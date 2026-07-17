@@ -11,6 +11,15 @@ from dataclasses import dataclass, field
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
 
+# division 메타(오픈API get_meta('division'))는 숫자가 작을수록 높은 등급이다.
+#   800 슈퍼챔피언스 · 900 챔피언스 · 1000 슈퍼챌린지 · 1100~1300 챌린지1~3 · ...
+# "챔피언스 이상" = 900 이하.
+CHAMPION_DIVISION_ID = 900
+
+
+def is_champion_or_above(division_id: int | None) -> bool:
+    return division_id is not None and division_id <= CHAMPION_DIVISION_ID
+
 # 슛 유형. 공식 문서에 매핑이 없어 실제 응답으로 확정했다.
 #  - type 8/9 는 shoot.goalFreekick / goalPenaltyKick 집계와 200개 선수-경기
 #    행에서 경기별로 정확히 일치 → 확정.

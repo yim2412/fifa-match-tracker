@@ -92,21 +92,18 @@ class RankerCard(QFrame):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(0)
 
-        head = QLabel("⚽  감독모드 랭커  ⚽")
-        head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._head = QLabel()
+        self._head.setAlignment(Qt.AlignmentFlag.AlignCenter)
         f = QFont()
         f.setBold(True)
-        head.setFont(f)
-        head.setStyleSheet(
-            f"background: {T.GREEN}; color: #06240d; border: none;"
-            f" border-top-left-radius: 8px; border-top-right-radius: 8px;"
-            f" padding: 7px;")
-        v.addWidget(head)
+        self._head.setFont(f)
+        v.addWidget(self._head)
 
         grid = QGridLayout()
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(1)
         self._vals: dict[str, QLabel] = {}
+        self._rows: dict[str, tuple[QLabel, QLabel]] = {}
         for r, name in enumerate(self.ROWS):
             cap = QLabel(name)
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -124,6 +121,7 @@ class RankerCard(QFrame):
             grid.addWidget(cap, r, 0)
             grid.addWidget(val, r, 1)
             self._vals[name] = val
+            self._rows[name] = (cap, val)
         v.addLayout(grid)
 
         self.note = QLabel("")
@@ -133,6 +131,31 @@ class RankerCard(QFrame):
             f" font-size: 11px;")
         self.note.setWordWrap(True)
         v.addWidget(self.note)
+        self.set_mode(False)  # 기본은 랭커 아님 — 확인되면 켠다
+
+    def set_mode(self, is_ranker: bool) -> None:
+        """챔피언스 이상(랭커)일 때만 순위·구단가치·점수 행을 보여준다.
+
+        그 아래 등급은 애초에 넥슨 데이터센터 랭킹(1만 위)에 거의 안 잡히고
+        값도 의미가 약해서, 카드 자체를 '랭커 카드'가 아니라 수수한 프로필로
+        보이게 헤더 스타일까지 바꾼다.
+        """
+        if is_ranker:
+            self._head.setText("⚽  감독모드 랭커  ⚽")
+            self._head.setStyleSheet(
+                f"background: {T.GREEN}; color: #06240d; border: none;"
+                f" border-top-left-radius: 8px; border-top-right-radius: 8px;"
+                f" padding: 7px;")
+        else:
+            self._head.setText("구단주 정보")
+            self._head.setStyleSheet(
+                f"background: {T.PANEL_2}; color: {T.TEXT_DIM}; border: none;"
+                f" border-top-left-radius: 8px; border-top-right-radius: 8px;"
+                f" padding: 7px;")
+        for name in ("순위", "구단가치", "점수"):
+            cap, val = self._rows[name]
+            cap.setVisible(is_ranker)
+            val.setVisible(is_ranker)
 
     def set(self, name: str, text: str, color: str = T.TEXT) -> None:
         lb = self._vals[name]

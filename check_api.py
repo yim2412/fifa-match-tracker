@@ -122,6 +122,17 @@ def main() -> int:
         print(f"[WARN] 데이터센터 랭킹 조회 실패(전적엔 영향 없음): {e}")
 
     try:
+        names = {m["divisionId"]: m["divisionName"] for m in api.get_meta("division")}
+        me = next((p for p in details[0]["matchInfo"] if p["ouid"] == ouid), None)
+        div_id = me.get("division") if me else None
+        grade = names.get(div_id, str(div_id))
+        champ = stats.is_champion_or_above(div_id)
+        print(f"[OK]   현재 등급(최근 경기 기준): {grade}"
+              f" — 챔피언스 이상: {'예' if champ else '아니오'}(랭커 카드 표시 여부)")
+    except Exception as e:
+        print(f"[WARN] 등급 판단 실패: {e}")
+
+    try:
         conn = store.open_db(config.DB_PATH)
         try:
             new = store.save_matches(conn, details)

@@ -14,14 +14,19 @@
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass
 
 import requests
 
 RANK_URL = "https://fconline.nexon.com/datacenter/rank_inner"
 # 브라우저처럼 보이지 않으면 넥슨이 응답을 안 줄 수 있어 UA 를 넣는다.
+# no-cache 류 헤더는 중간 프록시가 예전 응답을 재활용하는 걸 막는 안전장치다
+# (Cloudflare 는 이 페이지를 DYNAMIC 으로 표시해 자체 캐싱은 안 하는 걸 확인했지만,
+# 검색할 때마다 최신값을 받는다는 걸 보장하려고 남겨 둔다).
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"}
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+            "Cache-Control": "no-cache", "Pragma": "no-cache"}
 
 # 데이터 행에서 값을 뽑는 정규식. class 이름이 바뀌면 여기만 고친다.
 _RANK_NO = re.compile(r'class="td rank_no">\s*([\d,]+)\s*<')
@@ -77,8 +82,10 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
     try:
         res = requests.get(
             RANK_URL,
+            # _ts: 캐시 방지용 — URL 이 매번 달라야 어떤 프록시도 이전 응답을
+            # 재사용하지 못한다. 넥슨이 이 값을 쓰지 않으니 결과엔 영향 없다.
             params={"rt": "manager", "strCharacterName": nickname,
-                    "n4seasonno": 0, "n4pageno": 1},
+                    "n4seasonno": 0, "n4pageno": 1, "_ts": int(time.time() * 1000)},
             headers=_HEADERS, timeout=timeout)
         res.raise_for_status()
     except requests.RequestException as e:
