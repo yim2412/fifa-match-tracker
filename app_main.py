@@ -10,12 +10,14 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
+    QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 import config
+import scheduler
 import stats as st
 import store
 from models import MatchSummary, Stats, parse_match, summarize
@@ -156,6 +158,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._load_match_types()
         self._refresh_accounts()
+        self._refresh_auto()
 
     # ── UI 구성 ───────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -195,7 +198,22 @@ class MainWindow(QMainWindow):
         fav.addWidget(self.cb_accounts)
         fav.addWidget(self.btn_unfav)
         fav.addStretch(1)
+
+        # 자동 수집 — 앱을 안 켜도 등록 계정을 주기적으로 쌓는다.
+        self.chk_auto = QCheckBox(f"자동 수집 ({scheduler.DEFAULT_HOURS}시간마다)")
+        self.chk_auto.setToolTip(
+            "Windows 작업 스케줄러에 등록해 앱을 안 켜도 새 경기를 모읍니다.\n"
+            "PC가 켜져 있는 동안만 동작합니다.")
+        self.chk_auto.toggled.connect(self._on_toggle_auto)
+        self.lb_auto = QLabel("-")
+        self.lb_auto.setStyleSheet("color: #888;")
+        fav.addWidget(self.chk_auto)
+        fav.addWidget(self.lb_auto)
         outer.addLayout(fav)
+
+        if not scheduler.is_supported():
+            self.chk_auto.setVisible(False)
+            self.lb_auto.setVisible(False)
 
         # 요약
         self.gb_summary = QGroupBox("요약")
@@ -323,6 +341,28 @@ class MainWindow(QMainWindow):
         idx = self.cb_type.findData(config.DEFAULT_MATCH_TYPE)
         if idx >= 0:
             self.cb_type.setCurrentIndex(idx)
+
+    # ── 자동 수집 ─────────────────────────────────────────────────────
+    def _refresh_auto(self) -> None:
+        if not scheduler.is_supported():
+            return
+        # 체크 상태는 앱이 아니라 실제 스케줄러가 정답이다. 앱 밖에서 지웠을 수도 있다.
+        self.chk_auto.blockSignals(True)
+        self.chk_auto.setChecked(scheduler.is_enabled())
+        self.chk_auto.blockSignals(False)
+        self.lb_auto.setText(scheduler.describe())
+
+    def _on_toggle_auto(self, on: bool) -> None:
+        try:
+            if on:
+                scheduler.enable()
+            else:
+                scheduler.disable()
+        except scheduler.SchedulerError as e:
+            QMessageBox.warning(
+                self, "자동 수집",
+                f"{'등록' if on else '해제'}에 실패했습니다.\n\n{e}")
+        self._refresh_auto()
 
     # ── 등록 계정 ─────────────────────────────────────────────────────
     def _refresh_accounts(self) -> None:
