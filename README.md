@@ -30,6 +30,7 @@ python app_main.py
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats` 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. **역산해서 알아낸 상수가 여기 모여 있다** |
 | `store.py` | 조회한 경기를 SQLite(`fifa.db`)에 누적 — API 100경기 한계 극복 |
+| `ranker.py` | 넥슨 데이터센터에서 감독모드 순위·구단가치·ELO 를 긁어온다(오픈API 엔 없음) |
 | `collect.py` | GUI 없이 등록 계정의 새 경기를 수집. 작업 스케줄러가 이걸 부른다 |
 | `scheduler.py` | Windows 작업 스케줄러 등록/해제(`schtasks`) — 앱 체크박스가 쓴다 |
 | `config.py` | API 키 로드(.env), DB 경로, 매치 종류·조회 개수 기본값 |
@@ -73,6 +74,23 @@ python collect.py            # 등록 계정 전부 수동 수집
 python collect.py GB쭈우 맛술  # 지정한 닉네임만 (없으면 등록도 된다)
 schtasks /Query /TN "피파전적관리 자동수집"   # 등록됐는지 직접 확인
 ```
+
+## 감독모드 랭킹 (`ranker.py`)
+
+순위·구단가치·랭킹점수(ELO)는 **오픈API(JSON)에 없다.** 넥슨 공식 데이터센터
+웹페이지에는 있어서 거기서 긁어온다.
+
+```
+https://fconline.nexon.com/datacenter/rank_inner?rt=manager&strCharacterName=<닉네임>
+```
+
+- JSON API 가 아니라 **HTML 스크래핑**이다. 넥슨이 페이지 구조(class 이름)를 바꾸면
+  깨진다. 그래서 URL·class·정규식을 전부 `ranker.py` 한 곳에만 둔다 — 깨지면
+  실제 응답과 대조해 거기만 고친다.
+- 여기 전적은 **감독모드 통산**(오픈API 의 최근 3천 경기보다 많다)이라 랭커 카드는
+  이 값을 우선 쓴다. 단 요약 숫자일 뿐 경기별 상세는 아니다.
+- 랭킹은 상위 1만 위까지만. 밖이면 순위·구단가치·점수를 "랭킹 밖"으로 두고
+  전적은 앱이 받은 경기로 집계한다.
 
 ## API 메모
 

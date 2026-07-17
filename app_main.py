@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 import config
+import ranker
 import scheduler
 import stats as st
 import store
@@ -35,8 +36,8 @@ class MatchLoader(QThread):
 
     progress = pyqtSignal(int, int, str)
     # [MatchSummary], [원본 detail], ouid, basic, spId→이름, 포지션코드→이름,
-    # 새로 저장된 수, 이번에 API 로 받은 수
-    finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int)
+    # 새로 저장된 수, 이번에 API 로 받은 수, RankerInfo|None(넥슨 데이터센터 랭킹)
+    finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int, object)
     failed = pyqtSignal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
@@ -125,8 +126,12 @@ class MatchLoader(QThread):
             finally:
                 conn.close()
 
+            # 넥슨 데이터센터의 감독모드 랭킹(순위·구단가치·ELO). 오픈API 엔
+            # 없는 값이라 여기서 받는다. 실패해도 전적 조회는 살린다.
+            rank = self._safe_rank()
+
             if not details:
-                self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got)
+                self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got, rank)
                 return
 
             matches = [m for m in (parse_match(d, ouid) for d in details) if m]
@@ -137,7 +142,7 @@ class MatchLoader(QThread):
             positions = self._safe_meta("spposition", "spposition", "desc")
 
             self.finished_ok.emit(matches, details, ouid, basic, names,
-                                  positions, new, got)
+                                  positions, new, got, rank)
 
         except NexonAPIError as e:
             self.failed.emit(e.message)
@@ -161,6 +166,15 @@ class MatchLoader(QThread):
         except Exception:
             return {}
 
+    def _safe_rank(self):
+        """랭킹(데이터센터 스크래핑)이 깨져도 전적은 보여준다."""
+        if self._cancel:
+            return None
+        try:
+            return ranker.fetch_manager_rank(self._nickname)
+        except ranker.RankerError:
+            return None
+
 
 class MainWindow(QMainWindow):
     MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
@@ -176,6 +190,7 @@ class MainWindow(QMainWindow):
         self._ouid = ""
         self._nick = ""
         self._basic: dict = {}
+        self._rank = None   # ranker.RankerInfo | None — 넥슨 데이터센터 랭킹
         self._matches: list[MatchSummary] = []
         self._details: list[dict] = []
         self._names: dict = {}
@@ -575,11 +590,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "조회 실패", msg)
 
     def _on_loaded(self, matches: list, details: list, ouid: str, basic: dict,
-                   names: dict, positions: dict, new: int, got: int) -> None:
+                   names: dict, positions: dict, new: int, got: int,
+                   rank) -> None:
         self._set_busy(False)
         self._refresh_accounts()
         self._ouid = ouid
         self._basic = basic
+        self._rank = rank
         self._nick = basic.get("nickname") or self._nick
         for ed in self._nick_edits:
             ed.setText(self._nick)
@@ -590,14 +607,12 @@ class MainWindow(QMainWindow):
 
         # 검색 결과는 먼저 랭커 카드 페이지로.
         self.stack.setCurrentIndex(self.PAGE_RANKER)
-        self.lb_ranker_name.setText(f"{self._nick}  Lv.{basic.get('level', '-')}")
+        lv = (rank.level if rank and rank.level else basic.get("level", "-"))
+        self.lb_ranker_name.setText(f"{self._nick}  Lv.{lv}")
         self.btn_analyze.setEnabled(bool(matches))
+        self._render_ranker()
 
         if not matches:
-            self.card_ranker.set("전적", "감독모드 기록 없음", T.TEXT_DIM)
-            for r in ("순위", "구단가치", "점수"):
-                self.card_ranker.set(r, NA, T.TEXT_DIM)
-            self.card_ranker.note.setText("* 감독모드 경기가 없습니다")
             self.statusBar().showMessage(f"{self._nick} — 감독모드 기록이 없습니다.")
             return
 
@@ -634,19 +649,34 @@ class MainWindow(QMainWindow):
         self._render_tactics(details)
 
     def _render_ranker(self) -> None:
-        """랭커 카드는 표시 범위와 무관하게 감독모드 전체 전적을 보여준다."""
+        """랭커 카드 — 넥슨 데이터센터의 감독모드 순위·구단가치·ELO·통산전적.
+
+        데이터센터가 감독모드 통산(오픈API 의 최근 3천 경기보다 많다)을 주므로
+        전적도 그 값을 우선 쓰고, 랭킹 밖이거나 조회 실패면 우리 집계로 대체한다.
+        """
         c = self.card_ranker
-        full = summarize(self._matches)
-        c.set("전적",
-              f"{wdl_text(full.win, full.draw, full.lose)} ({full.win_rate:.1f}%)")
-        # 넥슨 API 가 안 주는 값 — 그럴싸한 숫자를 지어 넣지 않고, 왜 비었는지
-        # 화면에서 바로 보이게 적는다.
-        for row in ("순위", "구단가치", "점수"):
-            c.set(row, "API 미제공", T.TEXT_DIM)
-        last = self._matches[0].date_text if self._matches else "-"
-        c.note.setText(f"* {len(self._matches)}경기 기준 · {last} 업데이트")
-        c.setToolTip("순위·구단가치·점수는 넥슨 오픈API가 제공하지 않습니다.\n"
-                     "지어낸 값을 넣지 않고 비워 둡니다.")
+        r = self._rank
+
+        if r and r.ranked:
+            c.set("순위", f"{r.rank:,}위", T.GREEN)
+            c.set("전적", f"{r.record_text} ({r.win_rate})")
+            c.set("구단가치", r.team_value_text or NA)
+            c.set("점수", f"{r.elo:g}" if r.elo is not None else NA)
+            c.note.setText("* 넥슨 데이터센터 · 감독모드 통산 · 매시각 갱신")
+            c.setToolTip("순위·구단가치·점수·통산전적은 넥슨 공식 데이터센터에서\n"
+                         "가져옵니다(감독모드 랭킹, 매시각 갱신).")
+        else:
+            # 랭킹 밖(공식경기 미달 등)이거나 조회 실패 — 우리 집계로 채운다.
+            full = summarize(self._matches)
+            c.set("전적",
+                  f"{wdl_text(full.win, full.draw, full.lose)} ({full.win_rate:.1f}%)")
+            reason = "랭킹 밖" if r is not None else "조회 실패"
+            for row in ("순위", "구단가치", "점수"):
+                c.set(row, reason, T.TEXT_DIM)
+            last = self._matches[0].date_text if self._matches else "-"
+            c.note.setText(f"* 최근 {len(self._matches)}경기 기준 · {last}")
+            c.setToolTip("넥슨 데이터센터 감독모드 랭킹 1만 위 밖이거나\n"
+                         "랭킹 조회에 실패했습니다. 전적은 앱이 받은 경기 기준입니다.")
 
     @staticmethod
     def _cell(text: str, key=None):

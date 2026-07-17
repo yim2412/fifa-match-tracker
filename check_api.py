@@ -111,6 +111,17 @@ def main() -> int:
         return 1
 
     try:
+        import ranker
+        r = ranker.fetch_manager_rank(nickname)
+        if r.ranked:
+            print(f"[OK]   데이터센터 랭킹: {r.rank:,}위 · 구단가치 {r.team_value_text}"
+                  f" · ELO {r.elo} · 통산 {r.record_text}")
+        else:
+            print("[OK]   데이터센터 랭킹: 감독모드 1만 위 밖(순위 없음)")
+    except Exception as e:
+        print(f"[WARN] 데이터센터 랭킹 조회 실패(전적엔 영향 없음): {e}")
+
+    try:
         conn = store.open_db(config.DB_PATH)
         try:
             new = store.save_matches(conn, details)
