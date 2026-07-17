@@ -45,9 +45,18 @@ class MatchLoader(QThread):
         self._nickname = nickname
         self._match_type = match_type
         self._cancel = False
+        self._pool: ThreadPoolExecutor | None = None
 
     def cancel(self) -> None:
+        """즉시 취소 — 대기 중인 상세 요청을 버리고 진행 중인 것만 끝낸다.
+
+        pool 을 그냥 두면 제출된 수천 건이 다 끝날 때까지 기다려서, 창을
+        닫아도 워커가 안 죽고 프로세스가 좀비로 남았다(onefile exe 라 부트로더
+        까지 함께 남는다).
+        """
         self._cancel = True
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _new_match_ids(self, ouid: str, known) -> list[str]:
         """새로 저장할 매치 id 를 모은다.
@@ -94,8 +103,9 @@ class MatchLoader(QThread):
                 fresh: list[dict] = []
                 done = 0
                 if todo:
-                    with ThreadPoolExecutor(max_workers=6) as pool:
-                        for detail in pool.map(self._safe_detail, todo):
+                    self._pool = ThreadPoolExecutor(max_workers=6)
+                    try:
+                        for detail in self._pool.map(self._safe_detail, todo):
                             if self._cancel:
                                 return
                             done += 1
@@ -103,6 +113,11 @@ class MatchLoader(QThread):
                                                f"새 경기 받는 중… {done}/{len(todo)}")
                             if detail is not None:
                                 fresh.append(detail)
+                    except RuntimeError:
+                        return  # cancel() 이 pool 을 내려 map 이 끊긴 경우
+                    finally:
+                        self._pool.shutdown(wait=False, cancel_futures=True)
+                        self._pool = None
                 new = store.save_matches(conn, fresh)
 
                 self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
@@ -772,7 +787,12 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e) -> None:
         if self._loader and self._loader.isRunning():
             self._loader.cancel()
-            self._loader.wait(3000)
+            # 진행 중이던 상세 요청 몇 개가 네트워크 타임아웃까지 갈 수 있어
+            # 넉넉히 기다린다. 그래도 안 끝나면 마지막 수단으로 강제 종료 —
+            # 좀비 프로세스로 남기느니 낫다(DB 쓰기는 이 지점 이후라 안전).
+            if not self._loader.wait(8000):
+                self._loader.terminate()
+                self._loader.wait(1000)
         super().closeEvent(e)
 
 
