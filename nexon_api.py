@@ -123,13 +123,43 @@ class FCOnlineAPI:
 
     # ── 메타데이터 ────────────────────────────────────────────────────
     def get_meta(self, name: str) -> list[dict]:
-        """name: matchtype | division | seasonid | spid — 인증 헤더 없이도 열리는 정적 파일."""
+        """name: matchtype | division | seasonid | spid | spposition
+        — 인증 헤더 없이도 열리는 정적 파일. 잘 안 변하므로 디스크에 캐시한다
+        (spid 는 8만 건이 넘어 매번 받으면 낭비).
+        """
+        cached = self._meta_read(name)
+        if cached is not None:
+            return cached
         try:
             res = requests.get(f"{META_URL}/{name}.json", timeout=self._timeout)
             res.raise_for_status()
-            return res.json()
+            data = res.json()
         except Exception as e:
             raise NexonAPIError(f"메타데이터({name}) 조회 실패: {e}") from e
+        self._meta_write(name, data)
+        return data
+
+    def _meta_path(self, name: str) -> Path | None:
+        if not self._cache_dir:
+            return None
+        return self._cache_dir / f"meta_{''.join(c for c in name if c.isalnum())}.json"
+
+    def _meta_read(self, name: str) -> list[dict] | None:
+        p = self._meta_path(name)
+        if p and p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                return None
+        return None
+
+    def _meta_write(self, name: str, data: list[dict]) -> None:
+        p = self._meta_path(name)
+        if p:
+            try:
+                p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            except Exception:
+                pass
 
     # ── 캐시 ──────────────────────────────────────────────────────────
     def _cache_path(self, match_id: str) -> Path | None:

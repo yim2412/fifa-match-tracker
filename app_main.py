@@ -12,10 +12,11 @@ from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QSpinBox, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 import config
+import stats as st
 from models import MatchSummary, Stats, parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
 
@@ -29,11 +30,30 @@ class NoScrollComboBox(QComboBox):
         e.ignore()
 
 
+class SortableItem(QTableWidgetItem):
+    """숫자 열을 문자열로 정렬하면 '10'이 '9'보다 앞에 온다.
+
+    Qt 기본 정렬은 DisplayRole 문자열 비교라, 표시용 문자열("46.0%")과
+    정렬용 값(46.0)을 분리해서 비교를 직접 한다.
+    """
+
+    def __init__(self, text: str, sort_key=None):
+        super().__init__(text)
+        self._key = sort_key
+
+    def __lt__(self, other):
+        if isinstance(other, SortableItem) and self._key is not None \
+                and other._key is not None:
+            return self._key < other._key
+        return super().__lt__(other)
+
+
 class MatchLoader(QThread):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
 
     progress = pyqtSignal(int, int, str)          # 완료 수, 전체, 메시지
-    finished_ok = pyqtSignal(list, dict)          # [MatchSummary], user_basic
+    # [MatchSummary], [원본 detail], ouid, user_basic, spId→이름, 포지션코드→이름
+    finished_ok = pyqtSignal(list, list, str, dict, dict, dict)
     failed = pyqtSignal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, limit: int):
@@ -56,10 +76,11 @@ class MatchLoader(QThread):
             self.progress.emit(0, self._limit, "매치 목록 조회 중…")
             ids = self._api.get_match_ids(ouid, self._match_type, 0, self._limit)
             if not ids:
-                self.finished_ok.emit([], basic)
+                self.finished_ok.emit([], [], ouid, basic, {}, {})
                 return
 
             matches: list[MatchSummary] = []
+            details: list[dict] = []
             done = 0
             with ThreadPoolExecutor(max_workers=6) as pool:
                 for detail in pool.map(self._safe_detail, ids):
@@ -69,12 +90,19 @@ class MatchLoader(QThread):
                     self.progress.emit(done, len(ids), f"경기 상세 {done}/{len(ids)}")
                     if detail is None:
                         continue
+                    details.append(detail)
                     m = parse_match(detail, ouid)
                     if m:
                         matches.append(m)
 
             matches.sort(key=lambda m: m.match_date or 0, reverse=True)
-            self.finished_ok.emit(matches, basic)
+
+            # 선수 이름 메타는 8만 건이라 여기(워커)서 받는다. 실패해도 조회는 살린다.
+            self.progress.emit(done, len(ids), "선수 정보 조회 중…")
+            names = self._safe_meta("spid", "id", "name")
+            positions = self._safe_meta("spposition", "spposition", "desc")
+
+            self.finished_ok.emit(matches, details, ouid, basic, names, positions)
 
         except NexonAPIError as e:
             self.failed.emit(e.message)
@@ -89,6 +117,14 @@ class MatchLoader(QThread):
             return self._api.get_match_detail(match_id)
         except NexonAPIError:
             return None
+
+    def _safe_meta(self, name: str, key: str, val: str) -> dict:
+        """메타를 못 받아도 전적 자체는 보여준다 — 이름 대신 코드가 뜰 뿐."""
+        try:
+            return {m[key]: m[val] for m in self._api.get_meta(name)
+                    if key in m and val in m}
+        except Exception:
+            return {}
 
 
 class MainWindow(QMainWindow):
@@ -147,17 +183,13 @@ class MainWindow(QMainWindow):
             self._summary_labels[name] = val
         outer.addWidget(self.gb_summary)
 
-        # 전적 표
-        self.table = QTableWidget(0, len(self.COLUMNS))
-        self.table.setHorizontalHeaderLabels(self.COLUMNS)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setAlternatingRowColors(True)
-        hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        outer.addWidget(self.table, 1)
+        # 탭 — 전적 / 선수 지표 / 전술·경기 결과
+        self.tabs = QTabWidget()
+        self.table = self._make_table(self.COLUMNS)
+        self.tabs.addTab(self.table, "전적")
+        self.tabs.addTab(self._build_players_tab(), "선수 지표")
+        self.tabs.addTab(self._build_tactics_tab(), "전술·경기 결과")
+        outer.addWidget(self.tabs, 1)
 
         # 진행 표시
         self.progress = QProgressBar()
@@ -166,6 +198,86 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self.statusBar().showMessage("닉네임을 입력하세요.")
+
+    @staticmethod
+    def _make_table(columns: list[str]) -> QTableWidget:
+        t = QTableWidget(0, len(columns))
+        t.setHorizontalHeaderLabels(columns)
+        t.verticalHeader().setVisible(False)
+        t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        t.setAlternatingRowColors(True)
+        t.setSortingEnabled(True)
+        hdr = t.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        return t
+
+    PLAYER_COLUMNS = [
+        "포지션", "선수", "강화", "출전", "승률", "골", "어시", "공격P",
+        "슛", "유효슛", "패스%", "드리블%", "공중볼%", "태클%", "블록%",
+        "가로채기", "수비", "경고", "평점",
+    ]
+
+    def _build_players_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        note = QLabel("교체 명단이라도 기록이 있으면 출전으로 집계합니다. "
+                      "헤더를 클릭하면 정렬됩니다.")
+        note.setStyleSheet("color: #888;")
+        v.addWidget(note)
+        self.tbl_players = self._make_table(self.PLAYER_COLUMNS)
+        v.addWidget(self.tbl_players, 1)
+        return w
+
+    def _build_tactics_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        self.lb_my_formation = QLabel("-")
+        f = QFont()
+        f.setPointSize(15)
+        f.setBold(True)
+        self.lb_my_formation.setFont(f)
+        box_mine = QGroupBox("내 전술")
+        vm = QVBoxLayout(box_mine)
+        vm.addWidget(self.lb_my_formation)
+        v.addWidget(box_mine)
+
+        row = QHBoxLayout()
+        box_opp = QGroupBox("상대 전술별 내 승률")
+        vo = QVBoxLayout(box_opp)
+        hint = QLabel("전술은 수비-수미-미드-공미-공격 라인 인원. "
+                      "0-0-0-0-0 은 상대 기록이 없는 경기(몰수 등)입니다.")
+        hint.setStyleSheet("color: #888;")
+        vo.addWidget(hint)
+        self.tbl_formation = self._make_table(["상대 전술", "승률", "전적", "경기"])
+        vo.addWidget(self.tbl_formation)
+        row.addWidget(box_opp, 1)
+
+        box_res = QGroupBox("경기 결과")
+        vr = QVBoxLayout(box_res)
+        self.tbl_result = self._make_table(["구분", "전적", "승률"])
+        vr.addWidget(self.tbl_result)
+        self.tbl_period = self._make_table(["시간대", "득점", "실점"])
+        vr.addWidget(self.tbl_period)
+        row.addWidget(box_res, 1)
+        v.addLayout(row, 1)
+
+        row2 = QHBoxLayout()
+        box_gf = QGroupBox("득점 유형")
+        vgf = QVBoxLayout(box_gf)
+        self.tbl_goal_types = self._make_table(["유형", "골", "비율"])
+        vgf.addWidget(self.tbl_goal_types)
+        row2.addWidget(box_gf, 1)
+
+        box_ga = QGroupBox("실점 유형")
+        vga = QVBoxLayout(box_ga)
+        self.tbl_concede_types = self._make_table(["유형", "골", "비율"])
+        vga.addWidget(self.tbl_concede_types)
+        row2.addWidget(box_ga, 1)
+        v.addLayout(row2, 1)
+        return w
 
     def _load_match_types(self) -> None:
         """매치 종류는 메타데이터에서. 실패하면 폴백 목록."""
@@ -215,19 +327,26 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("조회 실패")
         QMessageBox.warning(self, "조회 실패", msg)
 
-    def _on_loaded(self, matches: list[MatchSummary], basic: dict) -> None:
+    def _on_loaded(self, matches: list[MatchSummary], details: list, ouid: str,
+                   basic: dict, names: dict, positions: dict) -> None:
         self._set_busy(False)
         nick = basic.get("nickname", "-")
         level = basic.get("level", "-")
 
         if not matches:
-            self.table.setRowCount(0)
+            for t in (self.table, self.tbl_players, self.tbl_formation,
+                      self.tbl_result, self.tbl_period, self.tbl_goal_types,
+                      self.tbl_concede_types):
+                t.setRowCount(0)
+            self.lb_my_formation.setText("-")
             self._render_summary(Stats())
             self.statusBar().showMessage(f"{nick} (Lv.{level}) — 해당 매치 기록이 없습니다.")
             return
 
         self._render_table(matches)
         self._render_summary(summarize(matches))
+        self._render_players(details, ouid, names, positions)
+        self._render_tactics(details, ouid)
         self.statusBar().showMessage(f"{nick} (Lv.{level}) — 최근 {len(matches)}경기")
 
     # ── 렌더 ──────────────────────────────────────────────────────────
@@ -250,6 +369,87 @@ class MainWindow(QMainWindow):
                             item.setForeground(QColor("white"))
                             break
                 self.table.setItem(r, c, item)
+
+    @staticmethod
+    def _cell(text: str, sort_key: float | None = None) -> QTableWidgetItem:
+        item = SortableItem(text, sort_key)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        return item
+
+    def _fill(self, table: QTableWidget, rows: list[list]) -> None:
+        """rows: [[(표시문자열, 정렬키|None), …], …]"""
+        table.setSortingEnabled(False)
+        table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, cell in enumerate(row):
+                text, key = cell if isinstance(cell, tuple) else (cell, None)
+                table.setItem(r, c, self._cell(text, key))
+        table.setSortingEnabled(True)
+
+    def _render_players(self, details: list, ouid: str,
+                        names: dict, positions: dict) -> None:
+        players = st.aggregate_players(
+            details, ouid,
+            name_of=lambda i: names.get(i, str(i)),
+            pos_name=lambda p: positions.get(p, str(p)),
+        )
+        rows = []
+        for p in players:
+            rows.append([
+                p.position, p.name, (f"{p.grade}", p.grade),
+                (f"{p.games}", p.games), (f"{p.win_rate:.1f}", p.win_rate),
+                (f"{p.goal}", p.goal), (f"{p.assist}", p.assist),
+                (f"{p.attack_point}", p.attack_point),
+                (f"{p.shoot}", p.shoot), (f"{p.effective_shoot}", p.effective_shoot),
+                (f"{p.pass_rate:.1f}", p.pass_rate),
+                (f"{p.dribble_rate:.1f}", p.dribble_rate),
+                (f"{p.aerial_rate:.1f}", p.aerial_rate),
+                (f"{p.tackle_rate:.1f}", p.tackle_rate),
+                (f"{p.block_rate:.1f}", p.block_rate),
+                (f"{p.intercept}", p.intercept), (f"{p.defending}", p.defending),
+                (f"{p.yellow}", p.yellow), (f"{p.rating:.2f}", p.rating),
+            ])
+        self._fill(self.tbl_players, rows)
+
+    def _render_tactics(self, details: list, ouid: str) -> None:
+        mine = st.formation_stats(details, ouid, of_opponent=False)
+        if mine:
+            top = mine[0]
+            extra = f" 외 {len(mine) - 1}종" if len(mine) > 1 else ""
+            self.lb_my_formation.setText(
+                f"{top.formation}   {top.win_rate:.1f}%   "
+                f"({top.games}경기 {top.win}승 {top.draw}무 {top.lose}패){extra}"
+            )
+
+        self._fill(self.tbl_formation, [
+            [f.formation, (f"{f.win_rate:.1f}%", f.win_rate),
+             f"{f.win}승 {f.draw}무 {f.lose}패", (f"{f.games}", f.games)]
+            for f in st.formation_stats(details, ouid)
+        ])
+
+        rb = st.result_breakdown(details, ouid)
+        self._fill(self.tbl_result, [
+            [label, f"{w}승 {d}무 {l}패",
+             (f"{(w / (w + d + l) * 100) if (w + d + l) else 0:.1f}%", 0)]
+            for label, (w, d, l) in [
+                ("전후반", rb.normal), ("연장전", rb.extra),
+                ("승부차기", rb.shootout), ("몰수", rb.forfeit),
+            ]
+        ])
+        self._fill(self.tbl_period, [
+            [st.PERIODS.get(k, str(k)), (f"{v.scored}", v.scored),
+             (f"{v.conceded}", v.conceded)]
+            for k, v in sorted(rb.periods.items())
+        ])
+
+        for table, counter in ((self.tbl_goal_types, rb.goal_types),
+                               (self.tbl_concede_types, rb.concede_types)):
+            total = sum(counter.values())
+            self._fill(table, [
+                [name, (f"{n}", n),
+                 (f"{n / total * 100:.1f}%" if total else "-", n)]
+                for name, n in counter.most_common()
+            ])
 
     def _render_summary(self, s: Stats) -> None:
         vals = {

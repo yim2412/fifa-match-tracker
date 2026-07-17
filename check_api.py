@@ -12,6 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import config
+import stats
 from models import parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
 
@@ -55,8 +56,11 @@ def main() -> int:
 
     try:
         matches = []
+        details = []
         for mid in ids:
-            m = parse_match(api.get_match_detail(mid), ouid)
+            d = api.get_match_detail(mid)
+            details.append(d)
+            m = parse_match(d, ouid)
             if m:
                 matches.append(m)
         print(f"[OK]   매치 상세 파싱 {len(matches)}건")
@@ -68,6 +72,41 @@ def main() -> int:
               f" · 평균 {s.avg_goals_for:.2f}득 {s.avg_goals_against:.2f}실")
     except NexonAPIError as e:
         print(f"[FAIL] 매치 상세: {e.message}")
+        return 1
+
+    # 탭 화면이 쓰는 집계 — GUI 없이 여기서 먼저 깨지는지 본다
+    try:
+        names = {m["id"]: m["name"] for m in api.get_meta("spid")}
+        positions = {m["spposition"]: m["desc"] for m in api.get_meta("spposition")}
+        print(f"[OK]   메타: 선수 {len(names)}명 / 포지션 {len(positions)}종")
+    except NexonAPIError as e:
+        print(f"[FAIL] 메타데이터: {e.message}")
+        return 1
+
+    try:
+        players = stats.aggregate_players(
+            details, ouid, name_of=lambda i: names.get(i, str(i)),
+            pos_name=lambda p: positions.get(p, str(p)))
+        print(f"[OK]   선수 지표 {len(players)}명")
+        for p in players[:3]:
+            print(f"       {p.position:>4} {p.name}  출전{p.games} 골{p.goal}"
+                  f" 어시{p.assist} 패스{p.pass_rate:.0f}% 평점{p.rating:.2f}")
+
+        mine = stats.formation_stats(details, ouid, of_opponent=False)
+        print(f"[OK]   내 전술: {', '.join(f'{f.formation}({f.games})' for f in mine)}")
+        print("[OK]   상대 전술별 승률:")
+        for f in stats.formation_stats(details, ouid):
+            print(f"       {f.formation}  {f.win_rate:5.1f}%  "
+                  f"({f.win}승 {f.draw}무 {f.lose}패)")
+
+        rb = stats.result_breakdown(details, ouid)
+        print("[OK]   경기 결과: " + " · ".join(
+            f"{k} {v[0]}승{v[1]}무{v[2]}패" for k, v in
+            [("전후반", rb.normal), ("연장", rb.extra),
+             ("승부차기", rb.shootout), ("몰수", rb.forfeit)]))
+        print(f"[OK]   득점 유형: {dict(rb.goal_types.most_common(3))}")
+    except Exception as e:
+        print(f"[FAIL] 집계: {type(e).__name__}: {e}")
         return 1
 
     print("\n전부 통과 — python app_main.py 로 앱을 띄우세요.")
