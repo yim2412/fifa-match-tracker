@@ -209,6 +209,7 @@ class MainWindow(QMainWindow):
         self.resize(1280, 720)
         self._build_ui()
         self._refresh_auto()
+        self._refresh_recent()
 
     # ── UI ────────────────────────────────────────────────────────────
     PAGE_SEARCH, PAGE_RANKER, PAGE_ANALYSIS = 0, 1, 2
@@ -267,8 +268,50 @@ class MainWindow(QMainWindow):
         self.lb_search_msg.setStyleSheet(f"color: {T.RED};")
         outer.addSpacing(10)
         outer.addWidget(self.lb_search_msg)
+
+        # 최근 검색 기록 — 클릭하면 바로 재검색.
+        outer.addSpacing(20)
+        lb_recent = QLabel("최근 검색")
+        lb_recent.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lb_recent.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(lb_recent)
+
+        self.row_recent = QHBoxLayout()
+        self.row_recent.addStretch(1)
+        outer.addLayout(self.row_recent)
+
         outer.addStretch(2)
         return w
+
+    RECENT_SEARCH_LIMIT = 5
+
+    def _refresh_recent(self) -> None:
+        """검색 화면의 '최근 검색' 칩을 최신순 5개로 다시 그린다."""
+        while self.row_recent.count() > 1:  # 맨 앞 stretch 는 남긴다
+            item = self.row_recent.takeAt(1)
+            if item.widget():
+                item.widget().deleteLater()
+
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                rows = store.recent_searches(conn, self.RECENT_SEARCH_LIMIT)
+            finally:
+                conn.close()
+        except Exception:
+            rows = []
+
+        for r in rows:
+            nick = r["nickname"] or r["ouid"][:8]
+            chip = QPushButton(nick)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.clicked.connect(lambda _=False, n=nick: self._search_recent(n))
+            self.row_recent.addWidget(chip)
+        self.row_recent.addStretch(1)
+
+    def _search_recent(self, nickname: str) -> None:
+        self.ed_search.setText(nickname)
+        self._on_search()
 
     def _top_bar(self) -> QHBoxLayout:
         """검색·등록·자동수집 — 랭커/분석 두 페이지가 공유하는 상단 바."""
@@ -595,6 +638,7 @@ class MainWindow(QMainWindow):
                    rank) -> None:
         self._set_busy(False)
         self._refresh_accounts()
+        self._refresh_recent()
         self._ouid = ouid
         self._basic = basic
         self._rank = rank

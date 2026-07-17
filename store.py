@@ -171,6 +171,14 @@ def list_accounts(conn: sqlite3.Connection) -> list[dict]:
         "SELECT ouid, nickname, last_seen FROM accounts ORDER BY nickname")]
 
 
+def recent_searches(conn: sqlite3.Connection, limit: int = 5) -> list[dict]:
+    """최근 검색 기록 — 조회할 때마다 upsert_account 가 last_seen 을 갱신하므로
+    그 최신순이 곧 검색 기록이다."""
+    return [dict(r) for r in conn.execute(
+        "SELECT ouid, nickname, last_seen FROM accounts"
+        " ORDER BY last_seen DESC LIMIT ?", (limit,))]
+
+
 def remove_account(conn: sqlite3.Connection, ouid: str) -> None:
     """목록에서만 뺀다 — 쌓아 둔 경기는 지우지 않는다."""
     conn.execute("DELETE FROM accounts WHERE ouid = ?", (ouid,))
