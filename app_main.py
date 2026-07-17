@@ -12,8 +12,7 @@ from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
     QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
-    QVBoxLayout, QWidget,
+    QScrollArea, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 import config
@@ -21,7 +20,7 @@ import scheduler
 import stats as st
 import store
 import theme as T
-from models import MatchSummary, Stats, parse_match, summarize
+from models import MatchSummary, parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
     NA, BarRow, NoScrollComboBox, RankerCard, SortableItem, StatCard,
@@ -40,22 +39,39 @@ class MatchLoader(QThread):
     finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int)
     failed = pyqtSignal(str)
 
-    def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int,
-                 offset: int = 0, limit: int = PAGE_SIZE):
+    def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
         super().__init__()
         self._api = api
         self._nickname = nickname
         self._match_type = match_type
-        self._offset = offset
-        self._limit = limit
         self._cancel = False
 
     def cancel(self) -> None:
         self._cancel = True
 
+    def _all_match_ids(self, ouid: str) -> list[str]:
+        """offset 페이징으로 받을 수 있는 매치 id 를 전부 모은다.
+
+        API 는 한 번에 최대 100개만 준다. 빈 응답이 올 때까지 offset 을 밀어
+        전량(이 계정은 3천여 경기)을 받는다.
+        """
+        ids: list[str] = []
+        offset = 0
+        while not self._cancel:
+            chunk = self._api.get_match_ids(ouid, self._match_type,
+                                            offset, PAGE_SIZE)
+            if not chunk:
+                break
+            ids.extend(chunk)
+            self.progress.emit(0, 0, f"경기 목록 수집 중… {len(ids)}경기")
+            if len(chunk) < PAGE_SIZE:  # 마지막 페이지
+                break
+            offset += PAGE_SIZE
+        return ids
+
     def run(self) -> None:
         try:
-            self.progress.emit(0, self._limit, f"'{self._nickname}' 계정 조회 중…")
+            self.progress.emit(0, 0, f"'{self._nickname}' 계정 조회 중…")
             ouid = self._api.get_ouid(self._nickname)
             basic = self._api.get_user_basic(ouid)
 
@@ -63,11 +79,13 @@ class MatchLoader(QThread):
             try:
                 store.upsert_account(conn, ouid, basic.get("nickname") or self._nickname)
 
-                self.progress.emit(0, self._limit, "매치 목록 조회 중…")
-                ids = self._api.get_match_ids(ouid, self._match_type,
-                                              self._offset, self._limit)
+                ids = self._all_match_ids(ouid)
+                if self._cancel:
+                    return
                 got = len(ids)
 
+                # 이미 저장한 경기는 API 를 다시 부르지 않는다 — 두 번째
+                # 검색부터는 새로 한 경기만 받아서 빠르다.
                 have = store.existing_ids(conn, ids)
                 todo = [i for i in ids if i not in have]
 
@@ -80,12 +98,12 @@ class MatchLoader(QThread):
                                 return
                             done += 1
                             self.progress.emit(done, len(todo),
-                                               f"새 경기 {done}/{len(todo)}")
+                                               f"새 경기 받는 중… {done}/{len(todo)}")
                             if detail is not None:
                                 fresh.append(detail)
                 new = store.save_matches(conn, fresh)
 
-                self.progress.emit(done, max(len(todo), 1), "저장된 전적 불러오는 중…")
+                self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
                 details = store.load_details(conn, ouid, self._match_type)
             finally:
                 conn.close()
@@ -97,7 +115,7 @@ class MatchLoader(QThread):
             matches = [m for m in (parse_match(d, ouid) for d in details) if m]
             matches.sort(key=lambda m: m.match_date or 0, reverse=True)
 
-            self.progress.emit(done, max(len(todo), 1), "선수 정보 조회 중…")
+            self.progress.emit(0, 0, "선수 정보 조회 중…")
             names = self._safe_meta("spid", "id", "name")
             positions = self._safe_meta("spposition", "spposition", "desc")
 
@@ -140,11 +158,19 @@ class MainWindow(QMainWindow):
         self._loader: MatchLoader | None = None
         self._ouid = ""
         self._nick = ""
-        self._api_loaded = 0      # 이번 계정에서 API 로 받아온 경기 수(offset 용)
+        self._basic: dict = {}
         self._matches: list[MatchSummary] = []
         self._details: list[dict] = []
         self._names: dict = {}
         self._positions: dict = {}
+        self._show_limit = PAGE_SIZE   # 화면에 몇 경기까지 보일지 — 100단위로 늘린다
+
+        # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
+        self._nick_edits: list[QLineEdit] = []
+        self._search_btns: list[QPushButton] = []
+        self._acct_combos: list[NoScrollComboBox] = []
+        self._auto_chks: list[QCheckBox] = []
+        self._auto_lbs: list[QLabel] = []
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
         self.resize(1280, 720)
@@ -152,10 +178,13 @@ class MainWindow(QMainWindow):
         self._refresh_auto()
 
     # ── UI ────────────────────────────────────────────────────────────
+    PAGE_SEARCH, PAGE_RANKER, PAGE_ANALYSIS = 0, 1, 2
+
     def _build_ui(self) -> None:
         self.stack = QStackedWidget()
-        self.stack.addWidget(self._build_search_page())
-        self.stack.addWidget(self._build_result_page())
+        self.stack.addWidget(self._build_search_page())    # 0
+        self.stack.addWidget(self._build_ranker_page())    # 1
+        self.stack.addWidget(self._build_analysis_page())  # 2
         self.setCentralWidget(self.stack)
 
         self.progress = QProgressBar()
@@ -208,62 +237,101 @@ class MainWindow(QMainWindow):
         outer.addStretch(2)
         return w
 
-    def _build_result_page(self) -> QWidget:
+    def _top_bar(self) -> QHBoxLayout:
+        """검색·등록·자동수집 — 랭커/분석 두 페이지가 공유하는 상단 바."""
+        bar = QHBoxLayout()
+        back = QPushButton("← 검색")
+        back.clicked.connect(self._go_search)
+        ed = QLineEdit()
+        ed.setPlaceholderText("구단주명")
+        ed.setMaximumWidth(220)
+        ed.returnPressed.connect(self._on_search)
+        btn = QPushButton("조회")
+        btn.setObjectName("primary")
+        btn.clicked.connect(self._on_search)
+        cb = NoScrollComboBox()
+        cb.setMinimumWidth(170)
+        cb.activated.connect(self._on_pick_account)
+        chk = QCheckBox(f"자동 수집 ({scheduler.DEFAULT_HOURS}시간마다)")
+        chk.setToolTip("Windows 작업 스케줄러에 등록해 앱을 안 켜도 새 경기를 모읍니다.\n"
+                       "PC가 켜져 있는 동안만 동작합니다.")
+        chk.toggled.connect(self._on_toggle_auto)
+        lb = QLabel("-")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        if not scheduler.is_supported():
+            chk.setVisible(False)
+            lb.setVisible(False)
+
+        bar.addWidget(back)
+        bar.addWidget(ed)
+        bar.addWidget(btn)
+        bar.addWidget(QLabel("등록"))
+        bar.addWidget(cb)
+        bar.addStretch(1)
+        bar.addWidget(chk)
+        bar.addWidget(lb)
+        # 두 페이지가 각각 자기 위젯을 갖되, 조작은 리스트로 함께 처리한다.
+        self._nick_edits.append(ed)
+        self._search_btns.append(btn)
+        self._acct_combos.append(cb)
+        self._auto_chks.append(chk)
+        self._auto_lbs.append(lb)
+        return bar
+
+    def _build_ranker_page(self) -> QWidget:
+        """검색 결과 1단계 — 랭커 카드만. '감독모드 분석'을 눌러야 탭으로 간다."""
+        w = QWidget()
+        outer = QVBoxLayout(w)
+        outer.addLayout(self._top_bar())
+        outer.addStretch(1)
+
+        row = QHBoxLayout()
+        row.addStretch(1)
+        col = QVBoxLayout()
+        self.lb_ranker_name = QLabel("-")
+        nf = QFont()
+        nf.setPointSize(18)
+        nf.setBold(True)
+        self.lb_ranker_name.setFont(nf)
+        self.lb_ranker_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        col.addWidget(self.lb_ranker_name)
+
+        self.card_ranker = RankerCard()
+        col.addWidget(self.card_ranker, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.btn_analyze = QPushButton("📊  감독모드 분석")
+        self.btn_analyze.setObjectName("primary")
+        self.btn_analyze.setFixedHeight(40)
+        self.btn_analyze.clicked.connect(self._go_analysis)
+        col.addWidget(self.btn_analyze)
+        row.addLayout(col)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(2)
+        return w
+
+    def _build_analysis_page(self) -> QWidget:
+        """검색 결과 2단계 — 프로필·요약 카드·범위·큰 탭."""
         w = QWidget()
         outer = QVBoxLayout(w)
         outer.setSpacing(10)
 
-        # 상단 바 — 뒤로/재검색 + 자동 수집
-        bar = QHBoxLayout()
-        back = QPushButton("← 검색")
-        back.clicked.connect(self._go_search)
-        self.ed_nick = QLineEdit()
-        self.ed_nick.setPlaceholderText("구단주명")
-        self.ed_nick.setMaximumWidth(220)
-        self.ed_nick.returnPressed.connect(self._on_search)
-        self.btn_search = QPushButton("조회")
-        self.btn_search.setObjectName("primary")
-        self.btn_search.clicked.connect(self._on_search)
-        self.cb_accounts = NoScrollComboBox()
-        self.cb_accounts.setMinimumWidth(170)
-        self.cb_accounts.activated.connect(self._on_pick_account)
-
-        bar.addWidget(back)
-        bar.addWidget(self.ed_nick)
-        bar.addWidget(self.btn_search)
-        bar.addWidget(QLabel("등록"))
-        bar.addWidget(self.cb_accounts)
-        bar.addStretch(1)
-        self.chk_auto = QCheckBox(f"자동 수집 ({scheduler.DEFAULT_HOURS}시간마다)")
-        self.chk_auto.setToolTip(
-            "Windows 작업 스케줄러에 등록해 앱을 안 켜도 새 경기를 모읍니다.\n"
-            "PC가 켜져 있는 동안만 동작합니다.")
-        self.chk_auto.toggled.connect(self._on_toggle_auto)
-        self.lb_auto = QLabel("-")
-        self.lb_auto.setStyleSheet(f"color: {T.TEXT_DIM};")
-        bar.addWidget(self.chk_auto)
-        bar.addWidget(self.lb_auto)
-        if not scheduler.is_supported():
-            self.chk_auto.setVisible(False)
-            self.lb_auto.setVisible(False)
-        outer.addLayout(bar)
-
-        # 프로필 + 랭커 카드 + 요약 카드
-        head = QHBoxLayout()
-        self.card_ranker = RankerCard()
-        head.addWidget(self.card_ranker)
-
-        right = QVBoxLayout()
+        bar2 = QHBoxLayout()
+        back = QPushButton("← 랭커 카드")
+        back.clicked.connect(lambda: self.stack.setCurrentIndex(self.PAGE_RANKER))
         self.lb_profile = QLabel("-")
         pf = QFont()
-        pf.setPointSize(17)
+        pf.setPointSize(16)
         pf.setBold(True)
         self.lb_profile.setFont(pf)
         self.lb_sub = QLabel("-")
         self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM};")
-        right.addWidget(self.lb_profile)
-        right.addWidget(self.lb_sub)
-        right.addSpacing(6)
+        bar2.addWidget(back)
+        bar2.addSpacing(10)
+        bar2.addWidget(self.lb_profile)
+        bar2.addWidget(self.lb_sub)
+        bar2.addStretch(1)
+        outer.addLayout(bar2)
 
         cards = QHBoxLayout()
         self.card_record = StatCard("전적")
@@ -272,41 +340,24 @@ class MainWindow(QMainWindow):
         self.card_ga = StatCard("평균 실점", T.RED)
         for c in (self.card_record, self.card_rate, self.card_gf, self.card_ga):
             cards.addWidget(c)
-        right.addLayout(cards)
-        right.addStretch(1)
-        head.addLayout(right, 1)
-        outer.addLayout(head)
+        outer.addLayout(cards)
 
-        # 범위 + 더 불러오기
+        # 표시 범위 — 100단위로 보고, 더 보기로 100씩 늘린다.
         rng = QGroupBox()
         rl = QHBoxLayout(rng)
-        self.sp_from = QSpinBox()
-        self.sp_to = QSpinBox()
-        for s in (self.sp_from, self.sp_to):
-            s.setRange(1, 99999)
-            s.setMaximumWidth(90)
-        self.btn_apply = QPushButton("적용")
-        self.btn_apply.setObjectName("primary")
-        self.btn_apply.clicked.connect(self._render_all)
         self.lb_total = QLabel("")
         self.lb_total.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.btn_more = QPushButton(f"{PAGE_SIZE}경기 더 불러오기")
-        self.btn_more.setToolTip(
-            "API 의 offset 으로 더 과거 경기를 받아 DB 에 쌓습니다.\n"
-            "받아온 경기는 다음부터 다시 받지 않습니다.")
-        self.btn_more.clicked.connect(self._on_load_more)
-
-        rl.addWidget(QLabel("시작"))
-        rl.addWidget(self.sp_from)
-        rl.addWidget(QLabel("~  끝"))
-        rl.addWidget(self.sp_to)
-        rl.addWidget(self.btn_apply)
+        self.btn_less = QPushButton("처음 100경기")
+        self.btn_less.clicked.connect(self._show_first)
+        self.btn_more = QPushButton(f"{PAGE_SIZE}경기 더 보기")
+        self.btn_more.setToolTip("DB에 쌓인 경기를 100씩 더 펼쳐 봅니다.")
+        self.btn_more.clicked.connect(self._show_more)
         rl.addWidget(self.lb_total)
         rl.addStretch(1)
+        rl.addWidget(self.btn_less)
         rl.addWidget(self.btn_more)
         outer.addWidget(rng)
 
-        # 탭
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_players_tab(), "선수 지표")
         self.tabs.addTab(self._build_tactics_tab(), "전술·경기 결과")
@@ -391,10 +442,13 @@ class MainWindow(QMainWindow):
         if not scheduler.is_supported():
             return
         # 체크 상태는 앱이 아니라 실제 스케줄러가 정답 — 밖에서 지웠을 수 있다.
-        self.chk_auto.blockSignals(True)
-        self.chk_auto.setChecked(scheduler.is_enabled())
-        self.chk_auto.blockSignals(False)
-        self.lb_auto.setText(scheduler.describe())
+        on = scheduler.is_enabled()
+        desc = scheduler.describe()
+        for chk, lb in zip(self._auto_chks, self._auto_lbs):
+            chk.blockSignals(True)
+            chk.setChecked(on)
+            chk.blockSignals(False)
+            lb.setText(desc)
 
     def _on_toggle_auto(self, on: bool) -> None:
         try:
@@ -417,73 +471,88 @@ class MainWindow(QMainWindow):
         except Exception:
             return  # 목록을 못 채워도 검색은 되어야 한다
 
-        self.cb_accounts.blockSignals(True)
-        self.cb_accounts.clear()
-        self.cb_accounts.addItem("— 선택 —", None)
-        for r in rows:
-            nick = r["nickname"] or r["ouid"][:8]
-            self.cb_accounts.addItem(f"{nick} ({counts.get(r['ouid'], 0)})",
-                                     nick)
-        self.cb_accounts.blockSignals(False)
+        for cb in self._acct_combos:
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("— 선택 —", None)
+            for r in rows:
+                nick = r["nickname"] or r["ouid"][:8]
+                cb.addItem(f"{nick} ({counts.get(r['ouid'], 0)})", nick)
+            cb.blockSignals(False)
 
     def _on_pick_account(self, index: int) -> None:
-        nick = self.cb_accounts.itemData(index)
+        cb = self.sender()
+        nick = cb.itemData(index) if cb else None
         if nick:
-            self.ed_nick.setText(nick)
-            self._on_search()
+            self._nick = nick
+            self._api_search(nick)
 
     # ── 조회 ──────────────────────────────────────────────────────────
     def _go_search(self) -> None:
-        self.stack.setCurrentIndex(0)
+        self.stack.setCurrentIndex(self.PAGE_SEARCH)
         self.ed_search.setFocus()
         self.ed_search.selectAll()
 
+    def _go_analysis(self) -> None:
+        if self._matches:
+            self.stack.setCurrentIndex(self.PAGE_ANALYSIS)
+
     def _on_search(self) -> None:
-        src = self.ed_search if self.stack.currentIndex() == 0 else self.ed_nick
-        nick = src.text().strip()
+        if self.stack.currentIndex() == self.PAGE_SEARCH:
+            nick = self.ed_search.text().strip()
+        else:
+            src = self.sender()
+            # 상단 바의 조회 버튼/입력창 중 어느 페이지에서 눌렸든 그 입력값을 쓴다.
+            nick = ""
+            for ed in self._nick_edits:
+                if ed.text().strip():
+                    nick = ed.text().strip()
+                    break
         if not nick:
             self.lb_search_msg.setText("구단주명을 입력해주세요.")
             return
-        if self._loader and self._loader.isRunning():
-            return
         self.lb_search_msg.setText("")
-        self._nick = nick
-        self._api_loaded = 0
-        self._start_loader(offset=0)
+        self._api_search(nick)
 
-    def _on_load_more(self) -> None:
+    def _api_search(self, nick: str) -> None:
         if self._loader and self._loader.isRunning():
             return
-        if not self._nick:
-            return
-        self._start_loader(offset=self._api_loaded)
-
-    def _start_loader(self, offset: int) -> None:
+        self._nick = nick
         self._set_busy(True)
-        self._loader = MatchLoader(self._api, self._nick,
-                                   config.DEFAULT_MATCH_TYPE, offset, PAGE_SIZE)
+        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.start()
 
+    # 100단위 표시
+    def _show_more(self) -> None:
+        self._show_limit = min(self._show_limit + PAGE_SIZE, len(self._matches))
+        self._render_all()
+
+    def _show_first(self) -> None:
+        self._show_limit = PAGE_SIZE
+        self._render_all()
+
     def _set_busy(self, busy: bool) -> None:
-        for w in (self.btn_search, self.ed_nick, self.ed_search,
-                  self.btn_more, self.btn_apply):
+        for w in (*self._search_btns, *self._nick_edits, self.ed_search):
             w.setEnabled(not busy)
+        for b in (self.btn_more, self.btn_less, self.btn_analyze):
+            b.setEnabled(not busy)
         self.progress.setVisible(busy)
         if busy:
             self.progress.setValue(0)
 
     def _on_progress(self, done: int, total: int, msg: str) -> None:
-        self.progress.setMaximum(max(total, 1))
+        # total==0 이면 총계를 모르는 단계(목록 수집 등) — 물결 막대로 둔다.
+        self.progress.setMaximum(total if total > 0 else 0)
         self.progress.setValue(done)
         self.statusBar().showMessage(msg)
 
     def _on_failed(self, msg: str) -> None:
         self._set_busy(False)
         self.statusBar().showMessage("조회 실패")
-        if self.stack.currentIndex() == 0:
+        if self.stack.currentIndex() == self.PAGE_SEARCH:
             self.lb_search_msg.setText(msg)
         else:
             QMessageBox.warning(self, "조회 실패", msg)
@@ -493,65 +562,72 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self._refresh_accounts()
         self._ouid = ouid
-        self._api_loaded += got
+        self._basic = basic
         self._nick = basic.get("nickname") or self._nick
-        self.ed_nick.setText(self._nick)
+        for ed in self._nick_edits:
+            ed.setText(self._nick)
         if names:
             self._names, self._positions = names, positions
         self._matches, self._details = matches, details
+        self._show_limit = min(PAGE_SIZE, len(matches)) or PAGE_SIZE
 
-        self.stack.setCurrentIndex(1)
+        # 검색 결과는 먼저 랭커 카드 페이지로.
+        self.stack.setCurrentIndex(self.PAGE_RANKER)
+        self.lb_ranker_name.setText(f"{self._nick}  Lv.{basic.get('level', '-')}")
+        self.btn_analyze.setEnabled(bool(matches))
+
         if not matches:
+            self.card_ranker.set("전적", "감독모드 기록 없음", T.TEXT_DIM)
+            for r in ("순위", "구단가치", "점수"):
+                self.card_ranker.set(r, NA, T.TEXT_DIM)
+            self.card_ranker.note.setText("* 감독모드 경기가 없습니다")
             self.statusBar().showMessage(f"{self._nick} — 감독모드 기록이 없습니다.")
-            self.lb_profile.setText(self._nick)
-            self.lb_sub.setText("감독모드 기록 없음")
             return
 
-        self.sp_from.setMaximum(len(matches))
-        self.sp_to.setMaximum(len(matches))
-        self.sp_from.setValue(1)
-        self.sp_to.setValue(len(matches))
-        self.lb_profile.setText(f"{self._nick}")
-        self.lb_sub.setText(f"Lv.{basic.get('level', '-')}  ·  "
-                            f"감독모드 {len(matches)}경기 분석")
         self._render_all()
         self.statusBar().showMessage(
-            f"누적 {len(matches)}경기" + (f" · 새 경기 {new}건 저장" if new else "")
-            + f" · API 로 {self._api_loaded}경기까지 받음")
+            f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
+            + (f" · 새 경기 {new}건 저장" if new else ""))
 
     # ── 렌더 ──────────────────────────────────────────────────────────
     def _slice(self) -> tuple[list[MatchSummary], list[dict]]:
-        """시작~끝 범위만. 표시 순서는 최신순이다."""
-        a = max(self.sp_from.value() - 1, 0)
-        b = min(self.sp_to.value(), len(self._matches))
-        if a >= b:
-            a, b = 0, len(self._matches)
-        ids = {m.match_id for m in self._matches[a:b]}
-        return (self._matches[a:b],
-                [d for d in self._details if d.get("matchId") in ids])
+        """최신순으로 _show_limit 경기까지. 100단위로 늘려 본다."""
+        n = min(self._show_limit, len(self._matches)) or len(self._matches)
+        shown = self._matches[:n]
+        ids = {m.match_id for m in shown}
+        return shown, [d for d in self._details if d.get("matchId") in ids]
 
     def _render_all(self) -> None:
         matches, details = self._slice()
-        self.lb_total.setText(f"전체 {len(self._matches)}경기 중 {len(matches)}경기")
+        total = len(self._matches)
+        self.lb_total.setText(f"전체 {total}경기 중 최근 {len(matches)}경기 표시")
+        self.btn_more.setEnabled(len(matches) < total)
+        self.btn_less.setEnabled(len(matches) > PAGE_SIZE)
+        self.lb_profile.setText(self._nick)
+        self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  "
+                            f"감독모드 {len(matches)}경기 분석 (누적 {total})")
         s = summarize(matches)
         self.card_record.set(wdl_text(s.win, s.draw, s.lose))
         self.card_rate.set(f"{s.win_rate:.1f}%")
         self.card_gf.set(f"{s.avg_goals_for:.2f}")
         self.card_ga.set(f"{s.avg_goals_against:.2f}")
-        self._render_ranker(s, len(matches))
+        self._render_ranker()
         self._render_matches(matches)
         self._render_players(details)
         self._render_tactics(details)
 
-    def _render_ranker(self, s: Stats, n: int) -> None:
+    def _render_ranker(self) -> None:
+        """랭커 카드는 표시 범위와 무관하게 감독모드 전체 전적을 보여준다."""
         c = self.card_ranker
-        c.set("전적", f"{wdl_text(s.win, s.draw, s.lose)} ({s.win_rate:.1f}%)")
+        full = summarize(self._matches)
+        c.set("전적",
+              f"{wdl_text(full.win, full.draw, full.lose)} ({full.win_rate:.1f}%)")
         # 넥슨 API 가 안 주는 값 — 그럴싸한 숫자를 지어 넣지 않고, 왜 비었는지
         # 화면에서 바로 보이게 적는다.
         for row in ("순위", "구단가치", "점수"):
             c.set(row, "API 미제공", T.TEXT_DIM)
         last = self._matches[0].date_text if self._matches else "-"
-        c.note.setText(f"* {n}경기 기준 · {last} 업데이트")
+        c.note.setText(f"* {len(self._matches)}경기 기준 · {last} 업데이트")
         c.setToolTip("순위·구단가치·점수는 넥슨 오픈API가 제공하지 않습니다.\n"
                      "지어낸 값을 넣지 않고 비워 둡니다.")
 
