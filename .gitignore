@@ -20,3 +20,6 @@ venv/
 build/
 dist/
 *.spec.bak
+
+# 백그라운드 작업 진행 보고용 임시 파일
+_bgtask.meta
