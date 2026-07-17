@@ -10,9 +10,10 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QGroupBox, QHBoxLayout, QHeaderView, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QScrollArea, QStackedWidget, QTableWidget, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QFrame, QGroupBox, QHBoxLayout, QHeaderView,
+    QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
+    QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
 import config
@@ -220,7 +221,6 @@ class MainWindow(QMainWindow):
         self._details: list[dict] = []
         self._names: dict = {}
         self._positions: dict = {}
-        self._show_limit = PAGE_SIZE   # 화면에 몇 경기까지 보일지 — 100단위로 늘린다
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -442,19 +442,53 @@ class MainWindow(QMainWindow):
             cards.addWidget(c)
         outer.addLayout(cards)
 
-        # 표시 범위 — 100단위로 보고, 더 보기로 100씩 늘린다.
-        rng = QGroupBox()
+        # 표시 범위 — 시작~끝을 직접 입력해 그 구간만 본다(레퍼런스 화면과 동일한
+        # 구성). 검색 시 이미 전량을 받아 두므로 "더 불러오기"는 그 사이 새로
+        # 생긴 경기가 있는지 다시 확인하는 버튼이다.
+        rng = QFrame()
+        rng.setStyleSheet(
+            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+            f" border-radius: 8px; }}")
         rl = QHBoxLayout(rng)
+        rl.setContentsMargins(14, 10, 14, 10)
+
+        lb_from = QLabel("시작")
+        lb_from.setStyleSheet(f"color: {T.TEXT};")
+        self.sp_from = QSpinBox()
+        self.sp_from.setRange(1, 1)
+        self.sp_from.setFixedWidth(72)
+        lb_tilde = QLabel("~")
+        lb_tilde.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lb_to = QLabel("끝")
+        lb_to.setStyleSheet(f"color: {T.TEXT};")
+        self.sp_to = QSpinBox()
+        self.sp_to.setRange(1, 1)
+        self.sp_to.setFixedWidth(72)
+        self.btn_apply = QPushButton("적용")
+        self.btn_apply.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {T.GREEN};"
+            f" border: 1px solid {T.GREEN}; border-radius: 6px; padding: 6px 16px;"
+            f" font-weight: bold; }}"
+            f"QPushButton:hover {{ background: rgba(63,185,80,0.12); }}")
+        self.btn_apply.clicked.connect(self._apply_range)
         self.lb_total = QLabel("")
         self.lb_total.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.btn_less = QPushButton("처음 100경기")
-        self.btn_less.clicked.connect(self._show_first)
-        self.btn_more = QPushButton(f"{PAGE_SIZE}경기 더 보기")
-        self.btn_more.setToolTip("DB에 쌓인 경기를 100씩 더 펼쳐 봅니다.")
-        self.btn_more.clicked.connect(self._show_more)
+        self.btn_more = QPushButton("⬇  새 경기 확인")
+        self.btn_more.setObjectName("primary")
+        self.btn_more.setToolTip(
+            "검색할 때 이미 받을 수 있는 만큼 전부 받아 둡니다.\n"
+            "이 버튼은 그 사이 새로 생긴 경기가 있는지 다시 확인합니다.")
+        self.btn_more.clicked.connect(self._on_search)
+
+        rl.addWidget(lb_from)
+        rl.addWidget(self.sp_from)
+        rl.addWidget(lb_tilde)
+        rl.addWidget(lb_to)
+        rl.addWidget(self.sp_to)
+        rl.addWidget(self.btn_apply)
+        rl.addSpacing(8)
         rl.addWidget(self.lb_total)
         rl.addStretch(1)
-        rl.addWidget(self.btn_less)
         rl.addWidget(self.btn_more)
         outer.addWidget(rng)
 
@@ -625,19 +659,14 @@ class MainWindow(QMainWindow):
         self._loader.failed.connect(self._on_failed)
         self._loader.start()
 
-    # 100단위 표시
-    def _show_more(self) -> None:
-        self._show_limit = min(self._show_limit + PAGE_SIZE, len(self._matches))
-        self._render_all()
-
-    def _show_first(self) -> None:
-        self._show_limit = PAGE_SIZE
+    def _apply_range(self) -> None:
+        """시작~끝 스핀박스 값대로 표시 구간을 바꾼다."""
         self._render_all()
 
     def _set_busy(self, busy: bool) -> None:
         for w in (*self._search_btns, *self._nick_edits, self.ed_search):
             w.setEnabled(not busy)
-        for b in (self.btn_more, self.btn_less, self.btn_analyze):
+        for b in (self.btn_more, self.btn_apply, self.btn_analyze):
             b.setEnabled(not busy)
         self.progress.setVisible(busy)
         if busy:
@@ -674,7 +703,17 @@ class MainWindow(QMainWindow):
         if names:
             self._names, self._positions = names, positions
         self._matches, self._details = matches, details
-        self._show_limit = min(PAGE_SIZE, len(matches)) or PAGE_SIZE
+
+        # 시작~끝 스핀박스 — 처음엔 최근 100경기(또는 그 이하)를 기본으로 보여준다.
+        total_n = len(matches)
+        self.sp_from.blockSignals(True)
+        self.sp_to.blockSignals(True)
+        self.sp_from.setRange(1, max(total_n, 1))
+        self.sp_to.setRange(1, max(total_n, 1))
+        self.sp_from.setValue(1)
+        self.sp_to.setValue(min(PAGE_SIZE, total_n) or 1)
+        self.sp_from.blockSignals(False)
+        self.sp_to.blockSignals(False)
 
         # 검색 결과는 먼저 랭커 카드 페이지로.
         self.stack.setCurrentIndex(self.PAGE_RANKER)
@@ -694,18 +733,20 @@ class MainWindow(QMainWindow):
 
     # ── 렌더 ──────────────────────────────────────────────────────────
     def _slice(self) -> tuple[list[MatchSummary], list[dict]]:
-        """최신순으로 _show_limit 경기까지. 100단위로 늘려 본다."""
-        n = min(self._show_limit, len(self._matches)) or len(self._matches)
-        shown = self._matches[:n]
+        """시작~끝 스핀박스 구간만. 표시 순서는 최신순 그대로다."""
+        total_n = len(self._matches)
+        a = max(self.sp_from.value() - 1, 0)
+        b = min(self.sp_to.value(), total_n)
+        if a >= b:
+            a, b = 0, total_n
+        shown = self._matches[a:b]
         ids = {m.match_id for m in shown}
         return shown, [d for d in self._details if d.get("matchId") in ids]
 
     def _render_all(self) -> None:
         matches, details = self._slice()
         total = len(self._matches)
-        self.lb_total.setText(f"전체 {total}경기 중 최근 {len(matches)}경기 표시")
-        self.btn_more.setEnabled(len(matches) < total)
-        self.btn_less.setEnabled(len(matches) > PAGE_SIZE)
+        self.lb_total.setText(f"전체 {total}경기")
         self.lb_profile.setText(self._nick)
         self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
                             f"감독모드 {len(matches)}경기 분석 (누적 {total})")
