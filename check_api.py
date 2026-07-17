@@ -13,6 +13,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 import config
 import stats
+import store
 from models import parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
 
@@ -107,6 +108,20 @@ def main() -> int:
         print(f"[OK]   득점 유형: {dict(rb.goal_types.most_common(3))}")
     except Exception as e:
         print(f"[FAIL] 집계: {type(e).__name__}: {e}")
+        return 1
+
+    try:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            new = store.save_matches(conn, details)
+            total = store.match_count(conn, ouid, config.DEFAULT_MATCH_TYPE)
+            a, b = store.date_range(conn, ouid, config.DEFAULT_MATCH_TYPE)
+            print(f"[OK]   DB({config.DB_PATH.name}): 이번에 {new}건 저장 · "
+                  f"누적 {total}경기 ({a} ~ {b})")
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[FAIL] DB: {type(e).__name__}: {e}")
         return 1
 
     print("\n전부 통과 — python app_main.py 로 앱을 띄우세요.")

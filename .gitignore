@@ -4,6 +4,11 @@
 # 매치 상세 디스크 캐시
 .cache/
 
+# 누적 DB — 내 전적 데이터라 커밋하지 않는다
+fifa.db
+fifa.db-wal
+fifa.db-shm
+
 # Python
 __pycache__/
 *.py[cod]

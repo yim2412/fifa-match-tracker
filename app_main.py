@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 import config
 import stats as st
+import store
 from models import MatchSummary, Stats, parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
 
@@ -52,8 +53,9 @@ class MatchLoader(QThread):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
 
     progress = pyqtSignal(int, int, str)          # 완료 수, 전체, 메시지
-    # [MatchSummary], [원본 detail], ouid, user_basic, spId→이름, 포지션코드→이름
-    finished_ok = pyqtSignal(list, list, str, dict, dict, dict)
+    # [MatchSummary], [원본 detail], ouid, user_basic, spId→이름, 포지션코드→이름,
+    # 이번 조회로 새로 저장된 경기 수
+    finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int)
     failed = pyqtSignal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, limit: int):
@@ -73,36 +75,51 @@ class MatchLoader(QThread):
             ouid = self._api.get_ouid(self._nickname)
             basic = self._api.get_user_basic(ouid)
 
-            self.progress.emit(0, self._limit, "매치 목록 조회 중…")
-            ids = self._api.get_match_ids(ouid, self._match_type, 0, self._limit)
-            if not ids:
-                self.finished_ok.emit([], [], ouid, basic, {}, {})
+            # DB 는 스레드마다 따로 연다 — 커넥션은 스레드 간 공유하면 안 된다.
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.upsert_account(conn, ouid, basic.get("nickname") or self._nickname)
+
+                self.progress.emit(0, self._limit, "매치 목록 조회 중…")
+                ids = self._api.get_match_ids(ouid, self._match_type, 0, self._limit)
+
+                # 이미 쌓아 둔 경기는 API 를 다시 부르지 않는다.
+                have = store.existing_ids(conn, ids)
+                todo = [i for i in ids if i not in have]
+
+                fresh: list[dict] = []
+                done = 0
+                if todo:
+                    with ThreadPoolExecutor(max_workers=6) as pool:
+                        for detail in pool.map(self._safe_detail, todo):
+                            if self._cancel:
+                                return
+                            done += 1
+                            self.progress.emit(done, len(todo),
+                                               f"새 경기 {done}/{len(todo)}")
+                            if detail is not None:
+                                fresh.append(detail)
+                new = store.save_matches(conn, fresh)
+
+                # 화면에 그리는 건 API 100경기가 아니라 DB 에 쌓인 전부.
+                self.progress.emit(done, max(len(todo), 1), "저장된 전적 불러오는 중…")
+                details = store.load_details(conn, ouid, self._match_type)
+            finally:
+                conn.close()
+
+            if not details:
+                self.finished_ok.emit([], [], ouid, basic, {}, {}, 0)
                 return
 
-            matches: list[MatchSummary] = []
-            details: list[dict] = []
-            done = 0
-            with ThreadPoolExecutor(max_workers=6) as pool:
-                for detail in pool.map(self._safe_detail, ids):
-                    if self._cancel:
-                        return
-                    done += 1
-                    self.progress.emit(done, len(ids), f"경기 상세 {done}/{len(ids)}")
-                    if detail is None:
-                        continue
-                    details.append(detail)
-                    m = parse_match(detail, ouid)
-                    if m:
-                        matches.append(m)
-
+            matches = [m for m in (parse_match(d, ouid) for d in details) if m]
             matches.sort(key=lambda m: m.match_date or 0, reverse=True)
 
             # 선수 이름 메타는 8만 건이라 여기(워커)서 받는다. 실패해도 조회는 살린다.
-            self.progress.emit(done, len(ids), "선수 정보 조회 중…")
+            self.progress.emit(done, max(len(todo), 1), "선수 정보 조회 중…")
             names = self._safe_meta("spid", "id", "name")
             positions = self._safe_meta("spposition", "spposition", "desc")
 
-            self.finished_ok.emit(matches, details, ouid, basic, names, positions)
+            self.finished_ok.emit(matches, details, ouid, basic, names, positions, new)
 
         except NexonAPIError as e:
             self.failed.emit(e.message)
@@ -138,6 +155,7 @@ class MainWindow(QMainWindow):
         self.resize(1000, 680)
         self._build_ui()
         self._load_match_types()
+        self._refresh_accounts()
 
     # ── UI 구성 ───────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -164,6 +182,20 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.sp_limit)
         bar.addWidget(self.btn_search)
         outer.addLayout(bar)
+
+        # 등록 계정 — 조회하면 자동 등록된다. 고르면 바로 조회.
+        fav = QHBoxLayout()
+        fav.addWidget(QLabel("등록 계정"))
+        self.cb_accounts = NoScrollComboBox()
+        self.cb_accounts.setMinimumWidth(180)
+        self.cb_accounts.activated.connect(self._on_pick_account)
+        self.btn_unfav = QPushButton("등록 해제")
+        self.btn_unfav.setToolTip("목록에서만 뺍니다. 쌓아 둔 경기 기록은 지우지 않습니다.")
+        self.btn_unfav.clicked.connect(self._on_remove_account)
+        fav.addWidget(self.cb_accounts)
+        fav.addWidget(self.btn_unfav)
+        fav.addStretch(1)
+        outer.addLayout(fav)
 
         # 요약
         self.gb_summary = QGroupBox("요약")
@@ -292,6 +324,63 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.cb_type.setCurrentIndex(idx)
 
+    # ── 등록 계정 ─────────────────────────────────────────────────────
+    def _refresh_accounts(self) -> None:
+        """DB 의 등록 계정을 콤보에 다시 채운다. 조회하면 자동으로 등록된다."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                rows = store.list_accounts(conn)
+                counts = {r["ouid"]: store.match_count(conn, r["ouid"]) for r in rows}
+            finally:
+                conn.close()
+        except Exception:
+            return  # 목록을 못 채워도 검색은 되어야 한다
+
+        current = self.cb_accounts.currentData()
+        self.cb_accounts.blockSignals(True)
+        self.cb_accounts.clear()
+        self.cb_accounts.addItem("— 선택 —", None)
+        for r in rows:
+            nick = r["nickname"] or r["ouid"][:8]
+            self.cb_accounts.addItem(f"{nick} ({counts.get(r['ouid'], 0)}경기)", r["ouid"])
+        idx = self.cb_accounts.findData(current)
+        if idx >= 0:
+            self.cb_accounts.setCurrentIndex(idx)
+        self.cb_accounts.blockSignals(False)
+
+    def _on_pick_account(self, index: int) -> None:
+        ouid = self.cb_accounts.itemData(index)
+        if not ouid:
+            return
+        nick = self.cb_accounts.itemText(index).rsplit(" (", 1)[0]
+        self.ed_nick.setText(nick)
+        self._on_search()
+
+    def _on_remove_account(self) -> None:
+        ouid = self.cb_accounts.currentData()
+        if not ouid:
+            QMessageBox.information(self, "알림", "목록에서 계정을 먼저 고르세요.")
+            return
+        nick = self.cb_accounts.currentText().rsplit(" (", 1)[0]
+        ok = QMessageBox.question(
+            self, "등록 해제",
+            f"'{nick}' 을(를) 등록 목록에서 뺄까요?\n\n"
+            "쌓아 둔 경기 기록은 지우지 않습니다. 다시 조회하면 목록에 돌아옵니다.",
+        )
+        if ok != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.remove_account(conn, ouid)
+            finally:
+                conn.close()
+        except Exception as e:
+            QMessageBox.warning(self, "실패", f"등록 해제에 실패했습니다: {e}")
+            return
+        self._refresh_accounts()
+
     # ── 조회 ──────────────────────────────────────────────────────────
     def _on_search(self) -> None:
         nick = self.ed_nick.text().strip()
@@ -328,8 +417,9 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "조회 실패", msg)
 
     def _on_loaded(self, matches: list[MatchSummary], details: list, ouid: str,
-                   basic: dict, names: dict, positions: dict) -> None:
+                   basic: dict, names: dict, positions: dict, new: int) -> None:
         self._set_busy(False)
+        self._refresh_accounts()
         nick = basic.get("nickname", "-")
         level = basic.get("level", "-")
 
@@ -347,7 +437,14 @@ class MainWindow(QMainWindow):
         self._render_summary(summarize(matches))
         self._render_players(details, ouid, names, positions)
         self._render_tactics(details, ouid)
-        self.statusBar().showMessage(f"{nick} (Lv.{level}) — 최근 {len(matches)}경기")
+
+        span = ""
+        if matches:
+            first, last = matches[-1].date_text[:10], matches[0].date_text[:10]
+            span = f" · {first} ~ {last}" if first != last else f" · {last}"
+        added = f" (새 경기 {new}건 저장)" if new else ""
+        self.statusBar().showMessage(
+            f"{nick} (Lv.{level}) — 누적 {len(matches)}경기{span}{added}")
 
     # ── 렌더 ──────────────────────────────────────────────────────────
     def _render_table(self, matches: list[MatchSummary]) -> None:

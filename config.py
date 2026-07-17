@@ -20,6 +20,7 @@ def _root() -> Path:
 
 ROOT = _root()
 CACHE_DIR = ROOT / ".cache"
+DB_PATH = ROOT / "fifa.db"  # 조회한 경기 누적 — API는 최근 100경기까지만 준다
 
 load_dotenv(ROOT / ".env")
 API_KEY = os.getenv("NEXON_API_KEY", "").strip()
