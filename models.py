@@ -21,10 +21,20 @@ class MatchSummary:
     pass_try: int
     pass_success: int
     rating: float
+    my_shootout: int = 0
+    opp_shootout: int = 0
+
+    @property
+    def is_shootout(self) -> bool:
+        """승부차기로 갈린 경기. 없었으면 양쪽 다 0으로 온다."""
+        return bool(self.my_shootout or self.opp_shootout)
 
     @property
     def score(self) -> str:
-        return f"{self.my_goals} : {self.opp_goals}"
+        base = f"{self.my_goals} : {self.opp_goals}"
+        if self.is_shootout:
+            base += f" (승부차기 {self.my_shootout}:{self.opp_shootout})"
+        return base
 
     @property
     def pass_rate(self) -> float:
@@ -33,6 +43,22 @@ class MatchSummary:
     @property
     def date_text(self) -> str:
         return self.match_date.strftime("%Y-%m-%d %H:%M") if self.match_date else "-"
+
+
+def _i(d: dict, key: str) -> int:
+    """숫자 필드를 안전하게 읽는다.
+
+    넥슨은 값을 비울 때 키를 빼는 게 아니라 null로 준다(상대 탈주 등으로
+    기록이 없는 경기에서 shoot 필드 전체가 null). .get(key, 0) 은 키가
+    있으면 기본값이 안 먹어 None이 새어 나가고, 집계에서 터진다.
+    """
+    v = d.get(key)
+    return int(v) if isinstance(v, (int, float)) else 0
+
+
+def _f(d: dict, key: str) -> float:
+    v = d.get(key)
+    return float(v) if isinstance(v, (int, float)) else 0.0
 
 
 def _parse_date(raw: str) -> datetime | None:
@@ -63,17 +89,19 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         match_id=detail.get("matchId", ""),
         match_date=_parse_date(detail.get("matchDate", "")),
         match_type=detail.get("matchType", 0),
-        my_nickname=me.get("nickname", "-"),
-        opponent=opp.get("nickname", "-"),
-        result=md.get("matchResult", "-"),
-        my_goals=shoot.get("goalTotal", 0),
-        opp_goals=opp_shoot.get("goalTotal", 0),
-        possession=md.get("possession", 0),
-        shoot_total=shoot.get("shootTotal", 0),
-        shoot_effective=shoot.get("effectiveShootTotal", 0),
-        pass_try=passes.get("passTry", 0),
-        pass_success=passes.get("passSuccess", 0),
-        rating=md.get("averageRating", 0.0),
+        my_nickname=me.get("nickname") or "-",
+        opponent=opp.get("nickname") or "-",
+        result=md.get("matchResult") or "-",
+        my_goals=_i(shoot, "goalTotal"),
+        opp_goals=_i(opp_shoot, "goalTotal"),
+        possession=_i(md, "possession"),
+        shoot_total=_i(shoot, "shootTotal"),
+        shoot_effective=_i(shoot, "effectiveShootTotal"),
+        pass_try=_i(passes, "passTry"),
+        pass_success=_i(passes, "passSuccess"),
+        rating=_f(md, "averageRating"),
+        my_shootout=_i(shoot, "shootOutScore"),
+        opp_shootout=_i(opp_shoot, "shootOutScore"),
     )
 
 

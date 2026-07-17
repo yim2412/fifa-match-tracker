@@ -25,7 +25,7 @@ load_dotenv(ROOT / ".env")
 API_KEY = os.getenv("NEXON_API_KEY", "").strip()
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
-DEFAULT_MATCH_TYPE = 50  # 공식경기
+DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다
 FALLBACK_MATCH_TYPES = [
     (50, "공식경기"),
     (52, "감독모드"),
