@@ -151,6 +151,33 @@ class PlayerStat:
     def block_rate(self) -> float:
         return self._rate(self.block, self.block_try)
 
+    # ── 파생 지표(자체 공식) ──────────────────────────────────────────
+    # API 가 주는 값이 아니라 우리가 만든 계산이다. 참고한 전적 사이트와
+    # 값이 다르다(그쪽 공식은 비공개). 포지션별 순서(공격수↑ 수비수·GK↑)가
+    # 자연스럽게 나오도록 가중치를 잡았고, 바꾸려면 아래 숫자만 고치면 된다.
+    @property
+    def attack_power(self) -> float:
+        """공격력 — 골·어시·슈팅·드리블 기여를 합산."""
+        missed = max(self.shoot - self.effective_shoot, 0)
+        return (self.goal * 5 + self.assist * 3 + self.effective_shoot * 1
+                + missed * 0.3 + self.dribble_success * 0.2)
+
+    @property
+    def defense_power(self) -> float:
+        """수비력 — 태클·블록·가로채기·선방·공중볼 기여를 합산."""
+        return (self.tackle * 3 + self.block * 3 + self.intercept * 2
+                + self.defending * 2 + self.aerial_success * 1)
+
+    @property
+    def expected_goal_rate(self) -> float:
+        """기대득점률(%) — 유효슛 대비 득점 전환율."""
+        return self._rate(self.goal, self.effective_shoot)
+
+    @property
+    def save_power(self) -> int:
+        """선방력 — defending 스탯 그대로. 실제로 GK·수비수에서 높다."""
+        return self.defending
+
 
 def aggregate_players(details: list[dict], ouid: str,
                       name_of=None, pos_name=None) -> list[PlayerStat]:

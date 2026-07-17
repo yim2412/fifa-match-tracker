@@ -179,9 +179,10 @@ class MatchLoader(QThread):
 class MainWindow(QMainWindow):
     MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
                      "패스성공률", "평점"]
-    PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률", "골", "어시",
-                      "공격P", "슛", "유효슛", "패스%", "드리블%", "공중볼%",
-                      "태클%", "블록%", "가로채기", "수비", "경고", "평점"]
+    PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률",
+                      "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
+                      "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
+                      "블록%", "선방력", "평점"]
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -722,18 +723,37 @@ class MainWindow(QMainWindow):
             rows.append([
                 p.position, p.name, (f"{p.grade}", p.grade),
                 (f"{p.games}", p.games), (f"{p.win_rate:.1f}", p.win_rate),
-                (f"{p.goal}", p.goal), (f"{p.assist}", p.assist),
+                (f"{p.attack_power:.1f}", p.attack_power),
+                (f"{p.defense_power:.1f}", p.defense_power),
+                (f"{p.expected_goal_rate:.1f}", p.expected_goal_rate),
                 (f"{p.attack_point}", p.attack_point),
-                (f"{p.shoot}", p.shoot), (f"{p.effective_shoot}", p.effective_shoot),
+                (f"{p.goal}", p.goal), (f"{p.assist}", p.assist),
                 (f"{p.pass_rate:.1f}", p.pass_rate),
                 (f"{p.dribble_rate:.1f}", p.dribble_rate),
                 (f"{p.aerial_rate:.1f}", p.aerial_rate),
+                (f"{p.intercept}", p.intercept),
                 (f"{p.tackle_rate:.1f}", p.tackle_rate),
                 (f"{p.block_rate:.1f}", p.block_rate),
-                (f"{p.intercept}", p.intercept), (f"{p.defending}", p.defending),
-                (f"{p.yellow}", p.yellow), (f"{p.rating:.2f}", p.rating),
+                (f"{p.save_power}", p.save_power),
+                (f"{p.rating:.2f}", p.rating),
             ])
         self._fill(self.tbl_players, rows)
+        # 공격력(5열)·수비력(6열)에 값 크기만큼 색을 입혀 강조 — 빨강/파랑.
+        atk_max = max((p.attack_power for p in players), default=1) or 1
+        def_max = max((p.defense_power for p in players), default=1) or 1
+        for r, p in enumerate(players):
+            self._tint(self.tbl_players.item(r, 5), p.attack_power, atk_max, T.RED)
+            self._tint(self.tbl_players.item(r, 6), p.defense_power, def_max, T.BLUE)
+
+    @staticmethod
+    def _tint(item, value: float, vmax: float, hexcolor: str) -> None:
+        """값이 클수록 진한 배경. 배경은 셀(item)에 붙어 정렬해도 따라간다."""
+        if item is None or vmax <= 0:
+            return
+        frac = max(0.0, min(value / vmax, 1.0))
+        col = QColor(hexcolor)
+        col.setAlpha(int(30 + frac * 150))  # 30~180 — 옅게~진하게
+        item.setBackground(col)
 
     @staticmethod
     def _clear(box) -> None:
