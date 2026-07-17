@@ -26,7 +26,12 @@ LOG_PATH = config.CACHE_DIR / "collect.log"
 
 def log(msg: str) -> None:
     line = f"{datetime.now():%Y-%m-%d %H:%M:%S}  {msg}"
-    print(line)
+    try:
+        # 콘솔 없이 돌 때(pythonw / --noconsole exe)는 sys.stdout 이 None 이다.
+        # 여기서 죽으면 아래 파일 로그까지 못 남아 원인을 못 찾는다.
+        print(line)
+    except Exception:
+        pass
     try:
         config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         with open(LOG_PATH, "a", encoding="utf-8") as f:

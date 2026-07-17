@@ -15,10 +15,26 @@ import config
 TASK_NAME = "피파전적관리 자동수집"
 DEFAULT_HOURS = 6
 
-# 작업 스케줄러가 부를 실행 파일. 콘솔 창을 띄우지 않는 pythonw 를 쓴다.
-_PYW = Path(sys.executable).with_name("pythonw.exe")
-PYTHON = _PYW if _PYW.exists() else Path(sys.executable)
-SCRIPT = config.ROOT / "collect.py"
+FROZEN = getattr(sys, "frozen", False)
+
+# 작업 스케줄러가 부를 실행 파일.
+#  - 개발 중: 콘솔 창이 6시간마다 번쩍이지 않게 pythonw.exe 로 collect.py 를 돌린다.
+#  - exe 로 묶으면: 옆에 collect.py 도 pythonw.exe 도 없다. exe 자신을
+#    --collect 로 부른다(app_main 이 이 인자를 받아 수집만 하고 끝낸다).
+if FROZEN:
+    PYTHON = Path(sys.executable)
+    SCRIPT = None
+else:
+    _PYW = Path(sys.executable).with_name("pythonw.exe")
+    PYTHON = _PYW if _PYW.exists() else Path(sys.executable)
+    SCRIPT = config.ROOT / "collect.py"
+
+
+def _task_command() -> str:
+    # 경로에 공백이 있어도 되게 통째로 따옴표. schtasks /TR 은 문자열 하나를 받는다.
+    if FROZEN:
+        return f'"{PYTHON}" --collect'
+    return f'"{PYTHON}" "{SCRIPT}"'
 
 # 자식 프로세스의 콘솔 창을 숨긴다 — GUI 에서 부를 때 창이 번쩍이지 않게.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -54,11 +70,9 @@ def is_enabled() -> bool:
 
 def enable(hours: int = DEFAULT_HOURS) -> None:
     """등록(이미 있으면 덮어쓴다). 주기는 시간 단위."""
-    if not SCRIPT.exists():
+    if SCRIPT is not None and not SCRIPT.exists():
         raise SchedulerError(f"{SCRIPT.name} 을 찾지 못했습니다.")
-    # 경로에 공백이 있어도 되게 통째로 따옴표. schtasks /TR 은 문자열 하나를 받는다.
-    command = f'"{PYTHON}" "{SCRIPT}"'
-    r = _run(["/Create", "/TN", TASK_NAME, "/TR", command,
+    r = _run(["/Create", "/TN", TASK_NAME, "/TR", _task_command(),
               "/SC", "HOURLY", "/MO", str(hours), "/F"])
     if r.returncode != 0:
         raise SchedulerError((r.stderr or r.stdout or "").strip()

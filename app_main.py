@@ -608,6 +608,13 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    # exe 로 묶이면 옆에 collect.py 가 없다. 작업 스케줄러는 exe 자신을
+    # --collect 로 부르고, 그때는 창 없이 수집만 하고 끝낸다.
+    if "--collect" in sys.argv[1:]:
+        import collect
+        args = [a for a in sys.argv[1:] if a != "--collect"]
+        return collect.main(args)
+
     app = QApplication(sys.argv)
     if not config.API_KEY:
         QMessageBox.critical(
