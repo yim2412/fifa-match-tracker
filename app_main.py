@@ -804,7 +804,7 @@ class MainWindow(QMainWindow):
                 (f"{p.intercept}", p.intercept),
                 (f"{p.tackle_rate:.1f}", p.tackle_rate),
                 (f"{p.block_rate:.1f}", p.block_rate),
-                (f"{p.save_power}", p.save_power),
+                (f"{p.save_power:.1f}", p.save_power),
                 (f"{p.rating:.2f}", p.rating),
             ])
         self._fill(self.tbl_players, rows)

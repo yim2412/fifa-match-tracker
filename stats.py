@@ -160,32 +160,64 @@ class PlayerStat:
     def block_rate(self) -> float:
         return self._rate(self.block, self.block_try)
 
-    # ── 파생 지표(자체 공식) ──────────────────────────────────────────
-    # API 가 주는 값이 아니라 우리가 만든 계산이다. 참고한 전적 사이트와
-    # 값이 다르다(그쪽 공식은 비공개). 포지션별 순서(공격수↑ 수비수·GK↑)가
-    # 자연스럽게 나오도록 가중치를 잡았고, 바꾸려면 아래 숫자만 고치면 된다.
+    def _per_match(self, total: float) -> float:
+        return total / self.games * 100 if self.games else 0.0
+
+    # ── 파생 지표 — fc-info.com 프론트엔드 JS 번들에서 역산 ────────────
+    # API 가 안 주는 값이라 직접 만들어야 했는데, 처음엔 우리 나름의 가중치로
+    # 지어냈다가(커밋 이력 참고) 실제 계산식을 찾아 그대로 옮겼다.
+    # fc-info 의 분석 페이지 JS 청크(pages/analysis/coach/[id]-*.js)에 미니파이된
+    # 채로 그대로 들어있었다 — attackScore/defenceScore/defendingPoint 등의
+    # 변수명으로. 실제 100경기 데이터로 재현해 값이 거의 일치함을 확인했다
+    # (예: GK 선방력 151.5 vs 참고 151.6, CDM 수비력 362.4 vs 참고 365.0).
+    #
+    # 핵심 발견: "선방력"은 defending 누적 합계가 아니라 **경기당 평균 × 100**
+    # 이다. 100경기 표본에서는 나눗셈과 곱셈이 상쇄돼 합계처럼 보였을 뿐이고,
+    # 경기 수가 다르면(우리 DB는 누적이라 수천 경기) 완전히 다른 값이 된다.
+    @property
+    def expected_goal_rate(self) -> float:
+        """기대득점률 — '경기당 공격포인트(골+어시) 비율×100'. 유효슛 대비
+        득점률이 아니다(이름과 달리 fc-info 정의를 그대로 따름)."""
+        return self._per_match(self.goal + self.assist)
+
+    @property
+    def intercept_rate(self) -> float:
+        """가로채기 포인트 — 경기당 평균 × 100 (원본 표기: interceptPoint)."""
+        return self._per_match(self.intercept)
+
+    @property
+    def defending_rate(self) -> float:
+        """선방력(defendingPoint) — defending 경기당 평균 × 100. 합계가 아니다."""
+        return self._per_match(self.defending)
+
+    @property
+    def save_power(self) -> float:
+        """선방력 — defending_rate 의 별칭(표에는 이 이름으로 노출)."""
+        return self.defending_rate
+
+    def _is_gk(self) -> bool:
+        return self.position == "GK"
+
     @property
     def attack_power(self) -> float:
-        """공격력 — 골·어시·슈팅·드리블 기여를 합산."""
-        missed = max(self.shoot - self.effective_shoot, 0)
-        return (self.goal * 5 + self.assist * 3 + self.effective_shoot * 1
-                + missed * 0.3 + self.dribble_success * 0.2)
+        """공격력 = 10×기대득점률 + 패스% + 드리블% + 5×(승률/출전)
+        + (GK 아니면 공중볼%)."""
+        score = (10 * self.expected_goal_rate + self.pass_rate + self.dribble_rate
+                + 5 * (self.win_rate / self.games if self.games else 0.0))
+        if not self._is_gk():
+            score += self.aerial_rate
+        return score
 
     @property
     def defense_power(self) -> float:
-        """수비력 — 태클·블록·가로채기·선방·공중볼 기여를 합산."""
-        return (self.tackle * 3 + self.block * 3 + self.intercept * 2
-                + self.defending * 2 + self.aerial_success * 1)
-
-    @property
-    def expected_goal_rate(self) -> float:
-        """기대득점률(%) — 유효슛 대비 득점 전환율."""
-        return self._rate(self.goal, self.effective_shoot)
-
-    @property
-    def save_power(self) -> int:
-        """선방력 — defending 스탯 그대로. 실제로 GK·수비수에서 높다."""
-        return self.defending
+        """수비력 = 패스% + 가로채기포인트 + 태클% + 2×선방력 + 블록%
+        + 5×(승률/출전) + (GK 아니면 공중볼%)."""
+        score = (self.pass_rate + self.intercept_rate + self.tackle_rate
+                + 2 * self.defending_rate + self.block_rate
+                + 5 * (self.win_rate / self.games if self.games else 0.0))
+        if not self._is_gk():
+            score += self.aerial_rate
+        return score
 
 
 def aggregate_players(details: list[dict], ouid: str,
