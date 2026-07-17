@@ -1,0 +1,17 @@
+# API 키 — 절대 커밋 금지
+.env
+
+# 매치 상세 디스크 캐시
+.cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 빌드 산출물
+build/
+dist/
+*.spec.bak
