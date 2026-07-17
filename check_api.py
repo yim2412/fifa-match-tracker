@@ -6,6 +6,11 @@ from __future__ import annotations
 
 import sys
 
+# 한국어 Windows 콘솔은 기본 cp949라 한글·기호(—) 출력에서 죽는다.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import config
 from models import parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
