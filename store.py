@@ -78,6 +78,19 @@ def save_matches(conn: sqlite3.Connection, details: list[dict]) -> int:
     return new
 
 
+def known_ids(conn: sqlite3.Connection, ouid: str,
+              match_type: int | None = None) -> set[str]:
+    """이 계정으로 이미 저장해 둔 매치 id 전체 — '새 경기까지만' 받기용."""
+    sql = ("SELECT p.match_id FROM match_players p"
+           " JOIN matches m ON m.match_id = p.match_id"
+           " WHERE p.ouid = ?")
+    args: list = [ouid]
+    if match_type is not None:
+        sql += " AND m.match_type = ?"
+        args.append(match_type)
+    return {r["match_id"] for r in conn.execute(sql, args)}
+
+
 def existing_ids(conn: sqlite3.Connection, match_ids: list[str]) -> set[str]:
     """이미 저장된 경기ID — 이건 API를 다시 부를 필요가 없다."""
     if not match_ids:
