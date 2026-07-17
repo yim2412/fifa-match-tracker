@@ -154,7 +154,7 @@ class MainWindow(QMainWindow):
         self._api = api
         self._loader: MatchLoader | None = None
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
-        self.resize(1000, 680)
+        self.resize(1280, 720)
         self._build_ui()
         self._load_match_types()
         self._refresh_accounts()
@@ -277,6 +277,10 @@ class MainWindow(QMainWindow):
         note.setStyleSheet("color: #888;")
         v.addWidget(note)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS)
+        # 선수 이름은 내용에 맞춰 — 균등 분배면 긴 이름이 여러 줄로 접힌다
+        # ("슈바인슈타이거"). 숫자 열들이 대신 줄어드는 게 낫다.
+        self.tbl_players.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents)
         v.addWidget(self.tbl_players, 1)
         return w
 
