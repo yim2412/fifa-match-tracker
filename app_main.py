@@ -290,6 +290,43 @@ class SeasonIconLoader(QThread):
                 self.loaded.emit(sp_id, str(path))
 
 
+class TeamColorLoader(QThread):
+    """상대 닉네임별 팀컬러를 백그라운드로 조회한다(넥슨 데이터센터 스크래핑,
+    ranker.fetch_manager_rank 재사용).
+
+    top 10,000 감독모드 랭커 밖이면 팀컬러가 빈 문자열로 온다 — 그 상대는
+    통계에서 자연히 빠진다. 닉네임 수만큼 순차 HTTP 요청이라 상대가 많으면
+    시간이 걸릴 수 있어, UI 스레드를 막지 않게 여기서 하나씩 돈다."""
+
+    progress = pyqtSignal(int, int)   # done, total
+    loaded = pyqtSignal(str, str)     # nickname, team_color("" 이면 못 찾음)
+    finished_all = pyqtSignal()
+
+    def __init__(self, nicknames: list[str]):
+        super().__init__()
+        self._nicknames = nicknames
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        total = len(self._nicknames)
+        for i, nick in enumerate(self._nicknames):
+            if self._cancel:
+                return
+            try:
+                color = ranker.fetch_manager_rank(nick).team_color
+            except ranker.RankerError:
+                color = ""
+            if self._cancel:
+                return
+            self.loaded.emit(nick, color)
+            self.progress.emit(i + 1, total)
+        if not self._cancel:
+            self.finished_all.emit()
+
+
 class MainWindow(QMainWindow):
     MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
                      "패스성공률", "평점"]
@@ -298,6 +335,9 @@ class MainWindow(QMainWindow):
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
                       "블록%", "선방력", "평점"]
     OPPONENT_COLUMNS = ["상대", "전적", "승률", "평균득점", "평균실점", "최근 경기"]
+    POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
+    TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "승", "무", "패", "승률"]
+    TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수"]
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -318,6 +358,9 @@ class MainWindow(QMainWindow):
         self._details: list[dict] = []
         self._names: dict = {}
         self._positions: dict = {}
+        self._trend_reset_pending = True
+        self._team_colors: dict[str, str] = {}   # 상대 닉네임 -> 팀컬러("" = 못 찾음)
+        self._teamcolor_loader: TeamColorLoader | None = None
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -591,19 +634,115 @@ class MainWindow(QMainWindow):
         self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
         self.tabs.addTab(self.tbl_opponents, "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
+        self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
+        self.tabs.addTab(self.tbl_position_opp, "포지션별 최다 상대")
+        self._teamcolor_fetch_btns: list[QPushButton] = []
+        self._teamcolor_status_labels: list[QLabel] = []
+        self.tabs.addTab(self._build_teamcolor_rate_tab(), "팀컬러 승률")
+        self.tabs.addTab(self._build_teamcolor_rank_tab(), "팀컬러 랭킹")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.tabs, 1)
+        return w
+
+    def _build_teamcolor_fetch_row(self) -> tuple[QHBoxLayout, QPushButton, QLabel]:
+        """팀컬러 승률·랭킹 두 탭이 같은 데이터를 쓰니 조회 트리거·상태
+        표시도 각 탭에 하나씩 두되 같은 핸들러(_on_fetch_team_colors)를
+        공유한다."""
+        row = QHBoxLayout()
+        btn = QPushButton("상대 팀컬러 불러오기")
+        btn.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {T.GREEN};"
+            f" border: 1px solid {T.GREEN}; border-radius: 6px; padding: 6px 16px;"
+            f" font-weight: bold; }}"
+            f"QPushButton:hover {{ background: rgba(63,185,80,0.12); }}"
+            f"QPushButton:disabled {{ color: {T.TEXT_DIM}; border-color: {T.BORDER}; }}")
+        btn.clicked.connect(self._on_fetch_team_colors)
+        lb = QLabel("")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(btn)
+        row.addSpacing(8)
+        row.addWidget(lb)
+        row.addStretch(1)
+        self._teamcolor_fetch_btns.append(btn)
+        self._teamcolor_status_labels.append(lb)
+        return row, btn, lb
+
+    def _teamcolor_note(self) -> QLabel:
+        note = QLabel(
+            "※ 넥슨 데이터센터 감독모드 랭킹 top 10,000 안에서 찾아지는 상대만"
+            " 반영한 근사치입니다 — 그 상대가 가장 최근 사용한 팀컬러 기준이라"
+            " 실제 경기 당시와 다를 수 있고, 10,000위 밖 상대는 빠집니다.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        return note
+
+    def _build_teamcolor_rate_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row, _, _ = self._build_teamcolor_fetch_row()
+        v.addLayout(row)
+        v.addWidget(self._teamcolor_note())
+        self.tbl_teamcolor_rate = self._make_table(self.TEAMCOLOR_RATE_COLUMNS)
+        v.addWidget(self.tbl_teamcolor_rate, 1)
+        return w
+
+    def _build_teamcolor_rank_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row, _, _ = self._build_teamcolor_fetch_row()
+        v.addLayout(row)
+        v.addWidget(self._teamcolor_note())
+        hint = QLabel("팀컬러 이름을 더블클릭하면 그 팀컬러를 쓴 상대들이"
+                     " 포지션별로 주로 기용한 선수를 볼 수 있습니다.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(hint)
+        self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS)
+        self.tbl_teamcolor_rank.itemDoubleClicked.connect(
+            self._on_teamcolor_double_clicked)
+        v.addWidget(self.tbl_teamcolor_rank, 1)
         return w
 
     def _build_trend_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        gb = QGroupBox("최근 30일 승률 추이")
-        gv = QVBoxLayout(gb)
+
+        ctrl = QHBoxLayout()
+        lb_days = QLabel("최근")
+        lb_days.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.sp_trend_days = QSpinBox()
+        self.sp_trend_days.setRange(1, 1)
+        self.sp_trend_days.setFixedWidth(72)
+        self.sp_trend_days.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        lb_days2 = QLabel("일")
+        lb_days2.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.btn_trend_apply = QPushButton("적용")
+        self.btn_trend_apply.setStyleSheet(
+            f"QPushButton {{ background: transparent; color: {T.GREEN};"
+            f" border: 1px solid {T.GREEN}; border-radius: 6px; padding: 6px 16px;"
+            f" font-weight: bold; }}"
+            f"QPushButton:hover {{ background: rgba(63,185,80,0.12); }}")
+        self.btn_trend_apply.clicked.connect(self._on_trend_days_apply)
+        self.lb_trend_span = QLabel("")
+        self.lb_trend_span.setStyleSheet(f"color: {T.TEXT_DIM};")
+        ctrl.addWidget(lb_days)
+        ctrl.addWidget(self.sp_trend_days)
+        ctrl.addWidget(lb_days2)
+        ctrl.addWidget(self.btn_trend_apply)
+        ctrl.addSpacing(8)
+        ctrl.addWidget(self.lb_trend_span)
+        ctrl.addStretch(1)
+        v.addLayout(ctrl)
+
+        self.gb_trend = QGroupBox("최근 30일 승률 추이")
+        gv = QVBoxLayout(self.gb_trend)
         self.trend_chart = TrendChart([])
         gv.addWidget(self.trend_chart)
-        v.addWidget(gb, 1)
+        v.addWidget(self.gb_trend, 1)
         return w
+
+    def _on_trend_days_apply(self) -> None:
+        self._render_trend(self._matches)
 
     @staticmethod
     def _make_table(columns: list[str],
@@ -646,12 +785,14 @@ class MainWindow(QMainWindow):
         hdr.setFont(header_font)
         hdr.setMinimumSectionSize(0)
         self.tbl_players.set_base_font_px(14, 13)
-        # Interactive 로 두고 _render_players 에서 데이터가 채워진 뒤
-        # _fit_columns_to_content 가 "헤더 글자 폭·값 글자 폭 중 큰 쪽" 기준으로
-        # 직접 너비를 잡는다 — 헤더도 값도 안 잘리면서, ResizeToContents 가
-        # 남기던 것 같은 불필요한 여백은 안 남긴다.
+        # Fixed — _render_players 에서 데이터가 채워진 뒤 _fit_columns_to_content
+        # 가 "헤더 글자 폭·값 글자 폭 중 큰 쪽" 기준으로 직접 너비를 잡는다.
+        # Interactive 로 두면 사용자가 드래그로 너비를 바꿀 수 있는데, 그러면
+        # 창 크기 변경 때 자동으로 다시 맞추는 로직과 계속 충돌하니 아예
+        # 사용자 조절은 막는다(Fixed 라도 setColumnWidth 호출로 코드에서
+        # 너비를 바꾸는 건 그대로 된다).
         for c in range(len(self.PLAYER_COLUMNS)):
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
         self.tbl_players.setIconSize(QSize(18, 18))
         v.addWidget(self.tbl_players, 1)
         return w
@@ -664,24 +805,24 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         w = QWidget()
         v = QVBoxLayout(w)
-        v.setSpacing(6)
+        v.setSpacing(8)
 
         gb_f = QGroupBox("전술 분석")
         vf = QVBoxLayout(gb_f)
-        vf.setSpacing(3)
+        vf.setSpacing(5)
 
         self.lb_my_formation = QLabel("-")
         mf = QFont()
-        mf.setPointSize(13)
+        mf.setPointSize(14)
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
         self.lb_my_formation.setStyleSheet(
             f"background: #12261a; border: 1px solid {T.BORDER};"
-            f" border-radius: 6px; padding: 6px;")
+            f" border-radius: 6px; padding: 8px;")
         vf.addWidget(self.lb_my_formation)
 
         self.box_opp = QVBoxLayout()
-        self.box_opp.setSpacing(0)
+        self.box_opp.setSpacing(2)
         vf.addLayout(self.box_opp)
         v.addWidget(gb_f)
 
@@ -693,7 +834,7 @@ class MainWindow(QMainWindow):
         for box, title in ((self.box_result, "경기 결과"),
                            (self.box_gf, "득점 유형"),
                            (self.box_ga, "실점 유형")):
-            box.setSpacing(0)
+            box.setSpacing(2)
             holder = QGroupBox(title)
             holder.setLayout(box)
             rl.addWidget(holder, 1)
@@ -817,6 +958,7 @@ class MainWindow(QMainWindow):
         if names:
             self._names, self._positions = names, positions
         self._matches, self._details = matches, details
+        self._trend_reset_pending = True  # 새 계정 로드 — 승률 그래프 기간을 30일로 되돌린다
 
         # 시작~끝 스핀박스 — 처음엔 최근 100경기(또는 그 이하)를 기본으로 보여준다.
         total_n = len(matches)
@@ -868,6 +1010,8 @@ class MainWindow(QMainWindow):
         self._render_players(details)
         self._render_tactics(details)
         self._render_opponents(matches)
+        self._render_position_opponents(details)
+        self._render_teamcolor_tabs(matches, details)
         # 승률 추이는 "최근 30일" 이 표시 구간(시작~끝, 최근 최대 100경기)에
         # 갇히면 안 된다 — 하루에 100경기 넘게 뛰는 계정은 그 구간이 하루도
         # 안 될 수 있어서, 누적 전체(self._matches)에서 30일을 계산한다.
@@ -1051,6 +1195,96 @@ class MainWindow(QMainWindow):
         players, match_date, result = found
         self._show_opponent_squad(nickname, players, match_date, result)
 
+    def _render_position_opponents(self, details: list[dict]) -> None:
+        players = st.opponent_position_players(
+            details, self._ouid,
+            name_of=lambda i: self._names.get(i, str(i)),
+            pos_name=lambda p: self._positions.get(p, str(p)))
+        rows = [[p.position, p.name, (str(p.count), p.count),
+                (f"{p.rate:.1f}%", p.rate)] for p in players]
+        self._fill(self.tbl_position_opp, rows)
+
+    # ── 팀컬러 (근사치 — top 10,000 랭커 안에서 찾아지는 상대만) ──────────
+    def _team_color_of(self, nickname: str) -> str | None:
+        return self._team_colors.get(nickname) or None
+
+    def _render_teamcolor_tabs(self, matches: list[MatchSummary],
+                               details: list[dict]) -> None:
+        stats_list = st.team_color_stats(matches, self._team_color_of)
+        rate_rows = [[s.team_color, str(s.games), str(s.win), str(s.draw),
+                     str(s.lose), (f"{s.win_rate:.1f}%", s.win_rate)]
+                    for s in stats_list]
+        self._fill(self.tbl_teamcolor_rate, rate_rows)
+        rank_rows = [[str(i), s.team_color, (str(s.games), s.games)]
+                    for i, s in enumerate(stats_list, start=1)]
+        self._fill(self.tbl_teamcolor_rank, rank_rows)
+
+    def _on_fetch_team_colors(self) -> None:
+        if self._teamcolor_loader and self._teamcolor_loader.isRunning():
+            return
+        nicknames = sorted({m.opponent for m in self._matches
+                            if m.opponent and m.opponent not in self._team_colors})
+        if not nicknames:
+            matches, details = self._slice()
+            self._render_teamcolor_tabs(matches, details)
+            return
+        for b in self._teamcolor_fetch_btns:
+            b.setEnabled(False)
+        for lb in self._teamcolor_status_labels:
+            lb.setText(f"0 / {len(nicknames)} 조회 중…")
+        self._teamcolor_loader = TeamColorLoader(nicknames)
+        self._teamcolor_loader.loaded.connect(self._on_teamcolor_loaded)
+        self._teamcolor_loader.progress.connect(self._on_teamcolor_progress)
+        self._teamcolor_loader.finished_all.connect(self._on_teamcolor_finished)
+        self._teamcolor_loader.start()
+
+    def _on_teamcolor_loaded(self, nickname: str, color: str) -> None:
+        self._team_colors[nickname] = color
+
+    def _on_teamcolor_progress(self, done: int, total: int) -> None:
+        for lb in self._teamcolor_status_labels:
+            lb.setText(f"{done} / {total} 조회 중…")
+
+    def _on_teamcolor_finished(self) -> None:
+        for b in self._teamcolor_fetch_btns:
+            b.setEnabled(True)
+        found = sum(1 for c in self._team_colors.values() if c)
+        for lb in self._teamcolor_status_labels:
+            lb.setText(f"상대 {len(self._team_colors)}명 조회 완료"
+                      f"(팀컬러 확인 {found}명)")
+        matches, details = self._slice()
+        self._render_teamcolor_tabs(matches, details)
+
+    def _on_teamcolor_double_clicked(self, item) -> None:
+        row = item.row()
+        color_item = self.tbl_teamcolor_rank.item(row, 1)
+        if not color_item:
+            return
+        color = color_item.text()
+        nicknames = {nick for nick, c in self._team_colors.items() if c == color}
+        if not nicknames:
+            return
+        _, details = self._slice()
+        players = st.opponent_position_players(
+            details, self._ouid,
+            name_of=lambda i: self._names.get(i, str(i)),
+            pos_name=lambda p: self._positions.get(p, str(p)),
+            nicknames=nicknames)
+        self._show_teamcolor_detail(color, players)
+
+    def _show_teamcolor_detail(self, color: str,
+                              players: list[st.PositionOpponent]) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{color} — 포지션별 기용률")
+        v = QVBoxLayout(dlg)
+        tbl = self._make_table(self.POSITION_OPP_COLUMNS)
+        rows = [[p.position, p.name, (str(p.count), p.count),
+                (f"{p.rate:.1f}%", p.rate)] for p in players]
+        self._fill(tbl, rows)
+        v.addWidget(tbl)
+        dlg.resize(560, 480)
+        dlg.exec()
+
     def _show_opponent_squad(self, nickname: str, players: list[dict],
                              match_date: str, result: str) -> None:
         dlg = QDialog(self)
@@ -1105,7 +1339,32 @@ class MainWindow(QMainWindow):
         season_loader.wait(500)
 
     def _render_trend(self, matches: list[MatchSummary]) -> None:
-        self._trend_periods = win_rate_trend(matches)
+        """승률 그래프 — '적용 경기 수'(시작~끝)가 아니라 '적용 일수'
+        (sp_trend_days)로 그린다. 하루 100경기 넘게 뛰는 계정은 경기 수
+        구간이 하루도 안 될 수 있어서, 누적 전체(self._matches)를 기준으로
+        날짜만 계산한다 — _render_all 의 호출도 그래서 self._matches 그대로."""
+        dated = [m for m in matches if m.match_date is not None]
+        if dated:
+            earliest = min(m.match_date for m in dated).date()
+            latest = max(m.match_date for m in dated).date()
+            span_days = (latest - earliest).days + 1
+            span_text = (f"전체 저장 기간: {span_days}일 "
+                        f"({earliest:%Y-%m-%d} ~ {latest:%Y-%m-%d})")
+        else:
+            span_days = 1
+            span_text = ""
+
+        self.sp_trend_days.blockSignals(True)
+        self.sp_trend_days.setRange(1, max(span_days, 1))
+        if self._trend_reset_pending:
+            self.sp_trend_days.setValue(min(30, span_days) or 1)
+            self._trend_reset_pending = False
+        self.sp_trend_days.blockSignals(False)
+        self.lb_trend_span.setText(span_text)
+
+        days = self.sp_trend_days.value()
+        self.gb_trend.setTitle(f"최근 {days}일 승률 추이")
+        self._trend_periods = win_rate_trend(matches, days=days)
         self.trend_chart.set_points(
             [(p.label, p.win_rate, p.games) for p in self._trend_periods])
         if self.tabs.currentIndex() == self.TAB_TREND:
@@ -1118,8 +1377,9 @@ class MainWindow(QMainWindow):
             self._show_range_summary()
 
     def _show_trend_summary(self) -> None:
-        """승률 그래프 탭에서는 상단 카드를 최근 30일 최고·평균·최저 승률로."""
+        """승률 그래프 탭에서는 상단 카드를 선택한 기간의 최고·평균·최저 승률로."""
         periods = getattr(self, "_trend_periods", [])
+        days = self.sp_trend_days.value()
         rates = [p.win_rate for p in periods if p.games]
         total_games = sum(p.games for p in periods)
         total_win = sum(p.win for p in periods)
@@ -1130,7 +1390,7 @@ class MainWindow(QMainWindow):
         self.card_rate.set(f"{avg_rate:.1f}%" if total_games else NA)
         self.card_gf.set_title("최저 승률")
         self.card_gf.set(f"{min(rates):.1f}%" if rates else NA)
-        self.card_ga.set_title("30일 경기수")
+        self.card_ga.set_title(f"{days}일 경기수")
         self.card_ga.set(f"{total_games}경기")
 
     def _show_range_summary(self) -> None:
@@ -1241,7 +1501,7 @@ class MainWindow(QMainWindow):
         for f in st.formation_stats(details, self._ouid):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 1, 4, 1)
+            h.setContentsMargins(4, 2, 4, 2)
             a = QLabel(f.formation)
             a.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
             b = QLabel(f"{f.win_rate:.1f}%")
@@ -1260,7 +1520,7 @@ class MainWindow(QMainWindow):
                            ("승부차기", rb.shootout), ("몰수", rb.forfeit)):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 1, 4, 1)
+            h.setContentsMargins(4, 2, 4, 2)
             a = QLabel(label)
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(wdl_text(*wdl))
@@ -1280,7 +1540,7 @@ class MainWindow(QMainWindow):
             v = rb.periods[k]
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 1, 4, 1)
+            h.setContentsMargins(4, 2, 4, 2)
             a = QLabel(st.PERIODS.get(k, str(k)))
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(f"{v.scored}득점")
@@ -1315,6 +1575,11 @@ class MainWindow(QMainWindow):
             if not self._img_loader.wait(3000):
                 self._img_loader.terminate()
                 self._img_loader.wait(1000)
+        if self._teamcolor_loader and self._teamcolor_loader.isRunning():
+            self._teamcolor_loader.cancel()
+            if not self._teamcolor_loader.wait(3000):
+                self._teamcolor_loader.terminate()
+                self._teamcolor_loader.wait(1000)
         super().closeEvent(e)
 
 

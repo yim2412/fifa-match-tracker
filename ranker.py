@@ -36,6 +36,9 @@ _ELO = re.compile(r'class="td rank_r_win_point">\s*([\d.]+)\s*<')
 _WINRATE = re.compile(r'class="top">\s*([\d.]+%)\s*<')
 _WDL = re.compile(r'class="bottom">\s*([\d,]+)\s*<em>\|</em>\s*([\d,]+)\s*'
                   r'<em>\|</em>\s*([\d,]+)\s*<')
+# 팀컬러: class="td team_color">...<span class="inner">이름 <small>(11명)</small>
+_TEAM_COLOR = re.compile(
+    r'class="td team_color">.*?class="inner">\s*([^<]+?)\s*<small>', re.S)
 _NOT_RANKED = "순위 내 포함되어 있지"
 
 
@@ -51,6 +54,7 @@ class RankerInfo:
     win: int = 0
     draw: int = 0
     lose: int = 0
+    team_color: str = ""             # "가장 최근 사용" 기준(그 경기 당시 값 아님)
 
     @property
     def ranked(self) -> bool:
@@ -119,4 +123,7 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
     m = _WDL.search(html)
     if m:
         info.win, info.draw, info.lose = (_to_int(m.group(i)) for i in (1, 2, 3))
+    m = _TEAM_COLOR.search(html)
+    if m:
+        info.team_color = " ".join(m.group(1).split())  # 개행·중복 공백 정리
     return info

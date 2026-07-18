@@ -426,3 +426,94 @@ def result_breakdown(details: list[dict], ouid: str) -> ResultBreakdown:
                     pg.conceded += 1
                     rb.concede_types[goal_type_name(sd.get("type"))] += 1
     return rb
+
+
+# ── 상대 팀컬러 ───────────────────────────────────────────────────────────
+# 팀컬러는 오픈API 매치 상세엔 없다(실제 캐시 JSON으로 확인 — 필드 자체가
+# 없음). 넥슨 데이터센터 감독모드 랭킹(ranker.py)에서 닉네임으로 검색해야
+# 나오는데, 그마저 top 10,000 랭커 안에 있을 때만 잡힌다 — 그래서 이 통계는
+# "찾아지는 상대만" 반영하는 근사치다. team_color_of 는 그 조회 결과를
+# 앱(app_main)이 캐시해 넘겨주는 nickname -> team_color(또는 None) 함수다.
+@dataclass
+class TeamColorStat:
+    team_color: str
+    games: int = 0
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+
+def team_color_stats(matches: list, team_color_of) -> list[TeamColorStat]:
+    """상대 팀컬러별 내 전적 — 팀컬러를 못 찾은(top 10,000 밖) 상대는 뺀다."""
+    acc: dict[str, TeamColorStat] = {}
+    for m in matches:
+        color = team_color_of(m.opponent)
+        if not color:
+            continue
+        s = acc.setdefault(color, TeamColorStat(team_color=color))
+        s.games += 1
+        if "승" in m.result:
+            s.win += 1
+        elif "무" in m.result:
+            s.draw += 1
+        elif "패" in m.result:
+            s.lose += 1
+    return sorted(acc.values(), key=lambda s: -s.games)
+
+
+# ── 포지션별 최다 상대 선수 ─────────────────────────────────────────────────
+@dataclass
+class PositionOpponent:
+    position: str
+    name: str
+    sp_id: int
+    count: int      # 그 선수를 만난 횟수
+    total: int       # 그 포지션 자체가 등장한 총 경기 수(비율의 분모)
+
+    @property
+    def rate(self) -> float:
+        return self.count / self.total * 100 if self.total else 0.0
+
+
+def opponent_position_players(details: list[dict], ouid: str, name_of=None,
+                              pos_name=None,
+                              nicknames: set[str] | None = None
+                              ) -> list[PositionOpponent]:
+    """포지션별로 상대가 가장 많이 기용한 선수.
+
+    nicknames 를 주면 그 닉네임들과의 경기만 집계한다 — 팀컬러 드릴다운
+    ("이 팀컬러를 쓴 상대들은 포지션별로 주로 누굴 쓰나")에 재사용한다.
+    """
+    pos_counts: dict[int, Counter] = defaultdict(Counter)
+    pos_total: dict[int, int] = defaultdict(int)
+
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        if nicknames is not None and (opp.get("nickname") or "-") not in nicknames:
+            continue
+        seen = set()
+        for p in opp.get("player") or []:
+            pos = p.get("spPosition")
+            sp_id = p.get("spId")
+            if not isinstance(pos, int) or not isinstance(sp_id, int):
+                continue
+            pos_counts[pos][sp_id] += 1
+            seen.add(pos)
+        for pos in seen:
+            pos_total[pos] += 1
+
+    result = []
+    for pos, counter in pos_counts.items():
+        sp_id, count = counter.most_common(1)[0]
+        result.append(PositionOpponent(
+            position=pos_name(pos) if pos_name else str(pos),
+            name=name_of(sp_id) if name_of else str(sp_id),
+            sp_id=sp_id, count=count, total=pos_total[pos]))
+    result.sort(key=lambda r: -r.total)
+    return result

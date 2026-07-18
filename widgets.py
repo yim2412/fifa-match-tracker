@@ -351,8 +351,8 @@ class BarRow(QWidget):
         super().__init__()
         pct = (count / total * 100) if total else 0.0
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 1, 0, 1)
-        v.setSpacing(1)
+        v.setContentsMargins(0, 2, 0, 2)
+        v.setSpacing(2)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
