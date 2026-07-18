@@ -19,6 +19,13 @@ import requests
 CDN_BASE = "https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction"
 _REFERER = "https://fconline.nexon.com/"
 
+# ImageLoader/SeasonIconLoader 가 스쿼드 하나에 선수·시즌 아이콘 수십 개를
+# 연달아 받는데, 매번 requests.get() 을 새로 쓰면 매 호출마다 TCP/TLS
+# 핸드셰이크가 다시 열린다. ranker.py 의 팀컬러 조회에 적용해 효과를 본 것과
+# 같은 최적화 — Session 으로 연결을 재사용한다. GET 만 하고 세션 상태를
+# 바꾸지 않으니 스레드에서 재사용해도 안전하다.
+_session = requests.Session()
+
 
 def image_url(sp_id: int) -> str:
     return f"{CDN_BASE}/p{sp_id}.png"
@@ -38,7 +45,7 @@ def fetch(sp_id: int, cache_dir: Path, timeout: int = 6) -> Path | None:
     if path.exists():
         return path
     try:
-        r = requests.get(image_url(sp_id), timeout=timeout,
+        r = _session.get(image_url(sp_id), timeout=timeout,
                          headers={"Referer": _REFERER})
         if r.status_code != 200 or not r.content:
             return None
@@ -71,7 +78,7 @@ def fetch_division_icon(rank_index: int, cache_dir: Path,
     if path.exists():
         return path
     try:
-        r = requests.get(division_icon_url(rank_index), timeout=timeout)
+        r = _session.get(division_icon_url(rank_index), timeout=timeout)
         if r.status_code != 200 or not r.content:
             return None
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -91,7 +98,7 @@ def fetch_season_icon(season_id: int, icon_url: str, cache_dir: Path,
     if path.exists():
         return path
     try:
-        r = requests.get(icon_url, timeout=timeout)
+        r = _session.get(icon_url, timeout=timeout)
         if r.status_code != 200 or not r.content:
             return None
         cache_dir.mkdir(parents=True, exist_ok=True)

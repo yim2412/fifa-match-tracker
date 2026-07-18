@@ -102,19 +102,6 @@ def known_ids(conn: sqlite3.Connection, ouid: str,
     return {r["match_id"] for r in conn.execute(sql, args)}
 
 
-def existing_ids(conn: sqlite3.Connection, match_ids: list[str]) -> set[str]:
-    """이미 저장된 경기ID — 이건 API를 다시 부를 필요가 없다."""
-    if not match_ids:
-        return set()
-    out: set[str] = set()
-    for i in range(0, len(match_ids), 500):  # SQLite 변수 개수 상한 회피
-        chunk = match_ids[i:i + 500]
-        q = ",".join("?" * len(chunk))
-        out |= {r["match_id"] for r in conn.execute(
-            f"SELECT match_id FROM matches WHERE match_id IN ({q})", chunk)}
-    return out
-
-
 def load_details(conn: sqlite3.Connection, ouid: str,
                  match_type: int | None = None,
                  limit: int | None = None) -> list[dict]:

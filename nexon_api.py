@@ -15,6 +15,14 @@ import requests
 BASE_URL = "https://open.api.nexon.com"
 META_URL = f"{BASE_URL}/static/fconline/meta"
 
+# get_meta(spid/division/seasonid 등)는 한 번 받으면 디스크에 영구 캐시했는데,
+# 넥슨이 새 시즌 카드·선수·등급을 추가해도 이 앱이 그걸 영영 모르는 문제가
+# 있었다. team_colors 캐시(store.TEAM_COLOR_TTL_DAYS=30)와 같은 방식으로
+# 파일 mtime 기준 TTL을 둔다 — spid.json 이 8만 건대라 너무 짧게 잡으면
+# 재다운로드 낭비가 크고, 새 시즌은 보통 한 달 단위로 나오므로 30일보다
+# 짧은 14일로 잡아 새 시즌을 너무 오래 놓치지 않게 한다.
+META_TTL_DAYS = 14
+
 EP_ID = "/fconline/v1/id"                    # 닉네임 → ouid
 EP_USER_BASIC = "/fconline/v1/user/basic"    # 계정 기본 정보
 EP_MAX_DIVISION = "/fconline/v1/user/maxdivision"  # 역대 최고 등급
@@ -147,6 +155,9 @@ class FCOnlineAPI:
     def _meta_read(self, name: str) -> list[dict] | None:
         p = self._meta_path(name)
         if p and p.exists():
+            age_days = (time.time() - p.stat().st_mtime) / 86400
+            if age_days > META_TTL_DAYS:
+                return None  # 오래된 캐시 — 없는 셈 치고 새로 받는다
             try:
                 return json.loads(p.read_text(encoding="utf-8"))
             except Exception:
