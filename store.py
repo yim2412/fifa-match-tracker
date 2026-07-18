@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 SCHEMA = """
@@ -33,7 +33,18 @@ CREATE TABLE IF NOT EXISTS accounts (
     nickname  TEXT,
     last_seen TEXT
 );
+-- 상대 팀컬러(넥슨 데이터센터 감독모드 랭킹 스크래핑, top 10,000 안에서만
+-- 잡히는 근사치·"지금" 값). 매번 다시 긁으면 느리니 fetched_at 기준
+-- TTL(기본 30일) 안에서는 재사용한다 — 그 이상 지나면 상대가 팀컬러를
+-- 바꿨을 수 있어 다시 조회한다.
+CREATE TABLE IF NOT EXISTS team_colors (
+    nickname   TEXT PRIMARY KEY,
+    team_color TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
 """
+
+TEAM_COLOR_TTL_DAYS = 30
 
 
 def open_db(path: Path | str) -> sqlite3.Connection:
@@ -182,4 +193,37 @@ def recent_searches(conn: sqlite3.Connection, limit: int = 5) -> list[dict]:
 def remove_account(conn: sqlite3.Connection, ouid: str) -> None:
     """목록에서만 뺀다 — 쌓아 둔 경기는 지우지 않는다."""
     conn.execute("DELETE FROM accounts WHERE ouid = ?", (ouid,))
+    conn.commit()
+
+
+# ── 상대 팀컬러 캐시 ─────────────────────────────────────────────────────
+def load_team_colors(conn: sqlite3.Connection, nicknames: list[str],
+                     ttl_days: int = TEAM_COLOR_TTL_DAYS) -> dict[str, str]:
+    """TTL 안에 있는 캐시만 돌려준다 — 지난 건 없는 셈 치고 다시 조회해야 한다."""
+    if not nicknames:
+        return {}
+    cutoff = (datetime.now() - timedelta(days=ttl_days)).isoformat(timespec="seconds")
+    out: dict[str, str] = {}
+    for i in range(0, len(nicknames), 500):  # SQLite 변수 개수 상한 회피
+        chunk = nicknames[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for row in conn.execute(
+            f"SELECT nickname, team_color FROM team_colors"
+            f" WHERE nickname IN ({q}) AND fetched_at >= ?", (*chunk, cutoff)):
+            out[row["nickname"]] = row["team_color"]
+    return out
+
+
+def save_team_colors(conn: sqlite3.Connection, colors: dict[str, str]) -> None:
+    """team_color 가 빈 문자열("찾지 못함")이어도 저장한다 — TTL 안에는
+    없는 상대를 매번 다시 조회하지 않게."""
+    if not colors:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    for nickname, color in colors.items():
+        conn.execute(
+            "INSERT INTO team_colors (nickname, team_color, fetched_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(nickname) DO UPDATE SET team_color=excluded.team_color,"
+            " fetched_at=excluded.fetched_at",
+            (nickname, color, now))
     conn.commit()

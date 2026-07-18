@@ -295,8 +295,12 @@ class TeamColorLoader(QThread):
     ranker.fetch_manager_rank 재사용).
 
     top 10,000 감독모드 랭커 밖이면 팀컬러가 빈 문자열로 온다 — 그 상대는
-    통계에서 자연히 빠진다. 닉네임 수만큼 순차 HTTP 요청이라 상대가 많으면
-    시간이 걸릴 수 있어, UI 스레드를 막지 않게 여기서 하나씩 돈다."""
+    통계에서 자연히 빠진다. MatchLoader 가 매치 상세를 받을 때와 같은 이유로
+    (닉네임이 많으면 순차 요청은 너무 느림) ThreadPoolExecutor 로 몇 개씩
+    동시에 돈다 — 다만 이건 공식 API 가 아니라 스크래핑이라 매치 상세보다
+    적은 동시 수(4)로 예의를 지킨다."""
+
+    MAX_WORKERS = 4
 
     progress = pyqtSignal(int, int)   # done, total
     loaded = pyqtSignal(str, str)     # nickname, team_color("" 이면 못 찾음)
@@ -306,23 +310,36 @@ class TeamColorLoader(QThread):
         super().__init__()
         self._nicknames = nicknames
         self._cancel = False
+        self._pool: ThreadPoolExecutor | None = None
 
     def cancel(self) -> None:
         self._cancel = True
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+
+    @staticmethod
+    def _fetch_one(nick: str) -> tuple[str, str]:
+        try:
+            return nick, ranker.fetch_manager_rank(nick).team_color
+        except ranker.RankerError:
+            return nick, ""
 
     def run(self) -> None:
         total = len(self._nicknames)
-        for i, nick in enumerate(self._nicknames):
-            if self._cancel:
-                return
-            try:
-                color = ranker.fetch_manager_rank(nick).team_color
-            except ranker.RankerError:
-                color = ""
-            if self._cancel:
-                return
-            self.loaded.emit(nick, color)
-            self.progress.emit(i + 1, total)
+        done = 0
+        self._pool = ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
+        try:
+            for nick, color in self._pool.map(self._fetch_one, self._nicknames):
+                if self._cancel:
+                    return
+                self.loaded.emit(nick, color)
+                done += 1
+                self.progress.emit(done, total)
+        except RuntimeError:
+            return  # cancel() 이 pool 을 내려 map 이 끊긴 경우
+        finally:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
         if not self._cancel:
             self.finished_all.emit()
 
@@ -361,6 +378,7 @@ class MainWindow(QMainWindow):
         self._trend_reset_pending = True
         self._team_colors: dict[str, str] = {}   # 상대 닉네임 -> 팀컬러("" = 못 찾음)
         self._teamcolor_loader: TeamColorLoader | None = None
+        self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -984,6 +1002,7 @@ class MainWindow(QMainWindow):
             return
 
         self._render_all()
+        self._on_fetch_team_colors()  # DB 캐시(TTL 30일)로 채우고, 모자란 것만 백그라운드 조회
         self.statusBar().showMessage(
             f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
             + (f" · 새 경기 {new}건 저장" if new else ""))
@@ -1247,8 +1266,24 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_teamcolor_rank, rank_rows)
 
     def _on_fetch_team_colors(self) -> None:
+        """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 30일)
+        에 있는 상대는 그걸로 채우고, 정말 처음 보거나 캐시가 오래된 상대만
+        넥슨 데이터센터에서 새로 긁는다. 그래서 같은 계정을 다시 보거나
+        상대가 겹치는 다른 계정을 봐도 대부분 거의 즉시 끝난다."""
         if self._teamcolor_loader and self._teamcolor_loader.isRunning():
             return
+        missing = sorted({m.opponent for m in self._matches
+                          if m.opponent and m.opponent not in self._team_colors})
+        if missing:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    self._team_colors.update(store.load_team_colors(conn, missing))
+                finally:
+                    conn.close()
+            except Exception:
+                pass  # DB 캐시를 못 읽어도 네트워크 조회로 계속 진행
+
         nicknames = sorted({m.opponent for m in self._matches
                             if m.opponent and m.opponent not in self._team_colors})
         if not nicknames:
@@ -1259,6 +1294,7 @@ class MainWindow(QMainWindow):
             b.setEnabled(False)
         for lb in self._teamcolor_status_labels:
             lb.setText(f"0 / {len(nicknames)} 조회 중…")
+        self._teamcolor_pending = nicknames
         self._teamcolor_loader = TeamColorLoader(nicknames)
         self._teamcolor_loader.loaded.connect(self._on_teamcolor_loaded)
         self._teamcolor_loader.progress.connect(self._on_teamcolor_progress)
@@ -1275,6 +1311,17 @@ class MainWindow(QMainWindow):
     def _on_teamcolor_finished(self) -> None:
         for b in self._teamcolor_fetch_btns:
             b.setEnabled(True)
+        fetched = {n: self._team_colors[n] for n in self._teamcolor_pending
+                  if n in self._team_colors}
+        if fetched:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    store.save_team_colors(conn, fetched)
+                finally:
+                    conn.close()
+            except Exception:
+                pass  # DB 저장이 실패해도 이번 세션 캐시(메모리)는 살아 있다
         found = sum(1 for c in self._team_colors.values() if c)
         for lb in self._teamcolor_status_labels:
             lb.setText(f"상대 {len(self._team_colors)}명 조회 완료"
