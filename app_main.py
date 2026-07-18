@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
@@ -298,10 +299,20 @@ class TeamColorLoader(QThread):
     통계에서 자연히 빠진다. MatchLoader 가 매치 상세를 받을 때와 같은 이유로
     (닉네임이 많으면 순차 요청은 너무 느림) ThreadPoolExecutor 로 몇 개씩
     동시에 돈다 — 다만 이건 공식 API 가 아니라 스크래핑이라 매치 상세(6)보다
-    약간 적은 동시 수로 예의를 지킨다. ranker._session 이 연결을 재사용해서
-    스레드 수를 늘려도 서버가 받는 연결 자체는 늘 새로 여는 것보다 적다."""
+    약간 많은 정도로만 예의를 지킨다. ranker._session 이 연결을 재사용해서
+    스레드 수를 늘려도 서버가 받는 연결 자체는 늘 새로 여는 것보다 적다.
 
-    MAX_WORKERS = 6
+    nicknames 는 호출부(app_main._on_fetch_team_colors)에서 이미 "많이 만난
+    상대 먼저" 순으로 정렬해서 넘겨준다 — ThreadPoolExecutor.map 은 제출
+    순서대로 작업을 집어가므로, 정말 다 받기 전에 취소해도(또는 화면을
+    먼저 봐도) 값어치 큰 상대부터 채워진다.
+
+    TIMEOUT 을 짧게 잡은 이유: 실측 정상 응답이 평균 0.2초대라 5초면 이미
+    넉넉하고, 응답 없는 상대 하나가 스레드를 오래 붙잡아 나머지를 늦추는
+    걸 막는다."""
+
+    MAX_WORKERS = 8
+    TIMEOUT = 5
 
     progress = pyqtSignal(int, int)   # done, total
     loaded = pyqtSignal(str, str)     # nickname, team_color("" 이면 못 찾음)
@@ -318,10 +329,9 @@ class TeamColorLoader(QThread):
         if self._pool is not None:
             self._pool.shutdown(wait=False, cancel_futures=True)
 
-    @staticmethod
-    def _fetch_one(nick: str) -> tuple[str, str]:
+    def _fetch_one(self, nick: str) -> tuple[str, str]:
         try:
-            return nick, ranker.fetch_manager_rank(nick).team_color
+            return nick, ranker.fetch_manager_rank(nick, timeout=self.TIMEOUT).team_color
         except ranker.RankerError:
             return nick, ""
 
@@ -381,6 +391,7 @@ class MainWindow(QMainWindow):
         self._team_colors: dict[str, str] = {}   # 상대 닉네임 -> 팀컬러("" = 못 찾음)
         self._teamcolor_loader: TeamColorLoader | None = None
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
+        self._teamcolor_loaded_count = 0  # 중간 갱신 주기용
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -1260,11 +1271,16 @@ class MainWindow(QMainWindow):
     def _render_teamcolor_tabs(self, matches: list[MatchSummary],
                                details: list[dict]) -> None:
         stats_list = st.team_color_stats(matches, self._team_color_of)
-        rate_rows = [[s.team_color, str(s.games), str(s.win), str(s.draw),
-                     str(s.lose), (f"{s.win_rate:.1f}%", s.win_rate)]
+        # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
+        # "10"을 "9"보다 뒤로 보내는 문자열 정렬 대신 실제 크기로 정렬한다
+        # (안 그러면 헤더 클릭 정렬이 9,88,80,8,8,8,75... 식으로 깨진다).
+        rate_rows = [[s.team_color, (str(s.games), s.games),
+                     (str(s.win), s.win), (str(s.draw), s.draw),
+                     (str(s.lose), s.lose),
+                     (f"{s.win_rate:.1f}%", s.win_rate)]
                     for s in stats_list]
         self._fill(self.tbl_teamcolor_rate, rate_rows)
-        rank_rows = [[str(i), s.team_color, (str(s.games), s.games)]
+        rank_rows = [[(str(i), i), s.team_color, (str(s.games), s.games)]
                     for i, s in enumerate(stats_list, start=1)]
         self._fill(self.tbl_teamcolor_rank, rank_rows)
 
@@ -1293,17 +1309,22 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass  # DB 캐시를 못 읽어도 네트워크 조회로 계속 진행
 
-        nicknames = sorted({m.opponent for m in shown_matches
-                            if m.opponent and m.opponent not in self._team_colors})
-        if not nicknames:
+        remaining = {m.opponent for m in shown_matches
+                    if m.opponent and m.opponent not in self._team_colors}
+        if not remaining:
             matches, details = self._slice()
             self._render_teamcolor_tabs(matches, details)
             return
+        # 많이 만난 상대부터 — 값어치 큰 상대가 먼저 채워지고, 진행 중에도
+        # 화면을 갱신하니(_on_teamcolor_loaded) 다 끝나기 전에도 유용해진다.
+        freq = Counter(m.opponent for m in shown_matches if m.opponent)
+        nicknames = sorted(remaining, key=lambda n: -freq[n])
         for b in self._teamcolor_fetch_btns:
             b.setEnabled(False)
         for lb in self._teamcolor_status_labels:
             lb.setText(f"0 / {len(nicknames)} 조회 중…")
         self._teamcolor_pending = nicknames
+        self._teamcolor_loaded_count = 0
         self._teamcolor_loader = TeamColorLoader(nicknames)
         self._teamcolor_loader.loaded.connect(self._on_teamcolor_loaded)
         self._teamcolor_loader.progress.connect(self._on_teamcolor_progress)
@@ -1312,6 +1333,11 @@ class MainWindow(QMainWindow):
 
     def _on_teamcolor_loaded(self, nickname: str, color: str) -> None:
         self._team_colors[nickname] = color
+        # 다 끝나야만 표가 채워지면 답답하니, 10개 받을 때마다 중간 갱신한다.
+        self._teamcolor_loaded_count += 1
+        if self._teamcolor_loaded_count % 10 == 0:
+            matches, details = self._slice()
+            self._render_teamcolor_tabs(matches, details)
 
     def _on_teamcolor_progress(self, done: int, total: int) -> None:
         for lb in self._teamcolor_status_labels:
