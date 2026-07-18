@@ -220,6 +220,34 @@ class PeriodRate:
         return (self.win / self.games * 100) if self.games else 0.0
 
 
+def current_streak(matches: list[MatchSummary]) -> tuple[str, int]:
+    """가장 최근 경기부터 같은 결과("승"/"무"/"패")가 몇 연속인지.
+
+    matches 는 최신순(0번이 가장 최근)이 전제 — 화면 표시 순서 그대로다.
+    몰수승/몰수패도 승패로 친다(summarize 와 동일 기준). 경기가 없으면
+    ("", 0)."""
+    def kind(result: str) -> str:
+        if "승" in result:
+            return "승"
+        if "무" in result:
+            return "무"
+        if "패" in result:
+            return "패"
+        return ""
+
+    if not matches:
+        return "", 0
+    first = kind(matches[0].result)
+    if not first:
+        return "", 0
+    n = 0
+    for m in matches:
+        if kind(m.result) != first:
+            break
+        n += 1
+    return first, n
+
+
 def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRate]:
     """최근 <days>일(기본 30일) 일별 승률 추이 — 오래된 날부터.
 

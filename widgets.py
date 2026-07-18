@@ -224,6 +224,10 @@ class StatCard(QFrame):
     def set_title(self, title: str) -> None:
         self.cap.setText(title)
 
+    def set_color(self, color: str) -> None:
+        """연승/연패처럼 값에 따라 색이 바뀌어야 하는 카드용."""
+        self.value.setStyleSheet(f"color: {color}; border: none;")
+
 
 class RankerCard(QFrame):
     """감독모드 랭커 카드 — 수치 중심 대시보드형.

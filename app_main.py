@@ -24,7 +24,8 @@ import stats as st
 import store
 import theme as T
 from models import (
-    MatchSummary, opponent_stats, parse_match, summarize, win_rate_trend,
+    MatchSummary, current_streak, opponent_stats, parse_match, summarize,
+    win_rate_trend,
 )
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
@@ -640,7 +641,12 @@ class MainWindow(QMainWindow):
         self.card_rate = StatCard("승률", T.GREEN)
         self.card_gf = StatCard("평균 득점", T.GREEN)
         self.card_ga = StatCard("평균 실점", T.RED)
-        for c in (self.card_record, self.card_rate, self.card_gf, self.card_ga):
+        # 연승/연패는 승률 그래프 탭에서도(그 탭은 위 4개를 기간 통계로 바꿔치기
+        # 한다) 항상 "지금 흐름"을 보여줘야 의미가 있어서 별도 카드로 뺀다 —
+        # _show_trend_summary/_show_range_summary 의 카드 갈아치우기 대상이 아니다.
+        self.card_streak = StatCard("연속")
+        for c in (self.card_record, self.card_rate, self.card_gf, self.card_ga,
+                 self.card_streak):
             cards.addWidget(c)
         outer.addLayout(cards)
 
@@ -689,12 +695,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_players_tab(), "선수 지표")
         self.tabs.addTab(self._build_tactics_tab(), "전술·경기 결과")
-        self.tabs.addTab(self._make_table(self.MATCH_COLUMNS), "경기 목록")
-        self.table = self.tabs.widget(2)
-        self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
-        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS)
-        self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
-        self.tabs.addTab(self.tbl_opponents, "상대 전적")
+        self.tabs.addTab(self._build_matches_tab(), "경기 목록")
+        self.tabs.addTab(self._build_opponents_tab(), "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
         self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
         # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
@@ -852,6 +854,76 @@ class MainWindow(QMainWindow):
         self.tbl_players.setIconSize(QSize(18, 18))
         v.addWidget(self.tbl_players, 1)
         return w
+
+    MATCH_FILTER_KINDS = (("승", T.GREEN), ("무", T.TEXT_DIM), ("패", T.RED))
+
+    def _build_matches_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        row = QHBoxLayout()
+        lb = QLabel("결과 필터")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(lb)
+        self._match_filter_btns: dict[str, QPushButton] = {}
+        for kind, color in self.MATCH_FILTER_KINDS:
+            btn = QPushButton(kind)
+            btn.setCheckable(True)
+            btn.setChecked(True)
+            btn.setFixedWidth(48)
+            btn.setStyleSheet(
+                f"QPushButton {{ border: 1px solid {T.BORDER}; border-radius: 6px;"
+                f" padding: 4px; }}"
+                f"QPushButton:checked {{ background: {color}; color: #06240d;"
+                f" font-weight: bold; border-color: {color}; }}")
+            btn.clicked.connect(self._apply_match_filter)
+            row.addWidget(btn)
+            self._match_filter_btns[kind] = btn
+        row.addStretch(1)
+        v.addLayout(row)
+
+        self.table = self._make_table(self.MATCH_COLUMNS)
+        self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
+        v.addWidget(self.table, 1)
+        return w
+
+    def _apply_match_filter(self) -> None:
+        """체크한 결과만 남기고 나머지 행은 숨긴다 — 데이터는 안 지우고
+        표시만 가린다(setRowHidden), 그래서 필터 해제하면 바로 되돌아온다."""
+        active = {k for k, b in self._match_filter_btns.items() if b.isChecked()}
+        for r in range(self.table.rowCount()):
+            item = self.table.item(r, 1)  # 결과 컬럼
+            text = item.text() if item else ""
+            kind = next((k for k, _ in self.MATCH_FILTER_KINDS if k in text), None)
+            self.table.setRowHidden(r, kind is not None and kind not in active)
+
+    def _build_opponents_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        row = QHBoxLayout()
+        lb = QLabel("상대 검색")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.ed_opponent_filter = QLineEdit()
+        self.ed_opponent_filter.setPlaceholderText("닉네임 일부만 입력해도 찾습니다")
+        self.ed_opponent_filter.setMaximumWidth(240)
+        self.ed_opponent_filter.textChanged.connect(self._apply_opponent_filter)
+        row.addWidget(lb)
+        row.addWidget(self.ed_opponent_filter)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS)
+        self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
+        v.addWidget(self.tbl_opponents, 1)
+        return w
+
+    def _apply_opponent_filter(self) -> None:
+        needle = self.ed_opponent_filter.text().strip().lower()
+        for r in range(self.tbl_opponents.rowCount()):
+            item = self.tbl_opponents.item(r, 0)  # 상대 컬럼
+            hidden = bool(needle) and (not item or needle not in item.text().lower())
+            self.tbl_opponents.setRowHidden(r, hidden)
 
     def _build_tactics_tab(self) -> QWidget:
         # 기본 창(1600x900) 안에 스크롤 없이 담으려고 그룹박스·행 사이 여백을
@@ -1200,6 +1272,7 @@ class MainWindow(QMainWindow):
             if date_item:
                 date_item.setData(Qt.ItemDataRole.UserRole, m.match_id)
         self.table.setSortingEnabled(True)
+        self._apply_match_filter()
 
     def _on_match_double_clicked(self, item) -> None:
         date_item = self.table.item(item.row(), 0)
@@ -1237,6 +1310,7 @@ class MainWindow(QMainWindow):
                 s.last_date,
             ])
         self._fill(self.tbl_opponents, rows)
+        self._apply_opponent_filter()
 
     def _on_opponent_double_clicked(self, item) -> None:
         row = item.row()
@@ -1543,6 +1617,13 @@ class MainWindow(QMainWindow):
         self.card_gf.set(f"{s.avg_goals_for:.2f}")
         self.card_ga.set_title("평균 실점")
         self.card_ga.set(f"{s.avg_goals_against:.2f}")
+        self._render_streak(matches)
+
+    def _render_streak(self, matches: list[MatchSummary]) -> None:
+        kind, n = current_streak(matches)
+        color = {"승": T.GREEN, "패": T.RED, "무": T.TEXT_DIM}.get(kind, T.TEXT_DIM)
+        self.card_streak.set_color(color)
+        self.card_streak.set(f"{n}{kind}" if kind else NA)
 
     def _render_players(self, details: list[dict]) -> None:
         players = st.aggregate_players(
