@@ -12,6 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import config
+import images
 import stats
 import store
 from models import parse_match, summarize
@@ -109,6 +110,30 @@ def main() -> int:
     except Exception as e:
         print(f"[FAIL] 집계: {type(e).__name__}: {e}")
         return 1
+
+    try:
+        first_sp = players[0].sp_id if players else None
+        if first_sp is not None:
+            path = images.fetch(first_sp, config.CACHE_DIR / "player_images")
+            print(f"[OK]   선수 이미지 CDN: {'받음' if path else '실패(404 등 — 그림 없이 표시됨)'}"
+                  f" (spId={first_sp})")
+        else:
+            print("[WARN] 선수 이미지 CDN: 확인할 선수가 없음")
+    except Exception as e:
+        print(f"[WARN] 선수 이미지 CDN 확인 실패(전적엔 영향 없음): {e}")
+
+    try:
+        seasons = {m["seasonId"]: m for m in api.get_meta("seasonid")
+                  if "seasonId" in m}
+        if first_sp is not None:
+            season_id = stats.season_id_of(first_sp)
+            info = seasons.get(season_id)
+            print(f"[OK]   시즌 메타: {len(seasons)}종 · spId={first_sp} → "
+                  f"{info['className'] if info else '(매칭 안 됨: ' + str(season_id) + ')'}")
+        else:
+            print(f"[OK]   시즌 메타: {len(seasons)}종")
+    except Exception as e:
+        print(f"[WARN] 시즌 메타 확인 실패(전적엔 영향 없음): {e}")
 
     try:
         import ranker

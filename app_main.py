@@ -7,26 +7,28 @@ from __future__ import annotations
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QGroupBox, QHBoxLayout, QHeaderView,
+    QApplication, QDialog, QFrame, QGroupBox, QHBoxLayout, QHeaderView,
     QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
     QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
 import config
+import images
 import ranker
-import scheduler
 import stats as st
 import store
 import theme as T
-from models import MatchSummary, parse_match, summarize
+from models import (
+    MatchSummary, opponent_stats, parse_match, summarize, win_rate_trend,
+)
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
-    NA, BarRow, NoScrollComboBox, RankerCard, SortableItem, StatCard,
-    rate_of, wdl_text,
+    NA, BarRow, FitTableWidget, NoScrollComboBox, PitchWidget, RankerCard,
+    RowBorderDelegate, SortableItem, StatCard, TrendChart, rate_of, wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -38,8 +40,10 @@ class MatchLoader(QThread):
     progress = pyqtSignal(int, int, str)
     # [MatchSummary], [원본 detail], ouid, basic, spId→이름, 포지션코드→이름,
     # 새로 저장된 수, 이번에 API 로 받은 수, RankerInfo|None(넥슨 데이터센터 랭킹),
-    # 등급이름(감독모드 최고 등급), is_champion(챔피언스 이상인지)
-    finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int, object, str, bool)
+    # 등급이름(감독모드 최고 등급), is_champion(챔피언스 이상인지), 등급 배지 로컬 경로,
+    # seasonId→{className,seasonImg}
+    finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int, object,
+                             str, bool, str, dict)
     failed = pyqtSignal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
@@ -131,11 +135,11 @@ class MatchLoader(QThread):
             # 넥슨 데이터센터의 감독모드 랭킹(순위·구단가치·ELO). 오픈API 엔
             # 없는 값이라 여기서 받는다. 실패해도 전적 조회는 살린다.
             rank = self._safe_rank()
-            grade_name, is_champion = self._current_grade(details, ouid)
+            grade_name, is_champion, badge_path = self._current_grade(details, ouid)
 
             if not details:
                 self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got,
-                                      rank, grade_name, is_champion)
+                                      rank, grade_name, is_champion, badge_path, {})
                 return
 
             matches = [m for m in (parse_match(d, ouid) for d in details) if m]
@@ -144,9 +148,11 @@ class MatchLoader(QThread):
             self.progress.emit(0, 0, "선수 정보 조회 중…")
             names = self._safe_meta("spid", "id", "name")
             positions = self._safe_meta("spposition", "spposition", "desc")
+            seasons = self._safe_meta_raw("seasonid", "seasonId")
 
             self.finished_ok.emit(matches, details, ouid, basic, names,
-                                  positions, new, got, rank, grade_name, is_champion)
+                                  positions, new, got, rank, grade_name,
+                                  is_champion, badge_path, seasons)
 
         except NexonAPIError as e:
             self.failed.emit(e.message)
@@ -170,8 +176,17 @@ class MatchLoader(QThread):
         except Exception:
             return {}
 
-    def _current_grade(self, details: list[dict], ouid: str) -> tuple[str, bool]:
-        """'지금' 등급 이름과, 챔피언스 이상인지(=랭커 카드 표시 여부).
+    def _safe_meta_raw(self, name: str, key: str) -> dict:
+        """_safe_meta 와 달리 항목 전체(dict)를 key 로 묶어 돌려준다 —
+        seasonid 처럼 여러 필드(className·seasonImg)가 다 필요할 때."""
+        try:
+            return {m[key]: m for m in self._api.get_meta(name) if key in m}
+        except Exception:
+            return {}
+
+    def _current_grade(self, details: list[dict],
+                       ouid: str) -> tuple[str, bool, str]:
+        """'지금' 등급 이름·챔피언스 이상 여부·등급 배지 아이콘 로컬 경로.
 
         오픈API user/maxdivision 은 '역대 최고' 등급이라 지금 등급과 다를 수
         있다(예: 예전에 슈퍼챔피언스를 찍었지만 지금은 챔피언스로 내려온 경우).
@@ -180,14 +195,32 @@ class MatchLoader(QThread):
         준다)의 값을 쓴다 — 우리가 실제로 확인한 최신 상태에 가장 가깝다.
         """
         if not details:
-            return "-", False
+            return "-", False, ""
         me = next((p for p in details[0].get("matchInfo") or []
                   if p.get("ouid") == ouid), None)
         div_id = me.get("division") if me else None
         if div_id is None:
-            return "-", False
-        names = self._safe_meta("division", "divisionId", "divisionName")
-        return names.get(div_id, str(div_id)), st.is_champion_or_above(div_id)
+            return "-", False, ""
+        raw = []
+        try:
+            raw = self._api.get_meta("division")
+        except NexonAPIError:
+            pass
+        names = {d.get("divisionId"): d.get("divisionName") for d in raw
+                if "divisionId" in d and "divisionName" in d}
+        grade_name = names.get(div_id, str(div_id))
+
+        # division.json 은 배열 순서 그대로가 등급 배지 CDN 번호다(0=슈퍼
+        # 챔피언스 … 17=프로3, 실제 응답으로 확인). 실패해도 이름·랭커
+        # 여부는 살린다 — 배지는 있으면 좋은 장식이다.
+        badge_path = ""
+        idx = next((i for i, d in enumerate(raw)
+                   if d.get("divisionId") == div_id), None)
+        if idx is not None:
+            path = images.fetch_division_icon(idx, config.CACHE_DIR / "division_icons")
+            if path:
+                badge_path = str(path)
+        return grade_name, st.is_champion_or_above(div_id), badge_path
 
     def _safe_rank(self):
         """랭킹(데이터센터 스크래핑)이 깨져도 전적은 보여준다."""
@@ -199,6 +232,64 @@ class MatchLoader(QThread):
             return None
 
 
+class ImageLoader(QThread):
+    """선수 지표 표에 쓸 얼굴 이미지를 백그라운드로 받는다.
+
+    UI 스레드에서 네트워크 대기를 하면 표를 그린 직후 창이 잠깐 얼어서,
+    받는 족족 loaded 시그널로 하나씩 넘긴다 — 표는 이미지 없이 먼저 뜨고
+    받아지는 대로 채워진다."""
+
+    loaded = pyqtSignal(int, str)  # spId, 로컬 파일 경로
+
+    def __init__(self, sp_ids: list[int], cache_dir):
+        super().__init__()
+        self._sp_ids = sp_ids
+        self._cache_dir = cache_dir
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        for sp_id in self._sp_ids:
+            if self._cancel:
+                return
+            path = images.fetch(sp_id, self._cache_dir)
+            if path and not self._cancel:
+                self.loaded.emit(sp_id, str(path))
+
+
+class SeasonIconLoader(QThread):
+    """스쿼드 카드에 쓸 시즌(카드 클래스) 아이콘을 백그라운드로 받는다.
+
+    같은 시즌 선수가 여러 명이면 한 번만 받는다(entries 안에서 URL 이 같으면
+    재사용) — 시즌은 최대 10여 종류라 스쿼드 하나에 중복이 흔하다."""
+
+    loaded = pyqtSignal(int, str)  # spId, 로컬 파일 경로
+
+    def __init__(self, entries: list[tuple[int, int, str]], cache_dir):
+        """entries: (spId, seasonId, seasonImg URL) 튜플 리스트."""
+        super().__init__()
+        self._entries = entries
+        self._cache_dir = cache_dir
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        cache: dict[int, object] = {}
+        for sp_id, season_id, icon_url in self._entries:
+            if self._cancel:
+                return
+            if season_id not in cache:
+                cache[season_id] = images.fetch_season_icon(
+                    season_id, icon_url, self._cache_dir)
+            path = cache[season_id]
+            if path and not self._cancel:
+                self.loaded.emit(sp_id, str(path))
+
+
 class MainWindow(QMainWindow):
     MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
                      "패스성공률", "평점"]
@@ -206,17 +297,23 @@ class MainWindow(QMainWindow):
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
                       "블록%", "선방력", "평점"]
+    OPPONENT_COLUMNS = ["상대", "전적", "승률", "평균득점", "평균실점", "최근 경기"]
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
         self._api = api
         self._loader: MatchLoader | None = None
+        self._img_loader: ImageLoader | None = None
+        self._img_cache_dir = config.CACHE_DIR / "player_images"
         self._ouid = ""
         self._nick = ""
         self._basic: dict = {}
         self._rank = None   # ranker.RankerInfo | None — 넥슨 데이터센터 랭킹
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
+        self._badge_path = ""      # 등급 배지 아이콘 로컬 캐시 경로
+        self._seasons: dict = {}   # seasonId -> {className, seasonImg} (get_meta("seasonid"))
+        self._season_icon_dir = config.CACHE_DIR / "season_icons"
         self._matches: list[MatchSummary] = []
         self._details: list[dict] = []
         self._names: dict = {}
@@ -226,13 +323,10 @@ class MainWindow(QMainWindow):
         self._nick_edits: list[QLineEdit] = []
         self._search_btns: list[QPushButton] = []
         self._acct_combos: list[NoScrollComboBox] = []
-        self._auto_chks: list[QCheckBox] = []
-        self._auto_lbs: list[QLabel] = []
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
         self.resize(1280, 720)
         self._build_ui()
-        self._refresh_auto()
         self._refresh_recent()
 
     # ── UI ────────────────────────────────────────────────────────────
@@ -256,53 +350,73 @@ class MainWindow(QMainWindow):
         outer = QVBoxLayout(w)
         outer.addStretch(1)
 
+        # 검은 배경에 텍스트/입력창만 떠 있으면 휑해 보여서, 제목·검색창·최근
+        # 검색을 부드러운 카드형 박스 하나로 감싼다.
+        centering = QHBoxLayout()
+        centering.addStretch(1)
+        box = QFrame()
+        box.setMaximumWidth(760)
+        box.setStyleSheet(
+            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+            f" border-radius: 16px; }}")
+        box_v = QVBoxLayout(box)
+        box_v.setContentsMargins(40, 36, 40, 32)
+        box_v.setSpacing(0)
+
         title = QLabel("FC ONLINE")
         f = QFont()
         f.setPointSize(30)
         f.setBold(True)
         title.setFont(f)
-        title.setStyleSheet(f"color: {T.GREEN};")
+        title.setStyleSheet(f"color: {T.GREEN}; border: none;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(title)
+        box_v.addWidget(title)
 
         sub = QLabel("감독모드 전적 분석")
-        sub.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 14px;")
+        sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none; font-size: 14px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(sub)
-        outer.addSpacing(24)
+        box_v.addWidget(sub)
+        box_v.addSpacing(24)
 
         row = QHBoxLayout()
         row.addStretch(1)
         self.ed_search = QLineEdit()
         self.ed_search.setPlaceholderText("구단주명을 입력해주세요.")
-        self.ed_search.setFixedWidth(420)
-        self.ed_search.setFixedHeight(42)
+        self.ed_search.setFixedWidth(580)
+        self.ed_search.setFixedHeight(56)
+        ef = QFont()
+        ef.setPointSize(13)
+        self.ed_search.setFont(ef)
         self.ed_search.returnPressed.connect(self._on_search)
         btn = QPushButton("🔍")
         btn.setObjectName("primary")
-        btn.setFixedSize(52, 42)
+        btn.setFixedSize(64, 56)
         btn.clicked.connect(self._on_search)
         row.addWidget(self.ed_search)
         row.addWidget(btn)
         row.addStretch(1)
-        outer.addLayout(row)
+        box_v.addLayout(row)
 
         self.lb_search_msg = QLabel("")
         self.lb_search_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lb_search_msg.setStyleSheet(f"color: {T.RED};")
-        outer.addSpacing(10)
-        outer.addWidget(self.lb_search_msg)
+        self.lb_search_msg.setStyleSheet(f"color: {T.RED}; border: none;")
+        box_v.addSpacing(10)
+        box_v.addWidget(self.lb_search_msg)
 
         # 최근 검색 기록 — 클릭하면 바로 재검색.
-        outer.addSpacing(20)
+        box_v.addSpacing(20)
         lb_recent = QLabel("최근 검색")
-        lb_recent.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lb_recent.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
         lb_recent.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        outer.addWidget(lb_recent)
+        box_v.addWidget(lb_recent)
 
         self.row_recent = QHBoxLayout()
         self.row_recent.addStretch(1)
-        outer.addLayout(self.row_recent)
+        box_v.addLayout(self.row_recent)
+
+        centering.addWidget(box)
+        centering.addStretch(1)
+        outer.addLayout(centering)
 
         outer.addStretch(2)
         return w
@@ -338,7 +452,7 @@ class MainWindow(QMainWindow):
         self._on_search()
 
     def _top_bar(self) -> QHBoxLayout:
-        """검색·등록·자동수집 — 랭커/분석 두 페이지가 공유하는 상단 바."""
+        """검색·등록 — 랭커/분석 두 페이지가 공유하는 상단 바."""
         bar = QHBoxLayout()
         back = QPushButton("← 검색")
         back.clicked.connect(self._go_search)
@@ -352,15 +466,6 @@ class MainWindow(QMainWindow):
         cb = NoScrollComboBox()
         cb.setMinimumWidth(170)
         cb.activated.connect(self._on_pick_account)
-        chk = QCheckBox(f"자동 수집 ({scheduler.DEFAULT_HOURS}시간마다)")
-        chk.setToolTip("Windows 작업 스케줄러에 등록해 앱을 안 켜도 새 경기를 모읍니다.\n"
-                       "PC가 켜져 있는 동안만 동작합니다.")
-        chk.toggled.connect(self._on_toggle_auto)
-        lb = QLabel("-")
-        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-        if not scheduler.is_supported():
-            chk.setVisible(False)
-            lb.setVisible(False)
 
         bar.addWidget(back)
         bar.addWidget(ed)
@@ -368,14 +473,10 @@ class MainWindow(QMainWindow):
         bar.addWidget(QLabel("등록"))
         bar.addWidget(cb)
         bar.addStretch(1)
-        bar.addWidget(chk)
-        bar.addWidget(lb)
         # 두 페이지가 각각 자기 위젯을 갖되, 조작은 리스트로 함께 처리한다.
         self._nick_edits.append(ed)
         self._search_btns.append(btn)
         self._acct_combos.append(cb)
-        self._auto_chks.append(chk)
-        self._auto_lbs.append(lb)
         return bar
 
     def _build_ranker_page(self) -> QWidget:
@@ -388,14 +489,6 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addStretch(1)
         col = QVBoxLayout()
-        self.lb_ranker_name = QLabel("-")
-        nf = QFont()
-        nf.setPointSize(18)
-        nf.setBold(True)
-        self.lb_ranker_name.setFont(nf)
-        self.lb_ranker_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        col.addWidget(self.lb_ranker_name)
-
         self.card_ranker = RankerCard()
         col.addWidget(self.card_ranker, alignment=Qt.AlignmentFlag.AlignCenter)
 
@@ -493,18 +586,36 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_tactics_tab(), "전술·경기 결과")
         self.tabs.addTab(self._make_table(self.MATCH_COLUMNS), "경기 목록")
         self.table = self.tabs.widget(2)
+        self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
+        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS)
+        self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
+        self.tabs.addTab(self.tbl_opponents, "상대 전적")
+        self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         outer.addWidget(self.tabs, 1)
         return w
 
+    def _build_trend_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        gb = QGroupBox("최근 30일 승률 추이")
+        gv = QVBoxLayout(gb)
+        self.trend_chart = TrendChart([])
+        gv.addWidget(self.trend_chart)
+        v.addWidget(gb, 1)
+        return w
+
     @staticmethod
-    def _make_table(columns: list[str]) -> QTableWidget:
-        t = QTableWidget(0, len(columns))
+    def _make_table(columns: list[str],
+                    widget_cls: type = QTableWidget) -> QTableWidget:
+        t = widget_cls(0, len(columns))
         t.setHorizontalHeaderLabels(columns)
         t.verticalHeader().setVisible(False)
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         t.setAlternatingRowColors(True)
         t.setSortingEnabled(True)
+        t.setItemDelegate(RowBorderDelegate(t))
         hdr = t.horizontalHeader()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -513,10 +624,35 @@ class MainWindow(QMainWindow):
     def _build_players_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        self.tbl_players = self._make_table(self.PLAYER_COLUMNS)
-        # 선수 이름은 내용에 맞춰 — 균등 분배면 긴 이름이 여러 줄로 접힌다.
-        self.tbl_players.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents)
+        self.tbl_players = self._make_table(self.PLAYER_COLUMNS,
+                                            widget_cls=FitTableWidget)
+        # 19개 열이라 전역 폰트(15px)로는 가로 스크롤 없이 한눈에 안 들어온다.
+        # 이 표만 폰트·여백을 줄여서 스크롤 없이 다 보이게 한다 — 그래도
+        # ResizeToContents 라 글자가 잘리진 않는다(Stretch 로 욱여넣던 예전
+        # 버그와는 다르다).
+        self.tbl_players.setStyleSheet(
+            f"QTableWidget {{ font-size: 14px; }}"
+            f"QTableWidget::item {{ padding: 6px 10px; margin: 0px; }}"
+            f"QHeaderView::section {{ font-size: 13px; padding: 8px 10px; }}")
+        # QSS 의 font-size 는 그려질 때만 적용되고 QFontMetrics 로 실측할 폰트
+        # 객체엔 안 반영된다 — 너비 계산이 실제 렌더 폰트와 어긋나면 또 잘리니
+        # 셀·헤더 폰트를 코드로도 명시해서 측정과 렌더가 같은 폰트를 쓰게 한다.
+        cell_font = QFont()
+        cell_font.setPixelSize(14)  # QSS 의 font-size: 14px 와 단위를 맞춘다
+        self.tbl_players.setFont(cell_font)
+        hdr = self.tbl_players.horizontalHeader()
+        header_font = QFont()
+        header_font.setPixelSize(13)
+        header_font.setBold(True)
+        hdr.setFont(header_font)
+        hdr.setMinimumSectionSize(0)
+        # Interactive 로 두고 _render_players 에서 데이터가 채워진 뒤
+        # _fit_columns_to_content 가 "헤더 글자 폭·값 글자 폭 중 큰 쪽" 기준으로
+        # 직접 너비를 잡는다 — 헤더도 값도 안 잘리면서, ResizeToContents 가
+        # 남기던 것 같은 불필요한 여백은 안 남긴다.
+        for c in range(len(self.PLAYER_COLUMNS)):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
+        self.tbl_players.setIconSize(QSize(18, 18))
         v.addWidget(self.tbl_players, 1)
         return w
 
@@ -529,9 +665,6 @@ class MainWindow(QMainWindow):
 
         gb_f = QGroupBox("전술 분석")
         vf = QVBoxLayout(gb_f)
-        hint = QLabel("전술은 수비-수미-미드-공미-공격 라인 인원으로 표기됩니다.")
-        hint.setStyleSheet(f"color: {T.TEXT_DIM};")
-        vf.addWidget(hint)
 
         self.lb_my_formation = QLabel("-")
         mf = QFont()
@@ -562,27 +695,6 @@ class MainWindow(QMainWindow):
         v.addStretch(1)
         scroll.setWidget(w)
         return scroll
-
-    # ── 자동 수집 ─────────────────────────────────────────────────────
-    def _refresh_auto(self) -> None:
-        if not scheduler.is_supported():
-            return
-        # 체크 상태는 앱이 아니라 실제 스케줄러가 정답 — 밖에서 지웠을 수 있다.
-        on = scheduler.is_enabled()
-        desc = scheduler.describe()
-        for chk, lb in zip(self._auto_chks, self._auto_lbs):
-            chk.blockSignals(True)
-            chk.setChecked(on)
-            chk.blockSignals(False)
-            lb.setText(desc)
-
-    def _on_toggle_auto(self, on: bool) -> None:
-        try:
-            scheduler.enable() if on else scheduler.disable()
-        except scheduler.SchedulerError as e:
-            QMessageBox.warning(self, "자동 수집",
-                                f"{'등록' if on else '해제'}에 실패했습니다.\n\n{e}")
-        self._refresh_auto()
 
     # ── 등록 계정 ─────────────────────────────────────────────────────
     def _refresh_accounts(self) -> None:
@@ -680,7 +792,8 @@ class MainWindow(QMainWindow):
 
     def _on_loaded(self, matches: list, details: list, ouid: str, basic: dict,
                    names: dict, positions: dict, new: int, got: int,
-                   rank, grade_name: str, is_champion: bool) -> None:
+                   rank, grade_name: str, is_champion: bool,
+                   badge_path: str, seasons: dict) -> None:
         self._set_busy(False)
         self._refresh_accounts()
         self._refresh_recent()
@@ -689,6 +802,9 @@ class MainWindow(QMainWindow):
         self._rank = rank
         self._grade_name = grade_name
         self._is_champion = is_champion
+        self._badge_path = badge_path
+        if seasons:
+            self._seasons = seasons
         self._nick = basic.get("nickname") or self._nick
         for ed in self._nick_edits:
             ed.setText(self._nick)
@@ -709,8 +825,6 @@ class MainWindow(QMainWindow):
 
         # 검색 결과는 먼저 랭커 카드 페이지로.
         self.stack.setCurrentIndex(self.PAGE_RANKER)
-        lv = (rank.level if rank and rank.level else basic.get("level", "-"))
-        self.lb_ranker_name.setText(f"{self._nick}  Lv.{lv}  ·  {grade_name}")
         self.btn_analyze.setEnabled(bool(matches))
         self._render_ranker()
 
@@ -742,15 +856,16 @@ class MainWindow(QMainWindow):
         self.lb_profile.setText(self._nick)
         self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
                             f"감독모드 {len(matches)}경기 분석 (누적 {total})")
-        s = summarize(matches)
-        self.card_record.set(wdl_text(s.win, s.draw, s.lose))
-        self.card_rate.set(f"{s.win_rate:.1f}%")
-        self.card_gf.set(f"{s.avg_goals_for:.2f}")
-        self.card_ga.set(f"{s.avg_goals_against:.2f}")
+        self._show_range_summary()
         self._render_ranker()
         self._render_matches(matches)
         self._render_players(details)
         self._render_tactics(details)
+        self._render_opponents(matches)
+        # 승률 추이는 "최근 30일" 이 표시 구간(시작~끝, 최근 최대 100경기)에
+        # 갇히면 안 된다 — 하루에 100경기 넘게 뛰는 계정은 그 구간이 하루도
+        # 안 될 수 있어서, 누적 전체(self._matches)에서 30일을 계산한다.
+        self._render_trend(self._matches)
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
@@ -762,7 +877,10 @@ class MainWindow(QMainWindow):
         """
         c = self.card_ranker
         r = self._rank
-        c.set_mode(self._is_champion)
+        c.set_mode(self._is_champion, self._grade_name)
+        lv = (r.level if r and r.level else self._basic.get("level", "-"))
+        c.set_name(f"{self._nick}  Lv.{lv}")
+        c.set_badge(self._badge_path or None)
 
         if self._is_champion and r and r.ranked:
             c.set("순위", f"{r.rank:,}위", T.GREEN)
@@ -788,14 +906,57 @@ class MainWindow(QMainWindow):
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         return item
 
-    def _fill(self, table: QTableWidget, rows: list[list]) -> None:
+    def _fill(self, table: QTableWidget, rows: list[list],
+             enable_sort: bool = True) -> None:
+        """표를 다시 채운다.
+
+        enable_sort=True 로 끝에서 setSortingEnabled(True) 를 부르면, 이 표에
+        이미 정렬 상태(헤더의 정렬 컬럼·방향)가 남아 있을 때 Qt 가 그 자리에서
+        즉시 재정렬한다(문서화된 동작). 채우자마자 재정렬되면, 채운 직후 행
+        순서를 그대로 믿고 색을 칠하거나 데이터를 붙이는 코드(선수 지표의
+        _render_players)가 엉뚱한 행을 건드리게 된다 — 그래서 그런 후처리가
+        있는 표는 enable_sort=False 로 두고, 후처리가 끝난 뒤 직접
+        setSortingEnabled(True) 를 불러야 한다.
+        """
         table.setSortingEnabled(False)
         table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
                 text, key = cell if isinstance(cell, tuple) else (cell, None)
                 table.setItem(r, c, self._cell(text, key))
-        table.setSortingEnabled(True)
+        if enable_sort:
+            table.setSortingEnabled(True)
+
+    @staticmethod
+    def _fit_columns_to_content(table: QTableWidget,
+                                extra: dict[int, int] | None = None) -> None:
+        """헤더 글자 폭과 값 글자 폭 중 큰 쪽으로 열 너비를 잡는다 — 헤더만
+        기준으로 하면(ResizeToContents 원래 동작) 짧은 값 주위가 헐렁해 보이고,
+        값만 기준으로 하면 긴 헤더("기대득점률" 등)가 잘린다. 둘 다 실제
+        렌더 폰트(setFont 로 맞춰 둔)로 재서 재는 폰트와 그리는 폰트가
+        어긋나 또 잘리는 일이 없게 한다.
+        extra: 열 번호별로 더 얹을 여백(아이콘이 같이 나오는 열 등)."""
+        fm = QFontMetrics(table.font())
+        hdr_fm = QFontMetrics(table.horizontalHeader().font())
+        extra = extra or {}
+        widths: dict[int, int] = {}
+        for c in range(table.columnCount()):
+            w = 0
+            header_item = table.horizontalHeaderItem(c)
+            if header_item:
+                w = hdr_fm.horizontalAdvance(header_item.text())
+            for r in range(table.rowCount()):
+                item = table.item(r, c)
+                if item:
+                    w = max(w, fm.horizontalAdvance(item.text()))
+            widths[c] = w + 26 + extra.get(c, 0)
+        if isinstance(table, FitTableWidget):
+            # 위젯이 이 총합보다 넓으면 남는 폭을 열마다 비례해서 채운다
+            # (창을 넓혀도 오른쪽에 빈 칸이 안 남게).
+            table.set_content_widths(widths)
+        else:
+            for c, w in widths.items():
+                table.setColumnWidth(c, w)
 
     def _render_matches(self, matches: list[MatchSummary]) -> None:
         rows = []
@@ -806,15 +967,177 @@ class MainWindow(QMainWindow):
                 (f"{m.shoot_effective}", m.shoot_effective),
                 (f"{m.pass_rate:.0f}%", m.pass_rate), (f"{m.rating:.2f}", m.rating),
             ])
-        self._fill(self.table, rows)
+        # enable_sort=False — 선수 지표에서 겪은 것과 같은 이유(재정렬 타이밍
+        # 버그). 행 배경색을 매기는 동안은 채운 순서 = matches 순서가 보장돼야
+        # 한다.
+        self._fill(self.table, rows, enable_sort=False)
         for r, m in enumerate(matches):
-            item = self.table.item(r, 1)
-            if not item:
+            if "승" in m.result:
+                bg = T.WIN
+            elif "패" in m.result:
+                bg = T.LOSE
+            else:
+                bg = None
+            for c in range(self.table.columnCount()):
+                item = self.table.item(r, c)
+                if not item:
+                    continue
+                if bg:
+                    item.setBackground(self._blend(T.PANEL, bg, 0.35))
+                    item.setForeground(QColor(T.TEXT))
+            # 더블클릭하면 이 경기 스쿼드를 바로 찾을 수 있게 match_id 를 붙인다.
+            date_item = self.table.item(r, 0)
+            if date_item:
+                date_item.setData(Qt.ItemDataRole.UserRole, m.match_id)
+        self.table.setSortingEnabled(True)
+
+    def _on_match_double_clicked(self, item) -> None:
+        date_item = self.table.item(item.row(), 0)
+        opp_item = self.table.item(item.row(), 3)
+        if not date_item or not opp_item:
+            return
+        match_id = date_item.data(Qt.ItemDataRole.UserRole)
+        detail = next((d for d in self._details if d.get("matchId") == match_id), None)
+        if detail is None:
+            return
+        opponent = opp_item.text()
+        found = st.opponent_squad([detail], self._ouid, opponent)
+        if found is None:
+            return
+        players, match_date, result = found
+        self._show_opponent_squad(opponent, players, match_date, result)
+
+    @staticmethod
+    def _blend(base_hex: str, target_hex: str, mix: float) -> QColor:
+        base, target = QColor(base_hex), QColor(target_hex)
+        return QColor(
+            int(base.red() + (target.red() - base.red()) * mix),
+            int(base.green() + (target.green() - base.green()) * mix),
+            int(base.blue() + (target.blue() - base.blue()) * mix),
+        )
+
+    def _render_opponents(self, matches: list[MatchSummary]) -> None:
+        rows = []
+        for s in opponent_stats(matches):
+            rows.append([
+                s.nickname, wdl_text(s.win, s.draw, s.lose),
+                (f"{s.win_rate:.1f}%", s.win_rate),
+                (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
+                (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
+                s.last_date,
+            ])
+        self._fill(self.tbl_opponents, rows)
+
+    def _on_opponent_double_clicked(self, item) -> None:
+        row = item.row()
+        name_item = self.tbl_opponents.item(row, 0)
+        if not name_item:
+            return
+        nickname = name_item.text()
+        _, details = self._slice()
+        found = st.opponent_squad(details, self._ouid, nickname)
+        if found is None:
+            QMessageBox.information(
+                self, "상대 스쿼드",
+                "표시 구간(시작~끝) 안에서 이 상대와 붙은 경기를 찾지 못했습니다.")
+            return
+        players, match_date, result = found
+        self._show_opponent_squad(nickname, players, match_date, result)
+
+    def _show_opponent_squad(self, nickname: str, players: list[dict],
+                             match_date: str, result: str) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{nickname} 스쿼드")
+        dlg.resize(600, 760)
+        v = QVBoxLayout(dlg)
+
+        formation = st.formation_of(players)
+        title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
+        title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        title.setWordWrap(True)
+        v.addWidget(title)
+
+        # 교체 명단(SUB)은 안 보여준다 — 선발만.
+        starters, sp_ids = [], []
+        for p in players:
+            pos = p.get("spPosition")
+            sp_id = p.get("spId")
+            if not (isinstance(pos, int) and pos in PitchWidget.COORDS):
                 continue
-            for key, col in (("승", T.WIN), ("무", T.DRAW), ("패", T.LOSE)):
-                if key in m.result:
-                    item.setForeground(QColor(col))
-                    break
+            pos_name = self._positions.get(pos, str(pos))
+            name = (self._names.get(sp_id, str(sp_id))
+                   if isinstance(sp_id, int) else "-")
+            grade = p.get("spGrade", "-")
+            starters.append((pos, pos_name, name, grade, sp_id))
+            if isinstance(sp_id, int):
+                sp_ids.append(sp_id)
+
+        pitch = PitchWidget(starters)
+        v.addWidget(pitch, 1)
+
+        # 얼굴 이미지·시즌 아이콘은 백그라운드로 — 다이얼로그는 모달이지만
+        # Qt 이벤트 루프는 계속 돌아서 시그널이 도착하는 대로 칩에 채워진다.
+        loader = ImageLoader(sp_ids, self._img_cache_dir)
+        loader.loaded.connect(pitch.set_face)
+        loader.start()
+
+        season_entries = []
+        for sp_id in sp_ids:
+            season_id = st.season_id_of(sp_id)
+            info = self._seasons.get(season_id)
+            if info and info.get("seasonImg"):
+                season_entries.append((sp_id, season_id, info["seasonImg"]))
+        season_loader = SeasonIconLoader(season_entries, self._season_icon_dir)
+        season_loader.loaded.connect(pitch.set_season_icon)
+        season_loader.start()
+
+        dlg.exec()
+        loader.cancel()
+        loader.wait(500)
+        season_loader.cancel()
+        season_loader.wait(500)
+
+    def _render_trend(self, matches: list[MatchSummary]) -> None:
+        self._trend_periods = win_rate_trend(matches)
+        self.trend_chart.set_points(
+            [(p.label, p.win_rate, p.games) for p in self._trend_periods])
+        if self.tabs.currentIndex() == self.TAB_TREND:
+            self._show_trend_summary()
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == self.TAB_TREND:
+            self._show_trend_summary()
+        else:
+            self._show_range_summary()
+
+    def _show_trend_summary(self) -> None:
+        """승률 그래프 탭에서는 상단 카드를 최근 30일 최고·평균·최저 승률로."""
+        periods = getattr(self, "_trend_periods", [])
+        rates = [p.win_rate for p in periods if p.games]
+        total_games = sum(p.games for p in periods)
+        total_win = sum(p.win for p in periods)
+        avg_rate = (total_win / total_games * 100) if total_games else 0.0
+        self.card_record.set_title("최고 승률")
+        self.card_record.set(f"{max(rates):.1f}%" if rates else NA)
+        self.card_rate.set_title("평균 승률")
+        self.card_rate.set(f"{avg_rate:.1f}%" if total_games else NA)
+        self.card_gf.set_title("최저 승률")
+        self.card_gf.set(f"{min(rates):.1f}%" if rates else NA)
+        self.card_ga.set_title("30일 경기수")
+        self.card_ga.set(f"{total_games}경기")
+
+    def _show_range_summary(self) -> None:
+        """다른 탭에서는 원래대로 — 표시 구간(시작~끝) 전적."""
+        matches, _ = self._slice()
+        s = summarize(matches)
+        self.card_record.set_title("전적")
+        self.card_record.set(wdl_text(s.win, s.draw, s.lose))
+        self.card_rate.set_title("승률")
+        self.card_rate.set(f"{s.win_rate:.1f}%")
+        self.card_gf.set_title("평균 득점")
+        self.card_gf.set(f"{s.avg_goals_for:.2f}")
+        self.card_ga.set_title("평균 실점")
+        self.card_ga.set(f"{s.avg_goals_against:.2f}")
 
     def _render_players(self, details: list[dict]) -> None:
         players = st.aggregate_players(
@@ -840,25 +1163,57 @@ class MainWindow(QMainWindow):
                 (f"{p.save_power:.1f}", p.save_power),
                 (f"{p.rating:.2f}", p.rating),
             ])
-        self._fill(self.tbl_players, rows)
+        # enable_sort=False — 재검색(2번째 이후 렌더)에서는 헤더에 이전 정렬
+        # 상태(공격력 내림차순)가 남아 있어서, 여기서 정렬을 바로 켜면 Qt가
+        # 채우자마자 그 상태로 재정렬해버린다. 그러면 아래 tint/데이터 루프가
+        # "채운 순서 = players 순서"라고 믿고 매기는 게 틀어져 엉뚱한 행에
+        # 색이 칠해진다(실제로 겪은 버그). 후처리를 다 끝낸 뒤에만 켠다.
+        self._fill(self.tbl_players, rows, enable_sort=False)
+        self._fit_columns_to_content(self.tbl_players, extra={1: 26})
         # 공격력(5열)·수비력(6열)에 값 크기만큼 색을 입혀 강조 — 빨강/파랑.
-        # 정렬(아래)이 행을 옮기므로, item 참조는 정렬 전인 지금 순서대로 매긴다.
         atk_max = max((p.attack_power for p in players), default=1) or 1
         def_max = max((p.defense_power for p in players), default=1) or 1
         for r, p in enumerate(players):
             self._tint(self.tbl_players.item(r, 5), p.attack_power, atk_max, T.RED)
             self._tint(self.tbl_players.item(r, 6), p.defense_power, def_max, T.BLUE)
+            name_item = self.tbl_players.item(r, 1)
+            if name_item:
+                name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
         self.tbl_players.sortByColumn(5, Qt.SortOrder.DescendingOrder)
+        self.tbl_players.setSortingEnabled(True)
+        self._load_player_images([p.sp_id for p in players])
+
+    def _load_player_images(self, sp_ids: list[int]) -> None:
+        """선수 얼굴 이미지를 백그라운드로 받아서 도착하는 대로 표에 채운다."""
+        if self._img_loader and self._img_loader.isRunning():
+            self._img_loader.cancel()
+            self._img_loader.wait(500)
+        self._img_loader = ImageLoader(sp_ids, self._img_cache_dir)
+        self._img_loader.loaded.connect(self._on_player_image)
+        self._img_loader.start()
+
+    def _on_player_image(self, sp_id: int, path: str) -> None:
+        icon = QIcon(QPixmap(path))
+        for r in range(self.tbl_players.rowCount()):
+            item = self.tbl_players.item(r, 1)
+            if item and item.data(Qt.ItemDataRole.UserRole) == sp_id:
+                item.setIcon(icon)
 
     @staticmethod
     def _tint(item, value: float, vmax: float, hexcolor: str) -> None:
-        """값이 클수록 진한 배경. 배경은 셀(item)에 붙어 정렬해도 따라간다."""
+        """값이 클수록 진한 배경. 배경은 셀(item)에 붙어 정렬해도 따라간다.
+
+        반투명(alpha) 배경을 쓰면 alternating row 색(짝/홀 행이 다름) 위에
+        섞여서 값이 같아도 행마다 진하기가 달라 보였다 — 그래서 알파 대신
+        고정 배경색(T.PANEL) 기준으로 직접 섞은 불투명 색을 쓴다.
+        """
         if item is None or vmax <= 0:
             return
         frac = max(0.0, min(value / vmax, 1.0))
-        col = QColor(hexcolor)
-        col.setAlpha(int(30 + frac * 150))  # 30~180 — 옅게~진하게
-        item.setBackground(col)
+        # 최소값도 배경과 구분되게 30%부터 시작 — 12%는 T.PANEL(#171b21)이
+        # 워낙 어두워서 낮은 값 쪽이 사실상 무색으로 보였다.
+        mix = 0.30 + frac * 0.55  # 30%~85% — 옅게~진하게
+        item.setBackground(MainWindow._blend(T.PANEL, hexcolor, mix))
 
     @staticmethod
     def _clear(box) -> None:
@@ -948,18 +1303,20 @@ class MainWindow(QMainWindow):
             if not self._loader.wait(8000):
                 self._loader.terminate()
                 self._loader.wait(1000)
+        if self._img_loader and self._img_loader.isRunning():
+            self._img_loader.cancel()
+            if not self._img_loader.wait(3000):
+                self._img_loader.terminate()
+                self._img_loader.wait(1000)
         super().closeEvent(e)
 
 
 def main() -> int:
-    # exe 로 묶이면 옆에 collect.py 가 없다. 작업 스케줄러는 exe 자신을
-    # --collect 로 부르고, 그때는 창 없이 수집만 하고 끝낸다.
-    if "--collect" in sys.argv[1:]:
-        import collect
-        return collect.main([a for a in sys.argv[1:] if a != "--collect"])
-
     app = QApplication(sys.argv)
     app.setStyleSheet(T.QSS)
+    icon_path = config.ROOT / "app_icon.ico"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
     if not config.API_KEY:
         QMessageBox.critical(
             None, "API 키 없음",

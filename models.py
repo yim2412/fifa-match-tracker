@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 @dataclass
@@ -153,3 +153,99 @@ def summarize(matches: list[MatchSummary]) -> Stats:
         s.possession_sum += m.possession
         s.rating_sum += m.rating
     return s
+
+
+@dataclass
+class OpponentStat:
+    """상대 구단주 한 명과의 상성 — 전적·평균 득실."""
+    nickname: str
+    games: int = 0
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    goals_for: int = 0
+    goals_against: int = 0
+    last_date: str = "-"
+
+    @property
+    def win_rate(self) -> float:
+        return (self.win / self.games * 100) if self.games else 0.0
+
+    @property
+    def avg_goals_for(self) -> float:
+        return (self.goals_for / self.games) if self.games else 0.0
+
+    @property
+    def avg_goals_against(self) -> float:
+        return (self.goals_against / self.games) if self.games else 0.0
+
+
+def opponent_stats(matches: list[MatchSummary]) -> list[OpponentStat]:
+    """상대 닉네임별로 묶은 상성 — 많이 붙어본 순.
+
+    matches 는 최신순으로 온다는 게 이미 전제라(화면 표시 순서 그대로),
+    한 상대를 처음 만나는 순간(=가장 최근 경기)의 날짜를 last_date 로 쓴다.
+    """
+    acc: dict[str, OpponentStat] = {}
+    for m in matches:
+        s = acc.get(m.opponent)
+        if s is None:
+            s = acc[m.opponent] = OpponentStat(nickname=m.opponent, last_date=m.date_text)
+        s.games += 1
+        if "승" in m.result:
+            s.win += 1
+        elif "무" in m.result:
+            s.draw += 1
+        elif "패" in m.result:
+            s.lose += 1
+        s.goals_for += m.my_goals
+        s.goals_against += m.opp_goals
+    return sorted(acc.values(), key=lambda s: -s.games)
+
+
+@dataclass
+class PeriodRate:
+    """하루 치 승률 — 기간별 승률 추이(그래프)의 한 점."""
+    label: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return (self.win / self.games * 100) if self.games else 0.0
+
+
+def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRate]:
+    """최근 <days>일(기본 30일) 일별 승률 추이 — 오래된 날부터.
+
+    기준은 오늘이 아니라 matches 안에서 가장 최근 경기 날짜 — 그래야 한동안
+    안 켠 계정을 조회해도 "최근 30일"이 그 계정 기준으로 잡힌다.
+    경기가 아예 없던 날은 만들지 않는다(그래프에서 0%로 보이면 "다 짐"과
+    구분이 안 된다 — TrendChart 도 이 전제로 그린다).
+    """
+    dated = [m for m in matches if m.match_date is not None]
+    if not dated:
+        return []
+    latest = max(m.match_date for m in dated).date()
+    cutoff = latest - timedelta(days=days - 1)
+
+    acc: dict = {}
+    for m in dated:
+        d = m.match_date.date()
+        if d < cutoff:
+            continue
+        s = acc.get(d)
+        if s is None:
+            s = acc[d] = PeriodRate(label=d.strftime("%m/%d"))
+        if "승" in m.result:
+            s.win += 1
+        elif "무" in m.result:
+            s.draw += 1
+        elif "패" in m.result:
+            s.lose += 1
+    return [acc[k] for k in sorted(acc.keys())]

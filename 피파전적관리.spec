@@ -6,7 +6,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=['collect', 'store', 'scheduler', 'stats', 'theme', 'widgets', 'ranker'],
+    hiddenimports=['store', 'stats', 'theme', 'widgets', 'ranker', 'images'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -35,4 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='app_icon.ico',
 )

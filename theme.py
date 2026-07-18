@@ -25,7 +25,7 @@ QSS = f"""
 QMainWindow, QWidget {{
     background: {BG};
     color: {TEXT};
-    font-size: 12px;
+    font-size: 15px;
 }}
 QLabel {{ background: transparent; }}
 
@@ -43,7 +43,7 @@ QPushButton {{
     background: {PANEL_2};
     border: 1px solid {BORDER};
     border-radius: 6px;
-    padding: 6px 14px;
+    padding: 8px 16px;
     color: {TEXT};
 }}
 QPushButton:hover {{ border-color: {GREEN}; }}
@@ -85,7 +85,7 @@ QTabBar::tab {{
     border-bottom: none;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
-    padding: 8px 18px;
+    padding: 10px 22px;
     margin-right: 2px;
 }}
 QTabBar::tab:selected {{
@@ -102,14 +102,14 @@ QTableWidget {{
     border-radius: 6px;
     color: {TEXT};
 }}
-QTableWidget::item:selected {{ background: #24303d; color: {TEXT}; }}
+QTableWidget::item:selected {{ background: transparent; color: {TEXT}; }}
 QHeaderView::section {{
     background: {PANEL_2};
     color: {TEXT_DIM};
     border: none;
     border-right: 1px solid {BORDER};
     border-bottom: 1px solid {BORDER};
-    padding: 6px 4px;
+    padding: 8px 6px;
     font-weight: bold;
 }}
 QTableCornerButton::section {{ background: {PANEL_2}; border: none; }}

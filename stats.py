@@ -67,6 +67,14 @@ def goal_type_name(t) -> str:
     return GOAL_TYPES.get(t, UNKNOWN_GOAL_TYPE)
 
 
+def season_id_of(sp_id: int) -> int:
+    """spId 앞 3자리 = 시즌 코드, 나머지 6자리 = 선수 코드.
+
+    실제 spId 여러 개를 get_meta("seasonid") 목록과 대조해 확인했다
+    (예: 100000041 → 100=ICON TM, 848121944 → 848=WS(Winning Streak))."""
+    return int(str(sp_id)[:3])
+
+
 def formation_of(players: list[dict]) -> str:
     """선발 포지션 인원으로 전술 표기를 만든다. 예: 4-1-2-3-0"""
     counts = []
@@ -92,6 +100,23 @@ def _me_opp(detail: dict, ouid: str) -> tuple[dict | None, dict]:
 
 def _result_of(p: dict) -> str:
     return (p.get("matchDetail") or {}).get("matchResult") or "-"
+
+
+def opponent_squad(details: list[dict], ouid: str, opponent_nickname: str):
+    """상대 닉네임과 가장 최근에 붙었던 경기의 상대 스쿼드(선수 raw 목록).
+
+    details 는 최신순으로 온다는 전제라(화면 표시 순서와 같다), 이 닉네임과
+    처음 마주치는 항목이 곧 가장 최근 경기다. 못 찾으면 None.
+    돌려주는 값: (선수 raw 목록, 경기일 문자열, 그 경기 내 내 결과).
+    """
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        if (opp.get("nickname") or "-") != opponent_nickname:
+            continue
+        return opp.get("player") or [], d.get("matchDate", "-"), _result_of(me)
+    return None
 
 
 # ── 선수 지표 ────────────────────────────────────────────────────────────
