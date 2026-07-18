@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sys
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import CancelledError, ThreadPoolExecutor
 
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
@@ -121,7 +121,7 @@ class MatchLoader(QThread):
                                                f"새 경기 받는 중… {done}/{len(todo)}")
                             if detail is not None:
                                 fresh.append(detail)
-                    except RuntimeError:
+                    except (RuntimeError, CancelledError):
                         return  # cancel() 이 pool 을 내려 map 이 끊긴 경우
                     finally:
                         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -346,7 +346,7 @@ class TeamColorLoader(QThread):
                 self.loaded.emit(nick, color)
                 done += 1
                 self.progress.emit(done, total)
-        except RuntimeError:
+        except (RuntimeError, CancelledError):
             return  # cancel() 이 pool 을 내려 map 이 끊긴 경우
         finally:
             self._pool.shutdown(wait=False, cancel_futures=True)
@@ -371,7 +371,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._api = api
         self._loader: MatchLoader | None = None
-        self._img_loader: ImageLoader | None = None
         self._img_cache_dir = config.CACHE_DIR / "player_images"
         self._table_season_loader: SeasonIconLoader | None = None
         self._ouid = ""
@@ -392,6 +391,7 @@ class MainWindow(QMainWindow):
         self._teamcolor_loader: TeamColorLoader | None = None
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
         self._teamcolor_loaded_count = 0  # 중간 갱신 주기용
+        self._teamcolor_retry_pending = False  # 조회 중 범위가 넓어져 재시도가 필요함
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -630,11 +630,7 @@ class MainWindow(QMainWindow):
         self.sp_to.setFixedWidth(72)
         self.sp_to.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.btn_apply = QPushButton("적용")
-        self.btn_apply.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {T.GREEN};"
-            f" border: 1px solid {T.GREEN}; border-radius: 6px; padding: 6px 16px;"
-            f" font-weight: bold; }}"
-            f"QPushButton:hover {{ background: rgba(63,185,80,0.12); }}")
+        self.btn_apply.setStyleSheet(T.OUTLINE_BUTTON_QSS)
         self.btn_apply.clicked.connect(self._apply_range)
         self.lb_total = QLabel("")
         self.lb_total.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -684,12 +680,7 @@ class MainWindow(QMainWindow):
         공유한다."""
         row = QHBoxLayout()
         btn = QPushButton("상대 팀컬러 불러오기")
-        btn.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {T.GREEN};"
-            f" border: 1px solid {T.GREEN}; border-radius: 6px; padding: 6px 16px;"
-            f" font-weight: bold; }}"
-            f"QPushButton:hover {{ background: rgba(63,185,80,0.12); }}"
-            f"QPushButton:disabled {{ color: {T.TEXT_DIM}; border-color: {T.BORDER}; }}")
+        btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
         btn.clicked.connect(self._on_fetch_team_colors)
         lb = QLabel("")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -751,11 +742,7 @@ class MainWindow(QMainWindow):
         lb_days2 = QLabel("일")
         lb_days2.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.btn_trend_apply = QPushButton("적용")
-        self.btn_trend_apply.setStyleSheet(
-            f"QPushButton {{ background: transparent; color: {T.GREEN};"
-            f" border: 1px solid {T.GREEN}; border-radius: 6px; padding: 6px 16px;"
-            f" font-weight: bold; }}"
-            f"QPushButton:hover {{ background: rgba(63,185,80,0.12); }}")
+        self.btn_trend_apply.setStyleSheet(T.OUTLINE_BUTTON_QSS)
         self.btn_trend_apply.clicked.connect(self._on_trend_days_apply)
         self.lb_trend_span = QLabel("")
         self.lb_trend_span.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -979,6 +966,8 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self._refresh_accounts()
         self._refresh_recent()
+        if ouid != self._ouid:
+            self._trend_reset_pending = True  # 다른 계정으로 전환 — 승률 그래프 기간을 30일로 되돌린다
         self._ouid = ouid
         self._basic = basic
         self._rank = rank
@@ -993,7 +982,6 @@ class MainWindow(QMainWindow):
         if names:
             self._names, self._positions = names, positions
         self._matches, self._details = matches, details
-        self._trend_reset_pending = True  # 새 계정 로드 — 승률 그래프 기간을 30일로 되돌린다
 
         # 시작~끝 스핀박스 — 처음엔 최근 100경기(또는 그 이하)를 기본으로 보여준다.
         total_n = len(matches)
@@ -1295,6 +1283,9 @@ class MainWindow(QMainWindow):
         너무 오래 걸린다. 대신 나중에 범위를 넓히면 그만큼 새로 늘어난
         상대만큼 다시 기다려야 한다(_apply_range 가 이 함수를 다시 부른다)."""
         if self._teamcolor_loader and self._teamcolor_loader.isRunning():
+            # 이미 도는 중에 범위가 넓어져 다시 불렸다 — 끝난 뒤(_on_teamcolor_finished)
+            # 새로 늘어난 상대까지 마저 조회하도록 재시도를 예약해 둔다.
+            self._teamcolor_retry_pending = True
             return
         shown_matches, _ = self._slice()
         missing = sorted({m.opponent for m in shown_matches
@@ -1357,12 +1348,15 @@ class MainWindow(QMainWindow):
                     conn.close()
             except Exception:
                 pass  # DB 저장이 실패해도 이번 세션 캐시(메모리)는 살아 있다
-        found = sum(1 for c in self._team_colors.values() if c)
+        found = sum(1 for c in fetched.values() if c)
         for lb in self._teamcolor_status_labels:
-            lb.setText(f"상대 {len(self._team_colors)}명 조회 완료"
+            lb.setText(f"상대 {len(self._teamcolor_pending)}명 조회 완료"
                       f"(팀컬러 확인 {found}명)")
         matches, details = self._slice()
         self._render_teamcolor_tabs(matches, details)
+        if self._teamcolor_retry_pending:
+            self._teamcolor_retry_pending = False
+            self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
 
     def _on_teamcolor_double_clicked(self, item) -> None:
         row = item.row()
@@ -1686,11 +1680,6 @@ class MainWindow(QMainWindow):
             if not self._loader.wait(8000):
                 self._loader.terminate()
                 self._loader.wait(1000)
-        if self._img_loader and self._img_loader.isRunning():
-            self._img_loader.cancel()
-            if not self._img_loader.wait(3000):
-                self._img_loader.terminate()
-                self._img_loader.wait(1000)
         if self._teamcolor_loader and self._teamcolor_loader.isRunning():
             self._teamcolor_loader.cancel()
             if not self._teamcolor_loader.wait(3000):

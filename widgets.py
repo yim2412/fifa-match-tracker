@@ -28,12 +28,18 @@ class FitTableWidget(QTableWidget):
     """
 
     MIN_FONT_PX = 9  # 이보다 더 줄이면 안 읽혀서 여기서 멈춘다.
+    # +42: QSS 좌우 padding(13px*2=26px)만 셈하면 슬랙이 0이 되고, 실제로
+    # 렌더될 땐 스타일이 얹는 여분의 텍스트 여백 때문에 "5경기"·"6.00"처럼
+    # 폭이 애매한 값이 "…"로 잘렸다(스크린샷으로 확인한 값 — 좌우 padding + 16 버퍼).
+    PAD = 42
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._extra: dict[int, int] = {}
         self._base_cell_px = 14
         self._base_header_px = 13
+        self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
+        self._fit_cache: dict[int, dict[int, int]] = {}  # cell_px -> 최종 열 너비(+padding+extra)
 
     def set_base_font_px(self, cell_px: int, header_px: int) -> None:
         """폰트를 줄이지 않아도 될 때(창이 넓을 때) 쓸 기본 크기."""
@@ -41,15 +47,28 @@ class FitTableWidget(QTableWidget):
         self._base_header_px = header_px
 
     def set_content_widths(self, extra: dict[int, int] | None = None) -> None:
-        """열 너비 계산에 쓸, 열별 추가 여백(아이콘 등)을 지정하고 즉시 맞춘다."""
+        """열 너비 계산에 쓸, 열별 추가 여백(아이콘 등)을 지정하고 즉시 맞춘다.
+
+        표 내용(행/헤더 텍스트)이 바뀔 때만 부르는 지점이라, 여기서 기준
+        폰트 크기의 텍스트 폭을 한 번 재서 캐시해 둔다. resizeEvent 는 이
+        캐시로 후보 폰트 크기를 추정만 하므로, 창을 드래그하는 동안 표
+        전체를 폰트 크기 수만큼 반복 측정하지 않는다."""
         self._extra = extra or {}
+        cell_font = QFont(self.font())
+        cell_font.setPixelSize(self._base_cell_px)
+        header_font = QFont(self.horizontalHeader().font())
+        header_font.setPixelSize(self._base_header_px)
+        self._base_text_widths = self._measure_text(
+            QFontMetrics(cell_font), QFontMetrics(header_font))
+        self._fit_cache = {}
         self._fit()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._fit()
 
-    def _measure(self, cell_fm: QFontMetrics, hdr_fm: QFontMetrics) -> dict[int, int]:
+    def _measure_text(self, cell_fm: QFontMetrics, hdr_fm: QFontMetrics) -> dict[int, int]:
+        """열별 텍스트 폭(패딩 제외) — 폰트 크기 하나에 대해 표 전체를 한 번 훑는다."""
         widths: dict[int, int] = {}
         for c in range(self.columnCount()):
             w = 0
@@ -60,35 +79,47 @@ class FitTableWidget(QTableWidget):
                 item = self.item(r, c)
                 if item:
                     w = max(w, cell_fm.horizontalAdvance(item.text()))
-            # +42: QSS 좌우 padding(13px*2=26px)만 셈하면 슬랙이 0이 되고,
-            # 실제로 렌더될 땐 스타일이 얹는 여분의 텍스트 여백 때문에
-            # "5경기"·"6.00"처럼 폭이 애매한 값이 "…"로 잘렸다(스크린샷으로
-            # 확인한 값 — 좌우 padding + 16 버퍼).
-            widths[c] = w + 42 + self._extra.get(c, 0)
+            widths[c] = w
         return widths
 
+    def _estimate_total(self, cell_px: int) -> int:
+        """텍스트 폭을 기준 크기 대비 선형 비례로 추정 — 후보 크기를 고르는
+        용도라, 표를 다시 훑지 않고 캐시된 기준 폭에 비율만 곱한다."""
+        scale = cell_px / self._base_cell_px
+        return sum(int(w * scale) + self.PAD + self._extra.get(c, 0)
+                  for c, w in self._base_text_widths.items())
+
     def _fit(self) -> None:
-        if self.columnCount() == 0:
+        if self.columnCount() == 0 or not self._base_text_widths:
             return
         avail = self.viewport().width()
         if avail <= 0:
             return
         cell_px = self._base_cell_px
-        header_px = self._base_header_px
-        cell_font = QFont(self.font())
-        header_font = QFont(self.horizontalHeader().font())
-        widths: dict[int, int] = {}
-        while True:
-            cell_font.setPixelSize(cell_px)
-            header_font.setPixelSize(header_px)
-            widths = self._measure(QFontMetrics(cell_font), QFontMetrics(header_font))
-            total = sum(widths.values())
-            if total <= avail or cell_px <= self.MIN_FONT_PX:
-                break
+        while (self._estimate_total(cell_px) > avail
+              and cell_px > self.MIN_FONT_PX):
             cell_px -= 1
-            header_px = max(self.MIN_FONT_PX - 1, header_px - 1)
-        self.setFont(cell_font)
-        self.horizontalHeader().setFont(header_font)
+        header_px = max(self.MIN_FONT_PX - 1,
+                        self._base_header_px - (self._base_cell_px - cell_px))
+
+        if cell_px not in self._fit_cache:
+            cell_font = QFont(self.font())
+            cell_font.setPixelSize(cell_px)
+            header_font = QFont(self.horizontalHeader().font())
+            header_font.setPixelSize(header_px)
+            text_widths = (self._base_text_widths if cell_px == self._base_cell_px
+                          else self._measure_text(QFontMetrics(cell_font),
+                                                  QFontMetrics(header_font)))
+            self._fit_cache[cell_px] = {
+                "widths": {c: w + self.PAD + self._extra.get(c, 0)
+                          for c, w in text_widths.items()},
+                "cell_font": cell_font,
+                "header_font": header_font,
+            }
+        entry = self._fit_cache[cell_px]
+        self.setFont(entry["cell_font"])
+        self.horizontalHeader().setFont(entry["header_font"])
+        widths = entry["widths"]
         total = sum(widths.values())
         if total <= 0:
             return

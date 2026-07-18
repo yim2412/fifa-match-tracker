@@ -21,6 +21,15 @@ WIN = GREEN
 DRAW = "#8b949e"
 LOSE = RED
 
+# "적용"/"불러오기" 류 강조 버튼(윤곽선만, 채우지 않음) — 3곳 이상에서 반복 사용.
+OUTLINE_BUTTON_QSS = f"""
+QPushButton {{ background: transparent; color: {GREEN};
+    border: 1px solid {GREEN}; border-radius: 6px; padding: 6px 16px;
+    font-weight: bold; }}
+QPushButton:hover {{ background: rgba(63,185,80,0.12); }}
+QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; }}
+"""
+
 QSS = f"""
 QMainWindow, QWidget {{
     background: {BG};
