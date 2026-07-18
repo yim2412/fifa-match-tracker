@@ -362,6 +362,7 @@ class MainWindow(QMainWindow):
         self._loader: MatchLoader | None = None
         self._img_loader: ImageLoader | None = None
         self._img_cache_dir = config.CACHE_DIR / "player_images"
+        self._table_season_loader: SeasonIconLoader | None = None
         self._ouid = ""
         self._nick = ""
         self._basic: dict = {}
@@ -1522,18 +1523,25 @@ class MainWindow(QMainWindow):
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
         self.tbl_players.sortByColumn(5, Qt.SortOrder.DescendingOrder)
         self.tbl_players.setSortingEnabled(True)
-        self._load_player_images([p.sp_id for p in players])
+        self._load_player_season_icons([p.sp_id for p in players])
 
-    def _load_player_images(self, sp_ids: list[int]) -> None:
-        """선수 얼굴 이미지를 백그라운드로 받아서 도착하는 대로 표에 채운다."""
-        if self._img_loader and self._img_loader.isRunning():
-            self._img_loader.cancel()
-            self._img_loader.wait(500)
-        self._img_loader = ImageLoader(sp_ids, self._img_cache_dir)
-        self._img_loader.loaded.connect(self._on_player_image)
-        self._img_loader.start()
+    def _load_player_season_icons(self, sp_ids: list[int]) -> None:
+        """선수 얼굴 대신 시즌(카드 클래스) 아이콘을 표에 채운다 — PitchWidget
+        스쿼드 화면의 SeasonIconLoader 와 같은 방식(같은 시즌은 한 번만 받음)."""
+        if self._table_season_loader and self._table_season_loader.isRunning():
+            self._table_season_loader.cancel()
+            self._table_season_loader.wait(500)
+        entries = []
+        for sp_id in sp_ids:
+            season_id = st.season_id_of(sp_id)
+            icon_url = self._seasons.get(season_id, {}).get("seasonImg")
+            if icon_url:
+                entries.append((sp_id, season_id, icon_url))
+        self._table_season_loader = SeasonIconLoader(entries, self._season_icon_dir)
+        self._table_season_loader.loaded.connect(self._on_player_season_icon)
+        self._table_season_loader.start()
 
-    def _on_player_image(self, sp_id: int, path: str) -> None:
+    def _on_player_season_icon(self, sp_id: int, path: str) -> None:
         icon = QIcon(QPixmap(path))
         for r in range(self.tbl_players.rowCount()):
             item = self.tbl_players.item(r, 1)
@@ -1654,6 +1662,9 @@ class MainWindow(QMainWindow):
             if not self._teamcolor_loader.wait(3000):
                 self._teamcolor_loader.terminate()
                 self._teamcolor_loader.wait(1000)
+        if self._table_season_loader and self._table_season_loader.isRunning():
+            self._table_season_loader.cancel()
+            self._table_season_loader.wait(500)
         super().closeEvent(e)
 
 
