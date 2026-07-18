@@ -936,6 +936,7 @@ class MainWindow(QMainWindow):
     def _apply_range(self) -> None:
         """시작~끝 스핀박스 값대로 표시 구간을 바꾼다."""
         self._render_all()
+        self._on_fetch_team_colors()  # 범위가 넓어졌으면 새로 들어온 상대만 조회
 
     def _set_busy(self, busy: bool) -> None:
         for w in (*self._search_btns, *self._nick_edits, self.ed_search):
@@ -1271,10 +1272,16 @@ class MainWindow(QMainWindow):
         """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 30일)
         에 있는 상대는 그걸로 채우고, 정말 처음 보거나 캐시가 오래된 상대만
         넥슨 데이터센터에서 새로 긁는다. 그래서 같은 계정을 다시 보거나
-        상대가 겹치는 다른 계정을 봐도 대부분 거의 즉시 끝난다."""
+        상대가 겹치는 다른 계정을 봐도 대부분 거의 즉시 끝난다.
+
+        범위는 self._matches(누적 전체)가 아니라 지금 표시 구간(시작~끝)만
+        — 계정에 따라 누적 상대가 수천 명이라 전체를 미리 긁으면 첫 조회가
+        너무 오래 걸린다. 대신 나중에 범위를 넓히면 그만큼 새로 늘어난
+        상대만큼 다시 기다려야 한다(_apply_range 가 이 함수를 다시 부른다)."""
         if self._teamcolor_loader and self._teamcolor_loader.isRunning():
             return
-        missing = sorted({m.opponent for m in self._matches
+        shown_matches, _ = self._slice()
+        missing = sorted({m.opponent for m in shown_matches
                           if m.opponent and m.opponent not in self._team_colors})
         if missing:
             try:
@@ -1286,7 +1293,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass  # DB 캐시를 못 읽어도 네트워크 조회로 계속 진행
 
-        nicknames = sorted({m.opponent for m in self._matches
+        nicknames = sorted({m.opponent for m in shown_matches
                             if m.opponent and m.opponent not in self._team_colors})
         if not nicknames:
             matches, details = self._slice()
