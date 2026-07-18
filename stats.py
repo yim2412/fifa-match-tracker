@@ -466,9 +466,23 @@ def team_color_stats(matches: list, team_color_of) -> list[TeamColorStat]:
 
 
 # ── 포지션별 최다 상대 선수 ─────────────────────────────────────────────────
+# 정렬·색상 그룹 — widgets.PitchWidget._accent_for 의 4구간(GK 노랑 · 수비
+# 1-8 파랑 · 미드필더군 9-19 초록 · 공격 20-27 빨강)과 맞춰서, 표를 봐도
+# 스쿼드 화면과 같은 느낌이 나게 한다. 그룹 순서는 공격→미들→수비→GK.
+def _position_group_rank(pos: int) -> int:
+    if pos == GK_POSITION:
+        return 3
+    if 1 <= pos <= 8:
+        return 2
+    if 9 <= pos <= 19:
+        return 1
+    return 0  # 20-27 공격
+
+
 @dataclass
 class PositionOpponent:
     position: str
+    pos_code: int    # 색상·정렬용 원본 spPosition 코드
     name: str
     sp_id: int
     count: int      # 그 선수를 만난 횟수
@@ -485,8 +499,9 @@ def opponent_position_players(details: list[dict], ouid: str, name_of=None,
                               ) -> list[PositionOpponent]:
     """포지션별로 상대가 가장 많이 기용한 선수.
 
-    nicknames 를 주면 그 닉네임들과의 경기만 집계한다 — 팀컬러 드릴다운
-    ("이 팀컬러를 쓴 상대들은 포지션별로 주로 누굴 쓰나")에 재사용한다.
+    교체 명단(SUB)은 실제로 뛴 자리가 아니라서 뺀다. nicknames 를 주면 그
+    닉네임들과의 경기만 집계한다 — 팀컬러 드릴다운("이 팀컬러를 쓴 상대들은
+    포지션별로 주로 누굴 쓰나")에 재사용한다.
     """
     pos_counts: dict[int, Counter] = defaultdict(Counter)
     pos_total: dict[int, int] = defaultdict(int)
@@ -503,6 +518,8 @@ def opponent_position_players(details: list[dict], ouid: str, name_of=None,
             sp_id = p.get("spId")
             if not isinstance(pos, int) or not isinstance(sp_id, int):
                 continue
+            if pos == SUB_POSITION:
+                continue
             pos_counts[pos][sp_id] += 1
             seen.add(pos)
         for pos in seen:
@@ -512,8 +529,8 @@ def opponent_position_players(details: list[dict], ouid: str, name_of=None,
     for pos, counter in pos_counts.items():
         sp_id, count = counter.most_common(1)[0]
         result.append(PositionOpponent(
-            position=pos_name(pos) if pos_name else str(pos),
+            position=pos_name(pos) if pos_name else str(pos), pos_code=pos,
             name=name_of(sp_id) if name_of else str(sp_id),
             sp_id=sp_id, count=count, total=pos_total[pos]))
-    result.sort(key=lambda r: -r.total)
+    result.sort(key=lambda r: (_position_group_rank(r.pos_code), -r.total))
     return result

@@ -635,6 +635,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tbl_opponents, "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
         self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
+        # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
+        # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
+        self.tbl_position_opp.setSortingEnabled(False)
         self.tabs.addTab(self.tbl_position_opp, "포지션별 최다 상대")
         self._teamcolor_fetch_btns: list[QPushButton] = []
         self._teamcolor_status_labels: list[QLabel] = []
@@ -1195,14 +1198,38 @@ class MainWindow(QMainWindow):
         players, match_date, result = found
         self._show_opponent_squad(nickname, players, match_date, result)
 
+    def _season_name(self, sp_id: int) -> str:
+        info = self._seasons.get(st.season_id_of(sp_id))
+        return info.get("className", "-") if info else "-"
+
+    def _position_opp_rows(self, players: list[st.PositionOpponent]) -> list[list]:
+        return [[p.position, f"{p.name} ({self._season_name(p.sp_id)})",
+                (str(p.count), p.count), (f"{p.rate:.1f}%", p.rate)]
+               for p in players]
+
+    @staticmethod
+    def _tint_position_rows(table: QTableWidget,
+                            players: list[st.PositionOpponent]) -> None:
+        """스쿼드 화면(PitchWidget)과 같은 라인 색상으로 행 전체를 물들인다."""
+        for r, p in enumerate(players):
+            bg = MainWindow._blend(T.PANEL, PitchWidget._accent_for(p.pos_code), 0.28)
+            for c in range(table.columnCount()):
+                item = table.item(r, c)
+                if item:
+                    item.setBackground(bg)
+                    item.setForeground(QColor(T.TEXT))
+
     def _render_position_opponents(self, details: list[dict]) -> None:
         players = st.opponent_position_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)))
-        rows = [[p.position, p.name, (str(p.count), p.count),
-                (f"{p.rate:.1f}%", p.rate)] for p in players]
-        self._fill(self.tbl_position_opp, rows)
+        # enable_sort=False 로 채우고 이 표는 정렬 자체를 계속 꺼 둔다(위
+        # setSortingEnabled(False) 참고) — 공격→미들→수비→GK 순서·줄별 색이
+        # 이 표의 핵심이라 헤더 클릭 정렬이 그 순서를 흐트러뜨리면 안 된다.
+        self._fill(self.tbl_position_opp, self._position_opp_rows(players),
+                  enable_sort=False)
+        self._tint_position_rows(self.tbl_position_opp, players)
 
     # ── 팀컬러 (근사치 — top 10,000 랭커 안에서 찾아지는 상대만) ──────────
     def _team_color_of(self, nickname: str) -> str | None:
@@ -1278,9 +1305,9 @@ class MainWindow(QMainWindow):
         dlg.setWindowTitle(f"{color} — 포지션별 기용률")
         v = QVBoxLayout(dlg)
         tbl = self._make_table(self.POSITION_OPP_COLUMNS)
-        rows = [[p.position, p.name, (str(p.count), p.count),
-                (f"{p.rate:.1f}%", p.rate)] for p in players]
-        self._fill(tbl, rows)
+        tbl.setSortingEnabled(False)  # 이유는 tbl_position_opp 와 동일
+        self._fill(tbl, self._position_opp_rows(players), enable_sort=False)
+        self._tint_position_rows(tbl, players)
         v.addWidget(tbl)
         dlg.resize(560, 480)
         dlg.exec()
