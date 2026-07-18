@@ -417,7 +417,7 @@ class MainWindow(QMainWindow):
         outer.setSpacing(10)
 
         bar2 = QHBoxLayout()
-        back = QPushButton("← 랭커 카드")
+        back = QPushButton("← 뒤로가기")
         back.clicked.connect(lambda: self.stack.setCurrentIndex(self.PAGE_RANKER))
         self.lb_profile = QLabel("-")
         pf = QFont()
@@ -452,18 +452,16 @@ class MainWindow(QMainWindow):
         rl = QHBoxLayout(rng)
         rl.setContentsMargins(14, 10, 14, 10)
 
-        lb_from = QLabel("시작")
-        lb_from.setStyleSheet(f"color: {T.TEXT};")
         self.sp_from = QSpinBox()
         self.sp_from.setRange(1, 1)
         self.sp_from.setFixedWidth(72)
+        self.sp_from.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         lb_tilde = QLabel("~")
         lb_tilde.setStyleSheet(f"color: {T.TEXT_DIM};")
-        lb_to = QLabel("끝")
-        lb_to.setStyleSheet(f"color: {T.TEXT};")
         self.sp_to = QSpinBox()
         self.sp_to.setRange(1, 1)
         self.sp_to.setFixedWidth(72)
+        self.sp_to.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.btn_apply = QPushButton("적용")
         self.btn_apply.setStyleSheet(
             f"QPushButton {{ background: transparent; color: {T.GREEN};"
@@ -480,10 +478,8 @@ class MainWindow(QMainWindow):
             "이 버튼은 그 사이 새로 생긴 경기가 있는지 다시 확인합니다.")
         self.btn_more.clicked.connect(self._on_search)
 
-        rl.addWidget(lb_from)
         rl.addWidget(self.sp_from)
         rl.addWidget(lb_tilde)
-        rl.addWidget(lb_to)
         rl.addWidget(self.sp_to)
         rl.addWidget(self.btn_apply)
         rl.addSpacing(8)
@@ -517,10 +513,6 @@ class MainWindow(QMainWindow):
     def _build_players_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        note = QLabel("교체 명단이라도 기록이 있으면 출전으로 집계합니다. "
-                      "헤더를 클릭하면 정렬됩니다.")
-        note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(note)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS)
         # 선수 이름은 내용에 맞춰 — 균등 분배면 긴 이름이 여러 줄로 접힌다.
         self.tbl_players.horizontalHeader().setSectionResizeMode(
@@ -850,11 +842,13 @@ class MainWindow(QMainWindow):
             ])
         self._fill(self.tbl_players, rows)
         # 공격력(5열)·수비력(6열)에 값 크기만큼 색을 입혀 강조 — 빨강/파랑.
+        # 정렬(아래)이 행을 옮기므로, item 참조는 정렬 전인 지금 순서대로 매긴다.
         atk_max = max((p.attack_power for p in players), default=1) or 1
         def_max = max((p.defense_power for p in players), default=1) or 1
         for r, p in enumerate(players):
             self._tint(self.tbl_players.item(r, 5), p.attack_power, atk_max, T.RED)
             self._tint(self.tbl_players.item(r, 6), p.defense_power, def_max, T.BLUE)
+        self.tbl_players.sortByColumn(5, Qt.SortOrder.DescendingOrder)
 
     @staticmethod
     def _tint(item, value: float, vmax: float, hexcolor: str) -> None:
