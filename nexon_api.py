@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,11 +18,18 @@ META_URL = f"{BASE_URL}/static/fconline/meta"
 
 # get_meta(spid/division/seasonid 등)는 한 번 받으면 디스크에 영구 캐시했는데,
 # 넥슨이 새 시즌 카드·선수·등급을 추가해도 이 앱이 그걸 영영 모르는 문제가
-# 있었다. team_colors 캐시(store.TEAM_COLOR_TTL_DAYS=30)와 같은 방식으로
-# 파일 mtime 기준 TTL을 둔다 — spid.json 이 8만 건대라 너무 짧게 잡으면
-# 재다운로드 낭비가 크고, 새 시즌은 보통 한 달 단위로 나오므로 30일보다
-# 짧은 14일로 잡아 새 시즌을 너무 오래 놓치지 않게 한다.
-META_TTL_DAYS = 14
+# 있었다. "받은 지 N일" 대신 "이번 주 금요일이 지났나"로 기준을 잡는다 —
+# 캐시가 이번 주 금요일 0시 이전에 받아둔 거면 낡은 것으로 치고 새로 받는다.
+# spid.json 이 8만 건대라 매 실행마다 새로 받으면 낭비지만, 주 단위로는
+# 넉넉히 갱신되게 하려는 절충이다. 0=월요일 … 4=금요일.
+META_REFRESH_WEEKDAY = 4
+
+
+def _week_boundary(now: datetime | None = None) -> datetime:
+    """이번 주(또는 지난 주) META_REFRESH_WEEKDAY 요일의 자정."""
+    now = now or datetime.now()
+    delta_days = (now.weekday() - META_REFRESH_WEEKDAY) % 7
+    return datetime.combine((now - timedelta(days=delta_days)).date(), datetime.min.time())
 
 EP_ID = "/fconline/v1/id"                    # 닉네임 → ouid
 EP_USER_BASIC = "/fconline/v1/user/basic"    # 계정 기본 정보
@@ -155,9 +163,9 @@ class FCOnlineAPI:
     def _meta_read(self, name: str) -> list[dict] | None:
         p = self._meta_path(name)
         if p and p.exists():
-            age_days = (time.time() - p.stat().st_mtime) / 86400
-            if age_days > META_TTL_DAYS:
-                return None  # 오래된 캐시 — 없는 셈 치고 새로 받는다
+            cached_at = datetime.fromtimestamp(p.stat().st_mtime)
+            if cached_at < _week_boundary():
+                return None  # 이번 주 갱신 기준일 이전 캐시 — 없는 셈 치고 새로 받는다
             try:
                 return json.loads(p.read_text(encoding="utf-8"))
             except Exception:
