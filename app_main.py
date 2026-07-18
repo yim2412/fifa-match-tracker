@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
         # 화면엔 그대로 큰 글씨가 남아 잘림이 재발한다 — 그래서 폰트 크기는
         # QSS 가 아니라 setFont() 하나로만 관리한다.
         self.tbl_players.setStyleSheet(
-            f"QTableWidget::item {{ padding: 6px 10px; margin: 0px; }}"
+            f"QTableWidget::item {{ padding: 10px 10px; margin: 0px; }}"
             f"QHeaderView::section {{ padding: 8px 10px; }}")
         cell_font = QFont()
         cell_font.setPixelSize(14)
