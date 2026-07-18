@@ -325,7 +325,7 @@ class MainWindow(QMainWindow):
         self._acct_combos: list[NoScrollComboBox] = []
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
-        self.resize(1280, 720)
+        self.resize(1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
         self._build_ui()
         self._refresh_recent()
 
@@ -626,19 +626,18 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS,
                                             widget_cls=FitTableWidget)
-        # 19개 열이라 전역 폰트(15px)로는 가로 스크롤 없이 한눈에 안 들어온다.
-        # 이 표만 폰트·여백을 줄여서 스크롤 없이 다 보이게 한다 — 그래도
-        # ResizeToContents 라 글자가 잘리진 않는다(Stretch 로 욱여넣던 예전
-        # 버그와는 다르다).
+        # 19개 열이라 전역 폰트(15px)로는 스크롤 없이 한눈에 안 들어온다.
+        # 이 표만 폰트·여백을 줄인 기본 크기(14/13px)에서 시작한다 — 창이
+        # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
+        # QSS 에 font-size 를 박아두면 그려질 때 그 값이 항상 이기고
+        # setFont() 로 준 크기는 QFontMetrics 측정에만 쓰여서, 축소해도
+        # 화면엔 그대로 큰 글씨가 남아 잘림이 재발한다 — 그래서 폰트 크기는
+        # QSS 가 아니라 setFont() 하나로만 관리한다.
         self.tbl_players.setStyleSheet(
-            f"QTableWidget {{ font-size: 14px; }}"
             f"QTableWidget::item {{ padding: 6px 10px; margin: 0px; }}"
-            f"QHeaderView::section {{ font-size: 13px; padding: 8px 10px; }}")
-        # QSS 의 font-size 는 그려질 때만 적용되고 QFontMetrics 로 실측할 폰트
-        # 객체엔 안 반영된다 — 너비 계산이 실제 렌더 폰트와 어긋나면 또 잘리니
-        # 셀·헤더 폰트를 코드로도 명시해서 측정과 렌더가 같은 폰트를 쓰게 한다.
+            f"QHeaderView::section {{ padding: 8px 10px; }}")
         cell_font = QFont()
-        cell_font.setPixelSize(14)  # QSS 의 font-size: 14px 와 단위를 맞춘다
+        cell_font.setPixelSize(14)
         self.tbl_players.setFont(cell_font)
         hdr = self.tbl_players.horizontalHeader()
         header_font = QFont()
@@ -646,6 +645,7 @@ class MainWindow(QMainWindow):
         header_font.setBold(True)
         hdr.setFont(header_font)
         hdr.setMinimumSectionSize(0)
+        self.tbl_players.set_base_font_px(14, 13)
         # Interactive 로 두고 _render_players 에서 데이터가 채워진 뒤
         # _fit_columns_to_content 가 "헤더 글자 폭·값 글자 폭 중 큰 쪽" 기준으로
         # 직접 너비를 잡는다 — 헤더도 값도 안 잘리면서, ResizeToContents 가
@@ -932,10 +932,16 @@ class MainWindow(QMainWindow):
                                 extra: dict[int, int] | None = None) -> None:
         """헤더 글자 폭과 값 글자 폭 중 큰 쪽으로 열 너비를 잡는다 — 헤더만
         기준으로 하면(ResizeToContents 원래 동작) 짧은 값 주위가 헐렁해 보이고,
-        값만 기준으로 하면 긴 헤더("기대득점률" 등)가 잘린다. 둘 다 실제
-        렌더 폰트(setFont 로 맞춰 둔)로 재서 재는 폰트와 그리는 폰트가
-        어긋나 또 잘리는 일이 없게 한다.
-        extra: 열 번호별로 더 얹을 여백(아이콘이 같이 나오는 열 등)."""
+        값만 기준으로 하면 긴 헤더("기대득점률" 등)가 잘린다.
+        extra: 열 번호별로 더 얹을 여백(아이콘이 같이 나오는 열 등).
+
+        FitTableWidget 은 폭 계산·창 폭에 안 맞을 때 폰트를 줄이는 것까지
+        전부 자기 안에서 처리한다(widgets.FitTableWidget._fit) — 여기서는
+        데이터가 채워진 지금 다시 맞추라고 호출만 해 준다.
+        """
+        if isinstance(table, FitTableWidget):
+            table.set_content_widths(extra)
+            return
         fm = QFontMetrics(table.font())
         hdr_fm = QFontMetrics(table.horizontalHeader().font())
         extra = extra or {}
@@ -950,13 +956,8 @@ class MainWindow(QMainWindow):
                 if item:
                     w = max(w, fm.horizontalAdvance(item.text()))
             widths[c] = w + 26 + extra.get(c, 0)
-        if isinstance(table, FitTableWidget):
-            # 위젯이 이 총합보다 넓으면 남는 폭을 열마다 비례해서 채운다
-            # (창을 넓혀도 오른쪽에 빈 칸이 안 남게).
-            table.set_content_widths(widths)
-        else:
-            for c, w in widths.items():
-                table.setColumnWidth(c, w)
+        for c, w in widths.items():
+            table.setColumnWidth(c, w)
 
     def _render_matches(self, matches: list[MatchSummary]) -> None:
         rows = []
