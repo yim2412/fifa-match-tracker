@@ -1342,9 +1342,17 @@ class MainWindow(QMainWindow):
                      (f"{s.win_rate:.1f}%", s.win_rate)]
                     for s in stats_list]
         self._fill(self.tbl_teamcolor_rate, rate_rows)
+        # 표를 다시 채울 때마다(범위 변경·새 경기 확인 등) 사용자가 전에
+        # 다른 열로 정렬해 뒀어도 "경기 많은 순"으로 되돌린다 — 이 표는
+        # 열어보면 항상 이 기준으로 보이는 게 목적이라, 헤더 클릭 정렬
+        # 상태가 재렌더 사이에 남아 있으면 안 된다.
+        self.tbl_teamcolor_rate.sortByColumn(
+            self.TEAMCOLOR_RATE_COLUMNS.index("경기"), Qt.SortOrder.DescendingOrder)
         rank_rows = [[(str(i), i), s.team_color, (str(s.games), s.games)]
                     for i, s in enumerate(stats_list, start=1)]
         self._fill(self.tbl_teamcolor_rank, rank_rows)
+        self.tbl_teamcolor_rank.sortByColumn(
+            self.TEAMCOLOR_RANK_COLUMNS.index("만난 횟수"), Qt.SortOrder.DescendingOrder)
 
     def _on_fetch_team_colors(self) -> None:
         """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 30일)
