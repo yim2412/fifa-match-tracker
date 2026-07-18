@@ -516,50 +516,15 @@ class MainWindow(QMainWindow):
 
         for r in rows:
             nick = r["nickname"] or r["ouid"][:8]
-            holder = QWidget()
-            hl = QHBoxLayout(holder)
-            hl.setContentsMargins(0, 0, 0, 0)
-            hl.setSpacing(0)
             chip = QPushButton(nick)
             chip.setCursor(Qt.CursorShape.PointingHandCursor)
             chip.clicked.connect(lambda _=False, n=nick: self._search_recent(n))
-            close = QPushButton("×")
-            close.setCursor(Qt.CursorShape.PointingHandCursor)
-            close.setFixedWidth(22)
-            close.setStyleSheet("QPushButton { padding: 8px 0px; }")
-            close.setToolTip("최근 검색·등록 목록에서 삭제(쌓인 전적은 남습니다)")
-            close.clicked.connect(
-                lambda _=False, o=r["ouid"], n=nick: self._remove_recent(o, n))
-            hl.addWidget(chip)
-            hl.addWidget(close)
-            self.row_recent.addWidget(holder)
+            self.row_recent.addWidget(chip)
         self.row_recent.addStretch(1)
 
     def _search_recent(self, nickname: str) -> None:
         self.ed_search.setText(nickname)
         self._on_search()
-
-    def _remove_recent(self, ouid: str, nickname: str) -> None:
-        """최근 검색·등록 목록에서만 뺀다(store.remove_account) — 쌓아 둔
-        전적은 그대로라 다시 검색하면 목록에 다시 나타난다."""
-        reply = QMessageBox.question(
-            self, "목록에서 삭제",
-            f"'{nickname}'을(를) 최근 검색·등록 목록에서 삭제할까요?\n"
-            "쌓아 둔 전적 데이터는 그대로 남고, 다시 검색하면 목록에 다시 나타납니다.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if reply != QMessageBox.StandardButton.Yes:
-            return
-        try:
-            conn = store.open_db(config.DB_PATH)
-            try:
-                store.remove_account(conn, ouid)
-            finally:
-                conn.close()
-        except Exception:
-            pass
-        self._refresh_recent()
-        self._refresh_accounts()
 
     def _top_bar(self) -> QHBoxLayout:
         """검색·등록 — 랭커/분석 두 페이지가 공유하는 상단 바."""
