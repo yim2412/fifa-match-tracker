@@ -60,11 +60,11 @@ class FitTableWidget(QTableWidget):
                 item = self.item(r, c)
                 if item:
                     w = max(w, cell_fm.horizontalAdvance(item.text()))
-            # +36: QSS padding(6px 10px 이니 좌우 20px)만 셈하면 딱 맞아떨어져
-            # 슬랙이 0이 되고, 실제로 렌더될 땐 스타일이 얹는 여분의 텍스트
-            # 여백 때문에 "5경기"·"6.00"처럼 폭이 애매한 값이 "…"로 잘렸다
-            # (실측·스크린샷으로 확인한 값 — 26으론 부족, 36이면 여유 있음).
-            widths[c] = w + 36 + self._extra.get(c, 0)
+            # +42: QSS 좌우 padding(13px*2=26px)만 셈하면 슬랙이 0이 되고,
+            # 실제로 렌더될 땐 스타일이 얹는 여분의 텍스트 여백 때문에
+            # "5경기"·"6.00"처럼 폭이 애매한 값이 "…"로 잘렸다(스크린샷으로
+            # 확인한 값 — 좌우 padding + 16 버퍼).
+            widths[c] = w + 42 + self._extra.get(c, 0)
         return widths
 
     def _fit(self) -> None:
@@ -351,8 +351,8 @@ class BarRow(QWidget):
         super().__init__()
         pct = (count / total * 100) if total else 0.0
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 3, 0, 3)
-        v.setSpacing(3)
+        v.setContentsMargins(0, 1, 0, 1)
+        v.setSpacing(1)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -372,7 +372,7 @@ class BarRow(QWidget):
         bar.setRange(0, 1000)
         bar.setValue(int(pct * 10))
         bar.setTextVisible(False)
-        bar.setFixedHeight(5)
+        bar.setFixedHeight(4)
         bar.setStyleSheet(
             f"QProgressBar {{ background: {T.PANEL_2}; border: none;"
             f" border-radius: 2px; }}"

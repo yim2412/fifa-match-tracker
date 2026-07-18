@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
         # 화면엔 그대로 큰 글씨가 남아 잘림이 재발한다 — 그래서 폰트 크기는
         # QSS 가 아니라 setFont() 하나로만 관리한다.
         self.tbl_players.setStyleSheet(
-            f"QTableWidget::item {{ padding: 10px 10px; margin: 0px; }}"
+            f"QTableWidget::item {{ padding: 14px 13px; margin: 0px; }}"
             f"QHeaderView::section {{ padding: 8px 10px; }}")
         cell_font = QFont()
         cell_font.setPixelSize(14)
@@ -657,26 +657,31 @@ class MainWindow(QMainWindow):
         return w
 
     def _build_tactics_tab(self) -> QWidget:
+        # 기본 창(1600x900) 안에 스크롤 없이 담으려고 그룹박스·행 사이 여백을
+        # 기본값보다 눌러뒀다 — 값이 없어서가 아니라 순전히 세로 공간 절약용.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         w = QWidget()
         v = QVBoxLayout(w)
+        v.setSpacing(6)
 
         gb_f = QGroupBox("전술 분석")
         vf = QVBoxLayout(gb_f)
+        vf.setSpacing(3)
 
         self.lb_my_formation = QLabel("-")
         mf = QFont()
-        mf.setPointSize(16)
+        mf.setPointSize(13)
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
         self.lb_my_formation.setStyleSheet(
             f"background: #12261a; border: 1px solid {T.BORDER};"
-            f" border-radius: 6px; padding: 10px;")
+            f" border-radius: 6px; padding: 6px;")
         vf.addWidget(self.lb_my_formation)
 
         self.box_opp = QVBoxLayout()
+        self.box_opp.setSpacing(0)
         vf.addLayout(self.box_opp)
         v.addWidget(gb_f)
 
@@ -688,6 +693,7 @@ class MainWindow(QMainWindow):
         for box, title in ((self.box_result, "경기 결과"),
                            (self.box_gf, "득점 유형"),
                            (self.box_ga, "실점 유형")):
+            box.setSpacing(0)
             holder = QGroupBox(title)
             holder.setLayout(box)
             rl.addWidget(holder, 1)
@@ -1235,7 +1241,7 @@ class MainWindow(QMainWindow):
         for f in st.formation_stats(details, self._ouid):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 1, 4, 1)
             a = QLabel(f.formation)
             a.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
             b = QLabel(f"{f.win_rate:.1f}%")
@@ -1268,7 +1274,7 @@ class MainWindow(QMainWindow):
             self.box_result.addWidget(row)
 
         sep = QLabel("시간대별 득실")
-        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 6px;")
+        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 3px;")
         self.box_result.addWidget(sep)
         for k in sorted(rb.periods):
             v = rb.periods[k]
