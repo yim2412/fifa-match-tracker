@@ -297,10 +297,11 @@ class TeamColorLoader(QThread):
     top 10,000 감독모드 랭커 밖이면 팀컬러가 빈 문자열로 온다 — 그 상대는
     통계에서 자연히 빠진다. MatchLoader 가 매치 상세를 받을 때와 같은 이유로
     (닉네임이 많으면 순차 요청은 너무 느림) ThreadPoolExecutor 로 몇 개씩
-    동시에 돈다 — 다만 이건 공식 API 가 아니라 스크래핑이라 매치 상세보다
-    적은 동시 수(4)로 예의를 지킨다."""
+    동시에 돈다 — 다만 이건 공식 API 가 아니라 스크래핑이라 매치 상세(6)보다
+    약간 적은 동시 수로 예의를 지킨다. ranker._session 이 연결을 재사용해서
+    스레드 수를 늘려도 서버가 받는 연결 자체는 늘 새로 여는 것보다 적다."""
 
-    MAX_WORKERS = 4
+    MAX_WORKERS = 6
 
     progress = pyqtSignal(int, int)   # done, total
     loaded = pyqtSignal(str, str)     # nickname, team_color("" 이면 못 찾음)

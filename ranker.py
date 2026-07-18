@@ -28,6 +28,14 @@ _HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                           "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
             "Cache-Control": "no-cache", "Pragma": "no-cache"}
 
+# 팀컬러 조회(TeamColorLoader)가 상대 수십~수백 명을 연달아 부르는데, 매번
+# requests.get() 을 새로 쓰면 매 호출마다 TCP/TLS 핸드셰이크가 다시 열린다.
+# Session 으로 연결을 재사용하면 넥슨 서버가 받는 요청 자체는 그대로면서
+# 체감 속도만 빨라진다. GET 만 하고 세션 상태를 바꾸지 않으니 여러 스레드가
+# 공유해도 안전하다(requests 문서 권고 범위).
+_session = requests.Session()
+_session.headers.update(_HEADERS)
+
 # 데이터 행에서 값을 뽑는 정규식. class 이름이 바뀌면 여기만 고친다.
 _RANK_NO = re.compile(r'class="td rank_no">\s*([\d,]+)\s*<')
 _LEVEL = re.compile(r'class="lv">.*?class="txt">\s*(\d+)\s*<', re.S)
@@ -84,13 +92,13 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
     if not nickname:
         raise RankerError("닉네임이 비어 있습니다.")
     try:
-        res = requests.get(
+        res = _session.get(
             RANK_URL,
             # _ts: 캐시 방지용 — URL 이 매번 달라야 어떤 프록시도 이전 응답을
             # 재사용하지 못한다. 넥슨이 이 값을 쓰지 않으니 결과엔 영향 없다.
             params={"rt": "manager", "strCharacterName": nickname,
                     "n4seasonno": 0, "n4pageno": 1, "_ts": int(time.time() * 1000)},
-            headers=_HEADERS, timeout=timeout)
+            timeout=timeout)
         res.raise_for_status()
     except requests.RequestException as e:
         raise RankerError(f"랭킹 조회 실패: {e}") from e
