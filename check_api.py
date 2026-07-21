@@ -147,6 +147,18 @@ def main() -> int:
         print(f"[WARN] 데이터센터 랭킹 조회 실패(전적엔 영향 없음): {e}")
 
     try:
+        import playerinfo
+        if first_sp is not None:
+            pinfo = playerinfo.fetch_player_info(first_sp)
+            print(f"[OK]   선수 카드 상세: {pinfo.name} {pinfo.position} OVR {pinfo.ovr}"
+                  f" · 능력치 {len(pinfo.abilities)}개 · 특성 {len(pinfo.traits)}개"
+                  f" · 시세 {len(pinfo.prices)}단계")
+        else:
+            print("[WARN] 선수 카드 상세: 확인할 선수가 없음")
+    except Exception as e:
+        print(f"[WARN] 선수 카드 상세 조회 실패(전적엔 영향 없음): {e}")
+
+    try:
         names = {m["divisionId"]: m["divisionName"] for m in api.get_meta("division")}
         me = next((p for p in details[0]["matchInfo"] if p["ouid"] == ouid), None)
         div_id = me.get("division") if me else None

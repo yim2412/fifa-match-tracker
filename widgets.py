@@ -4,7 +4,7 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, Qt
+from PyQt6.QtCore import QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
@@ -510,10 +510,17 @@ def _grade_badge_colors(grade) -> tuple[str, str]:
 
 
 class _PlayerChip(QFrame):
-    """피치 위에 올라가는 선수 카드 한 장 — 얼굴 사진·포지션·강화·이름."""
+    """피치 위에 올라가는 선수 카드 한 장 — 얼굴 사진·포지션·강화·이름.
+
+    클릭하면 그 선수 카드 상세(오버롤·능력치·시세 등)를 보여줄 수 있게
+    clicked 시그널을 낸다 — 실제 조회·다이얼로그는 app_main 쪽 책임이라
+    여기서는 "눌렸다"는 사실만 알린다."""
+
+    clicked = pyqtSignal()
 
     def __init__(self, pos_name: str, name: str, grade, accent: str):
         super().__init__()
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
             f"QFrame {{ background: rgba(13,17,23,235); border: 2px solid {accent};"
             f" border-radius: 8px; }}")
@@ -581,6 +588,11 @@ class _PlayerChip(QFrame):
         if not pm.isNull():
             self.season_badge.setPixmap(pm)
 
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
 
 class PitchWidget(QWidget):
     """축구장 배경에 포지션대로 선수를 배치해서 보여준다(fc-info.com 류 스쿼드 화면 참고).
@@ -607,6 +619,8 @@ class PitchWidget(QWidget):
     }
     CHIP_SIZE = (108, 96)
 
+    player_clicked = pyqtSignal(int)  # spId — 선수 카드를 클릭했을 때
+
     def __init__(self, players: list[tuple[int, str, str, object, object]]):
         """players: (spPosition, 포지션이름, 선수이름, 강화, spId) 튜플 리스트."""
         super().__init__()
@@ -622,6 +636,7 @@ class PitchWidget(QWidget):
             self._chips.append((chip, xf, yf))
             if isinstance(sp_id, int):
                 self._chip_by_sp_id[sp_id] = chip
+                chip.clicked.connect(lambda sid=sp_id: self.player_clicked.emit(sid))
         self._layout_chips()
 
     def set_face(self, sp_id: int, pixmap_path: str) -> None:

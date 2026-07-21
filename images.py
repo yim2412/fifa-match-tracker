@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import requests
@@ -99,6 +100,27 @@ def fetch_season_icon(season_id: int, icon_url: str, cache_dir: Path,
         return path
     try:
         r = _session.get(icon_url, timeout=timeout)
+        if r.status_code != 200 or not r.content:
+            return None
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(r.content)
+        return path
+    except requests.RequestException:
+        return None
+
+
+# ── 잡다한 URL(선수 카드 사진·국기·특성 아이콘 등) ──────────────────────────
+# playerinfo.py 가 긁어온 URL들은 spId 같은 고정 키가 없거나(국기·특성 아이콘은
+# 여러 선수가 공유) 파일명 규칙이 제각각이라, URL 자체를 해시해 캐시 키로 쓴다.
+def fetch_url(url: str, cache_dir: Path, timeout: int = 6) -> Path | None:
+    if not url:
+        return None
+    suffix = Path(url.split("?", 1)[0]).suffix or ".png"
+    path = cache_dir / f"{hashlib.sha1(url.encode()).hexdigest()}{suffix}"
+    if path.exists():
+        return path
+    try:
+        r = _session.get(url, timeout=timeout)
         if r.status_code != 200 or not r.content:
             return None
         cache_dir.mkdir(parents=True, exist_ok=True)

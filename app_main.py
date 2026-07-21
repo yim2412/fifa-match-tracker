@@ -11,14 +11,15 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QDialog, QFrame, QGroupBox, QHBoxLayout, QHeaderView,
-    QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QScrollArea, QSpinBox, QStackedWidget, QTableWidget, QTabWidget,
-    QVBoxLayout, QWidget,
+    QApplication, QDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
+    QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTableWidget,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 import config
 import images
+import playerinfo
 import ranker
 import stats as st
 import store
@@ -290,6 +291,51 @@ class SeasonIconLoader(QThread):
             path = cache[season_id]
             if path and not self._cancel:
                 self.loaded.emit(sp_id, str(path))
+
+
+class PlayerInfoLoader(QThread):
+    """선수 카드 상세(playerinfo.fetch_player_info)를 백그라운드로 받는다.
+
+    스쿼드 화면에서 선수를 클릭할 때마다 하나씩 조회하는 일회성 요청이라
+    (팀컬러처럼 수백 건을 한 번에 훑지 않는다) 풀 없이 스레드 하나로 충분하다."""
+
+    loaded = pyqtSignal(object)   # playerinfo.PlayerInfo
+    failed = pyqtSignal(str)
+
+    def __init__(self, sp_id: int):
+        super().__init__()
+        self._sp_id = sp_id
+
+    def run(self) -> None:
+        try:
+            info = playerinfo.fetch_player_info(self._sp_id)
+            self.loaded.emit(info)
+        except playerinfo.PlayerInfoError as e:
+            self.failed.emit(str(e))
+
+
+class UrlImageLoader(QThread):
+    """선수 카드 다이얼로그의 사진·국기·특성 아이콘처럼, spId 같은 고정 키가
+    없는 잡다한 URL들을 images.fetch_url 로 받는다."""
+
+    loaded = pyqtSignal(str, str)  # url, 로컬 파일 경로
+
+    def __init__(self, urls: list[str], cache_dir):
+        super().__init__()
+        self._urls = urls
+        self._cache_dir = cache_dir
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        for url in self._urls:
+            if self._cancel:
+                return
+            path = images.fetch_url(url, self._cache_dir)
+            if path and not self._cancel:
+                self.loaded.emit(url, str(path))
 
 
 class TeamColorLoader(QThread):
@@ -1712,6 +1758,12 @@ class MainWindow(QMainWindow):
                 sp_ids.append(sp_id)
 
         pitch = PitchWidget(starters)
+        # 선수 카드를 클릭하면 그 카드 상세(오버롤·능력치·시세 등)를 새
+        # 다이얼로그로 띄운다 — 이 경기 기록의 spGrade 를 같이 넘겨서
+        # "시세" 탭에서 지금 강화 단계를 짚어줄 수 있게 한다.
+        grade_by_sp_id = {sid: g for _, _, _, g, sid in starters if isinstance(sid, int)}
+        pitch.player_clicked.connect(
+            lambda sid: self._show_player_info(sid, grade_by_sp_id.get(sid)))
         v.addWidget(pitch, 1)
 
         # 얼굴 이미지·시즌 아이콘은 백그라운드로 — 다이얼로그는 모달이지만
@@ -1735,6 +1787,250 @@ class MainWindow(QMainWindow):
         loader.wait(500)
         season_loader.cancel()
         season_loader.wait(500)
+
+    PLAYERCARD_IMG_DIR_NAME = "player_card_images"
+
+    def _show_player_info(self, sp_id: int, current_grade=None) -> None:
+        """선수 카드 상세(넥슨 데이터센터 스크래핑, playerinfo.py) 다이얼로그.
+
+        네트워크 조회라 절대 UI 스레드에서 안 하고 PlayerInfoLoader 로
+        돌린다 — 다이얼로그를 먼저 "불러오는 중" 상태로 띄우고, 조회가
+        끝나면(모달이어도 Qt 이벤트 루프는 돌아서 시그널이 도착한다) 내용을
+        채운다."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("선수 정보")
+        dlg.resize(560, 720)
+        v = QVBoxLayout(dlg)
+        status = QLabel("불러오는 중…")
+        status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(status)
+        body = QWidget()
+        v.addWidget(body, 1)
+
+        img_dir = config.CACHE_DIR / self.PLAYERCARD_IMG_DIR_NAME
+        info_loader = PlayerInfoLoader(sp_id)
+        img_loader: UrlImageLoader | None = None
+
+        def on_loaded(info: playerinfo.PlayerInfo) -> None:
+            nonlocal img_loader
+            status.setText("")
+            widgets_by_url = self._fill_player_info(body, info, current_grade)
+            urls = [u for u in widgets_by_url if u]
+            if urls:
+                img_loader = UrlImageLoader(urls, img_dir)
+                img_loader.loaded.connect(
+                    lambda url, path: self._set_player_info_image(widgets_by_url, url, path))
+                img_loader.start()
+
+        def on_failed(msg: str) -> None:
+            status.setText(f"불러오지 못했습니다 — {msg}")
+
+        info_loader.loaded.connect(on_loaded)
+        info_loader.failed.connect(on_failed)
+        info_loader.start()
+
+        dlg.exec()
+        info_loader.wait(3000)
+        if img_loader is not None:
+            img_loader.cancel()
+            img_loader.wait(500)
+
+    @staticmethod
+    def _set_player_info_image(widgets_by_url: dict[str, QLabel], url: str, path: str) -> None:
+        lb = widgets_by_url.get(url)
+        if lb is None:
+            return
+        pm = QPixmap(path)
+        if not pm.isNull():
+            lb.setPixmap(pm)
+
+    def _fill_player_info(self, body: QWidget, info: playerinfo.PlayerInfo,
+                          current_grade=None) -> dict[str, QLabel]:
+        """body 위젯을 선수 카드 내용으로 채우고, 나중에 이미지가 도착하면
+        채울 수 있게 {URL: 그 이미지를 받을 QLabel} 맵을 돌려준다."""
+        widgets_by_url: dict[str, QLabel] = {}
+        outer = QVBoxLayout(body)
+
+        header = QHBoxLayout()
+        photo = QLabel()
+        photo.setFixedSize(96, 96)
+        photo.setScaledContents(True)
+        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: 8px;")
+        header.addWidget(photo)
+        if info.photo_url:
+            widgets_by_url[info.photo_url] = photo
+
+        text_col = QVBoxLayout()
+        name_row = QHBoxLayout()
+        flag = QLabel()
+        flag.setFixedSize(20, 14)
+        flag.setScaledContents(True)
+        name_row.addWidget(flag)
+        if info.nation_flag_url:
+            widgets_by_url[info.nation_flag_url] = flag
+        name_lb = QLabel(f"{info.name}  ·  {info.position}  ·  OVR {info.ovr or NA}")
+        nf = QFont()
+        nf.setPointSize(14)
+        nf.setBold(True)
+        name_lb.setFont(nf)
+        name_row.addWidget(name_lb)
+        name_row.addStretch(1)
+        text_col.addLayout(name_row)
+
+        sub_lb = QLabel(f"{info.nation}  ·  {info.height}  ·  {info.weight}  ·  "
+                        f"{info.body_type}  ·  주발 {info.strong_foot}(약발 {info.weak_foot})")
+        sub_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        text_col.addWidget(sub_lb)
+
+        stars = "★" * info.skill_moves + "☆" * max(info.skill_moves_max - info.skill_moves, 0)
+        fame_lb = QLabel(f"명성 {info.fame}  ·  개인기 {stars}")
+        fame_lb.setStyleSheet(f"color: {T.YELLOW};")
+        text_col.addWidget(fame_lb)
+        text_col.addStretch(1)
+        header.addLayout(text_col, 1)
+        outer.addLayout(header)
+
+        tabs = QTabWidget()
+        tabs.addTab(self._build_ability_tab(info), "능력치")
+        tabs.addTab(self._build_trait_tab(info, widgets_by_url), "특징")
+        tabs.addTab(self._build_price_tab(info, current_grade), "시세")
+        tabs.addTab(self._build_club_history_tab(info), "클럽 경력")
+        outer.addWidget(tabs, 1)
+        return widgets_by_url
+
+    @staticmethod
+    def _build_ability_tab(info: playerinfo.PlayerInfo) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        groups = info.group_stats()
+        if groups:
+            grow = QHBoxLayout()
+            for name, val in groups.items():
+                card = StatCard(name, T.GREEN)
+                card.set(str(val))
+                grow.addWidget(card)
+            v.addLayout(grow)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        grid_host = QWidget()
+        grid = QGridLayout(grid_host)
+        grid.setSpacing(6)
+        cols = 3
+        for i, (name, val) in enumerate(info.abilities.items()):
+            r, c = divmod(i, cols)
+            lb = QLabel(name)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            vb = QLabel(str(val))
+            vb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            pair = QHBoxLayout()
+            pair.addWidget(lb)
+            pair.addStretch(1)
+            pair.addWidget(vb)
+            grid.addLayout(pair, r, c)
+        scroll.setWidget(grid_host)
+        v.addWidget(scroll, 1)
+        return w
+
+    @staticmethod
+    def _build_trait_tab(info: playerinfo.PlayerInfo,
+                         widgets_by_url: dict[str, QLabel]) -> QWidget:
+        w = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        v = QVBoxLayout(host)
+        if not info.traits:
+            lb = QLabel("이 카드에 등록된 특성이 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            v.addWidget(lb)
+        for trait in info.traits:
+            row = QHBoxLayout()
+            icon = QLabel()
+            icon.setFixedSize(28, 28)
+            icon.setScaledContents(True)
+            row.addWidget(icon)
+            if trait.icon_url:
+                widgets_by_url[trait.icon_url] = icon
+            text_col = QVBoxLayout()
+            name_lb = QLabel(trait.name)
+            name_lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            text_col.addWidget(name_lb)
+            if trait.desc:
+                desc_lb = QLabel(trait.desc)
+                desc_lb.setWordWrap(True)
+                desc_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+                text_col.addWidget(desc_lb)
+            row.addLayout(text_col, 1)
+            v.addLayout(row)
+        v.addStretch(1)
+        scroll.setWidget(host)
+        outer = QVBoxLayout(w)
+        outer.addWidget(scroll)
+        return w
+
+    @staticmethod
+    def _build_price_tab(info: playerinfo.PlayerInfo, current_grade=None) -> QWidget:
+        w = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        grid = QGridLayout(host)
+        grid.setSpacing(6)
+        cols = 2  # 시세 문자열이 길어서("3,660,000,000,000 BP") 3열이면 가로 스크롤이 생긴다
+        for i, grade in enumerate(sorted(info.prices)):
+            r, c = divmod(i, cols)
+            price = info.prices[grade]
+            cell = QFrame()
+            cell.setStyleSheet(
+                f"QFrame {{ background: {T.PANEL}; border: 1px solid "
+                f"{T.GREEN if grade == current_grade else T.BORDER}; border-radius: 6px; }}")
+            cv = QVBoxLayout(cell)
+            cv.setContentsMargins(8, 6, 8, 6)
+            grade_lb = QLabel(f"{grade}강" if grade else "기본")
+            grade_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            price_lb = QLabel(price)
+            price_lb.setWordWrap(True)
+            price_lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            cv.addWidget(grade_lb)
+            cv.addWidget(price_lb)
+            grid.addWidget(cell, r, c)
+        scroll.setWidget(host)
+        outer = QVBoxLayout(w)
+        outer.addWidget(scroll)
+        return w
+
+    @staticmethod
+    def _build_club_history_tab(info: playerinfo.PlayerInfo) -> QWidget:
+        w = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        host = QWidget()
+        v = QVBoxLayout(host)
+        if not info.club_history:
+            lb = QLabel("클럽 경력 정보가 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            v.addWidget(lb)
+        for stint in info.club_history:
+            row = QHBoxLayout()
+            period_lb = QLabel(stint.period)
+            period_lb.setFixedWidth(110)
+            period_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            club_lb = QLabel(stint.club + ("  (임대)" if stint.loan else ""))
+            club_lb.setStyleSheet(f"color: {T.TEXT};")
+            row.addWidget(period_lb)
+            row.addWidget(club_lb, 1)
+            v.addLayout(row)
+        v.addStretch(1)
+        scroll.setWidget(host)
+        outer = QVBoxLayout(w)
+        outer.addWidget(scroll)
+        return w
 
     def _render_trend(self, matches: list[MatchSummary]) -> None:
         """승률 그래프 — '적용 경기 수'(시작~끝)가 아니라 '적용 일수'
