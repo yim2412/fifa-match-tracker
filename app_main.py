@@ -363,6 +363,26 @@ class MainWindow(QMainWindow):
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
                       "블록%", "선방력", "평점"]
+    # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
+    # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 fc-info
+    # 프론트엔드에서 역산한 파생 지표라, 이름만 보고는 계산 기준이 안 보여서 필요하다.
+    PLAYER_COLUMN_HELP = {
+        "포지션": "이 선수가 가장 많이 선 자리(출전 빈도 기준).",
+        "강화": "이 선수의 여러 경기 중 가장 높았던 강화 단계.",
+        "출전": "이 계정으로 이 선수가 실제로 뛴 경기 수(교체 투입 포함).",
+        "승률": "이 선수가 출전한 경기만 기준으로 한 승률.",
+        "공격력": "10×기대득점률 + 패스% + 드리블% + 5×(승률/출전)\n"
+                 "+ 필드 플레이어면 공중볼% — fc-info 산식을 그대로 역산해 옮김.",
+        "수비력": "패스% + 가로채기 + 태클% + 2×선방력 + 블록% + 5×(승률/출전)\n"
+                 "+ 필드 플레이어면 공중볼% — fc-info 산식을 그대로 역산해 옮김.",
+        "기대득점률": "경기당 평균 (골+어시) × 100.\n"
+                    "이름과 달리 유효슛 대비 득점률이 아니라 fc-info 정의를 그대로 따름.",
+        "공격P": "골 + 어시 합계(공격 포인트).",
+        "가로채기": "경기당 가로채기 평균 × 100(누적 합계가 아님).",
+        "선방력": "defending 스탯의 경기당 평균 × 100.\n"
+                 "GK는 실제 선방, 필드 플레이어는 수비 기여도로 볼 수 있음.",
+        "평점": "이 선수가 출전한 경기들의 평균 평점.",
+    }
     OPPONENT_COLUMNS = ["상대", "전적", "승률", "평균득점", "평균실점", "최근 경기"]
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
     TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "승", "무", "패", "승률"]
@@ -393,6 +413,7 @@ class MainWindow(QMainWindow):
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
         self._teamcolor_loaded_count = 0  # 중간 갱신 주기용
         self._teamcolor_retry_pending = False  # 조회 중 범위가 넓어져 재시도가 필요함
+        self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -663,11 +684,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_matches_tab(), "경기 목록")
         self.tabs.addTab(self._build_opponents_tab(), "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
-        self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
-        # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
-        # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
-        self.tbl_position_opp.setSortingEnabled(False)
-        self.tabs.addTab(self.tbl_position_opp, "포지션별 최다 상대")
+        self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
+        self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
         self._teamcolor_fetch_btns: list[QPushButton] = []
         self._teamcolor_status_labels: list[QLabel] = []
         self.tabs.addTab(self._build_teamcolor_rate_tab(), "팀컬러 승률")
@@ -816,6 +834,14 @@ class MainWindow(QMainWindow):
         # 너비를 바꾸는 건 그대로 된다).
         for c in range(len(self.PLAYER_COLUMNS)):
             hdr.setSectionResizeMode(c, QHeaderView.ResizeMode.Fixed)
+        # 헤더 위에 마우스를 올리면 지표 계산 기준을 보여준다 — 공격력/수비력처럼
+        # 오픈API에 없어 역산한 지표는 이름만으로는 기준이 안 보이기 때문.
+        for c, name in enumerate(self.PLAYER_COLUMNS):
+            help_text = self.PLAYER_COLUMN_HELP.get(name)
+            if help_text:
+                item = self.tbl_players.horizontalHeaderItem(c)
+                if item:
+                    item.setToolTip(help_text)
         self.tbl_players.setIconSize(QSize(18, 18))
         v.addWidget(self.tbl_players, 1)
         return w
@@ -889,6 +915,185 @@ class MainWindow(QMainWindow):
             item = self.tbl_opponents.item(r, 0)  # 상대 컬럼
             hidden = bool(needle) and (not item or needle not in item.text().lower())
             self.tbl_opponents.setRowHidden(r, hidden)
+
+    POSITION_COLOR_ALL = "전체"
+
+    def _build_position_opp_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        row = QHBoxLayout()
+        lb = QLabel("팀컬러")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.cb_position_color = NoScrollComboBox()
+        self.cb_position_color.addItem(self.POSITION_COLOR_ALL)
+        self.cb_position_color.setMinimumWidth(160)
+        self.cb_position_color.currentIndexChanged.connect(
+            self._on_position_color_changed)
+        row.addWidget(lb)
+        row.addWidget(self.cb_position_color)
+        row.addSpacing(8)
+        lb_note = QLabel("※ '팀컬러 승률/랭킹' 탭에서 상대 팀컬러를 먼저 불러와야 목록이 채워집니다.")
+        lb_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(lb_note)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
+        # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
+        # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
+        self.tbl_position_opp.setSortingEnabled(False)
+        v.addWidget(self.tbl_position_opp, 1)
+        return w
+
+    def _refresh_position_color_options(self) -> None:
+        """알려진 팀컬러 목록(self._team_colors 값)으로 필터 콤보를 다시 채운다.
+
+        팀컬러가 새로 조회될 때마다(_render_teamcolor_tabs) 불린다. 사용자가
+        고른 색이 새 목록에도 있으면 선택을 유지하고, 없어졌으면 '전체'로
+        되돌린다 — 표를 다시 그릴 때마다 필터가 조용히 풀리면 안 되니까.
+        """
+        current = self.cb_position_color.currentText()
+        colors = sorted({c for c in self._team_colors.values() if c})
+        self.cb_position_color.blockSignals(True)
+        self.cb_position_color.clear()
+        self.cb_position_color.addItem(self.POSITION_COLOR_ALL)
+        self.cb_position_color.addItems(colors)
+        keep = current if current in colors else self.POSITION_COLOR_ALL
+        self.cb_position_color.setCurrentText(keep)
+        self.cb_position_color.blockSignals(False)
+
+    def _on_position_color_changed(self, _index: int) -> None:
+        _, details = self._slice()
+        self._render_position_opponents(details)
+
+    COMPARE_ROWS = [
+        # (라벨, Stats 속성, 표시 포맷, 값이 클수록 좋음인지)
+        ("승률", "win_rate", "{:.1f}%", True),
+        ("평균 득점", "avg_goals_for", "{:.2f}", True),
+        ("평균 실점", "avg_goals_against", "{:.2f}", False),
+        ("평균 점유율", "avg_possession", "{:.1f}%", True),
+        ("평균 평점", "avg_rating", "{:.2f}", True),
+    ]
+
+    def _build_compare_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        row = QHBoxLayout()
+        lb = QLabel("상대 닉네임")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.ed_compare_nick = QLineEdit()
+        self.ed_compare_nick.setPlaceholderText("비교할 구단주명")
+        self.ed_compare_nick.setMaximumWidth(220)
+        self.ed_compare_nick.returnPressed.connect(self._on_compare_search)
+        lb_n = QLabel("최근")
+        lb_n.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.sp_compare_n = QSpinBox()
+        self.sp_compare_n.setRange(5, 100)
+        self.sp_compare_n.setValue(30)
+        self.sp_compare_n.setFixedWidth(64)
+        self.sp_compare_n.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        lb_n2 = QLabel("경기")
+        lb_n2.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.btn_compare = QPushButton("비교")
+        self.btn_compare.setObjectName("primary")
+        self.btn_compare.clicked.connect(self._on_compare_search)
+        self.lb_compare_status = QLabel("")
+        self.lb_compare_status.setStyleSheet(f"color: {T.TEXT_DIM};")
+
+        row.addWidget(lb)
+        row.addWidget(self.ed_compare_nick)
+        row.addSpacing(8)
+        row.addWidget(lb_n)
+        row.addWidget(self.sp_compare_n)
+        row.addWidget(lb_n2)
+        row.addSpacing(8)
+        row.addWidget(self.btn_compare)
+        row.addSpacing(8)
+        row.addWidget(self.lb_compare_status)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        note = QLabel("※ 상대 계정은 최근 경기를 새로 조회합니다(API 호출) — 처음 보는"
+                      " 계정이면 시간이 걸릴 수 있습니다.")
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(note)
+
+        self.tbl_compare = self._make_table(["지표", "내 계정", "상대 계정"])
+        self.tbl_compare.setSortingEnabled(False)  # 지표 순서 자체가 정보라 정렬 고정
+        v.addWidget(self.tbl_compare, 1)
+        return w
+
+    def _on_compare_search(self) -> None:
+        if not self._ouid:
+            QMessageBox.information(self, "구단주 비교", "먼저 내 계정을 검색해주세요.")
+            return
+        nick = self.ed_compare_nick.text().strip()
+        if not nick:
+            return
+        if self._compare_loader and self._compare_loader.isRunning():
+            return
+        self.btn_compare.setEnabled(False)
+        self.lb_compare_status.setText(f"'{nick}' 조회 중…")
+        # 내 계정과 같은 방식(MatchLoader) 재사용 — 이미 DB 캐시·중복 방지가 있어
+        # 같은 상대를 다시 비교하면 거의 즉시 끝난다.
+        self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
+        self._compare_loader.finished_ok.connect(self._on_compare_loaded)
+        self._compare_loader.failed.connect(self._on_compare_failed)
+        self._compare_loader.start()
+
+    def _on_compare_loaded(self, matches: list, details: list, ouid: str,
+                           basic: dict, names: dict, positions: dict,
+                           new: int, got: int, rank, grade_name: str,
+                           is_champion: bool, badge_path: str,
+                           seasons: dict) -> None:
+        self.btn_compare.setEnabled(True)
+        nick = basic.get("nickname") or self.ed_compare_nick.text().strip()
+        if not matches:
+            self.lb_compare_status.setText(f"{nick} — 감독모드 기록이 없습니다.")
+            return
+        n = self.sp_compare_n.value()
+        self._render_compare(nick, matches[:n])
+        self.lb_compare_status.setText(
+            f"{nick} — 최근 {min(n, len(matches))}경기 비교")
+
+    def _on_compare_failed(self, msg: str) -> None:
+        self.btn_compare.setEnabled(True)
+        self.lb_compare_status.setText(msg)
+
+    def _render_compare(self, opp_nick: str,
+                        opp_matches: list[MatchSummary]) -> None:
+        n = self.sp_compare_n.value()
+        # self._matches 는 누적 전체가 최신순으로 있으므로 앞에서 N개만 쓴다.
+        my_matches = self._matches[:n]
+        my_stats = summarize(my_matches)
+        opp_stats = summarize(opp_matches)
+
+        self.tbl_compare.setHorizontalHeaderLabels(
+            ["지표", f"{self._nick} (최근 {len(my_matches)}경기)",
+             f"{opp_nick} (최근 {len(opp_matches)}경기)"])
+
+        rows = [("경기수", str(len(my_matches)), str(len(opp_matches)),
+                len(my_matches), len(opp_matches), None)]
+        for label, attr, fmt, higher_is_better in self.COMPARE_ROWS:
+            mine_val = getattr(my_stats, attr)
+            opp_val = getattr(opp_stats, attr)
+            rows.append((label, fmt.format(mine_val), fmt.format(opp_val),
+                        mine_val, opp_val, higher_is_better))
+
+        self.tbl_compare.setRowCount(len(rows))
+        for r, (label, mine_txt, opp_txt, mine_val, opp_val,
+               higher_is_better) in enumerate(rows):
+            self.tbl_compare.setItem(r, 0, self._cell(label))
+            item_mine = self._cell(mine_txt)
+            item_opp = self._cell(opp_txt)
+            self.tbl_compare.setItem(r, 1, item_mine)
+            self.tbl_compare.setItem(r, 2, item_opp)
+            if higher_is_better is not None and mine_val != opp_val:
+                mine_wins = (mine_val > opp_val) == higher_is_better
+                item_mine.setForeground(QColor(T.GREEN if mine_wins else T.TEXT))
+                item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
 
     def _build_tactics_tab(self) -> QWidget:
         # 기본 창(1600x900) 안에 스크롤 없이 담으려고 그룹박스·행 사이 여백을
@@ -1315,10 +1520,15 @@ class MainWindow(QMainWindow):
                     item.setForeground(QColor(T.TEXT))
 
     def _render_position_opponents(self, details: list[dict]) -> None:
+        nicknames = None
+        color = self.cb_position_color.currentText()
+        if color and color != self.POSITION_COLOR_ALL:
+            nicknames = {nick for nick, c in self._team_colors.items() if c == color}
         players = st.opponent_position_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
-            pos_name=lambda p: self._positions.get(p, str(p)))
+            pos_name=lambda p: self._positions.get(p, str(p)),
+            nicknames=nicknames)
         # enable_sort=False 로 채우고 이 표는 정렬 자체를 계속 꺼 둔다(위
         # setSortingEnabled(False) 참고) — 공격→미들→수비→GK 순서·줄별 색이
         # 이 표의 핵심이라 헤더 클릭 정렬이 그 순서를 흐트러뜨리면 안 된다.
@@ -1353,6 +1563,9 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_teamcolor_rank, rank_rows)
         self.tbl_teamcolor_rank.sortByColumn(
             self.TEAMCOLOR_RANK_COLUMNS.index("만난 횟수"), Qt.SortOrder.DescendingOrder)
+        # 새로 알게 된 팀컬러가 있으면 "포지션별 최다 상대" 필터 목록도 같이 넓힌다.
+        self._refresh_position_color_options()
+        self._render_position_opponents(details)
 
     def _on_fetch_team_colors(self) -> None:
         """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 30일)
@@ -1777,6 +1990,11 @@ class MainWindow(QMainWindow):
         if self._table_season_loader and self._table_season_loader.isRunning():
             self._table_season_loader.cancel()
             self._table_season_loader.wait(500)
+        if self._compare_loader and self._compare_loader.isRunning():
+            self._compare_loader.cancel()
+            if not self._compare_loader.wait(8000):
+                self._compare_loader.terminate()
+                self._compare_loader.wait(1000)
         super().closeEvent(e)
 
 
