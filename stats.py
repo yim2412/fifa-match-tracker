@@ -102,6 +102,20 @@ def _result_of(p: dict) -> str:
     return (p.get("matchDetail") or {}).get("matchResult") or "-"
 
 
+def own_squad(details: list[dict], ouid: str):
+    """가장 최근 경기에서 내 스쿼드(선수 raw 목록). opponent_squad 와 대칭.
+
+    details 는 최신순 전제. 못 찾으면 None.
+    돌려주는 값: (선수 raw 목록, 경기일 문자열, 그 경기 내 내 결과).
+    """
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        if me is None:
+            continue
+        return me.get("player") or [], d.get("matchDate", "-"), _result_of(me)
+    return None
+
+
 def opponent_squad(details: list[dict], ouid: str, opponent_nickname: str):
     """상대 닉네임과 가장 최근에 붙었던 경기의 상대 스쿼드(선수 raw 목록).
 

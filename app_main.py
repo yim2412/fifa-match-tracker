@@ -314,6 +314,35 @@ class PlayerInfoLoader(QThread):
             self.failed.emit(str(e))
 
 
+class AbilitySimLoader(QThread):
+    """능력치 시뮬레이터(playerinfo.fetch_player_ability)를 백그라운드로 받는다.
+
+    강화·팀컬러 콤보박스를 바꿀 때마다 PC 데이터센터에 새로 물어봐야 해서
+    (서버가 직접 계산 — 로컬 근사 없음) 조작할 때마다 새로 띄운다."""
+
+    loaded = pyqtSignal(object)   # playerinfo.AbilitySim
+    failed = pyqtSignal(str)
+
+    def __init__(self, sp_id: int, strong: int, grow: int,
+                 teamcolor_id: int, teamcolor_lv: int,
+                 teamcolor_id_enhance: int, teamcolor_lv_enhance: int,
+                 teamcolor_id_feature: int):
+        super().__init__()
+        self._args = (sp_id, strong, grow, teamcolor_id, teamcolor_lv,
+                      teamcolor_id_enhance, teamcolor_lv_enhance, teamcolor_id_feature)
+
+    def run(self) -> None:
+        try:
+            sim = playerinfo.fetch_player_ability(
+                self._args[0], strong=self._args[1], grow=self._args[2],
+                teamcolor_id=self._args[3], teamcolor_lv=self._args[4],
+                teamcolor_id_enhance=self._args[5], teamcolor_lv_enhance=self._args[6],
+                teamcolor_id_feature=self._args[7])
+            self.loaded.emit(sim)
+        except playerinfo.PlayerInfoError as e:
+            self.failed.emit(str(e))
+
+
 class UrlImageLoader(QThread):
     """선수 카드 다이얼로그의 사진·국기·특성 아이콘처럼, spId 같은 고정 키가
     없는 잡다한 URL들을 images.fetch_url 로 받는다."""
@@ -460,6 +489,8 @@ class MainWindow(QMainWindow):
         self._teamcolor_loaded_count = 0  # 중간 갱신 주기용
         self._teamcolor_retry_pending = False  # 조회 중 범위가 넓어져 재시도가 필요함
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
+        self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
+        self._ability_sim_loader: AbilitySimLoader | None = None
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -889,6 +920,9 @@ class MainWindow(QMainWindow):
                 if item:
                     item.setToolTip(help_text)
         self.tbl_players.setIconSize(QSize(18, 18))
+        # "선수" 열(1번)에 spId 를 UserRole 로 붙여두고(_render_players)
+        # 더블클릭하면 상대 스쿼드 화면과 같은 선수 카드 다이얼로그를 연다.
+        self.tbl_players.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
         v.addWidget(self.tbl_players, 1)
         return w
 
@@ -989,6 +1023,7 @@ class MainWindow(QMainWindow):
         # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
         # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
         self.tbl_position_opp.setSortingEnabled(False)
+        self.tbl_position_opp.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
         v.addWidget(self.tbl_position_opp, 1)
         return w
 
@@ -1068,7 +1103,26 @@ class MainWindow(QMainWindow):
 
         self.tbl_compare = self._make_table(["지표", "내 계정", "상대 계정"])
         self.tbl_compare.setSortingEnabled(False)  # 지표 순서 자체가 정보라 정렬 고정
-        v.addWidget(self.tbl_compare, 1)
+        v.addWidget(self.tbl_compare)
+
+        # 각 구단주가 가장 최근 경기에 낸 스쿼드를 나란히 보여준다 —
+        # PitchWidget 최소 폭(560)이 둘이면 창 기본 폭(1600)에 빠듯해서
+        # 가로 스크롤 여지를 둔다.
+        squad_scroll = QScrollArea()
+        squad_scroll.setWidgetResizable(True)
+        squad_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        squad_host = QWidget()
+        squad_row = QHBoxLayout(squad_host)
+        self.box_compare_my_squad = QVBoxLayout()
+        gb_my = QGroupBox("내 스쿼드 (최근 경기)")
+        gb_my.setLayout(self.box_compare_my_squad)
+        self.box_compare_opp_squad = QVBoxLayout()
+        gb_opp = QGroupBox("상대 스쿼드 (최근 경기)")
+        gb_opp.setLayout(self.box_compare_opp_squad)
+        squad_row.addWidget(gb_my, 1)
+        squad_row.addWidget(gb_opp, 1)
+        squad_scroll.setWidget(squad_host)
+        v.addWidget(squad_scroll, 1)
         return w
 
     def _on_compare_search(self) -> None:
@@ -1100,7 +1154,7 @@ class MainWindow(QMainWindow):
             self.lb_compare_status.setText(f"{nick} — 감독모드 기록이 없습니다.")
             return
         n = self.sp_compare_n.value()
-        self._render_compare(nick, matches[:n])
+        self._render_compare(nick, matches[:n], ouid, details)
         self.lb_compare_status.setText(
             f"{nick} — 최근 {min(n, len(matches))}경기 비교")
 
@@ -1108,8 +1162,8 @@ class MainWindow(QMainWindow):
         self.btn_compare.setEnabled(True)
         self.lb_compare_status.setText(msg)
 
-    def _render_compare(self, opp_nick: str,
-                        opp_matches: list[MatchSummary]) -> None:
+    def _render_compare(self, opp_nick: str, opp_matches: list[MatchSummary],
+                        opp_ouid: str, opp_details: list[dict]) -> None:
         n = self.sp_compare_n.value()
         # self._matches 는 누적 전체가 최신순으로 있으므로 앞에서 N개만 쓴다.
         my_matches = self._matches[:n]
@@ -1140,6 +1194,50 @@ class MainWindow(QMainWindow):
                 mine_wins = (mine_val > opp_val) == higher_is_better
                 item_mine.setForeground(QColor(T.GREEN if mine_wins else T.TEXT))
                 item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
+
+        for loader in self._compare_squad_loaders:
+            loader.cancel()
+            loader.wait(500)
+        self._compare_squad_loaders = []
+        self._fill_compare_squad(self.box_compare_my_squad, self._ouid, self._details,
+                                 self._nick)
+        self._fill_compare_squad(self.box_compare_opp_squad, opp_ouid, opp_details,
+                                 opp_nick)
+
+    def _fill_compare_squad(self, box: QVBoxLayout, ouid: str, details: list[dict],
+                            label: str) -> None:
+        self._clear(box)
+        found = st.own_squad(details, ouid)
+        if found is None:
+            lb = QLabel("표시할 스쿼드가 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            box.addWidget(lb)
+            return
+        players, match_date, result = found
+        formation = st.formation_of(players)
+        title = QLabel(f"{label}  ·  {formation}  ·  {result}  ·  {match_date}")
+        title.setStyleSheet(f"color: {T.TEXT_DIM};")
+        title.setWordWrap(True)
+        box.addWidget(title)
+
+        pitch, sp_ids = self._make_pitch_from_players(players)
+        box.addWidget(pitch)
+
+        loader = ImageLoader(sp_ids, self._img_cache_dir)
+        loader.loaded.connect(pitch.set_face)
+        loader.start()
+        self._compare_squad_loaders.append(loader)
+
+        season_entries = []
+        for sp_id in sp_ids:
+            season_id = st.season_id_of(sp_id)
+            info = self._seasons.get(season_id)
+            if info and info.get("seasonImg"):
+                season_entries.append((sp_id, season_id, info["seasonImg"]))
+        season_loader = SeasonIconLoader(season_entries, self._season_icon_dir)
+        season_loader.loaded.connect(pitch.set_season_icon)
+        season_loader.start()
+        self._compare_squad_loaders.append(season_loader)
 
     def _build_tactics_tab(self) -> QWidget:
         # 기본 창(1600x900) 안에 스크롤 없이 담으려고 그룹박스·행 사이 여백을
@@ -1564,6 +1662,20 @@ class MainWindow(QMainWindow):
                 if item:
                     item.setBackground(bg)
                     item.setForeground(QColor(T.TEXT))
+            # "선수"(1번) 열에 spId 를 붙여 더블클릭 시 선수 카드를 열 수 있게 한다.
+            name_item = table.item(r, 1)
+            if name_item:
+                name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
+
+    def _on_player_cell_double_clicked(self, item) -> None:
+        """선수 지표·포지션별 최다 상대 표 공용 핸들러 — "선수"(1번) 열에
+        UserRole 로 붙여둔 spId 를 읽어 상대 스쿼드 화면과 같은 선수 카드
+        다이얼로그를 연다."""
+        table = item.tableWidget()
+        name_item = table.item(item.row(), 1)
+        sp_id = name_item.data(Qt.ItemDataRole.UserRole) if name_item else None
+        if isinstance(sp_id, int):
+            self._show_player_info(sp_id)
 
     def _render_position_opponents(self, details: list[dict]) -> None:
         nicknames = None
@@ -1723,26 +1835,19 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(dlg)
         tbl = self._make_table(self.POSITION_OPP_COLUMNS)
         tbl.setSortingEnabled(False)  # 이유는 tbl_position_opp 와 동일
+        tbl.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
         self._fill(tbl, self._position_opp_rows(players), enable_sort=False)
         self._tint_position_rows(tbl, players)
         v.addWidget(tbl)
         dlg.resize(560, 480)
         dlg.exec()
 
-    def _show_opponent_squad(self, nickname: str, players: list[dict],
-                             match_date: str, result: str) -> None:
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"{nickname} 스쿼드")
-        dlg.resize(600, 760)
-        v = QVBoxLayout(dlg)
+    def _make_pitch_from_players(self, players: list[dict]
+                                 ) -> tuple[PitchWidget, list[int]]:
+        """매치 상세의 선수 raw 목록(교체 포함) -> 선발만 배치한 PitchWidget.
 
-        formation = st.formation_of(players)
-        title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
-        title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-        title.setWordWrap(True)
-        v.addWidget(title)
-
-        # 교체 명단(SUB)은 안 보여준다 — 선발만.
+        상대 스쿼드 화면·구단주 비교 스쿼드가 공유하는 조립 로직 — 선수
+        카드 클릭 연결까지 여기서 끝낸다."""
         starters, sp_ids = [], []
         for p in players:
             pos = p.get("spPosition")
@@ -1764,6 +1869,22 @@ class MainWindow(QMainWindow):
         grade_by_sp_id = {sid: g for _, _, _, g, sid in starters if isinstance(sid, int)}
         pitch.player_clicked.connect(
             lambda sid: self._show_player_info(sid, grade_by_sp_id.get(sid)))
+        return pitch, sp_ids
+
+    def _show_opponent_squad(self, nickname: str, players: list[dict],
+                             match_date: str, result: str) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{nickname} 스쿼드")
+        dlg.resize(600, 760)
+        v = QVBoxLayout(dlg)
+
+        formation = st.formation_of(players)
+        title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
+        title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        title.setWordWrap(True)
+        v.addWidget(title)
+
+        pitch, sp_ids = self._make_pitch_from_players(players)
         v.addWidget(pitch, 1)
 
         # 얼굴 이미지·시즌 아이콘은 백그라운드로 — 다이얼로그는 모달이지만
@@ -1834,6 +1955,8 @@ class MainWindow(QMainWindow):
         if img_loader is not None:
             img_loader.cancel()
             img_loader.wait(500)
+        if self._ability_sim_loader and self._ability_sim_loader.isRunning():
+            self._ability_sim_loader.wait(2000)
 
     @staticmethod
     def _set_player_info_image(widgets_by_url: dict[str, QLabel], url: str, path: str) -> None:
@@ -1891,26 +2014,85 @@ class MainWindow(QMainWindow):
         outer.addLayout(header)
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_ability_tab(info), "능력치")
+        tabs.addTab(self._build_ability_tab(info, current_grade), "능력치")
         tabs.addTab(self._build_trait_tab(info, widgets_by_url), "특징")
         tabs.addTab(self._build_price_tab(info, current_grade), "시세")
         tabs.addTab(self._build_club_history_tab(info), "클럽 경력")
         outer.addWidget(tabs, 1)
         return widgets_by_url
 
-    @staticmethod
-    def _build_ability_tab(info: playerinfo.PlayerInfo) -> QWidget:
+    ABILITY_SIM_GROW = 5  # 적응도는 고정 — 강화·팀컬러만 사용자가 바꿔본다.
+
+    def _build_ability_tab(self, info: playerinfo.PlayerInfo,
+                           current_grade=None) -> QWidget:
+        """강화·적응도·팀컬러(소속/강화/관계) 시뮬레이터 — PC 데이터센터의
+        "선수 정보 변경" 팝업과 같은 조작을, 그 팝업이 부르는 것과 같은
+        엔드포인트(playerinfo.fetch_player_ability)로 그대로 재현한다.
+        로컬 계산이 아니라 매 조작마다 넥슨 서버에 다시 물어보므로(팀컬러
+        보너스 조합표를 넥슨이 공개하지 않아 근사할 방법이 없다) 콤보를
+        바꿀 때마다 짧게 "계산 중…" 이 뜬다."""
         w = QWidget()
         v = QVBoxLayout(w)
+        sp_id = info.sp_id
 
-        groups = info.group_stats()
-        if groups:
-            grow = QHBoxLayout()
-            for name, val in groups.items():
-                card = StatCard(name, T.GREEN)
-                card.set(str(val))
-                grow.addWidget(card)
-            v.addLayout(grow)
+        status = QLabel("")
+        status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(status)
+
+        opt_row = QHBoxLayout()
+        opt_row.addWidget(QLabel("강화"))
+        cb_strong = NoScrollComboBox()
+        for lvl in playerinfo.STRONG_LEVELS:
+            cb_strong.addItem(f"{lvl}강", lvl)
+        default_strong = current_grade if current_grade in playerinfo.STRONG_LEVELS else 1
+        cb_strong.setCurrentIndex(cb_strong.findData(default_strong))
+        opt_row.addWidget(cb_strong)
+        opt_row.addSpacing(12)
+        opt_row.addWidget(QLabel(f"적응도 {self.ABILITY_SIM_GROW}(고정)"))
+        opt_row.addStretch(1)
+        v.addLayout(opt_row)
+
+        # 팀컬러 선택지는 fetch_player_ability 응답에 이 선수 전용으로 이미
+        # 필터링돼 들어온다(수 개 수준) — 첫 응답이 오기 전까지만 비활성.
+        # 레벨 UI는 없다: 소속 팀컬러는 항상 그 팀컬러의 최대 레벨로 자동
+        # 조회하고(아래 club_max_lv), 강화 팀컬러는 항목 자체에 레벨이
+        # 박혀 있으며("Lv.1 백금빛 물결"), 관계 팀컬러는 레벨 개념이 없다.
+        def make_teamcolor_combo() -> NoScrollComboBox:
+            combo = NoScrollComboBox()
+            combo.addItem("(선택 안 함)", 0)
+            combo.setCurrentIndex(0)
+            combo.setEnabled(False)
+            return combo
+
+        tc_row1 = QHBoxLayout()
+        tc_row1.addWidget(QLabel("소속 팀컬러"))
+        cb_tc = make_teamcolor_combo()
+        tc_row1.addWidget(cb_tc, 1)
+        v.addLayout(tc_row1)
+
+        tc_row2 = QHBoxLayout()
+        tc_row2.addWidget(QLabel("강화 팀컬러"))
+        cb_tc_en = make_teamcolor_combo()
+        tc_row2.addWidget(cb_tc_en, 1)
+        v.addLayout(tc_row2)
+
+        tc_row3 = QHBoxLayout()
+        tc_row3.addWidget(QLabel("관계 팀컬러"))
+        cb_tc_feature = make_teamcolor_combo()
+        tc_row3.addWidget(cb_tc_feature, 1)
+        v.addLayout(tc_row3)
+
+        ovr_lb = QLabel("OVR -")
+        ovr_lb.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")
+        v.addWidget(ovr_lb)
+
+        group_cards: dict[str, StatCard] = {}
+        grow_row = QHBoxLayout()
+        for name in playerinfo.GROUP_NAMES:
+            card = StatCard(name, T.GREEN)
+            group_cards[name] = card
+            grow_row.addWidget(card)
+        v.addLayout(grow_row)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1918,20 +2100,100 @@ class MainWindow(QMainWindow):
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
         grid.setSpacing(6)
-        cols = 3
-        for i, (name, val) in enumerate(info.abilities.items()):
-            r, c = divmod(i, cols)
-            lb = QLabel(name)
-            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-            vb = QLabel(str(val))
-            vb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            pair = QHBoxLayout()
-            pair.addWidget(lb)
-            pair.addStretch(1)
-            pair.addWidget(vb)
-            grid.addLayout(pair, r, c)
-        scroll.setWidget(grid_host)
         v.addWidget(scroll, 1)
+        scroll.setWidget(grid_host)
+
+        # 소속 팀컬러별 최대 레벨 — 팀컬러마다 다르고(대부분 4, Winning
+        # Streak 는 3) 범위 밖을 보내면 넥슨이 에러 페이지를 돌려주므로,
+        # 모르는 팀컬러는 일단 Lv.1(항상 유효)로 조회하고 응답의 레벨
+        # 선택지(sim.club_levels)에서 최대치를 배운 뒤 자동 재조회한다.
+        club_max_lv: dict[int, int] = {}
+
+        # 매 응답마다 콤보를 그 선수 전용 목록으로 다시 채운다. 강화 팀컬러
+        # 목록이 강화 단계에 따라 달라지므로 "한 번 채우고 끝"이 아니다.
+        # blockSignals 로 재채움 중 currentIndexChanged → refresh() 무한루프를
+        # 막고, 현재 선택은 새 목록에 남아 있으면 유지한다.
+        def rebuild_combo(combo: NoScrollComboBox,
+                          options: list[tuple]) -> None:  # (userData, 표시명)
+            keep = combo.currentData() or 0
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("(선택 안 함)", 0)
+            for data, name in options:
+                combo.addItem(name, data)
+            # findData 는 튜플 userData 비교가 미덥지 않아 직접 훑는다.
+            idx = next((i for i in range(combo.count())
+                        if combo.itemData(i) == keep), 0)
+            combo.setCurrentIndex(idx)
+            combo.setEnabled(True)
+            combo.blockSignals(False)
+
+        def render(sim: playerinfo.AbilitySim) -> None:
+            try:
+                status.setText("")
+                rebuild_combo(cb_tc, sim.club_options)
+                rebuild_combo(cb_tc_en, [((eid, lv), label)
+                                         for eid, lv, label in sim.enhance_options])
+                rebuild_combo(cb_tc_feature, sim.feature_options)
+                # 선택된 소속 팀컬러의 최대 레벨을 처음 배웠으면 그 레벨로 재조회
+                club_id = cb_tc.currentData() or 0
+                if club_id and sim.club_levels:
+                    best = max(sim.club_levels)
+                    if club_max_lv.get(club_id) != best:
+                        club_max_lv[club_id] = best
+                        refresh()
+                        return
+                ovr_lb.setText(f"OVR {sim.ovr if sim.ovr is not None else NA}")
+                for name, card in group_cards.items():
+                    card.set(str(sim.groups.get(name, NA)))
+                while grid.count():
+                    item = grid.takeAt(0)
+                    if item.layout():
+                        self._clear(item.layout())
+                        item.layout().deleteLater()
+                cols = 3
+                for i, (name, val) in enumerate(sim.abilities.items()):
+                    r, c = divmod(i, cols)
+                    lb = QLabel(name)
+                    lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+                    vb = QLabel(str(val))
+                    vb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+                    pair = QHBoxLayout()
+                    pair.addWidget(lb)
+                    pair.addStretch(1)
+                    pair.addWidget(vb)
+                    grid.addLayout(pair, r, c)
+            except RuntimeError:
+                pass  # 다이얼로그가 이미 닫힌 뒤 응답이 도착함 — 무시
+
+        def on_failed(msg: str) -> None:
+            try:
+                status.setText(f"능력치 계산 실패 — {msg}")
+            except RuntimeError:
+                pass
+
+        def refresh() -> None:
+            if self._ability_sim_loader and self._ability_sim_loader.isRunning():
+                self._ability_sim_loader.loaded.disconnect()
+                self._ability_sim_loader.failed.disconnect()
+            status.setText("계산 중…")
+            club_id = cb_tc.currentData() or 0
+            en = cb_tc_en.currentData() or (0, 0)  # (id, lv) — 항목에 레벨 내장
+            loader = AbilitySimLoader(
+                sp_id, cb_strong.currentData(), self.ABILITY_SIM_GROW,
+                club_id, club_max_lv.get(club_id, 1) if club_id else 0,
+                en[0], en[1], cb_tc_feature.currentData() or 0)
+            self._ability_sim_loader = loader
+            loader.loaded.connect(render)
+            loader.failed.connect(on_failed)
+            loader.start()
+
+        cb_strong.currentIndexChanged.connect(refresh)
+        cb_tc.currentIndexChanged.connect(refresh)
+        cb_tc_en.currentIndexChanged.connect(refresh)
+        cb_tc_feature.currentIndexChanged.connect(refresh)
+
+        refresh()
         return w
 
     @staticmethod
@@ -2291,6 +2553,11 @@ class MainWindow(QMainWindow):
             if not self._compare_loader.wait(8000):
                 self._compare_loader.terminate()
                 self._compare_loader.wait(1000)
+        for loader in self._compare_squad_loaders:
+            loader.cancel()
+            loader.wait(500)
+        if self._ability_sim_loader and self._ability_sim_loader.isRunning():
+            self._ability_sim_loader.wait(2000)
         super().closeEvent(e)
 
 

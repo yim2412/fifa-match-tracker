@@ -159,6 +159,19 @@ def main() -> int:
         print(f"[WARN] 선수 카드 상세 조회 실패(전적엔 영향 없음): {e}")
 
     try:
+        import playerinfo
+        if first_sp is not None:
+            sim = playerinfo.fetch_player_ability(first_sp)
+            print(f"[OK]   능력치 시뮬레이터: OVR {sim.ovr}"
+                  f" · 능력치 {len(sim.abilities)}개 · 팀컬러 선택지"
+                  f" 소속 {len(sim.club_options)}/강화 {len(sim.enhance_options)}"
+                  f"/관계 {len(sim.feature_options)}개")
+        else:
+            print("[WARN] 능력치 시뮬레이터: 확인할 선수가 없음")
+    except Exception as e:
+        print(f"[WARN] 능력치 시뮬레이터 조회 실패(전적엔 영향 없음): {e}")
+
+    try:
         names = {m["divisionId"]: m["divisionName"] for m in api.get_meta("division")}
         me = next((p for p in details[0]["matchInfo"] if p["ouid"] == ouid), None)
         div_id = me.get("division") if me else None
