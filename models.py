@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 
 @dataclass
@@ -246,6 +246,95 @@ def current_streak(matches: list[MatchSummary]) -> tuple[str, int]:
             break
         n += 1
     return first, n
+
+
+def longest_streaks(matches: list[MatchSummary]) -> tuple[int, int]:
+    """(최장 연승, 최장 연패) — matches 순서 무관(날짜로 다시 정렬해서 센다).
+
+    current_streak 과 같은 기준: 몰수승/몰수패도 승패로 치고, 무승부는
+    연속을 끊는다. 날짜 없는 경기는 뺀다."""
+    dated = sorted((m for m in matches if m.match_date is not None),
+                   key=lambda m: m.match_date)
+    best_win = best_lose = 0
+    run_kind, run = "", 0
+    for m in dated:
+        kind = "승" if "승" in m.result else ("패" if "패" in m.result else "")
+        if kind and kind == run_kind:
+            run += 1
+        else:
+            run_kind, run = kind, (1 if kind else 0)
+        if run_kind == "승":
+            best_win = max(best_win, run)
+        elif run_kind == "패":
+            best_lose = max(best_lose, run)
+    return best_win, best_lose
+
+
+@dataclass
+class PeriodStat:
+    """기간(1일/2일/1주/1개월 묶음) 하나의 전적 — 기간별 추이 표의 한 줄."""
+    label: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    goals_for: int = 0
+    goals_against: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return (self.win / self.games * 100) if self.games else 0.0
+
+    @property
+    def avg_gf(self) -> float:
+        return self.goals_for / self.games if self.games else 0.0
+
+    @property
+    def avg_ga(self) -> float:
+        return self.goals_against / self.games if self.games else 0.0
+
+
+def period_stats(matches: list[MatchSummary], days: int = 7) -> list[PeriodStat]:
+    """경기를 기간 단위로 묶은 전적 — 최신 기간부터.
+
+    days: 1(일별) · 2(2일씩) · 7(주 — 월요일 시작) · 30(달력 월).
+    7과 30은 임의 창이 아니라 달력 기준(월요일 시작 주, 그 달)으로 묶는다 —
+    "이번 주" "7월" 같은 자연스러운 구간과 어긋나면 오히려 헷갈린다.
+    경기가 없던 기간은 만들지 않는다."""
+    dated = [m for m in matches if m.match_date is not None]
+    acc: dict = {}
+    for m in dated:
+        d = m.match_date.date()
+        if days == 30:
+            key = (d.year, d.month)
+            label = f"{d.year}-{d.month:02d}"
+        elif days == 7:
+            start = d - timedelta(days=d.weekday())
+            key = start
+            label = f"{start:%m/%d}~{start + timedelta(days=6):%m/%d}"
+        elif days == 1:
+            key = d
+            label = f"{d:%Y-%m-%d}"
+        else:
+            start_ord = d.toordinal() // days * days
+            key = start_ord
+            start = date.fromordinal(start_ord)
+            label = f"{start:%m/%d}~{start + timedelta(days=days - 1):%m/%d}"
+        s = acc.get(key)
+        if s is None:
+            s = acc[key] = PeriodStat(label=label)
+        if "승" in m.result:
+            s.win += 1
+        elif "무" in m.result:
+            s.draw += 1
+        elif "패" in m.result:
+            s.lose += 1
+        s.goals_for += m.my_goals
+        s.goals_against += m.opp_goals
+    return [acc[k] for k in sorted(acc.keys(), reverse=True)]
 
 
 def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRate]:

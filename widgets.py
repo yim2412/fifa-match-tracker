@@ -487,6 +487,91 @@ class TrendChart(QWidget):
                       Qt.AlignmentFlag.AlignCenter, self._points[i][0])
 
 
+class DivisionChart(QWidget):
+    """등급(디비전) 추이 계단 그래프 — TrendChart 와 같은 방식(QPainter 직접).
+
+    points: (라벨, divisionId) 리스트, 날짜 오름차순.
+    names: divisionId -> 등급 이름(오픈API division 메타). 등급은 id 가
+    작을수록 높다 — Y축은 위가 높은 등급이 되게 뒤집어 그린다.
+    Y 레벨은 데이터에 나온 등급들만 쓴다(전체 18단계를 다 그리면 실제 변화
+    폭이 눌려서 안 보인다)."""
+
+    def __init__(self):
+        super().__init__()
+        self._points: list[tuple[str, int]] = []
+        self._names: dict[int, str] = {}
+        self.setMinimumHeight(220)
+
+    def set_data(self, points: list[tuple[str, int]],
+                 names: dict[int, str]) -> None:
+        self._points = points
+        self._names = names
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        ml, mr, mt, mb = 96, 16, 14, 26  # 왼쪽 여백은 등급 이름이 들어갈 만큼
+        plot_w = max(w - ml - mr, 1)
+        plot_h = max(h - mt - mb, 1)
+        p.fillRect(self.rect(), QColor(T.PANEL))
+
+        font = p.font()
+        font.setPointSize(9)
+        p.setFont(font)
+
+        if not self._points:
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                      "표시 구간에 등급 정보가 있는 경기가 없습니다.")
+            return
+
+        # id 내림차순 = 낮은 등급부터 → y 아래에서 위로
+        levels = sorted({div for _, div in self._points}, reverse=True)
+        y_of = {div: (mt + plot_h - (plot_h * i / max(len(levels) - 1, 1))
+                      if len(levels) > 1 else mt + plot_h / 2)
+                for i, div in enumerate(levels)}
+
+        for div in levels:
+            y = y_of[div]
+            p.setPen(QColor(T.BORDER))
+            p.drawLine(ml, int(y), w - mr, int(y))
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(2, int(y) - 7, ml - 8, 14,
+                      Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                      self._names.get(div, str(div)))
+
+        n = len(self._points)
+
+        def x_of(i: int) -> float:
+            return ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+
+        pts = [QPointF(x_of(i), y_of[div])
+               for i, (_, div) in enumerate(self._points)]
+
+        # 계단형 — 등급은 경기 사이에 "서서히"가 아니라 딱 바뀌는 값이다
+        p.setPen(QPen(QColor(T.YELLOW), 2))
+        for a, b in zip(pts, pts[1:]):
+            p.drawLine(a, QPointF(b.x(), a.y()))
+            p.drawLine(QPointF(b.x(), a.y()), b)
+
+        p.setPen(QPen(QColor(T.PANEL), 1))
+        p.setBrush(QColor(T.YELLOW))
+        prev_div = None
+        for pt, (_, div) in zip(pts, self._points):
+            if div != prev_div:  # 등급이 바뀐 지점만 점을 찍는다 — 다 찍으면 떡칠
+                p.drawEllipse(pt, 3.5, 3.5)
+                prev_div = div
+
+        p.setPen(QColor(T.TEXT_DIM))
+        step = max(1, n // 6)
+        label_y = h - mb + 6
+        for i in range(0, n, step):
+            p.drawText(int(pts[i].x()) - 24, label_y, 48, 14,
+                      Qt.AlignmentFlag.AlignCenter, self._points[i][0])
+
+
 def _grade_badge_colors(grade) -> tuple[str, str]:
     """강화 단계 → (배지 배경색, 글자색).
 

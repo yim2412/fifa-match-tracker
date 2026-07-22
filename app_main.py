@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from datetime import timedelta
 
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
@@ -25,13 +26,14 @@ import stats as st
 import store
 import theme as T
 from models import (
-    MatchSummary, current_streak, opponent_stats, parse_match, summarize,
-    win_rate_trend,
+    MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match,
+    period_stats, summarize, win_rate_trend,
 )
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
-    NA, BarRow, FitTableWidget, NoScrollComboBox, PitchWidget, RankerCard,
-    RowBorderDelegate, SortableItem, StatCard, TrendChart, rate_of, wdl_text,
+    NA, BarRow, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
+    RankerCard, RowBorderDelegate, SortableItem, StatCard, TrendChart, rate_of,
+    wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -44,9 +46,9 @@ class MatchLoader(QThread):
     # [MatchSummary], [원본 detail], ouid, basic, spId→이름, 포지션코드→이름,
     # 새로 저장된 수, 이번에 API 로 받은 수, RankerInfo|None(넥슨 데이터센터 랭킹),
     # 등급이름(감독모드 최고 등급), is_champion(챔피언스 이상인지), 등급 배지 로컬 경로,
-    # seasonId→{className,seasonImg}
+    # seasonId→{className,seasonImg}, divisionId→등급이름(등급 추이 그래프용)
     finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int, object,
-                             str, bool, str, dict)
+                             str, bool, str, dict, dict)
     failed = pyqtSignal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
@@ -138,11 +140,13 @@ class MatchLoader(QThread):
             # 넥슨 데이터센터의 감독모드 랭킹(순위·구단가치·ELO). 오픈API 엔
             # 없는 값이라 여기서 받는다. 실패해도 전적 조회는 살린다.
             rank = self._safe_rank()
-            grade_name, is_champion, badge_path = self._current_grade(details, ouid)
+            grade_name, is_champion, badge_path, division_names = \
+                self._current_grade(details, ouid)
 
             if not details:
                 self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got,
-                                      rank, grade_name, is_champion, badge_path, {})
+                                      rank, grade_name, is_champion, badge_path,
+                                      {}, division_names)
                 return
 
             matches = [m for m in (parse_match(d, ouid) for d in details) if m]
@@ -155,7 +159,7 @@ class MatchLoader(QThread):
 
             self.finished_ok.emit(matches, details, ouid, basic, names,
                                   positions, new, got, rank, grade_name,
-                                  is_champion, badge_path, seasons)
+                                  is_champion, badge_path, seasons, division_names)
 
         except NexonAPIError as e:
             self.failed.emit(e.message)
@@ -188,7 +192,7 @@ class MatchLoader(QThread):
             return {}
 
     def _current_grade(self, details: list[dict],
-                       ouid: str) -> tuple[str, bool, str]:
+                       ouid: str) -> tuple[str, bool, str, dict]:
         """'지금' 등급 이름·챔피언스 이상 여부·등급 배지 아이콘 로컬 경로.
 
         오픈API user/maxdivision 은 '역대 최고' 등급이라 지금 등급과 다를 수
@@ -197,13 +201,6 @@ class MatchLoader(QThread):
         둔 경기 중 가장 최근 것(details[0], store.load_details 가 최신순으로
         준다)의 값을 쓴다 — 우리가 실제로 확인한 최신 상태에 가장 가깝다.
         """
-        if not details:
-            return "-", False, ""
-        me = next((p for p in details[0].get("matchInfo") or []
-                  if p.get("ouid") == ouid), None)
-        div_id = me.get("division") if me else None
-        if div_id is None:
-            return "-", False, ""
         raw = []
         try:
             raw = self._api.get_meta("division")
@@ -211,6 +208,14 @@ class MatchLoader(QThread):
             pass
         names = {d.get("divisionId"): d.get("divisionName") for d in raw
                 if "divisionId" in d and "divisionName" in d}
+
+        if not details:
+            return "-", False, "", names
+        me = next((p for p in details[0].get("matchInfo") or []
+                  if p.get("ouid") == ouid), None)
+        div_id = me.get("division") if me else None
+        if div_id is None:
+            return "-", False, "", names
         grade_name = names.get(div_id, str(div_id))
 
         # division.json 은 배열 순서 그대로가 등급 배지 CDN 번호다(0=슈퍼
@@ -223,7 +228,7 @@ class MatchLoader(QThread):
             path = images.fetch_division_icon(idx, config.CACHE_DIR / "division_icons")
             if path:
                 badge_path = str(path)
-        return grade_name, st.is_champion_or_above(div_id), badge_path
+        return grade_name, st.is_champion_or_above(div_id), badge_path, names
 
     def _safe_rank(self):
         """랭킹(데이터센터 스크래핑)이 깨져도 전적은 보여준다."""
@@ -481,6 +486,7 @@ class MainWindow(QMainWindow):
         self._basic: dict = {}
         self._rank = None   # ranker.RankerInfo | None — 넥슨 데이터센터 랭킹
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
+        self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
         self._badge_path = ""      # 등급 배지 아이콘 로컬 캐시 경로
         self._seasons: dict = {}   # seasonId -> {className, seasonImg} (get_meta("seasonid"))
@@ -770,6 +776,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_matches_tab(), "경기 목록")
         self.tabs.addTab(self._build_opponents_tab(), "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
+        self.tabs.addTab(self._build_period_tab(), "기간별 추이")
         self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
         self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
         self._teamcolor_fetch_btns: list[QPushButton] = []
@@ -866,7 +873,56 @@ class MainWindow(QMainWindow):
         self.trend_chart = TrendChart([])
         gv.addWidget(self.trend_chart)
         v.addWidget(self.gb_trend, 1)
+
+        # 등급 추이 — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음.
+        # 기간(일수)은 위 승률 추이와 같은 스핀박스를 공유한다.
+        self.gb_division = QGroupBox("등급 추이")
+        dv = QVBoxLayout(self.gb_division)
+        self.division_chart = DivisionChart()
+        dv.addWidget(self.division_chart)
+        v.addWidget(self.gb_division, 1)
         return w
+
+    PERIOD_CHOICES = [("1일", 1), ("2일", 2), ("1주", 7), ("1개월", 30)]
+    PERIOD_COLUMNS = ["기간", "경기", "승", "무", "패", "승률",
+                      "평균득점", "평균실점"]
+
+    def _build_period_tab(self) -> QWidget:
+        """기간별 추이 — 누적 전체 경기를 1일/2일/1주/1개월 단위로 묶은 전적 표."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        ctrl = QHBoxLayout()
+        ctrl.addWidget(QLabel("묶음 단위"))
+        self.cb_period = NoScrollComboBox()
+        for label, days in self.PERIOD_CHOICES:
+            self.cb_period.addItem(label, days)
+        self.cb_period.setCurrentIndex(self.cb_period.findData(7))
+        self.cb_period.currentIndexChanged.connect(
+            lambda: self._render_period(self._matches))
+        ctrl.addWidget(self.cb_period)
+        ctrl.addSpacing(12)
+        self.lb_streaks = QLabel("")
+        self.lb_streaks.setStyleSheet(f"color: {T.TEXT_DIM};")
+        ctrl.addWidget(self.lb_streaks)
+        ctrl.addStretch(1)
+        v.addLayout(ctrl)
+        self.tbl_period = self._make_table(self.PERIOD_COLUMNS)
+        v.addWidget(self.tbl_period, 1)
+        return w
+
+    def _render_period(self, matches: list[MatchSummary]) -> None:
+        periods = period_stats(matches, days=self.cb_period.currentData() or 7)
+        rows = [[p.label, (str(p.games), p.games), (str(p.win), p.win),
+                (str(p.draw), p.draw), (str(p.lose), p.lose),
+                (f"{p.win_rate:.1f}%", p.win_rate),
+                (f"{p.avg_gf:.2f}", p.avg_gf), (f"{p.avg_ga:.2f}", p.avg_ga)]
+               for p in periods]
+        self._fill(self.tbl_period, rows)
+        best_win, best_lose = longest_streaks(matches)
+        kind, n = current_streak(matches)
+        now_text = f"현재 {n}{kind}" if kind else "현재 -"
+        self.lb_streaks.setText(
+            f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose} (누적 전체 기준)")
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
@@ -1392,7 +1448,7 @@ class MainWindow(QMainWindow):
     def _on_loaded(self, matches: list, details: list, ouid: str, basic: dict,
                    names: dict, positions: dict, new: int, got: int,
                    rank, grade_name: str, is_champion: bool,
-                   badge_path: str, seasons: dict) -> None:
+                   badge_path: str, seasons: dict, division_names: dict) -> None:
         self._set_busy(False)
         self._refresh_accounts()
         self._refresh_recent()
@@ -1406,6 +1462,8 @@ class MainWindow(QMainWindow):
         self._badge_path = badge_path
         if seasons:
             self._seasons = seasons
+        if division_names:
+            self._division_names = division_names
         self._nick = basic.get("nickname") or self._nick
         for ed in self._nick_edits:
             ed.setText(self._nick)
@@ -1470,6 +1528,7 @@ class MainWindow(QMainWindow):
         # 갇히면 안 된다 — 하루에 100경기 넘게 뛰는 계정은 그 구간이 하루도
         # 안 될 수 있어서, 누적 전체(self._matches)에서 30일을 계산한다.
         self._render_trend(self._matches)
+        self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
@@ -2420,6 +2479,19 @@ class MainWindow(QMainWindow):
         self._trend_periods = win_rate_trend(matches, days=days)
         self.trend_chart.set_points(
             [(p.label, p.win_rate, p.games) for p in self._trend_periods])
+
+        # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다.
+        div_points = st.division_trend(self._details, self._ouid)
+        if div_points:
+            latest = max(t for t, _ in div_points).date()
+            cutoff = latest - timedelta(days=days - 1)
+            shown = [(f"{t:%m/%d}", div) for t, div in div_points
+                     if t.date() >= cutoff]
+        else:
+            shown = []
+        self.gb_division.setTitle(f"최근 {days}일 등급 추이")
+        self.division_chart.set_data(shown, self._division_names)
+
         if self.tabs.currentIndex() == self.TAB_TREND:
             self._show_trend_summary()
 
@@ -2462,6 +2534,9 @@ class MainWindow(QMainWindow):
 
     def _render_streak(self, matches: list[MatchSummary]) -> None:
         kind, n = current_streak(matches)
+        best_win, best_lose = longest_streaks(self._matches)
+        self.card_streak.setToolTip(
+            f"최장 연승 {best_win} · 최장 연패 {best_lose} (누적 전체 기준)")
         color = {"승": T.GREEN, "패": T.RED, "무": T.TEXT_DIM}.get(kind, T.TEXT_DIM)
         self.card_streak.set_color(color)
         self.card_streak.set(f"{n}{kind}" if kind else NA)

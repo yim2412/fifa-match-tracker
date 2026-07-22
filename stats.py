@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
@@ -19,6 +20,28 @@ CHAMPION_DIVISION_ID = 900
 
 def is_champion_or_above(division_id: int | None) -> bool:
     return division_id is not None and division_id <= CHAMPION_DIVISION_ID
+
+
+def division_trend(details: list, ouid: str) -> list[tuple[datetime, int]]:
+    """경기 시점별 내 등급(division) — 오래된 경기부터 (일시, divisionId).
+
+    매치 상세에 그 경기 당시의 division 이 박혀 있어서(_current_grade 와
+    같은 필드) 이미 쌓아 둔 데이터만으로 등급 변화 이력이 나온다.
+    날짜나 division 이 빠진 경기는 건너뛴다."""
+    out: list[tuple[datetime, int]] = []
+    for d in details:
+        raw = d.get("matchDate")
+        me = next((p for p in d.get("matchInfo") or []
+                   if p.get("ouid") == ouid), None)
+        div = me.get("division") if me else None
+        if not raw or div is None:
+            continue
+        try:
+            out.append((datetime.fromisoformat(raw), int(div)))
+        except (ValueError, TypeError):
+            continue
+    out.sort(key=lambda t: t[0])
+    return out
 
 # 슛 유형. 공식 문서에 매핑이 없어 실제 응답으로 확정했다.
 #  - type 8/9 는 shoot.goalFreekick / goalPenaltyKick 집계와 200개 선수-경기
