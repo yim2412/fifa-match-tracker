@@ -2154,7 +2154,11 @@ class MainWindow(QMainWindow):
                         return
                 ovr_lb.setText(f"OVR {sim.ovr if sim.ovr is not None else NA}")
                 for name, card in group_cards.items():
-                    card.set(str(sim.groups.get(name, NA)))
+                    gv = sim.groups.get(name)
+                    card.set(str(gv if gv is not None else NA))
+                    if gv is not None:
+                        card.value.setStyleSheet(
+                            f"color: {playerinfo.stat_color(gv)}; border: none;")
                 while grid.count():
                     item = grid.takeAt(0)
                     if item.layout():
@@ -2166,7 +2170,9 @@ class MainWindow(QMainWindow):
                     lb = QLabel(name)
                     lb.setStyleSheet(f"color: {T.TEXT_DIM};")
                     vb = QLabel(str(val))
-                    vb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+                    # 홈페이지와 같은 구간 기준으로 값에 색을 입힌다
+                    vb.setStyleSheet(
+                        f"color: {playerinfo.stat_color(val)}; font-weight: bold;")
                     pair = QHBoxLayout()
                     pair.addWidget(lb)
                     pair.addStretch(1)
