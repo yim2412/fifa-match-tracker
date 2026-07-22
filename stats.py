@@ -455,15 +455,36 @@ class TeamColorStat:
     win: int = 0
     draw: int = 0
     lose: int = 0
+    # 이 팀컬러를 쓴 상대들의 구단가치(원 단위) — 상대(닉네임)당 1개.
+    # 팀가치를 모르는 상대(구버전 캐시 등)는 안 들어가므로 평균·최저·최고는
+    # "팀가치를 아는 상대" 기준이다.
+    team_values: list = field(default_factory=list)
 
     @property
     def win_rate(self) -> float:
         return self.win / self.games * 100 if self.games else 0.0
 
+    @property
+    def avg_value(self):
+        return sum(self.team_values) // len(self.team_values) if self.team_values else None
 
-def team_color_stats(matches: list, team_color_of) -> list[TeamColorStat]:
-    """상대 팀컬러별 내 전적 — 팀컬러를 못 찾은(top 10,000 밖) 상대는 뺀다."""
+    @property
+    def min_value(self):
+        return min(self.team_values) if self.team_values else None
+
+    @property
+    def max_value(self):
+        return max(self.team_values) if self.team_values else None
+
+
+def team_color_stats(matches: list, team_color_of,
+                     team_value_of=None) -> list[TeamColorStat]:
+    """상대 팀컬러별 내 전적 — 팀컬러를 못 찾은(top 10,000 밖) 상대는 뺀다.
+
+    team_value_of(있으면)는 nickname -> 구단가치(원 단위 int 또는 None).
+    같은 상대를 여러 번 만나도 팀가치는 한 번만 집계한다."""
     acc: dict[str, TeamColorStat] = {}
+    seen_opponents: dict[str, set] = {}
     for m in matches:
         color = team_color_of(m.opponent)
         if not color:
@@ -476,6 +497,13 @@ def team_color_stats(matches: list, team_color_of) -> list[TeamColorStat]:
             s.draw += 1
         elif "패" in m.result:
             s.lose += 1
+        if team_value_of is not None:
+            seen = seen_opponents.setdefault(color, set())
+            if m.opponent not in seen:
+                seen.add(m.opponent)
+                value = team_value_of(m.opponent)
+                if value:
+                    s.team_values.append(value)
     return sorted(acc.values(), key=lambda s: -s.games)
 
 

@@ -106,6 +106,12 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
     html = res.text
     info = RankerInfo(nickname=nickname)
 
+    # 넥슨 웹 점검 페이지 — "랭킹 밖"과 마크업이 똑같이 rank_no 가 없어서,
+    # 여기서 구분하지 않으면 점검 시간에 조회된 상대 전부가 "못 찾음"으로
+    # TTL 기간 내내 잘못 캐시된다(2026-07-23 실제 점검 중 발견).
+    if "점검 진행 중" in html or "fc_logo_inspection" in html:
+        raise RankerError("넥슨 웹 점검 중입니다 — 잠시 후 다시 시도해주세요")
+
     if _NOT_RANKED in html or 'class="td rank_no"' not in html:
         return info  # 랭킹 1만 위 밖 — 순위 없음
 
@@ -135,3 +141,22 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
     if m:
         info.team_color = " ".join(m.group(1).split())  # 개행·중복 공백 정리
     return info
+
+
+# 넥슨 데이터센터가 구단가치를 표기하는 방식("10경 9,631조")과 같은 축약 —
+# 상대 팀가치는 원 단위 정수(team_value)만 저장하므로 표시할 때 이걸로 만든다.
+_VALUE_UNITS = [(10 ** 16, "경"), (10 ** 12, "조"), (10 ** 8, "억"), (10 ** 4, "만")]
+
+
+def format_team_value(value: int) -> str:
+    for i, (unit, name) in enumerate(_VALUE_UNITS):
+        if value >= unit:
+            top = value // unit
+            text = f"{top:,}{name}"
+            if i + 1 < len(_VALUE_UNITS):
+                sub_unit, sub_name = _VALUE_UNITS[i + 1]
+                sub = value % unit // sub_unit
+                if sub:
+                    text += f" {sub:,}{sub_name}"
+            return text
+    return f"{value:,}"

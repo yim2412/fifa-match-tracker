@@ -391,7 +391,8 @@ class TeamColorLoader(QThread):
     TIMEOUT = 5
 
     progress = pyqtSignal(int, int)   # done, total
-    loaded = pyqtSignal(str, str)     # nickname, team_color("" 이면 못 찾음)
+    # nickname, team_color("" 이면 못 찾음), 구단가치(원 단위 int, 못 찾으면 None)
+    loaded = pyqtSignal(str, str, object)
     finished_all = pyqtSignal()
 
     def __init__(self, nicknames: list[str]):
@@ -405,21 +406,26 @@ class TeamColorLoader(QThread):
         if self._pool is not None:
             self._pool.shutdown(wait=False, cancel_futures=True)
 
-    def _fetch_one(self, nick: str) -> tuple[str, str]:
+    def _fetch_one(self, nick: str) -> tuple[str, str, int | None] | None:
         try:
-            return nick, ranker.fetch_manager_rank(nick, timeout=self.TIMEOUT).team_color
+            info = ranker.fetch_manager_rank(nick, timeout=self.TIMEOUT)
+            # 팀가치는 랭킹에 잡힌 상대만 의미 있다 — 못 찾으면 None
+            return nick, info.team_color, (info.team_value if info.team_color else None)
         except ranker.RankerError:
-            return nick, ""
+            # 조회 실패(넥슨 웹 점검·타임아웃 등)는 "랭킹 밖"("")과 다르다 —
+            # emit 하지 않아 캐시에 안 남고, 다음 조회 때 다시 시도된다.
+            return None
 
     def run(self) -> None:
         total = len(self._nicknames)
         done = 0
         self._pool = ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
         try:
-            for nick, color in self._pool.map(self._fetch_one, self._nicknames):
+            for result in self._pool.map(self._fetch_one, self._nicknames):
                 if self._cancel:
                     return
-                self.loaded.emit(nick, color)
+                if result is not None:
+                    self.loaded.emit(*result)
                 done += 1
                 self.progress.emit(done, total)
         except (RuntimeError, CancelledError):
@@ -461,7 +467,8 @@ class MainWindow(QMainWindow):
     OPPONENT_COLUMNS = ["상대", "전적", "승률", "평균득점", "평균실점", "최근 경기"]
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
     TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "승", "무", "패", "승률"]
-    TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수"]
+    TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
+                              "평균 팀가치", "최저 팀가치", "최고 팀가치"]
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -484,6 +491,7 @@ class MainWindow(QMainWindow):
         self._positions: dict = {}
         self._trend_reset_pending = True
         self._team_colors: dict[str, str] = {}   # 상대 닉네임 -> 팀컬러("" = 못 찾음)
+        self._team_values: dict[str, int | None] = {}  # 상대 닉네임 -> 구단가치(원)
         self._teamcolor_loader: TeamColorLoader | None = None
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
         self._teamcolor_loaded_count = 0  # 중간 갱신 주기용
@@ -1701,7 +1709,8 @@ class MainWindow(QMainWindow):
 
     def _render_teamcolor_tabs(self, matches: list[MatchSummary],
                                details: list[dict]) -> None:
-        stats_list = st.team_color_stats(matches, self._team_color_of)
+        stats_list = st.team_color_stats(matches, self._team_color_of,
+                                         team_value_of=self._team_values.get)
         # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
         # "10"을 "9"보다 뒤로 보내는 문자열 정렬 대신 실제 크기로 정렬한다
         # (안 그러면 헤더 클릭 정렬이 9,88,80,8,8,8,75... 식으로 깨진다).
@@ -1717,7 +1726,15 @@ class MainWindow(QMainWindow):
         # 상태가 재렌더 사이에 남아 있으면 안 된다.
         self.tbl_teamcolor_rate.sortByColumn(
             self.TEAMCOLOR_RATE_COLUMNS.index("경기"), Qt.SortOrder.DescendingOrder)
-        rank_rows = [[(str(i), i), s.team_color, (str(s.games), s.games)]
+        # 팀가치는 넥슨식 축약("10경 9,631조")으로 보여주고 정렬은 원 단위로.
+        # 팀가치를 아는 상대가 없는 팀컬러(구버전 캐시 등)는 "-" — 다음
+        # 조회(TTL 만료·백필) 때 채워진다.
+        def value_cell(v):
+            return (ranker.format_team_value(v), v) if v is not None else ("-", -1)
+
+        rank_rows = [[(str(i), i), s.team_color, (str(s.games), s.games),
+                     value_cell(s.avg_value), value_cell(s.min_value),
+                     value_cell(s.max_value)]
                     for i, s in enumerate(stats_list, start=1)]
         self._fill(self.tbl_teamcolor_rank, rank_rows)
         self.tbl_teamcolor_rank.sortByColumn(
@@ -1748,7 +1765,9 @@ class MainWindow(QMainWindow):
             try:
                 conn = store.open_db(config.DB_PATH)
                 try:
-                    self._team_colors.update(store.load_team_colors(conn, missing))
+                    for nick, (color, value) in store.load_team_colors(conn, missing).items():
+                        self._team_colors[nick] = color
+                        self._team_values[nick] = value
                 finally:
                     conn.close()
             except Exception:
@@ -1776,8 +1795,9 @@ class MainWindow(QMainWindow):
         self._teamcolor_loader.finished_all.connect(self._on_teamcolor_finished)
         self._teamcolor_loader.start()
 
-    def _on_teamcolor_loaded(self, nickname: str, color: str) -> None:
+    def _on_teamcolor_loaded(self, nickname: str, color: str, value) -> None:
         self._team_colors[nickname] = color
+        self._team_values[nickname] = value
         # 다 끝나야만 표가 채워지면 답답하니, 10개 받을 때마다 중간 갱신한다.
         self._teamcolor_loaded_count += 1
         if self._teamcolor_loaded_count % 10 == 0:
@@ -1791,8 +1811,8 @@ class MainWindow(QMainWindow):
     def _on_teamcolor_finished(self) -> None:
         for b in self._teamcolor_fetch_btns:
             b.setEnabled(True)
-        fetched = {n: self._team_colors[n] for n in self._teamcolor_pending
-                  if n in self._team_colors}
+        fetched = {n: (self._team_colors[n], self._team_values.get(n))
+                  for n in self._teamcolor_pending if n in self._team_colors}
         if fetched:
             try:
                 conn = store.open_db(config.DB_PATH)
@@ -1802,7 +1822,7 @@ class MainWindow(QMainWindow):
                     conn.close()
             except Exception:
                 pass  # DB 저장이 실패해도 이번 세션 캐시(메모리)는 살아 있다
-        found = sum(1 for c in fetched.values() if c)
+        found = sum(1 for color, _ in fetched.values() if color)
         for lb in self._teamcolor_status_labels:
             lb.setText(f"상대 {len(self._teamcolor_pending)}명 조회 완료"
                       f"(팀컬러 확인 {found}명)")
