@@ -323,18 +323,18 @@ class AbilitySimLoader(QThread):
     loaded = pyqtSignal(object)   # playerinfo.AbilitySim
     failed = pyqtSignal(str)
 
-    def __init__(self, sp_id: int, strong: int, grow: int,
+    def __init__(self, sp_id: int, strong: int, adapt: int,
                  teamcolor_id: int, teamcolor_lv: int,
                  teamcolor_id_enhance: int, teamcolor_lv_enhance: int,
                  teamcolor_id_feature: int):
         super().__init__()
-        self._args = (sp_id, strong, grow, teamcolor_id, teamcolor_lv,
+        self._args = (sp_id, strong, adapt, teamcolor_id, teamcolor_lv,
                       teamcolor_id_enhance, teamcolor_lv_enhance, teamcolor_id_feature)
 
     def run(self) -> None:
         try:
             sim = playerinfo.fetch_player_ability(
-                self._args[0], strong=self._args[1], grow=self._args[2],
+                self._args[0], strong=self._args[1], adapt=self._args[2],
                 teamcolor_id=self._args[3], teamcolor_lv=self._args[4],
                 teamcolor_id_enhance=self._args[5], teamcolor_lv_enhance=self._args[6],
                 teamcolor_id_feature=self._args[7])
@@ -1991,6 +1991,12 @@ class MainWindow(QMainWindow):
         name_row.addWidget(flag)
         if info.nation_flag_url:
             widgets_by_url[info.nation_flag_url] = flag
+        season = QLabel()
+        season.setFixedSize(28, 20)
+        season.setScaledContents(True)
+        name_row.addWidget(season)
+        if info.season_icon_url:
+            widgets_by_url[info.season_icon_url] = season
         name_lb = QLabel(f"{info.name}  ·  {info.position}  ·  OVR {info.ovr or NA}")
         nf = QFont()
         nf.setPointSize(14)
@@ -2021,8 +2027,6 @@ class MainWindow(QMainWindow):
         outer.addWidget(tabs, 1)
         return widgets_by_url
 
-    ABILITY_SIM_GROW = 5  # 적응도는 고정 — 강화·팀컬러만 사용자가 바꿔본다.
-
     def _build_ability_tab(self, info: playerinfo.PlayerInfo,
                            current_grade=None) -> QWidget:
         """강화·적응도·팀컬러(소속/강화/관계) 시뮬레이터 — PC 데이터센터의
@@ -2044,11 +2048,16 @@ class MainWindow(QMainWindow):
         cb_strong = NoScrollComboBox()
         for lvl in playerinfo.STRONG_LEVELS:
             cb_strong.addItem(f"{lvl}강", lvl)
-        default_strong = current_grade if current_grade in playerinfo.STRONG_LEVELS else 1
-        cb_strong.setCurrentIndex(cb_strong.findData(default_strong))
+        # 기본은 1강(1카) — 홈페이지 첫 화면과 같은 기준으로 보여준다.
+        cb_strong.setCurrentIndex(cb_strong.findData(1))
         opt_row.addWidget(cb_strong)
         opt_row.addSpacing(12)
-        opt_row.addWidget(QLabel(f"적응도 {self.ABILITY_SIM_GROW}(고정)"))
+        opt_row.addWidget(QLabel("적응도"))
+        cb_adapt = NoScrollComboBox()
+        for a in playerinfo.ADAPT_CHOICES:
+            cb_adapt.addItem(f"+{a}", a)
+        cb_adapt.setCurrentIndex(cb_adapt.findData(playerinfo.ADAPT_DEFAULT))
+        opt_row.addWidget(cb_adapt)
         opt_row.addStretch(1)
         v.addLayout(opt_row)
 
@@ -2180,7 +2189,7 @@ class MainWindow(QMainWindow):
             club_id = cb_tc.currentData() or 0
             en = cb_tc_en.currentData() or (0, 0)  # (id, lv) — 항목에 레벨 내장
             loader = AbilitySimLoader(
-                sp_id, cb_strong.currentData(), self.ABILITY_SIM_GROW,
+                sp_id, cb_strong.currentData(), cb_adapt.currentData(),
                 club_id, club_max_lv.get(club_id, 1) if club_id else 0,
                 en[0], en[1], cb_tc_feature.currentData() or 0)
             self._ability_sim_loader = loader
@@ -2189,6 +2198,7 @@ class MainWindow(QMainWindow):
             loader.start()
 
         cb_strong.currentIndexChanged.connect(refresh)
+        cb_adapt.currentIndexChanged.connect(refresh)
         cb_tc.currentIndexChanged.connect(refresh)
         cb_tc_en.currentIndexChanged.connect(refresh)
         cb_tc_feature.currentIndexChanged.connect(refresh)

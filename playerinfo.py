@@ -38,13 +38,26 @@ _ABILITY = re.compile(
 _NAME = re.compile(r'<div class="name">([^<]+)</div>')
 _POSITION_OVR = re.compile(
     r'<strong class="(?:st|gk)">([^<]+)</strong><span class="_area_point">(\d+)</span>')
+# 2026-07 확인: 일부 카드(신규 시즌 등) 페이지는 마크업이 다르다 —
+# OVR 이 먼저, 포지션이 뒤(<span class="ovr _area_point">113</span>
+# <span class="position df">CB</span>). 옛 마크업(올리버 칸 등)과 공존하므로
+# 둘 다 시도한다. 캡처 순서가 서로 반대인 것에 주의.
+_POSITION_OVR_NEW = re.compile(
+    r'<span class="ovr _area_point">(\d+)</span>\s*<span class="position[^"]*">([^<]+)</span>')
+# 시즌 배지는 페이지에 여러 개다(다른 시즌 동일 선수 목록 등) — 카드 본인
+# 것은 nameWrap(이름 옆) 안에 있는 것만.
+_SEASON_ICON = re.compile(
+    r'class="nameWrap">\s*<span class="season">\s*<img src="([^"]+)"')
+_STRONG_FOOT = re.compile(r'<strong>([^<]+)</strong>')
 _PHOTO = re.compile(r'class="thumb"><span class="img action"><img src="([^"]+)"')
 _NATION = re.compile(
     r'class="nationWrap">\s*<span class="nation">\s*<img src="([^"]+)"[^>]*>\s*'
     r'<span class="txt">([^<]+)</span>')
+# 4번째 span(발기술)은 마크업이 두 가지다 — 옛: "L2 – <strong>R5</strong>",
+# 새: "<strong>L5</strong> – R3". 통째로 잡아서 코드에서 <strong>(주발)을 분리한다.
 _STAT_LINE = re.compile(
     r'<div class="statWrap">\s*<span>([^<]+)</span>\s*<span>([^<]+)</span>\s*'
-    r'<span>([^<]+)</span>\s*<span>\s*([^<]+?)\s*<strong>([^<]+)</strong>')
+    r'<span>([^<]+)</span>\s*<span>\s*(.*?)\s*</span>', re.S)
 _PRICE = re.compile(r'class="span_bp(\d+)"[^>]*>\s*([^<]+?)\s*<')
 _SKILLMOVE_BLOCK = re.compile(
     r'개인기</div>\s*<div class="value _area_skillmove">(.*?)</div>', re.S)
@@ -134,6 +147,7 @@ class PlayerInfo:
     weak_foot: str = "-"
     strong_foot: str = "-"
     fame: str = "-"
+    season_icon_url: str = ""   # 시즌 배지(FAC 등) — 카드 이름 옆에 뜨는 그 아이콘
     skill_moves: int = 0
     skill_moves_max: int = 0
     abilities: dict[str, int] = field(default_factory=dict)
@@ -186,7 +200,16 @@ class AbilitySim:
     club_levels: list[int] = field(default_factory=list)
 
 
-def fetch_player_ability(sp_id: int, strong: int = 1, grow: int = 5,
+# 적응도 선택지 — PC 데이터센터 드롭다운과 동일(1 또는 5, 기본 1).
+# 서버 파라미터 n1Grow 는 "적응도 - 1" 을 받는다(브라우저 실측: 드롭다운
+# +1 은 n1Grow=0, +5 는 n1Grow=4 를 보낸다). 예전에 grow=5 를 그대로
+# 보냈더니 존재하지 않는 "적응도 6"으로 계산돼 홈페이지와 전 능력치가
+# 5씩 어긋났다.
+ADAPT_CHOICES = [1, 5]
+ADAPT_DEFAULT = 1
+
+
+def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT,
                          teamcolor_id: int = 0, teamcolor_lv: int = 0,
                          teamcolor_id_enhance: int = 0, teamcolor_lv_enhance: int = 0,
                          teamcolor_id_feature: int = 0, timeout: int = 10) -> AbilitySim:
@@ -197,7 +220,7 @@ def fetch_player_ability(sp_id: int, strong: int = 1, grow: int = 5,
     엔티티)·레벨마다 다르고 넥슨이 그 조합표를 공개하지 않아, 근사치보다
     서버가 계산한 값을 그대로 받는 쪽이 확실하다."""
     data = {
-        "spid": sp_id, "n1Strong": strong, "n1Grow": grow,
+        "spid": sp_id, "n1Strong": strong, "n1Grow": adapt - 1,
         "n4TeamColorId": teamcolor_id, "n4TeamColorLv": teamcolor_lv,
         "n4TeamColorId_Enhance": teamcolor_id_enhance,
         "n4TeamColorLv_Enhance": teamcolor_lv_enhance,
@@ -213,9 +236,12 @@ def fetch_player_ability(sp_id: int, strong: int = 1, grow: int = 5,
     html = res.text
     groups: dict[str, int] = {}
     abilities: dict[str, int] = {}
+    # 6분류 요약이 개별 능력치보다 먼저 온다. "드리블"은 요약과 개별 능력치
+    # 양쪽에 같은 이름으로 있으므로 첫 번째 것만 요약으로 받는다 — 안 그러면
+    # 개별 드리블(예: 107)이 요약 드리블(108)을 덮어써서 홈페이지와 1 어긋난다.
     for name, value in _ABILITY_LI_PC.findall(html):
         name = name.strip()
-        if name in GROUP_NAMES:
+        if name in GROUP_NAMES and name not in groups:
             groups[name] = int(value)
         else:
             abilities[name] = int(value)
@@ -251,6 +277,14 @@ def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     if m:
         info.position = m.group(1).strip()
         info.ovr = int(m.group(2))
+    else:
+        m = _POSITION_OVR_NEW.search(html)
+        if m:
+            info.ovr = int(m.group(1))
+            info.position = m.group(2).strip()
+    m = _SEASON_ICON.search(html)
+    if m:
+        info.season_icon_url = m.group(1)
     m = _PHOTO.search(html)
     if m:
         info.photo_url = m.group(1)
@@ -261,7 +295,12 @@ def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     m = _STAT_LINE.search(html)
     if m:
         info.height, info.weight, info.body_type = (g.strip() for g in m.groups()[:3])
-        info.weak_foot, info.strong_foot = m.group(4).strip(), m.group(5).strip()
+        foot = m.group(4)
+        sm = _STRONG_FOOT.search(foot)
+        if sm:
+            info.strong_foot = sm.group(1).strip()
+        rest = _STRONG_FOOT.sub("", foot)
+        info.weak_foot = re.sub(r"[–\-\s]+", " ", rest).strip() or "-"
     m = _FAME.search(html)
     if m:
         info.fame = m.group(1).strip()
