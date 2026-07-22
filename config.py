@@ -23,6 +23,21 @@ def _root() -> Path:
 ROOT = _root()
 
 
+def asset_path(name: str) -> Path:
+    """소스에 같이 들어있는 정적 리소스(app_icon.ico 등)를 찾는다.
+
+    DATA_DIR(사용자 데이터: DB·캐시·.env)과는 다른 개념 — onefile로 묶으면
+    이런 리소스는 exe 옆이 아니라 실행할 때마다 풀리는 임시 폴더
+    (sys._MEIPASS)에 들어가므로 ROOT 를 그대로 쓰면 못 찾는다. spec 파일의
+    datas 에 넣어둔 것과 짝이 맞아야 한다.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass) / name
+    return ROOT / name
+
+
 def _data_dir() -> Path:
     """데이터(키·DB·캐시)가 사는 곳.
 

@@ -2297,7 +2297,7 @@ class MainWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setStyleSheet(T.QSS)
-    icon_path = config.ROOT / "app_icon.ico"
+    icon_path = config.asset_path("app_icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     if not config.API_KEY:
