@@ -491,6 +491,7 @@ class MainWindow(QMainWindow):
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
         self._ability_sim_loader: AbilitySimLoader | None = None
+        self._position_ovr_loader: AbilitySimLoader | None = None
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -1957,6 +1958,8 @@ class MainWindow(QMainWindow):
             img_loader.wait(500)
         if self._ability_sim_loader and self._ability_sim_loader.isRunning():
             self._ability_sim_loader.wait(2000)
+        if self._position_ovr_loader and self._position_ovr_loader.isRunning():
+            self._position_ovr_loader.wait(2000)
 
     @staticmethod
     def _set_player_info_image(widgets_by_url: dict[str, QLabel], url: str, path: str) -> None:
@@ -2024,8 +2027,66 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_trait_tab(info, widgets_by_url), "특징")
         tabs.addTab(self._build_price_tab(info, current_grade), "시세")
         tabs.addTab(self._build_club_history_tab(info), "클럽 경력")
+        tabs.addTab(self._build_position_ovr_tab(info), "포지션별 오버롤")
         outer.addWidget(tabs, 1)
         return widgets_by_url
+
+    # PC 데이터센터 축구장 그림과 같은 줄 구성(공격 → 골키퍼 순)
+    POSITION_OVR_ROWS = [
+        ("공격", ["ST", "CF", "LW", "RW"]),
+        ("미드필더", ["CAM", "CM", "CDM", "LM", "RM"]),
+        ("수비", ["CB", "SW", "LB", "RB", "LWB", "RWB"]),
+        ("골키퍼", ["GK"]),
+    ]
+
+    def _build_position_ovr_tab(self, info: playerinfo.PlayerInfo) -> QWidget:
+        """포지션별 오버롤 — PC 데이터센터 선수 상세의 축구장 그림에 있는
+        16개 값. fetch_player_ability 응답의 ovr_set 블록에서 오며, 카드
+        기본 상태(1강·적응도 +1) 기준으로 한 번만 조회한다."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        status = QLabel("불러오는 중…")
+        status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(status)
+        grid = QGridLayout()
+        grid.setSpacing(10)
+        v.addLayout(grid)
+        v.addStretch(1)
+
+        def render(sim: playerinfo.AbilitySim) -> None:
+            try:
+                if not sim.position_ovrs:
+                    status.setText("포지션별 오버롤 정보가 없습니다.")
+                    return
+                status.setText("1강 · 적응도 +1 기준")
+                for r, (cap_text, codes) in enumerate(self.POSITION_OVR_ROWS):
+                    cap = QLabel(cap_text)
+                    cap.setStyleSheet(f"color: {T.TEXT_DIM};")
+                    grid.addWidget(cap, r, 0)
+                    for c, code in enumerate(codes, start=1):
+                        val = sim.position_ovrs.get(code)
+                        if val is None:
+                            continue
+                        cell = QLabel(
+                            f"<span style='color:{T.TEXT_DIM}'>{code}</span> "
+                            f"<b style='color:{playerinfo.stat_color(val)}'>{val}</b>")
+                        grid.addWidget(cell, r, c)
+            except RuntimeError:
+                pass  # 다이얼로그가 닫힌 뒤 응답 도착 — 무시
+
+        def on_failed(msg: str) -> None:
+            try:
+                status.setText(f"조회 실패 — {msg}")
+            except RuntimeError:
+                pass
+
+        loader = AbilitySimLoader(info.sp_id, 1, playerinfo.ADAPT_DEFAULT,
+                                  0, 0, 0, 0, 0)
+        self._position_ovr_loader = loader
+        loader.loaded.connect(render)
+        loader.failed.connect(on_failed)
+        loader.start()
+        return w
 
     def _build_ability_tab(self, info: playerinfo.PlayerInfo,
                            current_grade=None) -> QWidget:
@@ -2574,6 +2635,8 @@ class MainWindow(QMainWindow):
             loader.wait(500)
         if self._ability_sim_loader and self._ability_sim_loader.isRunning():
             self._ability_sim_loader.wait(2000)
+        if self._position_ovr_loader and self._position_ovr_loader.isRunning():
+            self._position_ovr_loader.wait(2000)
         super().closeEvent(e)
 
 

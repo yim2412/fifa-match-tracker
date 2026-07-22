@@ -81,6 +81,9 @@ _ABILITY_LI_PC = re.compile(
     r'<div class="value[^"]*">\s*(\d+)', re.S)
 _OVR_PC = re.compile(r'<div class="ovr value">(\d+)</div>')
 GROUP_NAMES = {"스피드", "슛", "패스", "드리블", "수비", "피지컬"}
+# 포지션별 오버롤 — PC 페이지 오른쪽 축구장 그림의 값들. 응답의
+# <div class="ovr_set"> 안에 <div class="position st value">105</div> 꼴로 온다.
+_POSITION_OVR_SET = re.compile(r'<div class="position (\w+) value">(\d+)</div>')
 
 # 데이터센터 능력치 색 기준 — 값의 10점 구간마다 class("value overN")가 붙고
 # CSS 색이 매겨진다(2026-07-23 브라우저 계산 스타일로 실측). 구간 경계는
@@ -224,6 +227,8 @@ class AbilitySim:
     # 선택된 소속 팀컬러의 유효 레벨 목록(선택 없으면 빈 리스트) — 최대
     # 레벨이 팀컬러마다 달라서, 호출자가 이걸 보고 최대 레벨로 재조회한다.
     club_levels: list[int] = field(default_factory=list)
+    # 포지션별 오버롤 — {"ST": 105, "GK": 29, ...} 16개(대문자 코드)
+    position_ovrs: dict[str, int] = field(default_factory=dict)
 
 
 # 적응도 선택지 — PC 데이터센터 드롭다운과 동일(1 또는 5, 기본 1).
@@ -282,7 +287,9 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
                       club_options=_selector_items(html, "tdefault_wrap"),
                       enhance_options=enhance_options,
                       feature_options=_selector_items(html, "tspecial_wrap"),
-                      club_levels=sorted({int(v) for v in _CLUB_LV_ITEM.findall(html)}))
+                      club_levels=sorted({int(v) for v in _CLUB_LV_ITEM.findall(html)}),
+                      position_ovrs={p.upper(): int(v)
+                                     for p, v in _POSITION_OVR_SET.findall(html)})
 
 
 def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
