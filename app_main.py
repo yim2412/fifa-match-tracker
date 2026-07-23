@@ -777,6 +777,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_opponents_tab(), "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
         self.tabs.addTab(self._build_period_tab(), "기간별 추이")
+        self.tabs.addTab(self._build_clutch_tab(), "승부처 분석")
         self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
         self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
         self._teamcolor_fetch_btns: list[QPushButton] = []
@@ -923,6 +924,120 @@ class MainWindow(QMainWindow):
         now_text = f"현재 {n}{kind}" if kind else "현재 -"
         self.lb_streaks.setText(
             f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose} (누적 전체 기준)")
+
+    def _build_clutch_tab(self) -> QWidget:
+        """승부처 분석 — 선제골 승률·역전, 시간 구간별 득실, 시각대별 승률."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+
+        gb_first = QGroupBox("선제골 승률")
+        self.box_clutch_first = QVBoxLayout(gb_first)
+        self.box_clutch_first.setSpacing(3)
+        v.addWidget(gb_first)
+
+        gb_min = QGroupBox("시간 구간별 득실 (정규시간 15분 단위)")
+        self.box_clutch_minute = QVBoxLayout(gb_min)
+        self.box_clutch_minute.setSpacing(3)
+        v.addWidget(gb_min)
+
+        gb_tod = QGroupBox("시각대별 승률 (경기 시작 시각 기준)")
+        self.box_clutch_tod = QVBoxLayout(gb_tod)
+        self.box_clutch_tod.setSpacing(3)
+        v.addWidget(gb_tod)
+
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _render_clutch(self, details: list[dict],
+                       matches: list[MatchSummary]) -> None:
+        cs = st.clutch_summary(details, self._ouid)
+        self._clear(self.box_clutch_first)
+        for label, wdl, color in (
+                ("내가 선제골", cs.first_scored, T.GREEN),
+                ("선제 실점", cs.first_conceded, T.RED)):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(label)
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            b = QLabel(wdl_text(*wdl))
+            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            c = QLabel(f"({rate_of(*wdl):.1f}%)")
+            c.setStyleSheet(f"color: {color}; font-weight: bold;")
+            h.addWidget(a)
+            h.addStretch(1)
+            h.addWidget(b)
+            h.addWidget(c)
+            self.box_clutch_first.addWidget(row)
+        cb = QLabel(f"역전승 {cs.comeback_win}회 · 역전패 {cs.comeback_lose}회"
+                    f"    (무득점·동시각 {cs.goalless}경기 제외)")
+        cb.setStyleSheet(f"color: {T.TEXT_DIM}; padding-top: 3px;")
+        self.box_clutch_first.addWidget(cb)
+
+        buckets = st.goal_minute_buckets(details, self._ouid)
+        peak = max((max(b.scored, b.conceded) for b in buckets), default=0)
+        self._clear(self.box_clutch_minute)
+        for bk in buckets:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(bk.label if bk.label == "연장" else f"{bk.label}분")
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            a.setFixedWidth(64)
+            gbar = QProgressBar()
+            gbar.setRange(0, max(peak, 1))
+            gbar.setValue(bk.scored)
+            gbar.setFormat(f"{bk.scored}득")
+            gbar.setFixedHeight(16)
+            gbar.setStyleSheet(
+                f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                f"color:{T.TEXT};text-align:right;padding-right:4px;}}"
+                f"QProgressBar::chunk{{background:{T.GREEN};border-radius:3px;}}")
+            rbar = QProgressBar()
+            rbar.setRange(0, max(peak, 1))
+            rbar.setValue(bk.conceded)
+            rbar.setFormat(f"{bk.conceded}실")
+            rbar.setFixedHeight(16)
+            rbar.setStyleSheet(
+                f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                f"color:{T.TEXT};text-align:left;padding-left:4px;}}"
+                f"QProgressBar::chunk{{background:{T.RED};border-radius:3px;}}")
+            h.addWidget(a)
+            h.addWidget(gbar, 1)
+            h.addWidget(rbar, 1)
+            self.box_clutch_minute.addWidget(row)
+
+        self._clear(self.box_clutch_tod)
+        for band in st.time_of_day_rates(matches):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(f"{band.label} ({band.span})")
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            a.setFixedWidth(120)
+            if band.games:
+                bar = QProgressBar()
+                bar.setRange(0, 1000)
+                bar.setValue(int(band.win_rate * 10))
+                bar.setFormat(f"{band.win_rate:.1f}%  ({wdl_text(band.win, band.draw, band.lose)})")
+                bar.setFixedHeight(16)
+                bar.setStyleSheet(
+                    f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                    f"color:{T.TEXT};text-align:center;}}"
+                    f"QProgressBar::chunk{{background:{T.GREEN};border-radius:3px;}}")
+                h.addWidget(a)
+                h.addWidget(bar, 1)
+            else:
+                none = QLabel("경기 없음")
+                none.setStyleSheet(f"color: {T.TEXT_DIM};")
+                h.addWidget(a)
+                h.addWidget(none, 1)
+            self.box_clutch_tod.addWidget(row)
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
@@ -1529,6 +1644,7 @@ class MainWindow(QMainWindow):
         # 안 될 수 있어서, 누적 전체(self._matches)에서 30일을 계산한다.
         self._render_trend(self._matches)
         self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
+        self._render_clutch(self._details, self._matches)  # 승부처도 누적 전체 기준
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.

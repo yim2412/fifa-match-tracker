@@ -465,6 +465,157 @@ def result_breakdown(details: list[dict], ouid: str) -> ResultBreakdown:
     return rb
 
 
+# ── 승부처 분석 ───────────────────────────────────────────────────────────
+def _goal_events(p: dict) -> list[tuple[int, int]]:
+    """한 선수(matchInfo 항목)의 골을 (구간, 경과초) 목록으로. 시간 순 정렬 전."""
+    out = []
+    for sd in p.get("shootDetail") or []:
+        if sd.get("result") != GOAL_RESULT:
+            continue
+        out.append(decode_goal_time(sd.get("goalTime")))
+    return out
+
+
+@dataclass
+class ClutchSummary:
+    """선제골·역전 분석. first_* 는 [승, 무, 패]."""
+    first_scored: list[int] = field(default_factory=lambda: [0, 0, 0])  # 내가 선제골
+    first_conceded: list[int] = field(default_factory=lambda: [0, 0, 0])  # 선제 실점
+    comeback_win: int = 0   # 선제 실점 후 승
+    comeback_lose: int = 0  # 선제골 후 패
+    goalless: int = 0       # 양측 무득점(선제골 판정 불가)
+
+    @staticmethod
+    def _rate(wdl: list[int]) -> float:
+        tot = sum(wdl)
+        return wdl[0] / tot * 100 if tot else 0.0
+
+    @property
+    def first_scored_rate(self) -> float:
+        return self._rate(self.first_scored)
+
+    @property
+    def first_conceded_rate(self) -> float:
+        return self._rate(self.first_conceded)
+
+
+def clutch_summary(details: list[dict], ouid: str) -> ClutchSummary:
+    """경기별 골 타임라인으로 선제골 여부와 역전 경기를 센다.
+
+    양측 골이 같은 (구간, 초)로 오면(동시각) 선제골 판정을 보류하고
+    무득점과 함께 goalless 로 분류한다 — 애매한 걸 억지로 한쪽에 넣지 않는다.
+    """
+    cs = ClutchSummary()
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        res = _result_of(me)
+        mine = sorted(_goal_events(me))
+        their = sorted(_goal_events(opp))
+        if not mine and not their:
+            cs.goalless += 1
+            continue
+        my_first = mine[0] if mine else None
+        their_first = their[0] if their else None
+        if my_first is not None and (their_first is None or my_first < their_first):
+            first_mine = True
+        elif their_first is not None and (my_first is None or their_first < my_first):
+            first_mine = False
+        else:  # 정확히 같은 시각 — 판정 보류
+            cs.goalless += 1
+            continue
+        if first_mine:
+            _bump(cs.first_scored, res)
+            if "패" in res:
+                cs.comeback_lose += 1
+        else:
+            _bump(cs.first_conceded, res)
+            if "승" in res:
+                cs.comeback_win += 1
+    return cs
+
+
+# 정규시간 15분 6구간 + 연장. 구간은 (구간0=전반, 구간1=후반)에 경과초로 매긴다.
+MINUTE_BUCKETS = [(0, 15), (15, 30), (30, 45), (45, 60), (60, 75), (75, 90)]
+
+
+@dataclass
+class MinuteBucket:
+    label: str
+    scored: int = 0
+    conceded: int = 0
+
+
+def goal_minute_buckets(details: list[dict], ouid: str) -> list[MinuteBucket]:
+    """15분 단위 6구간 + 연장의 득실 분포 — 언제 넣고 언제 먹히는가.
+
+    전반(구간0)은 분=초/60, 후반(구간1)은 45+초/60. 45+·90+ 추가시간 골은
+    각각 마지막 정규 구간(30~45, 75~90)에 포함한다. 연장(구간2·3)은 별도.
+    """
+    buckets = [MinuteBucket(f"{lo}~{hi}") for lo, hi in MINUTE_BUCKETS]
+    extra = MinuteBucket("연장")
+
+    def place(period: int, sec: int) -> MinuteBucket:
+        if period >= 2:
+            return extra
+        minute = sec / 60 + (45 if period == 1 else 0)
+        for b, (lo, hi) in zip(buckets, MINUTE_BUCKETS):
+            if minute < hi:
+                return b
+        return buckets[2] if period == 0 else buckets[5]  # 추가시간 → 막판 구간
+
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        for period, sec in _goal_events(me):
+            place(period, sec).scored += 1
+        for period, sec in _goal_events(opp):
+            place(period, sec).conceded += 1
+    return buckets + [extra]
+
+
+# 하루 시각대 4구간 — matchDate 의 시(hour) 기준. "새벽에 하면 지는가".
+TIME_BANDS = [("심야", 0, 6), ("오전", 6, 12), ("오후", 12, 18), ("저녁·밤", 18, 24)]
+
+
+@dataclass
+class TimeBandRate:
+    label: str
+    span: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+
+def time_of_day_rates(matches: list) -> list[TimeBandRate]:
+    """경기 시작 시각대별 승/무/패 — 날짜 없는 경기는 뺀다."""
+    bands = [TimeBandRate(name, f"{lo:02d}~{hi:02d}") for name, lo, hi in TIME_BANDS]
+    for m in matches:
+        if m.match_date is None:
+            continue
+        h = m.match_date.hour
+        for band, (_, lo, hi) in zip(bands, TIME_BANDS):
+            if lo <= h < hi:
+                if "승" in m.result:
+                    band.win += 1
+                elif "무" in m.result:
+                    band.draw += 1
+                elif "패" in m.result:
+                    band.lose += 1
+                break
+    return bands
+
+
 # ── 상대 팀컬러 ───────────────────────────────────────────────────────────
 # 팀컬러는 오픈API 매치 상세엔 없다(실제 캐시 JSON으로 확인 — 필드 자체가
 # 없음). 넥슨 데이터센터 감독모드 랭킹(ranker.py)에서 닉네임으로 검색해야
