@@ -95,6 +95,24 @@ def test_finishing_ranking():
     assert (top.shots, top.goals) == (8, 4), (top.shots, top.goals)
 
 
+def test_goal_minute_buckets_added_time():
+    # 전반 추가시간(45분+) 골이 후반 첫 구간(45~60)으로 새면 안 된다 — 30~45 에.
+    def gt(period, sec):
+        return (period << 24) | sec
+
+    def one(period, sec):
+        d = {"matchInfo": [
+            {"ouid": "me", "matchDetail": {},
+             "shootDetail": [{"result": 3, "goalTime": gt(period, sec), "type": 1}]},
+            {"ouid": "op", "matchDetail": {}, "shootDetail": []}]}
+        return [b.label for b in st.goal_minute_buckets([d], "me") if b.scored][0]
+
+    assert one(0, 2820) == "30~45", one(0, 2820)   # 전반 47분
+    assert one(0, 2000) == "30~45", one(0, 2000)   # 전반 33분
+    assert one(1, 300) == "45~60", one(1, 300)     # 후반 50분
+    assert one(1, 2820) == "75~90", one(1, 2820)   # 후반 92분(추가시간)
+
+
 def test_shot_xg_deterministic():
     # 순수 함수 — 좌표만으로 결정. 계수를 바꾸면(모델 재튜닝) 여기가 깨진다(의도).
     assert abs(st.shot_xg(0.90, 0.50, True, "일반(D)") - 0.7482) < 1e-3

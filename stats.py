@@ -560,11 +560,11 @@ def goal_minute_buckets(details: list[dict], ouid: str) -> list[MinuteBucket]:
     def place(period: int, sec: int) -> MinuteBucket:
         if period >= 2:
             return extra
-        minute = sec / 60 + (45 if period == 1 else 0)
-        for b, (lo, hi) in zip(buckets, MINUTE_BUCKETS):
-            if minute < hi:
-                return b
-        return buckets[2] if period == 0 else buckets[5]  # 추가시간 → 막판 구간
+        # 전반은 0~44.9분으로, 후반은 45~89.9분으로 가둔다 — 그래야 전반
+        # 추가시간(45분+)이 후반 첫 구간(45~60)으로 새지 않고 30~45 에 남는다.
+        m = min(sec / 60, 44.99)
+        minute = m + (45 if period == 1 else 0)
+        return buckets[min(int(minute // 15), 5)]
 
     for d in details:
         me, opp = _me_opp(d, ouid)
