@@ -1074,12 +1074,17 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(QLabel("표시"))
         ctrl.addWidget(self.cb_shotmap_side)
         ctrl.addSpacing(16)
-        # 범례
-        for text, color in (("● 골", T.GREEN), ("● 유효슛", T.YELLOW),
-                            ("● 빗나감", T.TEXT_DIM)):
-            lb = QLabel(text)
-            lb.setStyleSheet(f"color: {color}; font-weight: bold;")
-            ctrl.addWidget(lb)
+        # 결과 종류별 표시 토글(범례 겸용). result 코드로 필터한다.
+        self.chk_shotmap_result: dict[int, QCheckBox] = {}
+        for result, text, color in ((st.SHOT_GOAL, "● 골", T.GREEN),
+                                    (st.SHOT_ON_TARGET, "● 유효슛", T.YELLOW),
+                                    (st.SHOT_OFF_TARGET, "● 빗나감", T.TEXT_DIM)):
+            chk = QCheckBox(text)
+            chk.setChecked(True)
+            chk.setStyleSheet(f"QCheckBox {{ color: {color}; font-weight: bold; }}")
+            chk.toggled.connect(self._render_shotmap)
+            self.chk_shotmap_result[result] = chk
+            ctrl.addWidget(chk)
         ctrl.addStretch(1)
         self.lb_shotmap_summary = QLabel("")
         self.lb_shotmap_summary.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
@@ -1091,10 +1096,12 @@ class MainWindow(QMainWindow):
         return w
 
     def _render_shotmap(self) -> None:
-        matches, details = self._slice()
+        _, details = self._slice()
         mine = bool(self.cb_shotmap_side.currentData())
         sm = st.shot_map(details, self._ouid, mine=mine)
-        self.shotmap.set_shots(sm.shots)
+        # 체크된 결과 종류만 화면에 찍는다(요약 수치는 전체 기준 유지).
+        shown = {r for r, chk in self.chk_shotmap_result.items() if chk.isChecked()}
+        self.shotmap.set_shots([s for s in sm.shots if s.result in shown])
         who = "내" if mine else "상대"
         self.lb_shotmap_summary.setText(
             f"{who} 슛 {sm.total} · 골 {sm.goals} · "
