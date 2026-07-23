@@ -7,15 +7,15 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QDialog, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
-    QPushButton, QScrollArea, QSpinBox, QStackedWidget, QTableWidget,
-    QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
+    QTableWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
 import config
@@ -479,6 +479,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._api = api
         self._loader: MatchLoader | None = None
+        self._auto_load = False  # 지금 진행 중인 조회가 자동 새로고침으로 시작됐는지
+        self._auto_timer = QTimer(self)
+        self._auto_timer.timeout.connect(self._auto_tick)
         self._img_cache_dir = config.CACHE_DIR / "player_images"
         self._table_season_loader: SeasonIconLoader | None = None
         self._ouid = ""
@@ -760,6 +763,21 @@ class MainWindow(QMainWindow):
             "이 버튼은 그 사이 새로 생긴 경기가 있는지 다시 확인합니다.")
         self.btn_more.clicked.connect(self._on_search)
 
+        # 자동 새로고침 — 앱이 켜져 있는 동안만 QTimer 로 주기적으로 위 "새 경기
+        # 확인"을 대신 눌러 준다. 트레이 상주는 안 한다(API가 소급 조회돼 불필요).
+        self.chk_auto = QCheckBox("자동 새로고침")
+        self.chk_auto.setToolTip(
+            "앱이 켜져 있는 동안 설정한 주기마다 새 경기가 있는지 자동으로 확인합니다.\n"
+            "새 경기가 있을 때만 화면을 갱신하고 상태바로 알립니다.")
+        self.chk_auto.toggled.connect(self._on_auto_toggled)
+        self.sp_auto_min = QSpinBox()
+        self.sp_auto_min.setRange(1, 120)
+        self.sp_auto_min.setValue(config.AUTO_REFRESH_MIN)
+        self.sp_auto_min.setFixedWidth(64)
+        self.sp_auto_min.setSuffix("분")
+        self.sp_auto_min.setToolTip("자동 새로고침 주기(분)")
+        self.sp_auto_min.valueChanged.connect(self._on_auto_interval_changed)
+
         rl.addWidget(self.sp_from)
         rl.addWidget(lb_tilde)
         rl.addWidget(self.sp_to)
@@ -767,6 +785,9 @@ class MainWindow(QMainWindow):
         rl.addSpacing(8)
         rl.addWidget(self.lb_total)
         rl.addStretch(1)
+        rl.addWidget(self.chk_auto)
+        rl.addWidget(self.sp_auto_min)
+        rl.addSpacing(8)
         rl.addWidget(self.btn_more)
         outer.addWidget(rng)
 
@@ -1521,9 +1542,10 @@ class MainWindow(QMainWindow):
         self.lb_search_msg.setText("")
         self._api_search(nick)
 
-    def _api_search(self, nick: str) -> None:
+    def _api_search(self, nick: str, auto: bool = False) -> None:
         if self._loader and self._loader.isRunning():
             return
+        self._auto_load = auto
         self._nick = nick
         self._set_busy(True)
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
@@ -1531,6 +1553,26 @@ class MainWindow(QMainWindow):
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.start()
+
+    # ── 자동 새로고침 ─────────────────────────────────────────────────
+    def _on_auto_toggled(self, on: bool) -> None:
+        if on:
+            self._auto_timer.start(self.sp_auto_min.value() * 60_000)
+            self.statusBar().showMessage(
+                f"자동 새로고침 켜짐 — {self.sp_auto_min.value()}분마다 새 경기 확인")
+        else:
+            self._auto_timer.stop()
+            self.statusBar().showMessage("자동 새로고침 꺼짐")
+
+    def _on_auto_interval_changed(self, _v: int) -> None:
+        if self.chk_auto.isChecked():
+            self._auto_timer.start(self.sp_auto_min.value() * 60_000)
+
+    def _auto_tick(self) -> None:
+        # 조회할 계정이 없거나 이미 조회 중이면 이번 틱은 건너뛴다(다음 틱에 재시도).
+        if not self._nick or (self._loader and self._loader.isRunning()):
+            return
+        self._api_search(self._nick, auto=True)
 
     def _apply_range(self) -> None:
         """시작~끝 스핀박스 값대로 표시 구간을 바꾼다."""
@@ -1554,6 +1596,13 @@ class MainWindow(QMainWindow):
 
     def _on_failed(self, msg: str) -> None:
         self._set_busy(False)
+        auto = self._auto_load
+        self._auto_load = False
+        # 자동 새로고침 실패는 5분마다 팝업이 뜨면 곤란하다 — 상태바로만 알린다.
+        if auto:
+            self.statusBar().showMessage(
+                f"자동 새로고침 {datetime.now():%H:%M} — 조회 실패: {msg}")
+            return
         self.statusBar().showMessage("조회 실패")
         if self.stack.currentIndex() == self.PAGE_SEARCH:
             self.lb_search_msg.setText(msg)
@@ -1565,6 +1614,14 @@ class MainWindow(QMainWindow):
                    rank, grade_name: str, is_champion: bool,
                    badge_path: str, seasons: dict, division_names: dict) -> None:
         self._set_busy(False)
+        auto = self._auto_load
+        self._auto_load = False
+        # 자동 새로고침인데 새 경기가 없으면 화면을 건드리지 않는다 — 5분마다
+        # 보던 탭·범위가 초기화되면 방해만 된다. 상태바로만 확인 시각을 남긴다.
+        if auto and not new:
+            self.statusBar().showMessage(
+                f"자동 새로고침 {datetime.now():%H:%M} — 새 경기 없음")
+            return
         self._refresh_accounts()
         self._refresh_recent()
         if ouid != self._ouid:
@@ -1597,8 +1654,10 @@ class MainWindow(QMainWindow):
         self.sp_from.blockSignals(False)
         self.sp_to.blockSignals(False)
 
-        # 검색 결과는 먼저 랭커 카드 페이지로.
-        self.stack.setCurrentIndex(self.PAGE_RANKER)
+        # 검색 결과는 먼저 랭커 카드 페이지로. 단, 자동 새로고침으로 새 경기가
+        # 들어온 경우엔 사용자가 보던 페이지를 그대로 둔다(강제 이동 안 함).
+        if not auto:
+            self.stack.setCurrentIndex(self.PAGE_RANKER)
         self.btn_analyze.setEnabled(bool(matches))
         self._render_ranker()
 
@@ -1608,9 +1667,13 @@ class MainWindow(QMainWindow):
 
         self._render_all()
         self._on_fetch_team_colors()  # DB 캐시(TTL 30일)로 채우고, 모자란 것만 백그라운드 조회
-        self.statusBar().showMessage(
-            f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
-            + (f" · 새 경기 {new}건 저장" if new else ""))
+        if auto:
+            self.statusBar().showMessage(
+                f"🔔 자동 새로고침 {datetime.now():%H:%M} — 새 경기 {new}건 발견, 갱신됨")
+        else:
+            self.statusBar().showMessage(
+                f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
+                + (f" · 새 경기 {new}건 저장" if new else ""))
 
     # ── 렌더 ──────────────────────────────────────────────────────────
     def _slice(self) -> tuple[list[MatchSummary], list[dict]]:
@@ -2820,6 +2883,7 @@ class MainWindow(QMainWindow):
             box.addStretch(1)
 
     def closeEvent(self, e) -> None:
+        self._auto_timer.stop()
         if self._loader and self._loader.isRunning():
             self._loader.cancel()
             # 진행 중이던 상세 요청 몇 개가 네트워크 타임아웃까지 갈 수 있어
