@@ -449,6 +449,8 @@ class MainWindow(QMainWindow):
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
                       "블록%", "선방력", "평점"]
+    # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 비공식 근사치.
+    FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
     # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 fc-info
     # 프론트엔드에서 역산한 파생 지표라, 이름만 보고는 계산 기준이 안 보여서 필요하다.
@@ -779,6 +781,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_period_tab(), "기간별 추이")
         self.tabs.addTab(self._build_clutch_tab(), "승부처 분석")
         self.tabs.addTab(self._build_shotmap_tab(), "슛 맵")
+        self.tabs.addTab(self._build_finishing_tab(), "선수별 결정력")
         self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
         self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
         self._teamcolor_fetch_btns: list[QPushButton] = []
@@ -1085,7 +1088,52 @@ class MainWindow(QMainWindow):
         self.lb_shotmap_summary.setText(
             f"{who} 슛 {sm.total} · 골 {sm.goals} · "
             f"유효슛 {sm.effective} ({sm.effective_rate:.0f}%) · "
-            f"전환율 {sm.conversion:.0f}%")
+            f"전환율 {sm.conversion:.0f}% · 기대골(xG) {sm.xg:.1f}")
+
+    def _build_finishing_tab(self) -> QWidget:
+        """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 비공식 근사치."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        note = QLabel("표시 구간 기준 · 내 슛만 · 골이 많은 순  "
+                      "(xG=기대득점, 넥슨이 안 주는 비공식 근사치 · "
+                      "골−xG가 +면 근사 기대보다 더 넣은 것)")
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        self.tbl_finishing = self._make_table(self.FINISHING_COLUMNS)
+        self.tbl_finishing.itemDoubleClicked.connect(
+            self._on_finishing_double_clicked)
+        v.addWidget(self.tbl_finishing, 1)
+        return w
+
+    def _render_finishing(self, details: list[dict]) -> None:
+        players = st.finishing_ranking(
+            details, self._ouid, name_of=lambda i: self._names.get(i, str(i)))
+        rows = []
+        for p in players:
+            rows.append([
+                p.name, (f"{p.shots}", p.shots), (f"{p.on_target}", p.on_target),
+                (f"{p.goals}", p.goals), (f"{p.conversion:.0f}%", p.conversion),
+                (f"{p.xg:.1f}", p.xg), (f"{p.xg_diff:+.1f}", p.xg_diff),
+                (f"{p.assists}", p.assists)])
+        self._fill(self.tbl_finishing, rows, enable_sort=False)
+        # 골−xG(6열)에 색: +면 초록(해결력↑), −면 빨강. spId 는 선수명(0열)에.
+        peak = max((abs(p.xg_diff) for p in players), default=1) or 1
+        for r, p in enumerate(players):
+            self._tint(self.tbl_finishing.item(r, 6), abs(p.xg_diff), peak,
+                       T.GREEN if p.xg_diff >= 0 else T.RED)
+            name_item = self.tbl_finishing.item(r, 0)
+            if name_item:
+                name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
+        self.tbl_finishing.sortByColumn(3, Qt.SortOrder.DescendingOrder)
+        self.tbl_finishing.setSortingEnabled(True)
+
+    def _on_finishing_double_clicked(self, item) -> None:
+        """결정력 표에서 선수 더블클릭 → 선수 카드. spId 는 0열 UserRole."""
+        name_item = item.tableWidget().item(item.row(), 0)
+        sp_id = name_item.data(Qt.ItemDataRole.UserRole) if name_item else None
+        if isinstance(sp_id, int):
+            self._show_player_info(sp_id)
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
@@ -1694,6 +1742,7 @@ class MainWindow(QMainWindow):
         self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
         self._render_clutch(self._details, self._matches)  # 승부처도 누적 전체 기준
         self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
+        self._render_finishing(details)  # 결정력도 표시 구간 기준
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.

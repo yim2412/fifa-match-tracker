@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -626,6 +627,35 @@ SHOT_ON_TARGET = 1
 SHOT_OFF_TARGET = 2
 _SHOT_RESULTS = (SHOT_GOAL, SHOT_ON_TARGET, SHOT_OFF_TARGET)
 
+# ── 기대득점(xG) 근사 ──────────────────────────────────────────────────────
+# ⚠️ 넥슨은 xG 정답값을 주지 않는다 — 이건 순수 근사 모델이다(비공식).
+# 슛 좌표(거리·골대 각도)와 박스 안 여부·슛 유형만으로 득점 확률을 추정한다.
+# 공개 xG 튜토리얼(거리·각도 로지스틱)의 형태를 따르되, 계수는 실제 캐시에서
+# 전체 xG 합이 실제 골 수와 같은 규모가 되도록 맞췄다(자기 계정 기준 캘리브레이션).
+_PITCH_LEN = 105.0   # m — x(0~1)가 경기장 전체 길이 비율
+_PITCH_WID = 68.0    # m — y(0~1)가 폭 비율, 0.5 가 중앙
+_GOAL_WIDTH = 7.32   # m
+
+
+def shot_xg(x: float, y: float, in_penalty: bool = False,
+            type_name: str = "") -> float:
+    """슛 하나의 기대득점(0~1) 근사. 정답값 없는 비공식 추정."""
+    if type_name == "페널티킥":
+        return 0.76  # 실측 PK 성공률 근사 — 위치와 무관
+    dx = max(0.01, (1.0 - x) * _PITCH_LEN)      # 골라인까지 거리
+    dy = abs(y - 0.5) * _PITCH_WID              # 중앙에서 좌우로 벗어난 폭
+    dist = math.hypot(dx, dy)
+    # 골대 양 포스트가 슛 지점에서 이루는 각(넓을수록 넣기 쉽다)
+    denom = dx * dx + dy * dy - (_GOAL_WIDTH / 2) ** 2
+    angle = math.atan2(_GOAL_WIDTH * dx, denom)
+    if angle < 0:
+        angle += math.pi
+    z = -0.15 + 0.115 * dist - 3.2 * angle
+    xg = 1.0 / (1.0 + math.exp(z))
+    if type_name == "헤더":
+        xg *= 0.7   # 헤더는 같은 위치라도 득점 확률이 낮다
+    return max(0.0, min(0.99, xg))
+
 
 @dataclass
 class Shot:
@@ -635,6 +665,7 @@ class Shot:
     type_name: str
     in_penalty: bool = False
     hit_post: bool = False
+    xg: float = 0.0
 
 
 @dataclass
@@ -674,6 +705,10 @@ class ShotMap:
         return sum(1 for s in self.shots
                    if s.result == SHOT_GOAL and s.in_penalty)
 
+    @property
+    def xg(self) -> float:  # 전체 기대득점 합(근사)
+        return sum(s.xg for s in self.shots)
+
 
 def shot_map(details: list[dict], ouid: str, mine: bool = True) -> ShotMap:
     """여러 경기의 슛 좌표를 모은다. mine=False 면 상대 슛(내 실점 위치).
@@ -692,10 +727,73 @@ def shot_map(details: list[dict], ouid: str, mine: bool = True) -> ShotMap:
                 continue
             if r not in _SHOT_RESULTS:
                 continue
+            tname = goal_type_name(sd.get("type"))
+            in_pen = bool(sd.get("inPenalty"))
             sm.shots.append(Shot(
-                float(x), float(y), int(r), goal_type_name(sd.get("type")),
-                bool(sd.get("inPenalty")), bool(sd.get("hitPost"))))
+                float(x), float(y), int(r), tname, in_pen,
+                bool(sd.get("hitPost")), shot_xg(float(x), float(y), in_pen, tname)))
     return sm
+
+
+# ── 선수별 결정력 랭킹 ─────────────────────────────────────────────────────
+@dataclass
+class PlayerFinishing:
+    sp_id: int
+    name: str = ""
+    shots: int = 0
+    on_target: int = 0   # 유효슛(골 포함) = result 1 또는 3
+    goals: int = 0
+    assists: int = 0     # 이 선수가 어시스트한 골 수
+    xg: float = 0.0      # 기대득점 합(근사)
+
+    @property
+    def conversion(self) -> float:  # 전환율 = 골 / 슛
+        return self.goals / self.shots * 100 if self.shots else 0.0
+
+    @property
+    def xg_diff(self) -> float:  # 골 − xG. +면 근사 기대보다 더 넣음(해결력/운)
+        return self.goals - self.xg
+
+
+def finishing_ranking(details: list[dict], ouid: str,
+                      name_of=lambda i: str(i)) -> list[PlayerFinishing]:
+    """내 shootDetail 을 슈터(spId)별로 모은 결정력 표. 어시스트는 골에만 준다.
+
+    골이 많은 순 → 같으면 슛 많은 순. name_of 로 선수명을 해석한다.
+    """
+    acc: dict[int, PlayerFinishing] = {}
+
+    def get(sp_id: int) -> PlayerFinishing:
+        pf = acc.get(sp_id)
+        if pf is None:
+            pf = acc[sp_id] = PlayerFinishing(sp_id=sp_id, name=name_of(sp_id))
+        return pf
+
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        if me is None:
+            continue
+        for sd in me.get("shootDetail") or []:
+            r = sd.get("result")
+            if r not in _SHOT_RESULTS:
+                continue
+            shooter = sd.get("spId")
+            if isinstance(shooter, int):
+                pf = get(shooter)
+                pf.shots += 1
+                if r in (SHOT_GOAL, SHOT_ON_TARGET):
+                    pf.on_target += 1
+                x, y = sd.get("x"), sd.get("y")
+                if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                    pf.xg += shot_xg(float(x), float(y), bool(sd.get("inPenalty")),
+                                     goal_type_name(sd.get("type")))
+                if r == SHOT_GOAL:
+                    pf.goals += 1
+                    if sd.get("assist"):
+                        a = sd.get("assistSpId")
+                        if isinstance(a, int):
+                            get(a).assists += 1
+    return sorted(acc.values(), key=lambda p: (-p.goals, -p.shots))
 
 
 # ── 상대 팀컬러 ───────────────────────────────────────────────────────────
