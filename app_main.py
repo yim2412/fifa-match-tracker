@@ -7,6 +7,7 @@ from __future__ import annotations
 import sys
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from dataclasses import replace
 from datetime import timedelta
 
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
@@ -483,6 +484,7 @@ class MainWindow(QMainWindow):
         self._loader: MatchLoader | None = None
         self._img_cache_dir = config.CACHE_DIR / "player_images"
         self._table_season_loader: SeasonIconLoader | None = None
+        self._finishing_icon_loader: SeasonIconLoader | None = None
         self._ouid = ""
         self._nick = ""
         self._basic: dict = {}
@@ -984,6 +986,10 @@ class MainWindow(QMainWindow):
         self.box_clutch_first.addWidget(cb)
 
         buckets = st.goal_minute_buckets(details, self._ouid)
+        # "연장"은 연장까지 간 경기가 있을 때(득실 하나라도 있을 때)만 보여준다.
+        if buckets and buckets[-1].label == "연장" \
+                and not (buckets[-1].scored or buckets[-1].conceded):
+            buckets = buckets[:-1]
         peak = max((max(b.scored, b.conceded) for b in buckets), default=0)
         self._clear(self.box_clutch_minute)
         for bk in buckets:
@@ -1083,7 +1089,12 @@ class MainWindow(QMainWindow):
         sm = st.shot_map(details, self._ouid, mine=mine)
         # 체크된 결과 종류만 화면에 찍는다(요약 수치는 전체 기준 유지).
         shown = {r for r, chk in self.chk_shotmap_result.items() if chk.isChecked()}
-        self.shotmap.set_shots([s for s in sm.shots if s.result in shown])
+        shots = [s for s in sm.shots if s.result in shown]
+        # 상대 슛 좌표는 상대 공격 기준이라 좌우(y)가 내 시점과 뒤집혀 있다 —
+        # 같은 골문(위)에 그리되 y 를 뒤집어 내 시점으로 통일한다(x=골문은 동일).
+        if not mine:
+            shots = [replace(s, y=1.0 - s.y) for s in shots]
+        self.shotmap.set_shots(shots)
         who = "내" if mine else "상대"
         self.lb_shotmap_summary.setText(
             f"{who} 슛 {sm.total} · 골 {sm.goals} · "
@@ -1127,6 +1138,8 @@ class MainWindow(QMainWindow):
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
         self.tbl_finishing.sortByColumn(3, Qt.SortOrder.DescendingOrder)
         self.tbl_finishing.setSortingEnabled(True)
+        self._load_season_icons([p.sp_id for p in players], self.tbl_finishing, 0,
+                                "_finishing_icon_loader")
 
     def _on_finishing_double_clicked(self, item) -> None:
         """결정력 표에서 선수 더블클릭 → 선수 카드. spId 는 0열 UserRole."""
@@ -2797,28 +2810,38 @@ class MainWindow(QMainWindow):
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
         self.tbl_players.sortByColumn(5, Qt.SortOrder.DescendingOrder)
         self.tbl_players.setSortingEnabled(True)
-        self._load_player_season_icons([p.sp_id for p in players])
+        self._load_season_icons([p.sp_id for p in players], self.tbl_players, 1,
+                                "_table_season_loader")
 
-    def _load_player_season_icons(self, sp_ids: list[int]) -> None:
-        """선수 얼굴 대신 시즌(카드 클래스) 아이콘을 표에 채운다 — PitchWidget
-        스쿼드 화면의 SeasonIconLoader 와 같은 방식(같은 시즌은 한 번만 받음)."""
-        if self._table_season_loader and self._table_season_loader.isRunning():
-            self._table_season_loader.cancel()
-            self._table_season_loader.wait(500)
+    def _load_season_icons(self, sp_ids: list[int], table: QTableWidget,
+                           name_col: int, holder: str) -> None:
+        """선수 얼굴 대신 시즌(카드 클래스) 아이콘을 표의 name_col 열에 채운다 —
+        PitchWidget 스쿼드 화면의 SeasonIconLoader 와 같은 방식(같은 시즌은 한 번만).
+
+        표마다 로더를 따로 두라고 holder(필드 이름)를 받는다 — 하나를 공유하면
+        선수 지표·결정력 표가 같은 렌더에서 서로의 로더를 취소해버린다."""
+        loader = getattr(self, holder)
+        if loader and loader.isRunning():
+            loader.cancel()
+            loader.wait(500)
         entries = []
         for sp_id in sp_ids:
             season_id = st.season_id_of(sp_id)
             icon_url = self._seasons.get(season_id, {}).get("seasonImg")
             if icon_url:
                 entries.append((sp_id, season_id, icon_url))
-        self._table_season_loader = SeasonIconLoader(entries, self._season_icon_dir)
-        self._table_season_loader.loaded.connect(self._on_player_season_icon)
-        self._table_season_loader.start()
+        loader = SeasonIconLoader(entries, self._season_icon_dir)
+        loader.loaded.connect(
+            lambda sid, path, t=table, c=name_col: self._apply_season_icon(t, c, sid, path))
+        setattr(self, holder, loader)
+        loader.start()
 
-    def _on_player_season_icon(self, sp_id: int, path: str) -> None:
+    @staticmethod
+    def _apply_season_icon(table: QTableWidget, name_col: int,
+                           sp_id: int, path: str) -> None:
         icon = QIcon(QPixmap(path))
-        for r in range(self.tbl_players.rowCount()):
-            item = self.tbl_players.item(r, 1)
+        for r in range(table.rowCount()):
+            item = table.item(r, name_col)
             if item and item.data(Qt.ItemDataRole.UserRole) == sp_id:
                 item.setIcon(icon)
 
@@ -2931,9 +2954,10 @@ class MainWindow(QMainWindow):
             if not self._teamcolor_loader.wait(3000):
                 self._teamcolor_loader.terminate()
                 self._teamcolor_loader.wait(1000)
-        if self._table_season_loader and self._table_season_loader.isRunning():
-            self._table_season_loader.cancel()
-            self._table_season_loader.wait(500)
+        for icon_loader in (self._table_season_loader, self._finishing_icon_loader):
+            if icon_loader and icon_loader.isRunning():
+                icon_loader.cancel()
+                icon_loader.wait(500)
         if self._compare_loader and self._compare_loader.isRunning():
             self._compare_loader.cancel()
             if not self._compare_loader.wait(8000):
