@@ -139,15 +139,20 @@ class Stats:
 
 
 def summarize(matches: list[MatchSummary]) -> Stats:
-    s = Stats(total=len(matches))
+    s = Stats()
     for m in matches:
-        # 몰수승/몰수패도 승패로 친다
+        # 몰수승/몰수패도 승패로 친다. "오류"(중단된 경기)처럼 승·무·패가
+        # 아닌 결과는 아예 집계에서 뺀다 — 승률 분모는 물론 평균 득실·점유율·
+        # 평점까지, 실제로 안 치러진 경기가 끌어내리지 않게.
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
             s.draw += 1
         elif "패" in m.result:
             s.lose += 1
+        else:
+            continue
+        s.total += 1
         s.goals_for += m.my_goals
         s.goals_against += m.opp_goals
         s.possession_sum += m.possession

@@ -54,9 +54,10 @@ def test_parse_match():
 def test_summarize():
     ouid, _, details = _load()
     s = models.summarize([models.parse_match(d, ouid) for d in details])
-    assert (s.total, s.win, s.draw, s.lose) == (4, 1, 1, 1), \
+    # 4경기 중 하나는 "오류"(중단) — 집계에서 빠져 total=3, 그 0:5 실점도 제외.
+    assert (s.total, s.win, s.draw, s.lose) == (3, 1, 1, 1), \
         (s.total, s.win, s.draw, s.lose)
-    assert (s.goals_for, s.goals_against) == (6, 11), (s.goals_for, s.goals_against)
+    assert (s.goals_for, s.goals_against) == (6, 6), (s.goals_for, s.goals_against)
 
 
 def test_shot_map():
