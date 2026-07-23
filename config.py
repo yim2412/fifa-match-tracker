@@ -94,5 +94,3 @@ FALLBACK_MATCH_TYPES = [
 
 DEFAULT_MATCH_LIMIT = 20  # 한 번 조회할 최근 경기 수
 MAX_MATCH_LIMIT = 100     # 넥슨 API가 한 번에 주는 상한
-
-AUTO_REFRESH_MIN = 5  # 자동 새로고침 기본 주기(분) — 앱이 켜져 있을 때만 동작
