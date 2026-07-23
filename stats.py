@@ -616,6 +616,88 @@ def time_of_day_rates(matches: list) -> list[TimeBandRate]:
     return bands
 
 
+# ── 슛 맵 ─────────────────────────────────────────────────────────────────
+# shootDetail 의 result: 3=골, 1=유효슛(막힘), 2=빗나감.
+# 실제 캐시로 확인: effectiveShootTotal == 골 + result1 (1189/1190),
+# shootTotal == shootDetail 총개수 (1190/1190). 좌표 x·y 는 0~1 정규화이고
+# x=1.0 이 상대 골문 쪽(슛이 x>0.48 에 몰림), y=0.5 가 폭 중앙이다.
+SHOT_GOAL = 3
+SHOT_ON_TARGET = 1
+SHOT_OFF_TARGET = 2
+_SHOT_RESULTS = (SHOT_GOAL, SHOT_ON_TARGET, SHOT_OFF_TARGET)
+
+
+@dataclass
+class Shot:
+    x: float
+    y: float
+    result: int          # SHOT_GOAL / SHOT_ON_TARGET / SHOT_OFF_TARGET
+    type_name: str
+    in_penalty: bool = False
+    hit_post: bool = False
+
+
+@dataclass
+class ShotMap:
+    shots: list = field(default_factory=list)
+
+    @property
+    def total(self) -> int:
+        return len(self.shots)
+
+    @property
+    def goals(self) -> int:
+        return sum(1 for s in self.shots if s.result == SHOT_GOAL)
+
+    @property
+    def on_target(self) -> int:  # 골이 아닌 유효슛(막힌 슛)
+        return sum(1 for s in self.shots if s.result == SHOT_ON_TARGET)
+
+    @property
+    def off_target(self) -> int:
+        return sum(1 for s in self.shots if s.result == SHOT_OFF_TARGET)
+
+    @property
+    def effective(self) -> int:  # 유효슛 = 골 + 막힌 유효슛
+        return self.goals + self.on_target
+
+    @property
+    def effective_rate(self) -> float:  # 유효슛률 = 유효슛 / 전체 슛
+        return self.effective / self.total * 100 if self.total else 0.0
+
+    @property
+    def conversion(self) -> float:  # 골 전환율 = 골 / 전체 슛
+        return self.goals / self.total * 100 if self.total else 0.0
+
+    @property
+    def in_penalty_goals(self) -> int:
+        return sum(1 for s in self.shots
+                   if s.result == SHOT_GOAL and s.in_penalty)
+
+
+def shot_map(details: list[dict], ouid: str, mine: bool = True) -> ShotMap:
+    """여러 경기의 슛 좌표를 모은다. mine=False 면 상대 슛(내 실점 위치).
+
+    좌표·result 가 정상 범위인 슛만 담는다 — 넥슨이 값을 비우면 건너뛴다.
+    """
+    sm = ShotMap()
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        p = me if mine else opp
+        for sd in p.get("shootDetail") or []:
+            x, y, r = sd.get("x"), sd.get("y"), sd.get("result")
+            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                continue
+            if r not in _SHOT_RESULTS:
+                continue
+            sm.shots.append(Shot(
+                float(x), float(y), int(r), goal_type_name(sd.get("type")),
+                bool(sd.get("inPenalty")), bool(sd.get("hitPost"))))
+    return sm
+
+
 # ── 상대 팀컬러 ───────────────────────────────────────────────────────────
 # 팀컬러는 오픈API 매치 상세엔 없다(실제 캐시 JSON으로 확인 — 필드 자체가
 # 없음). 넥슨 데이터센터 감독모드 랭킹(ranker.py)에서 닉네임으로 검색해야

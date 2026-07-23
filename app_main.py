@@ -32,8 +32,8 @@ from models import (
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
     NA, BarRow, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
-    RankerCard, RowBorderDelegate, SortableItem, StatCard, TrendChart, rate_of,
-    wdl_text,
+    RankerCard, RowBorderDelegate, ShotMapWidget, SortableItem, StatCard,
+    TrendChart, rate_of, wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -799,6 +799,7 @@ class MainWindow(QMainWindow):
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
         self.tabs.addTab(self._build_period_tab(), "기간별 추이")
         self.tabs.addTab(self._build_clutch_tab(), "승부처 분석")
+        self.tabs.addTab(self._build_shotmap_tab(), "슛 맵")
         self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
         self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
         self._teamcolor_fetch_btns: list[QPushButton] = []
@@ -1059,6 +1060,46 @@ class MainWindow(QMainWindow):
                 h.addWidget(a)
                 h.addWidget(none, 1)
             self.box_clutch_tod.addWidget(row)
+
+    def _build_shotmap_tab(self) -> QWidget:
+        """슛 맵 — 슛 좌표를 하프 피치 위에 점으로. 내 슛/상대 슛 토글."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+
+        ctrl = QHBoxLayout()
+        self.cb_shotmap_side = NoScrollComboBox()
+        self.cb_shotmap_side.addItem("내 슛", True)
+        self.cb_shotmap_side.addItem("상대 슛 (실점 위치)", False)
+        self.cb_shotmap_side.currentIndexChanged.connect(self._render_shotmap)
+        ctrl.addWidget(QLabel("표시"))
+        ctrl.addWidget(self.cb_shotmap_side)
+        ctrl.addSpacing(16)
+        # 범례
+        for text, color in (("● 골", T.GREEN), ("● 유효슛", T.YELLOW),
+                            ("● 빗나감", T.TEXT_DIM)):
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color: {color}; font-weight: bold;")
+            ctrl.addWidget(lb)
+        ctrl.addStretch(1)
+        self.lb_shotmap_summary = QLabel("")
+        self.lb_shotmap_summary.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        ctrl.addWidget(self.lb_shotmap_summary)
+        v.addLayout(ctrl)
+
+        self.shotmap = ShotMapWidget()
+        v.addWidget(self.shotmap, 1)
+        return w
+
+    def _render_shotmap(self) -> None:
+        matches, details = self._slice()
+        mine = bool(self.cb_shotmap_side.currentData())
+        sm = st.shot_map(details, self._ouid, mine=mine)
+        self.shotmap.set_shots(sm.shots)
+        who = "내" if mine else "상대"
+        self.lb_shotmap_summary.setText(
+            f"{who} 슛 {sm.total} · 골 {sm.goals} · "
+            f"유효슛 {sm.effective} ({sm.effective_rate:.0f}%) · "
+            f"전환율 {sm.conversion:.0f}%")
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
@@ -1708,6 +1749,7 @@ class MainWindow(QMainWindow):
         self._render_trend(self._matches)
         self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
         self._render_clutch(self._details, self._matches)  # 승부처도 누적 전체 기준
+        self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.

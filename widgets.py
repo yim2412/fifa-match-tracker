@@ -774,6 +774,75 @@ class PitchWidget(QWidget):
         p.drawRect(int(w / 2 - box_w / 2), h - m - box_h, box_w, box_h)
 
 
+class ShotMapWidget(QWidget):
+    """슛 좌표를 공격 진영 하프 피치 위에 점으로 찍는다(골문이 위).
+
+    좌표는 stats.Shot 의 x·y(0~1). x=1.0 이 골문 쪽이라 위로, y 가 폭(왼→오).
+    슛은 x>0.45 근처에만 오므로 하프 피치만 그린다. 색은 골=초록·유효=노랑·
+    빗나감=회색, 골대 맞은 슛은 흰 테두리로 표시. 골을 마지막에 그려 위로 얹는다.
+    """
+
+    X_MIN = 0.45  # 이보다 뒤(자기 진영)의 슛은 거의 없다 — 아래 경계로 삼는다.
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(560, 460)
+        self._shots: list = []
+
+    def set_shots(self, shots: list) -> None:
+        self._shots = shots or []
+        self.update()
+
+    def _pt(self, x: float, y: float, w: int, h: int, m: int):
+        dw, dh = w - 2 * m, h - 2 * m
+        xf = max(self.X_MIN, min(1.0, x))
+        vt = (1.0 - xf) / (1.0 - self.X_MIN)  # x=1 → 0(위), x=X_MIN → 1(아래)
+        return QPointF(m + max(0.0, min(1.0, y)) * dw, m + vt * dh)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        m = 12
+        p.fillRect(self.rect(), QColor("#1e5c34"))
+        line = QColor(255, 255, 255, 130)
+        p.setPen(QPen(line, 2))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRect(m, m, w - 2 * m, h - 2 * m)
+
+        # 골문(위 중앙) · 페널티 박스 · 골 에어리어 · 페널티 스폿
+        cx = w / 2
+        goal_w = (w - 2 * m) * 0.18
+        p.drawLine(int(cx - goal_w / 2), m, int(cx + goal_w / 2), m)
+        pen_w = (w - 2 * m) * 0.62
+        pen_h = (h - 2 * m) * 0.30
+        p.drawRect(int(cx - pen_w / 2), m, int(pen_w), int(pen_h))
+        ga_w = (w - 2 * m) * 0.30
+        ga_h = (h - 2 * m) * 0.12
+        p.drawRect(int(cx - ga_w / 2), m, int(ga_w), int(ga_h))
+        p.setBrush(line)
+        p.drawEllipse(QPointF(cx, m + (h - 2 * m) * 0.19), 2.5, 2.5)
+
+        if not self._shots:
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "슛 기록 없음")
+            return
+
+        colors = {3: QColor(T.GREEN), 1: QColor(T.YELLOW), 2: QColor(T.TEXT_DIM)}
+        # 빗나감 → 유효 → 골 순으로 그려서 골이 맨 위에 오게 한다.
+        order = sorted(self._shots, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
+        for s in order:
+            c = colors.get(s.result, QColor(T.TEXT_DIM))
+            pt = self._pt(s.x, s.y, w, h, m)
+            r = 6.0 if s.result == 3 else 4.5
+            if s.hit_post:
+                p.setPen(QPen(QColor("#ffffff"), 1.5))
+            else:
+                p.setPen(QPen(c.darker(160), 1))
+            p.setBrush(c)
+            p.drawEllipse(pt, r, r)
+
+
 def wdl_text(w: int, d: int, l: int) -> str:
     return f"{w}승 {d}무 {l}패"
 
