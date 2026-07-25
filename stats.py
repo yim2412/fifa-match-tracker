@@ -9,6 +9,7 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import combinations
 
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
@@ -615,6 +616,215 @@ def time_of_day_rates(matches: list) -> list[TimeBandRate]:
                     band.lose += 1
                 break
     return bands
+
+
+# ── 성적 진단(상대 등급별 · 점유율 구간별) ───────────────────────────────────
+def _wdl_of(res: str) -> int | None:
+    """승/무/패를 0/1/2 로. 그 외("오류" 등)는 None — 집계에서 뺀다
+    (summarize 와 같은 기준)."""
+    if "승" in res:
+        return 0
+    if "무" in res:
+        return 1
+    if "패" in res:
+        return 2
+    return None
+
+
+# division 없는 옛 경기를 모으는 버킷 — 정렬상 맨 끝(id 가장 큼)에 온다.
+UNKNOWN_DIVISION_ID = 10 ** 9
+
+
+@dataclass
+class DivisionStat:
+    """상대 등급(division) 하나에 대한 내 전적 — 성적 진단 탭."""
+    division_id: int
+    name: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    goals_for: int = 0
+    goals_against: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+    @property
+    def avg_gf(self) -> float:
+        return self.goals_for / self.games if self.games else 0.0
+
+    @property
+    def avg_ga(self) -> float:
+        return self.goals_against / self.games if self.games else 0.0
+
+
+def division_stats(details: list[dict], ouid: str,
+                   name_of=None) -> list[DivisionStat]:
+    """상대 등급별 내 승률·평균 득실 — 강한 등급(id 작을수록 상위)부터.
+
+    상대의 division 으로 묶는다. division 이 없는 옛 경기는 '미상' 버킷에 모아
+    합계가 맞게 둔다. 승·무·패가 아닌 결과("오류" 등)는 뺀다.
+    """
+    acc: dict[int, DivisionStat] = {}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        wdl = _wdl_of(_result_of(me))
+        if wdl is None:
+            continue
+        div = opp.get("division")
+        div_id = int(div) if isinstance(div, int) else UNKNOWN_DIVISION_ID
+        s = acc.get(div_id)
+        if s is None:
+            if div_id == UNKNOWN_DIVISION_ID:
+                nm = "미상"
+            else:
+                nm = name_of(div_id) if name_of else str(div_id)
+            s = acc[div_id] = DivisionStat(division_id=div_id, name=nm)
+        if wdl == 0:
+            s.win += 1
+        elif wdl == 1:
+            s.draw += 1
+        else:
+            s.lose += 1
+        s.goals_for += int(_num(me.get("shoot") or {}, "goalTotal"))
+        s.goals_against += int(_num(opp.get("shoot") or {}, "goalTotal"))
+    return [acc[k] for k in sorted(acc.keys())]
+
+
+# 내 점유율 3구간 — "지공(우세)이 맞나 역습(열세)이 맞나".
+POSSESSION_BANDS = [("열세", 0, 40), ("균형", 40, 61), ("우세", 61, 101)]
+
+
+@dataclass
+class PossessionBand:
+    """점유율 한 구간의 내 전적."""
+    label: str
+    span: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    goals_for: int = 0
+    goals_against: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+    @property
+    def avg_gf(self) -> float:
+        return self.goals_for / self.games if self.games else 0.0
+
+    @property
+    def avg_ga(self) -> float:
+        return self.goals_against / self.games if self.games else 0.0
+
+
+def possession_stats(details: list[dict], ouid: str) -> list[PossessionBand]:
+    """내 점유율 구간(열세<40 · 균형40~60 · 우세>60)별 승률·평균 득실.
+
+    점유율 0(상대 탈주 등 무기록)과 승·무·패 아닌 결과는 뺀다.
+    """
+    bands = [PossessionBand(name, f"{lo}~{hi - 1}")
+             for name, lo, hi in POSSESSION_BANDS]
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        wdl = _wdl_of(_result_of(me))
+        if wdl is None:
+            continue
+        pos = int(_num(me.get("matchDetail") or {}, "possession"))
+        if pos <= 0:
+            continue
+        for band, (_, lo, hi) in zip(bands, POSSESSION_BANDS):
+            if lo <= pos < hi:
+                if wdl == 0:
+                    band.win += 1
+                elif wdl == 1:
+                    band.draw += 1
+                else:
+                    band.lose += 1
+                band.goals_for += int(_num(me.get("shoot") or {}, "goalTotal"))
+                band.goals_against += int(_num(opp.get("shoot") or {}, "goalTotal"))
+                break
+    return bands
+
+
+# ── 선수 조합(케미) ───────────────────────────────────────────────────────
+@dataclass
+class PairStat:
+    """함께 선발로 나온 두 선수의 내 전적."""
+    a_id: int
+    b_id: int
+    a_name: str
+    b_name: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+
+def pair_synergy(details: list[dict], ouid: str, name_of=None,
+                 min_games: int = 1, exclude_gk: bool = True) -> list[PairStat]:
+    """함께 선발 출전한 선수쌍별 내 승률 — 잘 맞는/안 맞는 조합 찾기.
+
+    경기마다 내 선발(SUB 제외, 기본은 GK 도 제외)의 모든 2인 조합에 그 경기
+    결과를 누적한다. min_games 미만 조합은 버린다(표본 잡음 제거).
+    승률 높은 순 → 경기 많은 순. 승·무·패 아닌 결과는 뺀다.
+    """
+    acc: dict[tuple[int, int], PairStat] = {}
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        if me is None:
+            continue
+        wdl = _wdl_of(_result_of(me))
+        if wdl is None:
+            continue
+        starters = []
+        for p in me.get("player") or []:
+            pos = p.get("spPosition")
+            sp_id = p.get("spId")
+            if not isinstance(pos, int) or not isinstance(sp_id, int):
+                continue
+            if pos == SUB_POSITION:
+                continue
+            if exclude_gk and pos == GK_POSITION:
+                continue
+            starters.append(sp_id)
+        for a, b in combinations(sorted(set(starters)), 2):
+            s = acc.get((a, b))
+            if s is None:
+                s = acc[(a, b)] = PairStat(
+                    a_id=a, b_id=b,
+                    a_name=name_of(a) if name_of else str(a),
+                    b_name=name_of(b) if name_of else str(b))
+            if wdl == 0:
+                s.win += 1
+            elif wdl == 1:
+                s.draw += 1
+            else:
+                s.lose += 1
+    out = [s for s in acc.values() if s.games >= min_games]
+    out.sort(key=lambda s: (-s.win_rate, -s.games))
+    return out
 
 
 # ── 슛 맵 ─────────────────────────────────────────────────────────────────

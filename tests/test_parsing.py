@@ -114,6 +114,37 @@ def test_goal_minute_buckets_added_time():
     assert one(1, 2820) == "75~90", one(1, 2820)   # 후반 92분(추가시간)
 
 
+def test_division_stats():
+    ouid, _, details = _load()
+    ds = st.division_stats(details, ouid)
+    by = {s.division_id: s for s in ds}
+    # 상대 900 두 경기(승·패), 상대 1000 한 경기(무). "오류"(상대 900)는 승/무/패가
+    # 아니라 제외 → 총 3경기.
+    assert by[900].games == 2 and [by[900].win, by[900].draw, by[900].lose] == [1, 0, 1]
+    assert (by[900].goals_for, by[900].goals_against) == (5, 5)
+    assert [by[1000].win, by[1000].draw, by[1000].lose] == [0, 1, 0]
+    assert sum(s.games for s in ds) == 3, sum(s.games for s in ds)
+
+
+def test_possession_stats():
+    ouid, _, details = _load()
+    bands = {b.label: b for b in st.possession_stats(details, ouid)}
+    bal = bands["균형"]  # 세 경기 모두 점유율 46~58 → 균형 구간
+    assert bal.games == 3 and [bal.win, bal.draw, bal.lose] == [1, 1, 1]
+    assert (bal.goals_for, bal.goals_against) == (6, 6)
+    # "오류" 경기는 점유율이 null(0)이라 제외 → 열세·우세는 비어 있다.
+    assert bands["열세"].games == 0 and bands["우세"].games == 0
+
+
+def test_pair_synergy():
+    ouid, _, details = _load()
+    pairs = st.pair_synergy(details, ouid, min_games=1)
+    # 유효 3경기가 같은 선발 10명(SUB·GK 제외) → C(10,2)=45 조합, 각 3경기.
+    assert len(pairs) == 45, len(pairs)
+    assert all(p.games == 3 for p in pairs)
+    assert st.pair_synergy(details, ouid, min_games=4) == []
+
+
 def test_shot_xg_deterministic():
     # 순수 함수 — 좌표만으로 결정. 계수를 바꾸면(모델 재튜닝) 여기가 깨진다(의도).
     assert abs(st.shot_xg(0.90, 0.50, True, "일반(D)") - 0.7482) < 1e-3

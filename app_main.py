@@ -452,6 +452,8 @@ class MainWindow(QMainWindow):
                       "블록%", "선방력", "평점"]
     # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 비공식 근사치.
     FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
+    # 선수 조합(케미) — 함께 선발로 나온 두 선수의 내 승률
+    SYNERGY_COLUMNS = ["선수 A", "선수 B", "경기", "승", "무", "패", "승률"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
     # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 fc-info
     # 프론트엔드에서 역산한 파생 지표라, 이름만 보고는 계산 기준이 안 보여서 필요하다.
@@ -782,8 +784,10 @@ class MainWindow(QMainWindow):
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
         self.tabs.addTab(self._build_period_tab(), "기간별 추이")
         self.tabs.addTab(self._build_clutch_tab(), "승부처 분석")
+        self.tabs.addTab(self._build_diagnosis_tab(), "성적 진단")
         self.tabs.addTab(self._build_shotmap_tab(), "슛 맵")
         self.tabs.addTab(self._build_finishing_tab(), "선수별 결정력")
+        self.tabs.addTab(self._build_synergy_tab(), "선수 조합")
         self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
         self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
         self._teamcolor_fetch_btns: list[QPushButton] = []
@@ -1048,6 +1052,147 @@ class MainWindow(QMainWindow):
                 h.addWidget(a)
                 h.addWidget(none, 1)
             self.box_clutch_tod.addWidget(row)
+
+    # ── 성적 진단 ─────────────────────────────────────────────────────────
+    def _build_diagnosis_tab(self) -> QWidget:
+        """성적 진단 — 상대 등급별·점유율 구간별 승률과 평균 득실."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+
+        note = QLabel("누적 전체 기준 · 승·무·패 아닌 결과(오류 등)는 제외")
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(note)
+
+        gb_div = QGroupBox("상대 등급별 성적 (강한 등급부터)")
+        self.box_diag_division = QVBoxLayout(gb_div)
+        self.box_diag_division.setSpacing(3)
+        v.addWidget(gb_div)
+
+        gb_pos = QGroupBox("점유율 구간별 승률")
+        self.box_diag_possession = QVBoxLayout(gb_pos)
+        self.box_diag_possession.setSpacing(3)
+        v.addWidget(gb_pos)
+
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _wr_bar_row(self, label: str, win: int, draw: int, lose: int,
+                    avg_gf: float, avg_ga: float, label_w: int = 132) -> QWidget:
+        """승률 막대 한 줄 — 라벨 + (승률·전적·평균득실) 막대. 승부처 탭과 같은 톤."""
+        row = QWidget()
+        h = QHBoxLayout(row)
+        h.setContentsMargins(4, 2, 4, 2)
+        a = QLabel(label)
+        a.setStyleSheet(f"color: {T.TEXT_DIM};")
+        a.setFixedWidth(label_w)
+        h.addWidget(a)
+        games = win + draw + lose
+        if games:
+            wr = win / games * 100
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setValue(int(wr * 10))
+            bar.setFormat(f"{wr:.1f}%  ({wdl_text(win, draw, lose)})  "
+                          f"득 {avg_gf:.2f} 실 {avg_ga:.2f}")
+            bar.setFixedHeight(18)
+            bar.setStyleSheet(
+                f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                f"color:{T.TEXT};text-align:center;}}"
+                f"QProgressBar::chunk{{background:{T.GREEN};border-radius:3px;}}")
+            h.addWidget(bar, 1)
+        else:
+            none = QLabel("경기 없음")
+            none.setStyleSheet(f"color: {T.TEXT_DIM};")
+            h.addWidget(none, 1)
+        return row
+
+    def _render_diagnosis(self, details: list[dict]) -> None:
+        self._clear(self.box_diag_division)
+        divs = st.division_stats(
+            details, self._ouid,
+            name_of=lambda i: self._division_names.get(i, str(i)))
+        if divs:
+            for s in divs:
+                self.box_diag_division.addWidget(self._wr_bar_row(
+                    f"{s.name} ({s.games})", s.win, s.draw, s.lose,
+                    s.avg_gf, s.avg_ga))
+        else:
+            empty = QLabel("상대 등급 정보가 있는 경기가 없습니다.")
+            empty.setStyleSheet(f"color: {T.TEXT_DIM};")
+            self.box_diag_division.addWidget(empty)
+
+        self._clear(self.box_diag_possession)
+        for b in st.possession_stats(details, self._ouid):
+            self.box_diag_possession.addWidget(self._wr_bar_row(
+                f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
+                b.avg_gf, b.avg_ga))
+
+    # ── 선수 조합(케미) ───────────────────────────────────────────────────
+    def _build_synergy_tab(self) -> QWidget:
+        """선수 조합 — 함께 선발로 나온 두 선수의 내 승률."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        ctrl = QHBoxLayout()
+        ctrl.addWidget(QLabel("최소 경기수"))
+        self.sp_synergy_min = QSpinBox()
+        self.sp_synergy_min.setRange(1, 9999)
+        self.sp_synergy_min.setValue(20)
+        ctrl.addWidget(self.sp_synergy_min)
+        btn = QPushButton("적용")
+        btn.clicked.connect(self._on_synergy_apply)
+        ctrl.addWidget(btn)
+        note = QLabel("누적 전체 · 선발(SUB·GK 제외) · 승률 높은 순 · "
+                      "선수 더블클릭 시 카드")
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        ctrl.addSpacing(12)
+        ctrl.addWidget(note)
+        ctrl.addStretch(1)
+        v.addLayout(ctrl)
+
+        self.tbl_synergy = self._make_table(self.SYNERGY_COLUMNS)
+        self.tbl_synergy.itemDoubleClicked.connect(self._on_synergy_double_clicked)
+        v.addWidget(self.tbl_synergy, 1)
+        return w
+
+    def _on_synergy_apply(self) -> None:
+        self._render_synergy(self._details)
+
+    def _render_synergy(self, details: list[dict]) -> None:
+        name_of = lambda i: self._names.get(i, str(i))
+        pairs = st.pair_synergy(details, self._ouid, name_of=name_of,
+                                min_games=self.sp_synergy_min.value())
+        rows = []
+        for p in pairs:
+            rows.append([
+                f"{p.a_name} ({self._season_name(p.a_id)})",
+                f"{p.b_name} ({self._season_name(p.b_id)})",
+                (f"{p.games}", p.games),
+                (f"{p.win}", p.win), (f"{p.draw}", p.draw), (f"{p.lose}", p.lose),
+                (f"{p.win_rate:.1f}%", p.win_rate)])
+        self._fill(self.tbl_synergy, rows, enable_sort=False)
+        # 승률(6열)에 색: 50% 기준으로 위는 초록·아래는 빨강. spId 는 이름 셀에.
+        for r, p in enumerate(pairs):
+            self._tint(self.tbl_synergy.item(r, 6), abs(p.win_rate - 50), 50,
+                       T.GREEN if p.win_rate >= 50 else T.RED)
+            a_item = self.tbl_synergy.item(r, 0)
+            b_item = self.tbl_synergy.item(r, 1)
+            if a_item:
+                a_item.setData(Qt.ItemDataRole.UserRole, p.a_id)
+            if b_item:
+                b_item.setData(Qt.ItemDataRole.UserRole, p.b_id)
+        self.tbl_synergy.sortByColumn(6, Qt.SortOrder.DescendingOrder)
+        self.tbl_synergy.setSortingEnabled(True)
+
+    def _on_synergy_double_clicked(self, item) -> None:
+        """조합 표에서 선수 이름 더블클릭 → 그 선수 카드. spId 는 이름 셀 UserRole."""
+        sp_id = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(sp_id, int):
+            self._show_player_info(sp_id)
 
     def _build_shotmap_tab(self) -> QWidget:
         """슛 맵 — 슛 좌표를 하프 피치 위에 점으로. 내 슛/상대 슛 토글."""
@@ -1754,8 +1899,10 @@ class MainWindow(QMainWindow):
         self._render_trend(self._matches)
         self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
         self._render_clutch(self._details, self._matches)  # 승부처도 누적 전체 기준
+        self._render_diagnosis(self._details)  # 성적 진단도 누적 전체 기준(표본 크게)
         self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
         self._render_finishing(details)  # 결정력도 표시 구간 기준
+        self._render_synergy(self._details)  # 선수 조합도 누적 전체 기준
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
