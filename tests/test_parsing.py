@@ -5,8 +5,17 @@
 파싱은 회귀가 잘 어울리는 영역이라(CLAUDE.md "나중에" 항목), 실응답을 받은
 지금 도입했다.
 
-픽스처는 tests/fixtures/ 의 실제 매치 상세 JSON 4개 + manifest.json(내 ouid).
+픽스처는 tests/fixtures/ 의 매치 상세 JSON 4개 + manifest.json(기준 ouid).
 네트워크 없이 즉시 돈다. pytest 없이도 `python tests/test_parsing.py` 로 실행.
+
+**픽스처의 식별자는 익명화되어 있다.** 실제 응답을 받아 만들되 ouid·구단주명·matchId·
+경기 날짜는 가짜 값으로 바꿨다. 이 저장소는 공개이고, 그 넷은 넥슨 API 로 실제 계정을
+되짚을 수 있는 값이다(matchId 하나만 있어도 조회하면 참가자가 그대로 나온다).
+반대로 골·점유율·슛 좌표·선수ID 는 **원본 그대로**다 — 회귀 테스트의 의미가 거기 있다.
+
+픽스처를 새로 받으면 같은 방식으로 익명화한 뒤 커밋할 것:
+  ouid → 000…0001~0005 · 구단주명 → 테스트구단주/상대구단주N
+  matchId → aaa…0001~0004 (파일명도 함께) · matchDate → 순서만 보존한 가짜 날짜
 
 포함된 4경기(다양성 확보): 4:3 승 · 1:1 무 · 1:2 패 · 0:5 "오류"(중단).
 "오류" 경기는 승/무/패 문자열이 아니라, 그런 경기를 오집계하지 않는지까지 본다.
@@ -37,10 +46,10 @@ def test_parse_match():
     ouid, mids, details = _load()
     by_id = {d["matchId"]: d for d in details}
     expect = {
-        "6a31632e39c3c2475cc4d14a": (1, 2, "패", 46, 2),
-        "6a32b46359f56fe853c0e706": (4, 3, "승", 53, 8),
-        "6a32c212fb2df8f380dc3105": (1, 1, "무", 58, 7),
-        "6a39ecb64296647b21d285cc": (0, 5, "오류", 0, 0),
+        "aaaaaaaaaaaaaaaaaaaa0001": (1, 2, "패", 46, 2),
+        "aaaaaaaaaaaaaaaaaaaa0002": (4, 3, "승", 53, 8),
+        "aaaaaaaaaaaaaaaaaaaa0003": (1, 1, "무", 58, 7),
+        "aaaaaaaaaaaaaaaaaaaa0004": (0, 5, "오류", 0, 0),
     }
     for mid, (gf, ga, res, poss, shoot) in expect.items():
         ms = models.parse_match(by_id[mid], ouid)
