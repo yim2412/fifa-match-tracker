@@ -58,8 +58,10 @@ python app_main.py
 # 5) 파싱·집계 회귀 테스트 (네트워크 없이, 실제 응답 픽스처로)
 python tests/test_parsing.py
 python tests/test_bot.py
+node tests/test_adapter.js
 
-# 6) (선택) 카카오톡 오픈채팅 봇 서버 — 자세한 건 bot/README.md
+# 6) (선택) 카카오톡 오픈채팅 봇 — 서버는 bot/README.md,
+#    카톡에 붙이는 방법은 adapters/README.md
 python -m bot.server
 ```
 
@@ -80,8 +82,10 @@ python -m bot.server
 | `config.py` | API 키 로드(.env), DB 경로, 매치 종류·조회 개수 기본값 |
 | `check_api.py` | 터미널에서 키·엔드포인트·집계·DB 동작 확인용 |
 | `bot/` | 카카오톡 오픈채팅 봇 서버 — 같은 API·DB를 쓰는 별도 진입점([bot/README.md](bot/README.md)) |
+| `adapters/` | 봇을 카카오톡에 붙이는 어댑터 — 메신저봇R 스크립트([adapters/README.md](adapters/README.md)) |
 | `tests/test_parsing.py` | 파싱·집계 회귀 테스트 — 실제 응답 픽스처로 골든값 고정(네트워크 없음) |
 | `tests/test_bot.py` | 봇 명령 처리 회귀 테스트 — 채팅 한 줄 → 답장까지(네트워크 없음) |
+| `tests/test_adapter.js` | 어댑터 회귀 테스트 — 가짜 `java.*` 로 메신저봇R 진입점을 그대로 실행(node) |
 
 기본 매치 종류는 **감독모드(52)** 다 — 이 앱은 감독모드 전적을 본다.
 
