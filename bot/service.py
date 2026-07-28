@@ -151,6 +151,32 @@ class BotService:
         except (NexonAPIError, Exception):
             return None
 
+    # ── 채팅방 사용자 등록 ────────────────────────────────────────────
+    def register(self, room: str, sender: str, nickname: str) -> None:
+        """기본 계정 등록. 없는 구단주명이면 NexonAPIError 로 막는다 —
+        오타를 등록해 두면 이후 명령이 전부 실패해서 원인을 찾기 어렵다."""
+        nickname = nickname.strip()
+        self.ouid(nickname)
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.set_bot_user(conn, room, sender, nickname)
+        finally:
+            conn.close()
+
+    def registered(self, room: str, sender: str) -> str | None:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            return store.get_bot_user(conn, room, sender)
+        finally:
+            conn.close()
+
+    def unregister(self, room: str, sender: str) -> bool:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            return store.clear_bot_user(conn, room, sender)
+        finally:
+            conn.close()
+
     # ── 메타데이터 ────────────────────────────────────────────────────
     def meta_map(self, name: str, key: str, value: str) -> dict:
         """spid/spposition 같은 코드→이름 표. 8만 건짜리(spid)를 명령마다 파싱하면

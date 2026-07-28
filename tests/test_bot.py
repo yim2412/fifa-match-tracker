@@ -43,10 +43,20 @@ class _FakeService:
 
     def __init__(self):
         self.calls: list[tuple[str, int | None]] = []
+        self.saved: dict[tuple[str, str], str] = {}
 
     def lookup(self, nickname: str, limit: int | None = None) -> Lookup:
         self.calls.append((nickname, limit))
         return _lookup()
+
+    def register(self, room: str, sender: str, nickname: str) -> None:
+        self.saved[(room, sender)] = nickname
+
+    def registered(self, room: str, sender: str) -> str | None:
+        return self.saved.get((room, sender))
+
+    def unregister(self, room: str, sender: str) -> bool:
+        return self.saved.pop((room, sender), None) is not None
 
     def division_names(self) -> dict:
         return {900: "챔피언스", 1000: "슈퍼챌린지"}
@@ -107,6 +117,42 @@ def test_players_uses_details():
     text = fmt.players(_lookup(), {}, {}, n=3)
     assert "주요 선수 3명" in text, text
     assert "평점" in text
+    # 선수당 한 줄 — 두 줄씩 쓰면 카톡이 말풍선을 접는다
+    assert len(text.splitlines()) == 5, text
+
+
+def test_today_counts_only_that_day():
+    lookup = _lookup()
+    played = next(m for m in lookup.matches if "승" in m.result)
+    day = played.match_date.date()
+    text = fmt.today(lookup, on=day)
+
+    assert f"{day:%m/%d}" in text, text
+    same_day = [m for m in lookup.matches
+                if m.match_date and m.match_date.date() == day]
+    assert f"{len(same_day)}경기" in text, text
+    assert played.opponent in text, text
+    # 다른 날 경기는 섞이지 않는다
+    other = next(m for m in lookup.matches if m.match_date.date() != day)
+    assert other.opponent not in text, text
+
+
+def test_today_when_only_aborted_matches():
+    """그 날 경기가 전부 "오류"(중단)면 summarize 가 0을 준다. 그때 요약 줄이
+    통째로 빠져 머리글과 목록 사이가 비어 보이던 것을 막는다."""
+    lookup = _lookup()
+    aborted = next(m for m in lookup.matches
+                   if not any(k in m.result for k in ("승", "무", "패")))
+    text = fmt.today(lookup, on=aborted.match_date.date())
+    assert "집계된 경기가 없습니다" in text, text
+    assert "\n\n" not in text, text  # 빈 줄이 남지 않는다
+
+
+def test_unnamed_opponent_is_labeled():
+    """상대 기록이 없는 경기를 "vs -" 로 두면 무슨 경기인지 알 수 없다."""
+    lookup = _lookup()
+    lookup.matches[0].opponent = "-"
+    assert "(상대 기록 없음)" in fmt.recent(lookup, 1), fmt.recent(lookup, 1)
 
 
 # ── 라우터 ──────────────────────────────────────────────────────────────
@@ -124,15 +170,76 @@ def test_router_help_needs_no_api():
     assert fake.calls == []  # 도움말은 조회를 타지 않는다
 
 
-def test_router_cooldown_and_room_memory():
+def test_router_cooldown_is_per_person():
+    """쿨다운이 방 단위면 한 명이 치는 동안 그 방의 다른 사람이 막힌다."""
     fake = _FakeService()
     r = CommandRouter(service=fake)
-    assert "테스트구단주" in r.handle("방A", "나", "!전적 홍길동")
-    assert r.handle("방A", "나", "!전적 홍길동") is None      # 쿨다운
-    assert r.handle("방B", "나", "!전적 홍길동") is not None  # 방이 다르면 통과
-    # 닉네임을 빼면 그 방에서 마지막으로 조회한 계정을 쓴다
-    assert "주요 선수" in r.handle("방A", "나", "!선수")
+    assert "테스트구단주" in r.handle("방A", "갑", "!전적 홍길동")
+    assert r.handle("방A", "갑", "!전적 홍길동") is None       # 같은 사람 — 쿨다운
+    assert r.handle("방A", "을", "!전적 홍길동") is not None   # 옆 사람은 통과
+    assert r.handle("방B", "갑", "!전적 홍길동") is not None   # 방이 달라도 통과
+
+
+def test_router_remembers_per_person():
+    """방 단위로 기억하면 옆 사람이 조회한 순간 내 !선수 가 남의 계정을 본다."""
+    fake = _FakeService()
+    r = CommandRouter(service=fake)
+    r.handle("방A", "갑", "!전적 홍길동")
+    r.handle("방A", "을", "!전적 다른사람")
+    assert "주요 선수" in r.handle("방A", "갑", "!선수")
     assert fake.calls[-1][0] == "테스트구단주", fake.calls
+
+
+def test_register_then_short_commands():
+    fake = _FakeService()
+    r = CommandRouter(service=fake)
+    assert "등록했습니다" in r.handle("방", "갑", "!등록 홍길동")
+    assert fake.saved[("방", "갑")] == "홍길동", fake.saved
+
+    # 등록 뒤에는 구단주명 없이 친다
+    assert "3경기 1승 1무 1패" in r.handle("방", "갑", "!전적")
+    assert fake.calls[-1][0] == "홍길동", fake.calls
+    # 등록은 사람마다 따로 — 옆 사람은 그대로 안내를 받는다
+    assert "!등록" in r.handle("방", "을", "!전적")
+
+    # 등록·해제는 쿨다운을 타지 않는다 — 오타를 냈을 때 바로 다시 쳐야 한다
+    assert "홍길동" in r.handle("방", "갑", "!등록")      # 인자 없이 = 확인
+    assert "해제했습니다" in r.handle("방", "갑", "!해제")
+    assert "등록된 계정이 없습니다" in r.handle("방", "갑", "!해제")
+
+
+def test_register_has_no_cooldown():
+    """오타를 등록한 직후 바로 고쳐 칠 수 있어야 한다(실사용 스모크에서 겪음)."""
+    r = CommandRouter(service=_FakeService())
+    assert r.handle("방", "갑", "!등록 오타") is not None
+    assert r.handle("방", "갑", "!등록 제대로") is not None
+    # 조회 명령은 그대로 쿨다운이 걸린다
+    assert r.handle("방", "갑", "!전적 홍길동") is not None
+    assert r.handle("방", "갑", "!전적 홍길동") is None
+
+
+def test_register_rejects_unknown_account():
+    """오타를 등록해 두면 이후 명령이 전부 실패해서 원인을 찾기 어렵다."""
+    from nexon_api import NexonAPIError
+
+    fake = _FakeService()
+
+    def boom(room, sender, nickname):
+        raise NexonAPIError("'오타닉' 구단주명을 찾지 못했습니다.",
+                            code="OPENAPI00004")
+    fake.register = boom
+
+    r = CommandRouter(service=fake)
+    assert "찾지 못했습니다" in r.handle("방", "갑", "!등록 오타닉")
+    assert fake.saved == {}, fake.saved
+
+
+def test_today_command():
+    fake = _FakeService()
+    r = CommandRouter(service=fake)
+    reply = r.handle("방", "갑", "!오늘 홍길동")
+    # 픽스처 경기는 과거 날짜라 "오늘" 에는 잡히지 않는다
+    assert "오늘 치른 경기가 없습니다" in reply, reply
 
 
 def test_router_needs_nickname():

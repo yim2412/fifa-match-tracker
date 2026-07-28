@@ -43,6 +43,16 @@ CREATE TABLE IF NOT EXISTS team_colors (
     team_value INTEGER,
     fetched_at TEXT NOT NULL
 );
+-- 카톡 봇 전용 — 채팅방에서 "!등록" 한 사람의 기본 구단주명.
+-- accounts 와 따로 두는 이유: accounts 는 GUI 의 "최근 검색" 목록이고,
+-- 봇은 거기를 건드리지 않는다(방 사람들 닉네임으로 뒤덮이면 안 된다).
+-- 방이 다르면 다른 계정을 쓸 수 있어 (방, 사람) 을 키로 잡는다.
+CREATE TABLE IF NOT EXISTS bot_users (
+    room     TEXT NOT NULL,
+    sender   TEXT NOT NULL,
+    nickname TEXT NOT NULL,
+    PRIMARY KEY (room, sender)
+);
 """
 
 # 팀컬러는 잘 안 바뀌지만 팀가치(구단가치)는 강화로 계속 오르는 값이라
@@ -188,6 +198,31 @@ def remove_account(conn: sqlite3.Connection, ouid: str) -> None:
     """목록에서만 뺀다 — 쌓아 둔 경기는 지우지 않는다."""
     conn.execute("DELETE FROM accounts WHERE ouid = ?", (ouid,))
     conn.commit()
+
+
+# ── 카톡 봇 사용자 기본 계정 ────────────────────────────────────────────
+def set_bot_user(conn: sqlite3.Connection, room: str, sender: str,
+                 nickname: str) -> None:
+    conn.execute(
+        "INSERT INTO bot_users (room, sender, nickname) VALUES (?, ?, ?)"
+        " ON CONFLICT(room, sender) DO UPDATE SET nickname=excluded.nickname",
+        (room, sender, nickname))
+    conn.commit()
+
+
+def get_bot_user(conn: sqlite3.Connection, room: str, sender: str) -> str | None:
+    row = conn.execute(
+        "SELECT nickname FROM bot_users WHERE room = ? AND sender = ?",
+        (room, sender)).fetchone()
+    return row["nickname"] if row else None
+
+
+def clear_bot_user(conn: sqlite3.Connection, room: str, sender: str) -> bool:
+    """지운 게 있으면 True — 등록된 적 없는데 "해제했다"고 답하지 않으려고."""
+    cur = conn.execute("DELETE FROM bot_users WHERE room = ? AND sender = ?",
+                       (room, sender))
+    conn.commit()
+    return cur.rowcount > 0
 
 
 # ── 상대 팀컬러·팀가치 캐시 ──────────────────────────────────────────────
