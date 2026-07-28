@@ -57,6 +57,10 @@ python app_main.py
 
 # 5) 파싱·집계 회귀 테스트 (네트워크 없이, 실제 응답 픽스처로)
 python tests/test_parsing.py
+python tests/test_bot.py
+
+# 6) (선택) 카카오톡 오픈채팅 봇 서버 — 자세한 건 bot/README.md
+python -m bot.server
 ```
 
 ## 파일 구조
@@ -75,7 +79,9 @@ python tests/test_parsing.py
 | `playerinfo.py` | 선수 카드 상세(능력치·특성·시세·클럽경력) — 넥슨 모바일 데이터센터 HTML 스크래핑 |
 | `config.py` | API 키 로드(.env), DB 경로, 매치 종류·조회 개수 기본값 |
 | `check_api.py` | 터미널에서 키·엔드포인트·집계·DB 동작 확인용 |
+| `bot/` | 카카오톡 오픈채팅 봇 서버 — 같은 API·DB를 쓰는 별도 진입점([bot/README.md](bot/README.md)) |
 | `tests/test_parsing.py` | 파싱·집계 회귀 테스트 — 실제 응답 픽스처로 골든값 고정(네트워크 없음) |
+| `tests/test_bot.py` | 봇 명령 처리 회귀 테스트 — 채팅 한 줄 → 답장까지(네트워크 없음) |
 
 기본 매치 종류는 **감독모드(52)** 다 — 이 앱은 감독모드 전적을 본다.
 
