@@ -23,6 +23,7 @@ import config
 import images
 import playerinfo
 import ranker
+import seasons as sn
 import stats as st
 import store
 import theme as T
@@ -443,8 +444,34 @@ class TeamColorLoader(QThread):
             self.finished_all.emit()
 
 
+class SeasonLoader(QThread):
+    """감독모드 랭킹 시즌표를 백그라운드로 받아 온다(데이터센터 스크래핑).
+
+    한 번의 GET 이라 금방 끝나지만, 넥슨이 느리거나 점검 중이면 몇 초씩
+    걸릴 수 있어 UI 스레드에서 부르면 안 된다. 실패해도 조용히 지나간다 —
+    시즌 기능만 못 쓰고 판수 기준 화면은 그대로 돌아가야 한다.
+    """
+
+    loaded = pyqtSignal(list)   # list[sn.Season]
+
+    def run(self) -> None:
+        try:
+            items = sn.fetch_seasons()
+        except sn.SeasonError:
+            return
+        try:
+            conn = store.open_db(config.DB_PATH)  # DB 는 스레드마다 따로
+            try:
+                store.save_seasons(conn, items)
+            finally:
+                conn.close()
+        except Exception:
+            pass  # 캐시 저장 실패가 이번 화면까지 막을 이유는 없다
+        self.loaded.emit(items)
+
+
 class MainWindow(QMainWindow):
-    MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
+    MATCH_COLUMNS =["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
                      "패스성공률", "평점"]
     PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률",
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
@@ -479,6 +506,8 @@ class MainWindow(QMainWindow):
     TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "승", "무", "패", "승률"]
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
                               "평균 팀가치", "최저 팀가치", "최고 팀가치"]
+    SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률",
+                      "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -497,8 +526,15 @@ class MainWindow(QMainWindow):
         self._badge_path = ""      # 등급 배지 아이콘 로컬 캐시 경로
         self._seasons: dict = {}   # seasonId -> {className, seasonImg} (get_meta("seasonid"))
         self._season_icon_dir = config.CACHE_DIR / "season_icons"
+        # _matches/_details 는 "지금 보고 있는 것" — 시즌 필터가 걸리면 그 시즌
+        # 경기만 담긴다. _matches_all/_details_all 이 누적 전체(원본)다.
         self._matches: list[MatchSummary] = []
         self._details: list[dict] = []
+        self._matches_all: list[MatchSummary] = []
+        self._details_all: list[dict] = []
+        # 감독모드 랭킹 시즌표(seasons.py). 선수 카드 시즌(self._seasons)과 다르다.
+        self._rank_seasons: list[sn.Season] = []
+        self._season_loader: SeasonLoader | None = None
         self._names: dict = {}
         self._positions: dict = {}
         self._trend_reset_pending = True
@@ -522,6 +558,7 @@ class MainWindow(QMainWindow):
         self.resize(1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
         self._build_ui()
         self._refresh_recent()
+        self._load_season_cache()  # 시즌 콤보·시즌별 성적 탭이 쓸 시즌표
 
     # ── UI ────────────────────────────────────────────────────────────
     PAGE_SEARCH, PAGE_RANKER, PAGE_ANALYSIS = 0, 1, 2
@@ -744,6 +781,17 @@ class MainWindow(QMainWindow):
         rl = QHBoxLayout(rng)
         rl.setContentsMargins(14, 10, 14, 10)
 
+        # 시즌 필터가 먼저 걸리고, 그 안에서 시작~끝 판수를 자른다.
+        lb_season = QLabel("시즌")
+        lb_season.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.cb_season = NoScrollComboBox()
+        self.cb_season.setMinimumWidth(170)
+        self.cb_season.addItem("전체", None)
+        self.cb_season.currentIndexChanged.connect(self._on_season_changed)
+        rl.addWidget(lb_season)
+        rl.addWidget(self.cb_season)
+        rl.addSpacing(12)
+
         self.sp_from = QSpinBox()
         self.sp_from.setRange(1, 1)
         self.sp_from.setFixedWidth(72)
@@ -783,6 +831,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_opponents_tab(), "상대 전적")
         self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
         self.tabs.addTab(self._build_period_tab(), "기간별 추이")
+        self.tabs.addTab(self._build_season_tab(), "시즌별 성적")
         self.tabs.addTab(self._build_clutch_tab(), "승부처 분석")
         self.tabs.addTab(self._build_diagnosis_tab(), "성적 진단")
         self.tabs.addTab(self._build_shotmap_tab(), "슛 맵")
@@ -850,6 +899,20 @@ class MainWindow(QMainWindow):
         self.tbl_teamcolor_rank.itemDoubleClicked.connect(
             self._on_teamcolor_double_clicked)
         v.addWidget(self.tbl_teamcolor_rank, 1)
+        return w
+
+    def _build_season_tab(self) -> QWidget:
+        """시즌끼리 가로로 비교하는 표. 위 시즌 콤보와 달리 여기는 언제나
+        누적 전체(_matches_all)를 시즌별로 나눠 보여준다 — 필터를 걸어 둔
+        채로도 "저번 시즌은 어땠지"를 볼 수 있어야 하기 때문."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_season_note = QLabel("")
+        self.lb_season_note.setWordWrap(True)
+        self.lb_season_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_season_note)
+        self.tbl_seasons = self._make_table(self.SEASON_COLUMNS)
+        v.addWidget(self.tbl_seasons, 1)
         return w
 
     def _build_trend_tab(self) -> QWidget:
@@ -1791,6 +1854,99 @@ class MainWindow(QMainWindow):
         self._render_all()
         self._on_fetch_team_colors()  # 범위가 넓어졌으면 새로 들어온 상대만 조회
 
+    # ── 시즌 ──────────────────────────────────────────────────────────
+    ONGOING = "ongoing"  # 콤보 항목 데이터 — 시즌표에 아직 안 올라온 진행 중 시즌
+
+    def _load_season_cache(self) -> None:
+        """캐시된 시즌표를 즉시 쓰고, 오래됐으면 백그라운드로 다시 받는다."""
+        stale = True
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                self._rank_seasons = store.load_seasons(conn)
+                stale = store.seasons_stale(conn)
+            finally:
+                conn.close()
+        except Exception:
+            pass  # 시즌표가 없어도 판수 기준 화면은 그대로 돈다
+        if stale and not (self._season_loader and self._season_loader.isRunning()):
+            self._season_loader = SeasonLoader()
+            self._season_loader.loaded.connect(self._on_seasons_loaded)
+            self._season_loader.start()
+
+    def _on_seasons_loaded(self, items: list) -> None:
+        self._rank_seasons = items
+        if self._matches_all:
+            # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
+            # 선택은 "전체" 그대로라 표시 중인 화면은 건드리지 않는다.
+            self._rebuild_season_combo()
+            self._render_seasons()
+
+    def _season_groups(self) -> list[tuple[object, list[MatchSummary]]]:
+        """누적 전체를 시즌별로 묶은 것 — 콤보와 시즌별 성적 표가 같이 쓴다."""
+        return sn.group_by_season(self._rank_seasons, self._matches_all,
+                                  key=lambda m: m.match_date)
+
+    def _rebuild_season_combo(self) -> None:
+        """경기가 실제로 있는 시즌만 콤보에 올린다 — 2018년까지 89개가 다
+        떠 있으면 고르기만 번거롭다. 재검색이어도 같은 항목이 남아 있으면
+        고르고 있던 시즌을 유지한다."""
+        prev = self.cb_season.currentData()
+        self.cb_season.blockSignals(True)
+        self.cb_season.clear()
+        self.cb_season.addItem(f"전체 ({len(self._matches_all)}경기)", None)
+        for season, group in self._season_groups():
+            if season is None:
+                self.cb_season.addItem(f"진행 중 ({len(group)}경기)", self.ONGOING)
+            else:
+                self.cb_season.addItem(f"{season.label} ({len(group)}경기)", season)
+        idx = self.cb_season.findData(prev) if prev is not None else 0
+        self.cb_season.setCurrentIndex(idx if idx >= 0 else 0)
+        self.cb_season.blockSignals(False)
+
+    def _in_selected_season(self, when, selected) -> bool:
+        if when is None:
+            return False
+        if selected == self.ONGOING:
+            last_end = max((s.end for s in self._rank_seasons), default=None)
+            return last_end is not None and when.date() >= last_end
+        return selected.contains(when)
+
+    def _on_season_changed(self) -> None:
+        self._apply_season()
+
+    def _apply_season(self, render: bool = True) -> None:
+        """콤보에서 고른 시즌만 남긴다.
+
+        _matches/_details 자체를 갈아끼우므로, "누적 전체 기준"으로 그리는
+        탭들(승률 그래프·기간별 추이·승부처 등)도 자연히 그 시즌 안에서만
+        계산된다 — 시즌을 골랐다면 그게 기대하는 동작이다.
+        """
+        selected = self.cb_season.currentData()
+        if selected is None:
+            self._matches, self._details = self._matches_all, self._details_all
+        else:
+            self._matches = [m for m in self._matches_all
+                             if self._in_selected_season(m.match_date, selected)]
+            ids = {m.match_id for m in self._matches}
+            self._details = [d for d in self._details_all
+                             if d.get("matchId") in ids]
+
+        # 시작~끝 스핀박스 — 처음엔 최근 100경기(또는 그 이하)를 기본으로 보여준다.
+        total_n = len(self._matches)
+        self.sp_from.blockSignals(True)
+        self.sp_to.blockSignals(True)
+        self.sp_from.setRange(1, max(total_n, 1))
+        self.sp_to.setRange(1, max(total_n, 1))
+        self.sp_from.setValue(1)
+        self.sp_to.setValue(min(PAGE_SIZE, total_n) or 1)
+        self.sp_from.blockSignals(False)
+        self.sp_to.blockSignals(False)
+
+        if render and self._matches_all:
+            self._render_all()
+            self._on_fetch_team_colors()
+
     def _set_busy(self, busy: bool) -> None:
         for w in (*self._search_btns, *self._nick_edits, self.ed_search):
             w.setEnabled(not busy)
@@ -1838,18 +1994,11 @@ class MainWindow(QMainWindow):
             ed.setText(self._nick)
         if names:
             self._names, self._positions = names, positions
-        self._matches, self._details = matches, details
-
-        # 시작~끝 스핀박스 — 처음엔 최근 100경기(또는 그 이하)를 기본으로 보여준다.
-        total_n = len(matches)
-        self.sp_from.blockSignals(True)
-        self.sp_to.blockSignals(True)
-        self.sp_from.setRange(1, max(total_n, 1))
-        self.sp_to.setRange(1, max(total_n, 1))
-        self.sp_from.setValue(1)
-        self.sp_to.setValue(min(PAGE_SIZE, total_n) or 1)
-        self.sp_from.blockSignals(False)
-        self.sp_to.blockSignals(False)
+        self._matches_all, self._details_all = matches, details
+        # 시즌 콤보를 먼저 다시 채우고(이전 선택은 그대로 있으면 유지),
+        # 그 선택대로 _matches/_details 와 시작~끝 스핀박스를 맞춘다.
+        self._rebuild_season_combo()
+        self._apply_season(render=False)
 
         # 검색 결과는 먼저 랭커 카드 페이지로.
         self.stack.setCurrentIndex(self.PAGE_RANKER)
@@ -1898,6 +2047,7 @@ class MainWindow(QMainWindow):
         # 안 될 수 있어서, 누적 전체(self._matches)에서 30일을 계산한다.
         self._render_trend(self._matches)
         self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
+        self._render_seasons()  # 시즌별 성적만 누적 전체(_matches_all) 기준
         self._render_clutch(self._details, self._matches)  # 승부처도 누적 전체 기준
         self._render_diagnosis(self._details)  # 성적 진단도 누적 전체 기준(표본 크게)
         self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
@@ -2906,6 +3056,41 @@ class MainWindow(QMainWindow):
         self.card_ga.set(f"{s.avg_goals_against:.2f}")
         self._render_streak(matches)
 
+    def _render_seasons(self) -> None:
+        groups = self._season_groups()
+        last_end = max((s.end for s in self._rank_seasons), default=None)
+        rows = []
+        for season, group in groups:
+            s = summarize(group)
+            if season is None:
+                label, span, key = "진행 중", f"{last_end:%Y-%m-%d} ~", 99999999
+            else:
+                label, span = season.label, season.span_text
+                key = int(season.start.strftime("%Y%m%d"))
+            rows.append([
+                (label, key), span,
+                (f"{s.total:,}", s.total),
+                (f"{s.win:,}", s.win), (f"{s.draw:,}", s.draw),
+                (f"{s.lose:,}", s.lose),
+                (f"{s.win_rate:.1f}%", s.win_rate),
+                (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
+                (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
+                (f"{s.avg_possession:.1f}%", s.avg_possession),
+                (f"{s.avg_rating:.2f}", s.avg_rating),
+            ])
+        self._fill(self.tbl_seasons, rows)
+
+        if not self._rank_seasons:
+            self.lb_season_note.setText(
+                "※ 넥슨 데이터센터에서 시즌표를 받지 못했습니다 —"
+                " 잠시 후 다시 검색하면 채워집니다(그동안 판수 기준은 그대로 씁니다).")
+        else:
+            self.lb_season_note.setText(
+                "※ 넥슨 오픈API 는 과거 경기를 돌려주지 않습니다 — 이 앱으로"
+                " 조회하기 시작한 뒤 쌓인 경기만 시즌에 잡히므로, 앱을 쓰기 전"
+                " 시즌은 비어 있거나 실제보다 적게 나옵니다."
+                " · '진행 중'은 아직 데이터센터 시즌표에 안 올라온 최신 시즌입니다.")
+
     def _render_streak(self, matches: list[MatchSummary]) -> None:
         kind, n = current_streak(matches)
         best_win, best_lose = longest_streaks(self._matches)
@@ -3113,6 +3298,11 @@ class MainWindow(QMainWindow):
         for loader in self._compare_squad_loaders:
             loader.cancel()
             loader.wait(500)
+        if self._season_loader and self._season_loader.isRunning():
+            # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다.
+            if not self._season_loader.wait(3000):
+                self._season_loader.terminate()
+                self._season_loader.wait(1000)
         if self._ability_sim_loader and self._ability_sim_loader.isRunning():
             self._ability_sim_loader.wait(2000)
         if self._position_ovr_loader and self._position_ovr_loader.isRunning():

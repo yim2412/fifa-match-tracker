@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from seasons import Season
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS matches (
@@ -47,6 +49,15 @@ CREATE TABLE IF NOT EXISTS team_colors (
 -- accounts 와 따로 두는 이유: accounts 는 GUI 의 "최근 검색" 목록이고,
 -- 봇은 거기를 건드리지 않는다(방 사람들 닉네임으로 뒤덮이면 안 된다).
 -- 방이 다르면 다른 계정을 쓸 수 있어 (방, 사람) 을 키로 잡는다.
+-- 감독모드 랭킹 시즌표(데이터센터 스크래핑, seasons.py). 확정된 과거 시즌은
+-- 안 변하지만 새 시즌이 시작되면 목록에 한 줄이 붙으므로 TTL 안에서만 쓴다.
+CREATE TABLE IF NOT EXISTS seasons (
+    no         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    start_date TEXT NOT NULL,
+    end_date   TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS bot_users (
     room     TEXT NOT NULL,
     sender   TEXT NOT NULL,
@@ -58,6 +69,10 @@ CREATE TABLE IF NOT EXISTS bot_users (
 # 팀컬러는 잘 안 바뀌지만 팀가치(구단가치)는 강화로 계속 오르는 값이라
 # 같이 저장하는 이상 짧게 간다 — 2026-07-23 사용자와 합의(둘 다 7일).
 TEAM_COLOR_TTL_DAYS = 7
+
+# 시즌은 두 달에 한 번꼴로 바뀐다. 하루에 한 번만 확인해도 새 시즌을 늦게
+# 알아차릴 일이 없고, 조회 실패해도 지난 캐시를 계속 쓴다(load_seasons).
+SEASON_TTL_DAYS = 1
 
 
 def open_db(path: Path | str) -> sqlite3.Connection:
@@ -247,6 +262,47 @@ def load_team_colors(conn: sqlite3.Connection, nicknames: list[str],
                 continue  # 구버전 캐시 — 팀가치 백필을 위해 재조회 대상으로 남긴다
             out[row["nickname"]] = (row["team_color"], row["team_value"])
     return out
+
+
+def load_seasons(conn: sqlite3.Connection) -> list[Season]:
+    """캐시된 시즌표를 최신순으로. 오래됐어도 그대로 준다 — 지난 시즌 구간은
+    변하지 않으므로, 네트워크가 안 될 때 빈 목록을 주는 것보다 낫다.
+    (새 시즌이 붙었는지는 seasons_stale 로 따로 판단한다.)"""
+    out = []
+    for r in conn.execute("SELECT no, name, start_date, end_date FROM seasons"
+                          " ORDER BY start_date DESC"):
+        try:
+            out.append(Season(no=r["no"], name=r["name"],
+                              start=date.fromisoformat(r["start_date"]),
+                              end=date.fromisoformat(r["end_date"])))
+        except ValueError:
+            continue
+    return out
+
+
+def seasons_stale(conn: sqlite3.Connection,
+                  ttl_days: int = SEASON_TTL_DAYS) -> bool:
+    """다시 긁어와야 하는지. 비어 있으면 당연히 True."""
+    row = conn.execute("SELECT MAX(fetched_at) AS t FROM seasons").fetchone()
+    if not row or not row["t"]:
+        return True
+    cutoff = (datetime.now() - timedelta(days=ttl_days)).isoformat(timespec="seconds")
+    return row["t"] < cutoff
+
+
+def save_seasons(conn: sqlite3.Connection, items: list[Season]) -> None:
+    if not items:
+        return
+    now = datetime.now().isoformat(timespec="seconds")
+    for s in items:
+        conn.execute(
+            "INSERT INTO seasons (no, name, start_date, end_date, fetched_at)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(no) DO UPDATE SET name=excluded.name,"
+            " start_date=excluded.start_date, end_date=excluded.end_date,"
+            " fetched_at=excluded.fetched_at",
+            (s.no, s.name, s.start.isoformat(), s.end.isoformat(), now))
+    conn.commit()
 
 
 def save_team_colors(conn: sqlite3.Connection,

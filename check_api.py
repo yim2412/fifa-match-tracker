@@ -196,6 +196,20 @@ def main() -> int:
         print(f"[FAIL] DB: {type(e).__name__}: {e}")
         return 1
 
+    try:
+        import seasons as sn
+        rank_seasons = sn.fetch_seasons()
+        latest = rank_seasons[0]
+        print(f"[OK]   랭킹 시즌표: {len(rank_seasons)}개 · 최신 {latest.label}"
+              f" ({latest.span_text})")
+        groups = sn.group_by_season(rank_seasons, matches,
+                                    key=lambda m: m.match_date)
+        for season, group in groups[:3]:
+            label = "진행 중" if season is None else season.label
+            print(f"       {label}: {len(group)}경기")
+    except Exception as e:
+        print(f"[WARN] 랭킹 시즌표 조회 실패(시즌별 보기만 영향): {e}")
+
     print("\n전부 통과 — python app_main.py 로 앱을 띄우세요.")
     return 0
 
