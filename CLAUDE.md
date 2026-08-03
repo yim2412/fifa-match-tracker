@@ -10,6 +10,7 @@
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다 |
+| `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵 |
 | `widgets.py` | 화면 부품 — 랭커 카드, 표, 축구장 스쿼드 배치(`PitchWidget`) 등 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위 — 오픈API엔 없음) |

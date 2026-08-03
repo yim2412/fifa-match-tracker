@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import analysis
 from models import (OpponentStat, current_streak, longest_streaks,
                     opponent_stats, summarize)
 from stats import aggregate_players
@@ -180,6 +181,22 @@ def players(lookup, names: dict, positions: dict, n: int = 6) -> str:
     return "\n".join(head + body)
 
 
+def flow(lookup) -> str:
+    """!분석 — 최근 흐름과 이기는/지는 방식을 문장으로.
+
+    섹션당 2개로 줄인다(앱은 3개) — 카톡 말풍선이 길면 "전체 보기"로 접혀서
+    한눈에 안 들어온다.
+    """
+    found = analysis.narrate(lookup.matches, lookup.details, lookup.ouid,
+                             per_section=2)
+    if not found:
+        return (f"[{lookup.nickname}]\n"
+                f"분석할 만큼 경기가 쌓이지 않았습니다"
+                f" (최소 {analysis.MIN_FLOW}경기).")
+    head = [f"[{lookup.nickname}] 흐름 분석", LINE]
+    return "\n".join(head) + "\n" + analysis.as_text(found, bullet=BULLET)
+
+
 def ranking(info) -> str:
     """!랭킹 — 넥슨 데이터센터 감독모드 랭킹(오픈API 에 없는 값)."""
     if not info.ranked:
@@ -205,6 +222,7 @@ HELP = "\n".join([
     "!최근 [구단주명] [개수] — 최근 경기 목록",
     "!상대 [구단주명] [상대명] — 자주 만난 상대 / 특정 상대 상성",
     "!선수 [구단주명] — 주요 선수 기록",
+    "!분석 [구단주명] — 최근 흐름 · 이기는/지는 패턴",
     "!랭킹 [구단주명] — 감독모드 순위·구단가치",
     "!해제 — 등록 취소",
     "!도움 — 이 안내",

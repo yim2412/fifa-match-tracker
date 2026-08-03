@@ -242,6 +242,18 @@ def test_today_command():
     assert "오늘 치른 경기가 없습니다" in reply, reply
 
 
+def test_flow_command():
+    """!분석 — 픽스처는 4경기뿐이라 표본 부족 안내가 나와야 한다.
+
+    "말할 게 없으면 침묵한다"가 analysis 의 핵심 규칙이라, 봇 쪽에서도
+    그게 사람이 읽는 안내로 나오는지까지 본다(빈 말풍선이면 봇이 죽은 줄 안다).
+    """
+    r = CommandRouter(service=_FakeService())
+    reply = r.handle("방", "갑", "!분석 홍길동")
+    assert "분석할 만큼 경기가 쌓이지 않았습니다" in reply, reply
+    assert "!분석" in fmt.HELP, "도움말에 명령이 빠졌다"
+
+
 def test_router_needs_nickname():
     r = CommandRouter(service=_FakeService())
     assert "구단주명" in r.handle("새방", "나", "!전적")

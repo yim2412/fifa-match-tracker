@@ -164,6 +164,9 @@ class CommandRouter:
         return fmt.players(lookup, self._svc.player_names(),
                            self._svc.position_names())
 
+    def _cmd_flow(self, room: str, sender: str, args: list[str]) -> str:
+        return fmt.flow(self._lookup(room, sender, args))
+
     def _cmd_ranking(self, room: str, sender: str, args: list[str]) -> str:
         nick = self._nickname(room, sender, args)
         if not nick:
@@ -190,6 +193,7 @@ _HANDLERS = {
     "최근": CommandRouter._cmd_recent,
     "상대": CommandRouter._cmd_opponent,
     "선수": CommandRouter._cmd_players,
+    "분석": CommandRouter._cmd_flow,
     "랭킹": CommandRouter._cmd_ranking,
     "도움": None,  # handle 에서 먼저 처리 — 쿨다운·API 없이 바로 답한다
 }

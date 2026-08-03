@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTabWidget, QVBoxLayout, QWidget,
 )
 
+import analysis
 import config
 import images
 import playerinfo
@@ -825,6 +826,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(rng)
 
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_analysis_tab(), "흐름 분석")
         self.tabs.addTab(self._build_players_tab(), "선수 지표")
         self.tabs.addTab(self._build_tactics_tab(), "전술·경기 결과")
         self.tabs.addTab(self._build_matches_tab(), "경기 목록")
@@ -997,6 +999,67 @@ class MainWindow(QMainWindow):
         now_text = f"현재 {n}{kind}" if kind else "현재 -"
         self.lb_streaks.setText(
             f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose} (누적 전체 기준)")
+
+    def _build_analysis_tab(self) -> QWidget:
+        """흐름 분석 — 집계를 문장으로. 최근 흐름 / 이기는 · 지는 패턴."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+
+        note = QLabel(
+            f"최근 흐름은 최근 {analysis.WINDOW}경기 · 이기는/지는 패턴은 누적 전체 기준. "
+            "표본이 모자란 항목은 표시하지 않습니다.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(note)
+
+        self.box_analysis: dict[str, QVBoxLayout] = {}
+        for sec in analysis.SECTIONS:
+            gb = QGroupBox(sec)
+            box = QVBoxLayout(gb)
+            box.setSpacing(6)
+            self.box_analysis[sec] = box
+            v.addWidget(gb)
+
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _analysis_row(self, ins, color: str) -> QWidget:
+        row = QWidget()
+        col = QVBoxLayout(row)
+        col.setContentsMargins(4, 2, 4, 2)
+        col.setSpacing(1)
+        head = QLabel(f"· {ins.headline}")
+        head.setWordWrap(True)
+        head.setStyleSheet(f"color: {color}; font-weight: bold;")
+        col.addWidget(head)
+        if ins.detail:
+            sub = QLabel(f"   {ins.detail}")
+            sub.setWordWrap(True)
+            sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+            col.addWidget(sub)
+        return row
+
+    def _render_analysis(self, matches: list[MatchSummary],
+                         details: list[dict]) -> None:
+        found = analysis.narrate(matches, details, self._ouid)
+        colors = {analysis.SEC_FLOW: T.TEXT,
+                  analysis.SEC_WIN: T.GREEN,
+                  analysis.SEC_LOSE: T.RED}
+        for sec, box in self.box_analysis.items():
+            self._clear(box)
+            rows = [i for i in found if i.section == sec]
+            if not rows:
+                empty = QLabel("표본이 모자라 아직 말할 수 있는 게 없습니다.")
+                empty.setStyleSheet(f"color: {T.TEXT_DIM};")
+                box.addWidget(empty)
+                continue
+            for ins in rows:
+                box.addWidget(self._analysis_row(ins, colors[sec]))
 
     def _build_clutch_tab(self) -> QWidget:
         """승부처 분석 — 선제골 승률·역전, 시간 구간별 득실, 시각대별 승률."""
@@ -2053,6 +2116,8 @@ class MainWindow(QMainWindow):
         self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
         self._render_finishing(details)  # 결정력도 표시 구간 기준
         self._render_synergy(self._details)  # 선수 조합도 누적 전체 기준
+        # 흐름 분석은 누적 전체 기준 — 패턴 규칙이 표본을 크게 잡아야 한다.
+        self._render_analysis(self._matches, self._details)
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
