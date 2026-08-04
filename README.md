@@ -246,6 +246,15 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
       빗나감 종류별 표시 on/off 체크박스, 표시 구간 기준. 요약(슛·골·유효슛률·전환율)은
       필터와 무관하게 전체 기준으로 표시. 상대 슛은 좌표가 상대 공격 기준이라 y(좌우)를
       뒤집어 내 시점으로 통일
+- [x] 슛 유형·거리별 득점률 — 슛 맵 탭 오른쪽 패널(`stats.shot_type_breakdown` ·
+      `stats.shot_distance_breakdown` · `widgets.RatioBarRow`). 이미 만든 `ShotMap`만
+      쓰는 순수 계산이라 추가 조회·파싱이 없다. **분모가 골이 아니라 슛** —
+      "전체 골 중 헤딩이 10%"(`result_breakdown.goal_types`)와 "헤딩 슛의 20%가
+      들어간다"는 다른 지표다. 거리는 박스 안(`inPenalty`) / 박스 밖 ~25m / 25m 이상,
+      박스 안 여부는 좌표 환산 대신 넥슨이 직접 주는 `inPenalty`를 그대로 쓴다.
+      슛 5개 미만인 칸은 비율을 숨긴다(`MIN_BUCKET_SHOTS`) — 1/2=50%는 정보가 아니다.
+      위쪽 내 슛/상대 슛 토글이 그대로 걸려서 상대 슛으로 두면 "어떤 유형·거리에
+      실점하는가"가 된다
 - [x] 성적 진단 탭 — 저장된 데이터만으로(추가 조회 없음) 상대 등급(`division`)별 승률·
       평균 득실(`stats.division_stats`)과 내 점유율 구간별(열세<40·균형40~60·우세>60)
       승률(`stats.possession_stats`). 누적 전체 기준

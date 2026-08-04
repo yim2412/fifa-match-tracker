@@ -161,6 +161,42 @@ def test_shot_xg_deterministic():
     assert st.decode_goal_time((1 << 24) | 300) == (1, 300)
 
 
+def test_shot_breakdown():
+    """유형·거리별 효율 — 쪼갠 합이 원본 슛 수와 맞는지가 핵심."""
+    ouid, _, details = _load()
+    for mine, total, goals in ((True, 17, 6), (False, 23, 11)):
+        sm = st.shot_map(details, ouid, mine=mine)
+        types = st.shot_type_breakdown(sm)
+        dists = st.shot_distance_breakdown(sm)
+        # 어떤 슛도 흘리거나 두 번 세면 안 된다.
+        assert sum(b.shots for b in types) == total, (mine, types)
+        assert sum(b.shots for b in dists) == total, (mine, dists)
+        assert sum(b.goals for b in types) == goals, (mine, types)
+        assert sum(b.goals for b in dists) == goals, (mine, dists)
+        # 유형은 슛 많은 순, 거리는 가까운 순 고정.
+        assert [b.shots for b in types] == sorted(
+            (b.shots for b in types), reverse=True)
+        assert [b.label for b in dists] == [
+            l for l in st._DIST_ORDER if l in {b.label for b in dists}]
+
+    sm = st.shot_map(details, ouid, mine=True)
+    got = {b.label: (b.goals, b.shots) for b in st.shot_type_breakdown(sm)}
+    assert got["일반(D)"] == (2, 8), got
+    assert got["헤더"] == (2, 2), got
+    got = {b.label: (b.goals, b.shots) for b in st.shot_distance_breakdown(sm)}
+    # 이 4경기의 골은 전부 박스 안에서 나왔다.
+    assert got[st.DIST_IN_BOX] == (6, 9), got
+    assert got[st.DIST_FAR][0] == 0, got
+
+    # 표본 미달 칸은 비율을 내지 않는다(화면에서 "—"로 나가는 근거).
+    small = [b for b in st.shot_type_breakdown(sm) if b.shots < st.MIN_BUCKET_SHOTS]
+    assert small and all(not b.enough for b in small)
+    assert all(b.enough for b in st.shot_type_breakdown(sm)
+               if b.shots >= st.MIN_BUCKET_SHOTS)
+    assert st.shot_type_breakdown(st.ShotMap()) == []
+    assert st.shot_distance_breakdown(st.ShotMap()) == []
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

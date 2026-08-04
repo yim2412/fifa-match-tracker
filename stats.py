@@ -945,6 +945,90 @@ def shot_map(details: list[dict], ouid: str, mine: bool = True) -> ShotMap:
     return sm
 
 
+# ── 슛 유형·거리별 효율 ────────────────────────────────────────────────────
+# 이미 만들어 둔 ShotMap 만 쓰는 순수 계산 — 추가 조회도 새 파싱도 없다.
+#
+# ⚠️ result_breakdown 의 goal_types 와 헷갈리면 안 된다. 저건 "넣은 골의 유형
+# 분포"(분모=골)고, 여기는 "그 유형으로 찼을 때 들어가는 비율"(분모=슛)이다.
+# 헤딩골이 전체 골의 10%라는 것과 헤딩 슛의 20%가 들어간다는 건 다른 말이다.
+MIN_BUCKET_SHOTS = 5   # 이보다 적으면 비율을 숨긴다 — 1/2=50% 는 정보가 아니다
+
+# 거리 구간. 박스 안 여부는 좌표로 재지 않고 넥슨이 주는 inPenalty 를 그대로
+# 믿는다(직접 주는 값이라 좌표 환산보다 정확하다). 박스 밖만 골라인까지의
+# 거리로 다시 두 칸으로 쪼갠다.
+FAR_SHOT_M = 25.0
+DIST_IN_BOX = "박스 안"
+DIST_MID = f"박스 밖 ~{FAR_SHOT_M:.0f}m"
+DIST_FAR = f"{FAR_SHOT_M:.0f}m 이상"
+_DIST_ORDER = (DIST_IN_BOX, DIST_MID, DIST_FAR)
+
+
+@dataclass
+class ShotBucket:
+    """한 구간(유형 하나·거리 하나)의 슛 성적."""
+    label: str
+    shots: int = 0
+    goals: int = 0
+    on_target: int = 0   # 골 포함 유효슛
+    xg: float = 0.0
+
+    @property
+    def enough(self) -> bool:
+        """비율을 말해도 되는 표본인가."""
+        return self.shots >= MIN_BUCKET_SHOTS
+
+    @property
+    def conversion(self) -> float:  # 득점률 = 골 / 슛
+        return self.goals / self.shots * 100 if self.shots else 0.0
+
+    @property
+    def effective_rate(self) -> float:  # 유효슛률 = (골+막힌 유효슛) / 슛
+        return self.on_target / self.shots * 100 if self.shots else 0.0
+
+    @property
+    def xg_diff(self) -> float:  # +면 근사 기대보다 더 넣은 것
+        return self.goals - self.xg
+
+
+def shot_distance_m(s: Shot) -> float:
+    """슛 지점에서 골라인까지의 거리(m). 좌우로 벗어난 폭까지 포함한다."""
+    dx = max(0.0, (1.0 - s.x)) * _PITCH_LEN
+    dy = abs(s.y - 0.5) * _PITCH_WID
+    return math.hypot(dx, dy)
+
+
+def _distance_label(s: Shot) -> str:
+    if s.in_penalty:
+        return DIST_IN_BOX
+    return DIST_MID if shot_distance_m(s) < FAR_SHOT_M else DIST_FAR
+
+
+def _bucketize(shots: list, key) -> dict[str, ShotBucket]:
+    buckets: dict[str, ShotBucket] = {}
+    for s in shots:
+        b = buckets.setdefault(key(s), ShotBucket(key(s)))
+        b.shots += 1
+        b.xg += s.xg
+        if s.result == SHOT_GOAL:
+            b.goals += 1
+            b.on_target += 1
+        elif s.result == SHOT_ON_TARGET:
+            b.on_target += 1
+    return buckets
+
+
+def shot_type_breakdown(sm: ShotMap) -> list[ShotBucket]:
+    """슛 유형별 효율. 슛이 많은 순 — 실제로 자주 쓰는 수단부터 보게."""
+    buckets = _bucketize(sm.shots, lambda s: s.type_name)
+    return sorted(buckets.values(), key=lambda b: (-b.shots, b.label))
+
+
+def shot_distance_breakdown(sm: ShotMap) -> list[ShotBucket]:
+    """거리별 효율. 가까운 순 고정 — 순서가 바뀌면 구간 비교가 안 된다."""
+    buckets = _bucketize(sm.shots, _distance_label)
+    return [buckets[k] for k in _DIST_ORDER if k in buckets]
+
+
 # ── 선수별 결정력 랭킹 ─────────────────────────────────────────────────────
 @dataclass
 class PlayerFinishing:

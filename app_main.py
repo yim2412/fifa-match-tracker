@@ -35,8 +35,8 @@ from models import (
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
     NA, BarRow, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
-    RankerCard, RowBorderDelegate, ShotMapWidget, SortableItem, StatCard,
-    TrendChart, rate_of, wdl_text,
+    RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
+    StatCard, TrendChart, rate_of, wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -1350,14 +1350,47 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self.lb_shotmap_summary)
         v.addLayout(ctrl)
 
+        # 좌: 슛 좌표 산점도 / 우: 같은 슛을 유형·거리로 쪼갠 효율.
+        # 한 화면에 둬야 "먼 거리 효율이 낮다"와 "그 점들이 여기 몰려 있다"가
+        # 같이 읽힌다. 위쪽 콤보(내 슛/상대 슛)가 양쪽에 동시에 걸린다.
+        body = QHBoxLayout()
         self.shotmap = ShotMapWidget()
-        v.addWidget(self.shotmap, 1)
+        body.addWidget(self.shotmap, 3)
+
+        side = QScrollArea()
+        side.setWidgetResizable(True)
+        side.setFrameShape(QScrollArea.Shape.NoFrame)
+        side.setMinimumWidth(300)
+        host = QWidget()
+        sv = QVBoxLayout(host)
+        sv.setSpacing(8)
+
+        gb_type = QGroupBox("슛 유형별 득점률")
+        self.box_shot_type = QVBoxLayout(gb_type)
+        sv.addWidget(gb_type)
+
+        gb_dist = QGroupBox("거리별 득점률")
+        self.box_shot_dist = QVBoxLayout(gb_dist)
+        sv.addWidget(gb_dist)
+
+        note = QLabel(
+            f"분모는 골이 아니라 <b>슛</b>이다 — \"그 방식으로 찼을 때 들어가는 "
+            f"비율\".<br>슛 {st.MIN_BUCKET_SHOTS}개 미만인 칸은 비율을 내지 "
+            f"않는다({NA}).<br>괄호는 유효슛률 · xG는 비공식 근사치.")
+        note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        note.setWordWrap(True)
+        sv.addWidget(note)
+        sv.addStretch(1)
+        side.setWidget(host)
+        body.addWidget(side, 2)
+        v.addLayout(body, 1)
         return w
 
     def _render_shotmap(self) -> None:
         _, details = self._slice()
         mine = bool(self.cb_shotmap_side.currentData())
         sm = st.shot_map(details, self._ouid, mine=mine)
+        self._render_shot_buckets(sm, mine)
         # 체크된 결과 종류만 화면에 찍는다(요약 수치는 전체 기준 유지).
         shown = {r for r, chk in self.chk_shotmap_result.items() if chk.isChecked()}
         shots = [s for s in sm.shots if s.result in shown]
@@ -1371,6 +1404,24 @@ class MainWindow(QMainWindow):
             f"{who} 슛 {sm.total} · 골 {sm.goals} · "
             f"유효슛 {sm.effective} ({sm.effective_rate:.0f}%) · "
             f"전환율 {sm.conversion:.0f}% · 기대골(xG) {sm.xg:.1f}")
+
+    def _render_shot_buckets(self, sm, mine: bool) -> None:
+        """슛 유형·거리별 효율 패널. 내 슛이면 초록, 상대 슛(=내 실점)이면 빨강."""
+        color = T.GREEN if mine else T.RED
+        for box, buckets in (
+                (self.box_shot_type, st.shot_type_breakdown(sm)),
+                (self.box_shot_dist, st.shot_distance_breakdown(sm))):
+            self._clear(box)
+            if not buckets:
+                lb = QLabel("표시할 슛이 없습니다.")
+                lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+                box.addWidget(lb)
+                continue
+            for b in buckets:
+                extra = (f"유효 {b.effective_rate:.0f}% · xG {b.xg:.1f}"
+                         if b.enough else "")
+                box.addWidget(RatioBarRow(b.label, b.goals, b.shots, color,
+                                          enough=b.enough, extra=extra))
 
     def _build_finishing_tab(self) -> QWidget:
         """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 비공식 근사치."""

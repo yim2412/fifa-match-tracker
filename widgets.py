@@ -415,6 +415,60 @@ class BarRow(QWidget):
         v.addWidget(bar)
 
 
+class RatioBarRow(QWidget):
+    """비율 한 줄 — 이름 · 적중/시도 · 비율 · 막대.
+
+    BarRow 와 분모가 다르다. BarRow 는 "전체 골 중 이 유형이 몇 %"(분모=합계)라
+    막대들을 더하면 100%가 되지만, 여기는 "이 유형으로 찼을 때 몇 %가 들어가나"
+    (분모=그 칸의 시도)라 칸마다 독립이다. 그래서 막대도 각자 0~100%로 그린다.
+
+    enough=False 면 비율을 숨기고 회색으로 낸다 — 2번 차서 1번 들어간 걸
+    50%라고 적으면 사용자가 그걸 실력으로 읽는다.
+    """
+
+    def __init__(self, name: str, hit: int, total: int, color: str,
+                 enough: bool = True, extra: str = ""):
+        super().__init__()
+        pct = (hit / total * 100) if total else 0.0
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 2, 0, 2)
+        v.setSpacing(2)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        lb = QLabel(name)
+        lb.setStyleSheet(f"color: {T.TEXT};")
+        top.addWidget(lb)
+        top.addStretch(1)
+        if extra:
+            ex = QLabel(extra)
+            ex.setStyleSheet(f"color: {T.TEXT_DIM};")
+            top.addWidget(ex)
+        n = QLabel(f"{hit}/{total}")
+        n.setStyleSheet(f"color: {T.TEXT_DIM};")
+        top.addWidget(n)
+        p = QLabel(f"{pct:.0f}%" if enough else NA)
+        p.setStyleSheet(f"color: {color if enough else T.TEXT_DIM};"
+                        f" font-weight: bold;")
+        p.setFixedWidth(44)
+        p.setAlignment(Qt.AlignmentFlag.AlignRight
+                       | Qt.AlignmentFlag.AlignVCenter)
+        top.addWidget(p)
+        v.addLayout(top)
+
+        bar = QProgressBar()
+        bar.setRange(0, 1000)
+        bar.setValue(int(pct * 10))
+        bar.setTextVisible(False)
+        bar.setFixedHeight(6)
+        chunk = color if enough else T.BORDER
+        bar.setStyleSheet(
+            f"QProgressBar {{ background: {T.PANEL_2}; border: none;"
+            f" border-radius: 3px; }}"
+            f"QProgressBar::chunk {{ background: {chunk}; border-radius: 3px; }}")
+        v.addWidget(bar)
+
+
 class TrendChart(QWidget):
     """일별 승률 꺾은선 그래프 — QtCharts 없이 QPainter로 직접 그린다.
 
