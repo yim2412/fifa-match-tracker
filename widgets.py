@@ -444,6 +444,8 @@ class RatioBarRow(QWidget):
             ex = QLabel(extra)
             ex.setStyleSheet(f"color: {T.TEXT_DIM};")
             top.addWidget(ex)
+            # 간격이 없으면 "xG 2.4" + "2/8" 이 "2.42/8" 한 숫자로 읽힌다.
+            top.addSpacing(12)
         n = QLabel(f"{hit}/{total}")
         n.setStyleSheet(f"color: {T.TEXT_DIM};")
         top.addWidget(n)
@@ -458,7 +460,9 @@ class RatioBarRow(QWidget):
 
         bar = QProgressBar()
         bar.setRange(0, 1000)
-        bar.setValue(int(pct * 10))
+        # 표본 미달이면 막대도 채우지 않는다. 숫자는 "—"로 숨겨 놓고 막대만
+        # 절반까지 그리면 결국 그 비율을 말하는 셈이라 앞뒤가 안 맞는다.
+        bar.setValue(int(pct * 10) if enough else 0)
         bar.setTextVisible(False)
         bar.setFixedHeight(6)
         chunk = color if enough else T.BORDER
