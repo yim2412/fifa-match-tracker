@@ -536,6 +536,9 @@ class MainWindow(QMainWindow):
         # 감독모드 랭킹 시즌표(seasons.py). 선수 카드 시즌(self._seasons)과 다르다.
         self._rank_seasons: list[sn.Season] = []
         self._season_loader: SeasonLoader | None = None
+        # 사용자가 콤보를 직접 건드리기 전까지는 기본값(현재 시즌)을 고른다.
+        # "전체"도 data 가 None 이라 prev 만으로는 첫 조회와 구분되지 않는다.
+        self._season_picked = False
         self._names: dict = {}
         self._positions: dict = {}
         self._trend_reset_pending = True
@@ -2001,18 +2004,29 @@ class MainWindow(QMainWindow):
 
     def _rebuild_season_combo(self) -> None:
         """경기가 실제로 있는 시즌만 콤보에 올린다 — 2018년까지 89개가 다
-        떠 있으면 고르기만 번거롭다. 재검색이어도 같은 항목이 남아 있으면
-        고르고 있던 시즌을 유지한다."""
+        떠 있으면 고르기만 번거롭다. 재검색이어도 고르고 있던 시즌을 유지하고,
+        아직 안 고른 상태면 현재 시즌을 기본으로 잡는다.
+
+        항목에 기간을 붙이는 건, 끝난 시즌 이름("2026 시즌 3")이 현재 시즌으로
+        읽혀서 지난 시즌 기록을 보고 있는 줄 모르는 일이 실제로 있었기 때문이다."""
         prev = self.cb_season.currentData()
+        last_end = max((s.end for s in self._rank_seasons), default=None)
         self.cb_season.blockSignals(True)
         self.cb_season.clear()
         self.cb_season.addItem(f"전체 ({len(self._matches_all)}경기)", None)
         for season, group in self._season_groups():
             if season is None:
-                self.cb_season.addItem(f"진행 중 ({len(group)}경기)", self.ONGOING)
+                span = f"{last_end:%m-%d}~" if last_end else "최신"
+                self.cb_season.addItem(
+                    f"현재 시즌 (진행 중) · {span} ({len(group)}경기)", self.ONGOING)
             else:
-                self.cb_season.addItem(f"{season.label} ({len(group)}경기)", season)
-        idx = self.cb_season.findData(prev) if prev is not None else 0
+                self.cb_season.addItem(
+                    f"{season.label} · {season.start:%m-%d}~{season.end:%m-%d}"
+                    f" ({len(group)}경기)", season)
+        if self._season_picked:
+            idx = self.cb_season.findData(prev)
+        else:
+            idx = self.cb_season.findData(self.ONGOING)  # 없으면 -1 → "전체"
         self.cb_season.setCurrentIndex(idx if idx >= 0 else 0)
         self.cb_season.blockSignals(False)
 
@@ -2033,7 +2047,7 @@ class MainWindow(QMainWindow):
         if selected is None:
             return "누적 전체"
         if selected == self.ONGOING:
-            return "진행 중 시즌"
+            return "현재 시즌"
         return selected.label
 
     def _analysis_note_text(self) -> str:
@@ -2053,6 +2067,7 @@ class MainWindow(QMainWindow):
         self.lb_synergy_note.setText(self._synergy_note_text())
 
     def _on_season_changed(self) -> None:
+        self._season_picked = True
         self._apply_season()
 
     def _apply_season(self, render: bool = True) -> None:
