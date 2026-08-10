@@ -998,7 +998,8 @@ class MainWindow(QMainWindow):
         kind, n = current_streak(matches)
         now_text = f"현재 {n}{kind}" if kind else "현재 -"
         self.lb_streaks.setText(
-            f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose} (누적 전체 기준)")
+            f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose}"
+            f" ({self._scope_text()} 기준)")
 
     def _build_analysis_tab(self) -> QWidget:
         """흐름 분석 — 집계를 문장으로. 최근 흐름 / 이기는 · 지는 패턴."""
@@ -1009,12 +1010,10 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         v.setSpacing(8)
 
-        note = QLabel(
-            f"최근 흐름은 최근 {analysis.WINDOW}경기 · 이기는/지는 패턴은 누적 전체 기준. "
-            "표본이 모자란 항목은 표시하지 않습니다.")
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(note)
+        self.lb_analysis_note = QLabel(self._analysis_note_text())
+        self.lb_analysis_note.setWordWrap(True)
+        self.lb_analysis_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_analysis_note)
 
         self.box_analysis: dict[str, QVBoxLayout] = {}
         for sec in analysis.SECTIONS:
@@ -1189,9 +1188,9 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         v.setSpacing(8)
 
-        note = QLabel("누적 전체 기준 · 승·무·패 아닌 결과(오류 등)는 제외")
-        note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(note)
+        self.lb_diag_note = QLabel(self._diag_note_text())
+        self.lb_diag_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_diag_note)
 
         gb_div = QGroupBox("상대 등급별 성적 (강한 등급부터)")
         self.box_diag_division = QVBoxLayout(gb_div)
@@ -1272,11 +1271,10 @@ class MainWindow(QMainWindow):
         btn = QPushButton("적용")
         btn.clicked.connect(self._on_synergy_apply)
         ctrl.addWidget(btn)
-        note = QLabel("누적 전체 · 선발(SUB·GK 제외) · 승률 높은 순 · "
-                      "선수 더블클릭 시 카드")
-        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_synergy_note = QLabel(self._synergy_note_text())
+        self.lb_synergy_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         ctrl.addSpacing(12)
-        ctrl.addWidget(note)
+        ctrl.addWidget(self.lb_synergy_note)
         ctrl.addStretch(1)
         v.addLayout(ctrl)
 
@@ -2026,6 +2024,34 @@ class MainWindow(QMainWindow):
             return last_end is not None and when.date() >= last_end
         return selected.contains(when)
 
+    def _scope_text(self) -> str:
+        """표시 구간(시작~끝)에 안 갇히는 탭들이 실제로 쓰는 범위 이름.
+
+        시즌을 고르면 그 탭들도 그 시즌 안에서만 계산되므로, 안내 문구를
+        "누적 전체"로 박아 두면 화면에 틀린 말이 뜬다."""
+        selected = self.cb_season.currentData()
+        if selected is None:
+            return "누적 전체"
+        if selected == self.ONGOING:
+            return "진행 중 시즌"
+        return selected.label
+
+    def _analysis_note_text(self) -> str:
+        return (f"최근 흐름은 최근 {analysis.WINDOW}경기 · 이기는/지는 패턴은"
+                f" {self._scope_text()} 기준. 표본이 모자란 항목은 표시하지 않습니다.")
+
+    def _diag_note_text(self) -> str:
+        return f"{self._scope_text()} 기준 · 승·무·패 아닌 결과(오류 등)는 제외"
+
+    def _synergy_note_text(self) -> str:
+        return (f"{self._scope_text()} · 선발(SUB·GK 제외) · 승률 높은 순 · "
+                "선수 더블클릭 시 카드")
+
+    def _refresh_scope_notes(self) -> None:
+        self.lb_analysis_note.setText(self._analysis_note_text())
+        self.lb_diag_note.setText(self._diag_note_text())
+        self.lb_synergy_note.setText(self._synergy_note_text())
+
     def _on_season_changed(self) -> None:
         self._apply_season()
 
@@ -2149,6 +2175,7 @@ class MainWindow(QMainWindow):
         self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
                             f"감독모드 {len(matches)}경기 분석 (누적 {total})")
         self._show_range_summary()
+        self._refresh_scope_notes()
         self._render_ranker()
         self._render_matches(matches)
         self._render_players(details)
@@ -2156,18 +2183,20 @@ class MainWindow(QMainWindow):
         self._render_opponents(matches)
         self._render_position_opponents(details)
         self._render_teamcolor_tabs(matches, details)
+        # 아래 self._matches/_details 를 그대로 넘기는 것들은 "표시 구간에 안 갇힌다"는
+        # 뜻이지 누적 전체라는 뜻이 아니다 — 시즌 콤보를 고르면 그 시즌 안에서만 계산된다.
         # 승률 추이는 "최근 30일" 이 표시 구간(시작~끝, 최근 최대 100경기)에
         # 갇히면 안 된다 — 하루에 100경기 넘게 뛰는 계정은 그 구간이 하루도
-        # 안 될 수 있어서, 누적 전체(self._matches)에서 30일을 계산한다.
+        # 안 될 수 있어서, self._matches 전체에서 30일을 계산한다.
         self._render_trend(self._matches)
-        self._render_period(self._matches)  # 기간별 추이도 누적 전체 기준
-        self._render_seasons()  # 시즌별 성적만 누적 전체(_matches_all) 기준
-        self._render_clutch(self._details, self._matches)  # 승부처도 누적 전체 기준
-        self._render_diagnosis(self._details)  # 성적 진단도 누적 전체 기준(표본 크게)
+        self._render_period(self._matches)  # 기간별 추이도 표시 구간 무시
+        self._render_seasons()  # 시즌별 성적만 시즌 필터도 무시(_matches_all)
+        self._render_clutch(self._details, self._matches)  # 승부처도 표시 구간 무시
+        self._render_diagnosis(self._details)  # 성적 진단도 표시 구간 무시(표본 크게)
         self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
         self._render_finishing(details)  # 결정력도 표시 구간 기준
-        self._render_synergy(self._details)  # 선수 조합도 누적 전체 기준
-        # 흐름 분석은 누적 전체 기준 — 패턴 규칙이 표본을 크게 잡아야 한다.
+        self._render_synergy(self._details)  # 선수 조합도 표시 구간 무시
+        # 흐름 분석도 표시 구간 무시 — 패턴 규칙이 표본을 크게 잡아야 한다.
         self._render_analysis(self._matches, self._details)
 
     def _render_ranker(self) -> None:
@@ -3205,13 +3234,14 @@ class MainWindow(QMainWindow):
                 "※ 넥슨 오픈API 는 과거 경기를 돌려주지 않습니다 — 이 앱으로"
                 " 조회하기 시작한 뒤 쌓인 경기만 시즌에 잡히므로, 앱을 쓰기 전"
                 " 시즌은 비어 있거나 실제보다 적게 나옵니다."
-                " · '진행 중'은 아직 데이터센터 시즌표에 안 올라온 최신 시즌입니다.")
+                " · '진행 중'은 아직 데이터센터 시즌표에 안 올라온 최신 시즌입니다."
+                " · 이 표만은 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다.")
 
     def _render_streak(self, matches: list[MatchSummary]) -> None:
         kind, n = current_streak(matches)
         best_win, best_lose = longest_streaks(self._matches)
         self.card_streak.setToolTip(
-            f"최장 연승 {best_win} · 최장 연패 {best_lose} (누적 전체 기준)")
+            f"최장 연승 {best_win} · 최장 연패 {best_lose} ({self._scope_text()} 기준)")
         color = {"승": T.GREEN, "패": T.RED, "무": T.TEXT_DIM}.get(kind, T.TEXT_DIM)
         self.card_streak.set_color(color)
         self.card_streak.set(f"{n}{kind}" if kind else NA)
