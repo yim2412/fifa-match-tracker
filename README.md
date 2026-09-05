@@ -284,6 +284,19 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
       "선제골 승률은 76%인데 최근엔 선제골 자체가 안 나온다" 같은 문장을 만든다.
       규칙별 최소 표본에 못 미치면 문장을 내지 않는다. 봇 `!분석` 과 같은 로직
 
+## 개발 노트
+
+만들면서 **무엇이 어떻게 깨졌고 어떻게 알아냈는지**를 [`docs/notes/`](docs/notes/) 에
+두 편으로 적었다. 계산이 어려운 앱이 아니라서, **틀린 것도 계산이 아닌 쪽에서 나왔다.**
+
+| | 노트 |
+|---|---|
+| 01 | [정정한 사실을 문서에 다시 심었다](docs/notes/01-i-planted-the-correction-back-as-the-error.md) — 틀렸다고 커밋에 적어 놓고 6일 뒤 문서에 그 문장을 다시 넣었다 |
+| 02 | [숫자로는 침묵하고 막대로는 말했다](docs/notes/02-silent-in-numbers-loud-in-bars.md) — 표본이 모자라 비율은 숨기면서 막대는 실제 길이로 그렸다 |
+
+고르고 남은 후보 **40건**과 왜 안 골랐는지는 [`CANDIDATES.md`](docs/notes/CANDIDATES.md).
+다섯 프로젝트의 공개 색인은 <https://yim2412.github.io> 에 있다.
+
 ## 라이선스
 
 [MIT](LICENSE)
