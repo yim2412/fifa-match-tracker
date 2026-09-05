@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>피파 전적 관리</title>
+<meta name="description" content="넥슨 오픈API로 EA SPORTS FC 온라인 감독모드 전적을 조회·집계하는 데스크톱 앱. 승률·선수 지표·전술 상성·슛 맵을 화면으로 본다.">
+<!-- 생성된 파일이다. 고칠 때는 개발노트/make_pages.py 를 고치고 다시 뽑는다.
+     이 파일을 직접 고치면 다음 생성에서 덮어쓴다. -->
+<style>
+:root{--bg:#fbfaf8;--fg:#1b1a18;--dim:#6b6862;--line:#e3dfd8;--card:#fff;
+      --accent:#8a5a2b;--mark:#f0ebe2;--code:#f4f1ec}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --bg:#151513;--fg:#e8e5df;--dim:#928d84;--line:#2c2b28;--card:#1c1b19;
+  --accent:#c99a63;--mark:#26241f;--code:#211f1c}}
+:root[data-theme=dark]{--bg:#151513;--fg:#e8e5df;--dim:#928d84;--line:#2c2b28;
+  --card:#1c1b19;--accent:#c99a63;--mark:#26241f;--code:#211f1c}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:16px/1.75 -apple-system,BlinkMacSystemFont,"Pretendard","Malgun Gothic",system-ui,sans-serif;
+  letter-spacing:-.005em}
+.wrap{max-width:760px;margin:0 auto;padding:0 22px}
+a{color:inherit}a:hover{color:var(--accent)}
+img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:8px;display:block}
+header{padding:76px 0 44px;border-bottom:1px solid var(--line)}
+h1{font-size:32px;line-height:1.25;margin:0 0 14px;letter-spacing:-.02em;font-weight:700}
+.lead{font-size:17px;margin:0 0 12px;max-width:40em}
+.meta{font-size:13px;color:var(--dim);margin:0}
+.links{display:flex;gap:16px;flex-wrap:wrap;margin-top:24px;font-size:14px}
+.links a{color:var(--accent);text-decoration:none;border-bottom:1px solid transparent}
+.links a:hover{border-bottom-color:var(--accent)}
+section{padding:44px 0;border-bottom:1px solid var(--line)}
+h2{font-size:13px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim);
+   margin:0 0 22px;font-weight:600}
+p{margin:0 0 15px;max-width:42em}
+p:last-child{margin-bottom:0}
+.feat{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.feat li{border-bottom:1px solid var(--line);padding:12px 0;display:flex;gap:14px;
+  align-items:baseline;font-size:15px}
+.feat b{flex:none;min-width:8.5em;font-weight:600}
+.feat span{color:var(--dim)}
+.shots{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+figure{margin:0}
+figcaption{font-size:12.5px;color:var(--dim);margin-top:7px}
+ol.notes{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+ol.notes li{border-bottom:1px solid var(--line);padding:11px 0;display:flex;gap:14px;
+  align-items:baseline}
+.n{font-size:12px;color:var(--dim);min-width:1.6em;flex:none;font-variant-numeric:tabular-nums}
+.nt{flex:1}
+.nt a{text-decoration:none;border-bottom:1px solid var(--line)}
+.nt a:hover{border-bottom-color:var(--accent)}
+.nk{display:block;font-size:12.5px;color:var(--dim);margin-top:2px}
+.note-intro{color:var(--dim);font-size:14.5px;margin-bottom:18px}
+code{font:13px/1.6 ui-monospace,SFMono-Regular,"Cascadia Mono",Menlo,monospace;
+  background:var(--code);padding:1.5px 5px;border-radius:4px}
+footer{padding:38px 0 64px;font-size:13.5px;color:var(--dim)}
+footer a{color:var(--accent);text-decoration:none}
+@media(max-width:560px){header{padding:52px 0 34px}h1{font-size:26px}
+  section{padding:34px 0}.feat li{flex-direction:column;gap:2px}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>피파 전적 관리</h1>
+    <p class="lead">넥슨 오픈API로 <b>EA SPORTS FC 온라인 감독모드</b> 전적을 조회·집계하는 데스크톱 앱. 승률·선수 지표·전술 상성·슛 맵을 화면으로 본다.</p>
+    <p class="meta">Python · PyQt6 · SQLite · PyInstaller</p>
+    <div class="links">
+      <a href="https://github.com/yim2412/fifa-match-tracker">저장소</a>
+      <a href="https://github.com/yim2412/fifa-match-tracker/tree/master/docs/notes">개발 노트 2편</a>
+      <a href="https://github.com/yim2412/fifa-match-tracker/blob/master/docs/notes/CANDIDATES.md">노트 후보 목록</a>
+      <a href="https://yim2412.github.io">다섯 프로젝트 색인</a>
+    </div>
+  </div>
+</header>
+
+<section>
+  <div class="wrap">
+    <h2>무엇을 하는가</h2>
+    <p>닉네임을 넣으면 경기를 받아 와 <b>16종의 분석 탭</b>으로 펼친다. 공식이 공개되지 않은 값(공격력·수비력·기대득점률·선방력)은 실제 응답에서 역산해 맞췄다.</p>
+    <p>받은 경기는 로컬 SQLite 에 <b>누적</b>한다 — API 가 과거를 무한히 주지 않기 때문이다(실측: 약 한 달·3,024경기까지). 그래서 검색하는 순간이 곧 수집이고, 자주 보는 계정일수록 데이터가 길어진다.</p>
+    <p>카카오톡 오픈채팅 봇도 같은 DB 를 쓴다. 다만 조회 정책이 다르다 — 채팅방에서는 첫 응답이 수 분이면 못 쓰기 때문이다.</p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>주요 기능</h2>
+    <ul class="feat">
+    <li><b>흐름 분석</b><span>집계를 문장으로 — 최근 흐름과 이기는/지는 방식</span></li>
+    <li><b>선수 지표</b><span>출전·평점·공수 지표(공식 미제공 값 역산)</span></li>
+    <li><b>승부처 분석</b><span>선제골 승률 · 시간대별 득실 · 시각대별 승률</span></li>
+    <li><b>슛 맵</b><span>슛 좌표를 하프 피치에 · 유형·거리별 득점률</span></li>
+    <li><b>시즌별 보기</b><span>데이터센터 시즌표로 경기를 시즌에 나눠 담는다</span></li>
+    <li><b>오픈채팅 봇</b><span>같은 DB 를 쓰는 별도 진입점</span></li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>화면</h2>
+    <div class="shots">
+    <figure><img src="screenshots/ranker.png" alt="랭커 카드 — 순위·점수·전적·구단가치" loading="lazy"><figcaption>랭커 카드 — 순위·점수·전적·구단가치</figcaption></figure>
+    <figure><img src="screenshots/shotmap.png" alt="슛 맵 — 슛 좌표와 유형별 득점률" loading="lazy"><figcaption>슛 맵 — 슛 좌표와 유형별 득점률</figcaption></figure>
+    <figure><img src="screenshots/clutch.png" alt="승부처 분석 — 선제골 승률·시간 구간별 득실" loading="lazy"><figcaption>승부처 분석 — 선제골 승률·시간 구간별 득실</figcaption></figure>
+    <figure><img src="screenshots/players.png" alt="선수 지표 — 포지션별 출전·평점·공수 지표" loading="lazy"><figcaption>선수 지표 — 포지션별 출전·평점·공수 지표</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>개발 노트</h2>
+    <p class="note-intro">계산이 어려운 앱이 아니라서, <b>틀린 것도 계산이 아닌 쪽에서 나왔다.</b>
+      기능 소개가 아니라 <b>판단 기록</b>이라 «이건 아직 안 쟀다» 도 그대로 적는다.</p>
+    <ol class="notes">
+    <li><span class="n">01</span><span class="nt"><a href="https://github.com/yim2412/fifa-match-tracker/blob/master/docs/notes/01-i-planted-the-correction-back-as-the-error.md">정정한 사실을 문서에 다시 심었다</a><span class="nk">문서 관리 — 커밋 메시지에 남긴 정정은 문서를 옮겨 적는 사람에게 닿지 않는다</span></span></li>
+    <li><span class="n">02</span><span class="nt"><a href="https://github.com/yim2412/fifa-match-tracker/blob/master/docs/notes/02-silent-in-numbers-loud-in-bars.md">숫자로는 침묵하고 막대로는 말했다</a><span class="nk">전달 — 값은 맞는데 화면이 다른 말을 하는 다섯 가지</span></span></li>
+    </ol>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    노트 본문은 저장소에 있다 — 이 페이지는 링크만 건다.
+    다른 프로젝트의 기록은 <a href="https://yim2412.github.io">개발 노트 색인</a>에.
+  </div>
+</footer>
+
+</body>
+</html>
