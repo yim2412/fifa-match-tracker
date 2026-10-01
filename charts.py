@@ -149,17 +149,64 @@ class AreaTrendChart(_Chart):
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         p.strokePath(line, pen)
 
-        # 끝점 + 값 직접 표기
+        # 평균선 — 경기 수 가중(승 합 ÷ 경기 합). 승률 그래프 페이지 '평균 승률' 카드와
+        # 같은 식이라 두 화면 숫자가 같다. 1px 실선, 바탕에 묻히지 않을 만큼만 진하게.
+        played = [(i, v, g) for i, (_, v, g) in enumerate(self._points) if g > 0]
+        self.marks: dict = {}
+        placed: list[QRectF] = []
+        bold = _small_font(self.font(), SMALL_PT + 1, bold=True)
+        bfm = QFontMetrics(bold)
+        if played:
+            avg = sum(v * g for _, v, g in played) / sum(g for _, _, g in played)
+            ay = bottom - (bottom - top) * avg / 100
+            p.setPen(QPen(_color(T.TEXT_DIM, 0.7), 1))
+            p.drawLine(QPointF(ml, ay), QPointF(w - mr, ay))
+            self.marks["avg"] = avg
+
+            # 최고·최저 — 같은 모양(점 + 굵은 값). 경기 없는 날(오류만)은 0% 가
+            # 아니라 '모름'이라 후보에서 뺀다. 같은 값이면 최근 쪽을 표시한다.
+            hi = max(played, key=lambda t: (t[1], t[0]))[0]
+            lo = min(played, key=lambda t: (t[1], -t[0]))[0]
+            p.setFont(bold)
+            for kind, i in (("max", hi), ("min", lo)):
+                if kind == "min" and i == hi:
+                    continue
+                pt = pts[i]
+                p.setPen(QPen(QColor(T.PANEL), RING_W))
+                p.setBrush(QColor(T.CHART_UP))
+                p.drawEllipse(pt, DOT_R + 1, DOT_R + 1)
+                label = f"{self._points[i][1]:.1f}%"
+                lw = bfm.horizontalAdvance(label)
+                lx = min(max(pt.x() - lw / 2, ml), w - lw - 2)
+                # 최고는 점 위, 최저는 점 아래 — 곡선과 안 겹치게
+                ly = pt.y() - bfm.height() - 6 if kind == "max" else pt.y() + 6
+                ly = min(max(ly, 0), bottom - bfm.height())
+                rect = QRectF(lx, ly, lw, bfm.height())
+                p.setPen(QColor(T.TEXT))
+                p.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+                placed.append(rect)
+                self.marks[kind] = (i, label)
+
+            # 평균 글자 — 오른쪽 끝 선 위, 최고·최저 글자와 겹치면 선 아래로
+            p.setFont(small)
+            text = f"평균 {avg:.1f}%"
+            tw = fm.horizontalAdvance(text)
+            for ty in (ay - fm.height() - 2, ay + 2):
+                rect = QRectF(w - mr - tw, ty, tw, fm.height())
+                if not any(rect.intersects(r) for r in placed):
+                    break
+            # 곡선이 글자 위를 지나가도 읽히게 바탕색을 깐다
+            p.fillRect(rect.adjusted(-3, 0, 2, 0), QColor(T.PANEL))
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+            self.marks["avg_rect"] = rect
+            self.marks["label_rects"] = placed
+
+        # 마지막 날 — 점만(지금 위치). 값은 툴팁
         end = pts[-1]
         p.setPen(QPen(QColor(T.PANEL), RING_W))
         p.setBrush(QColor(T.CHART_UP))
-        p.drawEllipse(end, DOT_R + 1, DOT_R + 1)
-        p.setFont(_small_font(self.font(), SMALL_PT + 1, bold=True))
-        p.setPen(QColor(T.TEXT))
-        label = f"{self._points[-1][1]:.1f}%"
-        lw = QFontMetrics(p.font()).horizontalAdvance(label)
-        lx = min(end.x() - lw / 2, w - lw - 2)
-        p.drawText(QPointF(lx, max(end.y() - 9, 12)), label)
+        p.drawEllipse(end, DOT_R, DOT_R)
 
         # x 라벨 — 처음·끝 + 사이 몇 개(겹치지 않게)
         p.setFont(small)

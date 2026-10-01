@@ -351,6 +351,7 @@ def test_dashboard_cards_keep_their_own_scope():
     before_bands = list(d.timeband_bars._rows)
     before_gauges = [g._note for g in d.gauges]
     before_rate = (d.lb_rate.text(), d.lb_rate_delta.text())
+    before_rivals = list(d.rival_bars._rows)
     old_to = _win.sp_to.value()
     try:
         _win.sp_to.setValue(2)
@@ -358,6 +359,8 @@ def test_dashboard_cards_keep_their_own_scope():
         assert d.kpi_wdl.scope.text() == "표시 구간 2경기", d.kpi_wdl.scope.text()
         # 승률은 시즌 기준 — 표시 구간을 좁혀도 안 바뀐다
         assert (d.lb_rate.text(), d.lb_rate_delta.text()) == before_rate
+        assert d.rival_bars._rows == before_rivals  # 자주 만난 상대도 시즌 기준
+        assert d.rivals.scope.text().startswith(_win._scope_text()), d.rivals.scope.text()
         assert len(d.dots._items) == 2
         assert sum(d.minute_chart._series[0][1]) == before_goals
         # 개수만 보면 좁힌 2경기가 같은 시간대에 몰렸을 때 차이가 안 보인다 — 값 그대로 비교
@@ -380,6 +383,19 @@ def test_dashboard_trend_follows_trend_days():
     finally:
         _win.sp_trend_days.setValue(old)
         _win._on_trend_days_apply()
+
+
+def test_dashboard_rivals_skip_unknown_nickname():
+    # 닉네임 빈 경기("-")를 한 사람으로 묶으면 실데이터에서 "-" 가 1위가 됐다
+    from dataclasses import replace
+    from dashboard import DashboardInput
+    d = _win.dashboard
+    ms = [replace(m, opponent="-") for m in _win._matches] + list(_win._matches)
+    d.render(DashboardInput(ouid=_win._ouid, range_matches=ms, range_details=_win._details,
+                            scope_matches=ms, scope_details=_win._details, scope_name="t"))
+    names = [r[0] for r in d.rival_bars._rows]
+    assert "-" not in names and names, names
+    _win._render_dashboard()
 
 
 def test_dashboard_gauge_shows_value_once_sample_is_enough():
@@ -436,6 +452,32 @@ def test_charts_draw_empty_and_single():
     for v in (None, 0.0, 58.0, 100.0):
         g.set_data(v, "3경기")
         assert not g.grab().toImage().isNull()
+
+
+def test_trend_marks_max_min_and_average():
+    # 픽스처 일별: 01/01 패(1경기 0%) · 01/02 승+무(2경기 50%) · 01/03 오류뿐(0경기).
+    # 평균은 승 합 ÷ 경기 합 = 1/3 — 날짜별 승률의 단순 평균(25%)이 아니다.
+    # 최저는 01/01 — 경기 없는 01/03 을 0% 로 세면 "다 졌다"로 읽힌다.
+    c = _win.dashboard.trend_chart
+    c.resize(600, 220)
+    c.grab()
+    assert round(c.marks["avg"], 1) == 33.3, c.marks["avg"]
+    assert c.marks["max"] == (1, "50.0%"), c.marks["max"]
+    assert c.marks["min"] == (0, "0.0%"), c.marks["min"]
+    # 승률 그래프 페이지 '평균 승률' 카드와 같은 숫자
+    assert f"{c.marks['avg']:.1f}%" == _win.card_trend_avg.value.text(), \
+        (c.marks["avg"], _win.card_trend_avg.value.text())
+    rects = c.marks["label_rects"] + [c.marks["avg_rect"]]
+    assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
+    # 마지막 날이 최고점이고 평균과 가까우면 두 글자가 오른쪽 끝에서 부딪힌다 — 그때 평균 글자가 비켜야 한다
+    import charts
+    t = charts.AreaTrendChart()
+    t.set_data([("a", 40.0, 10), ("b", 40.0, 10), ("c", 46.0, 10)])
+    t.resize(400, 200)
+    t.grab()
+    rects = t.marks["label_rects"] + [t.marks["avg_rect"]]
+    assert t.marks["max"][0] == 2
+    assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
 
 
 def test_bar_peak_labels_never_overlap():

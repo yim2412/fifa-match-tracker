@@ -5,7 +5,9 @@
 제목 옆에 범위를 작게 적는다.
 
     승률                               → 시즌 범위 + 그 안의 최근 20경기와 차이
-    승무패 · 득실 · 연속 · 레이더 · 상대 → 표시 구간(시작~끝)
+    자주 만난 상대                      → 시즌 범위(사용자 요청 — 100경기 안에선 대부분 1번씩이라
+                                           '자주'가 안 드러난다. 상대 전적 페이지는 표시 구간 그대로)
+    승무패 · 득실 · 연속 · 레이더       → 표시 구간(시작~끝)
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
     승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(표시 구간에 안 갇힘)
 """
@@ -278,10 +280,10 @@ class DashboardPage(QWidget):
     def render(self, d: DashboardInput) -> None:
         rng = f"표시 구간 {len(d.range_matches):,}경기"
         scope = f"{d.scope_name} {len(d.scope_matches):,}경기"
-        for c in (self.kpi_wdl, self.kpi_goals, self.kpi_streak,
-                  self.radar_card, self.rivals):
+        for c in (self.kpi_wdl, self.kpi_goals, self.kpi_streak, self.radar_card):
             c.scope.setText(rng)
-        for c in (self.kpi_rate, self.clutch, self.minutes, self.timeband, self.story):
+        for c in (self.kpi_rate, self.clutch, self.minutes, self.timeband, self.story,
+                  self.rivals):
             c.scope.setText(scope)
         self.trend.scope.setText(f"최근 {d.trend_days}일 · 하루 단위")
 
@@ -405,7 +407,10 @@ class DashboardPage(QWidget):
 
     def _render_rivals(self, d: DashboardInput) -> None:
         rows = []
-        for o in opponent_stats(d.range_matches)[:TOP_OPPONENTS]:
+        # 닉네임이 빈 경기(parse_match 가 "-" 로 둔다)는 한 사람이 아니다 — 실데이터에서
+        # "-" 15경기가 1위로 올라왔다. 상대 전적 표에는 그대로 두고 여기서만 뺀다.
+        known = [o for o in opponent_stats(d.scope_matches) if o.nickname not in ("", "-")]
+        for o in known[:TOP_OPPONENTS]:
             rows.append((o.nickname, o.win_rate, f"{o.win}승 {o.draw}무 {o.lose}패",
                          f"{o.nickname} · {o.games}경기 · 승률 {o.win_rate:.1f}%"
                          f" · 득실 {o.goals_for}:{o.goals_against}"))
