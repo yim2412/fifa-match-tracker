@@ -1,47 +1,105 @@
-"""밝은 테마 — 색상과 스타일시트를 한곳에.
+"""테마 — 색상과 스타일시트를 한곳에.
 
-회색 바탕(BG) 위에 흰 카드(PANEL)를 띄우는 대시보드형. 강조색은 앱 정체성인
-초록을 유지하되, 흰 바탕에서 글자로도 읽히게 다크 테마 때(#3fb950)보다 한 단계
-진하게 잡았다. 바꿀 일이 생기면 여기만 고친다.
+창 배경(BG) 위에 카드(PANEL)를 띄우는 대시보드형. 팔레트는 어두운 것과 밝은 것
+둘을 두고 MODE 로 고른다 — 2026-10-01 하루에 다크 → 밝은 → 다크로 두 번 바뀌어서,
+다시 바뀔 때 값을 git 에서 캐내지 않게 둘 다 남긴다. 강조색은 앱 정체성인 초록.
+바꿀 일이 생기면 여기만 고친다.
 """
 from __future__ import annotations
 
-BG = "#f3f5f9"          # 창 배경(카드 사이 회색)
-PANEL = "#ffffff"       # 카드·패널
-PANEL_2 = "#f6f8fb"     # 표 헤더·교차행·카드 안 타일
-BORDER = "#e3e7ee"
-TEXT = "#1f2533"
-TEXT_DIM = "#7a8193"
+MODE = "dark"           # "dark" | "light"
 
-GREEN = "#1f9d55"       # 강조·승·득점
-GREEN_HOVER = "#23b05f"
-GREEN_SOFT = "#e6f5ec"  # 선택된 메뉴·강조 배경
-RED = "#e5484d"         # 패·실점
-BLUE = "#3b6fe0"        # 수비력
-YELLOW = "#d99a00"
-PURPLE = "#7c5cf0"
-ON_ACCENT = "#ffffff"   # 초록 등 진한 색 위의 글자
+_PALETTES = {
+    "dark": dict(
+        BG="#111418",          # 창 배경(카드 사이)
+        PANEL="#1a1e24",       # 카드·패널
+        PANEL_2="#22272e",     # 표 헤더·교차행·카드 안 타일
+        BORDER="#2e343d",
+        TEXT="#dfe3e8",        # 순백 대신 — 검은 바탕에서 눈부심을 줄인다
+        TEXT_DIM="#8a919c",
+        GREEN="#3fb950",
+        GREEN_HOVER="#4fc960",
+        GREEN_SOFT="#173322",
+        RED="#ef6268",
+        BLUE="#5b8cff",
+        YELLOW="#e3b341",
+        PURPLE="#a08cff",
+        ON_ACCENT="#08210f",   # 밝은 초록 위 흰 글자는 대비가 2.3:1 이라 진한 글자
+        DRAW="#6e7681",
+        WIN_BAR="#2c6a40",     # 위에 밝은 글자를 겹쳐 쓰므로 진하게
+        LOSE_BAR="#7a3438",
+        ROW_TINT=0.35,
+        SCROLL="#3a414b",
+        SCROLL_HOVER="#4b535f",
+        SHADOW_RGB=(0, 0, 0),
+        SHADOW_ALPHA=90,
+    ),
+    "light": dict(
+        BG="#f3f5f9",
+        PANEL="#ffffff",
+        PANEL_2="#f6f8fb",
+        BORDER="#e3e7ee",
+        TEXT="#1f2533",
+        TEXT_DIM="#7a8193",
+        GREEN="#1f9d55",       # 흰 바탕에서 글자로도 읽히게 한 단계 진하게
+        GREEN_HOVER="#23b05f",
+        GREEN_SOFT="#e6f5ec",
+        RED="#e5484d",
+        BLUE="#3b6fe0",
+        YELLOW="#d99a00",
+        PURPLE="#7c5cf0",
+        ON_ACCENT="#ffffff",
+        DRAW="#9aa1b0",
+        WIN_BAR="#93d6ae",     # 위에 진한 글자를 겹쳐 쓰므로 옅게
+        LOSE_BAR="#f2a3a6",
+        ROW_TINT=0.18,
+        SCROLL="#cfd5df",
+        SCROLL_HOVER="#b4bcc9",
+        SHADOW_RGB=(16, 24, 40),
+        SHADOW_ALPHA=22,
+    ),
+}
+_P = _PALETTES[MODE]
+
+BG = _P["BG"]
+PANEL = _P["PANEL"]
+PANEL_2 = _P["PANEL_2"]
+BORDER = _P["BORDER"]
+TEXT = _P["TEXT"]
+TEXT_DIM = _P["TEXT_DIM"]
+
+GREEN = _P["GREEN"]             # 강조·승·득점
+GREEN_HOVER = _P["GREEN_HOVER"]
+GREEN_SOFT = _P["GREEN_SOFT"]   # 선택된 메뉴·강조 배경
+RED = _P["RED"]                 # 패·실점
+BLUE = _P["BLUE"]               # 수비력
+YELLOW = _P["YELLOW"]
+PURPLE = _P["PURPLE"]
+ON_ACCENT = _P["ON_ACCENT"]     # 초록 등 강조색 위의 글자
 
 WIN = GREEN
-DRAW = "#9aa1b0"
+DRAW = _P["DRAW"]
 LOSE = RED
 
 FONT_FAMILY = "Malgun Gothic"  # 한글이 대부분이라 명시 — 미지정이면 플랫폼 따라 들쭉날쭉
 BASE_FONT_PX = 15
 RADIUS = 14             # 카드 모서리
-# 글자를 위에 겹쳐 쓰는 막대(승부처·시간대 등) — 원색이면 진한 글자가 묻힌다.
-WIN_BAR = "#93d6ae"
-LOSE_BAR = "#f2a3a6"
-ROW_TINT = 0.18         # 승/패 행 배경 — 흰 바탕에 섞는 비율(다크 땐 0.35)
+# 글자를 위에 겹쳐 쓰는 막대(승부처·시간대 등) — 원색이면 글자가 묻힌다.
+WIN_BAR = _P["WIN_BAR"]
+LOSE_BAR = _P["LOSE_BAR"]
+ROW_TINT = _P["ROW_TINT"]       # 승/패 행 배경 — PANEL 에 섞는 비율
 
-# 잔디 위 색 — 흰 카드용 초록(GREEN)은 잔디와 명도가 비슷해 골 점이 묻힌다.
+# 잔디 위 색 — 밝은 테마의 진한 GREEN 은 잔디와 명도가 비슷해 골 점이 묻힌다.
 PITCH = "#1e5c34"
 PITCH_GOAL = "#5ee08f"
 PITCH_MISS = "#c3c9d4"
 SIDEBAR_W = 230
 SHADOW_BLUR = 24        # 카드 그림자 — widgets.add_shadow
 SHADOW_Y = 3
-SHADOW_ALPHA = 22
+SHADOW_RGB = _P["SHADOW_RGB"]
+SHADOW_ALPHA = _P["SHADOW_ALPHA"]
+SCROLL = _P["SCROLL"]
+SCROLL_HOVER = _P["SCROLL_HOVER"]
 
 # "적용"/"불러오기" 류 강조 버튼(윤곽선만, 채우지 않음) — 3곳 이상에서 반복 사용.
 OUTLINE_BUTTON_QSS = f"""
@@ -52,9 +110,9 @@ QPushButton:hover {{ background: {GREEN_SOFT}; }}
 QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; }}
 """
 
-# 일반 QWidget 에는 배경을 주지 않는다 — 자식이 부모(카드)의 흰색을 그대로
+# 일반 QWidget 에는 배경을 주지 않는다 — 자식이 부모(카드)의 색을 그대로
 # 비치게 하려는 것. 다크 테마 때처럼 QWidget 전체에 배경을 깔면 카드 안의
-# 모든 컨테이너가 회색으로 덮인다.
+# 모든 컨테이너가 BG 로 덮인다.
 # 글꼴도 여기(QWidget 규칙)에 두지 않는다 — QSS 의 font 속성은 setFont 를 이긴다.
 # 다크 테마 땐 QWidget 에 font-size 15px 가 있어서 코드의 setFont 크기(제목 30pt ·
 # 랭커 타일 30pt · FitTableWidget 의 자동 축소)가 전부 15px 로 눌려 있었다.
@@ -235,25 +293,29 @@ QToolTip {{
     padding: 5px;
 }}
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
-QScrollBar::handle:vertical {{ background: #cfd5df; border-radius: 5px; min-height: 24px; }}
-QScrollBar::handle:vertical:hover {{ background: #b4bcc9; }}
+QScrollBar::handle:vertical {{ background: {SCROLL}; border-radius: 5px; min-height: 24px; }}
+QScrollBar::handle:vertical:hover {{ background: {SCROLL_HOVER}; }}
 QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; width: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 0; }}
-QScrollBar::handle:horizontal {{ background: #cfd5df; border-radius: 5px; min-width: 24px; }}
+QScrollBar::handle:horizontal {{ background: {SCROLL}; border-radius: 5px; min-width: 24px; }}
 """
 
 
 def apply(app) -> None:
     """앱 전체에 테마를 건다.
 
-    Qt 6.5+ 의 windows 스타일은 OS 다크 모드를 따라 기본 팔레트를 어둡게
-    바꾼다. 위 QSS 는 일반 위젯 배경을 일부러 비워 두므로, 그대로 두면 OS 가
-    다크 모드인 PC 에서 군데군데 검게 비친다 — Fusion + 밝은 팔레트로 고정한다.
+    Qt 6.5+ 의 windows 스타일은 OS 다크 모드를 따라 기본 팔레트를 바꾼다.
+    위 QSS 는 일반 위젯 배경을 일부러 비워 두므로, 그대로 두면 OS 설정과 MODE 가
+    다른 PC 에서 군데군데 다른 색이 비친다 — Fusion + MODE 팔레트로 고정한다.
+    색 체계도 MODE 로 맞춘다 — 안 맞추면 OS 설정을 따라 제목 표시줄만 다른 색이 된다.
     """
+    from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QColor, QFont, QPalette
 
     app.setStyle("Fusion")
+    app.styleHints().setColorScheme(
+        Qt.ColorScheme.Dark if MODE == "dark" else Qt.ColorScheme.Light)
     font = QFont(FONT_FAMILY)
     font.setPixelSize(BASE_FONT_PX)
     app.setFont(font)

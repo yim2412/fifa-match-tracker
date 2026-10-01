@@ -10,7 +10,7 @@
 | 파일 | 역할 |
 |------|------|
 | `app_main.py` | PyQt6 UI — 검색 화면 → 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드 포함), 조회 워커 스레드(`MatchLoader`). 메뉴를 늘리려면 `NAV` 에 한 줄 |
-| `theme.py` | 밝은 테마 — 색 상수·QSS·`apply()`(Fusion + 밝은 팔레트 + 기본 글꼴) |
+| `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다 |

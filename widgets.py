@@ -23,7 +23,7 @@ def add_shadow(w: QWidget) -> None:
     eff = QGraphicsDropShadowEffect(w)
     eff.setBlurRadius(T.SHADOW_BLUR)
     eff.setOffset(0, T.SHADOW_Y)
-    eff.setColor(QColor(16, 24, 40, T.SHADOW_ALPHA))
+    eff.setColor(QColor(*T.SHADOW_RGB, T.SHADOW_ALPHA))
     w.setGraphicsEffect(eff)
 
 

@@ -115,6 +115,26 @@ def test_player_table_cells_not_elided():
     assert not short, short
 
 
+def test_palettes_have_same_keys():
+    # 안 쓰는 쪽 팔레트에 키가 빠지면 MODE 를 바꾸는 순간에야 KeyError 로 터진다.
+    keys = {m: set(p) for m, p in T._PALETTES.items()}
+    assert len(set(map(frozenset, keys.values()))) == 1, keys
+
+
+def test_theme_reaches_widgets():
+    # MODE 팔레트가 QPalette 와 QSS 양쪽으로 실제로 걸렸는지 — 카드 배경을 직접 찍어 본다.
+    from PyQt6.QtGui import QPalette
+    # 제목 표시줄 색 체계(setColorScheme)는 offscreen 이 Unknown 만 돌려줘 여기선 못 잰다.
+    assert _app.palette().color(QPalette.ColorRole.Window).name() == T.BG
+    import widgets
+    card = widgets.Card()
+    card.resize(200, 120)
+    img = card.grab().toImage()
+    px = img.pixelColor(img.width() // 2, img.height() - 4).name()
+    assert px == T.PANEL, (px, T.PANEL)
+
+
+# 옛 다크 테마 시절 app_main/widgets 에 박혀 있던 색 — 색은 theme.py 에서만 온다.
 _DARK = ["#0f1216", "#171b21", "#1c2128", "#2a313a", "#0d1117", "#06240d", "#12261a"]
 
 
