@@ -337,7 +337,8 @@ def test_dashboard_cards_filled_from_fixture():
     assert len(d.rival_bars._rows) == 4
     # 선제골 표본 3경기 < 최소 표본 — 숫자 대신 "—"
     assert all(g._value is None for g in d.gauges), [g._value for g in d.gauges]
-    assert d.kpi_rate.scope.text() == "표시 구간 4경기", d.kpi_rate.scope.text()
+    assert d.kpi_wdl.scope.text() == "표시 구간 4경기", d.kpi_wdl.scope.text()
+    assert d.kpi_rate.scope.text().startswith(_win._scope_text()), d.kpi_rate.scope.text()
     assert d.clutch.scope.text().startswith(_win._scope_text()), d.clutch.scope.text()
     assert d.trend.scope.text().startswith(f"최근 {_win.sp_trend_days.value()}일")
 
@@ -349,11 +350,14 @@ def test_dashboard_cards_keep_their_own_scope():
     before_goals = sum(d.minute_chart._series[0][1])
     before_bands = list(d.timeband_bars._rows)
     before_gauges = [g._note for g in d.gauges]
+    before_rate = (d.lb_rate.text(), d.lb_rate_delta.text())
     old_to = _win.sp_to.value()
     try:
         _win.sp_to.setValue(2)
         _win._apply_range()
-        assert d.kpi_rate.scope.text() == "표시 구간 2경기", d.kpi_rate.scope.text()
+        assert d.kpi_wdl.scope.text() == "표시 구간 2경기", d.kpi_wdl.scope.text()
+        # 승률은 시즌 기준 — 표시 구간을 좁혀도 안 바뀐다
+        assert (d.lb_rate.text(), d.lb_rate_delta.text()) == before_rate
         assert len(d.dots._items) == 2
         assert sum(d.minute_chart._series[0][1]) == before_goals
         # 개수만 보면 좁힌 2경기가 같은 시간대에 몰렸을 때 차이가 안 보인다 — 값 그대로 비교

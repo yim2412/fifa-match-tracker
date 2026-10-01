@@ -4,7 +4,8 @@
 숫자와 상세 화면 숫자가 어긋나면 어느 쪽도 믿을 수 없게 된다. 그래서 카드
 제목 옆에 범위를 작게 적는다.
 
-    지표 4개 · 레이더 · 자주 만난 상대  → 표시 구간(시작~끝)
+    승률                               → 시즌 범위 + 그 안의 최근 20경기와 차이
+    승무패 · 득실 · 연속 · 레이더 · 상대 → 표시 구간(시작~끝)
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
     승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(표시 구간에 안 갇힘)
 """
@@ -277,10 +278,10 @@ class DashboardPage(QWidget):
     def render(self, d: DashboardInput) -> None:
         rng = f"표시 구간 {len(d.range_matches):,}경기"
         scope = f"{d.scope_name} {len(d.scope_matches):,}경기"
-        for c in (self.kpi_rate, self.kpi_wdl, self.kpi_goals, self.kpi_streak,
+        for c in (self.kpi_wdl, self.kpi_goals, self.kpi_streak,
                   self.radar_card, self.rivals):
             c.scope.setText(rng)
-        for c in (self.clutch, self.minutes, self.timeband, self.story):
+        for c in (self.kpi_rate, self.clutch, self.minutes, self.timeband, self.story):
             c.scope.setText(scope)
         self.trend.scope.setText(f"최근 {d.trend_days}일 · 하루 단위")
 
@@ -294,23 +295,26 @@ class DashboardPage(QWidget):
         self._render_rivals(d)
 
     def _render_kpis(self, d: DashboardInput) -> None:
-        s = summarize(d.range_matches)
-        if not s.total:
+        # 승률은 시즌 전체가 큰 숫자 — 표시 구간(1~100 등)은 스핀박스에 따라 바뀌는
+        # 임의의 묶음이라 기준으로 약하다. 요즘 폼은 같은 시즌의 최근 20경기와의 차이로.
+        season = summarize(d.scope_matches)
+        if not season.total:
             self.lb_rate.setText("—")
             self.lb_rate_delta.setText("경기 없음")
         else:
-            self.lb_rate.setText(f"{s.win_rate:.1f}%")
-            recent = summarize(d.range_matches[:RECENT_N])
-            if recent.total and s.total > recent.total:
-                gap = recent.win_rate - s.win_rate
+            self.lb_rate.setText(f"{season.win_rate:.1f}%")
+            recent = summarize(d.scope_matches[:RECENT_N])
+            if recent.total and season.total > recent.total:
+                gap = recent.win_rate - season.win_rate
                 arrow = "▲" if gap > 0 else "▼" if gap < 0 else "–"
                 col = T.CHART_UP if gap > 0 else T.CHART_DOWN if gap < 0 else T.TEXT_DIM
                 self.lb_rate_delta.setText(
                     f"최근 {RECENT_N}경기 {recent.win_rate:.1f}% "
                     f"<span style='color:{col}'>{arrow} {abs(gap):.1f}%p</span>")
             else:
-                self.lb_rate_delta.setText(f"{s.total}경기")
+                self.lb_rate_delta.setText(f"{season.total}경기")
 
+        s = summarize(d.range_matches)
         self.donut.set_data([("승", s.win, T.CHART_UP), ("무", s.draw, T.CHART_NEUTRAL),
                              ("패", s.lose, T.CHART_DOWN)],
                             center=f"{s.total:,}", sub="경기")
