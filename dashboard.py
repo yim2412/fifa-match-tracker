@@ -27,7 +27,7 @@ from models import (MatchSummary, current_streak, longest_streaks, opponent_stat
 from widgets import add_shadow, wdl_text
 
 RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
-DOTS_N = 10            # 최근 결과 점 개수
+DOTS_N = 20            # 최근 결과 점 개수
 TOP_OPPONENTS = 5
 MIN_GAUGE_GAMES = 10   # 승부처 게이지 — 이보다 적은 표본이면 숫자 대신 "—"
 SECTION_TAG = {analysis.SEC_FLOW: "흐름", analysis.SEC_WIN: "이길 때",
@@ -184,12 +184,10 @@ class DashboardPage(QWidget):
         row.setSpacing(14)
         row.addWidget(ranker_card, 1, Qt.AlignmentFlag.AlignTop)
         self.trend = self._card("승률 흐름", "승률 그래프")
-        top = QHBoxLayout()
-        top.addWidget(_label(f"최근 {DOTS_N}경기", dim=True))
+        # 글자는 점 위 줄로 — 20개 점과 한 줄에 두면 1280 폭에서 자리가 모자란다
+        self.trend.body.addWidget(_label(f"최근 {DOTS_N}경기 (왼쪽이 오래된 경기)", dim=True))
         self.dots = ResultDots()
-        top.addWidget(self.dots)
-        top.addStretch(1)
-        self.trend.body.addLayout(top)
+        self.trend.body.addWidget(self.dots)
         self.trend_chart = AreaTrendChart()
         self.trend.body.addWidget(self.trend_chart, 1)
         row.addWidget(self.trend, 2)

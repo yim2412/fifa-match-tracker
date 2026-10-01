@@ -493,9 +493,15 @@ class RadarChart(_Chart):
 
 
 class ResultDots(_Chart):
-    """최근 경기 결과 점 — 오래된 것 → 최신. 색만으로 구분하지 않게 점 안에 승/무/패 글자."""
+    """최근 경기 결과 점 — 오래된 것 → 최신. 색만으로 구분하지 않게 점 안에 승/무/패 글자.
+
+    점 지름은 폭에 맞춰 D(24)~MIN_D(18) 사이에서 줄어든다 — 20경기를 24px 로
+    놓으면 560px 가 필요한데 1280 폭 승률 흐름 카드 안쪽은 약 440px 다. 최소 폭은
+    MIN_D 기준으로 알려서 그보다 좁게는 눌리지 않는다(글자가 점 밖으로 안 넘친다).
+    """
 
     D = 24
+    MIN_D = 18
 
     def __init__(self):
         super().__init__(min_h=self.D + 4)
@@ -504,12 +510,16 @@ class ResultDots(_Chart):
     def set_data(self, items: list[tuple[str, str]]) -> None:
         """items: (결과 '승'/'무'/'패', 툴팁 글)."""
         self._items = list(items)
-        self.setMinimumWidth(max(len(self._items), 1) * (self.D + GAP + 2))
+        self.setMinimumWidth(max(len(self._items), 1) * (self.MIN_D + GAP + 2))
         self.updateGeometry()
         self.update()
 
     def sizeHint(self) -> QSize:
-        return QSize(self.minimumWidth(), self.D + 4)
+        return QSize(max(len(self._items), 1) * (self.D + GAP + 2), self.D + 4)
+
+    def dot_size(self) -> float:
+        n = max(len(self._items), 1)
+        return max(self.MIN_D, min(self.D, self.width() / n - GAP - 2))
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
@@ -518,14 +528,15 @@ class ResultDots(_Chart):
         if not self._items:
             self._empty(p)
             return
-        f = _small_font(self.font(), SMALL_PT, bold=True)
+        d = self.dot_size()
+        f = _small_font(self.font(), SMALL_PT if d >= 22 else SMALL_PT - 1, bold=True)
         p.setFont(f)
-        step = self.D + GAP + 2
-        y = (self.height() - self.D) / 2
+        step = d + GAP + 2
+        y = (self.height() - d) / 2
         for i, (res, tip) in enumerate(self._items):
             col = (T.CHART_UP if "승" in res else T.CHART_DOWN if "패" in res
                    else T.CHART_NEUTRAL)
-            rect = QRectF(i * step + 1, y, self.D, self.D)
+            rect = QRectF(i * step + 1, y, d, d)
             p.setPen(QPen(QColor(T.PANEL), RING_W))
             p.setBrush(QColor(col))
             p.drawEllipse(rect)
