@@ -9,7 +9,8 @@
 
 | 파일 | 역할 |
 |------|------|
-| `app_main.py` | PyQt6 UI — 검색 바, 요약 패널, 전적 표, 조회 워커 스레드(`MatchLoader`) |
+| `app_main.py` | PyQt6 UI — 검색 화면 → 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드 포함), 조회 워커 스레드(`MatchLoader`). 메뉴를 늘리려면 `NAV` 에 한 줄 |
+| `theme.py` | 밝은 테마 — 색 상수·QSS·`apply()`(Fusion + 밝은 팔레트 + 기본 글꼴) |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다 |
@@ -23,6 +24,9 @@
 ```powershell
 python check_api.py <닉네임>   # API 점검
 python app_main.py             # 앱 실행
+python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음)
+# 메뉴별 화면을 PNG 로 떠서 눈으로 볼 때 — 글꼴 폴더를 안 주면 offscreen 이 장식체를 집는다
+$env:QT_QPA_FONTDIR="C:/Windows/Fonts"; $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py
 ```
 
 필수 패키지: `pip install -r requirements.txt` (PyQt6, requests, python-dotenv)
@@ -70,6 +74,19 @@ python app_main.py             # 앱 실행
    달라 보인다.** 값 크기에 비례해 배경을 칠하는 강조(공격력/수비력 등)는
    알파 대신 고정 배경색(`T.PANEL`) 기준으로 직접 섞은 **불투명** 색을 써야
    행마다 일관되게 보인다.
+
+3. **전역 QSS 에 `font-size`/`font-family` 를 넣지 않는다 — QSS 의 글꼴은 `setFont()` 를
+   이긴다.** 다크 테마 시절 `QWidget { font-size: 15px }` 하나 때문에 코드의 모든
+   `setFont` 크기(검색 제목 30pt · 랭커 타일 30pt · `FitTableWidget` 의 자동 축소)가
+   **조용히 15px 로 눌려 있었다**(2026-10-01 밝은 테마 전환 중 발견). 표 자동 축소는
+   "글자는 그대로, 열만 좁아지는" 상태였다. 기본 글꼴은 `theme.apply()` 의
+   `QApplication.setFont` 로 건다.
+   `test_ui_smoke.test_setfont_sizes_survive_stylesheet` 가 지킨다.
+
+4. **`FitTableWidget` 의 열 여백은 상수가 아니라 `_measure_pad()` 로 Qt 에게 묻는다.**
+   선수 표는 표 전용 QSS(`QTableWidget::item { padding: … }`)가 셀마다 여백을 얹어서,
+   글자 폭만 보고 상수를 줄였더니 "33.3" 이 53px 칸에서 "3…" 로 잘렸다(Qt 계산 필요 폭 60).
+   `test_player_table_cells_not_elided` 가 "열 폭 ≥ `sizeHintForColumn`" 으로 지킨다.
 
 ---
 

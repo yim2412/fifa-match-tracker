@@ -1,6 +1,6 @@
 """피파 전적관리 — PyQt6 앱.
 
-첫 화면은 검색창 하나. 구단주명을 넣으면 랭커 카드 + 분석 탭으로 전환된다.
+첫 화면은 검색창 하나. 구단주명을 넣으면 왼쪽 메뉴 + 대시보드 화면으로 전환된다.
 """
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
-    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
+    QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
     QTableWidget, QTabWidget, QVBoxLayout, QWidget,
 )
@@ -34,9 +35,9 @@ from models import (
 )
 from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
-    NA, BarRow, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
+    NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
-    StatCard, TrendChart, rate_of, wdl_text,
+    StatCard, TrendChart, add_shadow, rate_of, wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -565,13 +566,12 @@ class MainWindow(QMainWindow):
         self._load_season_cache()  # 시즌 콤보·시즌별 성적 탭이 쓸 시즌표
 
     # ── UI ────────────────────────────────────────────────────────────
-    PAGE_SEARCH, PAGE_RANKER, PAGE_ANALYSIS = 0, 1, 2
+    PAGE_SEARCH, PAGE_MAIN = 0, 1
 
     def _build_ui(self) -> None:
         self.stack = QStackedWidget()
-        self.stack.addWidget(self._build_search_page())    # 0
-        self.stack.addWidget(self._build_ranker_page())    # 1
-        self.stack.addWidget(self._build_analysis_page())  # 2
+        self.stack.addWidget(self._build_search_page())  # 0
+        self.stack.addWidget(self._build_main_page())    # 1
         self.setCentralWidget(self.stack)
 
         self.progress = QProgressBar()
@@ -616,6 +616,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.addStretch(1)
         self.ed_search = QLineEdit()
+        self.ed_search.setObjectName("bigSearch")
         self.ed_search.setPlaceholderText("구단주명을 입력해주세요.")
         self.ed_search.setFixedWidth(580)
         self.ed_search.setFixedHeight(56)
@@ -649,6 +650,7 @@ class MainWindow(QMainWindow):
         self.row_recent.addStretch(1)
         box_v.addLayout(self.row_recent)
 
+        add_shadow(box)
         centering.addWidget(box)
         centering.addStretch(1)
         outer.addLayout(centering)
@@ -686,170 +688,249 @@ class MainWindow(QMainWindow):
         self.ed_search.setText(nickname)
         self._on_search()
 
-    def _top_bar(self) -> QHBoxLayout:
-        """검색·등록 — 랭커/분석 두 페이지가 공유하는 상단 바."""
-        bar = QHBoxLayout()
+    def _top_bar(self) -> QFrame:
+        """상단 바 — 재검색·등록 계정 + 시즌·표시 범위·새 경기 확인.
+
+        어느 메뉴에 있든 같은 필터가 걸린다. 예전엔 랭커/분석 두 페이지가 바를
+        하나씩 가져서 리스트(_nick_edits 등)로 묶었는데, 이제 하나뿐이어도
+        조작 코드는 그대로 리스트를 돈다.
+        """
+        bar = QFrame()
+        bar.setObjectName("topbar")
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(14, 10, 14, 10)
+        h.setSpacing(8)
+
         back = QPushButton("← 검색")
         back.clicked.connect(self._go_search)
         ed = QLineEdit()
         ed.setPlaceholderText("구단주명")
-        ed.setMaximumWidth(220)
+        ed.setFixedWidth(170)
         ed.returnPressed.connect(self._on_search)
         btn = QPushButton("조회")
         btn.setObjectName("primary")
         btn.clicked.connect(self._on_search)
         cb = NoScrollComboBox()
-        cb.setMinimumWidth(170)
+        cb.setMinimumWidth(150)
         cb.activated.connect(self._on_pick_account)
-
-        bar.addWidget(back)
-        bar.addWidget(ed)
-        bar.addWidget(btn)
-        bar.addWidget(QLabel("등록"))
-        bar.addWidget(cb)
-        bar.addStretch(1)
-        # 두 페이지가 각각 자기 위젯을 갖되, 조작은 리스트로 함께 처리한다.
+        lb_acct = QLabel("등록")
+        lb_acct.setStyleSheet(f"color: {T.TEXT_DIM};")
+        for x in (back, ed, btn):
+            h.addWidget(x)
+        h.addSpacing(6)
+        h.addWidget(lb_acct)
+        h.addWidget(cb)
         self._nick_edits.append(ed)
         self._search_btns.append(btn)
         self._acct_combos.append(cb)
-        return bar
 
-    def _build_ranker_page(self) -> QWidget:
-        """검색 결과 1단계 — 랭커 카드만. '감독모드 분석'을 눌러야 탭으로 간다."""
-        w = QWidget()
-        outer = QVBoxLayout(w)
-        outer.addLayout(self._top_bar())
-        outer.addStretch(1)
-
-        row = QHBoxLayout()
-        row.addStretch(1)
-        col = QVBoxLayout()
-        self.card_ranker = RankerCard()
-        col.addWidget(self.card_ranker, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        self.btn_analyze = QPushButton("📊  감독모드 분석")
-        self.btn_analyze.setObjectName("primary")
-        self.btn_analyze.setFixedHeight(40)
-        self.btn_analyze.clicked.connect(self._go_analysis)
-        col.addWidget(self.btn_analyze)
-        row.addLayout(col)
-        row.addStretch(1)
-        outer.addLayout(row)
-        outer.addStretch(2)
-        return w
-
-    def _build_analysis_page(self) -> QWidget:
-        """검색 결과 2단계 — 프로필·요약 카드·범위·큰 탭."""
-        w = QWidget()
-        outer = QVBoxLayout(w)
-        outer.setSpacing(10)
-
-        bar2 = QHBoxLayout()
-        back = QPushButton("← 뒤로가기")
-        back.clicked.connect(lambda: self.stack.setCurrentIndex(self.PAGE_RANKER))
-        self.lb_profile = QLabel("-")
-        pf = QFont()
-        pf.setPointSize(16)
-        pf.setBold(True)
-        self.lb_profile.setFont(pf)
-        self.lb_sub = QLabel("-")
-        self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM};")
-        bar2.addWidget(back)
-        bar2.addSpacing(10)
-        bar2.addWidget(self.lb_profile)
-        bar2.addWidget(self.lb_sub)
-        bar2.addStretch(1)
-        outer.addLayout(bar2)
-
-        cards = QHBoxLayout()
-        self.card_record = StatCard("전적")
-        self.card_rate = StatCard("승률", T.GREEN)
-        self.card_gf = StatCard("평균 득점", T.GREEN)
-        self.card_ga = StatCard("평균 실점", T.RED)
-        # 연승/연패는 승률 그래프 탭에서도(그 탭은 위 4개를 기간 통계로 바꿔치기
-        # 한다) 항상 "지금 흐름"을 보여줘야 의미가 있어서 별도 카드로 뺀다 —
-        # _show_trend_summary/_show_range_summary 의 카드 갈아치우기 대상이 아니다.
-        self.card_streak = StatCard("연속")
-        for c in (self.card_record, self.card_rate, self.card_gf, self.card_ga,
-                 self.card_streak):
-            cards.addWidget(c)
-        outer.addLayout(cards)
-
-        # 표시 범위 — 시작~끝을 직접 입력해 그 구간만 본다(레퍼런스 화면과 동일한
-        # 구성). 검색 시 이미 전량을 받아 두므로 "더 불러오기"는 그 사이 새로
-        # 생긴 경기가 있는지 다시 확인하는 버튼이다.
-        rng = QFrame()
-        rng.setStyleSheet(
-            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 8px; }}")
-        rl = QHBoxLayout(rng)
-        rl.setContentsMargins(14, 10, 14, 10)
+        sep = QFrame()
+        sep.setFixedSize(1, 26)
+        sep.setStyleSheet(f"background: {T.BORDER}; border: none;")
+        h.addSpacing(8)
+        h.addWidget(sep)
+        h.addSpacing(8)
 
         # 시즌 필터가 먼저 걸리고, 그 안에서 시작~끝 판수를 자른다.
         lb_season = QLabel("시즌")
         lb_season.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.cb_season = NoScrollComboBox()
-        self.cb_season.setMinimumWidth(170)
+        self.cb_season.setMinimumWidth(150)
         self.cb_season.addItem("전체", None)
         self.cb_season.currentIndexChanged.connect(self._on_season_changed)
-        rl.addWidget(lb_season)
-        rl.addWidget(self.cb_season)
-        rl.addSpacing(12)
+        h.addWidget(lb_season)
+        h.addWidget(self.cb_season)
+        h.addSpacing(8)
 
+        # 표시 범위 — 시작~끝을 직접 입력해 그 구간만 본다. 검색 시 이미 전량을
+        # 받아 두므로 "새 경기 확인"은 그 사이 새로 생긴 경기가 있는지 다시
+        # 확인하는 버튼이다.
         self.sp_from = QSpinBox()
         self.sp_from.setRange(1, 1)
-        self.sp_from.setFixedWidth(72)
+        self.sp_from.setFixedWidth(68)
         self.sp_from.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         lb_tilde = QLabel("~")
         lb_tilde.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.sp_to = QSpinBox()
         self.sp_to.setRange(1, 1)
-        self.sp_to.setFixedWidth(72)
+        self.sp_to.setFixedWidth(68)
         self.sp_to.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.btn_apply = QPushButton("적용")
         self.btn_apply.setStyleSheet(T.OUTLINE_BUTTON_QSS)
         self.btn_apply.clicked.connect(self._apply_range)
         self.lb_total = QLabel("")
         self.lb_total.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.btn_more = QPushButton("⬇  새 경기 확인")
+        self.btn_more = QPushButton("⟳  새 경기 확인")
         self.btn_more.setObjectName("primary")
         self.btn_more.setToolTip(
             "검색할 때 이미 받을 수 있는 만큼 전부 받아 둡니다.\n"
             "이 버튼은 그 사이 새로 생긴 경기가 있는지 다시 확인합니다.")
         self.btn_more.clicked.connect(self._on_search)
+        for x in (self.sp_from, lb_tilde, self.sp_to, self.btn_apply):
+            h.addWidget(x)
+        h.addSpacing(6)
+        h.addWidget(self.lb_total)
+        h.addStretch(1)
+        h.addWidget(self.btn_more)
+        return bar
 
-        rl.addWidget(self.sp_from)
-        rl.addWidget(lb_tilde)
-        rl.addWidget(self.sp_to)
-        rl.addWidget(self.btn_apply)
-        rl.addSpacing(8)
-        rl.addWidget(self.lb_total)
-        rl.addStretch(1)
-        rl.addWidget(self.btn_more)
-        outer.addWidget(rng)
+    # 왼쪽 메뉴 — (묶음 제목, [(메뉴 이름, 페이지 빌더 이름)]). 묶음 제목이
+    # None 이면 제목 없이 바로 메뉴. 페이지 순서는 이 표의 순서다.
+    NAV = [
+        (None, [("대시보드", "_build_dashboard_page")]),
+        ("경기", [("경기 목록", "_build_matches_tab"),
+                 ("상대 전적", "_build_opponents_tab"),
+                 ("구단주 비교", "_build_compare_tab")]),
+        ("흐름", [("흐름 분석", "_build_analysis_tab"),
+                 ("승률 그래프", "_build_trend_tab"),
+                 ("기간별 추이", "_build_period_tab"),
+                 ("시즌별 성적", "_build_season_tab")]),
+        ("경기력", [("승부처 분석", "_build_clutch_tab"),
+                   ("성적 진단", "_build_diagnosis_tab"),
+                   ("전술·경기 결과", "_build_tactics_tab"),
+                   ("슛 맵", "_build_shotmap_tab")]),
+        ("선수", [("선수 지표", "_build_players_tab"),
+                 ("선수별 결정력", "_build_finishing_tab"),
+                 ("선수 조합", "_build_synergy_tab"),
+                 ("포지션별 최다 상대", "_build_position_opp_tab")]),
+        ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
+                   ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
+    ]
 
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_analysis_tab(), "흐름 분석")
-        self.tabs.addTab(self._build_players_tab(), "선수 지표")
-        self.tabs.addTab(self._build_tactics_tab(), "전술·경기 결과")
-        self.tabs.addTab(self._build_matches_tab(), "경기 목록")
-        self.tabs.addTab(self._build_opponents_tab(), "상대 전적")
-        self.TAB_TREND = self.tabs.addTab(self._build_trend_tab(), "승률 그래프")
-        self.tabs.addTab(self._build_period_tab(), "기간별 추이")
-        self.tabs.addTab(self._build_season_tab(), "시즌별 성적")
-        self.tabs.addTab(self._build_clutch_tab(), "승부처 분석")
-        self.tabs.addTab(self._build_diagnosis_tab(), "성적 진단")
-        self.tabs.addTab(self._build_shotmap_tab(), "슛 맵")
-        self.tabs.addTab(self._build_finishing_tab(), "선수별 결정력")
-        self.tabs.addTab(self._build_synergy_tab(), "선수 조합")
-        self.tabs.addTab(self._build_position_opp_tab(), "포지션별 최다 상대")
-        self.tabs.addTab(self._build_compare_tab(), "구단주 비교")
+    def _build_main_page(self) -> QWidget:
+        """검색 이후 화면 — 왼쪽 메뉴 + (상단 바 / 메뉴별 페이지)."""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        side = QFrame()
+        side.setObjectName("sidebar")
+        side.setFixedWidth(T.SIDEBAR_W)
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(0, 20, 0, 14)
+        sv.setSpacing(2)
+        brand = QLabel("FC ONLINE")
+        brand.setObjectName("brand")
+        brand_sub = QLabel("감독모드 전적 분석")
+        brand_sub.setObjectName("brandSub")
+        for lb in (brand, brand_sub):
+            lb.setContentsMargins(22, 0, 0, 0)
+            sv.addWidget(lb)
+        sv.addSpacing(14)
+
+        self.nav = QListWidget()
+        self.nav.setObjectName("nav")
+        self.nav.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        sv.addWidget(self.nav, 1)
+
+        prof = QFrame()
+        prof.setObjectName("profileBox")
+        pv = QVBoxLayout(prof)
+        pv.setContentsMargins(12, 10, 12, 10)
+        pv.setSpacing(2)
+        self.lb_profile = QLabel("-")
+        pf = QFont()
+        pf.setPointSize(12)
+        pf.setBold(True)
+        self.lb_profile.setFont(pf)
+        self.lb_sub = QLabel("-")
+        self.lb_sub.setWordWrap(True)
+        self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 12px;")
+        pv.addWidget(self.lb_profile)
+        pv.addWidget(self.lb_sub)
+        pwrap = QHBoxLayout()
+        pwrap.setContentsMargins(12, 0, 12, 0)
+        pwrap.addWidget(prof)
+        sv.addLayout(pwrap)
+        h.addWidget(side)
+
+        right = QWidget()
+        rv = QVBoxLayout(right)
+        rv.setContentsMargins(20, 16, 20, 14)
+        rv.setSpacing(14)
+        rv.addWidget(self._top_bar())
+        self.pages = QStackedWidget()
+        rv.addWidget(self.pages, 1)
+        h.addWidget(right, 1)
+
+        # 팀컬러 두 탭이 빌드 중에 채우는 목록 — 빌더보다 먼저 있어야 한다.
         self._teamcolor_fetch_btns: list[QPushButton] = []
         self._teamcolor_status_labels: list[QLabel] = []
-        self.tabs.addTab(self._build_teamcolor_rate_tab(), "팀컬러 승률")
-        self.tabs.addTab(self._build_teamcolor_rank_tab(), "팀컬러 랭킹")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        outer.addWidget(self.tabs, 1)
+        self._page_index: dict[str, int] = {}
+        bold = QFont()
+        bold.setBold(True)
+        for section, entries in self.NAV:
+            if section:
+                head = QListWidgetItem(section)
+                head.setFlags(Qt.ItemFlag.NoItemFlags)
+                f = QFont()
+                f.setPointSize(9)
+                f.setBold(True)
+                head.setFont(f)
+                self.nav.addItem(head)
+            for name, builder in entries:
+                page = getattr(self, builder)()
+                if builder != "_build_dashboard_page":
+                    page = self._wrap_page(name, page)
+                idx = self.pages.addWidget(page)
+                self._page_index[name] = idx
+                item = QListWidgetItem(name)
+                item.setData(Qt.ItemDataRole.UserRole, idx)
+                self.nav.addItem(item)
+        self.nav.currentItemChanged.connect(self._on_nav_changed)
+        self.nav.setCurrentRow(0)
+        return w
+
+    @staticmethod
+    def _wrap_page(title: str, body: QWidget) -> QWidget:
+        """기존 탭 내용을 제목 달린 흰 카드 하나로 감싼다(내용은 그대로)."""
+        card = Card(title)
+        card.body.addWidget(body, 1)
+        return card
+
+    def _on_nav_changed(self, cur, _prev=None) -> None:
+        if cur is None:
+            return
+        idx = cur.data(Qt.ItemDataRole.UserRole)
+        if idx is not None:
+            self.pages.setCurrentIndex(idx)
+
+    def _go_page(self, name: str) -> None:
+        idx = self._page_index.get(name)
+        for row in range(self.nav.count()):
+            if self.nav.item(row).data(Qt.ItemDataRole.UserRole) == idx:
+                self.nav.setCurrentRow(row)
+                return
+
+    def _build_dashboard_page(self) -> QWidget:
+        """대시보드 — 지금은 요약 카드 + 구단주 카드. 차트 카드는 다음 단계."""
+        w = QWidget()
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(14)
+
+        cards = QHBoxLayout()
+        cards.setSpacing(14)
+        self.card_record = StatCard("전적")
+        self.card_rate = StatCard("승률", T.GREEN)
+        self.card_gf = StatCard("평균 득점", T.GREEN)
+        self.card_ga = StatCard("평균 실점", T.RED)
+        self.card_streak = StatCard("연속")
+        for c in (self.card_record, self.card_rate, self.card_gf, self.card_ga,
+                  self.card_streak):
+            add_shadow(c)
+            cards.addWidget(c)
+        outer.addLayout(cards)
+
+        row = QHBoxLayout()
+        self.card_ranker = RankerCard()
+        add_shadow(self.card_ranker)
+        row.addWidget(self.card_ranker, 0, Qt.AlignmentFlag.AlignTop)
+        row.addStretch(1)
+        outer.addLayout(row)
+        outer.addStretch(1)
         return w
 
     def _build_teamcolor_fetch_row(self) -> tuple[QHBoxLayout, QPushButton, QLabel]:
@@ -946,6 +1027,18 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self.lb_trend_span)
         ctrl.addStretch(1)
         v.addLayout(ctrl)
+
+        # 선택한 기간의 최고·평균·최저 승률 — 예전엔 상단 요약 카드를 이 탭에서만
+        # 바꿔치기했는데, 요약 카드가 대시보드로 옮겨 가 여기 따로 둔다.
+        trow = QHBoxLayout()
+        self.card_trend_max = StatCard("최고 승률", T.GREEN)
+        self.card_trend_avg = StatCard("평균 승률")
+        self.card_trend_min = StatCard("최저 승률", T.RED)
+        self.card_trend_games = StatCard("경기수")
+        for c in (self.card_trend_max, self.card_trend_avg,
+                  self.card_trend_min, self.card_trend_games):
+            trow.addWidget(c)
+        v.addLayout(trow)
 
         self.gb_trend = QGroupBox("최근 30일 승률 추이")
         gv = QVBoxLayout(self.gb_trend)
@@ -1137,18 +1230,18 @@ class MainWindow(QMainWindow):
             gbar.setFormat(f"{bk.scored}득")
             gbar.setFixedHeight(16)
             gbar.setStyleSheet(
-                f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
                 f"color:{T.TEXT};text-align:right;padding-right:4px;}}"
-                f"QProgressBar::chunk{{background:{T.GREEN};border-radius:3px;}}")
+                f"QProgressBar::chunk{{background:{T.WIN_BAR};border-radius:3px;}}")
             rbar = QProgressBar()
             rbar.setRange(0, max(peak, 1))
             rbar.setValue(bk.conceded)
             rbar.setFormat(f"{bk.conceded}실")
             rbar.setFixedHeight(16)
             rbar.setStyleSheet(
-                f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
                 f"color:{T.TEXT};text-align:left;padding-left:4px;}}"
-                f"QProgressBar::chunk{{background:{T.RED};border-radius:3px;}}")
+                f"QProgressBar::chunk{{background:{T.LOSE_BAR};border-radius:3px;}}")
             h.addWidget(a)
             h.addWidget(gbar, 1)
             h.addWidget(rbar, 1)
@@ -1169,9 +1262,9 @@ class MainWindow(QMainWindow):
                 bar.setFormat(f"{band.win_rate:.1f}%  ({wdl_text(band.win, band.draw, band.lose)})")
                 bar.setFixedHeight(16)
                 bar.setStyleSheet(
-                    f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                    f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
                     f"color:{T.TEXT};text-align:center;}}"
-                    f"QProgressBar::chunk{{background:{T.GREEN};border-radius:3px;}}")
+                    f"QProgressBar::chunk{{background:{T.WIN_BAR};border-radius:3px;}}")
                 h.addWidget(a)
                 h.addWidget(bar, 1)
             else:
@@ -1229,9 +1322,9 @@ class MainWindow(QMainWindow):
                           f"득 {avg_gf:.2f} 실 {avg_ga:.2f}")
             bar.setFixedHeight(18)
             bar.setStyleSheet(
-                f"QProgressBar{{background:{T.PANEL};border:none;border-radius:3px;"
+                f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
                 f"color:{T.TEXT};text-align:center;}}"
-                f"QProgressBar::chunk{{background:{T.GREEN};border-radius:3px;}}")
+                f"QProgressBar::chunk{{background:{T.WIN_BAR};border-radius:3px;}}")
             h.addWidget(bar, 1)
         else:
             none = QLabel("경기 없음")
@@ -1502,9 +1595,11 @@ class MainWindow(QMainWindow):
         # setFont() 로 준 크기는 QFontMetrics 측정에만 쓰여서, 축소해도
         # 화면엔 그대로 큰 글씨가 남아 잘림이 재발한다 — 그래서 폰트 크기는
         # QSS 가 아니라 setFont() 하나로만 관리한다.
+        # 좌우 padding 은 13 → 7px. 왼쪽 메뉴(230px)가 생겨 표 폭이 줄었는데,
+        # 19열 × 좌우 26px 이 여백으로만 나가 글자가 11px 까지 줄었다.
         self.tbl_players.setStyleSheet(
-            f"QTableWidget::item {{ padding: 14px 13px; margin: 0px; }}"
-            f"QHeaderView::section {{ padding: 8px 10px; }}")
+            f"QTableWidget::item {{ padding: 12px 7px; margin: 0px; }}"
+            f"QHeaderView::section {{ padding: 8px 6px; }}")
         cell_font = QFont()
         cell_font.setPixelSize(14)
         self.tbl_players.setFont(cell_font)
@@ -1557,7 +1652,7 @@ class MainWindow(QMainWindow):
             btn.setStyleSheet(
                 f"QPushButton {{ border: 1px solid {T.BORDER}; border-radius: 6px;"
                 f" padding: 4px; }}"
-                f"QPushButton:checked {{ background: {color}; color: #06240d;"
+                f"QPushButton:checked {{ background: {color}; color: {T.ON_ACCENT};"
                 f" font-weight: bold; border-color: {color}; }}")
             btn.clicked.connect(self._apply_match_filter)
             row.addWidget(btn)
@@ -1871,7 +1966,7 @@ class MainWindow(QMainWindow):
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
         self.lb_my_formation.setStyleSheet(
-            f"background: #12261a; border: 1px solid {T.BORDER};"
+            f"background: {T.GREEN_SOFT}; border: 1px solid {T.BORDER};"
             f" border-radius: 6px; padding: 8px;")
         vf.addWidget(self.lb_my_formation)
 
@@ -1931,10 +2026,6 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(self.PAGE_SEARCH)
         self.ed_search.setFocus()
         self.ed_search.selectAll()
-
-    def _go_analysis(self) -> None:
-        if self._matches:
-            self.stack.setCurrentIndex(self.PAGE_ANALYSIS)
 
     def _on_search(self) -> None:
         if self.stack.currentIndex() == self.PAGE_SEARCH:
@@ -2105,7 +2196,7 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         for w in (*self._search_btns, *self._nick_edits, self.ed_search):
             w.setEnabled(not busy)
-        for b in (self.btn_more, self.btn_apply, self.btn_analyze):
+        for b in (self.btn_more, self.btn_apply):
             b.setEnabled(not busy)
         self.progress.setVisible(busy)
         if busy:
@@ -2132,7 +2223,8 @@ class MainWindow(QMainWindow):
         self._set_busy(False)
         self._refresh_accounts()
         self._refresh_recent()
-        if ouid != self._ouid:
+        switched = ouid != self._ouid
+        if switched:
             self._trend_reset_pending = True  # 다른 계정으로 전환 — 승률 그래프 기간을 30일로 되돌린다
         self._ouid = ouid
         self._basic = basic
@@ -2155,9 +2247,10 @@ class MainWindow(QMainWindow):
         self._rebuild_season_combo()
         self._apply_season(render=False)
 
-        # 검색 결과는 먼저 랭커 카드 페이지로.
-        self.stack.setCurrentIndex(self.PAGE_RANKER)
-        self.btn_analyze.setEnabled(bool(matches))
+        # 다른 계정이면 대시보드부터. 같은 계정 재확인이면 보던 메뉴를 유지한다.
+        self.stack.setCurrentIndex(self.PAGE_MAIN)
+        if switched:
+            self._go_page("대시보드")
         self._render_ranker()
 
         if not matches:
@@ -2331,7 +2424,7 @@ class MainWindow(QMainWindow):
                 if not item:
                     continue
                 if bg:
-                    item.setBackground(self._blend(T.PANEL, bg, 0.35))
+                    item.setBackground(self._blend(T.PANEL, bg, T.ROW_TINT))
                     item.setForeground(QColor(T.TEXT))
             # 더블클릭하면 이 경기 스쿼드를 바로 찾을 수 있게 match_id 를 붙인다.
             date_item = self.table.item(r, 0)
@@ -3176,43 +3269,29 @@ class MainWindow(QMainWindow):
         self.gb_division.setTitle(f"최근 {days}일 등급 추이")
         self.division_chart.set_data(shown, self._division_names)
 
-        if self.tabs.currentIndex() == self.TAB_TREND:
-            self._show_trend_summary()
-
-    def _on_tab_changed(self, index: int) -> None:
-        if index == self.TAB_TREND:
-            self._show_trend_summary()
-        else:
-            self._show_range_summary()
+        self._show_trend_summary()
 
     def _show_trend_summary(self) -> None:
-        """승률 그래프 탭에서는 상단 카드를 선택한 기간의 최고·평균·최저 승률로."""
+        """승률 그래프 페이지의 기간 요약 — 선택한 기간의 최고·평균·최저 승률."""
         periods = getattr(self, "_trend_periods", [])
         days = self.sp_trend_days.value()
         rates = [p.win_rate for p in periods if p.games]
         total_games = sum(p.games for p in periods)
         total_win = sum(p.win for p in periods)
         avg_rate = (total_win / total_games * 100) if total_games else 0.0
-        self.card_record.set_title("최고 승률")
-        self.card_record.set(f"{max(rates):.1f}%" if rates else NA)
-        self.card_rate.set_title("평균 승률")
-        self.card_rate.set(f"{avg_rate:.1f}%" if total_games else NA)
-        self.card_gf.set_title("최저 승률")
-        self.card_gf.set(f"{min(rates):.1f}%" if rates else NA)
-        self.card_ga.set_title(f"{days}일 경기수")
-        self.card_ga.set(f"{total_games}경기")
+        self.card_trend_max.set(f"{max(rates):.1f}%" if rates else NA)
+        self.card_trend_avg.set(f"{avg_rate:.1f}%" if total_games else NA)
+        self.card_trend_min.set(f"{min(rates):.1f}%" if rates else NA)
+        self.card_trend_games.set_title(f"{days}일 경기수")
+        self.card_trend_games.set(f"{total_games}경기")
 
     def _show_range_summary(self) -> None:
-        """다른 탭에서는 원래대로 — 표시 구간(시작~끝) 전적."""
+        """대시보드 요약 카드 — 표시 구간(시작~끝) 전적."""
         matches, _ = self._slice()
         s = summarize(matches)
-        self.card_record.set_title("전적")
         self.card_record.set(wdl_text(s.win, s.draw, s.lose))
-        self.card_rate.set_title("승률")
         self.card_rate.set(f"{s.win_rate:.1f}%")
-        self.card_gf.set_title("평균 득점")
         self.card_gf.set(f"{s.avg_goals_for:.2f}")
-        self.card_ga.set_title("평균 실점")
         self.card_ga.set(f"{s.avg_goals_against:.2f}")
         self._render_streak(matches)
 
@@ -3349,9 +3428,9 @@ class MainWindow(QMainWindow):
         if item is None or vmax <= 0:
             return
         frac = max(0.0, min(value / vmax, 1.0))
-        # 최소값도 배경과 구분되게 30%부터 시작 — 12%는 T.PANEL(#171b21)이
-        # 워낙 어두워서 낮은 값 쪽이 사실상 무색으로 보였다.
-        mix = 0.30 + frac * 0.55  # 30%~85% — 옅게~진하게
+        # 다크 테마 땐 배경이 워낙 어두워 30%~85% 로 잡았다. 흰 배경에선 그 값이면
+        # 높은 쪽이 거의 원색이라 검은 글자가 묻힌다 — 10%~55% 로 낮췄다.
+        mix = 0.10 + frac * 0.45
         item.setBackground(MainWindow._blend(T.PANEL, hexcolor, mix))
 
     @staticmethod
@@ -3473,7 +3552,7 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
-    app.setStyleSheet(T.QSS)
+    T.apply(app)
     icon_path = config.asset_path("app_icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))

@@ -7,14 +7,44 @@ from __future__ import annotations
 from PyQt6.QtCore import QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar,
-    QSizePolicy, QStyle, QStyledItemDelegate, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
+    QLabel, QProgressBar, QSizePolicy, QStyle, QStyledItemDelegate,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import theme as T
 
 NA = "—"  # API 가 안 주는 값. 그럴싸한 숫자를 지어 넣지 않는다.
+
+
+def add_shadow(w: QWidget) -> None:
+    """카드 아래 옅은 그림자. 그림자 효과는 창 크기를 바꿀 때마다 다시
+    그려져 비싸다 — 화면에 동시에 보이는 카드 몇 장에만 건다."""
+    eff = QGraphicsDropShadowEffect(w)
+    eff.setBlurRadius(T.SHADOW_BLUR)
+    eff.setOffset(0, T.SHADOW_Y)
+    eff.setColor(QColor(16, 24, 40, T.SHADOW_ALPHA))
+    w.setGraphicsEffect(eff)
+
+
+class Card(QFrame):
+    """흰 카드 — 제목(선택) + 본문. 본문 레이아웃은 .body 로 채운다."""
+
+    def __init__(self, title: str = "", shadow: bool = False, margin: int = 18):
+        super().__init__()
+        self.setObjectName("card")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(margin, margin - 4, margin, margin)
+        v.setSpacing(10)
+        self.title = QLabel(title)
+        self.title.setObjectName("cardTitle")
+        self.title.setVisible(bool(title))
+        v.addWidget(self.title)
+        self.body = QVBoxLayout()
+        self.body.setContentsMargins(0, 0, 0, 0)
+        v.addLayout(self.body, 1)
+        if shadow:
+            add_shadow(self)
 
 
 class FitTableWidget(QTableWidget):
@@ -28,10 +58,13 @@ class FitTableWidget(QTableWidget):
     """
 
     MIN_FONT_PX = 9  # 이보다 더 줄이면 안 읽혀서 여기서 멈춘다.
-    # +42: QSS 좌우 padding(13px*2=26px)만 셈하면 슬랙이 0이 되고, 실제로
-    # 렌더될 땐 스타일이 얹는 여분의 텍스트 여백 때문에 "5경기"·"6.00"처럼
-    # 폭이 애매한 값이 "…"로 잘렸다(스크린샷으로 확인한 값 — 좌우 padding + 16 버퍼).
-    PAD = 42
+    # 열마다 글자 폭 위에 얹는 여백은 상수로 박지 않고 Qt 에게 묻는다
+    # (_measure_pad). 예전 상수 42 는 "재는 글꼴 ≠ 그리는 글꼴"(전역 QSS 의
+    # font-size 가 setFont 를 이겼다) 시절의 실측값이라, 그 QSS 를 걷어내자
+    # 24 로 줄였더니 이번엔 "33.3"(27px)이 53px 칸에서 "3…"로 잘렸다 — Qt 는
+    # 그 셀에 60px 가 필요하다고 계산하고 있었다(Fusion 셀 여백 + 체크 표시
+    # 자리 등). 스타일·글꼴이 바뀔 때마다 상수를 다시 맞추는 대신 실측한다.
+    PAD_SLACK = 2
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -40,6 +73,7 @@ class FitTableWidget(QTableWidget):
         self._base_header_px = 13
         self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
         self._fit_cache: dict[int, dict[int, int]] = {}  # cell_px -> 최종 열 너비(+padding+extra)
+        self._pad = 0  # 열마다 얹는 여백 — set_content_widths 때 _measure_pad 로 잰다
 
     def set_base_font_px(self, cell_px: int, header_px: int) -> None:
         """폰트를 줄이지 않아도 될 때(창이 넓을 때) 쓸 기본 크기."""
@@ -54,6 +88,7 @@ class FitTableWidget(QTableWidget):
         캐시로 후보 폰트 크기를 추정만 하므로, 창을 드래그하는 동안 표
         전체를 폰트 크기 수만큼 반복 측정하지 않는다."""
         self._extra = extra or {}
+        self._pad = self._measure_pad()
         cell_font = QFont(self.font())
         cell_font.setPixelSize(self._base_cell_px)
         header_font = QFont(self.horizontalHeader().font())
@@ -82,11 +117,31 @@ class FitTableWidget(QTableWidget):
             widths[c] = w
         return widths
 
+    def _measure_pad(self) -> int:
+        """Qt 가 계산한 열 크기 힌트 − 글자 폭 = 셀/헤더가 글자 외에 먹는 여백.
+        셀과 헤더 중 큰 쪽을 모든 열에 같이 쓴다."""
+        cell_fm = QFontMetrics(self.font())
+        header = self.horizontalHeader()
+        hdr_fm = QFontMetrics(header.font())
+        pad = 0
+        for c in range(self.columnCount()):
+            if self.rowCount():
+                tw = max((cell_fm.horizontalAdvance(self.item(r, c).text())
+                          for r in range(self.rowCount()) if self.item(r, c)),
+                         default=0)
+                if tw:
+                    pad = max(pad, self.sizeHintForColumn(c) - tw)
+            hi = self.horizontalHeaderItem(c)
+            if hi:
+                pad = max(pad, header.sectionSizeHint(c)
+                          - hdr_fm.horizontalAdvance(hi.text()))
+        return pad + self.PAD_SLACK
+
     def _estimate_total(self, cell_px: int) -> int:
         """텍스트 폭을 기준 크기 대비 선형 비례로 추정 — 후보 크기를 고르는
         용도라, 표를 다시 훑지 않고 캐시된 기준 폭에 비율만 곱한다."""
         scale = cell_px / self._base_cell_px
-        return sum(int(w * scale) + self.PAD + self._extra.get(c, 0)
+        return sum(int(w * scale) + self._pad + self._extra.get(c, 0)
                   for c, w in self._base_text_widths.items())
 
     def _fit(self) -> None:
@@ -111,7 +166,7 @@ class FitTableWidget(QTableWidget):
                           else self._measure_text(QFontMetrics(cell_font),
                                                   QFontMetrics(header_font)))
             self._fit_cache[cell_px] = {
-                "widths": {c: w + self.PAD + self._extra.get(c, 0)
+                "widths": {c: w + self._pad + self._extra.get(c, 0)
                           for c, w in text_widths.items()},
                 "cell_font": cell_font,
                 "header_font": header_font,
@@ -153,7 +208,7 @@ class RowBorderDelegate(QStyledItemDelegate):
         if not selected:
             return
         painter.save()
-        painter.setPen(QPen(QColor("#ffffff"), 1))
+        painter.setPen(QPen(QColor(T.GREEN), 1))
         rect = option.rect.adjusted(0, 0, -1, -1)
         table = self.parent()
         last_col = table.columnCount() - 1 if table is not None else index.column()
@@ -171,6 +226,17 @@ class NoScrollComboBox(QComboBox):
 
     def wheelEvent(self, e):
         e.ignore()
+
+    def paintEvent(self, e):
+        # QSS 로 ::drop-down 을 꾸미면 Fusion 이 화살표를 안 그린다 — 직접 그린다.
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QPen(QColor(T.TEXT_DIM if self.isEnabled() else T.BORDER), 1.6))
+        cx, cy = self.width() - 14, self.height() / 2
+        p.drawPolyline([QPointF(cx - 4, cy - 2), QPointF(cx, cy + 2),
+                        QPointF(cx + 4, cy - 2)])
+        p.end()
 
 
 class SortableItem(QTableWidgetItem):
@@ -297,7 +363,7 @@ class RankerCard(QFrame):
             r, col = divmod(i, 2)
             tile = QFrame()
             tile.setStyleSheet(
-                f"QFrame {{ background: #0d1117; border-radius: 8px; }}")
+                f"QFrame {{ background: {T.PANEL_2}; border-radius: 10px; }}")
             tv = QVBoxLayout(tile)
             tv.setContentsMargins(20, 20, 20, 20)
             tv.setSpacing(6)
@@ -348,8 +414,8 @@ class RankerCard(QFrame):
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.GREEN}; border: none;"
                 f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
-            self._head_name.setStyleSheet("color: #06240d; border: none;")
-            self._head_grade.setStyleSheet("color: #06240d; border: none;")
+            self._head_name.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
+            self._head_grade.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
         else:
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL_2}; border: none;"
@@ -665,7 +731,7 @@ class _PlayerChip(QFrame):
         super().__init__()
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet(
-            f"QFrame {{ background: rgba(13,17,23,235); border: 2px solid {accent};"
+            f"QFrame {{ background: rgba(255,255,255,240); border: 2px solid {accent};"
             f" border-radius: 8px; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(4, 4, 4, 3)
@@ -680,7 +746,7 @@ class _PlayerChip(QFrame):
         top.addWidget(self.season_badge)
         pos_lb = QLabel(pos_name)
         pos_lb.setStyleSheet(
-            f"background: {accent}; color: #06240d; border: none;"
+            f"background: {accent}; color: {T.ON_ACCENT}; border: none;"
             f" font-weight: bold; font-size: 11px; border-radius: 3px;"
             f" padding: 1px 4px;")
         grade_bg, grade_fg = _grade_badge_colors(grade)
@@ -819,7 +885,7 @@ class PitchWidget(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(self.rect(), QColor("#1e5c34"))
+        p.fillRect(self.rect(), QColor(T.PITCH))
         line = QColor(255, 255, 255, 130)
         p.setPen(QPen(line, 2))
         m = 10
@@ -862,7 +928,7 @@ class ShotMapWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         m = 12
-        p.fillRect(self.rect(), QColor("#1e5c34"))
+        p.fillRect(self.rect(), QColor(T.PITCH))
         line = QColor(255, 255, 255, 130)
         p.setPen(QPen(line, 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
@@ -886,7 +952,7 @@ class ShotMapWidget(QWidget):
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "슛 기록 없음")
             return
 
-        colors = {3: QColor(T.GREEN), 1: QColor(T.YELLOW), 2: QColor(T.TEXT_DIM)}
+        colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.YELLOW), 2: QColor(T.PITCH_MISS)}
         # 빗나감 → 유효 → 골 순으로 그려서 골이 맨 위에 오게 한다.
         order = sorted(self._shots, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
         for s in order:
