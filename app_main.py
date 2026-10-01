@@ -37,10 +37,14 @@ from nexon_api import FCOnlineAPI, NexonAPIError
 from widgets import (
     NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
-    StatCard, TrendChart, add_shadow, rate_of, wdl_text,
+    StatCard, TrendChart, VScrollArea, WrapBar, add_shadow, rate_of, wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
+# 창을 이보다 작게 못 줄인다 — 이 크기에서 글자가 잘리지 않는 것이 기준이다.
+# FHD 에서 넉넉하고 1366x768 노트북에도 들어간다. 화면 반 분할(960)은 18열짜리
+# 선수 지표 표가 의미가 없어 지원하지 않는다.
+MIN_WINDOW = (1280, 720)
 
 
 class MatchLoader(QThread):
@@ -561,6 +565,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
         self.resize(1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
+        self.setMinimumSize(*MIN_WINDOW)
         self._build_ui()
         self._refresh_recent()
         self._load_season_cache()  # 시즌 콤보·시즌별 성적 탭이 쓸 시즌표
@@ -695,12 +700,14 @@ class MainWindow(QMainWindow):
         하나씩 가져서 리스트(_nick_edits 등)로 묶었는데, 이제 하나뿐이어도
         조작 코드는 그대로 리스트를 돈다.
         """
-        bar = QFrame()
-        bar.setObjectName("topbar")
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(14, 10, 14, 10)
-        h.setSpacing(8)
+        def group() -> tuple[QWidget, QHBoxLayout]:
+            g = QWidget()
+            lay = QHBoxLayout(g)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(8)
+            return g, lay
 
+        left, h = group()
         back = QPushButton("← 검색")
         back.clicked.connect(self._go_search)
         ed = QLineEdit()
@@ -727,15 +734,12 @@ class MainWindow(QMainWindow):
         sep = QFrame()
         sep.setFixedSize(1, 26)
         sep.setStyleSheet(f"background: {T.BORDER}; border: none;")
-        h.addSpacing(8)
-        h.addWidget(sep)
-        h.addSpacing(8)
 
+        middle, h = group()
         # 시즌 필터가 먼저 걸리고, 그 안에서 시작~끝 판수를 자른다.
         lb_season = QLabel("시즌")
         lb_season.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.cb_season = NoScrollComboBox()
-        self.cb_season.setMinimumWidth(150)
         self.cb_season.addItem("전체", None)
         self.cb_season.currentIndexChanged.connect(self._on_season_changed)
         h.addWidget(lb_season)
@@ -770,9 +774,8 @@ class MainWindow(QMainWindow):
             h.addWidget(x)
         h.addSpacing(6)
         h.addWidget(self.lb_total)
-        h.addStretch(1)
-        h.addWidget(self.btn_more)
-        return bar
+        self.top_bar = WrapBar(left, middle, self.btn_more, sep=sep)
+        return self.top_bar
 
     # 왼쪽 메뉴 — (묶음 제목, [(메뉴 이름, 페이지 빌더 이름)]). 묶음 제목이
     # None 이면 제목 없이 바로 메뉴. 페이지 순서는 이 표의 순서다.
@@ -874,7 +877,7 @@ class MainWindow(QMainWindow):
                 page = getattr(self, builder)()
                 if builder != "_build_dashboard_page":
                     page = self._wrap_page(name, page)
-                idx = self.pages.addWidget(page)
+                idx = self.pages.addWidget(VScrollArea(page))
                 self._page_index[name] = idx
                 item = QListWidgetItem(name)
                 item.setData(Qt.ItemDataRole.UserRole, idx)
@@ -1568,9 +1571,13 @@ class MainWindow(QMainWindow):
         self._render_trend(self._matches)
 
     @staticmethod
-    def _make_table(columns: list[str],
-                    widget_cls: type = QTableWidget) -> QTableWidget:
-        t = widget_cls(0, len(columns))
+    def _make_table(columns: list[str]) -> FitTableWidget:
+        """모든 표 — 열은 글자 폭 기준으로 잡고 남는 폭은 비율대로 나누며, 창이
+        좁으면 글꼴을 줄여 맞춘다(FitTableWidget). 예전엔 첫 열만 내용 맞춤이고
+        나머지는 균등 분할(Stretch)이라, 둘째 열 이후가 길면 "…" 로 잘렸다
+        (선수 조합 '선수 B' 191 < 317px, 시즌별 '기간', 1280 폭에서 경기 목록
+        '스코어'(승부차기)·팀컬러 이름). 폭은 _fill 이 채운 뒤 다시 잰다."""
+        t = FitTableWidget(0, len(columns))
         t.setHorizontalHeaderLabels(columns)
         t.verticalHeader().setVisible(False)
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -1579,15 +1586,15 @@ class MainWindow(QMainWindow):
         t.setSortingEnabled(True)
         t.setItemDelegate(RowBorderDelegate(t))
         hdr = t.horizontalHeader()
-        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setMinimumSectionSize(0)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        t.set_base_font_px(T.BASE_FONT_PX, T.BASE_FONT_PX)
         return t
 
     def _build_players_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        self.tbl_players = self._make_table(self.PLAYER_COLUMNS,
-                                            widget_cls=FitTableWidget)
+        self.tbl_players = self._make_table(self.PLAYER_COLUMNS)
         # 19개 열이라 전역 폰트(15px)로는 스크롤 없이 한눈에 안 들어온다.
         # 이 표만 폰트·여백을 줄인 기본 크기(14/13px)에서 시작한다 — 창이
         # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
@@ -1901,6 +1908,7 @@ class MainWindow(QMainWindow):
                 mine_wins = (mine_val > opp_val) == higher_is_better
                 item_mine.setForeground(QColor(T.GREEN if mine_wins else T.TEXT))
                 item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
+        self.tbl_compare.refit()  # _fill 을 안 거치는 표
 
         for loader in self._compare_squad_loaders:
             loader.cancel()
@@ -2120,6 +2128,10 @@ class MainWindow(QMainWindow):
             idx = self.cb_season.findData(self.ONGOING)  # 없으면 -1 → "전체"
         self.cb_season.setCurrentIndex(idx if idx >= 0 else 0)
         self.cb_season.blockSignals(False)
+        # 가장 긴 항목이 다 들어가는 폭 밑으로는 안 눌리게 — 최소 150 이던 때
+        # 창을 줄이면 "현재 시즌 (진행" 까지만 보였다.
+        self.cb_season.setMinimumWidth(self.cb_season.sizeHint().width())
+        self.top_bar.relayout()
 
     def _in_selected_season(self, when, selected) -> bool:
         if when is None:
@@ -2366,38 +2378,16 @@ class MainWindow(QMainWindow):
                 table.setItem(r, c, self._cell(text, key))
         if enable_sort:
             table.setSortingEnabled(True)
+        if isinstance(table, FitTableWidget):
+            table.refit()
 
     @staticmethod
-    def _fit_columns_to_content(table: QTableWidget,
+    def _fit_columns_to_content(table: FitTableWidget,
                                 extra: dict[int, int] | None = None) -> None:
-        """헤더 글자 폭과 값 글자 폭 중 큰 쪽으로 열 너비를 잡는다 — 헤더만
-        기준으로 하면(ResizeToContents 원래 동작) 짧은 값 주위가 헐렁해 보이고,
-        값만 기준으로 하면 긴 헤더("기대득점률" 등)가 잘린다.
-        extra: 열 번호별로 더 얹을 여백(아이콘이 같이 나오는 열 등).
-
-        FitTableWidget 은 폭 계산·창 폭에 안 맞을 때 폰트를 줄이는 것까지
-        전부 자기 안에서 처리한다(widgets.FitTableWidget._fit) — 여기서는
-        데이터가 채워진 지금 다시 맞추라고 호출만 해 준다.
-        """
-        if isinstance(table, FitTableWidget):
-            table.set_content_widths(extra)
-            return
-        fm = QFontMetrics(table.font())
-        hdr_fm = QFontMetrics(table.horizontalHeader().font())
-        extra = extra or {}
-        widths: dict[int, int] = {}
-        for c in range(table.columnCount()):
-            w = 0
-            header_item = table.horizontalHeaderItem(c)
-            if header_item:
-                w = hdr_fm.horizontalAdvance(header_item.text())
-            for r in range(table.rowCount()):
-                item = table.item(r, c)
-                if item:
-                    w = max(w, fm.horizontalAdvance(item.text()))
-            widths[c] = w + 26 + extra.get(c, 0)
-        for c, w in widths.items():
-            table.setColumnWidth(c, w)
+        """열별 추가 여백(아이콘이 같이 나오는 열 등)을 주고 다시 맞춘다.
+        폭 계산·창 폭에 안 맞을 때 글꼴 축소는 FitTableWidget 이 한다 — 여백이
+        없는 표는 _fill 이 끝에서 refit() 하므로 부를 필요가 없다."""
+        table.set_content_widths(extra)
 
     def _render_matches(self, matches: list[MatchSummary]) -> None:
         rows = []

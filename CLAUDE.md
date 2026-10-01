@@ -15,7 +15,7 @@
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵 |
-| `widgets.py` | 화면 부품 — 랭커 카드, 표, 축구장 스쿼드 배치(`PitchWidget`) 등 |
+| `widgets.py` | 화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 스쿼드 배치(`PitchWidget`), 좁으면 접히는 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위 — 오픈API엔 없음) |
 | `config.py` | `.env`에서 API 키 로드, 매치 종류·조회 개수 기본값 |
@@ -87,6 +87,22 @@ $env:QT_QPA_FONTDIR="C:/Windows/Fonts"; $env:UI_SHOT="<스크래치 폴더>"; py
    선수 표는 표 전용 QSS(`QTableWidget::item { padding: … }`)가 셀마다 여백을 얹어서,
    글자 폭만 보고 상수를 줄였더니 "33.3" 이 53px 칸에서 "3…" 로 잘렸다(Qt 계산 필요 폭 60).
    `test_player_table_cells_not_elided` 가 "열 폭 ≥ `sizeHintForColumn`" 으로 지킨다.
+
+5. **창은 `MIN_WINDOW`(1280×720) 밑으로 안 줄고, 그 크기에서 아무것도 안 잘리는 게 기준이다**
+   (2026-10-01). 그 전엔 위쪽 바가 한 줄이라 창이 1566×866 밑으로 안 줄었고(1366 노트북에서
+   넘침), 그 위에서도 표는 둘째 열부터 균등 분할이라 긴 글자가 "…" 로 잘렸다. 지금 장치:
+   - **모든 표는 `_make_table` → `FitTableWidget`**, 폭은 `_fill` 끝에서 `refit()`. `_fill` 을 안
+     거치는 표(구단주 비교)는 직접 `refit()` 한다. 정렬 화살표 자리는 **정렬 중인 열에만**
+     준다 — 전부에 주면 19열 선수 지표가 최소 글꼴로도 안 들어간다.
+   - 위쪽 바는 `WrapBar` — 좁으면 두 줄. 페이지는 `VScrollArea` 로 감싸 **세로만** 스크롤.
+     `QScrollArea` 는 기본으로 안쪽 최소 폭을 밖에 안 알려 가로가 조용히 잘리므로 그걸 알린다.
+   - 큰 숫자 칸은 `FitLabel`(잘리는 대신 글꼴 축소).
+   - **명시적 최소 폭(`setMinimumWidth`)은 Qt 의 힌트를 이긴다** — 시즌 칸의 `150` 이 그래서
+     글자를 눌렀다. 줄 수 없는 폭이면 상수 대신 `sizeHint()` 로 준다.
+   검사는 offscreen 스모크(`test_window_shrinks_…`·`test_no_table_elides_…` 등)와, 실데이터로
+   메뉴마다 위젯 폭을 재는 스크래치 스크립트. ⚠ **가로 스크롤이 보이면 원인부터 재 본다** —
+   경기 목록의 가로 막대를 "세로 막대 자리를 안 빼서"로 읽고 장치를 넣었는데, 실화면에서
+   그 장치를 빼도 결과가 같았다. 진짜 원인은 화살표 자리를 모든 열에 준 것이었다(장치는 뺐다).
 
 ---
 

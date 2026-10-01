@@ -115,6 +115,184 @@ def test_player_table_cells_not_elided():
     assert not short, short
 
 
+def _at_size(w, h):
+    _win.resize(w, h)
+    _app.processEvents()
+    _app.processEvents()
+
+
+def test_window_shrinks_to_min_without_squeezing():
+    # 위쪽 바가 한 줄이던 때 창은 1566x866 밑으로 안 줄었다(1366 노트북에서 넘침).
+    # 반대로 명시적 최소 크기가 내용 최소보다 작으면 그만큼 조용히 잘린다.
+    try:
+        _at_size(1000, 600)  # 그보다 작게 줄이려 해도 최소에서 멈춰야 한다
+        assert (_win.width(), _win.height()) == app_main.MIN_WINDOW, \
+            (_win.width(), _win.height())
+        need = _win.centralWidget().minimumSizeHint()
+        assert need.width() <= app_main.MIN_WINDOW[0], need.width()
+        assert need.height() <= app_main.MIN_WINDOW[1], need.height()
+        # 페이지를 감싼 스크롤 틀이 안쪽 최소 폭을 밖에 알려야 가로가 안 잘린다 —
+        # 1280 에선 공간이 남아 프레임 폭만 보면 안 드러나므로, 창 쪽 최소 폭이
+        # 가장 넓은 페이지의 최소 폭을 품는지 본다.
+        widest = max(_win.pages.widget(i).widget().minimumSizeHint().width()
+                     for i in range(_win.pages.count()))
+        assert _win.pages.minimumSizeHint().width() >= widest, \
+            (_win.pages.minimumSizeHint().width(), widest)
+        for i in range(_win.pages.count()):
+            frame = _win.pages.widget(i)
+            inner = frame.widget().minimumSizeHint().width()
+            assert frame.width() >= inner, (i, frame.width(), inner)
+    finally:
+        _at_size(1600, 900)
+
+
+def test_top_bar_wraps_only_when_narrow():
+    try:
+        _at_size(*app_main.MIN_WINDOW)
+        assert _win.top_bar.is_two_rows()
+        _at_size(1920, 1000)
+        assert not _win.top_bar.is_two_rows()
+    finally:
+        _at_size(1600, 900)
+
+
+def test_season_combo_never_narrower_than_longest_item():
+    from PyQt6.QtGui import QFontMetrics
+    cb = _win.cb_season
+    fm = QFontMetrics(cb.font())
+    longest = max(fm.horizontalAdvance(cb.itemText(i)) for i in range(cb.count()))
+    # 막지 않았으면: 최소 150 이라 긴 항목이 잘린다 — 픽스처 항목이 150 을 넘는지 먼저
+    assert longest > 150, longest
+    # 공간이 남으면 칸은 알아서 넓어지므로 실제 폭이 아니라 '눌릴 수 있는 한계'를 본다.
+    # 레이아웃은 명시적 최소 폭이 있으면 힌트 대신 그 값을 쓴다(150 이던 때가 그랬다).
+    floor = cb.minimumWidth() or cb.minimumSizeHint().width()
+    assert floor > longest, (floor, longest)
+    try:
+        _at_size(*app_main.MIN_WINDOW)
+        assert cb.width() > longest, (cb.width(), longest)
+    finally:
+        _at_size(1600, 900)
+
+
+def test_fit_label_shrinks_instead_of_clipping():
+    import widgets
+    lb = widgets.FitLabel("906승 393무 903패 (41.1%)", base_pt=30, min_pt=14)
+    lb.resize(329, 60)  # 실데이터에서 잘렸던 칸 폭
+    lb.show()  # 숨은 위젯은 resizeEvent 가 show 때까지 미뤄진다
+    _app.processEvents()
+    from PyQt6.QtGui import QFontMetrics
+    full = QFontMetrics(lb._font_at(30)).horizontalAdvance(lb.text())
+    assert full > 329, full  # 30pt 그대로였으면 잘렸다
+    assert lb.font().pointSize() < 30, lb.font().pointSize()
+    assert QFontMetrics(lb.font()).horizontalAdvance(lb.text()) <= 329
+
+
+def test_no_table_elides_at_min_or_default_size():
+    # 예전 기본 표는 둘째 열부터 균등 분할이라 '선수 B'·'기간'·(1280 폭에서) '스코어' 가
+    # "…" 로 잘렸다. 헤더도 잰다 — 채우는 동안 정렬이 꺼져 있어 화살표 자리를 빼고
+    # 폭을 잡으면 "승률▾" 이 겹쳤다.
+    import widgets
+    _win.sp_synergy_min.setValue(1)
+    _win._render_synergy(_win._details)
+    tables = [t for t in _win.findChildren(widgets.FitTableWidget)]
+    assert len(tables) >= 11, len(tables)  # 12번째(포지션 선수 다이얼로그)는 열 때 생긴다
+    try:
+        for size in (app_main.MIN_WINDOW, (1600, 900)):
+            _at_size(*size)
+            bad = []
+            for tb in tables:
+                if tb.rowCount() == 0:
+                    continue
+                page = next((n for n, i in _win._page_index.items()
+                             if _win.pages.widget(i).isAncestorOf(tb)), None)
+                if page:
+                    _win._go_page(page)
+                    _app.processEvents()
+                hdr = tb.horizontalHeader()
+                # 세로 막대 자리를 안 빼면 가로 막대가 생기고 끝 열이 가려진다
+                if tb.horizontalScrollBar().maximum() > 0:
+                    bad.append((page, "가로 스크롤", tb.horizontalScrollBar().maximum()))
+                # 헤더 화살표는 정렬 중인 열에만 그려진다 — 나머지는 화살표 없이 잰다
+                sort_col = hdr.sortIndicatorSection()
+                shown = hdr.isSortIndicatorShown()
+                hdr.setSortIndicatorShown(False)
+                bare = [hdr.sectionSizeHint(c) for c in range(tb.columnCount())]
+                hdr.setSortIndicatorShown(True)
+                arrow = [hdr.sectionSizeHint(c) for c in range(tb.columnCount())]
+                hdr.setSortIndicatorShown(shown)
+                for c in range(tb.columnCount()):
+                    w = tb.columnWidth(c)
+                    head = arrow[c] if c == sort_col else bare[c]
+                    if w < tb.sizeHintForColumn(c) or w < head:
+                        bad.append((page, tb.horizontalHeaderItem(c).text(), w,
+                                    tb.sizeHintForColumn(c), head))
+            assert not bad, (size, bad[:5])
+    finally:
+        _win.sp_synergy_min.setValue(20)
+        _win._render_synergy(_win._details)
+        _at_size(1600, 900)
+
+
+def test_fit_table_never_scrolls_sideways_above_min_font():
+    # 글꼴 크기는 '정비례' 추정으로 고르는데 실측은 조금 더 넓게 나와, 실측으로 한 번
+    # 더 깎지 않으면 몇 px 넘쳐 가로 막대가 생겼다. 폭을 훑어 잰다.
+    import widgets
+    cols = [f"열이름{i}" for i in range(19)]
+    tb = widgets.FitTableWidget(6, len(cols))
+    tb.setHorizontalHeaderLabels(cols)
+    from PyQt6.QtWidgets import QHeaderView, QTableWidgetItem
+    tb.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    tb.horizontalHeader().setMinimumSectionSize(0)
+    tb.set_base_font_px(15, 15)
+    for r in range(6):
+        for c in range(len(cols)):
+            tb.setItem(r, c, QTableWidgetItem(f"{(r + 3) * (c + 7) * 1.37:.2f}%"))
+    tb.show()
+    tb.resize(1500, 400)
+    _app.processEvents()
+    tb.set_content_widths()
+    over = []
+    for w in range(700, 1500, 3):
+        tb.resize(w, 400)
+        _app.processEvents()
+        if (tb.horizontalScrollBar().maximum() > 0
+                and tb.font().pixelSize() > widgets.FitTableWidget.MIN_FONT_PX):
+            over.append((w, tb.font().pixelSize(), tb.horizontalScrollBar().maximum()))
+    # 최소 글꼴에서 조금(열마다 여유 PAD_SLACK 이내) 넘치는 폭 — 여유를 깎아 맞춘다.
+    # 실데이터 1280 폭 선수 지표가 9px 에서 1px 넘쳐 가로 막대가 떴다.
+    tb.resize(300, 400)
+    _app.processEvents()
+    assert tb.font().pixelSize() == widgets.FitTableWidget.MIN_FONT_PX
+    need = sum(tb._entry(widgets.FitTableWidget.MIN_FONT_PX)["widths"].values())
+    frame = tb.width() - tb.viewport().width()
+    tb.resize(need - 5 + frame, 400)
+    _app.processEvents()
+    assert tb.viewport().width() == need - 5, (tb.viewport().width(), need)
+    slack_over = tb.horizontalScrollBar().maximum()
+    tb.close()
+    assert not over, over[:5]
+    assert slack_over == 0, slack_over
+
+
+def test_sorted_column_gets_arrow_room_after_resort():
+    # 화살표 자리는 정렬 중인 열에만 준다 — 사용자가 다른 열을 누르면 다시 재야 한다.
+    tb = _win.tbl_opponents
+    _win._go_page("상대 전적")
+    _app.processEvents()
+    hdr = tb.horizontalHeader()
+    for c in range(tb.columnCount()):
+        tb.sortByColumn(c, Qt.SortOrder.AscendingOrder)
+        _app.processEvents()
+        assert tb.columnWidth(c) >= hdr.sectionSizeHint(c), \
+            (tb.horizontalHeaderItem(c).text(), tb.columnWidth(c), hdr.sectionSizeHint(c))
+
+
+def test_ranker_tiles_shrink_to_fit():
+    import widgets
+    card = widgets.RankerCard()
+    assert all(isinstance(v, widgets.FitLabel) for v in card._vals.values())
+
+
 def test_palettes_have_same_keys():
     # 안 쓰는 쪽 팔레트에 키가 빠지면 MODE 를 바꾸는 순간에야 KeyError 로 터진다.
     keys = {m: set(p) for m, p in T._PALETTES.items()}

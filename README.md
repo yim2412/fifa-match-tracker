@@ -7,6 +7,7 @@
 - **데이터**: 넥슨 오픈API(JSON) + 공식 데이터센터 HTML 스크래핑(오픈API에 없는 순위·구단가치·선수 능력치)
 - **저장**: 조회할 때마다 로컬 SQLite(`fifa.db`)에 누적 — API가 과거를 무한히 주지는 않기 때문
 - **API 키**: 개인 발급 키를 `.env`에 두고 읽는다(저장소에 포함되지 않음)
+- **화면**: 창 최소 1280×720(기본 1600×900). 그보다 좁은 화면 반 분할은 지원하지 않는다
 
 ## 주요 기능
 
@@ -76,7 +77,7 @@ python -m bot.server
 | 파일 | 역할 |
 |------|------|
 | `app_main.py` | PyQt6 UI — 검색 화면, 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드·흐름 분석·선수 지표·전술·승부처 분석·성적 진단·슛 맵·결정력·선수 조합·팀컬러 등 18개), 조회 워커 스레드 |
-| `widgets.py` | 화면 부품(위젯) — 흰 카드(`Card`·`add_shadow`)·랭커 카드·표(`FitTableWidget`)·승률/등급 그래프·축구장 스쿼드 배치(`PitchWidget`)·슛 맵·`NoScrollComboBox` 등 |
+| `widgets.py` | 화면 부품(위젯) — 카드(`Card`·`add_shadow`)·랭커 카드·표(`FitTableWidget` — 모든 표)·좁으면 두 줄로 접히는 위쪽 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·글꼴이 줄어드는 라벨(`FitLabel`)·승률/등급 그래프·축구장 스쿼드 배치(`PitchWidget`)·슛 맵·`NoScrollComboBox` 등 |
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·전역 스타일시트(QSS)·`apply()`(Fusion + 팔레트 + 기본 글꼴). **QSS 에 font-size 를 넣지 않는다**(setFont 를 이긴다) |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트. **엔드포인트 경로·에러코드가 전부 여기 상수에 모여 있다** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |

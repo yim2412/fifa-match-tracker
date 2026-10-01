@@ -4,11 +4,11 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
-    QLabel, QProgressBar, QSizePolicy, QStyle, QStyledItemDelegate,
+    QLabel, QProgressBar, QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
@@ -25,6 +25,186 @@ def add_shadow(w: QWidget) -> None:
     eff.setOffset(0, T.SHADOW_Y)
     eff.setColor(QColor(*T.SHADOW_RGB, T.SHADOW_ALPHA))
     w.setGraphicsEffect(eff)
+
+
+class FitLabel(QLabel):
+    """한 줄 글자가 칸보다 길면 잘리는 대신 글꼴을 줄여 다 보여준다.
+
+    랭커 카드 전적 칸(30pt)에 "906승 393무 903패 (41.1%)" 가 들어오자 512px 이
+    필요한데 칸은 329px 이라 양 끝이 잘렸다 — 숫자 자릿수는 계정마다 달라서
+    칸 폭을 상수로 맞출 수 없다. 최소 폭은 min_pt 로 다 들어가는 폭으로
+    알려서, 레이아웃이 그보다 좁게는 누르지 않게 한다.
+    """
+
+    def __init__(self, text: str = "", base_pt: int = 30, min_pt: int = 14,
+                 bold: bool = True):
+        super().__init__(text)
+        self._base_pt = base_pt
+        self._min_pt = min_pt
+        f = QFont()
+        f.setPointSize(base_pt)
+        f.setBold(bold)
+        super().setFont(f)
+        self._refit()
+
+    def _font_at(self, pt: int) -> QFont:
+        f = QFont(self.font())
+        f.setPointSize(pt)
+        return f
+
+    def _text_w(self, pt: int) -> int:
+        return QFontMetrics(self._font_at(pt)).horizontalAdvance(self.text())
+
+    def _pad(self) -> int:
+        m = self.contentsMargins()
+        return m.left() + m.right() + 2 * self.margin() + 2
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.updateGeometry()
+        self._refit()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refit()
+
+    def _refit(self) -> None:
+        avail = self.width() - self._pad()
+        pt = self._base_pt
+        while pt > self._min_pt and self._text_w(pt) > avail:
+            pt -= 1
+        if self.font().pointSize() != pt:
+            super().setFont(self._font_at(pt))
+
+    def sizeHint(self) -> QSize:
+        # 원하는 폭은 '줄여서라도 들어가는 폭' — 기본 크기 폭을 원하면 옆 칸을
+        # 밀어내 랭커 카드 타일 두 칸의 폭이 값에 따라 들쭉날쭉해진다.
+        return self.minimumSizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        fm = QFontMetrics(self._font_at(self._base_pt))
+        return QSize(self._text_w(self._min_pt) + self._pad(), fm.height())
+
+
+class WrapBar(QFrame):
+    """가로 바 — 한 줄에 다 들어가면 [왼쪽 | 가운데 … 오른쪽], 아니면 두 줄로
+    [왼쪽 … 오른쪽] / [가운데] 를 놓는다.
+
+    위쪽 바가 한 줄로만 놓이던 때는 바의 최소 폭(1296px)이 창 최소 폭을
+    1566px 로 묶어, 1366 노트북에선 창이 화면을 넘쳤고 그보다 넓어도 시즌
+    칸이 150px 로 눌려 글자가 잘렸다. 최소 폭을 두 줄 배치 기준으로 알려서
+    창은 그만큼까지 줄어들고, 줄이 바뀌는 판정은 폭만 보므로 왔다 갔다 하지
+    않는다.
+    """
+
+    def __init__(self, left: QWidget, middle: QWidget, right: QWidget,
+                 sep: QWidget | None = None, object_name: str = "topbar"):
+        super().__init__()
+        self.setObjectName(object_name)
+        self._left, self._middle, self._right, self._sep = left, middle, right, sep
+        self._v = QVBoxLayout(self)
+        self._v.setContentsMargins(14, 10, 14, 10)
+        self._v.setSpacing(8)
+        self._row1 = QHBoxLayout()
+        self._row2 = QHBoxLayout()
+        for row in (self._row1, self._row2):
+            row.setSpacing(8)
+            self._v.addLayout(row)
+        self._two_rows: bool | None = None
+        self._arrange(False)
+
+    def _gap(self) -> int:
+        return self._row1.spacing()
+
+    def _margins_w(self) -> int:
+        m = self._v.contentsMargins()
+        return m.left() + m.right()
+
+    def one_row_width(self) -> int:
+        parts = [self._left, self._middle, self._right]
+        if self._sep is not None:
+            parts.append(self._sep)
+        return (sum(w.sizeHint().width() for w in parts)
+                + self._gap() * len(parts) + self._margins_w())
+
+    def two_row_width(self) -> int:
+        top = (self._left.sizeHint().width() + self._right.sizeHint().width()
+               + self._gap() * 2)
+        return max(top, self._middle.sizeHint().width()) + self._margins_w()
+
+    @staticmethod
+    def _clear(row: QHBoxLayout) -> None:
+        while row.count():
+            row.takeAt(0)
+
+    def _arrange(self, two_rows: bool) -> None:
+        if two_rows == self._two_rows:
+            return
+        self._two_rows = two_rows
+        self._clear(self._row1)
+        self._clear(self._row2)
+        self._row1.addWidget(self._left)
+        if two_rows:
+            if self._sep is not None:
+                self._sep.hide()
+            self._row1.addStretch(1)
+            self._row1.addWidget(self._right)
+            self._row2.addWidget(self._middle)
+            self._row2.addStretch(1)
+        else:
+            if self._sep is not None:
+                self._sep.show()
+                self._row1.addWidget(self._sep)
+            self._row1.addWidget(self._middle)
+            self._row1.addStretch(1)
+            self._row1.addWidget(self._right)
+        self._v.invalidate()
+        self.updateGeometry()
+
+    def is_two_rows(self) -> bool:
+        return bool(self._two_rows)
+
+    def relayout(self) -> None:
+        """안에 든 위젯의 폭이 바뀌었을 때(시즌 목록 갱신 등) 다시 판정한다."""
+        self.updateGeometry()
+        self._arrange(self.width() < self.one_row_width())
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._arrange(self.width() < self.one_row_width())
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(self.two_row_width(), super().minimumSizeHint().height())
+
+
+class VScrollArea(QScrollArea):
+    """세로로만 스크롤되는 페이지 틀.
+
+    창 높이가 페이지 최소 높이(승률 그래프 737px)보다 작으면 페이지를 눌러
+    글자를 겹치게 하는 대신 스크롤로 보여준다. 가로는 스크롤을 끄는 대신
+    최소 폭을 내용의 최소 폭으로 알려서, 창이 그보다 좁아지지 않게 한다 —
+    QScrollArea 는 기본적으로 안의 최소 폭을 밖에 알리지 않아, 그대로 두면
+    창이 줄어드는 만큼 가로가 조용히 잘린다.
+    """
+
+    def __init__(self, inner: QWidget):
+        super().__init__()
+        self.setWidget(inner)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def _bar_w(self) -> int:
+        return self.verticalScrollBar().sizeHint().width()
+
+    def minimumSizeHint(self) -> QSize:
+        w = self.widget()
+        need = w.minimumSizeHint().expandedTo(w.minimumSize())
+        return QSize(need.width() + self._bar_w(), 120)
+
+    def sizeHint(self) -> QSize:
+        hint = self.widget().sizeHint()
+        return QSize(hint.width() + self._bar_w(), hint.height())
 
 
 class Card(QFrame):
@@ -74,6 +254,8 @@ class FitTableWidget(QTableWidget):
         self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
         self._fit_cache: dict[int, dict[int, int]] = {}  # cell_px -> 최종 열 너비(+padding+extra)
         self._pad = 0  # 열마다 얹는 여백 — set_content_widths 때 _measure_pad 로 잰다
+        self._sort_w = 0  # 정렬 화살표 폭 — Qt 는 정렬 중인 열 하나에만 그린다
+        self.horizontalHeader().sortIndicatorChanged.connect(self._on_sort_changed)
 
     def set_base_font_px(self, cell_px: int, header_px: int) -> None:
         """폰트를 줄이지 않아도 될 때(창이 넓을 때) 쓸 기본 크기."""
@@ -97,6 +279,14 @@ class FitTableWidget(QTableWidget):
             QFontMetrics(cell_font), QFontMetrics(header_font))
         self._fit_cache = {}
         self._fit()
+
+    def _on_sort_changed(self, *_):
+        self._fit_cache = {}
+        self._fit()
+
+    def refit(self) -> None:
+        """내용이 바뀐 뒤 — 지난번 열별 추가 여백을 그대로 두고 다시 잰다."""
+        self.set_content_widths(self._extra)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -123,6 +313,11 @@ class FitTableWidget(QTableWidget):
         cell_fm = QFontMetrics(self.font())
         header = self.horizontalHeader()
         hdr_fm = QFontMetrics(header.font())
+        # 정렬 화살표 자리는 따로 잰다(_sort_w). 채우는 동안(_fill)은 정렬이 꺼져
+        # 있어 그대로 재면 화살표 자리가 빠져 "승률▾" 이 겹쳤고, 반대로 켜고 재면
+        # 19열 전부에 15px 씩 붙어 선수 지표가 최소 글꼴로도 안 들어갔다.
+        shown = header.isSortIndicatorShown()
+        header.setSortIndicatorShown(False)
         pad = 0
         for c in range(self.columnCount()):
             if self.rowCount():
@@ -135,6 +330,11 @@ class FitTableWidget(QTableWidget):
             if hi:
                 pad = max(pad, header.sectionSizeHint(c)
                           - hdr_fm.horizontalAdvance(hi.text()))
+        if self.columnCount():
+            bare = header.sectionSizeHint(0)
+            header.setSortIndicatorShown(True)
+            self._sort_w = max(0, header.sectionSizeHint(0) - bare)
+        header.setSortIndicatorShown(shown)
         return pad + self.PAD_SLACK
 
     def _estimate_total(self, cell_px: int) -> int:
@@ -143,6 +343,28 @@ class FitTableWidget(QTableWidget):
         scale = cell_px / self._base_cell_px
         return sum(int(w * scale) + self._pad + self._extra.get(c, 0)
                   for c, w in self._base_text_widths.items())
+
+    def _entry(self, cell_px: int) -> dict:
+        """글꼴 크기 하나에 대한 실측 열 폭·글꼴 — 크기별로 캐시."""
+        if cell_px not in self._fit_cache:
+            header_px = max(self.MIN_FONT_PX - 1,
+                            self._base_header_px - (self._base_cell_px - cell_px))
+            cell_font = QFont(self.font())
+            cell_font.setPixelSize(cell_px)
+            header_font = QFont(self.horizontalHeader().font())
+            header_font.setPixelSize(header_px)
+            text_widths = (self._base_text_widths if cell_px == self._base_cell_px
+                          else self._measure_text(QFontMetrics(cell_font),
+                                                  QFontMetrics(header_font)))
+            sort_col = self.horizontalHeader().sortIndicatorSection()
+            self._fit_cache[cell_px] = {
+                "widths": {c: w + self._pad + self._extra.get(c, 0)
+                          + (self._sort_w if c == sort_col else 0)
+                          for c, w in text_widths.items()},
+                "cell_font": cell_font,
+                "header_font": header_font,
+            }
+        return self._fit_cache[cell_px]
 
     def _fit(self) -> None:
         if self.columnCount() == 0 or not self._base_text_widths:
@@ -154,24 +376,12 @@ class FitTableWidget(QTableWidget):
         while (self._estimate_total(cell_px) > avail
               and cell_px > self.MIN_FONT_PX):
             cell_px -= 1
-        header_px = max(self.MIN_FONT_PX - 1,
-                        self._base_header_px - (self._base_cell_px - cell_px))
-
-        if cell_px not in self._fit_cache:
-            cell_font = QFont(self.font())
-            cell_font.setPixelSize(cell_px)
-            header_font = QFont(self.horizontalHeader().font())
-            header_font.setPixelSize(header_px)
-            text_widths = (self._base_text_widths if cell_px == self._base_cell_px
-                          else self._measure_text(QFontMetrics(cell_font),
-                                                  QFontMetrics(header_font)))
-            self._fit_cache[cell_px] = {
-                "widths": {c: w + self._pad + self._extra.get(c, 0)
-                          for c, w in text_widths.items()},
-                "cell_font": cell_font,
-                "header_font": header_font,
-            }
-        entry = self._fit_cache[cell_px]
+        # 추정은 글자 폭이 크기에 정비례한다고 보지만 실측은 조금 더 넓게 나온다 —
+        # 표 폭을 3px 씩 훑으면 몇 px 넘쳐 가로 막대가 뜨는 폭이 있었다. 실측 합으로 한 번 더 깎는다.
+        while (sum(self._entry(cell_px)["widths"].values()) > avail
+               and cell_px > self.MIN_FONT_PX):
+            cell_px -= 1
+        entry = self._entry(cell_px)
         self.setFont(entry["cell_font"])
         self.horizontalHeader().setFont(entry["header_font"])
         widths = entry["widths"]
@@ -183,8 +393,15 @@ class FitTableWidget(QTableWidget):
             for c, w in widths.items():
                 self.setColumnWidth(c, w + int(extra * (w / total)))
         else:
+            # 최소 글꼴로도 넘치면 열마다 둔 여유(PAD_SLACK)만큼은 깎아 맞춘다 — 글자
+            # 폭은 안 건드리므로 안 잘린다. 1280 폭 실데이터 선수 지표가 9px 에서 1px
+            # 넘쳐 가로 막대가 떴다. 그보다 많이 넘치면 가로 스크롤로 둔다.
+            cut = 0
+            over = total - avail
+            if 0 < over <= self.PAD_SLACK * len(widths):
+                cut = -(-over // len(widths))
             for c, w in widths.items():
-                self.setColumnWidth(c, w)
+                self.setColumnWidth(c, w - cut)
 
 
 class RowBorderDelegate(QStyledItemDelegate):
@@ -376,12 +593,8 @@ class RankerCard(QFrame):
             cap.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
             tv.addWidget(cap)
 
-            val = QLabel(NA)
+            val = FitLabel(NA, base_pt=30, min_pt=14)
             val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            vf = QFont()
-            vf.setPointSize(30)
-            vf.setBold(True)
-            val.setFont(vf)
             val.setStyleSheet(f"color: {T.TEXT}; border: none;")
             val.setSizePolicy(QSizePolicy.Policy.Expanding,
                               QSizePolicy.Policy.Preferred)
@@ -390,6 +603,8 @@ class RankerCard(QFrame):
             grid.addWidget(tile, r, col)
             self._vals[name] = val
             self._rows[name] = (tile, val)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
         v.addLayout(grid)
 
         self.note = QLabel("")
