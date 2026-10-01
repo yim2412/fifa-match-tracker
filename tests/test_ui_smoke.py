@@ -36,6 +36,8 @@ def _load():
                for m in man["match_ids"]]
     ouid = man["ouid"]
     matches = [m for m in (models.parse_match(d, ouid) for d in details) if m]
+    # MatchLoader 와 똑같이 최신순 — 화면 코드는 전부 이 순서를 전제한다
+    matches.sort(key=lambda m: m.match_date or 0, reverse=True)
     return ouid, matches, details
 
 
@@ -62,8 +64,8 @@ def _nav_items():
 
 def test_loaded_opens_dashboard():
     assert _AFTER_LOAD == (_win.PAGE_MAIN, _win._page_index["대시보드"]), _AFTER_LOAD
-    # 픽스처: 승1 무1 패1 + 오류1 — 요약 카드가 실제로 채워졌는지
-    assert _win.card_record.value.text() not in ("-", ""), _win.card_record.value.text()
+    # 픽스처: 승1 무1 패1 + 오류1 — 대시보드 지표가 실제로 채워졌는지
+    assert _win.dashboard.lb_rate.text() == "33.3%", _win.dashboard.lb_rate.text()
     assert _win.lb_profile.text() == "테스트구단주", _win.lb_profile.text()
 
 
@@ -89,7 +91,7 @@ def test_trend_page_has_own_summary():
     _win._go_page("승률 그래프")
     assert _win.card_trend_games.value.text().endswith("경기"), \
         _win.card_trend_games.value.text()
-    assert _win.card_record.cap.text() == "전적", _win.card_record.cap.text()
+    assert _win.dashboard.kpi_rate.title.text() == "승률", _win.dashboard.kpi_rate.title.text()
 
 
 def test_setfont_sizes_survive_stylesheet():
@@ -285,12 +287,167 @@ def test_sorted_column_gets_arrow_room_after_resort():
         _app.processEvents()
         assert tb.columnWidth(c) >= hdr.sectionSizeHint(c), \
             (tb.horizontalHeaderItem(c).text(), tb.columnWidth(c), hdr.sectionSizeHint(c))
+    # 폭이 넉넉하면 화살표 자리 없이도 들어가 위가 안 드러난다 — 남는 폭이 0 인 표로 잰다
+    import widgets
+    from PyQt6.QtWidgets import QHeaderView, QTableWidgetItem
+    cols = ["가", "나나", "다다다", "라"]
+    t = widgets.FitTableWidget(2, len(cols))
+    t.setHorizontalHeaderLabels(cols)
+    t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    t.horizontalHeader().setMinimumSectionSize(0)
+    t.setSortingEnabled(True)
+    for r in range(2):
+        for c in range(len(cols)):
+            t.setItem(r, c, QTableWidgetItem("1"))
+    t.show()
+    t.resize(800, 200)
+    _app.processEvents()
+    t.set_content_widths()
+    frame = t.width() - t.viewport().width()
+    for c in range(len(cols)):
+        t.sortByColumn(c, Qt.SortOrder.AscendingOrder)
+        _app.processEvents()
+        tight = sum(t._entry(t._base_cell_px)["widths"].values())
+        t.resize(tight + frame, 200)  # 남는 폭 0 — 늘려 줄 여유가 없다
+        _app.processEvents()
+        hint = t.horizontalHeader().sectionSizeHint(c)
+        assert t.columnWidth(c) >= hint, (cols[c], t.columnWidth(c), hint)
+    t.close()
 
 
 def test_ranker_tiles_shrink_to_fit():
     import widgets
     card = widgets.RankerCard()
     assert all(isinstance(v, widgets.FitLabel) for v in card._vals.values())
+
+
+def test_dashboard_cards_filled_from_fixture():
+    # 손계산: 승·무·패 3경기(오류 제외) — 득 1+4+1, 실 2+3+1. 오류 경기도 '표시 구간'
+    # 4경기에는 들어간다(경기 목록과 같은 범위).
+    d = _win.dashboard
+    assert [lb.text() for lb in d.wdl_rows] == ["승 1 (33%)", "무 1 (33%)", "패 1 (33%)"], \
+        [lb.text() for lb in d.wdl_rows]
+    assert d.lb_goals.text() == "2.00 : 2.00", d.lb_goals.text()
+    assert "득실차 +0" in d.lb_goals_sub.text(), d.lb_goals_sub.text()
+    assert len(d.radar._axes) == 6, d.radar._axes
+    assert len(d.dots._items) == 4, d.dots._items
+    assert d.dots._items[-1][0] == "오류"  # 오래된 것 → 최신, 최신이 오류 경기
+    assert sum(d.minute_chart._series[0][1]) == 6, d.minute_chart._series  # 득점 6골
+    assert len(d.timeband_bars._rows) == 4
+    assert len(d.rival_bars._rows) == 4
+    # 선제골 표본 3경기 < 최소 표본 — 숫자 대신 "—"
+    assert all(g._value is None for g in d.gauges), [g._value for g in d.gauges]
+    assert d.kpi_rate.scope.text() == "표시 구간 4경기", d.kpi_rate.scope.text()
+    assert d.clutch.scope.text().startswith(_win._scope_text()), d.clutch.scope.text()
+    assert d.trend.scope.text().startswith(f"최근 {_win.sp_trend_days.value()}일")
+
+
+def test_dashboard_cards_keep_their_own_scope():
+    # 표시 구간을 2경기로 좁혀도 승부처·15분·시간대·분석은 시즌 범위 그대로여야 한다
+    # (상세 페이지와 같은 숫자). 픽스처는 둘이 같아서 좁혀야만 드러난다.
+    d = _win.dashboard
+    before_goals = sum(d.minute_chart._series[0][1])
+    before_bands = list(d.timeband_bars._rows)
+    before_gauges = [g._note for g in d.gauges]
+    old_to = _win.sp_to.value()
+    try:
+        _win.sp_to.setValue(2)
+        _win._apply_range()
+        assert d.kpi_rate.scope.text() == "표시 구간 2경기", d.kpi_rate.scope.text()
+        assert len(d.dots._items) == 2
+        assert sum(d.minute_chart._series[0][1]) == before_goals
+        # 개수만 보면 좁힌 2경기가 같은 시간대에 몰렸을 때 차이가 안 보인다 — 값 그대로 비교
+        assert d.timeband_bars._rows == before_bands, (d.timeband_bars._rows, before_bands)
+        assert [g._note for g in d.gauges] == before_gauges, [g._note for g in d.gauges]
+        assert d.clutch.scope.text().endswith(f"{len(_win._matches)}경기"), d.clutch.scope.text()
+    finally:
+        _win.sp_to.setValue(old_to)
+        _win._apply_range()
+
+
+def test_dashboard_trend_follows_trend_days():
+    d = _win.dashboard
+    old = _win.sp_trend_days.value()
+    try:
+        _win.sp_trend_days.setValue(1)
+        _win._on_trend_days_apply()
+        assert d.trend.scope.text().startswith("최근 1일"), d.trend.scope.text()
+        assert len(d.trend_chart._points) == 1, d.trend_chart._points
+    finally:
+        _win.sp_trend_days.setValue(old)
+        _win._on_trend_days_apply()
+
+
+def test_dashboard_gauge_shows_value_once_sample_is_enough():
+    import dashboard
+    d = _win.dashboard
+    old = dashboard.MIN_GAUGE_GAMES
+    try:
+        dashboard.MIN_GAUGE_GAMES = 1
+        _win._render_dashboard()
+        # 픽스처 선제골 3경기 중 1승 → 33%
+        assert d.gauges[0]._value is not None and round(d.gauges[0]._value) == 33, \
+            d.gauges[0]._value
+    finally:
+        dashboard.MIN_GAUGE_GAMES = old
+        _win._render_dashboard()
+
+
+def test_dashboard_cards_navigate():
+    from PyQt6.QtTest import QTest
+    d = _win.dashboard
+    targets = [c for c in d.cards if c.target]
+    assert len(targets) >= 9, len(targets)
+    for c in targets:
+        _win._go_page("대시보드")
+        _app.processEvents()
+        QTest.mouseClick(c, Qt.MouseButton.LeftButton)
+        _app.processEvents()
+        assert _win.pages.currentIndex() == _win._page_index[c.target], \
+            (c.title.text(), c.target)
+    _win._go_page("대시보드")
+
+
+def test_charts_draw_empty_and_single():
+    import charts
+    cases = [
+        (charts.AreaTrendChart(), [[], [("01/01", 50.0, 3)]]),
+        (charts.DonutChart(), [[], [("승", 1, T.CHART_UP)]]),
+        (charts.GroupedBarChart(), [([], []), (["0–15"], [("득점", [0], T.CHART_UP)])]),
+        (charts.RadarChart(), [[], [("a", 0.5, ""), ("b", 0.9, ""), ("c", 0.1, "")]]),
+        (charts.ResultDots(), [[], [("승", "")]]),
+        (charts.HBarList(), [[], [("오전", None, "경기 없음", "")]]),
+    ]
+    for w, datas in cases:
+        w.resize(300, 200)
+        for data in datas:
+            if isinstance(data, tuple):
+                w.set_data(*data)
+            else:
+                w.set_data(data)
+            img = w.grab().toImage()
+            assert not img.isNull(), type(w).__name__
+    g = charts.RingGauge("x")
+    g.resize(96, 96)
+    for v in (None, 0.0, 58.0, 100.0):
+        g.set_data(v, "3경기")
+        assert not g.grab().toImage().isNull()
+
+
+def test_bar_peak_labels_never_overlap():
+    # 실데이터 30~45분 득 772 · 실 765 가 좁은 폭에서 "77365" 로 붙었다.
+    import charts
+    c = charts.GroupedBarChart()
+    labels = ["0–15", "15–30", "30–45", "45–60", "60–75", "75–90", "연장"]
+    c.set_data(labels, [("득점", [530, 619, 772, 515, 599, 751, 187], T.CHART_UP),
+                        ("실점", [484, 586, 765, 554, 567, 728, 185], T.CHART_DOWN)])
+    for w in (220, 300, 600):
+        c.resize(w, 180)
+        c.grab()
+        rects = c.label_rects
+        assert rects, w
+        assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), \
+            (w, rects)
 
 
 def test_palettes_have_same_keys():

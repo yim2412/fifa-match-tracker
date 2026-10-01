@@ -34,6 +34,7 @@ from models import (
     period_stats, summarize, win_rate_trend,
 )
 from nexon_api import FCOnlineAPI, NexonAPIError
+from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
@@ -908,33 +909,13 @@ class MainWindow(QMainWindow):
                 return
 
     def _build_dashboard_page(self) -> QWidget:
-        """대시보드 — 지금은 요약 카드 + 구단주 카드. 차트 카드는 다음 단계."""
-        w = QWidget()
-        outer = QVBoxLayout(w)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(14)
-
-        cards = QHBoxLayout()
-        cards.setSpacing(14)
-        self.card_record = StatCard("전적")
-        self.card_rate = StatCard("승률", T.GREEN)
-        self.card_gf = StatCard("평균 득점", T.GREEN)
-        self.card_ga = StatCard("평균 실점", T.RED)
-        self.card_streak = StatCard("연속")
-        for c in (self.card_record, self.card_rate, self.card_gf, self.card_ga,
-                  self.card_streak):
-            add_shadow(c)
-            cards.addWidget(c)
-        outer.addLayout(cards)
-
-        row = QHBoxLayout()
+        """대시보드 — 카드 배치·채우기는 dashboard.DashboardPage. 랭커 카드만
+        여기서 만들어 넘긴다(_render_ranker 가 데이터센터 값으로 채운다)."""
         self.card_ranker = RankerCard()
         add_shadow(self.card_ranker)
-        row.addWidget(self.card_ranker, 0, Qt.AlignmentFlag.AlignTop)
-        row.addStretch(1)
-        outer.addLayout(row)
-        outer.addStretch(1)
-        return w
+        self.dashboard = DashboardPage(self.card_ranker)
+        self.dashboard.navigate.connect(self._go_page)
+        return self.dashboard
 
     def _build_teamcolor_fetch_row(self) -> tuple[QHBoxLayout, QPushButton, QLabel]:
         """팀컬러 승률·랭킹 두 탭이 같은 데이터를 쓰니 조회 트리거·상태
@@ -1569,6 +1550,7 @@ class MainWindow(QMainWindow):
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
+        self._render_dashboard()  # 대시보드 승률 흐름도 같은 '최근 N일'
 
     @staticmethod
     def _make_table(columns: list[str]) -> FitTableWidget:
@@ -2294,7 +2276,6 @@ class MainWindow(QMainWindow):
         self.lb_profile.setText(self._nick)
         self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
                             f"감독모드 {len(matches)}경기 분석 (누적 {total})")
-        self._show_range_summary()
         self._refresh_scope_notes()
         self._render_ranker()
         self._render_matches(matches)
@@ -2318,6 +2299,7 @@ class MainWindow(QMainWindow):
         self._render_synergy(self._details)  # 선수 조합도 표시 구간 무시
         # 흐름 분석도 표시 구간 무시 — 패턴 규칙이 표본을 크게 잡아야 한다.
         self._render_analysis(self._matches, self._details)
+        self._render_dashboard()  # 승률 흐름이 _render_trend 의 결과를 쓰므로 마지막
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
@@ -3275,15 +3257,17 @@ class MainWindow(QMainWindow):
         self.card_trend_games.set_title(f"{days}일 경기수")
         self.card_trend_games.set(f"{total_games}경기")
 
-    def _show_range_summary(self) -> None:
-        """대시보드 요약 카드 — 표시 구간(시작~끝) 전적."""
-        matches, _ = self._slice()
-        s = summarize(matches)
-        self.card_record.set(wdl_text(s.win, s.draw, s.lose))
-        self.card_rate.set(f"{s.win_rate:.1f}%")
-        self.card_gf.set(f"{s.avg_goals_for:.2f}")
-        self.card_ga.set(f"{s.avg_goals_against:.2f}")
-        self._render_streak(matches)
+    def _render_dashboard(self) -> None:
+        """대시보드 — 카드마다 자기 상세 페이지와 같은 범위를 넘긴다."""
+        matches, details = self._slice()
+        periods = getattr(self, "_trend_periods", [])
+        self.dashboard.render(DashboardInput(
+            ouid=self._ouid,
+            range_matches=matches, range_details=details,
+            scope_matches=self._matches, scope_details=self._details,
+            scope_name=self._scope_text(),
+            trend_points=[(p.label, p.win_rate, p.games) for p in periods],
+            trend_days=self.sp_trend_days.value()))
 
     def _render_seasons(self) -> None:
         groups = self._season_groups()
@@ -3320,15 +3304,6 @@ class MainWindow(QMainWindow):
                 " 시즌은 비어 있거나 실제보다 적게 나옵니다."
                 " · '진행 중'은 아직 데이터센터 시즌표에 안 올라온 최신 시즌입니다."
                 " · 이 표만은 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다.")
-
-    def _render_streak(self, matches: list[MatchSummary]) -> None:
-        kind, n = current_streak(matches)
-        best_win, best_lose = longest_streaks(self._matches)
-        self.card_streak.setToolTip(
-            f"최장 연승 {best_win} · 최장 연패 {best_lose} ({self._scope_text()} 기준)")
-        color = {"승": T.GREEN, "패": T.RED, "무": T.TEXT_DIM}.get(kind, T.TEXT_DIM)
-        self.card_streak.set_color(color)
-        self.card_streak.set(f"{n}{kind}" if kind else NA)
 
     def _render_players(self, details: list[dict]) -> None:
         players = st.aggregate_players(

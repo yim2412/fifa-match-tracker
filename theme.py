@@ -33,6 +33,11 @@ _PALETTES = {
         SCROLL_HOVER="#4b535f",
         SHADOW_RGB=(0, 0, 0),
         SHADOW_ALPHA=90,
+        CHART_UP="#199e70",
+        CHART_DOWN="#e66767",
+        CHART_NEUTRAL="#6e7681",
+        CHART_GRID="#262b33",
+        CHART_AXIS="#3a414b",
     ),
     "light": dict(
         BG="#f3f5f9",
@@ -57,6 +62,11 @@ _PALETTES = {
         SCROLL_HOVER="#b4bcc9",
         SHADOW_RGB=(16, 24, 40),
         SHADOW_ALPHA=22,
+        CHART_UP="#138a60",
+        CHART_DOWN="#e34948",
+        CHART_NEUTRAL="#9aa1b0",
+        CHART_GRID="#eceff4",
+        CHART_AXIS="#d5dae3",
     ),
 }
 _P = _PALETTES[MODE]
@@ -80,6 +90,16 @@ ON_ACCENT = _P["ON_ACCENT"]     # 초록 등 강조색 위의 글자
 WIN = GREEN
 DRAW = _P["DRAW"]
 LOSE = RED
+
+# 대시보드 그래프(charts.py) 색 — 앱의 GREEN/RED 짝은 적록 색약에서 색차 2.0 으로
+# 구분이 안 된다(dataviz 검증기, 기준 6). 그래서 그래프만 청록 쪽 초록 + 밝은
+# 빨강으로 다시 골랐다: 다크 6.5 · 밝은 6.9 — 6~8 은 '보조 표시가 있을 때만'
+# 허용이라 그래프에는 범례·2px 틈·글자 표기를 항상 같이 둔다. 무승부·상대는 회색.
+CHART_UP = _P["CHART_UP"]            # 득점·승·나
+CHART_DOWN = _P["CHART_DOWN"]        # 실점·패
+CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
+CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
+CHART_AXIS = _P["CHART_AXIS"]        # 기준선
 
 FONT_FAMILY = "Malgun Gothic"  # 한글이 대부분이라 명시 — 미지정이면 플랫폼 따라 들쭉날쭉
 BASE_FONT_PX = 15

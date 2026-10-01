@@ -88,6 +88,23 @@ def test_clutch_summary():
         (cs.comeback_win, cs.comeback_lose, cs.goalless)
 
 
+def test_team_profile():
+    # 손계산: 승·무·패 3경기("오류" 제외). 슈팅 2+8+7=17 vs 6+7+3=16, 골 6 vs 6,
+    # 점유 46+53+58, 태클 성공 5+3+3/7+4+7 vs 8+9+3/12+11+8 — 비율은 합의 비율.
+    ouid, _, details = _load()
+    p = st.team_profile(details, ouid)
+    assert p.games == 3, p.games
+    got = {a.name: (round(a.mine, 2), round(a.opp, 2)) for a in p.axes}
+    assert got["슈팅"] == (5.67, 5.33), got["슈팅"]
+    assert got["득점"] == (2.0, 2.0), got["득점"]
+    assert got["점유율"] == (52.33, 47.67), got["점유율"]
+    assert got["태클 성공률"] == (61.11, 64.52), got["태클 성공률"]
+    assert [a.name for a in p.axes] == [n for n, _ in st.PROFILE_AXES]
+    assert next(a for a in p.axes if a.name == "득점").share == 0.5
+    empty = st.team_profile([], ouid)
+    assert empty.games == 0 and empty.axes == []
+
+
 def test_result_breakdown():
     ouid, _, details = _load()
     rb = st.result_breakdown(details, ouid)

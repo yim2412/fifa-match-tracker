@@ -1224,3 +1224,85 @@ def opponent_position_players(details: list[dict], ouid: str, name_of=None,
             sp_id=sp_id, count=count, total=pos_total[pos]))
     result.sort(key=lambda r: (_position_group_rank(r.pos_code), -r.total))
     return result
+
+
+# ── 나 vs 상대 프로필(대시보드 레이더) ─────────────────────────────────────
+# (축 이름, 단위) — 순서가 레이더의 시계 방향 순서다. 전부 "높을수록 좋은" 값만
+# 둔다: 실점처럼 낮을수록 좋은 축이 섞이면 같은 모양이 축마다 반대 뜻이 된다.
+PROFILE_AXES = [
+    ("슈팅", "개/경기"),
+    ("유효슈팅률", "%"),
+    ("득점", "골/경기"),
+    ("점유율", "%"),
+    ("패스 성공률", "%"),
+    ("태클 성공률", "%"),
+]
+
+
+@dataclass
+class ProfileAxis:
+    name: str
+    unit: str
+    mine: float = 0.0
+    opp: float = 0.0
+
+    @property
+    def share(self) -> float:
+        """내 몫 mine/(mine+opp) — 0.5 가 동률. 단위가 다른 축을 한 눈금에
+        놓으려고 쓴다. 둘 다 0 이면 동률로 본다."""
+        tot = self.mine + self.opp
+        return self.mine / tot if tot else 0.5
+
+
+@dataclass
+class TeamProfile:
+    games: int = 0
+    axes: list[ProfileAxis] = field(default_factory=list)
+
+
+def _ratio(num: float, den: float) -> float:
+    return num / den * 100 if den else 0.0
+
+
+def team_profile(details: list[dict], ouid: str) -> TeamProfile:
+    """같은 경기들에서 나와 상대(그 경기 상대들의 평균)를 6축으로 비교한다.
+
+    승·무·패가 아닌 경기("오류" 등)는 summarize 와 같은 기준으로 뺀다.
+    비율 축(유효슈팅률·패스·태클)은 경기별 비율의 평균이 아니라 전체 합의
+    비율이다 — 슈팅 1개짜리 경기가 100% 로 평균을 흔들지 않게.
+    """
+    sums = {side: defaultdict(float) for side in ("mine", "opp")}
+    games = 0
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or _wdl_of(_result_of(me)) is None:
+            continue
+        games += 1
+        for side, p in (("mine", me), ("opp", opp)):
+            shoot = p.get("shoot") or {}
+            pas = p.get("pass") or {}
+            dfn = p.get("defence") or {}
+            s = sums[side]
+            s["shots"] += _num(shoot, "shootTotal")
+            s["on_target"] += _num(shoot, "effectiveShootTotal")
+            s["goals"] += _num(shoot, "goalTotal")
+            s["possession"] += _num(p.get("matchDetail") or {}, "possession")
+            s["pass_try"] += _num(pas, "passTry")
+            s["pass_ok"] += _num(pas, "passSuccess")
+            s["tackle_try"] += _num(dfn, "tackleTry")
+            s["tackle_ok"] += _num(dfn, "tackleSuccess")
+    prof = TeamProfile(games=games)
+    if not games:
+        return prof
+
+    def values(s: dict) -> list[float]:
+        return [s["shots"] / games,
+                _ratio(s["on_target"], s["shots"]),
+                s["goals"] / games,
+                s["possession"] / games,
+                _ratio(s["pass_ok"], s["pass_try"]),
+                _ratio(s["tackle_ok"], s["tackle_try"])]
+
+    for (name, unit), m, o in zip(PROFILE_AXES, values(sums["mine"]), values(sums["opp"])):
+        prof.axes.append(ProfileAxis(name, unit, m, o))
+    return prof
