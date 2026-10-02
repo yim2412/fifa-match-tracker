@@ -167,7 +167,7 @@ $env:QT_QPA_FONTDIR="C:/Windows/Fonts"; $env:UI_SHOT="<스크래치 폴더>"; py
 
 | 항목 | 상태 / 도입 시점 |
 |------|-----------------|
-| **버전 체계 + changelog** | ❌ 아직. exe로 **남에게 줄 때** 도입. 혼자 쓰는 동안은 git log로 충분 |
+| **버전 체계 + changelog** | ✅ 도입됨(2026-10-02, v0.2.0) — 지인·모르는 사람에게 exe 를 주기로 해서 조건 충족. 버전은 `config.APP_VERSION` 한 곳(UA 에도 실린다), 올리면 `CHANGELOG.md` 에 받는 사람이 읽을 말로 한 절. 크래시 로그(`crashlog.py`)도 같은 이유로 같이 들어왔다 |
 | **회귀 검증(파싱 골든)** | ✅ 도입됨 — `tests/fixtures/`(익명화한 실응답 4경기) + `test_parsing.py`·`test_analysis.py`. 네트워크 없이 `python tests/test_parsing.py`로 실행 |
 | **SQLite 누적 저장** | ✅ 도입됨 — `store.py`. **API가 오래된 경기를 버린다**(2026-09-05 실측: `offset` 페이징으로 3,024경기·약 한 달까지만. 같은 시점 DB 는 7,859경기). 화면은 API가 아니라 이 DB를 본다. ⚠️ 여기 오래 *"최근 100경기만 준다"* 라고 적혀 있었다 — 100은 **한 번에 받는 개수 상한**이고, 그 정정(`d872ef5` · 07-18)이 문서까지 오지 않았다 |
-| **PyInstaller exe 빌드** | ✅ 도입됨 — `피파전적관리.spec` → `dist/`. 기본적으로 매 작업마다 빌드해 실행 확인하되, 게임 중 등 사용자가 스모크를 미루라고 하면 offscreen(`QT_QPA_PLATFORM=offscreen`)으로 위젯 생성·렌더 경로만 확인한다 |
+| **PyInstaller exe 빌드** | ✅ 도입됨 — `피파전적관리.spec` → `dist/피파전적관리/`(**onedir**, 2026-10-02 onefile 에서 전환 — 프로세스가 하나라 창 찾기에 부트로더를 거를 필요가 없다), 배포는 README "빌드·배포"의 zip. 기본적으로 매 작업마다 빌드해 실행 확인하되, 게임 중 등 사용자가 스모크를 미루라고 하면 offscreen(`QT_QPA_PLATFORM=offscreen`)으로 위젯 생성·렌더 경로만 확인한다 |

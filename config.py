@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 APP_NAME = "피파 전적관리"
-APP_VERSION = "v0.1.0"
+APP_VERSION = "v0.2.0"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 
@@ -26,9 +26,9 @@ ROOT = _root()
 def asset_path(name: str) -> Path:
     """소스에 같이 들어있는 정적 리소스(app_icon.ico 등)를 찾는다.
 
-    DATA_DIR(사용자 데이터: DB·캐시·.env)과는 다른 개념 — onefile로 묶으면
-    이런 리소스는 exe 옆이 아니라 실행할 때마다 풀리는 임시 폴더
-    (sys._MEIPASS)에 들어가므로 ROOT 를 그대로 쓰면 못 찾는다. spec 파일의
+    DATA_DIR(사용자 데이터: DB·캐시·.env)과는 다른 개념 — exe 로 묶으면
+    이런 리소스는 exe 옆이 아니라 sys._MEIPASS(onedir 은 exe 옆 _internal\)에
+    들어가므로 ROOT 를 그대로 쓰면 못 찾는다. spec 파일의
     datas 에 넣어둔 것과 짝이 맞아야 한다.
     """
     if getattr(sys, "frozen", False):

@@ -47,7 +47,35 @@
 | **전술·경기 결과** — 상대 포메이션별 승률, 득·실점 유형<br>![전술·경기 결과](docs/screenshots/tactics.png) | **승률 그래프** — 기간별 승률·등급(디비전) 계단 그래프<br>![승률 그래프](docs/screenshots/trend.png) |
 | **승부처 분석** — 선제골 승률, 시간 구간별 득실, 시각대별 승률<br>![승부처 분석](docs/screenshots/clutch.png) | |
 
-## 시작하기
+## 받아서 쓰기 (exe)
+
+파이썬 없이 쓰는 방법이다. 바뀐 점은 [CHANGELOG.md](CHANGELOG.md).
+
+1. 받은 `피파전적관리-<버전>.zip` 을 풀고, 폴더 안의 **`피파전적관리.exe`** 를 실행한다.
+   폴더째 두어야 한다(`_internal` 이 없으면 안 켜진다).
+2. "Windows의 PC 보호" 파란 창이 뜨면 **추가 정보 → 실행**. 서명 인증서가 없는 exe 라
+   처음 한 번 뜬다.
+3. 처음 켜면 **API 키 입력 창**이 뜬다. [NEXON Open API](https://openapi.nexon.com/) 에 로그인 →
+   애플리케이션 등록 → 발급된 키를 붙여넣는다(무료, 바로 발급).
+4. 구단주 닉네임을 검색한다.
+
+- 데이터(키·전적 DB·캐시·오류 기록)는 `%LOCALAPPDATA%\피파전적관리\` 에 쌓인다.
+  새 버전으로 바꿔도 그대로 남고, 지우려면 이 폴더를 지운다.
+- 오류가 나면 `%LOCALAPPDATA%\피파전적관리\logs\crash.log` 를 보내 주면 된다.
+- 넥슨 데이터센터 조회(랭킹·팀가치·시즌표·선수 능력치)를 끄려면 위 폴더의 `.env` 에
+  `FIFA_WEB_DATA=0` 한 줄을 넣는다.
+
+## 빌드·배포
+
+```powershell
+python -m PyInstaller --noconfirm --clean 피파전적관리.spec   # → dist\피파전적관리\ (onedir)
+python -m zipfile -c dist\피파전적관리-v0.2.0.zip dist\피파전적관리   # 받는 사람에게 줄 zip
+```
+
+버전은 `config.APP_VERSION` 한 곳 — 올리면 `CHANGELOG.md` 에 한 절을 쓴다.
+zip 은 `python -m zipfile` 로 만든다. 한글 파일명에 UTF-8 표시를 달아서, 받는 쪽 압축 풀기에서 이름이 덜 깨진다.
+
+## 시작하기 (소스)
 
 ```powershell
 git clone https://github.com/yim2412/fifa-match-tracker.git
