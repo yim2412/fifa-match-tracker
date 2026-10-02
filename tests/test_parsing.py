@@ -745,6 +745,16 @@ def test_api_detail_and_meta_cache():
         # 메타: 이번 주 갱신일 뒤에 쓴 캐시는 쓰고, 그 전 것은 버린다
         api._meta_write("spid", [{"id": 1}])
         assert api._meta_read("spid") == [{"id": 1}]
+        # get_meta 도 캐시가 있으면 받지 않는다 — 받으러 가면 실패하게 막아 둔다
+        orig_get = nexon_api.requests.get
+        nexon_api.requests.get = lambda *a, **k: (_ for _ in ()).throw(AssertionError("캐시가 있는데 받으러 갔다"))
+        try:
+            assert api.get_meta("spid") == [{"id": 1}]
+        finally:
+            nexon_api.requests.get = orig_get
+        edge = nexon_api._week_boundary().timestamp()                  # 딱 갱신 기준 시각에 쓴 캐시는 유효
+        os.utime(tmp / "meta_spid.json", (edge, edge))
+        assert api._meta_read("spid") == [{"id": 1}], "갱신 기준 시각에 쓴 캐시를 버렸다"
         old = (nexon_api._week_boundary() - timedelta(seconds=1)).timestamp()
         os.utime(tmp / "meta_spid.json", (old, old))
         assert api._meta_read("spid") is None, "지난 갱신일 이전 메타를 그대로 썼다"
@@ -822,6 +832,11 @@ def test_store_match_type_filters_and_season_staleness():
         assert (a[:10], b[:10]) == ("2026-09-02", "2026-09-03"), (a, b)    # 50 경기(09-01)는 빠진다
         assert store.date_range(conn, "me")[0][:10] == "2026-09-01"
         # 시즌표: 비어 있으면 낡음 → 방금 저장하면 새것 → TTL 지나면 낡음
+        # 봇 등록 해제 — 지운 게 없으면 False("해제했다"고 거짓으로 답하지 않게)
+        assert store.clear_bot_user(conn, "방", "사람") is False
+        store.set_bot_user(conn, "방", "사람", "닉")
+        assert store.clear_bot_user(conn, "방", "사람") is True
+        assert store.clear_bot_user(conn, "방", "사람") is False
         assert store.seasons_stale(conn)
         store.save_seasons(conn, [sn.Season(no=1, name="시즌 1", start=date(2026, 1, 1), end=date(2026, 3, 1))])
         assert not store.seasons_stale(conn)
