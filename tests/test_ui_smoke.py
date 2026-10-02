@@ -39,6 +39,7 @@ import playerinfo  # noqa: E402
 import ranker  # noqa: E402
 import requests  # noqa: E402
 import seasons as sn  # noqa: E402
+import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
 
 _DIR = os.path.join(_ROOT, "tests", "fixtures")
@@ -696,6 +697,111 @@ def test_main_runs_setup_first():
     finally:
         app_main._setup_app, app_main.MainWindow, app_main.ApiKeyDialog = orig
     assert seen == [_app], seen
+
+
+def test_main_starts_update_check_after_show():
+    class _Stop(Exception):
+        pass
+
+    calls = []
+
+    class _Win:
+        def __init__(self, api):
+            calls.append("창")
+
+        def show(self):
+            calls.append("show")
+
+        def start_update_check(self):
+            calls.append("새 버전 확인")
+            raise _Stop()  # 이 뒤는 app.exec() — 실제로 들어가면 멈춘다
+
+    orig = app_main._setup_app, app_main.MainWindow
+    app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
+    # 확인 호출이 빠지면 main 이 app.exec() 로 들어가 영원히 멈춘다 — 그 루프를 바로 끝내
+    # 멈춤 대신 아래 단언이 실패하게 한다
+    guard = QTimer()
+    guard.setSingleShot(True)
+    guard.timeout.connect(_app.quit)
+    guard.start(0)
+    try:
+        app_main.main()
+    except _Stop:
+        pass
+    finally:
+        guard.stop()
+        app_main._setup_app, app_main.MainWindow = orig
+    assert calls == ["창", "show", "새 버전 확인"], calls
+
+
+# ── 새 버전 알림 ──────────────────────────────────────────────────────
+def test_is_newer_compares_numbers_not_text():
+    assert updatecheck.is_newer("v0.10.0", "v0.9.0")  # 문자열 비교면 "0.10" < "0.9"
+    assert updatecheck.is_newer("v1.0.0", "v0.2.0")
+    assert updatecheck.is_newer("0.2.1", "v0.2.0")
+    assert not updatecheck.is_newer("v0.2.0", "v0.2.0")
+    assert not updatecheck.is_newer("v0.1.9", "v0.2.0")
+    assert not updatecheck.is_newer("nightly", "v0.2.0")  # 모르는 형식은 알리지 않는다
+
+
+class _FakeGet:
+    def __init__(self, status=200, body=None, exc=None):
+        self.status, self.body, self.exc, self.calls = status, body, exc, 0
+
+    def __call__(self, url, **kw):
+        self.calls += 1
+        if self.exc:
+            raise self.exc
+        fake = self
+
+        class _R:
+            status_code = fake.status
+
+            def json(self):
+                if fake.body is None:
+                    raise ValueError("json 아님")
+                return fake.body
+        return _R()
+
+
+def test_latest_newer_reads_release_and_stays_quiet_on_failure():
+    page = "https://example.invalid/r"
+    rel = {"tag_name": "v9.0.0", "html_url": page, "draft": False, "prerelease": False}
+    cases = [
+        (_FakeGet(body=rel), ("v9.0.0", page)),
+        (_FakeGet(body=dict(rel, tag_name=config.APP_VERSION)), None),  # 같은 버전
+        (_FakeGet(body=dict(rel, draft=True)), None),
+        (_FakeGet(body=dict(rel, prerelease=True)), None),
+        (_FakeGet(status=404), None),                                    # 릴리스 없음
+        (_FakeGet(status=403), None),                                    # GitHub 한도
+        (_FakeGet(body=None), None),                                     # JSON 아님
+        (_FakeGet(exc=requests.ConnectionError("오프라인")), None),
+    ]
+    orig_get, orig_on = updatecheck.requests.get, config.UPDATE_CHECK
+    config.UPDATE_CHECK = True
+    try:
+        for fake, want in cases:
+            updatecheck.requests.get = fake
+            got = updatecheck.latest_newer()
+            assert got == want, (fake.status, fake.body, got)
+        # 끄면 묻지도 않는다 — 켜져 있으면 물었을 같은 응답으로
+        fake = _FakeGet(body=rel)
+        updatecheck.requests.get = fake
+        config.UPDATE_CHECK = False
+        assert updatecheck.latest_newer() is None and fake.calls == 0, fake.calls
+    finally:
+        updatecheck.requests.get, config.UPDATE_CHECK = orig_get, orig_on
+
+
+def test_update_label_appears_only_when_found():
+    lb = _win.lb_update
+    saved = lb.isVisibleTo(_win)
+    assert not saved, "새 버전 신호 없이 알림이 보인다"
+    _win._on_update_found("v9.0.0", "https://example.invalid/r")
+    try:
+        assert lb.isVisibleTo(_win) and "v9.0.0" in lb.text() and "example.invalid" in lb.text(), lb.text()
+    finally:
+        lb.setVisible(False)
 
 
 def test_thread_crash_logged_without_dialog():

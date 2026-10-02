@@ -94,8 +94,14 @@ WEB_DATA = os.getenv("FIFA_WEB_DATA", "1").strip() != "0"
 WEB_DATA_OFF_MSG = "넥슨 웹 데이터 조회가 꺼져 있습니다 (.env 의 FIFA_WEB_DATA=0)"
 # 브라우저인 척하지 않고 앱 이름을 밝힌다. 2026-10-02 실측: 이 UA 로도 네 페이지가
 # 브라우저 UA 와 같은 바이트로 응답했다. UA 를 아예 비우면 playerinfo 가 500 이다.
-WEB_USER_AGENT = (f"FifaMatchTracker/{APP_VERSION.lstrip('v')} "
-                  "(+https://github.com/yim2412/fifa-match-tracker)")
+REPO_URL = "https://github.com/yim2412/fifa-match-tracker"
+WEB_USER_AGENT = f"FifaMatchTracker/{APP_VERSION.lstrip('v')} (+{REPO_URL})"
+
+# 새 버전 알림 — 켤 때 한 번 GitHub 최신 릴리스 태그를 읽는다(GitHub 에 IP 가 남는다).
+# 끄려면 .env 에 FIFA_UPDATE_CHECK=0.
+UPDATE_CHECK = os.getenv("FIFA_UPDATE_CHECK", "1").strip() != "0"
+LATEST_RELEASE_API = "https://api.github.com/repos/yim2412/fifa-match-tracker/releases/latest"
+RELEASES_URL = f"{REPO_URL}/releases/latest"
 
 
 def save_api_key(key: str) -> None:

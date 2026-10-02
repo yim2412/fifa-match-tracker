@@ -7,7 +7,7 @@ a = Analysis(
     binaries=[],
     datas=[('app_icon.ico', '.')],
     hiddenimports=['store', 'stats', 'theme', 'widgets', 'ranker', 'images',
-                   'analysis', 'dashboard', 'charts', 'crashlog'],
+                   'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

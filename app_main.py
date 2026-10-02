@@ -30,6 +30,7 @@ import seasons as sn
 import stats as st
 import store
 import theme as T
+import updatecheck
 from models import (
     MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match,
     period_stats, summarize, win_rate_trend,
@@ -591,7 +592,24 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.progress.setMaximumHeight(14)
         self.statusBar().addPermanentWidget(self.progress, 1)
+        self.lb_update = QLabel()  # 새 버전이 있을 때만 보인다(start_update_check)
+        self.lb_update.setOpenExternalLinks(True)
+        self.lb_update.setVisible(False)
+        self.statusBar().addPermanentWidget(self.lb_update)
+        self._update_worker: UpdateCheckWorker | None = None
         self.statusBar().showMessage("구단주명을 입력하세요.")
+
+    def start_update_check(self) -> None:
+        """켤 때 한 번 — 테스트·스크린샷이 네트워크를 안 타게 main 에서만 부른다."""
+        self._update_worker = UpdateCheckWorker()
+        self._update_worker.found.connect(self._on_update_found)
+        self._update_worker.start()
+
+    def _on_update_found(self, tag: str, url: str) -> None:
+        self.lb_update.setText(
+            f"<a href='{url}' style='color:{T.GREEN};'>새 버전 {tag} — 받기</a>")
+        self.lb_update.setToolTip(f"지금 {config.APP_VERSION} · 변경 내용은 릴리스 페이지에")
+        self.lb_update.setVisible(True)
 
     def _build_search_page(self) -> QWidget:
         w = QWidget()
@@ -3532,6 +3550,9 @@ class MainWindow(QMainWindow):
             box.addStretch(1)
 
     def closeEvent(self, e) -> None:
+        if self._update_worker and self._update_worker.isRunning():
+            # requests 는 중간에 못 끊는다 — 타임아웃(5초)까지 기다려야 스레드가 안전히 끝난다
+            self._update_worker.wait(6000)
         if self._loader and self._loader.isRunning():
             self._loader.cancel()
             # 진행 중이던 상세 요청 몇 개가 네트워크 타임아웃까지 갈 수 있어
@@ -3567,6 +3588,19 @@ class MainWindow(QMainWindow):
         if self._position_ovr_loader and self._position_ovr_loader.isRunning():
             self._position_ovr_loader.wait(2000)
         super().closeEvent(e)
+
+
+class UpdateCheckWorker(QThread):
+    """GitHub 최신 릴리스 확인(updatecheck.latest_newer)을 UI 스레드 밖에서."""
+    found = pyqtSignal(str, str)  # (태그, 릴리스 페이지) — 새 버전이 있을 때만
+
+    def run(self) -> None:
+        try:
+            hit = updatecheck.latest_newer()
+        except Exception:
+            hit = None  # 알림 하나 때문에 크래시 로그가 쌓이면 안 된다
+        if hit:
+            self.found.emit(*hit)
 
 
 class KeyCheckWorker(QThread):
@@ -3682,6 +3716,7 @@ def main() -> int:
     api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     win = MainWindow(api)
     win.show()
+    win.start_update_check()
     return app.exec()
 
 

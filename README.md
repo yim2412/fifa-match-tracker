@@ -64,6 +64,8 @@
 - 오류가 나면 `%LOCALAPPDATA%\피파전적관리\logs\crash.log` 를 보내 주면 된다.
 - 넥슨 데이터센터 조회(랭킹·팀가치·시즌표·선수 능력치)를 끄려면 위 폴더의 `.env` 에
   `FIFA_WEB_DATA=0` 한 줄을 넣는다.
+- 켤 때 GitHub 에서 새 버전이 있는지 한 번 확인해, 있으면 화면 오른쪽 아래에 받기 링크를
+  띄운다(설치는 하지 않는다). 끄려면 `.env` 에 `FIFA_UPDATE_CHECK=0`.
 
 ## 빌드·배포
 
@@ -73,6 +75,7 @@ python -m zipfile -c dist\피파전적관리-v0.2.0.zip dist\피파전적관리 
 ```
 
 버전은 `config.APP_VERSION` 한 곳 — 올리면 `CHANGELOG.md` 에 한 절을 쓴다.
+배포는 GitHub Release(태그 `vX.Y.Z`, zip 첨부)로 한다 — 앱의 새 버전 알림이 그 태그를 읽는다.
 zip 은 `python -m zipfile` 로 만든다. 한글 파일명에 UTF-8 표시를 달아서, 받는 쪽 압축 풀기에서 이름이 덜 깨진다.
 
 ## 시작하기 (소스)
