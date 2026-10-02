@@ -9,7 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 APP_NAME = "피파 전적관리"
-APP_VERSION = "v0.2.0"
+APP_VERSION = "v0.3.0"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 

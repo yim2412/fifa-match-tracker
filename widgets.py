@@ -8,8 +8,8 @@ from PyQt6.QtCore import QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
-    QLabel, QProgressBar, QScrollArea, QSizePolicy, QStyle, QStyledItemDelegate,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
+    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import theme as T
@@ -25,6 +25,101 @@ def add_shadow(w: QWidget) -> None:
     eff.setOffset(0, T.SHADOW_Y)
     eff.setColor(QColor(*T.SHADOW_RGB, T.SHADOW_ALPHA))
     w.setGraphicsEffect(eff)
+
+
+class UpdateCard(QFrame):
+    """창 오른쪽 아래에 떠 있는 '새 버전' 카드 — 런처의 업데이트 알림처럼.
+
+    어느 화면 위에든 같은 자리에 뜬다(검색 화면·메인 화면). 위치는 부모가
+    place() 로 정한다. 내려받는 동안은 버튼 대신 진행 막대가 보인다."""
+    update_clicked = pyqtSignal()
+    dismissed = pyqtSignal()
+    MARGIN = 20
+    WIDTH = 300  # 고정 — 글자 길이에 따라 줄면 내려받는 중 문구가 잘렸다
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setObjectName("updateCard")
+        self.setFixedWidth(self.WIDTH)
+        self.setStyleSheet(
+            f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.GREEN};"
+            f" border-radius: 12px; }} QLabel {{ border: none; }}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(16, 12, 16, 12)
+        v.setSpacing(6)
+        self.lb_title = QLabel()
+        f = QFont()
+        f.setBold(True)
+        f.setPointSize(11)
+        self.lb_title.setFont(f)
+        self.lb_sub = QLabel()
+        self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_title)
+        v.addWidget(self.lb_sub)
+        self.bar = QProgressBar()
+        self.bar.setMaximumHeight(10)
+        self.bar.setTextVisible(False)
+        self.bar.setVisible(False)
+        v.addWidget(self.bar)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.btn_later = QPushButton("나중에")
+        self.btn_later.setFlat(True)
+        self.btn_later.clicked.connect(self._dismiss)
+        self.btn_update = QPushButton("업데이트")
+        self.btn_update.setObjectName("primary")
+        self.btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_update.clicked.connect(self.update_clicked)
+        row.addStretch(1)
+        row.addWidget(self.btn_later)
+        row.addWidget(self.btn_update)
+        v.addLayout(row)
+        add_shadow(self)
+        self.hide()
+
+    def show_release(self, tag: str, current: str, installed: bool) -> None:
+        self.lb_title.setText(f"새 버전 {tag}")
+        self.lb_sub.setText(f"지금 {current}" + ("" if installed else " · 받기 페이지가 열립니다"))
+        self.btn_update.setText("업데이트" if installed else "받으러 가기")
+        self.set_busy(False)
+        self.show()
+        self.raise_()
+        self.place()
+
+    def set_busy(self, busy: bool, text: str = "") -> None:
+        # 받는 동안은 버튼을 숨긴다 — 비활성 버튼이 남아 있으면 눌러도 되는지 헷갈린다
+        self.bar.setVisible(busy)
+        self.btn_update.setVisible(not busy)
+        self.btn_update.setEnabled(not busy)
+        self.btn_later.setVisible(not busy)
+        if busy:
+            self.lb_sub.setText(text)
+            self.bar.setRange(0, 0)  # 크기를 모를 때는 물결
+        self.place()
+
+    def set_progress(self, done: int, total: int) -> None:
+        if total > 0:
+            self.bar.setRange(0, total)
+            self.bar.setValue(done)
+            self.lb_sub.setText(f"내려받는 중 {done * 100 // total}% · {done / 2**20:.1f} / {total / 2**20:.1f} MB")
+        else:
+            self.lb_sub.setText(f"내려받는 중 · {done / 2**20:.1f} MB")
+
+    def place(self) -> None:
+        """부모의 오른쪽 아래(상태줄 위)에 붙인다 — 부모가 크기를 바꿀 때마다 부른다."""
+        p = self.parentWidget()
+        if p is None:
+            return
+        self.adjustSize()
+        bottom = p.height()
+        sb = getattr(p, "statusBar", None)
+        if callable(sb) and sb() is not None and sb().isVisible():
+            bottom -= sb().height()
+        self.move(p.width() - self.width() - self.MARGIN, bottom - self.height() - self.MARGIN)
+
+    def _dismiss(self) -> None:
+        self.hide()
+        self.dismissed.emit()
 
 
 class FitLabel(QLabel):

@@ -796,9 +796,16 @@ class _FakeGet:
 
 def test_latest_newer_reads_release_and_stays_quiet_on_failure():
     page = "https://example.invalid/r"
-    rel = {"tag_name": "v9.0.0", "html_url": page, "draft": False, "prerelease": False}
+    setup_u, sums_u = "https://example.invalid/s.exe", "https://example.invalid/sums"
+    rel = {"tag_name": "v9.0.0", "html_url": page, "draft": False, "prerelease": False,
+           "body": "## 받기\n\n- 설치\n\n## 바뀐 점\n\n- 새 기능\n- 고친 것\n\n## 파일 확인\n\nabc",
+           "assets": [{"name": "FifaMatchTracker-Setup-v9.0.0.exe", "browser_download_url": setup_u},
+                      {"name": "SHA256SUMS.txt", "browser_download_url": sums_u},
+                      {"name": "FifaMatchTracker-v9.0.0-portable.zip", "browser_download_url": "z"}]}
+    full = updatecheck.Release("v9.0.0", page, setup_u, sums_u, "- 새 기능\n- 고친 것")
     cases = [
-        (_FakeGet(body=rel), ("v9.0.0", page)),
+        (_FakeGet(body=rel), full),
+        (_FakeGet(body=dict(rel, assets=[])), updatecheck.Release("v9.0.0", page, "", "", full.notes)),
         (_FakeGet(body=dict(rel, tag_name=config.APP_VERSION)), None),  # 같은 버전
         (_FakeGet(body=dict(rel, draft=True)), None),
         (_FakeGet(body=dict(rel, prerelease=True)), None),
@@ -823,15 +830,195 @@ def test_latest_newer_reads_release_and_stays_quiet_on_failure():
         updatecheck.requests.get, config.UPDATE_CHECK = orig_get, orig_on
 
 
-def test_update_label_appears_only_when_found():
-    lb = _win.lb_update
-    saved = lb.isVisibleTo(_win)
-    assert not saved, "새 버전 신호 없이 알림이 보인다"
-    _win._on_update_found("v9.0.0", "https://example.invalid/r")
+_REL = updatecheck.Release("v9.0.0", "https://example.invalid/r",
+                           "https://example.invalid/s.exe", "https://example.invalid/sums", "- 새 기능")
+
+
+class _Patch:
+    """(대상, 이름, 값) 들을 잠깐 바꿨다가 되돌린다."""
+
+    def __init__(self, *items):
+        self.items = items
+
+    def __enter__(self):
+        self.saved = [(o, n, getattr(o, n)) for o, n, _ in self.items]
+        for o, n, v in self.items:
+            setattr(o, n, v)
+
+    def __exit__(self, *exc):
+        for o, n, v in self.saved:
+            setattr(o, n, v)
+
+
+def test_update_card_bottom_right_on_both_pages():
+    card = _win.update_card
+    assert not card.isVisibleTo(_win), "새 버전 신호 없이 카드가 보인다"
+    old_page = _win.stack.currentIndex()
     try:
-        assert lb.isVisibleTo(_win) and "v9.0.0" in lb.text() and "example.invalid" in lb.text(), lb.text()
+        for page in (_win.PAGE_SEARCH, _win.PAGE_MAIN):  # 처음 검색 전 화면에도 떠야 한다(사용자 요청)
+            _win.stack.setCurrentIndex(page)
+            _win._on_update_found(_REL)
+            _app.processEvents()
+            assert card.isVisibleTo(_win) and "v9.0.0" in card.lb_title.text(), card.lb_title.text()
+            g = card.geometry()
+            bottom = _win.height() - _win.statusBar().height()
+            # 오른쪽 아래 구석 — 여백 MARGIN, 상태줄 위
+            assert g.right() == _win.width() - card.MARGIN - 1, (g, _win.width())
+            assert g.bottom() == bottom - card.MARGIN - 1, (g, bottom)
+        # 창 크기를 바꾸면 따라간다
+        _win.resize(1400, 800)
+        _app.processEvents()
+        assert card.geometry().right() == _win.width() - card.MARGIN - 1, card.geometry()
+        # 소스 실행(테스트)은 설치판이 아니라 '받으러 가기'
+        assert card.btn_update.text() == "받으러 가기", card.btn_update.text()
     finally:
-        lb.setVisible(False)
+        card.hide()
+        _win.resize(1600, 900)
+        _win.stack.setCurrentIndex(old_page)
+
+
+def test_update_click_portable_opens_page_only():
+    opened = []
+    with _Patch((app_main.QDesktopServices, "openUrl", lambda u: opened.append(u.toString())),
+                (updatecheck, "install_dir", lambda: None)):
+        _win._release = _REL
+        _win._on_update_clicked()
+    assert opened == [_REL.page_url] and _win._download_worker is None, (opened, _win._download_worker)
+
+
+def test_update_click_asks_first_and_no_means_nothing():
+    no = app_main.QMessageBox.StandardButton.No
+    with _Patch((updatecheck, "install_dir", lambda: pathlib.Path("C:/fake")),
+                (app_main.QMessageBox, "question", lambda *a, **k: no)):
+        _win._download_worker = None
+        _win._on_update_found(_REL)
+        _win._on_update_clicked()
+        try:
+            assert _win._download_worker is None, "아니오를 눌렀는데 내려받기 시작"
+            assert _win.update_card.btn_update.isEnabled(), "아니오 뒤에 버튼이 잠겼다"
+        finally:
+            _win.update_card.hide()
+
+
+def test_update_click_installed_downloads_then_installs_and_closes():
+    asked, launched, closed = [], [], []
+    yes = app_main.QMessageBox.StandardButton.Yes
+    with _Patch((updatecheck, "install_dir", lambda: pathlib.Path("C:/fake")),
+                (app_main.QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or yes),
+                (updatecheck, "launch_installer", lambda p: launched.append(p)),
+                (_win, "close", lambda: closed.append(1))):
+        _win._on_update_found(_REL)
+        assert _win.update_card.btn_update.text() == "업데이트", _win.update_card.btn_update.text()
+        _win._on_update_clicked()
+        try:
+            w = _win._download_worker
+            assert w is not None and _win.update_card.bar.isVisibleTo(_win), "내려받기가 시작되지 않았다"
+            assert "v9.0.0" in asked[0] and "- 새 기능" in asked[0], asked
+            w.done.emit("C:/fake/setup.exe")  # 검증 통과 신호
+            assert launched == [pathlib.Path("C:/fake/setup.exe")] and closed == [1], (launched, closed)
+        finally:
+            _win._download_worker = None
+            _win.update_card.hide()
+    del _win.close
+
+
+def test_update_failure_restores_card_and_tells_why():
+    warned = []
+    with _Patch((app_main.QMessageBox, "warning", lambda *a, **k: warned.append(a[2]))):
+        _win._release = _REL
+        _win.update_card.set_busy(True, "내려받는 중…")
+        _win._on_update_failed("체크섬이 다릅니다")
+    try:
+        assert not _win.update_card.bar.isVisibleTo(_win) and _win.update_card.btn_update.isEnabled()
+        assert "체크섬" in warned[0] and _REL.page_url in warned[0], warned
+    finally:
+        _win.update_card.hide()
+
+
+def test_install_dir_only_for_installed_exe():
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    exe = tmp / "피파전적관리.exe"
+    exe.write_bytes(b"")
+    had_frozen = hasattr(sys, "frozen")
+    try:
+        assert updatecheck.install_dir() is None, "소스 실행인데 설치판으로 봤다"
+        with _Patch((sys, "executable", str(exe))):
+            sys.frozen = True
+            assert updatecheck.install_dir() is None, "제거기 없는 exe(포터블)를 설치판으로 봤다"
+            (tmp / updatecheck.UNINSTALLER).write_bytes(b"")
+            assert updatecheck.install_dir() == tmp.resolve(), updatecheck.install_dir()
+    finally:
+        if not had_frozen and hasattr(sys, "frozen"):
+            del sys.frozen
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_expected_sha256_reads_common_formats():
+    h = "a" * 64
+    assert updatecheck.expected_sha256(f"{h}  F.exe\n", "F.exe") == h
+    assert updatecheck.expected_sha256(f"{h} *F.exe\r\n", "F.exe") == h  # 바이너리 표시·CRLF
+    assert updatecheck.expected_sha256(f"{h.upper()}  F.exe", "F.exe") == h
+    assert updatecheck.expected_sha256(f"{h}  G.exe", "F.exe") is None
+    assert updatecheck.expected_sha256("zzz  F.exe", "F.exe") is None
+
+
+class _FakeDownload:
+    """sums 주소엔 체크섬 본문을, setup 주소엔 바이트를 준다."""
+
+    def __init__(self, payload: bytes, sums_text: str):
+        self.payload, self.sums_text = payload, sums_text
+
+    def __call__(self, url, **kw):
+        fake = self
+
+        class _R:
+            status_code = 200
+            text = fake.sums_text
+            headers = {"Content-Length": str(len(fake.payload))}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                for i in range(0, len(fake.payload), 3):
+                    yield fake.payload[i:i + 3]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *e):
+                pass
+        return _R()
+
+
+def test_download_verified_installs_only_matching_file():
+    import hashlib
+    payload = b"setup-bytes"
+    name = updatecheck.SETUP_ASSET.format(tag=_REL.tag)
+    good = f"{hashlib.sha256(payload).hexdigest()}  {name}\n"
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    try:
+        with _Patch((updatecheck.requests, "get", _FakeDownload(payload, good))):
+            prog = []
+            path = updatecheck.download_verified(_REL, tmp, progress=lambda d, t: prog.append((d, t)))
+            assert path.read_bytes() == payload and prog[-1] == (len(payload), len(payload)), prog
+        # 막지 않았으면: 다른 바이트가 와도 그대로 실행됐을 것이다
+        bad = f"{hashlib.sha256(b'other').hexdigest()}  {name}\n"
+        with _Patch((updatecheck.requests, "get", _FakeDownload(payload, bad))):
+            try:
+                updatecheck.download_verified(_REL, tmp)
+                raise AssertionError("체크섬이 다른데 통과했다")
+            except updatecheck.UpdateError as e:
+                assert "체크섬" in str(e), e
+            assert not (tmp / name).exists(), "검증에 실패한 설치 파일이 남았다"
+        # 자동 설치용 파일이 없는 릴리스
+        try:
+            updatecheck.download_verified(updatecheck.Release("v9.0.0", "p"), tmp)
+            raise AssertionError("설치 파일 주소 없이 통과했다")
+        except updatecheck.UpdateError:
+            pass
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_thread_crash_logged_without_dialog():

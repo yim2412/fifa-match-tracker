@@ -54,3 +54,11 @@ Name: "{autodesktop}\피파 전적관리"; Filename: "{app}\{#AppExe}"; Tasks: d
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,피파 전적관리}"; Flags: nowait postinstall skipifsilent
+; 앱 안 [업데이트] 로 실행됐을 때(/AUTOUPDATE=1, /SILENT)는 끝나면 앱을 다시 켠다 — updatecheck.INSTALL_ARGS
+Filename: "{app}\{#AppExe}"; Flags: nowait; Check: IsAutoUpdate
+
+[Code]
+function IsAutoUpdate: Boolean;
+begin
+  Result := ExpandConstant('{param:AUTOUPDATE|0}') = '1';
+end;

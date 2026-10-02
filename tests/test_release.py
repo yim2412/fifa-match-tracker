@@ -116,6 +116,18 @@ def test_asset_names_are_ascii():
     assert f"OutputBaseFilename={setup[:-4]}" in iss, "설치 파일 이름이 .iss 와 어긋난다"
 
 
+def test_updater_and_release_agree_on_names():
+    # 앱 안 업데이트는 릴리스 첨부를 이름으로 찾는다 — 어긋나면 버튼이 '받으러 가기'로만 남는다
+    import updatecheck
+    setup, _, sums = release.asset_names("v1.2.3")
+    assert updatecheck.SETUP_ASSET.format(tag="v1.2.3") == setup, (updatecheck.SETUP_ASSET, setup)
+    assert updatecheck.SUMS_ASSET == sums
+    # 설치 파일이 /AUTOUPDATE=1 을 받아 끝나고 앱을 다시 켠다
+    iss = release.ISS.read_text(encoding="utf-8-sig")
+    assert "/AUTOUPDATE=1" in updatecheck.INSTALL_ARGS and "{param:AUTOUPDATE|0}" in iss
+    assert "Check: IsAutoUpdate" in iss, "자동 업데이트 뒤 앱을 다시 켜는 줄이 없다"
+
+
 def test_sha256_lines_and_notes():
     import hashlib
     tmp = release.Path(os.environ.get("TEMP", "."))

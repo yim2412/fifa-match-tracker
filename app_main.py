@@ -5,13 +5,15 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPixmap
+from PyQt6.QtCore import Qt, QSize, QThread, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -43,7 +45,7 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
-    StatCard, TrendChart, VScrollArea, WrapBar, add_shadow, rate_of, wdl_text,
+    StatCard, TrendChart, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, wdl_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -611,12 +613,17 @@ class MainWindow(QMainWindow):
         self.progress.setVisible(False)
         self.progress.setMaximumHeight(14)
         self.statusBar().addPermanentWidget(self.progress, 1)
-        self.lb_update = QLabel()  # 새 버전이 있을 때만 보인다(start_update_check)
-        self.lb_update.setOpenExternalLinks(True)
-        self.lb_update.setVisible(False)
-        self.statusBar().addPermanentWidget(self.lb_update)
+        # 새 버전 카드 — 창 오른쪽 아래, 어느 화면 위에든 같은 자리(사용자 요청 2026-10-02)
+        self.update_card = UpdateCard(self)
+        self.update_card.update_clicked.connect(self._on_update_clicked)
+        self._release: updatecheck.Release | None = None
         self._update_worker: UpdateCheckWorker | None = None
+        self._download_worker: UpdateDownloadWorker | None = None
         self.statusBar().showMessage("구단주명을 입력하세요.")
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self.update_card.place()
 
     def start_update_check(self) -> None:
         """켤 때 한 번 — 테스트·스크린샷이 네트워크를 안 타게 main 에서만 부른다."""
@@ -624,11 +631,47 @@ class MainWindow(QMainWindow):
         self._update_worker.found.connect(self._on_update_found)
         self._update_worker.start()
 
-    def _on_update_found(self, tag: str, url: str) -> None:
-        self.lb_update.setText(
-            f"<a href='{url}' style='color:{T.GREEN};'>새 버전 {tag} — 받기</a>")
-        self.lb_update.setToolTip(f"지금 {config.APP_VERSION} · 변경 내용은 릴리스 페이지에")
-        self.lb_update.setVisible(True)
+    def _on_update_found(self, rel) -> None:
+        self._release = rel
+        installed = updatecheck.install_dir() is not None and bool(rel.setup_url)
+        self.update_card.show_release(rel.tag, config.APP_VERSION, installed)
+
+    def _on_update_clicked(self) -> None:
+        rel = self._release
+        if rel is None:
+            return
+        if updatecheck.install_dir() is None or not rel.setup_url:
+            # 포터블·소스 실행 — 설치 위치를 앱이 관리하지 않으니 페이지만 연다
+            QDesktopServices.openUrl(QUrl(rel.page_url))
+            return
+        notes = f"\n\n바뀐 점:\n{rel.notes}" if rel.notes else ""
+        ans = QMessageBox.question(
+            self, "업데이트",
+            f"{config.APP_VERSION} → {rel.tag} 로 업데이트할까요?\n"
+            f"내려받은 뒤 앱이 닫히고, 설치가 끝나면 다시 켜집니다. 전적 기록은 그대로입니다.{notes}")
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        self.update_card.set_busy(True, "내려받는 중…")
+        self._download_worker = UpdateDownloadWorker(rel)
+        self._download_worker.progress.connect(self.update_card.set_progress)
+        self._download_worker.done.connect(self._on_update_downloaded)
+        self._download_worker.failed.connect(self._on_update_failed)
+        self._download_worker.start()
+
+    def _on_update_downloaded(self, path: str) -> None:
+        try:
+            updatecheck.launch_installer(Path(path))
+        except OSError as e:
+            self._on_update_failed(f"설치 파일을 실행하지 못했습니다: {e}")
+            return
+        self.close()  # 파일이 잠기지 않게 바로 닫는다 — 설치 파일이 끝나면 다시 켠다
+
+    def _on_update_failed(self, msg: str) -> None:
+        self.update_card.set_busy(False)
+        if self._release:
+            self.update_card.show_release(self._release.tag, config.APP_VERSION, True)
+        page = self._release.page_url if self._release else config.RELEASES_URL
+        QMessageBox.warning(self, "업데이트 실패", f"{msg}\n\n직접 받기: {page}")
 
     def _build_search_page(self) -> QWidget:
         w = QWidget()
@@ -3574,6 +3617,9 @@ class MainWindow(QMainWindow):
         if self._update_worker and self._update_worker.isRunning():
             # requests 는 중간에 못 끊는다 — 타임아웃(5초)까지 기다려야 스레드가 안전히 끝난다
             self._update_worker.wait(6000)
+        if self._download_worker and self._download_worker.isRunning():
+            self._download_worker.cancel()  # 다음 덩어리에서 멈춘다(덩어리 하나는 끝까지 받는다)
+            self._download_worker.wait(20000)
         if self._loader and self._loader.isRunning():
             self._loader.cancel()
             # 진행 중이던 상세 요청 몇 개가 네트워크 타임아웃까지 갈 수 있어
@@ -3613,7 +3659,7 @@ class MainWindow(QMainWindow):
 
 class UpdateCheckWorker(QThread):
     """GitHub 최신 릴리스 확인(updatecheck.latest_newer)을 UI 스레드 밖에서."""
-    found = pyqtSignal(str, str)  # (태그, 릴리스 페이지) — 새 버전이 있을 때만
+    found = pyqtSignal(object)  # updatecheck.Release — 새 버전이 있을 때만
 
     def run(self) -> None:
         try:
@@ -3621,7 +3667,35 @@ class UpdateCheckWorker(QThread):
         except Exception:
             hit = None  # 알림 하나 때문에 크래시 로그가 쌓이면 안 된다
         if hit:
-            self.found.emit(*hit)
+            self.found.emit(hit)
+
+
+class UpdateDownloadWorker(QThread):
+    """설치 파일 내려받기 + 체크섬 검증(updatecheck.download_verified)."""
+    progress = pyqtSignal(int, int)  # (받은 바이트, 전체 바이트 — 모르면 0)
+    done = pyqtSignal(str)           # 검증을 통과한 설치 파일 경로
+    failed = pyqtSignal(str)
+
+    def __init__(self, rel):
+        super().__init__()
+        self._rel = rel
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        dest = Path(tempfile.gettempdir()) / "FifaMatchTracker-update"
+        try:
+            path = updatecheck.download_verified(
+                self._rel, dest, progress=self.progress.emit, cancelled=lambda: self._cancel)
+        except updatecheck.UpdateError as e:
+            self.failed.emit(str(e))
+            return
+        except Exception as e:  # 업데이트가 앱을 죽이면 안 된다
+            self.failed.emit(f"업데이트 중 오류: {e}")
+            return
+        self.done.emit(str(path))
 
 
 class KeyCheckWorker(QThread):
