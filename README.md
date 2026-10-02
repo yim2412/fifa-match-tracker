@@ -51,10 +51,14 @@
 
 파이썬 없이 쓰는 방법이다. 바뀐 점은 [CHANGELOG.md](CHANGELOG.md).
 
-1. 받은 `피파전적관리-<버전>.zip` 을 풀고, 폴더 안의 **`피파전적관리.exe`** 를 실행한다.
-   폴더째 두어야 한다(`_internal` 이 없으면 안 켜진다).
-2. "Windows의 PC 보호" 파란 창이 뜨면 **추가 정보 → 실행**. 서명 인증서가 없는 exe 라
-   처음 한 번 뜬다.
+1. [릴리스 페이지](https://github.com/yim2412/fifa-match-tracker/releases/latest)에서
+   **`피파전적관리-setup-<버전>.exe`** 를 받아 실행한다. 관리자 권한은 필요 없다(사용자 폴더
+   `%LOCALAPPDATA%\Programs\피파전적관리` 에 깔린다). 시작 메뉴에 생기고, 바탕화면 아이콘은
+   설치할 때 고른다. 지우는 건 윈도우 "설정 → 앱"에서.
+   - 설치 없이 쓰려면 `피파전적관리-<버전>.zip` 을 폴더째 풀고 `피파전적관리.exe` 실행
+     (`_internal` 이 옆에 있어야 켜진다).
+2. "Windows의 PC 보호" 파란 창이 뜨면 **추가 정보 → 실행**. 서명 인증서가 없는 프로그램이라
+   처음 한 번 뜬다(설치 파일도 같다).
 3. 처음 켜면 **API 키 입력 창**이 뜬다. [NEXON Open API](https://openapi.nexon.com/) 에 로그인 →
    애플리케이션을 **서비스 단계**로 등록 → 발급된 키를 붙여넣는다(무료).
    개발 단계 키는 [하루 1,000건](https://openapi.nexon.com/ko/support/faq/2354215/)이라, 처음 검색할 때
@@ -72,13 +76,18 @@
 ## 빌드·배포
 
 ```powershell
-python -m PyInstaller --noconfirm --clean 피파전적관리.spec   # → dist\피파전적관리\ (onedir)
-python -m zipfile -c dist\피파전적관리-v0.2.0.zip dist\피파전적관리   # 받는 사람에게 줄 zip
+python tools/release.py     # 빌드 → zip · 설치 파일 → 개인정보 검사 → 공개 명령 출력
 ```
 
-버전은 `config.APP_VERSION` 한 곳 — 올리면 `CHANGELOG.md` 에 한 절을 쓴다.
-배포는 GitHub Release(태그 `vX.Y.Z`, zip 첨부)로 한다 — 앱의 새 버전 알림이 그 태그를 읽는다.
-zip 은 `python -m zipfile` 로 만든다. 한글 파일명에 UTF-8 표시를 달아서, 받는 쪽 압축 풀기에서 이름이 덜 깨진다.
+1. `config.APP_VERSION` 을 올리고 `CHANGELOG.md` 에 그 버전 절을 쓴 뒤 **커밋한다**(안 하면 멈춘다).
+2. `tools/release.py` 가 `dist\` 에 `피파전적관리-setup-vX.Y.Z.exe` 와 `피파전적관리-vX.Y.Z.zip` 을 만들고,
+   배포물 안(exe 안의 압축된 코드까지)에서 **이 PC 의 홈 폴더 경로 · 프로젝트 경로 · API 키 · git 이메일**을
+   찾는다. 반드시 있어야 할 대조 문자열이 안 잡히면 "0건"을 믿지 않고 멈춘다.
+   더 찾을 말은 `RELEASE_SCAN_EXTRA="a,b"`.
+3. 마지막에 출력되는 `gh release create …` 를 확인하고 직접 친다 — 공개는 스크립트가 하지 않는다.
+
+설치 파일은 [Inno Setup 6](https://jrsoftware.org/isdl.php)(무료)이 필요하다 — 스크립트는 `installer/피파전적관리.iss`.
+앱의 새 버전 알림은 릴리스 태그(`vX.Y.Z`)를 읽는다.
 
 ## 시작하기 (소스)
 
@@ -104,6 +113,7 @@ python app_main.py
 python tests/test_parsing.py
 python tests/test_ui_smoke.py   # 화면 배선(offscreen)
 python tests/test_bot.py
+python tests/test_release.py   # 배포 검사 로직
 node tests/test_adapter.js
 
 # 6) (선택) 카카오톡 오픈채팅 봇 — 서버는 bot/README.md,

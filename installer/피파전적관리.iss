@@ -1,0 +1,54 @@
+﻿; 설치 파일(setup.exe) — Inno Setup 6. tools/release.py 가 /DAppVersion=X.Y.Z 로 부른다.
+; 입력은 PyInstaller onedir 결과(dist\피파전적관리\) 그대로다.
+; 이 파일은 UTF-8 BOM 으로 둔다 — BOM 이 없으면 컴파일러가 한글을 ANSI 로 읽는다.
+
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
+#define AppExe "피파전적관리.exe"
+
+[Setup]
+; AppId 는 바꾸지 않는다 — 바뀌면 새 버전이 덮어쓰기가 아니라 별개 프로그램으로 깔린다
+AppId={{FD0C45E7-7115-44EB-9318-CB5CD8B8CF69}
+AppName=피파 전적관리
+AppVersion={#AppVersion}
+AppVerName=피파 전적관리 v{#AppVersion}
+AppPublisher=yim2412
+AppPublisherURL=https://github.com/yim2412/fifa-match-tracker
+AppSupportURL=https://github.com/yim2412/fifa-match-tracker/releases
+; 사용자 폴더에 깐다(%LOCALAPPDATA%\Programs) — 관리자 권한 창이 안 뜬다
+PrivilegesRequired=lowest
+DefaultDirName={autopf}\피파전적관리
+DisableProgramGroupPage=yes
+OutputDir=..\dist
+OutputBaseFilename=피파전적관리-setup-v{#AppVersion}
+SetupIconFile=..\app_icon.ico
+UninstallDisplayIcon={app}\{#AppExe}
+UninstallDisplayName=피파 전적관리
+Compression=lzma2
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+; 켜 둔 채 업데이트하면 파일이 잠겨 있다 — 닫을지 묻는다
+CloseApplications=yes
+
+[Languages]
+Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[InstallDelete]
+; 덮어 설치할 때 옛 버전의 모듈이 남아 섞이지 않게 — 데이터는 %LOCALAPPDATA%\피파전적관리 라 여기와 무관하다
+Type: filesandordirs; Name: "{app}\_internal"
+
+[Files]
+Source: "..\dist\피파전적관리\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{autoprograms}\피파 전적관리"; Filename: "{app}\{#AppExe}"
+Name: "{autodesktop}\피파 전적관리"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,피파 전적관리}"; Flags: nowait postinstall skipifsilent
