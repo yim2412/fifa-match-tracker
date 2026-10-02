@@ -40,6 +40,7 @@ import ranker  # noqa: E402
 import requests  # noqa: E402
 import seasons as sn  # noqa: E402
 import store  # noqa: E402
+import stats as st_mod  # noqa: E402
 import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
 
@@ -88,6 +89,17 @@ class _NoApi:
 
 # 창이 켤 때 읽고 닫을 때 쓰는 settings.ini — 실제 파일을 건드리지 않게(지난번 창 크기가 테스트에 섞인다)
 config.SETTINGS_PATH = pathlib.Path(tempfile.mkdtemp()) / "settings.ini"
+# DB 도 임시로 — 창이 켤 때 시즌표·최근 검색을 DB 에서 읽는다. 실제 DB 를 쓰면 이 PC 와 CI 결과가 갈린다
+# (2026-10-02 CI 첫 실행: 시즌표가 없는 CI 에서만 시즌 테스트 2개가 실패). 픽스처 4경기(2026-01-01~03)가
+# 통째로 들어가는 끝난 시즌 하나 — 진행 중 시즌이 없어 기본은 '전체'다(이 PC 실제 DB 일 때와 같다).
+config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "ui.db"
+_seed = store.open_db(config.DB_PATH)
+try:
+    from datetime import date as _date
+    store.save_seasons(_seed, [sn.Season(no=90, name="시즌 9", start=_date(2025, 12, 1),
+                                         end=_date(2026, 2, 1))])
+finally:
+    _seed.close()
 _win = app_main.MainWindow(_NoApi())
 _win.resize(1600, 900)
 # 대부분의 테스트는 "모든 메뉴가 그려진 상태"를 본다 — 지연 그리기 자체는 test_lazy_* 가 켜서 잰다
@@ -886,15 +898,17 @@ def test_main_starts_update_check_after_show():
             calls.append("마지막 계정")
             raise _Stop()  # 이 뒤는 app.exec() — 실제로 들어가면 멈춘다
 
-    orig = app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED
+    orig = app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY
     app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
     config.NOTICE_ACCEPTED = config.NOTICE_VERSION  # 안내는 이미 동의한 상태
+    # 키도 있는 상태 — 이 PC 엔 실제 키가 있어 지나갔지만 키 없는 CI 에선 키 창이 떴다(2026-10-02)
+    config.API_KEY = "test_key"
     try:
         app_main.main()  # 확인 호출이 빠지면 app.exec() — 모달 차단이 바로 실패시킨다
     except _Stop:
         pass
     finally:
-        app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED = orig
+        app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY = orig
     assert calls == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
 
 
@@ -2122,6 +2136,34 @@ def test_teamcolor_progress_reaches_status_bar_unless_search_runs():
         _win._loader, _win._teamcolor_progress_fmt = saved[0], saved[1]
         for lb, t in zip(_win._teamcolor_status_labels, saved[2]):
             lb.setText(t)
+
+
+def test_player_card_has_my_record_tab():
+    import charts
+    shooter = next(p for p in st_mod.finishing_ranking(_win._details, _win._ouid) if p.shots)
+    orig_exec = app_main.QDialog.exec
+    app_main.QDialog.exec = lambda self: 0     # 다이얼로그 안을 보려고 — 띄우지는 않는다
+    try:
+        _win._show_player_info(shooter.sp_id)
+    finally:
+        app_main.QDialog.exec = orig_exec
+    tabs = _win._last_player_tabs
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["카드 정보", "내 기록"]
+    rec = tabs.widget(1)
+    summary = [lb for lb in rec.findChildren(app_main.QLabel) if lb.objectName() == "myRecordSummary"][0]
+    assert f"슛 {shooter.shots}" in summary.text() and f"골 {shooter.goals}" in summary.text(), summary.text()
+    assert len(rec.findChildren(app_main.ShotMapWidget)) == 1
+    # 픽스처는 슛이 적다 — 추이 대신 '표본 부족'. 기준을 낮추면 그래프가 나온다
+    trend = [x for x in rec.findChildren(app_main.QWidget) if x.objectName() == "myRecordTrend"][0]
+    assert isinstance(trend, app_main.QLabel) and "표본 부족" in trend.text(), type(trend)
+    saved = st_mod.PLAYER_TREND_MIN_SHOTS
+    st_mod.PLAYER_TREND_MIN_SHOTS = 1
+    try:
+        rec2 = _win._build_my_record(shooter.sp_id)
+    finally:
+        st_mod.PLAYER_TREND_MIN_SHOTS = saved
+    trend2 = [x for x in rec2.findChildren(app_main.QWidget) if x.objectName() == "myRecordTrend"][0]
+    assert isinstance(trend2, charts.AreaTrendChart), type(trend2)
 
 
 def test_search_hands_current_account_to_loader():
