@@ -336,6 +336,10 @@ class Card(QFrame):
             add_shadow(self)
 
 
+# 한 글자 폭의 상한을 잡을 때 같이 재는 넓은 글자 — 기본 글꼴 밖(대체 글꼴)에서 오는 종류마다 하나씩
+_WIDE_SAMPLES = ("가", "뷁", "漢", "W", "M", "@", "%", "Ⅲ", "😀", "★", "■")
+
+
 class FitTableWidget(QTableWidget):
     """열 너비는 값 텍스트 기준으로 잡되, 위젯이 그보다 넓으면 남는 폭을
     각 열의 원래 너비 비율대로 나눠 채운다 — 창을 넓혀도 오른쪽에 빈 칸이
@@ -402,17 +406,30 @@ class FitTableWidget(QTableWidget):
         self._fit()
 
     def _measure_text(self, cell_fm: QFontMetrics, hdr_fm: QFontMetrics) -> dict[int, int]:
-        """열별 텍스트 폭(패딩 제외) — 폰트 크기 하나에 대해 표 전체를 한 번 훑는다."""
+        """열별 텍스트 폭(패딩 제외) — 폰트 크기 하나에 대해 표 전체를 한 번 훑는다.
+
+        결과는 '가장 넓은 글자의 폭'이라 전부 잴 필요가 없다. 같은 글자는 한 번만, 긴 글자부터
+        재다가 `글자 수 × 가장 넓은 글자 폭`(그 글자가 가질 수 있는 최대 폭)이 이미 잰 값보다
+        작아지면 멈춘다 — 그보다 짧은 글자는 더 넓을 수 없으니 답은 전부 잴 때와 같다.
+        상대 전적 표(누적 상대 수천 명)에서 측정이 11.8만 번이었다(2026-10-02 프로파일)."""
         widths: dict[int, int] = {}
+        # maxWidth 는 기본 글꼴 안에서만 — 한글·한자·이모지는 다른 글꼴에서 빌려 와 더 넓을 수 있다
+        char_max = max([cell_fm.maxWidth(), 1] + [cell_fm.horizontalAdvance(ch) for ch in _WIDE_SAMPLES])
+        rows = self.rowCount()
         for c in range(self.columnCount()):
             w = 0
             header_item = self.horizontalHeaderItem(c)
             if header_item:
                 w = hdr_fm.horizontalAdvance(header_item.text())
-            for r in range(self.rowCount()):
+            texts = set()
+            for r in range(rows):
                 item = self.item(r, c)
                 if item:
-                    w = max(w, cell_fm.horizontalAdvance(item.text()))
+                    texts.add(item.text())
+            for t in sorted(texts, key=len, reverse=True):
+                if len(t) * char_max <= w:
+                    break
+                w = max(w, cell_fm.horizontalAdvance(t))
             widths[c] = w
         return widths
 

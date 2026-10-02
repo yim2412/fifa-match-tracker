@@ -657,6 +657,9 @@ class MainWindow(QMainWindow):
         self._teamcolor_rendered_at = 0.0  # 중간 갱신 간격(TEAMCOLOR_RENDER_INTERVAL_S)용
         self._teamcolor_progress_fmt = "{done} / {total} 조회 중…"
         self._teamcolor_retry_pending = False  # 조회 중 범위가 넓어져 재시도가 필요함
+        self._dirty: set[str] = set()  # 낡은 화면 키(PAGE_RENDER_KEYS) — 열 때 그린다
+        self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
+        self._narrate_found: list = []
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
         self._ability_sim_loader: AbilitySimLoader | None = None
@@ -1165,6 +1168,7 @@ class MainWindow(QMainWindow):
         idx = cur.data(Qt.ItemDataRole.UserRole)
         if idx is not None:
             self.pages.setCurrentIndex(idx)
+            self._render_current_page()  # 낡았으면 지금 그린다(_render_all 은 보이는 것만 그린다)
 
     def _go_page(self, name: str) -> None:
         idx = self._page_index.get(name)
@@ -1392,9 +1396,21 @@ class MainWindow(QMainWindow):
             col.addWidget(sub)
         return row
 
-    def _render_analysis(self, matches: list[MatchSummary],
-                         details: list[dict]) -> None:
-        found = analysis.narrate(matches, details, self._ouid)
+    def _narrate_scope(self) -> list:
+        """시즌 범위의 흐름 분석 — 대시보드 '흐름 분석 3줄'과 흐름 분석 메뉴가 같은 결과를 쓴다.
+
+        둘이 각자 계산하던 게 누적 전체 그리기의 55%였다(2026-10-02 프로파일). 범위가 바뀌면
+        (시즌 전환·새 경기·다른 계정) 키가 달라져 다시 계산한다 — 목록을 갈아끼우든(id) 앞에
+        이어 붙이든(길이·맨 앞 경기) 잡히게."""
+        m, d = self._matches, self._details
+        key = (self._ouid, id(m), len(m), m[0].match_id if m else None, id(d), len(d))
+        if key != self._narrate_key:
+            self._narrate_found = analysis.narrate(m, d, self._ouid)
+            self._narrate_key = key
+        return self._narrate_found
+
+    def _render_analysis(self) -> None:
+        found = self._narrate_scope()
         colors = {analysis.SEC_FLOW: T.TEXT,
                   analysis.SEC_WIN: T.GREEN,
                   analysis.SEC_LOSE: T.RED}
@@ -1819,7 +1835,7 @@ class MainWindow(QMainWindow):
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
-        self._render_dashboard()  # 대시보드 승률 흐름도 같은 '최근 N일'
+        self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일'
 
     @staticmethod
     def _make_table(columns: list[str]) -> FitTableWidget:
@@ -2564,8 +2580,44 @@ class MainWindow(QMainWindow):
         ids = {m.match_id for m in shown}
         return shown, [d for d in self._details if d.get("matchId") in ids]
 
+    # ── 보이는 화면만 그린다 ────────────────────────────────────────────
+    # 예전엔 _render_all 이 메뉴 18개를 매번 다 그려 시즌 "전체"(1만 경기) 전환에 3.2~3.5초 동안
+    # 창이 굳었다(2026-10-02 실측). 지금은 전부 '낡음'으로 표시하고 보이는 페이지만 그린 뒤,
+    # 나머지는 그 메뉴를 열 때 그린다. 같은 그리기를 쓰는 메뉴는 같은 키를 쓴다(한 번 그리면 같이 깨끗).
+    PAGE_RENDER_KEYS = {
+        "대시보드": "dashboard", "경기 목록": "matches", "상대 전적": "opponents",
+        "흐름 분석": "analysis", "기간별 추이": "period", "시즌별 성적": "seasons",
+        "승부처 분석": "clutch", "성적 진단": "diagnosis", "전술·경기 결과": "tactics",
+        "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing",
+        "선수 조합": "synergy", "포지션별 최다 상대": "teamcolor",
+        "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
+    }
+    LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
+
+    def _renderers(self) -> dict:
+        """키 → 그리기. 범위 주석은 예전 _render_all 그대로 — 표시 구간(_slice)에 갇히는 것과
+        시즌 범위(self._matches)를 쓰는 것이 메뉴마다 다르다."""
+        return {
+            "dashboard": self._render_dashboard,
+            "matches": lambda: self._render_matches(self._slice()[0]),
+            "players": lambda: self._render_players(self._slice()[1]),
+            "tactics": lambda: self._render_tactics(self._slice()[1]),
+            # 시즌 범위 — 표시 구간(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
+            "opponents": lambda: self._render_opponents(self._matches),
+            # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
+            "teamcolor": lambda: self._render_teamcolor_tabs(*self._teamcolor_scope()),
+            "period": lambda: self._render_period(self._matches),
+            "seasons": self._render_seasons,  # 시즌 필터도 무시(_matches_all)
+            "clutch": lambda: self._render_clutch(self._details, self._matches),
+            "diagnosis": lambda: self._render_diagnosis(self._details),
+            "shotmap": self._render_shotmap,  # 표시 구간
+            "finishing": lambda: self._render_finishing(self._slice()[1]),
+            "synergy": lambda: self._render_synergy(self._details),
+            "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위
+        }
+
     def _render_all(self) -> None:
-        matches, details = self._slice()
+        matches, _ = self._slice()
         total = len(self._matches)
         self.lb_total.setText(f"전체 {total}경기")
         self.lb_profile.setText(self._nick)
@@ -2573,30 +2625,39 @@ class MainWindow(QMainWindow):
                             f"감독모드 {len(matches)}경기 분석 (누적 {total})")
         self._refresh_scope_notes()
         self._render_ranker()
-        self._render_matches(matches)
-        self._render_players(details)
-        self._render_tactics(details)
-        # 시즌 범위 — 표시 구간(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
-        # 대시보드 '자주 만난 상대'(누르면 여기로 온다)와 같은 범위다.
-        self._render_opponents(self._matches)
-        # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
-        self._render_teamcolor_tabs(*self._teamcolor_scope())  # 포지션별 최다 상대도 여기서 그린다
-        # 아래 self._matches/_details 를 그대로 넘기는 것들은 "표시 구간에 안 갇힌다"는
-        # 뜻이지 누적 전체라는 뜻이 아니다 — 시즌 콤보를 고르면 그 시즌 안에서만 계산된다.
-        # 승률 추이는 "최근 30일" 이 표시 구간(시작~끝, 최근 최대 100경기)에
-        # 갇히면 안 된다 — 하루에 100경기 넘게 뛰는 계정은 그 구간이 하루도
-        # 안 될 수 있어서, self._matches 전체에서 30일을 계산한다.
+        # 승률 추이는 늘 — 대시보드 승률 흐름이 그 결과(_trend_periods)를 쓴다. 가볍다.
+        # "최근 30일" 이 표시 구간에 갇히면 안 된다(하루 100경기 넘게 뛰는 계정은 하루도 안 된다).
         self._render_trend(self._matches)
-        self._render_period(self._matches)  # 기간별 추이도 표시 구간 무시
-        self._render_seasons()  # 시즌별 성적만 시즌 필터도 무시(_matches_all)
-        self._render_clutch(self._details, self._matches)  # 승부처도 표시 구간 무시
-        self._render_diagnosis(self._details)  # 성적 진단도 표시 구간 무시(표본 크게)
-        self._render_shotmap()  # 슛 맵은 표시 구간(_slice) 기준
-        self._render_finishing(details)  # 결정력도 표시 구간 기준
-        self._render_synergy(self._details)  # 선수 조합도 표시 구간 무시
-        # 흐름 분석도 표시 구간 무시 — 패턴 규칙이 표본을 크게 잡아야 한다.
-        self._render_analysis(self._matches, self._details)
-        self._render_dashboard()  # 승률 흐름이 _render_trend 의 결과를 쓰므로 마지막
+        self._dirty = set(self._renderers())
+        if self.LAZY_RENDER:
+            self._render_current_page()
+        else:
+            self._render_everything()
+
+    def _current_page_name(self) -> str | None:
+        idx = self.pages.currentIndex()
+        return next((n for n, i in self._page_index.items() if i == idx), None)
+
+    def _render_page(self, name: str | None) -> None:
+        key = self.PAGE_RENDER_KEYS.get(name or "")
+        if key and key in self._dirty:
+            self._dirty.discard(key)  # 먼저 지운다 — 그리다 예외가 나도 같은 화면에서 무한 반복하지 않게
+            self._renderers()[key]()
+
+    def _render_current_page(self) -> None:
+        self._render_page(self._current_page_name())
+
+    def _render_everything(self) -> None:
+        for key, fn in self._renderers().items():
+            if key in self._dirty:
+                self._dirty.discard(key)
+                fn()
+
+    def _invalidate(self, key: str) -> None:
+        """그 키의 화면이 낡았다 — 보이고 있으면 바로, 아니면 열 때 그린다."""
+        self._dirty.add(key)
+        if not self.LAZY_RENDER or self.PAGE_RENDER_KEYS.get(self._current_page_name() or "") == key:
+            self._render_page(next(n for n, k in self.PAGE_RENDER_KEYS.items() if k == key))
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
@@ -2894,7 +2955,7 @@ class MainWindow(QMainWindow):
         remaining = {m.opponent for m in shown_matches
                     if m.opponent and m.opponent not in self._team_colors}
         if not remaining or not config.WEB_DATA:
-            self._render_teamcolor_tabs(*self._teamcolor_scope())
+            self._invalidate("teamcolor")  # 보이면 지금, 아니면 열 때
             if remaining:  # 꺼져 있다 — 상대마다 실패를 쌓는 대신 이유를 한 번만 보인다
                 for lb in self._teamcolor_status_labels:
                     lb.setText(config.WEB_DATA_OFF_MSG)
@@ -2934,7 +2995,7 @@ class MainWindow(QMainWindow):
         now = time.monotonic()
         if now - self._teamcolor_rendered_at >= self.TEAMCOLOR_RENDER_INTERVAL_S:
             self._teamcolor_rendered_at = now
-            self._render_teamcolor_tabs(*self._teamcolor_scope())
+            self._invalidate("teamcolor")
 
     def _on_teamcolor_progress(self, done: int, total: int) -> None:
         for lb in self._teamcolor_status_labels:
@@ -2961,7 +3022,7 @@ class MainWindow(QMainWindow):
             msg += f" · 랭킹 목록 {failed}쪽을 못 읽어 나머지는 다음에 다시 찾습니다"
         for lb in self._teamcolor_status_labels:
             lb.setText(msg)
-        self._render_teamcolor_tabs(*self._teamcolor_scope())
+        self._invalidate("teamcolor")
         if self._teamcolor_retry_pending:
             self._teamcolor_retry_pending = False
             self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
@@ -3593,7 +3654,8 @@ class MainWindow(QMainWindow):
             scope_matches=self._matches, scope_details=self._details,
             scope_name=self._scope_text(),
             trend_points=[(p.label, p.win_rate, p.games) for p in periods],
-            trend_days=self.sp_trend_days.value()))
+            trend_days=self.sp_trend_days.value(),
+            story=self._narrate_scope()))
 
     def _render_seasons(self) -> None:
         groups = self._season_groups()

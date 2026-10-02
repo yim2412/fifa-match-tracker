@@ -88,6 +88,8 @@ class _NoApi:
 
 _win = app_main.MainWindow(_NoApi())
 _win.resize(1600, 900)
+# 대부분의 테스트는 "모든 메뉴가 그려진 상태"를 본다 — 지연 그리기 자체는 test_lazy_* 가 켜서 잰다
+_win.LAZY_RENDER = False
 _win._on_fetch_team_colors = lambda: None
 _OUID, _MATCHES, _DETAILS = _load()
 _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
@@ -146,6 +148,90 @@ def test_trend_page_has_own_summary():
     assert _win.card_trend_games.value.text().endswith("경기"), \
         _win.card_trend_games.value.text()
     assert _win.dashboard.kpi_rate.title.text() == "승률", _win.dashboard.kpi_rate.title.text()
+
+
+class _CountRenders:
+    """창의 그리기 함수 몇 개를 세는 함수로 바꿔 끼운다 — 몇 번 그렸는지."""
+
+    NAMES = ("_render_dashboard", "_render_opponents", "_render_synergy", "_render_teamcolor_tabs")
+
+    def __enter__(self):
+        self.n = {k: 0 for k in self.NAMES}
+        for k in self.NAMES:
+            real = getattr(_win, k)
+
+            def spy(*a, _k=k, _real=real, **kw):
+                self.n[_k] += 1
+                return _real(*a, **kw)
+            setattr(_win, k, spy)
+        self._saved = (_win.LAZY_RENDER, _win.pages.currentIndex())
+        _win.LAZY_RENDER = True
+        return self
+
+    def __exit__(self, *exc):
+        for k in self.NAMES:
+            delattr(_win, k)  # 인스턴스 속성을 지워 클래스 메서드로 돌아간다
+        _win.LAZY_RENDER = self._saved[0]
+        _win._go_page("대시보드")
+        _win._render_all()
+
+
+def test_lazy_render_draws_only_the_visible_page():
+    with _CountRenders() as c:
+        _win._go_page("대시보드")
+        _win._render_all()
+        assert c.n["_render_dashboard"] == 1 and c.n["_render_opponents"] == 0, c.n
+        assert c.n["_render_synergy"] == 0 and c.n["_render_teamcolor_tabs"] == 0, c.n
+        _win._go_page("상대 전적")                 # 열면 그 때 그린다
+        assert c.n["_render_opponents"] == 1, c.n
+        _win._go_page("대시보드")
+        _win._go_page("상대 전적")                 # 이미 그렸으면 다시 안 그린다
+        assert c.n["_render_opponents"] == 1 and c.n["_render_dashboard"] == 1, c.n
+        _win._render_all()                          # 시즌 전환·새 경기 — 보이는 것만 다시
+        assert c.n["_render_opponents"] == 2 and c.n["_render_dashboard"] == 1, c.n
+        _win._go_page("대시보드")                  # 낡은 채로 남아 있다가 열 때
+        assert c.n["_render_dashboard"] == 2, c.n
+        _win._go_page("팀컬러 승률")               # 같은 그리기를 쓰는 메뉴는 한 번이면 같이 깨끗
+        _win._go_page("팀컬러 랭킹")
+        _win._go_page("포지션별 최다 상대")
+        assert c.n["_render_teamcolor_tabs"] == 1, c.n
+        _win._go_page("대시보드")
+        _win._invalidate("teamcolor")              # 안 보이면 미뤘다가
+        assert c.n["_render_teamcolor_tabs"] == 1, c.n
+        _win._go_page("팀컬러 랭킹")
+        assert c.n["_render_teamcolor_tabs"] == 2, c.n
+        _win._invalidate("teamcolor")              # 보이면 바로
+        assert c.n["_render_teamcolor_tabs"] == 3, c.n
+
+
+def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
+    calls = []
+    real = app_main.analysis.narrate
+
+    def spy(m, d, ouid, *a, **k):
+        calls.append(len(m))
+        return real(m, d, ouid, *a, **k)
+
+    # 경기를 빼고 그리면 '최근 N일' 칸의 범위가 줄어든 채 남는다 — 뒤 테스트(승률 평균)가 달라졌다
+    saved = _win._matches, _win._details, _win.sp_trend_days.value()
+    app_main.analysis.narrate = spy
+    try:
+        _win._narrate_key = None
+        _win._render_all()   # 대시보드 + 흐름 분석 메뉴 — 다 그려도 한 번
+        assert calls == [len(_win._matches)], calls
+        _win._render_all()   # 범위가 같으면 다시 안 한다
+        assert calls == [len(_win._matches)], calls
+        # 범위를 바꾸면 반드시 다시 — 캐시가 낡은 결과를 보여 주면 안 된다
+        _win._matches, _win._details = _win._matches[1:], _win._details[1:]
+        _win._render_all()
+        assert calls == [len(saved[0]), len(saved[0]) - 1], calls
+    finally:
+        app_main.analysis.narrate = real
+        _win._matches, _win._details = saved[0], saved[1]
+        _win._narrate_key = None
+        _win._render_trend(_win._matches)  # 범위를 먼저 되살려야 값이 들어간다
+        _win.sp_trend_days.setValue(saved[2])
+        _win._render_all()
 
 
 def test_setfont_sizes_survive_stylesheet():
@@ -287,6 +373,45 @@ def test_no_table_elides_at_min_or_default_size():
         _win.sp_synergy_min.setValue(20)
         _win._render_synergy(_win._details)
         _at_size(1600, 900)
+
+
+def test_measure_text_same_as_measuring_everything():
+    # 긴 글자부터 재다 멈추는 방식(2026-10-02)이 전부 재는 것과 같은 폭을 내야 한다 —
+    # 짧지만 넓은 글자(한글·이모지)를 일부러 섞는다. 다르면 열이 좁아 "…" 로 잘린다.
+    import random
+    from PyQt6.QtGui import QFont, QFontMetrics
+    from PyQt6.QtWidgets import QTableWidgetItem
+    import widgets
+    rnd = random.Random(11)
+    pools = ["iiii", "1.0", "가나다", "뷁뷁", "WWW", "MM", "漢字", "😀😀", "★", "a", "Fullcolor쿠팡", "lllllllllll"]
+    t = widgets.FitTableWidget(0, 3)
+    for trial in range(30):
+        n = rnd.randint(0, 60)
+        t.setRowCount(n)
+        for r in range(n):
+            for c in range(3):
+                t.setItem(r, c, QTableWidgetItem(
+                    "".join(rnd.choice(pools) for _ in range(rnd.randint(1, 3)))))
+        fm = QFontMetrics(QFont(t.font()))
+        got = t._measure_text(fm, fm)
+        want = {c: max([fm.horizontalAdvance(t.item(r, c).text()) for r in range(n)] + [0])
+                for c in range(3)}
+        assert got == want, (trial, got, want)
+    # 경계를 노린 경우 — 짧은데 넓은 글자(대체 글꼴)가 긴 글자보다 넓다. maxWidth() 만 믿으면
+    # 짧은 쪽을 재기 전에 멈춘다(실측: 맑은 고딕 maxWidth 16 · 😀 18, Consolas maxWidth 7 · 가 8 · 漢 13).
+    for family, texts in [("Consolas", ["abcde", "漢漢漢"]), (None, ["가가가가가", "😀😀😀😀"])]:
+        t.setRowCount(len(texts))
+        for r, s in enumerate(texts):
+            t.setItem(r, 0, QTableWidgetItem(s))
+            t.setItem(r, 1, QTableWidgetItem(""))
+            t.setItem(r, 2, QTableWidgetItem(""))
+        f = QFont(family) if family else QFont(t.font())
+        f.setPixelSize(13)
+        fm = QFontMetrics(f)
+        widest = max(fm.horizontalAdvance(s) for s in texts)
+        assert fm.horizontalAdvance(texts[1]) == widest and fm.horizontalAdvance(texts[0]) < widest, \
+            (family, [fm.horizontalAdvance(s) for s in texts])  # 정말 '짧은 쪽이 넓은' 경우인지
+        assert t._measure_text(fm, fm)[0] == widest, (family, t._measure_text(fm, fm)[0], widest)
 
 
 def test_fit_table_never_scrolls_sideways_above_min_font():

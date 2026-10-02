@@ -300,6 +300,23 @@ def test_fetch_seasons_parses_page():
             assert why in str(e), (why, e)
 
 
+def test_formation_of_matches_reference():
+    # 한 번만 훑게 바꾼 것(2026-10-02)이 예전 방식(라인마다 전부 훑기)과 같은 답을 내야 한다.
+    # 경계(0=GK·28=SUB·각 라인 끝)와 이상한 값(None·문자·실수)까지.
+    def reference(players):
+        return "-".join(str(sum(1 for p in players if isinstance(p.get("spPosition"), int)
+                                and p["spPosition"] in rng)) for _, rng in st._LINES)
+
+    import random
+    rnd = random.Random(7)
+    odd = [None, "5", 5.0, -1, 0, 28, 29, 100]
+    for _ in range(500):
+        players = [{"spPosition": rnd.choice(list(range(0, 30)) + odd)} for _ in range(rnd.randint(0, 18))]
+        players += [{}]  # 키가 없는 선수
+        assert st.formation_of(players) == reference(players), players
+    assert st.formation_of([{"spPosition": p} for p in (5, 5, 5, 5, 10, 13, 14, 18, 25, 0, 28)]) == "4-1-2-1-1"
+
+
 def _rank_row(no, nick, color, value):
     tc = (f'<span class="ico_rank"></span><span class="name"></span>'
           f'<span class="inner">{color} <small>(11명)</small></span>' if color else

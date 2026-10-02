@@ -79,6 +79,7 @@ _LINES = [
     ("공미", range(17, 20)),  # RAM CAM LAM
     ("공격", range(20, 28)),  # RF CF LF RW RS ST LS LW
 ]
+_POS_LINE = {pos: i for i, (_, rng) in enumerate(_LINES) for pos in rng}  # 포지션 코드 → 라인 번호
 
 
 def decode_goal_time(raw) -> tuple[int, int]:
@@ -101,12 +102,17 @@ def season_id_of(sp_id: int) -> int:
 
 
 def formation_of(players: list[dict]) -> str:
-    """선발 포지션 인원으로 전술 표기를 만든다. 예: 4-1-2-3-0"""
-    counts = []
-    for _, rng in _LINES:
-        n = sum(1 for p in players
-                if isinstance(p.get("spPosition"), int) and p["spPosition"] in rng)
-        counts.append(n)
+    """선발 포지션 인원으로 전술 표기를 만든다. 예: 4-1-2-3-0
+
+    선수를 한 번만 훑는다 — 라인마다 선수 전체를 다시 훑던 때는 1만 경기 흐름 분석에서
+    이 함수만 0.37초였다(2026-10-02 프로파일)."""
+    counts = [0] * len(_LINES)
+    for p in players:
+        pos = p.get("spPosition")
+        if isinstance(pos, int):
+            line = _POS_LINE.get(pos)
+            if line is not None:
+                counts[line] += 1
     return "-".join(str(c) for c in counts)
 
 

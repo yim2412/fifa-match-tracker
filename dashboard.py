@@ -48,6 +48,9 @@ class DashboardInput:
     scope_name: str                            # "현재 시즌" · "누적 전체" …
     trend_points: list[tuple[str, float, int]] = field(default_factory=list)
     trend_days: int = 30
+    # 흐름 분석 결과(analysis.narrate) — 창이 흐름 분석 메뉴와 같이 쓰려고 미리 계산해 넘긴다.
+    # 없으면 여기서 계산한다(같은 범위 · scope_matches/details)
+    story: list | None = None
 
 
 class DashCard(QFrame):
@@ -379,7 +382,8 @@ class DashboardPage(QWidget):
             ("실점", [b.conceded for b in buckets], T.CHART_DOWN)])
 
     def _render_story(self, d: DashboardInput) -> None:
-        found = analysis.narrate(d.scope_matches, d.scope_details, d.ouid)
+        found = d.story if d.story is not None else analysis.narrate(
+            d.scope_matches, d.scope_details, d.ouid)
         picks = []
         for sec in analysis.SECTIONS:
             first = next((i for i in found if i.section == sec), None)
