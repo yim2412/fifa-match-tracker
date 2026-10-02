@@ -28,6 +28,10 @@ import app_main  # noqa: E402
 import config  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
+import playerinfo  # noqa: E402
+import ranker  # noqa: E402
+import requests  # noqa: E402
+import seasons as sn  # noqa: E402
 import theme as T  # noqa: E402
 
 _DIR = os.path.join(_ROOT, "tests", "fixtures")
@@ -541,6 +545,76 @@ def test_attribution_on_search_and_main_pages():
         labels = [lb for lb in page.findChildren(app_main.QLabel)
                   if lb.objectName() == "attribution"]
         assert [lb.text() for lb in labels] == [want], (idx, [lb.text() for lb in labels])
+
+
+# ── 넥슨 웹 데이터 스위치 ─────────────────────────────────────────────
+class _Sent(Exception):
+    pass
+
+
+def _web_calls():
+    return [
+        ("ranker", lambda: ranker.fetch_manager_rank("닉"), ranker.RankerError),
+        ("playerinfo", lambda: playerinfo.fetch_player_info(1), playerinfo.PlayerInfoError),
+        ("ability", lambda: playerinfo.fetch_player_ability(1), playerinfo.PlayerInfoError),
+        ("seasons", lambda: sn.fetch_seasons(), sn.SeasonError),
+    ]
+
+
+def test_web_data_switch_blocks_every_request():
+    def sent(self, *a, **k):
+        raise _Sent()
+
+    orig_req, orig_on = requests.Session.request, config.WEB_DATA
+    requests.Session.request = sent
+    try:
+        # 켜져 있으면 요청이 실제로 나간다 — 이게 없으면 아래 "안 나감"이 공허하다
+        config.WEB_DATA = True
+        for name, call, err in _web_calls():
+            try:
+                call()
+                raise AssertionError(f"{name}: 요청 없이 끝났다")
+            except _Sent:
+                pass
+            except err as e:  # seasons 는 모든 예외를 SeasonError 로 감싼다
+                assert isinstance(e.__cause__, _Sent), (name, e)
+        config.WEB_DATA = False
+        for name, call, err in _web_calls():
+            try:
+                call()
+                raise AssertionError(f"{name}: 꺼졌는데 예외가 없다")
+            except _Sent:
+                raise AssertionError(f"{name}: 꺼졌는데 요청을 보냈다")
+            except err as e:
+                assert str(e) == config.WEB_DATA_OFF_MSG, (name, e)
+    finally:
+        requests.Session.request, config.WEB_DATA = orig_req, orig_on
+
+
+def test_web_requests_name_the_app():
+    for mod in (ranker, playerinfo):
+        ua = mod._session.headers.get("User-Agent", "")
+        assert ua == config.WEB_USER_AGENT and "Mozilla" not in ua, (mod.__name__, ua)
+
+
+def test_teamcolor_off_shows_reason_without_fetching():
+    class _NoLoader:
+        def __init__(self, *a, **k):
+            raise AssertionError("꺼졌는데 팀컬러 조회를 시작했다")
+
+    saved = (config.WEB_DATA, app_main.TeamColorLoader, dict(_win._team_colors),
+             [lb.text() for lb in _win._teamcolor_status_labels])
+    config.WEB_DATA, app_main.TeamColorLoader = False, _NoLoader
+    _win._team_colors.clear()
+    try:
+        app_main.MainWindow._on_fetch_team_colors(_win)  # 모듈 위쪽에서 인스턴스 쪽을 막아 뒀다
+        texts = {lb.text() for lb in _win._teamcolor_status_labels}
+        assert texts == {config.WEB_DATA_OFF_MSG}, texts
+    finally:
+        config.WEB_DATA, app_main.TeamColorLoader = saved[0], saved[1]
+        _win._team_colors.update(saved[2])
+        for lb, t in zip(_win._teamcolor_status_labels, saved[3]):
+            lb.setText(t)
 
 
 # ── API 키 입력 ───────────────────────────────────────────────────────

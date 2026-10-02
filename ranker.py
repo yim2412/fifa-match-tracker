@@ -19,13 +19,14 @@ from dataclasses import dataclass
 
 import requests
 
+import config
+
 RANK_URL = "https://fconline.nexon.com/datacenter/rank_inner"
-# 브라우저처럼 보이지 않으면 넥슨이 응답을 안 줄 수 있어 UA 를 넣는다.
+# UA 는 config.WEB_USER_AGENT(앱 이름) — 비우면 넥슨이 일부 페이지에 500 을 준다.
 # no-cache 류 헤더는 중간 프록시가 예전 응답을 재활용하는 걸 막는 안전장치다
 # (Cloudflare 는 이 페이지를 DYNAMIC 으로 표시해 자체 캐싱은 안 하는 걸 확인했지만,
 # 검색할 때마다 최신값을 받는다는 걸 보장하려고 남겨 둔다).
-_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
+_HEADERS = {"User-Agent": config.WEB_USER_AGENT,
             "Cache-Control": "no-cache", "Pragma": "no-cache"}
 
 # 팀컬러 조회(TeamColorLoader)가 상대 수십~수백 명을 연달아 부르는데, 매번
@@ -89,6 +90,8 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
 
     네트워크·파싱 실패는 RankerError. 호출부에서 잡아 카드를 비워도 앱은 산다.
     """
+    if not config.WEB_DATA:
+        raise RankerError(config.WEB_DATA_OFF_MSG)
     if not nickname:
         raise RankerError("닉네임이 비어 있습니다.")
     try:

@@ -2620,9 +2620,12 @@ class MainWindow(QMainWindow):
 
         remaining = {m.opponent for m in shown_matches
                     if m.opponent and m.opponent not in self._team_colors}
-        if not remaining:
+        if not remaining or not config.WEB_DATA:
             matches, details = self._slice()
             self._render_teamcolor_tabs(matches, details)
+            if remaining:  # 꺼져 있다 — 상대마다 실패를 쌓는 대신 이유를 한 번만 보인다
+                for lb in self._teamcolor_status_labels:
+                    lb.setText(config.WEB_DATA_OFF_MSG)
             return
         # 많이 만난 상대부터 — 값어치 큰 상대가 먼저 채워지고, 진행 중에도
         # 화면을 갱신하니(_on_teamcolor_loaded) 다 끝나기 전에도 유용해진다.

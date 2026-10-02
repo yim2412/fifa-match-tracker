@@ -17,13 +17,14 @@ from dataclasses import dataclass, field
 
 import requests
 
+import config
+
 PLAYER_INFO_URL = "https://m.fconline.nexon.com/datacenter/playerinfo"
 # PC 데이터센터 — 강화/적응도/팀컬러(소속·강화·관계 3종)를 반영한 능력치를
 # 넥슨 서버가 직접 계산해 돌려준다. 모바일 페이지에는 이 기능이 없다
 # (2026-07-22, 사용자가 PC 데이터센터 화면 캡처로 알려줘서 발견).
 PLAYER_ABILITY_URL = "https://fconline.nexon.com/datacenter/PlayerAbility"
-_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"}
+_HEADERS = {"User-Agent": config.WEB_USER_AGENT}
 
 # ranker.py 와 같은 이유로 Session 재사용 — 선수 카드를 여러 번 열어봐도
 # 매번 TCP/TLS 핸드셰이크를 새로 열지 않는다.
@@ -258,6 +259,8 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
         "n4TeamColorId_Feature": teamcolor_id_feature,
         "n1Change": 0, "strPlayerImg": "",
     }
+    if not config.WEB_DATA:
+        raise PlayerInfoError(config.WEB_DATA_OFF_MSG)
     try:
         res = _session.post(PLAYER_ABILITY_URL, data=data, timeout=timeout)
         res.raise_for_status()
@@ -294,6 +297,8 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
 
 def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     """선수 카드 상세를 가져온다. 네트워크·파싱 실패는 PlayerInfoError."""
+    if not config.WEB_DATA:
+        raise PlayerInfoError(config.WEB_DATA_OFF_MSG)
     try:
         res = _session.get(PLAYER_INFO_URL, params={"spid": sp_id}, timeout=timeout)
         res.raise_for_status()

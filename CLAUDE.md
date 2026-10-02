@@ -47,6 +47,11 @@ $env:QT_QPA_FONTDIR="C:/Windows/Fonts"; $env:UI_SHOT="<스크래치 폴더>"; py
   만들 수 없어서(2026-10-02). 판정은 `nexon_api.check_key`: 실측상 맞는 키로 없는 닉네임을
   물으면 `OPENAPI00004`, 틀린 키는 `OPENAPI00005` — **"00005 가 아니면 통과"**(네트워크·429·5xx 는
   모르는 상태라 불통). 조회 중 넥슨이 키를 거절하면 `MatchLoader.key_invalid` 로 같은 창을 띄운다.
+- **넥슨 웹(데이터센터) 요청은 전부 `config.WEB_DATA` 스위치 뒤에** — `ranker`·`playerinfo`·`seasons`
+  의 fetch 함수 첫 줄에서 막는다. 새 스크래핑 함수를 만들면 같은 검사를 넣고
+  `test_web_data_switch_blocks_every_request` 의 `_web_calls()` 에 한 줄 추가한다(안 넣으면 그 검사가 비어 있다).
+  UA 는 `config.WEB_USER_AGENT`(앱 이름) — 2026-10-02 실측으로 브라우저 UA 와 응답이 같았고, **빈 UA 만** playerinfo 가 500.
+  CDN 이미지(`images.py`)는 정적 파일이라 스위치 밖.
 - **엔드포인트 경로 상수는 `nexon_api.py` 상단에.** 여기서 특히 중요한 이유는
   **공식 문서가 JS 렌더링이라 자동 대조가 안 되기 때문**이다 — 경로가 틀렸을 때
   찾아 고칠 곳이 하나여야 한다. 실제로 자주 겪는다.

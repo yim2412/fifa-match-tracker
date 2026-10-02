@@ -86,6 +86,17 @@ API_KEY_VAR = "NEXON_API_KEY"
 load_dotenv(ENV_PATH)
 API_KEY = os.getenv(API_KEY_VAR, "").strip()
 
+# 넥슨 웹(데이터센터) 페이지 읽기 — 오픈API 에 없는 랭킹·팀가치·시즌표·선수 능력치.
+# 오픈API 약관 밖이라 한 곳에서 끌 수 있게 둔다(.env 에 FIFA_WEB_DATA=0).
+# 끄면 ranker·playerinfo·seasons 가 요청 없이 WebDataOff 계열 예외를 던진다.
+# CDN 이미지(images.py)는 페이지가 아니라 정적 파일이라 여기 안 묶는다.
+WEB_DATA = os.getenv("FIFA_WEB_DATA", "1").strip() != "0"
+WEB_DATA_OFF_MSG = "넥슨 웹 데이터 조회가 꺼져 있습니다 (.env 의 FIFA_WEB_DATA=0)"
+# 브라우저인 척하지 않고 앱 이름을 밝힌다. 2026-10-02 실측: 이 UA 로도 네 페이지가
+# 브라우저 UA 와 같은 바이트로 응답했다. UA 를 아예 비우면 playerinfo 가 500 이다.
+WEB_USER_AGENT = (f"FifaMatchTracker/{APP_VERSION.lstrip('v')} "
+                  "(+https://github.com/yim2412/fifa-match-tracker)")
+
 
 def save_api_key(key: str) -> None:
     """키를 .env 에 쓰고 이 프로세스의 API_KEY 도 바꾼다.
