@@ -935,7 +935,7 @@ def test_update_status_always_visible_bottom_left():
     orig = updatecheck.check
     try:
         for status, rel, want, card_shown in [
-                (updatecheck.LATEST, None, ("최신 버전입니다", None), False),
+                (updatecheck.LATEST, None, ("최신 버전입니다", None), True),     # 카드 자리에도
                 (updatecheck.UNKNOWN, None, ("업데이트 확인 못 함", None), False),  # 모르면 '최신'이라 안 한다
                 (updatecheck.NEWER, _REL, ("새 버전 v9.0.0", "받으러 가기"), True)]:
             card.hide()
@@ -945,6 +945,13 @@ def test_update_status_always_visible_bottom_left():
             _win._update_worker.run()           # 같은 스레드에서 돌려 신호 → 창까지
             assert _status_bar_state() == [want] * 2, (status, _status_bar_state())
             assert card.isVisibleTo(_win) == card_shown, status
+            if status == updatecheck.LATEST:
+                assert card.lb_title.text() == "최신 버전입니다", card.lb_title.text()
+                assert not card.btn_update.isVisibleTo(card) and card.btn_later.text() == "닫기"
+                _app.processEvents()
+                assert card.isVisibleTo(_win), "최신 카드가 저절로 닫혔다"
+        # 최신 카드 뒤 새 버전이 오면 버튼이 돌아온다(마지막 반복이 NEWER)
+        assert card.btn_update.isVisibleTo(card) and card.btn_later.text() == "나중에"
         # 왼쪽 아래 버튼도 카드 버튼과 같은 길(소스 실행 = 페이지 열기)
         opened = []
         with _Patch((app_main.QDesktopServices, "openUrl", lambda u: opened.append(u.toString())),

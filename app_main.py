@@ -721,6 +721,7 @@ class MainWindow(QMainWindow):
 
     def _on_update_latest(self) -> None:
         self._set_update_status("최신 버전입니다")
+        self.update_card.show_latest(config.APP_VERSION)  # 카드 자리에도(사용자 요청) — 닫을 때까지
 
     def _on_update_unknown(self) -> None:
         # 확인을 못 했는데 '최신'이라 하면 거짓말 — 그렇다고 말한다
