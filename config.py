@@ -58,6 +58,8 @@ def _data_dir() -> Path:
 
 DATA_DIR = _data_dir()
 CACHE_DIR = DATA_DIR / ".cache"
+# 창 크기·위치·마지막 메뉴·시즌 — QSettings 를 레지스트리 대신 이 ini 로(데이터 폴더를 지우면 같이 사라진다)
+SETTINGS_PATH = DATA_DIR / "settings.ini"
 DB_PATH = DATA_DIR / "fifa.db"  # 조회한 경기 누적 — API는 약 한 달 지난 경기를 버린다(store.py 머리말)
 
 

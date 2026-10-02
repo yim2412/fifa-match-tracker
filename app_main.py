@@ -13,7 +13,7 @@ from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSize, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import QSettings, Qt, QSize, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
@@ -71,14 +71,17 @@ class MatchLoader(QThread):
     key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
     quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
 
-    def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None):
+    def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
+                 offline_ouid: str | None = None):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
-        목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다)."""
+        목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
+        offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때."""
         super().__init__()
         self._api = api
         self._nickname = nickname
         self._match_type = match_type
         self._prev = prev
+        self._offline_ouid = offline_ouid
         self._cancel = False
         self._quota_hit = False
         self._pool: ThreadPoolExecutor | None = None
@@ -118,7 +121,35 @@ class MatchLoader(QThread):
             offset += PAGE_SIZE
         return ids
 
+    def _run_offline(self) -> None:
+        """DB 만 — 넥슨 API·웹을 부르지 않는다(메타는 디스크 캐시가 있으면 그걸로). 순위는 비워 두고,
+        뒤이은 새 경기 확인(정상 검색)이 채운다."""
+        ouid = self._offline_ouid
+        self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
+        conn = store.open_db(config.DB_PATH)
+        try:
+            details = store.load_details(conn, ouid, self._match_type)
+        finally:
+            conn.close()
+        if not details or self._cancel:
+            return  # 보여 줄 게 없으면 검색 화면 그대로
+        grade_name, is_champion, badge_path, division_names = self._current_grade(details, ouid)
+        matches = [m for m in (parse_match(d, ouid) for d in details) if m]
+        matches.sort(key=lambda m: m.match_date or 0, reverse=True)
+        names = self._safe_meta("spid", "id", "name")
+        positions = self._safe_meta("spposition", "spposition", "desc")
+        seasons = self._safe_meta_raw("seasonid", "seasonId")
+        self.finished_ok.emit(matches, details, ouid, {"nickname": self._nickname}, names,
+                              positions, 0, 0, None, grade_name, is_champion, badge_path,
+                              seasons, division_names)
+
     def run(self) -> None:
+        if self._offline_ouid:
+            try:
+                self._run_offline()
+            except Exception as e:
+                self.failed.emit(f"저장된 전적을 읽지 못했습니다: {e}")
+            return
         try:
             self.progress.emit(0, 0, f"'{self._nickname}' 계정 조회 중…")
             ouid = self._api.get_ouid(self._nickname)
@@ -643,6 +674,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._api = api
         self._loader: MatchLoader | None = None
+        self._quiet_search = False  # 켤 때 자동 새 경기 확인 — 실패를 상태줄로만
         self._img_cache_dir = config.CACHE_DIR / "player_images"
         self._table_season_loader: SeasonIconLoader | None = None
         self._finishing_icon_loader: SeasonIconLoader | None = None
@@ -701,6 +733,51 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_recent()
         self._load_season_cache()  # 시즌 콤보·시즌별 성적 탭이 쓸 시즌표
+        # 지난번 창 크기·위치·메뉴·시즌(사용자 요청 2026-10-02). 메뉴·시즌은 첫 계정을 그릴 때 한 번 쓴다
+        self._restore = self._load_settings()
+
+    # ── 설정 기억(settings.ini) ────────────────────────────────────────
+    def _settings(self) -> QSettings:
+        return QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
+
+    def _season_key(self, data) -> str:
+        if data is None:
+            return "all"
+        if data == self.ONGOING:
+            return "ongoing"
+        return f"s{getattr(data, 'no', '')}"
+
+    def _save_settings(self) -> None:
+        """닫을 때 — 실패해도 닫기는 막지 않는다(설정 파일 하나 때문에 창이 안 닫히면 안 된다)."""
+        try:
+            s = self._settings()
+            s.setValue("window/geometry", self.saveGeometry())
+            page = self._current_page_name() if self.stack.currentIndex() == self.PAGE_MAIN else None
+            if page:
+                s.setValue("view/page", page)
+            if self._matches_all:
+                s.setValue("view/season", self._season_key(self.cb_season.currentData()))
+            s.sync()
+        except Exception:
+            pass
+
+    def _load_settings(self) -> dict:
+        """창 크기·위치는 바로, 메뉴·시즌은 돌려줘서 첫 계정을 그릴 때 쓴다.
+
+        restoreGeometry 는 모니터를 떼어 낸 뒤처럼 화면 밖이면 보이는 곳으로 옮긴다(Qt 동작) —
+        그래도 화면 하나와도 안 겹치면 기본 크기·위치로 둔다."""
+        try:
+            s = self._settings()
+            geo = s.value("window/geometry")
+            if geo is not None and self.restoreGeometry(geo):
+                screens = QApplication.screens()
+                if screens and not any(sc.availableGeometry().intersects(self.frameGeometry())
+                                       for sc in screens):
+                    self.resize(1600, 900)
+                    self.move(screens[0].availableGeometry().topLeft())
+            return {k: s.value(f"view/{k}") for k in ("page", "season") if s.value(f"view/{k}")}
+        except Exception:
+            return {}
 
     # ── UI ────────────────────────────────────────────────────────────
     PAGE_SEARCH, PAGE_MAIN = 0, 1
@@ -2366,10 +2443,13 @@ class MainWindow(QMainWindow):
         self.lb_search_msg.setText("")
         self._api_search(nick)
 
-    def _api_search(self, nick: str) -> None:
+    def _api_search(self, nick: str, quiet: bool = False) -> None:
+        """quiet: 켤 때 자동으로 하는 새 경기 확인 — 실패해도 경고 창 없이 상태줄에만(화면은 DB 로 이미 떠 있다).
+        키가 거절된 경우만은 그래도 묻는다(사용자가 해야 할 일이 있다)."""
         if self._loader and self._loader.isRunning():
             return
         self._nick = nick
+        self._quiet_search = quiet
         self._set_busy(True)
         # 지금 화면의 계정을 넘긴다 — 같은 계정이면(로더가 ouid 로 판단) 새 경기만 DB 에서 읽는다
         prev = (self._ouid, self._matches_all, self._details_all) if self._ouid else None
@@ -2378,8 +2458,46 @@ class MainWindow(QMainWindow):
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.key_invalid.connect(self._on_key_invalid)
-        self._loader.quota_hit.connect(self._on_key_invalid)  # 키를 바꾸는 게 답이라 같은 길
+        self._loader.quota_hit.connect(self._on_quota_hit)  # 키를 바꾸는 게 답이라 같은 길
         self._loader.start()
+
+    def _on_quota_hit(self, msg: str) -> None:
+        if getattr(self, "_quiet_search", False):
+            self._on_failed(msg)  # 켤 때 자동 확인 — 키 창을 갑자기 띄우지 않는다(다음 직접 검색 때 묻는다)
+        else:
+            self._on_key_invalid(msg)
+
+    def open_last_account(self) -> bool:
+        """켤 때 — 마지막으로 본 계정을 DB 에서 바로 그리고, 끝나면 새 경기를 조용히 확인한다.
+        main 에서만 부른다. 열 계정이 없으면 False(검색 화면 그대로)."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                last = store.recent_searches(conn, 1)
+                if not last or not store.match_count(conn, last[0]["ouid"], config.DEFAULT_MATCH_TYPE):
+                    return False
+            finally:
+                conn.close()
+        except Exception:
+            return False
+        ouid, nick = last[0]["ouid"], last[0]["nickname"]
+        self._nick = nick
+        self._set_busy(True)
+        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, offline_ouid=ouid)
+        self._loader.progress.connect(self._on_progress)
+        self._loader.finished_ok.connect(self._on_loaded)
+        self._loader.failed.connect(self._on_failed)
+        # finished_ok 가 아니라 스레드가 끝난 뒤(finished) — 그 전엔 isRunning 이라 새 검색이 막힌다
+        self._loader.finished.connect(lambda o=ouid, n=nick: self._after_offline_open(o, n))
+        self._loader.start()
+        return True
+
+    def _after_offline_open(self, ouid: str, nick: str) -> None:
+        if self._ouid == ouid:  # DB 로 그리는 데 성공했다 — 이제 넥슨에 새 경기를 묻는다
+            self.statusBar().showMessage(f"{nick} — 저장된 기록을 보여 주는 중 · 새 경기 확인 중…")
+            self._api_search(nick, quiet=True)
+        else:
+            self._set_busy(False)
 
     def _apply_range(self) -> None:
         """시작~끝 스핀박스 값대로 표시 구간을 바꾼다."""
@@ -2440,8 +2558,16 @@ class MainWindow(QMainWindow):
                 self.cb_season.addItem(
                     f"{season.label} · {season.start:%m-%d}~{season.end:%m-%d}"
                     f" ({len(group)}경기)", season)
+        saved = self._restore.pop("season", None) if hasattr(self, "_restore") else None
         if self._season_picked:
             idx = self.cb_season.findData(prev)
+        elif saved is not None:  # 지난번에 보던 시즌 — 이번 데이터에 그 시즌이 없으면 기본(현재 시즌)
+            idx = next((i for i in range(self.cb_season.count())
+                        if self._season_key(self.cb_season.itemData(i)) == saved), -1)
+            if idx < 0:
+                idx = self.cb_season.findData(self.ONGOING)
+            else:
+                self._season_picked = True  # 다음 재검색에도 그대로
         else:
             idx = self.cb_season.findData(self.ONGOING)  # 없으면 -1 → "전체"
         self.cb_season.setCurrentIndex(idx if idx >= 0 else 0)
@@ -2545,6 +2671,10 @@ class MainWindow(QMainWindow):
     def _on_failed(self, msg: str) -> None:
         self._set_busy(False)
         self.statusBar().showMessage("조회 실패")
+        if getattr(self, "_quiet_search", False) and self.stack.currentIndex() == self.PAGE_MAIN:
+            first = msg.splitlines()[0] if msg else ""
+            self.statusBar().showMessage(f"새 경기를 확인하지 못했습니다 — 저장된 기록을 보여 줍니다 · {first}")
+            return
         if self.stack.currentIndex() == self.PAGE_SEARCH:
             self.lb_search_msg.setText(msg)
         else:
@@ -2584,7 +2714,9 @@ class MainWindow(QMainWindow):
         # 다른 계정이면 대시보드부터. 같은 계정 재확인이면 보던 메뉴를 유지한다.
         self.stack.setCurrentIndex(self.PAGE_MAIN)
         if switched:
-            self._go_page("대시보드")
+            # 이번에 켜고 처음 그리는 계정이면 지난번에 보던 메뉴로(settings.ini), 아니면 대시보드
+            page = self._restore.pop("page", None)
+            self._go_page(page if page in self._page_index else "대시보드")
         self._render_ranker()
 
         if not matches:
@@ -3900,6 +4032,7 @@ class MainWindow(QMainWindow):
             box.addStretch(1)
 
     def closeEvent(self, e) -> None:
+        self._save_settings()
         prune = getattr(self, "_prune_worker", None)
         if prune and prune.isRunning():
             # 파일을 지우는 중 — 하다 만 정리는 다음에 켤 때 이어서 하니, 오래 붙잡지 않고 끝낸다
@@ -4230,6 +4363,7 @@ def main() -> int:
     win.show()
     win.start_update_check()
     win.start_cache_prune()
+    win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
     return app.exec()
 
 

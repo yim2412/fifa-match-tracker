@@ -86,6 +86,8 @@ class _NoApi:
         raise AssertionError(f"스모크에서 API 를 불렀다: {name}")
 
 
+# 창이 켤 때 읽고 닫을 때 쓰는 settings.ini — 실제 파일을 건드리지 않게(지난번 창 크기가 테스트에 섞인다)
+config.SETTINGS_PATH = pathlib.Path(tempfile.mkdtemp()) / "settings.ini"
 _win = app_main.MainWindow(_NoApi())
 _win.resize(1600, 900)
 # 대부분의 테스트는 "모든 메뉴가 그려진 상태"를 본다 — 지연 그리기 자체는 test_lazy_* 가 켜서 잰다
@@ -876,6 +878,12 @@ def test_main_starts_update_check_after_show():
 
         def start_update_check(self):
             calls.append("새 버전 확인")
+
+        def start_cache_prune(self):
+            calls.append("캐시 정리")
+
+        def open_last_account(self):
+            calls.append("마지막 계정")
             raise _Stop()  # 이 뒤는 app.exec() — 실제로 들어가면 멈춘다
 
     orig = app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED
@@ -887,7 +895,7 @@ def test_main_starts_update_check_after_show():
         pass
     finally:
         app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED = orig
-    assert calls == ["창", "show", "새 버전 확인"], calls
+    assert calls == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
 
 
 def test_main_asks_notice_first_and_quits_on_decline():
@@ -1893,6 +1901,140 @@ def test_research_same_account_reads_only_new_matches():
     finally:
         config.DB_PATH, config.WEB_DATA, store.load_details = saved
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_settings_remember_window_page_and_season():
+    saved_state = (_win.size(), _win._restore, _win._ouid, _win._season_picked,
+                   _win.cb_season.currentIndex())
+    try:
+        _win.resize(1400, 800)
+        _win._go_page("슛 맵")
+        _win.cb_season.setCurrentIndex(_win.cb_season.findData(None))  # "전체"
+        _win._save_settings()
+        # 다른 상태로 돌려놓고, 켤 때처럼 읽는다
+        want_geo = bytes(_win.saveGeometry())
+        _win.resize(1600, 900)
+        _win._go_page("대시보드")
+        # 크기 자체는 Qt 가 화면에 맞춰 되살린다 — offscreen 화면이 800x800 이라 1280 최소폭 창은
+        # 줄어든다. 여기선 저장한 값이 그대로 restoreGeometry 로 가는지만 본다
+        got_geo = []
+        real_restore = _win.restoreGeometry
+        _win.restoreGeometry = lambda g: (got_geo.append(bytes(g)), real_restore(g))[1]
+        try:
+            _win._restore = _win._load_settings()
+        finally:
+            del _win.restoreGeometry
+        assert got_geo == [want_geo], "저장한 창 위치·크기가 복원에 안 쓰였다"
+        assert _win._restore == {"page": "슛 맵", "season": "all"}, _win._restore
+        # 처음 그리는 계정이면 그 메뉴·시즌으로
+        _win._ouid, _win._season_picked = "", False
+        _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert _win._current_page_name() == "슛 맵", _win._current_page_name()
+        assert _win.cb_season.currentData() is None, _win.cb_season.currentText()
+        assert _win._restore == {}, "한 번 쓴 복원값이 남아 다음 계정에도 적용된다"
+    finally:
+        _win.resize(saved_state[0])
+        _win._restore = {}
+        _win._season_picked = saved_state[3]
+        _win.cb_season.setCurrentIndex(saved_state[4])
+        _win._go_page("대시보드")
+        _win._render_all()
+
+
+def test_offline_loader_reads_db_without_asking_nexon():
+    class _MetaOnly:
+        def get_meta(self, name):
+            return []
+
+        def __getattr__(self, n):
+            raise AssertionError(f"켤 때 DB 만 읽어야 하는데 넥슨을 불렀다: {n}")
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA
+    config.DB_PATH, config.WEB_DATA = tmp / "t.db", False
+    try:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_matches(conn, _DETAILS)
+        finally:
+            conn.close()
+        out = []
+        ld = app_main.MatchLoader(_MetaOnly(), "테스트구단주", 52, offline_ouid=_OUID)
+        ld.finished_ok.connect(lambda *a: out.append(a))
+        ld.failed.connect(lambda m: out.append(("실패", m)))
+        ld.run()
+        assert len(out) == 1 and out[0][0] != "실패", out
+        assert len(out[0][1]) == len(_DETAILS) and out[0][2] == _OUID and out[0][8] is None, out[0][2:9]
+        # DB 에 그 계정 경기가 없으면 아무것도 안 낸다(검색 화면 그대로)
+        out.clear()
+        ld = app_main.MatchLoader(_MetaOnly(), "없음", 52, offline_ouid="없는계정")
+        ld.finished_ok.connect(lambda *a: out.append(a))
+        ld.run()
+        assert out == [], out
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_open_last_account_then_quiet_refresh():
+    made, searched = [], []
+
+    class _Rec:
+        def __init__(self, api, nick, mt, prev=None, offline_ouid=None):
+            made.append((nick, offline_ouid))
+            self.progress = self.finished_ok = self.failed = self.finished = self
+
+        def connect(self, *_):
+            pass
+
+        def start(self):
+            pass
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = (config.DB_PATH, app_main.MatchLoader, _win._loader, _win._api_search, _win._ouid)
+    config.DB_PATH = tmp / "t.db"
+    app_main.MatchLoader, _win._loader = _Rec, None
+    _win._api_search = lambda nick, quiet=False: searched.append((nick, quiet))
+    try:
+        assert _win.open_last_account() is False and made == [], "열 계정이 없는데 열었다"
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_matches(conn, _DETAILS)
+            store.upsert_account(conn, _OUID, "테스트구단주")
+        finally:
+            conn.close()
+        assert _win.open_last_account() is True and made == [("테스트구단주", _OUID)], made
+        _win._after_offline_open("다른계정", "테스트구단주")   # DB 로 못 그렸으면 넥슨에 묻지 않는다
+        assert searched == [], searched
+        _win._ouid = _OUID
+        _win._after_offline_open(_OUID, "테스트구단주")
+        assert searched == [("테스트구단주", True)], searched   # 그렸으면 조용히 새 경기 확인
+    finally:
+        (config.DB_PATH, app_main.MatchLoader, _win._loader, _win._api_search, _win._ouid) = saved
+        _win._set_busy(False)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_quiet_refresh_failure_stays_in_status_bar():
+    # 켤 때 자동 확인이 실패해도(오프라인·한도) 경고 창·키 창을 띄우지 않는다 — 모달이면 ModalCalled 로 빨개진다
+    saved = _win._quiet_search, _win.stack.currentIndex(), _win._ask_new_key
+    asked = []
+    _win._ask_new_key = asked.append
+    try:
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        _win._quiet_search = True
+        _win._on_failed("네트워크 오류\n자세한 내용")
+        assert "저장된 기록" in _win.statusBar().currentMessage(), _win.statusBar().currentMessage()
+        _win._on_quota_hit("한도")
+        assert asked == [], "자동 확인인데 키 창을 띄웠다"
+        _win._quiet_search = False   # 직접 검색이면 지금처럼 키를 바꾸라고 묻는다
+        with _Patch((app_main.QMessageBox, "warning", lambda *a, **k: None)):
+            _win._on_quota_hit("한도")
+        assert asked == ["한도"], asked
+    finally:
+        _win._quiet_search, _, _win._ask_new_key = saved[0], None, saved[2]
+        _win.stack.setCurrentIndex(saved[1])
 
 
 def test_search_hands_current_account_to_loader():
