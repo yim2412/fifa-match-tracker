@@ -28,7 +28,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from datetime import date, datetime
+
+import config
 import models
+import ranker
+import seasons as sn
 import stats as st
 
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
@@ -212,6 +217,87 @@ def test_shot_breakdown():
                if b.shots >= st.MIN_BUCKET_SHOTS)
     assert st.shot_type_breakdown(st.ShotMap()) == []
     assert st.shot_distance_breakdown(st.ShotMap()) == []
+
+
+# ── 시즌(seasons.py) ──────────────────────────────────────────────────
+# 가짜 시즌표. 실제처럼 앞 시즌 종료일 == 다음 시즌 시작일이고, 마지막 시즌이
+# 끝난 뒤(07-30~)는 진행 중이라 목록에 없다.
+_S2 = sn.Season(no=88, name="시즌 2", start=date(2026, 4, 2), end=date(2026, 5, 28))
+_S3 = sn.Season(no=89, name="시즌 3", start=date(2026, 5, 28), end=date(2026, 7, 30))
+_SEASONS = [_S3, _S2]
+
+
+def test_season_boundary_goes_to_new_season():
+    # [시작, 종료) — 경계일 경기는 새 시즌에만. 닫힌 구간이면 두 시즌에 겹친다.
+    assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 0, 0)) == _S3
+    assert sn.season_of(_SEASONS, datetime(2026, 5, 27, 23, 59)) == _S2
+    assert sn.season_of(_SEASONS, date(2026, 4, 2)) == _S2
+    assert not _S2.contains(date(2026, 5, 28)), "종료일이 포함됐다"
+    # 진행 중(마지막 종료일 당일부터)·날짜 없음·목록 이전은 시즌 없음
+    assert sn.season_of(_SEASONS, datetime(2026, 7, 30, 9, 0)) is None
+    assert sn.season_of(_SEASONS, None) is None
+    assert sn.season_of(_SEASONS, date(2026, 4, 1)) is None
+
+
+def test_group_by_season_order_and_buckets():
+    items = [datetime(2026, 8, 1), datetime(2026, 7, 30),     # 진행 중
+             datetime(2026, 7, 29), datetime(2026, 5, 28),    # 시즌 3
+             datetime(2026, 5, 27),                           # 시즌 2
+             datetime(2026, 1, 1),                            # 목록 이전 — 버린다
+             None]                                            # 날짜 없음 — 버린다
+    got = sn.group_by_season(_SEASONS, items, key=lambda x: x)
+    assert [(s.no if s else None, len(v)) for s, v in got] == [(None, 2), (89, 2), (88, 1)], got
+    # 진행 중 그룹에 목록 이전·날짜 없는 경기가 섞이면 안 된다
+    assert datetime(2026, 1, 1) not in got[0][1] and None not in got[0][1]
+    # 입력 순서와 무관하게 최신 시즌이 앞
+    got_rev = sn.group_by_season(list(reversed(_SEASONS)), list(reversed(items)), key=lambda x: x)
+    assert [s.no if s else None for s, _ in got_rev] == [None, 89, 88]
+    assert sn.group_by_season([], items, key=lambda x: x) == []
+
+
+def test_season_label_has_year():
+    # 해마다 "시즌 3" 이 반복되므로 시작 연도로 가른다
+    assert _S3.label == "2026 시즌 3", _S3.label
+    nxt = sn.Season(no=95, name="시즌 3", start=date(2027, 5, 27), end=date(2027, 7, 29))
+    assert nxt.label != _S3.label
+    assert _S3.span_text == "2026-05-28 ~ 2026-07-30"
+
+
+class _FakeRes:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def _fetch_with(html):
+    orig_get, orig_on = ranker._session.get, config.WEB_DATA
+    ranker._session.get = lambda *a, **k: _FakeRes(html)
+    config.WEB_DATA = True
+    try:
+        return sn.fetch_seasons()
+    finally:
+        ranker._session.get, config.WEB_DATA = orig_get, orig_on
+
+
+def test_fetch_seasons_parses_page():
+    # 실제 페이지 모양(seasons.py 머리말) — "전체 시즌"은 기간이 없어 빠져야 하고,
+    # 날짜가 깨진 줄 하나 때문에 나머지를 잃으면 안 된다.
+    html = """
+      <a onclick="ChangeSeason(0);"><span>전체 시즌</span></a>
+      <a onclick="ChangeSeason(88);" class="on"><span>시즌  2 (2026-04-02~2026-05-28)</span></a>
+      <a onclick="ChangeSeason(89);"><span>시즌 3 (2026-05-28~2026-07-30)</span></a>
+      <a onclick="ChangeSeason(90);"><span>시즌 9 (2026-13-01~2026-14-01)</span></a>
+    """
+    got = _fetch_with(html)
+    assert got == [_S3, _S2], got  # 최신순, 공백 정리("시즌  2" → "시즌 2")
+    for bad, why in (("<html>점검 진행 중</html>", "점검"), ("<html></html>", "구조")):
+        try:
+            _fetch_with(bad)
+            raise AssertionError(f"{why}: 예외가 없다")
+        except sn.SeasonError as e:
+            assert why in str(e), (why, e)
 
 
 def main() -> int:
