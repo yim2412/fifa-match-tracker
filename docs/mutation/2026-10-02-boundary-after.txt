@@ -1,0 +1,33 @@
+[OK] 조각 1개 합침 · 대상 48개
+
+
+잡힘 23 / 못 잡음 25
+
+=== 망가뜨려도 테스트가 전부 초록인 줄 ===
+  stats.py:87  if not isinstance(raw, int) or raw < 0:
+  stats.py:864  if angle < 0:
+  stats.py:1092  if not isinstance(s, str) or len(s) < 10:
+  analysis.py:145  if abs(gap) >= GAP:
+  analysis.py:146  word = "올랐습니다" if gap > 0 else "떨어졌습니다"
+  analysis.py:166  if len(prev_d) < MIN_BASE or len(recent_d) < MIN_FLOW:
+  analysis.py:173  if base_n < MIN_COND or now_n < MIN_FLOW:
+  analysis.py:179  if abs(gap) < GAP_WIDE or base.first_scored_rate < 50:
+  analysis.py:182  if gap < 0:
+  analysis.py:206  if n_first >= MIN_COND:
+  analysis.py:209  if gap >= GAP:
+  analysis.py:218  if share >= 20:
+  analysis.py:227  if n_conc >= MIN_COND:
+  analysis.py:230  if gap >= GAP:
+  analysis.py:250  if total < MIN_GOALS:
+  analysis.py:254  if share < 100 / 6 * CONC_SHARE:
+  analysis.py:278  if best.win_rate - worst.win_rate < GAP_WIDE:
+  analysis.py:299  if f.games >= need and f.formation != "0-0-0-0-0"]
+  analysis.py:303  if gap <= -GAP_WIDE:
+  analysis.py:309  elif gap >= GAP_WIDE:
+  analysis.py:323  if abs(gap) < FINISH_GAP:
+  analysis.py:326  if gap > 0:
+  analysis.py:356  if share < TYPE_SHARE:
+  analysis.py:372  if gap >= GAP_WIDE * 1.5:
+  analysis.py:385  if s.total < MIN_BASE:
+
+이 줄들을 지키는 단언이 하나도 없다. 고칠 것인지 동치 변이인지 하나씩 판단한다.

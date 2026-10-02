@@ -495,6 +495,11 @@ def test_opponent_squad_picks_that_opponent():
     players, _, res = st.opponent_squad(ds, "me", "나")
     assert [p["spId"] for p in players] == [2] and res == "패", (players, res)  # 가장 최근 '나' 경기
     assert st.opponent_squad(ds, "me", "다") is None
+    # 내 스쿼드도 — 내가 없는 경기를 건너뛰고 가장 최근 경기
+    ds[1]["matchInfo"][0]["player"] = [_p(50, 25)]
+    mine, _, res = st.own_squad(ds, "me")
+    assert [p["spId"] for p in mine] == [50] and res == "승", (mine, res)
+    assert st.own_squad(ds[:1], "me") is None
 
 
 def test_aggregate_players_counts_results_position_and_gk():
@@ -579,26 +584,29 @@ def test_division_stats_unknown_bucket_and_results():
 
 
 def test_possession_band_edges():
+    # 무·패 개수를 다르게(2:1) — 같으면 둘을 바꿔 세도 숫자가 같아 안 잡힌다(재측정에서 실제로 그랬다)
     ds = [_with(_d(i + 1, r, possession=p), 1, 0) for i, (p, r) in enumerate(
-        [(39, "승"), (40, "무"), (60, "패"), (61, "승"), (0, "승")])]
+        [(39, "승"), (40, "무"), (50, "무"), (60, "패"), (61, "승"), (0, "승")])]
     got = {b.label: (b.win, b.draw, b.lose) for b in st.possession_stats(ds, "me")}
-    assert got == {"열세": (1, 0, 0), "균형": (0, 1, 1), "우세": (1, 0, 0)}, got  # 0 은 무기록이라 뺀다
+    assert got == {"열세": (1, 0, 0), "균형": (0, 2, 1), "우세": (1, 0, 0)}, got  # 0 은 무기록이라 뺀다
 
 
 def test_pair_synergy_counts_and_min_games_edge():
     xi = [_p(1, 5), _p(2, 25), _p(9, 0), _p(7, 28)]          # GK(9)·SUB(7)는 조합에서 뺀다
-    ds = [_d(3, "승", xi), _d(2, "무", xi), _d(1, "패", xi)]
-    got = [(s.a_id, s.b_id, s.win, s.draw, s.lose) for s in st.pair_synergy(ds, "me", min_games=3)]
-    assert got == [(1, 2, 1, 1, 1)], got
-    assert st.pair_synergy(ds, "me", min_games=4) == []       # 3경기 조합은 4경기 기준에서 빠진다
+    ds = [_d(4, "승", xi), _d(3, "무", xi), _d(2, "무", xi), _d(1, "패", xi)]   # 무 2 · 패 1(비대칭)
+    got = [(s.a_id, s.b_id, s.win, s.draw, s.lose) for s in st.pair_synergy(ds, "me", min_games=4)]
+    assert got == [(1, 2, 1, 2, 1)], got
+    assert st.pair_synergy(ds, "me", min_games=5) == []       # 4경기 조합은 5경기 기준에서 빠진다
 
 
 def test_shot_buckets_on_target_distance_and_enough():
     S = st.Shot
+    # 막힌 유효슛 2 · 빗나감 1 · 골 1 — 유효슛과 빗나감 개수를 다르게(같으면 바꿔 세도 안 잡힌다)
     shots = [S(0.9, 0.5, st.SHOT_ON_TARGET, "일반", False, False, 0.1),
+             S(0.9, 0.5, st.SHOT_ON_TARGET, "일반", False, False, 0.1),
              S(0.9, 0.5, 2, "일반", False, False, 0.1), S(0.9, 0.5, st.SHOT_GOAL, "일반", False, False, 0.1)]
     b = st._bucketize(shots, lambda s: "x")["x"]
-    assert (b.shots, b.goals, b.on_target) == (3, 1, 2), (b.shots, b.goals, b.on_target)
+    assert (b.shots, b.goals, b.on_target) == (4, 1, 3), (b.shots, b.goals, b.on_target)
     b.shots = st.MIN_BUCKET_SHOTS
     assert b.enough
     b.shots -= 1
@@ -647,6 +655,7 @@ def test_finishing_assists_only_on_goals_with_valid_assister():
 
 def test_match_day_needs_full_date():
     assert st._match_day({"matchDate": "2026-10-02T10:00:00"}).isoformat() == "2026-10-02"
+    assert st._match_day({"matchDate": "2026-10-02"}).isoformat() == "2026-10-02"  # 시각 없이 날짜만(딱 10자)
     assert st._match_day({"matchDate": "2026-10-0"}) is None and st._match_day({}) is None
 
 
