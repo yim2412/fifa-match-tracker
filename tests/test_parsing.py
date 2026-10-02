@@ -413,6 +413,243 @@ def test_fetch_rank_page_refuses_empty_page():
         ranker._session.get, config.WEB_DATA = orig_get, orig_on
 
 
+# ── 변이 전수 측정 보강(2026-10-02, docs/mutation) ─────────────────────────
+# 판정을 뒤집어도 초록이던 줄들. 기대값은 전부 손으로 셌다 — 코드로 다시 계산하면 같은 실수를 같이 한다.
+def _m(day, result, opp="가", gf=1, ga=0, hour=12, **kw):
+    """합성 경기 하나 — 날짜는 2026-09-xx/10-xx(day 가 30 넘으면 10월로)."""
+    d = datetime(2026, 9, day, hour) if day <= 30 else datetime(2026, 10, day - 30, hour)
+    return models.MatchSummary(match_id=f"{day}-{hour}-{opp}", match_date=d, match_type=52,
+                               my_nickname="나", opponent=opp, result=result, my_goals=gf,
+                               opp_goals=ga, possession=50, shoot_total=0, shoot_effective=0,
+                               pass_try=0, pass_success=0, rating=0.0, **kw)
+
+
+def test_score_shows_shootout_only_when_there_was_one():
+    assert _m(1, "승", gf=1, ga=1, my_shootout=4, opp_shootout=3).score == "1 : 1 (승부차기 4:3)"
+    assert _m(1, "승", gf=2, ga=1).score == "2 : 1"
+
+
+def test_opponent_stats_counts_each_result():
+    ms = [_m(5, "승", "가"), _m(4, "무", "가"), _m(3, "패", "가"), _m(2, "몰수승", "가"), _m(1, "패", "나")]
+    got = {o.nickname: (o.games, o.win, o.draw, o.lose) for o in models.opponent_stats(ms)}
+    assert got == {"가": (4, 2, 1, 1), "나": (1, 0, 0, 1)}, got
+    assert [o.nickname for o in models.opponent_stats(ms)] == ["가", "나"]  # 많이 붙은 순
+
+
+def test_current_streak_by_kind():
+    cs = models.current_streak
+    assert cs([_m(3, "패"), _m(2, "패"), _m(1, "승")]) == ("패", 2)
+    assert cs([_m(3, "무"), _m(2, "무"), _m(1, "패")]) == ("무", 2)
+    assert cs([_m(3, "몰수승"), _m(2, "승"), _m(1, "패")]) == ("승", 2)
+    assert cs([]) == ("", 0) and cs([_m(1, "오류")]) == ("", 0)
+
+
+def test_longest_streaks_draw_breaks_run():
+    seq = ["승", "승", "무", "승", "패", "패", "패", "승"]          # 날짜 순서대로
+    ms = [_m(i + 1, r) for i, r in enumerate(seq)][::-1]          # 넘겨줄 땐 섞여 있어도 된다
+    assert models.longest_streaks(ms) == (2, 3)
+    assert models.longest_streaks([_m(1, "패"), _m(2, "승")]) == (1, 1)
+
+
+def test_period_stats_groups_by_calendar():
+    # 09-30(수) 승 · 10-01(목) 무 · 10-05(월) 패 2:3
+    ms = [_m(30, "승", gf=2, ga=1), _m(31, "무", gf=1, ga=1), _m(35, "패", gf=2, ga=3)]
+    rows = lambda days: [(p.label, p.win, p.draw, p.lose, p.goals_for, p.goals_against)  # noqa: E731
+                         for p in models.period_stats(ms, days=days)]
+    assert rows(30) == [("2026-10", 0, 1, 1, 3, 4), ("2026-09", 1, 0, 0, 2, 1)], rows(30)
+    assert rows(7) == [("10/05~10/11", 0, 0, 1, 2, 3), ("09/28~10/04", 1, 1, 0, 3, 2)], rows(7)
+    assert [r[0] for r in rows(1)] == ["2026-10-05", "2026-10-01", "2026-09-30"], rows(1)
+
+
+def _p(sp, pos, **status):
+    return {"spId": sp, "spPosition": pos, "spGrade": 1, "status": status}
+
+
+def _d(day, res, me_players=(), opp_players=(), opp="상대", me_shots=(), opp_shots=(),
+       division=None, hour=12, possession=50):
+    """합성 경기 상세 — 내 ouid 는 'me'. res 는 내 결과."""
+    when = datetime(2026, 9, day, hour) if day <= 30 else datetime(2026, 10, day - 30, hour)
+    opp_res = {"승": "패", "패": "승"}.get(res, res)
+    return {"matchId": f"m{day}-{hour}-{opp}", "matchDate": when.isoformat(),
+            "matchInfo": [
+                {"ouid": "me", "nickname": "나", "division": division,
+                 "matchDetail": {"matchResult": res, "possession": possession},
+                 "player": list(me_players), "shootDetail": list(me_shots)},
+                {"ouid": "o", "nickname": opp, "matchDetail": {"matchResult": opp_res},
+                 "player": list(opp_players), "shootDetail": list(opp_shots)}]}
+
+
+def test_champion_boundary_and_division_trend_skips_missing():
+    assert [st.is_champion_or_above(x) for x in (800, 900, 901, None)] == [True, True, False, False]
+    ds = [_d(3, "승", division=900), _d(2, "승"), _d(1, "패", division=1000)]
+    ds[1]["matchInfo"][0]["division"] = None
+    no_date = _d(4, "승", division=800)
+    no_date["matchDate"] = ""
+    assert [div for _, div in st.division_trend(ds + [no_date], "me")] == [1000, 900]
+
+
+def test_opponent_squad_picks_that_opponent():
+    ds = [_d(3, "승", opp="가", opp_players=[_p(1, 5)]), _d(2, "패", opp="나", opp_players=[_p(2, 5)]),
+          _d(1, "무", opp="나", opp_players=[_p(3, 5)])]
+    ds.insert(0, {"matchId": "x", "matchInfo": [{"ouid": "남"}]})  # 내가 없는 경기 — 건너뛴다
+    players, _, res = st.opponent_squad(ds, "me", "나")
+    assert [p["spId"] for p in players] == [2] and res == "패", (players, res)  # 가장 최근 '나' 경기
+    assert st.opponent_squad(ds, "me", "다") is None
+
+
+def test_aggregate_players_counts_results_position_and_gk():
+    X, GK, SUB = 100, 200, 300
+    air = {"aerialTry": 4, "aerialSuccess": 2, "passTry": 1}
+    ds = [_d(3, "승", [_p(X, 25, **air), _p(GK, 0, **air), _p(SUB, 28)]),
+          _d(2, "무", [_p(X, 25, **air), _p(GK, 0, **air)]),
+          _d(1, "패", [_p(X, 5, **air), _p(GK, 0, **air)])]
+    names = {0: "GK", 5: "CB", 25: "ST"}
+    got = {s.sp_id: s for s in st.aggregate_players(ds, "me", pos_name=names.get)}
+    assert SUB not in got, "벤치에만 있던 선수를 출전으로 셌다"
+    x, gk = got[X], got[GK]
+    assert (x.games, x.win, x.draw, x.lose) == (3, 1, 1, 1), (x.games, x.win, x.draw, x.lose)
+    assert x.position == "ST" and gk.position == "GK", (x.position, gk.position)  # 가장 자주 선 자리
+    # 공중볼%(50)는 필드 선수에게만 더한다 — 같은 기록이면 GK 가 정확히 그만큼 낮다
+    assert abs((x.attack_power - gk.attack_power) - x.aerial_rate) < 1e-9 and x.aerial_rate == 50
+    assert abs((x.defense_power - gk.defense_power) - x.aerial_rate) < 1e-9
+
+
+def test_formation_stats_by_opponent_shape():
+    four = [_p(i, 5) for i in range(4)] + [_p(9, 13), _p(10, 13), _p(11, 25)]
+    ds = [_d(3, "승", opp_players=four), _d(2, "무", opp_players=four), _d(1, "패", opp_players=[])]
+    got = {f.formation: (f.games, f.win, f.draw, f.lose) for f in st.formation_stats(ds, "me")}
+    assert got == {"4-0-2-0-1": (2, 1, 1, 0), "0-0-0-0-0": (1, 0, 0, 1)}, got
+
+
+def _shot(period, sec, result=3, sp=None, **kw):
+    sd = {"goalTime": (period << 24) + sec, "result": result, "x": 0.9, "y": 0.5, **kw}
+    if sp is not None:
+        sd["spId"] = sp
+    return sd
+
+
+def test_result_breakdown_extra_time_and_goal_sides():
+    ds = [_d(3, "승", me_shots=[_shot(2, 10)]),                       # 연장(구간 2) 골 → 연장 경기
+          _d(2, "패", me_shots=[_shot(1, 30, result=1)], opp_shots=[_shot(1, 40)]),  # 유효슛은 골 아님
+          _d(1, "무", me_shots=[_shot(0, 5)], opp_shots=[_shot(0, 6)])]
+    rb = st.result_breakdown(ds, "me")
+    assert (rb.extra, rb.normal) == ([1, 0, 0], [0, 1, 1]), (rb.extra, rb.normal)
+    got = {k: (v.scored, v.conceded) for k, v in rb.periods.items()}
+    assert got == {2: (1, 0), 1: (0, 1), 0: (1, 1)}, got
+
+
+def test_clutch_first_goal_ties_and_comebacks():
+    ds = [_d(4, "패", me_shots=[_shot(0, 100)], opp_shots=[_shot(0, 200), _shot(1, 5)]),  # 선제골 후 패
+          _d(3, "승", me_shots=[_shot(1, 50)], opp_shots=[_shot(0, 300)]),               # 선제 실점 후 승
+          _d(2, "무", me_shots=[_shot(0, 60)], opp_shots=[_shot(0, 60)]),                # 같은 시각 — 보류
+          _d(1, "무")]                                                                   # 무득점
+    cs = st.clutch_summary(ds, "me")
+    assert (cs.first_scored, cs.first_conceded) == ([0, 0, 1], [1, 0, 0]), (cs.first_scored, cs.first_conceded)
+    assert (cs.comeback_lose, cs.comeback_win, cs.goalless) == (1, 1, 2)
+
+
+def test_minute_buckets_extra_and_halves():
+    ds = [_d(1, "승", me_shots=[_shot(2, 0), _shot(1, 0), _shot(0, 2999)], opp_shots=[_shot(3, 9)])]
+    got = {b.label: (b.scored, b.conceded) for b in st.goal_minute_buckets(ds, "me") if b.scored or b.conceded}
+    # 후반 0초 = 45분 → 45~60 · 전반 2999초(49분, 추가시간) → 30~45 에 남는다 · 구간 2·3 → 연장
+    assert got == {"45~60": (1, 0), "30~45": (1, 0), "연장": (1, 1)}, got
+
+
+def test_time_of_day_band_edges():
+    ms = [_m(1, "승", hour=5), _m(2, "무", hour=6), _m(3, "패", hour=11), _m(4, "승", hour=12),
+          _m(5, "패", hour=23)]
+    ms.append(models.MatchSummary(**{**ms[0].__dict__, "match_id": "x", "match_date": None}))
+    got = {b.label: (b.win, b.draw, b.lose) for b in st.time_of_day_rates(ms)}
+    assert got == {"심야": (1, 0, 0), "오전": (0, 1, 1), "오후": (1, 0, 0), "저녁·밤": (0, 0, 1)}, got
+
+
+def _with(d, me_goals=0, opp_goals=0, opp_div=None):
+    d["matchInfo"][0]["shoot"] = {"goalTotal": me_goals}
+    d["matchInfo"][1]["shoot"] = {"goalTotal": opp_goals}
+    d["matchInfo"][1]["division"] = opp_div
+    return d
+
+
+def test_division_stats_unknown_bucket_and_results():
+    ds = [_with(_d(4, "승"), 2, 1, 900), _with(_d(3, "무"), 1, 1, 900), _with(_d(2, "패"), 0, 3),
+          _with(_d(1, "오류"), 9, 9, 900)]
+    got = {s.name: (s.win, s.draw, s.lose, s.goals_for, s.goals_against)
+           for s in st.division_stats(ds, "me", name_of=lambda i: f"등급{i}")}
+    assert got == {"등급900": (1, 1, 0, 3, 2), "미상": (0, 0, 1, 0, 3)}, got
+
+
+def test_possession_band_edges():
+    ds = [_with(_d(i + 1, r, possession=p), 1, 0) for i, (p, r) in enumerate(
+        [(39, "승"), (40, "무"), (60, "패"), (61, "승"), (0, "승")])]
+    got = {b.label: (b.win, b.draw, b.lose) for b in st.possession_stats(ds, "me")}
+    assert got == {"열세": (1, 0, 0), "균형": (0, 1, 1), "우세": (1, 0, 0)}, got  # 0 은 무기록이라 뺀다
+
+
+def test_pair_synergy_counts_and_min_games_edge():
+    xi = [_p(1, 5), _p(2, 25), _p(9, 0), _p(7, 28)]          # GK(9)·SUB(7)는 조합에서 뺀다
+    ds = [_d(3, "승", xi), _d(2, "무", xi), _d(1, "패", xi)]
+    got = [(s.a_id, s.b_id, s.win, s.draw, s.lose) for s in st.pair_synergy(ds, "me", min_games=3)]
+    assert got == [(1, 2, 1, 1, 1)], got
+    assert st.pair_synergy(ds, "me", min_games=4) == []       # 3경기 조합은 4경기 기준에서 빠진다
+
+
+def test_shot_buckets_on_target_distance_and_enough():
+    S = st.Shot
+    shots = [S(0.9, 0.5, st.SHOT_ON_TARGET, "일반", False, False, 0.1),
+             S(0.9, 0.5, 2, "일반", False, False, 0.1), S(0.9, 0.5, st.SHOT_GOAL, "일반", False, False, 0.1)]
+    b = st._bucketize(shots, lambda s: "x")["x"]
+    assert (b.shots, b.goals, b.on_target) == (3, 1, 2), (b.shots, b.goals, b.on_target)
+    b.shots = st.MIN_BUCKET_SHOTS
+    assert b.enough
+    b.shots -= 1
+    assert not b.enough
+    orig = st.shot_distance_m
+    try:
+        st.shot_distance_m = lambda s: st.FAR_SHOT_M          # 딱 25m 는 먼 쪽
+        assert st._distance_label(shots[0]) == st.DIST_FAR
+        st.shot_distance_m = lambda s: st.FAR_SHOT_M - 0.01
+        assert st._distance_label(shots[0]) == st.DIST_MID
+    finally:
+        st.shot_distance_m = orig
+    # 골대 바로 앞일수록 기대득점이 높다(각도가 음수로 꺾이는 구간 포함)
+    assert st.shot_xg(0.999, 0.5, True, "일반") > st.shot_xg(0.95, 0.5, True, "일반") > 0.3
+
+
+def test_position_group_edges_and_opponent_positions():
+    assert [st._position_group_rank(p) for p in (0, 1, 8, 9, 19, 20, 27)] == [3, 2, 2, 1, 1, 0, 0]
+    opp_a = [_p(11, 25), _p(12, 5), _p(13, 28), {"spId": "x", "spPosition": 5}]  # SUB·이상한 값 제외
+    ds = [_d(3, "승", opp="가", opp_players=opp_a), _d(2, "승", opp="가", opp_players=[_p(11, 25)]),
+          _d(1, "승", opp="나", opp_players=[_p(21, 25), _p(22, 0)])]
+    got = [(r.pos_code, r.sp_id, r.count, r.total) for r in st.opponent_position_players(ds, "me")]
+    # 공격(25) → 수비(5) → GK(0) 순 · 25 자리는 11번이 3경기 중 2번
+    assert got == [(25, 11, 2, 3), (5, 12, 1, 1), (0, 22, 1, 1)], got
+    only_ga = [(r.pos_code, r.count, r.total) for r in st.opponent_position_players(ds, "me", nicknames={"가"})]
+    assert only_ga == [(25, 2, 2), (5, 1, 1)], only_ga
+
+
+def test_team_color_stats_counts_and_values_once_per_opponent():
+    ms = [_m(4, "승", "가"), _m(3, "무", "가"), _m(2, "패", "나"), _m(1, "승", "몰라")]
+    colors = {"가": "레알", "나": "레알"}
+    values = {"가": 10, "나": 30}
+    got = st.team_color_stats(ms, colors.get, team_value_of=values.get)
+    assert [(s.team_color, s.games, s.win, s.draw, s.lose) for s in got] == [("레알", 3, 1, 1, 1)]
+    assert sorted(got[0].team_values) == [10, 30], "같은 상대 팀가치를 두 번 셌다"
+    assert st.team_color_stats(ms, colors.get)[0].team_values == []   # 팀가치 함수가 없으면 비운다
+
+
+def test_finishing_assists_only_on_goals_with_valid_assister():
+    me_shots = [_shot(0, 1, result=3, sp=1, assist=True, assistSpId=2),
+                _shot(0, 2, result=3, sp=1, assist=True, assistSpId=None),
+                _shot(0, 3, result=1, sp=1, assist=True, assistSpId=2)]
+    got = {p.sp_id: (p.goals, p.assists) for p in st.finishing_ranking([_d(1, "승", me_shots=me_shots)], "me")}
+    assert got == {1: (2, 0), 2: (0, 1)}, got
+
+
+def test_match_day_needs_full_date():
+    assert st._match_day({"matchDate": "2026-10-02T10:00:00"}).isoformat() == "2026-10-02"
+    assert st._match_day({"matchDate": "2026-10-0"}) is None and st._match_day({}) is None
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

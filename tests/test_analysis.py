@@ -207,6 +207,113 @@ def test_as_text_shape():
     assert analysis.as_text([]) == "분석할 만큼 경기가 쌓이지 않았습니다."
 
 
+# ── 변이 전수 측정 보강(2026-10-02, docs/mutation) — 규칙마다 '말한다/안 말한다'의 경계 ──────
+def _seq(results, opp="상대A", my_goals=None):
+    """결과 문자열 목록(최신순) → (matches, details). 골·슛은 결과에 맞춘 최소한."""
+    ds = []
+    for i, r in enumerate(results):
+        gf, ga = {"승": (1, 0), "무": (0, 0), "패": (0, 1)}[r]
+        mg = my_goals[i] if my_goals else ([(0, 600)] if gf else [])
+        ds.append(_match(1000 - i, r, len(mg) if my_goals else gf, ga, 50, mg,
+                         [(1, 1200)] if ga else [], opp_name=opp))
+    return [models.parse_match(d, OUID) for d in ds], ds
+
+
+def test_flow_streak_needs_three():
+    ms, ds = _seq(["승", "승", "승", "패", "패"])
+    assert _find(analysis._flow(ms, ds, OUID, 20), "3연승")
+    ms, ds = _seq(["무", "무", "무", "승", "패"])
+    assert _find(analysis._flow(ms, ds, OUID, 20), "3연속 무승부")
+    ms, ds = _seq(["승", "승", "패", "패", "패"])
+    assert not _find(analysis._flow(ms, ds, OUID, 20), "연승"), "2연승인데 말했다"
+
+
+def test_flow_compares_with_earlier_only_when_enough():
+    recent = ["승"] * 5
+    ms, ds = _seq(recent + ["패"] * analysis.MIN_BASE)          # 이전 구간이 딱 기준만큼
+    assert _find(analysis._flow(ms, ds, OUID, 5), "올랐습니다")
+    ms, ds = _seq(["패"] * 5 + ["승"] * analysis.MIN_BASE)
+    assert _find(analysis._flow(ms, ds, OUID, 5), "떨어졌습니다")
+    ms, ds = _seq(recent + ["패"] * (analysis.MIN_BASE - 1))    # 하나 모자라면 비교 안 한다
+    assert not _find(analysis._flow(ms, ds, OUID, 5), "대비")
+    ms, ds = _seq(["승", "패"] * 10 + ["승", "패"] * 10)          # 같은 승률 — 차이 없음
+    assert not _find(analysis._flow(ms, ds, OUID, 20), "대비")
+
+
+def test_lead_lost_rule_needs_three_and_twenty_percent():
+    def run(lost):
+        res = ["패"] * lost + ["승"] * (10 - lost)               # 10경기 모두 내가 선제골
+        goals = [[(0, 100)]] * 10
+        ds = []
+        for i, r in enumerate(res):
+            ga = [(1, 900), (1, 1200)] if r == "패" else []
+            ds.append(_match(i, r, 1, len(ga), 50, goals[i], ga))
+        return analysis._clutch_rules(ds, OUID, base_rate=50.0)
+    assert _find(run(3), "앞서고도 진 경기가 3번")              # 3/10 = 30%
+    assert not _find(run(2), "앞서고도 진 경기"), "2번인데 말했다"
+
+
+def test_possession_rule_needs_two_bands_and_a_gap():
+    def build(spec):
+        ds = []
+        for i, (poss, r) in enumerate(spec):
+            gf, ga = (1, 0) if r == "승" else (0, 1)
+            ds.append(_match(i, r, gf, ga, poss, [(0, 600)] if gf else [], [(0, 700)] if ga else []))
+        return analysis._possession_rules(ds, OUID, total=len(ds))
+    n = analysis.MIN_COND
+    assert build([(70, "승")] * n) == [], "구간이 하나뿐인데 비교했다"
+    assert build([(70, "승")] * n + [(30, "패")] * n)              # 100% vs 0%
+    half = [(70, "승"), (70, "패")] * (n // 2)
+    assert build(half + half[:0] + [(30, "승"), (30, "패")] * (n // 2)) == [], "승률이 같은데 말했다"
+
+
+def test_finishing_rule_direction_and_floor():
+    from stats import shot_xg, goal_type_name
+    xg1 = shot_xg(0.9, 0.5, True, goal_type_name(1))             # _shot 기본 좌표의 기대득점
+
+    def build(n_shots, n_goals):
+        shots = [_shot(3) for _ in range(n_goals)] + [_shot(1) for _ in range(n_shots - n_goals)]
+        d = _match(0, "승", n_goals, 0, 50, [], [])
+        d["matchInfo"][0]["shootDetail"] = shots
+        return analysis._finishing_rules([d], OUID)
+    n = analysis.MIN_SHOTS
+    expect = n * xg1
+    hi, lo = round(expect * 1.3), round(expect * 0.6)        # +30% · -40% (기준 ±25%)
+    assert hi <= n - 1, "많이 넣은 경우가 슛 수를 넘는다 — 비율을 낮춘다"
+    assert _find(build(n, hi), "잘 넣고") and _find(build(n, lo), "못 넣고")
+    assert build(n, round(expect)) == [], "기대만큼 넣었는데 말했다"
+    assert build(n - 1, hi) == [], "슛이 기준보다 적은데 말했다"
+
+
+def test_goal_type_rule_needs_enough_and_share():
+    def build(n_header, n_basic):
+        ga = [(0, 100 + k) for k in range(n_header + n_basic)]
+        d = _match(0, "패", 0, len(ga), 50, [], ga)
+        types = [3] * n_header + [1] * n_basic                    # 3=헤더(특수) · 1=일반
+        for sd, t in zip(d["matchInfo"][1]["shootDetail"], types):
+            sd["type"] = t
+        return analysis._goal_type_rules([d], OUID)
+    g = analysis.MIN_GOALS
+    assert _find(build(g // 2, g - g // 2), "헤더")                # 절반이 헤더
+    assert build(2, g - 2) == [], "헤더가 조금인데 치우쳤다고 했다"  # 2/15 = 13% < 25%
+    assert build(7, g - 8) == [], "골이 기준보다 적은데 말했다"  # 7/14 = 50% 지만 14 < 15
+
+
+def test_opponent_rule_needs_games_and_name():
+    ms, _ = _seq(["패"] * analysis.MIN_OPP, opp="천적")
+    assert _find(analysis._opponent_rules(ms, base_rate=60.0), "천적")
+    ms, _ = _seq(["패"] * (analysis.MIN_OPP - 1), opp="천적")
+    assert analysis._opponent_rules(ms, base_rate=60.0) == []
+    ms, _ = _seq(["패"] * analysis.MIN_OPP, opp="-")
+    assert analysis._opponent_rules(ms, base_rate=60.0) == [], "이름 없는 상대를 말했다"
+
+
+def test_as_text_blank_line_between_sections():
+    ins = [analysis.Insight(analysis.SEC_FLOW, "가.", "", 1.0), analysis.Insight(analysis.SEC_LOSE, "나.", "", 1.0)]
+    text = analysis.as_text(ins)
+    assert text.startswith(f"[{analysis.SEC_FLOW}]") and f"\n\n[{analysis.SEC_LOSE}]" in text, text
+
+
 def main() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
