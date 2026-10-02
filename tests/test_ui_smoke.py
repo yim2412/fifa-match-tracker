@@ -39,6 +39,7 @@ import playerinfo  # noqa: E402
 import ranker  # noqa: E402
 import requests  # noqa: E402
 import seasons as sn  # noqa: E402
+import store  # noqa: E402
 import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
 
@@ -980,6 +981,80 @@ def test_loader_routes_rejected_key_to_dialog():
         ld.failed.connect(lambda m: got.append("failed"))
         ld.run()
         assert got == [want], (code, got)
+
+
+class _DetailApi:
+    """픽스처 4경기를 돌려주되, bad 에 든 경기는 code 오류로 실패한다."""
+
+    def __init__(self, bad, code):
+        self.bad, self.code = set(bad), code
+        self.by_id = {d["matchId"]: d for d in _DETAILS}
+
+    def get_ouid(self, nick):
+        return _OUID
+
+    def get_user_basic(self, ouid):
+        return {"nickname": "테스트구단주"}
+
+    def get_match_ids(self, ouid, matchtype, offset, limit):
+        return list(self.by_id) if offset == 0 else []
+
+    def get_match_detail(self, mid):
+        if mid in self.bad:
+            raise nexon_api.NexonAPIError("x", code=self.code, status=429)
+        return self.by_id[mid]
+
+    def get_meta(self, name):
+        return []
+
+
+def _run_loader(api):
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA
+    config.DB_PATH, config.WEB_DATA = tmp / "t.db", False  # 랭킹 스크래핑도 안 나가게
+    got = {"ok": [], "quota": [], "failed": []}
+    try:
+        ld = app_main.MatchLoader(api, "닉", 52)
+        ld.finished_ok.connect(lambda *a: got["ok"].append(a[6]))  # 새로 저장한 수
+        ld.quota_hit.connect(got["quota"].append)
+        ld.failed.connect(got["failed"].append)
+        ld.run()
+        conn = store.open_db(config.DB_PATH)
+        try:
+            got["db"] = store.match_count(conn, _OUID, 52)
+        finally:
+            conn.close()
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    return got
+
+
+def test_quota_stops_without_saving_holes():
+    first = sorted(d["matchId"] for d in _DETAILS)[:1]
+    # 대조: 한도가 아닌 오류는 그 경기만 건너뛰고 나머지를 저장한다(기존 동작)
+    other = _run_loader(_DetailApi(first, "OPENAPI00009"))
+    assert other["db"] == len(_DETAILS) - 1 and other["ok"] and not other["quota"], other
+    # 한도(429)면 아무것도 저장하지 않고 멈춘다 — 저장하면 그 구멍은 다음 검색에서 안 메워진다
+    hit = _run_loader(_DetailApi(first, nexon_api.QUOTA_CODE))
+    assert hit["db"] == 0 and not hit["ok"], hit
+    assert len(hit["quota"]) == 1 and "서비스 단계" in hit["quota"][0], hit["quota"]
+
+
+def test_quota_signal_reaches_key_dialog():
+    # 배선 — 검색 로더의 quota_hit 이 키 변경 창으로 이어져야 한다(QThread.start 는 막혀 있다)
+    asked = []
+    orig = _win._ask_new_key, _win._loader, app_main.QMessageBox.warning, _win._nick
+    _win._ask_new_key = asked.append
+    app_main.QMessageBox.warning = lambda *a, **k: None
+    try:
+        _win._loader = None
+        _win._api_search("닉")
+        _win._loader.quota_hit.emit("한도")
+        assert asked == ["한도"], asked
+    finally:
+        _win._ask_new_key, _win._loader, app_main.QMessageBox.warning, _win._nick = orig
+        _win._set_busy(False)
 
 
 def test_rejected_key_asks_and_swaps_key():

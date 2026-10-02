@@ -36,7 +36,8 @@ from models import (
     period_stats, summarize, win_rate_trend,
 )
 from nexon_api import (
-    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, FCOnlineAPI, NexonAPIError, check_key,
+    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, FCOnlineAPI, NexonAPIError,
+    check_key,
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
@@ -64,6 +65,7 @@ class MatchLoader(QThread):
                              str, bool, str, dict, dict)
     failed = pyqtSignal(str)
     key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
+    quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
         super().__init__()
@@ -71,6 +73,7 @@ class MatchLoader(QThread):
         self._nickname = nickname
         self._match_type = match_type
         self._cancel = False
+        self._quota_hit = False
         self._pool: ThreadPoolExecutor | None = None
 
     def cancel(self) -> None:
@@ -134,6 +137,8 @@ class MatchLoader(QThread):
                         for detail in self._pool.map(self._safe_detail, todo):
                             if self._cancel:
                                 return
+                            if self._quota_hit:
+                                break
                             done += 1
                             self.progress.emit(done, len(todo),
                                                f"새 경기 받는 중… {done}/{len(todo)}")
@@ -144,6 +149,17 @@ class MatchLoader(QThread):
                     finally:
                         self._pool.shutdown(wait=False, cancel_futures=True)
                         self._pool = None
+                if self._quota_hit:
+                    # 듬성듬성한 결과를 DB 에 넣으면 그 구멍은 영영 안 메워진다 — 다음 검색의
+                    # _new_match_ids 는 첫 페이지가 다 아는 경기면 멈추기 때문이다. 대신 받은
+                    # 상세는 이미 디스크 캐시에 있어(get_match_detail) 다시 검색하면 거기서 읽고
+                    # 나머지만 API 로 받는다 — 이어 받기가 따로 필요 없다.
+                    self.quota_hit.emit(
+                        f"넥슨 API 호출 한도에 닿아 조회를 멈췄습니다({done}/{len(todo)}경기). "
+                        "받은 경기는 캐시에 있어, 다시 검색하면 나머지만 이어서 받습니다.\n\n"
+                        "개발 단계 키는 하루 1,000건이라 첫 조회(수천 건)를 끝내지 못합니다 — "
+                        "넥슨 오픈API에서 애플리케이션을 '서비스 단계'로 등록해 받은 키로 바꿔 주세요.")
+                    return
                 new = store.save_matches(conn, fresh)
 
                 self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
@@ -185,11 +201,14 @@ class MatchLoader(QThread):
 
     def _safe_detail(self, match_id: str):
         """한 경기가 실패해도 전체 조회를 죽이지 않는다."""
-        if self._cancel:
+        if self._cancel or self._quota_hit:
             return None
         try:
             return self._api.get_match_detail(match_id)
-        except NexonAPIError:
+        except NexonAPIError as e:
+            # 재시도(_get)까지 거친 429 — 개발 단계 키(초당 5·하루 1,000건)일 때 난다
+            if e.code == QUOTA_CODE:
+                self._quota_hit = True
             return None
 
     def _safe_meta(self, name: str, key: str, val: str) -> dict:
@@ -1880,6 +1899,7 @@ class MainWindow(QMainWindow):
         self._compare_loader.finished_ok.connect(self._on_compare_loaded)
         self._compare_loader.failed.connect(self._on_compare_failed)
         self._compare_loader.key_invalid.connect(self._on_compare_key_invalid)
+        self._compare_loader.quota_hit.connect(self._on_compare_key_invalid)  # 키를 바꾸는 게 답이라 같은 길
         self._compare_loader.start()
 
     def _on_compare_loaded(self, matches: list, details: list, ouid: str,
@@ -2102,6 +2122,7 @@ class MainWindow(QMainWindow):
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.key_invalid.connect(self._on_key_invalid)
+        self._loader.quota_hit.connect(self._on_key_invalid)  # 키를 바꾸는 게 답이라 같은 길
         self._loader.start()
 
     def _apply_range(self) -> None:
@@ -3634,8 +3655,9 @@ class ApiKeyDialog(QDialog):
         intro = QLabel(
             "넥슨 오픈API 키가 필요합니다. 키는 무료로 바로 발급됩니다.<br><br>"
             f"1. <a href='{KEY_ISSUE_URL}'>NEXON Open API</a> 에 로그인<br>"
-            "2. 애플리케이션 등록 → 발급된 키 복사<br>"
-            "3. 아래 칸에 붙여넣기")
+            "2. 애플리케이션 등록 — <b>서비스 단계</b>로 등록 → 발급된 키 복사<br>"
+            "3. 아래 칸에 붙여넣기<br><br>"
+            "개발 단계 키는 하루 1,000건이라, 처음 검색할 때 받는 수천 경기를 끝내지 못합니다.")
         intro.setOpenExternalLinks(True)
         intro.setWordWrap(True)
         v.addWidget(intro)
