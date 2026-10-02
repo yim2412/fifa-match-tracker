@@ -4,7 +4,7 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
@@ -36,8 +36,7 @@ class UpdateCard(QFrame):
     dismissed = pyqtSignal()
     MARGIN = 20
     WIDTH = 300  # 고정 — 글자 길이에 따라 줄면 내려받는 중 문구가 잘렸다
-    # "최신 버전입니다"는 알릴 게 없다는 확인이라 잠깐만 — 계속 떠 있으면 표 오른쪽 아래를 가린다
-    LATEST_HIDE_MS = 6000
+    # 새 버전일 때만 뜬다. "최신 버전입니다"는 왼쪽 아래 상태 칸(app_main._version_bar)이 늘 보여 준다
 
     def __init__(self, parent: QWidget):
         super().__init__(parent)
@@ -77,32 +76,16 @@ class UpdateCard(QFrame):
         row.addWidget(self.btn_update)
         v.addLayout(row)
         add_shadow(self)
-        self._hide_timer = QTimer(self)
-        self._hide_timer.setSingleShot(True)
-        self._hide_timer.timeout.connect(self.hide)
         self.hide()
 
     def show_release(self, tag: str, current: str, installed: bool) -> None:
-        self._hide_timer.stop()  # 새 버전 알림은 사용자가 닫을 때까지 둔다
         self.lb_title.setText(f"새 버전 {tag}")
         self.lb_sub.setText(f"지금 {current}" + ("" if installed else " · 받기 페이지가 열립니다"))
         self.btn_update.setText("업데이트" if installed else "받으러 가기")
-        self.btn_later.setText("나중에")
         self.set_busy(False)
         self.show()
         self.raise_()
         self.place()
-
-    def show_latest(self, current: str) -> None:
-        self.lb_title.setText("최신 버전입니다")
-        self.lb_sub.setText(f"지금 {current}")
-        self.set_busy(False)
-        self.btn_update.setVisible(False)
-        self.btn_later.setText("닫기")
-        self.show()
-        self.raise_()
-        self.place()
-        self._hide_timer.start(self.LATEST_HIDE_MS)
 
     def set_busy(self, busy: bool, text: str = "") -> None:
         # 받는 동안은 버튼을 숨긴다 — 비활성 버튼이 남아 있으면 눌러도 되는지 헷갈린다

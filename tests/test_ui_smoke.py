@@ -917,30 +917,47 @@ def test_check_says_latest_only_when_actually_checked():
         updatecheck.requests.get, config.UPDATE_CHECK = orig_get, orig_on
 
 
-def test_update_card_shows_latest_briefly_then_release_restores_buttons():
+def _status_bar_state():
+    """두 화면(검색·사이드바)의 왼쪽 아래 상태 칸 — [(문구, 버튼 문구 or None)]."""
+    out = []
+    for idx in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
+        page = _win.stack.widget(idx)
+        lb = [x for x in page.findChildren(app_main.QLabel) if x.objectName() == "updateStatus"]
+        bt = [x for x in page.findChildren(app_main.QPushButton) if x.objectName() == "updateInline"]
+        assert len(lb) == 1 and len(bt) == 1, (idx, len(lb), len(bt))
+        out.append((lb[0].text(), bt[0].text() if bt[0].isVisibleTo(page) else None))
+    return out
+
+
+def test_update_status_always_visible_bottom_left():
+    # 사용자 요청: 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 칸(버전 옆)
     card = _win.update_card
     orig = updatecheck.check
     try:
-        for status, visible in [(updatecheck.UNKNOWN, False), (updatecheck.LATEST, True)]:
+        for status, rel, want, card_shown in [
+                (updatecheck.LATEST, None, ("최신 버전입니다", None), False),
+                (updatecheck.UNKNOWN, None, ("업데이트 확인 못 함", None), False),  # 모르면 '최신'이라 안 한다
+                (updatecheck.NEWER, _REL, ("새 버전 v9.0.0", "받으러 가기"), True)]:
             card.hide()
-            updatecheck.check = lambda *a, **k: (status, None)
+            updatecheck.check = lambda *a, s=status, r=rel, **k: (s, r)
             _win.start_update_check()          # QThread.start 는 막혀 있다 — 배선만 만든다
+            assert _status_bar_state() == [("업데이트 확인 중…", None)] * 2
             _win._update_worker.run()           # 같은 스레드에서 돌려 신호 → 창까지
-            assert card.isVisibleTo(_win) == visible, (status, card.lb_title.text())
-        assert card.lb_title.text() == "최신 버전입니다" and config.APP_VERSION in card.lb_sub.text()
-        assert not card.btn_update.isVisibleTo(card) and card.btn_later.text() == "닫기"
-        assert card._hide_timer.isActive() and card._hide_timer.interval() == card.LATEST_HIDE_MS
-        card._hide_timer.timeout.emit()
-        assert not card.isVisibleTo(_win), "최신 안내가 사라지지 않는다"
-        # 그 뒤 새 버전이 오면 버튼이 돌아오고, 저절로 닫히지 않는다
-        card.show_latest(config.APP_VERSION)
-        _win._on_update_found(_REL)
-        assert card.btn_update.isVisibleTo(card) and card.btn_later.text() == "나중에"
-        assert not card._hide_timer.isActive()
+            assert _status_bar_state() == [want] * 2, (status, _status_bar_state())
+            assert card.isVisibleTo(_win) == card_shown, status
+        # 왼쪽 아래 버튼도 카드 버튼과 같은 길(소스 실행 = 페이지 열기)
+        opened = []
+        with _Patch((app_main.QDesktopServices, "openUrl", lambda u: opened.append(u.toString())),
+                    (updatecheck, "install_dir", lambda: None)):
+            btn = [b for b in _win.stack.widget(_win.PAGE_SEARCH).findChildren(app_main.QPushButton)
+                   if b.objectName() == "updateInline"][0]
+            btn.click()
+        assert opened == [_REL.page_url], opened
     finally:
         updatecheck.check = orig
-        card._hide_timer.stop()
         card.hide()
+        _win._release = None
+        _win._set_update_status("")
 
 
 def test_version_bottom_left_not_in_title():
@@ -1028,6 +1045,31 @@ def test_update_click_installed_downloads_then_installs_and_closes():
             _win._download_worker = None
             _win.update_card.hide()
     del _win.close
+
+
+def test_inline_update_after_dismiss_shows_progress_and_locks_button():
+    # 카드를 [나중에]로 닫고 왼쪽 아래 버튼으로 받으면 — 진행이 보일 곳이 없으면 멈춘 것처럼 보인다
+    yes = app_main.QMessageBox.StandardButton.Yes
+    card = _win.update_card
+    with _Patch((updatecheck, "install_dir", lambda: pathlib.Path("C:/fake")),
+                (app_main.QMessageBox, "question", lambda *a, **k: yes),
+                (app_main.QMessageBox, "warning", lambda *a, **k: None)):
+        _win._on_update_found(_REL)
+        card.btn_later.click()
+        assert not card.isVisibleTo(_win)
+        try:
+            _win._update_inline_btns[0].click()
+            assert card.isVisibleTo(_win) and card.bar.isVisibleTo(_win), "진행이 안 보인다"
+            assert not any(b.isEnabled() for b in _win._update_inline_btns), "받는 중에 또 누를 수 있다"
+            _win._on_update_failed("테스트 실패")
+            assert all(b.isEnabled() for b in _win._update_inline_btns), "실패 뒤 버튼이 잠긴 채다"
+        finally:
+            _win._download_worker = None
+            _win._release = None
+            card.hide()
+            _win._set_update_status("")
+            for b in _win._update_inline_btns:
+                b.setEnabled(True)
 
 
 def test_update_failure_restores_card_and_tells_why():

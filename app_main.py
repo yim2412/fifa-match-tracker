@@ -666,8 +666,11 @@ class MainWindow(QMainWindow):
         self._nick_edits: list[QLineEdit] = []
         self._search_btns: list[QPushButton] = []
         self._acct_combos: list[NoScrollComboBox] = []
+        # 왼쪽 아래 버전·업데이트 상태 줄 — 검색 화면·사이드바에 하나씩, 함께 갱신한다
+        self._update_status_labels: list[QLabel] = []
+        self._update_inline_btns: list[QPushButton] = []
 
-        self.setWindowTitle(config.APP_NAME)  # 버전은 왼쪽 아래(_version_label) — 사용자 요청 2026-10-02
+        self.setWindowTitle(config.APP_NAME)  # 버전은 왼쪽 아래(_version_bar) — 사용자 요청 2026-10-02
         self.resize(1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
         self.setMinimumSize(*MIN_WINDOW)
         self._build_ui()
@@ -704,15 +707,30 @@ class MainWindow(QMainWindow):
         self._update_worker = UpdateCheckWorker()
         self._update_worker.found.connect(self._on_update_found)
         self._update_worker.latest.connect(self._on_update_latest)
+        self._update_worker.unknown.connect(self._on_update_unknown)
+        self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
 
+    def _set_update_status(self, text: str, button: str = "") -> None:
+        """왼쪽 아래 상태 칸 — 늘 보이는 자리(카드는 새 버전일 때만 잠깐 눈에 띄게)."""
+        for lb in self._update_status_labels:
+            lb.setText(text)
+        for b in self._update_inline_btns:
+            b.setText(button)
+            b.setVisible(bool(button))
+
     def _on_update_latest(self) -> None:
-        self.update_card.show_latest(config.APP_VERSION)
+        self._set_update_status("최신 버전입니다")
+
+    def _on_update_unknown(self) -> None:
+        # 확인을 못 했는데 '최신'이라 하면 거짓말 — 그렇다고 말한다
+        self._set_update_status("업데이트 확인 못 함")
 
     def _on_update_found(self, rel) -> None:
         self._release = rel
         installed = updatecheck.install_dir() is not None and bool(rel.setup_url)
         self.update_card.show_release(rel.tag, config.APP_VERSION, installed)
+        self._set_update_status(f"새 버전 {rel.tag}", "업데이트" if installed else "받으러 가기")
 
     def _on_update_clicked(self) -> None:
         rel = self._release
@@ -729,6 +747,11 @@ class MainWindow(QMainWindow):
             f"내려받은 뒤 앱이 닫히고, 설치가 끝나면 다시 켜집니다. 전적 기록은 그대로입니다.{notes}")
         if ans != QMessageBox.StandardButton.Yes:
             return
+        # 카드를 [나중에]로 닫았어도 왼쪽 아래 버튼으로 올 수 있다 — 진행은 카드에서 보이게 다시 띄운다
+        self.update_card.show()
+        self.update_card.raise_()
+        for b in self._update_inline_btns:
+            b.setEnabled(False)
         self.update_card.set_busy(True, "내려받는 중…")
         self._download_worker = UpdateDownloadWorker(rel)
         self._download_worker.progress.connect(self.update_card.set_progress)
@@ -746,6 +769,8 @@ class MainWindow(QMainWindow):
 
     def _on_update_failed(self, msg: str) -> None:
         self.update_card.set_busy(False)
+        for b in self._update_inline_btns:
+            b.setEnabled(True)
         if self._release:
             self.update_card.show_release(self._release.tag, config.APP_VERSION, True)
         page = self._release.page_url if self._release else config.RELEASES_URL
@@ -830,18 +855,42 @@ class MainWindow(QMainWindow):
         outer.addStretch(2)
         outer.addWidget(self._attribution_label(), 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addWidget(self._about_button(), 0, Qt.AlignmentFlag.AlignHCenter)
-        outer.addWidget(self._version_label(), 0, Qt.AlignmentFlag.AlignLeft)  # 왼쪽 아래 구석
+        outer.addWidget(self._version_bar(), 0, Qt.AlignmentFlag.AlignLeft)  # 왼쪽 아래 구석
         return w
 
-    @staticmethod
-    def _version_label() -> QLabel:
-        """버전 표기 — 창 제목 대신 왼쪽 아래(검색 화면 구석 · 메인 화면 사이드바 맨 아래).
+    def _version_bar(self) -> QWidget:
+        """버전 + 업데이트 상태 — 창 제목 대신 왼쪽 아래(검색 화면 구석 · 메인 화면 사이드바 맨 아래).
 
-        상태줄 왼쪽은 안 쓴다 — showMessage 가 늘 그 자리를 덮어 버전이 가려진다."""
-        lb = QLabel(config.APP_VERSION)
-        lb.setObjectName("versionLabel")
-        lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 11px; border: none;")
-        return lb
+        "v0.3.1 · 최신 버전입니다" / "v0.3.1 · 새 버전 v0.3.2" + [업데이트] 버튼(아랫줄 — 사이드바
+        230px 에 한 줄로 안 들어간다). 상태줄 왼쪽은 안 쓴다 — showMessage 가 늘 덮어 가려진다.
+        사용자 요청(2026-10-02): 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 자리."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        style = f"color: {T.TEXT_DIM}; font-size: 11px; border: none;"
+        ver = QLabel(config.APP_VERSION)
+        ver.setObjectName("versionLabel")
+        ver.setStyleSheet(style)
+        status = QLabel("")
+        status.setObjectName("updateStatus")
+        status.setStyleSheet(style)
+        row.addWidget(ver)
+        row.addWidget(status)
+        row.addStretch(1)
+        v.addLayout(row)
+        btn = QPushButton("")
+        btn.setObjectName("updateInline")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        btn.clicked.connect(self._on_update_clicked)
+        btn.setVisible(False)
+        v.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self._update_status_labels.append(status)
+        self._update_inline_btns.append(btn)
+        return w
 
     def _about_button(self) -> QPushButton:
         """[정보] — 이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기. 두 화면에 하나씩."""
@@ -1059,8 +1108,8 @@ class MainWindow(QMainWindow):
         about.addWidget(self._about_button())
         about.addStretch(1)
         sv.addLayout(about)
-        ver = self._version_label()
-        ver.setContentsMargins(22, 4, 0, 0)
+        ver = self._version_bar()
+        ver.setContentsMargins(22, 4, 12, 0)
         sv.addWidget(ver)
         h.addWidget(side)
 
@@ -3805,7 +3854,8 @@ class MainWindow(QMainWindow):
 class UpdateCheckWorker(QThread):
     """GitHub 최신 릴리스 확인(updatecheck.check)을 UI 스레드 밖에서."""
     found = pyqtSignal(object)  # updatecheck.Release — 새 버전이 있을 때만
-    latest = pyqtSignal()       # 실제로 확인했고 지금이 최신일 때만(모르면 아무 신호도 없다)
+    latest = pyqtSignal()       # 실제로 확인했고 지금이 최신일 때만
+    unknown = pyqtSignal()      # 확인 못 함(꺼짐·오프라인·릴리스 없음) — '최신'과 다르다
 
     def run(self) -> None:
         try:
@@ -3816,6 +3866,8 @@ class UpdateCheckWorker(QThread):
             self.found.emit(rel)
         elif status == updatecheck.LATEST:
             self.latest.emit()
+        else:
+            self.unknown.emit()
 
 
 class UpdateDownloadWorker(QThread):
