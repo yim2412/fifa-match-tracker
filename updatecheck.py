@@ -56,28 +56,49 @@ def is_newer(tag: str, current: str) -> bool:
     return a is not None and b is not None and a > b
 
 
+# check() 의 결과 — 카드는 NEWER 면 업데이트, LATEST 면 "최신 버전입니다", UNKNOWN 이면 아무것도 안 띄운다.
+# 확인을 못 했는데 "최신"이라고 하면 거짓말이 되므로 둘을 가른다(2026-10-02 사용자 요청으로 LATEST 표시 추가).
+NEWER, LATEST, UNKNOWN = "newer", "latest", "unknown"
+
+
 def latest_newer(current: str = config.APP_VERSION, timeout: int = 5) -> Release | None:
     """current 보다 새 릴리스가 있으면 Release, 없거나 모르면 None."""
+    return check(current, timeout)[1]
+
+
+def check(current: str = config.APP_VERSION, timeout: int = 5) -> tuple[str, Release | None]:
+    """(NEWER, Release) · (LATEST, None) · (UNKNOWN, None).
+
+    LATEST 는 GitHub 의 최신 릴리스를 실제로 읽었고 current 가 그보다 새롭지 않을 때만 —
+    공개 전 버전(current 가 릴리스보다 높음)도 LATEST 다. 확인을 껐거나·실패했거나·
+    릴리스가 없거나(404)·버전 형식을 모르면 UNKNOWN.
+    """
     if not config.UPDATE_CHECK:
-        return None
+        return UNKNOWN, None
     try:
         res = requests.get(config.LATEST_RELEASE_API, timeout=timeout,
                            headers={"Accept": "application/vnd.github+json",
                                     "User-Agent": config.WEB_USER_AGENT})
         if res.status_code != 200:  # 404 = 릴리스가 아직 없다
-            return None
+            return UNKNOWN, None
         data = res.json()
     except (requests.RequestException, ValueError):
-        return None
+        return UNKNOWN, None
+    if not isinstance(data, dict):
+        return UNKNOWN, None
     tag = data.get("tag_name") or ""
-    if data.get("draft") or data.get("prerelease") or not is_newer(tag, current):
-        return None
+    if data.get("draft") or data.get("prerelease"):
+        return UNKNOWN, None
+    if parse_version(tag) is None or parse_version(current) is None:
+        return UNKNOWN, None
+    if not is_newer(tag, current):
+        return LATEST, None
     urls = {a.get("name"): a.get("browser_download_url") or ""
             for a in data.get("assets") or [] if isinstance(a, dict)}
-    return Release(tag=tag, page_url=data.get("html_url") or config.RELEASES_URL,
-                   setup_url=urls.get(SETUP_ASSET.format(tag=tag), ""),
-                   sums_url=urls.get(SUMS_ASSET, ""),
-                   notes=_changes_excerpt(data.get("body") or ""))
+    return NEWER, Release(tag=tag, page_url=data.get("html_url") or config.RELEASES_URL,
+                          setup_url=urls.get(SETUP_ASSET.format(tag=tag), ""),
+                          sums_url=urls.get(SUMS_ASSET, ""),
+                          notes=_changes_excerpt(data.get("body") or ""))
 
 
 def _changes_excerpt(body: str) -> str:

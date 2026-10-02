@@ -888,6 +888,76 @@ class _Patch:
             setattr(o, n, v)
 
 
+def test_check_says_latest_only_when_actually_checked():
+    rel = {"tag_name": "v9.0.0", "html_url": "https://example.invalid/r", "draft": False,
+           "prerelease": False, "body": "", "assets": []}
+    N, L, U = updatecheck.NEWER, updatecheck.LATEST, updatecheck.UNKNOWN
+    cases = [
+        (_FakeGet(body=rel), N),
+        (_FakeGet(body=dict(rel, tag_name=config.APP_VERSION)), L),   # 같은 버전
+        (_FakeGet(body=dict(rel, tag_name="v0.0.1")), L),             # 공개 전 버전을 쓰는 중
+        (_FakeGet(body=dict(rel, tag_name="nightly")), U),            # 형식을 모르면 최신이라 못 한다
+        (_FakeGet(body=dict(rel, draft=True)), U),
+        (_FakeGet(status=404), U),
+        (_FakeGet(status=403), U),
+        (_FakeGet(body=None), U),
+        (_FakeGet(exc=requests.ConnectionError("오프라인")), U),
+    ]
+    orig_get, orig_on = updatecheck.requests.get, config.UPDATE_CHECK
+    config.UPDATE_CHECK = True
+    try:
+        for fake, want in cases:
+            updatecheck.requests.get = fake
+            status, got = updatecheck.check()
+            assert status == want and (got is not None) == (want == N), (fake.body, status, got)
+        updatecheck.requests.get = _FakeGet(body=dict(rel, tag_name=config.APP_VERSION))
+        config.UPDATE_CHECK = False  # 껐으면 확인 안 했으니 '최신'도 아니다
+        assert updatecheck.check() == (U, None)
+    finally:
+        updatecheck.requests.get, config.UPDATE_CHECK = orig_get, orig_on
+
+
+def test_update_card_shows_latest_briefly_then_release_restores_buttons():
+    card = _win.update_card
+    orig = updatecheck.check
+    try:
+        for status, visible in [(updatecheck.UNKNOWN, False), (updatecheck.LATEST, True)]:
+            card.hide()
+            updatecheck.check = lambda *a, **k: (status, None)
+            _win.start_update_check()          # QThread.start 는 막혀 있다 — 배선만 만든다
+            _win._update_worker.run()           # 같은 스레드에서 돌려 신호 → 창까지
+            assert card.isVisibleTo(_win) == visible, (status, card.lb_title.text())
+        assert card.lb_title.text() == "최신 버전입니다" and config.APP_VERSION in card.lb_sub.text()
+        assert not card.btn_update.isVisibleTo(card) and card.btn_later.text() == "닫기"
+        assert card._hide_timer.isActive() and card._hide_timer.interval() == card.LATEST_HIDE_MS
+        card._hide_timer.timeout.emit()
+        assert not card.isVisibleTo(_win), "최신 안내가 사라지지 않는다"
+        # 그 뒤 새 버전이 오면 버튼이 돌아오고, 저절로 닫히지 않는다
+        card.show_latest(config.APP_VERSION)
+        _win._on_update_found(_REL)
+        assert card.btn_update.isVisibleTo(card) and card.btn_later.text() == "나중에"
+        assert not card._hide_timer.isActive()
+    finally:
+        updatecheck.check = orig
+        card._hide_timer.stop()
+        card.hide()
+
+
+def test_version_bottom_left_not_in_title():
+    assert config.APP_VERSION not in _win.windowTitle(), _win.windowTitle()
+    for idx in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
+        page = _win.stack.widget(idx)
+        labels = [lb for lb in page.findChildren(app_main.QLabel) if lb.objectName() == "versionLabel"]
+        assert [lb.text() for lb in labels] == [config.APP_VERSION], (idx, [lb.text() for lb in labels])
+        lb = labels[0]
+        _win.stack.setCurrentIndex(idx)
+        _app.processEvents()
+        pos = lb.mapTo(page, lb.rect().bottomLeft())
+        # 왼쪽 아래 — 화면 왼쪽 1/4 · 아래 1/8 안
+        assert pos.x() < page.width() / 4 and pos.y() > page.height() * 7 / 8, (idx, pos, page.size())
+    _win.stack.setCurrentIndex(_AFTER_LOAD[0])
+
+
 def test_update_card_bottom_right_on_both_pages():
     card = _win.update_card
     assert not card.isVisibleTo(_win), "새 버전 신호 없이 카드가 보인다"

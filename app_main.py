@@ -667,7 +667,7 @@ class MainWindow(QMainWindow):
         self._search_btns: list[QPushButton] = []
         self._acct_combos: list[NoScrollComboBox] = []
 
-        self.setWindowTitle(f"{config.APP_NAME} {config.APP_VERSION}")
+        self.setWindowTitle(config.APP_NAME)  # 버전은 왼쪽 아래(_version_label) — 사용자 요청 2026-10-02
         self.resize(1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
         self.setMinimumSize(*MIN_WINDOW)
         self._build_ui()
@@ -703,7 +703,11 @@ class MainWindow(QMainWindow):
         """켤 때 한 번 — 테스트·스크린샷이 네트워크를 안 타게 main 에서만 부른다."""
         self._update_worker = UpdateCheckWorker()
         self._update_worker.found.connect(self._on_update_found)
+        self._update_worker.latest.connect(self._on_update_latest)
         self._update_worker.start()
+
+    def _on_update_latest(self) -> None:
+        self.update_card.show_latest(config.APP_VERSION)
 
     def _on_update_found(self, rel) -> None:
         self._release = rel
@@ -826,7 +830,18 @@ class MainWindow(QMainWindow):
         outer.addStretch(2)
         outer.addWidget(self._attribution_label(), 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addWidget(self._about_button(), 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(self._version_label(), 0, Qt.AlignmentFlag.AlignLeft)  # 왼쪽 아래 구석
         return w
+
+    @staticmethod
+    def _version_label() -> QLabel:
+        """버전 표기 — 창 제목 대신 왼쪽 아래(검색 화면 구석 · 메인 화면 사이드바 맨 아래).
+
+        상태줄 왼쪽은 안 쓴다 — showMessage 가 늘 그 자리를 덮어 버전이 가려진다."""
+        lb = QLabel(config.APP_VERSION)
+        lb.setObjectName("versionLabel")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 11px; border: none;")
+        return lb
 
     def _about_button(self) -> QPushButton:
         """[정보] — 이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기. 두 화면에 하나씩."""
@@ -1044,6 +1059,9 @@ class MainWindow(QMainWindow):
         about.addWidget(self._about_button())
         about.addStretch(1)
         sv.addLayout(about)
+        ver = self._version_label()
+        ver.setContentsMargins(22, 4, 0, 0)
+        sv.addWidget(ver)
         h.addWidget(side)
 
         right = QWidget()
@@ -3785,16 +3803,19 @@ class MainWindow(QMainWindow):
 
 
 class UpdateCheckWorker(QThread):
-    """GitHub 최신 릴리스 확인(updatecheck.latest_newer)을 UI 스레드 밖에서."""
+    """GitHub 최신 릴리스 확인(updatecheck.check)을 UI 스레드 밖에서."""
     found = pyqtSignal(object)  # updatecheck.Release — 새 버전이 있을 때만
+    latest = pyqtSignal()       # 실제로 확인했고 지금이 최신일 때만(모르면 아무 신호도 없다)
 
     def run(self) -> None:
         try:
-            hit = updatecheck.latest_newer()
+            status, rel = updatecheck.check()
         except Exception:
-            hit = None  # 알림 하나 때문에 크래시 로그가 쌓이면 안 된다
-        if hit:
-            self.found.emit(hit)
+            status, rel = updatecheck.UNKNOWN, None  # 알림 하나 때문에 크래시 로그가 쌓이면 안 된다
+        if status == updatecheck.NEWER and rel:
+            self.found.emit(rel)
+        elif status == updatecheck.LATEST:
+            self.latest.emit()
 
 
 class UpdateDownloadWorker(QThread):
