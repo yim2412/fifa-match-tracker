@@ -118,13 +118,17 @@ def test_asset_names_are_ascii():
 
 def test_sha256_lines_and_notes():
     import hashlib
-    path = release.Path(os.environ.get("TEMP", ".")) / "release_sum_test.bin"
+    tmp = release.Path(os.environ.get("TEMP", "."))
+    path, sums = tmp / "release_sum_test.bin", tmp / "release_sum_test.txt"
     path.write_bytes(b"abc")
     try:
-        line = release.sha256_lines([path])
+        line = release.write_sums(sums, [path])
         assert line == f"{hashlib.sha256(b'abc').hexdigest()}  release_sum_test.bin\n", line
+        # CRLF 면 sha256sum -c 가 'release_sum_test.bin\r' 를 찾다 실패한다(v0.2.0 첫 업로드)
+        assert b"\r" not in sums.read_bytes(), sums.read_bytes()
     finally:
         path.unlink()
+        sums.unlink(missing_ok=True)
     notes = release.release_notes("- 바뀐 것", "S.exe", "P.zip", line)
     # 설치 파일이 포터블보다 먼저, 체크섬과 출처 표기가 본문에
     assert notes.index("S.exe") < notes.index("P.zip"), notes

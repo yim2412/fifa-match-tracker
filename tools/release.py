@@ -156,6 +156,14 @@ def sha256_lines(paths: list[Path]) -> str:
     return "".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in paths)
 
 
+def write_sums(path: Path, files: list[Path]) -> str:
+    """LF 로 쓴다 — 윈도우 기본(CRLF)이면 `sha256sum -c` 가 파일 이름 끝의 \\r 때문에 못 연다
+    (v0.2.0 에 처음 올린 SHA256SUMS.txt 가 그랬다)."""
+    text = sha256_lines(files)
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return text
+
+
 def release_notes(changes: str, setup: str, portable: str, sums: str) -> str:
     return (
         "## 받기\n\n"
@@ -234,8 +242,7 @@ def main() -> int:
     ok(f"설치 파일 {setup.name} ({setup.stat().st_size / 2**20:.1f} MB)")
 
     sums_path = DIST / sums_name
-    sums = sha256_lines([setup, zip_path])
-    sums_path.write_text(sums, encoding="utf-8")
+    sums = write_sums(sums_path, [setup, zip_path])
     ok(f"체크섬 {sums_name}")
 
     # 설치 파일은 LZMA 로 압축돼 안을 못 본다 — 그 입력(onedir 폴더)이 zip 과 같으므로 zip 으로 잰다.
