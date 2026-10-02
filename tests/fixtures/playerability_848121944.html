@@ -1,0 +1,1688 @@
+
+
+
+
+
+
+<input type="hidden" name="hidPlayerCustImg" value="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p848121944.png" />
+
+<div class="content data_detail">
+    <div class="wrap">
+        <div class="content_header">
+            <div class="playerCard thumb">
+                <div class="cardBack">
+                    <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/card/WS.png" alt="">
+                </div>
+                <div class="playerCardWrap _WS">
+                    <div class="playerCardInfoSide">
+                        <div class="liveInfo">
+
+                        </div>
+                        <div class="ovr value">119</div>
+                        <div class="position">
+                            CM
+                        </div>
+                        <div class="pay">
+                            <svg width="34px" height="34px">
+                                <path fill-rule="evenodd" stroke="#fff" stroke-width="2px" stroke-linecap="butt" stroke-linejoin="miter" fill="none"
+                                      d="M17,33 L1,26 L1,8 L17,1 L33,8 L33,26 L17,33 Z" />
+                            </svg>
+                            <span>30</span>
+                        </div>
+                        <div class="buildUp selector_wrap">
+                            <a href="#" class="ability en_level1">
+                                1
+                            </a>
+                        </div>
+                    </div>
+                    <div class="playerCardThumb">
+                        <div class="img action">
+                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersActionHigh/p848121944.png?rd=202610030210" onerror="this.src='https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/not_found.png'">
+                        </div>
+                    </div>
+                    <div class="playerCardInfoBottom">
+                        <div class="nameWrap">
+                            <div class="season">
+                                <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WS.png"
+                                     alt="">
+                            </div>
+                            <div class="name">슈바인슈타이거</div>
+                        </div>
+                        <div class="playerCardInfoSort">
+                            <div class="nation">
+<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/countries/smallflags/21.png" alt=""></div>
+<div class="league">
+<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/league/dark/ca/d2028.png" alt=""></div>
+<div class="team">
+<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/crests/dark/small/d130493.png" alt=""></div>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="info_wrap">
+                <div class="info_line info_name">
+                    <div class="season">
+                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WS.png"
+                             alt="">
+                    </div>
+                     <div class="pay_side">30</div>
+                    <div class="name">슈바인슈타이거</div>
+                    <div class="side_utils players_utils_848121944">
+                        <button class="btn_kakao" onclick="shareKakao()">카카오</button>
+                        <a href="javascript:;" class="btn_collect" data-no="[0]" onclick="DataCenter.SetPlayerFavorit(this, 848121944, 1, 1)"></a>
+                        
+                        <a href="javascript:;"
+                           onclick="DataCenter.GetPlayerGrow(this,848121944,'', 1);"
+                           class="btn_boost_helper"></a>
+                        <button class="btn_action"></button>
+                        <div class="action_wrap">
+                        </div>
+                    </div>
+                </div>
+                <script>
+                                    var thumb_currrent_season = "WS";
+                                    var thumb_custom_season = "default";
+
+                                    $(".info_name .btn_action").on("click", function (e) {
+                                        e.preventDefault();
+                                        $.ajax({
+                                            url: "/squadmaker/GetPlayerCustomImgList",
+                                            type: "POST",
+                                            cache: false,
+                                            dataType: "text",
+                                            data: { spid: 848121944 }
+                                        }).done(function (_data) {
+                                            const data = JSON.parse(_data);
+
+                                            var html = `<div class='tit'>선수 사진 변경</div>
+                                                <div class="sort_tit">기본 제공 사진</div><div class='default'><button class="btn_default_player ${
+                                                !thumb_custom_season || thumb_custom_season === "default" ? "active" : ""
+                                                }">
+                                                    <img class='season' src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/${
+                                                    thumb_currrent_season.toLowerCase().includes("icon_m") ? "/filter/icon_m" : thumb_currrent_season
+                                                    }.png" alt="">
+                                                    <img
+                                                            src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersActionHigh/p848121944.png?rd=202610030210"
+                                                            alt=""
+                                                            onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'"
+                                                        />
+                                                    </button></div><div class="sort_tit">전체 사진 리스트<span>(총 <strong>${data.length}</strong>장)</span></div>
+                                                <div class='action_list'>`;
+
+                                            const dcItem = data.find((item) => item.season.toLowerCase() === thumb_custom_season.toLowerCase());
+                                            const otherItems = data.filter((item) => item.season.toLowerCase() !== thumb_custom_season.toLowerCase());
+                                            const sortData = dcItem ? [dcItem, ...otherItems] : data;
+
+                                            $.each(sortData, function (index, value) {
+                                                html += `<button class="btn_action_player action${index} ${index === 0 && thumb_custom_season.toLowerCase() === value.season.toLowerCase() ? "active" : ""
+                                                    }" data-season="${value.season.toLowerCase()}">
+                                                        <img class='season' src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/${
+                                                        value.season.toLowerCase().includes("icon_m") ? "/filter/icon_m" : value.season
+                                                        }.png" alt="">
+                                                        ${
+                                                        value.n1Custom === 1
+                                                            ? `<img
+                                                                src="${`https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${value.spid}.png`}"
+                                                                alt=""
+                                                                onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'"
+                                                            />`
+                                                            : value.n1Custom === 2
+                                                            ? `<img
+                                                            src="${`https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${value.spid}.png`}"
+                                                            alt=""
+                                                            onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'"
+                                                        />`
+                                                            : value.n1Custom === 3
+                                                            ? `<img
+                                                            src="${`https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${value.spid % 1000000}.png`}"
+                                                            alt=""
+                                                            onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'"
+                                                        />`
+                                                            : `<img
+                                                            src="${`https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${value.spid % 1000000}.png`}"
+                                                            alt=""
+                                                            onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'"
+                                                        />`
+                                                        }
+                                                    </button>`;
+                                            });
+
+
+                                            html += "</div><div class='advice'><p>인게임 리스트 정보와 일부 상이할 수 있습니다.</p><p>라이선스 이슈에 따라 특정 선수 사진이 수정 또는 삭제될 수 있습니다.</p></div>";
+
+                                            var targetHtml =$(".info_name .action_wrap");
+                                            targetHtml.html(html);
+
+                                            $(".info_name .action_wrap").show();
+                                        });
+                                    });
+
+                                    $(".info_name .action_wrap").on("click", "button", function (e) {
+                                        e.preventDefault();
+                                        const season = $(this).data("season");
+                                        const target = $(".playerCardThumb .img img");
+                                        const targetSrc = $(this).find("img:not(.season)").attr("src");
+
+                                        if(season){
+                                            $(".btn_action").addClass("active");
+                                        }else{
+                                            $(".btn_action").removeClass("active");
+                                        }
+
+                                        $(".playerCardThumb .img").removeClass("action head").addClass(targetSrc.indexOf("Action") !== -1 ? "action" : "head");
+                                        target.attr("src", targetSrc);
+                                        $("[name=hidPlayerCustImg]").val(targetSrc);
+                                        thumb_custom_season = season ? season : "default";
+
+                                        $(".info_name .action_wrap .btn_action_player").removeClass("active");
+                                        $(this).addClass("active");
+
+                                        $(".info_name .action_wrap").hide();
+                                    });
+                </script>
+                <div class="info_line info_ab">
+                        <span class="position mf">
+                            <span class="txt">CM</span><span class="skillData_848121944 value">
+                                119
+                            </span>
+                            <span class="diff"></span>
+                        </span>
+                                        
+
+                </div>
+                <div class="info_line info_etc">
+                    <span class="etc birth">1984.08.01</span>
+
+                    <span class="etc height">183cm</span>
+                    <span class="etc weight">79kg</span>
+                    <span class="etc physical">보통</span>
+                    <span class="etc skill">
+                        <span>★★★</span>☆☆☆
+                    </span>
+                    <span class="etc foot">
+                        L3 –
+                        <strong>R5</strong>
+                    </span>
+                    <span class="etc season">월드클래스</span>
+                </div>
+                <div class="info_line info_team">
+                    <div class="etc team">
+                        <span class="txt"></span>
+                    </div>
+                    <div class="etc nation">
+                        <span class="img">
+                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/countries/smallflags/21.png"
+                                 alt="">
+                        </span>
+                        <span class="txt">
+                            독일
+                        </span>
+                    </div>
+                </div>
+                <div class="skill_wrap">
+                    <div class="tit">특성</div>
+
+                        <span>
+                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_16.png" alt="중거리 슛 선호" />
+                            <span class="desc">중거리 슛 선호</span>
+                        </span>
+                        <span>
+                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_27.png" alt="패스 마스터" />
+                            <span class="desc">패스 마스터</span>
+                        </span>
+                        <span>
+                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_15.png" alt="긴 패스 선호" />
+                            <span class="desc">긴 패스 선호</span>
+                        </span>
+                        <span>
+                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_18.png" alt="플레이 메이커" />
+                            <span class="desc">플레이 메이커</span>
+                        </span>
+
+                </div>
+
+                <div class="en_selector_wrap">
+                    <div class="en_selector">
+                        <div class="en">
+                            <div class="tit">강화</div>
+                            <div class="en_wrap selector_wrap en_wrap_848121944">
+                                <a href="#" class="ability en_level1">1</a>
+                                <div class="selector_list">
+                                    <ul>
+                                            <li>
+                                                <a class="selector_item en_level0"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 0, 0, 0, 1, 0, 1, 0, 1);">-</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level1"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 1, 0, 1);">1</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level2"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 2, 0, 0, 1, 0, 1, 0, 1);">2</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level3"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 3, 0, 0, 1, 0, 1, 0, 1);">3</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level4"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 4, 0, 0, 1, 0, 1, 0, 1);">4</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level5"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 5, 0, 0, 1, 0, 1, 0, 1);">5</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level6"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 6, 0, 0, 1, 0, 1, 0, 1);">6</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level7"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 7, 0, 0, 1, 0, 1, 0, 1);">7</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level8"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 8, 0, 0, 1, 0, 1, 0, 1);">8</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level9"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 9, 0, 0, 1, 0, 1, 0, 1);">9</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level10"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 10, 0, 0, 1, 0, 1, 0, 1);">10</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level11"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 11, 0, 0, 1, 0, 1, 0, 1);">11</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level12"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 12, 0, 0, 1, 0, 1, 0, 1);">12</a>
+                                            </li>
+                                            <li>
+                                                <a class="selector_item en_level13"
+                                                   onclick="DataCenter.GetPlayerAbility(848121944, 13, 0, 0, 1, 0, 1, 0, 1);">13</a>
+                                            </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="adap">
+                            <div class="tit">적응도</div>
+                            <div class="adap_wrap selector_wrap">
+                                <a href="#" class="ability">+1</a>
+                                <div class="selector_list">
+                                    <ul>
+                                        <li>
+                                            <a class="selector_item adap0"
+                                               onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 1, 0);">1</a>
+                                        </li>
+                                        <li>
+                                            <a class="selector_item adap4"
+                                               onclick="DataCenter.GetPlayerAbility(848121944, 1, 4, 0, 1, 0, 1, 0);">5</a>
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="teamcolor_selector_wrap">
+                            <div class="en_selector">
+                                <div class="tit">팀컬러</div>
+                                <div class="en">
+                                    <div class="en_wrap selector_wrap">
+                                        <a href="#" class="ability">
+                                            강화 팀컬러
+                                        </a>
+                                        <div class="selector_list">
+                                            <ul>
+
+                                                <li><a class="selector_item tdefault0" data-no="0" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 0, 0);">강화 팀컬러</a></li>
+
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tdefault">
+                                    <div class="tdefault_wrap selector_wrap">
+                                        <a href="#" class="ability">
+                                            소속 팀컬러
+                                        </a>
+                                        <div class="selector_list">
+                                            <ul>
+                                                <li><a class="selector_item tdefault0" data-no="0" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 1, 0);">소속 팀컬러</a></li>
+
+                                                    <li><a class="selector_item tdefault2004" data-no="2004" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 2004, 1, 0, 1, 0, 1);">독일</a></li>
+                                                    <li><a class="selector_item tdefault40664" data-no="40664" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 40664, 1, 0, 1, 0, 1);">Winning Streak</a></li>
+                                                    <li><a class="selector_item tdefault1010" data-no="1010" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 1010, 1, 0, 1, 0, 1);">바이에른 뮌헨</a></li>
+                                                    <li><a class="selector_item tdefault1005" data-no="1005" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 1005, 1, 0, 1, 0, 1);">맨체스터 유나이티드</a></li>
+                                                    <li><a class="selector_item tdefault90000000" data-no="90000000" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 90000000, 1, 0, 1, 0, 1);">단일팀</a></li>
+                                                    <li><a class="selector_item tdefault40663" data-no="40663" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 40663, 1, 0, 1, 0, 1);">Winning Streak</a></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="tspecial">
+                                    <div class="tspecial_wrap selector_wrap">
+                                        <a href="#" class="ability">관계 팀컬러</a>
+                                        <div class="selector_list">
+                                            <ul>
+                                                <li><a class="selector_item tspecial0" data-no="0" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 1, 0);">관계 팀컬러</a></li>
+
+                                                    <li><a class="selector_item tspecial20011" data-no="20011" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 1, 20011);">독일 황금세대</a></li>
+                                                    <li><a class="selector_item tspecial40189" data-no="40189" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, 0, 1, 0, 1, 40189);">바이언 첫번째 트레블</a></li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="ovr_set">
+                <div class="position st value">116</div>
+                <div class="position lw value">117</div>
+                <div class="position cf value">117</div>
+                <div class="position rw value">117</div>
+                <div class="position cam value">118</div>
+                <div class="position lm value">118</div>
+                <div class="position cm value">119</div>
+                <div class="position rm value">118</div>
+                <div class="position cdm value">119</div>
+                <div class="position lwb value">118</div>
+                <div class="position cb value">117</div>
+                <div class="position rwb value">118</div>
+                <div class="position lb value">118</div>
+                <div class="position sw value">117</div>
+                <div class="position rb value">118</div>
+                <div class="position gk value">33</div>
+            </div>
+        </div>
+
+        <div>
+            <div class="content_middle">
+                <div class="season_match">
+                    <div class="tit">
+                        <div class="toggle" id="teamColorToggle">
+                            <div class="txt">클래스 비교</div>
+                            <div class="select_check_box">
+                                    <input name="stCheckTeamColor" id="stCheckTeamColor" type="checkbox" class="checkbox grCheck" onclick="DataCenter.GetPlayerAbility(848121944, 1, 0, -1); $(this).attr('disabled', 'disabled');">
+                                <label for="stCheckTeamColor">
+                                    <span></span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="td">
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 100121944, 1, 0);">
+                                <input type="radio" id="season_ICONTM"
+                                       name="radioVS"
+                                       class="season_check season_ICONTM"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_ICONTM"
+                                       alt="ICONTM"
+                                       title="ICONTM"
+                                       data-diff="0,4,4,3,3,3,6,4,4,3,4,7,0,6,11,4,3,3,1,4,3,1,4,3,5,3,4,3,3,-7,3,6,7,6,3,7,15,17,13,14,16">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/ICONTM.png"
+                                             alt="ICONTM">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 101121944, 1, 0);">
+                                <input type="radio" id="season_ICON"
+                                       name="radioVS"
+                                       class="season_check season_ICON"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_ICON"
+                                       alt="ICON"
+                                       title="ICON"
+                                       data-diff="0,-9,-7,-8,-9,-11,-7,-8,-9,-8,-8,-4,-11,-6,-2,-8,-11,-7,-8,-7,-10,-12,-7,-8,-9,-8,-9,-12,-12,-18,-13,-8,-5,-9,-9,-6,-7,-5,-9,-9,-6">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/ICON.png"
+                                             alt="ICON">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 110121944, 1, 0);">
+                                <input type="radio" id="season_ICONTM_B"
+                                       name="radioVS"
+                                       class="season_check season_ICONTM_B"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_ICONTM_B"
+                                       alt="ICONTM_B"
+                                       title="ICONTM_B"
+                                       data-diff="0,4,4,3,3,3,6,4,4,3,4,7,0,6,11,4,3,3,1,4,3,1,4,3,5,3,4,3,3,-7,3,6,7,6,3,7,15,17,13,14,16">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/ICONTM_B.png"
+                                             alt="ICONTM_B">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 113121944, 1, 0);">
+                                <input type="radio" id="season_25IM_SP"
+                                       name="radioVS"
+                                       class="season_check season_25IM_SP"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_25IM_SP"
+                                       alt="25IM_SP"
+                                       title="25IM_SP"
+                                       data-diff="0,-4,-1,-3,-4,-6,-2,-3,-4,-3,0,4,-6,-1,3,-3,-6,-2,-3,-2,-5,-7,-2,-3,-4,-3,-4,-7,-7,-13,-8,-3,0,-4,-4,-1,-2,0,-4,-4,-1">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/25IM_SP.png"
+                                             alt="25IM_SP">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 214121944, 1, 0);">
+                                <input type="radio" id="season_TC"
+                                       name="radioVS"
+                                       class="season_check season_TC"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_TC"
+                                       alt="TC"
+                                       title="TC"
+                                       data-diff="0,-26,-26,-30,-29,-38,-33,-25,-27,-24,-33,-22,-29,-19,-19,-27,-34,-33,-28,-31,-36,-33,-24,-28,-33,-23,-42,-41,-31,-33,-38,-32,-30,-42,-19,-23,-8,-6,-10,-10,-7">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/TC.png"
+                                             alt="TC">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 251121944, 1, 0);">
+                                <input type="radio" id="season_EBS"
+                                       name="radioVS"
+                                       class="season_check season_EBS"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_EBS"
+                                       alt="EBS"
+                                       title="EBS"
+                                       data-diff="0,-14,-13,-17,-14,-27,-14,-14,-14,-12,-14,-14,-14,-9,-5,-17,-20,-13,-21,-14,-19,-16,-12,-11,-13,-16,-29,-26,-28,-25,-30,-14,-12,-15,-14,-12,-10,-8,-12,-12,-9">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/EBS.png"
+                                             alt="EBS">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 256121944, 1, 0);">
+                                <input type="radio" id="season_BTB"
+                                       name="radioVS"
+                                       class="season_check season_BTB"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_BTB"
+                                       alt="BTB"
+                                       title="BTB"
+                                       data-diff="0,-14,-12,-16,-13,-17,-13,-14,-13,-11,-16,-11,-13,-11,-4,-16,-19,-18,-13,-13,-18,-15,-10,-13,-15,-14,-15,-20,-15,-24,-17,-13,-12,-16,-13,-10,-11,-8,-12,-12,-10">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BTB.png"
+                                             alt="BTB">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 264121944, 1, 0);">
+                                <input type="radio" id="season_FA"
+                                       name="radioVS"
+                                       class="season_check season_FA"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_FA"
+                                       alt="FA"
+                                       title="FA"
+                                       data-diff="0,-16,-16,-18,-15,-24,-18,-16,-15,-15,-18,-16,-15,-12,-13,-15,-21,-21,-18,-19,-21,-17,-14,-14,-20,-15,-21,-25,-24,-27,-27,-18,-17,-19,-17,-13,-8,-6,-10,-6,-7">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/FA.png"
+                                             alt="FA">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 268121944, 1, 0);">
+                                <input type="radio" id="season_LN"
+                                       name="radioVS"
+                                       class="season_check season_LN"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_LN"
+                                       alt="LN"
+                                       title="LN"
+                                       data-diff="0,-14,-14,-13,-12,-18,-13,-15,-12,-14,-13,-15,-16,-14,-6,-11,-16,-16,-12,-12,-17,-14,-9,-11,-14,-12,-16,-18,-23,-23,-18,-12,-14,-13,-15,-9,-8,-6,-10,-10,-7">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/LN.png"
+                                             alt="LN">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 272121944, 1, 0);">
+                                <input type="radio" id="season_BWC"
+                                       name="radioVS"
+                                       class="season_check season_BWC"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_BWC"
+                                       alt="BWC"
+                                       title="BWC"
+                                       data-diff="0,-14,-15,-15,-14,-16,-14,-15,-12,-16,-13,-13,-15,-13,-6,-13,-18,-17,-12,-21,-20,-19,-9,-12,-12,-12,-16,-14,-17,-26,-10,-15,-13,-13,-18,-9,-9,-5,-11,-11,-7">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BWC.png"
+                                             alt="BWC">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 283121944, 1, 0);">
+                                <input type="radio" id="season_HG"
+                                       name="radioVS"
+                                       class="season_check season_HG"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_HG"
+                                       alt="HG"
+                                       title="HG"
+                                       data-diff="0,-7,-11,-10,-8,-22,-15,-8,-6,-12,-11,-7,-6,-15,-8,-12,-10,-5,-15,-9,-11,-9,-9,-7,-11,-7,-18,-23,-25,-25,-29,-17,-11,-15,-12,-8,-8,-5,-11,-10,-7">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/HG.png"
+                                             alt="HG">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 289121944, 1, 0);">
+                                <input type="radio" id="season_CC"
+                                       name="radioVS"
+                                       class="season_check season_CC"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_CC"
+                                       alt="CC"
+                                       title="CC"
+                                       data-diff="0,-8,-8,-8,-7,-11,-6,-7,-8,-9,-6,-6,-10,-9,0,-6,-8,-10,-6,-11,-15,-10,-3,-6,-5,-6,-10,-10,-15,-17,-7,-7,-4,-6,-11,-4,-6,-3,-8,-10,-5">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/CC.png"
+                                             alt="CC">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 319121944, 1, 0);">
+                                <input type="radio" id="season_19"
+                                       name="radioVS"
+                                       class="season_check season_19"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_19"
+                                       alt="19"
+                                       title="19"
+                                       data-diff="0,-81,-52,-48,-52,-51,-53,-80,-82,-50,-57,-54,-54,-41,-38,-46,-46,-54,-48,-54,-47,-55,-46,-63,-64,-39,-49,-53,-51,-53,-52,-46,-67,-53,-47,-38,-10,-8,-12,-12,-9">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19.png"
+                                             alt="19">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 802121944, 1, 0);">
+                                <input type="radio" id="season_DC"
+                                       name="radioVS"
+                                       class="season_check season_DC"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_DC"
+                                       alt="DC"
+                                       title="DC"
+                                       data-diff="0,-8,-8,-9,-7,-9,-8,-7,-8,-7,-7,-8,-9,-8,-3,-7,-10,-12,-7,-8,-12,-8,-6,-7,-8,-8,-9,-8,-13,-9,-9,-9,-7,-8,-8,-4,-7,-5,-8,-9,-8">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/DC.png"
+                                             alt="DC">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 814121944, 1, 0);">
+                                <input type="radio" id="season_UT"
+                                       name="radioVS"
+                                       class="season_check season_UT"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_UT"
+                                       alt="UT"
+                                       title="UT"
+                                       data-diff="0,-11,-13,-10,-10,-11,-11,-11,-10,-14,-12,-11,-11,-10,-7,-7,-11,-14,-13,-15,-13,-14,-5,-11,-10,-10,-13,-10,-8,-18,-14,-11,-11,-13,-11,-5,-4,-4,-8,-9,-2">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/UT.png"
+                                             alt="UT">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 825121944, 1, 0);">
+                                <input type="radio" id="season_CU"
+                                       name="radioVS"
+                                       class="season_check season_CU"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_CU"
+                                       alt="CU"
+                                       title="CU"
+                                       data-diff="0,-5,-7,-6,-7,-7,-6,-5,-5,-7,-7,-4,-8,-7,-1,-5,-5,-7,-6,-9,-9,-9,-5,-6,-7,-6,-8,-6,-2,-15,-9,-7,-6,-6,-7,-2,-4,-1,-8,-7,-5">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/CU.png"
+                                             alt="CU">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 827121944, 1, 0);">
+                                <input type="radio" id="season_BDO"
+                                       name="radioVS"
+                                       class="season_check season_BDO"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_BDO"
+                                       alt="BDO"
+                                       title="BDO"
+                                       data-diff="0,-11,-13,-11,-11,-12,-10,-12,-9,-12,-14,-13,-14,-11,-2,-10,-12,-13,-10,-16,-14,-12,-11,-9,-11,-9,-11,-11,-12,-19,-12,-10,-12,-10,-10,-7,-5,-3,-5,-9,-2">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BDO.png"
+                                             alt="BDO">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 829121944, 1, 0);">
+                                <input type="radio" id="season_GRU"
+                                       name="radioVS"
+                                       class="season_check season_GRU"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_GRU"
+                                       alt="GRU"
+                                       title="GRU"
+                                       data-diff="0,-3,-7,-4,-4,-15,-9,-4,-2,-8,-6,-5,-1,-8,3,-5,-3,-1,-8,-5,-7,-5,-4,-3,-8,-3,-14,-15,-16,-18,-19,-11,-8,-9,-5,-4,-3,-2,-5,-2,-2">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/GRU.png"
+                                             alt="GRU">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 836121944, 1, 0);">
+                                <input type="radio" id="season_WB"
+                                       name="radioVS"
+                                       class="season_check season_WB"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_WB"
+                                       alt="WB"
+                                       title="WB"
+                                       data-diff="0,-7,-8,-8,-6,-13,-9,-6,-7,-6,-10,-9,-10,-10,-5,-8,-9,-5,-12,-7,-11,-7,-5,-6,-10,-8,-13,-13,-12,-18,-14,-10,-6,-9,-8,-5,-7,-4,-10,-9,-7">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WB.png"
+                                             alt="WB">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 848121944, 1, 0);">
+                                <input type="radio" id="season_WS"
+                                       name="radioVS"
+                                       class="season_check season_WS"
+                                       checked disabled>
+                                <label class="_season_vs_label"
+                                       for="season_WS"
+                                       alt="WS"
+                                       title="WS"
+                                       data-diff="0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WS.png"
+                                             alt="WS">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 852121944, 1, 0);">
+                                <input type="radio" id="season_FAC"
+                                       name="radioVS"
+                                       class="season_check season_FAC"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_FAC"
+                                       alt="FAC"
+                                       title="FAC"
+                                       data-diff="0,-3,-5,-4,-2,-8,-5,-3,-3,-3,-6,-6,-5,-5,-3,-4,-4,-2,-8,-3,-6,-2,-2,-3,-7,-3,-8,-8,-7,-13,-9,-6,-2,-5,-4,-3,-4,-4,-5,-3,-2">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/FAC.png"
+                                             alt="FAC">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 861121944, 1, 0);">
+                                <input type="radio" id="season_WG"
+                                       name="radioVS"
+                                       class="season_check season_WG"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_WG"
+                                       alt="WG"
+                                       title="WG"
+                                       data-diff="0,2,2,2,1,-10,0,1,3,2,2,4,5,-2,2,1,3,4,-1,1,0,0,1,2,-2,2,-11,-9,-7,-12,-15,-2,3,1,1,2,3,8,5,8,8">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WG.png"
+                                             alt="WG">
+
+                                </label>
+                            </div>
+                            <div class="season" onclick="DataCenter.GetPlayerCompareForDetail(848121944, 877121944, 1, 0);">
+                                <input type="radio" id="season_UC"
+                                       name="radioVS"
+                                       class="season_check season_UC"
+                                        disabled>
+                                <label class="_season_vs_label"
+                                       for="season_UC"
+                                       alt="UC"
+                                       title="UC"
+                                       data-diff="0,5,4,5,6,5,5,5,6,5,5,4,4,5,4,4,6,4,6,5,5,5,6,5,5,6,4,6,5,5,5,6,4,3,6,6,5,6,4,6,6">
+
+                                        <img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/UC.png"
+                                             alt="UC">
+
+                                </label>
+                            </div>
+                    </div>
+                    <div class="pop_alert alert_toast" style="display: none;">
+                        <span class="ico ico_dt_ap_big"></span>
+                        <p>동일한 능력치 대조를 위해 강화/소속/특성 팀컬러는 적용되지 않습니다.</p>
+                    </div>
+                </div>
+                <ul>
+                        <li class="ab">
+                            <div class="txt">스피드</div>
+                            <div class="value over110">
+                                114 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab">
+                            <div class="txt">슛</div>
+                            <div class="value over110">
+                                115 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab">
+                            <div class="txt">패스</div>
+                            <div class="value over120">
+                                120 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab">
+                            <div class="txt">드리블</div>
+                            <div class="value over110">
+                                118 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab">
+                            <div class="txt">수비</div>
+                            <div class="value over110">
+                                117 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab">
+                            <div class="txt">피지컬</div>
+                            <div class="value over110">
+                                118 <span class="diff"></span>
+                            </div>
+                        </li>
+                </ul>
+            </div>
+            <div class="content_bottom">
+                <div class="position_tabs">
+                    <ul>
+                        <li class="active">
+                            <a href="javascript:;"
+                               onclick="fn_PositionTabChagePlayerInfo(this, 99);">총 능력치</a>
+                        </li>
+                            <li>
+                                <a href="javascript:;"
+                                   onclick="fn_PositionTabChagePlayerInfo(this, 14);">CM</a>
+                            </li>
+                                                                    </ul>
+                </div>
+
+
+                <ul class="data_wrap data_wrap_playerinfo">
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,12,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">속력</div>
+                        <div class="value over110">
+                            115 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",2,3,7,8,12,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">가속력</div>
+                        <div class="value over110">
+                            113 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">골 결정력</div>
+                        <div class="value over110">
+                            110 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",20,21,22,24,25,26,">
+                        <div class="txt">슛 파워</div>
+                        <div class="value over120">
+                            124 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",13,14,15,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">중거리 슛</div>
+                        <div class="value over120">
+                            121 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">위치 선정</div>
+                        <div class="value over110">
+                            117 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",24,25,26,">
+                        <div class="txt">발리슛</div>
+                        <div class="value over100">
+                            108 <span class="diff"></span>
+                        </div>
+                    </li>
+                </ul>
+                <ul class="data_wrap data_wrap_playerinfo">
+                    <li class="ab"
+                        data-positon="">
+                        <div class="txt">페널티 킥</div>
+                        <div class="value over100">
+                            106 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">짧은 패스</div>
+                        <div class="value over120">
+                            121 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,27,">
+                        <div class="txt">시야</div>
+                        <div class="value over120">
+                            120 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",2,3,7,8,12,16,23,27,">
+                        <div class="txt">크로스</div>
+                        <div class="value over110">
+                            119 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",9,10,11,12,13,14,15,16,17,18,19,">
+                        <div class="txt">긴 패스</div>
+                        <div class="value over120">
+                            124 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon="">
+                        <div class="txt">프리킥</div>
+                        <div class="value over110">
+                            119
+                            <span class="diff"></span>
+                        </div>
+                    </li>
+                    <!-- 12 -->
+
+                    <li class="ab"
+                        data-positon="">
+                        <div class="txt">커브</div>
+                        <div class="value over120">
+                            122 <span class="diff"></span>
+                        </div>
+                    </li>
+                </ul>
+                <ul class="data_wrap data_wrap_playerinfo">
+                    <li class="ab"
+                        data-positon=",2,8,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">드리블</div>
+                        <div class="value over120">
+                            120 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">볼 컨트롤</div>
+                        <div class="value over110">
+                            119 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",17,18,19,23,27,">
+                        <div class="txt">민첩성</div>
+                        <div class="value over110">
+                            114 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon="">
+                        <div class="txt">밸런스</div>
+                        <div class="value over120">
+                            122 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,">
+                        <div class="txt">반응 속도</div>
+                        <div class="value over110">
+                            114 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,9,10,11,">
+                        <div class="txt">대인 수비</div>
+                        <div class="value over110">
+                            116 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,9,10,11,13,14,15,">
+                        <div class="txt">태클</div>
+                        <div class="value over110">
+                            119
+                            <span class="diff"></span>
+                        </div>
+                    </li>
+                </ul>
+                <ul class="data_wrap data_wrap_playerinfo">
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,9,10,11,13,14,15,">
+                        <div class="txt">가로채기</div>
+                        <div class="value over110">
+                            118 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,3,4,5,6,7,20,21,22,24,25,26,">
+                        <div class="txt">헤더</div>
+                        <div class="value over120">
+                            120
+                            <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,2,3,4,5,6,7,8,9,10,11,">
+                        <div class="txt">슬라이딩 태클</div>
+                        <div class="value over110">
+                            118 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,4,5,6,9,10,11,24,25,26,">
+                        <div class="txt">몸싸움</div>
+                        <div class="value over110">
+                            115 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <!-- 24 -->
+
+
+                    <li class="ab"
+                        data-positon=",2,3,7,8,9,10,11,12,13,14,15,16,">
+                        <div class="txt">스태미너</div>
+                        <div class="value over120">
+                            123 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,4,5,6,9,10,11,">
+                        <div class="txt">적극성</div>
+                        <div class="value over120">
+                            124 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <li class="ab"
+                        data-positon=",1,4,5,6,">
+                        <div class="txt">점프</div>
+                        <div class="value over110">
+                            110 <span class="diff"></span>
+                        </div>
+                    </li>
+                    <!-- 34 -->
+                    <li class="ab"
+                        data-positon="">
+                        <div class="txt">침착성</div>
+                        <div class="value over110">
+                            118 <span class="diff"></span>
+                        </div>
+                    </li>
+                </ul>
+
+                    <ul class="data_wrap data_wrap_playerinfo">
+                        <li class="ab"
+                            data-positon=",0,">
+                            <div class="txt">GK 다이빙</div>
+                            <div class="value over20">
+                                25 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab"
+                            data-positon=",0,">
+                            <div class="txt">GK 핸들링</div>
+                            <div class="value over20">
+                                23 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab"
+                            data-positon=",0,">
+                            <div class="txt">GK 킥</div>
+                            <div class="value over20">
+                                26 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab"
+                            data-positon=",0,">
+                            <div class="txt">GK 반응속도</div>
+                            <div class="value over20">
+                                24 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <li class="ab"
+                            data-positon=",0,">
+                            <div class="txt">GK 위치 선정</div>
+                            <div class="value over20">
+                                23 <span class="diff"></span>
+                            </div>
+                        </li>
+                        <!-- 34 -->
+                    </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<script>
+    DataCenter.GetPlayerPriceChart(this, '848121944', 1, 'PlayerPriceGraph');
+
+</script>
+<script>
+(function () {
+    "use strict";
+
+    /*
+     * 서버에서만 구할 수 있는 값
+     * 이 부분만 Razor를 사용합니다.
+     */
+    var playerData = {
+        spid: 848121944,
+        playerName: "슈바인슈타이거",
+        seasonCode: "Winning Streak",
+        strong: 1
+    };
+
+    /*
+     * 카카오 공유 설정
+     */
+    var KAKAO_SHARE_IMAGE_URL =
+        "https://ssl.nexon.com/s2/game/fc/online/obt/squadMaker/share/kakao_share.jpg";
+
+    /*
+     * 공유 제목과 주소는 JavaScript에서 생성
+     */
+    var KAKAO_SHARE_TITLE =
+        playerData.seasonCode +
+        " " +
+        playerData.playerName +
+        "의 오버롤은?";
+
+    var KAKAO_SHARE_LINK =
+        window.location.origin +
+        "/DataCenter/PlayerInfo" +
+        "?spid=" + encodeURIComponent(playerData.spid) +
+        "&n1Strong=" + encodeURIComponent(playerData.strong) +
+        "&kakao=1";
+
+    /*
+     * 로그에 사용할 시즌 ID
+     */
+    var shareId = playerData.seasonCode;
+    var shareValue1 = "&shareValue1=" + encodeURIComponent(playerData.spid);
+    var shareValue2 = "&shareValue2=" + encodeURIComponent(playerData.strong);
+
+    /*
+     * 신규/복귀 팝업 데이터
+     */
+    var layerConfirmContentMap = {
+        new: {
+            message:
+                "<strong>잠깐!</strong><br>" +
+                "신규 구단주님 이신가요?<br>" +
+                "지금 스쿼드메이커에 방문하여<br>" +
+                "구단주님만의 스쿼드를 구상해보세요!",
+
+            buttonText: "스쿼드 메이커 이동하기",
+            buttonUrl: "/SquadMaker?kakao=1&shareFrom=detailNew" + shareValue1 + shareValue2,
+            clickLogType: "12"
+        },
+
+        return: {
+            message:
+                "<strong>잠깐!</strong><br>" +
+                "복귀 구단주님 이신가요?<br>" +
+                "한창이던 시절 짰던 내 스쿼드를 확인해보세요!",
+
+            buttonText: "내 스쿼드 확인하기",
+            buttonUrl: "/SquadMaker?kakao=1&openMySquad=1&shareFrom=detailReturn" + shareValue1 + shareValue2,
+            clickLogType: "13"
+        }
+    };
+
+    function getCookie(name) {
+        var cookies = document.cookie.split(";");
+        var targetName = name + "=";
+
+        for (var i = 0; i < cookies.length; i++) {
+            var cookie = cookies[i].trim();
+
+            if (cookie.indexOf(targetName) === 0) {
+                return cookie.substring(targetName.length);
+            }
+        }
+
+        return null;
+    }
+
+    function getNxchInfo() {
+        var nxch = getCookie("NXCH");
+
+        if (!nxch) {
+            return null;
+        }
+
+        var result = {};
+        var items = nxch.split("&");
+
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            var separatorIndex = item.indexOf("=");
+
+            if (separatorIndex === -1) {
+                continue;
+            }
+
+            var key = item.substring(0, separatorIndex);
+            var value = item.substring(separatorIndex + 1);
+
+            try {
+                value = decodeURIComponent(value);
+            } catch (error) {
+                /*
+                 * NXCH 값이 EUC-KR 형식이면
+                 * decodeURIComponent가 실패할 수 있으므로 원본 유지
+                 */
+            }
+
+            result[key] = value;
+        }
+
+        return result;
+    }
+
+    function isLogin() {
+        var nxchInfo = getNxchInfo();
+
+        return Boolean(
+            nxchInfo &&
+            nxchInfo.OID &&
+            nxchInfo.OID !== "0"
+        );
+    }
+
+    var cachedUserSegment = null;
+    var isResolvingUserSegment = false;
+    var pendingUserSegmentCallbacks = [];
+
+    function getSegmentFromResultData(resultData) {
+        switch (Number(resultData)) {
+            case 1:
+                return "new";
+            case 2:
+                return "return";
+            default:
+                return "exist";
+        }
+    }
+
+    function flushUserSegmentCallbacks(segment) {
+        var callbacks = pendingUserSegmentCallbacks.slice();
+        pendingUserSegmentCallbacks = [];
+
+        for (var i = 0; i < callbacks.length; i++) {
+            callbacks[i](segment);
+        }
+    }
+
+    function resolveUserSegment(callback) {
+        if (!isLogin()) {
+            callback("guest");
+            return;
+        }
+
+        if (cachedUserSegment) {
+            callback(cachedUserSegment);
+            return;
+        }
+
+        pendingUserSegmentCallbacks.push(callback);
+
+        if (isResolvingUserSegment) {
+            return;
+        }
+
+        isResolvingUserSegment = true;
+
+        $.ajax({
+            url: "/common/getnewandreturn",
+            type: "GET",
+            dataType: "json",
+            cache: false
+        })
+        .done(function (response) {
+            if (!response || Number(response.ResultCode) !== 1) {
+                console.error(
+                    "정상적인 응답이 아닙니다.",
+                    response
+                );
+                cachedUserSegment = "exist";
+                return;
+            }
+
+            cachedUserSegment = getSegmentFromResultData(response.ResultData);
+        })
+        .fail(function (xhr, status, error) {
+            console.error(
+                "getnewandreturn 호출 실패",
+                {
+                    status: xhr.status,
+                    statusText: status,
+                    error: error,
+                    responseText: xhr.responseText
+                }
+            );
+            cachedUserSegment = "exist";
+        })
+        .always(function () {
+            isResolvingUserSegment = false;
+            flushUserSegmentCallbacks(cachedUserSegment || "exist");
+        });
+    }
+
+    function sendShareLog(webType) {
+        if (
+            !window.$h ||
+            !window.$h.a2s ||
+            typeof window.$h.a2s.sendClickLog !== "function"
+        ) {
+            console.warn("sendClickLog 함수를 찾을 수 없습니다.");
+            return;
+        }
+
+        resolveUserSegment(function (segment) {
+            var normalizedWebType = String(webType);
+
+            window.$h.a2s.sendClickLog(
+                "FCO_Share_PoC",
+                JSON.stringify({
+                    type: normalizedWebType,
+                    value: String(playerData.spid),
+                    segment: segment
+                })
+            );
+        });
+    }
+
+    /*
+     * HTML onclick에서 호출할 수 있도록 window에 등록
+     */
+    window.shareKakao = function () {
+        sendShareLog("6");
+        try {
+            window.Kakao.Share.sendDefault({
+                objectType: "feed",
+
+                content: {
+                    description:
+                        "상세 내용은 선수 상세 보기를 클릭하여 확인해보세요!",
+
+                    imageUrl: KAKAO_SHARE_IMAGE_URL,
+                    imageWidth: 800,
+                    imageHeight: 400,
+
+                    link: {
+                        mobileWebUrl: KAKAO_SHARE_LINK,
+                        webUrl: KAKAO_SHARE_LINK
+                    }
+                },
+
+                itemContent: {
+                    profileText: "FC 온라인",
+                    profileImageUrl: KAKAO_SHARE_IMAGE_URL,
+                    titleImageText: KAKAO_SHARE_TITLE,
+                    titleImageCategory: "FC 온라인 데이터센터"
+                },
+
+                buttons: [
+                    {
+                        title: "선수 상세 보기",
+
+                        link: {
+                            mobileWebUrl: KAKAO_SHARE_LINK,
+                            webUrl: KAKAO_SHARE_LINK
+                        }
+                    }
+                ]
+            });
+        } catch (error) {
+            return false;
+        }
+        return false;
+    };
+
+    window.openLayerConfirm = function (userType) {
+        var popupData = layerConfirmContentMap[userType];
+
+        if (!popupData) {
+            return;
+        }
+
+        var $layerConfirm = $("#layerConfirm");
+
+        $layerConfirm
+            .find(".message")
+            .html(popupData.message);
+
+        $layerConfirm
+            .find(".btn_confirm")
+            .text(popupData.buttonText)
+            .attr("href", popupData.buttonUrl)
+            .attr(
+                "data-log-type",
+                popupData.clickLogType || ""
+            );
+
+        $layerConfirm
+            .stop(true, true)
+            .fadeIn(400);
+    };
+
+    window.closeLayerConfirm = function () {
+        var $layerConfirm = $("#layerConfirm");
+
+        if ($layerConfirm.is(":visible")) {
+            sendShareLog("9");
+        }
+
+        $layerConfirm
+            .stop(true, true)
+            .fadeOut(400);
+
+        return false;
+    };
+
+    window.moveLayerConfirm = function () {
+        var $button =
+            $("#layerConfirm .btn_confirm");
+
+        var targetUrl =
+            $button.attr("href");
+
+        var clickLogType =
+            $button.attr("data-log-type");
+
+        if (!targetUrl) {
+            return false;
+        }
+
+        if (clickLogType) {
+            sendShareLog(clickLogType);
+        }
+
+        window.open(
+            targetUrl,
+            "_blank",
+            "noopener,noreferrer"
+        );
+
+        var $layerConfirm = $("#layerConfirm");
+
+        $layerConfirm
+            .stop(true, true)
+            .fadeOut(400);
+        return false;
+    };
+
+    function checkNewOrReturnUser() {
+        resolveUserSegment(function (segment) {
+            switch (segment) {
+                case "new":
+                    openLayerConfirm("new");
+                    break;
+
+                case "return":
+                    openLayerConfirm("return");
+                    break;
+            }
+        });
+    }
+
+    /*
+     * 팝업 바깥 영역 클릭
+     */
+    $(document).on(
+        "click",
+        "#layerConfirm",
+        function (event) {
+            if ($(event.target).is("#layerConfirm")) {
+                closeLayerConfirm();
+            }
+        }
+    );
+
+    /*
+     * ESC 팝업 닫기
+     */
+    $(document).on("keydown", function (event) {
+        if (
+            event.key === "Escape" &&
+            $("#layerConfirm").is(":visible")
+        ) {
+            closeLayerConfirm();
+        }
+    });
+
+    /*
+     * 카카오 공유 링크 유입 사용자 확인
+     */
+    $(function () {
+        var searchParams =
+            new URLSearchParams(
+                window.location.search
+            );
+
+        var isKakaoEntry =
+            searchParams.get("kakao") === "1";
+
+        if (!isKakaoEntry) {
+            return;
+        }
+
+        sendShareLog("11");
+
+        if (!isLogin()) {
+            return;
+        }
+
+        checkNewOrReturnUser();
+    });
+})();
+</script>
+<div
+    class="confirm layer_popup"
+    id="layerConfirm"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="layerConfirmTitle"
+>
+    <div class="content clearfix">
+        <h4 class="title" id="layerConfirmTitle">
+            선수 상세
+        </h4>
+
+        <button
+            type="button"
+            onclick="return closeLayerConfirm();"
+            class="btn_close"
+        >
+            <span class="hidden">닫기</span>
+        </button>
+
+        <div class="item">
+            <p class="message"></p>
+        </div>
+
+        <div class="button">
+            <a
+                href="#"
+                onclick="return moveLayerConfirm();"
+                class="btn_confirm"
+            >
+                이동하기
+            </a>
+        </div>
+    </div>
+</div>
+
+<style>
+.layer_popup {
+    position: fixed;
+    top: 0;
+    left: 0;
+    display: none;
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    background-color: rgba(0, 0, 0, 0.7);
+    z-index: 10000;
+}
+
+.layer_popup .content {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    box-sizing: border-box;
+    width: 680px;
+    background-color: #fff;
+    box-shadow: 0 0 32px rgba(0, 0, 0, 0.8);
+    transform: translate(-50%, -50%);
+    z-index: 100;
+}
+
+.layer_popup .content .title {
+    position: relative;
+    height: 64px;
+    margin: 0;
+    background-color: #fff;
+    box-shadow: inset 0 -1px 0 rgba(220, 220, 220, 1);
+    color: #000;
+    font-size: 20px;
+    font-weight: 500;
+    line-height: 64px;
+    text-align: center;
+    z-index: 10;
+}
+
+.layer_popup .content .btn_close {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 64px;
+    height: 64px;
+    padding: 0;
+    border: 0;
+    box-shadow: inset 1px 0 0 rgba(220, 220, 220, 1);
+    background:
+        url("https://ssl.nexon.com/s2/game/fo4/event/2020/200402_layer_common_/btn_close.png")
+        left top
+        no-repeat;
+    cursor: pointer;
+    z-index: 16;
+}
+
+.layer_popup .content .btn_close::after {
+    content: "닫기(ESC)";
+    position: absolute;
+    top: -30px;
+    right: 0;
+    color: #b2b2b3;
+    font-size: 14px;
+    font-weight: 300;
+    letter-spacing: -0.5px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 1;
+}
+
+#layerConfirm .content {
+    width: 530px;
+}
+
+#layerConfirm .content .item .message {
+    margin: 0;
+    padding: 32px 20px;
+    color: #000;
+    font-size: 16px;
+    line-height: 1.5;
+    text-align: center;
+}
+
+#layerConfirm .content .item .message strong {
+    color: #08de68;
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+.layer_popup .content .button {
+    overflow: hidden;
+}
+
+.layer_popup .content .button .btn_confirm {
+    display: block;
+    width: 100%;
+    background-color: #08de68;
+    color: #fff;
+    font-size: 24px;
+    line-height: 72px;
+    text-align: center;
+    text-decoration: none;
+}
+
+.hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+}
+</style>

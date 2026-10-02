@@ -1,0 +1,1146 @@
+
+
+
+    <!doctype html>
+    <html lang="ko">
+    <head>
+        <title>EA SPORTS™ FC ONLINE</title>
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta charset="utf-8" />
+        <!-- icon -->
+        <link rel="shortcut icon" type="image/x-icon" href="https://ssl.nexon.com/s2/game/fc/online/common/fc_favicon.ico" />
+        <link rel="apple-touch-icon-precomposed" href="https://ssl.nexon.com/s2/game/fc/online/obt/mobile_120.png" />
+        <link rel="apple-touch-icon-precomposed" sizes="180x180" href="https://ssl.nexon.com/s2/game/fc/online/obt/mobile_180.png" />
+        <!-- //icon -->
+        <!-- metaset -->
+        <meta name="robots" content="index,follow" />
+        <meta name="description" content="EA SPORTS &trade; FC ONLINE - NEXON Korea" />
+        <meta name="author" content="NEXON Korea" />
+        <meta name="keywords" content="NEXON, 넥슨, NEXON Korea, 넥슨코리아, FC, FC 온라인, EA, EA Sports, 스포츠" />
+        <meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0,user-scalable=no" />
+        <!-- //metaset -->
+
+        <script src="https://ssl.nexon.com/s1/fc/online/library/jquery.min.js"></script>
+        <script src="https://ssl.nexon.com/s1/fc/online/library/TweenMax.min.js"></script>
+        <script src="https://ssl.nexon.com/s1/fc/online/obt/swiper.min.js"></script>
+        <script type="text/javascript" src="https://ssl.nexon.com/s1/fc/online/common/ga.js"></script>
+        <script type="text/javascript" src="https://ssl.nexon.com/s1/fc/online/common/gtm.js"></script>
+
+        <script src="https://ssl.nexon.com/s1/nest/sdk.js"></script>
+        <script type="text/javascript" src="/Scripts/common/common.js?202610030212"></script>
+
+        <script src="https://ssl.nexon.com/s1/fc/online/obt/fObject.min.js"></script>
+        <script src="https://ssl.nexon.com/s1/fc/online/obt/fc.m.min.js"></script>
+
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"
+                integrity="sha512-SIMGYRUjwY8+gKg7nn9EItdD8LCADSDfJNutF9TPrvEo86sQmFMh6MyralfIyhADlajSxqc7G0gs7+MwWF/ogQ=="
+                crossorigin="anonymous"
+                referrerpolicy="no-referrer"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2.2.0"></script>
+
+        <!-- css -->
+        <script type="text/javascript" src="/Scripts/datacenter/playerinfo.js?20261003021249"></script>
+        <script type="text/javascript" src="/Scripts/board.js?202610030212"></script>
+
+        <link rel="stylesheet" type="text/css" href="https://ssl.nexon.com/s3/fc/online/obt/fonts_ssl.css" media="all" />
+        <link rel="stylesheet" type="text/css" href="https://ssl.nexon.com/s3/fc/online/obt/fc.m_ssl.css?202610030212" media="all" />
+        <link rel="stylesheet" type="text/css" href="https://ssl.nexon.com/s3/fc/online/obt/seasons_ssl.css?202610030212" media="all" />
+
+        <link rel="stylesheet" type="text/css" href="/content/DataCenter/playerDetail.css" media="all" />
+        <!-- //css -->
+    </head>
+
+    <body id="body" class="fc">
+        <input type="hidden" name="Strong848121944" value="1" />
+        <input type="hidden" name="Grow848121944" value="0" />
+        <input type="hidden" name="TeamColor848121944" value="0" />
+        <input type="hidden" name="SkillMove848121944" value="2" />
+
+        <div id="wrapper">
+            <!-- 본문 -->
+            <section id="content" class="popHelper ">
+                    <!-- 헤더 추가시 -->
+                    <style>
+                        #loungeHeader .title {
+                            font-size: 18px;
+                            font-family: Pretendard, Dotum, 돋움, Helvetica, "Apple SD Gothic Neo", sans-serif;
+                            line-height: 68px;
+                            color: #fff;
+                            font-weight: 600;
+                            padding-left: 44px;
+                        }
+
+                        #loungeHeader .btn_close {
+                            position: absolute;
+                            left: 0;
+                            width: 100%;
+                            height: 100%;
+                            top: 0;
+                            color: #fff;
+                            display: flex;
+                            padding: 0 20px;
+                            justify-content: flex-start;
+                            align-items: center;
+                        }
+
+                        #loungeHeader {
+                            z-index: 1000;
+                            position: fixed;
+                            left: 0;
+                            top: 0;
+                            width: 100%;
+                            background-color: #151616;
+                            text-align: left;
+                        }
+
+                        .players_cotent_wrapper .header_tab {
+                            top: 68px;
+                        }
+
+                        .players_cotent_wrapper .content_tab {
+                            min-height: calc(100vh - 118px);
+                            padding-top: 118px;
+                        }
+
+                        .players_cotent_wrapper .loading {
+                            height: calc(100vh - 118px);
+                            top: 118px;
+                        }
+                    </style>
+                    <section id="loungeHeader">
+                        <p class="title">선수 상세</p>
+                        <button class="btn_close" onclick="history.back(-1)">
+                            <svg width="20"
+                                 height="20"
+                                 viewBox="0 0 20 20"
+                                 fill="none"
+                                 xmlns="http://www.w3.org/2000/svg">
+                                <path d="M14.2524 4.4519L8.75299 10.0072L14.2524 15.5624C14.8052 16.1208 14.8052 17.0228 14.2524 17.5812C13.6996 18.1396 12.8067 18.1396 12.2539 17.5812L5.74816 11.0094C5.19538 10.451 5.19538 9.54899 5.74816 8.9906L12.2539 2.41879C12.8067 1.8604 13.6996 1.8604 14.2524 2.41879C14.791 2.97718 14.8052 3.89351 14.2524 4.4519Z"
+                                      fill="white" />
+                            </svg>
+                        </button>
+                    </section>
+                    <!-- 헤더 추가시 -->
+
+                <div class="playerDetail">
+                    <div class="form_wrap">
+                        <input type="text" id="txtSearchProfile" class="input_coach" name="strPlayerName" placeholder="선수 검색">
+                        <button class="btn_search">
+                            <svg width="23" height="23" viewBox="0 0 23 23" fill="none" xmlns="http://www.w3.org/2000/svg" class="noneFocus">
+                                <g opacity="0.7">
+                                    <circle cx="11.3137" cy="11.3137" r="7" transform="rotate(-45 11.3137 11.3137)" stroke="#A3A7B0" stroke-width="2" />
+                                    <path d="M15.7988 16.3848L17.213 14.9706L22.1628 19.9203L20.7486 21.3345L15.7988 16.3848Z" fill="#A3A7B0" />
+                                </g>
+                            </svg>
+                            <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" class="focus">
+                                <circle cx="14" cy="14" r="14" fill="#D9D9D9" />
+                                <rect x="8.34277" y="9.41418" width="2" height="14" transform="rotate(-45 8.34277 9.41418)" fill="white" />
+                                <rect x="18.2422" y="8" width="2" height="14" transform="rotate(45 18.2422 8)" fill="white" />
+                            </svg>
+                        </button>
+                        <div class="common_quick_list">
+                            <ul><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=289020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/CC.png"></span><span class="pay_q">29</span><span class="ovr">110</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=287189881"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23TOTS.png"></span><span class="pay_q">25</span><span class="ovr">107</span><span class="name"><strong>크리스</strong> 스몰링</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=101000942"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/ICON.png"></span><span class="pay_q">25</span><span class="ovr">106</span><span class="name"><strong>크리스</strong>티안 비에리</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=267020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22TOTS.png"></span><span class="pay_q">27</span><span class="ovr">105</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=273020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WC22.png"></span><span class="pay_q">27</span><span class="ovr">105</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=284020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/RTN.png"></span><span class="pay_q">27</span><span class="ovr">105</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=259020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22TOTN.png"></span><span class="pay_q">26</span><span class="ovr">104</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=289190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/CC.png"></span><span class="pay_q">24</span><span class="ovr">104</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=240020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21TOTY.png"></span><span class="pay_q">26</span><span class="ovr">103</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=256020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BTB.png"></span><span class="pay_q">26</span><span class="ovr">103</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=265204024"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/LOL.png"></span><span class="pay_q">23</span><span class="ovr">103</span><span class="name"><strong>크리스</strong>토프 크라머</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=272020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BWC.png"></span><span class="pay_q">26</span><span class="ovr">103</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=283190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/HG.png"></span><span class="pay_q">24</span><span class="ovr">103</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=291209846"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23HW.png"></span><span class="pay_q">23</span><span class="ovr">103</span><span class="name"><strong>크리스</strong>티안 귄터</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=250020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21TOTS.png"></span><span class="pay_q">26</span><span class="ovr">102</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=251020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/EBS.png"></span><span class="pay_q">25</span><span class="ovr">102</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=252020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/CAP.png"></span><span class="pay_q">25</span><span class="ovr">102</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=265232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/LOL.png"></span><span class="pay_q">22</span><span class="ovr">102</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=279232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23TOTN.png"></span><span class="pay_q">22</span><span class="ovr">102</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=253020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BOE21.png"></span><span class="pay_q">25</span><span class="ovr">101</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=260020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21UCL.png"></span><span class="pay_q">26</span><span class="ovr">101</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=265208268"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/LOL.png"></span><span class="pay_q">22</span><span class="ovr">101</span><span class="name">B. <strong>크리스</strong>탄테</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=267209846"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22TOTS.png"></span><span class="pay_q">22</span><span class="ovr">101</span><span class="name"><strong>크리스</strong>티안 귄터</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=270232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/SPL.png"></span><span class="pay_q">22</span><span class="ovr">101</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=273213661"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WC22.png"></span><span class="pay_q">22</span><span class="ovr">101</span><span class="name">A. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=259232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22TOTN.png"></span><span class="pay_q">21</span><span class="ovr">100</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=264000942"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/FA.png"></span><span class="pay_q">22</span><span class="ovr">100</span><span class="name"><strong>크리스</strong>티안 비에리</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=273227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WC22.png"></span><span class="pay_q">22</span><span class="ovr">100</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=273232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WC22.png"></span><span class="pay_q">21</span><span class="ovr">100</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=283209846"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/HG.png"></span><span class="pay_q">21</span><span class="ovr">100</span><span class="name"><strong>크리스</strong>티안 귄터</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=237020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/MC.png"></span><span class="pay_q">24</span><span class="ovr">99</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=250232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21TOTS.png"></span><span class="pay_q">21</span><span class="ovr">99</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=253213661"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BOE21.png"></span><span class="pay_q">21</span><span class="ovr">99</span><span class="name">A. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=270190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/SPL.png"></span><span class="pay_q">22</span><span class="ovr">99</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=230020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20TOTS.png"></span><span class="pay_q">23</span><span class="ovr">98</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=259209846"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22TOTN.png"></span><span class="pay_q">21</span><span class="ovr">98</span><span class="name"><strong>크리스</strong>티안 귄터</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=260213661"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21UCL.png"></span><span class="pay_q">20</span><span class="ovr">98</span><span class="name">A. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=260233301"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21UCL.png"></span><span class="pay_q">21</span><span class="ovr">98</span><span class="name">R. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=280232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22UCL.png"></span><span class="pay_q">21</span><span class="ovr">98</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=234020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/LH.png"></span><span class="pay_q">23</span><span class="ovr">97</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=242020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20UCL.png"></span><span class="pay_q">23</span><span class="ovr">97</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=246139313"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/UP.png"></span><span class="pay_q">20</span><span class="ovr">97</span><span class="name"><strong>크리스</strong>티안 푹스</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=256190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BTB.png"></span><span class="pay_q">21</span><span class="ovr">97</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=513020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23PLA.png"></span><span class="pay_q">19</span><span class="ovr">97</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=242232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20UCL.png"></span><span class="pay_q">19</span><span class="ovr">96</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=246158856"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/UP.png"></span><span class="pay_q">20</span><span class="ovr">96</span><span class="name"><strong>크리스</strong>티안 겐트너</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=211020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19TOTY.png"></span><span class="pay_q">22</span><span class="ovr">95</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=216020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/HOT.png"></span><span class="pay_q">21</span><span class="ovr">95</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=230189881"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20TOTS.png"></span><span class="pay_q">19</span><span class="ovr">95</span><span class="name"><strong>크리스</strong> 스몰링</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=217020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/COC.png"></span><span class="pay_q">20</span><span class="ovr">94</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=222020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20TOTN.png"></span><span class="pay_q">21</span><span class="ovr">94</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=231184111"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/VTR.png"></span><span class="pay_q">19</span><span class="ovr">94</span><span class="name"><strong>크리스</strong>티앙 벤테케</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=233139313"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/MOG.png"></span><span class="pay_q">18</span><span class="ovr">94</span><span class="name"><strong>크리스</strong>티안 푹스</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=238227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20NG.png"></span><span class="pay_q">19</span><span class="ovr">94</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=511020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22PLA.png"></span><span class="pay_q">20</span><span class="ovr">94</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=214020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/TC.png"></span><span class="pay_q">21</span><span class="ovr">93</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=215020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19TOTS.png"></span><span class="pay_q">20</span><span class="ovr">93</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=233158856"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/MOG.png"></span><span class="pay_q">19</span><span class="ovr">93</span><span class="name"><strong>크리스</strong>티안 겐트너</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=251173752"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/EBS.png"></span><span class="pay_q">18</span><span class="ovr">93</span><span class="name"><strong>크리스</strong> 건터</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=508020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21PLA.png"></span><span class="pay_q">20</span><span class="ovr">93</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=222190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20TOTN.png"></span><span class="pay_q">19</span><span class="ovr">92</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=231149184"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/VTR.png"></span><span class="pay_q">18</span><span class="ovr">92</span><span class="name"><strong>크리스</strong>티안 마조</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=253206114"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BOE21.png"></span><span class="pay_q">18</span><span class="ovr">92</span><span class="name"><strong>크리스</strong>토페르 올손</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=253233201"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BOE21.png"></span><span class="pay_q">17</span><span class="ovr">92</span><span class="name"><strong>크리스</strong> 메팜</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=273233201"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WC22.png"></span><span class="pay_q">17</span><span class="ovr">92</span><span class="name"><strong>크리스</strong> 메팜</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=513232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23PLA.png"></span><span class="pay_q">17</span><span class="ovr">92</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=216190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/HOT.png"></span><span class="pay_q">18</span><span class="ovr">91</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=234190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/LH.png"></span><span class="pay_q">18</span><span class="ovr">91</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=242227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20UCL.png"></span><span class="pay_q">17</span><span class="ovr">91</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=503020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19PLS.png"></span><span class="pay_q">18</span><span class="ovr">91</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=506020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20PLA.png"></span><span class="pay_q">19</span><span class="ovr">91</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=513213661"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23PLA.png"></span><span class="pay_q">18</span><span class="ovr">91</span><span class="name">A. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=207020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/TT.png"></span><span class="pay_q">19</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=212020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/18TOTY.png"></span><span class="pay_q">19</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=215190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19TOTS.png"></span><span class="pay_q">18</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=221227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19UCL.png"></span><span class="pay_q">17</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=246200315"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/UP.png"></span><span class="pay_q">17</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>티안 테요</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=272204024"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BWC.png"></span><span class="pay_q">17</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>토프 크라머</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=502020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19PLA.png"></span><span class="pay_q">18</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=513190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23PLA.png"></span><span class="pay_q">18</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=513227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/23PLA.png"></span><span class="pay_q">17</span><span class="ovr">90</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=217227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/COC.png"></span><span class="pay_q">17</span><span class="ovr">89</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=221020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19UCL.png"></span><span class="pay_q">16</span><span class="ovr">89</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=260227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21UCL.png"></span><span class="pay_q">17</span><span class="ovr">89</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=280227796"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22UCL.png"></span><span class="pay_q">17</span><span class="ovr">89</span><span class="name"><strong>크리스</strong>천 풀리식</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=206020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/TB.png"></span><span class="pay_q">18</span><span class="ovr">88</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=207000942"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/TT.png"></span><span class="pay_q">18</span><span class="ovr">88</span><span class="name"><strong>크리스</strong>티안 비에리</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=242204024"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20UCL.png"></span><span class="pay_q">16</span><span class="ovr">88</span><span class="name"><strong>크리스</strong>토프 크라머</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=242213661"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/20UCL.png"></span><span class="pay_q">15</span><span class="ovr">88</span><span class="name">A. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=253208268"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/BOE21.png"></span><span class="pay_q">16</span><span class="ovr">88</span><span class="name">B. <strong>크리스</strong>탄테</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=280212244"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22UCL.png"></span><span class="pay_q">17</span><span class="ovr">88</span><span class="name"><strong>크리스</strong>토퍼 렌츠</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=500020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/PLC.png"></span><span class="pay_q">19</span><span class="ovr">88</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=511213661"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22PLA.png"></span><span class="pay_q">16</span><span class="ovr">88</span><span class="name">A. <strong>크리스</strong>텐센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=210190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/GR.png"></span><span class="pay_q">17</span><span class="ovr">87</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=501020801"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/18PLS.png"></span><span class="pay_q">17</span><span class="ovr">87</span><span class="name"><strong>크리스</strong>티아누 호날두</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=511190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/22PLA.png"></span><span class="pay_q">16</span><span class="ovr">87</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=206190460"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/TB.png"></span><span class="pay_q">17</span><span class="ovr">86</span><span class="name"><strong>크리스</strong>티안 에릭센</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=219235866"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/19NG.png"></span><span class="pay_q">16</span><span class="ovr">86</span><span class="name"><strong>크리스</strong>티앙 쿠아메</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=508232488"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/21PLA.png"></span><span class="pay_q">15</span><span class="ovr">86</span><span class="name"><strong>크리스</strong>티안 로메로</span></a></li><li class="quick_player" tabindex="2"><a href="https://fconline.nexon.com/DataCenter/PlayerInfo?spid=201000942"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/NHD.png"></span><span class="pay_q">17</span><span class="ovr">85</span><span class="name"><strong>크리스</strong>티안 비에리</span></a></li></ul>
+                        </div>
+                    </div>
+                    <script>
+                        let _quickSearchValue;
+                        let _quickFinding = false;
+                        let _currentSearchValue = "";
+                        let _currentTime;
+                        let _ajaxStart = false;
+
+                        function quickMakeCard(target, json, searchString) {
+                            let html = "";
+
+                            if (json["players"] != "") {
+                                $.each(json["players"], function (index, value) {
+                                    html += `<li class="quick_player" tabindex="2"><a href="/DataCenter/PlayerInfo?strvisit=&spid=${value.spid}"><span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/${value.seasonImgSmall
+                                        }.png"></span><span class="pay_q">${value.pay}</span><span class="ovr">${parseInt(value.ovr) + 3
+                                        }</span><span class="name">${value.name.replace(
+                                            searchString,
+                                            `<strong>${searchString}</strong>`
+                                        )}</span></a></li>`; //선택된클래스의선수는 select 클래스추가
+                                });
+                            }
+
+                            $(target).closest(".form_wrap").find(".common_quick_list ul").html(html);
+                        }
+
+                        function quickSearchCall(target, text) {
+
+                            $(target)
+                                .closest(".form_wrap")
+                                .find(".common_quick_list").show();
+
+                            $(target)
+                                .closest(".form_wrap")
+                                .find(".common_quick_list ul")
+                                .html("<li class='loading'><span class='loader'></span></li>");
+                            if (_ajaxStart) return;
+
+                            _ajaxStart = true;
+
+                            const request = $.ajax({
+                                type: "get",
+                                url:
+                                    "/DataCenter/SquadMakerPlayerList?strPlayerName=" +
+                                    text +
+                                    "&rd=" +
+                                    Math.random(),
+                                dataType: "text",
+                            });
+                            request.done(function (msg) {
+                                let _msg = msg;
+
+                                _quickSearchValue = "";
+                                _currentSearchValue = text;
+
+                                quickMakeCard(target, JSON.parse(_msg), text);
+                                _quickFinding = false;
+                                _ajaxStart = false;
+                            });
+                        }
+
+                        function checkTime(target) {
+                            if (_quickFinding) return;
+
+                            let callback = function () {
+                                let ts = new Date().getTime();
+                                if (ts - 1000 > _currentTime) {
+                                    if (_quickSearchValue.length > 1) {
+                                        quickSearchCall(target, _quickSearchValue);
+                                    }
+                                    _quickFinding = false;
+                                } else {
+                                    requestAnimationFrame(callback);
+                                }
+                            };
+                            requestAnimationFrame(callback);
+                        }
+
+                        //퀵 검색
+                        $("#txtSearchProfile").on("keyup", function (e) {
+                            e.preventDefault();
+                            if (e.keyCode === 13) {
+                                quickSearchCall(this, _quickSearchValue);
+                                $(this).val("");
+                                _quickSearchValue = "";
+                            } else {
+                                _quickSearchValue = $(this).val();
+                                checkTime(this);
+                                _currentTime = new Date().getTime();
+                            }
+                            _quickFinding = true;
+
+                        });
+
+                        $(".btn_search").on("click", function (e) {
+                            e.preventDefault();
+
+                            $(this)
+                                .closest(".form_wrap")
+                                .find(".common_quick_list").hide();
+
+                        });
+
+                        $("#txtSearchProfile").on("focus", function (e) {
+                            $(e.target).val("");
+                        })
+                    </script>
+                    <div class="detailInfo">
+                        <div class="playerThumb">
+                            <div class="playerWrap _WS">
+                                <span class="back"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/card/WS.png" alt="" /></span>
+                                <span class="ovr _area_point">119</span><span class="position mf">CM</span>
+                                <span class="nation">
+<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/countries/smallflags/21.png" alt=""></span>
+<span class="league">
+<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/league/dark/ca/d2028.png" alt=""></span>
+<span class="team">
+<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/crests/dark/small/d130493.png" alt=""></span>
+
+                                <span class="thumb"><span class="img action"><img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersActionHigh/p848121944.png?rd=202610030210" alt="" /></span></span>
+                                <span class="buildUp buildUp1"><span>1</span></span>
+                                <span class="nameWrap">
+                                    <span class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WS.png" /></span>
+                                    <span class="name"><span>슈바인슈타이거</span></span>
+                                </span>
+                                <span class="pay">
+                                    <svg width="34px" height="34px">
+                                        <path fillrule="evenodd" stroke="#fff" strokewidth="2px" strokelinecap="butt" strokelinejoin="miter" fill="none" d="M17,33 L1,26 L1,8 L17,1 L33,8 L33,26 L17,33 Z"></path>
+                                    </svg>
+                                    <span>30</span>
+                                </span>
+                            </div>
+                        </div>
+                        <div class="infoWrap">
+                            <button class="btnAction">
+                                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+                                    <rect x="0.5" y="0.5" width="27" height="27" fill="url(#pattern0_3_8317)" stroke="#DCE0EA"/>
+                                    <defs>
+                                    <pattern id="pattern0_3_8317" patternContentUnits="objectBoundingBox" width="1" height="1">
+                                    <use xlink:href="#image0_3_8317" transform="scale(0.0357143)"/>
+                                    </pattern>
+                                    <image id="image0_3_8317" width="28" height="28" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAydpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDkuMS1jMDAyIDc5LmE2YTYzOTY4YSwgMjAyNC8wMy8wNi0xMTo1MjowNSAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RSZWY9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZVJlZiMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI1LjEyIChXaW5kb3dzKSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDo4MEI1RDIyNEEwMTkxMUVGQjQyMTk2MUE2MTM4NTk0MiIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDo4MEI1RDIyNUEwMTkxMUVGQjQyMTk2MUE2MTM4NTk0MiI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOjgwQjVEMjIyQTAxOTExRUZCNDIxOTYxQTYxMzg1OTQyIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjgwQjVEMjIzQTAxOTExRUZCNDIxOTYxQTYxMzg1OTQyIi8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+n0J1/AAAAOFJREFUeNpi3LT9IAM9ARMDncGohaMW0txCTiDeAMRfgfgblM1JSwuXAfF/IFYFYmUoez4pBrCQaKEb1LJnUH42EN8eVnG4C4inArEkFIPYW2hpYRQQMwLxXSgGsRNoGYffgTiAXkEKSv69UJ/9hOK7UDFOaluoAcS3oFmhECkOC6Fit6BqqBKkINfvBuIdQJyKJrcJimdD1WhACwWKfNgMxOewWIYMUqFqGqkRpIFAPJcIdXOhaim2UB4aXITAXiCWo4aFzNDsQAh8JSZNDMqijZEE8xiHpA9HLRzcFgIEGABj1ylMjH2BBgAAAABJRU5ErkJggg=="/>
+                                    </defs>
+                                </svg>
+                                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" class="active">
+                                    <rect x="0.5" y="0.5" width="27" height="27" fill="url(#pattern0_3_8947)" stroke="#DCE0EA"/>
+                                    <rect x="0.5" y="0.5" width="27" height="27" fill="#25C7F5" stroke="#25C7F5"/>
+                                    <rect width="28" height="28" fill="url(#pattern1_3_8947)"/>
+                                    <defs>
+                                    <pattern id="pattern0_3_8947" patternContentUnits="objectBoundingBox" width="1" height="1">
+                                    <use xlink:href="#image0_3_8947" transform="scale(0.0357143)"/>
+                                    </pattern>
+                                    <pattern id="pattern1_3_8947" patternContentUnits="objectBoundingBox" width="1" height="1">
+                                    <use xlink:href="#image1_3_8947" transform="scale(0.0357143)"/>
+                                    </pattern>
+                                    <image id="image0_3_8947" width="28" height="28" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAydpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDkuMS1jMDAyIDc5LmE2YTYzOTY4YSwgMjAyNC8wMy8wNi0xMTo1MjowNSAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RSZWY9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZVJlZiMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI1LjEyIChXaW5kb3dzKSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDo4MEI1RDIyNEEwMTkxMUVGQjQyMTk2MUE2MTM4NTk0MiIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDo4MEI1RDIyNUEwMTkxMUVGQjQyMTk2MUE2MTM4NTk0MiI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOjgwQjVEMjIyQTAxOTExRUZCNDIxOTYxQTYxMzg1OTQyIiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOjgwQjVEMjIzQTAxOTExRUZCNDIxOTYxQTYxMzg1OTQyIi8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+n0J1/AAAAOFJREFUeNpi3LT9IAM9ARMDncGohaMW0txCTiDeAMRfgfgblM1JSwuXAfF/IFYFYmUoez4pBrCQaKEb1LJnUH42EN8eVnG4C4inArEkFIPYW2hpYRQQMwLxXSgGsRNoGYffgTiAXkEKSv69UJ/9hOK7UDFOaluoAcS3oFmhECkOC6Fit6BqqBKkINfvBuIdQJyKJrcJimdD1WhACwWKfNgMxOewWIYMUqFqGqkRpIFAPJcIdXOhaim2UB4aXITAXiCWo4aFzNDsQAh8JSZNDMqijZEE8xiHpA9HLRzcFgIEGABj1ylMjH2BBgAAAABJRU5ErkJggg=="/>
+                                    <image id="image1_3_8947" width="28" height="28" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAAydpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDkuMS1jMDAyIDc5LmE2YTYzOTY4YSwgMjAyNC8wMy8wNi0xMTo1MjowNSAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RSZWY9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZVJlZiMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI1LjEyIChXaW5kb3dzKSIgeG1wTU06SW5zdGFuY2VJRD0ieG1wLmlpZDpFQ0RDQTYyNEEwMTkxMUVGQUY1RERCMjZFQkNBNTA4OSIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDpFQ0RDQTYyNUEwMTkxMUVGQUY1RERCMjZFQkNBNTA4OSI+IDx4bXBNTTpEZXJpdmVkRnJvbSBzdFJlZjppbnN0YW5jZUlEPSJ4bXAuaWlkOkVDRENBNjIyQTAxOTExRUZBRjVEREIyNkVCQ0E1MDg5IiBzdFJlZjpkb2N1bWVudElEPSJ4bXAuZGlkOkVDRENBNjIzQTAxOTExRUZBRjVEREIyNkVCQ0E1MDg5Ii8+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+7S4HeAAAAOdJREFUeNpi/P//PwM9ARMDncGohaMW0txCTiDeAMRfgfgblM1JSwuXATEo46oCsTKUPZ8UAxhJzPhfoZY9g/KlgPg2EHMP2jgk1YfroXQWlJ4GxL+AOJxWPowCORKI70IxiJ1ASx/SNVuAkn8v1Gc/ofguVIyT2hZqAPEtaFYoBGJJKC6Eit2CqiEMQEFKAHMC8WMgno1HzWyoGm5C5hEThz3QvOdPQN1GaJ4sodSHd4HYjwh1flC1FPvwDxDzAvF3AupApc0HIGalNFv8h+Y3opIEIbWDsnpiJKUgGa3xRy2kOgAIMADDH+FtW9BlNQAAAABJRU5ErkJggg=="/>
+                                    </defs>
+                                </svg>
+
+                            </button>
+                            <button class="btnAdd _area_favorit_848121944" data-no="[0]" onclick="PlayerInfo.SetPlayerFavorit(this, 848121944, 1, 1);">
+                                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="0.5" y="0.5" width="27" height="27" fill="white" stroke="#DCE0EA" />
+                                    <path d="M14 7H20V21L14 15.9L8 21V7H14Z" fill="#B2B7C1" />
+                                </svg>
+                            </button>
+                            <div class="nameWrap">
+                                <div class="season"><img src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/WS.png" /></div>
+                                <div class="name">슈바인슈타이거</div>
+                            </div>
+                            <div class="ovrWrap">
+                                    <span><strong class="cm">CM</strong><span class="_area_point">119</span></span>
+                                                                                            </div>
+                            <div class="nationWrap">
+                                <span class="nation">
+                                    <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/countries/smallflags/21.png" alt="" />
+                                    <span class="txt">독일</span>
+                                </span>
+                            </div>
+                            <div class="stat">
+                                <div class="statWrap">
+                                    <span>183cm</span>
+                                    <span>79kg</span>
+                                    <span>보통</span>
+                                    <span>
+                                        L3 –
+                                        <strong>R5</strong>
+                                    </span>
+                                    <br />
+
+                                    <span class="span_bp0" style="display:none">-</span>
+                                    <span class="span_bp1" style="display:none">308,000 BP</span>
+                                    <span class="span_bp2" style="display:none">347,000 BP</span>
+                                    <span class="span_bp3" style="display:none">347,000 BP</span>
+                                    <span class="span_bp4" style="display:none">676,000 BP</span>
+                                    <span class="span_bp5" style="display:none">1,550,000 BP</span>
+                                    <span class="span_bp6" style="display:none">4,020,000 BP</span>
+                                    <span class="span_bp7" style="display:none">9,650,000 BP</span>
+                                    <span class="span_bp8" style="display:none">17,400,000 BP</span>
+                                    <span class="span_bp9" style="display:none">25,200,000 BP</span>
+                                    <span class="span_bp10" style="display:none">55,900,000 BP</span>
+                                    <span class="span_bp11" style="display:none">374,000,000 BP</span>
+                                    <span class="span_bp12" style="display:none">880,000,000 BP</span>
+                                    <span class="span_bp13" style="display:none">2,820,000,000 BP</span>
+
+
+                                    <script>
+                                        $(".span_bp1").show();
+                                    </script>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="contSortinnerTab">
+                        <ul>
+                            <li class="active"><button>능력치</button></li>
+                            <li><button>특징</button></li>
+                            <li><button>시세</button></li>
+                            <li><button>클럽 경력</button></li>
+                        </ul>
+                    </div>
+                    <div class="sortChoiceWrap">
+                        <div class="sortChoiceWrapInner">
+                            <span>강화</span><strong class="en1 _area_option_strong_value">1</strong>
+                            <span>적응도</span><strong class="_area_option_grow_value">1</strong>
+                            <span>능력치</span><strong class="_area_option_position_value">전체</strong>
+                            <span>팀컬러</span><strong class="_area_option_teamcolor_value">-</strong>
+                            <button onclick="$('.vsInfoChange').stop().show();return;">
+                                <svg width="28" height="28" viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="0.5" y="0.5" width="27" height="27" fill="white" stroke="#DCE0EA" />
+                                    <rect width="12" height="2" transform="matrix(-1 0 0 1 20 13)" fill="black" />
+                                    <rect width="12" height="2" transform="matrix(1.19249e-08 -1 -1 -1.19249e-08 15 20)" fill="black" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="detailContent">
+                        <div class="contentItem contentAbility active">
+                            <ul class="data_wrap">
+
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,12,16,17,18,19,20,21,22,23,24,25,26,27,">
+                                    <div class="txt">속력</div>
+                                    <div class="value _area_point over110">115</div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",2,3,7,8,12,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">가속력</div>
+                                    <div class="value _area_point over110 ">113</div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">골 결정력</div>
+                                    <div class="value _area_point over110 ">
+                                        110
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",20,21,22,24,25,26,)">
+                                    <div class="txt">슛 파워</div>
+                                    <div class="value _area_point over120 ">
+                                        124
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",13,14,15,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">중거리 슛</div>
+                                    <div class="value _area_point over120 ">
+                                        121
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">위치 선정</div>
+                                    <div class="value _area_point over110 ">
+                                        117
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",24,25,26,)">
+                                    <div class="txt">발리슛</div>
+                                    <div class="value _area_point over100 ">
+                                        108
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=")">
+                                    <div class="txt">페널티 킥</div>
+                                    <div class="value _area_point over100 ">
+                                        106
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">짧은 패스</div>
+                                    <div class="value _area_point over120 ">
+                                        121
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,27,)">
+                                    <div class="txt">시야</div>
+                                    <div class="value _area_point over120 ">
+                                        120
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",2,3,7,8,12,16,23,27,)">
+                                    <div class="txt">크로스</div>
+                                    <div class="value _area_point over110 ">
+                                        119
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",9,10,11,12,13,14,15,16,17,18,19,)">
+                                    <div class="txt">긴 패스</div>
+                                    <div class="value _area_point over120 ">
+                                        124
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=")">
+                                    <div class="txt">프리킥</div>
+                                    <div class="value _area_point over110 ">
+                                        119
+
+                                    </div>
+                                </li>
+                                <!-- 12 -->
+
+                                <li class="ab"
+                                    data-positon=")">
+                                    <div class="txt">커브</div>
+                                    <div class="value _area_point over120 ">
+                                        122
+                                    </div>
+                                </li>
+
+                                <li class="ab"
+                                    data-positon=",2,8,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">드리블</div>
+                                    <div class="value _area_point over120 ">
+                                        120
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">볼 컨트롤</div>
+                                    <div class="value _area_point over110 ">
+                                        119
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",17,18,19,23,27,)">
+                                    <div class="txt">민첩성</div>
+                                    <div class="value _area_point over110 ">
+                                        114
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=")">
+                                    <div class="txt">밸런스</div>
+                                    <div class="value _area_point over120 ">
+                                        122
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,)">
+                                    <div class="txt">반응 속도</div>
+                                    <div class="value _area_point over110 ">
+                                        114
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,9,10,11,)">
+                                    <div class="txt">대인 수비</div>
+                                    <div class="value _area_point over110 ">
+                                        116
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,9,10,11,13,14,15,)">
+                                    <div class="txt">태클</div>
+                                    <div class="value _area_point over110 ">
+                                        119
+
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,9,10,11,13,14,15,)">
+                                    <div class="txt">가로채기</div>
+                                    <div class="value _area_point over110 ">
+                                        118
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,3,4,5,6,7,20,21,22,24,25,26,)">
+                                    <div class="txt">헤더</div>
+                                    <div class="value _area_point over120 ">
+                                        120
+
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,2,3,4,5,6,7,8,9,10,11,)">
+                                    <div class="txt">슬라이딩 태클</div>
+                                    <div class="value _area_point over110 ">
+                                        118
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,4,5,6,9,10,11,24,25,26,)">
+                                    <div class="txt">몸싸움</div>
+                                    <div class="value _area_point over110 ">
+                                        115
+                                    </div>
+                                </li>
+                                <!-- 24 -->
+
+
+                                <li class="ab"
+                                    data-positon=",2,3,7,8,9,10,11,12,13,14,15,16,)">
+                                    <div class="txt">스태미너</div>
+                                    <div class="value _area_point over120 ">
+                                        123
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,4,5,6,9,10,11,)">
+                                    <div class="txt">적극성</div>
+                                    <div class="value _area_point over120 ">
+                                        124
+                                    </div>
+                                </li>
+                                <li class="ab"
+                                    data-positon=",1,4,5,6,)">
+                                    <div class="txt">점프</div>
+                                    <div class="value _area_point over110 ">
+                                        110
+                                    </div>
+                                </li>
+
+                                <li class="ab"
+                                    data-positon=")">
+                                    <div class="txt">침착성</div>
+                                    <div class="value _area_point over110 ">
+                                        118
+                                    </div>
+                                </li>
+
+                                    <li class="ab"
+                                        data-positon=",0,)">
+                                        <div class="txt">GK 다이빙</div>
+                                        <div class="value _area_point over20 ">
+                                            25
+                                        </div>
+                                    </li>
+                                    <li class="ab"
+                                        data-positon=",0,)">
+                                        <div class="txt">GK 핸들링</div>
+                                        <div class="value _area_point over20 ">
+                                            23
+                                        </div>
+                                    </li>
+                                    <li class="ab"
+                                        data-positon=",0,)">
+                                        <div class="txt">GK 킥</div>
+                                        <div class="value _area_point over20 ">
+                                            26
+                                        </div>
+                                    </li>
+                                    <li class="ab"
+                                        data-positon=",0,)">
+                                        <div class="txt">GK 반응속도</div>
+                                        <div class="value _area_point over20 ">
+                                            24
+                                        </div>
+                                    </li>
+                                    <li class="ab"
+                                        data-positon=",0,)">
+                                        <div class="txt">GK 위치 선정</div>
+                                        <div class="value _area_point over20 ">
+                                            23
+                                        </div>
+                                    </li>
+                            </ul>
+                        </div>
+                        <div class="contentItem contentFeature" style="display:none;">
+                            <ul class="data_wrap">
+                                <li class="ab">
+                                    <div class="txt">출생</div>
+                                    <div class="value">
+                                        1984.08.01 (43세)
+                                    </div>
+                                </li>
+                                <li class="ab">
+                                    <div class="txt">개인기</div>
+                                    <div class="value _area_skillmove">
+                                        <svg width="19" height="18" viewBox="0 0 19 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.19227 17.44L6.27227 11.08L0.832266 7.16H7.51227L9.59227 0.799999L11.6723 7.16H18.3923L12.9523 11.08L15.0323 17.44L9.59227 13.52L4.19227 17.44Z" fill="#F1C018" /></svg><svg width="19" height="18" viewBox="0 0 19 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.19227 17.44L6.27227 11.08L0.832266 7.16H7.51227L9.59227 0.799999L11.6723 7.16H18.3923L12.9523 11.08L15.0323 17.44L9.59227 13.52L4.19227 17.44Z" fill="#F1C018" /></svg><svg width="19" height="18" viewBox="0 0 19 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.19227 17.44L6.27227 11.08L0.832266 7.16H7.51227L9.59227 0.799999L11.6723 7.16H18.3923L12.9523 11.08L15.0323 17.44L9.59227 13.52L4.19227 17.44Z" fill="#F1C018" /></svg><svg width="19" height="18" viewBox="0 0 19 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.19227 17.48L6.27227 11.08L0.832266 7.16H7.51227L9.59227 0.799999L11.6723 7.16H18.3923L12.9523 11.08L15.0323 17.48L9.59227 13.52L4.19227 17.48ZM4.11227 8.2L7.51227 10.68L6.19227 14.68L9.59227 12.2L12.9923 14.68L11.7123 10.68L15.1123 8.2H10.9123L9.59227 4.24L8.31227 8.2H4.11227Z" fill="#8F96A0" /></svg><svg width="19" height="18" viewBox="0 0 19 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.19227 17.48L6.27227 11.08L0.832266 7.16H7.51227L9.59227 0.799999L11.6723 7.16H18.3923L12.9523 11.08L15.0323 17.48L9.59227 13.52L4.19227 17.48ZM4.11227 8.2L7.51227 10.68L6.19227 14.68L9.59227 12.2L12.9923 14.68L11.7123 10.68L15.1123 8.2H10.9123L9.59227 4.24L8.31227 8.2H4.11227Z" fill="#8F96A0" /></svg><svg width="19" height="18" viewBox="0 0 19 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4.19227 17.48L6.27227 11.08L0.832266 7.16H7.51227L9.59227 0.799999L11.6723 7.16H18.3923L12.9523 11.08L15.0323 17.48L9.59227 13.52L4.19227 17.48ZM4.11227 8.2L7.51227 10.68L6.19227 14.68L9.59227 12.2L12.9923 14.68L11.7123 10.68L15.1123 8.2H10.9123L9.59227 4.24L8.31227 8.2H4.11227Z" fill="#8F96A0" /></svg>
+                                    </div>
+                                </li>
+                                <li class="ab">
+                                    <div class="txt">명성</div>
+                                    <div class="value">월드클래스</div>
+                                </li>
+
+                                        <li class="ab feature">
+
+                                            <div class="txt">
+                                                <div class="txtTop">중거리 슛 선호</div>
+                                                <div class="txtBottom">
+                                                    <span>(AI) 중거리 슛을 자주 합니다.</span>
+                                                </div>
+                                            </div>
+                                            <div class="value">
+                                                <div class="featureList">
+
+                                                    <ul>
+                                                        <li>
+                                                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_16.png" alt="중거리 슛 선호" />
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </li>
+                                        <li class="ab feature">
+
+                                            <div class="txt">
+                                                <div class="txtTop">패스 마스터</div>
+                                                <div class="txtBottom">
+                                                    <span>패스 스킬이 뛰어납니다.</span>
+                                                </div>
+                                            </div>
+                                            <div class="value">
+                                                <div class="featureList">
+
+                                                    <ul>
+                                                        <li>
+                                                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_27.png" alt="패스 마스터" />
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </li>
+                                        <li class="ab feature">
+
+                                            <div class="txt">
+                                                <div class="txtTop">긴 패스 선호</div>
+                                                <div class="txtBottom">
+                                                    <span>(AI) 긴 패스를 자주 합니다.</span>
+                                                </div>
+                                            </div>
+                                            <div class="value">
+                                                <div class="featureList">
+
+                                                    <ul>
+                                                        <li>
+                                                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_15.png" alt="긴 패스 선호" />
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </li>
+                                        <li class="ab feature">
+
+                                            <div class="txt">
+                                                <div class="txtTop">플레이 메이커</div>
+                                                <div class="txtBottom">
+                                                    <span>(AI) 팀의 중심이 되어 경기를 조율합니다.</span>
+                                                </div>
+                                            </div>
+                                            <div class="value">
+                                                <div class="featureList">
+
+                                                    <ul>
+                                                        <li>
+                                                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/traits/trait_icon_18.png" alt="플레이 메이커" />
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                        </li>
+
+
+
+
+
+
+                            </ul>
+                        </div>
+                        <div class="contentItem contentPrice _area_PlayerPriceGraph" style="display:none;">
+
+                        </div>
+                        <div class="contentItem contentClub" style="display:none;">
+                            <div class="clubHistory">
+                                <div class="header">
+                                    <div class="year">연도</div>
+                                    <div class="club">클럽</div>
+                                    <div class="rent">임대 여부</div>
+                                </div>
+                                    <div class="listItem">
+                                        <div class="year">2017 ~ 2019</div>
+                                        <div class="club">시카고 파이어 FC</div>
+                                        <div class="rent"></div>
+                                    </div>
+                                    <div class="listItem">
+                                        <div class="year">2015 ~ 2017</div>
+                                        <div class="club">맨체스터 유나이티드</div>
+                                        <div class="rent"></div>
+                                    </div>
+                                    <div class="listItem">
+                                        <div class="year">2002 ~ 2015</div>
+                                        <div class="club">바이에른 뮌헨</div>
+                                        <div class="rent"></div>
+                                    </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="playAvgHistory">
+                        <div class="tit">플레이 평균 기록</div>
+                        <div class="tableWrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>출전</th>
+                                        <th>득점</th>
+                                        <th>도움</th>
+                                        <th>유효 슈팅</th>
+                                        <th>일반 슈팅</th>
+                                        <th>패스 성공률</th>
+                                        <th>드리블 성공률</th>
+                                        <th>공중볼 경합 성공률</th>
+                                        <th>가로채기</th>
+                                        <th>태클 성공률</th>
+                                        <th>차단 성공률</th>
+                                        <th>선방 (골 차단)</th>
+                                        <th>평점</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                        <tr>
+                                            <td>
+                                                <span>20,363</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    0.2
+                                                </span>
+                                                <span>(4,241)</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    0.2
+                                                </span>
+                                                <span>(4,046)</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    0.5
+                                                </span>
+                                                <span>(9,640)</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    0.1
+                                                </span>
+                                                <span>(2,353)</span>
+                                            </td>
+                                            <td>
+                                                <span>83.8%</span>
+                                                <span>186,364/222,387</span>
+                                            </td>
+                                            <td>
+                                                <span>88.5%</span>
+                                                <span>159,612/180,334</span>
+                                            </td>
+                                            <td>
+                                                <span>5.8%</span>
+                                                <span>1,480/25,593</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    0.6
+                                                </span>
+                                                <span>(12,440)</span>
+                                            </td>
+                                            <td>
+                                                <span>69.5%</span>
+                                                <span>12,814/18,427</span>
+                                            </td>
+                                            <td>
+                                                <span>2%</span>
+                                                <span>128/6,539</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    0.2
+                                                </span>
+                                                <span>(4,148)</span>
+                                            </td>
+                                            <td>
+                                                <span>
+                                                    6.6
+                                                </span>
+                                            </td>
+                                        </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="playerEv">
+                        <div class="tit">선수 평가</div>
+                        <div class="pointWrap">
+                            <p class="sco_txt">-</p>
+                            <button class="minus" onclick="CalAssessment(2);">-</button>
+                            <button class="plus" onclick="CalAssessment(1);">+</button>
+                        </div>
+                        <div class="inputWrap">
+
+                                <textarea name="" id="" cols="30" rows="10" placeholder="로그인후 글쓰기 가능합니다."
+                                          disabled="disabled"></textarea>
+                                <button onclick="alert('로그인후 글쓰기 가능합니다.')">등록</button>
+                        </div>
+                    </div>
+                    <div class="commentWrap" id="divCommentList">
+                    </div>
+                </div>
+            </section>
+            <!-- //본문 -->
+        </div>
+
+
+
+        <script>
+            $('.contSortinnerTab').on('click', 'button', function (e) {
+                e.preventDefault();
+                const _idx = $(e.target).closest('li').index();
+                $(this).closest('li').addClass('active').siblings().removeClass('active');
+                $('.detailContent .contentItem').eq(_idx).show().siblings().hide();
+            });
+
+            $('.sortChoiceWrap').on('click', 'button', function (e) {
+                e.preventDefault();
+                const _idx = $(e.target).closest('li').index();
+
+                if ($(this).closest('li').hasClass('active')) {
+                    $(this).closest('li').removeClass('active');
+                } else {
+                    $(this).closest('li').addClass('active').siblings().removeClass('active');
+                }
+            });
+        </script>
+
+
+        <script>
+            PlayerInfo.GetPlayerPriceChart(this, '848121944', 1, 'PlayerPriceGraph');;
+            Article.PlayerCommentList(1, "#divCommentList", "88868", 0);
+        </script>
+
+
+
+        <div class="popup vsInfoChange">
+            <div class="popupHeader">
+                <div class="popupTitle">선수 정보 변경</div>
+                <div class="popupUtils">
+                    <button class="btnPopupClose" onclick="$('.vsInfoChange').stop().hide();return;">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect x="1.3335" y="16" width="1.88561" height="20.7417" transform="rotate(-135 1.3335 16)" fill="#C3C6CD" />
+                            <rect y="1.3335" width="1.88561" height="20.7417" transform="rotate(-45 0 1.3335)" fill="#C3C6CD" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div class="popupContent">
+                <div class="popupContentInner">
+                    <div class="searchDefault">
+                        <div class="searchSort">
+                            <div class="searchSortHeader">
+                                <div class="sortTit">강화</div>
+                            </div>
+                            <div class="searchSortContent">
+                                <div class="sortAdderWrap">
+                                    <button class="btnSortAdder adderPosition btnBuild build1 active" onclick="PlayerInfo.SetStrongOption(1, 848121944);"><span class="enLevel1">1</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build2 " onclick="PlayerInfo.SetStrongOption(2, 848121944);"><span class="enLevel2">2</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build3 " onclick="PlayerInfo.SetStrongOption(3, 848121944);"><span class="enLevel3">3</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build4 " onclick="PlayerInfo.SetStrongOption(4, 848121944);"><span class="enLevel4">4</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build5 " onclick="PlayerInfo.SetStrongOption(5, 848121944);"><span class="enLevel5">5</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build6 " onclick="PlayerInfo.SetStrongOption(6, 848121944);"><span class="enLevel6">6</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build7 " onclick="PlayerInfo.SetStrongOption(7, 848121944);"><span class="enLevel7">7</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build8 " onclick="PlayerInfo.SetStrongOption(8, 848121944);"><span class="enLevel8">8</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build9 " onclick="PlayerInfo.SetStrongOption(9, 848121944);"><span class="enLevel9">9</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build10 " onclick="PlayerInfo.SetStrongOption(10, 848121944);"><span class="enLevel10">10</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build11 " onclick="PlayerInfo.SetStrongOption(11, 848121944);"><span class="enLevel11">11</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build12 " onclick="PlayerInfo.SetStrongOption(12, 848121944);"><span class="enLevel12">12</span></button>
+                                    <button class="btnSortAdder adderPosition btnBuild build13 " onclick="PlayerInfo.SetStrongOption(13, 848121944);"><span class="enLevel13">13</span></button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="searchSort">
+                            <div class="searchSortHeader">
+                                <div class="sortTit">적응도</div>
+                            </div>
+                            <div class="searchSortContent">
+                                <div class="sortAdderWrap">
+                                    <button class="btnSortAdder adderPosition adap active" onclick="PlayerInfo.SetGrowOption(1, 848121944);">
+                                        <span>1</span>
+                                    </button>                                    
+                                    <button class="btnSortAdder adderPosition adap " onclick="PlayerInfo.SetGrowOption(5, 848121944);">
+                                        <span>5</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="searchSort">
+                            <div class="searchSortHeader">
+                                <div class="sortTit">능력치</div>
+                            </div>
+                            <div class="searchSortContent">
+                                <div class="sortAdderWrap">
+                                    <button class="btnSortAdder adderPosition ability active" onclick="fn_PositionTabChagePlayerInfo(this, 99);">
+                                        전체
+                                    </button>
+
+                                            <button class="btnSortAdder adderPosition ability" onclick="fn_PositionTabChagePlayerInfo(this, 14);">CM</button>
+                                                                                                            
+                                </div>
+                            </div>
+                        </div>
+                        <div class="searchSort">
+                            <div class="searchSortHeader">
+                                <div class="sortTit">팀컬러</div>
+                            </div>
+                            <div class="searchSortContent">
+                                <div class="sortAdderWrap">
+                                    <button class="btnSortAdder adderPosition active" onclick="PlayerInfo.SetTeamColorOption(0, 848121944);">
+                                        -
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(1, 848121944);">
+                                        1
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(2, 848121944);">
+                                        2
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(3, 848121944);">
+                                        3
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(4, 848121944);">
+                                        4
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(5, 848121944);">
+                                        5
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(6, 848121944);">
+                                        6
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(7, 848121944);">
+                                        7
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(8, 848121944);">
+                                        8
+                                    </button>
+                                    <button class="btnSortAdder adderPosition " onclick="PlayerInfo.SetTeamColorOption(9, 848121944);">
+                                        9
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="popupBtnArea">
+                    <button class="btnCofirm" onclick="$('.vsInfoChange').stop().hide();return;">확인</button>
+                </div>
+            </div>
+        </div>
+        <script>
+            let selectValue = [];
+            $(".sortAdderWrap").on("click", ".btnSortAdder", function (e) {
+                e.preventDefault();
+                const _target = $(this).addClass("active").siblings().removeClass("active");
+                $(".sortAdderWrap").each(function (idx, item) {
+                    console.log(item)
+                    selectValue[idx] = $(item).find(".active").index();
+                });
+            });
+
+
+
+            var strFavorit = JSON.parse($("._area_favorit_" + 848121944).attr("data-no"));
+
+            if (strFavorit.filter(function (a) { return a == 1; }).length > 0) {
+                $("._area_favorit_" + 848121944).attr("onclick", `PlayerInfo.SetPlayerFavorit(this, ${848121944}, ${0}, ${1})`)
+                $("._area_favorit_" + 848121944).addClass("active");
+            }
+            else {
+                $("._area_favorit_" + 848121944).attr("onclick", `PlayerInfo.SetPlayerFavorit(this, ${848121944}, ${1}, ${1})`)
+                $("._area_favorit_" + 848121944).removeClass("active");
+            }
+        </script>
+        
+<div class="popup makerActionSearchList fullLayout">
+</div>
+
+<script>
+let thumb_currrent_season = "WS";
+let thumb_custom_season = "default";
+
+$(".btnAction, .playerThumb").on("click", function (e) {
+    e.preventDefault();
+    $.ajax({
+        url: "/squadmaker/GetPlayerCustomImgList",
+        type: "POST",
+        cache: false,
+        dataType: "text",
+        data: { spid: 848121944 }
+    }).done(function (_data) {
+        const data = JSON.parse(_data);
+
+        let html = `<div class="popupHeader">
+                        <div class="popupTitle">
+                            선수 사진 변경 (총 <span>${data.length}</span>장)
+                        </div>
+                        <div class="popupUtils">
+                            <button class="btnPrev"><span></span></button>
+                            <button class="btnPopupClose">
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                    <rect x="1.3335" y="16" width="1.88561" height="20.7417" transform="rotate(-135 1.3335 16)" fill="#C3C6CD" />
+                                    <rect y="1.3335" width="1.88561" height="20.7417" transform="rotate(-45 0 1.3335)" fill="#C3C6CD" />
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="popupContent">
+                        <div class="popupContentInner">
+                            <div class="searchListContent">
+                                <div class="searchActionShotList">
+                                    <div class="sortTit">기본 제공 사진</div>
+                                    <div class="defaultShotList">
+                                        <div class="button defaultShot ${!thumb_custom_season || thumb_custom_season === "default" ? "active" : ""}">
+                                            <img class='season' src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/${thumb_currrent_season.toLowerCase().includes("icon_m") ? "/filter/icon_m" : thumb_currrent_season}.png" alt="">
+                                            <img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersActionHigh/p848121944.png?rd=202610030210" alt="" onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'" />
+                                        </div>
+                                    </div>
+                                    <div class="sortTit">전체 사진 리스트 (총 <span>${data.length}</span>장)</div>
+                                    <div class="actionShotList">`;
+
+        const dcItem = data.find((item) => item.season.toLowerCase() === thumb_custom_season.toLowerCase());
+        const otherItems = data.filter((item) => item.season.toLowerCase() !== thumb_custom_season.toLowerCase());
+        const sortData = dcItem ? [dcItem, ...otherItems] : data;
+
+        $.each(sortData, function (index, value) {
+            html += `<div class="button actionShot action${index} ${index === 0 && thumb_custom_season.toLowerCase() === value.season.toLowerCase() ? "active" : ""}" data-season="${value.season.toLowerCase()}">
+                        <img class='season' src="https://ssl.nexon.com/s2/game/fc/online/obt/externalAssets/new/season/${value.season.toLowerCase().includes("icon_m") ? "/filter/icon_m" : value.season}.png" alt="">
+                        ${value.n1Custom === 1 ? 
+                            `<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${value.spid}.png" alt="" onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'" />` : 
+                            value.n1Custom === 2 ? 
+                                `<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${value.spid}.png" alt="" onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'" />` : 
+                            value.n1Custom === 3 ? 
+                                `<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction/p${value.spid % 1000000}.png" alt="" onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'" />` : 
+                                `<img src="https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/players/p${value.spid % 1000000}.png" alt="" onerror="this.src='https://ssl.nexon.com/s2/game/fc/mobile/squadMaker/default/d_player.png'" />`
+                        }
+                    </div>`;
+        });
+
+        html += `</div>
+                <div class="popupAdvice">
+                    <p>인게임 리스트 정보와 일부 상이할 수 있습니다.</p>
+                    <p>라이선스 이슈에 따라 특정 선수 사진이 수정 또는 삭제될 수 있습니다.</p>
+                </div>
+            </div>
+        </div>`;
+
+        let targetHtml = $(".makerActionSearchList");
+        targetHtml.html(html);
+        $(".makerActionSearchList").addClass("active");
+    });
+});
+
+$(".makerActionSearchList").on("click", ".button", function (e) {
+    e.preventDefault();
+    const season = $(this).data("season");
+    const target = $(".playerWrap .thumb img");
+    const targetSrc = $(this).find("img:not(.season)").attr("src");
+
+    $(".playerWrap .img").removeClass("action head").addClass(targetSrc.indexOf("Action") !== -1 ? "action" : "head");
+    target.attr("src", targetSrc);
+
+    thumb_custom_season = season ? season : "default";
+    $(".makerActionSearchList .actionShotList .button").removeClass("active");
+    $(this).addClass("active");
+
+    $(".makerActionSearchList").removeClass("active");
+});
+
+$(".makerActionSearchList").on("click", ".btnPopupClose, .btnPrev", function (e) {
+    e.preventDefault();
+    $(".makerActionSearchList").removeClass("active");
+});
+
+</script>
+
+    </body>
+</html>

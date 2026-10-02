@@ -960,6 +960,61 @@ def test_stat_color_bucket_edges():
     assert pi.stat_color(-5) == pi.STAT_COLOR_BUCKETS[-1][1]
 
 
+# ── 선수 카드 파싱 — 실제 페이지(2026-10-03 받음, 슈바인슈타이거 WS)로 고정 ──────────────────
+# 지어낸 HTML 은 정규식을 베낀 테스트가 된다 — 넥슨이 페이지를 바꾸면 이 자료를 새로 받는다.
+def _pi_parse(kind):
+    import playerinfo as pi
+    html = (Path(_DIR) / f"{kind}_848121944.html").read_text(encoding="utf-8")
+
+    class _R:
+        text = html
+
+        def raise_for_status(self):
+            pass
+
+    saved = (pi._session.get, pi._session.post, config.WEB_DATA)
+    pi._session.get = pi._session.post = lambda *a, **k: _R()
+    config.WEB_DATA = True
+    try:
+        return pi.fetch_player_info(848121944) if kind == "playerinfo" else pi.fetch_player_ability(848121944)
+    finally:
+        pi._session.get, pi._session.post, config.WEB_DATA = saved
+
+
+def test_player_info_real_page():
+    i = _pi_parse("playerinfo")
+    assert (i.name, i.position, i.ovr, i.nation) == ("슈바인슈타이거", "CM", 119, "독일"), vars(i)
+    assert (i.height, i.weight, i.body_type, i.strong_foot, i.weak_foot) == ("183cm", "79kg", "보통", "R5", "L3")
+    assert (i.fame, i.skill_moves, i.skill_moves_max) == ("월드클래스", 3, 6)
+    assert i.photo_url.startswith("https://") and "848121944" in i.photo_url
+    assert i.nation_flag_url.endswith("/21.png") and i.season_icon_url.endswith("/WS.png")
+    assert len(i.abilities) >= 30 and i.abilities["속력"] == 115 and i.abilities["슛 파워"] == 124
+    assert i.prices[1] == "308,000 BP" and i.prices[0] == "-"
+    assert i.traits and i.traits[0].name == "중거리 슛 선호" and i.traits[0].icon_url.endswith(".png")
+    assert i.club_history[0].period == "2017 ~ 2019" and i.club_history[0].club == "시카고 파이어 FC"
+    assert i.group_stats() == {"스피드": 114, "슛": 114, "패스": 121, "드리블": 118, "수비": 118, "피지컬": 118}
+
+
+def test_player_ability_real_page():
+    s = _pi_parse("playerability")
+    assert s.ovr == 119
+    # '드리블'은 요약과 개별 능력치에 같은 이름 — 요약은 첫 번째(118), 개별은 120
+    assert s.groups == {"스피드": 114, "슛": 115, "패스": 120, "드리블": 118, "수비": 117, "피지컬": 118}, s.groups
+    assert s.abilities["드리블"] == 120 and s.abilities["속력"] == 115
+    assert (1010, "바이에른 뮌헨") in s.club_options and (0, "") not in s.club_options
+    assert s.feature_options == [(20011, "독일 황금세대"), (40189, "바이언 첫번째 트레블")]
+    assert s.enhance_options == [] and s.club_levels == []
+    assert len(s.position_ovrs) == 16 and s.position_ovrs["CM"] == 119 and s.position_ovrs["GK"] == 33
+
+
+def test_player_parsing_missing_parts():
+    import playerinfo as pi
+    assert pi._selector_items("<div>목록 없음</div>", "tdefault_wrap") == []
+    # 능력치가 없는 분류는 평균을 내지 않는다(0 으로 나누거나 0 으로 보이지 않게)
+    assert pi.PlayerInfo(sp_id=1, abilities={"속력": 100, "가속력": 90}).group_stats() == {"스피드": 95}
+    assert pi.PlayerInfo(sp_id=1).group_stats() == {}
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

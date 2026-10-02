@@ -2322,6 +2322,110 @@ def _shots():
         _win.grab().save(os.path.join(out, f"{idx + 1:02d}_{item.text()}.png"))
 
 
+# ── 변이 5순위 — 화면 코드 중 사용자가 실제로 겪을 잘못만(2026-10-03) ───────────────────
+# 버튼·표시 분기를 전부 막으면 테스트가 화면 구조에 묶인다. 틀리면 '틀린 숫자·엉뚱한 색·
+# 엉뚱한 조회'가 되는 곳만 고른다.
+def test_selected_season_filter_edges():
+    import seasons as sn_
+    from datetime import date as d_, datetime as dt_
+    saved = _win._rank_seasons
+    s1 = sn_.Season(no=1, name="시즌 1", start=d_(2025, 1, 1), end=d_(2025, 6, 1))
+    _win._rank_seasons = [s1]
+    try:
+        f = _win._in_selected_season
+        assert f(None, s1) is False and f(None, _win.ONGOING) is False   # 날짜 없는 경기는 어디에도 안 든다
+        assert f(dt_(2025, 6, 1, 0, 0), _win.ONGOING)                     # 마지막 종료일 당일부터 진행 중
+        assert not f(dt_(2025, 5, 31, 23, 59), _win.ONGOING)
+        assert f(dt_(2025, 5, 31, 23, 59), s1) and not f(dt_(2025, 6, 1), s1)
+        _win._rank_seasons = []
+        assert not f(dt_(2025, 6, 1), _win.ONGOING)                       # 시즌표가 없으면 진행 중도 없다
+        # 설정 파일에 남기는 시즌 이름 — 셋이 서로 달라야 다음에 켤 때 같은 시즌으로 돌아온다
+        keys = [_win._season_key(None), _win._season_key(_win.ONGOING), _win._season_key(s1)]
+        assert keys == ["all", "ongoing", "s1"], keys
+    finally:
+        _win._rank_seasons = saved
+
+
+def test_match_rows_tinted_by_result():
+    import dataclasses
+    results = ["승", "패", "무", "몰수승", "몰수패", "오류"]
+    ms = [dataclasses.replace(_MATCHES[0], match_id=f"t{i}", result=r) for i, r in enumerate(results)]
+    _win._render_matches(ms)
+    want = {"승": T.WIN, "몰수승": T.WIN, "패": T.LOSE, "몰수패": T.LOSE}
+    seen = set()
+    for r in range(_win.table.rowCount()):
+        res = _win.table.item(r, 1).text()
+        bg = _win.table.item(r, 0).background().color().name().lower()
+        tinted = _win._blend(T.PANEL, want[res], T.ROW_TINT).name().lower() if res in want else None
+        if tinted:
+            assert bg == tinted, (res, bg, tinted)
+        else:
+            assert bg not in (_win._blend(T.PANEL, T.WIN, T.ROW_TINT).name().lower(),
+                              _win._blend(T.PANEL, T.LOSE, T.ROW_TINT).name().lower()), (res, bg)
+        assert _win.table.item(r, 0).data(Qt.ItemDataRole.UserRole), "더블클릭용 경기 id 가 안 붙었다"
+        seen.add(res)
+    assert seen == set(results), seen
+    _win._render_matches(_win._matches)
+
+
+def test_compare_colors_the_better_side():
+    import dataclasses
+    from models import summarize as summ
+    from PyQt6.QtGui import QColor
+    green = QColor(T.GREEN).name()
+    mine = [dataclasses.replace(m, result="승") for m in _MATCHES]
+    opp = [dataclasses.replace(m, result="패", match_id=f"o{i}") for i, m in enumerate(_MATCHES)]
+    saved = (_win._matches, _win._fill_compare_squad, _win.sp_compare_n.value())
+    _win._matches = mine
+    _win._fill_compare_squad = lambda *a: None          # 스쿼드 그림은 이미지 받기라 뺀다
+    _win.sp_compare_n.setValue(len(mine))
+    try:
+        _win._render_compare("상대", opp, "opp", [])
+        a, b = summ(mine), summ(opp)
+        t = _win.tbl_compare
+        assert t.item(0, 1).foreground().color().name() != green                     # 경기수는 우열 없음
+        for r, (label, attr, _fmt, higher) in enumerate(_win.COMPARE_ROWS, start=1):
+            mv, ov = getattr(a, attr), getattr(b, attr)
+            mc, oc = t.item(r, 1).foreground().color().name(), t.item(r, 2).foreground().color().name()
+            if mv == ov:
+                assert green not in (mc, oc), (label, mc, oc)                       # 같으면 아무도 초록이 아니다
+            else:
+                assert (mc == green) == ((mv > ov) == higher) and (oc == green) != (mc == green), (label, mv, ov)
+        assert t.item(1, 1).foreground().color().name() == green, "승률이 높은 쪽(나)이 초록이 아니다"
+        lower_better = next(i for i, row in enumerate(_win.COMPARE_ROWS, start=1) if row[3] is False)
+        assert lower_better and _win.COMPARE_ROWS[lower_better - 1][1] == "avg_goals_against"
+    finally:
+        _win._matches, _win._fill_compare_squad = saved[0], saved[1]
+        _win.sp_compare_n.setValue(saved[2])
+
+
+def test_search_uses_the_box_that_has_text():
+    calls = []
+    saved = (_win._api_search, _win.stack.currentIndex(), _win.ed_search.text(),
+             [e.text() for e in _win._nick_edits])
+    _win._api_search = lambda nick, quiet=False: calls.append(nick)
+    try:
+        _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
+        _win.ed_search.setText("   ")
+        _win._on_search()
+        assert calls == [] and "입력" in _win.lb_search_msg.text()            # 빈 칸은 조회하지 않는다
+        _win.ed_search.setText("  검색칸 ")
+        _win._on_search()
+        assert calls == ["검색칸"] and _win.lb_search_msg.text() == ""
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        for e in _win._nick_edits:
+            e.setText("")
+        _win._nick_edits[-1].setText("위쪽칸")
+        _win._on_search()
+        assert calls[-1] == "위쪽칸", calls                                  # 메인에선 검색 화면 칸을 안 본다
+    finally:
+        _win._api_search = saved[0]
+        _win.stack.setCurrentIndex(saved[1])
+        _win.ed_search.setText(saved[2])
+        for e, t in zip(_win._nick_edits, saved[3]):
+            e.setText(t)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
