@@ -11,6 +11,7 @@ import os
 import sys
 import zipfile
 import zlib
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -186,6 +187,84 @@ def test_changelog_section():
     sec = release.changelog_section("v0.2.0")
     assert "서비스 단계" in sec and "## " not in sec, sec[:200]
     assert release.changelog_section("v9.9.9") == ""
+
+
+# ── main() 의 멈춤 장치 — 검사에 걸리면 정말 멈추나(변이 5순위, 2026-10-02) ────────────────
+class _FakeProc:
+    def __init__(self, stdout="", returncode=0):
+        self.stdout, self.returncode = stdout, returncode
+
+
+def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False):
+    """가짜 빌드 결과(dist/피파전적관리)로 release.main 을 돌린다 → (종료 코드, 출력)."""
+    import contextlib
+    root, dist = tmp / "root", tmp / "root" / "dist"
+    app = dist / release.APP_DIR_NAME
+    internal = app / "_internal"
+    (internal / "orjson").mkdir(parents=True)
+    (app / f"{release.APP_DIR_NAME}.exe").write_bytes(b"exe")
+    (internal / "orjson" / "orjson.cp314-win_amd64.pyd").write_bytes(b"pyd")
+    for n in [n for n, _l, _d in release.notice.THIRD_PARTY] + ["this-app"]:
+        (internal / release.notice.LICENSE_DIR / n).mkdir(parents=True)
+        (internal / release.notice.LICENSE_DIR / n / "LICENSE").write_text("license", encoding="utf-8")
+    controls = b"".join(release.CONTROLS.values()) + (SECRET.encode("utf-8") if leak else b"")
+    (internal / "base.bin").write_bytes(controls)
+    if drop:
+        shutil.rmtree(internal / drop)
+    iss = root / "setup.iss"
+    iss.write_text("; iss", encoding="utf-8")
+
+    def fake_run(cmd, what):
+        if make_setup and "설치" in what:
+            (dist / release.asset_names(release.config.APP_VERSION)[0]).write_bytes(b"setup")
+
+    def fake_sub(cmd, **kw):
+        if cmd[:2] == ["git", "status"]:
+            return _FakeProc(stdout=dirty)
+        if cmd[:3] == ["gh", "release", "view"]:
+            return _FakeProc(returncode=0 if gh_exists else 1)
+        return _FakeProc()
+
+    saved = (release.ROOT, release.DIST, release.ISS, release.find_iscc, release.run,
+             release.subprocess.run, release.changelog_section, release.private_needles, sys.argv)
+    release.ROOT, release.DIST, release.ISS = root, dist, iss
+    release.find_iscc = lambda: (Path("iscc.exe") if iscc else None)
+    release.run, release.subprocess.run = fake_run, fake_sub
+    release.changelog_section = lambda v: "- 바뀐 것"
+    release.private_needles = lambda: NEEDLES
+    sys.argv = ["release.py", "--skip-build"]
+    out = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out):
+            code = release.main()
+    except SystemExit as e:
+        code = e.code
+    finally:
+        (release.ROOT, release.DIST, release.ISS, release.find_iscc, release.run,
+         release.subprocess.run, release.changelog_section, release.private_needles, sys.argv) = saved
+    return code, out.getvalue()
+
+
+def test_release_main_stops_on_every_gate():
+    from pathlib import Path as _P
+    cases = [  # (설명, 인자, 멈춰야 하나, 출력에 있어야 할 말)
+        ("정상", {}, False, "gh release create"),
+        ("이미 있는 릴리스", {"gh_exists": True}, False, "gh release upload"),
+        ("커밋 안 한 변경", {"dirty": " M app_main.py"}, True, "커밋 안 한 변경"),
+        ("Inno Setup 없음", {"iscc": False}, True, "ISCC"),
+        ("라이선스 빠짐", {"drop": f"{release.notice.LICENSE_DIR}/PyQt6"}, True, "라이선스 전문이 빠졌다"),
+        ("orjson 빠짐", {"drop": "orjson"}, True, "빠진 모듈"),
+        ("설치 파일 안 생김", {"make_setup": False}, True, "설치 파일이 안 생겼다"),
+        ("개인정보 섞임", {"leak": True}, True, "개인정보가 들어 있다"),
+    ]
+    for name, kw, should_stop, needle in cases:
+        tmp = _P(tempfile.mkdtemp())
+        try:
+            code, out = _run_main(tmp, **kw)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        assert (code != 0) == should_stop, (name, code, out[-300:])
+        assert needle in out, (name, out[-300:])
 
 
 def main() -> int:

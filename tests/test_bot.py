@@ -401,6 +401,41 @@ def test_server_roundtrip():
         server.server_close()
 
 
+# ── 변이 5순위 보강(2026-10-02) — 봇 응답 문구의 분기 ─────────────────────────────────
+def test_result_mark_each_kind():
+    assert [fmt._result_mark(r) for r in ("승", "몰수승", "무", "패", "몰수패", "오류")] == \
+        ["승", "승", "무", "패", "패", "?"]
+
+
+def test_ranking_message_optional_lines():
+    import ranker
+    full = ranker.RankerInfo(nickname="가", rank=4500, level=3823, team_value_text="93억",
+                             team_value=1, elo=3398.9, win_rate="41.6%", win=1, draw=2, lose=3,
+                             team_color="레알")
+    text = fmt.ranking(full)
+    for want in ("4,500위", "구단가치 93억", "팀컬러 레알", "레벨 3823", "1승 2무 3패"):
+        assert want in text, (want, text)
+    bare = ranker.RankerInfo(nickname="가", rank=1, elo=1.0, win_rate="1%")
+    text = fmt.ranking(bare)
+    assert "구단가치" not in text and "팀컬러" not in text and "레벨" not in text, text
+    assert "안에 없습니다" in fmt.ranking(ranker.RankerInfo(nickname="가"))
+
+
+def test_today_lists_ten_then_counts_rest_and_streak():
+    lookup = _lookup()
+    m0 = lookup.matches[0]
+    import dataclasses
+    from datetime import timedelta as _td
+    day = m0.match_date
+    many = [dataclasses.replace(m0, match_id=f"x{i}", result="승", match_date=day - _td(minutes=i))
+            for i in range(12)]
+    lookup.matches = many
+    text = fmt.today(lookup, on=day.date())
+    assert "… 외 2경기" in text and "마지막 12연승" in text, text
+    lookup.matches = many[:10]
+    assert "… 외" not in fmt.today(lookup, on=day.date())
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

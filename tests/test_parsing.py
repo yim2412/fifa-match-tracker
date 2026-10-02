@@ -936,6 +936,15 @@ def test_migrate_moves_only_missing_files():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_stat_color_bucket_edges():
+    import playerinfo as pi
+    floors = [f for f, _ in pi.STAT_COLOR_BUCKETS]
+    for i, f in enumerate(floors[:-1]):                     # 딱 하한이면 그 색, 하나 아래면 다음 색
+        assert pi.stat_color(f) == pi.STAT_COLOR_BUCKETS[i][1], f
+        assert pi.stat_color(f - 1) == pi.STAT_COLOR_BUCKETS[i + 1][1], f - 1
+    assert pi.stat_color(-5) == pi.STAT_COLOR_BUCKETS[-1][1]
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
