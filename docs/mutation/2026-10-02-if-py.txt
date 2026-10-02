@@ -1,0 +1,329 @@
+[OK] 조각 8개 합침 · 대상 645개
+
+
+잡힘 324 / 못 잡음 321
+
+=== 망가뜨려도 테스트가 전부 초록인 줄 ===
+  analysis.py:349  if total < MIN_GOALS:
+  analysis.py:426  if lines:
+  app_main.py:375  if self._cancel:
+  app_main.py:543  if self._cancel:
+  app_main.py:1741  if divs:
+  app_main.py:2031  if help_text:
+  app_main.py:2345  if found is None:
+  app_main.py:2727  if seasons:
+  app_main.py:3030  if name_item:
+  app_main.py:3312  if info and info.get("seasonImg"):
+  app_main.py:3444  if info.photo_url:
+  app_main.py:3683  if item.layout():
+  app_main.py:3864  if div_points:
+  check_api.py:141  if r.ranked:
+  config.py:77  if src.exists() and not dst.exists():
+  images.py:51  if r.status_code != 200 or not r.content:
+  models.py:35  if self.is_shootout:
+  models.py:202  elif "무" in m.result:
+  models.py:267  if kind and kind == run_kind:
+  models.py:336  elif "무" in m.result:
+  nexon_api.py:164  if cached is not None:
+  playerinfo.py:137  if not m:
+  playerinfo.py:324  if m:
+  ranker.py:151  if m:
+  stats.py:161  if (opp.get("nickname") or "-") != opponent_nickname:
+  stats.py:328  if "승" in res:
+  stats.py:1243  if 1 <= pos <= 8:
+  widgets.py:112  if busy:
+  widgets.py:260  if self._sep is not None:
+  widgets.py:549  if selected:
+  widgets.py:992  if not self._points:
+  widgets.py:1190  if isinstance(sp_id, int):
+  bot/formatters.py:32  if "무" in result:
+  bot/service.py:186  if hit is not None:
+  tools/release.py:276  if lic_missing:
+  analysis.py:135  if run >= 3:
+  analysis.py:274  if len(bands) < 2:
+  app_main.py:378  if path and not self._cancel:
+  app_main.py:545  if result is not None:
+  app_main.py:1805  if a_item:
+  app_main.py:2033  if item:
+  app_main.py:2369  if info and info.get("seasonImg"):
+  app_main.py:2550  if stale and not (self._season_loader and self._season_loader.is
+  app_main.py:2624  if selected == self.ONGOING:
+  app_main.py:2729  if division_names:
+  app_main.py:2950  if date_item:
+  app_main.py:3040  if isinstance(sp_id, int):
+  app_main.py:3360  if urls:
+  app_main.py:3453  if info.nation_flag_url:
+  app_main.py:3710  if self._ability_sim_loader and self._ability_sim_loader.isRunni
+  app_main.py:4046  if mine:
+  app_main.py:4141  if not self._teamcolor_loader.wait(3000):
+  check_api.py:10  if hasattr(sys.stdout, "reconfigure"):
+  check_api.py:151  if first_sp is not None:
+  dashboard.py:312  if recent.total and season.total > recent.total:
+  images.py:79  if path.exists():
+  models.py:204  elif "패" in m.result:
+  models.py:271  if run_kind == "승":
+  models.py:338  elif "패" in m.result:
+  nexon_api.py:177  if cached is not None:
+  playerinfo.py:211  if vals:
+  playerinfo.py:327  if m:
+  ranker.py:125  if "점검 진행 중" in html or "fc_logo_inspection" in html:
+  ranker.py:154  if m:
+  stats.py:277  if not self._is_gk():
+  stats.py:330  elif "무" in res:
+  stats.py:1220  if "승" in m.result:
+  stats.py:1245  if 9 <= pos <= 19:
+  store.py:333  if not row or not row["t"]:
+  widgets.py:118  if total > 0:
+  widgets.py:267  if self._sep is not None:
+  widgets.py:554  if not selected:
+  widgets.py:1054  if g >= 11:
+  widgets.py:1197  if chip:
+  bot/formatters.py:34  if "패" in result:
+  bot/formatters.py:192  if not found:
+  bot/server.py:73  if reply:
+  tools/release.py:281  if mods_missing:
+  analysis.py:143  if prev.total >= MIN_BASE:
+  analysis.py:216  if cs.comeback_lose >= 3 and n_first >= MIN_COND:
+  analysis.py:278  if best.win_rate - worst.win_rate < GAP_WIDE:
+  analysis.py:356  if share < TYPE_SHARE:
+  app_main.py:403  if self._cancel:
+  app_main.py:555  if not self._cancel:
+  app_main.py:763  if data is None:
+  app_main.py:1807  if b_item:
+  app_main.py:2245  if not self._ouid:
+  app_main.py:2447  if nick:
+  app_main.py:2557  if self._matches_all:
+  app_main.py:2734  if names:
+  app_main.py:2958  if not date_item or not opp_item:
+  app_main.py:3046  if color and color != self.POSITION_COLOR_ALL:
+  app_main.py:3219  if not (self._loader and self._loader.isRunning()):
+  app_main.py:3459  if info.season_icon_url:
+  app_main.py:3743  if not info.traits:
+  app_main.py:4145  if icon_loader and icon_loader.isRunning():
+  charts.py:217  if n - 1 not in shown:
+  check_api.py:23  if len(sys.argv) < 2:
+  check_api.py:163  if first_sp is not None:
+  images.py:83  if r.status_code != 200 or not r.content:
+  models.py:235  if "승" in result:
+  models.py:273  elif run_kind == "패":
+  nexon_api.py:189  if not self._cache_dir:
+  playerinfo.py:330  if m:
+  ranker.py:128  if _NOT_RANKED in html or 'class="td rank_no"' not in html:
+  stats.py:39  if not raw or div is None:
+  stats.py:288  if not self._is_gk():
+  stats.py:332  elif "패" in res:
+  stats.py:521  if not mine and not their:
+  stats.py:609  if m.match_date is None:
+  stats.py:1222  elif "무" in m.result:
+  stats.py:1279  if me is None:
+  store.py:144  if match_type is not None:
+  widgets.py:338  if shadow:
+  widgets.py:563  if index.column() == 0:
+  widgets.py:1056  if g >= 8:
+  widgets.py:1202  if chip:
+  bot/formatters.py:123  if run:
+  bot/formatters.py:202  if not info.ranked:
+  bot/server.py:102  if not config.API_KEY:
+  tools/release.py:288  if not setup.is_file():
+  analysis.py:145  if abs(gap) >= GAP:
+  analysis.py:218  if share >= 20:
+  analysis.py:369  if o.games < MIN_OPP or o.nickname in ("-", ""):
+  app_main.py:114  if self._pool is not None:
+  app_main.py:324  if not details:
+  app_main.py:405  if season_id not in cache:
+  app_main.py:587  if self._pool is not None:
+  app_main.py:765  if data == self.ONGOING:
+  app_main.py:1524  if ins.detail:
+  app_main.py:1815  if isinstance(sp_id, int):
+  app_main.py:2249  if not nick:
+  app_main.py:2458  if self.stack.currentIndex() == self.PAGE_SEARCH:
+  app_main.py:2680  if render and self._matches_all:
+  app_main.py:2908  if enable_sort:
+  app_main.py:2962  if detail is None:
+  app_main.py:3222  if self._teamcolor_retry_pending:
+  app_main.py:3516  if not sim.position_ovrs:
+  app_main.py:3753  if trait.icon_url:
+  app_main.py:3982  if name_item:
+  app_main.py:4122  if not prune.wait(3000):
+  app_main.py:4294  if not key:
+  charts.py:218  if shown and pts[n - 1].x() - pts[shown[-1]].x() < lab_w:
+  charts.py:428  if bh > 0:
+  check_api.py:28  if not config.API_KEY:
+  config.py:20  if getattr(sys, "frozen", False):
+  images.py:99  if path.exists():
+  models.py:237  if "무" in result:
+  models.py:316  if days == 30:
+  nexon_api.py:195  if p and p.exists():
+  nexon_api.py:265  if p:
+  playerinfo.py:278  if name in GROUP_NAMES and name not in groups:
+  playerinfo.py:334  if m:
+  ranker.py:132  if m:
+  stats.py:355  if pos_count[sp_id]:
+  stats.py:613  if lo <= h < hi:
+  stats.py:1224  elif "패" in m.result:
+  stats.py:1281  if nicknames is not None and (opp.get("nickname") or "-") not in
+  store.py:158  if match_type is not None:
+  widgets.py:565  if index.column() == last_col:
+  widgets.py:1058  if g >= 5:
+  widgets.py:1210  if sp_position == 0:
+  bot/formatters.py:127  if len(todays) > 10:
+  bot/formatters.py:207  if info.team_value_text:
+  tools/release.py:235  if r.returncode != 0:
+  tools/release.py:307  if verdict:
+  app_main.py:329  if div_id is None:
+  app_main.py:409  if path and not self._cancel:
+  app_main.py:910  if self._release:
+  app_main.py:1894  if not mine:
+  app_main.py:2251  if self._compare_loader and self._compare_loader.isRunning():
+  app_main.py:2465  if ed.text().strip():
+  app_main.py:2590  if self._season_picked:
+  app_main.py:2690  if busy:
+  app_main.py:2966  if found is None:
+  app_main.py:3526  if val is None:
+  app_main.py:3759  if trait.desc:
+  app_main.py:4150  if not self._compare_loader.wait(8000):
+  charts.py:63  if area.contains(pos):
+  charts.py:260  if not total:
+  check_api.py:55  if not ids:
+  config.py:36  if getattr(sys, "frozen", False):
+  dashboard.py:82  if target:
+  images.py:103  if r.status_code != 200 or not r.content:
+  models.py:239  if "패" in result:
+  models.py:319  elif days == 7:
+  nexon_api.py:110  if attempt == 2:
+  nexon_api.py:197  if cached_at < _week_boundary():
+  playerinfo.py:338  if sm:
+  ranker.py:135  if m:
+  stats.py:386  if me is None:
+  stats.py:614  if "승" in m.result:
+  stats.py:822  if wdl == 0:
+  stats.py:1226  if team_value_of is not None:
+  stats.py:1287  if not isinstance(pos, int) or not isinstance(sp_id, int):
+  widgets.py:757  if is_ranker:
+  widgets.py:1060  if g >= 1:
+  widgets.py:1212  if 1 <= sp_position <= 8:
+  bot/commands.py:129  if saved:
+  bot/formatters.py:209  if info.team_color:
+  tools/release.py:251  if problems:
+  tools/release.py:317  if exists:
+  analysis.py:320  if sm.total < MIN_SHOTS or sm.xg <= 0:
+  app_main.py:339  if idx is not None:
+  app_main.py:480  if self._cancel:
+  app_main.py:1552  if not rows:
+  app_main.py:1910  if not buckets:
+  app_main.py:2271  if not matches:
+  app_main.py:2468  if not nick:
+  app_main.py:2935  if "승" in m.result:
+  app_main.py:3668  if club_id and sim.club_levels:
+  app_main.py:3812  if not info.club_history:
+  app_main.py:4004  if icon_url:
+  charts.py:77  if len(pts) == 1:
+  charts.py:293  if sub:
+  check_api.py:66  if m:
+  config.py:38  if meipass:
+  dashboard.py:96  if pt or bold:
+  images.py:116  if not url:
+  models.py:243  if not matches:
+  models.py:323  elif days == 1:
+  nexon_api.py:115  if res.status_code == 200:
+  nexon_api.py:207  if p:
+  playerinfo.py:312  if m:
+  playerinfo.py:343  if m:
+  ranker.py:138  if m:
+  ranker.py:208  if value >= unit:
+  stats.py:314  if not _played(p):
+  stats.py:393  if "승" in res:
+  stats.py:616  elif "무" in m.result:
+  stats.py:688  if div_id == UNKNOWN_DIVISION_ID:
+  stats.py:757  elif wdl == 1:
+  stats.py:824  elif wdl == 1:
+  stats.py:1228  if m.opponent not in seen:
+  stats.py:1289  if pos == SUB_POSITION:
+  store.py:214  if match_type is not None:
+  widgets.py:237  if self._sep is not None:
+  widgets.py:779  if pixmap_path:
+  widgets.py:1136  if not pm.isNull():
+  widgets.py:1214  if 9 <= sp_position <= 19:
+  bot/formatters.py:78  if run:
+  bot/formatters.py:211  if info.level:
+  tools/release.py:256  if iscc is None:
+  analysis.py:323  if abs(gap) < FINISH_GAP:
+  app_main.py:341  if path:
+  app_main.py:483  if path and not self._cancel:
+  app_main.py:791  if geo is not None and self.restoreGeometry(geo):
+  app_main.py:1269  if section:
+  app_main.py:1659  if band.games:
+  app_main.py:1954  if name_item:
+  app_main.py:2706  if self.stack.currentIndex() == self.PAGE_SEARCH:
+  app_main.py:2937  elif "패" in m.result:
+  app_main.py:3267  if not (isinstance(pos, int) and pos in PitchWidget.COORDS):
+  app_main.py:3425  if lb is None:
+  app_main.py:3670  if club_max_lv.get(club_id) != best:
+  app_main.py:4018  if item and item.data(Qt.ItemDataRole.UserRole) == sp_id:
+  app_main.py:4158  if not self._season_loader.wait(3000):
+  charts.py:575  if not self._items:
+  check_api.py:116  if first_sp is not None:
+  dashboard.py:98  if pt:
+  dashboard.py:405  if b.games:
+  images.py:120  if path.exists():
+  models.py:246  if not first:
+  nexon_api.py:120  if res.status_code in (429, 500, 503) and attempt < 2:
+  notice.py:92  if up.startswith(("LICENSE", "LICENCE", "COPYING", "NOTICE")):
+  playerinfo.py:315  if m:
+  playerinfo.py:346  if m:
+  ranker.py:142  if m:
+  ranker.py:211  if i + 1 < len(_VALUE_UNITS):
+  stats.py:144  if me is None:
+  stats.py:395  elif "무" in res:
+  stats.py:460  if sd.get("result") != GOAL_RESULT:
+  stats.py:618  elif "패" in m.result:
+  stats.py:1164  if sd.get("assist"):
+  store.py:227  if match_type is not None:
+  widgets.py:853  if extra:
+  widgets.py:1141  if not pm.isNull():
+  widgets.py:1294  if not self._shots:
+  bot/commands.py:172  if not nick:
+  tools/release.py:260  if not args.skip_build:
+  analysis.py:326  if gap > 0:
+  app_main.py:347  if self._cancel:
+  app_main.py:524  if self._pool is not None:
+  app_main.py:1965  if isinstance(sp_id, int):
+  app_main.py:2326  if higher_is_better is not None and mine_val != opp_val:
+  app_main.py:2719  if switched:
+  app_main.py:2943  if not item:
+  app_main.py:3025  if item:
+  app_main.py:3185  if now - self._teamcolor_rendered_at >= self.TEAMCOLOR_RENDER_IN
+  app_main.py:3274  if isinstance(sp_id, int):
+  app_main.py:3428  if not pm.isNull():
+  app_main.py:3678  if gv is not None:
+  app_main.py:4029  if item is None or vmax <= 0:
+  app_main.py:4136  if not self._loader.wait(8000):
+  app_main.py:4428  if icon_path.exists():
+  charts.py:340  if span > 0:
+  check_api.py:128  if first_sp is not None:
+  config.py:54  if base:
+  images.py:46  if path.exists():
+  images.py:124  if r.status_code != 200 or not r.content:
+  models.py:200  if "승" in m.result:
+  models.py:250  if kind(m.result) != first:
+  models.py:334  if "승" in m.result:
+  nexon_api.py:143  if not ouid:
+  nexon_api.py:222  if p and p.exists():
+  playerinfo.py:111  if value >= floor:
+  playerinfo.py:320  if m:
+  ranker.py:148  if m:
+  ranker.py:214  if sub:
+  stats.py:324  if isinstance(pos, int):
+  stats.py:397  elif "패" in res:
+  stats.py:464  if mine:
+  stats.py:1022  elif s.result == SHOT_ON_TARGET:
+  stats.py:1166  if isinstance(a, int):
+  stats.py:1241  if pos == GK_POSITION:
+  widgets.py:259  if two_rows:
+  widgets.py:922  if not self._points:
+  widgets.py:1145  if event.button() == Qt.MouseButton.LeftButton:
+  widgets.py:1306  if s.hit_post:
+  bot/formatters.py:30  if "승" in result:
+  tools/release.py:263  if not (app_dir / f"{APP_DIR_NAME}.exe").is_file():
+
+이 줄들을 지키는 단언이 하나도 없다. 고칠 것인지 동치 변이인지 하나씩 판단한다.

@@ -1,0 +1,128 @@
+[OK] 조각 2개 합침 · 대상 138개
+
+
+잡힘 18 / 못 잡음 120
+
+=== 망가뜨려도 테스트가 전부 초록인 줄 ===
+  analysis.py:143  if prev.total >= MIN_BASE:
+  analysis.py:146  word = "올랐습니다" if gap > 0 else "떨어졌습니다"
+  analysis.py:173  if base_n < MIN_COND or now_n < MIN_FLOW:
+  analysis.py:182  if gap < 0:
+  analysis.py:209  if gap >= GAP:
+  analysis.py:218  if share >= 20:
+  analysis.py:230  if gap >= GAP:
+  analysis.py:254  if share < 100 / 6 * CONC_SHARE:
+  analysis.py:274  if len(bands) < 2:
+  analysis.py:299  if f.games >= need and f.formation != "0-0-0-0-0"]
+  analysis.py:309  elif gap >= GAP_WIDE:
+  analysis.py:323  if abs(gap) < FINISH_GAP:
+  analysis.py:349  if total < MIN_GOALS:
+  analysis.py:369  if o.games < MIN_OPP or o.nickname in ("-", ""):
+  analysis.py:385  if s.total < MIN_BASE:
+  app_main.py:69  if left < 60:
+  app_main.py:1952  T.GREEN if p.xg_diff >= 0 else T.RED)
+  app_main.py:2327  mine_wins = (mine_val > opp_val) == higher_is_better
+  app_main.py:2601  self.cb_season.setCurrentIndex(idx if idx >= 0 else 0)
+  app_main.py:2695  self.progress.setMaximum(total if total > 0 else 0)
+  app_main.py:3409  if shots >= st.PLAYER_TREND_MIN_SHOTS:
+  app_main.py:4029  if item is None or vmax <= 0:
+  charts.py:270  draw = max(span - (gap_deg if len(self._segs) > 1 else 0), 0.5)
+  charts.py:428  if bh > 0:
+  charts.py:528  align = (Qt.AlignmentFlag.AlignLeft if dx > 1 else
+  charts.py:531  x = pt.x() + 6 if dx > 1 else pt.x() - 6 - box_w if dx < -1 else
+  charts.py:579  f = _small_font(self.font(), SMALL_PT if d >= 22 else SMALL_PT -
+  check_api.py:23  if len(sys.argv) < 2:
+  crashlog.py:28  if path.exists() and path.stat().st_size > MAX_BYTES:
+  dashboard.py:314  arrow = "▲" if gap > 0 else "▼" if gap < 0 else "–"
+  dashboard.py:372  if n < MIN_GAUGE_GAMES:
+  nexon_api.py:120  if res.status_code in (429, 500, 503) and attempt < 2:
+  playerinfo.py:111  if value >= floor:
+  ranker.py:211  if i + 1 < len(_VALUE_UNITS):
+  stats.py:87  if not isinstance(raw, int) or raw < 0:
+  stats.py:526  if my_first is not None and (their_first is None or my_first < t
+  stats.py:565  if period >= 2:
+  stats.py:751  if pos <= 0:
+  stats.py:828  out = [s for s in acc.values() if s.games >= min_games]
+  stats.py:985  return self.shots >= MIN_BUCKET_SHOTS
+  stats.py:1092  if not isinstance(s, str) or len(s) < 10:
+  stats.py:1245  if 9 <= pos <= 19:
+  store.py:306  f" WHERE nickname IN ({q}) AND fetched_at >= ?", (*chunk, cutoff
+  theme.py:194  QScrollArea > QWidget > QWidget {{ background: transparent; }}
+  widgets.py:118  if total > 0:
+  widgets.py:282  self._arrange(self.width() < self.one_row_width())
+  widgets.py:433  if len(t) * char_max <= w:
+  widgets.py:505  while (self._estimate_total(cell_px) > avail
+  widgets.py:510  while (sum(self._entry(cell_px)["widths"].values()) > avail
+  widgets.py:518  if total <= 0:
+  widgets.py:530  if 0 < over <= self.PAD_SLACK * len(widths):
+  widgets.py:931  x = ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+  widgets.py:1016  return ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
+  widgets.py:1056  if g >= 8:
+  widgets.py:1060  if g >= 1:
+  widgets.py:1214  if 9 <= sp_position <= 19:
+  bot/commands.py:94  self._recent_calls = [t for t in self._recent_calls if now - t <
+  bot/commands.py:158  target = args[1] if len(args) > 1 else ""
+  bot/server.py:52  if length <= 0 or length > MAX_BODY:
+  bot/service.py:106  if hit and now - hit[1] < LOOKUP_TTL_SEC:
+  analysis.py:135  if run >= 3:
+  analysis.py:145  if abs(gap) >= GAP:
+  analysis.py:166  if len(prev_d) < MIN_BASE or len(recent_d) < MIN_FLOW:
+  analysis.py:179  if abs(gap) < GAP_WIDE or base.first_scored_rate < 50:
+  analysis.py:206  if n_first >= MIN_COND:
+  analysis.py:216  if cs.comeback_lose >= 3 and n_first >= MIN_COND:
+  analysis.py:227  if n_conc >= MIN_COND:
+  analysis.py:250  if total < MIN_GOALS:
+  analysis.py:273  bands = [b for b in possession_stats(details, ouid) if b.games >
+  analysis.py:278  if best.win_rate - worst.win_rate < GAP_WIDE:
+  analysis.py:303  if gap <= -GAP_WIDE:
+  analysis.py:320  if sm.total < MIN_SHOTS or sm.xg <= 0:
+  analysis.py:326  if gap > 0:
+  analysis.py:356  if share < TYPE_SHARE:
+  analysis.py:372  if gap >= GAP_WIDE * 1.5:
+  app_main.py:136  if len(chunk) < PAGE_SIZE:           # 마지막 페이지
+  app_main.py:1802  T.GREEN if p.win_rate >= 50 else T.RED)
+  app_main.py:1977  (선수 조합 '선수 B' 191 < 317px, 시즌별 '기간', 1280 폭에서 경기 목록
+  app_main.py:2595  if idx < 0:
+  app_main.py:2613  return last_end is not None and when.date() >= last_end
+  app_main.py:2766  if a >= b:
+  app_main.py:3185  if now - self._teamcolor_rendered_at >= self.TEAMCOLOR_RENDER_IN
+  app_main.py:3868  if t.date() >= cutoff]
+  charts.py:80  p0 = pts[i - 1] if i > 0 else pts[i]
+  charts.py:218  if shown and pts[n - 1].x() - pts[shown[-1]].x() < lab_w:
+  charts.py:245  self._segs = [s for s in segments if s[1] > 0]
+  charts.py:340  if span > 0:
+  charts.py:410  if v <= 0:
+  charts.py:473  if len(self._axes) < 3:
+  charts.py:529  Qt.AlignmentFlag.AlignRight if dx < -1 else Qt.AlignmentFlag.Ali
+  charts.py:533  y = (pt.y() - fm.height() - 2 if dy < -1 else pt.y() + 2 if dy >
+  charts.py:644  if v is not None and v > 0:
+  dashboard.py:312  if recent.total and season.total > recent.total:
+  dashboard.py:315  col = T.CHART_UP if gap > 0 else T.CHART_DOWN if gap < 0 else T.
+  nexon_api.py:197  if cached_at < _week_boundary():
+  ranker.py:208  if value >= unit:
+  stats.py:24  return division_id is not None and division_id <= CHAMPION_DIVIS
+  stats.py:453  decode_goal_time(sd.get("goalTime"))[0] >= 2
+  stats.py:528  elif their_first is not None and (my_first is None or their_firs
+  stats.py:613  if lo <= h < hi:
+  stats.py:754  if lo <= pos < hi:
+  stats.py:864  if angle < 0:
+  stats.py:1010  return DIST_MID if shot_distance_m(s) < FAR_SHOT_M else DIST_FAR
+  stats.py:1243  if 1 <= pos <= 8:
+  store.py:286  return cur.rowcount > 0
+  store.py:336  return row["t"] < cutoff
+  widgets.py:186  while pt > self._min_pt and self._text_w(pt) > avail:
+  widgets.py:286  self._arrange(self.width() < self.one_row_width())
+  widgets.py:502  if avail <= 0:
+  widgets.py:520  if avail > total:
+  widgets.py:602  return self._key < other._key
+  widgets.py:1001  if len(levels) > 1 else mt + plot_h / 2)
+  widgets.py:1054  if g >= 11:
+  widgets.py:1058  if g >= 5:
+  widgets.py:1212  if 1 <= sp_position <= 8:
+  bot/commands.py:86  if now - last < USER_COOLDOWN_SEC:
+  bot/commands.py:95  if len(self._recent_calls) >= GLOBAL_PER_MINUTE:
+  bot/formatters.py:127  if len(todays) > 10:
+  bot/service.py:82  if hit and now - hit[1] < OUID_TTL_SEC:
+  tools/release.py:98  while (i := data.find(b"\x78\x9c", i)) >= 0:
+
+이 줄들을 지키는 단언이 하나도 없다. 고칠 것인지 동치 변이인지 하나씩 판단한다.
