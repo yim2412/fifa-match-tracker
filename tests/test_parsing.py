@@ -300,6 +300,40 @@ def test_fetch_seasons_parses_page():
             assert why in str(e), (why, e)
 
 
+def test_player_record_matches_finishing_table():
+    # 선수 카드 '내 기록'의 합계는 선수별 결정력 표와 같은 숫자여야 한다(같은 슛을 다르게 세면 안 된다)
+    ouid, matches, details = _load()
+    table = {p.sp_id: p for p in st.finishing_ranking(details, ouid)}
+    assert table, "픽스처에 슛이 없다"
+    total_mapped = 0
+    for sp, pf in table.items():
+        if pf.shots == 0:
+            continue
+        weeks = st.player_finishing_trend(details, ouid, sp)
+        assert sum(w.shots for w in weeks) == pf.shots, (sp, [w.shots for w in weeks], pf.shots)
+        assert sum(w.goals for w in weeks) == pf.goals and sum(w.on_target for w in weeks) == pf.on_target
+        assert abs(sum(w.xg for w in weeks) - pf.xg) < 1e-9, (sp, pf.xg)
+        assert [w.week_start for w in weeks] == sorted(w.week_start for w in weeks)
+        assert all(w.week_start.weekday() == 0 for w in weeks), "주 시작이 월요일이 아니다"
+        n = len(st.shot_map(details, ouid, mine=True, sp_id=sp).shots)
+        assert n <= pf.shots, (sp, n, pf.shots)  # 좌표가 빈 슛은 맵에서만 빠진다
+        total_mapped += n
+    assert total_mapped == len(st.shot_map(details, ouid, mine=True).shots), "선수별 맵을 합치면 전체 맵이어야 한다"
+
+
+def test_played_counts_used_subs_only():
+    sub_idle = {"spId": 1, "spPosition": st.SUB_POSITION, "status": {}}
+    sub_used = {"spId": 1, "spPosition": st.SUB_POSITION, "status": {"passTry": 3}}
+    starter = {"spId": 1, "spPosition": 5, "status": {}}
+    assert (st._played(sub_idle), st._played(sub_used), st._played(starter)) == (False, True, True)
+    d = {"matchDate": "2026-10-01T10:00:00",
+         "matchInfo": [{"ouid": "me", "player": [sub_idle], "shootDetail": []}, {"ouid": "x"}]}
+    assert st.player_finishing_trend([d], "me", 1) == [], "벤치에만 있던 경기를 출전으로 셌다"
+    d["matchInfo"][0]["player"] = [sub_used]
+    weeks = st.player_finishing_trend([d], "me", 1)
+    assert len(weeks) == 1 and weeks[0].games == 1 and str(weeks[0].week_start) == "2026-09-28", weeks
+
+
 def test_store_uses_orjson_and_merge_keeps_db_order():
     # 설치돼 있는데 대체 경로(json)로 돌면 조용히 2배 느려진다 — requirements.txt 에 있다
     import store

@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 )
 
 import analysis
+import charts
 import config
 import crashlog
 import images
@@ -3323,12 +3324,20 @@ class MainWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle("선수 정보")
         dlg.resize(560, 720)
-        v = QVBoxLayout(dlg)
+        outer = QVBoxLayout(dlg)
+        tabs = QTabWidget()
+        outer.addWidget(tabs)
+        card = QWidget()
+        v = QVBoxLayout(card)
         status = QLabel("불러오는 중…")
         status.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(status)
         body = QWidget()
         v.addWidget(body, 1)
+        tabs.addTab(card, "카드 정보")
+        # 내 기록 — 이미 가진 경기 기록만 쓴다(넥슨 홈페이지 데이터를 꺼도 보인다)
+        tabs.addTab(self._build_my_record(sp_id), "내 기록")
+        self._last_player_tabs = tabs  # 테스트가 다이얼로그 안을 본다
 
         img_dir = config.CACHE_DIR / self.PLAYERCARD_IMG_DIR_NAME
         info_loader = PlayerInfoLoader(sp_id)
@@ -3361,6 +3370,45 @@ class MainWindow(QMainWindow):
             self._ability_sim_loader.wait(2000)
         if self._position_ovr_loader and self._position_ovr_loader.isRunning():
             self._position_ovr_loader.wait(2000)
+
+    def _build_my_record(self, sp_id: int) -> QWidget:
+        """선수 카드 '내 기록' — 그 카드(spId)만의 슛 맵과 주 단위 결정력 추이. 범위는 위쪽 시즌 콤보.
+
+        같은 선수라도 시즌이 다른 카드는 spId 가 달라 따로 본다(사용자 결정 2026-10-02).
+        슛이 st.PLAYER_TREND_MIN_SHOTS 보다 적으면 추이를 그리지 않는다 — 몇 개로 그린 선은 노이즈다."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        weeks = st.player_finishing_trend(self._details, self._ouid, sp_id)
+        sm = st.shot_map(self._details, self._ouid, mine=True, sp_id=sp_id)
+        games = sum(x.games for x in weeks)
+        shots = sum(x.shots for x in weeks)
+        goals = sum(x.goals for x in weeks)
+        xg = sum(x.xg for x in weeks)
+        conv = f"{goals / shots * 100:.0f}%" if shots else NA
+        summary = QLabel(f"{self._scope_text()} · 출전 {games}경기 · 슛 {shots} · 골 {goals}"
+                         f" · 전환율 {conv} · xG {xg:.1f}")
+        summary.setObjectName("myRecordSummary")
+        summary.setWordWrap(True)
+        v.addWidget(summary)
+        pitch = ShotMapWidget()
+        pitch.set_shots(sm.shots)
+        pitch.setMinimumHeight(260)
+        v.addWidget(pitch, 2)
+        title = QLabel("주 단위 전환율(골 ÷ 슛)")
+        title.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(title)
+        if shots >= st.PLAYER_TREND_MIN_SHOTS:
+            chart = charts.AreaTrendChart()
+            chart.setObjectName("myRecordTrend")
+            chart.set_data([(x.label, x.conversion, x.shots) for x in weeks])
+            chart.setMinimumHeight(160)
+            v.addWidget(chart, 1)
+        else:
+            lb = QLabel(f"표본 부족 — 슛 {shots}개(추이는 {st.PLAYER_TREND_MIN_SHOTS}개부터)")
+            lb.setObjectName("myRecordTrend")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            v.addWidget(lb, 1)
+        return w
 
     @staticmethod
     def _set_player_info_image(widgets_by_url: dict[str, QLabel], url: str, path: str) -> None:

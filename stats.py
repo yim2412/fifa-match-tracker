@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from itertools import combinations
 
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
@@ -311,10 +311,7 @@ def aggregate_players(details: list[dict], ouid: str,
                 continue
             st = p.get("status") or {}
             pos = p.get("spPosition")
-            played = pos != SUB_POSITION or any(
-                _num(st, k) for k in ("shoot", "passTry", "tackleTry", "spRating")
-            )
-            if not played:
+            if not _played(p):
                 continue
 
             s = acc.get(sp_id)
@@ -926,10 +923,12 @@ class ShotMap:
         return sum(s.xg for s in self.shots)
 
 
-def shot_map(details: list[dict], ouid: str, mine: bool = True) -> ShotMap:
+def shot_map(details: list[dict], ouid: str, mine: bool = True,
+             sp_id: int | None = None) -> ShotMap:
     """여러 경기의 슛 좌표를 모은다. mine=False 면 상대 슛(내 실점 위치).
 
     좌표·result 가 정상 범위인 슛만 담는다 — 넥슨이 값을 비우면 건너뛴다.
+    sp_id 를 주면 그 카드가 찬 슛만(선수 카드 '내 기록') — 시즌이 다른 같은 선수는 다른 spId 라 따로다.
     """
     sm = ShotMap()
     for d in details:
@@ -938,6 +937,8 @@ def shot_map(details: list[dict], ouid: str, mine: bool = True) -> ShotMap:
             continue
         p = me if mine else opp
         for sd in p.get("shootDetail") or []:
+            if sp_id is not None and sd.get("spId") != sp_id:
+                continue
             x, y, r = sd.get("x"), sd.get("y"), sd.get("result")
             if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
                 continue
@@ -1053,6 +1054,77 @@ class PlayerFinishing:
     @property
     def xg_diff(self) -> float:  # 골 − xG. +면 근사 기대보다 더 넣음(해결력/운)
         return self.goals - self.xg
+
+
+# 선수 카드 '내 기록' — 주 단위 결정력 추이. 슛이 이보다 적으면 추이를 그리지 않는다(흐름 분석과 같은 원칙:
+# 표본이 모자라면 침묵). 주 하나의 비율도 슛 MIN_BUCKET_SHOTS 미만이면 점만 찍고 선으로 잇지 않는다.
+PLAYER_TREND_MIN_SHOTS = 20
+
+
+@dataclass
+class WeekFinishing:
+    week_start: date          # 그 주 월요일
+    games: int = 0            # 그 카드가 선발·교체로 나온 경기(SUB 대기만은 제외)
+    shots: int = 0
+    on_target: int = 0
+    goals: int = 0
+    xg: float = 0.0
+
+    @property
+    def conversion(self) -> float:
+        return self.goals / self.shots * 100 if self.shots else 0.0
+
+    @property
+    def label(self) -> str:
+        return f"{self.week_start:%m/%d}~"
+
+
+def _played(p: dict) -> bool:
+    """그 경기에 실제로 뛰었나 — 선발이거나, 교체 명단(SUB)이라도 기록이 남았으면(들어왔다)."""
+    if p.get("spPosition") != SUB_POSITION:
+        return True
+    st = p.get("status") or {}
+    return any(_num(st, k) for k in ("shoot", "passTry", "tackleTry", "spRating"))
+
+
+def _match_day(d: dict) -> date | None:
+    s = d.get("matchDate")
+    if not isinstance(s, str) or len(s) < 10:
+        return None
+    try:
+        return date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+
+
+def player_finishing_trend(details: list[dict], ouid: str, sp_id: int) -> list[WeekFinishing]:
+    """그 카드(spId)의 주별 출전·슛·골·xG — 오래된 주부터. 나온 주만(빈 주는 없다)."""
+    weeks: dict[date, WeekFinishing] = {}
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        day = _match_day(d)
+        if me is None or day is None:
+            continue
+        played = any(p.get("spId") == sp_id and _played(p) for p in me.get("player") or [])
+        shots = [sd for sd in me.get("shootDetail") or []
+                 if sd.get("spId") == sp_id and sd.get("result") in _SHOT_RESULTS]
+        if not played and not shots:
+            continue
+        start = day - timedelta(days=day.weekday())
+        w = weeks.setdefault(start, WeekFinishing(week_start=start))
+        w.games += 1 if played else 0
+        for sd in shots:
+            r = sd.get("result")
+            w.shots += 1
+            if r in (SHOT_GOAL, SHOT_ON_TARGET):
+                w.on_target += 1
+            if r == SHOT_GOAL:
+                w.goals += 1
+            x, y = sd.get("x"), sd.get("y")
+            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                w.xg += shot_xg(float(x), float(y), bool(sd.get("inPenalty")),
+                                goal_type_name(sd.get("type")))
+    return [weeks[k] for k in sorted(weeks)]
 
 
 def finishing_ranking(details: list[dict], ouid: str,
