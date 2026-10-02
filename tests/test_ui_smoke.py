@@ -48,6 +48,28 @@ _app = QApplication.instance() or QApplication(sys.argv)
 T.apply(_app)
 
 
+# ── 모달 차단 — offscreen 에선 모달이 안 닫혀 테스트가 실패 대신 영원히 멈춘다 ──────
+# 2026-10-02 하루에 세 번 겪었다(안내 창·키 창·app.exec()). 매번 그 자리만 가로챘는데,
+# 회귀가 생기면 빨개지는 대신 멈추니 무엇이 깨졌는지도 안 보였다. 그래서 전부 막고
+# "부르면 즉시 실패"로 바꾼다. 창이 떠야 정상인 테스트는 지금처럼 그 함수를 직접 가로챈다.
+class ModalCalled(AssertionError):
+    pass
+
+
+def _no_modal(name):
+    def blocked(*a, **k):
+        raise ModalCalled(f"테스트 중 모달 호출: {name} — 가로채지 않으면 offscreen 에서 멈춘다")
+    return blocked
+
+
+from PyQt6.QtWidgets import QDialog, QMessageBox  # noqa: E402
+
+for _n in ("warning", "information", "critical", "question"):
+    setattr(QMessageBox, _n, staticmethod(_no_modal(f"QMessageBox.{_n}")))
+QDialog.exec = _no_modal("QDialog.exec")
+QApplication.exec = _no_modal("QApplication.exec")
+
+
 def _load():
     man = json.load(open(os.path.join(_DIR, "manifest.json"), encoding="utf-8"))
     details = [json.load(open(os.path.join(_DIR, m + ".json"), encoding="utf-8"))
@@ -78,6 +100,20 @@ _AFTER_LOAD = (_win.stack.currentIndex(), _win.pages.currentIndex())
 def _nav_items():
     return [(_win.nav.item(r), _win.nav.item(r).data(Qt.ItemDataRole.UserRole))
             for r in range(_win.nav.count())]
+
+
+def test_modal_calls_fail_fast():
+    # 막지 않았으면 이 호출들은 offscreen 에서 돌아오지 않는다
+    for call in (lambda: QMessageBox.information(None, "t", "t"),
+                 lambda: QMessageBox.warning(None, "t", "t"),
+                 lambda: QDialog().exec(),
+                 lambda: app_main.ApiKeyDialog().exec(),   # 하위 클래스도 막힌다
+                 lambda: _app.exec()):
+        try:
+            call()
+            raise AssertionError("모달이 막히지 않았다")
+        except ModalCalled:
+            pass
 
 
 def test_loaded_opens_dashboard():
@@ -719,18 +755,11 @@ def test_main_starts_update_check_after_show():
 
     orig = app_main._setup_app, app_main.MainWindow
     app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
-    # 확인 호출이 빠지면 main 이 app.exec() 로 들어가 영원히 멈춘다 — 그 루프를 바로 끝내
-    # 멈춤 대신 아래 단언이 실패하게 한다
-    guard = QTimer()
-    guard.setSingleShot(True)
-    guard.timeout.connect(_app.quit)
-    guard.start(0)
     try:
-        app_main.main()
+        app_main.main()  # 확인 호출이 빠지면 app.exec() — 모달 차단이 바로 실패시킨다
     except _Stop:
         pass
     finally:
-        guard.stop()
         app_main._setup_app, app_main.MainWindow = orig
     assert calls == ["창", "show", "새 버전 확인"], calls
 

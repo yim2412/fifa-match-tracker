@@ -133,6 +133,14 @@ python -m PyInstaller --noconfirm 피파전적관리.spec   # exe → dist\피�
    경기 목록의 가로 막대를 "세로 막대 자리를 안 빼서"로 읽고 장치를 넣었는데, 실화면에서
    그 장치를 빼도 결과가 같았다. 진짜 원인은 화살표 자리를 모든 열에 준 것이었다(장치는 뺐다).
 
+6. **offscreen 테스트에서 모달은 안 닫힌다 — 회귀가 "실패"가 아니라 "멈춤"으로 나타난다.**
+   2026-10-02 하루에 세 번(못 찾음 안내 창 · 키 창 `exec()` · `app.exec()`), 매번 그 자리만
+   가로채다가 장치로 바꿨다: `test_ui_smoke.py` 머리에서 `QMessageBox.warning/information/
+   critical/question` · `QDialog.exec` · `QApplication.exec` 를 **부르면 즉시 `ModalCalled`**
+   로 막는다. 창이 떠야 정상인 테스트는 그 함수를 직접 가로챈다(지금처럼). 새 종류의 모달
+   (`QFileDialog`·`QInputDialog`·`QMenu.exec` 등)을 쓰기 시작하면 거기에도 한 줄 더한다.
+   검증: 오늘 멈췄던 두 경우가 장치로 4초 만에 FAIL, 장치를 빼면 다시 60초 멈춤.
+
 ---
 
 ## 작업 방식 (이 앱 고유분)
