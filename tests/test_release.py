@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import io
+import shutil
+import tempfile
 import os
 import sys
 import zipfile
@@ -54,14 +56,17 @@ def test_zip_members_are_scanned():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("피파/_internal/a.pyz", _fake_exe(SECRET.encode("utf-8")))
-    path = os.path.join(os.environ.get("TEMP", "."), "release_test.zip")
+    # 실행마다 다른 폴더 — 고정 이름(TEMP/release_test.zip)이면 동시에 돈 테스트끼리 서로 지우고 잠갔다
+    # (2026-10-02 변이 전수 측정을 여러 사본에서 동시에 돌리다 7조각이 시작부터 실패)
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "release_test.zip")
     with open(path, "wb") as f:
         f.write(buf.getvalue())
     try:
         leaks, _ = release.scan(release.zip_files(release.Path(path)), NEEDLES, CONTROLS)
         assert leaks == {"홈": {"피파/_internal/a.pyz"}}, leaks
     finally:
-        os.remove(path)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_private_needles_come_from_this_pc():
@@ -130,7 +135,7 @@ def test_updater_and_release_agree_on_names():
 
 def test_sha256_lines_and_notes():
     import hashlib
-    tmp = release.Path(os.environ.get("TEMP", "."))
+    tmp = release.Path(tempfile.mkdtemp())  # 고정 이름이면 동시에 돈 테스트끼리 부딪친다(위 zip 테스트와 같은 이유)
     path, sums = tmp / "release_sum_test.bin", tmp / "release_sum_test.txt"
     path.write_bytes(b"abc")
     try:
@@ -139,8 +144,7 @@ def test_sha256_lines_and_notes():
         # CRLF 면 sha256sum -c 가 'release_sum_test.bin\r' 를 찾다 실패한다(v0.2.0 첫 업로드)
         assert b"\r" not in sums.read_bytes(), sums.read_bytes()
     finally:
-        path.unlink()
-        sums.unlink(missing_ok=True)
+        shutil.rmtree(tmp, ignore_errors=True)
     notes = release.release_notes("- 바뀐 것", "S.exe", "P.zip", line)
     # 설치 파일이 포터블보다 먼저, 체크섬과 출처 표기가 본문에
     assert notes.index("S.exe") < notes.index("P.zip"), notes
