@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 import analysis
 import config
+import crashlog
 import images
 import playerinfo
 import ranker
@@ -3640,12 +3641,26 @@ class ApiKeyDialog(QDialog):
         self.accept()
 
 
-def main() -> int:
-    app = QApplication(sys.argv)
+def _notify_crash(path) -> None:
+    QMessageBox.warning(
+        None, "예기치 못한 오류",
+        "오류가 나서 기록을 남겼습니다. 앱은 계속 쓸 수 있지만, 화면이 이상하면 "
+        "다시 켜 주세요.\n\n"
+        f"오류 기록: {path}\n\n이 파일을 보내 주시면 원인을 찾을 수 있습니다.")
+
+
+def _setup_app(app: QApplication) -> None:
+    """main() 의 창 띄우기 전 준비 — 테스트가 같은 경로를 부를 수 있게 떼어 뒀다."""
+    crashlog.install(config.DATA_DIR / "logs", config.APP_VERSION, notify=_notify_crash)
     T.apply(app)
     icon_path = config.asset_path("app_icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
+
+
+def main() -> int:
+    app = QApplication(sys.argv)
+    _setup_app(app)
     if not config.API_KEY:
         if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
             return 0

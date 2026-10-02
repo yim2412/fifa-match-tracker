@@ -20,7 +20,8 @@
 | `widgets.py` | 화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 스쿼드 배치(`PitchWidget`), 좁으면 접히는 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위 — 오픈API엔 없음) |
-| `config.py` | `.env`에서 API 키 로드, 매치 종류·조회 개수 기본값 |
+| `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·UA, 매치 종류·조회 개수 기본값 |
+| `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다 |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
 
 ```powershell

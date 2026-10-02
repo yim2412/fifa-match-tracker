@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import faulthandler
 import json
 import os
 import pathlib
@@ -14,18 +15,20 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-from PyQt6.QtCore import QEvent, QThread, Qt  # noqa: E402
+from PyQt6.QtCore import QEvent, QThread, QTimer, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
 
 import app_main  # noqa: E402
 import config  # noqa: E402
+import crashlog  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
 import playerinfo  # noqa: E402
@@ -545,6 +548,95 @@ def test_attribution_on_search_and_main_pages():
         labels = [lb for lb in page.findChildren(app_main.QLabel)
                   if lb.objectName() == "attribution"]
         assert [lb.text() for lb in labels] == [want], (idx, [lb.text() for lb in labels])
+
+
+# ── 크래시 로그 ───────────────────────────────────────────────────────
+class _TempCrash:
+    """_setup_app 을 임시 데이터 폴더로 부르고, 끝나면 훅·faulthandler 를 되돌린다."""
+
+    def __init__(self, prefill: bytes = b""):
+        self.prefill = prefill
+        self.notified = []
+
+    def __enter__(self):
+        self._dir = pathlib.Path(tempfile.mkdtemp())
+        self._saved = (config.DATA_DIR, sys.excepthook, threading.excepthook,
+                       app_main.QMessageBox.warning)
+        if self.prefill:
+            (self._dir / "logs").mkdir()
+            (self._dir / "logs" / crashlog.LOG_NAME).write_bytes(self.prefill)
+        config.DATA_DIR = self._dir
+        app_main.QMessageBox.warning = lambda *a, **k: self.notified.append(a)
+        app_main._setup_app(_app)
+        self.logs = self._dir / "logs"
+        return self
+
+    def __exit__(self, *exc):
+        (config.DATA_DIR, sys.excepthook, threading.excepthook,
+         app_main.QMessageBox.warning) = self._saved
+        faulthandler.disable()
+        fh = crashlog._state.pop("fault_file", None)
+        if fh:
+            fh.close()
+        crashlog._state.clear()
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+
+def _raise_into_hook(msg):
+    try:
+        raise ValueError(msg)
+    except ValueError:
+        sys.excepthook(*sys.exc_info())
+
+
+def test_setup_app_logs_crash_and_notifies_once():
+    # 훅이 안 걸려 있으면 기본 훅이 받는다 — PyQt6 는 그때 앱을 끝낸다
+    assert sys.excepthook is not crashlog._on_main_exc
+    with _TempCrash() as ctx:
+        _raise_into_hook("한글 오류 하나")
+        _raise_into_hook("한글 오류 둘")
+        text = (ctx.logs / crashlog.LOG_NAME).read_text(encoding="utf-8")
+        assert "ValueError: 한글 오류 하나" in text and "ValueError: 한글 오류 둘" in text, text
+        assert config.APP_VERSION in text, text
+        assert len(ctx.notified) == 1, ctx.notified  # 같은 세션 두 번째부터는 기록만
+        assert str(ctx.logs / crashlog.LOG_NAME) in ctx.notified[0][2], ctx.notified
+
+
+def test_qt_slot_crash_reaches_log_and_app_survives():
+    # 실제 경로 — 슬롯 안 예외. 훅이 없으면 PyQt6 가 여기서 프로세스를 끝낸다.
+    def bad():
+        raise RuntimeError("슬롯에서 터짐")
+
+    with _TempCrash() as ctx:
+        QTimer.singleShot(0, bad)
+        for _ in range(5):
+            _app.processEvents()
+        text = (ctx.logs / crashlog.LOG_NAME).read_text(encoding="utf-8")
+        assert "RuntimeError: 슬롯에서 터짐" in text, text
+        assert len(ctx.notified) == 1, ctx.notified
+
+
+def test_thread_crash_logged_without_dialog():
+    with _TempCrash() as ctx:
+        t = threading.Thread(target=lambda: 1 / 0, name="일꾼")
+        t.start()
+        t.join()
+        # QThread.run 의 예외는 threading 이 아니라 sys.excepthook 으로, 그 스레드에서 온다
+        t = threading.Thread(target=lambda: _raise_into_hook("큐스레드식"))
+        t.start()
+        t.join()
+        text = (ctx.logs / crashlog.LOG_NAME).read_text(encoding="utf-8")
+        assert "thread 일꾼" in text and "ZeroDivisionError" in text, text
+        assert "ValueError: 큐스레드식" in text, text
+        assert not ctx.notified  # GUI 스레드가 아니면 창을 띄우지 않는다
+
+
+def test_crash_log_rotates_at_start():
+    big = b"x" * (crashlog.MAX_BYTES + 1)
+    with _TempCrash(prefill=big) as ctx:
+        old = ctx.logs / (crashlog.LOG_NAME + ".1")
+        assert old.exists() and old.stat().st_size == len(big), old
+        assert (ctx.logs / crashlog.LOG_NAME).stat().st_size < len(big)
 
 
 # ── 넥슨 웹 데이터 스위치 ─────────────────────────────────────────────

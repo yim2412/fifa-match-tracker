@@ -96,7 +96,8 @@ python -m bot.server
 | `seasons.py` | 감독모드 랭킹 시즌표(번호·이름·기간)를 데이터센터에서 긁어와 경기를 시즌에 나눠 담는다 |
 | `images.py` | 넥슨 CDN에서 선수 얼굴 이미지를 받아 디스크에 캐시(오픈API 아닌 정적 CDN, 비공식) |
 | `playerinfo.py` | 선수 카드 상세(능력치·특성·시세·클럽경력) — 넥슨 모바일 데이터센터 HTML 스크래핑 |
-| `config.py` | API 키 로드(.env), DB 경로, 매치 종류·조회 개수 기본값 |
+| `config.py` | API 키 로드·저장(.env), DB 경로, 웹 데이터 스위치, 매치 종류·조회 개수 기본값 |
+| `crashlog.py` | 처리 안 된 예외를 `%LOCALAPPDATA%\피파전적관리\logs\crash.log` 에 남기고 첫 오류 때 위치를 알려 준다 |
 | `check_api.py` | 터미널에서 키·엔드포인트·집계·DB 동작 확인용 |
 | `bot/` | 카카오톡 오픈채팅 봇 서버 — 같은 API·DB를 쓰는 별도 진입점([bot/README.md](bot/README.md)) |
 | `adapters/` | 봇을 카카오톡에 붙이는 어댑터 — 메신저봇R 스크립트([adapters/README.md](adapters/README.md)) |
