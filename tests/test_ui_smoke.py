@@ -414,6 +414,41 @@ def test_dashboard_rivals_skip_unknown_nickname():
     _win._render_dashboard()
 
 
+def test_opponents_page_uses_season_scope_not_range():
+    # 표시 구간을 1경기로 좁혀도 상대 전적은 시즌 범위 전체를 센다(대시보드 '자주 만난 상대'와 같게)
+    tb = _win.tbl_opponents
+    old = (_win.sp_from.value(), _win.sp_to.value())
+    shown = []
+    orig_show, orig_info = _win._show_opponent_squad, app_main.QMessageBox.information
+    _win._show_opponent_squad = lambda nick, *a: shown.append(nick)
+    # 못 찾으면 뜨는 안내 창은 모달이라 offscreen 에서 영원히 멈춘다 — 기록만 남긴다
+    app_main.QMessageBox.information = lambda *a, **k: shown.append("못 찾음 창")
+    try:
+        _win.sp_from.setValue(1)
+        _win.sp_to.setValue(1)
+        _win._render_all()
+        in_range = {m.opponent for m in _win._slice()[0]}
+        in_scope = {m.opponent for m in _win._matches}
+        assert len(in_range) < len(in_scope), (in_range, in_scope)  # 픽스처가 차이를 만들어야 의미가 있다
+        names = {tb.item(r, 0).text() for r in range(tb.rowCount())}
+        assert names == in_scope, (names, in_scope)
+        # 시즌을 바꾸면 문구도 따라가야 한다 — 처음 만든 문구가 우연히 맞는 것과 구분
+        _win._scope_text = lambda: "가짜 시즌"
+        _win._render_all()
+        del _win._scope_text
+        assert "가짜 시즌" in _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
+        # 표시 구간 밖 상대도 더블클릭하면 스쿼드가 열린다
+        outside = next(iter(in_scope - in_range))
+        row = next(r for r in range(tb.rowCount()) if tb.item(r, 0).text() == outside)
+        _win._on_opponent_double_clicked(tb.item(row, 0))
+        assert shown == [outside], shown
+    finally:
+        _win._show_opponent_squad, app_main.QMessageBox.information = orig_show, orig_info
+        _win.sp_from.setValue(old[0])
+        _win.sp_to.setValue(old[1])
+        _win._render_all()
+
+
 def test_dashboard_gauge_shows_value_once_sample_is_enough():
     import dashboard
     d = _win.dashboard

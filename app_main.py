@@ -1699,6 +1699,9 @@ class MainWindow(QMainWindow):
         row.addWidget(lb)
         row.addWidget(self.ed_opponent_filter)
         row.addStretch(1)
+        self.lb_opponent_note = QLabel(self._opponent_note_text())
+        self.lb_opponent_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(self.lb_opponent_note)
         v.addLayout(row)
 
         self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS)
@@ -2184,7 +2187,11 @@ class MainWindow(QMainWindow):
         return (f"{self._scope_text()} · 선발(SUB·GK 제외) · 승률 높은 순 · "
                 "선수 더블클릭 시 카드")
 
+    def _opponent_note_text(self) -> str:
+        return f"{self._scope_text()} 기준 · 더블클릭하면 그 상대와의 최근 경기 스쿼드"
+
     def _refresh_scope_notes(self) -> None:
+        self.lb_opponent_note.setText(self._opponent_note_text())
         self.lb_analysis_note.setText(self._analysis_note_text())
         self.lb_diag_note.setText(self._diag_note_text())
         self.lb_synergy_note.setText(self._synergy_note_text())
@@ -2319,7 +2326,9 @@ class MainWindow(QMainWindow):
         self._render_matches(matches)
         self._render_players(details)
         self._render_tactics(details)
-        self._render_opponents(matches)
+        # 시즌 범위 — 표시 구간(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
+        # 대시보드 '자주 만난 상대'(누르면 여기로 온다)와 같은 범위다.
+        self._render_opponents(self._matches)
         self._render_position_opponents(details)
         self._render_teamcolor_tabs(matches, details)
         # 아래 self._matches/_details 를 그대로 넘기는 것들은 "표시 구간에 안 갇힌다"는
@@ -2487,12 +2496,11 @@ class MainWindow(QMainWindow):
         if not name_item:
             return
         nickname = name_item.text()
-        _, details = self._slice()
-        found = st.opponent_squad(details, self._ouid, nickname)
+        found = st.opponent_squad(self._details, self._ouid, nickname)  # 표와 같은 범위
         if found is None:
             QMessageBox.information(
                 self, "상대 스쿼드",
-                "표시 구간(시작~끝) 안에서 이 상대와 붙은 경기를 찾지 못했습니다.")
+                f"{self._scope_text()} 안에서 이 상대와 붙은 경기의 스쿼드를 찾지 못했습니다.")
             return
         players, match_date, result = found
         self._show_opponent_squad(nickname, players, match_date, result)
