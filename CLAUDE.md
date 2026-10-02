@@ -27,9 +27,10 @@
 ```powershell
 python check_api.py <닉네임>   # API 점검
 python app_main.py             # 앱 실행
-python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음)
-# 메뉴별 화면을 PNG 로 떠서 눈으로 볼 때 — 글꼴 폴더를 안 주면 offscreen 이 장식체를 집는다
-$env:QT_QPA_FONTDIR="C:/Windows/Fonts"; $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py
+python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
+# 메뉴별 화면을 PNG 로 떠서 눈으로 볼 때 — 최근 검색 칩에 실제 닉네임이 찍히니 확인 후 지운다
+$env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py
+python -m PyInstaller --noconfirm 피파전적관리.spec   # exe → dist\피파전적관리\ (배포 zip 은 README "빌드·배포")
 ```
 
 필수 패키지: `pip install -r requirements.txt` (PyQt6, requests, python-dotenv)

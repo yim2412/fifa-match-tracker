@@ -18,6 +18,10 @@ import tempfile
 import threading
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+# offscreen 은 글꼴 폴더를 안 주면 장식체를 집어 글자 폭이 달라지고, 그러면 1280x720
+# 잘림 검사 4개가 코드와 무관하게 FAIL 한다(2026-10-02 — 문서의 명령 그대로 치면 26/30).
+if os.path.isdir("C:/Windows/Fonts"):
+    os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
