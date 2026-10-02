@@ -24,6 +24,7 @@
 | `playerinfo.py` | 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑 |
 | `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL). **화면은 API 가 아니라 이 DB 를 본다** |
 | `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·UA, 매치 종류·조회 개수 기본값 |
+| `notice.py` | 이용 안내·개인정보·웹 데이터 고지·오픈소스 목록(`THIRD_PARTY`) — 첫 실행 `NoticeDialog` 와 [정보] `AboutDialog` 가 같은 글을 쓴다. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(이미 동의한 사람에게 다시 보이게). 새 패키지를 묶으면 `THIRD_PARTY` 에 한 줄 — spec 이 라이선스 전문을 `_internal/licenses/` 에 넣고 `release.py` 가 빠진 걸 막는다 |
 | `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다 |
 | `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(실패는 전부 조용히). 창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다. 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조) |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
@@ -58,6 +59,12 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
   만들 수 없어서(2026-10-02). 판정은 `nexon_api.check_key`: 실측상 맞는 키로 없는 닉네임을
   물으면 `OPENAPI00004`, 틀린 키는 `OPENAPI00005` — **"00005 가 아니면 통과"**(네트워크·429·5xx 는
   모르는 상태라 불통). 조회 중 넥슨이 키를 거절하면 `MatchLoader.key_invalid` 로 같은 창을 띄운다.
+- **화면 이름은 `config.APP_NAME`("감독모드 전적 분석"), 내부 이름은 예전 그대로**(데이터 폴더·exe·AppId·
+  릴리스 첨부·저장소) — 2026-10-02 상표 때문에 화면에서 FIFA·FC ONLINE 을 뺐다. 내부 이름을 바꾸면 기존
+  데이터·자동 업데이트가 끊긴다. `.iss` 의 `AppTitle` 은 `APP_NAME` 과 같아야 한다(테스트가 대조).
+  화면에 상표가 다시 들어오면 `test_no_trademark_in_window_names` 가 빨개진다.
+- **웹 데이터는 기본 꺼짐 + 첫 실행 동의(`NoticeDialog`) 때 사용자가 고른다**(2026-10-02 결정, 체크 기본 해제).
+  `config.WEB_DATA`·`NOTICE_ACCEPTED` 는 재할당 전역(`set_web_data`·`accept_notice`) — 모듈 경유로 읽는다.
 - **넥슨 웹(데이터센터) 요청은 전부 `config.WEB_DATA` 스위치 뒤에** — `ranker`·`playerinfo`·`seasons`
   의 fetch 함수 첫 줄에서 막는다. 새 스크래핑 함수를 만들면 같은 검사를 넣고
   `test_web_data_switch_blocks_every_request` 의 `_web_calls()` 에 한 줄 추가한다(안 넣으면 그 검사가 비어 있다).

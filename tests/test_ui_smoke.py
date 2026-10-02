@@ -153,7 +153,7 @@ def test_setfont_sizes_survive_stylesheet():
     # (다크 테마 시절 실제로 그랬다 — 30pt 제목이 15px 로 보였다).
     from PyQt6.QtWidgets import QLabel
     title = [lb for lb in _win.stack.widget(_win.PAGE_SEARCH).findChildren(QLabel)
-             if lb.text() == "FC ONLINE"]
+             if lb.objectName() == "searchTitle"]
     assert title, "검색 화면 제목을 못 찾음"
     f = title[0].font()
     assert f.pointSize() == 30, (f.pointSize(), f.pixelSize())
@@ -753,15 +753,53 @@ def test_main_starts_update_check_after_show():
             calls.append("새 버전 확인")
             raise _Stop()  # 이 뒤는 app.exec() — 실제로 들어가면 멈춘다
 
-    orig = app_main._setup_app, app_main.MainWindow
+    orig = app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED
     app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
+    config.NOTICE_ACCEPTED = config.NOTICE_VERSION  # 안내는 이미 동의한 상태
     try:
         app_main.main()  # 확인 호출이 빠지면 app.exec() — 모달 차단이 바로 실패시킨다
     except _Stop:
         pass
     finally:
-        app_main._setup_app, app_main.MainWindow = orig
+        app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED = orig
     assert calls == ["창", "show", "새 버전 확인"], calls
+
+
+def test_main_asks_notice_first_and_quits_on_decline():
+    seen = []
+
+    def dialog(name, result):
+        class _Dlg:
+            def exec(self):
+                seen.append(name)
+                return result
+        return _Dlg
+
+    def too_far(*a, **k):
+        raise AssertionError("동의하지 않았는데 창까지 왔다")
+
+    A, R = app_main.QDialog.DialogCode.Accepted, app_main.QDialog.DialogCode.Rejected
+    orig = (app_main._setup_app, app_main.NoticeDialog, app_main.ApiKeyDialog,
+            app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY)
+    app_main._setup_app, app_main.MainWindow = (lambda app: None), too_far
+    try:
+        # 이미 동의한 버전보다 안내가 새로우면 다시 묻는다 — v0.3.0 사용자(.env 에 값 없음 = 0)
+        config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_VERSION - 1, ""
+        app_main.NoticeDialog = dialog("안내", R)
+        app_main.ApiKeyDialog = dialog("키", R)
+        assert app_main.main() == 0
+        assert seen == ["안내"], seen  # 거절하면 키도 안 묻고 끝
+        seen.clear()
+        app_main.NoticeDialog = dialog("안내", A)
+        assert app_main.main() == 0
+        assert seen == ["안내", "키"], seen  # 안내가 키보다 먼저
+        seen.clear()
+        config.NOTICE_ACCEPTED = config.NOTICE_VERSION
+        assert app_main.main() == 0
+        assert seen == ["키"], seen  # 동의했으면 다시 안 묻는다
+    finally:
+        (app_main._setup_app, app_main.NoticeDialog, app_main.ApiKeyDialog,
+         app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY) = orig
 
 
 # ── 새 버전 알림 ──────────────────────────────────────────────────────
@@ -1116,21 +1154,94 @@ def test_teamcolor_off_shows_reason_without_fetching():
 
 # ── API 키 입력 ───────────────────────────────────────────────────────
 class _TempEnv:
-    """config.ENV_PATH·API_KEY 를 임시 폴더로 돌려 실제 .env 를 안 건드린다."""
+    """config.ENV_PATH·API_KEY·안내 동의·웹 데이터를 임시로 돌려 실제 .env 를 안 건드린다."""
+    _VARS = (config.API_KEY_VAR, config.WEB_DATA_VAR, config.NOTICE_VAR)
 
     def __enter__(self):
         self._dir = tempfile.mkdtemp()
-        self._saved = (config.ENV_PATH, config.API_KEY, os.environ.get(config.API_KEY_VAR))
+        self._saved = (config.ENV_PATH, config.API_KEY, config.WEB_DATA, config.NOTICE_ACCEPTED,
+                       {v: os.environ.get(v) for v in self._VARS})
         config.ENV_PATH = pathlib.Path(self._dir) / ".env"
         return config.ENV_PATH
 
     def __exit__(self, *exc):
-        config.ENV_PATH, config.API_KEY, env = self._saved
-        if env is None:
-            os.environ.pop(config.API_KEY_VAR, None)
-        else:
-            os.environ[config.API_KEY_VAR] = env
+        config.ENV_PATH, config.API_KEY, config.WEB_DATA, config.NOTICE_ACCEPTED, env = self._saved
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         shutil.rmtree(self._dir, ignore_errors=True)
+
+
+def test_web_data_off_and_notice_due_on_fresh_or_old_env():
+    # 기본값은 코드에서 바로 재야 한다 — v0.3.0 의 .env(웹 데이터 줄 없음)로 새 프로세스를 띄운다
+    import subprocess
+    for env_text, want in [("", "False True"), ("NEXON_API_KEY=x\n", "False True"),
+                           ("FIFA_WEB_DATA=1\nFIFA_NOTICE=1\n", "True False"),
+                           ("FIFA_NOTICE=junk\n", "False True")]:
+        d = tempfile.mkdtemp()
+        try:
+            pathlib.Path(d, ".env").write_text(env_text, encoding="utf-8")
+            env = {k: v for k, v in os.environ.items() if k not in _TempEnv._VARS}
+            env["FIFA_DATA_DIR"] = d
+            out = subprocess.run(
+                [sys.executable, "-c",
+                 "import config; print(config.WEB_DATA, config.notice_needed())"],
+                cwd=_ROOT, env=env, capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60)
+            assert out.stdout.strip() == want, (env_text, out.stdout, out.stderr[-500:])
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def test_notice_dialog_web_off_by_default_and_saves_choice():
+    for tick_web in (False, True):
+        with _TempEnv() as env:
+            config.WEB_DATA, config.NOTICE_ACCEPTED = True, 0  # v0.3.0 — 고지 없이 켜져 있던 사람
+            dlg = app_main.NoticeDialog()
+            assert not dlg.chk_web.isChecked(), "예전에 켜져 있었어도 처음엔 꺼진 채로 보여야 한다"
+            assert not dlg.btn_ok.isEnabled(), "동의 없이 시작할 수 있다"
+            dlg.chk_web.setChecked(tick_web)
+            dlg.chk_agree.setChecked(True)
+            assert dlg.btn_ok.isEnabled()
+            dlg.btn_ok.click()
+            assert dlg.result() == app_main.QDialog.DialogCode.Accepted
+            lines = env.read_text(encoding="utf-8").splitlines()
+            assert f"FIFA_WEB_DATA={int(tick_web)}" in lines and "FIFA_NOTICE=1" in lines, lines
+            assert config.WEB_DATA is tick_web and not config.notice_needed()
+
+
+def test_about_button_on_both_pages_toggles_web_data():
+    for idx in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
+        btns = [b for b in _win.stack.widget(idx).findChildren(app_main.QPushButton)
+                if b.objectName() == "aboutButton"]
+        assert len(btns) == 1, (idx, len(btns))
+        opened = []
+        orig = app_main.AboutDialog.exec
+        app_main.AboutDialog.exec = lambda self: opened.append(self)
+        try:
+            btns[0].click()
+        finally:
+            app_main.AboutDialog.exec = orig
+        assert len(opened) == 1, (idx, opened)
+    with _TempEnv() as env:
+        config.WEB_DATA = False
+        dlg = app_main.AboutDialog()
+        assert not dlg.chk_web.isChecked()
+        dlg.chk_web.setChecked(True)
+        assert config.WEB_DATA is True and "FIFA_WEB_DATA=1" in env.read_text(encoding="utf-8")
+        dlg.chk_web.setChecked(False)
+        assert config.WEB_DATA is False and "FIFA_WEB_DATA=0" in env.read_text(encoding="utf-8")
+
+
+def test_no_trademark_in_window_names():
+    # 화면 이름에서 FIFA·FC ONLINE 을 뺐다(상표) — 다시 들어오면 빨개진다
+    # 창 자신의 글만 — [정보] 창의 상표 고지("FC 온라인… 각 사의 상표")는 있어야 하는 글이다
+    texts = [_win.windowTitle()] + [lb.text() for lb in _win.findChildren(app_main.QLabel)
+                                    if lb.window() is _win]
+    bad = [t for t in texts if re.search(r"FC ONLINE|FIFA|피파", t)]
+    assert not bad, bad
 
 
 def test_save_api_key_replaces_only_key_line():

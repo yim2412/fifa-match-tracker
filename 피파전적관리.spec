@@ -1,13 +1,21 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
 
+sys.path.insert(0, SPECPATH)
+import notice  # noqa: E402
+
+# 오픈소스 라이선스 전문 — 배포물 _internal/licenses/<이름>/ 에. 목록은 notice.THIRD_PARTY 한 곳.
+# PyQt6 가 GPL v3 라 받는 사람에게 라이선스 사본을 줘야 한다(tools/release.py 가 들어갔는지 확인한다).
+LICENSE_DATAS = [(str(p), f"{notice.LICENSE_DIR}/{name}") for name, p in notice.license_files()]
+LICENSE_DATAS.append(('LICENSE', f"{notice.LICENSE_DIR}/this-app"))
 
 a = Analysis(
     ['app_main.py'],
     pathex=[],
     binaries=[],
-    datas=[('app_icon.ico', '.')],
+    datas=[('app_icon.ico', '.')] + LICENSE_DATAS,
     hiddenimports=['store', 'stats', 'theme', 'widgets', 'ranker', 'images',
-                   'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck'],
+                   'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck', 'notice'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

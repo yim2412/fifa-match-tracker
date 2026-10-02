@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 import config  # noqa: E402
 import nexon_api  # noqa: E402
+import notice  # noqa: E402
 
 APP_DIR_NAME = "피파전적관리"
 # 릴리스 첨부 파일 이름은 영문 — GitHub 가 한글을 지운다(v0.2.0 의 zip 이 '-v0.2.0.zip' 으로 올라갔다).
@@ -144,6 +145,18 @@ def scan_verdict(leaks: dict, seen: dict) -> str | None:
     return None
 
 
+def missing_licenses(names: list[str]) -> list[str]:
+    """배포물 파일 이름들 중 라이선스 폴더에 파일이 하나도 없는 고지 항목.
+
+    PyQt6 가 GPL v3 라 라이선스 사본을 같이 줘야 한다 — spec 이 넣지만, 패키지 이름이 바뀌어
+    license_files() 가 못 찾으면 조용히 빠지므로 여기서 막는다.
+    """
+    want = [n for n, _lic, _d in notice.THIRD_PARTY] + ["this-app"]
+    have = {n.split(f"/{notice.LICENSE_DIR}/", 1)[1].split("/", 1)[0]
+            for n in names if f"/{notice.LICENSE_DIR}/" in n}
+    return [n for n in want if n not in have]
+
+
 def asset_names(version: str) -> tuple[str, str, str]:
     """(설치 파일, 포터블 zip, 체크섬) — 전부 ASCII 여야 GitHub 에서 이름이 안 깨진다."""
     return (f"{ASSET_PREFIX}-Setup-{version}.exe", f"{ASSET_PREFIX}-{version}-portable.zip",
@@ -164,6 +177,19 @@ def write_sums(path: Path, files: list[Path]) -> str:
     return text
 
 
+# 받기 전에 읽게 — 앱 첫 실행 안내(notice.py)와 같은 내용의 요약
+DISCLAIMER = (
+    "## 받기 전에\n\n"
+    f"- {notice.UNOFFICIAL} 무료이며 있는 그대로 제공되고, 쓰다 생긴 손해는 책임지지 않는다.\n"
+    "- 넥슨 오픈API 키는 본인이 발급받아 넣는다 — 키 관리와 넥슨 오픈API 이용약관 준수는 본인 몫.\n"
+    "- **넥슨 홈페이지 데이터(랭킹·구단가치·팀컬러·시즌 구분·선수 능력치)는 기본 꺼짐.** 홈페이지를 자동으로"
+    " 읽는 방식이라 넥슨이 공식으로 허락한 경로(오픈API)가 아니다. 첫 실행 때 켤지 고르며, 켜는 건 사용자의"
+    " 선택과 책임이다. 끄면 그 칸이 빈다.\n"
+    "- 만든 사람은 아무것도 수집하지 않는다. 연결처는 넥슨(API·이미지·홈페이지)과 GitHub(업데이트 확인)뿐.\n"
+    "- 소스는 MIT, 실행 파일은 PyQt6(GPL v3)를 포함해 GPL v3 조건으로 배포된다."
+    " 라이선스 전문은 프로그램 폴더 `_internal\\licenses`.")
+
+
 def release_notes(changes: str, setup: str, portable: str, sums: str) -> str:
     return (
         "## 받기\n\n"
@@ -174,6 +200,7 @@ def release_notes(changes: str, setup: str, portable: str, sums: str) -> str:
         "- 처음 켜면 API 키를 묻는다 — 넥슨 오픈API에서 애플리케이션을 **서비스 단계**로 등록해 받는다.\n"
         "- 전적 기록·키는 `%LOCALAPPDATA%\\피파전적관리` 에 있어, 업데이트하거나 지워도 남는다.\n\n"
         f"## 바뀐 점\n\n{changes}\n\n"
+        f"{DISCLAIMER}\n\n"
         "## 파일 확인 (SHA256)\n\n"
         "받은 파일이 아래 값과 같은지: `certutil -hashfile <파일> SHA256`\n\n"
         f"```\n{sums}```\n\n"
@@ -233,6 +260,11 @@ def main() -> int:
         for p in sorted(app_dir.rglob("*")):
             z.write(p, p.relative_to(DIST).as_posix())
     ok(f"zip {zip_path.name} ({zip_path.stat().st_size / 2**20:.1f} MB)")
+    with zipfile.ZipFile(zip_path) as z:
+        lic_missing = missing_licenses(z.namelist())
+    if lic_missing:
+        fail(f"라이선스 전문이 빠졌다 {lic_missing} — notice.THIRD_PARTY 의 배포 이름을 확인")
+    ok(f"라이선스 전문 {len(notice.THIRD_PARTY) + 1}개 항목 전부 들어 있음")
 
     setup = DIST / setup_name
     setup.unlink(missing_ok=True)

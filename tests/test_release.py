@@ -145,6 +145,30 @@ def test_sha256_lines_and_notes():
     # 설치 파일이 포터블보다 먼저, 체크섬과 출처 표기가 본문에
     assert notes.index("S.exe") < notes.index("P.zip"), notes
     assert line.strip() in notes and "Data based on NEXON Open API" in notes and "- 바뀐 것" in notes
+    # 받기 전에 읽어야 할 고지 — 비공식·웹 데이터 기본 꺼짐·GPL
+    assert release.DISCLAIMER in notes and "기본 꺼짐" in notes and "GPL v3" in notes, notes
+
+
+def test_every_third_party_has_license_file():
+    # 배포 이름이 바뀌어 못 찾으면 spec 이 조용히 빼고 넘어간다 — 여기서 빨개져야 한다
+    found = {name for name, p in release.notice.license_files() if p.is_file()}
+    want = [n for n, _lic, _d in release.notice.THIRD_PARTY]
+    assert found == set(want), sorted(set(want) - found)
+
+
+def test_missing_licenses_reads_zip_names():
+    d = f"피파전적관리/_internal/{release.notice.LICENSE_DIR}"
+    every = [f"{d}/{n}/LICENSE" for n, _l, _d in release.notice.THIRD_PARTY] + [f"{d}/this-app/LICENSE"]
+    assert release.missing_licenses(every) == []
+    assert release.missing_licenses(every[1:]) == [release.notice.THIRD_PARTY[0][0]]
+    assert release.missing_licenses([]) != [], "빈 배포물을 통과시켰다"
+
+
+def test_installer_shows_app_name():
+    iss = release.ISS.read_text(encoding="utf-8-sig")
+    assert f'#define AppTitle "{release.config.APP_NAME}"' in iss, "설치 파일 표시 이름이 config.APP_NAME 과 다르다"
+    # 옛 이름 바로가기를 안 지우면 업데이트 뒤 시작 메뉴에 둘이 남는다
+    assert '#define OldTitle "피파 전적관리"' in iss and iss.count("{#OldTitle}.lnk") == 2, iss
 
 
 def test_changelog_section():

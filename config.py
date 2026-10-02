@@ -8,8 +8,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-APP_NAME = "피파 전적관리"
-APP_VERSION = "v0.3.0"
+# 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
+# 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
+APP_NAME = "감독모드 전적 분석"
+APP_VERSION = "v0.3.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 
@@ -87,11 +89,23 @@ load_dotenv(ENV_PATH)
 API_KEY = os.getenv(API_KEY_VAR, "").strip()
 
 # 넥슨 웹(데이터센터) 페이지 읽기 — 오픈API 에 없는 랭킹·팀가치·시즌표·선수 능력치.
-# 오픈API 약관 밖이라 한 곳에서 끌 수 있게 둔다(.env 에 FIFA_WEB_DATA=0).
-# 끄면 ranker·playerinfo·seasons 가 요청 없이 WebDataOff 계열 예외를 던진다.
+# 오픈API 약관 밖이라 **기본 꺼짐**이고, 첫 실행 안내 창(또는 [정보])에서 사용자가 켠다
+# (.env 의 FIFA_WEB_DATA=1). 끄면 ranker·playerinfo·seasons 가 요청 없이 WebDataOff 계열 예외를 던진다.
 # CDN 이미지(images.py)는 페이지가 아니라 정적 파일이라 여기 안 묶는다.
-WEB_DATA = os.getenv("FIFA_WEB_DATA", "1").strip() != "0"
-WEB_DATA_OFF_MSG = "넥슨 웹 데이터 조회가 꺼져 있습니다 (.env 의 FIFA_WEB_DATA=0)"
+# set_web_data 가 재할당한다 — 다른 모듈은 config.WEB_DATA 로 읽는다.
+WEB_DATA_VAR = "FIFA_WEB_DATA"
+WEB_DATA = os.getenv(WEB_DATA_VAR, "0").strip() == "1"
+WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 — [정보] 에서 켤 수 있습니다"
+
+# 이용 안내 동의 — 첫 실행 때 받는다. notice.py 의 글을 실질적으로 바꾸면 NOTICE_VERSION 을
+# 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
+# .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
+NOTICE_VAR = "FIFA_NOTICE"
+NOTICE_VERSION = 1
+try:
+    NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
+except ValueError:
+    NOTICE_ACCEPTED = 0
 # 브라우저인 척하지 않고 앱 이름을 밝힌다. 2026-10-02 실측: 이 UA 로도 네 페이지가
 # 브라우저 UA 와 같은 바이트로 응답했다. UA 를 아예 비우면 playerinfo 가 500 이다.
 REPO_URL = "https://github.com/yim2412/fifa-match-tracker"
@@ -104,23 +118,47 @@ LATEST_RELEASE_API = "https://api.github.com/repos/yim2412/fifa-match-tracker/re
 RELEASES_URL = f"{REPO_URL}/releases/latest"
 
 
-def save_api_key(key: str) -> None:
-    """키를 .env 에 쓰고 이 프로세스의 API_KEY 도 바꾼다.
-
-    .env 의 다른 줄(FIFA_* 설정 등)은 그대로 둔다. API_KEY 를 재할당하므로
-    다른 모듈은 `from config import API_KEY` 가 아니라 `config.API_KEY` 로 읽어야 한다.
-    """
-    global API_KEY
-    key = key.strip()
+def _save_env(var: str, value: str) -> None:
+    """.env 의 그 한 줄만 바꾼다(다른 줄은 그대로) — 이 프로세스의 환경 변수도 같이."""
     lines = []
     if ENV_PATH.exists():
         lines = ENV_PATH.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-    lines = [ln for ln in lines if not ln.strip().startswith(f"{API_KEY_VAR}=")]
-    lines.append(f"{API_KEY_VAR}={key}")
+    lines = [ln for ln in lines if not ln.strip().startswith(f"{var}=")]
+    lines.append(f"{var}={value}")
     ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.environ[API_KEY_VAR] = key
+    os.environ[var] = value
+
+
+def save_api_key(key: str) -> None:
+    """키를 .env 에 쓰고 이 프로세스의 API_KEY 도 바꾼다.
+
+    API_KEY 를 재할당하므로 다른 모듈은 `from config import API_KEY` 가 아니라
+    `config.API_KEY` 로 읽어야 한다.
+    """
+    global API_KEY
+    key = key.strip()
+    _save_env(API_KEY_VAR, key)
     API_KEY = key
+
+
+def set_web_data(on: bool) -> None:
+    """넥슨 홈페이지 데이터 읽기를 켜고 끈다 — 저장하고 다음 요청부터 바로 반영."""
+    global WEB_DATA
+    _save_env(WEB_DATA_VAR, "1" if on else "0")
+    WEB_DATA = on
+
+
+def accept_notice(web_data: bool) -> None:
+    """이용 안내 동의 — 웹 데이터 선택과 같이 저장한다(고지 없이 켜진 채 남지 않게)."""
+    global NOTICE_ACCEPTED
+    set_web_data(web_data)
+    _save_env(NOTICE_VAR, str(NOTICE_VERSION))
+    NOTICE_ACCEPTED = NOTICE_VERSION
+
+
+def notice_needed() -> bool:
+    return NOTICE_ACCEPTED < NOTICE_VERSION
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다

@@ -1,4 +1,4 @@
-"""피파 전적관리 — PyQt6 앱.
+"""감독모드 전적 분석(예전 이름 피파 전적관리) — PyQt6 앱.
 
 첫 화면은 검색창 하나. 구단주명을 넣으면 왼쪽 메뉴 + 대시보드 화면으로 전환된다.
 """
@@ -19,13 +19,14 @@ from PyQt6.QtWidgets import (
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-    QTableWidget, QTabWidget, QVBoxLayout, QWidget,
+    QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 import analysis
 import config
 import crashlog
 import images
+import notice
 import playerinfo
 import ranker
 import seasons as sn
@@ -691,7 +692,8 @@ class MainWindow(QMainWindow):
         box_v.setContentsMargins(40, 36, 40, 32)
         box_v.setSpacing(0)
 
-        title = QLabel("FC ONLINE")
+        title = QLabel(config.APP_NAME)
+        title.setObjectName("searchTitle")
         f = QFont()
         f.setPointSize(30)
         f.setBold(True)
@@ -700,7 +702,7 @@ class MainWindow(QMainWindow):
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         box_v.addWidget(title)
 
-        sub = QLabel("감독모드 전적 분석")
+        sub = QLabel("넥슨·EA 와 무관한 비공식 프로그램")
         sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none; font-size: 14px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         box_v.addWidget(sub)
@@ -750,7 +752,22 @@ class MainWindow(QMainWindow):
 
         outer.addStretch(2)
         outer.addWidget(self._attribution_label(), 0, Qt.AlignmentFlag.AlignHCenter)
+        outer.addWidget(self._about_button(), 0, Qt.AlignmentFlag.AlignHCenter)
         return w
+
+    def _about_button(self) -> QPushButton:
+        """[정보] — 이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기. 두 화면에 하나씩."""
+        btn = QPushButton("정보 · 이용 안내")
+        btn.setObjectName("aboutButton")
+        btn.setFlat(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 11px; border: none;"
+                          " text-decoration: underline; padding: 0;")
+        btn.clicked.connect(self._open_about)
+        return btn
+
+    def _open_about(self) -> None:
+        AboutDialog(self).exec()
 
     @staticmethod
     def _attribution_label() -> QLabel:
@@ -910,9 +927,9 @@ class MainWindow(QMainWindow):
         sv = QVBoxLayout(side)
         sv.setContentsMargins(0, 20, 0, 14)
         sv.setSpacing(2)
-        brand = QLabel("FC ONLINE")
+        brand = QLabel("감독모드")  # config.APP_NAME 을 두 줄로 — 사이드바 폭에 한 줄로 안 들어간다
         brand.setObjectName("brand")
-        brand_sub = QLabel("감독모드 전적 분석")
+        brand_sub = QLabel("전적 분석 · 비공식")
         brand_sub.setObjectName("brandSub")
         for lb in (brand, brand_sub):
             lb.setContentsMargins(22, 0, 0, 0)
@@ -949,6 +966,11 @@ class MainWindow(QMainWindow):
         attr.setWordWrap(True)  # 사이드바 폭이 고정이라 넘치면 접는다
         attr.setContentsMargins(22, 0, 12, 0)
         sv.addWidget(attr)
+        about = QHBoxLayout()
+        about.setContentsMargins(22, 0, 12, 0)
+        about.addWidget(self._about_button())
+        about.addStretch(1)
+        sv.addLayout(about)
         h.addWidget(side)
 
         right = QWidget()
@@ -3784,12 +3806,105 @@ class ApiKeyDialog(QDialog):
         self.accept()
 
 
+def _notice_browser(html: str) -> QTextBrowser:
+    tb = QTextBrowser()
+    tb.setOpenExternalLinks(True)
+    tb.setHtml(html)
+    return tb
+
+
+class NoticeDialog(QDialog):
+    """첫 실행(또는 안내 글이 바뀐 뒤) 이용 안내 동의 + 넥슨 홈페이지 데이터 선택.
+
+    웹 데이터는 **기본 체크 안 됨** — 예전 버전에서 켜져 있었어도 여기서 다시 고른다
+    (고지 없이 켜진 채 남지 않게). 동의하지 않고 닫으면 앱을 켜지 않는다.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} — 이용 안내")
+        v = QVBoxLayout(self)
+        v.addWidget(_notice_browser(notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML), 1)
+        self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
+        self.chk_agree = QCheckBox(notice.AGREE_CHECK)
+        v.addWidget(self.chk_web)
+        v.addWidget(self.chk_agree)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_ok = QPushButton("시작")
+        self.btn_ok.setEnabled(False)
+        self.btn_ok.clicked.connect(self._on_accept)
+        self.chk_agree.toggled.connect(self.btn_ok.setEnabled)
+        btn_cancel = QPushButton("닫기")
+        btn_cancel.clicked.connect(self.reject)
+        row.addWidget(self.btn_ok)
+        row.addWidget(btn_cancel)
+        v.addLayout(row)
+        self.resize(620, 640)
+
+    def _on_accept(self) -> None:
+        if not self.chk_agree.isChecked():
+            return
+        try:
+            config.accept_notice(self.chk_web.isChecked())
+        except OSError as e:
+            QMessageBox.warning(self, "저장 실패", f"설정을 저장하지 못했습니다: {e}")
+            return
+        self.accept()
+
+
+class AboutDialog(QDialog):
+    """[정보] — 버전·이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} — 정보")
+        v = QVBoxLayout(self)
+        head = QLabel(f"<b>{config.APP_NAME}</b> {config.APP_VERSION}<br>"
+                      f"{notice.UNOFFICIAL}<br>"
+                      f"<a href='{config.REPO_URL}'>{config.REPO_URL}</a>")
+        head.setOpenExternalLinks(True)
+        head.setWordWrap(True)
+        v.addWidget(head)
+        tabs = QTabWidget()
+        tabs.addTab(_notice_browser(notice.TERMS_HTML), "이용 안내")
+        tabs.addTab(_notice_browser(notice.PRIVACY_HTML), "개인정보")
+        tabs.addTab(_notice_browser(notice.WEB_DATA_HTML), "넥슨 홈페이지 데이터")
+        tabs.addTab(_notice_browser(notice.licenses_html()), "오픈소스 라이선스")
+        v.addWidget(tabs, 1)
+        self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
+        self.chk_web.setChecked(config.WEB_DATA)
+        self.chk_web.toggled.connect(self._on_web_toggled)
+        v.addWidget(self.chk_web)
+        self.lb_msg = QLabel("")
+        self.lb_msg.setWordWrap(True)
+        self.lb_msg.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_msg)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        btn = QPushButton("닫기")
+        btn.clicked.connect(self.accept)
+        row.addWidget(btn)
+        v.addLayout(row)
+        self.resize(620, 600)
+
+    def _on_web_toggled(self, on: bool) -> None:
+        try:
+            config.set_web_data(on)
+        except OSError as e:
+            self.lb_msg.setText(f"저장하지 못했습니다: {e}")
+            return
+        self.lb_msg.setText("켰습니다 — 다음 조회부터 반영됩니다." if on else
+                            "껐습니다 — 다음 조회부터 넥슨 홈페이지를 읽지 않습니다.")
+
+
 def _notify_crash(path) -> None:
     QMessageBox.warning(
         None, "예기치 못한 오류",
         "오류가 나서 기록을 남겼습니다. 앱은 계속 쓸 수 있지만, 화면이 이상하면 "
         "다시 켜 주세요.\n\n"
-        f"오류 기록: {path}\n\n이 파일을 보내 주시면 원인을 찾을 수 있습니다.")
+        f"오류 기록: {path}\n\n이 파일을 보내 주시면 원인을 찾을 수 있습니다. "
+        "기록에 PC 의 폴더 경로(사용자 이름 포함)가 들어 있을 수 있으니, 보내기 전에 열어 확인하세요.")
 
 
 def _setup_app(app: QApplication) -> None:
@@ -3805,6 +3920,9 @@ def main() -> int:
     # instance() — 테스트가 이미 만든 앱으로 main 을 부를 수 있게(둘째 QApplication 은 예외)
     app = QApplication.instance() or QApplication(sys.argv)
     _setup_app(app)
+    if config.notice_needed():
+        if NoticeDialog().exec() != QDialog.DialogCode.Accepted:
+            return 0
     if not config.API_KEY:
         if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
             return 0
