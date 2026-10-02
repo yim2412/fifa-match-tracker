@@ -54,6 +54,9 @@ KEY_INVALID_CODE = "OPENAPI00005"
 KEY_CHECK_NICKNAME = "키확인용"
 KEY_ISSUE_URL = "https://openapi.nexon.com/"
 
+# 오픈API 약관 제6조④ — 결과 데이터에 출처를 명시. 문구는 공식 가이드(API 사용하기)가 정한 것.
+ATTRIBUTION = "Data based on NEXON Open API"
+
 
 class NexonAPIError(Exception):
     """API가 에러를 돌려줬거나 네트워크가 실패한 경우."""

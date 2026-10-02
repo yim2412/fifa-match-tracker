@@ -533,6 +533,16 @@ def test_no_dark_theme_leftovers():
             assert not hits, (name, hexv, hits)
 
 
+def test_attribution_on_search_and_main_pages():
+    # 넥슨 오픈API 약관 제6조④ — 문구는 공식 가이드 그대로여야 한다
+    want = "Data based on NEXON Open API"
+    for idx in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
+        page = _win.stack.widget(idx)
+        labels = [lb for lb in page.findChildren(app_main.QLabel)
+                  if lb.objectName() == "attribution"]
+        assert [lb.text() for lb in labels] == [want], (idx, [lb.text() for lb in labels])
+
+
 # ── API 키 입력 ───────────────────────────────────────────────────────
 class _TempEnv:
     """config.ENV_PATH·API_KEY 를 임시 폴더로 돌려 실제 .env 를 안 건드린다."""

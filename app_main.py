@@ -34,7 +34,7 @@ from models import (
     period_stats, summarize, win_rate_trend,
 )
 from nexon_api import (
-    KEY_INVALID_CODE, KEY_ISSUE_URL, FCOnlineAPI, NexonAPIError, check_key,
+    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, FCOnlineAPI, NexonAPIError, check_key,
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
@@ -668,7 +668,16 @@ class MainWindow(QMainWindow):
         outer.addLayout(centering)
 
         outer.addStretch(2)
+        outer.addWidget(self._attribution_label(), 0, Qt.AlignmentFlag.AlignHCenter)
         return w
+
+    @staticmethod
+    def _attribution_label() -> QLabel:
+        """넥슨 오픈API 약관 제6조④ 출처 표기 — API 데이터가 보이는 화면마다 둔다."""
+        lb = QLabel(ATTRIBUTION)
+        lb.setObjectName("attribution")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 11px; border: none;")
+        return lb
 
     RECENT_SEARCH_LIMIT = 5
 
@@ -854,6 +863,11 @@ class MainWindow(QMainWindow):
         pwrap.setContentsMargins(12, 0, 12, 0)
         pwrap.addWidget(prof)
         sv.addLayout(pwrap)
+        sv.addSpacing(8)
+        attr = self._attribution_label()
+        attr.setWordWrap(True)  # 사이드바 폭이 고정이라 넘치면 접는다
+        attr.setContentsMargins(22, 0, 12, 0)
+        sv.addWidget(attr)
         h.addWidget(side)
 
         right = QWidget()
