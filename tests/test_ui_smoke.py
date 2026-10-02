@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import re
+import shutil
 import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -22,7 +25,9 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
 
 import app_main  # noqa: E402
+import config  # noqa: E402
 import models  # noqa: E402
+import nexon_api  # noqa: E402
 import theme as T  # noqa: E402
 
 _DIR = os.path.join(_ROOT, "tests", "fixtures")
@@ -526,6 +531,117 @@ def test_no_dark_theme_leftovers():
             hits = [i + 1 for i, line in enumerate(src.splitlines())
                     if re.search(re.escape(hexv), line, re.I)]
             assert not hits, (name, hexv, hits)
+
+
+# ── API 키 입력 ───────────────────────────────────────────────────────
+class _TempEnv:
+    """config.ENV_PATH·API_KEY 를 임시 폴더로 돌려 실제 .env 를 안 건드린다."""
+
+    def __enter__(self):
+        self._dir = tempfile.mkdtemp()
+        self._saved = (config.ENV_PATH, config.API_KEY, os.environ.get(config.API_KEY_VAR))
+        config.ENV_PATH = pathlib.Path(self._dir) / ".env"
+        return config.ENV_PATH
+
+    def __exit__(self, *exc):
+        config.ENV_PATH, config.API_KEY, env = self._saved
+        if env is None:
+            os.environ.pop(config.API_KEY_VAR, None)
+        else:
+            os.environ[config.API_KEY_VAR] = env
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+
+def test_save_api_key_replaces_only_key_line():
+    with _TempEnv() as env:
+        env.write_text("FIFA_X=1\nNEXON_API_KEY=old\n", encoding="utf-8")
+        config.save_api_key("  new  ")
+        assert env.read_text(encoding="utf-8").splitlines() == ["FIFA_X=1", "NEXON_API_KEY=new"]
+        assert config.API_KEY == "new", config.API_KEY
+
+
+def test_check_key_judges_by_error_code():
+    def fake(err):
+        def _get(self, path, **params):
+            if err:
+                raise err
+            return {"ouid": "x"}
+        return _get
+
+    E = nexon_api.NexonAPIError
+    cases = [  # (응답, 통과해야 하나)
+        (None, True),
+        (E("없는 닉네임", code="OPENAPI00004", status=400), True),   # 맞는 키의 실측 응답
+        (E("거절", code=nexon_api.KEY_INVALID_CODE, status=400), False),
+        (E("네트워크 오류"), False),                                  # status 없음
+        (E("호출량 초과", code="OPENAPI00007", status=429), False),
+        (E("서버 오류", code="OPENAPI00001", status=500), False),
+    ]
+    orig = nexon_api.FCOnlineAPI._get
+    try:
+        for err, ok in cases:
+            nexon_api.FCOnlineAPI._get = fake(err)
+            got = nexon_api.check_key("some_key")
+            assert (got is None) == ok, (err and err.message, got)
+    finally:
+        nexon_api.FCOnlineAPI._get = orig
+    assert nexon_api.check_key("   ") == "키를 입력하세요."
+
+
+def test_key_dialog_saves_only_accepted_key():
+    with _TempEnv() as env:
+        dlg = app_main.ApiKeyDialog()
+        dlg.show()
+        dlg._on_checked("bad_key", "API 키가 유효하지 않습니다.")
+        assert not env.exists(), "거절된 키가 저장됐다"
+        assert dlg.result() != app_main.QDialog.DialogCode.Accepted
+        assert "유효하지" in dlg.lb_msg.text(), dlg.lb_msg.text()
+        dlg._on_checked("good_key", "")
+        assert dlg.result() == app_main.QDialog.DialogCode.Accepted
+        assert "NEXON_API_KEY=good_key" in env.read_text(encoding="utf-8")
+
+
+def test_loader_routes_rejected_key_to_dialog():
+    class _Api:
+        def __init__(self, code):
+            self.code = code
+
+        def get_ouid(self, nick):
+            raise nexon_api.NexonAPIError("msg", code=self.code, status=400)
+
+    for code, want in ((nexon_api.KEY_INVALID_CODE, "key"), ("OPENAPI00009", "failed")):
+        got = []
+        ld = app_main.MatchLoader(_Api(code), "닉", 52)
+        ld.key_invalid.connect(lambda m: got.append("key"))
+        ld.failed.connect(lambda m: got.append("failed"))
+        ld.run()
+        assert got == [want], (code, got)
+
+
+def test_rejected_key_asks_and_swaps_key():
+    seen = {}
+
+    class _Dlg:
+        def __init__(self, parent=None, reason=""):
+            seen["reason"] = reason
+
+        def exec(self):
+            config.API_KEY = "fresh_key"  # 창이 save_api_key 를 부른 것과 같은 상태
+            return app_main.QDialog.DialogCode.Accepted
+
+    class _Api:
+        def set_key(self, key):
+            seen["key"] = key
+
+    orig = app_main.ApiKeyDialog, _win._api, app_main.QMessageBox.warning
+    with _TempEnv():
+        app_main.ApiKeyDialog, _win._api = _Dlg, _Api()
+        app_main.QMessageBox.warning = lambda *a, **k: None  # 모달이라 offscreen 에서 멈춘다
+        try:
+            _win._on_key_invalid("거절됨")
+        finally:
+            app_main.ApiKeyDialog, _win._api, app_main.QMessageBox.warning = orig
+    assert seen == {"reason": "거절됨", "key": "fresh_key"}, seen
 
 
 def _shots():

@@ -33,7 +33,9 @@ from models import (
     MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match,
     period_stats, summarize, win_rate_trend,
 )
-from nexon_api import FCOnlineAPI, NexonAPIError
+from nexon_api import (
+    KEY_INVALID_CODE, KEY_ISSUE_URL, FCOnlineAPI, NexonAPIError, check_key,
+)
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
@@ -59,6 +61,7 @@ class MatchLoader(QThread):
     finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int, object,
                              str, bool, str, dict, dict)
     failed = pyqtSignal(str)
+    key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
         super().__init__()
@@ -171,7 +174,10 @@ class MatchLoader(QThread):
                                   is_champion, badge_path, seasons, division_names)
 
         except NexonAPIError as e:
-            self.failed.emit(e.message)
+            if e.code == KEY_INVALID_CODE:
+                self.key_invalid.emit(e.message)
+            else:
+                self.failed.emit(e.message)
         except Exception as e:
             self.failed.emit(f"예기치 못한 오류: {e}")
 
@@ -1837,6 +1843,7 @@ class MainWindow(QMainWindow):
         self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
         self._compare_loader.finished_ok.connect(self._on_compare_loaded)
         self._compare_loader.failed.connect(self._on_compare_failed)
+        self._compare_loader.key_invalid.connect(self._on_compare_key_invalid)
         self._compare_loader.start()
 
     def _on_compare_loaded(self, matches: list, details: list, ouid: str,
@@ -1857,6 +1864,21 @@ class MainWindow(QMainWindow):
     def _on_compare_failed(self, msg: str) -> None:
         self.btn_compare.setEnabled(True)
         self.lb_compare_status.setText(msg)
+
+    def _on_compare_key_invalid(self, msg: str) -> None:
+        self._on_compare_failed(msg)
+        self._ask_new_key(msg)
+
+    def _on_key_invalid(self, msg: str) -> None:
+        self._on_failed(msg)
+        self._ask_new_key(msg)
+
+    def _ask_new_key(self, reason: str) -> None:
+        """넥슨이 키를 거절했다(만료·폐기 등) — 앱을 끄지 않고 새 키를 받는다."""
+        dlg = ApiKeyDialog(self, reason=reason)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._api.set_key(config.API_KEY)
+            self.statusBar().showMessage("API 키를 바꿨습니다. 다시 검색하세요.")
 
     def _render_compare(self, opp_nick: str, opp_matches: list[MatchSummary],
                         opp_ouid: str, opp_details: list[dict]) -> None:
@@ -2043,6 +2065,7 @@ class MainWindow(QMainWindow):
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
+        self._loader.key_invalid.connect(self._on_key_invalid)
         self._loader.start()
 
     def _apply_range(self) -> None:
@@ -3515,6 +3538,91 @@ class MainWindow(QMainWindow):
         super().closeEvent(e)
 
 
+class KeyCheckWorker(QThread):
+    """키 확인 호출(nexon_api.check_key)을 UI 스레드 밖에서 한다."""
+    checked = pyqtSignal(str, str)  # (키, 실패 이유 — 통과면 빈 문자열)
+
+    def __init__(self, key: str):
+        super().__init__()
+        self._key = key
+
+    def run(self) -> None:
+        try:
+            reason = check_key(self._key, timeout=6) or ""
+        except Exception as e:
+            reason = f"확인 중 오류: {e}"
+        self.checked.emit(self._key, reason)
+
+
+class ApiKeyDialog(QDialog):
+    """넥슨 오픈API 키 입력 — 첫 실행, 또는 넥슨이 키를 거절했을 때.
+
+    받은 사람이 숨김 폴더(%LOCALAPPDATA%)에 .env 를 직접 만들 필요가 없게 한다.
+    넥슨에 한 번 물어 통과한 키만 config.save_api_key 로 저장한다.
+    """
+    _running: set = set()  # 창이 먼저 닫혀도 확인 스레드가 끝날 때까지 참조를 쥔다
+
+    def __init__(self, parent=None, reason: str = ""):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} — API 키")
+        v = QVBoxLayout(self)
+        intro = QLabel(
+            "넥슨 오픈API 키가 필요합니다. 키는 무료로 바로 발급됩니다.<br><br>"
+            f"1. <a href='{KEY_ISSUE_URL}'>NEXON Open API</a> 에 로그인<br>"
+            "2. 애플리케이션 등록 → 발급된 키 복사<br>"
+            "3. 아래 칸에 붙여넣기")
+        intro.setOpenExternalLinks(True)
+        intro.setWordWrap(True)
+        v.addWidget(intro)
+        self.ed_key = QLineEdit()
+        self.ed_key.setPlaceholderText("live_… 또는 test_…")
+        self.ed_key.returnPressed.connect(self._on_submit)
+        v.addWidget(self.ed_key)
+        self.lb_msg = QLabel(reason)
+        self.lb_msg.setWordWrap(True)
+        self.lb_msg.setStyleSheet(f"color: {T.RED};")
+        v.addWidget(self.lb_msg)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_ok = QPushButton("확인")
+        self.btn_ok.clicked.connect(self._on_submit)
+        btn_cancel = QPushButton("취소")
+        btn_cancel.clicked.connect(self.reject)
+        row.addWidget(self.btn_ok)
+        row.addWidget(btn_cancel)
+        v.addLayout(row)
+        self.resize(460, self.sizeHint().height())
+
+    def _on_submit(self) -> None:
+        key = self.ed_key.text().strip()
+        if not key:
+            self.lb_msg.setText("키를 입력하세요.")
+            return
+        self.btn_ok.setEnabled(False)
+        self.ed_key.setEnabled(False)
+        self.lb_msg.setText("넥슨에 확인하는 중…")
+        worker = KeyCheckWorker(key)
+        self._running.add(worker)
+        worker.checked.connect(self._on_checked)
+        worker.finished.connect(lambda w=worker: self._running.discard(w))
+        worker.start()
+
+    def _on_checked(self, key: str, reason: str) -> None:
+        if not self.isVisible():
+            return  # 확인 중에 창을 닫았다
+        self.btn_ok.setEnabled(True)
+        self.ed_key.setEnabled(True)
+        if reason:
+            self.lb_msg.setText(reason)
+            return
+        try:
+            config.save_api_key(key)
+        except OSError as e:
+            self.lb_msg.setText(f"키를 저장하지 못했습니다: {e}")
+            return
+        self.accept()
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     T.apply(app)
@@ -3522,13 +3630,8 @@ def main() -> int:
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     if not config.API_KEY:
-        QMessageBox.critical(
-            None, "API 키 없음",
-            f".env 파일에 NEXON_API_KEY가 없습니다.\n\n"
-            f"위치: {config.DATA_DIR / '.env'}\n\n"
-            "NEXON_API_KEY= 뒤에 발급받은 키를 넣어주세요.",
-        )
-        return 1
+        if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
+            return 0
 
     api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     win = MainWindow(api)

@@ -80,8 +80,30 @@ def _migrate_from_source() -> list[str]:
 
 MIGRATED = _migrate_from_source()
 
-load_dotenv(DATA_DIR / ".env")
-API_KEY = os.getenv("NEXON_API_KEY", "").strip()
+ENV_PATH = DATA_DIR / ".env"
+API_KEY_VAR = "NEXON_API_KEY"
+
+load_dotenv(ENV_PATH)
+API_KEY = os.getenv(API_KEY_VAR, "").strip()
+
+
+def save_api_key(key: str) -> None:
+    """키를 .env 에 쓰고 이 프로세스의 API_KEY 도 바꾼다.
+
+    .env 의 다른 줄(FIFA_* 설정 등)은 그대로 둔다. API_KEY 를 재할당하므로
+    다른 모듈은 `from config import API_KEY` 가 아니라 `config.API_KEY` 로 읽어야 한다.
+    """
+    global API_KEY
+    key = key.strip()
+    lines = []
+    if ENV_PATH.exists():
+        lines = ENV_PATH.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    lines = [ln for ln in lines if not ln.strip().startswith(f"{API_KEY_VAR}=")]
+    lines.append(f"{API_KEY_VAR}={key}")
+    ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[API_KEY_VAR] = key
+    API_KEY = key
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다

@@ -41,12 +41,18 @@ EP_MATCH_DETAIL = "/fconline/v1/match-detail"  # 매치 상세
 ERROR_MESSAGES = {
     "OPENAPI00001": "넥슨 서버 내부 오류입니다. 잠시 후 다시 시도하세요.",
     "OPENAPI00004": "요청 파라미터가 잘못됐습니다.",
-    "OPENAPI00005": "API 키가 유효하지 않습니다. .env 의 NEXON_API_KEY를 확인하세요.",
+    "OPENAPI00005": "API 키가 유효하지 않습니다. 키를 다시 확인하세요.",
     "OPENAPI00007": "API 호출량을 초과했습니다. 잠시 후 다시 시도하세요.",
     "OPENAPI00009": "존재하지 않는 데이터입니다.",
     "OPENAPI00010": "게임 점검 중입니다.",
     "OPENAPI00011": "API 점검 중입니다.",
 }
+
+# 키 확인 — 2026-10-02 실측: 틀린 키는 OPENAPI00005, 맞는 키로 없는 닉네임을 물으면
+# OPENAPI00004 가 온다. 그래서 "00005 가 아니면 통과"로 판정한다(닉네임 존재 여부와 무관).
+KEY_INVALID_CODE = "OPENAPI00005"
+KEY_CHECK_NICKNAME = "키확인용"
+KEY_ISSUE_URL = "https://openapi.nexon.com/"
 
 
 class NexonAPIError(Exception):
@@ -59,6 +65,20 @@ class NexonAPIError(Exception):
         self.status = status
 
 
+def check_key(api_key: str, timeout: int = 10) -> str | None:
+    """키가 쓸 만하면 None, 아니면 사람이 읽을 이유를 돌려준다."""
+    api_key = api_key.strip()
+    if not api_key:
+        return "키를 입력하세요."
+    try:
+        FCOnlineAPI(api_key, timeout=timeout)._get(EP_ID, nickname=KEY_CHECK_NICKNAME)
+    except NexonAPIError as e:
+        # 네트워크 실패·호출량 초과·서버 오류는 키가 맞는지 모르는 상태라 통과시키지 않는다.
+        if e.code == KEY_INVALID_CODE or e.status is None or e.status >= 429:
+            return e.message
+    return None
+
+
 class FCOnlineAPI:
     def __init__(self, api_key: str, timeout: int = 10, cache_dir: Path | None = None):
         if not api_key:
@@ -69,6 +89,9 @@ class FCOnlineAPI:
         self._cache_dir = cache_dir
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def set_key(self, api_key: str) -> None:
+        self._session.headers.update({"x-nxopen-api-key": api_key})
 
     # ── 공통 ──────────────────────────────────────────────────────────
     def _get(self, path: str, **params: Any) -> Any:
