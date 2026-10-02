@@ -52,10 +52,10 @@
 파이썬 없이 쓰는 방법이다. 바뀐 점은 [CHANGELOG.md](CHANGELOG.md).
 
 1. [릴리스 페이지](https://github.com/yim2412/fifa-match-tracker/releases/latest)에서
-   **`피파전적관리-setup-<버전>.exe`** 를 받아 실행한다. 관리자 권한은 필요 없다(사용자 폴더
+   **`FifaMatchTracker-Setup-<버전>.exe`** 를 받아 실행한다. 관리자 권한은 필요 없다(사용자 폴더
    `%LOCALAPPDATA%\Programs\피파전적관리` 에 깔린다). 시작 메뉴에 생기고, 바탕화면 아이콘은
    설치할 때 고른다. 지우는 건 윈도우 "설정 → 앱"에서.
-   - 설치 없이 쓰려면 `피파전적관리-<버전>.zip` 을 폴더째 풀고 `피파전적관리.exe` 실행
+   - 설치 없이 쓰려면 `FifaMatchTracker-<버전>-portable.zip` 을 폴더째 풀고 `피파전적관리.exe` 실행
      (`_internal` 이 옆에 있어야 켜진다).
 2. "Windows의 PC 보호" 파란 창이 뜨면 **추가 정보 → 실행**. 서명 인증서가 없는 프로그램이라
    처음 한 번 뜬다(설치 파일도 같다).
@@ -80,7 +80,7 @@ python tools/release.py     # 빌드 → zip · 설치 파일 → 개인정보 �
 ```
 
 1. `config.APP_VERSION` 을 올리고 `CHANGELOG.md` 에 그 버전 절을 쓴 뒤 **커밋한다**(안 하면 멈춘다).
-2. `tools/release.py` 가 `dist\` 에 `피파전적관리-setup-vX.Y.Z.exe` 와 `피파전적관리-vX.Y.Z.zip` 을 만들고,
+2. `tools/release.py` 가 `dist\` 에 `FifaMatchTracker-Setup-vX.Y.Z.exe` · `FifaMatchTracker-vX.Y.Z-portable.zip` · `SHA256SUMS.txt` 를 만들고,
    배포물 안(exe 안의 압축된 코드까지)에서 **이 PC 의 홈 폴더 경로 · 프로젝트 경로 · API 키 · git 이메일**을
    찾는다. 반드시 있어야 할 대조 문자열이 안 잡히면 "0건"을 믿지 않고 멈춘다.
    더 찾을 말은 `RELEASE_SCAN_EXTRA="a,b"`.

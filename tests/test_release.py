@@ -107,6 +107,30 @@ def test_private_needles_include_key_and_email_when_present():
         release.config.API_KEY, release.subprocess.run = orig_key, orig_run
 
 
+def test_asset_names_are_ascii():
+    # GitHub 는 첨부 이름의 한글을 지운다 — v0.2.0 zip 이 '-v0.2.0.zip' 으로 올라갔다
+    for name in release.asset_names("v1.2.3"):
+        assert name.isascii() and "v1.2.3" in name or name == "SHA256SUMS.txt", name
+    iss = release.ISS.read_text(encoding="utf-8-sig")
+    setup = release.asset_names("v{#AppVersion}")[0]
+    assert f"OutputBaseFilename={setup[:-4]}" in iss, "설치 파일 이름이 .iss 와 어긋난다"
+
+
+def test_sha256_lines_and_notes():
+    import hashlib
+    path = release.Path(os.environ.get("TEMP", ".")) / "release_sum_test.bin"
+    path.write_bytes(b"abc")
+    try:
+        line = release.sha256_lines([path])
+        assert line == f"{hashlib.sha256(b'abc').hexdigest()}  release_sum_test.bin\n", line
+    finally:
+        path.unlink()
+    notes = release.release_notes("- 바뀐 것", "S.exe", "P.zip", line)
+    # 설치 파일이 포터블보다 먼저, 체크섬과 출처 표기가 본문에
+    assert notes.index("S.exe") < notes.index("P.zip"), notes
+    assert line.strip() in notes and "Data based on NEXON Open API" in notes and "- 바뀐 것" in notes
+
+
 def test_changelog_section():
     sec = release.changelog_section("v0.2.0")
     assert "서비스 단계" in sec and "## " not in sec, sec[:200]

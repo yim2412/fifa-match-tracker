@@ -27,7 +27,7 @@
 | `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다 |
 | `updatecheck.py` | 새 버전 알림 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교. 실패는 전부 조용히. 릴리스 태그는 `vX.Y.Z` 형식이어야 잡힌다 |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
-| `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다) |
+| `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
 | `bot/` · `adapters/` | 카카오톡 오픈채팅 봇 — 서버(`bot/`, 같은 DB 를 본다)와 카톡에 붙이는 쪽(`adapters/`). 각 폴더 README |
 | `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선) · `test_bot.py` · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
 

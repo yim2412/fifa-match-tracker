@@ -25,6 +25,9 @@ import config  # noqa: E402
 import nexon_api  # noqa: E402
 
 APP_DIR_NAME = "피파전적관리"
+# 릴리스 첨부 파일 이름은 영문 — GitHub 가 한글을 지운다(v0.2.0 의 zip 이 '-v0.2.0.zip' 으로 올라갔다).
+# installer/*.iss 의 OutputBaseFilename 과 같아야 한다
+ASSET_PREFIX = "FifaMatchTracker"
 SPEC = ROOT / "피파전적관리.spec"
 ISS = ROOT / "installer" / "피파전적관리.iss"
 DIST = ROOT / "dist"
@@ -141,6 +144,34 @@ def scan_verdict(leaks: dict, seen: dict) -> str | None:
     return None
 
 
+def asset_names(version: str) -> tuple[str, str, str]:
+    """(설치 파일, 포터블 zip, 체크섬) — 전부 ASCII 여야 GitHub 에서 이름이 안 깨진다."""
+    return (f"{ASSET_PREFIX}-Setup-{version}.exe", f"{ASSET_PREFIX}-{version}-portable.zip",
+            "SHA256SUMS.txt")
+
+
+def sha256_lines(paths: list[Path]) -> str:
+    """`sha256sum` 형식 — 받는 쪽에서 `certutil -hashfile <파일> SHA256` 로 대조한다."""
+    import hashlib
+    return "".join(f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n" for p in paths)
+
+
+def release_notes(changes: str, setup: str, portable: str, sums: str) -> str:
+    return (
+        "## 받기\n\n"
+        f"- **설치 파일(권장)**: `{setup}` — 받아서 실행. 관리자 권한 필요 없음. 시작 메뉴에 생기고,"
+        " 바탕화면 아이콘은 설치할 때 고른다. 지우는 건 윈도우 \"설정 → 앱\".\n"
+        f"- **포터블**: `{portable}` — 설치 없이 쓰려면 폴더째 풀고 `{APP_DIR_NAME}.exe` 실행.\n"
+        "- \"Windows의 PC 보호\" 창이 뜨면 **추가 정보 → 실행**(서명 인증서가 없는 프로그램이라 처음 한 번).\n"
+        "- 처음 켜면 API 키를 묻는다 — 넥슨 오픈API에서 애플리케이션을 **서비스 단계**로 등록해 받는다.\n"
+        "- 전적 기록·키는 `%LOCALAPPDATA%\\피파전적관리` 에 있어, 업데이트하거나 지워도 남는다.\n\n"
+        f"## 바뀐 점\n\n{changes}\n\n"
+        "## 파일 확인 (SHA256)\n\n"
+        "받은 파일이 아래 값과 같은지: `certutil -hashfile <파일> SHA256`\n\n"
+        f"```\n{sums}```\n\n"
+        f"{nexon_api.ATTRIBUTION}\n")
+
+
 # ── 단계 ─────────────────────────────────────────────────────────────
 def changelog_section(version: str) -> str:
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
@@ -187,29 +218,30 @@ def main() -> int:
         fail(f"{app_dir} 에 exe 가 없다")
     ok("빌드 결과 있음")
 
-    zip_path = DIST / f"{APP_DIR_NAME}-{version}.zip"
+    setup_name, zip_name, sums_name = asset_names(version)
+    zip_path = DIST / zip_name
     zip_path.unlink(missing_ok=True)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:  # 한글 이름에 UTF-8 플래그가 붙는다
         for p in sorted(app_dir.rglob("*")):
             z.write(p, p.relative_to(DIST).as_posix())
     ok(f"zip {zip_path.name} ({zip_path.stat().st_size / 2**20:.1f} MB)")
 
-    setup = DIST / f"{APP_DIR_NAME}-setup-{version}.exe"
+    setup = DIST / setup_name
     setup.unlink(missing_ok=True)
     run([str(iscc), "/Q", f"/DAppVersion={num}", str(ISS)], "설치 파일 컴파일")
     if not setup.is_file():
-        fail(f"설치 파일이 안 생겼다: {setup.name}")
+        fail(f"설치 파일이 안 생겼다: {setup.name} — .iss 의 OutputBaseFilename 과 ASSET_PREFIX 가 같은지")
     ok(f"설치 파일 {setup.name} ({setup.stat().st_size / 2**20:.1f} MB)")
+
+    sums_path = DIST / sums_name
+    sums = sha256_lines([setup, zip_path])
+    sums_path.write_text(sums, encoding="utf-8")
+    ok(f"체크섬 {sums_name}")
 
     # 설치 파일은 LZMA 로 압축돼 안을 못 본다 — 그 입력(onedir 폴더)이 zip 과 같으므로 zip 으로 잰다.
     # 설치 파일 겉(헤더·문자열)과 설치 스크립트·릴리스 본문은 따로 잰다.
     notes_path = DIST / f"release-notes-{version}.md"
-    notes_path.write_text(
-        notes + "\n\n### 설치\n"
-        f"- **`{setup.name}`** 를 받아 실행한다(관리자 권한 필요 없음). 바탕화면 아이콘은 설치할 때 고른다.\n"
-        f"- 설치 없이 쓰려면 `{zip_path.name}` 을 폴더째 풀고 `{APP_DIR_NAME}.exe` 실행.\n"
-        "- 처음 켜면 API 키를 묻는다 — 넥슨 오픈API에서 애플리케이션을 **서비스 단계**로 등록해 받는다.\n\n"
-        f"{nexon_api.ATTRIBUTION}\n", encoding="utf-8")
+    notes_path.write_text(release_notes(notes, setup.name, zip_path.name, sums), encoding="utf-8")
     files = list(zip_files(zip_path)) + [
         (setup.name, setup.read_bytes()),
         (ISS.name, ISS.read_bytes()),
@@ -225,11 +257,14 @@ def main() -> int:
     exists = subprocess.run(["gh", "release", "view", version], cwd=ROOT, capture_output=True,
                             text=True, encoding="utf-8", errors="replace").returncode == 0
     rel = lambda p: p.relative_to(ROOT).as_posix()  # noqa: E731
+    assets = f'"{rel(setup)}" "{rel(zip_path)}" "{rel(sums_path)}"'
     print("\n공개는 확인 후 직접:")
     if exists:
-        print(f'  gh release upload {version} "{rel(setup)}" "{rel(zip_path)}" --clobber')
+        print(f"  gh release upload {version} {assets} --clobber")
+        print(f'  gh release edit {version} --notes-file "{rel(notes_path)}"')
+        print(f"  (옛 이름의 첨부가 남아 있으면: gh release delete-asset {version} <이름> -y)")
     else:
-        print(f'  gh release create {version} "{rel(setup)}" "{rel(zip_path)}" '
+        print(f"  gh release create {version} {assets} "
               f'--target master --title "{version}" --notes-file "{rel(notes_path)}"')
     return 0
 

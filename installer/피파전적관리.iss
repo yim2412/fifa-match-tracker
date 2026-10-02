@@ -21,7 +21,9 @@ PrivilegesRequired=lowest
 DefaultDirName={autopf}\피파전적관리
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=피파전적관리-setup-v{#AppVersion}
+; GitHub 는 첨부 파일 이름의 한글을 지운다(v0.2.0 zip 이 '-v0.2.0.zip' 이 됐다) — 그래서 영문.
+; release.py 의 ASSET_PREFIX 와 같아야 한다
+OutputBaseFilename=FifaMatchTracker-Setup-v{#AppVersion}
 SetupIconFile=..\app_icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName=피파 전적관리
