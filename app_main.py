@@ -3347,12 +3347,17 @@ class MainWindow(QMainWindow):
                 "※ 넥슨 데이터센터에서 시즌표를 받지 못했습니다 —"
                 " 잠시 후 다시 검색하면 채워집니다(그동안 판수 기준은 그대로 씁니다).")
         else:
+            # 위쪽 시즌 콤보는 모든 경기를, 이 표·승률은 승·무·패만 센다(summarize).
+            # 그 차이를 안 적으면 같은 시즌이 두 숫자로 보인다(2026-10-02 스크린샷에서 발견).
+            n_err = len(self._matches_all) - summarize(self._matches_all).total
+            err = (f" · 경기 수는 승·무·패만 셉니다 — 중단된 '오류' 경기 {n_err}개는 빠져서"
+                   " 위 시즌 목록의 경기 수보다 적을 수 있습니다." if n_err else "")
             self.lb_season_note.setText(
-                "※ 넥슨 오픈API 는 과거 경기를 돌려주지 않습니다 — 이 앱으로"
-                " 조회하기 시작한 뒤 쌓인 경기만 시즌에 잡히므로, 앱을 쓰기 전"
-                " 시즌은 비어 있거나 실제보다 적게 나옵니다."
+                "※ 넥슨 오픈API 는 약 한 달 전까지의 경기만 돌려줍니다 — 그보다 오래된"
+                " 경기는 이 앱으로 조회해 쌓아 둔 것만 있으므로, 앱을 쓰기 전 시즌은"
+                " 비어 있거나 실제보다 적게 나옵니다."
                 " · '진행 중'은 아직 데이터센터 시즌표에 안 올라온 최신 시즌입니다."
-                " · 이 표만은 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다.")
+                " · 이 표만은 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다." + err)
 
     def _render_players(self, details: list[dict]) -> None:
         players = st.aggregate_players(
@@ -3667,7 +3672,8 @@ def _setup_app(app: QApplication) -> None:
 
 
 def main() -> int:
-    app = QApplication(sys.argv)
+    # instance() — 테스트가 이미 만든 앱으로 main 을 부를 수 있게(둘째 QApplication 은 예외)
+    app = QApplication.instance() or QApplication(sys.argv)
     _setup_app(app)
     if not config.API_KEY:
         if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:

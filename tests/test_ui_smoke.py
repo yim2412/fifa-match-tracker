@@ -449,6 +449,22 @@ def test_opponents_page_uses_season_scope_not_range():
         _win._render_all()
 
 
+def test_season_note_explains_error_games():
+    # 콤보는 모든 경기, 표는 승·무·패만 — 픽스처의 "오류" 1경기만큼 차이가 나고 그걸 적어야 한다
+    import seasons as sn_
+    from datetime import date as d_
+    saved = _win._rank_seasons
+    _win._rank_seasons = [sn_.Season(no=1, name="시즌 1", start=d_(2025, 1, 1), end=d_(2025, 6, 1))]
+    try:
+        _win._render_seasons()
+        n_err = len(_win._matches_all) - models.summarize(_win._matches_all).total
+        assert n_err == 1, n_err  # 픽스처 전제 — 0 이면 이 테스트가 아무것도 안 잰다
+        assert "오류' 경기 1개" in _win.lb_season_note.text(), _win.lb_season_note.text()
+    finally:
+        _win._rank_seasons = saved
+        _win._render_seasons()
+
+
 def test_dashboard_gauge_shows_value_once_sample_is_enough():
     import dashboard
     d = _win.dashboard
@@ -653,6 +669,33 @@ def test_qt_slot_crash_reaches_log_and_app_survives():
         text = (ctx.logs / crashlog.LOG_NAME).read_text(encoding="utf-8")
         assert "RuntimeError: 슬롯에서 터짐" in text, text
         assert len(ctx.notified) == 1, ctx.notified
+
+
+def test_main_runs_setup_first():
+    # main() → _setup_app 배선 — 이 한 줄이 빠지면 exe 의 크래시 로그가 통째로 꺼진다
+    class _Stop(Exception):
+        pass
+
+    seen = []
+
+    def fake_setup(app):
+        seen.append(app)
+        raise _Stop()
+
+    def too_far(*a, **k):  # 준비를 건너뛰고 창까지 오면 — 그대로 두면 app.exec() 에서 영원히 멈춘다
+        raise AssertionError("main 이 _setup_app 없이 창을 만들었다")
+
+    orig = app_main._setup_app, app_main.MainWindow, app_main.ApiKeyDialog
+    app_main._setup_app = fake_setup
+    app_main.MainWindow = app_main.ApiKeyDialog = too_far
+    try:
+        app_main.main()
+        raise AssertionError("main 이 _setup_app 을 안 불렀다")
+    except _Stop:
+        pass
+    finally:
+        app_main._setup_app, app_main.MainWindow, app_main.ApiKeyDialog = orig
+    assert seen == [_app], seen
 
 
 def test_thread_crash_logged_without_dialog():
