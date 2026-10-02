@@ -300,6 +300,44 @@ def test_fetch_seasons_parses_page():
             assert why in str(e), (why, e)
 
 
+def _rank_row(no, nick, color, value):
+    tc = (f'<span class="ico_rank"></span><span class="name"></span>'
+          f'<span class="inner">{color} <small>(11명)</small></span>' if color else
+          '<span class="ico_rank"> </span> <span class="name"> </span>')
+    return (f'<div class="tr"><span class="td rank_no">{no}</span>'
+            f'<span class="td rank_coach"><span class="name profile_pointer" data-x="1">{nick}</span>'
+            f'<span class="price" alt="{value}">1억</span></span>'
+            f'<span class="td team_color">{tc}</span>'
+            f'<span class="td formation">-</span><span class="td rank_best"></span></div>')
+
+
+def test_rank_page_rows_stay_aligned_when_a_color_is_empty():
+    # 실측 475페이지: 팀컬러를 안 쓰는 사람이 있다. 페이지 전체에서 따로 뽑아 짝지으면
+    # 그 행이 다음 사람 팀컬러를 집어 뒤가 전부 한 칸씩 밀린다.
+    html = "<div>" + "".join([_rank_row(1, "가", "네덜란드", "1,000"),
+                              _rank_row(2, "나&amp;다", "", "2,000"),
+                              _rank_row(3, "라", "잉글랜드", "3,000")]) + "</div>"
+    rows = ranker.parse_rank_page(html)
+    assert rows == [("가", "네덜란드", 1000), ("나&다", "", None), ("라", "잉글랜드", 3000)], rows
+
+
+def test_fetch_rank_page_refuses_empty_page():
+    # 구조가 바뀌어 0행으로 읽히면 상대 수백 명이 '랭킹 밖'으로 30일 캐시된다 — 실패여야 한다
+    orig_get, orig_on = ranker._session.get, config.WEB_DATA
+    config.WEB_DATA = True
+    try:
+        ranker._session.get = lambda *a, **k: _FakeRes("<div>바뀐 구조</div>")
+        try:
+            ranker.fetch_rank_page(1)
+            raise AssertionError("빈 페이지를 정상으로 읽었다")
+        except ranker.RankerError:
+            pass
+        ranker._session.get = lambda *a, **k: _FakeRes(_rank_row(1, "가", "네덜란드", "1"))
+        assert ranker.fetch_rank_page(1) == [("가", "네덜란드", 1)]
+    finally:
+        ranker._session.get, config.WEB_DATA = orig_get, orig_on
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

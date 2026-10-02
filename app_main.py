@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+import time
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import replace
@@ -435,13 +436,14 @@ class TeamColorLoader(QThread):
     TIMEOUT = 5
 
     progress = pyqtSignal(int, int)   # done, total
-    # nickname, team_color("" 이면 못 찾음), 구단가치(원 단위 int, 못 찾으면 None)
-    loaded = pyqtSignal(str, str, object)
+    # {닉네임: (팀컬러("" 이면 랭킹 밖), 구단가치(원 단위 int, 못 찾으면 None))} — RankListLoader 와 같은 모양
+    loaded_many = pyqtSignal(dict)
     finished_all = pyqtSignal()
 
     def __init__(self, nicknames: list[str]):
         super().__init__()
         self._nicknames = nicknames
+        self.total = len(nicknames)
         self._cancel = False
         self._pool: ThreadPoolExecutor | None = None
 
@@ -469,7 +471,8 @@ class TeamColorLoader(QThread):
                 if self._cancel:
                     return
                 if result is not None:
-                    self.loaded.emit(*result)
+                    nick, color, value = result
+                    self.loaded_many.emit({nick: (color, value)})
                 done += 1
                 self.progress.emit(done, total)
         except (RuntimeError, CancelledError):
@@ -479,6 +482,74 @@ class TeamColorLoader(QThread):
             self._pool = None
         if not self._cancel:
             self.finished_all.emit()
+
+
+class RankListLoader(QThread):
+    """감독모드 랭킹 1만 위 목록(ranker.RANK_PAGES 쪽)을 통째로 읽어 wanted 의 팀컬러를 찾는다.
+
+    상대가 많을 때 TeamColorLoader(상대마다 검색) 대신 쓴다 — 찾을 수 있는 범위(1만 위 안)는
+    같고 요청은 500번으로 고정이다. 1만 위 목록에 없는 상대는 '랭킹 밖'("")으로 내보낸다.
+    단 **한 쪽이라도 못 읽었으면 그러지 않는다** — 그 쪽에 있었을 상대를 7일(store.TEAM_COLOR_TTL_DAYS) 동안 '랭킹 밖'으로
+    캐시하게 되므로, 못 찾은 상대는 비워 두고 다음 조회 때 다시 찾는다.
+    읽는 동안 순위가 움직여 쪽 경계에서 한두 명이 빠질 수 있다 — 그 사람은 '랭킹 밖'으로
+    저장돼 캐시가 만료되면 다시 찾는다(빠지는 수가 작아 받아들인다).
+    """
+
+    MAX_WORKERS = TeamColorLoader.MAX_WORKERS  # 같은 페이지·같은 예의
+    TIMEOUT = 10  # 목록 한 쪽은 검색 결과보다 크다(약 50KB)
+
+    progress = pyqtSignal(int, int)   # 읽은 쪽, 전체 쪽
+    loaded_many = pyqtSignal(dict)    # {닉네임: (팀컬러, 구단가치)}
+    finished_all = pyqtSignal()
+
+    def __init__(self, wanted: set[str]):
+        super().__init__()
+        self._wanted = wanted
+        self.total = ranker.RANK_PAGES
+        self.failed_pages = 0
+        self._cancel = False
+        self._pool: ThreadPoolExecutor | None = None
+
+    def cancel(self) -> None:
+        self._cancel = True
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+
+    def _page(self, page: int):
+        try:
+            return ranker.fetch_rank_page(page, timeout=self.TIMEOUT)
+        except ranker.RankerError:
+            return None
+
+    def run(self) -> None:
+        found: set[str] = set()
+        done = 0
+        self._pool = ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
+        try:
+            for rows in self._pool.map(self._page, range(1, self.total + 1)):
+                if self._cancel:
+                    return
+                if rows is None:
+                    self.failed_pages += 1
+                else:
+                    batch = {n: (c, v) for n, c, v in rows if n in self._wanted and n not in found}
+                    if batch:
+                        found.update(batch)
+                        self.loaded_many.emit(batch)
+                done += 1
+                self.progress.emit(done, self.total)
+        except (RuntimeError, CancelledError):
+            return
+        finally:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
+        if self._cancel:
+            return
+        if not self.failed_pages:
+            rest = {n: ("", None) for n in self._wanted - found}
+            if rest:
+                self.loaded_many.emit(rest)
+        self.finished_all.emit()
 
 
 class SeasonLoader(QThread):
@@ -582,7 +653,9 @@ class MainWindow(QMainWindow):
         self._team_values: dict[str, int | None] = {}  # 상대 닉네임 -> 구단가치(원)
         self._teamcolor_loader: TeamColorLoader | None = None
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
-        self._teamcolor_loaded_count = 0  # 중간 갱신 주기용
+        self._teamcolor_loaded_count = 0
+        self._teamcolor_rendered_at = 0.0  # 중간 갱신 간격(TEAMCOLOR_RENDER_INTERVAL_S)용
+        self._teamcolor_progress_fmt = "{done} / {total} 조회 중…"
         self._teamcolor_retry_pending = False  # 조회 중 범위가 넓어져 재시도가 필요함
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
@@ -985,6 +1058,7 @@ class MainWindow(QMainWindow):
         # 팀컬러 두 탭이 빌드 중에 채우는 목록 — 빌더보다 먼저 있어야 한다.
         self._teamcolor_fetch_btns: list[QPushButton] = []
         self._teamcolor_status_labels: list[QLabel] = []
+        self._teamcolor_note_labels: list[QLabel] = []
         self._page_index: dict[str, int] = {}
         bold = QFont()
         bold.setBold(True)
@@ -1059,13 +1133,17 @@ class MainWindow(QMainWindow):
         return row, btn, lb
 
     def _teamcolor_note(self) -> QLabel:
-        note = QLabel(
-            "※ 넥슨 데이터센터 감독모드 랭킹 top 10,000 안에서 찾아지는 상대만"
-            " 반영한 근사치입니다 — 그 상대가 가장 최근 사용한 팀컬러 기준이라"
-            " 실제 경기 당시와 다를 수 있고, 10,000위 밖 상대는 빠집니다.")
+        note = QLabel(self._teamcolor_note_text(0, 0))
         note.setWordWrap(True)
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self._teamcolor_note_labels.append(note)
         return note
+
+    def _teamcolor_note_text(self, opponents: int, known: int) -> str:
+        """몇 명이 반영됐는지를 같이 보인다 — 부분 집계인 걸 숨기지 않게."""
+        return (f"{self._scope_text()} · 상대 {opponents:,}명 중 {known:,}명 팀컬러 반영"
+                " — 넥슨 감독모드 랭킹 1만 위 안 상대만 찾을 수 있고, 경기 당시가 아니라"
+                " 그 상대가 지금 쓰는 팀컬러 기준입니다(지난 시즌일수록 실제와 달라질 수 있음).")
 
     def _build_teamcolor_rate_tab(self) -> QWidget:
         w = QWidget()
@@ -1867,7 +1945,7 @@ class MainWindow(QMainWindow):
         self.cb_position_color.blockSignals(False)
 
     def _on_position_color_changed(self, _index: int) -> None:
-        _, details = self._slice()
+        _, details = self._teamcolor_scope()
         self._render_position_opponents(details)
 
     COMPARE_ROWS = [
@@ -2401,7 +2479,7 @@ class MainWindow(QMainWindow):
             return
 
         self._render_all()
-        self._on_fetch_team_colors()  # DB 캐시(TTL 30일)로 채우고, 모자란 것만 백그라운드 조회
+        self._on_fetch_team_colors()  # DB 캐시(TTL store.TEAM_COLOR_TTL_DAYS · 7일)로 채우고, 모자란 것만 백그라운드 조회
         self.statusBar().showMessage(
             f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
             + (f" · 새 경기 {new}건 저장" if new else ""))
@@ -2433,8 +2511,8 @@ class MainWindow(QMainWindow):
         # 시즌 범위 — 표시 구간(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
         # 대시보드 '자주 만난 상대'(누르면 여기로 온다)와 같은 범위다.
         self._render_opponents(self._matches)
-        self._render_position_opponents(details)
-        self._render_teamcolor_tabs(matches, details)
+        # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
+        self._render_teamcolor_tabs(*self._teamcolor_scope())  # 포지션별 최다 상대도 여기서 그린다
         # 아래 self._matches/_details 를 그대로 넘기는 것들은 "표시 구간에 안 갇힌다"는
         # 뜻이지 누적 전체라는 뜻이 아니다 — 시즌 콤보를 고르면 그 시즌 안에서만 계산된다.
         # 승률 추이는 "최근 30일" 이 표시 구간(시작~끝, 최근 최대 100경기)에
@@ -2700,74 +2778,99 @@ class MainWindow(QMainWindow):
         # 새로 알게 된 팀컬러가 있으면 "포지션별 최다 상대" 필터 목록도 같이 넓힌다.
         self._refresh_position_color_options()
         self._render_position_opponents(details)
+        opps = {m.opponent for m in matches if m.opponent}
+        known = sum(1 for n in opps if self._team_colors.get(n))
+        for lb in self._teamcolor_note_labels:
+            lb.setText(self._teamcolor_note_text(len(opps), known))
+
+    def _teamcolor_scope(self) -> tuple[list[MatchSummary], list[dict]]:
+        """팀컬러 두 탭·포지션별 최다 상대가 세는 범위 — 표시 구간이 아니라 시즌 콤보.
+
+        표시 구간(100경기)이면 상대 98명을 거의 한 번씩만 만나 팀컬러마다 1~2경기라
+        승률이 안 된다(2026-10-02 실측). 시즌이면 2천 경기가 넘는다."""
+        return self._matches, self._details
+
+    def _load_cached_team_colors(self, nicknames: set[str]) -> None:
+        missing = sorted(n for n in nicknames if n not in self._team_colors)
+        if not missing:
+            return
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                for nick, (color, value) in store.load_team_colors(conn, missing).items():
+                    self._team_colors[nick] = color
+                    self._team_values[nick] = value
+            finally:
+                conn.close()
+        except Exception:
+            pass  # DB 캐시를 못 읽어도 네트워크 조회로 계속 진행
 
     def _on_fetch_team_colors(self) -> None:
-        """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 30일)
+        """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 7일)
         에 있는 상대는 그걸로 채우고, 정말 처음 보거나 캐시가 오래된 상대만
-        넥슨 데이터센터에서 새로 긁는다. 그래서 같은 계정을 다시 보거나
-        상대가 겹치는 다른 계정을 봐도 대부분 거의 즉시 끝난다.
+        넥슨 데이터센터에서 새로 긁는다.
 
-        범위는 self._matches(누적 전체)가 아니라 지금 표시 구간(시작~끝)만
-        — 계정에 따라 누적 상대가 수천 명이라 전체를 미리 긁으면 첫 조회가
-        너무 오래 걸린다. 대신 나중에 범위를 넓히면 그만큼 새로 늘어난
-        상대만큼 다시 기다려야 한다(_apply_range 가 이 함수를 다시 부른다)."""
+        범위는 시즌 콤보(_teamcolor_scope). 새로 읽을 상대가 랭킹 목록 페이지 수
+        (ranker.RANK_PAGES)보다 많으면 상대마다 검색하는 대신 1만 위 목록을 통째로
+        읽는다 — 요청이 적고(실측 시즌 1,491명 158초 vs 목록 49초), 한 번 읽으면 이 계정의
+        다른 시즌 상대까지 다 채워져 시즌을 바꿔도 다시 안 읽는다. 적으면(평소 — 그날
+        새로 만난 상대) 그 상대만 검색하는 쪽이 싸다."""
         if self._teamcolor_loader and self._teamcolor_loader.isRunning():
             # 이미 도는 중에 범위가 넓어져 다시 불렸다 — 끝난 뒤(_on_teamcolor_finished)
             # 새로 늘어난 상대까지 마저 조회하도록 재시도를 예약해 둔다.
             self._teamcolor_retry_pending = True
             return
-        shown_matches, _ = self._slice()
-        missing = sorted({m.opponent for m in shown_matches
-                          if m.opponent and m.opponent not in self._team_colors})
-        if missing:
-            try:
-                conn = store.open_db(config.DB_PATH)
-                try:
-                    for nick, (color, value) in store.load_team_colors(conn, missing).items():
-                        self._team_colors[nick] = color
-                        self._team_values[nick] = value
-                finally:
-                    conn.close()
-            except Exception:
-                pass  # DB 캐시를 못 읽어도 네트워크 조회로 계속 진행
-
+        shown_matches, _ = self._teamcolor_scope()
+        all_opps = {m.opponent for m in self._matches_all if m.opponent}
+        self._load_cached_team_colors(all_opps)  # DB 만 — 다른 시즌으로 바꿀 때도 바로 그린다
         remaining = {m.opponent for m in shown_matches
                     if m.opponent and m.opponent not in self._team_colors}
         if not remaining or not config.WEB_DATA:
-            matches, details = self._slice()
-            self._render_teamcolor_tabs(matches, details)
+            self._render_teamcolor_tabs(*self._teamcolor_scope())
             if remaining:  # 꺼져 있다 — 상대마다 실패를 쌓는 대신 이유를 한 번만 보인다
                 for lb in self._teamcolor_status_labels:
                     lb.setText(config.WEB_DATA_OFF_MSG)
             return
-        # 많이 만난 상대부터 — 값어치 큰 상대가 먼저 채워지고, 진행 중에도
-        # 화면을 갱신하니(_on_teamcolor_loaded) 다 끝나기 전에도 유용해진다.
-        freq = Counter(m.opponent for m in shown_matches if m.opponent)
-        nicknames = sorted(remaining, key=lambda n: -freq[n])
+        if len(remaining) > ranker.RANK_PAGES:
+            # 목록을 읽는 김에 이 계정의 모든 시즌 상대를 같이 찾는다(요청 수는 같다)
+            wanted = sorted(n for n in all_opps if n not in self._team_colors)
+            self._teamcolor_loader = RankListLoader(set(wanted))
+            self._teamcolor_progress_fmt = "랭킹 목록 {done} / {total}쪽 읽는 중…"
+        else:
+            # 많이 만난 상대부터 — 값어치 큰 상대가 먼저 채워지고, 진행 중에도
+            # 화면을 갱신하니(_on_teamcolor_loaded) 다 끝나기 전에도 유용해진다.
+            freq = Counter(m.opponent for m in shown_matches if m.opponent)
+            wanted = sorted(remaining, key=lambda n: -freq[n])
+            self._teamcolor_loader = TeamColorLoader(wanted)
+            self._teamcolor_progress_fmt = "상대 {done} / {total}명 조회 중…"
         for b in self._teamcolor_fetch_btns:
             b.setEnabled(False)
-        for lb in self._teamcolor_status_labels:
-            lb.setText(f"0 / {len(nicknames)} 조회 중…")
-        self._teamcolor_pending = nicknames
+        self._teamcolor_pending = wanted
         self._teamcolor_loaded_count = 0
-        self._teamcolor_loader = TeamColorLoader(nicknames)
-        self._teamcolor_loader.loaded.connect(self._on_teamcolor_loaded)
+        self._teamcolor_rendered_at = time.monotonic()
+        self._on_teamcolor_progress(0, self._teamcolor_loader.total)
+        self._teamcolor_loader.loaded_many.connect(self._on_teamcolor_loaded)
         self._teamcolor_loader.progress.connect(self._on_teamcolor_progress)
         self._teamcolor_loader.finished_all.connect(self._on_teamcolor_finished)
         self._teamcolor_loader.start()
 
-    def _on_teamcolor_loaded(self, nickname: str, color: str, value) -> None:
-        self._team_colors[nickname] = color
-        self._team_values[nickname] = value
-        # 다 끝나야만 표가 채워지면 답답하니, 10개 받을 때마다 중간 갱신한다.
-        self._teamcolor_loaded_count += 1
-        if self._teamcolor_loaded_count % 10 == 0:
-            matches, details = self._slice()
-            self._render_teamcolor_tabs(matches, details)
+    # 조회 중 표 중간 갱신 간격(초). 개수로 세면 목록 읽기(한 쪽에 여러 명)에서 너무 자주
+    # 다시 그린다 — 시즌 범위는 2천 경기라 한 번 그리는 값이 작지 않다.
+    TEAMCOLOR_RENDER_INTERVAL_S = 2.0
+
+    def _on_teamcolor_loaded(self, batch: dict) -> None:
+        for nick, (color, value) in batch.items():
+            self._team_colors[nick] = color
+            self._team_values[nick] = value
+        self._teamcolor_loaded_count += len(batch)
+        now = time.monotonic()
+        if now - self._teamcolor_rendered_at >= self.TEAMCOLOR_RENDER_INTERVAL_S:
+            self._teamcolor_rendered_at = now
+            self._render_teamcolor_tabs(*self._teamcolor_scope())
 
     def _on_teamcolor_progress(self, done: int, total: int) -> None:
         for lb in self._teamcolor_status_labels:
-            lb.setText(f"{done} / {total} 조회 중…")
+            lb.setText(self._teamcolor_progress_fmt.format(done=done, total=total))
 
     def _on_teamcolor_finished(self) -> None:
         for b in self._teamcolor_fetch_btns:
@@ -2784,11 +2887,13 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass  # DB 저장이 실패해도 이번 세션 캐시(메모리)는 살아 있다
         found = sum(1 for color, _ in fetched.values() if color)
+        msg = f"상대 {len(self._teamcolor_pending)}명 조회 완료(팀컬러 확인 {found}명)"
+        failed = getattr(self._teamcolor_loader, "failed_pages", 0)
+        if failed:  # 못 읽은 쪽이 있으면 못 찾은 상대를 '랭킹 밖'으로 저장하지 않았다
+            msg += f" · 랭킹 목록 {failed}쪽을 못 읽어 나머지는 다음에 다시 찾습니다"
         for lb in self._teamcolor_status_labels:
-            lb.setText(f"상대 {len(self._teamcolor_pending)}명 조회 완료"
-                      f"(팀컬러 확인 {found}명)")
-        matches, details = self._slice()
-        self._render_teamcolor_tabs(matches, details)
+            lb.setText(msg)
+        self._render_teamcolor_tabs(*self._teamcolor_scope())
         if self._teamcolor_retry_pending:
             self._teamcolor_retry_pending = False
             self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
@@ -2802,7 +2907,7 @@ class MainWindow(QMainWindow):
         nicknames = {nick for nick, c in self._team_colors.items() if c == color}
         if not nicknames:
             return
-        _, details = self._slice()
+        _, details = self._teamcolor_scope()  # 표와 같은 범위
         players = st.opponent_position_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),

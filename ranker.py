@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from html import unescape
 
 import requests
 
@@ -49,6 +50,15 @@ _WDL = re.compile(r'class="bottom">\s*([\d,]+)\s*<em>\|</em>\s*([\d,]+)\s*'
 _TEAM_COLOR = re.compile(
     r'class="td team_color">.*?class="inner">\s*([^<]+?)\s*<small>', re.S)
 _NOT_RANKED = "순위 내 포함되어 있지"
+_NAME = re.compile(r'class="name profile_pointer"[^>]*>\s*([^<]+?)\s*<')
+_ROW_START = 'class="td rank_no"'
+
+# 랭킹 목록(닉네임 없이 n4pageno 만) — 한 페이지 20명, 1만 위까지 500페이지.
+# 2026-10-02 실측: 501페이지 이후는 500페이지(9,981~10,000위)를 그대로 반복한다.
+# 상대가 많을 때 상대마다 검색하는 대신 이걸 통째로 읽는다 — 진행 중 시즌 상대 1,491명
+# 검색 환산 158초 vs 목록 500페이지 환산 49초(동시 8, 표본 80건씩). 덮는 범위(1만 위 안)는 같다.
+RANK_PAGE_SIZE = 20
+RANK_PAGES = 500
 
 
 @dataclass
@@ -144,6 +154,48 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
     if m:
         info.team_color = " ".join(m.group(1).split())  # 개행·중복 공백 정리
     return info
+
+
+def parse_rank_page(html: str) -> list[tuple[str, str, int | None]]:
+    """목록 페이지 → [(닉네임, 팀컬러, 구단가치)]. 팀컬러를 안 쓰는 사람은 "".
+
+    행 단위로 잘라서 읽는다 — 페이지 전체에서 닉네임·팀컬러를 따로 findall 하면 팀컬러가
+    빈 행(실측 475페이지에 있었다)에서 _TEAM_COLOR 의 `.*?` 가 다음 행 팀컬러를 집어
+    그 뒤가 전부 한 칸씩 밀린다.
+    """
+    out = []
+    for row in html.split(_ROW_START)[1:]:
+        m = _NAME.search(row)
+        if not m:
+            continue
+        nick = unescape(m.group(1)).strip()
+        c = _TEAM_COLOR.search(row)
+        color = " ".join(c.group(1).split()) if c else ""
+        p = _PRICE.search(row)
+        out.append((nick, color, _to_int(p.group(1)) if p and color else None))
+    return out
+
+
+def fetch_rank_page(page: int, timeout: int = 10) -> list[tuple[str, str, int | None]]:
+    """감독모드 랭킹 목록 한 페이지(1..RANK_PAGES). 실패는 RankerError."""
+    if not config.WEB_DATA:
+        raise RankerError(config.WEB_DATA_OFF_MSG)
+    try:
+        res = _session.get(
+            RANK_URL,
+            params={"rt": "manager", "n4seasonno": 0, "n4pageno": page,
+                    "_ts": int(time.time() * 1000)},
+            timeout=timeout)
+        res.raise_for_status()
+    except requests.RequestException as e:
+        raise RankerError(f"랭킹 목록 조회 실패: {e}") from e
+    html = res.text
+    if "점검 진행 중" in html or "fc_logo_inspection" in html:
+        raise RankerError("넥슨 웹 점검 중입니다 — 잠시 후 다시 시도해주세요")
+    rows = parse_rank_page(html)
+    if not rows:  # 빈 페이지를 "아무도 없음"으로 읽으면 상대 수백 명이 '랭킹 밖'으로 캐시된다
+        raise RankerError(f"랭킹 목록 {page}페이지를 읽지 못했습니다(구조가 바뀌었을 수 있음)")
+    return rows
 
 
 # 넥슨 데이터센터가 구단가치를 표기하는 방식("10경 9,631조")과 같은 축약 —

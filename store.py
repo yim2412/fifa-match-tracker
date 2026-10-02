@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS accounts (
 );
 -- 상대 팀컬러(넥슨 데이터센터 감독모드 랭킹 스크래핑, top 10,000 안에서만
 -- 잡히는 근사치·"지금" 값). 매번 다시 긁으면 느리니 fetched_at 기준
--- TTL(기본 30일) 안에서는 재사용한다 — 그 이상 지나면 상대가 팀컬러를
+-- TTL(TEAM_COLOR_TTL_DAYS, 7일) 안에서는 재사용한다 — 그 이상 지나면 상대가 팀컬러를
 -- 바꿨을 수 있어 다시 조회한다.
 CREATE TABLE IF NOT EXISTS team_colors (
     nickname   TEXT PRIMARY KEY,

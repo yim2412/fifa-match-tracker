@@ -1090,6 +1090,7 @@ class _Sent(Exception):
 def _web_calls():
     return [
         ("ranker", lambda: ranker.fetch_manager_rank("닉"), ranker.RankerError),
+        ("rank page", lambda: ranker.fetch_rank_page(1), ranker.RankerError),
         ("playerinfo", lambda: playerinfo.fetch_player_info(1), playerinfo.PlayerInfoError),
         ("ability", lambda: playerinfo.fetch_player_ability(1), playerinfo.PlayerInfoError),
         ("seasons", lambda: sn.fetch_seasons(), sn.SeasonError),
@@ -1137,19 +1138,255 @@ def test_teamcolor_off_shows_reason_without_fetching():
         def __init__(self, *a, **k):
             raise AssertionError("꺼졌는데 팀컬러 조회를 시작했다")
 
-    saved = (config.WEB_DATA, app_main.TeamColorLoader, dict(_win._team_colors),
-             [lb.text() for lb in _win._teamcolor_status_labels])
-    config.WEB_DATA, app_main.TeamColorLoader = False, _NoLoader
+    saved = (config.WEB_DATA, app_main.TeamColorLoader, app_main.RankListLoader,
+             dict(_win._team_colors), [lb.text() for lb in _win._teamcolor_status_labels],
+             ranker.RANK_PAGES)
+    config.WEB_DATA = False
+    app_main.TeamColorLoader = app_main.RankListLoader = _NoLoader
     _win._team_colors.clear()
     try:
-        app_main.MainWindow._on_fetch_team_colors(_win)  # 모듈 위쪽에서 인스턴스 쪽을 막아 뒀다
-        texts = {lb.text() for lb in _win._teamcolor_status_labels}
-        assert texts == {config.WEB_DATA_OFF_MSG}, texts
+        for pages in (1000, 1):  # 상대 검색 쪽 · 목록 쪽 둘 다
+            ranker.RANK_PAGES = pages
+            app_main.MainWindow._on_fetch_team_colors(_win)  # 모듈 위쪽에서 인스턴스 쪽을 막아 뒀다
+            texts = {lb.text() for lb in _win._teamcolor_status_labels}
+            assert texts == {config.WEB_DATA_OFF_MSG}, (pages, texts)
     finally:
-        config.WEB_DATA, app_main.TeamColorLoader = saved[0], saved[1]
-        _win._team_colors.update(saved[2])
-        for lb, t in zip(_win._teamcolor_status_labels, saved[3]):
+        config.WEB_DATA, app_main.TeamColorLoader, app_main.RankListLoader = saved[:3]
+        _win._team_colors.update(saved[3])
+        for lb, t in zip(_win._teamcolor_status_labels, saved[4]):
             lb.setText(t)
+        ranker.RANK_PAGES = saved[5]
+
+
+def _run_rank_list(wanted, pages):
+    """RankListLoader.run 을 스레드 없이 돌린다 — pages: {쪽: 행들 | None(실패)}."""
+    orig = ranker.fetch_rank_page, ranker.RANK_PAGES
+
+    def fake(page, timeout=10):
+        rows = pages[page]
+        if rows is None:
+            raise ranker.RankerError("못 읽음")
+        return rows
+
+    ranker.fetch_rank_page, ranker.RANK_PAGES = fake, len(pages)
+    got, done = {}, []
+    try:
+        ld = app_main.RankListLoader(set(wanted))
+        ld.loaded_many.connect(got.update)
+        ld.finished_all.connect(lambda: done.append(True))
+        ld.run()
+    finally:
+        ranker.fetch_rank_page, ranker.RANK_PAGES = orig
+    return ld, got, done
+
+
+def test_rank_list_marks_outside_only_when_every_page_read():
+    pages = {1: [("가", "네덜란드", 1), ("남", "프랑스", 2)], 2: [("나", "", None)]}
+    ld, got, done = _run_rank_list({"가", "나", "밖"}, pages)
+    # 원한 사람만 내보낸다(목록의 남은 저장하지 않는다) · 목록에 없으면 '랭킹 밖'("")
+    assert got == {"가": ("네덜란드", 1), "나": ("", None), "밖": ("", None)}, got
+    assert done == [True] and ld.failed_pages == 0
+    pages[2] = None  # 한 쪽 실패 — 그 쪽에 있었을 수도 있는 상대를 '랭킹 밖'으로 굳히면 안 된다
+    ld, got, done = _run_rank_list({"가", "나", "밖"}, pages)
+    assert got == {"가": ("네덜란드", 1)}, got
+    assert done == [True] and ld.failed_pages == 1
+
+
+def test_teamcolor_picks_rank_list_only_when_cheaper():
+    made = []
+
+    class _Rec:
+        def __init__(self, arg):
+            made.append((self.kind, arg))
+            self.total = 0
+            self.loaded_many = self.progress = self.finished_all = self
+
+        def connect(self, *_):
+            pass
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    class _Each(_Rec):
+        kind = "검색"
+
+    class _List(_Rec):
+        kind = "목록"
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = (config.WEB_DATA, config.DB_PATH, app_main.TeamColorLoader, app_main.RankListLoader,
+             ranker.RANK_PAGES, dict(_win._team_colors), _win._teamcolor_loader, _win._matches,
+             [lb.text() for lb in _win._teamcolor_status_labels])
+    config.WEB_DATA, config.DB_PATH = True, tmp / "t.db"
+    app_main.TeamColorLoader, app_main.RankListLoader = _Each, _List
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    try:
+        assert len(opps) >= 3, opps
+        # 시즌 범위에 상대 2명, 누적 전체엔 그보다 많다
+        _win._matches = [m for m in _MATCHES if m.opponent in opps[:2]]
+        for pages, want in [(1, ("목록", set(opps))),        # 2명 > 1쪽 → 목록, 모든 시즌 상대까지
+                            (2, ("검색", set(opps[:2])))]:   # 2명 ≤ 2쪽 → 시즌 상대만 검색
+            made.clear()
+            _win._team_colors.clear()
+            _win._teamcolor_loader = None
+            ranker.RANK_PAGES = pages
+            app_main.MainWindow._on_fetch_team_colors(_win)
+            assert [(k, set(a)) for k, a in made] == [want], (pages, made)
+    finally:
+        (config.WEB_DATA, config.DB_PATH, app_main.TeamColorLoader, app_main.RankListLoader,
+         ranker.RANK_PAGES) = saved[:5]
+        _win._team_colors.clear()
+        _win._team_colors.update(saved[5])
+        _win._teamcolor_loader, _win._matches = saved[6], saved[7]
+        for lb, t in zip(_win._teamcolor_status_labels, saved[8]):
+            lb.setText(t)
+        for b in _win._teamcolor_fetch_btns:
+            b.setEnabled(True)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _TeamColorEnv:
+    """임시 DB · 웹 데이터 켬 · 팀컬러 상태를 잡아 뒀다 되돌린다."""
+
+    def __enter__(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self._saved = (config.WEB_DATA, config.DB_PATH, app_main.TeamColorLoader,
+                       app_main.RankListLoader, dict(_win._team_colors), dict(_win._team_values),
+                       _win._teamcolor_loader, _win._matches,
+                       [lb.text() for lb in _win._teamcolor_status_labels])
+        config.WEB_DATA, config.DB_PATH = True, self.tmp / "t.db"
+        _win._team_colors.clear()
+        _win._teamcolor_loader = None
+        return self
+
+    def __exit__(self, *exc):
+        (config.WEB_DATA, config.DB_PATH, app_main.TeamColorLoader,
+         app_main.RankListLoader) = self._saved[:4]
+        _win._team_colors.clear()
+        _win._team_colors.update(self._saved[4])
+        _win._team_values.clear()
+        _win._team_values.update(self._saved[5])
+        _win._teamcolor_loader, _win._matches = self._saved[6], self._saved[7]
+        for lb, t in zip(_win._teamcolor_status_labels, self._saved[8]):
+            lb.setText(t)
+        for b in _win._teamcolor_fetch_btns:
+            b.setEnabled(True)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def test_teamcolor_results_reach_table_and_db():
+    # 로더 → 창 배선(받기·끝)과 DB 저장까지. 로더는 start() 에서 바로 내보낸다.
+    from PyQt6.QtCore import QObject, pyqtSignal
+
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+
+    class _Instant(QObject):
+        loaded_many = pyqtSignal(dict)
+        progress = pyqtSignal(int, int)
+        finished_all = pyqtSignal()
+
+        def __init__(self, wanted):
+            super().__init__()
+            self.wanted, self.total = list(wanted), len(wanted)
+
+        def start(self):
+            self.loaded_many.emit({n: ("즉시컬러", 7) for n in self.wanted})
+            self.finished_all.emit()
+
+        def isRunning(self):
+            return False
+
+    with _TeamColorEnv():
+        app_main.TeamColorLoader = app_main.RankListLoader = _Instant
+        app_main.MainWindow._on_fetch_team_colors(_win)
+        assert all(_win._team_colors.get(n) == "즉시컬러" for n in opps), _win._team_colors
+        assert all("조회 완료" in lb.text() for lb in _win._teamcolor_status_labels), \
+            [lb.text() for lb in _win._teamcolor_status_labels]
+        tbl = _win.tbl_teamcolor_rate
+        assert tbl.rowCount() == 1 and tbl.item(0, 0).text() == "즉시컬러"
+        conn = store.open_db(config.DB_PATH)
+        try:
+            saved = store.load_team_colors(conn, opps)
+        finally:
+            conn.close()
+        assert saved == {n: ("즉시컬러", 7) for n in opps}, saved
+
+
+def test_teamcolor_uses_db_cache_for_every_season_before_fetching():
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+
+    def no_loader(*a, **k):
+        raise AssertionError("DB 에 다 있는데 조회를 시작했다")
+
+    with _TeamColorEnv():
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_team_colors(conn, {n: ("캐시컬러", 1) for n in opps})
+        finally:
+            conn.close()
+        app_main.TeamColorLoader = app_main.RankListLoader = no_loader
+        _win._matches = [m for m in _MATCHES if m.opponent == opps[0]]  # 시즌엔 한 명뿐
+        app_main.MainWindow._on_fetch_team_colors(_win)
+        # 시즌 밖 상대도 DB 에서 미리 채운다 — 시즌을 바꿨을 때 바로 그리게
+        assert all(_win._team_colors.get(n) == "캐시컬러" for n in opps), _win._team_colors
+
+
+def test_position_views_follow_teamcolor_scope():
+    # 포지션별 최다 상대(색 필터)·팀컬러 더블클릭 상세도 표와 같은 시즌 범위
+    seen = []
+    orig = app_main.st.opponent_position_players, _win.sp_to.value(), _win._show_teamcolor_detail
+    saved_colors = dict(_win._team_colors)
+
+    def spy(details, *a, **k):
+        seen.append(len(details))
+        return orig[0](details, *a, **k)
+
+    try:
+        for m in _MATCHES:
+            if m.opponent:
+                _win._team_colors[m.opponent] = "범위컬러"
+        _win.sp_to.setValue(1)
+        _win._render_all()
+        assert len(_win._slice()[1]) < len(_win._details), "표시 구간이 좁아지지 않아 비교가 안 된다"
+        app_main.st.opponent_position_players = spy
+        _win._show_teamcolor_detail = lambda *a, **k: None
+        _win._on_position_color_changed(0)
+        _win._on_teamcolor_double_clicked(_win.tbl_teamcolor_rank.item(0, 1))
+        assert seen == [len(_win._details)] * 2, (seen, len(_win._details))
+    finally:
+        app_main.st.opponent_position_players = orig[0]
+        _win._show_teamcolor_detail = orig[2]
+        _win._team_colors.clear()
+        _win._team_colors.update(saved_colors)
+        _win.sp_to.setValue(orig[1])
+        _win._render_all()
+
+
+def test_teamcolor_counts_season_scope_not_display_range():
+    # 표시 구간을 1경기로 좁혀도 팀컬러 표는 시즌(지금은 전체) 경기를 다 센다
+    saved = dict(_win._team_colors), _win.sp_to.value()
+    try:
+        for m in _MATCHES:
+            if m.opponent:
+                _win._team_colors[m.opponent] = "테스트컬러"
+        _win.sp_to.setValue(1)
+        _win._render_all()
+        n = sum(1 for m in _win._matches if m.opponent)
+        assert len(_win._slice()[0]) == 1 and n > 1, n
+        tbl = _win.tbl_teamcolor_rate
+        col = app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS.index("경기")
+        assert tbl.rowCount() == 1 and tbl.item(0, col).text() == str(n), \
+            [tbl.item(0, c).text() for c in range(tbl.columnCount())]
+        note = _win._teamcolor_note_labels[0].text()
+        assert f"상대 {len({m.opponent for m in _win._matches if m.opponent})}명 중" in note, note
+    finally:
+        _win._team_colors.clear()
+        _win._team_colors.update(saved[0])
+        _win.sp_to.setValue(saved[1])
+        _win._render_all()
 
 
 # ── API 키 입력 ───────────────────────────────────────────────────────
