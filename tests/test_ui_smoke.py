@@ -1909,7 +1909,13 @@ def test_settings_remember_window_page_and_season():
     try:
         _win.resize(1400, 800)
         _win._go_page("슛 맵")
-        _win.cb_season.setCurrentIndex(_win.cb_season.findData(None))  # "전체"
+        # 기본으로 잡히는 시즌이 아닌 것을 고른다 — 같으면 복원을 빼도 결과가 같아 안 잰다
+        default = _win.cb_season.findData(_win.ONGOING)
+        default = default if default >= 0 else 0
+        assert _win.cb_season.count() >= 2, "시즌이 하나뿐이라 복원을 잴 수 없다"
+        pick = 0 if default != 0 else 1
+        _win.cb_season.setCurrentIndex(pick)
+        want_season = _win._season_key(_win.cb_season.itemData(pick))
         _win._save_settings()
         # 다른 상태로 돌려놓고, 켤 때처럼 읽는다
         want_geo = bytes(_win.saveGeometry())
@@ -1925,14 +1931,23 @@ def test_settings_remember_window_page_and_season():
         finally:
             del _win.restoreGeometry
         assert got_geo == [want_geo], "저장한 창 위치·크기가 복원에 안 쓰였다"
-        assert _win._restore == {"page": "슛 맵", "season": "all"}, _win._restore
+        assert _win._restore == {"page": "슛 맵", "season": want_season}, _win._restore
         # 처음 그리는 계정이면 그 메뉴·시즌으로
         _win._ouid, _win._season_picked = "", False
         _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         assert _win._current_page_name() == "슛 맵", _win._current_page_name()
-        assert _win.cb_season.currentData() is None, _win.cb_season.currentText()
+        assert _win._season_key(_win.cb_season.currentData()) == want_season, _win.cb_season.currentText()
         assert _win._restore == {}, "한 번 쓴 복원값이 남아 다음 계정에도 적용된다"
+        # 닫을 때 저장하는 배선 — closeEvent 가 _save_settings 를 부른다
+        called = []
+        _win._save_settings = lambda: called.append(1)
+        try:
+            from PyQt6.QtGui import QCloseEvent
+            _win.closeEvent(QCloseEvent())
+        finally:
+            del _win._save_settings
+        assert called == [1], "닫을 때 설정을 저장하지 않는다"
     finally:
         _win.resize(saved_state[0])
         _win._restore = {}
@@ -2000,8 +2015,13 @@ def test_open_last_account_then_quiet_refresh():
         assert _win.open_last_account() is False and made == [], "열 계정이 없는데 열었다"
         conn = store.open_db(config.DB_PATH)
         try:
-            store.save_matches(conn, _DETAILS)
             store.upsert_account(conn, _OUID, "테스트구단주")
+        finally:
+            conn.close()
+        assert _win.open_last_account() is False and made == [], "기록이 없는 계정을 열었다"
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_matches(conn, _DETAILS)
         finally:
             conn.close()
         assert _win.open_last_account() is True and made == [("테스트구단주", _OUID)], made
