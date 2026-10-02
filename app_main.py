@@ -65,8 +65,11 @@ class MatchLoader(QThread):
     # 새로 저장된 수, 이번에 API 로 받은 수, RankerInfo|None(넥슨 데이터센터 랭킹),
     # 등급이름(감독모드 최고 등급), is_champion(챔피언스 이상인지), 등급 배지 로컬 경로,
     # seasonId→{className,seasonImg}, divisionId→등급이름(등급 추이 그래프용)
-    finished_ok = pyqtSignal(list, list, str, dict, dict, dict, int, int, object,
-                             str, bool, str, dict, dict)
+    # 컨테이너는 list/dict 가 아니라 object 로 선언한다 — list/dict 면 PyQt 가 1만 경기 기록(중첩 dict)을
+    # Qt 형식으로 통째로 깊은 복사했다 되돌려, 직접 읽으면 786MB 인 것이 앱에선 2.7~4.5GB 까지 올랐고
+    # 로더가 끝난 뒤 화면까지 약 6초 걸렸다(2026-10-02 실측). object 는 참조만 넘긴다.
+    finished_ok = pyqtSignal(object, object, str, object, object, object, int, int, object,
+                             str, bool, str, object, object)
     failed = pyqtSignal(str)
     key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
     quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
@@ -490,7 +493,7 @@ class TeamColorLoader(QThread):
 
     progress = pyqtSignal(int, int)   # done, total
     # {닉네임: (팀컬러("" 이면 랭킹 밖), 구단가치(원 단위 int, 못 찾으면 None))} — RankListLoader 와 같은 모양
-    loaded_many = pyqtSignal(dict)
+    loaded_many = pyqtSignal(object)  # dict — 이유는 MatchLoader.finished_ok
     finished_all = pyqtSignal()
 
     def __init__(self, nicknames: list[str]):
@@ -552,7 +555,7 @@ class RankListLoader(QThread):
     TIMEOUT = 10  # 목록 한 쪽은 검색 결과보다 크다(약 50KB)
 
     progress = pyqtSignal(int, int)   # 읽은 쪽, 전체 쪽
-    loaded_many = pyqtSignal(dict)    # {닉네임: (팀컬러, 구단가치)}
+    loaded_many = pyqtSignal(object)  # {닉네임: (팀컬러, 구단가치)} — object 인 이유는 MatchLoader.finished_ok
     finished_all = pyqtSignal()
 
     def __init__(self, wanted: set[str]):
@@ -613,7 +616,7 @@ class SeasonLoader(QThread):
     시즌 기능만 못 쓰고 판수 기준 화면은 그대로 돌아가야 한다.
     """
 
-    loaded = pyqtSignal(list)   # list[sn.Season]
+    loaded = pyqtSignal(object)  # list[sn.Season] — object 인 이유는 MatchLoader.finished_ok
 
     def run(self) -> None:
         try:

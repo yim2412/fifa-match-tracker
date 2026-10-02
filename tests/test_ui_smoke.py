@@ -2057,6 +2057,24 @@ def test_quiet_refresh_failure_stays_in_status_bar():
         _win.stack.setCurrentIndex(saved[1])
 
 
+def test_loader_signals_pass_objects_without_copying():
+    # list/dict 로 선언한 신호는 PyQt 가 중첩 dict 를 통째로 깊은 복사한다 — 1만 경기에서 메모리
+    # 4.5GB·화면까지 6초였다(2026-10-02). 같은 객체가 그대로 와야 한다(복사면 is 가 깨진다)
+    from PyQt6.QtCore import Qt as _Qt
+    details, matches, names = [{"a": {"b": [1]}}], [object()], {1: "x"}
+    got = []
+    ld = app_main.MatchLoader(_NoApi(), "x", 52)
+    ld.finished_ok.connect(lambda *a: got.append(a), _Qt.ConnectionType.DirectConnection)
+    ld.finished_ok.emit(matches, details, "o", {}, names, {}, 0, 0, None, "", False, "", {}, {})
+    assert got and got[0][0] is matches and got[0][1] is details and got[0][4] is names, got
+    batch = {"닉": ("팀", 1)}
+    for loader in (app_main.TeamColorLoader(["닉"]), app_main.RankListLoader({"닉"})):
+        seen = []
+        loader.loaded_many.connect(seen.append, _Qt.ConnectionType.DirectConnection)
+        loader.loaded_many.emit(batch)
+        assert seen and seen[0] is batch, type(loader).__name__
+
+
 def test_search_hands_current_account_to_loader():
     got = []
 
