@@ -332,6 +332,16 @@ def test_played_counts_used_subs_only():
     d["matchInfo"][0]["player"] = [sub_used]
     weeks = st.player_finishing_trend([d], "me", 1)
     assert len(weeks) == 1 and weeks[0].games == 1 and str(weeks[0].week_start) == "2026-09-28", weeks
+    # 슛 기록은 있는데 출전 기록이 없는 경기(넥슨이 값을 비운 경우) — 슛은 세되 출전으로는 안 센다
+    d["matchInfo"][0]["player"] = [sub_idle]
+    d["matchInfo"][0]["shootDetail"] = [{"spId": 1, "result": st.SHOT_GOAL, "x": 0.9, "y": 0.5}]
+    weeks = st.player_finishing_trend([d], "me", 1)
+    assert [(w.games, w.shots, w.goals) for w in weeks] == [(0, 1, 1)], weeks
+    # 경기 순서가 섞여 와도(DB 는 최신순) 주는 오래된 것부터
+    later = {"matchDate": "2026-10-08T10:00:00",
+             "matchInfo": [{"ouid": "me", "player": [starter], "shootDetail": []}, {"ouid": "x"}]}
+    weeks = st.player_finishing_trend([later, d], "me", 1)
+    assert [str(w.week_start) for w in weeks] == ["2026-09-28", "2026-10-05"], weeks
 
 
 def test_store_uses_orjson_and_merge_keeps_db_order():

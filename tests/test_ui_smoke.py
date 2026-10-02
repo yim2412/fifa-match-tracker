@@ -2152,7 +2152,11 @@ def test_player_card_has_my_record_tab():
     rec = tabs.widget(1)
     summary = [lb for lb in rec.findChildren(app_main.QLabel) if lb.objectName() == "myRecordSummary"][0]
     assert f"슛 {shooter.shots}" in summary.text() and f"골 {shooter.goals}" in summary.text(), summary.text()
-    assert len(rec.findChildren(app_main.ShotMapWidget)) == 1
+    maps = rec.findChildren(app_main.ShotMapWidget)
+    want = st_mod.shot_map(_win._details, _win._ouid, mine=True, sp_id=shooter.sp_id).shots
+    every = st_mod.shot_map(_win._details, _win._ouid, mine=True).shots
+    assert len(want) < len(every), "그 카드 슛과 전체 슛이 같아 잴 수 없다"
+    assert len(maps) == 1 and maps[0]._shots == want, (len(maps[0]._shots), len(want))
     # 픽스처는 슛이 적다 — 추이 대신 '표본 부족'. 기준을 낮추면 그래프가 나온다
     trend = [x for x in rec.findChildren(app_main.QWidget) if x.objectName() == "myRecordTrend"][0]
     assert isinstance(trend, app_main.QLabel) and "표본 부족" in trend.text(), type(trend)
