@@ -57,6 +57,19 @@ PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
 MIN_WINDOW = (1280, 720)
 
 
+ETA_MIN_DONE = 30  # 이만큼 끝나기 전엔 남은 시간을 안 낸다 — 첫 몇 건은 연결 준비로 느려 크게 틀린다
+
+
+def eta_text(done: int, total: int, elapsed: float) -> str:
+    """" · 남음 약 N분" — 지금까지 실제로 걸린 시간으로만 낸다(상수 없음). 표본이 적거나 끝났으면 빈 글."""
+    if done < ETA_MIN_DONE or done >= total or elapsed <= 0:
+        return ""
+    left = elapsed / done * (total - done)
+    if left < 60:
+        return f" · 남음 약 {max(int(round(left)), 1)}초"
+    return f" · 남음 약 {int(round(left / 60))}분"
+
+
 class MatchLoader(QThread):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
 
@@ -174,6 +187,7 @@ class MatchLoader(QThread):
                 done = 0
                 if todo:
                     self._pool = ThreadPoolExecutor(max_workers=6)
+                    started = time.monotonic()
                     try:
                         for detail in self._pool.map(self._safe_detail, todo):
                             if self._cancel:
@@ -182,7 +196,8 @@ class MatchLoader(QThread):
                                 break
                             done += 1
                             self.progress.emit(done, len(todo),
-                                               f"새 경기 받는 중… {done}/{len(todo)}")
+                                               f"새 경기 받는 중… {done:,}/{len(todo):,}"
+                                               + eta_text(done, len(todo), time.monotonic() - started))
                             if detail is not None:
                                 fresh.append(detail)
                     except (RuntimeError, CancelledError):
@@ -3162,8 +3177,13 @@ class MainWindow(QMainWindow):
             self._invalidate("teamcolor")
 
     def _on_teamcolor_progress(self, done: int, total: int) -> None:
+        text = self._teamcolor_progress_fmt.format(done=done, total=total)
         for lb in self._teamcolor_status_labels:
-            lb.setText(self._teamcolor_progress_fmt.format(done=done, total=total))
+            lb.setText(text)
+        # 팀컬러 화면에서만 보이던 진행을 상태줄에도 — 처음 목록 읽기(약 50초)가 어느 화면에서든 보이게.
+        # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다
+        if not (self._loader and self._loader.isRunning()):
+            self.statusBar().showMessage(f"팀컬러 — {text}")
 
     def _on_teamcolor_finished(self) -> None:
         for b in self._teamcolor_fetch_btns:
@@ -3186,6 +3206,8 @@ class MainWindow(QMainWindow):
             msg += f" · 랭킹 목록 {failed}쪽을 못 읽어 나머지는 다음에 다시 찾습니다"
         for lb in self._teamcolor_status_labels:
             lb.setText(msg)
+        if not (self._loader and self._loader.isRunning()):
+            self.statusBar().showMessage(f"팀컬러 — {msg}")
         self._invalidate("teamcolor")
         if self._teamcolor_retry_pending:
             self._teamcolor_retry_pending = False

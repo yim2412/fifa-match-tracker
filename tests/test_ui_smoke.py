@@ -2075,6 +2075,55 @@ def test_loader_signals_pass_objects_without_copying():
         assert seen and seen[0] is batch, type(loader).__name__
 
 
+def test_eta_text_only_from_real_elapsed():
+    assert app_main.eta_text(app_main.ETA_MIN_DONE - 1, 100, 10.0) == "", "표본이 적은데 시간을 냈다"
+    assert app_main.eta_text(100, 100, 10.0) == "", "끝났는데 남은 시간을 냈다"
+    assert app_main.eta_text(50, 100, 0.0) == ""
+    assert app_main.eta_text(50, 100, 25.0) == " · 남음 약 25초"      # 50건에 25초 → 남은 50건도 25초
+    assert app_main.eta_text(30, 2100, 60.0) == " · 남음 약 69분"     # 2초/건 × 2,070건 = 4,140초
+    assert app_main.eta_text(99, 100, 9.9) == " · 남음 약 1초"        # 1초 미만도 0초라 하지 않는다
+
+
+def test_loader_progress_carries_eta():
+    # 배선 — 새 경기 받는 진행 문구에 남은 시간이 실린다(픽스처는 4경기라 기준을 1로 낮춰 잰다)
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA, app_main.ETA_MIN_DONE
+    config.DB_PATH, config.WEB_DATA, app_main.ETA_MIN_DONE = tmp / "t.db", False, 1
+    msgs = []
+    try:
+        ld = app_main.MatchLoader(_DetailApi([], ""), "닉", 52)
+        ld.progress.connect(lambda d, t, m: msgs.append(m))
+        ld.run()
+    finally:
+        config.DB_PATH, config.WEB_DATA, app_main.ETA_MIN_DONE = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    got = [m for m in msgs if m.startswith("새 경기 받는 중")]
+    assert got and any("남음 약" in m for m in got), got
+
+
+def test_teamcolor_progress_reaches_status_bar_unless_search_runs():
+    saved = _win._loader, _win._teamcolor_progress_fmt, [lb.text() for lb in _win._teamcolor_status_labels]
+
+    class _Busy:
+        def isRunning(self):
+            return True
+
+    try:
+        _win._teamcolor_progress_fmt = "랭킹 목록 {done} / {total}쪽 읽는 중…"
+        _win._loader = None
+        _win._on_teamcolor_progress(120, 500)
+        assert _win.statusBar().currentMessage() == "팀컬러 — 랭킹 목록 120 / 500쪽 읽는 중…", \
+            _win.statusBar().currentMessage()
+        _win.statusBar().showMessage("새 경기 받는 중… 3/10")
+        _win._loader = _Busy()                     # 검색이 돌 땐 그쪽이 상태줄 주인
+        _win._on_teamcolor_progress(121, 500)
+        assert _win.statusBar().currentMessage() == "새 경기 받는 중… 3/10"
+    finally:
+        _win._loader, _win._teamcolor_progress_fmt = saved[0], saved[1]
+        for lb, t in zip(_win._teamcolor_status_labels, saved[2]):
+            lb.setText(t)
+
+
 def test_search_hands_current_account_to_loader():
     got = []
 
