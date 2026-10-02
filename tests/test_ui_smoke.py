@@ -1080,9 +1080,11 @@ def test_update_status_always_visible_bottom_left():
     # 사용자 요청: 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 칸(버전 옆)
     card = _win.update_card
     orig = updatecheck.check
+    page0 = _win.stack.currentIndex()
+    _win.stack.setCurrentIndex(_win.PAGE_SEARCH)  # 최신 카드는 첫 검색 화면에서만 뜬다
     try:
         for status, rel, want, card_shown in [
-                (updatecheck.LATEST, None, ("최신 버전입니다", None), True),     # 카드 자리에도
+                (updatecheck.LATEST, None, ("최신 버전입니다", None), True),     # 카드 자리에도(검색 화면)
                 (updatecheck.UNKNOWN, None, ("업데이트 확인 못 함", None), False),  # 모르면 '최신'이라 안 한다
                 (updatecheck.NEWER, _REL, ("새 버전 v9.0.0", "받으러 가기"), True)]:
             card.hide()
@@ -1112,6 +1114,35 @@ def test_update_status_always_visible_bottom_left():
         card.hide()
         _win._release = None
         _win._set_update_status("")
+        _win.stack.setCurrentIndex(page0)
+
+
+def test_latest_card_never_covers_main_page():
+    # 사용자 요청(2026-10-02 스크린샷): '최신 버전입니다' 카드가 대시보드를 가렸다 — 메인에선 안 뜬다.
+    # 새 버전 카드는 놓치면 안 되니 메인에서도 뜨고, 화면을 옮겨도 남는다.
+    card = _win.update_card
+    page0 = _win.stack.currentIndex()
+    try:
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        card.hide()
+        _win._on_update_latest()
+        assert not card.isVisibleTo(_win), "메인 화면에 최신 카드가 떴다"
+        assert _status_bar_state()[1][0] == "최신 버전입니다"   # 왼쪽 아래에는 그대로
+        _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
+        _win._on_update_latest()
+        assert card.isVisibleTo(_win)
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)            # 검색 → 메인(계정을 열면)이면 닫힌다
+        assert not card.isVisibleTo(_win), "메인으로 넘어가도 최신 카드가 남았다"
+        _win._on_update_found(_REL)                           # 새 버전 카드는 메인에서도
+        assert card.isVisibleTo(_win)
+        _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        assert card.isVisibleTo(_win), "새 버전 카드가 화면을 옮기자 사라졌다"
+    finally:
+        card.hide()
+        _win._release = None
+        _win._set_update_status("")
+        _win.stack.setCurrentIndex(page0)
 
 
 def test_version_bottom_left_not_in_title():

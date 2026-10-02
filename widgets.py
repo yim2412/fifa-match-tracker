@@ -36,7 +36,7 @@ class UpdateCard(QFrame):
     dismissed = pyqtSignal()
     MARGIN = 20
     WIDTH = 300  # 고정 — 글자 길이에 따라 줄면 내려받는 중 문구가 잘렸다
-    # 새 버전이면 [업데이트], 최신이면 "최신 버전입니다"(사용자 요청 2026-10-02 — 이 자리에 둘 다).
+    # 새 버전이면 [업데이트](어느 화면에서든), 최신이면 "최신 버전입니다"(첫 검색 화면에서만 — 메인 내용을 가린다).
     # 어느 쪽이든 사용자가 닫을 때까지 둔다 — 6초 뒤 저절로 닫았더니 사용자가 못 봤다.
     # 확인을 못 했으면 안 띄운다(왼쪽 아래 상태 칸이 "업데이트 확인 못 함"을 보인다).
 
@@ -78,9 +78,11 @@ class UpdateCard(QFrame):
         row.addWidget(self.btn_update)
         v.addLayout(row)
         add_shadow(self)
+        self.mode = ""  # "release"(새 버전) · "latest"(최신) — 최신 카드는 메인 화면에서 닫힌다
         self.hide()
 
     def show_release(self, tag: str, current: str, installed: bool) -> None:
+        self.mode = "release"
         self.lb_title.setText(f"새 버전 {tag}")
         self.lb_sub.setText(f"지금 {current}" + ("" if installed else " · 받기 페이지가 열립니다"))
         self.btn_update.setText("업데이트" if installed else "받으러 가기")
@@ -91,6 +93,7 @@ class UpdateCard(QFrame):
         self.place()
 
     def show_latest(self, current: str) -> None:
+        self.mode = "latest"
         self.lb_title.setText("최신 버전입니다")
         self.lb_sub.setText(f"지금 {current}")
         self.set_busy(False)

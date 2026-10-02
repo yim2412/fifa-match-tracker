@@ -806,6 +806,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._build_search_page())  # 0
         self.stack.addWidget(self._build_main_page())    # 1
         self.setCentralWidget(self.stack)
+        self.stack.currentChanged.connect(self._on_stack_changed)  # 메인으로 가면 '최신 버전' 카드를 닫는다
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -847,7 +848,15 @@ class MainWindow(QMainWindow):
 
     def _on_update_latest(self) -> None:
         self._set_update_status("최신 버전입니다")
-        self.update_card.show_latest(config.APP_VERSION)  # 카드 자리에도(사용자 요청) — 닫을 때까지
+        # 카드는 첫 검색 화면에서만 — 메인 화면(대시보드 등)에선 내용을 가린다(사용자 요청 2026-10-02).
+        # 메인에선 왼쪽 아래 상태 칸이 같은 말을 한다. 새 버전 카드는 놓치면 안 되니 어디서든 뜬다.
+        if self.stack.currentIndex() == self.PAGE_SEARCH:
+            self.update_card.show_latest(config.APP_VERSION)
+
+    def _on_stack_changed(self, idx: int) -> None:
+        card = getattr(self, "update_card", None)  # 창을 만드는 도중엔 아직 없다
+        if card is not None and idx == self.PAGE_MAIN and card.mode == "latest":
+            card.hide()
 
     def _on_update_unknown(self) -> None:
         # 확인을 못 했는데 '최신'이라 하면 거짓말 — 그렇다고 말한다
