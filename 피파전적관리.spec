@@ -19,7 +19,9 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # tzdata — 앱은 시간대 자료를 안 쓴다(zoneinfo 호출 0). 개발 PC 에 pandas 와 같이 깔려 있어
+    # 딸려 들어왔다: 파일 627개·0.5MB. 쓰게 되면 여기서 빼고 notice.THIRD_PARTY 에 라이선스를 넣는다.
+    excludes=['tzdata'],
     noarchive=False,
     optimize=0,
 )
