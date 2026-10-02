@@ -314,6 +314,116 @@ def test_as_text_blank_line_between_sections():
     assert text.startswith(f"[{analysis.SEC_FLOW}]") and f"\n\n[{analysis.SEC_LOSE}]" in text, text
 
 
+# ── 기준값과 정확히 같을 때도 말한다(경계 변이 3순위, 2026-10-02) ─────────────────────────
+# '이상(>=)'을 '초과(>)'로 바꾸면 기준값에 딱 맞는 경우만 갈린다 — 그 경우를 일부러 만든다.
+# 비율은 부동소수 오차가 없게 고른다(20경기 중 9 = 45%, 슛 64개 × 0.5 = 32).
+def _g(i, first, res):
+    """선제골 시나리오 한 경기. first: 'me'(내가 먼저) · 'opp'(먼저 실점) · None(무득점)."""
+    if first == "me":
+        return _match(i, res, 1, 1 if res == "패" else 0, 50, [(0, 100)],
+                      [(0, 200), (1, 300)] if res == "패" else [])
+    if first == "opp":
+        return _match(i, res, 1 if res == "승" else 0, 1, 50,
+                      [(0, 200), (1, 300)] if res == "승" else [], [(0, 100)])
+    return _match(i, res, 0, 0, 50, [], [])
+
+
+def _clutch_at(spec_me, spec_opp, base_rate):
+    """spec_*: 결과 문자열 목록 — 선제골 경기들과 선제 실점 경기들."""
+    ds = [_g(i, "me", r) for i, r in enumerate(spec_me)]
+    ds += [_g(100 + i, "opp", r) for i, r in enumerate(spec_opp)]
+    return analysis._clutch_rules(ds, OUID, base_rate=base_rate)
+
+
+def test_flow_compare_fires_exactly_at_gap():
+    # 최근 5경기 3승(60%) · 이전 20경기 10승(50%) → 차이 딱 10%p(GAP)
+    ms, ds = _seq(["승", "승", "승", "패", "패"] + ["승", "패"] * 10)
+    assert _find(analysis._flow(ms, ds, OUID, 5), "10%p 올랐습니다")
+
+
+def test_clutch_rules_fire_exactly_at_thresholds():
+    n = analysis.MIN_COND                                   # 8
+    # 선제골 8경기(기준 딱) · 승률 75% · 전체 65% → 차이 딱 10%p(GAP)
+    assert _find(_clutch_at(["승"] * 6 + ["패"] * 2, [], 65.0), "선제골을 넣으면")
+    # 선제 실점 8경기 · 승률 25% · 전체 35% → 차이 딱 10%p
+    assert _find(_clutch_at([], ["승"] * 2 + ["패"] * 6, 35.0), "먼저 실점하면")
+    # 앞서고 진 경기 3/15 = 딱 20%
+    assert _find(_clutch_at(["패"] * 3 + ["승"] * 12, [], 50.0), "앞서고도 진 경기가 3번")
+    assert n == 8 and analysis.GAP == 10.0
+
+
+def test_contrast_fires_exactly_at_gap_rate_and_sizes():
+    def run(prev, recent):
+        ds = [_g(i, f, r) for i, (f, r) in enumerate(recent + prev)]   # 최신순 — 앞이 최근
+        ms = [models.parse_match(d, OUID) for d in ds]
+        return analysis._contrast(ms, ds, OUID, window=len(recent))
+    # 평소 선제골 9/20 = 45% → 최근 3/5 = 60% : 차이 딱 15%p(GAP_WIDE) · 선제골 승률 100%
+    prev = [("me", "승")] * 9 + [("opp", "패")] * 11
+    recent = [("me", "승")] * 3 + [("opp", "패")] * 2
+    assert _find(run(prev, recent), "앞서서 시작하는 빈도")
+    # 선제골 승률이 딱 50%(4승 4패) — 평소 8/20 = 40% → 최근 5/5 = 100%
+    prev = [("me", "승")] * 4 + [("me", "패")] * 4 + [("opp", "패")] * 12
+    assert _find(run(prev, [("me", "승")] * 5), "앞서서 시작하는 빈도")
+    # 크기가 딱 기준: 이전 15경기(MIN_BASE) 중 선제골 갈린 8경기(MIN_COND) · 최근 5경기(MIN_FLOW)
+    prev = [("me", "승")] * 8 + [(None, "무")] * 7
+    recent = [("opp", "패")] * 5
+    assert _find(run(prev, recent), "이기는 방식이 막혀")
+
+
+def test_minute_rule_fires_at_min_goals_and_share():
+    def run(spread):
+        """spread: 15분 구간별 실점 수 → 한 경기에 다 넣는다."""
+        goals = []
+        for k, n in enumerate(spread):
+            period, base = (0, k * 900) if k < 3 else (1, (k - 3) * 900)
+            goals += [(period, base + 60 + j) for j in range(n)]
+        return analysis._minute_rules([_match(0, "패", 0, len(goals), 50, [], goals)], OUID)
+    # 딱 15골(MIN_GOALS) — 한 구간에 몰려 있음
+    assert _find(run([10, 1, 1, 1, 1, 1]), "실점의")
+    # 16골 중 4골 = 딱 25%(균등 1/6 의 1.5배)
+    assert _find(run([4, 3, 3, 2, 2, 2]), "실점의 25%")
+
+
+def test_possession_formation_finishing_type_opponent_exact():
+    # 점유율: 우세 20경기 13승(65%) · 열세 20경기 10승(50%) → 차이 딱 15%p
+    ds = []
+    for i, (poss, r) in enumerate([(70, "승")] * 13 + [(70, "패")] * 7 + [(30, "승")] * 10 + [(30, "패")] * 10):
+        ds.append(_match(i, r, 1 if r == "승" else 0, 0 if r == "승" else 1, poss,
+                         [(0, 600)] if r == "승" else [], [] if r == "승" else [(0, 700)]))
+    assert analysis._possession_rules(ds, OUID, total=len(ds))
+    # 전술: 상대 전술 8경기(기준 딱) 승률 25% · 전체 40% → 딱 -15%p / 50% · 전체 35% → 딱 +15%p
+    def form(wins, base):
+        ds = [_match(i, "승" if i < wins else "패", 0, 0, 50, [], []) for i in range(analysis.MIN_COND)]
+        return analysis._formation_rules(ds, OUID, base_rate=base, total=analysis.MIN_COND)
+    assert _find(form(2, 40.0), "나오면 승률 25%")
+    assert _find(form(4, 35.0), "일 때 승률 50%")
+    # 결정력: 슛 64개 × 기대득점 0.5 = 32, 40골 → 딱 +25%
+    import stats as st_
+    orig = st_.shot_xg
+    st_.shot_xg = lambda *a, **k: 0.5
+    try:
+        d = _match(0, "승", 40, 0, 50, [], [])
+        d["matchInfo"][0]["shootDetail"] = [_shot(3)] * 40 + [_shot(1)] * 24
+        assert _find(analysis._finishing_rules([d], OUID), "잘 넣고")
+    finally:
+        st_.shot_xg = orig
+    # 골 유형: 16골 중 헤더 4 = 딱 25%
+    d = _match(0, "패", 0, 16, 50, [], [(0, 100 + k) for k in range(16)])
+    for k, sd in enumerate(d["matchInfo"][1]["shootDetail"]):
+        sd["type"] = 3 if k < 4 else 1
+    assert _find(analysis._goal_type_rules([d], OUID), "헤더")
+    # 상대: 4경기 1승(25%) · 전체 47.5% → 딱 22.5%p(GAP_WIDE × 1.5)
+    ms, _ = _seq(["승", "패", "패", "패"], opp="천적")
+    assert _find(analysis._opponent_rules(ms, base_rate=47.5), "천적")
+
+
+def test_patterns_start_exactly_at_min_base():
+    ms, ds = _seq(["패"] * analysis.MIN_OPP + ["승"] * (analysis.MIN_BASE - analysis.MIN_OPP), opp="천적")
+    for m in ms[analysis.MIN_OPP:]:
+        m.opponent = "기타"                                   # 천적에게만 4패
+    assert len(ms) == analysis.MIN_BASE and analysis._patterns(ms, ds, OUID), "딱 기준 경기 수인데 침묵했다"
+
+
 def main() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

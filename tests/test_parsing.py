@@ -28,7 +28,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
 import config
 import models
@@ -657,6 +658,282 @@ def test_match_day_needs_full_date():
     assert st._match_day({"matchDate": "2026-10-02T10:00:00"}).isoformat() == "2026-10-02"
     assert st._match_day({"matchDate": "2026-10-02"}).isoformat() == "2026-10-02"  # 시각 없이 날짜만(딱 10자)
     assert st._match_day({"matchDate": "2026-10-0"}) is None and st._match_day({}) is None
+
+
+# ── 넥슨 API 클라이언트 — 재시도·캐시(변이 4순위, 2026-10-02) ─────────────────────────────
+class _Res:
+    def __init__(self, status, body=None):
+        self.status_code, self._body, self.text = status, body, ""
+
+    def json(self):
+        return self._body
+
+
+class _Seq:
+    """session.get 대역 — 정한 순서대로 응답(또는 예외)을 낸다."""
+
+    def __init__(self, *items):
+        self.items, self.calls = list(items), 0
+
+    def get(self, url, params=None, timeout=None):
+        self.calls += 1
+        it = self.items.pop(0)
+        if isinstance(it, Exception):
+            raise it
+        return it
+
+
+def _api_with(*items):
+    import nexon_api
+    api = nexon_api.FCOnlineAPI("k")
+    api._session = _Seq(*items)
+    return api
+
+
+def test_api_retries_only_transient_errors():
+    import nexon_api
+    import requests
+    orig = nexon_api.time.sleep
+    nexon_api.time.sleep = lambda s: None       # 실제로 기다리지 않는다
+    try:
+        api = _api_with(_Res(429), _Res(200, {"ok": 1}))
+        assert api._get("/x") == {"ok": 1} and api._session.calls == 2
+        api = _api_with(_Res(500), _Res(503), _Res(200, [1]))
+        assert api._get("/x") == [1] and api._session.calls == 3
+        for items, status in (([_Res(429)] * 3, 429), ([_Res(400, {"error": {"name": "OPENAPI00004"}})], 400)):
+            api = _api_with(*items)
+            try:
+                api._get("/x")
+                raise AssertionError("실패인데 통과했다")
+            except nexon_api.NexonAPIError as e:
+                assert e.status == status and api._session.calls == len(items), (status, api._session.calls)
+        err = requests.ConnectionError("끊김")
+        api = _api_with(err, _Res(200, {"ok": 2}))
+        assert api._get("/x") == {"ok": 2}                      # 네트워크 오류도 다시 해 본다
+        api = _api_with(err, err, err)
+        try:
+            api._get("/x")
+            raise AssertionError("세 번 끊겼는데 통과했다")
+        except nexon_api.NexonAPIError as e:
+            assert "네트워크 오류" in e.message and api._session.calls == 3
+        api = _api_with(_Res(200, {"ouid": ""}))
+        try:
+            api.get_ouid("없음")
+            raise AssertionError("빈 ouid 를 받아들였다")
+        except nexon_api.NexonAPIError:
+            pass
+    finally:
+        nexon_api.time.sleep = orig
+
+
+def test_api_detail_and_meta_cache():
+    import tempfile
+    import shutil
+    import nexon_api
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        api = nexon_api.FCOnlineAPI("k", cache_dir=tmp)
+        api._session = _Seq(_Res(200, {"matchId": "abc"}))
+        assert api.get_match_detail("abc") == {"matchId": "abc"}
+        assert api.get_match_detail("abc") == {"matchId": "abc"} and api._session.calls == 1, "캐시를 안 썼다"
+        (tmp / "bad.json").write_text("{깨짐", encoding="utf-8")
+        assert api._cache_read("bad") is None                       # 깨진 캐시는 없는 셈
+        no_cache = nexon_api.FCOnlineAPI("k")
+        no_cache._session = _Seq(_Res(200, {"a": 1}), _Res(200, {"a": 1}))
+        no_cache.get_match_detail("abc"), no_cache.get_match_detail("abc")
+        assert no_cache._session.calls == 2                          # 캐시 폴더가 없으면 매번
+        # 메타: 이번 주 갱신일 뒤에 쓴 캐시는 쓰고, 그 전 것은 버린다
+        api._meta_write("spid", [{"id": 1}])
+        assert api._meta_read("spid") == [{"id": 1}]
+        old = (nexon_api._week_boundary() - timedelta(seconds=1)).timestamp()
+        os.utime(tmp / "meta_spid.json", (old, old))
+        assert api._meta_read("spid") is None, "지난 갱신일 이전 메타를 그대로 썼다"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_week_boundary_is_refresh_weekday_midnight():
+    import nexon_api
+    wd = nexon_api.META_REFRESH_WEEKDAY
+    base = datetime(2026, 10, 5)                                   # 월요일
+    on_day = base + timedelta(days=(wd - base.weekday()) % 7, hours=15)
+    assert nexon_api._week_boundary(on_day) == on_day.replace(hour=0)
+    assert nexon_api._week_boundary(on_day - timedelta(days=1)) == (on_day - timedelta(days=7)).replace(hour=0)
+
+
+# ── 랭킹 한 사람 읽기·구단가치 표기(변이 4순위) ─────────────────────────────────────────
+_RANK_HTML = ('<div class="tr"><span class="td rank_no">4,500</span>'
+              '<span class="lv"><span class="txt">3823</span></span>'
+              '<span class="price" alt="9,356,900,000">93억 5,690만</span>'
+              '<span class="td rank_r_win_point">3398.92</span>'
+              '<span class="top">41.6%</span><span class="bottom">959<em>|</em>395<em>|</em>949</span>'
+              '<span class="td team_color"><span class="inner">맨체스터  유나이티드 <small>(11명)</small></span></span></div>')
+
+
+def _rank_from(html):
+    orig_get, orig_on = ranker._session.get, config.WEB_DATA
+    ranker._session.get = lambda *a, **k: _FakeRes(html)
+    config.WEB_DATA = True
+    try:
+        return ranker.fetch_manager_rank("닉")
+    finally:
+        ranker._session.get, config.WEB_DATA = orig_get, orig_on
+
+
+def test_fetch_manager_rank_reads_every_field():
+    i = _rank_from(_RANK_HTML)
+    assert (i.rank, i.level, i.team_value, i.team_value_text, i.elo) == (4500, 3823, 9356900000, "93억 5,690만", 3398.92)
+    assert (i.win_rate, i.win, i.draw, i.lose) == ("41.6%", 959, 395, 949)
+    assert i.team_color == "맨체스터 유나이티드" and i.ranked, i.team_color      # 겹친 공백 정리
+    out = _rank_from('<div>순위 내 포함되어 있지 않습니다</div>')
+    assert not out.ranked and out.team_color == "" and out.team_value == 0       # 랭킹 밖은 빈 값
+    try:
+        _rank_from('<div class="fc_logo_inspection">점검 진행 중</div>')
+        raise AssertionError("점검 페이지를 '랭킹 밖'으로 읽었다")
+    except ranker.RankerError:
+        pass
+
+
+def test_format_team_value_units():
+    f = ranker.format_team_value
+    assert f(9356900000) == "93억 5,690만"
+    assert f(10 ** 16 + 9631 * 10 ** 12) == "1경 9,631조"
+    assert f(3 * 10 ** 8) == "3억"                      # 아래 단위가 0이면 붙이지 않는다
+    assert f(10 ** 4) == "1만" and f(9999) == "9,999"    # 단위 경계 딱 1만
+    assert f(5 * 10 ** 4 + 7) == "5만"                   # 마지막 단위(만) 아래는 없다
+
+
+# ── DB 필터·시즌표 갱신·이미지 캐시(변이 4순위) ─────────────────────────────────────────
+def test_store_match_type_filters_and_season_staleness():
+    import tempfile
+    import shutil
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        conn = store.open_db(tmp / "t.db")
+        ds = [_d(3, "승"), _d(2, "패"), _d(1, "무")]
+        ds[0]["matchType"] = ds[1]["matchType"] = 52
+        ds[2]["matchType"] = 50
+        store.save_matches(conn, ds)
+        assert store.match_count(conn, "me") == 3 and store.match_count(conn, "me", 52) == 2
+        assert len(store.load_details(conn, "me")) == 3 and len(store.load_details(conn, "me", 50)) == 1
+        assert store.known_ids(conn, "me", 50) == {ds[2]["matchId"]}
+        a, b = store.date_range(conn, "me", 52)
+        assert (a[:10], b[:10]) == ("2026-09-02", "2026-09-03"), (a, b)    # 50 경기(09-01)는 빠진다
+        assert store.date_range(conn, "me")[0][:10] == "2026-09-01"
+        # 시즌표: 비어 있으면 낡음 → 방금 저장하면 새것 → TTL 지나면 낡음
+        assert store.seasons_stale(conn)
+        store.save_seasons(conn, [sn.Season(no=1, name="시즌 1", start=date(2026, 1, 1), end=date(2026, 3, 1))])
+        assert not store.seasons_stale(conn)
+        conn.execute("UPDATE seasons SET fetched_at = '2000-01-01T00:00:00'")
+        assert store.seasons_stale(conn)
+        conn.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_image_fetch_cache_and_failures():
+    import tempfile
+    import shutil
+    import images
+    import requests
+
+    class _Img:
+        def __init__(self, status, content):
+            self.status_code, self.content = status, content
+
+    tmp = Path(tempfile.mkdtemp())
+    calls = []
+
+    def respond(status, content):
+        def get(url, timeout=None, headers=None):
+            calls.append(url)
+            if status is None:
+                raise requests.ConnectionError("끊김")
+            return _Img(status, content)
+        return get
+
+    orig = images._session.get
+    try:
+        cases = [  # (함수, 인자)
+            (images.fetch, (101,)),
+            (images.fetch_division_icon, (3,)),
+            (images.fetch_season_icon, (201, "https://x/s.png")),
+            (images.fetch_url, ("https://x/a.png",)),
+        ]
+        for fn, args in cases:
+            for status, content in ((404, b"x"), (200, b""), (None, b"")):   # 실패는 전부 None, 파일 없음
+                images._session.get = respond(status, content)
+                assert fn(*args, tmp) is None, (fn.__name__, status, content)
+            images._session.get = respond(200, b"PNG")
+            p = fn(*args, tmp)
+            assert p is not None and p.read_bytes() == b"PNG", fn.__name__
+            n = len(calls)
+            images._session.get = respond(500, b"")                        # 캐시가 있으면 묻지 않는다
+            assert fn(*args, tmp) == p and len(calls) == n, fn.__name__
+        assert images.fetch_url("", tmp) is None
+    finally:
+        images._session.get = orig
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 설정 — exe 로 묶였을 때의 경로·데이터 폴더·옛 위치 이관(변이 4순위) ──────────────────
+def test_config_paths_when_frozen_and_data_dir_order():
+    import tempfile
+    import shutil
+    saved = (getattr(sys, "frozen", None), getattr(sys, "_MEIPASS", None), sys.executable,
+             os.environ.get("FIFA_DATA_DIR"), os.environ.get("LOCALAPPDATA"))
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        sys.frozen, sys._MEIPASS, sys.executable = True, str(tmp / "_internal"), str(tmp / "app.exe")
+        assert config._root() == tmp.resolve(), config._root()                 # exe 옆
+        assert config.asset_path("a.ico") == tmp / "_internal" / "a.ico"        # 묶인 리소스는 _MEIPASS
+        del sys._MEIPASS
+        assert config.asset_path("a.ico") == config.ROOT / "a.ico"
+        del sys.frozen
+        assert config._root() == Path(config.__file__).resolve().parent         # 소스 실행은 소스 폴더
+        os.environ["FIFA_DATA_DIR"] = str(tmp / "d")
+        assert config._data_dir() == tmp / "d"                                  # 덮어쓰기가 먼저
+        os.environ.pop("FIFA_DATA_DIR")
+        os.environ["LOCALAPPDATA"] = str(tmp / "local")
+        assert config._data_dir() == tmp / "local" / config.DATA_DIR_NAME
+        os.environ.pop("LOCALAPPDATA")
+        assert config._data_dir() == Path.home() / f".{config.DATA_DIR_NAME}"   # 윈도우가 아닐 때
+    finally:
+        for attr, v in (("frozen", saved[0]), ("_MEIPASS", saved[1])):
+            if v is None:
+                if hasattr(sys, attr):
+                    delattr(sys, attr)
+            else:
+                setattr(sys, attr, v)
+        sys.executable = saved[2]
+        for k, v in (("FIFA_DATA_DIR", saved[3]), ("LOCALAPPDATA", saved[4])):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_migrate_moves_only_missing_files():
+    import tempfile
+    import shutil
+    tmp = Path(tempfile.mkdtemp())
+    saved = config.ROOT, config.DATA_DIR
+    try:
+        config.ROOT, config.DATA_DIR = tmp / "src", tmp / "data"
+        (tmp / "src").mkdir()
+        (tmp / "data").mkdir()
+        (tmp / "src" / ".env").write_text("옛", encoding="utf-8")
+        (tmp / "src" / "fifa.db").write_text("옛db", encoding="utf-8")
+        (tmp / "data" / "fifa.db").write_text("정본", encoding="utf-8")   # 이미 있으면 그쪽이 정본
+        assert config._migrate_from_source() == [".env"]
+        assert (tmp / "data" / ".env").read_text(encoding="utf-8") == "옛" and not (tmp / "src" / ".env").exists()
+        assert (tmp / "data" / "fifa.db").read_text(encoding="utf-8") == "정본"
+        assert (tmp / "src" / "fifa.db").exists(), "정본이 있는데 옛 DB 를 옮겨 덮었다"
+    finally:
+        config.ROOT, config.DATA_DIR = saved
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:
