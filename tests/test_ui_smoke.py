@@ -1794,15 +1794,19 @@ def test_loader_routes_rejected_key_to_dialog():
 class _DetailApi:
     """픽스처 4경기를 돌려주되, bad 에 든 경기는 code 오류로 실패한다."""
 
-    def __init__(self, bad, code):
+    def __init__(self, bad, code, only=None):
         self.bad, self.code = set(bad), code
-        self.by_id = {d["matchId"]: d for d in _DETAILS}
+        self.by_id = {d["matchId"]: d for d in _DETAILS if only is None or d["matchId"] in only}
+        self.forgotten = []
 
     def get_ouid(self, nick):
         return _OUID
 
     def get_user_basic(self, ouid):
         return {"nickname": "테스트구단주"}
+
+    def forget_details(self, ids):
+        self.forgotten.extend(ids)
 
     def get_match_ids(self, ouid, matchtype, offset, limit):
         return list(self.by_id) if offset == 0 else []
@@ -1836,6 +1840,108 @@ def _run_loader(api):
         config.DB_PATH, config.WEB_DATA = saved
         shutil.rmtree(tmp, ignore_errors=True)
     return got
+
+
+def test_research_same_account_reads_only_new_matches():
+    # 같은 계정을 다시 검색하면 화면이 가진 경기는 DB 에서 다시 읽지 않는다 — 결과는 전부 읽은 것과 같아야 한다
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA, store.load_details
+    config.DB_PATH, config.WEB_DATA = tmp / "t.db", False
+    ids = sorted(d["matchId"] for d in _DETAILS)
+    full_reads = []
+
+    def spy(*a, **k):
+        full_reads.append(1)
+        return saved[2](*a, **k)
+
+    def run(api, prev):
+        out = []
+        ld = app_main.MatchLoader(api, "닉", 52, prev=prev)
+        ld.finished_ok.connect(lambda *a: out.append(a))
+        ld.failed.connect(lambda m: out.append(("실패", m)))
+        ld.run()
+        assert len(out) == 1 and out[0][0] != "실패", out
+        return out[0]
+
+    store.load_details = spy
+    try:
+        api1 = _DetailApi([], "", only=ids[:2])           # 처음엔 2경기만
+        first = run(api1, None)
+        assert full_reads == [1] and len(first[1]) == 2
+        assert sorted(api1.forgotten) == ids[:2], api1.forgotten  # DB 에 넣은 경기의 캐시는 지운다
+        prev = (_OUID, first[0], first[1])
+        api2 = _DetailApi([], "")                          # 새 경기 2개가 더 생겼다
+        second = run(api2, prev)
+        assert full_reads == [1], "같은 계정인데 전부 다시 읽었다"
+        conn = store.open_db(config.DB_PATH)
+        try:
+            want = saved[2](conn, _OUID, 52)               # 전부 읽었으면 나왔을 목록·순서
+        finally:
+            conn.close()
+        assert [d["matchId"] for d in second[1]] == [d["matchId"] for d in want], (second[1], want)
+        assert sorted(m.match_id for m in second[0]) == ids
+        assert [m.match_id for m in second[0]] == [m.match_id for m in sorted(
+            second[0], key=lambda m: m.match_date, reverse=True)], "경기 순서가 최신순이 아니다"
+        assert len(first[0]) == 2 and len(first[1]) == 2, "화면이 쓰던 옛 목록을 고쳤다"
+        # 화면엔 없는데 DB 에는 있는 경기(한도에 걸렸다 이어 받은 것 등) — 이번에 새로 받지 않았어도 들어와야 한다
+        third = run(_DetailApi([], ""), (_OUID, second[0][:1], second[1][:1]))
+        assert full_reads == [1], full_reads
+        assert sorted(d["matchId"] for d in third[1]) == ids, "DB 에 있던 경기를 빠뜨렸다"
+        # 다른 계정이면(ouid 가 다르면) 전부 읽는다
+        run(_DetailApi([], ""), ("다른계정", first[0], first[1]))
+        assert full_reads == [1, 1], full_reads
+    finally:
+        config.DB_PATH, config.WEB_DATA, store.load_details = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_search_hands_current_account_to_loader():
+    got = []
+
+    class _Rec:
+        def __init__(self, api, nick, mt, prev=None):
+            got.append(prev)
+            self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
+
+        def connect(self, *_):
+            pass
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return False
+
+    orig = app_main.MatchLoader, _win._loader
+    app_main.MatchLoader, _win._loader = _Rec, None
+    try:
+        _win._api_search("아무개")
+    finally:
+        app_main.MatchLoader, _win._loader = orig
+        _win._set_busy(False)
+    assert len(got) == 1 and got[0][0] == _OUID, got
+    assert got[0][1] is _win._matches_all and got[0][2] is _win._details_all, "지금 가진 목록을 넘기지 않았다"
+
+
+def test_prune_cache_deletes_only_stored_matches():
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    try:
+        api = nexon_api.FCOnlineAPI("k", cache_dir=tmp)
+        for name in ("aaa111", "bbb222", "meta_spid"):
+            (tmp / f"{name}.json").write_text("{}", encoding="utf-8")
+        # 지켜야 할 것이 정말 있는지 먼저 — DB 에 없는 경기(이어 받기용)와 메타
+        assert (tmp / "bbb222.json").exists() and (tmp / "meta_spid.json").exists()
+        n, size = api.prune_detail_cache({"aaa111", "meta_spid", "zzz999"})
+        assert (n, size) == (1, 2), (n, size)
+        assert sorted(p.name for p in tmp.iterdir()) == ["bbb222.json", "meta_spid.json"]
+        api.forget_details(["bbb222", None, "없는것"])
+        assert sorted(p.name for p in tmp.iterdir()) == ["meta_spid.json"]
+        # 멈추라면 멈춘다(창을 닫는 중)
+        (tmp / "ccc333.json").write_text("{}", encoding="utf-8")
+        assert api.prune_detail_cache({"ccc333"}, stop=lambda: True) == (0, 0)
+        assert (tmp / "ccc333.json").exists()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_quota_stops_without_saving_holes():

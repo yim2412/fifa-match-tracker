@@ -15,6 +15,17 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+# 경기 기록 해석 — orjson 이 있으면 그걸로. 실데이터 1만 경기 2.05초 → 0.87초(중앙값 2.37배,
+# 2026-10-02, 결과 동일 확인). "2배 이상일 때만 넣는다"는 합의를 넘어 들였다. 없으면(소스 실행) json.
+# 배포판에 빠지면 조용히 느려지기만 하니 tools/release.py 가 들어갔는지 확인한다.
+try:
+    import orjson
+    _loads = orjson.loads
+    JSON_ENGINE = "orjson"
+except ImportError:  # pragma: no cover — 설치 안 된 환경
+    _loads = json.loads
+    JSON_ENGINE = "json"
+
 from seasons import Season
 
 SCHEMA = """
@@ -155,10 +166,43 @@ def load_details(conn: sqlite3.Connection, ouid: str,
     out = []
     for row in conn.execute(sql, args):
         try:
-            out.append(json.loads(row["payload"]))
+            out.append(_loads(row["payload"]))
         except Exception:
             continue
     return out
+
+
+def all_match_ids(conn: sqlite3.Connection) -> set[str]:
+    """저장된 경기 id 전부(계정 무관) — 디스크 캐시 정리용."""
+    return {r["match_id"] for r in conn.execute("SELECT match_id FROM matches")}
+
+
+def load_details_by_ids(conn: sqlite3.Connection, match_ids) -> list[dict]:
+    """그 경기들만(순서 없음) — 같은 계정을 다시 검색할 때 새로 생긴 경기만 읽으려고.
+
+    전부 읽으면 1만 경기에 3.6초(그중 JSON 해석 2.8초)였다(2026-10-02 실측)."""
+    ids = list(match_ids)
+    out = []
+    for i in range(0, len(ids), 500):  # SQLite 변수 개수 상한 회피
+        chunk = ids[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for row in conn.execute(f"SELECT payload FROM matches WHERE match_id IN ({q})", chunk):
+            try:
+                out.append(_loads(row["payload"]))
+            except Exception:
+                continue
+    return out
+
+
+def merge_details(old: list[dict], new: list[dict]) -> list[dict]:
+    """이미 가진 목록 + 새로 읽은 것 → load_details 와 같은 순서(matchDate 내림차순)의 새 목록.
+
+    옛 목록은 건드리지 않는다(화면이 아직 쓰고 있다). 같은 경기가 양쪽에 있으면 한 번만.
+    새 경기가 늘 앞이라고 가정하지 않는다 — 처음 검색이 한도에 걸렸다 이어 받으면 옛 경기가 새로 온다."""
+    seen = {d.get("matchId") for d in old}
+    merged = list(old) + [d for d in new if d.get("matchId") not in seen]
+    merged.sort(key=lambda d: d.get("matchDate") or "", reverse=True)
+    return merged
 
 
 def match_count(conn: sqlite3.Connection, ouid: str,

@@ -71,11 +71,14 @@ class MatchLoader(QThread):
     key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
     quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
 
-    def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int):
+    def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None):
+        """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
+        목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다)."""
         super().__init__()
         self._api = api
         self._nickname = nickname
         self._match_type = match_type
+        self._prev = prev
         self._cancel = False
         self._quota_hit = False
         self._pool: ThreadPoolExecutor | None = None
@@ -165,9 +168,23 @@ class MatchLoader(QThread):
                         "넥슨 오픈API에서 애플리케이션을 '서비스 단계'로 등록해 받은 키로 바꿔 주세요.")
                     return
                 new = store.save_matches(conn, fresh)
+                # DB 에 들어간 경기의 디스크 캐시는 지운다 — DB 가 정본이고, 캐시는 한도에 걸려
+                # 아직 DB 에 못 넣은 경기를 이어 받을 때만 필요하다(2026-10-02: 2만 개·407MB 중복)
+                self._api.forget_details([d.get("matchId") for d in fresh])
 
                 self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
-                details = store.load_details(conn, ouid, self._match_type)
+                prev_details = self._prev[2] if self._prev and self._prev[0] == ouid else None
+                if prev_details is not None:
+                    # 같은 계정 다시 검색 — 화면이 이미 가진 것은 다시 읽지 않는다(재검색 3.6초 → 거의 0).
+                    # 새로 받은 것만이 아니라 DB 에 있는데 화면에 없는 것 전부(id 로 대조 — 시각으로 자르면
+                    # 이어 받기로 들어온 옛 경기를 빠뜨린다)
+                    have = {d.get("matchId") for d in prev_details}
+                    missing = [i for i in store.known_ids(conn, ouid, self._match_type) if i not in have]
+                    new_details = store.load_details_by_ids(conn, missing)
+                    details = store.merge_details(prev_details, new_details)
+                else:
+                    new_details = None
+                    details = store.load_details(conn, ouid, self._match_type)
             finally:
                 conn.close()
 
@@ -183,7 +200,12 @@ class MatchLoader(QThread):
                                       {}, division_names)
                 return
 
-            matches = [m for m in (parse_match(d, ouid) for d in details) if m]
+            if new_details is not None:
+                have_m = {m.match_id for m in self._prev[1]}
+                matches = list(self._prev[1]) + [
+                    m for m in (parse_match(d, ouid) for d in new_details) if m and m.match_id not in have_m]
+            else:
+                matches = [m for m in (parse_match(d, ouid) for d in details) if m]
             matches.sort(key=lambda m: m.match_date or 0, reverse=True)
 
             self.progress.emit(0, 0, "선수 정보 조회 중…")
@@ -713,6 +735,11 @@ class MainWindow(QMainWindow):
         self._update_worker.unknown.connect(self._on_update_unknown)
         self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
+
+    def start_cache_prune(self) -> None:
+        """켤 때 한 번 — main 에서만 부른다(테스트가 실제 캐시 폴더를 건드리지 않게)."""
+        self._prune_worker = CachePruneWorker(self._api)
+        self._prune_worker.start()
 
     def _set_update_status(self, text: str, button: str = "") -> None:
         """왼쪽 아래 상태 칸 — 늘 보이는 자리(카드는 새 버전일 때만 잠깐 눈에 띄게)."""
@@ -2344,7 +2371,9 @@ class MainWindow(QMainWindow):
             return
         self._nick = nick
         self._set_busy(True)
-        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
+        # 지금 화면의 계정을 넘긴다 — 같은 계정이면(로더가 ouid 로 판단) 새 경기만 DB 에서 읽는다
+        prev = (self._ouid, self._matches_all, self._details_all) if self._ouid else None
+        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
@@ -3871,6 +3900,13 @@ class MainWindow(QMainWindow):
             box.addStretch(1)
 
     def closeEvent(self, e) -> None:
+        prune = getattr(self, "_prune_worker", None)
+        if prune and prune.isRunning():
+            # 파일을 지우는 중 — 하다 만 정리는 다음에 켤 때 이어서 하니, 오래 붙잡지 않고 끝낸다
+            prune.requestInterruption()
+            if not prune.wait(3000):
+                prune.terminate()
+                prune.wait(1000)
         if self._update_worker and self._update_worker.isRunning():
             # requests 는 중간에 못 끊는다 — 타임아웃(5초)까지 기다려야 스레드가 안전히 끝난다
             self._update_worker.wait(6000)
@@ -3912,6 +3948,27 @@ class MainWindow(QMainWindow):
         if self._position_ovr_loader and self._position_ovr_loader.isRunning():
             self._position_ovr_loader.wait(2000)
         super().closeEvent(e)
+
+
+class CachePruneWorker(QThread):
+    """켤 때 한 번 — 이미 DB 에 있는 경기의 디스크 캐시를 지운다(FCOnlineAPI.prune_detail_cache).
+    수만 개 파일을 훑으니 UI 스레드에서 하지 않는다. 실패는 조용히 — 다음에 켤 때 다시."""
+    done = pyqtSignal(int, int)  # 지운 수, 바이트
+
+    def __init__(self, api: FCOnlineAPI):
+        super().__init__()
+        self._api = api
+
+    def run(self) -> None:
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                ids = store.all_match_ids(conn)
+            finally:
+                conn.close()
+            self.done.emit(*self._api.prune_detail_cache(ids, stop=self.isInterruptionRequested))
+        except Exception:
+            pass
 
 
 class UpdateCheckWorker(QThread):
@@ -4172,6 +4229,7 @@ def main() -> int:
     win = MainWindow(api)
     win.show()
     win.start_update_check()
+    win.start_cache_prune()
     return app.exec()
 
 

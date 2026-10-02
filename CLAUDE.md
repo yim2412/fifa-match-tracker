@@ -22,7 +22,7 @@
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회는 상대가 적으면 상대마다 검색(`fetch_manager_rank`), 500명보다 많으면 1만 위 목록 500쪽(`fetch_rank_page`) — 목록은 **행 단위로 잘라 읽는다**(팀컬러 빈 행에서 뒤가 밀린다) |
 | `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
 | `playerinfo.py` | 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑 |
-| `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL). **화면은 API 가 아니라 이 DB 를 본다** |
+| `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL). **화면은 API 가 아니라 이 DB 를 본다**. 같은 계정 재검색은 화면이 가진 목록 + DB 에만 있는 경기(`known_ids` 대조 — 시각으로 자르면 이어 받은 옛 경기를 빠뜨린다)만 읽어 `merge_details`. 해석은 `orjson`(없으면 json, 배포판엔 `release.py` 가 확인) |
 | `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·UA, 매치 종류·조회 개수 기본값 |
 | `notice.py` | 이용 안내·개인정보·웹 데이터 고지·오픈소스 목록(`THIRD_PARTY`) — 첫 실행 `NoticeDialog` 와 [정보] `AboutDialog` 가 같은 글을 쓴다. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(이미 동의한 사람에게 다시 보이게). 새 패키지를 묶으면 `THIRD_PARTY` 에 한 줄 — spec 이 라이선스 전문을 `_internal/licenses/` 에 넣고 `release.py` 가 빠진 걸 막는다 |
 | `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다 |
@@ -75,6 +75,8 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
   찾아 고칠 곳이 하나여야 한다. 실제로 자주 겪는다.
 - **끝난 경기 상세는 내용이 안 변한다 → `.cache/` 디스크 캐시**(`FCOnlineAPI.get_match_detail`).
   호출량 초과는 **`OPENAPI00007`(429)** 로 돌아온다.
+  **캐시는 DB 에 넣기 전까지만 산다** — 저장하면 `forget_details`, 켤 때 `CachePruneWorker` 가 DB 에 있는
+  것을 정리한다(v1.0.1 전엔 두 벌로 쌓여 2만 개·407MB). 남는 건 한도에 걸려 아직 못 넣은 경기 — 이어 받기용.
 - **방어적 읽기의 이 앱 패턴은 `MatchLoader._safe_detail`.** 한 경기 파싱 실패가
   나머지 조회를 막지 않는다.
 - **에러 메시지 표는 `nexon_api.ERROR_MESSAGES`.** 새 코드가 생기면 여기에 넣는다.

@@ -157,6 +157,17 @@ def missing_licenses(names: list[str]) -> list[str]:
     return [n for n in want if n not in have]
 
 
+# 없으면 앱이 '대체 경로'로 돌아 겉으론 멀쩡한 모듈 — 빠져도 아무 오류가 안 난다(store._loads 의 orjson)
+REQUIRED_MODULES = ["orjson"]
+
+
+def missing_modules(names: list[str]) -> list[str]:
+    """배포물 파일 이름들에 그 모듈의 확장 모듈(.pyd)이 없는 것."""
+    low = [n.lower() for n in names]
+    return [m for m in REQUIRED_MODULES
+            if not any(f"/_internal/{m}/" in n and n.endswith(".pyd") for n in low)]
+
+
 def asset_names(version: str) -> tuple[str, str, str]:
     """(설치 파일, 포터블 zip, 체크섬) — 전부 ASCII 여야 GitHub 에서 이름이 안 깨진다."""
     return (f"{ASSET_PREFIX}-Setup-{version}.exe", f"{ASSET_PREFIX}-{version}-portable.zip",
@@ -265,6 +276,11 @@ def main() -> int:
     if lic_missing:
         fail(f"라이선스 전문이 빠졌다 {lic_missing} — notice.THIRD_PARTY 의 배포 이름을 확인")
     ok(f"라이선스 전문 {len(notice.THIRD_PARTY) + 1}개 항목 전부 들어 있음")
+    with zipfile.ZipFile(zip_path) as z:
+        mods_missing = missing_modules(z.namelist())
+    if mods_missing:
+        fail(f"배포판에 빠진 모듈 {mods_missing} — 없으면 앱이 대체 경로로 조용히 느려진다")
+    ok(f"선택 모듈 {', '.join(REQUIRED_MODULES)} 들어 있음")
 
     setup = DIST / setup_name
     setup.unlink(missing_ok=True)

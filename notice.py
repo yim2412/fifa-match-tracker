@@ -68,6 +68,7 @@ THIRD_PARTY = [
     ("certifi", "MPL-2.0", "certifi"),
     ("python-dotenv", "BSD-3-Clause", "python-dotenv"),
     ("setuptools", "MIT", "setuptools"),  # PyInstaller 가 같이 묶는다
+    ("orjson", "MPL-2.0 AND (Apache-2.0 OR MIT)", "orjson"),  # 경기 기록 해석(store._loads)
     ("Python", "PSF License", None),       # OpenSSL·SQLite·libffi 등 동봉 라이브러리 고지가 이 파일 안에 있다
 ]
 LICENSE_DIR = "licenses"  # 배포물 안(_internal\licenses\<이름>\…)

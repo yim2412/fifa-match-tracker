@@ -226,6 +226,40 @@ class FCOnlineAPI:
                 return None  # 깨진 캐시는 무시하고 다시 받는다
         return None
 
+    def forget_details(self, match_ids) -> None:
+        """DB 에 저장한 경기의 디스크 캐시를 지운다 — 그 뒤로는 DB 가 정본이다."""
+        for mid in match_ids:
+            p = self._cache_path(mid) if mid else None
+            if p:
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass  # 열려 있거나 권한 — 다음 정리(prune_detail_cache) 때 다시
+
+    def prune_detail_cache(self, stored_ids: set[str], stop=lambda: False) -> tuple[int, int]:
+        """캐시 폴더에서 이미 DB 에 있는 경기 파일만 지운다 → (지운 수, 바이트).
+
+        v1.0.1 전에는 받은 경기를 캐시와 DB 에 둘 다 남겨 2만 개·407MB 가 쌓였다(2026-10-02 실측).
+        메타 파일(meta_*.json)과 DB 에 없는 경기(한도에 걸려 아직 못 넣은 것 — 이어 받기에 쓴다)는 둔다.
+        """
+        if not self._cache_dir or not self._cache_dir.is_dir():
+            return 0, 0
+        keep_safe = {"".join(c for c in i if c.isalnum()) for i in stored_ids}
+        n = size = 0
+        for p in self._cache_dir.glob("*.json"):
+            if stop():  # 창을 닫는 중 — 남은 건 다음에 켤 때
+                break
+            if p.stem.startswith("meta_") or p.stem not in keep_safe:
+                continue
+            try:
+                s = p.stat().st_size
+                p.unlink()
+                n += 1
+                size += s
+            except OSError:
+                continue
+        return n, size
+
     def _cache_write(self, match_id: str, data: dict) -> None:
         p = self._cache_path(match_id)
         if p:

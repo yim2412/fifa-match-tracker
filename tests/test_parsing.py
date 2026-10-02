@@ -300,6 +300,20 @@ def test_fetch_seasons_parses_page():
             assert why in str(e), (why, e)
 
 
+def test_store_uses_orjson_and_merge_keeps_db_order():
+    # 설치돼 있는데 대체 경로(json)로 돌면 조용히 2배 느려진다 — requirements.txt 에 있다
+    import store
+    import orjson
+    assert store.JSON_ENGINE == "orjson" and store._loads is orjson.loads, (store.JSON_ENGINE, store._loads)
+    old = [{"matchId": "b", "matchDate": "2026-01-02"}, {"matchId": "d", "matchDate": "2026-01-01"}]
+    new = [{"matchId": "a", "matchDate": "2026-01-03"},          # 더 새 경기
+           {"matchId": "c", "matchDate": "2026-01-01T12"},       # 이어 받기로 들어온 옛 경기(가운데)
+           {"matchId": "b", "matchDate": "2026-01-02"}]          # 이미 있는 경기 — 한 번만
+    merged = store.merge_details(old, new)
+    assert [d["matchId"] for d in merged] == ["a", "b", "c", "d"], merged
+    assert [d["matchId"] for d in old] == ["b", "d"], "옛 목록을 고쳤다"
+
+
 def test_formation_of_matches_reference():
     # 한 번만 훑게 바꾼 것(2026-10-02)이 예전 방식(라인마다 전부 훑기)과 같은 답을 내야 한다.
     # 경계(0=GK·28=SUB·각 라인 끝)와 이상한 값(None·문자·실수)까지.

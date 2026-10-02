@@ -164,6 +164,13 @@ def test_missing_licenses_reads_zip_names():
     assert release.missing_licenses([]) != [], "빈 배포물을 통과시켰다"
 
 
+def test_missing_modules_needs_the_pyd():
+    base = "피파전적관리/_internal"
+    assert release.missing_modules([f"{base}/orjson/orjson.cp314-win_amd64.pyd"]) == []
+    assert release.missing_modules([f"{base}/orjson/__init__.pyi"]) == ["orjson"], "pyd 없이 통과했다"
+    assert release.missing_modules([]) == ["orjson"]
+
+
 def test_installer_shows_app_name():
     iss = release.ISS.read_text(encoding="utf-8-sig")
     assert f'#define AppTitle "{release.config.APP_NAME}"' in iss, "설치 파일 표시 이름이 config.APP_NAME 과 다르다"
