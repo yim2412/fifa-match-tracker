@@ -19,10 +19,15 @@
 | `charts.py` | 대시보드 그래프(QPainter). 색은 `theme.CHART_*` — 앱의 GREEN/RED 는 적록 색약에서 구분이 안 돼 그래프엔 안 쓴다 |
 | `widgets.py` | 화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 스쿼드 배치(`PitchWidget`), 좁으면 접히는 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
-| `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위 — 오픈API엔 없음) |
+| `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회도 이걸 상대마다 부른다 |
+| `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
+| `playerinfo.py` | 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑 |
+| `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL). **화면은 API 가 아니라 이 DB 를 본다** |
 | `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·UA, 매치 종류·조회 개수 기본값 |
 | `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다 |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
+| `bot/` · `adapters/` | 카카오톡 오픈채팅 봇 — 서버(`bot/`, 같은 DB 를 본다)와 카톡에 붙이는 쪽(`adapters/`). 각 폴더 README |
+| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선) · `test_bot.py` · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
@@ -64,6 +69,15 @@ python -m PyInstaller --noconfirm 피파전적관리.spec   # exe → dist\피�
 - **에러 메시지 표는 `nexon_api.ERROR_MESSAGES`.** 새 코드가 생기면 여기에 넣는다.
 - **터미널 스모크는 `python check_api.py <닉네임>`.** 새 엔드포인트를 붙이면 여기에도
   한 줄 추가한다.
+
+### 시즌 (`seasons.py`) — 넥슨 시즌표의 함정
+
+오픈API 는 경기에 시즌을 안 달아 준다. 데이터센터 시즌표의 기간으로 나누는데, 셋 다
+조용히 틀어지는 종류라 `test_parsing.py` 의 시즌 테스트가 지킨다(2026-10-02 추가 — 그전엔 0개였다).
+- **`rt` 에 따라 시즌 번호가 다르다** — 공식경기 91 = 감독모드 89(기간은 같다). 항상 `rt=manager`.
+- **앞 시즌 종료일 == 다음 시즌 시작일.** `[시작, 종료)` 반개구간 — 닫힌 구간이면 경계일 경기가 두 시즌에 들어간다.
+- **진행 중인 시즌은 목록에 없다.** 마지막 종료일 이후 경기는 `None`(진행 중) 그룹으로 맨 앞.
+- 이름이 해마다 반복된다("시즌 3") → 화면에는 `Season.label`("2026 시즌 3").
 
 ---
 

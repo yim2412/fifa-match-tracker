@@ -27,7 +27,7 @@ def asset_path(name: str) -> Path:
     """소스에 같이 들어있는 정적 리소스(app_icon.ico 등)를 찾는다.
 
     DATA_DIR(사용자 데이터: DB·캐시·.env)과는 다른 개념 — exe 로 묶으면
-    이런 리소스는 exe 옆이 아니라 sys._MEIPASS(onedir 은 exe 옆 _internal\)에
+    이런 리소스는 exe 옆이 아니라 sys._MEIPASS(onedir 은 exe 옆 _internal 폴더)에
     들어가므로 ROOT 를 그대로 쓰면 못 찾는다. spec 파일의
     datas 에 넣어둔 것과 짝이 맞아야 한다.
     """
@@ -56,7 +56,7 @@ def _data_dir() -> Path:
 
 DATA_DIR = _data_dir()
 CACHE_DIR = DATA_DIR / ".cache"
-DB_PATH = DATA_DIR / "fifa.db"  # 조회한 경기 누적 — API는 최근 100경기까지만 준다
+DB_PATH = DATA_DIR / "fifa.db"  # 조회한 경기 누적 — API는 약 한 달 지난 경기를 버린다(store.py 머리말)
 
 
 def _migrate_from_source() -> list[str]:
