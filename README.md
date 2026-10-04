@@ -293,6 +293,8 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
 
 ## 앞으로
 
+> 앞으로 할 일(버전별 상세 계획)은 [`docs/ROADMAP.md`](docs/ROADMAP.md) 한 곳에 있다. 아래는 이미 끝난 것들이다.
+
 - [x] 선수별 통계 — `stats.aggregate_players`
 - [x] 상대 전술별 승률 — `stats.formation_stats`
 - [x] 공격력·수비력·기대득점률·선방력 — API 미제공이라 fc-info.com 프론트엔드 JS 번들
