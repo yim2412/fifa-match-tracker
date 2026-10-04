@@ -32,6 +32,8 @@ jobs:
         run: python tests/test_bot.py
       - name: 랭킹 수집기
         run: python tests/test_rankcollect.py
+      - name: 트레이 상주
+        run: python tests/test_tray.py
       - name: 배포 검사
         run: python tests/test_release.py
       - name: 화면 스모크

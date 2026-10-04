@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 )
 
 import analysis
+import autostart
 import charts
 import config
 import crashlog
@@ -39,6 +40,7 @@ import seasons as sn
 import stats as st
 import store
 import theme as T
+import tray
 import updatecheck
 from models import (
     MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match,
@@ -1007,9 +1009,19 @@ class RankCollectScheduler(QObject):
                 w.terminate()
                 w.wait(1000)
 
-    def shutdown(self) -> None:
+    def shutdown(self, fast: bool = False) -> list:
+        """끝낼 때(quit_app). fast 면 기다리지 않고 멈춤 요청만 → 아직 도는 스레드(호출부가 합계 시간만 기다린다)."""
         self._check_timer.stop()
-        self.stop()
+        if not fast:
+            self.stop()
+            return []
+        self._start_timer.stop()
+        self.planned = None
+        w = self.worker
+        if w is not None and w.isRunning():
+            w.cancel()  # 한 트랜잭션이라 끊겨도 반쪽 스냅숏이 안 남는다
+            return [w]
+        return []
 
 
 class MainWindow(QMainWindow):
@@ -1096,7 +1108,11 @@ class MainWindow(QMainWindow):
         self._dirty: set[str] = set()  # 낡은 화면 키(PAGE_RENDER_KEYS) — 열 때 그린다
         self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
         self._narrate_found: list = []
-        self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — main 이 start_rank_collect 로
+        self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
+        self.shell = None          # tray.AppShell — 없으면(테스트) X 가 예전처럼 정리하고 닫는다
+        self._quitting = False     # quit_app 이 세운다 — closeEvent 는 받기만
+        self._released = False     # 숨긴 지 오래돼 경기 기록을 내려놓았다(release_memory) — 열 때 다시 읽는다
+        self._shown_once = False   # show_initial 을 한 번 거쳤나(--tray 로 숨긴 채 만든 창은 처음 열 때 거친다)
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
         self._ability_sim_loader: AbilitySimLoader | None = None
@@ -1201,6 +1217,7 @@ class MainWindow(QMainWindow):
 
     def show_initial(self) -> None:
         """main 에서 — 작은 화면이면 최대화로 띄우고, 띄운 뒤 실제 테두리로 한 번 더 확인한다."""
+        self._shown_once = True
         if self._start_maximized:
             self.showMaximized()
         else:
@@ -1345,7 +1362,11 @@ class MainWindow(QMainWindow):
         self._settle_if_restored()
 
     def start_update_check(self) -> None:
-        """켤 때 한 번 — 테스트·스크린샷이 네트워크를 안 타게 main 에서만 부른다."""
+        """켤 때 한 번 + 트레이 상주 중 UPDATE_CHECK_EVERY_H 마다(tray.AppShell) — 테스트·스크린샷이 네트워크를
+        안 타게 main·껍데기에서만 부른다. 앞 확인이 아직 돌거나 내려받는 중이면 건너뛴다."""
+        if (self._update_worker and self._update_worker.isRunning()) or \
+                (self._download_worker and self._download_worker.isRunning()):
+            return
         self._update_worker = UpdateCheckWorker()
         self._update_worker.found.connect(self._on_update_found)
         self._update_worker.latest.connect(self._on_update_latest)
@@ -1353,11 +1374,10 @@ class MainWindow(QMainWindow):
         self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
 
-    def start_rank_collect(self) -> None:
-        """켤 때 한 번 — 랭킹 수집 예약을 건다(꺼져 있으면 1시간마다 조건만 보고 아무것도 안 한다). main 에서만."""
-        self._rank_sched = RankCollectScheduler(self)
-        self._rank_sched.status.connect(self._on_rank_collect_status)
-        self._rank_sched.start()
+    def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
+        """랭킹 수집 예약은 창 밖(tray.AppShell)에 산다 — 창을 숨기거나 기록을 내려놓아도 돌게. 창은 상태만 받는다."""
+        self._rank_sched = sched
+        sched.status.connect(self._on_rank_collect_status)
 
     def _on_rank_collect_status(self, text: str, important: bool) -> None:
         # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다 — 중요한 알림(스스로 꺼짐·연속 실패)만 덮는다
@@ -1439,7 +1459,13 @@ class MainWindow(QMainWindow):
         except OSError as e:
             self._on_update_failed(f"설치 파일을 실행하지 못했습니다: {e}")
             return
-        self.close()  # 파일이 잠기지 않게 바로 닫는다 — 설치 파일이 끝나면 다시 켠다
+        self._quit_app()  # 파일이 잠기지 않게 바로 끝낸다 — 설치 파일이 끝나면 다시 켠다(트레이로 숨기면 안 된다)
+
+    def _quit_app(self) -> None:
+        if self.shell is not None:
+            self.shell.quit_app()
+        else:
+            self.close()
 
     def _on_update_failed(self, msg: str) -> None:
         self.update_card.set_busy(False)
@@ -4692,59 +4718,112 @@ class MainWindow(QMainWindow):
             box.addStretch(1)
 
     def closeEvent(self, e) -> None:
+        if self._quitting:  # quit_app 이 이미 정리했다 — app.quit() 이 보이는 창에 한 번 더 부른다(PyQt 6.11 실측)
+            super().closeEvent(e)
+            return
+        sh = self.shell
+        if sh is None:  # 껍데기 없이 만든 창(테스트) — 예전처럼 여기서 정리하고 닫는다
+            self.shutdown()
+            super().closeEvent(e)
+            return
+        e.ignore()
+        if sh.should_hide():
+            sh.hide_window()
+        else:
+            sh.quit_app()
+
+    def shutdown(self, fast: bool = False) -> list:
+        """끝낼 때 정리 — 설정 저장이 먼저, 그다음 도는 작업 멈추기.
+        fast(윈도우 종료·로그오프): 멈춤 요청만 하고 기다리지 않는다 → 아직 도는 스레드 목록(quit_app 이 합계
+        FAST_QUIT_WAIT_S 만 기다리고 남은 것은 terminate). 아니면 예전처럼 하나씩 기다린다 — 최악 합계 약 60초."""
         self._save_settings()
-        if self._rank_sched is not None:
-            self._rank_sched.shutdown()  # 한 트랜잭션이라 끊겨도 반쪽 스냅숏이 안 남는다
         if self._prefetch is not None:
             self._prefetch.discard()  # 읽던 중이면 다음 행에서 멈춘다 — 종료를 2초씩 붙잡지 않게
         prune = getattr(self, "_prune_worker", None)
-        if prune and prune.isRunning():
-            # 파일을 지우는 중 — 하다 만 정리는 다음에 켤 때 이어서 하니, 오래 붙잡지 않고 끝낸다
-            prune.requestInterruption()
-            if not prune.wait(3000):
-                prune.terminate()
-                prune.wait(1000)
-        if self._update_worker and self._update_worker.isRunning():
+
+        def cancel(t):
+            return getattr(t, "cancel", None)
+
+        # (스레드, 멈춤 요청, 기다림 ms, 못 끝나면 terminate 하나)
+        table = [
+            # 파일을 지우는 중 — 하다 만 정리는 다음에 켤 때 이어서 한다
+            (prune, prune.requestInterruption if prune else None, 3000, True),
             # requests 는 중간에 못 끊는다 — 타임아웃(5초)까지 기다려야 스레드가 안전히 끝난다
-            self._update_worker.wait(6000)
-        if self._download_worker and self._download_worker.isRunning():
-            self._download_worker.cancel()  # 다음 덩어리에서 멈춘다(덩어리 하나는 끝까지 받는다)
-            self._download_worker.wait(20000)
-        if self._loader and self._loader.isRunning():
-            self._loader.cancel()
-            # 진행 중이던 상세 요청 몇 개가 네트워크 타임아웃까지 갈 수 있어
-            # 넉넉히 기다린다. 그래도 안 끝나면 마지막 수단으로 강제 종료 —
-            # 좀비 프로세스로 남기느니 낫다(DB 쓰기는 이 지점 이후라 안전).
-            if not self._loader.wait(8000):
-                self._loader.terminate()
-                self._loader.wait(1000)
-        if self._teamcolor_loader and self._teamcolor_loader.isRunning():
-            self._teamcolor_loader.cancel()
-            if not self._teamcolor_loader.wait(3000):
-                self._teamcolor_loader.terminate()
-                self._teamcolor_loader.wait(1000)
-        for icon_loader in (self._table_season_loader, self._finishing_icon_loader):
-            if icon_loader and icon_loader.isRunning():
-                icon_loader.cancel()
-                icon_loader.wait(500)
-        if self._compare_loader and self._compare_loader.isRunning():
-            self._compare_loader.cancel()
-            if not self._compare_loader.wait(8000):
-                self._compare_loader.terminate()
-                self._compare_loader.wait(1000)
-        for loader in self._compare_squad_loaders:
-            loader.cancel()
-            loader.wait(500)
-        if self._season_loader and self._season_loader.isRunning():
-            # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다.
-            if not self._season_loader.wait(3000):
-                self._season_loader.terminate()
-                self._season_loader.wait(1000)
-        if self._ability_sim_loader and self._ability_sim_loader.isRunning():
-            self._ability_sim_loader.wait(2000)
-        if self._position_ovr_loader and self._position_ovr_loader.isRunning():
-            self._position_ovr_loader.wait(2000)
-        super().closeEvent(e)
+            (self._update_worker, None, 6000, False),
+            # 다음 덩어리에서 멈춘다(덩어리 하나는 끝까지 받는다)
+            (self._download_worker, cancel(self._download_worker), 20000, False),
+            # 진행 중이던 상세 요청이 네트워크 타임아웃까지 갈 수 있어 넉넉히. DB 쓰기는 이 지점 이후라 강제 종료도 안전
+            (self._loader, cancel(self._loader), 8000, True),
+            (self._teamcolor_loader, cancel(self._teamcolor_loader), 3000, True),
+            (self._table_season_loader, cancel(self._table_season_loader), 500, False),
+            (self._finishing_icon_loader, cancel(self._finishing_icon_loader), 500, False),
+            (self._compare_loader, cancel(self._compare_loader), 8000, True),
+            *[(ld, cancel(ld), 500, False) for ld in self._compare_squad_loaders],
+            # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다
+            (self._season_loader, None, 3000, True),
+            (self._ability_sim_loader, None, 2000, False),
+            (self._position_ovr_loader, None, 2000, False),
+        ]
+        running = [(t, stop, ms, term) for t, stop, ms, term in table if t is not None and t.isRunning()]
+        if fast:
+            for _t, stop, _ms, _term in running:
+                if stop:
+                    stop()
+            return [t for t, *_ in running]
+        for t, stop, ms, term in running:
+            if stop:
+                stop()
+            if not t.wait(ms) and term:
+                t.terminate()
+                t.wait(1000)
+        return []
+
+    # ── 숨긴 창 기록 내려놓기(1.1.1) ────────────────────────────────────
+    def busy_for_release(self) -> bool:
+        """검색·팀컬러·비교 조회 중이면 미룬다 — 도중에 목록을 비우면 끝난 결과가 빈 화면에 쏟아진다."""
+        return any(t is not None and t.isRunning()
+                   for t in (self._loader, self._teamcolor_loader, self._compare_loader))
+
+    def release_memory(self) -> None:
+        """숨긴 지 RELEASE_AFTER_HIDE_MIN 지나면 경기 기록을 놓는다(1만 경기면 수백 MB). 붙잡는 곳 전부 —
+        하나라도 남으면 gc 가 못 거둔다(test_release_drops_every_reference 가 잰다). 계정(_ouid)은 비우지 않는다 —
+        비우면 다시 읽을 때 '다른 계정'으로 보여 승률 그래프 기간이 초기화된다(이미 한 번 고친 버그)."""
+        if self._released or not self._matches_all:
+            return
+        self._save_settings()  # 메뉴·시즌 — 다시 그릴 때 _restore 로 돌아온다
+        try:
+            s = self._settings()
+            self._restore = {k: s.value(f"view/{k}") for k in ("page", "season") if s.value(f"view/{k}")}
+        except Exception:
+            self._restore = {}
+        self._matches_all, self._details_all = [], []
+        self._matches, self._details = [], []
+        self._narrate_found, self._narrate_key = [], None
+        if self._prefetch is not None:
+            self._prefetch.discard()  # discard 는 멈춤 표시만 — 끝난 Future 의 결과는 참조를 놓아야 풀린다
+        self._prefetch = None
+        for name in ("_loader", "_compare_loader", "_teamcolor_loader"):
+            t = getattr(self, name)
+            if t is not None and not t.isRunning():
+                setattr(self, name, None)  # 끝난 로더가 _prev(화면 목록)·미리 읽기를 쥐고 있다
+        self._teamcolor_pending = []
+        self._released = True
+        gc.collect()
+
+    def reload_after_release(self) -> None:
+        """다시 열 때 — 그 계정의 저장된 경기를 DB 에서 다시 읽는다(1만 경기 약 1~2초). 넥슨에는 묻지 않는다."""
+        if not self._released:
+            return
+        self._released = False
+        if not self._ouid or (self._loader and self._loader.isRunning()):
+            return
+        self._set_busy(True)
+        self.statusBar().showMessage(f"{self._nick} — 저장된 기록을 다시 읽는 중…")
+        self._loader = MatchLoader(self._api, self._nick, config.DEFAULT_MATCH_TYPE, offline_ouid=self._ouid)
+        self._loader.progress.connect(self._on_progress)
+        self._loader.finished_ok.connect(self._on_loaded)
+        self._loader.failed.connect(self._on_failed)
+        self._loader.start()
 
 
 class CachePruneWorker(QThread):
@@ -4920,7 +4999,7 @@ class NoticeDialog(QDialog):
         self.setWindowTitle(f"{config.APP_NAME} — 이용 안내")
         v = QVBoxLayout(self)
         v.addWidget(_notice_browser(notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML
-                                    + notice.RANK_COLLECT_HTML), 1)
+                                    + notice.RANK_COLLECT_HTML + notice.TRAY_HTML), 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
         self.chk_agree = QCheckBox(notice.AGREE_CHECK)
         web_row = QHBoxLayout()
@@ -4975,6 +5054,7 @@ class AboutDialog(QDialog):
         tabs.addTab(_notice_browser(notice.PRIVACY_HTML), "개인정보")
         tabs.addTab(_notice_browser(notice.WEB_DATA_HTML), "넥슨 홈페이지 데이터")
         tabs.addTab(_notice_browser(notice.RANK_COLLECT_HTML), "랭킹 수집")
+        tabs.addTab(_notice_browser(notice.TRAY_HTML), "트레이·자동 실행")
         tabs.addTab(_notice_browser(notice.licenses_html()), "오픈소스 라이선스")
         v.addWidget(tabs, 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
@@ -5001,6 +5081,18 @@ class AboutDialog(QDialog):
         self.lb_rank.setWordWrap(True)
         self.lb_rank.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_rank)
+        # 자동 실행(D2) — 앱 토글 하나. exe 에서만(소스 실행은 python.exe 를 등록하게 된다)
+        self.chk_auto = QCheckBox(notice.AUTOSTART_CHECK)
+        avail = autostart.available()
+        try:
+            self.chk_auto.setChecked(avail and autostart.is_enabled())
+        except OSError:
+            pass
+        self.chk_auto.setEnabled(avail)
+        if not avail:
+            self.chk_auto.setToolTip("설치판·포터블 실행 파일에서만 켤 수 있습니다")
+        self.chk_auto.toggled.connect(self._on_auto_toggled)
+        v.addWidget(self.chk_auto)
         self.lb_msg = QLabel("")
         self.lb_msg.setWordWrap(True)
         self.lb_msg.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -5047,6 +5139,18 @@ class AboutDialog(QDialog):
                 sched.stop()
         self.lb_msg.setText("랭킹 수집을 켰습니다 — 하루 한 번, 정각 뒤 몇십 분 사이에 읽습니다." if on else
                             "랭킹 수집을 껐습니다.")
+
+    def _on_auto_toggled(self, on: bool) -> None:
+        try:
+            autostart.set_enabled(on)
+        except OSError as e:
+            self.chk_auto.blockSignals(True)
+            self.chk_auto.setChecked(not on)
+            self.chk_auto.blockSignals(False)
+            self.lb_msg.setText(f"자동 실행을 바꾸지 못했습니다: {e}")
+            return
+        self.lb_msg.setText("윈도우를 켜면 트레이로 조용히 시작합니다 — 창을 닫아도(X) 트레이에 남습니다." if on else
+                            "자동 실행을 껐습니다.")
 
     def _ask_clear(self, keep_ouid: str | None) -> str | None:
         """→ "all" · "keep"(지금 계정 ELO 는 남김) · None(취소)."""
@@ -5117,13 +5221,26 @@ def clear_rank_records(sched, keep_ouid: str | None) -> tuple[bool, int]:
     return done, n
 
 
-def _notify_crash(path) -> None:
+_SHELL: tray.AppShell | None = None  # main 이 만든다 — 숨긴 창에서 난 오류는 모달 대신 트레이로
+
+
+def _crash_modal(path) -> None:
     QMessageBox.warning(
         None, "예기치 못한 오류",
         "오류가 나서 기록을 남겼습니다. 앱은 계속 쓸 수 있지만, 화면이 이상하면 "
         "다시 켜 주세요.\n\n"
         f"오류 기록: {path}\n\n이 파일을 보내 주시면 원인을 찾을 수 있습니다. "
         "기록에 PC 의 폴더 경로(사용자 이름 포함)가 들어 있을 수 있으니, 보내기 전에 열어 확인하세요.")
+
+
+def _notify_crash(path) -> None:
+    """첫 오류 안내 — 창이 숨어 있거나 아직 없으면(트레이 상주) 게임 위에 모달을 띄우지 않는다:
+    트레이 알림만 하고, 창을 열 때 안내한다(tray.AppShell.show_window)."""
+    sh = _SHELL
+    if sh is not None and not sh.window_visible():
+        sh.crash_while_hidden(path)
+        return
+    _crash_modal(path)
 
 
 def _setup_app(app: QApplication) -> None:
@@ -5135,31 +5252,62 @@ def _setup_app(app: QApplication) -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
 
-def main() -> int:
-    # instance() — 테스트가 이미 만든 앱으로 main 을 부를 수 있게(둘째 QApplication 은 예외)
-    app = QApplication.instance() or QApplication(sys.argv)
-    _setup_app(app)
+def _open_window(shell: tray.AppShell, show: bool = True):
+    """안내 동의·키 → 창. 동의·키 창에서 취소하면 None. show=False 는 --tray(숨긴 채 — 미리 읽기도 안 한다)."""
     if config.notice_needed():
         if NoticeDialog().exec() != QDialog.DialogCode.Accepted:
-            return 0
+            return None
     if not config.API_KEY:
         if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
-            return 0
-
+            return None
     try:
         rankcollect.delete_pending()  # 지난번 [수집 기록 지우기]에서 다른 실행본이 열고 있어 못 지운 것
     except Exception:
         pass
     api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     win = MainWindow(api)
-    win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
+    shell.attach_window(win)
+    if show:
+        win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
     win.start_update_check()
     win.start_cache_prune()
-    win.start_rank_collect()
-    if config.OPEN_LAST_ACCOUNT:
-        win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
-    else:
-        win.start_prefetch()  # 화면은 검색창 그대로, 마지막 계정의 저장된 경기만 뒤에서 읽어 둔다
+    if show:
+        if config.OPEN_LAST_ACCOUNT:
+            win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
+        else:
+            win.start_prefetch()  # 화면은 검색창 그대로, 마지막 계정의 저장된 경기만 뒤에서 읽어 둔다
+    return win
+
+
+def main(argv: list[str] | None = None) -> int:
+    global _SHELL
+    argv = sys.argv if argv is None else argv
+    # instance() — 테스트가 이미 만든 앱으로 main 을 부를 수 있게(둘째 QApplication 은 예외)
+    app = QApplication.instance() or QApplication(argv)
+    _setup_app(app)
+    tray_mode = autostart.TRAY_ARG in argv[1:]
+    single = None
+    if config.SINGLE_INSTANCE:
+        single = tray.SingleInstance(tray.instance_name())
+        if not single.claim():
+            return 0  # 이미 떠 있다 — 그 창을 앞으로 불렀다
+    # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
+    shell = tray.AppShell(app, open_window=lambda: _open_window(shell),
+                          sched=RankCollectScheduler(), single=single)
+    if tray_mode:
+        # 부팅 때 자동 실행 — 창·막는 창·미리 읽기 없이 트레이만. 동의·키가 필요하면 창도 만들지 않는다
+        # (창을 만들면 시즌표를 넥슨 웹에 요청한다) — 사용자가 트레이에서 열 때 안내·키 창.
+        if not config.notice_needed() and config.API_KEY:
+            _open_window(shell, show=False)
+    elif _open_window(shell) is None:
+        return 0
+    _SHELL = shell  # 여기서부터 숨긴 창의 오류는 트레이로(동의를 거절하고 끝난 실행은 껍데기를 남기지 않는다)
+    shell.crash_modal = _crash_modal
+    try:
+        autostart.repair()  # 등록된 exe 가 없어졌으면(폴더를 옮김) 지금 exe 로
+    except Exception:
+        pass
+    shell.start(tray_mode=tray_mode)
     rc = app.exec()
     # 창은 이미 닫혔고 설정도 저장했다. 남은 1만 경기 기록(객체 수백만 개)을 파이썬이 종료하며 하나씩 훑느라
     # 프로세스가 1.7초 더 살아 있었다 — 얼려서 건너뛴다(메모리는 OS 가 회수, 0.05초. 2026-10-04 실측).

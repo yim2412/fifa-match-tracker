@@ -21,6 +21,8 @@
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회는 상대가 적으면 상대마다 검색(`fetch_manager_rank`), 500명보다 많으면 1만 위 목록 500쪽(`fetch_rank_page`) — 목록은 **행 단위로 잘라 읽는다**(팀컬러 빈 행에서 뒤가 밀린다) |
 | `rankcollect.py` | 랭킹 1만 명 수집(1.1.1, 기본 꺼짐 `config.RANK_COLLECT`) — `rank.db`(fifa.db 와 **따로** — 지우기가 파일 삭제) 에 스냅숏 원본(14일)·집계(영구)·수집 상태·잠금. `collect()` 한 번 = 한 회차: `.env` 다시 읽기 → 잠금 → 500쪽(작업자 6, 첫 실패에 나머지 취소) → 한 트랜잭션 저장 → `record_result`(실패 대기 1~24h · 차단 3회차면 스스로 끔 D6 · 연결 안 됨·정각 걸침은 안 셈). 예약은 앱 몫 — `is_due`·`pick_start`·`start_still_valid` 만 준다(앱은 `app_main.RankCollectScheduler` — 1시간 확인·예약 하나·늦게 터지면 다시 고름). 팀컬러 목록(`RankListLoader`)과 **목록 읽기 차례**(`acquire_list_read`)를 나눠, 하루 안의 스냅숏이 있으면 팀컬러는 거기서(요청 0) · 겹치면 뒤에 온 쪽이 기다린다 · 팀컬러가 다 읽은 목록은 수집이 켜져 있으면 스냅숏으로(`save_from_pages`). 토글은 `set_enabled_at`(.env 와 rank.db 사본 둘 다). 스레드 우선순위는 ctypes 로 낮추는데 **핸들 형을 안 적으면 64비트에서 조용히 실패**했다(테스트가 잡음) |
+| `tray.py` | 트레이 상주(1.1.1) — `AppShell`(트레이 · 수집 예약 · 6시간 업데이트 확인 · 숨긴 30분 뒤 내려놓기)과 **종료 진입점 하나 `quit_app(fast)`** (파일 머리말 표 — 새 종료 경로는 여기를 거친다). 창(`MainWindow`)은 정리를 `shutdown(fast)` 로 내주고, closeEvent 는 `_quitting` 이면 받기만(`app.quit()` 이 다시 부른다). 한 번만 실행(`SingleInstance`)은 **뮤텍스로 판정** — 윈도우에선 같은 이름 `QLocalServer` 의 두 번째 listen 도 성공한다(2026-10-04 실측). 파이프는 "창 앞으로" 전달만 |
+| `autostart.py` | 자동 실행 — HKCU Run 에 `"<exe>" --tray`. exe 에서만 · 값 이름을 설치판(`VALUE_INSTALLED` — `.iss` 제거기와 같아야)·포터블로 나눈다 · 경로는 없어졌을 때만 고친다(`repair`) |
 | `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
 | `playerinfo.py` | 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑 |
 | `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL)·검색한 구단주 ELO(`elo_history` — 메인 검색 로더만 `record_elo=True`, 비교 로더·봇은 안 적는다). **화면은 API 가 아니라 이 DB 를 본다**. 검색 결과는 바탕(화면이 가진 목록 · 미리 읽은 것 · 새로 읽은 것) + DB 에만 있는 경기(`known_ids` 대조 — 시각으로 자르면 이어 받은 옛 경기를 빠뜨린다)를 `merge_details`. 열 때 `PRAGMA optimize` 로 통계를 갱신하는데, **통계가 생기면 SQLite 가 계획을 바꾼다** — `load_details` 는 본문을 통째로 임시 정렬하는 계획을 골라 SQL 이 3배가 됐다(2026-10-04). 그래서 `(종류, 날짜)` 인덱스를 직접 지정한다. 새 쿼리를 붙이면 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 가 없는지 본다. 해석은 `orjson`(없으면 json, 배포판엔 `release.py` 가 확인) |
@@ -31,13 +33,14 @@
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
 | `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
 | `bot/` · `adapters/` | 카카오톡 오픈채팅 봇 — 서버(`bot/`, 같은 DB 를 본다)와 카톡에 붙이는 쪽(`adapters/`). 각 폴더 README |
-| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_bot.py` · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
+| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_bot.py` · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_tray.py`(트레이·종료·한 번만 실행·자동 실행 — 창과 엮이는 X 숨김·내려놓기는 `test_ui_smoke`) · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
 python rankcollect.py --pages 3   # 랭킹 수집 실제 3쪽(저장 안 함 — 웹 데이터가 켜져 있어야)
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
+python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
 python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175% 를 흉내 내 실제 창을 띄워 잰다
 # 메뉴별 화면을 PNG 로 떠서 눈으로 볼 때 — 최근 검색 칩에 실제 닉네임이 찍히니 확인 후 지운다
 $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py

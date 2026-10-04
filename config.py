@@ -115,10 +115,22 @@ REPO_URL = "https://github.com/yim2412/fifa-match-tracker"
 WEB_USER_AGENT = f"FifaMatchTracker/{APP_VERSION.lstrip('v')} (+{REPO_URL})"
 
 # 새 버전 알림 — 켤 때 한 번 GitHub 최신 릴리스 태그를 읽는다(GitHub 에 IP 가 남는다).
-# 끄려면 .env 에 FIFA_UPDATE_CHECK=0.
+# 트레이에 상주하면 UPDATE_CHECK_EVERY_H 마다 다시. 끄려면 .env 에 FIFA_UPDATE_CHECK=0.
 UPDATE_CHECK = os.getenv("FIFA_UPDATE_CHECK", "1").strip() != "0"
 LATEST_RELEASE_API = "https://api.github.com/repos/yim2412/fifa-match-tracker/releases/latest"
 RELEASES_URL = f"{REPO_URL}/releases/latest"
+UPDATE_CHECK_EVERY_H = 6            # 트레이에 상주하는 동안 다시 확인하는 간격(켤 때 한 번은 그대로)
+
+# 트레이 상주(tray.py · 1.1.1)
+TRAY_WAIT_S = 60                    # --tray 로 부팅 직후 트레이가 아직 없을 때 기다리는 한도
+TRAY_POLL_S = 5                     # 그동안 트레이를 다시 보는 간격
+TRAY_RETRY_MIN = 1                  # 동의가 필요해 창을 못 띄우는 동안 트레이를 다시 보는 간격
+RELEASE_AFTER_HIDE_MIN = 30         # 창을 숨긴 지 이만큼 지나면 경기 기록을 메모리에서 내려놓는다
+RELEASE_RETRY_MIN = 5               # 그때 검색·수집 중이면 이만큼 뒤에 다시
+FAST_QUIT_WAIT_S = 1                # 윈도우 종료·로그오프 때 작업을 기다리는 합계 — 길면 "종료를 막고 있습니다"
+SINGLE_WAIT_OLD_S = 60              # 앞 실행본이 끝나는 중이면(업데이트 뒤 재실행) 이만큼까지 기다린다
+# 테스트·여러 개 띄워 보기용 — FIFA_SINGLE_INSTANCE=0 이면 한 번만 실행 장치를 끈다
+SINGLE_INSTANCE = os.getenv("FIFA_SINGLE_INSTANCE", "1").strip() != "0"
 
 
 # 넥슨 홈페이지 요청 — 한 프로세스 안 동시 요청 상한(ranker.web_get 의 세마포어). 수집·팀컬러·검색·선수 카드가 같이 쓴다.

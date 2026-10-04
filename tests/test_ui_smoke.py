@@ -114,6 +114,8 @@ config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "ui.db"
 # 실제 .env 를 읽으면 config.WEB_DATA 가 이 PC 값으로 바뀐다.
 config.RANK_DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "rank.db"
 config.ENV_PATH = config.RANK_DB_PATH.with_name(".env")
+# 한 번만 실행(tray.SingleInstance) — main() 을 부르는 테스트가 이 PC 에 떠 있는 앱을 앞으로 부르거나 그 때문에 끝나지 않게
+config.SINGLE_INSTANCE = False
 _seed = store.open_db(config.DB_PATH)
 try:
     from datetime import date as _date
@@ -933,8 +935,8 @@ def test_main_starts_update_check_after_show():
         def start_cache_prune(self):
             calls.append("캐시 정리")
 
-        def start_rank_collect(self):
-            calls.append("랭킹 수집")
+        def attach_rank_sched(self, sched):
+            calls.append("랭킹 수집")  # 예약은 창 밖(AppShell)에 살고 창은 상태만 받는다
 
         def open_last_account(self):
             calls.append("마지막 계정")
@@ -945,7 +947,7 @@ def test_main_starts_update_check_after_show():
     def run(open_last: bool) -> list[str]:
         calls.clear()
         orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
-                config.OPEN_LAST_ACCOUNT)
+                config.OPEN_LAST_ACCOUNT, app_main._SHELL)
         app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION  # 안내는 이미 동의한 상태
         # 키도 있는 상태 — 이 PC 엔 실제 키가 있어 지나갔지만 키 없는 CI 에선 키 창이 떴다(2026-10-02)
@@ -957,15 +959,99 @@ def test_main_starts_update_check_after_show():
         except ModalCalled as e:  # 끝의 app.exec() — 모달 차단이 멈춤 대신 여기서 끊는다
             assert "QApplication.exec" in str(e), e
         finally:
+            _stop_shell()
             (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
-             config.OPEN_LAST_ACCOUNT) = orig
+             config.OPEN_LAST_ACCOUNT, app_main._SHELL) = orig
         return list(calls)
 
     # 기본은 검색 화면부터 — 마지막으로 본 계정을 저절로 열지 않는다(2026-10-04 사용자 결정)
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
-    assert run(False) == ["창", "show", "새 버전 확인", "캐시 정리", "랭킹 수집", "미리 읽기"], calls
-    assert run(True) == ["창", "show", "새 버전 확인", "캐시 정리", "랭킹 수집", "마지막 계정"], calls
+    assert run(False) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", "미리 읽기"], calls
+    assert run(True) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
+
+
+def _stop_shell():
+    """main() 이 만든 껍데기의 타이머(1시간 수집 확인·6시간 업데이트)를 내린다 — 다음 테스트로 새지 않게."""
+    sh = app_main._SHELL
+    if sh is not None:
+        for t in (sh._release_timer, sh._update_timer, sh._tray_timer):
+            t.stop()
+        if sh.sched is not None:
+            sh.sched.shutdown()
+    app_main._SHELL = None
+
+
+def test_main_tray_mode_makes_hidden_window_without_prefetch():
+    calls = []
+
+    class _Win:
+        def __init__(self, api):
+            calls.append("창")
+
+        def attach_rank_sched(self, sched):
+            pass
+
+        def __getattr__(self, name):
+            return lambda *a: calls.append(name)
+
+    orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, app_main._SHELL)
+    app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
+    config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_VERSION, "test_key"
+    try:
+        try:
+            app_main.main(["app", "--tray"])
+            raise AssertionError("main 이 app.exec() 까지 안 갔다")
+        except ModalCalled as e:
+            assert "QApplication.exec" in str(e), e
+        sh = app_main._SHELL
+        assert sh is not None and sh.window is not None
+        assert sh.sched._check_timer.isActive(), "--tray 인데 수집 예약을 안 걸었다 — 상주하는 이유가 수집이다"
+    finally:
+        _stop_shell()
+        (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, app_main._SHELL) = orig
+    # 창은 만들되 띄우지 않고, 1만 경기 미리 읽기(약 750MB)도 안 한다
+    assert calls == ["창", "start_update_check", "start_cache_prune"], calls
+
+
+def test_tray_before_consent_makes_no_request():
+    # --tray 로 부팅했는데 안내 동의가 필요하다(안내 버전을 올린 뒤) — 창을 만들면 시즌표를 넥슨 웹에 요청한다.
+    # 막는 창(안내·키)도 게임 위에 띄우지 않는다. 사용자가 트레이에서 열 때 묻는다.
+    def boom(*a, **k):
+        raise AssertionError("동의 전에 창·안내 창을 만들었다")
+
+    orig = (app_main._setup_app, app_main.MainWindow, app_main.NoticeDialog, app_main.ApiKeyDialog,
+            config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA, app_main._SHELL)
+    app_main._setup_app = lambda app: None
+    app_main.MainWindow = app_main.NoticeDialog = app_main.ApiKeyDialog = boom
+    config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA = config.NOTICE_VERSION - 1, "test_key", True
+    gets = []
+    keep_get = ranker._session.get
+    ranker._session.get = lambda *a, **k: gets.append(a) or boom()
+    try:
+        for key in ("test_key", ""):
+            config.API_KEY = key
+            try:
+                app_main.main(["app", "--tray"])
+                raise AssertionError("main 이 app.exec() 까지 안 갔다")
+            except ModalCalled as e:
+                assert "QApplication.exec" in str(e), e
+            sh = app_main._SHELL
+            assert sh is not None and sh.window is None, "동의 전인데 창을 만들었다"
+            assert not sh.sched.can_run(), "동의 전인데 수집이 돌 수 있다"
+            _stop_shell()
+        config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_VERSION, ""
+        try:
+            app_main.main(["app", "--tray"])
+        except ModalCalled:
+            pass
+        assert app_main._SHELL.window is None, "키가 없는데 창을 만들었다"
+    finally:
+        _stop_shell()
+        ranker._session.get = keep_get
+        (app_main._setup_app, app_main.MainWindow, app_main.NoticeDialog, app_main.ApiKeyDialog,
+         config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA, app_main._SHELL) = orig
+    assert gets == [], gets
 
 
 def test_main_freezes_gc_after_event_loop():
@@ -986,9 +1072,12 @@ def test_main_freezes_gc_after_event_loop():
     config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_VERSION, "test_key"
     QApplication.exec = lambda self: seen.append("exec") or 7
     app_main.gc.freeze = lambda: seen.append("freeze")
+    keep_shell = app_main._SHELL
     try:
         rc = app_main.main()
     finally:
+        _stop_shell()
+        app_main._SHELL = keep_shell
         (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
          QApplication.exec, app_main.gc.freeze) = orig
     assert seen == ["exec", "freeze"] and rc == 7, (seen, rc)
@@ -3021,23 +3110,215 @@ def test_rank_collect_scheduler_gates_plans_once_and_rechooses_late_timer():
             sched.shutdown()
 
 
-def test_window_starts_and_stops_rank_collect():
+class _ShellOnWin:
+    """테스트 창(_win)에 진짜 AppShell 을 잠깐 붙인다 — app.quit·창 닫기는 기록만. 끝나면 떼고 상태를 되돌린다."""
+
+    def __init__(self, tray_visible=True):
+        import tray as tray_mod
+        self.tray_mod = tray_mod
+        self.tray_visible = tray_visible
+
+    def __enter__(self):
+        import tray as tray_mod
+
+        class _FakeTray:
+            def __init__(s, vis):
+                s.vis, s.msgs = vis, []
+
+            def isVisible(s):
+                return s.vis
+
+            def hide(s):
+                s.vis = False
+
+            def showMessage(s, title, *a):
+                s.msgs.append(title)
+
+        self.keep = (_win._rank_sched, _win.shell, _win._quitting, _win.__dict__.get("close"))
+        self.sh = tray_mod.AppShell(_app, sched=app_main.RankCollectScheduler())
+        self.quits = []
+        self.sh.app = type("A", (), {"quit": lambda s: self.quits.append(1)})()
+        self.sh.attach_window(_win)
+        self.sh.tray = _FakeTray(self.tray_visible) if self.tray_visible is not None else None
+        self.closed = []
+        _win.close = lambda: self.closed.append(_win._quitting)
+        return self
+
+    def __exit__(self, *a):
+        for t in (self.sh._release_timer, self.sh._update_timer, self.sh._tray_timer):
+            t.stop()
+        self.sh.sched.shutdown()
+        _win._rank_sched, _win.shell, _win._quitting, close = self.keep
+        if close is None:
+            _win.__dict__.pop("close", None)
+        _win.show()
+        _app.setQuitOnLastWindowClosed(True)
+        return False
+
+
+def test_shell_starts_and_stops_rank_collect():
+    # 수집 예약은 창 밖(AppShell)에 산다 — 창을 숨겨도 돌고, quit_app 이 내린다(남기면 닫는 중에 수집이 터진다)
+    with _RankSwitches(collect=False), _ShellOnWin() as ctx:
+        sched = ctx.sh.sched
+        assert _win._rank_sched is sched, "창이 예약 상태를 못 받는다(상태줄)"
+        ctx.sh.start()
+        assert sched._check_timer.isActive(), "1시간 확인 타이머를 안 걸었다"
+        sched.planned = datetime.now()
+        sched._start_timer.start(600000)
+        ctx.sh.quit_app()
+        assert not sched._check_timer.isActive() and not sched._start_timer.isActive() and sched.planned is None
+        assert ctx.quits == [1] and ctx.closed == [True], (ctx.quits, ctx.closed)
+
+
+def test_x_hides_when_collecting():
     from PyQt6.QtGui import QCloseEvent
-    keep = _win._rank_sched
-    with _RankSwitches(collect=False):
+    keep = config.RANK_COLLECT, config.WEB_DATA
+    try:
+        with _ShellOnWin() as ctx:
+            config.RANK_COLLECT = config.WEB_DATA = True
+            e = QCloseEvent()
+            _win.closeEvent(e)
+            assert not e.isAccepted() and not _win.isVisible(), "수집이 켜져 있는데 X 가 창을 닫았다"
+            assert ctx.quits == [] and ctx.sh._release_timer.isActive()
+    finally:
+        config.RANK_COLLECT, config.WEB_DATA = keep
+
+
+def test_x_quits_by_default():
+    from PyQt6.QtGui import QCloseEvent
+    keep = config.RANK_COLLECT, config.WEB_DATA, app_main.autostart.is_enabled
+    try:
+        app_main.autostart.is_enabled = lambda: False
+        for collect, web, tray_vis in ((False, True, True), (True, False, True), (True, True, None)):
+            config.RANK_COLLECT, config.WEB_DATA = collect, web
+            with _ShellOnWin(tray_visible=tray_vis) as ctx:
+                saved = []
+                keep_save = _win._save_settings
+                _win._save_settings = lambda: saved.append(1)
+                try:
+                    _win.closeEvent(QCloseEvent())
+                finally:
+                    _win._save_settings = keep_save
+                # 트레이가 없거나 수집이 못 도는 상태면 X 는 끝낸다 — 정리(설정 저장)도 quit_app 에서 돈다
+                assert ctx.quits == [1] and saved == [1], (collect, web, tray_vis, ctx.quits, saved)
+    finally:
+        config.RANK_COLLECT, config.WEB_DATA, app_main.autostart.is_enabled = keep
+
+
+def test_close_event_while_quitting_only_accepts():
+    # app.quit() 은 보이는 창의 closeEvent 를 한 번 더 부른다 — 그때 숨기거나 두 번 정리하면 안 된다
+    from PyQt6.QtGui import QCloseEvent
+    with _ShellOnWin():
+        _win._quitting = True
+        hit = []
+        keep_sd = _win.shutdown
+        _win.shutdown = lambda fast=False: hit.append(1) or []
         try:
-            _win.start_rank_collect()
-            sched = _win._rank_sched
-            assert sched is not None and sched._check_timer.isActive(), "1시간 확인 타이머를 안 걸었다"
-            sched.planned = datetime.now()
-            sched._start_timer.start(600000)
-            _win.closeEvent(QCloseEvent())
-            # 닫으면 예약·확인을 내린다 — 남기면 닫는 중에 수집이 터진다
-            assert not sched._check_timer.isActive() and not sched._start_timer.isActive() and sched.planned is None
+            e = QCloseEvent()
+            e.ignore()
+            _win.closeEvent(e)
+            assert e.isAccepted() and hit == [], hit
         finally:
-            if _win._rank_sched is not None:
-                _win._rank_sched.shutdown()
-            _win._rank_sched = keep
+            _win.shutdown = keep_sd
+
+
+def test_update_calls_quit_app():
+    # [업데이트] 뒤엔 반드시 끝나야 한다 — X 처럼 트레이로 숨으면 설치기가 파일을 못 바꾼다
+    keep = updatecheck.launch_installer, config.RANK_COLLECT, config.WEB_DATA
+    updatecheck.launch_installer = lambda p: None
+    config.RANK_COLLECT = config.WEB_DATA = True  # 숨김 조건이 서 있어도
+    try:
+        with _ShellOnWin() as ctx:
+            _win._on_update_downloaded("setup.exe")
+            assert ctx.quits == [1], "업데이트 뒤 quit_app 을 안 불렀다"
+    finally:
+        updatecheck.launch_installer, config.RANK_COLLECT, config.WEB_DATA = keep
+
+
+def test_crash_while_hidden_no_modal():
+    keep = app_main._SHELL, _win.isVisible()
+    with _ShellOnWin() as ctx:
+        app_main._SHELL = ctx.sh
+        try:
+            _win.hide()
+            app_main._notify_crash("crash.log")  # 모달이면 ModalCalled
+            assert ctx.sh.tray.msgs == ["예기치 못한 오류"] and ctx.sh._pending_crash == "crash.log"
+            _win.show()
+            try:
+                app_main._notify_crash("crash.log")
+                raise AssertionError("창이 보이는데 안내 창을 안 띄웠다")
+            except ModalCalled:
+                pass
+        finally:
+            app_main._SHELL = keep[0]
+
+
+def test_release_drops_every_reference():
+    import gc
+    with _ShellOnWin():
+        # 새 dict 로 넘긴다 — 테스트가 쥔 _DETAILS 목록을 창이 그대로 쥐면, 그 목록을 빼는 순간 창의 참조도 안 보인다
+        details = [dict(d) for d in _DETAILS]
+        matches = list(_MATCHES)
+        _win._ouid, _win._season_picked = "", False
+        _win._on_loaded(matches, details, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(matches), None, "-", False, "", {}, {})
+        _win._narrate_scope()
+        probe = details[0]
+        # 끝난 로더가 화면 목록(_prev)을 쥐고 있는 경우까지
+        _win._loader = app_main.MatchLoader(_NoApi(), "x", 52, prev=(_OUID, list(matches), list(details)))
+        # 끝난 미리 읽기 — discard() 는 멈춤 표시만 하고 결과는 Future 가 계속 쥔다
+        from concurrent.futures import Future
+        pf = app_main.SavedPrefetch.__new__(app_main.SavedPrefetch)
+        pf.ouid, pf.match_type, pf._stop = _OUID, 52, False
+        pf._future = Future()
+        pf._future.set_result((list(matches), list(details)))
+        _win._prefetch = pf
+        del pf
+        # 테스트 쪽 참조는 지운다 — 창은 넘긴 목록 객체를 그대로 쥐므로, 그 목록을 '내 것'으로 빼면 창의 참조도 안 보인다
+        mine: set = set()
+        del matches, details
+        # 개수만 — 목록으로 받아 두면 그 목록이 창의 옛 목록을 살려 둬서 '남았다'로 잰다(처음 판이 그랬다)
+        before = sum(1 for r in gc.get_referrers(probe) if id(r) not in mine)
+        assert before >= 2, f"측정 도구 확인 — 내려놓기 전엔 창(원본)·끝난 로더가 쥐고 있어야 한다: {before}"
+        _win.release_memory()
+        gc.collect()
+        left = [type(r).__name__ for r in gc.get_referrers(probe) if id(r) not in mine]
+        try:
+            assert left == [], f"내려놓은 뒤에도 경기 기록을 쥐고 있다: {left}"
+            assert _win._ouid == _OUID, "계정을 비우면 다시 읽을 때 승률 그래프 기간이 초기화된다"
+            assert _win._released and _win.busy_for_release() is False
+        finally:
+            reloaded = []
+            keep_start = app_main.MatchLoader.start
+            app_main.MatchLoader.start = lambda self: reloaded.append(self._offline_ouid)
+            try:
+                _win.reload_after_release()
+            finally:
+                app_main.MatchLoader.start = keep_start
+            assert reloaded == [_OUID] and not _win._released, reloaded
+            _win._set_busy(False)
+            _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                            {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+
+
+def test_release_is_skipped_while_searching():
+    class _Busy:
+        def isRunning(self):
+            return True
+    keep = _win._loader
+    _win._loader = _Busy()
+    try:
+        assert _win.busy_for_release() is True
+    finally:
+        _win._loader = keep
+
+
+def test_about_dialog_autostart_toggle_locked_in_source_run():
+    dlg = app_main.AboutDialog(_win)
+    assert not dlg.chk_auto.isEnabled() and not dlg.chk_auto.isChecked(), "소스 실행에서 자동 실행을 켤 수 있다"
+    text = " ".join(t.toPlainText() for t in dlg.findChildren(app_main.QTextBrowser))
+    assert "트레이" in text and "[종료]" in text and "6시간" in text, "안내에 트레이 상주·자동 실행·업데이트 주기가 없다"
+    dlg.deleteLater()
 
 
 def test_rank_collect_outcomes_reach_status_bar():
