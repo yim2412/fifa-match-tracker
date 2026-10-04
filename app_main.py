@@ -4,8 +4,10 @@
 """
 from __future__ import annotations
 
+import gc
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
@@ -52,6 +54,11 @@ from widgets import (
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
+# 새 경기 상세를 동시에 몇 개 받나. 2026-10-04 서비스 키 실측(250건씩): 6 → 초당 27~30건, 12 → 55,
+# 24 → 97, 48 → 124(응답 상위 10% 가 235 → 427ms 로 늘어남). 처음 보는 계정 3천 경기가 113초 → 약 32초.
+# 429(호출 한도)를 한 번이라도 받으면 그 검색은 THROTTLED 로 내린다 — 개발 단계 키는 초당 5건이다.
+DETAIL_WORKERS = 24
+DETAIL_WORKERS_THROTTLED = 2
 # 창을 이보다 작게 못 줄인다 — 이 크기에서 글자가 잘리지 않는 것이 기준이다.
 # FHD 에서 넉넉하고 1366x768 노트북에도 들어간다. 화면 반 분할(960)은 18열짜리
 # 선수 지표 표가 의미가 없어 지원하지 않는다.
@@ -69,6 +76,32 @@ def eta_text(done: int, total: int, elapsed: float) -> str:
     if left < 60:
         return f" · 남음 약 {max(int(round(left)), 1)}초"
     return f" · 남음 약 {int(round(left / 60))}분"
+
+
+class _Slots:
+    """동시에 도는 상세 요청 수의 상한 — 도중에 낮출 수 있다(스레드 수는 그대로, 남는 스레드는 기다린다)."""
+
+    def __init__(self, limit: int):
+        self.limit = limit
+        self.active = 0
+        self.peak = 0  # 테스트·측정용 — 실제로 동시에 돈 최대 수
+        self._cond = threading.Condition()
+
+    def __enter__(self):
+        with self._cond:
+            while self.active >= self.limit:
+                self._cond.wait()
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+
+    def __exit__(self, *exc):
+        with self._cond:
+            self.active -= 1
+            self._cond.notify_all()
+
+    def shrink(self, limit: int) -> None:
+        with self._cond:
+            self.limit = min(self.limit, limit)
 
 
 def load_saved(ouid: str, match_type: int, stop=None) -> tuple[list, list]:
@@ -142,6 +175,8 @@ class MatchLoader(QThread):
         self._quota_hit = False
         self._pool: ThreadPoolExecutor | None = None
         self._side: ThreadPoolExecutor | None = None  # 넥슨 조회와 나란히 도는 DB 읽기·랭킹·메타
+        self._slots = _Slots(DETAIL_WORKERS)
+        self._throttled_base = 0  # 상세를 받기 직전에 잰다(run) — DB 만 읽는 경로에선 API 를 건드리지 않는다
 
     def cancel(self) -> None:
         """즉시 취소 — 대기 중인 상세 요청을 버리고 진행 중인 것만 끝낸다.
@@ -240,7 +275,10 @@ class MatchLoader(QThread):
                 fresh: list[dict] = []
                 done = 0
                 if todo:
-                    self._pool = ThreadPoolExecutor(max_workers=6)
+                    # 이 검색 전까지의 429 수 — API 객체는 앱이 켜져 있는 동안 계속 세므로, 지난 검색의 429 로
+                    # 이번 검색까지 내리지 않게 이것과 비교한다
+                    self._throttled_base = getattr(self._api, "throttled", 0)
+                    self._pool = ThreadPoolExecutor(max_workers=DETAIL_WORKERS)
                     started = time.monotonic()
                     try:
                         for detail in self._pool.map(self._safe_detail, todo):
@@ -339,7 +377,14 @@ class MatchLoader(QThread):
         if self._cancel or self._quota_hit:
             return None
         try:
-            return self._api.get_match_detail(match_id)
+            with self._slots:
+                if self._cancel or self._quota_hit:  # 자리를 기다리는 사이 멈췄을 수 있다
+                    return None
+                try:
+                    return self._api.get_match_detail(match_id)
+                finally:
+                    if getattr(self._api, "throttled", 0) > self._throttled_base:
+                        self._slots.shrink(DETAIL_WORKERS_THROTTLED)
         except NexonAPIError as e:
             # 재시도(_get)까지 거친 429 — 개발 단계 키(초당 5·하루 1,000건)일 때 난다
             if e.code == QUOTA_CODE:
@@ -4539,7 +4584,12 @@ def main() -> int:
         win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
     else:
         win.start_prefetch()  # 화면은 검색창 그대로, 마지막 계정의 저장된 경기만 뒤에서 읽어 둔다
-    return app.exec()
+    rc = app.exec()
+    # 창은 이미 닫혔고 설정도 저장했다. 남은 1만 경기 기록(객체 수백만 개)을 파이썬이 종료하며 하나씩 훑느라
+    # 프로세스가 1.7초 더 살아 있었다 — 얼려서 건너뛴다(메모리는 OS 가 회수, 0.05초. 2026-10-04 실측).
+    # os._exit 와 달리 atexit·로그 비우기는 그대로 돈다.
+    gc.freeze()
+    return rc
 
 
 if __name__ == "__main__":

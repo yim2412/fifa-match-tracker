@@ -927,6 +927,32 @@ def test_main_starts_update_check_after_show():
     assert run(True) == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
 
 
+def test_main_freezes_gc_after_event_loop():
+    # 1만 경기 기록이 든 채로 닫으면 파이썬이 종료하며 객체를 훑느라 프로세스가 1.7초 더 살았다.
+    # 이벤트 루프가 끝난 '뒤' 얼려야 한다 — 앞에서 얼리면 그 뒤에 만든 기록은 그대로 훑는다.
+    seen = []
+
+    class _Win:
+        def __init__(self, api):
+            pass
+
+        def __getattr__(self, name):
+            return lambda *a: None
+
+    orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
+            QApplication.exec, app_main.gc.freeze)
+    app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
+    config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_VERSION, "test_key"
+    QApplication.exec = lambda self: seen.append("exec") or 7
+    app_main.gc.freeze = lambda: seen.append("freeze")
+    try:
+        rc = app_main.main()
+    finally:
+        (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
+         QApplication.exec, app_main.gc.freeze) = orig
+    assert seen == ["exec", "freeze"] and rc == 7, (seen, rc)
+
+
 def test_main_asks_notice_first_and_quits_on_decline():
     seen = []
 
@@ -2073,6 +2099,79 @@ def test_loader_reads_db_while_waiting_for_nexon():
     assert seen == [True], "DB 읽기가 넥슨 조회가 끝나기를 기다렸다"
     assert sorted(d["matchId"] for d in res[1]) == sorted(d["matchId"] for d in _DETAILS), "합친 결과가 다르다"
     assert sorted(m.match_id for m in res[0]) == sorted(d["matchId"] for d in _DETAILS)
+
+
+class _ManyApi(_DetailApi):
+    """픽스처를 복제한 새 경기 n 개 — 상세 하나에 delay 초. throttle_first 면 첫 요청이 429 를 받은 셈 친다.
+    peak_after: 첫 요청이 끝난 '뒤' 시작한 요청들 사이의 최대 동시 수 — 줄이기는 첫 요청이 끝날 때 걸린다."""
+
+    def __init__(self, n, delay=0.03, throttle_first=False):
+        super().__init__([], "")
+        base = _DETAILS[0]
+        self.by_id = {}
+        for i in range(n):
+            d = dict(base)
+            d["matchId"] = f"many{i:04d}"
+            self.by_id[d["matchId"]] = d
+        self.delay, self.throttle_first = delay, throttle_first
+        self.throttled = 0
+        self._lock = threading.Lock()
+        self.calls, self.active, self.first_done = 0, 0, False
+        self.peak_all, self.peak_after, self.n_after = 0, 0, 0
+
+    def get_match_detail(self, mid):
+        with self._lock:
+            self.calls += 1
+            first = self.calls == 1
+            if first and self.throttle_first:
+                self.throttled += 1
+            self.active += 1
+            self.peak_all = max(self.peak_all, self.active)
+            after = self.first_done
+            if after:
+                self.n_after += 1
+                self.peak_after = max(self.peak_after, self.active)
+        try:
+            time.sleep(self.delay)
+            return self.by_id[mid]
+        finally:
+            with self._lock:
+                self.active -= 1
+                if first:
+                    self.first_done = True
+
+
+def test_loader_fetches_details_concurrently_and_backs_off_on_429():
+    # 동시 6개 → 24개: 처음 보는 계정 3천 경기 113초 → 약 32초(서비스 키 실측). 429 를 받으면 그 검색은 2개로.
+    tmp, saved = _loader_db(0)
+    try:
+        fast = _ManyApi(60)
+        _run_one(app_main.MatchLoader(fast, "닉", 52))
+        assert fast.peak_all > 6, f"동시 요청이 예전 6개를 넘지 않는다: {fast.peak_all}"
+        assert fast.peak_all <= app_main.DETAIL_WORKERS, fast.peak_all
+        slow = _ManyApi(200, throttle_first=True)
+        shutil.rmtree(tmp, ignore_errors=True)
+        config.DB_PATH, config.WEB_DATA = saved
+        tmp, saved = _loader_db(0)
+        _run_one(app_main.MatchLoader(slow, "닉", 52))
+        assert slow.n_after > 20, f"전제: 첫 요청 뒤에 시작한 요청이 있어야 잰다({slow.n_after})"
+        assert slow.peak_after <= app_main.DETAIL_WORKERS_THROTTLED, f"429 뒤에도 {slow.peak_after}개씩 보냈다"
+        # 지난 검색의 429 로 이번 검색까지 내리지 않는다 — API 객체는 앱이 켜져 있는 동안 계속 센다
+        shutil.rmtree(tmp, ignore_errors=True)
+        config.DB_PATH, config.WEB_DATA = saved
+        tmp, saved = _loader_db(0)
+        old = _ManyApi(200)
+        old.throttled = 3
+        _run_one(app_main.MatchLoader(old, "닉", 52))
+        assert old.n_after > 20, f"전제: 첫 요청 뒤에 시작한 요청이 있어야 잰다({old.n_after})"
+        assert old.peak_after > app_main.DETAIL_WORKERS_THROTTLED, \
+            f"지난 검색의 429 로 이번 검색을 내렸다({old.peak_after})"
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    # 연결 풀이 동시 요청보다 커야 한다 — requests 기본 10 이면 남는 연결을 버리고 다시 맺는다
+    api = nexon_api.FCOnlineAPI("k")
+    assert api._session.get_adapter("https://open.api.nexon.com")._pool_maxsize >= app_main.DETAIL_WORKERS
 
 
 def test_loader_uses_prefetch_only_for_that_account():

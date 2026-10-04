@@ -698,8 +698,11 @@ def test_api_retries_only_transient_errors():
     try:
         api = _api_with(_Res(429), _Res(200, {"ok": 1}))
         assert api._get("/x") == {"ok": 1} and api._session.calls == 2
+        # 재시도로 넘어간 429 도 센다 — 로더가 이걸 보고 동시 요청을 줄인다(개발 단계 키 초당 5건)
+        assert api.throttled == 1, api.throttled
         api = _api_with(_Res(500), _Res(503), _Res(200, [1]))
         assert api._get("/x") == [1] and api._session.calls == 3
+        assert api.throttled == 0, "429 가 아닌 오류를 호출 한도로 셌다"
         for items, status in (([_Res(429)] * 3, 429), ([_Res(400, {"error": {"name": "OPENAPI00004"}})], 400)):
             api = _api_with(*items)
             try:

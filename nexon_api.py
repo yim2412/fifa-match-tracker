@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
 
 BASE_URL = "https://open.api.nexon.com"
 META_URL = f"{BASE_URL}/static/fconline/meta"
@@ -53,8 +54,12 @@ ERROR_MESSAGES = {
 KEY_INVALID_CODE = "OPENAPI00005"
 # 호출 한도(429). 개발 단계 키는 초당 5·하루 1,000건, 서비스 단계는 초당 500·하루 2천만건
 # (공식 FAQ 「API 이용 제한이 있나요?」). 첫 조회가 3천 건을 넘어 개발 단계 키로는 못 끝낸다
-# (2026-10-02 실측: 빈 데이터 첫 검색 3,124건 · 서비스 키 113초 · 429 0건).
+# (2026-10-02 실측: 빈 데이터 첫 검색 3,124건 · 서비스 키 113초 · 429 0건 — 동시 6개.
+#  2026-10-04 동시 24개로 3,130건 38초 · 429 0건, 같은 때 6개는 119초).
 QUOTA_CODE = "OPENAPI00007"
+# 동시에 열어 둘 연결 수 — 상세 조회를 여러 스레드로 할 때(app_main.DETAIL_WORKERS) 그보다 커야 한다.
+# requests 기본은 10이라 그 이상이면 연결을 버리고 다시 맺는다.
+HTTP_POOL_SIZE = 32
 KEY_CHECK_NICKNAME = "키확인용"
 KEY_ISSUE_URL = "https://openapi.nexon.com/"
 
@@ -92,7 +97,9 @@ class FCOnlineAPI:
             raise NexonAPIError("API 키가 비어 있습니다. .env 파일에 NEXON_API_KEY를 넣어주세요.")
         self._session = requests.Session()
         self._session.headers.update({"x-nxopen-api-key": api_key})
+        self._session.mount("https://", HTTPAdapter(pool_maxsize=HTTP_POOL_SIZE))
         self._timeout = timeout
+        self.throttled = 0  # 429(호출 한도)를 받은 횟수 — 재시도로 넘어간 것도 센다. 로더가 동시 요청을 줄일 신호
         self._cache_dir = cache_dir
         if cache_dir:
             cache_dir.mkdir(parents=True, exist_ok=True)
@@ -116,6 +123,8 @@ class FCOnlineAPI:
                 return res.json()
 
             code, msg = self._parse_error(res)
+            if res.status_code == 429:
+                self.throttled += 1
             # 호출량 초과·일시적 서버 오류는 백오프 후 재시도
             if res.status_code in (429, 500, 503) and attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
