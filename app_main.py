@@ -1003,8 +1003,20 @@ class MainWindow(QMainWindow):
 
     def changeEvent(self, e) -> None:
         super().changeEvent(e)
-        # 최대화를 풀면 띄우기 전에 정한(제목줄 없던) 위치로 돌아가 아래가 넘쳤다 — 풀린 뒤 화면 안으로
-        if e.type() == QEvent.Type.WindowStateChange and not (self.isMaximized() or self.isMinimized()):
+        # 최대화를 풀면 띄우기 전에 정한(제목줄 없던) 위치로 돌아가 아래가 넘쳤다 — 풀린 뒤 화면 안으로.
+        # 상태 신호가 올 땐 창이 아직 최대화 자리에 있고, 윈도우가 원래 위치로 되돌리는 건 그 뒤라(실화면 실측
+        # 1.875초 신호 → 1.934초 이동) 신호에서 바로 맞추면 헛돈다 → 그 뒤 첫 이동·크기 변경에서 맞춘다.
+        if e.type() == QEvent.Type.WindowStateChange:
+            self._settle_after_restore = not (self.isMaximized() or self.isMinimized())
+
+    def moveEvent(self, e) -> None:
+        super().moveEvent(e)
+        self._settle_if_restored()
+
+    # resizeEvent 는 아래(업데이트 카드 자리 잡기)에 하나만 — 두 번 정의하면 뒤의 것만 남는다
+    def _settle_if_restored(self) -> None:
+        if getattr(self, "_settle_after_restore", False):
+            self._settle_after_restore = False
             QTimer.singleShot(0, self._keep_on_screen)
 
     def _keep_on_screen(self) -> None:
@@ -1116,6 +1128,7 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
         self.update_card.place()
+        self._settle_if_restored()
 
     def start_update_check(self) -> None:
         """켤 때 한 번 — 테스트·스크린샷이 네트워크를 안 타게 main 에서만 부른다."""
