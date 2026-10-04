@@ -16,6 +16,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # offscreen 은 글꼴 폴더를 안 주면 장식체를 집어 글자 폭이 달라지고, 그러면 1280x720
@@ -897,6 +898,9 @@ def test_main_starts_update_check_after_show():
         def open_last_account(self):
             calls.append("마지막 계정")
 
+        def start_prefetch(self):
+            calls.append("미리 읽기")
+
     def run(open_last: bool) -> list[str]:
         calls.clear()
         orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
@@ -918,7 +922,8 @@ def test_main_starts_update_check_after_show():
 
     # 기본은 검색 화면부터 — 마지막으로 본 계정을 저절로 열지 않는다(2026-10-04 사용자 결정)
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
-    assert run(False) == ["창", "show", "새 버전 확인", "캐시 정리"], calls
+    # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
+    assert run(False) == ["창", "show", "새 버전 확인", "캐시 정리", "미리 읽기"], calls
     assert run(True) == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
 
 
@@ -1997,18 +2002,157 @@ def test_settings_remember_window_page_and_season():
         # 닫을 때 저장하는 배선 — closeEvent 가 _save_settings 를 부른다
         called = []
         _win._save_settings = lambda: called.append(1)
+
+        class _Pf:  # 켤 때 미리 읽기 — 닫을 때 멈추게 해야 종료가 2초씩 안 붙잡힌다
+            def discard(self):
+                called.append("미리 읽기 멈춤")
+        _win._prefetch = _Pf()
         try:
             from PyQt6.QtGui import QCloseEvent
             _win.closeEvent(QCloseEvent())
         finally:
             del _win._save_settings
-        assert called == [1], "닫을 때 설정을 저장하지 않는다"
+            _win._prefetch = None
+        assert called == [1, "미리 읽기 멈춤"], called
     finally:
         _win.resize(saved_state[0])
         _win._restore = {}
         _win._season_picked = saved_state[3]
         _win.cb_season.setCurrentIndex(saved_state[4])
         _win._go_page("대시보드")
+        _win._render_all()
+
+
+def _loader_db(n_saved: int):
+    """임시 DB 에 픽스처 n_saved 경기를 미리 저장 — (폴더, 되돌릴 설정)."""
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA
+    config.DB_PATH, config.WEB_DATA = tmp / "t.db", False
+    conn = store.open_db(config.DB_PATH)
+    try:
+        store.save_matches(conn, sorted(_DETAILS, key=lambda d: d["matchId"])[:n_saved])
+    finally:
+        conn.close()
+    return tmp, saved
+
+
+def _run_one(ld):
+    out = []
+    ld.finished_ok.connect(lambda *a: out.append(a))
+    ld.failed.connect(lambda m: out.append(("실패", m)))
+    ld.run()
+    assert len(out) == 1 and out[0][0] != "실패", out
+    return out[0]
+
+
+def test_loader_reads_db_while_waiting_for_nexon():
+    # 저장된 경기 읽기(1만 경기 약 2초)는 넥슨 응답을 기다릴 이유가 없다 — 차례로 돌 때 검색 5.3초였다.
+    # 넥슨 경기 목록 응답이 'DB 읽기가 시작됐다'를 기다린다: 차례로 돌면 5초 기다리다 False 를 적는다.
+    import threading
+    tmp, saved = _loader_db(2)
+    orig = app_main.load_saved
+    started, seen = threading.Event(), []
+
+    def spy(*a, **k):
+        started.set()
+        return orig(*a, **k)
+
+    class _Api(_DetailApi):
+        def get_match_ids(self, ouid, matchtype, offset, limit):
+            if offset == 0:
+                seen.append(started.wait(5))
+            return super().get_match_ids(ouid, matchtype, offset, limit)
+
+    app_main.load_saved = spy
+    try:
+        res = _run_one(app_main.MatchLoader(_Api([], ""), "닉", 52))
+    finally:
+        app_main.load_saved = orig
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    assert seen == [True], "DB 읽기가 넥슨 조회가 끝나기를 기다렸다"
+    assert sorted(d["matchId"] for d in res[1]) == sorted(d["matchId"] for d in _DETAILS), "합친 결과가 다르다"
+    assert sorted(m.match_id for m in res[0]) == sorted(d["matchId"] for d in _DETAILS)
+
+
+def test_loader_uses_prefetch_only_for_that_account():
+    # 켤 때 미리 읽은 계정을 검색하면 DB 를 다시 읽지 않는다. 다른 계정이면 미리 읽기를 멈추고 직접 읽는다.
+    tmp, saved = _loader_db(4)
+    orig = app_main.load_saved
+    calls = []
+
+    def spy(ouid, *a, **k):
+        calls.append(ouid)
+        return orig(ouid, *a, **k)
+
+    app_main.load_saved = spy
+    try:
+        pf = app_main.SavedPrefetch(_OUID, 52)
+        pf._future.result()
+        assert calls == [_OUID]
+        res = _run_one(app_main.MatchLoader(_DetailApi([], ""), "닉", 52, prefetch=pf))
+        assert calls == [_OUID], f"미리 읽은 계정인데 DB 를 다시 읽었다: {calls}"
+        assert len(res[1]) == len(_DETAILS) and len(res[0]) == len(_DETAILS)
+        other = app_main.SavedPrefetch("다른계정", 52)
+        other._future.result()
+        _run_one(app_main.MatchLoader(_DetailApi([], ""), "닉", 52, prefetch=other))
+        assert other._stop, "다른 계정인데 미리 읽기를 버리지 않았다"
+        assert calls == [_OUID, "다른계정", _OUID], calls
+        assert other.take(_OUID, 52) is None and other.take("다른계정", 52) is None, "버린 것을 다시 내줬다"
+    finally:
+        app_main.load_saved = orig
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_loader_does_not_wait_for_rank():
+    # 랭킹(데이터센터 1.1초)은 랭커 카드에만 쓴다 — 아직이면 먼저 그리고 rank_ready 로 뒤따른다.
+    # 기다리면 스레드가 살아 있어 그동안 새 검색도 막힌다(_api_search 의 isRunning).
+    import threading
+    tmp, saved = _loader_db(4)
+    gate, ready = threading.Event(), []
+    orig = app_main.MatchLoader._safe_rank
+    app_main.MatchLoader._safe_rank = lambda self: (gate.wait(5), "랭킹")[1]
+    try:
+        ld = app_main.MatchLoader(_DetailApi([], ""), "닉", 52)
+        ld.rank_ready.connect(lambda o, r: ready.append((o, r)))
+        res = _run_one(ld)
+        assert res[8] is None and ready == [], "랭킹을 기다린 뒤에야 화면으로 넘겼다"
+        gate.set()
+        for _ in range(100):  # 다른 스레드에서 온 신호는 UI 스레드 대기열로 간다 — 이벤트를 돌려야 받는다
+            _app.processEvents()
+            if ready:
+                break
+            time.sleep(0.05)
+        assert ready == [(_OUID, "랭킹")], ready
+        # 이미 끝났으면 첫 신호에 실려 가고 뒤따르는 신호는 없다
+        gate.set()
+        ld2 = app_main.MatchLoader(_DetailApi([], ""), "닉", 52)
+        ld2.rank_ready.connect(lambda o, r: ready.append(("두번째", r)))
+        app_main.MatchLoader._safe_rank = lambda self: "랭킹2"
+        res2 = _run_one(ld2)
+        time.sleep(0.1)
+        _app.processEvents()
+        assert res2[8] == "랭킹2" and ready == [(_OUID, "랭킹")], (res2[8], ready)
+    finally:
+        app_main.MatchLoader._safe_rank = orig
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+    # 받는 쪽 — 지금 계정이면 카드만 다시, 그사이 다른 계정을 열었으면 버린다. 같은 계정 재검색에서 None 이면 보던 값을 둔다
+    keep = _win._rank
+    try:
+        drawn = []
+        _win._render_ranker = lambda: drawn.append(_win._rank)
+        _win._on_rank_ready("다른계정", "옛 계정 랭킹")
+        assert _win._rank is keep and drawn == [], "다른 계정의 늦은 랭킹이 카드에 들어갔다"
+        _win._on_rank_ready(_OUID, "새 랭킹")
+        assert drawn == ["새 랭킹"], drawn
+        _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert _win._rank == "새 랭킹", "같은 계정 재검색에서 아직 안 온 랭킹(None)이 보던 카드를 지웠다"
+    finally:
+        _win.__dict__.pop("_render_ranker", None)
+        _win._rank = keep
         _win._render_all()
 
 
@@ -2215,9 +2359,11 @@ def test_search_hands_current_account_to_loader():
     got = []
 
     class _Rec:
-        def __init__(self, api, nick, mt, prev=None):
+        def __init__(self, api, nick, mt, prev=None, prefetch=None):
             got.append(prev)
+            pf.append(prefetch)
             self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
+            self.rank_ready = self
 
         def connect(self, *_):
             pass
@@ -2228,15 +2374,49 @@ def test_search_hands_current_account_to_loader():
         def isRunning(self):
             return False
 
+    pf = []
     orig = app_main.MatchLoader, _win._loader
     app_main.MatchLoader, _win._loader = _Rec, None
+    _win._prefetch = "켤 때 미리 읽은 것"
     try:
+        _win._api_search("아무개")
         _win._api_search("아무개")
     finally:
         app_main.MatchLoader, _win._loader = orig
+        _win._prefetch = None
         _win._set_busy(False)
-    assert len(got) == 1 and got[0][0] == _OUID, got
+    assert len(got) == 2 and got[0][0] == _OUID, got
     assert got[0][1] is _win._matches_all and got[0][2] is _win._details_all, "지금 가진 목록을 넘기지 않았다"
+    # 미리 읽은 것은 첫 검색에 한 번만 — 두 번째 검색까지 들고 있으면 옛 스냅숏을 다시 바탕으로 쓴다
+    assert pf == ["켤 때 미리 읽은 것", None], pf
+
+
+def test_start_prefetch_reads_last_searched_account():
+    tmp, saved = _loader_db(4)
+    try:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            # 시각을 직접 둔다 — 같은 초에 넣으면 '최근' 순서가 동률이다
+            store.upsert_account(conn, _OUID, "테스트구단주")
+            store.upsert_account(conn, "빈계정", "빈")          # 경기 없는 계정 — 이게 최근이면 안 읽는다
+            conn.execute("UPDATE accounts SET last_seen = ? WHERE ouid = ?", ("2026-10-01T00:00:00", _OUID))
+            conn.execute("UPDATE accounts SET last_seen = ? WHERE ouid = ?", ("2026-10-02T00:00:00", "빈계정"))
+            conn.commit()
+            empty_last = _win._last_account()
+            conn.execute("UPDATE accounts SET last_seen = ? WHERE ouid = ?", ("2026-10-03T00:00:00", _OUID))
+            conn.commit()
+        finally:
+            conn.close()
+        assert empty_last is None, empty_last
+        _win._prefetch = None
+        _win.start_prefetch()
+        assert _win._prefetch is not None and _win._prefetch.ouid == _OUID, "마지막 계정을 미리 읽지 않았다"
+        matches, details = _win._prefetch._future.result()
+        assert len(details) == 4 and len(matches) == 4
+    finally:
+        _win._prefetch = None
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def test_prune_cache_deletes_only_stored_matches():

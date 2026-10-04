@@ -847,6 +847,70 @@ def test_store_match_type_filters_and_season_staleness():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_store_open_refreshes_query_stats():
+    """통계가 없으면 계정별 경기 수 세기가 감독모드 경기 전체를 계정마다 훑는다(1만 경기·11계정 0.8초).
+    open_db 가 PRAGMA optimize 로 통계를 채우는지 — 쌓인 뒤 다시 열 때 잰다."""
+    import tempfile
+    import shutil
+    import sqlite3
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        conn = store.open_db(tmp / "t.db")
+        store.save_matches(conn, [_d(3, "승"), _d(2, "패"), _d(1, "무")])
+        conn.close()
+        raw = sqlite3.connect(tmp / "t.db")   # 전제: 저장만으로는 통계가 생기지 않는다
+        has = lambda c: c.execute("SELECT name FROM sqlite_master WHERE name='sqlite_stat1'").fetchone() and \
+            c.execute("SELECT count(*) FROM sqlite_stat1 WHERE tbl='matches'").fetchone()[0]  # noqa: E731
+        assert not has(raw), "저장만 했는데 통계가 있다 — 이 테스트가 open_db 를 재지 못한다"
+        raw.close()
+        conn = store.open_db(tmp / "t.db")
+        assert has(conn), "open_db 가 통계를 채우지 않았다"
+        conn.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_load_details_reads_in_date_order_without_sorting_payloads():
+    """통계가 생기면 SQLite 는 계정 인덱스부터 골라 본문을 통째로 임시 정렬했다(1만 경기 SQL 0.7초 → 2.3초).
+    load_details 가 (종류, 날짜) 인덱스로 읽는지 — 상대가 경기마다 다른 실제 모양으로 잰다."""
+    import tempfile
+    import shutil
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        conn = store.open_db(tmp / "t.db")
+        ds = []
+        for i in range(60):
+            d = _d(1 + i % 28, "승", hour=i % 24, opp=f"상대{i}")
+            d["matchType"] = 52
+            if i >= 20:
+                d["matchInfo"][0]["ouid"] = f"x{i % 7}"   # 다른 계정의 경기
+            d["matchInfo"][1]["ouid"] = f"opp{i}"         # 상대는 경기마다 다르다
+            ds.append(d)
+        store.save_matches(conn, ds)
+        conn.close()
+        conn = store.open_db(tmp / "t.db")                 # 여기서 통계가 생긴다
+        plain = ("SELECT m.payload FROM matches m JOIN match_players p ON p.match_id = m.match_id"
+                 " WHERE p.ouid = ? AND m.match_type = ? ORDER BY m.match_date DESC")
+        plan = lambda sql, args=(): " ".join(r[3] for r in conn.execute("EXPLAIN QUERY PLAN " + sql, args))  # noqa: E731
+        assert "TEMP B-TREE" in plan(plain, ("me", 52)), "전제: 인덱스를 안 정하면 임시 정렬이 나와야 한다"
+        ran = []
+        conn.set_trace_callback(ran.append)
+        got = store.load_details(conn, "me", 52)
+        conn.set_trace_callback(None)
+        sql = next(s for s in ran if "payload" in s)
+        assert "TEMP B-TREE" not in plan(sql), plan(sql)
+        assert len(got) == 20 and [d["matchDate"] for d in got] == sorted(
+            (d["matchDate"] for d in ds[:20]), reverse=True)
+        # 멈추기 — stop 이 참이면 거기서 끊고 읽은 데까지만(미리 읽기를 버릴 때)
+        n = []
+        assert store.load_details(conn, "me", 52, stop=lambda: n.append(1) or len(n) > 5) == got[:5]
+        conn.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_image_fetch_cache_and_failures():
     import tempfile
     import shutil

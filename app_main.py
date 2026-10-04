@@ -71,6 +71,42 @@ def eta_text(done: int, total: int, elapsed: float) -> str:
     return f" · 남음 약 {int(round(left / 60))}분"
 
 
+def load_saved(ouid: str, match_type: int, stop=None) -> tuple[list, list]:
+    """DB 에 저장된 경기 — (최신순 [MatchSummary], 최신순 [detail]). 넥슨을 부르지 않는다.
+    1만 경기 약 2초(대부분 JSON 해석)라 검색할 때 넥슨 조회와 나란히 돌리고, 켤 때 미리 읽는다.
+    자기 DB 연결을 연다 — 어느 스레드에서 불러도 된다."""
+    conn = store.open_db(config.DB_PATH)
+    try:
+        details = store.load_details(conn, ouid, match_type, stop=stop)
+    finally:
+        conn.close()
+    matches = [m for m in (parse_match(d, ouid) for d in details) if m]
+    matches.sort(key=lambda m: m.match_date or 0, reverse=True)
+    return matches, details
+
+
+class SavedPrefetch:
+    """켤 때 마지막으로 검색한 계정의 저장된 경기를 뒤에서 미리 읽어 둔다 — 화면엔 아무것도 안 그린다.
+    그 계정을 검색하면 DB 읽기(1만 경기 약 2초)를 건너뛴다. 한 번 쓰면 끝, 다른 계정이면 멈추고 버린다."""
+
+    def __init__(self, ouid: str, match_type: int):
+        self.ouid, self.match_type = ouid, match_type
+        self._stop = False
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="prefetch")
+        self._future = pool.submit(load_saved, ouid, match_type, lambda: self._stop)
+        pool.shutdown(wait=False)
+
+    def take(self, ouid: str, match_type: int):
+        """같은 계정이면 그 Future(끝났으면 바로, 아니면 기다리면 된다), 아니면 멈추고 None."""
+        if ouid == self.ouid and match_type == self.match_type and not self._stop:
+            return self._future
+        self.discard()
+        return None
+
+    def discard(self) -> None:
+        self._stop = True  # 읽던 중이면 다음 행에서 멈춘다 — 창을 닫을 때 종료를 붙잡지 않게
+
+
 class MatchLoader(QThread):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
 
@@ -87,21 +123,25 @@ class MatchLoader(QThread):
     failed = pyqtSignal(str)
     key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
     quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
+    rank_ready = pyqtSignal(str, object)  # finished_ok 때 랭킹이 아직이었으면 뒤따라 — ouid, RankerInfo|None
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
-                 offline_ouid: str | None = None):
+                 offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
-        offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때."""
+        offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
+        prefetch: 켤 때 미리 읽어 둔 저장 경기 — 같은 계정이면 DB 를 다시 안 읽는다."""
         super().__init__()
         self._api = api
         self._nickname = nickname
         self._match_type = match_type
         self._prev = prev
         self._offline_ouid = offline_ouid
+        self._prefetch = prefetch
         self._cancel = False
         self._quota_hit = False
         self._pool: ThreadPoolExecutor | None = None
+        self._side: ThreadPoolExecutor | None = None  # 넥슨 조회와 나란히 도는 DB 읽기·랭킹·메타
 
     def cancel(self) -> None:
         """즉시 취소 — 대기 중인 상세 요청을 버리고 진행 중인 것만 끝낸다.
@@ -111,8 +151,11 @@ class MatchLoader(QThread):
         까지 함께 남는다).
         """
         self._cancel = True
-        if self._pool is not None:
-            self._pool.shutdown(wait=False, cancel_futures=True)
+        for pool in (self._pool, self._side):
+            if pool is not None:
+                pool.shutdown(wait=False, cancel_futures=True)
+        if self._prefetch is not None:
+            self._prefetch.discard()
 
     def _new_match_ids(self, ouid: str, known) -> list[str]:
         """새로 저장할 매치 id 를 모은다.
@@ -143,16 +186,10 @@ class MatchLoader(QThread):
         뒤이은 새 경기 확인(정상 검색)이 채운다."""
         ouid = self._offline_ouid
         self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
-        conn = store.open_db(config.DB_PATH)
-        try:
-            details = store.load_details(conn, ouid, self._match_type)
-        finally:
-            conn.close()
+        matches, details = load_saved(ouid, self._match_type, lambda: self._cancel)
         if not details or self._cancel:
             return  # 보여 줄 게 없으면 검색 화면 그대로
         grade_name, is_champion, badge_path, division_names = self._current_grade(details, ouid)
-        matches = [m for m in (parse_match(d, ouid) for d in details) if m]
-        matches.sort(key=lambda m: m.match_date or 0, reverse=True)
         names = self._safe_meta("spid", "id", "name")
         positions = self._safe_meta("spposition", "spposition", "desc")
         seasons = self._safe_meta_raw("seasonid", "seasonId")
@@ -170,6 +207,22 @@ class MatchLoader(QThread):
         try:
             self.progress.emit(0, 0, f"'{self._nickname}' 계정 조회 중…")
             ouid = self._api.get_ouid(self._nickname)
+            # 넥슨 조회(기본 정보·새 경기)를 기다리는 동안 나머지를 나란히 — 차례로 돌 때 1만 경기 검색이
+            # 5.3초였고 그중 DB 읽기 1.9초·랭킹 1.0초가 서로를 기다릴 이유가 없었다(2026-10-04 실측).
+            # 저장된 경기의 바탕: 화면이 가진 목록(같은 계정 재검색) > 켤 때 미리 읽은 것 > 지금 DB 에서.
+            # 바탕을 읽은 뒤 저장된 경기는 아래에서 id 대조로 채운다 — 바탕이 언제 읽혔든 빠지는 경기가 없다.
+            self._side = ThreadPoolExecutor(max_workers=3, thread_name_prefix="loader-side")
+            if self._prev and self._prev[0] == ouid:
+                base_f = None
+            else:
+                base_f = self._prefetch.take(ouid, self._match_type) if self._prefetch else None
+                if base_f is None:
+                    base_f = self._side.submit(load_saved, ouid, self._match_type, lambda: self._cancel)
+            rank_f = self._side.submit(self._safe_rank)
+            meta_f = self._side.submit(lambda: (self._safe_meta("spid", "id", "name"),
+                                                self._safe_meta("spposition", "spposition", "desc"),
+                                                self._safe_meta_raw("seasonid", "seasonId")))
+            self._side.shutdown(wait=False)  # 더 넣지 않는다 — 끝난 스레드는 알아서 내려간다
             basic = self._api.get_user_basic(ouid)
 
             conn = store.open_db(config.DB_PATH)  # DB 는 스레드마다 따로 연다
@@ -223,24 +276,28 @@ class MatchLoader(QThread):
                 self._api.forget_details([d.get("matchId") for d in fresh])
 
                 self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
-                prev_details = self._prev[2] if self._prev and self._prev[0] == ouid else None
-                if prev_details is not None:
-                    # 같은 계정 다시 검색 — 화면이 이미 가진 것은 다시 읽지 않는다(재검색 3.6초 → 거의 0).
-                    # 새로 받은 것만이 아니라 DB 에 있는데 화면에 없는 것 전부(id 로 대조 — 시각으로 자르면
-                    # 이어 받기로 들어온 옛 경기를 빠뜨린다)
-                    have = {d.get("matchId") for d in prev_details}
-                    missing = [i for i in store.known_ids(conn, ouid, self._match_type) if i not in have]
-                    new_details = store.load_details_by_ids(conn, missing)
-                    details = store.merge_details(prev_details, new_details)
+                if base_f is None:
+                    # 같은 계정 다시 검색 — 화면이 이미 가진 것은 다시 읽지 않는다(재검색 3.6초 → 거의 0)
+                    base_matches, base_details = self._prev[1], self._prev[2]
                 else:
-                    new_details = None
-                    details = store.load_details(conn, ouid, self._match_type)
+                    base_matches, base_details = base_f.result()  # 아직이면 여기서 기다린다
+                if self._cancel:
+                    return
+                # 바탕에 없는데 DB 에 있는 것 전부 — 방금 저장한 새 경기, 바탕을 읽은 뒤 들어온 경기(봇 등),
+                # 한도에 걸렸다 이어 받은 옛 경기. id 로 대조한다(시각으로 자르면 이어 받은 옛 경기를 빠뜨린다).
+                have = {d.get("matchId") for d in base_details}
+                missing = [i for i in store.known_ids(conn, ouid, self._match_type) if i not in have]
+                new_details = store.load_details_by_ids(conn, missing)
+                details = store.merge_details(base_details, new_details)
             finally:
                 conn.close()
 
-            # 넥슨 데이터센터의 감독모드 랭킹(순위·구단가치·ELO). 오픈API 엔
-            # 없는 값이라 여기서 받는다. 실패해도 전적 조회는 살린다.
-            rank = self._safe_rank()
+            # 넥슨 데이터센터의 감독모드 랭킹(순위·구단가치·ELO). 오픈API 엔 없는 값이라 받는다(위에서
+            # 나란히 시작). 아직이면 기다리지 않고 먼저 그린다 — 미리 읽은 계정이면 검색 2.0초 중 1.1초가
+            # 이 기다림이었다(2026-10-04 실측). 쓰는 곳은 랭커 카드뿐이라 오면 rank_ready 로 카드만 다시.
+            # 실패해도 전적 조회는 살린다.
+            rank = rank_f.result() if rank_f.done() else None
+            rank_pending = rank is None and not rank_f.done()
             grade_name, is_champion, badge_path, division_names = \
                 self._current_grade(details, ouid)
 
@@ -250,28 +307,30 @@ class MatchLoader(QThread):
                                       {}, division_names)
                 return
 
-            if new_details is not None:
-                have_m = {m.match_id for m in self._prev[1]}
-                matches = list(self._prev[1]) + [
-                    m for m in (parse_match(d, ouid) for d in new_details) if m and m.match_id not in have_m]
-            else:
-                matches = [m for m in (parse_match(d, ouid) for d in details) if m]
+            have_m = {m.match_id for m in base_matches}
+            matches = list(base_matches) + [
+                m for m in (parse_match(d, ouid) for d in new_details) if m and m.match_id not in have_m]
             matches.sort(key=lambda m: m.match_date or 0, reverse=True)
 
             self.progress.emit(0, 0, "선수 정보 조회 중…")
-            names = self._safe_meta("spid", "id", "name")
-            positions = self._safe_meta("spposition", "spposition", "desc")
-            seasons = self._safe_meta_raw("seasonid", "seasonId")
+            names, positions, seasons = meta_f.result()
 
             self.finished_ok.emit(matches, details, ouid, basic, names,
                                   positions, new, got, rank, grade_name,
                                   is_champion, badge_path, seasons, division_names)
+            if rank_pending:
+                # 여기서 기다리지 않는다 — 스레드가 살아 있으면 그동안 새 검색이 막힌다(_api_search 의 isRunning).
+                # 끝나면 그 스레드에서 신호만 보낸다(받는 쪽은 UI 스레드로 줄 세워진다).
+                rank_f.add_done_callback(
+                    lambda f, o=ouid: None if self._cancel else self.rank_ready.emit(o, f.result()))
 
         except NexonAPIError as e:
             if e.code == KEY_INVALID_CODE:
                 self.key_invalid.emit(e.message)
             else:
                 self.failed.emit(e.message)
+        except CancelledError:
+            return  # cancel() 이 나란히 돌던 일을 내렸다 — 창을 닫는 중이라 알릴 곳이 없다
         except Exception as e:
             self.failed.emit(f"예기치 못한 오류: {e}")
 
@@ -693,6 +752,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._api = api
         self._loader: MatchLoader | None = None
+        self._prefetch: SavedPrefetch | None = None  # start_prefetch — 첫 검색이 가져간다
         self._quiet_search = False  # 켤 때 자동 새 경기 확인 — 실패를 상태줄로만
         self._img_cache_dir = config.CACHE_DIR / "player_images"
         self._table_season_loader: SeasonIconLoader | None = None
@@ -837,6 +897,13 @@ class MainWindow(QMainWindow):
         """켤 때 한 번 — main 에서만 부른다(테스트가 실제 캐시 폴더를 건드리지 않게)."""
         self._prune_worker = CachePruneWorker(self._api)
         self._prune_worker.start()
+
+    def start_prefetch(self) -> None:
+        """켤 때 한 번 — 마지막으로 검색한 계정의 저장된 경기를 뒤에서 읽어 둔다(화면은 검색 화면 그대로).
+        그 계정을 검색하면 DB 읽기를 건너뛴다. main 에서만 부른다."""
+        last = self._last_account()
+        if last:
+            self._prefetch = SavedPrefetch(last[0], config.DEFAULT_MATCH_TYPE)
 
     def _set_update_status(self, text: str, button: str = "") -> None:
         """왼쪽 아래 상태 칸 — 늘 보이는 자리(카드는 새 버전일 때만 잠깐 눈에 띄게)."""
@@ -2481,13 +2548,24 @@ class MainWindow(QMainWindow):
         self._set_busy(True)
         # 지금 화면의 계정을 넘긴다 — 같은 계정이면(로더가 ouid 로 판단) 새 경기만 DB 에서 읽는다
         prev = (self._ouid, self._matches_all, self._details_all) if self._ouid else None
-        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev)
+        # 미리 읽은 것은 한 번만 넘긴다 — 다른 계정이면 로더가 멈추고 버린다
+        prefetch, self._prefetch = self._prefetch, None
+        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
+                                   prefetch=prefetch)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.key_invalid.connect(self._on_key_invalid)
         self._loader.quota_hit.connect(self._on_quota_hit)  # 키를 바꾸는 게 답이라 같은 길
+        self._loader.rank_ready.connect(self._on_rank_ready)
         self._loader.start()
+
+    def _on_rank_ready(self, ouid: str, rank) -> None:
+        """랭킹이 첫 화면보다 늦게 왔다 — 랭커 카드만. 그사이 다른 계정을 열었으면 버린다."""
+        if ouid != self._ouid:
+            return
+        self._rank = rank
+        self._render_ranker()
 
     def _on_quota_hit(self, msg: str) -> None:
         if getattr(self, "_quiet_search", False):
@@ -2495,20 +2573,27 @@ class MainWindow(QMainWindow):
         else:
             self._on_key_invalid(msg)
 
-    def open_last_account(self) -> bool:
-        """켤 때 — 마지막으로 본 계정을 DB 에서 바로 그리고, 끝나면 새 경기를 조용히 확인한다.
-        main 에서만 부른다. 열 계정이 없으면 False(검색 화면 그대로)."""
+    def _last_account(self) -> tuple[str, str] | None:
+        """마지막으로 검색한 계정 (ouid, 닉네임) — 저장된 감독모드 경기가 없거나 DB 를 못 열면 None."""
         try:
             conn = store.open_db(config.DB_PATH)
             try:
                 last = store.recent_searches(conn, 1)
                 if not last or not store.match_count(conn, last[0]["ouid"], config.DEFAULT_MATCH_TYPE):
-                    return False
+                    return None
             finally:
                 conn.close()
         except Exception:
+            return None
+        return last[0]["ouid"], last[0]["nickname"]
+
+    def open_last_account(self) -> bool:
+        """켤 때 — 마지막으로 본 계정을 DB 에서 바로 그리고, 끝나면 새 경기를 조용히 확인한다.
+        main 에서만 부른다. 열 계정이 없으면 False(검색 화면 그대로)."""
+        last = self._last_account()
+        if not last:
             return False
-        ouid, nick = last[0]["ouid"], last[0]["nickname"]
+        ouid, nick = last
         self._nick = nick
         self._set_busy(True)
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, offline_ouid=ouid)
@@ -2720,7 +2805,10 @@ class MainWindow(QMainWindow):
             self._trend_reset_pending = True  # 다른 계정으로 전환 — 승률 그래프 기간을 30일로 되돌린다
         self._ouid = ouid
         self._basic = basic
-        self._rank = rank
+        if rank is not None or switched:
+            # 같은 계정 재검색에서 None 이면 대개 '아직'(rank_ready 가 뒤따른다) — 카드가 비었다 차는 깜빡임 대신
+            # 보던 값을 둔다. 다른 계정이면 옛 계정 순위를 남기지 않는다.
+            self._rank = rank
         self._grade_name = grade_name
         self._is_champion = is_champion
         self._badge_path = badge_path
@@ -4115,6 +4203,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e) -> None:
         self._save_settings()
+        if self._prefetch is not None:
+            self._prefetch.discard()  # 읽던 중이면 다음 행에서 멈춘다 — 종료를 2초씩 붙잡지 않게
         prune = getattr(self, "_prune_worker", None)
         if prune and prune.isRunning():
             # 파일을 지우는 중 — 하다 만 정리는 다음에 켤 때 이어서 하니, 오래 붙잡지 않고 끝낸다
@@ -4447,6 +4537,8 @@ def main() -> int:
     win.start_cache_prune()
     if config.OPEN_LAST_ACCOUNT:
         win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
+    else:
+        win.start_prefetch()  # 화면은 검색창 그대로, 마지막 계정의 저장된 경기만 뒤에서 읽어 둔다
     return app.exec()
 
 

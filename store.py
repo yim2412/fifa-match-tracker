@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -87,6 +88,10 @@ TEAM_COLOR_TTL_DAYS = 7
 # 알아차릴 일이 없고, 조회 실패해도 지난 캐시를 계속 쓴다(load_seasons).
 SEASON_TTL_DAYS = 1
 
+# 열 때마다 PRAGMA optimize 에 줄 값 — 0x10000(필요한 표만 다시 재기) | 0x02(재는 행 수에 상한).
+# SQLite 문서가 "연결을 열 때" 권하는 값이다.
+OPTIMIZE_ON_OPEN = 0x10002
+
 
 def open_db(path: Path | str) -> sqlite3.Connection:
     """DB를 열고 없으면 만든다. 스레드마다 따로 열 것 — 커넥션 공유 금지."""
@@ -100,6 +105,10 @@ def open_db(path: Path | str) -> sqlite3.Connection:
     if "team_value" not in cols:
         conn.execute("ALTER TABLE team_colors ADD COLUMN team_value INTEGER")
     conn.commit()
+    # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
+    # 감독모드 경기 2만 개를 매번 다 훑었다 — 계정 11개에 0.79초 → 0.07초(2026-10-04 실측).
+    # 빈 DB 에서 쌓인 경우도 다시 잰다(같은 날 실측 0.88초 → 0.08초).
+    conn.execute(f"PRAGMA optimize={OPTIMIZE_ON_OPEN}")
     return conn
 
 
@@ -149,9 +158,16 @@ def known_ids(conn: sqlite3.Connection, ouid: str,
 
 def load_details(conn: sqlite3.Connection, ouid: str,
                  match_type: int | None = None,
-                 limit: int | None = None) -> list[dict]:
-    """저장된 경기를 최신순으로. 깨진 행은 건너뛴다(하나 때문에 전체가 죽지 않게)."""
-    sql = ("SELECT m.payload FROM matches m"
+                 limit: int | None = None,
+                 stop: Callable[[], bool] | None = None) -> list[dict]:
+    """저장된 경기를 최신순으로. 깨진 행은 건너뛴다(하나 때문에 전체가 죽지 않게).
+    stop 이 참을 돌려주면 거기서 멈추고 읽은 데까지만 — 미리 읽기를 버릴 때(1만 경기 약 2초)."""
+    # 종류가 정해지면 (종류, 날짜) 인덱스 순서로 읽는다 — 이미 최신순이라 정렬이 없다. 통계(open_db 의
+    # PRAGMA optimize)가 생기자 SQLite 는 계정 인덱스부터 고르고 본문(1만 경기 212MB)을 통째로 임시
+    # 정렬했다: SQL 0.7~1.0초 → 1.5~2.3초(2026-10-04 실측). 계정 쪽은 (경기, 계정) 키로 바로 찾으니
+    # 경기가 적은 계정도 다른 계정 경기의 인덱스만 훑고 지나간다.
+    table = "matches m INDEXED BY idx_matches_type_date" if match_type is not None else "matches m"
+    sql = (f"SELECT m.payload FROM {table}"
            " JOIN match_players p ON p.match_id = m.match_id"
            " WHERE p.ouid = ?")
     args: list = [ouid]
@@ -165,6 +181,8 @@ def load_details(conn: sqlite3.Connection, ouid: str,
 
     out = []
     for row in conn.execute(sql, args):
+        if stop is not None and stop():
+            break
         try:
             out.append(_loads(row["payload"]))
         except Exception:
