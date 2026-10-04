@@ -874,6 +874,35 @@ def test_store_open_refreshes_query_stats():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_store_open_from_threads_at_once():
+    """검색은 넥슨 조회와 DB 읽기를 나란히 돌려 두 스레드가 거의 동시에 open_db 한다. 여는 순간의 설정(WAL 전환 ·
+    표 만들기 · 통계)이 겹치면 "database is locked" 로 검색이 죽었다 — 새 DB 를 세 스레드가 열면 60번 중 56번."""
+    import tempfile
+    import shutil
+    import sqlite3
+    import threading
+    import store
+    fails = []
+    for i in range(12):
+        tmp = Path(tempfile.mkdtemp())
+        bar = threading.Barrier(3)
+
+        def work():
+            bar.wait()
+            try:
+                store.open_db(tmp / "t.db").close()
+            except sqlite3.OperationalError as e:
+                fails.append((i, str(e)))
+
+        ts = [threading.Thread(target=work) for _ in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        shutil.rmtree(tmp, ignore_errors=True)
+    assert not fails, fails[:3]
+
+
 def test_load_details_reads_in_date_order_without_sorting_payloads():
     """통계가 생기면 SQLite 는 계정 인덱스부터 골라 본문을 통째로 임시 정렬했다(1만 경기 SQL 0.7초 → 2.3초).
     load_details 가 (종류, 날짜) 인덱스로 읽는지 — 상대가 경기마다 다른 실제 모양으로 잰다."""

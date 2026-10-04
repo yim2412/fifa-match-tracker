@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -92,23 +93,31 @@ SEASON_TTL_DAYS = 1
 # SQLite 문서가 "연결을 열 때" 권하는 값이다.
 OPTIMIZE_ON_OPEN = 0x10002
 
+# 다른 연결이 쓰는 중이면 이만큼 기다린다(초) — 봇처럼 다른 프로세스가 같은 DB 를 열 때.
+OPEN_TIMEOUT_S = 15
+# 여는 순간의 설정(WAL 전환 · 표 만들기 · 통계 갱신)은 쓰기라, 같은 프로세스의 두 스레드가 동시에 하면 한쪽이
+# "database is locked" 로 죽었다 — 검색이 넥슨 조회와 DB 읽기를 나란히 돌리면서(03eeb08) 생겼다. 새 DB 를
+# 세 스레드가 동시에 열면 60번 중 56번(2026-10-04 실측). WAL 전환은 잠금 대기(timeout)를 안 거쳐서 기다려도 안 된다.
+_OPEN_LOCK = threading.Lock()
+
 
 def open_db(path: Path | str) -> sqlite3.Connection:
     """DB를 열고 없으면 만든다. 스레드마다 따로 열 것 — 커넥션 공유 금지."""
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=OPEN_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
-    # 조회(UI)와 저장(워커)이 겹칠 수 있어 WAL 로 둔다.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(SCHEMA)
-    # team_value 열은 나중에 생겼다 — 그 전에 만들어진 DB 는 여기서 늘려준다.
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(team_colors)")}
-    if "team_value" not in cols:
-        conn.execute("ALTER TABLE team_colors ADD COLUMN team_value INTEGER")
-    conn.commit()
-    # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
-    # 감독모드 경기 2만 개를 매번 다 훑었다 — 계정 11개에 0.79초 → 0.07초(2026-10-04 실측).
-    # 빈 DB 에서 쌓인 경우도 다시 잰다(같은 날 실측 0.88초 → 0.08초).
-    conn.execute(f"PRAGMA optimize={OPTIMIZE_ON_OPEN}")
+    with _OPEN_LOCK:
+        # 조회(UI)와 저장(워커)이 겹칠 수 있어 WAL 로 둔다.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.executescript(SCHEMA)
+        # team_value 열은 나중에 생겼다 — 그 전에 만들어진 DB 는 여기서 늘려준다.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(team_colors)")}
+        if "team_value" not in cols:
+            conn.execute("ALTER TABLE team_colors ADD COLUMN team_value INTEGER")
+        conn.commit()
+        # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
+        # 감독모드 경기 2만 개를 매번 다 훑었다 — 계정 11개에 0.79초 → 0.07초(2026-10-04 실측).
+        # 빈 DB 에서 쌓인 경우도 다시 잰다(같은 날 실측 0.88초 → 0.08초).
+        conn.execute(f"PRAGMA optimize={OPTIMIZE_ON_OPEN}")
     return conn
 
 
