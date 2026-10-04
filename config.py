@@ -171,5 +171,9 @@ FALLBACK_MATCH_TYPES = [
     (60, "친선경기"),
 ]
 
+# 켤 때 마지막으로 본 계정을 바로 열지. 기본은 꺼짐 — 검색 화면부터(2026-10-04 사용자 결정:
+# 켜자마자 남의 닉네임으로 검색돼 있는 게 하드코딩처럼 보였다). 켜면 MainWindow.open_last_account.
+OPEN_LAST_ACCOUNT = False
+
 DEFAULT_MATCH_LIMIT = 20  # 한 번 조회할 최근 경기 수
 MAX_MATCH_LIMIT = 100     # 넥슨 API가 한 번에 주는 상한

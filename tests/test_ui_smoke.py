@@ -896,20 +896,30 @@ def test_main_starts_update_check_after_show():
 
         def open_last_account(self):
             calls.append("마지막 계정")
-            raise _Stop()  # 이 뒤는 app.exec() — 실제로 들어가면 멈춘다
 
-    orig = app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY
-    app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
-    config.NOTICE_ACCEPTED = config.NOTICE_VERSION  # 안내는 이미 동의한 상태
-    # 키도 있는 상태 — 이 PC 엔 실제 키가 있어 지나갔지만 키 없는 CI 에선 키 창이 떴다(2026-10-02)
-    config.API_KEY = "test_key"
-    try:
-        app_main.main()  # 확인 호출이 빠지면 app.exec() — 모달 차단이 바로 실패시킨다
-    except _Stop:
-        pass
-    finally:
-        app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY = orig
-    assert calls == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
+    def run(open_last: bool) -> list[str]:
+        calls.clear()
+        orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
+                config.OPEN_LAST_ACCOUNT)
+        app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
+        config.NOTICE_ACCEPTED = config.NOTICE_VERSION  # 안내는 이미 동의한 상태
+        # 키도 있는 상태 — 이 PC 엔 실제 키가 있어 지나갔지만 키 없는 CI 에선 키 창이 떴다(2026-10-02)
+        config.API_KEY = "test_key"
+        config.OPEN_LAST_ACCOUNT = open_last
+        try:
+            app_main.main()
+            raise AssertionError("main 이 app.exec() 까지 안 갔다")
+        except ModalCalled as e:  # 끝의 app.exec() — 모달 차단이 멈춤 대신 여기서 끊는다
+            assert "QApplication.exec" in str(e), e
+        finally:
+            (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
+             config.OPEN_LAST_ACCOUNT) = orig
+        return list(calls)
+
+    # 기본은 검색 화면부터 — 마지막으로 본 계정을 저절로 열지 않는다(2026-10-04 사용자 결정)
+    assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
+    assert run(False) == ["창", "show", "새 버전 확인", "캐시 정리"], calls
+    assert run(True) == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
 
 
 def test_main_asks_notice_first_and_quits_on_decline():

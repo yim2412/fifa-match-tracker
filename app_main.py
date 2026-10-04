@@ -4445,7 +4445,8 @@ def main() -> int:
     win.show()
     win.start_update_check()
     win.start_cache_prune()
-    win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
+    if config.OPEN_LAST_ACCOUNT:
+        win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
     return app.exec()
 
 
