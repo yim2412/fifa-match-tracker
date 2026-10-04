@@ -414,6 +414,182 @@ def test_fetch_rank_page_refuses_empty_page():
         ranker._session.get, config.WEB_DATA = orig_get, orig_on
 
 
+# ── 랭킹 수집(1.1.1) — 행 전체 읽기 · 쪽 판정 · 응답 분류 · 동시 상한 ─────────────────────
+# 실제 목록 페이지(2026-10-04)의 마크업 그대로, 값은 전부 바꿨다(닉네임·프로필 번호·순위·구단가치·ELO·승무패).
+def _full_row(no, sn_, nick, color="", count=11, grade=3, best=(5, 7), cls="td rank_no"):
+    tc = (f'<span class="ico_rank"><img src="x.png" alt=""></span><span class="name">'
+          f'<span class="inner">\n{color} <small>({count}명)</small>\n</span></span>' if color else
+          '<span class="ico_rank"> </span><span class="name"> </span>')
+    sn_attr = f' data-sn="{sn_}"' if sn_ is not None else ""
+    return (f'<div class="tr">\n<span class="{cls}">{no:,}</span>\n'
+            f'<span class="td rank_coach"><span class="ico_rank"><img src="https://x/ico_rank{grade}_m.png"></span>'
+            f'<span class="coach_wrap"><span class="lv"><span class="gage" style="width:20%"></span>'
+            f'<span class="txt">1234</span></span>'
+            f'<span class="name profile_pointer"{sn_attr}>{nick}</span></span>'
+            f'<span class="price" alt="12,345,678,000" title="12,345,678,000">123억 4,567만</span></span>'
+            f'<span class="td rank_r_win_point">3210</span>'
+            f'<span class="td rank_before"><span class="top">51.5%</span>'
+            f'<span class="bottom">100 <em>|</em> 7 <em>|</em> 93</span></span>'
+            f'<span class="td team_color">{tc}</span>'
+            f'<span class="td formation">4-2-3-1</span>'
+            f'<span class="td rank_best"><span class="ico_rank"><img src="https://x/ico_rank{best[0]}_m.png"></span>'
+            f'<em></em><span class="ico_rank"><img src="https://x/ico_rank{best[1]}_m.png"></span></span>\n</div>')
+
+
+def _page(*rows):
+    return '<div class="tbody">' + "".join(rows) + "</div>"
+
+
+def test_parse_rank_rows_reads_every_field():
+    rows = ranker.parse_rank_rows(_page(_full_row(1234, 900001, "가나&amp;다", "테스트 FC", 9),
+                                        _full_row(1235, 900002, "라마", "")))
+    a, b = rows
+    assert (a.rank, a.profile_sn, a.nickname, a.level) == (1234, 900001, "가나&다", 1234), a
+    assert (a.team_value, a.team_value_text, a.elo) == (12345678000, "123억 4,567만", 3210.0), a
+    assert (a.win_rate, a.win, a.draw, a.lose) == ("51.5%", 100, 7, 93), a
+    assert (a.team_color, a.color_count, a.formation) == ("테스트 FC", 9, "4-2-3-1"), a
+    assert (a.grade, a.best_grade, a.prev_grade) == (3, 5, 7), a       # 지금 등급 ≠ 최고 등급 칸
+    assert (b.rank, b.team_color, b.color_count) == (1235, "", None), b  # 팀컬러 빈 행이 앞 행 값을 안 집는다
+    # 포장 규칙: 팀컬러가 없으면 구단가치 None
+    assert ranker.parse_rank_page(_page(_full_row(1, 1, "가", "X"), _full_row(2, 2, "나"))) == \
+        [("가", "X", 12345678000), ("나", "", None)]
+
+
+def _rows(*sns, start=1):
+    return ranker.parse_rank_rows(_page(*(_full_row(start + i, s, f"n{s}") for i, s in enumerate(sns))))
+
+
+def test_judge_page_table():
+    p1, p2 = _rows(1, 2), _rows(3, 4, start=3)
+    assert ranker.judge_page(1, p1, None) == "ok"
+    assert ranker.judge_page(2, p2, p1) == "ok"
+    assert ranker.judge_page(3, _rows(3, 4, start=3), p2) == "end"        # 앞 쪽 되풀이 = 목록 끝
+    for page, rows, prev, err in [(1, [], None, ranker.RankerError),       # 1쪽 0행은 실패로 센다
+                                  (7, [], p2, ranker.RankStructureError)]:  # 중간 쪽 0행
+        try:
+            ranker.judge_page(page, rows, prev)
+            raise AssertionError(f"{page}쪽 0행을 정상으로 읽었다")
+        except ranker.RankerError as e:
+            assert type(e) is err, (page, type(e))   # 1쪽 0행은 '구조 변경'이라 단정하지 않는다(시즌 첫날일 수 있다)
+
+
+def test_rank_structure_change_is_failure():
+    # class 이름이 바뀌거나 data-sn 이 빠지면 행은 있는데 필수 칸이 빈다 — '정상'·'끝'이면 반쪽 스냅숏이 쌓인다
+    renamed = ranker.parse_rank_rows(_page(_full_row(1, 1, "가"), _full_row(2, 2, "나")).replace(
+        "name profile_pointer", "name profile"))
+    no_sn = ranker.parse_rank_rows(_page(_full_row(1, 1, "가"), _full_row(2, None, "나")))
+    assert renamed and no_sn, "행 자체를 못 잘랐다 — 아래 검사가 공허하다"
+    for rows in (renamed, no_sn):
+        try:
+            ranker.judge_page(2, rows, _rows(9))
+            raise AssertionError("구조가 바뀐 쪽을 정상으로 읽었다")
+        except ranker.RankStructureError:
+            pass
+
+
+class _RankRes:
+    def __init__(self, text="", status=200, history=(), date="Sun, 04 Oct 2026 13:42:06 GMT"):
+        self.text, self.status_code, self.history = text, status, list(history)
+        self.headers = {"Date": date}
+
+    def raise_for_status(self):
+        import requests
+        if self.status_code >= 400:
+            raise requests.HTTPError(f"{self.status_code}")
+
+
+def test_fetch_rank_rows_classifies_responses():
+    import requests
+    orig_get, orig_on = ranker._session.get, config.WEB_DATA
+    config.WEB_DATA = True
+
+    def case(res_or_exc):
+        def get(*a, **k):
+            if isinstance(res_or_exc, Exception):
+                raise res_or_exc
+            return res_or_exc
+        ranker._session.get = get
+        try:
+            return ranker.fetch_rank_rows(1)
+        except ranker.RankerError as e:
+            return e
+    try:
+        ok = case(_RankRes(_page(_full_row(1, 1, "가"))))
+        assert isinstance(ok, ranker.RankPageResult) and len(ok.rows) == 1 and ok.date.startswith("Sun"), ok
+        empty = case(_RankRes("<div>바뀐 구조</div>"))
+        assert isinstance(empty, ranker.RankPageResult) and empty.rows == [], empty   # 0행 판정은 judge_page
+        for res, kind in [(_RankRes(status=403), ranker.RankBlocked), (_RankRes(status=429), ranker.RankBlocked),
+                          (_RankRes('<script src="/cdn-cgi/challenge-platform/x"></script>'), ranker.RankBlocked),
+                          (requests.ConnectionError("x"), ranker.RankOffline),
+                          (_RankRes(status=500), ranker.RankerError),
+                          (_RankRes(_page(_full_row(1, 1, "가")), history=[object()]), ranker.RankerError),
+                          (_RankRes('<div class="fc_logo_inspection">점검 진행 중</div>'), ranker.RankerError)]:
+            got = case(res)
+            assert type(got) is kind, (res, got)          # 하위 종류가 섞이면 차단·연결 안 됨 판정이 틀어진다
+    finally:
+        ranker._session.get, config.WEB_DATA = orig_get, orig_on
+
+
+def test_web_get_caps_concurrency():
+    import threading
+    import time as _t
+    now = peak = 0
+    lock = threading.Lock()
+
+    class _S:
+        def get(self, url, **kw):
+            nonlocal now, peak
+            with lock:
+                now += 1
+                peak = max(peak, now)
+            _t.sleep(0.05)
+            with lock:
+                now -= 1
+            return url
+    ts = [threading.Thread(target=ranker.web_get, args=(_S(), "u")) for _ in range(20)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert peak == config.RANK_MAX_CONCURRENT, peak     # 20개를 한꺼번에 불러도 8 — 상한이 없으면 20
+
+
+def test_save_env_atomic_and_retries():
+    import shutil
+    import tempfile
+    orig_path, orig_replace, orig_retry = config.ENV_PATH, os.replace, config.ENV_WRITE_RETRY
+    tmp = Path(tempfile.mkdtemp())
+    config.ENV_PATH = tmp / ".env"
+    config.ENV_WRITE_RETRY = (3, 0)
+    calls = []
+
+    def flaky(src, dst):
+        calls.append(1)
+        if len(calls) <= fails:
+            raise PermissionError("다른 실행본이 열고 있음")
+        orig_replace(src, dst)
+    try:
+        config.ENV_PATH.write_text("KEEP=한글값\nFIFA_X=0\n", encoding="utf-8")
+        os.replace, fails = flaky, 2
+        config._save_env("FIFA_X", "1")
+        assert len(calls) == 3, calls                                     # 두 번 막혔다 세 번째에 바뀜
+        assert config.ENV_PATH.read_text(encoding="utf-8").splitlines() == ["KEEP=한글값", "FIFA_X=1"]
+        calls.clear()
+        fails = 99
+        try:
+            config._save_env("FIFA_X", "2")
+            raise AssertionError("끝내 못 바꿨는데 조용히 넘어갔다")
+        except PermissionError:
+            pass
+        assert len(calls) == 4, calls                                     # 처음 + 다시 3번
+        assert "FIFA_X=1" in config.ENV_PATH.read_text(encoding="utf-8")  # 실패해도 원래 파일은 그대로
+        assert list(tmp.iterdir()) == [config.ENV_PATH], list(tmp.iterdir())  # 임시 파일이 안 남는다
+    finally:
+        os.replace, config.ENV_PATH, config.ENV_WRITE_RETRY = orig_replace, orig_path, orig_retry
+        os.environ.pop("FIFA_X", None)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ── 변이 전수 측정 보강(2026-10-02, docs/mutation) ─────────────────────────
 # 판정을 뒤집어도 초록이던 줄들. 기대값은 전부 손으로 셌다 — 코드로 다시 계산하면 같은 실수를 같이 한다.
 def _m(day, result, opp="가", gf=1, ga=0, hour=12, **kw):
@@ -777,6 +953,7 @@ def test_week_boundary_is_refresh_weekday_midnight():
 # ── 랭킹 한 사람 읽기·구단가치 표기(변이 4순위) ─────────────────────────────────────────
 _RANK_HTML = ('<div class="tr"><span class="td rank_no">4,500</span>'
               '<span class="lv"><span class="txt">3823</span></span>'
+              '<span class="name profile_pointer" data-sn="777001">닉</span>'
               '<span class="price" alt="9,356,900,000">93억 5,690만</span>'
               '<span class="td rank_r_win_point">3398.92</span>'
               '<span class="top">41.6%</span><span class="bottom">959<em>|</em>395<em>|</em>949</span>'
@@ -798,6 +975,7 @@ def test_fetch_manager_rank_reads_every_field():
     assert (i.rank, i.level, i.team_value, i.team_value_text, i.elo) == (4500, 3823, 9356900000, "93억 5,690만", 3398.92)
     assert (i.win_rate, i.win, i.draw, i.lose) == ("41.6%", 959, 395, 949)
     assert i.team_color == "맨체스터 유나이티드" and i.ranked, i.team_color      # 겹친 공백 정리
+    assert i.profile_sn == 777001, i.profile_sn
     out = _rank_from('<div>순위 내 포함되어 있지 않습니다</div>')
     assert not out.ranked and out.team_color == "" and out.team_value == 0       # 랭킹 밖은 빈 값
     try:

@@ -69,6 +69,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 - **넥슨 웹(데이터센터) 요청은 전부 `config.WEB_DATA` 스위치 뒤에** — `ranker`·`playerinfo`·`seasons`
   의 fetch 함수 첫 줄에서 막는다. 새 스크래핑 함수를 만들면 같은 검사를 넣고
   `test_web_data_switch_blocks_every_request` 의 `_web_calls()` 에 한 줄 추가한다(안 넣으면 그 검사가 비어 있다).
+  **요청은 세션을 직접 부르지 말고 `ranker.web_get(session, url, …)`** — 한 프로세스 동시 요청 상한
+  (`config.RANK_MAX_CONCURRENT` = 8)이 거기 있다. 수집(1.1.1)·팀컬러·검색이 겹쳐도 넥슨에 8개를 넘겨 보내지 않게.
+  `_web_calls()` 에 넣으면 `test_every_web_request_goes_through_the_concurrency_cap` 이 우회를 잡는다.
   UA 는 `config.WEB_USER_AGENT`(앱 이름) — 2026-10-02 실측으로 브라우저 UA 와 응답이 같았고, **빈 UA 만** playerinfo 가 500.
   CDN 이미지(`images.py`)는 정적 파일이라 스위치 밖.
 - **엔드포인트 경로 상수는 `nexon_api.py` 상단에.** 여기서 특히 중요한 이유는

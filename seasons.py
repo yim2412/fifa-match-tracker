@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 import config
-import ranker  # 세션(연결 재사용·UA 헤더)을 그대로 쓴다
+import ranker  # 세션(연결 재사용·UA 헤더)과 동시 상한(web_get)을 그대로 쓴다
 
 SEASON_LIST_URL = "https://fconline.nexon.com/datacenter/rank"
 
@@ -67,8 +67,8 @@ def fetch_seasons(timeout: int = 10) -> list[Season]:
     if not config.WEB_DATA:
         raise SeasonError(config.WEB_DATA_OFF_MSG)
     try:
-        res = ranker._session.get(SEASON_LIST_URL, params={"rt": "manager"},
-                                  timeout=timeout)
+        res = ranker.web_get(ranker._session, SEASON_LIST_URL, params={"rt": "manager"},
+                             timeout=timeout)
         res.raise_for_status()
     except Exception as e:  # requests 예외 전부 — 호출부는 SeasonError 만 안다
         raise SeasonError(f"시즌 목록 조회 실패: {e}") from e

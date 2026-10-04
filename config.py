@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -120,15 +121,40 @@ LATEST_RELEASE_API = "https://api.github.com/repos/yim2412/fifa-match-tracker/re
 RELEASES_URL = f"{REPO_URL}/releases/latest"
 
 
+# 넥슨 홈페이지 요청 — 한 프로세스 안 동시 요청 상한(ranker.web_get 의 세마포어). 수집·팀컬러·검색·선수 카드가 같이 쓴다.
+RANK_MAX_CONCURRENT = 8
+RANK_PAGE_TIMEOUT_S = 10
+
+# .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
+ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)
+
+
 def _save_env(var: str, value: str) -> None:
-    """.env 의 그 한 줄만 바꾼다(다른 줄은 그대로) — 이 프로세스의 환경 변수도 같이."""
+    """.env 의 그 한 줄만 바꾼다(다른 줄은 그대로) — 이 프로세스의 환경 변수도 같이.
+
+    임시 파일에 다 쓴 뒤 os.replace 로 바꾼다 — 쓰는 도중 죽거나 다른 실행본이 읽으면
+    반쯤 쓴 .env(키가 사라진)를 보게 된다. 끝내 못 바꾸면 OSError 를 그대로 올린다(호출부가 잡는다).
+    """
     lines = []
     if ENV_PATH.exists():
         lines = ENV_PATH.read_text(encoding="utf-8-sig", errors="replace").splitlines()
     lines = [ln for ln in lines if not ln.strip().startswith(f"{var}=")]
     lines.append(f"{var}={value}")
     ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ENV_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp = ENV_PATH.with_name(f"{ENV_PATH.name}.{os.getpid()}.tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tries, gap = ENV_WRITE_RETRY
+    try:
+        for i in range(tries + 1):
+            try:
+                os.replace(tmp, ENV_PATH)
+                break
+            except PermissionError:
+                if i == tries:
+                    raise
+                time.sleep(gap)
+    finally:
+        tmp.unlink(missing_ok=True)
     os.environ[var] = value
 
 

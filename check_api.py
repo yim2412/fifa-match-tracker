@@ -147,6 +147,14 @@ def main() -> int:
         print(f"[WARN] 데이터센터 랭킹 조회 실패(전적엔 영향 없음): {e}")
 
     try:
+        import ranker
+        page = ranker.fetch_rank_rows(1)
+        verdict = ranker.judge_page(1, page.rows, None)  # 구조가 바뀌었으면 여기서 예외
+        print(f"[OK]   랭킹 목록 1쪽(수집용): {len(page.rows)}행 · 판정 {verdict} · Date {page.date}")
+    except Exception as e:
+        print(f"[WARN] 랭킹 목록 수집 읽기 실패(수집만 영향): {type(e).__name__}: {e}")
+
+    try:
         import playerinfo
         if first_sp is not None:
             pinfo = playerinfo.fetch_player_info(first_sp)

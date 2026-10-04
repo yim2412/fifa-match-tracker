@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import requests
 
 import config
+import ranker  # web_get — 넥슨 홈페이지 동시 요청 상한을 같이 쓴다
 
 PLAYER_INFO_URL = "https://m.fconline.nexon.com/datacenter/playerinfo"
 # PC 데이터센터 — 강화/적응도/팀컬러(소속·강화·관계 3종)를 반영한 능력치를
@@ -262,7 +263,7 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
     if not config.WEB_DATA:
         raise PlayerInfoError(config.WEB_DATA_OFF_MSG)
     try:
-        res = _session.post(PLAYER_ABILITY_URL, data=data, timeout=timeout)
+        res = ranker.web_get(_session, PLAYER_ABILITY_URL, "post", data=data, timeout=timeout)
         res.raise_for_status()
     except requests.RequestException as e:
         raise PlayerInfoError(f"능력치 시뮬레이터 조회 실패: {e}") from e
@@ -300,7 +301,7 @@ def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     if not config.WEB_DATA:
         raise PlayerInfoError(config.WEB_DATA_OFF_MSG)
     try:
-        res = _session.get(PLAYER_INFO_URL, params={"spid": sp_id}, timeout=timeout)
+        res = ranker.web_get(_session, PLAYER_INFO_URL, params={"spid": sp_id}, timeout=timeout)
         res.raise_for_status()
     except requests.RequestException as e:
         raise PlayerInfoError(f"선수 정보 조회 실패: {e}") from e

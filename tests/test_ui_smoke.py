@@ -1460,6 +1460,7 @@ def _web_calls():
     return [
         ("ranker", lambda: ranker.fetch_manager_rank("닉"), ranker.RankerError),
         ("rank page", lambda: ranker.fetch_rank_page(1), ranker.RankerError),
+        ("rank rows", lambda: ranker.fetch_rank_rows(1), ranker.RankerError),
         ("playerinfo", lambda: playerinfo.fetch_player_info(1), playerinfo.PlayerInfoError),
         ("ability", lambda: playerinfo.fetch_player_ability(1), playerinfo.PlayerInfoError),
         ("seasons", lambda: sn.fetch_seasons(), sn.SeasonError),
@@ -1494,6 +1495,30 @@ def test_web_data_switch_blocks_every_request():
                 assert str(e) == config.WEB_DATA_OFF_MSG, (name, e)
     finally:
         requests.Session.request, config.WEB_DATA = orig_req, orig_on
+
+
+def test_every_web_request_goes_through_the_concurrency_cap():
+    # 세션을 직접 부르면 전역 동시 상한(RANK_MAX_CONCURRENT) 밖에서 요청이 나간다 — 스위치 테스트로는 안 보인다
+    routed = []
+    orig_get, orig_on, orig_req = ranker.web_get, config.WEB_DATA, requests.Session.request
+
+    def spy(session, url, method="get", **kw):
+        routed.append(url)
+        raise _Sent()
+
+    def direct(self, *a, **k):
+        raise AssertionError("web_get 을 거치지 않은 요청")
+    ranker.web_get, config.WEB_DATA, requests.Session.request = spy, True, direct
+    try:
+        for name, call, err in _web_calls():
+            before = len(routed)
+            try:
+                call()
+            except (_Sent, err):
+                pass
+            assert len(routed) == before + 1, f"{name}: web_get 을 안 거쳤다"
+    finally:
+        ranker.web_get, config.WEB_DATA, requests.Session.request = orig_get, orig_on, orig_req
 
 
 def test_web_requests_name_the_app():
