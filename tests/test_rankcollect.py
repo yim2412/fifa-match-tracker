@@ -477,6 +477,209 @@ def test_queries_use_indexes():
         c.close()
 
 
+# ── 3단계: 앱 연결 ─────────────────────────────────────────────────────────
+
+def _snap(env, when, people=40, color_of=None):
+    c = env.conn()
+    rows = [_row(r, color=(color_of or {}).get(r, "")) for r in range(1, people + 1)]
+    sid = rc.save_snapshot(c, rows, when)
+    c.close()
+    return sid
+
+
+def test_snapshot_colors_from_fresh_snapshot_only():
+    with Env() as env:
+        assert rc.snapshot_colors({"n1"}, env.db, NOW) is None, "스냅숏이 없는데 뭔가 줬다"
+        assert not env.db.exists(), "없는 rank.db 를 만들었다(수집을 안 켠 사람에게 빈 파일)"
+        _snap(env, NOW - timedelta(hours=25), color_of={1: "옛날"})
+        assert rc.snapshot_colors({"n1"}, env.db, NOW) is None, "간격(24h) 지난 스냅숏을 썼다"
+        _snap(env, NOW - timedelta(hours=2), color_of={1: "네덜란드"})
+        colors, taken = rc.snapshot_colors({"n1", "n2", "밖"}, env.db, NOW)
+        assert taken == NOW - timedelta(hours=2), taken
+        # 팀컬러 없는 행은 구단가치 None · 목록에 없으면 '랭킹 밖'
+        assert colors == {"n1": ("네덜란드", 1000), "n2": ("", None), "밖": ("", None)}, colors
+        c = env.conn()
+        rc.prune_raw(c, NOW + timedelta(days=30))   # 원본이 지워진 스냅숏은 못 쓴다
+        c.close()
+        assert rc.fresh_snapshot(env.db, NOW) is None
+
+
+def test_list_read_is_shared_waiter_uses_collect_snapshot():
+    # 수집이 읽는 동안 팀컬러가 오면 기다렸다 그 스냅숏을 쓴다 — 같은 500쪽을 두 번 읽지 않는다
+    with Env() as env:
+        world = World(200, sleep=0.02)
+        res = {}
+        t = threading.Thread(target=lambda: res.setdefault(
+            "out", rc.collect(db_path=env.db, fetch=world, pages=10, now_fn=lambda: NOW)))
+        t.start()
+        for _ in range(100):
+            if world.calls:
+                break
+            time.sleep(0.01)
+        waited = []
+        got, w = rc.acquire_list_read(on_wait=lambda: waited.append(True))
+        try:
+            assert got and w and waited == [True], (got, w, waited)
+            assert res["out"].kind == "ok", "차례를 얻었는데 수집이 아직 안 끝났다"
+            assert rc.snapshot_colors({"n1"}, env.db, NOW) is not None
+        finally:
+            rc.release_list_read()
+        t.join(5)
+        assert len(world.calls) == 10, world.calls
+
+
+def test_collect_after_waiting_skips_when_snapshot_appeared():
+    with Env() as env:
+        got, _ = rc.acquire_list_read()
+        assert got
+        res = {}
+        t = threading.Thread(target=lambda: res.setdefault(
+            "out", rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW)))
+        t.start()
+        time.sleep(0.3)
+        assert t.is_alive(), "목록 읽기 차례를 기다리지 않았다"
+        _snap(env, NOW)   # 기다리는 사이 팀컬러 쪽이 스냅숏을 남겼다
+        rc.release_list_read()
+        t.join(5)
+        assert res["out"].kind == "fresh", res["out"]
+        c = env.conn()
+        assert _count(c, "snapshots") == 1
+        c.close()
+        # 대조군 — 기다리지 않았으면(차례가 비어 있으면) 간격과 무관하게 그대로 읽는다(예약은 부르는 쪽 몫)
+        assert rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW).kind == "ok"
+
+
+def test_collect_waiting_can_be_cancelled():
+    with Env() as env:
+        got, _ = rc.acquire_list_read()
+        try:
+            ev = threading.Event()
+            threading.Timer(0.2, ev.set).start()
+            out = rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW, cancel=ev)
+            assert out.kind == "cancelled", out
+        finally:
+            rc.release_list_read()
+
+
+def _pages(world, n):
+    return {p: world(p) for p in range(1, n + 1)}
+
+
+def test_save_from_pages_only_when_collect_on_and_due():
+    with Env(collect="0") as env:
+        pages = _pages(World(40), 2)
+        assert rc.save_from_pages(pages, NOW, pages=2, db_path=env.db, now_fn=lambda: NOW) is None
+        assert not env.db.exists(), "수집이 꺼졌는데 rank.db 를 만들었다"
+        env.write(collect="1")
+        out = rc.save_from_pages(pages, NOW, pages=2, db_path=env.db, now_fn=lambda: NOW)
+        assert out is not None and (out.kind, out.rows) == ("ok", 40), out
+        c = env.conn()
+        assert rc.get_state(c)["last_success_at"] == NOW.isoformat()
+        assert _count(c, "collect_lock") == 0
+        c.close()
+        # 간격 안이면 또 저장하지 않는다
+        assert rc.save_from_pages(pages, NOW, pages=2, db_path=env.db, now_fn=lambda: NOW) is None
+        # 구조 변경은 실패로 센다(저장 안 함)
+        later = NOW + timedelta(days=2)
+        bad = _pages(World(40), 2)
+        bad[2].rows[0].profile_sn = None
+        out = rc.save_from_pages(bad, later, pages=2, db_path=env.db, now_fn=lambda: later)
+        assert out.kind == "failed", out
+        c = env.conn()
+        assert _count(c, "snapshots") == 1 and rc.get_state(c)["fail_count"] == "1"
+        c.close()
+
+
+def test_set_enabled_at_writes_env_and_rank_db_copy():
+    with Env(collect="0") as env:
+        c = env.conn()
+        rc.set_enabled(c, False, "blocked")       # D6 로 꺼진 사본 — .env 만 켜면 계속 disabled
+        c.close()
+        rc.set_enabled_at(True, db_path=env.db)
+        assert config.RANK_COLLECT and "FIFA_RANK_COLLECT=1" in config.ENV_PATH.read_text(encoding="utf-8")
+        c = env.conn()
+        assert rc.get_state(c)["enabled"] == "1"
+        c.close()
+        out = rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW)
+        assert out.kind == "ok", out
+        rc.set_enabled_at(False, "user", db_path=env.db)
+        c = env.conn()
+        assert rc.get_state(c)["enabled"] == "0" and not config.RANK_COLLECT
+        c.close()
+    with Env(collect="0") as env:
+        rc.set_enabled_at(False, "user", db_path=env.db)
+        assert not env.db.exists(), "끄기만 했는데 rank.db 를 만들었다"
+
+
+def test_web_data_off_turns_collect_off():
+    with Env() as env:
+        config.read_env_switches()
+        assert config.RANK_COLLECT
+        config.set_web_data(False)
+        text = config.ENV_PATH.read_text(encoding="utf-8")
+        assert "FIFA_RANK_COLLECT=0" in text and not config.RANK_COLLECT, text
+        config.set_web_data(True)   # 웹 데이터를 다시 켜도 수집은 꺼진 채(다시 묻는다)
+        assert config.read_env_switches() == (True, False)
+
+
+def test_delete_db_and_pending_marker():
+    with Env() as env:
+        _snap(env, NOW)
+        assert env.db.exists()
+        assert rc.delete_db(env.db) is True
+        assert not any(env.dir.glob("rank.db*")), list(env.dir.iterdir())
+        # 다른 실행본이 열고 있다 — 지우지 못하면 표시를 남기고 다음에 켤 때 지운다
+        _snap(env, NOW)
+        orig = Path.unlink
+
+        def busy(self, missing_ok=False):
+            if self.name == "rank.db":
+                raise PermissionError("열려 있음")
+            return orig(self, missing_ok=missing_ok)
+        Path.unlink = busy
+        try:
+            assert rc.delete_db(env.db) is False
+        finally:
+            Path.unlink = orig
+        assert env.db.exists() and (env.dir / "rank.db.delete-pending").exists()
+        assert rc.delete_pending(env.db) is True
+        assert not env.db.exists() and not (env.dir / "rank.db.delete-pending").exists()
+        assert rc.delete_pending(env.db) is False   # 표시가 없으면 아무것도 안 한다
+        _snap(env, NOW)
+        assert rc.delete_pending(env.db) is False and env.db.exists(), "표시 없이 지웠다"
+
+
+def test_read_status_does_not_create_db():
+    with Env() as env:
+        assert rc.read_status(env.db) == {} and not env.db.exists()
+        _snap(env, NOW, people=30)
+        st = rc.read_status(env.db)
+        assert (st["snapshots"], st["last_rows"], st["last_taken_at"]) == (1, 30, NOW.isoformat()), st
+
+
+def test_elo_history_store():
+    import store
+    d = Path(tempfile.mkdtemp())
+    try:
+        c = store.open_db(d / "f.db")
+        assert store.save_elo(c, "o1", 1500.0, 30, profile_sn=9, nickname="가", taken_at=NOW)
+        assert not store.save_elo(c, "o1", 1500.0, 30, taken_at=NOW + timedelta(hours=1)), "같은 값을 또 적었다"
+        assert store.save_elo(c, "o1", 1510.0, 28, taken_at=NOW + timedelta(hours=2))
+        assert store.save_elo(c, "o2", 1400.0, None, taken_at=NOW)
+        h = store.elo_history(c, "o1")
+        assert [(r["elo"], r["rank"], r["source"]) for r in h] == [(1500.0, 30, "search"), (1510.0, 28, "search")], h
+        assert h[0]["profile_sn"] == 9 and h[0]["nickname"] == "가"
+        assert store.clear_elo(c, keep_ouid="o1") == 1 and len(store.elo_history(c, "o1")) == 2
+        assert store.clear_elo(c) == 2 and store.elo_history(c, "o1") == []
+        plan = " | ".join(r[3] for r in c.execute(
+            "EXPLAIN QUERY PLAN SELECT elo, rank FROM elo_history WHERE ouid = ? ORDER BY taken_at DESC LIMIT 1",
+            ("o1",)))
+        assert "TEMP B-TREE" not in plan and "SCAN" not in plan, plan
+        c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

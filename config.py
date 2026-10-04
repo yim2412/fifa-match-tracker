@@ -104,7 +104,7 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 1
+NOTICE_VERSION = 2  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -131,6 +131,7 @@ RANK_COLLECT_VAR = "FIFA_RANK_COLLECT"
 RANK_COLLECT = os.getenv(RANK_COLLECT_VAR, "0").strip() == "1"
 RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
 RANK_COLLECT_INTERVAL_H = 24
+RANK_CHECK_EVERY_MIN = 60           # 앱이 켜져 있는 동안 간격이 지났는지 보는 주기
 RANK_COLLECT_WORKERS = 6            # RANK_MAX_CONCURRENT 안에서 — 수집 중 검색이 굶지 않게 2칸을 남긴다
 RANK_RETRY_BACKOFF_H = (1, 2, 4, 8, 16, 24)   # 실패 회차마다 다음 대기. 성공하면 처음으로
 RANK_BLOCK_ROUNDS = 3               # 403·429·Cloudflare 가 서로 다른 회차에 이만큼 이어지면 수집을 스스로 끈다(D6)
@@ -193,6 +194,9 @@ def set_web_data(on: bool) -> None:
     global WEB_DATA
     _save_env(WEB_DATA_VAR, "1" if on else "0")
     WEB_DATA = on
+    if not on and RANK_COLLECT:
+        # 웹 데이터를 끄면 수집도 끈다 — 웹 데이터를 다시 켜도 수집은 따로 다시 고르게(조용히 되살아나지 않게)
+        set_rank_collect(False)
 
 
 def set_rank_collect(on: bool) -> None:

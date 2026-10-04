@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # offscreen 은 글꼴 폴더를 안 주면 장식체를 집어 글자 폭이 달라지고, 그러면 1280x720
@@ -36,7 +37,9 @@ import config  # noqa: E402
 import crashlog  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
+import notice  # noqa: E402
 import playerinfo  # noqa: E402
+import rankcollect  # noqa: E402
 import ranker  # noqa: E402
 import requests  # noqa: E402
 import seasons as sn  # noqa: E402
@@ -107,6 +110,10 @@ config.SETTINGS_PATH = pathlib.Path(tempfile.mkdtemp()) / "settings.ini"
 # (2026-10-02 CI 첫 실행: 시즌표가 없는 CI 에서만 시즌 테스트 2개가 실패). 픽스처 4경기(2026-01-01~03)가
 # 통째로 들어가는 끝난 시즌 하나 — 진행 중 시즌이 없어 기본은 '전체'다(이 PC 실제 DB 일 때와 같다).
 config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "ui.db"
+# 랭킹 수집(rank.db)·스위치(.env)도 임시로 — 팀컬러 목록 읽기가 스냅숏을 찾고 .env 를 다시 읽는다(1.1.1).
+# 실제 .env 를 읽으면 config.WEB_DATA 가 이 PC 값으로 바뀐다.
+config.RANK_DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "rank.db"
+config.ENV_PATH = config.RANK_DB_PATH.with_name(".env")
 _seed = store.open_db(config.DB_PATH)
 try:
     from datetime import date as _date
@@ -926,6 +933,9 @@ def test_main_starts_update_check_after_show():
         def start_cache_prune(self):
             calls.append("캐시 정리")
 
+        def start_rank_collect(self):
+            calls.append("랭킹 수집")
+
         def open_last_account(self):
             calls.append("마지막 계정")
 
@@ -954,8 +964,8 @@ def test_main_starts_update_check_after_show():
     # 기본은 검색 화면부터 — 마지막으로 본 계정을 저절로 열지 않는다(2026-10-04 사용자 결정)
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
-    assert run(False) == ["창", "show", "새 버전 확인", "캐시 정리", "미리 읽기"], calls
-    assert run(True) == ["창", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
+    assert run(False) == ["창", "show", "새 버전 확인", "캐시 정리", "랭킹 수집", "미리 읽기"], calls
+    assert run(True) == ["창", "show", "새 버전 확인", "캐시 정리", "랭킹 수집", "마지막 계정"], calls
 
 
 def test_main_freezes_gc_after_event_loop():
@@ -1553,16 +1563,19 @@ def test_teamcolor_off_shows_reason_without_fetching():
 
 
 def _run_rank_list(wanted, pages):
-    """RankListLoader.run 을 스레드 없이 돌린다 — pages: {쪽: 행들 | None(실패)}."""
-    orig = ranker.fetch_rank_page, ranker.RANK_PAGES
+    """RankListLoader.run 을 스레드 없이 돌린다 — pages: {쪽: [(닉, 팀컬러, 구단가치)] | None(실패)}."""
+    orig = ranker.fetch_rank_rows, ranker.RANK_PAGES
 
     def fake(page, timeout=10):
         rows = pages[page]
         if rows is None:
             raise ranker.RankerError("못 읽음")
-        return rows
+        return ranker.RankPageResult(page, [
+            ranker.RankRow(rank=page * 100 + i, profile_sn=page * 100 + i, nickname=n, team_color=c,
+                           team_value=v if v is not None else 7)
+            for i, (n, c, v) in enumerate(rows)], "")
 
-    ranker.fetch_rank_page, ranker.RANK_PAGES = fake, len(pages)
+    ranker.fetch_rank_rows, ranker.RANK_PAGES = fake, len(pages)
     got, done = {}, []
     try:
         ld = app_main.RankListLoader(set(wanted))
@@ -1570,7 +1583,7 @@ def _run_rank_list(wanted, pages):
         ld.finished_all.connect(lambda: done.append(True))
         ld.run()
     finally:
-        ranker.fetch_rank_page, ranker.RANK_PAGES = orig
+        ranker.fetch_rank_rows, ranker.RANK_PAGES = orig
     return ld, got, done
 
 
@@ -1593,7 +1606,7 @@ def test_teamcolor_picks_rank_list_only_when_cheaper():
         def __init__(self, arg):
             made.append((self.kind, arg))
             self.total = 0
-            self.loaded_many = self.progress = self.finished_all = self
+            self.loaded_many = self.progress = self.finished_all = self.waiting = self
 
         def connect(self, *_):
             pass
@@ -1629,7 +1642,14 @@ def test_teamcolor_picks_rank_list_only_when_cheaper():
             ranker.RANK_PAGES = pages
             app_main.MainWindow._on_fetch_team_colors(_win)
             assert [(k, set(a)) for k, a in made] == [want], (pages, made)
+        # 하루 안의 랭킹 스냅숏이 있으면 상대가 적어도 목록 쪽(스냅숏에서 읽는다 — 요청 0)
+        _rank_snapshot(datetime.now() - timedelta(hours=1), {})
+        made.clear()
+        _win._team_colors.clear()
+        app_main.MainWindow._on_fetch_team_colors(_win)
+        assert [(k, set(a)) for k, a in made] == [("목록", set(opps))], made
     finally:
+        rankcollect.delete_db()
         (config.WEB_DATA, config.DB_PATH, app_main.TeamColorLoader, app_main.RankListLoader,
          ranker.RANK_PAGES) = saved[:5]
         _win._team_colors.clear()
@@ -1640,6 +1660,18 @@ def test_teamcolor_picks_rank_list_only_when_cheaper():
         for b in _win._teamcolor_fetch_btns:
             b.setEnabled(True)
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _rank_snapshot(when, colors: dict, people: int = 30):
+    """config.RANK_DB_PATH 에 스냅숏 하나 — colors: {닉네임: 팀컬러}. 행 닉네임은 colors 의 키 + n1.."""
+    names = list(colors) + [f"n{i}" for i in range(1, people - len(colors) + 1)]
+    rows = [ranker.RankRow(rank=i, profile_sn=700000 + i, nickname=n, team_color=colors.get(n, ""),
+                           team_value=5000 + i, elo=3000.0 - i) for i, n in enumerate(names, start=1)]
+    c = rankcollect.open_rank_db()
+    try:
+        return rankcollect.save_snapshot(c, rows, when)
+    finally:
+        c.close()
 
 
 class _TeamColorEnv:
@@ -1809,7 +1841,9 @@ def test_web_data_off_and_notice_due_on_fresh_or_old_env():
     # 기본값은 코드에서 바로 재야 한다 — v0.3.0 의 .env(웹 데이터 줄 없음)로 새 프로세스를 띄운다
     import subprocess
     for env_text, want in [("", "False True"), ("NEXON_API_KEY=x\n", "False True"),
-                           ("FIFA_WEB_DATA=1\nFIFA_NOTICE=1\n", "True False"),
+                           (f"FIFA_WEB_DATA=1\nFIFA_NOTICE={config.NOTICE_VERSION}\n", "True False"),
+                           # 1.0.x 에서 동의한 사람 — 1.1.1 은 랭킹 수집·ELO 기록 안내가 늘어 다시 묻는다
+                           ("FIFA_WEB_DATA=1\nFIFA_NOTICE=1\n", "True True"),
                            ("FIFA_NOTICE=junk\n", "False True")]:
         d = tempfile.mkdtemp()
         try:
@@ -1839,7 +1873,7 @@ def test_notice_dialog_web_off_by_default_and_saves_choice():
             dlg.btn_ok.click()
             assert dlg.result() == app_main.QDialog.DialogCode.Accepted
             lines = env.read_text(encoding="utf-8").splitlines()
-            assert f"FIFA_WEB_DATA={int(tick_web)}" in lines and "FIFA_NOTICE=1" in lines, lines
+            assert f"FIFA_WEB_DATA={int(tick_web)}" in lines and f"FIFA_NOTICE={config.NOTICE_VERSION}" in lines, lines
             assert config.WEB_DATA is tick_web and not config.notice_needed()
 
 
@@ -2514,9 +2548,10 @@ def test_search_hands_current_account_to_loader():
     got = []
 
     class _Rec:
-        def __init__(self, api, nick, mt, prev=None, prefetch=None):
+        def __init__(self, api, nick, mt, prev=None, prefetch=None, record_elo=False):
             got.append(prev)
             pf.append(prefetch)
+            elo.append(record_elo)
             self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
             self.rank_ready = self
 
@@ -2529,7 +2564,7 @@ def test_search_hands_current_account_to_loader():
         def isRunning(self):
             return False
 
-    pf = []
+    pf, elo = [], []
     orig = app_main.MatchLoader, _win._loader
     app_main.MatchLoader, _win._loader = _Rec, None
     _win._prefetch = "켤 때 미리 읽은 것"
@@ -2544,6 +2579,7 @@ def test_search_hands_current_account_to_loader():
     assert got[0][1] is _win._matches_all and got[0][2] is _win._details_all, "지금 가진 목록을 넘기지 않았다"
     # 미리 읽은 것은 첫 검색에 한 번만 — 두 번째 검색까지 들고 있으면 옛 스냅숏을 다시 바탕으로 쓴다
     assert pf == ["켤 때 미리 읽은 것", None], pf
+    assert elo == [True, True], "메인 검색이 ELO 를 안 적는다"
 
 
 def test_start_prefetch_reads_last_searched_account():
@@ -2769,6 +2805,345 @@ def test_search_uses_the_box_that_has_text():
         _win.ed_search.setText(saved[2])
         for e, t in zip(_win._nick_edits, saved[3]):
             e.setText(t)
+
+
+# ── 1.1.1 3단계: 랭킹 수집 앱 연결 ──────────────────────────────────────────
+
+class _RankSwitches:
+    """.env(임시)·안내 동의·웹 데이터·수집 스위치를 잡았다 되돌린다. rank.db 는 끝나면 지운다."""
+
+    def __init__(self, web=True, collect=True):
+        self.web, self.collect = web, collect
+
+    def __enter__(self):
+        self._saved = (config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED,
+                       {v: os.environ.get(v) for v in (config.WEB_DATA_VAR, config.RANK_COLLECT_VAR)})
+        self.write(self.web, self.collect)
+        config.NOTICE_ACCEPTED = config.NOTICE_VERSION
+        return self
+
+    def write(self, web, collect):
+        config.ENV_PATH.write_text(f"{config.WEB_DATA_VAR}={int(web)}\n{config.RANK_COLLECT_VAR}={int(collect)}\n",
+                                   encoding="utf-8")
+        config.read_env_switches()
+
+    def __exit__(self, *exc):
+        config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED, env = self._saved
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        config.ENV_PATH.unlink(missing_ok=True)
+        rankcollect.delete_db()
+
+
+def test_rank_list_uses_fresh_snapshot_without_requests():
+    def no_request(*a, **k):
+        raise AssertionError("하루 안의 스냅숏이 있는데 넥슨에 요청했다")
+
+    with _RankSwitches(), _TeamColorEnv():
+        taken = (datetime.now() - timedelta(hours=3)).replace(microsecond=0)
+        _rank_snapshot(taken, {"가": "네덜란드", "나": ""})
+        orig = ranker.fetch_rank_rows
+        ranker.fetch_rank_rows = no_request
+        got, done = {}, []
+        try:
+            ld = app_main.RankListLoader({"가", "나", "밖"})
+            ld.loaded_many.connect(got.update)
+            ld.finished_all.connect(lambda: done.append(True))
+            ld.run()
+        finally:
+            ranker.fetch_rank_rows = orig
+        # 팀컬러 없는 행은 구단가치도 None(팀컬러 표가 '팀가치 모름'으로) · 목록에 없으면 '랭킹 밖'
+        assert got == {"가": ("네덜란드", 5001), "나": ("", None), "밖": ("", None)}, got
+        assert done == [True] and ld.fetched_at == taken, (done, ld.fetched_at)
+        # 팀컬러 캐시의 유효기간은 스냅숏 시각부터 센다(지금 시각이면 7일이 최대 8일이 된다)
+        _win._teamcolor_loader, _win._teamcolor_pending = ld, ["가", "나"]
+        _win._team_colors.update({k: c for k, (c, _) in got.items()})
+        _win._team_values.update({k: v for k, (_, v) in got.items()})
+        _win._on_teamcolor_finished()
+        c = store.open_db(config.DB_PATH)
+        try:
+            when = {r["nickname"]: r["fetched_at"] for r in c.execute("SELECT nickname, fetched_at FROM team_colors")}
+        finally:
+            c.close()
+        assert when == {"가": taken.isoformat(), "나": taken.isoformat()}, when
+
+
+def test_rank_list_saves_snapshot_only_when_collect_on():
+    pages = {1: [("가", "네덜란드", 1), ("남", "프랑스", 2)], 2: [("나", "", None)]}
+    with _RankSwitches(collect=False) as sw:
+        ld, got, _ = _run_rank_list({"가"}, pages)
+        assert got["가"] == ("네덜란드", 1) and ld.saved_snapshot is None
+        assert not config.RANK_DB_PATH.exists(), "수집이 꺼졌는데 rank.db 를 만들었다"
+        sw.write(True, True)
+        ld, got, _ = _run_rank_list({"가"}, pages)
+        assert ld.saved_snapshot is not None and ld.saved_snapshot.kind == "ok", ld.saved_snapshot
+        assert rankcollect.read_status()["last_rows"] == 3
+        # 한 쪽이라도 못 읽었으면 스냅숏을 남기지 않는다(팀컬러는 읽은 만큼 쓴다)
+        rankcollect.delete_db()
+        pages[2] = None
+        ld, got, _ = _run_rank_list({"가"}, pages)
+        assert got == {"가": ("네덜란드", 1)} and ld.saved_snapshot is None
+        assert not rankcollect.read_status().get("snapshots"), "반쪽 목록을 스냅숏으로 남겼다"
+
+
+def test_rank_list_waits_for_collect_then_uses_its_snapshot():
+    def no_request(*a, **k):
+        raise AssertionError("수집이 읽는 중인데 같은 목록을 또 읽었다")
+
+    with _RankSwitches():
+        got, waited, done = {}, [], []
+        ld = app_main.RankListLoader({"가"})
+        ld.loaded_many.connect(got.update, Qt.ConnectionType.DirectConnection)
+        ld.waiting.connect(lambda: waited.append(True), Qt.ConnectionType.DirectConnection)
+        ld.finished_all.connect(lambda: done.append(True), Qt.ConnectionType.DirectConnection)
+        orig = ranker.fetch_rank_rows
+        ranker.fetch_rank_rows = no_request
+        held, _ = rankcollect.acquire_list_read()   # 수집이 목록을 읽고 있다
+        assert held
+        try:
+            t = threading.Thread(target=ld.run)
+            t.start()
+            time.sleep(0.3)
+            assert waited == [True] and t.is_alive(), "수집을 기다리지 않았다"
+            _rank_snapshot(datetime.now(), {"가": "브라질"})
+        finally:
+            rankcollect.release_list_read()
+        t.join(5)
+        ranker.fetch_rank_rows = orig
+        assert got == {"가": ("브라질", 5001)} and done == [True], (got, done)
+
+
+def test_main_loader_records_elo_and_compare_does_not():
+    tmp, saved = _loader_db(4)
+    gate = threading.Event()
+    orig = app_main.MatchLoader._safe_rank
+    info = ranker.RankerInfo(nickname="테스트구단주", rank=12, elo=2345.0, profile_sn=77)
+    app_main.MatchLoader._safe_rank = lambda self: (gate.wait(5), info)[1]
+
+    def rows():
+        c = store.open_db(config.DB_PATH)
+        try:
+            return [(r["elo"], r["rank"], r["profile_sn"], r["source"]) for r in store.elo_history(c, _OUID)]
+        finally:
+            c.close()
+    try:
+        # 비교 로더(기본) — 상대 이력을 쌓지 않는다
+        gate.set()
+        _run_one(app_main.MatchLoader(_DetailApi([], ""), "닉", 52))
+        time.sleep(0.2)
+        assert rows() == [], "구단주 비교 로더가 ELO 를 적었다"
+        # 메인 검색 — 랭킹이 첫 화면보다 늦게 와도 로더 쪽에서 적는다
+        gate.clear()
+        _run_one(app_main.MatchLoader(_DetailApi([], ""), "닉", 52, record_elo=True))
+        assert rows() == []
+        gate.set()
+        for _ in range(50):
+            if rows():
+                break
+            time.sleep(0.05)
+        assert rows() == [(2345.0, 12, 77, "search")], rows()
+        # 창을 닫는 중에 온 값은 버린다
+        from concurrent.futures import Future
+        f = Future()
+        f.set_result(ranker.RankerInfo(nickname="x", rank=1, elo=9999.0))
+        ld = app_main.MatchLoader(_DetailApi([], ""), "닉", 52, record_elo=True)
+        ld._cancel = True
+        ld._save_elo(_OUID, f)
+        ld._cancel = False
+        f2 = Future()
+        f2.set_result(ranker.RankerInfo(nickname="x"))   # 랭킹 밖 — ELO 없음
+        ld._save_elo(_OUID, f2)
+        assert rows() == [(2345.0, 12, 77, "search")], rows()
+        ld._save_elo(_OUID, f)   # 대조군 — 막는 게 없으면 적힌다
+        assert len(rows()) == 2
+    finally:
+        gate.set()
+        app_main.MatchLoader._safe_rank = orig
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+class _Clock:
+    def __init__(self, t):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+
+def test_rank_collect_scheduler_gates_plans_once_and_rechooses_late_timer():
+    clock = _Clock(datetime(2026, 10, 5, 13, 2, 0))
+    with _RankSwitches():
+        sched = app_main.RankCollectScheduler(now_fn=clock)
+        ran = []
+        sched.run_now = lambda: ran.append(clock.t)
+        try:
+            for web, collect, notice_ok in [(False, True, True), (True, False, True), (True, True, False)]:
+                config.WEB_DATA, config.RANK_COLLECT = web, collect
+                config.NOTICE_ACCEPTED = config.NOTICE_VERSION if notice_ok else config.NOTICE_VERSION - 1
+                sched.check()
+                assert sched.planned is None, (web, collect, notice_ok)
+            assert not config.RANK_DB_PATH.exists(), "조건이 안 맞는데 rank.db 를 만들었다"
+            config.WEB_DATA = config.RANK_COLLECT = True
+            config.NOTICE_ACCEPTED = config.NOTICE_VERSION
+            sched.check()
+            first = sched.planned
+            lo, hi = config.RANK_START_JITTER_MIN
+            assert first is not None and datetime(2026, 10, 5, 13, lo) <= first <= datetime(2026, 10, 5, 13, hi), first
+            assert sched._start_timer.isActive()
+            sched.check()
+            assert sched.planned == first, "1시간 확인이 겹쳐 예약을 다시 잡았다"
+            # 절전 복귀로 늦게 터졌다 — 그 자리에서 시작하지 않고 지금 시각 기준으로 다시 고른다
+            clock.t = datetime(2026, 10, 5, 16, 55, 0)
+            sched._fire()
+            assert ran == [] and sched.planned is not None and sched.planned.hour == 17, (ran, sched.planned)
+            clock.t = sched.planned
+            sched._fire()
+            assert ran == [clock.t] and sched.planned is None
+            # 터질 때 꺼져 있으면 안 돈다
+            sched.check()
+            config.RANK_COLLECT = False
+            clock.t = sched.planned
+            sched._fire()
+            assert len(ran) == 1
+            # 간격 안의 스냅숏이 있으면 예약하지 않는다
+            config.RANK_COLLECT = True
+            _rank_snapshot(clock.t - timedelta(hours=1), {})
+            sched.check()
+            assert sched.planned is None
+            sched.planned = first
+            sched.stop()
+            assert sched.planned is None and not sched._start_timer.isActive()
+        finally:
+            sched.shutdown()
+
+
+def test_window_starts_and_stops_rank_collect():
+    from PyQt6.QtGui import QCloseEvent
+    keep = _win._rank_sched
+    with _RankSwitches(collect=False):
+        try:
+            _win.start_rank_collect()
+            sched = _win._rank_sched
+            assert sched is not None and sched._check_timer.isActive(), "1시간 확인 타이머를 안 걸었다"
+            sched.planned = datetime.now()
+            sched._start_timer.start(600000)
+            _win.closeEvent(QCloseEvent())
+            # 닫으면 예약·확인을 내린다 — 남기면 닫는 중에 수집이 터진다
+            assert not sched._check_timer.isActive() and not sched._start_timer.isActive() and sched.planned is None
+        finally:
+            if _win._rank_sched is not None:
+                _win._rank_sched.shutdown()
+            _win._rank_sched = keep
+
+
+def test_rank_collect_outcomes_reach_status_bar():
+    O = rankcollect.Outcome
+    cases = [(O("ok", rows=10000), "10,000명", False),
+             (O("blocked", "막힘", disabled_by_block=True), "껐습니다", True),
+             (O("failed", "점검", fail_notice=True), "연속 실패", True),
+             (O("failed", "점검"), "점검", False),
+             (O("offline"), "연결", False)]
+    for out, part, important in cases:
+        text, imp = app_main.collect_outcome_text(out)
+        assert part in text and imp is important, (out, text, imp)
+    for kind in ("disabled", "cancelled", "fresh"):
+        assert app_main.collect_outcome_text(O(kind)) == ("", False), kind
+    sched = app_main.RankCollectScheduler()
+    seen = []
+    sched.status.connect(lambda t, i: seen.append((t, i)))
+    sched._on_done(O("blocked", "막힘", disabled_by_block=True))
+    sched._on_done(O("cancelled"))
+    assert len(seen) == 1 and seen[0][1] is True, seen
+    keep = _win.statusBar().currentMessage()
+    try:
+        _win._on_rank_collect_status("랭킹 수집 완료 — 3명", False)
+        assert _win.statusBar().currentMessage() == "랭킹 수집 완료 — 3명"
+    finally:
+        _win.statusBar().showMessage(keep)
+
+
+def test_about_rank_toggle_locked_by_web_data_and_writes_both_copies():
+    with _RankSwitches(web=False, collect=False):
+        dlg = app_main.AboutDialog()
+        assert not dlg.chk_rank.isEnabled() and not dlg.chk_rank.isChecked(), "웹 데이터가 꺼졌는데 수집을 켤 수 있다"
+        dlg.chk_web.setChecked(True)
+        assert dlg.chk_rank.isEnabled() and not dlg.chk_rank.isChecked(), "웹 데이터를 켰더니 수집이 같이 켜졌다"
+        dlg.chk_rank.setChecked(True)
+        assert config.RANK_COLLECT and "FIFA_RANK_COLLECT=1" in config.ENV_PATH.read_text(encoding="utf-8")
+        assert rankcollect.read_status()["enabled"] == "1", "rank.db 사본을 안 켰다 — D6 로 꺼진 사본이 계속 막는다"
+        dlg.chk_web.setChecked(False)
+        assert not dlg.chk_rank.isChecked() and not dlg.chk_rank.isEnabled()
+        assert config.read_env_switches() == (False, False)
+    # D6 로 꺼진 사본 — .env 는 켜져 있어도 꺼진 것으로 보여야 한다
+    with _RankSwitches(web=True, collect=True):
+        c = rankcollect.open_rank_db()
+        rankcollect.set_enabled(c, False, "blocked")
+        c.close()
+        dlg = app_main.AboutDialog()
+        assert not dlg.chk_rank.isChecked() and "스스로 껐습니다" in dlg.lb_rank.text(), dlg.lb_rank.text()
+
+
+def test_clear_rank_records_stops_turns_off_and_deletes():
+    tmp, saved = _loader_db(0)
+    stops = []
+
+    class _Sched:
+        def stop(self):
+            stops.append(config.RANK_COLLECT)   # 끈 다음에 멈춰야 다음 확인이 다시 모으지 않는다
+
+    try:
+        with _RankSwitches():
+            _rank_snapshot(datetime.now(), {})
+            c = store.open_db(config.DB_PATH)
+            store.save_elo(c, "나", 2000.0, 5)
+            store.save_elo(c, "남", 1900.0, 9)
+            c.close()
+            # 취소하면 아무것도 안 지운다
+            dlg = app_main.AboutDialog()
+            dlg._ask_clear = lambda keep: None
+            dlg._on_clear_rank()
+            assert config.RANK_DB_PATH.exists() and config.RANK_COLLECT
+            # .env 를 못 쓰면(수집을 못 끄면) 지우지 않는다 — 켜진 채 지우면 곧바로 다시 모은다
+            orig = config.set_rank_collect
+
+            def fail(on):
+                raise PermissionError("다른 실행본")
+            config.set_rank_collect = fail
+            try:
+                dlg._ask_clear = lambda keep: "all"
+                dlg._on_clear_rank()
+            finally:
+                config.set_rank_collect = orig
+            assert config.RANK_DB_PATH.exists() and "지우지 않았습니다" in dlg.lb_msg.text(), dlg.lb_msg.text()
+            done, n = app_main.clear_rank_records(_Sched(), keep_ouid="나")
+            assert done and n == 1 and stops == [False], (done, n, stops)
+            assert not config.RANK_DB_PATH.exists() and "FIFA_RANK_COLLECT=0" in config.ENV_PATH.read_text(
+                encoding="utf-8")
+            c = store.open_db(config.DB_PATH)
+            assert [r["elo"] for r in store.elo_history(c, "나")] == [2000.0] and store.elo_history(c, "남") == []
+            c.close()
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_notice_dialog_says_web_data_is_on_now_and_mentions_collection():
+    keep = config.WEB_DATA
+    try:
+        for on in (True, False):
+            config.WEB_DATA = on
+            dlg = app_main.NoticeDialog()
+            assert not dlg.chk_web.isChecked(), "체크는 매번 비워 둔다(고지 없이 켜진 채 남지 않게)"
+            assert dlg.lb_web_now.isVisibleTo(dlg) is on and (dlg.lb_web_now.text() == notice.WEB_DATA_ON_NOW) is on
+            text = dlg.findChild(app_main.QTextBrowser).toPlainText()
+            assert "하루 한 번" in text and "14일" in text and "ELO" in text, "안내에 랭킹 수집·ELO 기록이 없다"
+    finally:
+        config.WEB_DATA = keep
+    assert config.NOTICE_VERSION >= 2, "안내 글이 바뀌었는데 NOTICE_VERSION 을 안 올렸다 — 동의한 사람이 다시 안 본다"
 
 
 def main() -> int:

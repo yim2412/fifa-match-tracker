@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gc
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -12,10 +13,10 @@ import time
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
@@ -32,6 +33,7 @@ import crashlog
 import images
 import notice
 import playerinfo
+import rankcollect
 import ranker
 import seasons as sn
 import stats as st
@@ -204,12 +206,16 @@ class MatchLoader(QThread):
     rank_ready = pyqtSignal(str, object)  # finished_ok 때 랭킹이 아직이었으면 뒤따라 — ouid, RankerInfo|None
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
-                 offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None):
+                 offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
+                 record_elo: bool = False):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
         offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
-        prefetch: 켤 때 미리 읽어 둔 저장 경기 — 같은 계정이면 DB 를 다시 안 읽는다."""
+        prefetch: 켤 때 미리 읽어 둔 저장 경기 — 같은 계정이면 DB 를 다시 안 읽는다.
+        record_elo: 받은 ELO 를 fifa.db elo_history 에 — 메인 검색만. 구단주 비교도 같은 클래스라
+        기본은 꺼 둔다(비교 상대의 이력을 쌓지 않는다)."""
         super().__init__()
+        self._record_elo = record_elo
         self._api = api
         self._nickname = nickname
         self._match_type = match_type
@@ -299,6 +305,9 @@ class MatchLoader(QThread):
                 if base_f is None:
                     base_f = self._side.submit(load_saved, ouid, self._match_type, lambda: self._cancel)
             rank_f = self._side.submit(self._safe_rank)
+            if self._record_elo:
+                # 받는 즉시 로더 쪽에서 적는다 — 화면(_on_rank_ready)은 그사이 다른 계정을 열면 늦게 온 값을 버린다
+                rank_f.add_done_callback(lambda f, o=ouid: self._save_elo(o, f))
             meta_f = self._side.submit(lambda: (self._safe_meta("spid", "id", "name"),
                                                 self._safe_meta("spposition", "spposition", "desc"),
                                                 self._safe_meta_raw("seasonid", "seasonId")))
@@ -490,6 +499,24 @@ class MatchLoader(QThread):
             if path:
                 badge_path = str(path)
         return grade_name, st.is_champion_or_above(div_id), badge_path, names
+
+    def _save_elo(self, ouid: str, fut) -> None:
+        """ELO 한 줄(store.save_elo). 창을 닫는 중(_cancel)이면 버리고, 실패는 조용히 — 기록 하나 때문에 검색이
+        죽지 않게. 다른 스레드(나란히 돌던 일)에서 불린다 — DB 는 여기서 따로 연다."""
+        if self._cancel or fut.cancelled():
+            return
+        try:
+            info = fut.result()
+            if info is None or getattr(info, "elo", None) is None:
+                return  # 랭킹 밖·못 받음
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.save_elo(conn, ouid, info.elo, info.rank, profile_sn=info.profile_sn,
+                               nickname=info.nickname or self._nickname)
+            finally:
+                conn.close()
+        except Exception:
+            pass
 
     def _safe_rank(self):
         """랭킹(데이터센터 스크래핑)이 깨져도 전적은 보여준다."""
@@ -714,6 +741,10 @@ class RankListLoader(QThread):
     캐시하게 되므로, 못 찾은 상대는 비워 두고 다음 조회 때 다시 찾는다.
     읽는 동안 순위가 움직여 쪽 경계에서 한두 명이 빠질 수 있다 — 그 사람은 '랭킹 밖'으로
     저장돼 캐시가 만료되면 다시 찾는다(빠지는 수가 작아 받아들인다).
+
+    **읽는 곳은 랭킹 수집(rankcollect)과 하나다**(1.1.1): 간격 안의 스냅숏이 있으면 거기서 읽고(요청 0),
+    수집이 지금 돌고 있으면 끝나기를 기다렸다 그 스냅숏을 쓴다. 스스로 500쪽을 다 읽었으면 수집이 켜져 있을 때만
+    스냅숏으로도 남긴다. 실패 규칙은 쓰는 쪽마다 — 여기는 못 읽은 쪽만 빼고 쓰고, 스냅숏은 한 쪽이라도 빠지면 버린다.
     """
 
     MAX_WORKERS = TeamColorLoader.MAX_WORKERS  # 같은 페이지·같은 예의
@@ -722,12 +753,15 @@ class RankListLoader(QThread):
     progress = pyqtSignal(int, int)   # 읽은 쪽, 전체 쪽
     loaded_many = pyqtSignal(object)  # {닉네임: (팀컬러, 구단가치)} — object 인 이유는 MatchLoader.finished_ok
     finished_all = pyqtSignal()
+    waiting = pyqtSignal()            # 랭킹 수집이 같은 목록을 읽는 중이라 기다린다
 
     def __init__(self, wanted: set[str]):
         super().__init__()
         self._wanted = wanted
         self.total = ranker.RANK_PAGES
         self.failed_pages = 0
+        self.fetched_at = None   # 스냅숏에서 채웠으면 그 시각 — 팀컬러 캐시 유효기간을 거기서 센다
+        self.saved_snapshot = None  # 스스로 읽은 목록을 스냅숏으로 남겼으면 rankcollect.Outcome
         self._cancel = False
         self._pool: ThreadPoolExecutor | None = None
 
@@ -738,21 +772,53 @@ class RankListLoader(QThread):
 
     def _page(self, page: int):
         try:
-            return ranker.fetch_rank_page(page, timeout=self.TIMEOUT)
+            return ranker.fetch_rank_rows(page, timeout=self.TIMEOUT)
         except ranker.RankerError:
             return None
 
+    def _from_snapshot(self) -> bool:
+        try:
+            got = rankcollect.snapshot_colors(self._wanted)
+        except Exception:
+            return False  # rank.db 를 못 읽으면 넥슨에서 읽는다
+        if got is None:
+            return False
+        colors, self.fetched_at = got
+        if colors and not self._cancel:
+            self.loaded_many.emit(colors)
+        self.progress.emit(self.total, self.total)
+        return True
+
     def run(self) -> None:
+        if self._from_snapshot():
+            self.finished_all.emit()
+            return
+        got, waited = rankcollect.acquire_list_read(lambda: self._cancel, on_wait=self.waiting.emit)
+        if not got:
+            return
+        try:
+            if waited and self._from_snapshot():   # 기다린 수집이 남긴 스냅숏
+                self.finished_all.emit()
+                return
+            self._read_pages()
+        finally:
+            rankcollect.release_list_read()
+
+    def _read_pages(self) -> None:
         found: set[str] = set()
+        results: dict[int, ranker.RankPageResult] = {}
         done = 0
+        taken = datetime.now()
         self._pool = ThreadPoolExecutor(max_workers=self.MAX_WORKERS)
         try:
-            for rows in self._pool.map(self._page, range(1, self.total + 1)):
+            for res in self._pool.map(self._page, range(1, self.total + 1)):
                 if self._cancel:
                     return
-                if rows is None:
+                rows = ranker._color_rows(res.rows) if res is not None else []
+                if not rows:  # 빈 쪽을 "아무도 없음"으로 읽으면 상대 수백 명이 '랭킹 밖'으로 캐시된다
                     self.failed_pages += 1
                 else:
+                    results[res.page] = res
                     batch = {n: (c, v) for n, c, v in rows if n in self._wanted and n not in found}
                     if batch:
                         found.update(batch)
@@ -770,7 +836,27 @@ class RankListLoader(QThread):
             rest = {n: ("", None) for n in self._wanted - found}
             if rest:
                 self.loaded_many.emit(rest)
+            try:
+                self.saved_snapshot = rankcollect.save_from_pages(
+                    results, taken, pages=self.total, ended_season=_ended_season())
+            except Exception:
+                pass  # 스냅숏 저장 실패가 팀컬러까지 막지 않는다 — 수집이 다음 확인에 다시 읽는다
         self.finished_all.emit()
+
+
+def _ended_season() -> int | None:
+    """시즌표(fifa.db 캐시)에서 마지막으로 끝난 시즌 번호 — 랭킹 스냅숏의 시즌 경계 판정용. 모르면 None."""
+    try:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            items = store.load_seasons(conn)
+        finally:
+            conn.close()
+    except Exception:
+        return None
+    today = datetime.now().date()
+    nos = [s.no for s in items if s.end <= today]
+    return max(nos) if nos else None
 
 
 class SeasonLoader(QThread):
@@ -797,6 +883,133 @@ class SeasonLoader(QThread):
         except Exception:
             pass  # 캐시 저장 실패가 이번 화면까지 막을 이유는 없다
         self.loaded.emit(items)
+
+
+class RankCollectWorker(QThread):
+    """랭킹 수집 한 회차(rankcollect.collect)를 UI 스레드 밖에서."""
+    progress = pyqtSignal(int, int)  # 읽은 쪽, 전체 쪽
+    done = pyqtSignal(object)        # rankcollect.Outcome
+
+    def __init__(self):
+        super().__init__()
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            out = rankcollect.collect(cancel=self._cancel, progress=self.progress.emit,
+                                      ended_season=_ended_season())
+        except Exception as e:  # DB 를 못 여는 등 — 수집 하나 때문에 크래시 로그가 쌓이면 안 된다
+            out = rankcollect.Outcome("failed", f"수집 중 오류: {e}")
+        self.done.emit(out)
+
+
+def collect_outcome_text(out) -> tuple[str, bool]:
+    """수집 결과 → (상태줄 글, 오래 보여야 하나). 알릴 게 없으면 ("", False)."""
+    k = out.kind
+    if k == "ok":
+        return f"랭킹 수집 완료 — {out.rows:,}명", False
+    if out.disabled_by_block:
+        return "넥슨이 랭킹 목록 요청을 계속 막아 랭킹 수집을 껐습니다 — [정보] 에서 다시 켤 수 있습니다", True
+    if out.fail_notice:
+        return f"랭킹 수집이 여러 번 연속 실패했습니다 — {out.message} · 간격을 늘려 다시 시도합니다", True
+    if k in ("failed", "blocked"):
+        return f"랭킹 수집 실패 — {out.message} · 나중에 다시 시도합니다", False
+    if k == "offline":
+        return "랭킹 수집 — 연결이 안 돼 다음 확인에 다시 합니다", False
+    if k in ("straddle", "locked"):
+        return f"랭킹 수집 — {out.message}", False
+    return "", False  # disabled · cancelled · fresh
+
+
+class RankCollectScheduler(QObject):
+    """랭킹 수집 예약(1.1.1) — 켤 때와 RANK_CHECK_EVERY_MIN 마다 간격이 지났는지 보고, 지났으면 그 시각
+    +5~50분(rankcollect.pick_start) 무작위에 한 번 돌린다. 예약은 하나만(planned) — 1시간 확인이 겹쳐 두 번 잡지 않게.
+    타이머가 늦게 터지면(절전 복귀) 그 자리에서 시작하지 않고 지금 기준으로 다시 고른다.
+    도는 조건은 매번 본다: 안내 동의 · 웹 데이터 · 수집 토글(rankcollect.collect 도 .env 를 다시 읽어 한 번 더 막는다)."""
+
+    status = pyqtSignal(str, bool)   # 상태줄 글, 오래 보여야 하나
+    outcome = pyqtSignal(object)     # 끝난 회차(rankcollect.Outcome)
+
+    def __init__(self, parent=None, now_fn=datetime.now):
+        super().__init__(parent)
+        self._now = now_fn
+        self._check_timer = QTimer(self)
+        self._check_timer.setInterval(config.RANK_CHECK_EVERY_MIN * 60 * 1000)
+        self._check_timer.timeout.connect(self.check)
+        self._start_timer = QTimer(self)
+        self._start_timer.setSingleShot(True)
+        self._start_timer.timeout.connect(self._fire)
+        self.planned: datetime | None = None
+        self.worker: RankCollectWorker | None = None
+
+    @staticmethod
+    def can_run() -> bool:
+        return not config.notice_needed() and config.WEB_DATA and config.RANK_COLLECT
+
+    def running(self) -> bool:
+        return self.worker is not None and self.worker.isRunning()
+
+    def start(self) -> None:
+        self._check_timer.start()
+        self.check()
+
+    def check(self) -> None:
+        if not self.can_run() or self.planned is not None or self.running():
+            return
+        try:
+            conn = rankcollect.open_rank_db()
+            try:
+                due = rankcollect.is_due(conn, self._now())
+            finally:
+                conn.close()
+        except Exception:
+            return  # rank.db 를 못 열면 다음 확인에
+        if due:
+            self._plan()
+
+    def _plan(self) -> None:
+        now = self._now()
+        self.planned = rankcollect.pick_start(now)
+        self._start_timer.start(max(0, int((self.planned - now).total_seconds() * 1000)))
+
+    def _fire(self) -> None:
+        planned, self.planned = self.planned, None
+        if planned is None or not self.can_run() or self.running():
+            return
+        if not rankcollect.start_still_valid(planned, self._now()):
+            self.check()  # 늦게 터졌다 — 지금 시각 기준으로 다시 고른다
+            return
+        self.run_now()
+
+    def run_now(self) -> None:
+        self.worker = RankCollectWorker()
+        self.worker.progress.connect(lambda d, n: self.status.emit(f"랭킹 수집 {d} / {n}쪽…", False))
+        self.worker.done.connect(self._on_done)
+        self.worker.start()
+
+    def _on_done(self, out) -> None:
+        text, important = collect_outcome_text(out)
+        if text:
+            self.status.emit(text, important)
+        self.outcome.emit(out)
+
+    def stop(self, wait_ms: int = 3000) -> None:
+        """예약을 지우고 도는 회차를 멈춘다(토글 끔·기록 지우기). 1시간 확인은 그대로 — 다시 켜면 거기서 잡는다."""
+        self._start_timer.stop()
+        self.planned = None
+        w = self.worker
+        if w is not None and w.isRunning():
+            w.cancel()
+            if not w.wait(wait_ms):
+                w.terminate()
+                w.wait(1000)
+
+    def shutdown(self) -> None:
+        self._check_timer.stop()
+        self.stop()
 
 
 class MainWindow(QMainWindow):
@@ -883,6 +1096,7 @@ class MainWindow(QMainWindow):
         self._dirty: set[str] = set()  # 낡은 화면 키(PAGE_RENDER_KEYS) — 열 때 그린다
         self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
         self._narrate_found: list = []
+        self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — main 이 start_rank_collect 로
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
         self._ability_sim_loader: AbilitySimLoader | None = None
@@ -1138,6 +1352,17 @@ class MainWindow(QMainWindow):
         self._update_worker.unknown.connect(self._on_update_unknown)
         self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
+
+    def start_rank_collect(self) -> None:
+        """켤 때 한 번 — 랭킹 수집 예약을 건다(꺼져 있으면 1시간마다 조건만 보고 아무것도 안 한다). main 에서만."""
+        self._rank_sched = RankCollectScheduler(self)
+        self._rank_sched.status.connect(self._on_rank_collect_status)
+        self._rank_sched.start()
+
+    def _on_rank_collect_status(self, text: str, important: bool) -> None:
+        # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다 — 중요한 알림(스스로 꺼짐·연속 실패)만 덮는다
+        if important or not (self._loader and self._loader.isRunning()):
+            self.statusBar().showMessage(text, 0 if important else 15000)
 
     def start_cache_prune(self) -> None:
         """켤 때 한 번 — main 에서만 부른다(테스트가 실제 캐시 폴더를 건드리지 않게)."""
@@ -2797,7 +3022,7 @@ class MainWindow(QMainWindow):
         # 미리 읽은 것은 한 번만 넘긴다 — 다른 계정이면 로더가 멈추고 버린다
         prefetch, self._prefetch = self._prefetch, None
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
-                                   prefetch=prefetch)
+                                   prefetch=prefetch, record_elo=True)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
@@ -3483,11 +3708,13 @@ class MainWindow(QMainWindow):
                 for lb in self._teamcolor_status_labels:
                     lb.setText(config.WEB_DATA_OFF_MSG)
             return
-        if len(remaining) > ranker.RANK_PAGES:
-            # 목록을 읽는 김에 이 계정의 모든 시즌 상대를 같이 찾는다(요청 수는 같다)
+        if len(remaining) > ranker.RANK_PAGES or self._rank_snapshot_fresh():
+            # 목록을 읽는 김에 이 계정의 모든 시즌 상대를 같이 찾는다(요청 수는 같다).
+            # 하루 안의 랭킹 스냅숏(1.1.1 수집)이 있으면 상대가 몇 명이든 거기서 — 요청 0
             wanted = sorted(n for n in all_opps if n not in self._team_colors)
             self._teamcolor_loader = RankListLoader(set(wanted))
             self._teamcolor_progress_fmt = "랭킹 목록 {done} / {total}쪽 읽는 중…"
+            self._teamcolor_loader.waiting.connect(self._on_teamcolor_waiting)
         else:
             # 많이 만난 상대부터 — 값어치 큰 상대가 먼저 채워지고, 진행 중에도
             # 화면을 갱신하니(_on_teamcolor_loaded) 다 끝나기 전에도 유용해진다.
@@ -3529,6 +3756,16 @@ class MainWindow(QMainWindow):
         if not (self._loader and self._loader.isRunning()):
             self.statusBar().showMessage(f"팀컬러 — {text}")
 
+    def _rank_snapshot_fresh(self) -> bool:
+        try:
+            return rankcollect.fresh_snapshot() is not None
+        except Exception:
+            return False
+
+    def _on_teamcolor_waiting(self) -> None:
+        for lb in self._teamcolor_status_labels:
+            lb.setText("랭킹 수집이 같은 목록을 읽는 중 — 끝나면 그 결과를 씁니다…")
+
     def _on_teamcolor_finished(self) -> None:
         for b in self._teamcolor_fetch_btns:
             b.setEnabled(True)
@@ -3538,7 +3775,8 @@ class MainWindow(QMainWindow):
             try:
                 conn = store.open_db(config.DB_PATH)
                 try:
-                    store.save_team_colors(conn, fetched)
+                    store.save_team_colors(conn, fetched,
+                                           fetched_at=getattr(self._teamcolor_loader, "fetched_at", None))
                 finally:
                     conn.close()
             except Exception:
@@ -4455,6 +4693,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e) -> None:
         self._save_settings()
+        if self._rank_sched is not None:
+            self._rank_sched.shutdown()  # 한 트랜잭션이라 끊겨도 반쪽 스냅숏이 안 남는다
         if self._prefetch is not None:
             self._prefetch.discard()  # 읽던 중이면 다음 행에서 멈춘다 — 종료를 2초씩 붙잡지 않게
         prune = getattr(self, "_prune_worker", None)
@@ -4679,10 +4919,19 @@ class NoticeDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"{config.APP_NAME} — 이용 안내")
         v = QVBoxLayout(self)
-        v.addWidget(_notice_browser(notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML), 1)
+        v.addWidget(_notice_browser(notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML
+                                    + notice.RANK_COLLECT_HTML), 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
         self.chk_agree = QCheckBox(notice.AGREE_CHECK)
-        v.addWidget(self.chk_web)
+        web_row = QHBoxLayout()
+        web_row.addWidget(self.chk_web)
+        # D5: 체크는 매번 비워 두되(고지 없이 켜진 채 남지 않게), 켜 둔 사람이 [시작]만 눌러 모르고 끄지 않게 알린다
+        self.lb_web_now = QLabel(notice.WEB_DATA_ON_NOW if config.WEB_DATA else "")
+        self.lb_web_now.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_web_now.setVisible(config.WEB_DATA)
+        web_row.addWidget(self.lb_web_now)
+        web_row.addStretch(1)
+        v.addLayout(web_row)
         v.addWidget(self.chk_agree)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -4725,12 +4974,33 @@ class AboutDialog(QDialog):
         tabs.addTab(_notice_browser(notice.TERMS_HTML), "이용 안내")
         tabs.addTab(_notice_browser(notice.PRIVACY_HTML), "개인정보")
         tabs.addTab(_notice_browser(notice.WEB_DATA_HTML), "넥슨 홈페이지 데이터")
+        tabs.addTab(_notice_browser(notice.RANK_COLLECT_HTML), "랭킹 수집")
         tabs.addTab(_notice_browser(notice.licenses_html()), "오픈소스 라이선스")
         v.addWidget(tabs, 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
         self.chk_web.setChecked(config.WEB_DATA)
         self.chk_web.toggled.connect(self._on_web_toggled)
         v.addWidget(self.chk_web)
+        # 랭킹 수집 — 웹 데이터가 꺼져 있으면 잠긴다. 켜짐은 .env 와 rank.db 사본 둘 다 봐야 한다(D6 로 꺼졌을 수 있다)
+        try:
+            st = rankcollect.read_status()
+        except Exception:
+            st = {}
+        rank_row = QHBoxLayout()
+        self.chk_rank = QCheckBox(notice.RANK_COLLECT_CHECK)
+        self.chk_rank.setChecked(config.WEB_DATA and config.RANK_COLLECT and st.get("enabled") != "0")
+        self.chk_rank.setEnabled(config.WEB_DATA)
+        self.chk_rank.toggled.connect(self._on_rank_toggled)
+        rank_row.addWidget(self.chk_rank)
+        rank_row.addStretch(1)
+        self.btn_clear_rank = QPushButton("수집 기록 지우기")
+        self.btn_clear_rank.clicked.connect(self._on_clear_rank)
+        rank_row.addWidget(self.btn_clear_rank)
+        v.addLayout(rank_row)
+        self.lb_rank = QLabel(rank_status_text(st))
+        self.lb_rank.setWordWrap(True)
+        self.lb_rank.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_rank)
         self.lb_msg = QLabel("")
         self.lb_msg.setWordWrap(True)
         self.lb_msg.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -4743,14 +5013,108 @@ class AboutDialog(QDialog):
         v.addLayout(row)
         fit_to_screen(self, 620, 600)
 
+    def _sched(self):
+        return getattr(self.parent(), "_rank_sched", None)
+
     def _on_web_toggled(self, on: bool) -> None:
         try:
-            config.set_web_data(on)
+            config.set_web_data(on)   # 끄면 수집도 끈다(.env)
         except OSError as e:
             self.lb_msg.setText(f"저장하지 못했습니다: {e}")
             return
+        if not on:
+            sched = self._sched()
+            if sched is not None:
+                sched.stop()  # 도는 회차가 남은 쪽을 '꺼짐' 오류로 세지 않게
+            self.chk_rank.blockSignals(True)
+            self.chk_rank.setChecked(False)
+            self.chk_rank.blockSignals(False)
+        self.chk_rank.setEnabled(on)
         self.lb_msg.setText("켰습니다 — 다음 조회부터 반영됩니다." if on else
                             "껐습니다 — 다음 조회부터 넥슨 홈페이지를 읽지 않습니다.")
+
+    def _on_rank_toggled(self, on: bool) -> None:
+        try:
+            rankcollect.set_enabled_at(on, "" if on else "user")
+        except (OSError, sqlite3.Error) as e:
+            self.lb_msg.setText(f"저장하지 못했습니다: {e}")
+            return
+        sched = self._sched()
+        if sched is not None:
+            if on:
+                sched.check()
+            else:
+                sched.stop()
+        self.lb_msg.setText("랭킹 수집을 켰습니다 — 하루 한 번, 정각 뒤 몇십 분 사이에 읽습니다." if on else
+                            "랭킹 수집을 껐습니다.")
+
+    def _ask_clear(self, keep_ouid: str | None) -> str | None:
+        """→ "all" · "keep"(지금 계정 ELO 는 남김) · None(취소)."""
+        box = QMessageBox(self)
+        box.setWindowTitle("수집 기록 지우기")
+        box.setText("랭킹 수집 기록(다른 구단주 1만 명분과 집계)과 검색한 구단주의 ELO 기록을 지웁니다.\n"
+                    "랭킹 수집은 꺼집니다.")
+        b_all = box.addButton("전부 지우기", QMessageBox.ButtonRole.DestructiveRole)
+        b_keep = box.addButton("지금 계정 ELO 는 남기기", QMessageBox.ButtonRole.AcceptRole) if keep_ouid else None
+        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        hit = box.clickedButton()
+        return "all" if hit is b_all else "keep" if (b_keep is not None and hit is b_keep) else None
+
+    def _on_clear_rank(self) -> None:
+        keep_ouid = getattr(self.parent(), "_ouid", None) or None
+        choice = self._ask_clear(keep_ouid)
+        if choice is None:
+            return
+        try:
+            done, n = clear_rank_records(self._sched(), keep_ouid if choice == "keep" else None)
+        except OSError as e:
+            self.lb_msg.setText(f"설정을 저장하지 못해 지우지 않았습니다: {e}")
+            return
+        self.chk_rank.blockSignals(True)
+        self.chk_rank.setChecked(False)
+        self.chk_rank.blockSignals(False)
+        self.lb_rank.setText(rank_status_text({}))
+        self.lb_msg.setText(f"지웠습니다 — ELO 기록 {n}줄." if done else
+                            f"ELO 기록 {n}줄을 지웠습니다. 랭킹 수집 기록은 다른 실행본이 열고 있어 다음에 켤 때 지웁니다.")
+
+
+def rank_status_text(st: dict) -> str:
+    """[정보] 창의 랭킹 수집 상태 한 줄(rankcollect.read_status)."""
+    if not st or not st.get("snapshots"):
+        parts = ["아직 수집한 기록이 없습니다."]
+    else:
+        when = (st.get("last_taken_at") or "")[:16].replace("T", " ")
+        parts = [f"마지막 수집 {when} · {int(st.get('last_rows') or 0):,}명 · 보관 {st['snapshots']}회"]
+    if st.get("enabled") == "0" and st.get("off_reason") == "blocked":
+        parts.append("넥슨이 요청을 계속 막아 스스로 껐습니다")
+    try:
+        fails = int(st.get("fail_count") or 0)
+    except ValueError:
+        fails = 0
+    if fails:
+        retry = (st.get("retry_at") or "")[:16].replace("T", " ")
+        parts.append(f"연속 실패 {fails}번 · 다음 시도 {retry} 이후")
+    return " · ".join(parts)
+
+
+def clear_rank_records(sched, keep_ouid: str | None) -> tuple[bool, int]:
+    """수집 기록 지우기 — 수집을 끄고(.env 를 못 쓰면 OSError — 그러면 아무것도 안 지운다: 켜진 채 지우면 다음
+    확인이 곧바로 다시 모은다) 멈춘 뒤 rank.db 를 지우고 fifa.db 의 ELO 기록을 지운다. → (rank.db 를 다 지웠나, ELO 줄 수)."""
+    config.set_rank_collect(False)
+    if sched is not None:
+        sched.stop()
+    done = rankcollect.delete_db()
+    n = 0
+    try:
+        conn = store.open_db(config.DB_PATH)
+        try:
+            n = store.clear_elo(conn, keep_ouid)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+    return done, n
 
 
 def _notify_crash(path) -> None:
@@ -4782,11 +5146,16 @@ def main() -> int:
         if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
             return 0
 
+    try:
+        rankcollect.delete_pending()  # 지난번 [수집 기록 지우기]에서 다른 실행본이 열고 있어 못 지운 것
+    except Exception:
+        pass
     api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     win = MainWindow(api)
     win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
     win.start_update_check()
     win.start_cache_prune()
+    win.start_rank_collect()
     if config.OPEN_LAST_ACCOUNT:
         win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
     else:

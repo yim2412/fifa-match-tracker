@@ -79,6 +79,18 @@ CREATE TABLE IF NOT EXISTS bot_users (
     nickname TEXT NOT NULL,
     PRIMARY KEY (room, sender)
 );
+-- 검색한 구단주의 ELO(랭킹 점수) 기록 — 메인 검색에서만 적는다(구단주 비교·봇은 안 적는다).
+-- 다른 구단주 1만 명분(스냅숏 출처)은 rank.db 에 있고 여기 쌓지 않는다 — 두 DB 에 걸친 트랜잭션이 없게.
+CREATE TABLE IF NOT EXISTS elo_history (
+    ouid       TEXT NOT NULL,
+    profile_sn INTEGER,
+    nickname   TEXT,
+    taken_at   TEXT NOT NULL,
+    elo        REAL NOT NULL,
+    rank       INTEGER,
+    source     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_elo_ouid_taken ON elo_history(ouid, taken_at);
 """
 
 # 팀컬러는 잘 안 바뀌지만 팀가치(구단가치)는 강화로 계속 오르는 값이라
@@ -379,13 +391,16 @@ def save_seasons(conn: sqlite3.Connection, items: list[Season]) -> None:
 
 
 def save_team_colors(conn: sqlite3.Connection,
-                     colors: dict[str, tuple[str, int | None]]) -> None:
+                     colors: dict[str, tuple[str, int | None]],
+                     fetched_at: datetime | None = None) -> None:
     """team_color 가 빈 문자열("찾지 못함")이어도 저장한다 — TTL 안에는
     없는 상대를 매번 다시 조회하지 않게. 팀가치는 랭커로 찾아진 상대만
-    있고(top 10,000 밖이면 None) 팀컬러와 항상 같이 갱신된다."""
+    있고(top 10,000 밖이면 None) 팀컬러와 항상 같이 갱신된다.
+    fetched_at: 값을 실제로 읽은 시각 — 랭킹 스냅숏에서 채웠으면 스냅숏 시각(지금 시각을 넣으면
+    7일 유효기간이 최대 8일이 된다)."""
     if not colors:
         return
-    now = datetime.now().isoformat(timespec="seconds")
+    now = (fetched_at or datetime.now()).isoformat(timespec="seconds")
     for nickname, (color, value) in colors.items():
         conn.execute(
             "INSERT INTO team_colors (nickname, team_color, team_value, fetched_at)"
@@ -394,3 +409,38 @@ def save_team_colors(conn: sqlite3.Connection,
             " team_value=excluded.team_value, fetched_at=excluded.fetched_at",
             (nickname, color, value, now))
     conn.commit()
+
+
+# ── ELO 기록 (1.1.1 — 그래프는 1.3.1) ─────────────────────────────────────────
+
+def save_elo(conn: sqlite3.Connection, ouid: str, elo: float, rank: int | None,
+             profile_sn: int | None = None, nickname: str = "", source: str = "search",
+             taken_at: datetime | None = None) -> bool:
+    """검색 때 받은 ELO 를 한 줄 — 마지막 줄과 점수·순위가 같으면 안 적는다(같은 날 재검색이 줄을 불리지 않게).
+    → 적었나."""
+    last = conn.execute("SELECT elo, rank FROM elo_history WHERE ouid = ? ORDER BY taken_at DESC LIMIT 1",
+                        (ouid,)).fetchone()
+    if last is not None and last["elo"] == elo and last["rank"] == rank:
+        return False
+    conn.execute("INSERT INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
+                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 (ouid, profile_sn, nickname, (taken_at or datetime.now()).isoformat(timespec="seconds"),
+                  elo, rank, source))
+    conn.commit()
+    return True
+
+
+def elo_history(conn: sqlite3.Connection, ouid: str) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT taken_at, elo, rank, profile_sn, nickname, source FROM elo_history"
+        " WHERE ouid = ? ORDER BY taken_at", (ouid,))]
+
+
+def clear_elo(conn: sqlite3.Connection, keep_ouid: str | None = None) -> int:
+    """ELO 기록 지우기 — keep_ouid 가 있으면 그 계정 것만 남긴다. → 지운 줄 수."""
+    if keep_ouid:
+        cur = conn.execute("DELETE FROM elo_history WHERE ouid <> ?", (keep_ouid,))
+    else:
+        cur = conn.execute("DELETE FROM elo_history")
+    conn.commit()
+    return cur.rowcount

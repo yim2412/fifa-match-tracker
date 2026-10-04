@@ -407,7 +407,12 @@ def run_round(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = 
     finally:
         stop.set()
         pool.shutdown(wait=True, cancel_futures=True)
+    return rows_from_pages(results, pages)
 
+
+def rows_from_pages(results: dict[int, ranker.RankPageResult], pages: int
+                    ) -> tuple[list[ranker.RankRow], int]:
+    """다 읽은 쪽들 → (행, 버린 수). 정각 걸침은 Straddle, 구조 변경은 RankStructureError."""
     keys = {k for k in (_hour_key(r.date) for r in results.values() if r.date) if k}
     if len(keys) > 1:
         raise Straddle("수집 중에 정각을 넘겼습니다 — 다음 시각에 다시")
@@ -421,9 +426,147 @@ def run_round(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = 
     return dedup(out)
 
 
+# ── 목록 읽기는 한 프로세스에 하나 ────────────────────────────────────────────
+# 수집과 팀컬러 목록(app_main.RankListLoader)이 같은 500쪽을 읽는다. 둘이 겹치면 뒤에 온 쪽이 앞 작업이 끝나기를
+# 기다렸다가 그 스냅숏을 쓴다(요청 0) — 앞 작업이 실패·취소로 끝났으면 기다린 쪽이 스스로 읽는다.
+_LIST_READ = threading.Lock()
+_LIST_POLL_S = 0.2
+
+
+def acquire_list_read(cancelled=lambda: False, on_wait=None) -> tuple[bool, bool]:
+    """목록 읽기 차례를 얻는다 → (얻었나, 기다렸나). 기다리는 동안 cancelled() 가 참이면 (False, True).
+    on_wait: 기다리기 시작할 때 한 번(화면에 '수집이 읽는 중' 표시)."""
+    if _LIST_READ.acquire(blocking=False):
+        return True, False
+    if on_wait is not None:
+        on_wait()
+    while not cancelled():
+        if _LIST_READ.acquire(timeout=_LIST_POLL_S):
+            return True, True
+    return False, True
+
+
+def release_list_read() -> None:
+    _LIST_READ.release()
+
+
+def fresh_snapshot(db_path: Path | str | None = None, now: datetime | None = None
+                   ) -> tuple[int, datetime] | None:
+    """간격(RANK_COLLECT_INTERVAL_H) 안의, 원본이 남아 있는 마지막 스냅숏 → (id, 시각). 없으면 None.
+    rank.db 가 없으면 만들지 않는다 — 수집을 안 켠 사람에게 빈 파일이 생기지 않게."""
+    p = Path(db_path) if db_path else config.RANK_DB_PATH
+    if not p.exists():
+        return None
+    now = now or datetime.now()
+    conn = open_rank_db(p)
+    try:
+        row = conn.execute("SELECT id, taken_at FROM snapshots WHERE taken_at >= ? "
+                           "ORDER BY taken_at DESC, id DESC LIMIT 1",
+                           (_iso(now - timedelta(hours=config.RANK_COLLECT_INTERVAL_H)),)).fetchone()
+        if row is None:
+            return None
+        if conn.execute("SELECT 1 FROM snapshot_rows WHERE snapshot_id = ? LIMIT 1", (row["id"],)).fetchone() is None:
+            return None
+        return row["id"], datetime.fromisoformat(row["taken_at"])
+    finally:
+        conn.close()
+
+
+def snapshot_colors(nicknames, db_path: Path | str | None = None, now: datetime | None = None
+                    ) -> tuple[dict[str, tuple[str, int | None]], datetime] | None:
+    """팀컬러를 스냅숏에서 — {닉네임: (팀컬러, 구단가치)}, 스냅숏 시각. 목록에 없는 사람은 '랭킹 밖'("", None).
+    팀컬러가 없는 행은 구단가치도 None(ranker._color_rows 와 같은 규칙). 쓸 스냅숏이 없으면 None."""
+    snap = fresh_snapshot(db_path, now)
+    if snap is None:
+        return None
+    sid, taken = snap
+    want = set(nicknames)
+    conn = open_rank_db(db_path)
+    try:
+        found = {}
+        for r in conn.execute("SELECT nickname, team_color, team_value FROM snapshot_rows WHERE snapshot_id = ?",
+                              (sid,)):
+            if r["nickname"] in want:
+                color = r["team_color"] or ""
+                found[r["nickname"]] = (color, r["team_value"] if color else None)
+    finally:
+        conn.close()
+    for n in want - found.keys():
+        found[n] = ("", None)
+    return found, taken
+
+
+# ── 지우기 ───────────────────────────────────────────────────────────────────
+
+def _pending_marker(p: Path) -> Path:
+    return p.with_name(p.name + ".delete-pending")
+
+
+def delete_db(db_path: Path | str | None = None) -> bool:
+    """rank.db(+-wal·-shm)를 지운다 → 다 지웠나. 다른 실행본이 열고 있어 못 지우면 표시를 남겨
+    다음에 켤 때(delete_pending) 먼저 지운다. 부르는 쪽이 수집을 먼저 멈추고 자기 연결을 닫는다."""
+    p = Path(db_path) if db_path else config.RANK_DB_PATH
+    ok = True
+    for f in (p, p.with_name(p.name + "-wal"), p.with_name(p.name + "-shm")):
+        try:
+            f.unlink(missing_ok=True)
+        except OSError:
+            ok = False
+    marker = _pending_marker(p)
+    if ok:
+        marker.unlink(missing_ok=True)
+    else:
+        try:
+            marker.write_text(_iso(datetime.now()), encoding="utf-8")
+        except OSError:
+            pass
+    return ok
+
+
+def delete_pending(db_path: Path | str | None = None) -> bool:
+    """켤 때 — 지난번에 못 지운 rank.db 가 있으면 지금 지운다. → 지울 게 있었나."""
+    p = Path(db_path) if db_path else config.RANK_DB_PATH
+    if not _pending_marker(p).exists():
+        return False
+    delete_db(p)
+    return True
+
+
+def read_status(db_path: Path | str | None = None) -> dict:
+    """[정보] 창 표시용 — 마지막 성공·실패 횟수·끈 이유·스냅숏 수. rank.db 가 없으면 빈 dict(만들지 않는다)."""
+    p = Path(db_path) if db_path else config.RANK_DB_PATH
+    if not p.exists():
+        return {}
+    conn = open_rank_db(p)
+    try:
+        st = get_state(conn)
+        st["snapshots"] = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
+        last = conn.execute("SELECT taken_at, row_count FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
+                            ).fetchone()
+        if last is not None:
+            st["last_taken_at"], st["last_rows"] = last["taken_at"], last["row_count"]
+        return st
+    finally:
+        conn.close()
+
+
+def set_enabled_at(on: bool, reason: str = "", db_path: Path | str | None = None) -> None:
+    """토글 — .env 와 rank.db 사본을 같이(사본이 D6 끔을 붙잡고 있어 .env 만 켜면 계속 disabled 다).
+    끌 때 rank.db 가 없으면 만들지 않는다."""
+    config.set_rank_collect(on)
+    p = Path(db_path) if db_path else config.RANK_DB_PATH
+    if not on and not p.exists():
+        return
+    conn = open_rank_db(p)
+    try:
+        set_enabled(conn, on, reason)
+    finally:
+        conn.close()
+
+
 @dataclass
 class Outcome:
-    kind: str                 # ok · failed · blocked · offline · straddle · cancelled · locked · disabled
+    kind: str                 # ok · failed · blocked · offline · straddle · cancelled · locked · disabled · fresh
     message: str = ""
     snapshot_id: int | None = None
     rows: int = 0
@@ -438,10 +581,23 @@ def collect(*, db_path: Path | str | None = None, now_fn=datetime.now, fetch=Non
     web, on = config.read_env_switches()
     if config.notice_needed() or not web or not on:
         return Outcome("disabled", "랭킹 수집이 꺼져 있습니다(넥슨 홈페이지 데이터가 꺼져 있으면 잠깁니다)")
+    got, waited = acquire_list_read(lambda: cancel is not None and cancel.is_set())
+    if not got:
+        return Outcome("cancelled")
+    try:
+        return _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, pages, waited)
+    finally:
+        release_list_read()
+
+
+def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, pages, waited) -> Outcome:
     conn = open_rank_db(db_path)
     try:
         if get_state(conn).get("enabled") == "0":
             return Outcome("disabled", "랭킹 수집이 꺼져 있습니다")
+        if waited and not is_due(conn, now_fn()):
+            # 기다리는 사이 팀컬러 목록 읽기가 스냅숏을 남겼다 — 같은 500쪽을 다시 읽지 않는다
+            return Outcome("fresh", "방금 읽은 랭킹 목록을 썼습니다")
         lock = CollectLock(conn, now_fn)
         if not lock.acquire():
             return Outcome("locked", "다른 실행본이 수집 중입니다")
@@ -467,6 +623,41 @@ def collect(*, db_path: Path | str | None = None, now_fn=datetime.now, fetch=Non
                 return out             # 창을 닫는 중 — 상태를 건드리지 않는다
             flags = record_result(conn, out.kind, now_fn(), out.message)
             out.disabled_by_block, out.fail_notice = flags["disabled"], flags["fail_notice"]
+            return out
+        finally:
+            lock.release()
+    finally:
+        conn.close()
+
+
+def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, *,
+                    pages: int = ranker.RANK_PAGES, ended_season: int | None = None,
+                    db_path: Path | str | None = None, now_fn=datetime.now) -> Outcome | None:
+    """팀컬러 때문에 500쪽을 다 읽었으면 그걸 스냅숏으로 — 수집이 켜져 있고 간격이 지났을 때만. 목록 읽기 차례
+    (acquire_list_read)를 쥔 채 부른다. 저장 안 했으면 None. 쪽 판정·정각 걸침은 collect 와 같은 규칙."""
+    web, on = config.read_env_switches()
+    if config.notice_needed() or not web or not on:
+        return None
+    conn = open_rank_db(db_path)
+    try:
+        if get_state(conn).get("enabled") == "0" or not is_due(conn, now_fn()):
+            return None
+        lock = CollectLock(conn, now_fn)
+        if not lock.acquire():
+            return None
+        try:
+            try:
+                rows, dups = rows_from_pages(results, pages)
+            except Straddle:
+                return None                      # 세지 않는다 — 다음 확인에 수집이 다시 읽는다
+            except ranker.RankerError as e:
+                out = Outcome("failed", str(e))
+                flags = record_result(conn, "failed", now_fn(), out.message)
+                out.disabled_by_block, out.fail_notice = flags["disabled"], flags["fail_notice"]
+                return out
+            out = Outcome("ok", snapshot_id=save_snapshot(conn, rows, taken, dups, ended_season), rows=len(rows))
+            prune_raw(conn, taken)
+            record_result(conn, "ok", now_fn())
             return out
         finally:
             lock.release()
