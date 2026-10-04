@@ -20,20 +20,22 @@
 | `widgets.py` | 화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 스쿼드 배치(`PitchWidget`), 좁으면 접히는 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회는 상대가 적으면 상대마다 검색(`fetch_manager_rank`), 500명보다 많으면 1만 위 목록 500쪽(`fetch_rank_page`) — 목록은 **행 단위로 잘라 읽는다**(팀컬러 빈 행에서 뒤가 밀린다) |
+| `rankcollect.py` | 랭킹 1만 명 수집(1.1.1, 기본 꺼짐 `config.RANK_COLLECT`) — `rank.db`(fifa.db 와 **따로** — 지우기가 파일 삭제) 에 스냅숏 원본(14일)·집계(영구)·수집 상태·잠금. `collect()` 한 번 = 한 회차: `.env` 다시 읽기 → 잠금 → 500쪽(작업자 6, 첫 실패에 나머지 취소) → 한 트랜잭션 저장 → `record_result`(실패 대기 1~24h · 차단 3회차면 스스로 끔 D6 · 연결 안 됨·정각 걸침은 안 셈). 예약은 앱 몫 — `is_due`·`pick_start`·`start_still_valid` 만 준다. 스레드 우선순위는 ctypes 로 낮추는데 **핸들 형을 안 적으면 64비트에서 조용히 실패**했다(테스트가 잡음) |
 | `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
 | `playerinfo.py` | 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑 |
 | `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL). **화면은 API 가 아니라 이 DB 를 본다**. 검색 결과는 바탕(화면이 가진 목록 · 미리 읽은 것 · 새로 읽은 것) + DB 에만 있는 경기(`known_ids` 대조 — 시각으로 자르면 이어 받은 옛 경기를 빠뜨린다)를 `merge_details`. 열 때 `PRAGMA optimize` 로 통계를 갱신하는데, **통계가 생기면 SQLite 가 계획을 바꾼다** — `load_details` 는 본문을 통째로 임시 정렬하는 계획을 골라 SQL 이 3배가 됐다(2026-10-04). 그래서 `(종류, 날짜)` 인덱스를 직접 지정한다. 새 쿼리를 붙이면 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 가 없는지 본다. 해석은 `orjson`(없으면 json, 배포판엔 `release.py` 가 확인) |
-| `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·UA, 매치 종류·조회 개수 기본값 |
+| `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·랭킹 수집 스위치(`RANK_COLLECT`·`RANK_*` 상수 — `read_env_switches` 가 디스크에서 다시 읽는다)·UA, 매치 종류·조회 개수 기본값 |
 | `notice.py` | 이용 안내·개인정보·웹 데이터 고지·오픈소스 목록(`THIRD_PARTY`) — 첫 실행 `NoticeDialog` 와 [정보] `AboutDialog` 가 같은 글을 쓴다. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(이미 동의한 사람에게 다시 보이게). 새 패키지를 묶으면 `THIRD_PARTY` 에 한 줄 — spec 이 라이선스 전문을 `_internal/licenses/` 에 넣고 `release.py` 가 빠진 걸 막는다 |
 | `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다 |
 | `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다). 창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다. 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조) |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
 | `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
 | `bot/` · `adapters/` | 카카오톡 오픈채팅 봇 — 서버(`bot/`, 같은 DB 를 본다)와 카톡에 붙이는 쪽(`adapters/`). 각 폴더 README |
-| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_bot.py` · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
+| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_bot.py` · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
+python rankcollect.py --pages 3   # 랭킹 수집 실제 3쪽(저장 안 함 — 웹 데이터가 켜져 있어야)
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
 python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175% 를 흉내 내 실제 창을 띄워 잰다

@@ -7,7 +7,7 @@ import sys
 import time
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
@@ -125,6 +125,24 @@ RELEASES_URL = f"{REPO_URL}/releases/latest"
 RANK_MAX_CONCURRENT = 8
 RANK_PAGE_TIMEOUT_S = 10
 
+# 랭킹 1만 명 수집(rankcollect.py) — 기본 꺼짐. 넥슨 웹 데이터(WEB_DATA)가 꺼져 있으면 켜져 있어도 잠긴다.
+# set_rank_collect 가 재할당한다 — 다른 모듈은 config.RANK_COLLECT 로 읽는다.
+RANK_COLLECT_VAR = "FIFA_RANK_COLLECT"
+RANK_COLLECT = os.getenv(RANK_COLLECT_VAR, "0").strip() == "1"
+RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
+RANK_COLLECT_INTERVAL_H = 24
+RANK_COLLECT_WORKERS = 6            # RANK_MAX_CONCURRENT 안에서 — 수집 중 검색이 굶지 않게 2칸을 남긴다
+RANK_RETRY_BACKOFF_H = (1, 2, 4, 8, 16, 24)   # 실패 회차마다 다음 대기. 성공하면 처음으로
+RANK_BLOCK_ROUNDS = 3               # 403·429·Cloudflare 가 서로 다른 회차에 이만큼 이어지면 수집을 스스로 끈다(D6)
+RANK_FAIL_NOTICE_ROUNDS = 3         # 실패가 이만큼 이어지면 상태에 알린다
+RANK_LOCK_HEARTBEAT_PAGES = 50
+RANK_LOCK_STALE_MIN = 10            # 하트비트가 이만큼 끊긴 잠금은 무효(절전으로 멈춘 실행본이 남의 수집을 막지 않게)
+RANK_SEASON_DROP_RATIO = 0.5        # 행 수가 앞 스냅숏의 이 비율 밑으로 떨어지면 새 시즌
+RANK_TIERS = (200, 1000, 10000)     # 집계 구간의 끝 순위 — 1~200 · 201~1,000 · 1,001~10,000
+RANK_CUT_RANKS = (1, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000)
+RANK_START_JITTER_MIN = (5, 50)     # 간격이 지난 시각의 +5~+50분 — 50분이면 약 1.5분 수집이 다음 정각 전에 끝난다
+RANK_RAW_KEEP_DAYS = 14             # 다른 구단주 1만 명분 원본은 이만큼만. 집계는 계속
+
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)
 
@@ -175,6 +193,28 @@ def set_web_data(on: bool) -> None:
     global WEB_DATA
     _save_env(WEB_DATA_VAR, "1" if on else "0")
     WEB_DATA = on
+
+
+def set_rank_collect(on: bool) -> None:
+    """랭킹 수집을 켜고 끈다 — 저장하고 이 프로세스에도 바로 반영."""
+    global RANK_COLLECT
+    _save_env(RANK_COLLECT_VAR, "1" if on else "0")
+    RANK_COLLECT = on
+
+
+def read_env_switches() -> tuple[bool, bool]:
+    """.env 를 디스크에서 다시 읽어 (웹 데이터, 랭킹 수집) — 다른 실행본이 바꿨을 수 있다(D6 로 껐다든지).
+
+    load_dotenv 는 이미 든 환경 변수를 덮지 않아서 못 쓴다. 읽은 값으로 이 프로세스의 전역도 맞춘다.
+    """
+    global WEB_DATA, RANK_COLLECT
+    try:
+        vals = dotenv_values(ENV_PATH, encoding="utf-8-sig") if ENV_PATH.exists() else {}
+    except (OSError, UnicodeError, ValueError):
+        return WEB_DATA, RANK_COLLECT  # 못 읽으면 아는 값 그대로
+    WEB_DATA = (vals.get(WEB_DATA_VAR) or "0").strip() == "1"
+    RANK_COLLECT = (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
+    return WEB_DATA, RANK_COLLECT
 
 
 def accept_notice(web_data: bool) -> None:

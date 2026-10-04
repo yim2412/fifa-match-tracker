@@ -123,6 +123,7 @@ python app_main.py
 python tests/test_parsing.py
 python tests/test_ui_smoke.py   # 화면 배선(offscreen)
 python tests/test_bot.py
+python tests/test_rankcollect.py   # 랭킹 수집기
 python tests/test_release.py   # 배포 검사 로직
 node tests/test_adapter.js
 
@@ -146,6 +147,7 @@ python -m bot.server
 | `analysis.py` | 집계 → 문장. 최근 흐름(최근 20경기)과 이기는/지는 패턴(누적 전체)을 규칙 기반으로 서술 |
 | `store.py` | 조회한 경기를 SQLite(`fifa.db`)에 누적 — API가 오래된 경기를 버리는 것을 넘기 위해 |
 | `ranker.py` | 넥슨 데이터센터에서 감독모드 순위·구단가치·ELO 를 긁어온다(오픈API 엔 없음) |
+| `rankcollect.py` | 랭킹 1만 명을 하루 한 번 모아 `rank.db` 에 쌓는 수집기(1.1.1 — 기본 꺼짐, 아직 화면에 안 붙음). 터미널 확인: `python rankcollect.py --pages 3` |
 | `seasons.py` | 감독모드 랭킹 시즌표(번호·이름·기간)를 데이터센터에서 긁어와 경기를 시즌에 나눠 담는다 |
 | `images.py` | 넥슨 CDN에서 선수 얼굴 이미지를 받아 디스크에 캐시(오픈API 아닌 정적 CDN, 비공식) |
 | `playerinfo.py` | 선수 카드 상세(능력치·특성·시세·클럽경력) — 넥슨 모바일 데이터센터 HTML 스크래핑 |
@@ -155,6 +157,7 @@ python -m bot.server
 | `bot/` | 카카오톡 오픈채팅 봇 서버 — 같은 API·DB를 쓰는 별도 진입점([bot/README.md](bot/README.md)) |
 | `adapters/` | 봇을 카카오톡에 붙이는 어댑터 — 메신저봇R 스크립트([adapters/README.md](adapters/README.md)) |
 | `tests/test_parsing.py` | 파싱·집계 회귀 테스트 — 실제 응답 픽스처로 골든값 고정(네트워크 없음) |
+| `tests/test_rankcollect.py` | 랭킹 수집기 테스트 — 가짜 랭킹 목록으로 쪽 판정·실패 대기·차단 시 끄기·잠금·집계(네트워크 없음) |
 | `tests/test_bot.py` | 봇 명령 처리 회귀 테스트 — 채팅 한 줄 → 답장까지(네트워크 없음) |
 | `tests/test_analysis.py` | 흐름 분석 회귀 테스트 — 임계값 경계·가중치 정규화(네트워크 없음) |
 | `tests/test_adapter.js` | 어댑터 회귀 테스트 — 가짜 `java.*` 로 메신저봇R 진입점을 그대로 실행(node) |

@@ -1,4 +1,4 @@
-# 푸시할 때마다 테스트 5종 + 카톡 어댑터 테스트. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
+# 푸시할 때마다 테스트 6종 + 카톡 어댑터 테스트. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
 # 화면 스모크는 offscreen — 글꼴은 러너의 C:/Windows/Fonts(테스트 머리에서 기본으로 준다).
 name: test
 
@@ -30,6 +30,8 @@ jobs:
         run: python tests/test_analysis.py
       - name: 봇
         run: python tests/test_bot.py
+      - name: 랭킹 수집기
+        run: python tests/test_rankcollect.py
       - name: 배포 검사
         run: python tests/test_release.py
       - name: 화면 스모크

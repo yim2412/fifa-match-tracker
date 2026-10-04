@@ -1,5 +1,5 @@
 {
-  "test": "python tests/test_parsing.py && python tests/test_analysis.py && python tests/test_bot.py && python tests/test_release.py && python tests/test_ui_smoke.py",
+  "test": "python tests/test_parsing.py && python tests/test_analysis.py && python tests/test_bot.py && python tests/test_rankcollect.py && python tests/test_release.py && python tests/test_ui_smoke.py",
   "files": ["./*.py", "bot/*.py", "tools/release.py"],
   "preset": "if-py",
   "label": "파이썬 조건 변이"
