@@ -34,5 +34,7 @@ jobs:
         run: python tests/test_release.py
       - name: 화면 스모크
         run: python tests/test_ui_smoke.py
+      - name: 창 크기(흉내 낸 화면 5종)
+        run: python tests/test_window_size.py
       - name: 카톡 어댑터
         run: node tests/test_adapter.js

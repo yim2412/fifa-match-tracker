@@ -1,0 +1,5 @@
+{
+  "screens": [
+    {"name": "lap1366", "x": 0, "y": 0, "width": 1366, "height": 768, "logicalDpi": 96, "logicalBaseDpi": 96, "dpr": 1.0}
+  ]
+}

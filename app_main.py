@@ -11,11 +11,11 @@ import threading
 import time
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, Qt, QSize, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import QEvent, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
@@ -59,10 +59,55 @@ PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
 # 429(호출 한도)를 한 번이라도 받으면 그 검색은 THROTTLED 로 내린다 — 개발 단계 키는 초당 5건이다.
 DETAIL_WORKERS = 24
 DETAIL_WORKERS_THROTTLED = 2
-# 창을 이보다 작게 못 줄인다 — 이 크기에서 글자가 잘리지 않는 것이 기준이다.
-# FHD 에서 넉넉하고 1366x768 노트북에도 들어간다. 화면 반 분할(960)은 18열짜리
-# 선수 지표 표가 의미가 없어 지원하지 않는다.
+# 창을 이보다 작게 못 줄인다 — 이 크기에서 글자가 잘리지 않는 것이 기준이다. 화면 반 분할(960)은 18열짜리
+# 선수 지표 표가 의미가 없어 지원하지 않는다. ⚠ "1366x768 노트북에도 들어간다"고 적혀 있었지만 제목줄(약 31)과
+# 작업 표시줄을 빼면 높이가 모자라 안 들어갔다 — FHD 150% 배율(논리 1280x720)도 같다(2026-10-04).
+# 그래서 그런 화면에선 최대화로 열고 최소 높이만 MIN_HEIGHT_SMALL 로 낮춘다(페이지는 세로 스크롤이 된다).
 MIN_WINDOW = (1280, 720)
+DEFAULT_WINDOW = (1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
+MIN_HEIGHT_SMALL = 480  # 레이아웃 하한 434(실측) 위 여유 — 434~640 안에서 잘림 없음 테스트로 정함(434 도 통과)
+# 창을 띄우기 전엔 실제 테두리 크기를 모른다 — 판정할 땐 이만큼 더해 보고, 띄운 뒤 실제 값으로 한 번 더 확인한다.
+# 윈도우 11 의 제목줄 약 31 + 위아래 테두리, 좌우 테두리.
+FRAME_ALLOWANCE = (16, 40)
+NARROW_SCREEN_MSG = ("화면 배율이 커서 일부가 잘릴 수 있습니다 — 윈도우 디스플레이 설정에서 배율을 125% 이하로 "
+                     "낮추면 전부 보입니다.")
+
+
+@dataclass(frozen=True)
+class WindowPlan:
+    size: tuple[int, int]      # 보통 상태 크기(최대화하면 풀었을 때 이 크기)
+    maximized: bool
+    min_size: tuple[int, int]
+    narrow: bool               # 폭조차 MIN_WINDOW 가 안 됨 — 일부가 잘릴 수 있다고 한 번 알린다
+
+
+def initial_window(avail_w: int, avail_h: int) -> WindowPlan:
+    """쓸 수 있는 화면 크기(배율 반영 · 작업 표시줄 뺀 것)로 창을 어떻게 열지 정한다.
+    모니터 해상도로 정하면 FHD 150% 노트북에서 1600x900 이 화면 밖으로 넘친다."""
+    fw, fh = FRAME_ALLOWANCE
+    if avail_w >= DEFAULT_WINDOW[0] + fw and avail_h >= DEFAULT_WINDOW[1] + fh:
+        return WindowPlan(DEFAULT_WINDOW, False, MIN_WINDOW, False)
+    if avail_w >= MIN_WINDOW[0] + fw and avail_h >= MIN_WINDOW[1] + fh:
+        return WindowPlan(MIN_WINDOW, False, MIN_WINDOW, False)
+    # 최대화로 연다. 최소 폭은 '최대화를 풀어도 테두리까지 화면에 들어가는' 폭으로 — 화면 폭 그대로(1280)면
+    # FHD 150% 에서 최대화를 풀 때 테두리만큼 넘쳤다(실측 2px). 그 폭에서도 표가 안 잘리는지는 스모크가 잰다.
+    min_w = min(MIN_WINDOW[0], avail_w - fw)
+    min_h = min(MIN_HEIGHT_SMALL, avail_h - fh)
+    size = (min_w, max(min_h, min(MIN_WINDOW[1], avail_h - fh)))
+    return WindowPlan(size, True, (min_w, min_h), avail_w < MIN_WINDOW[0])
+
+
+def fit_to_screen(widget: QWidget, w: int, h: int) -> None:
+    """대화상자를 (w, h) 로 열되 화면보다 크면 화면에 맞춘다 — 선수 카드 560x720 · 스쿼드 600x760 이
+    FHD 150% 노트북(창 안쪽 높이 약 657)에서 아래가 잘렸다."""
+    host = widget.parentWidget() or widget
+    screen = host.screen() or QApplication.primaryScreen()
+    if screen is None:
+        widget.resize(w, h)
+        return
+    avail = screen.availableGeometry()
+    fw, fh = FRAME_ALLOWANCE
+    widget.resize(min(w, avail.width() - fw), min(h, avail.height() - fh))
 
 
 ETA_MIN_DONE = 30  # 이만큼 끝나기 전엔 남은 시간을 안 낸다 — 첫 몇 건은 연결 준비로 느려 크게 틀린다
@@ -852,8 +897,9 @@ class MainWindow(QMainWindow):
         self._update_inline_btns: list[QPushButton] = []
 
         self.setWindowTitle(config.APP_NAME)  # 버전은 왼쪽 아래(_version_bar) — 사용자 요청 2026-10-02
-        self.resize(1600, 900)  # 선수 지표 표가 스크롤 없이 다 들어차는 실측 크기 근사
-        self.setMinimumSize(*MIN_WINDOW)
+        self._start_maximized = False  # 작은 화면 첫 실행 — main 이 showMaximized 로 띄운다
+        self._watched_screen = None    # 배율·작업 표시줄 변경 신호를 잇고 있는 화면
+        self._apply_plan(QApplication.primaryScreen())  # 크기·최소 크기 — 저장값 복원(_load_settings)보다 먼저
         self._build_ui()
         self._refresh_recent()
         self._load_season_cache()  # 시즌 콤보·시즌별 성적 탭이 쓸 시즌표
@@ -888,20 +934,162 @@ class MainWindow(QMainWindow):
     def _load_settings(self) -> dict:
         """창 크기·위치는 바로, 메뉴·시즌은 돌려줘서 첫 계정을 그릴 때 쓴다.
 
-        restoreGeometry 는 모니터를 떼어 낸 뒤처럼 화면 밖이면 보이는 곳으로 옮긴다(Qt 동작) —
-        그래도 화면 하나와도 안 겹치면 기본 크기·위치로 둔다."""
+        restoreGeometry 는 화면보다 큰 저장값을 화면에 맞게 줄이고 화면 밖이면 보이는 곳으로 옮긴다(Qt 동작) —
+        단, 최소 크기가 그보다 크게 먼저 걸려 있으면 줄임이 무시돼 넘친다(실측). 그래서 __init__ 에서 화면 판정과
+        최소 크기를 먼저 정해 두고, 복원한 뒤 창이 실제로 놓인 화면 기준으로 다시 맞춘다."""
         try:
             s = self._settings()
             geo = s.value("window/geometry")
-            if geo is not None and self.restoreGeometry(geo):
+            restored = geo is not None and self.restoreGeometry(geo)
+            if restored:
                 screens = QApplication.screens()
                 if screens and not any(sc.availableGeometry().intersects(self.frameGeometry())
                                        for sc in screens):
-                    self.resize(1600, 900)
-                    self.move(screens[0].availableGeometry().topLeft())
+                    restored = False  # 그 모니터가 없다 — 처음 실행처럼
+            if restored:
+                self._apply_plan(self._screen_of_window(), keep_size=True)
+            else:
+                self._apply_plan(QApplication.primaryScreen(), center=True)
             return {k: s.value(f"view/{k}") for k in ("page", "season") if s.value(f"view/{k}")}
         except Exception:
             return {}
+
+    # ── 창 크기 — 화면에 맞추기(1.0.3) ──────────────────────────────────
+    def _screen_of_window(self):
+        """창 가운데가 있는 모니터 — 없으면 주 모니터."""
+        return (QApplication.screenAt(self.frameGeometry().center())
+                or self.screen() or QApplication.primaryScreen())
+
+    def _apply_plan(self, screen, keep_size: bool = False, center: bool = False) -> WindowPlan | None:
+        """그 화면에 맞는 최소 크기를 걸고, 창이 화면보다 크면 줄인다.
+        keep_size: 저장된 크기를 살린다(화면보다 클 때만 줄임). 아니면 규칙의 기본 크기로."""
+        if screen is None:
+            self.resize(*DEFAULT_WINDOW)
+            self.setMinimumSize(*MIN_WINDOW)
+            return None
+        avail = screen.availableGeometry()
+        plan = initial_window(avail.width(), avail.height())
+        self.setMinimumSize(*plan.min_size)
+        fw, fh = FRAME_ALLOWANCE
+        if keep_size:
+            w = min(self.width(), max(plan.min_size[0], avail.width() - fw))
+            h = min(self.height(), max(plan.min_size[1], avail.height() - fh))
+            if (w, h) != (self.width(), self.height()):
+                self.resize(w, h)
+        else:
+            self.resize(*plan.size)  # 최대화로 열어도 풀었을 때 이 크기 — 화면을 넘는 1600x900 으로 돌아가지 않게
+            self._start_maximized = plan.maximized
+        self._center_on_show = center
+        if center:
+            self._move_inside(avail, center=True)
+        self._narrow_screen = plan.narrow
+        return plan
+
+    def show_initial(self) -> None:
+        """main 에서 — 작은 화면이면 최대화로 띄우고, 띄운 뒤 실제 테두리로 한 번 더 확인한다."""
+        if self._start_maximized:
+            self.showMaximized()
+        else:
+            self.show()
+        QApplication.processEvents()
+        if not self.isMaximized():
+            # 띄우기 전엔 제목줄이 없어, 그때 맞춘 가운데는 띄운 뒤 제목줄만큼 아래로 밀려 화면 아래를 넘었다
+            # (실화면 실측: 쓸 수 있는 높이 688 에서 1px 넘침). 실제 테두리로 다시 맞춘다.
+            screen = self._screen_of_window()
+            if screen is not None:
+                self._move_inside(screen.availableGeometry(), center=getattr(self, "_center_on_show", False))
+        self._check_fits()
+        self._notify_narrow_once()
+
+    def changeEvent(self, e) -> None:
+        super().changeEvent(e)
+        # 최대화를 풀면 띄우기 전에 정한(제목줄 없던) 위치로 돌아가 아래가 넘쳤다 — 풀린 뒤 화면 안으로
+        if e.type() == QEvent.Type.WindowStateChange and not (self.isMaximized() or self.isMinimized()):
+            QTimer.singleShot(0, self._keep_on_screen)
+
+    def _keep_on_screen(self) -> None:
+        if self.isMaximized() or self.isMinimized() or not self.isVisible():
+            return
+        screen = self._screen_of_window()
+        if screen is not None and not screen.availableGeometry().contains(self.frameGeometry()):
+            self._move_inside(screen.availableGeometry())
+
+    def _move_inside(self, avail, center: bool = False) -> None:
+        """창(테두리 포함)을 쓸 수 있는 영역 안으로 — center 면 가운데로."""
+        fg = self.frameGeometry()
+        if center:
+            fg.moveCenter(avail.center())
+        x = min(max(fg.left(), avail.left()), avail.right() - fg.width() + 1)
+        y = min(max(fg.top(), avail.top()), avail.bottom() - fg.height() + 1)
+        if (x, y) != (self.frameGeometry().left(), self.frameGeometry().top()):
+            self.move(x, y)
+
+    def _check_fits(self) -> None:
+        """띄운 뒤 — 실제 테두리 포함 크기가 쓸 수 있는 영역을 넘으면 최대화(FRAME_ALLOWANCE 추정이 틀렸을 때)."""
+        if self.isMaximized() or self.isFullScreen():
+            return
+        screen = self._screen_of_window()
+        if screen is None:
+            return
+        avail, fg = screen.availableGeometry(), self.frameGeometry()
+        if fg.width() > avail.width() or fg.height() > avail.height():
+            self.showMaximized()
+
+    def _notify_narrow_once(self) -> None:
+        """폭조차 1280 이 안 되는 화면 — 막는 창 대신 상태줄로, 처음 한 번만."""
+        if not getattr(self, "_narrow_screen", False):
+            return
+        try:
+            s = self._settings()
+            if s.value("window/narrow_hinted"):
+                return
+            s.setValue("window/narrow_hinted", 1)
+        except Exception:
+            pass
+        self.statusBar().showMessage(NARROW_SCREEN_MSG, 30000)
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        handle = self.windowHandle()
+        if handle is not None and not getattr(self, "_screen_hooked", False):
+            self._screen_hooked = True
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._watch_screen(handle.screen())
+
+    def _watch_screen(self, screen) -> None:
+        """그 화면의 배율·작업 표시줄 변경도 같은 재판정으로 — 모니터 이동(screenChanged)과 다른 신호다."""
+        old = self._watched_screen
+        if old is not None:
+            for sig in (old.availableGeometryChanged, old.logicalDotsPerInchChanged):
+                try:
+                    sig.disconnect(self._on_screen_metrics_changed)
+                except (TypeError, RuntimeError):
+                    pass
+        self._watched_screen = screen
+        if screen is not None:
+            screen.availableGeometryChanged.connect(self._on_screen_metrics_changed)
+            screen.logicalDotsPerInchChanged.connect(self._on_screen_metrics_changed)
+
+    def _on_screen_changed(self, screen) -> None:
+        self._watch_screen(screen)
+        # 한 바퀴 뒤에 — 모니터를 옮기는 순간 Qt 가 배율에 맞춰 크기를 다시 정하며 여기서 맞춘 크기를 덮어썼다(실측)
+        QTimer.singleShot(0, lambda: self._refit(screen))
+
+    def _on_screen_metrics_changed(self, *_) -> None:
+        QTimer.singleShot(0, lambda: self._refit(self._watched_screen))
+
+    def _refit(self, screen) -> None:
+        """창이 다른 화면으로 갔거나 화면이 바뀌었다 — 최소 크기를 다시 정하고, 넘치면 맞춘다."""
+        if screen is None:
+            return
+        if self.isMaximized() or self.isFullScreen():
+            self.setMinimumSize(*initial_window(screen.availableGeometry().width(),
+                                                screen.availableGeometry().height()).min_size)
+            return
+        self._apply_plan(screen, keep_size=True)
+        avail, fg = screen.availableGeometry(), self.frameGeometry()
+        if not avail.contains(fg):  # 크기는 맞췄는데 일부가 화면 밖 — 안으로 옮긴다
+            self._move_inside(avail)
 
     # ── UI ────────────────────────────────────────────────────────────
     PAGE_SEARCH, PAGE_MAIN = 0, 1
@@ -3384,7 +3572,7 @@ class MainWindow(QMainWindow):
         self._fill(tbl, self._position_opp_rows(players), enable_sort=False)
         self._tint_position_rows(tbl, players)
         v.addWidget(tbl)
-        dlg.resize(560, 480)
+        fit_to_screen(dlg, 560, 480)
         dlg.exec()
 
     def _make_pitch_from_players(self, players: list[dict]
@@ -3420,8 +3608,14 @@ class MainWindow(QMainWindow):
                              match_date: str, result: str) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle(f"{nickname} 스쿼드")
-        dlg.resize(600, 760)
-        v = QVBoxLayout(dlg)
+        fit_to_screen(dlg, 600, 760)
+        # 내용은 세로 스크롤 안에 — 축구장 최소 560x640 + 제목이 약 688 이라 FHD 150% 노트북(창 안쪽 약 657)에선
+        # 대화상자를 화면에 맞춰 줄여도 안 들어갔다(2026-10-04 실측)
+        outer = QVBoxLayout(dlg)
+        outer.setContentsMargins(0, 0, 0, 0)
+        body = QWidget()
+        v = QVBoxLayout(body)
+        outer.addWidget(VScrollArea(body))
 
         formation = st.formation_of(players)
         title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
@@ -3465,7 +3659,7 @@ class MainWindow(QMainWindow):
         채운다."""
         dlg = QDialog(self)
         dlg.setWindowTitle("선수 정보")
-        dlg.resize(560, 720)
+        fit_to_screen(dlg, 560, 720)
         outer = QVBoxLayout(dlg)
         tabs = QTabWidget()
         outer.addWidget(tabs)
@@ -4422,7 +4616,7 @@ class ApiKeyDialog(QDialog):
         row.addWidget(self.btn_ok)
         row.addWidget(btn_cancel)
         v.addLayout(row)
-        self.resize(460, self.sizeHint().height())
+        fit_to_screen(self, 460, self.sizeHint().height())
 
     def _on_submit(self) -> None:
         key = self.ed_key.text().strip()
@@ -4488,7 +4682,7 @@ class NoticeDialog(QDialog):
         row.addWidget(self.btn_ok)
         row.addWidget(btn_cancel)
         v.addLayout(row)
-        self.resize(620, 640)
+        fit_to_screen(self, 620, 640)
 
     def _on_accept(self) -> None:
         if not self.chk_agree.isChecked():
@@ -4534,7 +4728,7 @@ class AboutDialog(QDialog):
         btn.clicked.connect(self.accept)
         row.addWidget(btn)
         v.addLayout(row)
-        self.resize(620, 600)
+        fit_to_screen(self, 620, 600)
 
     def _on_web_toggled(self, on: bool) -> None:
         try:
@@ -4577,7 +4771,7 @@ def main() -> int:
 
     api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     win = MainWindow(api)
-    win.show()
+    win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
     win.start_update_check()
     win.start_cache_prune()
     if config.OPEN_LAST_ACCOUNT:

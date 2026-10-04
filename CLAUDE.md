@@ -30,12 +30,13 @@
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
 | `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
 | `bot/` · `adapters/` | 카카오톡 오픈채팅 봇 — 서버(`bot/`, 같은 DB 를 본다)와 카톡에 붙이는 쪽(`adapters/`). 각 폴더 README |
-| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선) · `test_bot.py` · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
+| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_bot.py` · `test_release.py`(배포 검사) · `test_adapter.js`. pytest 없이 파일을 직접 실행 |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
+python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175% 를 흉내 내 실제 창을 띄워 잰다
 # 메뉴별 화면을 PNG 로 떠서 눈으로 볼 때 — 최근 검색 칩에 실제 닉네임이 찍히니 확인 후 지운다
 $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py
 python -m PyInstaller --noconfirm 피파전적관리.spec   # exe → dist\피파전적관리\ (확인용)
@@ -168,6 +169,13 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
    늘 화면 함수를 **직접** 불러 쟀다(신호를 안 거침) — 실제 경로(exe 를 켜서 프로세스 메모리)로 재야 보인다.
    `test_loader_signals_pass_objects_without_copying` 이 "받은 게 같은 객체(is)"로 지킨다.
 
+9. **창·대화상자 크기는 고정값으로 열지 않는다 — 화면(배율 반영 · 작업 표시줄 뺀 것)에 맞춘다**(1.0.3, 2026-10-04).
+   1600×900 고정이 FHD 150%(논리 1280×720)·1366×768 에서 넘쳤고, 최소 1280×720 조차 안 들어갔다. 지금 장치:
+   `initial_window`(규칙) · `_apply_plan`(최소 크기 → 저장 크기 복원 순서 — 복원보다 최소를 늦게 걸면 Qt 의 '화면에 맞춰
+   줄임'이 무시된다) · 띄운 뒤 `_check_fits` · 모니터/배율 변경 때 `_refit`(한 바퀴 뒤 — 바로 하면 Qt 가 덮어쓴다).
+   **새 대화상자는 `fit_to_screen(dlg, w, h)`** 로 열고, 내용 최소 높이가 657(150% 노트북 창 안쪽)을 넘으면 세로 스크롤
+   안에 넣는다(스쿼드 창이 그랬다). `tests/test_window_size.py` 가 흉내 낸 화면 5종에서 실제 창으로 잰다.
+
 ---
 
 ## 작업 방식 (이 앱 고유분)
@@ -218,7 +226,7 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 
 | 항목 | 상태 / 도입 시점 |
 |------|-----------------|
-| **버전 체계 + changelog** | ✅ 도입됨(2026-10-02, v0.2.0) — 지인·모르는 사람에게 exe 를 주기로 해서 조건 충족. 버전은 `config.APP_VERSION` 한 곳(UA 에도 실린다), 올리면 `CHANGELOG.md` 에 받는 사람이 읽을 말로 한 절. 크래시 로그(`crashlog.py`)도 같은 이유로 같이 들어왔다 |
+| **버전 체계 + changelog** | ✅ 도입됨(2026-10-02, v0.2.0) — 지인·모르는 사람에게 exe 를 주기로 해서 조건 충족. 버전은 `config.APP_VERSION` 한 곳(UA 에도 실린다), 올리면 `CHANGELOG.md` 에 받는 사람이 읽을 말로 한 절. 크래시 로그(`crashlog.py`)도 같은 이유로 같이 들어왔다. **번호 규칙(2026-10-04 사용자)**: `a.b.c` — a 큰 패치(구조가 바뀌어 새로 익혀야 함) · b 중간(새 기능·화면) · c 작은 수정(버그·문구). 올린 자리 아래는 **1로** 돌린다(1.4.2 → 2.1.1). 1.0.x 만 예외로 1.0.3 까지, 다음 기능 패치는 1.1.1. 앞으로의 버전별 계획은 `docs/ROADMAP.md` |
 | **회귀 검증(파싱 골든)** | ✅ 도입됨 — `tests/fixtures/`(익명화한 실응답 4경기) + `test_parsing.py`·`test_analysis.py`. 네트워크 없이 `python tests/test_parsing.py`로 실행 |
 | **SQLite 누적 저장** | ✅ 도입됨 — `store.py`. **API가 오래된 경기를 버린다**(2026-09-05 실측: `offset` 페이징으로 3,024경기·약 한 달까지만. 같은 시점 DB 는 7,859경기). 화면은 API가 아니라 이 DB를 본다. ⚠️ 여기 오래 *"최근 100경기만 준다"* 라고 적혀 있었다 — 100은 **한 번에 받는 개수 상한**이고, 그 정정(`d872ef5` · 07-18)이 문서까지 오지 않았다 |
 | **PyInstaller exe 빌드** | ✅ 도입됨 — `피파전적관리.spec` → `dist/피파전적관리/`(**onedir**, 2026-10-02 onefile 에서 전환 — 프로세스가 하나라 창 찾기에 부트로더를 거를 필요가 없다), 배포는 README "빌드·배포"의 zip. 기본적으로 매 작업마다 빌드해 실행 확인하되, 게임 중 등 사용자가 스모크를 미루라고 하면 offscreen(`QT_QPA_PLATFORM=offscreen`)으로 위젯 생성·렌더 경로만 확인한다 |

@@ -46,6 +46,19 @@ import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
 
 _DIR = os.path.join(_ROOT, "tests", "fixtures")
+# offscreen 의 기본 가상 화면은 800x800 이라, 창을 화면에 맞추는 규칙(1.0.3)이 모든 테스트를 '좁은 화면'으로
+# 판정해 최대화·안내를 띄운다 → FHD 가상 화면을 기본으로 준다. 작은 화면은 test_window_size.py 가 따로 잰다.
+# ⚠ configfile 경로에 한글이 있으면 Qt 가 아무 출력 없이 죽는다(rc=127, 이 PC 는 경로가 다 한글) — 그 폴더로 가서
+# 상대 경로로 주고 앱을 만든 뒤 돌아온다.
+SCREENS_DIR = os.path.join(_ROOT, "tests", "screens")
+if os.environ.get("QT_QPA_PLATFORM") == "offscreen" and QApplication.instance() is None:
+    os.environ["QT_QPA_PLATFORM"] = "offscreen:configfile=fhd100.json"
+    _cwd = os.getcwd()
+    os.chdir(SCREENS_DIR)
+    try:
+        _app = QApplication(sys.argv)
+    finally:
+        os.chdir(_cwd)
 _app = QApplication.instance() or QApplication(sys.argv)
 T.apply(_app)
 
@@ -295,10 +308,16 @@ def test_window_shrinks_to_min_without_squeezing():
                      for i in range(_win.pages.count()))
         assert _win.pages.minimumSizeHint().width() >= widest, \
             (_win.pages.minimumSizeHint().width(), widest)
+        # 숨은 페이지는 크기가 안 잡혀(640) 있다 — 열어서 잰다. 전엔 안 열고 재서, 앞선 테스트들이 페이지를 한 번씩
+        # 열어 둔 전체 실행에서만 통과하고 단독으로는 실패했다(2026-10-04).
+        cur = _win.pages.currentIndex()
         for i in range(_win.pages.count()):
+            _win.pages.setCurrentIndex(i)
+            _app.processEvents()
             frame = _win.pages.widget(i)
             inner = frame.widget().minimumSizeHint().width()
             assert frame.width() >= inner, (i, frame.width(), inner)
+        _win.pages.setCurrentIndex(cur)
     finally:
         _at_size(1600, 900)
 
@@ -353,9 +372,14 @@ def test_no_table_elides_at_min_or_default_size():
     _win._render_synergy(_win._details)
     tables = [t for t in _win.findChildren(widgets.FitTableWidget)]
     assert len(tables) >= 11, len(tables)  # 12번째(포지션 선수 다이얼로그)는 열 때 생긴다
+    # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
+    # 생기고 그 폭만큼 가로가 준다(1.0.3).
+    small = app_main.initial_window(1280, 688).min_size
     try:
-        for size in (app_main.MIN_WINDOW, (1600, 900)):
+        for size in (app_main.MIN_WINDOW, small, (1600, 900)):
+            _win.setMinimumSize(*small)
             _at_size(*size)
+            assert (_win.width(), _win.height()) == tuple(size), ("그 크기로 못 줄였다", size, _win.size())
             bad = []
             for tb in tables:
                 if tb.rowCount() == 0:
@@ -365,6 +389,12 @@ def test_no_table_elides_at_min_or_default_size():
                 if page:
                     _win._go_page(page)
                     _app.processEvents()
+                    # 페이지 틀이 안쪽 최소 폭보다 좁으면 가로가 조용히 잘린다 — 숨은 페이지는 크기가 안 잡혀(640)
+                    # 있어 연 뒤에 잰다
+                    frame = _win.pages.currentWidget()
+                    if frame.width() < frame.widget().minimumSizeHint().width():
+                        bad.append((page, "페이지 가로 잘림", frame.width(),
+                                    frame.widget().minimumSizeHint().width()))
                 hdr = tb.horizontalHeader()
                 # 세로 막대 자리를 안 빼면 가로 막대가 생기고 끝 열이 가려진다
                 if tb.horizontalScrollBar().maximum() > 0:
@@ -387,6 +417,7 @@ def test_no_table_elides_at_min_or_default_size():
     finally:
         _win.sp_synergy_min.setValue(20)
         _win._render_synergy(_win._details)
+        _win.setMinimumSize(*app_main.MIN_WINDOW)
         _at_size(1600, 900)
 
 
@@ -886,7 +917,7 @@ def test_main_starts_update_check_after_show():
         def __init__(self, api):
             calls.append("창")
 
-        def show(self):
+        def show_initial(self):
             calls.append("show")
 
         def start_update_check(self):
