@@ -171,6 +171,9 @@ B 새 [상] 0 · [중] 5 → 전부 반영(위쪽 경계 `top_stop_<kind>` · �
 3회차(바뀐 줄만 — A 1.0만 · B 0.8만 토큰): **둘 다 같은 새 [상] 1**(키 판정이 판정 전에 쓰거나 미정인데 받기를 계속하면 다른 주인 거래가 섞이고, 다음 판정이 그 줄을 만나 "같은 주인"으로 굳는다) ·
 [중] A 4 · B 2 → 전부 반영(판정 전 쓰기 금지 · 저장 0건이면 바로 받아들임 · 빈 쪽 = 다른 주인 · 20쪽 미정이면 사용자에게 묻기 · 지울 때 top_stop·fetched_at 까지 ·
 offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최근 구매는 따로 소계 · 화면 스레드 `wait()` 없음).
+4회차(바뀐 줄만 — A 0.8만 · B 0.7만 토큰): A 새 [상] 1(저장 0건 받아들임이 done·top_stop·fetched_at 을 안 지워 새 주인 옛 거래 영구 누락) · [중] 3(빈 쪽 오판 · 구매 saleSn 은 판 사람의 매물
+번호라 부계정 매물을 사면 종류를 넘어 겹침 · 묻는 띠의 상태) / B 새 [상] 0 · [중] 3(묻기보다 자동이 안전 · 0건일 때 알림 없음 · 판정 중 표시).
+→ **키 판정 장치를 없앴다** — 4회차 연속 같은 자리에서 [상]이 나왔고, 틀렸을 때 잃는 건 다시 받기 19초뿐. 키가 바뀌면 전부 지우고 다시 받고, 내 계정만 띠로 확인.
 
 ### 실측 장부 (2026-10-06 — 검토자는 다시 재지 않는다)
 
@@ -205,21 +208,18 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
   ouid 를 아예 빼고 부를 수 있는지는 구현 첫 줄에서 잰다(안 되면 빈 문자열 — R1 에서 통과). `TRADE_PAGE = 100`(R4 상한).
 - **저장**(fifa.db): `trades(kind TEXT, sale_sn TEXT, trade_date TEXT, spid INTEGER, grade INTEGER, value INTEGER, PRIMARY KEY(kind, sale_sn))` +
   `idx_trades_spid(spid, trade_date)` · `INSERT OR IGNORE`(R5 중복 — 같은 줄이 별개 판매였는지는 사용자 대조, 아래 "재지 않은 것"). ouid 열은 **없다** — 이 표는 "이 키 주인의 거래"다.
-  `trade_state(key TEXT PRIMARY KEY, value TEXT)`: `key_fp`(키 sha256 앞 16자 — 키 자체는 안 남긴다) · `fetched_at` · `my_ouid` · 종류별 `done_<kind>`(가장 옛 쪽까지 닿았다) ·
+  `trade_state(key TEXT PRIMARY KEY, value TEXT)`: `key_fp`(키 sha256 앞 16자 — 키 자체는 안 남긴다) · `fetched_at` · `my_ouid` · `my_ouid_unconfirmed`(키가 바뀐 뒤 확인 전) · 종류별 `done_<kind>`(가장 옛 쪽까지 닿았다) ·
   종류별 `top_stop_<kind>`(위쪽 받기를 **시작할 때** 저장돼 있던 최신 거래 날짜 — 위쪽이 끝나면 지운다).
-- **키가 바뀌면** — 판정은 `TradeLoader` 가 **시작할 때마다** `key_fp` 를 비교해서 한다(키를 바꾸는 길이 `_ask_new_key`(app_main.py:3342)·첫 실행 키 창·`.env` 손 수정 셋이라
-  한 자리에 걸면 나머지가 빠진다 — 2회차). 키 교체 직후에는 돌던 `TradeLoader` 에 `cancel()` 만 보내고(**화면 스레드에서 `wait()` 안 함** — 요청 타임아웃 10초 동안 창이 굳는다),
-  끝남 신호를 받은 뒤 새로 띄운다(`TradeLoader` 는 한 번에 하나 — 옛 키의 남은 쪽이 새 주인 표에 섞이지 않게).
-  **판정이 날 때까지 DB 에 아무것도 쓰지 않는다**(3회차 [상] 둘 다 — 판정용 쪽을 먼저 넣으면 판정이 자기가 넣은 `saleSn` 을 만나 늘 "같은 주인"이 된다). 판정용 쪽은 메모리에만.
-  판정 — 새 키로 구매·판매 쪽을 차례로 받으며:
-  - 저장된 거래가 **0건** → 섞일 것이 없다 → 새 `key_fp` 로 받아들이고 `my_ouid` 는 지운다(옛 주인이 거래 없던 계정일 수 있다).
-  - 저장된 `saleSn` 이 하나라도 나옴 → **같은 주인**(재발급) → `key_fp` 만 바꾸고 그대로.
-  - 저장된 최신 날짜보다 옛 쪽에 닿았거나 **빈 쪽**(새 주인의 목록이 끝남)인데 하나도 없음 → **다른 주인** → 거래·`my_ouid`·`done_*`·`top_stop_*`·`fetched_at` 를 **전부** 지우고
-    `key_fp` 를 바꾸고 띠에 *"API 키가 바뀌어 거래 기록과 내 계정 지정을 지웠습니다"*.
-  - `config.TRADE_KEYCHECK_PAGES`(20)쪽 안에 위 셋 중 하나도 아님(그 사이 2천 건 넘게 거래) → 띠로 사용자에게 묻는다: *"API 키가 바뀌었습니다. 같은 넥슨 계정의 키인가요? [같은 계정] [다른 계정]"*
-    (자동으로 영영 미정이 되지 않게 — 3회차). 답할 때까지 받기 없음.
-  - 429 · 네트워크 · 키 거절 → **아무것도 안 쓰고 이번 실행은 받기 없이 끝**. 다음 기회에 다시 판정.
-  판정이 나야 그다음 위쪽·아래쪽 받기로 간다.
+- **키가 바뀌면 — 판정하지 않고 전부 다시 받는다**(4회차에 설계를 줄였다). 1~4회차에 "같은 주인인가"를 `saleSn` 대조로 판정하려다 회차마다 새 [상]이 나왔다
+  (판정 전 쓰기로 자기 오염 · 0건·빈 쪽·20쪽 미정 · 구매 `saleSn` 은 판 사람의 매물 번호라 부계정 매물을 사면 종류를 넘어 겹침 · 묻는 띠의 상태·반복 요청).
+  틀렸을 때 잃는 것은 다시 받기(162요청 · 약 19초 — R4)뿐이라 판정 장치의 위험이 이득보다 크다.
+  - 감지: `TradeLoader` 가 **시작할 때마다** `trade_state.key_fp` 와 지금 키(`config.API_KEY` — 모듈 경유)의 지문을 비교한다 — 키를 바꾸는 길 셋(`_ask_new_key` app_main.py:3342 ·
+    첫 실행 키 창 · `.env` 손 수정)을 한 자리에서 잡는다.
+  - 다르면 **한 트랜잭션으로** 거래 · `done_*` · `top_stop_*` · `fetched_at` 을 **전부** 지우고 `key_fp` 를 새것으로, `my_ouid` 는 `my_ouid_unconfirmed` 로 옮긴다 → 그다음 첫 수집처럼 받는다.
+  - 화면: 거래 화면은 `my_ouid_unconfirmed` 가 있으면 거래를 붙이지 않고 띠 *"API 키가 바뀌었습니다. 내 계정이 ○○ 맞나요? [맞음] [바꾸기]"* — 답은 화면 스레드가 `my_ouid` 한 줄만 쓴다
+    (받기와 무관 — 답을 안 해도 수집은 계속되고 요청이 되풀이되지 않는다). [맞음]을 잘못 눌러도 [바꾸기]로 되돌린다(1회차 띠와 같음).
+  - 화면이 지금 키의 지문 ≠ `key_fp` 를 보면(로더가 아직 안 돔) 거래 화면은 *"API 키 확인 중"* — 새 키 주인이 옛 주인 가계부를 자기 것으로 읽지 않게.
+  - 키 교체 직후 돌던 `TradeLoader` 엔 `cancel()` 만(**화면 스레드에서 `wait()` 안 함**), 끝남 신호 뒤 새로 띄운다(`TradeLoader` 는 한 번에 하나).
 - **받는 규칙**(1회차 [상] — 첫 수집이 끊기면 옛 거래가 영영 빠졌다):
   - **위쪽(새 거래)**: 시작할 때 `top_stop_<kind>` 가 없으면 지금 저장된 최신 날짜로 적는다(있으면 끊긴 위쪽을 잇는 중 — 그대로 둔다). offset 0 부터
     **그 쪽의 가장 옛 날짜가 `top_stop_<kind>` − `config.TRADE_OVERLAP_DAYS`(7) 이하**일 때까지(R6 — 늦게 반영된 옛 날짜 거래도 겹쳐 받는다). 다 받으면 `top_stop_<kind>` 를 지운다.
@@ -309,12 +309,12 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 | 진입점 | 무엇을 | 스레드 | 스위치 | 캐시 | `shutdown` 정리 표 | 테스트 |
 |---|---|---|---|---|---|---|
 | `TradeLoader` | `get_trades` 구매·판매(위쪽·아래쪽) | 작업 | 없음(오픈API) · **키만 있으면**(계정 무관) | 위쪽 `fetched_at` 하루 · 아래쪽 `done_<kind>` | 한 줄(cancel · 12000 · **terminate 안 함** — 쪽마다 트랜잭션, 요청 타임아웃 10초) | `test_trade_interrupted_first_fetch_resumes_old` · `test_trade_interrupted_top_fetch_no_gap` · `test_trade_overlap_catches_late` · `test_trade_429_keeps_state` · `test_trade_yields_to_new_search` |
-| 키 교체 판정 — 키를 바꾸는 길 셋(`_ask_new_key` app_main.py:3338 · 첫 실행 키 창 · `.env` 손 수정) 모두 `TradeLoader` 시작 때 `key_fp` 비교로 잡는다 | 저장된 최신 날짜까지 쪽(≤ 20) → 같은 주인 판정 | 작업(`TradeLoader` 첫 단계 · 한 번에 하나) | — | — | 위와 같음 · 키 교체 직후 옛 것엔 `cancel()` 만, 끝남 신호 뒤 새로(화면 스레드 `wait()` 없음) | `test_trade_key_reissue_keeps` · `test_trade_key_reissue_after_100_trades` · `test_trade_key_change_wipes`(top_stop·fetched_at 까지) · `test_trade_key_check_never_writes_before_verdict`(미정이면 0줄 추가) · `test_trade_key_check_empty_store_accepts` · `test_trade_key_check_asks_after_20_pages` · `test_trade_key_change_via_env` |
+| 키 교체 감지 — 키를 바꾸는 길 셋(`_ask_new_key` app_main.py:3338 · 첫 실행 키 창 · `.env` 손 수정) 모두 `TradeLoader` 시작 때 `key_fp` 비교로 잡는다 | 다르면 한 트랜잭션으로 전부 지우고 `my_ouid` → `my_ouid_unconfirmed` → 첫 수집 | 작업(`TradeLoader` 첫 단계 · 한 번에 하나) | — | — | 위와 같음 · 키 교체 직후 옛 것엔 `cancel()` 만, 끝남 신호 뒤 새로(화면 스레드 `wait()` 없음) | `test_trade_key_change_wipes_all`(거래·done·top_stop·fetched_at) · `test_trade_key_change_via_env` · `test_trade_screen_key_checking`(지문 다르면 "API 키 확인 중") |
 | `PriceLoader` | `fetch_player_info`(시세) 반복 | 작업 | `WEB_DATA` | `card_prices` 하루 | 한 줄(카드 사이 cancel · 12000 · terminate 안 함) | `test_price_cache_daily` · `test_price_fetch_respects_cap` · `test_price_partial_label` |
 | 선수 카드 [시세] 탭 | 기존 요청 + `card_prices` 쓰기(작업 스레드) | 기존 | `WEB_DATA` | 쓰기만 추가 | 카드 창 `exec` 뒤 `wait()`(app_main.py:4465~) — `shutdown` 표 아님 | `test_price_tab_fills_cache` |
 | `RankerStatsLoader` | `get_ranker_stats`(N1) | 작업 | 없음 | `ranker_stats` 하루 | 한 줄 | `test_ranker_cache_daily` |
 | 선수 카드 [랭커 기록] 탭(N2) | `get_ranker_stats` 한 번 | 작업 | 없음 | `ranker_stats` 공용 | `_ability_sim_loader` 처럼 **self 속성** → `shutdown` 표 한 줄 + 카드 창 `wait()` | `test_scout_tab_one_request` |
-| 내 계정 [내 계정으로]·[바꾸기] | `trade_state.my_ouid` 쓰기 | 화면(쓰기 한 줄) | — | — | — | `test_my_account_banner` · `test_hint_needs_trades` |
+| 내 계정 [내 계정으로]·[바꾸기]·[맞음](키 교체 뒤) | `trade_state.my_ouid` 쓰기(· `my_ouid_unconfirmed` 지움) | 화면(쓰기 한 줄) | — | — | — | `test_my_account_banner` · `test_hint_needs_trades` · `test_key_change_asks_confirm_without_blocking_fetch` |
 
 ### 환경 행렬 (③)
 
@@ -336,14 +336,11 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 | 실패 | 결과 | 알아채는 법 | 복구 |
 |---|---|---|---|
 | 내 계정을 잘못 지정 | 남의 경기 화면에 내 거래 | 띠의 힌트 점수(R2) | [바꾸기] |
-| 키가 다른 넥슨 ID 로 바뀜 | 거래 섞임 | 키 교체 자리에서 첫 쪽 `saleSn` 대조 | 지우고 다시 받기 + 띠로 알림 |
-| 같은 넥슨 ID 로 키 재발급 | (막지 않으면) 지정이 사라지고 162요청 | 첫 쪽 `saleSn` 이 겹침 | 그대로 둔다 |
+| 키가 바뀜(다른 넥슨 ID든 같은 ID 재발급이든) | (막지 않으면) 다른 주인 거래가 섞임 | `TradeLoader` 시작 때 `key_fp` 다름 | 전부 지우고 다시 받기(162요청 · 19초) · 내 계정은 [맞음]/[바꾸기] 띠로 확인 |
 | 첫 수집이 끊김(종료·트레이 내려놓기·429) | (막지 않으면) 옛 거래 영구 누락 | `done_<kind>` 가 거짓 | 아래쪽을 다음 기회에 이어 받기 |
 | 429 | 그날 경기 조회까지 한도에 걸림 | `OPENAPI00007` | 거래는 그 자리에서 멈추고 키 창으로 안 보냄 · 다른 로더가 시작되면 양보 |
 | 강화 재료·방출로 사라진 카드 | (막지 않으면) "보유 중"으로 평가 손익 부풀림 | 최근 스쿼드에 없음 | 타임라인 상태 3·4번으로 따로 · 평가 안 함 |
 | 위쪽 받기가 끊김 | (막지 않으면) 가운데 구멍 영구 | `top_stop_<kind>` 가 남아 있음 | 다음에 0쪽부터 그 경계까지 |
-| 키 판정 실패(429·네트워크) | (막지 않으면) 같은 주인인데 지정이 지워짐 · 또는 판정 전 쓰기로 다른 주인 거래가 섞여 "같은 주인"으로 굳음 | — | **판정 전엔 안 쓴다** · 이번 실행은 받기 없이 끝 · 다음 기회에 |
-| 판정이 20쪽 안에 안 남 | (막지 않으면) 영영 미정 → 거래 기능 정지 | 20쪽 소진 | 띠로 사용자에게 [같은 계정]/[다른 계정] |
 | 옛 거래를 아직 다 못 받음 | 판매가 뒤 구매와 짝 | `done_*` 거짓 | 실현 손익 비움 + "받는 중" |
 | 넥슨이 ouid 를 다시 존중(정책 변경) | 빈 ouid 요청이 400/빈 목록 | `check_api` 줄 · 가계부 빈칸 | 그때 `get_trades` 에 ouid 를 되살린다 |
 | 반영 지연(R6) | 최근 거래 빠짐 | "마지막 거래 날짜" 표시 | 없음(넥슨 쪽) |
