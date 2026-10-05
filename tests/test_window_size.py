@@ -103,6 +103,18 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         d.exec()
         QDialog.exec = orig_exec
         out["dialogs"] = sizes
+    if case == "about":
+        from PyQt6.QtWidgets import QTabWidget
+        import theme
+        theme.apply(app)  # 앱 기본 글꼴 — 없으면 탭 폭이 실제의 절반(434 vs 837)이라 고정 620 도 통과했다
+        d = app_main.AboutDialog(win)
+        d.show()
+        app.processEvents()
+        bar = d.findChild(QTabWidget).tabBar()
+        dg = d.frameGeometry()
+        out["about"] = {"bar": bar.width(), "need": bar.sizeHint().width(),
+                        "frame": [dg.x(), dg.y(), dg.width(), dg.height()]}
+        d.close()
     scr = (win.screen() or app.primaryScreen()).availableGeometry()
     fg = win.frameGeometry()
     out.update({
@@ -247,6 +259,18 @@ def test_dialogs_fit_small_screen():
     for title, (w, h, mw, mh) in res["dialogs"].items():
         assert h + fh <= ah, ("대화상자가 화면보다 크다", title, h, ah)
         assert mh + fh <= real_h, ("내용 최소 크기 때문에 줄일 수 없다 — 스크롤 안에 넣어야", title, mh, real_h)
+
+
+def test_about_dialog_shows_every_tab():
+    # 정보 창이 고정 620 이던 때 탭 6개(합 837)가 안 들어가 ◀ ▶ 로 넘겨야 했다(2026-10-05 사용자).
+    # 탭 줄 폭 ≥ 원하는 폭이면 넘김 버튼이 안 생긴다. 가장 좁은 흉내 화면(175%, 논리 폭 약 1097)까지.
+    for screen in ("fhd100", "fhd150", "fhd175", "lap1366"):
+        res = _run("about", screen)
+        a = res["about"]
+        assert a["bar"] >= a["need"], ("탭 줄이 좁아 넘김 버튼이 생긴다", screen, a)
+        ax, ay, aw, ah = res["avail"]
+        fx, fy, fw, fh = a["frame"]
+        assert fw <= aw and fh <= ah, ("정보 창이 화면보다 크다", screen, a, res["avail"])
 
 
 def test_wrong_frame_estimate_is_caught_after_show():

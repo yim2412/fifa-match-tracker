@@ -5247,7 +5247,10 @@ class AboutDialog(QDialog):
         btn.clicked.connect(self.accept)
         row.addWidget(btn)
         v.addLayout(row)
-        fit_to_screen(self, 620, 600)
+        # 폭은 탭 줄이 원하는 만큼 — 고정 620 이던 때 탭 6개(합 837)가 안 들어가 ◀ ▶ 로 넘겨야 했고
+        # 마지막 탭은 아예 안 보였다(2026-10-05). 화면보다 넓으면 fit_to_screen 이 줄인다.
+        m = v.contentsMargins()
+        fit_to_screen(self, max(620, tabs.tabBar().sizeHint().width() + m.left() + m.right()), 600)
 
     def _sched(self):
         return getattr(self.parent(), "_rank_sched", None)
