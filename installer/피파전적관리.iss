@@ -78,13 +78,23 @@ end;
 // 떠 있는 앱(트레이 상주 포함)을 먼저 끝낸다 — 제거기는 설치기와 달리 떠 있는 앱을 닫지 않아, 앱이 계속 돌고
 // 설치 폴더가 통째로 남았다(1.1.1 실측). --quit 은 떠 있는 실행본에 종료를 부탁하고 끝날 때까지 기다린다(tray.request_quit).
 // 떠 있지 않으면 아무것도 켜지 않는다. 확인 창 뒤(usUninstall)라 취소하면 앱은 그대로다.
+// 끝난 앱의 뮤텍스는 프로세스가 완전히 내려가기 직전에 풀려, 파일은 다 지워져도 빈 폴더가 남았다(실측) —
+// 끝에서 빈 폴더 지우기를 잠깐 다시 시도한다. RemoveDir 은 빈 폴더만 지운다(사용자가 넣은 파일이 있으면 그대로).
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  ResultCode: Integer;
+  ResultCode, I: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
     Exec(ExpandConstant('{app}\{#AppExe}'), '{#QuitArg}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
   end;
+  if CurUninstallStep = usPostUninstall then
+    for I := 1 to 20 do
+    begin
+      if not DirExists(ExpandConstant('{app}')) then
+        Break;
+      RemoveDir(ExpandConstant('{app}'));
+      Sleep(250);
+    end;
 end;

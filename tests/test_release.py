@@ -200,6 +200,9 @@ def test_uninstaller_quits_running_app_first():
     body = code[:code.index("\nend;")]
     assert "Exec(ExpandConstant('{app}\\{#AppExe}'), '{#QuitArg}'" in body and "ewWaitUntilTerminated" in body, body
     assert body.index("usUninstall") < body.index("{#QuitArg}"), "확인 창 뒤(usUninstall)에서 끝내야 취소해도 앱이 산다"
+    # 빈 폴더 다시 지우기 — 끝에서, 빈 폴더만(DelTree 면 사용자 파일까지 지운다)
+    post = body[body.index("usPostUninstall"):]
+    assert "RemoveDir(ExpandConstant('{app}'))" in post and "Sleep(" in post and "DelTree" not in body, post
 
 
 def test_installer_shows_app_name():
