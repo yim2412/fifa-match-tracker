@@ -30,11 +30,13 @@ COLOR_ALLOW = {("playerinfo.py", "STAT_COLOR_BUCKETS"),
 # 임시 정렬(TEMP B-TREE)을 봐줄 표 — 행이 수십 개라 통째 정렬이 공짜다(계정·시즌·수집 상태).
 # 1만 행대(matches · match_players · snapshot_rows · elo_history)는 여기 넣지 않는다
 SQL_SMALL_TABLES = {"accounts", "seasons", "team_colors", "collect_state", "collect_lock", "snapshots",
-                    "cut_elo"}
+                    "cut_elo", "elo_track"}   # elo_track — 최대 config.ELO_TRACK_MAX(5)줄
 # 그 밖에 봐줄 문장 — 앱이 안 타는 경로만
 SQL_TEMP_ALLOW = {
     # 종류 없는 load_details 는 테스트만 쓴다 — 앱은 항상 종류를 준다(app_main.load_saved)
     "store.py:load_details": re.compile(r"FROM matches m JOIN"),
+    # 옛 DB 의 겹친 ELO 줄 정리 — 고유 인덱스를 만들기 전에 DB 마다 한 번만 돈다(인덱스가 생기면 다시 안 돈다)
+    "store.py:_ensure_elo_unique": re.compile(r"DELETE FROM elo_history WHERE rowid NOT IN"),
 }
 MODAL_STATIC = {"QFileDialog", "QInputDialog", "QColorDialog", "QFontDialog", "QMessageBox"}
 MODAL_GUARDED_BASE = {"QDialog.exec", "QApplication.exec"}   # 하위 클래스의 exec() 도 이걸로 막힌다

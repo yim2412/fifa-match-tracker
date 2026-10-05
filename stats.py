@@ -789,6 +789,32 @@ def time_of_day_rates(matches: list) -> list[TimeBandRate]:
     return bands
 
 
+WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")   # date.weekday() 순서(월=0)
+
+
+def time_weekday_rates(matches: list) -> list[list[TimeBandRate]]:
+    """시간대(TIME_BANDS) × 요일 승/무/패 — [시간대][요일(월=0)]. 날짜 없는 경기는 뺀다.
+
+    시각·요일은 time_of_day_rates 와 같은 match_date 기준이라 두 화면의 칸 합이 맞는다."""
+    grid = [[TimeBandRate(f"{name} {wd}", f"{lo:02d}~{hi:02d}") for wd in WEEKDAYS]
+            for name, lo, hi in TIME_BANDS]
+    for m in matches:
+        if m.match_date is None:
+            continue
+        h = m.match_date.hour
+        for row, (_, lo, hi) in zip(grid, TIME_BANDS):
+            if lo <= h < hi:
+                cell = row[m.match_date.weekday()]
+                if "승" in m.result:
+                    cell.win += 1
+                elif "무" in m.result:
+                    cell.draw += 1
+                elif "패" in m.result:
+                    cell.lose += 1
+                break
+    return grid
+
+
 # ── 연승·연패 직후 승률 ───────────────────────────────────────────────────
 @dataclass
 class StreakAfter:

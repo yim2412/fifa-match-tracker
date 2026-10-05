@@ -64,13 +64,28 @@ SEC_WIN = "이기는 패턴"
 SEC_LOSE = "지는 패턴"
 
 
+@dataclass(frozen=True)
+class Basis:
+    """조건부 승률 문장의 근거 숫자 — 화면이 "조건 막대 vs 기준 승률"로 그린다(1.3.1 ②).
+
+    min_n 은 그 문장을 낸 표본 기준과 같은 값이다 — 막대 흐림이 문장 기준과 어긋나지 않게.
+    기준이 전체 승률이 아닌 규칙(최근 vs 그 이전 · 점유율 구간끼리)은 base_label 로 밝힌다."""
+    label: str
+    rate: float
+    n: int
+    base_rate: float
+    min_n: int
+    base_label: str = "전체"
+
+
 @dataclass
 class Insight:
-    """분석 문장 하나. headline 은 결론, detail 은 근거 숫자."""
+    """분석 문장 하나. headline 은 결론, detail 은 근거 숫자. basis 는 조건부 승률일 때만."""
     section: str
     headline: str
     detail: str = ""
     weight: float = 0.0
+    basis: Basis | None = None
 
     def text(self) -> str:
         return f"{self.headline} {self.detail}".strip()
@@ -158,7 +173,9 @@ def _flow(matches: list[MatchSummary], details: list[dict], ouid: str,
                 SEC_FLOW,
                 f"그 이전 {prev.total}경기 승률 {prev.win_rate:.0f}% 대비"
                 f" {abs(gap):.0f}%p {word}.",
-                "", _w(gap, min(s.total, prev.total), MIN_BASE)))
+                "", _w(gap, min(s.total, prev.total), MIN_BASE),
+                Basis(f"최근 {s.total}경기", s.win_rate, s.total, prev.win_rate, MIN_FLOW,
+                      f"그 이전 {prev.total}경기")))
 
     out.extend(_contrast(matches, details, ouid, window))
     return out
@@ -222,7 +239,8 @@ def _clutch_rules(details: list[dict], ouid: str, base_rate: float
                 f"{n_first}경기 {_wdl_text(*cs.first_scored)} —"
                 f" 전체 승률({base_rate:.0f}%)보다 {gap:.0f}%p 높습니다."
                 f" 먼저 앞서 나가는 게 승패를 가장 크게 가릅니다.",
-                _w(gap, n_first, MIN_COND)))
+                _w(gap, n_first, MIN_COND),
+                Basis("선제골 넣은 경기", r, n_first, base_rate, MIN_COND)))
         if cs.comeback_lose >= 3 and n_first >= MIN_COND:
             share = cs.comeback_lose / n_first * 100
             if share >= 20:
@@ -246,7 +264,8 @@ def _clutch_rules(details: list[dict], ouid: str, base_rate: float
                 SEC_LOSE, f"먼저 실점하면 승률이 {r:.0f}%로 떨어집니다.",
                 f"{n_conc}경기 {_wdl_text(*cs.first_conceded)}."
                 f" 선제골이 갈린 경기의 {share:.0f}%에서 먼저 실점하고 있습니다.",
-                _w(gap, n_conc, MIN_COND)))
+                _w(gap, n_conc, MIN_COND),
+                Basis("먼저 실점한 경기", r, n_conc, base_rate, MIN_COND)))
     return out
 
 
@@ -299,7 +318,9 @@ def _possession_rules(details: list[dict], ouid: str, total: int
         f"{worst.games}경기 {_wdl_text(worst.win, worst.draw, worst.lose)}."
         f" 반면 {best.label}({best.span}%) 구간은 {best.games}경기에서"
         f" {best.win_rate:.0f}%. {hint}",
-        _w(best.win_rate - worst.win_rate, worst.games, MIN_COND))]
+        _w(best.win_rate - worst.win_rate, worst.games, MIN_COND),
+        Basis(f"점유율 {worst.span}%", worst.win_rate, worst.games, best.win_rate, need,
+              f"{best.label}({best.span}%)"))]
 
 
 def _formation_rules(details: list[dict], ouid: str, base_rate: float,
@@ -315,13 +336,15 @@ def _formation_rules(details: list[dict], ouid: str, base_rate: float,
                 SEC_LOSE, f"상대가 {f.formation}로 나오면 승률 {f.win_rate:.0f}%.",
                 f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
                 f" 전체보다 {abs(gap):.0f}%p 낮습니다.",
-                _w(gap, f.games, MIN_COND)))
+                _w(gap, f.games, MIN_COND),
+                Basis(f"상대 {f.formation}", f.win_rate, f.games, base_rate, need)))
         elif gap >= GAP_WIDE:
             out.append(Insight(
                 SEC_WIN, f"상대가 {f.formation}일 때 승률 {f.win_rate:.0f}%.",
                 f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
                 f" 전체보다 {gap:.0f}%p 높습니다.",
-                _w(gap, f.games, MIN_COND)))
+                _w(gap, f.games, MIN_COND),
+                Basis(f"상대 {f.formation}", f.win_rate, f.games, base_rate, need)))
     return out
 
 
@@ -385,7 +408,8 @@ def _opponent_rules(matches: list[MatchSummary], base_rate: float
                 f"{_wdl_text(o.win, o.draw, o.lose)},"
                 f" 평균 {o.avg_goals_for:.1f}:{o.avg_goals_against:.1f}."
                 f" 반복해서 지고 있는 상대입니다.",
-                _w(gap, o.games, MIN_OPP)))
+                _w(gap, o.games, MIN_OPP),
+                Basis(f"{o.nickname} 상대", o.win_rate, o.games, base_rate, MIN_OPP)))
     return out
 
 
@@ -412,7 +436,8 @@ def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int
             sec, f"{run} 직후 다음 경기 승률 {r.win_rate:.0f}%.",
             f"{r.games}경기 {_wdl_text(r.win, r.draw, r.lose)} — 전체 승률({base_rate:.0f}%)보다"
             f" {abs(gap):.0f}%p {'높습니다' if gap > 0 else '낮습니다'}. {tail}",
-            _w(gap, r.games, need)))
+            _w(gap, r.games, need),
+            Basis(f"{run} 직후", r.win_rate, r.games, base_rate, need)))
     return out
 
 
@@ -434,6 +459,17 @@ def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
 
 # ── 진입점 ───────────────────────────────────────────────────────────────
 SECTIONS = (SEC_FLOW, SEC_WIN, SEC_LOSE)
+
+# 규칙 함수 전수 — basis 를 채우는 것 / 안 채우는 것(이유). 새 규칙 함수를 만들면 둘 중 하나에 넣는다
+# — test_analysis 가 모듈의 규칙 함수 목록과 대조한다(빠진 규칙은 화면에 빈칸으로도 안 보여서).
+BASIS_RULES = ("_flow", "_clutch_rules", "_possession_rules", "_formation_rules",
+               "_opponent_rules", "_streak_rules")
+NO_BASIS_RULES = {
+    "_contrast": "선제골 '비율'의 변화 — 승률이 아니다",
+    "_minute_rules": "골이 몰린 구간의 비중 — 승률이 아니다",
+    "_finishing_rules": "기대득점 대비 골 — 승률이 아니다",
+    "_goal_type_rules": "골 유형 비중 — 승률이 아니다",
+}
 
 
 def narrate(matches: list[MatchSummary], details: list[dict], ouid: str,

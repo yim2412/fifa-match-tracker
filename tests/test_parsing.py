@@ -813,6 +813,26 @@ def test_time_of_day_band_edges():
     assert got == {"심야": (1, 0, 0), "오전": (0, 1, 1), "오후": (1, 0, 0), "저녁·밤": (0, 0, 1)}, got
 
 
+def test_time_weekday_rates_midnight_and_weekday():
+    from datetime import datetime as _dt
+    base = _m(1, "승", hour=5)
+
+    def at(i, res, when):
+        return models.MatchSummary(**{**base.__dict__, "match_id": f"w{i}", "result": res, "match_date": when})
+    # 2026-09-13 은 일요일 — 23:59 는 일·저녁, 자정 넘긴 00:00 은 월·심야
+    ms = [at(1, "승", _dt(2026, 9, 13, 23, 59)), at(2, "패", _dt(2026, 9, 14, 0, 0)),
+          at(3, "무", _dt(2026, 9, 14, 0, 30)), at(4, "승", _dt(2026, 9, 19, 12, 0)),
+          at(5, "승", None)]
+    grid = st.time_weekday_rates(ms)
+    bands = [b[0] for b in st.TIME_BANDS]
+    cell = lambda band, wd: (lambda c: (c.win, c.draw, c.lose))(grid[bands.index(band)][st.WEEKDAYS.index(wd)])  # noqa: E731
+    assert cell("저녁·밤", "일") == (1, 0, 0) and cell("심야", "월") == (0, 1, 1) and cell("오후", "토") == (1, 0, 0)
+    assert sum(c.games for row in grid for c in row) == 4, "날짜 없는 경기를 셌다"
+    # 시간대 합이 time_of_day_rates 와 같다(두 화면이 같은 기준)
+    assert [sum(c.games for c in row) for row in grid] == [b.games for b in st.time_of_day_rates(ms)]
+    assert grid[0][0].label == "심야 월"
+
+
 def _with(d, me_goals=0, opp_goals=0, opp_div=None):
     d["matchInfo"][0]["shoot"] = {"goalTotal": me_goals}
     d["matchInfo"][1]["shoot"] = {"goalTotal": opp_goals}

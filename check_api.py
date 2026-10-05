@@ -210,6 +210,11 @@ def main() -> int:
             a, b = store.date_range(conn, ouid, config.DEFAULT_MATCH_TYPE)
             print(f"[OK]   DB({config.DB_PATH.name}): 이번에 {new}건 저장 · "
                   f"누적 {total}경기 ({a} ~ {b})")
+            elo = store.elo_history(conn, ouid)
+            tracked = any(t["ouid"] == ouid for t in store.track_list(conn))
+            print(f"[OK]   ELO 기록: 검색 {sum(r['source'] == 'search' for r in elo)}점 · "
+                  f"스냅숏 {sum(r['source'] == 'snapshot' for r in elo)}점"
+                  f" · 따라가기 {'함' if tracked else '안 함'}")
         finally:
             conn.close()
     except Exception as e:

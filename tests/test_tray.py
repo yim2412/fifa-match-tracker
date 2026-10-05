@@ -472,12 +472,16 @@ def test_update_timer_respects_switch_and_consent():
             sh._update_timer.stop()
         seen = []
         w.start_update_check = lambda: seen.append(1)
-        config.UPDATE_CHECK, config.NOTICE_ACCEPTED = True, config.NOTICE_VERSION - 1
+        config.UPDATE_CHECK, config.NOTICE_ACCEPTED = True, config.NOTICE_BASE_VERSION - 1
         sh._update_due()
-        assert not seen, "동의 전에 GitHub 에 물었다"
+        assert not seen, "동의 전(v1)에 GitHub 에 물었다"
+        # v2 — 옛 동의로 계속 쓰는 범위라 다시 묻기 전에도 확인은 돈다(1.3.1 사용자 ⑤)
+        config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
+        sh._update_due()
+        assert seen == [1], "옛 동의(v2)인데 업데이트 확인이 멈췄다"
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         sh._update_due()
-        assert seen == [1]
+        assert seen == [1, 1]
     finally:
         config.UPDATE_CHECK, config.NOTICE_ACCEPTED = keep
 

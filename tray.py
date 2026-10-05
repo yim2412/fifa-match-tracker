@@ -339,6 +339,9 @@ class AppShell(QObject):
             w.show()
         w.raise_()
         w.activateWindow()
+        ask = getattr(w, "ask_notice_update_once", None)
+        if ask is not None:
+            QTimer.singleShot(0, ask)  # 옛 동의자에게 바뀐 안내 — 보인 **뒤**(트레이 [열기] · 두 번째 실행)
         path, self._pending_crash = self._pending_crash, None
         if path is not None and self.crash_modal is not None:
             self.crash_modal(path)

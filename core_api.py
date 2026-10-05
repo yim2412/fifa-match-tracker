@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from analysis import (
     MIN_COND, MIN_OPP, MIN_PLAYER_GAMES, SEC_FLOW, SEC_LOSE, SEC_WIN, SECTIONS, STREAK_MAX, WINDOW,
-    narrate, streak_min_n,
+    Basis, narrate, streak_min_n,
 )
 from models import (
     MatchSummary, current_streak, longest_streaks, moving_win_rate, opponent_stats, parse_match, period_stats,
@@ -24,13 +24,14 @@ from stats import (
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
     opponent_position_players, opponent_squad, own_squad, player_finishing_trend,
     position_line, possession_stats, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
-    shot_type_breakdown, team_color_stats, team_profile, time_of_day_rates,
+    shot_type_breakdown, team_color_stats, team_profile, time_of_day_rates, time_weekday_rates,
+    TIME_BANDS, WEEKDAYS,
 )
 
 __all__ = [
     # analysis — 집계 → 문장
     "MIN_COND", "MIN_OPP", "MIN_PLAYER_GAMES", "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "STREAK_MAX", "WINDOW",
-    "narrate", "streak_min_n",
+    "Basis", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "current_streak", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend",
@@ -44,4 +45,5 @@ __all__ = [
     "position_line", "possession_stats", "result_breakdown", "season_divisions", "season_id_of",
     "shot_distance_breakdown", "shot_map",
     "shot_type_breakdown", "team_color_stats", "team_profile", "time_of_day_rates",
+    "time_weekday_rates", "TIME_BANDS", "WEEKDAYS",
 ]

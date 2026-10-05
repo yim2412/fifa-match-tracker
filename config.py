@@ -104,7 +104,11 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 2  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내
+NOTICE_VERSION = 3  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+# 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
+# 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
+NOTICE_BASE_VERSION = 2
+TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)은 이 버전 동의 뒤부터
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -158,6 +162,9 @@ RANK_TIERS = (200, 1000, 10000)     # 집계 구간의 끝 순위 — 1~200 · 2
 RANK_CUT_RANKS = (1, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000)
 RANK_START_JITTER_MIN = (5, 50)     # 간격이 지난 시각의 +5~+50분 — 50분이면 약 1.5분 수집이 다음 정각 전에 끝난다
 RANK_RAW_KEEP_DAYS = 14             # 다른 구단주 1만 명분 원본은 이만큼만. 집계는 계속
+ELO_TRACK_MAX = 5                   # 하루 한 번 ELO 를 이어서 기록할 구단주 — 사용자가 직접 고른다(1.3.1 사용자 ⑥)
+ELO_CUT_LINES = (200, 1000)         # ELO 그래프에 시계열로 긋는 순위 컷 — 1만 위는 축을 넓혀 그래프를 찌그러뜨려 툴팁만
+ELO_FALLBACK_DAYS = 70              # 시즌표도 스냅숏도 없을 때 "지금 시즌"으로 볼 기간 — 최근 시즌 최장(ROADMAP R5)
 RANK_EMPTY_RETRIES = 2              # 빈 쪽은 그 쪽만 이만큼 다시 받는다 — 10-05 실측: 500쪽 중 빈 쪽 하나가 회차 전체를 버렸다
 RANK_EMPTY_RETRY_WAIT_S = 1.0       # 다시 받기 전 대기. 진짜 구조 변경이면 다시 받아도 비어 그대로 실패한다
 
@@ -247,7 +254,19 @@ def accept_notice(web_data: bool) -> None:
 
 
 def notice_needed() -> bool:
-    return NOTICE_ACCEPTED < NOTICE_VERSION
+    """처음 동의가 필요한가 — 이게 참이면 창·수집·업데이트 확인·ELO 기록이 전부 멈춘다.
+    v1(1.0.x) 동의자도 여기 든다 — v2 의 수집·ELO 안내를 아직 못 봤다(ROADMAP 1.3.1 검토 B 4-1)."""
+    return NOTICE_ACCEPTED < NOTICE_BASE_VERSION
+
+
+def notice_update_pending() -> bool:
+    """옛 동의(기본 범위는 계속 돎) + 새 안내를 아직 안 봄 — 창을 사용자에게 보일 때 한 번 다시 묻는다."""
+    return NOTICE_BASE_VERSION <= NOTICE_ACCEPTED < NOTICE_VERSION
+
+
+def track_allowed() -> bool:
+    """따라가기 계정의 하루 ELO 기록 — 그 안내(TRACK_NOTICE_VERSION)에 동의한 뒤부터."""
+    return NOTICE_ACCEPTED >= TRACK_NOTICE_VERSION
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다

@@ -28,6 +28,7 @@ except ImportError:  # pragma: no cover — 설치 안 된 환경
     _loads = json.loads
     JSON_ENGINE = "json"
 
+import config
 from seasons import Season
 
 SCHEMA = """
@@ -71,8 +72,9 @@ CREATE TABLE IF NOT EXISTS seasons (
 );
 -- 카톡 봇(2026-10-05 삭제)이 쓰던 표 — 채팅방·보낸 사람 이름이 들어 있어 남기지 않는다.
 DROP TABLE IF EXISTS bot_users;
--- 검색한 구단주의 ELO(랭킹 점수) 기록 — 메인 검색에서만 적는다(구단주 비교는 안 적는다).
--- 다른 구단주 1만 명분(스냅숏 출처)은 rank.db 에 있고 여기 쌓지 않는다 — 두 DB 에 걸친 트랜잭션이 없게.
+-- 구단주 ELO(랭킹 점수) 기록 — source "search": 메인 검색 때 한 줄(구단주 비교는 안 적는다) ·
+-- "snapshot": 사용자가 고른 따라가기 계정(elo_track, 최대 5명)만 수집 스냅숏에서 옮겨 적는다(1.3.1 —
+-- 원본이 14일 뒤 지워져도 남게). 다른 구단주 1만 명분은 rank.db 에만 — 두 DB 에 걸친 트랜잭션이 없게.
 CREATE TABLE IF NOT EXISTS elo_history (
     ouid       TEXT NOT NULL,
     profile_sn INTEGER,
@@ -83,7 +85,19 @@ CREATE TABLE IF NOT EXISTS elo_history (
     source     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_elo_ouid_taken ON elo_history(ouid, taken_at);
+-- ELO 따라가기 목록(1.3.1) — 수집 스레드·다른 실행본도 읽어야 해서 settings.ini 가 아니라 DB
+CREATE TABLE IF NOT EXISTS elo_track (
+    ouid       TEXT PRIMARY KEY,
+    profile_sn INTEGER,
+    nickname   TEXT,
+    added_at   TEXT NOT NULL
+);
 """
+
+# 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
+# DB 가 막는다(확인 뒤 쓰기는 그 사이에 끼인다). 옛 DB 에 이미 겹친 줄이 있으면 만들기가 실패하므로 먼저 하나만 남긴다.
+ELO_UNIQUE_INDEX = "ux_elo_src"
+
 
 # 팀컬러는 잘 안 바뀌지만 팀가치(구단가치)는 강화로 계속 오르는 값이라
 # 같이 저장하는 이상 짧게 간다 — 2026-07-23 사용자와 합의(둘 다 7일).
@@ -117,12 +131,22 @@ def open_db(path: Path | str) -> sqlite3.Connection:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(team_colors)")}
         if "team_value" not in cols:
             conn.execute("ALTER TABLE team_colors ADD COLUMN team_value INTEGER")
+        _ensure_elo_unique(conn)
         conn.commit()
         # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
         # 감독모드 경기 2만 개를 매번 다 훑었다 — 계정 11개에 0.79초 → 0.07초(2026-10-04 실측).
         # 빈 DB 에서 쌓인 경우도 다시 잰다(같은 날 실측 0.88초 → 0.08초).
         conn.execute(f"PRAGMA optimize={OPTIMIZE_ON_OPEN}")
     return conn
+
+
+def _ensure_elo_unique(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+                    (ELO_UNIQUE_INDEX,)).fetchone():
+        return
+    conn.execute("DELETE FROM elo_history WHERE rowid NOT IN"
+                 " (SELECT MIN(rowid) FROM elo_history GROUP BY ouid, taken_at, source)")
+    conn.execute(f"CREATE UNIQUE INDEX {ELO_UNIQUE_INDEX} ON elo_history(ouid, taken_at, source)")
 
 
 def _match_ouids(detail: dict) -> list[str]:
@@ -385,16 +409,90 @@ def save_elo(conn: sqlite3.Connection, ouid: str, elo: float, rank: int | None,
              taken_at: datetime | None = None) -> bool:
     """검색 때 받은 ELO 를 한 줄 — 마지막 줄과 점수·순위가 같으면 안 적는다(같은 날 재검색이 줄을 불리지 않게).
     → 적었나."""
-    last = conn.execute("SELECT elo, rank FROM elo_history WHERE ouid = ? ORDER BY taken_at DESC LIMIT 1",
-                        (ouid,)).fetchone()
+    # 같은 출처의 마지막 줄과만 비교한다 — 마지막 줄이 스냅숏 출처면 같은 검색 값이 매번 새 줄이 됐다(1.3.1 검토 B 2-12)
+    last = conn.execute("SELECT elo, rank FROM elo_history WHERE ouid = ? AND source = ?"
+                        " ORDER BY taken_at DESC LIMIT 1", (ouid, source)).fetchone()
     if last is not None and last["elo"] == elo and last["rank"] == rank:
         return False
-    conn.execute("INSERT INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
-                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                 (ouid, profile_sn, nickname, (taken_at or datetime.now()).isoformat(timespec="seconds"),
-                  elo, rank, source))
+    cur = conn.execute("INSERT OR IGNORE INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
+                       " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                       (ouid, profile_sn, nickname, (taken_at or datetime.now()).isoformat(timespec="seconds"),
+                        elo, rank, source))
     conn.commit()
+    return cur.rowcount > 0
+
+
+def save_elo_snapshots(conn: sqlite3.Connection, ouid: str, rows: list[tuple]) -> int:
+    """따라가기 계정의 스냅숏 점들 — rows: (taken_at ISO, elo, rank, profile_sn, nickname). 이미 있으면 건너뜀
+    (ux_elo_src — 14일치를 매번 다시 넘겨도 멱등). 한 계정 한 트랜잭션(수집을 끊을 때 잠금이 오래 안 남게). → 넣은 줄 수."""
+    with conn:
+        before = conn.total_changes
+        conn.executemany("INSERT OR IGNORE INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
+                         " VALUES (?, ?, ?, ?, ?, ?, 'snapshot')",
+                         [(ouid, sn, nick, t, elo, rank) for t, elo, rank, sn, nick in rows])
+        return conn.total_changes - before
+
+
+def _clear_marker(db_path: Path | str) -> Path:
+    p = Path(db_path)
+    return p.with_name(p.name + ".elo-clear-pending")
+
+
+def mark_clear_elo(db_path: Path | str, keep_ouid: str | None) -> None:
+    """ELO 지우기가 잠김 등으로 실패했다 — 표시를 남겨 다음에 켤 때(clear_elo_pending) 지운다.
+    조용히 넘기면 사용자에겐 지웠다고 보인다(1.3.1 검토 A 마지막 7)."""
+    try:
+        _clear_marker(db_path).write_text(keep_ouid or "", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_elo_pending(db_path: Path | str) -> bool:
+    """켤 때 — 지난번에 못 지운 ELO 기록이 있으면 지금 지운다. → 지울 게 있었나."""
+    m = _clear_marker(db_path)
+    if not m.exists():
+        return False
+    keep = m.read_text(encoding="utf-8", errors="replace").strip() or None
+    conn = open_db(db_path)
+    try:
+        clear_elo(conn, keep)
+    finally:
+        conn.close()
+    m.unlink(missing_ok=True)
     return True
+
+
+# ── ELO 따라가기 목록 (1.3.1 — 최대 config.ELO_TRACK_MAX 명) ────────────────────
+
+class TrackFull(Exception):
+    """따라가기 목록이 이미 가득 찼다."""
+
+
+def track_list(conn: sqlite3.Connection) -> list[dict]:
+    return [dict(r) for r in conn.execute(
+        "SELECT ouid, profile_sn, nickname, added_at FROM elo_track ORDER BY added_at")]
+
+
+def track_add(conn: sqlite3.Connection, ouid: str, profile_sn: int | None, nickname: str,
+              limit: int | None = None) -> None:
+    """목록에 넣는다(이미 있으면 프로필 번호·닉네임만 고침). 가득 차면 TrackFull."""
+    limit = config.ELO_TRACK_MAX if limit is None else limit
+    with conn:
+        have = conn.execute("SELECT 1 FROM elo_track WHERE ouid = ?", (ouid,)).fetchone()
+        if have:
+            conn.execute("UPDATE elo_track SET profile_sn = COALESCE(?, profile_sn), nickname = ? WHERE ouid = ?",
+                         (profile_sn, nickname, ouid))
+            return
+        if conn.execute("SELECT COUNT(*) FROM elo_track").fetchone()[0] >= limit:
+            raise TrackFull()
+        conn.execute("INSERT INTO elo_track (ouid, profile_sn, nickname, added_at) VALUES (?, ?, ?, ?)",
+                     (ouid, profile_sn, nickname, datetime.now().isoformat(timespec="seconds")))
+
+
+def track_remove(conn: sqlite3.Connection, ouid: str) -> None:
+    """목록에서만 뺀다 — 이미 쌓인 점은 남는다(지우기는 [수집 기록 지우기])."""
+    with conn:
+        conn.execute("DELETE FROM elo_track WHERE ouid = ?", (ouid,))
 
 
 def elo_history(conn: sqlite3.Connection, ouid: str) -> list[dict]:
@@ -405,9 +503,12 @@ def elo_history(conn: sqlite3.Connection, ouid: str) -> list[dict]:
 
 def clear_elo(conn: sqlite3.Connection, keep_ouid: str | None = None) -> int:
     """ELO 기록 지우기 — keep_ouid 가 있으면 그 계정 것만 남긴다. → 지운 줄 수."""
+    # 따라가기 목록도 같은 규칙 — 남길 계정 외에는 같이 빠진다(지운 사람이 다음 회차에 다시 쌓이지 않게)
     if keep_ouid:
         cur = conn.execute("DELETE FROM elo_history WHERE ouid <> ?", (keep_ouid,))
+        conn.execute("DELETE FROM elo_track WHERE ouid <> ?", (keep_ouid,))
     else:
         cur = conn.execute("DELETE FROM elo_history")
+        conn.execute("DELETE FROM elo_track")
     conn.commit()
     return cur.rowcount

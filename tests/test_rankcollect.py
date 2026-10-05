@@ -72,7 +72,10 @@ class Env:
         self.db = self.dir / "rank.db"
         self.saved = (config.ENV_PATH, config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED,
                       os.environ.get(config.RANK_COLLECT_VAR), os.environ.get(config.WEB_DATA_VAR))
+        self.saved_db = config.DB_PATH
         config.ENV_PATH = self.dir / ".env"
+        # 수집이 따라가기 ELO 를 fifa.db 에 옮긴다(1.3.1) — 실제 사용자 DB 를 열지 않게
+        config.DB_PATH = self.fifa = self.dir / "fifa.db"
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         self.write(web, collect)
 
@@ -88,6 +91,7 @@ class Env:
 
     def __exit__(self, *exc):
         (config.ENV_PATH, config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED, rc_env, web_env) = self.saved
+        config.DB_PATH = self.saved_db
         for var, val in ((config.RANK_COLLECT_VAR, rc_env), (config.WEB_DATA_VAR, web_env)):
             if val is None:
                 os.environ.pop(var, None)
@@ -323,10 +327,33 @@ def test_disabled_unless_both_switches_on_in_env():
 
 
 def test_disabled_before_notice_accepted():
+    # v1(1.0.x) 동의자는 v2 의 수집 안내를 못 봤다 — 막힌다. 처음(0)도 같다
+    for accepted in (0, config.NOTICE_BASE_VERSION - 1):
+        with Env() as env:
+            config.NOTICE_ACCEPTED = accepted
+            w = World(200)
+            assert rc.collect(db_path=env.db, fetch=w, pages=10).kind == "disabled" and not w.calls, accepted
+
+
+def test_old_notice_keeps_collecting_but_not_tracking():
+    # v2(1.1.1~1.2.1) 동의자는 다시 묻기 전에도 수집이 계속 돈다 — 새로 더한 따라가기 기록만 동의 뒤부터
+    import store
     with Env() as env:
-        config.NOTICE_ACCEPTED = config.NOTICE_VERSION - 1
-        w = World(200)
-        assert rc.collect(db_path=env.db, fetch=w, pages=10).kind == "disabled" and not w.calls
+        config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
+        assert config.notice_update_pending() and not config.notice_needed()
+        c = store.open_db(env.fifa)
+        store.track_add(c, "o1", 900001, "n1")
+        c.close()
+        out = rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW)
+        assert out.kind == "ok", out
+        c = store.open_db(env.fifa)
+        assert store.elo_history(c, "o1") == [], "동의 전에 따라가기 기록을 적었다"
+        c.close()
+        config.NOTICE_ACCEPTED = config.TRACK_NOTICE_VERSION
+        rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW + timedelta(days=1, hours=2))
+        c = store.open_db(env.fifa)
+        assert len(store.elo_history(c, "o1")) == 2, "동의 뒤 회차가 14일치(스냅숏 둘)를 채우지 않았다"
+        c.close()
 
 
 def test_read_env_switches_handles_bom_and_korean():
@@ -747,6 +774,222 @@ def test_elo_history_store():
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
+
+# ── 9단계: ELO 따라가기 (1.3.1) ──────────────────────────────────────────────
+
+def _fifa(env):
+    import store
+    return store.open_db(env.fifa)
+
+
+def test_track_list_caps_at_five():
+    import store
+    with Env() as env:
+        c = _fifa(env)
+        for i in range(config.ELO_TRACK_MAX):
+            store.track_add(c, f"o{i}", 900000 + i, f"n{i}")
+        store.track_add(c, "o0", None, "새이름")            # 이미 있는 계정은 자리를 안 먹는다(번호는 그대로)
+        try:
+            store.track_add(c, "o9", 1, "x")
+            raise AssertionError("6명째를 받았다")
+        except store.TrackFull:
+            pass
+        lst = store.track_list(c)
+        assert len(lst) == config.ELO_TRACK_MAX and lst[0]["nickname"] == "새이름" and lst[0]["profile_sn"] == 900000
+        store.track_remove(c, "o1")
+        store.track_add(c, "o9", 1, "x")                     # 하나 빼면 다시 들어간다
+        c.close()
+
+
+def test_sync_tracked_elo_only_tracked_and_idempotent():
+    import store
+    with Env() as env:
+        _snap(env, NOW - timedelta(days=1), people=40)
+        _snap(env, NOW, people=40)
+        c = _fifa(env)
+        store.track_add(c, "me", 900003, "n3")
+        store.save_elo(c, "searched", 4000.0, 7, profile_sn=900007, taken_at=NOW)   # 검색만 한 계정
+        c.close()
+        r = env.conn()
+        assert rc.sync_tracked_elo(r, env.fifa) == 2
+        assert rc.sync_tracked_elo(r, env.fifa) == 0, "두 번째에 또 적었다(멱등 아님)"
+        r.close()
+        c = _fifa(env)
+        h = store.elo_history(c, "me")
+        assert [(x["rank"], x["elo"], x["source"]) for x in h] == [(3, 4997.0, "snapshot")] * 2, h
+        assert [x["source"] for x in store.elo_history(c, "searched")] == ["search"], "목록 밖 계정까지 옮겼다"
+        c.close()
+
+
+def test_sync_survives_prune_and_new_track_gets_14_days():
+    import store
+    with Env() as env:
+        for d in range(3):
+            _snap(env, NOW - timedelta(days=2 - d), people=40)
+        c = _fifa(env)
+        store.track_add(c, "late", 900005, "n5")      # 스냅숏이 쌓인 뒤 넣은 계정 — 다음 회차에 지난 것까지
+        c.close()
+        r = env.conn()
+        assert rc.sync_tracked_elo(r, env.fifa) == 3
+        rc.prune_raw(r, NOW + timedelta(days=config.RANK_RAW_KEEP_DAYS + 5))
+        assert _count(r, "snapshot_rows") == 0
+        r.close()
+        c = _fifa(env)
+        assert len(store.elo_history(c, "late")) == 3, "원본을 지운 뒤 ELO 기록이 사라졌다(R11)"
+        c.close()
+
+
+def test_sync_finds_profile_by_nickname_when_missing():
+    import store
+    with Env() as env:
+        _snap(env, NOW, people=40)
+        c = _fifa(env)
+        store.track_add(c, "me", None, "n12")
+        c.close()
+        r = env.conn()
+        assert rc.sync_tracked_elo(r, env.fifa) == 1
+        r.close()
+        c = _fifa(env)
+        assert store.track_list(c)[0]["profile_sn"] == 900012
+        c.close()
+
+
+def test_sync_skips_when_fifa_locked():
+    import sqlite3
+    import store
+    with Env() as env:
+        _snap(env, NOW, people=40)
+        c = _fifa(env)
+        store.track_add(c, "me", 900003, "n3")
+        c.close()
+        hold = sqlite3.connect(str(env.fifa))
+        hold.execute("BEGIN EXCLUSIVE")
+        saved = store.OPEN_TIMEOUT_S
+        store.OPEN_TIMEOUT_S = 0.2
+        try:
+            r = env.conn()
+            assert rc.sync_tracked_elo(r, env.fifa) == 0
+            r.close()
+            # 회차 전체도 성공으로 끝난다
+            out = rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW + timedelta(days=2))
+            assert out.kind == "ok", out
+        finally:
+            store.OPEN_TIMEOUT_S = saved
+            hold.rollback()
+            hold.close()
+
+
+def test_sync_cancel_stops_between_accounts():
+    import store
+    with Env() as env:
+        _snap(env, NOW, people=40)
+        c = _fifa(env)
+        store.track_add(c, "a", 900001, "n1")
+        store.track_add(c, "b", 900002, "n2")
+        c.close()
+        ev = threading.Event()
+        ev.set()
+        r = env.conn()
+        assert rc.sync_tracked_elo(r, env.fifa, cancel=ev) == 0
+        r.close()
+        # 끊은 뒤 바로 지우기가 잠금 없이 된다
+        c = _fifa(env)
+        store.clear_elo(c)
+        c.close()
+
+
+def test_both_entry_points_sync_tracked_elo():
+    import store
+    with Env() as env:
+        c = _fifa(env)
+        store.track_add(c, "me", 900003, "n3")
+        c.close()
+        assert rc.collect(db_path=env.db, fetch=World(40), pages=2, now_fn=lambda: NOW).kind == "ok"
+        c = _fifa(env)
+        assert len(store.elo_history(c, "me")) == 1, "수집 회차 끝에서 안 옮겼다"
+        c.close()
+        later = NOW + timedelta(days=1, hours=1)
+        w = World(40)
+        results = {p: w(p) for p in (1, 2)}
+        out = rc.save_from_pages(results, later, pages=2, db_path=env.db, now_fn=lambda: later)
+        assert out is not None and out.kind == "ok", out
+        c = _fifa(env)
+        assert len(store.elo_history(c, "me")) == 2, "팀컬러 목록 저장 끝에서 안 옮겼다"
+        c.close()
+
+
+def test_clear_elo_keeps_mine_including_snapshot_points_and_track():
+    import store
+    with Env() as env:
+        _snap(env, NOW, people=40)
+        c = _fifa(env)
+        store.track_add(c, "me", 900003, "n3")
+        store.track_add(c, "other", 900004, "n4")
+        c.close()
+        r = env.conn()
+        rc.sync_tracked_elo(r, env.fifa)
+        r.close()
+        c = _fifa(env)
+        store.clear_elo(c, keep_ouid="me")
+        assert len(store.elo_history(c, "me")) == 1 and store.elo_history(c, "other") == []
+        assert [t["ouid"] for t in store.track_list(c)] == ["me"], "지운 계정이 따라가기에 남았다"
+        c.close()
+
+
+def test_save_elo_compares_only_with_last_search_row():
+    import store
+    d = Path(tempfile.mkdtemp())
+    try:
+        c = store.open_db(d / "f.db")
+        assert store.save_elo(c, "o", 4000.0, 9, taken_at=NOW)
+        store.save_elo_snapshots(c, "o", [((NOW + timedelta(hours=1)).isoformat(), 4100.0, 5, 1, "n")])
+        assert not store.save_elo(c, "o", 4000.0, 9, taken_at=NOW + timedelta(hours=2)), \
+            "마지막 줄이 스냅숏이라 같은 검색 값을 또 적었다"
+        # 같은 초 같은 출처는 DB 가 막는다 — 예외 없이 False
+        assert not store.save_elo(c, "o", 4200.0, 3, taken_at=NOW)
+        c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_old_db_with_duplicate_elo_rows_opens():
+    import sqlite3
+    import store
+    d = Path(tempfile.mkdtemp())
+    try:
+        p = d / "old.db"
+        c = sqlite3.connect(str(p))
+        c.execute("CREATE TABLE elo_history (ouid TEXT NOT NULL, profile_sn INTEGER, nickname TEXT,"
+                  " taken_at TEXT NOT NULL, elo REAL NOT NULL, rank INTEGER, source TEXT NOT NULL)")
+        c.executemany("INSERT INTO elo_history VALUES (?,?,?,?,?,?,?)",
+                      [("o", 1, "n", "2026-10-01T00:00:00", 1.0, 1, "search")] * 3)
+        c.commit()
+        c.close()
+        c = store.open_db(p)
+        assert len(store.elo_history(c, "o")) == 1
+        c.close()
+        c = store.open_db(p)          # 두 번째 열기는 정리를 다시 안 한다(인덱스가 있다)
+        c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_open_rank_db_ro_does_not_create_and_reads():
+    with Env() as env:
+        assert rc.open_rank_db_ro(env.db) is None and not env.db.exists()
+        _snap(env, NOW - timedelta(days=1), people=1200)
+        _snap(env, NOW, people=1200)
+        r = rc.open_rank_db_ro(env.db)
+        s = rc.cut_series(r)
+        assert [e for _, e in s[200]] == [4800.0, 4800.0] and len(s[1000]) == 2, s
+        assert rc.season_start_by_snapshots(r) == (NOW - timedelta(days=1)).isoformat()
+        try:
+            r.execute("DELETE FROM snapshots")
+            raise AssertionError("읽기 전용인데 지워졌다")
+        except Exception as e:
+            assert "readonly" in str(e).lower() or "read-only" in str(e).lower() or "query_only" in str(e).lower(), e
+        r.close()
+        assert rc.delete_db(env.db), "읽기 연결을 닫았는데 못 지웠다"
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

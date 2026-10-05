@@ -35,6 +35,7 @@ from pathlib import Path
 
 import config
 import ranker
+import store
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -208,6 +209,79 @@ def cut_elo(conn: sqlite3.Connection, snapshot_id: int | None = None) -> dict[in
         snapshot_id = row["id"]
     return {r["rank"]: r["elo"] for r in
             conn.execute("SELECT rank, elo FROM cut_elo WHERE snapshot_id=? ORDER BY rank", (snapshot_id,))}
+
+
+def open_rank_db_ro(path: Path | str | None = None) -> sqlite3.Connection | None:
+    """읽기 전용으로 연다 — 없으면 None(만들지 않는다: 수집을 켠 적 없는 사람에게 파일이 생기지 않게).
+    스키마를 안 건드리고 query_only 로 둔다. 읽고 바로 닫을 것 — 열린 연결이 delete_db 를 막는다."""
+    p = Path(path) if path else config.RANK_DB_PATH
+    if not p.exists():
+        return None
+    try:
+        conn = sqlite3.connect(str(p), timeout=OPEN_TIMEOUT_S)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA query_only=1")
+        return conn
+    except sqlite3.Error:
+        return None
+
+
+def cut_series(conn: sqlite3.Connection, ranks=config.ELO_CUT_LINES) -> dict[int, list[tuple[str, float]]]:
+    """순위 컷의 스냅숏별 시계열 — {순위: [(taken_at ISO, elo)]} 오래된 것부터. cut_elo 는 영구라 14일 넘게 남는다."""
+    out: dict[int, list[tuple[str, float]]] = {r: [] for r in ranks}
+    marks = ",".join("?" * len(ranks))
+    for r in conn.execute(f"SELECT s.taken_at, c.rank, c.elo FROM cut_elo c JOIN snapshots s ON s.id = c.snapshot_id"
+                          f" WHERE c.rank IN ({marks}) AND c.elo IS NOT NULL ORDER BY s.taken_at", tuple(ranks)):
+        out[r["rank"]].append((r["taken_at"], r["elo"]))
+    return out
+
+
+def season_start_by_snapshots(conn: sqlite3.Connection) -> str | None:
+    """시즌표가 없을 때 "지금 시즌"의 시작 — 마지막 season_seq 의 첫 스냅숏 시각(ISO). 스냅숏이 없으면 None."""
+    row = conn.execute("SELECT MIN(taken_at) AS t FROM snapshots WHERE season_seq ="
+                       " (SELECT season_seq FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1)").fetchone()
+    return row["t"] if row and row["t"] else None
+
+
+def sync_tracked_elo(rank_conn: sqlite3.Connection, fifa_path: Path | str | None = None,
+                     cancel: threading.Event | None = None) -> int:
+    """따라가기 계정(fifa.db elo_track)의 ELO 를 원본이 남은 스냅숏 전부(14일)에서 찾아 elo_history 에 옮긴다.
+
+    멱등(ux_elo_src)이고 매번 14일을 다 보므로 따로 backfill 이 없다 — 새로 넣은 계정도 다음 회차에 14일치가 찬다.
+    save_snapshot 커밋 **뒤** 부른다(rank.db 긴 트랜잭션 중이 아니게). fifa.db 가 잠겼거나 실패하면 건너뛴다 —
+    다음 회차가 다시 채운다. 계정마다 cancel 을 보고 한 계정 한 트랜잭션(끊을 때 쓰기 잠금이 남지 않게). → 넣은 줄 수."""
+    if not config.track_allowed():
+        return 0
+    added = 0
+    try:
+        fconn = store.open_db(fifa_path or config.DB_PATH)
+    except sqlite3.Error:
+        return 0
+    try:
+        for t in store.track_list(fconn):
+            if cancel is not None and cancel.is_set():
+                break
+            sn = t["profile_sn"]
+            if sn is None:
+                # 검색 때 랭킹을 못 받아 프로필 번호가 없던 계정 — 마지막 스냅숏에서 닉네임으로 찾아 둔다
+                hit = rank_conn.execute(
+                    "SELECT profile_sn FROM snapshot_rows WHERE nickname = ? AND snapshot_id ="
+                    " (SELECT id FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1)",
+                    (t["nickname"] or "",)).fetchone()
+                if hit is None:
+                    continue
+                sn = hit["profile_sn"]
+                store.track_add(fconn, t["ouid"], sn, t["nickname"] or "")
+            rows = [(r["taken_at"], r["elo"], r["rank"], r["profile_sn"], r["nickname"]) for r in rank_conn.execute(
+                "SELECT s.taken_at, r.elo, r.rank, r.profile_sn, r.nickname FROM snapshot_rows r"
+                " JOIN snapshots s ON s.id = r.snapshot_id WHERE r.profile_sn = ? AND r.elo IS NOT NULL", (sn,))]
+            if rows:
+                added += store.save_elo_snapshots(fconn, t["ouid"], rows)
+    except sqlite3.Error:
+        pass       # 잠김 등 — 회차 성공에는 영향 없음, 다음 회차가 14일치를 다시 본다
+    finally:
+        fconn.close()
+    return added
 
 
 # ── 수집 상태 (실패 대기 · D6 · 켜짐 사본) ──────────────────────────────────────
@@ -625,6 +699,7 @@ def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, page
                 rows, dups = run_round(fetch, pages=pages, cancel=cancel, progress=progress, heartbeat=lock.heartbeat)
                 out.snapshot_id = save_snapshot(conn, rows, taken, dups, ended_season)
                 out.rows = len(rows)
+                sync_tracked_elo(conn, cancel=cancel)   # 커밋 뒤 · prune 전(지울 원본도 한 번 더 옮길 기회)
                 prune_raw(conn, taken)
             except Cancelled:
                 out = Outcome("cancelled")
@@ -675,6 +750,7 @@ def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, 
                 out.disabled_by_block, out.fail_notice = flags["disabled"], flags["fail_notice"]
                 return out
             out = Outcome("ok", snapshot_id=save_snapshot(conn, rows, taken, dups, ended_season), rows=len(rows))
+            sync_tracked_elo(conn)
             prune_raw(conn, taken)
             record_result(conn, "ok", now_fn())
             return out

@@ -212,6 +212,8 @@ class MatchLoader(QThread):
     # 역대 최고 등급(user/maxdivision) — ouid, dict|{}(그 종류 기록 없음)|None(실패). finished_ok 뒤에 보내지만
     # 순서에 기대지 않는다: 화면이 ouid 별로 담아서, 먼저 와도 _on_loaded 가 그 계정을 그릴 때 보인다(7단계 변이로 확인)
     max_division_ready = pyqtSignal(str, object)
+    # 이번 검색의 ELO 를 새 줄로 적었다(1.3.1) — 랭킹이 finished_ok 보다 늦게 와도 ELO 그래프가 이번 점을 넣게
+    elo_saved = pyqtSignal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
@@ -560,10 +562,12 @@ class MatchLoader(QThread):
                 return  # 랭킹 밖·못 받음
             conn = store.open_db(config.DB_PATH)
             try:
-                store.save_elo(conn, ouid, info.elo, info.rank, profile_sn=info.profile_sn,
-                               nickname=info.nickname or self._nickname)
+                wrote = store.save_elo(conn, ouid, info.elo, info.rank, profile_sn=info.profile_sn,
+                                       nickname=info.nickname or self._nickname)
             finally:
                 conn.close()
+            if wrote and not self._cancel:   # 같은 값이라 안 적었거나 실패면 안 낸다(rank_ready 와 같은 규칙)
+                self.elo_saved.emit(ouid)
         except Exception:
             pass
 
@@ -908,6 +912,129 @@ def _ended_season() -> int | None:
     return max(nos) if nos else None
 
 
+# ── ELO 그래프 (1.3.1 · 13) — 읽기는 EloLoader(작업 스레드), 그리기는 들고 있는 값으로 ────────────
+
+@dataclass
+class EloSeries:
+    """EloLoader 가 한 번에 읽은 것 — 계정의 ELO 기록 전부 · 순위 컷 시계열 · 따라가기 상태."""
+    req: int                                  # 창이 띄울 때 준 요청 번호 — 늦게 끝난 옛 읽기를 거른다
+    rows: list[dict]                          # elo_history(오래된 것부터) — 계정별로 거르지 않고 시즌은 그릴 때
+    cuts: dict                                # {순위: [(taken_at ISO, elo)]} — rank.db 가 없으면 {}
+    snap_season_start: str | None = None      # 시즌표가 없을 때 쓸 시작(마지막 season_seq 의 첫 스냅숏)
+    tracked: bool = False
+    track_names: tuple = ()                   # 지금 따라가는 닉네임들(버튼 툴팁)
+
+
+class EloLoader(QThread):
+    """fifa.db elo_history·elo_track 과 rank.db cut_elo 를 읽는다. rank.db 는 읽기 전용 — 없으면 만들지 않는다."""
+    elo_ready = pyqtSignal(str, object)   # ouid, EloSeries — object 인 이유는 PyQt 규칙 8
+
+    def __init__(self, ouid: str, req: int):
+        super().__init__()
+        self._ouid, self._req = ouid, req
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        rows, tl, cuts, snap = [], [], {}, None
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                rows = store.elo_history(conn, self._ouid)
+                tl = store.track_list(conn)
+            finally:
+                conn.close()
+        except Exception:
+            pass   # 못 읽으면 빈 그래프 — 다음 신호 때 다시 읽는다
+        if self._cancel:
+            return
+        try:
+            r = rankcollect.open_rank_db_ro()
+            if r is not None:
+                try:
+                    cuts = rankcollect.cut_series(r)
+                    snap = rankcollect.season_start_by_snapshots(r)
+                finally:
+                    r.close()
+        except Exception:
+            pass
+        if self._cancel:
+            return
+        self.elo_ready.emit(self._ouid, EloSeries(
+            self._req, rows, cuts, snap, any(t["ouid"] == self._ouid for t in tl),
+            tuple(t["nickname"] or t["ouid"][:8] for t in tl)))
+
+
+def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
+    """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료일(반개구간이라 그날 0시부터) ·
+    시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일."""
+    ended = [s.end for s in rank_seasons if s.end <= now.date()]
+    if ended:
+        return datetime.combine(max(ended), datetime.min.time())
+    if snap_start:
+        try:
+            return datetime.fromisoformat(snap_start)
+        except ValueError:
+            pass
+    return now - timedelta(days=config.ELO_FALLBACK_DAYS)
+
+
+def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
+    """시작 이후 줄을 하루 한 점으로 — 같은 날 둘이면 늦은 것(검색·스냅숏 출처 무관). 오래된 것부터."""
+    by_day: dict = {}
+    for r in rows:
+        try:
+            t = datetime.fromisoformat(r["taken_at"])
+        except (TypeError, ValueError):
+            continue
+        if t < start or r.get("elo") is None:
+            continue
+        cur = by_day.get(t.date())
+        if cur is None or t >= cur["at"]:
+            by_day[t.date()] = {**r, "at": t}
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def rank_tier_index(rank: int | None) -> int:
+    """순위 → RANK_TIERS 구간 번호(0 이 맨 위). 1만 위 밖·모름은 len(RANK_TIERS)."""
+    if rank is None:
+        return len(config.RANK_TIERS)
+    for i, t in enumerate(config.RANK_TIERS):
+        if rank <= t:
+            return i
+    return len(config.RANK_TIERS)
+
+
+def rank_tier_label(idx: int) -> str:
+    tiers = config.RANK_TIERS
+    if idx >= len(tiers):
+        return f"{tiers[-1] // 10000}만 위 밖" if tiers[-1] % 10000 == 0 else f"{tiers[-1]:,}위 밖"
+    lo = 1 if idx == 0 else tiers[idx - 1] + 1
+    return f"{lo:,}~{tiers[idx]:,}위"
+
+
+def rank_tier_change_text(points: list[dict]) -> str:
+    """순위 구간 변화 한 줄 — 지금 구간 + 바로 앞 기록 하나와 비교(알림이 아니라 지난 값 표시).
+    points 는 지금 시즌 안의 점이라 하나뿐이면(새 시즌 첫 기록) 비교하지 않는다."""
+    if not points:
+        return ""
+    now_i = rank_tier_index(points[-1].get("rank"))
+    text = f"지금 {rank_tier_label(now_i)} 구간"
+    if now_i >= len(config.RANK_TIERS):
+        text = f"지금 {rank_tier_label(now_i)}"
+    if len(points) < 2:
+        return text
+    prev = points[-2]
+    prev_i = rank_tier_index(prev.get("rank"))
+    when = prev["at"].strftime("%m/%d")
+    if prev_i == now_i:
+        return f"{text} · 지난 기록({when})과 같은 구간"
+    way = "올라옴" if now_i < prev_i else "내려옴"
+    return f"{text} · 지난 기록({when}) {rank_tier_label(prev_i)}에서 {way}"
+
+
 class SeasonLoader(QThread):
     """감독모드 랭킹 시즌표를 백그라운드로 받아 온다(데이터센터 스크래핑).
 
@@ -1122,6 +1249,12 @@ class MainWindow(QMainWindow):
         self._basic: dict = {}
         self._rank = None   # ranker.RankerInfo | None — 넥슨 데이터센터 랭킹
         self._max_division: dict[str, dict] = {}  # ouid → {"division","date"} | {} — 역대 최고 등급(_on_max_division)
+        # ELO 그래프(1.3.1) — 계정별로 들고 그리는 건 늘 self._ouid 칸. 요청 번호는 계정별 마지막 것만 받는다.
+        # 내려놓기(release_memory)도 안 비운다(작다 — _max_division 과 같은 규칙).
+        self._elo: dict[str, EloSeries] = {}
+        self._elo_req: dict[str, int] = {}
+        self._elo_workers: list[EloLoader] = []
+        self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
@@ -1420,10 +1553,29 @@ class MainWindow(QMainWindow):
         self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
 
+    def ask_notice_update_once(self) -> None:
+        """옛 동의자에게 바뀐 안내를 다시 묻는다 — 창이 **사용자에게 보일 때** 실행당 한 번(숨긴 창에서 띄우면 게임 중
+        초점을 뺏는다). 일반 실행 · 트레이 [열기] · 두 번째 실행의 "창 앞으로"가 부른다. 취소하면 옛 동의 그대로."""
+        if self._notice_asked or not config.notice_update_pending() or not self.isVisible():
+            return
+        self._notice_asked = True
+        self.ask_notice_update()
+
+    def ask_notice_update(self) -> bool:
+        ok = NoticeDialog(self, reask=True).exec() == QDialog.DialogCode.Accepted
+        self._render_elo()   # 따라가기 버튼 툴팁이 동의 여부를 따른다
+        return ok
+
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
         """랭킹 수집 예약은 창 밖(tray.AppShell)에 산다 — 창을 숨기거나 기록을 내려놓아도 돌게. 창은 상태만 받는다."""
         self._rank_sched = sched
         sched.status.connect(self._on_rank_collect_status)
+        sched.outcome.connect(self._on_rank_collect_outcome)
+
+    def _on_rank_collect_outcome(self, out) -> None:
+        """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드)."""
+        if getattr(out, "kind", None) in ("ok", "fresh") and self._ouid:
+            self._load_elo(self._ouid)
 
     def _on_rank_collect_status(self, text: str, important: bool) -> None:
         # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다 — 중요한 알림(스스로 꺼짐·연속 실패)만 덮는다
@@ -2072,6 +2224,27 @@ class MainWindow(QMainWindow):
         for lb in (self.lb_sc_note, self.lb_sc_list, self.lb_sc_nexon):
             sv.addWidget(lb)
         v.addWidget(self.gb_sc)
+
+        # ELO(랭킹 점수) — 지금 시즌만(시즌 필터와 무관). 읽기는 EloLoader, 그리기는 _render_elo 가 들고 있는 값으로.
+        self.gb_elo = QGroupBox("ELO(랭킹 점수) — 지금 시즌")
+        ev = QVBoxLayout(self.gb_elo)
+        top = QHBoxLayout()
+        self.lb_elo_tier = QLabel("")
+        self.lb_elo_tier.setWordWrap(True)
+        self.lb_elo_tier.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        top.addWidget(self.lb_elo_tier, 1)
+        self.btn_elo_track = QPushButton("")
+        self.btn_elo_track.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        self.btn_elo_track.clicked.connect(self._on_elo_track_clicked)
+        top.addWidget(self.btn_elo_track)
+        ev.addLayout(top)
+        self.lb_elo_note = QLabel("")
+        self.lb_elo_note.setWordWrap(True)
+        self.lb_elo_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        ev.addWidget(self.lb_elo_note)
+        self.elo_chart = charts.AreaTrendChart()
+        ev.addWidget(self.elo_chart)
+        v.addWidget(self.gb_elo)
         return w
 
     PERIOD_CHOICES = [("1일", 1), ("2일", 2), ("1주", 7), ("1개월", 30)]
@@ -2178,6 +2351,12 @@ class MainWindow(QMainWindow):
         self.lb_analysis_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_analysis_note)
 
+        gb_dots = QGroupBox(f"최근 {core.WINDOW}경기 결과 (왼쪽이 오래된 경기)")
+        dl = QVBoxLayout(gb_dots)
+        self.analysis_dots = charts.ResultDots()
+        dl.addWidget(self.analysis_dots)
+        v.addWidget(gb_dots)
+
         self.box_analysis: dict[str, QVBoxLayout] = {}
         for sec in core.SECTIONS:
             gb = QGroupBox(sec)
@@ -2226,6 +2405,9 @@ class MainWindow(QMainWindow):
 
     def _render_analysis(self) -> None:
         found = self._narrate_scope()
+        recent = self._matches[:core.WINDOW][::-1]
+        self.analysis_dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
+                                     for m in recent])
         colors = {core.SEC_FLOW: T.TEXT,
                   core.SEC_WIN: T.GREEN,
                   core.SEC_LOSE: T.RED}
@@ -2239,7 +2421,32 @@ class MainWindow(QMainWindow):
                 continue
             for ins in rows:
                 box.addWidget(self._analysis_row(ins, colors[sec]))
+            bars = self._basis_bars(rows)
+            if bars is not None:
+                box.addWidget(bars)
         self._render_streak_after(self._matches)
+
+    @staticmethod
+    def _basis_bars(rows: list) -> charts.HBarList | None:
+        """섹션 문장 중 조건부 승률(basis)이 있는 것만 막대로 — 조건 승률 vs 기준 승률.
+
+        흐림은 basis.min_n(문장을 낸 표본 기준과 같은 값) — 문장이 나왔으면 흐리지 않다."""
+        data = []
+        for ins in rows:
+            b = ins.basis
+            if b is None:
+                continue
+            gap = b.rate - b.base_rate
+            data.append((b.label, b.rate,
+                         f"{b.rate:.1f}% · {b.n:,}경기 · {b.base_label} {b.base_rate:.1f}%",
+                         f"{b.label}: 승률 {b.rate:.1f}% ({b.n:,}경기)\n"
+                         f"{b.base_label} {b.base_rate:.1f}% 대비 {gap:+.1f}%p",
+                         b.n < b.min_n))
+        if not data:
+            return None
+        bars = charts.HBarList()
+        bars.set_data(data)
+        return bars
 
     def _render_streak_after(self, matches: list) -> None:
         """연승·연패 1·2·3+ 직후 다음 경기 승률 — 막대 + 전체 승률 대비 ±%p.
@@ -2302,6 +2509,16 @@ class MainWindow(QMainWindow):
         self.box_clutch_tod = QVBoxLayout(gb_tod)
         self.box_clutch_tod.setSpacing(3)
         v.addWidget(gb_tod)
+
+        gb_heat = QGroupBox("시간대 × 요일 승률")
+        hl = QVBoxLayout(gb_heat)
+        self.lb_clutch_heat_note = QLabel()
+        self.lb_clutch_heat_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_clutch_heat_note.setWordWrap(True)
+        hl.addWidget(self.lb_clutch_heat_note)
+        self.clutch_heat = charts.HeatmapChart()
+        hl.addWidget(self.clutch_heat)
+        v.addWidget(gb_heat)
 
         v.addStretch(1)
         scroll.setWidget(w)
@@ -2396,6 +2613,30 @@ class MainWindow(QMainWindow):
                 h.addWidget(a)
                 h.addWidget(none, 1)
             self.box_clutch_tod.addWidget(row)
+        self._render_clutch_heat(matches)
+
+    def _render_clutch_heat(self, matches: list[MatchSummary]) -> None:
+        """시간대 × 요일 히트맵 — 칸 경기가 MIN_COND 미만이면 색 없이 "표본 N"(소표본 100% 가 가장 진하지 않게)."""
+        grid = core.time_weekday_rates(matches)
+        few = core.MIN_COND
+        cells = []
+        for row in grid:
+            out = []
+            for c in row:
+                if not c.games:
+                    out.append((None, "—", f"{c.label} ({c.span}시) — 경기 없음", True))
+                    continue
+                weak = c.games < few
+                tip = (f"{c.label} ({c.span}시) — 승률 {c.win_rate:.1f}%"
+                       f" ({wdl_text(c.win, c.draw, c.lose)})")
+                if weak:
+                    tip += f"\n{sample_note(c.games, few)}"
+                out.append((c.win_rate, f"표본 {c.games}" if weak else f"{c.win_rate:.0f}%", tip, weak))
+            cells.append(out)
+        self.clutch_heat.set_data([f"{name} {lo:02d}~{hi:02d}" for name, lo, hi in core.TIME_BANDS],
+                                  list(core.WEEKDAYS), cells)
+        self.lb_clutch_heat_note.setText(
+            f"경기 시작 시각(이 PC 시간대) 기준 · 50%보다 높으면 초록, 낮으면 빨강 쪽 · 회색 칸은 경기 {few}판 미만")
 
     # ── 성적 진단 ─────────────────────────────────────────────────────────
     def _build_diagnosis_tab(self) -> QWidget:
@@ -3212,6 +3453,7 @@ class MainWindow(QMainWindow):
         self._loader.quota_hit.connect(self._on_quota_hit)  # 키를 바꾸는 게 답이라 같은 길
         self._loader.rank_ready.connect(self._on_rank_ready)
         self._loader.max_division_ready.connect(self._on_max_division)
+        self._loader.elo_saved.connect(self._load_elo)
         self._loader.start()
 
     def _on_rank_ready(self, ouid: str, rank) -> None:
@@ -3304,6 +3546,7 @@ class MainWindow(QMainWindow):
 
     def _on_seasons_loaded(self, items: list) -> None:
         self._rank_seasons = items
+        self._render_elo()   # 지금 시즌 시작이 바뀐다 — 들고 있는 값으로 다시 그림(읽기 없음)
         if self._matches_all:
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
             # 선택은 "전체" 그대로라 표시 중인 화면은 건드리지 않는다.
@@ -3494,6 +3737,8 @@ class MainWindow(QMainWindow):
             page = self._restore.pop("page", None)
             self._go_page(page if page in self._page_index else "대시보드")
         self._render_ranker()
+        # ELO — 검색·저장본 열기·내려놓은 뒤 다시 열기가 전부 여기를 지난다(경기 0 이어도 ELO 는 있을 수 있다)
+        self._load_elo(ouid)
 
         if not matches:
             self.statusBar().showMessage(f"{self._nick} — 감독모드 기록이 없습니다.")
@@ -4654,6 +4899,145 @@ class MainWindow(QMainWindow):
 
         self._show_trend_summary()
         self._render_sc_records()
+        self._render_elo()
+
+    # ── ELO 그래프 (1.3.1 · 13) ──────────────────────────────────────────────
+    def _load_elo(self, ouid: str | None = None) -> None:
+        """EloLoader 를 띄운다 — 계정을 연 뒤(_on_loaded 전부) · 이번 검색 ELO 를 적은 뒤(elo_saved) · 수집 회차 끝.
+        요청 번호를 올려 두고 elo_ready 는 그 계정의 마지막 번호만 받는다(늦게 끝난 옛 읽기가 새 값을 덮지 않게)."""
+        ouid = ouid or self._ouid
+        if not ouid:
+            return
+        self._elo_workers = [w for w in self._elo_workers if w.isRunning()]
+        req = self._elo_req.get(ouid, 0) + 1
+        self._elo_req[ouid] = req
+        w = EloLoader(ouid, req)
+        w.elo_ready.connect(self._on_elo_ready)
+        self._elo_workers.append(w)
+        w.start()
+
+    def _on_elo_ready(self, ouid: str, data) -> None:
+        if data is None or data.req != self._elo_req.get(ouid):
+            return
+        self._elo[ouid] = data
+        if ouid == self._ouid:
+            self._render_elo()
+
+    def _elo_points(self) -> list[dict]:
+        data = self._elo.get(self._ouid) if self._ouid else None
+        if data is None:
+            return []
+        start = elo_season_start(self._rank_seasons, data.snap_season_start, datetime.now())
+        return elo_daily_points(data.rows, start)
+
+    def _render_elo(self) -> None:
+        """들고 있는 self._elo[self._ouid] 로만 그린다(읽기 없음 — _render_trend 가 검색·시즌 전환마다 부른다)."""
+        data = self._elo.get(self._ouid) if self._ouid else None
+        pts = self._elo_points()
+        start = elo_season_start(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        self.gb_elo.setTitle(f"ELO(랭킹 점수) — 지금 시즌 ({start:%m/%d}~)")
+        self.lb_elo_tier.setText(rank_tier_change_text(pts))
+        self.lb_elo_tier.setVisible(bool(pts))
+        self.lb_elo_note.setText(self._elo_note(data, pts))
+        self.lb_elo_note.setVisible(bool(self.lb_elo_note.text()))
+        self._render_elo_track_button(data)
+        if len(pts) < 2:
+            self.elo_chart.set_data([])
+            self.elo_chart.setVisible(False)
+            return
+        self.elo_chart.setVisible(True)
+        vals = [p["elo"] for p in pts]
+        refs = []
+        for i, rank in enumerate(config.ELO_CUT_LINES):
+            series = []   # 창 앞 값도 넘긴다 — 계단선이 첫 점 날짜에 유효했던 컷부터 긋는다
+            for t, e in (data.cuts.get(rank) or []):
+                try:
+                    series.append((datetime.fromisoformat(t).date(), e))
+                except ValueError:
+                    continue
+            if series:
+                refs.append((f"{rank:,}위", series, T.CHART_NEUTRAL if i else T.CHART_DOWN))
+        self.elo_chart.set_data(
+            [(p["at"].strftime("%m/%d"),
+              p["elo"], None) for p in pts],
+            axis=charts.Axis.fit(vals), avg=False, x_dates=[p["at"].date() for p in pts], ref_series=refs)
+        self.elo_chart.setToolTip(self._elo_cut_tip(data))
+
+    @staticmethod
+    def _elo_cut_tip(data) -> str:
+        """그리지 않는 컷(1만 위 등)은 값만 툴팁으로 — 축을 넓혀 그래프를 찌그러뜨린다."""
+        last = []
+        for rank in config.RANK_CUT_RANKS:
+            series = (data.cuts.get(rank) if data else None) or []
+            if rank in config.ELO_CUT_LINES or not series:
+                continue
+            last.append(f"{rank:,}위 {series[-1][1]:,.0f}")
+        return ("마지막 수집의 순위 컷 — " + " · ".join(last)) if last else ""
+
+    def _elo_note(self, data, pts: list[dict]) -> str:
+        """빈 상태·안내는 원인별로(검토 B 8·9). 켜기 버튼은 두지 않는다 — 켜기는 동의 흐름이 있는 [정보·설정] 한 곳."""
+        if not config.WEB_DATA:
+            return "홈페이지 데이터가 꺼져 있어 ELO 를 받지 않습니다 — [정보·설정]"
+        out = []
+        if pts and rank_tier_index(pts[-1].get("rank")) >= len(config.RANK_TIERS):
+            out.append("1만 위 밖은 하루 기록이 없습니다")
+        tracked = bool(data and data.tracked)
+        if not config.RANK_COLLECT:
+            if len(pts) < 2:
+                out.append("검색할 때마다 한 점씩 쌓입니다 — 랭킹 수집을 켜 두면 하루 한 점")
+        elif tracked:
+            if len(pts) < 2:
+                out.append("다음 수집(하루 한 번) 뒤부터 그려집니다")
+        else:
+            out.append("검색할 때마다 한 점 — [따라가기]를 누르면 하루 한 점")
+        return " · ".join(out)
+
+    def _render_elo_track_button(self, data) -> None:
+        b = self.btn_elo_track
+        names = list(data.track_names) if data else []
+        tracked = bool(data and data.tracked)
+        b.setVisible(bool(self._ouid) and config.WEB_DATA)
+        if tracked:
+            b.setText("따라가기 그만")
+            b.setEnabled(True)
+            b.setToolTip("하루 한 번 기록을 그만 둡니다 — 이미 쌓인 점은 남습니다")
+            return
+        b.setText(f"이 구단주 ELO 따라가기 ({len(names)}/{config.ELO_TRACK_MAX})")
+        full = len(names) >= config.ELO_TRACK_MAX
+        b.setEnabled(not full)
+        if full:
+            b.setToolTip(f"{config.ELO_TRACK_MAX}명까지 — 지금 목록: " + ", ".join(names))
+        elif not config.track_allowed():
+            b.setToolTip("이용 안내 동의가 필요합니다 — 누르면 안내 창이 열립니다")
+        else:
+            tip = "랭킹 수집이 켜져 있으면 하루 한 번 ELO·순위를 이어서 기록합니다(지울 때까지)"
+            if self._rank is None or getattr(self._rank, "profile_sn", None) is None:
+                tip += " — 1만 위 안일 때만 하루 기록이 쌓입니다"
+            b.setToolTip(tip)
+
+    def _on_elo_track_clicked(self) -> None:
+        if not self._ouid:
+            return
+        data = self._elo.get(self._ouid)
+        if not (data and data.tracked) and not config.track_allowed():
+            self.ask_notice_update()
+            if not config.track_allowed():
+                return
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                if data and data.tracked:
+                    store.track_remove(conn, self._ouid)
+                else:
+                    sn_ = getattr(self._rank, "profile_sn", None) if self._rank is not None else None
+                    store.track_add(conn, self._ouid, sn_, self._nick or "")
+            finally:
+                conn.close()
+        except store.TrackFull:
+            self.statusBar().showMessage(f"따라가기는 {config.ELO_TRACK_MAX}명까지입니다.", 5000)
+        except sqlite3.Error as e:
+            self.statusBar().showMessage(f"따라가기 목록을 저장하지 못했습니다: {e}", 5000)
+        self._load_elo(self._ouid)
 
     def _sc_entries(self) -> tuple[list, bool]:
         """저장된 전체(_details_all — 시즌 필터 무시)에서 슈챔 진입 시각 — 캐시.
@@ -4949,21 +5333,23 @@ class MainWindow(QMainWindow):
                 f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
 
         self._clear(self.box_opp)
+        few = core.MIN_COND
+        opp_rows = []
         for f in core.formation_stats(details, self._ouid):
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
-            a = QLabel(f.formation)
-            a.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            b = QLabel(f"{f.win_rate:.1f}%")
-            b.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")
-            c = QLabel(f"({wdl_text(f.win, f.draw, f.lose)})")
-            c.setStyleSheet(f"color: {T.TEXT_DIM};")
-            h.addWidget(a)
-            h.addStretch(1)
-            h.addWidget(b)
-            h.addWidget(c)
-            self.box_opp.addWidget(row)
+            weak = f.games < few
+            opp_rows.append((
+                f.formation, f.win_rate,
+                f"{f.win_rate:.1f}% · {wdl_text(f.win, f.draw, f.lose)}" + (f" · 표본 {f.games}" if weak else ""),
+                f"상대 {f.formation} — {f.games}경기 승률 {f.win_rate:.1f}%"
+                + (f"\n{sample_note(f.games, few)}" if weak else ""),
+                weak))
+        if opp_rows:
+            head = QLabel(f"상대 포메이션별 내 승률 · 흐린 줄은 {few}경기 미만")
+            head.setStyleSheet(f"color: {T.TEXT_DIM};")
+            self.box_opp.addWidget(head)
+            self.opp_formation_bars = charts.HBarList()
+            self.opp_formation_bars.set_data(opp_rows)
+            self.box_opp.addWidget(self.opp_formation_bars)
 
         rb = core.result_breakdown(details, self._ouid)
         self._clear(self.box_result)
@@ -5006,12 +5392,18 @@ class MainWindow(QMainWindow):
             h.addWidget(c)
             self.box_result.addWidget(row)
 
-        for box, counter, color in ((self.box_gf, rb.goal_types, T.GREEN),
-                                    (self.box_ga, rb.concede_types, T.RED)):
+        self.type_donuts = {}
+        for key, box, counter, word in (("gf", self.box_gf, rb.goal_types, "득점"),
+                                        ("ga", self.box_ga, rb.concede_types, "실점")):
             self._clear(box)
             total = sum(counter.values())
-            for name, n in counter.most_common():
-                box.addWidget(BarRow(name, n, total, color))
+            segs = charts.donut_segments(list(counter.items()))
+            donut = charts.DonutChart(size=120)
+            donut.set_data(segs, center=f"{total:,}", sub=word)
+            self.type_donuts[key] = donut
+            box.addWidget(donut, 0, Qt.AlignmentFlag.AlignHCenter)
+            for name, n, col in segs:   # 범례 겸 숫자 — 조각과 같은 색
+                box.addWidget(BarRow(name, n, total, col))
             box.addStretch(1)
 
     def closeEvent(self, e) -> None:
@@ -5056,6 +5448,8 @@ class MainWindow(QMainWindow):
             (self._finishing_icon_loader, cancel(self._finishing_icon_loader), 500, False),
             (self._compare_loader, cancel(self._compare_loader), 8000, True),
             *[(ld, cancel(ld), 500, False) for ld in self._compare_squad_loaders],
+            # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
+            *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
             # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다
             (self._season_loader, None, 3000, True),
             (self._ability_sim_loader, None, 2000, False),
@@ -5295,20 +5689,27 @@ class NoticeDialog(QDialog):
     (고지 없이 켜진 채 남지 않게). 동의하지 않고 닫으면 앱을 켜지 않는다.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, reask: bool = False):
+        """reask: 이미 동의한 사람에게 바뀐 안내를 다시 묻는다(1.3.1 사용자 ⑤) — 홈페이지 데이터 체크를 **지금 값으로**
+        채우고 바뀐 점을 맨 위에. 처음 동의(reask=False)는 지금처럼 빈 칸(D5)."""
         super().__init__(parent)
-        self.setWindowTitle(f"{config.APP_NAME} — 이용 안내")
+        self.reask = reask
+        self.setWindowTitle(f"{config.APP_NAME} — 이용 안내" + (" (바뀐 점)" if reask else ""))
         v = QVBoxLayout(self)
-        v.addWidget(_notice_browser(notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML
+        v.addWidget(_notice_browser((notice.CHANGES_HTML if reask else "")
+                                    + notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML
                                     + notice.RANK_COLLECT_HTML + notice.TRAY_HTML), 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
+        self.chk_web.setChecked(reask and config.WEB_DATA)
         self.chk_agree = QCheckBox(notice.AGREE_CHECK)
         web_row = QHBoxLayout()
         web_row.addWidget(self.chk_web)
-        # D5: 체크는 매번 비워 두되(고지 없이 켜진 채 남지 않게), 켜 둔 사람이 [시작]만 눌러 모르고 끄지 않게 알린다
-        self.lb_web_now = QLabel(notice.WEB_DATA_ON_NOW if config.WEB_DATA else "")
+        # D5: 처음 동의는 체크를 비워 두되(고지 없이 켜진 채 남지 않게), 켜 둔 사람이 [시작]만 눌러 모르고 끄지 않게 알린다.
+        # 다시 묻기는 체크가 이미 지금 값이라 이 글이 필요 없다 — [시작]만 눌러도 홈페이지 데이터·수집이 그대로다.
+        on_now = config.WEB_DATA and not reask
+        self.lb_web_now = QLabel(notice.WEB_DATA_ON_NOW if on_now else "")
         self.lb_web_now.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.lb_web_now.setVisible(config.WEB_DATA)
+        self.lb_web_now.setVisible(on_now)
         web_row.addWidget(self.lb_web_now)
         web_row.addStretch(1)
         v.addLayout(web_row)
@@ -5483,8 +5884,10 @@ class AboutDialog(QDialog):
         self.chk_rank.setChecked(False)
         self.chk_rank.blockSignals(False)
         self.lb_rank.setText(rank_status_text({}))
-        self.lb_msg.setText(f"지웠습니다 — ELO 기록 {n}줄." if done else
-                            f"ELO 기록 {n}줄을 지웠습니다. 랭킹 수집 기록은 다른 실행본이 열고 있어 다음에 켤 때 지웁니다.")
+        elo = (f"ELO 기록 {n}줄을 지웠습니다." if n is not None
+               else "ELO 기록은 지금 쓰는 중이라 다음에 켤 때 지웁니다.")
+        self.lb_msg.setText(elo if done else
+                            f"{elo} 랭킹 수집 기록은 다른 실행본이 열고 있어 다음에 켤 때 지웁니다.")
 
 
 def rank_status_text(st: dict) -> str:
@@ -5506,23 +5909,23 @@ def rank_status_text(st: dict) -> str:
     return " · ".join(parts)
 
 
-def clear_rank_records(sched, keep_ouid: str | None) -> tuple[bool, int]:
+def clear_rank_records(sched, keep_ouid: str | None) -> tuple[bool, int | None]:
     """수집 기록 지우기 — 수집을 끄고(.env 를 못 쓰면 OSError — 그러면 아무것도 안 지운다: 켜진 채 지우면 다음
-    확인이 곧바로 다시 모은다) 멈춘 뒤 rank.db 를 지우고 fifa.db 의 ELO 기록을 지운다. → (rank.db 를 다 지웠나, ELO 줄 수)."""
+    확인이 곧바로 다시 모은다) 멈춘 뒤 rank.db 를 지우고 fifa.db 의 ELO 기록·따라가기 목록을 지운다.
+    → (rank.db 를 다 지웠나, ELO 줄 수 — 못 지웠으면 None: 표시를 남겨 다음에 켤 때 지운다)."""
     config.set_rank_collect(False)
     if sched is not None:
-        sched.stop()
+        sched.stop()      # 수집 스레드가 fifa.db 에도 쓴다(따라가기 — 계정마다 cancel 을 본다)
     done = rankcollect.delete_db()
-    n = 0
     try:
         conn = store.open_db(config.DB_PATH)
         try:
-            n = store.clear_elo(conn, keep_ouid)
+            return done, store.clear_elo(conn, keep_ouid)
         finally:
             conn.close()
     except sqlite3.Error:
-        pass
-    return done, n
+        store.mark_clear_elo(config.DB_PATH, keep_ouid)
+        return done, None
 
 
 _SHELL: tray.AppShell | None = None  # main 이 만든다 — 숨긴 창에서 난 오류는 모달 대신 트레이로
@@ -5568,6 +5971,10 @@ def _open_window(shell: tray.AppShell, show: bool = True):
         rankcollect.delete_pending()  # 지난번 [수집 기록 지우기]에서 다른 실행본이 열고 있어 못 지운 것
     except Exception:
         pass
+    try:
+        store.clear_elo_pending(config.DB_PATH)  # 같은 지우기에서 ELO 기록이 잠겨 못 지운 것
+    except Exception:
+        pass
     api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     win = MainWindow(api)
     shell.attach_window(win)
@@ -5576,6 +5983,7 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     win.start_update_check()
     win.start_cache_prune()
     if show:
+        QTimer.singleShot(0, win.ask_notice_update_once)  # 창이 그려진 뒤 그 위에(옛 동의자만)
         if config.OPEN_LAST_ACCOUNT:
             win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
         else:

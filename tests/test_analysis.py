@@ -424,6 +424,76 @@ def test_patterns_start_exactly_at_min_base():
     assert len(ms) == analysis.MIN_BASE and analysis._patterns(ms, ds, OUID), "딱 기준 경기 수인데 침묵했다"
 
 
+# ── 근거 막대(1.3.1 ②) — 조건부 승률 문장은 숫자(Basis)를 같이 싣는다 ─────────────────────────
+def test_rule_table_covers_every_rule_function():
+    import inspect
+    names = {n for n, f in inspect.getmembers(analysis, inspect.isfunction)
+             if f.__module__ == "analysis" and (n.endswith("_rules") or n in ("_flow", "_contrast"))}
+    listed = set(analysis.BASIS_RULES) | set(analysis.NO_BASIS_RULES)
+    assert names == listed, f"표에 없는 규칙 {names - listed} · 없는 이름 {listed - names}"
+    assert not set(analysis.BASIS_RULES) & set(analysis.NO_BASIS_RULES)
+
+
+def _basis_cases():
+    """BASIS_RULES 의 규칙마다 (문장 목록, 찾을 글, 기대 (rate, n, base_rate, min_n)) — 손 데이터."""
+    out = {}
+    # 최근 5경기 3승(60%) · 그 이전 20경기 10승(50%)
+    ms, ds = _seq(["승", "승", "승", "패", "패"] + ["승", "패"] * 10)
+    out["_flow"] = (analysis._flow(ms, ds, OUID, 5), "대비", (60.0, 5, 50.0, analysis.MIN_FLOW))
+    out["_clutch_rules"] = (_clutch_at(["승"] * 6 + ["패"] * 2, ["승"] * 2 + ["패"] * 6, 50.0),
+                            "선제골을 넣으면", (75.0, 8, 50.0, analysis.MIN_COND))
+    ds = []
+    for i, (poss, r) in enumerate([(70, "승")] * 13 + [(70, "패")] * 7 + [(30, "승")] * 10 + [(30, "패")] * 10):
+        ds.append(_match(i, r, 1 if r == "승" else 0, 0 if r == "승" else 1, poss,
+                         [(0, 600)] if r == "승" else [], [] if r == "승" else [(0, 700)]))
+    out["_possession_rules"] = (analysis._possession_rules(ds, OUID, total=40), "점유율",
+                                (50.0, 20, 65.0, analysis.MIN_COND))
+    ds = [_match(i, "승" if i < 2 else "패", 0, 0, 50, [], []) for i in range(analysis.MIN_COND)]
+    out["_formation_rules"] = (analysis._formation_rules(ds, OUID, base_rate=40.0, total=8),
+                               "나오면", (25.0, 8, 40.0, analysis.MIN_COND))
+    ms, _ = _seq(["승", "패", "패", "패"], opp="천적")
+    out["_opponent_rules"] = (analysis._opponent_rules(ms, base_rate=60.0), "천적",
+                              (25.0, 4, 60.0, analysis.MIN_OPP))
+    ms, _ = _seq(["승", "패"] * 10)
+    out["_streak_rules"] = (analysis._streak_rules(ms, base_rate=50.0, total=20), "1연패 직후",
+                            (100.0, 10, 50.0, analysis.streak_min_n(20)))
+    return out
+
+
+def test_every_basis_rule_fills_basis_with_its_numbers():
+    cases = _basis_cases()
+    assert set(cases) == set(analysis.BASIS_RULES), "basis 규칙 하나가 손 데이터 없이 빠졌다"
+    for name, (found, needle, want) in cases.items():
+        hits = [i for i in found if needle in i.headline]
+        assert hits, f"{name}: 문장이 안 나왔다"
+        b = hits[0].basis
+        assert b is not None, f"{name}: basis 가 비었다"
+        got = (round(b.rate, 6), b.n, round(b.base_rate, 6), b.min_n)
+        assert got == want, f"{name}: {b}"
+        assert b.n >= b.min_n, f"{name}: 문장이 나왔는데 표본 미달로 흐려진다"
+        assert b.label and b.base_label
+
+
+def test_basis_base_label_names_the_comparison():
+    c = _basis_cases()
+    flow = [i for i in c["_flow"][0] if "대비" in i.headline][0].basis
+    assert flow.base_label == "그 이전 20경기" and flow.label == "최근 5경기"
+    poss = c["_possession_rules"][0][0].basis
+    assert poss.base_label.startswith("우세"), poss.base_label
+    assert c["_opponent_rules"][0][0].basis.base_label == "전체"
+
+
+def test_non_rate_rules_have_no_basis():
+    d = _match(0, "패", 0, 16, 50, [], [(0, 100 + k) for k in range(16)])
+    for k, sd in enumerate(d["matchInfo"][1]["shootDetail"]):
+        sd["type"] = 3 if k < 4 else 1
+    found = analysis._goal_type_rules([d], OUID)
+    assert found and all(i.basis is None for i in found)
+    # 요약 줄(최근 N경기 …)도 basis 없음 — 비교 대상이 없다
+    ms, ds = _seq(["승"] * 5)
+    assert all(i.basis is None for i in analysis._flow(ms, ds, OUID, 5))
+
+
 def main() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

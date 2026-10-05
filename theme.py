@@ -38,6 +38,8 @@ _PALETTES = {
         CHART_NEUTRAL="#6e7681",
         CHART_GRID="#262b33",
         CHART_AXIS="#3a414b",
+        # 부분-전체 조각(득점·실점 유형 도넛) — Okabe-Ito 색약 안전 팔레트에서 바탕과 구분되는 다섯. 여섯째는 "기타"=회색.
+        CHART_CATS=("#56b4e9", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
         # 선수 지표 공격력·수비력 칸 — PANEL 에서 이 색까지 섞는다. 끝 색은 '모든 단계에서 TEXT 대비 ≥ 4.6'
         # 을 만족하는 가장 밝은 값으로 계산해 골랐다(1.2.1). 원색 RED 는 그 위 밝은 글자가 안 읽힌다.
         HEAT_ATK="#c41c1c",
@@ -76,6 +78,7 @@ _PALETTES = {
         CHART_NEUTRAL="#9aa1b0",
         CHART_GRID="#eceff4",
         CHART_AXIS="#d5dae3",
+        CHART_CATS=("#0072b2", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
         HEAT_ATK="#e96363",    # 밝은 테마는 반대로 — 진한 글자가 읽히는 가장 어두운 값
         HEAT_DEF="#678ce9",
         POS_FW="#db3333",
@@ -115,6 +118,7 @@ CHART_DOWN = _P["CHART_DOWN"]        # 실점·패
 CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
+CHART_CATS = _P["CHART_CATS"]        # 도넛 조각 색(순서대로) — 넘치는 조각은 CHART_NEUTRAL "기타"
 
 CHART_ON_MARK = "#ffffff"            # 색 점·골대 맞은 슛 위의 흰 글자·테두리(두 테마 같음)
 

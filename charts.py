@@ -913,3 +913,110 @@ class HBarList(_Chart):
             p.drawText(QRectF(self.width() - val_w + 6, y, val_w - 6, self.ROW),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, right)
             self._hits.append((QRectF(0, y, self.width(), self.ROW), tip))
+
+
+DONUT_MAX = 6   # 도넛 조각 상한 — 넘치면 앞 DONUT_MAX-1 개 + "기타"
+
+
+def donut_segments(counts: list[tuple[str, float]], max_n: int = DONUT_MAX
+                   ) -> list[tuple[str, float, str]]:
+    """(이름, 값) 목록 → 도넛 조각 (이름, 값, 색). 큰 순서로 색을 주고, max_n 을 넘으면 꼬리를 "기타" 하나로.
+
+    색이 조각 순서를 따라가므로 같은 화면의 범례(BarRow)도 이 결과의 색을 쓴다."""
+    rows = sorted(((n, v) for n, v in counts if v > 0), key=lambda kv: -kv[1])
+    if len(rows) > max_n:
+        rest = sum(v for _, v in rows[max_n - 1:])
+        rows = rows[:max_n - 1] + [("기타", rest)]
+    cats = T.CHART_CATS
+    out = []
+    for i, (name, v) in enumerate(rows):
+        col = T.CHART_NEUTRAL if name == "기타" or i >= len(cats) else cats[i]
+        out.append((name, v, col))
+    return out
+
+
+HEAT_FULL_PP = 25.0   # 승률이 50% 에서 이만큼(%p) 벗어나면 가장 진한 칸
+HEAT_MAX_MIX = 0.6    # 칸 색 상한 — 이보다 진하면 어두운 테마에서 칸 안 글자(TEXT) 대비가 4.5 밑(테스트가 잰다)
+
+
+def heat_cell_color(rate: float) -> str:
+    """승률 → 칸 색(불투명). 50% 는 바탕, 위는 CHART_UP 쪽, 아래는 CHART_DOWN 쪽으로 최대 HEAT_MAX_MIX."""
+    frac = min(abs(rate - 50.0) / HEAT_FULL_PP, 1.0)
+    return T.blend(T.PANEL, T.CHART_UP if rate >= 50 else T.CHART_DOWN, frac * HEAT_MAX_MIX)
+
+
+class HeatmapChart(_Chart):
+    """행 × 열 칸 — 칸마다 (승률 | None, 칸 글자, 툴팁, 흐림). 색만으로 읽히지 않게 칸 안에 글자.
+
+    흐린 칸(표본 미달)은 색을 칠하지 않고 회색 칸 + "표본 N" 같은 글자 — 소표본 100% 가 가장 진한 칸이 되지 않게.
+    최소 폭은 칸마다 "100%" 글자 + 8 을 알린다(QScrollArea 가 가로를 조용히 자르지 않게 — PyQt 규칙 5)."""
+
+    ROW_H = 30
+    HEAD_H = 22
+    PAD = 8
+
+    def __init__(self):
+        super().__init__(min_h=self.HEAD_H + self.ROW_H)
+        self._rows: list[str] = []
+        self._cols: list[str] = []
+        self._cells: list[list[tuple[float | None, str, str, bool]]] = []
+        self.cell_colors: list[list[str | None]] = []   # 마지막으로 정한 칸 색(테스트가 본다)
+
+    def set_data(self, rows: list[str], cols: list[str],
+                 cells: list[list[tuple[float | None, str, str, bool]]]) -> None:
+        self._rows, self._cols, self._cells = list(rows), list(cols), [list(r) for r in cells]
+        self.cell_colors = [[None if (weak or v is None) else heat_cell_color(v)
+                             for v, _t, _tip, weak in r] for r in self._cells]
+        self.setMinimumHeight(self.HEAD_H + max(len(self._rows), 1) * self.ROW_H)
+        self.updateGeometry()
+        self.update()
+
+    def _font(self) -> QFont:
+        return _small_font(self.font(), SMALL_PT + 1)
+
+    def _label_w(self, fm: QFontMetrics) -> int:
+        return max((fm.horizontalAdvance(r) for r in self._rows), default=0) + self.PAD * 2
+
+    def cell_min_w(self) -> int:
+        fm = QFontMetrics(self._font())
+        texts = ["100%"] + [t for r in self._cells for _v, t, _tip, _w in r]
+        return max(fm.horizontalAdvance(t) for t in texts) + self.PAD
+
+    def minimumSizeHint(self) -> QSize:
+        fm = QFontMetrics(self._font())
+        return QSize(self._label_w(fm) + max(len(self._cols), 1) * self.cell_min_w(),
+                     self.HEAD_H + max(len(self._rows), 1) * self.ROW_H)
+
+    def sizeHint(self) -> QSize:
+        m = self.minimumSizeHint()
+        return QSize(max(m.width(), 480), m.height())
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hits = []
+        if not self._rows or not any(v is not None for r in self._cells for v, *_ in r):
+            self._empty(p)
+            return
+        f = self._font()
+        fm = QFontMetrics(f)
+        p.setFont(f)
+        lw = self._label_w(fm)
+        cw = max((self.width() - lw) / max(len(self._cols), 1), 1)
+        p.setPen(QColor(T.TEXT_DIM))
+        for j, c in enumerate(self._cols):
+            p.drawText(QRectF(lw + j * cw, 0, cw, self.HEAD_H), Qt.AlignmentFlag.AlignCenter, c)
+        for i, name in enumerate(self._rows):
+            y = self.HEAD_H + i * self.ROW_H
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(0, y, lw - self.PAD, self.ROW_H),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, name)
+            for j, (v, text, tip, weak) in enumerate(self._cells[i]):
+                rect = QRectF(lw + j * cw + GAP / 2, y + GAP / 2, cw - GAP, self.ROW_H - GAP)
+                col = self.cell_colors[i][j]
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(col or T.CHART_GRID))
+                p.drawRoundedRect(rect, 3, 3)
+                p.setPen(QColor(T.TEXT if col else T.TEXT_DIM))
+                p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+                self._hits.append((rect, tip))

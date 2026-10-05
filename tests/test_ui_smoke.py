@@ -1292,6 +1292,9 @@ def test_main_starts_update_check_after_show():
         def start_prefetch(self):
             calls.append("미리 읽기")
 
+        def ask_notice_update_once(self):
+            pass   # 옛 동의자 다시 묻기 — 창이 보인 뒤(test_reask_after_show_normal)
+
     def run(open_last: bool) -> list[str]:
         calls.clear()
         orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
@@ -1372,7 +1375,8 @@ def test_tray_before_consent_makes_no_request():
             config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA, app_main._SHELL)
     app_main._setup_app = lambda app: None
     app_main.MainWindow = app_main.NoticeDialog = app_main.ApiKeyDialog = boom
-    config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA = config.NOTICE_VERSION - 1, "test_key", True
+    # v1(1.0.x) 동의자 — v2 의 수집 안내를 못 봤다. 처음 동의와 같이 막힌다(v2 는 test_reask_never_while_hidden)
+    config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA = config.NOTICE_BASE_VERSION - 1, "test_key", True
     gets = []
     keep_get = ranker._session.get
     ranker._session.get = lambda *a, **k: gets.append(a) or boom()
@@ -1449,8 +1453,8 @@ def test_main_asks_notice_first_and_quits_on_decline():
             app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY)
     app_main._setup_app, app_main.MainWindow = (lambda app: None), too_far
     try:
-        # 이미 동의한 버전보다 안내가 새로우면 다시 묻는다 — v0.3.0 사용자(.env 에 값 없음 = 0)
-        config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_VERSION - 1, ""
+        # 옛 동의로 계속 쓸 수 없는 버전(v1 이하 — v0.3.0 사용자는 .env 에 값 없음 = 0)이면 창 전에 묻는다
+        config.NOTICE_ACCEPTED, config.API_KEY = config.NOTICE_BASE_VERSION - 1, ""
         app_main.NoticeDialog = dialog("안내", R)
         app_main.ApiKeyDialog = dialog("키", R)
         assert app_main.main() == 0
@@ -1463,6 +1467,11 @@ def test_main_asks_notice_first_and_quits_on_decline():
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         assert app_main.main() == 0
         assert seen == ["키"], seen  # 동의했으면 다시 안 묻는다
+        seen.clear()
+        # v2(옛 동의 · 새 안내 있음) — 창 **전에는** 묻지 않는다(창을 띄운 뒤 그 위에 — test_reask_after_show_normal)
+        config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
+        assert app_main.main() == 0
+        assert seen == ["키"], seen
     finally:
         (app_main._setup_app, app_main.NoticeDialog, app_main.ApiKeyDialog,
          app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY) = orig
@@ -3238,6 +3247,8 @@ def test_search_hands_current_account_to_loader():
             maxdiv.append(want_max_division)
             self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
             self.rank_ready = self.max_division_ready = self
+            self.elo_saved = _Sig()
+
 
         def connect(self, *_):
             pass
@@ -3248,7 +3259,11 @@ def test_search_hands_current_account_to_loader():
         def isRunning(self):
             return False
 
-    pf, elo, maxdiv = [], [], []
+    class _Sig:
+        def connect(self, slot):
+            elo_slots.append(slot)
+
+    pf, elo, maxdiv, elo_slots = [], [], [], []
     orig = app_main.MatchLoader, _win._loader
     app_main.MatchLoader, _win._loader = _Rec, None
     _win._prefetch = "켤 때 미리 읽은 것"
@@ -3265,6 +3280,7 @@ def test_search_hands_current_account_to_loader():
     assert pf == ["켤 때 미리 읽은 것", None], pf
     assert elo == [True, True], "메인 검색이 ELO 를 안 적는다"
     assert maxdiv == [True, True], "메인 검색이 역대 최고 등급을 안 묻는다"
+    assert elo_slots == [_win._load_elo] * 2, "이번 검색 ELO 를 적은 뒤 그래프를 다시 읽지 않는다(elo_saved)"
 
 
 def test_start_prefetch_reads_last_searched_account():
@@ -3642,6 +3658,7 @@ def test_main_loader_records_elo_and_compare_does_not():
         f2.set_result(ranker.RankerInfo(nickname="x"))   # 랭킹 밖 — ELO 없음
         ld._save_elo(_OUID, f2)
         assert rows() == [(2345.0, 12, 77, "search")], rows()
+        time.sleep(1.05)          # 같은 초 같은 출처는 DB 가 한 줄로 막는다(ux_elo_src) — 다음 초로
         ld._save_elo(_OUID, f)   # 대조군 — 막는 게 없으면 적힌다
         assert len(rows()) == 2
     finally:
@@ -3668,7 +3685,7 @@ def test_rank_collect_scheduler_gates_plans_once_and_rechooses_late_timer():
         try:
             for web, collect, notice_ok in [(False, True, True), (True, False, True), (True, True, False)]:
                 config.WEB_DATA, config.RANK_COLLECT = web, collect
-                config.NOTICE_ACCEPTED = config.NOTICE_VERSION if notice_ok else config.NOTICE_VERSION - 1
+                config.NOTICE_ACCEPTED = config.NOTICE_VERSION if notice_ok else config.NOTICE_BASE_VERSION - 1
                 sched.check()
                 assert sched.planned is None, (web, collect, notice_ok)
             assert not config.RANK_DB_PATH.exists(), "조건이 안 맞는데 rank.db 를 만들었다"
@@ -4311,6 +4328,500 @@ def test_badge_paint_failure_falls_back():
         widgets._grade_badge_colors, crashlog.note = real_colors, real_note
         dg.failed = 0
         _win._go_page("대시보드")
+
+
+# ── 9단계(1.3.1): ② 흐름 분석 띠·근거 막대 · ⑥ 히트맵·도넛·포메이션 막대 · 13 ELO · 다시 묻는 동의 ───────────
+from dataclasses import replace  # noqa: E402
+from PyQt6.QtGui import QFontMetrics  # noqa: E402
+import charts  # noqa: E402
+import tray  # noqa: E402
+
+def _wait(cond, timeout=5.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        _app.processEvents()
+        if cond():
+            return True
+        time.sleep(0.02)
+    return cond()
+
+
+def test_analysis_result_dots_and_basis_bars():
+    from analysis import Basis, Insight
+    keep = app_main.core.narrate
+    found = [Insight(app_main.core.SEC_WIN, "선제골을 넣으면 승률 80%.", "", 5.0,
+                     Basis("선제골 넣은 경기", 80.0, 30, 50.0, 8)),
+             Insight(app_main.core.SEC_WIN, "득점의 30%가 헤더에서 나옵니다.", "", 4.0),       # basis 없음 — 막대 없음
+             Insight(app_main.core.SEC_LOSE, "천적 상대로 4경기 승률 25%.", "", 3.0,
+                     Basis("천적 상대", 25.0, 4, 50.0, 6))]                                 # 표본 미달(일부러) — 흐림
+    app_main.core.narrate = lambda *a, **k: found
+    try:
+        _win._narrate_key = None
+        _win._render_analysis()
+        assert len(_win.analysis_dots._items) == min(len(_win._matches), app_main.core.WINDOW)
+        assert [r for r, _ in _win.analysis_dots._items] == [m.result for m in _win._matches[:20]][::-1], "오래된 것부터가 아니다"
+
+        def bars(sec):
+            box = _win.box_analysis[sec]
+            return [box.itemAt(i).widget() for i in range(box.count())
+                    if isinstance(box.itemAt(i).widget(), charts.HBarList)]
+        win_bars, lose_bars = bars(app_main.core.SEC_WIN), bars(app_main.core.SEC_LOSE)
+        assert len(win_bars) == 1 and len(win_bars[0]._rows) == 1, "basis 있는 문장만 막대로"
+        name, v, right, tip, weak = win_bars[0]._rows[0]
+        assert (name, v, weak) == ("선제골 넣은 경기", 80.0, False) and "전체 50.0%" in right and "30경기" in right, right
+        assert lose_bars[0]._rows[0][4] is True, "표본 미달인데 흐리지 않았다"
+        assert bars(app_main.core.SEC_FLOW) == [], "문장이 없는 섹션에 막대가 생겼다"
+    finally:
+        app_main.core.narrate = keep
+        _win._narrate_key = None
+        _win._render_analysis()
+
+
+def test_clutch_heatmap_cells_and_weak_cells_uncolored():
+    from datetime import datetime as _dt
+    ms = []
+    for i in range(10):                                   # 월요일 20시 10경기 — 색이 칠해지는 칸
+        m = replace(_MATCHES[0], match_date=_dt(2026, 9, 14, 20, i), result="승" if i < 8 else "패")
+        ms.append(m)
+    ms.append(replace(_MATCHES[0], match_date=_dt(2026, 9, 15, 3, 0), result="승"))   # 화 심야 1경기 — 흐림
+    _win._render_clutch_heat(ms)
+    h = _win.clutch_heat
+    bands = [b[0] for b in app_main.core.TIME_BANDS]
+    night, eve = bands.index("심야"), bands.index("저녁·밤")
+    assert len(h._cells) == 4 and all(len(r) == 7 for r in h._cells)
+    v, text, tip, weak = h._cells[eve][0]
+    assert (v, text, weak) == (80.0, "80%", False) and h.cell_colors[eve][0] is not None, h._cells[eve][0]
+    v, text, tip, weak = h._cells[night][1]
+    assert weak and text == "표본 1" and h.cell_colors[night][1] is None, "소표본 칸에 색을 칠했다"
+    assert h.cell_colors[night][0] is None and h._cells[night][0][1] == "—"
+    # 최소 폭은 칸마다 '100%' 이상 — QScrollArea 가 가로를 조용히 자르지 않게
+    fm = QFontMetrics(h._font())
+    assert h.minimumSizeHint().width() >= 7 * (fm.horizontalAdvance("100%") + h.PAD)
+    _win._render_clutch(_win._details, _win._matches)
+
+
+def test_heatmap_text_stays_readable_and_direction():
+    bad = []
+    for mode, p in T._PALETTES.items():
+        for key in ("CHART_UP", "CHART_DOWN"):
+            for s in range(11):
+                bg = T.blend(p["PANEL"], p[key], charts.HEAT_MAX_MIX * s / 10)
+                if T.contrast(p["TEXT"], bg) < 4.5:
+                    bad.append((mode, key, s))
+    assert not bad, bad
+    assert charts.heat_cell_color(50.0) == T.PANEL
+    assert charts.heat_cell_color(90.0) == T.blend(T.PANEL, T.CHART_UP, charts.HEAT_MAX_MIX)
+    assert charts.heat_cell_color(10.0) == T.blend(T.PANEL, T.CHART_DOWN, charts.HEAT_MAX_MIX)
+    assert charts.heat_cell_color(62.5) == T.blend(T.PANEL, T.CHART_UP, 0.5 * charts.HEAT_MAX_MIX)
+
+
+def test_donut_groups_tail_into_other():
+    counts = [(f"유형{i}", 10 - i) for i in range(8)] + [("없음", 0)]
+    segs = charts.donut_segments(counts)
+    assert len(segs) == charts.DONUT_MAX and segs[-1][0] == "기타", segs
+    assert segs[-1][1] == sum(10 - i for i in range(5, 8)) and segs[-1][2] == T.CHART_NEUTRAL
+    assert [s[2] for s in segs[:5]] == list(T.CHART_CATS)
+    assert sum(v for _, v, _ in segs) == sum(v for _, v in counts)
+    few = charts.donut_segments([("가", 3), ("나", 5)])
+    assert [s[0] for s in few] == ["나", "가"] and "기타" not in [s[0] for s in few]
+
+
+def test_tactics_formation_bars_and_type_donuts():
+    _win._render_tactics(_win._details)
+    bars = _win.opp_formation_bars
+    opp = app_main.core.formation_stats(_win._details, _win._ouid)
+    assert [r[0] for r in bars._rows] == [f.formation for f in opp]
+    assert all(r[4] == (f.games < app_main.core.MIN_COND) for r, f in zip(bars._rows, opp))
+    assert set(_win.type_donuts) == {"gf", "ga"}
+    rb = app_main.core.result_breakdown(_win._details, _win._ouid)
+    assert sum(v for _, v, _ in _win.type_donuts["gf"]._segs) == sum(rb.goal_types.values())
+
+
+# ── 13 ELO ──
+
+def _elo_rows(points):
+    """[(ISO 시각, elo, rank, source)] → elo_history 줄 모양."""
+    return [{"taken_at": t, "elo": e, "rank": r, "source": s, "profile_sn": 1, "nickname": "n"} for t, e, r, s in points]
+
+
+def test_elo_season_start_rules():
+    from datetime import date as _d
+    now = datetime(2026, 10, 5, 12, 0)
+    seasons = [sn.Season(89, "시즌 2", _d(2026, 7, 1), _d(2026, 8, 1)), sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+    assert app_main.elo_season_start(seasons, "2026-09-20T00:00:00", now) == datetime(2026, 9, 10)
+    assert app_main.elo_season_start([], "2026-09-20T03:00:00", now) == datetime(2026, 9, 20, 3)
+    assert app_main.elo_season_start([], None, now) == now - timedelta(days=config.ELO_FALLBACK_DAYS)
+    # 아직 안 끝난 시즌(미래 종료일)은 시작으로 안 쓴다
+    fut = seasons + [sn.Season(91, "시즌 4", _d(2026, 9, 10), _d(2026, 11, 1))]
+    assert app_main.elo_season_start(fut, None, now) == datetime(2026, 9, 10)
+
+
+def test_elo_daily_points_keep_latest_of_day_and_filter_start():
+    rows = _elo_rows([("2026-09-01T10:00:00", 3000.0, 5000, "search"),     # 지난 시즌 — 빠진다
+                      ("2026-09-11T09:00:00", 3100.0, 4000, "snapshot"),
+                      ("2026-09-11T21:00:00", 3150.0, 3900, "search"),     # 같은 날 늦은 것
+                      ("2026-09-13T08:00:00", 3200.0, 900, "snapshot")])
+    pts = app_main.elo_daily_points(rows, datetime(2026, 9, 10))
+    assert [(p["at"].day, p["elo"]) for p in pts] == [(11, 3150.0), (13, 3200.0)], pts
+    assert app_main.elo_daily_points(rows, datetime(2026, 9, 11, 9, 0))[0]["elo"] == 3150.0   # 시작 시각 포함
+
+
+def test_rank_tier_change_text_cases():
+    def pts(*ranks):
+        return [{"rank": r, "at": datetime(2026, 10, 1 + i)} for i, r in enumerate(ranks)]
+    f = app_main.rank_tier_change_text
+    assert f([]) == ""
+    assert f(pts(150)) == "지금 1~200위 구간", "새 시즌 첫 기록인데 비교했다"
+    assert f(pts(500, 1500)) == "지금 1,001~10,000위 구간 · 지난 기록(10/01) 201~1,000위에서 내려옴"
+    assert f(pts(1500, 1000)) == "지금 201~1,000위 구간 · 지난 기록(10/01) 1,001~10,000위에서 올라옴"
+    assert f(pts(200, 201)).endswith("1~200위에서 내려옴"), "경계(200위)가 틀렸다"
+    assert f(pts(300, 900)).endswith("같은 구간")
+    assert f(pts(9000, None)) == "지금 1만 위 밖 · 지난 기록(10/01) 1,001~10,000위에서 내려옴"
+    assert f(pts(10001, 10000)).endswith("1만 위 밖에서 올라옴")
+
+
+def _elo_data(rows, cuts=None, tracked=False, names=(), req=None, ouid=None):
+    ouid = ouid or _OUID
+    if req is None:
+        req = _win._elo_req.get(ouid, 0) + 1
+    _win._elo_req[ouid] = req
+    return app_main.EloSeries(req, rows, cuts or {}, None, tracked, tuple(names))
+
+
+def test_elo_chart_draws_current_season_with_cut_lines():
+    from datetime import date as _d
+    keep = (_win._rank_seasons, dict(_win._elo), config.WEB_DATA, config.RANK_COLLECT)
+    try:
+        config.WEB_DATA, config.RANK_COLLECT = True, True
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+        rows = _elo_rows([("2026-09-05T10:00:00", 2900.0, 9000, "search"),
+                          ("2026-09-12T10:00:00", 3100.0, 1500, "snapshot"),
+                          ("2026-09-14T10:00:00", 3300.0, 800, "snapshot")])
+        cuts = {200: [("2026-09-11T10:00:00", 4300.0), ("2026-09-13T10:00:00", 4320.0)],
+                1000: [("2026-09-13T10:00:00", 3200.0)], 10000: [("2026-09-13T10:00:00", 2500.0)]}
+        _win._on_elo_ready(_OUID, _elo_data(rows, cuts, tracked=True))
+        _win._go_page("승률 그래프")     # 메뉴를 거쳐 — pages 만 바꾸면 메뉴 선택과 어긋나 다음 테스트가 깨진다
+        _app.processEvents()
+        ch = _win.elo_chart
+        assert ch.isVisibleTo(_win) and len(ch._points) == 2, "지난 시즌 점이 섞였거나 안 그렸다"
+        assert ch._x_dates == [_d(2026, 9, 12), _d(2026, 9, 14)] and ch._avg is False
+        assert [r[0] for r in ch._refs] == ["200위", "1,000위"], "1만 위 컷까지 그렸다(축이 찌그러진다)"
+        assert "10,000위 2,500" in ch.toolTip() and "200위" not in ch.toolTip(), "그린 컷을 툴팁에 또 적었다"
+        assert "%" not in ch._axis.fmt
+        assert _win.lb_elo_tier.text().endswith("1,001~10,000위에서 올라옴"), _win.lb_elo_tier.text()
+        assert "09/10" in _win.gb_elo.title()
+    finally:
+        _win._rank_seasons, _win._elo, config.WEB_DATA, config.RANK_COLLECT = keep
+        _win._render_elo()
+
+
+def test_elo_empty_states_by_cause():
+    keep = (dict(_win._elo), config.WEB_DATA, config.RANK_COLLECT)
+    one = _elo_rows([(datetime.now().isoformat(timespec="seconds"), 3000.0, 5000, "search")])
+    out = _elo_rows([(datetime.now().isoformat(timespec="seconds"), 2000.0, None, "search")])
+    try:
+        cases = [((False, False, False, one), "홈페이지 데이터가 꺼져"),
+                 ((True, False, False, one), "검색할 때마다 한 점씩 쌓입니다"),
+                 ((True, True, True, one), "다음 수집(하루 한 번) 뒤부터"),
+                 ((True, True, False, one), "[따라가기]를 누르면 하루 한 점"),
+                 ((True, False, False, out), "1만 위 밖은 하루 기록이 없습니다")]
+        for (web, collect, tracked, rows), want in cases:
+            config.WEB_DATA, config.RANK_COLLECT = web, collect
+            _win._on_elo_ready(_OUID, _elo_data(rows, tracked=tracked))
+            assert want in _win.lb_elo_note.text(), (web, collect, tracked, _win.lb_elo_note.text())
+            assert not _win.elo_chart.isVisibleTo(_win), "점이 하나인데 그래프를 그렸다"
+    finally:
+        _win._elo, config.WEB_DATA, config.RANK_COLLECT = keep
+        _win._render_elo()
+
+
+def test_elo_stale_request_and_other_account_ignored():
+    keep = dict(_win._elo)
+    try:
+        new = _elo_data(_elo_rows([("2026-10-01T10:00:00", 3500.0, 100, "search")]))
+        old = app_main.EloSeries(new.req - 1, [], {}, None)
+        _win._on_elo_ready(_OUID, new)
+        _win._on_elo_ready(_OUID, old)                       # 먼저 띄운 읽기가 나중에 끝났다
+        assert _win._elo[_OUID] is new, "늦게 끝난 옛 읽기가 새 값을 덮었다"
+        other = _elo_data([], ouid="다른계정")
+        _win._on_elo_ready("다른계정", other)
+        assert _win._elo["다른계정"] is other and _win._elo[_OUID] is new
+    finally:
+        _win._elo = keep
+
+
+def test_elo_loads_on_every_open_path():
+    seen = []
+    keep = _win._load_elo
+    _win._load_elo = lambda ouid=None: seen.append(ouid)
+    tmp, saved = _loader_db(4)
+    try:
+        _restore_account()                                    # 검색·다시 열기 — 전부 _on_loaded 를 지난다
+        assert seen == [_OUID], seen
+        ld = app_main.MatchLoader(_DetailApi([], ""), "닉", 52, offline_ouid=_OUID)   # 저장본 열기(켤 때·내려놓은 뒤)
+        ld.finished_ok.connect(_win._on_loaded)
+        ld.run()
+        _app.processEvents()
+        assert seen == [_OUID, _OUID], seen
+        # 수집 회차 끝 — UI 스레드에선 시작만
+        sched = app_main.RankCollectScheduler()
+        keep_sched = _win._rank_sched
+        _win.attach_rank_sched(sched)
+        try:
+            sched.outcome.emit(rankcollect.Outcome("ok"))
+            sched.outcome.emit(rankcollect.Outcome("failed"))
+        finally:
+            sched.outcome.disconnect()
+            sched.status.disconnect()
+            _win._rank_sched = keep_sched
+        assert seen == [_OUID] * 3, seen
+    finally:
+        _win._load_elo = keep
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+        _restore_account()
+
+
+def test_elo_loader_runs_off_ui_and_reads_rank_db_readonly():
+    tmp, saved = _loader_db(0)
+    keep_rank = config.RANK_DB_PATH
+    config.RANK_DB_PATH = tmp / "rank.db"
+    try:
+        c = store.open_db(config.DB_PATH)
+        store.save_elo(c, _OUID, 3333.0, 700, taken_at=datetime.now())
+        c.close()
+        _win._load_elo(_OUID)
+        w = _win._elo_workers[-1]
+        assert isinstance(w, QThread)          # UI 스레드에선 띄우기만 — 스모크는 QThread.start 를 막아 run 을 직접 부른다
+        w.run()
+        assert _win._elo[_OUID].req == _win._elo_req[_OUID]
+        assert [r["elo"] for r in _win._elo[_OUID].rows] == [3333.0]
+        assert not config.RANK_DB_PATH.exists(), "ELO 를 읽다 rank.db 를 만들었다"
+    finally:
+        config.RANK_DB_PATH = keep_rank
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_elo_includes_this_search_point():
+    # 랭킹이 finished_ok 보다 늦게 와도 — 첫 EloLoader 는 이번 점 없이 읽고, 적은 뒤 elo_saved 가 다시 읽게 한다
+    tmp, saved = _loader_db(4)
+    gate, keep = threading.Event(), app_main.MatchLoader._safe_rank
+    info = ranker.RankerInfo(nickname="테스트구단주", rank=420, elo=4321.0, profile_sn=55)
+    app_main.MatchLoader._safe_rank = lambda self: (gate.wait(5), info)[1]
+    keep_elo = dict(_win._elo)
+    app_main.EloLoader.start = lambda self: self.run()   # 스모크는 QThread.start 를 막는다 — 읽기를 그 자리에서
+    try:
+        _win._elo.pop(_OUID, None)
+        ld = app_main.MatchLoader(_DetailApi([], ""), "닉", 52, record_elo=True)
+        ld.finished_ok.connect(_win._on_loaded)
+        ld.finished_ok.connect(lambda *a: gate.set())        # 화면이 열린 '뒤'에 랭킹이 온다
+        ld.elo_saved.connect(_win._load_elo)
+        ld.run()
+        assert _wait(lambda: _win._elo.get(_OUID) is not None
+                     and any(r["elo"] == 4321.0 for r in _win._elo[_OUID].rows)), "이번 검색의 점이 빠졌다"
+    finally:
+        gate.set()
+        app_main.MatchLoader._safe_rank = keep
+        del app_main.EloLoader.start
+        _win._elo = keep_elo
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+        _restore_account()
+
+
+def test_elo_track_button_add_remove_full_and_needs_consent():
+    tmp, saved = _loader_db(0)
+    keep = (config.NOTICE_ACCEPTED, config.WEB_DATA, dict(_win._elo), _win.ask_notice_update)
+    asked = []
+    try:
+        config.WEB_DATA = True
+        config.NOTICE_ACCEPTED = config.NOTICE_VERSION
+        _win._on_elo_ready(_OUID, _elo_data([]))
+        assert _win.btn_elo_track.text() == f"이 구단주 ELO 따라가기 (0/{config.ELO_TRACK_MAX})"
+        _win._on_elo_track_clicked()
+        c = store.open_db(config.DB_PATH)
+        assert [t["ouid"] for t in store.track_list(c)] == [_OUID]
+        c.close()
+        _win._on_elo_ready(_OUID, _elo_data([], tracked=True, names=("테스트구단주",)))
+        assert _win.btn_elo_track.text() == "따라가기 그만"
+        _win._on_elo_track_clicked()
+        c = store.open_db(config.DB_PATH)
+        assert store.track_list(c) == []
+        c.close()
+        # 가득 차면 막고 툴팁에 목록
+        names = tuple(f"n{i}" for i in range(config.ELO_TRACK_MAX))
+        _win._on_elo_ready(_OUID, _elo_data([], names=names))
+        assert not _win.btn_elo_track.isEnabled() and "n4" in _win.btn_elo_track.toolTip()
+        # 옛 동의 — 누르면 다시 묻는 창, 취소하면 안 넣는다
+        config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
+        _win.ask_notice_update = lambda: asked.append(1) or False
+        _win._on_elo_ready(_OUID, _elo_data([]))
+        assert "동의가 필요" in _win.btn_elo_track.toolTip()
+        _win._on_elo_track_clicked()
+        c = store.open_db(config.DB_PATH)
+        assert asked == [1] and store.track_list(c) == [], "동의 없이 따라가기에 넣었다"
+        c.close()
+    finally:
+        config.NOTICE_ACCEPTED, config.WEB_DATA, _win._elo, _win.ask_notice_update = keep
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+        _win._render_elo()
+
+
+def test_shutdown_stops_elo_workers():
+    class _Busy(app_main.EloLoader):      # 도는 중인 척 — 스모크는 QThread.start 를 막는다
+        def isRunning(self):
+            return not self._cancel
+
+    w = _Busy(_OUID, 999)
+    _win._elo_workers.append(w)
+    try:
+        left = _win.shutdown(fast=True)
+        assert w in left and w._cancel, "종료 정리 목록에 EloLoader 가 없다"
+    finally:
+        w.cancel()
+        _win._elo_workers.remove(w)
+
+
+def test_clear_elo_failure_not_silent():
+    import sqlite3 as _sq
+    tmp, saved = _loader_db(0)
+    keep_t = store.OPEN_TIMEOUT_S
+    try:
+        with _RankSwitches():
+            c = store.open_db(config.DB_PATH)
+            store.save_elo(c, "남", 1900.0, 9)
+            c.close()
+            hold = _sq.connect(str(config.DB_PATH))
+            hold.execute("BEGIN EXCLUSIVE")
+            store.OPEN_TIMEOUT_S = 0.2
+            try:
+                done, n = app_main.clear_rank_records(None, None)
+            finally:
+                hold.rollback()
+                hold.close()
+                store.OPEN_TIMEOUT_S = keep_t
+            assert n is None, "잠겨서 못 지웠는데 지웠다고 했다"
+            assert store.clear_elo_pending(config.DB_PATH) is True
+            c = store.open_db(config.DB_PATH)
+            assert store.elo_history(c, "남") == [], "다음에 켤 때 지우지 않았다"
+            c.close()
+            assert store.clear_elo_pending(config.DB_PATH) is False
+    finally:
+        store.OPEN_TIMEOUT_S = keep_t
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 다시 묻는 동의(1.3.1 사용자 ⑤) ──
+
+def test_notice_versions_split_first_and_reask():
+    keep = config.NOTICE_ACCEPTED
+    try:
+        for acc, needed, pending, track in [(0, True, False, False), (1, True, False, False),
+                                            (2, False, True, False), (3, False, False, True)]:
+            config.NOTICE_ACCEPTED = acc
+            assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
+                (needed, pending, track), acc
+        assert config.NOTICE_VERSION == config.TRACK_NOTICE_VERSION == 3 and config.NOTICE_BASE_VERSION == 2
+    finally:
+        config.NOTICE_ACCEPTED = keep
+
+
+def test_reask_dialog_keeps_current_web_choice():
+    keep = (config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED)
+    saved_env = config.ENV_PATH
+    config.ENV_PATH = pathlib.Path(tempfile.mkdtemp()) / ".env"
+    try:
+        for on in (True, False):
+            config.WEB_DATA = on
+            dlg = app_main.NoticeDialog(reask=True)
+            assert dlg.chk_web.isChecked() is on, "다시 묻기에서 지금 값을 안 채웠다"
+            assert not dlg.lb_web_now.isVisibleTo(dlg)
+            first = app_main.NoticeDialog()
+            assert not first.chk_web.isChecked(), "처음 동의는 빈 칸(D5)"
+        # [시작]만 눌러도 홈페이지 데이터·수집이 그대로
+        config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED = True, True, config.NOTICE_BASE_VERSION
+        dlg = app_main.NoticeDialog(reask=True)
+        dlg.chk_agree.setChecked(True)
+        dlg._on_accept()
+        assert config.WEB_DATA and config.RANK_COLLECT and config.NOTICE_ACCEPTED == config.NOTICE_VERSION
+    finally:
+        config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED = keep
+        config.ENV_PATH = saved_env
+
+
+def _count_reask(fn):
+    calls = []
+    keep = (app_main.NoticeDialog, config.NOTICE_ACCEPTED, _win._notice_asked)
+
+    class _Dlg:
+        def __init__(self, parent=None, reask=False):
+            calls.append(reask)
+
+        def exec(self):
+            return app_main.QDialog.DialogCode.Rejected
+    app_main.NoticeDialog = _Dlg
+    config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
+    _win._notice_asked = False
+    try:
+        fn()
+        _app.processEvents()
+    finally:
+        app_main.NoticeDialog, config.NOTICE_ACCEPTED, _win._notice_asked = keep
+    return calls
+
+
+def test_reask_after_show_normal_once():
+    assert _count_reask(lambda: (_win.ask_notice_update_once(), _win.ask_notice_update_once())) == [True], \
+        "보이는 창에서 한 번만 물어야 한다"
+
+
+def test_reask_never_while_hidden():
+    def hidden():
+        _win.hide()
+        try:
+            _win.ask_notice_update_once()
+        finally:
+            _win.show()
+    assert _count_reask(hidden) == [], "숨긴 창에서 물었다(게임 중 초점을 뺏는다)"
+    # --tray(v2) — 숨긴 창을 만들고 수집·확인은 돈다, 묻지 않는다
+    made = []
+
+    class _Win:
+        def __init__(self, api):
+            made.append(self)
+
+        def __getattr__(self, name):
+            if name == "ask_notice_update_once":
+                raise AssertionError("--tray 에서 다시 묻기를 걸었다")
+            return lambda *a, **k: None
+
+    orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA,
+            app_main._SHELL)
+    app_main._setup_app, app_main.MainWindow = (lambda app: None), _Win
+    config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA = config.NOTICE_BASE_VERSION, "test_key", True
+    try:
+        try:
+            app_main.main(["app", "--tray"])
+        except ModalCalled:
+            pass
+        assert made and app_main._SHELL.window is made[0], "옛 동의(v2)인데 --tray 가 창을 안 만들었다"
+    finally:
+        _stop_shell()
+        (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, config.WEB_DATA,
+         app_main._SHELL) = orig
+
+
+def test_reask_on_tray_open_and_second_instance():
+    # 트레이 [열기] 와 두 번째 실행의 "창 앞으로"는 같은 show_window — 보인 뒤 한 번
+    sh = tray.AppShell(_app)
+    sh.window = _win          # attach_window 는 _win.shell 을 바꿔 다음 테스트의 X 동작까지 바꾼다
+    try:
+        assert _count_reask(sh.show_window) == [True]
+    finally:
+        sh.window = None
 
 
 def main() -> int:
