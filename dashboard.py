@@ -20,12 +20,11 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy,
                              QVBoxLayout, QWidget)
 
-import analysis
-import stats as st
+import core_api as core
 import theme as T
 from charts import (AreaTrendChart, DonutChart, GroupedBarChart, HBarList, RadarChart,
                     ResultDots, RingGauge)
-from models import (MatchSummary, current_streak, longest_streaks, opponent_stats,
+from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
 from widgets import add_shadow, wdl_text
 
@@ -33,8 +32,8 @@ RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
 DOTS_N = 20            # 최근 결과 점 개수
 TOP_OPPONENTS = 5
 MIN_GAUGE_GAMES = 10   # 승부처 게이지 — 이보다 적은 표본이면 숫자 대신 "—"
-SECTION_TAG = {analysis.SEC_FLOW: "흐름", analysis.SEC_WIN: "이길 때",
-               analysis.SEC_LOSE: "질 때"}
+SECTION_TAG = {core.SEC_FLOW: "흐름", core.SEC_WIN: "이길 때",
+               core.SEC_LOSE: "질 때"}
 
 
 @dataclass
@@ -350,14 +349,14 @@ class DashboardPage(QWidget):
         self.trend_chart.set_data(d.trend_points)
 
     def _render_radar(self, d: DashboardInput) -> None:
-        prof = st.team_profile(d.range_details, d.ouid)
+        prof = core.team_profile(d.range_details, d.ouid)
         self.radar.set_data([
             (a.name, a.share,
              f"{a.name} — 나 {a.mine:.1f} · 상대 {a.opp:.1f} {a.unit} ({prof.games}경기)")
             for a in prof.axes])
 
     def _render_clutch(self, d: DashboardInput) -> None:
-        cs = st.clutch_summary(d.scope_details, d.ouid)
+        cs = core.clutch_summary(d.scope_details, d.ouid)
         scored = sum(cs.first_scored)
         conceded = sum(cs.first_conceded)
         vals = [
@@ -375,17 +374,17 @@ class DashboardPage(QWidget):
                 g.set_data(v, f"{n:,}경기", tip)
 
     def _render_minutes(self, d: DashboardInput) -> None:
-        buckets = st.goal_minute_buckets(d.scope_details, d.ouid)
+        buckets = core.goal_minute_buckets(d.scope_details, d.ouid)
         labels = [b.label.replace("~", "–") for b in buckets]
         self.minute_chart.set_data(labels, [
             ("득점", [b.scored for b in buckets], T.CHART_UP),
             ("실점", [b.conceded for b in buckets], T.CHART_DOWN)])
 
     def _render_story(self, d: DashboardInput) -> None:
-        found = d.story if d.story is not None else analysis.narrate(
+        found = d.story if d.story is not None else core.narrate(
             d.scope_matches, d.scope_details, d.ouid)
         picks = []
-        for sec in analysis.SECTIONS:
+        for sec in core.SECTIONS:
             first = next((i for i in found if i.section == sec), None)
             if first:
                 picks.append(first)
@@ -401,7 +400,7 @@ class DashboardPage(QWidget):
 
     def _render_timeband(self, d: DashboardInput) -> None:
         rows = []
-        for b in st.time_of_day_rates(d.scope_matches):
+        for b in core.time_of_day_rates(d.scope_matches):
             if b.games:
                 rows.append((b.label, b.win_rate, f"{b.win_rate:.0f}% · {b.games:,}",
                              f"{b.label} {b.span} · {wdl_text(b.win, b.draw, b.lose)}"))

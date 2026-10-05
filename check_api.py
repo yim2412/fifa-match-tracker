@@ -12,10 +12,10 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import config
+import core_api as core
 import images
-import stats
 import store
-from models import parse_match, summarize
+from core_api import parse_match, summarize
 from nexon_api import FCOnlineAPI, NexonAPIError
 
 
@@ -86,7 +86,7 @@ def main() -> int:
         return 1
 
     try:
-        players = stats.aggregate_players(
+        players = core.aggregate_players(
             details, ouid, name_of=lambda i: names.get(i, str(i)),
             pos_name=lambda p: positions.get(p, str(p)))
         print(f"[OK]   선수 지표 {len(players)}명")
@@ -94,14 +94,14 @@ def main() -> int:
             print(f"       {p.position:>4} {p.name}  출전{p.games} 골{p.goal}"
                   f" 어시{p.assist} 패스{p.pass_rate:.0f}% 평점{p.rating:.2f}")
 
-        mine = stats.formation_stats(details, ouid, of_opponent=False)
+        mine = core.formation_stats(details, ouid, of_opponent=False)
         print(f"[OK]   내 전술: {', '.join(f'{f.formation}({f.games})' for f in mine)}")
         print("[OK]   상대 전술별 승률:")
-        for f in stats.formation_stats(details, ouid):
+        for f in core.formation_stats(details, ouid):
             print(f"       {f.formation}  {f.win_rate:5.1f}%  "
                   f"({f.win}승 {f.draw}무 {f.lose}패)")
 
-        rb = stats.result_breakdown(details, ouid)
+        rb = core.result_breakdown(details, ouid)
         print("[OK]   경기 결과: " + " · ".join(
             f"{k} {v[0]}승{v[1]}무{v[2]}패" for k, v in
             [("전후반", rb.normal), ("연장", rb.extra),
@@ -126,7 +126,7 @@ def main() -> int:
         seasons = {m["seasonId"]: m for m in api.get_meta("seasonid")
                   if "seasonId" in m}
         if first_sp is not None:
-            season_id = stats.season_id_of(first_sp)
+            season_id = core.season_id_of(first_sp)
             info = seasons.get(season_id)
             print(f"[OK]   시즌 메타: {len(seasons)}종 · spId={first_sp} → "
                   f"{info['className'] if info else '(매칭 안 됨: ' + str(season_id) + ')'}")
@@ -184,7 +184,7 @@ def main() -> int:
         me = next((p for p in details[0]["matchInfo"] if p["ouid"] == ouid), None)
         div_id = me.get("division") if me else None
         grade = names.get(div_id, str(div_id))
-        champ = stats.is_champion_or_above(div_id)
+        champ = core.is_champion_or_above(div_id)
         print(f"[OK]   현재 등급(최근 경기 기준): {grade}"
               f" — 챔피언스 이상: {'예' if champ else '아니오'}(랭커 카드 표시 여부)")
     except Exception as e:

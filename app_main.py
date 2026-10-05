@@ -26,10 +26,10 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-import analysis
 import autostart
 import charts
 import config
+import core_api as core
 import crashlog
 import images
 import notice
@@ -37,12 +37,11 @@ import playerinfo
 import rankcollect
 import ranker
 import seasons as sn
-import stats as st
 import store
 import theme as T
 import tray
 import updatecheck
-from models import (
+from core_api import (
     MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match,
     period_stats, summarize, win_rate_trend,
 )
@@ -500,7 +499,7 @@ class MatchLoader(QThread):
             path = images.fetch_division_icon(idx, config.CACHE_DIR / "division_icons")
             if path:
                 badge_path = str(path)
-        return grade_name, st.is_champion_or_above(div_id), badge_path, names
+        return grade_name, core.is_champion_or_above(div_id), badge_path, names
 
     def _save_elo(self, ouid: str, fut) -> None:
         """ELO 한 줄(store.save_elo). 창을 닫는 중(_cancel)이면 버리고, 실패는 조용히 — 기록 하나 때문에 검색이
@@ -2065,7 +2064,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_analysis_note)
 
         self.box_analysis: dict[str, QVBoxLayout] = {}
-        for sec in analysis.SECTIONS:
+        for sec in core.SECTIONS:
             gb = QGroupBox(sec)
             box = QVBoxLayout(gb)
             box.setSpacing(6)
@@ -2101,15 +2100,15 @@ class MainWindow(QMainWindow):
         m, d = self._matches, self._details
         key = (self._ouid, id(m), len(m), m[0].match_id if m else None, id(d), len(d))
         if key != self._narrate_key:
-            self._narrate_found = analysis.narrate(m, d, self._ouid)
+            self._narrate_found = core.narrate(m, d, self._ouid)
             self._narrate_key = key
         return self._narrate_found
 
     def _render_analysis(self) -> None:
         found = self._narrate_scope()
-        colors = {analysis.SEC_FLOW: T.TEXT,
-                  analysis.SEC_WIN: T.GREEN,
-                  analysis.SEC_LOSE: T.RED}
+        colors = {core.SEC_FLOW: T.TEXT,
+                  core.SEC_WIN: T.GREEN,
+                  core.SEC_LOSE: T.RED}
         for sec, box in self.box_analysis.items():
             self._clear(box)
             rows = [i for i in found if i.section == sec]
@@ -2151,7 +2150,7 @@ class MainWindow(QMainWindow):
 
     def _render_clutch(self, details: list[dict],
                        matches: list[MatchSummary]) -> None:
-        cs = st.clutch_summary(details, self._ouid)
+        cs = core.clutch_summary(details, self._ouid)
         self._clear(self.box_clutch_first)
         for label, wdl, color in (
                 ("내가 선제골", cs.first_scored, T.GREEN),
@@ -2175,7 +2174,7 @@ class MainWindow(QMainWindow):
         cb.setStyleSheet(f"color: {T.TEXT_DIM}; padding-top: 3px;")
         self.box_clutch_first.addWidget(cb)
 
-        buckets = st.goal_minute_buckets(details, self._ouid)
+        buckets = core.goal_minute_buckets(details, self._ouid)
         # "연장"은 연장까지 간 경기가 있을 때(득실 하나라도 있을 때)만 보여준다.
         if buckets and buckets[-1].label == "연장" \
                 and not (buckets[-1].scored or buckets[-1].conceded):
@@ -2213,7 +2212,7 @@ class MainWindow(QMainWindow):
             self.box_clutch_minute.addWidget(row)
 
         self._clear(self.box_clutch_tod)
-        for band in st.time_of_day_rates(matches):
+        for band in core.time_of_day_rates(matches):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
@@ -2299,7 +2298,7 @@ class MainWindow(QMainWindow):
 
     def _render_diagnosis(self, details: list[dict]) -> None:
         self._clear(self.box_diag_division)
-        divs = st.division_stats(
+        divs = core.division_stats(
             details, self._ouid,
             name_of=lambda i: self._division_names.get(i, str(i)))
         if divs:
@@ -2313,7 +2312,7 @@ class MainWindow(QMainWindow):
             self.box_diag_division.addWidget(empty)
 
         self._clear(self.box_diag_possession)
-        for b in st.possession_stats(details, self._ouid):
+        for b in core.possession_stats(details, self._ouid):
             self.box_diag_possession.addWidget(self._wr_bar_row(
                 f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
                 b.avg_gf, b.avg_ga))
@@ -2349,7 +2348,7 @@ class MainWindow(QMainWindow):
 
     def _render_synergy(self, details: list[dict]) -> None:
         name_of = lambda i: self._names.get(i, str(i))
-        pairs = st.pair_synergy(details, self._ouid, name_of=name_of,
+        pairs = core.pair_synergy(details, self._ouid, name_of=name_of,
                                 min_games=self.sp_synergy_min.value())
         rows = []
         for p in pairs:
@@ -2394,9 +2393,9 @@ class MainWindow(QMainWindow):
         ctrl.addSpacing(16)
         # 결과 종류별 표시 토글(범례 겸용). result 코드로 필터한다.
         self.chk_shotmap_result: dict[int, QCheckBox] = {}
-        for result, text, color in ((st.SHOT_GOAL, "● 골", T.GREEN),
-                                    (st.SHOT_ON_TARGET, "● 유효슛", T.YELLOW),
-                                    (st.SHOT_OFF_TARGET, "● 빗나감", T.TEXT_DIM)):
+        for result, text, color in ((core.SHOT_GOAL, "● 골", T.GREEN),
+                                    (core.SHOT_ON_TARGET, "● 유효슛", T.YELLOW),
+                                    (core.SHOT_OFF_TARGET, "● 빗나감", T.TEXT_DIM)):
             chk = QCheckBox(text)
             chk.setChecked(True)
             chk.setStyleSheet(f"QCheckBox {{ color: {color}; font-weight: bold; }}")
@@ -2434,7 +2433,7 @@ class MainWindow(QMainWindow):
 
         note = QLabel(
             f"분모는 골이 아니라 <b>슛</b>이다 — \"그 방식으로 찼을 때 들어가는 "
-            f"비율\".<br>슛 {st.MIN_BUCKET_SHOTS}개 미만인 칸은 비율을 내지 "
+            f"비율\".<br>슛 {core.MIN_BUCKET_SHOTS}개 미만인 칸은 비율을 내지 "
             f"않는다({NA}).<br>괄호는 유효슛률 · xG는 비공식 근사치.")
         note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
         note.setWordWrap(True)
@@ -2448,7 +2447,7 @@ class MainWindow(QMainWindow):
     def _render_shotmap(self) -> None:
         _, details = self._slice()
         mine = bool(self.cb_shotmap_side.currentData())
-        sm = st.shot_map(details, self._ouid, mine=mine)
+        sm = core.shot_map(details, self._ouid, mine=mine)
         self._render_shot_buckets(sm, mine)
         # 체크된 결과 종류만 화면에 찍는다(요약 수치는 전체 기준 유지).
         shown = {r for r, chk in self.chk_shotmap_result.items() if chk.isChecked()}
@@ -2468,8 +2467,8 @@ class MainWindow(QMainWindow):
         """슛 유형·거리별 효율 패널. 내 슛이면 초록, 상대 슛(=내 실점)이면 빨강."""
         color = T.GREEN if mine else T.RED
         for box, buckets in (
-                (self.box_shot_type, st.shot_type_breakdown(sm)),
-                (self.box_shot_dist, st.shot_distance_breakdown(sm))):
+                (self.box_shot_type, core.shot_type_breakdown(sm)),
+                (self.box_shot_dist, core.shot_distance_breakdown(sm))):
             self._clear(box)
             if not buckets:
                 lb = QLabel("표시할 슛이 없습니다.")
@@ -2499,7 +2498,7 @@ class MainWindow(QMainWindow):
         return w
 
     def _render_finishing(self, details: list[dict]) -> None:
-        players = st.finishing_ranking(
+        players = core.finishing_ranking(
             details, self._ouid, name_of=lambda i: self._names.get(i, str(i)))
         rows = []
         for p in players:
@@ -2905,14 +2904,14 @@ class MainWindow(QMainWindow):
     def _fill_compare_squad(self, box: QVBoxLayout, ouid: str, details: list[dict],
                             label: str) -> None:
         self._clear(box)
-        found = st.own_squad(details, ouid)
+        found = core.own_squad(details, ouid)
         if found is None:
             lb = QLabel("표시할 스쿼드가 없습니다.")
             lb.setStyleSheet(f"color: {T.TEXT_DIM};")
             box.addWidget(lb)
             return
         players, match_date, result = found
-        formation = st.formation_of(players)
+        formation = core.formation_of(players)
         title = QLabel(f"{label}  ·  {formation}  ·  {result}  ·  {match_date}")
         title.setStyleSheet(f"color: {T.TEXT_DIM};")
         title.setWordWrap(True)
@@ -2928,7 +2927,7 @@ class MainWindow(QMainWindow):
 
         season_entries = []
         for sp_id in sp_ids:
-            season_id = st.season_id_of(sp_id)
+            season_id = core.season_id_of(sp_id)
             info = self._seasons.get(season_id)
             if info and info.get("seasonImg"):
                 season_entries.append((sp_id, season_id, info["seasonImg"]))
@@ -3208,7 +3207,7 @@ class MainWindow(QMainWindow):
         return selected.label
 
     def _analysis_note_text(self) -> str:
-        return (f"최근 흐름은 최근 {analysis.WINDOW}경기 · 이기는/지는 패턴은"
+        return (f"최근 흐름은 최근 {core.WINDOW}경기 · 이기는/지는 패턴은"
                 f" {self._scope_text()} 기준. 표본이 모자란 항목은 표시하지 않습니다.")
 
     def _diag_note_text(self) -> str:
@@ -3547,7 +3546,7 @@ class MainWindow(QMainWindow):
         if detail is None:
             return
         opponent = opp_item.text()
-        found = st.opponent_squad([detail], self._ouid, opponent)
+        found = core.opponent_squad([detail], self._ouid, opponent)
         if found is None:
             return
         players, match_date, result = found
@@ -3581,7 +3580,7 @@ class MainWindow(QMainWindow):
         if not name_item:
             return
         nickname = name_item.text()
-        found = st.opponent_squad(self._details, self._ouid, nickname)  # 표와 같은 범위
+        found = core.opponent_squad(self._details, self._ouid, nickname)  # 표와 같은 범위
         if found is None:
             QMessageBox.information(
                 self, "상대 스쿼드",
@@ -3591,17 +3590,17 @@ class MainWindow(QMainWindow):
         self._show_opponent_squad(nickname, players, match_date, result)
 
     def _season_name(self, sp_id: int) -> str:
-        info = self._seasons.get(st.season_id_of(sp_id))
+        info = self._seasons.get(core.season_id_of(sp_id))
         return info.get("className", "-") if info else "-"
 
-    def _position_opp_rows(self, players: list[st.PositionOpponent]) -> list[list]:
+    def _position_opp_rows(self, players: list[core.PositionOpponent]) -> list[list]:
         return [[p.position, f"{p.name} ({self._season_name(p.sp_id)})",
                 (str(p.count), p.count), (f"{p.rate:.1f}%", p.rate)]
                for p in players]
 
     @staticmethod
     def _tint_position_rows(table: QTableWidget,
-                            players: list[st.PositionOpponent]) -> None:
+                            players: list[core.PositionOpponent]) -> None:
         """스쿼드 화면(PitchWidget)과 같은 라인 색상으로 행 전체를 물들인다."""
         for r, p in enumerate(players):
             bg = MainWindow._blend(T.PANEL, PitchWidget._accent_for(p.pos_code), 0.28)
@@ -3630,7 +3629,7 @@ class MainWindow(QMainWindow):
         color = self.cb_position_color.currentText()
         if color and color != self.POSITION_COLOR_ALL:
             nicknames = {nick for nick, c in self._team_colors.items() if c == color}
-        players = st.opponent_position_players(
+        players = core.opponent_position_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)),
@@ -3648,7 +3647,7 @@ class MainWindow(QMainWindow):
 
     def _render_teamcolor_tabs(self, matches: list[MatchSummary],
                                details: list[dict]) -> None:
-        stats_list = st.team_color_stats(matches, self._team_color_of,
+        stats_list = core.team_color_stats(matches, self._team_color_of,
                                          team_value_of=self._team_values.get)
         # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
         # "10"을 "9"보다 뒤로 보내는 문자열 정렬 대신 실제 크기로 정렬한다
@@ -3831,7 +3830,7 @@ class MainWindow(QMainWindow):
         if not nicknames:
             return
         _, details = self._teamcolor_scope()  # 표와 같은 범위
-        players = st.opponent_position_players(
+        players = core.opponent_position_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)),
@@ -3839,7 +3838,7 @@ class MainWindow(QMainWindow):
         self._show_teamcolor_detail(color, players)
 
     def _show_teamcolor_detail(self, color: str,
-                              players: list[st.PositionOpponent]) -> None:
+                              players: list[core.PositionOpponent]) -> None:
         dlg = QDialog(self)
         dlg.setWindowTitle(f"{color} — 포지션별 기용률")
         v = QVBoxLayout(dlg)
@@ -3894,7 +3893,7 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(body)
         outer.addWidget(VScrollArea(body))
 
-        formation = st.formation_of(players)
+        formation = core.formation_of(players)
         title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
         title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
         title.setWordWrap(True)
@@ -3911,7 +3910,7 @@ class MainWindow(QMainWindow):
 
         season_entries = []
         for sp_id in sp_ids:
-            season_id = st.season_id_of(sp_id)
+            season_id = core.season_id_of(sp_id)
             info = self._seasons.get(season_id)
             if info and info.get("seasonImg"):
                 season_entries.append((sp_id, season_id, info["seasonImg"]))
@@ -3988,11 +3987,11 @@ class MainWindow(QMainWindow):
         """선수 카드 '내 기록' — 그 카드(spId)만의 슛 맵과 주 단위 결정력 추이. 범위는 위쪽 시즌 콤보.
 
         같은 선수라도 시즌이 다른 카드는 spId 가 달라 따로 본다(사용자 결정 2026-10-02).
-        슛이 st.PLAYER_TREND_MIN_SHOTS 보다 적으면 추이를 그리지 않는다 — 몇 개로 그린 선은 노이즈다."""
+        슛이 stats.PLAYER_TREND_MIN_SHOTS 보다 적으면 추이를 그리지 않는다 — 몇 개로 그린 선은 노이즈다."""
         w = QWidget()
         v = QVBoxLayout(w)
-        weeks = st.player_finishing_trend(self._details, self._ouid, sp_id)
-        sm = st.shot_map(self._details, self._ouid, mine=True, sp_id=sp_id)
+        weeks = core.player_finishing_trend(self._details, self._ouid, sp_id)
+        sm = core.shot_map(self._details, self._ouid, mine=True, sp_id=sp_id)
         games = sum(x.games for x in weeks)
         shots = sum(x.shots for x in weeks)
         goals = sum(x.goals for x in weeks)
@@ -4010,14 +4009,14 @@ class MainWindow(QMainWindow):
         title = QLabel("주 단위 전환율(골 ÷ 슛)")
         title.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(title)
-        if shots >= st.PLAYER_TREND_MIN_SHOTS:
+        if shots >= core.PLAYER_TREND_MIN_SHOTS:
             chart = charts.AreaTrendChart()
             chart.setObjectName("myRecordTrend")
             chart.set_data([(x.label, x.conversion, x.shots) for x in weeks])
             chart.setMinimumHeight(160)
             v.addWidget(chart, 1)
         else:
-            lb = QLabel(f"표본 부족 — 슛 {shots}개(추이는 {st.PLAYER_TREND_MIN_SHOTS}개부터)")
+            lb = QLabel(f"표본 부족 — 슛 {shots}개(추이는 {core.PLAYER_TREND_MIN_SHOTS}개부터)")
             lb.setObjectName("myRecordTrend")
             lb.setStyleSheet(f"color: {T.TEXT_DIM};")
             v.addWidget(lb, 1)
@@ -4464,7 +4463,7 @@ class MainWindow(QMainWindow):
             [(p.label, p.win_rate, p.games) for p in self._trend_periods])
 
         # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다.
-        div_points = st.division_trend(self._details, self._ouid)
+        div_points = core.division_trend(self._details, self._ouid)
         if div_points:
             latest = max(t for t, _ in div_points).date()
             cutoff = latest - timedelta(days=days - 1)
@@ -4546,7 +4545,7 @@ class MainWindow(QMainWindow):
                 " · 이 표만은 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다." + err)
 
     def _render_players(self, details: list[dict]) -> None:
-        players = st.aggregate_players(
+        players = core.aggregate_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)))
@@ -4603,7 +4602,7 @@ class MainWindow(QMainWindow):
             loader.wait(500)
         entries = []
         for sp_id in sp_ids:
-            season_id = st.season_id_of(sp_id)
+            season_id = core.season_id_of(sp_id)
             icon_url = self._seasons.get(season_id, {}).get("seasonImg")
             if icon_url:
                 entries.append((sp_id, season_id, icon_url))
@@ -4646,7 +4645,7 @@ class MainWindow(QMainWindow):
                 item.widget().deleteLater()
 
     def _render_tactics(self, details: list[dict]) -> None:
-        mine = st.formation_stats(details, self._ouid, of_opponent=False)
+        mine = core.formation_stats(details, self._ouid, of_opponent=False)
         if mine:
             t = mine[0]
             self.lb_my_formation.setText(
@@ -4654,7 +4653,7 @@ class MainWindow(QMainWindow):
                 f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
 
         self._clear(self.box_opp)
-        for f in st.formation_stats(details, self._ouid):
+        for f in core.formation_stats(details, self._ouid):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
@@ -4670,7 +4669,7 @@ class MainWindow(QMainWindow):
             h.addWidget(c)
             self.box_opp.addWidget(row)
 
-        rb = st.result_breakdown(details, self._ouid)
+        rb = core.result_breakdown(details, self._ouid)
         self._clear(self.box_result)
         for label, wdl in (("전후반", rb.normal), ("연장전", rb.extra),
                            ("승부차기", rb.shootout), ("몰수", rb.forfeit)):
@@ -4697,7 +4696,7 @@ class MainWindow(QMainWindow):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
-            a = QLabel(st.PERIODS.get(k, str(k)))
+            a = QLabel(core.PERIODS.get(k, str(k)))
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(f"{v.scored}득점")
             b.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")

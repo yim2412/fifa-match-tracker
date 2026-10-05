@@ -1310,6 +1310,39 @@ def test_player_parsing_missing_parts():
     assert pi.PlayerInfo(sp_id=1).group_stats() == {}
 
 
+# ── 화면 ↔ 분석 경계(19단계, 2026-10-05) — 화면은 계산을 core_api 로만 ─────────────────────
+UI_FILES = ("app_main.py", "dashboard.py", "widgets.py", "charts.py", "tray.py", "check_api.py")
+CORE_MODULES = {"analysis", "stats", "models"}
+
+
+def test_ui_reaches_analysis_only_through_core_api():
+    import ast
+    import core_api
+    root = Path(__file__).resolve().parent.parent
+    exported = set(core_api.__all__)
+    # 목록과 실제 이름이 같다 — 지운 이름이 목록에 남거나, 가져오기만 하고 목록에 안 적은 게 없게
+    present = {n for n in vars(core_api) if not n.startswith("_") and n != "annotations"}
+    assert present == exported, sorted(present ^ exported)
+    for f in UI_FILES:
+        tree = ast.parse((root / f).read_text(encoding="utf-8"))
+        aliases = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    assert a.name.split(".")[0] not in CORE_MODULES, f"{f}: import {a.name} — core_api 를 거친다"
+                    if a.name == "core_api":
+                        aliases.add(a.asname or a.name)
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                assert mod.split(".")[0] not in CORE_MODULES, f"{f}: from {mod} import … — core_api 를 거친다"
+                if mod == "core_api":
+                    extra = {a.name for a in node.names} - exported
+                    assert not extra, f"{f}: core_api 에 없는 이름 {extra}"
+        used = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)
+                and isinstance(n.value, ast.Name) and n.value.id in aliases}
+        assert used <= exported, f"{f}: core_api 에 없는 이름 {sorted(used - exported)}"
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

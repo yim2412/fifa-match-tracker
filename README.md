@@ -152,6 +152,7 @@ python tests/test_release.py   # 배포 검사 로직
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. **역산해서 알아낸 상수가 여기 모여 있다** |
 | `analysis.py` | 집계 → 문장. 최근 흐름(최근 20경기)과 이기는/지는 패턴(누적 전체)을 규칙 기반으로 서술 |
+| `core_api.py` | 화면과 분석 사이의 경계 — 화면 쪽 파일은 분석 함수를 여기서만 가져온다 |
 | `store.py` | 조회한 경기를 SQLite(`fifa.db`)에 누적 — API가 오래된 경기를 버리는 것을 넘기 위해 |
 | `ranker.py` | 넥슨 데이터센터에서 감독모드 순위·구단가치·ELO 를 긁어온다(오픈API 엔 없음) |
 | `rankcollect.py` | 랭킹 1만 명을 하루 한 번 모아 `rank.db` 에 쌓는 수집기(1.1.1 — 기본 꺼짐, [정보] 에서 켠다). 팀컬러 목록과 같은 읽기를 나눠 쓴다. 터미널 확인: `python rankcollect.py --pages 3` |

@@ -15,6 +15,7 @@
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵 |
+| `core_api.py` | **화면 ↔ 분석 경계**(19단계) — 화면 쪽(`app_main`·`dashboard`·`check_api`)은 analysis·stats·models 를 여기서만 가져온다. 화면에서 새 분석 함수를 쓰려면 import 와 `__all__` 에 한 줄씩. 나중에 핵심을 비공개 모듈로 옮길 때 고칠 곳이 여기 하나가 되게(ROADMAP "배포 보호 준비"). 이름을 복사해 오므로 **테스트에서 바꿔 끼울 땐 `core_api` 쪽을**(`app_main.core.narrate`). `test_ui_reaches_analysis_only_through_core_api` 가 지킨다 |
 | `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) |
 | `charts.py` | 대시보드 그래프(QPainter). 색은 `theme.CHART_*` — 앱의 GREEN/RED 는 적록 색약에서 구분이 안 돼 그래프엔 안 쓴다 |
 | `widgets.py` | 화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 스쿼드 배치(`PitchWidget`), 좁으면 접히는 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등 |

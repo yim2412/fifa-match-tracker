@@ -244,7 +244,7 @@ def test_lazy_render_draws_only_the_visible_page():
 
 def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
     calls = []
-    real = app_main.analysis.narrate
+    real = app_main.core.narrate
 
     def spy(m, d, ouid, *a, **k):
         calls.append(len(m))
@@ -252,7 +252,7 @@ def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
 
     # 경기를 빼고 그리면 '최근 N일' 칸의 범위가 줄어든 채 남는다 — 뒤 테스트(승률 평균)가 달라졌다
     saved = _win._matches, _win._details, _win.sp_trend_days.value()
-    app_main.analysis.narrate = spy
+    app_main.core.narrate = spy
     try:
         _win._narrate_key = None
         _win._render_all()   # 대시보드 + 흐름 분석 메뉴 — 다 그려도 한 번
@@ -264,7 +264,7 @@ def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
         _win._render_all()
         assert calls == [len(saved[0]), len(saved[0]) - 1], calls
     finally:
-        app_main.analysis.narrate = real
+        app_main.core.narrate = real
         _win._matches, _win._details = saved[0], saved[1]
         _win._narrate_key = None
         _win._render_trend(_win._matches)  # 범위를 먼저 되살려야 값이 들어간다
@@ -1939,7 +1939,7 @@ def test_teamcolor_uses_db_cache_for_every_season_before_fetching():
 def test_position_views_follow_teamcolor_scope():
     # 포지션별 최다 상대(색 필터)·팀컬러 더블클릭 상세도 표와 같은 시즌 범위
     seen = []
-    orig = app_main.st.opponent_position_players, _win.sp_to.value(), _win._show_teamcolor_detail
+    orig = app_main.core.opponent_position_players, _win.sp_to.value(), _win._show_teamcolor_detail
     saved_colors = dict(_win._team_colors)
 
     def spy(details, *a, **k):
@@ -1953,13 +1953,13 @@ def test_position_views_follow_teamcolor_scope():
         _win.sp_to.setValue(1)
         _win._render_all()
         assert len(_win._slice()[1]) < len(_win._details), "표시 구간이 좁아지지 않아 비교가 안 된다"
-        app_main.st.opponent_position_players = spy
+        app_main.core.opponent_position_players = spy
         _win._show_teamcolor_detail = lambda *a, **k: None
         _win._on_position_color_changed(0)
         _win._on_teamcolor_double_clicked(_win.tbl_teamcolor_rank.item(0, 1))
         assert seen == [len(_win._details)] * 2, (seen, len(_win._details))
     finally:
-        app_main.st.opponent_position_players = orig[0]
+        app_main.core.opponent_position_players = orig[0]
         _win._show_teamcolor_detail = orig[2]
         _win._team_colors.clear()
         _win._team_colors.update(saved_colors)
@@ -2710,12 +2710,12 @@ def test_player_card_has_my_record_tab():
     # 픽스처는 슛이 적다 — 추이 대신 '표본 부족'. 기준을 낮추면 그래프가 나온다
     trend = [x for x in rec.findChildren(app_main.QWidget) if x.objectName() == "myRecordTrend"][0]
     assert isinstance(trend, app_main.QLabel) and "표본 부족" in trend.text(), type(trend)
-    saved = st_mod.PLAYER_TREND_MIN_SHOTS
-    st_mod.PLAYER_TREND_MIN_SHOTS = 1
+    saved = app_main.core.PLAYER_TREND_MIN_SHOTS  # 화면이 읽는 쪽 — core_api 는 값을 복사해 온다
+    app_main.core.PLAYER_TREND_MIN_SHOTS = 1
     try:
         rec2 = _win._build_my_record(shooter.sp_id)
     finally:
-        st_mod.PLAYER_TREND_MIN_SHOTS = saved
+        app_main.core.PLAYER_TREND_MIN_SHOTS = saved
     trend2 = [x for x in rec2.findChildren(app_main.QWidget) if x.objectName() == "myRecordTrend"][0]
     assert isinstance(trend2, charts.AreaTrendChart), type(trend2)
 

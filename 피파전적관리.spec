@@ -14,7 +14,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[('app_icon.ico', '.')] + LICENSE_DATAS,
-    hiddenimports=['store', 'stats', 'theme', 'widgets', 'ranker', 'images',
+    hiddenimports=['store', 'stats', 'core_api', 'theme', 'widgets', 'ranker', 'images',
                    'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck', 'notice',
                    # 1.1.1 — 트레이·자동 실행·랭킹 수집. QtNetwork 는 '한 번만 실행'(QLocalServer) — release.py 가 .pyd 를 확인한다
                    'tray', 'autostart', 'rankcollect', 'PyQt6.QtNetwork'],
