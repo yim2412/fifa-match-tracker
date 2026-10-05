@@ -163,7 +163,9 @@
 
 **규모** 큼. 새 넥슨 요청: 오픈API 둘(거래 · 랭커 기록) + 홈페이지 하나(시세 — 이미 있는 카드 상세 요청을 캐시로).
 
-**검토 기록** — (1회차 전)
+**검토 기록** 1회차(2026-10-06) — 독립 검토자 A(코드·환경, 13.7만 토큰) [상] 2 · [중] 8 / B(사용자·운영·통계, 11.6만 토큰) [상] 3 · [중] 9.
+[상] 두 개는 둘이 같이 찾았다(첫 수집이 끊기면 옛 거래 영구 누락 · 지정 전엔 거래가 없어 힌트가 안 나옴) + B 의 "강화 재료·방출 카드가 보유 중으로 평가됨" → 전부 반영
+(받는 규칙 다시 씀 · 계정 무관하게 받기 · "행방 모름"). 토큰은 검토자가 적은 값(4만·4.5만)이 아니라 실제 사용량.
 
 ### 실측 장부 (2026-10-06 — 검토자는 다시 재지 않는다)
 
@@ -196,19 +198,25 @@
 
 - **API**: `nexon_api.EP_USER_TRADE` · `get_trades(tradetype, offset, limit=100)` — **ouid 인자가 없다**(넥슨이 무시 — R1. 받는 척하면 남의 거래로 읽힌다).
   ouid 를 아예 빼고 부를 수 있는지는 구현 첫 줄에서 잰다(안 되면 빈 문자열 — R1 에서 통과). `TRADE_PAGE = 100`(R4 상한).
-- **저장**(fifa.db): `trades(sale_sn TEXT PRIMARY KEY, kind TEXT, trade_date TEXT, spid INTEGER, grade INTEGER, value INTEGER)` +
-  `idx_trades_spid(spid, trade_date)` · `INSERT OR IGNORE`(R5 중복). ouid 열은 **없다** — 이 표는 "이 키 주인의 거래"다.
-  `trade_state(key TEXT PRIMARY KEY, value TEXT)`: `key_fp`(키 sha256 앞 16자 — 키 자체는 안 남긴다) · `fetched_at` · `my_ouid`.
-- **키가 바뀌면**(`key_fp` 다름) 거래·`my_ouid` 를 지우고 다시 받는다 — 다른 넥슨 ID 의 거래가 섞이지 않게.
-- **이어 받기**: 구매·판매 각각 offset 0 부터, 한 쪽 안에 저장된 `saleSn` 이 하나라도 있으면 그 쪽까지 넣고 멈춘다(같은 초 일괄 거래가
-  쪽 경계에 걸쳐도 `OR IGNORE` 라 안전). 첫 수집 요청 162 · 약 19초(R4). **하루 한 번**(`fetched_at` 이 오늘이면 안 부른다 — R6 이라 더 자주 받아도 새것이 없다).
+- **저장**(fifa.db): `trades(kind TEXT, sale_sn TEXT, trade_date TEXT, spid INTEGER, grade INTEGER, value INTEGER, PRIMARY KEY(kind, sale_sn))` +
+  `idx_trades_spid(spid, trade_date)` · `INSERT OR IGNORE`(R5 중복 — 같은 줄이 별개 판매였는지는 사용자 대조, 아래 "재지 않은 것"). ouid 열은 **없다** — 이 표는 "이 키 주인의 거래"다.
+  `trade_state(key TEXT PRIMARY KEY, value TEXT)`: `key_fp`(키 sha256 앞 16자 — 키 자체는 안 남긴다) · `fetched_at` · `my_ouid` · 종류별 `done_<kind>`(가장 옛 쪽까지 닿았다).
+- **키가 바뀌면**(`_ask_new_key` → `set_key` 자리 app_main.py:3342 에서 바로 — 로더 안이 아니라): 새 키로 첫 쪽(구매·판매 각 1요청)을 받아 저장된 `saleSn` 과
+  **겹치면 같은 주인**(같은 넥슨 ID 재발급) → 그대로 둔다. 안 겹치면 거래·`my_ouid`·`done_*` 를 지우고 띠에 *"API 키가 바뀌어 거래 기록과 내 계정 지정을 지웠습니다"*.
+- **받는 규칙**(1회차 [상] — 첫 수집이 끊기면 옛 거래가 영영 빠졌다):
+  - **위쪽(새 거래)**: offset 0 부터, 저장된 `saleSn` 을 만나고 **그 쪽의 가장 옛 날짜가 저장된 최신 날짜 − `config.TRADE_OVERLAP_DAYS`(7) 이하**일 때까지(R6 — 늦게 반영된 옛 날짜 거래를 놓치지 않게 겹쳐 받는다).
+  - **아래쪽(옛 거래)**: `done_<kind>` 가 아니면 offset = (그 종류 저장 줄 수 − 100)부터 빈 쪽이 올 때까지 → 빈 쪽에서 `done_<kind>`. 새 거래가 위에 끼면 offset 이 밀려 **겹칠 뿐 건너뛰지 않는다**.
+  - **쪽마다 한 트랜잭션** — 끊겨도 반쪽 쪽은 롤백. `cancel()` 은 쪽 사이에서 본다. `fetched_at` 은 위쪽이 두 종류 다 끝났을 때만 쓴다.
+  - **429**(`OPENAPI00007`)를 받으면 그 자리에서 멈추고 상태를 그대로 둔다 — 키 입력 창(`quota_hit`)으로 보내지 않는다. 다음 검색·다음 날 이어서.
+  - 첫 수집 요청 162 · 약 19초(R4). 위쪽은 **하루 한 번**(`fetched_at` 이 오늘이면 안 부른다), 아래쪽은 끝날 때까지 기회마다.
+- **언제 받나**(1회차 [상] — 지정 전에 받아야 힌트를 낸다): **키가 있으면 계정과 무관하게** 아무 검색의 `MatchLoader` 가 끝난 **뒤** `TradeLoader`(작업 스레드 · 자기 연결 · `cancel()` · 요청 번호).
+  다른 오픈API 로더(새 검색 · 구단주 비교)가 시작되면 쪽 사이에서 멈추고 다음 기회에 이어 받는다 — 상세 동시 요청(최대 24)과 키 한도를 나눠 쓰지 않게.
 - **내 계정 지정**(사용자 결정 ①): 메뉴 "스쿼드·이적" 페이지 위의 띠(모달 아님 — 초점 안 뺏는다): *"거래 기록은 API 키 주인 계정 것만
-  나옵니다. 이 계정이 내 계정인가요? [내 계정으로] "* + 힌트 *"최근 300경기 카드 중 내 거래에 있는 카드 91%"*(R2 점수 — 판정이 아니라 참고, R3).
-  정한 뒤엔 띠가 *"내 계정: ○○ · [바꾸기]"*. 다른 계정을 검색하면 거래 화면은 *"거래 기록은 내 계정(○○)에서만 볼 수 있습니다"* 만.
-- **언제 받나**: 검색 계정 == `my_ouid` 일 때 `MatchLoader` 가 끝난 **뒤** `TradeLoader`(작업 스레드 · 자기 연결 · `cancel()` · 요청 번호).
-  메인 로더의 상세 동시 요청(최대 24)과 겹치지 않게. 내 계정을 처음 정한 순간에도 한 번.
+  나옵니다. 이 계정이 내 계정인가요? [내 계정으로] "* + 힌트 *"최근 300경기에 쓴 (카드, 강화) 중 내 거래에 있는 것 91%"*(R2 점수 — **(카드, 강화) 단위**: 카드 단위면 남의 계정도 81%, R3 · 판정이 아니라 참고).
+  거래를 아직 다 못 받았으면 힌트 대신 *"거래 기록을 받는 중"*. 정한 뒤엔 띠가 *"내 계정: ○○ · [바꾸기]"*. 다른 계정을 검색하면 거래 화면은 *"거래 기록은 내 계정(○○)에서만 볼 수 있습니다"* 만.
 - 화면 어디서나 **"넥슨 반영 기준 · 마지막 거래 9월 30일"**(R6) — 최근 거래가 없는 걸 앱 버그로 읽지 않게.
-- **안내문**: `PRIVACY_HTML` 의 "이 PC 에만 있는 것"에 "거래 기록" 추가 → `NOTICE_VERSION` 4, `NOTICE_BASE_VERSION` 은 2 그대로
+- **안내문**: `PRIVACY_HTML` — 연결 목록의 오픈API 용도를 "전적·거래 기록·랭커 기록 조회"로, *"거래 기록은 넥슨이 API 키 주인 계정 것만 줍니다"* 한 줄,
+  "이 PC 에만 있는 것"에 "거래 기록". `WEB_DATA_HTML` — *"켜 두면 가계부 평가용 시세를 하루 한 번 자동으로 읽습니다"* 한 줄 → `NOTICE_VERSION` 4, `NOTICE_BASE_VERSION` 은 2 그대로
   (막지 않고 창이 보일 때 다시 묻기만 — 1.3.1 방식). 새 기록을 막는 게이트(`track_allowed` 같은 것)는 **두지 않는다** — 오픈API 로 받는 본인 데이터다.
 - `check_api.py` 에 한 줄: 거래 첫 쪽 건수 · 마지막 거래 날짜만(카드·금액은 안 찍는다).
 
@@ -216,7 +224,9 @@
 
 - `card_prices(spid INTEGER, grade INTEGER, price INTEGER, fetched_on TEXT, PRIMARY KEY(spid, grade))` — `fetch_player_info` 한 번에 그 카드
   **모든 강화 단계**를 넣는다. 문자열 → 정수는 `playerinfo.parse_bp("3,660,000,000,000 BP")`, 못 읽으면 그 행만 버린다(R13).
-- 하루 캐시(`fetched_on` == 오늘 로컬 날짜면 안 부른다). 선수 카드 창의 [시세] 탭이 읽은 결과도 여기에 넣는다.
+- 하루 캐시(`fetched_on` == 오늘 로컬 날짜면 안 부른다). 선수 카드 창의 [시세] 탭이 읽은 결과도 여기에 넣는다 — `_build_price_tab` 은 staticmethod 라
+  쓰기는 **카드 상세를 읽은 작업 스레드가 자기 연결로**(화면 스레드에서 DB 쓰기 안 함). `PriceLoader` 는 카드 사이마다 `cancel()` 을 본다(한 장 = 한 트랜잭션).
+- 상한에 걸려 일부만 받았으면 가계부에 *"보유 N장 중 M장 평가"* — 부분합을 전체처럼 보이지 않게.
 - `WEB_DATA` 꺼짐 → 평가 손익 칸 *"시세 없음(홈페이지 데이터 꺼짐)"*. 하루 요청 상한 `config.PRICE_FETCH_MAX`(값은 11단계에서 **보유 카드 수를 재고** 정한다 — `test_price_fetch_respects_cap`).
 - 요청은 `PriceLoader`(작업 스레드) → `fetch_player_info` → `web_get`(동시 8 상한 그대로). `_web_calls()` 엔 이미 있다(새 함수 아님).
 
@@ -224,18 +234,21 @@
 
 - 입력: 검색 계정의 경기 + (내 계정일 때만) 거래. 출력: `TimelineEvent(date, spid, kind, grade_from, grade_to, before, after)` 목록.
 - 사건 종류: 구매 · 판매 · 첫 출전 · 마지막 출전 · 강화 변화(같은 `spid` 의 `spGrade` 가 바뀐 첫 경기). 같은 카드를 여러 번 사고팔면 구간을 나눈다.
-- 상태: **보유 중**(산 뒤 판 기록 없음) · **미출전**(샀는데 안 씀) · **추정**(거래 없이 스쿼드에 들어옴 — 팩·보상, 2022-01-27 전 구매(R4), 또는 다른 계정이면 전부).
+- 상태: **보유 중**(짝 안 맞은 구매 중 최근 `config.HOLD_RECENT_GAMES`(50)경기 스쿼드에 나온 것) · **행방 모름**(짝 안 맞은 구매인데 최근 스쿼드에 없음 —
+  강화 재료·방출 등은 판매 목록에 안 나온다, 1회차 [상]) · **미출전**(샀는데 한 번도 안 씀) · **추정**(거래 없이 스쿼드에 들어옴 — 팩·보상, 2022-01-27 전 구매(R4), 또는 다른 계정이면 전부).
 - 사건마다 앞뒤 `config.TIMELINE_WINDOW`(20)경기 승률·득실 — 표본 흐림 규칙(1.2.1) 그대로. 문구는 "들어온 뒤 20경기"(원인 단정 금지).
 - 예산: 1만 경기 + 거래 1.6만 줄 한 번 훑기 **300ms 이하**(`test_timeline_budget_10k`).
 
 ### N3 이적시장 가계부 (12단계 — 내 계정만)
 
-- 범위는 위쪽 시즌 콤보(거래 날짜로 자른다). 총 지출 · 수입 · 순지출.
+- **짝은 전체 이력으로 먼저 맞추고, 범위는 그 뒤에 자른다** — 시즌 콤보로 거래를 먼저 자르면 지난 시즌에 사서 이번 시즌에 판 카드가 "취득가 없음"이 된다.
+  실현 손익은 **판매 날짜**로, 지출은 구매 날짜로 범위에 넣는다. 총 지출 · 수입 · 순지출.
 - 짝: **같은 `spid` 끼리 선입선출**(강화는 산 뒤 바뀔 수 있어 `grade` 는 짝 기준이 아니라 표시). 판 것 → **실현 손익**, 짝 없는 판매 → *"취득가 없음"*(팩·보상) 따로 합계.
-  남은 구매 → **평가 손익** = 오늘 시세(지금 강화 = 마지막 출전 `spGrade`, 출전 없으면 산 강화) − 산 값. 시세가 없으면 빈칸.
+  팩으로 받은 같은 카드가 섞이면 짝이 틀릴 수 있어 화면에 *"짝은 먼저 산 것부터 맞춘 추정"*.
+  **보유 중**(타임라인 정의)만 **평가 손익** = 오늘 시세(지금 강화 = 마지막 출전 `spGrade`) − 산 값. **행방 모름**은 평가하지 않고 건수·산 값 합계만. 시세가 없으면 빈칸.
 - **수수료**(R7): 11단계 첫날 사용자가 게임 안 거래 내역 한 줄과 대조한다(사용자 확인 필요) → 결과에 따라 문구 *"판매 금액은 수수료를 뗀 값"* 또는 계산.
-  화면 고정 문구 *"이적시장 기준(강화 비용 제외)"*.
-- 큰 금액 표시는 `억`·`조` 단위 함수 하나(`stats.format_bp`) — 표·카드 공용.
+  **대조 전에는 실현 손익(판매 금액)과 평가 손익(홈페이지 시세 — 수수료 전)을 한 합계로 더하지 않는다** — 기준이 다르다. 화면 고정 문구 *"이적시장 기준(강화 비용 제외)"*.
+- 큰 금액 표시는 **새로 만들지 않고** `ranker.format_team_value`(ranker.py:365 · `_VALUE_UNITS` 억·조)를 쓴다 — 같은 단위 표가 두 벌이 되지 않게.
 
 ### 새 메뉴 "스쿼드·이적" (12단계)
 
@@ -247,6 +260,7 @@
 - `nexon_api.EP_RANKER_STATS` · `get_ranker_stats(matchtype, pairs)` — `RANKER_STATS_BATCH` 개씩 나눠 부른다(상한은 13단계 첫 줄에서 잰다 — R9).
 - 캐시: `ranker_stats(spid, po, matchtype, fetched_on, payload, PRIMARY KEY(spid, po, matchtype))` 하루.
 - 비교는 **응답에 있는 항목만**(R8): 경기당 슛·유효슛·골·어시·드리블 성공률·패스 성공률·태클·블록. 평점은 랭커 쪽에 없어 안 한다.
+- 랭커 값은 소수(`passTry` 8.85 · `dribble` 165.05)라 **경기당 평균으로 보인다** — 13단계 첫 줄에서 확인(평균인데 `matchCount` 로 또 나누면 조용히 틀린다 · `test_ranker_values_are_per_game`).
 - 랭커 `matchCount < config.RANKER_MIN_MATCHES`(10)면 흐림. 카드마다 `createDate` 가 달라 **카드별 기준일**을 칸에 적는다.
 - 자리: 메뉴 "선수" 아래 **"랭커와 비교"** 한 줄(NAV + 그리기 표). 문구는 "조작 실력"이 아니라 **전술 효과**.
 
@@ -256,22 +270,23 @@
 - **N5 패스 스타일** `stats.pass_style(details, ouid)` — 종류 6가지 비중·성공률, 이긴/진 경기 비교(R10) → [전술·경기 결과] 메뉴 안 구역. 종류 필드가 없는 경기는 건너뛴다.
 - **N6 어시스트** — `ShotMapWidget.set_shots(…, assists=True)` 면 어시 위치 → 슛 위치 선. `X_MIN` 아래 2.3%(R11)는 경계에 붙여 그리고 점 모양으로 표시(잘렸다는 뜻).
   [슛 맵] 메뉴에 [어시스트] 전환.
-- **N9 평점 추이** — 선수 카드 [내 기록] 탭에 주 단위 평균 `spRating`(R12) `AreaTrendChart`(축 `Axis.fit`) · 주 경기 수 < `PLAYER_TREND_MIN_GAMES` 는 흐림.
+- **N9 평점 추이** — 선수 카드 [내 기록] 탭에 주 단위 평균 `spRating`(R12) `AreaTrendChart`(축 `Axis.fit`) · 주 경기 수 < `stats.PLAYER_RATING_MIN_GAMES`(**새 상수** — 있는 건 슛 기준 `PLAYER_TREND_MIN_SHOTS` 뿐, stats.py:1235)는 흐림.
 
 ### `core_api` 에 더할 이름 (공통 기준 8)
 
-`squad_timeline.build_timeline` · `TimelineEvent` · `trade_book.ledger`(N3 — 모듈 이름은 12단계에서 확정) · `stats.pass_style` · `stats.format_bp` · `stats.rating_trend`(N9) · `stats.ranker_compare`(N1).
+`squad_timeline.build_timeline` · `TimelineEvent` · `trade_book.ledger`(N3 — 모듈 이름은 12단계에서 확정) · `stats.pass_style` · `stats.rating_trend`(N9) · `stats.ranker_compare`(N1).
 
 ### 진입점 표 (⑩)
 
 | 진입점 | 무엇을 | 스레드 | 스위치 | 캐시 | `shutdown` 정리 표 | 테스트 |
 |---|---|---|---|---|---|---|
-| `TradeLoader` | `get_trades` 구매·판매 | 작업 | 없음(오픈API) · 내 계정일 때만 | `trade_state.fetched_at` 하루 | 한 줄(cancel · 8000 · terminate) | `test_trade_resume_stops_at_known` · `test_trade_key_change_wipes` |
-| `PriceLoader` | `fetch_player_info`(시세) | 작업 | `WEB_DATA` | `card_prices` 하루 | 한 줄(GET 한 번 — 3000) | `test_price_cache_daily` · `test_price_fetch_respects_cap` |
-| 선수 카드 [시세] 탭 | 기존 요청 + `card_prices` 쓰기 | 기존 | `WEB_DATA` | 쓰기만 추가 | 기존 | `test_price_tab_fills_cache` |
+| `TradeLoader` | `get_trades` 구매·판매(위쪽·아래쪽) | 작업 | 없음(오픈API) · **키만 있으면**(계정 무관) | 위쪽 `fetched_at` 하루 · 아래쪽 `done_<kind>` | 한 줄(cancel · 12000 · **terminate 안 함** — 쪽마다 트랜잭션, 요청 타임아웃 10초) | `test_trade_interrupted_first_fetch_resumes_old` · `test_trade_overlap_catches_late` · `test_trade_429_keeps_state` · `test_trade_yields_to_new_search` |
+| 키 교체(`_ask_new_key` app_main.py:3338) | 첫 쪽 2요청 → 같은 주인 판정 | 작업(같은 `TradeLoader` 모드) | — | — | 위와 같음 | `test_trade_key_reissue_keeps` · `test_trade_key_change_wipes` |
+| `PriceLoader` | `fetch_player_info`(시세) 반복 | 작업 | `WEB_DATA` | `card_prices` 하루 | 한 줄(카드 사이 cancel · 12000 · terminate 안 함) | `test_price_cache_daily` · `test_price_fetch_respects_cap` · `test_price_partial_label` |
+| 선수 카드 [시세] 탭 | 기존 요청 + `card_prices` 쓰기(작업 스레드) | 기존 | `WEB_DATA` | 쓰기만 추가 | 카드 창 `exec` 뒤 `wait()`(app_main.py:4465~) — `shutdown` 표 아님 | `test_price_tab_fills_cache` |
 | `RankerStatsLoader` | `get_ranker_stats`(N1) | 작업 | 없음 | `ranker_stats` 하루 | 한 줄 | `test_ranker_cache_daily` |
-| 선수 카드 [랭커 기록] 탭(N2) | `get_ranker_stats` 한 번 | 작업 | 없음 | `ranker_stats` 공용 | 한 줄 | `test_scout_tab_one_request` |
-| 내 계정 [내 계정으로]·[바꾸기] | `trade_state.my_ouid` 쓰기 | 화면(쓰기 한 줄) | — | — | — | `test_my_account_banner` |
+| 선수 카드 [랭커 기록] 탭(N2) | `get_ranker_stats` 한 번 | 작업 | 없음 | `ranker_stats` 공용 | `_ability_sim_loader` 처럼 **self 속성** → `shutdown` 표 한 줄 + 카드 창 `wait()` | `test_scout_tab_one_request` |
+| 내 계정 [내 계정으로]·[바꾸기] | `trade_state.my_ouid` 쓰기 | 화면(쓰기 한 줄) | — | — | — | `test_my_account_banner` · `test_hint_needs_trades` |
 
 ### 환경 행렬 (③)
 
@@ -293,7 +308,11 @@
 | 실패 | 결과 | 알아채는 법 | 복구 |
 |---|---|---|---|
 | 내 계정을 잘못 지정 | 남의 경기 화면에 내 거래 | 띠의 힌트 점수(R2) | [바꾸기] |
-| 키가 다른 넥슨 ID 로 바뀜 | 거래 섞임 | `key_fp` 비교 | 지우고 다시 받기 |
+| 키가 다른 넥슨 ID 로 바뀜 | 거래 섞임 | 키 교체 자리에서 첫 쪽 `saleSn` 대조 | 지우고 다시 받기 + 띠로 알림 |
+| 같은 넥슨 ID 로 키 재발급 | (막지 않으면) 지정이 사라지고 162요청 | 첫 쪽 `saleSn` 이 겹침 | 그대로 둔다 |
+| 첫 수집이 끊김(종료·트레이 내려놓기·429) | (막지 않으면) 옛 거래 영구 누락 | `done_<kind>` 가 거짓 | 아래쪽을 다음 기회에 이어 받기 |
+| 429 | 그날 경기 조회까지 한도에 걸림 | `OPENAPI00007` | 거래는 그 자리에서 멈추고 키 창으로 안 보냄 · 다른 로더가 시작되면 양보 |
+| 강화 재료·방출로 사라진 카드 | (막지 않으면) "보유 중"으로 평가 손익 부풀림 | 최근 스쿼드에 없음 | "행방 모름"으로 따로 · 평가 안 함 |
 | 넥슨이 ouid 를 다시 존중(정책 변경) | 빈 ouid 요청이 400/빈 목록 | `check_api` 줄 · 가계부 빈칸 | 그때 `get_trades` 에 ouid 를 되살린다 |
 | 반영 지연(R6) | 최근 거래 빠짐 | "마지막 거래 날짜" 표시 | 없음(넥슨 쪽) |
 | 시세 파싱 실패 · 웹 꺼짐 | 평가 손익 빈칸 | 칸 문구 | 다음 날 다시 |
@@ -302,7 +321,7 @@
 예산(⑦): 거래 첫 수집 요청 ≤ 170 · ≤ 30초, 이후 하루 1회 2~4요청 · 랭커 계정당 하루 2~4요청 · 시세 하루 ≤ `PRICE_FETCH_MAX` · 타임라인·가계부 계산 1만 경기 ≤ 300ms(지연 그리기 안) ·
 `trades` 1.6만 줄 디스크 ≈ 2MB(구현 때 잰다 — `test_rules` SQL 계획 검사가 `TEMP B-TREE` 를 막는다).
 
-상호작용(⑧): 거래 수집 × 메인 검색(오픈API 동시 요청 — **로더 끝난 뒤**) · 시세 × 팀컬러·랭킹 수집(웹 동시 8 — `web_get`) · 거래 수집 × 트레이 내려놓기(`shutdown` 표) ·
+상호작용(⑧): 거래 수집 × 메인 검색·구단주 비교(오픈API 동시 요청 — **로더 끝난 뒤 시작 · 새 로더가 오면 쪽 사이에서 양보**) · 시세 × 팀컬러·랭킹 수집(웹 동시 8 — `web_get`) · 거래 수집 × 트레이 내려놓기(`shutdown` 표) ·
 내 계정 × ELO 따라가기(무관 — 다른 표) · 안내 다시 묻기 × 랭킹 수집(1.3.1 과 같은 방식 — 막지 않음).
 
 사용자 제약(⑨): 알림 없음(띠만) · 초점 안 뺏음(모달 없음) · 정확 우선 — "추정"·"취득가 없음"·"넥슨 반영 기준"을 숨기지 않는다 · 남의 지출은 안 본다(만들 수도 없다 — R1).
@@ -311,6 +330,9 @@
 
 - 반영 지연 길이(R6) — 11단계에서 며칠 간격으로 다시 조회 · 수수료(R7) — 사용자 대조 · 랭커 기록 한 요청 상한(R9) · 보유 카드 수 → `PRICE_FETCH_MAX`
 - ouid 를 아예 뺀 거래 요청이 되는지 · 다른 사람의 키(개발 단계 · FC 계정 없음)에서의 거래 API 동작 — **못 잰다**(빈 목록 처리로 막는다)
+- R5 의 같은 줄 59건이 진짜 중복인지 같은 초 별개 판매인지 — 09-22 일괄 판매 건수를 게임 안 내역과 사용자 대조
+- 랭커 값이 경기당 평균인지(13단계 첫 줄) · 판매 말고 카드가 구단에서 사라지는 길(강화 재료·방출 외) — 사용자 확인 대기
+- 키 한도 — 개발 단계 키(하루 1,000)면 첫 검색 3천 요청부터 이미 못 끝난다(nexon_api.py 주석) — 거래 162요청은 그보다 작다. 서비스 단계 키 한도에서 겹침은 위 "양보"로 막는다
 
 ---
 
