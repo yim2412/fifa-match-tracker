@@ -47,6 +47,13 @@ def _write(kind: str, exc_type, exc, tb) -> None:
         pass  # 기록 실패가 또 다른 크래시가 되면 안 된다
 
 
+def note(kind: str, exc: BaseException) -> None:
+    """처리한 예외를 남긴다(앱은 계속 돈다) — 그리기처럼 되풀이되는 자리는 부르는 쪽이 한 번만 부른다.
+    install 전(테스트·소스 실행 일부)이면 아무것도 안 한다."""
+    if "path" in _state:
+        _write(kind, type(exc), exc, exc.__traceback__)
+
+
 def _on_main_exc(exc_type, exc, tb) -> None:
     if issubclass(exc_type, KeyboardInterrupt):
         sys.__excepthook__(exc_type, exc, tb)

@@ -51,7 +51,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
-    NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
+    NA, BarRow, Card, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
     StatCard, TrendChart, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
     wdl_text, win_rate_bar,
@@ -2526,6 +2526,7 @@ class MainWindow(QMainWindow):
                 if item:
                     item.setToolTip(help_text)
         self.tbl_players.setIconSize(QSize(18, 18))
+        self.tbl_players.setItemDelegateForColumn(2, GradeBadgeDelegate(self.tbl_players))
         # "선수" 열(1번)에 spId 를 UserRole 로 붙여두고(_render_players)
         # 더블클릭하면 상대 스쿼드 화면과 같은 선수 카드 다이얼로그를 연다.
         self.tbl_players.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
@@ -4468,11 +4469,13 @@ class MainWindow(QMainWindow):
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)))
+        few = core.MIN_PLAYER_GAMES
         rows = []
         for p in players:
             rows.append([
                 p.position, p.name, (f"{p.grade}", p.grade),
-                (f"{p.games}", p.games), (f"{p.win_rate:.1f}", p.win_rate),
+                (f"{p.games} ⚠" if p.games < few else f"{p.games}", p.games),
+                (f"{p.win_rate:.1f}", p.win_rate),
                 (f"{p.attack_power:.1f}", p.attack_power),
                 (f"{p.defense_power:.1f}", p.defense_power),
                 (f"{p.expected_goal_rate:.1f}", p.expected_goal_rate),
@@ -4493,13 +4496,25 @@ class MainWindow(QMainWindow):
         # "채운 순서 = players 순서"라고 믿고 매기는 게 틀어져 엉뚱한 행에
         # 색이 칠해진다(실제로 겪은 버그). 후처리를 다 끝낸 뒤에만 켠다.
         self._fill(self.tbl_players, rows, enable_sort=False)
-        self._fit_columns_to_content(self.tbl_players, extra={1: 26})
-        # 공격력(5열)·수비력(6열)에 값 크기만큼 색을 입혀 강조 — 빨강/파랑.
-        atk_max = max((p.attack_power for p in players), default=1) or 1
-        def_max = max((p.defense_power for p in players), default=1) or 1
+        # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말)
+        self._fit_columns_to_content(self.tbl_players,
+                                     extra={1: 26, 2: 2 * GradeBadgeDelegate.PAD})
+        # 공격력(5열)·수비력(6열) — 최소~최대를 넓은 단계로 칠한다. 눈금은 출전이 충분한 선수로만 잡는다.
+        enough = [p.games >= few for p in players]
+        atk = self._heat_scale([p.attack_power for p in players], enough)
+        dfn = self._heat_scale([p.defense_power for p in players], enough)
         for r, p in enumerate(players):
-            self._tint(self.tbl_players.item(r, 5), p.attack_power, atk_max, T.RED)
-            self._tint(self.tbl_players.item(r, 6), p.defense_power, def_max, T.BLUE)
+            self._heat(self.tbl_players.item(r, 5), atk[r], T.HEAT_ATK)
+            self._heat(self.tbl_players.item(r, 6), dfn[r], T.HEAT_DEF)
+            pos_item = self.tbl_players.item(r, 0)
+            line = core.position_line(p.pos_code)
+            if pos_item and line:
+                pos_item.setForeground(QColor(T.POS_COLORS[line]))
+            if not enough[r]:
+                games_item = self.tbl_players.item(r, 3)
+                if games_item:
+                    games_item.setToolTip(f"출전 {p.games}경기 — 비율이 크게 흔들립니다"
+                                          f"(색은 {few}경기부터)")
             name_item = self.tbl_players.item(r, 1)
             if name_item:
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
@@ -4539,6 +4554,30 @@ class MainWindow(QMainWindow):
             item = table.item(r, name_col)
             if item and item.data(Qt.ItemDataRole.UserRole) == sp_id:
                 item.setIcon(icon)
+
+    @staticmethod
+    def _heat_scale(values: list[float], enough: list[bool]) -> list[float | None]:
+        """값 → 0~1 단계((값−최소)/(최대−최소)). 최소·최대는 enough 인 것만으로 잡는다 — 1경기 선수 하나가
+        눈금을 늘이지 않게. enough 가 아니거나 눈금을 못 잡으면(대상 0~1명 · 전부 같은 값) None = 안 칠함."""
+        pool = [v for v, ok in zip(values, enough) if ok]
+        if len(pool) < 2:
+            return [None] * len(values)
+        lo, hi = min(pool), max(pool)
+        if hi <= lo:
+            return [None] * len(values)
+        return [max(0.0, min((v - lo) / (hi - lo), 1.0)) if ok else None
+                for v, ok in zip(values, enough)]
+
+    # 가장 낮은 단계도 바탕과 구분되게 — 0 이면 칠하지 않은 칸과 같아 보인다
+    HEAT_FLOOR = 0.12
+
+    @staticmethod
+    def _heat(item, frac: float | None, end_hex: str) -> None:
+        """단계 frac(0~1) → PANEL 에서 end_hex 쪽으로 섞은 불투명 배경(PyQt 규칙 2번). None 이면 그대로."""
+        if item is None or frac is None:
+            return
+        f = MainWindow.HEAT_FLOOR
+        item.setBackground(MainWindow._blend(T.PANEL, end_hex, f + (1 - f) * frac))
 
     @staticmethod
     def _tint(item, value: float, vmax: float, hexcolor: str) -> None:

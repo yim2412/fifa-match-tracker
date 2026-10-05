@@ -3656,6 +3656,132 @@ def test_winrate_bars_use_shared_helper():
     assert "QProgressBar()" not in (pathlib.Path(_ROOT) / "dashboard.py").read_text(encoding="utf-8")
 
 
+def test_heat_colors_keep_text_readable():
+    # 선수 지표 칸은 글자 위에 칠한다 — 두 팔레트 × 공격/수비 × 11단계 전부 TEXT 대비 4.5 이상. 원색 RED 를 끝 색으로
+    # 쓰면(예전) 어두운 테마에서 밝은 글자가 안 읽힌다. 포지션 글자는 PANEL 위 4.5 이상. 흐린 승률 막대 위 글자(TEXT)도.
+    f = app_main.MainWindow.HEAT_FLOOR
+    bad = []
+    for mode, p in T._PALETTES.items():
+        for key in ("HEAT_ATK", "HEAT_DEF"):
+            for s in range(11):
+                bg = T.blend(p["PANEL"], p[key], f + (1 - f) * s / 10)
+                if T.contrast(p["TEXT"], bg) < 4.5:
+                    bad.append((mode, key, s, bg))
+        for key in ("POS_FW", "POS_MF", "POS_DF", "POS_GK"):
+            if T.contrast(p[key], p["PANEL"]) < 4.5:
+                bad.append((mode, key))
+        if T.contrast(p["TEXT"], T.blend(p["PANEL_2"], p["WIN_BAR"], T.WEAK_MIX)) < 4.5:
+            bad.append((mode, "흐린 막대 글자"))
+    assert not bad, bad
+    # 화면이 실제로 그 끝 색을 쓰는지(배선) — 기본 RED/BLUE 가 아니다
+    assert (T.HEAT_ATK, T.HEAT_DEF) == (T._P["HEAT_ATK"], T._P["HEAT_DEF"]) and T.HEAT_ATK != T.RED
+
+
+def test_heat_scale_degenerate():
+    hs = app_main.MainWindow._heat_scale
+    assert hs([], []) == []
+    assert hs([3.0, 9.0], [True, False]) == [None, None]          # 기준 넘는 선수 1명 — 눈금 못 잡음
+    assert hs([5.0, 5.0, 1.0], [True, True, False]) == [None, None, None]  # 전부 같은 값
+    assert hs([2.0, 4.0, 3.0, 99.0], [True, True, True, False]) == [0.0, 1.0, 0.5, None]  # 99 는 눈금 밖
+
+
+def _player_rows():
+    """선수 지표 표 → {spId: (출전 글자, 출전 툴팁, 공격력 배경, 수비력 배경, 포지션 글자색)}."""
+    tb = _win.tbl_players
+    out = {}
+    for r in range(tb.rowCount()):
+        sid = tb.item(r, 1).data(Qt.ItemDataRole.UserRole)
+        out[sid] = (tb.item(r, 3).text(), tb.item(r, 3).toolTip(),
+                    tb.item(r, 5).background().style() != Qt.BrushStyle.NoBrush,
+                    tb.item(r, 6).background().style() != Qt.BrushStyle.NoBrush,
+                    tb.item(r, 0).foreground().color().name())
+    return out
+
+
+def test_players_small_sample_marked():
+    # 픽스처 선수는 출전 3~4경기라 기본 5 면 전부 ⚠ — 기준을 '가장 적은 출전'과 '+1'로 바꿔 경계를 잰다.
+    import core_api
+    saved = core_api.MIN_PLAYER_GAMES
+    players = app_main.core.aggregate_players(_win._slice()[1], _win._ouid)
+    games = {p.sp_id: p.games for p in players}
+    low = min(games.values())
+    try:
+        core_api.MIN_PLAYER_GAMES = low
+        _win._render_players(_win._slice()[1])
+        rows = _player_rows()
+        assert not any("⚠" in t for t, *_ in rows.values()), rows
+        assert sum(a for _, _, a, _, _ in rows.values()) >= 2, "기준을 넘는 선수가 칠해지지 않았다"
+        core_api.MIN_PLAYER_GAMES = low + 1
+        _win._render_players(_win._slice()[1])
+        rows = _player_rows()
+        for sid, (text, tip, atk, dfn, _) in rows.items():
+            few = games[sid] < low + 1
+            assert ("⚠" in text) == few and bool(tip) == few, (sid, games[sid], text, tip)
+            if few:
+                assert not atk and not dfn, (sid, "표본 미달 선수가 칠해졌다")
+        # 포지션 글자색 — 묶음이 있는 선수는 그 색, 정렬이 끝난 뒤에도 행을 따라간다
+        for p in players:
+            line = app_main.core.position_line(p.pos_code)
+            if line:
+                assert rows[p.sp_id][4] == T.POS_COLORS[line].lower(), (p.sp_id, line, rows[p.sp_id][4])
+    finally:
+        core_api.MIN_PLAYER_GAMES = saved
+        _win._render_players(_win._slice()[1])
+
+
+def test_grade_badge_not_clipped():
+    # 강화 열은 배지 — 글자 폭 + 배지 여백이 그 열에만 들어가야 한다. 여백을 sizeHint 로 알리면 FitTableWidget 이
+    # 그 여백을 19열 전부에 얹는다(_measure_pad) — 그래서 표 공통 여백이 '배지 없을 때'와 같은지도 본다.
+    # 픽셀 폭이 아니라 공통 여백·기준 글자 폭으로 잰다 — 좁은 창에선 표 글꼴 축소로 픽셀이 정상적으로 바뀐다.
+    import widgets
+    tb = _win.tbl_players
+    dg = tb.itemDelegateForColumn(2)
+    assert isinstance(dg, widgets.GradeBadgeDelegate) and isinstance(dg, widgets.RowBorderDelegate), dg
+    _win._render_players(_win._slice()[1])
+    with_badge = (tb._pad, dict(tb._base_text_widths), dict(tb._extra))
+    tb.setItemDelegateForColumn(2, None)
+    try:
+        _win._render_players(_win._slice()[1])
+        plain = (tb._pad, dict(tb._base_text_widths))
+    finally:
+        tb.setItemDelegateForColumn(2, dg)
+        _win._render_players(_win._slice()[1])
+    assert with_badge[0] == plain[0] and with_badge[1] == plain[1], (with_badge[:2], plain)
+    assert with_badge[2].get(2) == 2 * widgets.GradeBadgeDelegate.PAD, with_badge[2]
+    from PyQt6.QtGui import QFontMetrics
+    _win._go_page("선수 지표")
+    _app.processEvents()
+    fm = QFontMetrics(tb.font())
+    need = max(fm.horizontalAdvance(tb.item(r, 2).text()) for r in range(tb.rowCount())) \
+        + 2 * widgets.GradeBadgeDelegate.PAD
+    assert tb.columnWidth(2) >= need, (tb.columnWidth(2), need)
+    _win._go_page("대시보드")
+
+
+def test_badge_paint_failure_falls_back():
+    # 그리기 예외는 다시 그릴 때마다 되풀이된다 — 글자만 그리고 넘기되 기록은 한 번만(crash.log 가 불어나지 않게)
+    import crashlog
+    import widgets
+    tb = _win.tbl_players
+    dg = tb.itemDelegateForColumn(2)
+    notes = []
+    real_colors, real_note = widgets._grade_badge_colors, crashlog.note
+
+    def boom(grade):
+        raise ValueError("배지 색 실패")
+    widgets._grade_badge_colors, crashlog.note = boom, lambda kind, e: notes.append(kind)
+    dg.failed = 0
+    try:
+        _win._go_page("선수 지표")
+        for _ in range(2):
+            tb.viewport().grab()
+        assert dg.failed >= 2 and len(notes) == 1, (dg.failed, notes)
+    finally:
+        widgets._grade_badge_colors, crashlog.note = real_colors, real_note
+        dg.failed = 0
+        _win._go_page("대시보드")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -1326,6 +1326,20 @@ def test_ui_reaches_analysis_only_through_core_api():
         assert used <= exported, f"{f}: core_api 에 없는 이름 {sorted(used - exported)}"
 
 
+def test_position_line_groups():
+    # 선수 지표 포지션 글자색의 묶음 — 경계 코드마다(수미 9~11·공미 17~19 는 MF). SUB 28 은 없음.
+    got = {c: st.position_line(c) for c in (0, 1, 8, 9, 11, 12, 16, 17, 19, 20, 27, 28, None, -1)}
+    assert got == {0: "GK", 1: "DF", 8: "DF", 9: "MF", 11: "MF", 12: "MF", 16: "MF", 17: "MF",
+                   19: "MF", 20: "FW", 27: "FW", 28: None, None: None, -1: None}, got
+
+
+def test_aggregate_players_keeps_position_code():
+    # 포지션 이름만 남기면 색을 못 정한다 — 이름을 고른 그 최빈 코드를 같이 남긴다
+    ouid, _, details = _load()
+    ps = st.aggregate_players(details, ouid, pos_name=lambda c: f"P{c}")
+    assert ps and all(p.position == f"P{p.pos_code}" for p in ps), [(p.position, p.pos_code) for p in ps]
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -80,6 +80,18 @@ _LINES = [
     ("공격", range(20, 28)),  # RF CF LF RW RS ST LS LW
 ]
 _POS_LINE = {pos: i for i, (_, rng) in enumerate(_LINES) for pos in rng}  # 포지션 코드 → 라인 번호
+GK_CODE = 0
+
+
+def position_line(code) -> str | None:
+    """포지션 코드 → 큰 묶음 "GK"·"DF"·"MF"·"FW" (선수 지표 포지션 글자색). 수미·미드·공미는 MF.
+    SUB(28)·모르는 값은 None. 경계는 _LINES 의 코드 범위 그대로."""
+    if code == GK_CODE:
+        return "GK"
+    line = _POS_LINE.get(code)
+    if line is None:
+        return None
+    return ("DF", "MF", "MF", "MF", "FW")[line]
 
 
 def decode_goal_time(raw) -> tuple[int, int]:
@@ -174,6 +186,7 @@ class PlayerStat:
     games: int = 0
     win: int = 0
     draw: int = 0
+    pos_code: int | None = None  # 가장 자주 선 자리의 코드 — position(이름)의 출처. 포지션 색(position_line)용
     lose: int = 0
     goal: int = 0
     assist: int = 0
@@ -355,6 +368,7 @@ def aggregate_players(details: list[dict], ouid: str,
         if pos_count[sp_id]:
             top = pos_count[sp_id].most_common(1)[0][0]  # 가장 자주 선 자리
             s.position = pos_name(top) if pos_name else str(top)
+            s.pos_code = top
     return sorted(acc.values(), key=lambda s: (-s.games, -s.attack_point))
 
 

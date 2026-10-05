@@ -789,6 +789,59 @@ class RankerCard(QFrame):
         lb.setStyleSheet(f"color: {color}; border: none;")
 
 
+class GradeBadgeDelegate(RowBorderDelegate):
+    """선수 지표 '강화' 칸 — 숫자를 넥슨 데이터센터 색 배지로(_grade_badge_colors).
+
+    RowBorderDelegate 를 상속한다: 표 전체에 걸린 선택 행 테두리가 이 칸에서 끊기지 않게.
+    배지 여백(PAD)은 sizeHint 로 알리지 않는다 — FitTableWidget._measure_pad 가 열마다 잰 여백 중
+    가장 큰 값 하나를 19열 전부에 쓰므로, 한 열만 키워도 표 전체가 넓어진다. 열 폭은 app_main 이
+    _fit_columns_to_content(extra=…) 로 이 열에만 준다(1.2.1 계획 검토 A).
+    그리기 예외는 다시 그릴 때마다 되풀이되므로 글자만 그리는 쪽으로 넘기고 한 번만 기록한다."""
+
+    PAD = 8  # 배지 안쪽 좌우 여백(px) — 열에 더할 폭은 2 × PAD
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.failed = 0  # 테스트가 읽는다 — 기록은 첫 번째만
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        option.text = ""  # 글자는 배지 안에 직접 그린다(기본 그리기는 배경·선택 테두리만)
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        text = str(index.data() or "")
+        try:
+            self._badge(painter, option, text)
+        except Exception as e:  # noqa: BLE001 — 칸 하나 그리기 실패로 표가 죽거나 로그가 불어나면 안 된다
+            self.failed += 1
+            if self.failed == 1:
+                import crashlog
+                crashlog.note("강화 배지 그리기", e)
+            painter.save()
+            painter.setPen(QColor(T.TEXT))
+            painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, text)
+            painter.restore()
+
+    def _badge(self, painter, option, text: str) -> None:
+        bg, fg = _grade_badge_colors(text)
+        fm = QFontMetrics(option.font)
+        w = fm.horizontalAdvance(text) + 2 * self.PAD
+        h = min(fm.height() + 4, option.rect.height() - 4)
+        r = option.rect
+        from PyQt6.QtCore import QRectF
+        box = QRectF(r.x() + (r.width() - w) / 2, r.y() + (r.height() - h) / 2, w, h)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(bg))
+        painter.drawRoundedRect(box, h / 2, h / 2)
+        painter.setPen(QColor(fg))
+        painter.setFont(option.font)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+
+
 def sample_note(games: int, min_n: int) -> str:
     """표본 미달 칸의 툴팁 — 승률 막대·대시보드 막대가 같은 말을 쓴다."""
     return f"표본이 {games}경기라 승률이 크게 흔들립니다(기준 {min_n}경기)."
@@ -798,7 +851,7 @@ def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int,
                  height: int = 18) -> QProgressBar:
     """승률 막대 하나 — 승률을 막대로 그리는 곳은 전부 이걸 거친다(표본 흐림 규칙, 1.2.1).
 
-    경기 수가 min_n 보다 적으면 막대를 바탕 쪽으로 흐리게(불투명) · 글자도 흐리게 · 끝에 "· 표본 N".
+    경기 수가 min_n 보다 적으면 막대를 바탕 쪽으로 흐리게(불투명) · 끝에 "· 표본 N".
     "프로1 (1경기) 100%" 가 꽉 찬 막대로 보여 실력처럼 읽히던 것을 막는다. 색만으로 구분하지 않게
     글자를 같이 붙인다(적록 색약). 흐렸는지는 property("weak") 로 테스트가 읽는다."""
     games = win + draw + lose
@@ -810,10 +863,11 @@ def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int,
     bar.setFormat(text + (f"  · 표본 {games}" if weak else ""))
     bar.setFixedHeight(height)
     chunk = T.blend(T.PANEL_2, T.WIN_BAR, T.WEAK_MIX) if weak else T.WIN_BAR
-    fg = T.TEXT_DIM if weak else T.TEXT
+    # 글자는 흐리지 않는다 — TEXT_DIM 은 흐린 막대 위에서 대비 3.6(어두운 테마, 기준 4.5)이라 안 읽혔다(1.2.1 실측).
+    # 흐림은 막대색과 "표본 N" 이 맡는다.
     bar.setStyleSheet(
         f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
-        f"color:{fg};text-align:center;}}"
+        f"color:{T.TEXT};text-align:center;}}"
         f"QProgressBar::chunk{{background:{chunk};border-radius:3px;}}")
     bar.setProperty("weak", weak)
     bar.setProperty("games", games)

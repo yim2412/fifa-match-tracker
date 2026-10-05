@@ -38,6 +38,15 @@ _PALETTES = {
         CHART_NEUTRAL="#6e7681",
         CHART_GRID="#262b33",
         CHART_AXIS="#3a414b",
+        # 선수 지표 공격력·수비력 칸 — PANEL 에서 이 색까지 섞는다. 끝 색은 '모든 단계에서 TEXT 대비 ≥ 4.6'
+        # 을 만족하는 가장 밝은 값으로 계산해 골랐다(1.2.1). 원색 RED 는 그 위 밝은 글자가 안 읽힌다.
+        HEAT_ATK="#c41c1c",
+        HEAT_DEF="#2055df",
+        # 포지션 글자색 — PANEL 위 대비 ≥ 4.6. 글자(ST·CB…)가 같이 있어 색은 보조다(적록 색약).
+        POS_FW="#e25a5a",
+        POS_MF="#1c9c30",
+        POS_DF="#4d88e0",
+        POS_GK="#a9821e",
     ),
     "light": dict(
         BG="#f3f5f9",
@@ -67,6 +76,12 @@ _PALETTES = {
         CHART_NEUTRAL="#9aa1b0",
         CHART_GRID="#eceff4",
         CHART_AXIS="#d5dae3",
+        HEAT_ATK="#e96363",    # 밝은 테마는 반대로 — 진한 글자가 읽히는 가장 어두운 값
+        HEAT_DEF="#678ce9",
+        POS_FW="#db3333",
+        POS_MF="#188629",
+        POS_DF="#2b71da",
+        POS_GK="#8f6e19",
     ),
 }
 _P = _PALETTES[MODE]
@@ -100,6 +115,10 @@ CHART_DOWN = _P["CHART_DOWN"]        # 실점·패
 CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
+
+HEAT_ATK = _P["HEAT_ATK"]   # 선수 지표 공격력 칸 끝 색
+HEAT_DEF = _P["HEAT_DEF"]   # 수비력 칸 끝 색
+POS_COLORS = {"FW": _P["POS_FW"], "MF": _P["POS_MF"], "DF": _P["POS_DF"], "GK": _P["POS_GK"]}
 
 FONT_FAMILY = "Malgun Gothic"  # 한글이 대부분이라 명시 — 미지정이면 플랫폼 따라 들쭉날쭉
 BASE_FONT_PX = 15
