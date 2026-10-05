@@ -14,7 +14,7 @@
 9(1.3.1 — 흐름 분석 띠·근거 막대 · 히트맵·도넛·포메이션 막대 · ELO 그래프 + 따라가기 · 순위 구간 변화 · 다시 묻는 동의, 2026-10-05) ·
 10(**1.3.1 공개** 2026-10-06 — 시즌 말 순위 예측 `predict.py` · 지난 시즌 최종 컷 · 시즌 종료일 공지 `2f72d4b`).
 **1.2.1 부터의 나눔은 제안** — 그 버전 계획 검토(①~⑩·⑫) 때 고친다. **버전마다 첫 단계 앞에 계획 검토가 붙는다** —
-**1.3.1 공개 끝**(2026-10-06 — 상세는 `docs/DONE.md`) — 다음 할 일은 **1.4.1 계획 검토**(그 뒤 11단계 구현). 끝난 버전의 상세는 `docs/DONE.md`.
+**1.3.1 공개 끝**(2026-10-06 — 상세는 `docs/DONE.md`) · **1.4.1 계획 검토 끝**(2026-10-06 — 아래 1.4.1 절) — 다음 할 일은 **11단계 구현**(새 세션 · "진행시켜" 뒤). 끝난 버전의 상세는 `docs/DONE.md`.
 20~22(보호 빌드)는 기능이 거의 완성된 뒤 한 번에 — 번호·버전은 제안이고, 그 사이 기능 단계가 늘면 그 앞에 끼운다.
 
 난이도는 낮음·중간·높음(2026-10-06 사용자: 계획을 보여 줄 때 늘 같이) — 계획 검토 때 다시 매긴다.
@@ -176,6 +176,9 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 → **키 판정 장치를 없앴다** — 4회차 연속 같은 자리에서 [상]이 나왔고, 틀렸을 때 잃는 건 다시 받기 19초뿐. 키가 바뀌면 전부 지우고 다시 받고, 내 계정만 띠로 확인.
 5회차(바뀐 줄만 — A 0.7만 · B 0.6만 토큰): **둘 다 새 [상] 0** · [중] A 3 · B 3 → 반영("지웠음" 신호로 화면 다시 읽기 · 키 바꾼 직후·거래 화면 열 때도 로더 · 하루 제한 무시 ·
 확인 전 키 재교체 · 다시 받는 중 힌트 문구 · 옛 거래 보존 기간은 11단계 첫날 재측정).
+마지막 회차(A · 계획 전체 — 1.8만 토큰): **새 [상] 0** · [중] 5(`CORE_MODULES` 에 새 모듈 · `PriceLoader` 띄우는 때 · 랭커 "데이터 없음" 캐시 · N6 데이터 경로 · 재지 않은 것의 잴 자리) → 반영.
+[상] 회차별 5 → 1 → 2 → 1 → 0 · 0. **검토 끝(2026-10-06)**. 토큰(실제 누적): A 20.8만 · B 15.1만 — 2회차부터 이어 쓰기로 회당 0.6만~2.3만.
+구현은 "진행시켜" 뒤 **새 세션**에서 11단계부터.
 
 ### 실측 장부 (2026-10-06 — 검토자는 다시 재지 않는다)
 
@@ -256,6 +259,8 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 - 상한에 걸려 일부만 받았으면 가계부에 *"보유 N장 중 M장 평가"* — 부분합을 전체처럼 보이지 않게.
 - `WEB_DATA` 꺼짐 → 평가 손익 칸 *"시세 없음(홈페이지 데이터 꺼짐)"*. 하루 요청 상한 `config.PRICE_FETCH_MAX`(값은 11단계에서 **보유 카드 수를 재고** 정한다 — `test_price_fetch_respects_cap`).
 - 요청은 `PriceLoader`(작업 스레드) → `fetch_player_info` → `web_get`(동시 8 상한 그대로). `_web_calls()` 엔 이미 있다(새 함수 아님).
+- **언제·무엇을**: 내 계정이 확정(`my_ouid`)된 상태에서 **가계부를 처음 그릴 때** 한 번(하루 캐시가 있으면 요청 0) — 대상은 타임라인 상태 1·2번 카드만(3·4번은 평가 안 함),
+  마지막 출전 강화(2번은 산 강화) 순. 거래 받기와 겹치지 않게 `TradeLoader` 가 돌고 있으면 그 끝남 신호 뒤(`test_price_loader_targets_held_only`).
 
 ### 스쿼드 타임라인 (12단계) — `squad_timeline.py`
 
@@ -292,7 +297,8 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 ### N1 내 선수 vs 랭커 (13단계)
 
 - `nexon_api.EP_RANKER_STATS` · `get_ranker_stats(matchtype, pairs)` — `RANKER_STATS_BATCH` 개씩 나눠 부른다(상한은 13단계 첫 줄에서 잰다 — R9).
-- 캐시: `ranker_stats(spid, po, matchtype, fetched_on, payload, PRIMARY KEY(spid, po, matchtype))` 하루.
+- 캐시: `ranker_stats(spid, po, matchtype, fetched_on, payload, PRIMARY KEY(spid, po, matchtype))` 하루. 넥슨이 **응답에서 뺀 쌍도 `payload` NULL 줄로** 하루 기억한다
+  (R8 — 안 그러면 N1·N2 를 열 때마다 같은 쌍을 다시 묻는다 · `test_ranker_cache_daily` 에 "빠진 쌍도 다시 안 묻는다").
 - 비교는 **응답에 있는 항목만**(R8): 경기당 슛·유효슛·골·어시·드리블 성공률·패스 성공률·태클·블록. 평점은 랭커 쪽에 없어 안 한다.
 - 랭커 값은 소수(`passTry` 8.85 · `dribble` 165.05)라 **경기당 평균으로 보인다** — 13단계 첫 줄에서 확인(평균인데 `matchCount` 로 또 나누면 조용히 틀린다 · `test_ranker_values_are_per_game`).
 - 랭커 `matchCount < config.RANKER_MIN_MATCHES`(10)면 흐림. 카드마다 `createDate` 가 달라 **카드별 기준일**을 칸에 적는다.
@@ -302,13 +308,15 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 
 - **N2 스카우팅**: 선수 카드 창에 [랭커 기록] 탭 — 그 카드 × 포지션 0~27 을 **요청 한 번**으로(R8) · 데이터 있는 포지션만 표. 안 쓰는 카드도 된다. 오픈API 라 `WEB_DATA` 와 무관.
 - **N5 패스 스타일** `stats.pass_style(details, ouid)` — 종류 6가지 비중·성공률, 이긴/진 경기 비교(R10) → [전술·경기 결과] 메뉴 안 구역. 종류 필드가 없는 경기는 건너뛴다.
-- **N6 어시스트** — `ShotMapWidget.set_shots(…, assists=True)` 면 어시 위치 → 슛 위치 선. `X_MIN` 아래 2.3%(R11)는 경계에 붙여 그리고 점 모양으로 표시(잘렸다는 뜻).
+- **N6 어시스트** — `stats.Shot` 에 `assist_x`·`assist_y`(어시 없는 슛은 None)를 더하고, `ShotMapWidget.set_shots(…, assists=True)` 면 **골이면서 어시가 있는 슛에만** 어시 위치 → 슛 위치 선.
+  기본값(`assists=False`)은 지금 그림 그대로 — 선수 카드 [내 기록](app_main.py:4516)도 같은 함수(`test_shotmap_default_unchanged`). `X_MIN` 아래 2.3%(R11)는 경계에 붙여 그리고 점 모양으로 표시(잘렸다는 뜻).
   [슛 맵] 메뉴에 [어시스트] 전환.
 - **N9 평점 추이** — 선수 카드 [내 기록] 탭에 주 단위 평균 `spRating`(R12) `AreaTrendChart`(축 `Axis.fit`) · 주 경기 수 < `stats.PLAYER_RATING_MIN_GAMES`(**새 상수** — 있는 건 슛 기준 `PLAYER_TREND_MIN_SHOTS` 뿐, stats.py:1235)는 흐림.
 
 ### `core_api` 에 더할 이름 (공통 기준 8)
 
-`squad_timeline.build_timeline` · `TimelineEvent` · `trade_book.ledger`(N3 — 모듈 이름은 12단계에서 확정) · `stats.pass_style` · `stats.rating_trend`(N9) · `stats.ranker_compare`(N1).
+`squad_timeline.build_timeline` · `TimelineEvent` · `trade_book.ledger`(N3 — 모듈 이름은 12단계에서 확정) · `stats.pass_style` · `stats.rating_trend`(N9) · `stats.ranker_compare`(N1) · `stats.PLAYER_RATING_MIN_GAMES`(화면이 지금 `core.PLAYER_TREND_MIN_SHOTS` 를 쓰는 꼴).
+**새 분석 모듈 `squad_timeline`·`trade_book` 은 경계 테스트의 `CORE_MODULES`(tests/test_parsing.py:1395)에도 더한다** — 안 더하면 화면이 직접 import 해도 초록이다(마지막 회차).
 
 ### 진입점 표 (⑩)
 
@@ -365,8 +373,10 @@ offset 하한 0 · 같은 spid 여러 장이면 보유는 최근 한 장 · 최�
 
 ### 재지 않은 것 (구현 때 잰다)
 
-- 반영 지연 길이(R6) — 11단계에서 며칠 간격으로 다시 조회 · 수수료(R7) — 사용자 대조 · 랭커 기록 한 요청 상한(R9) · 보유 카드 수 → `PRICE_FETCH_MAX`
-- ouid 를 아예 뺀 거래 요청이 되는지 · 다른 사람의 키(개발 단계 · FC 계정 없음)에서의 거래 API 동작 — **못 잰다**(빈 목록 처리로 막는다)
+- 반영 지연 길이(R6) — 11단계 첫날·사흘 뒤 `check_api.py` 거래 줄(마지막 거래 날짜)로 대조해 장부에 R15 로 · 수수료(R7) — 사용자 대조 ·
+  랭커 기록 한 요청 상한(R9) — 13단계 첫 줄, `check_api.py` 랭커 줄에 28·56·100쌍을 물어 `RANKER_STATS_BATCH` 를 정한다 · 보유 카드 수 → `PRICE_FETCH_MAX`(11단계 · `test_price_fetch_respects_cap`)
+- ouid 를 아예 뺀 거래 요청이 되는지 — 11단계 첫 줄 `check_api.py` 거래 줄을 ouid 없이 부르고 결과를 R15 옆에 · 다른 사람의 키(개발 단계 · FC 계정 없음)에서의 거래 API 동작 — **못 잰다**(빈 목록 처리로 막는다)
+- 예산의 "첫 수집 ≤ 30초"·"`trades` ≈ 2MB" — 11단계에서 실제 첫 수집을 재서(시간 · `fifa.db` 크기 전후) 장부에 적는다. 넘으면 그 자리에서 계획을 고친다
 - R5 의 같은 줄 59건이 진짜 중복인지 같은 초 별개 판매인지 — 09-22 일괄 판매 건수를 게임 안 내역과 사용자 대조
 - 랭커 값이 경기당 평균인지(13단계 첫 줄) · 판매 말고 카드가 구단에서 사라지는 길(강화 재료·방출 외) — 사용자 확인 대기
 - **넥슨이 옛 거래를 기간이 지나면 버리는지**(5회차 B) — 키가 바뀌면 지우고 다시 받는 설계는 "옛 거래가 다시 받아진다"에 기댄다. 10-06 가장 옛 날짜가 구매·판매 둘 다 2022-01-27(고정 시작점으로 보인다).
