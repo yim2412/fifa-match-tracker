@@ -51,7 +51,7 @@ def main() -> int:
         if row:
             names = {d.get("divisionId"): d.get("divisionName") for d in api.get_meta("division")}
             name = names.get(row.get("division"), row.get("division"))
-            print(f"[OK]   역대 최고(감독모드): {name} ({str(row.get('achievementDate') or '')[:10]})")
+            print(f"[OK]   최고티어(감독모드): {name} · 최근 달성일 {str(row.get('achievementDate') or '')[:10]}")
         else:
             print("[WARN] 역대 최고(감독모드): 기록 없음")
     except NexonAPIError as e:

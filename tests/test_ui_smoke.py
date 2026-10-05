@@ -2541,7 +2541,7 @@ def test_max_division_survives_account_switch():
         ld.run()
         _app.processEvents()
         assert api.calls == 1 and _win._ouid == _OUID
-        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", _best_line()  # 50(공식경기) 줄이 아니라 52
+        assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", _best_line()  # 50(공식경기) 줄이 아니라 52
         # 구단주 비교 로더(기본값)는 부르지 않는다
         other = _MaxDivApi()
         _run_one(app_main.MatchLoader(other, "닉", 52))
@@ -2552,7 +2552,7 @@ def test_max_division_survives_account_switch():
         ld.max_division_ready.connect(_win._on_max_division)
         _run_one(ld)
         _app.processEvents()
-        assert bad.calls == 1 and _best_line() == "역대 최고 챔피언스 · 2026-07-05", _best_line()
+        assert bad.calls == 1 and _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", _best_line()
     finally:
         config.DB_PATH, config.WEB_DATA = saved
         shutil.rmtree(tmp, ignore_errors=True)
@@ -2568,11 +2568,11 @@ def test_max_division_card_rules():
         _win._max_division = {}
         val = {"division": 800, "date": "2026-07-05"}
         _win._on_max_division(_OUID, val)
-        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05"
+        assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]"
         _win._on_max_division("다른계정", {"division": 800, "date": "2020-01-01"})
-        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", "다른 계정 값이 들어갔다"
+        assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", "다른 계정 값이 들어갔다"
         _win._on_max_division(_OUID, None)
-        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", "실패(None)가 보던 값을 지웠다"
+        assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", "실패(None)가 보던 값을 지웠다"
         _win._on_max_division(_OUID, {})
         assert _best_line() is None, "감독모드 기록이 없는데 줄이 남았다"
         _win._on_max_division(_OUID, {"division": 999, "date": "2026-07-05"})
@@ -2582,7 +2582,7 @@ def test_max_division_card_rules():
         for champ in (True, False):
             _win._is_champion = champ
             _win._render_ranker()
-            assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", champ
+            assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", champ
         _win._is_champion = False
         # 계정을 바꾸면 옛 계정 줄이 안 남는다 — 새 계정 요청이 실패해도
         _win._on_loaded(_MATCHES, _DETAILS, "B계정", {"nickname": "B", "level": 1},

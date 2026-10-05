@@ -3524,13 +3524,18 @@ class MainWindow(QMainWindow):
             self._render_page(next(n for n, k in self.PAGE_RENDER_KEYS.items() if k == key))
 
     def _max_division_text(self) -> str | None:
-        """지금 계정의 역대 최고 등급 줄 — 기록이 없거나 등급 이름을 모르면(메타 실패) None.
-        숫자("800")를 이름 대신 내지 않는다."""
+        """지금 계정의 최고 티어 줄 — 기록이 없거나 등급 이름을 모르면(메타 실패) None.
+        숫자("800")를 이름 대신 내지 않는다.
+
+        넥슨 achievementDate 는 '처음'이 아니라 **가장 최근에** 그 티어로 올라선 경기의 시작 시각이고, 시즌마다
+        초기화되지 않는다(2026-10-05 실측 9계정: 하루 네 번 슈챔 승급한 계정은 네 번째 경기 시각과 초 단위까지 같았고,
+        2026 시즌엔 챔피언스인 계정의 값이 2025 시즌 5 날짜였다) — 그래서 '최근 달성일'이라고 쓴다."""
         info = self._max_division.get(self._ouid) if self._ouid else None
         name = self._division_names.get(info.get("division")) if info else None
         if not name:
             return None
-        return f"역대 최고 {name}" + (f" · {info['date']}" if info.get("date") else "")
+        date = f" {info['date']}" if info.get("date") else ""
+        return f"최고티어 최근 달성일{date}  [ {name} ]"
 
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.

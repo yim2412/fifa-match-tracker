@@ -703,6 +703,8 @@ class RankerCard(QFrame):
         self._head_best = QLabel("")
         self._head_best.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._head_best.setVisible(False)
+        self._head_best.setToolTip("감독모드에서 올라가 본 가장 높은 티어(시즌과 무관)와,\n"
+                                   "그 티어에 가장 최근에 올라선 날 — 넥슨 공식 기록")
         head_v.addWidget(self._head_best)
 
         v.addWidget(self._head)

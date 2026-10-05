@@ -271,7 +271,7 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
 |------|------|------|
 | `EP_ID` | `/fconline/v1/id` | 닉네임 → ouid |
 | `EP_USER_BASIC` | `/fconline/v1/user/basic` | 계정 기본 정보 |
-| `EP_MAX_DIVISION` | `/fconline/v1/user/maxdivision` | 역대 최고 등급 |
+| `EP_MAX_DIVISION` | `/fconline/v1/user/maxdivision` | 최고 티어 · 그 티어 최근 달성일(시즌 무관) |
 | `EP_USER_MATCH` | `/fconline/v1/user/match` | 매치 id 목록 |
 | `EP_MATCH_DETAIL` | `/fconline/v1/match-detail` | 매치 상세 |
 
