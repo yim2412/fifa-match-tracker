@@ -1,4 +1,4 @@
-# 푸시할 때마다 테스트 7종. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
+# 푸시할 때마다 테스트 9종. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
 # 화면 스모크는 offscreen — 글꼴은 러너의 C:/Windows/Fonts(테스트 머리에서 기본으로 준다).
 name: test
 
@@ -31,6 +31,10 @@ jobs:
         run: python tests/test_tray.py
       - name: 배포 검사
         run: python tests/test_release.py
+      - name: 규칙 검사
+        run: python tests/test_rules.py
+      - name: 검토 준비 도구
+        run: python tests/test_review_kit.py
       - name: 화면 스모크
         run: python tests/test_ui_smoke.py
       - name: 창 크기(흉내 낸 화면 5종)

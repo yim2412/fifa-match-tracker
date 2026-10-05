@@ -136,6 +136,8 @@ python tests/test_ui_smoke.py   # 화면 배선(offscreen)
 python tests/test_rankcollect.py   # 랭킹 수집기
 python tests/test_tray.py   # 트레이 상주·자동 실행·한 번만 실행
 python tests/test_release.py   # 배포 검사 로직
+python tests/test_rules.py   # 규칙 검사(인코딩·색·콤보박스·대화상자 크기·모달·신호·SQL 실행 계획)
+python tests/test_review_kit.py   # 계획 검토 준비 도구
 ```
 
 ## 파일 구조
@@ -167,6 +169,8 @@ python tests/test_release.py   # 배포 검사 로직
 | `tests/test_rankcollect.py` | 랭킹 수집기 테스트 — 가짜 랭킹 목록으로 쪽 판정·실패 대기·차단 시 끄기·잠금·집계(네트워크 없음) |
 | `tests/test_tray.py` | 트레이 상주 테스트 — 종료 진입점·X 숨김 규칙·한 번만 실행 판정·자동 실행(가짜 레지스트리)·내려놓기 미룸 |
 | `tests/test_analysis.py` | 흐름 분석 회귀 테스트 — 임계값 경계·가중치 정규화(네트워크 없음) |
+| `tests/test_rules.py` | 규칙 검사 — 프로젝트 규칙(인코딩 명시·색은 theme.py 에서만 등)을 코드 전체에 기계로 대조하고, 모든 SQL 의 실행 계획에 큰 표 통째 정렬이 없는지 본다 |
+| `tools/review_kit.py` | 계획 검토 준비 — 계획 절이 짚은 코드 조각 묶음(`bundle`) · 회차 사이 바뀐 계획 줄(`diff`) · 주장 장부 빈 표(`ledger`). 쓰는 법은 `docs/ROADMAP.md` "검토 방법" |
 
 기본 매치 종류는 **감독모드(52)** 다 — 이 앱은 감독모드 전적을 본다.
 

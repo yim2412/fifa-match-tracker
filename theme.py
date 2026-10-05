@@ -116,6 +116,16 @@ CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
 
+CHART_ON_MARK = "#ffffff"            # 색 점·골대 맞은 슛 위의 흰 글자·테두리(두 테마 같음)
+
+# 테마와 무관한 고정색 — 게임 화면의 색을 그대로 옮긴 것
+PITCH_LINE = "#82ffffff"             # 축구장 선(흰색 · 알파 130)
+# 강화 등급 배지 (최소 등급, 바탕, 글자) — 1~4 브론즈 · 5~7 실버 · 8~10 골드 · 11~13 홀로그램
+GRADE_BADGES = ((11, "#6dd5e8", "#0a2a30"),
+                (8, "#e8c545", "#3a2c00"),
+                (5, "#b8bfc7", "#20242a"),
+                (1, "#c17a4a", "#2b1608"))
+
 HEAT_ATK = _P["HEAT_ATK"]   # 선수 지표 공격력 칸 끝 색
 HEAT_DEF = _P["HEAT_DEF"]   # 수비력 칸 끝 색
 POS_COLORS = {"FW": _P["POS_FW"], "MF": _P["POS_MF"], "DF": _P["POS_DF"], "GK": _P["POS_GK"]}

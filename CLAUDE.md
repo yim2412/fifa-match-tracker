@@ -33,7 +33,8 @@
 | `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다). 창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다. 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조) |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
 | `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
-| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_tray.py`(트레이·종료·한 번만 실행·자동 실행 — 창과 엮이는 X 숨김·내려놓기는 `test_ui_smoke`) · `test_release.py`(배포 검사). pytest 없이 파일을 직접 실행 |
+| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_tray.py`(트레이·종료·한 번만 실행·자동 실행 — 창과 엮이는 X 숨김·내려놓기는 `test_ui_smoke`) · `test_release.py`(배포 검사) · `test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py`. pytest 없이 파일을 직접 실행 |
+| `tools/review_kit.py` | 계획 검토 준비(ROADMAP "검토 방법" 11~13) — `bundle`(절이 짚은 코드 조각 · 정의/쓰임만/없음) · `diff`(회차 사이 바뀐 줄 + 진입점 표 행) · `ledger`(주장 장부 빈 표). 검토자에게 파일을 통째로 읽히지 않으려고 |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
@@ -46,6 +47,8 @@ python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175
 $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py
 python -m PyInstaller --noconfirm 피파전적관리.spec   # exe → dist\피파전적관리\ (확인용)
 python tests/test_release.py   # 배포 검사 로직(빌드 없이)
+python tests/test_rules.py     # 규칙 검사(정적 + SQL 실행 계획 — 파싱·수집 테스트를 같이 돌려 쿼리를 모은다)
+python tools/review_kit.py bundle "③ 승률"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
 
@@ -197,6 +200,17 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
   화면을 보게 된다.** (2026-08-15 전수 점검: 이 프로젝트 인코딩 위험 지점 0건 — 유지한다.)
 
 ---
+
+## 규칙은 테스트로 (`tests/test_rules.py` — 2026-10-05)
+
+계획 검토 때 검토자가 매번 눈으로 대조하던 규칙을 기계로 옮겼다 — 여기 있는 것은 **검토에서 다시 보지 않는다**.
+`QComboBox` 직접 생성 · 대화상자 `fit_to_screen` · 글자 파일·`subprocess(text=True)` 의 `encoding=` · `pyqtSignal(list/dict)` ·
+앱이 쓰는 모달이 화면 스모크 차단에 있는지 · **색은 `theme.py` 에서만** · **모든 SQL 의 실행 계획에 큰 표 `TEMP B-TREE` 없음**.
+- 규칙마다 **위반을 심은 가짜 소스를 잡는지** 같이 단언한다(빈 검사 방지). 새 규칙도 그 꼴로.
+- SQL 은 파싱·수집 테스트를 그대로 돌리며 trace 로 모은다 — **SELECT 를 품은 함수가 한 번도 안 돌면 FAIL**(검사 밖이 생기지 않게).
+  새 읽기 함수를 그 두 테스트가 안 부르면 `_drive_uncovered()` 에 한 줄.
+- 예외는 표로만(`COLOR_ALLOW` · `SQL_SMALL_TABLES` · `SQL_TEMP_ALLOW`) — 줄마다 이유. 첫 실행에서 grep 이 놓친 색 13곳이
+  나왔다(강화 등급 배지·축구장 선 → `theme.GRADE_BADGES`·`PITCH_LINE`, 값 그대로).
 
 ## 알려진 버그 — 해결 이력
 

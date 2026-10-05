@@ -587,7 +587,7 @@ class ResultDots(_Chart):
             p.setPen(QPen(QColor(T.PANEL), RING_W))
             p.setBrush(QColor(col))
             p.drawEllipse(rect)
-            p.setPen(QColor("#ffffff"))
+            p.setPen(QColor(T.CHART_ON_MARK))
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, res[:1] if res[:1] in "승무패" else "?")
             self._hits.append((rect.adjusted(-GAP, -4, GAP, 4), tip))
 

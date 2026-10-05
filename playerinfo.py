@@ -63,6 +63,7 @@ _STAT_LINE = re.compile(
 _PRICE = re.compile(r'class="span_bp(\d+)"[^>]*>\s*([^<]+?)\s*<')
 _SKILLMOVE_BLOCK = re.compile(
     r'개인기</div>\s*<div class="value _area_skillmove">(.*?)</div>', re.S)
+_SKILLMOVE_ON = "#F1C018"   # 개인기 별 중 켜진 것의 채움색 — 화면 색이 아니라 넥슨 HTML 의 표식
 _FAME = re.compile(r'명성</div>\s*<div class="value">([^<]+)</div>')
 _TRAIT = re.compile(
     r'<li class="ab feature">\s*<div class="txt">\s*<div class="txtTop">([^<]+)</div>'
@@ -346,7 +347,7 @@ def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     m = _SKILLMOVE_BLOCK.search(html)
     if m:
         block = m.group(1)
-        info.skill_moves = block.count("#F1C018")
+        info.skill_moves = block.count(_SKILLMOVE_ON)
         info.skill_moves_max = block.count("<svg")
 
     info.abilities = {name.strip(): int(value) for name, value in _ABILITY.findall(html)}

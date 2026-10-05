@@ -1154,14 +1154,9 @@ def _grade_badge_colors(grade) -> tuple[str, str]:
         g = int(grade)
     except (TypeError, ValueError):
         return T.PANEL_2, T.TEXT_DIM
-    if g >= 11:
-        return "#6dd5e8", "#0a2a30"
-    if g >= 8:
-        return "#e8c545", "#3a2c00"
-    if g >= 5:
-        return "#b8bfc7", "#20242a"
-    if g >= 1:
-        return "#c17a4a", "#2b1608"
+    for lo, bg, fg in T.GRADE_BADGES:
+        if g >= lo:
+            return bg, fg
     return T.PANEL_2, T.TEXT_DIM
 
 
@@ -1333,7 +1328,7 @@ class PitchWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         p.fillRect(self.rect(), QColor(T.PITCH))
-        line = QColor(255, 255, 255, 130)
+        line = QColor(T.PITCH_LINE)
         p.setPen(QPen(line, 2))
         m = 10
         p.drawRect(m, m, w - 2 * m, h - 2 * m)
@@ -1376,7 +1371,7 @@ class ShotMapWidget(QWidget):
         w, h = self.width(), self.height()
         m = 12
         p.fillRect(self.rect(), QColor(T.PITCH))
-        line = QColor(255, 255, 255, 130)
+        line = QColor(T.PITCH_LINE)
         p.setPen(QPen(line, 2))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawRect(m, m, w - 2 * m, h - 2 * m)
@@ -1407,7 +1402,7 @@ class ShotMapWidget(QWidget):
             pt = self._pt(s.x, s.y, w, h, m)
             r = 6.0 if s.result == 3 else 4.5
             if s.hit_post:
-                p.setPen(QPen(QColor("#ffffff"), 1.5))
+                p.setPen(QPen(QColor(T.CHART_ON_MARK), 1.5))
             else:
                 p.setPen(QPen(c.darker(160), 1))
             p.setBrush(c)
