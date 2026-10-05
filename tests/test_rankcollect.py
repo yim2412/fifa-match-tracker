@@ -164,10 +164,70 @@ def test_structure_change_mid_list_is_failure():
         assert out.kind == "failed" and "빠진" in out.message, out
         w2 = World(200)
         w2.fail[4] = lambda rows: []
-        assert rc.collect(db_path=env.db, fetch=w2, pages=10, now_fn=lambda: NOW).kind == "failed"
+        with _no_retry_wait():
+            assert rc.collect(db_path=env.db, fetch=w2, pages=10, now_fn=lambda: NOW).kind == "failed"
+        # 끝까지 비면 다시 받은 뒤에도 실패 — 다시 받기가 구조 변경 보호를 풀지 않는다
+        assert w2.calls.count(4) == 1 + config.RANK_EMPTY_RETRIES, w2.calls.count(4)
         c = env.conn()
         assert _count(c, "snapshots") == 0
         c.close()
+
+
+class _no_retry_wait:
+    def __enter__(self):
+        self.saved = config.RANK_EMPTY_RETRY_WAIT_S
+        config.RANK_EMPTY_RETRY_WAIT_S = 0.0
+
+    def __exit__(self, *exc):
+        config.RANK_EMPTY_RETRY_WAIT_S = self.saved
+
+
+def test_transient_empty_page_is_refetched_alone():
+    # 10-05 실측: 500쪽 중 2쪽 하나가 한 번 비어 회차 전체가 실패로 셌다. 그 쪽만 다시 받으면 정상이었다.
+    with Env() as env:
+        w = World(200)
+        hits = {"n": 0}
+
+        def once_empty(rows):
+            hits["n"] += 1
+            return [] if hits["n"] == 1 else rows
+        w.fail[2] = once_empty
+        with _no_retry_wait():
+            out = rc.collect(db_path=env.db, fetch=w, pages=10, now_fn=lambda: NOW)
+        assert (out.kind, out.rows) == ("ok", 200), out
+        assert w.calls.count(2) == 2, f"2쪽 요청 {w.calls.count(2)}번 — 한 번만 다시 받아야"
+        assert all(w.calls.count(p) == 1 for p in range(1, 11) if p != 2), "빈 쪽 말고 다른 쪽까지 다시 받았다"
+        c = env.conn()
+        assert rc.get_state(c).get("fail_count", "0") in ("0", ""), "다시 받아 성공했는데 실패로 셌다"
+        c.close()
+
+
+def test_empty_page_retry_waits_and_cancels():
+    # 다시 받기 전 대기를 실제로 하고, 취소되면 대기 중에 빠져나온다
+    w = World(200)
+    w.fail[2] = lambda rows: []
+    saved = config.RANK_EMPTY_RETRY_WAIT_S
+    config.RANK_EMPTY_RETRY_WAIT_S = 0.3
+    try:
+        t0 = time.monotonic()
+        try:
+            rc.run_round(w, pages=3)
+        except ranker.RankStructureError:
+            pass
+        took = time.monotonic() - t0
+        assert took >= 0.3 * config.RANK_EMPTY_RETRIES - 0.05, f"대기 없이 바로 다시 받았다({took:.2f}초)"
+        cancel = threading.Event()
+        threading.Timer(0.1, cancel.set).start()
+        config.RANK_EMPTY_RETRY_WAIT_S = 5.0
+        t0 = time.monotonic()
+        try:
+            rc.run_round(w, pages=3, cancel=cancel)
+            raise AssertionError("취소했는데 끝까지 돌았다")
+        except rc.Cancelled:
+            pass
+        assert time.monotonic() - t0 < 2.0, "취소가 대기를 끊지 못했다"
+    finally:
+        config.RANK_EMPTY_RETRY_WAIT_S = saved
 
 
 def test_failure_kinds_map_to_outcomes():
@@ -587,6 +647,14 @@ def test_save_from_pages_only_when_collect_on_and_due():
         assert out.kind == "failed", out
         c = env.conn()
         assert _count(c, "snapshots") == 1 and rc.get_state(c)["fail_count"] == "1"
+        c.close()
+        # 빈 쪽은 일시적일 수 있어 세지 않는다(저장도 안 함) — 수집이 다시 받아 판정한다
+        later2 = later + timedelta(days=2)
+        empty = _pages(World(40), 2)
+        empty[2].rows.clear()
+        assert rc.save_from_pages(empty, later2, pages=2, db_path=env.db, now_fn=lambda: later2) is None
+        c = env.conn()
+        assert _count(c, "snapshots") == 1 and rc.get_state(c)["fail_count"] == "1", "빈 쪽을 실패로 셌다"
         c.close()
 
 

@@ -4,7 +4,8 @@
 
 - **rank.db 는 fifa.db 와 따로**: 지우기가 파일 삭제라 VACUUM(457MB 전체 재작성 · WAL 이 DB 만큼)이 필요 없고,
   1.0.3·봇이 여는 fifa.db 는 그대로다.
-- **반쪽 저장 안 함**: 한 쪽이라도 못 읽으면 남은 요청을 취소하고 회차를 버린다. 쪽 판정은 ranker.judge_page —
+- **반쪽 저장 안 함**: 한 쪽이라도 못 읽으면 남은 요청을 취소하고 회차를 버린다(빈 쪽만은 그 쪽을
+  RANK_EMPTY_RETRIES 번 다시 받아 본 뒤). 쪽 판정은 ranker.judge_page —
   구조가 바뀐 응답이 '정상'으로 읽히면 반쪽 스냅숏이 조용히 쌓인다.
 - **실패 종류마다 다르게 센다**(record_result): 실패 → 대기를 1·2·4…24시간으로 · 차단(403·429·Cloudflare)이
   서로 다른 회차에 RANK_BLOCK_ROUNDS 번 이어지면 스스로 끈다(D6 — 넥슨이 막으면 검색 때 쓰는 랭커 카드·팀컬러도
@@ -23,6 +24,7 @@ import sqlite3
 import statistics
 import sys
 import threading
+import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -386,10 +388,25 @@ def run_round(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = 
     fetch = fetch or ranker.fetch_rank_rows
     stop = threading.Event()
 
+    def stopped():
+        return stop.is_set() or (cancel is not None and cancel.is_set())
+
     def one(page: int):
-        if stop.is_set() or (cancel is not None and cancel.is_set()):
+        if stopped():
             raise Cancelled()
-        return fetch(page)
+        res = fetch(page)
+        for _ in range(config.RANK_EMPTY_RETRIES):
+            # 일시적인 빈 응답일 수 있다(10-05 실측: 같은 쪽을 바로 다시 받으니 정상) — 그 쪽만 다시 받는다.
+            # 끝까지 비면 그대로 돌려줘 judge_page 가 구조 변경으로 판정한다.
+            if res.rows:
+                break
+            end = time.monotonic() + config.RANK_EMPTY_RETRY_WAIT_S
+            while not stopped() and time.monotonic() < end:   # 창 닫기(cancel)도 대기를 끊게 잘게 나눠 기다린다
+                stop.wait(min(0.1, max(0.0, end - time.monotonic())))
+            if stopped():
+                raise Cancelled()
+            res = fetch(page)
+        return res
 
     results: dict[int, ranker.RankPageResult] = {}
     pool = ThreadPoolExecutor(max_workers=workers or config.RANK_COLLECT_WORKERS, initializer=_low_priority, thread_name_prefix="rankcollect")
@@ -638,6 +655,8 @@ def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, 
     web, on = config.read_env_switches()
     if config.notice_needed() or not web or not on:
         return None
+    if any(not r.rows for r in results.values()):
+        return None      # 빈 쪽은 일시적일 수 있다 — 세지 않고, 수집이 다시 받아 보고(run_round) 판정하게 둔다
     conn = open_rank_db(db_path)
     try:
         if get_state(conn).get("enabled") == "0" or not is_due(conn, now_fn()):
