@@ -762,6 +762,329 @@ def test_trend_marks_max_min_and_average():
     assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
 
 
+# ── 1.3.1 8단계 — 추이 그래프 확장(D) ─────────────────────────────────────────
+_AREA_CASES = [
+    ([("01/01", 0.0, 1), ("01/02", 50.0, 2), ("01/03", 0.0, 0)], (600, 220)),
+    ([("a", 40.0, 10), ("b", 40.0, 10), ("c", 46.0, 10)], (400, 200)),
+    ([(f"09/{i:02d}", v, g) for i, (v, g) in enumerate(
+        [(55.0, 20), (61.2, 31), (48.0, 25), (70.0, 10), (33.3, 3), (52.5, 40), (58.0, 50), (49.0, 45)], 1)],
+     (500, 180)),
+    ([("01/01", 50.0, 3)], (300, 200)),
+    ([], (300, 200)),
+]
+
+
+def _rect(r):
+    return tuple(round(v, 3) for v in (r.x(), r.y(), r.width(), r.height()))
+
+
+def test_area_chart_defaults_unchanged():
+    # 대시보드·선수 카드는 set_data(points) 만 부른다 — 확장 전 그림(tests/legacy_area_chart.py, 얼린 사본)과
+    # 픽셀까지 같아야 한다. 좌표를 박지 않고 같은 프로세스에서 두 그림을 대조하므로 CI 러너 글꼴과 무관하다.
+    import charts
+    sys.path.insert(0, os.path.join(_ROOT, "tests"))
+    from legacy_area_chart import LegacyAreaTrendChart
+    for pts, (w, h) in _AREA_CASES:
+        new, old = charts.AreaTrendChart(), LegacyAreaTrendChart()
+        for c in (new, old):
+            c.set_data(pts)
+            c.resize(w, h)
+        a, b = new.grab().toImage(), old.grab().toImage()
+        assert a == b, ("기본값 그림이 바뀌었다", pts[:2], (w, h))
+        om = getattr(old, "marks", {})
+        assert {k: (_rect(v) if hasattr(v, "intersects") else v) for k, v in new.marks.items() if k != "label_rects"} \
+            == {k: (_rect(v) if hasattr(v, "intersects") else v) for k, v in om.items() if k != "label_rects"}, \
+            (new.marks, om)
+        assert [(_rect(r), t) for r, t in new._hits] == [(_rect(r), t) for r, t in old._hits]
+        assert new.minimumHeight() == old.minimumHeight()
+
+
+def _drawn(c, w=500, h=240, **kw):
+    pts = kw.pop("pts", [("09/01", 40.0, 10), ("09/02", 55.0, 12), ("09/03", 62.0, 8), ("09/04", 48.0, 20)])
+    c.set_data(pts, **kw)
+    c.resize(w, h)
+    c.grab()
+    return c
+
+
+def test_area_chart_axis_has_no_hardcoded_percent():
+    import charts
+    elo = [("09/01", 4196.2, None), ("09/02", 4231.0, None), ("09/05", 4180.5, None)]
+    ax = charts.Axis.fit([v for _, v, _ in elo])
+    assert ax.lo <= 4180.5 and ax.hi >= 4231.0 and len(ax.ticks) == 3, ax
+    c = _drawn(charts.AreaTrendChart(), pts=elo, axis=ax, avg=False)
+    texts = [t for _, t in c._hits] + [c.marks["max"][1], c.marks["min"][1]]
+    assert not any("%" in t for t in texts), texts
+    assert c.marks["max"] == (1, "4,231"), c.marks["max"]
+    assert c.marks["min"] == (2, "4,180"), c.marks["min"]  # 경기 수 None 점도 최고·최저 후보(전부)
+    assert "avg" not in c.marks and "avg_rect" not in c.marks, c.marks
+    assert c._hits[0][1] == "09/01 · ELO 4,196", c._hits[0][1]  # 경기 수 None 이면 "(…경기)" 없음
+    # 축 글자도 % 가 없다 — 승률 축이면 왼쪽 여백 폭이 "100%" 기준이라 ELO 숫자(4,200)가 안 들어간다
+    assert "%" not in ax.tick_text(ax.hi) and "%" not in ax.text(ax.lo)
+
+
+def test_area_chart_options_each_change_the_drawing():
+    import charts
+    from datetime import date as _d
+    # baseline — 눈금(50)이면 그 격자선을 진하게(글자 따로 없음), 눈금 밖(45)이면 점선 + 글자(겹침 규칙 안)
+    c = _drawn(charts.AreaTrendChart(), baseline=50)
+    top, foot = c._hits[0][0].top(), c._hits[0][0].bottom()
+    kind, y = c.marks["baseline"]
+    assert kind == "grid" and abs(y - (top + (foot - top) / 2)) < 0.01, (kind, y, top, foot)
+    assert "baseline_rect" not in c.marks
+    c = _drawn(charts.AreaTrendChart(), baseline=45)
+    assert c.marks["baseline"][0] == "dashed"
+    rects = c.marks["label_rects"] + [c.marks["avg_rect"]]
+    assert c.marks["baseline_rect"] in c.marks["label_rects"]
+    assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
+    assert "baseline" not in _drawn(charts.AreaTrendChart()).marks
+    # ma — None 에서 끊긴다 · 툴팁에 이동평균
+    c = _drawn(charts.AreaTrendChart(), ma=[50.0, None, 60.0, 58.5])
+    assert (c.marks["ma_points"], c.marks["ma_segments"]) == (3, 2), c.marks
+    assert c._hits[3][1] == "09/04 · 승률 48.0% · 7일 평균 58.5% (20경기)", c._hits[3][1]
+    assert c._hits[1][1] == "09/02 · 승률 55.0% (12경기)", c._hits[1][1]
+    # counts — 경기 있는 점마다 막대, 가장 큰 값만 숫자 · 띠만큼 그래프가 위로 줄어 최소 높이가 는다
+    plain = _drawn(charts.AreaTrendChart())
+    c = _drawn(charts.AreaTrendChart(), pts=[("a", 40.0, 3), ("b", 50.0, 0), ("c", 60.0, 5)], counts=True)
+    assert c.marks["count_bars"] == 2 and c.marks["count_peak"] == (2, "5경기"), c.marks
+    assert c.minimumHeight() > plain.minimumHeight()
+    # x_dates — 날짜 간격(하루 · 9일)이 순번 간격으로 찌그러지지 않는다
+    days = [_d(2026, 9, 1), _d(2026, 9, 2), _d(2026, 9, 11)]
+    pts3 = [("09/01", 40.0, 5), ("09/02", 50.0, 5), ("09/11", 60.0, 5)]
+    c = _drawn(charts.AreaTrendChart(), pts=pts3, x_dates=days)
+    w0, w1, w2 = (c._hits[i][0].width() for i in range(3))
+    assert w0 * 5 < w2 and w1 > w2, (w0, w1, w2)  # 첫 점 띠는 하루의 반, 마지막 점은 9일의 반
+    even = _drawn(charts.AreaTrendChart(), pts=pts3)
+    assert abs(even._hits[0][0].width() - even._hits[2][0].width()) < 0.01
+    # ref_series — 축 밖이면 끝에 ▲, 안이면 이름·값 · 날짜가 없으면 안 그린다
+    elo = [("09/01", 4196.0, None), ("09/02", 4231.0, None), ("09/11", 4180.0, None)]
+    ax = charts.Axis.fit([v for _, v, _ in elo])
+    refs = [("200위", [(_d(2026, 8, 30), 4500.0), (_d(2026, 9, 5), 4515.0)], T.CHART_DOWN),
+            ("1만 위", [(_d(2026, 9, 1), 4200.0)], T.CHART_NEUTRAL)]
+    c = _drawn(charts.AreaTrendChart(), pts=elo, axis=ax, avg=False, x_dates=days, ref_series=refs)
+    assert c.marks["ref"] == [("200위", "above", "▲ 200위 4,515"), ("1만 위", "in", "1만 위 4,200")], c.marks["ref"]
+    rects = c.marks["label_rects"]
+    assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
+    c = _drawn(charts.AreaTrendChart(), pts=elo, axis=ax, avg=False, ref_series=refs)
+    assert [s for _, s, _ in c.marks["ref"]] == ["no-dates", "no-dates"]
+    assert c.marks["max"] == (1, "4,231")  # 기준선을 못 그려도 본 그림은 그린다
+
+
+def test_trend_page_uses_area_chart_with_counts_and_ma():
+    import charts
+    _restore_account()
+    _win._go_page("승률 그래프")
+    c = _win.trend_chart
+    assert isinstance(c, charts.AreaTrendChart), type(c)
+    c.resize(700, 300)
+    c.grab()
+    # 픽스처 일별: 01/01 1경기 · 01/02 2경기 · 01/03 오류뿐(0경기) — 막대는 경기 있는 날만
+    assert c.marks["baseline"][0] == "grid" and c.marks["count_bars"] == 2, c.marks
+    assert c._ma == [None, None, None], c._ma  # 3경기 — 이동평균 표본(MIN_COND) 미달이라 끊김
+    # 배선 — 이동평균은 경기에서 직접(그날 날짜를 넘긴다), 결과가 그대로 선이 된다
+    seen = []
+    real = app_main.core.moving_win_rate
+
+    def spy(matches, days, **kw):
+        seen.append((len(matches), list(days), kw))
+        return [40.0] * len(days)
+    app_main.core.moving_win_rate = spy
+    try:
+        _win._render_trend(_win._matches)
+        c.grab()
+    finally:
+        app_main.core.moving_win_rate = real
+    assert seen == [(len(_win._matches), [_date(2026, 1, 1), _date(2026, 1, 2), _date(2026, 1, 3)],
+                     {"min_n": app_main.core.MIN_COND})], seen
+    assert c.marks["ma_points"] == 3, c.marks
+    # 등급 — 하루 한 점(4경기 → 3일) · 툴팁에 그날 처음·마지막·최고
+    dc = _win.division_chart
+    assert len(dc._points) == 3, dc._points
+    assert all("처음" in t and "최고" in t for t in dc._tips), dc._tips
+    _win._render_trend(_win._matches)
+
+
+def test_trend_page_groups_not_squeezed():
+    # 세로는 아무도 안 쟀다(창 최소 크기 테스트는 폭만) — MIN_WINDOW 에서 그룹마다 최소 높이가 지켜지고,
+    # 넘치는 만큼은 세로 스크롤로 밀려야 한다.
+    try:
+        _at_size(*app_main.MIN_WINDOW)
+        _win._go_page("승률 그래프")
+        _app.processEvents()
+        frame = _win.pages.currentWidget()
+        groups = [_win.gb_trend, _win.gb_division, _win.gb_sc]
+        bad = [(g.title(), g.height(), g.minimumSizeHint().height()) for g in groups
+               if g.height() < g.minimumSizeHint().height()]
+        assert not bad, bad
+        assert frame.verticalScrollBar().isVisible(), "내용이 창보다 긴데 세로 스크롤이 없다 — 눌렸다"
+        assert frame.verticalScrollBar().maximum() > 0
+    finally:
+        _at_size(1600, 900)
+        _win._go_page("대시보드")
+
+
+def _sc_details(div_by_id: dict):
+    """픽스처 상세의 내 등급을 바꾼 사본 — {matchId 끝 4자리: division}."""
+    import copy
+    out = copy.deepcopy(_DETAILS)
+    for d in out:
+        div = div_by_id.get(d["matchId"][-4:])
+        if div is not None:
+            for p in d["matchInfo"]:
+                if p["ouid"] == _OUID:
+                    p["division"] = div
+    return out
+
+
+def test_sc_records_list_and_nexon_line():
+    keep_max = dict(_win._max_division)
+    try:
+        # 0002(01-02 12:00) 900 → 0003(01-02 13:00) 800 → 0004(01-03) 900 : 진입 한 번
+        det = _sc_details({"0003": 800})
+        _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert _win.lb_sc_list.text() == "2026-01-02 · 1번 (13:00)", _win.lb_sc_list.text()
+        assert "2026-01-01 ~" in _win.lb_sc_note.text(), _win.lb_sc_note.text()
+        assert _win.division_chart._markers == [1], _win.division_chart._markers  # 그날(01-02)에 세로 점선
+        # 넥슨 최근 달성이 목록의 진입과 60초 안이면 같은 것 — 줄을 안 낸다
+        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T13:00:30"})
+        assert _win.lb_sc_nexon.isHidden(), _win.lb_sc_nexon.text()
+        # 5분 어긋나면 목록에 없는 것
+        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T13:05:00"})
+        assert not _win.lb_sc_nexon.isHidden()
+        assert _win.lb_sc_nexon.text().startswith("넥슨 기록상 최근 달성 2026-01-02 (저장된 경기에서는 못 찾음"), \
+            _win.lb_sc_nexon.text()
+        # 저장 범위보다 앞
+        _win._on_max_division(_OUID, {"division": 800, "date": "2025-11-02", "at": "2025-11-02T10:00:00"})
+        assert _win.lb_sc_nexon.text() == "넥슨 기록상 최근 달성 2025-11-02 (저장된 경기 밖)", _win.lb_sc_nexon.text()
+        # 옛 값(at 없음)은 날짜로 비교
+        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02"})
+        assert _win.lb_sc_nexon.isHidden()
+        # 최고가 슈챔이 아니면(챔피언스) 줄이 없다
+        _win._on_max_division(_OUID, {"division": 900, "date": "2025-11-02", "at": "2025-11-02T10:00:00"})
+        assert _win.lb_sc_nexon.isHidden()
+        # 첫 경기부터 슈챔이면 진입이 아니라 '기록 시작 때 이미'
+        det = _sc_details({"0001": 800, "0002": 800, "0003": 800, "0004": 800})
+        _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert _win.lb_sc_list.text() == "기록 시작(2026-01-01) 때 이미 슈퍼 챔피언스", _win.lb_sc_list.text()
+        # 기록 없음
+        _restore_account()
+        assert _win.lb_sc_list.text() == "저장된 경기에는 슈퍼 챔피언스 달성 기록이 없습니다"
+    finally:
+        _win._max_division = keep_max
+        _restore_account()
+
+
+def test_sc_nexon_line_arrives_after_loader_finishes():
+    # maxdivision 신호는 finished_ok 뒤에 온다 — _render_trend 에서만 그리면 넥슨 줄이 늘 빠진다. 진짜 로더로.
+    tmp, saved = _loader_db(4)
+    keep_names, keep_max = dict(_win._division_names), dict(_win._max_division)
+    try:
+        _win._ouid, _win._max_division = "옛계정", {}
+        ld = app_main.MatchLoader(_MaxDivApi(), "닉", 52, want_max_division=True)
+        ld.finished_ok.connect(_win._on_loaded)
+        ld.max_division_ready.connect(_win._on_max_division)
+        ld.run()
+        _app.processEvents()
+        assert _win._ouid == _OUID
+        # _MAXDIV_ROWS 의 52 줄: 800 · 2026-07-05 — 저장된 4경기(01-01~01-03)엔 없다
+        assert not _win.lb_sc_nexon.isHidden(), "로더가 끝난 뒤 온 최고 등급이 승률 그래프에 안 그려졌다"
+        assert _win.lb_sc_nexon.text().startswith("넥슨 기록상 최근 달성 2026-07-05"), _win.lb_sc_nexon.text()
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+        _win._division_names, _win._max_division = keep_names, keep_max
+        _restore_account()
+
+
+def _week_matches():
+    """월요일 시작 주 셋 — A(09-07 주) 4승(표본 미달) · B(09-14 주) 10경기 6승 · C(09-21 주) 9경기 3승."""
+    out = []
+
+    def mk(day, hour, result):
+        base = _MATCHES[0]
+        return models.MatchSummary(**{**base.__dict__, "match_id": f"w{day}{hour}{result}",
+                                      "match_date": datetime(2026, 9, day, hour), "result": result})
+    out += [mk(8, h, "승") for h in range(10, 14)]
+    out += [mk(15, h, "승") for h in range(6)] + [mk(16, h, "패") for h in range(4)]
+    out += [mk(22, h, "승") for h in range(3)] + [mk(23, h, "패") for h in range(6)]
+    out.sort(key=lambda m: m.match_date, reverse=True)
+    return out
+
+
+def test_period_table_marks_best_worst_and_keeps_tint_after_sort():
+    from PyQt6.QtGui import QColor
+    t = _win.tbl_period
+    rate_col = _win.PERIOD_COLUMNS.index("승률")
+    vs_col = _win.PERIOD_COLUMNS.index("평균 대비")
+    games_col = _win.PERIOD_COLUMNS.index("경기")
+    ms = _week_matches()
+    try:
+        _win.cb_period.setCurrentIndex(_win.cb_period.findData(7))
+        # 헤더에 정렬이 남아 있는 상태에서 다시 그린다 — 채우자마자 재정렬되면 색이 엉뚱한 행에 간다(표 함정 1번)
+        t.sortByColumn(games_col, Qt.SortOrder.AscendingOrder)
+        _win._render_period(ms)
+        assert t.rowCount() == 3
+        by_label = {t.item(r, 0).text(): r for r in range(3)}
+        a, b, c = by_label["09/07~09/13"], by_label["09/14~09/20"], by_label["09/21~09/27"]
+        # 4판짜리 A 가 100% 지만 최고가 아니다(후보는 MIN_COND 판 이상) — 흐리고 칠하지 않는다
+        assert not t.item(a, rate_col).font().bold()
+        assert t.item(a, rate_col).foreground().color() == QColor(T.TEXT_DIM)
+        assert t.item(a, rate_col).toolTip().startswith("표본이 4경기")
+        assert t.item(b, rate_col).font().bold() and t.item(c, rate_col).font().bold()
+        # 평균(13/23 = 56.5%)보다 높은 B 는 HEAT_ATK, 낮은 C 는 HEAT_DEF 쪽 — 그 행에 붙어 있다
+        overall = 13 / 23 * 100
+        f = _win.HEAT_FLOOR
+        exp = lambda diff, end: _win._blend(  # noqa: E731
+            T.PANEL, end, f + (1 - f) * min(abs(diff) / _win.PERIOD_HEAT_FULL_PP, 1.0)).name()
+        assert t.item(b, rate_col).background().color().name() == exp(60 - overall, T.HEAT_ATK)
+        assert t.item(c, rate_col).background().color().name() == exp(100 / 3 - overall, T.HEAT_DEF)
+        assert t.item(b, vs_col).text() == f"{60 - overall:+.1f}%p", t.item(b, vs_col).text()
+        assert t.isSortingEnabled()
+        # 그래프는 표와 같은 단위 · 오래된 것부터
+        g = _win.period_chart
+        g.resize(600, 260)
+        g.grab()
+        assert [h[1].split(" · ")[0] for h in g._hits] == ["09/07~09/13", "09/14~09/20", "09/21~09/27"]
+        assert g.marks["count_bars"] == 3 and g.marks["count_peak"] == (1, "10경기"), g.marks
+    finally:
+        t.setSortingEnabled(False)
+        t.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+        _win._render_period(_win._matches)
+
+
+def test_season_table_compares_with_previous_season():
+    keep = (_win._rank_seasons, _win._matches_all)
+    old = sn.Season(no=89, name="시즌 8", start=_date(2025, 10, 1), end=_date(2025, 12, 1))
+    new = sn.Season(no=90, name="시즌 9", start=_date(2025, 12, 1), end=_date(2026, 2, 1))
+    base = _MATCHES[0]
+    olds = [models.MatchSummary(**{**base.__dict__, "match_id": f"o{i}", "result": "승",
+                                   "match_date": datetime(2025, 11, 10, 9 + i)}) for i in range(2)]
+    try:
+        _win._rank_seasons = [new, old]
+        _win._matches_all = list(_MATCHES) + olds
+        _win._render_seasons()
+        t = _win.tbl_seasons
+        cols = _win.SEASON_COLUMNS
+        rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
+        assert set(rows) == {"2025 시즌 9", "2025 시즌 8"}, rows
+        vs = cols.index("지난 시즌 대비")
+        # 새 시즌 33.3%(승1 무1 패1) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
+        assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 3 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
+        assert t.item(rows["2025 시즌 8"], vs).text() == "—"
+        grade = cols.index("등급")
+        assert t.item(rows["2025 시즌 9"], grade).text() == _win._division_names.get(900, "900")
+        assert t.item(rows["2025 시즌 9"], grade).toolTip().startswith("최고 ")
+        assert t.item(rows["2025 시즌 8"], grade).text() == "—"  # 상세가 없는 경기 — 등급 모름
+        bars = _win.season_bars._rows
+        assert [r[0] for r in bars] == ["2025 시즌 9", "2025 시즌 8"], bars
+        assert bars[0][2] == "33.3% · 3경기" and bars[0][4] is True, bars[0]  # 3경기 < MIN_COND → 흐림
+    finally:
+        _win._rank_seasons, _win._matches_all = keep
+        _win._render_seasons()
+
+
 def test_bar_peak_labels_never_overlap():
     # 실데이터 30~45분 득 772 · 실 765 가 좁은 폭에서 "77365" 로 붙었다.
     import charts

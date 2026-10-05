@@ -215,6 +215,7 @@ class PeriodRate:
     win: int = 0
     draw: int = 0
     lose: int = 0
+    day: date | None = None  # 라벨("%m/%d")엔 연도가 없어 이동평균 창을 못 잰다
 
     @property
     def games(self) -> int:
@@ -348,7 +349,7 @@ def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRa
     기준은 오늘이 아니라 matches 안에서 가장 최근 경기 날짜 — 그래야 한동안
     안 켠 계정을 조회해도 "최근 30일"이 그 계정 기준으로 잡힌다.
     경기가 아예 없던 날은 만들지 않는다(그래프에서 0%로 보이면 "다 짐"과
-    구분이 안 된다 — TrendChart 도 이 전제로 그린다).
+    구분이 안 된다 — charts.AreaTrendChart 도 이 전제로 그린다).
     """
     dated = [m for m in matches if m.match_date is not None]
     if not dated:
@@ -363,7 +364,7 @@ def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRa
             continue
         s = acc.get(d)
         if s is None:
-            s = acc[d] = PeriodRate(label=d.strftime("%m/%d"))
+            s = acc[d] = PeriodRate(label=d.strftime("%m/%d"), day=d)
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
@@ -371,3 +372,35 @@ def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRa
         elif "패" in m.result:
             s.lose += 1
     return [acc[k] for k in sorted(acc.keys())]
+
+
+def moving_win_rate(matches: list[MatchSummary], days: list[date], *, min_n: int,
+                    window_days: int = 7) -> list[float | None]:
+    """days 의 날마다 달력 window_days 일(그날 포함 앞 window_days-1 일) 승률 — 승 합 ÷ 경기 합(%).
+
+    경기에서 직접 센다 — 그래프 점(PeriodRate)은 경기 없는 날을 안 만들어서 점 7개가 7일이 아니다.
+    창 안 경기(승·무·패)가 min_n 미만이면 None(선이 끊긴다). min_n 은 부르는 쪽이 준다
+    (analysis.MIN_COND — models 가 analysis 를 import 하면 순환이다)."""
+    per_day: dict[date, list[int]] = {}
+    for m in matches:
+        if m.match_date is None:
+            continue
+        if "승" in m.result:
+            won = 1
+        elif "무" in m.result or "패" in m.result:
+            won = 0
+        else:
+            continue  # 오류·몰수 미상 — 승률 분모에 안 넣는다(PeriodRate.games 와 같다)
+        acc = per_day.setdefault(m.match_date.date(), [0, 0])
+        acc[0] += won
+        acc[1] += 1
+    out: list[float | None] = []
+    for d in days:
+        win = games = 0
+        for k in range(window_days):
+            acc = per_day.get(d - timedelta(days=k))
+            if acc:
+                win += acc[0]
+                games += acc[1]
+        out.append(win / games * 100 if games and games >= min_n else None)
+    return out

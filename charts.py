@@ -12,10 +12,11 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
 from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QLinearGradient, QPainter,
-                         QPainterPath, QPen)
+                         QPainterPath, QPen, QPolygonF)
 from PyQt6.QtWidgets import QToolTip, QWidget
 
 import theme as T
@@ -88,51 +89,150 @@ def _smooth_path(pts: list[QPointF], top: float, bottom: float) -> QPainterPath:
     return path
 
 
-class AreaTrendChart(_Chart):
-    """승률 흐름 — 부드러운 곡선 + 아래 옅은 채움. 값은 0~100(%).
+@dataclass(frozen=True)
+class Axis:
+    """값 축 하나 — 범위·눈금·글자 모양·툴팁 이름. 승률(%)이 박혀 있던 자리를 여기 모은다
+    (격자 글자 · 왼쪽 여백 폭 · 최고/최저 · 평균 · 툴팁) — ELO 축에 % 가 새지 않게."""
+    lo: float
+    hi: float
+    ticks: tuple
+    fmt: str            # 값 글자(최고·최저·평균·툴팁)
+    name: str           # 툴팁 이름("승률" · "ELO")
+    tick_fmt: str = ""  # 눈금 글자 — 비면 fmt
 
-    points: (x 라벨, 값, 경기 수), 오래된 것부터. 경기가 없는 날은 넘기지 않는다.
+    def text(self, v: float) -> str:
+        return self.fmt.format(v)
+
+    def tick_text(self, v: float) -> str:
+        return (self.tick_fmt or self.fmt).format(v)
+
+    @staticmethod
+    def fit(values, fmt: str = "{:,.0f}", name: str = "ELO") -> "Axis":
+        """데이터 범위 + 위아래 10% 여백을 덮는 눈금 셋(같은 간격 · 1·2·2.5·5 의 10배수)."""
+        vals = [v for v in values if v is not None]
+        if not vals:
+            return Axis(0, 2, (0, 1, 2), fmt, name)
+        vmin, vmax = min(vals), max(vals)
+        span = (vmax - vmin) or max(abs(vmax) * 0.02, 1.0)
+        lo_raw, hi_raw = vmin - span * 0.1, vmax + span * 0.1
+        mag = 10 ** math.floor(math.log10((hi_raw - lo_raw) / 2))
+        for m in (1, 2, 2.5, 5, 10, 20):  # 20 이면 반드시 덮는다(간격 ≥ 범위)
+            step = m * mag
+            lo = math.floor(lo_raw / step) * step
+            if lo + 2 * step >= hi_raw:
+                break
+        return Axis(lo, lo + 2 * step, (lo, lo + step, lo + 2 * step), fmt, name)
+
+
+PCT_AXIS = Axis(0, 100, (0, 50, 100), "{:.1f}%", "승률", "{:.0f}%")
+
+
+class AreaTrendChart(_Chart):
+    """추이 — 부드러운 곡선 + 아래 옅은 채움. 기본은 승률(0~100%).
+
+    points: (x 라벨, 값, 경기 수 | None), 오래된 것부터. 경기가 없는 날은 넘기지 않는다.
     마지막 점에만 값을 직접 적는다(전부 적으면 읽히지 않는다).
+
+    옵션은 전부 set_data 인자(1.3.1) — 기본값이면 그림이 확장 전과 픽셀까지 같다
+    (tests/legacy_area_chart.py 와 대조). 대시보드·선수 카드는 set_data(points) 만 부른다.
+      axis       값 축(PCT_AXIS · Axis.fit(…))
+      avg        경기 수 가중 평균선 — 경기 수가 None 인 점(ELO)은 평균에 안 들어간다
+      baseline   기준값 — 눈금이면 그 격자선을 진하게, 아니면 점선 + 글자
+      ma         두 번째 선(이동평균) — 점마다 값, None 이면 끊긴다
+      counts     아래 띠에 점마다 경기 수 막대 + 가장 큰 값만 숫자
+      ref_series [(이름, [(날짜, 값)], 색)] — 날짜에 따라 움직이는 계단선(x_dates 필요)
+      x_dates    점마다 날짜 — 주면 x 를 날짜 간격으로(빈 날이 순번 간격으로 찌그러지지 않게)
     """
 
-    def __init__(self):
-        super().__init__(min_h=170)
-        self._points: list[tuple[str, float, int]] = []
+    BASE_MIN_H = 170
+    COUNT_FRAC = 0.18   # 경기 수 띠 — 그래프 높이 비율
+    COUNT_MIN = 24      # 경기 수 띠 최소 높이(px)
+    MA_W = 1.5
 
-    def set_data(self, points: list[tuple[str, float, int]]) -> None:
+    def __init__(self):
+        super().__init__(min_h=self.BASE_MIN_H)
+        self._points: list[tuple[str, float, int | None]] = []
+        self._axis = PCT_AXIS
+        self._avg = True
+        self._baseline: float | None = None
+        self._ma: list[float | None] | None = None
+        self._ma_name = "7일 평균"
+        self._counts = False
+        self._refs: tuple = ()
+        self._x_dates: list | None = None
+        self.marks: dict = {}
+
+    def set_data(self, points: list[tuple[str, float, int | None]], *, axis: Axis = PCT_AXIS,
+                 avg: bool = True, baseline: float | None = None, ma: list[float | None] | None = None,
+                 ma_name: str = "7일 평균", counts: bool = False, ref_series=(),
+                 x_dates: list | None = None) -> None:
         self._points = list(points)
+        if ma is not None and len(ma) != len(self._points):
+            raise ValueError(f"ma 길이 {len(ma)} != 점 {len(self._points)}")
+        if x_dates is not None and len(x_dates) != len(self._points):
+            raise ValueError(f"x_dates 길이 {len(x_dates)} != 점 {len(self._points)}")
+        self._axis, self._avg, self._baseline = axis, avg, baseline
+        self._ma, self._ma_name, self._counts = (list(ma) if ma is not None else None), ma_name, counts
+        self._refs = tuple(ref_series)
+        self._x_dates = list(x_dates) if x_dates is not None else None
+        self.setMinimumHeight(self.BASE_MIN_H + (self.COUNT_MIN + 16 if counts else 0))
+        self.updateGeometry()
         self.update()
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         self._hits = []
+        self.marks = {}
         if not self._points:
             self._empty(p)
             return
+        ax = self._axis
         small = _small_font(self.font())
         fm = QFontMetrics(small)
         p.setFont(small)
-        ml = fm.horizontalAdvance("100%") + 8
-        mr = fm.horizontalAdvance("100.0%") // 2 + 10
+        ml = max(fm.horizontalAdvance(ax.tick_text(t)) for t in ax.ticks) + 8
+        mr = fm.horizontalAdvance(ax.text(ax.hi)) // 2 + 10
         mt, mb = 18, fm.height() + 8
         w, h = self.width(), self.height()
-        top, bottom = mt, h - mb
+        strip = max(self.COUNT_MIN, h * self.COUNT_FRAC) if self._counts else 0
+        top = mt
+        foot = h - mb                       # x 라벨 칸 위 — 마우스 띠가 여기까지
+        bottom = foot - (strip + 6 if self._counts else 0)
         plot_w = max(w - ml - mr, 1)
 
-        for pct in (0, 50, 100):
-            y = bottom - (bottom - top) * pct / 100
-            p.setPen(QPen(QColor(T.CHART_AXIS if pct == 0 else T.CHART_GRID), 1))
+        def y_of(v: float) -> float:
+            return bottom - (bottom - top) * (min(max(v, ax.lo), ax.hi) - ax.lo) / (ax.hi - ax.lo)
+
+        base_on_grid = self._baseline is not None and self._baseline in ax.ticks
+        for t in ax.ticks:
+            y = bottom - (bottom - top) * (t - ax.lo) / (ax.hi - ax.lo)
+            strong = base_on_grid and t == self._baseline
+            p.setPen(QPen(QColor(T.CHART_AXIS if t == ax.ticks[0] or strong else T.CHART_GRID),
+                          2 if strong else 1))
             p.drawLine(QPointF(ml, y), QPointF(w - mr, y))
             p.setPen(QColor(T.TEXT_DIM))
             p.drawText(QRectF(0, y - fm.height() / 2, ml - 6, fm.height()),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                       f"{pct}%")
+                       ax.tick_text(t))
+            if strong:
+                self.marks["baseline"] = ("grid", y)
+        if self._baseline is not None and not base_on_grid:
+            by = y_of(self._baseline)
+            pen = QPen(QColor(T.CHART_AXIS), 1)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(ml, by), QPointF(w - mr, by))
+            self.marks["baseline"] = ("dashed", by)
 
         n = len(self._points)
-        pts = [QPointF(ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2),
-                       bottom - (bottom - top) * max(0.0, min(100.0, v)) / 100)
-               for i, (_, v, _) in enumerate(self._points)]
+        if self._x_dates is not None:
+            d0 = self._x_dates[0]
+            span = (self._x_dates[-1] - d0).days
+            xs = [ml + (plot_w * (d - d0).days / span if span else plot_w / 2) for d in self._x_dates]
+        else:
+            xs = [ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2) for i in range(n)]
+        pts = [QPointF(x, y_of(v)) for x, (_, v, _) in zip(xs, self._points)]
         line = _smooth_path(pts, top, bottom)
 
         area = QPainterPath(line)
@@ -144,6 +244,10 @@ class AreaTrendChart(_Chart):
         grad.setColorAt(1, _color(T.CHART_UP, 0.0))
         p.fillPath(area, grad)
 
+        ref_ends = self._draw_ref_lines(p, y_of, ml, plot_w) if self._refs else []
+        if self._ma is not None:
+            self._draw_ma(p, xs, y_of)
+
         pen = QPen(QColor(T.CHART_UP), LINE_W)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
@@ -151,18 +255,21 @@ class AreaTrendChart(_Chart):
 
         # 평균선 — 경기 수 가중(승 합 ÷ 경기 합). 승률 그래프 페이지 '평균 승률' 카드와
         # 같은 식이라 두 화면 숫자가 같다. 1px 실선, 바탕에 묻히지 않을 만큼만 진하게.
-        played = [(i, v, g) for i, (_, v, g) in enumerate(self._points) if g > 0]
-        self.marks: dict = {}
+        # 경기 수가 None 인 점(ELO)은 '모름'이 아니라 '세지 않는 값'이라 최고·최저 후보엔 든다.
+        played = [(i, v, g) for i, (_, v, g) in enumerate(self._points) if g is None or g > 0]
+        weighted = [(i, v, g) for i, v, g in played if g is not None]
         placed: list[QRectF] = []
         bold = _small_font(self.font(), SMALL_PT + 1, bold=True)
         bfm = QFontMetrics(bold)
-        if played:
-            avg = sum(v * g for _, v, g in played) / sum(g for _, _, g in played)
-            ay = bottom - (bottom - top) * avg / 100
+        show_avg = self._avg and bool(weighted)
+        if show_avg:
+            avg = sum(v * g for _, v, g in weighted) / sum(g for _, _, g in weighted)
+            ay = y_of(avg)
             p.setPen(QPen(_color(T.TEXT_DIM, 0.7), 1))
             p.drawLine(QPointF(ml, ay), QPointF(w - mr, ay))
             self.marks["avg"] = avg
 
+        if played:
             # 최고·최저 — 같은 모양(점 + 굵은 값). 경기 없는 날(오류만)은 0% 가
             # 아니라 '모름'이라 후보에서 뺀다. 같은 값이면 최근 쪽을 표시한다.
             hi = max(played, key=lambda t: (t[1], t[0]))[0]
@@ -175,7 +282,7 @@ class AreaTrendChart(_Chart):
                 p.setPen(QPen(QColor(T.PANEL), RING_W))
                 p.setBrush(QColor(T.CHART_UP))
                 p.drawEllipse(pt, DOT_R + 1, DOT_R + 1)
-                label = f"{self._points[i][1]:.1f}%"
+                label = ax.text(self._points[i][1])
                 lw = bfm.horizontalAdvance(label)
                 lx = min(max(pt.x() - lw / 2, ml), w - lw - 2)
                 # 최고는 점 위, 최저는 점 아래 — 곡선과 안 겹치게
@@ -187,19 +294,33 @@ class AreaTrendChart(_Chart):
                 placed.append(rect)
                 self.marks[kind] = (i, label)
 
-            # 평균 글자 — 오른쪽 끝 선 위, 최고·최저 글자와 겹치면 선 아래로
-            p.setFont(small)
-            text = f"평균 {avg:.1f}%"
+        p.setFont(small)
+        if self._baseline is not None and not base_on_grid:
+            text = ax.tick_text(self._baseline)
             tw = fm.horizontalAdvance(text)
-            for ty in (ay - fm.height() - 2, ay + 2):
-                rect = QRectF(w - mr - tw, ty, tw, fm.height())
-                if not any(rect.intersects(r) for r in placed):
-                    break
+            by = self.marks["baseline"][1]
+            rect = self._free_rect([QRectF(ml + 4, by - fm.height() - 2, tw, fm.height()),
+                                    QRectF(ml + 4, by + 2, tw, fm.height())], placed)
+            p.fillRect(rect.adjusted(-3, 0, 2, 0), QColor(T.PANEL))
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+            placed.append(rect)
+            self.marks["baseline_rect"] = rect
+        if ref_ends:
+            self._draw_ref_labels(p, fm, ref_ends, w - mr, top, bottom, placed)
+
+        if show_avg:
+            # 평균 글자 — 오른쪽 끝 선 위, 최고·최저 글자와 겹치면 선 아래로
+            text = f"평균 {ax.text(avg)}"
+            tw = fm.horizontalAdvance(text)
+            rect = self._free_rect([QRectF(w - mr - tw, ty, tw, fm.height())
+                                    for ty in (ay - fm.height() - 2, ay + 2)], placed)
             # 곡선이 글자 위를 지나가도 읽히게 바탕색을 깐다
             p.fillRect(rect.adjusted(-3, 0, 2, 0), QColor(T.PANEL))
             p.setPen(QColor(T.TEXT_DIM))
             p.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
             self.marks["avg_rect"] = rect
+        if played:
             self.marks["label_rects"] = placed
 
         # 마지막 날 — 점만(지금 위치). 값은 툴팁
@@ -208,25 +329,163 @@ class AreaTrendChart(_Chart):
         p.setBrush(QColor(T.CHART_UP))
         p.drawEllipse(end, DOT_R, DOT_R)
 
+        if self._counts:
+            self._draw_counts(p, fm, xs, bottom + 6, foot, w - mr)
+
         # x 라벨 — 처음·끝 + 사이 몇 개(겹치지 않게)
         p.setFont(small)
         p.setPen(QColor(T.TEXT_DIM))
         lab_w = max(fm.horizontalAdvance(lb) for lb, _, _ in self._points) + 12
-        step = max(1, math.ceil(n / max(1, plot_w // lab_w)))
-        shown = list(range(0, n, step))
+        if self._x_dates is None:
+            step = max(1, math.ceil(n / max(1, plot_w // lab_w)))
+            shown = list(range(0, n, step))
+        else:  # 날짜 간격이면 순번으로 건너뛰면 겹친다 — 앞 라벨과 떨어진 것만
+            shown, last = [], -math.inf
+            for i, x in enumerate(xs):
+                if x - last >= lab_w:
+                    shown.append(i)
+                    last = x
         if n - 1 not in shown:
             if shown and pts[n - 1].x() - pts[shown[-1]].x() < lab_w:
                 shown.pop()
             shown.append(n - 1)
         for i in shown:
-            p.drawText(QRectF(pts[i].x() - lab_w / 2, bottom + 4, lab_w, fm.height()),
+            p.drawText(QRectF(pts[i].x() - lab_w / 2, foot + 4, lab_w, fm.height()),
                        Qt.AlignmentFlag.AlignCenter, self._points[i][0])
 
         # 마우스 올림 — 가장 가까운 점까지의 세로 띠
-        half = plot_w / (2 * (n - 1)) if n > 1 else plot_w / 2
-        for (lb, v, games), pt in zip(self._points, pts):
-            self._hits.append((QRectF(pt.x() - half, top, 2 * half, bottom - top),
-                               f"{lb} · 승률 {v:.1f}% ({games}경기)"))
+        if self._x_dates is None:
+            half = plot_w / (2 * (n - 1)) if n > 1 else plot_w / 2
+            bands = [(x - half, 2 * half) for x in xs]
+        else:
+            mids = [(a + b) / 2 for a, b in zip(xs, xs[1:])]
+            bands = [(a, max(b - a, 1)) for a, b in zip([ml] + mids, mids + [ml + plot_w])]
+        for i, ((lb, v, games), (bx, bw)) in enumerate(zip(self._points, bands)):
+            tip = f"{lb} · {ax.name} {ax.text(v)}"
+            if self._ma is not None and self._ma[i] is not None:
+                tip += f" · {self._ma_name} {ax.text(self._ma[i])}"
+            if games is not None:
+                tip += f" ({games}경기)"
+            self._hits.append((QRectF(bx, top, bw, foot - top), tip))
+
+    @staticmethod
+    def _free_rect(cands: list[QRectF], placed: list[QRectF]) -> QRectF:
+        """후보 중 이미 놓인 글자와 안 겹치는 첫 칸 — 다 겹치면 마지막 후보."""
+        for rect in cands:
+            if not any(rect.intersects(r) for r in placed):
+                return rect
+        return cands[-1]
+
+    def _draw_ma(self, p: QPainter, xs: list[float], y_of) -> None:
+        pen = QPen(QColor(T.CHART_NEUTRAL), self.MA_W)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        p.setPen(pen)
+        segs, seg = [], []
+        for x, m in zip(xs, self._ma):
+            if m is None:
+                if seg:
+                    segs.append(seg)
+                seg = []
+            else:
+                seg.append(QPointF(x, y_of(m)))
+        if seg:
+            segs.append(seg)
+        for s in segs:
+            if len(s) == 1:
+                p.drawPoint(s[0])
+            else:
+                p.drawPolyline(QPolygonF(s))
+        self.marks["ma_points"] = sum(len(s) for s in segs)
+        self.marks["ma_segments"] = len(segs)
+
+    def _draw_ref_lines(self, p: QPainter, y_of, ml: float, plot_w: float) -> list:
+        """기준 계단선 — 그 날짜에 유효했던 값(그날 이전 마지막 값)을 오른쪽으로 잇는다.
+        날짜가 없으면(순번 x) 어디에 놓을지 몰라 안 그린다. 돌려주는 것: 오른쪽 끝 글자 재료."""
+        if self._x_dates is None:
+            self.marks["ref"] = [(name, "no-dates", "") for name, _, _ in self._refs]
+            return []
+        d0, dn = self._x_dates[0], self._x_dates[-1]
+        span = (dn - d0).days
+
+        def x_of(d) -> float:
+            if not span:
+                return ml + plot_w / 2
+            return min(max(ml + plot_w * (d - d0).days / span, ml), ml + plot_w)
+
+        ends = []
+        for name, series, color in self._refs:
+            series = sorted(series, key=lambda t: t[0])
+            if not series:
+                continue
+            before = [t for t in series if t[0] <= d0]
+            steps = ([(d0, before[-1][1])] if before else []) + [t for t in series if d0 < t[0] <= dn]
+            if not steps:  # 전부 창 뒤 — 첫 값부터
+                steps = [series[0]]
+            pen = QPen(QColor(color), 1.5)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            path = QPainterPath(QPointF(x_of(steps[0][0]), y_of(steps[0][1])))
+            for (_, v0), (d1, v1) in zip(steps, steps[1:]):
+                path.lineTo(x_of(d1), y_of(v0))
+                path.lineTo(x_of(d1), y_of(v1))
+            path.lineTo(ml + plot_w, y_of(steps[-1][1]))
+            p.strokePath(path, pen)
+            ends.append((name, steps[-1][1]))
+        return ends
+
+    def _draw_ref_labels(self, p: QPainter, fm: QFontMetrics, ends, right: float,
+                         top: float, bottom: float, placed: list[QRectF]) -> None:
+        """기준선 오른쪽 끝 글자 — 축 범위 밖이면 끝에 ▲/▼ 로(선은 가장자리에 붙는다)."""
+        ax = self._axis
+        states = []
+        for name, v in ends:
+            if v > ax.hi:
+                state, text, ys = "above", f"▲ {name} {ax.text(v)}", [top - fm.height() + 2, top + 2]
+            elif v < ax.lo:
+                state, text, ys = "below", f"▼ {name} {ax.text(v)}", [bottom - fm.height() - 2]
+            else:
+                y = bottom - (bottom - top) * (v - ax.lo) / (ax.hi - ax.lo)
+                state, text, ys = "in", f"{name} {ax.text(v)}", [y - fm.height() - 2, y + 2]
+            tw = fm.horizontalAdvance(text)
+            cands = [QRectF(right - tw, max(y, 0), tw, fm.height()) for y in ys]
+            cands += [QRectF(right - tw, max(ys[-1], 0) + k * fm.height(), tw, fm.height()) for k in (1, -1)]
+            rect = self._free_rect(cands, placed)
+            p.fillRect(rect.adjusted(-3, 0, 2, 0), QColor(T.PANEL))
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, text)
+            placed.append(rect)
+            states.append((name, state, text))
+        self.marks["ref"] = states
+
+    def _draw_counts(self, p: QPainter, fm: QFontMetrics, xs: list[float], s_top: float,
+                     s_bot: float, right: float) -> None:
+        """경기 수 띠 — 점마다 막대, 가장 큰 값만 숫자(전부 적으면 읽히지 않는다)."""
+        games = [g or 0 for _, _, g in self._points]
+        peak = max(games)
+        gaps = [b - a for a, b in zip(xs, xs[1:]) if b > a]
+        bw = max(2.0, min(BAR_MAX, (min(gaps) if gaps else BAR_MAX) * 0.6))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(T.CHART_NEUTRAL))
+        drawn = 0
+        for x, g in zip(xs, games):
+            if g <= 0:
+                continue
+            bh = max((s_bot - s_top) * g / peak, 1.0)
+            r = min(BAR_RADIUS, bw / 2)
+            p.drawRoundedRect(QRectF(x - bw / 2, s_bot - bh, bw, bh), r, r)
+            drawn += 1
+        self.marks["count_bars"] = drawn
+        if peak > 0:
+            i = max(range(len(games)), key=lambda k: (games[k], k))
+            text = f"{peak:,}경기"
+            tw = fm.horizontalAdvance(text)
+            tx = xs[i] + bw / 2 + 4
+            if tx + tw > right:
+                tx = xs[i] - bw / 2 - 4 - tw
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(max(tx, 0), s_top, tw, fm.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+            self.marks["count_peak"] = (i, text)
 
 
 class DonutChart(_Chart):

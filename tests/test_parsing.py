@@ -1417,6 +1417,91 @@ def test_aggregate_players_keeps_position_code():
     assert ps and all(p.position == f"P{p.pos_code}" for p in ps), [(p.position, p.pos_code) for p in ps]
 
 
+# ── 1.3.1 8단계 — 이동평균 · 하루 등급 · 슈챔 진입 · 시즌별 등급 ─────────────────
+def _md(when: datetime, result: str):
+    """아무 날짜의 합성 경기 — _m 은 9·10월만 만든다."""
+    m = _m(1, result)
+    return models.MatchSummary(**{**m.__dict__, "match_id": f"{when:%Y%m%d%H%M}-{result}", "match_date": when})
+
+
+def test_moving_win_rate_calendar_window():
+    mw = models.moving_win_rate
+    d = lambda mo, dd, y=2026: date(y, mo, dd)  # noqa: E731
+    # 창 경계 — 그날 포함 앞 6일(09-04)은 들고, 7일 전(09-03)은 뺀다
+    ms = [_md(datetime(2026, 9, 3, 12), "승"), _md(datetime(2026, 9, 4, 12), "패"),
+          _md(datetime(2026, 9, 10, 12), "승")]
+    assert mw(ms, [d(9, 10)], min_n=1) == [50.0], mw(ms, [d(9, 10)], min_n=1)  # 3일 들면 66.7 · 4일 빼면 100
+    # 가중 — 하루 1승(100%) · 다음 날 3패(0%) → 1/4 = 25%(날짜별 승률의 단순 평균이면 50%)
+    ms = [_md(datetime(2026, 9, 1, 12), "승")] + [_md(datetime(2026, 9, 2, h), "패") for h in (10, 11, 12)]
+    assert mw(ms, [d(9, 2)], min_n=1) == [25.0]
+    # 경기 없는 날도 창으로 잰다 — 09-05 엔 경기가 없지만 09-01~09-05 가 창
+    assert mw(ms, [d(9, 5)], min_n=1) == [25.0]
+    # 표본 미달이면 None(선이 끊긴다) — min_n 은 부르는 쪽이 준다
+    assert mw(ms, [d(9, 2)], min_n=5) == [None]
+    assert mw(ms, [d(9, 2)], min_n=4) == [25.0]
+    # 창에 경기가 하나도 없으면 None(0% 가 아니다)
+    assert mw(ms, [d(9, 20)], min_n=1) == [None]
+    # 연도가 바뀌는 창(12/28~01/03) — 12/27 은 빠진다
+    ms = [_md(datetime(2025, 12, 27, 9), "승"), _md(datetime(2025, 12, 28, 9), "승"),
+          _md(datetime(2026, 1, 3, 9), "패")]
+    assert mw(ms, [date(2026, 1, 3)], min_n=1) == [50.0]
+    # 오류(중단) 경기는 분모에 안 든다 — PeriodRate.games 와 같은 규칙
+    ms = [_md(datetime(2026, 9, 1, 9), "승"), _md(datetime(2026, 9, 1, 10), "오류")]
+    assert mw(ms, [d(9, 1)], min_n=1) == [100.0]
+
+
+def test_win_rate_trend_points_carry_their_day():
+    ms = [_m(1, "승"), _m(3, "패"), _m(3, "승", hour=13)]
+    got = models.win_rate_trend(ms, days=30)
+    assert [p.day for p in got] == [date(2026, 9, 1), date(2026, 9, 3)], got
+    assert [p.label for p in got] == ["09/01", "09/03"]  # 라벨은 그대로
+
+
+def test_daily_division_last_of_day():
+    t = lambda dd, h: datetime(2026, 7, dd, h)  # noqa: E731
+    # 처음·마지막·최고가 전부 다르게(같으면 '마지막 대신 처음'을 못 가른다 — 변이로 확인)
+    pts = [(t(6, 9), 1000), (t(5, 11), 1000), (t(5, 9), 900), (t(5, 10), 800)]  # 순서 섞임
+    got = st.daily_division(pts)
+    assert [(x.day.day, x.last, x.first, x.best) for x in got] == [(5, 1000, 900, 800), (6, 1000, 1000, 1000)], got
+    assert st.daily_division([]) == []
+
+
+def test_division_entries_counts_each_climb():
+    t = lambda h, mi=0: datetime(2026, 7, 5, h, mi)  # noqa: E731
+    sc = st.SUPER_CHAMPION_DIVISION_ID
+    assert sc == 800
+    # R7 모양 — 하루에 오르내림 반복: 진입은 '바로 앞과 다르게 슈챔이 나온 경기'마다
+    seq = [900, 900, 800, 800, 900, 800, 900, 900, 800]
+    pts = [(t(9, i), div) for i, div in enumerate(seq)]
+    entries, at_start = st.division_entries(pts)
+    assert entries == [t(9, 2), t(9, 5), t(9, 8)], entries  # '처음 한 번만'이면 1개
+    assert at_start is False
+    # 입력 순서 무관
+    assert st.division_entries(list(reversed(pts)))[0] == entries
+    # 첫 경기가 이미 슈챔 — 진입으로 세지 않고 따로 알린다
+    pts = [(t(9, 0), 800), (t(9, 1), 800), (t(9, 2), 900), (t(9, 3), 800)]
+    entries, at_start = st.division_entries(pts)
+    assert entries == [t(9, 3)] and at_start is True, (entries, at_start)
+    # 날짜 없는 점은 건너뛴다 · 빈 입력
+    assert st.division_entries([(None, 800), (t(9, 1), 900), (t(9, 2), 800)]) == ([t(9, 2)], False)
+    assert st.division_entries([]) == ([], False)
+    # 다른 등급을 물으면 그 등급으로
+    assert st.division_entries([(t(9, 0), 1000), (t(9, 1), 900)], division=900) == ([t(9, 1)], False)
+
+
+def test_season_divisions_follow_season_boundary():
+    # 경계일 00:00 경기는 새 시즌(시즌 3)에 — 표의 행과 같은 갈림
+    a = _md(datetime(2026, 5, 27, 23, 59), "승")
+    b = _md(datetime(2026, 5, 28, 0, 0), "패")
+    c = _md(datetime(2026, 6, 10, 12), "승")
+    e = _md(datetime(2026, 8, 1, 12), "승")  # 진행 중 — 등급 점 없음
+    groups = sn.group_by_season(_SEASONS, [a, b, c, e], key=lambda m: m.match_date)
+    pts = [(a.match_date, 1000), (b.match_date, 900), (c.match_date, 800)]
+    got = st.season_divisions(pts, groups)
+    assert [(s.no if s else None) for s, _ in groups] == [None, 89, 88]
+    assert got == [None, (900, 800, 800), (1000, 1000, 1000)], got
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

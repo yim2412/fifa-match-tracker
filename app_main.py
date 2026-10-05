@@ -53,7 +53,7 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
-    StatCard, TrendChart, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
+    StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
     wdl_text, win_rate_bar,
 )
 
@@ -451,7 +451,8 @@ class MatchLoader(QThread):
         return fut
 
     def _safe_max_division(self, ouid: str):
-        """감독모드 줄 하나 → {"division", "date"}. 그 종류 줄이 없으면 {} · 실패면 None(검색은 안 죽인다)."""
+        """감독모드 줄 하나 → {"division", "date", "at"}. 그 종류 줄이 없으면 {} · 실패면 None(검색은 안 죽인다).
+        at 은 achievementDate 전체(초까지) — 슈챔 달성 기록이 목록의 진입 시각과 ±60초로 대조한다."""
         try:
             rows = self._api.get_max_division(ouid)
         except Exception:
@@ -460,7 +461,8 @@ class MatchLoader(QThread):
                     and r.get("matchType") == config.DEFAULT_MATCH_TYPE), None)
         if row is None or row.get("division") is None:
             return {}
-        return {"division": row.get("division"), "date": str(row.get("achievementDate") or "")[:10]}
+        at = str(row.get("achievementDate") or "")
+        return {"division": row.get("division"), "date": at[:10], "at": at}
 
     def _send_max_division(self, fut, ouid: str) -> None:
         """끝났으면 지금, 아니면 끝나는 스레드에서. 여기서 기다리지 않는다(스레드가 살아 있으면 새 검색이 막힌다)."""
@@ -1103,7 +1105,7 @@ class MainWindow(QMainWindow):
     TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "승", "무", "패", "승률"]
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
                               "평균 팀가치", "최저 팀가치", "최고 팀가치"]
-    SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률",
+    SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
                       "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
 
     def __init__(self, api: FCOnlineAPI):
@@ -1993,6 +1995,9 @@ class MainWindow(QMainWindow):
         self.lb_season_note.setWordWrap(True)
         self.lb_season_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_season_note)
+        # 시즌 승률 막대 — 오른쪽 글에 경기 수(GroupedBarChart 는 계열마다 최대값만 적어 경기 수를 못 단다)
+        self.season_bars = charts.HBarList()
+        v.addWidget(self.season_bars)
         self.tbl_seasons = self._make_table(self.SEASON_COLUMNS)
         v.addWidget(self.tbl_seasons, 1)
         return w
@@ -2038,22 +2043,41 @@ class MainWindow(QMainWindow):
 
         self.gb_trend = QGroupBox("최근 30일 승률 추이")
         gv = QVBoxLayout(self.gb_trend)
-        self.trend_chart = TrendChart([])
+        # 1.3.1 — 옛 widgets.TrendChart(GREEN 꺾은선)를 대시보드와 같은 그래프로. 50% 기준선 ·
+        # 7일 이동평균(달력 7일, 표본 미달이면 끊김) · 아래 띠에 그날 경기 수.
+        self.trend_chart = charts.AreaTrendChart()
         gv.addWidget(self.trend_chart)
         v.addWidget(self.gb_trend, 1)
 
         # 등급 추이 — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음.
-        # 기간(일수)은 위 승률 추이와 같은 스핀박스를 공유한다.
+        # 기간(일수)은 위 승률 추이와 같은 스핀박스를 공유한다. 점은 하루 마지막 등급.
         self.gb_division = QGroupBox("등급 추이")
         dv = QVBoxLayout(self.gb_division)
         self.division_chart = DivisionChart()
         dv.addWidget(self.division_chart)
         v.addWidget(self.gb_division, 1)
+
+        # 슈퍼 챔피언스 달성 기록 — 시즌 필터 무시(평생 기록). _render_sc_records 가 채운다.
+        self.gb_sc = QGroupBox("슈퍼 챔피언스 달성 기록")
+        sv = QVBoxLayout(self.gb_sc)
+        self.lb_sc_note = QLabel("")
+        self.lb_sc_note.setWordWrap(True)
+        self.lb_sc_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_sc_list = QLabel("")
+        self.lb_sc_list.setWordWrap(True)
+        self.lb_sc_list.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.lb_sc_nexon = QLabel("")
+        self.lb_sc_nexon.setWordWrap(True)
+        self.lb_sc_nexon.setStyleSheet(f"color: {T.TEXT_DIM};")
+        for lb in (self.lb_sc_note, self.lb_sc_list, self.lb_sc_nexon):
+            sv.addWidget(lb)
+        v.addWidget(self.gb_sc)
         return w
 
     PERIOD_CHOICES = [("1일", 1), ("2일", 2), ("1주", 7), ("1개월", 30)]
-    PERIOD_COLUMNS = ["기간", "경기", "승", "무", "패", "승률",
+    PERIOD_COLUMNS = ["기간", "경기", "승", "무", "패", "승률", "평균 대비",
                       "평균득점", "평균실점"]
+    PERIOD_HEAT_FULL_PP = 15.0  # 평균 대비 이만큼(%p) 벌어지면 가장 진한 색
 
     def _build_period_tab(self) -> QWidget:
         """기간별 추이 — 누적 전체 경기를 1일/2일/1주/1개월 단위로 묶은 전적 표."""
@@ -2074,24 +2098,71 @@ class MainWindow(QMainWindow):
         ctrl.addWidget(self.lb_streaks)
         ctrl.addStretch(1)
         v.addLayout(ctrl)
+        # 표와 같은 묶음 단위의 승률 그래프(오래된 것부터) — 단위가 다르면 헷갈린다
+        self.period_chart = charts.AreaTrendChart()
+        v.addWidget(self.period_chart)
         self.tbl_period = self._make_table(self.PERIOD_COLUMNS)
         v.addWidget(self.tbl_period, 1)
         return w
 
     def _render_period(self, matches: list[MatchSummary]) -> None:
         periods = period_stats(matches, days=self.cb_period.currentData() or 7)
+        self.period_chart.set_data([(p.label, p.win_rate, p.games) for p in reversed(periods)],
+                                   counts=True)
+        total = sum(p.games for p in periods)
+        overall = sum(p.win for p in periods) / total * 100 if total else 0.0
         rows = [[p.label, (str(p.games), p.games), (str(p.win), p.win),
                 (str(p.draw), p.draw), (str(p.lose), p.lose),
                 (f"{p.win_rate:.1f}%", p.win_rate),
+                (f"{p.win_rate - overall:+.1f}%p", p.win_rate - overall),
                 (f"{p.avg_gf:.2f}", p.avg_gf), (f"{p.avg_ga:.2f}", p.avg_ga)]
                for p in periods]
-        self._fill(self.tbl_period, rows)
+        # 색·굵게를 채운 순서대로 붙인 뒤에 정렬을 켠다(표 함정 1번 — 다시 그릴 때 헤더 정렬이 남아 있다)
+        self._fill(self.tbl_period, rows, enable_sort=False)
+        self._tint_period_rows(periods, overall)
+        self.tbl_period.setSortingEnabled(True)
         best_win, best_lose = longest_streaks(matches)
         kind, n = current_streak(matches)
         now_text = f"현재 {n}{kind}" if kind else "현재 -"
         self.lb_streaks.setText(
             f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose}"
             f" ({self._scope_text()} 기준)")
+
+    def _tint_period_rows(self, periods: list, overall: float) -> None:
+        """승률·평균 대비 칸 — 평균보다 높으면 HEAT_ATK, 낮으면 HEAT_DEF 쪽으로(불투명, 표 함정 2번).
+        최고·최저 기간은 굵게 — 후보는 경기 ≥ MIN_COND 인 기간만(4판짜리 주가 최고가 되지 않게).
+        미달 기간은 칠하지 않고 흐리게 + 툴팁. 행 r = periods[r] 이어야 한다(정렬은 이 뒤에 켠다)."""
+        t = self.tbl_period
+        rate_col = self.PERIOD_COLUMNS.index("승률")
+        vs_col = self.PERIOD_COLUMNS.index("평균 대비")
+        few = core.MIN_COND
+        enough = [i for i, p in enumerate(periods) if p.games >= few]
+        best = max(enough, key=lambda i: periods[i].win_rate, default=None)
+        worst = min(enough, key=lambda i: periods[i].win_rate, default=None)
+        if best is not None and worst is not None and periods[best].win_rate == periods[worst].win_rate:
+            best = worst = None  # 전부 같은 승률 — 최고·최저가 없다
+        self._period_marks = {"best": best, "worst": worst}
+        for r, p in enumerate(periods):
+            cells = [t.item(r, rate_col), t.item(r, vs_col)]
+            if p.games < few:
+                for it in cells:
+                    if it:
+                        it.setForeground(QColor(T.TEXT_DIM))
+                        it.setToolTip(sample_note(p.games, few))
+                continue
+            diff = p.win_rate - overall
+            frac = min(abs(diff) / self.PERIOD_HEAT_FULL_PP, 1.0)
+            for it in cells:
+                self._heat(it, frac, T.HEAT_ATK if diff > 0 else T.HEAT_DEF)
+            for kind, idx in (("최고", best), ("최저", worst)):
+                if r == idx:
+                    for it in cells:
+                        if it:
+                            f = it.font()
+                            f.setBold(True)
+                            it.setFont(f)
+                            it.setToolTip(f"이 범위에서 승률이 가장 {'높은' if kind == '최고' else '낮은'} 기간"
+                                          f"(경기 {few}판 이상 중)")
 
     def _build_analysis_tab(self) -> QWidget:
         """흐름 분석 — 집계를 문장으로. 최근 흐름 / 이기는 · 지는 패턴."""
@@ -3159,6 +3230,7 @@ class MainWindow(QMainWindow):
         if info is not None:
             self._max_division[ouid] = info
         self._render_ranker()
+        self._render_sc_records()  # 이 신호는 finished_ok 뒤에 온다 — 승률 그래프의 넥슨 줄도 다시
 
     def _on_quota_hit(self, msg: str) -> None:
         if getattr(self, "_quiet_search", False):
@@ -4560,22 +4632,84 @@ class MainWindow(QMainWindow):
         days = self.sp_trend_days.value()
         self.gb_trend.setTitle(f"최근 {days}일 승률 추이")
         self._trend_periods = win_rate_trend(matches, days=days)
-        self.trend_chart.set_points(
-            [(p.label, p.win_rate, p.games) for p in self._trend_periods])
+        # 이동평균은 그래프에만 — _trend_periods 는 대시보드가 같이 쓴다. 창 앞 6일도 matches(시즌 범위) 안에서만.
+        ma = core.moving_win_rate(matches, [p.day for p in self._trend_periods], min_n=core.MIN_COND)
+        self.trend_chart.set_data(
+            [(p.label, p.win_rate, p.games) for p in self._trend_periods],
+            counts=True, baseline=50, ma=ma)
 
-        # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다.
-        div_points = core.division_trend(self._details, self._ouid)
-        if div_points:
-            latest = max(t for t, _ in div_points).date()
-            cutoff = latest - timedelta(days=days - 1)
-            shown = [(f"{t:%m/%d}", div) for t, div in div_points
-                     if t.date() >= cutoff]
-        else:
-            shown = []
+        # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다. 점은 하루 마지막 등급(1만 경기 → 약 100점).
+        days_div = core.daily_division(core.division_trend(self._details, self._ouid))
+        if days_div:
+            cutoff = days_div[-1].day - timedelta(days=days - 1)
+            days_div = [d for d in days_div if d.day >= cutoff]
+        name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
+        entry_days = {t.date() for t in self._sc_entries()[0]}
         self.gb_division.setTitle(f"최근 {days}일 등급 추이")
-        self.division_chart.set_data(shown, self._division_names)
+        self.division_chart.set_data(
+            [(f"{d.day:%m/%d}", d.last) for d in days_div], self._division_names,
+            tips=[f"{d.day:%Y-%m-%d} · 마지막 {name(d.last)} · 처음 {name(d.first)} · 최고 {name(d.best)}"
+                  for d in days_div],
+            markers=[i for i, d in enumerate(days_div) if d.day in entry_days])
 
         self._show_trend_summary()
+        self._render_sc_records()
+
+    def _sc_entries(self) -> tuple[list, bool]:
+        """저장된 전체(_details_all — 시즌 필터 무시)에서 슈챔 진입 시각 — 캐시.
+
+        _render_trend 는 지연 그리기 밖이라 검색·시즌 전환마다 돈다 — 1만 경기 훑기(약 10ms)를 매번 안 하게
+        목록 id·길이·맨 앞 경기로 키를 잡는다(_narrate_scope 와 같은 방식)."""
+        d = self._details_all
+        key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
+        if getattr(self, "_sc_cache_key", None) != key:
+            self._sc_cache = core.division_entries(core.division_trend(d, self._ouid),
+                                                   core.SUPER_CHAMPION_DIVISION_ID)
+            self._sc_cache_key = key
+        return self._sc_cache
+
+    SC_NEXON_MATCH_S = 60  # 넥슨 최근 달성 시각이 목록의 진입과 이만큼 안이면 같은 것으로 본다
+
+    def _render_sc_records(self) -> None:
+        """슈퍼 챔피언스 달성 기록 — _render_trend 와 _on_max_division 둘 다 부른다.
+        maxdivision 신호는 finished_ok 뒤에 오므로 _render_trend 만 부르면 넥슨 줄이 늘 빠진다."""
+        entries, at_start = self._sc_entries()
+        dated = [m.match_date for m in self._matches_all if m.match_date is not None]
+        first = min(dated).date() if dated else None
+        span = f"{first:%Y-%m-%d} ~" if first else "없음"
+        self.lb_sc_note.setText(
+            f"저장된 경기 범위({span})만 — 앱을 쓰기 전 기록은 없습니다. "
+            "경기 사이가 비면 그 사이 달성은 빠질 수 있습니다.")
+        by_day: dict = {}
+        for t in entries:
+            by_day.setdefault(t.date(), []).append(t)
+        lines = [f"{d:%Y-%m-%d} · {len(ts)}번 ({' · '.join(f'{t:%H:%M}' for t in ts)})"
+                 for d, ts in sorted(by_day.items(), reverse=True)]
+        if at_start and first:
+            lines.append(f"기록 시작({first:%Y-%m-%d}) 때 이미 슈퍼 챔피언스")
+        self.lb_sc_list.setText("\n".join(lines) if lines else
+                                "저장된 경기에는 슈퍼 챔피언스 달성 기록이 없습니다")
+        self.lb_sc_nexon.setText(self._sc_nexon_text(entries, first) or "")
+        self.lb_sc_nexon.setVisible(bool(self.lb_sc_nexon.text()))
+
+    def _sc_nexon_text(self, entries: list, first) -> str | None:
+        """넥슨 기록상 최근 달성이 목록에 없을 때만 한 줄. 최고가 슈챔이 아니면 없다."""
+        info = self._max_division.get(self._ouid) if self._ouid else None
+        if not info or info.get("division") != core.SUPER_CHAMPION_DIVISION_ID or not info.get("date"):
+            return None
+        at = None
+        try:
+            at = datetime.fromisoformat(info["at"]) if info.get("at") else None
+        except ValueError:
+            at = None
+        if at is not None:
+            if any(abs((t - at).total_seconds()) <= self.SC_NEXON_MATCH_S for t in entries):
+                return None
+        elif any(f"{t:%Y-%m-%d}" == info["date"] for t in entries):
+            return None  # 옛 값(날짜만) — 날짜로 비교
+        where = "저장된 경기 밖" if first is None or info["date"] < f"{first:%Y-%m-%d}" else \
+            "저장된 경기에서는 못 찾음 — 그 사이 경기가 비었을 수 있습니다"
+        return f"넥슨 기록상 최근 달성 {info['date']} ({where})"
 
     def _show_trend_summary(self) -> None:
         """승률 그래프 페이지의 기간 요약 — 선택한 기간의 최고·평균·최저 승률."""
@@ -4607,26 +4741,49 @@ class MainWindow(QMainWindow):
     def _render_seasons(self) -> None:
         groups = self._season_groups()
         last_end = max((s.end for s in self._rank_seasons), default=None)
-        rows = []
-        for season, group in groups:
-            s = summarize(group)
+        sums = [summarize(group) for _, group in groups]
+        divs = core.season_divisions(core.division_trend(self._details_all, self._ouid), groups)
+        name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
+        rows, bars, tips = [], [], []
+        for i, ((season, group), s, dv) in enumerate(zip(groups, sums, divs)):
             if season is None:
                 label, span, key = "진행 중", f"{last_end:%Y-%m-%d} ~", 99999999
             else:
                 label, span = season.label, season.span_text
                 key = int(season.start.strftime("%Y%m%d"))
+            # 바로 앞 시즌 = 목록에서 다음 것(최신순) — 경기 없는 시즌은 목록에 없어 건너뛴다
+            prev = sums[i + 1] if i + 1 < len(sums) else None
+            if prev is not None and s.total and prev.total:
+                diff = s.win_rate - prev.win_rate
+                vs = (f"{diff:+.1f}%p", diff)
+            else:
+                vs = ("—", -1e9)
+            grade = ((f"{name(dv[0])} → {name(dv[1])}" if dv[0] != dv[1] else name(dv[0]), -dv[1])
+                     if dv else ("—", -1e9))
+            tips.append(f"최고 {name(dv[2])}" if dv else "")
             rows.append([
                 (label, key), span,
                 (f"{s.total:,}", s.total),
                 (f"{s.win:,}", s.win), (f"{s.draw:,}", s.draw),
                 (f"{s.lose:,}", s.lose),
                 (f"{s.win_rate:.1f}%", s.win_rate),
+                vs, grade,
                 (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
                 (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
                 (f"{s.avg_possession:.1f}%", s.avg_possession),
                 (f"{s.avg_rating:.2f}", s.avg_rating),
             ])
-        self._fill(self.tbl_seasons, rows)
+            weak = s.total < core.MIN_COND
+            bars.append((label, s.win_rate if s.total else None, f"{s.win_rate:.1f}% · {s.total:,}경기",
+                         sample_note(s.total, core.MIN_COND) if weak else f"{label} · {span}", weak))
+        self.season_bars.set_data(bars)
+        self._fill(self.tbl_seasons, rows, enable_sort=False)  # 툴팁을 채운 순서대로 붙인다(표 함정 1번)
+        grade_col = self.SEASON_COLUMNS.index("등급")
+        for r, tip in enumerate(tips):
+            item = self.tbl_seasons.item(r, grade_col)
+            if item and tip:
+                item.setToolTip(tip)
+        self.tbl_seasons.setSortingEnabled(True)
 
         if not self._rank_seasons:
             self.lb_season_note.setText(

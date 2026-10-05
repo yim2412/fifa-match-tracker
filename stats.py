@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from itertools import combinations
+from typing import NamedTuple
 
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
@@ -18,6 +19,7 @@ GK_POSITION = 0
 #   800 슈퍼챔피언스 · 900 챔피언스 · 1000 슈퍼챌린지 · 1100~1300 챌린지1~3 · ...
 # "챔피언스 이상" = 900 이하.
 CHAMPION_DIVISION_ID = 900
+SUPER_CHAMPION_DIVISION_ID = 800
 
 
 def is_champion_or_above(division_id: int | None) -> bool:
@@ -44,6 +46,68 @@ def division_trend(details: list, ouid: str) -> list[tuple[datetime, int]]:
             continue
     out.sort(key=lambda t: t[0])
     return out
+
+class DayDivision(NamedTuple):
+    """하루 등급 — 그래프 점은 last, 툴팁에 first·best(id 가 작을수록 높다)."""
+    day: date
+    last: int
+    first: int
+    best: int
+
+
+def daily_division(points: list[tuple[datetime, int]]) -> list[DayDivision]:
+    """division_trend 결과를 하루 한 점으로 — 그날 마지막 경기 등급(오래된 날부터).
+
+    경기마다 한 점이면 1만 경기 계정이 1만 점(R7: 10,949 → 111일)이라 계단이 읽히지 않는다."""
+    days: dict[date, DayDivision] = {}
+    for t, div in sorted(points, key=lambda x: x[0]):
+        d = t.date()
+        cur = days.get(d)
+        days[d] = DayDivision(d, div, div, div) if cur is None else \
+            DayDivision(d, div, cur.first, min(cur.best, div))
+    return [days[d] for d in sorted(days)]
+
+
+def division_entries(points: list[tuple[datetime, int]],
+                     division: int = SUPER_CHAMPION_DIVISION_ID) -> tuple[list[datetime], bool]:
+    """그 등급에 오른 시각들 — 시간순으로 바로 앞 경기와 다르게 그 등급이 나온 경기(오래된 것부터).
+
+    저장된 첫 경기가 이미 그 등급이면 진입으로 세지 않는다(그 전에 언제 올랐는지 모른다) —
+    대신 둘째 값이 True("기록 시작 때 이미 그 등급"). 넥슨 maxdivision 의 achievementDate 가
+    이 정의의 경기 시각과 초 단위로 맞았다(1.2.1 실측)."""
+    seq = sorted((t, div) for t, div in points if t is not None)
+    entries: list[datetime] = []
+    prev = None
+    for i, (t, div) in enumerate(seq):
+        if div == division and (i > 0 and prev != division):
+            entries.append(t)
+        prev = div
+    return entries, bool(seq) and seq[0][1] == division
+
+
+def season_divisions(points: list[tuple[datetime, int]],
+                     groups: list[tuple[object, list]]) -> list[tuple[int, int, int] | None]:
+    """시즌 그룹마다 그 시즌 (첫 경기 등급, 마지막 경기 등급, 최고 등급) — groups 와 같은 순서.
+
+    groups 는 seasons.group_by_season 결과(시즌, 경기 목록) 그대로 — 경기 시각으로 점을 그 그룹에
+    넣으므로 시즌 경계(반개구간)는 표의 행과 똑같이 갈린다. 등급 있는 점이 없으면 None."""
+    owner: dict[datetime, int] = {}
+    for gi, (_, ms) in enumerate(groups):
+        for m in ms:
+            when = getattr(m, "match_date", None)
+            if when is not None:
+                owner[when.replace(microsecond=0)] = gi
+    acc: dict[int, list[tuple[datetime, int]]] = defaultdict(list)
+    for t, div in points:
+        gi = owner.get(t.replace(microsecond=0))
+        if gi is not None:
+            acc[gi].append((t, div))
+    out: list[tuple[int, int, int] | None] = []
+    for gi in range(len(groups)):
+        seq = sorted(acc.get(gi, []), key=lambda x: x[0])
+        out.append((seq[0][1], seq[-1][1], min(d for _, d in seq)) if seq else None)
+    return out
+
 
 # 슛 유형. 공식 문서에 매핑이 없어 실제 응답으로 확정했다.
 #  - type 8/9 는 shoot.goalFreekick / goalPenaltyKick 집계와 200개 선수-경기

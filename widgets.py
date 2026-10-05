@@ -4,12 +4,12 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
-    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import theme as T
@@ -986,98 +986,46 @@ class RatioBarRow(QWidget):
         v.addWidget(bar)
 
 
-class TrendChart(QWidget):
-    """일별 승률 꺾은선 그래프 — QtCharts 없이 QPainter로 직접 그린다.
-
-    points: (라벨, 승률, 경기수) 튜플 리스트, 날짜 오름차순. 경기가 없는 날은
-    아예 넘기지 말 것 — 0%로 그려지면 "그 날 다 짐"과 구분이 안 된다.
-    """
-
-    def __init__(self, points: list[tuple[str, float, int]]):
-        super().__init__()
-        self._points = points
-        self.setMinimumHeight(220)
-
-    def set_points(self, points: list[tuple[str, float, int]]) -> None:
-        self._points = points
-        self.update()
-
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        ml, mr, mt, mb = 44, 16, 14, 26
-        plot_w = max(w - ml - mr, 1)
-        plot_h = max(h - mt - mb, 1)
-
-        p.fillRect(self.rect(), QColor(T.PANEL))
-
-        font = p.font()
-        font.setPointSize(9)
-        p.setFont(font)
-        for pct in (0, 25, 50, 75, 100):
-            y = mt + plot_h * (1 - pct / 100)
-            p.setPen(QColor(T.BORDER))
-            p.drawLine(ml, int(y), w - mr, int(y))
-            p.setPen(QColor(T.TEXT_DIM))
-            p.drawText(2, int(y) + 4, f"{pct}%")
-
-        if not self._points:
-            p.setPen(QColor(T.TEXT_DIM))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                      "표시 구간에 날짜가 있는 경기가 없습니다.")
-            return
-
-        n = len(self._points)
-
-        def xy(i: int, rate: float) -> QPointF:
-            x = ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
-            y = mt + plot_h * (1 - rate / 100)
-            return QPointF(x, y)
-
-        pts = [xy(i, rate) for i, (_, rate, _) in enumerate(self._points)]
-
-        p.setPen(QPen(QColor(T.GREEN), 2))
-        for a, b in zip(pts, pts[1:]):
-            p.drawLine(a, b)
-
-        p.setPen(QPen(QColor(T.PANEL), 1))
-        p.setBrush(QColor(T.GREEN))
-        for pt in pts:
-            p.drawEllipse(pt, 3.5, 3.5)
-
-        p.setPen(QColor(T.TEXT_DIM))
-        step = max(1, n // 6)
-        # 라벨 rect 의 y 는 사각형 "맨 위" 다 — h-8 로 두면 높이 14짜리 rect가
-        # h+6 까지 내려가 위젯 바깥(잘림)으로 삐져나갔다. margin_b(mb) 안에
-        # 완전히 들어오게 올려 잡는다.
-        label_y = h - mb + 6
-        for i in range(0, n, step):
-            x = pts[i].x()
-            p.drawText(int(x) - 24, label_y, 48, 14,
-                      Qt.AlignmentFlag.AlignCenter, self._points[i][0])
-
-
 class DivisionChart(QWidget):
-    """등급(디비전) 추이 계단 그래프 — TrendChart 와 같은 방식(QPainter 직접).
+    """등급(디비전) 추이 계단 그래프 — QPainter 직접.
 
-    points: (라벨, divisionId) 리스트, 날짜 오름차순.
+    points: (라벨, divisionId) 리스트, 날짜 오름차순(1.3.1 부터 하루 한 점 — stats.daily_division).
     names: divisionId -> 등급 이름(오픈API division 메타). 등급은 id 가
     작을수록 높다 — Y축은 위가 높은 등급이 되게 뒤집어 그린다.
     Y 레벨은 데이터에 나온 등급들만 쓴다(전체 18단계를 다 그리면 실제 변화
-    폭이 눌려서 안 보인다)."""
+    폭이 눌려서 안 보인다).
+    tips: 점마다 툴팁(그날 처음·마지막·최고) · markers: 세로 점선을 그을 점 번호(슈챔 진입한 날)."""
 
     def __init__(self):
         super().__init__()
         self._points: list[tuple[str, int]] = []
         self._names: dict[int, str] = {}
+        self._tips: list[str] = []
+        self._markers: list[int] = []
+        self._hits: list[tuple[QRectF, str]] = []
+        self.marks: dict = {}
         self.setMinimumHeight(220)
+        self.setMouseTracking(True)
 
-    def set_data(self, points: list[tuple[str, int]],
-                 names: dict[int, str]) -> None:
+    def set_data(self, points: list[tuple[str, int]], names: dict[int, str],
+                 tips: list[str] | None = None, markers=()) -> None:
         self._points = points
         self._names = names
+        self._tips = list(tips) if tips is not None else []
+        self._markers = sorted(set(markers))
         self.update()
+
+    def mouseMoveEvent(self, event) -> None:
+        pos = event.position()
+        for area, text in self._hits:
+            if area.contains(pos):
+                QToolTip.showText(event.globalPosition().toPoint(), text, self)
+                return
+        QToolTip.hideText()
+
+    def leaveEvent(self, event) -> None:
+        QToolTip.hideText()
+        super().leaveEvent(event)
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
@@ -1087,6 +1035,8 @@ class DivisionChart(QWidget):
         plot_w = max(w - ml - mr, 1)
         plot_h = max(h - mt - mb, 1)
         p.fillRect(self.rect(), QColor(T.PANEL))
+        self._hits = []
+        self.marks = {}
 
         font = p.font()
         font.setPointSize(9)
@@ -1121,6 +1071,16 @@ class DivisionChart(QWidget):
         pts = [QPointF(x_of(i), y_of[div])
                for i, (_, div) in enumerate(self._points)]
 
+        # 슈챔 진입한 날 — 세로 점선(계단 밑에 깔리게 먼저)
+        shown_markers = [i for i in self._markers if 0 <= i < n]
+        if shown_markers:
+            pen = QPen(QColor(T.CHART_NEUTRAL), 1)
+            pen.setStyle(Qt.PenStyle.DotLine)
+            p.setPen(pen)
+            for i in shown_markers:
+                p.drawLine(QPointF(pts[i].x(), mt), QPointF(pts[i].x(), mt + plot_h))
+        self.marks["markers"] = len(shown_markers)
+
         # 계단형 — 등급은 경기 사이에 "서서히"가 아니라 딱 바뀌는 값이다
         p.setPen(QPen(QColor(T.YELLOW), 2))
         for a, b in zip(pts, pts[1:]):
@@ -1141,6 +1101,13 @@ class DivisionChart(QWidget):
         for i in range(0, n, step):
             p.drawText(int(pts[i].x()) - 24, label_y, 48, 14,
                       Qt.AlignmentFlag.AlignCenter, self._points[i][0])
+
+        # 마우스 올림 — 가장 가까운 점까지의 세로 띠
+        half = plot_w / (2 * (n - 1)) if n > 1 else plot_w / 2
+        for i, pt in enumerate(pts):
+            label, div = self._points[i]
+            tip = self._tips[i] if i < len(self._tips) else f"{label} · {self._names.get(div, div)}"
+            self._hits.append((QRectF(pt.x() - half, mt, 2 * half, plot_h), tip))
 
 
 def _grade_badge_colors(grade) -> tuple[str, str]:
