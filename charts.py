@@ -593,7 +593,10 @@ class ResultDots(_Chart):
 
 
 class HBarList(_Chart):
-    """가로 막대 몇 줄 — (이름, 값 0~100, 오른쪽 글, 툴팁). 한 계열이라 범례 없음."""
+    """가로 막대 몇 줄 — (이름, 값 0~100, 오른쪽 글, 툴팁[, 흐림]). 한 계열이라 범례 없음.
+
+    다섯째 값이 참이면 표본 미달 — 막대·오른쪽 글을 흐리게(theme.WEAK_MIX, 불투명). "· 표본 N" 같은
+    글자는 부르는 쪽이 오른쪽 글에 **합쳐** 넣는다 — 칸 폭을 그 글로 재므로 따로 그리면 겹친다."""
 
     ROW = 26
     THICK = 8
@@ -631,7 +634,8 @@ class HBarList(_Chart):
         val_w = max(fm.horizontalAdvance(r[2]) for r in self._rows) + 8
         bar_x = name_w
         bar_w = max(self.width() - name_w - val_w, 10)
-        for i, (name, v, right, tip) in enumerate(self._rows):
+        for i, (name, v, right, tip, *rest) in enumerate(self._rows):
+            weak = bool(rest and rest[0])
             y = i * self.ROW
             mid = y + self.ROW / 2
             p.setPen(QColor(T.TEXT_DIM))
@@ -644,9 +648,9 @@ class HBarList(_Chart):
             if v is not None and v > 0:
                 fill = QRectF(track.left(), track.top(),
                               max(track.width() * min(v, 100) / 100, self.THICK), self.THICK)
-                p.setBrush(QColor(T.CHART_UP))
+                p.setBrush(QColor(T.blend(T.CHART_GRID, T.CHART_UP, T.WEAK_MIX) if weak else T.CHART_UP))
                 p.drawRoundedRect(fill, self.THICK / 2, self.THICK / 2)
-            p.setPen(QColor(T.TEXT))
+            p.setPen(QColor(T.TEXT_DIM if weak else T.TEXT))
             p.drawText(QRectF(self.width() - val_w + 6, y, val_w - 6, self.ROW),
                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, right)
             self._hits.append((QRectF(0, y, self.width(), self.ROW), tip))

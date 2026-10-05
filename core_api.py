@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
-from analysis import SEC_FLOW, SEC_LOSE, SEC_WIN, SECTIONS, WINDOW, narrate
+from analysis import (
+    MIN_COND, MIN_OPP, MIN_PLAYER_GAMES, SEC_FLOW, SEC_LOSE, SEC_WIN, SECTIONS, WINDOW, narrate,
+)
 from models import (
     MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match, period_stats,
     summarize, win_rate_trend,
@@ -24,7 +26,7 @@ from stats import (
 
 __all__ = [
     # analysis — 집계 → 문장
-    "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "WINDOW", "narrate",
+    "MIN_COND", "MIN_OPP", "MIN_PLAYER_GAMES", "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "WINDOW", "narrate",
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "current_streak", "longest_streaks", "opponent_stats", "parse_match", "period_stats",
     "summarize", "win_rate_trend",

@@ -26,7 +26,7 @@ from charts import (AreaTrendChart, DonutChart, GroupedBarChart, HBarList, Radar
                     ResultDots, RingGauge)
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
-from widgets import add_shadow, wdl_text
+from widgets import add_shadow, sample_note, wdl_text
 
 RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
 DOTS_N = 20            # 최근 결과 점 개수
@@ -402,8 +402,11 @@ class DashboardPage(QWidget):
         rows = []
         for b in core.time_of_day_rates(d.scope_matches):
             if b.games:
-                rows.append((b.label, b.win_rate, f"{b.win_rate:.0f}% · {b.games:,}",
-                             f"{b.label} {b.span} · {wdl_text(b.win, b.draw, b.lose)}"))
+                weak = b.games < core.MIN_COND  # 표본 흐림 — 글자에도 "표본" 을 넣어 색만으로 구분하지 않는다
+                tip = f"{b.label} {b.span} · {wdl_text(b.win, b.draw, b.lose)}"
+                rows.append((b.label, b.win_rate,
+                             f"{b.win_rate:.0f}% · 표본 {b.games:,}" if weak else f"{b.win_rate:.0f}% · {b.games:,}",
+                             f"{tip}\n{sample_note(b.games, core.MIN_COND)}" if weak else tip, weak))
             else:
                 rows.append((b.label, None, "경기 없음", f"{b.label} {b.span}"))
         self.timeband_bars.set_data(rows)
@@ -414,7 +417,10 @@ class DashboardPage(QWidget):
         # "-" 15경기가 1위로 올라왔다. 상대 전적 표에는 그대로 두고 여기서만 뺀다.
         known = [o for o in opponent_stats(d.scope_matches) if o.nickname not in ("", "-")]
         for o in known[:TOP_OPPONENTS]:
-            rows.append((o.nickname, o.win_rate, f"{o.win}승 {o.draw}무 {o.lose}패",
-                         f"{o.nickname} · {o.games}경기 · 승률 {o.win_rate:.1f}%"
-                         f" · 득실 {o.goals_for}:{o.goals_against}"))
+            weak = o.games < core.MIN_OPP
+            tip = (f"{o.nickname} · {o.games}경기 · 승률 {o.win_rate:.1f}%"
+                   f" · 득실 {o.goals_for}:{o.goals_against}")
+            rows.append((o.nickname, o.win_rate,
+                         f"{o.win}승 {o.draw}무 {o.lose}패" + (f" · 표본 {o.games}" if weak else ""),
+                         f"{tip}\n{sample_note(o.games, core.MIN_OPP)}" if weak else tip, weak))
         self.rival_bars.set_data(rows)

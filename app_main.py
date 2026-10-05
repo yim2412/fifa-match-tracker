@@ -53,7 +53,8 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, DivisionChart, FitTableWidget, NoScrollComboBox, PitchWidget,
     RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
-    StatCard, TrendChart, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, wdl_text,
+    StatCard, TrendChart, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
+    wdl_text, win_rate_bar,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -2159,8 +2160,14 @@ class MainWindow(QMainWindow):
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(wdl_text(*wdl))
             b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            c = QLabel(f"({rate_of(*wdl):.1f}%)")
-            c.setStyleSheet(f"color: {color}; font-weight: bold;")
+            games = sum(wdl)
+            weak = games < core.MIN_COND  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
+            c = QLabel(f"({rate_of(*wdl):.1f}% · 표본 {games})" if weak else f"({rate_of(*wdl):.1f}%)")
+            c.setStyleSheet(f"color: {T.TEXT_DIM if weak else color}; font-weight: bold;")
+            c.setProperty("weak", weak)
+            c.setProperty("games", games)
+            if weak:
+                c.setToolTip(sample_note(games, core.MIN_COND))
             h.addWidget(a)
             h.addStretch(1)
             h.addWidget(b)
@@ -2217,17 +2224,11 @@ class MainWindow(QMainWindow):
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             a.setFixedWidth(120)
             if band.games:
-                bar = QProgressBar()
-                bar.setRange(0, 1000)
-                bar.setValue(int(band.win_rate * 10))
-                bar.setFormat(f"{band.win_rate:.1f}%  ({wdl_text(band.win, band.draw, band.lose)})")
-                bar.setFixedHeight(16)
-                bar.setStyleSheet(
-                    f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
-                    f"color:{T.TEXT};text-align:center;}}"
-                    f"QProgressBar::chunk{{background:{T.WIN_BAR};border-radius:3px;}}")
                 h.addWidget(a)
-                h.addWidget(bar, 1)
+                h.addWidget(win_rate_bar(
+                    band.win, band.draw, band.lose,
+                    f"{band.win_rate:.1f}%  ({wdl_text(band.win, band.draw, band.lose)})",
+                    core.MIN_COND, height=16), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -2276,17 +2277,10 @@ class MainWindow(QMainWindow):
         games = win + draw + lose
         if games:
             wr = win / games * 100
-            bar = QProgressBar()
-            bar.setRange(0, 1000)
-            bar.setValue(int(wr * 10))
-            bar.setFormat(f"{wr:.1f}%  ({wdl_text(win, draw, lose)})  "
-                          f"득 {avg_gf:.2f} 실 {avg_ga:.2f}")
-            bar.setFixedHeight(18)
-            bar.setStyleSheet(
-                f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
-                f"color:{T.TEXT};text-align:center;}}"
-                f"QProgressBar::chunk{{background:{T.WIN_BAR};border-radius:3px;}}")
-            h.addWidget(bar, 1)
+            h.addWidget(win_rate_bar(win, draw, lose,
+                                     f"{wr:.1f}%  ({wdl_text(win, draw, lose)})  "
+                                     f"득 {avg_gf:.2f} 실 {avg_ga:.2f}",
+                                     core.MIN_COND), 1)
         else:
             none = QLabel("경기 없음")
             none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3484,12 +3478,7 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _blend(base_hex: str, target_hex: str, mix: float) -> QColor:
-        base, target = QColor(base_hex), QColor(target_hex)
-        return QColor(
-            int(base.red() + (target.red() - base.red()) * mix),
-            int(base.green() + (target.green() - base.green()) * mix),
-            int(base.blue() + (target.blue() - base.blue()) * mix),
-        )
+        return QColor(T.blend(base_hex, target_hex, mix))
 
     def _render_opponents(self, matches: list[MatchSummary]) -> None:
         rows = []

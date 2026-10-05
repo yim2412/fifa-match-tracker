@@ -3584,6 +3584,78 @@ def test_notice_dialog_says_web_data_is_on_now_and_mentions_collection():
     assert config.NOTICE_VERSION >= 2, "안내 글이 바뀌었는데 NOTICE_VERSION 을 안 올렸다 — 동의한 사람이 다시 안 본다"
 
 
+def _weak_sites():
+    """표본 흐림 규칙의 진입점(ROADMAP 1.2.1 표) — 이름 → (그리기, 위젯에서 (경기 수, 흐림) 목록 뽑기, 기준 상수 이름)."""
+    from PyQt6.QtWidgets import QLabel, QProgressBar
+
+    def bars(*boxes, kind=QProgressBar):
+        out = []
+        for box in boxes:
+            for i in range(box.count()):
+                w = box.itemAt(i).widget()
+                if w is None:
+                    continue
+                for x in [w, *w.findChildren(kind)]:
+                    if isinstance(x, kind) and x.property("weak") is not None:
+                        out.append((x.property("games"), bool(x.property("weak"))))
+        return out
+
+    def hbar(chart, games_of):
+        return [(games_of(r), bool(r[4]) if len(r) > 4 else False) for r in chart._rows if r[1] is not None]
+
+    tod = {b.label: b.games for b in app_main.core.time_of_day_rates(_win._matches)}
+    opp = {o.nickname: o.games for o in app_main.core.opponent_stats(_win._matches)}
+    diag = lambda: _win._render_diagnosis(_win._details)  # noqa: E731
+    clutch = lambda: _win._render_clutch(_win._details, _win._matches)  # noqa: E731
+    return {
+        "성적 진단": (diag, lambda: bars(_win.box_diag_division, _win.box_diag_possession), "MIN_COND"),
+        "승부처 시간대": (clutch, lambda: bars(_win.box_clutch_tod), "MIN_COND"),
+        "승부처 선제골": (clutch, lambda: bars(_win.box_clutch_first, kind=QLabel), "MIN_COND"),
+        "대시보드 시간대": (_win._render_dashboard,
+                       lambda: hbar(_win.dashboard.timeband_bars, lambda r: tod[r[0]]), "MIN_COND"),
+        "대시보드 라이벌": (_win._render_dashboard,
+                       lambda: hbar(_win.dashboard.rival_bars, lambda r: opp[r[0]]), "MIN_OPP"),
+    }
+
+
+def test_winrate_bars_dim_small_samples():
+    # 픽스처는 4경기라 기본 기준(8)에선 전부 흐리다 — 칸마다 기준을 '가장 작은 표본'과 '그보다 1 큰 값'으로
+    # 바꿔 그린다. 앞에선 아무것도 안 흐려야 하고(<= 로 바꾸면 FAIL), 뒤에선 가장 작은 칸만 흐려야 한다.
+    # 기본값이 아닌 기준으로 재므로 화면이 상수를 안 읽고 숫자를 박아도 FAIL 한다.
+    import core_api
+    saved = core_api.MIN_COND, core_api.MIN_OPP
+    try:
+        for site, (render, read, const) in _weak_sites().items():
+            setattr(core_api, const, 1)
+            render()
+            got = read()
+            assert got, (site, "막대가 하나도 없다 — 이 칸은 재지 못한다")
+            low = min(g for g, _ in got)
+            for t in (low, low + 1):
+                setattr(core_api, const, t)
+                render()
+                got = read()
+                want = [(g, g < t) for g, _ in got]
+                assert got == want, (site, t, got)
+            assert any(w for _, w in got) and (len({g for g, _ in got}) == 1 or not all(w for _, w in got)), \
+                (site, "흐린 칸과 안 흐린 칸을 둘 다 못 봤다", got)
+            core_api.MIN_COND, core_api.MIN_OPP = saved
+    finally:
+        core_api.MIN_COND, core_api.MIN_OPP = saved
+        _win._render_all()
+
+
+def test_winrate_bars_use_shared_helper():
+    # 승률 막대는 전부 widgets.win_rate_bar 를 거친다 — 직접 QProgressBar() 를 만들면 표본 흐림 규칙을 건너뛴다.
+    # 허용은 변수 이름으로(줄 번호면 코드를 지울 때마다 깨진다): 상태 진행 막대 · 승부처 분 단위 득·실 개수 막대.
+    src = (pathlib.Path(_ROOT) / "app_main.py").read_text(encoding="utf-8")
+    made = re.findall(r"^\s*([\w.]+)\s*=\s*QProgressBar\(\)", src, re.M)
+    assert sorted(made) == ["gbar", "rbar", "self.progress"], made
+    # 대입 없이 바로 넣는 것(addWidget(QProgressBar()))도 센다 — 대입만 세던 첫 판은 그 변이를 못 잡았다
+    assert len(re.findall(r"QProgressBar\(", src)) == len(made), re.findall(r".*QProgressBar\(.*", src)
+    assert "QProgressBar()" not in (pathlib.Path(_ROOT) / "dashboard.py").read_text(encoding="utf-8")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

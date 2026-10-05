@@ -109,6 +109,33 @@ WIN_BAR = _P["WIN_BAR"]
 LOSE_BAR = _P["LOSE_BAR"]
 ROW_TINT = _P["ROW_TINT"]       # 승/패 행 배경 — PANEL 에 섞는 비율
 
+# 표본이 모자란 막대 — 원래 색을 바탕 쪽으로 이만큼만 섞는다(불투명). 색만으로 구분하지 않게
+# 쓰는 쪽이 글자 "표본 N" 도 같이 붙인다(widgets.win_rate_bar · charts.HBarList).
+WEAK_MIX = 0.35
+
+
+def blend(base_hex: str, target_hex: str, mix: float) -> str:
+    """base 에서 target 쪽으로 mix(0~1)만큼 간 불투명 색 — '#rrggbb'.
+
+    반투명(alpha) 대신 이걸 쓴다: 표의 교차 행 색 위에 알파를 얹으면 값이 같아도 행마다
+    진하기가 달라 보였다(CLAUDE.md PyQt 규칙 2번)."""
+    b = [int(base_hex[i:i + 2], 16) for i in (1, 3, 5)]
+    t = [int(target_hex[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{int(x + (y - x) * mix):02x}" for x, y in zip(b, t))
+
+
+def contrast(a_hex: str, b_hex: str) -> float:
+    """WCAG 대비(1~21). 글자는 4.5 이상이어야 읽힌다 — 테스트가 팔레트를 이걸로 잰다."""
+    def lum(h: str) -> float:
+        out = []
+        for i in (1, 3, 5):
+            c = int(h[i:i + 2], 16) / 255
+            out.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
+    hi, lo = sorted((lum(a_hex), lum(b_hex)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 # 잔디 위 색 — 밝은 테마의 진한 GREEN 은 잔디와 명도가 비슷해 골 점이 묻힌다.
 PITCH = "#1e5c34"
 PITCH_GOAL = "#5ee08f"
