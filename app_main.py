@@ -1391,7 +1391,7 @@ class MainWindow(QMainWindow):
 
     def start_prefetch(self) -> None:
         """켤 때 한 번 — 마지막으로 검색한 계정의 저장된 경기를 뒤에서 읽어 둔다(화면은 검색 화면 그대로).
-        그 계정을 검색하면 DB 읽기를 건너뛴다. main 에서만 부른다."""
+        그 계정을 검색하면 DB 읽기를 건너뛴다. main 과, 검색 전에 내려놓았다 다시 열 때(reload_after_release) 부른다."""
         last = self._last_account()
         if last:
             self._prefetch = SavedPrefetch(last[0], config.DEFAULT_MATCH_TYPE)
@@ -4788,7 +4788,8 @@ class MainWindow(QMainWindow):
         """숨긴 지 RELEASE_AFTER_HIDE_MIN 지나면 경기 기록을 놓는다(1만 경기면 수백 MB). 붙잡는 곳 전부 —
         하나라도 남으면 gc 가 못 거둔다(test_release_drops_every_reference 가 잰다). 계정(_ouid)은 비우지 않는다 —
         비우면 다시 읽을 때 '다른 계정'으로 보여 승률 그래프 기간이 초기화된다(이미 한 번 고친 버그)."""
-        if self._released or not self._matches_all:
+        # 검색 없이 숨겨도 켤 때 미리 읽은 마지막 계정(1만 경기면 약 800MB)이 남는다 — 목록만 보면 그걸 놓친다(1.1.1 exe 실측)
+        if self._released or (not self._matches_all and self._prefetch is None):
             return
         self._save_settings()  # 메뉴·시즌 — 다시 그릴 때 _restore 로 돌아온다
         try:
@@ -4815,7 +4816,10 @@ class MainWindow(QMainWindow):
         if not self._released:
             return
         self._released = False
-        if not self._ouid or (self._loader and self._loader.isRunning()):
+        if not self._ouid:
+            self.start_prefetch()  # 검색 전에 놓은 미리 읽기 — 첫 검색이 다시 빠르게
+            return
+        if self._loader and self._loader.isRunning():
             return
         self._set_busy(True)
         self.statusBar().showMessage(f"{self._nick} — 저장된 기록을 다시 읽는 중…")

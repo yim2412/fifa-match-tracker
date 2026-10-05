@@ -3388,6 +3388,42 @@ def test_release_drops_every_reference():
                             {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
 
 
+def test_release_drops_prefetch_without_search():
+    # 1.1.1 exe 실측: 켜고 검색 없이 X → 숨긴 30분 뒤에도 821MB 그대로. 미리 읽기만 쥐고 목록은 비어 있어 내려놓기가 그냥 돌아갔다.
+    import gc
+    from concurrent.futures import Future
+    with _ShellOnWin():
+        keep = (_win._ouid, _win._nick)
+        _win._matches_all, _win._details_all, _win._matches, _win._details = [], [], [], []
+        _win._ouid, _win._released = "", False
+        probe = dict(_DETAILS[0])
+        pf = app_main.SavedPrefetch.__new__(app_main.SavedPrefetch)
+        pf.ouid, pf.match_type, pf._stop = _OUID, 52, False
+        pf._future = Future()
+        pf._future.set_result(([], [probe]))
+        _win._prefetch = pf
+        del pf
+        assert sum(1 for _ in gc.get_referrers(probe)) >= 1, "측정 도구 확인 — 미리 읽기가 쥐고 있어야 한다"
+        _win.release_memory()
+        gc.collect()
+        left = [type(r).__name__ for r in gc.get_referrers(probe)]
+        restarted = []
+        keep_start = app_main.MainWindow.start_prefetch
+        app_main.MainWindow.start_prefetch = lambda self: restarted.append(True)
+        try:
+            assert left == [], f"검색 없이 숨겼는데 미리 읽기를 쥐고 있다: {left}"
+            assert _win._released and _win._prefetch is None
+            _win.reload_after_release()
+            assert restarted == [True] and not _win._released, "다시 열 때 미리 읽기를 다시 시작하지 않는다"
+        finally:
+            app_main.MainWindow.start_prefetch = keep_start
+            _win._released = False
+            _win._ouid, _win._nick = keep
+            _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                            {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+            _win._set_busy(False)
+
+
 def test_release_is_skipped_while_searching():
     class _Busy:
         def isRunning(self):
