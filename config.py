@@ -111,13 +111,15 @@ except ValueError:
     NOTICE_ACCEPTED = 0
 # 브라우저인 척하지 않고 앱 이름을 밝힌다. 2026-10-02 실측: 이 UA 로도 네 페이지가
 # 브라우저 UA 와 같은 바이트로 응답했다. UA 를 아예 비우면 playerinfo 가 500 이다.
-REPO_URL = "https://github.com/yim2412/fifa-match-tracker"
+# 저장소 주소는 여기 한 줄 — 설치기(.iss 의 RepoUrl)는 test_release 가 이 값과 대조한다.
+REPO_SLUG = "yim2412/fifa-match-tracker"
+REPO_URL = f"https://github.com/{REPO_SLUG}"
 WEB_USER_AGENT = f"FifaMatchTracker/{APP_VERSION.lstrip('v')} (+{REPO_URL})"
 
 # 새 버전 알림 — 켤 때 한 번 GitHub 최신 릴리스 태그를 읽는다(GitHub 에 IP 가 남는다).
 # 트레이에 상주하면 UPDATE_CHECK_EVERY_H 마다 다시. 끄려면 .env 에 FIFA_UPDATE_CHECK=0.
 UPDATE_CHECK = os.getenv("FIFA_UPDATE_CHECK", "1").strip() != "0"
-LATEST_RELEASE_API = "https://api.github.com/repos/yim2412/fifa-match-tracker/releases/latest"
+LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 RELEASES_URL = f"{REPO_URL}/releases/latest"
 UPDATE_CHECK_EVERY_H = 6            # 트레이에 상주하는 동안 다시 확인하는 간격(켤 때 한 번은 그대로)
 

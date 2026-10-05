@@ -205,6 +205,14 @@ def test_uninstaller_quits_running_app_first():
     assert "RemoveDir(ExpandConstant('{app}'))" in post and "Sleep(" in post and "DelTree" not in body, post
 
 
+def test_installer_repo_url_matches_config():
+    iss = release.ISS.read_text(encoding="utf-8-sig")
+    assert f'#define RepoUrl "{release.config.REPO_URL}"' in iss, "설치 파일의 저장소 주소가 config.REPO_URL 과 다르다"
+    # 주소를 다시 줄마다 적으면 한쪽만 고쳐진다 — 정의 한 줄 말고는 주소 문자열이 없어야
+    assert iss.count("github.com/") == 1 and iss.count("{#RepoUrl}") == 2, \
+        f"주소 문자열 {iss.count('github.com/')}개 · RepoUrl 참조 {iss.count('{#RepoUrl}')}개"
+
+
 def test_installer_shows_app_name():
     iss = release.ISS.read_text(encoding="utf-8-sig")
     assert f'#define AppTitle "{release.config.APP_NAME}"' in iss, "설치 파일 표시 이름이 config.APP_NAME 과 다르다"

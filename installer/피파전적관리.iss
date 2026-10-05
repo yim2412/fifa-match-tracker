@@ -13,6 +13,8 @@
 #define RunValue "FifaMatchTracker"
 ; tray.QUIT_ARG 와 같아야 한다(test_release 가 대조)
 #define QuitArg "--quit"
+; config.REPO_URL 과 같아야 한다(test_release 가 대조)
+#define RepoUrl "https://github.com/yim2412/fifa-match-tracker"
 
 [Setup]
 ; AppId 는 바꾸지 않는다 — 바뀌면 새 버전이 덮어쓰기가 아니라 별개 프로그램으로 깔린다
@@ -21,8 +23,8 @@ AppName={#AppTitle}
 AppVersion={#AppVersion}
 AppVerName={#AppTitle} v{#AppVersion}
 AppPublisher=yim2412
-AppPublisherURL=https://github.com/yim2412/fifa-match-tracker
-AppSupportURL=https://github.com/yim2412/fifa-match-tracker/releases
+AppPublisherURL={#RepoUrl}
+AppSupportURL={#RepoUrl}/releases
 ; 사용자 폴더에 깐다(%LOCALAPPDATA%\Programs) — 관리자 권한 창이 안 뜬다
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\피파전적관리
