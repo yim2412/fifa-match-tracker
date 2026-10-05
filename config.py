@@ -104,11 +104,13 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 3  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 4  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+#                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
 TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)은 이 버전 동의 뒤부터
+PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 이 버전 동의 뒤부터 — 사용자가 연 [시세] 탭은 그대로
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -190,6 +192,12 @@ PREDICT_RANGE = (0.10, 0.90)        # "예상 순위 80% 범위"
 SEASON_NOTICE_MAX_DAYS = 120        # 공지 종료일이 시작일 + 이만큼 안일 때만 받는다
 RANK_EMPTY_RETRIES = 2              # 빈 쪽은 그 쪽만 이만큼 다시 받는다 — 10-05 실측: 500쪽 중 빈 쪽 하나가 회차 전체를 버렸다
 RANK_EMPTY_RETRY_WAIT_S = 1.0       # 다시 받기 전 대기. 진짜 구조 변경이면 다시 받아도 비어 그대로 실패한다
+
+# 거래 기록(1.4.1 · tradecollect.py) — 넥슨은 API 키 주인 것만 준다
+TRADE_OVERLAP_DAYS = 7              # 위쪽(새 거래) 받기를 저장된 최신 날짜보다 이만큼 더 내려가 겹쳐 받는다 — 반영이 늦다(R6)
+# 카드 시세 캐시(B · card_prices) — 가계부 평가용 자동 읽기의 하루 상한(카드 수 = 홈페이지 요청 수).
+# 2026-10-06 실측(키 주인 계정): 평가 대상 후보 = 최근 50경기 카드 18 + 최근 14일 구매 67 = 최대 76장 → 하루 한 번에 다 읽히게
+PRICE_FETCH_MAX = 80
 
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)
@@ -290,6 +298,11 @@ def notice_update_pending() -> bool:
 def track_allowed() -> bool:
     """따라가기 계정의 하루 ELO 기록 — 그 안내(TRACK_NOTICE_VERSION)에 동의한 뒤부터."""
     return NOTICE_ACCEPTED >= TRACK_NOTICE_VERSION
+
+
+def price_auto_allowed() -> bool:
+    """가계부 평가용 시세를 자동으로 읽어도 되나 — 그 안내(PRICE_NOTICE_VERSION) 동의 + 웹 데이터 켜짐."""
+    return WEB_DATA and NOTICE_ACCEPTED >= PRICE_NOTICE_VERSION
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다

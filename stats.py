@@ -209,6 +209,29 @@ def _result_of(p: dict) -> str:
     return (p.get("matchDetail") or {}).get("matchResult") or "-"
 
 
+TRADE_HINT_GAMES = 300  # 내 계정 힌트 — 최근 이만큼 경기(ROADMAP 1.4.1 R2 와 같은 기준)
+
+
+def trade_hint(details: list[dict], ouid: str, bought: set, games: int = TRADE_HINT_GAMES) -> tuple[int, int]:
+    """최근 경기 스쿼드에 쓴 (카드, 강화) 중 산 기록에 있는 것 → (있는 수, 전체 수).
+
+    (카드, 강화) 단위다 — 카드 단위면 남의 계정도 81% 가 나왔다(R3, 같은 메타 카드). 판정이 아니라 참고.
+    details 는 최신순 전제."""
+    keys, seen = set(), 0
+    for d in details:
+        if seen >= games:
+            break
+        me, _ = _me_opp(d, ouid)
+        if me is None:
+            continue
+        seen += 1
+        for p in me.get("player") or []:
+            sp, gr = p.get("spId"), p.get("spGrade")
+            if sp is not None and gr is not None:
+                keys.add((sp, gr))
+    return len(keys & bought), len(keys)
+
+
 def own_squad(details: list[dict], ouid: str):
     """가장 최근 경기에서 내 스쿼드(선수 raw 목록). opponent_squad 와 대칭.
 

@@ -1,0 +1,125 @@
+"""거래 기록 받기(1.4.1) — 넥슨은 **API 키 주인 계정**의 거래만 준다(ROADMAP 1.4.1 R1·R2).
+
+화면 없이 도는 한 번(`collect`)만 여기 있고, 띄우는 때·양보는 앱(`app_main.TradeLoader`)의 몫이다.
+규칙은 ROADMAP "내 계정 지정 · 거래 수집" 절 — 검토 1~5회차에서 [상]이 나온 자리라 바꾸기 전에 거기를 읽는다.
+
+| 단계 | 무엇을 | 왜 |
+|---|---|---|
+| 키 지문 | 저장된 `key_fp` ≠ 지금 키 → 거래·받기 상태를 전부 지우고 첫 수집처럼 | 키 주인이 바뀌었는지 판정하려다 4회차 연속 [상] — 틀려도 잃는 건 다시 받기(약 160요청 · 19초) |
+| 위쪽(새 거래) | 0쪽부터 `top_stop − TRADE_OVERLAP_DAYS` 이하가 나올 때까지 · 하루 한 번 | 반영이 늦게 오는 옛 날짜 거래(R6)를 겹쳐 받는다. "저장된 saleSn 을 만나면 멈춤"은 끊긴 직전 실행의 새 묶음으로 채워져 가운데 구멍이 남았다(2회차 [상]) |
+| 아래쪽(옛 거래) | `done_<kind>` 가 아니면 (저장 줄 수 − 100)쪽부터 빈 쪽까지 | 첫 수집이 끊겨도 옛 거래가 영구히 빠지지 않게(1회차 [상]). 새 거래가 위에 끼면 겹칠 뿐 건너뛰지 않는다 |
+| 끊김 | 쪽마다 한 트랜잭션 · 쪽 사이에서 cancel · 429 면 그 자리에서 멈춤 | 다음 기회에 이어서 |
+"""
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+
+import config
+import store
+from nexon_api import QUOTA_CODE, TRADE_KINDS, TRADE_PAGE, NexonAPIError
+
+
+@dataclass
+class TradeResult:
+    wiped: bool = False        # 키가 바뀌어 옛 주인 거래를 지웠다
+    requests: int = 0
+    added: int = 0
+    quota: bool = False        # 429 — 상태는 그대로, 다음 기회에
+    error: str | None = None   # 그 밖의 실패(네트워크 등) — 상태는 그대로
+    cancelled: bool = False
+    complete: bool = False     # 위쪽(오늘)·아래쪽 둘 다 끝
+
+
+class _Stop(Exception):
+    pass
+
+
+def _overlap_floor(stop: str) -> str:
+    """top_stop 날짜에서 겹침 일수를 뺀 경계(ISO 문자열 비교용)."""
+    try:
+        d = datetime.fromisoformat(stop)
+    except ValueError:
+        return ""  # 못 읽으면 경계 없음 — 빈 쪽까지(안전한 쪽)
+    return (d - timedelta(days=config.TRADE_OVERLAP_DAYS)).isoformat(timespec="seconds")
+
+
+def collect(api, conn, api_key: str, cancel: Callable[[], bool] = lambda: False,
+            today: date | None = None, on_wiped: Callable[[], None] | None = None) -> TradeResult:
+    """한 번 받기. on_wiped: 지우기를 커밋한 직후 — 화면이 들고 있던 옛 주인 거래를 버리게(받기보다 먼저)."""
+    res = TradeResult()
+    today_s = (today or date.today()).isoformat()
+    fp = store.key_fingerprint(api_key)
+    st = store.trade_state(conn)
+    if st.get("key_fp") != fp:
+        # 처음(지문 없음)이면 지울 게 없다 — 그래도 같은 길로(상태가 어떻든 깨끗하게 시작)
+        res.wiped = st.get("key_fp") is not None
+        store.reset_trades_for_key(conn, fp)
+        if res.wiped and on_wiped:
+            on_wiped()
+        st = store.trade_state(conn)
+
+    def page(kind: str, offset: int) -> list[dict]:
+        if cancel():
+            raise _Stop()
+        res.requests += 1
+        rows = api.get_trades(kind, offset=offset, limit=TRADE_PAGE)
+        res.added += store.save_trades(conn, kind, rows)
+        return rows
+
+    try:
+        if st.get("fetched_at") != today_s:
+            for kind in TRADE_KINDS:
+                _top(conn, kind, page)
+            store.set_trade_state(conn, fetched_at=today_s)
+        st = store.trade_state(conn)
+        for kind in TRADE_KINDS:
+            if st.get(f"done_{kind}") != "1":
+                _bottom(conn, kind, page)
+        res.complete = True
+    except _Stop:
+        res.cancelled = True
+    except NexonAPIError as e:
+        if e.code == QUOTA_CODE or e.status == 429:
+            res.quota = True
+        else:
+            res.error = e.message
+    return res
+
+
+def _top(conn, kind: str, page) -> None:
+    st = store.trade_state(conn)
+    stop = st.get(f"top_stop_{kind}")
+    if not stop:
+        # 시작할 때 저장돼 있던 최신 날짜 — 끊긴 위쪽을 이을 때는 그대로 둔다(그사이 들어온 새 묶음으로 다시 잡으면 구멍).
+        # 저장 0건(첫 수집)이면 "" — 빈 쪽까지. 첫 수집이 끊긴 뒤라면 저장된 건 맨 위부터 이어진 한 덩어리라 그 최신으로 잡아도 된다
+        stop = store.trade_latest(conn, kind) or ""
+        store.set_trade_state(conn, **{f"top_stop_{kind}": stop})
+    floor = _overlap_floor(stop) if stop else ""
+    offset = 0
+    while True:
+        rows = page(kind, offset)
+        if not rows:
+            store.set_trade_state(conn, **{f"done_{kind}": "1"})  # 맨 위부터 끝까지 이어 읽었다
+            break
+        oldest = min((r.get("tradeDate") or "" for r in rows if isinstance(r, dict)), default="")
+        if floor and oldest and oldest <= floor:
+            break
+        offset += TRADE_PAGE
+    store.set_trade_state(conn, **{f"top_stop_{kind}": None})
+
+
+def _bottom(conn, kind: str, page) -> None:
+    offset = max(0, store.trade_count(conn, kind) - TRADE_PAGE)
+    while True:
+        rows = page(kind, offset)
+        if not rows:
+            store.set_trade_state(conn, **{f"done_{kind}": "1"})
+            return
+        offset += TRADE_PAGE
+
+
+def is_complete(st: dict) -> bool:
+    """옛 거래까지 다 받았나 — 아니면 힌트·실현 손익을 비운다(뒤 구매와 잘못 짝짓지 않게)."""
+    return all(st.get(f"done_{k}") == "1" for k in TRADE_KINDS)

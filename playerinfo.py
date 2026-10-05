@@ -357,3 +357,51 @@ def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     info.club_history = [ClubStint(period=p.strip(), club=c.strip(), loan=bool(r.strip()))
                          for p, c, r in _CLUB_ITEM.findall(html)]
     return info
+
+
+# ── 시세 → 정수 · 카드 시세 캐시 채우기(공용 부품 B — 1.4.1) ─────────────────────────
+
+_BP_DIGITS = re.compile(r"[0-9][0-9,]*")
+
+
+def parse_bp(text) -> int | None:
+    """"3,660,000,000,000 BP" → 3660000000000. "-"·빈칸·숫자 없음은 None(그 단계만 버린다 — R13)."""
+    m = _BP_DIGITS.search(text or "")
+    return int(m.group(0).replace(",", "")) if m else None
+
+
+def prices_as_int(info: PlayerInfo) -> dict[int, int]:
+    out = {}
+    for grade, text in info.prices.items():
+        v = parse_bp(text)
+        if v is not None and v > 0:
+            out[grade] = v
+    return out
+
+
+def collect_prices(conn, spids, day: str, cap: int, cancel=lambda: False, fetch=None) -> tuple[int, int]:
+    """시세를 하루 캐시로 채운다 → (이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수).
+
+    오늘 이미 읽은 카드는 건너뛰고, 그날 읽은 카드가 cap 에 닿으면 멈춘다(실행이 여러 번이어도 하루 상한).
+    한 장 = 한 트랜잭션, 카드 사이마다 cancel 을 본다. 한 장 실패는 건너뛴다(나머지를 막지 않게)."""
+    import store  # store → seasons → … 순환을 피해 여기서
+    fetch = fetch or fetch_player_info
+    done = skipped = 0
+    todo = [s for s in dict.fromkeys(spids) if not store.card_price_fresh(conn, s, day)]
+    # 시도 수로도 센다 — 시세가 비어 오는 카드는 저장되지 않아 저장 수만 세면 상한 밖에서 계속 요청한다
+    budget = cap - store.card_prices_fetched_on(conn, day)
+    for i, spid in enumerate(todo):
+        if cancel():
+            break
+        if i >= budget:
+            skipped = len(todo) - i
+            break
+        try:
+            info = fetch(spid)
+        except PlayerInfoError:
+            continue
+        prices = prices_as_int(info)
+        if prices:
+            store.save_card_prices(conn, spid, prices, day)
+            done += 1
+    return done, skipped

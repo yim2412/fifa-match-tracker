@@ -37,6 +37,11 @@ EP_USER_BASIC = "/fconline/v1/user/basic"    # 계정 기본 정보
 EP_MAX_DIVISION = "/fconline/v1/user/maxdivision"  # 역대 최고 등급
 EP_USER_MATCH = "/fconline/v1/user/match"    # 매치 id 목록
 EP_MATCH_DETAIL = "/fconline/v1/match-detail"  # 매치 상세
+# 거래 기록 — ouid 를 **무시하고 API 키 주인 계정**의 거래만 준다(2026-10-06 실측, ROADMAP 1.4.1 R1·R2).
+# 그래서 get_trades 는 ouid 를 받지 않는다 — 받는 척하면 남의 거래로 읽힌다. ouid 없이 불러도 200(같은 날 실측).
+EP_USER_TRADE = "/fconline/v1/user/trade"
+TRADE_KINDS = ("buy", "sell")
+TRADE_PAGE = 100  # 한 번에 받는 상한 — 200 이면 OPENAPI00004(R4)
 
 # 넥슨 에러코드 → 사람이 읽는 말
 ERROR_MESSAGES = {
@@ -177,6 +182,12 @@ class FCOnlineAPI:
         data = self._get(EP_MATCH_DETAIL, matchid=match_id)
         self._cache_write(match_id, data)
         return data
+
+    # ── 거래 ──────────────────────────────────────────────────────────
+    def get_trades(self, tradetype: str, offset: int = 0, limit: int = TRADE_PAGE) -> list[dict]:
+        """키 주인 계정의 거래(최신순) — tradetype 은 buy | sell. 끝을 지나면 빈 목록."""
+        data = self._get(EP_USER_TRADE, tradetype=tradetype, offset=offset, limit=limit)
+        return data if isinstance(data, list) else []
 
     # ── 메타데이터 ────────────────────────────────────────────────────
     def get_meta(self, name: str) -> list[dict]:

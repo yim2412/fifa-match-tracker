@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import threading
@@ -103,6 +104,33 @@ CREATE TABLE IF NOT EXISTS predictions (
     end_source   TEXT,
     p200 REAL, p1000 REAL, lo INTEGER, hi INTEGER,
     PRIMARY KEY (ouid, day)
+);
+-- 거래 기록(1.4.1) — 넥슨은 검색 계정이 아니라 **API 키 주인**의 거래만 준다(ROADMAP R1·R2). 그래서 ouid 열이 없다:
+-- 이 표는 "지금 키 주인의 거래"이고, 키가 바뀌면 tradecollect 가 통째로 지우고 다시 받는다.
+-- 같은 saleSn 이 완전히 같은 줄로 두 번 오는 일이 있다(R5 — 같은 초 일괄 판매) → 하나만 남긴다.
+CREATE TABLE IF NOT EXISTS trades (
+    kind       TEXT NOT NULL,
+    sale_sn    TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    spid       INTEGER,
+    grade      INTEGER,
+    value      INTEGER,
+    PRIMARY KEY (kind, sale_sn)
+);
+CREATE INDEX IF NOT EXISTS idx_trades_spid ON trades(spid, trade_date);
+CREATE INDEX IF NOT EXISTS idx_trades_kind_date ON trades(kind, trade_date);
+-- 받기 상태 · 키 지문 · 내 계정 — 키는 남기지 않고 지문(sha256 앞 16자)만
+CREATE TABLE IF NOT EXISTS trade_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+-- 카드 시세(공용 부품 B — 1.4.1 은 시세만) — 홈페이지 선수 페이지 한 번에 그 카드 모든 강화 단계. 하루 캐시
+CREATE TABLE IF NOT EXISTS card_prices (
+    spid       INTEGER NOT NULL,
+    grade      INTEGER NOT NULL,
+    price      INTEGER NOT NULL,
+    fetched_on TEXT NOT NULL,
+    PRIMARY KEY (spid, grade)
 );
 """
 
@@ -558,3 +586,122 @@ def predictions(conn: sqlite3.Connection, ouid: str | None = None) -> list[dict]
     if ouid is None:
         return [dict(r) for r in conn.execute("SELECT * FROM predictions ORDER BY ouid, day")]
     return [dict(r) for r in conn.execute("SELECT * FROM predictions WHERE ouid = ? ORDER BY day", (ouid,))]
+
+
+# ── 거래 기록 (1.4.1 — 키 주인 것만, 받는 규칙은 tradecollect.py) ─────────────────────
+
+# 키가 바뀌면 지우는 상태 — 받기 진행(done·top_stop)과 하루 제한(fetched_at). my_ouid 는 지우지 않고 '확인 전'으로 옮긴다
+TRADE_PROGRESS_PREFIXES = ("done_", "top_stop_")
+
+
+def key_fingerprint(api_key: str) -> str:
+    """키 지문 — 키 자체는 DB 에 안 남긴다."""
+    return hashlib.sha256((api_key or "").strip().encode("utf-8")).hexdigest()[:16]
+
+
+def trade_state(conn: sqlite3.Connection) -> dict[str, str]:
+    return {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM trade_state")}
+
+
+def _put_state(conn: sqlite3.Connection, items: dict) -> None:
+    for k, v in items.items():
+        if v is None:
+            conn.execute("DELETE FROM trade_state WHERE key = ?", (k,))
+        else:
+            conn.execute("INSERT OR REPLACE INTO trade_state (key, value) VALUES (?, ?)", (k, str(v)))
+
+
+def set_trade_state(conn: sqlite3.Connection, **items) -> None:
+    """값이 None 이면 그 줄을 지운다. 한 트랜잭션."""
+    with conn:
+        _put_state(conn, items)
+
+
+def reset_trades_for_key(conn: sqlite3.Connection, fp: str) -> None:
+    """키가 바뀌었다 — 거래·받기 상태를 전부 지우고 새 지문으로. 한 트랜잭션(ROADMAP 1.4.1 키 바뀜).
+    내 계정은 '확인 전'으로 옮긴다. 확인 전에 키가 또 바뀌었으면(my_ouid 가 비었다) 확인 전 값을 그대로 둔다."""
+    with conn:
+        st = trade_state(conn)
+        conn.execute("DELETE FROM trades")
+        for k in st:
+            if k.startswith(TRADE_PROGRESS_PREFIXES) or k == "fetched_at":
+                conn.execute("DELETE FROM trade_state WHERE key = ?", (k,))
+        mine = st.get("my_ouid")
+        _put_state(conn, {"key_fp": fp, "my_ouid": None,
+                          "my_ouid_unconfirmed": mine if mine else st.get("my_ouid_unconfirmed")})
+
+
+def save_trades(conn: sqlite3.Connection, kind: str, rows: list[dict]) -> int:
+    """거래 한 쪽을 한 트랜잭션으로 → 새로 들어간 줄 수. 필드가 빠진 줄만 버린다(나머지는 넣는다)."""
+    vals = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sn, when = r.get("saleSn"), r.get("tradeDate")
+        if not sn or not isinstance(when, str):
+            continue
+        vals.append((kind, str(sn), when, _int_or_none(r.get("spid")), _int_or_none(r.get("grade")),
+                     _int_or_none(r.get("value"))))
+    with conn:
+        before = conn.total_changes
+        conn.executemany("INSERT OR IGNORE INTO trades (kind, sale_sn, trade_date, spid, grade, value)"
+                         " VALUES (?, ?, ?, ?, ?, ?)", vals)
+        return conn.total_changes - before
+
+
+def _int_or_none(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def trade_count(conn: sqlite3.Connection, kind: str) -> int:
+    return conn.execute("SELECT COUNT(*) FROM trades WHERE kind = ?", (kind,)).fetchone()[0]
+
+
+def trade_latest(conn: sqlite3.Connection, kind: str | None = None) -> str | None:
+    """저장된 가장 최근 거래 시각(ISO) — kind 가 없으면 두 종류 중."""
+    if kind is None:
+        return conn.execute("SELECT MAX(trade_date) FROM trades").fetchone()[0]
+    return conn.execute("SELECT MAX(trade_date) FROM trades WHERE kind = ?", (kind,)).fetchone()[0]
+
+
+def bought_cards(conn: sqlite3.Connection) -> set[tuple[int, int]]:
+    """산 적 있는 (카드, 강화) — 내 계정 힌트(R2 · (카드, 강화) 단위)."""
+    # DISTINCT 는 SQL 대신 집합으로 — 임시 정렬(TEMP B-TREE)을 안 만든다(test_rules)
+    return {(r[0], r[1]) for r in conn.execute(
+        "SELECT spid, grade FROM trades WHERE kind = 'buy' AND spid IS NOT NULL")}
+
+
+def account_nickname(conn: sqlite3.Connection, ouid: str) -> str | None:
+    row = conn.execute("SELECT nickname FROM accounts WHERE ouid = ?", (ouid,)).fetchone()
+    return row[0] if row else None
+
+
+# ── 카드 시세 캐시 (공용 부품 B — 1.4.1 은 시세만) ─────────────────────────────
+
+def save_card_prices(conn: sqlite3.Connection, spid: int, prices: dict[int, int], day: str) -> None:
+    """그 카드 강화 단계 전부를 한 트랜잭션으로(day = 로컬 날짜 ISO)."""
+    with conn:
+        conn.executemany("INSERT OR REPLACE INTO card_prices (spid, grade, price, fetched_on) VALUES (?, ?, ?, ?)",
+                         [(spid, g, p, day) for g, p in prices.items()])
+
+
+def card_price_fresh(conn: sqlite3.Connection, spid: int, day: str) -> bool:
+    return conn.execute("SELECT 1 FROM card_prices WHERE spid = ? AND fetched_on = ? LIMIT 1",
+                        (spid, day)).fetchone() is not None
+
+
+def card_prices_fetched_on(conn: sqlite3.Connection, day: str) -> int:
+    """그날 시세를 읽은 카드 수 — 하루 상한(PRICE_FETCH_MAX)을 실행이 여러 번이어도 지키려고."""
+    return len({r[0] for r in conn.execute("SELECT spid FROM card_prices WHERE fetched_on = ?", (day,))})
+
+
+def load_card_prices(conn: sqlite3.Connection, spids) -> dict[tuple[int, int], tuple[int, str]]:
+    """(카드, 강화) → (시세, 읽은 날)."""
+    out = {}
+    for spid in set(spids):
+        for r in conn.execute("SELECT grade, price, fetched_on FROM card_prices WHERE spid = ?", (spid,)):
+            out[(spid, r[0])] = (r[1], r[2])
+    return out

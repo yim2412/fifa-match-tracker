@@ -32,24 +32,26 @@ PRIVACY_HTML = f"""
 <p>만든 사람은 <b>아무것도 수집하지 않습니다.</b> 개발자 서버도, 사용 통계도 없습니다.
 이 PC 에서 나가는 연결은 아래뿐입니다.</p>
 <ul>
-<li>넥슨 오픈API (open.api.nexon.com) — 전적 조회</li>
+<li>넥슨 오픈API (open.api.nexon.com) — 전적·거래 기록 조회. 거래 기록은 넥슨이 <b>API 키 주인 계정</b> 것만 줍니다</li>
 <li>넥슨 이미지 서버 (fco.dn.nexoncdn.co.kr · ssl.nexon.com) — 선수 얼굴·등급 배지</li>
 <li>넥슨 홈페이지 (fconline.nexon.com · m.fconline.nexon.com) — 아래 '넥슨 홈페이지 데이터'를 켰을 때만</li>
 <li>GitHub (api.github.com · github.com) — 새 버전 확인(켤 때, 트레이에 남아 있는 동안 6시간마다)·내려받기
 · 시즌 종료일 공지(같은 응답에 실려 온다)</li>
 </ul>
-<p>키·전적 기록·ELO 기록·랭킹 수집 기록·오류 기록은 이 PC 의 <code>%LOCALAPPDATA%\\{config.DATA_DIR_NAME}</code> 에만 있습니다.
+<p>키·전적 기록·거래 기록·ELO 기록·랭킹 수집 기록·오류 기록은 이 PC 의 <code>%LOCALAPPDATA%\\{config.DATA_DIR_NAME}</code> 에만 있습니다.
 오류 기록(crash.log)에는 PC 의 폴더 경로(사용자 이름 포함)가 들어갈 수 있으니, 누구에게 보내기 전에
 열어서 확인하세요.</p>
 """
 
-WEB_DATA_HTML = """
+WEB_DATA_HTML = f"""
 <h3>넥슨 홈페이지 데이터 (선택)</h3>
 <p>오픈API 에 없는 정보 — 감독모드 랭킹·구단가치, 팀컬러, 시즌 구분, 선수 능력치 — 는
 넥슨 FC 온라인 홈페이지(데이터센터)를 프로그램이 <b>자동으로 읽어</b> 가져옵니다.</p>
 <p>이건 넥슨이 공식으로 허락한 방법(오픈API)이 <b>아닙니다.</b> 넥슨이 언제든 막거나 문제 삼을 수
 있으며, 켜는 것은 <b>사용자의 선택이고 그 책임도 사용자에게</b> 있습니다.
 끄면 랭커 카드·팀컬러·시즌 구분·선수 능력치가 빈칸으로 나옵니다. 나중에 [정보] 에서 바꿀 수 있습니다.</p>
+<p>켜 두면 이적시장 가계부의 평가 손익을 내려고, 보유 중인 카드의 시세를 <b>하루 최대 {config.PRICE_FETCH_MAX}장</b>
+자동으로 읽습니다.</p>
 """
 
 RANK_COLLECT_HTML = """

@@ -26,7 +26,7 @@ from stats import (
     opponent_position_players, opponent_squad, own_squad, player_finishing_trend,
     position_line, possession_stats, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_stats, team_profile, time_of_day_rates, time_weekday_rates,
-    TIME_BANDS, WEEKDAYS,
+    trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
 )
 
 __all__ = [
@@ -48,5 +48,5 @@ __all__ = [
     "position_line", "possession_stats", "result_breakdown", "season_divisions", "season_id_of",
     "shot_distance_breakdown", "shot_map",
     "shot_type_breakdown", "team_color_stats", "team_profile", "time_of_day_rates",
-    "time_weekday_rates", "TIME_BANDS", "WEEKDAYS",
+    "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
 ]

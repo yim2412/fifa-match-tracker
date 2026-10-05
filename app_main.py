@@ -39,6 +39,7 @@ import ranker
 import seasons as sn
 import store
 import theme as T
+import tradecollect
 import tray
 import updatecheck
 from core_api import (
@@ -643,7 +644,8 @@ class PlayerInfoLoader(QThread):
     """선수 카드 상세(playerinfo.fetch_player_info)를 백그라운드로 받는다.
 
     스쿼드 화면에서 선수를 클릭할 때마다 하나씩 조회하는 일회성 요청이라
-    (팀컬러처럼 수백 건을 한 번에 훑지 않는다) 풀 없이 스레드 하나로 충분하다."""
+    (팀컬러처럼 수백 건을 한 번에 훑지 않는다) 풀 없이 스레드 하나로 충분하다.
+    받은 시세는 카드 시세 캐시(card_prices)에도 넣는다 — 화면 스레드에서 DB 를 쓰지 않으려고 여기서(1.4.1)."""
 
     loaded = pyqtSignal(object)   # playerinfo.PlayerInfo
     failed = pyqtSignal(str)
@@ -655,9 +657,80 @@ class PlayerInfoLoader(QThread):
     def run(self) -> None:
         try:
             info = playerinfo.fetch_player_info(self._sp_id)
-            self.loaded.emit(info)
         except playerinfo.PlayerInfoError as e:
             self.failed.emit(str(e))
+            return
+        self.loaded.emit(info)
+        prices = playerinfo.prices_as_int(info)
+        if prices:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    store.save_card_prices(conn, self._sp_id, prices, datetime.now().date().isoformat())
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                pass  # 캐시 실패가 카드 창을 막으면 안 된다 — 다음에 다시 읽는다
+
+
+class TradeLoader(QThread):
+    """거래 기록 받기(tradecollect.collect — 키 주인 것만). 한 번에 하나.
+
+    다른 오픈API 로더(새 검색·구단주 비교)가 시작되면 화면이 cancel() 로 양보시킨다 — 쪽 사이에서 멈추고 다음 기회에
+    이어 받는다. 쪽마다 한 트랜잭션이라 끊겨도 반쪽이 안 남아 terminate 하지 않는다(shutdown 표)."""
+
+    wiped = pyqtSignal()        # 키가 바뀌어 옛 주인 거래를 지웠다(커밋 뒤) — 화면이 들고 있던 걸 버린다
+    done = pyqtSignal(object)   # tradecollect.TradeResult
+
+    def __init__(self, api: FCOnlineAPI):
+        super().__init__()
+        self._api = api
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        conn = None
+        try:
+            conn = store.open_db(config.DB_PATH)
+            # 키는 모듈 경유 — 키 바꾸는 길 셋(키 창 둘 · .env 손 수정)을 여기 한 자리에서 지문으로 잡는다
+            res = tradecollect.collect(self._api, conn, config.API_KEY, cancel=lambda: self._cancel,
+                                       on_wiped=self.wiped.emit)
+        except Exception as e:  # DB 잠김 등 — 거래 받기 실패가 앱을 죽이지 않게. 상태는 그대로라 다음에 이어 받는다
+            res = tradecollect.TradeResult(error=f"{type(e).__name__}: {e}")
+        finally:
+            if conn is not None:
+                conn.close()
+        self.done.emit(res)
+
+
+class PriceLoader(QThread):
+    """가계부 평가용 카드 시세를 하루 캐시로(playerinfo.collect_prices). 띄우는 곳은 12단계 가계부 —
+    config.price_auto_allowed() 뒤에서만. 카드 사이마다 cancel 을 본다(한 장 = 한 트랜잭션)."""
+
+    done = pyqtSignal(int, int)  # 이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
+
+    def __init__(self, spids: list[int]):
+        super().__init__()
+        self._spids = list(spids)
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        got = skipped = 0
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                got, skipped = playerinfo.collect_prices(conn, self._spids, datetime.now().date().isoformat(),
+                                                         config.PRICE_FETCH_MAX, cancel=lambda: self._cancel)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass
+        self.done.emit(got, skipped)
 
 
 class AbilitySimLoader(QThread):
@@ -1315,6 +1388,11 @@ class MainWindow(QMainWindow):
         self._pred_req: dict[str, int] = {}
         self._pred_workers: list[PredictWorker] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
+        # 거래 기록(1.4.1) — 받기는 한 번에 하나. 도는 중에 다시 띄우라는 요청(키 바꿈 등)이 오면 끝난 뒤 한 번 더
+        self._trade_loader: TradeLoader | None = None
+        self._trade_again = False
+        self._trade_result: tradecollect.TradeResult | None = None  # 마지막 받기 결과 — 거래 화면 상태 줄
+        self._price_loader: PriceLoader | None = None  # 12단계 가계부가 띄운다 — 정리 표에는 지금부터
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
@@ -2027,6 +2105,8 @@ class MainWindow(QMainWindow):
                  ("포지션별 최다 상대", "_build_position_opp_tab")]),
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
+        # 1.4.1 — 11단계는 내 계정 지정 띠·거래 받기 상태만, 12단계에서 타임라인·가계부 표가 들어온다
+        ("스쿼드·이적", [("이적시장 가계부", "_build_ledger_tab")]),
     ]
 
     def _build_main_page(self) -> QWidget:
@@ -2142,6 +2222,9 @@ class MainWindow(QMainWindow):
         idx = cur.data(Qt.ItemDataRole.UserRole)
         if idx is not None:
             self.pages.setCurrentIndex(idx)
+            if self.PAGE_RENDER_KEYS.get(self._current_page_name() or "") == "trades":
+                self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
+                self.start_trades()
             self._render_current_page()  # 낡았으면 지금 그린다(_render_all 은 보이는 것만 그린다)
 
     def _go_page(self, name: str) -> None:
@@ -2964,6 +3047,197 @@ class MainWindow(QMainWindow):
                 box.addWidget(RatioBarRow(b.label, b.goals, b.shots, color,
                                           enough=b.enough, extra=extra))
 
+    # ── 거래 기록 · 내 계정(1.4.1 — 11단계는 띠와 받기 상태, 표는 12단계) ─────────────────────
+    def _build_ledger_tab(self) -> QWidget:
+        """이적시장 가계부 — 넥슨은 API 키 주인 계정의 거래만 주므로(ROADMAP R1·R2) 위에 '내 계정' 띠(모달 아님)."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        band = Card()
+        row = QHBoxLayout()
+        self.lb_trade_banner = QLabel("-")
+        self.lb_trade_banner.setWordWrap(True)
+        row.addWidget(self.lb_trade_banner, 1)
+        self.btn_trade_mine = QPushButton("내 계정으로")
+        self.btn_trade_yes = QPushButton("맞음")
+        self.btn_trade_change = QPushButton("바꾸기")
+        self.btn_trade_mine.clicked.connect(self._on_trade_mine)
+        self.btn_trade_yes.clicked.connect(self._on_trade_yes)
+        self.btn_trade_change.clicked.connect(self._on_trade_change)
+        for b in (self.btn_trade_mine, self.btn_trade_yes, self.btn_trade_change):
+            b.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+            row.addWidget(b)
+        band.body.addLayout(row)
+        self.lb_trade_hint = QLabel("")
+        self.lb_trade_hint.setWordWrap(True)
+        self.lb_trade_hint.setStyleSheet(f"color: {T.TEXT_DIM};")
+        band.body.addWidget(self.lb_trade_hint)
+        v.addWidget(band)
+        self.lb_trade_status = QLabel("")
+        self.lb_trade_status.setWordWrap(True)
+        v.addWidget(self.lb_trade_status)
+        note = QLabel("가계부 표(산 값 · 판 값 · 손익)는 준비 중입니다 — 지금은 거래 기록을 모아 둡니다.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(note)
+        v.addStretch(1)
+        return w
+
+    def _trade_snapshot(self) -> dict | None:
+        """거래 화면이 그릴 상태 — 작은 표 몇 줄이라 화면 스레드에서 읽는다(거래 본문은 힌트용 (카드, 강화)만)."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                st = store.trade_state(conn)
+                ids = [o for o in (st.get("my_ouid"), st.get("my_ouid_unconfirmed")) if o]
+                return {
+                    "state": st,
+                    "counts": {k: store.trade_count(conn, k) for k in tradecollect.TRADE_KINDS},
+                    "latest": store.trade_latest(conn),
+                    "names": {o: store.account_nickname(conn, o) or o[:8] for o in ids},
+                    "bought": store.bought_cards(conn) if tradecollect.is_complete(st) else None,
+                }
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+
+    def _render_trades(self) -> None:
+        snap = self._trade_snapshot()
+        buttons = {"mine": False, "yes": False, "change": False}
+        hint = status = ""
+        if snap is None:
+            banner = "거래 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다."
+        else:
+            st, names = snap["state"], snap["names"]
+            mine, unconf = st.get("my_ouid"), st.get("my_ouid_unconfirmed")
+            running = self._trade_loader is not None and self._trade_loader.isRunning()
+            if st.get("key_fp") != store.key_fingerprint(config.API_KEY):
+                # 로더가 아직 새 키를 못 봤다 — 옛 주인 거래를 새 주인 것으로 읽지 않게 아무것도 안 붙인다
+                banner = "API 키 확인 중 — 거래 기록을 이 키 주인 것으로 다시 맞추고 있습니다."
+            elif mine and mine != self._ouid:
+                banner = f"거래 기록은 내 계정({names.get(mine)})에서만 볼 수 있습니다."
+                buttons["change"] = True
+            else:
+                if not mine and unconf:
+                    banner = f"API 키가 바뀌었습니다. 내 계정이 {names.get(unconf)} 맞나요?"
+                    buttons["yes"] = buttons["change"] = True
+                    hint = self._trade_hint_text(snap["bought"], unconf, again=True)
+                elif not mine:
+                    banner = (f"거래 기록은 API 키 주인 계정 것만 나옵니다. 이 계정({self._nick})이 내 계정인가요?")
+                    buttons["mine"] = True
+                    hint = self._trade_hint_text(snap["bought"], self._ouid, again=False)
+                else:
+                    banner = f"내 계정: {names.get(mine)}"
+                    buttons["change"] = True
+                status = self._trade_status_text(snap, running)
+        self.lb_trade_banner.setText(banner)
+        self.btn_trade_mine.setVisible(buttons["mine"])
+        self.btn_trade_yes.setVisible(buttons["yes"])
+        self.btn_trade_change.setVisible(buttons["change"])
+        self.lb_trade_hint.setText(hint)
+        self.lb_trade_hint.setVisible(bool(hint))
+        self.lb_trade_status.setText(status)
+        self.lb_trade_status.setVisible(bool(status))
+
+    def _trade_hint_text(self, bought, ouid: str, again: bool) -> str:
+        """R2 점수 — (카드, 강화) 단위. 판정이 아니라 참고. 옛 거래를 다 못 받았으면 숫자를 안 낸다."""
+        if bought is None:
+            return ("거래 기록을 다시 받는 중 — 끝나면 힌트가 나옵니다." if again
+                    else "거래 기록을 받는 중 — 끝나면 힌트가 나옵니다.")
+        if ouid != self._ouid:
+            return "그 계정을 검색하면 힌트가 나옵니다."
+        hit, total = core.trade_hint(self._details_all, ouid, bought)
+        if not total:
+            return ""
+        return (f"참고: 최근 {core.TRADE_HINT_GAMES}경기에 쓴 (카드, 강화) 중 이 키의 구매 기록에 있는 것 "
+                f"{hit / total:.0%} ({hit}/{total}) — 판정이 아니라 참고용입니다.")
+
+    def _trade_status_text(self, snap: dict, running: bool) -> str:
+        counts, latest, st = snap["counts"], snap["latest"], snap["state"]
+        if not latest:
+            if running or not tradecollect.is_complete(st):
+                return "거래 기록을 받는 중…"
+            return "거래 기록이 없습니다 — 넥슨이 이 API 키 주인의 거래를 주지 않았습니다."
+        try:
+            d = datetime.fromisoformat(latest)
+            last = f"{d.month}월 {d.day}일"
+        except ValueError:
+            last = latest[:10]
+        parts = [f"구매 {counts.get('buy', 0):,} · 판매 {counts.get('sell', 0):,}건",
+                 f"넥슨 반영 기준 · 마지막 거래 {last}"]
+        if running:
+            parts.append("받는 중…")
+        elif not tradecollect.is_complete(st):
+            parts.append("옛 거래를 아직 다 못 받음 — 다음 검색 때 이어 받습니다")
+        r = self._trade_result
+        if r is not None and not running:
+            if r.quota:
+                parts.append("넥슨 호출 한도에 걸려 멈춤 — 다음 검색 때 이어 받습니다")
+            elif r.error:
+                parts.append(f"받기 실패({r.error}) — 다음 검색 때 다시")
+        return " · ".join(parts)
+
+    def _set_my_account(self, mine: str | None) -> None:
+        """띠 버튼 — 화면 스레드가 trade_state 한 줄만 쓴다(받기와 무관 — 답을 안 해도 받기는 계속)."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.set_trade_state(conn, my_ouid=mine, my_ouid_unconfirmed=None)
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            self.statusBar().showMessage(f"내 계정을 저장하지 못했습니다: {e}", 5000)
+        self._invalidate("trades")
+
+    def _on_trade_mine(self) -> None:
+        if self._ouid:
+            self._set_my_account(self._ouid)
+
+    def _on_trade_yes(self) -> None:
+        snap = self._trade_snapshot()
+        if snap and snap["state"].get("my_ouid_unconfirmed"):
+            self._set_my_account(snap["state"]["my_ouid_unconfirmed"])
+
+    def _on_trade_change(self) -> None:
+        self._set_my_account(None)
+
+    def _api_loader_busy(self) -> bool:
+        return any(t is not None and t.isRunning() for t in (self._loader, self._compare_loader))
+
+    def start_trades(self) -> None:
+        """거래 기록 받기 — 검색·비교가 끝난 뒤 · 키를 바꾼 직후 · 거래 화면을 열 때. 키가 있으면 계정과 무관하게
+        (지정 전에 받아야 힌트가 나온다). 하루 제한은 로더 안에서(키가 바뀌었으면 무관하게 받는다)."""
+        if not config.API_KEY or self._quitting:
+            return
+        if self._trade_loader is not None and self._trade_loader.isRunning():
+            self._trade_again = True  # 끝난 뒤 한 번 더 — 화면 스레드에서 wait() 하지 않는다
+            return
+        if self._api_loader_busy():
+            return  # 그 로더가 끝나면(finished) 다시 여기로 온다 — 상세 동시 요청·키 한도를 나눠 쓰지 않게
+        self._trade_again = False
+        ld = TradeLoader(self._api)
+        ld.wiped.connect(self._on_trades_wiped)
+        ld.done.connect(self._on_trades_done)
+        ld.finished.connect(self._on_trade_thread_finished)
+        self._trade_loader = ld
+        ld.start()
+
+    def _yield_trades(self) -> None:
+        """다른 오픈API 로더가 시작된다 — 쪽 사이에서 멈추게만(기다리지 않는다). 그 로더가 끝나면 이어 받는다."""
+        if self._trade_loader is not None and self._trade_loader.isRunning():
+            self._trade_loader.cancel()
+
+    def _on_trades_wiped(self) -> None:
+        self._invalidate("trades")  # 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게(12단계 메뉴도 여기에)
+
+    def _on_trades_done(self, res) -> None:
+        self._trade_result = res  # 그리기는 스레드가 끝난 뒤(finished) — 여기선 아직 isRunning 이라 "받는 중"으로 남는다
+
+    def _on_trade_thread_finished(self) -> None:
+        self._invalidate("trades")
+        if self._trade_again:
+            self.start_trades()
+
     def _build_finishing_tab(self) -> QWidget:
         """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 비공식 근사치."""
         w = QWidget()
@@ -3301,7 +3575,9 @@ class MainWindow(QMainWindow):
         self.lb_compare_status.setText(f"'{nick}' 조회 중…")
         # 내 계정과 같은 방식(MatchLoader) 재사용 — 이미 DB 캐시·중복 방지가 있어
         # 같은 상대를 다시 비교하면 거의 즉시 끝난다.
+        self._yield_trades()
         self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
+        self._compare_loader.finished.connect(self.start_trades)  # 끝나면 거래 받기를 잇는다
         self._compare_loader.finished_ok.connect(self._on_compare_loaded)
         self._compare_loader.failed.connect(self._on_compare_failed)
         self._compare_loader.key_invalid.connect(self._on_compare_key_invalid)
@@ -3341,6 +3617,10 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._api.set_key(config.API_KEY)
             self.statusBar().showMessage("API 키를 바꿨습니다. 다시 검색하세요.")
+            # 거래는 키 주인 것 — 새 키로 바로 다시 맞춘다("API 키 확인 중"이 다음 검색까지 안 풀리지 않게)
+            self._yield_trades()
+            self.start_trades()
+            self._invalidate("trades")
 
     def _render_compare(self, opp_nick: str, opp_matches: list[MatchSummary],
                         opp_ouid: str, opp_details: list[dict]) -> None:
@@ -3530,8 +3810,10 @@ class MainWindow(QMainWindow):
         prev = (self._ouid, self._matches_all, self._details_all) if self._ouid else None
         # 미리 읽은 것은 한 번만 넘긴다 — 다른 계정이면 로더가 멈추고 버린다
         prefetch, self._prefetch = self._prefetch, None
+        self._yield_trades()  # 거래 받기는 쪽 사이에서 멈추고, 이 검색이 끝나면(finished) 이어 받는다
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
                                    prefetch=prefetch, record_elo=True, want_max_division=True)
+        self._loader.finished.connect(self.start_trades)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
@@ -3860,6 +4142,7 @@ class MainWindow(QMainWindow):
         "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing",
         "포지션별 최다 상대": "teamcolor",
         "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
+        "이적시장 가계부": "trades",
     }
     # 위 표 밖의 메뉴 — 이유 없이 빠진 메뉴는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
     PAGE_RENDER_EXEMPT = {
@@ -3887,6 +4170,7 @@ class MainWindow(QMainWindow):
             "shotmap": self._render_shotmap,  # 표시 구간
             "finishing": lambda: self._render_finishing(self._slice()[1]),
             "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위
+            "trades": self._render_trades,  # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기
         }
 
     def _render_all(self) -> None:
@@ -5576,6 +5860,10 @@ class MainWindow(QMainWindow):
             (self._table_season_loader, cancel(self._table_season_loader), 500, False),
             (self._finishing_icon_loader, cancel(self._finishing_icon_loader), 500, False),
             (self._compare_loader, cancel(self._compare_loader), 8000, True),
+            # 쪽 사이에서 멈춘다 — 진행 중인 요청 하나(타임아웃 10초)까지. 쪽마다 한 트랜잭션이라 terminate 하지 않는다
+            (self._trade_loader, cancel(self._trade_loader), 12000, False),
+            # 카드 사이에서 멈춘다(한 장 = 한 트랜잭션) — 같은 이유로 terminate 하지 않는다
+            (self._price_loader, cancel(self._price_loader), 12000, False),
             *[(ld, cancel(ld), 500, False) for ld in self._compare_squad_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
@@ -5586,14 +5874,14 @@ class MainWindow(QMainWindow):
             (self._position_ovr_loader, None, 2000, False),
         ]
         running = [(t, stop, ms, term) for t, stop, ms, term in table if t is not None and t.isRunning()]
-        if fast:
-            for _t, stop, _ms, _term in running:
-                if stop:
-                    stop()
-            return [t for t, *_ in running]
-        for t, stop, ms, term in running:
+        # 멈춤 요청을 전부 먼저 — 하나씩 "요청 → 기다림"이면 뒤 스레드가 앞의 기다림 동안 계속 돌아 최악이 합이 된다
+        # (1.4.1 에 12초짜리 둘이 들어오며 85초를 넘을 뻔했다 · test_shutdown_requests_all_stops_first)
+        for _t, stop, _ms, _term in running:
             if stop:
                 stop()
+        if fast:
+            return [t for t, *_ in running]
+        for t, _stop, ms, term in running:
             if not t.wait(ms) and term:
                 t.terminate()
                 t.wait(1000)
@@ -6101,7 +6389,8 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     if config.notice_needed():
         if NoticeDialog().exec() != QDialog.DialogCode.Accepted:
             return None
-    if not config.API_KEY:
+    new_key = not config.API_KEY
+    if new_key:
         if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
             return None
     try:
@@ -6119,6 +6408,8 @@ def _open_window(shell: tray.AppShell, show: bool = True):
         win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
     win.start_update_check()
     win.start_cache_prune()
+    if new_key:
+        win.start_trades()  # 키를 막 넣었다 — 거래 기록(키 주인 것)을 받아 둔다(내 계정 힌트가 검색 직후 나오게)
     if show:
         QTimer.singleShot(0, win.ask_notice_update_once)  # 창이 그려진 뒤 그 위에(옛 동의자만)
         if config.OPEN_LAST_ACCOUNT:

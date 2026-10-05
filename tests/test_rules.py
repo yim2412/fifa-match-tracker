@@ -218,7 +218,7 @@ def collect_sql() -> dict[str, set[str]]:
 
     sqlite3.connect = connect
     try:
-        for name in ("test_parsing", "test_rankcollect"):
+        for name in ("test_parsing", "test_rankcollect", "test_trades"):
             spec = importlib.util.spec_from_file_location(f"_rules_{name}", ROOT / "tests" / f"{name}.py")
             mod = importlib.util.module_from_spec(spec)
             with contextlib.redirect_stdout(io.StringIO()):
@@ -250,6 +250,7 @@ def _drive_uncovered() -> None:
             store.match_dates(conn, "a", "2026-01-01")          # 예측(1.3.1) — test_predict·화면 스모크가 부른다
             store.predictions(conn)
             store.predictions(conn, "a")
+            store.account_nickname(conn, "a")                   # 거래 화면 띠(1.4.1) — 화면 스모크가 부른다
         finally:
             conn.close()
         import rankcollect

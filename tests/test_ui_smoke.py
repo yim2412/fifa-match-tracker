@@ -3271,7 +3271,7 @@ def test_search_hands_current_account_to_loader():
             elo.append(record_elo)
             maxdiv.append(want_max_division)
             self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
-            self.rank_ready = self.max_division_ready = self
+            self.rank_ready = self.max_division_ready = self.finished = self
             self.elo_saved = _Sig()
 
 
@@ -4880,11 +4880,14 @@ def test_notice_versions_split_first_and_reask():
     keep = config.NOTICE_ACCEPTED
     try:
         for acc, needed, pending, track in [(0, True, False, False), (1, True, False, False),
-                                            (2, False, True, False), (3, False, False, True)]:
+                                            (2, False, True, False), (3, False, True, True),
+                                            (4, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
-        assert config.NOTICE_VERSION == config.TRACK_NOTICE_VERSION == 3 and config.NOTICE_BASE_VERSION == 2
+        # 1.4.1: 4 = 거래 기록·시세 자동 읽기 — 옛 동의(2·3)는 막지 않고 다시 묻기만, 자동 시세만 4 뒤부터
+        assert (config.NOTICE_VERSION, config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION,
+                config.NOTICE_BASE_VERSION) == (4, 4, 3, 2)
     finally:
         config.NOTICE_ACCEPTED = keep
 
@@ -4982,6 +4985,299 @@ def test_reask_on_tray_open_and_second_instance():
         assert _count_reask(sh.show_window) == [True]
     finally:
         sh.window = None
+
+
+# ── 거래 기록 · 내 계정(1.4.1 · 11단계) ─────────────────────────────────────────
+
+class _TradeKey:
+    """config.API_KEY 를 테스트 키로 바꾸고 거래 표·상태를 비운 채 시작 — 끝나면 되돌린다."""
+
+    def __init__(self, key="ui-test-key"):
+        self.key = key
+
+    def __enter__(self):
+        self.keep = config.API_KEY
+        config.API_KEY = self.key
+        c = store.open_db(config.DB_PATH)
+        with c:
+            c.execute("DELETE FROM trades")
+            c.execute("DELETE FROM trade_state")
+        c.close()
+        return self
+
+    def state(self, **kv):
+        c = store.open_db(config.DB_PATH)
+        store.set_trade_state(c, **kv)
+        c.close()
+
+    def ready(self, bought=(), **kv):
+        """지금 키로 다 받은 상태 + 산 (카드, 강화)."""
+        c = store.open_db(config.DB_PATH)
+        store.save_trades(c, "buy", [{"tradeDate": "2026-09-30T10:00:00", "saleSn": f"b{i}", "spid": s,
+                                      "grade": g, "value": 100} for i, (s, g) in enumerate(bought)])
+        store.save_trades(c, "sell", [{"tradeDate": "2026-09-29T10:00:00", "saleSn": "s0", "spid": 1,
+                                       "grade": 1, "value": 50}])
+        store.set_trade_state(c, key_fp=store.key_fingerprint(self.key), done_buy="1", done_sell="1", **kv)
+        c.close()
+
+    def __exit__(self, *exc):
+        config.API_KEY = self.keep
+        c = store.open_db(config.DB_PATH)
+        with c:
+            c.execute("DELETE FROM trades")
+            c.execute("DELETE FROM trade_state")
+        c.close()
+        _win._trade_result = None
+
+
+def _my_cards(n=3):
+    me = next(p for p in _DETAILS[0]["matchInfo"] if p.get("ouid") == _OUID)
+    return [(p["spId"], p["spGrade"]) for p in me["player"][:n]]
+
+
+def _trade_view():
+    _win._render_trades()
+    vis = {n: getattr(_win, f"btn_trade_{n}").isVisibleTo(_win.lb_trade_banner.parentWidget())
+           for n in ("mine", "yes", "change")}
+    return _win.lb_trade_banner.text(), _win.lb_trade_hint.text(), _win.lb_trade_status.text(), vis
+
+
+def test_trade_page_in_nav():
+    names = [n for _g, items in app_main.MainWindow.NAV for n, _b in items]
+    assert "이적시장 가계부" in names and app_main.MainWindow.PAGE_RENDER_KEYS["이적시장 가계부"] == "trades"
+
+
+def test_my_account_banner():
+    with _TradeKey() as k:
+        k.ready(bought=_my_cards(2))
+        banner, hint, status, vis = _trade_view()
+        assert "이 계정(테스트구단주)이 내 계정인가요" in banner and vis == {"mine": True, "yes": False, "change": False}, (banner, vis)
+        assert "%" in hint and "참고" in hint, hint
+        assert "마지막 거래 9월 30일" in status and "구매 2 · 판매 1건" in status, status
+        _win.btn_trade_mine.click()
+        assert store.trade_state(store.open_db(config.DB_PATH)).get("my_ouid") == _OUID
+        banner, hint, status, vis = _trade_view()
+        assert banner.startswith("내 계정:") and vis["change"] and not vis["mine"] and not hint, (banner, vis, hint)
+        # 다른 계정이 내 계정으로 정해져 있으면 거래는 안 붙인다
+        k.state(my_ouid="someone-else")
+        banner, hint, status, vis = _trade_view()
+        assert "내 계정(" in banner and "에서만" in banner and not status and vis["change"], (banner, status)
+        _win.btn_trade_change.click()
+        banner, *_ = _trade_view()
+        assert "내 계정인가요" in banner, banner
+
+
+def test_hint_needs_trades():
+    with _TradeKey() as k:
+        k.ready(bought=_my_cards(2))
+        k.state(done_buy=None)  # 옛 거래를 아직 다 못 받았다
+        banner, hint, status, _vis = _trade_view()
+        assert "받는 중" in hint and "%" not in hint, hint
+        assert "옛 거래를 아직 다 못 받음" in status, status
+
+
+def test_trade_screen_key_checking():
+    with _TradeKey() as k:
+        k.ready(bought=_my_cards(2), my_ouid=_OUID)
+        k.state(key_fp=store.key_fingerprint("old-key"))  # 로더가 아직 새 키를 못 봤다
+        banner, hint, status, vis = _trade_view()
+        assert "API 키 확인 중" in banner and not any(vis.values()) and not hint and not status, (banner, vis, status)
+
+
+def test_key_change_asks_confirm_without_blocking_fetch():
+    with _TradeKey() as k:
+        k.ready(bought=_my_cards(2), my_ouid_unconfirmed=_OUID)
+        banner, hint, status, vis = _trade_view()
+        assert "API 키가 바뀌었습니다" in banner and vis == {"mine": False, "yes": True, "change": True}, (banner, vis)
+        assert "%" in hint and "구매 2" in status, (hint, status)   # 답을 안 해도 받은 거래는 보인다
+        k.state(done_sell=None)
+        assert "다시 받는 중" in _trade_view()[1]
+        _win.btn_trade_yes.click()
+        st = store.trade_state(store.open_db(config.DB_PATH))
+        assert st.get("my_ouid") == _OUID and "my_ouid_unconfirmed" not in st, st
+
+
+class _FakeTradeApi:
+    def __init__(self):
+        self.calls, self.keys = [], []
+
+    def set_key(self, key):
+        self.keys.append(key)
+
+    def get_trades(self, kind, offset=0, limit=100):
+        self.calls.append((kind, offset))
+        if offset:
+            return []
+        return [{"tradeDate": "2026-10-01T09:00:00", "saleSn": f"new-{kind}", "spid": 5, "grade": 2, "value": 9}]
+
+
+def test_key_change_starts_loader_same_day():
+    """키를 바꾼 직후 — 오늘 이미 받았어도(fetched_at) 새 키로 다시 받는다("확인 중"이 다음 날까지 안 풀리지 않게)."""
+    keep = _win._api, app_main.ApiKeyDialog, _win._trade_loader
+    with _TradeKey("old-key") as k:
+        k.ready(bought=_my_cards(1), my_ouid=_OUID, fetched_at=datetime.now().date().isoformat())
+        api = _win._api = _FakeTradeApi()
+
+        class Accept:
+            def __init__(self, *a, **kw):
+                pass
+
+            def exec(self):
+                config.API_KEY = "new-key"
+                return app_main.QDialog.DialogCode.Accepted
+        app_main.ApiKeyDialog = Accept
+        try:
+            _win._trade_loader = None
+            _win._ask_new_key("만료")
+            ld = _win._trade_loader
+            assert isinstance(ld, app_main.TradeLoader) and api.keys == ["new-key"], (ld, api.keys)
+            wiped = []
+            ld.wiped.connect(lambda: wiped.append(1))
+            ld.run()  # QThread.start 는 막혀 있다 — 같은 스레드에서
+            st = store.trade_state(store.open_db(config.DB_PATH))
+            assert wiped and api.calls, (wiped, api.calls)
+            assert st["key_fp"] == store.key_fingerprint("new-key") and st.get("my_ouid_unconfirmed") == _OUID, st
+            assert "b0" not in {r[0] for r in store.open_db(config.DB_PATH).execute("SELECT sale_sn FROM trades")}
+        finally:
+            _win._api, app_main.ApiKeyDialog, _win._trade_loader = keep
+
+
+def test_trade_key_change_via_env():
+    """.env 를 손으로 고쳐 다시 켠 경우 — 키 창을 안 거쳐도 로더가 지문으로 잡는다."""
+    with _TradeKey("first-key") as k:
+        k.ready(bought=_my_cards(1), my_ouid=_OUID)
+        config.API_KEY = "edited-in-env"
+        api = _FakeTradeApi()
+        ld = app_main.TradeLoader(api)
+        got = []
+        ld.done.connect(got.append)
+        ld.run()
+        assert got and got[0].wiped and got[0].complete, got
+        assert store.trade_state(store.open_db(config.DB_PATH))["key_fp"] == store.key_fingerprint("edited-in-env")
+
+
+def test_trade_wipe_clears_screen():
+    """지웠음 신호 → 거래 화면을 다시 읽는다 — 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게."""
+    keep = _win.LAZY_RENDER
+    _win.LAZY_RENDER = True
+    try:
+        with _TradeKey() as k:
+            k.ready(bought=_my_cards(2), my_ouid=_OUID)
+            _win._go_page("대시보드")
+            _win._dirty.discard("trades")
+            _win._on_trades_wiped()
+            assert "trades" in _win._dirty, "보이지 않는 거래 화면을 낡음으로 안 표시했다"
+            _win._go_page("이적시장 가계부")      # 열면 다시 그린다
+            assert "trades" not in _win._dirty
+            assert _win.lb_trade_banner.text().startswith("내 계정:"), _win.lb_trade_banner.text()
+            k.state(key_fp=store.key_fingerprint("other"))   # 보이는 중에 지웠음 — 바로 다시 읽는다
+            _win._on_trades_wiped()
+            assert "API 키 확인 중" in _win.lb_trade_banner.text(), _win.lb_trade_banner.text()
+    finally:
+        _win.LAZY_RENDER = keep
+        _win._go_page("대시보드")
+
+
+class _FakeThread:
+    def __init__(self, name, log, running=True):
+        self.name, self.log, self.running = name, log, running
+
+    def isRunning(self):
+        return self.running
+
+    def cancel(self):
+        self.log.append(f"stop {self.name}")
+
+    def wait(self, ms):
+        self.log.append(f"wait {self.name}")
+        return True
+
+    def terminate(self):
+        self.log.append(f"kill {self.name}")
+
+
+def test_trade_yields_to_new_search():
+    keep = _win._trade_loader, _win._loader, _win._compare_loader, _win._api
+    log = []
+    try:
+        _win._api = _FakeTradeApi()
+        _win._trade_loader = _FakeThread("trade", log)
+        _win._loader = None
+        _win._api_search("다른구단주")
+        assert log == ["stop trade"], log           # 쪽 사이에서 멈추게만 — 기다리지 않는다
+        assert isinstance(_win._loader, app_main.MatchLoader)
+        # 검색 스레드가 끝나면(finished — QThread.start 는 막혀 있어 손으로 낸다) 거래 받기를 잇는다
+        with _TradeKey():
+            _win._trade_loader = None
+            _win._loader.finished.emit()
+            assert isinstance(_win._trade_loader, app_main.TradeLoader), "검색이 끝났는데 거래 받기를 안 이었다"
+            # 구단주 비교도 같은 규칙 — 시작할 때 양보, 끝나면 잇기
+            _win._trade_loader = _FakeThread("trade-c", log)
+            _win._loader, _win._compare_loader = None, None
+            _win.ed_compare_nick.setText("비교상대")
+            _win._on_compare_search()
+            assert "stop trade-c" in log and isinstance(_win._compare_loader, app_main.MatchLoader), log
+            _win._trade_loader = None
+            _win._compare_loader.finished.emit()
+            assert isinstance(_win._trade_loader, app_main.TradeLoader), "비교가 끝났는데 거래 받기를 안 이었다"
+            _win.ed_compare_nick.setText("")
+            _win.btn_compare.setEnabled(True)
+        # 검색이 도는 동안엔 다시 안 띄운다 — 끝나면(finished → start_trades) 이어 받는다
+        _win._trade_loader = None
+        _win._loader = _FakeThread("search", log)
+        with _TradeKey():
+            _win.start_trades()
+            assert _win._trade_loader is None, "검색 중에 거래 받기를 띄웠다"
+            _win._loader.running = False
+            _win.start_trades()
+            assert isinstance(_win._trade_loader, app_main.TradeLoader), "검색이 끝났는데 안 띄웠다"
+            # 도는 중에 또 부르면 끝난 뒤 한 번 더(키 바꿈 등) — 화면 스레드에서 wait() 안 함
+            _win._trade_loader = _FakeThread("trade2", log)
+            _win.start_trades()
+            assert _win._trade_again and "wait trade2" not in log
+    finally:
+        _win._trade_loader, _win._loader, _win._compare_loader, _win._api = keep
+        _win._trade_again = False
+        _win._set_busy(False)
+
+
+def test_shutdown_requests_all_stops_first():
+    """멈춤 요청을 표 전체에 먼저 보내고 그다음 차례로 기다린다 — 하나씩이면 최악이 합이 된다(1.4.1 종료 대기)."""
+    names = ("_loader", "_compare_loader", "_trade_loader", "_price_loader")
+    keep = {n: getattr(_win, n) for n in names}
+    log = []
+    try:
+        for n in names:
+            setattr(_win, n, _FakeThread(n, log))
+        assert _win.shutdown() == []
+        stops = [i for i, e in enumerate(log) if e.startswith("stop")]
+        waits = [i for i, e in enumerate(log) if e.startswith("wait")]
+        assert len(stops) == 4 and len(waits) == 4 and max(stops) < min(waits), log
+        assert not any(e.startswith("kill") for e in log), log
+        log.clear()
+        assert len(_win.shutdown(fast=True)) == 4 and all(e.startswith("stop") for e in log), log
+    finally:
+        for n, v in keep.items():
+            setattr(_win, n, v)
+
+
+def test_price_tab_fills_cache():
+    """선수 카드 [시세] 탭이 읽은 시세는 작업 스레드가 카드 시세 캐시에 넣는다(화면 스레드에서 DB 쓰기 안 함)."""
+    keep = playerinfo.fetch_player_info
+    playerinfo.fetch_player_info = lambda sp, timeout=10: playerinfo.PlayerInfo(
+        sp_id=sp, prices={0: "-", 1: "308,000 BP", 8: "17,400,000 BP"})
+    try:
+        ld = app_main.PlayerInfoLoader(424242)
+        got = []
+        ld.loaded.connect(got.append)
+        ld.run()
+        c = store.open_db(config.DB_PATH)
+        prices = store.load_card_prices(c, [424242])
+        c.close()
+        assert got and prices == {(424242, 1): (308000, datetime.now().date().isoformat()),
+                                  (424242, 8): (17400000, datetime.now().date().isoformat())}, prices
+    finally:
+        playerinfo.fetch_player_info = keep
 
 
 def main() -> int:

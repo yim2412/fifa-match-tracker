@@ -57,6 +57,16 @@ def main() -> int:
     except NexonAPIError as e:
         print(f"[WARN] 역대 최고 등급: {e.message}")
 
+    # 1.4.1 거래 기록 — ouid 없이(넥슨이 무시하고 키 주인 것만 준다, ROADMAP R1). 카드·금액은 찍지 않는다.
+    # 마지막 거래 날짜로 반영 지연(R6)을, 넥슨이 ouid 를 다시 존중하게 바뀌면 여기서 400·빈 목록으로 보인다
+    for kind in ("buy", "sell"):
+        try:
+            rows = api.get_trades(kind)
+            last = str(rows[0].get("tradeDate") or "")[:16] if rows else "-"
+            print(f"[OK]   거래 기록({kind}, 키 주인 것): 첫 쪽 {len(rows)}건 · 마지막 거래 {last}")
+        except NexonAPIError as e:
+            print(f"[WARN] 거래 기록({kind}): {e.message}  (code={e.code}, status={e.status})")
+
     try:
         ids = api.get_match_ids(ouid, config.DEFAULT_MATCH_TYPE, 0, 5)
         print(f"[OK]   최근 매치 {len(ids)}건: {ids[:2]}")
