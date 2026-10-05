@@ -900,6 +900,24 @@ def test_qt_slot_crash_reaches_log_and_app_survives():
         assert len(ctx.notified) == 1, ctx.notified
 
 
+def test_main_quit_arg_only_asks_and_starts_nothing():
+    # 제거기가 부르는 --quit — 떠 있는 실행본에 부탁만 하고, 이 실행은 준비·한 번만 실행 주인·창 무엇도 안 된다
+    import tray
+    asked = []
+
+    def boom(*a, **k):
+        raise AssertionError("--quit 실행이 앱을 띄우려 했다")
+
+    orig = app_main._setup_app, tray.request_quit, tray.SingleInstance
+    app_main._setup_app = tray.SingleInstance = boom
+    tray.request_quit = lambda name: asked.append(name) or "none"
+    try:
+        assert app_main.main(["exe", tray.QUIT_ARG]) == 0
+    finally:
+        app_main._setup_app, tray.request_quit, tray.SingleInstance = orig
+    assert asked == [tray.instance_name()], asked
+
+
 def test_main_runs_setup_first():
     # main() → _setup_app 배선 — 이 한 줄이 빠지면 exe 의 크래시 로그가 통째로 꺼진다
     class _Stop(Exception):

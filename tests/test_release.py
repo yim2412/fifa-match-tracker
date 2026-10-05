@@ -191,6 +191,17 @@ def test_uninstaller_removes_installed_autostart_value():
     assert "usUninstall" in iss and autostart.VALUE_PORTABLE not in iss, "제거기는 설치판 값만 지운다"
 
 
+def test_uninstaller_quits_running_app_first():
+    # 제거기가 떠 있는 앱(트레이 상주)을 안 끝내면 앱이 계속 돌고 설치 폴더가 통째로 남는다(1.1.1 실측)
+    import tray
+    iss = release.ISS.read_text(encoding="utf-8-sig")
+    assert f'#define QuitArg "{tray.QUIT_ARG}"' in iss, "제거기의 종료 인자가 tray.QUIT_ARG 와 다르다"
+    code = iss[iss.index("procedure CurUninstallStepChanged"):]
+    body = code[:code.index("\nend;")]
+    assert "Exec(ExpandConstant('{app}\\{#AppExe}'), '{#QuitArg}'" in body and "ewWaitUntilTerminated" in body, body
+    assert body.index("usUninstall") < body.index("{#QuitArg}"), "확인 창 뒤(usUninstall)에서 끝내야 취소해도 앱이 산다"
+
+
 def test_installer_shows_app_name():
     iss = release.ISS.read_text(encoding="utf-8-sig")
     assert f'#define AppTitle "{release.config.APP_NAME}"' in iss, "설치 파일 표시 이름이 config.APP_NAME 과 다르다"

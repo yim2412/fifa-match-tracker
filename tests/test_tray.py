@@ -208,6 +208,87 @@ def test_single_real_mutex_detects_second_claim():
     assert e2 and not h2, (h2, e2)
 
 
+def test_single_server_quit_message_requests_quit_without_activating():
+    si = tray.SingleInstance("x")
+    shown, quit_req = [], []
+    si.activated.connect(lambda: shown.append(1))
+    si.quit_requested.connect(lambda: quit_req.append(1))
+
+    class _Sock:
+        out = b""
+
+        def readAll(self):
+            return b"quit\n"
+
+        def write(self, b):
+            _Sock.out += b
+
+        def flush(self):
+            pass
+
+    si._on_message(_Sock())
+    assert quit_req == [1] and shown == [] and _Sock.out == b"ok", (quit_req, shown, _Sock.out)
+
+
+def test_request_quit_does_nothing_when_not_running():
+    sent = []
+    assert tray.request_quit("x", exists=lambda n: False, send=sent.append) == "none"
+    assert sent == [], "떠 있지 않은데 종료를 보냈다"
+
+
+def test_request_quit_waits_until_owner_is_gone_or_limit():
+    alive = {"n": 3}  # 보낸 뒤 세 번 더 '있음'으로 보이다 끝난다
+
+    def exists(_n):
+        if not sent:
+            return True
+        alive["n"] -= 1
+        return alive["n"] >= 0
+
+    sent, slept = [], []
+    assert tray.request_quit("x", wait_s=10, exists=exists, send=sent.append, sleep=slept.append) == "done"
+    assert sent == ["x"] and len(slept) == 3, (sent, slept)
+    t = {"now": 0.0}
+
+    def tick(s):
+        t["now"] += s
+
+    assert tray.request_quit("x", wait_s=1, exists=lambda n: True, send=lambda n: None,
+                             sleep=tick, clock=lambda: t["now"]) == "timeout"
+    assert 1 <= t["now"] < 1.5, t
+
+
+def test_request_quit_real_mutex_seen_and_released():
+    # 실제 뮤텍스 — 만들지 않고 있는지만 보는 함수가 주인이 있을 때만 참인지
+    if sys.platform != "win32":
+        return
+    import ctypes
+    name = f"FifaMatchTracker-quit-{os.getpid()}"
+    assert not tray._win_mutex_exists(name), "없는 뮤텍스를 있다고 본다"
+    h, existed = tray._win_mutex(name)
+    assert h and not existed
+    assert tray._win_mutex_exists(name), "주인이 있는데 못 본다"
+    released = []
+
+    def send(n):
+        ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(h))
+        released.append(n)
+
+    assert tray.request_quit(name, wait_s=3, send=send) == "done" and released == [name]
+
+
+def test_shell_quits_fast_when_uninstaller_asks():
+    si = tray.SingleInstance("x")
+    sh = tray.AppShell(_app, sched=_FakeSched(), single=si)
+    w = _FakeWin(False)
+    sh.attach_window(w)
+    sh.tray = _FakeTray()
+    quits = []
+    sh.app = type("A", (), {"quit": lambda self: quits.append(1)})()
+    si.quit_requested.emit()
+    assert w.calls[1] == ("shutdown", True, True) and quits == [1], (w.calls, quits)
+
+
 # ── 종료 진입점 ───────────────────────────────────────────────────────
 class _Thread:
     def __init__(self, ends_after_s: float | None):

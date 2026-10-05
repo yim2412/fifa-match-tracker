@@ -9,6 +9,7 @@
 | 트레이 [종료] | quit_app() | quit_app() |
 | 앱 안 [업데이트] | quit_app() | (숨긴 상태엔 버튼 없음) |
 | 윈도우 종료·로그오프·설치기 | commitDataRequest → quit_app(fast=True) | 같음 |
+| 제거기(`--quit` → 한 번만 실행 통로의 quit) | quit_requested → quit_app(fast=True) | 같음 |
 | 처리 안 된 예외 | 기록 + 안내 창(app_main) | 기록만, 창을 열 때 안내(트레이 알림 없음) |
 
 ⚠ app.quit() 은 보이는 창의 closeEvent 를 한 번 더 부른다(PyQt 6.11 실측) → 창은 `_quitting` 이면 숨김·정리 없이 받기만.
@@ -31,6 +32,10 @@ import autostart
 import config
 
 _MSG_SHOW, _MSG_OK, _MSG_QUITTING = b"show", "ok", "quitting"
+_MSG_QUIT = b"quit"
+# 떠 있는 실행본에 종료를 부탁한다 — 제거기(.iss InitializeUninstall)가 부른다. 제거기는 설치기와 달리
+# 떠 있는 앱을 닫지 않아, 트레이에 남은 앱이 돌고 설치 폴더가 통째로 남았다(1.1.1 exe 실측).
+QUIT_ARG = "--quit"
 
 
 # ── 한 번만 실행 ──────────────────────────────────────────────────────
@@ -65,6 +70,50 @@ def _win_mutex(name: str):
     return h, existed
 
 
+def _win_mutex_exists(name: str) -> bool:
+    """만들지 않고 있는지만 — 종료 부탁 뒤 앞 실행본이 정말 끝났는지 볼 때."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenMutexW.restype = wintypes.HANDLE
+    k32.OpenMutexW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    h = k32.OpenMutexW(0x00100000, False, f"Local\\{name}")  # SYNCHRONIZE
+    if h:
+        k32.CloseHandle(h)
+        return True
+    return False
+
+
+def request_quit(name: str, wait_s: float | None = None, exists=_win_mutex_exists, send=None,
+                 sleep=time.sleep, clock=time.monotonic) -> str:
+    """떠 있는 실행본에 종료를 부탁하고 끝날 때까지 기다린다 → "none"(떠 있지 않음) · "done" · "timeout".
+    떠 있지 않으면 아무것도 켜지 않는다 — --quit 실행이 앱을 새로 띄우면 제거기가 그걸 못 지운다."""
+    wait_s = config.QUIT_REQUEST_WAIT_S if wait_s is None else wait_s
+    if not exists(name):
+        return "none"
+    (send or _send_quit)(name)
+    deadline = clock() + wait_s
+    while exists(name):
+        if clock() >= deadline:
+            return "timeout"
+        sleep(0.2)
+    return "done"
+
+
+def _send_quit(name: str) -> None:
+    sock = QLocalSocket()
+    sock.connectToServer(name)
+    if not sock.waitForConnected(1000):
+        return
+    sock.write(_MSG_QUIT + b"\n")
+    sock.flush()
+    sock.waitForReadyRead(2000)
+    sock.disconnectFromServer()
+
+
 def _allow_foreground() -> None:
     """두 번째 프로세스가 앞 실행본에게 '창을 앞으로 가져와도 된다'고 넘긴다(윈도우 포그라운드 제한)."""
     if sys.platform != "win32":
@@ -96,6 +145,7 @@ class SingleInstance(QObject):
     """한 번만 실행 — claim() 이 True 면 이 프로세스가 주인, False 면 앞 실행본을 앞으로 불렀으니 끝내면 된다."""
 
     activated = pyqtSignal()
+    quit_requested = pyqtSignal()  # --quit(제거기) — AppShell 이 quit_app 으로 받는다
 
     def __init__(self, name: str, is_quitting: Callable[[], bool] = lambda: False,
                  mutex=_win_mutex, ping_fn=ping, sleep=time.sleep, clock=time.monotonic):
@@ -137,7 +187,13 @@ class SingleInstance(QObject):
             sock.disconnected.connect(sock.deleteLater)
 
     def _on_message(self, sock: QLocalSocket) -> None:
-        if _MSG_SHOW not in bytes(sock.readAll()):
+        data = bytes(sock.readAll())
+        if _MSG_QUIT in data:
+            sock.write(_MSG_OK.encode())
+            sock.flush()
+            self.quit_requested.emit()
+            return
+        if _MSG_SHOW not in data:
             return
         quitting = self.is_quitting()
         sock.write((_MSG_QUITTING if quitting else _MSG_OK).encode())
@@ -190,6 +246,8 @@ class AppShell(QObject):
         if single is not None:
             single.is_quitting = lambda: self._quitting
             single.activated.connect(self.show_window)
+            # 제거기 — 윈도우 종료·설치기와 같은 빠른 종료(제거기가 기다리고 있다)
+            single.quit_requested.connect(lambda: self.quit_app(fast=True))
 
     # ── 시작 ──
     def attach_window(self, win) -> None:

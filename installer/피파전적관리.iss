@@ -11,6 +11,8 @@
 #define OldTitle "피파 전적관리"
 ; 앱 쪽 상수와 같아야 한다(test_release 가 대조) — autostart.VALUE_INSTALLED
 #define RunValue "FifaMatchTracker"
+; tray.QUIT_ARG 와 같아야 한다(test_release 가 대조)
+#define QuitArg "--quit"
 
 [Setup]
 ; AppId 는 바꾸지 않는다 — 바뀌면 새 버전이 덮어쓰기가 아니라 별개 프로그램으로 깔린다
@@ -73,8 +75,16 @@ end;
 
 // 제거할 때 자동 실행 등록을 지운다 — 앱 토글(autostart.py)이 만든 값이라 [Registry] 로는 못 지운다.
 // 설치판 값만(autostart.VALUE_INSTALLED) — 포터블 값은 포터블 몫이다. 값이 없어도 그냥 넘어간다.
+// 떠 있는 앱(트레이 상주 포함)을 먼저 끝낸다 — 제거기는 설치기와 달리 떠 있는 앱을 닫지 않아, 앱이 계속 돌고
+// 설치 폴더가 통째로 남았다(1.1.1 실측). --quit 은 떠 있는 실행본에 종료를 부탁하고 끝날 때까지 기다린다(tray.request_quit).
+// 떠 있지 않으면 아무것도 켜지 않는다. 확인 창 뒤(usUninstall)라 취소하면 앱은 그대로다.
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
+  begin
+    Exec(ExpandConstant('{app}\{#AppExe}'), '{#QuitArg}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
+  end;
 end;

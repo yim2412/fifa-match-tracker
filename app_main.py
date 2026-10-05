@@ -5288,6 +5288,10 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv if argv is None else argv
     # instance() — 테스트가 이미 만든 앱으로 main 을 부를 수 있게(둘째 QApplication 은 예외)
     app = QApplication.instance() or QApplication(argv)
+    if tray.QUIT_ARG in argv[1:]:
+        # 제거기 — 떠 있는 실행본만 끝내고 이 실행은 아무것도 띄우지 않는다(창·크래시 기록·한 번만 실행 주인도 안 됨)
+        tray.request_quit(tray.instance_name())
+        return 0
     _setup_app(app)
     tray_mode = autostart.TRAY_ARG in argv[1:]
     single = None

@@ -128,7 +128,8 @@ TRAY_RETRY_MIN = 1                  # 동의가 필요해 창을 못 띄우는 �
 RELEASE_AFTER_HIDE_MIN = 30         # 창을 숨긴 지 이만큼 지나면 경기 기록을 메모리에서 내려놓는다
 RELEASE_RETRY_MIN = 5               # 그때 검색·수집 중이면 이만큼 뒤에 다시
 FAST_QUIT_WAIT_S = 1                # 윈도우 종료·로그오프 때 작업을 기다리는 합계 — 길면 "종료를 막고 있습니다"
-SINGLE_WAIT_OLD_S = 60              # 앞 실행본이 끝나는 중이면(업데이트 뒤 재실행) 이만큼까지 기다린다
+QUIT_REQUEST_WAIT_S = 15            # --quit(제거기)이 떠 있던 실행본이 끝나기를 기다리는 한도
+SINGLE_WAIT_OLD_S = 60            # 앞 실행본이 끝나는 중이면(업데이트 뒤 재실행) 이만큼까지 기다린다
 # 테스트·여러 개 띄워 보기용 — FIFA_SINGLE_INSTANCE=0 이면 한 번만 실행 장치를 끈다
 SINGLE_INSTANCE = os.getenv("FIFA_SINGLE_INSTANCE", "1").strip() != "0"
 
