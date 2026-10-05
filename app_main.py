@@ -108,14 +108,58 @@ def initial_window(avail_w: int, avail_h: int) -> WindowPlan:
 def fit_to_screen(widget: QWidget, w: int, h: int) -> None:
     """대화상자를 (w, h) 로 열되 화면보다 크면 화면에 맞춘다 — 선수 카드 560x720 · 스쿼드 600x760 이
     FHD 150% 노트북(창 안쪽 높이 약 657)에서 아래가 잘렸다."""
-    host = widget.parentWidget() or widget
-    screen = host.screen() or QApplication.primaryScreen()
+    ref = _parent_ref(widget)
+    screen = ((QApplication.screenAt(ref.center()) if ref is not None else None)
+              or widget.screen() or QApplication.primaryScreen())
     if screen is None:
         widget.resize(w, h)
         return
     avail = screen.availableGeometry()
     fw, fh = FRAME_ALLOWANCE
-    widget.resize(min(w, avail.width() - fw), min(h, avail.height() - fh))
+    rw, rh = min(w, avail.width() - fw), min(h, avail.height() - fh)
+    widget.resize(rw, rh)
+    place_over_parent(widget)
+
+
+def place_over_parent(widget: QWidget) -> None:
+    """대화상자를 메인 창 위 가운데로 — Qt 에 맡기지 않고 직접(화면 밖으로 나가면 그 모니터 안으로).
+    띄울 때(fit_to_screen)와 메인 창이 움직일 때(MainWindow.moveEvent) 부른다 — 메인 창만 다른 모니터로 옮겨져
+    안내 창이 주 모니터(게임 중)에 홀로 남았다(2026-10-06 사용자 · 실제 윈도우 실측)."""
+    ref = _parent_ref(widget)
+    if ref is None:
+        return
+    screen = QApplication.screenAt(ref.center()) or widget.parentWidget().window().screen() \
+        or QApplication.primaryScreen()
+    if screen is None:
+        return
+    avail = screen.availableGeometry()
+    fw, fh = FRAME_ALLOWANCE
+    widget.setScreen(screen)
+    x, y = dialog_origin((ref.x(), ref.y(), ref.width(), ref.height()),
+                         (avail.x(), avail.y(), avail.width(), avail.height()),
+                         widget.width() + fw, widget.height() + fh)
+    widget.move(x, y)
+
+
+def _parent_ref(widget: QWidget):
+    """부모 창의 자리(테두리 포함) — 최소화돼 있으면 윈도우가 좌표를 화면 밖(-32000)으로 보내므로 돌아올 자리. 없으면 None."""
+    parent = widget.parentWidget()
+    win = parent.window() if parent is not None else None
+    if win is None:
+        return None
+    ref = win.normalGeometry() if win.isMinimized() else win.frameGeometry()
+    return ref if ref.isValid() and not ref.isEmpty() else None
+
+
+def dialog_origin(ref: tuple, avail: tuple, fw: int, fh: int) -> tuple[int, int]:
+    """테두리 포함 (fw, fh) 크기 대화상자의 왼쪽 위 — ref(메인 창) 가운데에 맞추고 avail(그 모니터) 안으로 민다."""
+    rx, ry, rw, rh = ref
+    ax, ay, aw, ah = avail
+    x = rx + (rw - fw) // 2
+    y = ry + (rh - fh) // 2
+    x = max(ax, min(x, ax + aw - fw))
+    y = max(ay, min(y, ay + ah - fh))
+    return x, y
 
 
 ETA_MIN_DONE = 30  # 이만큼 끝나기 전엔 남은 시간을 안 낸다 — 첫 몇 건은 연결 준비로 느려 크게 틀린다
@@ -1388,6 +1432,7 @@ class MainWindow(QMainWindow):
         self._pred_req: dict[str, int] = {}
         self._pred_workers: list[PredictWorker] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
+        self._notice_after_restore = False  # 최소화 중이라 미뤘다 — 창이 돌아오면 묻는다
         # 거래 기록(1.4.1) — 받기는 한 번에 하나. 도는 중에 다시 띄우라는 요청(키 바꿈 등)이 오면 끝난 뒤 한 번 더
         self._trade_loader: TradeLoader | None = None
         self._trade_again = False
@@ -1556,10 +1601,23 @@ class MainWindow(QMainWindow):
         # 1.875초 신호 → 1.934초 이동) 신호에서 바로 맞추면 헛돈다 → 그 뒤 첫 이동·크기 변경에서 맞춘다.
         if e.type() == QEvent.Type.WindowStateChange:
             self._settle_after_restore = not (self.isMaximized() or self.isMinimized())
+            if getattr(self, "_notice_after_restore", False) and not self.isMinimized():  # __init__ 중에도 온다
+                self._notice_after_restore = False
+                # 상태가 바뀐 직후엔 창이 아직 제자리가 아니다 — 한 바퀴 뒤 그 창 위에
+                QTimer.singleShot(0, self.ask_notice_update_once)
 
     def moveEvent(self, e) -> None:
         super().moveEvent(e)
         self._settle_if_restored()
+        self._follow_dialogs()
+
+    def _follow_dialogs(self) -> None:
+        """열린 대화상자(안내·정보·선수 카드 등)가 메인 창을 따라온다 — 메인 창만 다른 모니터로 옮겨져 안내 창이 주
+        모니터에 홀로 남았다(2026-10-06 실측). 모달이 떠 있는 동안 사용자는 메인 창을 못 끌므로, 여기 오는 건 윈도우·
+        다른 프로그램이 옮긴 경우뿐이다."""
+        for d in self.findChildren(QDialog, options=Qt.FindChildOption.FindDirectChildrenOnly):
+            if d.isVisible():
+                place_over_parent(d)
 
     # resizeEvent 는 아래(업데이트 카드 자리 잡기)에 하나만 — 두 번 정의하면 뒤의 것만 남는다
     def _settle_if_restored(self) -> None:
@@ -1716,6 +1774,11 @@ class MainWindow(QMainWindow):
         """옛 동의자에게 바뀐 안내를 다시 묻는다 — 창이 **사용자에게 보일 때** 실행당 한 번(숨긴 창에서 띄우면 게임 중
         초점을 뺏는다). 일반 실행 · 트레이 [열기] · 두 번째 실행의 "창 앞으로"가 부른다. 취소하면 옛 동의 그대로."""
         if self._notice_asked or not config.notice_update_pending() or not self.isVisible():
+            return
+        if self.isMinimized():
+            # isVisible 은 최소화돼도 참이다. 그대로 띄우면 부모 자리를 몰라 주 모니터(게임 중) 가운데에 떴다
+            # (2026-10-06 사용자 — exe 를 최소화로 켜 2번 모니터로 옮기는 사이) → 창이 돌아오면 그때(changeEvent)
+            self._notice_after_restore = True
             return
         self._notice_asked = True
         self.ask_notice_update()

@@ -4987,6 +4987,54 @@ def test_reask_on_tray_open_and_second_instance():
         sh.window = None
 
 
+def test_dialog_origin_centers_and_clamps():
+    # 메인 창 가운데 · 모니터 밖으로 나가면 안으로
+    assert app_main.dialog_origin((2000, 100, 1200, 800), (1920, 0, 1920, 1040), 400, 300) == (2400, 350)
+    assert app_main.dialog_origin((3500, 900, 400, 200), (1920, 0, 1920, 1040), 600, 500) == (3240, 540)
+    assert app_main.dialog_origin((-50, -50, 300, 200), (0, 0, 1920, 1040), 600, 500) == (0, 0)
+
+
+def test_dialog_follows_minimized_main_window():
+    """윈도우는 최소화된 창의 좌표를 화면 밖(-32000)으로 보낸다 — 그때도 창이 돌아올 자리 위에(2026-10-06 사용자).
+    offscreen 은 이 좌표를 흉내 내지 않아 가짜로 만든다."""
+    from PyQt6.QtCore import QRect
+    host = app_main.QWidget()
+    host.isMinimized = lambda: True
+    host.frameGeometry = lambda: QRect(-32000, -32000, 160, 28)
+    host.normalGeometry = lambda: QRect(300, 200, 1200, 700)
+    d = app_main.QDialog(host)
+    app_main.fit_to_screen(d, 400, 300)
+    fw, fh = app_main.FRAME_ALLOWANCE
+    assert (d.x(), d.y()) == (300 + (1200 - 400 - fw) // 2, 200 + (700 - 300 - fh) // 2), (d.x(), d.y())
+    host.isMinimized = lambda: False
+    host.frameGeometry = lambda: QRect(100, 50, 1000, 600)
+    app_main.fit_to_screen(d, 400, 300)
+    assert (d.x(), d.y()) == (100 + (1000 - 400 - fw) // 2, 50 + (600 - 300 - fh) // 2), (d.x(), d.y())
+    d.deleteLater()
+    host.deleteLater()
+
+
+def test_notice_reask_waits_while_minimized():
+    keep = config.NOTICE_ACCEPTED, app_main.NoticeDialog.exec, _win._notice_asked, _win.isMinimized
+    asked = []
+    try:
+        config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
+        app_main.NoticeDialog.exec = lambda self: asked.append(1) or 0
+        _win._notice_asked = False
+        _win.isMinimized = lambda: True
+        _win.ask_notice_update_once()
+        assert asked == [] and _win._notice_after_restore, "최소화 중에 다시 묻는 안내를 띄웠다"
+        _win.isMinimized = lambda: False
+        _win.changeEvent(QEvent(QEvent.Type.WindowStateChange))   # 최소화에서 돌아왔다
+        for _ in range(3):
+            _app.processEvents()
+        assert asked == [1] and not _win._notice_after_restore, asked
+    finally:
+        config.NOTICE_ACCEPTED, app_main.NoticeDialog.exec, _win._notice_asked = keep[:3]
+        _win.isMinimized = keep[3]
+        _win._notice_after_restore = False
+
+
 # ── 거래 기록 · 내 계정(1.4.1 · 11단계) ─────────────────────────────────────────
 
 class _TradeKey:

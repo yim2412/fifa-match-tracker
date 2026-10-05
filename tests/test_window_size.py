@@ -115,6 +115,77 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         out["about"] = {"bar": bar.width(), "need": bar.sizeHint().width(),
                         "frame": [dg.x(), dg.y(), dg.width(), dg.height()]}
         d.close()
+    if case == "dialog_screen":
+        # 메인 창을 오른쪽 모니터로 옮긴 뒤 대화상자를 연다 — 정보 창이 다른 모니터에 떴다(2026-10-06 사용자)
+        win.show_initial()
+        app.processEvents()
+        win.move(1920 + 100, 50)
+        for _ in range(5):
+            app.processEvents()
+        mf = win.frameGeometry()
+        placed = {}
+        orig_exec = QDialog.exec
+
+        def fake_exec(self):
+            self.show()
+            for _ in range(3):
+                app.processEvents()
+            f = self.frameGeometry()
+            c = f.center()
+            placed[self.windowTitle() or type(self).__name__] = {
+                "screen": self.screen().name(), "center_in_main": mf.contains(c),
+                "frame": [f.x(), f.y(), f.width(), f.height()]}
+            self.close()
+            return 0
+
+        QDialog.exec = fake_exec
+        app_main.ImageLoader.start = lambda self: None
+        app_main.SeasonIconLoader.start = lambda self: None
+        app_main.PlayerInfoLoader.start = lambda self: None
+        app_main.AboutDialog(win).exec()
+        app_main.ApiKeyDialog(win, reason="만료").exec()
+        players = [{"spId": 100000001 + i, "spPosition": p, "spGrade": 5}
+                   for i, p in enumerate((0, 3, 5, 6, 7, 10, 14, 16, 18, 23, 25))]
+        win._show_opponent_squad("상대", players, "2026-10-04", "승")
+        out["main_screen"] = win.screen().name()
+        # 대화상자가 열린 채 메인 창만 다른 모니터로 옮겨진다(실제 윈도우 실측 — 안내 창이 주 모니터에 홀로 남았다)
+        d = QDialog(win)
+        d.setWindowTitle("따라오기")
+        app_main.fit_to_screen(d, 400, 300)
+        d.show()
+        for _ in range(3):
+            app.processEvents()
+        win.move(100, 60)   # 왼쪽(100%) 모니터로
+        for _ in range(5):
+            app.processEvents()
+        mf2 = win.frameGeometry()
+        out["follow"] = {"main": win.screen().name(), "dialog": d.screen().name(),
+                         "center_in_main": mf2.contains(d.frameGeometry().center())}
+        d.close()
+        win.move(1920 + 100, 50)
+        for _ in range(5):
+            app.processEvents()
+        # 최소화된 채로 뜬 대화상자 — exe 를 최소화로 켜 2번 모니터로 옮기는 사이 '다시 묻는 안내'가 주 모니터에 떴다
+        win.showMinimized()
+        for _ in range(3):
+            app.processEvents()
+        d = QDialog(win)
+        d.setWindowTitle("최소화 중")
+        app_main.fit_to_screen(d, 400, 300)
+        d.exec()
+        # 다시 묻는 안내는 최소화 중엔 미뤘다가 창이 돌아오면 — 그때 메인 창 위에
+        asked = []
+        app_main.NoticeDialog.exec = lambda self: asked.append(win.isMinimized()) or 0
+        app_main.config.NOTICE_ACCEPTED = app_main.config.NOTICE_BASE_VERSION
+        win._notice_asked = False
+        win.ask_notice_update_once()
+        out["asked_while_min"] = list(asked)
+        win.showNormal()
+        for _ in range(5):
+            app.processEvents()
+        out["asked_after_restore"] = list(asked)
+        QDialog.exec = orig_exec
+        out["placed"] = placed
     scr = (win.screen() or app.primaryScreen()).availableGeometry()
     fg = win.frameGeometry()
     out.update({
@@ -271,6 +342,20 @@ def test_about_dialog_shows_every_tab():
         ax, ay, aw, ah = res["avail"]
         fx, fy, fw, fh = a["frame"]
         assert fw <= aw and fh <= ah, ("정보 창이 화면보다 크다", screen, a, res["avail"])
+
+
+def test_dialogs_open_over_main_window_on_its_monitor():
+    """대화상자는 메인 창이 있는 모니터에, 메인 창 위 가운데에 — 정보 창이 다른 모니터에 떴다(2026-10-06 사용자).
+    두 모니터 배율이 다르면(100% · 150%) Qt 의 자동 위치가 빗나간다."""
+    res = _run("dialog_screen", "two")
+    assert res["main_screen"] == "lap150", res
+    placed = res["placed"]
+    assert len(placed) == 4, placed
+    for title, p in placed.items():
+        assert p["screen"] == "lap150" and p["center_in_main"], (title, p, res["frame"])
+    assert res["follow"] == {"main": "big", "dialog": "big", "center_in_main": True}, res["follow"]
+    # 최소화 중엔 다시 묻기를 미루고(주 모니터에 갑자기 뜨지 않게), 창이 돌아오면 그때 한 번
+    assert res["asked_while_min"] == [] and res["asked_after_restore"] == [False], res
 
 
 def test_wrong_frame_estimate_is_caught_after_show():
