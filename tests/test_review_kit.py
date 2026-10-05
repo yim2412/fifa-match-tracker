@@ -168,15 +168,15 @@ def test_diff_report_on_a_real_git_history():
 
 def test_main_writes_each_command():
     d = Path(tempfile.mkdtemp())
-    assert rk.main(["ledger", "## 1.3.1", "--out", str(d / "l.md")]) == 0
-    assert (d / "l.md").read_text(encoding="utf-8").startswith("# 주장 장부 — 1.3.1"), "ledger 가 다른 걸 썼다"
-    assert rk.main(["bundle", "③ 승률 그래프", "--out", str(d / "b.md")]) == 0
-    assert (d / "b.md").read_text(encoding="utf-8").startswith("# 근거 묶음 — ③ 승률 그래프")
+    assert rk.main(["ledger", "## 1.4.1", "--out", str(d / "l.md")]) == 0
+    assert (d / "l.md").read_text(encoding="utf-8").startswith("# 주장 장부 — 1.4.1"), "ledger 가 다른 걸 썼다"
+    assert rk.main(["bundle", "## 1.4.1", "--out", str(d / "b.md")]) == 0
+    assert (d / "b.md").read_text(encoding="utf-8").startswith("# 근거 묶음 — 1.4.1")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         buf.reconfigure = lambda **k: None          # main 이 콘솔 인코딩을 맞춘다 — 가짜 출력엔 없는 메서드
         sys.stdout.reconfigure = buf.reconfigure
-        rk.main(["ledger", "## 1.3.1"])
+        rk.main(["ledger", "## 1.4.1"])
     assert buf.getvalue().startswith("# 주장 장부"), "--out 없이 표준 출력으로 안 나왔다"
     assert not (d / "x").exists()
 
@@ -244,9 +244,9 @@ def test_ledger_rows_and_basis():
 def test_real_plan_bundle_runs():
     # 실제 계획에서 — 절 하나의 묶음이 그 파일들을 통째로 읽는 것보다 훨씬 작아야 쓸모가 있다
     lines = (ROOT / rk.ROADMAP).read_text(encoding="utf-8").splitlines()
-    _, sec = rk.section(lines, "## 1.3.1")
+    _, sec = rk.section(lines, "## 1.4.1")
     body = "\n".join(sec)
-    out = rk.bundle(rk.build_index(), rk.identifiers(body), rk.file_refs(body), "1.3.1")
+    out = rk.bundle(rk.build_index(), rk.identifiers(body), rk.file_refs(body), "1.4.1")
     head = out.splitlines()[2]
     assert "정의" in head and "통째로면" in head, head
     size = int(head.split("묶음 ")[1].split("자")[0].replace(",", ""))

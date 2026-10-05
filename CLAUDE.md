@@ -52,7 +52,7 @@ $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py
 python -m PyInstaller --noconfirm 피파전적관리.spec   # exe → dist\피파전적관리\ (확인용)
 python tests/test_release.py   # 배포 검사 로직(빌드 없이)
 python tests/test_rules.py     # 규칙 검사(정적 + SQL 실행 계획 — 파싱·수집 테스트를 같이 돌려 쿼리를 모은다)
-python tools/review_kit.py bundle "③ 승률"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
+python tools/review_kit.py bundle "## 1.4.1"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
 
