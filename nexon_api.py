@@ -108,13 +108,14 @@ class FCOnlineAPI:
         self._session.headers.update({"x-nxopen-api-key": api_key})
 
     # ── 공통 ──────────────────────────────────────────────────────────
-    def _get(self, path: str, **params: Any) -> Any:
+    def _get(self, path: str, attempts: int = 3, **params: Any) -> Any:
         url = f"{BASE_URL}{path}"
-        for attempt in range(3):
+        last = attempts - 1
+        for attempt in range(attempts):
             try:
                 res = self._session.get(url, params=params, timeout=self._timeout)
             except requests.RequestException as e:
-                if attempt == 2:
+                if attempt == last:
                     raise NexonAPIError(f"네트워크 오류: {e}") from e
                 time.sleep(1.0 * (attempt + 1))
                 continue
@@ -126,7 +127,7 @@ class FCOnlineAPI:
             if res.status_code == 429:
                 self.throttled += 1
             # 호출량 초과·일시적 서버 오류는 백오프 후 재시도
-            if res.status_code in (429, 500, 503) and attempt < 2:
+            if res.status_code in (429, 500, 503) and attempt < last:
                 time.sleep(1.5 * (attempt + 1))
                 continue
             raise NexonAPIError(msg, code=code, status=res.status_code)
@@ -157,7 +158,8 @@ class FCOnlineAPI:
         return self._get(EP_USER_BASIC, ouid=ouid)
 
     def get_max_division(self, ouid: str) -> list[dict]:
-        data = self._get(EP_MAX_DIVISION, ouid=ouid)
+        # 재시도 없이 한 번만 — 부가 정보라 429·5xx 에 최대 4.5초 잠들며 검색 뒤끝을 붙잡을 이유가 없다.
+        data = self._get(EP_MAX_DIVISION, attempts=1, ouid=ouid)
         return data if isinstance(data, list) else []
 
     # ── 매치 ──────────────────────────────────────────────────────────

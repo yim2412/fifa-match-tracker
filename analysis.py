@@ -19,9 +19,9 @@ import math
 from dataclasses import dataclass
 
 from models import MatchSummary, current_streak, opponent_stats, summarize
-from stats import (UNKNOWN_GOAL_TYPE, clutch_summary, formation_stats,
-                   goal_minute_buckets, possession_stats, result_breakdown,
-                   shot_map)
+from stats import (UNKNOWN_GOAL_TYPE, after_streak_rates, clutch_summary,
+                   formation_stats, goal_minute_buckets, possession_stats,
+                   result_breakdown, shot_map)
 
 WINDOW = 20          # "최근 흐름"이 보는 경기 수
 
@@ -41,6 +41,7 @@ MIN_OPP = 4          # 같은 상대와 최소 이만큼 붙어야 상성을 말
 # 선수 지표 — 출전이 이보다 적으면 ⚠ 표시하고 색을 칠하지 않는다. 실DB 3계정에서 출전 <5 와 <10 인
 # 선수 수가 거의 같아(0·0·11명 / 0·0·11명, 2026-10-05) 5 가 자연스러운 경계였다.
 MIN_PLAYER_GAMES = 5
+STREAK_MAX = 3       # 연승·연패 직후 승률 — 3 이상은 한 칸("3+")
 
 # ── 유의하다고 볼 최소 차이 ───────────────────────────────────────────────
 GAP = 10.0           # 승률 차이(%p)
@@ -97,6 +98,12 @@ def _w(gap: float, n: int, base_n: int) -> float:
 def _min_cond(total: int) -> int:
     """전체 total 경기일 때 조건부 규칙이 요구할 최소 표본."""
     return max(MIN_COND, math.ceil(total * COND_SHARE))
+
+
+def streak_min_n(total: int) -> int:
+    """연승·연패 직후 구역의 흐림 기준 — 문장 기준(_min_cond)과 같게 둬서, 막대는 굵은데
+    문장은 침묵하는 엇갈림이 없게 한다. total 은 승·무·패 경기 수."""
+    return _min_cond(total)
 
 
 def _rate(wdl: list[int]) -> float:
@@ -382,6 +389,33 @@ def _opponent_rules(matches: list[MatchSummary], base_rate: float
     return out
 
 
+def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int
+                  ) -> list[Insight]:
+    """연승·연패 직후 승률이 전체와 GAP 이상 갈릴 때만. 실DB 3계정에서 차이는 최대 5.9%p 라
+    거의 안 나온다(2026-10-05) — 그게 맞는 결과다. 화면 구역이 '거의 같다'를 숫자로 보여 준다."""
+    need = streak_min_n(total)
+    out = []
+    for r in after_streak_rates(matches, STREAK_MAX):
+        if r.games < need:
+            continue
+        gap = r.win_rate - base_rate
+        if abs(gap) < GAP:
+            continue
+        run = f"{r.length}{'+' if r.length == STREAK_MAX else ''}연{r.kind}"
+        if gap > 0:
+            sec, tail = SEC_WIN, "흐름을 타면 이어 가는 편입니다."
+        elif r.kind == "패":
+            sec, tail = SEC_LOSE, "연패가 다음 판까지 끌려가고 있습니다."
+        else:
+            sec, tail = SEC_LOSE, "이긴 뒤에 오히려 흔들립니다."
+        out.append(Insight(
+            sec, f"{run} 직후 다음 경기 승률 {r.win_rate:.0f}%.",
+            f"{r.games}경기 {_wdl_text(r.win, r.draw, r.lose)} — 전체 승률({base_rate:.0f}%)보다"
+            f" {abs(gap):.0f}%p {'높습니다' if gap > 0 else '낮습니다'}. {tail}",
+            _w(gap, r.games, need)))
+    return out
+
+
 def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
               ) -> list[Insight]:
     s = summarize(matches)
@@ -394,7 +428,8 @@ def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
             + _formation_rules(details, ouid, base, s.total)
             + _finishing_rules(details, ouid)
             + _goal_type_rules(details, ouid)
-            + _opponent_rules(matches, base))
+            + _opponent_rules(matches, base)
+            + _streak_rules(matches, base, s.total))
 
 
 # ── 진입점 ───────────────────────────────────────────────────────────────

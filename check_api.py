@@ -46,6 +46,18 @@ def main() -> int:
         print(f"[FAIL] 계정 정보: {e.message}")
 
     try:
+        rows = api.get_max_division(ouid)
+        row = next((r for r in rows if r.get("matchType") == config.DEFAULT_MATCH_TYPE), None)
+        if row:
+            names = {d.get("divisionId"): d.get("divisionName") for d in api.get_meta("division")}
+            name = names.get(row.get("division"), row.get("division"))
+            print(f"[OK]   역대 최고(감독모드): {name} ({str(row.get('achievementDate') or '')[:10]})")
+        else:
+            print("[WARN] 역대 최고(감독모드): 기록 없음")
+    except NexonAPIError as e:
+        print(f"[WARN] 역대 최고 등급: {e.message}")
+
+    try:
         ids = api.get_match_ids(ouid, config.DEFAULT_MATCH_TYPE, 0, 5)
         print(f"[OK]   최근 매치 {len(ids)}건: {ids[:2]}")
     except NexonAPIError as e:

@@ -291,6 +291,20 @@ def test_goal_type_rule_needs_enough_and_share():
     assert build(7, g - 8) == [], "골이 기준보다 적은데 말했다"  # 7/14 = 50% 지만 14 < 15
 
 
+def test_streak_rule_gap_and_sample_edges():
+    # 날짜 순 패 승 패 승 … (20경기) — 1연패 뒤 다음 경기는 10번 전부 승(100%), 1연승 뒤는 9번 전부 패(0%).
+    ms, _ = _seq(["승", "패"] * 10)
+    one_loss = lambda found: [i for i in found if "1연패 직후" in i.headline]  # noqa: E731
+    assert one_loss(analysis._streak_rules(ms, base_rate=88.0, total=20)), "12%p 차이인데 침묵"
+    assert not one_loss(analysis._streak_rules(ms, base_rate=91.0, total=20)), "9%p 차이인데 말했다"
+    assert one_loss(analysis._streak_rules(ms, base_rate=90.0, total=20)), "정확히 GAP 인데 침묵"
+    # 표본 10경기: 전체 500 이면 기준 ceil(500×2%)=10 → 말한다, 501 이면 11 → 침묵
+    assert one_loss(analysis._streak_rules(ms, base_rate=50.0, total=500))
+    assert not one_loss(analysis._streak_rules(ms, base_rate=50.0, total=501)), "표본 미달인데 말했다"
+    # narrate 에 실제로 배선돼 있다 — 20경기 전체 승률 50% 에서 1연패 뒤 100%
+    assert _find(analysis.narrate(ms, [], OUID), "1연패 직후")
+
+
 def test_opponent_rule_needs_games_and_name():
     ms, _ = _seq(["패"] * analysis.MIN_OPP, opp="천적")
     assert _find(analysis._opponent_rules(ms, base_rate=60.0), "천적")

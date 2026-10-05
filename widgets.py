@@ -698,6 +698,13 @@ class RankerCard(QFrame):
         grade_row.addStretch(1)
         head_v.addLayout(grade_row)
 
+        # 역대 최고 등급(1.2.1) — 타일이 아니라 머리 아래 한 줄. 랭커/비랭커 두 모드 모두 같은 자리에 보이고
+        # (set_mode 가 숨기지 않는다) 값이 없으면 이 줄만 숨긴다.
+        self._head_best = QLabel("")
+        self._head_best.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._head_best.setVisible(False)
+        head_v.addWidget(self._head_best)
+
         v.addWidget(self._head)
 
         grid = QGridLayout()
@@ -760,12 +767,14 @@ class RankerCard(QFrame):
                 f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
             self._head_name.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
             self._head_grade.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
+            self._head_best.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
         else:
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL_2}; border: none;"
                 f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
             self._head_name.setStyleSheet(f"color: {T.TEXT}; border: none;")
             self._head_grade.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+            self._head_best.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
         for name in ("순위", "구단가치", "점수"):
             tile, _ = self._rows[name]
             tile.setVisible(is_ranker)
@@ -773,6 +782,11 @@ class RankerCard(QFrame):
     def set_name(self, text: str) -> None:
         """헤더 안 이름·레벨 줄."""
         self._head_name.setText(text)
+
+    def set_best(self, text: str | None) -> None:
+        """역대 최고 등급 줄 — 없으면(None·빈 글자) 숨긴다."""
+        self._head_best.setText(text or "")
+        self._head_best.setVisible(bool(text))
 
     def set_badge(self, pixmap_path: str | None) -> None:
         """등급 옆 배지 아이콘. 못 받아왔으면(경로 없음) 그냥 비워 둔다."""

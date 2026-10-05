@@ -117,7 +117,84 @@ def test_result_breakdown():
     assert rb.normal == [0, 1, 1], rb.normal
     assert rb.extra == [1, 0, 0], rb.extra          # 4:3 은 연장까지 간 경기
     assert rb.shootout == [0, 0, 0], rb.shootout
-    assert rb.forfeit == [0, 0, 0], rb.forfeit
+    # 0004 는 내 쪽 matchEndType 4("오류") + 상대 1(몰수승) — 실제로는 몰수패. 1.2.1 전엔 결과 문자열을 봐서 0 이었다.
+    assert rb.forfeit == [0, 0, 1], rb.forfeit
+
+
+def _end_game(my_end, my_res, opp_end=0, opp_res="승"):
+    return {"matchId": "e", "matchInfo": [
+        {"ouid": "me", "matchDetail": {"matchResult": my_res, "matchEndType": my_end}},
+        {"ouid": "op", "matchDetail": {"matchResult": opp_res, "matchEndType": opp_end}}]}
+
+
+def test_end_kind_reads_both_sides():
+    ek = lambda d: st.end_kind(d["matchInfo"][0], d["matchInfo"][1])  # noqa: E731
+    assert ek(_end_game(0, "승")) == "정상"
+    assert ek(_end_game(1, "승", 2, "패")) == "몰수승"
+    assert ek(_end_game(2, "패", 1, "승")) == "몰수패"
+    assert ek(_end_game(4, "오류", 1, "승")) == "몰수패"      # 내 쪽은 "오류"로 남는 몰수패
+    assert ek(_end_game(4, "오류", 4, "오류")) == "중단"
+    assert st.end_kind({"matchDetail": {"matchEndType": 4}}, {}) == "중단"   # 상대 기록 없음
+    assert st.end_kind({}, {}) == "정상"
+
+
+def test_result_breakdown_counts_forfeit_by_end_type():
+    # 실DB: 종료 유형 1·2 의 matchResult 는 그냥 "승"·"패"다(2026-10-05). 결과 문자열로 가르면 둘 다 정상 종료로 샌다.
+    rb = st.result_breakdown([_end_game(1, "승", 2, "패"), _end_game(2, "패", 1, "승"),
+                              _end_game(4, "오류", 4, "오류"), _end_game(0, "승")], "me")
+    assert rb.forfeit == [1, 0, 1], rb.forfeit
+    assert rb.normal == [1, 0, 0], rb.normal               # 중단(4·4)은 어디에도 안 센다
+
+
+def test_result_breakdown_counts_error_side_forfeit():
+    # 몰수패가 내 쪽 "오류"로 남으면 경기 결과 패널엔 패로, 승률 분모(summarize)엔 없다 — 의도된 차이.
+    ouid, _, details = _load()
+    rb = st.result_breakdown(details, ouid)
+    panel = sum(rb.normal) + sum(rb.extra) + sum(rb.shootout) + sum(rb.forfeit)
+    ms = [models.parse_match(d, ouid) for d in details]
+    assert (panel, models.summarize(ms).total) == (4, 3), (panel, models.summarize(ms).total)
+
+
+def test_discipline_stats_fixture_golden():
+    # 손으로 셌다(픽스처 matchDetail · shootDetail[].hitPost). 0004("오류")는 평균에서 빠지고 종료 유형에만 센다.
+    ouid, _, details = _load()
+    ds = st.discipline_stats(details, ouid)
+    assert ds.games == 3, ds.games
+    got = {a.name: (round(a.mine, 3), round(a.opp, 3)) for a in ds.axes}
+    assert got == {"파울": (1.0, 1.333), "경고": (0.333, 0.0), "퇴장": (0.0, 0.0),
+                   "오프사이드": (1.333, 2.333), "코너킥": (1.333, 2.667), "골대": (0.0, 0.333)}, got
+    assert dict(ds.end_kinds) == {"정상": 3, "몰수패": 1}, ds.end_kinds
+    assert (ds.post_hit, ds.my_red, ds.opp_red) == ([0, 0, 0], [0, 0, 0], [0, 0, 0])
+
+
+def test_discipline_conditional_rates():
+    def g(res, post=0, my_red=0, opp_red=0):
+        d = _end_game(0, res, 0, {"승": "패", "패": "승"}.get(res, res))
+        d["matchInfo"][0]["matchDetail"]["redCards"] = my_red
+        d["matchInfo"][0]["shootDetail"] = [{"hitPost": True}] * post + [{"hitPost": False}]
+        d["matchInfo"][1]["matchDetail"]["redCards"] = opp_red
+        return d
+    ds = st.discipline_stats([g("승", post=2), g("패", my_red=1), g("무", opp_red=1),
+                              g("오류", post=1, my_red=1)], "me")   # 오류는 조건부 승률에서도 뺀다
+    assert (ds.post_hit, ds.my_red, ds.opp_red) == ([1, 0, 0], [0, 0, 1], [0, 1, 0])
+    assert next(a for a in ds.axes if a.name == "골대").mine == 2 / 3
+
+
+def test_after_streak_rates_rules():
+    # 날짜 순: 승 승 패 승 무 승 승 승 승 패 오류 승 (손으로 센 다음 경기)
+    #   1연승 뒤: m2 승 · m5 무 · m7 승 → 2-1-0 / 2연승 뒤: m3 패 · m8 승 → 1-0-1
+    #   3+연승 뒤: m9 승 · m10 패(4연승도 3+) → 1-0-1 / 1연패 뒤: m4 승 · m11 오류(분모 밖) → 1-0-0
+    #   무(m5)·오류(m11)는 연속을 끊는다 — m6·m12 앞엔 연속이 없다
+    seq = ["승", "승", "패", "승", "무", "승", "승", "승", "승", "패", "오류", "승"]
+    ms = [_m(i + 1, r) for i, r in enumerate(seq)][::-1]
+    ms.append(models.MatchSummary(**{**ms[0].__dict__, "match_id": "x", "match_date": None}))  # 날짜 없음 — 뺀다
+    got = {(r.kind, r.length): (r.win, r.draw, r.lose) for r in st.after_streak_rates(ms, 3)}
+    assert got == {("승", 1): (2, 1, 0), ("승", 2): (1, 0, 1), ("승", 3): (1, 0, 1),
+                   ("패", 1): (1, 0, 0), ("패", 2): (0, 0, 0), ("패", 3): (0, 0, 0)}, got
+    assert [(r.kind, r.length) for r in st.after_streak_rates(ms, 3)] == \
+        [("승", 1), ("승", 2), ("승", 3), ("패", 1), ("패", 2), ("패", 3)]
+    shuffled = ms[::2] + ms[1::2]
+    assert {(r.kind, r.length): (r.win, r.draw, r.lose) for r in st.after_streak_rates(shuffled, 3)} == got
 
 
 def test_finishing_ranking():

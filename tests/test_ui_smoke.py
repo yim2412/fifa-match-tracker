@@ -2486,6 +2486,174 @@ def test_loader_uses_prefetch_only_for_that_account():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+_MAXDIV_ROWS = [{"matchType": 50, "division": 900, "achievementDate": "2025-01-01T00:00:00"},
+                {"matchType": 52, "division": 800, "achievementDate": "2026-07-05T18:37:53"}]
+
+
+class _MaxDivApi(_DetailApi):
+    """maxdivision 은 바로 답하고, 로더가 finished_ok 전에 부르는 division 메타는 그 답이 끝난 뒤에야 준다 —
+    그래서 finished_ok 때는 늘 '이미 끝남'이라 보내는 순서가 결정적이다(앞으로 옮기는 변이가 매번 잡힌다)."""
+
+    def __init__(self, rows=_MAXDIV_ROWS, fail=False):
+        import threading
+        super().__init__([], "")
+        self.rows, self.fail, self.calls = rows, fail, 0
+        self.done = threading.Event()
+
+    def get_max_division(self, ouid):
+        self.calls += 1
+        try:
+            if self.fail:
+                raise nexon_api.NexonAPIError("x", code="OPENAPI00007", status=429)
+            return self.rows
+        finally:
+            self.done.set()
+
+    def get_meta(self, name):
+        if name == "division":
+            self.done.wait(5)
+            return [{"divisionId": 800, "divisionName": "챔피언스"}, {"divisionId": 900, "divisionName": "슈퍼챔피언스"}]
+        return []
+
+
+def _best_line():
+    lb = _win.card_ranker._head_best
+    return lb.text() if not lb.isHidden() else None
+
+
+def _restore_account():
+    _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                    {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+
+
+def test_max_division_survives_account_switch():
+    # 진짜 로더 → 창. 다른 계정을 보다가 검색하면 _on_loaded 전까지 _ouid 가 옛 계정이다 — 계획 검토 B [상] 은 그 사이
+    # 온 신호가 버려지는 것이었는데, 화면이 ouid 별로 담게 해 순서와 무관해졌다(보내는 자리를 앞으로 옮겨도 이 테스트는 초록).
+    # 여기서 재는 건 끝에서 끝까지 — 로더가 부르고, 52 줄을 고르고, 계정을 바꾼 창에 실제로 뜨는지.
+    tmp, saved = _loader_db(4)
+    keep_names, keep_max = dict(_win._division_names), dict(_win._max_division)
+    try:
+        _win._ouid, _win._max_division = "옛계정", {}
+        api = _MaxDivApi()
+        ld = app_main.MatchLoader(api, "닉", 52, want_max_division=True)
+        ld.finished_ok.connect(_win._on_loaded)
+        ld.max_division_ready.connect(_win._on_max_division)
+        ld.run()
+        _app.processEvents()
+        assert api.calls == 1 and _win._ouid == _OUID
+        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", _best_line()  # 50(공식경기) 줄이 아니라 52
+        # 구단주 비교 로더(기본값)는 부르지 않는다
+        other = _MaxDivApi()
+        _run_one(app_main.MatchLoader(other, "닉", 52))
+        assert other.calls == 0
+        # 실패해도 검색은 정상 완료 · 같은 계정이면 보던 줄 유지
+        bad = _MaxDivApi(fail=True)
+        ld = app_main.MatchLoader(bad, "닉", 52, want_max_division=True)
+        ld.max_division_ready.connect(_win._on_max_division)
+        _run_one(ld)
+        _app.processEvents()
+        assert bad.calls == 1 and _best_line() == "역대 최고 챔피언스 · 2026-07-05", _best_line()
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+        _win._division_names, _win._max_division = keep_names, keep_max
+        _restore_account()
+
+
+def test_max_division_card_rules():
+    keep_names, keep_max = dict(_win._division_names), dict(_win._max_division)
+    try:
+        _restore_account()
+        _win._division_names = {800: "챔피언스"}
+        _win._max_division = {}
+        val = {"division": 800, "date": "2026-07-05"}
+        _win._on_max_division(_OUID, val)
+        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05"
+        _win._on_max_division("다른계정", {"division": 800, "date": "2020-01-01"})
+        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", "다른 계정 값이 들어갔다"
+        _win._on_max_division(_OUID, None)
+        assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", "실패(None)가 보던 값을 지웠다"
+        _win._on_max_division(_OUID, {})
+        assert _best_line() is None, "감독모드 기록이 없는데 줄이 남았다"
+        _win._on_max_division(_OUID, {"division": 999, "date": "2026-07-05"})
+        assert _best_line() is None, "등급 이름을 모르는데 숫자를 냈다"
+        # 두 모드 모두 같은 자리에 보인다(set_mode 가 숨기지 않는다)
+        _win._on_max_division(_OUID, val)
+        for champ in (True, False):
+            _win._is_champion = champ
+            _win._render_ranker()
+            assert _best_line() == "역대 최고 챔피언스 · 2026-07-05", champ
+        _win._is_champion = False
+        # 계정을 바꾸면 옛 계정 줄이 안 남는다 — 새 계정 요청이 실패해도
+        _win._on_loaded(_MATCHES, _DETAILS, "B계정", {"nickname": "B", "level": 1},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        _win._on_max_division("B계정", None)
+        assert _best_line() is None, "B 계정 화면에 A 계정 최고 등급이 남았다"
+        # 랭킹·최고 등급 신호는 어느 순서로 와도 마지막 카드가 같다
+        _restore_account()
+        shots = []
+        for order in ((0, 1), (1, 0)):
+            _win._max_division, _win._rank = {}, None
+            calls = [lambda: _win._on_rank_ready(_OUID, None), lambda: _win._on_max_division(_OUID, val)]
+            for i in order:
+                calls[i]()
+            shots.append((_best_line(), _win.card_ranker._vals["전적"].text()))
+        assert shots[0] == shots[1], shots
+    finally:
+        _win._division_names, _win._max_division = keep_names, keep_max
+        _restore_account()
+
+
+def test_offline_open_does_not_ask_max_division():
+    # 켤 때 저장본 열기·내려놓은 뒤 다시 열기(둘 다 offline_ouid)는 넥슨에 묻지 않는다 — 뒤따르는 검색이 채운다
+    tmp, saved = _loader_db(4)
+    try:
+        api = _MaxDivApi()
+        _run_one(app_main.MatchLoader(api, "닉", 52, offline_ouid=_OUID, want_max_division=True))
+        assert api.calls == 0
+    finally:
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_max_division_request_does_not_retry():
+    # 429·5xx 에 최대 4.5초 잠들며 재시도하던 _get 을 maxdivision 만 한 번으로 — 부가 정보라 기다릴 이유가 없다
+    class _Res:
+        status_code = 429
+
+        def json(self):
+            return {"error": {"name": "OPENAPI00007", "message": "x"}}
+
+    class _Sess:
+        headers: dict = {}
+        calls = 0
+
+        def get(self, *a, **k):
+            _Sess.calls += 1
+            return _Res()
+
+    api = nexon_api.FCOnlineAPI("k")
+    api._session = _Sess()
+    keep = nexon_api.time.sleep
+    nexon_api.time.sleep = lambda s: (_ for _ in ()).throw(AssertionError(f"{s}초 잠들었다"))
+    try:
+        try:
+            api.get_max_division("o")
+            raise AssertionError("429 인데 예외가 없다")
+        except nexon_api.NexonAPIError:
+            pass
+        assert _Sess.calls == 1, _Sess.calls
+        _Sess.calls = 0
+        nexon_api.time.sleep = lambda s: None
+        try:
+            api.get_user_basic("o")   # 다른 요청은 그대로 세 번 — attempts 기본값이 바뀌지 않았다
+        except nexon_api.NexonAPIError:
+            pass
+        assert _Sess.calls == 3, _Sess.calls
+    finally:
+        nexon_api.time.sleep = keep
+
+
 def test_loader_does_not_wait_for_rank():
     # 랭킹(데이터센터 1.1초)은 랭커 카드에만 쓴다 — 아직이면 먼저 그리고 rank_ready 로 뒤따른다.
     # 기다리면 스레드가 살아 있어 그동안 새 검색도 막힌다(_api_search 의 isRunning).
@@ -2740,12 +2908,13 @@ def test_search_hands_current_account_to_loader():
     got = []
 
     class _Rec:
-        def __init__(self, api, nick, mt, prev=None, prefetch=None, record_elo=False):
+        def __init__(self, api, nick, mt, prev=None, prefetch=None, record_elo=False, want_max_division=False):
             got.append(prev)
             pf.append(prefetch)
             elo.append(record_elo)
+            maxdiv.append(want_max_division)
             self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
-            self.rank_ready = self
+            self.rank_ready = self.max_division_ready = self
 
         def connect(self, *_):
             pass
@@ -2756,7 +2925,7 @@ def test_search_hands_current_account_to_loader():
         def isRunning(self):
             return False
 
-    pf, elo = [], []
+    pf, elo, maxdiv = [], [], []
     orig = app_main.MatchLoader, _win._loader
     app_main.MatchLoader, _win._loader = _Rec, None
     _win._prefetch = "켤 때 미리 읽은 것"
@@ -2772,6 +2941,7 @@ def test_search_hands_current_account_to_loader():
     # 미리 읽은 것은 첫 검색에 한 번만 — 두 번째 검색까지 들고 있으면 옛 스냅숏을 다시 바탕으로 쓴다
     assert pf == ["켤 때 미리 읽은 것", None], pf
     assert elo == [True, True], "메인 검색이 ELO 를 안 적는다"
+    assert maxdiv == [True, True], "메인 검색이 역대 최고 등급을 안 묻는다"
 
 
 def test_start_prefetch_reads_last_searched_account():
@@ -3401,11 +3571,14 @@ def test_release_drops_every_reference():
         # 개수만 — 목록으로 받아 두면 그 목록이 창의 옛 목록을 살려 둬서 '남았다'로 잰다(처음 판이 그랬다)
         before = sum(1 for r in gc.get_referrers(probe) if id(r) not in mine)
         assert before >= 2, f"측정 도구 확인 — 내려놓기 전엔 창(원본)·끝난 로더가 쥐고 있어야 한다: {before}"
+        _win._max_division[_OUID] = {"division": 800, "date": "2026-07-05"}
         _win.release_memory()
         gc.collect()
         left = [type(r).__name__ for r in gc.get_referrers(probe) if id(r) not in mine]
         try:
             assert left == [], f"내려놓은 뒤에도 경기 기록을 쥐고 있다: {left}"
+            # 다시 열기는 저장본 경로라 maxdivision 을 다시 안 부른다 — 비우면 줄이 다음 검색까지 사라진다
+            assert _win._max_division.get(_OUID), "내려놓기가 역대 최고 등급을 비웠다"
             assert _win._ouid == _OUID, "계정을 비우면 다시 읽을 때 승률 그래프 기간이 초기화된다"
             assert _win._released and _win.busy_for_release() is False
         finally:
@@ -3584,6 +3757,30 @@ def test_notice_dialog_says_web_data_is_on_now_and_mentions_collection():
     assert config.NOTICE_VERSION >= 2, "안내 글이 바뀌었는데 NOTICE_VERSION 을 안 올렸다 — 동의한 사람이 다시 안 본다"
 
 
+def _discipline_details():
+    """골대 3경기 · 내 퇴장 1경기 · 상대 퇴장 2경기 — 규율·불운 막대 표본이 셋 다 다르게."""
+    def g(i, res, post=False, my_red=0, opp_red=0):
+        opp_res = {"승": "패", "패": "승"}.get(res, res)
+        return {"matchId": f"disc{i}", "matchInfo": [
+            {"ouid": _win._ouid, "matchDetail": {"matchResult": res, "matchEndType": 0, "redCards": my_red},
+             "shootDetail": [{"hitPost": True}] if post else []},
+            {"ouid": "상대", "matchDetail": {"matchResult": opp_res, "matchEndType": 0, "redCards": opp_red}}]}
+    return [g(1, "승", post=True), g(2, "패", post=True), g(3, "무", post=True, my_red=1),
+            g(4, "승", opp_red=1), g(5, "패", opp_red=1)]
+
+
+def test_discipline_section_shows_averages_and_end_kinds():
+    _win._render_discipline(_discipline_details())
+    from PyQt6.QtWidgets import QLabel
+    text = " ".join(lb.text() for i in range(_win.box_diag_discipline.count())
+                    if (w := _win.box_diag_discipline.itemAt(i).widget())
+                    for lb in [w, *w.findChildren(QLabel)] if isinstance(lb, QLabel))
+    assert "골대 나 0.60 상대 0.00" in text, text             # 골대 3 / 5경기
+    assert "퇴장 나 1회 상대 2회" in text, text                 # 퇴장은 평균이 0.00 으로만 보여 횟수로
+    assert "종료 유형: 정상 5 · 몰수승 0 · 몰수패 0 · 중단 0" in text, text
+    _win._render_all()
+
+
 def _weak_sites():
     """표본 흐림 규칙의 진입점(ROADMAP 1.2.1 표) — 이름 → (그리기, 위젯에서 (경기 수, 흐림) 목록 뽑기, 기준 상수 이름)."""
     from PyQt6.QtWidgets import QLabel, QProgressBar
@@ -3607,8 +3804,13 @@ def _weak_sites():
     opp = {o.nickname: o.games for o in app_main.core.opponent_stats(_win._matches)}
     diag = lambda: _win._render_diagnosis(_win._details)  # noqa: E731
     clutch = lambda: _win._render_clutch(_win._details, _win._matches)  # noqa: E731
+    # 픽스처엔 골대·퇴장 경기가 없어 막대가 안 생긴다 — 표본이 3·1·2 로 갈리게 만든 경기로 그린다
+    disc = lambda: _win._render_discipline(_discipline_details())  # noqa: E731
     return {
         "성적 진단": (diag, lambda: bars(_win.box_diag_division, _win.box_diag_possession), "MIN_COND"),
+        "성적 진단 규율": (disc, lambda: bars(_win.box_diag_discipline), "MIN_COND"),
+        # 흐름 분석 메뉴 그리기(_render_analysis)를 거쳐 재야 그 구역이 실제로 불리는지도 잰다
+        "흐름 분석 연승": (_win._render_analysis, lambda: bars(_win.box_streak), "streak_min_n"),
         "승부처 시간대": (clutch, lambda: bars(_win.box_clutch_tod), "MIN_COND"),
         "승부처 선제골": (clutch, lambda: bars(_win.box_clutch_first, kind=QLabel), "MIN_COND"),
         "대시보드 시간대": (_win._render_dashboard,
@@ -3623,25 +3825,31 @@ def test_winrate_bars_dim_small_samples():
     # 바꿔 그린다. 앞에선 아무것도 안 흐려야 하고(<= 로 바꾸면 FAIL), 뒤에선 가장 작은 칸만 흐려야 한다.
     # 기본값이 아닌 기준으로 재므로 화면이 상수를 안 읽고 숫자를 박아도 FAIL 한다.
     import core_api
-    saved = core_api.MIN_COND, core_api.MIN_OPP
+    names = ("MIN_COND", "MIN_OPP", "streak_min_n")
+    saved = {n: getattr(core_api, n) for n in names}
+
+    def put(const, t):  # 기준이 함수인 칸(연승 구역 — 전체 규모를 따라간다)은 그 값을 돌려주는 함수로
+        setattr(core_api, const, (lambda _total, t=t: t) if callable(saved[const]) else t)
     try:
         for site, (render, read, const) in _weak_sites().items():
-            setattr(core_api, const, 1)
+            put(const, 1)
             render()
             got = read()
             assert got, (site, "막대가 하나도 없다 — 이 칸은 재지 못한다")
             low = min(g for g, _ in got)
             for t in (low, low + 1):
-                setattr(core_api, const, t)
+                put(const, t)
                 render()
                 got = read()
                 want = [(g, g < t) for g, _ in got]
                 assert got == want, (site, t, got)
             assert any(w for _, w in got) and (len({g for g, _ in got}) == 1 or not all(w for _, w in got)), \
                 (site, "흐린 칸과 안 흐린 칸을 둘 다 못 봤다", got)
-            core_api.MIN_COND, core_api.MIN_OPP = saved
+            for n, v in saved.items():
+                setattr(core_api, n, v)
     finally:
-        core_api.MIN_COND, core_api.MIN_OPP = saved
+        for n, v in saved.items():
+            setattr(core_api, n, v)
         _win._render_all()
 
 

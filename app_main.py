@@ -58,6 +58,9 @@ from widgets import (
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
+# 1.2.1 에서 몰수 판정을 종료 유형으로 바꿨다 — 업데이트한 사람이 "정상 종료 수가 왜 줄었나"를 여기서 본다.
+FORFEIT_TIP = ("넥슨 경기 종료 유형으로 셉니다 — 상대나 내가 나가서 끝난 경기.\n"
+               "내 쪽 기록이 '오류'로 남은 몰수패도 포함해서, 승률 계산에는 아직 안 들어간 경기가 있습니다.")
 # 새 경기 상세를 동시에 몇 개 받나. 2026-10-04 서비스 키 실측(250건씩): 6 → 초당 27~30건, 12 → 55,
 # 24 → 97, 48 → 124(응답 상위 10% 가 235 → 427ms 로 늘어남). 처음 보는 계정 3천 경기가 113초 → 약 32초.
 # 429(호출 한도)를 한 번이라도 받으면 그 검색은 THROTTLED 로 내린다 — 개발 단계 키는 초당 5건이다.
@@ -206,10 +209,13 @@ class MatchLoader(QThread):
     key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
     quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
     rank_ready = pyqtSignal(str, object)  # finished_ok 때 랭킹이 아직이었으면 뒤따라 — ouid, RankerInfo|None
+    # 역대 최고 등급(user/maxdivision) — ouid, dict|{}(그 종류 기록 없음)|None(실패). finished_ok 뒤에 보내지만
+    # 순서에 기대지 않는다: 화면이 ouid 별로 담아서, 먼저 와도 _on_loaded 가 그 계정을 그릴 때 보인다(7단계 변이로 확인)
+    max_division_ready = pyqtSignal(str, object)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
-                 record_elo: bool = False):
+                 record_elo: bool = False, want_max_division: bool = False):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
         offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
@@ -218,6 +224,8 @@ class MatchLoader(QThread):
         기본은 꺼 둔다(비교 상대의 이력을 쌓지 않는다)."""
         super().__init__()
         self._record_elo = record_elo
+        self._want_max_division = want_max_division  # 메인 검색만 — 구단주 비교 로더는 안 부른다
+        self._tail: ThreadPoolExecutor | None = None  # 상세 받기가 끝난 뒤 maxdivision 한 건
         self._api = api
         self._nickname = nickname
         self._match_type = match_type
@@ -239,7 +247,7 @@ class MatchLoader(QThread):
         까지 함께 남는다).
         """
         self._cancel = True
-        for pool in (self._pool, self._side):
+        for pool in (self._pool, self._side, self._tail):
             if pool is not None:
                 pool.shutdown(wait=False, cancel_futures=True)
         if self._prefetch is not None:
@@ -368,6 +376,9 @@ class MatchLoader(QThread):
                 # DB 에 들어간 경기의 디스크 캐시는 지운다 — DB 가 정본이고, 캐시는 한도에 걸려
                 # 아직 DB 에 못 넣은 경기를 이어 받을 때만 필요하다(2026-10-02: 2만 개·407MB 중복)
                 self._api.forget_details([d.get("matchId") for d in fresh])
+                # 상세 받기가 다 끝난 뒤에 — 그 중에 부르면 이 요청의 429 가 api.throttled 를 올려 같은 검색의
+                # 상세 슬롯을 줄인다(_safe_detail)
+                maxdiv_f = self._start_max_division(ouid)
 
                 self.progress.emit(0, 0, "저장된 전적 불러오는 중…")
                 if base_f is None:
@@ -399,6 +410,7 @@ class MatchLoader(QThread):
                 self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got,
                                       rank, grade_name, is_champion, badge_path,
                                       {}, division_names)
+                self._send_max_division(maxdiv_f, ouid)
                 return
 
             have_m = {m.match_id for m in base_matches}
@@ -412,6 +424,7 @@ class MatchLoader(QThread):
             self.finished_ok.emit(matches, details, ouid, basic, names,
                                   positions, new, got, rank, grade_name,
                                   is_champion, badge_path, seasons, division_names)
+            self._send_max_division(maxdiv_f, ouid)
             if rank_pending:
                 # 여기서 기다리지 않는다 — 스레드가 살아 있으면 그동안 새 검색이 막힌다(_api_search 의 isRunning).
                 # 끝나면 그 스레드에서 신호만 보낸다(받는 쪽은 UI 스레드로 줄 세워진다).
@@ -427,6 +440,38 @@ class MatchLoader(QThread):
             return  # cancel() 이 나란히 돌던 일을 내렸다 — 창을 닫는 중이라 알릴 곳이 없다
         except Exception as e:
             self.failed.emit(f"예기치 못한 오류: {e}")
+
+    def _start_max_division(self, ouid: str):
+        """역대 최고 등급 요청을 따로 한 스레드에서 시작 — 꺼져 있으면 None."""
+        if not self._want_max_division or self._cancel:
+            return None
+        self._tail = ThreadPoolExecutor(max_workers=1, thread_name_prefix="loader-maxdiv")
+        fut = self._tail.submit(self._safe_max_division, ouid)
+        self._tail.shutdown(wait=False)
+        return fut
+
+    def _safe_max_division(self, ouid: str):
+        """감독모드 줄 하나 → {"division", "date"}. 그 종류 줄이 없으면 {} · 실패면 None(검색은 안 죽인다)."""
+        try:
+            rows = self._api.get_max_division(ouid)
+        except Exception:
+            return None
+        row = next((r for r in rows if isinstance(r, dict)
+                    and r.get("matchType") == config.DEFAULT_MATCH_TYPE), None)
+        if row is None or row.get("division") is None:
+            return {}
+        return {"division": row.get("division"), "date": str(row.get("achievementDate") or "")[:10]}
+
+    def _send_max_division(self, fut, ouid: str) -> None:
+        """끝났으면 지금, 아니면 끝나는 스레드에서. 여기서 기다리지 않는다(스레드가 살아 있으면 새 검색이 막힌다)."""
+        if fut is None:
+            return
+        send = lambda f: None if self._cancel or f.cancelled() else \
+            self.max_division_ready.emit(ouid, f.result())  # noqa: E731
+        if fut.done():
+            send(fut)
+        else:
+            fut.add_done_callback(send)
 
     def _safe_detail(self, match_id: str):
         """한 경기가 실패해도 전체 조회를 죽이지 않는다."""
@@ -1074,6 +1119,7 @@ class MainWindow(QMainWindow):
         self._nick = ""
         self._basic: dict = {}
         self._rank = None   # ranker.RankerInfo | None — 넥슨 데이터센터 랭킹
+        self._max_division: dict[str, dict] = {}  # ouid → {"division","date"} | {} — 역대 최고 등급(_on_max_division)
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
@@ -2069,6 +2115,11 @@ class MainWindow(QMainWindow):
             self.box_analysis[sec] = box
             v.addWidget(gb)
 
+        gb_streak = QGroupBox("연승·연패 직후 승률")
+        self.box_streak = QVBoxLayout(gb_streak)
+        self.box_streak.setSpacing(3)
+        v.addWidget(gb_streak)
+
         v.addStretch(1)
         scroll.setWidget(w)
         return scroll
@@ -2117,6 +2168,45 @@ class MainWindow(QMainWindow):
                 continue
             for ins in rows:
                 box.addWidget(self._analysis_row(ins, colors[sec]))
+        self._render_streak_after(self._matches)
+
+    def _render_streak_after(self, matches: list) -> None:
+        """연승·연패 1·2·3+ 직후 다음 경기 승률 — 막대 + 전체 승률 대비 ±%p.
+
+        흐림 기준은 흐름 분석 문장과 같다(streak_min_n) — 막대는 굵은데 문장은 침묵하는 엇갈림을 없앤다."""
+        box = self.box_streak
+        self._clear(box)
+        s = summarize(matches)
+        if not s.total:
+            empty = QLabel("경기가 없습니다.")
+            empty.setStyleSheet(f"color: {T.TEXT_DIM};")
+            box.addWidget(empty)
+            return
+        need = core.streak_min_n(s.total)
+        base = s.win_rate
+        note = QLabel(f"전체 승률 {base:.1f}% 기준 · 흐린 줄은 표본 {need}경기 미만")
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        box.addWidget(note)
+        for r in core.after_streak_rates(matches, core.STREAK_MAX):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            plus = "+" if r.length == core.STREAK_MAX else ""
+            a = QLabel(f"{r.length}{plus}연{r.kind} 뒤")
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            a.setFixedWidth(90)
+            h.addWidget(a)
+            if r.games:
+                gap = r.win_rate - base
+                h.addWidget(win_rate_bar(
+                    r.win, r.draw, r.lose,
+                    f"{r.win_rate:.1f}%  ({wdl_text(r.win, r.draw, r.lose)})  기준 대비 {gap:+.1f}%p",
+                    need, height=16), 1)
+            else:
+                none = QLabel("경기 없음")
+                none.setStyleSheet(f"color: {T.TEXT_DIM};")
+                h.addWidget(none, 1)
+            box.addWidget(row)
 
     def _build_clutch_tab(self) -> QWidget:
         """승부처 분석 — 선제골 승률·역전, 시간 구간별 득실, 시각대별 승률."""
@@ -2260,6 +2350,11 @@ class MainWindow(QMainWindow):
         self.box_diag_possession.setSpacing(3)
         v.addWidget(gb_pos)
 
+        gb_disc = QGroupBox("규율·불운 (경기당 평균 · 나 / 상대)")
+        self.box_diag_discipline = QVBoxLayout(gb_disc)
+        self.box_diag_discipline.setSpacing(3)
+        v.addWidget(gb_disc)
+
         v.addStretch(1)
         scroll.setWidget(w)
         return scroll
@@ -2307,6 +2402,66 @@ class MainWindow(QMainWindow):
             self.box_diag_possession.addWidget(self._wr_bar_row(
                 f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
                 b.avg_gf, b.avg_ga))
+        self._render_discipline(details)
+
+    def _render_discipline(self, details: list[dict]) -> None:
+        """규율·불운 — 나/상대 경기당 평균, 골대·퇴장이 있던 경기의 승률, 종료 유형별 경기 수."""
+        box = self.box_diag_discipline
+        self._clear(box)
+        ds = core.discipline_stats(details, self._ouid)
+        if not ds.games:
+            empty = QLabel("경기가 없습니다.")
+            empty.setStyleSheet(f"color: {T.TEXT_DIM};")
+            box.addWidget(empty)
+            return
+        for ax in ds.axes:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(ax.name)
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            a.setFixedWidth(90)
+            if ax.name == "퇴장":
+                # 경기당 0.001 수준이라 평균은 "0.00" 으로만 보인다(실DB 1만 경기 14회) — 횟수로
+                mine, opp = f"{round(ax.mine * ds.games)}회", f"{round(ax.opp * ds.games)}회"
+            else:
+                mine, opp = f"{ax.mine:.2f}", f"{ax.opp:.2f}"
+            b = QLabel(f"나 {mine}")
+            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            c = QLabel(f"상대 {opp}")
+            c.setStyleSheet(f"color: {T.TEXT_DIM};")
+            h.addWidget(a)
+            h.addWidget(b)
+            h.addSpacing(16)
+            h.addWidget(c)
+            h.addStretch(1)
+            box.addWidget(row)
+
+        sep = QLabel("이런 경기의 승률")
+        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 3px;")
+        box.addWidget(sep)
+        for label, wdl in (("골대 맞힌 경기", ds.post_hit), ("내가 퇴장당한 경기", ds.my_red),
+                           ("상대가 퇴장당한 경기", ds.opp_red)):
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(f"{label} ({sum(wdl)})")
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            a.setFixedWidth(170)
+            h.addWidget(a)
+            if sum(wdl):
+                h.addWidget(win_rate_bar(*wdl, f"{rate_of(*wdl):.1f}%  ({wdl_text(*wdl)})",
+                                         core.MIN_COND, height=16), 1)
+            else:
+                none = QLabel("경기 없음")
+                none.setStyleSheet(f"color: {T.TEXT_DIM};")
+                h.addWidget(none, 1)
+            box.addWidget(row)
+
+        ends = QLabel("종료 유형: " + " · ".join(f"{k} {ds.end_kinds.get(k, 0)}" for k in core.END_KINDS))
+        ends.setStyleSheet(f"color: {T.TEXT_DIM}; padding-top: 3px;")
+        ends.setToolTip(FORFEIT_TIP)
+        box.addWidget(ends)
 
     def _build_shotmap_tab(self) -> QWidget:
         """슛 맵 — 슛 좌표를 하프 피치 위에 점으로. 내 슛/상대 슛 토글."""
@@ -2978,13 +3133,14 @@ class MainWindow(QMainWindow):
         # 미리 읽은 것은 한 번만 넘긴다 — 다른 계정이면 로더가 멈추고 버린다
         prefetch, self._prefetch = self._prefetch, None
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
-                                   prefetch=prefetch, record_elo=True)
+                                   prefetch=prefetch, record_elo=True, want_max_division=True)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.key_invalid.connect(self._on_key_invalid)
         self._loader.quota_hit.connect(self._on_quota_hit)  # 키를 바꾸는 게 답이라 같은 길
         self._loader.rank_ready.connect(self._on_rank_ready)
+        self._loader.max_division_ready.connect(self._on_max_division)
         self._loader.start()
 
     def _on_rank_ready(self, ouid: str, rank) -> None:
@@ -2992,6 +3148,16 @@ class MainWindow(QMainWindow):
         if ouid != self._ouid:
             return
         self._rank = rank
+        self._render_ranker()
+
+    def _on_max_division(self, ouid: str, info) -> None:
+        """역대 최고 등급. None(실패)이면 보던 값을 둔다(순위와 같은 규칙), {} 면 기록 없음.
+
+        ouid 별로 들고 카드는 지금 계정 것만 읽는다 — 그래서 다른 계정의 늦은 신호는 따로 거를 필요가 없다
+        (거르는 줄을 둬 봤는데 빼도 결과가 같았다, 7단계 변이). 내려놓기(release_memory)도 안 비운다 —
+        다시 열기는 저장본 경로라 maxdivision 을 다시 부르지 않는다."""
+        if info is not None:
+            self._max_division[ouid] = info
         self._render_ranker()
 
     def _on_quota_hit(self, msg: str) -> None:
@@ -3357,6 +3523,15 @@ class MainWindow(QMainWindow):
         if not self.LAZY_RENDER or self.PAGE_RENDER_KEYS.get(self._current_page_name() or "") == key:
             self._render_page(next(n for n, k in self.PAGE_RENDER_KEYS.items() if k == key))
 
+    def _max_division_text(self) -> str | None:
+        """지금 계정의 역대 최고 등급 줄 — 기록이 없거나 등급 이름을 모르면(메타 실패) None.
+        숫자("800")를 이름 대신 내지 않는다."""
+        info = self._max_division.get(self._ouid) if self._ouid else None
+        name = self._division_names.get(info.get("division")) if info else None
+        if not name:
+            return None
+        return f"역대 최고 {name}" + (f" · {info['date']}" if info.get("date") else "")
+
     def _render_ranker(self) -> None:
         """랭커 카드 — 챔피언스 이상일 때만 순위·구단가치·ELO 를 보여준다.
 
@@ -3371,6 +3546,7 @@ class MainWindow(QMainWindow):
         lv = (r.level if r and r.level else self._basic.get("level", "-"))
         c.set_name(f"{self._nick}  Lv.{lv}")
         c.set_badge(self._badge_path or None)
+        c.set_best(self._max_division_text())
 
         if self._is_champion and r and r.ranked:
             c.set("순위", f"{r.rank:,}위", T.GREEN)
@@ -4644,6 +4820,8 @@ class MainWindow(QMainWindow):
             h.addStretch(1)
             h.addWidget(b)
             h.addWidget(c)
+            if wdl is rb.forfeit:
+                row.setToolTip(FORFEIT_TIP)
             self.box_result.addWidget(row)
 
         sep = QLabel("시간대별 득실")

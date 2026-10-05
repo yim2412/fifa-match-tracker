@@ -446,6 +446,32 @@ def _bump(wdl: list[int], res: str) -> None:
         wdl[2] += 1
 
 
+# matchEndType — 오픈API 문서(인용): 0 정상 · 1 몰수승 · 2 몰수패. 4 는 문서에 없고 실DB 에서
+# "오류" 결과에만 붙는다(55팀-경기, 2026-10-05 실측). 1·2 경기의 matchResult 는 "몰수승"이 아니라
+# 그냥 "승"·"패"라, 결과 문자열로는 몰수를 못 가린다(1.2.1 전 result_breakdown 의 몰수 줄이 늘 0이던 이유).
+END_NORMAL, END_FORFEIT_WIN, END_FORFEIT_LOSE, END_ABORT = 0, 1, 2, 4
+
+
+def _end_type(p: dict) -> int | None:
+    v = (p.get("matchDetail") or {}).get("matchEndType")
+    return v if isinstance(v, int) else None
+
+
+def end_kind(me: dict, opp: dict) -> str:
+    """한 경기의 종료 유형 — "정상"|"몰수승"|"몰수패"|"중단". 양쪽 matchEndType 을 같이 본다.
+
+    내가 4(오류)이고 상대가 1(몰수승)이면 실제로는 몰수패다 — 내 쪽 기록은 "오류"로 남는다
+    (픽스처 0004 가 이 짝, 실DB 에서 1 이 2 보다 많은 것과 맞는다)."""
+    mine, theirs = _end_type(me), _end_type(opp or {})
+    if mine == END_FORFEIT_WIN:
+        return "몰수승"
+    if mine == END_FORFEIT_LOSE:
+        return "몰수패"
+    if mine == END_ABORT:
+        return "몰수패" if theirs == END_FORFEIT_WIN else "중단"
+    return "정상"
+
+
 def result_breakdown(details: list[dict], ouid: str) -> ResultBreakdown:
     rb = ResultBreakdown()
     for d in details:
@@ -456,9 +482,13 @@ def result_breakdown(details: list[dict], ouid: str) -> ResultBreakdown:
         my_shoot = me.get("shoot") or {}
         op_shoot = opp.get("shoot") or {}
 
-        # 몰수는 matchEndType 으로 구분된다(0=정상). 사용자 표시는 result 문자열.
-        if "몰수" in res:
-            _bump(rb.forfeit, res)
+        # 몰수는 결과 문자열이 아니라 종료 유형으로 센다 — 내 쪽이 "오류"인 몰수패도 패로 들어간다.
+        # 그래서 이 패널 합계는 승률 분모(오류 제외)보다 그만큼 클 수 있다(의도).
+        kind = end_kind(me, opp)
+        if kind == "몰수승":
+            rb.forfeit[0] += 1
+        elif kind == "몰수패":
+            rb.forfeit[2] += 1
         elif _num(my_shoot, "shootOutScore") or _num(op_shoot, "shootOutScore"):
             _bump(rb.shootout, res)
         else:
@@ -482,6 +512,66 @@ def result_breakdown(details: list[dict], ouid: str) -> ResultBreakdown:
                     pg.conceded += 1
                     rb.concede_types[goal_type_name(sd.get("type"))] += 1
     return rb
+
+
+# ── 규율·불운 ─────────────────────────────────────────────────────────────
+# (이름, matchDetail 키) — 골대는 matchDetail 이 아니라 shootDetail[].hitPost 에 있다(None 자리).
+DISCIPLINE_AXES = [
+    ("파울", "foul"),
+    ("경고", "yellowCards"),
+    ("퇴장", "redCards"),
+    ("오프사이드", "offsideCount"),
+    ("코너킥", "cornerKick"),
+    ("골대", None),
+]
+END_KINDS = ("정상", "몰수승", "몰수패", "중단")
+
+
+@dataclass
+class Discipline:
+    """성적 진단 '규율·불운' — 나/상대 경기당 평균, 조건부 승률, 종료 유형별 경기 수."""
+    games: int = 0                                     # 승·무·패 경기(평균·승률의 분모)
+    axes: list[ProfileAxis] = field(default_factory=list)
+    post_hit: list[int] = field(default_factory=lambda: [0, 0, 0])   # 내가 골대를 맞힌 경기 승,무,패
+    my_red: list[int] = field(default_factory=lambda: [0, 0, 0])     # 내가 퇴장당한 경기
+    opp_red: list[int] = field(default_factory=lambda: [0, 0, 0])    # 상대가 퇴장당한 경기
+    end_kinds: Counter = field(default_factory=Counter)              # 결과와 무관하게 전 경기
+
+
+def _posts(p: dict) -> int:
+    return sum(1 for sd in p.get("shootDetail") or [] if sd.get("hitPost"))
+
+
+def discipline_stats(details: list[dict], ouid: str) -> Discipline:
+    """파울·경고·퇴장·오프사이드·코너킥·골대 — 나와 상대의 경기당 평균.
+
+    승·무·패 아닌 결과("오류")는 평균·조건부 승률에서 뺀다(team_profile 과 같은 기준).
+    종료 유형 수는 그 경기들까지 센다 — 몰수패가 "오류"로 남는 경우가 있어서."""
+    out = Discipline()
+    sums = {side: defaultdict(float) for side in ("mine", "opp")}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        out.end_kinds[end_kind(me, opp)] += 1
+        w = _wdl_of(_result_of(me))
+        if w is None:
+            continue
+        out.games += 1
+        for side, p in (("mine", me), ("opp", opp)):
+            md = p.get("matchDetail") or {}
+            for name, key in DISCIPLINE_AXES:
+                sums[side][name] += _posts(p) if key is None else _num(md, key)
+        if _posts(me):
+            out.post_hit[w] += 1
+        if _num(me.get("matchDetail") or {}, "redCards"):
+            out.my_red[w] += 1
+        if _num(opp.get("matchDetail") or {}, "redCards"):
+            out.opp_red[w] += 1
+    n = out.games or 1
+    out.axes = [ProfileAxis(name, "회/경기", sums["mine"][name] / n, sums["opp"][name] / n)
+                for name, _ in DISCIPLINE_AXES]
+    return out
 
 
 # ── 승부처 분석 ───────────────────────────────────────────────────────────
@@ -633,6 +723,52 @@ def time_of_day_rates(matches: list) -> list[TimeBandRate]:
                     band.lose += 1
                 break
     return bands
+
+
+# ── 연승·연패 직후 승률 ───────────────────────────────────────────────────
+@dataclass
+class StreakAfter:
+    """연승/연패 length 경기(max_len 이면 그 이상) 직후의 다음 경기 승·무·패."""
+    kind: str          # "승" | "패"
+    length: int
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+
+def after_streak_rates(matches: list, max_len: int = 3) -> list[StreakAfter]:
+    """연승·연패 1..max_len(마지막은 이상) 직후 다음 경기 성적 — 승 1·2·3+, 패 1·2·3+ 순.
+
+    연속을 세는 기준은 models.longest_streaks 와 같다(무·오류가 끊는다, 날짜 없는 경기 제외,
+    입력 순서 무관). 다음 경기가 승·무·패가 아니면(오류) 분모에서 뺀다. 경기 간 시간 간격 조건은
+    두지 않는다 — 60분 넘게 쉰 경기를 빼도 값이 1.7%p 안에서만 움직였다(2026-10-05 실측)."""
+    rows = {(k, n): StreakAfter(k, n) for k in ("승", "패") for n in range(1, max_len + 1)}
+    dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
+    run_kind, run = "", 0
+    for m in dated:
+        w = _wdl_of(m.result)
+        if run_kind and w is not None:
+            row = rows[(run_kind, min(run, max_len))]
+            if w == 0:
+                row.win += 1
+            elif w == 1:
+                row.draw += 1
+            else:
+                row.lose += 1
+        kind = "승" if w == 0 else ("패" if w == 2 else "")
+        if kind and kind == run_kind:
+            run += 1
+        else:
+            run_kind, run = kind, (1 if kind else 0)
+    return list(rows.values())
 
 
 # ── 성적 진단(상대 등급별 · 점유율 구간별) ───────────────────────────────────
