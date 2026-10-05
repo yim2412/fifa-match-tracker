@@ -1425,6 +1425,9 @@ class MainWindow(QMainWindow):
         installed = updatecheck.install_dir() is not None and bool(rel.setup_url)
         self.update_card.show_release(rel.tag, config.APP_VERSION, installed)
         self._set_update_status(f"새 버전 {rel.tag}", "업데이트" if installed else "받으러 가기")
+        sh = getattr(self, "shell", None)
+        if sh is not None and not sh.window_visible():
+            sh.update_found_while_hidden(rel.tag)  # 트레이 상주 중 6시간 확인 — 카드는 창을 열어야 보인다
 
     def _on_update_clicked(self) -> None:
         rel = self._release
@@ -5093,6 +5096,10 @@ class AboutDialog(QDialog):
             self.chk_auto.setToolTip("설치판·포터블 실행 파일에서만 켤 수 있습니다")
         self.chk_auto.toggled.connect(self._on_auto_toggled)
         v.addWidget(self.chk_auto)
+        self.chk_notify = QCheckBox(notice.NOTIFY_CHECK)
+        self.chk_notify.setChecked(tray.notify_enabled())
+        self.chk_notify.toggled.connect(self._on_notify_toggled)
+        v.addWidget(self.chk_notify)
         self.lb_msg = QLabel("")
         self.lb_msg.setWordWrap(True)
         self.lb_msg.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -5151,6 +5158,11 @@ class AboutDialog(QDialog):
             return
         self.lb_msg.setText("윈도우를 켜면 트레이로 조용히 시작합니다 — 창을 닫아도(X) 트레이에 남습니다." if on else
                             "자동 실행을 껐습니다.")
+
+    def _on_notify_toggled(self, on: bool) -> None:
+        tray.set_notify_enabled(on)
+        self.lb_msg.setText("트레이 알림을 켰습니다 — 게임(전체 화면) 중엔 끝난 뒤에 띄웁니다." if on else
+                            "트레이 알림을 껐습니다 — 상태는 창을 열면 보입니다.")
 
     def _ask_clear(self, keep_ouid: str | None) -> str | None:
         """→ "all" · "keep"(지금 계정 ELO 는 남김) · None(취소)."""
@@ -5246,6 +5258,8 @@ def _notify_crash(path) -> None:
 def _setup_app(app: QApplication) -> None:
     """main() 의 창 띄우기 전 준비 — 테스트가 같은 경로를 부를 수 있게 떼어 뒀다."""
     crashlog.install(config.DATA_DIR / "logs", config.APP_VERSION, notify=_notify_crash)
+    if updatecheck.install_dir() is not None:
+        tray.set_app_user_model_id()  # 창보다 먼저 — 알림이 바로가기 이름으로 뜨게(설치판만)
     T.apply(app)
     icon_path = config.asset_path("app_icon.ico")
     if icon_path.exists():

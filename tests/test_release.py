@@ -171,9 +171,26 @@ def test_missing_licenses_reads_zip_names():
 
 def test_missing_modules_needs_the_pyd():
     base = "피파전적관리/_internal"
-    assert release.missing_modules([f"{base}/orjson/orjson.cp314-win_amd64.pyd"]) == []
-    assert release.missing_modules([f"{base}/orjson/__init__.pyi"]) == ["orjson"], "pyd 없이 통과했다"
-    assert release.missing_modules([]) == ["orjson"]
+    net = f"{base}/PyQt6/QtNetwork.pyd"
+    assert release.missing_modules([f"{base}/orjson/orjson.cp314-win_amd64.pyd", net]) == []
+    assert release.missing_modules([f"{base}/orjson/__init__.pyi", net]) == ["orjson"], "pyd 없이 통과했다"
+    # 1.1.1 계획 때 실측: Qt6Network.dll 은 있는데 QtNetwork.pyd 가 없었다 — dll 로 통과하면 안 된다
+    only_dll = [f"{base}/orjson/orjson.cp314-win_amd64.pyd", f"{base}/PyQt6/Qt6/bin/Qt6Network.dll",
+                f"{base}/PyQt6/QtCore.pyd"]
+    assert release.missing_modules(only_dll) == ["PyQt6/QtNetwork.pyd"], release.missing_modules(only_dll)
+    assert release.missing_modules([]) == ["orjson", "PyQt6/QtNetwork.pyd"]
+
+
+def test_installer_matches_app_constants():
+    # 알림 앱 이름(AUMID)이 어긋나면 알림이 exe 이름으로 뜨거나 안 뜬다 · 제거기가 다른 이름을 지우면 부팅마다 '없는 exe'
+    import autostart
+    iss = release.ISS.read_text(encoding="utf-8-sig")
+    assert f'#define AppUserModelID "{release.config.APP_USER_MODEL_ID}"' in iss
+    assert iss.count('AppUserModelID: "{#AppUserModelID}"') == 2, "바로가기 둘 다에 AppUserModelID 가 있어야"
+    assert f'#define RunValue "{autostart.VALUE_INSTALLED}"' in iss
+    assert "RegDeleteValue(HKEY_CURRENT_USER, 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', '{#RunValue}')" in iss
+    assert autostart.RUN_KEY == r"Software\Microsoft\Windows\CurrentVersion\Run"
+    assert "usUninstall" in iss and autostart.VALUE_PORTABLE not in iss, "제거기는 설치판 값만 지운다"
 
 
 def test_installer_shows_app_name():
@@ -204,13 +221,16 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
     (internal / "orjson").mkdir(parents=True)
     (app / f"{release.APP_DIR_NAME}.exe").write_bytes(b"exe")
     (internal / "orjson" / "orjson.cp314-win_amd64.pyd").write_bytes(b"pyd")
+    (internal / "PyQt6").mkdir()
+    (internal / "PyQt6" / "QtNetwork.pyd").write_bytes(b"pyd")
     for n in [n for n, _l, _d in release.notice.THIRD_PARTY] + ["this-app"]:
         (internal / release.notice.LICENSE_DIR / n).mkdir(parents=True)
         (internal / release.notice.LICENSE_DIR / n / "LICENSE").write_text("license", encoding="utf-8")
     controls = b"".join(release.CONTROLS.values()) + (SECRET.encode("utf-8") if leak else b"")
     (internal / "base.bin").write_bytes(controls)
     if drop:
-        shutil.rmtree(internal / drop)
+        p = internal / drop
+        shutil.rmtree(p) if p.is_dir() else p.unlink()
     iss = root / "setup.iss"
     iss.write_text("; iss", encoding="utf-8")
 
@@ -254,6 +274,7 @@ def test_release_main_stops_on_every_gate():
         ("Inno Setup 없음", {"iscc": False}, True, "ISCC"),
         ("라이선스 빠짐", {"drop": f"{release.notice.LICENSE_DIR}/PyQt6"}, True, "라이선스 전문이 빠졌다"),
         ("orjson 빠짐", {"drop": "orjson"}, True, "빠진 모듈"),
+        ("QtNetwork 빠짐", {"drop": "PyQt6/QtNetwork.pyd"}, True, "빠진 모듈"),
         ("설치 파일 안 생김", {"make_setup": False}, True, "설치 파일이 안 생겼다"),
         ("개인정보 섞임", {"leak": True}, True, "개인정보가 들어 있다"),
     ]

@@ -158,14 +158,21 @@ def missing_licenses(names: list[str]) -> list[str]:
 
 
 # 없으면 앱이 '대체 경로'로 돌아 겉으론 멀쩡한 모듈 — 빠져도 아무 오류가 안 난다(store._loads 의 orjson)
-REQUIRED_MODULES = ["orjson"]
+# "PyQt6/QtNetwork.pyd" 처럼 파일로 적은 것은 그 파일 — 트레이의 '한 번만 실행'(QLocalServer)이 쓴다. 1.1.1 계획 때
+# 배포판에 Qt6Network.dll 은 있는데 이 .pyd 가 없었다(소스·테스트에선 안 보이고 exe 에서만 import 가 죽는다).
+REQUIRED_MODULES = ["orjson", "PyQt6/QtNetwork.pyd"]
 
 
 def missing_modules(names: list[str]) -> list[str]:
     """배포물 파일 이름들에 그 모듈의 확장 모듈(.pyd)이 없는 것."""
     low = [n.lower() for n in names]
-    return [m for m in REQUIRED_MODULES
-            if not any(f"/_internal/{m}/" in n and n.endswith(".pyd") for n in low)]
+
+    def has(m: str) -> bool:
+        m = m.lower()
+        if m.endswith(".pyd"):
+            return any(n.endswith(f"/_internal/{m}") for n in low)
+        return any(f"/_internal/{m}/" in n and n.endswith(".pyd") for n in low)
+    return [m for m in REQUIRED_MODULES if not has(m)]
 
 
 def asset_names(version: str) -> tuple[str, str, str]:
@@ -279,7 +286,7 @@ def main() -> int:
     with zipfile.ZipFile(zip_path) as z:
         mods_missing = missing_modules(z.namelist())
     if mods_missing:
-        fail(f"배포판에 빠진 모듈 {mods_missing} — 없으면 앱이 대체 경로로 조용히 느려진다")
+        fail(f"배포판에 빠진 모듈 {mods_missing} — 소스·테스트에선 안 보이고 exe 에서만 조용히 느려지거나 깨진다")
     ok(f"선택 모듈 {', '.join(REQUIRED_MODULES)} 들어 있음")
 
     setup = DIST / setup_name

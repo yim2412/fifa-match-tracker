@@ -116,6 +116,9 @@ config.RANK_DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "rank.db"
 config.ENV_PATH = config.RANK_DB_PATH.with_name(".env")
 # 한 번만 실행(tray.SingleInstance) — main() 을 부르는 테스트가 이 PC 에 떠 있는 앱을 앞으로 부르거나 그 때문에 끝나지 않게
 config.SINGLE_INSTANCE = False
+# 트레이 알림은 게임(전체 화면) 중이면 미룬다 — 테스트 도중 게임을 켜 둬도 결과가 같게
+import tray as _tray  # noqa: E402
+_tray.user_busy = lambda: False
 _seed = store.open_db(config.DB_PATH)
 try:
     from datetime import date as _date
@@ -3251,6 +3254,35 @@ def test_crash_while_hidden_no_modal():
                 pass
         finally:
             app_main._SHELL = keep[0]
+
+
+def test_update_found_while_hidden_goes_to_tray_once_a_day():
+    # 트레이 상주 중 6시간 확인 — 카드는 창을 열어야 보이니 숨어 있으면 알림으로, 같은 날 두 번은 안 띄운다
+    with _ShellOnWin() as ctx:
+        _win._on_update_found(_REL)
+        assert ctx.sh.tray.msgs == [], "창이 보이는데 알림까지 띄웠다(카드로 충분)"
+        _win.hide()
+        _win._on_update_found(_REL)
+        _win._on_update_found(_REL)
+        assert ctx.sh.tray.msgs == [f"새 버전 {_REL.tag}"], ctx.sh.tray.msgs
+    _win.update_card.hide()
+
+
+def test_about_dialog_notify_toggle():
+    import tray as tray_mod
+    dlg = app_main.AboutDialog(_win)
+    try:
+        assert dlg.chk_notify.isChecked(), "알림은 기본 켬"
+        dlg.chk_notify.setChecked(False)
+        assert not tray_mod.notify_enabled(), "체크를 풀어도 설정에 안 남았다"
+        dlg2 = app_main.AboutDialog(_win)
+        assert not dlg2.chk_notify.isChecked(), "다시 열면 꺼진 게 안 보인다"
+        dlg2.deleteLater()
+        text = " ".join(t.toPlainText() for t in dlg.findChildren(app_main.QTextBrowser))
+        assert "트레이 알림" in text, "안내에 트레이 알림이 없다"
+    finally:
+        tray_mod.set_notify_enabled(True)
+        dlg.deleteLater()
 
 
 def test_release_drops_every_reference():

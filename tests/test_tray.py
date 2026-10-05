@@ -18,9 +18,20 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
+import tempfile  # noqa: E402
+from datetime import date, timedelta  # noqa: E402
+from pathlib import Path  # noqa: E402
+
 import autostart  # noqa: E402
 import config  # noqa: E402
 import tray  # noqa: E402
+
+# 실제 설정·rank.db 를 건드리지 않게(알림 하루 한 번 기록이 rank.db 에 간다) · 테스트 도중 게임을 켜 둬도 결과가 같게
+_TMP = Path(tempfile.mkdtemp(prefix="test_tray_"))
+config.SETTINGS_PATH = _TMP / "settings.ini"
+config.RANK_DB_PATH = _TMP / "rank.db"
+_REAL_USER_BUSY = tray.user_busy
+tray.user_busy = lambda: False
 
 
 # ── 자동 실행 ─────────────────────────────────────────────────────────
@@ -446,6 +457,147 @@ def test_crash_while_hidden_goes_to_tray_then_modal_on_open():
     assert modal == ["crash.log"]
     sh.show_window()
     assert modal == ["crash.log"], "안내가 두 번 떴다"
+    # 오류 알림도 같은 길 — 게임 중이면 미루고 끝난 뒤에(풍선을 직접 띄우면 게임 위에 뜬다)
+    sh, w, _q = _shell(visible=False)
+    busy = [True]
+    sh.notifier._busy = lambda: busy[0]
+    sh.crash_while_hidden("crash.log")
+    assert sh.tray.msgs == [] and "crash" in sh.notifier.pending, "게임 중인데 오류 알림을 바로 띄웠다"
+    busy[0] = False
+    sh.notifier.flush()
+    assert sh.tray.msgs == ["예기치 못한 오류"]
+    sh._update_timer.stop()
+
+
+# ── 알림(8절) ─────────────────────────────────────────────────────────
+class _Box:
+    """Notifier 의 바깥 — 띄운 알림·게임 중 여부·켜짐·하루 기록을 손으로 쥔다."""
+
+    def __init__(self, busy=False, enabled=True, ready=True, claim=None):
+        self.shown, self.busy, self.enabled, self.ready = [], busy, enabled, ready
+        self.day = date(2026, 10, 5)
+        self.n = tray.Notifier(lambda t, x: self.shown.append(t) or True, ready=lambda: self.ready,
+                               busy=lambda: self.busy, enabled=lambda: self.enabled,
+                               today=lambda: self.day, claim_daily=claim)
+
+
+def _rank_db():
+    return Path(tempfile.mkdtemp(prefix="notify_")) / "rank.db"
+
+
+def test_notifier_defers_while_gaming_then_shows_latest_once():
+    b = _Box(busy=True)
+    assert b.n.post("update", "v1", "") == "deferred" and b.n.post("update", "v2", "") == "deferred"
+    assert b.n.post("crash", "오류", "") == "deferred"
+    assert b.shown == [] and b.n._timer.isActive(), "게임 중인데 띄웠거나 다시 볼 타이머가 없다"
+    assert b.n._timer.interval() == config.NOTIFY_RETRY_S * 1000
+    b.n.flush()
+    assert b.shown == [], "아직 게임 중인데 띄웠다"
+    b.busy = False
+    b.n.flush()
+    assert b.shown == ["v2", "오류"], b.shown          # 종류마다 마지막 것 하나씩
+    assert not b.n._timer.isActive() and b.n.pending == {}
+    b.n.flush()
+    assert b.shown == ["v2", "오류"], "두 번 띄웠다"
+    # 미뤄 둔 사이 알림을 끄면 끝난 뒤에도 안 띄운다
+    b2 = _Box(busy=True)
+    b2.n.post("update", "v3", "")
+    b2.enabled, b2.busy = False, False
+    b2.n.flush()
+    assert b2.shown == []
+
+
+def test_notifier_daily_once_across_two_instances():
+    import rankcollect
+    db = _rank_db()
+    claim = lambda k, d: rankcollect.claim_daily_notice(k, d, db)  # noqa: E731
+    a, b = _Box(claim=claim), _Box(claim=claim)   # 설치판·포터블이 같은 rank.db 를 본다
+    assert a.n.post("update", "새 버전", "", daily=True) == "shown"
+    assert b.n.post("update", "새 버전", "", daily=True) == "skipped", "다른 실행본이 같은 날 또 알렸다"
+    assert a.n.post("update", "새 버전", "", daily=True) == "skipped"
+    assert a.n.post("rank_fail", "실패", "", daily=True) == "shown", "종류가 다르면 따로 센다"
+    assert a.n.post("crash", "오류", "") == "shown" and a.n.post("crash", "오류", "") == "shown", "daily 아닌데 막았다"
+    a.day = b.day = date(2026, 10, 6)
+    assert b.n.post("update", "새 버전", "", daily=True) == "shown", "다음 날인데 안 알렸다"
+    assert a.shown == ["새 버전", "실패", "오류", "오류"] and b.shown == ["새 버전"]
+
+
+def test_notifier_off_no_tray_and_broken_record():
+    b = _Box(enabled=False, busy=True)
+    assert b.n.post("update", "x", "") == "off" and b.n.pending == {}, "꺼졌는데 미뤄 뒀다"
+    claimed = []
+    b = _Box(ready=False, claim=lambda k, d: claimed.append(k) or True)
+    assert b.n.post("update", "x", "", daily=True) == "no-tray"
+    assert claimed == [], "트레이가 없어 못 띄웠는데 오늘 몫을 써 버렸다"
+
+    def broken(k, d):
+        raise OSError("rank.db 잠김")
+    b = _Box(claim=broken)
+    assert b.n.post("update", "x", "", daily=True) == "shown", "기록을 못 남겼다고 알림을 버렸다"
+
+
+def test_user_busy_answers_without_error():
+    assert _REAL_USER_BUSY() in (True, False)
+
+
+class _OutcomeSched(_FakeSched):
+    def __init__(self):
+        super().__init__()
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class S(QObject):
+            outcome = pyqtSignal(object)
+        self._s = S()
+        self.outcome = self._s.outcome
+
+
+def test_collect_outcome_notifies_only_while_hidden():
+    from types import SimpleNamespace as O
+    for visible in (True, False):
+        sh = tray.AppShell(_app, sched=_OutcomeSched())
+        sh.attach_window(_FakeWin(visible))
+        sh.tray = _FakeTray()
+        sh.notifier._claim = lambda k, d: True
+        sh.sched.outcome.emit(O(kind="blocked", message="403", disabled_by_block=True, fail_notice=False))
+        sh.sched.outcome.emit(O(kind="failed", message="점검", disabled_by_block=False, fail_notice=True))
+        sh.sched.outcome.emit(O(kind="failed", message="한 번", disabled_by_block=False, fail_notice=False))
+        sh.sched.outcome.emit(O(kind="ok", rows=10000, message="", disabled_by_block=False, fail_notice=False))
+        want = [] if visible else ["랭킹 수집을 껐습니다", "랭킹 수집이 계속 실패합니다"]
+        assert sh.tray.msgs == want, (visible, sh.tray.msgs)
+        sh._update_timer.stop()
+
+
+def test_tray_mode_without_window_asks_for_consent_and_click_opens():
+    keep = tray.QSystemTrayIcon.isSystemTrayAvailable
+    tray.QSystemTrayIcon.isSystemTrayAvailable = staticmethod(lambda: True)
+    try:
+        for tray_mode, want in ((True, ["확인이 필요합니다"]), (False, [])):
+            sh = tray.AppShell(_app)
+            shown, opened = [], []
+            sh.notifier._show = lambda t, x: shown.append(t) or True
+            sh.notifier._claim = lambda k, d: True
+            sh.show_window = lambda: opened.append(1)
+            sh.start(tray_mode=tray_mode)
+            assert shown == want, (tray_mode, shown)
+            sh.tray.messageClicked.emit()
+            assert opened == [1], "알림을 눌러도 창을 열지 않았다"
+            sh.tray.hide()
+            sh._update_timer.stop()
+    finally:
+        tray.QSystemTrayIcon.isSystemTrayAvailable = keep
+
+
+def test_notify_toggle_round_trip():
+    assert tray.notify_enabled(), "기본은 켬"
+    tray.set_notify_enabled(False)
+    try:
+        assert not tray.notify_enabled()
+        sh = tray.AppShell(_app)
+        sh.tray = _FakeTray()
+        assert sh.post("crash", "오류", "") == "off" and sh.tray.msgs == []
+    finally:
+        tray.set_notify_enabled(True)
+    assert tray.notify_enabled()
 
 
 def test_constants_sane():

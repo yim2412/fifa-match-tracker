@@ -9,6 +9,9 @@
 ; 화면 이름 — config.APP_NAME 과 같게. 폴더·exe·AppId 는 예전 이름 그대로(바꾸면 업데이트가 끊긴다)
 #define AppTitle "감독모드 전적 분석"
 #define OldTitle "피파 전적관리"
+; 둘 다 앱 쪽 상수와 같아야 한다(test_release 가 대조) — config.APP_USER_MODEL_ID · autostart.VALUE_INSTALLED
+#define AppUserModelID "FifaMatchTracker.App"
+#define RunValue "FifaMatchTracker"
 
 [Setup]
 ; AppId 는 바꾸지 않는다 — 바뀌면 새 버전이 덮어쓰기가 아니라 별개 프로그램으로 깔린다
@@ -55,8 +58,9 @@ Type: files; Name: "{autodesktop}\{#OldTitle}.lnk"
 Source: "..\dist\피파전적관리\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppTitle}"; Filename: "{app}\{#AppExe}"
-Name: "{autodesktop}\{#AppTitle}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+; AppUserModelID — 앱이 프로세스에 거는 값(config.APP_USER_MODEL_ID)과 같아야 윈도우 알림이 이 이름으로 뜬다
+Name: "{autoprograms}\{#AppTitle}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelID}"
+Name: "{autodesktop}\{#AppTitle}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelID}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppTitle}}"; Flags: nowait postinstall skipifsilent
@@ -67,4 +71,12 @@ Filename: "{app}\{#AppExe}"; Flags: nowait; Check: IsAutoUpdate
 function IsAutoUpdate: Boolean;
 begin
   Result := ExpandConstant('{param:AUTOUPDATE|0}') = '1';
+end;
+
+// 제거할 때 자동 실행 등록을 지운다 — 앱 토글(autostart.py)이 만든 값이라 [Registry] 로는 못 지운다.
+// 설치판 값만(autostart.VALUE_INSTALLED) — 포터블 값은 포터블 몫이다. 값이 없어도 그냥 넘어간다.
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
 end;
