@@ -243,6 +243,29 @@ def test_lazy_render_draws_only_the_visible_page():
         assert c.n["_render_teamcolor_tabs"] == 3, c.n
 
 
+def _render_coverage_problems(nav, keys: dict, exempt: dict, renderer_keys) -> list[str]:
+    """메뉴 ↔ 그리기 표 대조 — 표에 안 넣은 메뉴는 예외 없이 조용히 안 그려진다(CLAUDE.md PyQt 7)."""
+    pages = [name for _, items in nav for name, _ in items]
+    out = [f"{p}: PAGE_RENDER_KEYS 에도 PAGE_RENDER_EXEMPT 에도 없다" for p in pages
+           if p not in keys and p not in exempt]
+    out += [f"{p}: 두 표에 다 있다" for p in pages if p in keys and p in exempt]
+    out += [f"{p}: 메뉴에 없는 이름" for p in [*keys, *exempt] if p not in pages]
+    out += [f"{p}: 키 {k!r} 의 그리기가 _renderers() 에 없다" for p, k in keys.items()
+            if k not in renderer_keys]
+    out += [f"그리기 {k!r} 를 쓰는 메뉴가 없다" for k in renderer_keys if k not in keys.values()]
+    return out
+
+
+def test_every_nav_page_has_a_renderer():
+    W = app_main.MainWindow
+    # 심은 위반부터 — 새 메뉴를 NAV 에만 넣은 경우를 잡지 못하면 아래 단언은 빈 검사다
+    planted = [*W.NAV, ("새 묶음", [("새 메뉴", "_build_x")])]
+    assert any("새 메뉴" in p for p in _render_coverage_problems(
+        planted, W.PAGE_RENDER_KEYS, W.PAGE_RENDER_EXEMPT, _win._renderers())), "심은 새 메뉴를 못 잡음"
+    probs = _render_coverage_problems(W.NAV, W.PAGE_RENDER_KEYS, W.PAGE_RENDER_EXEMPT, _win._renderers())
+    assert not probs, probs
+
+
 def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
     calls = []
     real = app_main.core.narrate

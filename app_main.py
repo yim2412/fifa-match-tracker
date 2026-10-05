@@ -3861,6 +3861,11 @@ class MainWindow(QMainWindow):
         "포지션별 최다 상대": "teamcolor",
         "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
     }
+    # 위 표 밖의 메뉴 — 이유 없이 빠진 메뉴는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
+    PAGE_RENDER_EXEMPT = {
+        "구단주 비교": "사용자가 [비교] 를 눌러야 그린다 — 검색 결과에 안 묶인다",
+        "승률 그래프": "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
+    }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
 
     def _renderers(self) -> dict:
