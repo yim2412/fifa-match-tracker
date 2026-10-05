@@ -168,15 +168,6 @@ def test_possession_stats():
     assert bands["열세"].games == 0 and bands["우세"].games == 0
 
 
-def test_pair_synergy():
-    ouid, _, details = _load()
-    pairs = st.pair_synergy(details, ouid, min_games=1)
-    # 유효 3경기가 같은 선발 10명(SUB·GK 제외) → C(10,2)=45 조합, 각 3경기.
-    assert len(pairs) == 45, len(pairs)
-    assert all(p.games == 3 for p in pairs)
-    assert st.pair_synergy(details, ouid, min_games=4) == []
-
-
 def test_shot_xg_deterministic():
     # 순수 함수 — 좌표만으로 결정. 계수를 바꾸면(모델 재튜닝) 여기가 깨진다(의도).
     assert abs(st.shot_xg(0.90, 0.50, True, "일반(D)") - 0.7482) < 1e-3
@@ -766,14 +757,6 @@ def test_possession_band_edges():
         [(39, "승"), (40, "무"), (50, "무"), (60, "패"), (61, "승"), (0, "승")])]
     got = {b.label: (b.win, b.draw, b.lose) for b in st.possession_stats(ds, "me")}
     assert got == {"열세": (1, 0, 0), "균형": (0, 2, 1), "우세": (1, 0, 0)}, got  # 0 은 무기록이라 뺀다
-
-
-def test_pair_synergy_counts_and_min_games_edge():
-    xi = [_p(1, 5), _p(2, 25), _p(9, 0), _p(7, 28)]          # GK(9)·SUB(7)는 조합에서 뺀다
-    ds = [_d(4, "승", xi), _d(3, "무", xi), _d(2, "무", xi), _d(1, "패", xi)]   # 무 2 · 패 1(비대칭)
-    got = [(s.a_id, s.b_id, s.win, s.draw, s.lose) for s in st.pair_synergy(ds, "me", min_games=4)]
-    assert got == [(1, 2, 1, 2, 1)], got
-    assert st.pair_synergy(ds, "me", min_games=5) == []       # 4경기 조합은 5경기 기준에서 빠진다
 
 
 def test_shot_buckets_on_target_distance_and_enough():

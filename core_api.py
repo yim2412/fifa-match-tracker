@@ -17,7 +17,7 @@ from stats import (
     MIN_BUCKET_SHOTS, PERIODS, PLAYER_TREND_MIN_SHOTS, SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET,
     PositionOpponent, aggregate_players, clutch_summary, division_stats, division_trend,
     finishing_ranking, formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
-    opponent_position_players, opponent_squad, own_squad, pair_synergy, player_finishing_trend,
+    opponent_position_players, opponent_squad, own_squad, player_finishing_trend,
     possession_stats, result_breakdown, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_stats, team_profile, time_of_day_rates,
 )
@@ -32,7 +32,7 @@ __all__ = [
     "MIN_BUCKET_SHOTS", "PERIODS", "PLAYER_TREND_MIN_SHOTS", "SHOT_GOAL", "SHOT_OFF_TARGET", "SHOT_ON_TARGET",
     "PositionOpponent", "aggregate_players", "clutch_summary", "division_stats", "division_trend",
     "finishing_ranking", "formation_of", "formation_stats", "goal_minute_buckets", "is_champion_or_above",
-    "opponent_position_players", "opponent_squad", "own_squad", "pair_synergy", "player_finishing_trend",
+    "opponent_position_players", "opponent_squad", "own_squad", "player_finishing_trend",
     "possession_stats", "result_breakdown", "season_id_of", "shot_distance_breakdown", "shot_map",
     "shot_type_breakdown", "team_color_stats", "team_profile", "time_of_day_rates",
 ]

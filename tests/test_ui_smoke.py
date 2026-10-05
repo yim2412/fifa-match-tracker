@@ -191,7 +191,7 @@ def test_trend_page_has_own_summary():
 class _CountRenders:
     """창의 그리기 함수 몇 개를 세는 함수로 바꿔 끼운다 — 몇 번 그렸는지."""
 
-    NAMES = ("_render_dashboard", "_render_opponents", "_render_synergy", "_render_teamcolor_tabs")
+    NAMES = ("_render_dashboard", "_render_opponents", "_render_diagnosis", "_render_teamcolor_tabs")
 
     def __enter__(self):
         self.n = {k: 0 for k in self.NAMES}
@@ -219,7 +219,7 @@ def test_lazy_render_draws_only_the_visible_page():
         _win._go_page("대시보드")
         _win._render_all()
         assert c.n["_render_dashboard"] == 1 and c.n["_render_opponents"] == 0, c.n
-        assert c.n["_render_synergy"] == 0 and c.n["_render_teamcolor_tabs"] == 0, c.n
+        assert c.n["_render_diagnosis"] == 0 and c.n["_render_teamcolor_tabs"] == 0, c.n
         _win._go_page("상대 전적")                 # 열면 그 때 그린다
         assert c.n["_render_opponents"] == 1, c.n
         _win._go_page("대시보드")
@@ -378,10 +378,8 @@ def test_no_table_elides_at_min_or_default_size():
     # "…" 로 잘렸다. 헤더도 잰다 — 채우는 동안 정렬이 꺼져 있어 화살표 자리를 빼고
     # 폭을 잡으면 "승률▾" 이 겹쳤다.
     import widgets
-    _win.sp_synergy_min.setValue(1)
-    _win._render_synergy(_win._details)
     tables = [t for t in _win.findChildren(widgets.FitTableWidget)]
-    assert len(tables) >= 11, len(tables)  # 12번째(포지션 선수 다이얼로그)는 열 때 생긴다
+    assert len(tables) == 10, len(tables)  # 11번째(포지션 선수 다이얼로그)는 열 때 생긴다
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -425,8 +423,6 @@ def test_no_table_elides_at_min_or_default_size():
                                     tb.sizeHintForColumn(c), head))
             assert not bad, (size, bad[:5])
     finally:
-        _win.sp_synergy_min.setValue(20)
-        _win._render_synergy(_win._details)
         _win.setMinimumSize(*app_main.MIN_WINDOW)
         _at_size(1600, 900)
 
@@ -2311,6 +2307,26 @@ def test_settings_remember_window_page_and_season():
         _win._restore = {}
         _win._season_picked = saved_state[3]
         _win.cb_season.setCurrentIndex(saved_state[4])
+        _win._go_page("대시보드")
+        _win._render_all()
+
+
+def test_removed_page_name_restores_to_dashboard():
+    # 1.2.1 에서 "선수 조합" 메뉴를 지웠다 — 그걸 보고 닫은 사람의 settings.ini 에 이름이 남아 있다.
+    # 대시보드가 아닌 메뉴에서 시작한다: 대시보드에서 시작하면 이름 검사를 빼도 _go_page 가 묶음 제목 행을
+    # 골라 페이지가 그대로라 통과해 버린다.
+    try:
+        _win._go_page("슛 맵")
+        assert _win._current_page_name() == "슛 맵"
+        _win._ouid, _win._restore = "", {"page": "선수 조합"}
+        _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert "선수 조합" not in _win._page_index
+        assert _win.pages.currentIndex() == _win._page_index["대시보드"], _win._current_page_name()
+        row = _win.nav.currentItem()
+        assert row is not None and row.data(Qt.ItemDataRole.UserRole) == _win._page_index["대시보드"]
+    finally:
+        _win._restore = {}
         _win._go_page("대시보드")
         _win._render_all()
 

@@ -1032,8 +1032,6 @@ class MainWindow(QMainWindow):
                       "블록%", "선방력", "평점"]
     # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 비공식 근사치.
     FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
-    # 선수 조합(케미) — 함께 선발로 나온 두 선수의 내 승률
-    SYNERGY_COLUMNS = ["선수 A", "선수 B", "경기", "승", "무", "패", "승률"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
     # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 fc-info
     # 프론트엔드에서 역산한 파생 지표라, 이름만 보고는 계산 기준이 안 보여서 필요하다.
@@ -1744,7 +1742,6 @@ class MainWindow(QMainWindow):
                    ("슛 맵", "_build_shotmap_tab")]),
         ("선수", [("선수 지표", "_build_players_tab"),
                  ("선수별 결정력", "_build_finishing_tab"),
-                 ("선수 조합", "_build_synergy_tab"),
                  ("포지션별 최다 상대", "_build_position_opp_tab")]),
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
@@ -2316,67 +2313,6 @@ class MainWindow(QMainWindow):
             self.box_diag_possession.addWidget(self._wr_bar_row(
                 f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
                 b.avg_gf, b.avg_ga))
-
-    # ── 선수 조합(케미) ───────────────────────────────────────────────────
-    def _build_synergy_tab(self) -> QWidget:
-        """선수 조합 — 함께 선발로 나온 두 선수의 내 승률."""
-        w = QWidget()
-        v = QVBoxLayout(w)
-        ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("최소 경기수"))
-        self.sp_synergy_min = QSpinBox()
-        self.sp_synergy_min.setRange(1, 9999)
-        self.sp_synergy_min.setValue(20)
-        ctrl.addWidget(self.sp_synergy_min)
-        btn = QPushButton("적용")
-        btn.clicked.connect(self._on_synergy_apply)
-        ctrl.addWidget(btn)
-        self.lb_synergy_note = QLabel(self._synergy_note_text())
-        self.lb_synergy_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        ctrl.addSpacing(12)
-        ctrl.addWidget(self.lb_synergy_note)
-        ctrl.addStretch(1)
-        v.addLayout(ctrl)
-
-        self.tbl_synergy = self._make_table(self.SYNERGY_COLUMNS)
-        self.tbl_synergy.itemDoubleClicked.connect(self._on_synergy_double_clicked)
-        v.addWidget(self.tbl_synergy, 1)
-        return w
-
-    def _on_synergy_apply(self) -> None:
-        self._render_synergy(self._details)
-
-    def _render_synergy(self, details: list[dict]) -> None:
-        name_of = lambda i: self._names.get(i, str(i))
-        pairs = core.pair_synergy(details, self._ouid, name_of=name_of,
-                                min_games=self.sp_synergy_min.value())
-        rows = []
-        for p in pairs:
-            rows.append([
-                f"{p.a_name} ({self._season_name(p.a_id)})",
-                f"{p.b_name} ({self._season_name(p.b_id)})",
-                (f"{p.games}", p.games),
-                (f"{p.win}", p.win), (f"{p.draw}", p.draw), (f"{p.lose}", p.lose),
-                (f"{p.win_rate:.1f}%", p.win_rate)])
-        self._fill(self.tbl_synergy, rows, enable_sort=False)
-        # 승률(6열)에 색: 50% 기준으로 위는 초록·아래는 빨강. spId 는 이름 셀에.
-        for r, p in enumerate(pairs):
-            self._tint(self.tbl_synergy.item(r, 6), abs(p.win_rate - 50), 50,
-                       T.GREEN if p.win_rate >= 50 else T.RED)
-            a_item = self.tbl_synergy.item(r, 0)
-            b_item = self.tbl_synergy.item(r, 1)
-            if a_item:
-                a_item.setData(Qt.ItemDataRole.UserRole, p.a_id)
-            if b_item:
-                b_item.setData(Qt.ItemDataRole.UserRole, p.b_id)
-        self.tbl_synergy.sortByColumn(6, Qt.SortOrder.DescendingOrder)
-        self.tbl_synergy.setSortingEnabled(True)
-
-    def _on_synergy_double_clicked(self, item) -> None:
-        """조합 표에서 선수 이름 더블클릭 → 그 선수 카드. spId 는 이름 셀 UserRole."""
-        sp_id = item.data(Qt.ItemDataRole.UserRole)
-        if isinstance(sp_id, int):
-            self._show_player_info(sp_id)
 
     def _build_shotmap_tab(self) -> QWidget:
         """슛 맵 — 슛 좌표를 하프 피치 위에 점으로. 내 슛/상대 슛 토글."""
@@ -3213,10 +3149,6 @@ class MainWindow(QMainWindow):
     def _diag_note_text(self) -> str:
         return f"{self._scope_text()} 기준 · 승·무·패 아닌 결과(오류 등)는 제외"
 
-    def _synergy_note_text(self) -> str:
-        return (f"{self._scope_text()} · 선발(SUB·GK 제외) · 승률 높은 순 · "
-                "선수 더블클릭 시 카드")
-
     def _opponent_note_text(self) -> str:
         return f"{self._scope_text()} 기준 · 더블클릭하면 그 상대와의 최근 경기 스쿼드"
 
@@ -3224,7 +3156,6 @@ class MainWindow(QMainWindow):
         self.lb_opponent_note.setText(self._opponent_note_text())
         self.lb_analysis_note.setText(self._analysis_note_text())
         self.lb_diag_note.setText(self._diag_note_text())
-        self.lb_synergy_note.setText(self._synergy_note_text())
 
     def _on_season_changed(self) -> None:
         self._season_picked = True
@@ -3362,7 +3293,7 @@ class MainWindow(QMainWindow):
         "흐름 분석": "analysis", "기간별 추이": "period", "시즌별 성적": "seasons",
         "승부처 분석": "clutch", "성적 진단": "diagnosis", "전술·경기 결과": "tactics",
         "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing",
-        "선수 조합": "synergy", "포지션별 최다 상대": "teamcolor",
+        "포지션별 최다 상대": "teamcolor",
         "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
     }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
@@ -3385,7 +3316,6 @@ class MainWindow(QMainWindow):
             "diagnosis": lambda: self._render_diagnosis(self._details),
             "shotmap": self._render_shotmap,  # 표시 구간
             "finishing": lambda: self._render_finishing(self._slice()[1]),
-            "synergy": lambda: self._render_synergy(self._details),
             "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위
         }
 
