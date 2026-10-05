@@ -1,0 +1,3 @@
+# 시즌 종료일 공지 — 개발자가 고치는 한 곳. tools/season_notice.py <종료일> [--start <시작일>] 이 이 파일과
+# 최신 릴리스 본문을 같이 고친다. tools/release.py 는 새 릴리스 본문 끝에 아래 줄을 이어 붙인다.
+# 형식: <!-- season-end: YYYY-MM-DD start: YYYY-MM-DD -->   (공지가 없으면 앱은 최근 시즌 길이로 추정한다)

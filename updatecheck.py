@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -61,48 +62,84 @@ def is_newer(tag: str, current: str) -> bool:
 NEWER, LATEST, UNKNOWN = "newer", "latest", "unknown"
 
 
+# 시즌 종료일 공지(1.3.1 · 사용자 ②) — 릴리스 본문의 안 보이는 줄. 시작일을 같이 실어 앱이 지금 시즌과 대조한다
+# (대조는 쓸 때 — predict.resolve_notice). 운영은 tools/season_notice.py, 새 릴리스는 tools/release.py 가 이어 붙인다
+_SEASON_NOTICE = re.compile(r"<!--\s*season-end:\s*(\d{4}-\d{2}-\d{2})\s+start:\s*(\d{4}-\d{2}-\d{2})\s*-->")
+_COMMENT = re.compile(r"<!--.*?-->", re.S)
+
+
+def parse_season_notice(body: str) -> tuple[date, date] | None:
+    """본문의 공지 → (종료일, 시작일). 형식이 틀리거나 start < end ≤ start + SEASON_NOTICE_MAX_DAYS 가 아니면 None."""
+    m = _SEASON_NOTICE.search(body or "")
+    if not m:
+        return None
+    try:
+        end, start = date.fromisoformat(m.group(1)), date.fromisoformat(m.group(2))
+    except ValueError:
+        return None
+    if not (start < end <= start + timedelta(days=config.SEASON_NOTICE_MAX_DAYS)):
+        return None
+    return end, start
+
+
+@dataclass(frozen=True)
+class CheckResult:
+    status: str
+    release: Release | None = None
+    season_notice: tuple[date, date] | None = None   # LATEST 일 때도 실린다 — 공지는 버전과 무관
+
+
 def latest_newer(current: str = config.APP_VERSION, timeout: int = 5) -> Release | None:
     """current 보다 새 릴리스가 있으면 Release, 없거나 모르면 None."""
     return check(current, timeout)[1]
 
 
 def check(current: str = config.APP_VERSION, timeout: int = 5) -> tuple[str, Release | None]:
-    """(NEWER, Release) · (LATEST, None) · (UNKNOWN, None).
+    """(NEWER, Release) · (LATEST, None) · (UNKNOWN, None) — check_full 의 옛 모양(부르는 곳·테스트가 그대로)."""
+    r = check_full(current, timeout)
+    return r.status, r.release
+
+
+def check_full(current: str = config.APP_VERSION, timeout: int = 5) -> CheckResult:
+    """상태 · 새 릴리스 · 시즌 종료일 공지.
 
     LATEST 는 GitHub 의 최신 릴리스를 실제로 읽었고 current 가 그보다 새롭지 않을 때만 —
     공개 전 버전(current 가 릴리스보다 높음)도 LATEST 다. 확인을 껐거나·실패했거나·
     릴리스가 없거나(404)·버전 형식을 모르면 UNKNOWN.
     """
     if not config.UPDATE_CHECK:
-        return UNKNOWN, None
+        return CheckResult(UNKNOWN)
     try:
         res = requests.get(config.LATEST_RELEASE_API, timeout=timeout,
                            headers={"Accept": "application/vnd.github+json",
                                     "User-Agent": config.WEB_USER_AGENT})
         if res.status_code != 200:  # 404 = 릴리스가 아직 없다
-            return UNKNOWN, None
+            return CheckResult(UNKNOWN)
         data = res.json()
     except (requests.RequestException, ValueError):
-        return UNKNOWN, None
+        return CheckResult(UNKNOWN)
     if not isinstance(data, dict):
-        return UNKNOWN, None
+        return CheckResult(UNKNOWN)
     tag = data.get("tag_name") or ""
     if data.get("draft") or data.get("prerelease"):
-        return UNKNOWN, None
+        return CheckResult(UNKNOWN)
+    body = data.get("body") or ""
+    notice = parse_season_notice(body if isinstance(body, str) else "")
     if parse_version(tag) is None or parse_version(current) is None:
-        return UNKNOWN, None
+        return CheckResult(UNKNOWN, None, notice)
     if not is_newer(tag, current):
-        return LATEST, None
+        return CheckResult(LATEST, None, notice)
     urls = {a.get("name"): a.get("browser_download_url") or ""
             for a in data.get("assets") or [] if isinstance(a, dict)}
-    return NEWER, Release(tag=tag, page_url=data.get("html_url") or config.RELEASES_URL,
-                          setup_url=urls.get(SETUP_ASSET.format(tag=tag), ""),
-                          sums_url=urls.get(SUMS_ASSET, ""),
-                          notes=_changes_excerpt(data.get("body") or ""))
+    return CheckResult(NEWER, Release(tag=tag, page_url=data.get("html_url") or config.RELEASES_URL,
+                                      setup_url=urls.get(SETUP_ASSET.format(tag=tag), ""),
+                                      sums_url=urls.get(SUMS_ASSET, ""),
+                                      notes=_changes_excerpt(body)), notice)
 
 
 def _changes_excerpt(body: str) -> str:
-    """릴리스 본문의 '## 바뀐 점' 절 앞부분. 없으면 본문 앞부분."""
+    """릴리스 본문의 '## 바뀐 점' 절 앞부분. 없으면 본문 앞부분. 안 보이는 주석(시즌 공지)은 걷어낸다."""
+    body = _COMMENT.sub("", body or "")
     m = re.search(r"^## 바뀐 점\s*$(.*?)(?=^## |\Z)", body, re.M | re.S)
     lines = [ln for ln in (m.group(1) if m else body).strip().splitlines() if ln.strip()]
     return "\n".join(lines[:NOTES_MAX_LINES])

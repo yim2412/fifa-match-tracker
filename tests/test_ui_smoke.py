@@ -35,6 +35,7 @@ QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
 
 import app_main  # noqa: E402
 import config  # noqa: E402
+import core_api as core  # noqa: E402
 import crashlog  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
@@ -1607,7 +1608,7 @@ def _status_bar_state():
 def test_update_status_always_visible_bottom_left():
     # 사용자 요청: 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 칸(버전 옆)
     card = _win.update_card
-    orig = updatecheck.check
+    orig = updatecheck.check_full
     page0 = _win.stack.currentIndex()
     _win.stack.setCurrentIndex(_win.PAGE_SEARCH)  # 최신 카드는 첫 검색 화면에서만 뜬다
     try:
@@ -1616,7 +1617,7 @@ def test_update_status_always_visible_bottom_left():
                 (updatecheck.UNKNOWN, None, ("업데이트 확인 못 함", None), False),  # 모르면 '최신'이라 안 한다
                 (updatecheck.NEWER, _REL, ("새 버전 v9.0.0", "받으러 가기"), True)]:
             card.hide()
-            updatecheck.check = lambda *a, s=status, r=rel, **k: (s, r)
+            updatecheck.check_full = lambda *a, s=status, r=rel, **k: updatecheck.CheckResult(s, r)
             _win.start_update_check()          # QThread.start 는 막혀 있다 — 배선만 만든다
             assert _status_bar_state() == [("업데이트 확인 중…", None)] * 2
             _win._update_worker.run()           # 같은 스레드에서 돌려 신호 → 창까지
@@ -1638,7 +1639,7 @@ def test_update_status_always_visible_bottom_left():
             btn.click()
         assert opened == [_REL.page_url], opened
     finally:
-        updatecheck.check = orig
+        updatecheck.check_full = orig
         card.hide()
         _win._release = None
         _win._set_update_status("")
@@ -1975,6 +1976,7 @@ def _web_calls():
         ("ranker", lambda: ranker.fetch_manager_rank("닉"), ranker.RankerError),
         ("rank page", lambda: ranker.fetch_rank_page(1), ranker.RankerError),
         ("rank rows", lambda: ranker.fetch_rank_rows(1), ranker.RankerError),
+        ("season cut", lambda: ranker.fetch_season_cut(90, 200), ranker.RankerError),
         ("playerinfo", lambda: playerinfo.fetch_player_info(1), playerinfo.PlayerInfoError),
         ("ability", lambda: playerinfo.fetch_player_ability(1), playerinfo.PlayerInfoError),
         ("seasons", lambda: sn.fetch_seasons(), sn.SeasonError),
@@ -4682,6 +4684,141 @@ def test_shutdown_stops_elo_workers():
     finally:
         w.cancel()
         _win._elo_workers.remove(w)
+
+
+def test_predict_runs_after_every_elo_read():
+    # 진입점 표 다섯째 줄 — EloLoader 를 띄우는 세 경우는 전부 _on_elo_ready 로 끝난다(위 test_elo_loads_on_every_open_path)
+    seen = []
+    keep = (_win._load_predict, dict(_win._elo))
+    _win._load_predict = lambda ouid: seen.append(ouid)
+    try:
+        new = _elo_data([])
+        _win._on_elo_ready(_OUID, new)
+        _win._on_elo_ready(_OUID, app_main.EloSeries(new.req - 1, [], {}, None))   # 늦게 끝난 옛 읽기 — 예측도 안 띄운다
+        _win._on_elo_ready("다른계정", _elo_data([], ouid="다른계정"))
+        assert seen == [_OUID, "다른계정"], seen
+        _win._on_seasons_loaded(list(_win._rank_seasons))                            # 시즌표 도착 — 다시 계산
+        assert seen[-1] == _win._ouid, seen
+    finally:
+        _win._load_predict, _win._elo = keep
+
+
+def test_predict_stale_result_ignored_and_rendered():
+    keep = (dict(_win._pred), dict(_win._pred_req), config.WEB_DATA)
+    try:
+        config.WEB_DATA = True
+        _win._pred_req[_OUID] = 2
+        ok = core.Prediction(True, p={200: 0.31, 1000: 0.995}, lo=150, hi=420, end_text="11/12(공지)",
+                             end_source="notice")
+        _win._on_pred_ready(_OUID, (2, ok))
+        _win._on_pred_ready(_OUID, (1, core.Prediction(False, "옛 계산")))         # 먼저 띄운 게 나중에 끝남
+        t = _win.lb_elo_predict.text()
+        assert "200위 안 31%" in t and "1,000위 안 >99%" in t and "150위~420위" in t and "11/12(공지)" in t, t
+        assert "검증 전" in t and "보정" not in t, t
+        _win._on_pred_ready(_OUID, (2, core.Prediction(False, "랭킹 기록을 모으는 중입니다")))
+        assert _win.lb_elo_predict.text() == "랭킹 기록을 모으는 중입니다"
+    finally:
+        _win._pred, _win._pred_req, config.WEB_DATA = keep
+        _win._render_predict()
+
+
+def test_prediction_logged_once_per_day_and_failure_contained():
+    tmp, saved = _loader_db(0)
+    keep = (core.predict_for, crashlog.note, getattr(app_main.PredictWorker, "_noted", False))
+    noted, got = [], []
+    try:
+        ok = core.Prediction(True, p={200: 0.2, 1000: 0.9}, lo=180, hi=900, end_text="x", end_source="estimate",
+                             season_start=datetime(2026, 9, 10).date(), profile_sn=55)
+        core.predict_for = lambda **k: ok
+        for _ in range(2):
+            w = app_main.PredictWorker(_OUID, 1, [], [], None)
+            w.pred_ready.connect(lambda o, p: got.append(p))
+            w.run()
+        c = store.open_db(config.DB_PATH)
+        rows = store.predictions(c, _OUID)
+        c.close()
+        assert len(rows) == 1 and rows[0]["p200"] == 0.2 and rows[0]["profile_sn"] == 55, rows
+        # 계산이 터져도 그 구역만 — crash.log 는 한 번
+        app_main.PredictWorker._noted = False
+        crashlog.note = lambda kind, e: noted.append(kind)
+        core.predict_for = lambda **k: 1 / 0
+        for _ in range(2):
+            w = app_main.PredictWorker(_OUID, 1, [], [], None)
+            w.pred_ready.connect(lambda o, p: got.append(p))
+            w.run()
+        assert noted == ["predict"], noted
+        assert got[-1][1].message == app_main.PredictWorker.FAILED, got[-1]
+        # 지우기는 남길 계정 규칙 그대로
+        c = store.open_db(config.DB_PATH)
+        store.save_prediction(c, "남", datetime.now(), profile_sn=None, season_start=None, end_source="x",
+                              p200=0.1, p1000=0.1, lo=1, hi=2)
+        store.clear_elo(c, _OUID)
+        assert [r["ouid"] for r in store.predictions(c)] == [_OUID]
+        c.close()
+    finally:
+        core.predict_for, crashlog.note, app_main.PredictWorker._noted = keep
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_shutdown_and_clear_stop_predict_workers():
+    class _Busy(app_main.PredictWorker):
+        def isRunning(self):
+            return not self._cancel
+
+        def wait(self, *a):
+            return True
+
+    w = _Busy(_OUID, 999, [], [], None)
+    _win._pred_workers.append(w)
+    try:
+        left = _win.shutdown(fast=True)
+        assert w in left and w._cancel, "종료 정리 목록에 PredictWorker 가 없다"
+        w2 = _Busy(_OUID, 1000, [], [], None)
+        _win._pred_workers.append(w2)
+        _win.stop_predict_workers()
+        assert w2._cancel and _win._pred_workers == [], "지우기 전에 예측 작업자를 멈추지 않았다"
+    finally:
+        _win._pred_workers = [x for x in _win._pred_workers if x is not w]
+
+
+def test_season_notice_saved_on_latest():
+    orig = updatecheck.check_full
+    s = _win._settings()
+    keep = (s.value("season/end"), s.value("season/start"))
+    loads = []
+    keep_lp = _win._load_predict
+    _win._load_predict = lambda ouid: loads.append(ouid)
+    try:
+        notice = (datetime(2026, 11, 12).date(), datetime(2026, 9, 10).date())
+        updatecheck.check_full = lambda *a, **k: updatecheck.CheckResult(updatecheck.LATEST, None, notice)
+        _win.start_update_check()
+        _win._update_worker.run()
+        assert _win._season_notice() == notice, _win._season_notice()
+        assert loads, "공지가 바뀌면 예측을 다시 계산한다"
+        _win._update_worker.run()
+        assert len(loads) == 1, "같은 공지로 다시 계산했다"
+    finally:
+        updatecheck.check_full = orig
+        _win._load_predict = keep_lp
+        for k, v in zip(("season/end", "season/start"), keep):
+            if v is None:
+                s.remove(k)
+            else:
+                s.setValue(k, v)
+        _win._set_update_status("")
+
+
+def test_season_notice_parse_and_hidden_from_notes():
+    p = updatecheck.parse_season_notice
+    assert p("본문\n<!-- season-end: 2026-11-12 start: 2026-09-10 -->") == (
+        datetime(2026, 11, 12).date(), datetime(2026, 9, 10).date())
+    assert p("<!-- season-end: 2026-09-01 start: 2026-09-10 -->") is None, "종료가 시작보다 앞"
+    assert p("<!-- season-end: 2027-03-01 start: 2026-09-10 -->") is None, "120일 넘음"
+    assert p("<!-- season-end: 2026-13-01 start: 2026-09-10 -->") is None
+    assert p("") is None
+    body = "## 바뀐 점\n- 하나\n<!-- season-end: 2026-11-12 start: 2026-09-10 -->\n- 둘\n"
+    assert "season-end" not in updatecheck._changes_excerpt(body)
 
 
 def test_clear_elo_failure_not_silent():

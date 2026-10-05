@@ -92,6 +92,18 @@ CREATE TABLE IF NOT EXISTS elo_track (
     nickname   TEXT,
     added_at   TEXT NOT NULL
 );
+-- 시즌 말 순위 예측 기록(1.3.1) — 계정마다 하루 한 줄(그날 마지막). 원본이 14일 뒤 지워져 시즌 중 예측을 나중에 다시
+-- 만들 수 없으므로 남겨 두고, 시즌이 끝나면 tools/check_predictions.py 가 실제 최종 순위와 대조한다
+CREATE TABLE IF NOT EXISTS predictions (
+    ouid         TEXT NOT NULL,
+    day          TEXT NOT NULL,
+    made_at      TEXT NOT NULL,
+    profile_sn   INTEGER,
+    season_start TEXT,
+    end_source   TEXT,
+    p200 REAL, p1000 REAL, lo INTEGER, hi INTEGER,
+    PRIMARY KEY (ouid, day)
+);
 """
 
 # 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
@@ -507,8 +519,42 @@ def clear_elo(conn: sqlite3.Connection, keep_ouid: str | None = None) -> int:
     if keep_ouid:
         cur = conn.execute("DELETE FROM elo_history WHERE ouid <> ?", (keep_ouid,))
         conn.execute("DELETE FROM elo_track WHERE ouid <> ?", (keep_ouid,))
+        conn.execute("DELETE FROM predictions WHERE ouid <> ?", (keep_ouid,))
     else:
         cur = conn.execute("DELETE FROM elo_history")
         conn.execute("DELETE FROM elo_track")
+        conn.execute("DELETE FROM predictions")
     conn.commit()
     return cur.rowcount
+
+
+# ── 시즌 말 순위 예측 (1.3.1) ────────────────────────────────────────────────
+
+def match_dates(conn: sqlite3.Connection, ouid: str, since: str, match_type: int = config.DEFAULT_MATCH_TYPE) -> list[datetime]:
+    """그 계정의 since(ISO) 뒤 경기 시각 — 예측의 내 하루 경기 수. 몰수·오류 경기도 넥슨 ELO 에 들어가므로 다 센다."""
+    out = []
+    for r in conn.execute("SELECT m.match_date FROM matches m INDEXED BY idx_matches_type_date"
+                          " JOIN match_players p ON p.match_id = m.match_id"
+                          " WHERE m.match_type = ? AND m.match_date >= ? AND p.ouid = ?", (match_type, since, ouid)):
+        try:
+            out.append(datetime.fromisoformat(r["match_date"]))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def save_prediction(conn: sqlite3.Connection, ouid: str, made_at: datetime, *, profile_sn, season_start, end_source,
+                    p200: float, p1000: float, lo: int | None, hi: int | None) -> None:
+    """계정마다 하루 한 줄 — 같은 날 다시 계산하면 그날 마지막 것으로(PRIMARY KEY 가 지킨다)."""
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO predictions (ouid, day, made_at, profile_sn, season_start, end_source,"
+                     " p200, p1000, lo, hi) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (ouid, made_at.date().isoformat(), made_at.isoformat(timespec="seconds"), profile_sn,
+                      season_start, end_source, p200, p1000, lo, hi))
+
+
+def predictions(conn: sqlite3.Connection, ouid: str | None = None) -> list[dict]:
+    """예측 기록(날짜순) — tools/check_predictions.py · check_api."""
+    if ouid is None:
+        return [dict(r) for r in conn.execute("SELECT * FROM predictions ORDER BY ouid, day")]
+    return [dict(r) for r in conn.execute("SELECT * FROM predictions WHERE ouid = ? ORDER BY day", (ouid,))]

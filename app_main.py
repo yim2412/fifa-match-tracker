@@ -967,6 +967,63 @@ class EloLoader(QThread):
             tuple(t["nickname"] or t["ouid"][:8] for t in tl)))
 
 
+class PredictWorker(QThread):
+    """시즌 말 순위 예측(1.3.1 · predict.py) — EloLoader 가 끝난 뒤 그 계정으로. rank.db 는 읽기 전용(없으면 만들지 않음).
+    숫자를 내면 fifa.db predictions 에 그날 한 줄(시즌 뒤 대조용). 계산 예외는 그 구역만 "계산하지 못했습니다"."""
+    pred_ready = pyqtSignal(str, object)   # ouid, (요청 번호, Prediction)
+
+    FAILED = "예측을 계산하지 못했습니다"
+
+    def __init__(self, ouid: str, req: int, elo_rows: list, seasons: list, notice):
+        super().__init__()
+        self._ouid, self._req = ouid, req
+        self._rows, self._seasons, self._notice = elo_rows, list(seasons), notice
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        now = datetime.now()
+        try:
+            since = (now - timedelta(days=config.PREDICT_RECENT_DAYS + 31)).isoformat(timespec="seconds")
+            conn = store.open_db(config.DB_PATH)
+            try:
+                dates = store.match_dates(conn, self._ouid, since)
+            finally:
+                conn.close()
+            if self._cancel:
+                return
+            r = rankcollect.open_rank_db_ro()
+            try:
+                pr = core.predict_for(elo_rows=self._rows, match_dates=dates, rank_conn=r, seasons=self._seasons,
+                                      notice=self._notice, now=now)
+            finally:
+                if r is not None:
+                    r.close()
+        except Exception as e:  # noqa: BLE001 — 예측 하나 때문에 화면이 죽지 않게
+            if not getattr(PredictWorker, "_noted", False):
+                PredictWorker._noted = True     # crash.log 에 실행당 한 번만
+                crashlog.note("predict", e)
+            pr = core.Prediction(False, self.FAILED)
+        if self._cancel:
+            return
+        if pr.ok:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    store.save_prediction(conn, self._ouid, now, profile_sn=pr.profile_sn,
+                                          season_start=pr.season_start.isoformat() if pr.season_start else None,
+                                          end_source=pr.end_source, p200=pr.p.get(200, 0.0),
+                                          p1000=pr.p.get(1000, 0.0), lo=pr.lo, hi=pr.hi)
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                pass      # 기록 실패는 화면과 무관 — 다음 계산이 그날 줄을 다시 쓴다
+        if not self._cancel:
+            self.pred_ready.emit(self._ouid, (self._req, pr))
+
+
 def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료일(반개구간이라 그날 0시부터) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일."""
@@ -1254,6 +1311,9 @@ class MainWindow(QMainWindow):
         self._elo: dict[str, EloSeries] = {}
         self._elo_req: dict[str, int] = {}
         self._elo_workers: list[EloLoader] = []
+        self._pred: dict = {}                       # ouid → Prediction (EloLoader 뒤 PredictWorker 가 채운다)
+        self._pred_req: dict[str, int] = {}
+        self._pred_workers: list[PredictWorker] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
@@ -1550,8 +1610,29 @@ class MainWindow(QMainWindow):
         self._update_worker.found.connect(self._on_update_found)
         self._update_worker.latest.connect(self._on_update_latest)
         self._update_worker.unknown.connect(self._on_update_unknown)
+        self._update_worker.season_notice.connect(self._on_season_notice)
         self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
+
+    def _on_season_notice(self, notice) -> None:
+        """릴리스 본문의 시즌 종료일 공지를 저장 — 받을 때는 형식·범위만 봤고, 지금 시즌과의 대조는 쓸 때
+        (predict.resolve_notice). 공지가 빠진 릴리스가 와도 마지막 저장값을 쓴다 — 그 시즌 동안만(대조가 버린다)."""
+        end, start = notice
+        s = self._settings()
+        if s.value("season/end") == end.isoformat() and s.value("season/start") == start.isoformat():
+            return
+        s.setValue("season/end", end.isoformat())
+        s.setValue("season/start", start.isoformat())
+        s.sync()
+        self._load_predict(self._ouid)
+
+    def _season_notice(self):
+        s = self._settings()
+        try:
+            return (datetime.fromisoformat(str(s.value("season/end"))).date(),
+                    datetime.fromisoformat(str(s.value("season/start"))).date())
+        except (TypeError, ValueError):
+            return None
 
     def ask_notice_update_once(self) -> None:
         """옛 동의자에게 바뀐 안내를 다시 묻는다 — 창이 **사용자에게 보일 때** 실행당 한 번(숨긴 창에서 띄우면 게임 중
@@ -2244,6 +2325,11 @@ class MainWindow(QMainWindow):
         ev.addWidget(self.lb_elo_note)
         self.elo_chart = charts.AreaTrendChart()
         ev.addWidget(self.elo_chart)
+        # 시즌 말 순위 예측(1.3.1) — 숫자를 못 내면 원인 문구. 계산은 PredictWorker(작업 스레드)
+        self.lb_elo_predict = QLabel("")
+        self.lb_elo_predict.setWordWrap(True)
+        self.lb_elo_predict.setStyleSheet(f"color: {T.TEXT};")
+        ev.addWidget(self.lb_elo_predict)
         v.addWidget(self.gb_elo)
         return w
 
@@ -3547,6 +3633,7 @@ class MainWindow(QMainWindow):
     def _on_seasons_loaded(self, items: list) -> None:
         self._rank_seasons = items
         self._render_elo()   # 지금 시즌 시작이 바뀐다 — 들고 있는 값으로 다시 그림(읽기 없음)
+        self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
             # 선택은 "전체" 그대로라 표시 중인 화면은 건드리지 않는다.
@@ -4922,6 +5009,42 @@ class MainWindow(QMainWindow):
         self._elo[ouid] = data
         if ouid == self._ouid:
             self._render_elo()
+        self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
+
+    def _load_predict(self, ouid: str | None) -> None:
+        """PredictWorker 를 띄운다 — 요청 번호 규칙은 EloLoader 와 같다(늦게 끝난 옛 계산이 새 값을 덮지 않게)."""
+        data = self._elo.get(ouid) if ouid else None
+        if data is None:
+            return
+        self._pred_workers = [w for w in self._pred_workers if w.isRunning()]
+        req = self._pred_req.get(ouid, 0) + 1
+        self._pred_req[ouid] = req
+        w = PredictWorker(ouid, req, data.rows, self._rank_seasons, self._season_notice())
+        w.pred_ready.connect(self._on_pred_ready)
+        self._pred_workers.append(w)
+        w.start()
+
+    def _on_pred_ready(self, ouid: str, payload) -> None:
+        req, pr = payload
+        if req != self._pred_req.get(ouid):
+            return
+        self._pred[ouid] = pr
+        if ouid == self._ouid:
+            self._render_predict()
+
+    def stop_predict_workers(self) -> None:
+        """[수집 기록 지우기] 전에 — cancel → wait(종료 정리와 같은 규칙). 지운 뒤 들고 있던 예측도 버린다."""
+        for w in self._pred_workers:
+            w.cancel()
+            w.wait(3000)
+        self._pred_workers = []
+        self._pred.clear()
+        self._render_predict()
+
+    def _render_predict(self) -> None:
+        pr = self._pred.get(self._ouid) if self._ouid else None
+        self.lb_elo_predict.setText(core.describe_prediction(pr) if pr is not None else "")
+        self.lb_elo_predict.setVisible(pr is not None and config.WEB_DATA)
 
     def _elo_points(self) -> list[dict]:
         data = self._elo.get(self._ouid) if self._ouid else None
@@ -4941,6 +5064,7 @@ class MainWindow(QMainWindow):
         self.lb_elo_note.setText(self._elo_note(data, pts))
         self.lb_elo_note.setVisible(bool(self.lb_elo_note.text()))
         self._render_elo_track_button(data)
+        self._render_predict()
         if len(pts) < 2:
             self.elo_chart.set_data([])
             self.elo_chart.setVisible(False)
@@ -5450,6 +5574,7 @@ class MainWindow(QMainWindow):
             *[(ld, cancel(ld), 500, False) for ld in self._compare_squad_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
+            *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],
             # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다
             (self._season_loader, None, 3000, True),
             (self._ability_sim_loader, None, 2000, False),
@@ -5547,10 +5672,14 @@ class UpdateCheckWorker(QThread):
     found = pyqtSignal(object)  # updatecheck.Release — 새 버전이 있을 때만
     latest = pyqtSignal()       # 실제로 확인했고 지금이 최신일 때만
     unknown = pyqtSignal()      # 확인 못 함(꺼짐·오프라인·릴리스 없음) — '최신'과 다르다
+    season_notice = pyqtSignal(object)   # (종료일, 시작일) — 릴리스 본문에 공지가 있을 때만(1.3.1)
 
     def run(self) -> None:
         try:
-            status, rel = updatecheck.check()
+            r = updatecheck.check_full()
+            status, rel = r.status, r.release
+            if r.season_notice is not None:
+                self.season_notice.emit(r.season_notice)
         except Exception:
             status, rel = updatecheck.UNKNOWN, None  # 알림 하나 때문에 크래시 로그가 쌓이면 안 된다
         if status == updatecheck.NEWER and rel:
@@ -5875,6 +6004,9 @@ class AboutDialog(QDialog):
         choice = self._ask_clear(keep_ouid)
         if choice is None:
             return
+        stop = getattr(self.parent(), "stop_predict_workers", None)
+        if stop is not None:
+            stop()      # 예측 작업자가 predictions 에 쓰는 중이면 지운 뒤에 한 줄이 되살아난다
         try:
             done, n = clear_rank_records(self._sched(), keep_ouid if choice == "keep" else None)
         except OSError as e:

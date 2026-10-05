@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS cut_elo (
     snapshot_id INTEGER NOT NULL, rank INTEGER NOT NULL, elo REAL,
     PRIMARY KEY (snapshot_id, rank)
 ) WITHOUT ROWID;
+-- 끝난 시즌의 최종 순위 컷 — 영구(끝난 시즌은 안 변한다 · 순위와 점수뿐 — 개인 정보 없음). 예측(predict.py)이 쓴다
+CREATE TABLE IF NOT EXISTS season_cuts (
+    season_no INTEGER NOT NULL, rank INTEGER NOT NULL, elo REAL NOT NULL, fetched_at TEXT NOT NULL,
+    PRIMARY KEY (season_no, rank)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS collect_state (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS collect_lock (
     id INTEGER PRIMARY KEY CHECK (id = 1), owner TEXT NOT NULL, pid INTEGER, heartbeat_at TEXT NOT NULL
@@ -282,6 +287,61 @@ def sync_tracked_elo(rank_conn: sqlite3.Connection, fifa_path: Path | str | None
     finally:
         fconn.close()
     return added
+
+
+def raw_snapshots(conn: sqlite3.Connection) -> list[dict]:
+    """원본이 남은 스냅숏 — [{id, taken_at, season_seq}] 오래된 것부터(예측의 하루 걸음 표본)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT s.id, s.taken_at, s.season_seq FROM snapshots s WHERE EXISTS"
+        " (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id) ORDER BY s.taken_at, s.id")]
+
+
+def snapshot_games(conn: sqlite3.Connection, snapshot_id: int) -> dict[int, tuple[float, int]]:
+    """스냅숏 하나의 {프로필 번호: (ELO, 승+무+패)} — 승무패는 시즌 누적이라(1.3.1 실측) 이웃 차가 그 사이 경기 수."""
+    return {r["profile_sn"]: (r["elo"], (r["win"] or 0) + (r["draw"] or 0) + (r["lose"] or 0))
+            for r in conn.execute("SELECT profile_sn, elo, win, draw, lose FROM snapshot_rows"
+                                  " WHERE snapshot_id = ? AND elo IS NOT NULL", (snapshot_id,))}
+
+
+def season_cuts(conn: sqlite3.Connection) -> dict[int, dict[int, float]]:
+    """받아 둔 지난 시즌 최종 컷 — {시즌 번호: {순위: ELO}}. 순위가 다 찬 시즌만."""
+    out: dict[int, dict[int, float]] = {}
+    for r in conn.execute("SELECT season_no, rank, elo FROM season_cuts"):
+        out.setdefault(r["season_no"], {})[r["rank"]] = r["elo"]
+    want = set(config.RANK_CUT_RANKS)
+    return {no: c for no, c in out.items() if want <= set(c)}
+
+
+def fetch_season_cuts(conn: sqlite3.Connection, ended_season: int | None, now: datetime,
+                      fetch=None, cancel: threading.Event | None = None) -> int:
+    """빠진 지난 시즌(최근 PREDICT_FETCH_SEASONS 개)의 최종 컷을 받는다 — 수집 회차 끝에서, 실패해도 회차는 성공.
+
+    시즌 하나 = RANK_CUT_RANKS 쪽, 다 받았을 때만 한 트랜잭션으로 넣는다(반쯤 받은 시즌이 남지 않게 —
+    다음 회차가 그 시즌을 다시 받는다). 쪽마다 cancel 을 본다. → 새로 채운 시즌 수."""
+    if not ended_season:
+        return 0
+    fetch = fetch or ranker.fetch_season_cut
+    have = season_cuts(conn)
+    filled = 0
+    for no in range(ended_season, max(ended_season - config.PREDICT_FETCH_SEASONS, 0), -1):
+        if no in have:
+            continue
+        got = {}
+        try:
+            for rank in config.RANK_CUT_RANKS:
+                if cancel is not None and cancel.is_set():
+                    return filled
+                elo = fetch(no, rank)
+                if elo is None:
+                    raise ranker.RankStructureError(f"{no}시즌 {rank}위 컷이 비었습니다")
+                got[rank] = elo
+        except ranker.RankerError:
+            continue          # 그 시즌만 건너뛴다 — 없는 시즌(리다이렉트)·일시 실패는 다음 회차
+        with conn:
+            conn.executemany("INSERT OR REPLACE INTO season_cuts (season_no, rank, elo, fetched_at) VALUES (?, ?, ?, ?)",
+                             [(no, r, e, _iso(now)) for r, e in got.items()])
+        filled += 1
+    return filled
 
 
 # ── 수집 상태 (실패 대기 · D6 · 켜짐 사본) ──────────────────────────────────────
@@ -701,6 +761,10 @@ def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, page
                 out.rows = len(rows)
                 sync_tracked_elo(conn, cancel=cancel)   # 커밋 뒤 · prune 전(지울 원본도 한 번 더 옮길 기회)
                 prune_raw(conn, taken)
+                try:
+                    fetch_season_cuts(conn, ended_season, taken, cancel=cancel)
+                except (sqlite3.Error, ranker.RankerError):
+                    pass   # 예측용 지난 시즌 컷 — 회차 성공과 무관, 다음 회차가 빠진 시즌만 다시 받는다
             except Cancelled:
                 out = Outcome("cancelled")
             except Straddle as e:

@@ -247,8 +247,19 @@ def _drive_uncovered() -> None:
             store.load_seasons(conn)
             store.load_team_colors(conn, ["가", "나"])
             store.recent_searches(conn)
+            store.match_dates(conn, "a", "2026-01-01")          # 예측(1.3.1) — test_predict·화면 스모크가 부른다
+            store.predictions(conn)
+            store.predictions(conn, "a")
         finally:
             conn.close()
+        import rankcollect
+        r = rankcollect.open_rank_db(Path(d) / "r.db")
+        try:
+            rankcollect.raw_snapshots(r)
+            rankcollect.snapshot_games(r, 1)
+            rankcollect.season_cuts(r)
+        finally:
+            r.close()
 
 
 def sql_functions() -> set[str]:

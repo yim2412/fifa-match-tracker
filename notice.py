@@ -35,7 +35,8 @@ PRIVACY_HTML = f"""
 <li>넥슨 오픈API (open.api.nexon.com) — 전적 조회</li>
 <li>넥슨 이미지 서버 (fco.dn.nexoncdn.co.kr · ssl.nexon.com) — 선수 얼굴·등급 배지</li>
 <li>넥슨 홈페이지 (fconline.nexon.com · m.fconline.nexon.com) — 아래 '넥슨 홈페이지 데이터'를 켰을 때만</li>
-<li>GitHub (api.github.com · github.com) — 새 버전 확인(켤 때, 트레이에 남아 있는 동안 6시간마다)·내려받기</li>
+<li>GitHub (api.github.com · github.com) — 새 버전 확인(켤 때, 트레이에 남아 있는 동안 6시간마다)·내려받기
+· 시즌 종료일 공지(같은 응답에 실려 온다)</li>
 </ul>
 <p>키·전적 기록·ELO 기록·랭킹 수집 기록·오류 기록은 이 PC 의 <code>%LOCALAPPDATA%\\{config.DATA_DIR_NAME}</code> 에만 있습니다.
 오류 기록(crash.log)에는 PC 의 폴더 경로(사용자 이름 포함)가 들어갈 수 있으니, 누구에게 보내기 전에
@@ -64,6 +65,8 @@ RANK_COLLECT_HTML = """
 (홈페이지 데이터가 켜져 있을 때).</li>
 <li>수집이 켜져 있으면, 승률 그래프 메뉴에서 <b>직접 고른 구단주(최대 5명)</b>의 ELO·순위를 수집 목록에서 찾아
 <b>하루 한 번 이어서</b> 기록합니다 — 지울 때까지 남습니다. 기본은 아무도 고르지 않은 상태입니다.</li>
+<li>수집이 켜져 있으면 지난 시즌들의 최종 순위 컷 점수(순위와 점수만)를 받아 두고, 시즌 말 순위 예측에 씁니다.
+예측 결과는 나중에 맞았는지 확인할 수 있게 계정마다 하루 한 줄 이 PC 에 남깁니다.</li>
 <li>[정보] 의 <b>수집 기록 지우기</b>로 둘 다 지울 수 있습니다. 이 기록을 밖으로 보내는 기능은 없습니다.</li>
 </ul>
 """

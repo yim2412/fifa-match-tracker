@@ -15,6 +15,7 @@
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵. 조건부 승률 문장은 `Insight.basis`(`Basis` — 화면의 근거 막대)를 싣는다 — **새 규칙 함수는 `BASIS_RULES`/`NO_BASIS_RULES` 둘 중 하나에** 넣는다(test_analysis 가 모듈의 규칙 함수와 대조) |
+| `predict.py` | 시즌 말 순위 예측(1.3.1) — `day_steps`(rank.db 원본의 이웃 스냅숏 하루 걸음 · 원본 id 목록으로 캐시) → `simulate`(점수대 ±띠 · 경기 수 4분위 · 직전 사흘 3분위 칸에서 뽑아 이어 붙임 · 사흘 묶음) → `predict_for`(조건을 차례로 보고 못 내면 원인 문구 `MSG_*`). 칸 경계는 **실행 때 표본에서** 잰다(상수 아님). 상수는 `config.PREDICT_*`. 화면은 `core_api` 로만, 계산은 `app_main.PredictWorker`(EloLoader 뒤 · 요청 번호) — 숫자를 내면 `fifa.db predictions` 에 하루 한 줄. **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저 본다** |
 | `core_api.py` | **화면 ↔ 분석 경계**(19단계) — 화면 쪽(`app_main`·`dashboard`·`check_api`)은 analysis·stats·models 를 여기서만 가져온다. 화면에서 새 분석 함수를 쓰려면 import 와 `__all__` 에 한 줄씩. 나중에 핵심을 비공개 모듈로 옮길 때 고칠 곳이 여기 하나가 되게(ROADMAP "배포 보호 준비"). 이름을 복사해 오므로 **테스트에서 바꿔 끼울 땐 `core_api` 쪽을**(`app_main.core.narrate`). `test_ui_reaches_analysis_only_through_core_api` 가 지킨다 |
 | `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) |
 | `charts.py` | 그래프(QPainter) — 대시보드·승률 그래프·기간별 추이·시즌별 막대. 색은 `theme.CHART_*` — 앱의 GREEN/RED 는 적록 색약에서 구분이 안 돼 그래프엔 안 쓴다. 히트맵(`HeatmapChart` — 칸 안 글자 · 흐린 칸은 색 없음 · 색 상한 `HEAT_MAX_MIX` 는 글자 대비 4.5 로 잼)·도넛 조각(`donut_segments` — 6개 넘으면 "기타"). 추이는 **`AreaTrendChart` 하나**(1.3.1) — 축(`Axis` · `PCT_AXIS`/`Axis.fit`)·기준선·이동평균·경기 수 띠·날짜 x·기준 계단선은 전부 `set_data` 인자. **기본값 그림은 확장 전과 픽셀까지 같아야** 한다(대시보드·선수 카드가 기본값만 쓴다) — `tests/legacy_area_chart.py`(얼린 사본, 고치지 않는다)와 `test_area_chart_defaults_unchanged` 가 대조 |
@@ -33,7 +34,8 @@
 | `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다). 창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다. 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조) |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
 | `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
-| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_tray.py`(트레이·종료·한 번만 실행·자동 실행 — 창과 엮이는 X 숨김·내려놓기는 `test_ui_smoke`) · `test_release.py`(배포 검사) · `test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py`. pytest 없이 파일을 직접 실행 |
+| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스) · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_predict.py`(예측 — 가짜 스냅숏) · `test_tray.py`(트레이·종료·한 번만 실행·자동 실행 — 창과 엮이는 X 숨김·내려놓기는 `test_ui_smoke`) · `test_release.py`(배포 검사) · `test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py`. pytest 없이 파일을 직접 실행 |
+| `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(릴리스 본문의 `<!-- season-end: … start: … -->` 한 줄만 바꾼 파일 + `gh release edit` **출력만** · `docs/season_end.txt` 도 — `release.py` 가 새 릴리스에 이어 붙인다) · 시즌 뒤 예측 대조(저장된 프로필 번호로). 앱은 `updatecheck.check_full` 로 공지를 받아 `settings.ini season/*` 에 두고, 지금 시즌과의 대조는 **쓸 때**(`predict.resolve_notice`) |
 | `tools/review_kit.py` | 계획 검토 준비(ROADMAP "검토 방법" 11~13) — `bundle`(절이 짚은 코드 조각 · 정의/쓰임만/없음) · `diff`(회차 사이 바뀐 줄 + 진입점 표 행) · `ledger`(주장 장부 빈 표). 검토자에게 파일을 통째로 읽히지 않으려고 |
 
 ```powershell
@@ -42,6 +44,8 @@ python rankcollect.py --pages 3   # 랭킹 수집 실제 3쪽(저장 안 함 —
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
 python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
+python tests/test_predict.py   # 시즌 말 예측 — 가짜 스냅숏(네트워크 없음)
+python tools/season_notice.py 2026-11-12   # 종료일 공지 — 바꾼 본문 파일 + gh 명령 출력(공개는 사람이)
 python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175% 를 흉내 내 실제 창을 띄워 잰다
 # 메뉴별 화면을 PNG 로 떠서 눈으로 볼 때 — 최근 검색 칩에 실제 닉네임이 찍히니 확인 후 지운다
 $env:UI_SHOT="<스크래치 폴더>"; python tests/test_ui_smoke.py

@@ -234,6 +234,48 @@ def main() -> int:
             print(f"       {label}: {len(group)}경기")
     except Exception as e:
         print(f"[WARN] 랭킹 시즌표 조회 실패(시즌별 보기만 영향): {e}")
+        rank_seasons = []
+
+    # 1.3.1 시즌 말 예측 — 지난 시즌 최종 컷(실호출 1건) · 종료일 공지 · 예측
+    from datetime import date, datetime
+    ended = [s for s in rank_seasons if s.end <= date.today()]
+    start = max((s.end for s in ended), default=None)
+    try:
+        import ranker
+        last = max(ended, key=lambda s: s.end) if ended else None
+        if last is not None:
+            print(f"[OK]   지난 시즌 최종 200위 컷: {last.no}시즌 {ranker.fetch_season_cut(last.no, 200):.0f}")
+    except Exception as e:
+        print(f"[WARN] 지난 시즌 컷 조회 실패(예측만 영향): {e}")
+    try:
+        import updatecheck
+        n = updatecheck.check_full().season_notice
+        if n is None:
+            print("[OK]   시즌 종료 공지: 없음 — 앱은 최근 시즌 길이로 추정")
+        else:
+            same = "지금 시즌과 같음" if n[1] == start else f"지금 시즌 시작 {start} 과 다름!"
+            print(f"[OK]   시즌 종료 공지: {n[0]:%m/%d} (시작 {n[1]:%m/%d} — {same})")
+    except Exception as e:
+        print(f"[WARN] 시즌 종료 공지 확인 실패: {e}")
+    try:
+        import rankcollect
+        conn = store.open_db(config.DB_PATH)
+        try:
+            elo = store.elo_history(conn, ouid)
+            dates = store.match_dates(conn, ouid, "2000-01-01")
+            logged = len(store.predictions(conn, ouid))
+        finally:
+            conn.close()
+        r = rankcollect.open_rank_db_ro()
+        try:
+            pr = core.predict_for(elo_rows=elo, match_dates=dates, rank_conn=r, seasons=rank_seasons,
+                                  notice=None, now=datetime.now())
+        finally:
+            if r is not None:
+                r.close()
+        print(f"[OK]   시즌 말 예측: {core.describe_prediction(pr).splitlines()[0]} · 남긴 기록 {logged}일")
+    except Exception as e:
+        print(f"[WARN] 시즌 말 예측 실패: {type(e).__name__}: {e}")
 
     print("\n전부 통과 — python app_main.py 로 앱을 띄우세요.")
     return 0

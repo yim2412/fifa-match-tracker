@@ -12,7 +12,7 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
-APP_VERSION = "v1.2.1"
+APP_VERSION = "v1.3.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 
@@ -122,6 +122,7 @@ WEB_USER_AGENT = f"FifaMatchTracker/{APP_VERSION.lstrip('v')} (+{REPO_URL})"
 
 # 새 버전 알림 — 켤 때 한 번 GitHub 최신 릴리스 태그를 읽는다(GitHub 에 IP 가 남는다).
 # 트레이에 상주하면 UPDATE_CHECK_EVERY_H 마다 다시. 끄려면 .env 에 FIFA_UPDATE_CHECK=0.
+# 끄면 시즌 종료일 공지(같은 응답에 실림 — 1.3.1)도 못 받아 예측이 최근 시즌 길이로 추정한다.
 UPDATE_CHECK = os.getenv("FIFA_UPDATE_CHECK", "1").strip() != "0"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 RELEASES_URL = f"{REPO_URL}/releases/latest"
@@ -165,6 +166,28 @@ RANK_RAW_KEEP_DAYS = 14             # 다른 구단주 1만 명분 원본은 이
 ELO_TRACK_MAX = 5                   # 하루 한 번 ELO 를 이어서 기록할 구단주 — 사용자가 직접 고른다(1.3.1 사용자 ⑥)
 ELO_CUT_LINES = (200, 1000)         # ELO 그래프에 시계열로 긋는 순위 컷 — 1만 위는 축을 넓혀 그래프를 찌그러뜨려 툴팁만
 ELO_FALLBACK_DAYS = 70              # 시즌표도 스냅숏도 없을 때 "지금 시즌"으로 볼 기간 — 최근 시즌 최장(ROADMAP R5)
+
+# 시즌 말 순위 예측(1.3.1 · predict.py) — 같은 점수대 구단주들의 실제 하루 ELO 변화를 이어 붙인다
+PREDICT_TARGETS = RANK_TIERS[:2]    # 200 · 1,000위 — 1만 위 컷은 시즌 길이에 따라 크게 움직여(R4) 목표로 안 쓴다
+PREDICT_RUNS = 2000                 # 경로 수
+PREDICT_SEED = 20261005             # 같은 입력이면 같은 숫자(화면이 다시 그릴 때마다 흔들리지 않게)
+PREDICT_STEP_GAP_H = (20, 28)       # 이웃 스냅숏 간격이 이 안일 때만 "하루 걸음"
+PREDICT_ELO_BANDS = (50, 100, 200)  # 같은 점수대 — 칸이 얇으면 차례로 넓힌다
+PREDICT_MIN_PAIRS = 3               # 이웃 스냅숏 쌍이 이만큼은 있어야
+PREDICT_MIN_STEPS = 300             # 내 ELO ±50 안 걸음이 이만큼은 있어야
+PREDICT_MIN_CELL = 20               # (점수대, 경기 수 칸, 흐름 3분위) 칸 하나가 이만큼 안 되면 다음 단계로 푼다
+PREDICT_MIN_BLOCKS = 50             # 사흘 묶음이 칸에 이만큼 있어야 묶음으로 뽑는다(아니면 하루씩)
+PREDICT_MAX_DROP = 0.02             # 그 점수대 1만 위 밖 이탈이 이 비율 이상이면 "기록이 적다" — 남은 사람만 보면 치우친다
+PREDICT_RECENT_DAYS = 14            # 내 하루 경기 수를 뽑는 기간(마지막 경기 날까지)
+PREDICT_FETCH_SEASONS = 8           # 지난 시즌 최종 컷을 받는 시즌 수(시즌마다 RANK_CUT_RANKS 10쪽)
+PREDICT_MIN_SEASONS = 2             # 최종 컷이 이만큼 시즌은 있어야
+PREDICT_EQUAL_WEIGHT_SEASONS = 3    # 받은 시즌이 이 이하면 길이 가중 없이 같은 무게
+PREDICT_SEASON_WEIGHT_DAYS = 7.0    # 시즌 길이 차가 이만큼이면 무게 절반
+PREDICT_RECENT_SEASONS = 12         # 종료일 추정에 쓰는 최근 시즌 길이 수
+PREDICT_SOON_DAYS = 14              # 경과일이 최근 시즌 전부보다 길면 "곧 끝남" — 1~이만큼 고르게
+PREDICT_WARN_SHARE = 0.10           # 띠를 넓힌 경로 · 지금 컷이 최종 컷을 넘은 경로가 이 비율을 넘으면 경고
+PREDICT_RANGE = (0.10, 0.90)        # "예상 순위 80% 범위"
+SEASON_NOTICE_MAX_DAYS = 120        # 공지 종료일이 시작일 + 이만큼 안일 때만 받는다
 RANK_EMPTY_RETRIES = 2              # 빈 쪽은 그 쪽만 이만큼 다시 받는다 — 10-05 실측: 500쪽 중 빈 쪽 하나가 회차 전체를 버렸다
 RANK_EMPTY_RETRY_WAIT_S = 1.0       # 다시 받기 전 대기. 진짜 구조 변경이면 다시 받아도 비어 그대로 실패한다
 

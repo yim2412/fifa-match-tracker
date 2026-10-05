@@ -160,8 +160,9 @@ def _to_int(s: str) -> int:
         return 0
 
 
-def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
-    """감독모드 랭킹을 가져온다. 랭킹 밖이면 ranked=False 로 돌아온다.
+def fetch_manager_rank(nickname: str, timeout: int = 10, season_no: int = 0) -> RankerInfo:
+    """감독모드 랭킹을 가져온다. 랭킹 밖이면 ranked=False 로 돌아온다. season_no 0 = 지금 시즌
+    (지난 시즌 최종 순위는 그 번호 — tools/check_predictions.py 가 쓴다).
 
     네트워크·파싱 실패는 RankerError. 호출부에서 잡아 카드를 비워도 앱은 산다.
     """
@@ -175,7 +176,7 @@ def fetch_manager_rank(nickname: str, timeout: int = 10) -> RankerInfo:
             # _ts: 캐시 방지용 — URL 이 매번 달라야 어떤 프록시도 이전 응답을
             # 재사용하지 못한다. 넥슨이 이 값을 쓰지 않으니 결과엔 영향 없다.
             params={"rt": "manager", "strCharacterName": nickname,
-                    "n4seasonno": 0, "n4pageno": 1, "_ts": int(time.time() * 1000)},
+                    "n4seasonno": season_no, "n4pageno": 1, "_ts": int(time.time() * 1000)},
             timeout=timeout)
         res.raise_for_status()
     except requests.RequestException as e:
@@ -299,8 +300,8 @@ def judge_page(page: int, rows: list[RankRow], prev_rows: list[RankRow] | None) 
     return "ok"
 
 
-def fetch_rank_rows(page: int, timeout: int = config.RANK_PAGE_TIMEOUT_S) -> RankPageResult:
-    """랭킹 목록 한 쪽을 그대로 받는다 — 0행이어도 예외 없이 돌려준다(판정은 judge_page).
+def fetch_rank_rows(page: int, timeout: int = config.RANK_PAGE_TIMEOUT_S, season_no: int = 0) -> RankPageResult:
+    """랭킹 목록 한 쪽을 그대로 받는다 — 0행이어도 예외 없이 돌려준다(판정은 judge_page). season_no 0 = 지금 시즌.
 
     실패 종류를 가른다: RankBlocked(403·429·Cloudflare) · RankOffline(연결 안 됨) · RankerError(그 밖 —
     리다이렉트·점검·HTTP 오류). 없는 시즌은 302 로 랭킹 첫 화면에 보내므로 리다이렉트는 실패다(실측).
@@ -309,7 +310,7 @@ def fetch_rank_rows(page: int, timeout: int = config.RANK_PAGE_TIMEOUT_S) -> Ran
         raise RankerError(config.WEB_DATA_OFF_MSG)
     try:
         res = web_get(_session, RANK_URL,
-                      params={"rt": "manager", "n4seasonno": 0, "n4pageno": page,
+                      params={"rt": "manager", "n4seasonno": season_no, "n4pageno": page,
                               "_ts": int(time.time() * 1000)},
                       timeout=timeout)
     except requests.ConnectionError as e:
@@ -328,6 +329,24 @@ def fetch_rank_rows(page: int, timeout: int = config.RANK_PAGE_TIMEOUT_S) -> Ran
     if "점검 진행 중" in html or "fc_logo_inspection" in html:
         raise RankerError("넥슨 웹 점검 중입니다 — 잠시 후 다시 시도해주세요")
     return RankPageResult(page, parse_rank_rows(html), getattr(res, "headers", {}).get("Date", ""))
+
+
+def fetch_season_cut(season_no: int, rank: int, timeout: int = config.RANK_PAGE_TIMEOUT_S) -> float | None:
+    """끝난 시즌의 최종 순위 컷 — 그 순위가 든 쪽 하나(ceil(rank/20))만 받는다(1.3.1 예측 · ROADMAP R2).
+
+    같은 점수면 순위가 건너뛰므로 rank 이하 중 가장 아래 행의 ELO. 행이 비면 RankStructureError,
+    그 밖 실패는 fetch_rank_rows 와 같다(리다이렉트 = 없는 시즌)."""
+    if not config.WEB_DATA:
+        raise RankerError(config.WEB_DATA_OFF_MSG)
+    if season_no <= 0 or rank <= 0:
+        raise ValueError("끝난 시즌 번호와 순위가 필요합니다")
+    page = -(-rank // RANK_PAGE_SIZE)
+    rows = fetch_rank_rows(page, timeout, season_no=season_no).rows
+    usable = [r for r in rows if r.rank is not None and r.elo is not None]
+    if not usable:
+        raise RankStructureError(f"{season_no}시즌 랭킹 {page}쪽을 읽지 못했습니다")
+    at_or_above = [r for r in usable if r.rank <= rank]
+    return (max(at_or_above, key=lambda r: r.rank) if at_or_above else usable[0]).elo
 
 
 def fetch_rank_page(page: int, timeout: int = 10) -> list[tuple[str, str, int | None]]:

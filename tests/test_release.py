@@ -154,6 +154,39 @@ def test_sha256_lines_and_notes():
     assert release.DISCLAIMER in notes and "기본 꺼짐" in notes and "GPL v3" in notes, notes
 
 
+def test_season_notice_tool_changes_only_the_comment():
+    import season_notice
+    import updatecheck
+    from datetime import date
+    assert season_notice.SEASON_END_FILE == release.SEASON_END_FILE, "두 도구가 다른 파일을 본다"
+    body = "## 바뀐 점\n\n- 하나\n\n## 파일 확인\n\n```\nabc\n```\n"
+    one = season_notice.apply_notice(body, date(2026, 11, 12), date(2026, 9, 10))
+    assert one.startswith(body.rstrip("\n")) and updatecheck.parse_season_notice(one) == (
+        date(2026, 11, 12), date(2026, 9, 10)), one
+    two = season_notice.apply_notice(one, date(2026, 11, 19), date(2026, 9, 10))
+    assert two.count("season-end") == 1 and "2026-11-19" in two and two.replace("2026-11-19", "2026-11-12") == one
+    try:
+        season_notice.apply_notice(body, date(2026, 9, 1), date(2026, 9, 10))
+        raise AssertionError("종료가 시작보다 앞인데 받았다")
+    except ValueError:
+        pass
+    # 릴리스 본문에는 마지막 공지를 이어 붙이고, 주석(#)·틀린 줄은 버린다
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        f = tmp / "season_end.txt"
+        f.write_text("# 설명\n<!-- season-end: 2026-09-01 start: 2026-09-10 -->\n", encoding="utf-8")
+        assert release.season_notice_line(f) == ""
+        season_notice.write_season_end_file(season_notice.notice_line(date(2026, 11, 12), date(2026, 9, 10)), f)
+        line = release.season_notice_line(f)
+        assert line == "<!-- season-end: 2026-11-12 start: 2026-09-10 -->", line
+        assert f.read_text(encoding="utf-8").startswith("# 설명"), "설명 줄이 지워졌다"
+        notes = release.release_notes("- 바뀐 것", "S.exe", "P.zip", "abc\n", line)
+        assert updatecheck.parse_season_notice(notes) and "season-end" not in updatecheck._changes_excerpt(notes)
+        assert release.season_notice_line(tmp / "없음.txt") == ""
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_every_third_party_has_license_file():
     # 배포 이름이 바뀌어 못 찾으면 spec 이 조용히 빼고 넘어간다 — 여기서 빨개져야 한다
     found = {name for name, p in release.notice.license_files() if p.is_file()}

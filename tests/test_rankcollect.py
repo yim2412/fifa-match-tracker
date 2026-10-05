@@ -121,6 +121,30 @@ def test_collect_saves_snapshot_and_aggregates():
         c.close()
 
 
+def test_season_cuts_failure_keeps_round_ok():
+    """회차 끝에 빠진 지난 시즌 컷을 받는다 — 실패(넥슨 막음 포함)해도 회차는 ok, 다음 회차가 빠진 시즌만 다시."""
+    keep = ranker.fetch_season_cut
+    calls = []
+    try:
+        with Env() as env:
+            def broken(no, rank):
+                calls.append(no)
+                raise ranker.RankBlocked("막힘")
+            ranker.fetch_season_cut = broken
+            out = rc.collect(db_path=env.db, fetch=World(200), pages=10, now_fn=lambda: NOW, ended_season=90)
+            assert out.kind == "ok", out
+            assert calls and rc.season_cuts(env.conn()) == {}, calls
+            assert rc.get_state(env.conn()).get("fail_count") in (None, "0"), "컷 실패가 회차 실패로 셌다"
+            ranker.fetch_season_cut = lambda no, rank: 4000.0 + no
+            later = NOW + timedelta(days=1, hours=1)
+            out = rc.collect(db_path=env.db, fetch=World(200), pages=10, now_fn=lambda: later, ended_season=90)
+            assert out.kind == "ok", out
+            got = rc.season_cuts(env.conn())
+            assert sorted(got) == list(range(90 - config.PREDICT_FETCH_SEASONS + 1, 91)), sorted(got)
+    finally:
+        ranker.fetch_season_cut = keep
+
+
 def test_aggregate_values():
     rows = [_row(1, value=100, color="가 FC"), _row(2, value=300, color=""), _row(3, value=None, color="가 FC"),
             _row(250, value=10, formation="4-4-2"), _row(12000)]          # 1만 위 밖은 어느 구간에도 안 든다

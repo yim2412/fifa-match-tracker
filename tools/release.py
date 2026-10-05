@@ -208,7 +208,25 @@ DISCLAIMER = (
     " 라이선스 전문은 프로그램 폴더 `_internal\\licenses`.")
 
 
-def release_notes(changes: str, setup: str, portable: str, sums: str) -> str:
+SEASON_END_FILE = ROOT / "docs" / "season_end.txt"
+
+
+def season_notice_line(path: Path = SEASON_END_FILE) -> str:
+    """마지막 시즌 종료일 공지(tools/season_notice.py 가 고치는 한 곳) — 새 릴리스 본문에 이어 붙인다.
+    공지가 새 릴리스로 사라지면 앱이 그 시즌 동안만 마지막 저장값을 쓰므로, 시즌 중 릴리스는 이어 붙여야 한다."""
+    import updatecheck
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    for ln in lines:
+        ln = ln.strip()
+        if ln.startswith("<!--") and updatecheck.parse_season_notice(ln):
+            return ln
+    return ""
+
+
+def release_notes(changes: str, setup: str, portable: str, sums: str, notice: str = "") -> str:
     return (
         "## 받기\n\n"
         f"- **설치 파일(권장)**: `{setup}` — 받아서 실행. 관리자 권한 필요 없음. 시작 메뉴에 생기고,"
@@ -222,7 +240,8 @@ def release_notes(changes: str, setup: str, portable: str, sums: str) -> str:
         "## 파일 확인 (SHA256)\n\n"
         "받은 파일이 아래 값과 같은지: `certutil -hashfile <파일> SHA256`\n\n"
         f"```\n{sums}```\n\n"
-        f"{nexon_api.ATTRIBUTION}\n")
+        f"{nexon_api.ATTRIBUTION}\n"
+        + (f"\n{notice}\n" if notice else ""))
 
 
 # ── 단계 ─────────────────────────────────────────────────────────────
@@ -303,7 +322,8 @@ def main() -> int:
     # 설치 파일은 LZMA 로 압축돼 안을 못 본다 — 그 입력(onedir 폴더)이 zip 과 같으므로 zip 으로 잰다.
     # 설치 파일 겉(헤더·문자열)과 설치 스크립트·릴리스 본문은 따로 잰다.
     notes_path = DIST / f"release-notes-{version}.md"
-    notes_path.write_text(release_notes(notes, setup.name, zip_path.name, sums), encoding="utf-8")
+    notes_path.write_text(release_notes(notes, setup.name, zip_path.name, sums, season_notice_line()),
+                          encoding="utf-8")
     files = list(zip_files(zip_path)) + [
         (setup.name, setup.read_bytes()),
         (ISS.name, ISS.read_bytes()),
