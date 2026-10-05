@@ -13,6 +13,7 @@ import os
 import pathlib
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -827,17 +828,25 @@ def test_attribution_on_search_and_main_pages():
 class _TempCrash:
     """_setup_app 을 임시 데이터 폴더로 부르고, 끝나면 훅·faulthandler 를 되돌린다."""
 
-    def __init__(self, prefill: bytes = b""):
+    def __init__(self, prefill: bytes = b"", files: dict | None = None, hold: str | None = None):
         self.prefill = prefill
+        self.files = files or {}   # logs 폴더에 미리 둘 파일(앞 실행이 남긴 faulthandler 기록 등)
+        self.hold = hold           # 그중 열어 둘 파일 — 살아 있는 다른 실행이 쥔 것처럼
         self.notified = []
 
     def __enter__(self):
         self._dir = pathlib.Path(tempfile.mkdtemp())
         self._saved = (config.DATA_DIR, sys.excepthook, threading.excepthook,
                        app_main.QMessageBox.warning)
-        if self.prefill:
+        self._held = None
+        if self.prefill or self.files:
             (self._dir / "logs").mkdir()
+        if self.prefill:
             (self._dir / "logs" / crashlog.LOG_NAME).write_bytes(self.prefill)
+        for name, data in self.files.items():
+            (self._dir / "logs" / name).write_bytes(data)
+        if self.hold:
+            self._held = open(self._dir / "logs" / self.hold, "a", encoding="utf-8")
         config.DATA_DIR = self._dir
         app_main.QMessageBox.warning = lambda *a, **k: self.notified.append(a)
         app_main._setup_app(_app)
@@ -851,6 +860,8 @@ class _TempCrash:
         fh = crashlog._state.pop("fault_file", None)
         if fh:
             fh.close()
+        if self._held:
+            self._held.close()
         crashlog._state.clear()
         shutil.rmtree(self._dir, ignore_errors=True)
 
@@ -1547,7 +1558,65 @@ def test_crash_log_rotates_at_start():
     with _TempCrash(prefill=big) as ctx:
         old = ctx.logs / (crashlog.LOG_NAME + ".1")
         assert old.exists() and old.stat().st_size == len(big), old
-        assert (ctx.logs / crashlog.LOG_NAME).stat().st_size < len(big)
+        # 밀어낸 뒤엔 오류가 날 때 새로 생긴다(시작할 때 만들지 않는다 — faulthandler 는 따로 쓴다)
+        assert not (ctx.logs / crashlog.LOG_NAME).exists()
+
+
+def _crash_text(ctx) -> str:
+    p = ctx.logs / crashlog.LOG_NAME
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def test_handled_native_exception_not_in_crash_log():
+    # 1.1.1 exe 실측: 처리된 COM 예외 0x8001010d 를 faulthandler 가 "fatal" 로 적었다. ctypes 는 SEH 를 잡아
+    # OSError 로 바꾸므로 같은 상황(처리된 네이티브 예외 · 프로세스 생존)을 그대로 만든다.
+    import ctypes
+    with _TempCrash() as ctx:
+        try:
+            ctypes.windll.kernel32.RaiseException(0x8001010D, 0, 0, None)
+        except OSError:
+            pass
+        fault = crashlog._state["fault_path"]
+        crashlog._state["fault_file"].flush()
+        # 막지 않았다면 — faulthandler 는 이걸 정말로 적는다
+        assert "0x8001010d" in fault.read_text(encoding="utf-8"), "faulthandler 가 처리된 예외를 안 적음 — 재현 실패"
+        crashlog.discard_fault()  # 정상 종료(atexit)
+        assert not fault.exists(), fault
+        assert "0x8001010d" not in _crash_text(ctx), _crash_text(ctx)
+
+
+def test_normal_exit_discards_fault_file():
+    # 배선 — 정상 종료(atexit)가 실제로 버리는지 별도 프로세스로. 처리된 예외 하나를 남기고 끝낸다.
+    d = pathlib.Path(tempfile.mkdtemp())
+    try:
+        code = ("import sys, ctypes; sys.path.insert(0, sys.argv[1]); import crashlog, pathlib\n"
+                "crashlog.install(pathlib.Path(sys.argv[2]), 't')\n"
+                "try:\n    ctypes.windll.kernel32.RaiseException(0x8001010D, 0, 0, None)\nexcept OSError:\n    pass\n")
+        r = subprocess.run([sys.executable, "-c", code, _ROOT, str(d)], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=60)
+        assert r.returncode == 0, r.stderr
+        assert not list(d.glob(crashlog.FAULT_PREFIX + "*")), list(d.iterdir())
+        assert not (d / crashlog.LOG_NAME).exists()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_fault_from_dead_session_moves_to_crash_log():
+    left = crashlog.FAULT_PREFIX + "99999"
+    empty = crashlog.FAULT_PREFIX + "99998"
+    with _TempCrash(files={left: b"Windows fatal exception: access violation\n", empty: b""}) as ctx:
+        text = _crash_text(ctx)
+        assert "access violation" in text and "비정상 종료" in text, text
+        assert not (ctx.logs / left).exists() and not (ctx.logs / empty).exists()
+        assert text.count("===") == 1, text  # 빈 파일은 지우기만
+
+
+def test_live_session_fault_file_left_alone():
+    # 두 번째 실행도 crashlog 를 건다 — 첫 실행이 쥐고 있는 파일을 옮기면 안 된다
+    live = crashlog.FAULT_PREFIX + "11111"
+    with _TempCrash(files={live: b"Windows fatal exception: code 0x8001010d\n"}, hold=live) as ctx:
+        assert (ctx.logs / live).exists()
+        assert "0x8001010d" not in _crash_text(ctx), _crash_text(ctx)
 
 
 # ── 넥슨 웹 데이터 스위치 ─────────────────────────────────────────────

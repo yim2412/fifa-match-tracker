@@ -6,7 +6,9 @@ PyQt6 는 슬롯 안 예외를 sys.excepthook 으로 넘기고, 훅이 기본값
 """
 from __future__ import annotations
 
+import atexit
 import faulthandler
+import os
 import platform
 import sys
 import threading
@@ -16,8 +18,8 @@ from pathlib import Path
 from typing import Callable
 
 LOG_NAME = "crash.log"
-# 시작할 때 이보다 크면 crash.log.1 로 밀어낸다(하나만 남긴다). 실행 중에는 안 민다 —
-# faulthandler 가 파일을 열고 있어 윈도우에서 이름을 못 바꾼다.
+FAULT_PREFIX = "crash.fault."  # + PID — 실행마다 faulthandler 가 쓰는 파일
+# 시작할 때 이보다 크면 crash.log.1 로 밀어낸다(하나만 남긴다).
 MAX_BYTES = 512 * 1024
 
 _state: dict = {}
@@ -76,12 +78,53 @@ def install(log_dir: Path, version: str,
     sys.excepthook = _on_main_exc
     threading.excepthook = _on_thread_exc
     # 파이썬 예외가 아닌 진짜 크래시(접근 위반 등)는 faulthandler 만 잡는다.
-    # 파일을 열어 둔 채여야 하므로 _state 에 쥔다.
+    # 그런데 윈도우에선 **처리된** 네이티브 예외도 "Windows fatal exception" 으로 적는다 — 1.1.1 exe 실측에서
+    # COM 의 0x8001010d 가 앱이 멀쩡한데 crash.log 에 크래시처럼 남았다(2026-10-05). 그래서 실행마다 따로 받고,
+    # 정상 종료면 버리고, 다음 실행 때 남아 있으면(그 실행이 실제로 죽었다) crash.log 로 옮긴다.
     try:
         _rotate(path)
-        fh = open(path, "a", encoding="utf-8", errors="replace")
-        _state["fault_file"] = fh
+        _harvest_faults(log_dir, path)
+        fault = log_dir / f"{FAULT_PREFIX}{os.getpid()}"
+        fh = open(fault, "w", encoding="utf-8", errors="replace")
+        _state.update(fault_file=fh, fault_path=fault)
         faulthandler.enable(file=fh)
+        if not _state.get("atexit"):
+            atexit.register(discard_fault)
+            _state["atexit"] = True
     except (OSError, RuntimeError, ValueError):
         pass
     return path
+
+
+def _harvest_faults(log_dir: Path, path: Path) -> None:
+    """앞 실행이 남긴 faulthandler 파일을 crash.log 로. 지울 수 없는 건 살아 있는 실행(두 번째 실행 등)이 쥔 것이라 둔다."""
+    for f in sorted(log_dir.glob(FAULT_PREFIX + "*")):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+            when = datetime.fromtimestamp(f.stat().st_mtime)
+            f.unlink()
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        try:
+            with open(path, "a", encoding="utf-8", errors="replace") as out:
+                out.write(f"=== {when:%Y-%m-%d %H:%M:%S} · 이전 실행이 비정상 종료 · faulthandler\n"
+                          + text.rstrip() + "\n\n")
+        except OSError:
+            pass
+
+
+def discard_fault() -> None:
+    """정상 종료 — 이번 실행의 faulthandler 기록은 처리된 예외뿐이라 버린다."""
+    fh = _state.pop("fault_file", None)
+    fault = _state.pop("fault_path", None)
+    if fh is None:
+        return
+    try:
+        faulthandler.disable()
+        fh.close()
+        if fault is not None:
+            fault.unlink(missing_ok=True)
+    except OSError:
+        pass
