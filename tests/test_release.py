@@ -181,12 +181,10 @@ def test_missing_modules_needs_the_pyd():
     assert release.missing_modules([]) == ["orjson", "PyQt6/QtNetwork.pyd"]
 
 
-def test_installer_matches_app_constants():
-    # 알림 앱 이름(AUMID)이 어긋나면 알림이 exe 이름으로 뜨거나 안 뜬다 · 제거기가 다른 이름을 지우면 부팅마다 '없는 exe'
+def test_uninstaller_removes_installed_autostart_value():
+    # 제거기가 다른 이름을 지우면 제거한 뒤에도 부팅마다 '없는 exe' 를 실행하려 한다
     import autostart
     iss = release.ISS.read_text(encoding="utf-8-sig")
-    assert f'#define AppUserModelID "{release.config.APP_USER_MODEL_ID}"' in iss
-    assert iss.count('AppUserModelID: "{#AppUserModelID}"') == 2, "바로가기 둘 다에 AppUserModelID 가 있어야"
     assert f'#define RunValue "{autostart.VALUE_INSTALLED}"' in iss
     assert "RegDeleteValue(HKEY_CURRENT_USER, 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', '{#RunValue}')" in iss
     assert autostart.RUN_KEY == r"Software\Microsoft\Windows\CurrentVersion\Run"

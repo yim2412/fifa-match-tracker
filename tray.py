@@ -4,12 +4,12 @@
 
 | 진입점 | 창 보임 | 창 숨김 |
 |---|---|---|
-| X — 숨김 조건(should_hide) | 숨김(처음 한 번 알림) | — |
+| X — 숨김 조건(should_hide) | 숨김 | — |
 | X — 그 밖(트레이 없음 포함) | quit_app() | — |
 | 트레이 [종료] | quit_app() | quit_app() |
 | 앱 안 [업데이트] | quit_app() | (숨긴 상태엔 버튼 없음) |
 | 윈도우 종료·로그오프·설치기 | commitDataRequest → quit_app(fast=True) | 같음 |
-| 처리 안 된 예외 | 기록 + 안내 창(app_main) | 기록 + 트레이 알림, 창을 열 때 안내 |
+| 처리 안 된 예외 | 기록 + 안내 창(app_main) | 기록만, 창을 열 때 안내(트레이 알림 없음) |
 
 ⚠ app.quit() 은 보이는 창의 closeEvent 를 한 번 더 부른다(PyQt 6.11 실측) → 창은 `_quitting` 이면 숨김·정리 없이 받기만.
 정리는 closeEvent 가 아니라 quit_app 에서 한다 — 숨긴 상태로 끝낼 때도 돌게.
@@ -20,18 +20,16 @@ import hashlib
 import os
 import sys
 import time
-from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtCore import QObject, QSettings, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import autostart
 import config
 
-HIDE_NOTICE_KEY = "tray/hide_notice_shown"
 _MSG_SHOW, _MSG_OK, _MSG_QUITTING = b"show", "ok", "quitting"
 
 
@@ -148,120 +146,6 @@ class SingleInstance(QObject):
             self.activated.emit()
 
 
-# ── 알림(ROADMAP 1.1.1 8절) ───────────────────────────────────────────
-NOTIFY_KEY = "tray/notify"   # 알림 전체 끄기(기본 켬) — [정보] 체크박스
-# SHQueryUserNotificationState: 2 BUSY(전체 화면 앱) · 3 RUNNING_D3D_FULL_SCREEN · 4 PRESENTATION_MODE — 이때는 미룬다
-_QUNS_DEFER = (2, 3, 4)
-
-
-def user_busy() -> bool:
-    """게임(전체 화면)·발표 중인가. 못 물으면 False — 알림을 영영 막지 않게.
-    경계 없는 창 게임을 잡는지는 실측 대상(ROADMAP 8절)."""
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-        state = ctypes.c_int(0)
-        hr = ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state))
-        return hr == 0 and state.value in _QUNS_DEFER
-    except Exception:
-        return False
-
-
-def set_app_user_model_id() -> bool:
-    """윈도우 알림에 붙는 앱 이름 — 설치판 바로가기(.iss AppUserModelID)와 같은 값을 프로세스에 건다.
-    창을 만들기 전에 불러야 한다. 포터블은 바로가기가 없어 값이 어긋나므로 부르는 쪽이 설치판에서만."""
-    if sys.platform != "win32":
-        return False
-    try:
-        import ctypes
-        return ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(config.APP_USER_MODEL_ID) == 0
-    except Exception:
-        return False
-
-
-def _settings() -> QSettings:
-    return QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
-
-
-def notify_enabled() -> bool:
-    try:
-        return str(_settings().value(NOTIFY_KEY, "1")) not in ("0", "false")
-    except Exception:
-        return True
-
-
-def set_notify_enabled(on: bool) -> None:
-    s = _settings()
-    s.setValue(NOTIFY_KEY, "1" if on else "0")
-    s.sync()
-
-
-def _claim_daily(kind: str, day) -> bool:
-    import rankcollect  # 필요할 때만 — 트레이가 수집기(requests 등)를 켤 때부터 끌고 오지 않게
-    return rankcollect.claim_daily_notice(kind, day)
-
-
-class Notifier(QObject):
-    """트레이 알림 한 곳 — 창이 숨어 있을 때 알리는 것은 전부 여기를 거친다(모달 금지).
-    게임 중이면 종류별 마지막 것만 들고 있다가 NOTIFY_RETRY_S 마다 보고 끝나면 띄운다.
-    daily=True 는 하루 한 번(두 실행본 사이에서도 — rank.db). 기록을 못 남기면 알림은 그대로 띄운다."""
-
-    def __init__(self, show: Callable[[str, str], bool], ready: Callable[[], bool] = lambda: True,
-                 busy: Callable[[], bool] | None = None, claim_daily: Callable | None = None,
-                 today: Callable | None = None, enabled: Callable[[], bool] | None = None):
-        super().__init__()
-        # 기본값은 부를 때 모듈에서 찾는다 — 테스트가 tray.user_busy 를 바꾸면 이미 만든 껍데기에도 먹게
-        self._show, self._ready = show, ready
-        self._busy = busy or (lambda: user_busy())
-        self._claim = claim_daily or (lambda k, d: _claim_daily(k, d))
-        self._today = today or date.today
-        self._enabled = enabled or (lambda: notify_enabled())
-        self.pending: dict[str, tuple[str, str, bool]] = {}
-        self._timer = QTimer(self)
-        self._timer.setInterval(config.NOTIFY_RETRY_S * 1000)
-        self._timer.timeout.connect(self.flush)
-
-    def post(self, kind: str, title: str, text: str, daily: bool = False) -> str:
-        """→ "shown" · "deferred"(게임 중) · "skipped"(오늘 이미) · "off"(알림 꺼짐) · "no-tray"."""
-        if not self._enabled():
-            return "off"
-        if not self._ready():
-            return "no-tray"
-        if self._busy():
-            self.pending[kind] = (title, text, daily)
-            if not self._timer.isActive():
-                self._timer.start()
-            return "deferred"
-        return self._emit(kind, title, text, daily)
-
-    def _emit(self, kind: str, title: str, text: str, daily: bool) -> str:
-        if daily:
-            try:
-                if not self._claim(kind, self._today()):
-                    return "skipped"
-            except Exception:
-                pass  # rank.db 를 못 열어도 알림은 띄운다(두 번 뜰 수 있는 쪽이 안 뜨는 쪽보다 낫다)
-        return "shown" if self._show(title, text) else "no-tray"
-
-    def flush(self) -> None:
-        if not self.pending:
-            self._timer.stop()
-            return
-        if self._busy():
-            return
-        self._timer.stop()
-        items, self.pending = self.pending, {}
-        if not self._enabled() or not self._ready():
-            return
-        for kind, (title, text, daily) in items.items():
-            self._emit(kind, title, text, daily)
-
-    def stop(self) -> None:
-        self._timer.stop()
-        self.pending.clear()
-
-
 # ── 스레드 마무리 ─────────────────────────────────────────────────────
 def finish_threads(threads, budget_ms: int) -> None:
     """멈춤 요청을 보낸 스레드들을 합계 budget_ms 만 기다리고, 남은 것은 terminate.
@@ -303,11 +187,6 @@ class AppShell(QObject):
         self._tray_timer = QTimer(self)
         self._tray_timer.timeout.connect(self._retry_tray)
         app.commitDataRequest.connect(self._on_commit_data)
-        self._tray_mode = False
-        self.notifier = Notifier(self._balloon, ready=lambda: self.tray is not None)
-        outcome = getattr(sched, "outcome", None)
-        if outcome is not None:
-            outcome.connect(self._on_collect_outcome)
         if single is not None:
             single.is_quitting = lambda: self._quitting
             single.activated.connect(self.show_window)
@@ -322,7 +201,6 @@ class AppShell(QObject):
     def start(self, tray_mode: bool = False) -> None:
         """tray_mode(--tray): 트레이가 아직 없으면(부팅 직후) TRAY_WAIT_S 까지 다시 보고, 끝내 없으면 창을 활성화하지 않고
         최소화로 띄운다. 동의·키가 필요해 창이 없으면 띄우지 않고 TRAY_RETRY_MIN 마다 계속 본다(게임 위에 막는 창 금지)."""
-        self._tray_mode = tray_mode
         if not self._ensure_tray() and tray_mode:
             self._tray_timer.start(config.TRAY_POLL_S * 1000)
         if self.sched is not None:
@@ -344,13 +222,8 @@ class AppShell(QObject):
         tray.setContextMenu(menu)
         self._menu = menu  # 메뉴는 부모가 없어 쥐고 있어야 산다
         tray.activated.connect(self._on_tray_activated)
-        tray.messageClicked.connect(self.show_window)
         tray.show()
         self.tray = tray
-        if self._tray_mode and self.window is None:
-            # --tray 로 켰는데 안내 동의·키가 필요해 창 없이 쉬고 있다 — 사용자가 모르면 수집이 영영 안 돈다
-            self.post("consent", "확인이 필요합니다",
-                      "이용 안내 동의(또는 API 키 입력)가 필요해 아직 쉬고 있습니다. 눌러서 열어 주세요.", daily=True)
         return True
 
     def _retry_tray(self) -> None:
@@ -389,17 +262,6 @@ class AppShell(QObject):
         w = self.window
         w.hide()
         self._release_timer.start(config.RELEASE_AFTER_HIDE_MIN * 60 * 1000)
-        try:
-            s = QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
-            first = s.value(HIDE_NOTICE_KEY) is None
-            if first:
-                s.setValue(HIDE_NOTICE_KEY, 1)
-                s.sync()
-        except Exception:
-            first = False
-        if first:
-            self.post("hide", "트레이에서 계속 돕니다",
-                        "창을 닫아도 랭킹 수집·자동 실행을 위해 여기 남습니다. 완전히 끄려면 이 아이콘을 오른쪽 클릭 → [종료].")
 
     def show_window(self) -> None:
         if self._quitting:
@@ -430,35 +292,9 @@ class AppShell(QObject):
         w.showMinimized()
         w._shown_once = True
 
-    # ── 알림 ──
-    def _balloon(self, title: str, text: str) -> bool:
-        """트레이 풍선 — 모달을 띄우지 않는다(숨긴 창 위·게임 위). 트레이가 없으면 False."""
-        if self.tray is None:
-            return False
-        self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Information, 10000)
-        return True
-
-    def post(self, kind: str, title: str, text: str, daily: bool = False) -> str:
-        """알림은 전부 여기로 — 게임 중 미룸 · 하루 한 번 · 알림 끄기(Notifier)."""
-        return self.notifier.post(kind, title, text, daily)
-
+    # 트레이 풍선 알림은 없다(2026-10-05 사용자 — "알림 자체는 안 보내도록"). 숨긴 동안 생긴 일은 창을 열 때 안내한다.
     def crash_while_hidden(self, path) -> None:
         self._pending_crash = path
-        self.post("crash", "예기치 못한 오류", "오류 기록을 남겼습니다. 창을 열면 자세히 알려 드립니다.")
-
-    def update_found_while_hidden(self, tag: str) -> None:
-        self.post("update", f"새 버전 {tag}", "눌러서 창을 열면 업데이트할 수 있습니다.", daily=True)
-
-    def _on_collect_outcome(self, out) -> None:
-        """수집 결과 중 알려야 할 것 — 창이 보이면 상태줄(app_main)이 맡는다."""
-        if self.window_visible():
-            return
-        if getattr(out, "disabled_by_block", False):
-            self.post("rank_off", "랭킹 수집을 껐습니다",
-                      "넥슨이 랭킹 목록 요청을 계속 막았습니다. [정보] 에서 다시 켤 수 있습니다.")
-        elif getattr(out, "fail_notice", False):
-            self.post("rank_fail", "랭킹 수집이 계속 실패합니다",
-                      f"{getattr(out, 'message', '')} — 간격을 늘려 다시 시도합니다.", daily=True)
 
     # ── 주기 일 ──
     def _update_due(self) -> None:
@@ -486,7 +322,6 @@ class AppShell(QObject):
         self._quitting = True
         for t in (self._release_timer, self._update_timer, self._tray_timer):
             t.stop()
-        self.notifier.stop()
         w = self.window
         left = []
         if w is not None:

@@ -9,8 +9,7 @@
 ; 화면 이름 — config.APP_NAME 과 같게. 폴더·exe·AppId 는 예전 이름 그대로(바꾸면 업데이트가 끊긴다)
 #define AppTitle "감독모드 전적 분석"
 #define OldTitle "피파 전적관리"
-; 둘 다 앱 쪽 상수와 같아야 한다(test_release 가 대조) — config.APP_USER_MODEL_ID · autostart.VALUE_INSTALLED
-#define AppUserModelID "FifaMatchTracker.App"
+; 앱 쪽 상수와 같아야 한다(test_release 가 대조) — autostart.VALUE_INSTALLED
 #define RunValue "FifaMatchTracker"
 
 [Setup]
@@ -58,9 +57,8 @@ Type: files; Name: "{autodesktop}\{#OldTitle}.lnk"
 Source: "..\dist\피파전적관리\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-; AppUserModelID — 앱이 프로세스에 거는 값(config.APP_USER_MODEL_ID)과 같아야 윈도우 알림이 이 이름으로 뜬다
-Name: "{autoprograms}\{#AppTitle}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelID}"
-Name: "{autodesktop}\{#AppTitle}"; Filename: "{app}\{#AppExe}"; AppUserModelID: "{#AppUserModelID}"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppTitle}"; Filename: "{app}\{#AppExe}"
+Name: "{autodesktop}\{#AppTitle}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppTitle}}"; Flags: nowait postinstall skipifsilent

@@ -29,7 +29,7 @@ import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -221,30 +221,6 @@ def _set_state(conn: sqlite3.Connection, **kv) -> None:
         conn.executemany("INSERT INTO collect_state (key, value) VALUES (?, ?) "
                          "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                          [(k, None if v is None else str(v)) for k, v in kv.items()])
-
-
-def claim_daily_notice(kind: str, day: date, db_path: Path | str | None = None) -> bool:
-    """트레이 알림 하루 한 번 — 오늘 이 종류를 아직 안 알렸으면 표시하고 True.
-    설치판·포터블이 같이 떠 있어도 같은 rank.db 를 봐서 두 번 알리지 않는다(ROADMAP 1.1.1 8절)."""
-    conn = open_rank_db(db_path)
-    try:
-        conn.isolation_level = None
-        conn.execute("BEGIN IMMEDIATE")     # 읽고 쓰는 사이에 다른 실행본이 끼지 않게
-        try:
-            key, today = f"notified_{kind}", day.isoformat()
-            row = conn.execute("SELECT value FROM collect_state WHERE key = ?", (key,)).fetchone()
-            if row is not None and row["value"] == today:
-                conn.execute("ROLLBACK")
-                return False
-            conn.execute("INSERT INTO collect_state (key, value) VALUES (?, ?) "
-                         "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, today))
-            conn.execute("COMMIT")
-            return True
-        except BaseException:
-            conn.execute("ROLLBACK")
-            raise
-    finally:
-        conn.close()
 
 
 def set_enabled(conn: sqlite3.Connection, on: bool, reason: str = "") -> None:

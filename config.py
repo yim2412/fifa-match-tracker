@@ -131,9 +131,6 @@ FAST_QUIT_WAIT_S = 1                # 윈도우 종료·로그오프 때 작업�
 SINGLE_WAIT_OLD_S = 60              # 앞 실행본이 끝나는 중이면(업데이트 뒤 재실행) 이만큼까지 기다린다
 # 테스트·여러 개 띄워 보기용 — FIFA_SINGLE_INSTANCE=0 이면 한 번만 실행 장치를 끈다
 SINGLE_INSTANCE = os.getenv("FIFA_SINGLE_INSTANCE", "1").strip() != "0"
-NOTIFY_RETRY_S = 60                 # 게임(전체 화면) 중이라 미룬 알림을 다시 보는 간격
-# 윈도우 알림의 앱 이름 — 설치판 바로가기(.iss [Icons] AppUserModelID)와 같아야 한다(test_release 가 대조)
-APP_USER_MODEL_ID = "FifaMatchTracker.App"
 
 
 # 넥슨 홈페이지 요청 — 한 프로세스 안 동시 요청 상한(ranker.web_get 의 세마포어). 수집·팀컬러·검색·선수 카드가 같이 쓴다.
