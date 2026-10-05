@@ -134,15 +134,9 @@ python app_main.py
 # 5) 파싱·집계 회귀 테스트 (네트워크 없이, 실제 응답 픽스처로)
 python tests/test_parsing.py
 python tests/test_ui_smoke.py   # 화면 배선(offscreen)
-python tests/test_bot.py
 python tests/test_rankcollect.py   # 랭킹 수집기
 python tests/test_tray.py   # 트레이 상주·자동 실행·한 번만 실행
 python tests/test_release.py   # 배포 검사 로직
-node tests/test_adapter.js
-
-# 6) (선택) 카카오톡 오픈채팅 봇 — 서버는 bot/README.md,
-#    카톡에 붙이는 방법은 adapters/README.md
-python -m bot.server
 ```
 
 ## 파일 구조
@@ -169,14 +163,10 @@ python -m bot.server
 | `config.py` | API 키 로드·저장(.env), DB 경로, 웹 데이터 스위치, 매치 종류·조회 개수 기본값 |
 | `crashlog.py` | 처리 안 된 예외를 `%LOCALAPPDATA%\피파전적관리\logs\crash.log` 에 남기고 첫 오류 때 위치를 알려 준다 |
 | `check_api.py` | 터미널에서 키·엔드포인트·집계·DB 동작 확인용 |
-| `bot/` | 카카오톡 오픈채팅 봇 서버 — 같은 API·DB를 쓰는 별도 진입점([bot/README.md](bot/README.md)) |
-| `adapters/` | 봇을 카카오톡에 붙이는 어댑터 — 메신저봇R 스크립트([adapters/README.md](adapters/README.md)) |
 | `tests/test_parsing.py` | 파싱·집계 회귀 테스트 — 실제 응답 픽스처로 골든값 고정(네트워크 없음) |
 | `tests/test_rankcollect.py` | 랭킹 수집기 테스트 — 가짜 랭킹 목록으로 쪽 판정·실패 대기·차단 시 끄기·잠금·집계(네트워크 없음) |
 | `tests/test_tray.py` | 트레이 상주 테스트 — 종료 진입점·X 숨김 규칙·한 번만 실행 판정·자동 실행(가짜 레지스트리)·내려놓기 미룸 |
-| `tests/test_bot.py` | 봇 명령 처리 회귀 테스트 — 채팅 한 줄 → 답장까지(네트워크 없음) |
 | `tests/test_analysis.py` | 흐름 분석 회귀 테스트 — 임계값 경계·가중치 정규화(네트워크 없음) |
-| `tests/test_adapter.js` | 어댑터 회귀 테스트 — 가짜 `java.*` 로 메신저봇R 진입점을 그대로 실행(node) |
 
 기본 매치 종류는 **감독모드(52)** 다 — 이 앱은 감독모드 전적을 본다.
 
@@ -386,7 +376,7 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
       이기는/지는 패턴은 **누적 전체** 기준으로 나눠 잰다(패턴을 20경기로 말하면 조건부로
       쪼갤 때 표본이 6~8경기로 줄어 노이즈를 패턴으로 읽는다). 두 층을 대조해
       "선제골 승률은 76%인데 최근엔 선제골 자체가 안 나온다" 같은 문장을 만든다.
-      규칙별 최소 표본에 못 미치면 문장을 내지 않는다. 봇 `!분석` 과 같은 로직
+      규칙별 최소 표본에 못 미치면 문장을 내지 않는다
 
 ## 개발 노트
 
@@ -418,8 +408,6 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
   넥슨 이미지 서버 · 넥슨 홈페이지(켰을 때만) · GitHub(업데이트 확인)뿐이다. 키·전적·오류 기록은
   `%LOCALAPPDATA%\피파전적관리` 에만 있다. 오류 기록(crash.log)에는 PC 폴더 경로(사용자 이름)가 들어갈 수
   있으니 보내기 전에 열어 확인한다.
-- 카카오톡 봇(`bot/`)은 배포판에 들어 있지 않다. 직접 돌려 채팅방에 붙이면 방 이름·보낸 사람 이름·등록
-  닉네임을 저장하게 되므로, 운영하는 사람이 그 방에 따로 알리고 동의를 받아야 한다([bot/README.md](bot/README.md)).
 
 ## 라이선스
 

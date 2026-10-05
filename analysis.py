@@ -412,19 +412,3 @@ def narrate(matches: list[MatchSummary], details: list[dict], ouid: str,
                        key=lambda i: -i.weight)
         out.extend(group[:per_section])
     return out
-
-
-def as_text(insights: list[Insight], bullet: str = "·") -> str:
-    """섹션 제목이 붙은 여러 줄 텍스트 — 봇 응답·클립보드용."""
-    if not insights:
-        return "분석할 만큼 경기가 쌓이지 않았습니다."
-    lines: list[str] = []
-    for sec in SECTIONS:
-        group = [i for i in insights if i.section == sec]
-        if not group:
-            continue
-        if lines:
-            lines.append("")
-        lines.append(f"[{sec}]")
-        lines.extend(f"{bullet} {i.text()}" for i in group)
-    return "\n".join(lines)

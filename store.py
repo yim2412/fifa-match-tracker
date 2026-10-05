@@ -60,10 +60,6 @@ CREATE TABLE IF NOT EXISTS team_colors (
     team_value INTEGER,
     fetched_at TEXT NOT NULL
 );
--- 카톡 봇 전용 — 채팅방에서 "!등록" 한 사람의 기본 구단주명.
--- accounts 와 따로 두는 이유: accounts 는 GUI 의 "최근 검색" 목록이고,
--- 봇은 거기를 건드리지 않는다(방 사람들 닉네임으로 뒤덮이면 안 된다).
--- 방이 다르면 다른 계정을 쓸 수 있어 (방, 사람) 을 키로 잡는다.
 -- 감독모드 랭킹 시즌표(데이터센터 스크래핑, seasons.py). 확정된 과거 시즌은
 -- 안 변하지만 새 시즌이 시작되면 목록에 한 줄이 붙으므로 TTL 안에서만 쓴다.
 CREATE TABLE IF NOT EXISTS seasons (
@@ -73,13 +69,9 @@ CREATE TABLE IF NOT EXISTS seasons (
     end_date   TEXT NOT NULL,
     fetched_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS bot_users (
-    room     TEXT NOT NULL,
-    sender   TEXT NOT NULL,
-    nickname TEXT NOT NULL,
-    PRIMARY KEY (room, sender)
-);
--- 검색한 구단주의 ELO(랭킹 점수) 기록 — 메인 검색에서만 적는다(구단주 비교·봇은 안 적는다).
+-- 카톡 봇(2026-10-05 삭제)이 쓰던 표 — 채팅방·보낸 사람 이름이 들어 있어 남기지 않는다.
+DROP TABLE IF EXISTS bot_users;
+-- 검색한 구단주의 ELO(랭킹 점수) 기록 — 메인 검색에서만 적는다(구단주 비교는 안 적는다).
 -- 다른 구단주 1만 명분(스냅숏 출처)은 rank.db 에 있고 여기 쌓지 않는다 — 두 DB 에 걸친 트랜잭션이 없게.
 CREATE TABLE IF NOT EXISTS elo_history (
     ouid       TEXT NOT NULL,
@@ -105,7 +97,7 @@ SEASON_TTL_DAYS = 1
 # SQLite 문서가 "연결을 열 때" 권하는 값이다.
 OPTIMIZE_ON_OPEN = 0x10002
 
-# 다른 연결이 쓰는 중이면 이만큼 기다린다(초) — 봇처럼 다른 프로세스가 같은 DB 를 열 때.
+# 다른 연결이 쓰는 중이면 이만큼 기다린다(초) — 다른 프로세스(check_api 등)가 같은 DB 를 열 때.
 OPEN_TIMEOUT_S = 15
 # 여는 순간의 설정(WAL 전환 · 표 만들기 · 통계 갱신)은 쓰기라, 같은 프로세스의 두 스레드가 동시에 하면 한쪽이
 # "database is locked" 로 죽었다 — 검색이 넥슨 조회와 DB 읽기를 나란히 돌리면서(03eeb08) 생겼다. 새 DB 를
@@ -298,31 +290,6 @@ def remove_account(conn: sqlite3.Connection, ouid: str) -> None:
     """목록에서만 뺀다 — 쌓아 둔 경기는 지우지 않는다."""
     conn.execute("DELETE FROM accounts WHERE ouid = ?", (ouid,))
     conn.commit()
-
-
-# ── 카톡 봇 사용자 기본 계정 ────────────────────────────────────────────
-def set_bot_user(conn: sqlite3.Connection, room: str, sender: str,
-                 nickname: str) -> None:
-    conn.execute(
-        "INSERT INTO bot_users (room, sender, nickname) VALUES (?, ?, ?)"
-        " ON CONFLICT(room, sender) DO UPDATE SET nickname=excluded.nickname",
-        (room, sender, nickname))
-    conn.commit()
-
-
-def get_bot_user(conn: sqlite3.Connection, room: str, sender: str) -> str | None:
-    row = conn.execute(
-        "SELECT nickname FROM bot_users WHERE room = ? AND sender = ?",
-        (room, sender)).fetchone()
-    return row["nickname"] if row else None
-
-
-def clear_bot_user(conn: sqlite3.Connection, room: str, sender: str) -> bool:
-    """지운 게 있으면 True — 등록된 적 없는데 "해제했다"고 답하지 않으려고."""
-    cur = conn.execute("DELETE FROM bot_users WHERE room = ? AND sender = ?",
-                       (room, sender))
-    conn.commit()
-    return cur.rowcount > 0
 
 
 # ── 상대 팀컬러·팀가치 캐시 ──────────────────────────────────────────────

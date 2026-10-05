@@ -152,7 +152,7 @@ footer p{color:var(--faint);max-width:44em;line-height:1.8}
       <div class="step"><b>파싱</b><span>정규화 · 방어적 읽기</span></div>
       <div class="step"><b>SQLite 누적</b><span>API 가 버린 과거를 보존</span></div>
       <div class="step"><b>집계</b><span>승률·지표·상성</span></div>
-      <div class="step"><b>화면 · 봇</b><span>PyQt6 / 오픈채팅</span></div>
+      <div class="step"><b>화면</b><span>PyQt6</span></div>
     </div>
     <p class="flow-note">화면은 API 가 아니라 DB 를 그린다. 검색하는 순간이 곧 수집이라, 자주 보는 계정일수록 데이터가 길어진다.</p>
   </div>
@@ -163,7 +163,6 @@ footer p{color:var(--faint);max-width:44em;line-height:1.8}
     <h2>무엇을 하는가</h2>
     <p>닉네임을 넣으면 경기를 받아 와 분석 탭으로 펼친다. 공식이 공개되지 않은 값(공격력·수비력·기대득점률·선방력)은 <b>실제 응답에서 역산</b>해 맞췄다.</p>
     <p>받은 경기는 로컬 SQLite 에 <b>누적</b>한다 — API 가 과거를 무한히 주지 않기 때문이다(실측: 약 한 달·3,024경기까지). 그보다 오래된 경기는 DB 에만 남는다.</p>
-    <p>카카오톡 오픈채팅 봇도 같은 DB 를 쓴다. 다만 조회 정책이 다르다 — 채팅방에서 첫 응답이 수 분이면 못 쓰기 때문이다.</p>
   </div>
 </section>
 
@@ -176,7 +175,6 @@ footer p{color:var(--faint);max-width:44em;line-height:1.8}
       <div><b>승부처 분석</b><span>선제골 승률 · 시간대별 득실 · 시각대별 승률</span></div>
       <div><b>슛 맵</b><span>슛 좌표를 하프 피치에 · 유형·거리별 득점률</span></div>
       <div><b>시즌별 보기</b><span>데이터센터 시즌표로 경기를 시즌에 나눠 담는다</span></div>
-      <div><b>오픈채팅 봇</b><span>같은 DB 를 쓰는 별도 진입점</span></div>
     </div>
   </div>
 </section>

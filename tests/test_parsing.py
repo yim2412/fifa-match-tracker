@@ -1013,17 +1013,38 @@ def test_store_match_type_filters_and_season_staleness():
         assert (a[:10], b[:10]) == ("2026-09-02", "2026-09-03"), (a, b)    # 50 경기(09-01)는 빠진다
         assert store.date_range(conn, "me")[0][:10] == "2026-09-01"
         # 시즌표: 비어 있으면 낡음 → 방금 저장하면 새것 → TTL 지나면 낡음
-        # 봇 등록 해제 — 지운 게 없으면 False("해제했다"고 거짓으로 답하지 않게)
-        assert store.clear_bot_user(conn, "방", "사람") is False
-        store.set_bot_user(conn, "방", "사람", "닉")
-        assert store.clear_bot_user(conn, "방", "사람") is True
-        assert store.clear_bot_user(conn, "방", "사람") is False
         assert store.seasons_stale(conn)
         store.save_seasons(conn, [sn.Season(no=1, name="시즌 1", start=date(2026, 1, 1), end=date(2026, 3, 1))])
         assert not store.seasons_stale(conn)
         conn.execute("UPDATE seasons SET fetched_at = '2000-01-01T00:00:00'")
         assert store.seasons_stale(conn)
         conn.close()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_store_open_drops_bot_users():
+    """카톡 봇(2026-10-05 삭제)이 남긴 표 — 채팅방·보낸 사람 이름이라 열 때 지운다."""
+    import shutil
+    import sqlite3
+    import tempfile
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        path = tmp / "old.db"
+        old = sqlite3.connect(path)
+        old.execute("CREATE TABLE bot_users (room TEXT, sender TEXT, nickname TEXT, PRIMARY KEY (room, sender))")
+        old.execute("INSERT INTO bot_users VALUES ('방', '사람', '닉')")
+        old.commit()
+        old.close()
+        probe = sqlite3.connect(path)  # 지우지 않았다면 남아 있을 것 — 먼저 있는 걸 확인한다
+        assert probe.execute("SELECT count(*) FROM bot_users").fetchone()[0] == 1
+        probe.close()
+        conn = store.open_db(path)
+        names = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        conn.close()
+        assert "bot_users" not in names, names
+        assert "matches" in names
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

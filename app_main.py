@@ -377,7 +377,7 @@ class MatchLoader(QThread):
                     base_matches, base_details = base_f.result()  # 아직이면 여기서 기다린다
                 if self._cancel:
                     return
-                # 바탕에 없는데 DB 에 있는 것 전부 — 방금 저장한 새 경기, 바탕을 읽은 뒤 들어온 경기(봇 등),
+                # 바탕에 없는데 DB 에 있는 것 전부 — 방금 저장한 새 경기, 바탕을 읽은 뒤 다른 프로세스(check_api 등)가 넣은 경기,
                 # 한도에 걸렸다 이어 받은 옛 경기. id 로 대조한다(시각으로 자르면 이어 받은 옛 경기를 빠뜨린다).
                 have = {d.get("matchId") for d in base_details}
                 missing = [i for i in store.known_ids(conn, ouid, self._match_type) if i not in have]

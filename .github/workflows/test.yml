@@ -1,4 +1,4 @@
-# 푸시할 때마다 테스트 6종 + 카톡 어댑터 테스트. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
+# 푸시할 때마다 테스트 7종. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
 # 화면 스모크는 offscreen — 글꼴은 러너의 C:/Windows/Fonts(테스트 머리에서 기본으로 준다).
 name: test
 
@@ -18,9 +18,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - name: 패키지
         # setuptools — 배포판에 묶여 오픈소스 고지(notice.THIRD_PARTY)에 들어가 있어 라이선스 검사가 찾는다
         run: python -m pip install -r requirements.txt setuptools
@@ -28,8 +25,6 @@ jobs:
         run: python tests/test_parsing.py
       - name: 흐름 분석
         run: python tests/test_analysis.py
-      - name: 봇
-        run: python tests/test_bot.py
       - name: 랭킹 수집기
         run: python tests/test_rankcollect.py
       - name: 트레이 상주
@@ -40,5 +35,3 @@ jobs:
         run: python tests/test_ui_smoke.py
       - name: 창 크기(흉내 낸 화면 5종)
         run: python tests/test_window_size.py
-      - name: 카톡 어댑터
-        run: node tests/test_adapter.js

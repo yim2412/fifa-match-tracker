@@ -199,14 +199,6 @@ def test_weight_cap():
     assert analysis._w(10, 8, 8) == 10
 
 
-def test_as_text_shape():
-    ms, ds = _build()
-    text = analysis.as_text(analysis.narrate(ms, ds, OUID))
-    assert f"[{analysis.SEC_FLOW}]" in text
-    assert "·" in text
-    assert analysis.as_text([]) == "분석할 만큼 경기가 쌓이지 않았습니다."
-
-
 # ── 변이 전수 측정 보강(2026-10-02, docs/mutation) — 규칙마다 '말한다/안 말한다'의 경계 ──────
 def _seq(results, opp="상대A", my_goals=None):
     """결과 문자열 목록(최신순) → (matches, details). 골·슛은 결과에 맞춘 최소한."""
@@ -306,12 +298,6 @@ def test_opponent_rule_needs_games_and_name():
     assert analysis._opponent_rules(ms, base_rate=60.0) == []
     ms, _ = _seq(["패"] * analysis.MIN_OPP, opp="-")
     assert analysis._opponent_rules(ms, base_rate=60.0) == [], "이름 없는 상대를 말했다"
-
-
-def test_as_text_blank_line_between_sections():
-    ins = [analysis.Insight(analysis.SEC_FLOW, "가.", "", 1.0), analysis.Insight(analysis.SEC_LOSE, "나.", "", 1.0)]
-    text = analysis.as_text(ins)
-    assert text.startswith(f"[{analysis.SEC_FLOW}]") and f"\n\n[{analysis.SEC_LOSE}]" in text, text
 
 
 # ── 기준값과 정확히 같을 때도 말한다(경계 변이 3순위, 2026-10-02) ─────────────────────────
