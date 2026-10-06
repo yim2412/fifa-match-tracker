@@ -45,7 +45,7 @@ __all__ = [
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "current_streak", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend",
-    # predict — 시즌 말 순위 예측(21단계에서 비공개로 옮길 1순위)
+    # predict — 시즌 말 순위 예측(38단계에서 비공개로 옮길 1순위)
     "Prediction", "describe_prediction", "predict_for",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
     "PickCard", "PickSummary", "ranker_pick_summary",
