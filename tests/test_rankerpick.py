@@ -412,6 +412,118 @@ def test_ranker_pick_render_budget():
     print(f"       랭커 픽 집계 200명 {best * 1000:.0f}ms")
 
 
+# ── 11-lite 추천(17단계) ────────────────────────────────────────────────
+
+def _snap_row(rank, nick, color="팀A", value=None):
+    return {"rank": rank, "profile_sn": 6000 + rank, "nickname": nick, "team_color": color, "formation": "4-2-3-1",
+            "team_value": value}
+
+
+def test_my_team_color_order():
+    rows = [_snap_row(5, "나", "팀A"), _snap_row(6, "남", "")]
+    assert rp.my_team_color(rows, "나", "팀C") == "팀A", "스냅숏의 내 행이 먼저"
+    assert rp.my_team_color(rows, "남", "팀C") == "팀C", "스냅숏 행에 팀컬러가 없으면 캐시"
+    assert rp.my_team_color(rows, "1만밖", None) is None, "모르면 None — 최근 스쿼드로 짐작하지 않는다"
+
+
+def test_recommend_candidates_sources():
+    """① 받아 둔 상위 200 · ② 내 DB 의 상대(30일 · 요청 0) · ③ 받아 둔 201~1,000 — 내 팀컬러만 · 나 빼고."""
+    conn = _db()
+    rows = [_snap_row(200, "랭커1"), _snap_row(2, "다른색", "팀B"), _snap_row(250, "추천1"),
+            _snap_row(300, "상대최근"), _snap_row(400, "상대옛날"), _snap_row(500, "상대다른색", "팀B"),
+            _snap_row(50, "나"), _snap_row(9000, "상대1만")]
+    players = {"랭커1": ("r1", _match("rm1", TODAY, [("r1", "랭커1", _squad(100))])),
+               "다른색": ("r2", _match("rm2", TODAY, [("r2", "다른색", _squad(200))])),
+               "추천1": ("r3", _match("rm3", TODAY, [("r3", "추천1", _squad(300))]))}
+    api = FakeAPI(players)
+    _collect(api, conn, [rows[0], rows[1]])
+    _collect(api, conn, [rows[2]], source=store.RECOMMEND)
+    store.save_matches(conn, [   # 1만 위 쪽을 먼저 넣는다 — 색인 순서가 아니라 순위 순으로 자르는지 잰다
+        _match("o4", TODAY, [("me", "나", _squad(1)), ("op9000", "상대1만", _squad(700))]),
+        _match("o1", TODAY - timedelta(days=3), [("me", "나", _squad(1)), ("op300", "상대최근", _squad(400))]),
+        _match("o2", TODAY - timedelta(days=40), [("me", "나", _squad(1)), ("op400", "상대옛날", _squad(500))]),
+        _match("o3", TODAY, [("me", "나", _squad(1)), ("op500", "상대다른색", _squad(600))])])
+    cands = rp.recommend_candidates(conn, rows, "팀A", me="나", today=TODAY)
+    got = [(c.nickname, c.source) for c in cands]
+    assert got == [("랭커1", rp.SRC_PICK), ("추천1", rp.SRC_RECOMMEND), ("상대최근", rp.SRC_OPP),
+                   ("상대1만", rp.SRC_OPP)], got
+    assert [p["spId"] for p in cands[2].players] == _squad(400), "상대의 선발(교체 28 제외)"
+    assert rp.recommend_candidates(conn, rows, None) == [], "팀컬러를 모르면 후보 없음"
+    keep = config.RECOMMEND_OPPONENT_MAX
+    config.RECOMMEND_OPPONENT_MAX = 1
+    try:
+        cands = rp.recommend_candidates(conn, rows, "팀A", me="나", today=TODAY)
+        assert [c.nickname for c in cands if c.source == rp.SRC_OPP] == ["상대최근"], "② 상한은 순위 순으로 자른다"
+    finally:
+        config.RECOMMEND_OPPONENT_MAX = keep
+
+
+def test_recommend_targets_only_when_short():
+    rows = [_snap_row(r, f"n{r}") for r in (150, 200, 201, 999, 1000, 1001)] + [_snap_row(205, "나"),
+                                                                                _snap_row(210, "b", "팀B")]
+    need = config.RECOMMEND_MIN_RANKERS
+    got = [r["rank"] for r in rp.recommend_targets(rows, "팀A", need - 1, me="나")]
+    assert got == [201, 999, 1000], ("201~1,000위 · 내 팀컬러 · 나 빼고 · 순위 순", got)
+    assert rp.recommend_targets(rows, "팀A", need, me="나") == [], "후보가 문턱 이상이면 더 받지 않는다(경계)"
+    assert rp.recommend_targets(rows, None, 0) == []
+    many = [_snap_row(300 + i, f"m{i}") for i in range(config.RECOMMEND_FETCH_MAX + 5)]
+    assert len(rp.recommend_targets(many, "팀A", 0)) == config.RECOMMEND_FETCH_MAX
+
+
+def _cand(i, spids, value=None, grade=None, source=rp.SRC_PICK):
+    players = [{"spId": s, "spPosition": po, "spGrade": grade if grade is not None else 1 + s % 8}
+               for s, po in zip(spids, FORMATION)]
+    return rp.Candidate(f"c{i}", i + 1, source, value, players)
+
+
+def test_recommend_cards_and_standing():
+    n = config.RECOMMEND_MIN_RANKERS
+    mine = [{"spId": s, "spPosition": po, "spGrade": 5} for s, po in zip(_squad(100), FORMATION)]
+    # 모두 GK(첫 자리)는 내 카드 100, ST(25 · 9번째 자리)는 사람마다 — 777 은 MIN_USERS 명, 888 은 그보다 하나 적게
+    cands = []
+    for i in range(n):
+        spids = _squad(100)
+        spids[8] = 777 if i < config.RECOMMEND_MIN_USERS else (888 if i < 2 * config.RECOMMEND_MIN_USERS - 1 else 5000 + i)
+        cands.append(_cand(i, spids, value=(i + 1) * 100, grade=3 + i % 5))
+    rec = rp.recommend(cands, "팀A", mine, my_value=n * 100 - 300)  # 후보 하나와 같은 값 — 같으면 "나보다 높다"가 아니다
+    assert rec.enough and rec.total == n and rec.by_source[rp.SRC_PICK] == n
+    allcards = {c.spid: c for _ln, cs in rec.lines for c in cs}
+    assert set(allcards) == {777}, ("내가 쓰는 카드는 빼고 · MIN_USERS 미만(888)도 뺀다", set(allcards))
+    assert dict(rec.lines)["공격"][0].users == config.RECOMMEND_MIN_USERS
+    assert abs(allcards[777].rate - config.RECOMMEND_MIN_USERS / n) < 1e-9
+    value = rec.standings[0]
+    assert value.name == "구단가치" and value.n == n and abs(value.above - 3 / n) < 1e-9, value  # 위 셋만 나보다 높다
+    grade = rec.standings[1]
+    assert grade.mine == 5 and grade.median is not None, grade
+    assert rec.formation == (rp.formation_of(mine), n, n), rec.formation
+    assert rp.recommend(cands, "팀A", [], None).standings[0].above is None, "내 값을 모르면 위치도 모름"
+
+
+def test_recommend_threshold_boundary():
+    n = config.RECOMMEND_MIN_RANKERS
+    cands = [_cand(i, _squad(200)) for i in range(n - 1)]
+    rec = rp.recommend(cands, "팀A", [], None)
+    assert not rec.enough and rec.lines == [] and rec.standings == [] and rec.total == n - 1, "문턱 미만은 추천 안 함"
+    assert rec.ranks == (1, n - 1)
+    assert rp.recommend(cands + [_cand(n, _squad(200))], "팀A", [], None).enough, "정확히 문턱이면 추천"
+
+
+def test_recommend_render_budget():
+    """⑦ 추천 후보 ② 상한(200명)까지 경기 본문을 읽어 묶는 데 ≤ 0.3초(랭커 픽 화면 그리기 예산과 같음)."""
+    conn = _db()
+    rows, ds = [], []
+    for i in range(config.RECOMMEND_OPPONENT_MAX + 50):
+        rows.append(_snap_row(300 + i, f"상대{i}"))
+        ds.append(_match(f"m{i}", TODAY, [("me", "나", _squad(1)), (f"op{i}", f"상대{i}", _squad(1000 + i % 40))]))
+    store.save_matches(conn, ds)
+    best = min(_timed(lambda: rp.recommend(rp.recommend_candidates(conn, rows, "팀A", me="나",
+                                                                    today=TODAY), "팀A", [], None)) for _ in range(3))
+    cands = rp.recommend_candidates(conn, rows, "팀A", me="나", today=TODAY)
+    assert len(cands) == config.RECOMMEND_OPPONENT_MAX, len(cands)
+    assert best <= 0.3, f"{best * 1000:.0f}ms"
+    print(f"       추천 후보 {len(cands)}명 {best * 1000:.0f}ms")
+
+
 # ── 보관·지우기 ─────────────────────────────────────────────────────────
 
 def _file_db():

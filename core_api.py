@@ -17,7 +17,11 @@ from models import (
     summarize, win_rate_trend,
 )
 from predict import Prediction, describe as describe_prediction, predict_for
-from rankerpick import PickCard, PickSummary, ranker_pick_summary
+from rankcollect import RankTrend, rank_trend_series
+from rankerpick import (
+    SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
+    ranker_pick_summary, recommend, recommend_candidates,
+)
 from squad_timeline import (
     HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, build_timeline, parse_trades,
 )
@@ -45,6 +49,9 @@ __all__ = [
     "Prediction", "describe_prediction", "predict_for",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
     "PickCard", "PickSummary", "ranker_pick_summary",
+    # rankerpick — 11-lite 추천(17단계) · rankcollect — 랭킹 추이(P2, rank.db 영구 집계)
+    "SRC_OPP", "SRC_PICK", "SRC_RECOMMEND", "RecCard", "Recommend", "Standing", "my_team_color", "recommend",
+    "recommend_candidates", "RankTrend", "rank_trend_series",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",

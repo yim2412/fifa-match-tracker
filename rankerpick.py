@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta
 import config
 import store
 from nexon_api import NETWORK_CODE, QUOTA_CODE, NexonAPIError
-from stats import PITCH_ROWS, SUB_POSITION, pitch_rows
+from stats import PITCH_ROWS, SUB_POSITION, formation_of, pitch_rows
 
 
 @dataclass
@@ -92,7 +92,7 @@ class _Session:
 
 
 def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP) -> tuple[str | None, list[dict]]:
-    """원본이 남은 마지막 스냅숏의 상위 limit 명 → (찍은 시각, [{rank, profile_sn, nickname, team_color, formation}]).
+    """원본이 남은 마지막 스냅숏의 상위 limit 명 → (찍은 시각, [{rank, profile_sn, nickname, team_color, formation, team_value}]).
     스냅숏이 없으면 (None, [])."""
     if rank_conn is None:
         return None, []
@@ -103,7 +103,7 @@ def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP) -> tuple[str | N
         return None, []
     # 정렬은 여기서 — ORDER BY rank 는 PK(snapshot_id, profile_sn) 순이 아니라 1만 행을 임시 정렬한다(test_rules)
     rows = [dict(r) for r in rank_conn.execute(
-        "SELECT rank, profile_sn, nickname, team_color, formation FROM snapshot_rows"
+        "SELECT rank, profile_sn, nickname, team_color, formation, team_value FROM snapshot_rows"
         " WHERE snapshot_id = ? AND rank <= ?", (snap[0], limit))]
     rows.sort(key=lambda r: r["rank"])
     return snap[1], rows
@@ -278,3 +278,197 @@ def _row_index(codes: list[int]) -> list[list[int]]:
         ri = next(i for i, (_n, rng) in enumerate(PITCH_ROWS) if code in rng)
         rows[ri] = row
     return rows
+
+
+# ── 11-lite 랭커 기반 추천(2.1.1 · 17단계) ────────────────────────────────
+# 후보(ROADMAP U3) — 내 팀컬러인 랭커만:
+#   ① pick      상위 200 중 랭커 픽이 받아 둔 사람(요청은 랭커 픽 몫)
+#   ② opp       마지막 스냅숏 1만 안 · 내 DB 에 최근 CARD_OWNER_DAYS 일 경기가 있는 상대(요청 0)
+#   ③ recommend ①+② 가 RECOMMEND_MIN_RANKERS 미만일 때만 201~1,000위에서 RECOMMEND_FETCH_MAX 명을 더 받는다
+# ②는 ①과 뽑힌 방식이 다르다(내가 만난 사람) — 섞이면 편향되니 출처별 인원을 화면에 적는다.
+SRC_PICK, SRC_OPP, SRC_RECOMMEND = "pick", "opp", "recommend"
+
+
+@dataclass
+class Candidate:
+    nickname: str
+    rank: int
+    source: str
+    team_value: int | None
+    players: list[dict]          # 선발(교체 28 제외) — spId · spPosition · spGrade
+
+
+@dataclass
+class RecCard:
+    spid: int
+    users: int                                         # 이 줄에 이 카드를 쓴 후보 수
+    rate: float                                        # users / 후보 수
+    grades: Counter = field(default_factory=Counter)
+
+
+@dataclass
+class Standing:
+    """내 스쿼드가 후보 분포의 어디쯤 — above 는 나보다 높은 후보 비율(0~1). 모르면 None."""
+    name: str
+    mine: float | None
+    median: float | None
+    above: float | None
+    n: int
+
+
+@dataclass
+class Recommend:
+    color: str | None = None
+    by_source: Counter = field(default_factory=Counter)  # 출처 → 후보 수
+    ranks: tuple[int, int] | None = None                # 쓰인 순위 범위
+    enough: bool = False                                # 후보가 RECOMMEND_MIN_RANKERS 이상
+    lines: list[tuple[str, list[RecCard]]] = field(default_factory=list)  # 내가 안 쓰는 카드만
+    standings: list[Standing] = field(default_factory=list)
+    formation: tuple[str | None, int, int] = (None, 0, 0)   # (내 포메이션, 같은 후보 수, 후보 수)
+
+    @property
+    def total(self) -> int:
+        return sum(self.by_source.values())
+
+
+def _ranker_players(conn, h: dict | None, t: dict, oldest: str) -> list[dict] | None:
+    """받아 둔 랭커 줄 → 선발. 못 쓰면(안 받음·실패·닉네임 바뀜·경기 지워짐·오래됨) None."""
+    if h is None or not h.get("match_id") or h.get("nickname") != t["nickname"]:
+        return None
+    detail = store.load_match(conn, h["match_id"])
+    if detail is None or str(detail.get("matchDate") or "")[:10] < oldest:
+        return None
+    return _starters(detail, h.get("ouid")) or None
+
+
+def _latest_detail(conn, ouid: str) -> dict | None:
+    """그 구단주의 마지막 감독모드 경기 — MAX 와 같이 고른 줄이라 정렬이 없다. 기간은 부르는 쪽이 색인의
+    last_day(감독모드 경기만 센다)로 이미 걸렀다."""
+    r = conn.execute("SELECT m.match_id, MAX(m.match_date) FROM match_players p JOIN matches m ON m.match_id = p.match_id"
+                     " WHERE p.ouid = ? AND m.match_type = ?", (ouid, config.DEFAULT_MATCH_TYPE)).fetchone()
+    if r is None or r[0] is None:
+        return None
+    return store.load_match(conn, r[0])
+
+
+def my_team_color(rows: list[dict], nickname: str | None, cached: str | None) -> str | None:
+    """마지막 스냅숏의 내 행 → 없으면(1만 밖) 팀컬러 캐시 → 둘 다 없으면 None.
+    최근 스쿼드로 추정하지 않는다 — 틀린 추천보다 없음이 낫다(ROADMAP 11-lite)."""
+    if nickname:
+        row = next((r for r in rows if r["nickname"] == nickname), None)
+        if row is not None and row.get("team_color"):
+            return row["team_color"]
+    return cached or None
+
+
+def recommend_targets(rows: list[dict], color: str | None, have_count: int, me: str | None = None) -> list[dict]:
+    """③ 더 받을 랭커 — 후보(①+②)가 모자랄 때만, 내 팀컬러 201~RANKER_RECOMMEND_TOP 위에서 순위 순으로
+    RECOMMEND_FETCH_MAX 명(이미 받은 사람도 넘긴다 — 3일 안이면 collect 의 due 가 거른다)."""
+    if not color or have_count >= config.RECOMMEND_MIN_RANKERS:
+        return []
+    out = [r for r in rows if r.get("team_color") == color and r["nickname"] != me
+           and config.RANKER_PICK_TOP < r["rank"] <= config.RANKER_RECOMMEND_TOP]
+    out.sort(key=lambda r: r["rank"])
+    return out[:config.RECOMMEND_FETCH_MAX]
+
+
+def recommend_candidates(conn, rows: list[dict], color: str | None, me: str | None = None,
+                         today: date | None = None) -> list[Candidate]:
+    """내 팀컬러 후보 ①②③ — rows 는 마지막 스냅숏(1만). 요청 없음(DB 만 읽는다). 나는 닉네임으로 뺀다
+    (스냅숏 행에서 빼면 ② 의 색인 쪽으로도 안 간다)."""
+    if not color:
+        return []
+    today = today or date.today()
+    oldest = (today - timedelta(days=config.RANKER_PICK_MAX_AGE_DAYS)).isoformat()
+    since_opp = (today - timedelta(days=config.CARD_OWNER_DAYS)).isoformat()
+    mine = [r for r in rows if r.get("team_color") == color and r["nickname"] != me]
+    have = store.ranker_squads(conn)
+    out: list[Candidate] = []
+    rest: list[dict] = []
+    for r in mine:
+        players = _ranker_players(conn, have.get(r["profile_sn"]), r, oldest)
+        if players:
+            src = SRC_PICK if r["rank"] <= config.RANKER_PICK_TOP else SRC_RECOMMEND
+            out.append(Candidate(r["nickname"], r["rank"], src, r.get("team_value"), players))
+        else:
+            rest.append(r)
+    # ② 내 DB 의 상대 — 닉네임으로 색인의 구단주를 찾는다(마지막 사용일이 기간 안인 사람만)
+    by_nick = {r["nickname"]: r for r in rest}
+    found: list[tuple[dict, str]] = []
+    names = list(by_nick)
+    since_day = date.fromisoformat(since_opp).toordinal()
+    for i in range(0, len(names), 500):
+        chunk = names[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for ouid, nick in conn.execute(f"SELECT ouid, nickname FROM squad_owner WHERE nickname IN ({q})"
+                                       f" AND last_day >= ?", (*chunk, since_day)):
+            found.append((by_nick[nick], ouid))
+    found.sort(key=lambda t: t[0]["rank"])
+    for r, ouid in found[:config.RECOMMEND_OPPONENT_MAX]:
+        detail = _latest_detail(conn, ouid)
+        players = _starters(detail, ouid) if detail else []
+        if players:
+            out.append(Candidate(r["nickname"], r["rank"], SRC_OPP, r.get("team_value"), players))
+    out.sort(key=lambda c: c.rank)
+    return out
+
+
+def _median(vals: list[float]) -> float | None:
+    if not vals:
+        return None
+    s = sorted(vals)
+    m = len(s) // 2
+    return s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2
+
+
+def _standing(name: str, mine: float | None, theirs: list[float]) -> Standing:
+    above = (sum(1 for v in theirs if v > mine) / len(theirs)) if (mine is not None and theirs) else None
+    return Standing(name, mine, _median(theirs), above, len(theirs))
+
+
+def _grade_avg(players: list[dict]) -> float | None:
+    g = [p.get("spGrade") for p in players if isinstance(p.get("spGrade"), int)]
+    return sum(g) / len(g) if g else None
+
+
+def recommend(cands: list[Candidate], color: str | None, my_players: list[dict], my_value: int | None,
+              top_per_line: int = 5) -> Recommend:
+    """후보 → 줄별 대체 카드(내가 안 쓰는 것) · 내 스쿼드 위치. 후보가 RECOMMEND_MIN_RANKERS 미만이면 enough=False
+    (화면은 "추천 안 함"과 인원만 — 표는 비운다)."""
+    out = Recommend(color=color)
+    out.by_source.update(c.source for c in cands)
+    if cands:
+        out.ranks = (min(c.rank for c in cands), max(c.rank for c in cands))
+    out.enough = len(cands) >= config.RECOMMEND_MIN_RANKERS
+    if not out.enough:
+        return out
+    n = len(cands)
+    mine = {p.get("spId") for p in my_players}
+    per_line: list[dict[int, RecCard]] = [{} for _ in PITCH_ROWS]
+    for c in cands:
+        codes = [p["spPosition"] for p in c.players]
+        for ri, row in enumerate(_row_index(codes)):
+            seen: set[int] = set()
+            for i in row:
+                p = c.players[i]
+                if p["spId"] in mine or p["spId"] in seen:
+                    continue
+                seen.add(p["spId"])
+                rc = per_line[ri].setdefault(p["spId"], RecCard(p["spId"], 0, 0.0))
+                rc.users += 1
+                rc.grades[p.get("spGrade")] += 1
+    for ri, (name, _rng) in enumerate(PITCH_ROWS):
+        cards = [rc for rc in per_line[ri].values() if rc.users >= config.RECOMMEND_MIN_USERS]
+        for rc in cards:
+            rc.rate = rc.users / n
+        cards.sort(key=lambda rc: (-rc.users, rc.spid))
+        if cards:
+            out.lines.append((name, cards[:top_per_line]))
+    out.standings = [
+        _standing("구단가치", my_value, [c.team_value for c in cands if c.team_value is not None]),
+        _standing("선발 강화 평균", _grade_avg(my_players),
+                  [g for g in (_grade_avg(c.players) for c in cands) if g is not None]),
+    ]
+    my_form = formation_of(my_players) if my_players else None
+    out.formation = (my_form, sum(1 for c in cands if formation_of(c.players) == my_form) if my_form else 0, n)
+    return out

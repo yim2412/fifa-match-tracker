@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -196,6 +197,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         "min": [win.minimumWidth(), win.minimumHeight()],
         "msg": win.statusBar().currentMessage(),
     })
+    out["db_path"] = str(config.DB_PATH)  # 부모가 임시 데이터 폴더 안인지 본다(_run)
     print("RESULT " + json.dumps(out, ensure_ascii=False), flush=True)
 
 
@@ -205,16 +207,23 @@ def _run(case: str, screen: str, settings_path: str | None = None) -> dict:
         fd, settings_path = tempfile.mkstemp(suffix=".ini")
         os.close(fd)
         os.remove(settings_path)
+    # 데이터 폴더도 임시로 — 안 주면 창을 만들며 실제 fifa.db·rank.db 를 연다(16단계 실측: 실제 fifa.db 에 빈 새 표가 생겼다)
+    data_dir = tempfile.mkdtemp(prefix="winsize_")
     try:
         r = subprocess.run([sys.executable, os.path.abspath(__file__), "--child", case, screen, settings_path],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-                           env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1"))
+                           env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1",
+                                    FIFA_DATA_DIR=data_dir))
         line = next((ln for ln in r.stdout.splitlines() if ln.startswith("RESULT ")), None)
         assert line, f"자식 프로세스가 결과를 못 냈다(rc={r.returncode}): {r.stderr[-800:]}"
-        return json.loads(line[len("RESULT "):])
+        res = json.loads(line[len("RESULT "):])
+        assert os.path.commonpath([os.path.abspath(res["db_path"]), data_dir]) == data_dir, \
+            ("자식이 임시 데이터 폴더 밖의 DB 를 봤다", res["db_path"])
+        return res
     finally:
         if own and os.path.exists(settings_path):
             os.remove(settings_path)
+        shutil.rmtree(data_dir, ignore_errors=True)
 
 
 def _inside(res: dict) -> bool:

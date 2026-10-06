@@ -385,17 +385,20 @@ def test_trades_tab_open_starts_loader():
 def test_go_page_rejects_unknown_or_hidden():
     """E4 — 없는 이름·숨긴 메뉴·없는 탭이면 아무것도 안 한다(예전엔 묶음 제목 줄로 갔다)."""
     _win._go_page("슛 맵")
-    for args in (("없는 메뉴",), ("랭킹 추이",), ("선수 지표", "없는 탭"), ("슛 맵", "탭"), ("랭커와 비교",)):
-        _win._go_page(*args)
-        assert _win._current_view() == ("슛 맵", None), (args, _win._current_view())
-    assert "랭킹 추이" in config.HIDDEN_NAV_UNTIL_READY  # 숨김이 풀리면(17단계) 위 줄은 다른 숨긴 메뉴로 — 없으면 이 테스트를 지운다
-    hidden_rows = [_win.nav.item(r) for r in range(_win.nav.count())
-                   if _win.nav.item(r).text() in config.HIDDEN_NAV_UNTIL_READY]
-    assert len(hidden_rows) == 1 and all(it.isHidden() for it in hidden_rows), \
-        [(it.text(), it.isHidden()) for it in hidden_rows]
+    keep = config.HIDDEN_NAV_UNTIL_READY
+    config.HIDDEN_NAV_UNTIL_READY = ("랭킹 추이",)  # 지금 숨긴 메뉴가 없어 하나를 숨긴 셈 치고 잰다(판정은 부를 때 config 를 본다)
+    try:
+        for args in (("없는 메뉴",), ("랭킹 추이",), ("선수 지표", "없는 탭"), ("슛 맵", "탭"), ("랭커와 비교",)):
+            _win._go_page(*args)
+            assert _win._current_view() == ("슛 맵", None), (args, _win._current_view())
+    finally:
+        config.HIDDEN_NAV_UNTIL_READY = keep
+    _win._go_page("랭킹 추이")
+    assert _win._current_view() == ("랭킹 추이", None), "숨김을 풀면 열린다"
+    assert config.HIDDEN_NAV_UNTIL_READY == (), "2.1.1 공개판엔 숨긴 메뉴가 없다(release.py 도 막는다)"
     shown = [_win.nav.item(r) for r in range(_win.nav.count())
-             if _win.nav.item(r).text() in ("랭커", "랭커 픽", "선수로 구단주 찾기")]
-    assert len(shown) == 3 and not any(it.isHidden() for it in shown), "16단계가 켠 메뉴(묶음 제목 포함)는 보인다"
+             if _win.nav.item(r).text() in ("랭커", "랭킹 추이", "랭커 픽", "선수로 구단주 찾기")]
+    assert len(shown) == 4 and not any(it.isHidden() for it in shown), "17단계로 랭커 묶음이 다 보인다"
     _win._go_page("대시보드")
 
 
@@ -588,7 +591,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 17, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기(2.1.1)
+    assert len(tables) == 19, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -933,8 +936,14 @@ def test_dashboard_targets_exist():
     def bad(targets):
         return [t for t in targets if not isinstance(t, tuple) or t not in views
                 or t[0] in config.HIDDEN_NAV_UNTIL_READY]
-    planted = [("승률 그래프", None), ("승률 그래프", "없는 탭"), "경기 목록", ("랭킹 추이", None)]
+    planted = [("승률 그래프", None), ("승률 그래프", "없는 탭"), "경기 목록"]
     assert bad(planted) == planted, bad(planted)
+    keep = config.HIDDEN_NAV_UNTIL_READY
+    config.HIDDEN_NAV_UNTIL_READY = ("랭킹 추이",)  # 숨긴 메뉴를 가리키는 카드도 잡는다(지금은 숨긴 메뉴가 없다)
+    try:
+        assert bad([("랭킹 추이", None)]) == [("랭킹 추이", None)]
+    finally:
+        config.HIDDEN_NAV_UNTIL_READY = keep
     targets = [c.target for c in _win.dashboard.cards if c.target]
     assert targets and not bad(targets), bad(targets)
 
@@ -2892,9 +2901,10 @@ def test_settings_remember_window_page_and_season():
 
 
 def test_restore_old_page_names():
-    """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 숨긴 메뉴는 대시보드."""
-    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("랭킹 추이", ("대시보드", None))]
-    assert len(cases) == 4
+    """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 모르는 이름은 대시보드."""
+    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("없는 메뉴", ("대시보드", None)),
+             ("랭킹 추이", ("랭킹 추이", None))]
+    assert len(cases) == 5
     try:
         for old, want in cases:
             _win._go_page("선수 지표", "지표")
@@ -6278,10 +6288,11 @@ class _FakePickLoader:
             for f in self.slots:
                 f(*a)
 
-    def __init__(self, api):
+    def __init__(self, api, recommend=None):
         self.ranker, self.done, self.finished = self._S(), self._S(), self._S()
         self.running = False
         self.cancelled = False
+        self.recommend = recommend
 
     def start(self):
         _FakePickLoader.started += 1
@@ -6456,6 +6467,188 @@ def test_ranker_pick_renders_summary():
                 store.purge_ranker_data(conn, everything=True)
             finally:
                 conn.close()
+
+
+def test_ranker_pick_share_tables_most_common_first():
+    """[픽] 팀컬러·포메이션 표는 많은 순 그대로 — 정렬을 켜 두면 머리글 기본 정렬(이름)로 다시 섞였다(17단계 실화면)."""
+    with _PickEnv():
+        config.RANK_COLLECT = False
+        r = rankcollect.open_rank_db()
+        try:
+            r.execute("DELETE FROM snapshot_rows")
+            r.executemany("INSERT INTO snapshot_rows (snapshot_id, rank, profile_sn, nickname, team_color, formation)"
+                          " VALUES (1, ?, ?, ?, ?, ?)",
+                          [(i + 1, 900 + i, f"랭커{i}", c, "4-2-3-1") for i, c in enumerate("나가나다다나")])
+            r.commit()
+        finally:
+            r.close()
+        _win._go_page("랭커 픽", "픽")
+        _win._invalidate("rankerpick")
+        names = [_win.tbl_pick_colors.item(i, 0).text() for i in range(_win.tbl_pick_colors.rowCount())]
+        assert names == ["나", "다", "가"], names
+
+
+def test_recommend_tab_loads_with_recommend_args():
+    """[추천] 탭이 보일 때만 ③(1,000위 안 더 받기)을 싣는다 — [픽] 으로 띄운 로더가 돌면 멈추고 끝난 뒤 실어서 다시."""
+    keep = (_win._nick, _win._rank, _win._ouid)
+    with _PickEnv():
+        _win._nick, _win._rank, _win._ouid = "랭커1", None, _OUID      # 스냅숏의 내 행 → 팀A
+        try:
+            _win._go_page("랭커 픽", "픽")
+            ld = _win._pick_loader
+            assert _FakePickLoader.started == 1 and ld.recommend is None, "[픽] 에서 ③ 을 실었다"
+            _win._page_tabs["랭커 픽"].set_current("추천")
+            assert ld.cancelled and _FakePickLoader.started == 1, "[추천] 을 열었는데 ③ 없는 로더를 그대로 뒀다"
+            ld.end()
+            assert _FakePickLoader.started == 2, "끝난 뒤 다시 띄우지 않았다"
+            assert _win._pick_loader.recommend == ("팀A", "랭커1"), _win._pick_loader.recommend
+            _win._pick_loader.end()
+            _win._nick = "1만밖"                        # 스냅숏에 없음 · 검색 때 읽은 팀컬러도 없음 → ③ 없음
+            _win._go_page("대시보드")
+            _win._go_page("랭커 픽", "추천")
+            assert _win._pick_loader.recommend is None, "팀컬러를 모르는데 ③ 을 실었다(짐작 금지)"
+            assert "팀컬러를 모릅니다" in _win.lb_rec_status.text(), _win.lb_rec_status.text()
+            _win._pick_loader.end()
+        finally:
+            _win._nick, _win._rank, _win._ouid = keep
+            _win._page_tabs["랭커 픽"].set_current("픽", emit=False)
+
+
+def test_recommend_renders_from_db():
+    """후보(랭커 픽이 받아 둔 경기) → 표. 문턱 미만이면 "N명뿐"과 빈 표 — 숫자를 지어내지 않는다."""
+    keep = (_win._nick, _win._rank, config.RECOMMEND_MIN_RANKERS, config.RECOMMEND_MIN_USERS)
+    with _PickEnv():
+        config.RANK_COLLECT = False      # 받지 않게 — 이미 받아 둔 것만 그린다
+        _win._nick, _win._rank = "랭커1", None
+        conn = store.open_db(config.DB_PATH)
+        try:
+            d = json.loads(json.dumps(_DETAILS[0]))
+            d["matchId"], d["matchDate"] = "recm0", datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            side = next(s for s in d["matchInfo"] if s.get("ouid") != _win._ouid)  # 내 선발과 다른 카드
+            store.save_matches(conn, [d])
+            store.mark_ranker_match(conn, "recm0", datetime.now().date().isoformat())
+            store.save_ranker_squad(conn, 900, nickname="랭커0", ouid=side["ouid"], rank=1, match_id="recm0",
+                                    match_day=d["matchDate"][:10], fetched_at=datetime.now().isoformat(), fail=None,
+                                    source=store.PICK)
+        finally:
+            conn.close()
+        try:
+            _win._go_page("랭커 픽", "추천")
+            rec = _win.rec
+            assert rec is not None and rec.total == 1 and not rec.enough, rec
+            assert "1명뿐" in _win.lb_rec_status.text() and _win.tbl_rec_cards.rowCount() == 0, _win.lb_rec_status.text()
+            assert _win.tbl_rec_stand.rowCount() == 0, "문턱 미만인데 내 위치를 냈다"
+            config.RECOMMEND_MIN_RANKERS = config.RECOMMEND_MIN_USERS = 1
+            _win._invalidate("recommend")
+            rec = _win.rec
+            assert rec.enough and rec.by_source[core.SRC_PICK] == 1, rec
+            mine = {p.get("spId") for p in _win._my_latest_starters()}
+            shown = [_win.tbl_rec_cards.item(r, 1).data(app_main.Qt.ItemDataRole.UserRole)
+                     for r in range(_win.tbl_rec_cards.rowCount())]
+            assert shown and not (set(shown) & mine), "내가 이미 쓰는 카드를 추천했다"
+            assert _win.tbl_rec_stand.rowCount() == 3 and "상위 200 1" in _win.lb_rec_summary.text()
+        finally:
+            _win._nick, _win._rank, config.RECOMMEND_MIN_RANKERS, config.RECOMMEND_MIN_USERS = keep
+            _win._page_tabs["랭커 픽"].set_current("픽", emit=False)
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.purge_ranker_data(conn, everything=True)
+            finally:
+                conn.close()
+
+
+def test_ranker_pick_loader_fetches_recommend_first():
+    """로더 본체(run 을 이 스레드에서) — [추천] 이면 ③(내 팀컬러 201~1,000위)을 상위 200보다 먼저 받는다.
+    200명은 하루 상한을 혼자 다 쓰는 크기라 뒤에 두면 ③ 이 며칠 밀린다. [픽] 이면 ③ 없음."""
+    import ranker
+
+    class _Api:
+        def __init__(self):
+            self.asked = []
+
+        def get_ouid(self, nickname, attempts=3):
+            self.asked.append(nickname)
+            return "u_" + nickname
+
+        def get_match_ids(self, ouid, *a, **k):
+            return []                       # 최근 경기 없음 — 받는 순서만 잰다
+
+    r = rankcollect.open_rank_db()
+    keep = (config.RANKER_PICK_GAP_S, config.DB_PATH)
+    try:
+        r.execute("DELETE FROM snapshot_rows")
+        r.execute("DELETE FROM snapshots")
+        rows = [ranker.RankRow(rank=i, profile_sn=700 + i, nickname=f"k{i}", team_color="팀A" if i in (2, 300) else "팀B")
+                for i in (1, 2, 300, 301)]
+        rankcollect.save_snapshot(r, rows, datetime.now())
+        config.RANKER_PICK_GAP_S = 0.0
+        config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "loader.db"
+        api = _Api()
+        app_main.RankerPickLoader(api, ("팀A", "나")).run()
+        assert api.asked == ["k300", "k1", "k2"], api.asked
+        conn = store.open_db(config.DB_PATH)
+        try:
+            src = {sn: h["source"] for sn, h in store.ranker_squads(conn).items()}
+        finally:
+            conn.close()
+        assert src == {1000: store.RECOMMEND, 701: store.PICK, 702: store.PICK}, src
+        config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "loader2.db"
+        api = _Api()
+        app_main.RankerPickLoader(api, None).run()
+        assert api.asked == ["k1", "k2"], ("[픽] 에서 ③ 을 받았다", api.asked)
+    finally:
+        r.close()
+        config.RANKER_PICK_GAP_S, config.DB_PATH = keep
+        for suffix in ("", "-wal", "-shm"):
+            pathlib.Path(str(config.RANK_DB_PATH) + suffix).unlink(missing_ok=True)
+
+
+def test_rank_trend_page():
+    """P2 — rank.db 없음 · 스냅숏 1개("모으는 중") · 2개면 그래프 넷 · 구간 콤보로 다시 그림."""
+    import ranker
+    with _PickEnv():
+        for suffix in ("", "-wal", "-shm"):
+            pathlib.Path(str(config.RANK_DB_PATH) + suffix).unlink(missing_ok=True)
+        config.RANK_COLLECT = False
+        _win._go_page("랭킹 추이")
+        _win._invalidate("ranktrend")                  # 앞 테스트가 남긴 낡음 표시에 기대지 않는다(단독 실행)
+        assert "랭킹 수집을 켜면" in _win.lb_rtrend_note.text(), _win.lb_rtrend_note.text()
+        assert not config.RANK_DB_PATH.exists(), "그리다 rank.db 를 만들었다"
+        r = rankcollect.open_rank_db()
+        try:
+            rows = [ranker.RankRow(rank=i, profile_sn=900 + i, nickname=f"n{i}", elo=5000.0 - i, team_value=10 ** 10,
+                                   team_color="팀A" if i % 3 else "팀B",
+                                   formation="4-2-3-1" if i != 7 else "5-3-2") for i in range(1, 301)]  # 5-3-2 = 0.5%
+            rankcollect.save_snapshot(r, rows, datetime.now() - timedelta(days=1))
+            _win._invalidate("ranktrend")
+            assert "모으는 중 (1/2)" in _win.lb_rtrend_note.text(), _win.lb_rtrend_note.text()
+            assert not _win.rtrend_charts["cut"]._points
+            rankcollect.save_snapshot(r, rows, datetime.now())
+        finally:
+            r.close()
+        keep_ouid = _win._ouid
+        _win._ouid = ""                                  # ELO 다시 읽기(작업 스레드)는 여기서 재지 않는다
+        try:
+            _win._on_rank_collect_outcome(rankcollect.Outcome("ok"))  # 수집 회차 끝 → 보던 추이를 다시 그린다
+        finally:
+            _win._ouid = keep_ouid
+        ch = _win.rtrend_charts
+        assert len(ch["cut"]._points) == 2 and len(ch["cut"]._refs) == len(config.RANK_TREND_CUTS) - 1, ch["cut"]._refs
+        assert "실선 1위" in _win.rtrend_titles["cut"].text()
+        assert "실선 팀A" in _win.rtrend_titles["team_color"].text(), _win.rtrend_titles["team_color"].text()
+        assert ch["value"]._points[-1][1] == 100.0, "구단가치는 억 단위로"
+        for key in ("formation", "team_color"):  # 비율 축은 0% 부터(실화면에서 -100% 까지 내려갔다)
+            ax, top = ch[key]._axis, max(v for _l, v, _n in ch[key]._points)
+            assert ax.lo == 0 and ax.hi >= top and ax.hi <= 100, (key, ax, top)
+        _win.cb_rtrend_tier.setCurrentIndex(1)
+        assert "201~1,000위" in _win.rtrend_titles["formation"].text()
+        assert len(ch["formation"]._points) == 2
+        _win.cb_rtrend_tier.setCurrentIndex(0)
+        assert not ch["formation"]._refs, ("1% 못 미친 계열(5-3-2 0.5%)을 그었다", ch["formation"]._refs)
+        _win.cb_rtrend_tier.setCurrentIndex(1)
+        _win.cb_rtrend_tier.setCurrentIndex(2)         # 1,001~1만 — 데이터 없는 구간은 빈 그래프(예외 없이)
+        assert not ch["formation"]._points
+        _win.cb_rtrend_tier.setCurrentIndex(0)
 
 
 def test_purge_waits_for_running_loader():

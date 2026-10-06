@@ -272,7 +272,8 @@ def _drive_uncovered() -> None:
     import test_rankerpick as trp
     for t in (trp.test_save_indexes_squads, trp.test_backfill_resumes_and_skips_indexed, trp.test_owner_lookup_window_and_grade,
               trp.test_ranker_pick_collects_and_saves, trp.test_ranker_pick_second_429_stops_for_the_day,
-              trp.test_ranker_pick_summary, trp.test_clear_removes_ranker_pick_data):
+              trp.test_ranker_pick_summary, trp.test_clear_removes_ranker_pick_data,
+              trp.test_recommend_candidates_sources):   # 11-lite 추천 후보(17단계 — 색인·내 상대 마지막 경기)
         t()
 
 

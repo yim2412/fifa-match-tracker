@@ -12,12 +12,13 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
-APP_VERSION = "v1.4.1"
+APP_VERSION = "v2.1.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
-# 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 하나씩 뺀다).
-# 남아 있으면 배포판을 안 만든다(tools/release.py preflight_problems) — 빈 페이지를 내보내지 않게.
-HIDDEN_NAV_UNTIL_READY = ("랭킹 추이",)
+# 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 다 뺐다 —
+# 새 메뉴의 자리만 먼저 잡을 때 이름을 넣고 빌더는 _build_pending_page). 남아 있으면 배포판을 안 만든다
+# (tools/release.py preflight_problems) — 빈 페이지를 내보내지 않게.
+HIDDEN_NAV_UNTIL_READY: tuple[str, ...] = ()
 
 
 def _root() -> Path:
@@ -234,6 +235,13 @@ RANKER_PICK_MAX_AGE_DAYS = 14       # 마지막 경기가 이보다 오래된 �
 RANKER_PICK_GAP_S = 0.25            # 요청 사이 — 개발 단계 키 초당 5 미만
 RANKER_PICK_429_WAIT_S = 60         # 429 를 받으면 이만큼 쉬고 한 번 더 → 또 429 면 그날 멈춘다(초당·하루 429 가 같은 코드라)
 RANKER_PICK_MIN_RANKERS = 30        # 이보다 적은 랭커로 낸 카드 비율은 흐림(표본 흐림 규칙 — 1.2.1)
+# 11-lite 랭커 기반 추천(17단계 — rankerpick.recommend). 문턱 10 근거: 2026-10-06 스냅숏 1,000위 안에서 10명 이상인
+# 팀컬러가 52개 중 23개 · 그 23개가 1,000명 중 938명(94%) — 대부분의 사람은 추천을 받고, 그 밖은 "N명뿐"이 맞다
+RANK_TREND_CUTS = (1, 10, 50, 100, 200)  # 랭킹 추이의 컷 그래프(1위 실선 · 나머지 점선) — "상위 구간 200위"까지
+RECOMMEND_MIN_RANKERS = 10         # 내 팀컬러 후보가 이보다 적으면 추천 안 함
+RECOMMEND_MIN_USERS = 3             # 대체 카드는 후보 중 이만큼 이상이 쓴 것만(한두 명의 취향을 추천으로 내지 않게)
+RECOMMEND_FETCH_MAX = 20            # ③ 모자랄 때 1,000위 안에서 더 받는 랭커 — 최대 60요청(하루 상한 안)
+RECOMMEND_OPPONENT_MAX = 200        # ② 내 DB 의 상대 후보 상한(순위 순) — 경기 본문을 읽어 그리기 예산(0.3초) 안에
 
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)

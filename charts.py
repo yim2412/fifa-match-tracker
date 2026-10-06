@@ -124,6 +124,15 @@ class Axis:
         return Axis(lo, lo + 2 * step, (lo, lo + step, lo + 2 * step), fmt, name)
 
 
+    @staticmethod
+    def share(values, name: str = "비율") -> "Axis":
+        """비율(0~100%) 축 — 0 에서 시작하고 가장 큰 값 + 10% 를 덮는 눈금 셋. fit 은 위아래로 여백을 줘서
+        0% 근처 값이면 눈금이 음수까지 내려갔다(17단계 실화면: 포메이션 비율 -100%~100%)."""
+        top = max([v for v in values if v is not None] or [0.0]) * 1.1
+        step = next((s for s in (5, 10, 20, 25, 50) if 2 * s >= top), 50)
+        return Axis(0, 2 * step, (0, step, 2 * step), "{:.1f}%", name, "{:.0f}%")
+
+
 PCT_AXIS = Axis(0, 100, (0, 50, 100), "{:.1f}%", "승률", "{:.0f}%")
 
 

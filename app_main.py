@@ -13,7 +13,7 @@ import time
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
 
@@ -908,28 +908,50 @@ class RankerPickLoader(QThread):
     ranker = pyqtSignal()        # 한 명 끝 — 화면이 집계를 다시 그린다
     done = pyqtSignal(object)    # rankerpick.PickResult
 
-    def __init__(self, api: FCOnlineAPI):
+    @property
+    def recommend(self) -> tuple | None:
+        return self._recommend
+
+    def __init__(self, api: FCOnlineAPI, recommend: tuple | None = None):
+        """recommend = (내 팀컬러, 내 닉네임) — [추천] 탭이 보일 때만. 주면 ③(후보가 모자랄 때 1,000위 안에서
+        더 받기)를 상위 200보다 먼저 한다 — 200명은 하루 상한(300)을 혼자 다 쓰는 크기라 뒤에 두면 ③이 며칠 밀린다."""
         super().__init__()
         self._api = api
+        self._recommend = recommend
         self._cancel = False
 
     def cancel(self) -> None:
         self._cancel = True
+
+    def _stopped(self, res) -> bool:
+        return self._cancel or res.limit or res.quota or res.cancelled or bool(res.error)
 
     def run(self) -> None:
         res = rankerpick.PickResult()
         try:
             rconn = rankcollect.open_rank_db_ro()
             try:
-                _taken, targets = rankerpick.top_rankers(rconn)
+                _taken, rows = rankerpick.top_rankers(rconn, limit=config.RANK_TIERS[-1])
             finally:
                 if rconn is not None:
                     rconn.close()
+            targets = [r for r in rows if r["rank"] <= config.RANKER_PICK_TOP]
             if targets:
                 conn = store.open_db(config.DB_PATH)
                 try:
-                    res = rankerpick.collect(self._api, conn, targets, cancel=lambda: self._cancel,
-                                             on_ranker=self.ranker.emit)
+                    if self._recommend is not None:
+                        color, me = self._recommend
+                        have = rankerpick.recommend_candidates(conn, rows, color, me)
+                        more = rankerpick.recommend_targets(rows, color, len(have), me)
+                        if more:
+                            res = rankerpick.collect(self._api, conn, more, source=store.RECOMMEND,
+                                                     cancel=lambda: self._cancel, on_ranker=self.ranker.emit)
+                    if not self._stopped(res):
+                        first = res
+                        res = rankerpick.collect(self._api, conn, targets, cancel=lambda: self._cancel,
+                                                 on_ranker=self.ranker.emit)
+                        res.checked += first.checked
+                        res.requests += first.requests
                 finally:
                     conn.close()
         except Exception as e:  # DB 잠김 등 — 랭커 픽 하나 때문에 앱이 죽지 않게. 다음 기회에 이어서
@@ -1662,6 +1684,7 @@ class MainWindow(QMainWindow):
         self._pick_loader: RankerPickLoader | None = None
         self._pick_result: rankerpick.PickResult | None = None
         self._pick_purge_pending = False
+        self._pick_restart = False   # [픽] 으로 띄운 로더가 도는 중에 [추천] 을 열었다 — 끝나면 ③ 을 실어 다시 띄운다
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -2006,7 +2029,8 @@ class MainWindow(QMainWindow):
         if getattr(out, "kind", None) in ("ok", "fresh") and self._ouid:
             self._load_elo(self._ouid)
         if getattr(out, "kind", None) in ("ok", "fresh"):
-            self._invalidate("rankerpick")  # 새 스냅숏 — 대상 200명이 바뀌었을 수 있다
+            for key in ("rankerpick", "recommend", "ranktrend"):  # 새 스냅숏 — 대상·후보·추이가 바뀌었다
+                self._invalidate(key)
 
     def _on_rank_collect_status(self, text: str, important: bool) -> None:
         # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다 — 중요한 알림(스스로 꺼짐·연속 실패)만 덮는다
@@ -2386,10 +2410,10 @@ class MainWindow(QMainWindow):
                                              ("가계부", "_build_ledger_tab"))))]),
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
-        # 2.1.1 새 묶음 — 16·17단계가 채우며 config.HIDDEN_NAV_UNTIL_READY 에서 하나씩 뺀다
-        # 랭커 픽은 16단계엔 탭 없는 한 페이지 — [추천] 탭은 17단계가 Tabs("rankerpick", (픽 | 추천))로 나눈다
-        ("랭커", [("랭킹 추이", "_build_pending_page"),
-                 ("랭커 픽", "_build_ranker_pick_tab"),
+        # 2.1.1 새 묶음 — 아직 빈 메뉴는 config.HIDDEN_NAV_UNTIL_READY 에 이름을 넣어 숨긴다(16·17단계가 채웠다)
+        ("랭커", [("랭킹 추이", "_build_rank_trend_tab"),
+                 ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
+                                              ("추천", "_build_recommend_tab")))),
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
     ]
     # 1.x 메뉴 이름 → 2.1.1 의 (메뉴, 탭). settings.ini 의 view/page 가 옛 이름이면 새 자리로 연다(U4 — 알림 띠는 없다)
@@ -2537,8 +2561,8 @@ class MainWindow(QMainWindow):
         if key == "trades":
             self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
             self.start_trades()
-        if key == "rankerpick":
-            self._dirty.add("rankerpick")  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다
+        if key in self.PICK_KEYS:
+            self._dirty.add(key)  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다
             self.start_ranker_pick()
         else:
             self._stop_ranker_pick()  # 다른 자리로 갔다 — 랭커 사이에서 멈춘다(받은 만큼은 남는다 · U2)
@@ -3860,7 +3884,7 @@ class MainWindow(QMainWindow):
 
     # ── 랭커 픽(2.1.1 · 6) — 받기 ─────────────────────────────────────
     def _ranker_pick_visible(self) -> bool:
-        return (self.KEY_OF_VIEW.get(self._current_view()) == "rankerpick"
+        return (self.KEY_OF_VIEW.get(self._current_view()) in self.PICK_KEYS
                 and self.stack.currentIndex() == self.PAGE_MAIN
                 and self.isVisible() and not self.isMinimized())
 
@@ -3875,12 +3899,17 @@ class MainWindow(QMainWindow):
         if (self._quitting or not config.API_KEY or not config.ranker_pick_allowed()
                 or not self._ranker_pick_visible() or self._pick_purge_pending):
             return
+        recommend = (self._recommend_args()
+                     if self.KEY_OF_VIEW.get(self._current_view()) == "recommend" else None)
         if self._pick_loader is not None and self._pick_loader.isRunning():
+            if recommend is not None and self._pick_loader.recommend is None:
+                self._pick_restart = True  # 랭커 사이에서 멈추고 finished 에서 ③ 을 실어 다시
+                self._pick_loader.cancel()
             return
         if self._api_background_busy():
             return  # 그 로더가 끝나면(finished) 다시 여기로
-        ld = RankerPickLoader(self._api)
-        ld.ranker.connect(lambda: self._invalidate("rankerpick"))
+        ld = RankerPickLoader(self._api, recommend)
+        ld.ranker.connect(self._invalidate_pick)
         ld.done.connect(self._on_ranker_pick_done)
         ld.finished.connect(self._on_ranker_pick_finished)
         self._pick_loader = ld
@@ -3897,8 +3926,12 @@ class MainWindow(QMainWindow):
     def _on_ranker_pick_finished(self) -> None:
         if self._pick_purge_pending:
             self._pick_purge_pending = False
+            self._pick_restart = False
             self.purge_ranker_pick_data(everything=True)
-        self._invalidate("rankerpick")
+        self._invalidate_pick()
+        if self._pick_restart:
+            self._pick_restart = False
+            self.start_ranker_pick()
 
     def purge_ranker_pick_data(self, everything: bool = True) -> int | None:
         """랭커 픽 데이터 지우기(E12) — 화면 스레드의 한 함수. 로더가 돌면 멈추게 하고 끝난 뒤(finished) 이어서 지운다
@@ -3918,7 +3951,7 @@ class MainWindow(QMainWindow):
         if everything:
             self._pick_result = None
         if n:
-            self._invalidate("rankerpick")
+            self._invalidate_pick()
         return n
 
     # ── 선수 색인 백필(2.1.1 · 12) ───────────────────────────────────
@@ -3960,7 +3993,7 @@ class MainWindow(QMainWindow):
         """수집이 꺼져 있으면 랭커 픽 데이터를 전부 지운다 — 끄는 길(토글 · 웹 데이터 끄기 · D6 · 다시 묻는 창 · .env 손 수정)
         어디서 왔든 이 한 자리를 거친다. 켜져 있으면 14일 정리만(켤 때)."""
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
-        self._invalidate("rankerpick")
+        self._invalidate_pick()
 
     # ── 랭커 픽(6) — 화면 ─────────────────────────────────────────────
     PICK_SHARE_COLUMNS = ["이름", "인원", "비율"]
@@ -3995,6 +4028,7 @@ class MainWindow(QMainWindow):
             lb.setStyleSheet(f"color: {T.TEXT_DIM};")
             box.addWidget(lb)
             tbl.setMinimumHeight(200)
+            tbl.setSortingEnabled(False)  # 많은 순이 정보다 — 켜 두면 머리글의 기본 정렬(이름)로 다시 섞였다(17단계 실화면)
             box.addWidget(tbl)
             shares.addLayout(box, 1)
         v.addLayout(shares)
@@ -4087,7 +4121,7 @@ class MainWindow(QMainWindow):
         for tbl, counter in ((self.tbl_pick_colors, summary.colors), (self.tbl_pick_forms, summary.formations)):
             total = sum(counter.values()) or 1
             self._fill(tbl, [[name, (str(n), n), (f"{n / total * 100:.0f}%", n / total)]
-                             for name, n in counter.most_common(self.PICK_TOP_SHARES)])
+                             for name, n in counter.most_common(self.PICK_TOP_SHARES)], enable_sort=False)
         few = summary.used < config.RANKER_PICK_MIN_RANKERS
         rows = []
         for line, cards in summary.lines:
@@ -4135,6 +4169,274 @@ class MainWindow(QMainWindow):
         pitch.player_clicked.connect(lambda sid: self._show_player_info(sid))
         self.box_pick_pitch.addWidget(pitch)
         self._pick_pitch_loaders = self._start_pitch_loaders(pitch, card_info=False)  # 칩 카드 정보 요청 0 — 픽률이 본론
+
+    # ── 11-lite 추천(17단계) — 랭커 픽 [추천] 탭 ─────────────────────────
+    PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
+    REC_CARD_COLUMNS = ["줄", "선수", "후보", "비율", "강화", "시세"]
+    REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
+    REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
+
+    def _invalidate_pick(self) -> None:
+        for key in self.PICK_KEYS:
+            self._invalidate(key)
+
+    def _my_latest_starters(self) -> list[dict]:
+        """지금 계정의 가장 최근 경기 선발(교체 28 제외) — 랭커 픽 축구장 · 추천이 같이 쓴다."""
+        if not (self._details and self._ouid):
+            return []
+        me = next((p for p in self._details[0].get("matchInfo") or [] if p.get("ouid") == self._ouid), None)
+        return [p for p in (me or {}).get("player") or []
+                if isinstance(p.get("spId"), int) and isinstance(p.get("spPosition"), int)
+                and p.get("spPosition") != core.SUB_POSITION]
+
+    def _recommend_args(self) -> tuple | None:
+        """로더에 실을 (내 팀컬러, 내 닉네임) — 검색 전이거나 팀컬러를 모르면 None(③ 을 안 받는다)."""
+        color = self._my_color(None) if self._ouid else None
+        return (color, self._nick) if color else None
+
+    def _my_color(self, rows: list[dict] | None) -> str | None:
+        """마지막 스냅숏의 내 행 → 검색 때 읽은 데이터센터 내 팀컬러 → 상대 팀컬러 캐시. rows 가 None 이면 스냅숏을 읽는다."""
+        if rows is None:
+            rows = []
+            try:
+                rconn = rankcollect.open_rank_db_ro()
+                if rconn is not None:
+                    try:
+                        rows = rankerpick.top_rankers(rconn, limit=config.RANK_TIERS[-1])[1]
+                    finally:
+                        rconn.close()
+            except sqlite3.Error:
+                pass
+        cached = getattr(self._rank, "team_color", "") or self._team_colors.get(self._nick or "")
+        return core.my_team_color(rows, self._nick, cached)
+
+    def _build_recommend_tab(self) -> QWidget:
+        """내 팀컬러 랭커가 많이 쓰는데 내가 안 쓰는 카드(줄별) · 내 스쿼드가 그 랭커들 사이 어디쯤인지."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.lb_rec_status = QLabel("")
+        self.lb_rec_status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_rec_status.setWordWrap(True)
+        self.btn_rec_notice = QPushButton("안내 보기")
+        self.btn_rec_notice.clicked.connect(self.ask_notice_update)
+        self.btn_rec_notice.setVisible(False)
+        row.addWidget(self.lb_rec_status, 1)
+        row.addWidget(self.btn_rec_notice)
+        v.addLayout(row)
+        self.lb_rec_summary = QLabel("")
+        self.lb_rec_summary.setWordWrap(True)
+        v.addWidget(self.lb_rec_summary)
+        lb = QLabel("내 스쿼드 위치 — 같은 팀컬러 후보 사이에서")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(lb)
+        self.tbl_rec_stand = self._make_table(self.REC_STAND_COLUMNS)
+        self.tbl_rec_stand.setSortingEnabled(False)
+        self.tbl_rec_stand.setMinimumHeight(130)
+        v.addWidget(self.tbl_rec_stand)
+        lb = QLabel(f"줄별 대체 후보 — 후보가 그 줄에 많이 쓰는데 내 최근 선발에 없는 카드"
+                    f" (후보 {config.RECOMMEND_MIN_USERS}명 이상이 쓴 것만 · 시세는 받아 둔 것만)")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lb.setWordWrap(True)
+        v.addWidget(lb)
+        self.tbl_rec_cards = self._make_table(self.REC_CARD_COLUMNS)
+        self.tbl_rec_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
+        self.tbl_rec_cards.setMinimumHeight(260)
+        self.tbl_rec_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
+        v.addWidget(self.tbl_rec_cards, 1)
+        self.rec: core.Recommend | None = None  # 테스트가 집계를 본다
+        return w
+
+    def _render_recommend(self) -> None:
+        gate, button = self._ranker_pick_gate()
+        self.btn_rec_notice.setVisible(button)
+        rows: list[dict] = []
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            if rconn is not None:
+                try:
+                    rows = rankerpick.top_rankers(rconn, limit=config.RANK_TIERS[-1])[1]
+                finally:
+                    rconn.close()
+        except sqlite3.Error:
+            pass
+        color = self._my_color(rows) if self._ouid else None
+        rec = None
+        mine = self._my_latest_starters()
+        if rows and color:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    cands = core.recommend_candidates(conn, rows, color, self._nick)
+                    rec = core.recommend(cands, color, mine, getattr(self._rank, "team_value", None) or None)
+                    prices = store.load_card_prices(conn, [c.spid for _ln, cs in rec.lines for c in cs])
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                rec = None
+        self.rec = rec
+        running = self._pick_loader is not None and self._pick_loader.isRunning()
+        if not self._ouid:
+            status = "구단주를 검색하면 그 구단주의 팀컬러로 추천합니다."
+        elif not rows:
+            status = gate or "랭킹 스냅숏이 아직 없습니다 — 랭킹 수집 첫 회차가 끝나면(하루 안) 보입니다."
+        elif not color:
+            status = ("팀컬러를 모릅니다 — 1만 위 안이거나 데이터센터에서 팀컬러를 읽을 수 있을 때만 추천합니다"
+                      " (최근 스쿼드로 짐작하지 않습니다).")
+        elif rec is not None and not rec.enough:
+            status = (f"'{color}' 후보가 {rec.total}명뿐이라 추천하지 않습니다 — {config.RECOMMEND_MIN_RANKERS}명부터."
+                      + (f" {gate}" if gate else (" 이 화면을 열어 두면 1,000위 안 랭커를 더 받습니다." if running else "")))
+        else:
+            status = gate if gate else ("랭커 경기를 받는 중…" if running else "")
+        self.lb_rec_status.setText(status)
+        self.lb_rec_status.setVisible(bool(status))
+        if rec is None or not rec.enough:
+            self.lb_rec_summary.setText(self._rec_sources_text(rec) if rec is not None and rec.total else "")
+            self._fill(self.tbl_rec_stand, [], enable_sort=False)
+            self._fill(self.tbl_rec_cards, [], enable_sort=False)
+            return
+        self.lb_rec_summary.setText(self._rec_sources_text(rec))
+        stand = []
+        for s in rec.standings:
+            money = s.name == "구단가치"
+            fmt = (lambda x: ranker.format_team_value(int(x))) if money else (lambda x: f"{x:.1f}강")
+            where = "-" if s.above is None else f"상위 {max(s.above * 100, 1):.0f}%"
+            stand.append([s.name, fmt(s.mine) if s.mine is not None else "모름",
+                          fmt(s.median) if s.median is not None else "-", where])
+        form, same, n = rec.formation
+        stand.append(["포메이션", form or "모름", "-", f"후보 {n}명 중 {same}명이 같은 배치" if form else "-"])
+        self._fill(self.tbl_rec_stand, stand, enable_sort=False)
+        few = rec.total < config.RANKER_PICK_MIN_RANKERS
+        rows_out, cards = [], []
+        for line, cs in rec.lines:
+            for c in cs:
+                grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
+                grades = " · ".join(f"{g}강 {k}" for g, k in c.grades.most_common(3) if isinstance(g, int))
+                price = prices.get((c.spid, grade)) if grade is not None else None
+                rows_out.append([line, f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
+                                 (str(c.users), c.users), (f"{c.rate * 100:.0f}%", c.rate), grades,
+                                 (self._bp(price[0]) if price else "-", price[0] if price else -1)])
+                cards.append(c)
+        self._fill(self.tbl_rec_cards, rows_out, enable_sort=False)
+        for r, c in enumerate(cards):
+            item = self.tbl_rec_cards.item(r, 1)
+            if item is not None:
+                item.setData(Qt.ItemDataRole.UserRole, c.spid)  # 더블클릭 → 선수 카드
+            if few:
+                for col in range(len(self.REC_CARD_COLUMNS)):
+                    it = self.tbl_rec_cards.item(r, col)
+                    if it is not None:
+                        it.setForeground(QColor(T.TEXT_DIM))
+
+    def _rec_sources_text(self, rec) -> str:
+        """후보 출처별 인원 — ②(내가 만난 상대)는 ①과 뽑힌 방식이 달라 섞이면 편향된다(ROADMAP 11-lite)."""
+        parts = [f"{self.REC_SOURCE_NAMES[k]} {rec.by_source[k]}" for k in self.REC_SOURCE_NAMES if rec.by_source[k]]
+        text = f"내 팀컬러 '{rec.color}' 후보 {rec.total}명(" + " · ".join(parts) + ")"
+        if rec.ranks:
+            text += f" · 순위 {rec.ranks[0]:,}~{rec.ranks[1]:,}위"
+        if rec.total < config.RANKER_PICK_MIN_RANKERS:
+            text += f" · {config.RANKER_PICK_MIN_RANKERS}명 미만이라 흐리게 — 참고만"
+        return text
+
+    # ── 랭킹 추이(P2 · 17단계) ─────────────────────────────────────────
+    TREND_TIERS = [("1~200위", 200), ("201~1,000위", 1000), ("1,001~1만 위", 10000)]
+    TREND_LINES = 5   # 비율 그래프 — 실선 하나 + 점선 넷(CHART_CATS 다섯 색)
+    TREND_MIN_SHARE = 1.0  # % — 이보다 작은 계열은 안 긋는다
+
+    def _build_rank_trend_tab(self) -> QWidget:
+        """rank.db 영구 집계(스냅숏마다) — 순위 컷 ELO · 구단가치 · 포메이션 · 팀컬러. 새 요청 없음(R3)."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.lb_rtrend_note = QLabel("")
+        self.lb_rtrend_note.setWordWrap(True)
+        self.lb_rtrend_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        top.addWidget(self.lb_rtrend_note, 1)
+        top.addWidget(QLabel("순위 구간"))
+        self.cb_rtrend_tier = NoScrollComboBox()
+        for label, tier in self.TREND_TIERS:
+            self.cb_rtrend_tier.addItem(label, tier)
+        self.cb_rtrend_tier.currentIndexChanged.connect(lambda _i: self._invalidate("ranktrend"))
+        top.addWidget(self.cb_rtrend_tier)
+        v.addLayout(top)
+        grid = QGridLayout()
+        self.rtrend_titles: dict[str, QLabel] = {}
+        self.rtrend_charts: dict[str, charts.AreaTrendChart] = {}
+        for i, key in enumerate(("cut", "value", "formation", "team_color")):
+            box = QVBoxLayout()
+            title = QLabel("")
+            title.setWordWrap(True)
+            title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            chart = charts.AreaTrendChart()
+            box.addWidget(title)
+            box.addWidget(chart, 1)
+            grid.addLayout(box, i // 2, i % 2)
+            self.rtrend_titles[key], self.rtrend_charts[key] = title, chart
+        v.addLayout(grid, 1)
+        self.rank_trend: rankcollect.RankTrend | None = None  # 테스트가 본다
+        return w
+
+    def _render_rank_trend(self) -> None:
+        trend = rankcollect.RankTrend()
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            if rconn is not None:
+                try:
+                    trend = core.rank_trend_series(rconn)
+                finally:
+                    rconn.close()
+        except sqlite3.Error:
+            pass
+        self.rank_trend = trend
+        n = len(trend.taken)
+        if n < 2:
+            if not (config.WEB_DATA and config.RANK_COLLECT) and not n:
+                note = "랭킹 수집을 켜면 하루 한 번 1만 명 순위를 모아 추이를 그립니다 — [정보] 에서 켤 수 있습니다."
+            else:
+                note = f"모으는 중 ({n}/2) — 스냅숏이 이틀치 쌓이면 그립니다(하루 한 번 수집)."
+            self.lb_rtrend_note.setText(note)
+            for key, chart in self.rtrend_charts.items():
+                chart.set_data([])
+                self.rtrend_titles[key].setText("")
+            return
+        first, last = trend.taken[0][:10], trend.taken[-1][:10]
+        self.lb_rtrend_note.setText(f"지금 시즌 스냅숏 {n}개 ({first} ~ {last}) · 하루 한 번 수집 · 랭킹 페이지 그대로")
+        dates = [date.fromisoformat(t[:10]) for t in trend.taken]
+        tier = self.cb_rtrend_tier.currentData() or 200
+        tier_name = self.cb_rtrend_tier.currentText()
+        cuts = [(f"{r:,}위", trend.cuts.get(r) or []) for r in config.RANK_TREND_CUTS]
+        self._draw_trend("cut", "순위 컷 ELO", cuts, dates, "{:,.0f}", "ELO")
+        value = [("평균", [None if x is None else x / 1e8 for x in trend.value_avg.get(tier) or []]),
+                 ("중앙값", [None if x is None else x / 1e8 for x in trend.value_median.get(tier) or []])]
+        self._draw_trend("value", f"구단가치 — {tier_name} (억)", value, dates, "{:,.0f}억", "구단가치")
+        for key, title, blank in (("formation", "포메이션 비율", "모름"), ("team_color", "팀컬러 비율", "안 씀")):
+            shares = trend.shares.get((tier, key)) or {}
+            # 한 번도 TREND_MIN_SHARE 에 못 미친 계열은 뺀다 — 0%대 점선 글자가 바닥에 겹쳐 읽히지 않았다(17단계 실화면)
+            top_keys = sorted((k for k in shares if max(shares[k]) >= self.TREND_MIN_SHARE),
+                              key=lambda k: (-shares[k][-1], k))[:self.TREND_LINES]
+            series = [(k or blank, shares[k]) for k in top_keys]
+            self._draw_trend(key, f"{title} — {tier_name} 상위 {len(series)}", series, dates, "{:.1f}%", "비율")
+
+    def _draw_trend(self, key: str, title: str, series: list[tuple[str, list]], dates: list, fmt: str,
+                    axis_name: str) -> None:
+        """첫 계열은 실선(면), 나머지는 점선 — 이름은 제목 줄(실선)과 점선 오른쪽 끝 글자로."""
+        chart = self.rtrend_charts[key]
+        series = [(name, vals) for name, vals in series if any(x is not None for x in vals)]
+        if not series:
+            chart.set_data([])
+            self.rtrend_titles[key].setText(title)
+            return
+        main_name, main = series[0]
+        pts = [(d.strftime("%m/%d"), x, None) for d, x in zip(dates, main) if x is not None]
+        xd = [d for d, x in zip(dates, main) if x is not None]
+        colors = list(T.CHART_CATS)
+        refs = [(name, [(d, x) for d, x in zip(dates, vals) if x is not None], colors[i % len(colors)])
+                for i, (name, vals) in enumerate(series[1:])]
+        allv = [x for _n, vals in series for x in vals if x is not None]
+        axis = (charts.Axis.share(allv) if axis_name == "비율"
+                else charts.Axis.fit(allv, fmt=fmt, name=axis_name))
+        chart.set_data(pts, axis=axis, avg=False, x_dates=xd, ref_series=refs)
+        self.rtrend_titles[key].setText(f"{title} · 실선 {main_name}")
 
     # ── 선수로 구단주 찾기(12) — 화면 ────────────────────────────────
     CARD_OWNER_COLUMNS = ["구단주", "마지막 사용", "경기", "포지션", "강화", "팀컬러", "순위"]
@@ -5375,7 +5677,8 @@ class MainWindow(QMainWindow):
         "finishing": [("선수별 결정력", None)],
         "teamcolor": [("포지션별 최다 상대", None), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
-        "rankerpick": [("랭커 픽", None)],
+        "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")],
+        "ranktrend": [("랭킹 추이", None)],
     }
     KEY_OF_VIEW = {view: key for key, views in VIEW_OF_KEY.items() for view in views}
     # 위 표 밖의 자리 — 이유 없이 빠진 자리는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
@@ -5383,7 +5686,6 @@ class MainWindow(QMainWindow):
         ("구단주 비교", None): "사용자가 [비교] 를 눌러야 그린다 — 검색 결과에 안 묶인다",
         ("승률 그래프", "승률·등급"): "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
         ("승률 그래프", "점수·예측"): "_render_elo 가 EloLoader·PredictWorker 결과로 그린다(검색 결과에 안 묶인다)",
-        ("랭킹 추이", None): "아직 빈 메뉴(config.HIDDEN_NAV_UNTIL_READY) — 17단계",
         ("선수로 구단주 찾기", None): "사용자가 [찾기] 를 눌러야 그린다 — 검색 결과에 안 묶인다(구단주 비교와 같다)",
     }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
@@ -5412,6 +5714,8 @@ class MainWindow(QMainWindow):
             "trades": self._render_trades,
             "timeline": self._render_timeline,  # 누적 전체 — 짝·보유 상태는 전체 이력으로 맞춘다
             "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
+            "recommend": self._render_recommend,     # 후보는 DB(랭커 픽 · 내 상대) · "내 스쿼드"는 최근 경기
+            "ranktrend": self._render_rank_trend,    # rank.db 영구 집계 — 검색 결과에 안 묶인다
         }
 
     def _render_all(self) -> None:

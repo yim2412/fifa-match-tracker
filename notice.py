@@ -73,7 +73,9 @@ RANK_COLLECT_HTML = f"""
 <li>수집이 켜져 있으면 지난 시즌들의 최종 순위 컷 점수(순위와 점수만)를 받아 두고, 시즌 말 순위 예측에 씁니다.
 예측 결과는 나중에 맞았는지 확인할 수 있게 계정마다 하루 한 줄 이 PC 에 남깁니다.</li>
 <li>수집이 켜져 있으면 <b>랭커 픽</b> 메뉴를 열어 둔 동안에만, 랭킹 상위 {config.RANKER_PICK_TOP}명의 최근 경기 하나씩을
-<b>넥슨 오픈API(내 API 키)</b>로 받아 그들이 쓰는 선발 카드를 셉니다 — 하루 최대 {config.RANKER_PICK_DAILY_REQ}번 요청
+<b>넥슨 오픈API(내 API 키)</b>로 받아 그들이 쓰는 선발 카드를 셉니다. [추천] 탭을 열었는데 내 팀컬러 랭커가
+{config.RECOMMEND_MIN_RANKERS}명보다 적으면, 내 팀컬러인 {config.RANKER_RECOMMEND_TOP:,}위 안 랭커를 최대
+{config.RECOMMEND_FETCH_MAX}명 더 받습니다. 둘을 합쳐 하루 최대 {config.RANKER_PICK_DAILY_REQ}번 요청
 (키 한도를 다 쓰지 않게), 넥슨이 호출 한도를 알리면 그날은 멈춥니다. 받은 경기(상대 구단주 정보 포함)는
 <b>14일</b>만 두고, 수집을 끄거나 아래 지우기를 하면 함께 지웁니다. 메뉴를 열지 않으면 요청하지 않습니다.</li>
 <li>[정보] 의 <b>수집 기록 지우기</b>로 둘 다 지울 수 있습니다. 이 기록을 밖으로 보내는 기능은 없습니다.</li>
@@ -100,7 +102,8 @@ CHANGES_HTML = f"""
 <p>홈페이지 데이터가 켜져 있으면, 스쿼드 축구장을 열 때 칸에 놓인 카드의 <b>시세·급여·OVR 을 자동으로</b> 읽습니다
 (하루 최대 {config.CHIP_FETCH_MAX}장 — 아래 '넥슨 홈페이지 데이터'). 홈페이지 데이터 선택은 지금 값 그대로 두었습니다.</p>
 <p>랭킹 수집이 켜져 있으면, <b>랭커 픽</b> 메뉴를 열어 둔 동안 상위 {config.RANKER_PICK_TOP}명의 최근 경기를 넥슨 오픈API(내 키)로
-받습니다(하루 최대 {config.RANKER_PICK_DAILY_REQ}번 · 14일 보관 — 아래 '랭킹 수집'). 저장된 경기로 <b>선수 → 구단주 색인</b>도
+받습니다 — [추천] 탭에서 내 팀컬러 랭커가 모자라면 {config.RANKER_RECOMMEND_TOP:,}위 안에서 최대 {config.RECOMMEND_FETCH_MAX}명 더
+(합쳐 하루 최대 {config.RANKER_PICK_DAILY_REQ}번 · 14일 보관 — 아래 '랭킹 수집'). 저장된 경기로 <b>선수 → 구단주 색인</b>도
 만듭니다(요청 없음).</p>
 """
 

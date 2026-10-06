@@ -547,6 +547,32 @@ def test_season_boundary():
         c.close()
 
 
+def test_rank_trend_series():
+    """랭킹 추이(P2) — 지금 시즌만 · 하루에 둘이면 그날 마지막 · 원본을 지워도(14일) 집계로 그린다 · 비율의 분모는 구간 인원."""
+    assert rc.rank_trend_series(None).taken == []
+    with Env() as env:
+        c = env.conn()
+        assert rc.rank_trend_series(c).taken == [], "스냅숏 없음"
+        full = [_row(r, color="팀A" if r <= 150 else "", formation="4-4-2" if r % 2 else "4-3-3")
+                for r in range(1, 1201)]
+        rc.save_snapshot(c, full, NOW - timedelta(days=5))                 # 지난 시즌(아래에서 인원이 절반 밑으로)
+        rc.save_snapshot(c, full[:500], NOW - timedelta(days=3))           # 새 시즌 첫 스냅숏
+        rc.save_snapshot(c, [_row(r, elo=1.0) for r in range(1, 501)], NOW - timedelta(days=2, hours=5))  # 같은 날 앞 것 — 버린다
+        later = [_row(r, elo=4000.0 - r, color="팀A" if r <= 50 else "팀B") for r in range(1, 501)]
+        rc.save_snapshot(c, later, NOW - timedelta(days=2))
+        rc.prune_raw(c, NOW + timedelta(days=30))                          # 원본은 다 지워져도
+        t = rc.rank_trend_series(c)
+        assert [x[:10] for x in t.taken] == [(NOW - timedelta(days=3)).date().isoformat(),
+                                            (NOW - timedelta(days=2)).date().isoformat()], t.taken
+        assert t.cuts[1] == [4999.0, 3999.0] and t.cuts[200] == [4800.0, 3800.0], t.cuts
+        assert 1000 not in t.cuts, "목록이 1,000위까지 안 가면 그 컷은 없다(화면은 빈 계열을 건너뛴다)"
+        top = t.shares[(200, "team_color")]
+        assert top["팀A"] == [75.0, 25.0] and top[""][0] == 25.0 and top["팀B"] == [0.0, 75.0], top
+        assert t.shares[(1000, "team_color")]["팀B"] == [0.0, 100.0], "201~1,000 구간 — 분모는 그 구간 인원(300)"
+        assert t.value_avg[200] == [1000, 1000] and t.value_median[1000] == [1000, 1000]
+        c.close()
+
+
 def test_prune_keeps_aggregates():
     with Env() as env:
         c = env.conn()

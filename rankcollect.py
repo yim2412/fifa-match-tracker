@@ -28,7 +28,7 @@ import time
 import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -238,6 +238,52 @@ def cut_series(conn: sqlite3.Connection, ranks=config.ELO_CUT_LINES) -> dict[int
     for r in conn.execute(f"SELECT s.taken_at, c.rank, c.elo FROM cut_elo c JOIN snapshots s ON s.id = c.snapshot_id"
                           f" WHERE c.rank IN ({marks}) AND c.elo IS NOT NULL ORDER BY s.taken_at", tuple(ranks)):
         out[r["rank"]].append((r["taken_at"], r["elo"]))
+    return out
+
+
+@dataclass
+class RankTrend:
+    """랭킹 추이(2.1.1 · P2) — 지금 시즌 스냅숏마다 한 값(하루에 여럿이면 그날 마지막). 영구 집계만 읽는다(원본 14일과 무관).
+    shares 의 키 "" 는 팀컬러 안 씀 · 포메이션 모름 — 비율의 분모라 그대로 둔다."""
+    taken: list[str] = field(default_factory=list)                       # 스냅숏 시각 ISO, 오래된 것부터
+    cuts: dict[int, list[float | None]] = field(default_factory=dict)    # 컷 순위 → 값
+    value_avg: dict[int, list[int | None]] = field(default_factory=dict)  # 구간 → 구단가치 평균
+    value_median: dict[int, list[int | None]] = field(default_factory=dict)
+    shares: dict[tuple[int, str], dict[str, list[float]]] = field(default_factory=dict)  # (구간, 종류) → 키 → 비율(%)
+
+
+def rank_trend_series(conn: sqlite3.Connection | None) -> RankTrend:
+    """rank.db 영구 집계(tier_counts·tier_values·cut_elo) → 지금 시즌의 스냅숏별 값. 없으면 빈 RankTrend."""
+    out = RankTrend()
+    if conn is None:
+        return out
+    snaps = conn.execute(
+        "SELECT id, taken_at FROM snapshots WHERE season_seq ="
+        " (SELECT season_seq FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1) ORDER BY taken_at, id").fetchall()
+    by_day: dict[str, tuple[int, str]] = {}
+    for sid, taken in snaps:
+        by_day[taken[:10]] = (sid, taken)  # 같은 날이면 뒤(늦은) 것 — x 가 날짜라 같은 날 두 점은 겹친다
+    picked = sorted(by_day.values(), key=lambda t: t[1])
+    out.taken = [t for _sid, t in picked]
+    pos = {sid: i for i, (sid, _t) in enumerate(picked)}
+    n = len(picked)
+    if not n:
+        return out
+    marks = ",".join("?" * n)
+    ids = tuple(pos)
+    for sid, rank, elo in conn.execute(f"SELECT snapshot_id, rank, elo FROM cut_elo WHERE snapshot_id IN ({marks})", ids):
+        out.cuts.setdefault(rank, [None] * n)[pos[sid]] = elo
+    for sid, tier, avg, med in conn.execute(
+            f"SELECT snapshot_id, tier, value_avg, value_median FROM tier_values WHERE snapshot_id IN ({marks})", ids):
+        out.value_avg.setdefault(tier, [None] * n)[pos[sid]] = avg
+        out.value_median.setdefault(tier, [None] * n)[pos[sid]] = med
+    counts: dict[tuple[int, str], dict[str, list[int]]] = {}
+    for sid, tier, kind, key, cnt in conn.execute(
+            f"SELECT snapshot_id, tier, kind, key, n FROM tier_counts WHERE snapshot_id IN ({marks})", ids):
+        counts.setdefault((tier, kind), {}).setdefault(key, [0] * n)[pos[sid]] = cnt
+    for tk, keys in counts.items():
+        totals = [sum(v[i] for v in keys.values()) for i in range(n)]
+        out.shares[tk] = {k: [v[i] * 100 / totals[i] if totals[i] else 0.0 for i in range(n)] for k, v in keys.items()}
     return out
 
 
