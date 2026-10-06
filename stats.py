@@ -209,7 +209,7 @@ def _result_of(p: dict) -> str:
     return (p.get("matchDetail") or {}).get("matchResult") or "-"
 
 
-TRADE_HINT_GAMES = 300  # 내 계정 힌트 — 최근 이만큼 경기(ROADMAP 1.4.1 R2 와 같은 기준)
+TRADE_HINT_GAMES = 300  # 내 계정 힌트 — 최근 이만큼 경기(docs/DONE.md 1.4.1 R2 와 같은 기준)
 
 
 def trade_hint(details: list[dict], ouid: str, bought: set, games: int = TRADE_HINT_GAMES) -> tuple[int, int]:

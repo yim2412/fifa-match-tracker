@@ -3175,7 +3175,7 @@ class MainWindow(QMainWindow):
 
     # ── 거래 기록 · 내 계정(1.4.1 — 11단계는 띠와 받기 상태, 표는 12단계) ─────────────────────
     def _build_ledger_tab(self) -> QWidget:
-        """이적시장 가계부 — 넥슨은 API 키 주인 계정의 거래만 주므로(ROADMAP R1·R2) 위에 '내 계정' 띠(모달 아님)."""
+        """이적시장 가계부 — 넥슨은 API 키 주인 계정의 거래만 주므로(docs/DONE.md 1.4.1 R1·R2) 위에 '내 계정' 띠(모달 아님)."""
         w = QWidget()
         v = QVBoxLayout(w)
         band = Card()
