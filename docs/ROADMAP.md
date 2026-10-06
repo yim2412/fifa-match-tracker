@@ -160,6 +160,11 @@
 > **상태: 계획 검토 중**(2026-10-06 첫 초안 — 개요 한 장을 상세 계획으로). 구현은 검토 끝 + "진행시켜" 뒤 **새 세션**에서 14단계부터.
 > 아래 **"사용자 확인"** 표 — 넷 다 정함(2026-10-06).
 
+**검토 기록** 1회차(2026-10-06 · Opus) — 독립 검토자 A(코드·환경, 18.4만 토큰) [상] 2 · [중] 7 / B(사용자·운영·법적·통계, 14.9만 토큰) [상] 4 · [중] 12.
+[상]은 넷으로 겹친다 → 전부 반영: ① 랭커 픽을 켜는 조건(토글·동의 버전)이 없었다(A·B 둘 다) ② "시도 수" 계수기가 코드에 없다 — 지금 80 상한은 실행이 바뀌면
+저장된 카드 수만 센다(store.py:738) · 300·429 멈춤을 어디 적는지 없음(A·B) ③ 랭커 픽 데이터가 안내한 "14일 · 지우기" 약속 밖에 쌓인다(B) ④ 사용자가 연 선수 카드까지
+80 에 묶어 기존 기능이 죽는다(B). 아래 "하루 요청 · 동의 · 보관" 절과 진입점 표가 답이다.
+
 **규모** 가장 큼 — 메뉴를 한 번에 바꾸므로 1.x 기능을 제자리 탭으로 옮기는 회귀 확인이 핵심. 새 넥슨 요청: 오픈API(랭커 200명의 최근 경기 — 기존 엔드포인트 셋) + 홈페이지(선수 페이지 — 이미 있는 요청에서 급여·OVR 을 더 읽음). 새 저장: fifa.db 표 넷(`card_info` · `ranker_squads` · `squad_owner` · `match_squads` 계열).
 
 ### 사용자 확인 (답 전 — 내 추천을 적어 둔다)
@@ -195,12 +200,13 @@
 | 14 | `widgets.PageTabs` · 메뉴 재편(새 묶음 "랭커"는 빈 자리 없이 17단계까지 숨김) · 1.x 구획을 탭으로 · 옛 이름 복원(U4 — 띠 없음) | 높음 — 진입점 표 ⑩ 전부 · 회귀 | 커밋·푸시 |
 | 15 | B `card_info` · C 축구장 v2 · ⑨ 축구장 · ① 구단주 비교 · 스쿼드 창 v2 | 높음 — 새 위젯 + 화면 넷 통일 | 커밋·푸시 |
 | 16 | 12 색인(`match_squads` · 백필) · 6 랭커 픽 수집(`RankerPickLoader`) + 화면 · 12 화면 | 높음 — 새 수집 길 · 백필 · 키 한도 | 커밋·푸시 |
-| 17 | P2 랭킹 추이 · 11-lite 추천 · 안내 문구(`NOTICE_VERSION`) · CHANGELOG | 중간 — 데이터는 앞 단계에 있음 | **2.1.1 공개** |
+| 17 | P2 랭킹 추이 · 11-lite 추천 · CHANGELOG(안내 문구는 15·16 에서 기능과 같이) | 중간 — 데이터는 앞 단계에 있음 | **2.1.1 공개** |
 
 ### 페이지 안 탭 · 메뉴 재편 (14단계)
 
 - **`widgets.PageTabs`** — 칸이 나뉜 탭줄 + `QStackedWidget`. 색은 `theme`(규칙 검사). 탭 하나 = **지금 구획 위젯을 그대로 옮긴다**(그리기 코드는 안 바꾼다 — 회귀 줄이기).
   좁으면 탭 글자를 줄이지 않고 탭줄이 두 줄(`WrapBar` 와 같은 원리) — 1280×720 에서 탭 셋.
+  **숨은 탭은 크기 정책 `Ignored`**(1회차 A) — `QStackedWidget` 의 최소 크기가 모든 탭의 최댓값이 돼 넓은 표 하나가 옆 탭까지 가로로 넓힌다. 창 크기 테스트(`test_window_shrinks_…`·`test_no_table_elides_…`)를 **탭마다** 돈다.
 - **메뉴 표(21개)** — `[ ]` 는 탭:
   대시보드 / 경기: 경기 목록 · 상대 전적 · 구단주 비교 / 흐름: 흐름 분석 · 승률 그래프[승률·등급 | 점수·예측] · 기간별 추이 · 시즌별 성적 /
   경기력: 승부처 분석 · 성적 진단[상대·점유율 | 규율·불운] · 전술·경기 결과[전술 | 경기 결과 | 패스 스타일] · 슛 맵[슛 | 어시스트] /
@@ -214,7 +220,9 @@
 - **보던 탭 기억** `view/tab/<키 묶음 ASCII>`(예 `view/tab/players`) — 메뉴 이름(한글)을 설정 **키**로 쓰지 않는다(값으로만). 복원은 메뉴 복원 뒤 한 번.
 - **옛 메뉴 이름 복원** — 표 `OLD_PAGE_NAMES = {"랭커와 비교": ("선수 지표", "랭커 비교"), "스쿼드 타임라인": ("스쿼드·이적", "타임라인"), "이적시장 가계부": ("스쿼드·이적", "가계부")}`.
   저장된 `view/page` 가 옛 이름이면 이 표로 간다(지금 코드는 대시보드로 떨어진다 — R9). 옛 버전으로 되돌리면 새 이름("스쿼드·이적")을 모르니 대시보드 — 그대로 둔다(⑥).
-- **대시보드 카드 대상**은 지금 이름이 전부 남는다(경기 목록·승률 그래프·승부처 분석·흐름 분석·상대 전적). `_go_page(이름, 탭=None)` 로 넓히고, 테스트 하나:
+- **대시보드 카드 대상은 (메뉴, 탭)으로 적는다**(1회차 A·B) — "승률 흐름" 카드가 "승률 그래프"만 가리키면 마지막에 본 [점수·예측]으로 열린다. `_card(제목, (메뉴, 탭))` · `_go_page(메뉴, 탭=None)`(탭이 None 이면 그 메뉴의 **첫 탭**, 기억된 탭이 아니라).
+  `_go_page` 는 **없는 이름이면 바로 return** — 지금은 `idx=None` 이 묶음 제목 줄(UserRole None)과 같다고 판정돼 제목 줄로 간다(app_main.py:2343). 숨긴 메뉴·탭 이름 오타가 그 길을 밟는다.
+  테스트 `test_dashboard_targets_exist` 는 (메뉴, 탭)까지 대조한다.
   대시보드 카드 대상이 전부 NAV 에 있다(`test_dashboard_targets_exist` — 메뉴 이름을 바꾸면 카드가 조용히 아무 데도 안 간다).
 - **"랭커" 묶음은 14단계엔 숨긴다**(빈 페이지를 내보내지 않게) — `NAV` 에 넣되 `HIDDEN_UNTIL_READY` 로 16·17단계가 하나씩 켠다. 공개판에서 남아 있으면 `test_no_hidden_nav_in_release`(release.py 검사)가 FAIL.
 
@@ -225,7 +233,9 @@
 - **강화별 OVR** = `base_ovr` + `config.GRADE_OVR_BONUS[grade]`(1~13). 표 값은 15단계 첫 줄에 능력치 시뮬레이터(`playerinfo.fetch_ability_sim` — PC PlayerAbility POST)로
   카드 셋 × 1~13강을 재서 정한다 → `check_api.py` 에 한 줄(표가 넥슨과 어긋나면 [FAIL]). 칩·표의 OVR 은 **카드 기본 포지션 기준**이라고 툴팁에 쓴다(다른 자리에 세우면 게임 값과 다르다).
 - **채우기**: `fetch_player_info` 가 한 요청으로 시세·급여·OVR 을 같이 읽는다(본 카드 구역 앵커 — R7). `card_info` 는 30일 TTL(라이브 패치로 바뀔 수 있다 — 30일인 근거는 없다: 구현 뒤 TTL 지난 카드의 값이 바뀐 비율을 `check_api` 줄로 본다 → 재지 않은 것).
-  하루 시도 상한은 기존 `PRICE_FETCH_MAX`(80 — 시도 수)와 **같은 계수기**를 쓴다(카드 상세 요청이 같은 요청이라).
+  하루 상한은 **쓰임별로 따로**(1회차 B [상] — 한 계수기에 묶으면 칩이 80 을 먼저 다 써 가계부 평가 손익이 비고, 사용자가 연 선수 카드까지 막힌다):
+  사용자가 연 선수 카드·[시세] 탭 = **상한 없음**(지금 그대로) · 가계부 자동 시세 = `PRICE_FETCH_MAX` 80(지금 그대로) · v2 칩 자동 = `CHIP_FETCH_MAX`(초안 60 — 15단계 첫 줄에 스쿼드 창·비교를 하루 몇 번 여는지로 정함).
+  셋 다 아래 `api_budget` 표에서 센다(재시작해도 남는다). 상한에 걸린 칩은 "오늘 조회 한도"로 비운다. 칩 자동 요청은 동의 게이트 `chip_auto_allowed()`(`NOTICE_ACCEPTED >= CHIP_NOTICE_VERSION`) 뒤.
   **집계에는 카드 상세가 필요 없다** — 랭커 픽·12 의 카드 이름은 메타 `spid`(8만 건대 — nexon_api.py:24 주석)로. 요청은 **화면에 띄운 축구장의 칩**(최대 11장 × 띄운 수)만.
 - 개요의 "출처 둘(선수 페이지 · 팀컬러 선수 JSON)" 중 팀컬러 선수 JSON 은 **2.2.1(7)의 새 요청**이라 2.1.1 엔 선수 페이지 하나. 2.2.1 이 붙인다.
 - `WEB_DATA` 꺼짐 → 시세·급여·OVR 칸만 비운다(이름·포지션·강화는 경기 상세·메타).
@@ -254,9 +264,11 @@
 - **표**(R2 — 정수 키, R12 — rowid 를 안 쓴다): `squad_owner(id INTEGER PRIMARY KEY, ouid TEXT UNIQUE, nickname TEXT, last_day INTEGER)` ·
   `squad_match(id INTEGER PRIMARY KEY, match_id TEXT UNIQUE)` · `match_squads(spid, day, match, owner, po, grade, PRIMARY KEY(spid, day, match, owner, po)) WITHOUT ROWID` — 선발만(28 제외).
   크기 목표 2만 경기 **≤ 25MB**(R2 의 12.3MB + `squad_match` 의 TEXT UNIQUE) — 16단계 첫 줄에 실제 DB 사본으로 잰다(`tools/` 스크래치 아님 — 커밋 메시지에 수치).
-- **채우기 둘**: ① `store.save_matches` 가 새로 넣은 경기만 **같은 트랜잭션**에서 색인 ② 백필 — 색인 안 된 경기(`matches` LEFT JOIN `squad_match` 가 빈 것)를 작업 스레드가
+- **채우기 둘**: ① `store.save_matches` 가 새로 넣은 경기만 같은 커밋 안에서 색인(경기마다 `.get` 방어 — 한 경기 색인 실패는 그 경기만 건너뛴다. `save_matches` 는 끝에서 한 번 커밋하므로 예외가 새면 새 경기 저장 전체가 롤백된다 — 1회차 A) ② 백필 — 색인 안 된 경기(`matches` LEFT JOIN `squad_match` 가 빈 것)를 작업 스레드가
+  **선발 0명인 경기(몰수·오류 — 1.2.1)도 `squad_match` 줄은 쓴다** — 안 쓰면 매 실행 다시 해석된다(1회차 A·B). 쓰기는 전부 `INSERT OR IGNORE`(저장과 백필이 같은 경기를 겹쳐 색인해도 충돌 없음).
   1,000경기씩 트랜잭션으로(끊겨도 다음 실행이 잇는다 — "어디까지"를 따로 적지 않는다). **옛 버전으로 내려가서 저장한 경기도 다음 실행이 잡는다**(높은 물 표시 방식이면 놓친다).
   백필은 검색·로더가 없을 때만, 낮은 스레드 우선순위(`rankcollect` 와 같은 ctypes — 핸들 형 주의). 1만 경기 첫 화면 시간(공통 기준 3)에 백필이 끼면 안 된다 — 첫 화면 뒤 30초부터.
+  트레이로 켜졌으면(`--tray` · 첫 화면 없음) 켠 뒤 2분부터(1회차 B). 찾기 화면은 백필이 남았으면 **"색인 중 N/M 경기 — 결과가 덜 나올 수 있음"**을 띄운다(조용히 덜 나오지 않게).
 - **찾기 화면**: 선수 이름(메타 `spid` 8만 건 — 입력 2글자부터 후보) + 카드 시즌(`stats.season_id_of`) + 강화(선택) + 팀컬러(선택) → 그 카드를 **최근 30일**(`config.CARD_OWNER_DAYS`) 선발로 쓴 구단주 목록
   (닉네임 · 마지막 사용일 · 횟수 · 포지션 · 팀컬러 · 순위). 팀컬러·순위는 **마지막 스냅숏 1만 명 안이거나 `team_colors` 캐시에 있을 때만** — 없으면 "모름"(필터를 걸면 빠진다고 화면에 적는다).
   범위: 내 DB 구단주(검색한 계정 + 그 상대 — R1 11,902명) + 랭커 픽 200(6이 `matches` 에 넣은 경기). 누르면 그 구단주 검색.
@@ -266,12 +278,14 @@
 - **대상**: 마지막 스냅숏 1~200위. 스냅숏이 없으면(수집 꺼짐 · 첫 회차 전) 화면은 "랭킹 수집을 켜면 하루 뒤부터" — 팀컬러 목록(`RankListLoader`)이 남긴 스냅숏도 스냅숏이다.
 - **요청 0 으로 되는 것**(R3): 팀컬러·포메이션 분포 — 스냅숏 행.
 - **요청이 드는 것**(R6): 선발 카드·강화 — `RankerPickLoader`(작업 스레드 · 자기 연결 · `cancel()` · 요청 번호). 랭커마다 ouid(`ranker_squads.ouid` 캐시 — 닉네임이 바뀌면 다시) → 최근 경기 1 → 상세(이미 `matches` 에 있으면 0요청).
-  상세는 `matches` + `match_players`(그 랭커 ouid 만)에 저장 — 12 색인이 같이 잡는다. **`accounts` 에는 넣지 않는다**(R11).
-  `ranker_squads(profile_sn PRIMARY KEY, nickname, ouid, match_id, match_day, fetched_at)` — 오래된 것부터(`fetched_at` — 3일 안에 받은 랭커는 다시 안 묻는다 · `config.RANKER_PICK_STALE_DAYS`), 하루 **`config.RANKER_PICK_DAILY_REQ`(300 — U2 안전 상한)** 안에서. 상한은 요청 **시도** 수(실패도 센다).
+  상세는 **`save_matches` 그대로**(양쪽 ouid 를 `match_players` 에 — 1회차 B: 따로 저장하면 그 상대를 나중에 검색할 때 `known_ids` 와 어긋난다) — 12 색인이 같이 잡는다. **`accounts` 에는 넣지 않는다**(R11). 랭커 픽으로 들어온 경기는 `ranker_matches(match_id PRIMARY KEY, fetched_on)` 에 표시 — 보관·지우기 범위(아래).
+  `ranker_squads(profile_sn PRIMARY KEY, nickname, ouid, match_id, match_day, fetched_at, fail TEXT)` — 오래된 것부터(`fetched_at` — 3일 안에 받은 랭커는 다시 안 묻는다 · `config.RANKER_PICK_STALE_DAYS`), 하루 **`config.RANKER_PICK_DAILY_REQ`(300 — U2 안전 상한)** 안에서. `OPENAPI00004`(닉네임 바뀜) 등 실패도 `fail` 에 적고 `fetched_at` 을 써서 탭을 열 때마다 다시 시도하지 않는다(1회차 B).
 - **언제**(U2): **랭커 픽 · 추천 탭이 보일 때만** — 탭을 열면 `RankerPickLoader` 를 띄우고, 다른 메뉴로 가면 랭커 사이에서 멈춘다(받은 만큼은 남는다). 랭킹 수집 회차 끝에는 **붙이지 않는다**.
+  **멈춤·재개**(1회차 A·B): 창이 숨겨지거나 최소화되면 멈춘다(`hideEvent`·`changeEvent` — X 는 트레이 숨김이라 30분 동안 계속 받았다) · 검색·비교·거래 받기가 끝나면(`finished`) 그 탭이 **보이고 창이 보일 때** 다시 띄운다 · `start_trades` 는 돌던 랭커 픽을 `cancel()`(거래 → 랭커 픽 순).
   오픈API 를 쓰는 다른 로더(검색 · 구단주 비교 · 거래 받기)가 돌면 랭커마다 사이에서 멈추고 양보(`TradeLoader` 와 같은 규칙).
   **오픈API 백그라운드 로더는 한 번에 하나**: 거래 → 랭커 픽 순. 429 를 받으면 그날 멈춘다(키 입력 창으로 보내지 않는다 — `quota_hit` 아님).
-- **화면**: [픽] 팀컬러·포메이션 비율 · 포지션 줄별 많이 쓴 카드(강화 분포 막대) · 받은 랭커 수 "200명 중 N명(마지막 받은 날)" · 표본 흐림 규칙(1.2.1) 그대로.
+- **화면**: [픽] 팀컬러·포메이션 비율 · 포지션 줄별 많이 쓴 카드(강화 분포 막대) · "200명 중 N명 · 최근 `RANKER_PICK_MAX_AGE_DAYS`(초안 14)일 경기" — **마지막 경기가 그보다 오래된 랭커는 집계에서 뺀다**(1회차 B — 받은 날이 아니라 경기 날) · 표본 흐림 규칙(1.2.1) 그대로.
+  오늘 한도에 걸렸으면 "오늘 한도 — N/200, 내일 이어서"(429 를 받았으면 "넥슨 호출 한도에 걸려 오늘은 멈춤").
   "내 스쿼드 vs 랭커" — 내 최근 경기 선발을 v2 축구장에, 칩마다 그 카드의 랭커 픽률(같은 줄). [추천] 탭은 17단계.
 
 ### P2 랭킹 추이 (17단계)
@@ -283,6 +297,7 @@
 
 - 후보(U3): 내 팀컬러의 ① 6 이 받은 상위 200 ② **요청 0** — 마지막 스냅숏 1만 안에서 내 팀컬러이고 12 색인에 최근 30일 선발이 있는 구단주 ③ 그래도 10명 미만이면 **내 팀컬러 1,000위 안** 랭커 중 없는 사람만 받는다(같은 로더·같은 하루 상한).
   **10명 미만이면 추천 안 함**("이 팀컬러 1,000위 안 랭커가 N명뿐"), 쓰인 순위 범위를 같이 적는다(②가 1,000위 밖이면 범위가 넓어진다 — 그대로 보인다).
+  후보 출처(①②③)별 인원을 화면에 적는다 — ②(내 상대)는 ①과 뽑힌 방식이 달라 섞이면 편향된다(1회차 B). [추천]에도 표본 흐림 + **카드별 최소 사용 인원**(`RECOMMEND_MIN_USERS` — 초안 3, N 과 같이 정함). ③ 추가 받기도 `ranker_pick_allowed()` 와 하루 상한 뒤.
   내 팀컬러는 마지막 스냅숏의 내 행 → 없으면(1만 밖) `team_colors` 캐시 → 둘 다 없으면 "팀컬러를 모름"(최근 스쿼드로 추정하지 않는다 — 틀린 추천보다 없음이 낫다).
 - 포지션 줄별 대체 선수(랭커 픽률 높은데 내가 안 쓰는 카드 — 시세 있으면 같이) · 내 스쿼드 위치(구단가치·강화 평균·포메이션이 그 랭커들 분포의 어디쯤).
   N(초안 30)은 16단계 수집 뒤 팀컬러별 인원 분포를 보고 정한다(`docs` 에 수치) — 재지 않은 것.
@@ -292,6 +307,18 @@
 `ranker_pick_summary` · `ranker_pick_rates` · `owners_using_card` · `recommend_replacements` · `squad_position_vs_rankers` · `rank_trend_series` · `pitch_rows`(줄 배치 — 화면 없는 계산이면 stats 쪽) ·
 `squad_value`(시세·급여 합) — 이름은 구현 때 확정, 빠지면 경계 테스트 FAIL.
 
+### 하루 요청 · 동의 · 보관 (1회차 [상] 반영)
+
+- **`api_budget(day TEXT, kind TEXT, attempts INTEGER, hit_429 INTEGER, PRIMARY KEY(day, kind))`**(fifa.db) — 재시작해도 남는다. 종류: `ranker_pick` · `card_ledger` · `card_chip`.
+  **요청 직전에** 그날 수를 1 더하고(커밋) 상한을 넘으면 안 보낸다. 지금 시세 상한(`card_prices_fetched_on` — 저장 수)은 이걸로 바꾼다(빈 시세 응답이 실행마다 새던 구멍).
+- 랭커 픽 로더는 **`_get` 의 재시도를 끄고**(`attempts=1` — 재시도도 하루 한도를 먹는데 계수에 안 잡힌다, nexon_api.py:124) 요청 사이 **0.25초 이상**(개발 단계 키 초당 5 미만 — 초당 429 와 하루 429 가 같은 `OPENAPI00007` 이라 구분 못 한다).
+  429 를 받으면 `hit_429` = 1 → 그날 랭커 픽은 다시 안 띄운다. **다른 로더(검색·거래·랭커 기록)가 그날 429 를 받았어도 랭커 픽은 시작하지 않는다**(내 검색이 먼저 — 그 로더들이 `api_budget` 의 `openapi` 줄에 적는다).
+- **동의 게이트**: `RANKER_PICK_NOTICE_VERSION` · `CHIP_NOTICE_VERSION` = 5(지금 `NOTICE_VERSION` 4 → 5) — `track_allowed`·`price_auto_allowed`(config.py:307·312)와 같은 꼴. 옛 동의자(2~4)는 다시 묻는 창에서 5 에 동의하기 전까지 둘 다 꺼짐.
+  안내 문구는 **기능이 들어오는 단계에서** 쓴다(칩 15 · 랭커 픽·색인 16) — 17단계에 몰지 않는다(그 사이 배포가 없어도 문구와 기능이 같이 커밋되게).
+- **보관·지우기**(지금 안내: "다른 구단주 원본 14일 · 수집 기록 지우기로 지움" — notice.py:62~70): 랭커 픽 데이터도 같은 약속 안에 —
+  `ranker_squads` 와 `ranker_matches` 의 경기 중 **검색한 계정(`accounts`)과 안 닿는 것**(그 경기의 `match_players` 에 검색한 계정이 없음)과 그 색인 행은 **14일**(`RANK_RAW_KEEP_DAYS`) 뒤 지운다.
+  [수집 기록 지우기]·랭킹 수집 끄기도 같이 지운다(E12). 12 색인(내 DB 의 상대)은 이 PC 의 경기 기록으로 만드는 색인이라 경기와 같이 산다 — 안내에 "이 PC 의 경기 기록으로 카드 → 구단주 색인을 만든다 · 밖으로 안 보냄"을 적는다.
+
 ### 진입점 표 (⑩)
 
 | # | 진입점 | 거쳐야 할 것 | 테스트 |
@@ -299,14 +326,16 @@
 | E1 | 메뉴 클릭(`_on_nav_changed`) | (메뉴, 지금 탭)의 키 → 낡았으면 그림 | `test_lazy_*` 를 탭 단위로 |
 | E2 | 탭 클릭(`_on_tab_changed`) | 같은 키 → 낡았으면 그림 · `view/tab/*` 저장 | `test_tab_switch_renders_dirty_only` |
 | E3 | "trades" 열기(메뉴 또는 탭) | `_dirty.add("trades")` + `start_trades()` | `test_trades_tab_open_starts_loader`(메뉴로·탭으로 둘 다) |
-| E4 | 대시보드 카드(`navigate`) | `_go_page(메뉴, 탭)` | `test_dashboard_targets_exist` |
-| E5 | 저장된 보기 복원(4586) | 옛 이름 표 → (메뉴, 탭) · `view/tab/*` | `test_restore_old_page_names` |
+| E4 | 대시보드 카드(`navigate`) | `_go_page(메뉴, 탭)` — 탭 명시 · 없는 이름이면 return | `test_dashboard_targets_exist`(탭까지) |
+| E5 | 저장된 보기 복원(4586) | 옛 이름 표 → (메뉴, 탭) · `view/tab/*` · 숨긴 메뉴·없는 탭이면 기본 | `test_restore_old_page_names` |
 | E6 | `_invalidate(키)` | 보이는 자리면 바로, 아니면 낡음 | `test_invalidate_shared_key_any_place` |
-| E7 | 경기 저장(`save_matches` — 검색·비교·랭커 픽) | 같은 트랜잭션에서 `match_squads` | `test_save_indexes_squads` |
-| E8 | 백필 | 검색·로더가 없을 때 · 첫 화면 30초 뒤 · 1,000경기 트랜잭션 · `shutdown` 정리 표 | `test_backfill_resumes_and_skips_indexed` |
-| E9 | 오픈API 백그라운드 로더 시작(거래 · 랭커 픽) | 한 번에 하나 · 검색·비교가 오면 양보 · 429 면 그날 멈춤 · 랭커 픽은 **탭이 보일 때만**(떠나면 멈춤) | `test_background_openapi_one_at_a_time` · `test_ranker_pick_only_while_visible` |
-| E10 | 카드 상세 요청(`fetch_player_info` — 선수 카드 창 · 시세 · v2 칩) | `WEB_DATA` · `web_get` · 하루 시도 계수기 하나 | 기존 `test_web_data_switch_*` 에 그대로 걸림 + `test_card_info_counts_attempts` |
+| E7 | 경기 저장(`save_matches` — 검색·비교·랭커 픽) | 같은 커밋에서 `match_squads` · 경기마다 방어 · 0명도 `squad_match` · `OR IGNORE` | `test_save_indexes_squads`(몰수 경기 · 깨진 경기 하나 섞기) |
+| E8 | 백필 | 검색·로더가 없을 때 · 첫 화면 30초 뒤(트레이 시작이면 2분) · 1,000경기 트랜잭션 · 진행 N/M 노출 · `shutdown` 정리 표 | `test_backfill_resumes_and_skips_indexed` |
+| E9 | 랭커 픽 시작(탭 열기 · 재개) | **`ranker_pick_allowed()`**(랭킹 수집 켜짐 `RankCollectScheduler.can_run` + `NOTICE_ACCEPTED >= RANKER_PICK_NOTICE_VERSION`) · 탭과 창이 보임 · 오늘 `api_budget` 에 429 없음·300 미만 · 오픈API 백그라운드 로더 하나 | `test_ranker_pick_gate`(**수집 끄고 스냅숏 남긴 채 탭 열기 → 요청 0** · 옛 동의 4 → 0) · `test_ranker_pick_only_while_visible`(메뉴 이동·숨김·최소화) |
+| E9b | 랭커 픽 재개 | 검색·비교·거래 `finished` → E9 조건 다시 | `test_ranker_pick_resumes_after_yield` |
+| E10 | 카드 상세 요청(`fetch_player_info`) | `WEB_DATA` · `web_get` · 쓰임별 계수(사용자 연 카드 = 없음 · 가계부 80 · 칩 `CHIP_FETCH_MAX`) · 칩은 `chip_auto_allowed()` | `test_web_data_switch_*` · `test_card_budget_per_use`(실행 두 번 + 빈 시세 응답 → 상한 지킴) |
 | E11 | 앱 종료·트레이 내려놓기(`shutdown`) | 새 워커 셋(`RankerPickLoader` · 백필 · `CardInfoLoader`)이 정리 표에 | `test_shutdown_stops_all_workers`(표 대조) |
+| E12 | [수집 기록 지우기] · 랭킹 수집 끄기 | rank.db 삭제 + **랭커 픽 데이터 삭제**(`ranker_squads` · 검색한 계정과 안 닿는 `ranker_matches` 경기와 그 색인 행) | `test_clear_removes_ranker_pick_data` |
 
 ### 환경 행렬 (③)
 
@@ -343,6 +372,7 @@
 - 상위 200 선발의 서로 다른 카드 수 → 카드 상세 80/일 상한으로 며칠 걸리나(16단계 수집 뒤)
 - 11-lite N(팀컬러별 랭커 인원 분포)
 - 탭줄이 150% 에서 두 줄로 접히는지(실제 윈도우)
+- `CHIP_FETCH_MAX`(초안 60) · `RANKER_PICK_MAX_AGE_DAYS`(초안 14) · `RECOMMEND_MIN_USERS`(초안 3) — 15·16단계 실데이터로
 
 ---
 
