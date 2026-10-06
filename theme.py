@@ -283,6 +283,15 @@ QPushButton#primary {{
 }}
 QPushButton#primary:hover {{ background: {GREEN_HOVER}; color: {ON_ACCENT}; }}
 QPushButton#primary:disabled {{ background: {BORDER}; color: {TEXT_DIM}; }}
+QPushButton#pageTab {{
+    background: transparent;
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 5px 16px;
+    color: {TEXT_DIM};
+}}
+QPushButton#pageTab:hover {{ border-color: {GREEN}; color: {GREEN}; }}
+QPushButton#pageTab:checked {{ background: {GREEN_SOFT}; border-color: {GREEN}; color: {GREEN}; }}
 
 QGroupBox {{
     background: {PANEL};

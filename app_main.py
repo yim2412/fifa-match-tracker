@@ -15,6 +15,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
@@ -53,8 +54,8 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
-    NA, BarRow, Card, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PitchWidget,
-    RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
+    NA, BarRow, Card, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PageTabs,
+    PitchWidget, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
     StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
     wdl_text, win_rate_bar,
 )
@@ -80,6 +81,12 @@ MIN_HEIGHT_SMALL = 480  # 레이아웃 하한 434(실측) 위 여유 — 434~640
 FRAME_ALLOWANCE = (16, 40)
 NARROW_SCREEN_MSG = ("화면 배율이 커서 일부가 잘릴 수 있습니다 — 윈도우 디스플레이 설정에서 배율을 125% 이하로 "
                      "낮추면 전부 보입니다.")
+
+
+class Tabs(NamedTuple):
+    """메뉴 하나의 페이지 안 탭(2.1.1) — sid 는 보던 탭을 기억하는 설정 키(ASCII), tabs 는 ((탭 이름, 빌더 이름), …)."""
+    sid: str
+    tabs: tuple
 
 
 @dataclass(frozen=True)
@@ -1514,7 +1521,7 @@ class MainWindow(QMainWindow):
         self._teamcolor_rendered_at = 0.0  # 중간 갱신 간격(TEAMCOLOR_RENDER_INTERVAL_S)용
         self._teamcolor_progress_fmt = "{done} / {total} 조회 중…"
         self._teamcolor_retry_pending = False  # 조회 중 범위가 넓어져 재시도가 필요함
-        self._dirty: set[str] = set()  # 낡은 화면 키(PAGE_RENDER_KEYS) — 열 때 그린다
+        self._dirty: set[str] = set()  # 낡은 화면 키(VIEW_OF_KEY) — 열 때 그린다
         self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
         self._narrate_found: list = []
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
@@ -1564,6 +1571,9 @@ class MainWindow(QMainWindow):
             page = self._current_page_name() if self.stack.currentIndex() == self.PAGE_MAIN else None
             if page:
                 s.setValue("view/page", page)
+            for menu, tabs in self._page_tabs.items():  # 메뉴마다 보던 탭 — 키는 ASCII sid, 탭 이름(한글)은 값으로만
+                if tabs.current_name():
+                    s.setValue(f"view/tab/{self._tab_sid[menu]}", tabs.current_name())
             if self._matches_all:
                 s.setValue("view/season", self._season_key(self.cb_season.currentData()))
             s.sync()
@@ -1589,7 +1599,11 @@ class MainWindow(QMainWindow):
                 self._apply_plan(self._screen_of_window(), keep_size=True)
             else:
                 self._apply_plan(QApplication.primaryScreen(), center=True)
-            return {k: s.value(f"view/{k}") for k in ("page", "season") if s.value(f"view/{k}")}
+            out = {k: s.value(f"view/{k}") for k in ("page", "season") if s.value(f"view/{k}")}
+            tabs = {sid: s.value(f"view/tab/{sid}") for sid in self._tab_sid.values() if s.value(f"view/tab/{sid}")}
+            if tabs:
+                out["tabs"] = tabs
+            return out
         except Exception:
             return {}
 
@@ -2195,31 +2209,47 @@ class MainWindow(QMainWindow):
         self.top_bar = WrapBar(left, middle, self.btn_more, sep=sep)
         return self.top_bar
 
-    # 왼쪽 메뉴 — (묶음 제목, [(메뉴 이름, 페이지 빌더 이름)]). 묶음 제목이
+    # 왼쪽 메뉴 — (묶음 제목, [(메뉴 이름, 페이지 빌더 이름 또는 Tabs)]). 묶음 제목이
     # None 이면 제목 없이 바로 메뉴. 페이지 순서는 이 표의 순서다.
+    # 2.1.1 — 한 메뉴 안의 구획은 페이지 안 탭(Tabs). sid 는 보던 탭을 기억하는 설정 키(view/tab/<sid>) —
+    # 메뉴 이름(한글)을 설정 키로 쓰지 않는다. 탭 하나 = 예전 구획 위젯 그대로(그리기 코드는 안 바꿨다).
     NAV = [
         (None, [("대시보드", "_build_dashboard_page")]),
         ("경기", [("경기 목록", "_build_matches_tab"),
                  ("상대 전적", "_build_opponents_tab"),
                  ("구단주 비교", "_build_compare_tab")]),
         ("흐름", [("흐름 분석", "_build_analysis_tab"),
-                 ("승률 그래프", "_build_trend_tab"),
+                 ("승률 그래프", Tabs("trend", (("승률·등급", "_build_trend_tab"),
+                                              ("점수·예측", "_build_elo_tab")))),
                  ("기간별 추이", "_build_period_tab"),
                  ("시즌별 성적", "_build_season_tab")]),
         ("경기력", [("승부처 분석", "_build_clutch_tab"),
-                   ("성적 진단", "_build_diagnosis_tab"),
-                   ("전술·경기 결과", "_build_tactics_tab"),
+                   ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
+                                                ("규율·불운", "_build_discipline_tab")))),
+                   ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
+                                                   ("경기 결과", "_build_results_tab"),
+                                                   ("패스 스타일", "_build_pass_style_tab")))),
                    ("슛 맵", "_build_shotmap_tab")]),
-        ("선수", [("선수 지표", "_build_players_tab"),
+        ("선수", [("선수 지표", Tabs("players", (("지표", "_build_players_tab"),
+                                             ("랭커 비교", "_build_ranker_compare_tab")))),
                  ("선수별 결정력", "_build_finishing_tab"),
-                 ("랭커와 비교", "_build_ranker_compare_tab"),
-                 ("포지션별 최다 상대", "_build_position_opp_tab")]),
+                 ("포지션별 최다 상대", "_build_position_opp_tab"),
+                 ("스쿼드·이적", Tabs("squad", (("타임라인", "_build_timeline_tab"),
+                                             ("가계부", "_build_ledger_tab"))))]),
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
-        # 1.4.1 — 1.x 라 페이지 안 탭 대신 메뉴 두 줄(2.1.1 에서 탭으로)
-        ("스쿼드·이적", [("스쿼드 타임라인", "_build_timeline_tab"),
-                      ("이적시장 가계부", "_build_ledger_tab")]),
+        # 2.1.1 새 묶음 — 16·17단계가 채우며 config.HIDDEN_NAV_UNTIL_READY 에서 하나씩 뺀다
+        ("랭커", [("랭킹 추이", "_build_pending_page"),
+                 ("랭커 픽", Tabs("rankerpick", (("픽", "_build_pending_page"),
+                                              ("추천", "_build_pending_page")))),
+                 ("선수로 구단주 찾기", "_build_pending_page")]),
     ]
+    # 1.x 메뉴 이름 → 2.1.1 의 (메뉴, 탭). settings.ini 의 view/page 가 옛 이름이면 새 자리로 연다(U4 — 알림 띠는 없다)
+    OLD_PAGE_NAMES = {
+        "랭커와 비교": ("선수 지표", "랭커 비교"),
+        "스쿼드 타임라인": ("스쿼드·이적", "타임라인"),
+        "이적시장 가계부": ("스쿼드·이적", "가계부"),
+    }
 
     def _build_main_page(self) -> QWidget:
         """검색 이후 화면 — 왼쪽 메뉴 + (상단 바 / 메뉴별 페이지)."""
@@ -2297,8 +2327,8 @@ class MainWindow(QMainWindow):
         self._teamcolor_status_labels: list[QLabel] = []
         self._teamcolor_note_labels: list[QLabel] = []
         self._page_index: dict[str, int] = {}
-        bold = QFont()
-        bold.setBold(True)
+        self._page_tabs: dict[str, PageTabs] = {}   # 메뉴 이름 → 페이지 안 탭(Tabs 인 메뉴만)
+        self._tab_sid: dict[str, str] = {}          # 메뉴 이름 → 보던 탭 설정 키(view/tab/<sid>)
         for section, entries in self.NAV:
             if section:
                 head = QListWidgetItem(section)
@@ -2308,15 +2338,27 @@ class MainWindow(QMainWindow):
                 f.setBold(True)
                 head.setFont(f)
                 self.nav.addItem(head)
+                # 묶음의 메뉴가 전부 숨김이면 제목도 숨긴다
+                head.setHidden(all(n in config.HIDDEN_NAV_UNTIL_READY for n, _b in entries))
             for name, builder in entries:
-                page = getattr(self, builder)()
-                if builder != "_build_dashboard_page":
-                    page = self._wrap_page(name, page)
+                if isinstance(builder, Tabs):
+                    tabs = PageTabs()
+                    for tab_name, tab_builder in builder.tabs:
+                        tabs.add_tab(tab_name, getattr(self, tab_builder)())
+                    tabs.changed.connect(lambda _i, n=name: self._on_tab_changed(n))
+                    self._page_tabs[name], self._tab_sid[name] = tabs, builder.sid
+                    page = self._wrap_page(name, tabs)
+                    page.add_to_title_row(tabs.take_bar())
+                else:
+                    page = getattr(self, builder)()
+                    if builder != "_build_dashboard_page":
+                        page = self._wrap_page(name, page)
                 idx = self.pages.addWidget(VScrollArea(page))
                 self._page_index[name] = idx
                 item = QListWidgetItem(name)
                 item.setData(Qt.ItemDataRole.UserRole, idx)
                 self.nav.addItem(item)
+                item.setHidden(name in config.HIDDEN_NAV_UNTIL_READY)
         self.nav.currentItemChanged.connect(self._on_nav_changed)
         self.nav.setCurrentRow(0)
         return w
@@ -2334,17 +2376,54 @@ class MainWindow(QMainWindow):
         idx = cur.data(Qt.ItemDataRole.UserRole)
         if idx is not None:
             self.pages.setCurrentIndex(idx)
-            if self.PAGE_RENDER_KEYS.get(self._current_page_name() or "") == "trades":
-                self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
-                self.start_trades()
-            self._render_current_page()  # 낡았으면 지금 그린다(_render_all 은 보이는 것만 그린다)
+            self._on_view_opened()
 
-    def _go_page(self, name: str) -> None:
+    def _on_tab_changed(self, menu: str) -> None:
+        """탭 클릭(E2) — 그 메뉴가 지금 보이는 메뉴일 때만. 메뉴 클릭과 같은 길(_on_view_opened)."""
+        if self._current_page_name() == menu:
+            self._on_view_opened()
+
+    def _on_view_opened(self) -> None:
+        """메뉴나 탭으로 한 자리(메뉴, 탭)를 열었다 — 낡았으면 지금 그린다(_render_all 은 보이는 것만 그린다)."""
+        if self.KEY_OF_VIEW.get(self._current_view()) == "trades":
+            self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
+            self.start_trades()
+        self._render_current_page()
+
+    def _go_page(self, name: str, tab: str | None = None) -> None:
+        """그 메뉴(와 탭)로 — 탭이 None 이면 그 메뉴의 **첫 탭**(기억된 탭이 아니라 — 대시보드 카드가 늘 같은 자리로).
+        없는 이름·숨긴 메뉴·없는 탭이면 아무것도 안 한다(예전엔 idx=None 이 묶음 제목 줄과 같다고 판정돼 제목 줄로 갔다)."""
         idx = self._page_index.get(name)
+        if idx is None or name in config.HIDDEN_NAV_UNTIL_READY:
+            return
+        tabs = self._page_tabs.get(name)
+        if tabs is not None:
+            if tab is not None and tab not in tabs.names():
+                return
+            # 메뉴를 바꾸기 전에 탭을 먼저 — 바꾼 뒤에 고르면 옛 탭을 한 번 그리고 다시 그린다
+            tabs.set_current(tab if tab is not None else 0, emit=self._current_page_name() == name)
+        elif tab is not None:
+            return
         for row in range(self.nav.count()):
             if self.nav.item(row).data(Qt.ItemDataRole.UserRole) == idx:
                 self.nav.setCurrentRow(row)
                 return
+
+    def _go_target(self, target: tuple[str, str | None]) -> None:
+        """대시보드 카드 대상 (메뉴, 탭 또는 None)."""
+        self._go_page(*target)
+
+    def _current_view(self) -> tuple[str | None, str | None]:
+        """(지금 메뉴, 그 메뉴의 지금 탭 — 탭 없는 메뉴면 None)."""
+        menu = self._current_page_name()
+        tabs = self._page_tabs.get(menu or "")
+        return menu, (tabs.current_name() if tabs is not None else None)
+
+    def _build_pending_page(self) -> QWidget:
+        """아직 빈 메뉴(config.HIDDEN_NAV_UNTIL_READY) — 숨겨 두므로 보통은 안 보인다."""
+        lb = QLabel("준비 중입니다.")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        return lb
 
     def _build_dashboard_page(self) -> QWidget:
         """대시보드 — 카드 배치·채우기는 dashboard.DashboardPage. 랭커 카드만
@@ -2352,7 +2431,7 @@ class MainWindow(QMainWindow):
         self.card_ranker = RankerCard()
         add_shadow(self.card_ranker)
         self.dashboard = DashboardPage(self.card_ranker)
-        self.dashboard.navigate.connect(self._go_page)
+        self.dashboard.navigate.connect(self._go_target)
         return self.dashboard
 
     def _build_teamcolor_fetch_row(self) -> tuple[QHBoxLayout, QPushButton, QLabel]:
@@ -2500,8 +2579,13 @@ class MainWindow(QMainWindow):
         for lb in (self.lb_sc_note, self.lb_sc_list, self.lb_sc_nexon):
             sv.addWidget(lb)
         v.addWidget(self.gb_sc)
+        return w
 
-        # ELO(랭킹 점수) — 지금 시즌만(시즌 필터와 무관). 읽기는 EloLoader, 그리기는 _render_elo 가 들고 있는 값으로.
+    def _build_elo_tab(self) -> QWidget:
+        """승률 그래프 [점수·예측] 탭 — ELO(랭킹 점수) 지금 시즌만(시즌 필터와 무관). 읽기는 EloLoader,
+        그리기는 _render_elo 가 들고 있는 값으로."""
+        w = QWidget()
+        v = QVBoxLayout(w)
         self.gb_elo = QGroupBox("ELO(랭킹 점수) — 지금 시즌")
         ev = QVBoxLayout(self.gb_elo)
         top = QHBoxLayout()
@@ -2526,6 +2610,7 @@ class MainWindow(QMainWindow):
         self.lb_elo_predict.setStyleSheet(f"color: {T.TEXT};")
         ev.addWidget(self.lb_elo_predict)
         v.addWidget(self.gb_elo)
+        v.addStretch(1)
         return w
 
     PERIOD_CHOICES = [("1일", 1), ("2일", 2), ("1주", 7), ("1개월", 30)]
@@ -2943,11 +3028,25 @@ class MainWindow(QMainWindow):
         self.box_diag_possession.setSpacing(3)
         v.addWidget(gb_pos)
 
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _build_discipline_tab(self) -> QWidget:
+        """성적 진단 [규율·불운] 탭 — 채우기는 _render_diagnosis 가 [상대·점유율] 과 같이 한다(키 diagnosis)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_diag_note2 = QLabel(self._diag_note_text())
+        self.lb_diag_note2.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_diag_note2)
         gb_disc = QGroupBox("규율·불운 (경기당 평균 · 나 / 상대)")
         self.box_diag_discipline = QVBoxLayout(gb_disc)
         self.box_diag_discipline.setSpacing(3)
         v.addWidget(gb_disc)
-
         v.addStretch(1)
         scroll.setWidget(w)
         return scroll
@@ -4166,15 +4265,21 @@ class MainWindow(QMainWindow):
         season_loader.start()
         self._compare_squad_loaders.append(season_loader)
 
-    def _build_tactics_tab(self) -> QWidget:
-        # 기본 창(1600x900) 안에 스크롤 없이 담으려고 그룹박스·행 사이 여백을
-        # 기본값보다 눌러뒀다 — 값이 없어서가 아니라 순전히 세로 공간 절약용.
+    @staticmethod
+    def _tactics_scroll() -> tuple[QScrollArea, QVBoxLayout]:
+        """전술·경기 결과 탭 셋의 틀 — 채우기는 _render_tactics 하나가 셋을 같이 한다(키 tactics)."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         w = QWidget()
         v = QVBoxLayout(w)
         v.setSpacing(8)
+        scroll.setWidget(w)
+        return scroll, v
+
+    def _build_tactics_tab(self) -> QWidget:
+        # 그룹박스·행 사이 여백을 기본값보다 눌러뒀다 — 값이 없어서가 아니라 순전히 세로 공간 절약용.
+        scroll, v = self._tactics_scroll()
 
         gb_f = QGroupBox("전술 분석")
         vf = QVBoxLayout(gb_f)
@@ -4194,7 +4299,11 @@ class MainWindow(QMainWindow):
         self.box_opp.setSpacing(2)
         vf.addLayout(self.box_opp)
         v.addWidget(gb_f)
+        v.addStretch(1)
+        return scroll
 
+    def _build_results_tab(self) -> QWidget:
+        scroll, v = self._tactics_scroll()
         gb_r = QGroupBox("경기 결과")
         rl = QHBoxLayout(gb_r)
         self.box_result = QVBoxLayout()
@@ -4208,7 +4317,11 @@ class MainWindow(QMainWindow):
             holder.setLayout(box)
             rl.addWidget(holder, 1)
         v.addWidget(gb_r)
+        v.addStretch(1)
+        return scroll
 
+    def _build_pass_style_tab(self) -> QWidget:
+        scroll, v = self._tactics_scroll()
         # 1.4.1 N5 — 경기 상세의 패스 종류 6가지(R10). 표(FitTableWidget)는 스크롤 안에서 높이가 안 잡혀 글자 칸으로
         gb_p = QGroupBox("패스 스타일")
         pv = QVBoxLayout(gb_p)
@@ -4222,7 +4335,6 @@ class MainWindow(QMainWindow):
         pv.addWidget(self.lb_pass_note)
         v.addWidget(gb_p)
         v.addStretch(1)
-        scroll.setWidget(w)
         return scroll
 
     # ── 등록 계정 ─────────────────────────────────────────────────────
@@ -4480,6 +4592,7 @@ class MainWindow(QMainWindow):
         self.lb_opponent_note.setText(self._opponent_note_text())
         self.lb_analysis_note.setText(self._analysis_note_text())
         self.lb_diag_note.setText(self._diag_note_text())
+        self.lb_diag_note2.setText(self._diag_note_text())
 
     def _on_season_changed(self) -> None:
         self._season_picked = True
@@ -4581,9 +4694,8 @@ class MainWindow(QMainWindow):
         # 다른 계정이면 대시보드부터. 같은 계정 재확인이면 보던 메뉴를 유지한다.
         self.stack.setCurrentIndex(self.PAGE_MAIN)
         if switched:
-            # 이번에 켜고 처음 그리는 계정이면 지난번에 보던 메뉴로(settings.ini), 아니면 대시보드
-            page = self._restore.pop("page", None)
-            self._go_page(page if page in self._page_index else "대시보드")
+            # 이번에 켜고 처음 그리는 계정이면 지난번에 보던 메뉴·탭으로(settings.ini), 아니면 대시보드
+            self._go_page(*self._restore_view(self._restore.pop("page", None), self._restore.pop("tabs", None)))
         self._render_ranker()
         # ELO — 검색·저장본 열기·내려놓은 뒤 다시 열기가 전부 여기를 지난다(경기 0 이어도 ELO 는 있을 수 있다)
         self._load_elo(ouid)
@@ -4597,6 +4709,22 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
             + (f" · 새 경기 {new}건 저장" if new else ""))
+
+    def _restore_view(self, page, saved_tabs) -> tuple[str, str | None]:
+        """저장된 보기 → (메뉴, 탭). 다른 메뉴의 보던 탭도 여기서 한 번 되살린다(신호 없이 — 그리기는 열 때).
+        1.x 이름은 OLD_PAGE_NAMES 로 새 자리에 · 없는 이름·숨긴 메뉴·없는 탭은 대시보드(E5)."""
+        for menu, tabs in self._page_tabs.items():
+            name = (saved_tabs or {}).get(self._tab_sid[menu])
+            if isinstance(name, str):
+                tabs.set_current(name, emit=False)
+        if not isinstance(page, str):
+            return "대시보드", None
+        if page in self.OLD_PAGE_NAMES:
+            return self.OLD_PAGE_NAMES[page]
+        if page not in self._page_index or page in config.HIDDEN_NAV_UNTIL_READY:
+            return "대시보드", None
+        tabs = self._page_tabs.get(page)
+        return page, (tabs.current_name() if tabs is not None else None)
 
     # ── 렌더 ──────────────────────────────────────────────────────────
     def _slice(self) -> tuple[list[MatchSummary], list[dict]]:
@@ -4614,19 +4742,30 @@ class MainWindow(QMainWindow):
     # 예전엔 _render_all 이 메뉴 18개를 매번 다 그려 시즌 "전체"(1만 경기) 전환에 3.2~3.5초 동안
     # 창이 굳었다(2026-10-02 실측). 지금은 전부 '낡음'으로 표시하고 보이는 페이지만 그린 뒤,
     # 나머지는 그 메뉴를 열 때 그린다. 같은 그리기를 쓰는 메뉴는 같은 키를 쓴다(한 번 그리면 같이 깨끗).
-    PAGE_RENDER_KEYS = {
-        "대시보드": "dashboard", "경기 목록": "matches", "상대 전적": "opponents",
-        "흐름 분석": "analysis", "기간별 추이": "period", "시즌별 성적": "seasons",
-        "승부처 분석": "clutch", "성적 진단": "diagnosis", "전술·경기 결과": "tactics",
-        "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing", "랭커와 비교": "rankercmp",
-        "포지션별 최다 상대": "teamcolor",
-        "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
-        "스쿼드 타임라인": "timeline", "이적시장 가계부": "trades",
+    # 2.1.1 — 그리기 단위는 (메뉴, 탭). 키 → 그 키가 그리는 자리들. 한 키를 여러 자리가 쓰면(teamcolor · 한 함수가
+    # 탭 여럿을 채우는 diagnosis·tactics) 자리를 여럿 적는다 — 그중 하나가 보이면 그린다.
+    VIEW_OF_KEY = {
+        "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", None)],
+        "analysis": [("흐름 분석", None)], "period": [("기간별 추이", None)], "seasons": [("시즌별 성적", None)],
+        "clutch": [("승부처 분석", None)],
+        "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
+        "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
+        "shotmap": [("슛 맵", None)],
+        "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
+        "finishing": [("선수별 결정력", None)],
+        "teamcolor": [("포지션별 최다 상대", None), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
+        "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
     }
-    # 위 표 밖의 메뉴 — 이유 없이 빠진 메뉴는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
-    PAGE_RENDER_EXEMPT = {
-        "구단주 비교": "사용자가 [비교] 를 눌러야 그린다 — 검색 결과에 안 묶인다",
-        "승률 그래프": "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
+    KEY_OF_VIEW = {view: key for key, views in VIEW_OF_KEY.items() for view in views}
+    # 위 표 밖의 자리 — 이유 없이 빠진 자리는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
+    VIEW_EXEMPT = {
+        ("구단주 비교", None): "사용자가 [비교] 를 눌러야 그린다 — 검색 결과에 안 묶인다",
+        ("승률 그래프", "승률·등급"): "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
+        ("승률 그래프", "점수·예측"): "_render_elo 가 EloLoader·PredictWorker 결과로 그린다(검색 결과에 안 묶인다)",
+        ("랭킹 추이", None): "아직 빈 메뉴(config.HIDDEN_NAV_UNTIL_READY) — 17단계",
+        ("랭커 픽", "픽"): "아직 빈 메뉴 — 16단계",
+        ("랭커 픽", "추천"): "아직 빈 메뉴 — 17단계",
+        ("선수로 구단주 찾기", None): "아직 빈 메뉴 — 16단계",
     }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
 
@@ -4678,14 +4817,13 @@ class MainWindow(QMainWindow):
         idx = self.pages.currentIndex()
         return next((n for n, i in self._page_index.items() if i == idx), None)
 
-    def _render_page(self, name: str | None) -> None:
-        key = self.PAGE_RENDER_KEYS.get(name or "")
+    def _render_key(self, key: str | None) -> None:
         if key and key in self._dirty:
             self._dirty.discard(key)  # 먼저 지운다 — 그리다 예외가 나도 같은 화면에서 무한 반복하지 않게
             self._renderers()[key]()
 
     def _render_current_page(self) -> None:
-        self._render_page(self._current_page_name())
+        self._render_key(self.KEY_OF_VIEW.get(self._current_view()))
 
     def _render_everything(self) -> None:
         for key, fn in self._renderers().items():
@@ -4694,10 +4832,10 @@ class MainWindow(QMainWindow):
                 fn()
 
     def _invalidate(self, key: str) -> None:
-        """그 키의 화면이 낡았다 — 보이고 있으면 바로, 아니면 열 때 그린다."""
+        """그 키의 화면이 낡았다 — 그 키의 자리 중 하나가 보이고 있으면 바로, 아니면 열 때 그린다."""
         self._dirty.add(key)
-        if not self.LAZY_RENDER or self.PAGE_RENDER_KEYS.get(self._current_page_name() or "") == key:
-            self._render_page(next(n for n, k in self.PAGE_RENDER_KEYS.items() if k == key))
+        if not self.LAZY_RENDER or self._current_view() in self.VIEW_OF_KEY.get(key, ()):
+            self._render_key(key)
 
     def _max_division_text(self) -> str | None:
         """지금 계정의 최고 티어 줄 — 기록이 없거나 등급 이름을 모르면(메타 실패) None.

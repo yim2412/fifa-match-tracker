@@ -15,6 +15,10 @@ APP_NAME = "감독모드 전적 분석"
 APP_VERSION = "v1.4.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
+# 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 하나씩 뺀다).
+# 남아 있으면 배포판을 안 만든다(tools/release.py preflight_problems) — 빈 페이지를 내보내지 않게.
+HIDDEN_NAV_UNTIL_READY = ("랭킹 추이", "랭커 픽", "선수로 구단주 찾기")
+
 
 def _root() -> Path:
     """개발 중에는 소스 폴더, exe로 묶이면 exe 옆 폴더."""

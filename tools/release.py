@@ -125,9 +125,12 @@ def zip_files(path: Path):
                 yield n, z.read(n)
 
 
-def preflight_problems(version: str, notes: str, dirty: str) -> list[str]:
+def preflight_problems(version: str, notes: str, dirty: str, hidden=()) -> list[str]:
     """빌드 전에 멈춰야 할 이유들. 비면 진행."""
     out = []
+    if hidden:
+        out.append("숨긴 메뉴가 남아 있다(config.HIDDEN_NAV_UNTIL_READY) — 빈 페이지를 내보내지 않는다: "
+                   + ", ".join(hidden))
     if not notes:
         out.append(f"CHANGELOG.md 에 '## {version}' 절이 없다 — 받는 사람이 읽을 변경 내용부터 쓴다")
     if dirty:
@@ -273,7 +276,7 @@ def main() -> int:
     notes = changelog_section(version)
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True,
                            text=True, encoding="utf-8", errors="replace").stdout.strip()
-    problems = preflight_problems(version, notes, dirty)
+    problems = preflight_problems(version, notes, dirty, config.HIDDEN_NAV_UNTIL_READY)
     if problems:
         fail("\n       ".join(problems))
     ok(f"버전 {version} · CHANGELOG 절 있음 · 작업 트리 깨끗함")

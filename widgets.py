@@ -289,6 +289,145 @@ class WrapBar(QFrame):
         return QSize(self.two_row_width(), super().minimumSizeHint().height())
 
 
+class _TabBar(QWidget):
+    """PageTabs 의 탭줄 — 한 줄에 안 들어가면 탭 글자를 줄이지 않고 여러 줄로 접는다(WrapBar 와 같은 원리:
+    폭만 보고 판정하니 왔다 갔다 하지 않는다). 최소 폭은 가장 넓은 탭 하나 — 탭줄이 창 최소 폭을 묶지 않게."""
+
+    def __init__(self):
+        super().__init__()
+        self._btns: list[QPushButton] = []
+        self._v = QVBoxLayout(self)
+        self._v.setContentsMargins(0, 0, 0, 0)
+        self._v.setSpacing(6)
+        self._rows_now: list[list[int]] | None = None
+
+    def add(self, btn: QPushButton) -> None:
+        self._btns.append(btn)
+        self._rows_now = None
+        self._arrange(self.width() if self.isVisible() else 10 ** 6)
+
+    def _rows_for(self, width: int) -> list[list[int]]:
+        gap = 6
+        rows: list[list[int]] = [[]]
+        used = 0
+        for i, b in enumerate(self._btns):
+            w = b.sizeHint().width()
+            if rows[-1] and used + gap + w > width:
+                rows.append([])
+                used = 0
+            used += (gap if rows[-1] else 0) + w
+            rows[-1].append(i)
+        return rows
+
+    def _arrange(self, width: int) -> None:
+        rows = self._rows_for(width)
+        if rows == self._rows_now:
+            return
+        self._rows_now = rows
+        while self._v.count():
+            item = self._v.takeAt(0)
+            lay = item.layout()
+            if lay is not None:
+                while lay.count():
+                    lay.takeAt(0)
+                lay.deleteLater()
+        for row in rows:
+            h = QHBoxLayout()
+            h.setSpacing(6)
+            for i in row:
+                h.addWidget(self._btns[i])
+            h.addStretch(1)
+            self._v.addLayout(h)
+        self.updateGeometry()
+
+    def row_count(self) -> int:
+        return len(self._rows_now or [])
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._arrange(self.width())
+
+    def minimumSizeHint(self) -> QSize:
+        w = max((b.sizeHint().width() for b in self._btns), default=0)
+        return QSize(w, super().minimumSizeHint().height())
+
+
+class PageTabs(QWidget):
+    """페이지 안 탭(2.1.1) — 탭줄 + 지금 탭의 내용 하나만 보인다.
+
+    QStackedWidget 을 안 쓰고 숨기기/보이기로 바꾼다 — QStackedWidget 은 모든 페이지의 최소 크기 최댓값을 알려,
+    넓은 표가 있는 탭 하나가 옆 탭까지 가로로 넓힌다(크기 정책 Ignored 를 따로 걸어야 한다). 숨은 위젯은
+    레이아웃 크기 계산에서 빠지므로 그 함정이 처음부터 없다."""
+
+    changed = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+        self._names: list[str] = []
+        self._pages: list[QWidget] = []
+        self._btns: list[QPushButton] = []
+        self._cur = -1
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
+        self.bar = _TabBar()
+        v.addWidget(self.bar)
+        self._body = QVBoxLayout()
+        self._body.setContentsMargins(0, 0, 0, 0)
+        v.addLayout(self._body, 1)
+
+    def add_tab(self, name: str, page: QWidget) -> int:
+        i = len(self._pages)
+        btn = QPushButton(name)
+        btn.setObjectName("pageTab")
+        btn.setCheckable(True)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(lambda _=False, i=i: self.set_current(i))
+        self._names.append(name)
+        self._pages.append(page)
+        self._btns.append(btn)
+        self.bar.add(btn)
+        page.setVisible(False)
+        self._body.addWidget(page, 1)
+        if self._cur < 0:
+            self.set_current(0, emit=False)
+        return i
+
+    def take_bar(self) -> _TabBar:
+        """탭줄을 이 위젯 밖(카드 제목 줄 — Card.add_to_title_row)에 놓을 때. 신호·고르기는 그대로 여기서."""
+        self.layout().removeWidget(self.bar)
+        return self.bar
+
+    def names(self) -> list[str]:
+        return list(self._names)
+
+    def page(self, i: int) -> QWidget:
+        return self._pages[i]
+
+    def current_index(self) -> int:
+        return self._cur
+
+    def current_name(self) -> str | None:
+        return self._names[self._cur] if 0 <= self._cur < len(self._names) else None
+
+    def set_current(self, which: int | str, emit: bool = True) -> bool:
+        """이름이나 번호로 고른다 — 없는 이름이면 아무것도 안 하고 False."""
+        i = self._names.index(which) if isinstance(which, str) and which in self._names else which
+        if not isinstance(i, int) or not 0 <= i < len(self._pages):
+            return False
+        for j, b in enumerate(self._btns):
+            b.setChecked(j == i)
+        if i == self._cur:
+            return True
+        if self._cur >= 0:
+            self._pages[self._cur].setVisible(False)
+        self._cur = i
+        self._pages[i].setVisible(True)
+        if emit:
+            self.changed.emit(i)
+        return True
+
+
 class VScrollArea(QScrollArea):
     """세로로만 스크롤되는 페이지 틀.
 
@@ -338,6 +477,18 @@ class Card(QFrame):
         if shadow:
             add_shadow(self)
 
+    def add_to_title_row(self, w: QWidget) -> None:
+        """제목 줄 오른쪽에 붙인다(페이지 안 탭줄) — 제목 아래 따로 두면 그 높이만큼 작은 화면에서 세로 막대가
+        생겨 표 폭이 줄었다(2.1.1 — FHD 150% 최소 높이에서 랭커 비교 표 머리글이 2px 잘림)."""
+        v = self.layout()
+        i = v.indexOf(self.title)
+        v.removeWidget(self.title)
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        row.addWidget(self.title)
+        row.addWidget(w, 1)
+        v.insertLayout(i, row)
+
 
 # 한 글자 폭의 상한을 잡을 때 같이 재는 넓은 글자 — 기본 글꼴 밖(대체 글꼴)에서 오는 종류마다 하나씩
 _WIDE_SAMPLES = ("가", "뷁", "漢", "W", "M", "@", "%", "Ⅲ", "😀", "★", "■")
@@ -370,7 +521,6 @@ class FitTableWidget(QTableWidget):
         self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
         self._fit_cache: dict[int, dict[int, int]] = {}  # cell_px -> 최종 열 너비(+padding+extra)
         self._pad = 0  # 열마다 얹는 여백 — set_content_widths 때 _measure_pad 로 잰다
-        self._sort_w = 0  # 정렬 화살표 폭 — Qt 는 정렬 중인 열 하나에만 그린다
         self.horizontalHeader().sortIndicatorChanged.connect(self._on_sort_changed)
 
     def set_base_font_px(self, cell_px: int, header_px: int) -> None:
@@ -442,7 +592,7 @@ class FitTableWidget(QTableWidget):
         cell_fm = QFontMetrics(self.font())
         header = self.horizontalHeader()
         hdr_fm = QFontMetrics(header.font())
-        # 정렬 화살표 자리는 따로 잰다(_sort_w). 채우는 동안(_fill)은 정렬이 꺼져
+        # 정렬 화살표 자리는 따로 잰다(_arrow_w). 채우는 동안(_fill)은 정렬이 꺼져
         # 있어 그대로 재면 화살표 자리가 빠져 "승률▾" 이 겹쳤고, 반대로 켜고 재면
         # 19열 전부에 15px 씩 붙어 선수 지표가 최소 글꼴로도 안 들어갔다.
         shown = header.isSortIndicatorShown()
@@ -459,12 +609,25 @@ class FitTableWidget(QTableWidget):
             if hi:
                 pad = max(pad, header.sectionSizeHint(c)
                           - hdr_fm.horizontalAdvance(hi.text()))
-        if self.columnCount():
-            bare = header.sectionSizeHint(0)
-            header.setSortIndicatorShown(True)
-            self._sort_w = max(0, header.sectionSizeHint(0) - bare)
         header.setSortIndicatorShown(shown)
         return pad + self.PAD_SLACK
+
+    def _arrow_w(self, header_font: QFont) -> int:
+        """그 머리글 글꼴에서 정렬 화살표가 먹는 폭. Qt 는 화살표 자리를 머리글 높이(= 글꼴)에 비례해 잡는다 —
+        예전엔 한 번 잰 값(그때의 글꼴)을 모든 크기에 써서, 큰 글꼴일 때 잰 값이면 작은 글꼴에서 남고 반대면
+        모자랐다(2.1.1 — 탭으로 옮기며 재는 순서가 바뀌자 1264×480 랭커 비교 '포지션▲' 이 2px 잘림)."""
+        if not self.columnCount():
+            return 0
+        header = self.horizontalHeader()
+        saved, shown = header.font(), header.isSortIndicatorShown()
+        header.setFont(header_font)
+        header.setSortIndicatorShown(False)
+        bare = header.sectionSizeHint(0)
+        header.setSortIndicatorShown(True)
+        arrow = header.sectionSizeHint(0)
+        header.setSortIndicatorShown(shown)
+        header.setFont(saved)
+        return max(0, arrow - bare)
 
     def _estimate_total(self, cell_px: int) -> int:
         """텍스트 폭을 기준 크기 대비 선형 비례로 추정 — 후보 크기를 고르는
@@ -486,9 +649,10 @@ class FitTableWidget(QTableWidget):
                           else self._measure_text(QFontMetrics(cell_font),
                                                   QFontMetrics(header_font)))
             sort_col = self.horizontalHeader().sortIndicatorSection()
+            arrow = self._arrow_w(header_font)
             self._fit_cache[cell_px] = {
                 "widths": {c: w + self._pad + self._extra.get(c, 0)
-                          + (self._sort_w if c == sort_col else 0)
+                          + (arrow if c == sort_col else 0)
                           for c, w in text_widths.items()},
                 "cell_font": cell_font,
                 "header_font": header_font,

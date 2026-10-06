@@ -83,6 +83,9 @@ def test_preflight_stops_on_missing_notes_or_dirty_tree():
     assert len(p) == 1 and "CHANGELOG" in p[0], p
     p = release.preflight_problems("v1.0.0", "변경 내용", " M app_main.py")
     assert len(p) == 1 and "커밋" in p[0], p
+    # 2.1.1 — 아직 빈 메뉴를 숨겨 둔 채로는 배포판을 안 만든다(test_no_hidden_nav_in_release)
+    p = release.preflight_problems("v1.0.0", "변경 내용", "", ("랭커 픽",))
+    assert len(p) == 1 and "숨긴 메뉴" in p[0] and "랭커 픽" in p[0], p
 
 
 def test_scan_verdict_distrusts_zero_without_controls():
@@ -265,7 +268,7 @@ class _FakeProc:
         self.stdout, self.returncode = stdout, returncode
 
 
-def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False):
+def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False, hidden=()):
     """가짜 빌드 결과(dist/피파전적관리)로 release.main 을 돌린다 → (종료 코드, 출력)."""
     import contextlib
     root, dist = tmp / "root", tmp / "root" / "dist"
@@ -299,7 +302,9 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
         return _FakeProc()
 
     saved = (release.ROOT, release.DIST, release.ISS, release.find_iscc, release.run,
-             release.subprocess.run, release.changelog_section, release.private_needles, sys.argv)
+             release.subprocess.run, release.changelog_section, release.private_needles, sys.argv,
+             release.config.HIDDEN_NAV_UNTIL_READY)
+    release.config.HIDDEN_NAV_UNTIL_READY = hidden
     release.ROOT, release.DIST, release.ISS = root, dist, iss
     release.find_iscc = lambda: (Path("iscc.exe") if iscc else None)
     release.run, release.subprocess.run = fake_run, fake_sub
@@ -314,7 +319,8 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
         code = e.code
     finally:
         (release.ROOT, release.DIST, release.ISS, release.find_iscc, release.run,
-         release.subprocess.run, release.changelog_section, release.private_needles, sys.argv) = saved
+         release.subprocess.run, release.changelog_section, release.private_needles, sys.argv,
+         release.config.HIDDEN_NAV_UNTIL_READY) = saved
     return code, out.getvalue()
 
 
@@ -330,6 +336,7 @@ def test_release_main_stops_on_every_gate():
         ("QtNetwork 빠짐", {"drop": "PyQt6/QtNetwork.pyd"}, True, "빠진 모듈"),
         ("설치 파일 안 생김", {"make_setup": False}, True, "설치 파일이 안 생겼다"),
         ("개인정보 섞임", {"leak": True}, True, "개인정보가 들어 있다"),
+        ("숨긴 메뉴 남음", {"hidden": ("랭커 픽",)}, True, "숨긴 메뉴"),
     ]
     for name, kw, should_stop, needle in cases:
         tmp = _P(tempfile.mkdtemp())

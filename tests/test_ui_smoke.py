@@ -192,7 +192,8 @@ def test_trend_page_has_own_summary():
 class _CountRenders:
     """창의 그리기 함수 몇 개를 세는 함수로 바꿔 끼운다 — 몇 번 그렸는지."""
 
-    NAMES = ("_render_dashboard", "_render_opponents", "_render_diagnosis", "_render_teamcolor_tabs")
+    NAMES = ("_render_dashboard", "_render_opponents", "_render_diagnosis", "_render_teamcolor_tabs",
+             "_render_players", "_render_ranker_compare")
 
     def __enter__(self):
         self.n = {k: 0 for k in self.NAMES}
@@ -243,27 +244,170 @@ def test_lazy_render_draws_only_the_visible_page():
         assert c.n["_render_teamcolor_tabs"] == 3, c.n
 
 
-def _render_coverage_problems(nav, keys: dict, exempt: dict, renderer_keys) -> list[str]:
-    """메뉴 ↔ 그리기 표 대조 — 표에 안 넣은 메뉴는 예외 없이 조용히 안 그려진다(CLAUDE.md PyQt 7)."""
-    pages = [name for _, items in nav for name, _ in items]
-    out = [f"{p}: PAGE_RENDER_KEYS 에도 PAGE_RENDER_EXEMPT 에도 없다" for p in pages
-           if p not in keys and p not in exempt]
-    out += [f"{p}: 두 표에 다 있다" for p in pages if p in keys and p in exempt]
-    out += [f"{p}: 메뉴에 없는 이름" for p in [*keys, *exempt] if p not in pages]
-    out += [f"{p}: 키 {k!r} 의 그리기가 _renderers() 에 없다" for p, k in keys.items()
-            if k not in renderer_keys]
-    out += [f"그리기 {k!r} 를 쓰는 메뉴가 없다" for k in renderer_keys if k not in keys.values()]
+def _views_of_nav(nav) -> list[tuple]:
+    """NAV → 모든 (메뉴, 탭 또는 None) 자리."""
+    out = []
+    for _, items in nav:
+        for name, b in items:
+            if isinstance(b, app_main.Tabs):
+                out += [(name, t) for t, _b in b.tabs]
+            else:
+                out.append((name, None))
+    return out
+
+
+def _render_coverage_problems(nav, view_of_key: dict, exempt: dict, renderer_keys) -> list[str]:
+    """자리 ↔ 그리기 표 대조 — 표에 안 넣은 자리(메뉴·탭)는 예외 없이 조용히 안 그려진다(CLAUDE.md PyQt 7)."""
+    views = _views_of_nav(nav)
+    keyed = [v for vs in view_of_key.values() for v in vs]
+    out = [f"{v}: VIEW_OF_KEY 에도 VIEW_EXEMPT 에도 없다" for v in views if v not in keyed and v not in exempt]
+    out += [f"{v}: 두 표에 다 있다" for v in views if v in keyed and v in exempt]
+    out += [f"{v}: 메뉴에 없는 자리" for v in [*keyed, *exempt] if v not in views]
+    out += [f"{v}: 키 둘에 있다" for v in set(keyed) if keyed.count(v) > 1]
+    out += [f"키 {k!r} 의 그리기가 _renderers() 에 없다" for k in view_of_key if k not in renderer_keys]
+    out += [f"그리기 {k!r} 를 쓰는 자리가 없다" for k in renderer_keys if k not in view_of_key]
     return out
 
 
 def test_every_nav_page_has_a_renderer():
     W = app_main.MainWindow
-    # 심은 위반부터 — 새 메뉴를 NAV 에만 넣은 경우를 잡지 못하면 아래 단언은 빈 검사다
-    planted = [*W.NAV, ("새 묶음", [("새 메뉴", "_build_x")])]
-    assert any("새 메뉴" in p for p in _render_coverage_problems(
-        planted, W.PAGE_RENDER_KEYS, W.PAGE_RENDER_EXEMPT, _win._renderers())), "심은 새 메뉴를 못 잡음"
-    probs = _render_coverage_problems(W.NAV, W.PAGE_RENDER_KEYS, W.PAGE_RENDER_EXEMPT, _win._renderers())
+    # 심은 위반부터 — 새 메뉴·새 탭을 NAV 에만 넣은 경우를 잡지 못하면 아래 단언은 빈 검사다
+    planted = [*W.NAV, ("새 묶음", [("새 메뉴", "_build_x"),
+                                  ("탭 메뉴", app_main.Tabs("x", (("새 탭", "_build_x"),)))])]
+    probs = _render_coverage_problems(planted, W.VIEW_OF_KEY, W.VIEW_EXEMPT, _win._renderers())
+    assert any("새 메뉴" in p for p in probs) and any("새 탭" in p for p in probs), "심은 새 메뉴·탭을 못 잡음"
+    moved = {**W.VIEW_OF_KEY, "players": [("선수 지표", "없는 탭")]}  # 탭 이름을 바꾸고 표를 안 고친 경우
+    assert any("없는 탭" in p for p in _render_coverage_problems(W.NAV, moved, W.VIEW_EXEMPT, _win._renderers()))
+    probs = _render_coverage_problems(W.NAV, W.VIEW_OF_KEY, W.VIEW_EXEMPT, _win._renderers())
     assert not probs, probs
+    assert W.KEY_OF_VIEW == {v: k for k, vs in W.VIEW_OF_KEY.items() for v in vs}
+
+
+def test_tab_switch_renders_dirty_only():
+    """E1·E2·E6 — 메뉴·탭을 열 때 그 자리의 키만, 낡았을 때만. 한 함수가 탭 여럿을 채우는 키는 한 번이면 같이 깨끗."""
+    with _CountRenders() as c:
+        tabs = _win._page_tabs["선수 지표"]
+        _win._go_page("대시보드")
+        _win._render_all()
+        _win._go_page("선수 지표")                        # 첫 탭 [지표] 만
+        assert c.n["_render_players"] == 1 and c.n["_render_ranker_compare"] == 0, c.n
+        tabs.set_current("랭커 비교")                      # 탭 클릭 → 그 탭의 키
+        assert c.n["_render_ranker_compare"] == 1 and c.n["_render_players"] == 1, c.n
+        tabs.set_current("지표")                          # 깨끗하면 다시 안 그린다
+        assert c.n["_render_players"] == 1, c.n
+        _win._go_page("성적 진단", "규율·불운")
+        assert c.n["_render_diagnosis"] == 1, c.n
+        _win._page_tabs["성적 진단"].set_current("상대·점유율")  # 같은 키 — 이미 그렸다
+        assert c.n["_render_diagnosis"] == 1, c.n
+        _win._invalidate("diagnosis")                      # 보이는 자리면 바로(E6)
+        assert c.n["_render_diagnosis"] == 2, c.n
+        _win._go_page("대시보드")
+        _win._invalidate("diagnosis")                      # 안 보이면 미뤘다가
+        assert c.n["_render_diagnosis"] == 2, c.n
+        _win._go_page("성적 진단")
+        assert c.n["_render_diagnosis"] == 3, c.n
+        _win._go_page("대시보드")
+        _win._render_all()
+        tabs.set_current("랭커 비교")                      # 안 보이는 메뉴의 탭이 바뀌어도 안 그린다
+        assert c.n["_render_ranker_compare"] == 1 and c.n["_render_players"] == 1, c.n
+        tabs.set_current("지표")
+
+
+def test_trades_tab_open_starts_loader():
+    """E3 — 가계부를 열면(메뉴로든 탭으로든) 상태를 다시 읽고 거래 받기를 띄운다."""
+    calls = []
+    _win.start_trades = lambda *a, **k: calls.append(1)
+    tabs = _win._page_tabs["스쿼드·이적"]
+    try:
+        _win._go_page("대시보드")
+        _win._go_page("스쿼드·이적", "가계부")          # 메뉴로(대시보드 → 가계부)
+        assert calls == [1], calls
+        tabs.set_current("타임라인")
+        assert calls == [1], calls
+        tabs.set_current("가계부")                       # 탭으로
+        assert calls == [1, 1], calls
+        _win._go_page("대시보드")
+        _win.nav.setCurrentRow(next(r for r in range(_win.nav.count())
+                                    if _win.nav.item(r).text() == "스쿼드·이적"))  # 기억된 탭(가계부)으로 메뉴 클릭
+        assert calls == [1, 1, 1], calls
+        _win._go_page("대시보드")
+        tabs.set_current("타임라인")
+        tabs.set_current("가계부")                       # 안 보이는 메뉴의 탭 — 거래 받기를 띄우지 않는다
+        assert calls == [1, 1, 1], calls
+        _win._go_page("스쿼드·이적", "가계부")
+        assert calls == [1, 1, 1, 1], calls
+        _win._page_tabs["선수 지표"].set_current("랭커 비교")  # 가계부를 보는 중에 다른 메뉴의 탭이 바뀌어도
+        _win._page_tabs["선수 지표"].set_current("지표")
+        assert calls == [1, 1, 1, 1], calls
+    finally:
+        del _win.start_trades
+        tabs.set_current("타임라인", emit=False)
+        _win._go_page("대시보드")
+
+
+def test_go_page_rejects_unknown_or_hidden():
+    """E4 — 없는 이름·숨긴 메뉴·없는 탭이면 아무것도 안 한다(예전엔 묶음 제목 줄로 갔다)."""
+    _win._go_page("슛 맵")
+    for args in (("없는 메뉴",), ("랭커 픽",), ("선수 지표", "없는 탭"), ("슛 맵", "탭"), ("랭커와 비교",)):
+        _win._go_page(*args)
+        assert _win._current_view() == ("슛 맵", None), (args, _win._current_view())
+    assert "랭커 픽" in config.HIDDEN_NAV_UNTIL_READY  # 숨김이 풀리면 위 줄은 다른 숨긴 메뉴로
+    hidden_rows = [_win.nav.item(r) for r in range(_win.nav.count())
+                   if _win.nav.item(r).text() in (*config.HIDDEN_NAV_UNTIL_READY, "랭커")]
+    assert len(hidden_rows) == 4 and all(it.isHidden() for it in hidden_rows), \
+        [(it.text(), it.isHidden()) for it in hidden_rows]
+    _win._go_page("대시보드")
+
+
+def test_page_tabs_widget():
+    """PageTabs — 지금 탭만 보인다 · 바뀔 때만 신호 · 없는 탭은 거절 · 숨은 탭의 넓은 내용이 최소 폭을 안 넓힌다 ·
+    좁으면 탭 글자를 줄이지 않고 탭줄이 접힌다."""
+    import widgets
+    from PyQt6.QtWidgets import QLabel
+    t = widgets.PageTabs()
+    pages = [QLabel("b"), QLabel("넓은 내용" * 60), QLabel("c")]
+    for i, p in enumerate(pages):
+        t.add_tab(f"탭 이름 {i}", p)
+    got = []
+    t.changed.connect(got.append)
+    t.resize(700, 200)
+    t.show()
+    try:
+        _app.processEvents()
+        assert [p.isVisible() for p in pages] == [True, False, False] and got == []
+        assert t.set_current("탭 이름 2") and got == [2], got
+        assert [p.isVisible() for p in pages] == [False, False, True]
+        assert [b.isChecked() for b in t._btns] == [False, False, True]
+        assert t.set_current(2) and got == [2], "같은 탭인데 신호를 냈다"
+        assert not t.set_current("없음") and not t.set_current(5) and t.current_name() == "탭 이름 2"
+        wide = pages[1].sizeHint().width()
+        assert t.minimumSizeHint().width() < wide, ("숨은 탭이 최소 폭을 넓혔다", t.minimumSizeHint(), wide)
+        assert t.bar.row_count() == 1, t.bar.row_count()
+        t.resize(t.bar.minimumSizeHint().width(), 200)
+        _app.processEvents()
+        assert t.bar.row_count() == 3, t.bar.row_count()
+        assert all(b.width() >= b.sizeHint().width() for b in t._btns), "좁아졌다고 탭 글자를 줄였다"
+        t.resize(700, 200)
+        _app.processEvents()
+        assert t.bar.row_count() == 1, t.bar.row_count()
+    finally:
+        t.close()
+
+
+def test_go_page_literals_in_tests_exist():
+    """테스트의 _go_page("…") 이름이 틀리면 조용히 안 움직여 엉뚱한 화면을 잰다 — 소스에서 대조한다."""
+    import re
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    views = _views_of_nav(app_main.MainWindow.NAV)
+    menus = {m for m, _t in views}
+    calls = re.findall(r'_win\._go_page\("([^"]+)"(?:, "([^"]+)")?\)', src)
+    assert len(calls) > 30, len(calls)
+
+    def bad(cs):
+        return [(m, t) for m, t in cs if not (m in menus and (not t or (m, t) in views))]
+    planted = [("랭커와 비교", ""), ("선수 지표", "없는 탭"), ("슛 맵", "탭")]
+    assert bad(planted) == planted, ("심은 틀린 이름을 못 잡음", bad(planted))
+    assert not bad(calls), bad(calls)
 
 
 def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
@@ -420,7 +564,10 @@ def test_no_table_elides_at_min_or_default_size():
                 page = next((n for n, i in _win._page_index.items()
                              if _win.pages.widget(i).isAncestorOf(tb)), None)
                 if page:
-                    _win._go_page(page)
+                    tabs = _win._page_tabs.get(page)
+                    tab = next((tabs.names()[i] for i in range(len(tabs.names()))
+                                if tabs.page(i).isAncestorOf(tb)), None) if tabs else None
+                    _win._go_page(page, tab)
                     _app.processEvents()
                     # 페이지 틀이 안쪽 최소 폭보다 좁으면 가로가 조용히 잘린다 — 숨은 페이지는 크기가 안 잡혀(640)
                     # 있어 연 뒤에 잰다
@@ -726,13 +873,30 @@ def test_dashboard_cards_navigate():
     targets = [c for c in d.cards if c.target]
     assert len(targets) >= 9, len(targets)
     for c in targets:
+        _win._go_page("승률 그래프", "점수·예측")  # 마지막에 본 탭이 달라도 카드는 카드가 적은 탭으로
         _win._go_page("대시보드")
         _app.processEvents()
         QTest.mouseClick(c, Qt.MouseButton.LeftButton)
         _app.processEvents()
-        assert _win.pages.currentIndex() == _win._page_index[c.target], \
-            (c.title.text(), c.target)
+        menu, tab = c.target
+        want = (menu, tab if tab else (_win._page_tabs[menu].names()[0] if menu in _win._page_tabs else None))
+        assert _win._current_view() == want, (c.title.text(), c.target, _win._current_view())
+    _win._go_page("승률 그래프", "승률·등급")
     _win._go_page("대시보드")
+
+
+def test_dashboard_targets_exist():
+    """대시보드 카드 대상 (메뉴, 탭) 이 NAV 에 있다 — 이름을 바꾸면 카드가 조용히 아무 데도 안 간다.
+    탭이 있는 메뉴는 탭까지 적는다(안 적으면 마지막에 본 탭으로 열린다)."""
+    views = _views_of_nav(app_main.MainWindow.NAV)
+
+    def bad(targets):
+        return [t for t in targets if not isinstance(t, tuple) or t not in views
+                or t[0] in config.HIDDEN_NAV_UNTIL_READY]
+    planted = [("승률 그래프", None), ("승률 그래프", "없는 탭"), "경기 목록", ("랭킹 추이", None)]
+    assert bad(planted) == planted, bad(planted)
+    targets = [c.target for c in _win.dashboard.cards if c.target]
+    assert targets and not bad(targets), bad(targets)
 
 
 def test_charts_draw_empty_and_single():
@@ -2614,6 +2778,7 @@ def test_settings_remember_window_page_and_season():
                    _win.cb_season.currentIndex())
     try:
         _win.resize(1400, 800)
+        _win._go_page("선수 지표", "랭커 비교")  # 기본(첫 탭)이 아닌 탭 — 같으면 복원을 빼도 결과가 같다
         _win._go_page("슛 맵")
         # 기본으로 잡히는 시즌이 아닌 것을 고른다 — 같으면 복원을 빼도 결과가 같아 안 잰다
         default = _win.cb_season.findData(_win.ONGOING)
@@ -2626,6 +2791,7 @@ def test_settings_remember_window_page_and_season():
         # 다른 상태로 돌려놓고, 켤 때처럼 읽는다
         want_geo = bytes(_win.saveGeometry())
         _win.resize(1600, 900)
+        _win._go_page("선수 지표")  # 첫 탭으로 돌려놓는다
         _win._go_page("대시보드")
         # 크기 자체는 Qt 가 화면에 맞춰 되살린다 — offscreen 화면이 800x800 이라 1280 최소폭 창은
         # 줄어든다. 여기선 저장한 값이 그대로 restoreGeometry 로 가는지만 본다
@@ -2637,12 +2803,16 @@ def test_settings_remember_window_page_and_season():
         finally:
             del _win.restoreGeometry
         assert got_geo == [want_geo], "저장한 창 위치·크기가 복원에 안 쓰였다"
+        tabs = _win._restore.pop("tabs", {})
+        assert tabs.get("players") == "랭커 비교" and tabs.get("trend") == "승률·등급", tabs
         assert _win._restore == {"page": "슛 맵", "season": want_season}, _win._restore
+        _win._restore["tabs"] = tabs
         # 처음 그리는 계정이면 그 메뉴·시즌으로
         _win._ouid, _win._season_picked = "", False
         _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         assert _win._current_page_name() == "슛 맵", _win._current_page_name()
+        assert _win._page_tabs["선수 지표"].current_name() == "랭커 비교", "보던 탭을 안 되살렸다"
         assert _win._season_key(_win.cb_season.currentData()) == want_season, _win.cb_season.currentText()
         assert _win._restore == {}, "한 번 쓴 복원값이 남아 다음 계정에도 적용된다"
         # 닫을 때 저장하는 배선 — closeEvent 가 _save_settings 를 부른다
@@ -2665,6 +2835,27 @@ def test_settings_remember_window_page_and_season():
         _win._restore = {}
         _win._season_picked = saved_state[3]
         _win.cb_season.setCurrentIndex(saved_state[4])
+        _win._go_page("대시보드")
+        _win._render_all()
+
+
+def test_restore_old_page_names():
+    """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 숨긴 메뉴는 대시보드."""
+    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("랭커 픽", ("대시보드", None))]
+    assert len(cases) == 4
+    try:
+        for old, want in cases:
+            _win._go_page("선수 지표", "지표")
+            _win._go_page("스쿼드·이적", "타임라인")  # 기억된 탭이 답과 달라야 복원을 잰다
+            _win._go_page("슛 맵")
+            _win._ouid, _win._restore = "", {"page": old}
+            _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                            {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+            assert _win._current_view() == want, (old, _win._current_view())
+    finally:
+        _win._restore = {}
+        _win._page_tabs["선수 지표"].set_current("지표", emit=False)
+        _win._page_tabs["스쿼드·이적"].set_current("타임라인", emit=False)
         _win._go_page("대시보드")
         _win._render_all()
 
@@ -4526,7 +4717,7 @@ def test_elo_chart_draws_current_season_with_cut_lines():
         cuts = {200: [("2026-09-11T10:00:00", 4300.0), ("2026-09-13T10:00:00", 4320.0)],
                 1000: [("2026-09-13T10:00:00", 3200.0)], 10000: [("2026-09-13T10:00:00", 2500.0)]}
         _win._on_elo_ready(_OUID, _elo_data(rows, cuts, tracked=True))
-        _win._go_page("승률 그래프")     # 메뉴를 거쳐 — pages 만 바꾸면 메뉴 선택과 어긋나 다음 테스트가 깨진다
+        _win._go_page("승률 그래프", "점수·예측")     # 메뉴를 거쳐 — pages 만 바꾸면 메뉴 선택과 어긋나 다음 테스트가 깨진다
         _app.processEvents()
         ch = _win.elo_chart
         assert ch.isVisibleTo(_win) and len(ch._points) == 2, "지난 시즌 점이 섞였거나 안 그렸다"
@@ -5092,9 +5283,10 @@ def _trade_view():
 
 
 def test_trade_page_in_nav():
-    names = [n for _g, items in app_main.MainWindow.NAV for n, _b in items]
-    assert "이적시장 가계부" in names and app_main.MainWindow.PAGE_RENDER_KEYS["이적시장 가계부"] == "trades"
-    assert "스쿼드 타임라인" in names and app_main.MainWindow.PAGE_RENDER_KEYS["스쿼드 타임라인"] == "timeline"
+    views = _views_of_nav(app_main.MainWindow.NAV)
+    assert ("스쿼드·이적", "가계부") in views and app_main.MainWindow.KEY_OF_VIEW[("스쿼드·이적", "가계부")] == "trades"
+    assert ("스쿼드·이적", "타임라인") in views and \
+        app_main.MainWindow.KEY_OF_VIEW[("스쿼드·이적", "타임라인")] == "timeline"
 
 
 def _my_starters(n=3):
@@ -5363,7 +5555,7 @@ def test_trade_wipe_clears_screen():
             _win._on_trades_wiped()
             assert "trades" in _win._dirty, "보이지 않는 거래 화면을 낡음으로 안 표시했다"
             assert "timeline" in _win._dirty, "타임라인이 옛 주인 거래를 들고 있다"
-            _win._go_page("이적시장 가계부")      # 열면 다시 그린다
+            _win._go_page("스쿼드·이적", "가계부")      # 열면 다시 그린다
             assert "trades" not in _win._dirty
             assert _win.lb_trade_banner.text().startswith("내 계정:"), _win.lb_trade_banner.text()
             k.state(key_fp=store.key_fingerprint("other"))   # 보이는 중에 지웠음 — 바로 다시 읽는다
@@ -5522,7 +5714,7 @@ class _RankerEnv:
 
 
 def _ranker_view():
-    _win._go_page("랭커와 비교")
+    _win._go_page("선수 지표", "랭커 비교")
     _win._dirty.add("rankercmp")
     _win._render_ranker_compare(_win._slice()[1])
 

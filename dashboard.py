@@ -53,11 +53,13 @@ class DashboardInput:
 
 
 class DashCard(QFrame):
-    """제목 + 범위 글 + 본문. target 이 있으면 눌렀을 때 navigate(target)."""
+    """제목 + 범위 글 + 본문. target(메뉴, 탭 또는 None)이 있으면 눌렀을 때 navigate(target).
 
-    clicked = pyqtSignal(str)
+    탭까지 적는다(2.1.1) — 메뉴만 적으면 그 메뉴에서 마지막에 본 탭으로 열려 카드와 다른 내용이 보인다."""
 
-    def __init__(self, title: str, target: str | None = None):
+    clicked = pyqtSignal(object)
+
+    def __init__(self, title: str, target: tuple[str, str | None] | None = None):
         super().__init__()
         self.setObjectName("card")
         self.target = target
@@ -80,7 +82,9 @@ class DashCard(QFrame):
         v.addLayout(self.body, 1)
         if target:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.setToolTip(f"눌러서 '{target}' 보기")
+            menu, tab = target
+            where = f"{menu} › {tab}" if tab else menu
+            self.setToolTip(f"눌러서 '{where}' 보기")
 
     def mouseReleaseEvent(self, event) -> None:
         if self.target and event.button() == Qt.MouseButton.LeftButton \
@@ -124,9 +128,9 @@ def _pct(n: int, d: int) -> float | None:
 
 
 class DashboardPage(QWidget):
-    """대시보드. render(DashboardInput) 로 채운다. 카드를 누르면 navigate(메뉴 이름)."""
+    """대시보드. render(DashboardInput) 로 채운다. 카드를 누르면 navigate((메뉴, 탭 또는 None))."""
 
-    navigate = pyqtSignal(str)
+    navigate = pyqtSignal(object)
 
     def __init__(self, ranker_card: QWidget):
         super().__init__()
@@ -138,13 +142,13 @@ class DashboardPage(QWidget):
         # ② 지표 4개
         row = QHBoxLayout()
         row.setSpacing(14)
-        self.kpi_rate = self._card("승률", "경기 목록")
+        self.kpi_rate = self._card("승률", ("경기 목록", None))
         self.lb_rate = _label("—", pt=22, bold=True)
         self.lb_rate_delta = _label("", dim=True)
         self.kpi_rate.body.addWidget(self.lb_rate)
         self.kpi_rate.body.addWidget(self.lb_rate_delta)
 
-        self.kpi_wdl = self._card("승무패", "경기 목록")
+        self.kpi_wdl = self._card("승무패", ("경기 목록", None))
         wdl = QHBoxLayout()
         self.donut = DonutChart(size=96)
         wdl.addWidget(self.donut)
@@ -163,13 +167,13 @@ class DashboardPage(QWidget):
         wdl.addLayout(self.lb_wdl_legend, 1)
         self.kpi_wdl.body.addLayout(wdl)
 
-        self.kpi_goals = self._card("득실", "경기 목록")
+        self.kpi_goals = self._card("득실", ("경기 목록", None))
         self.lb_goals = _label("—", pt=22, bold=True)
         self.lb_goals_sub = _label("", dim=True)
         self.kpi_goals.body.addWidget(self.lb_goals)
         self.kpi_goals.body.addWidget(self.lb_goals_sub)
 
-        self.kpi_streak = self._card("연속", "경기 목록")
+        self.kpi_streak = self._card("연속", ("경기 목록", None))
         self.lb_streak = _label("—", pt=22, bold=True)
         self.lb_streak_sub = _label("", dim=True)
         self.kpi_streak.body.addWidget(self.lb_streak)
@@ -188,7 +192,7 @@ class DashboardPage(QWidget):
         row = QHBoxLayout()
         row.setSpacing(14)
         row.addWidget(ranker_card, 1, Qt.AlignmentFlag.AlignTop)
-        self.trend = self._card("승률 흐름", "승률 그래프")
+        self.trend = self._card("승률 흐름", ("승률 그래프", "승률·등급"))
         # 글자는 점 위 줄로 — 20개 점과 한 줄에 두면 1280 폭에서 자리가 모자란다
         self.trend.body.addWidget(_label(f"최근 {DOTS_N}경기 (왼쪽이 오래된 경기)", dim=True))
         self.dots = ResultDots()
@@ -212,7 +216,7 @@ class DashboardPage(QWidget):
             _label("바깥일수록 그 항목에서 앞선다 · 진한 고리가 동률", dim=True, wrap=True))
         grid.addWidget(self.radar_card, 0, 0)
 
-        self.clutch = self._card("승부처", "승부처 분석")
+        self.clutch = self._card("승부처", ("승부처 분석", None))
         gauges = QHBoxLayout()
         gauges.setSpacing(6)
         self.gauges: list[RingGauge] = []
@@ -229,7 +233,7 @@ class DashboardPage(QWidget):
         self.clutch.body.addStretch(1)
         grid.addWidget(self.clutch, 0, 1)
 
-        self.minutes = self._card("언제 넣고 먹히나", "승부처 분석")
+        self.minutes = self._card("언제 넣고 먹히나", ("승부처 분석", None))
         self.minutes.body.addWidget(_legend([("득점", T.CHART_UP), ("실점", T.CHART_DOWN)]))
         self.minute_chart = GroupedBarChart()
         self.minutes.body.addWidget(self.minute_chart, 1)
@@ -242,7 +246,7 @@ class DashboardPage(QWidget):
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)
-        self.story = self._card("흐름 분석", "흐름 분석")
+        self.story = self._card("흐름 분석", ("흐름 분석", None))
         self.story_rows: list[tuple[QLabel, QLabel]] = []
         for _ in range(3):
             line = QHBoxLayout()
@@ -257,13 +261,13 @@ class DashboardPage(QWidget):
         self.story.body.addStretch(1)
         grid.addWidget(self.story, 0, 0)
 
-        self.timeband = self._card("시간대 승률", "승부처 분석")
+        self.timeband = self._card("시간대 승률", ("승부처 분석", None))
         self.timeband_bars = HBarList()
         self.timeband.body.addWidget(self.timeband_bars)
         self.timeband.body.addStretch(1)
         grid.addWidget(self.timeband, 0, 1)
 
-        self.rivals = self._card("자주 만난 상대", "상대 전적")
+        self.rivals = self._card("자주 만난 상대", ("상대 전적", None))
         self.rival_bars = HBarList()
         self.rivals.body.addWidget(self.rival_bars)
         self.rivals.body.addStretch(1)
@@ -271,7 +275,7 @@ class DashboardPage(QWidget):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-    def _card(self, title: str, target: str | None = None) -> DashCard:
+    def _card(self, title: str, target: tuple[str, str | None] | None = None) -> DashCard:
         c = DashCard(title, target)
         c.clicked.connect(self.navigate)
         add_shadow(c)
