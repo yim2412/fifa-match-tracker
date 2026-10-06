@@ -493,13 +493,16 @@ def test_non_rate_rules_have_no_basis():
     ms, ds = _seq(["승"] * 5)
     assert all(i.basis is None for i in analysis._flow(ms, ds, OUID, 5))
 
+import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
 
 def main() -> int:
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for fn in fns:
         try:
-            fn()
+            with watchdog.limit(fn.__name__):
+                fn()
             print(f"[OK]   {fn.__name__}")
         except AssertionError as e:
             failed += 1

@@ -37,6 +37,7 @@ import images
 import notice
 import playerinfo
 import rankcollect
+import rankerpick
 import rankerstats
 import ranker
 import seasons as sn
@@ -246,6 +247,12 @@ class SavedPrefetch:
         self._stop = True  # 읽던 중이면 다음 행에서 멈춘다 — 창을 닫을 때 종료를 붙잡지 않게
 
 
+def _mark_final_429() -> None:
+    """오픈API 로더가 재시도 끝에 429 로 실패했다 — 그날 랭커 픽은 시작하지 않는다(store.api_budget 'openapi' 줄 · E13).
+    재시도로 넘어간 초당 429(api.throttled)는 안 적는다 — 개발 단계 키의 큰 검색에서 늘 나 그날 랭커 픽이 꺼진다."""
+    store.mark_final_429(datetime.now().date().isoformat())
+
+
 class MatchLoader(QThread):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
 
@@ -418,6 +425,7 @@ class MatchLoader(QThread):
                         self._pool.shutdown(wait=False, cancel_futures=True)
                         self._pool = None
                 if self._quota_hit:
+                    _mark_final_429()  # 재시도 끝의 429 — 그날 랭커 픽은 시작하지 않는다(내 검색이 먼저 · E13)
                     # 듬성듬성한 결과를 DB 에 넣으면 그 구멍은 영영 안 메워진다 — 다음 검색의
                     # _new_match_ids 는 첫 페이지가 다 아는 경기면 멈추기 때문이다. 대신 받은
                     # 상세는 이미 디스크 캐시에 있어(get_match_detail) 다시 검색하면 거기서 읽고
@@ -488,6 +496,8 @@ class MatchLoader(QThread):
                     lambda f, o=ouid: None if self._cancel else self.rank_ready.emit(o, f.result()))
 
         except NexonAPIError as e:
+            if e.code == QUOTA_CODE or e.status == 429:
+                _mark_final_429()
             if e.code == KEY_INVALID_CODE:
                 self.key_invalid.emit(e.message)
             else:
@@ -754,6 +764,8 @@ class TradeLoader(QThread):
         finally:
             if conn is not None:
                 conn.close()
+        if res.quota:
+            _mark_final_429()  # get_trades 의 재시도 끝 429(E13)
         self.done.emit(res)
 
 
@@ -848,6 +860,8 @@ class RankerStatsLoader(QThread):
             finally:
                 conn.close()
         except NexonAPIError as e:  # 429 도 여기 — 키 입력 창으로 보내지 않는다(부가 기능)
+            if e.code == QUOTA_CODE or e.status == 429:
+                _mark_final_429()  # 재시도 끝 429(E13)
             if not self._cancel:
                 self.failed.emit(e.message)
             return
@@ -857,6 +871,70 @@ class RankerStatsLoader(QThread):
             return
         if not self._cancel:
             self.done.emit(res)
+
+
+class SquadBackfillWorker(QThread):
+    """선수 색인 백필(store.backfill_squads — 2.1.1 · 12). 낮은 우선순위 · 묶음(1,000경기 · 한 트랜잭션) 사이에서 멈춘다.
+    끊겨도 다음 실행이 LEFT JOIN 으로 이어서 찾아 terminate 하지 않는다(shutdown 표)."""
+
+    progress = pyqtSignal(int, int)   # 남은 경기, 전체 경기
+
+    def __init__(self):
+        super().__init__()
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        rankcollect.lower_thread_priority()  # 게임 중에도 돈다 — 핸들 형은 rankcollect 가 적어 둔다
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                left, total = store.unindexed_count(conn)
+                self.progress.emit(left, total)
+                store.backfill_squads(conn, stop=lambda: self._cancel,
+                                      on_batch=lambda done: self.progress.emit(max(0, left - done), total))
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass  # DB 잠김 등 — 다음 실행이 잇는다
+
+
+class RankerPickLoader(QThread):
+    """랭커 픽 받기(rankerpick.collect) — 마지막 스냅숏 상위 RANKER_PICK_TOP 명. 화면(랭커 픽)이 보이는 동안만 돈다.
+    랭커 사이에서 멈추고(받은 만큼은 남는다), 429 대기도 1초씩 cancel 을 본다. 랭커마다 저장이 끝나 terminate 하지 않는다."""
+
+    ranker = pyqtSignal()        # 한 명 끝 — 화면이 집계를 다시 그린다
+    done = pyqtSignal(object)    # rankerpick.PickResult
+
+    def __init__(self, api: FCOnlineAPI):
+        super().__init__()
+        self._api = api
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        res = rankerpick.PickResult()
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            try:
+                _taken, targets = rankerpick.top_rankers(rconn)
+            finally:
+                if rconn is not None:
+                    rconn.close()
+            if targets:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    res = rankerpick.collect(self._api, conn, targets, cancel=lambda: self._cancel,
+                                             on_ranker=self.ranker.emit)
+                finally:
+                    conn.close()
+        except Exception as e:  # DB 잠김 등 — 랭커 픽 하나 때문에 앱이 죽지 않게. 다음 기회에 이어서
+            res.error = f"{type(e).__name__}: {e}"
+        self.done.emit(res)
 
 
 class AbilitySimLoader(QThread):
@@ -1574,6 +1652,16 @@ class MainWindow(QMainWindow):
         self._retired_loaders: list = []        # 갈아 끼운 축구장의 로더 — 끝날 때까지 쥔다(_retire_loaders)
         self._ability_sim_loader: AbilitySimLoader | None = None
         self._position_ovr_loader: AbilitySimLoader | None = None
+        # 선수 색인 백필(12) — schedule_backfill 이 첫 화면 뒤에 띄운다. 남은 수는 찾기 화면의 "색인 중 N/M"
+        self._backfill_worker: SquadBackfillWorker | None = None
+        self._backfill_left: tuple[int, int] | None = None   # (남은 경기, 전체) — None 이면 아직 모름
+        self._backfill_timer = QTimer(self)
+        self._backfill_timer.setSingleShot(True)
+        self._backfill_timer.timeout.connect(self._start_backfill)
+        # 랭커 픽(6) — 화면이 보이는 동안만. 지우기 요청이 로더가 도는 중에 오면 끝난 뒤(finished) 지운다
+        self._pick_loader: RankerPickLoader | None = None
+        self._pick_result: rankerpick.PickResult | None = None
+        self._pick_purge_pending = False
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -1703,6 +1791,8 @@ class MainWindow(QMainWindow):
         # 1.875초 신호 → 1.934초 이동) 신호에서 바로 맞추면 헛돈다 → 그 뒤 첫 이동·크기 변경에서 맞춘다.
         if e.type() == QEvent.Type.WindowStateChange:
             self._settle_after_restore = not (self.isMaximized() or self.isMinimized())
+            # 랭커 픽 멈춤·재개는 여기 두지 않는다 — 최소화·복원은 spontaneous hide/show 이벤트로도 와서(Qt 문서 ·
+            # offscreen 실측) hideEvent·showEvent 가 이미 한다. 여기 두었던 줄은 지워도 테스트가 그대로였다(16단계 변이 #24)
             if getattr(self, "_notice_after_restore", False) and not self.isMinimized():  # __init__ 중에도 온다
                 self._notice_after_restore = False
                 # 상태가 바뀐 직후엔 창이 아직 제자리가 아니다 — 한 바퀴 뒤 그 창 위에
@@ -1768,8 +1858,15 @@ class MainWindow(QMainWindow):
             pass
         self.statusBar().showMessage(NARROW_SCREEN_MSG, 30000)
 
+    def hideEvent(self, e) -> None:
+        super().hideEvent(e)
+        if hasattr(self, "_pick_loader"):
+            self._stop_ranker_pick()  # X(트레이 숨김)·최소화 둘 다 여기로 온다 — 안 보는 동안 받지 않게(U2 · 1회차 A·B)
+
     def showEvent(self, e) -> None:
         super().showEvent(e)
+        if hasattr(self, "_pick_loader"):
+            QTimer.singleShot(0, self.start_ranker_pick)  # 트레이 [열기] · 다시 보임 — 그 화면이면 잇는다(E9b)
         handle = self.windowHandle()
         if handle is not None and not getattr(self, "_screen_hooked", False):
             self._screen_hooked = True
@@ -1889,6 +1986,9 @@ class MainWindow(QMainWindow):
         ok = NoticeDialog(self, reask=True).exec() == QDialog.DialogCode.Accepted
         self._render_elo()   # 따라가기 버튼 툴팁이 동의 여부를 따른다
         self._refresh_pitch_cards()   # 동의 직후 — 막혀 있던 축구장 칩이 바로 읽기 시작(ROADMAP 2.1.1 3회차)
+        # 다시 묻는 창에서 웹 데이터를 끄면 수집도 꺼진다 — 그 길로도 랭커 픽 데이터를 지운다. 동의했으면 바로 받기 시작(E9b)
+        self.sync_ranker_pick_data()
+        self.start_ranker_pick()
         return ok
 
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
@@ -1898,9 +1998,15 @@ class MainWindow(QMainWindow):
         sched.outcome.connect(self._on_rank_collect_outcome)
 
     def _on_rank_collect_outcome(self, out) -> None:
-        """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드)."""
+        """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드).
+        D6(스스로 끔)이면 랭커 픽 데이터를 여기서 지운다 — 수집 스레드에서 지우면 돌던 로더의 저장과 겹친다(3회차 A)."""
+        if getattr(out, "disabled_by_block", False):
+            config.read_env_switches()  # 수집 스레드가 .env 에 껐다 — 이 프로세스 전역도 맞춘다
+            self.sync_ranker_pick_data()
         if getattr(out, "kind", None) in ("ok", "fresh") and self._ouid:
             self._load_elo(self._ouid)
+        if getattr(out, "kind", None) in ("ok", "fresh"):
+            self._invalidate("rankerpick")  # 새 스냅숏 — 대상 200명이 바뀌었을 수 있다
 
     def _on_rank_collect_status(self, text: str, important: bool) -> None:
         # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다 — 중요한 알림(스스로 꺼짐·연속 실패)만 덮는다
@@ -2281,10 +2387,10 @@ class MainWindow(QMainWindow):
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
         # 2.1.1 새 묶음 — 16·17단계가 채우며 config.HIDDEN_NAV_UNTIL_READY 에서 하나씩 뺀다
+        # 랭커 픽은 16단계엔 탭 없는 한 페이지 — [추천] 탭은 17단계가 Tabs("rankerpick", (픽 | 추천))로 나눈다
         ("랭커", [("랭킹 추이", "_build_pending_page"),
-                 ("랭커 픽", Tabs("rankerpick", (("픽", "_build_pending_page"),
-                                              ("추천", "_build_pending_page")))),
-                 ("선수로 구단주 찾기", "_build_pending_page")]),
+                 ("랭커 픽", "_build_ranker_pick_tab"),
+                 ("선수로 구단주 찾기", "_build_card_owner_tab")]),
     ]
     # 1.x 메뉴 이름 → 2.1.1 의 (메뉴, 탭). settings.ini 의 view/page 가 옛 이름이면 새 자리로 연다(U4 — 알림 띠는 없다)
     OLD_PAGE_NAMES = {
@@ -2427,9 +2533,15 @@ class MainWindow(QMainWindow):
 
     def _on_view_opened(self) -> None:
         """메뉴나 탭으로 한 자리(메뉴, 탭)를 열었다 — 낡았으면 지금 그린다(_render_all 은 보이는 것만 그린다)."""
-        if self.KEY_OF_VIEW.get(self._current_view()) == "trades":
+        key = self.KEY_OF_VIEW.get(self._current_view())
+        if key == "trades":
             self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
             self.start_trades()
+        if key == "rankerpick":
+            self._dirty.add("rankerpick")  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다
+            self.start_ranker_pick()
+        else:
+            self._stop_ranker_pick()  # 다른 자리로 갔다 — 랭커 사이에서 멈춘다(받은 만큼은 남는다 · U2)
         self._render_current_page()
 
     def _go_page(self, name: str, tab: str | None = None) -> None:
@@ -3717,6 +3829,7 @@ class MainWindow(QMainWindow):
         if self._api_loader_busy():
             return  # 그 로더가 끝나면(finished) 다시 여기로 온다 — 상세 동시 요청·키 한도를 나눠 쓰지 않게
         self._trade_again = False
+        self._stop_ranker_pick()  # 오픈API 백그라운드는 하나씩 — 거래가 먼저, 끝나면(finished) 랭커 픽이 잇는다
         ld = TradeLoader(self._api)
         ld.wiped.connect(self._on_trades_wiped)
         ld.done.connect(self._on_trades_done)
@@ -3725,9 +3838,12 @@ class MainWindow(QMainWindow):
         ld.start()
 
     def _yield_trades(self) -> None:
-        """다른 오픈API 로더가 시작된다 — 쪽 사이에서 멈추게만(기다리지 않는다). 그 로더가 끝나면 이어 받는다."""
+        """다른 오픈API 로더가 시작된다 — 쪽 사이에서 멈추게만(기다리지 않는다). 그 로더가 끝나면 이어 받는다.
+        랭커 픽도 같이 양보한다(랭커 사이에서) — 끝나면 거래 → 랭커 픽 순으로 잇는다."""
         if self._trade_loader is not None and self._trade_loader.isRunning():
             self._trade_loader.cancel()
+        self._stop_ranker_pick()
+        self._yield_backfill()  # 같은 DB 쓰기 — 검색 저장이 1,000경기 묶음 뒤에 줄 서지 않게
 
     def _on_trades_wiped(self) -> None:
         self._invalidate_trades()  # 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게
@@ -3739,6 +3855,425 @@ class MainWindow(QMainWindow):
         self._invalidate_trades()
         if self._trade_again:
             self.start_trades()
+        else:
+            self.start_ranker_pick()  # 오픈API 백그라운드는 하나씩 — 거래 → 랭커 픽 순(E9b)
+
+    # ── 랭커 픽(2.1.1 · 6) — 받기 ─────────────────────────────────────
+    def _ranker_pick_visible(self) -> bool:
+        return (self.KEY_OF_VIEW.get(self._current_view()) == "rankerpick"
+                and self.stack.currentIndex() == self.PAGE_MAIN
+                and self.isVisible() and not self.isMinimized())
+
+    def _api_background_busy(self) -> bool:
+        """오픈API 를 쓰는 다른 로더(검색·비교·거래·랭커 기록)가 도는 중 — 랭커 픽은 그 뒤(양보)."""
+        return any(t is not None and t.isRunning()
+                   for t in (self._loader, self._compare_loader, self._trade_loader, self._ranker_loader))
+
+    def start_ranker_pick(self) -> None:
+        """E9 — 켜는 조건을 전부 본다: 랭킹 수집 켜짐 + 그 안내 동의 · 화면과 창이 보임 · 다른 오픈API 로더 없음.
+        하루 상한·429 는 로더 안(rankerpick.collect)에서 — 요청 없이 바로 끝난다."""
+        if (self._quitting or not config.API_KEY or not config.ranker_pick_allowed()
+                or not self._ranker_pick_visible() or self._pick_purge_pending):
+            return
+        if self._pick_loader is not None and self._pick_loader.isRunning():
+            return
+        if self._api_background_busy():
+            return  # 그 로더가 끝나면(finished) 다시 여기로
+        ld = RankerPickLoader(self._api)
+        ld.ranker.connect(lambda: self._invalidate("rankerpick"))
+        ld.done.connect(self._on_ranker_pick_done)
+        ld.finished.connect(self._on_ranker_pick_finished)
+        self._pick_loader = ld
+        ld.start()
+
+    def _stop_ranker_pick(self) -> None:
+        """멈춤 요청만 — 화면 스레드에서 기다리지 않는다(랭커 사이 · 429 대기는 1초 안에 멈춘다)."""
+        if self._pick_loader is not None and self._pick_loader.isRunning():
+            self._pick_loader.cancel()
+
+    def _on_ranker_pick_done(self, res) -> None:
+        self._pick_result = res
+
+    def _on_ranker_pick_finished(self) -> None:
+        if self._pick_purge_pending:
+            self._pick_purge_pending = False
+            self.purge_ranker_pick_data(everything=True)
+        self._invalidate("rankerpick")
+
+    def purge_ranker_pick_data(self, everything: bool = True) -> int | None:
+        """랭커 픽 데이터 지우기(E12) — 화면 스레드의 한 함수. 로더가 돌면 멈추게 하고 끝난 뒤(finished) 이어서 지운다
+        (돌던 로더의 저장과 겹치면 반쯤 지워지거나 다시 생긴다). → 지운 경기 수 · 미뤘거나 실패면 None."""
+        if self._pick_loader is not None and self._pick_loader.isRunning():
+            self._pick_purge_pending = self._pick_purge_pending or everything
+            self._pick_loader.cancel()
+            return None
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                n = store.purge_ranker_data(conn, everything=everything, cache_dir=config.CACHE_DIR)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None  # 잠김 — 다음에 켤 때 정리가 다시 본다(수집이 꺼져 있으면 그때 전부)
+        if everything:
+            self._pick_result = None
+        if n:
+            self._invalidate("rankerpick")
+        return n
+
+    # ── 선수 색인 백필(2.1.1 · 12) ───────────────────────────────────
+    BACKFILL_RETRY_S = 30   # 검색·로더가 돌고 있으면 이만큼 뒤에 다시 본다
+
+    def schedule_backfill(self, delay_s: float) -> None:
+        """켤 때 한 번(main) — 첫 화면 뒤 delay_s 초. 1만 경기 첫 화면 시간(공통 기준 3)에 끼지 않게."""
+        if not self._quitting:
+            self._backfill_timer.start(int(delay_s * 1000))
+
+    def _start_backfill(self) -> None:
+        if self._quitting or (self._backfill_worker is not None and self._backfill_worker.isRunning()):
+            return
+        if self._api_loader_busy() or (self._teamcolor_loader is not None and self._teamcolor_loader.isRunning()):
+            self._backfill_timer.start(self.BACKFILL_RETRY_S * 1000)  # 검색이 먼저 — 그 저장과 쓰기 차례를 다투지 않게
+            return
+        w = SquadBackfillWorker()
+        w.progress.connect(self._on_backfill_progress)
+        w.finished.connect(self._on_backfill_finished)
+        self._backfill_worker = w
+        w.start()
+
+    def _yield_backfill(self) -> None:
+        """검색이 시작된다 — 묶음 사이에서 멈추고 BACKFILL_RETRY_S 뒤 다시(남았으면)."""
+        if self._backfill_worker is not None and self._backfill_worker.isRunning():
+            self._backfill_worker.cancel()
+
+    def _on_backfill_progress(self, left: int, total: int) -> None:
+        self._backfill_left = (left, total)
+        self._show_backfill_note()
+
+    def _on_backfill_finished(self) -> None:
+        left = self._backfill_left[0] if self._backfill_left else 0
+        if left and not self._quitting:
+            self._backfill_timer.start(self.BACKFILL_RETRY_S * 1000)  # 양보로 멈췄다 — 이어서
+        self._show_backfill_note()
+
+    def sync_ranker_pick_data(self) -> None:
+        """수집이 꺼져 있으면 랭커 픽 데이터를 전부 지운다 — 끄는 길(토글 · 웹 데이터 끄기 · D6 · 다시 묻는 창 · .env 손 수정)
+        어디서 왔든 이 한 자리를 거친다. 켜져 있으면 14일 정리만(켤 때)."""
+        self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
+        self._invalidate("rankerpick")
+
+    # ── 랭커 픽(6) — 화면 ─────────────────────────────────────────────
+    PICK_SHARE_COLUMNS = ["이름", "인원", "비율"]
+    PICK_CARD_COLUMNS = ["줄", "선수", "랭커", "비율", "강화"]
+    PICK_TOP_SHARES = 10
+
+    def _build_ranker_pick_tab(self) -> QWidget:
+        """마지막 랭킹 스냅숏 상위 200명 — 팀컬러·포메이션(스냅숏, 요청 0) · 줄별 많이 쓴 카드(최근 경기 — 오픈API) ·
+        내 최근 선발에 그 카드의 랭커 픽률."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.lb_pick_status = QLabel("")
+        self.lb_pick_status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_pick_status.setWordWrap(True)
+        self.btn_pick_notice = QPushButton("안내 보기")
+        self.btn_pick_notice.clicked.connect(self.ask_notice_update)
+        self.btn_pick_notice.setVisible(False)
+        row.addWidget(self.lb_pick_status, 1)
+        row.addWidget(self.btn_pick_notice)
+        v.addLayout(row)
+        self.lb_pick_summary = QLabel("")
+        self.lb_pick_summary.setWordWrap(True)
+        v.addWidget(self.lb_pick_summary)
+
+        shares = QHBoxLayout()
+        self.tbl_pick_colors = self._make_table(self.PICK_SHARE_COLUMNS)
+        self.tbl_pick_forms = self._make_table(self.PICK_SHARE_COLUMNS)
+        for title, tbl in (("팀컬러", self.tbl_pick_colors), ("포메이션", self.tbl_pick_forms)):
+            box = QVBoxLayout()
+            lb = QLabel(title)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            box.addWidget(lb)
+            tbl.setMinimumHeight(200)
+            box.addWidget(tbl)
+            shares.addLayout(box, 1)
+        v.addLayout(shares)
+
+        lb = QLabel("줄별 많이 쓴 카드 — 랭커 = 그 줄에 그 카드를 선발로 쓴 사람 수 · 강화는 사람 수(많은 순)")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lb.setWordWrap(True)
+        v.addWidget(lb)
+        self.tbl_pick_cards = self._make_table(self.PICK_CARD_COLUMNS)
+        self.tbl_pick_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
+        self.tbl_pick_cards.setMinimumHeight(260)
+        self.tbl_pick_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
+        v.addWidget(self.tbl_pick_cards)
+
+        lb = QLabel("내 스쿼드 vs 랭커 — 최근 경기 선발 · 칩 아래 = 그 카드를 선발로 쓴 랭커 비율")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(lb)
+        self.box_pick_pitch = QVBoxLayout()
+        v.addLayout(self.box_pick_pitch, 1)
+        self._pick_pitch_loaders: list = []
+        self.pick_summary: core.PickSummary | None = None  # 테스트가 집계를 본다
+        return w
+
+    def _ranker_pick_gate(self) -> tuple[str, bool]:
+        """막힌 이유 한 줄과 [안내 보기]를 보일지 — 안 막혔으면 ("", False)."""
+        if not (config.WEB_DATA and config.RANK_COLLECT):
+            return ("랭킹 수집을 켜면 상위 200명이 쓰는 선발 카드를 모읍니다 — [정보] 에서 켤 수 있습니다"
+                    " (이 화면을 열어 둔 동안만 넥슨 오픈API 로 받습니다).", False)
+        if config.NOTICE_ACCEPTED < config.RANKER_PICK_NOTICE_VERSION:
+            return "새 이용 안내에 동의해야 켜집니다.", True
+        return "", False
+
+    def _render_ranker_pick(self) -> None:
+        gate, button = self._ranker_pick_gate()
+        self.btn_pick_notice.setVisible(button)
+        taken, targets = None, []
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            if rconn is not None:
+                try:
+                    taken, targets = rankerpick.top_rankers(rconn)
+                finally:
+                    rconn.close()
+        except sqlite3.Error:
+            pass
+        summary = None
+        if targets:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    summary = core.ranker_pick_summary(conn, taken, targets)
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                summary = None
+        self.pick_summary = summary
+        running = self._pick_loader is not None and self._pick_loader.isRunning()
+        res = self._pick_result
+        if gate:
+            status = gate
+        elif not targets:
+            status = "랭킹 스냅숏이 아직 없습니다 — 랭킹 수집 첫 회차가 끝나면(하루 안) 보입니다."
+        elif res is not None and res.quota:
+            status = "넥슨 호출 한도에 걸려 오늘은 멈췄습니다 — 내일 이어서 받습니다."
+        elif res is not None and res.limit:
+            status = f"오늘 한도({config.RANKER_PICK_DAILY_REQ}요청) — {summary.used if summary else 0}/{len(targets)}명, 내일 이어서 받습니다."
+        elif running:
+            status = f"랭커 경기를 받는 중… (받은 랭커 {(summary.total - summary.pending) if summary else 0}/{len(targets)})"
+        elif res is not None and res.error:
+            status = f"받다가 멈췄습니다 — {res.error} · 이 화면을 다시 열면 이어서 받습니다."
+        else:
+            status = ""
+        self.lb_pick_status.setText(status)
+        self.lb_pick_status.setVisible(bool(status))
+        if summary is None:
+            self.lb_pick_summary.setText("")
+            for tbl in (self.tbl_pick_colors, self.tbl_pick_forms, self.tbl_pick_cards):
+                self._fill(tbl, [])
+            self._render_pick_pitch(None)
+            return
+        when = (taken or "")[:16].replace("T", " ")
+        parts = [f"{summary.total}명 중 {summary.used}명 · 최근 {config.RANKER_PICK_MAX_AGE_DAYS}일 경기 · 스냅숏 {when}"]
+        if summary.old:
+            parts.append(f"마지막 경기가 오래된 {summary.old}명은 뺐습니다")
+        if summary.refetch:
+            parts.append(f"{summary.refetch}명 다시 받는 중")
+        if summary.used < config.RANKER_PICK_MIN_RANKERS:
+            parts.append(f"{config.RANKER_PICK_MIN_RANKERS}명 미만이라 카드 비율은 흐리게 — 참고만")
+        self.lb_pick_summary.setText(" · ".join(parts))
+        for tbl, counter in ((self.tbl_pick_colors, summary.colors), (self.tbl_pick_forms, summary.formations)):
+            total = sum(counter.values()) or 1
+            self._fill(tbl, [[name, (str(n), n), (f"{n / total * 100:.0f}%", n / total)]
+                             for name, n in counter.most_common(self.PICK_TOP_SHARES)])
+        few = summary.used < config.RANKER_PICK_MIN_RANKERS
+        rows = []
+        for line, cards in summary.lines:
+            for c in cards:
+                grades = " · ".join(f"{g}강 {n}" for g, n in c.grades.most_common(3) if isinstance(g, int))
+                rate = c.users / summary.used if summary.used else 0.0
+                rows.append([line, f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
+                             (str(c.users), c.users), (f"{rate * 100:.0f}%", rate), grades])
+        self._fill(self.tbl_pick_cards, rows, enable_sort=False)
+        for r, card in enumerate(c for _ln, cs in summary.lines for c in cs):
+            item = self.tbl_pick_cards.item(r, 1)
+            if item is not None:
+                item.setData(Qt.ItemDataRole.UserRole, card.spid)  # 더블클릭 → 선수 카드
+            if few:
+                for col in range(len(self.PICK_CARD_COLUMNS)):
+                    it = self.tbl_pick_cards.item(r, col)
+                    if it is not None:
+                        it.setForeground(QColor(T.TEXT_DIM))
+        self._render_pick_pitch(summary)
+
+    def _render_pick_pitch(self, summary) -> None:
+        """내 최근 경기 선발 — 칩에 그 카드의 랭커 픽률(같은 카드를 어느 자리든 선발로 쓴 비율)."""
+        self._retire_loaders(self._pick_pitch_loaders)
+        self._pick_pitch_loaders = []
+        self._clear(self.box_pick_pitch)
+        me = None
+        if self._details and self._ouid:
+            me = next((p for p in self._details[0].get("matchInfo") or [] if p.get("ouid") == self._ouid), None)
+        if summary is None or me is None:
+            lb = QLabel("랭커 기록과 내 최근 경기가 있으면 여기에 내 선발과 랭커 픽률을 겹쳐 보여 줍니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            lb.setWordWrap(True)
+            self.box_pick_pitch.addWidget(lb)
+            return
+        cards = []
+        for p in me.get("player") or []:
+            pos, sp_id = p.get("spPosition"), p.get("spId")
+            if not isinstance(pos, int) or pos == core.SUB_POSITION or not isinstance(sp_id, int):
+                continue
+            rate = summary.rate.get(sp_id, 0.0)
+            grade = p.get("spGrade")
+            cards.append(PitchCard(pos, self._positions.get(pos, str(pos)), self._names.get(sp_id, str(sp_id)), sp_id,
+                                   grade if isinstance(grade, int) else None, note=f"랭커 {rate * 100:.0f}%"))
+        pitch = PitchWidget(self._pitch_rows(cards), band=False)
+        pitch.player_clicked.connect(lambda sid: self._show_player_info(sid))
+        self.box_pick_pitch.addWidget(pitch)
+        self._pick_pitch_loaders = self._start_pitch_loaders(pitch, card_info=False)  # 칩 카드 정보 요청 0 — 픽률이 본론
+
+    # ── 선수로 구단주 찾기(12) — 화면 ────────────────────────────────
+    CARD_OWNER_COLUMNS = ["구단주", "마지막 사용", "경기", "포지션", "강화", "팀컬러", "순위"]
+    CARD_OWNER_MAX_CANDIDATES = 50   # 이름 후보 콤보에 이만큼
+
+    def _build_card_owner_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row = QHBoxLayout()
+        lb = QLabel("선수")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.ed_owner_name = QLineEdit()
+        self.ed_owner_name.setPlaceholderText("선수 이름(2글자부터)")
+        self.ed_owner_name.setMaximumWidth(180)
+        self.ed_owner_name.textChanged.connect(lambda _t: self._refresh_owner_candidates())
+        self.cb_owner_card = NoScrollComboBox()
+        self.cb_owner_card.setMinimumWidth(220)
+        self.cb_owner_grade = NoScrollComboBox()
+        self.cb_owner_grade.addItem("강화 전체", None)
+        for g in range(1, 14):
+            self.cb_owner_grade.addItem(f"{g}강", g)
+        self.cb_owner_color = NoScrollComboBox()
+        self.cb_owner_color.setMinimumWidth(140)
+        self.btn_owner_find = QPushButton("찾기")
+        self.btn_owner_find.setObjectName("primary")
+        self.btn_owner_find.clicked.connect(self._on_owner_find)
+        for wd in (lb, self.ed_owner_name, self.cb_owner_card, self.cb_owner_grade, self.cb_owner_color,
+                   self.btn_owner_find):
+            row.addWidget(wd)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.lb_owner_status = QLabel(f"최근 {config.CARD_OWNER_DAYS}일 안에 그 카드를 선발로 쓴 구단주 — 이 PC 에 저장된 경기"
+                                      "(검색한 계정과 그 상대 · 랭커 픽)에서 찾습니다. 줄을 두 번 누르면 그 구단주를 검색합니다.")
+        self.lb_owner_status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_owner_status.setWordWrap(True)
+        v.addWidget(self.lb_owner_status)
+        self.lb_owner_backfill = QLabel("")
+        self.lb_owner_backfill.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_owner_backfill.setVisible(False)
+        v.addWidget(self.lb_owner_backfill)
+        self.tbl_owner = self._make_table(self.CARD_OWNER_COLUMNS)
+        self.tbl_owner.itemDoubleClicked.connect(self._on_owner_double_clicked)
+        v.addWidget(self.tbl_owner, 1)
+        self.owner_rows: list[dict] = []   # 테스트가 결과를 본다
+        self._refresh_owner_colors()
+        return w
+
+    def _refresh_owner_colors(self) -> None:
+        cur = self.cb_owner_color.currentData()
+        self.cb_owner_color.blockSignals(True)
+        self.cb_owner_color.clear()
+        self.cb_owner_color.addItem("팀컬러 전체", None)
+        for c in sorted({c for c in self._team_colors.values() if c}):
+            self.cb_owner_color.addItem(c, c)
+        i = self.cb_owner_color.findData(cur)
+        self.cb_owner_color.setCurrentIndex(max(0, i))
+        self.cb_owner_color.blockSignals(False)
+
+    def _refresh_owner_candidates(self) -> None:
+        """입력 2글자부터 메타 이름(spid 8만 건)에서 후보 — 같은 이름의 시즌 카드가 여럿이라 시즌을 같이 적는다."""
+        needle = self.ed_owner_name.text().strip()
+        self.cb_owner_card.clear()
+        if len(needle) < 2:
+            return
+        hits = [(name, sp) for sp, name in self._names.items() if isinstance(name, str) and needle in name]
+        hits.sort(key=lambda x: (x[0] != needle, len(x[0]), x[0], -x[1]))
+        for name, sp in hits[:self.CARD_OWNER_MAX_CANDIDATES]:
+            self.cb_owner_card.addItem(f"{name} ({self._season_name(sp)})", sp)
+
+    def _show_backfill_note(self) -> None:
+        if not hasattr(self, "lb_owner_backfill"):
+            return
+        left = self._backfill_left
+        busy = self._backfill_worker is not None and self._backfill_worker.isRunning()
+        text = ""
+        if left and left[0]:
+            done = left[1] - left[0]
+            text = (f"색인 중 {done:,}/{left[1]:,} 경기 — 결과가 덜 나올 수 있습니다" if busy else
+                    f"색인 대기 중 {done:,}/{left[1]:,} 경기 — 결과가 덜 나올 수 있습니다")
+        self.lb_owner_backfill.setText(text)
+        self.lb_owner_backfill.setVisible(bool(text))
+
+    def _on_owner_find(self) -> None:
+        self._refresh_owner_colors()
+        sp = self.cb_owner_card.currentData()
+        if not isinstance(sp, int):
+            self.lb_owner_status.setText("선수 이름을 2글자 이상 넣고 카드를 고르세요.")
+            return
+        grade, color = self.cb_owner_grade.currentData(), self.cb_owner_color.currentData()
+        since = datetime.now().date().toordinal() - config.CARD_OWNER_DAYS
+        snap: dict = {}
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                owners = store.owners_using_card(conn, sp, since, grade=grade)
+                left = store.unindexed_count(conn)
+            finally:
+                conn.close()
+            rconn = rankcollect.open_rank_db_ro()
+            if rconn is not None:
+                try:
+                    snap = rankerpick.snapshot_index(rconn)
+                finally:
+                    rconn.close()
+        except sqlite3.Error as e:
+            self.lb_owner_status.setText(f"읽지 못했습니다: {e}")
+            return
+        self._backfill_left = left
+        self._show_backfill_note()
+        rows, shown, unknown = [], [], 0
+        for o in owners:
+            rank, tc = snap.get(o["nickname"], (None, ""))
+            tc = tc or self._team_colors.get(o["nickname"] or "") or ""
+            if color is not None and tc != color:
+                unknown += not tc
+                continue
+            pos = max(o["positions"], key=o["positions"].get)
+            grades = " · ".join(f"{g}강" for g, _n in sorted(o["grades"].items(), key=lambda x: -x[1])
+                                if isinstance(g, int))
+            day = datetime.fromordinal(o["last_day"]).date().isoformat()
+            rows.append([o["nickname"] or "-", (day, o["last_day"]), (str(o["games"]), o["games"]),
+                         self._positions.get(pos, str(pos)), grades, tc or "모름",
+                         (f"{rank:,}" if rank else "-", rank or 10 ** 6)])
+            shown.append(o)
+        self.owner_rows = shown
+        self._fill(self.tbl_owner, rows)
+        name = self.cb_owner_card.currentText()
+        note = f"{name} — 구단주 {len(rows)}명(최근 {config.CARD_OWNER_DAYS}일 선발)"
+        if color is not None:
+            note += f" · 팀컬러를 모르는 구단주 {unknown}명은 빠졌습니다(랭킹 1만 명 안이거나 팀컬러를 불러온 상대만 압니다)"
+        self.lb_owner_status.setText(note)
+
+    def _on_owner_double_clicked(self, item) -> None:
+        name_item = self.tbl_owner.item(item.row(), 0)
+        nick = name_item.text() if name_item else ""
+        if nick and nick != "-":
+            for ed in self._nick_edits:
+                ed.setText(nick)
+            self._api_search(nick)
 
     # ── 랭커와 비교(1.4.1 N1) ─────────────────────────────────────────
     RANKER_COLUMNS = ["포지션", "선수", "출전", *[name for name, _ in core.RANKER_METRICS], "랭커 표본", "기준일"]
@@ -3821,6 +4356,7 @@ class MainWindow(QMainWindow):
 
     def _start_ranker_loader(self, pairs: list) -> None:
         self._ranker_note = ""
+        self._stop_ranker_pick()  # 사용자가 연 화면이 먼저 — 끝나면(finished) 랭커 픽이 잇는다
         ld = RankerStatsLoader(self._api, pairs, config.DEFAULT_MATCH_TYPE)
         ld.done.connect(self._on_ranker_done)
         ld.failed.connect(lambda msg, key=tuple(pairs): self._on_ranker_failed(key, msg))
@@ -3838,6 +4374,7 @@ class MainWindow(QMainWindow):
     def _on_ranker_finished(self) -> None:
         # finished 에서 — done 은 스레드 안에서 나와 그 순간 isRunning 이 참이다(TradeLoader 와 같은 이유)
         self._invalidate("rankercmp")
+        self.start_ranker_pick()
 
     def _on_ranker_double_clicked(self, item) -> None:
         name_item = self.tbl_ranker.item(item.row(), 1)
@@ -4230,6 +4767,7 @@ class MainWindow(QMainWindow):
         self._yield_trades()
         self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
         self._compare_loader.finished.connect(self.start_trades)  # 끝나면 거래 받기를 잇는다
+        self._compare_loader.finished.connect(self.start_ranker_pick)
         self._compare_loader.finished_ok.connect(self._on_compare_loaded)
         self._compare_loader.failed.connect(self._on_compare_failed)
         self._compare_loader.key_invalid.connect(self._on_compare_key_invalid)
@@ -4486,6 +5024,7 @@ class MainWindow(QMainWindow):
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
                                    prefetch=prefetch, record_elo=True, want_max_division=True)
         self._loader.finished.connect(self.start_trades)
+        self._loader.finished.connect(self.start_ranker_pick)  # 거래가 시작됐으면 그쪽이 끝난 뒤
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
@@ -4836,6 +5375,7 @@ class MainWindow(QMainWindow):
         "finishing": [("선수별 결정력", None)],
         "teamcolor": [("포지션별 최다 상대", None), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
+        "rankerpick": [("랭커 픽", None)],
     }
     KEY_OF_VIEW = {view: key for key, views in VIEW_OF_KEY.items() for view in views}
     # 위 표 밖의 자리 — 이유 없이 빠진 자리는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
@@ -4844,9 +5384,7 @@ class MainWindow(QMainWindow):
         ("승률 그래프", "승률·등급"): "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
         ("승률 그래프", "점수·예측"): "_render_elo 가 EloLoader·PredictWorker 결과로 그린다(검색 결과에 안 묶인다)",
         ("랭킹 추이", None): "아직 빈 메뉴(config.HIDDEN_NAV_UNTIL_READY) — 17단계",
-        ("랭커 픽", "픽"): "아직 빈 메뉴 — 16단계",
-        ("랭커 픽", "추천"): "아직 빈 메뉴 — 17단계",
-        ("선수로 구단주 찾기", None): "아직 빈 메뉴 — 16단계",
+        ("선수로 구단주 찾기", None): "사용자가 [찾기] 를 눌러야 그린다 — 검색 결과에 안 묶인다(구단주 비교와 같다)",
     }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
 
@@ -4873,6 +5411,7 @@ class MainWindow(QMainWindow):
             # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기. 가계부 합계만 시즌 범위(짝은 전체로 맞춘 뒤)
             "trades": self._render_trades,
             "timeline": self._render_timeline,  # 누적 전체 — 짝·보유 상태는 전체 이력으로 맞춘다
+            "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
         }
 
     def _render_all(self) -> None:
@@ -6801,6 +7340,7 @@ class MainWindow(QMainWindow):
         fast(윈도우 종료·로그오프): 멈춤 요청만 하고 기다리지 않는다 → 아직 도는 스레드 목록(quit_app 이 합계
         FAST_QUIT_WAIT_S 만 기다리고 남은 것은 terminate). 아니면 예전처럼 하나씩 기다린다 — 최악 합계 약 60초."""
         self._save_settings()
+        self._backfill_timer.stop()
         if self._prefetch is not None:
             self._prefetch.discard()  # 읽던 중이면 다음 행에서 멈춘다 — 종료를 2초씩 붙잡지 않게
         prune = getattr(self, "_prune_worker", None)
@@ -6829,6 +7369,10 @@ class MainWindow(QMainWindow):
             # 랭커 기록 — 묶음 사이에서 멈춘다(요청 하나 0.3초 · 타임아웃 10초). 묶음마다 한 트랜잭션
             (self._ranker_loader, cancel(self._ranker_loader), 12000, False),
             (self._scout_loader, cancel(self._scout_loader), 12000, False),
+            # 랭커 픽 — 랭커 사이에서 멈춘다(요청 하나 타임아웃 10초 · 429 대기는 1초씩 cancel 을 본다). 랭커마다 저장이 끝난다
+            (self._pick_loader, cancel(self._pick_loader), 12000, False),
+            # 색인 백필 — 묶음(1,000경기 약 0.2초) 사이에서 멈춘다. 끊겨도 다음 실행이 잇는다
+            (self._backfill_worker, cancel(self._backfill_worker), 3000, False),
             *[(ld, cancel(ld), 500, False)
               for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders],
             # 축구장 칩 카드 정보 — 카드 사이에서 멈춘다(한 장 = 한 트랜잭션 · 요청 하나 타임아웃 10초)
@@ -7203,6 +7747,12 @@ class AboutDialog(QDialog):
     def _sched(self):
         return getattr(self.parent(), "_rank_sched", None)
 
+    def _sync_pick(self) -> None:
+        """수집이 꺼졌으면 랭커 픽 데이터를 지운다(E12) — 메인 창의 한 함수로(로더를 먼저 멈춘다)."""
+        sync = getattr(self.parent(), "sync_ranker_pick_data", None)
+        if sync is not None:
+            sync()
+
     def _on_web_toggled(self, on: bool) -> None:
         try:
             config.set_web_data(on)   # 끄면 수집도 끈다(.env)
@@ -7216,6 +7766,7 @@ class AboutDialog(QDialog):
             self.chk_rank.blockSignals(True)
             self.chk_rank.setChecked(False)
             self.chk_rank.blockSignals(False)
+            self._sync_pick()
         self.chk_rank.setEnabled(on)
         self.lb_msg.setText("켰습니다 — 다음 조회부터 반영됩니다." if on else
                             "껐습니다 — 다음 조회부터 넥슨 홈페이지를 읽지 않습니다.")
@@ -7232,6 +7783,8 @@ class AboutDialog(QDialog):
                 sched.check()
             else:
                 sched.stop()
+        if not on:
+            self._sync_pick()
         self.lb_msg.setText("랭킹 수집을 켰습니다 — 하루 한 번, 정각 뒤 몇십 분 사이에 읽습니다." if on else
                             "랭킹 수집을 껐습니다.")
 
@@ -7273,6 +7826,7 @@ class AboutDialog(QDialog):
         except OSError as e:
             self.lb_msg.setText(f"설정을 저장하지 못해 지우지 않았습니다: {e}")
             return
+        self._sync_pick()  # 수집이 꺼졌다 — 랭커 픽 경기·닉네임도 같이(E12)
         self.chk_rank.blockSignals(True)
         self.chk_rank.setChecked(False)
         self.chk_rank.blockSignals(False)
@@ -7376,6 +7930,9 @@ def _open_window(shell: tray.AppShell, show: bool = True):
         win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
     win.start_update_check()
     win.start_cache_prune()
+    # 랭커 픽 데이터 — 토글과 무관하게 켤 때(14일 · 범위 밖), 수집이 꺼져 있으면 전부(옛 버전으로 내려갔던 동안 남은 것까지)
+    win.sync_ranker_pick_data()
+    win.schedule_backfill(config.SQUAD_BACKFILL_DELAY_S if show else config.SQUAD_BACKFILL_TRAY_DELAY_S)
     if new_key:
         win.start_trades()  # 키를 막 넣었다 — 거래 기록(키 주인 것)을 받아 둔다(내 계정 힌트가 검색 직후 나오게)
     if show:

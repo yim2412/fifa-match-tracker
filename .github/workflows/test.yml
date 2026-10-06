@@ -31,6 +31,8 @@ jobs:
         run: python tests/test_trades.py
       - name: 스쿼드 타임라인 · 가계부
         run: python tests/test_timeline.py
+      - name: 선수 색인 · 랭커 픽
+        run: python tests/test_rankerpick.py
       - name: 트레이 상주
         run: python tests/test_tray.py
       - name: 배포 검사

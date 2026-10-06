@@ -67,6 +67,7 @@ KEY_INVALID_CODE = "OPENAPI00005"
 # (2026-10-02 실측: 빈 데이터 첫 검색 3,124건 · 서비스 키 113초 · 429 0건 — 동시 6개.
 #  2026-10-04 동시 24개로 3,130건 38초 · 429 0건, 같은 때 6개는 119초).
 QUOTA_CODE = "OPENAPI00007"
+NETWORK_CODE = "NETWORK"  # 응답을 못 받았다(넥슨 코드 아님) — 랭커 픽이 "그 랭커 실패"와 "이번 회차 멈춤"을 가른다
 # 동시에 열어 둘 연결 수 — 상세 조회를 여러 스레드로 할 때(app_main.DETAIL_WORKERS) 그보다 커야 한다.
 # requests 기본은 10이라 그 이상이면 연결을 버리고 다시 맺는다.
 HTTP_POOL_SIZE = 32
@@ -126,7 +127,7 @@ class FCOnlineAPI:
                 res = self._session.get(url, params=params, timeout=self._timeout)
             except requests.RequestException as e:
                 if attempt == last:
-                    raise NexonAPIError(f"네트워크 오류: {e}") from e
+                    raise NexonAPIError(f"네트워크 오류: {e}", code=NETWORK_CODE) from e
                 time.sleep(1.0 * (attempt + 1))
                 continue
 
@@ -157,8 +158,8 @@ class FCOnlineAPI:
         return code, msg
 
     # ── 계정 ──────────────────────────────────────────────────────────
-    def get_ouid(self, nickname: str) -> str:
-        data = self._get(EP_ID, nickname=nickname)
+    def get_ouid(self, nickname: str, attempts: int = 3) -> str:
+        data = self._get(EP_ID, attempts=attempts, nickname=nickname)
         ouid = data.get("ouid")
         if not ouid:
             raise NexonAPIError(f"'{nickname}' 계정을 찾지 못했습니다.")
@@ -174,17 +175,18 @@ class FCOnlineAPI:
 
     # ── 매치 ──────────────────────────────────────────────────────────
     def get_match_ids(self, ouid: str, matchtype: int = 50,
-                      offset: int = 0, limit: int = 20) -> list[str]:
-        data = self._get(EP_USER_MATCH, ouid=ouid, matchtype=matchtype,
+                      offset: int = 0, limit: int = 20, attempts: int = 3) -> list[str]:
+        """attempts=1 — 재시도도 하루 한도를 먹는데 부르는 쪽 계수에 안 잡힌다(랭커 픽)."""
+        data = self._get(EP_USER_MATCH, attempts=attempts, ouid=ouid, matchtype=matchtype,
                          offset=offset, limit=limit)
         return data if isinstance(data, list) else []
 
-    def get_match_detail(self, match_id: str) -> dict:
+    def get_match_detail(self, match_id: str, attempts: int = 3) -> dict:
         """매치 상세. 이미 끝난 경기는 내용이 안 변하므로 디스크에 캐시한다."""
         cached = self._cache_read(match_id)
         if cached is not None:
             return cached
-        data = self._get(EP_MATCH_DETAIL, matchid=match_id)
+        data = self._get(EP_MATCH_DETAIL, attempts=attempts, matchid=match_id)
         self._cache_write(match_id, data)
         return data
 
@@ -265,6 +267,10 @@ class FCOnlineAPI:
             except Exception:
                 return None  # 깨진 캐시는 무시하고 다시 받는다
         return None
+
+    def cached_detail(self, match_id: str) -> dict | None:
+        """디스크 캐시에 있는 상세(요청 없음) — 없으면 None. 실제 요청만 세는 쪽(랭커 픽)이 먼저 본다."""
+        return self._cache_read(match_id)
 
     def forget_details(self, match_ids) -> None:
         """DB 에 저장한 경기의 디스크 캐시를 지운다 — 그 뒤로는 DB 가 정본이다."""

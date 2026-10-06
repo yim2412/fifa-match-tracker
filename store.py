@@ -173,6 +173,45 @@ CREATE TABLE IF NOT EXISTS ranker_stats (
     payload    TEXT,
     PRIMARY KEY (spid, po, matchtype)
 );
+-- 선수 색인(2.1.1 · 12 "선수로 구단주 찾기") — 카드 → 그 카드를 선발로 쓴 구단주. 정수 키라 2만 경기에 12MB 대
+-- (텍스트 키는 90MB — ROADMAP R2). matches.rowid 를 가리키지 않는다(TEXT PK 표의 rowid 는 VACUUM 때 바뀔 수 있다 — R12).
+-- day = 경기 날짜의 date.toordinal(). 감독모드 경기만 줄을 쓰고, 다른 종류·선발 0명 경기도 squad_match 줄은 쓴다(다시 안 훑게)
+CREATE TABLE IF NOT EXISTS squad_owner (
+    id       INTEGER PRIMARY KEY,
+    ouid     TEXT UNIQUE NOT NULL,
+    nickname TEXT,
+    last_day INTEGER
+);
+CREATE TABLE IF NOT EXISTS squad_match (
+    id       INTEGER PRIMARY KEY,
+    match_id TEXT UNIQUE NOT NULL
+);
+CREATE TABLE IF NOT EXISTS match_squads (
+    spid  INTEGER NOT NULL,
+    day   INTEGER NOT NULL,
+    match INTEGER NOT NULL,
+    owner INTEGER NOT NULL,
+    po    INTEGER NOT NULL,
+    grade INTEGER,
+    PRIMARY KEY (spid, day, match, owner, po)
+) WITHOUT ROWID;
+-- 랭커 픽(2.1.1 · 6) — 상위 200(pick)·추천 후보(recommend, 17단계)의 마지막 경기. 경기 본문은 matches 에(save_matches 그대로),
+-- 랭커 픽으로 들어온 경기는 ranker_matches 에 표시 — 14일·지우기의 범위(ROADMAP "보관·지우기")
+CREATE TABLE IF NOT EXISTS ranker_squads (
+    profile_sn INTEGER PRIMARY KEY,
+    nickname   TEXT,
+    ouid       TEXT,
+    rank       INTEGER,
+    match_id   TEXT,
+    match_day  TEXT,
+    fetched_at TEXT,
+    fail       TEXT,
+    source     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ranker_matches (
+    match_id   TEXT PRIMARY KEY,
+    fetched_on TEXT NOT NULL
+);
 """
 
 # 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
@@ -207,6 +246,9 @@ def open_db(path: Path | str) -> sqlite3.Connection:
     with _OPEN_LOCK:
         # 조회(UI)와 저장(워커)이 겹칠 수 있어 WAL 로 둔다.
         conn.execute("PRAGMA journal_mode=WAL")
+        # 지운 행·옮겨진 셀의 바이트를 0 으로 — 지우는 연결에서만 켜면 그 전에 삽입·재배치로 페이지 빈칸에 남은 조각
+        # (다른 구단주 닉네임)이 그대로였다(2026-10-06 test_clear_removes_ranker_pick_data). fifa.db 는 VACUUM 을 안 한다(R12)
+        conn.execute("PRAGMA secure_delete=ON")
         conn.executescript(SCHEMA)
         # team_value 열은 나중에 생겼다 — 그 전에 만들어진 DB 는 여기서 늘려준다.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(team_colors)")}
@@ -257,8 +299,149 @@ def save_matches(conn: sqlite3.Connection, details: list[dict]) -> int:
                 "INSERT OR IGNORE INTO match_players (match_id, ouid) VALUES (?, ?)",
                 (mid, ouid),
             )
+        if cur.rowcount:
+            index_squads(conn, mid, d)  # 같은 커밋에서 — 한 경기 색인 실패는 그 경기만(저장 전체를 롤백시키지 않게)
     conn.commit()
     return new
+
+
+# ── 선수 색인(12) ────────────────────────────────────────────────────────
+SQUAD_SUB_POSITION = 28   # 교체 명단 — 출전이 아니라 색인에 안 넣는다(stats.SUB_POSITION 과 같은 값)
+SQUAD_BATCH = 1000        # 백필 한 트랜잭션 — 끊겨도 다음 실행이 잇는다
+
+
+def match_day(match_date) -> int:
+    """경기 날짜 → 색인의 day(date.toordinal). 깨졌으면 ValueError."""
+    return date.fromisoformat(str(match_date)[:10]).toordinal()
+
+
+_SQUAD_INSERT = "INSERT OR IGNORE INTO match_squads (spid, day, match, owner, po, grade) VALUES (?, ?, ?, ?, ?, ?)"
+
+
+def index_squads(conn: sqlite3.Connection, match_id: str, detail: dict) -> bool:
+    """한 경기를 색인한다 — 이미 했으면 아무것도 안 한다. 실패하면 그 경기 줄만 되돌리고 False(예외를 안 올린다)."""
+    rows = _squad_rows(conn, match_id, detail)
+    if rows:
+        conn.executemany(_SQUAD_INSERT, rows)
+    return rows is not None
+
+
+def _squad_rows(conn: sqlite3.Connection, match_id: str, detail: dict) -> list | None:
+    """squad_match·squad_owner 줄을 쓰고 match_squads 에 넣을 줄을 돌려준다(실패면 그 경기 줄을 되돌리고 None).
+
+    SAVEPOINT 라 바깥 트랜잭션(save_matches · 백필 묶음)을 끝내지 않는다. 넣기를 부르는 쪽에 맡기는 건 백필이 묶음을
+    PK 순으로 정렬해 한 번에 넣으려고 — 경기마다 넣으면 b-tree 곳곳에 끼워 2.1만 경기에 4.2초였다(2026-10-06 사본 실측)."""
+    rows: list = []
+    conn.execute("SAVEPOINT squad")
+    try:
+        cur = conn.execute("INSERT OR IGNORE INTO squad_match (match_id) VALUES (?)", (match_id,))
+        if cur.rowcount and detail.get("matchType") == config.DEFAULT_MATCH_TYPE:
+            mrow = cur.lastrowid
+            day = match_day(detail.get("matchDate"))
+            for side in detail.get("matchInfo") or []:
+                ouid = side.get("ouid")
+                if not isinstance(ouid, str) or not ouid:
+                    continue
+                players = [p for p in side.get("player") or []
+                           if isinstance(p.get("spId"), int) and isinstance(p.get("spPosition"), int)
+                           and p.get("spPosition") != SQUAD_SUB_POSITION]
+                if not players:
+                    continue
+                owner = conn.execute(
+                    "INSERT INTO squad_owner (ouid, nickname, last_day) VALUES (?, ?, ?)"
+                    " ON CONFLICT(ouid) DO UPDATE SET"
+                    " nickname = CASE WHEN excluded.last_day >= last_day THEN excluded.nickname ELSE nickname END,"
+                    " last_day = MAX(last_day, excluded.last_day) RETURNING id",
+                    (ouid, side.get("nickname"), day)).fetchone()[0]
+                rows.extend((p["spId"], day, mrow, owner, p["spPosition"], p.get("spGrade")) for p in players)
+        conn.execute("RELEASE squad")
+        return rows
+    except Exception:
+        conn.execute("ROLLBACK TO squad")
+        conn.execute("RELEASE squad")
+        # 훑었다는 줄만은 남긴다 — 없으면 백필이 매 묶음 같은 경기를 다시 집어 끝나지 않는다
+        try:
+            conn.execute("INSERT OR IGNORE INTO squad_match (match_id) VALUES (?)", (match_id,))
+        except sqlite3.Error:
+            pass
+        return None
+
+
+def unindexed_count(conn: sqlite3.Connection) -> tuple[int, int]:
+    """(아직 색인 안 된 경기 수, 전체 경기 수) — 찾기 화면의 "색인 중 N/M"."""
+    total = conn.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+    done = conn.execute("SELECT COUNT(*) FROM squad_match").fetchone()[0]
+    return max(0, total - done), total
+
+
+def backfill_squads(conn: sqlite3.Connection, stop: Callable[[], bool] = lambda: False,
+                    on_batch: Callable[[int], None] | None = None, batch: int = SQUAD_BATCH) -> int:
+    """색인 안 된 경기를 batch 개씩 한 트랜잭션으로 → 이번에 색인한 경기 수. stop 이 참이면 묶음 사이에서 멈춘다.
+
+    "어디까지 했나"를 따로 적지 않고 매 묶음 LEFT JOIN 으로 찾는다 — 옛 버전으로 내려가 저장한 경기도 다음 실행이 잡는다."""
+    done = 0
+    seen: set[str] = set()
+    while not stop():
+        rows = conn.execute(
+            "SELECT m.match_id, m.payload FROM matches m"
+            " LEFT JOIN squad_match s ON s.match_id = m.match_id WHERE s.id IS NULL LIMIT ?", (batch,)).fetchall()
+        if not rows or all(r[0] in seen for r in rows):
+            break  # 다 했거나, 줄을 못 쓰는 경기만 남았다(같은 걸 다시 집으면 끝나지 않는다)
+        seen.update(r[0] for r in rows)
+        # 바깥 트랜잭션을 먼저 연다 — 없으면 index_squads 의 SAVEPOINT 가 바깥이 돼 RELEASE 가 경기마다 커밋한다
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
+        squads: list = []
+        for r in rows:
+            try:
+                d = _loads(r[1])
+            except Exception:
+                d = {}  # 깨진 본문 — 줄만 써 두고 다시 안 훑는다
+            if not isinstance(d, dict):
+                d = {}
+            squads.extend(_squad_rows(conn, r[0], d) or ())
+        squads.sort()
+        conn.executemany(_SQUAD_INSERT, squads)
+        conn.commit()
+        done += len(rows)
+        if on_batch is not None:
+            on_batch(done)
+    return done
+
+
+def owners_using_card(conn: sqlite3.Connection, spid: int, since_day: int, grade: int | None = None) -> list[dict]:
+    """그 카드를 since_day(toordinal) 이후 선발로 쓴 구단주 — 마지막 사용일 최신순.
+    [{ouid, nickname, last_day, games, positions: {po: n}, grades: {grade: n}}]"""
+    sql = ("SELECT owner, day, match, po, grade FROM match_squads WHERE spid = ? AND day >= ?")
+    args: list = [spid, since_day]
+    if grade is not None:
+        sql += " AND grade = ?"
+        args.append(grade)
+    by: dict[int, dict] = {}
+    for owner, day, match, po, gr in conn.execute(sql, args):
+        o = by.setdefault(owner, {"last_day": day, "matches": set(), "positions": {}, "grades": {}})
+        o["last_day"] = max(o["last_day"], day)
+        o["matches"].add(match)
+        o["positions"][po] = o["positions"].get(po, 0) + 1
+        o["grades"][gr] = o["grades"].get(gr, 0) + 1
+    if not by:
+        return []
+    names = {}
+    ids = list(by)
+    for i in range(0, len(ids), 500):
+        chunk = ids[i:i + 500]
+        q = ",".join("?" * len(chunk))
+        for r in conn.execute(f"SELECT id, ouid, nickname FROM squad_owner WHERE id IN ({q})", chunk):
+            names[r[0]] = (r[1], r[2])
+    out = []
+    for owner, o in by.items():
+        ouid, nick = names.get(owner, (None, None))
+        if ouid is None:
+            continue
+        out.append({"ouid": ouid, "nickname": nick, "last_day": o["last_day"], "games": len(o["matches"]),
+                    "positions": o["positions"], "grades": o["grades"]})
+    out.sort(key=lambda o: (o["last_day"], o["games"]), reverse=True)
+    return out
 
 
 def known_ids(conn: sqlite3.Connection, ouid: str,
@@ -805,6 +988,158 @@ def budget_take(conn: sqlite3.Connection, day: str, kind: str, cap: int | None) 
 def budget_used(conn: sqlite3.Connection, day: str, kind: str) -> int:
     r = conn.execute("SELECT attempts FROM api_budget WHERE day = ? AND kind = ?", (day, kind)).fetchone()
     return r[0] if r else 0
+
+
+BUDGET_OPENAPI = "openapi"          # 다른 로더(검색·거래·랭커 기록)의 최종 429 표시만
+BUDGET_RANKER_PICK = "ranker_pick"
+
+
+def budget_mark_429(conn: sqlite3.Connection, day: str, kind: str) -> None:
+    """그날 그 종류가 최종 429 를 받았다 — 랭커 픽은 그날 다시 시작하지 않는다(내 검색이 먼저)."""
+    with conn:
+        conn.execute("INSERT INTO api_budget (day, kind, attempts, hit_429) VALUES (?, ?, 0, 1)"
+                     " ON CONFLICT(day, kind) DO UPDATE SET hit_429 = 1", (day, kind))
+
+
+def budget_hit_429(conn: sqlite3.Connection, day: str, kinds=(BUDGET_OPENAPI, BUDGET_RANKER_PICK)) -> bool:
+    q = ",".join("?" * len(kinds))
+    return conn.execute(f"SELECT 1 FROM api_budget WHERE day = ? AND kind IN ({q}) AND hit_429 = 1 LIMIT 1",
+                        (day, *kinds)).fetchone() is not None
+
+
+def mark_final_429(day: str, db_path: Path | str | None = None) -> None:
+    """오픈API 로더(검색·거래·랭커 기록)가 재시도 끝에 429 로 실패했다 — 실패해도 조용히(표시 하나 때문에 로더가 죽지 않게)."""
+    try:
+        conn = open_db(db_path or config.DB_PATH)
+        try:
+            budget_mark_429(conn, day, BUDGET_OPENAPI)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+
+
+# ── 랭커 픽(6) ───────────────────────────────────────────────────────────
+PICK = "pick"
+RECOMMEND = "recommend"
+SOURCE_TOP = {PICK: config.RANKER_PICK_TOP, RECOMMEND: config.RANKER_RECOMMEND_TOP}
+
+
+def ranker_squads(conn: sqlite3.Connection) -> dict[int, dict]:
+    return {r["profile_sn"]: dict(r) for r in conn.execute("SELECT * FROM ranker_squads")}
+
+
+def save_ranker_squad(conn: sqlite3.Connection, profile_sn: int, *, nickname, ouid, rank, match_id, match_day,
+                      fetched_at: str, fail, source: str) -> None:
+    """한 랭커 줄. 출처는 pick 이 recommend 를 이긴다(같은 사람이 둘 다면 범위가 좁은 쪽으로 — 정리 기준이 된다)."""
+    with conn:
+        conn.execute(
+            "INSERT INTO ranker_squads (profile_sn, nickname, ouid, rank, match_id, match_day, fetched_at, fail, source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(profile_sn) DO UPDATE SET nickname=excluded.nickname,"
+            " ouid=excluded.ouid, rank=excluded.rank, match_id=excluded.match_id, match_day=excluded.match_day,"
+            " fetched_at=excluded.fetched_at, fail=excluded.fail,"
+            " source=CASE WHEN source=? OR excluded.source=? THEN ? ELSE excluded.source END",
+            (profile_sn, nickname, ouid, rank, match_id, match_day, fetched_at, fail, source, PICK, PICK, PICK))
+
+
+def mark_ranker_match(conn: sqlite3.Connection, match_id: str, day: str) -> None:
+    """랭커 픽으로 받은(또는 다시 확인한) 경기 — fetched_on 을 오늘로. 활동 중인 랭커 경기가 14일 정리에 지워지지 않게."""
+    with conn:
+        conn.execute("INSERT INTO ranker_matches (match_id, fetched_on) VALUES (?, ?)"
+                     " ON CONFLICT(match_id) DO UPDATE SET fetched_on = excluded.fetched_on", (match_id, day))
+
+
+def has_match(conn: sqlite3.Connection, match_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM matches WHERE match_id = ?", (match_id,)).fetchone() is not None
+
+
+def load_match(conn: sqlite3.Connection, match_id: str) -> dict | None:
+    r = conn.execute("SELECT payload FROM matches WHERE match_id = ?", (match_id,)).fetchone()
+    if r is None:
+        return None
+    try:
+        d = _loads(r[0])
+    except Exception:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def purge_ranker_data(conn: sqlite3.Connection, *, everything: bool, today: date | None = None,
+                      cache_dir: Path | None = None) -> int:
+    """랭커 픽 데이터 지우기 → 지운 경기 수. everything 이면 전부([수집 기록 지우기] · 수집 끄기), 아니면 14일 정리
+    (ranker_matches.fetched_on · ranker_squads.fetched_at 이 RANK_RAW_KEEP_DAYS 지난 것 · 출처 범위 밖 랭커).
+
+    지우는 경기는 **검색한 계정(accounts)이 안 나온** 랭커 픽 경기만 — 그 경기의 matches · match_players · .cache ·
+    squad_match · match_squads 줄, 그 뒤 아무 색인도 안 가리키는 squad_owner(검색한 계정은 남김), 그 경기를 가리키던
+    ranker_squads 줄. 지운 바이트가 파일에 안 남는 건 open_db 의 secure_delete. 한 트랜잭션."""
+    today = today or date.today()
+    cutoff = (today - timedelta(days=config.RANK_RAW_KEEP_DAYS)).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if everything:
+            stale = [r[0] for r in conn.execute("SELECT match_id FROM ranker_matches")]
+        else:
+            stale = [r[0] for r in conn.execute("SELECT match_id FROM ranker_matches WHERE fetched_on < ?",
+                                                (cutoff,))]
+        # 검색한 계정이 나온 경기는 그 계정의 기록이다 — 표시만 지우고 경기는 남긴다
+        gone = [m for m in stale if conn.execute(
+            "SELECT 1 FROM match_players p JOIN accounts a ON a.ouid = p.ouid WHERE p.match_id = ? LIMIT 1",
+            (m,)).fetchone() is None]
+        for i in range(0, len(stale), 500):
+            chunk = stale[i:i + 500]
+            conn.execute(f"DELETE FROM ranker_matches WHERE match_id IN ({','.join('?' * len(chunk))})", chunk)
+        owners: set[int] = set()
+        for i in range(0, len(gone), 500):
+            chunk = gone[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            mids = [r[0] for r in conn.execute(f"SELECT id FROM squad_match WHERE match_id IN ({q})", chunk)]
+            for j in range(0, len(mids), 500):
+                mc = mids[j:j + 500]
+                mq = ",".join("?" * len(mc))
+                owners.update(r[0] for r in conn.execute(
+                    f"SELECT owner FROM match_squads WHERE match IN ({mq})", mc))
+                conn.execute(f"DELETE FROM match_squads WHERE match IN ({mq})", mc)
+            conn.execute(f"DELETE FROM squad_match WHERE match_id IN ({q})", chunk)
+            conn.execute(f"DELETE FROM match_players WHERE match_id IN ({q})", chunk)
+            conn.execute(f"DELETE FROM matches WHERE match_id IN ({q})", chunk)
+            conn.execute(f"DELETE FROM ranker_squads WHERE match_id IN ({q})", chunk)
+        if owners:
+            ol = list(owners)
+            still: set[int] = set()
+            for i in range(0, len(ol), 500):
+                oc = ol[i:i + 500]
+                still.update(r[0] for r in conn.execute(
+                    f"SELECT owner FROM match_squads WHERE owner IN ({','.join('?' * len(oc))})", oc))
+            drop = [o for o in ol if o not in still]
+            for i in range(0, len(drop), 500):
+                dc = drop[i:i + 500]
+                conn.execute(f"DELETE FROM squad_owner WHERE id IN ({','.join('?' * len(dc))})"
+                             " AND ouid NOT IN (SELECT ouid FROM accounts)", dc)
+        if everything:
+            conn.execute("DELETE FROM ranker_squads")  # 하루 계수(api_budget)는 남긴다 — 지우고 다시 켜도 상한은 그대로
+        else:
+            conn.execute("DELETE FROM ranker_squads WHERE fetched_at < ?", (cutoff,))
+            for src, top in SOURCE_TOP.items():
+                conn.execute("DELETE FROM ranker_squads WHERE source = ? AND (rank IS NULL OR rank > ?)",
+                             (src, top))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    if gone:
+        # WAL 에 지우기 전 페이지가 남는다 — 본 파일로 옮기고 비운다(다른 연결이 읽는 중이면 다음 기회에, 실패해도 조용히)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        except sqlite3.Error:
+            pass
+    if cache_dir is not None:
+        for mid in gone:
+            safe = "".join(c for c in mid if c.isalnum())
+            try:
+                (cache_dir / f"{safe}.json").unlink(missing_ok=True)
+            except OSError:
+                pass
+    return len(gone)
 
 
 def load_card_prices(conn: sqlite3.Connection, spids) -> dict[tuple[int, int], tuple[int, str]]:

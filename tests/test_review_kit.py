@@ -253,13 +253,16 @@ def test_real_plan_bundle_runs():
     whole = int(head.split("통째로면 ")[1].split("자")[0].replace(",", ""))
     assert size * 3 < whole, head
 
+import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for t in tests:
         try:
-            t()
+            with watchdog.limit(t.__name__):
+                t()
             print(f"[OK]   {t.__name__}")
         except AssertionError as e:
             failed += 1

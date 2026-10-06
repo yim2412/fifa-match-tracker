@@ -193,7 +193,7 @@ def check_colors(srcs: dict[str, str]) -> list[str]:
 
 # ── SQL 실행 계획 ────────────────────────────────────────────────────────────
 
-SQL_FILES = ("store.py", "rankcollect.py")
+SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py")
 
 
 def collect_sql() -> dict[str, set[str]]:
@@ -259,8 +259,21 @@ def _drive_uncovered() -> None:
             rankcollect.raw_snapshots(r)
             rankcollect.snapshot_games(r, 1)
             rankcollect.season_cuts(r)
+            import rankerpick                                   # 랭커 픽 대상 · 12 찾기의 팀컬러·순위(2.1.1)
+            r.execute("INSERT INTO snapshots (id, taken_at, row_count, dup_count, season_seq, new_season)"
+                      " VALUES (1, '2026-10-06T10:00:00', 1, 0, 1, 0)")
+            r.execute("INSERT INTO snapshot_rows (snapshot_id, rank, profile_sn, nickname) VALUES (1, 1, 5, 'n')")
+            rankerpick.top_rankers(r)
+            rankerpick.snapshot_index(r)
         finally:
             r.close()
+    # 선수 색인 · 랭커 픽 받기·집계·지우기(2.1.1) — 화면 없이 도는 테스트를 그대로
+    sys.path.insert(0, str(ROOT / "tests"))
+    import test_rankerpick as trp
+    for t in (trp.test_save_indexes_squads, trp.test_backfill_resumes_and_skips_indexed, trp.test_owner_lookup_window_and_grade,
+              trp.test_ranker_pick_collects_and_saves, trp.test_ranker_pick_second_429_stops_for_the_day,
+              trp.test_ranker_pick_summary, trp.test_clear_removes_ranker_pick_data):
+        t()
 
 
 def sql_functions() -> set[str]:
@@ -386,13 +399,30 @@ def test_temp_sort_check_catches_unindexed_order():
     # 작은 표만 읽는 정렬은 봐주되, 큰 표가 하나라도 끼면 잡는다
     assert n == 4 and len(bad) == 2, (n, bad)
 
+def test_watchdog_kills_hung_test():
+    """테스트 감시(tests/watchdog.py)가 정말 끊는다 — 끝나지 않는 테스트를 1초 한도로 돌리면 종료 코드 3 · 이름 · 멈춘 줄.
+    감시가 빠지면 이 자식이 30초 시간 초과로 걸려 빨개진다(2026-10-06 스모크가 18분 멈췄던 일의 장치)."""
+    import subprocess
+    code = ("import sys; sys.path.insert(0, r'%s'); import watchdog\n"
+            "def spin_forever():\n    while True: pass\n"
+            "with watchdog.limit('test_spin', 1):\n    spin_forever()\n") % (ROOT / "tests")
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=30)
+    assert r.returncode == 3, (r.returncode, r.stdout, r.stderr[-500:])
+    assert "[멈춤] test_spin" in r.stdout, r.stdout
+    assert "spin_forever" in r.stderr, "멈춘 자리(호출 스택)가 안 남았다"
+
+
+import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for t in tests:
         try:
-            t()
+            with watchdog.limit(t.__name__):
+                t()
             print(f"[OK]   {t.__name__}")
         except AssertionError as e:
             failed += 1

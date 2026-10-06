@@ -504,6 +504,11 @@ def _low_priority() -> None:
             pass
 
 
+def lower_thread_priority() -> None:
+    """부른 스레드의 우선순위를 낮춘다(실패는 조용히) — 색인 백필(app_main.SquadBackfillWorker)도 같은 핸들 형으로."""
+    _low_priority()
+
+
 def _hour_key(date_header: str):
     try:
         d = parsedate_to_datetime(date_header)

@@ -385,14 +385,17 @@ def test_trades_tab_open_starts_loader():
 def test_go_page_rejects_unknown_or_hidden():
     """E4 — 없는 이름·숨긴 메뉴·없는 탭이면 아무것도 안 한다(예전엔 묶음 제목 줄로 갔다)."""
     _win._go_page("슛 맵")
-    for args in (("없는 메뉴",), ("랭커 픽",), ("선수 지표", "없는 탭"), ("슛 맵", "탭"), ("랭커와 비교",)):
+    for args in (("없는 메뉴",), ("랭킹 추이",), ("선수 지표", "없는 탭"), ("슛 맵", "탭"), ("랭커와 비교",)):
         _win._go_page(*args)
         assert _win._current_view() == ("슛 맵", None), (args, _win._current_view())
-    assert "랭커 픽" in config.HIDDEN_NAV_UNTIL_READY  # 숨김이 풀리면 위 줄은 다른 숨긴 메뉴로
+    assert "랭킹 추이" in config.HIDDEN_NAV_UNTIL_READY  # 숨김이 풀리면(17단계) 위 줄은 다른 숨긴 메뉴로 — 없으면 이 테스트를 지운다
     hidden_rows = [_win.nav.item(r) for r in range(_win.nav.count())
-                   if _win.nav.item(r).text() in (*config.HIDDEN_NAV_UNTIL_READY, "랭커")]
-    assert len(hidden_rows) == 4 and all(it.isHidden() for it in hidden_rows), \
+                   if _win.nav.item(r).text() in config.HIDDEN_NAV_UNTIL_READY]
+    assert len(hidden_rows) == 1 and all(it.isHidden() for it in hidden_rows), \
         [(it.text(), it.isHidden()) for it in hidden_rows]
+    shown = [_win.nav.item(r) for r in range(_win.nav.count())
+             if _win.nav.item(r).text() in ("랭커", "랭커 픽", "선수로 구단주 찾기")]
+    assert len(shown) == 3 and not any(it.isHidden() for it in shown), "16단계가 켠 메뉴(묶음 제목 포함)는 보인다"
     _win._go_page("대시보드")
 
 
@@ -585,7 +588,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 13, len(tables)  # 13번째는 랭커와 비교(1.4.1)
+    assert len(tables) == 17, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기(2.1.1)
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -1521,6 +1524,12 @@ def test_main_starts_update_check_after_show():
         def ask_notice_update_once(self):
             pass   # 옛 동의자 다시 묻기 — 창이 보인 뒤(test_reask_after_show_normal)
 
+        def sync_ranker_pick_data(self):
+            calls.append("랭커 픽 정리")  # 켤 때 토글과 무관하게(14일 · 꺼졌으면 전부 — E12)
+
+        def schedule_backfill(self, delay_s):
+            calls.append(f"색인 {delay_s}초 뒤")
+
     def run(open_last: bool) -> list[str]:
         calls.clear()
         orig = (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY,
@@ -1544,8 +1553,9 @@ def test_main_starts_update_check_after_show():
     # 기본은 검색 화면부터 — 마지막으로 본 계정을 저절로 열지 않는다(2026-10-04 사용자 결정)
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
-    assert run(False) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", "미리 읽기"], calls
-    assert run(True) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", "마지막 계정"], calls
+    tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
+    assert run(False) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", *tail, "미리 읽기"], calls
+    assert run(True) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", *tail, "마지막 계정"], calls
 
 
 def _stop_shell():
@@ -1569,6 +1579,9 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
         def attach_rank_sched(self, sched):
             pass
 
+        def schedule_backfill(self, delay_s):
+            calls.append(f"색인 {delay_s}초 뒤")
+
         def __getattr__(self, name):
             return lambda *a: calls.append(name)
 
@@ -1588,7 +1601,9 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
         _stop_shell()
         (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, app_main._SHELL) = orig
     # 창은 만들되 띄우지 않고, 1만 경기 미리 읽기(약 750MB)도 안 한다
-    assert calls == ["창", "start_update_check", "start_cache_prune"], calls
+    # 색인 백필은 트레이 시작이면 첫 화면이 없어 2분 뒤(ROADMAP 2.1.1 12)
+    assert calls == ["창", "start_update_check", "start_cache_prune", "sync_ranker_pick_data",
+                     f"색인 {config.SQUAD_BACKFILL_TRAY_DELAY_S}초 뒤"], calls
 
 
 def test_tray_before_consent_makes_no_request():
@@ -2878,7 +2893,7 @@ def test_settings_remember_window_page_and_season():
 
 def test_restore_old_page_names():
     """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 숨긴 메뉴는 대시보드."""
-    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("랭커 픽", ("대시보드", None))]
+    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("랭킹 추이", ("대시보드", None))]
     assert len(cases) == 4
     try:
         for old, want in cases:
@@ -6247,12 +6262,384 @@ def test_my_record_rating_trend():
     assert isinstance(lb, app_main.QLabel) and "출전 기록이 없습니다" in lb.text()
 
 
+# ── 2.1.1 16단계 — 랭커 픽(6) · 선수로 구단주 찾기(12) 배선(진입점 표 E7~E13) ─────────────
+class _FakePickLoader:
+    """랭커 픽 로더 자리 — 띄운 수·멈춤 요청만 센다. 받기 규칙 자체는 tests/test_rankerpick.py 가 잰다."""
+    started = 0
+
+    class _S:  # 이 파일 아래쪽에 _Sig 가 하나 더 있어(인자 없는 emit) 이름을 따로 둔다
+        def __init__(self):
+            self.slots = []
+
+        def connect(self, f):
+            self.slots.append(f)
+
+        def emit(self, *a):
+            for f in self.slots:
+                f(*a)
+
+    def __init__(self, api):
+        self.ranker, self.done, self.finished = self._S(), self._S(), self._S()
+        self.running = False
+        self.cancelled = False
+
+    def start(self):
+        _FakePickLoader.started += 1
+        self.running = True
+
+    def isRunning(self):
+        return self.running
+
+    def cancel(self):
+        self.cancelled = True
+
+    def wait(self, *_a):
+        return True
+
+    def end(self):
+        """스레드가 끝났다 — 진짜와 같은 순서(done → finished)."""
+        self.running = False
+        self.done.emit(app_main.rankerpick.PickResult())
+        self.finished.emit()
+
+
+def _seed_snapshot(n=3):
+    r = rankcollect.open_rank_db()
+    try:
+        r.execute("DELETE FROM snapshot_rows")
+        r.execute("DELETE FROM snapshots")
+        r.execute("INSERT INTO snapshots (id, taken_at, row_count, dup_count, season_seq, new_season)"
+                  " VALUES (1, ?, ?, 0, 1, 0)", (datetime.now().isoformat(timespec="seconds"), n))
+        r.executemany("INSERT INTO snapshot_rows (snapshot_id, rank, profile_sn, nickname, team_color, formation)"
+                      " VALUES (1, ?, ?, ?, ?, ?)", [(i + 1, 900 + i, f"랭커{i}", "팀A", "4-2-3-1") for i in range(n)])
+        r.commit()
+    finally:
+        r.close()
+
+
+class _PickEnv:
+    """랭커 픽 테스트의 공통 상태 — 수집 켜짐 · 동의 5 · 키 있음 · 가짜 로더. 끝나면 되돌린다."""
+
+    def __enter__(self):
+        self.keep = (config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED, config.API_KEY,
+                     app_main.RankerPickLoader, _win._pick_loader, _win._pick_result, _win._loader,
+                     _win._compare_loader, _win._trade_loader, _win._ranker_loader)
+        config.WEB_DATA, config.RANK_COLLECT = True, True
+        config.NOTICE_ACCEPTED, config.API_KEY = config.RANKER_PICK_NOTICE_VERSION, "test_key"
+        app_main.RankerPickLoader = _FakePickLoader
+        _win._pick_loader = _win._loader = _win._compare_loader = _win._trade_loader = _win._ranker_loader = None
+        _FakePickLoader.started = 0
+        _seed_snapshot()
+        return self
+
+    def __exit__(self, *exc):
+        _win._go_page("대시보드")
+        # rank.db 를 남기지 않는다 — 뒤 테스트(수집 예약)가 "조건이 안 맞으면 rank.db 를 안 만든다"를 잰다
+        for suffix in ("", "-wal", "-shm"):
+            pathlib.Path(str(config.RANK_DB_PATH) + suffix).unlink(missing_ok=True)
+        (config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED, config.API_KEY,
+         app_main.RankerPickLoader, _win._pick_loader, _win._pick_result, _win._loader,
+         _win._compare_loader, _win._trade_loader, _win._ranker_loader) = self.keep
+        _win._pick_purge_pending = False
+        return False
+
+
+def test_ranker_pick_gate():
+    """E9 — 수집 꺼짐(스냅숏은 남음) · 옛 동의 4 → 요청 0. [안내 보기]로 동의하면 바로 시작(E9b)."""
+    with _PickEnv():
+        config.RANK_COLLECT = False
+        _win._go_page("랭커 픽")
+        assert _FakePickLoader.started == 0, "수집이 꺼졌는데 랭커 픽을 받았다"
+        assert "랭킹 수집을 켜면" in _win.lb_pick_status.text(), _win.lb_pick_status.text()
+        _win._go_page("대시보드")
+        config.RANK_COLLECT, config.NOTICE_ACCEPTED = True, 4
+        _win._go_page("랭커 픽")
+        assert _FakePickLoader.started == 0, "옛 동의(4)인데 받았다"
+        assert _win.btn_pick_notice.isVisibleTo(_win) and "동의" in _win.lb_pick_status.text()
+
+        class _Notice:
+            def __init__(self, *a, **k):
+                pass
+
+            def exec(self):
+                config.NOTICE_ACCEPTED = config.NOTICE_VERSION
+                return app_main.QDialog.DialogCode.Accepted
+
+        keep = app_main.NoticeDialog
+        app_main.NoticeDialog = _Notice
+        try:
+            _win.btn_pick_notice.click()
+        finally:
+            app_main.NoticeDialog = keep
+        assert _FakePickLoader.started == 1, "동의 직후 시작하지 않았다"
+        assert not _win.btn_pick_notice.isVisibleTo(_win)
+
+
+def test_ranker_pick_only_while_visible():
+    """U2 — 그 화면이 보이고 창이 보일 때만. 다른 메뉴 · 숨김(X) · 최소화면 멈추고, 다시 보이면 잇는다."""
+    with _PickEnv():
+        _win._go_page("랭커 픽")
+        assert _FakePickLoader.started == 1
+        ld = _win._pick_loader
+        _win._go_page("대시보드")
+        assert ld.cancelled, "다른 메뉴로 갔는데 계속 받는다"
+        ld.end()
+        _win._go_page("랭커 픽")
+        assert _FakePickLoader.started == 2
+        ld = _win._pick_loader
+        _win.hide()
+        assert ld.cancelled, "창을 숨겼는데(트레이) 계속 받는다"
+        ld.end()
+        _win.show()
+        _app.processEvents()
+        assert _FakePickLoader.started == 3, "다시 보였는데 잇지 않았다"
+        ld = _win._pick_loader
+        _win.showMinimized()
+        _app.processEvents()
+        assert ld.cancelled, "최소화했는데 계속 받는다"
+        ld.end()
+        _win.showNormal()
+        _app.processEvents()
+        assert _FakePickLoader.started == 4, "최소화가 풀렸는데 잇지 않았다"
+
+
+def test_ranker_pick_yields_and_resumes():
+    """⑧ 오픈API 백그라운드는 하나씩 — 검색·거래·랭커 기록이 돌면 시작 안 함 · 거래가 시작되면 양보 · 끝나면 잇는다(E9b)."""
+    with _PickEnv():
+        log = []
+        _win._loader = _FakeThread("검색", log)
+        _win._go_page("랭커 픽")
+        assert _FakePickLoader.started == 0, "검색이 도는데 시작했다"
+        _win._loader.running = False
+        _win.start_ranker_pick()
+        assert _FakePickLoader.started == 1
+        ld = _win._pick_loader
+        _win._yield_trades()                      # 새 검색·비교가 시작된다
+        assert ld.cancelled, "새 검색에 양보하지 않았다"
+        ld.end()
+        _win._trade_loader = _FakeThread("거래", log)
+        _win.start_ranker_pick()
+        assert _FakePickLoader.started == 1, "거래가 도는데 시작했다"
+        _win._trade_loader.running = False
+        _win._trade_again = False
+        _win._on_trade_thread_finished()
+        assert _FakePickLoader.started == 2, "거래가 끝났는데 잇지 않았다"
+
+
+def test_ranker_pick_renders_summary():
+    """받아 둔 랭커 경기 → 화면(요청 없이 DB 에서) — 인원 줄 · 팀컬러 표 · 카드 표 · 내 최근 선발 축구장."""
+    with _PickEnv():
+        config.RANK_COLLECT = False      # 받지 않게 — 이미 받아 둔 것만 그린다
+        conn = store.open_db(config.DB_PATH)
+        try:
+            d = json.loads(json.dumps(_DETAILS[0]))
+            d["matchId"], d["matchDate"] = "pickm0", datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            side = d["matchInfo"][0]
+            store.save_matches(conn, [d])
+            store.mark_ranker_match(conn, "pickm0", datetime.now().date().isoformat())
+            store.save_ranker_squad(conn, 900, nickname="랭커0", ouid=side["ouid"], rank=1, match_id="pickm0",
+                                    match_day=d["matchDate"][:10], fetched_at=datetime.now().isoformat(), fail=None,
+                                    source=store.PICK)
+        finally:
+            conn.close()
+        try:
+            _win._go_page("랭커 픽")
+            s = _win.pick_summary
+            assert s is not None and (s.total, s.used, s.pending) == (3, 1, 2), s
+            assert _win.tbl_pick_colors.rowCount() == 1 and _win.tbl_pick_cards.rowCount() > 0
+            assert "3명 중 1명" in _win.lb_pick_summary.text(), _win.lb_pick_summary.text()
+            assert _win.box_pick_pitch.count() == 1 and isinstance(_win.box_pick_pitch.itemAt(0).widget(),
+                                                                   app_main.PitchWidget)
+        finally:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.purge_ranker_data(conn, everything=True)
+            finally:
+                conn.close()
+
+
+def test_purge_waits_for_running_loader():
+    """E12 — 로더가 도는 중에 끄면 멈추게 하고 끝난 뒤(finished) 지운다(겹치면 반쯤 지워지거나 다시 생긴다)."""
+    with _PickEnv():
+        calls = []
+        keep = store.purge_ranker_data
+        store.purge_ranker_data = lambda conn, **k: calls.append(k["everything"]) or 0
+        try:
+            _win._go_page("랭커 픽")
+            ld = _win._pick_loader
+            config.RANK_COLLECT = False
+            _win.sync_ranker_pick_data()
+            assert ld.cancelled and calls == [], "도는 로더를 두고 지웠다"
+            _win.start_ranker_pick()
+            assert _FakePickLoader.started == 1
+            ld.end()
+            assert calls == [True], calls
+            config.RANK_COLLECT = True
+            _win.sync_ranker_pick_data()
+            assert calls == [True, False], "켜져 있으면 14일 정리만"
+        finally:
+            store.purge_ranker_data = keep
+
+
+def test_every_off_path_purges_ranker_pick():
+    """E12 — 끄는 길 넷 + [수집 기록 지우기]가 전부 sync_ranker_pick_data 를 거친다."""
+    seen = []
+    keep = (_win.sync_ranker_pick_data, config.WEB_DATA, config.RANK_COLLECT, app_main.NoticeDialog)
+    _win.sync_ranker_pick_data = lambda: seen.append("sync")
+    try:
+        config.WEB_DATA = config.RANK_COLLECT = True
+        dlg = app_main.AboutDialog(_win)
+        dlg._on_rank_toggled(False)
+        assert seen == ["sync"], ("[정보] 수집 끄기", seen)
+        dlg._on_web_toggled(False)
+        assert len(seen) == 2, ("웹 데이터 끄기", seen)
+        dlg._ask_clear = lambda keep_ouid: "all"
+        dlg._on_clear_rank()
+        assert len(seen) == 3, ("수집 기록 지우기", seen)
+        dlg.close()
+        _win._on_rank_collect_outcome(rankcollect.Outcome("blocked", disabled_by_block=True))
+        assert len(seen) == 4, ("D6 스스로 끔", seen)
+
+        class _Notice:
+            def __init__(self, *a, **k):
+                pass
+
+            def exec(self):
+                return app_main.QDialog.DialogCode.Rejected
+
+        app_main.NoticeDialog = _Notice
+        _win.ask_notice_update()
+        assert len(seen) == 5, ("다시 묻는 창", seen)
+    finally:
+        _win.sync_ranker_pick_data, config.WEB_DATA, config.RANK_COLLECT, app_main.NoticeDialog = keep
+
+
+def test_shutdown_stops_ranker_pick_and_backfill():
+    log = []
+    keep = _win._pick_loader, _win._backfill_worker
+    try:
+        _win._pick_loader, _win._backfill_worker = _FakeThread("픽", log), _FakeThread("색인", log)
+        left = _win.shutdown(fast=True)
+        assert _win._pick_loader in left and _win._backfill_worker in left, "종료 표에 새 워커가 없다(E11)"
+        assert "stop 픽" in log and "stop 색인" in log, log
+    finally:
+        _win._pick_loader, _win._backfill_worker = keep
+
+
+def test_final_429_recorded_per_loader():
+    """E13 — 재시도 끝의 429 만 적는다(검색 · 거래 · 랭커 기록). 재시도로 넘어간 429 는 안 적는다."""
+    marks = []
+    keep = app_main._mark_final_429, app_main.tradecollect.collect, app_main.rankerstats.collect
+    app_main._mark_final_429 = lambda: marks.append(1)
+    try:
+        got = _run_loader(_DetailApi([d["matchId"] for d in _DETAILS], nexon_api.QUOTA_CODE))
+        assert got["quota"] and len(marks) == 1, ("검색", marks)
+        got = _run_loader(_DetailApi([], ""))
+        assert got["ok"] and len(marks) == 1, "429 없는 검색이 적었다"
+        app_main.tradecollect.collect = lambda *a, **k: app_main.tradecollect.TradeResult(quota=True)
+        app_main.TradeLoader(None).run()
+        assert len(marks) == 2, ("거래", marks)
+        app_main.tradecollect.collect = lambda *a, **k: app_main.tradecollect.TradeResult(complete=True)
+        app_main.TradeLoader(None).run()
+        assert len(marks) == 2
+
+        def boom(*a, **k):
+            raise nexon_api.NexonAPIError("한도", code=nexon_api.QUOTA_CODE, status=429)
+        app_main.rankerstats.collect = boom
+        app_main.RankerStatsLoader(None, [(1, 2)], 52).run()
+        assert len(marks) == 3, ("랭커 기록", marks)
+    finally:
+        app_main._mark_final_429, app_main.tradecollect.collect, app_main.rankerstats.collect = keep
+
+
+def test_mark_final_429_blocks_ranker_pick_today():
+    """_mark_final_429 가 정말 그날 랭커 픽을 막는 표시를 쓴다(배선 — 표시를 다른 종류로 쓰면 막지 못한다)."""
+    app_main._mark_final_429()
+    conn = store.open_db(config.DB_PATH)
+    try:
+        assert store.budget_hit_429(conn, datetime.now().date().isoformat())
+        conn.execute("DELETE FROM api_budget")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_backfill_waits_for_loaders_and_yields():
+    """E8 — 검색·로더가 돌면 미룬다 · 새 검색이 시작되면 묶음 사이에서 멈춘다 · 양보로 멈췄으면 다시 예약."""
+    log = []
+    keep = _win._loader, _win._backfill_worker
+    try:
+        _win._loader = _FakeThread("검색", log)
+        _win._backfill_worker = None
+        _win._start_backfill()
+        assert _win._backfill_worker is None and _win._backfill_timer.isActive(), "검색 중에 색인을 시작했다"
+        _win._loader.running = False
+        _win._start_backfill()
+        assert isinstance(_win._backfill_worker, app_main.SquadBackfillWorker)
+        _win._backfill_worker = _FakeThread("색인", log)
+        _win._yield_trades()
+        assert "stop 색인" in log, "새 검색에 색인이 양보하지 않았다"
+        _win._backfill_timer.stop()
+        _win._backfill_left = (5, 10)
+        _win._on_backfill_finished()
+        assert _win._backfill_timer.isActive(), "남았는데 다시 예약하지 않았다"
+    finally:
+        _win._backfill_timer.stop()
+        _win._loader, _win._backfill_worker = keep
+        _win._backfill_left = None
+
+
+def test_card_owner_find():
+    """12 — 이름 후보 → 카드 → 최근 30일 선발 구단주 · 색인 안 된 경기가 있으면 "색인 중" 줄."""
+    d = json.loads(json.dumps(_DETAILS[0]))
+    d["matchId"], d["matchDate"] = "ownerm0", datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    me = next(p for p in d["matchInfo"] if p["ouid"] == _OUID)
+    sp = next(p["spId"] for p in me["player"] if p.get("spPosition") not in (None, 28))
+    keep = dict(_win._names)
+    conn = store.open_db(config.DB_PATH)
+    try:
+        store.save_matches(conn, [d])
+        conn.execute("INSERT INTO matches (match_id, match_type, match_date, payload) VALUES ('raw1', 52, ?, '{}')",
+                     (d["matchDate"],))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        _win._names = {sp: "테스트카드선수"}
+        _win._go_page("선수로 구단주 찾기")
+        _win.ed_owner_name.setText("테스트")
+        assert _win.cb_owner_card.count() == 1 and _win.cb_owner_card.currentData() == sp
+        _win.btn_owner_find.click()
+        assert [o["ouid"] for o in _win.owner_rows] == [_OUID], _win.owner_rows
+        assert _win.tbl_owner.rowCount() == 1
+        assert _win.lb_owner_backfill.isVisibleTo(_win) and "색인" in _win.lb_owner_backfill.text(), \
+            "색인 안 된 경기가 있는데 조용히 덜 나왔다"
+        _win.ed_owner_name.setText("테")
+        assert _win.cb_owner_card.count() == 0, "2글자부터"
+    finally:
+        _win._names = keep
+        conn = store.open_db(config.DB_PATH)
+        try:
+            for t in ("match_squads", "squad_match", "squad_owner"):
+                conn.execute(f"DELETE FROM {t}")
+            conn.execute("DELETE FROM match_players WHERE match_id IN ('ownerm0', 'raw1')")
+            conn.execute("DELETE FROM matches WHERE match_id IN ('ownerm0', 'raw1')")
+            conn.commit()
+        finally:
+            conn.close()
+        _win._backfill_left = None
+        _win._go_page("대시보드")
+
+import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for t in tests:
         try:
-            t()
+            with watchdog.limit(t.__name__):
+                t()
             print(f"[OK]   {t.__name__}")
         except AssertionError as e:
             failed += 1

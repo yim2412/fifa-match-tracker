@@ -528,13 +528,16 @@ def test_constants_sane():
     assert config.TRAY_WAIT_S % config.TRAY_POLL_S == 0
     assert config.FAST_QUIT_WAIT_S <= 2, "윈도우 종료를 오래 붙잡으면 '종료를 막고 있습니다'가 뜬다"
 
+import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
 
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for t in tests:
         try:
-            t()
+            with watchdog.limit(t.__name__):
+                t()
             print(f"[OK]   {t.__name__}")
         except AssertionError as e:
             failed += 1

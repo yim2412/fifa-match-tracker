@@ -1015,12 +1015,16 @@ def test_open_rank_db_ro_does_not_create_and_reads():
         r.close()
         assert rc.delete_db(env.db), "읽기 연결을 닫았는데 못 지웠다"
 
+import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
     for t in tests:
         try:
-            t()
+            with watchdog.limit(t.__name__):
+                t()
             print(f"[OK]   {t.__name__}")
         except AssertionError as e:
             failed += 1

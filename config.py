@@ -17,7 +17,7 @@ DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NA
 
 # 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 하나씩 뺀다).
 # 남아 있으면 배포판을 안 만든다(tools/release.py preflight_problems) — 빈 페이지를 내보내지 않게.
-HIDDEN_NAV_UNTIL_READY = ("랭킹 추이", "랭커 픽", "선수로 구단주 찾기")
+HIDDEN_NAV_UNTIL_READY = ("랭킹 추이",)
 
 
 def _root() -> Path:
@@ -117,6 +117,7 @@ NOTICE_BASE_VERSION = 2
 TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)은 이 버전 동의 뒤부터
 PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 이 버전 동의 뒤부터 — 사용자가 연 [시세] 탭은 그대로
 CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
+RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -220,6 +221,19 @@ TIMELINE_MAX_ROWS = 1000            # 사건 표는 최근 이만큼 — 표 채
 # 랭커 기록(13단계 · N1 랭커와 비교 · N2 선수 카드 [랭커 기록]) — 오픈API, 하루 캐시(store.ranker_stats)
 RANKER_MIN_MATCHES = 10             # 랭커 표본(matchCount — 실측 1~20)이 이보다 적으면 흐림
 RANKER_COMPARE_MAX = 40             # 비교 표는 많이 쓴 카드부터 이만큼 — 요청은 RANKER_STATS_BATCH 로 나눠 1번
+# 선수로 구단주 찾기(2.1.1 · 12) — fifa.db match_squads 색인(store.backfill_squads)
+CARD_OWNER_DAYS = 30                # 이만큼 안에 선발로 쓴 구단주만
+SQUAD_BACKFILL_DELAY_S = 30         # 첫 화면 뒤 색인 백필 시작 — 1만 경기 첫 화면(공통 기준 3)에 끼지 않게
+SQUAD_BACKFILL_TRAY_DELAY_S = 120   # 트레이로 켜졌으면(첫 화면 없음) 켠 뒤 이만큼
+# 랭커 픽(2.1.1 · 6 — rankerpick.py) — 마지막 스냅숏 상위 RANKER_PICK_TOP 명의 최근 경기 하나. 화면(탭)이 보일 때만 받는다(U2)
+RANKER_PICK_TOP = 200
+RANKER_RECOMMEND_TOP = 1000         # 추천 후보(17단계 ③)는 이 순위 안만 — 범위 밖 줄은 켤 때 정리
+RANKER_PICK_DAILY_REQ = 300         # 하루 오픈API 요청 상한(U2 — 개발 단계 키 하루 1,000 의 30%)
+RANKER_PICK_STALE_DAYS = 3          # 이만큼 안에 받은 랭커는 다시 안 묻는다(닉네임이 바뀌었으면 바로 다시)
+RANKER_PICK_MAX_AGE_DAYS = 14       # 마지막 경기가 이보다 오래된 랭커는 집계에서 뺀다(받은 날이 아니라 경기 날) — 초안
+RANKER_PICK_GAP_S = 0.25            # 요청 사이 — 개발 단계 키 초당 5 미만
+RANKER_PICK_429_WAIT_S = 60         # 429 를 받으면 이만큼 쉬고 한 번 더 → 또 429 면 그날 멈춘다(초당·하루 429 가 같은 코드라)
+RANKER_PICK_MIN_RANKERS = 30        # 이보다 적은 랭커로 낸 카드 비율은 흐림(표본 흐림 규칙 — 1.2.1)
 
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)
@@ -330,6 +344,13 @@ def price_auto_allowed() -> bool:
 def chip_auto_allowed() -> bool:
     """축구장 칩의 카드 정보를 자동으로 읽어도 되나 — 그 안내(CHIP_NOTICE_VERSION) 동의 + 웹 데이터 켜짐."""
     return WEB_DATA and NOTICE_ACCEPTED >= CHIP_NOTICE_VERSION
+
+
+def ranker_pick_allowed() -> bool:
+    """랭커 픽을 받아도 되나 — 랭킹 수집이 켜져 있고(웹 데이터·처음 동의 포함) 그 안내 버전에 동의했을 때(U1).
+    수집 토글 하나로 묶었다 — 켜는 사람이 이미 "다른 구단주 데이터를 모은다"에 동의했다."""
+    return (not notice_needed() and WEB_DATA and RANK_COLLECT
+            and NOTICE_ACCEPTED >= RANKER_PICK_NOTICE_VERSION)
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다
