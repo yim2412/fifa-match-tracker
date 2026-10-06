@@ -157,7 +157,7 @@
 
 ## 2.2.1 — 팀컬러 (중간 패치)
 
-> **상태: 계획 검토 2회차 반영**(2026-10-06 — 1회차 A [상] 1 · B [상] 2 · 2회차 A·B 가 같은 [상] 1(가르기가 목록에 기댐) → 목록 없는 규칙으로 · [중] 전부 반영). 3회차 전. 단계는 18 하나 + 공개.
+> **상태: 계획 검토 3회차 반영**(2026-10-06 — 3회차: B 바뀐 줄 [상] 0 · A 계획 전체 [상] 1(저장 경로가 화면 글자를 DB 에 씀) → 반영 · [중] 8 반영). 4회차(계획 전체 · 1명) 전. 단계는 18 하나 + 공개.
 
 **규모** 중간. 새 넥슨 요청: 홈페이지 셋(팀컬러 목록 · 상세 · 선수 JSON) — 전부 **사용자가 누를 때만**(자동 요청 0). 오픈API 요청 0.
 저장 형식: fifa.db 새 표 둘 + `team_colors.emblem` 열 · rank.db 새 표 하나(`snapshot_emblems`) — **기존 표의 열 순서·INSERT 는 안 건드린다**(아래 U2). 메뉴는 그대로("팀컬러: 팀컬러 승률 · 팀컬러 랭킹").
@@ -204,12 +204,14 @@
 - 랭킹 읽기: `ranker.RankRow.team_color_emblem` 과 `RankerInfo.team_color_emblem` — `parse_rank_rows`·`fetch_manager_rank` 둘 다(T16). 앵커는 `class="td team_color"` 안 첫 `<img src>`(행 단위로 자른 뒤 — 팀컬러 빈 행에서 뒤가 밀리는 함정).
 - **(팀컬러, 팀가치) 두 칸이 세 칸이 되는 곳**(2회차 A [중] 3 — 진입점 표에 행): `ranker._color_rows`(ranker.py:238) · `TeamColorLoader._fetch_one`(app_main.py:1059) · `RankListLoader` 의 `batch`·`rest`(1177·1192) · `loaded_many` → `_on_teamcolor_loaded`(6123) · `rankcollect.snapshot_colors`(677) · `store.save_team_colors`·`load_team_colors` · 테스트 `test_ui_smoke.py:2508`.
   화면에 넣는 순간(`_on_teamcolor_loaded`·`_load_cached_team_colors`) `teamcolor.label` 로 글자 하나가 된다 — 그 뒤는 바뀌지 않는다.
-- **fifa.db** `team_colors.emblem TEXT` — `open_db` 에서 `ALTER TABLE ADD COLUMN`. 값은 `읽은 이름 + "\t" + 엠블럼 키`.
-  **옛 버전은 `ON CONFLICT DO UPDATE SET team_color, team_value, fetched_at` 이라 emblem 을 그대로 둔다**(store.py:661 — 2회차 A [중] 2: 이름만 바뀌고 옛 엠블럼이 남는다) → 읽을 때 앞의 이름이 지금 `team_color` 와 다르면 엠블럼 없음으로 본다. 테스트로 잰다.
+  **저장은 화면 글자가 아니라 원값으로**(3회차 A [상] — 지금 `_on_teamcolor_finished` 가 `self._team_colors[n]` 을 다시 읽어 저장한다, app_main.py:6155): 로더가 준 (이름, 팀가치, 엠블럼 키)를 `self._teamcolor_raw[닉네임]` 에 따로 쥐고 `_on_teamcolor_finished` 는 거기서 저장한다. DB `team_color` 는 언제나 넥슨 이름.
+  **랭커 쪽 이름과 맞대는 곳은 글자 → 이름**(3회차 A [중] 2): `teamcolor.name_of(label)`(접미사를 뗀다). 선수로 구단주 찾기 — 콤보는 글자 키, 스냅숏 쪽은 `snapshot_emblems` 를 붙여 같은 `label` 로 만들어 비교(app_main.py:4551) · 추천 `my_team_color` 의 `cached` 는 `name_of` 를 거친다(app_main.py:4210 — rank.db 는 이름).
+- **fifa.db** `team_colors.emblem TEXT` — `open_db` 에서 `ALTER TABLE ADD COLUMN`. 값은 `읽은 시각(fetched_at) + "\t" + 엠블럼 키`(3회차 A·B — 이름 대조는 같은 이름의 강화↔클럽 바뀜을 못 거른다).
+  **옛 버전은 `ON CONFLICT DO UPDATE SET team_color, team_value, fetched_at` 이라 emblem 을 그대로 둔다**(store.py:661 — 2회차 A [중] 2: 이름만 바뀌고 옛 엠블럼이 남는다) → 옛 버전도 `fetched_at` 은 늘 갱신하므로, 읽을 때 앞의 시각이 지금 `fetched_at` 과 다르면 엠블럼 없음으로 본다. 테스트로 잰다.
 - **rank.db** 는 `snapshot_rows` 를 **안 건드리고**(T13) 옆 표 `snapshot_emblems(snapshot_id, profile_sn, emblem, PK(snapshot_id, profile_sn)) WITHOUT ROWID` — 같은 트랜잭션에 쓰고, 원본 지우기(`prune_raw` — rankcollect.py:194)에서 같은 조건으로 같이 지운다.
   옛 버전이 원본만 지우고 남긴 줄은 **`snapshot_rows` 에 없는 snapshot_id** 로 지운다(2회차 A [중] 5 — `snapshots` 는 영구라 그 기준으론 안 잡힌다). 스냅숏 → `team_colors` 옮기기(rankcollect.py:689)가 이 표를 붙여 읽는다.
 - **엠블럼이 없는 옛 줄**: 겹치는 이름이 아니면 영향 없음. 겹치는 이름(0.6%)이면 `이름 (구분 전)` — 7일 TTL 이 지나 다시 읽히면(목록·검색 두 길 다 엠블럼이 있다 — T12·T16) 사라진다. 효과 창은 `(구분 전)` 을 누르면 두 후보를 고르게.
-  안내 줄에 "(구분 전) — 예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기"(2회차 B: 합친 값이라는 걸 숨기지 않게).
+  안내 줄에 "(구분 전) — 예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기"(2회차 B: 합친 값이라는 걸 숨기지 않게) + 같은 이름이 최대 세 줄(강화·클럽·구분 전)로 나뉘어 줄마다 표본이 작아진다(3회차 B).
 - **랭커 묶음(랭킹 추이 `tier_counts` · 랭커 픽 · 추천의 `my_team_color`)은 이름 그대로** — 영구 집계의 키를 바꾸면 옛 회차와 이어지지 않는다. 겹침 0.6% 라 이번 범위 밖으로 두고 "버전 미정 후보"에 적는다.
 
 ### 7 팀컬러 효과표 — 새 모듈 `teamcolor.py` + 창 `TeamColorDialog`
@@ -220,7 +222,7 @@
   `test_web_data_switch_blocks_every_request` 의 `_web_calls()` 에 셋.
 - 파싱 앵커는 `GetTeamColorDetail(` · `class="teamcolor_item"`(라벨 글자 아님). 1건 실패는 그 항목만 빼고, **801개 중 절반 넘게 실패면 예외**(빈 목록을 "팀컬러 없음"으로 읽지 않게). 상세 단계 표의 앵커는 구현 첫 줄에 본문 구조로 정한다(T4 는 글자만 봤다 → 재지 않은 것).
 - 이어 받기(U1·T7): 다음 쪽 `ovr_max` = 지난 쪽 마지막 OVR, spid 로 중복 제거. **새 spid 가 0 이면 `ovr_max − 1`** 로 한 번 더(같은 OVR 이 100명 넘는 경우), 그래도 0 이거나 받은 수 < 100 이면 끝 → [더 보기] 숨김.
-- 캐시(fifa.db 새 표): `teamcolor_meta(id PK, name, emblem, max_step, members, effects, fetched_on)` · `teamcolor_steps(id, step, members, effects, fetched_on, PK(id, step))` — **둘 다 7일**(1회차 B: 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다). 목록에 그 (이름, 엠블럼)이 없으면 그날 한 번 목록을 다시 받는다.
+- 캐시(fifa.db 새 표): `teamcolor_meta(id PK, name, emblem, max_step, members, effects, fetched_on)` · `teamcolor_steps(id, step, members, effects, fetched_on, PK(id, step))` — **둘 다 7일**(1회차 B: 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다). 목록에 그 (이름, 엠블럼)이 없으면 그날 한 번 목록을 다시 받는다. **SQL 은 `store.py` 에**(`load_teamcolor_meta`·`save_teamcolor_meta`·`load_teamcolor_steps`·`save_teamcolor_steps` — 3회차 A: `test_rules` 의 SQL 실행 계획 검사는 `SQL_FILES` 셋만 본다, tests/test_rules.py:196) · `test_parsing` 에서 돈다(아니면 `_drive_uncovered`).
   선수 목록은 DB 에 안 넣는다(시세가 매일 바뀌고 크다) — 창이 떠 있는 동안 메모리만.
 - **B 카드 캐시 쓰기**(1회차 A·B [상] — T14): 급여는 새 `store.save_card_salary(conn, spid, salary)` — `INSERT … ON CONFLICT(spid) DO UPDATE SET salary` 로 **급여 열만**. 줄이 없으면 `base_ovr`·`position` NULL · `fetched_on` 빈 문자열로 넣어 `card_info_fresh` 가 낡은 것으로 본다(칩 로더가 OVR 을 다시 읽는다). `name`·`position`·`base_ovr`·`fetched_on` 은 건드리지 않는다.
   시세는 `card_prices` 에 `eachPrice` 1~13번 칸 → 1~13강, **0 이하·빈 값은 안 쓴다**(`playerinfo.prices_as_int` 와 같은 규칙 — 모르는 시세는 0 이 아니다). 단위가 `card_prices` 와 같은지는 구현 첫 줄 대조(같은 spid 를 `playerinfo` 로) → `check_api` 줄. 다르면 시세는 안 넣는다.
@@ -235,14 +237,13 @@
 
 - 안내 줄에 "팀컬러 N종"(지금 표에 나온 수 · 필터로 숨긴 수는 따로).
 - 승률 표에 **"상대 수"** 열 — `stats.TeamColorStat.opponents`(서로 다른 닉네임 set). **`team_value_of` 와 상관없이** 센다(1회차 A — 지금 `seen_opponents` 는 팀가치 인자가 있을 때만 채워진다, stats.py:1491).
-- `team_color_stats` 의 키는 (이름, 엠블럼)(U2) — `team_color_of` 가 (이름, 엠블럼)을 돌려준다.
 
 ### ⑩ 팀컬러 승률·랭킹 표
 
 - **기준선 = 팀컬러를 아는 경기만의 승률**(1회차 B [상] — 범위 전체로 잡으면 1만 위 밖 상대(53%)와의 경기가 기준에만 들어가 거의 모든 팀컬러가 "평균 아래"가 된다). 안내 줄에 "팀컬러를 아는 N경기 승률 X% 기준". `core_api` 에 `team_color_baseline`.
-- **"평균 대비" 열** — 팀컬러 승률 − 기준선, `+3.2%p`. **흐린 행은 숫자도 흐리게 하고 정렬 때 맨 아래로**(2회차 B — 상대 2명 +25%p 가 맨 위로 오지 않게: 정렬 값을 흐림 먼저로).
+- **"평균 대비" 열** — 팀컬러 승률 − 기준선, `+3.2%p`. **흐린 행은 숫자도 흐리게 하고 정렬 때 맨 아래로**(2회차 B — 상대 2명 +25%p 가 맨 위로 오지 않게). Qt 는 두 방향을 같은 비교로 뒤집으므로 **정렬 항목의 `lessThan` 이 지금 방향을 보고 흐린 행을 늘 뒤로**(3회차 B) — 테스트는 두 방향 다.
 - **승률 칸 색** — 차이로 섞은 불투명 색(PyQt 규칙 2) · `theme.CHART_*`. **흐린 행에는 색을 안 칠한다.**
-- **흐림**(1.2.1 규칙 · 1회차 B) — 경기 < `core.MIN_COND`(8) **또는 상대 수 < `config.TEAMCOLOR_MIN_OPPONENTS`(초안 3)** — 한 사람과의 반복 대전이 승률을 끌고 가는 것을 막는다. 툴팁 "표본 N경기 · 상대 M명".
+- **흐림**(1.2.1 규칙 · 1회차 B) — 경기 < `core.MIN_COND`(8) **또는 상대 수 < `config.TEAMCOLOR_MIN_OPPONENTS`(초안 3)** — 한 사람과의 반복 대전이 승률을 끌고 가는 것을 막는다. 툴팁 "표본 N경기 · 상대 M명". **`이름 (구분 전)` 줄은 표본과 상관없이 흐림**(두 팀컬러를 합친 값이라 해석할 수 없다 — 3회차 B).
 - **최소 경기 수 필터** — 표 위 스핀, 기본 = `core.MIN_COND`(흐림 기준과 같게 — 1회차 B: 5 와 8 이 어긋났다), 두 탭 공용 · 안내 줄에 "N종 숨김".
 - 안내 줄에 지금 문구(상대가 **지금** 쓰는 팀컬러 기준)를 유지 — 평균 대비·색이 붙어 해석이 세지므로 지우지 않는다.
 - **팀가치 범위 막대**(랭킹 탭) — 최저~최고 막대 + 평균 점 · **로그 축**(구단가치가 자릿수로 벌어진다) · 축 범위는 **필터와 무관하게 표의 전체 행**(스핀을 바꿔도 막대 길이가 안 변하게). 새 델리게이트(`widgets`, 색은 theme). 열 폭은 `set_content_widths(extra={열: 폭})`(글자가 없어 `FitTableWidget` 이 최소 폭으로 누른다 — 1회차 A). 정렬은 평균.
@@ -257,10 +258,12 @@
 | 선수 요청(첫 100 · 더 보기) | 위 + 이어 받기(같은 OVR 100명 경우) + B 캐시 쓰기 | `test_teamcolor_players_continue`(경계 OVR 겹침 · 100명 전부 같은 OVR) · `test_teamcolor_players_feed_card_cache`(**쓴 뒤에도 기존 `base_ovr` 가 남고 칩 `need()` 가 그대로** · 0 시세 안 씀 · 칸↔강화 첨자) |
 | 랭킹 행 읽기(목록·검색 둘) | 엠블럼 앵커 · 행 단위 | `test_parsing` 의 랭킹 픽스처에 엠블럼 단언(팀컬러 빈 행 포함) |
 | 스냅숏 저장 · 원본 지우기 · 스냅숏→`team_colors` | `snapshot_emblems` 같은 트랜잭션 · 같이 지움 · `snapshot_rows` 에 없는 snapshot_id 줄 지움 · 붙여 읽기 | `test_rankcollect` 에 셋 |
-| `team_colors` 저장·읽기 · 옛 DB 열기 · 옛 버전이 쓴 줄 | `ALTER` · `읽은 이름\t엠블럼` · 이름이 다르면 엠블럼 없음 | `test_parsing` 에 "엠블럼 열 없는 옛 DB 를 열면 늘어난다" · "옛 저장으로 이름만 바뀐 줄은 (구분 전)/이름 그대로" |
-| (팀컬러, 팀가치) → 세 칸 메모리 경로 | `_color_rows` · `_fetch_one` · `RankListLoader` batch·rest · `loaded_many` 풀기 · `snapshot_colors` · 화면에 넣을 때 `teamcolor.label` | `test_ui_smoke` 의 팀컬러 로더 가짜 응답에 엠블럼 · **"목록(teamcolor_meta)을 받기 전후로 승률 표 행 수·값이 같다"** · 겹치는 이름 두 상대가 두 줄 |
+| `team_colors` 저장·읽기 · 옛 DB 열기 · 옛 버전이 쓴 줄 | `ALTER` · `읽은 시각\t엠블럼` · 시각이 `fetched_at` 과 다르면 엠블럼 없음 | `test_parsing` 에 "엠블럼 열 없는 옛 DB 를 열면 늘어난다" · "옛 저장으로 이름·시각만 바뀐 줄(같은 이름 강화↔클럽 포함)은 엠블럼 없음" |
+| (팀컬러, 팀가치) → 세 칸 메모리 경로 | `_color_rows` · `_fetch_one` · `RankListLoader` batch·rest · `loaded_many` 풀기 · `snapshot_colors` · 화면에 넣을 때 `teamcolor.label` · **`_on_teamcolor_finished` 는 `_teamcolor_raw` 에서 저장** | `test_ui_smoke` 의 팀컬러 로더 가짜 응답에 엠블럼 · **"목록(teamcolor_meta)을 받기 전후로 승률 표 행 수·값이 같다"** · 겹치는 이름 두 상대가 두 줄 · **겹치는 이름 상대를 받고 저장 → DB `team_color` 는 넥슨 이름, emblem 은 `시각\t키`** |
 | 겹치는 이름 판정 | `config.TEAMCOLOR_DUP_NAMES` | `test_parsing`(목록 픽스처의 겹치는 이름 집합 = 상수 · 쌍마다 종류가 다름) · `check_api` 줄(실제 목록과 대조) |
 | 포지션별 최다 상대 · 더블클릭 | 글자 키 그대로 — 겹치는 이름은 다른 글자 | `test_teamcolor_double_click_on_dup_name`(`이름 · 강화` 행 더블클릭 → 그 상대만) |
+| 랭커 쪽 이름과 맞대는 곳 | 선수로 구단주 찾기(스냅숏도 `label`) · 추천 `my_team_color`(`name_of`) | `test_owner_finder_dup_name_label`("Winning Streak · 강화" 를 골라도 스냅숏 구단주가 남는다) · `test_my_team_color_strips_label` |
+| 효과 캐시 SQL | `store.py` 에 | `test_rules` SQL 검사가 그 함수를 돈다(안 돌면 FAIL) |
 | 효과 창 열기 | "효과" 열 `cellClicked` 만 · 더블클릭은 그 열 무시 · 같은 키 요청 0 | `test_teamcolor_effect_opens_only_from_column` · `test_teamcolor_double_click_on_effect_column_does_nothing` |
 | 앱 종료·트레이 내려놓기 | 창의 로더 + 물러난 로더가 `shutdown` 정리 표에(멈춤 요청 먼저) | 새 `test_shutdown_stops_teamcolor_effect_loaders`(갈아 끼운 뒤 종료 포함) |
 | 화면 그리기 | 창은 메뉴·탭이 아니다 — `VIEW_OF_KEY` 에 안 넣는다(1회차 A: 넣으면 "없는 탭"으로 FAIL). 표의 새 열·색은 기존 `teamcolor` 키 안 | `test_every_nav_page_has_a_renderer`(그대로 초록) |
@@ -276,7 +279,7 @@
 | 실제 윈도우 100%/150% | 창 `fit_to_screen` · 두 표의 새 열이 1280×720 에서 안 잘림 — `test_window_size` + 2번 모니터 |
 | 새 설치 | 표·열 생성 |
 | 업그레이드 | `team_colors` 에 열 추가 · rank.db 에 표 추가 · 옛 줄 엠블럼 NULL → 이름 하나뿐이면 그대로 |
-| 되돌리기(옛 버전이 새 DB) | fifa.db: 옛 저장은 emblem 을 **그대로 둔 채** 이름만 바꾼다 → 새 버전이 `읽은 이름` 대조로 버린다 · rank.db: `snapshot_rows` 그대로라 수집 정상 · `snapshot_emblems` 는 옛 버전이 안 지운다 → 새 버전이 `snapshot_rows` 에 없는 snapshot_id 줄을 지움 |
+| 되돌리기(옛 버전이 새 DB) | fifa.db: 옛 저장은 emblem 을 **그대로 둔 채** 이름만 바꾼다 → 새 버전이 `읽은 시각` 대조로 버린다 · rank.db: `snapshot_rows` 그대로라 수집 정상 · `snapshot_emblems` 는 옛 버전이 안 지운다 → 새 버전이 `snapshot_rows` 에 없는 snapshot_id 줄을 지움 |
 | 남의 PC CP949 | 새 파일 IO 없음 — 규칙 테스트 |
 
 ### 실패·복구(⑥) · 예산(⑦) · 상호작용(⑧) · 사용자 제약(⑨)
@@ -289,6 +292,7 @@
 
 ### 재지 않은 것 (구현 때 잰다)
 
+- `TEAMCOLOR_DUP_NAMES` 가 상수라 넥슨이 새 쌍을 만들면 **배포된 앱은 다음 업데이트 전까지 두 팀컬러를 한 줄로 합친다** — `check_api` [FAIL] 은 개발자에게만 보인다. 받은 목록으로 상수를 넓히는 안은 창 전후로 표가 바뀌는 문제를 되살려 뺐다(3회차 B). 새 쌍이 생기면 다음 c 패치로
 - 선수 JSON 의 `pay`·`eachPrice` 단위가 `playerinfo`·`card_prices` 와 같은지 — 구현 첫 줄 대조 · `check_api` 줄
 - 상세 본문의 단계 표 앵커 — 구현 첫 줄
 - 새 열·창이 1280×720·150% 에서 안 잘리는지 — `test_window_size`
