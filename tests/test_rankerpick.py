@@ -319,6 +319,40 @@ def test_ranker_pick_second_429_stops_for_the_day():
     assert not res.quota and res.checked == 3, "다음 날은 다시"
 
 
+def test_ranker_pick_other_key_counts_separately():
+    """개발용 수집(tools/dev_archive.py)은 다른 키 — 계수·상한·429·다시 묻는 간격이 앱 키와 따로다."""
+    conn = _db()
+    day = TODAY.isoformat()
+    targets, api = _rankers(3)
+    store.budget_mark_429(conn, day, store.BUDGET_OPENAPI)       # 앱 키가 오늘 429 로 멈췄다
+    assert _collect(api, conn, targets).quota, "전제: 앱 쪽 기본값이면 막힌다"
+    opts = {"budget_kind": "dev", "daily_cap": 7, "stale_days": 0.5}
+    res = _collect(api, conn, targets, **opts)
+    assert not res.quota and res.limit and res.requests == 7, f"앱 키의 429 에 안 막히고, 제 상한(7)에서 멈춘다: {res}"
+    assert store.budget_used(conn, day, "dev") == 7 and store.budget_used(conn, day, store.BUDGET_RANKER_PICK) == 0
+    keep, n = config.RANKER_PICK_DAILY_REQ, len(api.calls)
+    config.RANKER_PICK_DAILY_REQ = 0
+    try:   # 앱 상한이 바닥이어도 다른 키 쪽은 제 상한을 본다
+        res = _collect(api, conn, targets, budget_kind="dev", daily_cap=100, stale_days=0.5)
+        assert res.checked == 1 and not res.limit, res
+    finally:
+        config.RANKER_PICK_DAILY_REQ = keep
+    n = len(api.calls)
+    res = _collect(api, conn, targets, now_fn=lambda: NOW + timedelta(days=1), budget_kind="dev", daily_cap=100,
+                   stale_days=0.5)
+    assert res.checked == 3 and len(api.calls) > n, "하루 지나면 다시 묻는다(기본 3일이면 안 묻는다)"
+    store.budget_mark_429(conn, (TODAY + timedelta(days=2)).isoformat(), "dev")
+    res = _collect(api, conn, targets, now_fn=lambda: NOW + timedelta(days=2))
+    assert not res.quota, "다른 키의 429 는 앱을 막지 않는다"
+    # 다른 키가 실제로 429 두 번을 받으면 — 표시는 제 종류에만
+    conn = _db()
+    targets, api = _rankers(2)
+    for i in (1, 2):
+        api.errors[i] = NexonAPIError("한도", code=QUOTA_CODE, status=429)
+    assert _collect(api, conn, targets, budget_kind="dev", daily_cap=100).quota
+    assert store.budget_hit_429(conn, day, ("dev",)) and not store.budget_hit_429(conn, day), "앱 쪽 429 표시는 안 남긴다"
+
+
 def test_ranker_pick_yields_to_final_429_of_other_loaders():
     conn = _db()
     targets, api = _rankers(2)

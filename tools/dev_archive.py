@@ -43,6 +43,12 @@ LOG_PATH = config.DATA_DIR / "logs" / "dev_archive.log"
 PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
 REF_RE = re.compile(r'rank_advice">\s*※\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*기준')
 PICK_TOP = config.RANKER_PICK_TOP
+# 서비스 단계 키(2026-10-07 — 하루 2,000만 · 초당 500)가 .env 에 있으면 ③ 은 그 키로, 계수·429 도 앱 키와 따로.
+# 앱 키(NEXON_API_KEY)는 그대로 둔다 — 바꾸면 거래 받기가 '키 바뀜'으로 옛 거래를 trades_prev 로 옮긴다
+DEV_KEY_VAR = "DEV_NEXON_API_KEY"
+DEV_BUDGET_KIND = "ranker_pick_dev"
+DEV_DAILY_CAP = 5000         # 상위 200 매일 다시 받기 ≈ 400 — 넉넉히. 넥슨 한도가 아니라 실수(무한 반복)를 막는 상한
+DEV_STALE_DAYS = 0.8         # 하루 한 번 다시 받는다(어제 09:00 에 받은 랭커를 오늘 08:59 로그온 때도 다시 — 1일이면 빠진다)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snap (
@@ -179,8 +185,12 @@ def collect_picks(arc: sqlite3.Connection, now: datetime) -> str:
     import rankerpick
     import store
     from nexon_api import FCOnlineAPI
-    if not config.API_KEY:
+    dev_key = os.getenv(DEV_KEY_VAR, "").strip()
+    key = dev_key or config.API_KEY
+    if not key:
         return "API 키 없음 — 건너뜀"
+    opts = ({"budget_kind": DEV_BUDGET_KIND, "daily_cap": DEV_DAILY_CAP, "stale_days": DEV_STALE_DAYS}
+            if dev_key else {})
     if not config.ranker_pick_allowed():
         return "랭커 픽 동의·수집 토글이 꺼져 있음 — 건너뜀"
     rconn = rankcollect.open_rank_db_ro()
@@ -191,15 +201,15 @@ def collect_picks(arc: sqlite3.Connection, now: datetime) -> str:
             rconn.close()
     if not targets:
         return "스냅숏 없음 — 건너뜀"
-    api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
+    api = FCOnlineAPI(key, cache_dir=config.CACHE_DIR)
     conn = store.open_db(config.DB_PATH)
     try:
-        res = rankerpick.collect(api, conn, targets, now_fn=datetime.now)
+        res = rankerpick.collect(api, conn, targets, now_fn=datetime.now, **opts)
         n = snapshot_pick_day(conn, arc, targets, now.date().isoformat())
     finally:
         conn.close()
     flags = [k for k in ("limit", "quota", "cancelled") if getattr(res, k)]
-    return (f"확인 {res.checked}명 · 요청 {res.requests} · 기록 {n}줄"
+    return (f"{'서비스 키' if dev_key else '앱 키'} · 확인 {res.checked}명 · 요청 {res.requests} · 기록 {n}줄"
             + (f" · 멈춤({','.join(flags)})" if flags else "") + (f" · 오류 {res.error}" if res.error else ""))
 
 

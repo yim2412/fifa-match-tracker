@@ -59,8 +59,10 @@ class _Quota(Exception):
 class _Session:
     """요청 하나마다: cancel → 하루 계수 → 간격 → 요청(재시도 없음) → 429 면 쉬고 한 번 더."""
 
-    def __init__(self, conn, day: str, cancel, sleep, clock, res: PickResult):
+    def __init__(self, conn, day: str, cancel, sleep, clock, res: PickResult,
+                 kind: str = store.BUDGET_RANKER_PICK, cap: int | None = None):
         self.conn, self.day, self.cancel, self.sleep, self.clock, self.res = conn, day, cancel, sleep, clock, res
+        self.kind, self.cap = kind, (config.RANKER_PICK_DAILY_REQ if cap is None else cap)
         self._last: float | None = None
 
     def _gap(self) -> None:
@@ -74,7 +76,7 @@ class _Session:
         for attempt in (0, 1):
             if self.cancel():
                 raise _Stop
-            if not store.budget_take(self.conn, self.day, store.BUDGET_RANKER_PICK, config.RANKER_PICK_DAILY_REQ):
+            if not store.budget_take(self.conn, self.day, self.kind, self.cap):
                 raise _Limit
             self._gap()
             self.res.requests += 1
@@ -84,7 +86,7 @@ class _Session:
                 if e.code != QUOTA_CODE and e.status != 429:
                     raise
                 if attempt == 1:
-                    store.budget_mark_429(self.conn, self.day, store.BUDGET_RANKER_PICK)
+                    store.budget_mark_429(self.conn, self.day, self.kind)
                     raise _Quota from e
                 # 초당 429 와 하루 429 가 같은 코드라 구분이 안 된다 — 쉬고 한 번 더. 통잠이면 종료가 기다림 시간을 넘긴다
                 for _ in range(int(config.RANKER_PICK_429_WAIT_S)):
@@ -129,9 +131,10 @@ def snapshot_index(rank_conn) -> dict[str, tuple[int, str]]:
             for r in rows}
 
 
-def due(targets: list[dict], have: dict[int, dict], now: datetime) -> list[dict]:
+def due(targets: list[dict], have: dict[int, dict], now: datetime, stale_days: float | None = None) -> list[dict]:
     """다시 물을 랭커 — 처음 보는 사람 · 닉네임이 바뀐 사람 먼저, 그다음 오래전에 받은 순. 3일 안에 받은 사람은 뺀다."""
-    stale_before = (now - timedelta(days=config.RANKER_PICK_STALE_DAYS)).isoformat(timespec="seconds")
+    days = config.RANKER_PICK_STALE_DAYS if stale_days is None else stale_days
+    stale_before = (now - timedelta(days=days)).isoformat(timespec="seconds")
     out = []
     for t in targets:
         h = have.get(t["profile_sn"])
@@ -145,16 +148,21 @@ def due(targets: list[dict], have: dict[int, dict], now: datetime) -> list[dict]
 
 def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=datetime.now,
             cancel: Callable[[], bool] = lambda: False, sleep=time.sleep, clock=time.monotonic,
-            on_ranker: Callable[[], None] | None = None) -> PickResult:
-    """다시 물을 랭커를 차례로 받는다. 한 랭커 = 저장 몇 번(각각 한 트랜잭션) — 끊겨도 다음 기회에 이어서."""
+            on_ranker: Callable[[], None] | None = None, budget_kind: str = store.BUDGET_RANKER_PICK,
+            daily_cap: int | None = None, stale_days: float | None = None) -> PickResult:
+    """다시 물을 랭커를 차례로 받는다. 한 랭커 = 저장 몇 번(각각 한 트랜잭션) — 끊겨도 다음 기회에 이어서.
+
+    budget_kind·daily_cap·stale_days 는 다른 키로 도는 개발용 수집(tools/dev_archive.py)만 바꾼다 — 그 키의 계수·429 는
+    앱 키와 따로 센다(앱 키의 429 가 그쪽을 막거나, 그쪽 429 가 앱을 막지 않게)."""
     res = PickResult()
     day = now_fn().date().isoformat()
-    if store.budget_hit_429(conn, day):
+    kinds = (store.BUDGET_OPENAPI, store.BUDGET_RANKER_PICK) if budget_kind == store.BUDGET_RANKER_PICK else (budget_kind,)
+    if store.budget_hit_429(conn, day, kinds):
         res.quota = True
         return res
     have = store.ranker_squads(conn)
-    s = _Session(conn, day, cancel, sleep, clock, res)
-    for t in due(targets, have, now_fn()):
+    s = _Session(conn, day, cancel, sleep, clock, res, budget_kind, daily_cap)
+    for t in due(targets, have, now_fn(), stale_days):
         if cancel():
             res.cancelled = True
             break
