@@ -747,6 +747,34 @@ def test_opponent_squad_picks_that_opponent():
     assert st.own_squad(ds[:1], "me") is None
 
 
+def test_pitch_rows_top_to_bottom_left_to_right():
+    # 4-2-3-1 류: GK · RB RCB LCB LB · RDM LDM · RAM CAM LAM · ST + 교체(28)·모르는 코드(99)는 빠진다
+    codes = [0, 3, 4, 6, 7, 9, 11, 17, 18, 19, 25, 28, 99]
+    rows = st.pitch_rows(codes)
+    by_code = [[codes[i] for i in row] for row in rows]
+    assert by_code == [[25], [19, 18, 17], [11, 9], [7, 6, 4, 3], [0]], by_code   # 빈 줄(미드)은 빠진다
+    # 같은 줄의 RWB·RB(옛 좌표로 39px 차이) — 같은 줄의 칸 둘로
+    assert [[codes2 for codes2 in r] for r in st.pitch_rows([2, 3])] == [[1, 0]]
+    assert st.pitch_rows([]) == [] and st.pitch_rows([28, None, "x"]) == []
+
+
+def test_squad_value_counts_unknown_separately():
+    sv = st.squad_value([(100, 10), (None, 20), (50, None), (None, None)])
+    assert (sv.value, sv.unknown, sv.salary, sv.salary_unknown) == (150, 2, 30, 2), sv
+
+
+def test_key_players_goal_and_rating_with_min_games():
+    A, B, C, D = 1, 2, 3, 4
+    ds = [_d(10 - i, "승", [_p(A, 25, goal=1, spRating=6.0), _p(B, 18, spRating=7.0),
+                            *([_p(C, 10, spRating=9.9, goal=3)] if i == 0 else []), _p(D, 5, spRating=8.0)])
+          for i in range(10)]
+    kp = st.key_players(ds, "me")
+    assert kp.min_games == 3, kp.min_games   # 10경기 × 0.3
+    assert [p.sp_id for p in kp.by_goal] == [A, C], [p.sp_id for p in kp.by_goal]   # 골 10 > 3, 골 0 은 안 든다
+    # C 는 한 경기 9.9 — 문턱(3경기) 밑이라 평점 상위에서 빠진다
+    assert [p.sp_id for p in kp.by_rating] == [D, B, A], [p.sp_id for p in kp.by_rating]
+
+
 def test_aggregate_players_counts_results_position_and_gk():
     X, GK, SUB = 100, 200, 300
     air = {"aerialTry": 4, "aerialSuccess": 2, "passTry": 1}

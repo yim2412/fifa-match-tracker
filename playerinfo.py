@@ -48,6 +48,10 @@ _POSITION_OVR_NEW = re.compile(
     r'<span class="ovr _area_point">(\d+)</span>\s*<span class="position[^"]*">([^<]+)</span>')
 # 시즌 배지는 페이지에 여러 개다(다른 시즌 동일 선수 목록 등) — 카드 본인
 # 것은 nameWrap(이름 옆) 안에 있는 것만.
+# 본 카드 구역 — 페이지에 다른 카드(빠른 목록·같은 선수 다른 시즌)의 pay_q·ovr 이 수십 개라(2026-10-06 실측 pay 102개)
+# 급여는 이 구역 안에서만 찾는다. 구역은 playerThumb 부터 바로 뒤 infoWrap 까지(라벨이 아니라 wrapper class 로 앵커).
+_MAIN_CARD = re.compile(r'<div class="playerThumb">(.*?)<div class="infoWrap">', re.S)
+_PAY = re.compile(r'<span class="pay">.*?<span>\s*(\d+)\s*</span>', re.S)
 _SEASON_ICON = re.compile(
     r'class="nameWrap">\s*<span class="season">\s*<img src="([^"]+)"')
 _STRONG_FOOT = re.compile(r'<strong>([^<]+)</strong>')
@@ -170,6 +174,7 @@ class PlayerInfo:
     name: str = "-"
     position: str = "-"
     ovr: int | None = None
+    salary: int | None = None   # 급여 — 본 카드 구역에서만(못 찾으면 None)
     photo_url: str = ""
     nation_flag_url: str = ""
     nation: str = "-"
@@ -313,15 +318,21 @@ def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     m = _NAME.search(html)
     if m:
         info.name = m.group(1).strip()
-    m = _POSITION_OVR.search(html)
-    if m:
-        info.position = m.group(1).strip()
-        info.ovr = int(m.group(2))
-    else:
-        m = _POSITION_OVR_NEW.search(html)
+    card = _MAIN_CARD.search(html)
+    # OVR·포지션도 본 카드 구역 먼저 — 구역을 못 찾으면(마크업 변경) 예전처럼 페이지 전체의 첫 값
+    for scope in ((card.group(1), html) if card else (html,)):
+        m = _POSITION_OVR.search(scope)
         if m:
-            info.ovr = int(m.group(1))
-            info.position = m.group(2).strip()
+            info.position, info.ovr = m.group(1).strip(), int(m.group(2))
+            break
+        m = _POSITION_OVR_NEW.search(scope)
+        if m:
+            info.ovr, info.position = int(m.group(1)), m.group(2).strip()
+            break
+    if card:
+        m = _PAY.search(card.group(1))
+        if m:
+            info.salary = int(m.group(1))
     m = _SEASON_ICON.search(html)
     if m:
         info.season_icon_url = m.group(1)
@@ -379,29 +390,52 @@ def prices_as_int(info: PlayerInfo) -> dict[int, int]:
     return out
 
 
-def collect_prices(conn, spids, day: str, cap: int, cancel=lambda: False, fetch=None) -> tuple[int, int]:
-    """시세를 하루 캐시로 채운다 → (이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수).
-
-    오늘 이미 읽은 카드는 건너뛰고, 그날 읽은 카드가 cap 에 닿으면 멈춘다(실행이 여러 번이어도 하루 상한).
-    한 장 = 한 트랜잭션, 카드 사이마다 cancel 을 본다. 한 장 실패는 건너뛴다(나머지를 막지 않게)."""
+def save_card(conn, info: PlayerInfo, day: str) -> bool:
+    """선수 페이지 한 번 읽은 것을 두 캐시에 — 시세(card_prices · 하루)와 카드 정보(card_info · 30일). 시세가 있었나를 돌려준다."""
     import store  # store → seasons → … 순환을 피해 여기서
+    prices = prices_as_int(info)
+    if prices:
+        store.save_card_prices(conn, info.sp_id, prices, day)
+    store.save_card_info(conn, info.sp_id, info.name if info.name != "-" else None,
+                         info.position if info.position != "-" else None, info.ovr, info.salary, day)
+    return bool(prices)
+
+
+# 쓰임별 하루 계수 이름(store.api_budget.kind)
+KIND_LEDGER = "card_ledger"
+KIND_CHIP = "card_chip"
+
+
+def collect_cards(conn, spids, day: str, kind: str, cap: int, cancel=lambda: False, fetch=None,
+                  need=None, on_card=None) -> tuple[int, int]:
+    """선수 페이지를 읽어 시세·카드 정보 캐시를 채운다 → (이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수).
+
+    need(spid) 가 참인 카드만(기본: 오늘 시세가 없는 카드). 요청 직전에만 그날 그 쓰임(kind)의 계수를 1 더하고
+    상한(cap)에 닿으면 멈춘다 — 실행이 여러 번이어도, 시세가 비어 와 저장되지 않는 카드도 센다.
+    웹 데이터가 꺼졌으면 요청도 계수도 없이 멈춘다. 한 장 = 한 트랜잭션, 카드 사이마다 cancel.
+    한 장 실패는 건너뛴다(나머지를 막지 않게). on_card(PlayerInfo) — 읽은 카드를 화면에 바로 넘길 때."""
+    import store
     fetch = fetch or fetch_player_info
+    need = need or (lambda s: not store.card_price_fresh(conn, s, day))
     done = skipped = 0
-    todo = [s for s in dict.fromkeys(spids) if not store.card_price_fresh(conn, s, day)]
-    # 시도 수로도 센다 — 시세가 비어 오는 카드는 저장되지 않아 저장 수만 세면 상한 밖에서 계속 요청한다
-    budget = cap - store.card_prices_fetched_on(conn, day)
+    todo = [s for s in dict.fromkeys(spids) if need(s)]
     for i, spid in enumerate(todo):
-        if cancel():
+        if cancel() or not config.WEB_DATA:
             break
-        if i >= budget:
+        if not store.budget_take(conn, day, kind, cap):
             skipped = len(todo) - i
             break
         try:
             info = fetch(spid)
         except PlayerInfoError:
             continue
-        prices = prices_as_int(info)
-        if prices:
-            store.save_card_prices(conn, spid, prices, day)
-            done += 1
+        save_card(conn, info, day)
+        done += 1
+        if on_card is not None:
+            on_card(info)
     return done, skipped
+
+
+def collect_prices(conn, spids, day: str, cap: int, cancel=lambda: False, fetch=None) -> tuple[int, int]:
+    """가계부 평가용 시세(쓰임 KIND_LEDGER) — collect_cards 와 같고 계수만 가계부 몫."""
+    return collect_cards(conn, spids, day, KIND_LEDGER, cap, cancel=cancel, fetch=fetch)

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6 import sip
 from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
@@ -54,8 +55,8 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
-    NA, BarRow, Card, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PageTabs,
-    PitchWidget, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
+    NA, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PageTabs,
+    PitchCard, PitchWidget, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
     StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
     wdl_text, win_rate_bar,
 )
@@ -697,7 +698,8 @@ class PlayerInfoLoader(QThread):
 
     스쿼드 화면에서 선수를 클릭할 때마다 하나씩 조회하는 일회성 요청이라
     (팀컬러처럼 수백 건을 한 번에 훑지 않는다) 풀 없이 스레드 하나로 충분하다.
-    받은 시세는 카드 시세 캐시(card_prices)에도 넣는다 — 화면 스레드에서 DB 를 쓰지 않으려고 여기서(1.4.1)."""
+    받은 시세·급여·OVR 은 카드 캐시(card_prices · card_info)에도 넣는다 — 화면 스레드에서 DB 를 쓰지 않으려고 여기서.
+    사용자가 직접 연 카드라 하루 상한은 없다(계수도 안 한다 — ROADMAP 2.1.1 B)."""
 
     loaded = pyqtSignal(object)   # playerinfo.PlayerInfo
     failed = pyqtSignal(str)
@@ -713,16 +715,14 @@ class PlayerInfoLoader(QThread):
             self.failed.emit(str(e))
             return
         self.loaded.emit(info)
-        prices = playerinfo.prices_as_int(info)
-        if prices:
+        try:
+            conn = store.open_db(config.DB_PATH)
             try:
-                conn = store.open_db(config.DB_PATH)
-                try:
-                    store.save_card_prices(conn, self._sp_id, prices, datetime.now().date().isoformat())
-                finally:
-                    conn.close()
-            except sqlite3.Error:
-                pass  # 캐시 실패가 카드 창을 막으면 안 된다 — 다음에 다시 읽는다
+                playerinfo.save_card(conn, info, datetime.now().date().isoformat())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass  # 캐시 실패가 카드 창을 막으면 안 된다 — 다음에 다시 읽는다
 
 
 class TradeLoader(QThread):
@@ -783,6 +783,43 @@ class PriceLoader(QThread):
         except sqlite3.Error:
             pass
         self.done.emit(got, skipped)
+
+
+class CardInfoLoader(QThread):
+    """축구장 칩의 카드 정보(시세·급여·OVR) — playerinfo.collect_cards(쓰임 card_chip · 하루 CHIP_FETCH_MAX).
+    오늘 시세가 있고 카드 정보가 CARD_INFO_TTL_DAYS 안이면 안 읽는다. 띄우는 곳은 _start_card_info(chip_auto_allowed 뒤).
+    카드 사이마다 cancel · 한 장 = 한 트랜잭션이라 terminate 하지 않는다(shutdown 표)."""
+
+    card = pyqtSignal(object)    # playerinfo.PlayerInfo — 읽는 대로 칩에
+    done = pyqtSignal(int, int)  # 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
+
+    def __init__(self, spids: list[int]):
+        super().__init__()
+        self._spids = list(spids)
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        got = skipped = 0
+        day = datetime.now().date().isoformat()
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                def need(s):
+                    return not (store.card_price_fresh(conn, s, day)
+                                and store.card_info_fresh(conn, s, day, config.CARD_INFO_TTL_DAYS))
+                got, skipped = playerinfo.collect_cards(
+                    conn, self._spids, day, playerinfo.KIND_CHIP, config.CHIP_FETCH_MAX,
+                    cancel=lambda: self._cancel, need=need,
+                    on_card=lambda info: None if self._cancel else self.card.emit(info))
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass
+        if not self._cancel:
+            self.done.emit(got, skipped)
 
 
 class RankerStatsLoader(QThread):
@@ -1531,6 +1568,10 @@ class MainWindow(QMainWindow):
         self._shown_once = False   # show_initial 을 한 번 거쳤나(--tray 로 숨긴 채 만든 창은 처음 열 때 거친다)
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
+        self._pitch_card_loaders: list = []     # 축구장 칩 카드 정보(CardInfoLoader) — 대화상자가 닫혀도 종료 표가 기다린다
+        self._live_pitches: list = []           # 카드 정보를 쓰는 축구장 — 동의 직후 막혔던 것을 다시 읽는다
+        self._position_pitch_loaders: list = [] # ⑨ 축구장의 얼굴·시즌 아이콘
+        self._retired_loaders: list = []        # 갈아 끼운 축구장의 로더 — 끝날 때까지 쥔다(_retire_loaders)
         self._ability_sim_loader: AbilitySimLoader | None = None
         self._position_ovr_loader: AbilitySimLoader | None = None
 
@@ -1847,6 +1888,7 @@ class MainWindow(QMainWindow):
     def ask_notice_update(self) -> bool:
         ok = NoticeDialog(self, reask=True).exec() == QDialog.DialogCode.Accepted
         self._render_elo()   # 따라가기 버튼 툴팁이 동의 여부를 따른다
+        self._refresh_pitch_cards()   # 동의 직후 — 막혀 있던 축구장 칩이 바로 읽기 시작(ROADMAP 2.1.1 3회차)
         return ok
 
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
@@ -4012,36 +4054,51 @@ class MainWindow(QMainWindow):
         self.cb_position_color.setMinimumWidth(160)
         self.cb_position_color.currentIndexChanged.connect(
             self._on_position_color_changed)
+        # 팀컬러가 수십 개라 — 입력하면 콤보 목록이 걸러진다(고른 것은 걸러도 남는다)
+        self.ed_position_color = QLineEdit()
+        self.ed_position_color.setPlaceholderText("팀컬러 찾기")
+        self.ed_position_color.setClearButtonEnabled(True)
+        self.ed_position_color.setMaximumWidth(160)
+        self.ed_position_color.textChanged.connect(lambda _t: self._refresh_position_color_options())
         row.addWidget(lb)
+        row.addWidget(self.ed_position_color)
         row.addWidget(self.cb_position_color)
         row.addSpacing(8)
         lb_note = QLabel("※ '팀컬러 승률/랭킹' 탭에서 상대 팀컬러를 먼저 불러와야 목록이 채워집니다.")
         lb_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        row.addWidget(lb_note)
-        row.addStretch(1)
+        lb_note.setWordWrap(True)
+        row.addWidget(lb_note, 1)
         v.addLayout(row)
+
+        # 축구장 — 자리마다 그 자리에서 가장 많이 만난 상대 카드(칩에 만난 횟수·비율). _render_position_opponents 가 갈아 끼운다
+        self.box_position_pitch = QVBoxLayout()
+        v.addLayout(self.box_position_pitch, 1)
 
         self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
         # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
         # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
         self.tbl_position_opp.setSortingEnabled(False)
         self.tbl_position_opp.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
-        v.addWidget(self.tbl_position_opp, 1)
+        self.tbl_position_opp.setMinimumHeight(260)
+        self.fold_position_opp = Collapsible("표로 보기", self.tbl_position_opp)
+        v.addWidget(self.fold_position_opp)
         return w
 
     def _refresh_position_color_options(self) -> None:
         """알려진 팀컬러 목록(self._team_colors 값)으로 필터 콤보를 다시 채운다.
 
-        팀컬러가 새로 조회될 때마다(_render_teamcolor_tabs) 불린다. 사용자가
-        고른 색이 새 목록에도 있으면 선택을 유지하고, 없어졌으면 '전체'로
+        팀컬러가 새로 조회될 때마다(_render_teamcolor_tabs)와 찾기 칸을 고칠 때 불린다. 사용자가
+        고른 색이 새 목록에도 있으면 선택을 유지하고(찾기 칸에 안 맞아도 남긴다), 없어졌으면 '전체'로
         되돌린다 — 표를 다시 그릴 때마다 필터가 조용히 풀리면 안 되니까.
         """
         current = self.cb_position_color.currentText()
         colors = sorted({c for c in self._team_colors.values() if c})
+        needle = self.ed_position_color.text().strip().lower()
+        shown = [c for c in colors if needle in c.lower() or c == current]
         self.cb_position_color.blockSignals(True)
         self.cb_position_color.clear()
         self.cb_position_color.addItem(self.POSITION_COLOR_ALL)
-        self.cb_position_color.addItems(colors)
+        self.cb_position_color.addItems(shown)
         keep = current if current in colors else self.POSITION_COLOR_ALL
         self.cb_position_color.setCurrentText(keep)
         self.cb_position_color.blockSignals(False)
@@ -4058,6 +4115,28 @@ class MainWindow(QMainWindow):
         ("평균 점유율", "avg_possession", "{:.1f}%", True),
         ("평균 평점", "avg_rating", "{:.2f}", True),
     ]
+    # 경기 상세에서 나오는 줄 — (라벨, team_profile 축 이름, 포맷, 클수록 좋음). 축이 없으면 그 줄을 뺀다
+    COMPARE_PROFILE_ROWS = [
+        ("경기당 슛", "슈팅", "{:.1f}", True),
+        ("유효슛 비율", "유효슈팅률", "{:.1f}%", True),
+        ("패스 성공률", "패스 성공률", "{:.1f}%", True),
+        ("태클 성공률", "태클 성공률", "{:.1f}%", True),
+    ]
+
+    @staticmethod
+    def _details_of(details: list[dict], matches: list) -> list[dict]:
+        """그 경기들의 상세만(순서는 details 그대로 — 최신순)."""
+        ids = {m.match_id for m in matches}
+        return [d for d in details if d.get("matchId") in ids]
+
+    def _key_players_html(self, nick: str, details: list[dict], ouid: str) -> str:
+        kp = core.key_players(details, ouid, name_of=lambda i: self._names.get(i, str(i)),
+                              pos_name=lambda p: self._positions.get(p, str(p)))
+        esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;")  # noqa: E731 — 닉네임·선수명에 < 가 올 수 있다
+        goal = " · ".join(f"{esc(p.name)} {p.goal}골" for p in kp.by_goal) or "-"
+        rating = " · ".join(f"{esc(p.name)} {p.rating:.2f}" for p in kp.by_rating) or "-"
+        return (f"<b>{esc(nick)}</b> 키플레이어<br>득점 상위: {goal}<br>"
+                f"평점 상위({kp.min_games}경기 이상): {rating}")
 
     def _build_compare_tab(self) -> QWidget:
         w = QWidget()
@@ -4103,18 +4182,27 @@ class MainWindow(QMainWindow):
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(note)
 
+        # 지표 카드(접었다 폄) — 지표 표 + 키플레이어(양쪽 골·평점 상위)
+        metrics = QWidget()
+        mv = QVBoxLayout(metrics)
+        mv.setContentsMargins(0, 0, 0, 0)
         self.tbl_compare = self._make_table(["지표", "내 계정", "상대 계정"])
         self.tbl_compare.setSortingEnabled(False)  # 지표 순서 자체가 정보라 정렬 고정
-        v.addWidget(self.tbl_compare)
+        mv.addWidget(self.tbl_compare)
+        keys = QHBoxLayout()
+        self.lb_compare_keys = (QLabel(""), QLabel(""))
+        for lb in self.lb_compare_keys:
+            lb.setWordWrap(True)
+            lb.setTextFormat(Qt.TextFormat.RichText)
+            lb.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            keys.addWidget(lb, 1)
+        mv.addLayout(keys)
+        self.fold_compare_metrics = Collapsible("지표 · 키플레이어", metrics, opened=True)
+        v.addWidget(self.fold_compare_metrics)
 
-        # 각 구단주가 가장 최근 경기에 낸 스쿼드를 나란히 보여준다 —
-        # PitchWidget 최소 폭(560)이 둘이면 창 기본 폭(1600)에 빠듯해서
-        # 가로 스크롤 여지를 둔다.
-        squad_scroll = QScrollArea()
-        squad_scroll.setWidgetResizable(True)
-        squad_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        squad_host = QWidget()
-        squad_row = QHBoxLayout(squad_host)
+        # 각 구단주가 가장 최근 경기에 낸 스쿼드를 나란히 — 축구장 v2 는 폭에 맞춰 칩을 줄여서
+        # 1280×720 창에도 가로 스크롤 없이 둘이 들어간다(test_compare_two_pitches_fit_min_window).
+        squad_row = QHBoxLayout()
         self.box_compare_my_squad = QVBoxLayout()
         gb_my = QGroupBox("내 스쿼드 (최근 경기)")
         gb_my.setLayout(self.box_compare_my_squad)
@@ -4123,8 +4211,7 @@ class MainWindow(QMainWindow):
         gb_opp.setLayout(self.box_compare_opp_squad)
         squad_row.addWidget(gb_my, 1)
         squad_row.addWidget(gb_opp, 1)
-        squad_scroll.setWidget(squad_host)
-        v.addWidget(squad_scroll, 1)
+        v.addLayout(squad_row, 1)
         return w
 
     def _on_compare_search(self) -> None:
@@ -4194,6 +4281,11 @@ class MainWindow(QMainWindow):
         my_matches = self._matches[:n]
         my_stats = summarize(my_matches)
         opp_stats = summarize(opp_matches)
+        # 슛·패스·태클 줄과 키플레이어는 경기 상세에서 — 비교하는 그 경기들만(표 위 숫자와 같은 범위)
+        my_details = self._details_of(self._details, my_matches)
+        opp_details = self._details_of(opp_details, opp_matches)
+        my_prof = {a.name: a.mine for a in core.team_profile(my_details, self._ouid).axes}
+        opp_prof = {a.name: a.mine for a in core.team_profile(opp_details, opp_ouid).axes}
 
         self.tbl_compare.setHorizontalHeaderLabels(
             ["지표", f"{self._nick} (최근 {len(my_matches)}경기)",
@@ -4206,6 +4298,12 @@ class MainWindow(QMainWindow):
             opp_val = getattr(opp_stats, attr)
             rows.append((label, fmt.format(mine_val), fmt.format(opp_val),
                         mine_val, opp_val, higher_is_better))
+        for label, axis, fmt, higher_is_better in self.COMPARE_PROFILE_ROWS:
+            if axis in my_prof and axis in opp_prof:
+                rows.append((label, fmt.format(my_prof[axis]), fmt.format(opp_prof[axis]),
+                             my_prof[axis], opp_prof[axis], higher_is_better))
+        self.lb_compare_keys[0].setText(self._key_players_html(self._nick, my_details, self._ouid))
+        self.lb_compare_keys[1].setText(self._key_players_html(opp_nick, opp_details, opp_ouid))
 
         self.tbl_compare.setRowCount(len(rows))
         for r, (label, mine_txt, opp_txt, mine_val, opp_val,
@@ -4221,9 +4319,7 @@ class MainWindow(QMainWindow):
                 item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
         self.tbl_compare.refit()  # _fill 을 안 거치는 표
 
-        for loader in self._compare_squad_loaders:
-            loader.cancel()
-            loader.wait(500)
+        self._retire_loaders(self._compare_squad_loaders)
         self._compare_squad_loaders = []
         self._fill_compare_squad(self.box_compare_my_squad, self._ouid, self._details,
                                  self._nick)
@@ -4246,24 +4342,9 @@ class MainWindow(QMainWindow):
         title.setWordWrap(True)
         box.addWidget(title)
 
-        pitch, sp_ids = self._make_pitch_from_players(players)
+        pitch, _sp_ids = self._make_pitch_from_players(players)
         box.addWidget(pitch)
-
-        loader = ImageLoader(sp_ids, self._img_cache_dir)
-        loader.loaded.connect(pitch.set_face)
-        loader.start()
-        self._compare_squad_loaders.append(loader)
-
-        season_entries = []
-        for sp_id in sp_ids:
-            season_id = core.season_id_of(sp_id)
-            info = self._seasons.get(season_id)
-            if info and info.get("seasonImg"):
-                season_entries.append((sp_id, season_id, info["seasonImg"]))
-        season_loader = SeasonIconLoader(season_entries, self._season_icon_dir)
-        season_loader.loaded.connect(pitch.set_season_icon)
-        season_loader.start()
-        self._compare_squad_loaders.append(season_loader)
+        self._compare_squad_loaders += self._start_pitch_loaders(pitch)
 
     @staticmethod
     def _tactics_scroll() -> tuple[QScrollArea, QVBoxLayout]:
@@ -5055,6 +5136,25 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_position_opp, self._position_opp_rows(players),
                   enable_sort=False)
         self._tint_position_rows(self.tbl_position_opp, players)
+        self._render_position_pitch(players)
+
+    def _render_position_pitch(self, players: list[core.PositionOpponent]) -> None:
+        """⑨ 축구장 — 자리마다 칩 하나(강화는 여러 개가 섞여 비운다 · 시세 줄 자리에 만난 횟수). 카드 정보는 안 읽는다
+        (강화가 없어 OVR·시세를 못 정한다 — 요청 0). 얼굴·시즌 아이콘만."""
+        self._retire_loaders(self._position_pitch_loaders)
+        self._position_pitch_loaders = []
+        self._clear(self.box_position_pitch)
+        if not players:
+            lb = QLabel("표시할 상대 기록이 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            self.box_position_pitch.addWidget(lb)
+            return
+        cards = [PitchCard(p.pos_code, p.position, f"{p.name} ({self._season_name(p.sp_id)})", p.sp_id,
+                           note=f"{p.count}회 · {p.rate:.0f}%") for p in players]
+        pitch = PitchWidget(self._pitch_rows(cards), band=False)
+        pitch.player_clicked.connect(lambda sid: self._show_player_info(sid))
+        self.box_position_pitch.addWidget(pitch)
+        self._position_pitch_loaders = self._start_pitch_loaders(pitch, card_info=False)
 
     # ── 팀컬러 (근사치 — top 10,000 랭커 안에서 찾아지는 상대만) ──────────
     def _team_color_of(self, nickname: str) -> str | None:
@@ -5266,34 +5366,153 @@ class MainWindow(QMainWindow):
         fit_to_screen(dlg, 560, 480)
         dlg.exec()
 
+    def _pitch_rows(self, cards: list[PitchCard]) -> list[list[PitchCard]]:
+        """칩 재료 → 줄 배치(core.pitch_rows — 위=공격 → 아래=GK, 줄 안 왼쪽 → 오른쪽). 줄이 없는 코드는 빠진다."""
+        return [[cards[i] for i in row] for row in core.pitch_rows([c.pos_code for c in cards])]
+
     def _make_pitch_from_players(self, players: list[dict]
                                  ) -> tuple[PitchWidget, list[int]]:
-        """매치 상세의 선수 raw 목록(교체 포함) -> 선발만 배치한 PitchWidget.
+        """매치 상세의 선수 raw 목록(교체 포함) -> 선발만 배치한 축구장(v2).
 
-        상대 스쿼드 화면·구단주 비교 스쿼드가 공유하는 조립 로직 — 선수
-        카드 클릭 연결까지 여기서 끝낸다."""
-        starters, sp_ids = [], []
+        스쿼드 창·구단주 비교가 공유하는 조립 — 선수 카드 클릭·[안내 보기] 연결까지 여기서 끝낸다.
+        얼굴·시즌 아이콘·카드 정보는 _start_pitch_loaders 가 채운다."""
+        cards = []
         for p in players:
             pos = p.get("spPosition")
             sp_id = p.get("spId")
-            if not (isinstance(pos, int) and pos in PitchWidget.COORDS):
+            if not isinstance(pos, int) or pos == core.SUB_POSITION:
                 continue
-            pos_name = self._positions.get(pos, str(pos))
-            name = (self._names.get(sp_id, str(sp_id))
-                   if isinstance(sp_id, int) else "-")
-            grade = p.get("spGrade", "-")
-            starters.append((pos, pos_name, name, grade, sp_id))
-            if isinstance(sp_id, int):
-                sp_ids.append(sp_id)
-
-        pitch = PitchWidget(starters)
+            grade = p.get("spGrade")
+            cards.append(PitchCard(pos, self._positions.get(pos, str(pos)),
+                                   self._names.get(sp_id, str(sp_id)) if isinstance(sp_id, int) else "-",
+                                   sp_id if isinstance(sp_id, int) else None,
+                                   grade if isinstance(grade, int) else None))
+        pitch = PitchWidget(self._pitch_rows(cards))
         # 선수 카드를 클릭하면 그 카드 상세(오버롤·능력치·시세 등)를 새
         # 다이얼로그로 띄운다 — 이 경기 기록의 spGrade 를 같이 넘겨서
         # "시세" 탭에서 지금 강화 단계를 짚어줄 수 있게 한다.
-        grade_by_sp_id = {sid: g for _, _, _, g, sid in starters if isinstance(sid, int)}
+        grade_by_sp_id = {c.sp_id: c.grade for c in cards if c.sp_id is not None}
         pitch.player_clicked.connect(
             lambda sid: self._show_player_info(sid, grade_by_sp_id.get(sid)))
-        return pitch, sp_ids
+        return pitch, pitch.sp_ids()
+
+    def _retire_loaders(self, loaders: list) -> None:
+        """갈아 끼운 축구장의 로더 — 멈춤만 요청하고 끝날 때까지 참조를 쥔다(도는 QThread 를 놓으면 프로세스가 죽는다).
+        예전엔 wait(500) 뒤 놓았는데, 얼굴 한 장이 0.5초를 넘기면 그 길이었다."""
+        for ld in loaders:
+            ld.cancel()
+        self._retired_loaders = [x for x in self._retired_loaders if x.isRunning()] + \
+            [x for x in loaders if x.isRunning()]
+
+    def _start_pitch_loaders(self, pitch: PitchWidget, card_info: bool = True) -> list:
+        """축구장 하나에 얼굴·시즌 아이콘(+ 카드 정보 — 캐시 먼저, 모자라면 CardInfoLoader). 돌려준 스레드는 부른 쪽이 정리.
+        카드 정보 로더는 창 표(self._pitch_card_loaders)에도 넣는다 — 대화상자가 닫혀도 종료 표가 기다린다(E11)."""
+        sp_ids = pitch.sp_ids()
+        loader = ImageLoader(sp_ids, self._img_cache_dir)
+        loader.loaded.connect(pitch.set_face)
+        loader.start()
+        season_entries = []
+        for sp_id in sp_ids:
+            season_id = core.season_id_of(sp_id)
+            info = self._seasons.get(season_id)
+            if info and info.get("seasonImg"):
+                season_entries.append((sp_id, season_id, info["seasonImg"]))
+        season_loader = SeasonIconLoader(season_entries, self._season_icon_dir)
+        season_loader.loaded.connect(pitch.set_season_icon)
+        season_loader.start()
+        out = [loader, season_loader]
+        if card_info:
+            # [안내 보기]는 게이트를 거는 이 자리에서 잇는다 — 축구장을 만드는 곳마다 잇게 두면 하나를 빠뜨린다
+            pitch.notice_requested.connect(self._on_pitch_notice)
+            self._live_pitches = [p for p in self._live_pitches if not sip.isdeleted(p)] + [pitch]
+            self._fill_pitch_from_cache(pitch)
+            ld = self._start_card_info(pitch)
+            if ld is not None:
+                out.append(ld)
+        return out
+
+    def _fill_pitch_from_cache(self, pitch: PitchWidget) -> None:
+        """카드 캐시(card_info · card_prices — 날짜 무관)로 칩을 채운다. 화면 스레드에서 읽는다(카드 11장 · 인덱스 조회)."""
+        data = {}
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                info = store.load_card_info(conn, pitch.sp_ids())
+                prices = store.load_card_prices(conn, pitch.sp_ids())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            info, prices = {}, {}
+        for sp_id in pitch.sp_ids():
+            row = info.get(sp_id) or {}
+            data[sp_id] = {"base_ovr": row.get("base_ovr"), "salary": row.get("salary"),
+                           "prices": {g: v[0] for (s, g), v in prices.items() if s == sp_id}}
+        pitch.card_data = data
+        for sp_id in data:
+            self._apply_pitch_card(pitch, sp_id)
+
+    def _apply_pitch_card(self, pitch: PitchWidget, sp_id: int) -> None:
+        d = pitch.card_data.get(sp_id) or {}
+        pitch.set_card(sp_id, lambda g: core.card_ovr(d.get("base_ovr"), g),
+                       lambda g: (d.get("prices") or {}).get(g))
+        vals = [((pitch.card_data.get(c.card.sp_id) or {}).get("prices", {}).get(c.card.grade),
+                 (pitch.card_data.get(c.card.sp_id) or {}).get("salary")) for c in pitch.chips()]
+        sv = core.squad_value(vals)
+        text = f"스쿼드 가치 {self._bp(sv.value) if sv.value else '-'}"
+        if sv.unknown:
+            text += f" ({sv.unknown}장 시세 모름)"
+        if sv.salary_unknown == len(vals):
+            text += " · 급여 -"
+        else:
+            text += f" · 급여 {sv.salary}" + (f" ({sv.salary_unknown}장 모름)" if sv.salary_unknown else "")
+        pitch.set_value_text(text)
+
+    PITCH_GATE_WEB_OFF = "홈페이지 데이터가 꺼져 있어 시세·급여·OVR 을 읽지 않습니다 — [정보] 에서 켤 수 있습니다"
+    PITCH_GATE_NOTICE = "새 이용 안내에 동의하면 시세·급여·OVR 을 자동으로 읽습니다"
+
+    def _start_card_info(self, pitch: PitchWidget):
+        """칩 카드 정보 자동 읽기 — 게이트(chip_auto_allowed) 뒤. 막히면 띠에 이유(동의가 답이면 [안내 보기])."""
+        if not config.chip_auto_allowed():
+            if not config.WEB_DATA:
+                pitch.set_gate(self.PITCH_GATE_WEB_OFF)
+            else:
+                pitch.set_gate(self.PITCH_GATE_NOTICE, button=True)
+            return None
+        pitch.set_gate("")
+        if self._quitting:
+            return None
+        ld = CardInfoLoader(pitch.sp_ids())
+        ld.card.connect(lambda info, p=pitch: self._on_pitch_card(p, info))
+        ld.done.connect(lambda got, skipped, p=pitch: self._on_pitch_card_done(p, skipped))
+        self._pitch_card_loaders = [x for x in self._pitch_card_loaders if x.isRunning()] + [ld]
+        ld.start()
+        return ld
+
+    def _on_pitch_card(self, pitch: PitchWidget, info) -> None:
+        if sip.isdeleted(pitch):
+            return
+        d = pitch.card_data.setdefault(info.sp_id, {})
+        d["base_ovr"], d["salary"] = info.ovr, info.salary
+        d["prices"] = playerinfo.prices_as_int(info)
+        self._apply_pitch_card(pitch, info.sp_id)
+
+    def _on_pitch_card_done(self, pitch: PitchWidget, skipped: int) -> None:
+        if not sip.isdeleted(pitch) and skipped:
+            pitch.set_gate(f"오늘 카드 조회 한도({config.CHIP_FETCH_MAX}장)에 걸려 {skipped}장은 내일 읽습니다")
+
+    def _on_pitch_notice(self) -> None:
+        """띠의 [안내 보기] — 다시 묻는 안내. 동의했으면 열린 축구장들의 자동 읽기를 바로 시작한다(ask_notice_update 가)."""
+        self.ask_notice_update()
+
+    def _refresh_pitch_cards(self) -> None:
+        """동의 직후 — 막혀 있던 축구장의 카드 정보 읽기를 다시 본다(닫힌 대화상자의 것은 버린다)."""
+        self._live_pitches = [p for p in self._live_pitches if not sip.isdeleted(p)]
+        if not config.chip_auto_allowed():
+            return
+        for p in self._live_pitches:
+            # 닫힌 스쿼드 창(대화상자는 지워지지 않고 숨는다)의 것은 건너뛴다 — 메인 창 안이면 다른 메뉴에 있어도 읽는다
+            if p.window().isVisible() and p.btn_notice.isVisibleTo(p):
+                self._start_card_info(p)
 
     def _show_opponent_squad(self, nickname: str, players: list[dict],
                              match_date: str, result: str) -> None:
@@ -5314,30 +5533,18 @@ class MainWindow(QMainWindow):
         title.setWordWrap(True)
         v.addWidget(title)
 
-        pitch, sp_ids = self._make_pitch_from_players(players)
+        pitch, _sp_ids = self._make_pitch_from_players(players)
         v.addWidget(pitch, 1)
 
-        # 얼굴 이미지·시즌 아이콘은 백그라운드로 — 다이얼로그는 모달이지만
+        # 얼굴 이미지·시즌 아이콘·카드 정보는 백그라운드로 — 다이얼로그는 모달이지만
         # Qt 이벤트 루프는 계속 돌아서 시그널이 도착하는 대로 칩에 채워진다.
-        loader = ImageLoader(sp_ids, self._img_cache_dir)
-        loader.loaded.connect(pitch.set_face)
-        loader.start()
-
-        season_entries = []
-        for sp_id in sp_ids:
-            season_id = core.season_id_of(sp_id)
-            info = self._seasons.get(season_id)
-            if info and info.get("seasonImg"):
-                season_entries.append((sp_id, season_id, info["seasonImg"]))
-        season_loader = SeasonIconLoader(season_entries, self._season_icon_dir)
-        season_loader.loaded.connect(pitch.set_season_icon)
-        season_loader.start()
-
+        loaders = self._start_pitch_loaders(pitch)
         dlg.exec()
-        loader.cancel()
-        loader.wait(500)
-        season_loader.cancel()
-        season_loader.wait(500)
+        for ld in loaders:
+            ld.cancel()
+        for ld in loaders:
+            if not isinstance(ld, CardInfoLoader):  # 카드 정보는 요청 하나(타임아웃 10초)까지 — 창 표가 종료 때 기다린다
+                ld.wait(500)
 
     PLAYERCARD_IMG_DIR_NAME = "player_card_images"
 
@@ -6622,7 +6829,10 @@ class MainWindow(QMainWindow):
             # 랭커 기록 — 묶음 사이에서 멈춘다(요청 하나 0.3초 · 타임아웃 10초). 묶음마다 한 트랜잭션
             (self._ranker_loader, cancel(self._ranker_loader), 12000, False),
             (self._scout_loader, cancel(self._scout_loader), 12000, False),
-            *[(ld, cancel(ld), 500, False) for ld in self._compare_squad_loaders],
+            *[(ld, cancel(ld), 500, False)
+              for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders],
+            # 축구장 칩 카드 정보 — 카드 사이에서 멈춘다(한 장 = 한 트랜잭션 · 요청 하나 타임아웃 10초)
+            *[(ld, cancel(ld), 12000, False) for ld in self._pitch_card_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],

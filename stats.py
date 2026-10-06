@@ -12,6 +12,8 @@ from datetime import date, datetime, timedelta
 from itertools import combinations
 from typing import NamedTuple
 
+import config
+
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
 
@@ -156,6 +158,64 @@ def position_line(code) -> str | None:
     if line is None:
         return None
     return ("DF", "MF", "MF", "MF", "FW")[line]
+
+
+# ── 축구장 줄 배치(C — 스쿼드 축구장 v2) ─────────────────────────────────────
+# 위(공격) → 아래(GK) 여섯 줄. 줄 안 순서는 화면 왼쪽 → 오른쪽(아래 x 값 — 옛 PitchWidget.COORDS 의 x 그대로).
+# 예전엔 포지션마다 고정 좌표라 같은 줄의 RWB·RB 가 560px 에서 39px 떨어져 칩(108)이 겹쳤다(ROADMAP R8) →
+# 줄마다 폭을 사람 수로 나눈다.
+PITCH_ROWS = [("공격", range(20, 28)), ("공미", range(17, 20)), ("미드", range(12, 17)),
+              ("수미", range(9, 12)), ("수비", range(1, 9)), ("GK", range(0, 1))]
+PITCH_X = {0: 0.50, 1: 0.50, 2: 0.87, 3: 0.80, 4: 0.62, 5: 0.50, 6: 0.38, 7: 0.20, 8: 0.13,
+           9: 0.65, 10: 0.50, 11: 0.35, 12: 0.87, 13: 0.62, 14: 0.50, 15: 0.38, 16: 0.13,
+           17: 0.65, 18: 0.50, 19: 0.35, 20: 0.65, 21: 0.50, 22: 0.35,
+           23: 0.85, 24: 0.60, 25: 0.50, 26: 0.40, 27: 0.15}
+_PITCH_ROW_OF = {pos: i for i, (_, rng) in enumerate(PITCH_ROWS) for pos in rng}
+
+
+def pitch_rows(codes: list) -> list[list[int]]:
+    """포지션 코드 목록 → 줄마다 그 줄 선수의 **인덱스**(위=공격 → 아래=GK, 줄 안은 왼쪽 → 오른쪽).
+    빈 줄은 빠진다(남은 줄이 높이를 나눠 가진다). 교체(28)·모르는 코드는 어느 줄에도 안 든다.
+    x 가 같은 두 자리(SW·CB 등)는 원래 순서대로."""
+    rows: list[list[int]] = [[] for _ in PITCH_ROWS]
+    for i, code in enumerate(codes):
+        r = _PITCH_ROW_OF.get(code) if isinstance(code, int) else None
+        if r is not None:
+            rows[r].append(i)
+    for row in rows:
+        row.sort(key=lambda i: PITCH_X[codes[i]])
+    return [row for row in rows if row]
+
+
+@dataclass
+class SquadValue:
+    value: int = 0          # 아는 시세 합
+    unknown: int = 0        # 시세를 모르는 카드 수
+    salary: int = 0         # 아는 급여 합
+    salary_unknown: int = 0
+
+
+def squad_value(cards: list[tuple[int | None, int | None]]) -> SquadValue:
+    """(시세, 급여) 목록 → 합. 모르는 값(None)은 합에 안 넣고 따로 센다 — 0 으로 더하면 가치가 조용히 낮아 보인다."""
+    out = SquadValue()
+    for price, salary in cards:
+        if isinstance(price, int):
+            out.value += price
+        else:
+            out.unknown += 1
+        if isinstance(salary, int):
+            out.salary += salary
+        else:
+            out.salary_unknown += 1
+    return out
+
+
+def card_ovr(base_ovr, grade) -> int | None:
+    """1강 OVR + 강화 가산(config.GRADE_OVR_BONUS) — 카드 기본 포지션 기준. 모르는 강화·OVR 이면 None."""
+    bonus = config.GRADE_OVR_BONUS.get(grade) if isinstance(grade, int) else None
+    if not isinstance(base_ovr, int) or bonus is None:
+        return None
+    return base_ovr + bonus
 
 
 def decode_goal_time(raw) -> tuple[int, int]:
@@ -1508,6 +1568,28 @@ def opponent_position_players(details: list[dict], ouid: str, name_of=None,
             sp_id=sp_id, count=count, total=pos_total[pos]))
     result.sort(key=lambda r: (_position_group_rank(r.pos_code), -r.total))
     return result
+
+
+# ── 키플레이어(구단주 비교 ①) ─────────────────────────────────────────────
+KEY_PLAYER_TOP = 3
+KEY_PLAYER_MIN_SHARE = 0.3   # 평점 상위는 비교 경기의 이 비율 이상 뛴 선수만 — 한두 경기 반짝 평점이 위로 오지 않게
+
+
+@dataclass
+class KeyPlayers:
+    by_goal: list[PlayerStat] = field(default_factory=list)     # 골 1 이상 · 골 → 출전 적은 순
+    by_rating: list[PlayerStat] = field(default_factory=list)   # 출전 문턱 이상 · 평균 평점 순
+    min_games: int = 0
+
+
+def key_players(details: list[dict], ouid: str, name_of=None, pos_name=None) -> KeyPlayers:
+    """그 계정의 골·평점 상위 KEY_PLAYER_TOP 명 — details 는 비교에 쓰는 경기만 넘긴다."""
+    players = aggregate_players(details, ouid, name_of=name_of, pos_name=pos_name)
+    games = sum(1 for d in details if _me_opp(d, ouid)[0] is not None)
+    min_games = max(1, math.ceil(games * KEY_PLAYER_MIN_SHARE))
+    by_goal = sorted((p for p in players if p.goal > 0), key=lambda p: (-p.goal, p.games, p.sp_id))
+    by_rating = sorted((p for p in players if p.games >= min_games), key=lambda p: (-p.rating, -p.games, p.sp_id))
+    return KeyPlayers(by_goal[:KEY_PLAYER_TOP], by_rating[:KEY_PLAYER_TOP], min_games)
 
 
 # ── 나 vs 상대 프로필(대시보드 레이더) ─────────────────────────────────────

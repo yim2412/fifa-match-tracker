@@ -125,6 +125,43 @@ try:
                                          end=_date(2026, 2, 1))])
 finally:
     _seed.close()
+class _FakeCardInfoLoader:
+    """축구장 칩 카드 정보 로더 자리 — 스모크가 넥슨 홈페이지에 요청하지 않게(동의·웹 데이터는 테스트마다 바뀐다).
+    띄운 기록만 남긴다. 실제 로더의 동작(쓰임별 계수·상한)은 test_trades 가 잰다."""
+    started: list = []
+
+    def __init__(self, spids):
+        self.spids = list(spids)
+        self.card = _Sig()
+        self.done = _Sig()
+
+    def start(self):
+        _FakeCardInfoLoader.started.append(self.spids)
+
+    def isRunning(self):
+        return False
+
+    def cancel(self):
+        pass
+
+    def wait(self, *_a):
+        return True
+
+
+class _Sig:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, f):
+        self.slots.append(f)
+
+    def emit(self, *a):
+        for f in self.slots:
+            f(*a)
+
+
+_RealCardInfoLoader = app_main.CardInfoLoader
+app_main.CardInfoLoader = _FakeCardInfoLoader
 _win = app_main.MainWindow(_NoApi())
 _win.resize(1600, 900)
 # 대부분의 테스트는 "모든 메뉴가 그려진 상태"를 본다 — 지연 그리기 자체는 test_lazy_* 가 켜서 잰다
@@ -3698,6 +3735,231 @@ def test_compare_colors_the_better_side():
         _win.sp_compare_n.setValue(saved[2])
 
 
+# ── 축구장 v2(C) · ⑨ · ① (2.1.1 15단계) ───────────────────────────────────────
+
+_FORMATIONS = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "formations.json"),
+                             encoding="utf-8"))
+
+
+def _pitch_for(codes, band=True):
+    from widgets import PitchCard, PitchWidget
+    cards = [PitchCard(c, f"P{c}", f"선수{i}", 100000000 + i, grade=1 + i % 13) for i, c in enumerate(codes)]
+    return PitchWidget(_win._pitch_rows(cards), band=band)
+
+
+def test_pitch_chips_never_overlap():
+    """실제 DB 의 서로 다른 선발 배치 상위 50(포지션 코드만 — tests/fixtures/formations.json)에서, 가장 작은 축구장부터
+    넓은 축구장까지 칩 사각형이 서로 안 겹치고 잔디 밖으로 안 나간다. 옛 고정 좌표는 RWB·RB 가 39px 떨어져 겹쳤다(R8)."""
+    assert len(_FORMATIONS) == 50
+    checked = 0
+    for codes in _FORMATIONS:
+        pitch = _pitch_for(codes)
+        f = pitch.field
+        for w, h in (f.minimumWidth(), f.minimumHeight()), (470, 560), (1000, 700):
+            f.resize(w, h)
+            f.layout_chips()
+            rects = [c.geometry() for c in pitch.chips()]
+            assert len(rects) == len(codes), (codes, len(rects))
+            for i, a in enumerate(rects):
+                assert f.rect().contains(a), (codes, w, h, a)
+                for b in rects[i + 1:]:
+                    assert not a.intersects(b), (codes, w, h, a, b)
+            checked += 1
+        pitch.deleteLater()
+    assert checked == 150
+
+
+def test_pitch_chip_drops_face_then_price_when_small():
+    pitch = _pitch_for([0, 3, 4, 6, 7, 10, 13, 15, 17, 18, 25])
+    chip = pitch.chips()[0]
+    chip.resize(110, 110)
+    assert chip.shows_face() and chip.shows_price_line()
+    chip.resize(90, chip.FACE_MIN_H - 1)
+    assert not chip.shows_face() and chip.shows_price_line()
+    chip.resize(90, chip.PRICE_MIN_H - 1)
+    assert not chip.shows_face() and not chip.shows_price_line()
+    pitch.deleteLater()
+
+
+def test_pitch_card_fills_ovr_price_and_band():
+    """캐시에 있는 카드 정보로 칩(강화 반영 OVR · 그 강화 시세)과 위 띠(가치 합 · 모르는 장 수 · 급여 합)를 채운다."""
+    pitch = _pitch_for([0, 25])        # 카드 100000000(GK, 1강) · 100000001(ST, 2강)
+    gk, st_ = 100000000, 100000001
+    pitch.card_data = {gk: {"base_ovr": 100, "salary": 10, "prices": {1: 5 * 10 ** 8}},
+                       st_: {"base_ovr": 110, "salary": None, "prices": {}}}
+    _win._apply_pitch_card(pitch, gk)
+    _win._apply_pitch_card(pitch, st_)
+    chips = {c.card.sp_id: c for c in pitch.chips()}
+    assert (chips[gk].ovr, chips[gk].price) == (100, 5 * 10 ** 8)
+    assert (chips[st_].ovr, chips[st_].price) == (111, None), "2강 OVR 은 +1(GRADE_OVR_BONUS)"
+    text = pitch.lb_value.text()
+    assert "5억" in text and "1장 시세 모름" in text and "급여 10 (1장 모름)" in text, text
+    pitch.deleteLater()
+
+
+def test_pitch_gate_and_notice_button_starts_reading():
+    """자동 읽기가 막히면 띠에 이유 — 동의가 답이면 [안내 보기], 누르고 동의하면 그 축구장이 바로 읽기 시작(E10 · 3회차)."""
+    keep = (config.NOTICE_ACCEPTED, config.WEB_DATA, _win.ask_notice_update, list(_FakeCardInfoLoader.started),
+            _win.stack.currentIndex())
+    try:
+        _win.show()
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        config.NOTICE_ACCEPTED, config.WEB_DATA = 4, True
+        pitch = _pitch_for([0, 25])
+        _win.box_compare_my_squad.addWidget(pitch)      # 보이는 자리에 — 다시 읽기는 보이는 축구장만
+        _win._go_page("구단주 비교")
+        _app.processEvents()
+        _FakeCardInfoLoader.started.clear()
+        _win._start_pitch_loaders(pitch)
+        assert not _FakeCardInfoLoader.started, "동의 전(4)에 칩 카드 정보를 읽었다"
+        assert pitch.lb_gate.text() == _win.PITCH_GATE_NOTICE and pitch.btn_notice.isVisibleTo(pitch)
+
+        def accept():
+            # 웹 데이터도 여기서 다시 — 앞 테스트가 남긴 팀컬러 목록 스레드가 .env(임시 · 꺼짐)를 다시 읽어 끌 수 있다
+            config.NOTICE_ACCEPTED, config.WEB_DATA = 5, True
+            _win._refresh_pitch_cards()
+            return True
+        _win.ask_notice_update = accept
+        pitch.btn_notice.click()
+        # 메인 창 안의 다른 막힌 축구장(앞 테스트의 비교 화면)도 같이 읽기 시작한다 — 이 축구장이 그중에 있으면 된다
+        assert pitch.sp_ids() in _FakeCardInfoLoader.started, list(_FakeCardInfoLoader.started)
+        n_after = len(_FakeCardInfoLoader.started)
+        assert not pitch.btn_notice.isVisibleTo(pitch) and pitch.lb_gate.text() == ""
+        # 웹 데이터 꺼짐 — 이유만, 버튼 없음(동의가 답이 아니다)
+        config.WEB_DATA = False
+        p2 = _pitch_for([0])
+        _win._start_pitch_loaders(p2)
+        assert p2.lb_gate.text() == _win.PITCH_GATE_WEB_OFF and not p2.btn_notice.isVisibleTo(p2)
+        assert len(_FakeCardInfoLoader.started) == n_after, "웹 데이터가 꺼졌는데 읽었다"
+        p2.deleteLater()
+    finally:
+        config.NOTICE_ACCEPTED, config.WEB_DATA, _win.ask_notice_update = keep[:3]
+        _FakeCardInfoLoader.started[:] = keep[3]
+        _win.stack.setCurrentIndex(keep[4])
+        _win._clear(_win.box_compare_my_squad)
+
+
+def test_ask_notice_update_refreshes_pitches():
+    """ask_notice_update(진짜 함수)가 동의 뒤 축구장 다시 보기를 부른다 — 빼면 [안내 보기]로 동의해도 칩이 그대로 빈다."""
+    import inspect
+    assert "_refresh_pitch_cards()" in inspect.getsource(app_main.MainWindow.ask_notice_update)
+
+
+def test_compare_two_pitches_fit_min_window():
+    """구단주 비교의 축구장 둘이 1280×720 창에서 가로 스크롤 없이 나란히(예전엔 560×2 를 가로 스크롤로 버텼다)."""
+    saved = (_win.sp_compare_n.value(), config.WEB_DATA, _win.stack.currentIndex())
+    config.WEB_DATA = False
+    try:
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        _at_size(*app_main.MIN_WINDOW)
+        _win._go_page("구단주 비교")
+        _win.sp_compare_n.setValue(len(_MATCHES))
+        _win._render_compare("상대", list(_MATCHES), _OUID, list(_DETAILS))
+        _app.processEvents()
+        _app.processEvents()
+        frame = _win.pages.currentWidget()
+        pitches = [box.itemAt(i).widget() for box in (_win.box_compare_my_squad, _win.box_compare_opp_squad)
+                   for i in range(box.count()) if isinstance(box.itemAt(i).widget(), app_main.PitchWidget)]
+        assert len(pitches) == 2, len(pitches)
+        inner = frame.widget().minimumSizeHint().width()
+        assert inner <= frame.viewport().width(), (inner, frame.viewport().width())
+        assert not frame.horizontalScrollBar().isVisible()
+        a, b = sorted(pitches, key=lambda p: p.mapTo(frame, p.rect().topLeft()).x())
+        assert a.mapTo(frame, a.rect().topRight()).x() < b.mapTo(frame, b.rect().topLeft()).x(), "나란히가 아니다"
+        for p in pitches:
+            assert p.field.width() >= p.field.minimumWidth() and len(p.chips()) == 11, (p.field.width(), len(p.chips()))
+    finally:
+        _win.sp_compare_n.setValue(saved[0])
+        config.WEB_DATA = saved[1]
+        _win.stack.setCurrentIndex(saved[2])
+        _at_size(1600, 900)
+
+
+def test_compare_profile_rows_and_key_players():
+    saved = _win.sp_compare_n.value()
+    try:
+        _win.sp_compare_n.setValue(len(_MATCHES))
+        _win._render_compare("상대", list(_MATCHES), _OUID, list(_DETAILS))
+        t = _win.tbl_compare
+        labels = [t.item(r, 0).text() for r in range(t.rowCount())]
+        for label, *_ in _win.COMPARE_PROFILE_ROWS:
+            assert label in labels, (label, labels)
+        prof = {a.name: a.mine for a in core.team_profile(list(_DETAILS), _OUID).axes}
+        r = labels.index("패스 성공률")
+        assert t.item(r, 1).text() == f"{prof['패스 성공률']:.1f}%", (t.item(r, 1).text(), prof)
+        kp = core.key_players(list(_DETAILS), _OUID, name_of=lambda i: _win._names.get(i, str(i)))
+        html = _win.lb_compare_keys[0].text()
+        assert "키플레이어" in html and all(p.name in html for p in kp.by_rating), html
+        # 범위 — 비교 경기 수를 줄이면 그 경기만(승·무·패로 끝난 경기 하나 — 몰수·오류는 team_profile 이 뺀다)
+        first = next(m for m in _MATCHES if m.result in ("승", "무", "패"))
+        _win.sp_compare_n.setValue(1)
+        _win._matches, keep_m = [first], _win._matches
+        try:
+            _win._render_compare("상대", [first], _OUID, list(_DETAILS))
+        finally:
+            _win._matches = keep_m
+        one = _win._details_of(list(_DETAILS), [first])
+        assert len(one) == 1 and one[0]["matchId"] == first.match_id
+        labels = [t.item(r, 0).text() for r in range(t.rowCount())]
+        prof1 = {a.name: a.mine for a in core.team_profile(one, _OUID).axes}
+        assert t.item(labels.index("경기당 슛"), 1).text() == f"{prof1['슈팅']:.1f}"
+        # 지표 카드는 접힌다
+        _win.fold_compare_metrics.head.click()
+        assert not _win.fold_compare_metrics.is_open()
+        _win.fold_compare_metrics.head.click()
+        assert _win.fold_compare_metrics.is_open()
+    finally:
+        _win.sp_compare_n.setValue(saved)
+
+
+def test_position_opponents_pitch_and_folded_table():
+    """⑨ — 자리마다 가장 많이 만난 상대 카드가 축구장 칩으로(시세 줄 자리에 횟수·비율), 표는 아래 접힘. 카드 정보 요청 0."""
+    keep = (list(_FakeCardInfoLoader.started), config.NOTICE_ACCEPTED, config.WEB_DATA)
+    try:
+        # 게이트를 연 채로 잰다 — 닫혀 있으면 "요청 0"이 ⑨ 덕인지 게이트 덕인지 모른다(변이로 확인: 닫힌 채로는 못 잡았다)
+        config.NOTICE_ACCEPTED, config.WEB_DATA = config.CHIP_NOTICE_VERSION, True
+        assert config.chip_auto_allowed()
+        _FakeCardInfoLoader.started.clear()
+        _win._render_position_opponents(list(_DETAILS))
+        players = core.opponent_position_players(list(_DETAILS), _OUID,
+                                                 pos_name=lambda p: _win._positions.get(p, str(p)))
+        pitches = [_win.box_position_pitch.itemAt(i).widget() for i in range(_win.box_position_pitch.count())]
+        pitch = next(w for w in pitches if isinstance(w, app_main.PitchWidget))
+        chips = pitch.chips()
+        assert len(chips) == len(players) and players, (len(chips), len(players))
+        by_code = {c.card.pos_code: c for c in chips}
+        for p in players:
+            assert by_code[p.pos_code].card.note == f"{p.count}회 · {p.rate:.0f}%"
+            assert by_code[p.pos_code].card.grade is None   # 강화가 섞여 비운다
+        assert not pitch.band.isVisibleTo(pitch), "⑨ 은 합이 뜻이 없어 위 띠가 없다"
+        assert _FakeCardInfoLoader.started == [], "⑨ 이 카드 정보를 읽었다"
+        assert not _win.fold_position_opp.is_open() and _win.tbl_position_opp.rowCount() == len(players)
+    finally:
+        _FakeCardInfoLoader.started[:] = keep[0]
+        config.NOTICE_ACCEPTED, config.WEB_DATA = keep[1], keep[2]
+
+
+def test_position_color_search_filters_combo():
+    saved = (dict(_win._team_colors), _win.cb_position_color.currentText())
+    try:
+        _win._team_colors.update({"가": "리버풀", "나": "레알 마드리드", "다": "리옹"})
+        _win.ed_position_color.setText("")
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentText("레알 마드리드")
+        _win.ed_position_color.setText("리")
+        items = [_win.cb_position_color.itemText(i) for i in range(_win.cb_position_color.count())]
+        assert "리버풀" in items and "리옹" in items and "레알 마드리드" in items, items   # 고른 것은 걸러도 남는다
+        _win.ed_position_color.setText("옹")
+        items = [_win.cb_position_color.itemText(i) for i in range(_win.cb_position_color.count())]
+        assert "리옹" in items and "리버풀" not in items, items
+        assert _win.cb_position_color.currentText() == "레알 마드리드"
+    finally:
+        _win._team_colors.clear()
+        _win._team_colors.update(saved[0])
+        _win.ed_position_color.setText("")
+        _win.cb_position_color.setCurrentText(saved[1])
+
+
 def test_search_uses_the_box_that_has_text():
     calls = []
     saved = (_win._api_search, _win.stack.currentIndex(), _win.ed_search.text(),
@@ -5073,13 +5335,14 @@ def test_notice_versions_split_first_and_reask():
     try:
         for acc, needed, pending, track in [(0, True, False, False), (1, True, False, False),
                                             (2, False, True, False), (3, False, True, True),
-                                            (4, False, False, True)]:
+                                            (4, False, True, True), (5, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
         # 1.4.1: 4 = 거래 기록·시세 자동 읽기 — 옛 동의(2·3)는 막지 않고 다시 묻기만, 자동 시세만 4 뒤부터
-        assert (config.NOTICE_VERSION, config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION,
-                config.NOTICE_BASE_VERSION) == (4, 4, 3, 2)
+        # 2.1.1: 5 = 축구장 칩 카드 정보 자동 읽기(랭커 픽은 16단계가 같은 5 를 쓴다)
+        assert (config.NOTICE_VERSION, config.CHIP_NOTICE_VERSION, config.PRICE_NOTICE_VERSION,
+                config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (5, 5, 4, 3, 2)
     finally:
         config.NOTICE_ACCEPTED = keep
 
@@ -5666,6 +5929,91 @@ def test_price_tab_fills_cache():
                                   (424242, 8): (17400000, datetime.now().date().isoformat())}, prices
     finally:
         playerinfo.fetch_player_info = keep
+
+
+def test_user_opened_card_fills_card_info_without_budget():
+    """사용자가 연 선수 카드는 급여·OVR 도 캐시에(card_info) — 하루 계수는 안 한다(상한 없음 · ROADMAP B)."""
+    keep = playerinfo.fetch_player_info
+    playerinfo.fetch_player_info = lambda sp, timeout=10: playerinfo.PlayerInfo(
+        sp_id=sp, name="가", position="CM", ovr=119, salary=30, prices={1: "1,000 BP"})
+    def used():
+        c = store.open_db(config.DB_PATH)
+        try:
+            return [store.budget_used(c, datetime.now().date().isoformat(), k)
+                    for k in (playerinfo.KIND_CHIP, playerinfo.KIND_LEDGER)]
+        finally:
+            c.close()
+    try:
+        before = used()
+        app_main.PlayerInfoLoader(434343).run()
+        c = store.open_db(config.DB_PATH)
+        info = store.load_card_info(c, [434343])[434343]
+        c.close()
+        assert (info["base_ovr"], info["salary"]) == (119, 30) and used() == before, (info, before, used())
+    finally:
+        playerinfo.fetch_player_info = keep
+
+
+def test_card_info_loader_reads_once_then_cache():
+    """실제 CardInfoLoader — 칩 카드를 읽어 신호로 넘기고(card · done) 칩 몫으로 센다. 같은 날 다시 띄우면 요청 0(캐시)."""
+    calls = []
+    keep = (playerinfo.fetch_player_info, config.WEB_DATA)
+
+    def fetch(sp, timeout=10):
+        calls.append(sp)
+        return playerinfo.PlayerInfo(sp_id=sp, ovr=100, salary=20, prices={1: "2,000 BP"})
+    playerinfo.fetch_player_info = fetch
+    config.WEB_DATA = True
+    try:
+        spids = [515151, 515152]
+        ld = _RealCardInfoLoader(spids)
+        got, done = [], []
+        ld.card.connect(got.append)
+        ld.done.connect(lambda a, b: done.append((a, b)))
+        ld.run()
+        assert sorted(i.sp_id for i in got) == spids and done == [(2, 0)] and calls == spids, (got, done, calls)
+        c = store.open_db(config.DB_PATH)
+        used = store.budget_used(c, datetime.now().date().isoformat(), playerinfo.KIND_CHIP)
+        c.close()
+        assert used >= 2, used
+        ld2 = _RealCardInfoLoader(spids)
+        ld2.run()
+        assert calls == spids, "같은 날 캐시가 있는데 다시 읽었다"
+        # 끊으면 신호를 안 낸다
+        ld3, sent = _RealCardInfoLoader([525252]), []
+        ld3.done.connect(lambda *a: sent.append(a))
+        ld3.cancel()
+        ld3.run()
+        assert sent == [] and 525252 not in calls
+    finally:
+        playerinfo.fetch_player_info, config.WEB_DATA = keep
+
+
+def test_shutdown_stops_pitch_loaders():
+    """축구장 칩 카드 정보 · 갈아 끼운 축구장 로더 · ⑨ 로더가 종료 표에 있다(E11) — 빠지면 도는 QThread 를 놓아 죽는다."""
+    class _Busy:
+        def __init__(self):
+            self._cancel = False
+
+        def cancel(self):
+            self._cancel = True
+
+        def isRunning(self):
+            return not self._cancel
+
+        def wait(self, *_a):
+            return True
+    a, b, c = _Busy(), _Busy(), _Busy()
+    _win._pitch_card_loaders.append(a)
+    _win._retired_loaders.append(b)
+    _win._position_pitch_loaders.append(c)
+    try:
+        left = _win.shutdown(fast=True)
+        assert all(x in left and x._cancel for x in (a, b, c)), [x in left for x in (a, b, c)]
+    finally:
+        _win._pitch_card_loaders.remove(a)
+        _win._retired_loaders.remove(b)
+        _win._position_pitch_loaders.remove(c)
 
 
 # ── 1.4.1 13단계 — 랭커 비교 · 랭커 기록 탭 · 패스 스타일 · 어시스트 · 평점 추이 ─────────────────

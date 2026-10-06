@@ -198,6 +198,14 @@ def main() -> int:
             print(f"[OK]   선수 카드 상세: {pinfo.name} {pinfo.position} OVR {pinfo.ovr}"
                   f" · 능력치 {len(pinfo.abilities)}개 · 특성 {len(pinfo.traits)}개"
                   f" · 시세 {len(pinfo.prices)}단계")
+            # 축구장 칩(2.1.1) — 급여는 본 카드 구역에서만 읽는다. 못 찾으면 칩·띠의 급여가 빈다
+            tag = "[OK]  " if isinstance(pinfo.salary, int) else "[FAIL]"
+            print(f"{tag} 카드 급여(본 카드 구역): {pinfo.salary}")
+            # 강화별 OVR 가산표(config.GRADE_OVR_BONUS)가 넥슨 계산과 같은가 — 시뮬레이터 4번
+            sims = {g: playerinfo.fetch_player_ability(first_sp, strong=g).ovr for g in (1, 5, 8, 13)}
+            want = {g: sims[1] + config.GRADE_OVR_BONUS[g] for g in sims} if sims[1] is not None else {}
+            ok = bool(want) and sims == want and pinfo.ovr == sims[1]
+            print(f"{'[OK]  ' if ok else '[FAIL]'} 강화별 OVR 가산표: 넥슨 {sims} · 표 {want} · 선수 페이지 1강 {pinfo.ovr}")
         else:
             print("[WARN] 선수 카드 상세: 확인할 선수가 없음")
     except Exception as e:

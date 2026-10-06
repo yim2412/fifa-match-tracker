@@ -284,6 +284,19 @@ def test_parse_bp():
     assert playerinfo.prices_as_int(info) == {1: 308000}
 
 
+def _web_on(fn):
+    """선수 페이지 읽기는 웹 데이터가 켜져 있을 때만 요청·계수한다(collect_cards) — 가짜 fetch 테스트는 켠 채로."""
+    def run():
+        keep = config.WEB_DATA
+        config.WEB_DATA = True
+        try:
+            fn()
+        finally:
+            config.WEB_DATA = keep
+    run.__name__ = fn.__name__
+    return run
+
+
 def _fake_fetch(calls, empty=()):
     def fetch(spid):
         calls.append(spid)
@@ -293,6 +306,7 @@ def _fake_fetch(calls, empty=()):
     return fetch
 
 
+@_web_on
 def test_price_cache_daily():
     c = _db()
     calls = []
@@ -305,6 +319,7 @@ def test_price_cache_daily():
     assert calls == [11, 12, 11], "다음 날 다시 안 읽었다"
 
 
+@_web_on
 def test_price_fetch_respects_cap():
     c = _db()
     calls = []
@@ -319,6 +334,7 @@ def test_price_fetch_respects_cap():
     assert len(calls2) == 3, calls2
 
 
+@_web_on
 def test_price_cancel_between_cards():
     c = _db()
     calls = []
@@ -327,6 +343,7 @@ def test_price_cancel_between_cards():
     assert calls == [1, 2], calls
 
 
+@_web_on
 def test_price_failure_skips_one():
     c = _db()
 
@@ -432,6 +449,132 @@ def test_ranker_api_splits_into_batches():
     assert [len(b) for b in sent] == [50, 50, 20] if nexon_api.RANKER_STATS_BATCH == 50 else sent
     assert all(len(b) <= nexon_api.RANKER_STATS_BATCH for b in sent)
     assert sent[0][0] == {"id": 100000000, "po": 0}
+
+
+# ── 카드 정보(B · 2.1.1) — 급여·OVR · 쓰임별 하루 계수 ─────────────────────────
+
+# 선수 페이지 모양(2026-10-06 실측 마크업을 줄인 것) — 본 카드 **앞에** 다른 카드의 급여·OVR 이 먼저 온다(빠른 목록 등).
+# 본 카드 구역(playerThumb … infoWrap)으로 앵커하지 않으면 앞의 17 · 99 를 잡는다.
+_PAGE = """
+<div class="common_quick_list"><ul><li class="quick_player"><span class="pay_q">29</span><span class="ovr">110</span></li></ul>
+<div class="other"><span class="ovr _area_point">99</span><span class="position fw">ST</span>
+<span class="pay"><svg width="34px"><path d="M17,33"></path></svg><span>17</span></span></div>
+<div class="playerThumb">
+  <div class="playerWrap _DCB">
+    <span class="ovr _area_point">119</span><span class="position mf">CM</span>
+    <span class="nameWrap"><span class="name"><span>지어낸 선수</span></span></span>
+    <span class="pay">
+      <svg width="34px" height="34px"><path d="M17,33 L1,26 Z"></path></svg>
+      <span>30</span>
+    </span>
+  </div>
+</div>
+<div class="infoWrap"><button class="btnAction"></button></div>
+<div class="playerThumb"><span class="ovr _area_point">88</span><span class="position df">CB</span>
+<span class="pay"><svg></svg><span>5</span></span></div><div class="infoWrap"></div>
+"""
+
+
+class _Res:
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def test_salary_and_ovr_from_main_card_only():
+    import ranker
+    keep = (ranker.web_get, config.WEB_DATA)
+    ranker.web_get = lambda *a, **kw: _Res(_PAGE)
+    config.WEB_DATA = True
+    try:
+        info = playerinfo.fetch_player_info(846000250)
+    finally:
+        ranker.web_get, config.WEB_DATA = keep
+    assert (info.salary, info.ovr, info.position) == (30, 119, "CM"), (info.salary, info.ovr, info.position)
+
+
+def test_card_ovr_by_grade():
+    import stats
+    # 2026-10-06 시뮬레이터 실측 표(config.GRADE_OVR_BONUS) — 1강 119 카드의 8강 = 134, 13강 = 146
+    assert stats.card_ovr(119, 1) == 119 and stats.card_ovr(119, 8) == 134 and stats.card_ovr(119, 13) == 146
+    assert stats.card_ovr(119, None) is None and stats.card_ovr(None, 5) is None and stats.card_ovr(119, 14) is None
+
+
+def _info_fetch(calls, empty=()):
+    def fetch(spid):
+        calls.append(spid)
+        prices = {1: "-"} if spid in empty else {1: f"{spid},000 BP", 8: f"{spid * 9},000 BP"}
+        return playerinfo.PlayerInfo(sp_id=spid, name=f"선수{spid}", position="CM", ovr=100 + spid % 10,
+                                     salary=10 + spid % 5, prices=prices)
+    return fetch
+
+
+@_web_on
+def test_card_budget_per_use():
+    """쓰임별로 따로 센다 — 칩이 상한을 다 써도 가계부 몫은 남는다. 실행이 바뀌어도(새 연결) 하루 상한을 지킨다.
+    시세가 비어 오는 카드도 센다. 캐시 적중 · 웹 데이터 꺼짐은 0."""
+    import tempfile
+    path = os.path.join(tempfile.mkdtemp(), "fifa.db")
+    day = "2026-10-07"
+    c1, calls = store.open_db(path), []
+    done, skipped = playerinfo.collect_cards(c1, range(1, 6), day, playerinfo.KIND_CHIP, 3,
+                                             fetch=_info_fetch(calls, empty={1, 2}))
+    assert (done, skipped, len(calls)) == (3, 2, 3), (done, skipped, calls)
+    assert store.budget_used(c1, day, playerinfo.KIND_CHIP) == 3
+    assert store.load_card_info(c1, [3])[3]["salary"] == 13 and store.load_card_info(c1, [3])[3]["base_ovr"] == 103
+    c1.close()
+    # 다시 켠 실행(새 연결) — 그날 칩 상한은 이미 다 썼다
+    c2 = store.open_db(path)
+    done, skipped = playerinfo.collect_cards(c2, range(4, 9), day, playerinfo.KIND_CHIP, 3,
+                                             fetch=_info_fetch(calls))
+    assert (done, skipped, len(calls)) == (0, 5, 3), (done, skipped, calls)
+    # 가계부 몫은 따로 — 칩이 다 써도 막히지 않는다
+    done, _ = playerinfo.collect_prices(c2, [4, 5], day, cap=80, fetch=_info_fetch(calls))
+    assert done == 2 and store.budget_used(c2, day, playerinfo.KIND_LEDGER) == 2, done
+    # 캐시 적중(오늘 시세가 있는 3) — 요청도 계수도 없다
+    before = store.budget_used(c2, day, playerinfo.KIND_LEDGER)
+    playerinfo.collect_prices(c2, [3], day, cap=80, fetch=_info_fetch(calls))
+    assert store.budget_used(c2, day, playerinfo.KIND_LEDGER) == before and calls.count(3) == 1
+    # 웹 데이터 꺼짐 — 요청도 계수도 없다
+    config.WEB_DATA = False
+    n = len(calls)
+    playerinfo.collect_cards(c2, [20, 21], "2026-10-08", playerinfo.KIND_CHIP, 3, fetch=_info_fetch(calls))
+    assert len(calls) == n and store.budget_used(c2, "2026-10-08", playerinfo.KIND_CHIP) == 0
+    # 다음 날은 새 상한
+    config.WEB_DATA = True
+    done, _ = playerinfo.collect_cards(c2, [20, 21], "2026-10-08", playerinfo.KIND_CHIP, 3, fetch=_info_fetch(calls))
+    assert done == 2
+    c2.close()
+
+
+def test_budget_take_stops_at_cap():
+    c = _db()
+    assert [store.budget_take(c, "d", "k", 2) for _ in range(3)] == [True, True, False]
+    assert store.budget_used(c, "d", "k") == 2 and store.budget_used(c, "d", "other") == 0
+    assert store.budget_take(c, "d", "k", None)   # 상한 없음은 세기만
+    assert store.budget_used(c, "d", "k") == 3
+
+
+def test_card_info_ttl_boundary():
+    c = _db()
+    store.save_card_info(c, 7, "n", "CM", 100, 20, "2026-09-07")
+    assert store.card_info_fresh(c, 7, "2026-10-06", 30)        # 29일
+    assert not store.card_info_fresh(c, 7, "2026-10-07", 30)    # 30일 — 다시 읽는다
+    assert not store.card_info_fresh(c, 8, "2026-10-07", 30)    # 없는 카드
+
+
+def test_chip_auto_needs_notice_5_and_web_data():
+    keep = (config.NOTICE_ACCEPTED, config.WEB_DATA)
+    try:
+        for accepted, web, want in ((4, True, False), (5, False, False), (5, True, True)):
+            config.NOTICE_ACCEPTED, config.WEB_DATA = accepted, web
+            assert config.chip_auto_allowed() is want, (accepted, web)
+        config.NOTICE_ACCEPTED, config.WEB_DATA = 4, True
+        assert config.price_auto_allowed(), "옛 동의 4 의 가계부 시세는 그대로"
+    finally:
+        config.NOTICE_ACCEPTED, config.WEB_DATA = keep
 
 
 def main() -> int:

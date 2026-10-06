@@ -108,13 +108,15 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 4  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 5  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
+#                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
 TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)은 이 버전 동의 뒤부터
 PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 이 버전 동의 뒤부터 — 사용자가 연 [시세] 탭은 그대로
+CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -202,6 +204,13 @@ TRADE_OVERLAP_DAYS = 7              # 위쪽(새 거래) 받기를 저장된 최
 # 카드 시세 캐시(B · card_prices) — 가계부 평가용 자동 읽기의 하루 상한(카드 수 = 홈페이지 요청 수).
 # 2026-10-06 실측(키 주인 계정): 평가 대상 후보 = 최근 50경기 카드 18 + 최근 14일 구매 67 = 최대 76장 → 하루 한 번에 다 읽히게
 PRICE_FETCH_MAX = 80
+# 카드 정보(B · card_info — 2.1.1) — 선수 페이지 한 요청에 시세·급여·OVR(1강·카드 기본 포지션)이 같이 온다.
+# 하루 상한은 쓰임별로 따로 센다(store.api_budget): 사용자가 연 선수 카드 = 없음 · 가계부 = PRICE_FETCH_MAX · 축구장 칩 = 아래.
+CHIP_FETCH_MAX = 60                 # 초안 — 스쿼드 창·비교를 하루 몇 번 여는지로 다시 정한다(ROADMAP 2.1.1 "재지 않은 것")
+CARD_INFO_TTL_DAYS = 30             # 급여·OVR 은 라이브 패치로만 바뀐다 — 30일인 근거는 아직 없다(재지 않은 것)
+# 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
+# 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
+GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}
 # 스쿼드 타임라인 · 가계부(12단계 · squad_timeline.py · trade_book.py) — 출전은 선발만(교체 명단 28 은 안 센다)
 HOLD_RECENT_GAMES = 50              # 이 경기 수 안에 출전한 카드 = 보유 중
 HOLD_GRACE_DAYS = 14                # 산 지 이만큼 안이면 "최근 구매 · 아직 안 씀"(평가 합계에 안 넣고 따로 소계)
@@ -316,6 +325,11 @@ def track_allowed() -> bool:
 def price_auto_allowed() -> bool:
     """가계부 평가용 시세를 자동으로 읽어도 되나 — 그 안내(PRICE_NOTICE_VERSION) 동의 + 웹 데이터 켜짐."""
     return WEB_DATA and NOTICE_ACCEPTED >= PRICE_NOTICE_VERSION
+
+
+def chip_auto_allowed() -> bool:
+    """축구장 칩의 카드 정보를 자동으로 읽어도 되나 — 그 안내(CHIP_NOTICE_VERSION) 동의 + 웹 데이터 켜짐."""
+    return WEB_DATA and NOTICE_ACCEPTED >= CHIP_NOTICE_VERSION
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다

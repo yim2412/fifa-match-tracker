@@ -4,12 +4,14 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
-    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolTip, QVBoxLayout, QWidget,
+    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import theme as T
@@ -488,6 +490,34 @@ class Card(QFrame):
         row.addWidget(self.title)
         row.addWidget(w, 1)
         v.insertLayout(i, row)
+
+
+class Collapsible(QWidget):
+    """누르면 접히고 펴지는 구획 — 머리(▸ 제목) + 본문. 접힌 본문은 숨김이라 크기 계산에서 빠진다."""
+
+    def __init__(self, title: str, body: QWidget, opened: bool = False):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.head = QToolButton()
+        self.head.setText(title)
+        self.head.setCheckable(True)
+        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.head.setStyleSheet(f"QToolButton {{ border: none; color: {T.TEXT_DIM}; font-weight: bold; }}")
+        self.head.toggled.connect(self.set_open)
+        self.body = body
+        v.addWidget(self.head)
+        v.addWidget(body)
+        self.head.setChecked(opened)
+        self.set_open(opened)
+
+    def set_open(self, on: bool) -> None:
+        self.head.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.body.setVisible(on)
+
+    def is_open(self) -> bool:
+        return self.body.isVisibleTo(self)
 
 
 # 한 글자 폭의 상한을 잡을 때 같이 재는 넓은 글자 — 기본 글꼴 밖(대체 글꼴)에서 오는 종류마다 하나씩
@@ -1291,84 +1321,154 @@ def _grade_badge_colors(grade) -> tuple[str, str]:
     return T.PANEL_2, T.TEXT_DIM
 
 
-class _PlayerChip(QFrame):
-    """피치 위에 올라가는 선수 카드 한 장 — 얼굴 사진·포지션·강화·이름.
+def short_bp(v: int | None) -> str:
+    """칩 한 줄에 들어가는 짧은 금액 — 1.2조 · 3,400억 · 5,600만. 모르면 NA."""
+    if not isinstance(v, int) or v <= 0:
+        return NA
+    for unit, name in ((10 ** 12, "조"), (10 ** 8, "억"), (10 ** 4, "만")):
+        if v >= unit:
+            if unit == 10 ** 12:
+                return f"{v / unit:.1f}".rstrip("0").rstrip(".") + name
+            return f"{v // unit:,}{name}"
+    return f"{v:,}"
 
-    클릭하면 그 선수 카드 상세(오버롤·능력치·시세 등)를 보여줄 수 있게
-    clicked 시그널을 낸다 — 실제 조회·다이얼로그는 app_main 쪽 책임이라
-    여기서는 "눌렸다"는 사실만 알린다."""
+
+@dataclass
+class PitchCard:
+    """축구장 칩 한 장의 재료 — 화면이 경기 기록에서 만든다(widgets 는 계산하지 않는다)."""
+    pos_code: int
+    pos_name: str
+    name: str
+    sp_id: int | None
+    grade: int | None = None
+    note: str = ""      # 시세 줄 대신 쓸 글(⑨ "만난 12회 · 34%"). 비어 있으면 시세
+
+
+class _PlayerChip(QWidget):
+    """축구장 위 선수 카드 한 장(v2) — 크기는 축구장이 정하고, 내용은 그 크기에 맞춰 그린다.
+
+    위 줄 포지션 · OVR · 강화 배지 / 얼굴 / 시즌 아이콘 + 이름 / 시세(또는 note). 작아지면 얼굴 → 시세 줄 순으로 뺀다
+    (글자를 MIN_FONT_PX 밑으로 줄이지 않는다). 클릭하면 clicked — 조회·창은 app_main 몫."""
 
     clicked = pyqtSignal()
+    MIN_FONT_PX = 10
+    FACE_MIN_H = 76     # 이보다 낮으면 얼굴을 뺀다
+    PRICE_MIN_H = 58    # 이보다 낮으면 시세 줄을 뺀다
 
-    def __init__(self, pos_name: str, name: str, grade, accent: str):
+    def __init__(self, card: PitchCard, accent: str):
         super().__init__()
+        self.card = card
+        self.accent = accent
+        self.ovr: int | None = None
+        self.price: int | None = None
+        self.face: QPixmap | None = None
+        self.season: QPixmap | None = None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(
-            f"QFrame {{ background: rgba(255,255,255,240); border: 2px solid {accent};"
-            f" border-radius: 8px; }}")
-        v = QVBoxLayout(self)
-        v.setContentsMargins(4, 4, 4, 3)
-        v.setSpacing(0)
-
-        top = QHBoxLayout()
-        top.setSpacing(4)
-        self.season_badge = QLabel()
-        self.season_badge.setFixedSize(14, 14)
-        self.season_badge.setScaledContents(True)
-        self.season_badge.setStyleSheet("border: none; background: transparent;")
-        top.addWidget(self.season_badge)
-        pos_lb = QLabel(pos_name)
-        pos_lb.setStyleSheet(
-            f"background: {accent}; color: {T.ON_ACCENT}; border: none;"
-            f" font-weight: bold; font-size: 11px; border-radius: 3px;"
-            f" padding: 1px 4px;")
-        grade_bg, grade_fg = _grade_badge_colors(grade)
-        grade_lb = QLabel(str(grade))
-        grade_lb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        grade_lb.setFixedSize(18, 18)
-        gf = QFont()
-        gf.setBold(True)
-        gf.setPointSize(9)
-        grade_lb.setFont(gf)
-        grade_lb.setStyleSheet(
-            f"background: {grade_bg}; color: {grade_fg}; border: none;"
-            f" border-radius: 9px;")
-        top.addWidget(pos_lb)
-        top.addStretch(1)
-        top.addWidget(grade_lb)
-        v.addLayout(top)
-
-        self.face = QLabel()
-        self.face.setFixedSize(40, 40)
-        self.face.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.face.setScaledContents(True)
-        self.face.setStyleSheet(
-            f"border: none; background: {T.PANEL_2}; border-radius: 20px;")
-        face_row = QHBoxLayout()
-        face_row.addStretch(1)
-        face_row.addWidget(self.face)
-        face_row.addStretch(1)
-        v.addLayout(face_row)
-
-        name_lb = QLabel(name)
-        nf = QFont()
-        nf.setPointSize(10)
-        nf.setBold(True)
-        name_lb.setFont(nf)
-        name_lb.setStyleSheet(f"color: {T.TEXT}; border: none;")
-        name_lb.setWordWrap(True)
-        name_lb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        v.addWidget(name_lb)
+        self.setToolTip(f"{card.pos_name} · {card.name}\n누르면 선수 카드")
 
     def set_face(self, pixmap_path: str) -> None:
         pm = QPixmap(pixmap_path)
         if not pm.isNull():
-            self.face.setPixmap(pm)
+            self.face = pm
+            self.update()
 
     def set_season_icon(self, pixmap_path: str) -> None:
         pm = QPixmap(pixmap_path)
         if not pm.isNull():
-            self.season_badge.setPixmap(pm)
+            self.season = pm
+            self.update()
+
+    def set_card(self, ovr: int | None, price: int | None) -> None:
+        self.ovr, self.price = ovr, price
+        tip = f"{self.card.pos_name} · {self.card.name}"
+        if ovr is not None:
+            tip += f"\nOVR {ovr} — 카드 기본 포지션·강화 기준(다른 자리에 세우면 게임 값과 다르다)"
+        self.setToolTip(tip + "\n누르면 선수 카드")
+        self.update()
+
+    def shows_price_line(self) -> bool:
+        return self.height() >= self.PRICE_MIN_H
+
+    def shows_face(self) -> bool:
+        return self.height() >= self.FACE_MIN_H
+
+    def _font(self, px: float, bold: bool = False) -> QFont:
+        f = QFont(self.font())
+        f.setPixelSize(max(self.MIN_FONT_PX, int(px)))
+        f.setBold(bold)
+        return f
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.setPen(QPen(QColor(self.accent), 2))
+        p.setBrush(QColor(T.PANEL))
+        p.drawRoundedRect(QRectF(1, 1, w - 2, h - 2), 7, 7)
+
+        # 위 줄 — 포지션 배지(왼) · OVR(가운데) · 강화 배지(오른)
+        top_h = max(16, int(h * 0.2))
+        small = self._font(top_h * 0.62, bold=True)
+        p.setFont(small)
+        fm = QFontMetrics(small)
+        pos_w = min(w // 2 - 4, fm.horizontalAdvance(self.card.pos_name) + 8)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(self.accent))
+        pos_r = QRectF(4, 4, pos_w, top_h - 2)
+        p.drawRoundedRect(pos_r, 3, 3)
+        p.setPen(QColor(T.ON_ACCENT))
+        p.drawText(pos_r, Qt.AlignmentFlag.AlignCenter, self.card.pos_name)
+        if self.card.grade is not None:
+            gbg, gfg = _grade_badge_colors(self.card.grade)
+            d = top_h - 2
+            g_r = QRectF(w - 4 - d, 4, d, d)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(gbg))
+            p.drawEllipse(g_r)
+            p.setPen(QColor(gfg))
+            p.drawText(g_r, Qt.AlignmentFlag.AlignCenter, str(self.card.grade))
+        if self.ovr is not None:
+            p.setPen(QColor(T.TEXT))
+            p.drawText(QRectF(pos_r.right(), 4, w - pos_r.right() - top_h - 4, top_h - 2),
+                       Qt.AlignmentFlag.AlignCenter, str(self.ovr))
+
+        y = top_h + 4
+        line_h = max(self.MIN_FONT_PX + 4, int(h * 0.15))
+        rest = h - y - 4
+        price_on = self.shows_price_line()
+        name_lines = 1 + (1 if price_on else 0)
+        if self.shows_face():
+            d = max(16, min(w - 16, rest - name_lines * line_h - 2))
+            face_r = QRectF((w - d) / 2, y, d, d)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(T.PANEL_2))
+            p.drawEllipse(face_r)
+            if self.face is not None:
+                p.drawPixmap(face_r.toRect(), self.face)
+            y += d + 2
+
+        # 이름 줄 — 시즌 아이콘 + 이름(넘치면 …)
+        name_f = self._font(line_h * 0.78, bold=True)
+        p.setFont(name_f)
+        x0 = 4
+        if self.season is not None:
+            ic = line_h - 4
+            p.drawPixmap(QRectF(x0, y + 2, ic, ic).toRect(), self.season)
+            x0 += ic + 2
+        avail = w - x0 - 4
+        text = QFontMetrics(name_f).elidedText(self.card.name, Qt.TextElideMode.ElideRight, avail)
+        p.setPen(QColor(T.TEXT))
+        p.drawText(QRectF(x0, y, avail, line_h), Qt.AlignmentFlag.AlignCenter, text)
+        y += line_h
+
+        if price_on:
+            line = self.card.note or (short_bp(self.price) if self.price is not None else NA)
+            pf = self._font(line_h * 0.7)
+            p.setFont(pf)
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(4, y, w - 8, line_h), Qt.AlignmentFlag.AlignCenter,
+                       QFontMetrics(pf).elidedText(line, Qt.TextElideMode.ElideRight, w - 8))
+        p.end()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1376,60 +1476,136 @@ class _PlayerChip(QFrame):
         super().mousePressEvent(event)
 
 
-class PitchWidget(QWidget):
-    """축구장 배경에 포지션대로 선수를 배치해서 보여준다(fc-info.com 류 스쿼드 화면 참고).
+class _PitchField(QWidget):
+    """잔디·선 + 칩 배치. 줄(rows)마다 높이를 똑같이, 줄 안에서는 폭을 사람 수로 나눠 칩이 겹치지 않는다."""
 
-    players: (spPosition, 포지션이름, 선수이름, 강화) 튜플 리스트.
-    좌표는 실측 없이 표준 포메이션 슬롯을 손으로 잡은 근사치 — 실제 좌표
-    데이터가 없어서(API 미제공) 포지션 코드별로 "대략 그 자리"에 놓는다.
-    y=0 이 상대 골대 쪽(공격 라인), y=1 이 GK.
-    """
+    MARGIN = 10
+    GAP = 6
+    CHIP_MAX = (118, 112)       # 넓은 화면에서도 이 이상 안 키운다
+    GROUP_SPREAD = 1.7          # 줄 안 칸 폭의 상한 = 칩 최대 폭 × 이것 — 둘뿐인 줄이 양 끝으로 벌어지지 않게
 
-    # spPosition -> (x비율, y비율). stats._LINES 코드 정의와 맞춘 것.
-    COORDS: dict[int, tuple[float, float]] = {
-        0: (0.50, 0.94),                                            # GK
-        1: (0.50, 0.84), 2: (0.87, 0.74), 3: (0.80, 0.79),           # SW RWB RB
-        4: (0.62, 0.81), 5: (0.50, 0.82), 6: (0.38, 0.81),           # RCB CB LCB
-        7: (0.20, 0.79), 8: (0.13, 0.74),                            # LB LWB
-        9: (0.65, 0.63), 10: (0.50, 0.65), 11: (0.35, 0.63),         # RDM CDM LDM
-        12: (0.87, 0.50), 13: (0.62, 0.52), 14: (0.50, 0.54),        # RM RCM CM
-        15: (0.38, 0.52), 16: (0.13, 0.50),                          # LCM LM
-        17: (0.65, 0.36), 18: (0.50, 0.34), 19: (0.35, 0.36),        # RAM CAM LAM
-        20: (0.65, 0.17), 21: (0.50, 0.13), 22: (0.35, 0.17),        # RF CF LF
-        23: (0.85, 0.21), 24: (0.60, 0.08), 25: (0.50, 0.05),        # RW RS ST
-        26: (0.40, 0.08), 27: (0.15, 0.21),                          # LS LW
-    }
-    CHIP_SIZE = (108, 96)
-
-    player_clicked = pyqtSignal(int)  # spId — 선수 카드를 클릭했을 때
-
-    def __init__(self, players: list[tuple[int, str, str, object, object]]):
-        """players: (spPosition, 포지션이름, 선수이름, 강화, spId) 튜플 리스트."""
+    def __init__(self, rows: list[list[_PlayerChip]]):
         super().__init__()
-        self.setMinimumSize(560, 640)
-        self._chips: list[tuple[QWidget, float, float]] = []
-        self._chip_by_sp_id: dict[int, _PlayerChip] = {}
-        for sp_position, pos_name, name, grade, sp_id in players:
-            xf, yf = self.COORDS.get(sp_position, (0.5, 0.5))
-            accent = self._accent_for(sp_position)
-            chip = _PlayerChip(pos_name, name, grade, accent)
-            chip.setParent(self)
-            chip.setFixedSize(*self.CHIP_SIZE)
-            self._chips.append((chip, xf, yf))
-            if isinstance(sp_id, int):
-                self._chip_by_sp_id[sp_id] = chip
-                chip.clicked.connect(lambda sid=sp_id: self.player_clicked.emit(sid))
-        self._layout_chips()
+        self._rows = rows
+        for row in rows:
+            for chip in row:
+                chip.setParent(self)
+        self.setMinimumSize(340, 420)
+
+    def sizeHint(self) -> QSize:
+        return QSize(520, 600)
+
+    def resizeEvent(self, event) -> None:
+        self.layout_chips()
+        super().resizeEvent(event)
+
+    def layout_chips(self) -> None:
+        if not self._rows:
+            return
+        m, gap = self.MARGIN, self.GAP
+        W, H = self.width() - 2 * m, self.height() - 2 * m
+        row_h = H / len(self._rows)
+        max_w, max_h = self.CHIP_MAX
+        for r, row in enumerate(self._rows):
+            cell_w = min(W / len(row), max_w * self.GROUP_SPREAD)
+            left = m + (W - cell_w * len(row)) / 2
+            cw = int(min(max_w, cell_w - gap))
+            ch = int(min(max_h, row_h - gap))
+            for i, chip in enumerate(row):
+                cx = left + cell_w * (i + 0.5)
+                cy = m + row_h * (r + 0.5)
+                chip.setGeometry(int(cx - cw / 2), int(cy - ch / 2), max(1, cw), max(1, ch))
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        p.fillRect(self.rect(), QColor(T.PITCH))
+        p.setPen(QPen(QColor(T.PITCH_LINE), 2))
+        m = self.MARGIN
+        p.drawRect(m, m, w - 2 * m, h - 2 * m)
+        p.drawLine(m, h // 2, w - m, h // 2)
+        p.drawEllipse(QPointF(w / 2, h / 2), 46, 46)
+        box_w = int((w - 2 * m) * 0.62)
+        box_h = 56
+        p.drawRect(int(w / 2 - box_w / 2), m, box_w, box_h)
+        p.drawRect(int(w / 2 - box_w / 2), h - m - box_h, box_w, box_h)
+
+
+class PitchWidget(QWidget):
+    """스쿼드 축구장 v2 — 위 띠(스쿼드 가치·급여 합 · 자동 읽기가 막힌 이유 + [안내 보기]) + 축구장.
+
+    rows: 줄(위=공격 → 아래=GK)마다 PitchCard 목록(왼쪽 → 오른쪽) — 배치 계산(core.pitch_rows)은 화면이 한다.
+    칩의 OVR·시세는 set_card 로 나중에 채운다(캐시 → 자동 읽기). band=False 면 위 띠가 없다(⑨ — 합이 뜻이 없다)."""
+
+    player_clicked = pyqtSignal(int)   # spId — 선수 카드를 클릭했을 때
+    notice_requested = pyqtSignal()    # 띠의 [안내 보기]
+
+    def __init__(self, rows: list[list[PitchCard]], band: bool = True):
+        super().__init__()
+        self._chips_by_sp: dict[int, list[_PlayerChip]] = {}
+        chip_rows = []
+        for row in rows:
+            chips = []
+            for card in row:
+                chip = _PlayerChip(card, self._accent_for(card.pos_code))
+                chips.append(chip)
+                if isinstance(card.sp_id, int):
+                    self._chips_by_sp.setdefault(card.sp_id, []).append(chip)
+                    chip.clicked.connect(lambda sid=card.sp_id: self.player_clicked.emit(sid))
+            chip_rows.append(chips)
+        self.field = _PitchField(chip_rows)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(4)
+        self.band = QWidget()
+        hb = QHBoxLayout(self.band)
+        hb.setContentsMargins(2, 0, 2, 0)
+        self.lb_value = QLabel("")
+        self.lb_value.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        self.lb_value.setWordWrap(True)
+        self.lb_gate = QLabel("")
+        self.lb_gate.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_gate.setWordWrap(True)
+        self.btn_notice = QPushButton("안내 보기")
+        self.btn_notice.clicked.connect(self.notice_requested.emit)
+        self.btn_notice.hide()
+        hb.addWidget(self.lb_value, 1)
+        hb.addWidget(self.lb_gate, 1)
+        hb.addWidget(self.btn_notice)
+        self.band.setVisible(band)
+        v.addWidget(self.band)
+        v.addWidget(self.field, 1)
+
+    # ── 채우기 ──
+    def sp_ids(self) -> list[int]:
+        return list(self._chips_by_sp)
+
+    def chips(self) -> list[_PlayerChip]:
+        return [c for row in self.field._rows for c in row]
 
     def set_face(self, sp_id: int, pixmap_path: str) -> None:
-        chip = self._chip_by_sp_id.get(sp_id)
-        if chip:
+        for chip in self._chips_by_sp.get(sp_id, ()):
             chip.set_face(pixmap_path)
 
     def set_season_icon(self, sp_id: int, pixmap_path: str) -> None:
-        chip = self._chip_by_sp_id.get(sp_id)
-        if chip:
+        for chip in self._chips_by_sp.get(sp_id, ()):
             chip.set_season_icon(pixmap_path)
+
+    def set_card(self, sp_id: int, ovr_of, price_of) -> None:
+        """그 카드 칩마다 — ovr_of(강화)·price_of(강화) 로 칩의 강화에 맞는 값(같은 카드가 강화 다르게 둘일 수 있다)."""
+        for chip in self._chips_by_sp.get(sp_id, ()):
+            chip.set_card(ovr_of(chip.card.grade), price_of(chip.card.grade))
+
+    def set_value_text(self, text: str) -> None:
+        self.lb_value.setText(text)
+
+    def set_gate(self, text: str, button: bool = False) -> None:
+        """자동 읽기가 막힌 이유 한 줄(빈 글이면 숨김) — [안내 보기]는 동의가 답일 때만."""
+        self.lb_gate.setText(text)
+        self.lb_gate.setVisible(bool(text))
+        self.btn_notice.setVisible(button)
 
     @staticmethod
     def _accent_for(sp_position: int) -> str:
@@ -1443,32 +1619,6 @@ class PitchWidget(QWidget):
         if 9 <= sp_position <= 19:
             return T.GREEN
         return T.RED
-
-    def resizeEvent(self, event) -> None:
-        self._layout_chips()
-        super().resizeEvent(event)
-
-    def _layout_chips(self) -> None:
-        w, h = self.width(), self.height()
-        cw, ch = self.CHIP_SIZE
-        for chip, xf, yf in self._chips:
-            chip.move(int(w * xf - cw / 2), int(h * yf - ch / 2))
-
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        p.fillRect(self.rect(), QColor(T.PITCH))
-        line = QColor(T.PITCH_LINE)
-        p.setPen(QPen(line, 2))
-        m = 10
-        p.drawRect(m, m, w - 2 * m, h - 2 * m)
-        p.drawLine(m, h // 2, w - m, h // 2)
-        p.drawEllipse(QPointF(w / 2, h / 2), 46, 46)
-        box_w = int((w - 2 * m) * 0.62)
-        box_h = 56
-        p.drawRect(int(w / 2 - box_w / 2), m, box_w, box_h)
-        p.drawRect(int(w / 2 - box_w / 2), h - m - box_h, box_w, box_h)
 
 
 class ShotMapWidget(QWidget):

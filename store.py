@@ -144,6 +144,25 @@ CREATE TABLE IF NOT EXISTS card_prices (
     fetched_on TEXT NOT NULL,
     PRIMARY KEY (spid, grade)
 );
+-- 카드 정보(B · 2.1.1) — 카드 하나에 하나. 급여는 강화와 무관하고(2026-10-06 실측 1강·8강 같음), OVR 은 1강·카드 기본
+-- 포지션 값만 둔다(강화별은 config.GRADE_OVR_BONUS). 시세는 강화마다라 card_prices 에 따로
+CREATE TABLE IF NOT EXISTS card_info (
+    spid       INTEGER PRIMARY KEY,
+    name       TEXT,
+    position   TEXT,
+    base_ovr   INTEGER,
+    salary     INTEGER,
+    fetched_on TEXT NOT NULL
+);
+-- 하루 요청 계수(2.1.1) — 실제로 HTTP 요청을 보내기 직전에만 1 더한다. 재시작해도 남아 하루 상한을 지킨다.
+-- kind: card_ledger(가계부 시세) · card_chip(축구장 칩) · ranker_pick · openapi(16단계)
+CREATE TABLE IF NOT EXISTS api_budget (
+    day      TEXT NOT NULL,
+    kind     TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    hit_429  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, kind)
+);
 -- 랭커 기록(13단계 · 오픈API ranker-stats) 하루 캐시. 넥슨이 응답에서 뺀 쌍(데이터 없음)도 payload NULL 로 그날
 -- 기억한다 — 안 그러면 화면을 열 때마다 같은 쌍을 다시 묻는다
 CREATE TABLE IF NOT EXISTS ranker_stats (
@@ -735,9 +754,57 @@ def card_price_fresh(conn: sqlite3.Connection, spid: int, day: str) -> bool:
                         (spid, day)).fetchone() is not None
 
 
-def card_prices_fetched_on(conn: sqlite3.Connection, day: str) -> int:
-    """그날 시세를 읽은 카드 수 — 하루 상한(PRICE_FETCH_MAX)을 실행이 여러 번이어도 지키려고."""
-    return len({r[0] for r in conn.execute("SELECT spid FROM card_prices WHERE fetched_on = ?", (day,))})
+def save_card_info(conn: sqlite3.Connection, spid: int, name, position, base_ovr, salary, day: str) -> None:
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO card_info (spid, name, position, base_ovr, salary, fetched_on)"
+                     " VALUES (?, ?, ?, ?, ?, ?)", (spid, name, position, base_ovr, salary, day))
+
+
+def card_info_fresh(conn: sqlite3.Connection, spid: int, day: str, ttl_days: int) -> bool:
+    """읽은 지 ttl_days 안인가(day = 오늘 ISO). 날짜가 깨졌으면 낡은 것으로."""
+    r = conn.execute("SELECT fetched_on FROM card_info WHERE spid = ?", (spid,)).fetchone()
+    if r is None:
+        return False
+    try:
+        return (date.fromisoformat(day) - date.fromisoformat(r[0])).days < ttl_days
+    except (TypeError, ValueError):
+        return False
+
+
+def load_card_info(conn: sqlite3.Connection, spids) -> dict[int, dict]:
+    """카드 → {name, position, base_ovr, salary, fetched_on}. 없는 카드는 키가 없다."""
+    out = {}
+    for spid in set(spids):
+        r = conn.execute("SELECT name, position, base_ovr, salary, fetched_on FROM card_info WHERE spid = ?",
+                         (spid,)).fetchone()
+        if r is not None:
+            out[spid] = dict(r)
+    return out
+
+
+def budget_take(conn: sqlite3.Connection, day: str, kind: str, cap: int | None) -> bool:
+    """그날 그 종류 요청을 하나 쓴다 — 상한(cap)에 닿았으면 안 쓰고 False. 요청을 보내기 직전에만 부른다.
+
+    읽고-더하기를 한 쓰기 트랜잭션으로(BEGIN IMMEDIATE) — 같은 종류 로더 둘(비교 화면의 축구장 둘)이 겹쳐도 상한을 안 넘는다."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        r = conn.execute("SELECT attempts FROM api_budget WHERE day = ? AND kind = ?", (day, kind)).fetchone()
+        used = r[0] if r else 0
+        if cap is not None and used >= cap:
+            conn.rollback()
+            return False
+        conn.execute("INSERT INTO api_budget (day, kind, attempts) VALUES (?, ?, 1)"
+                     " ON CONFLICT(day, kind) DO UPDATE SET attempts = attempts + 1", (day, kind))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return True
+
+
+def budget_used(conn: sqlite3.Connection, day: str, kind: str) -> int:
+    r = conn.execute("SELECT attempts FROM api_budget WHERE day = ? AND kind = ?", (day, kind)).fetchone()
+    return r[0] if r else 0
 
 
 def load_card_prices(conn: sqlite3.Connection, spids) -> dict[tuple[int, int], tuple[int, str]]:
