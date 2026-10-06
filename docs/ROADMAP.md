@@ -164,6 +164,10 @@
 [상]은 넷으로 겹친다 → 전부 반영: ① 랭커 픽을 켜는 조건(토글·동의 버전)이 없었다(A·B 둘 다) ② "시도 수" 계수기가 코드에 없다 — 지금 80 상한은 실행이 바뀌면
 저장된 카드 수만 센다(store.py:738) · 300·429 멈춤을 어디 적는지 없음(A·B) ③ 랭커 픽 데이터가 안내한 "14일 · 지우기" 약속 밖에 쌓인다(B) ④ 사용자가 연 선수 카드까지
 80 에 묶어 기존 기능이 죽는다(B). 아래 "하루 요청 · 동의 · 보관" 절과 진입점 표가 답이다.
+2회차(같은 검토자 이어 쓰기 · 바뀐 줄만 — A 3.6만 · B 2.0만 토큰): A 새 [상] 0 · [중] 4 / B 새 [상] 1 · [중] 5.
+[상] — 지우기 범위가 모자랐다(A [중]으로도 같이 나옴): `squad_owner`(ouid·닉네임) · `match_players` · `squad_match` 가 남아 다른 구단주 식별자가 14일 뒤에도 남았다 → "보관·지우기"를 고쳐 씀.
+[중] 전부 반영: 창이 다시 보일 때 재개 · 429 는 재시도 끝 최종만 적고 랭커 픽은 한 번 쉬고 다시 · 계수는 실제 HTTP 요청만 · `chip_auto_allowed` 에 `WEB_DATA` ·
+14일 정리는 앱 켤 때 토글과 무관 · 끄는 길 넷 · 동의 안 한 상태를 화면에 · `CHANGES_HTML` · 다시 확인 때 같은 경기면 `fetched_on` 갱신.
 
 **규모** 가장 큼 — 메뉴를 한 번에 바꾸므로 1.x 기능을 제자리 탭으로 옮기는 회귀 확인이 핵심. 새 넥슨 요청: 오픈API(랭커 200명의 최근 경기 — 기존 엔드포인트 셋) + 홈페이지(선수 페이지 — 이미 있는 요청에서 급여·OVR 을 더 읽음). 새 저장: fifa.db 표 넷(`card_info` · `ranker_squads` · `squad_owner` · `match_squads` 계열).
 
@@ -235,7 +239,8 @@
 - **채우기**: `fetch_player_info` 가 한 요청으로 시세·급여·OVR 을 같이 읽는다(본 카드 구역 앵커 — R7). `card_info` 는 30일 TTL(라이브 패치로 바뀔 수 있다 — 30일인 근거는 없다: 구현 뒤 TTL 지난 카드의 값이 바뀐 비율을 `check_api` 줄로 본다 → 재지 않은 것).
   하루 상한은 **쓰임별로 따로**(1회차 B [상] — 한 계수기에 묶으면 칩이 80 을 먼저 다 써 가계부 평가 손익이 비고, 사용자가 연 선수 카드까지 막힌다):
   사용자가 연 선수 카드·[시세] 탭 = **상한 없음**(지금 그대로) · 가계부 자동 시세 = `PRICE_FETCH_MAX` 80(지금 그대로) · v2 칩 자동 = `CHIP_FETCH_MAX`(초안 60 — 15단계 첫 줄에 스쿼드 창·비교를 하루 몇 번 여는지로 정함).
-  셋 다 아래 `api_budget` 표에서 센다(재시작해도 남는다). 상한에 걸린 칩은 "오늘 조회 한도"로 비운다. 칩 자동 요청은 동의 게이트 `chip_auto_allowed()`(`NOTICE_ACCEPTED >= CHIP_NOTICE_VERSION`) 뒤.
+  셋 다 아래 `api_budget` 표에서 센다(재시작해도 남는다). 상한에 걸린 칩은 "오늘 조회 한도"로 비운다. 칩 자동 요청은 동의 게이트 `chip_auto_allowed()`(`WEB_DATA and NOTICE_ACCEPTED >= CHIP_NOTICE_VERSION` — `price_auto_allowed` 와 같은 꼴, config.py:314) 뒤.
+  게이트에 막힌 칩은 툴팁 "새 이용 안내에 동의하면 시세·급여가 나옵니다 [안내 보기]"(웹 데이터 꺼짐이면 그 문구) — 조용히 빈칸이 되지 않게(2회차 B).
   **집계에는 카드 상세가 필요 없다** — 랭커 픽·12 의 카드 이름은 메타 `spid`(8만 건대 — nexon_api.py:24 주석)로. 요청은 **화면에 띄운 축구장의 칩**(최대 11장 × 띄운 수)만.
 - 개요의 "출처 둘(선수 페이지 · 팀컬러 선수 JSON)" 중 팀컬러 선수 JSON 은 **2.2.1(7)의 새 요청**이라 2.1.1 엔 선수 페이지 하나. 2.2.1 이 붙인다.
 - `WEB_DATA` 꺼짐 → 시세·급여·OVR 칸만 비운다(이름·포지션·강화는 경기 상세·메타).
@@ -280,12 +285,14 @@
 - **요청이 드는 것**(R6): 선발 카드·강화 — `RankerPickLoader`(작업 스레드 · 자기 연결 · `cancel()` · 요청 번호). 랭커마다 ouid(`ranker_squads.ouid` 캐시 — 닉네임이 바뀌면 다시) → 최근 경기 1 → 상세(이미 `matches` 에 있으면 0요청).
   상세는 **`save_matches` 그대로**(양쪽 ouid 를 `match_players` 에 — 1회차 B: 따로 저장하면 그 상대를 나중에 검색할 때 `known_ids` 와 어긋난다) — 12 색인이 같이 잡는다. **`accounts` 에는 넣지 않는다**(R11). 랭커 픽으로 들어온 경기는 `ranker_matches(match_id PRIMARY KEY, fetched_on)` 에 표시 — 보관·지우기 범위(아래).
   `ranker_squads(profile_sn PRIMARY KEY, nickname, ouid, match_id, match_day, fetched_at, fail TEXT)` — 오래된 것부터(`fetched_at` — 3일 안에 받은 랭커는 다시 안 묻는다 · `config.RANKER_PICK_STALE_DAYS`), 하루 **`config.RANKER_PICK_DAILY_REQ`(300 — U2 안전 상한)** 안에서. `OPENAPI00004`(닉네임 바뀜) 등 실패도 `fail` 에 적고 `fetched_at` 을 써서 탭을 열 때마다 다시 시도하지 않는다(1회차 B).
+  다시 확인했는데 최근 경기가 그대로면 `ranker_matches.fetched_on` 을 **오늘로 갱신**한다 — 안 그러면 활동 중인 랭커의 경기가 14일 정리에 지워지고 다음 확인까지 집계에서 조용히 빠진다(2회차 B). 집계는 `ranker_squads.match_id` 가 가리키는 경기가 없으면 그 랭커를 "다시 받는 중"으로 따로 센다.
 - **언제**(U2): **랭커 픽 · 추천 탭이 보일 때만** — 탭을 열면 `RankerPickLoader` 를 띄우고, 다른 메뉴로 가면 랭커 사이에서 멈춘다(받은 만큼은 남는다). 랭킹 수집 회차 끝에는 **붙이지 않는다**.
-  **멈춤·재개**(1회차 A·B): 창이 숨겨지거나 최소화되면 멈춘다(`hideEvent`·`changeEvent` — X 는 트레이 숨김이라 30분 동안 계속 받았다) · 검색·비교·거래 받기가 끝나면(`finished`) 그 탭이 **보이고 창이 보일 때** 다시 띄운다 · `start_trades` 는 돌던 랭커 픽을 `cancel()`(거래 → 랭커 픽 순).
+  **멈춤·재개**(1회차 A·B · 2회차 A): 창이 숨겨지거나 최소화되면 멈춘다(`hideEvent`·`changeEvent` — X 는 트레이 숨김이라 30분 동안 계속 받았다). 다시 띄우는 계기: 검색·비교·거래 받기·랭커 기록(`RankerStatsLoader`)의 `finished` · **창이 다시 보임**(`showEvent` · 최소화 풀림 app_main.py:1649 · 트레이 [열기]) — 그 탭이 보이고 창이 보일 때만 · `start_trades` 는 돌던 랭커 픽을 `cancel()`(거래 → 랭커 픽 순). 양보 대상에 랭커 기록 로더도 넣는다(2회차 B).
   오픈API 를 쓰는 다른 로더(검색 · 구단주 비교 · 거래 받기)가 돌면 랭커마다 사이에서 멈추고 양보(`TradeLoader` 와 같은 규칙).
   **오픈API 백그라운드 로더는 한 번에 하나**: 거래 → 랭커 픽 순. 429 를 받으면 그날 멈춘다(키 입력 창으로 보내지 않는다 — `quota_hit` 아님).
 - **화면**: [픽] 팀컬러·포메이션 비율 · 포지션 줄별 많이 쓴 카드(강화 분포 막대) · "200명 중 N명 · 최근 `RANKER_PICK_MAX_AGE_DAYS`(초안 14)일 경기" — **마지막 경기가 그보다 오래된 랭커는 집계에서 뺀다**(1회차 B — 받은 날이 아니라 경기 날) · 표본 흐림 규칙(1.2.1) 그대로.
-  오늘 한도에 걸렸으면 "오늘 한도 — N/200, 내일 이어서"(429 를 받았으면 "넥슨 호출 한도에 걸려 오늘은 멈춤").
+  오늘 한도에 걸렸으면 "오늘 한도 — N/200, 내일 이어서"(429 로 멈췄으면 "넥슨 호출 한도에 걸려 오늘은 멈춤").
+  막힌 이유를 늘 한 줄로 — 수집 꺼짐 "랭킹 수집을 켜면…" · 동의 전 **"새 이용 안내에 동의해야 켜집니다 [안내 보기]"**(누르면 `ask_notice_update()` — 2회차 B) · 스냅숏 없음 · 오늘 한도.
   "내 스쿼드 vs 랭커" — 내 최근 경기 선발을 v2 축구장에, 칩마다 그 카드의 랭커 픽률(같은 줄). [추천] 탭은 17단계.
 
 ### P2 랭킹 추이 (17단계)
@@ -309,15 +316,18 @@
 
 ### 하루 요청 · 동의 · 보관 (1회차 [상] 반영)
 
-- **`api_budget(day TEXT, kind TEXT, attempts INTEGER, hit_429 INTEGER, PRIMARY KEY(day, kind))`**(fifa.db) — 재시작해도 남는다. 종류: `ranker_pick` · `card_ledger` · `card_chip`.
-  **요청 직전에** 그날 수를 1 더하고(커밋) 상한을 넘으면 안 보낸다. 지금 시세 상한(`card_prices_fetched_on` — 저장 수)은 이걸로 바꾼다(빈 시세 응답이 실행마다 새던 구멍).
-- 랭커 픽 로더는 **`_get` 의 재시도를 끄고**(`attempts=1` — 재시도도 하루 한도를 먹는데 계수에 안 잡힌다, nexon_api.py:124) 요청 사이 **0.25초 이상**(개발 단계 키 초당 5 미만 — 초당 429 와 하루 429 가 같은 `OPENAPI00007` 이라 구분 못 한다).
-  429 를 받으면 `hit_429` = 1 → 그날 랭커 픽은 다시 안 띄운다. **다른 로더(검색·거래·랭커 기록)가 그날 429 를 받았어도 랭커 픽은 시작하지 않는다**(내 검색이 먼저 — 그 로더들이 `api_budget` 의 `openapi` 줄에 적는다).
-- **동의 게이트**: `RANKER_PICK_NOTICE_VERSION` · `CHIP_NOTICE_VERSION` = 5(지금 `NOTICE_VERSION` 4 → 5) — `track_allowed`·`price_auto_allowed`(config.py:307·312)와 같은 꼴. 옛 동의자(2~4)는 다시 묻는 창에서 5 에 동의하기 전까지 둘 다 꺼짐.
-  안내 문구는 **기능이 들어오는 단계에서** 쓴다(칩 15 · 랭커 픽·색인 16) — 17단계에 몰지 않는다(그 사이 배포가 없어도 문구와 기능이 같이 커밋되게).
-- **보관·지우기**(지금 안내: "다른 구단주 원본 14일 · 수집 기록 지우기로 지움" — notice.py:62~70): 랭커 픽 데이터도 같은 약속 안에 —
-  `ranker_squads` 와 `ranker_matches` 의 경기 중 **검색한 계정(`accounts`)과 안 닿는 것**(그 경기의 `match_players` 에 검색한 계정이 없음)과 그 색인 행은 **14일**(`RANK_RAW_KEEP_DAYS`) 뒤 지운다.
-  [수집 기록 지우기]·랭킹 수집 끄기도 같이 지운다(E12). 12 색인(내 DB 의 상대)은 이 PC 의 경기 기록으로 만드는 색인이라 경기와 같이 산다 — 안내에 "이 PC 의 경기 기록으로 카드 → 구단주 색인을 만든다 · 밖으로 안 보냄"을 적는다.
+- **`api_budget(day TEXT, kind TEXT, attempts INTEGER, hit_429 INTEGER, PRIMARY KEY(day, kind))`**(fifa.db) — 재시작해도 남는다. 종류: `ranker_pick` · `card_ledger` · `card_chip` · `openapi`(다른 로더의 429 표시만).
+  **실제로 HTTP 요청을 보내기 직전에만** 그날 수를 1 더하고(커밋) 상한을 넘으면 안 보낸다 — `.cache`·`matches` 적중·`WEB_DATA` 꺼짐(예외)은 0(2회차 A). 지금 시세 상한(`card_prices_fetched_on` — 저장 수)은 이걸로 바꾼다(빈 시세 응답이 실행마다 새던 구멍).
+- 랭커 픽 로더는 **`_get` 의 재시도를 끄고**(`attempts=1` — 재시도도 하루 한도를 먹는데 계수에 안 잡힌다, nexon_api.py:124) 요청 사이 **0.25초 이상**(개발 단계 키 초당 5 미만).
+  초당 429 와 하루 429 가 같은 `OPENAPI00007` 이라 구분 못 한다 → 랭커 픽이 429 를 받으면 **60초 쉬고 한 번 더**, 또 429 면 `hit_429` = 1 → 그날 다시 안 띄운다(2회차 B).
+  다른 로더(검색 `MatchLoader` · `TradeLoader` · `RankerStatsLoader`)는 **재시도 끝에 실패로 올라온 최종 429 만** `openapi` 줄에 적는다(app_main.py:540 의 그 자리 — 재시도로 넘어간 초당 429 · `throttled` 는 안 적는다: 개발 단계 키의 큰 검색에서 늘 나 그날 랭커 픽이 꺼진다). 그 줄이 있으면 랭커 픽은 그날 시작하지 않는다(내 검색이 먼저).
+- **동의 게이트**: `RANKER_PICK_NOTICE_VERSION` · `CHIP_NOTICE_VERSION` = 5(지금 `NOTICE_VERSION` 4 → 5) — `track_allowed`·`price_auto_allowed`(config.py:307·312)와 같은 꼴. 옛 동의자(2~4)는 다시 묻는 창에서 5 에 동의하기 전까지 둘 다 꺼짐(화면에 이유 — 위).
+  안내 본문과 다시 묻는 창의 **"이번에 바뀐 점"(`notice.CHANGES_HTML`, notice.py:86)**을 기능이 들어오는 단계에서 고친다(칩 15 · 랭커 픽·색인 16). 15·16 이 같은 5 를 쓰므로 **최종 문구는 17단계 공개 직전에 확정**하고, 개발 중 5 에 동의한 사람(개발자)은 그때 문구를 다시 본다(재지 않은 것 아님 — 17단계 체크 줄).
+- **보관·지우기**(지금 안내: "다른 구단주 원본 14일 · 수집 기록 지우기로 지움" — notice.py:62~70). **지우는 단위는 "검색한 계정(`accounts`)과 안 닿는 랭커 픽 경기"** — 그 경기의 `match_players` 에 검색한 계정이 없는 `ranker_matches` 경기. 지울 때 같이:
+  `matches` 줄 · 그 경기의 `match_players` 줄 · `.cache` 파일 · `squad_match`·`match_squads` 줄 → 그 뒤 **남은 `match_squads` 가 하나도 가리키지 않는 `squad_owner` 줄**(단 `accounts` 의 계정은 남김) · 그 경기를 가리키던 `ranker_squads` 줄(2회차 A·B [상]).
+  - **언제**: ① 앱을 켤 때 **토글과 무관하게** `ranker_matches.fetched_on` 14일(`RANK_RAW_KEEP_DAYS`) 지난 것 · `ranker_squads` 는 `fetched_at` 14일 지났거나 상위 200 밖으로 나간 랭커 ② 끄는 길 넷과 [수집 기록 지우기] — 전부(E12). 정리를 수집 회차·랭커 픽 로더에 걸면 꺼진 동안 영영 안 돈다(2회차 B).
+  - **전제**: 검색한 계정은 `accounts` 에서 빠지지 않는다 — `store.remove_account`(store.py:375)는 지금 부르는 곳이 없다. 누가 부르기 시작하면 그 계정 경기가 정리 대상이 된다 → 부르는 곳이 생기면 이 규칙을 다시 본다(`test_remove_account_unused` — 부르는 곳 0 을 단언).
+  - 12 색인(내 DB 의 상대)은 이 PC 의 경기 기록으로 만드는 색인이라 경기와 같이 산다 — 안내에 "이 PC 의 경기 기록으로 카드 → 구단주 색인을 만든다 · 밖으로 안 보냄"을 적는다.
 
 ### 진입점 표 (⑩)
 
@@ -332,10 +342,11 @@
 | E7 | 경기 저장(`save_matches` — 검색·비교·랭커 픽) | 같은 커밋에서 `match_squads` · 경기마다 방어 · 0명도 `squad_match` · `OR IGNORE` | `test_save_indexes_squads`(몰수 경기 · 깨진 경기 하나 섞기) |
 | E8 | 백필 | 검색·로더가 없을 때 · 첫 화면 30초 뒤(트레이 시작이면 2분) · 1,000경기 트랜잭션 · 진행 N/M 노출 · `shutdown` 정리 표 | `test_backfill_resumes_and_skips_indexed` |
 | E9 | 랭커 픽 시작(탭 열기 · 재개) | **`ranker_pick_allowed()`**(랭킹 수집 켜짐 `RankCollectScheduler.can_run` + `NOTICE_ACCEPTED >= RANKER_PICK_NOTICE_VERSION`) · 탭과 창이 보임 · 오늘 `api_budget` 에 429 없음·300 미만 · 오픈API 백그라운드 로더 하나 | `test_ranker_pick_gate`(**수집 끄고 스냅숏 남긴 채 탭 열기 → 요청 0** · 옛 동의 4 → 0) · `test_ranker_pick_only_while_visible`(메뉴 이동·숨김·최소화) |
-| E9b | 랭커 픽 재개 | 검색·비교·거래 `finished` → E9 조건 다시 | `test_ranker_pick_resumes_after_yield` |
-| E10 | 카드 상세 요청(`fetch_player_info`) | `WEB_DATA` · `web_get` · 쓰임별 계수(사용자 연 카드 = 없음 · 가계부 80 · 칩 `CHIP_FETCH_MAX`) · 칩은 `chip_auto_allowed()` | `test_web_data_switch_*` · `test_card_budget_per_use`(실행 두 번 + 빈 시세 응답 → 상한 지킴) |
+| E9b | 랭커 픽 재개 | 검색·비교·거래·랭커 기록 `finished` · 창 다시 보임(`showEvent` · 최소화 풀림 · 트레이 [열기]) → E9 조건 다시 | `test_ranker_pick_resumes_after_yield` · `test_ranker_pick_only_while_visible`(숨김 → 보임 → 다시 받음) |
+| E10 | 카드 상세 요청(`fetch_player_info`) | `WEB_DATA` · `web_get` · 쓰임별 계수(사용자 연 카드 = 없음 · 가계부 80 · 칩 `CHIP_FETCH_MAX`) · **실제 요청만 계수** · 칩은 `chip_auto_allowed()` | `test_web_data_switch_*` · `test_card_budget_per_use`(실행 두 번 + 빈 시세 응답 → 상한 지킴 · 웹 데이터 꺼짐·캐시 적중 → 계수 0) |
 | E11 | 앱 종료·트레이 내려놓기(`shutdown`) | 새 워커 셋(`RankerPickLoader` · 백필 · `CardInfoLoader`)이 정리 표에 | `test_shutdown_stops_all_workers`(표 대조) |
-| E12 | [수집 기록 지우기] · 랭킹 수집 끄기 | rank.db 삭제 + **랭커 픽 데이터 삭제**(`ranker_squads` · 검색한 계정과 안 닿는 `ranker_matches` 경기와 그 색인 행) | `test_clear_removes_ranker_pick_data` |
+| E12 | 랭커 픽 데이터 지우기 — [수집 기록 지우기] · 수집 끄기 넷([정보] 토글 · 홈페이지 데이터 끄기 · D6 스스로 끔 · 다시 묻는 창에서 체크 해제) · 앱 켤 때 14일 정리 | 위 "보관·지우기"의 전체 범위 | `test_clear_removes_ranker_pick_data` — **지우기 전에 그 랭커 닉네임·ouid 가 있음을 먼저 단언**하고, 지운 뒤 **fifa.db 모든 표**에서 0건(검색한 계정·내 상대는 남음) · 끄는 길 넷 각각 |
+| E13 | 오픈API 최종 429(검색·거래·랭커 기록) | 재시도 끝 최종 429 만 `api_budget` `openapi` 줄 — 재시도로 넘어간 것은 안 적음 | `test_final_429_recorded_per_loader`(로더마다 · 재시도 성공 429 는 안 적힘) |
 
 ### 환경 행렬 (③)
 
