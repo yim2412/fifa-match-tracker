@@ -667,6 +667,12 @@ def trade_latest(conn: sqlite3.Connection, kind: str | None = None) -> str | Non
     return conn.execute("SELECT MAX(trade_date) FROM trades WHERE kind = ?", (kind,)).fetchone()[0]
 
 
+def load_trades(conn: sqlite3.Connection) -> list[dict]:
+    """거래 전부(순서 없음 — 정렬은 squad_timeline.parse_trades 가. ORDER BY 는 임시 정렬을 만든다, test_rules)."""
+    return [dict(r) for r in conn.execute(
+        "SELECT kind, sale_sn, trade_date, spid, grade, value FROM trades")]
+
+
 def bought_cards(conn: sqlite3.Connection) -> set[tuple[int, int]]:
     """산 적 있는 (카드, 강화) — 내 계정 힌트(R2 · (카드, 강화) 단위)."""
     # DISTINCT 는 SQL 대신 집합으로 — 임시 정렬(TEMP B-TREE)을 안 만든다(test_rules)

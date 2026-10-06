@@ -223,6 +223,21 @@ def test_trade_duplicates_and_bad_rows():
     assert tuple(row) == (None, None, 7), tuple(row)
 
 
+def test_load_trades_feeds_timeline():
+    """저장된 거래 → 타임라인 입력(시간순 · 같은 초면 구매 먼저) — 가계부의 짝이 여기서 시작한다."""
+    import squad_timeline
+    c = _db()
+    store.save_trades(c, "sell", [{"tradeDate": "2026-09-01T10:00:00", "saleSn": "s1", "spid": 7, "grade": 3,
+                                   "value": 500}])
+    store.save_trades(c, "buy", [{"tradeDate": "2026-09-01T10:00:00", "saleSn": "b1", "spid": 7, "grade": 3,
+                                  "value": 200}, {"tradeDate": "2026-08-01T10:00:00", "saleSn": "b0", "spid": 8,
+                                                  "grade": 1, "value": 10}])
+    trades = squad_timeline.parse_trades(store.load_trades(c))
+    assert [t.sale_sn for t in trades] == ["b0", "b1", "s1"], trades
+    pairs, orphans, left = squad_timeline.fifo_pairs(trades)
+    assert [p.profit for p in pairs] == [300] and not orphans and list(left) == [8]
+
+
 def test_bought_cards_for_hint():
     c = _db()
     store.save_trades(c, "buy", [{"tradeDate": "2026-09-01T00:00:00", "saleSn": "1", "spid": 7, "grade": 5, "value": 1}])

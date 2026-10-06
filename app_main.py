@@ -1437,7 +1437,9 @@ class MainWindow(QMainWindow):
         self._trade_loader: TradeLoader | None = None
         self._trade_again = False
         self._trade_result: tradecollect.TradeResult | None = None  # 마지막 받기 결과 — 거래 화면 상태 줄
-        self._price_loader: PriceLoader | None = None  # 12단계 가계부가 띄운다 — 정리 표에는 지금부터
+        self._price_loader: PriceLoader | None = None  # 가계부를 그릴 때 — 보유·최근 구매 카드 시세(하루 캐시)
+        self._price_tried_on: str | None = None        # 오늘 이미 띄웠다 — 다 그린 뒤 다시 그려도 또 띄우지 않게
+        self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
@@ -2168,8 +2170,9 @@ class MainWindow(QMainWindow):
                  ("포지션별 최다 상대", "_build_position_opp_tab")]),
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
-        # 1.4.1 — 11단계는 내 계정 지정 띠·거래 받기 상태만, 12단계에서 타임라인·가계부 표가 들어온다
-        ("스쿼드·이적", [("이적시장 가계부", "_build_ledger_tab")]),
+        # 1.4.1 — 1.x 라 페이지 안 탭 대신 메뉴 두 줄(2.1.1 에서 탭으로)
+        ("스쿼드·이적", [("스쿼드 타임라인", "_build_timeline_tab"),
+                      ("이적시장 가계부", "_build_ledger_tab")]),
     ]
 
     def _build_main_page(self) -> QWidget:
@@ -3138,12 +3141,242 @@ class MainWindow(QMainWindow):
         self.lb_trade_status = QLabel("")
         self.lb_trade_status.setWordWrap(True)
         v.addWidget(self.lb_trade_status)
-        note = QLabel("가계부 표(산 값 · 판 값 · 손익)는 준비 중입니다 — 지금은 거래 기록을 모아 둡니다.")
-        note.setWordWrap(True)
-        note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(note)
-        v.addStretch(1)
+        # 가계부 본문 — 내 계정으로 확정되고 지금 키의 거래일 때만 보인다
+        self.box_ledger = QWidget()
+        lv = QVBoxLayout(self.box_ledger)
+        lv.setContentsMargins(0, 0, 0, 0)
+        self.lb_ledger_note = QLabel("")
+        self.lb_ledger_note.setWordWrap(True)
+        self.lb_ledger_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lv.addWidget(self.lb_ledger_note)
+        sums = Card()
+        grid = QGridLayout()
+        self.lb_ledger = {}
+        for r, (key, name) in enumerate(self.LEDGER_ROWS):
+            a = QLabel(name)
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            b = QLabel("-")
+            b.setWordWrap(True)
+            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            grid.addWidget(a, r, 0)
+            grid.addWidget(b, r, 1)
+            self.lb_ledger[key] = b
+        grid.setColumnStretch(1, 1)
+        sums.body.addLayout(grid)
+        lv.addWidget(sums)
+        self.tbl_ledger = self._make_table(self.LEDGER_COLUMNS)
+        lv.addWidget(self.tbl_ledger, 1)
+        v.addWidget(self.box_ledger, 1)
         return w
+
+    LEDGER_ROWS = [
+        ("spent", "지출"), ("income", "수입"), ("net", "순지출"),
+        ("realized", "실현 손익(판 카드)"), ("no_cost", "취득가 없음 판매"),
+        ("held", "평가 손익 · 보유 중"), ("recent", "최근 구매 · 아직 안 씀"),
+        ("never", "미출전 · 보유 여부 모름"), ("not_recent", "최근 경기에 안 씀 · 보유 여부 모름"),
+    ]
+    LEDGER_COLUMNS = ["선수", "상태", "산 날", "산 강화", "산 값", "지금 강화", "오늘 시세", "평가 손익"]
+    TIMELINE_COLUMNS = ["날짜", "선수", "사건", "강화", "금액",
+                        f"앞 {config.TIMELINE_WINDOW}경기", f"뒤 {config.TIMELINE_WINDOW}경기"]
+    TIMELINE_KINDS = {"buy": "구매", "sell": "판매", "first": "첫 출전", "last": "마지막 출전", "grade": "강화 변화"}
+
+    def _trade_mode(self, st: dict) -> str:
+        """거래 화면의 상태 — checking(키 바뀜, 로더 전) · other(내 계정이 다른 계정) · unconfirmed · unset · mine."""
+        if st.get("key_fp") != store.key_fingerprint(config.API_KEY):
+            return "checking"
+        mine = st.get("my_ouid")
+        if mine and mine != self._ouid:
+            return "other"
+        if not mine:
+            return "unconfirmed" if st.get("my_ouid_unconfirmed") else "unset"
+        return "mine"
+
+    def _invalidate_trades(self) -> None:
+        """거래를 쓰는 화면 전부 — 가계부·타임라인."""
+        self._invalidate("trades")
+        self._invalidate("timeline")
+
+    @staticmethod
+    def _bp(v: int | None, sign: bool = False) -> str:
+        """큰 금액 — 단위 표는 ranker.format_team_value 하나(억·조)를 쓴다."""
+        if v is None:
+            return "-"
+        head = "-" if v < 0 else ("+" if sign and v > 0 else "")
+        return f"{head}{ranker.format_team_value(abs(v))} BP"
+
+    def _timeline_for_screen(self):
+        """(Timeline, 거래 상태) — 타임라인·가계부가 같이 쓴다. 거래는 내 계정으로 확정된 때만 붙인다(남의 경기에 내 거래 금지).
+        1만 경기 계산이 약 0.1초라 화면 스레드에서 하되, 같은 입력이면 다시 안 한다."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                st = store.trade_state(conn)
+                mode = self._trade_mode(st)
+                extra = None
+                if mode == "mine":
+                    extra = (st.get("key_fp"), store.trade_count(conn, "buy"), store.trade_count(conn, "sell"),
+                             store.trade_latest(conn))
+                key = (id(self._details_all), len(self._details_all), self._ouid, mode, extra,
+                       datetime.now().date())
+                if self._timeline_cache is not None and self._timeline_cache[0] == key:
+                    return self._timeline_cache[1], st
+                rows = store.load_trades(conn) if mode == "mine" else None
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None, None
+        trades = core.parse_trades(rows) if rows is not None else None
+        tl = core.build_timeline(self._details_all, self._ouid, trades)
+        self._timeline_cache = (key, tl)
+        return tl, st
+
+    # ── 스쿼드 타임라인 ──
+    def _build_timeline_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_timeline_note = QLabel("")
+        self.lb_timeline_note.setWordWrap(True)
+        self.lb_timeline_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_timeline_note)
+        self.tbl_timeline = self._make_table(self.TIMELINE_COLUMNS)
+        v.addWidget(self.tbl_timeline, 1)
+        return w
+
+    @staticmethod
+    def _window_cell(w) -> tuple[str, float]:
+        if not w.games:
+            return "-", -1.0
+        text = f"{w.win_rate:.0f}% · 득실 {w.gf - w.ga:+d}"
+        if w.weak:
+            text += f" · 표본 {w.games}"
+        return text, w.win_rate
+
+    def _render_timeline(self) -> None:
+        tl, _st = self._timeline_for_screen()
+        win = config.TIMELINE_WINDOW
+        if tl is None:
+            self.lb_timeline_note.setText("거래 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
+            self._fill(self.tbl_timeline, [])
+            return
+        notes = [f"출전은 선발만 · 사건 앞뒤 {win}경기 성적은 그 기간의 성적이지 원인이 아닙니다"]
+        if tl.has_trades:
+            notes.append("거래는 넥슨 반영 기준 · '추정' = 산 기록 없이 들어옴(팩·보상·2022년 1월 27일 전 구매)")
+        else:
+            notes.append("거래 기록은 내 계정에서만 붙습니다 — 지금은 출전 기록만(첫 출전은 전부 '추정')")
+        events = tl.events[:config.TIMELINE_MAX_ROWS]
+        if len(tl.events) > len(events):
+            notes.append(f"최근 {len(events):,}건만 (전체 {len(tl.events):,}건)")
+        self.lb_timeline_note.setText(" · ".join(notes))
+        rows = []
+        for e in events:
+            kind = self.TIMELINE_KINDS.get(e.kind, e.kind)
+            if e.estimated:
+                kind += " (추정)"
+            if e.grade_from is not None:
+                grade = (f"{e.grade_from} → {e.grade_to}", e.grade_to)
+            else:
+                grade = (str(e.grade_to) if e.grade_to is not None else "-", e.grade_to or 0)
+            rows.append([(e.date.strftime("%Y-%m-%d %H:%M"), e.date.timestamp()),
+                         self._names.get(e.spid, str(e.spid)), kind, grade,
+                         (self._bp(e.value), e.value or 0), self._window_cell(e.before), self._window_cell(e.after)])
+        self._fill(self.tbl_timeline, rows, enable_sort=False)
+        min_n = config.TIMELINE_MIN_GAMES
+        for r, e in enumerate(events):
+            for c, w in ((5, e.before), (6, e.after)):
+                item = self.tbl_timeline.item(r, c)
+                if item is None or not w.games:
+                    continue
+                item.setToolTip(f"{w.games}경기 {w.win}승 {w.draw}무 {w.lose}패 · 득점 {w.gf} 실점 {w.ga}"
+                                + (f"\n{sample_note(w.games, min_n)}" if w.weak else ""))
+                if w.weak:  # 표본 흐림 규칙(1.2.1) — 색 + "표본 N"
+                    item.setForeground(QColor(T.TEXT_DIM))
+                    item.setData(Qt.ItemDataRole.UserRole + 1, True)
+        self.tbl_timeline.setSortingEnabled(True)
+
+    # ── 가계부 ──
+    @staticmethod
+    def _valued_text(v, label_cost: str = "산 값") -> str:
+        """평가 묶음 한 줄 — 일부만 시세가 있으면 '보유 N장 중 M장 평가'(부분합을 전체처럼 보이지 않게)."""
+        if not v.count:
+            return "없음"
+        head = f"{v.count}장 · {label_cost} {MainWindow._bp(v.cost)}"
+        if v.gain is None:
+            return head + " · 시세 없음"
+        part = f" · {v.count}장 중 {v.priced}장 평가" if v.priced < v.count else ""
+        return f"{head}{part} · 평가 {MainWindow._bp(v.gain, sign=True)}"
+
+    def _render_ledger(self, st: dict) -> None:
+        tl, st2 = self._timeline_for_screen()
+        if tl is None or not tl.has_trades:
+            self.box_ledger.setVisible(False)
+            return
+        self.box_ledger.setVisible(True)
+        complete = tradecollect.is_complete(st2 or st)
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                prices = store.load_card_prices(conn, [h.trade.spid for h in tl.holdings])
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            prices = {}
+        selected = self.cb_season.currentData()
+        scope = None if selected is None else (lambda d: self._in_selected_season(d, selected))
+        lg = core.ledger(tl, prices, in_scope=scope, complete=complete)
+        self.lb_ledger_note.setText(
+            f"이적시장 기준(강화 비용 제외) · 지출·수입·실현 손익은 {self._scope_text()} · "
+            "짝은 같은 카드를 먼저 산 것부터 맞춘 추정 · 평가는 홈페이지 오늘 시세라 판매 금액과 합치지 않습니다 · "
+            f"보유는 최근 {tl.games_basis}경기 출전 기준")
+        L = self.lb_ledger
+        L["spent"].setText(f"{self._bp(lg.spent)} (구매 {lg.spent_n:,}건)")
+        L["income"].setText(f"{self._bp(lg.income)} (판매 {lg.income_n:,}건)")
+        L["net"].setText(self._bp(lg.net, sign=True))
+        if lg.realized is None:
+            L["realized"].setText("거래 기록을 받는 중 — 옛 거래를 다 받으면 나옵니다")
+            L["no_cost"].setText("거래 기록을 받는 중")
+        else:
+            L["realized"].setText(f"{self._bp(lg.realized, sign=True)} (짝 맞은 판매 {lg.realized_n:,}건)")
+            L["no_cost"].setText(f"{self._bp(lg.no_cost)} ({lg.no_cost_n:,}건 · 팩·보상·기록 전 구매)")
+        running = self._price_loader is not None and self._price_loader.isRunning()
+        held = self._valued_text(lg.held)
+        if lg.held.count and lg.held.priced < lg.held.count:
+            if not config.WEB_DATA:
+                held += " — 시세 없음(홈페이지 데이터 꺼짐)"
+            elif running:
+                held += " — 시세 읽는 중…"
+        L["held"].setText(held)
+        L["recent"].setText(self._valued_text(lg.recent) + " (합계에 안 넣음)")
+        for key, status in (("never", core.NEVER_PLAYED), ("not_recent", core.NOT_RECENT)):
+            n, cost = lg.unknown.get(status, (0, 0))
+            L[key].setText(f"{n:,}장 · 산 값 {self._bp(cost)} (평가 안 함)" if n else "없음")
+        rows = []
+        for group, status in ((lg.held, "보유 중"), (lg.recent, "최근 구매")):
+            for h, price in group.rows:
+                t = h.trade
+                now = h.cur_grade if h.cur_grade is not None else t.grade
+                gain = None if price is None or t.value is None else price - t.value
+                rows.append([self._names.get(t.spid, str(t.spid)), status,
+                             (t.date.strftime("%Y-%m-%d"), t.date.timestamp()), (str(t.grade or "-"), t.grade or 0),
+                             (self._bp(t.value), t.value or 0), (str(now or "-"), now or 0),
+                             (self._bp(price), price or 0), (self._bp(gain, sign=True), gain or 0)])
+        self._fill(self.tbl_ledger, rows)
+        self._maybe_start_prices(tl)
+
+    def _maybe_start_prices(self, tl) -> None:
+        """가계부를 그릴 때 하루 한 번 — 보유·최근 구매 카드 시세(동의 4 + 웹 데이터 뒤). 거래 받기가 돌면 그 끝(다시 그림) 뒤로."""
+        if not config.price_auto_allowed() or self._quitting:
+            return
+        if any(t is not None and t.isRunning() for t in (self._price_loader, self._trade_loader)):
+            return
+        today = datetime.now().date().isoformat()
+        targets = core.price_targets(tl)
+        if self._price_tried_on == today or not targets:
+            return
+        self._price_tried_on = today
+        ld = PriceLoader(targets)
+        ld.finished.connect(lambda: self._invalidate("trades"))
+        self._price_loader = ld
+        ld.start()
 
     def _trade_snapshot(self) -> dict | None:
         """거래 화면이 그릴 상태 — 작은 표 몇 줄이라 화면 스레드에서 읽는다(거래 본문은 힌트용 (카드, 강화)만)."""
@@ -3174,18 +3407,19 @@ class MainWindow(QMainWindow):
             st, names = snap["state"], snap["names"]
             mine, unconf = st.get("my_ouid"), st.get("my_ouid_unconfirmed")
             running = self._trade_loader is not None and self._trade_loader.isRunning()
-            if st.get("key_fp") != store.key_fingerprint(config.API_KEY):
+            mode = self._trade_mode(st)
+            if mode == "checking":
                 # 로더가 아직 새 키를 못 봤다 — 옛 주인 거래를 새 주인 것으로 읽지 않게 아무것도 안 붙인다
                 banner = "API 키 확인 중 — 거래 기록을 이 키 주인 것으로 다시 맞추고 있습니다."
-            elif mine and mine != self._ouid:
+            elif mode == "other":
                 banner = f"거래 기록은 내 계정({names.get(mine)})에서만 볼 수 있습니다."
                 buttons["change"] = True
             else:
-                if not mine and unconf:
+                if mode == "unconfirmed":
                     banner = f"API 키가 바뀌었습니다. 내 계정이 {names.get(unconf)} 맞나요?"
                     buttons["yes"] = buttons["change"] = True
                     hint = self._trade_hint_text(snap["bought"], unconf, again=True)
-                elif not mine:
+                elif mode == "unset":
                     banner = (f"거래 기록은 API 키 주인 계정 것만 나옵니다. 이 계정({self._nick})이 내 계정인가요?")
                     buttons["mine"] = True
                     hint = self._trade_hint_text(snap["bought"], self._ouid, again=False)
@@ -3201,6 +3435,10 @@ class MainWindow(QMainWindow):
         self.lb_trade_hint.setVisible(bool(hint))
         self.lb_trade_status.setText(status)
         self.lb_trade_status.setVisible(bool(status))
+        if snap is not None:
+            self._render_ledger(snap["state"])  # 내 계정이 아니면 그 안에서 숨긴다(거래를 붙이는 판정이 한 곳에)
+        else:
+            self.box_ledger.setVisible(False)
 
     def _trade_hint_text(self, bought, ouid: str, again: bool) -> str:
         """R2 점수 — (카드, 강화) 단위. 판정이 아니라 참고. 옛 거래를 다 못 받았으면 숫자를 안 낸다."""
@@ -3250,7 +3488,7 @@ class MainWindow(QMainWindow):
                 conn.close()
         except sqlite3.Error as e:
             self.statusBar().showMessage(f"내 계정을 저장하지 못했습니다: {e}", 5000)
-        self._invalidate("trades")
+        self._invalidate_trades()
 
     def _on_trade_mine(self) -> None:
         if self._ouid:
@@ -3291,13 +3529,13 @@ class MainWindow(QMainWindow):
             self._trade_loader.cancel()
 
     def _on_trades_wiped(self) -> None:
-        self._invalidate("trades")  # 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게(12단계 메뉴도 여기에)
+        self._invalidate_trades()  # 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게
 
     def _on_trades_done(self, res) -> None:
         self._trade_result = res  # 그리기는 스레드가 끝난 뒤(finished) — 여기선 아직 isRunning 이라 "받는 중"으로 남는다
 
     def _on_trade_thread_finished(self) -> None:
-        self._invalidate("trades")
+        self._invalidate_trades()
         if self._trade_again:
             self.start_trades()
 
@@ -3683,7 +3921,7 @@ class MainWindow(QMainWindow):
             # 거래는 키 주인 것 — 새 키로 바로 다시 맞춘다("API 키 확인 중"이 다음 검색까지 안 풀리지 않게)
             self._yield_trades()
             self.start_trades()
-            self._invalidate("trades")
+            self._invalidate_trades()
 
     def _render_compare(self, opp_nick: str, opp_matches: list[MatchSummary],
                         opp_ouid: str, opp_details: list[dict]) -> None:
@@ -4205,7 +4443,7 @@ class MainWindow(QMainWindow):
         "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing",
         "포지션별 최다 상대": "teamcolor",
         "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
-        "이적시장 가계부": "trades",
+        "스쿼드 타임라인": "timeline", "이적시장 가계부": "trades",
     }
     # 위 표 밖의 메뉴 — 이유 없이 빠진 메뉴는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
     PAGE_RENDER_EXEMPT = {
@@ -4233,7 +4471,9 @@ class MainWindow(QMainWindow):
             "shotmap": self._render_shotmap,  # 표시 구간
             "finishing": lambda: self._render_finishing(self._slice()[1]),
             "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위
-            "trades": self._render_trades,  # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기
+            # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기. 가계부 합계만 시즌 범위(짝은 전체로 맞춘 뒤)
+            "trades": self._render_trades,
+            "timeline": self._render_timeline,  # 누적 전체 — 짝·보유 상태는 전체 이력으로 맞춘다
         }
 
     def _render_all(self) -> None:

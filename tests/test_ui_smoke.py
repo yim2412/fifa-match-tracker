@@ -403,7 +403,7 @@ def test_no_table_elides_at_min_or_default_size():
     # 폭을 잡으면 "승률▾" 이 겹쳤다.
     import widgets
     tables = [t for t in _win.findChildren(widgets.FitTableWidget)]
-    assert len(tables) == 10, len(tables)  # 11번째(포지션 선수 다이얼로그)는 열 때 생긴다
+    assert len(tables) == 12, len(tables)  # 13번째(포지션 선수 다이얼로그)는 열 때 생긴다
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -5093,6 +5093,151 @@ def _trade_view():
 def test_trade_page_in_nav():
     names = [n for _g, items in app_main.MainWindow.NAV for n, _b in items]
     assert "이적시장 가계부" in names and app_main.MainWindow.PAGE_RENDER_KEYS["이적시장 가계부"] == "trades"
+    assert "스쿼드 타임라인" in names and app_main.MainWindow.PAGE_RENDER_KEYS["스쿼드 타임라인"] == "timeline"
+
+
+def _my_starters(n=3):
+    me = next(p for p in _DETAILS[0]["matchInfo"] if p.get("ouid") == _OUID)
+    return [(p["spId"], p["spGrade"]) for p in me["player"] if p.get("spPosition") != 28][:n]
+
+
+def test_timeline_trades_only_for_my_account():
+    """타임라인 — 거래는 내 계정으로 정했을 때만 붙는다(남의 경기에 내 거래 금지)."""
+    with _TradeKey() as k:
+        k.ready(bought=_my_starters(2))
+        _win._render_timeline()
+        rows = _win.tbl_timeline.rowCount()
+        kinds = {_win.tbl_timeline.item(r, 2).text() for r in range(rows)}
+        assert rows and "구매" not in kinds and "내 계정에서만" in _win.lb_timeline_note.text(), (kinds,)
+        assert all("추정" in t for t in kinds if t.startswith("첫 출전")), kinds
+        k.state(my_ouid=_OUID)
+        _win._render_timeline()
+        kinds = {_win.tbl_timeline.item(r, 2).text() for r in range(_win.tbl_timeline.rowCount())}
+        assert "구매" in kinds and "내 계정에서만" not in _win.lb_timeline_note.text(), kinds
+
+
+def test_trade_events_redraw_timeline():
+    """거래가 바뀌는 길(받기 끝 · 지움 · 내 계정 지정)은 타임라인도 다시 그린다 — 가계부만 다시 그리면 타임라인에 옛 거래가 남는다."""
+    keep = _win._trade_again
+    try:
+        with _TradeKey() as k:
+            k.ready(bought=_my_starters(2))
+            _win._render_timeline()
+            kinds = {_win.tbl_timeline.item(r, 2).text() for r in range(_win.tbl_timeline.rowCount())}
+            assert "구매" not in kinds, kinds
+            k.state(my_ouid=_OUID)                     # 다른 실행본이 정했거나 받기가 끝난 것처럼 — DB 만 바뀜
+            _win._trade_again = False
+            _win._on_trade_thread_finished()
+            kinds = {_win.tbl_timeline.item(r, 2).text() for r in range(_win.tbl_timeline.rowCount())}
+            assert "구매" in kinds, "거래 받기가 끝났는데 타임라인이 그대로다"
+    finally:
+        _win._trade_again = keep
+
+
+def test_ledger_only_for_my_account():
+    with _TradeKey() as k:
+        k.ready(bought=_my_starters(2))
+        _trade_view()
+        assert _win.box_ledger.isHidden(), "내 계정을 정하기 전에 가계부가 보였다"
+        k.state(my_ouid=_OUID)
+        _trade_view()
+        assert not _win.box_ledger.isHidden()
+        assert "구매 2건" in _win.lb_ledger["spent"].text(), _win.lb_ledger["spent"].text()
+        assert "판매 1건" in _win.lb_ledger["income"].text()
+        assert "취득가" not in _win.lb_ledger["realized"].text()
+        k.state(key_fp=store.key_fingerprint("other-key"))        # 키가 바뀌었는데 로더 전 — 옛 주인 가계부 금지
+        _trade_view()
+        assert _win.box_ledger.isHidden()
+
+
+def test_ledger_incomplete_blanks_realized():
+    with _TradeKey() as k:
+        k.ready(bought=_my_starters(1), my_ouid=_OUID)
+        k.state(done_sell=None)                                    # 옛 판매를 아직 다 못 받음
+        _trade_view()
+        assert "받는 중" in _win.lb_ledger["realized"].text(), _win.lb_ledger["realized"].text()
+
+
+def test_price_partial_label():
+    v = core.ledger(core.build_timeline([], "x", []), {}).held   # 빈 묶음
+    assert app_main.MainWindow._valued_text(v) == "없음"
+
+    class _V:
+        count, priced, cost, gain = 3, 1, 300, 50
+    text = app_main.MainWindow._valued_text(_V())
+    assert "3장 중 1장 평가" in text and "+" in text, text   # 부분합을 전체처럼 보이지 않게
+
+
+class _FakePriceLoader:
+    made: list = []
+
+    def __init__(self, spids):
+        self.spids = list(spids)
+        self.finished = _Sig()
+        _FakePriceLoader.made.append(self)
+
+    def start(self):
+        pass
+
+    def isRunning(self):
+        return False
+
+
+class _Sig:
+    def __init__(self):
+        self.slots = []
+
+    def connect(self, fn):
+        self.slots.append(fn)
+
+    def emit(self):
+        for fn in self.slots:
+            fn()
+
+
+def test_price_loader_targets_held_only():
+    """가계부를 그릴 때 시세는 보유 중·최근 구매 카드만 — 동의·웹 데이터 뒤, 거래 받기가 도는 동안은 미룬다."""
+    keep = (app_main.PriceLoader, config.price_auto_allowed, _win._price_tried_on, _win._price_loader, _win._trade_loader)
+    app_main.PriceLoader = _FakePriceLoader
+    _FakePriceLoader.made = []
+    try:
+        with _TradeKey() as k:
+            held = _my_starters(2)
+            k.ready(bought=held, my_ouid=_OUID)
+            c = store.open_db(config.DB_PATH)
+            store.save_trades(c, "buy", [{"tradeDate": "2023-01-01T10:00:00", "saleSn": "never", "spid": 77,
+                                          "grade": 1, "value": 5}])   # 산 뒤 한 번도 안 씀 — 시세 안 읽는다
+            c.close()
+            config.price_auto_allowed = lambda: False
+            _win._price_tried_on = None
+            _trade_view()
+            assert not _FakePriceLoader.made, "동의·웹 데이터 없이 시세를 읽었다"
+            config.price_auto_allowed = lambda: True
+
+            class _Busy:
+                def isRunning(self):
+                    return True
+            _win._trade_loader = _Busy()
+            _trade_view()
+            assert not _FakePriceLoader.made, "거래 받기가 도는 중에 시세를 띄웠다"
+            _win._trade_loader = None
+            _trade_view()
+            assert len(_FakePriceLoader.made) == 1, _FakePriceLoader.made
+            assert set(_FakePriceLoader.made[0].spids) == {s for s, _ in held}, _FakePriceLoader.made[0].spids
+            _trade_view()
+            assert len(_FakePriceLoader.made) == 1, "같은 날 다시 그릴 때 또 띄웠다"
+            # 시세를 다 읽으면 가계부를 다시 그린다 — 안 그러면 "시세 없음"이 다음 검색까지 남는다
+            assert "시세 없음" in _win.lb_ledger["recent"].text(), _win.lb_ledger["recent"].text()  # 09-30 구매 = 최근 구매
+            c = store.open_db(config.DB_PATH)
+            for s, _g in held:
+                store.save_card_prices(c, s, {g: 10 ** 12 for g in range(1, 14)}, datetime.now().date().isoformat())
+            c.close()
+            _win._dirty.discard("trades")
+            _FakePriceLoader.made[0].finished.emit()
+            assert "평가 " in _win.lb_ledger["recent"].text(), _win.lb_ledger["recent"].text()
+    finally:
+        (app_main.PriceLoader, config.price_auto_allowed, _win._price_tried_on, _win._price_loader,
+         _win._trade_loader) = keep
 
 
 def test_my_account_banner():
@@ -5213,8 +5358,10 @@ def test_trade_wipe_clears_screen():
             k.ready(bought=_my_cards(2), my_ouid=_OUID)
             _win._go_page("대시보드")
             _win._dirty.discard("trades")
+            _win._dirty.discard("timeline")
             _win._on_trades_wiped()
             assert "trades" in _win._dirty, "보이지 않는 거래 화면을 낡음으로 안 표시했다"
+            assert "timeline" in _win._dirty, "타임라인이 옛 주인 거래를 들고 있다"
             _win._go_page("이적시장 가계부")      # 열면 다시 그린다
             assert "trades" not in _win._dirty
             assert _win.lb_trade_banner.text().startswith("내 계정:"), _win.lb_trade_banner.text()

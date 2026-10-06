@@ -198,6 +198,12 @@ TRADE_OVERLAP_DAYS = 7              # 위쪽(새 거래) 받기를 저장된 최
 # 카드 시세 캐시(B · card_prices) — 가계부 평가용 자동 읽기의 하루 상한(카드 수 = 홈페이지 요청 수).
 # 2026-10-06 실측(키 주인 계정): 평가 대상 후보 = 최근 50경기 카드 18 + 최근 14일 구매 67 = 최대 76장 → 하루 한 번에 다 읽히게
 PRICE_FETCH_MAX = 80
+# 스쿼드 타임라인 · 가계부(12단계 · squad_timeline.py · trade_book.py) — 출전은 선발만(교체 명단 28 은 안 센다)
+HOLD_RECENT_GAMES = 50              # 이 경기 수 안에 출전한 카드 = 보유 중
+HOLD_GRACE_DAYS = 14                # 산 지 이만큼 안이면 "최근 구매 · 아직 안 씀"(평가 합계에 안 넣고 따로 소계)
+TIMELINE_WINDOW = 20                # 사건 앞뒤 이만큼 경기의 승률·득실
+TIMELINE_MIN_GAMES = 10             # 앞뒤 경기가 이보다 적으면 흐림(표본 흐림 규칙 — 1.2.1)
+TIMELINE_MAX_ROWS = 1000            # 사건 표는 최근 이만큼 — 표 채우기·열 폭 재기가 줄 수에 비례한다
 
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)

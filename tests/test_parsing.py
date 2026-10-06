@@ -1392,7 +1392,7 @@ def test_player_parsing_missing_parts():
 
 # ── 화면 ↔ 분석 경계(19단계, 2026-10-05) — 화면은 계산을 core_api 로만 ─────────────────────
 UI_FILES = ("app_main.py", "dashboard.py", "widgets.py", "charts.py", "tray.py", "check_api.py")
-CORE_MODULES = {"analysis", "stats", "models", "predict"}
+CORE_MODULES = {"analysis", "stats", "models", "predict", "squad_timeline", "trade_book"}
 
 
 def test_ui_reaches_analysis_only_through_core_api():

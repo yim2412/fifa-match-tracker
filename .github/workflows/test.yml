@@ -29,6 +29,8 @@ jobs:
         run: python tests/test_rankcollect.py
       - name: 거래 기록 · 시세 캐시
         run: python tests/test_trades.py
+      - name: 스쿼드 타임라인 · 가계부
+        run: python tests/test_timeline.py
       - name: 트레이 상주
         run: python tests/test_tray.py
       - name: 배포 검사
