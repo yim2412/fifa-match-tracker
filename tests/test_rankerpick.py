@@ -419,6 +419,38 @@ def _snap_row(rank, nick, color="팀A", value=None):
             "team_value": value}
 
 
+def test_owner_finder_dup_name_label():
+    # 선수로 구단주 찾기 — 스냅숏 쪽만 엠블럼을 붙여 화면 콤보와 같은 글자("Spartan · 강화")로. top_rankers 는 이름 그대로
+    # (랭커 픽 비율·추천이 쓰는 영구 집계 키를 안 바꾼다)
+    import rankcollect
+    import ranker
+    with tempfile.TemporaryDirectory() as d:
+        rc = rankcollect.open_rank_db(Path(d) / "rank.db")
+        rows = [ranker.RankRow(rank=i, profile_sn=900 + i, nickname=n, team_color=c, team_color_emblem=e, elo=3000.0 - i)
+                for i, (n, c, e) in enumerate([("강화", "Spartan", "teamcolorboost/4_l999867.png"),
+                                               ("클럽", "Spartan", "crests/l130634.png"),
+                                               ("옛", "Spartan", ""), ("리옹", "리옹", "crests/l66.png")], start=1)]
+        try:
+            rankcollect.save_snapshot(rc, rows, NOW)
+            idx = rp.snapshot_index(rc)
+            assert idx == {"강화": (1, "Spartan · 강화"), "클럽": (2, "Spartan · 클럽"), "옛": (3, "Spartan (구분 전)"),
+                           "리옹": (4, "리옹")}, idx
+            assert [r["team_color"] for r in rp.top_rankers(rc)[1]] == ["Spartan", "Spartan", "Spartan", "리옹"]
+            # 옛 rank.db(표 없음)를 읽기 전용으로 열었어도 이름으로라도 돈다
+            rc.execute("DROP TABLE snapshot_emblems")
+            assert rp.snapshot_index(rc)["강화"] == (1, "Spartan (구분 전)")
+        finally:
+            rc.close()   # 단언이 실패해도 임시 폴더를 지울 수 있게(안 닫으면 실패가 PermissionError 로 가려진다)
+
+
+def test_my_team_color_strips_label():
+    # 추천의 내 팀컬러 — 상대 캐시 글자("이름 · 강화")는 이름으로 되돌려 랭커 쪽(이름)과 맞댄다
+    import teamcolor
+    rows = [{"nickname": "남", "team_color": "", "rank": 5}]
+    assert rp.my_team_color(rows, "남", teamcolor.name_of("Spartan · 클럽")) == "Spartan"
+    assert rp.my_team_color(rows, "남", teamcolor.name_of("20시즌 울산 (ACL 우승)")) == "20시즌 울산 (ACL 우승)"
+
+
 def test_my_team_color_order():
     rows = [_snap_row(5, "나", "팀A"), _snap_row(6, "남", "")]
     assert rp.my_team_color(rows, "나", "팀C") == "팀A", "스냅숏의 내 행이 먼저"

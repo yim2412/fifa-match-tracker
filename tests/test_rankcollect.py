@@ -616,9 +616,11 @@ def test_queries_use_indexes():
 
 # ── 3단계: 앱 연결 ─────────────────────────────────────────────────────────
 
-def _snap(env, when, people=40, color_of=None):
+def _snap(env, when, people=40, color_of=None, emblem_of=None):
     c = env.conn()
     rows = [_row(r, color=(color_of or {}).get(r, "")) for r in range(1, people + 1)]
+    for r in rows:
+        r.team_color_emblem = (emblem_of or {}).get(r.rank, "")
     sid = rc.save_snapshot(c, rows, when)
     c.close()
     return sid
@@ -630,15 +632,36 @@ def test_snapshot_colors_from_fresh_snapshot_only():
         assert not env.db.exists(), "없는 rank.db 를 만들었다(수집을 안 켠 사람에게 빈 파일)"
         _snap(env, NOW - timedelta(hours=25), color_of={1: "옛날"})
         assert rc.snapshot_colors({"n1"}, env.db, NOW) is None, "간격(24h) 지난 스냅숏을 썼다"
-        _snap(env, NOW - timedelta(hours=2), color_of={1: "네덜란드"})
-        colors, taken = rc.snapshot_colors({"n1", "n2", "밖"}, env.db, NOW)
+        _snap(env, NOW - timedelta(hours=2), color_of={1: "네덜란드", 3: "Spartan"},
+              emblem_of={1: "countries/14.png", 2: "crests/x.png", 3: "crests/l130634.png"})
+        colors, taken = rc.snapshot_colors({"n1", "n2", "n3", "밖"}, env.db, NOW)
         assert taken == NOW - timedelta(hours=2), taken
-        # 팀컬러 없는 행은 구단가치 None · 목록에 없으면 '랭킹 밖'
-        assert colors == {"n1": ("네덜란드", 1000), "n2": ("", None), "밖": ("", None)}, colors
+        # 팀컬러 없는 행은 구단가치·엠블럼 없음 · 목록에 없으면 '랭킹 밖' · 엠블럼은 옆 표에서 붙여 읽는다(2.2.1)
+        assert colors == {"n1": ("네덜란드", 1000, "countries/14.png"), "n2": ("", None, ""),
+                          "n3": ("Spartan", 1000, "crests/l130634.png"), "밖": ("", None, "")}, colors
         c = env.conn()
+        assert _count(c, "snapshot_emblems") == 2, "팀컬러가 없는 행(n2)의 엠블럼까지 적었다"
         rc.prune_raw(c, NOW + timedelta(days=30))   # 원본이 지워진 스냅숏은 못 쓴다
+        assert _count(c, "snapshot_emblems") == 0, "원본을 지우면서 엠블럼을 남겼다"
         c.close()
         assert rc.fresh_snapshot(env.db, NOW) is None
+
+
+def test_snapshot_emblems_beside_rows_old_version_still_writes():
+    # 옛 버전(2.1.1 이하)이 새 DB 로 수집해도 된다 — snapshot_rows 는 그대로 16칸(T13) · 옛 버전이 원본만 지우고 남긴
+    # 엠블럼 줄은 snapshot_rows 에 없는 snapshot_id 로 지운다(snapshots 는 영구라 날짜로는 안 잡힌다)
+    with Env() as env:
+        sid = _snap(env, NOW - timedelta(hours=2), color_of={1: "X"}, emblem_of={1: "crests/a.png"})
+        c = env.conn()
+        assert len(c.execute("PRAGMA table_info(snapshot_rows)").fetchall()) == 16
+        c.execute("INSERT INTO snapshot_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (sid, 99, 99, "옛", None, None, None, 0, 0, 0, "", None, "", None, None, None))
+        c.execute("DELETE FROM snapshot_rows WHERE snapshot_id = ?", (sid,))   # 옛 prune_raw — 엠블럼은 그대로
+        c.commit()
+        assert _count(c, "snapshot_emblems") == 1
+        rc.prune_raw(c, NOW)   # 날짜 조건엔 안 걸리는 스냅숏
+        assert _count(c, "snapshot_emblems") == 0, "옛 버전이 남긴 엠블럼 줄을 안 지웠다"
+        c.close()
 
 
 def test_list_read_is_shared_waiter_uses_collect_snapshot():

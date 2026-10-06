@@ -190,6 +190,42 @@ def main() -> int:
         print(f"[OK]   랭킹 목록 1쪽(수집용): {len(page.rows)}행 · 판정 {verdict} · Date {page.date}")
     except Exception as e:
         print(f"[WARN] 랭킹 목록 수집 읽기 실패(수집만 영향): {type(e).__name__}: {e}")
+        page = None
+
+    # 팀컬러(2.2.1) — 엠블럼 앵커 · 겹치는 이름 상수 · 효과 상세·선수(X-Requested-With) · 선수 JSON 단위
+    try:
+        import playerinfo
+        import teamcolor
+        if page is not None:
+            empty = [r.nickname for r in page.rows if r.team_color and not r.team_color_emblem]
+            print(f"{'[FAIL]' if empty else '[OK]  '} 랭킹 행 팀컬러 엠블럼: "
+                  f"{sum(1 for r in page.rows if r.team_color_emblem)}행 · 엠블럼 없는 팀컬러 행 {len(empty)}")
+        items = teamcolor.fetch_list()
+        names: dict = {}
+        for m in items:
+            names[m.name] = names.get(m.name, 0) + 1
+        dups = {n for n, k in names.items() if k > 1}
+        same = dups == set(config.TEAMCOLOR_DUP_NAMES)
+        print(f"{'[OK]  ' if same else '[FAIL]'} 팀컬러 목록 {len(items)}개 · 겹치는 이름 {len(dups)}쌍"
+              + ("" if same else f" — 상수와 다름: 새 {sorted(dups - config.TEAMCOLOR_DUP_NAMES)}"
+                                 f" · 사라짐 {sorted(config.TEAMCOLOR_DUP_NAMES - dups)} (config.TEAMCOLOR_DUP_NAMES 고칠 것)"))
+        big = max(items, key=lambda m: (m.members or 0, m.max_step or 0))
+        _desc, steps = teamcolor.fetch_detail(big.id)
+        print(f"[OK]   팀컬러 상세({big.name}): {len(steps)}단계 · "
+              + " / ".join(f"{s.step}단계 {s.members}명" for s in steps))
+        players = teamcolor.fetch_players(big.id)
+        print(f"[OK]   팀컬러 선수: {len(players)}명(한 번 상한 {config.TEAMCOLOR_PLAYERS_PAGE}) · 최저 OVR "
+              f"{min((p.ovr for p in players if p.ovr is not None), default='-')}")
+        # 카드 캐시(B)에 넣는 값이 선수 페이지와 같은 단위인가 — 급여·1강 시세
+        p0 = next((p for p in players if p.prices.get(1)), None)
+        if p0 is not None:
+            info = playerinfo.fetch_player_info(p0.spid)
+            page_price = playerinfo.prices_as_int(info).get(1)
+            ok = info.salary == p0.pay and page_price == p0.prices[1]
+            print(f"{'[OK]  ' if ok else '[FAIL]'} 팀컬러 선수 JSON 단위({p0.name}): 급여 {p0.pay}/{info.salary}"
+                  f" · 1강 시세 {p0.prices[1]}/{page_price}(JSON/선수 페이지)")
+    except Exception as e:
+        print(f"[WARN] 팀컬러 효과 확인 실패(효과 창만 영향): {type(e).__name__}: {e}")
 
     try:
         import playerinfo

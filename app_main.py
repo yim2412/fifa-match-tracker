@@ -42,6 +42,7 @@ import rankerstats
 import ranker
 import seasons as sn
 import store
+import teamcolor
 import theme as T
 import tradecollect
 import tray
@@ -57,8 +58,8 @@ from nexon_api import (
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PageTabs,
-    PitchCard, PitchWidget, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget, SortableItem,
-    StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
+    RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
+    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
     wdl_text, win_rate_bar,
 )
 
@@ -1036,7 +1037,7 @@ class TeamColorLoader(QThread):
     TIMEOUT = 5
 
     progress = pyqtSignal(int, int)   # done, total
-    # {닉네임: (팀컬러("" 이면 랭킹 밖), 구단가치(원 단위 int, 못 찾으면 None))} — RankListLoader 와 같은 모양
+    # {닉네임: (넥슨 팀컬러 이름("" 이면 랭킹 밖), 구단가치(원 단위 int, 못 찾으면 None), 엠블럼 키)} — RankListLoader 와 같은 모양
     loaded_many = pyqtSignal(object)  # dict — 이유는 MatchLoader.finished_ok
     finished_all = pyqtSignal()
 
@@ -1052,11 +1053,12 @@ class TeamColorLoader(QThread):
         if self._pool is not None:
             self._pool.shutdown(wait=False, cancel_futures=True)
 
-    def _fetch_one(self, nick: str) -> tuple[str, str, int | None] | None:
+    def _fetch_one(self, nick: str) -> tuple[str, str, int | None, str] | None:
         try:
             info = ranker.fetch_manager_rank(nick, timeout=self.TIMEOUT)
             # 팀가치는 랭킹에 잡힌 상대만 의미 있다 — 못 찾으면 None
-            return nick, info.team_color, (info.team_value if info.team_color else None)
+            return (nick, info.team_color, (info.team_value if info.team_color else None),
+                    info.team_color_emblem if info.team_color else "")
         except ranker.RankerError:
             # 조회 실패(넥슨 웹 점검·타임아웃 등)는 "랭킹 밖"("")과 다르다 —
             # emit 하지 않아 캐시에 안 남고, 다음 조회 때 다시 시도된다.
@@ -1071,8 +1073,8 @@ class TeamColorLoader(QThread):
                 if self._cancel:
                     return
                 if result is not None:
-                    nick, color, value = result
-                    self.loaded_many.emit({nick: (color, value)})
+                    nick, color, value, emblem = result
+                    self.loaded_many.emit({nick: (color, value, emblem)})
                 done += 1
                 self.progress.emit(done, total)
         except (RuntimeError, CancelledError):
@@ -1103,7 +1105,7 @@ class RankListLoader(QThread):
     TIMEOUT = 10  # 목록 한 쪽은 검색 결과보다 크다(약 50KB)
 
     progress = pyqtSignal(int, int)   # 읽은 쪽, 전체 쪽
-    loaded_many = pyqtSignal(object)  # {닉네임: (팀컬러, 구단가치)} — object 인 이유는 MatchLoader.finished_ok
+    loaded_many = pyqtSignal(object)  # {닉네임: (팀컬러, 구단가치, 엠블럼 키)} — object 인 이유는 MatchLoader.finished_ok
     finished_all = pyqtSignal()
     waiting = pyqtSignal()            # 랭킹 수집이 같은 목록을 읽는 중이라 기다린다
 
@@ -1171,7 +1173,7 @@ class RankListLoader(QThread):
                     self.failed_pages += 1
                 else:
                     results[res.page] = res
-                    batch = {n: (c, v) for n, c, v in rows if n in self._wanted and n not in found}
+                    batch = {n: (c, v, e) for n, c, v, e in rows if n in self._wanted and n not in found}
                     if batch:
                         found.update(batch)
                         self.loaded_many.emit(batch)
@@ -1185,7 +1187,7 @@ class RankListLoader(QThread):
         if self._cancel:
             return
         if not self.failed_pages:
-            rest = {n: ("", None) for n in self._wanted - found}
+            rest = {n: ("", None, "") for n in self._wanted - found}
             if rest:
                 self.loaded_many.emit(rest)
             try:
@@ -1209,6 +1211,142 @@ def _ended_season() -> int | None:
     today = datetime.now().date()
     nos = [s.no for s in items if s.end <= today]
     return max(nos) if nos else None
+
+
+# ── 팀컬러 효과 창(2.2.1 · 7) — 받기는 TeamColorEffectLoader(작업 스레드), 그리기는 TeamColorDialog ──────────
+
+@dataclass
+class TeamColorView:
+    """효과 창 한 번 열기(또는 [더 보기])의 결과. 요청 번호로 늦은 결과를 버린다."""
+    req: int
+    label: str
+    meta: dict | None = None                 # store.load_teamcolor_meta 한 줄 — 못 찾으면 None
+    candidates: list = None                  # "(구분 전)" 이면 고를 두 줄
+    message: str = ""                        # 목록·단계 쪽 안내(못 찾음·꺼짐·오류 — 옛 값을 보이면 날짜와 같이)
+    steps: list = None                       # [{step, members, effects}]
+    steps_day: str = ""
+    players: list = None                     # [teamcolor.TeamColorPlayer] — 이번에 받은 것(더 보기면 새로 받은 것만)
+    players_done: bool = True
+    players_message: str = ""
+    emblem_path: str = ""
+    more: bool = False                       # [더 보기] 결과(이어 붙인다)
+
+
+class TeamColorEffectLoader(QThread):
+    """효과 창 — 목록(7일 캐시 · 없는 (이름, 엠블럼)이면 그날 한 번 다시) → 단계(7일 캐시) → 선수 첫 100명.
+    [더 보기]는 선수만(have 를 주면). 요청은 사용자가 누른 이 한 번뿐이고 웹 데이터가 꺼져 있으면 0 —
+    캐시가 있으면 그걸 날짜와 같이 보인다. 받은 선수의 급여·시세는 카드 캐시(B)에 — 급여 열만·0 시세는 안 쓴다."""
+
+    loaded = pyqtSignal(object)   # TeamColorView
+
+    def __init__(self, req: int, label: str, meta_id: int | None = None, have: list | None = None):
+        super().__init__()
+        self.req, self.label, self.meta_id, self.have = req, label, meta_id, have
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    @staticmethod
+    def _error_text(e: teamcolor.TeamColorError) -> str:
+        return teamcolor.MESSAGES.get(e.kind, str(e))
+
+    def _find(self, rows: list[dict]) -> tuple[dict | None, list]:
+        if self.meta_id is not None:
+            return next((r for r in rows if r["id"] == self.meta_id), None), []
+        name = teamcolor.name_of(self.label)
+        same = [r for r in rows if r["name"] == name]
+        if teamcolor.is_unsplit(self.label):
+            return None, same
+        hits = [r for r in same if teamcolor.label(r["name"], r["emblem"]) == self.label]
+        return (hits[0] if hits else None), []
+
+    def run(self) -> None:
+        view = TeamColorView(self.req, self.label, more=self.have is not None)
+        try:
+            conn = store.open_db(config.DB_PATH)
+        except sqlite3.Error as e:
+            view.message = f"저장된 팀컬러를 읽지 못했습니다: {e}"
+            self.loaded.emit(view)
+            return
+        try:
+            self._run(conn, view)
+        finally:
+            conn.close()
+        if not self._cancel:
+            self.loaded.emit(view)
+
+    def _run(self, conn, view: TeamColorView) -> None:
+        today = datetime.now().date()
+        day = today.isoformat()
+        rows, fresh = store.load_teamcolor_meta(conn, today, config.TEAMCOLOR_CACHE_DAYS)
+        meta, view.candidates = self._find(rows)
+        # 목록이 없거나 낡았거나, 그 (이름, 엠블럼)이 없는데 오늘 받은 게 아니면 — 한 번 받는다
+        refetch_ok = not rows or not fresh or (meta is None and not view.candidates
+                                               and min(r["fetched_on"] for r in rows) != day)
+        if refetch_ok and config.WEB_DATA and not self._cancel:
+            try:
+                items = teamcolor.fetch_list()
+                store.save_teamcolor_meta(conn, items, day)
+                rows, fresh = store.load_teamcolor_meta(conn, today, config.TEAMCOLOR_CACHE_DAYS)
+                meta, view.candidates = self._find(rows)
+            except teamcolor.TeamColorError as e:
+                if rows:
+                    view.message = f"{self._error_text(e)} — 저장된 목록({rows[0]['fetched_on']})을 보여 줍니다"
+                else:
+                    view.message = self._error_text(e)
+                    return
+        elif not rows:
+            view.message = config.WEB_DATA_OFF_MSG   # 목록이 없고 꺼져 있다
+            return
+        elif not fresh and not config.WEB_DATA:
+            view.message = f"웹 데이터가 꺼져 있어 저장된 값({rows[0]['fetched_on']})을 보여 줍니다"
+        if view.candidates:
+            return   # 고르면 meta_id 로 다시 연다
+        if meta is None:
+            view.message = "넥슨 팀컬러 목록에 없는 팀컬러입니다"
+            return
+        view.meta = meta
+        if meta.get("emblem_url"):
+            path = images.fetch_url(meta["emblem_url"], config.CACHE_DIR / "teamcolor_emblems")
+            view.emblem_path = str(path) if path else ""
+        if self.have is None:
+            self._steps(conn, view, meta["id"], today)
+        self._players(conn, view, meta["id"], day)
+
+    def _steps(self, conn, view: TeamColorView, tid: int, today: date) -> None:
+        steps, sday, fresh = store.load_teamcolor_steps(conn, tid, today, config.TEAMCOLOR_CACHE_DAYS)
+        if (not steps or not fresh) and config.WEB_DATA and not self._cancel:
+            try:
+                _desc, got = teamcolor.fetch_detail(tid)   # 설명 한 줄은 캐시하지 않아 창에도 안 쓴다(열 때마다 달라 보이지 않게)
+                store.save_teamcolor_steps(conn, tid, got, today.isoformat())
+                steps, sday, fresh = store.load_teamcolor_steps(conn, tid, today, config.TEAMCOLOR_CACHE_DAYS)
+            except teamcolor.TeamColorError as e:
+                note = self._error_text(e)
+                view.message = (f"{note} — 저장된 단계({sday})를 보여 줍니다" if steps else note)
+        elif steps and not fresh:
+            view.message = f"웹 데이터가 꺼져 있어 저장된 값({sday})을 보여 줍니다"
+        view.steps, view.steps_day = steps, sday
+
+    def _players(self, conn, view: TeamColorView, tid: int, day: str) -> None:
+        if not config.WEB_DATA:
+            view.players, view.players_message = [], config.WEB_DATA_OFF_MSG   # 선수 목록은 캐시가 없다(시세가 매일 바뀐다)
+            return
+        if self._cancel:
+            return
+        try:
+            got, view.players_done = teamcolor.more_players(tid, self.have or [])
+        except teamcolor.TeamColorError as e:
+            view.players, view.players_message = [], self._error_text(e)
+            return
+        view.players = got
+        try:   # 카드 캐시(B)의 두 번째 출처 — 실패해도 창은 그린다
+            store.save_card_salary(conn, [(p.spid, p.pay) for p in got])
+            for p in got:
+                if p.prices:
+                    store.save_card_prices(conn, p.spid, p.prices, day)
+        except sqlite3.Error:
+            pass
 
 
 # ── ELO 그래프 (1.3.1 · 13) — 읽기는 EloLoader(작업 스레드), 그리기는 들고 있는 값으로 ────────────
@@ -1564,19 +1702,19 @@ class MainWindow(QMainWindow):
     # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 비공식 근사치.
     FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
-    # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 fc-info
-    # 프론트엔드에서 역산한 파생 지표라, 이름만 보고는 계산 기준이 안 보여서 필요하다.
+    # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 직접 만든
+    # 파생 지표라, 이름만 보고는 계산 기준이 안 보여서 필요하다.
     PLAYER_COLUMN_HELP = {
         "포지션": "이 선수가 가장 많이 선 자리(출전 빈도 기준).",
         "강화": "이 선수의 여러 경기 중 가장 높았던 강화 단계.",
         "출전": "이 계정으로 이 선수가 실제로 뛴 경기 수(교체 투입 포함).",
         "승률": "이 선수가 출전한 경기만 기준으로 한 승률.",
         "공격력": "10×기대득점률 + 패스% + 드리블% + 5×(승률/출전)\n"
-                 "+ 필드 플레이어면 공중볼% — fc-info 산식을 그대로 역산해 옮김.",
+                 "+ 필드 플레이어면 공중볼%.",
         "수비력": "패스% + 가로채기 + 태클% + 2×선방력 + 블록% + 5×(승률/출전)\n"
-                 "+ 필드 플레이어면 공중볼% — fc-info 산식을 그대로 역산해 옮김.",
+                 "+ 필드 플레이어면 공중볼%.",
         "기대득점률": "경기당 평균 (골+어시) × 100.\n"
-                    "이름과 달리 유효슛 대비 득점률이 아니라 fc-info 정의를 그대로 따름.",
+                    "이름과 달리 유효슛 대비 득점률이 아니다.",
         "공격P": "골 + 어시 합계(공격 포인트).",
         "가로채기": "경기당 가로채기 평균 × 100(누적 합계가 아님).",
         "선방력": "defending 스탯의 경기당 평균 × 100.\n"
@@ -1585,9 +1723,12 @@ class MainWindow(QMainWindow):
     }
     OPPONENT_COLUMNS = ["상대", "전적", "승률", "평균득점", "평균실점", "최근 경기"]
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
-    TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "승", "무", "패", "승률"]
+    TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "상대 수", "승", "무", "패", "승률", "평균 대비", "효과"]
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
-                              "평균 팀가치", "최저 팀가치", "최고 팀가치"]
+                              "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위", "효과"]
+    TEAMCOLOR_EFFECT_TEXT = "보기"     # "효과" 열 — 이 열의 한 번 클릭만 효과 창을 연다(더블클릭·화살표 이동은 안 연다)
+    TEAMCOLOR_RANGE_W = 150            # 팀가치 범위 막대 열 폭(글자가 없어 FitTableWidget 이 최소 폭으로 누른다)
+    TEAMCOLOR_TINT_FULL_PP = 15.0      # 승률 칸 색 — 기준선과 이만큼(%p) 벌어지면 가장 진하게(T.ROW_TINT)
     SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
                       "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
 
@@ -1650,8 +1791,13 @@ class MainWindow(QMainWindow):
         self._names: dict = {}
         self._positions: dict = {}
         self._trend_reset_pending = True
-        self._team_colors: dict[str, str] = {}   # 상대 닉네임 -> 팀컬러("" = 못 찾음)
+        # 상대 닉네임 -> 팀컬러 글자(teamcolor.label — 이름이 겹치는 두 팀컬러만 "이름 · 강화"/"이름 · 클럽", "" = 못 찾음).
+        # 표·콤보·더블클릭 대조가 전부 이 글자로 돈다. DB 에 쓸 원값(넥슨 이름·팀가치·엠블럼 키)은 _teamcolor_raw 에 따로
+        self._team_colors: dict[str, str] = {}
         self._team_values: dict[str, int | None] = {}  # 상대 닉네임 -> 구단가치(원)
+        self._teamcolor_raw: dict[str, tuple] = {}     # 이번 실행에 로더가 준 (이름, 팀가치, 엠블럼 키) — 저장은 여기서
+        self._teamcolor_dialog: TeamColorDialog | None = None   # 팀컬러 효과 창(하나만 — U3)
+        self._tc_effect_loaders: list[TeamColorEffectLoader] = []  # 효과 창의 로더(도는 것 + 물러난 것) — 종료 표가 기다린다
         self._teamcolor_loader: TeamColorLoader | None = None
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
         self._teamcolor_loaded_count = 0
@@ -2498,6 +2644,7 @@ class MainWindow(QMainWindow):
         self._teamcolor_fetch_btns: list[QPushButton] = []
         self._teamcolor_status_labels: list[QLabel] = []
         self._teamcolor_note_labels: list[QLabel] = []
+        self._teamcolor_min_spins: list[QSpinBox] = []
         self._page_index: dict[str, int] = {}
         self._page_tabs: dict[str, PageTabs] = {}   # 메뉴 이름 → 페이지 안 탭(Tabs 인 메뉴만)
         self._tab_sid: dict[str, str] = {}          # 메뉴 이름 → 보던 탭 설정 키(view/tab/<sid>)
@@ -2643,13 +2790,47 @@ class MainWindow(QMainWindow):
                 " — 넥슨 감독모드 랭킹 1만 위 안 상대만 찾을 수 있고, 경기 당시가 아니라"
                 " 그 상대가 지금 쓰는 팀컬러 기준입니다(지난 시즌일수록 실제와 달라질 수 있음).")
 
+    def _teamcolor_min_row(self) -> QHBoxLayout:
+        """최소 경기 수 필터 — 두 탭이 같은 값(한쪽을 바꾸면 다른 쪽도). 기본 = 흐림 기준(core.MIN_COND)."""
+        row = QHBoxLayout()
+        lb = QLabel("최소")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        sp = QSpinBox()
+        sp.setRange(1, 999)
+        sp.setValue(core.MIN_COND)
+        sp.setFixedWidth(64)
+        sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        sp.valueChanged.connect(self._on_teamcolor_min_changed)
+        lb2 = QLabel("경기 이상만")
+        lb2.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(lb)
+        row.addWidget(sp)
+        row.addWidget(lb2)
+        row.addStretch(1)
+        self._teamcolor_min_spins.append(sp)
+        return row
+
+    def _on_teamcolor_min_changed(self, value: int) -> None:
+        for sp in self._teamcolor_min_spins:
+            if sp.value() != value:
+                sp.blockSignals(True)
+                sp.setValue(value)
+                sp.blockSignals(False)
+        self._invalidate("teamcolor")
+
+    def _teamcolor_min_games(self) -> int:
+        return self._teamcolor_min_spins[0].value() if self._teamcolor_min_spins else core.MIN_COND
+
     def _build_teamcolor_rate_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         row, _, _ = self._build_teamcolor_fetch_row()
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
+        v.addLayout(self._teamcolor_min_row())
         self.tbl_teamcolor_rate = self._make_table(self.TEAMCOLOR_RATE_COLUMNS)
+        self.tbl_teamcolor_rate.cellClicked.connect(
+            lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, r, c))
         v.addWidget(self.tbl_teamcolor_rate, 1)
         return w
 
@@ -2659,14 +2840,22 @@ class MainWindow(QMainWindow):
         row, _, _ = self._build_teamcolor_fetch_row()
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
-        hint = QLabel("팀컬러 이름을 더블클릭하면 그 팀컬러를 쓴 상대들이"
-                     " 포지션별로 주로 기용한 선수를 볼 수 있습니다.")
+        hint = QLabel("팀컬러 이름을 더블클릭하면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수를,"
+                     " \"효과\" 열의 [보기] 를 누르면 넥슨 데이터센터의 단계별 효과와 적용 선수를 볼 수 있습니다."
+                     " 범위 막대는 로그 눈금입니다(점 = 평균).")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(hint)
+        v.addLayout(self._teamcolor_min_row())
         self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS)
         self.tbl_teamcolor_rank.itemDoubleClicked.connect(
             self._on_teamcolor_double_clicked)
+        self.tbl_teamcolor_rank.cellClicked.connect(
+            lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rank, self.TEAMCOLOR_RANK_COLUMNS, r, c))
+        rc = self.TEAMCOLOR_RANK_COLUMNS.index("팀가치 범위")
+        self._tc_range_delegate = RangeBarDelegate(self.tbl_teamcolor_rank)
+        self.tbl_teamcolor_rank.setItemDelegateForColumn(rc, self._tc_range_delegate)
+        self.tbl_teamcolor_rank.set_content_widths({rc: self.TEAMCOLOR_RANGE_W})   # refit 이 이 여백을 계속 쓴다
         v.addWidget(self.tbl_teamcolor_rank, 1)
         return w
 
@@ -4207,7 +4396,8 @@ class MainWindow(QMainWindow):
                         rconn.close()
             except sqlite3.Error:
                 pass
-        cached = getattr(self._rank, "team_color", "") or self._team_colors.get(self._nick or "")
+        # 랭커 쪽은 넥슨 이름 — 상대 팀컬러 글자("이름 · 강화")는 이름으로 되돌려 맞댄다
+        cached = getattr(self._rank, "team_color", "") or teamcolor.name_of(self._team_colors.get(self._nick or "") or "")
         return core.my_team_color(rows, self._nick, cached)
 
     def _build_recommend_tab(self) -> QWidget:
@@ -6003,23 +6193,52 @@ class MainWindow(QMainWindow):
     def _team_color_of(self, nickname: str) -> str | None:
         return self._team_colors.get(nickname) or None
 
+    @staticmethod
+    def _teamcolor_weak(s) -> str:
+        """흐림 사유(빈 문자열 = 흐리지 않음) — 표본 흐림 규칙(1.2.1) + 상대 수(한 사람과의 반복 대전이 승률을 끌고 가지
+        않게) + "(구분 전)"(같은 이름의 두 팀컬러를 합친 값이라 해석할 수 없다)."""
+        if teamcolor.is_unsplit(s.team_color):
+            return "예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기 — 두 팀컬러를 합친 값입니다."
+        if s.games < core.MIN_COND or len(s.opponents) < config.TEAMCOLOR_MIN_OPPONENTS:
+            return (f"표본 {s.games}경기 · 상대 {len(s.opponents)}명 — 기준({core.MIN_COND}경기 · "
+                    f"상대 {config.TEAMCOLOR_MIN_OPPONENTS}명) 미만이라 크게 흔들립니다.")
+        return ""
+
     def _render_teamcolor_tabs(self, matches: list[MatchSummary],
                                details: list[dict]) -> None:
-        stats_list = core.team_color_stats(matches, self._team_color_of,
-                                         team_value_of=self._team_values.get)
+        stats_all = core.team_color_stats(matches, self._team_color_of,
+                                        team_value_of=self._team_values.get)
+        base_n, base_rate = core.team_color_baseline(matches, self._team_color_of)
+        min_games = self._teamcolor_min_games()
+        stats_list = [s for s in stats_all if s.games >= min_games]
+        weak = [self._teamcolor_weak(s) for s in stats_list]
+        eff = self.TEAMCOLOR_EFFECT_TEXT
         # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
         # "10"을 "9"보다 뒤로 보내는 문자열 정렬 대신 실제 크기로 정렬한다
         # (안 그러면 헤더 클릭 정렬이 9,88,80,8,8,8,75... 식으로 깨진다).
-        rate_rows = [[s.team_color, (str(s.games), s.games),
-                     (str(s.win), s.win), (str(s.draw), s.draw),
-                     (str(s.lose), s.lose),
-                     (f"{s.win_rate:.1f}%", s.win_rate)]
-                    for s in stats_list]
-        self._fill(self.tbl_teamcolor_rate, rate_rows)
+        rate_rows = []
+        for s in stats_list:
+            diff = s.win_rate - base_rate
+            rate_rows.append([s.team_color, (str(s.games), s.games), (str(len(s.opponents)), len(s.opponents)),
+                              (str(s.win), s.win), (str(s.draw), s.draw), (str(s.lose), s.lose),
+                              (f"{s.win_rate:.1f}%", s.win_rate),
+                              (f"{diff:+.1f}%p", diff) if base_n else ("-", 0.0), eff])
+        # 채우는 순서(PyQt 규칙 1): 정렬 끈 채로 채움 → 색·흐림 → 정렬 켬 → 기본 정렬
+        self._fill(self.tbl_teamcolor_rate, rate_rows, enable_sort=False)
+        rate_col = self.TEAMCOLOR_RATE_COLUMNS.index("승률")
+        for i, s in enumerate(stats_list):
+            if not weak[i] and base_n:
+                item = self.tbl_teamcolor_rate.item(i, rate_col)
+                diff = s.win_rate - base_rate
+                mix = min(1.0, abs(diff) / self.TEAMCOLOR_TINT_FULL_PP) * T.ROW_TINT
+                item.setBackground(self._blend(T.PANEL, T.CHART_UP if diff >= 0 else T.CHART_DOWN, mix))
+                item.setForeground(QColor(T.TEXT))
+        self._mark_teamcolor_rows(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, stats_list, weak)
         # 표를 다시 채울 때마다(범위 변경·새 경기 확인 등) 사용자가 전에
         # 다른 열로 정렬해 뒀어도 "경기 많은 순"으로 되돌린다 — 이 표는
         # 열어보면 항상 이 기준으로 보이는 게 목적이라, 헤더 클릭 정렬
         # 상태가 재렌더 사이에 남아 있으면 안 된다.
+        self.tbl_teamcolor_rate.setSortingEnabled(True)
         self.tbl_teamcolor_rate.sortByColumn(
             self.TEAMCOLOR_RATE_COLUMNS.index("경기"), Qt.SortOrder.DescendingOrder)
         # 팀가치는 넥슨식 축약("10경 9,631조")으로 보여주고 정렬은 원 단위로.
@@ -6030,9 +6249,22 @@ class MainWindow(QMainWindow):
 
         rank_rows = [[(str(i), i), s.team_color, (str(s.games), s.games),
                      value_cell(s.avg_value), value_cell(s.min_value),
-                     value_cell(s.max_value)]
+                     value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1), eff]
                     for i, s in enumerate(stats_list, start=1)]
-        self._fill(self.tbl_teamcolor_rank, rank_rows)
+        self._fill(self.tbl_teamcolor_rank, rank_rows, enable_sort=False)
+        # 범위 막대 축은 필터와 무관하게 표의 전체 행 — 스핀을 바꿔도 막대 길이가 안 변하게
+        lows = [s.min_value for s in stats_all if s.min_value]
+        highs = [s.max_value for s in stats_all if s.max_value]
+        self._tc_range_delegate.set_axis(min(lows) if lows else None, max(highs) if highs else None)
+        range_col = self.TEAMCOLOR_RANK_COLUMNS.index("팀가치 범위")
+        for i, s in enumerate(stats_list):
+            item = self.tbl_teamcolor_rank.item(i, range_col)
+            if item and s.min_value:
+                item.setData(RANGE_ROLE, (s.min_value, s.avg_value, s.max_value))
+                item.setToolTip(f"최저 {ranker.format_team_value(s.min_value)} · 평균 "
+                                f"{ranker.format_team_value(s.avg_value)} · 최고 {ranker.format_team_value(s.max_value)}")
+        self._mark_teamcolor_rows(self.tbl_teamcolor_rank, self.TEAMCOLOR_RANK_COLUMNS, stats_list, weak)
+        self.tbl_teamcolor_rank.setSortingEnabled(True)
         self.tbl_teamcolor_rank.sortByColumn(
             self.TEAMCOLOR_RANK_COLUMNS.index("만난 횟수"), Qt.SortOrder.DescendingOrder)
         # 새로 알게 된 팀컬러가 있으면 "포지션별 최다 상대" 필터 목록도 같이 넓힌다.
@@ -6040,8 +6272,50 @@ class MainWindow(QMainWindow):
         self._render_position_opponents(details)
         opps = {m.opponent for m in matches if m.opponent}
         known = sum(1 for n in opps if self._team_colors.get(n))
+        extra = f" 팀컬러 {len(stats_list)}종"
+        if len(stats_all) > len(stats_list):
+            extra += f"(최소 {min_games}경기 미만 {len(stats_all) - len(stats_list)}종 숨김)"
+        if base_n:
+            extra += f" · \"평균 대비\"는 팀컬러를 아는 {base_n:,}경기 승률 {base_rate:.1f}% 기준."
+        if any(teamcolor.is_unsplit(s.team_color) for s in stats_all):
+            extra += (" \"(구분 전)\" — 예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기입니다"
+                      "(상대를 다시 읽으면 갈립니다). 같은 이름이 최대 세 줄로 나뉘어 줄마다 표본이 작아집니다.")
         for lb in self._teamcolor_note_labels:
-            lb.setText(self._teamcolor_note_text(len(opps), known))
+            lb.setText(self._teamcolor_note_text(len(opps), known) + extra)
+
+    def _mark_teamcolor_rows(self, table, columns: list[str], stats_list: list, weak: list[str]) -> None:
+        """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink) · "효과" 칸에 팀컬러 글자와 안내."""
+        eff_col = columns.index("효과")
+        for i, s in enumerate(stats_list):
+            for c in range(table.columnCount()):
+                item = table.item(i, c)
+                if item is None:
+                    continue
+                if weak[i]:
+                    item.sink = True
+                    item.setForeground(QColor(T.TEXT_DIM))
+                    item.setToolTip(weak[i])
+                    item.setData(Qt.ItemDataRole.UserRole + 1, True)
+            item = table.item(i, eff_col)
+            if item is not None:
+                item.setData(Qt.ItemDataRole.UserRole, s.team_color)
+                item.setForeground(QColor(T.TEXT_DIM if weak[i] else T.GREEN))
+                item.setToolTip("넥슨 데이터센터의 단계별 효과·적용 선수(누를 때만 읽습니다)")
+
+    def _on_teamcolor_cell_clicked(self, table, columns: list[str], row: int, col: int) -> None:
+        """"효과" 열의 한 번 클릭에서만 연다 — 한 번 클릭은 더블클릭 앞에 오므로 다른 열에서 열면 랭킹 탭의
+        포지션 창과 겹친다. 화살표 키 이동(currentChanged)에는 안 묶는다."""
+        if col != columns.index("효과"):
+            return
+        item = table.item(row, col)
+        label = item.data(Qt.ItemDataRole.UserRole) if item else None
+        if label:
+            self._open_teamcolor_effect(label)
+
+    def _open_teamcolor_effect(self, label: str) -> None:
+        if self._teamcolor_dialog is None:
+            self._teamcolor_dialog = TeamColorDialog(self)
+        self._teamcolor_dialog.open_label(label)
 
     def _teamcolor_scope(self) -> tuple[list[MatchSummary], list[dict]]:
         """팀컬러 두 탭·포지션별 최다 상대가 세는 범위 — 표시 구간이 아니라 시즌 콤보.
@@ -6057,8 +6331,8 @@ class MainWindow(QMainWindow):
         try:
             conn = store.open_db(config.DB_PATH)
             try:
-                for nick, (color, value) in store.load_team_colors(conn, missing).items():
-                    self._team_colors[nick] = color
+                for nick, (color, value, emblem) in store.load_team_colors(conn, missing).items():
+                    self._team_colors[nick] = teamcolor.label(color, emblem)
                     self._team_values[nick] = value
             finally:
                 conn.close()
@@ -6121,8 +6395,11 @@ class MainWindow(QMainWindow):
     TEAMCOLOR_RENDER_INTERVAL_S = 2.0
 
     def _on_teamcolor_loaded(self, batch: dict) -> None:
-        for nick, (color, value) in batch.items():
-            self._team_colors[nick] = color
+        for nick, v in batch.items():
+            color, value = v[0], v[1]
+            emblem = v[2] if len(v) > 2 else ""
+            self._teamcolor_raw[nick] = (color, value, emblem)
+            self._team_colors[nick] = teamcolor.label(color, emblem)   # 화면에 넣는 순간 글자 하나 — 그 뒤는 안 바뀐다
             self._team_values[nick] = value
         self._teamcolor_loaded_count += len(batch)
         now = time.monotonic()
@@ -6152,8 +6429,8 @@ class MainWindow(QMainWindow):
     def _on_teamcolor_finished(self) -> None:
         for b in self._teamcolor_fetch_btns:
             b.setEnabled(True)
-        fetched = {n: (self._team_colors[n], self._team_values.get(n))
-                  for n in self._teamcolor_pending if n in self._team_colors}
+        # 저장은 화면 글자가 아니라 로더가 준 원값으로 — DB team_color 는 언제나 넥슨 이름(ROADMAP 2.2.1 3회차 A)
+        fetched = {n: self._teamcolor_raw[n] for n in self._teamcolor_pending if n in self._teamcolor_raw}
         if fetched:
             try:
                 conn = store.open_db(config.DB_PATH)
@@ -6164,7 +6441,7 @@ class MainWindow(QMainWindow):
                     conn.close()
             except Exception:
                 pass  # DB 저장이 실패해도 이번 세션 캐시(메모리)는 살아 있다
-        found = sum(1 for color, _ in fetched.values() if color)
+        found = sum(1 for v in fetched.values() if v[0])
         msg = f"상대 {len(self._teamcolor_pending)}명 조회 완료(팀컬러 확인 {found}명)"
         failed = getattr(self._teamcolor_loader, "failed_pages", 0)
         if failed:  # 못 읽은 쪽이 있으면 못 찾은 상대를 '랭킹 밖'으로 저장하지 않았다
@@ -6179,6 +6456,8 @@ class MainWindow(QMainWindow):
             self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
 
     def _on_teamcolor_double_clicked(self, item) -> None:
+        if item.column() == self.TEAMCOLOR_RANK_COLUMNS.index("효과"):
+            return   # 효과 열은 한 번 클릭(효과 창) — 포지션 창을 같이 띄우지 않는다
         row = item.row()
         color_item = self.tbl_teamcolor_rank.item(row, 1)
         if not color_item:
@@ -7684,6 +7963,8 @@ class MainWindow(QMainWindow):
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],
+            # 팀컬러 효과 창 — 요청 사이에서 멈춘다(요청 하나 타임아웃 teamcolor.TIMEOUT_S 10초). 저장은 표 하나씩 한 트랜잭션
+            *[(ld, cancel(ld), (teamcolor.TIMEOUT_S + 2) * 1000, False) for ld in self._tc_effect_loaders],
             # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다
             (self._season_loader, None, 3000, True),
             (self._ability_sim_loader, None, 2000, False),
@@ -7841,6 +8122,168 @@ class KeyCheckWorker(QThread):
         except Exception as e:
             reason = f"확인 중 오류: {e}"
         self.checked.emit(self._key, reason)
+
+
+class TeamColorDialog(QDialog):
+    """팀컬러 효과·적용 선수(2.2.1 · U3 — 별도 창 · 모달 아님 · 하나만). 같은 팀컬러를 다시 누르면 요청 없이 앞으로만,
+    다른 팀컬러면 내용만 바꾼다. 받기는 TeamColorEffectLoader — 도는 로더는 갈아 끼울 때 cancel 하고 메인 창의
+    _tc_effect_loaders 에 끝날 때까지 남겨 종료 표가 기다린다(창이 먼저 닫혀도)."""
+
+    STEP_COLUMNS = ["단계", "인원", "효과"]
+    PLAYER_COLUMNS = ["OVR", "선수", "포지션", "급여", "1강 시세"]
+    SIZE = (640, 720)
+    EMBLEM_PX = 44
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setModal(False)
+        self._req = 0
+        self._label = ""
+        self._meta: dict | None = None
+        self._players: list = []
+        v = QVBoxLayout(self)
+        head = QHBoxLayout()
+        self.lb_emblem = QLabel()
+        self.lb_emblem.setFixedSize(self.EMBLEM_PX, self.EMBLEM_PX)
+        self.lb_title = QLabel("")
+        f = self.lb_title.font()
+        f.setBold(True)
+        f.setPointSizeF(f.pointSizeF() * 1.25)
+        self.lb_title.setFont(f)
+        self.lb_title.setWordWrap(True)
+        head.addWidget(self.lb_emblem)
+        head.addWidget(self.lb_title, 1)
+        v.addLayout(head)
+        self.lb_status = QLabel("")
+        self.lb_status.setWordWrap(True)
+        self.lb_status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_status)
+        self.box_pick = QHBoxLayout()   # "(구분 전)" — 두 후보 중 고르기
+        v.addLayout(self.box_pick)
+        self.tbl_steps = main._make_table(self.STEP_COLUMNS)
+        self.tbl_steps.setSortingEnabled(False)
+        v.addWidget(self.tbl_steps, 2)
+        self.lb_players = QLabel("적용 선수 — OVR 높은 순")
+        self.lb_players.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_players)
+        self.tbl_players = main._make_table(self.PLAYER_COLUMNS)
+        self.tbl_players.itemDoubleClicked.connect(main._on_player_cell_double_clicked)
+        v.addWidget(self.tbl_players, 3)
+        row = QHBoxLayout()
+        self.btn_more = QPushButton(f"더 보기 (+{config.TEAMCOLOR_PLAYERS_PAGE}명)")
+        self.btn_more.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        self.btn_more.clicked.connect(self._on_more)
+        self.btn_more.setVisible(False)
+        self.lb_source = QLabel("")
+        self.lb_source.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(self.btn_more)
+        row.addStretch(1)
+        row.addWidget(self.lb_source)
+        v.addLayout(row)
+        fit_to_screen(self, *self.SIZE)
+
+    # ── 열기 ──
+    def open_label(self, label: str) -> None:
+        if label == self._label and (self._meta is not None or self._busy()):
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            return
+        self._start(label)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _busy(self) -> bool:
+        return any(ld.isRunning() and getattr(ld, "req", None) == self._req for ld in self.main._tc_effect_loaders)
+
+    def _start(self, label: str, meta_id: int | None = None, have: list | None = None) -> None:
+        self._req += 1
+        for ld in self.main._tc_effect_loaders:
+            ld.cancel()
+        self.main._tc_effect_loaders = [x for x in self.main._tc_effect_loaders if x.isRunning()]
+        if have is None:
+            self._label, self._meta, self._players = label, None, []
+            self.setWindowTitle(f"{label} — 팀컬러 효과")
+            self.lb_title.setText(label)
+            self.lb_emblem.clear()
+            self._clear_pick()
+            self.tbl_steps.setRowCount(0)
+            self.tbl_players.setRowCount(0)
+            self.btn_more.setVisible(False)
+            self.lb_source.setText("")
+        self.lb_status.setText("넥슨 데이터센터에서 읽는 중…" if config.WEB_DATA else "")
+        self.btn_more.setEnabled(False)
+        ld = TeamColorEffectLoader(self._req, label, meta_id, have)
+        ld.loaded.connect(self._on_loaded)
+        self.main._tc_effect_loaders.append(ld)
+        ld.start()
+
+    def _on_more(self) -> None:
+        if self._meta is not None:
+            self._start(self._label, self._meta["id"], list(self._players))
+
+    def _clear_pick(self) -> None:
+        while self.box_pick.count():
+            w = self.box_pick.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+
+    # ── 받은 것 그리기 ──
+    def _on_loaded(self, view: TeamColorView) -> None:
+        if view.req != self._req:
+            return   # 갈아 끼운 뒤 늦게 온 옛 결과
+        self.btn_more.setEnabled(True)
+        if view.candidates:
+            self._show_pick(view)
+            return
+        if view.meta is None and not view.more:
+            self.lb_status.setText(view.message)
+            return
+        if not view.more:
+            self._meta = view.meta
+            self.lb_title.setText(f"{view.meta['name']}  ·  최고 {view.meta.get('max_step') or '-'}단계")
+            if view.emblem_path:
+                pm = QPixmap(view.emblem_path)
+                if not pm.isNull():
+                    self.lb_emblem.setPixmap(pm.scaled(self.EMBLEM_PX, self.EMBLEM_PX,
+                                                       Qt.AspectRatioMode.KeepAspectRatio,
+                                                       Qt.TransformationMode.SmoothTransformation))
+            self.main._fill(self.tbl_steps, [[(f"{s['step']}단계", s["step"]),
+                                              (f"{s['members']}명" if s["members"] else "-", s["members"] or 0),
+                                              " · ".join(s["effects"]) or "-"]
+                                             for s in (view.steps or [])], enable_sort=False)
+            if not view.steps:   # 단계를 못 받았으면 목록의 최고 단계 한 줄이라도
+                m = view.meta
+                self.main._fill(self.tbl_steps, [[(f"{m.get('max_step') or '-'}단계", m.get("max_step") or 0),
+                                                  (f"{m.get('members')}명" if m.get("members") else "-", 0),
+                                                  " · ".join(m.get("effects") or []) or "-"]], enable_sort=False)
+            self.lb_source.setText(f"넥슨 데이터센터 기준 · 받은 날 {view.steps_day or view.meta.get('fetched_on', '')}")
+        self._players += view.players or []
+        rows = [[(str(p.ovr) if p.ovr is not None else "-", p.ovr or 0), p.name, p.position,
+                 (str(p.pay) if p.pay is not None else "-", p.pay or 0),
+                 (MainWindow._bp(p.prices.get(1)), p.prices.get(1, -1))] for p in self._players]
+        self.main._fill(self.tbl_players, rows, enable_sort=False)
+        for i, p in enumerate(self._players):
+            item = self.tbl_players.item(i, 1)
+            if item:
+                item.setData(Qt.ItemDataRole.UserRole, p.spid)   # 더블클릭 → 선수 카드(_on_player_cell_double_clicked)
+        self.tbl_players.setSortingEnabled(True)
+        self.btn_more.setVisible(bool(self._players) and not view.players_done)
+        self.lb_players.setText(f"적용 선수 — OVR 높은 순 {len(self._players):,}명"
+                                + (f" · {view.players_message}" if view.players_message else ""))
+        self.lb_status.setText(view.message)
+
+    def _show_pick(self, view: TeamColorView) -> None:
+        self._clear_pick()
+        self.lb_status.setText("예전에 읽은 상대라 같은 이름의 두 팀컬러 중 어느 것인지 모릅니다 — 고르세요.")
+        for r in view.candidates:
+            b = QPushButton(teamcolor.label(r["name"], r["emblem"]))
+            b.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+            b.clicked.connect(lambda _=False, r=r: self._start(teamcolor.label(r["name"], r["emblem"]), r["id"]))
+            self.box_pick.addWidget(b)
+        self.box_pick.addStretch(1)
 
 
 class ApiKeyDialog(QDialog):

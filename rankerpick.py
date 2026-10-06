@@ -19,6 +19,7 @@ ouid(닉네임이 그대로면 캐시) → 최근 경기 id 1 → 상세(이미 
 """
 from __future__ import annotations
 
+import sqlite3
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -26,7 +27,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import config
+import rankcollect
 import store
+import teamcolor
 from nexon_api import NETWORK_CODE, QUOTA_CODE, NexonAPIError
 from stats import PITCH_ROWS, SUB_POSITION, formation_of, pitch_rows
 
@@ -110,9 +113,20 @@ def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP) -> tuple[str | N
 
 
 def snapshot_index(rank_conn) -> dict[str, tuple[int, str]]:
-    """원본이 남은 마지막 스냅숏의 닉네임 → (순위, 팀컬러) — 12 찾기 결과의 팀컬러·순위 칸(요청 0)."""
+    """원본이 남은 마지막 스냅숏의 닉네임 → (순위, 팀컬러 글자 teamcolor.label) — 12 찾기 결과의 팀컬러·순위 칸(요청 0).
+    글자는 화면 콤보(상대 팀컬러 글자)와 맞대려고 여기서만 붙인다 — top_rankers 는 랭커 픽 비율·추천도 쓰므로 이름 그대로."""
     _taken, rows = top_rankers(rank_conn, limit=config.RANK_TIERS[-1])
-    return {r["nickname"]: (r["rank"], r.get("team_color") or "") for r in rows}
+    if not rows:
+        return {}
+    sid = rank_conn.execute(
+        "SELECT s.id FROM snapshots s WHERE EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)"
+        " ORDER BY s.taken_at DESC, s.id DESC LIMIT 1").fetchone()
+    try:
+        emblems = rankcollect.snapshot_emblem_map(rank_conn, sid[0]) if sid else {}
+    except sqlite3.Error:   # 옛 rank.db 를 읽기 전용으로 열었으면 표가 아직 없다
+        emblems = {}
+    return {r["nickname"]: (r["rank"], teamcolor.label(r.get("team_color") or "", emblems.get(r["profile_sn"], "")))
+            for r in rows}
 
 
 def due(targets: list[dict], have: dict[int, dict], now: datetime) -> list[dict]:

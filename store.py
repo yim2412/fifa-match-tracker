@@ -212,6 +212,26 @@ CREATE TABLE IF NOT EXISTS ranker_matches (
     match_id   TEXT PRIMARY KEY,
     fetched_on TEXT NOT NULL
 );
+-- 팀컬러 효과(2.2.1 · teamcolor.py) — 넥슨 데이터센터 목록·단계. 개인 정보가 아니라 지우기 대상이 아니다.
+-- 목록 801개는 한 번에 바꾼다(save_teamcolor_meta). effects 는 줄바꿈으로 이은 글자
+CREATE TABLE IF NOT EXISTS teamcolor_meta (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL,
+    emblem     TEXT NOT NULL,
+    emblem_url TEXT,
+    max_step   INTEGER,
+    members    INTEGER,
+    effects    TEXT,
+    fetched_on TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS teamcolor_steps (
+    id         INTEGER NOT NULL,
+    step       INTEGER NOT NULL,
+    members    INTEGER,
+    effects    TEXT,
+    fetched_on TEXT NOT NULL,
+    PRIMARY KEY (id, step)
+) WITHOUT ROWID;
 """
 
 # 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
@@ -254,6 +274,8 @@ def open_db(path: Path | str) -> sqlite3.Connection:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(team_colors)")}
         if "team_value" not in cols:
             conn.execute("ALTER TABLE team_colors ADD COLUMN team_value INTEGER")
+        if "emblem" not in cols:   # 2.2.1 — 값은 "읽은 시각\t엠블럼 키"(load_team_colors 가 시각을 대조한다)
+            conn.execute("ALTER TABLE team_colors ADD COLUMN emblem TEXT")
         _ensure_elo_unique(conn)
         conn.commit()
         # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
@@ -581,26 +603,33 @@ def remove_account(conn: sqlite3.Connection, ouid: str) -> None:
 
 
 # ── 상대 팀컬러·팀가치 캐시 ──────────────────────────────────────────────
+def _emblem_of(row) -> str:
+    """emblem 열("읽은 시각\t키")에서 키 — 시각이 지금 fetched_at 과 다르면 "". 옛 버전(2.1.1 이하)의 저장은
+    ON CONFLICT 에서 emblem 을 그대로 두고 이름·시각만 바꾸므로(같은 이름의 강화↔클럽 바뀜 포함) 그 줄의 엠블럼은 남의 것이다."""
+    when, sep, key = (row["emblem"] or "").partition("\t")
+    return key if sep and when == row["fetched_at"] else ""
+
+
 def load_team_colors(conn: sqlite3.Connection, nicknames: list[str],
                      ttl_days: int = TEAM_COLOR_TTL_DAYS
-                     ) -> dict[str, tuple[str, int | None]]:
-    """TTL 안에 있는 캐시만 {닉네임: (팀컬러, 팀가치)} 로 돌려준다.
+                     ) -> dict[str, tuple[str, int | None, str]]:
+    """TTL 안에 있는 캐시만 {닉네임: (팀컬러, 팀가치, 엠블럼 키 — 모르면 "")} 로 돌려준다.
 
     팀컬러는 있는데 팀가치가 NULL 인 행(팀가치 저장 이전 버전이 남긴 것)은
     빼고 돌려준다 — 없는 셈 쳐야 호출부가 다시 긁어서 팀가치까지 채운다."""
     if not nicknames:
         return {}
     cutoff = (datetime.now() - timedelta(days=ttl_days)).isoformat(timespec="seconds")
-    out: dict[str, tuple[str, int | None]] = {}
+    out: dict[str, tuple[str, int | None, str]] = {}
     for i in range(0, len(nicknames), 500):  # SQLite 변수 개수 상한 회피
         chunk = nicknames[i:i + 500]
         q = ",".join("?" * len(chunk))
         for row in conn.execute(
-            f"SELECT nickname, team_color, team_value FROM team_colors"
+            f"SELECT nickname, team_color, team_value, emblem, fetched_at FROM team_colors"
             f" WHERE nickname IN ({q}) AND fetched_at >= ?", (*chunk, cutoff)):
             if row["team_color"] and row["team_value"] is None:
                 continue  # 구버전 캐시 — 팀가치 백필을 위해 재조회 대상으로 남긴다
-            out[row["nickname"]] = (row["team_color"], row["team_value"])
+            out[row["nickname"]] = (row["team_color"], row["team_value"], _emblem_of(row))
     return out
 
 
@@ -646,23 +675,27 @@ def save_seasons(conn: sqlite3.Connection, items: list[Season]) -> None:
 
 
 def save_team_colors(conn: sqlite3.Connection,
-                     colors: dict[str, tuple[str, int | None]],
+                     colors: dict[str, tuple],
                      fetched_at: datetime | None = None) -> None:
-    """team_color 가 빈 문자열("찾지 못함")이어도 저장한다 — TTL 안에는
+    """colors: {닉네임: (넥슨 팀컬러 이름, 팀가치[, 엠블럼 키])} — 화면 글자(teamcolor.label)가 아니라 원값.
+
+    team_color 가 빈 문자열("찾지 못함")이어도 저장한다 — TTL 안에는
     없는 상대를 매번 다시 조회하지 않게. 팀가치는 랭커로 찾아진 상대만
     있고(top 10,000 밖이면 None) 팀컬러와 항상 같이 갱신된다.
     fetched_at: 값을 실제로 읽은 시각 — 랭킹 스냅숏에서 채웠으면 스냅숏 시각(지금 시각을 넣으면
-    7일 유효기간이 최대 8일이 된다)."""
+    7일 유효기간이 최대 8일이 된다). 엠블럼은 "시각\t키" 로 — 옛 버전이 이름만 바꾼 줄을 가려내려고(_emblem_of)."""
     if not colors:
         return
     now = (fetched_at or datetime.now()).isoformat(timespec="seconds")
-    for nickname, (color, value) in colors.items():
+    for nickname, v in colors.items():
+        color, value = v[0], v[1]
+        emblem = v[2] if len(v) > 2 else ""
         conn.execute(
-            "INSERT INTO team_colors (nickname, team_color, team_value, fetched_at)"
-            " VALUES (?, ?, ?, ?)"
+            "INSERT INTO team_colors (nickname, team_color, team_value, fetched_at, emblem)"
+            " VALUES (?, ?, ?, ?, ?)"
             " ON CONFLICT(nickname) DO UPDATE SET team_color=excluded.team_color,"
-            " team_value=excluded.team_value, fetched_at=excluded.fetched_at",
-            (nickname, color, value, now))
+            " team_value=excluded.team_value, fetched_at=excluded.fetched_at, emblem=excluded.emblem",
+            (nickname, color, value, now, f"{now}\t{emblem}" if emblem else None))
     conn.commit()
 
 
@@ -943,6 +976,18 @@ def save_card_info(conn: sqlite3.Connection, spid: int, name, position, base_ovr
                      " VALUES (?, ?, ?, ?, ?, ?)", (spid, name, position, base_ovr, salary, day))
 
 
+def save_card_salary(conn: sqlite3.Connection, spids_salaries) -> None:
+    """급여 열만 — 팀컬러 선수 목록(2.2.1)이 두 번째 출처. 그 JSON 의 OVR 은 선수 페이지 1강 OVR 과 달라(2026-10-06 실측
+    122 vs 125) 안 쓴다. 줄이 없으면 base_ovr·position NULL · fetched_on "" 로 넣어 card_info_fresh 가 낡은 것으로 본다
+    (칩 로더가 OVR 을 다시 읽는다). 이미 있는 줄의 name·position·base_ovr·fetched_on 은 건드리지 않는다."""
+    rows = [(s, pay) for s, pay in spids_salaries if s is not None and pay is not None]
+    if not rows:
+        return
+    with conn:
+        conn.executemany("INSERT INTO card_info (spid, salary, fetched_on) VALUES (?, ?, '')"
+                         " ON CONFLICT(spid) DO UPDATE SET salary = excluded.salary", rows)
+
+
 def card_info_fresh(conn: sqlite3.Connection, spid: int, day: str, ttl_days: int) -> bool:
     """읽은 지 ttl_days 안인가(day = 오늘 ISO). 날짜가 깨졌으면 낡은 것으로."""
     r = conn.execute("SELECT fetched_on FROM card_info WHERE spid = ?", (spid,)).fetchone()
@@ -963,6 +1008,60 @@ def load_card_info(conn: sqlite3.Connection, spids) -> dict[int, dict]:
         if r is not None:
             out[spid] = dict(r)
     return out
+
+
+# ── 팀컬러 효과 캐시(2.2.1) ──────────────────────────────────────────────────
+
+def _cache_fresh(fetched_on: str | None, today: date, days: int) -> bool:
+    try:
+        return (today - date.fromisoformat(fetched_on or "")).days < days
+    except ValueError:
+        return False
+
+
+def save_teamcolor_meta(conn: sqlite3.Connection, items, day: str) -> None:
+    """목록 전부를 한 트랜잭션으로 바꾼다(넥슨이 뺀 팀컬러는 사라진다). items: teamcolor.TeamColorMeta."""
+    with conn:
+        conn.execute("DELETE FROM teamcolor_meta")
+        conn.executemany(
+            "INSERT OR REPLACE INTO teamcolor_meta (id, name, emblem, emblem_url, max_step, members, effects, fetched_on)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(m.id, m.name, m.emblem, m.emblem_url, m.max_step, m.members, "\n".join(m.effects), day) for m in items])
+
+
+def load_teamcolor_meta(conn: sqlite3.Connection, today: date | None = None, days: int = 7) -> tuple[list[dict], bool]:
+    """→ (목록 [{id, name, emblem, emblem_url, max_step, members, effects(list), fetched_on}], days 안인가).
+    낡았어도 준다 — 웹 데이터가 꺼졌거나 실패하면 옛 값과 날짜를 보인다. 비었으면 ([], False)."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, name, emblem, emblem_url, max_step, members, effects, fetched_on FROM teamcolor_meta")]
+    for r in rows:
+        r["effects"] = [e for e in (r["effects"] or "").split("\n") if e]
+    if not rows:
+        return [], False
+    return rows, _cache_fresh(min(r["fetched_on"] for r in rows), today or date.today(), days)
+
+
+def save_teamcolor_steps(conn: sqlite3.Connection, teamcolor_id: int, steps, day: str) -> None:
+    """한 팀컬러의 단계 전부를 바꾼다. steps: teamcolor.Step."""
+    with conn:
+        conn.execute("DELETE FROM teamcolor_steps WHERE id = ?", (teamcolor_id,))
+        conn.executemany("INSERT OR REPLACE INTO teamcolor_steps (id, step, members, effects, fetched_on)"
+                         " VALUES (?, ?, ?, ?, ?)",
+                         [(teamcolor_id, s.step, s.members, "\n".join(s.effects), day) for s in steps])
+
+
+def load_teamcolor_steps(conn: sqlite3.Connection, teamcolor_id: int, today: date | None = None,
+                         days: int = 7) -> tuple[list[dict], str, bool]:
+    """→ (단계 [{step, members, effects(list)}] 단계 순, 받은 날, days 안인가). 없으면 ([], "", False)."""
+    rows = [dict(r) for r in conn.execute(
+        "SELECT step, members, effects, fetched_on FROM teamcolor_steps WHERE id = ?", (teamcolor_id,))]
+    if not rows:
+        return [], "", False
+    rows.sort(key=lambda r: r["step"])
+    for r in rows:
+        r["effects"] = [e for e in (r["effects"] or "").split("\n") if e]
+    day = min(r["fetched_on"] for r in rows)
+    return rows, day, _cache_fresh(day, today or date.today(), days)
 
 
 def budget_take(conn: sqlite3.Connection, day: str, kind: str, cap: int | None) -> bool:

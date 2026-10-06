@@ -462,7 +462,7 @@ def test_rank_page_rows_stay_aligned_when_a_color_is_empty():
                               _rank_row(2, "나&amp;다", "", "2,000"),
                               _rank_row(3, "라", "잉글랜드", "3,000")]) + "</div>"
     rows = ranker.parse_rank_page(html)
-    assert rows == [("가", "네덜란드", 1000), ("나&다", "", None), ("라", "잉글랜드", 3000)], rows
+    assert rows == [("가", "네덜란드", 1000, ""), ("나&다", "", None, ""), ("라", "잉글랜드", 3000, "")], rows
 
 
 def test_fetch_rank_page_refuses_empty_page():
@@ -477,15 +477,20 @@ def test_fetch_rank_page_refuses_empty_page():
         except ranker.RankerError:
             pass
         ranker._session.get = lambda *a, **k: _FakeRes(_rank_row(1, "가", "네덜란드", "1"))
-        assert ranker.fetch_rank_page(1) == [("가", "네덜란드", 1)]
+        assert ranker.fetch_rank_page(1) == [("가", "네덜란드", 1, "")]
     finally:
         ranker._session.get, config.WEB_DATA = orig_get, orig_on
 
 
 # ── 랭킹 수집(1.1.1) — 행 전체 읽기 · 쪽 판정 · 응답 분류 · 동시 상한 ─────────────────────
 # 실제 목록 페이지(2026-10-04)의 마크업 그대로, 값은 전부 바꿨다(닉네임·프로필 번호·순위·구단가치·ELO·승무패).
-def _full_row(no, sn_, nick, color="", count=11, grade=3, best=(5, 7), cls="td rank_no"):
-    tc = (f'<span class="ico_rank"><img src="x.png" alt=""></span><span class="name">'
+EMBLEM_CLUB = "https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/crests/light/medium/l11.png"
+EMBLEM_BOOST = "https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/teamcolorboost/icon/medium/4_l999867.png"
+
+
+def _full_row(no, sn_, nick, color="", count=11, grade=3, best=(5, 7), cls="td rank_no", emblem=EMBLEM_CLUB):
+    img = f'<img src="{emblem}" alt="">' if emblem else ""
+    tc = (f'<span class="ico_rank">\n{img}\n</span><span class="name">'
           f'<span class="inner">\n{color} <small>({count}명)</small>\n</span></span>' if color else
           '<span class="ico_rank"> </span><span class="name"> </span>')
     sn_attr = f' data-sn="{sn_}"' if sn_ is not None else ""
@@ -518,9 +523,23 @@ def test_parse_rank_rows_reads_every_field():
     assert (a.team_color, a.color_count, a.formation) == ("테스트 FC", 9, "4-2-3-1"), a
     assert (a.grade, a.best_grade, a.prev_grade) == (3, 5, 7), a       # 지금 등급 ≠ 최고 등급 칸
     assert (b.rank, b.team_color, b.color_count) == (1235, "", None), b  # 팀컬러 빈 행이 앞 행 값을 안 집는다
-    # 포장 규칙: 팀컬러가 없으면 구단가치 None
+    # 엠블럼(2.2.1) — 크기·명암 칸을 뺀 "종류/파일". 그림 없는 팀컬러 칸은 같은 행 뒤쪽의 등급 그림(rank_best)을 집지 않는다
+    assert a.team_color_emblem == "crests/l11.png" and b.team_color_emblem == "", (a, b)
+    c = ranker.parse_rank_rows(_page(_full_row(1, 1, "다", "그림 없음", emblem=None)))[0]
+    assert (c.team_color, c.team_color_emblem) == ("그림 없음", ""), c.team_color_emblem
+    # 포장 규칙: 팀컬러가 없으면 구단가치·엠블럼 없음
     assert ranker.parse_rank_page(_page(_full_row(1, 1, "가", "X"), _full_row(2, 2, "나"))) == \
-        [("가", "X", 12345678000), ("나", "", None)]
+        [("가", "X", 12345678000, "crests/l11.png"), ("나", "", None, "")]
+
+
+def test_emblem_key_forms():
+    # 2026-10-06 목록의 네 종류(T17) — 크기 칸(medium/large)·CDN 주소가 달라도 같은 키
+    k = ranker.emblem_key
+    assert k(EMBLEM_CLUB) == "crests/l11.png" == k(EMBLEM_CLUB.replace("medium", "large").replace("fco.dn", "x"))
+    assert k(EMBLEM_BOOST + "?v=3") == "teamcolorboost/4_l999867.png"
+    assert k("https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/countries/largeflags/14.png") == "countries/14.png"
+    assert k("https://ssl.nexon.com/s2/game/fc/online/obt/datacenter/teamcolor/tc_u_1.png") == "teamcolor/tc_u_1.png"
+    assert k("") == "" and k("x.png") == ""
 
 
 def _rows(*sns, start=1):
@@ -1149,7 +1168,9 @@ _RANK_HTML = ('<div class="tr"><span class="td rank_no">4,500</span>'
               '<span class="price" alt="9,356,900,000">93억 5,690만</span>'
               '<span class="td rank_r_win_point">3398.92</span>'
               '<span class="top">41.6%</span><span class="bottom">959<em>|</em>395<em>|</em>949</span>'
-              '<span class="td team_color"><span class="inner">맨체스터  유나이티드 <small>(11명)</small></span></span></div>')
+              '<span class="td team_color"><span class="ico_rank"><img src="https://x/live/externalAssets/common/'
+              'crests/light/medium/l11.png" alt=""></span>'
+              '<span class="inner">맨체스터  유나이티드 <small>(11명)</small></span></span></div>')
 
 
 def _rank_from(html):
@@ -1167,6 +1188,7 @@ def test_fetch_manager_rank_reads_every_field():
     assert (i.rank, i.level, i.team_value, i.team_value_text, i.elo) == (4500, 3823, 9356900000, "93억 5,690만", 3398.92)
     assert (i.win_rate, i.win, i.draw, i.lose) == ("41.6%", 959, 395, 949)
     assert i.team_color == "맨체스터 유나이티드" and i.ranked, i.team_color      # 겹친 공백 정리
+    assert i.team_color_emblem == "crests/l11.png", i.team_color_emblem          # 검색 한 명 경로에도(T16)
     assert i.profile_sn == 777001, i.profile_sn
     out = _rank_from('<div>순위 내 포함되어 있지 않습니다</div>')
     assert not out.ranked and out.team_color == "" and out.team_value == 0       # 랭킹 밖은 빈 값
@@ -1632,6 +1654,289 @@ def test_season_divisions_follow_season_boundary():
     got = st.season_divisions(pts, groups)
     assert [(s.no if s else None) for s, _ in groups] == [None, 89, 88]
     assert got == [None, (900, 800, 800), (1000, 1000, 1000)], got
+
+
+# ── 팀컬러 효과표 · 엠블럼(2.2.1) ──────────────────────────────────────────────────────
+# 픽스처: 실제 목록(2026-10-06 · 801개, 목록 구역만 공백을 줄여 gzip) · 상세 둘(단계 하나 · 넷 — 선수 검색 양식 앞까지) ·
+# 선수 JSON 6명(넥슨 공개 카드 정보 — 개인 정보 없음)
+
+def _tc_list_html() -> str:
+    import gzip
+    with gzip.open(os.path.join(_DIR, "teamcolor_list.html.gz"), "rt", encoding="utf-8") as f:
+        return f.read()
+
+
+def _tc_fixture(name: str) -> str:
+    return Path(_DIR, name).read_text(encoding="utf-8")
+
+
+class _TcRes:
+    def __init__(self, text="", status=200):
+        self.text, self.status_code = text, status
+
+
+def _tc_with(responses):
+    """ranker.web_get 을 바꿔 끼운다 — responses(url, params, kw) → _TcRes. 보낸 (url, params, kw) 를 모은다."""
+    import contextlib
+    import teamcolor
+    sent = []
+
+    @contextlib.contextmanager
+    def ctx():
+        orig, on = ranker.web_get, config.WEB_DATA
+        ranker.web_get = lambda s, url, method="get", **kw: (sent.append((url, kw.get("params"), kw)),
+                                                            responses(url, kw.get("params") or {}, kw))[1]
+        config.WEB_DATA = True
+        try:
+            yield teamcolor, sent
+        finally:
+            ranker.web_get, config.WEB_DATA = orig, on
+    return ctx()
+
+
+def test_teamcolor_list_parse():
+    import teamcolor
+    items = teamcolor.parse_list(_tc_list_html())
+    assert len(items) == 801, len(items)
+    by_name: dict = {}
+    for m in items:
+        by_name.setdefault(m.name, []).append(m)
+    dups = {n for n, v in by_name.items() if len(v) > 1}
+    # 상수 = 실제 목록의 겹치는 이름(T3) · 쌍마다 강화 하나 + 클럽 하나(T17) · (엠블럼, 이름)은 전부 고유
+    assert dups == set(config.TEAMCOLOR_DUP_NAMES), dups ^ set(config.TEAMCOLOR_DUP_NAMES)
+    for n in dups:
+        assert sorted(m.emblem.split("/")[0] for m in by_name[n]) == ["crests", "teamcolorboost"], n
+    assert len({(m.name, m.emblem) for m in items}) == 801
+    assert len({m.label for m in items}) == 801, "label 이 겹치는 두 팀컬러를 가르지 못한다"
+    # 글자 → 이름이 전부 되돌아온다 · 진짜 괄호 이름(T18)은 안 자른다
+    assert all(teamcolor.name_of(m.label) == m.name for m in items)
+    assert all(teamcolor.name_of(teamcolor.label(m.name, "")) == m.name for m in items)
+    assert teamcolor.name_of("20시즌 울산 (ACL 우승)") == "20시즌 울산 (ACL 우승)"
+    # 꼬리표 모양이어도 겹치는 이름이 아니면 진짜 이름이다 — 떼지 않는다
+    assert teamcolor.name_of("리옹 (구분 전)") == "리옹 (구분 전)" and teamcolor.name_of("리옹 · 강화") == "리옹 · 강화"
+    assert teamcolor.label("Spartan", "") == "Spartan (구분 전)" and teamcolor.is_unsplit("Spartan (구분 전)")
+    assert teamcolor.label("맨체스터 유나이티드", "") == "맨체스터 유나이티드"   # 겹치지 않으면 엠블럼과 상관없이 이름
+    m = next(m for m in items if m.id == 30007)
+    assert (m.name, m.max_step, m.members, m.effects) == ("01-03 성남FC 리그3연패 베스트", 1, 5, ["골 결정력 +3", "슛 파워 +2"]), m
+
+
+def test_teamcolor_list_half_broken_is_error():
+    # 절반 넘게 못 읽으면 "형식이 바뀜" — 빈 목록이나 반쪽 목록을 "팀컬러 없음"으로 읽지 않는다
+    import teamcolor
+    html = _tc_list_html()
+    chunks = html.split(teamcolor._ITEM_START)
+    broken = teamcolor._ITEM_START.join(chunks[:1] + [c.replace("GetTeamColorDetail(", "X(") if i % 3 else c
+                                                      for i, c in enumerate(chunks[1:])])
+    for bad in (broken, "<div>바뀐 구조</div>"):
+        try:
+            teamcolor.parse_list(bad)
+            raise AssertionError("반쪽 목록을 정상으로 읽었다")
+        except teamcolor.TeamColorError as e:
+            assert e.kind == "format", e.kind
+    # 한 항목 실패는 그 항목만
+    one = teamcolor._ITEM_START.join(chunks[:1] + [chunks[1].replace("GetTeamColorDetail(", "X(")] + chunks[2:])
+    assert len(teamcolor.parse_list(one)) == 800
+
+
+def test_teamcolor_detail_parse():
+    import teamcolor
+    desc, steps = teamcolor.parse_detail(_tc_fixture("teamcolor_detail_1005.html"))
+    assert desc == "맨체스터 유나이티드 선수들로 구성된 팀컬러입니다.", desc
+    assert [(s.step, s.members) for s in steps] == [(1, 3), (2, 6), (3, 8), (4, 11)], steps
+    assert steps[2].effects == ["전체 능력치 +3", "가속력 +2", "중거리 슛 +1"], steps[2]   # "-" 칸은 빠진다
+    _, one = teamcolor.parse_detail(_tc_fixture("teamcolor_detail_30007.html"))   # 단계 하나짜리는 class="level lvs1"
+    assert [(s.step, s.members, s.effects) for s in one] == [(1, 5, ["골 결정력 +3", "슛 파워 +2"])], one
+    try:
+        teamcolor.parse_detail("<div>바뀐 구조</div>")
+        raise AssertionError("단계 없는 상세를 정상으로 읽었다")
+    except teamcolor.TeamColorError as e:
+        assert e.kind == "format"
+
+
+def test_teamcolor_players_parse():
+    import teamcolor
+    ps = teamcolor.parse_players(_tc_fixture("teamcolor_players_1005.json"))
+    assert len(ps) == 6 and ps[0].spid == 110226764 and ps[0].ovr == 122 and ps[0].pay == 43, ps[0]
+    assert ps[0].position == "RW" and ps[0].prices[1] == 150000 and 0 not in ps[0].prices, ps[0]
+    # 0번 칸·0·빈 값은 시세가 아니다(모르는 시세는 0 이 아니다) · 칸 번호 = 강화
+    assert teamcolor.parse_prices("0|1,000|0||-|5,000") == {1: 1000, 5: 5000}
+    for bad in ("<html>", '{"x": 1}', '{"players": 3}'):
+        try:
+            teamcolor.parse_players(bad)
+            raise AssertionError(f"{bad}: 예외가 없다")
+        except teamcolor.TeamColorError as e:
+            assert e.kind == "format"
+    assert [p.spid for p in teamcolor.parse_players('{"players": [{"spid": "x"}, {"spid": 7, "ovr": "9"}]}')] == [7]
+
+
+def _tc_player(spid, ovr):
+    import teamcolor
+    return teamcolor.TeamColorPlayer(spid, f"p{spid}", "ST", ovr, 10)
+
+
+def test_teamcolor_players_continue():
+    import teamcolor
+    page = config.TEAMCOLOR_PLAYERS_PAGE
+    pool = [_tc_player(i, 130 - i // 30) for i in range(250)]   # OVR 마다 30명 — 쪽 경계에서 같은 OVR 이 겹친다
+    calls = []
+
+    def fetch(tid, cap):
+        calls.append(cap)
+        return [p for p in pool if cap is None or p.ovr <= cap][:page]
+
+    have, done = teamcolor.more_players(1, [], fetch)
+    assert len(have) == page and not done and calls == [None]
+    while not done:
+        new, done = teamcolor.more_players(1, have, fetch)
+        assert new or done
+        have += new
+    assert [p.spid for p in have] == list(range(250)), "경계 OVR 에서 겹치거나 빠졌다"
+    assert len({p.spid for p in have}) == 250
+    # 같은 OVR 이 한 쪽(100명)을 넘으면 — 새 사람이 0 이라 상한을 1 내려 한 번 더(그 OVR 의 나머지는 못 받는다)
+    same = [_tc_player(i, 120) for i in range(150)] + [_tc_player(1000 + i, 119) for i in range(5)]
+    calls.clear()
+
+    def fetch2(tid, cap):
+        calls.append(cap)
+        return [p for p in same if cap is None or p.ovr <= cap][:page]
+
+    have, done = teamcolor.more_players(1, [], fetch2)
+    new, done = teamcolor.more_players(1, have, fetch2)
+    assert calls == [None, 120, 119] and [p.spid for p in new] == [1000 + i for i in range(5)] and done, (calls, new)
+    # 받은 수 < 100 이면 끝 · 받은 게 다 겹치고 한 쪽보다 적으면 끝
+    assert teamcolor.more_players(1, [], lambda t, c: [_tc_player(1, 100)]) == ([_tc_player(1, 100)], True)
+    assert teamcolor.more_players(1, [_tc_player(1, 100)], lambda t, c: [_tc_player(1, 100)]) == ([], True)
+
+
+def test_teamcolor_requests_header_and_redirect_is_error():
+    # 상세·선수는 X-Requested-With 가 있어야 200(T4·T5 · U4) · 302 는 따라가지 않고 오류 · 200 이어도 오류 페이지 표시면 오류
+    list_html = _tc_list_html()
+    detail = _tc_fixture("teamcolor_detail_1005.html")
+    players = _tc_fixture("teamcolor_players_1005.json")
+
+    def ok(url, params, kw):
+        import teamcolor
+        return _TcRes({teamcolor.LIST_URL: list_html, teamcolor.DETAIL_URL: detail}.get(url, players))
+
+    with _tc_with(ok) as (tc, sent):
+        assert len(tc.fetch_list()) == 801
+        assert len(tc.fetch_detail(1005)[1]) == 4
+        assert len(tc.fetch_players(1005, 119)) == 6
+        for url, params, kw in sent:
+            assert kw.get("allow_redirects") is False, (url, kw)   # 넘김 주소(bulletin)엔 가지 않는다
+        assert sent[0][2].get("headers") is None, "목록은 헤더 없이 된다(T1)"
+        for _url, _p, kw in sent[1:]:
+            assert kw["headers"] == {"X-Requested-With": "XMLHttpRequest"}, kw
+        assert sent[1][1] == {"teamcolorid": 1005} and sent[2][1]["n4OvrMax"] == 119 and sent[2][1]["teamcolorid"] == 1005
+        assert sent[2][1]["strPosition"] == "", "포지션 필터는 안 쓴다(T8)"
+    for res, kind in ((_TcRes("", 302), "down"), (_TcRes("", 503), "down"), (_TcRes("", 429), "rate"),
+                      (_TcRes('<a href="http://bulletin.nexon.com/nxk/error.html">'), "down"),
+                      (_TcRes('<div class="fc_logo_inspection">'), "down")):
+        with _tc_with(lambda u, p, k, r=res: r) as (tc, sent):
+            try:
+                tc.fetch_detail(1005)
+                raise AssertionError(f"{res.status_code}: 예외가 없다")
+            except tc.TeamColorError as e:
+                assert e.kind == kind, (res.status_code, e.kind)
+
+
+def test_team_colors_emblem_saved_with_time_and_old_version_rows():
+    import sqlite3
+    import tempfile
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        # 옛 DB(emblem 열 없음)를 열면 늘어난다
+        old = sqlite3.connect(tmp / "f.db")
+        old.execute("CREATE TABLE team_colors (nickname TEXT PRIMARY KEY, team_color TEXT NOT NULL,"
+                    " team_value INTEGER, fetched_at TEXT NOT NULL)")
+        old.execute("INSERT INTO team_colors VALUES ('옛', '리옹', 5, ?)", (datetime.now().isoformat(timespec="seconds"),))
+        old.commit()
+        old.close()
+        c = store.open_db(tmp / "f.db")
+        assert "emblem" in {r[1] for r in c.execute("PRAGMA table_info(team_colors)")}
+        assert store.load_team_colors(c, ["옛"]) == {"옛": ("리옹", 5, "")}
+        # 새 저장 — 넥슨 이름 + "시각\t키" · 엠블럼 없는 2칸 튜플도 받는다
+        t = datetime.now().replace(microsecond=0)
+        store.save_team_colors(c, {"가": ("Spartan", 7, "crests/l130634.png"), "나": ("리옹", 3)}, fetched_at=t)
+        row = c.execute("SELECT team_color, emblem FROM team_colors WHERE nickname = '가'").fetchone()
+        assert tuple(row) == ("Spartan", f"{t.isoformat()}\tcrests/l130634.png"), tuple(row)
+        got = store.load_team_colors(c, ["가", "나"])
+        assert got == {"가": ("Spartan", 7, "crests/l130634.png"), "나": ("리옹", 3, "")}, got
+        # 옛 버전(2.1.1)의 저장 — emblem 은 그대로 두고 이름·시각만 바꾼다(같은 이름의 강화↔클럽 바뀜 포함) → 엠블럼 없음
+        later = (t + timedelta(seconds=5)).isoformat()
+        c.execute("INSERT INTO team_colors (nickname, team_color, team_value, fetched_at) VALUES ('가', 'Spartan', 7, ?)"
+                  " ON CONFLICT(nickname) DO UPDATE SET team_color=excluded.team_color,"
+                  " team_value=excluded.team_value, fetched_at=excluded.fetched_at", (later,))
+        c.commit()
+        assert store.load_team_colors(c, ["가"]) == {"가": ("Spartan", 7, "")}, "옛 버전이 바꾼 줄에 남의 엠블럼을 붙였다"
+        c.close()
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teamcolor_cache_ttl():
+    import tempfile
+    import store
+    import teamcolor
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        c = store.open_db(tmp / "f.db")
+        assert store.load_teamcolor_meta(c) == ([], False)
+        items = teamcolor.parse_list(_tc_list_html())
+        store.save_teamcolor_meta(c, items, "2026-10-01")
+        rows, fresh = store.load_teamcolor_meta(c, date(2026, 10, 7))
+        assert len(rows) == 801 and fresh, fresh                            # 6일 — 아직
+        r = next(r for r in rows if r["id"] == 30007)
+        assert r["effects"] == ["골 결정력 +3", "슛 파워 +2"] and r["emblem"] == "teamcolorboost/4_l981.png", r
+        assert store.load_teamcolor_meta(c, date(2026, 10, 8))[1] is False  # 7일 — 낡음(그래도 준다)
+        store.save_teamcolor_meta(c, items[:5], "2026-10-08")              # 통째로 바꾼다
+        assert len(store.load_teamcolor_meta(c, date(2026, 10, 8))[0]) == 5
+        assert store.load_teamcolor_steps(c, 1005) == ([], "", False)
+        _, steps = teamcolor.parse_detail(_tc_fixture("teamcolor_detail_1005.html"))
+        store.save_teamcolor_steps(c, 1005, steps, "2026-10-01")
+        got, day, fresh = store.load_teamcolor_steps(c, 1005, date(2026, 10, 7))
+        assert [s["step"] for s in got] == [1, 2, 3, 4] and day == "2026-10-01" and fresh
+        assert got[3]["effects"] == ["전체 능력치 +4", "가속력 +3", "중거리 슛 +3"], got[3]
+        assert store.load_teamcolor_steps(c, 1005, date(2026, 10, 8))[2] is False
+        c.close()
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_teamcolor_players_feed_card_cache():
+    # 급여 열만 — 기존 base_ovr·position·fetched_on 이 남아 칩의 need()(card_info_fresh)가 그대로다.
+    # 줄이 없으면 낡은 것으로 넣어 칩이 OVR 을 다시 읽는다
+    import tempfile
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        c = store.open_db(tmp / "f.db")
+        store.save_card_info(c, 7, "가", "ST", 120, 30, "2026-10-05")
+        store.save_card_salary(c, [(7, 33), (8, 20), (9, None)])
+        info = store.load_card_info(c, [7, 8, 9])
+        assert info[7] == {"name": "가", "position": "ST", "base_ovr": 120, "salary": 33, "fetched_on": "2026-10-05"}, info[7]
+        assert store.card_info_fresh(c, 7, "2026-10-06", 30), "급여만 썼는데 칩이 다시 읽게 됐다"
+        assert info[8]["salary"] == 20 and info[8]["base_ovr"] is None and 9 not in info, info
+        assert not store.card_info_fresh(c, 8, "2026-10-06", 30), "OVR 없는 줄을 신선하다고 봤다"
+        c.close()
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_team_color_baseline_and_opponents():
+    import dataclasses
+    ms = [dataclasses.replace(_md(datetime(2026, 9, 1, h), r), opponent=opp) for h, (r, opp) in enumerate(
+        [("승", "가"), ("승", "가"), ("패", "나"), ("승", "다"), ("패", "밖"), ("패", "밖")])]
+    colors = {"가": "X", "나": "X", "다": "Y"}
+    stats_ = {s.team_color: s for s in st.team_color_stats(ms, colors.get)}   # 팀가치 인자 없이도 상대를 센다
+    assert stats_["X"].opponents == {"가", "나"} and stats_["Y"].opponents == {"다"}, stats_
+    # 기준 = 팀컬러를 아는 경기만(1만 위 밖 상대의 패가 빠진다)
+    assert st.team_color_baseline(ms, colors.get) == (4, 75.0)
+    assert st.team_color_baseline([], colors.get) == (0, 0.0)
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 

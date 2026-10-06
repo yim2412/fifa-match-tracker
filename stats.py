@@ -114,10 +114,8 @@ def season_divisions(points: list[tuple[datetime, int]],
 # 슛 유형. 공식 문서에 매핑이 없어 실제 응답으로 확정했다.
 #  - type 8/9 는 shoot.goalFreekick / goalPenaltyKick 집계와 200개 선수-경기
 #    행에서 경기별로 정확히 일치 → 확정.
-#  - 1/2/3/6/7 은 외부 전적 사이트가 같은 계정 100경기에서 낸 유형별 골 수와
-#    합계가 전부 일치 → 확정.
-#  - 4/10/13/14 는 근거가 없어 비워 둔다(= "알 수 없음"). 참고한 사이트도
-#    이 타입들을 못 읽고 "알 수 없음"으로 표시한다.
+#  - 1/2/3/6/7 은 같은 계정 100경기의 유형별 골 수 대조로 합계가 전부 일치 → 확정.
+#  - 4/10/13/14 는 근거가 없어 비워 둔다(= "알 수 없음").
 GOAL_TYPES = {
     1: "일반(D)",
     2: "감아차기(ZD)",
@@ -393,13 +391,9 @@ class PlayerStat:
     def _per_match(self, total: float) -> float:
         return total / self.games * 100 if self.games else 0.0
 
-    # ── 파생 지표 — fc-info.com 프론트엔드 JS 번들에서 역산 ────────────
-    # API 가 안 주는 값이라 직접 만들어야 했는데, 처음엔 우리 나름의 가중치로
-    # 지어냈다가(커밋 이력 참고) 실제 계산식을 찾아 그대로 옮겼다.
-    # fc-info 의 분석 페이지 JS 청크(pages/analysis/coach/[id]-*.js)에 미니파이된
-    # 채로 그대로 들어있었다 — attackScore/defenceScore/defendingPoint 등의
-    # 변수명으로. 실제 100경기 데이터로 재현해 값이 거의 일치함을 확인했다
-    # (예: GK 선방력 151.5 vs 참고 151.6, CDM 수비력 362.4 vs 참고 365.0).
+    # ── 파생 지표 — 공격력·수비력·기대득점률·선방력 ────────────────────
+    # API 가 안 주는 값이라 직접 만든다. 처음엔 임의 가중치였다가 계산식을 다시
+    # 정해 옮겼고, 실제 100경기 데이터로 검증했다.
     #
     # 핵심 발견: "선방력"은 defending 누적 합계가 아니라 **경기당 평균 × 100**
     # 이다. 100경기 표본에서는 나눗셈과 곱셈이 상쇄돼 합계처럼 보였을 뿐이고,
@@ -407,7 +401,7 @@ class PlayerStat:
     @property
     def expected_goal_rate(self) -> float:
         """기대득점률 — '경기당 공격포인트(골+어시) 비율×100'. 유효슛 대비
-        득점률이 아니다(이름과 달리 fc-info 정의를 그대로 따름)."""
+        득점률이 아니다."""
         return self._per_match(self.goal + self.assist)
 
     @property
@@ -1451,6 +1445,7 @@ class TeamColorStat:
     # 팀가치를 모르는 상대(구버전 캐시 등)는 안 들어가므로 평균·최저·최고는
     # "팀가치를 아는 상대" 기준이다.
     team_values: list = field(default_factory=list)
+    opponents: set = field(default_factory=set)   # 서로 다른 상대 닉네임 — 한 사람과의 반복 대전을 가려낸다(2.2.1)
 
     @property
     def win_rate(self) -> float:
@@ -1489,6 +1484,7 @@ def team_color_stats(matches: list, team_color_of,
             s.draw += 1
         elif "패" in m.result:
             s.lose += 1
+        s.opponents.add(m.opponent)   # 팀가치 인자와 상관없이 센다
         if team_value_of is not None:
             seen = seen_opponents.setdefault(color, set())
             if m.opponent not in seen:
@@ -1497,6 +1493,18 @@ def team_color_stats(matches: list, team_color_of,
                 if value:
                     s.team_values.append(value)
     return sorted(acc.values(), key=lambda s: -s.games)
+
+
+def team_color_baseline(matches: list, team_color_of) -> tuple[int, float]:
+    """팀컬러 표의 "평균 대비" 기준 — 팀컬러를 아는 경기만의 (경기 수, 승률 %). 범위 전체로 잡으면 1만 위 밖 상대와의
+    경기가 기준에만 들어가 거의 모든 팀컬러가 "평균 아래"가 된다(ROADMAP 2.2.1 ⑩). team_color_stats 와 같은 셈."""
+    games = win = 0
+    for m in matches:
+        if not team_color_of(m.opponent):
+            continue
+        games += 1
+        win += "승" in m.result
+    return games, (win / games * 100 if games else 0.0)
 
 
 # ── 포지션별 최다 상대 선수 ─────────────────────────────────────────────────

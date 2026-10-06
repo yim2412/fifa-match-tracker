@@ -166,17 +166,41 @@ def test_diff_report_on_a_real_git_history():
         assert "[FAIL] git" in str(e), e
 
 
+DONE = "docs/DONE.md"
+
+
+def _live_version() -> tuple[str, str]:
+    """실제 문서의 버전 절 → (문서, "2.2.1"). 계획 문서의 첫 버전 절, 없으면(다음 버전 계획 전) 끝난 기록의 마지막 절.
+    번호를 박지 않는다 — 2.1.1 을 박아 둔 탓에 그 절이 DONE.md 로 옮겨 간 뒤로 이 파일이 빨갰다."""
+    import re
+    for doc, pick in ((rk.ROADMAP, 0), (DONE, -1)):
+        found = [m.group(1) for s in (ROOT / doc).read_text(encoding="utf-8").splitlines()
+                 if (m := re.match(r"## (\d+\.\d+\.\d+)\b", s))]
+        if found:
+            return doc, found[pick]
+    raise AssertionError("계획 문서에도 끝난 기록에도 버전 절이 없다")
+
+
 def test_main_writes_each_command():
     d = Path(tempfile.mkdtemp())
-    assert rk.main(["ledger", "## 2.1.1", "--out", str(d / "l.md")]) == 0
-    assert (d / "l.md").read_text(encoding="utf-8").startswith("# 주장 장부 — 2.1.1"), "ledger 가 다른 걸 썼다"
-    assert rk.main(["bundle", "## 2.1.1", "--out", str(d / "b.md")]) == 0
-    assert (d / "b.md").read_text(encoding="utf-8").startswith("# 근거 묶음 — 2.1.1")
+    doc, v = _live_version()
+    keep, rk.ROADMAP = rk.ROADMAP, doc
+    try:
+        _main_writes(d, v)
+    finally:
+        rk.ROADMAP = keep
+
+
+def _main_writes(d: Path, v: str) -> None:
+    assert rk.main(["ledger", f"## {v}", "--out", str(d / "l.md")]) == 0
+    assert (d / "l.md").read_text(encoding="utf-8").startswith(f"# 주장 장부 — {v}"), "ledger 가 다른 걸 썼다"
+    assert rk.main(["bundle", f"## {v}", "--out", str(d / "b.md")]) == 0
+    assert (d / "b.md").read_text(encoding="utf-8").startswith(f"# 근거 묶음 — {v}")
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         buf.reconfigure = lambda **k: None          # main 이 콘솔 인코딩을 맞춘다 — 가짜 출력엔 없는 메서드
         sys.stdout.reconfigure = buf.reconfigure
-        rk.main(["ledger", "## 2.1.1"])
+        rk.main(["ledger", f"## {v}"])
     assert buf.getvalue().startswith("# 주장 장부"), "--out 없이 표준 출력으로 안 나왔다"
     assert not (d / "x").exists()
 
@@ -243,10 +267,11 @@ def test_ledger_rows_and_basis():
 
 def test_real_plan_bundle_runs():
     # 실제 계획에서 — 절 하나의 묶음이 그 파일들을 통째로 읽는 것보다 훨씬 작아야 쓸모가 있다
-    lines = (ROOT / rk.ROADMAP).read_text(encoding="utf-8").splitlines()
-    _, sec = rk.section(lines, "## 2.1.1")
+    doc, v = _live_version()
+    lines = (ROOT / doc).read_text(encoding="utf-8").splitlines()
+    _, sec = rk.section(lines, f"## {v}")
     body = "\n".join(sec)
-    out = rk.bundle(rk.build_index(), rk.identifiers(body), rk.file_refs(body), "2.1.1")
+    out = rk.bundle(rk.build_index(), rk.identifiers(body), rk.file_refs(body), v)
     head = out.splitlines()[2]
     assert "정의" in head and "통째로면" in head, head
     size = int(head.split("묶음 ")[1].split("자")[0].replace(",", ""))

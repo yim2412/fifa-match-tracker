@@ -789,12 +789,68 @@ class SortableItem(QTableWidgetItem):
     def __init__(self, text: str, sort_key=None):
         super().__init__(text)
         self._key = sort_key
+        # 표본이 작아 흐린 행 — 어느 열·어느 방향으로 정렬해도 맨 아래로(2.2.1 팀컬러 표: 상대 2명 +25%p 가 맨 위로 오지 않게).
+        # Qt 는 내림차순을 같은 비교를 뒤집어(other < self) 쓰므로 지금 방향을 머리글에서 읽어 맞춘다
+        self.sink = False
 
     def __lt__(self, other):
+        if isinstance(other, SortableItem) and self.sink != other.sink:
+            table = self.tableWidget()
+            desc = table is not None and \
+                table.horizontalHeader().sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+            return self.sink if desc else other.sink
         if isinstance(other, SortableItem) and self._key is not None \
                 and getattr(other, "_key", None) is not None:
             return self._key < other._key
         return super().__lt__(other)
+
+
+# 팀가치 범위 막대(2.2.1) 칸의 값 — (최저, 평균, 최고) 원 단위. 축은 델리게이트가 쥔다(표의 전체 행 기준)
+RANGE_ROLE = Qt.ItemDataRole.UserRole + 7
+
+
+class RangeBarDelegate(RowBorderDelegate):
+    """최저~최고 막대 + 평균 점, **로그 축** — 구단가치가 자릿수로 벌어져(수천억~수경) 선형이면 대부분이 한 점이 된다.
+    축(lo, hi)은 set_axis 로 — 필터로 줄을 숨겨도 막대 길이가 안 변하게 표의 전체 행에서 잰 값을 준다.
+    흐린 줄은 SortableItem.sink 를 보고 흐린 색으로."""
+
+    PAD = 8
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.lo = self.hi = None
+
+    def set_axis(self, lo: int | None, hi: int | None) -> None:
+        self.lo, self.hi = lo, hi
+
+    def x_of(self, v: float, left: float, width: float) -> float:
+        import math
+        if not self.lo or not self.hi or self.hi <= self.lo:
+            return left + width / 2
+        a, b = math.log10(self.lo), math.log10(self.hi)
+        return left + (math.log10(max(v, self.lo)) - a) / (b - a) * width
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        val = index.data(RANGE_ROLE)
+        if not val or val[0] is None:
+            return
+        lo, avg, hi = val
+        table = self.parent()
+        item = table.item(index.row(), index.column()) if isinstance(table, QTableWidget) else None
+        dim = bool(getattr(item, "sink", False))
+        r = option.rect.adjusted(self.PAD, 0, -self.PAD, 0)
+        y = option.rect.top() + option.rect.height() / 2
+        x0, x1, xa = (self.x_of(v, r.left(), r.width()) for v in (lo, hi, avg))
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(T.TEXT_DIM if dim else T.CHART_NEUTRAL), 4, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap))
+        painter.drawLine(QPointF(x0, y), QPointF(max(x1, x0 + 0.5), y))
+        painter.setPen(QPen(QColor(T.CHART_ON_MARK), 1.5))
+        painter.setBrush(QColor(T.TEXT_DIM if dim else T.CHART_UP))
+        painter.drawEllipse(QPointF(xa, y), 4.5, 4.5)
+        painter.restore()
 
 
 class StatCard(QFrame):
@@ -842,8 +898,7 @@ class RankerCard(QFrame):
     존재하지 않는 경로도 같은 400 을 뱉는 것으로 확인). 칸은 두되 값은
     NA 로 남기고 각주로 이유를 밝힌다 — 지어낸 숫자를 넣지 않는다.
 
-    큰 숫자를 타일로 나열해 게임 레벨업 화면처럼 — 표 형태(fc-info.com 류)와
-    확실히 다른 구성으로 가져간다. 타일 순서: 순위 · 점수 순으로 눈에 먼저
+    큰 숫자를 타일로 나열해 게임 레벨업 화면처럼. 타일 순서: 순위 · 점수 순으로 눈에 먼저
     들어오게, 전적·구단가치는 아래.
     """
 

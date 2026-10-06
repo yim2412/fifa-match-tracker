@@ -37,6 +37,7 @@ import app_main  # noqa: E402
 import config  # noqa: E402
 import core_api as core  # noqa: E402
 import crashlog  # noqa: E402
+import images  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
 import notice  # noqa: E402
@@ -47,6 +48,7 @@ import requests  # noqa: E402
 import seasons as sn  # noqa: E402
 import store  # noqa: E402
 import stats as st_mod  # noqa: E402
+import teamcolor  # noqa: E402
 import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
 
@@ -2229,6 +2231,9 @@ def _web_calls():
         ("playerinfo", lambda: playerinfo.fetch_player_info(1), playerinfo.PlayerInfoError),
         ("ability", lambda: playerinfo.fetch_player_ability(1), playerinfo.PlayerInfoError),
         ("seasons", lambda: sn.fetch_seasons(), sn.SeasonError),
+        ("teamcolor list", lambda: teamcolor.fetch_list(), teamcolor.TeamColorError),
+        ("teamcolor detail", lambda: teamcolor.fetch_detail(1005), teamcolor.TeamColorError),
+        ("teamcolor players", lambda: teamcolor.fetch_players(1005), teamcolor.TeamColorError),
     ]
 
 
@@ -2287,7 +2292,7 @@ def test_every_web_request_goes_through_the_concurrency_cap():
 
 
 def test_web_requests_name_the_app():
-    for mod in (ranker, playerinfo):
+    for mod in (ranker, playerinfo, teamcolor):
         ua = mod._session.headers.get("User-Agent", "")
         assert ua == config.WEB_USER_AGENT and "Mozilla" not in ua, (mod.__name__, ua)
 
@@ -2326,9 +2331,9 @@ def _run_rank_list(wanted, pages):
         if rows is None:
             raise ranker.RankerError("못 읽음")
         return ranker.RankPageResult(page, [
-            ranker.RankRow(rank=page * 100 + i, profile_sn=page * 100 + i, nickname=n, team_color=c,
-                           team_value=v if v is not None else 7)
-            for i, (n, c, v) in enumerate(rows)], "")
+            ranker.RankRow(rank=page * 100 + i, profile_sn=page * 100 + i, nickname=r[0], team_color=r[1],
+                           team_value=r[2] if r[2] is not None else 7, team_color_emblem=r[3] if len(r) > 3 else "")
+            for i, r in enumerate(rows)], "")
 
     ranker.fetch_rank_rows, ranker.RANK_PAGES = fake, len(pages)
     got, done = {}, []
@@ -2343,14 +2348,14 @@ def _run_rank_list(wanted, pages):
 
 
 def test_rank_list_marks_outside_only_when_every_page_read():
-    pages = {1: [("가", "네덜란드", 1), ("남", "프랑스", 2)], 2: [("나", "", None)]}
+    pages = {1: [("가", "네덜란드", 1, "countries/14.png"), ("남", "프랑스", 2)], 2: [("나", "", None, "x/y.png")]}
     ld, got, done = _run_rank_list({"가", "나", "밖"}, pages)
-    # 원한 사람만 내보낸다(목록의 남은 저장하지 않는다) · 목록에 없으면 '랭킹 밖'("")
-    assert got == {"가": ("네덜란드", 1), "나": ("", None), "밖": ("", None)}, got
+    # 원한 사람만 내보낸다(목록의 남은 저장하지 않는다) · 목록에 없으면 '랭킹 밖'("") · 엠블럼이 같이 온다(2.2.1)
+    assert got == {"가": ("네덜란드", 1, "countries/14.png"), "나": ("", None, ""), "밖": ("", None, "")}, got
     assert done == [True] and ld.failed_pages == 0
     pages[2] = None  # 한 쪽 실패 — 그 쪽에 있었을 수도 있는 상대를 '랭킹 밖'으로 굳히면 안 된다
     ld, got, done = _run_rank_list({"가", "나", "밖"}, pages)
-    assert got == {"가": ("네덜란드", 1)}, got
+    assert got == {"가": ("네덜란드", 1, "countries/14.png")}, got
     assert done == [True] and ld.failed_pages == 1
 
 
@@ -2429,6 +2434,13 @@ def _rank_snapshot(when, colors: dict, people: int = 30):
         c.close()
 
 
+def _tc_min(n: int) -> int:
+    """팀컬러 표 최소 경기 수 필터를 n 으로 → 옛 값(두 탭 공용 스핀)."""
+    old = _win._teamcolor_min_games()
+    _win._teamcolor_min_spins[0].setValue(n)
+    return old
+
+
 class _TeamColorEnv:
     """임시 DB · 웹 데이터 켬 · 팀컬러 상태를 잡아 뒀다 되돌린다."""
 
@@ -2441,9 +2453,12 @@ class _TeamColorEnv:
         config.WEB_DATA, config.DB_PATH = True, self.tmp / "t.db"
         _win._team_colors.clear()
         _win._teamcolor_loader = None
+        self._min = _tc_min(1)   # 픽스처는 4경기라 기본 필터(최소 core.MIN_COND 경기)면 줄이 다 숨는다
         return self
 
     def __exit__(self, *exc):
+        _tc_min(self._min)
+        _win._teamcolor_raw.clear()
         (config.WEB_DATA, config.DB_PATH, app_main.TeamColorLoader,
          app_main.RankListLoader) = self._saved[:4]
         _win._team_colors.clear()
@@ -2493,7 +2508,7 @@ def test_teamcolor_results_reach_table_and_db():
             saved = store.load_team_colors(conn, opps)
         finally:
             conn.close()
-        assert saved == {n: ("즉시컬러", 7) for n in opps}, saved
+        assert saved == {n: ("즉시컬러", 7, "") for n in opps}, saved
 
 
 def test_teamcolor_uses_db_cache_for_every_season_before_fetching():
@@ -2520,6 +2535,7 @@ def test_position_views_follow_teamcolor_scope():
     seen = []
     orig = app_main.core.opponent_position_players, _win.sp_to.value(), _win._show_teamcolor_detail
     saved_colors = dict(_win._team_colors)
+    old_min = _tc_min(1)
 
     def spy(details, *a, **k):
         seen.append(len(details))
@@ -2543,12 +2559,13 @@ def test_position_views_follow_teamcolor_scope():
         _win._team_colors.clear()
         _win._team_colors.update(saved_colors)
         _win.sp_to.setValue(orig[1])
+        _tc_min(old_min)
         _win._render_all()
 
 
 def test_teamcolor_counts_season_scope_not_display_range():
     # 표시 구간을 1경기로 좁혀도 팀컬러 표는 시즌(지금은 전체) 경기를 다 센다
-    saved = dict(_win._team_colors), _win.sp_to.value()
+    saved = dict(_win._team_colors), _win.sp_to.value(), _tc_min(1)
     try:
         for m in _MATCHES:
             if m.opponent:
@@ -2567,7 +2584,347 @@ def test_teamcolor_counts_season_scope_not_display_range():
         _win._team_colors.clear()
         _win._team_colors.update(saved[0])
         _win.sp_to.setValue(saved[1])
+        _tc_min(saved[2])
         _win._render_all()
+
+
+# ── 2.2.1 팀컬러 — 엠블럼으로 가르기 · 효과 창 · 표 ─────────────────────────────────────
+BOOST, CLUB = "teamcolorboost/4_l999867.png", "crests/l130634.png"   # Spartan 의 두 팀컬러(실측 목록)
+
+
+def _table_dump(tbl):
+    return [[tbl.item(r, c).text() if tbl.item(r, c) else None for c in range(tbl.columnCount())]
+            for r in range(tbl.rowCount())]
+
+
+def test_teamcolor_dup_names_split_and_save_raw():
+    # 같은 이름(Spartan)의 강화·클럽 팀컬러를 쓰는 두 상대 → 두 줄 · 저장은 넥슨 이름 + "시각\t키"(화면 글자 아님)
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    with _TeamColorEnv():
+        _win._teamcolor_pending = opps[:2]
+        _win._teamcolor_loader = None
+        _win._on_teamcolor_loaded({opps[0]: ("Spartan", 7, BOOST), opps[1]: ("Spartan", 9, CLUB)})
+        assert (_win._team_colors[opps[0]], _win._team_colors[opps[1]]) == ("Spartan · 강화", "Spartan · 클럽")
+        _win._on_teamcolor_finished()
+        names = {_win.tbl_teamcolor_rate.item(r, 0).text() for r in range(_win.tbl_teamcolor_rate.rowCount())}
+        assert {"Spartan · 강화", "Spartan · 클럽"} <= names, names
+        c = store.open_db(config.DB_PATH)
+        try:
+            rows = {r["nickname"]: (r["team_color"], r["emblem"]) for r in c.execute(
+                "SELECT nickname, team_color, emblem FROM team_colors")}
+            loaded = store.load_team_colors(c, opps[:2])
+        finally:
+            c.close()
+        assert rows[opps[0]][0] == "Spartan" and rows[opps[0]][1].endswith("\t" + BOOST), rows
+        assert loaded[opps[1]] == ("Spartan", 9, CLUB), loaded
+        # DB 에서 다시 읽어도 같은 글자(다른 실행 · 다른 시즌으로 바꿨을 때)
+        _win._team_colors.clear()
+        _win._load_cached_team_colors(set(opps[:2]))
+        assert _win._team_colors[opps[1]] == "Spartan · 클럽", _win._team_colors
+
+
+def test_teamcolor_table_same_before_and_after_meta():
+    # 가르기는 목록 없이 선다(2회차 [상]) — 효과 창이 목록을 받기 전후로 표의 행·값이 같다
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    with _TeamColorEnv():
+        _win._on_teamcolor_loaded({opps[0]: ("Spartan", 7, BOOST), opps[1]: ("Spartan", 9, ""),
+                                   opps[2]: ("리옹", 3, "crests/l66.png")})
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        before = _table_dump(_win.tbl_teamcolor_rate), _table_dump(_win.tbl_teamcolor_rank)
+        assert any(r[0] == "Spartan (구분 전)" for r in before[0]), before[0]
+        c = store.open_db(config.DB_PATH)
+        try:
+            gz = pathlib.Path(__file__).parent / "fixtures" / "teamcolor_list.html.gz"
+            import gzip
+            store.save_teamcolor_meta(c, teamcolor.parse_list(gzip.decompress(gz.read_bytes()).decode("utf-8")),
+                                      datetime.now().date().isoformat())
+        finally:
+            c.close()
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        assert (_table_dump(_win.tbl_teamcolor_rate), _table_dump(_win.tbl_teamcolor_rank)) == before
+
+
+def test_teamcolor_weak_rows_sink_both_ways_and_stay_uncolored():
+    # 흐린 줄(상대 수 < 기준 · 구분 전)은 숫자도 흐리고 색이 없으며, 어느 방향으로 정렬해도 맨 아래
+    from PyQt6.QtGui import QColor
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    with _TeamColorEnv():
+        saved_min = config.TEAMCOLOR_MIN_OPPONENTS
+        config.TEAMCOLOR_MIN_OPPONENTS = 2
+        try:
+            # 강한 줄: 두 상대(X) · 약한 줄: 한 상대(Y)
+            _win._on_teamcolor_loaded({opps[0]: ("X", 1, ""), opps[1]: ("X", 1, ""), opps[2]: ("Y", 1, "")})
+            orig_cond = app_main.core.MIN_COND
+            app_main.core.MIN_COND = 1
+            try:
+                _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+            finally:
+                app_main.core.MIN_COND = orig_cond
+            tbl = _win.tbl_teamcolor_rate
+            cols = app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS
+            rows = {tbl.item(r, 0).text(): r for r in range(tbl.rowCount())}
+            assert set(rows) == {"X", "Y"}, rows
+            weak = tbl.item(rows["Y"], cols.index("승률"))
+            strong = tbl.item(rows["X"], cols.index("승률"))
+            assert weak.sink and not strong.sink and weak.toolTip(), weak.toolTip()
+            assert weak.foreground().color().name() == QColor(T.TEXT_DIM).name()
+            assert weak.background().style() == Qt.BrushStyle.NoBrush, "흐린 줄에 색을 칠했다"
+            for col in ("승률", "경기", "평균 대비", "팀컬러"):
+                for order in (Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder):
+                    tbl.sortByColumn(cols.index(col), order)
+                    assert tbl.item(tbl.rowCount() - 1, 0).text() == "Y", (col, order, _table_dump(tbl))
+        finally:
+            config.TEAMCOLOR_MIN_OPPONENTS = saved_min
+
+
+def test_teamcolor_min_games_filter_hides_and_counts():
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    with _TeamColorEnv():
+        _win._on_teamcolor_loaded({n: ("필터컬러", 1, "") for n in opps})
+        games = sum(1 for m in _win._matches if m.opponent)
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        assert _win.tbl_teamcolor_rate.rowCount() == 1
+        _win._teamcolor_min_spins[1].setValue(games + 1)   # 다른 탭의 스핀 — 두 탭이 같은 값
+        assert _win._teamcolor_min_spins[0].value() == games + 1
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        assert _win.tbl_teamcolor_rate.rowCount() == 0 and _win.tbl_teamcolor_rank.rowCount() == 0
+        assert "1종 숨김" in _win._teamcolor_note_labels[0].text(), _win._teamcolor_note_labels[0].text()
+
+
+def test_teamcolor_range_axis_ignores_filter():
+    # 범위 막대 축은 필터와 무관하게 표의 전체 행 — 스핀을 바꿔도 막대 길이가 안 변하게
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    with _TeamColorEnv():
+        # 숨길 B 가 축의 최저를 쥔다 — 필터 뒤 줄로 축을 재면 바로 달라진다
+        _win._on_teamcolor_loaded({opps[0]: ("A", 10 ** 10, ""), opps[1]: ("A", 10 ** 11, ""),
+                                   opps[2]: ("B", 10 ** 9, "")})
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        axis = (_win._tc_range_delegate.lo, _win._tc_range_delegate.hi)
+        assert axis == (10 ** 9, 10 ** 11), axis
+        games_b = sum(1 for m in _win._matches if m.opponent == opps[2])
+        games_a = sum(1 for m in _win._matches if m.opponent in opps[:2])
+        if games_a > games_b:   # B 만 숨기는 문턱
+            _win._teamcolor_min_spins[0].setValue(games_b + 1)
+            _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+            names = {_win.tbl_teamcolor_rank.item(r, 1).text() for r in range(_win.tbl_teamcolor_rank.rowCount())}
+            assert names == {"A"}, names
+            assert (_win._tc_range_delegate.lo, _win._tc_range_delegate.hi) == axis, "필터가 축을 바꿨다"
+        else:
+            raise AssertionError(f"픽스처로 B 만 숨길 수 없다(A {games_a} · B {games_b}) — 상대 배정을 바꿀 것")
+
+
+def test_teamcolor_double_click_on_dup_name():
+    # "Spartan · 강화" 줄을 더블클릭하면 그 상대만(글자 키 그대로 대조)
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    got = []
+    orig = _win._show_teamcolor_detail
+    with _TeamColorEnv():
+        _win._on_teamcolor_loaded({opps[0]: ("Spartan", 1, BOOST), opps[1]: ("Spartan", 1, CLUB)})
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        seen = []
+        orig_pp = app_main.core.opponent_position_players
+        app_main.core.opponent_position_players = lambda *a, nicknames=None, **k: (seen.append(nicknames), [])[1]
+        _win._show_teamcolor_detail = lambda color, players: got.append(color)
+        try:
+            tbl = _win.tbl_teamcolor_rank
+            r = next(r for r in range(tbl.rowCount()) if tbl.item(r, 1).text() == "Spartan · 강화")
+            _win._on_teamcolor_double_clicked(tbl.item(r, 1))
+            assert got == ["Spartan · 강화"] and seen == [{opps[0]}], (got, seen)
+            # 효과 열의 더블클릭은 아무것도 안 한다(한 번 클릭이 효과 창을 연다)
+            _win._on_teamcolor_double_clicked(tbl.item(r, app_main.MainWindow.TEAMCOLOR_RANK_COLUMNS.index("효과")))
+            assert got == ["Spartan · 강화"], got
+        finally:
+            _win._show_teamcolor_detail = orig
+            app_main.core.opponent_position_players = orig_pp
+
+
+def test_teamcolor_effect_opens_only_from_column():
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    opened = []
+    orig = _win._open_teamcolor_effect
+    with _TeamColorEnv():
+        _win._on_teamcolor_loaded({opps[0]: ("Spartan", 1, CLUB)})
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        _win._open_teamcolor_effect = opened.append
+        try:
+            for tbl, cols in ((_win.tbl_teamcolor_rate, app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS),
+                              (_win.tbl_teamcolor_rank, app_main.MainWindow.TEAMCOLOR_RANK_COLUMNS)):
+                # 다른 열 칸에도 글자를 심는다 — 열 검사 없이 "칸에 글자가 있으면 연다"로 바뀌어도 잡히게
+                for c in range(tbl.columnCount()):
+                    if c != cols.index("효과") and tbl.item(0, c) is not None:
+                        tbl.item(0, c).setData(Qt.ItemDataRole.UserRole, "다른 열")
+                for c in range(tbl.columnCount()):
+                    tbl.cellClicked.emit(0, c)
+                assert tbl.item(0, cols.index("효과")).text() == "보기"
+            assert opened == ["Spartan · 클럽"] * 2, opened
+        finally:
+            _win._open_teamcolor_effect = orig
+
+
+class _TcFake:
+    """teamcolor.fetch_* 를 가짜로 — 보낸 요청을 센다. 실픽스처(목록 801개 · 맨유 상세 · 선수 6명)."""
+
+    def __init__(self, players=None, fail=None):
+        import gzip
+        fx = pathlib.Path(__file__).parent / "fixtures"
+        self.items = teamcolor.parse_list(gzip.decompress((fx / "teamcolor_list.html.gz").read_bytes()).decode("utf-8"))
+        self.steps = teamcolor.parse_detail((fx / "teamcolor_detail_1005.html").read_text(encoding="utf-8"))
+        self.players = players if players is not None else \
+            teamcolor.parse_players((fx / "teamcolor_players_1005.json").read_text(encoding="utf-8"))
+        self.fail, self.calls = fail, []
+
+    def __enter__(self):
+        self._orig = teamcolor.fetch_list, teamcolor.fetch_detail, teamcolor.fetch_players, images.fetch_url
+        app_main.TeamColorEffectLoader.start = lambda ld: ld.run()   # 스모크는 QThread.start 를 막는다 — 그 자리에서
+
+        def maybe(kind):
+            self.calls.append(kind)
+            if self.fail:
+                raise teamcolor.TeamColorError("가짜", self.fail)
+
+        teamcolor.fetch_list = lambda: (maybe("list"), self.items)[1]
+        teamcolor.fetch_detail = lambda tid: (maybe(("detail", tid)), self.steps)[1]
+        teamcolor.fetch_players = lambda tid, cap=None: (  # 넥슨처럼 한 번에 최대 100명(T6)
+            maybe(("players", tid, cap)),
+            [p for p in self.players if cap is None or p.ovr <= cap][:config.TEAMCOLOR_PLAYERS_PAGE])[1]
+        images.fetch_url = lambda *a, **k: None
+        return self
+
+    def __exit__(self, *exc):
+        teamcolor.fetch_list, teamcolor.fetch_detail, teamcolor.fetch_players, images.fetch_url = self._orig
+        del app_main.TeamColorEffectLoader.start   # 물려받은 것으로 되돌린다(대입하면 sip 메서드가 깨진다)
+
+
+def _tc_dialog_open(label, timeout=10):
+    _win._open_teamcolor_effect(label)
+    dlg = _win._teamcolor_dialog
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and any(ld.isRunning() for ld in _win._tc_effect_loaders):
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+    return dlg
+
+
+def test_teamcolor_effect_dialog_flow():
+    with _TeamColorEnv():
+        with _TcFake() as fake:
+            dlg = _tc_dialog_open("맨체스터 유나이티드")
+            assert not dlg.isModal() and dlg.isVisible() and dlg.parent() is _win
+            assert fake.calls[0] == "list" and ("detail", 1005) in fake.calls, fake.calls
+            assert dlg.tbl_steps.rowCount() == 4 and dlg.tbl_players.rowCount() == 6, \
+                (dlg.tbl_steps.rowCount(), dlg.tbl_players.rowCount())
+            assert "전체 능력치 +4" in dlg.tbl_steps.item(3, 2).text()
+            assert not dlg.btn_more.isVisible(), "100명보다 적게 왔는데 [더 보기]를 보였다"
+            sp = dlg.tbl_players.item(0, 1).data(Qt.ItemDataRole.UserRole)
+            assert sp == 110226764, sp
+            # 같은 팀컬러를 다시 누르면 요청 없이 앞으로만
+            n = len(fake.calls)
+            _tc_dialog_open("맨체스터 유나이티드")
+            assert len(fake.calls) == n and _win._teamcolor_dialog is dlg, fake.calls[n:]
+            # 다른 팀컬러 — 목록은 캐시(7일) · 단계·선수만 받는다
+            fake.calls.clear()
+            _tc_dialog_open("01-03 성남FC 리그3연패 베스트")
+            assert "list" not in fake.calls and ("detail", 30007) in fake.calls, fake.calls
+            # 카드 캐시(B) — 급여 열만 · 시세
+            c = store.open_db(config.DB_PATH)
+            try:
+                info = store.load_card_info(c, [110226764])
+                prices = store.load_card_prices(c, [110226764])
+            finally:
+                c.close()
+            assert info[110226764]["salary"] == 43 and info[110226764]["base_ovr"] is None, info
+            assert prices[(110226764, 1)][0] == 150000, prices
+            # 목록에 없는 팀컬러 — 오늘 받은 목록이면 다시 안 받는다(요청 0)
+            fake.calls.clear()
+            _tc_dialog_open("단일 팀")
+            assert fake.calls == [] and "목록에 없는" in dlg.lb_status.text(), (fake.calls, dlg.lb_status.text())
+            # (구분 전) — 두 후보 단추, 고르면 그 id 로
+            _tc_dialog_open("Spartan (구분 전)")
+            btns = [dlg.box_pick.itemAt(i).widget() for i in range(dlg.box_pick.count())
+                    if dlg.box_pick.itemAt(i).widget()]
+            assert sorted(b.text() for b in btns) == ["Spartan · 강화", "Spartan · 클럽"], [b.text() for b in btns]
+        dlg.close()
+
+
+def test_teamcolor_effect_dialog_more_and_off_and_errors():
+    big = [teamcolor.TeamColorPlayer(i, f"p{i}", "ST", 130 - i // 40, 10, {1: 1000 + i})
+           for i in range(150)]
+    with _TeamColorEnv():
+        with _TcFake(players=big) as fake:
+            dlg = _tc_dialog_open("맨체스터 유나이티드")
+            assert dlg.tbl_players.rowCount() == config.TEAMCOLOR_PLAYERS_PAGE and dlg.btn_more.isVisible()
+            dlg._on_more()
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and any(ld.isRunning() for ld in _win._tc_effect_loaders):
+                QApplication.processEvents()
+                time.sleep(0.01)
+            QApplication.processEvents()
+            assert dlg.tbl_players.rowCount() == 150 and not dlg.btn_more.isVisible(), dlg.tbl_players.rowCount()
+            assert fake.calls[-1] == ("players", 1005, big[99].ovr), fake.calls
+        # 웹 데이터 꺼짐 — 캐시를 보이고 선수 목록은 꺼짐 문구 · 요청 0
+        config.WEB_DATA = False
+        with _TcFake() as fake:
+            _win._teamcolor_dialog._label = ""
+            dlg = _tc_dialog_open("맨체스터 유나이티드")
+            assert fake.calls == [] and dlg.tbl_steps.rowCount() == 4, fake.calls
+            assert config.WEB_DATA_OFF_MSG in dlg.lb_players.text(), dlg.lb_players.text()
+        # 목록이 아직 없고 꺼짐 → 꺼짐 문구(요청 0)
+        c = store.open_db(config.DB_PATH)
+        c.execute("DELETE FROM teamcolor_meta")
+        c.commit()
+        c.close()
+        with _TcFake() as fake:
+            _win._teamcolor_dialog._label = ""
+            dlg = _tc_dialog_open("맨체스터 유나이티드")
+            assert fake.calls == [] and dlg.lb_status.text() == config.WEB_DATA_OFF_MSG, dlg.lb_status.text()
+        # 켜져 있는데 넥슨이 넘김(점검) — 사람 말 문구
+        config.WEB_DATA = True
+        with _TcFake(fail="down"):
+            _win._teamcolor_dialog._label = ""
+            dlg = _tc_dialog_open("맨체스터 유나이티드")
+            assert dlg.lb_status.text() == teamcolor.MESSAGES["down"], dlg.lb_status.text()
+        dlg.close()
+
+
+def test_my_color_strips_label_for_ranker_side():
+    # 추천의 내 팀컬러 — 검색 때 읽은 데이터센터 값이 없으면 상대 캐시 글자를 쓰는데, 랭커 쪽은 넥슨 이름이라 되돌린다
+    saved = _win._rank, _win._nick, dict(_win._team_colors)
+    try:
+        _win._rank, _win._nick = None, "나의닉"
+        _win._team_colors["나의닉"] = "Spartan · 클럽"
+        assert _win._my_color([]) == "Spartan", _win._my_color([])
+    finally:
+        _win._rank, _win._nick = saved[0], saved[1]
+        _win._team_colors.clear()
+        _win._team_colors.update(saved[2])
+
+
+def test_shutdown_stops_teamcolor_effect_loaders():
+    # 갈아 끼운(물러난) 로더까지 종료 표가 멈춤을 요청한다 — 창이 먼저 닫혀도. 스모크는 QThread.start 가 막혀 있어
+    # "도는 중"을 흉내 낸다(시작은 했고 아직 안 끝남)
+    cls = app_main.TeamColorEffectLoader
+    # 되돌릴 땐 지운다 — 물려받은 sip 메서드를 하위 클래스에 다시 대입하면 이후 호출이 깨진다
+    keep = {n: cls.__dict__.get(n) for n in ("start", "isRunning")}, _win._tc_effect_loaders, _win._teamcolor_dialog
+    cls.start, cls.isRunning = (lambda ld: None), (lambda ld: True)
+    try:
+        _win._tc_effect_loaders, _win._teamcolor_dialog = [], None
+        _win._open_teamcolor_effect("맨체스터 유나이티드")
+        _win._teamcolor_dialog.open_label("01-03 성남FC 리그3연패 베스트")   # 첫 로더를 물리고 갈아 끼운다
+        loaders = list(_win._tc_effect_loaders)
+        assert len(loaders) == 2 and loaders[0]._cancel and not loaders[1]._cancel, loaders
+        _win._teamcolor_dialog.close()
+        left = _win.shutdown(fast=True)
+        assert all(ld in left for ld in loaders) and all(ld._cancel for ld in loaders), left
+    finally:
+        for n, v in keep[0].items():
+            if v is None:
+                delattr(cls, n)
+            else:
+                setattr(cls, n, v)
+        if _win._teamcolor_dialog is not None:
+            _win._teamcolor_dialog.deleteLater()
+        _win._tc_effect_loaders, _win._teamcolor_dialog = keep[1], keep[2]
 
 
 # ── API 키 입력 ───────────────────────────────────────────────────────
@@ -4061,12 +4418,11 @@ def test_rank_list_uses_fresh_snapshot_without_requests():
         finally:
             ranker.fetch_rank_rows = orig
         # 팀컬러 없는 행은 구단가치도 None(팀컬러 표가 '팀가치 모름'으로) · 목록에 없으면 '랭킹 밖'
-        assert got == {"가": ("네덜란드", 5001), "나": ("", None), "밖": ("", None)}, got
+        assert got == {"가": ("네덜란드", 5001, ""), "나": ("", None, ""), "밖": ("", None, "")}, got
         assert done == [True] and ld.fetched_at == taken, (done, ld.fetched_at)
         # 팀컬러 캐시의 유효기간은 스냅숏 시각부터 센다(지금 시각이면 7일이 최대 8일이 된다)
         _win._teamcolor_loader, _win._teamcolor_pending = ld, ["가", "나"]
-        _win._team_colors.update({k: c for k, (c, _) in got.items()})
-        _win._team_values.update({k: v for k, (_, v) in got.items()})
+        _win._on_teamcolor_loaded(got)   # 실제 길 — 저장은 로더가 준 원값(_teamcolor_raw)에서
         _win._on_teamcolor_finished()
         c = store.open_db(config.DB_PATH)
         try:
@@ -4080,7 +4436,7 @@ def test_rank_list_saves_snapshot_only_when_collect_on():
     pages = {1: [("가", "네덜란드", 1), ("남", "프랑스", 2)], 2: [("나", "", None)]}
     with _RankSwitches(collect=False) as sw:
         ld, got, _ = _run_rank_list({"가"}, pages)
-        assert got["가"] == ("네덜란드", 1) and ld.saved_snapshot is None
+        assert got["가"] == ("네덜란드", 1, "") and ld.saved_snapshot is None
         assert not config.RANK_DB_PATH.exists(), "수집이 꺼졌는데 rank.db 를 만들었다"
         sw.write(True, True)
         ld, got, _ = _run_rank_list({"가"}, pages)
@@ -4090,7 +4446,7 @@ def test_rank_list_saves_snapshot_only_when_collect_on():
         rankcollect.delete_db()
         pages[2] = None
         ld, got, _ = _run_rank_list({"가"}, pages)
-        assert got == {"가": ("네덜란드", 1)} and ld.saved_snapshot is None
+        assert got == {"가": ("네덜란드", 1, "")} and ld.saved_snapshot is None
         assert not rankcollect.read_status().get("snapshots"), "반쪽 목록을 스냅숏으로 남겼다"
 
 
@@ -4118,7 +4474,7 @@ def test_rank_list_waits_for_collect_then_uses_its_snapshot():
             rankcollect.release_list_read()
         t.join(5)
         ranker.fetch_rank_rows = orig
-        assert got == {"가": ("브라질", 5001)} and done == [True], (got, done)
+        assert got == {"가": ("브라질", 5001, "")} and done == [True], (got, done)
 
 
 def test_main_loader_records_elo_and_compare_does_not():

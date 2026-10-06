@@ -61,6 +61,14 @@ CREATE TABLE IF NOT EXISTS snapshot_rows (
     PRIMARY KEY (snapshot_id, profile_sn)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_rows_sn ON snapshot_rows(profile_sn);
+-- 팀컬러 엠블럼(2.2.1) — snapshot_rows 에 열을 더하지 않고 옆 표로: 옛 버전의 INSERT 가 열 이름 없이 16칸이라
+-- 열이 늘면 옛 버전이 이 DB 로 수집할 때 실패한다(ROADMAP 2.2.1 T13). 원본과 같이 지운다(prune_raw)
+CREATE TABLE IF NOT EXISTS snapshot_emblems (
+    snapshot_id INTEGER NOT NULL,
+    profile_sn  INTEGER NOT NULL,
+    emblem      TEXT NOT NULL,
+    PRIMARY KEY (snapshot_id, profile_sn)
+) WITHOUT ROWID;
 -- 집계 — 영구. 순위 구간(tier = 구간 끝 순위)별 포메이션·팀컬러 인원
 CREATE TABLE IF NOT EXISTS tier_counts (
     snapshot_id INTEGER NOT NULL, tier INTEGER NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL,
@@ -185,6 +193,9 @@ def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at
             "INSERT INTO snapshot_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(sid, r.rank, r.profile_sn, r.nickname, r.level, r.team_value, r.elo, r.win, r.draw, r.lose,
               r.team_color, r.color_count, r.formation, r.grade, r.best_grade, r.prev_grade) for r in rows])
+        conn.executemany("INSERT INTO snapshot_emblems (snapshot_id, profile_sn, emblem) VALUES (?,?,?)",
+                         [(sid, r.profile_sn, r.team_color_emblem) for r in rows
+                          if r.team_color and r.team_color_emblem])
         conn.executemany("INSERT INTO tier_counts VALUES (?,?,?,?,?)", [(sid, *c) for c in counts])
         conn.executemany("INSERT INTO tier_values VALUES (?,?,?,?,?)", [(sid, *v) for v in values])
         conn.executemany("INSERT INTO cut_elo VALUES (?,?,?)", [(sid, *c) for c in cuts])
@@ -197,6 +208,9 @@ def prune_raw(conn: sqlite3.Connection, now: datetime) -> int:
     with conn:
         cur = conn.execute("DELETE FROM snapshot_rows WHERE snapshot_id IN "
                            "(SELECT id FROM snapshots WHERE taken_at < ?)", (cutoff,))
+        # 엠블럼은 원본이 없는 스냅숏 것 전부 — 옛 버전(2.1.1 이하)이 원본만 지우고 남긴 줄까지. snapshots 는 영구라
+        # 날짜 조건으로는 그 줄이 안 잡힌다
+        conn.execute("DELETE FROM snapshot_emblems WHERE snapshot_id NOT IN (SELECT DISTINCT snapshot_id FROM snapshot_rows)")
     return cur.rowcount
 
 
@@ -674,9 +688,15 @@ def fresh_snapshot(db_path: Path | str | None = None, now: datetime | None = Non
         conn.close()
 
 
+def snapshot_emblem_map(conn: sqlite3.Connection, snapshot_id: int) -> dict[int, str]:
+    """그 스냅숏의 프로필 번호 → 팀컬러 엠블럼 키(2.2.1). 옛 버전이 찍은 스냅숏이면 빈 dict."""
+    return {r[0]: r[1] for r in conn.execute(
+        "SELECT profile_sn, emblem FROM snapshot_emblems WHERE snapshot_id = ?", (snapshot_id,))}
+
+
 def snapshot_colors(nicknames, db_path: Path | str | None = None, now: datetime | None = None
-                    ) -> tuple[dict[str, tuple[str, int | None]], datetime] | None:
-    """팀컬러를 스냅숏에서 — {닉네임: (팀컬러, 구단가치)}, 스냅숏 시각. 목록에 없는 사람은 '랭킹 밖'("", None).
+                    ) -> tuple[dict[str, tuple[str, int | None, str]], datetime] | None:
+    """팀컬러를 스냅숏에서 — {닉네임: (팀컬러, 구단가치, 엠블럼 키)}, 스냅숏 시각. 목록에 없는 사람은 '랭킹 밖'("", None, "").
     팀컬러가 없는 행은 구단가치도 None(ranker._color_rows 와 같은 규칙). 쓸 스냅숏이 없으면 None."""
     snap = fresh_snapshot(db_path, now)
     if snap is None:
@@ -685,16 +705,18 @@ def snapshot_colors(nicknames, db_path: Path | str | None = None, now: datetime 
     want = set(nicknames)
     conn = open_rank_db(db_path)
     try:
+        emblems = snapshot_emblem_map(conn, sid)
         found = {}
-        for r in conn.execute("SELECT nickname, team_color, team_value FROM snapshot_rows WHERE snapshot_id = ?",
+        for r in conn.execute("SELECT nickname, profile_sn, team_color, team_value FROM snapshot_rows WHERE snapshot_id = ?",
                               (sid,)):
             if r["nickname"] in want:
                 color = r["team_color"] or ""
-                found[r["nickname"]] = (color, r["team_value"] if color else None)
+                found[r["nickname"]] = (color, r["team_value"] if color else None,
+                                        emblems.get(r["profile_sn"], "") if color else "")
     finally:
         conn.close()
     for n in want - found.keys():
-        found[n] = ("", None)
+        found[n] = ("", None, "")
     return found, taken
 
 

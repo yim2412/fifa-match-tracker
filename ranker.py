@@ -61,6 +61,9 @@ _WDL = re.compile(r'class="bottom">\s*([\d,]+)\s*<em>\|</em>\s*([\d,]+)\s*'
 # 팀컬러: class="td team_color">...<span class="inner">이름 <small>(11명)</small>
 _TEAM_COLOR = re.compile(
     r'class="td team_color">.*?class="inner">\s*([^<]+?)\s*<small>', re.S)
+# 팀컬러 엠블럼 — 같은 칸의 첫 <img src>(2.2.1 · 이름이 같은 두 팀컬러를 가른다). 칸 밖으로 새지 않게 _team_color_cell 로 자른 뒤 찾는다
+_TD_TEAM_COLOR = 'class="td team_color">'
+_IMG_SRC = re.compile(r'<img src="([^"]+)"')
 _NOT_RANKED = "순위 내 포함되어 있지"
 _NAME = re.compile(r'class="name profile_pointer"[^>]*>\s*([^<]+?)\s*<')
 # 프로필 번호 — 닉네임을 바꿔도 같은 사람을 잇는 열쇠(2026-10-04 실측 20/20 행에 있음)
@@ -98,6 +101,7 @@ class RankerInfo:
     lose: int = 0
     team_color: str = ""             # "가장 최근 사용" 기준(그 경기 당시 값 아님)
     profile_sn: int | None = None    # 데이터센터 프로필 번호(data-sn) — 닉네임이 바뀌어도 같은 사람
+    team_color_emblem: str = ""      # 팀컬러 엠블럼 emblem_key — 이름이 같은 두 팀컬러를 가른다(2.2.1)
 
     @property
     def ranked(self) -> bool:
@@ -128,6 +132,7 @@ class RankRow:
     grade: int | None = None         # 지금 등급 아이콘 번호
     best_grade: int | None = None    # 역대 최고 등급
     prev_grade: int | None = None    # 이전 시즌 최고 등급
+    team_color_emblem: str = ""      # 팀컬러 엠블럼 emblem_key(2.2.1) — rank.db 는 snapshot_rows 가 아니라 snapshot_emblems 에
 
 
 @dataclass
@@ -151,6 +156,28 @@ class RankOffline(RankerError):
 
 class RankStructureError(RankerError):
     """행은 왔는데 필수 칸이 비었거나 중간 쪽이 비었음 — 넥슨이 페이지 구조를 바꾼 것."""
+
+
+def emblem_key(url: str) -> str:
+    """엠블럼 주소 → "종류/파일명"(예: "crests/l11.png") — 크기·명암 칸과 CDN 주소는 뺀다(쪽마다 크기가 다를 수 있다).
+    종류는 common/ 바로 뒤 칸, 없으면 파일의 부모 폴더(ssl.nexon.com/…/teamcolor/tc_u_*.png → "teamcolor"). 빈 주소는 ""."""
+    path = (url or "").split("?", 1)[0].split("#", 1)[0]
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    if len(parts) < 2:
+        return ""
+    kind = parts[parts.index("common") + 1] if "common" in parts[:-2] else parts[-2]
+    return f"{kind}/{parts[-1]}"
+
+
+def _team_color_emblem(html: str) -> str:
+    """팀컬러 칸(다음 칸 앞까지)의 첫 엠블럼 → emblem_key. 칸이 없거나 그림이 없으면 ""."""
+    i = html.find(_TD_TEAM_COLOR)
+    if i < 0:
+        return ""
+    i += len(_TD_TEAM_COLOR)
+    j = html.find('class="td ', i)
+    m = _IMG_SRC.search(html, i, j if j >= 0 else len(html))
+    return emblem_key(m.group(1)) if m else ""
 
 
 def _to_int(s: str) -> int:
@@ -219,14 +246,15 @@ def fetch_manager_rank(nickname: str, timeout: int = 10, season_no: int = 0) -> 
     m = _TEAM_COLOR.search(html)
     if m:
         info.team_color = " ".join(m.group(1).split())  # 개행·중복 공백 정리
+        info.team_color_emblem = _team_color_emblem(html)
     m = _SN.search(html)
     if m:
         info.profile_sn = int(m.group(1))
     return info
 
 
-def parse_rank_page(html: str) -> list[tuple[str, str, int | None]]:
-    """목록 페이지 → [(닉네임, 팀컬러, 구단가치)]. 팀컬러를 안 쓰는 사람은 "".
+def parse_rank_page(html: str) -> list[tuple[str, str, int | None, str]]:
+    """목록 페이지 → [(닉네임, 팀컬러, 구단가치, 엠블럼 키)]. 팀컬러를 안 쓰는 사람은 "".
 
     행 단위로 잘라서 읽는다 — 페이지 전체에서 닉네임·팀컬러를 따로 findall 하면 팀컬러가
     빈 행(실측 475페이지에 있었다)에서 _TEAM_COLOR 의 `.*?` 가 다음 행 팀컬러를 집어
@@ -235,9 +263,10 @@ def parse_rank_page(html: str) -> list[tuple[str, str, int | None]]:
     return _color_rows(parse_rank_rows(html))
 
 
-def _color_rows(rows: list[RankRow]) -> list[tuple[str, str, int | None]]:
-    # 팀컬러가 없으면 구단가치도 None — 팀컬러 표가 그 행을 '팀가치 모름'으로 보여 준다
-    return [(r.nickname, r.team_color, r.team_value if r.team_color else None)
+def _color_rows(rows: list[RankRow]) -> list[tuple[str, str, int | None, str]]:
+    # 팀컬러가 없으면 구단가치·엠블럼도 없음 — 팀컬러 표가 그 행을 '팀가치 모름'으로 보여 준다
+    return [(r.nickname, r.team_color, r.team_value if r.team_color else None,
+             r.team_color_emblem if r.team_color else "")
             for r in rows if r.nickname]
 
 
@@ -269,6 +298,7 @@ def parse_rank_rows(html: str) -> list[RankRow]:
             r.win, r.draw, r.lose = (_to_int(m.group(i)) for i in (1, 2, 3))
         if m := _TEAM_COLOR.search(row):
             r.team_color = " ".join(m.group(1).split())
+            r.team_color_emblem = _team_color_emblem(row)
         if m := _COLOR_COUNT.search(row):
             r.color_count = int(m.group(1))
         if m := _FORMATION.search(row):
@@ -349,8 +379,8 @@ def fetch_season_cut(season_no: int, rank: int, timeout: int = config.RANK_PAGE_
     return (max(at_or_above, key=lambda r: r.rank) if at_or_above else usable[0]).elo
 
 
-def fetch_rank_page(page: int, timeout: int = 10) -> list[tuple[str, str, int | None]]:
-    """감독모드 랭킹 목록 한 페이지(1..RANK_PAGES) — 팀컬러용 (닉네임, 팀컬러, 구단가치). 실패는 RankerError."""
+def fetch_rank_page(page: int, timeout: int = 10) -> list[tuple[str, str, int | None, str]]:
+    """감독모드 랭킹 목록 한 페이지(1..RANK_PAGES) — 팀컬러용 (닉네임, 팀컬러, 구단가치, 엠블럼 키). 실패는 RankerError."""
     rows = _color_rows(fetch_rank_rows(page, timeout).rows)
     if not rows:  # 빈 페이지를 "아무도 없음"으로 읽으면 상대 수백 명이 '랭킹 밖'으로 캐시된다
         raise RankerError(f"랭킹 목록 {page}페이지를 읽지 못했습니다(구조가 바뀌었을 수 있음)")

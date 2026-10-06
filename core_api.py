@@ -34,7 +34,7 @@ from stats import (
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
     opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
-    shot_type_breakdown, team_color_stats, team_profile, time_of_day_rates, time_weekday_rates,
+    shot_type_breakdown, team_color_baseline, team_color_stats, team_profile, time_of_day_rates, time_weekday_rates,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
 )
 
@@ -66,6 +66,6 @@ __all__ = [
     "position_line", "possession_stats", "ranker_compare", "ranker_targets", "ranker_values", "rating_trend",
     "result_breakdown", "season_divisions", "season_id_of",
     "shot_distance_breakdown", "shot_map",
-    "shot_type_breakdown", "team_color_stats", "team_profile", "time_of_day_rates",
+    "shot_type_breakdown", "team_color_baseline", "team_color_stats", "team_profile", "time_of_day_rates",
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
 ]

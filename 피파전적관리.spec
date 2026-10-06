@@ -17,7 +17,9 @@ a = Analysis(
     hiddenimports=['store', 'stats', 'core_api', 'theme', 'widgets', 'ranker', 'images',
                    'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck', 'notice',
                    # 1.1.1 — 트레이·자동 실행·랭킹 수집. QtNetwork 는 '한 번만 실행'(QLocalServer) — release.py 가 .pyd 를 확인한다
-                   'tray', 'autostart', 'rankcollect', 'PyQt6.QtNetwork'],
+                   'tray', 'autostart', 'rankcollect', 'PyQt6.QtNetwork',
+                   # 2.2.1 — 팀컬러 효과 창(app_main 이 import — release.py 는 모듈별 검사가 없어 exe 스모크로 확인)
+                   'teamcolor'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

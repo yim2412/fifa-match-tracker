@@ -12,7 +12,7 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
-APP_VERSION = "v2.1.1"
+APP_VERSION = "v2.2.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 # 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 다 뺐다 —
@@ -210,6 +210,14 @@ PRICE_FETCH_MAX = 80
 # 하루 상한은 쓰임별로 따로 센다(store.api_budget): 사용자가 연 선수 카드 = 없음 · 가계부 = PRICE_FETCH_MAX · 축구장 칩 = 아래.
 CHIP_FETCH_MAX = 60                 # 초안 — 스쿼드 창·비교를 하루 몇 번 여는지로 다시 정한다(ROADMAP 2.1.1 "재지 않은 것")
 CARD_INFO_TTL_DAYS = 30             # 급여·OVR 은 라이브 패치로만 바뀐다 — 30일인 근거는 아직 없다(재지 않은 것)
+# 팀컬러(2.2.1 · teamcolor.py) — 이름이 같은 팀컬러 11쌍(2026-10-06 목록 801개 실측 — 쌍마다 강화 하나 + 클럽 하나).
+# 상수인 이유: 받은 목록으로 넓히면 효과 창을 열기 전후로 승률 표의 줄이 바뀐다(ROADMAP 2.2.1 U2). check_api 가 실제 목록과 대조한다
+TEAMCOLOR_DUP_NAMES = frozenset({
+    "Continental Heroes", "Dramatic Comebacks", "Football Association Champions", "Greatest Runner-Ups",
+    "Legend of Europa", "Number 7", "Spartan", "Step Higher", "Untouchable Champions", "Winning Streak", "Wonderboys"})
+TEAMCOLOR_CACHE_DAYS = 7            # 효과 목록·단계 캐시 — 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다
+TEAMCOLOR_MIN_OPPONENTS = 3         # 승률 표에서 상대가 이보다 적은 팀컬러는 흐림 — 한 사람과의 반복 대전이 승률을 끌고 가지 않게(초안)
+TEAMCOLOR_PLAYERS_PAGE = 100        # 넥슨 선수 목록 한 요청의 최대 인원(쪽 넘김 없음 — OVR 상한으로 이어 받는다)
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}
