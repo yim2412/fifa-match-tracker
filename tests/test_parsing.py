@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -811,6 +812,20 @@ def test_aggregate_players_counts_results_position_and_gk():
     assert abs((x.defense_power - gk.defense_power) - x.aerial_rate) < 1e-9
 
 
+def test_attack_defense_power_do_not_depend_on_sample_size():
+    """비율이 같으면 출전 수와 상관없이 같은 값 — 승리 항이 출전 수로 한 번 더 나뉘면 적게 뛴 선수가 부푼다."""
+    def stat(n):  # 같은 비율(승 60% · 경기당 골 0.5 · 패스 80% …)을 n 경기로
+        return st.PlayerStat(1, "X", "ST", games=n, win=n * 6 // 10, goal=n // 2, assist=n // 10,
+                             pass_try=n * 30, pass_success=n * 24, dribble_try=n * 10, dribble_success=n * 7,
+                             tackle_try=n * 2, tackle=n, intercept=n, defending=n, block_try=n, block=n // 10 * 2)
+    few, many = stat(10), stat(1000)
+    assert abs(few.attack_power - many.attack_power) < 1e-6, (few.attack_power, many.attack_power)
+    assert abs(few.defense_power - many.defense_power) < 1e-6, (few.defense_power, many.defense_power)
+    # 승리 항은 승률을 따라간다(빠지지 않았다) — 승 60% 는 3점
+    assert abs(few.attack_power - st.PlayerStat(1, "X", "ST", games=10, win=0, goal=5, assist=1,
+               pass_try=300, pass_success=240, dribble_try=100, dribble_success=70).attack_power - 3) < 1e-6
+
+
 def test_formation_stats_by_opponent_shape():
     four = [_p(i, 5) for i in range(4)] + [_p(9, 13), _p(10, 13), _p(11, 25)]
     ds = [_d(3, "승", opp_players=four), _d(2, "무", opp_players=four), _d(1, "패", opp_players=[])]
@@ -843,6 +858,24 @@ def test_clutch_first_goal_ties_and_comebacks():
     cs = st.clutch_summary(ds, "me")
     assert (cs.first_scored, cs.first_conceded) == ([0, 0, 1], [1, 0, 0]), (cs.first_scored, cs.first_conceded)
     assert (cs.comeback_lose, cs.comeback_win, cs.goalless) == (1, 1, 2)
+
+
+def test_clutch_skips_matches_whose_goal_log_misses_a_goal():
+    """자책골은 슛 기록에 없다 — 점수판과 골 수가 다르면 선제골을 되짚지 않는다."""
+    own = _d(2, "패", me_shots=[_shot(0, 100)], opp_shots=[_shot(1, 5)])  # 0:00 대의 상대 득점이 내 자책골
+    own["matchInfo"][0]["shoot"] = {"goalTotalDisplay": 1, "ownGoal": 1}
+    own["matchInfo"][1]["shoot"] = {"goalTotalDisplay": 2, "ownGoal": 0}
+    ok = _d(1, "승", me_shots=[_shot(0, 100)])
+    ok["matchInfo"][0]["shoot"] = {"goalTotalDisplay": 1}
+    ok["matchInfo"][1]["shoot"] = {"goalTotalDisplay": 0}
+    # 막지 않았다면: 점수판을 모르는 같은 경기는 '선제골 후 패'로 세어진다
+    blind = copy.deepcopy(own)
+    for p in blind["matchInfo"]:
+        p.pop("shoot")
+    assert st.clutch_summary([blind], "me").first_scored == [0, 0, 1]
+    cs = st.clutch_summary([own, ok], "me")
+    assert (cs.first_scored, cs.comeback_lose, cs.unreplayable) == ([1, 0, 0], 0, 1), \
+        (cs.first_scored, cs.comeback_lose, cs.unreplayable)
 
 
 def test_minute_buckets_extra_and_halves():

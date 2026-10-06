@@ -319,13 +319,14 @@ def test_opponent_rule_needs_games_and_name():
 # 비율은 부동소수 오차가 없게 고른다(20경기 중 9 = 45%, 슛 64개 × 0.5 = 32).
 def _g(i, first, res):
     """선제골 시나리오 한 경기. first: 'me'(내가 먼저) · 'opp'(먼저 실점) · None(무득점)."""
+    # 점수판(gf·ga)은 슛 기록 골 수와 같게 — 다르면 clutch_summary 가 자책골 경기로 보고 뺀다
     if first == "me":
-        return _match(i, res, 1, 1 if res == "패" else 0, 50, [(0, 100)],
-                      [(0, 200), (1, 300)] if res == "패" else [])
-    if first == "opp":
-        return _match(i, res, 1 if res == "승" else 0, 1, 50,
-                      [(0, 200), (1, 300)] if res == "승" else [], [(0, 100)])
-    return _match(i, res, 0, 0, 50, [], [])
+        mine, theirs = [(0, 100)], ([(0, 200), (1, 300)] if res == "패" else [])
+    elif first == "opp":
+        mine, theirs = ([(0, 200), (1, 300)] if res == "승" else []), [(0, 100)]
+    else:
+        mine, theirs = [], []
+    return _match(i, res, len(mine), len(theirs), 50, mine, theirs)
 
 
 def _clutch_at(spec_me, spec_opp, base_rate):

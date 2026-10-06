@@ -423,11 +423,17 @@ class PlayerStat:
         return self.position == "GK"
 
     @property
+    def _win_term(self) -> float:
+        """5×(승/출전) — 0~5. 예전엔 5×(승률%/출전)이라 1경기 1승이 +500, 1,000경기면 +0.25 였다
+        (출전이 적을수록 부풀었다 · 2026-10-07). 옮겨 온 검증 표본이 정확히 100경기라 두 식이 같은 값을 냈다."""
+        return 5 * self.win_rate / 100
+
+    @property
     def attack_power(self) -> float:
-        """공격력 = 10×기대득점률 + 패스% + 드리블% + 5×(승률/출전)
+        """공격력 = 10×기대득점률 + 패스% + 드리블% + 5×(승/출전)
         + (GK 아니면 공중볼%)."""
         score = (10 * self.expected_goal_rate + self.pass_rate + self.dribble_rate
-                + 5 * (self.win_rate / self.games if self.games else 0.0))
+                + self._win_term)
         if not self._is_gk():
             score += self.aerial_rate
         return score
@@ -435,10 +441,10 @@ class PlayerStat:
     @property
     def defense_power(self) -> float:
         """수비력 = 패스% + 가로채기포인트 + 태클% + 2×선방력 + 블록%
-        + 5×(승률/출전) + (GK 아니면 공중볼%)."""
+        + 5×(승/출전) + (GK 아니면 공중볼%)."""
         score = (self.pass_rate + self.intercept_rate + self.tackle_rate
                 + 2 * self.defending_rate + self.block_rate
-                + 5 * (self.win_rate / self.games if self.games else 0.0))
+                + self._win_term)
         if not self._is_gk():
             score += self.aerial_rate
         return score
@@ -734,6 +740,7 @@ class ClutchSummary:
     comeback_win: int = 0   # 선제 실점 후 승
     comeback_lose: int = 0  # 선제골 후 패
     goalless: int = 0       # 양측 무득점(선제골 판정 불가)
+    unreplayable: int = 0   # 슛 기록 골 수가 점수판과 달라 순서를 못 되짚은 경기(대부분 자책골)
 
     @staticmethod
     def _rate(wdl: list[int]) -> float:
@@ -749,16 +756,31 @@ class ClutchSummary:
         return self._rate(self.first_conceded)
 
 
+def _timeline_matches_board(p: dict) -> bool:
+    """슛 기록의 골 수가 점수판과 같은가 — 점수판이 없으면(합성 경기) 같다고 본다.
+
+    자책골은 shootDetail 에 없고 상대 점수판에만 얹힌다(shoot.ownGoal 은 넣은 쪽에 붙는다).
+    시각을 모르는 골이 하나라도 있으면 선제골·역전을 되짚을 수 없다 — 2026-10-07 실측
+    감독모드 21,327경기 중 점수판 > 슛 기록 320경기, 그중 270경기가 ownGoal 로 설명됐다."""
+    shoot = p.get("shoot") or {}
+    board = shoot.get("goalTotalDisplay", shoot.get("goalTotal"))
+    return board is None or int(board) == len(_goal_events(p))
+
+
 def clutch_summary(details: list[dict], ouid: str) -> ClutchSummary:
     """경기별 골 타임라인으로 선제골 여부와 역전 경기를 센다.
 
     양측 골이 같은 (구간, 초)로 오면(동시각) 선제골 판정을 보류하고
     무득점과 함께 goalless 로 분류한다 — 애매한 걸 억지로 한쪽에 넣지 않는다.
+    골 기록이 점수판과 다른 경기(자책골 등)는 unreplayable 로 뺀다.
     """
     cs = ClutchSummary()
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None:
+            continue
+        if not (_timeline_matches_board(me) and _timeline_matches_board(opp)):
+            cs.unreplayable += 1
             continue
         res = _result_of(me)
         mine = sorted(_goal_events(me))

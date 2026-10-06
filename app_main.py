@@ -3284,8 +3284,10 @@ class MainWindow(QMainWindow):
             h.addWidget(b)
             h.addWidget(c)
             self.box_clutch_first.addWidget(row)
-        cb = QLabel(f"역전승 {cs.comeback_win}회 · 역전패 {cs.comeback_lose}회"
-                    f"    (무득점·동시각 {cs.goalless}경기 제외)")
+        skipped = f"무득점·동시각 {cs.goalless}경기"
+        if cs.unreplayable:
+            skipped += f" · 자책골 등으로 골 순서를 모르는 {cs.unreplayable}경기"
+        cb = QLabel(f"역전승 {cs.comeback_win}회 · 역전패 {cs.comeback_lose}회    ({skipped} 제외)")
         cb.setStyleSheet(f"color: {T.TEXT_DIM}; padding-top: 3px;")
         self.box_clutch_first.addWidget(cb)
 
