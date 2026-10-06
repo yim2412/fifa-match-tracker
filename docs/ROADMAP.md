@@ -155,19 +155,105 @@
 
 ---
 
-## 2.2.1 — 팀컬러
+## 2.2.1 — 팀컬러 (중간 패치)
 
-- **7 팀컬러 효과표** — 새 모듈 `teamcolor.py`: 목록(`/datacenter/teamcolor`, 801개) · 상세(`TeamColorDetail`, 단계별
-  3·6·8·11명 효과) · 선수(`TeamColorPlayerList` JSON). 상세·선수는 누를 때 받아 캐시(TTL). 상세·선수 요청은 브라우저가
-  보내는 Referer 를 같이 보낸다(없으면 오류 페이지). 공개 문서 없는 주소라 바뀔 수 있다 → `check_api.py` 에 줄.
-- **7+ 팀컬러 승률 보강** — "팀컬러 N종" · 팀컬러별 서로 다른 상대 수 열.
-- **⑩** 승률 칸 색 · 내 평균 대비 ± · 최소 경기 수 필터 · 팀가치 최저~최고 범위 막대. 팀컬러를 누르면 효과·선수 목록.
+> **상태: 계획 검토 1회차 전**(2026-10-06 초안). 단계는 18 하나 + 공개. 진행 지시 전.
 
-**규모** 중간.
+**규모** 중간. 새 넥슨 요청: 홈페이지 셋(팀컬러 목록 · 상세 · 선수 JSON) — 전부 **사용자가 누를 때만**(자동 요청 0). 오픈API 요청 0.
+저장 형식: fifa.db 에 캐시 표 둘(새 표만 — 옛 표는 안 건드린다). 메뉴는 그대로("팀컬러: 팀컬러 승률 · 팀컬러 랭킹").
+
+### 실측 장부 (2026-10-06 — 검토자는 다시 재지 않는다)
+
+| # | 사실 | 근거 |
+|---|---|---|
+| T1 | 목록 `GET /datacenter/teamcolor` — 헤더 없이 200 · 1,221,587바이트 · 0.28초 · 팀컬러 **801개**. 항목마다 `DataCenter.GetTeamColorDetail(<id>)` · 엠블럼 `<img>` · `num`(최고 단계 인원) · `name` · `level`(N단계) · `desc`(최고 단계 효과 `span.item`). id 대역 0~4만(4만대 654개) | 실측 |
+| T2 | 최고 단계 분포 — 1단계 502 · 4단계 201 · 3단계 94 · 2단계 4. 인원 8·11·3·5·2·4·6. `crests` 클래스 `lvs1` 500 · `lv4` 201 · `lv3` 94 · `lvu1~3` 5 · `lv2` 1 | 실측 |
+| T3 | **이름이 겹치는 팀컬러 11쌍**(Winning Streak · Spartan …) — 쌍마다 엠블럼 경로가 다르다(`teamcolorboost/icon/…/4_l9998xx.png` 와 `crests/light/…/l130xxx.png`), 단계·인원은 같다 | 실측 |
+| T4 | 상세 `GET /datacenter/TeamColorDetail?teamcolorid=N` — **`X-Requested-With: XMLHttpRequest` 가 있어야** 200 · 326,358바이트(대부분 선수 검색 양식의 시즌 체크박스) · 0.04~0.55초. 없거나 `Referer` 만이면 `bulletin.nexon.com/nxk/error.html` 로 넘어간다(200 · 7,424바이트). 본문 앞 4,278바이트에 "적용조건 1단계 3명 전체 능력치 +1 … 4단계 11명 전체 능력치 +4 가속력 +3 중거리 슛 +3" | 실측 |
+| T5 | 선수 `GET /DataCenter/TeamColorPlayerList?<양식>` — 같은 헤더 필요(`Referer` 만이면 오류 페이지 · `X-Requested-With` 만이면 성공). 응답 `{"players":[…]}` 124KB · 0.7~0.8초. 항목: `spid` · `name` · `ovr`(문자열) · `position` · `pay`(급여 정수) · `price`("152,000") · `eachPrice`("0|152,000|…" 14칸 = 0~13강) · `eachOvr`(포지션 28칸) · `season` · `thumb` … | 실측 |
+| T6 | **한 요청 최대 100명, 쪽 넘김 없음** — `n4PageNo`·`pageNo`·`page`·`n4Page`=2 모두 첫 쪽과 같고, 사이트 JS(`datacenter.teamcolor.js`)에도 쪽 인자가 없다. 포지션별(공·미·수) 각 100 → 합 286 | 실측 |
+| T7 | **OVR 상한(`n4OvrMax`)으로 이어 받으면 전부 온다** — 정렬 `overallrating descending` 에서 마지막 OVR 을 다음 요청 상한으로(경계 OVR 은 겹쳐 받고 spid 로 중복 제거): 맨유 1,108장 · 12요청 · 9.1초(0.3초 간격) · 최저 OVR 44. 작은 팀컬러 9장 1요청 · Winning Streak 둘 121장 2요청 / 59장 1요청 | 실측 |
+| T8 | GK 필터(`strPosition` = `0`·`28`·`gk`) 는 0명 — 맨유 상위 100 안에 GK 6명이 있다. 포지션 필터는 **안 쓴다** | 실측 |
+| T9 | 랭킹 행의 팀컬러 칸에 **엠블럼 `<img src>`** 가 같이 있다(`crests/light/medium/l5.png` · `countries/largeflags/f_167.png` · `crests/…/l131682.png`) — 목록(T1)의 엠블럼과 같은 경로 체계. 지금 `ranker._TEAM_COLOR` 는 이름만 읽는다 | 실측 |
+| T10 | 내 fifa.db `team_colors` — 상대 11,178행 중 이름 있는 5,270 · 서로 다른 이름 85. 목록에 **없는** 이름은 "단일 팀"(4행) 하나. 겹치는 이름(T3)을 쓰는 상대 32행(0.6%) | 실측 |
+| T11 | 이용 안내(`notice.py:48`)가 이미 "팀컬러 … 데이터센터를 자동으로 읽어"를 적고 있다 — 새 요청은 같은 사이트·사용자가 누를 때만이라 `NOTICE_VERSION` 을 올리지 않는다 | 코드 |
+
+### 사용자 확인 (답 전 — 내 추천을 적어 둔다)
+
+| # | 물음 | 추천 |
+|---|---|---|
+| U1 | 선수 목록 100명 상한(T6) | **처음엔 OVR 높은 순 100명(요청 1)** + 아래 [더 보기] — 누를 때마다 다음 100명(T7 방식). 전부 한 번에(맨유 12요청·9초)는 쓸모 대비 비싸다(OVR 44 카드까지) |
+| U2 | 이름이 겹치는 팀컬러(T3 · 0.6%) | **이름으로 찾고 둘이면 상세 창 위에 둘 다 고를 수 있게**(엠블럼과 함께). 랭킹 행의 엠블럼(T9)으로 가르는 안은 `team_colors`·`rank.db` 형식을 바꿔야 해서 뺀다 |
+| U3 | 상세를 어떻게 여나 | 두 탭 표에서 **팀컬러 칸 한 번 클릭 → 오른쪽(좁으면 아래) 상세 패널**. 랭킹 탭 더블클릭(포지션별 최다 상대)은 그대로 |
+
+### 7 팀컬러 효과표 — 새 모듈 `teamcolor.py`
+
+- 함수: `fetch_list()` → `[TeamColorMeta(id, name, emblem, max_step, members, effects)]` · `fetch_detail(id)` → `[Step(step, members, effects: list[str])]` ·
+  `fetch_players(id, ovr_max=None)` → `[TeamColorPlayer(spid, name, position, ovr, pay, prices: dict[grade,int])]`(최대 100 · `ovr_max` 로 이어 받기).
+  셋 다 첫 줄에 `config.WEB_DATA` 검사 · 요청은 `ranker.web_get` · 헤더 `X-Requested-With`(T4·T5) · 상수(`TEAMCOLOR_LIST_URL` 등)는 파일 상단.
+  `test_web_data_switch_blocks_every_request` 의 `_web_calls()` 에 셋.
+- 파싱은 앵커를 `GetTeamColorDetail(` · `class="teamcolor_item"` 로(라벨 글자 아님 — 메모리 "PlayerAbility 함정"). 1건 실패는 그 항목만 빼고, **801개 중 절반 넘게 실패면 예외**(구조가 바뀐 것 — 빈 목록을 "팀컬러 없음"으로 읽지 않게).
+  오류 페이지 넘김(`error.html` URL)은 `TeamColorError("넥슨 페이지 형식이 바뀌었을 수 있습니다")`.
+- 캐시(fifa.db 새 표): `teamcolor_meta(id PK, name, emblem, max_step, members, effects, fetched_on)` — 7일, 상세를 열 때 이름이 목록에 없으면 그날 한 번 다시 받는다 ·
+  `teamcolor_steps(id, step, members, effects, fetched_on, PK(id, step))` — 30일. 선수 목록은 **DB 에 안 넣는다**(시세가 매일 바뀌고 크다) — 창이 떠 있는 동안 메모리만.
+- 선수 JSON 의 급여·시세는 **B 카드 정보 캐시에 넣는다**(2.1.1 에서 넘어온 것): `pay` → `card_info.salary` · `eachPrice` → `card_prices`(1~13강). `card_info.base_ovr`·`position` 은
+  **넣지 않는다** — 선수 페이지(1강·기본 포지션)와 같은 값인지 아직 모른다(구현 첫 줄에 같은 spid 몇 장을 두 출처로 대조 → 같으면 넣는다 · `check_api` 줄). 시세 단위가 `card_prices` 와 같은지도 같은 대조로.
+- 로더 `TeamColorDetailLoader`(작업 스레드 · 요청 번호로 늦은 응답 버림): 목록(캐시 없을 때) → 상세 → 선수 100. [더 보기] 는 같은 로더에 `ovr_max`.
+- 화면(U3): 패널 = 엠블럼 · 이름 · 단계 표(단계 | 인원 | 효과) · 선수 표(OVR | 이름 | 포지션 | 급여 | 1강 시세 — `FitTableWidget`, 정렬 OVR 내림차순) · [더 보기] · "넥슨 데이터센터 기준 · 날짜".
+  선수 이름 더블클릭 → 기존 선수 카드 창. "단일 팀"·목록에 없는 이름 → "효과 정보가 없는 팀컬러입니다"(요청 0). 웹 데이터 꺼짐 → `config.WEB_DATA_OFF_MSG`.
+
+### 7+ 팀컬러 승률 보강
+
+- 안내 줄에 "팀컬러 N종"(지금 표에 나온 수).
+- 승률 표에 **"상대 수"** 열(그 팀컬러로 만난 서로 다른 닉네임) — `stats.TeamColorStat.opponents`(set 길이). 같은 상대 반복이 승률을 끌고 가는지 보이게.
+
+### ⑩ 팀컬러 승률·랭킹 표
+
+- **승률 칸 색** — 내 범위 전체 승률 대비 차이로 섞은 불투명 색(PyQt 규칙 2 — 알파 금지) · 색은 `theme.CHART_*`(적록 색약 — GREEN/RED 안 씀).
+- **"내 평균 대비" 열** — 팀컬러 승률 − 같은 범위(`_teamcolor_scope`) 전체 승률, `+3.2%p`.
+- **최소 경기 수 필터** — 표 위 스핀(기본 `config.TEAMCOLOR_MIN_GAMES` 초안 5), 두 탭 공용. 걸러진 수를 안내 줄에 "N종 숨김".
+- **표본 흐림**(1.2.1 규칙) — 경기 < `core.MIN_COND` 이면 칸 색 대신 흐림 + 툴팁 "표본 N".
+- **팀가치 범위 막대**(랭킹 탭) — 최저~최고를 한 칸 막대로(평균 점), 축은 표에 보이는 행의 최저~최고. 칸 그리기는 `widgets` 의 새 델리게이트(색은 theme). 숫자 열 셋은 그대로 두고 막대 열을 더한다(정렬은 평균).
+
+### 진입점 표 (⑩)
+
+| 진입점 | 거쳐야 할 것 | 테스트 |
+|---|---|---|
+| 팀컬러 목록 요청 | `WEB_DATA` · `web_get` · 헤더 · 오류 페이지 판정 | `test_web_data_switch_blocks_every_request` · `test_every_web_request_goes_through_the_concurrency_cap` · `test_teamcolor_list_parse`(실응답 익명 조각 픽스처) |
+| 상세 요청 | 위 + 30일 캐시 | `test_teamcolor_detail_parse` · `test_teamcolor_cache_ttl` |
+| 선수 요청(첫 100 · 더 보기) | 위 + 이어 받기 중복 제거 + `card_info`/`card_prices` 쓰기 | `test_teamcolor_players_continue`(가짜 응답: 경계 OVR 이 걸친 두 쪽) · `test_teamcolor_players_feed_card_cache` |
+| 앱 종료·트레이 내려놓기 | `TeamColorDetailLoader` 가 `shutdown` 정리 표에(멈춤 요청 먼저 → 기다림) | 새 `test_shutdown_stops_teamcolor_detail_loader`(`test_shutdown_stops_pitch_loaders` 꼴) |
+| 화면 그리기 | `VIEW_OF_KEY`·`_renderers()` 에 패널 키(아니면 `VIEW_EXEMPT`) | `test_every_nav_page_has_a_renderer` |
+| 지우기(사용자 데이터 삭제가 있으면) | 새 표 둘도 지운다 | 구현 때 지우기 경로 grep → 테스트 |
+
+### 환경 행렬 (③)
+
+소스 · offscreen(`test_ui_smoke` — 패널·필터·막대 델리게이트) · CI(네트워크 없음 — 픽스처만) · exe(새 모듈 `hiddenimports` 확인 — `release.py`) · 실제 윈도우 100%/150%(패널이 1280×720 에서 잘리지 않음 — `test_window_size` + 2번 모니터) ·
+새 설치(표 없음 → 생성) · 업그레이드(2.1.1 DB 에 표 추가 · 옛 버전이 새 DB 를 열면 새 표는 무시) · 남의 PC CP949(새 파일 IO 없음 — 규칙 테스트).
+
+### 실패·복구(⑥) · 예산(⑦) · 상호작용(⑧) · 사용자 제약(⑨)
+
+- **⑥** 넥슨 형식 변경 → 파서 예외 → 패널에 사람 말 + 캐시가 있으면 옛 값 · `check_api` 가 [FAIL]. 오류 페이지 넘김 → 같은 처리. 429 → 패널에 "잠시 뒤", 재시도 없음(누를 때만이라).
+- **⑦** 목록 1.2MB(7일 1회) · 상세 0.33MB · 선수 0.12MB/100 — 패널 하나 열기 최대 3요청·약 1.7MB. 메모리: 선수 목록은 패널에 띄운 것만. 디스크: 표 둘 합 1MB 미만(801 + 단계 4줄 × 연 것).
+- **⑧** 팀컬러 상대 조회(`RankListLoader`/`TeamColorLoader`)·랭킹 수집과 같은 `web_get` 상한 8 을 나눈다 — 겹치면 기다릴 뿐. 랭킹 탭 더블클릭(포지션별 최다 상대)과 한 번 클릭(패널)은 다른 신호.
+  B 캐시 쓰기는 `CardInfoLoader`·`PriceLoader` 와 같은 표 — 같은 날 값이면 덮어써도 같다(`INSERT OR REPLACE`).
+- **⑨** 자동 요청 0(누를 때만) · 알림 없음 · 초점 안 뺏음(패널은 창 안) · 웹 데이터 꺼짐 존중.
+
+### 재지 않은 것 (구현 때 잰다)
+
+- 선수 JSON 의 `pay`·`eachPrice` 가 선수 페이지(`playerinfo`)의 급여·시세와 같은지 — 구현 첫 줄 대조(`check_api` 줄)
+- 상세 본문 구조(단계 표)를 앵커로 읽을 수 있는지 — T4 는 글자만 봤다
+- 패널을 넣은 두 탭이 1280×720·150% 에서 표 잘림 없이 들어가는지 — `test_window_size`
+- `TEAMCOLOR_MIN_GAMES` 5 — 시즌 범위 실데이터로 숨는 종 수를 보고
+
+### 단계
+
+| # | 할 일 | 난이도 |
+|---|---|---|
+| 18 | 7 · 7+ · ⑩ 전부 → **2.2.1 공개** | 중간 — 문서 없는 웹 주소 셋 · 새 캐시 표 둘 · 표 델리게이트 |
 
 **2.1.1 에서 넘어온 것**(상세는 `docs/DONE.md` 2.1.1 절)
-- 카드 정보 캐시(B)의 두 번째 출처 **팀컬러 선수 JSON** 은 2.2.1(7)이 붙인다 — 2.1.1 은 선수 페이지 하나만.
-- 메뉴 "팀컬러: 팀컬러 승률 · 팀컬러 랭킹" 이 이미 있다 — 7·7+·⑩ 은 이 자리에 붙인다(새 메뉴 아님).
+- 카드 정보 캐시(B)의 두 번째 출처 **팀컬러 선수 JSON** — 위 7 에 넣었다.
 - **사용자 확인 거리(17단계 이견)**: 랭커 추천 후보 ②(내 상대 중 1만 위 안)가 후보 대부분이다 — 1,000위 안으로 좁히면 이름에 맞지만 ③ 요청이 는다. 답 전까지 U3 그대로.
 - 실사용으로 정할 초안 값: `CHIP_FETCH_MAX` 60 · `RANKER_PICK_MAX_AGE_DAYS` 14 · `RECOMMEND_MIN_USERS` 3 · 랭커 픽 요청 간격 0.25초·429 대기 60초 · `card_info` 30일 TTL.
 
