@@ -21,14 +21,14 @@
 16(2.1.1 — 선수 색인 `match_squads`·백필 · 랭커 픽 `rankerpick.py` + 화면 · 선수로 구단주 찾기, 2026-10-06) ·
 17(**2.1.1 공개** 2026-10-06 — 랭킹 추이 · 랭커 픽 [추천] · 최종 안내 문구 · `test_window_size` 임시 데이터 폴더 · 2번 모니터 실화면).
 **1.2.1 부터의 나눔은 제안** — 그 버전 계획 검토(①~⑩·⑫) 때 고친다. **버전마다 첫 단계 앞에 계획 검토가 붙는다** —
-**2.1.1 공개 끝**(2026-10-06 — 상세는 `docs/DONE.md`) — 지금은 **18단계 앞 2.2.1 계획 검토**. 끝난 버전의 상세는 `docs/DONE.md`.
+**2.1.1 공개 끝**(2026-10-06 — 상세는 `docs/DONE.md`) — **2.2.1 계획 검토 끝**(2026-10-06 — 4회차 새 [상] 0) — 다음은 **18단계 구현**(새 세션 · U4 답 먼저). 끝난 버전의 상세는 `docs/DONE.md`.
 20~22(보호 빌드)는 기능이 거의 완성된 뒤 한 번에 — 번호·버전은 제안이고, 그 사이 기능 단계가 늘면 그 앞에 끼운다.
 
 난이도는 낮음·중간·높음(2026-10-06 사용자: 계획을 보여 줄 때 늘 같이) — 계획 검토 때 다시 매긴다.
 
 | # | 버전 | 단계 | 난이도 | 끝에 |
 |---|---|---|---|---|
-| 18 | 2.2.1 | 7 팀컬러 효과표 · 7+ 승률 보강 · ⑩ | 중간 — 문서 없는 웹 주소 | **2.2.1 공개** |
+| 18 | 2.2.1 | U2 엠블럼 · 7 팀컬러 효과표 · 7+ 승률 보강 · ⑩ | 중간~높음 — 문서 없는 웹 주소 · 두 DB 형식 추가 | **2.2.1 공개** |
 | 20 | (제안) 2.3.1 | PySide6 전환(PyQt6 GPL → LGPL) — 화면 동작은 그대로, 회귀 확인이 핵심 | 중간 — 기계적이지만 전 화면 회귀 | |
 | 21 | (제안) 2.3.1 | 핵심을 비공개 저장소로 · 공개 쪽은 `core_api` + 간이 대체 · `build_dev` / `build_release` 분리 | 높음 — 저장소·빌드 구조 변경 | |
 | 22 | (제안) 2.3.1 | Nuitka 배포 빌드 — 아래 "배포 보호 준비" 위험 점검표를 실측으로 · 설치기 · 라이선스 고지 | 높음 — 실측 없는 위험이 많음 | **2.3.1 공개** |
@@ -157,7 +157,9 @@
 
 ## 2.2.1 — 팀컬러 (중간 패치)
 
-> **상태: 계획 검토 3회차 반영**(2026-10-06 — 3회차: B 바뀐 줄 [상] 0 · A 계획 전체 [상] 1(저장 경로가 화면 글자를 DB 에 씀) → 반영 · [중] 8 반영). 4회차(계획 전체 · 1명) 전. 단계는 18 하나 + 공개.
+> **상태: 계획 검토 끝**(2026-10-06 — 4회차 계획 전체 새 [상] 0). 남은 답: U4. 다음은 **새 세션에서 18단계 구현**.
+>
+> **검토 기록** 1회차 A [상] 1 · B [상] 2(카드 캐시는 둘 다) · [중] 20 안팎 → 2회차(바뀐 줄) A·B 같은 [상] 1(가르기가 목록에 기댐) → 3회차 B(바뀐 줄) [상] 0 · A(계획 전체) [상] 1(저장 경로가 화면 글자를 씀) → 4회차 A(계획 전체) [상] 0 · [중] 2. 토큰: A 15.1만→18.3만→20.3만→21.3만(누적) · B 12.0만→14.0만→14.7만(누적).
 
 **규모** 중간. 새 넥슨 요청: 홈페이지 셋(팀컬러 목록 · 상세 · 선수 JSON) — 전부 **사용자가 누를 때만**(자동 요청 0). 오픈API 요청 0.
 저장 형식: fifa.db 새 표 둘 + `team_colors.emblem` 열 · rank.db 새 표 하나(`snapshot_emblems`) — **기존 표의 열 순서·INSERT 는 안 건드린다**(아래 U2). 메뉴는 그대로("팀컬러: 팀컬러 승률 · 팀컬러 랭킹").
@@ -183,6 +185,7 @@
 | T15 | 오류 페이지 넘김은 **HTTP 302**(→ http bulletin → 301 → https) — `allow_redirects=False` 면 302 로 끝난다 | 실측 |
 | T16 | **검색 한 명 경로**(`strCharacterName` — `fetch_manager_rank`)에도 팀컬러 칸 엠블럼이 같은 경로로 있다 — 4명 4/4, 목록 쪽 경로와 같음 | 실측 |
 | T17 | 목록 엠블럼 경로의 종류 칸: `common/teamcolorboost/icon/medium` 532 · `common/crests/light/medium` 208 · `common/countries/largeflags` 56 · `ssl.nexon.com/…/datacenter/teamcolor/tc_u_*.png` 5. 크기 칸을 빼고 **(파일명, 이름)만으로도 801개 전부 고유**. 겹치는 11쌍은 **전부 강화(`teamcolorboost`) 하나 + 클럽(`crests`) 하나** | 실측 |
+| T18 | 목록 이름 중 괄호로 끝나는 진짜 이름 2개(`20시즌 울산 (ACL 우승)`·`20시즌 전북 (리그 우승)`) · ` · ` 를 품은 이름 0 — 접미사를 무조건 떼면 잘린다 | 실측 |
 
 ### 사용자 결정 (2026-10-06)
 
@@ -205,7 +208,7 @@
 - **(팀컬러, 팀가치) 두 칸이 세 칸이 되는 곳**(2회차 A [중] 3 — 진입점 표에 행): `ranker._color_rows`(ranker.py:238) · `TeamColorLoader._fetch_one`(app_main.py:1059) · `RankListLoader` 의 `batch`·`rest`(1177·1192) · `loaded_many` → `_on_teamcolor_loaded`(6123) · `rankcollect.snapshot_colors`(677) · `store.save_team_colors`·`load_team_colors` · 테스트 `test_ui_smoke.py:2508`.
   화면에 넣는 순간(`_on_teamcolor_loaded`·`_load_cached_team_colors`) `teamcolor.label` 로 글자 하나가 된다 — 그 뒤는 바뀌지 않는다.
   **저장은 화면 글자가 아니라 원값으로**(3회차 A [상] — 지금 `_on_teamcolor_finished` 가 `self._team_colors[n]` 을 다시 읽어 저장한다, app_main.py:6155): 로더가 준 (이름, 팀가치, 엠블럼 키)를 `self._teamcolor_raw[닉네임]` 에 따로 쥐고 `_on_teamcolor_finished` 는 거기서 저장한다. DB `team_color` 는 언제나 넥슨 이름.
-  **랭커 쪽 이름과 맞대는 곳은 글자 → 이름**(3회차 A [중] 2): `teamcolor.name_of(label)`(접미사를 뗀다). 선수로 구단주 찾기 — 콤보는 글자 키, 스냅숏 쪽은 `snapshot_emblems` 를 붙여 같은 `label` 로 만들어 비교(app_main.py:4551) · 추천 `my_team_color` 의 `cached` 는 `name_of` 를 거친다(app_main.py:4210 — rank.db 는 이름).
+  **랭커 쪽 이름과 맞대는 곳은 글자 → 이름**(3회차 A [중] 2): `teamcolor.name_of(label)`(접미사를 떼고 **남은 이름이 `TEAMCOLOR_DUP_NAMES` 에 있을 때만** — T18 · 4회차 A). 선수로 구단주 찾기 — 콤보는 글자 키, 스냅숏 쪽은 **`rankerpick.snapshot_index` 안에서만** `snapshot_emblems` 를 붙여 같은 `label` 로(rankerpick.py:112 — 4회차 A: `top_rankers` 는 랭커 픽 비율·추천도 쓰므로 거기엔 넣지 않는다) · 추천 `my_team_color` 의 `cached` 는 `name_of` 를 거친다(app_main.py:4210 — rank.db 는 이름).
 - **fifa.db** `team_colors.emblem TEXT` — `open_db` 에서 `ALTER TABLE ADD COLUMN`. 값은 `읽은 시각(fetched_at) + "\t" + 엠블럼 키`(3회차 A·B — 이름 대조는 같은 이름의 강화↔클럽 바뀜을 못 거른다).
   **옛 버전은 `ON CONFLICT DO UPDATE SET team_color, team_value, fetched_at` 이라 emblem 을 그대로 둔다**(store.py:661 — 2회차 A [중] 2: 이름만 바뀌고 옛 엠블럼이 남는다) → 옛 버전도 `fetched_at` 은 늘 갱신하므로, 읽을 때 앞의 시각이 지금 `fetched_at` 과 다르면 엠블럼 없음으로 본다. 테스트로 잰다.
 - **rank.db** 는 `snapshot_rows` 를 **안 건드리고**(T13) 옆 표 `snapshot_emblems(snapshot_id, profile_sn, emblem, PK(snapshot_id, profile_sn)) WITHOUT ROWID` — 같은 트랜잭션에 쓰고, 원본 지우기(`prune_raw` — rankcollect.py:194)에서 같은 조건으로 같이 지운다.
@@ -262,7 +265,7 @@
 | (팀컬러, 팀가치) → 세 칸 메모리 경로 | `_color_rows` · `_fetch_one` · `RankListLoader` batch·rest · `loaded_many` 풀기 · `snapshot_colors` · 화면에 넣을 때 `teamcolor.label` · **`_on_teamcolor_finished` 는 `_teamcolor_raw` 에서 저장** | `test_ui_smoke` 의 팀컬러 로더 가짜 응답에 엠블럼 · **"목록(teamcolor_meta)을 받기 전후로 승률 표 행 수·값이 같다"** · 겹치는 이름 두 상대가 두 줄 · **겹치는 이름 상대를 받고 저장 → DB `team_color` 는 넥슨 이름, emblem 은 `시각\t키`** |
 | 겹치는 이름 판정 | `config.TEAMCOLOR_DUP_NAMES` | `test_parsing`(목록 픽스처의 겹치는 이름 집합 = 상수 · 쌍마다 종류가 다름) · `check_api` 줄(실제 목록과 대조) |
 | 포지션별 최다 상대 · 더블클릭 | 글자 키 그대로 — 겹치는 이름은 다른 글자 | `test_teamcolor_double_click_on_dup_name`(`이름 · 강화` 행 더블클릭 → 그 상대만) |
-| 랭커 쪽 이름과 맞대는 곳 | 선수로 구단주 찾기(스냅숏도 `label`) · 추천 `my_team_color`(`name_of`) | `test_owner_finder_dup_name_label`("Winning Streak · 강화" 를 골라도 스냅숏 구단주가 남는다) · `test_my_team_color_strips_label` |
+| 랭커 쪽 이름과 맞대는 곳 | 선수로 구단주 찾기(`rankerpick.snapshot_index` 만 `label`) · 추천 `my_team_color`(`name_of`) | `test_owner_finder_dup_name_label`("Winning Streak · 강화" 를 골라도 스냅숏 구단주가 남는다) · **`top_rankers` 반환은 이름 그대로** · `test_my_team_color_strips_label` · `test_parsing`: 목록 픽스처 전부에 `name_of(label(n, e)) == n` |
 | 효과 캐시 SQL | `store.py` 에 | `test_rules` SQL 검사가 그 함수를 돈다(안 돌면 FAIL) |
 | 효과 창 열기 | "효과" 열 `cellClicked` 만 · 더블클릭은 그 열 무시 · 같은 키 요청 0 | `test_teamcolor_effect_opens_only_from_column` · `test_teamcolor_double_click_on_effect_column_does_nothing` |
 | 앱 종료·트레이 내려놓기 | 창의 로더 + 물러난 로더가 `shutdown` 정리 표에(멈춤 요청 먼저) | 새 `test_shutdown_stops_teamcolor_effect_loaders`(갈아 끼운 뒤 종료 포함) |
