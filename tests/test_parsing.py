@@ -910,6 +910,90 @@ def test_finishing_assists_only_on_goals_with_valid_assister():
     assert got == {1: (2, 0), 2: (0, 1)}, got
 
 
+def test_shot_assist_position_only_when_flagged_with_coords():
+    shots = [_shot(0, 1, result=3, assist=True, assistX=0.7, assistY=0.4),
+             _shot(0, 2, result=3, assist=True),                          # 좌표 없음
+             _shot(0, 3, result=3, assist=False, assistX=0.6, assistY=0.5),  # 어시 아님 — 좌표가 와도 버린다
+             _shot(0, 4, result=1, assist=True, assistX=0.3, assistY=0.2)]   # 유효슛(골 아님)도 값은 싣는다
+    got = [(s.assist_x, s.assist_y) for s in st.shot_map([_d(1, "승", me_shots=shots)], "me").shots]
+    assert got == [(0.7, 0.4), (None, None), (None, None), (0.3, 0.2)], got
+
+
+def _with_pass(d, **pas):
+    d["matchInfo"][0]["pass"] = pas
+    return d
+
+
+def test_pass_style_shares_rates_and_win_lose():
+    ds = [_with_pass(_d(5, "승"), shortPassTry=10, shortPassSuccess=9, throughPassTry=10, throughPassSuccess=5),
+          _with_pass(_d(4, "패"), shortPassTry=30, shortPassSuccess=30, longPassTry=10, longPassSuccess=2),
+          _with_pass(_d(3, "무"), shortPassTry=20, shortPassSuccess=10),
+          _with_pass(_d(2, "승"), passTry=50, passSuccess=40),           # 종류 필드 없음 — 건너뛴다
+          _with_pass(_d(1, "오류"), shortPassTry=99, shortPassSuccess=99)]  # 승무패 아님 — 안 센다
+    ps = st.pass_style(ds, "me")
+    assert (ps.all.games, ps.win.games, ps.lose.games, ps.skipped) == (3, 1, 1, 1), \
+        (ps.all.games, ps.win.games, ps.lose.games, ps.skipped)
+    short = ps.all.kinds[0]
+    assert short.name == "짧은 패스" and (short.tries, short.success) == (60, 49), (short.tries, short.success)
+    assert ps.all.total == 80 and abs(ps.all.share(short) - 75.0) < 1e-9   # 6종 합 대비
+    assert abs(ps.all.per_game(short) - 20.0) < 1e-9
+    through_win = ps.win.kinds[4]
+    assert through_win.name == "스루 패스" and through_win.rate == 50.0 and ps.win.share(through_win) == 50.0
+    assert ps.lose.kinds[4].tries == 0 and ps.lose.kinds[1].rate == 20.0   # 무승부는 이긴/진 쪽에 안 들어간다
+    assert [k.name for k in ps.all.kinds] == [n for n, _ in st.PASS_KINDS]
+
+
+def test_rating_trend_weeks_and_weak():
+    X = 7
+    # 9/28(월)~ 주에 세 경기(하나는 교체 대기만 — 안 센다), 10/5~ 주에 한 경기
+    ds = [_d(30 + 6, "승", [_p(X, 25, spRating=8.0)]),
+          _d(30, "패", [_p(X, 25, spRating=6.0)]),
+          _d(29, "승", [_p(X, 25, spRating=7.0)]),
+          _d(28, "승", [_p(X, 28)]),
+          _d(27, "승", [_p(X, 25, spRating=9.9)])]   # 9/27(일) — 그 앞 주
+    weeks = st.rating_trend(ds, "me", X)
+    got = [(w.week_start.isoformat(), w.games, round(w.rating, 2)) for w in weeks]
+    assert got == [("2026-09-21", 1, 9.9), ("2026-09-28", 2, 6.5), ("2026-10-05", 1, 8.0)], got
+    assert all(w.weak for w in weeks)   # 다섯 경기 미만
+    # 경계 — 정확히 기준 경기 수인 주는 흐리지 않는다(기준 미만만)
+    n = st.PLAYER_RATING_MIN_GAMES
+    edge = [_d(28 + i % 7, "승", [_p(X, 25, spRating=7.0)], hour=10 + i // 7) for i in range(n)]
+    assert [w.games for w in st.rating_trend(edge, "me", X)] == [n]
+    assert not st.rating_trend(edge, "me", X)[0].weak
+    assert st.rating_trend(edge[:-1], "me", X)[0].weak
+    assert st.rating_trend(ds, "me", 999) == []
+
+
+def _ranker(spid, po, **status):
+    return {"spid": spid, "spPosition": po, "status": status, "createDate": "2026-10-05T17:30:00"}
+
+
+def test_ranker_values_are_per_game():
+    """랭커 값은 이미 경기당 평균이다(실측 — matchCount 20 이면 0.05 단위) — matchCount 로 또 나누면 조용히 틀린다."""
+    r = _ranker(1, 25, shoot=0.75, goal=0.4, passTry=10.0, passSuccess=9.0, dribbleTry=0, matchCount=20)
+    n, day, vals = st.ranker_values(r)
+    assert (n, day) == (20, "2026-10-05")
+    assert vals["슛"] == 0.75 and vals["골"] == 0.4, vals
+    assert vals["패스 성공률"] == 90.0 and vals["드리블 성공률"] == 0.0, vals
+    assert st.ranker_values(None) is None and st.ranker_values(_ranker(1, 2, shoot=1, matchCount=0)) is None
+
+
+def test_ranker_compare_uses_most_played_position_only():
+    C, D = 11, 22
+    ds = [_d(3, "승", [_p(C, 25, shoot=2, passTry=10, passSuccess=8), _p(D, 5, tackle=3)]),
+          _d(2, "패", [_p(C, 25, shoot=4, passTry=10, passSuccess=10), _p(D, 28, tackle=9)]),  # D 교체 대기 — 자리 없음
+          _d(1, "무", [_p(C, 20, shoot=9)])]                                            # C 의 덜 선 자리
+    assert st.ranker_targets(ds, "me") == [(C, 25), (D, 5)]
+    assert st.ranker_targets(ds, "me", limit=1) == [(C, 25)]
+    rows = st.ranker_compare(ds, "me", {(C, 25): _ranker(C, 25, shoot=1.5, passTry=4, passSuccess=2, matchCount=8),
+                                        (D, 5): None})
+    c, d = rows
+    assert (c.sp_id, c.pos, c.games) == (C, 25, 2)
+    assert c.mine["슛"] == 3.0 and c.mine["패스 성공률"] == 90.0, c.mine   # 20 자리 경기(슛 9)는 안 섞인다
+    assert c.ranker["슛"] == 1.5 and c.ranker["패스 성공률"] == 50.0 and c.ranker_games == 8, c.ranker
+    assert (d.games, d.mine["태클"], d.ranker, d.ranker_games) == (1, 3.0, {}, 0)
+
+
 def test_match_day_needs_full_date():
     assert st._match_day({"matchDate": "2026-10-02T10:00:00"}).isoformat() == "2026-10-02"
     assert st._match_day({"matchDate": "2026-10-02"}).isoformat() == "2026-10-02"  # 시각 없이 날짜만(딱 10자)

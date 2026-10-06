@@ -402,8 +402,9 @@ def test_no_table_elides_at_min_or_default_size():
     # "…" 로 잘렸다. 헤더도 잰다 — 채우는 동안 정렬이 꺼져 있어 화살표 자리를 빼고
     # 폭을 잡으면 "승률▾" 이 겹쳤다.
     import widgets
-    tables = [t for t in _win.findChildren(widgets.FitTableWidget)]
-    assert len(tables) == 12, len(tables)  # 13번째(포지션 선수 다이얼로그)는 열 때 생긴다
+    # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
+    tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
+    assert len(tables) == 13, len(tables)  # 13번째는 랭커와 비교(1.4.1)
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -3239,7 +3240,7 @@ def test_player_card_has_my_record_tab():
     finally:
         app_main.QDialog.exec = orig_exec
     tabs = _win._last_player_tabs
-    assert [tabs.tabText(i) for i in range(tabs.count())] == ["카드 정보", "내 기록"]
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["카드 정보", "내 기록", "랭커 기록"]
     rec = tabs.widget(1)
     summary = [lb for lb in rec.findChildren(app_main.QLabel) if lb.objectName() == "myRecordSummary"][0]
     assert f"슛 {shooter.shots}" in summary.text() and f"골 {shooter.goals}" in summary.text(), summary.text()
@@ -5473,6 +5474,237 @@ def test_price_tab_fills_cache():
                                   (424242, 8): (17400000, datetime.now().date().isoformat())}, prices
     finally:
         playerinfo.fetch_player_info = keep
+
+
+# ── 1.4.1 13단계 — 랭커 비교 · 랭커 기록 탭 · 패스 스타일 · 어시스트 · 평점 추이 ─────────────────
+class _RankerApi:
+    """넥슨처럼 데이터 있는 쌍만 — 모든 (카드, 자리)에 표본 n 경기. fail 이면 예외."""
+
+    def __init__(self, n=20, fail=None, only_po=None):
+        self.n, self.fail, self.only_po, self.calls = n, fail, only_po, []
+
+    def get_ranker_stats(self, matchtype, pairs):
+        self.calls.append(list(pairs))
+        if self.fail is not None:
+            raise self.fail
+        return [{"spid": s, "spPosition": p, "createDate": "2026-10-05T17:30:00",
+                 "status": {"shoot": 0.5, "effectiveShoot": 0.25, "goal": 0.1, "passTry": 10.0, "passSuccess": 9.0,
+                            "matchCount": self.n}}
+                for s, p in pairs if self.only_po is None or p in self.only_po]
+
+
+class _RankerEnv:
+    """임시 DB(하루 캐시가 테스트끼리 안 섞이게) · 가짜 API · 키 — 끝나면 되돌린다."""
+
+    def __init__(self, api):
+        self.api = api
+
+    def __enter__(self):
+        for ld in (_win._ranker_loader, _win._scout_loader):  # 앞에서 띄운 것(첫 그리기 등)이 끝나야 '받는 중'이 안 섞인다
+            if ld is not None:
+                ld.wait(5000)
+        _app.processEvents()
+        self.keep = (config.DB_PATH, config.API_KEY, _win._api, _win._ranker_day, _win._ranker_data,
+                     _win._ranker_failed, _win._ranker_note)
+        config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "r.db"
+        config.API_KEY = "test_key"
+        _win._api = self.api
+        _win._ranker_day, _win._ranker_data, _win._ranker_failed, _win._ranker_note = None, {}, None, ""
+        return self
+
+    def __exit__(self, *exc):
+        for ld in (_win._ranker_loader, _win._scout_loader):
+            if ld is not None:
+                ld.wait(5000)
+        (config.DB_PATH, config.API_KEY, _win._api, _win._ranker_day, _win._ranker_data,
+         _win._ranker_failed, _win._ranker_note) = self.keep
+        return False
+
+
+def _ranker_view():
+    _win._go_page("랭커와 비교")
+    _win._dirty.add("rankercmp")
+    _win._render_ranker_compare(_win._slice()[1])
+
+
+def _run_thread(ld):
+    """QThread.start 는 막혀 있다 — 스레드 몸통을 여기서 돌리고 끝남 신호를 낸다(진짜와 같은 순서: done → finished)."""
+    ld.run()
+    ld.finished.emit()
+
+
+def test_ranker_compare_page_fetches_once_and_blurs_small_samples():
+    api = _RankerApi(n=8)   # 랭커 표본 8 < RANKER_MIN_MATCHES — 전부 흐림
+    with _RankerEnv(api):
+        _ranker_view()
+        assert "받는 중" in _win.lb_ranker_status.text(), _win.lb_ranker_status.text()
+        ld = _win._ranker_loader
+        _run_thread(ld)   # finished → 다시 그리기(_invalidate)
+        want = st_mod.ranker_targets(_win._slice()[1], _OUID, config.RANKER_COMPARE_MAX)
+        assert [p for c in api.calls for p in c] == want, (api.calls, want)
+        assert [(r.sp_id, r.pos) for r in _win.ranker_rows] == want
+        assert all(r.ranker_games == 8 for r in _win.ranker_rows), "다 받은 뒤 다시 그리지 않았다"
+        assert "받는 중" not in _win.lb_ranker_status.text(), _win.lb_ranker_status.text()
+        tb = _win.tbl_ranker
+        assert tb.rowCount() == len(want) and tb.columnCount() == len(app_main.MainWindow.RANKER_COLUMNS)
+        assert all(tb.item(i, 0).data(Qt.ItemDataRole.UserRole + 1) for i in range(tb.rowCount())), "표본 8 인데 안 흐렸다"
+        # 칸은 "나 / 랭커" — 랭커 값 0.50 이 그대로(경기당 — 다시 나누지 않는다)
+        col = app_main.MainWindow.RANKER_COLUMNS.index("슛")
+        assert tb.item(0, col).text().endswith("/ 0.50"), tb.item(0, col).text()
+        # 다시 그려도(같은 날) 새로 안 띄운다
+        _ranker_view()
+        assert _win._ranker_loader is ld and len(api.calls) == 1
+        # 창이 들고 있던 걸 잃어도(날이 바뀐 것처럼) DB 하루 캐시로 — 요청 0
+        _win._ranker_day = None
+        _ranker_view()
+        assert _win._ranker_loader is not ld
+        _run_thread(_win._ranker_loader)
+        assert len(api.calls) == 1, "같은 날 DB 캐시를 두고 다시 물었다"
+        assert all(r.ranker_games == 8 for r in _win.ranker_rows)
+    # 랭커 표본이 넉넉하면 내 출전이 충분한 줄은 안 흐린다
+    with _RankerEnv(_RankerApi(n=20)):
+        _ranker_view()
+        _run_thread(_win._ranker_loader)
+        tb = _win.tbl_ranker
+        for i, r in enumerate(_win.ranker_rows):
+            weak = bool(tb.item(i, 0).data(Qt.ItemDataRole.UserRole + 1))
+            assert weak == (r.games < core.MIN_PLAYER_GAMES), (i, r.games, weak)
+
+
+def test_ranker_compare_failure_shows_reason_without_retry_loop():
+    api = _RankerApi(fail=app_main.NexonAPIError("API 호출량을 초과했습니다.", code="OPENAPI00007", status=429))
+    with _RankerEnv(api):
+        _ranker_view()
+        ld = _win._ranker_loader
+        _run_thread(ld)
+        text = _win.lb_ranker_status.text()
+        assert "받지 못했습니다" in text and "호출량" in text, text
+        _ranker_view()   # 같은 쌍을 되풀이해 묻지 않는다(finished 가 다시 그린 것까지 띄운 로더는 하나)
+        assert _win._ranker_loader is ld and len(api.calls) == 1, api.calls
+        assert all(r.ranker_games == 0 for r in _win.ranker_rows)
+        # 새 데이터(검색·시즌 바꿈)면 다시 해 본다
+        _win._render_all()
+        _ranker_view()
+        assert _win._ranker_loader is not ld
+
+
+def _open_card(sp_id):
+    orig_exec = app_main.QDialog.exec
+    app_main.QDialog.exec = lambda self: 0
+    try:
+        _win._show_player_info(sp_id)
+    finally:
+        app_main.QDialog.exec = orig_exec
+    return _win._last_player_tabs
+
+
+def test_scout_tab_one_request():
+    """선수 카드 [랭커 기록] — 탭을 열 때 포지션 28개를 요청 하나로, 데이터 있는 자리만 표에. 홈페이지 스위치와 무관."""
+    sp = st_mod.ranker_targets(_DETAILS, _OUID)[0][0]
+    api = _RankerApi(n=20, only_po={0, 25, 27})
+    keep_web = config.WEB_DATA
+    config.WEB_DATA = False
+    try:
+        with _RankerEnv(api):
+            # 탭을 안 열면 묻지 않는다(창 하나 열 때마다 요청하지 않게) — 창을 닫은 뒤의 탭을 재 보려고 직접 만든다
+            tab = _win._build_scout_tab(sp)
+            assert not api.calls
+            _win._start_scout(tab)
+            first = _win._scout_loader
+            _run_thread(first)
+            assert tab.table.rowCount() == 3, tab.status.text()
+            assert len(api.calls) == 1 and api.calls[0] == [(sp, po) for po in range(28)], api.calls
+            assert "포지션 3곳" in tab.status.text(), tab.status.text()
+            _win._start_scout(tab)
+            assert _win._scout_loader is first, "같은 탭을 다시 열 때 또 띄웠다"
+            # 같은 날 다른 창 — DB 캐시(빠진 25개 자리 포함)로 요청 0
+            tab2 = _win._build_scout_tab(sp)
+            _win._start_scout(tab2)
+            _run_thread(_win._scout_loader)
+            assert tab2.table.rowCount() == 3 and len(api.calls) == 1, api.calls
+            # 실제 카드 창 — 세 번째 탭으로 옮기면 띄운다(탭 전환 배선)
+            tabs = _open_card(sp)
+            assert tabs.tabText(2) == "랭커 기록"
+            before = _win._scout_loader
+            tabs.setCurrentIndex(2)
+            assert _win._scout_loader is not before, "탭을 열었는데 안 띄웠다"
+            _run_thread(_win._scout_loader)
+            assert tabs.widget(2).table.rowCount() == 3
+    finally:
+        config.WEB_DATA = keep_web
+
+
+def test_pass_style_section_in_tactics():
+    _win._go_page("전술·경기 결과")
+    _win._render_tactics(_win._slice()[1])
+    ps = _win.pass_style
+    # 픽스처 4경기 전부 종류 필드가 있고, 하나는 "오류"(승무패 아님)라 뺀다
+    wdl = [m for m in _win._slice()[0] if m.result in ("승", "무", "패")]
+    assert ps.all.games == len(wdl) == 3, (ps.all.games, len(wdl))
+    g = _win.grid_pass
+    assert g.rowCount() == 1 + len(st_mod.PASS_KINDS), g.rowCount()
+    assert g.itemAtPosition(1, 0).widget().text() == "짧은 패스"
+    # 이긴/진 경기 칸은 표본(MIN_COND) 미만이면 흐림 — 픽스처는 몇 경기뿐이라 흐리다
+    cell = g.itemAtPosition(1, 4).widget()
+    assert app_main.T.TEXT_DIM in cell.styleSheet() and cell.toolTip(), cell.styleSheet()
+
+
+def test_shotmap_assist_toggle():
+    _win._go_page("슛 맵")
+    _win.cb_shotmap_side.setCurrentIndex(0)
+    _win.chk_shotmap_assist.setChecked(False)
+    assert _win.shotmap.assist_lines() == [], "기본은 어시 선이 없어야 한다"
+    _win.chk_shotmap_assist.setChecked(True)
+    try:
+        want = [s for s in st_mod.shot_map(_win._slice()[1], _OUID).shots
+                if s.result == 3 and s.assist_x is not None]
+        assert want and len(_win.shotmap.assist_lines()) == len(want), (len(_win.shotmap.assist_lines()), len(want))
+        assert "어시 있는 골" in _win.lb_shotmap_summary.text()
+        _win.cb_shotmap_side.setCurrentIndex(1)   # 상대 슛 — 어시 위치도 내 시점으로 뒤집는다
+        opp = st_mod.shot_map(_win._slice()[1], _OUID, mine=False).shots
+        a = next(s for s in opp if s.result == 3 and s.assist_y is not None)
+        drawn = [s for s in _win.shotmap.assist_lines() if abs(s.x - a.x) < 1e-12]
+        assert drawn and abs(drawn[0].assist_y - (1.0 - a.assist_y)) < 1e-12
+    finally:
+        _win.chk_shotmap_assist.setChecked(False)
+        _win.cb_shotmap_side.setCurrentIndex(0)
+
+
+def test_shotmap_default_unchanged():
+    """set_shots(shots) 기본값은 예전 그림 그대로 — 선수 카드 [내 기록]도 같은 함수. 어시 좌표가 실려 와도 안 그린다."""
+    sm = st_mod.shot_map(_DETAILS, _OUID)
+    bare = [app_main.replace(s, assist_x=None, assist_y=None) for s in sm.shots]
+    assert any(s.assist_x is not None for s in sm.shots)
+    w = app_main.ShotMapWidget()
+    w.resize(560, 460)
+    w.set_shots(bare)
+    before = w.grab().toImage()
+    w.set_shots(sm.shots)
+    assert w.grab().toImage() == before, "어시 좌표가 기본 그림을 바꿨다"
+    w.set_shots(sm.shots, assists=True)
+    assert w.grab().toImage() != before, "assists=True 인데 그림이 같다(선이 안 그려졌다)"
+    tabs = _open_card(next(p for p in st_mod.finishing_ranking(_DETAILS, _OUID) if p.shots).sp_id)
+    card_map = tabs.widget(1).findChildren(app_main.ShotMapWidget)[0]
+    assert card_map.assist_lines() == [], "선수 카드 슛 맵에 어시 선"
+
+
+def test_my_record_rating_trend():
+    import charts
+    sp = st_mod.ranker_targets(_DETAILS, _OUID)[0][0]
+    tabs = _open_card(sp)
+    rec = tabs.widget(1)
+    chart = [x for x in rec.findChildren(app_main.QWidget) if x.objectName() == "myRecordRating"][0]
+    assert isinstance(chart, charts.AreaTrendChart), type(chart)
+    weeks = st_mod.rating_trend(_win._details, _OUID, sp)
+    assert [p[1] for p in chart._points] == [w.rating for w in weeks]
+    assert chart._weak == [w.weak for w in weeks] and any(chart._weak), chart._weak   # 픽스처는 주 5경기 미만
+    chart.resize(500, 220)
+    chart.grab()
+    assert chart.marks.get("weak") == [i for i, w in enumerate(weeks) if w.weak], chart.marks.get("weak")
+    # 출전 없는 카드는 그래프 대신 글자
+    rec2 = _win._build_my_record(1)
+    lb = [x for x in rec2.findChildren(app_main.QWidget) if x.objectName() == "myRecordRating"][0]
+    assert isinstance(lb, app_main.QLabel) and "출전 기록이 없습니다" in lb.text()
 
 
 def main() -> int:

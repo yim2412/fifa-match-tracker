@@ -338,6 +338,74 @@ def test_trade_hint_card_and_grade():
     assert core.trade_hint([], "me", {(1, 5)}) == (0, 0)
 
 
+# ── 랭커 기록 캐시(13단계 · rankerstats.collect) ─────────────────────────────
+class FakeRankerAPI:
+    """넥슨처럼 데이터 있는 쌍만 돌려준다 — have: (spid, po) → 경기당 status."""
+
+    def __init__(self, have: dict):
+        self.have = have
+        self.calls: list[list] = []
+        self.fail: Exception | None = None
+
+    def get_ranker_stats(self, matchtype, pairs):
+        self.calls.append(list(pairs))
+        if self.fail is not None:
+            raise self.fail
+        return [{"spid": s, "spPosition": p, "status": dict(self.have[(s, p)]), "createDate": "2026-10-05T17:30:00"}
+                for s, p in pairs if (s, p) in self.have]
+
+
+def test_ranker_cache_daily():
+    import rankerstats
+    conn = _db()
+    st = {"shoot": 0.75, "matchCount": 20}
+    api = FakeRankerAPI({(1, 19): st, (2, 10): st})
+    pairs = [(1, 19), (2, 10), (3, 5)]   # (3, 5)는 넥슨에 없다 — 응답에서 빠진다
+    got = rankerstats.collect(api, conn, pairs, 52, "2026-10-07")
+    assert len(api.calls) == 1, api.calls
+    assert got[(1, 19)]["status"]["shoot"] == 0.75 and got[(3, 5)] is None, got
+    # 같은 날 다시 — 빠진 쌍까지 기억해 요청 0(안 그러면 화면을 열 때마다 같은 쌍을 다시 묻는다)
+    again = rankerstats.collect(api, conn, pairs, 52, "2026-10-07")
+    assert len(api.calls) == 1, f"같은 날 다시 물었다: {api.calls}"
+    assert again == got
+    # 다음 날엔 다시 · 다른 matchtype 은 따로
+    rankerstats.collect(api, conn, pairs, 52, "2026-10-08")
+    rankerstats.collect(api, conn, pairs, 50, "2026-10-08")
+    assert len(api.calls) == 3, api.calls
+
+
+def test_ranker_batches_and_failure_keeps_done_batches():
+    import rankerstats
+    from nexon_api import RANKER_STATS_BATCH
+    conn = _db()
+    pairs = [(i, 1) for i in range(RANKER_STATS_BATCH + 5)]
+    api = FakeRankerAPI({p: {"matchCount": 10} for p in pairs})
+    rankerstats.collect(api, conn, pairs[:RANKER_STATS_BATCH], 52, "2026-10-07")
+    api.fail = NexonAPIError("한도", code=QUOTA_CODE, status=429)
+    try:
+        rankerstats.collect(api, conn, pairs, 52, "2026-10-07")
+        raise AssertionError("429 를 삼켰다")
+    except NexonAPIError:
+        pass
+    # 앞 묶음은 저장돼 있어 다시 안 묻고, 남은 5쌍만 물었다
+    assert [len(c) for c in api.calls] == [RANKER_STATS_BATCH, 5], [len(c) for c in api.calls]
+    assert len(store.load_ranker_stats(conn, pairs, 52, "2026-10-07")) == RANKER_STATS_BATCH
+
+
+def test_ranker_api_splits_into_batches():
+    """URL 길이 상한(실측 81쌍) — nexon_api 가 RANKER_STATS_BATCH 개씩 나눠 묻는다."""
+    import json as _json
+    import nexon_api
+    api = nexon_api.FCOnlineAPI("k")
+    sent = []
+    api._get = lambda path, **kw: sent.append(_json.loads(kw["players"])) or []
+    api.get_ranker_stats(52, [(100000000 + i, i % 28) for i in range(120)])
+    assert nexon_api.RANKER_STATS_BATCH <= 81
+    assert [len(b) for b in sent] == [50, 50, 20] if nexon_api.RANKER_STATS_BATCH == 50 else sent
+    assert all(len(b) <= nexon_api.RANKER_STATS_BATCH for b in sent)
+    assert sent[0][0] == {"id": 100000000, "po": 0}
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

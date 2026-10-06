@@ -1076,6 +1076,9 @@ class Shot:
     in_penalty: bool = False
     hit_post: bool = False
     xg: float = 0.0
+    # 어시스트 위치(1.4.1 N6) — 넥슨이 assist=True 로 준 슛만(골의 90%, 실측 R11). 없으면 None
+    assist_x: float | None = None
+    assist_y: float | None = None
 
 
 @dataclass
@@ -1143,9 +1146,13 @@ def shot_map(details: list[dict], ouid: str, mine: bool = True,
                 continue
             tname = goal_type_name(sd.get("type"))
             in_pen = bool(sd.get("inPenalty"))
+            ax, ay = sd.get("assistX"), sd.get("assistY")
+            has_assist = (bool(sd.get("assist")) and isinstance(ax, (int, float))
+                          and isinstance(ay, (int, float)))
             sm.shots.append(Shot(
                 float(x), float(y), int(r), tname, in_pen,
-                bool(sd.get("hitPost")), shot_xg(float(x), float(y), in_pen, tname)))
+                bool(sd.get("hitPost")), shot_xg(float(x), float(y), in_pen, tname),
+                float(ax) if has_assist else None, float(ay) if has_assist else None))
     return sm
 
 
@@ -1256,6 +1263,8 @@ class PlayerFinishing:
 # 선수 카드 '내 기록' — 주 단위 결정력 추이. 슛이 이보다 적으면 추이를 그리지 않는다(흐름 분석과 같은 원칙:
 # 표본이 모자라면 침묵). 주 하나의 비율도 슛 MIN_BUCKET_SHOTS 미만이면 점만 찍고 선으로 잇지 않는다.
 PLAYER_TREND_MIN_SHOTS = 20
+# 평점 추이(1.4.1 N9) — 그 주 출전이 이보다 적으면 그 주 점을 흐리게(평균 하나가 한두 경기에 흔들린다)
+PLAYER_RATING_MIN_GAMES = 5
 
 
 @dataclass
@@ -1581,3 +1590,214 @@ def team_profile(details: list[dict], ouid: str) -> TeamProfile:
     for (name, unit), m, o in zip(PROFILE_AXES, values(sums["mine"]), values(sums["opp"])):
         prof.axes.append(ProfileAxis(name, unit, m, o))
     return prof
+
+
+# ── 평점 추이(1.4.1 N9) ────────────────────────────────────────────────────
+@dataclass
+class WeekRating:
+    week_start: date          # 그 주 월요일
+    games: int = 0            # 그 카드가 뛴 경기(교체 대기만은 제외 — _played)
+    rating_sum: float = 0.0
+
+    @property
+    def rating(self) -> float:
+        return self.rating_sum / self.games if self.games else 0.0
+
+    @property
+    def weak(self) -> bool:
+        return self.games < PLAYER_RATING_MIN_GAMES
+
+    @property
+    def label(self) -> str:
+        return f"{self.week_start:%m/%d}~"
+
+
+def rating_trend(details: list[dict], ouid: str, sp_id: int) -> list[WeekRating]:
+    """그 카드(spId)의 주별 평균 spRating — 오래된 주부터, 나온 주만. spRating 은 출전 기록 전부에 있다(R12)."""
+    weeks: dict[date, WeekRating] = {}
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        day = _match_day(d)
+        if me is None or day is None:
+            continue
+        for p in me.get("player") or []:
+            if p.get("spId") != sp_id or not _played(p):
+                continue
+            start = day - timedelta(days=day.weekday())
+            w = weeks.setdefault(start, WeekRating(week_start=start))
+            w.games += 1
+            w.rating_sum += _num(p.get("status") or {}, "spRating")
+            break  # 한 경기에 같은 카드는 한 장
+    return [weeks[k] for k in sorted(weeks)]
+
+
+# ── 패스 스타일(1.4.1 N5) ──────────────────────────────────────────────────
+# 경기 상세 pass 의 종류별 시도/성공(R10 — 거의 모든 경기에 있다). (화면 이름, 필드 앞부분)
+PASS_KINDS = (
+    ("짧은 패스", "shortPass"),
+    ("롱 패스", "longPass"),
+    ("바운스 로브", "bouncingLobPass"),
+    ("낮고 빠른 패스", "drivenGroundPass"),
+    ("스루 패스", "throughPass"),
+    ("로빙 스루", "lobbedThroughPass"),
+)
+
+
+PASS_MIN_TRIES = 20   # 종류 하나의 시도가 이보다 적으면 성공률을 숨긴다(바운스 로브 같은 드문 종류 — 3/5=60% 는 정보가 아니다)
+
+
+@dataclass
+class PassKind:
+    name: str
+    tries: float = 0.0
+    success: float = 0.0
+
+    @property
+    def rate(self) -> float:
+        return self.success / self.tries * 100 if self.tries else 0.0
+
+
+@dataclass
+class PassGroup:
+    """한 묶음(전체 · 이긴 경기 · 진 경기)의 종류별 패스 — 비중은 이 묶음 종류 합 대비."""
+    label: str
+    games: int = 0
+    kinds: list[PassKind] = field(default_factory=lambda: [PassKind(n) for n, _ in PASS_KINDS])
+
+    @property
+    def total(self) -> float:
+        return sum(k.tries for k in self.kinds)
+
+    def share(self, k: PassKind) -> float:
+        return k.tries / self.total * 100 if self.total else 0.0
+
+    def per_game(self, k: PassKind) -> float:
+        return k.tries / self.games if self.games else 0.0
+
+
+@dataclass
+class PassStyle:
+    all: PassGroup
+    win: PassGroup
+    lose: PassGroup
+    skipped: int = 0   # 종류 필드가 없어 건너뛴 경기
+
+
+def pass_style(details: list[dict], ouid: str) -> PassStyle:
+    """내 패스 종류 6가지의 비중·성공률 — 전체와 이긴/진 경기. 승·무·패가 아닌 경기와 종류 필드가 없는 경기는 뺀다."""
+    style = PassStyle(PassGroup("전체"), PassGroup("이긴 경기"), PassGroup("진 경기"))
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        if me is None:
+            continue
+        wdl = _wdl_of(_result_of(me))
+        if wdl is None:
+            continue
+        pas = me.get("pass") or {}
+        if not any(f"{key}Try" in pas for _, key in PASS_KINDS):
+            style.skipped += 1
+            continue
+        groups = [style.all] + ([style.win] if wdl == 0 else [style.lose] if wdl == 2 else [])
+        for g in groups:
+            g.games += 1
+            for k, (_, key) in zip(g.kinds, PASS_KINDS):
+                k.tries += _num(pas, f"{key}Try")
+                k.success += _num(pas, f"{key}Success")
+    return style
+
+
+# ── 내 선수 vs 랭커(1.4.1 N1) ──────────────────────────────────────────────
+# 비교는 랭커 응답에 있는 항목만(R8 — 평점은 랭커 쪽에 없다). (이름, 경기당 필드 | (성공, 시도) 비율)
+RANKER_METRICS = (
+    ("슛", "shoot"),
+    ("유효슛", "effectiveShoot"),
+    ("골", "goal"),
+    ("어시", "assist"),
+    ("드리블 성공률", ("dribbleSuccess", "dribbleTry")),
+    ("패스 성공률", ("passSuccess", "passTry")),
+    ("태클", "tackle"),
+    ("블록", "block"),
+)
+
+
+@dataclass
+class RankerRow:
+    sp_id: int
+    pos: int
+    games: int                         # 내가 그 카드를 그 자리에 세운 경기
+    ranker_games: int = 0              # 랭커 표본(matchCount) — 0 이면 랭커 기록 없음
+    ranker_date: str = ""              # 랭커 기준일(createDate 앞 10자) — 카드마다 다르다
+    mine: dict = field(default_factory=dict)      # 지표 이름 → 경기당 값(비율은 %)
+    ranker: dict = field(default_factory=dict)    # 같은 꼴, 랭커 기록이 없으면 비었다
+
+
+def _my_pair_sums(details: list[dict], ouid: str) -> dict[tuple[int, int], dict]:
+    """(spId, 선 자리) → 합계 — 교체 명단(28)은 자리가 없어 뺀다."""
+    acc: dict[tuple[int, int], dict] = {}
+    for d in details:
+        me, _ = _me_opp(d, ouid)
+        if me is None:
+            continue
+        for p in me.get("player") or []:
+            sp_id, pos = p.get("spId"), p.get("spPosition")
+            if not isinstance(sp_id, int) or not isinstance(pos, int) or pos == SUB_POSITION:
+                continue
+            st = p.get("status") or {}
+            a = acc.setdefault((sp_id, pos), defaultdict(float))
+            a["games"] += 1
+            for _, f in RANKER_METRICS:
+                for key in (f if isinstance(f, tuple) else (f,)):
+                    a[key] += _num(st, key)
+    return acc
+
+
+def ranker_targets(details: list[dict], ouid: str, limit: int | None = None) -> list[tuple[int, int]]:
+    """물어볼 (spId, 자리) — 카드마다 가장 많이 선 자리 하나, 많이 쓴 카드부터."""
+    return _targets_of(_my_pair_sums(details, ouid), limit)
+
+
+def _targets_of(sums: dict, limit: int | None) -> list[tuple[int, int]]:
+    best: dict[int, tuple[int, int]] = {}
+    for (sp_id, pos), a in sums.items():
+        g = int(a["games"])
+        if sp_id not in best or g > best[sp_id][1]:
+            best[sp_id] = (pos, g)
+    order = sorted(best.items(), key=lambda kv: -kv[1][1])
+    out = [(sp_id, pos) for sp_id, (pos, _) in order]
+    return out[:limit] if limit else out
+
+
+def _metric_values(src: dict, games: float) -> dict:
+    out = {}
+    for name, f in RANKER_METRICS:
+        if isinstance(f, tuple):
+            ok, tr = _num(src, f[0]), _num(src, f[1])
+            out[name] = ok / tr * 100 if tr else 0.0
+        else:
+            out[name] = _num(src, f) / games if games else 0.0
+    return out
+
+
+def ranker_values(r: dict | None) -> tuple[int, str, dict] | None:
+    """랭커 응답 한 줄 → (표본 경기 수, 기준일, 지표 이름 → 경기당 값). 데이터가 없으면 None.
+    값은 이미 경기당 평균이라 나누지 않는다(test_ranker_values_are_per_game)."""
+    st = (r or {}).get("status") or {}
+    n = _num(st, "matchCount")
+    if not r or not n:
+        return None
+    return int(n), str(r.get("createDate") or "")[:10], _metric_values(st, 1)
+
+
+def ranker_compare(details: list[dict], ouid: str, ranker: dict, limit: int | None = None) -> list[RankerRow]:
+    """ranker_targets 의 각 쌍에 대해 내 경기당 값과 랭커 경기당 값을 나란히.
+    ranker: (spId, 자리) → 응답 한 줄 | None(넥슨에 데이터 없음). 랭커 값은 이미 경기당 평균이라 나누지 않는다."""
+    sums = _my_pair_sums(details, ouid)
+    rows = []
+    for sp_id, pos in _targets_of(sums, limit):
+        a = sums[(sp_id, pos)]
+        row = RankerRow(sp_id, pos, int(a["games"]), mine=_metric_values(a, a["games"]))
+        got = ranker_values(ranker.get((sp_id, pos)))
+        if got is not None:
+            row.ranker_games, row.ranker_date, row.ranker = got
+        rows.append(row)
+    return rows

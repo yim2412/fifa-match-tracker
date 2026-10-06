@@ -204,6 +204,9 @@ HOLD_GRACE_DAYS = 14                # 산 지 이만큼 안이면 "최근 구매
 TIMELINE_WINDOW = 20                # 사건 앞뒤 이만큼 경기의 승률·득실
 TIMELINE_MIN_GAMES = 10             # 앞뒤 경기가 이보다 적으면 흐림(표본 흐림 규칙 — 1.2.1)
 TIMELINE_MAX_ROWS = 1000            # 사건 표는 최근 이만큼 — 표 채우기·열 폭 재기가 줄 수에 비례한다
+# 랭커 기록(13단계 · N1 랭커와 비교 · N2 선수 카드 [랭커 기록]) — 오픈API, 하루 캐시(store.ranker_stats)
+RANKER_MIN_MATCHES = 10             # 랭커 표본(matchCount — 실측 1~20)이 이보다 적으면 흐림
+RANKER_COMPARE_MAX = 40             # 비교 표는 많이 쓴 카드부터 이만큼 — 요청은 RANKER_STATS_BATCH 로 나눠 1번
 
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)

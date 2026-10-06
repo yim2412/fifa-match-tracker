@@ -173,6 +173,7 @@ def contrast(a_hex: str, b_hex: str) -> float:
 PITCH = "#1e5c34"
 PITCH_GOAL = "#5ee08f"
 PITCH_MISS = "#c3c9d4"
+PITCH_ASSIST = "#8ec9ff"   # 어시스트 위치 → 슛 선(슛 맵 [어시스트]) — 골 초록·빗나감 회색과 갈리게 파랑
 SIDEBAR_W = 230
 SHADOW_BLUR = 24        # 카드 그림자 — widgets.add_shadow
 SHADOW_Y = 3

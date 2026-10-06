@@ -132,6 +132,16 @@ CREATE TABLE IF NOT EXISTS card_prices (
     fetched_on TEXT NOT NULL,
     PRIMARY KEY (spid, grade)
 );
+-- 랭커 기록(13단계 · 오픈API ranker-stats) 하루 캐시. 넥슨이 응답에서 뺀 쌍(데이터 없음)도 payload NULL 로 그날
+-- 기억한다 — 안 그러면 화면을 열 때마다 같은 쌍을 다시 묻는다
+CREATE TABLE IF NOT EXISTS ranker_stats (
+    spid       INTEGER NOT NULL,
+    po         INTEGER NOT NULL,
+    matchtype  INTEGER NOT NULL,
+    fetched_on TEXT NOT NULL,
+    payload    TEXT,
+    PRIMARY KEY (spid, po, matchtype)
+);
 """
 
 # 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
@@ -711,3 +721,35 @@ def load_card_prices(conn: sqlite3.Connection, spids) -> dict[tuple[int, int], t
         for r in conn.execute("SELECT grade, price, fetched_on FROM card_prices WHERE spid = ?", (spid,)):
             out[(spid, r[0])] = (r[1], r[2])
     return out
+
+
+# ── 랭커 기록 캐시(13단계) ─────────────────────────────────────────────────
+def load_ranker_stats(conn: sqlite3.Connection, pairs, matchtype: int,
+                      day: str) -> dict[tuple[int, int], dict | None]:
+    """그날 받아 둔 쌍만 — (spid, po) → 응답 한 줄, 넥슨에 데이터가 없던 쌍은 None. 없는 키 = 아직 안 물음."""
+    out: dict[tuple[int, int], dict | None] = {}
+    for spid, po in set(pairs):
+        r = conn.execute("SELECT payload FROM ranker_stats WHERE spid = ? AND po = ? AND matchtype = ?"
+                         " AND fetched_on = ?", (spid, po, matchtype, day)).fetchone()
+        if r is None:
+            continue
+        try:
+            out[(spid, po)] = json.loads(r[0]) if r[0] is not None else None
+        except ValueError:
+            continue  # 깨진 줄은 안 물은 것으로 — 다시 받는다
+    return out
+
+
+def save_ranker_stats(conn: sqlite3.Connection, asked, rows: list[dict], matchtype: int, day: str) -> None:
+    """물은 쌍 전부를 한 트랜잭션으로 — 응답에 없는 쌍은 payload NULL(그날 다시 안 묻는다)."""
+    got: dict[tuple[int, int], dict] = {}
+    for row in rows:
+        spid = row.get("spid", row.get("spId"))
+        po = row.get("spPosition")
+        if isinstance(spid, int) and isinstance(po, int):
+            got[(spid, po)] = row
+    with conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO ranker_stats (spid, po, matchtype, fetched_on, payload) VALUES (?, ?, ?, ?, ?)",
+            [(s, p, matchtype, day, json.dumps(got[(s, p)], ensure_ascii=False) if (s, p) in got else None)
+             for s, p in set(asked) | set(got)])

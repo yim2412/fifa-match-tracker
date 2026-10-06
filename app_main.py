@@ -35,6 +35,7 @@ import images
 import notice
 import playerinfo
 import rankcollect
+import rankerstats
 import ranker
 import seasons as sn
 import store
@@ -777,6 +778,43 @@ class PriceLoader(QThread):
         self.done.emit(got, skipped)
 
 
+class RankerStatsLoader(QThread):
+    """랭커 기록(rankerstats.collect — 하루 캐시 우선) — N1 메뉴 "랭커와 비교"와 N2 선수 카드 [랭커 기록]이 같이 쓴다.
+    요청은 묶음(RANKER_STATS_BATCH)마다 하나 · 묶음마다 한 트랜잭션이라 terminate 하지 않는다(shutdown 표)."""
+
+    done = pyqtSignal(object)   # (spid, po) → 응답 한 줄 | None
+    failed = pyqtSignal(str)
+
+    def __init__(self, api: FCOnlineAPI, pairs, matchtype: int):
+        super().__init__()
+        self._api = api
+        self._pairs = list(pairs)
+        self._matchtype = matchtype
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                res = rankerstats.collect(self._api, conn, self._pairs, self._matchtype,
+                                          datetime.now().date().isoformat(), cancel=lambda: self._cancel)
+            finally:
+                conn.close()
+        except NexonAPIError as e:  # 429 도 여기 — 키 입력 창으로 보내지 않는다(부가 기능)
+            if not self._cancel:
+                self.failed.emit(e.message)
+            return
+        except Exception as e:  # DB 잠김 등 — 화면 하나가 비는 것으로 끝나게
+            if not self._cancel:
+                self.failed.emit(f"{type(e).__name__}: {e}")
+            return
+        if not self._cancel:
+            self.done.emit(res)
+
+
 class AbilitySimLoader(QThread):
     """능력치 시뮬레이터(playerinfo.fetch_player_ability)를 백그라운드로 받는다.
 
@@ -1440,6 +1478,13 @@ class MainWindow(QMainWindow):
         self._price_loader: PriceLoader | None = None  # 가계부를 그릴 때 — 보유·최근 구매 카드 시세(하루 캐시)
         self._price_tried_on: str | None = None        # 오늘 이미 띄웠다 — 다 그린 뒤 다시 그려도 또 띄우지 않게
         self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
+        # 랭커 기록(13단계) — N1 메뉴 로더와 N2 카드 탭 로더는 따로(카드 창이 메뉴 로더를 끊지 않게)
+        self._ranker_loader: RankerStatsLoader | None = None
+        self._ranker_day: str | None = None   # _ranker_data 를 받은 날 — 바뀌면 비운다(하루 캐시)
+        self._ranker_data: dict = {}          # (spid, po) → 응답 한 줄 | None — 오늘 받은 것
+        self._ranker_note = ""                # 실패 문구(있으면 표 위에)
+        self._ranker_failed: tuple | None = None  # 실패한 쌍 — 같은 쌍을 다시 그릴 때마다 묻지 않게(새 데이터면 풀린다)
+        self._scout_loader: RankerStatsLoader | None = None
         self._grade_name = "-"     # 감독모드 최고 등급 이름 (division 메타)
         self._division_names: dict[int, str] = {}  # divisionId -> 등급 이름
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
@@ -2167,6 +2212,7 @@ class MainWindow(QMainWindow):
                    ("슛 맵", "_build_shotmap_tab")]),
         ("선수", [("선수 지표", "_build_players_tab"),
                  ("선수별 결정력", "_build_finishing_tab"),
+                 ("랭커와 비교", "_build_ranker_compare_tab"),
                  ("포지션별 최다 상대", "_build_position_opp_tab")]),
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
@@ -3034,11 +3080,21 @@ class MainWindow(QMainWindow):
             chk.toggled.connect(self._render_shotmap)
             self.chk_shotmap_result[result] = chk
             ctrl.addWidget(chk)
+        ctrl.addSpacing(16)
+        # 1.4.1 N6 — 골에 어시 위치 → 슛 위치 선. 넥슨이 준 골의 90%에 있다(R11)
+        self.chk_shotmap_assist = QCheckBox("─ 어시스트")
+        self.chk_shotmap_assist.setToolTip("골이 된 슛에 어시스트한 위치에서 슛 위치까지 선을 긋습니다.\n"
+                                           "삼각형은 하프라인 뒤에서 온 어시스트(아래 경계에 붙여 그림).")
+        self.chk_shotmap_assist.setStyleSheet(f"QCheckBox {{ color: {T.PITCH_ASSIST}; font-weight: bold; }}")
+        self.chk_shotmap_assist.toggled.connect(self._render_shotmap)
+        ctrl.addWidget(self.chk_shotmap_assist)
         ctrl.addStretch(1)
+        v.addLayout(ctrl)
+        # 요약은 따로 한 줄 — [어시스트]가 들어오며 한 줄이 창 최소 폭(1280)을 넘었다
         self.lb_shotmap_summary = QLabel("")
         self.lb_shotmap_summary.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-        ctrl.addWidget(self.lb_shotmap_summary)
-        v.addLayout(ctrl)
+        self.lb_shotmap_summary.setWordWrap(True)
+        v.addWidget(self.lb_shotmap_summary)
 
         # 좌: 슛 좌표 산점도 / 우: 같은 슛을 유형·거리로 쪼갠 효율.
         # 한 화면에 둬야 "먼 거리 효율이 낮다"와 "그 점들이 여기 몰려 있다"가
@@ -3087,13 +3143,17 @@ class MainWindow(QMainWindow):
         # 상대 슛 좌표는 상대 공격 기준이라 좌우(y)가 내 시점과 뒤집혀 있다 —
         # 같은 골문(위)에 그리되 y 를 뒤집어 내 시점으로 통일한다(x=골문은 동일).
         if not mine:
-            shots = [replace(s, y=1.0 - s.y) for s in shots]
-        self.shotmap.set_shots(shots)
+            shots = [replace(s, y=1.0 - s.y, assist_y=None if s.assist_y is None else 1.0 - s.assist_y)
+                     for s in shots]
+        assists = self.chk_shotmap_assist.isChecked()
+        self.shotmap.set_shots(shots, assists=assists)
         who = "내" if mine else "상대"
-        self.lb_shotmap_summary.setText(
-            f"{who} 슛 {sm.total} · 골 {sm.goals} · "
-            f"유효슛 {sm.effective} ({sm.effective_rate:.0f}%) · "
-            f"전환율 {sm.conversion:.0f}% · 기대골(xG) {sm.xg:.1f}")
+        text = (f"{who} 슛 {sm.total} · 골 {sm.goals} · "
+                f"유효슛 {sm.effective} ({sm.effective_rate:.0f}%) · "
+                f"전환율 {sm.conversion:.0f}% · 기대골(xG) {sm.xg:.1f}")
+        if assists:
+            text += f" · 어시 있는 골 {sum(1 for s in sm.shots if s.result == core.SHOT_GOAL and s.assist_x is not None)}"
+        self.lb_shotmap_summary.setText(text)
 
     def _render_shot_buckets(self, sm, mine: bool) -> None:
         """슛 유형·거리별 효율 패널. 내 슛이면 초록, 상대 슛(=내 실점)이면 빨강."""
@@ -3538,6 +3598,111 @@ class MainWindow(QMainWindow):
         self._invalidate_trades()
         if self._trade_again:
             self.start_trades()
+
+    # ── 랭커와 비교(1.4.1 N1) ─────────────────────────────────────────
+    RANKER_COLUMNS = ["포지션", "선수", "출전", *[name for name, _ in core.RANKER_METRICS], "랭커 표본", "기준일"]
+
+    def _build_ranker_compare_tab(self) -> QWidget:
+        """내 카드(가장 많이 선 자리) vs 그 카드를 그 자리에 쓴 상위 랭커들의 경기당 평균 — 넥슨 오픈API ranker-stats."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        note = QLabel("표시 구간 기준 · 칸은 <b>나 / 랭커</b>(경기당 · 성공률은 %) · 열 정렬은 차이(나 − 랭커) 순<br>"
+                      "랭커 = 같은 카드를 같은 자리에 쓴 상위 랭커들의 평균(넥슨 오픈API — 기준일은 카드마다 다르다). "
+                      "차이는 조작 실력이 아니라 전술·역할 차이일 수 있습니다. "
+                      f"흐린 줄은 랭커 표본 {config.RANKER_MIN_MATCHES}경기 · 내 출전 {core.MIN_PLAYER_GAMES}경기 미만.")
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        note.setWordWrap(True)
+        v.addWidget(note)
+        self.lb_ranker_status = QLabel("")
+        self.lb_ranker_status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_ranker_status)
+        self.tbl_ranker = self._make_table(self.RANKER_COLUMNS)
+        self.tbl_ranker.itemDoubleClicked.connect(self._on_ranker_double_clicked)
+        v.addWidget(self.tbl_ranker, 1)
+        return w
+
+    def _render_ranker_compare(self, details: list[dict]) -> None:
+        today = datetime.now().date().isoformat()
+        if self._ranker_day != today:  # 하루 캐시 — 날이 바뀌면 다시 받는다
+            self._ranker_day, self._ranker_data, self._ranker_failed = today, {}, None
+        pairs = core.ranker_targets(details, self._ouid, config.RANKER_COMPARE_MAX)
+        missing = [p for p in pairs if p not in self._ranker_data]
+        busy = self._ranker_loader is not None and self._ranker_loader.isRunning()
+        # 받는 중이면 새로 띄우지 않는다 — 끝나면(finished) 지금 범위로 다시 그리며 남은 쌍을 묻는다
+        if missing and not busy and config.API_KEY and self._ranker_failed != tuple(missing):
+            self._start_ranker_loader(missing)
+            busy = True
+        rows_data = core.ranker_compare(details, self._ouid, self._ranker_data, config.RANKER_COMPARE_MAX)
+        self.ranker_rows = rows_data  # 테스트가 계산 결과를 본다
+        if self._ranker_note:
+            self.lb_ranker_status.setText(self._ranker_note)
+        elif busy:
+            self.lb_ranker_status.setText(f"랭커 기록을 받는 중… ({len(missing)}장)")
+        else:
+            self.lb_ranker_status.setText("" if pairs else "표시 구간에 선발로 뛴 카드가 없습니다.")
+        few_r, few_me = config.RANKER_MIN_MATCHES, core.MIN_PLAYER_GAMES
+        rows = []
+        for r in rows_data:
+            row = [self._positions.get(r.pos, str(r.pos)), self._names.get(r.sp_id, str(r.sp_id)), (f"{r.games}", r.games)]
+            for name, f in core.RANKER_METRICS:
+                pct = isinstance(f, tuple)
+                fmt = "{:.0f}" if pct else "{:.2f}"
+                mine = r.mine.get(name, 0.0)
+                if r.ranker:
+                    theirs = r.ranker[name]
+                    row.append((f"{fmt.format(mine)} / {fmt.format(theirs)}", mine - theirs))
+                else:
+                    row.append((f"{fmt.format(mine)} / {NA}", -1e9))
+            row.append((f"{r.ranker_games}" if r.ranker_games else ("받는 중" if (r.sp_id, r.pos) in missing and busy
+                                                                    else "기록 없음"), r.ranker_games))
+            row.append(r.ranker_date or NA)
+            rows.append(row)
+        self._fill(self.tbl_ranker, rows, enable_sort=False)
+        for i, r in enumerate(rows_data):
+            weak = r.ranker_games < few_r or r.games < few_me
+            name_item = self.tbl_ranker.item(i, 1)
+            if name_item:
+                name_item.setData(Qt.ItemDataRole.UserRole, r.sp_id)
+            pos_item = self.tbl_ranker.item(i, 0)
+            line = core.position_line(r.pos)
+            if pos_item and line and not weak:
+                pos_item.setForeground(QColor(T.POS_COLORS[line]))
+            if weak:  # 표본 흐림 규칙(1.2.1) — 색 + 툴팁
+                tip = (f"랭커 표본 {r.ranker_games}경기(기준 {few_r})" if r.ranker_games < few_r
+                       else f"내 출전 {r.games}경기(기준 {few_me})") + " — 차이가 크게 흔들립니다."
+                for c in range(self.tbl_ranker.columnCount()):
+                    item = self.tbl_ranker.item(i, c)
+                    if item:
+                        item.setForeground(QColor(T.TEXT_DIM))
+                        item.setToolTip(tip)
+                        item.setData(Qt.ItemDataRole.UserRole + 1, True)
+        self.tbl_ranker.setSortingEnabled(True)
+
+    def _start_ranker_loader(self, pairs: list) -> None:
+        self._ranker_note = ""
+        ld = RankerStatsLoader(self._api, pairs, config.DEFAULT_MATCH_TYPE)
+        ld.done.connect(self._on_ranker_done)
+        ld.failed.connect(lambda msg, key=tuple(pairs): self._on_ranker_failed(key, msg))
+        ld.finished.connect(self._on_ranker_finished)
+        self._ranker_loader = ld
+        ld.start()
+
+    def _on_ranker_done(self, res: dict) -> None:
+        self._ranker_data.update(res)
+
+    def _on_ranker_failed(self, key: tuple, msg: str) -> None:
+        self._ranker_failed = key  # 같은 쌍을 같은 화면에서 되풀이해 묻지 않는다 — 다음 검색·다음 날 다시
+        self._ranker_note = f"랭커 기록을 받지 못했습니다 — {msg}"
+
+    def _on_ranker_finished(self) -> None:
+        # finished 에서 — done 은 스레드 안에서 나와 그 순간 isRunning 이 참이다(TradeLoader 와 같은 이유)
+        self._invalidate("rankercmp")
+
+    def _on_ranker_double_clicked(self, item) -> None:
+        name_item = self.tbl_ranker.item(item.row(), 1)
+        sp_id = name_item.data(Qt.ItemDataRole.UserRole) if name_item else None
+        if isinstance(sp_id, int):
+            self._show_player_info(sp_id)
 
     def _build_finishing_tab(self) -> QWidget:
         """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 비공식 근사치."""
@@ -4043,6 +4208,19 @@ class MainWindow(QMainWindow):
             holder.setLayout(box)
             rl.addWidget(holder, 1)
         v.addWidget(gb_r)
+
+        # 1.4.1 N5 — 경기 상세의 패스 종류 6가지(R10). 표(FitTableWidget)는 스크롤 안에서 높이가 안 잡혀 글자 칸으로
+        gb_p = QGroupBox("패스 스타일")
+        pv = QVBoxLayout(gb_p)
+        self.grid_pass = QGridLayout()
+        self.grid_pass.setHorizontalSpacing(18)
+        self.grid_pass.setVerticalSpacing(3)
+        pv.addLayout(self.grid_pass)
+        self.lb_pass_note = QLabel("")
+        self.lb_pass_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        self.lb_pass_note.setWordWrap(True)
+        pv.addWidget(self.lb_pass_note)
+        v.addWidget(gb_p)
         v.addStretch(1)
         scroll.setWidget(w)
         return scroll
@@ -4440,7 +4618,7 @@ class MainWindow(QMainWindow):
         "대시보드": "dashboard", "경기 목록": "matches", "상대 전적": "opponents",
         "흐름 분석": "analysis", "기간별 추이": "period", "시즌별 성적": "seasons",
         "승부처 분석": "clutch", "성적 진단": "diagnosis", "전술·경기 결과": "tactics",
-        "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing",
+        "슛 맵": "shotmap", "선수 지표": "players", "선수별 결정력": "finishing", "랭커와 비교": "rankercmp",
         "포지션별 최다 상대": "teamcolor",
         "팀컬러 승률": "teamcolor", "팀컬러 랭킹": "teamcolor",
         "스쿼드 타임라인": "timeline", "이적시장 가계부": "trades",
@@ -4470,6 +4648,7 @@ class MainWindow(QMainWindow):
             "diagnosis": lambda: self._render_diagnosis(self._details),
             "shotmap": self._render_shotmap,  # 표시 구간
             "finishing": lambda: self._render_finishing(self._slice()[1]),
+            "rankercmp": lambda: self._render_ranker_compare(self._slice()[1]),  # 표시 구간 — 랭커 요청은 카드 수만큼
             "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위
             # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기. 가계부 합계만 시즌 범위(짝은 전체로 맞춘 뒤)
             "trades": self._render_trades,
@@ -4488,6 +4667,7 @@ class MainWindow(QMainWindow):
         # 승률 추이는 늘 — 대시보드 승률 흐름이 그 결과(_trend_periods)를 쓴다. 가볍다.
         # "최근 30일" 이 표시 구간에 갇히면 안 된다(하루 100경기 넘게 뛰는 계정은 하루도 안 된다).
         self._render_trend(self._matches)
+        self._ranker_failed, self._ranker_note = None, ""  # 새 데이터면 실패했던 랭커 요청도 다시 해 본다
         self._dirty = set(self._renderers())
         if self.LAZY_RENDER:
             self._render_current_page()
@@ -5046,6 +5226,10 @@ class MainWindow(QMainWindow):
         tabs.addTab(card, "카드 정보")
         # 내 기록 — 이미 가진 경기 기록만 쓴다(넥슨 홈페이지 데이터를 꺼도 보인다)
         tabs.addTab(self._build_my_record(sp_id), "내 기록")
+        # 랭커 기록(N2) — 오픈API 라 홈페이지 데이터 스위치와 무관. 탭을 처음 열 때 한 번 묻는다(포지션 28개 = 요청 하나)
+        scout = self._build_scout_tab(sp_id)
+        scout_idx = tabs.addTab(scout, "랭커 기록")
+        tabs.currentChanged.connect(lambda i: i == scout_idx and self._start_scout(scout))
         self._last_player_tabs = tabs  # 테스트가 다이얼로그 안을 본다
 
         img_dir = config.CACHE_DIR / self.PLAYERCARD_IMG_DIR_NAME
@@ -5079,6 +5263,74 @@ class MainWindow(QMainWindow):
             self._ability_sim_loader.wait(2000)
         if self._position_ovr_loader and self._position_ovr_loader.isRunning():
             self._position_ovr_loader.wait(2000)
+        if self._scout_loader and self._scout_loader.isRunning():
+            self._scout_loader.cancel()  # 창이 닫혔다 — 끝나도 신호를 안 낸다(지워진 표를 건드리지 않게)
+            self._scout_loader.wait(12000)
+
+    SCOUT_COLUMNS = ["포지션", *[name for name, _ in core.RANKER_METRICS], "랭커 표본", "기준일"]
+
+    def _build_scout_tab(self, sp_id: int) -> QWidget:
+        """선수 카드 [랭커 기록](N2) — 그 카드를 쓴 상위 랭커들의 포지션별 경기당 평균. 안 쓰는 카드도 된다."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        status = QLabel("탭을 열면 넥슨 오픈API 에서 받습니다.")
+        status.setObjectName("scoutStatus")
+        status.setStyleSheet(f"color: {T.TEXT_DIM};")
+        status.setWordWrap(True)
+        v.addWidget(status)
+        table = self._make_table(self.SCOUT_COLUMNS)
+        table.setObjectName("scoutTable")
+        v.addWidget(table, 1)
+        w.sp_id, w.status, w.table, w.started = sp_id, status, table, False
+        return w
+
+    def _start_scout(self, tab: QWidget) -> None:
+        if tab.started:
+            return
+        tab.started = True
+        if not config.API_KEY:
+            tab.status.setText("API 키가 없어 랭커 기록을 받을 수 없습니다.")
+            return
+        old = self._scout_loader
+        if old is not None and old.isRunning():
+            old.cancel()  # 앞 카드 창의 것 — 끝나도 신호를 안 낸다
+        tab.status.setText("랭커 기록을 받는 중…")
+        ld = RankerStatsLoader(self._api, [(tab.sp_id, po) for po in range(core.SUB_POSITION)],
+                               config.DEFAULT_MATCH_TYPE)
+        ld.done.connect(lambda res, t=tab: self._fill_scout(t, res))
+        ld.failed.connect(lambda msg, t=tab: t.status.setText(f"랭커 기록을 받지 못했습니다 — {msg}"))
+        self._scout_loader = ld
+        ld.start()
+
+    def _fill_scout(self, tab: QWidget, res: dict) -> None:
+        few = config.RANKER_MIN_MATCHES
+        found = []
+        for (sp_id, po), r in res.items():
+            got = core.ranker_values(r) if sp_id == tab.sp_id else None
+            if got is not None:
+                found.append((po, *got))
+        found.sort(key=lambda t: -t[1])  # 표본 많은 자리부터 — 그 카드를 주로 쓰는 자리
+        rows = []
+        for po, n, day, vals in found:
+            row = [self._positions.get(po, str(po))]
+            for name, f in core.RANKER_METRICS:
+                v = vals[name]
+                row.append((f"{v:.0f}%" if isinstance(f, tuple) else f"{v:.2f}", v))
+            row += [(f"{n}", n), day or NA]
+            rows.append(row)
+        self._fill(tab.table, rows, enable_sort=False)
+        for i, (po, n, _day, _vals) in enumerate(found):
+            if n < few:  # 표본 흐림 규칙(1.2.1)
+                for c in range(tab.table.columnCount()):
+                    item = tab.table.item(i, c)
+                    if item:
+                        item.setForeground(QColor(T.TEXT_DIM))
+                        item.setToolTip(f"랭커 표본 {n}경기(기준 {few}) — 값이 크게 흔들립니다.")
+                        item.setData(Qt.ItemDataRole.UserRole + 1, True)
+        tab.table.setSortingEnabled(True)
+        tab.status.setText(f"이 카드를 쓴 상위 랭커들의 경기당 평균 · 포지션 {len(found)}곳"
+                           f" · 흐린 줄은 표본 {few}경기 미만" if found
+                           else "이 카드를 쓴 랭커 기록이 없습니다.")
 
     def _build_my_record(self, sp_id: int) -> QWidget:
         """선수 카드 '내 기록' — 그 카드(spId)만의 슛 맵과 주 단위 결정력 추이. 범위는 위쪽 시즌 콤보.
@@ -5117,7 +5369,28 @@ class MainWindow(QMainWindow):
             lb.setObjectName("myRecordTrend")
             lb.setStyleSheet(f"color: {T.TEXT_DIM};")
             v.addWidget(lb, 1)
-        return w
+        # 1.4.1 N9 — 주 단위 평균 평점(spRating 은 출전 기록 전부에 있다, R12). 슛과 달리 수비수·GK 도 나온다
+        rweeks = core.rating_trend(self._details, self._ouid, sp_id)
+        few = core.PLAYER_RATING_MIN_GAMES
+        title = QLabel(f"주 단위 평균 평점 · 빈 고리는 그 주 {few}경기 미만")
+        title.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(title)
+        if rweeks:
+            chart = charts.AreaTrendChart()
+            chart.setObjectName("myRecordRating")
+            values = [x.rating for x in rweeks]
+            chart.set_data([(x.label, x.rating, x.games) for x in rweeks],
+                           axis=charts.Axis.fit(values, fmt="{:.2f}", name="평점"),
+                           weak=[x.weak for x in rweeks])
+            chart.setMinimumHeight(160)
+            v.addWidget(chart, 1)
+        else:
+            lb = QLabel("출전 기록이 없습니다.")
+            lb.setObjectName("myRecordRating")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            v.addWidget(lb, 1)
+        # 차트가 셋이라 최소 높이가 150% 노트북 대화상자 안쪽(657)을 넘는다 — 세로 스크롤(PyQt6 규칙 9)
+        return VScrollArea(w)
 
     @staticmethod
     def _set_player_info_image(widgets_by_url: dict[str, QLabel], url: str, path: str) -> None:
@@ -6121,6 +6394,47 @@ class MainWindow(QMainWindow):
             for name, n, col in segs:   # 범례 겸 숫자 — 조각과 같은 색
                 box.addWidget(BarRow(name, n, total, col))
             box.addStretch(1)
+        self._render_pass_style(details)
+
+    def _render_pass_style(self, details: list[dict]) -> None:
+        """패스 종류 6가지 — 비중(6종 합 대비)·경기당·성공률, 이긴/진 경기 나란히(N5). 원인 단정 없이 숫자만."""
+        ps = core.pass_style(details, self._ouid)
+        self.pass_style = ps  # 테스트가 계산 결과를 본다
+        g = self.grid_pass
+        self._clear(g)
+        if not ps.all.games:
+            lb = QLabel("패스 종류 기록이 있는 경기가 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            g.addWidget(lb, 0, 0)
+            self.lb_pass_note.setText("")
+            return
+        few, min_tries = core.MIN_COND, core.PASS_MIN_TRIES
+
+        def rate(k) -> str:
+            return f"{k.rate:.0f}%" if k.tries >= min_tries else NA
+
+        heads = ["종류", "비중", "경기당", "성공률",
+                 f"이긴 경기 {ps.win.games} — 비중 · 성공률", f"진 경기 {ps.lose.games} — 비중 · 성공률"]
+        for c, text in enumerate(heads):
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-weight: bold;")
+            g.addWidget(lb, 0, c)
+        for r, (k, kw, kl) in enumerate(zip(ps.all.kinds, ps.win.kinds, ps.lose.kinds), 1):
+            cells = [(k.name, False), (f"{ps.all.share(k):.0f}%", False), (f"{ps.all.per_game(k):.1f}", False),
+                     (rate(k), False)]
+            for grp, kk in ((ps.win, kw), (ps.lose, kl)):
+                cells.append((f"{grp.share(kk):.0f}% · {rate(kk)}" if grp.games else NA, grp.games < few))
+            for c, (text, weak) in enumerate(cells):
+                lb = QLabel(text)
+                lb.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT};" + (" font-weight: bold;" if c == 0 else ""))
+                if weak:  # 표본 흐림 규칙(1.2.1)
+                    lb.setToolTip(sample_note(ps.win.games if c == 4 else ps.lose.games, few))
+                g.addWidget(lb, r, c)
+        note = (f"비중은 6가지 종류 합 대비 · 성공률은 시도 {min_tries}회 미만이면 {NA} · "
+                f"흐린 칸은 {few}경기 미만 · 무승부는 전체에만 들어갑니다.")
+        if ps.skipped:
+            note += f" 종류 기록이 없는 {ps.skipped}경기는 뺐습니다."
+        self.lb_pass_note.setText(note)
 
     def closeEvent(self, e) -> None:
         if self._quitting:  # quit_app 이 이미 정리했다 — app.quit() 이 보이는 창에 한 번 더 부른다(PyQt 6.11 실측)
@@ -6167,6 +6481,9 @@ class MainWindow(QMainWindow):
             (self._trade_loader, cancel(self._trade_loader), 12000, False),
             # 카드 사이에서 멈춘다(한 장 = 한 트랜잭션) — 같은 이유로 terminate 하지 않는다
             (self._price_loader, cancel(self._price_loader), 12000, False),
+            # 랭커 기록 — 묶음 사이에서 멈춘다(요청 하나 0.3초 · 타임아웃 10초). 묶음마다 한 트랜잭션
+            (self._ranker_loader, cancel(self._ranker_loader), 12000, False),
+            (self._scout_loader, cancel(self._scout_loader), 12000, False),
             *[(ld, cancel(ld), 500, False) for ld in self._compare_squad_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],

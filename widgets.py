@@ -5,7 +5,7 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 from __future__ import annotations
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
@@ -1321,9 +1321,13 @@ class ShotMapWidget(QWidget):
         super().__init__()
         self.setMinimumSize(560, 460)
         self._shots: list = []
+        self._assists = False
 
-    def set_shots(self, shots: list) -> None:
+    def set_shots(self, shots: list, assists: bool = False) -> None:
+        """assists 면 골이면서 어시가 있는 슛에만 어시 위치 → 슛 위치 선(1.4.1 N6). 기본값은 예전 그림 그대로 —
+        선수 카드 [내 기록]도 이 함수를 쓴다(test_shotmap_default_unchanged)."""
         self._shots = shots or []
+        self._assists = assists
         self.update()
 
     def _pt(self, x: float, y: float, w: int, h: int, m: int):
@@ -1361,6 +1365,8 @@ class ShotMapWidget(QWidget):
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "슛 기록 없음")
             return
 
+        if self._assists:
+            self._paint_assists(p, w, h, m)
         colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.YELLOW), 2: QColor(T.PITCH_MISS)}
         # 빗나감 → 유효 → 골 순으로 그려서 골이 맨 위에 오게 한다.
         order = sorted(self._shots, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
@@ -1374,6 +1380,27 @@ class ShotMapWidget(QWidget):
                 p.setPen(QPen(c.darker(160), 1))
             p.setBrush(c)
             p.drawEllipse(pt, r, r)
+
+    def assist_lines(self) -> list:
+        """그릴 어시스트 선의 슛 — 골이면서 어시 위치가 있는 것만(테스트가 그림 대신 이걸 본다)."""
+        if not self._assists:
+            return []
+        return [s for s in self._shots if s.result == 3 and getattr(s, "assist_x", None) is not None]
+
+    def _paint_assists(self, p: QPainter, w: int, h: int, m: int) -> None:
+        """골 점 밑에 깔리게 슛 점보다 먼저. 하프 피치 밖(X_MIN 뒤 — 실측 2.3%)에서 온 어시는 아래 경계에 붙이고
+        점 대신 삼각형으로 — 거기서 잘렸다는 뜻."""
+        c = QColor(T.PITCH_ASSIST)
+        for s in self.assist_lines():
+            a = self._pt(s.assist_x, s.assist_y, w, h, m)
+            p.setPen(QPen(c, 1.4))
+            p.drawLine(a, self._pt(s.x, s.y, w, h, m))
+            p.setBrush(c)
+            if s.assist_x < self.X_MIN:
+                p.drawPolygon(QPolygonF([QPointF(a.x() - 4, a.y()), QPointF(a.x() + 4, a.y()),
+                                         QPointF(a.x(), a.y() - 6)]))
+            else:
+                p.drawEllipse(a, 2.5, 2.5)
 
 
 def wdl_text(w: int, d: int, l: int) -> str:

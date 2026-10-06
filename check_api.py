@@ -144,6 +144,21 @@ def main() -> int:
     except Exception as e:
         print(f"[WARN] 선수 이미지 CDN 확인 실패(전적엔 영향 없음): {e}")
 
+    # 1.4.1 랭커 기록 — 가장 많이 뛴 카드 × 포지션 28개를 요청 하나로(선수 카드 [랭커 기록]과 같은 꼴). 값이 경기당
+    # 평균인지도 눈으로 — 넥슨이 합계로 바꾸면 슛이 matchCount 배쯤 커진다
+    try:
+        if first_sp is not None:
+            rows = api.get_ranker_stats(config.DEFAULT_MATCH_TYPE, [(first_sp, po) for po in range(28)])
+            if rows:
+                r = max(rows, key=lambda x: (x.get("status") or {}).get("matchCount") or 0)
+                st = r.get("status") or {}
+                print(f"[OK]   랭커 기록: 포지션 {len(rows)}/28곳 · 표본 {st.get('matchCount')}경기"
+                      f" · 경기당 슛 {st.get('shoot')} · 기준일 {str(r.get('createDate') or '')[:10]}")
+            else:
+                print("[OK]   랭커 기록: 그 카드는 랭커 기록 없음(요청은 성공)")
+    except NexonAPIError as e:
+        print(f"[WARN] 랭커 기록 조회 실패(랭커와 비교만 영향): {e.message}")
+
     try:
         seasons = {m["seasonId"]: m for m in api.get_meta("seasonid")
                   if "seasonId" in m}

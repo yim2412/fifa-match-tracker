@@ -142,6 +142,7 @@ class AreaTrendChart(_Chart):
       counts     아래 띠에 점마다 경기 수 막대 + 가장 큰 값만 숫자
       ref_series [(이름, [(날짜, 값)], 색)] — 날짜에 따라 움직이는 계단선(x_dates 필요)
       x_dates    점마다 날짜 — 주면 x 를 날짜 간격으로(빈 날이 순번 간격으로 찌그러지지 않게)
+      weak       점마다 표본 부족 여부 — 참인 점은 빈 고리로 흐리게, 최고·최저 표시에서 뺀다(1.4.1 평점 추이)
     """
 
     BASE_MIN_H = 170
@@ -160,13 +161,17 @@ class AreaTrendChart(_Chart):
         self._counts = False
         self._refs: tuple = ()
         self._x_dates: list | None = None
+        self._weak: list[bool] | None = None
         self.marks: dict = {}
 
     def set_data(self, points: list[tuple[str, float, int | None]], *, axis: Axis = PCT_AXIS,
                  avg: bool = True, baseline: float | None = None, ma: list[float | None] | None = None,
                  ma_name: str = "7일 평균", counts: bool = False, ref_series=(),
-                 x_dates: list | None = None) -> None:
+                 x_dates: list | None = None, weak: list[bool] | None = None) -> None:
         self._points = list(points)
+        if weak is not None and len(weak) != len(self._points):
+            raise ValueError(f"weak 길이 {len(weak)} != 점 {len(self._points)}")
+        self._weak = list(weak) if weak is not None else None
         if ma is not None and len(ma) != len(self._points):
             raise ValueError(f"ma 길이 {len(ma)} != 점 {len(self._points)}")
         if x_dates is not None and len(x_dates) != len(self._points):
@@ -258,6 +263,8 @@ class AreaTrendChart(_Chart):
         # 경기 수가 None 인 점(ELO)은 '모름'이 아니라 '세지 않는 값'이라 최고·최저 후보엔 든다.
         played = [(i, v, g) for i, (_, v, g) in enumerate(self._points) if g is None or g > 0]
         weighted = [(i, v, g) for i, v, g in played if g is not None]
+        if self._weak:  # 가중 평균엔 두고(경기 수만큼만 무게) 최고·최저 표시에서만 뺀다
+            played = [t for t in played if not self._weak[t[0]]]
         placed: list[QRectF] = []
         bold = _small_font(self.font(), SMALL_PT + 1, bold=True)
         bfm = QFontMetrics(bold)
@@ -329,6 +336,14 @@ class AreaTrendChart(_Chart):
         p.setBrush(QColor(T.CHART_UP))
         p.drawEllipse(end, DOT_R, DOT_R)
 
+        if self._weak:
+            # 표본 부족 점 — 빈 고리(흐림). 선은 그대로 잇는다: 빼면 남은 주들이 붙어 흐름이 거짓으로 매끈해진다
+            self.marks["weak"] = [i for i, wk in enumerate(self._weak) if wk]
+            p.setPen(QPen(QColor(T.TEXT_DIM), RING_W))
+            p.setBrush(QColor(T.PANEL))
+            for i in self.marks["weak"]:
+                p.drawEllipse(pts[i], DOT_R, DOT_R)
+
         if self._counts:
             self._draw_counts(p, fm, xs, bottom + 6, foot, w - mr)
 
@@ -366,6 +381,8 @@ class AreaTrendChart(_Chart):
                 tip += f" · {self._ma_name} {ax.text(self._ma[i])}"
             if games is not None:
                 tip += f" ({games}경기)"
+            if self._weak and self._weak[i]:
+                tip += " · 표본 부족"
             self._hits.append((QRectF(bx, top, bw, foot - top), tip))
 
     @staticmethod

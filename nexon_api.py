@@ -42,6 +42,11 @@ EP_MATCH_DETAIL = "/fconline/v1/match-detail"  # 매치 상세
 EP_USER_TRADE = "/fconline/v1/user/trade"
 TRADE_KINDS = ("buy", "sell")
 TRADE_PAGE = 100  # 한 번에 받는 상한 — 200 이면 OPENAPI00004(R4)
+# 랭커 기록 — 그 (카드, 포지션)을 쓴 상위 랭커들의 **경기당 평균**(값이 matchCount 분의 1 단위 — 2026-10-06 실측,
+# 다시 나누면 조용히 틀린다). 데이터 없는 쌍은 응답에서 빠진다(오류 아님). 쌍 목록은 URL 에 JSON 으로 실려
+# 한 요청 상한이 URL 길이다 — 9자리 spid 로 81쌍(URL 3,691자)까지 200, 82쌍부터 400 · 100쌍 414(같은 날 실측).
+EP_RANKER_STATS = "/fconline/v1/ranker-stats"
+RANKER_STATS_BATCH = 50  # 한 카드 × 포지션 28개(N2)가 한 번에 · 81 상한에 여유
 
 # 넥슨 에러코드 → 사람이 읽는 말
 ERROR_MESSAGES = {
@@ -188,6 +193,19 @@ class FCOnlineAPI:
         """키 주인 계정의 거래(최신순) — tradetype 은 buy | sell. 끝을 지나면 빈 목록."""
         data = self._get(EP_USER_TRADE, tradetype=tradetype, offset=offset, limit=limit)
         return data if isinstance(data, list) else []
+
+    # ── 랭커 기록 ──────────────────────────────────────────────────────
+    def get_ranker_stats(self, matchtype: int, pairs) -> list[dict]:
+        """(spid, 포지션) 쌍들의 랭커 경기당 평균 — RANKER_STATS_BATCH 개씩 나눠 묻는다. 데이터 없는 쌍은 결과에 없다."""
+        pairs = list(pairs)
+        out: list[dict] = []
+        for i in range(0, len(pairs), RANKER_STATS_BATCH):
+            body = json.dumps([{"id": int(s), "po": int(p)} for s, p in pairs[i:i + RANKER_STATS_BATCH]],
+                              separators=(",", ":"))
+            data = self._get(EP_RANKER_STATS, matchtype=matchtype, players=body)
+            if isinstance(data, list):
+                out.extend(r for r in data if isinstance(r, dict))
+        return out
 
     # ── 메타데이터 ────────────────────────────────────────────────────
     def get_meta(self, name: str) -> list[dict]:
