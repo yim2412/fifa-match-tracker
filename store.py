@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     PRIMARY KEY (ouid, day)
 );
 -- 거래 기록(1.4.1) — 넥슨은 검색 계정이 아니라 **API 키 주인**의 거래만 준다(ROADMAP R1·R2). 그래서 ouid 열이 없다:
--- 이 표는 "지금 키 주인의 거래"이고, 키가 바뀌면 tradecollect 가 통째로 지우고 다시 받는다.
+-- 이 표는 "지금 키 주인의 거래"이고, 키가 바뀌면 tradecollect 가 trades_prev 로 옮기고 새 주인 것을 다시 받는다.
 -- 같은 saleSn 이 완전히 같은 줄로 두 번 오는 일이 있다(R5 — 같은 초 일괄 판매) → 하나만 남긴다.
 CREATE TABLE IF NOT EXISTS trades (
     kind       TEXT NOT NULL,
@@ -119,6 +119,18 @@ CREATE TABLE IF NOT EXISTS trades (
 );
 CREATE INDEX IF NOT EXISTS idx_trades_spid ON trades(spid, trade_date);
 CREATE INDEX IF NOT EXISTS idx_trades_kind_date ON trades(kind, trade_date);
+-- 옛 키 주인의 거래(키 지문별) — 지우지 않는다. 넥슨이 옛 거래를 기간이 지나면 버리는지 모르므로(ROADMAP 1.4.1
+-- "재지 않은 것"), 키가 바뀔 때 옮겨 두고 그 키로 돌아와 다시 받기를 끝내면 넥슨이 더는 안 주는 줄만 되돌린다
+CREATE TABLE IF NOT EXISTS trades_prev (
+    key_fp     TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    sale_sn    TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    spid       INTEGER,
+    grade      INTEGER,
+    value      INTEGER,
+    PRIMARY KEY (key_fp, kind, sale_sn)
+);
 -- 받기 상태 · 키 지문 · 내 계정 — 키는 남기지 않고 지문(sha256 앞 16자)만
 CREATE TABLE IF NOT EXISTS trade_state (
     key   TEXT PRIMARY KEY,
@@ -628,10 +640,12 @@ def set_trade_state(conn: sqlite3.Connection, **items) -> None:
 
 
 def reset_trades_for_key(conn: sqlite3.Connection, fp: str) -> None:
-    """키가 바뀌었다 — 거래·받기 상태를 전부 지우고 새 지문으로. 한 트랜잭션(ROADMAP 1.4.1 키 바뀜).
-    내 계정은 '확인 전'으로 옮긴다. 확인 전에 키가 또 바뀌었으면(my_ouid 가 비었다) 확인 전 값을 그대로 둔다."""
+    """키가 바뀌었다 — 거래는 옛 지문으로 trades_prev 에 옮기고, 받기 상태를 비우고 새 지문으로. 한 트랜잭션
+    (ROADMAP 1.4.1 키 바뀜). 내 계정은 '확인 전'으로 옮긴다. 확인 전에 키가 또 바뀌었으면(my_ouid 가 비었다) 확인 전 값을 그대로 둔다."""
     with conn:
         st = trade_state(conn)
+        conn.execute("INSERT OR IGNORE INTO trades_prev (key_fp, kind, sale_sn, trade_date, spid, grade, value)"
+                     " SELECT ?, kind, sale_sn, trade_date, spid, grade, value FROM trades", (st.get("key_fp") or "",))
         conn.execute("DELETE FROM trades")
         for k in st:
             if k.startswith(TRADE_PROGRESS_PREFIXES) or k == "fetched_at":
@@ -639,6 +653,18 @@ def reset_trades_for_key(conn: sqlite3.Connection, fp: str) -> None:
         mine = st.get("my_ouid")
         _put_state(conn, {"key_fp": fp, "my_ouid": None,
                           "my_ouid_unconfirmed": mine if mine else st.get("my_ouid_unconfirmed")})
+
+
+def restore_prev_trades(conn: sqlite3.Connection, fp: str) -> int:
+    """이 지문으로 옮겨 둔 옛 거래를 되돌린다 → 새로 들어간 줄 수. 다시 받기를 끝낸 뒤에만 부른다(tradecollect) —
+    받는 도중에 넣으면 아래쪽 이어 받기의 시작 쪽(저장 줄 수 − 100)이 넥슨 목록보다 커져 옛 거래를 건너뛴다."""
+    with conn:
+        before = conn.total_changes
+        conn.execute("INSERT OR IGNORE INTO trades (kind, sale_sn, trade_date, spid, grade, value)"
+                     " SELECT kind, sale_sn, trade_date, spid, grade, value FROM trades_prev WHERE key_fp = ?", (fp,))
+        added = conn.total_changes - before
+        conn.execute("DELETE FROM trades_prev WHERE key_fp = ?", (fp,))
+        return added
 
 
 def save_trades(conn: sqlite3.Connection, kind: str, rows: list[dict]) -> int:

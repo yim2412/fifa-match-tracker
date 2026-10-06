@@ -200,6 +200,34 @@ def test_trade_key_change_wipes_all():
     assert st.get("my_ouid_unconfirmed") == "me-ouid" and "my_ouid" not in st, st
 
 
+def _prev(conn, fp):
+    return {r[0] for r in conn.execute("SELECT sale_sn FROM trades_prev WHERE key_fp = ?", (fp,))}
+
+
+def test_trade_key_change_keeps_old_owner_rows():
+    """키가 바뀌어도 옛 주인 거래는 지우지 않는다 — 그 키로 돌아와 다 받으면, 넥슨이 그사이 버린 옛 거래가 되살아난다."""
+    a = FakeAPI({"buy": _rows("buy", 150, prefix="A"), "sell": _rows("sell", 20, prefix="A")})
+    c = _db()
+    tc.collect(a, c, "key-A", today=DAY)
+    fa = store.key_fingerprint("key-A")
+    a_buys = _all(a, "buy")
+    tc.collect(FakeAPI({"buy": _rows("buy", 30, prefix="B"), "sell": []}), c, "key-B", today=DAY)
+    assert _prev(c, fa) == a_buys | _all(a, "sell"), "옛 주인 거래를 옮겨 두지 않았다"
+    assert not (_stored(c, "buy") & a_buys)  # 화면 표에는 새 주인 것만
+    # 넥슨이 A 의 옛 거래 50줄을 버렸다 — 다시 받아도 안 온다
+    a.lists["buy"] = a.lists["buy"][:100]
+    # A 로 돌아와 받다 끊기면 아직 되돌리지 않는다(이어 받기의 쪽 계산을 흐리지 않게)
+    a.calls.clear()
+    r = tc.collect(a, c, "key-A", today=DAY + timedelta(days=1), cancel=CancelAfter(a, 1))
+    assert r.cancelled and _prev(c, fa), r
+    assert not (_stored(c, "buy") - _all(a, "buy")), "다 받기 전에 되돌렸다"
+    r = tc.collect(a, c, "key-A", today=DAY + timedelta(days=1))
+    assert r.complete, r
+    assert _stored(c, "buy") == a_buys, "넥슨이 버린 옛 거래가 되살아나지 않았다"
+    assert not _prev(c, fa), "되돌린 줄이 trades_prev 에 남았다"
+    assert _prev(c, store.key_fingerprint("key-B")), "B 의 거래를 옮겨 두지 않았다"
+
+
 def test_trade_first_key_is_not_a_wipe():
     """처음 지문을 적는 건 '키가 바뀜'이 아니다 — 화면에 지웠음 신호를 보내지 않는다."""
     c = _db()

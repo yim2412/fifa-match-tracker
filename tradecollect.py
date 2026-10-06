@@ -5,7 +5,7 @@
 
 | 단계 | 무엇을 | 왜 |
 |---|---|---|
-| 키 지문 | 저장된 `key_fp` ≠ 지금 키 → 거래·받기 상태를 전부 지우고 첫 수집처럼 | 키 주인이 바뀌었는지 판정하려다 4회차 연속 [상] — 틀려도 잃는 건 다시 받기(약 160요청 · 19초) |
+| 키 지문 | 저장된 `key_fp` ≠ 지금 키 → 거래는 `trades_prev` 로 옮기고 받기 상태를 비워 첫 수집처럼 · 그 키로 돌아와 다 받으면 옮겨 둔 줄을 되돌린다 | 키 주인이 바뀌었는지 판정하려다 4회차 연속 [상] — 틀려도 잃는 건 다시 받기(약 160요청 · 19초). 지우지 않는 건 넥슨이 옛 거래를 버리는지 몰라서(재지 않은 것) |
 | 위쪽(새 거래) | 0쪽부터 `top_stop − TRADE_OVERLAP_DAYS` 이하가 나올 때까지 · 하루 한 번 | 반영이 늦게 오는 옛 날짜 거래(R6)를 겹쳐 받는다. "저장된 saleSn 을 만나면 멈춤"은 끊긴 직전 실행의 새 묶음으로 채워져 가운데 구멍이 남았다(2회차 [상]) |
 | 아래쪽(옛 거래) | `done_<kind>` 가 아니면 (저장 줄 수 − 100)쪽부터 빈 쪽까지 | 첫 수집이 끊겨도 옛 거래가 영구히 빠지지 않게(1회차 [상]). 새 거래가 위에 끼면 겹칠 뿐 건너뛰지 않는다 |
 | 끊김 | 쪽마다 한 트랜잭션 · 쪽 사이에서 cancel · 429 면 그 자리에서 멈춤 | 다음 기회에 이어서 |
@@ -23,7 +23,7 @@ from nexon_api import QUOTA_CODE, TRADE_KINDS, TRADE_PAGE, NexonAPIError
 
 @dataclass
 class TradeResult:
-    wiped: bool = False        # 키가 바뀌어 옛 주인 거래를 지웠다
+    wiped: bool = False        # 키가 바뀌어 옛 주인 거래를 화면 표에서 뺐다(trades_prev 로 옮김)
     requests: int = 0
     added: int = 0
     quota: bool = False        # 429 — 상태는 그대로, 다음 기회에
@@ -78,6 +78,7 @@ def collect(api, conn, api_key: str, cancel: Callable[[], bool] = lambda: False,
             if st.get(f"done_{kind}") != "1":
                 _bottom(conn, kind, page)
         res.complete = True
+        res.added += store.restore_prev_trades(conn, fp)  # 넥슨이 더는 안 주는 옛 거래 — 다 받은 뒤라야 이어 받기를 안 흐린다
     except _Stop:
         res.cancelled = True
     except NexonAPIError as e:
