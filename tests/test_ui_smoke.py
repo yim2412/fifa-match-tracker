@@ -5030,7 +5030,8 @@ def _weak_sites():
     # 픽스처엔 골대·퇴장 경기가 없어 막대가 안 생긴다 — 표본이 3·1·2 로 갈리게 만든 경기로 그린다
     disc = lambda: _win._render_discipline(_discipline_details())  # noqa: E731
     return {
-        "성적 진단": (diag, lambda: bars(_win.box_diag_division, _win.box_diag_possession), "MIN_COND"),
+        "성적 진단": (diag, lambda: bars(_win.box_diag_my_division, _win.box_diag_division, _win.box_diag_possession),
+                   "MIN_COND"),
         "성적 진단 규율": (disc, lambda: bars(_win.box_diag_discipline), "MIN_COND"),
         # 흐름 분석 메뉴 그리기(_render_analysis)를 거쳐 재야 그 구역이 실제로 불리는지도 잰다
         "흐름 분석 연승": (_win._render_analysis, lambda: bars(_win.box_streak), "streak_min_n"),

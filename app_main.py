@@ -3492,7 +3492,13 @@ class MainWindow(QMainWindow):
         self.lb_diag_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_diag_note)
 
-        gb_div = QGroupBox("상대 등급별 성적 (강한 등급부터)")
+        # 둘 다 내 승·무·패 — 묶는 기준만 다르다. 제목이 "상대 등급별 성적"뿐일 땐 상대가 오른 등급으로 읽혔다(2026-10-07 사용자)
+        gb_mine = QGroupBox("내 등급별 성적 (그 경기 때 내 등급)")
+        self.box_diag_my_division = QVBoxLayout(gb_mine)
+        self.box_diag_my_division.setSpacing(3)
+        v.addWidget(gb_mine)
+
+        gb_div = QGroupBox("상대 등급별 내 성적 (그 경기 상대의 등급)")
         self.box_diag_division = QVBoxLayout(gb_div)
         self.box_diag_division.setSpacing(3)
         v.addWidget(gb_div)
@@ -3549,19 +3555,22 @@ class MainWindow(QMainWindow):
         return row
 
     def _render_diagnosis(self, details: list[dict]) -> None:
-        self._clear(self.box_diag_division)
-        divs = core.division_stats(
-            details, self._ouid,
-            name_of=lambda i: self._division_names.get(i, str(i)))
-        if divs:
-            for s in divs:
-                self.box_diag_division.addWidget(self._wr_bar_row(
-                    f"{s.name} ({s.games})", s.win, s.draw, s.lose,
-                    s.avg_gf, s.avg_ga))
-        else:
-            empty = QLabel("상대 등급 정보가 있는 경기가 없습니다.")
-            empty.setStyleSheet(f"color: {T.TEXT_DIM};")
-            self.box_diag_division.addWidget(empty)
+        for box, mine, none_text in (
+                (self.box_diag_my_division, True, "등급 정보가 있는 경기가 없습니다."),
+                (self.box_diag_division, False, "상대 등급 정보가 있는 경기가 없습니다.")):
+            self._clear(box)
+            divs = core.division_stats(
+                details, self._ouid,
+                name_of=lambda i: self._division_names.get(i, str(i)), by_mine=mine)
+            if divs:
+                for s in divs:
+                    box.addWidget(self._wr_bar_row(
+                        f"{s.name} ({s.games})", s.win, s.draw, s.lose,
+                        s.avg_gf, s.avg_ga))
+            else:
+                empty = QLabel(none_text)
+                empty.setStyleSheet(f"color: {T.TEXT_DIM};")
+                box.addWidget(empty)
 
         self._clear(self.box_diag_possession)
         for b in core.possession_stats(details, self._ouid):

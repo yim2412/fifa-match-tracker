@@ -1006,11 +1006,11 @@ class DivisionStat:
 
 
 def division_stats(details: list[dict], ouid: str,
-                   name_of=None) -> list[DivisionStat]:
-    """상대 등급별 내 승률·평균 득실 — 강한 등급(id 작을수록 상위)부터.
+                   name_of=None, by_mine: bool = False) -> list[DivisionStat]:
+    """등급별 내 승률·평균 득실 — 강한 등급(id 작을수록 상위)부터.
 
-    상대의 division 으로 묶는다. division 이 없는 옛 경기는 '미상' 버킷에 모아
-    합계가 맞게 둔다. 승·무·패가 아닌 결과("오류" 등)는 뺀다.
+    기본은 상대의 division 으로, by_mine 이면 그 경기 때 **내** division 으로 묶는다(승·무·패·득실은 둘 다 내 쪽).
+    division 이 없는 옛 경기는 '미상' 버킷에 모아 합계가 맞게 둔다. 승·무·패가 아닌 결과("오류" 등)는 뺀다.
     """
     acc: dict[int, DivisionStat] = {}
     for d in details:
@@ -1020,7 +1020,7 @@ def division_stats(details: list[dict], ouid: str,
         wdl = _wdl_of(_result_of(me))
         if wdl is None:
             continue
-        div = opp.get("division")
+        div = (me if by_mine else opp).get("division")
         div_id = int(div) if isinstance(div, int) else UNKNOWN_DIVISION_ID
         s = acc.get(div_id)
         if s is None:

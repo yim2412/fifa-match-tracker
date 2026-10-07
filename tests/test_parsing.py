@@ -928,6 +928,19 @@ def test_division_stats_unknown_bucket_and_results():
     assert got == {"등급900": (1, 1, 0, 3, 2), "미상": (0, 0, 1, 0, 3)}, got
 
 
+def test_division_stats_by_my_division():
+    # 내 등급과 상대 등급을 서로 다르게 — 같으면 기준을 바꿔 세도 숫자가 같아 안 잡힌다
+    ds = [_with(_d(3, "승"), 2, 0, 800), _with(_d(2, "패"), 0, 1, 800), _with(_d(1, "무"), 1, 1, 900)]
+    for d, mine in zip(ds, (900, 900, None)):
+        d["matchInfo"][0]["division"] = mine
+    name = lambda i: f"등급{i}"  # noqa: E731
+    mine = {s.name: (s.win, s.draw, s.lose, s.goals_for, s.goals_against)
+            for s in st.division_stats(ds, "me", name_of=name, by_mine=True)}
+    assert mine == {"등급900": (1, 0, 1, 2, 1), "미상": (0, 1, 0, 1, 1)}, mine  # 승·무·패·득실은 그대로 내 쪽
+    opp = {s.name: (s.win, s.draw, s.lose) for s in st.division_stats(ds, "me", name_of=name)}
+    assert opp == {"등급800": (1, 0, 1), "등급900": (0, 1, 0)}, opp
+
+
 def test_possession_band_edges():
     # 무·패 개수를 다르게(2:1) — 같으면 둘을 바꿔 세도 숫자가 같아 안 잡힌다(재측정에서 실제로 그랬다)
     ds = [_with(_d(i + 1, r, possession=p), 1, 0) for i, (p, r) in enumerate(
