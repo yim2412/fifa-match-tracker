@@ -53,7 +53,7 @@ python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
 python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
 python tests/test_trades.py    # 거래 받기(끊김·겹침·429·키 바뀜) · 시세 캐시 하루 상한 · 랭커 기록 캐시 — 가짜 목록(네트워크 없음)
-python tests/test_traits.py    # 포지션 특성 단계 1 — 이름표·팀 칸 해석·팀 찾기·요청 오류 분류(가짜 응답·가짜 세션, 네트워크 없음)
+python tests/test_traits.py    # 포지션 특성 — 이름표·팀 칸 해석·팀 찾기·요청 오류 분류 · trait_squads 저장·지우기(가짜 응답·가짜 세션, 네트워크 없음)
 python tests/test_timeline.py  # 스쿼드 타임라인 · 가계부(짝·보유 상태·경계·앞뒤 창) — 지어낸 경기·거래(네트워크 없음)
 python tests/test_predict.py   # 시즌 말 예측 — 가짜 스냅숏(네트워크 없음)
 python tests/test_rankmeta.py  # 랭커 메타 ② 스냅숏 읽기(하루 승률·가성비·구단가치·구간 평균·승률→점수·주간 요약·순위 변동) — 지어낸 rank.db(네트워크 없음)

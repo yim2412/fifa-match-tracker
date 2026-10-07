@@ -18,7 +18,7 @@ SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐
 정수 키, `matches.rowid` 를 안 가리킨다.
 새 경기는 `save_matches` 안에서 `index_squads`(SAVEPOINT — 한 경기 실패는 그 경기만, 그래도 `squad_match` 줄은 남겨 다시 안 훑는다) ·
 옛 경기는 `backfill_squads`(1,000경기 · PK 순 정렬해 넣기 — 경기마다 넣으면 2배) ·
-찾기 `owners_using_card`)·랭커 픽(`ranker_squads`·`ranker_matches` · 지우기 `purge_ranker_data`).
+찾기 `owners_using_card`)·랭커 픽(`ranker_squads`·`ranker_matches` · 지우기 `purge_ranker_data` · 출처는 저장 때 순위로 `source_for_rank`)·포지션 특성(`trait_squads` — 전부 지우기는 `purge_ranker_data` · 켤 때 정리 `prune_trait_squads`).
 **모든 연결이 `secure_delete=ON`** — 지우는 연결에서만 켜면 그 전 삽입·재배치로 페이지 빈칸에 남은 다른 구단주 닉네임이 그대로였다(2026-10-06 테스트가 파일 바이트로 잡음).
 **화면은 API 가 아니라 이 DB 를 본다**. 검색 결과는 바탕(화면이 가진 목록 · 미리 읽은 것 ·
 새로 읽은 것) + DB 에만 있는 경기(`known_ids` 대조 — 시각으로 자르면 이어 받은 옛 경기를 빠뜨린다)를 `merge_details`.
@@ -229,6 +229,22 @@ CREATE TABLE IF NOT EXISTS ranker_squads (
 CREATE TABLE IF NOT EXISTS ranker_matches (
     match_id   TEXT PRIMARY KEY,
     fetched_on TEXT NOT NULL
+);
+-- 포지션 특성(32단계 · traitcollect.py) — 랭커 한 사람 한 줄(덮어씀). body = JSON [[spid, 자리, 강화, [특성3], [코치3]|null], …].
+-- 지우기: 전부(purge_ranker_data everything) · 14일·500위 밖·켠 시각이 다름(prune_trait_squads). 옛 버전이 열어도 새 표라 그대로
+CREATE TABLE IF NOT EXISTS trait_squads (
+    profile_sn    INTEGER PRIMARY KEY,
+    source        TEXT NOT NULL,
+    rank          INTEGER,
+    match_id      TEXT,
+    formation     TEXT,
+    team          TEXT,
+    body          TEXT,
+    state         TEXT NOT NULL,
+    collect_on_at TEXT,
+    match_day     TEXT,
+    checked_at    TEXT NOT NULL,
+    fail          TEXT
 );
 -- 팀컬러 효과(2.2.1 · teamcolor.py) — 넥슨 데이터센터 목록·단계. 개인 정보가 아니라 지우기 대상이 아니다.
 -- 목록 801개는 한 번에 바꾼다(save_teamcolor_meta). effects 는 줄바꿈으로 이은 글자
@@ -1138,8 +1154,21 @@ def mark_final_429(day: str, db_path: Path | str | None = None) -> None:
 
 # ── 랭커 픽(6) ───────────────────────────────────────────────────────────
 PICK = "pick"
+TRAIT = "trait"
 RECOMMEND = "recommend"
-SOURCE_TOP = {PICK: config.RANKER_PICK_TOP, RECOMMEND: config.RANKER_RECOMMEND_TOP}
+SOURCE_TOP = {PICK: config.RANKER_PICK_TOP, TRAIT: config.TRAIT_TOP, RECOMMEND: config.RANKER_RECOMMEND_TOP}
+
+
+def source_for_rank(rank, fallback: str) -> str:
+    """그 순위를 담는 가장 좁은 구간(≤200 pick · ≤500 trait · 그 밖 recommend). 순위가 없으면 fallback.
+    "pick 이 이긴다"였던 때는 150→300위로 내려간 사람이 pick 으로 남아 켤 때 정리가 "pick 인데 200 초과"로 지우고
+    다음 날 처음 보는 사람으로 3요청을 다시 썼다(32단계 검토 A)."""
+    if rank is None:
+        return fallback
+    for src, top in sorted(SOURCE_TOP.items(), key=lambda kv: kv[1]):
+        if rank <= top:
+            return src
+    return RECOMMEND
 
 
 def ranker_squads(conn: sqlite3.Connection) -> dict[int, dict]:
@@ -1148,15 +1177,74 @@ def ranker_squads(conn: sqlite3.Connection) -> dict[int, dict]:
 
 def save_ranker_squad(conn: sqlite3.Connection, profile_sn: int, *, nickname, ouid, rank, match_id, match_day,
                       fetched_at: str, fail, source: str) -> None:
-    """한 랭커 줄. 출처는 pick 이 recommend 를 이긴다(같은 사람이 둘 다면 범위가 좁은 쪽으로 — 정리 기준이 된다)."""
+    """한 랭커 줄. 출처는 저장 때 순위로 정한다(source_for_rank — source 는 순위가 없을 때만) · 정리 기준이 된다."""
     with conn:
         conn.execute(
             "INSERT INTO ranker_squads (profile_sn, nickname, ouid, rank, match_id, match_day, fetched_at, fail, source)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(profile_sn) DO UPDATE SET nickname=excluded.nickname,"
             " ouid=excluded.ouid, rank=excluded.rank, match_id=excluded.match_id, match_day=excluded.match_day,"
-            " fetched_at=excluded.fetched_at, fail=excluded.fail,"
-            " source=CASE WHEN source=? OR excluded.source=? THEN ? ELSE excluded.source END",
-            (profile_sn, nickname, ouid, rank, match_id, match_day, fetched_at, fail, source, PICK, PICK, PICK))
+            " fetched_at=excluded.fetched_at, fail=excluded.fail, source=excluded.source",
+            (profile_sn, nickname, ouid, rank, match_id, match_day, fetched_at, fail, source_for_rank(rank, source)))
+
+
+def trait_squads(conn: sqlite3.Connection) -> dict[int, dict]:
+    """특성 줄 전부 — body 는 풀어서(깨진 줄은 빈 목록 — 한 줄 때문에 집계가 죽지 않게)."""
+    out = {}
+    for r in conn.execute("SELECT * FROM trait_squads"):
+        d = dict(r)
+        try:
+            body = _loads(d["body"]) if d["body"] else []
+        except Exception:
+            body = []
+        d["body"] = body if isinstance(body, list) else []
+        out[d["profile_sn"]] = d
+    return out
+
+
+def save_trait_squad(conn: sqlite3.Connection, profile_sn: int, *, source: str, rank, match_id, formation, team,
+                     body: list | None, state: str, collect_on_at, match_day, checked_at: str, fail=None) -> None:
+    """한 사람 한 줄(덮어씀) — 한 트랜잭션(저장 중 종료돼도 반쪽 줄이 안 남는다)."""
+    raw = json.dumps(body, ensure_ascii=False, separators=(",", ":")) if body is not None else None
+    with conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO trait_squads (profile_sn, source, rank, match_id, formation, team, body, state,"
+            " collect_on_at, match_day, checked_at, fail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (profile_sn, source, rank, match_id, formation, team, raw, state, collect_on_at, match_day, checked_at, fail))
+
+
+def prune_trait_squads(conn: sqlite3.Connection, *, on_at: str | None, keep: set[int] | None = None,
+                       today: date | None = None) -> int:
+    """켤 때 정리(D3·D5 ②) → 지운 줄 수. ① checked_at 이 RANK_RAW_KEEP_DAYS 지난 줄 ② keep(지금 스냅숏 TRAIT_TOP 안)에 없는 줄 —
+    keep 이 None 이거나 비면 건너뛴다(스냅숏 없음·rank.db 못 엶에 전부 지우지 않게) ③ 저장 때 켠 시각이 on_at 과 다른 줄
+    (옛 버전에서 껐다 다시 켠 경우 — 꺼짐 판정만으론 놓친다 · 둘 다 None 이면 같음). 수집이 꺼져 있을 때 전부 지우기는
+    purge_ranker_data(everything) 쪽."""
+    today = today or date.today()
+    cutoff = (today - timedelta(days=config.RANK_RAW_KEEP_DAYS)).isoformat()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        n = conn.execute("DELETE FROM trait_squads WHERE checked_at < ? OR IFNULL(collect_on_at, '') != ?",
+                         (cutoff, on_at or "")).rowcount
+        if keep:
+            drop = [r[0] for r in conn.execute("SELECT profile_sn FROM trait_squads") if r[0] not in keep]
+            for i in range(0, len(drop), 500):
+                chunk = drop[i:i + 500]
+                n += conn.execute(f"DELETE FROM trait_squads WHERE profile_sn IN ({','.join('?' * len(chunk))})",
+                                  chunk).rowcount
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    if n:
+        _checkpoint_quiet(conn)
+    return n
+
+
+def _checkpoint_quiet(conn: sqlite3.Connection) -> None:
+    """WAL 에 지우기 전 페이지가 남는다 — 본 파일로 옮기고 비운다(다른 연결이 읽는 중이면 다음 기회에, 실패해도 조용히)."""
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except sqlite3.Error:
+        pass
 
 
 def mark_ranker_match(conn: sqlite3.Connection, match_id: str, day: str) -> None:
@@ -1232,8 +1320,10 @@ def purge_ranker_data(conn: sqlite3.Connection, *, everything: bool, today: date
                 dc = drop[i:i + 500]
                 conn.execute(f"DELETE FROM squad_owner WHERE id IN ({','.join('?' * len(dc))})"
                              " AND ouid NOT IN (SELECT ouid FROM accounts)", dc)
+        traits = 0
         if everything:
             conn.execute("DELETE FROM ranker_squads")  # 하루 계수(api_budget)는 남긴다 — 지우고 다시 켜도 상한은 그대로
+            traits = conn.execute("DELETE FROM trait_squads").rowcount   # 포지션 특성(32단계 D1·D2)도 같은 길
         else:
             conn.execute("DELETE FROM ranker_squads WHERE fetched_at < ?", (cutoff,))
             for src, top in SOURCE_TOP.items():
@@ -1243,12 +1333,8 @@ def purge_ranker_data(conn: sqlite3.Connection, *, everything: bool, today: date
     except BaseException:
         conn.rollback()
         raise
-    if gone:
-        # WAL 에 지우기 전 페이지가 남는다 — 본 파일로 옮기고 비운다(다른 연결이 읽는 중이면 다음 기회에, 실패해도 조용히)
-        try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        except sqlite3.Error:
-            pass
+    if gone or traits:
+        _checkpoint_quiet(conn)
     if cache_dir is not None:
         for mid in gone:
             safe = "".join(c for c in mid if c.isalnum())

@@ -685,19 +685,35 @@ def test_purge_on_start_catches_overdue():
 
 def test_purge_drops_out_of_range_by_source():
     conn = _db()
-    for sn, rank, src in ((1, 150, store.PICK), (2, 250, store.PICK), (3, 900, store.RECOMMEND), (4, 1200, store.RECOMMEND)):
+    for sn, rank, src in ((1, 150, store.PICK), (2, None, store.PICK), (3, 900, store.RECOMMEND), (4, 1200, store.RECOMMEND)):
         store.save_ranker_squad(conn, sn, nickname=f"n{sn}", ouid=None, rank=rank, match_id=None, match_day=None,
                                 fetched_at=NOW.isoformat(), fail=None, source=src)
+    # 출처 범위 밖 줄(옛 버전이 "pick 이 이긴다"로 남긴 것) — 지금 저장 함수로는 못 만든다
+    conn.execute("INSERT INTO ranker_squads (profile_sn, rank, source) VALUES (5, 250, ?)", (store.PICK,))
+    conn.commit()
     store.purge_ranker_data(conn, everything=False, today=TODAY)
     assert sorted(store.ranker_squads(conn)) == [1, 3], "pick 200 · recommend 1,000 — 추천 랭커가 매일 지워지면 안 된다"
 
 
-def test_pick_source_wins_over_recommend():
+def test_ranker_source_follows_rank_and_prune():
+    """32단계 — 출처는 저장 때 순위의 가장 좁은 구간. 3판의 "pick 이 이긴다"면 150→300위로 내려간 사람이 pick 으로 남아
+    켤 때 정리가 지우고 다음 날 처음 보는 사람으로 3요청을 다시 썼다(검토 A)."""
     conn = _db()
-    kw = dict(nickname="n", ouid=None, rank=100, match_id=None, match_day=None, fetched_at=NOW.isoformat(), fail=None)
-    store.save_ranker_squad(conn, 1, source=store.PICK, **kw)
-    store.save_ranker_squad(conn, 1, source=store.RECOMMEND, **kw)
+    kw = dict(nickname="n", ouid=None, match_id=None, match_day=None, fetched_at=NOW.isoformat(), fail=None)
+    store.save_ranker_squad(conn, 1, rank=150, source=store.PICK, **kw)
     assert store.ranker_squads(conn)[1]["source"] == store.PICK
+    store.save_ranker_squad(conn, 1, rank=300, source=store.PICK, **kw)       # 내려감 — 부른 쪽이 pick 이어도
+    assert store.ranker_squads(conn)[1]["source"] == store.TRAIT
+    store.purge_ranker_data(conn, everything=False, today=TODAY)
+    assert 1 in store.ranker_squads(conn), "500위 안으로 내려간 사람을 정리가 지웠다"
+    store.save_ranker_squad(conn, 1, rank=100, source=store.RECOMMEND, **kw)  # 추천 길로 받았어도 200 안이면 pick
+    assert store.ranker_squads(conn)[1]["source"] == store.PICK
+    store.save_ranker_squad(conn, 1, rank=700, source=store.PICK, **kw)
+    assert store.ranker_squads(conn)[1]["source"] == store.RECOMMEND
+    store.save_ranker_squad(conn, 2, rank=None, source=store.RECOMMEND, **kw)  # 순위 없음 — 부른 쪽 값
+    assert store.ranker_squads(conn)[2]["source"] == store.RECOMMEND
+    assert [store.source_for_rank(r, "x") for r in (200, 201, 500, 501, 1000, 1001)] == \
+        [store.PICK, store.TRAIT, store.TRAIT, store.RECOMMEND, store.RECOMMEND, store.RECOMMEND]
 
 
 def test_remove_account_unused():

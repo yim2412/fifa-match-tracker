@@ -251,6 +251,8 @@ def _drive_uncovered() -> None:
             store.predictions(conn)
             store.predictions(conn, "a")
             store.account_nickname(conn, "a")                   # 거래 화면 띠(1.4.1) — 화면 스모크가 부른다
+            store.trait_squads(conn)                            # 포지션 특성(32단계) — test_traits 가 부른다
+            store.prune_trait_squads(conn, on_at=None, keep={1})
         finally:
             conn.close()
         import rankcollect

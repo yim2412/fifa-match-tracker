@@ -4258,10 +4258,13 @@ class MainWindow(QMainWindow):
             self._pick_purge_pending = self._pick_purge_pending or everything
             self._pick_loader.cancel()
             return None
+        keep = None if everything else self._trait_keep()
         try:
             conn = store.open_db(config.DB_PATH)
             try:
                 n = store.purge_ranker_data(conn, everything=everything, cache_dir=config.CACHE_DIR)
+                if not everything:   # 포지션 특성 켤 때 정리(32단계 D3·D5 ②) — 전부 지우기는 위 everything 이 같이 한다
+                    store.prune_trait_squads(conn, on_at=config.read_rank_on_at(), keep=keep)
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -4271,6 +4274,11 @@ class MainWindow(QMainWindow):
         if n:
             self._invalidate_pick()
         return n
+
+    def _trait_keep(self) -> set[int] | None:
+        """지금 스냅숏 상위 TRAIT_TOP 의 profile_sn — 스냅숏이 없거나 rank.db 를 못 열면 None(순위 정리를 건너뛴다)."""
+        rows = self._rank_read(lambda r: rankerpick.top_rankers(r, limit=config.TRAIT_TOP)[1])
+        return {r["profile_sn"] for r in rows} if rows else None
 
     # ── 선수 색인 백필(2.1.1 · 12) ───────────────────────────────────
     BACKFILL_RETRY_S = 30   # 검색·로더가 돌고 있으면 이만큼 뒤에 다시 본다

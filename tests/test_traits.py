@@ -1,4 +1,4 @@
-"""포지션 특성(32단계 단계 1 · traitcollect.py · trait_codes.py) 테스트 — 가짜 응답·가짜 세션, 네트워크 없이.
+"""포지션 특성(32단계 · traitcollect.py · trait_codes.py · store.trait_squads) 테스트 — 가짜 응답·가짜 세션, 네트워크 없이.
 
 pytest 없이 `python tests/test_traits.py`. 실제 넥슨에 붙는 스모크는 `python check_api.py <닉네임>` 의 특성 칸 줄.
 픽스처 `squadmaker_team.json.gz` 는 실제 응답 한 칸(구단주명·번호·스쿼드 이름·메모를 지운 것) — 선수 spid·특성·코치·강화·state 는 원본 그대로.
@@ -11,6 +11,9 @@ import gzip
 import json
 import os
 import sys
+import tempfile
+from datetime import date, timedelta
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import requests
 
 import config
+import store
 import trait_codes as tcodes
 import traitcollect as tc
 import watchdog
@@ -408,6 +412,116 @@ def test_trait_session_names_the_app():
 def test_trait_messages_cover_every_kind():
     assert set(tc.MESSAGES) == {"off", "down", "format", "rate"}
     assert all(isinstance(m, str) and m for m in tc.MESSAGES.values())
+
+
+# ── 저장 · 지우기(단계 2 — store.trait_squads) ──────────────────────────────────
+
+TODAY = date(2026, 10, 7)
+ON_AT = "2026-10-01T09:00:00.000000"
+
+
+def _file_db():
+    d = Path(tempfile.mkdtemp())
+    return d, store.open_db(d / "fifa.db")
+
+
+def _real_body() -> list:
+    """실응답 픽스처의 선발 11 — 실제 크기·모양(코치 없는 카드 포함)."""
+    starters = [c for c in tc.parse_team(_fixture()) if c.state == 1][:11]
+    return [[c.spid, i, c.build_up, list(c.traits), list(c.trainer) if c.trainer else None] for i, c in enumerate(starters)]
+
+
+def _save(conn, sn, *, checked=TODAY, on_at=ON_AT, rank=1, nick_mark=None):
+    body = _real_body()
+    if nick_mark:   # 파일 바이트 검사용 표시(실제 줄엔 닉네임이 없다 — 다른 칸에 실어 지운 뒤 남는지 본다)
+        body[0].append(nick_mark)
+    store.save_trait_squad(conn, sn, source=store.PICK if rank <= 200 else store.TRAIT, rank=rank, match_id=f"m{sn}",
+                           formation="4-2-3-1", team="1-0", body=body, state="ok", collect_on_at=on_at,
+                           match_day=checked.isoformat(), checked_at=f"{checked.isoformat()}T10:00:00")
+
+
+def test_trait_row_roundtrip():
+    conn = store.open_db(":memory:")
+    _save(conn, 7)
+    row = store.trait_squads(conn)[7]
+    assert row["body"] == _real_body() and row["state"] == "ok" and row["collect_on_at"] == ON_AT, row
+    assert any(c[4] is None for c in row["body"]), "코치 없는 카드(null)가 픽스처에 있어야 — 없으면 이 왕복이 그 모양을 안 잰다"
+    _save(conn, 7, rank=300)                                  # 한 사람 한 줄(덮어씀)
+    assert len(store.trait_squads(conn)) == 1 and store.trait_squads(conn)[7]["rank"] == 300
+    conn.execute("UPDATE trait_squads SET body = '[1,' WHERE profile_sn = 7")
+    conn.commit()
+    assert store.trait_squads(conn)[7]["body"] == [], "깨진 body 한 줄에 읽기가 죽었다"
+
+
+def test_trait_row_size():
+    """계획: 한 줄 약 0.5KB · 500명 약 0.25MB — 실응답 11장으로 잰다(상한은 그 2배)."""
+    conn = store.open_db(":memory:")
+    _save(conn, 123456789)
+    size = conn.execute("SELECT LENGTH(body) + LENGTH(collect_on_at) + LENGTH(checked_at) + LENGTH(match_id)"
+                        " + LENGTH(formation) + LENGTH(team) + 40 FROM trait_squads").fetchone()[0]
+    assert 200 < size < 1000, size
+
+
+def test_trait_purge_on_every_off_path():
+    """D1·D2 — 끄는 길 전부와 [수집 기록 지우기]는 purge_ranker_data(everything) 를 거친다(길은 화면 스모크
+    test_every_off_path_purges_ranker_pick) → 특성 줄도 전부, 파일 바이트까지(secure_delete · WAL 비우기)."""
+    d, conn = _file_db()
+    for sn in (1, 2, 3):
+        _save(conn, sn, nick_mark=f"특성표시{sn}")
+    raw = (d / "fifa.db").read_bytes() + (d / "fifa.db-wal").read_bytes()
+    assert "특성표시2".encode() in raw, "지우기 전에 있어야 — 없으면 아래 단언이 빈 검사"
+    store.purge_ranker_data(conn, everything=False, today=TODAY)
+    assert len(store.trait_squads(conn)) == 3, "14일 정리(everything=False)가 특성 줄을 지웠다"
+    store.purge_ranker_data(conn, everything=True, today=TODAY)
+    assert store.trait_squads(conn) == {}
+    conn.close()
+    raw = (d / "fifa.db").read_bytes()
+    wal = d / "fifa.db-wal"
+    raw += wal.read_bytes() if wal.exists() else b""
+    assert "특성표시".encode() not in raw, "지운 특성 줄이 파일에 남았다"
+
+
+def test_trait_prune_14d():
+    conn = store.open_db(":memory:")
+    _save(conn, 1, checked=TODAY - timedelta(days=config.RANK_RAW_KEEP_DAYS))
+    _save(conn, 2, checked=TODAY - timedelta(days=config.RANK_RAW_KEEP_DAYS + 1))
+    assert store.prune_trait_squads(conn, on_at=ON_AT, today=TODAY) == 1
+    assert sorted(store.trait_squads(conn)) == [1], "14일째는 남고 15일째는 지운다"
+
+
+def test_trait_prune_out_of_range():
+    conn = store.open_db(":memory:")
+    for sn in (1, 2, 3):
+        _save(conn, sn)
+    assert store.prune_trait_squads(conn, on_at=ON_AT, keep={1, 3, 99}, today=TODAY) == 1
+    assert sorted(store.trait_squads(conn)) == [1, 3]
+
+
+def test_trait_prune_skips_without_snapshot():
+    """목록이 비면(원본 스냅숏 없음 · rank.db 못 엶) 순위 정리를 건너뛴다 — 안 그러면 특성 줄이 전부 지워진다(검토 3회차)."""
+    conn = store.open_db(":memory:")
+    for sn in (1, 2):
+        _save(conn, sn)
+    assert store.prune_trait_squads(conn, on_at=ON_AT, keep={99}, today=TODAY) == 2, "keep 이 순위 정리를 하는지 먼저"
+    for sn in (1, 2):
+        _save(conn, sn)
+    for keep in (None, set()):
+        assert store.prune_trait_squads(conn, on_at=ON_AT, keep=keep, today=TODAY) == 0, keep
+    assert len(store.trait_squads(conn)) == 2
+
+
+def test_trait_purge_when_reenabled_in_old_version():
+    """D5 ② — 줄에 적힌 켠 시각이 지금 값과 다르면 지운다(옛 버전에서 껐다 다시 켠 경우 — 꺼짐 판정만으론 놓친다).
+    둘 다 None 이면 같음(켠 시각을 안 적는 옛 버전에서 켠 사람)."""
+    conn = store.open_db(":memory:")
+    _save(conn, 1, on_at=ON_AT)
+    _save(conn, 2, on_at=None)
+    assert store.prune_trait_squads(conn, on_at=ON_AT, today=TODAY) == 1
+    assert sorted(store.trait_squads(conn)) == [1]
+    _save(conn, 2, on_at=None)
+    assert store.prune_trait_squads(conn, on_at="2026-10-07T08:00:00.000000", today=TODAY) == 2, "다시 켰는데 남았다"
+    _save(conn, 3, on_at=None)
+    assert store.prune_trait_squads(conn, on_at=None, today=TODAY) == 0, "둘 다 None 인데 지웠다"
 
 
 def main() -> int:

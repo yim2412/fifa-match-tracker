@@ -250,7 +250,8 @@ TEAMCOLOR_PLAYERS_PAGE = 100        # 넥슨 선수 목록 한 요청의 최대 
 # 대표를 먼저 본다(랭커 경기는 대부분 대표 팀 — 맞는 팀을 일찍 찾으면 거기서 멈춘다). 이 단계는 전술 번호 0(= 전술 1) 한 칸만 본다
 TRAIT_TEAM_ORDER = ((1, 0), (1, 1), (1, 2), (0, 0), (0, 1), (0, 2))
 TRAIT_TACTIC_SEQ = 0
-TRAIT_TIMEOUT_S = 10                # 로더(다음 단계)를 붙일 때 앱 종료 대기 표에 이 값을 넣는다(teamcolor.TIMEOUT_S 꼴)
+TRAIT_TOP = 500                     # 특성 대상 1~500위(U7) — 추천 범위(RANKER_RECOMMEND_TOP)와 따로. 밖으로 밀린 줄은 켤 때 정리
+TRAIT_TIMEOUT_S = 10               # 로더(다음 단계)를 붙일 때 앱 종료 대기 표에 이 값을 넣는다(teamcolor.TIMEOUT_S 꼴)
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}

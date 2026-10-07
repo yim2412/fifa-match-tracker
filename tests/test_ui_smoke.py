@@ -6980,7 +6980,8 @@ def test_ranker_pick_loader_fetches_recommend_first():
             src = {sn: h["source"] for sn, h in store.ranker_squads(conn).items()}
         finally:
             conn.close()
-        assert src == {1000: store.RECOMMEND, 701: store.PICK, 702: store.PICK}, src
+        # 출처는 받은 길이 아니라 순위(32단계 source_for_rank) — 추천 길로 받은 300위는 500 안이라 trait
+        assert src == {1000: store.TRAIT, 701: store.PICK, 702: store.PICK}, src
         config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "loader2.db"
         api = _Api()
         app_main.RankerPickLoader(api, None).run()
@@ -7061,6 +7062,46 @@ def test_purge_waits_for_running_loader():
             assert calls == [True, False], "켜져 있으면 14일 정리만"
         finally:
             store.purge_ranker_data = keep
+
+
+def test_trait_purge_by_state():
+    """32단계 D3·D5 배선 — 켤 때 정리(sync → purge_ranker_pick_data(everything=False))가 지금 스냅숏 상위 TRAIT_TOP 와
+    .env 의 켠 시각을 prune_trait_squads 에 넘긴다 · 스냅숏이 없으면 순위 정리를 건너뛴다 · 수집이 꺼져 있으면 전부(D5 ①)."""
+    on_at = "2026-10-01T09:00:00.000000"
+    keep_read = config.read_rank_on_at
+
+    def save(sn, at=on_at):
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_trait_squad(conn, sn, source=store.PICK, rank=1, match_id=None, formation=None, team=None,
+                                   body=[], state="ok", collect_on_at=at, match_day=None,
+                                   checked_at=datetime.now().isoformat(timespec="seconds"))
+        finally:
+            conn.close()
+
+    def have():
+        conn = store.open_db(config.DB_PATH)
+        try:
+            return sorted(store.trait_squads(conn))
+        finally:
+            conn.close()
+
+    with _PickEnv():                                   # 스냅숏 900·901·902 = 1~3위
+        config.read_rank_on_at = lambda: on_at
+        try:
+            save(900), save(950), save(901, at="2026-09-01T00:00:00.000000")
+            _win.sync_ranker_pick_data()
+            assert have() == [900], ("500위 밖(950) · 켠 시각이 다른 줄(901)을 남겼다", have())
+            for suffix in ("", "-wal", "-shm"):        # 스냅숏 없음 — 순위로 지우지 않는다
+                pathlib.Path(str(config.RANK_DB_PATH) + suffix).unlink(missing_ok=True)
+            save(950)
+            _win.sync_ranker_pick_data()
+            assert have() == [900, 950], ("스냅숏이 없는데 순위로 지웠다", have())
+            config.RANK_COLLECT = False
+            _win.sync_ranker_pick_data()
+            assert have() == [], ("수집이 꺼졌는데 특성 줄이 남았다", have())
+        finally:
+            config.read_rank_on_at = keep_read
 
 
 def test_every_off_path_purges_ranker_pick():
