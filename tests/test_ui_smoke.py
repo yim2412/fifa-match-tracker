@@ -7064,6 +7064,273 @@ def test_purge_waits_for_running_loader():
             store.purge_ranker_data = keep
 
 
+# ── 32단계 단계 3 — 특성 로더 배선(받기 규칙 자체는 tests/test_traits.py) ─────────────
+# [포지션 특성] 탭은 단계 4 라 아직 없다 — 어느 쪽이 보이는지는 _Vis 로 바꿔 끼운다(진짜 판정 _trait_visible 은
+# test_trait_visible_needs_trait_key 가 따로 잰다)
+class _FakeTraitLoader(_FakePickLoader):
+    started = 0
+
+    def __init__(self, api):
+        super().__init__(api)
+        self.person = self._S()
+
+    def start(self):
+        _FakeTraitLoader.started += 1
+        self.running = True
+
+    def end(self, out=None):
+        self.running = False
+        self.done.emit(out or app_main.traitcollect.TraitRun())
+        self.finished.emit()
+
+
+class _TraitEnv(_PickEnv):
+    """_PickEnv + 특성 동의(7) · 가짜 특성 로더 · 보임은 self.vis("pick"/"trait"/None)."""
+
+    def __enter__(self):
+        super().__enter__()
+        self.keep2 = (app_main.TraitLoader, _win._trait_loader, _win._trait_result)
+        config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION
+        app_main.TraitLoader = _FakeTraitLoader
+        _win._trait_loader = None
+        _FakeTraitLoader.started = 0
+        _win.set_trait_off("")
+        self.vis = None
+        _win._ranker_pick_visible = lambda: self.vis == "pick"
+        _win._trait_visible = lambda: self.vis == "trait"
+        return self
+
+    def __exit__(self, *exc):
+        del _win._ranker_pick_visible, _win._trait_visible
+        _win.set_trait_off("")
+        app_main.TraitLoader, _win._trait_loader, _win._trait_result = self.keep2
+        return super().__exit__(*exc)
+
+
+def test_trait_gate():
+    """E1 — 수집 꺼짐 · 특성 안내(7) 전 · 탭 안 보임 · 스스로 끔 → 요청 0. 다 맞으면 시작."""
+    with _TraitEnv() as env:
+        env.vis = "trait"
+        for setup in (lambda: setattr(config, "RANK_COLLECT", False),
+                      lambda: setattr(config, "NOTICE_ACCEPTED", config.TRAIT_NOTICE_VERSION - 1),
+                      lambda: setattr(env, "vis", None),
+                      lambda: _win.set_trait_off("blocked")):
+            config.RANK_COLLECT, config.NOTICE_ACCEPTED, env.vis = True, config.TRAIT_NOTICE_VERSION, "trait"
+            _win.set_trait_off("")
+            setup()
+            _win.start_visible_api_loader()
+            _win.start_trait()
+            assert _FakeTraitLoader.started == 0, "막혀야 할 때 특성 로더가 떴다"
+        config.RANK_COLLECT, config.NOTICE_ACCEPTED, env.vis = True, config.TRAIT_NOTICE_VERSION, "trait"
+        _win.set_trait_off("")
+        _win.start_visible_api_loader()
+        assert _FakeTraitLoader.started == 1 and _FakePickLoader.started == 0, "다 맞는데 안 떴다(위 단언이 빈 검사)"
+
+
+def test_trait_visible_needs_trait_key():
+    """진짜 보임 판정 — 지금 자리의 키가 TRAIT_KEY 여야 · TRAIT_KEY 는 PICK_KEYS 밖(넣으면 특성 탭에서 랭커 픽 로더가 뜬다)."""
+    assert app_main.MainWindow.TRAIT_KEY not in app_main.MainWindow.PICK_KEYS
+    _win._go_page("랭커 픽")
+    assert _win._ranker_pick_visible() and not _win._trait_visible()
+    _win._go_page("대시보드")
+
+
+def test_pick_to_trait_tab_starts_trait_after_pick_finishes():
+    """랭커 픽 → 특성 탭: 랭커 픽 로더는 멈추게만 · 그게 끝나면(finished) 특성이 뜬다(검토 3회차)."""
+    with _TraitEnv() as env:
+        env.vis = "pick"
+        _win.start_visible_api_loader()
+        pick = _win._pick_loader
+        env.vis = "trait"
+        _win.start_visible_api_loader()
+        assert pick.cancelled and _FakeTraitLoader.started == 0, "랭커 픽이 도는데 특성이 같이 떴다"
+        pick.end()
+        assert _FakeTraitLoader.started == 1, "랭커 픽이 끝났는데 특성이 안 떴다"
+        assert _FakePickLoader.started == 1, "특성 탭인데 랭커 픽을 다시 띄웠다"
+
+
+def test_trait_to_pick_tab_waits_trait():
+    with _TraitEnv() as env:
+        env.vis = "trait"
+        _win.start_visible_api_loader()
+        trait = _win._trait_loader
+        env.vis = "pick"
+        _win.start_visible_api_loader()
+        assert trait.cancelled and _FakePickLoader.started == 0, "특성이 도는데 랭커 픽이 같이 떴다(같은 장부 둘)"
+        trait.end()
+        assert _FakePickLoader.started == 1 and _FakeTraitLoader.started == 1
+
+
+def test_finished_loader_does_not_restart_itself():
+    """끝난 로더가 자기 자신을 다시 띄우지 않는다 — 받을 게 없어도 끝나자마자 다시 뜨는 반복(계획의 "무조건 다시 켜기" 대신)."""
+    with _TraitEnv() as env:
+        for side, fake in (("pick", _FakePickLoader), ("trait", _FakeTraitLoader)):
+            env.vis = side
+            _win.start_visible_api_loader()
+            n = fake.started
+            (_win._pick_loader if side == "pick" else _win._trait_loader).end()
+            assert fake.started == n, f"{side} 가 끝나자마자 다시 떴다"
+
+
+def test_pick_and_trait_loaders_exclusive():
+    """⑧ 하나씩 — 서로를 "돌고 있으면 기다림"으로 본다 · 검색이 돌면 둘 다 시작 안 함 · 새 검색에 둘 다 양보."""
+    with _TraitEnv() as env:
+        env.vis = "trait"
+        _win.start_trait()
+        _win.start_ranker_pick()
+        assert _FakeTraitLoader.started == 1 and _FakePickLoader.started == 0, "특성이 도는데 랭커 픽이 떴다"
+        _win._trait_loader.end()
+        env.vis = "pick"
+        _win.start_ranker_pick()
+        env.vis = "trait"
+        _win.start_trait()
+        assert _FakeTraitLoader.started == 1, "랭커 픽이 도는데 특성이 떴다"
+        _win._pick_loader.end()            # 끝나면 특성이 뜬다
+        trait = _win._trait_loader
+        _win._yield_trades()
+        assert trait.cancelled, "새 검색에 특성이 양보하지 않았다"
+        trait.end()
+        _win._loader = _FakeThread("검색", [])
+        _win.start_trait()
+        assert _FakeTraitLoader.started == 2, "검색이 도는데 특성이 떴다"
+
+
+def test_trait_stops_when_hidden_and_resumes_on_show():
+    with _TraitEnv() as env:
+        env.vis = "trait"
+        _win.start_visible_api_loader()
+        ld = _win._trait_loader
+        _win.hide()
+        assert ld.cancelled, "창을 숨겼는데 특성을 계속 받는다"
+        ld.end()
+        _win.show()
+        _app.processEvents()
+        assert _FakeTraitLoader.started == 2, "다시 보였는데 잇지 않았다"
+
+
+def test_trait_purge_waits_both_loaders():
+    """D4 — 지우기는 랭커 픽·특성 로더 둘 다 멈추게 하고 **둘 다** 끝난 뒤 한 번(특성 로더도 ranker_squads·matches 에 쓴다)."""
+    with _TraitEnv() as env:
+        calls = []
+        keep = store.purge_ranker_data
+        store.purge_ranker_data = lambda conn, **k: calls.append(k["everything"]) or 0
+        try:
+            env.vis = "pick"
+            _win.start_ranker_pick()
+            pick = _win._pick_loader
+            trait = _FakeTraitLoader(None)       # 하나씩이라 정상 길로는 둘이 같이 못 돈다 — 겹친 순간을 직접 만든다
+            trait.start()
+            trait.finished.connect(_win._on_trait_finished)
+            _win._trait_loader = trait
+            config.RANK_COLLECT = False
+            _win.sync_ranker_pick_data()
+            assert pick.cancelled and trait.cancelled and calls == [], "도는 로더를 두고 지웠다"
+            pick.end()
+            assert calls == [], "특성 로더가 아직 도는데 지웠다"
+            env.vis = "trait"
+            config.RANK_COLLECT = True
+            _win.start_trait()
+            assert _FakeTraitLoader.started == 1, "지우기가 기다리는 중에 특성이 떴다"
+            trait.end()
+            assert calls == [True], calls
+            # 특성 로더만 도는 중에 끈다 — 지우기가 랭커 픽 로더만 보면 여기서 바로 지운다
+            _win.start_trait()
+            trait = _win._trait_loader
+            config.RANK_COLLECT = False
+            _win.sync_ranker_pick_data()
+            assert trait.cancelled and calls == [True], ("특성 로더가 도는데 지웠다", calls)
+            trait.end()
+            assert calls == [True, True], calls
+            # 지우기 대기 상태에선 특성을 띄우지 않는다(랭커 픽 쪽과 같은 방어 — 상태를 직접 만들어 잰다)
+            config.RANK_COLLECT = True
+            _win._pick_purge_pending = True
+            n = _FakeTraitLoader.started
+            _win.start_trait()
+            assert _FakeTraitLoader.started == n, "지우기가 기다리는 중에 특성이 떴다"
+            _win._pick_purge_pending = False
+            _win.start_trait()
+            assert _FakeTraitLoader.started == n + 1, "대기가 풀렸는데 안 떴다(위 단언이 빈 검사)"
+        finally:
+            store.purge_ranker_data = keep
+
+
+def test_trait_block_three_days_turns_off():
+    """막힌 날이 TRAIT_BLOCK_DAYS 이어지면 특성 받기만 끈다(settings.ini — 화면 스레드) · 랭킹 수집은 그대로."""
+    with _TraitEnv() as env:
+        env.vis = "trait"
+        _win.start_trait()
+        _win._trait_loader.end(app_main.traitcollect.TraitRun(block_streak=config.TRAIT_BLOCK_DAYS - 1))
+        assert not _win._trait_off_reason()
+        _win.start_trait()
+        _win._trait_loader.end(app_main.traitcollect.TraitRun(block_streak=config.TRAIT_BLOCK_DAYS))
+        assert _win._trait_off_reason() == "blocked" and config.RANK_COLLECT
+        _win.start_trait()
+        assert _FakeTraitLoader.started == 2, "스스로 껐는데 다시 떴다"
+
+
+def test_visible_loader_after_notice():
+    """다시 묻는 동의 뒤 · 다른 오픈API 로더 끝 — 보이는 쪽(특성)을 켠다."""
+    with _TraitEnv() as env:
+        env.vis = "trait"
+
+        class _Notice:
+            def __init__(self, *a, **k):
+                pass
+
+            def exec(self):
+                return app_main.QDialog.DialogCode.Accepted
+
+        keep = app_main.NoticeDialog
+        app_main.NoticeDialog = _Notice
+        try:
+            _win.ask_notice_update()
+        finally:
+            app_main.NoticeDialog = keep
+        assert _FakeTraitLoader.started == 1, "동의 뒤 특성 탭인데 안 켰다"
+        _win._trait_loader.end()
+        _win._trade_loader = _FakeThread("거래", [], running=False)
+        _win._trade_again = False
+        _win._on_trade_thread_finished()
+        assert _FakeTraitLoader.started == 2, "거래가 끝났는데 특성이 안 이었다"
+        _win._trait_loader.end()
+        _win._on_ranker_finished()
+        assert _FakeTraitLoader.started == 3, "랭커 기록이 끝났는데 특성이 안 이었다"
+
+
+def test_every_api_loader_start_goes_through_one_function():
+    """랭커 픽을 켜는 자리는 start_visible_api_loader 하나 · 멈추는 자리는 stop_api_loaders 하나(+ 보이는 쪽을 켤 때 반대쪽).
+    새 자리가 start_ranker_pick 을 직접 부르면 특성 탭에서 랭커 픽을 켜거나 특성을 못 잇는다(검토 4회차)."""
+    import ast
+    src = pathlib.Path(app_main.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    allowed = {"start_ranker_pick": {"start_visible_api_loader"},
+               "_stop_ranker_pick": {"start_visible_api_loader", "stop_api_loaders"},
+               "start_trait": {"start_visible_api_loader", "_on_ranker_pick_finished"}}
+    bad = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Attribute) and node.attr in allowed and fn.name not in allowed[node.attr] \
+                    and fn.name != node.attr:
+                bad.append(f"{fn.name} → {node.attr} (줄 {node.lineno})")
+    assert not bad, bad
+    planted = "def f(self):\n    self._loader.finished.connect(self.start_ranker_pick)\n"
+    hit = [n for n in ast.walk(ast.parse(planted)) if isinstance(n, ast.Attribute) and n.attr == "start_ranker_pick"]
+    assert hit, "심은 위반을 못 잡는다 — 검사가 비었다"
+
+
+def test_shutdown_waits_trait_loader():
+    log = []
+    keep = _win._trait_loader
+    try:
+        _win._trait_loader = _FakeThread("특성", log)
+        left = _win.shutdown(fast=True)
+        assert _win._trait_loader in left and "stop 특성" in log, "종료 표에 특성 로더가 없다"
+    finally:
+        _win._trait_loader = keep
+
+
 def test_trait_purge_by_state():
     """32단계 D3·D5 배선 — 켤 때 정리(sync → purge_ranker_pick_data(everything=False))가 지금 스냅숏 상위 TRAIT_TOP 와
     .env 의 켠 시각을 prune_trait_squads 에 넘긴다 · 스냅숏이 없으면 순위 정리를 건너뛴다 · 수집이 꺼져 있으면 전부(D5 ①)."""

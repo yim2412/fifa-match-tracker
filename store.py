@@ -1125,6 +1125,13 @@ def budget_used(conn: sqlite3.Connection, day: str, kind: str) -> int:
 
 BUDGET_OPENAPI = "openapi"          # 다른 로더(검색·거래·랭커 기록)의 최종 429 표시만
 BUDGET_RANKER_PICK = "ranker_pick"
+# 포지션 특성(32단계) — 오픈API 는 ranker_pick 한 장부(429 도)에 더해 201~500 몫만 따로 센다(trait_share · 429 는 안 적는다).
+# 웹(스쿼드메이커)은 trait_web 이 하루 요청 · 그날 멈춤 표시는 hit_429 칸에: 막힘(403·429·Cloudflare)은 trait_web_block,
+# 응답 구조 바뀜은 trait_web_format — 막힘 날짜가 이어진 수(trait_block_streak)로 스스로 끈다
+BUDGET_TRAIT_SHARE = "trait_share"
+BUDGET_TRAIT_WEB = "trait_web"
+BUDGET_TRAIT_WEB_BLOCK = "trait_web_block"
+BUDGET_TRAIT_WEB_FORMAT = "trait_web_format"
 
 
 def budget_mark_429(conn: sqlite3.Connection, day: str, kind: str) -> None:
@@ -1138,6 +1145,21 @@ def budget_hit_429(conn: sqlite3.Connection, day: str, kinds=(BUDGET_OPENAPI, BU
     q = ",".join("?" * len(kinds))
     return conn.execute(f"SELECT 1 FROM api_budget WHERE day = ? AND kind IN ({q}) AND hit_429 = 1 LIMIT 1",
                         (day, *kinds)).fetchone() is not None
+
+
+def trait_block_streak(conn: sqlite3.Connection) -> int:
+    """특성 웹이 막힌 날이 몇 번 이어졌나 — 웹을 쓴 날(trait_web)을 최근부터 보며 막힘 표시가 있는 날을 센다.
+    막힘 없이 받은 날이 나오면 거기서 끊는다(안 연 날은 세지도 끊지도 않는다 — "서로 다른 날")."""
+    days: dict[str, bool] = {}
+    for day, kind in conn.execute("SELECT day, kind FROM api_budget WHERE kind IN (?, ?) AND (attempts > 0 OR hit_429 = 1)",
+                                  (BUDGET_TRAIT_WEB, BUDGET_TRAIT_WEB_BLOCK)):
+        days[day] = days.get(day, False) or kind == BUDGET_TRAIT_WEB_BLOCK
+    n = 0
+    for day in sorted(days, reverse=True):
+        if not days[day]:
+            break
+        n += 1
+    return n
 
 
 def mark_final_429(day: str, db_path: Path | str | None = None) -> None:
@@ -1210,6 +1232,12 @@ def save_trait_squad(conn: sqlite3.Connection, profile_sn: int, *, source: str, 
             "INSERT OR REPLACE INTO trait_squads (profile_sn, source, rank, match_id, formation, team, body, state,"
             " collect_on_at, match_day, checked_at, fail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (profile_sn, source, rank, match_id, formation, team, raw, state, collect_on_at, match_day, checked_at, fail))
+
+
+def touch_trait_squad(conn: sqlite3.Connection, profile_sn: int, *, rank, checked_at: str) -> None:
+    """경기가 그대로인 다시 확인(요청 0) — checked_at·순위만 새로. 안 그러면 경기를 안 한 랭커의 줄이 14일 정리에 지워진다(검토 B)."""
+    with conn:
+        conn.execute("UPDATE trait_squads SET checked_at = ?, rank = ? WHERE profile_sn = ?", (checked_at, rank, profile_sn))
 
 
 def prune_trait_squads(conn: sqlite3.Connection, *, on_at: str | None, keep: set[int] | None = None,

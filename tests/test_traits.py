@@ -524,6 +524,365 @@ def test_trait_purge_when_reenabled_in_old_version():
     assert store.prune_trait_squads(conn, on_at=None, today=TODAY) == 0, "둘 다 None 인데 지웠다"
 
 
+# ── 단계 3 — 받기(오픈API 대상별 주기·몫 · 웹 · 한 바퀴) ─────────────────────────
+# 오픈API 쪽 가짜(FakeAPI · 지어낸 경기)는 test_rankerpick 것을 그대로 — 랭커 i 의 선발은 _squad(7000 + i % 3) · 강화 1 + spid % 8
+
+import test_rankerpick as trp  # noqa: E402
+
+NOW = trp.NOW
+DAY = NOW.date().isoformat()
+
+
+def _ranked(ranks) -> tuple[list[dict], "trp.FakeAPI"]:
+    """순위마다 랭커 하나 — sn·닉네임·ouid·경기 id 가 순위로 정해져 구간을 섞어도 안 겹친다. 선발 = _squad_of."""
+    targets, players = [], {}
+    for rank in ranks:
+        nick, ouid = f"랭커{rank}", f"r{rank}"
+        targets.append({"rank": rank, "profile_sn": 5000 + rank, "nickname": nick, "team_color": "팀A", "formation": "4-1-2-3"})
+        players[nick] = (ouid, trp._match(f"rm{rank}", NOW.date(), [(ouid, nick, _squad_of(rank)),
+                                                                   (f"x{rank}", f"상대{rank}", trp._squad(8000))]))
+    return targets, trp.FakeAPI(players)
+
+
+def _squad_of(rank: int) -> list[int]:
+    return trp._squad(7000 + 100 * (rank % 3))
+
+
+def _targets(n: int, start_rank: int = 1):
+    return _ranked(range(start_rank, start_rank + n))
+
+
+class _Web:
+    """가짜 스쿼드메이커 — sn → {팀: 칸}. 칸이 없으면 빈칸(None). calls 에 (sn, 팀). errors: 순번(1부터) → TraitError."""
+
+    def __init__(self):
+        self.cells: dict[int, dict[tuple[int, int], list]] = {}
+        self.calls: list[tuple[int, tuple[int, int]]] = []
+        self.errors: dict[int, Exception] = {}
+
+    def put(self, sn: int, team: tuple[int, int], spids: list[int], build=None, traits=(28, 55, 13)):
+        self.cells.setdefault(sn, {})[team] = [
+            tc.TeamCard(s, 1, (1 + s % 8) if build is None else build, traits, None) for s in spids]
+
+    def __call__(self, _session, sn, team_type, part):
+        self.calls.append((sn, (team_type, part)))
+        e = self.errors.get(len(self.calls))
+        if e is not None:
+            raise e
+        return self.cells.get(sn, {}).get((team_type, part))
+
+
+def _picked(api, conn, targets, **kw):
+    """랭커 픽 길로 마지막 경기를 받아 둔다(1~200 이 이미 받아 둔 상태)."""
+    return trp._collect(api, conn, targets, **kw)
+
+
+def _web_collect(web, conn, targets, now=NOW, **kw):
+    clk = trp.Clock()
+    return tc.collect(None, conn, targets, on_at=ON_AT, now_fn=lambda: now, sleep=clk.sleep, clock=clk, fetch=web, **kw)
+
+
+def _cfg(**kw):
+    """config 상수를 잠깐 바꾼다 — with 문으로."""
+    class _C:
+        def __enter__(self):
+            self.keep = {k: getattr(config, k) for k in kw}
+            for k, v in kw.items():
+                setattr(config, k, v)
+
+        def __exit__(self, *exc):
+            for k, v in self.keep.items():
+                setattr(config, k, v)
+            return False
+    return _C()
+
+
+def test_due_mixed_targets_order():
+    """한 번에 부를 때 대상마다 주기가 다르다 — 1~200(3일)은 4일 전이면 다시, 201~500(10일)은 4일 전이면 아직.
+    순서: 정리 임박(받은 지 12일 넘음) → 처음 보는 사람(순위 순) → 나머지 다시 확인(오래된 순)."""
+    have = {}
+    t = []
+    for sn, rank, ago, cycle in ((1, 1, 4, None), (2, 300, 4, 10), (3, 301, 11, 10), (4, 2, 13, None),
+                                 (5, 302, None, 10), (6, 3, None, None), (7, 303, 13, 10)):
+        d = {"rank": rank, "profile_sn": sn, "nickname": f"n{sn}"}
+        if cycle:
+            d["stale_days"] = cycle
+        t.append(d)
+        if ago is not None:
+            have[sn] = {"nickname": f"n{sn}", "fetched_at": (NOW - timedelta(days=ago)).isoformat(timespec="seconds")}
+    got = [d["profile_sn"] for d in tc.rankerpick.due(t, have, NOW)]
+    assert 2 not in got, "201~500 이 3일 주기로 다시 물렸다(대상별 주기가 안 먹었다)"
+    assert got == [4, 7, 5, 6, 3, 1], got
+
+
+def test_trait_recheck_before_prune():
+    """정리(14일)에 닿기 전에 다시 묻는다 — 몫이 한 명분뿐인 날, 처음 보는 사람보다 12일 넘은 줄이 먼저(검토 A·B)."""
+    conn = store.open_db(":memory:")
+    targets, api = _targets(2, start_rank=201)
+    old = trp._collect(api, conn, targets[:1], now_fn=lambda: NOW - timedelta(days=config.RANK_RAW_KEEP_DAYS - 1))
+    assert old.checked == 1
+    with _cfg(TRAIT_API_SHARE=2):   # 첫 사람은 ouid 가 있어 2요청이면 한 명분
+        res = trp._collect(api, conn, tc.api_targets(targets))
+    rows = store.ranker_squads(conn)
+    assert rows[targets[0]["profile_sn"]]["fetched_at"].startswith(DAY), "정리 임박 줄을 다시 안 물었다"
+    assert targets[1]["profile_sn"] not in rows and res.share_spent, "몫이 없는데 처음 보는 사람을 받았다"
+
+
+def test_trait_share_leaves_pick_reserve():
+    """특성 몫(201~500)은 TRAIT_API_SHARE 까지만 — 그 뒤 1~200 은 합계(300)가 남는 한 계속 받는다."""
+    conn = store.open_db(":memory:")
+    both, api_a = _ranked([201, 202, 203, 204, 205, 1, 2, 3])
+    low, top = both[:5], both[5:]
+    with _cfg(TRAIT_API_SHARE=6):
+        res = trp._collect(api_a, conn, tc.api_targets(low + top))
+    used = store.budget_used(conn, DAY, store.BUDGET_TRAIT_SHARE)
+    assert used == 6 and res.share_spent, (used, res)
+    rows = store.ranker_squads(conn)
+    assert sum(1 for t in low if t["profile_sn"] in rows) == 2, "몫 6 = 두 명분(3요청씩)"
+    assert all(t["profile_sn"] in rows for t in top), "몫이 바닥난 뒤 1~200 을 안 받았다"
+    assert store.budget_used(conn, DAY, store.BUDGET_RANKER_PICK) == 6 + 9, "합계는 한 장부(ranker_pick)"
+
+
+def test_pick_recheck_continues_after_share_spent():
+    """몫 바닥은 그 대상만 건너뛴다(_ShareLimit) · 합계 바닥만 반복을 끝낸다(_Limit) — 몫 대상이 앞에 줄 서 있어도
+    1~200 다시 확인이 매일 잘리지 않게. 한 명분 검사를 지나도 몫이 바닥나는 길(429 다시 시도)을 직접 만든다."""
+    conn = store.open_db(":memory:")
+    both, api = _ranked([201, 1])
+    low, top = both[:1], both[1:]
+    api.errors[1] = trp.NexonAPIError("한도", code=trp.QUOTA_CODE, status=429)   # 첫 요청이 429 → 다시 시도가 몫을 하나 더
+    with _cfg(TRAIT_API_SHARE=3, RANKER_PICK_429_WAIT_S=1):
+        res = trp._collect(api, conn, tc.api_targets(low + top))
+    rows = store.ranker_squads(conn)
+    assert res.share_spent and not res.limit, res
+    assert low[0]["profile_sn"] not in rows, "몫이 중간에 바닥났는데 반쪽 줄을 저장했다"
+    sn = top[0]["profile_sn"]
+    assert sn in rows and rows[sn]["match_id"], "몫 바닥 뒤 1~200 을 끝내 버렸다(합계 바닥과 같은 예외)"
+
+
+def test_trait_share_whole_person():
+    """몫 대상은 한 명분(ouid 없으면 3)을 남은 몫으로 시작할 수 있을 때만 — 몫 경계에서 ouid 만 받고 끊기지 않는다.
+    몫은 합계를 센 뒤에만 센다(합계가 바닥나 못 보낸 요청이 몫에 잡히지 않게)."""
+    conn = store.open_db(":memory:")
+    low, api = _targets(3, start_rank=201)
+    with _cfg(TRAIT_API_SHARE=5):
+        res = trp._collect(api, conn, tc.api_targets(low))
+    assert res.requests == 3 and store.budget_used(conn, DAY, store.BUDGET_TRAIT_SHARE) == 3, res
+    assert all(name != "ouid" for name, *_ in api.calls[3:]), "남은 몫 2 로 새 사람을 시작했다"
+    conn2 = store.open_db(":memory:")
+    with _cfg(TRAIT_API_SHARE=100, RANKER_PICK_DAILY_REQ=4):
+        low2, api2 = _targets(3, start_rank=201)
+        res = trp._collect(api2, conn2, tc.api_targets(low2))
+    assert res.limit and store.budget_used(conn2, DAY, store.BUDGET_RANKER_PICK) == 4
+    assert store.budget_used(conn2, DAY, store.BUDGET_TRAIT_SHARE) == 4, "합계에서 막힌 요청이 몫에 잡혔다"
+
+
+def test_trait_respects_search_429():
+    """429 는 한 키 한 장부 — 검색·거래·랭커 기록의 최종 429(openapi) 표시가 있으면 특성 로더의 오픈API 요청도 0."""
+    conn = store.open_db(":memory:")
+    targets, api = _targets(3, start_rank=201)
+    store.budget_mark_429(conn, DAY, store.BUDGET_OPENAPI)
+    out = tc.run(api, None, conn, targets, on_at=ON_AT, now_fn=lambda: NOW, fetch=_Web(), sleep=lambda s: None)
+    assert out.pick is not None and out.pick.quota and api.calls == [], (out.pick, api.calls)
+
+
+def test_trait_web_collects_and_stops_at_matching_team():
+    conn = store.open_db(":memory:")
+    targets, api = _targets(2)
+    _picked(api, conn, targets)
+    web = _Web()
+    for t in targets:
+        web.put(t["profile_sn"], (1, 1), _squad_of(t["rank"]))
+    res = _web_collect(web, conn, targets)
+    assert res.checked == 2 and res.cards == 22 and res.requests == 4, res
+    row = store.trait_squads(conn)[targets[0]["profile_sn"]]
+    assert row["state"] == "ok" and row["team"] == "1-1" and row["collect_on_at"] == ON_AT, row
+    assert row["formation"] and row["match_day"] == DAY and len(row["body"]) == 11, row
+    assert store.budget_used(conn, DAY, store.BUDGET_TRAIT_WEB) == 4, "실제 요청만큼 계수"
+    # 같은 경기면 요청 0 · 다음에 경기가 바뀌면 지난번 팀부터(1요청)
+    res = _web_collect(web, conn, targets)
+    assert res.requests == 0 and res.checked == 0
+    store.save_matches(conn, [trp._match("새경기", NOW.date(), [("r1", "랭커1", _squad_of(1))])])
+    store.save_ranker_squad(conn, targets[0]["profile_sn"], nickname=targets[0]["nickname"], ouid="r1", rank=1,
+                            match_id="새경기", match_day=DAY, fetched_at=NOW.isoformat(), fail=None, source=store.PICK)
+    web.calls.clear()
+    res = _web_collect(web, conn, targets[:1])
+    assert web.calls == [(targets[0]["profile_sn"], (1, 1))], web.calls
+
+
+def test_trait_stale_retried_after_days():
+    """6칸 다 안 맞으면 stale 로 저장 — 경기가 그대로면 TRAIT_STALE_RETRY_DAYS 뒤에만 다시."""
+    conn = store.open_db(":memory:")
+    targets, api = _targets(1)
+    _picked(api, conn, targets)
+    web = _Web()
+    res = _web_collect(web, conn, targets)
+    assert res.stale == 1 and res.requests == 6 and store.trait_squads(conn)[targets[0]["profile_sn"]]["state"] == "stale"
+    days = config.TRAIT_STALE_RETRY_DAYS
+    assert _web_collect(web, conn, targets, now=NOW + timedelta(days=days - 1)).requests == 0, "stale 을 바로 다시 봤다"
+    assert _web_collect(web, conn, targets, now=NOW + timedelta(days=days, seconds=1)).requests == 6
+
+
+def test_trait_row_survives_same_match_recheck():
+    """경기 id 가 같아도 오픈API 다시 확인이 지나가면 checked_at 을 새로(요청 0) — 안 그러면 경기를 안 한 랭커의 줄이
+    14일 정리에 지워진다(검토 B). 줄이 없으면 경기 id 와 상관없이 웹을 본다."""
+    conn = store.open_db(":memory:")
+    targets, api = _targets(1)
+    _picked(api, conn, targets)
+    web = _Web()
+    web.put(targets[0]["profile_sn"], (1, 0), _squad_of(1))
+    _web_collect(web, conn, targets)
+    later = NOW + timedelta(days=4)
+    trp._collect(api, conn, targets, now_fn=lambda: later)            # 3일 지나 다시 확인 — 같은 경기
+    res = _web_collect(web, conn, targets, now=later)
+    assert res.touched == 1 and res.requests == 0, res
+    row = store.trait_squads(conn)[targets[0]["profile_sn"]]
+    assert row["checked_at"].startswith(later.date().isoformat()), row["checked_at"]
+    store.prune_trait_squads(conn, on_at=ON_AT, today=NOW.date() + timedelta(days=config.RANK_RAW_KEEP_DAYS + 2))
+    assert store.trait_squads(conn), "다시 확인한 줄이 14일 정리에 지워졌다"
+    conn.execute("DELETE FROM trait_squads")
+    conn.commit()
+    assert _web_collect(web, conn, targets, now=later).checked == 1, "줄이 없는데 같은 경기라고 안 봤다"
+
+
+def test_trait_skips_old_match_and_failed_rows():
+    """마지막 경기가 RANKER_PICK_MAX_AGE_DAYS 넘었거나 · 실패 줄 · 닉네임이 바뀐 사람은 웹을 안 본다(요청 0)."""
+    conn = store.open_db(":memory:")
+    targets, api = _targets(1)
+    _picked(api, conn, targets)
+    web = _Web()
+    later = NOW + timedelta(days=config.RANKER_PICK_MAX_AGE_DAYS + 1)
+    assert _web_collect(web, conn, targets, now=later).requests == 0, "오래된 경기에 웹을 썼다"
+    renamed = [dict(targets[0], nickname="새이름")]
+    assert _web_collect(web, conn, renamed).requests == 0, "닉네임이 바뀌었는데 옛 경기로 봤다"
+    assert _web_collect(web, conn, targets).requests == 6, "볼 사람을 거른 게 아니라 다 막았다(위 단언이 빈 검사)"
+
+
+def test_trait_loader_budget():
+    """웹 하루 상한 trait_web — 실제 요청 직전에만 세고, 닿으면 그 사람 저장 없이 멈춘다 · 다시 켜도 계수가 남는다."""
+    conn = store.open_db(":memory:")
+    targets, api = _targets(3)
+    _picked(api, conn, targets)
+    with _cfg(TRAIT_WEB_DAILY_REQ=8):
+        res = _web_collect(_Web(), conn, targets)
+        assert res.limit and res.requests == 8 and res.checked == 1, res
+        assert len(store.trait_squads(conn)) == 1, "상한에 끊긴 사람을 반쪽으로 저장했다"
+        assert _web_collect(_Web(), conn, targets).requests == 0
+
+
+def test_trait_web_gap_between_requests():
+    conn = store.open_db(":memory:")
+    targets, api = _targets(1)
+    _picked(api, conn, targets)
+    clk = trp.Clock()
+    tc.collect(None, conn, targets, on_at=ON_AT, now_fn=lambda: NOW, sleep=clk.sleep, clock=clk, fetch=_Web())
+    assert len(clk.slept) == 5 and all(abs(s - config.RANKER_PICK_GAP_S) < 1e-9 for s in clk.slept), clk.slept
+
+
+def test_trait_web_stops_for_the_day_on_block_and_format():
+    """막힘(rate) · 형식 바뀜(format) → 그날 멈춤 표시(각각 따로) · 다시 켜도 요청 0. 넘김·연결(down)은 이번만."""
+    for kind, mark in (("rate", store.BUDGET_TRAIT_WEB_BLOCK), ("format", store.BUDGET_TRAIT_WEB_FORMAT)):
+        conn = store.open_db(":memory:")
+        targets, api = _targets(2)
+        _picked(api, conn, targets)
+        web = _Web()
+        web.errors[2] = tc.TraitError("x", kind)
+        res = _web_collect(web, conn, targets)
+        assert res.stop == kind and res.error == tc.MESSAGES[kind] and store.budget_hit_429(conn, DAY, (mark,)), res
+        assert store.trait_squads(conn) == {}, "멈춘 사람을 저장했다"
+        n = len(web.calls)
+        res = _web_collect(web, conn, targets)
+        assert res.stop == kind and len(web.calls) == n, "그날 다시 요청했다"
+    conn = store.open_db(":memory:")
+    targets, api = _targets(1)
+    _picked(api, conn, targets)
+    web = _Web()
+    web.errors[1] = tc.TraitError("x", "down")
+    assert _web_collect(web, conn, targets).stop == "down"
+    assert _web_collect(web, conn, targets).requests == 6, "연결 실패로 그날을 막았다"
+
+
+def test_trait_block_streak():
+    """막힌 날이 이어진 수 — 막힘 없이 받은 날에서 끊는다 · 안 연 날은 세지도 끊지도 않는다."""
+    conn = store.open_db(":memory:")
+
+    def web_day(day, blocked):
+        store.budget_take(conn, day, store.BUDGET_TRAIT_WEB, None)
+        if blocked:
+            store.budget_mark_429(conn, day, store.BUDGET_TRAIT_WEB_BLOCK)
+
+    web_day("2026-10-01", True)
+    web_day("2026-10-02", False)
+    web_day("2026-10-03", True)
+    web_day("2026-10-05", True)
+    assert store.trait_block_streak(conn) == 2
+    web_day("2026-10-06", True)
+    assert store.trait_block_streak(conn) == config.TRAIT_BLOCK_DAYS == 3
+
+
+def test_trait_run_order_and_records_pick_days():
+    """한 바퀴 = 웹(이미 경기가 있는 1~200) → 오픈API(1~200 + 201~500 몫) → 웹(새로 받은 경기).
+    오픈API 바퀴가 끝까지 돌면 1~200 만 record_days 로(N15 — 검토 3회차) · cancel 이면 안 센다."""
+    conn = store.open_db(":memory:")
+    both, api = _ranked([1, 2, 201])
+    top, low = both[:2], both[2:]
+    _picked(api, conn, top[:1])
+    web = _Web()
+    for t in both:
+        web.put(t["profile_sn"], (1, 0), _squad_of(t["rank"]))
+    days = []
+    out = tc.run(api, None, conn, top + low, on_at=ON_AT, now_fn=lambda: NOW, fetch=web, sleep=lambda s: None,
+                 record_days=days.append)
+    assert len(out.web) == 2 and out.web[0].checked == 1 and out.web[1].checked == 2, out
+    assert [t["rank"] for t in days[0]] == [1, 2], days
+    assert sorted(store.trait_squads(conn)) == sorted(t["profile_sn"] for t in top + low)
+    days.clear()
+    n = len(api.calls)
+    stop = [False]
+    ids = api.get_match_ids
+    api.get_match_ids = lambda *a, **k: (stop.__setitem__(0, True), ids(*a, **k))[1]   # 오픈API 단계 안에서 끊는다
+    out = tc.run(api, None, conn, top + low, on_at=ON_AT, now_fn=lambda: NOW + timedelta(days=11), fetch=web,
+                 sleep=lambda s: None, record_days=days.append, cancel=lambda: stop[0])
+    assert out.pick is not None and out.pick.cancelled and len(api.calls) > n, "오픈API 단계까지 안 갔다(빈 검사)"
+    assert days == [], "cancel 로 끊긴 바퀴를 셌다"
+
+
+def test_trait_run_skips_openapi_when_web_stopped():
+    conn = store.open_db(":memory:")
+    targets, api = _targets(1)
+    _picked(api, conn, targets)
+    store.budget_mark_429(conn, DAY, store.BUDGET_TRAIT_WEB_BLOCK)
+    n = len(api.calls)
+    out = tc.run(api, None, conn, targets, on_at=ON_AT, now_fn=lambda: NOW, fetch=_Web(), sleep=lambda s: None)
+    assert out.pick is None and len(api.calls) == n, out
+    assert out.block_streak == 1, "막힘으로 멈춘 바퀴가 이어진 날 수를 안 실었다(화면이 스스로 끄는 근거)"
+
+
+def test_trait_api_targets():
+    rows = [{"rank": r, "profile_sn": r, "nickname": str(r)} for r in (1, 200, 201, 500, 501)]
+    got = {t["rank"]: t for t in tc.api_targets(rows)}
+    assert sorted(got) == [1, 200, 201, 500], "501위가 들어갔다"
+    assert "share" not in got[200] and "stale_days" not in got[200], "1~200 에 몫·주기를 실었다"
+    assert got[201]["share"] == "trait" and got[201]["stale_days"] == config.TRAIT_STALE_DAYS
+
+
+def test_trait_share_constant():
+    """몫 = 300 − 1~200 다시 확인(67명 × 2) − 추천 ③(20 × 3) = 106 — 숫자를 박지 않고 상수에서 나온다."""
+    assert config.TRAIT_API_SHARE == 106
+    assert config.TRAIT_STALE_DAYS < config.RANK_RAW_KEEP_DAYS - config.TRAIT_RECHECK_MARGIN_DAYS, "주기가 정리 임박보다 길다"
+
+
+def test_trait_disk_budget():
+    """201~500 의 마지막 경기 300개가 matches 에 같이 쌓인다 — 가짜 경기 300개(양쪽 선발 11 + 교체) · 상한 15MB."""
+    d, conn = _file_db()
+    ds = [trp._match(f"t{i:04d}", NOW.date(), [(f"a{i}", f"가{i}", trp._squad(100000000 + i * 11)),
+                                              (f"b{i}", f"나{i}", trp._squad(200000000 + i * 11))]) for i in range(300)]
+    store.save_matches(conn, ds)
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
+    size = (d / "fifa.db").stat().st_size
+    assert size < 15 * 1024 * 1024, size
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -14,6 +14,8 @@ ouid(닉네임이 그대로면 캐시) → 최근 경기 id 1 → 상세(이미 
 | 429 → `RANKER_PICK_429_WAIT_S` 쉬고(1초씩 쪼개 cancel 을 본다) 한 번 더 → 또 429 면 그날 `hit_429` | `_Session.call` |
 | 그날 다른 로더의 최종 429(`openapi`) 나 랭커 픽 429 가 있으면 시작 안 함 | `collect` 머리 |
 | 3일 안에 받은 랭커는 다시 안 묻는다 — 단 스냅숏 닉네임이 바뀌었으면 바로 | `due` |
+| 순서: 받은 지 12일 넘어 정리 임박 → 처음 보는 사람 → 나머지 다시 확인 | `due` |
+| 대상마다 주기(`stale_days`)·몫(`share` — 특성 201~500)을 싣고 한 번에 부른다 · 몫 바닥은 그 대상만 건너뛰고 합계 바닥만 끝낸다 · 몫 대상은 한 명분이 남을 때만 시작 | `collect` · `_Session.call` |
 | 실패(닉네임 바뀜 등)도 `fail`·`fetched_at` 을 적는다 — 탭을 열 때마다 다시 시도하지 않게 | `collect` |
 | 같은 경기를 다시 확인하면 `ranker_matches.fetched_on` 을 오늘로 — 14일 정리에 안 지워지게 | `store.mark_ranker_match` |
 
@@ -59,6 +61,7 @@ class PickResult:
     quota: bool = False     # 429 로 멈춤(이번 또는 그날 앞서)
     cancelled: bool = False
     error: str = ""         # 네트워크 등 — 다음 기회에 이어서
+    share_spent: bool = False   # 몫(특성 201~500)이 바닥나 몫 대상을 건너뛰었다 — 다른 대상은 계속 받았다
 
 
 class _Stop(Exception):
@@ -67,6 +70,15 @@ class _Stop(Exception):
 
 class _Limit(Exception):
     pass
+
+
+class _ShareLimit(Exception):
+    """몫 바닥 — 그 대상만 건너뛴다. 합계 바닥(_Limit)은 반복을 끝낸다 — 같은 예외면 둘을 못 가른다(32단계 검토 4회차)."""
+
+
+# 몫 이름(대상 dict 의 "share") → (계수 종류, 상한). 상한은 부를 때 읽는다(테스트가 config 를 바꾼다)
+SHARES = {"trait": (store.BUDGET_TRAIT_SHARE, lambda: config.TRAIT_API_SHARE)}
+PERSON_MAX_REQ = 3   # 한 명분 최대 요청(ouid · 목록 · 상세) — 몫 대상은 이만큼 남았을 때만 시작한다
 
 
 class _Quota(Exception):
@@ -89,12 +101,19 @@ class _Session:
                 self.sleep(wait)
         self._last = self.clock()
 
-    def call(self, fn):
+    def call(self, fn, share: str | None = None):
+        """share = 몫 이름(SHARES) — 몫은 보기만 하고 합계를 센 뒤에 센다(합계에서 실패했는데 몫만 세지지 않게)."""
         for attempt in (0, 1):
             if self.cancel():
                 raise _Stop
+            if share is not None:
+                kind, cap = SHARES[share]
+                if store.budget_used(self.conn, self.day, kind) >= cap():
+                    raise _ShareLimit
             if not store.budget_take(self.conn, self.day, self.kind, self.cap):
                 raise _Limit
+            if share is not None:
+                store.budget_take(self.conn, self.day, SHARES[share][0], None)
             self._gap()
             self.res.requests += 1
             try:
@@ -149,18 +168,26 @@ def snapshot_index(rank_conn) -> dict[str, tuple[int, str]]:
 
 
 def due(targets: list[dict], have: dict[int, dict], now: datetime, stale_days: float | None = None) -> list[dict]:
-    """다시 물을 랭커 — 처음 보는 사람 · 닉네임이 바뀐 사람 먼저, 그다음 오래전에 받은 순. 3일 안에 받은 사람은 뺀다."""
+    """다시 물을 랭커 — ① 받은 지 오래돼 14일 정리에 곧 지워질 사람 ② 처음 보는 사람 · 닉네임이 바뀐 사람(대상 순서 = 순위 순)
+    ③ 나머지 다시 확인(오래전에 받은 순). 주기(기본 3일) 안에 받은 사람은 뺀다.
+    대상 dict 의 "stale_days" 가 있으면 그 대상만 그 주기(32단계 — 1~200 은 3일 · 201~500 은 10일을 한 번에 부른다:
+    구간마다 따로 부르면 앞 호출의 처음 보는 사람이 몫을 먼저 써서 뒤 구간의 정리 임박 줄이 지워진다, 검토 A).
+    ① 이 ② 보다 앞인 이유: 처음 보는 사람을 먼저 받으면 첫 바퀴 동안 첫날 받은 줄이 정리에 걸려 지워지고
+    다시 "처음 보는 사람"이 된다(검토 A·B)."""
     days = config.RANKER_PICK_STALE_DAYS if stale_days is None else stale_days
-    stale_before = (now - timedelta(days=days)).isoformat(timespec="seconds")
+    prune_soon = (now - timedelta(days=config.RANK_RAW_KEEP_DAYS - config.TRAIT_RECHECK_MARGIN_DAYS)).isoformat(
+        timespec="seconds")
     out = []
     for t in targets:
         h = have.get(t["profile_sn"])
         if h is None or h.get("nickname") != t["nickname"]:
-            out.append(("", t))
-        elif (h.get("fetched_at") or "") < stale_before:
-            out.append((h.get("fetched_at") or "", t))
-    out.sort(key=lambda x: x[0])
-    return [t for _, t in out]
+            out.append((1, "", t))
+            continue
+        got = h.get("fetched_at") or ""
+        if got < (now - timedelta(days=t.get("stale_days", days))).isoformat(timespec="seconds"):
+            out.append((0 if got < prune_soon else 2, got, t))
+    out.sort(key=lambda x: (x[0], x[1]))
+    return [t for *_k, t in out]
 
 
 def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=datetime.now,
@@ -168,6 +195,10 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
             on_ranker: Callable[[], None] | None = None, budget_kind: str = store.BUDGET_RANKER_PICK,
             daily_cap: int | None = None, stale_days: float | None = None) -> PickResult:
     """다시 물을 랭커를 차례로 받는다. 한 랭커 = 저장 몇 번(각각 한 트랜잭션) — 끊겨도 다음 기회에 이어서.
+
+    대상 dict 마다 "stale_days"(주기)·"share"(몫 이름 — SHARES)를 실을 수 있다(없으면 인자 값 · 출처는 저장 때 순위로).
+    몫 대상은 몫과 합계 둘 다 남을 때만 받고, 몫이 바닥나면 **그 대상만 건너뛰고** 계속한다 — 합계가 바닥날 때만 끝낸다
+    (안 그러면 첫 바퀴 동안 몫이 다 차는 순간 뒤에 줄 선 1~200 다시 확인이 매일 잘린다 · 32단계 U7).
 
     budget_kind·daily_cap·stale_days 는 다른 키로 도는 개발용 수집(tools/dev_archive.py)만 바꾼다 — 그 키의 계수·429 는
     앱 키와 따로 센다(앱 키의 429 가 그쪽을 막거나, 그쪽 429 가 앱을 막지 않게)."""
@@ -186,12 +217,19 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
         sn, nick = t["profile_sn"], t["nickname"]
         h = have.get(sn) or {}
         ouid = h.get("ouid") if h.get("nickname") == nick else None
+        share = t.get("share")
+        if share is not None:
+            # 한 명분을 남은 몫으로 시작할 수 있을 때만 — ouid 만 받고 끊기면 저장이 안 돼 다음 날 그 요청을 다시 낸다
+            kind, cap = SHARES[share]
+            if store.budget_used(conn, day, kind) + PERSON_MAX_REQ - (1 if ouid else 0) > cap():
+                res.share_spent = True
+                continue
         mid = mday = fail = None
         try:
             try:
                 if not ouid:
-                    ouid = s.call(lambda: api.get_ouid(nick, attempts=1))
-                ids = s.call(lambda: api.get_match_ids(ouid, config.DEFAULT_MATCH_TYPE, 0, 1, attempts=1))
+                    ouid = s.call(lambda: api.get_ouid(nick, attempts=1), share)
+                ids = s.call(lambda: api.get_match_ids(ouid, config.DEFAULT_MATCH_TYPE, 0, 1, attempts=1), share)
                 if not ids:
                     fail = "최근 감독모드 경기 없음"
                 else:
@@ -199,7 +237,7 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
                     if not store.has_match(conn, mid):
                         detail = api.cached_detail(mid)  # .cache 적중은 요청이 아니라 계수 안 함
                         if detail is None:
-                            detail = s.call(lambda: api.get_match_detail(mid, attempts=1))
+                            detail = s.call(lambda: api.get_match_detail(mid, attempts=1), share)
                         store.save_matches(conn, [detail])
                         api.forget_details([mid])
                     stored = store.load_match(conn, mid)
@@ -213,6 +251,9 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
         except _Stop:
             res.cancelled = True
             break
+        except _ShareLimit:
+            res.share_spent = True   # 한 명분 검사 뒤에도 429 다시 시도가 몫을 더 쓸 수 있다 — 그 대상만 건너뛴다(저장 안 함)
+            continue
         except _Limit:
             res.limit = True
             break

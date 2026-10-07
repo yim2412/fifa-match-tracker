@@ -7,9 +7,22 @@
 (teamcolor 와 같다) 넘김은 따라가지 않고 오류로 본다(allow_redirects=False). 로그인 없이 남의 구단주도 열려 있다(ROADMAP 32단계 "단계" 0).
 요청은 `ranker.web_get`(동시 상한) 경유 · 첫 줄에서 `config.WEB_DATA` 가 꺼져 있으면 요청 0.
 
-한 사람의 흐름(이 파일은 계산·요청만 — 저장·로더는 다음 단계):
+한 사람의 흐름(`collect` — 로더는 app_main.TraitLoader):
   마지막 경기 선발 11 (spid, 자리, 강화) → 팀 칸(대표·클럽 × A·B·C = 6) 을 차례로 받아 **경기 선발 카드가 다 있는 팀**을 찾는다 →
   경기 카드마다 (spid, 자리, 강화, 특성3, 코치3). 맞는 팀을 찾으면 **거기서 멈춘다**(`find_team`) · 6칸 다 안 맞으면 `stale`(낡은 웹 값).
+  구단주 번호는 묻지 않는다 — 랭킹 스냅숏의 profile_sn 이 스쿼드메이커 sn 과 같다(2026-10-07 실측 3/3 · getownerinfo 는 check_api 만).
+  마지막 경기는 랭커 픽 길(rankerpick.collect)이 ranker_squads·matches 에 둔 것을 읽는다 — 이 파일은 오픈API 를 안 부른다.
+
+받는 규칙(`collect`):
+| 규칙 | 어디 |
+|---|---|
+| 웹을 보는 사람: 특성 줄이 없음 · 경기 id 가 바뀜 · 낡은 값(stale)이고 TRAIT_STALE_RETRY_DAYS 지남 | `_web_due` |
+| 경기가 그대로면 요청 0 — 오픈API 다시 확인이 지나갔으면 checked_at 만 새로(14일 정리에 안 지워지게) | `collect` |
+| 마지막 경기가 RANKER_PICK_MAX_AGE_DAYS 넘은 사람은 웹을 안 본다(집계가 어차피 뺀다) | `_web_due` |
+| 지난번 팀 칸을 먼저(대개 1요청) | `collect` → `find_team(order=…)` |
+| 실제 요청 직전에만 하루 계수(`trait_web` < TRAIT_WEB_DAILY_REQ) · 간격 RANKER_PICK_GAP_S | `_fetcher` |
+| 막힘(rate) → 그날 멈춤 + `trait_web_block` 표시 · 형식 바뀜(format) → 그날 멈춤 + `trait_web_format` · 넘김·연결(down)은 이번만 | `collect` |
+| 한 사람 = 한 트랜잭션(끊겨도 반쪽 줄이 안 남는다) · cancel 은 요청 사이에서 | `store.save_trait_squad` |
 
 함정(2026-10-07 실측 — 25명 × 60칸 1,500요청):
 - **`traits` 는 길이 3 이거나 `[-2]` 하나다**(칸이 전부 잠긴 카드 — 8,297칸). 길이 3 만 허용하면 그 카드마다 "형식 바뀜"으로 오판한다 → `[-2]` 는 (-2,-2,-2) 로 편다.
@@ -21,14 +34,19 @@
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Callable, Iterable
 
 import requests
 
 import config
 import ranker  # web_get(동시 상한)
+import rankerpick
+import store
 import trait_codes
+from stats import formation_of
 
 URL = "https://fconline.nexon.com/squadmakerapi/SquadMakerProc"
 _XHR = {"X-Requested-With": "XMLHttpRequest"}
@@ -247,3 +265,205 @@ def fetch_team(session, sn: int, team_type: int, part: int, seq: int | None = No
     return parse_team(_post(session, {
         "strMethod": M_TEAM, "n1TeamType": team_type, "n1TeamPart": part,
         "n4TeamSeq": config.TRAIT_TACTIC_SEQ if seq is None else seq, "n8TargetNexonSN": sn}))
+
+
+# ── 받기(로더가 부른다 — 파일 머리말 "받는 규칙") ─────────────────────────────
+
+@dataclass
+class TraitResult:
+    checked: int = 0        # 웹을 본 사람(저장까지)
+    touched: int = 0        # 경기가 그대로라 요청 없이 checked_at 만 새로
+    requests: int = 0
+    limit: bool = False     # 오늘 웹 상한(trait_web)
+    stop: str = ""          # 멈춘 까닭 — TraitError.kind(rate·format 은 그날 · down·off 는 이번만)
+    error: str = ""         # 그 문구(MESSAGES 꼴)
+    cancelled: bool = False
+    stale: int = 0          # 카드가 다 있는 팀이 없던 사람(낡은 웹 값)
+    cards: int = 0          # 저장한 카드
+    dropped: int = 0        # 강화가 달라 뺀 카드(재지 않은 것 — 비율을 이 값으로 잰다)
+
+
+class _Stop(Exception):
+    pass
+
+
+class _WebLimit(Exception):
+    pass
+
+
+def _starters_of(conn, h: dict) -> tuple[list[dict], str | None]:
+    detail = store.load_match(conn, h["match_id"])
+    if detail is None:
+        return [], None
+    return rankerpick._starters(detail, h.get("ouid")), (str(detail.get("matchDate") or "")[:10] or None)
+
+
+def _web_due(t: dict, h: dict | None, tr: dict | None, now: datetime) -> bool | None:
+    """True = 웹을 본다 · False = 경기가 그대로(요청 0) · None = 볼 수 없다(마지막 경기 없음·실패·닉네임 바뀜·오래된 경기)."""
+    if h is None or not h.get("match_id") or h.get("nickname") != t["nickname"]:
+        return None
+    oldest = (now.date() - timedelta(days=config.RANKER_PICK_MAX_AGE_DAYS)).isoformat()
+    if (h.get("match_day") or "") < oldest:
+        return None
+    if tr is None or tr.get("match_id") != h["match_id"]:
+        return True
+    if tr.get("state") != "ok":
+        retry = (now - timedelta(days=config.TRAIT_STALE_RETRY_DAYS)).isoformat(timespec="seconds")
+        return (tr.get("checked_at") or "") < retry
+    return False
+
+
+def _team_key(team: tuple[int, int]) -> str:
+    return f"{team[0]}-{team[1]}"
+
+
+def _team_order(key: str | None) -> list[tuple[int, int]]:
+    """지난번 팀을 맨 앞에 — 나머지는 config 순서."""
+    order = list(config.TRAIT_TEAM_ORDER)
+    try:
+        last = tuple(int(x) for x in (key or "").split("-"))
+    except ValueError:
+        last = ()
+    if last in order:
+        order.remove(last)
+        order.insert(0, last)
+    return order
+
+
+def collect(session, conn, targets: list[dict], *, on_at: str | None, now_fn=datetime.now,
+            cancel: Callable[[], bool] = lambda: False, sleep=time.sleep, clock=time.monotonic,
+            on_person: Callable[[], None] | None = None, fetch=None) -> TraitResult:
+    """대상(스냅숏 상위 TRAIT_TOP — 순위 순)마다 웹을 볼지 정해 차례로 받는다. on_at = 저장 때 켠 시각(D5 —
+    다르면 켤 때 정리가 지운다). fetch(session, sn, team_type, part) 는 테스트가 바꿔 끼운다(기본 fetch_team)."""
+    fetch = fetch or fetch_team
+    res = TraitResult()
+    day = now_fn().date().isoformat()
+    for kind, why in ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TRAIT_WEB_FORMAT, "format")):
+        if store.budget_hit_429(conn, day, (kind,)):
+            res.stop, res.error = why, MESSAGES[why]
+            return res
+    picks = store.ranker_squads(conn)
+    traits = store.trait_squads(conn)
+    last: list[float | None] = [None]
+
+    def fetcher(sn: int):
+        def one(team_type: int, part: int):
+            if cancel():
+                raise _Stop
+            if not store.budget_take(conn, day, store.BUDGET_TRAIT_WEB, config.TRAIT_WEB_DAILY_REQ):
+                raise _WebLimit
+            if last[0] is not None:
+                wait = last[0] + config.RANKER_PICK_GAP_S - clock()
+                if wait > 0:
+                    sleep(wait)
+            last[0] = clock()
+            res.requests += 1
+            return fetch(session, sn, team_type, part)
+        return one
+
+    for t in targets:
+        if cancel():
+            res.cancelled = True
+            break
+        sn = t["profile_sn"]
+        h, tr = picks.get(sn), traits.get(sn)
+        due = _web_due(t, h, tr, now_fn())
+        if due is None:
+            continue
+        stamp = now_fn().isoformat(timespec="seconds")
+        if not due:
+            if (h.get("fetched_at") or "") > (tr.get("checked_at") or ""):
+                store.touch_trait_squad(conn, sn, rank=t.get("rank"), checked_at=stamp)
+                res.touched += 1
+            continue
+        players, mday = _starters_of(conn, h)
+        if not players:
+            continue
+        starters = [(p["spId"], p["spPosition"], p.get("spGrade")) for p in players]
+        try:
+            found = find_team(starters, fetcher(sn), _team_order((tr or {}).get("team")))
+        except _Stop:
+            res.cancelled = True
+            break
+        except _WebLimit:
+            res.limit = True
+            break
+        except TraitError as e:
+            res.stop, res.error = e.kind, MESSAGES.get(e.kind, str(e))
+            if e.kind == "rate":
+                store.budget_mark_429(conn, day, store.BUDGET_TRAIT_WEB_BLOCK)
+            elif e.kind == "format":
+                store.budget_mark_429(conn, day, store.BUDGET_TRAIT_WEB_FORMAT)
+            break
+        body = None
+        if found.pick is not None:
+            body = [[c.spid, c.position, c.grade, list(c.traits), list(c.trainer) if c.trainer else None]
+                    for c in found.pick.cards]
+            res.cards += len(body)
+            res.dropped += found.pick.dropped
+        else:
+            res.stale += 1
+        store.save_trait_squad(conn, sn, source=store.source_for_rank(t.get("rank"), store.TRAIT), rank=t.get("rank"),
+                               match_id=h["match_id"], formation=formation_of(players),
+                               team=_team_key(found.pick.team) if found.pick else None, body=body, state=found.state,
+                               collect_on_at=on_at, match_day=mday or h.get("match_day"), checked_at=stamp)
+        res.checked += 1
+        if on_person is not None:
+            on_person()
+    return res
+
+
+def api_targets(rows: list[dict]) -> list[dict]:
+    """스냅숏 상위 TRAIT_TOP → 오픈API 대상(rankerpick.collect 한 번에) — 1~200 은 랭커 픽 그대로(3일 · 몫 없음),
+    201~500 은 TRAIT_STALE_DAYS 주기 + 특성 몫. 구간마다 따로 부르지 않는다(rankerpick.due 머리말)."""
+    out = []
+    for r in rows:
+        rank = r.get("rank") or 0
+        if rank <= config.RANKER_PICK_TOP:
+            out.append(dict(r))
+        elif rank <= config.TRAIT_TOP:
+            out.append(dict(r, stale_days=config.TRAIT_STALE_DAYS, share="trait"))
+    return out
+
+
+@dataclass
+class TraitRun:
+    """로더 한 바퀴 — 웹(이미 경기가 있는 사람) → 오픈API → 웹(새로 받은 경기)."""
+    web: list[TraitResult] = field(default_factory=list)
+    pick: rankerpick.PickResult | None = None
+    block_streak: int = 0       # 막힌 날이 이어진 수 — TRAIT_BLOCK_DAYS 면 화면 스레드가 특성 받기를 끈다
+    error: str = ""             # DB 잠김 등
+
+    @property
+    def last_web(self) -> TraitResult | None:
+        return self.web[-1] if self.web else None
+
+    @property
+    def requests(self) -> int:
+        return sum(w.requests for w in self.web)
+
+    @property
+    def cancelled(self) -> bool:
+        return any(w.cancelled for w in self.web) or bool(self.pick and self.pick.cancelled)
+
+
+def run(api, session, conn, rows: list[dict], *, on_at: str | None, cancel: Callable[[], bool] = lambda: False,
+        on_person: Callable[[], None] | None = None, record_days: Callable[[list[dict]], None] | None = None,
+        now_fn=datetime.now, sleep=time.sleep, clock=time.monotonic, fetch=None) -> TraitRun:
+    """한 바퀴. 웹을 먼저 — 랭커 픽이 이미 받아 둔 1~200 은 오픈API 없이 바로 찬다. 웹이 멈췄으면(상한·막힘·형식·연결)
+    오픈API 도 안 쓴다(오늘 읽지 못할 경기를 받는 셈). 오픈API 바퀴가 끝까지 돌았으면(cancel 아님) 1~200 을 rank.db
+    날짜별 픽에 더한다(record_days — N15: 특성 로더가 1~200 의 경기를 새로 덮으면 랭커 픽 로더가 앞 경기를 영영 못 센다)."""
+    out = TraitRun()
+    kw = dict(now_fn=now_fn, cancel=cancel, sleep=sleep, clock=clock)
+    first = collect(session, conn, rows, on_at=on_at, on_person=on_person, fetch=fetch, **kw)
+    out.web.append(first)
+    if not (first.cancelled or first.limit or first.stop):
+        out.pick = rankerpick.collect(api, conn, api_targets(rows), on_ranker=on_person, **kw)
+        if not (cancel() or out.pick.cancelled):
+            if record_days is not None:
+                record_days([r for r in rows if (r.get("rank") or 0) <= config.RANKER_PICK_TOP])
+            if out.pick.checked:
+                out.web.append(collect(session, conn, rows, on_at=on_at, on_person=on_person, fetch=fetch, **kw))
+    if out.last_web is not None and out.last_web.stop == "rate":
+        out.block_streak = store.trait_block_streak(conn)
+    return out

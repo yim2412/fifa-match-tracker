@@ -122,6 +122,7 @@ PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 �
 CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
 RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
 META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
+TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터 — 안내 7 은 32단계 단계 5 에서 올린다
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -251,7 +252,12 @@ TEAMCOLOR_PLAYERS_PAGE = 100        # 넥슨 선수 목록 한 요청의 최대 
 TRAIT_TEAM_ORDER = ((1, 0), (1, 1), (1, 2), (0, 0), (0, 1), (0, 2))
 TRAIT_TACTIC_SEQ = 0
 TRAIT_TOP = 500                     # 특성 대상 1~500위(U7) — 추천 범위(RANKER_RECOMMEND_TOP)와 따로. 밖으로 밀린 줄은 켤 때 정리
-TRAIT_TIMEOUT_S = 10               # 로더(다음 단계)를 붙일 때 앱 종료 대기 표에 이 값을 넣는다(teamcolor.TIMEOUT_S 꼴)
+TRAIT_TIMEOUT_S = 10               # 요청 하나 타임아웃 — 앱 종료 대기 표(TraitLoader)가 이 값 + 2초를 기다린다
+TRAIT_STALE_DAYS = 10               # 201~500 의 마지막 경기 다시 묻는 주기(1~200 은 RANKER_PICK_STALE_DAYS) — 14일 정리보다 짧게(예산표)
+TRAIT_STALE_RETRY_DAYS = 7          # 낡은 웹 값(stale)인 사람은 경기가 그대로면 이만큼 뒤에만 웹을 다시 본다
+TRAIT_WEB_DAILY_REQ = 1000          # 스쿼드메이커 하루 요청 상한(trait_web) — 한 명 최대 6 · 다시 확인은 대개 1(R6 · 약 20MB/일)
+TRAIT_BLOCK_DAYS = 3                # 403·429·Cloudflare 가 서로 다른 날 이만큼 이어지면 특성 받기만 스스로 끈다(랭킹 수집은 안 끈다)
+TRAIT_RECHECK_MARGIN_DAYS = 2       # 받은 지 RANK_RAW_KEEP_DAYS − 이만큼 지난 랭커는 처음 보는 사람보다 먼저 다시 묻는다(정리에 지워지기 전에)
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}
@@ -284,6 +290,9 @@ RECOMMEND_MIN_RANKERS = 10         # 내 팀컬러 후보가 이보다 적으면
 RECOMMEND_MIN_USERS = 3             # 대체 카드는 후보 중 이만큼 이상이 쓴 것만(한두 명의 취향을 추천으로 내지 않게)
 RECOMMEND_FETCH_MAX = 20            # ③ 모자랄 때 1,000위 안에서 더 받는 랭커 — 최대 60요청(하루 상한 안)
 RECOMMEND_OPPONENT_MAX = 200        # ② 내 DB 의 상대 후보 상한(순위 순) — 경기 본문을 읽어 그리기 예산(0.3초) 안에
+# 특성 몫(32단계 U7) — 하루 RANKER_PICK_DAILY_REQ 에서 1~200 다시 확인(3일마다 67명 × 목록·상세 2 = 134)과 추천 ③(20명 × 3 = 60)을
+# 먼저 떼고 남은 것(106)만 특성 201~500 이 쓴다 — 특성 탭을 먼저 연 날 랭커 픽·[추천] 이 상한에 걸리지 않게(검토 B)
+TRAIT_API_SHARE = RANKER_PICK_DAILY_REQ - 2 * -(-RANKER_PICK_TOP // RANKER_PICK_STALE_DAYS) - 3 * RECOMMEND_FETCH_MAX
 
 # .env 쓰기 — 다른 실행본(설치판·포터블)이 같은 파일을 열고 있으면 os.replace 가 PermissionError 를 낸다.
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)
@@ -434,6 +443,11 @@ def ranker_pick_allowed() -> bool:
     수집 토글 하나로 묶었다 — 켜는 사람이 이미 "다른 구단주 데이터를 모은다"에 동의했다."""
     return (not notice_needed() and WEB_DATA and RANK_COLLECT
             and NOTICE_ACCEPTED >= RANKER_PICK_NOTICE_VERSION)
+
+
+def trait_allowed() -> bool:
+    """포지션 특성을 받아도 되나 — 랭커 픽 조건(수집 켜짐 포함) + 특성 안내(TRAIT_NOTICE_VERSION) 동의."""
+    return ranker_pick_allowed() and NOTICE_ACCEPTED >= TRAIT_NOTICE_VERSION
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다

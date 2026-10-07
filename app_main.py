@@ -59,6 +59,7 @@ import store
 import teamcolor
 import theme as T
 import tradecollect
+import traitcollect
 import tray
 import updatecheck
 from core_api import (
@@ -991,6 +992,45 @@ class RankerPickLoader(QThread):
             pass
         finally:
             rconn.close()
+
+
+class TraitLoader(QThread):
+    """포지션 특성 받기(32단계 · traitcollect.run) — 스냅숏 상위 TRAIT_TOP. [포지션 특성] 탭과 창이 보이는 동안만 돈다.
+    사람 사이에서 멈추고(받은 만큼은 남는다) 한 사람 = 한 트랜잭션이라 terminate 하지 않는다. 오픈API 는 랭커 픽과 한 장부."""
+
+    person = pyqtSignal()        # 한 명 끝 — 화면이 다시 그린다
+    done = pyqtSignal(object)    # traitcollect.TraitRun
+
+    def __init__(self, api: FCOnlineAPI):
+        super().__init__()
+        self._api = api
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        out = traitcollect.TraitRun()
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            try:
+                _taken, rows = rankerpick.top_rankers(rconn, limit=config.TRAIT_TOP)
+            finally:
+                if rconn is not None:
+                    rconn.close()
+            if rows:
+                conn = store.open_db(config.DB_PATH)
+                session = traitcollect.new_session()
+                try:
+                    out = traitcollect.run(self._api, session, conn, rows, on_at=config.read_rank_on_at(),
+                                           cancel=lambda: self._cancel, on_person=self.person.emit,
+                                           record_days=lambda ts: RankerPickLoader._record_days(conn, ts))
+                finally:
+                    session.close()
+                    conn.close()
+        except Exception as e:  # DB 잠김 등 — 특성 하나 때문에 앱이 죽지 않게. 다음 기회에 이어서
+            out.error = f"{type(e).__name__}: {e}"
+        self.done.emit(out)
 
 
 class AbilitySimLoader(QThread):
@@ -1939,6 +1979,9 @@ class MainWindow(QMainWindow):
         self._pick_result: rankerpick.PickResult | None = None
         self._pick_purge_pending = False
         self._pick_restart = False   # [픽] 으로 띄운 로더가 도는 중에 [추천] 을 열었다 — 끝나면 ③ 을 실어 다시 띄운다
+        # 포지션 특성(32단계) — [포지션 특성] 탭이 보이는 동안만. 랭커 픽 로더와 하나씩(같은 오픈API 장부) · 지우기는 둘 다 끝난 뒤
+        self._trait_loader: TraitLoader | None = None
+        self._trait_result: traitcollect.TraitRun | None = None
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -2138,12 +2181,12 @@ class MainWindow(QMainWindow):
     def hideEvent(self, e) -> None:
         super().hideEvent(e)
         if hasattr(self, "_pick_loader"):
-            self._stop_ranker_pick()  # X(트레이 숨김)·최소화 둘 다 여기로 온다 — 안 보는 동안 받지 않게(U2 · 1회차 A·B)
+            self.stop_api_loaders()  # X(트레이 숨김)·최소화 둘 다 여기로 온다 — 안 보는 동안 받지 않게(U2 · 1회차 A·B)
 
     def showEvent(self, e) -> None:
         super().showEvent(e)
         if hasattr(self, "_pick_loader"):
-            QTimer.singleShot(0, self.start_ranker_pick)  # 트레이 [열기] · 다시 보임 — 그 화면이면 잇는다(E9b)
+            QTimer.singleShot(0, self.start_visible_api_loader)  # 트레이 [열기] · 다시 보임 — 그 화면이면 잇는다(E9b)
         handle = self.windowHandle()
         if handle is not None and not getattr(self, "_screen_hooked", False):
             self._screen_hooked = True
@@ -2265,7 +2308,7 @@ class MainWindow(QMainWindow):
         self._refresh_pitch_cards()   # 동의 직후 — 막혀 있던 축구장 칩이 바로 읽기 시작(ROADMAP 2.1.1 3회차)
         # 다시 묻는 창에서 웹 데이터를 끄면 수집도 꺼진다 — 그 길로도 랭커 픽 데이터를 지운다. 동의했으면 바로 받기 시작(E9b)
         self.sync_ranker_pick_data()
-        self.start_ranker_pick()
+        self.start_visible_api_loader()
         return ok
 
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
@@ -2828,9 +2871,10 @@ class MainWindow(QMainWindow):
             self.start_trades()
         if key in self.PICK_KEYS:
             self._dirty.add(key)  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다
-            self.start_ranker_pick()
+        if key in self.PICK_KEYS or key == self.TRAIT_KEY:
+            self.start_visible_api_loader()  # 다른 쪽 로더는 거기서 멈추게 하고, 그게 끝나면(finished) 이쪽이 뜬다
         else:
-            self._stop_ranker_pick()  # 다른 자리로 갔다 — 랭커 사이에서 멈춘다(받은 만큼은 남는다 · U2)
+            self.stop_api_loaders()  # 다른 자리로 갔다 — 사람 사이에서 멈춘다(받은 만큼은 남는다 · U2)
         self._render_current_page()
 
     def _go_page(self, name: str, tab: str | None = None) -> None:
@@ -4171,7 +4215,7 @@ class MainWindow(QMainWindow):
         if self._api_loader_busy():
             return  # 그 로더가 끝나면(finished) 다시 여기로 온다 — 상세 동시 요청·키 한도를 나눠 쓰지 않게
         self._trade_again = False
-        self._stop_ranker_pick()  # 오픈API 백그라운드는 하나씩 — 거래가 먼저, 끝나면(finished) 랭커 픽이 잇는다
+        self.stop_api_loaders()  # 오픈API 백그라운드는 하나씩 — 거래가 먼저, 끝나면(finished) 랭커 픽·특성이 잇는다
         ld = TradeLoader(self._api)
         ld.wiped.connect(self._on_trades_wiped)
         ld.done.connect(self._on_trades_done)
@@ -4184,7 +4228,7 @@ class MainWindow(QMainWindow):
         랭커 픽도 같이 양보한다(랭커 사이에서) — 끝나면 거래 → 랭커 픽 순으로 잇는다."""
         if self._trade_loader is not None and self._trade_loader.isRunning():
             self._trade_loader.cancel()
-        self._stop_ranker_pick()
+        self.stop_api_loaders()
         self._yield_backfill()  # 같은 DB 쓰기 — 검색 저장이 1,000경기 묶음 뒤에 줄 서지 않게
 
     def _on_trades_wiped(self) -> None:
@@ -4198,7 +4242,7 @@ class MainWindow(QMainWindow):
         if self._trade_again:
             self.start_trades()
         else:
-            self.start_ranker_pick()  # 오픈API 백그라운드는 하나씩 — 거래 → 랭커 픽 순(E9b)
+            self.start_visible_api_loader()  # 오픈API 백그라운드는 하나씩 — 거래 → 랭커 픽·특성 순(E9b)
 
     # ── 랭커 픽(2.1.1 · 6) — 받기 ─────────────────────────────────────
     def _ranker_pick_visible(self) -> bool:
@@ -4207,9 +4251,98 @@ class MainWindow(QMainWindow):
                 and self.isVisible() and not self.isMinimized())
 
     def _api_background_busy(self) -> bool:
-        """오픈API 를 쓰는 다른 로더(검색·비교·거래·랭커 기록)가 도는 중 — 랭커 픽은 그 뒤(양보)."""
-        return any(t is not None and t.isRunning()
-                   for t in (self._loader, self._compare_loader, self._trade_loader, self._ranker_loader))
+        """오픈API 를 쓰는 다른 로더(검색·비교·거래·랭커 기록·특성)가 도는 중 — 랭커 픽은 그 뒤(양보).
+        특성 로더도 넣는다 — 안 그러면 특성 탭 → 랭커 픽 탭으로 옮길 때 두 로더가 같은 장부로 동시에 돌아 간격이
+        무력화되고 같은 대상을 두 번 받는다(32단계 검토 4회차)."""
+        return self._trait_running() or any(
+            t is not None and t.isRunning()
+            for t in (self._loader, self._compare_loader, self._trade_loader, self._ranker_loader))
+
+    @staticmethod
+    def _bg_running(ld) -> bool:
+        """돌고 있나 — finished 처리를 마친 로더는 isRunning 이 잠깐 참이어도 끝난 것으로 본다(지우기 차례 판정)."""
+        return ld is not None and ld.isRunning() and not getattr(ld, "ended", False)
+
+    def _pick_running(self) -> bool:
+        return self._bg_running(self._pick_loader)
+
+    def _trait_running(self) -> bool:
+        return self._bg_running(self._trait_loader)
+
+    def start_visible_api_loader(self) -> None:
+        """보이는 쪽 로더를 켠다 — 오픈API 백그라운드(랭커 픽·특성)를 다시 켜는 자리는 전부 여기를 거친다(32단계 검토 3회차:
+        랭커 픽 → 특성 탭으로 옮기면 랭커 픽 로더가 아직 돌아 특성이 못 뜨는데, 끝난 뒤 다시 켜는 자리들이 랭커 픽만 켰다).
+        안 보이는 쪽이 돌고 있으면 멈추게만 한다 — 그게 끝나면(finished) 다시 여기로 온다."""
+        if self._ranker_pick_visible():
+            self._stop_trait()
+            self.start_ranker_pick()
+        elif self._trait_visible():
+            self._stop_ranker_pick()
+            self.start_trait()
+
+    def stop_api_loaders(self) -> None:
+        """랭커 픽·특성 둘 다 멈춤 요청만(기다리지 않는다) — 숨김·다른 자리·다른 오픈API 로더에 양보."""
+        self._stop_ranker_pick()
+        self._stop_trait()
+
+    def _trait_visible(self) -> bool:
+        return (self.KEY_OF_VIEW.get(self._current_view()) == self.TRAIT_KEY
+                and self.stack.currentIndex() == self.PAGE_MAIN
+                and self.isVisible() and not self.isMinimized())
+
+    def _trait_off_reason(self) -> str:
+        """특성 받기를 스스로 껐나(막힘이 TRAIT_BLOCK_DAYS 이어짐) — settings.ini trait/off_reason. 못 읽으면 켜짐."""
+        try:
+            return str(self._settings().value("trait/off_reason", "") or "")
+        except Exception:
+            return ""
+
+    def set_trait_off(self, reason: str) -> None:
+        """reason "" = 다시 켜기([다시 켜기] — 탭 단계) · "blocked" = 스스로 끔. 쓰기는 화면 스레드에서만."""
+        try:
+            s = self._settings()
+            s.setValue("trait/off_reason", reason)
+            s.sync()
+        except Exception:
+            pass
+
+    def start_trait(self) -> None:
+        """켜는 조건: 특성 동의(수집 켜짐 포함) · 탭과 창이 보임 · 스스로 끄지 않음 · 지우기 대기 아님 ·
+        랭커 픽·다른 오픈API 로더 없음(하나씩). 하루 상한·막힘·429 는 로더 안에서 — 요청 없이 바로 끝난다."""
+        if (self._quitting or not config.API_KEY or not config.trait_allowed() or not self._trait_visible()
+                or self._pick_purge_pending or self._trait_off_reason()):
+            return
+        if self._trait_running() or self._pick_running() or self._api_background_busy():
+            return  # 그 로더가 끝나면(finished) start_visible_api_loader 로 다시 여기로
+        ld = TraitLoader(self._api)
+        ld.person.connect(self._on_trait_person)
+        ld.done.connect(self._on_trait_done)
+        ld.finished.connect(self._on_trait_finished)
+        self._trait_loader = ld
+        ld.start()
+
+    def _stop_trait(self) -> None:
+        if self._trait_loader is not None and self._trait_loader.isRunning():
+            self._trait_loader.cancel()
+
+    def _on_trait_person(self) -> None:
+        self._invalidate_pick()   # 1~200 의 마지막 경기는 랭커 픽과 같은 줄이다 — 탭 그리기는 탭 단계에서 여기에
+
+    def _on_trait_done(self, out) -> None:
+        self._trait_result = out
+        if out.block_streak >= config.TRAIT_BLOCK_DAYS:
+            self.set_trait_off("blocked")   # 랭킹 수집은 안 끈다 — 특성 받기만(계획 "막힘")
+
+    def _on_trait_finished(self) -> None:
+        if self._trait_loader is not None:
+            self._trait_loader.ended = True
+        if self._pick_purge_pending:   # 랭커 픽 로더가 아직 돌면 purge_ranker_pick_data 가 다시 미룬다(D4)
+            self._pick_purge_pending = False
+            self._pick_restart = False
+            self.purge_ranker_pick_data(everything=True)
+        self._invalidate_pick()
+        if self._ranker_pick_visible():
+            self.start_visible_api_loader()   # 특성 → 랭커 픽 탭으로 옮겨 기다리던 쪽. 특성 탭이면 다시 켜지 않는다(끝없이 다시 뜬다)
 
     def start_ranker_pick(self) -> None:
         """E9 — 켜는 조건을 전부 본다: 랭킹 수집 켜짐 + 그 안내 동의 · 화면과 창이 보임 · 다른 오픈API 로더 없음.
@@ -4242,21 +4375,29 @@ class MainWindow(QMainWindow):
         self._pick_result = res
 
     def _on_ranker_pick_finished(self) -> None:
-        if self._pick_purge_pending:
+        if self._pick_loader is not None:
+            self._pick_loader.ended = True
+        if self._pick_purge_pending:   # 특성 로더가 아직 돌면 purge_ranker_pick_data 가 다시 미룬다(D4)
             self._pick_purge_pending = False
             self._pick_restart = False
             self.purge_ranker_pick_data(everything=True)
         self._invalidate_pick()
+        # 계획은 "끝에서 무조건 start_visible_api_loader" 였으나 그러면 랭커 픽 탭에선 받을 게 없어도 끝나자마자 다시 뜬다
+        # (끝없는 반복) — 다시 켜기는 ③ 을 실을 때만, 그 밖엔 기다리던 특성 쪽만
         if self._pick_restart:
             self._pick_restart = False
-            self.start_ranker_pick()
+            self.start_visible_api_loader()
+        elif self._trait_visible():
+            self.start_trait()
 
     def purge_ranker_pick_data(self, everything: bool = True) -> int | None:
         """랭커 픽 데이터 지우기(E12) — 화면 스레드의 한 함수. 로더가 돌면 멈추게 하고 끝난 뒤(finished) 이어서 지운다
         (돌던 로더의 저장과 겹치면 반쯤 지워지거나 다시 생긴다). → 지운 경기 수 · 미뤘거나 실패면 None."""
-        if self._pick_loader is not None and self._pick_loader.isRunning():
+        if self._pick_running() or self._trait_running():
+            # D4 — 둘 다 멈추게 하고 둘 다 끝난 뒤(각 finished 가 남은 쪽을 본다) 이어서. 특성 로더도 collect 로
+            # ranker_squads·matches 에 쓴다(32단계 검토 A [상])
             self._pick_purge_pending = self._pick_purge_pending or everything
-            self._pick_loader.cancel()
+            self.stop_api_loaders()
             return None
         keep = None if everything else self._trait_keep()
         try:
@@ -4514,6 +4655,7 @@ class MainWindow(QMainWindow):
         self._pick_pitch_loaders = self._start_pitch_loaders(pitch, card_info=False)  # 칩 카드 정보 요청 0 — 픽률이 본론
 
     # ── 11-lite 추천(17단계) — 랭커 픽 [추천] 탭 ─────────────────────────
+    TRAIT_KEY = "traits"   # [포지션 특성] 탭(32단계 단계 4 에서 VIEW_OF_KEY 에) — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
     PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
     REC_CARD_COLUMNS = ["줄", "선수", "후보", "비율", "강화", "시세"]
     REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
@@ -5780,7 +5922,7 @@ class MainWindow(QMainWindow):
 
     def _start_ranker_loader(self, pairs: list) -> None:
         self._ranker_note = ""
-        self._stop_ranker_pick()  # 사용자가 연 화면이 먼저 — 끝나면(finished) 랭커 픽이 잇는다
+        self.stop_api_loaders()  # 사용자가 연 화면이 먼저 — 끝나면(finished) 랭커 픽·특성이 잇는다
         ld = RankerStatsLoader(self._api, pairs, config.DEFAULT_MATCH_TYPE)
         ld.done.connect(self._on_ranker_done)
         ld.failed.connect(lambda msg, key=tuple(pairs): self._on_ranker_failed(key, msg))
@@ -5798,7 +5940,7 @@ class MainWindow(QMainWindow):
     def _on_ranker_finished(self) -> None:
         # finished 에서 — done 은 스레드 안에서 나와 그 순간 isRunning 이 참이다(TradeLoader 와 같은 이유)
         self._invalidate("rankercmp")
-        self.start_ranker_pick()
+        self.start_visible_api_loader()
 
     def _on_ranker_double_clicked(self, item) -> None:
         name_item = self.tbl_ranker.item(item.row(), 1)
@@ -6197,7 +6339,7 @@ class MainWindow(QMainWindow):
         self._yield_trades()
         self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
         self._compare_loader.finished.connect(self.start_trades)  # 끝나면 거래 받기를 잇는다
-        self._compare_loader.finished.connect(self.start_ranker_pick)
+        self._compare_loader.finished.connect(self.start_visible_api_loader)
         self._compare_loader.finished_ok.connect(self._on_compare_loaded)
         self._compare_loader.failed.connect(self._on_compare_failed)
         self._compare_loader.key_invalid.connect(self._on_compare_key_invalid)
@@ -6454,7 +6596,7 @@ class MainWindow(QMainWindow):
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
                                    prefetch=prefetch, record_elo=True, want_max_division=True)
         self._loader.finished.connect(self.start_trades)
-        self._loader.finished.connect(self.start_ranker_pick)  # 거래가 시작됐으면 그쪽이 끝난 뒤
+        self._loader.finished.connect(self.start_visible_api_loader)  # 거래가 시작됐으면 그쪽이 끝난 뒤
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
@@ -8916,6 +9058,8 @@ class MainWindow(QMainWindow):
             (self._scout_loader, cancel(self._scout_loader), 12000, False),
             # 랭커 픽 — 랭커 사이에서 멈춘다(요청 하나 타임아웃 10초 · 429 대기는 1초씩 cancel 을 본다). 랭커마다 저장이 끝난다
             (self._pick_loader, cancel(self._pick_loader), 12000, False),
+            # 포지션 특성 — 사람 사이에서 멈춘다(웹 요청 하나 타임아웃 TRAIT_TIMEOUT_S · 오픈API 는 랭커 픽과 같다). 한 사람 = 한 트랜잭션
+            (self._trait_loader, cancel(self._trait_loader), max(12000, (config.TRAIT_TIMEOUT_S + 2) * 1000), False),
             # 색인 백필 — 묶음(1,000경기 약 0.2초) 사이에서 멈춘다. 끊겨도 다음 실행이 잇는다
             (self._backfill_worker, cancel(self._backfill_worker), 3000, False),
             *[(ld, cancel(ld), 500, False)
