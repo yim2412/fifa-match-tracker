@@ -1600,6 +1600,58 @@ def opponent_position_players(details: list[dict], ouid: str, name_of=None,
     return result
 
 
+@dataclass
+class OppCard:
+    sp_id: int
+    met: int            # 그 자리에 그 카드가 선발로 나온 판
+    pos_games: int      # 그 자리가 나온 판(사용률의 분모)
+    win: int
+    draw: int
+    lose: int
+
+    @property
+    def usage(self) -> float:
+        return self.met * 100 / self.pos_games if self.pos_games else 0.0
+
+    @property
+    def win_rate(self) -> float:
+        """승÷전체 — 앱의 내 경기 승률 규칙(무승부 분모 규칙은 33단계 A6 가 한꺼번에 바꾼다)."""
+        return self.win * 100 / self.met if self.met else 0.0
+
+
+def opponent_cards(details: list[dict], ouid: str, nicknames: set[str] | None = None) -> dict[int, list[OppCard]]:
+    """N7 상대가 쓰는 카드 — {자리 코드: [OppCard] 만난 판 내림차순}. 교체 명단 뺌(opponent_position_players 와 같다).
+    nicknames 를 주면 그 상대와의 경기만(팀컬러 · 1만 위 안 상대)."""
+    met: dict[int, dict[int, list[int]]] = defaultdict(dict)
+    pos_games: dict[int, int] = defaultdict(int)
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        if nicknames is not None and (opp.get("nickname") or "-") not in nicknames:
+            continue
+        res = _result_of(me)
+        k = 0 if "승" in res else 1 if "무" in res else 2 if "패" in res else None
+        seen: set[tuple[int, int]] = set()
+        for p in opp.get("player") or []:
+            pos, sp_id = p.get("spPosition"), p.get("spId")
+            if not isinstance(pos, int) or not isinstance(sp_id, int) or pos == SUB_POSITION or (pos, sp_id) in seen:
+                continue
+            seen.add((pos, sp_id))
+            c = met[pos].setdefault(sp_id, [0, 0, 0, 0])
+            c[0] += 1
+            if k is not None:
+                c[1 + k] += 1
+        for pos in {pos for pos, _sp in seen}:
+            pos_games[pos] += 1
+    out: dict[int, list[OppCard]] = {}
+    for pos, cards in met.items():
+        rows = [OppCard(sp, n, pos_games[pos], w, dr, lo) for sp, (n, w, dr, lo) in cards.items()]
+        rows.sort(key=lambda c: (-c.met, c.sp_id))
+        out[pos] = rows
+    return dict(sorted(out.items(), key=lambda kv: (_position_group_rank(kv[0]), kv[0])))
+
+
 # ── 키플레이어(구단주 비교 ①) ─────────────────────────────────────────────
 KEY_PLAYER_TOP = 3
 KEY_PLAYER_MIN_SHARE = 0.3   # 평점 상위는 비교 경기의 이 비율 이상 뛴 선수만 — 한두 경기 반짝 평점이 위로 오지 않게

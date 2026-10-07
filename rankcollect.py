@@ -1046,6 +1046,12 @@ def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, 
 # 사람별 표는 그 시즌 동안만이고(U1), 수집을 끄거나 동의 전이면 지운다 — 지우기 조건은 표시가 아니라 상태로 판정한다
 # (purge_person_if_needed — 화면 스레드는 rank.db 에 쓰지 않는다). 규칙의 근거는 ROADMAP 2.3.1 각 절.
 
+def is_champ(grade) -> bool:
+    """챔스 이상 — 지금 등급 칸(grade) 번호가 CHAMP_GRADE_MAX 이하. 등급 칸이 셋(grade·best_grade·prev_grade)이라
+    판정을 한 곳에 둔다(2.4.1). rankmeta 가 rankcollect 를 가져다 쓰므로 여기 둔다(거꾸로면 순환 import)."""
+    return grade is not None and grade <= config.CHAMP_GRADE_MAX
+
+
 def data_time(row) -> str:
     """스냅숏의 데이터 시각 — 넥슨 기준 시각(ref_time), 없으면(옛 버전이 쓴 스냅숏) taken_at. 이번에 새로 만든 읽기는
     전부 이걸 쓴다. elo_history 는 그대로 taken_at(R15 — 바꾸면 같은 스냅숏이 다른 시각으로 다시 들어가 ux_elo_src 가 못 막는다)."""
@@ -1237,7 +1243,7 @@ def _person_apply(conn: sqlite3.Connection, sid: int, t: str, ps: dict, prev: di
     firsts, upd = [], []
     for r in rows:
         sn = r["profile_sn"]
-        champ = r["grade"] is not None and r["grade"] <= 1
+        champ = is_champ(r["grade"])
         w = watch.get(sn)
         if w is None:
             upd.append((season_at, sn, t, t, 0 if champ else 1))

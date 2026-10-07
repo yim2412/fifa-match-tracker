@@ -972,6 +972,24 @@ def test_position_group_edges_and_opponent_positions():
     assert only_ga == [(25, 2, 2), (5, 1, 1)], only_ga
 
 
+def test_opponent_cards_usage_and_my_results():
+    """N7(2.4.1) — 자리마다 카드 전부 · 사용률 분모 = 그 자리가 나온 판 · 내 승·무·패 · 교체 명단·같은 경기 겹침 뺌."""
+    ds = [_d(4, "승", opp="가", opp_players=[_p(11, 25), _p(12, 5), _p(13, 28), _p(11, 25)]),   # 같은 (자리, 카드) 겹침
+          _d(3, "패", opp="가", opp_players=[_p(11, 25)]),
+          _d(2, "무", opp="나", opp_players=[_p(21, 25), _p(22, 0)]),
+          _d(1, "몰수승", opp="나", opp_players=[_p(21, 25)]),
+          _d(5, "승", opp="다", opp_players=[_p(21, 25), _p(31, 25)])]    # 같은 자리 둘(투톱) — 자리 판은 한 번
+    got = st.opponent_cards(ds, "me")
+    assert list(got) == [25, 5, 0], list(got)                    # 공격 → 수비 → GK
+    c21, c11, c31 = got[25]                                      # 만난 판 많은 순
+    assert (c11.sp_id, c11.met, c11.pos_games, c11.win, c11.draw, c11.lose) == (11, 2, 5, 1, 0, 1), c11
+    assert (c21.sp_id, c21.met, c21.win, c21.draw, c21.lose) == (21, 3, 2, 1, 0), c21
+    assert c31.met == 1 and c11.usage == 40.0 and c11.win_rate == 50.0
+    assert 28 not in got
+    only = st.opponent_cards(ds, "me", nicknames={"나"})
+    assert [c.sp_id for c in only[25]] == [21] and only[25][0].pos_games == 2
+
+
 def test_team_color_stats_counts_and_values_once_per_opponent():
     ms = [_m(4, "승", "가"), _m(3, "무", "가"), _m(2, "패", "나"), _m(1, "승", "몰라")]
     colors = {"가": "레알", "나": "레알"}
@@ -1559,7 +1577,7 @@ def test_player_parsing_missing_parts():
 
 # ── 화면 ↔ 분석 경계(19단계, 2026-10-05) — 화면은 계산을 core_api 로만 ─────────────────────
 UI_FILES = ("app_main.py", "dashboard.py", "widgets.py", "charts.py", "tray.py", "check_api.py")
-CORE_MODULES = {"analysis", "stats", "models", "predict", "squad_timeline", "trade_book"}
+CORE_MODULES = {"analysis", "stats", "models", "predict", "squad_timeline", "trade_book", "rankmeta"}
 
 
 def test_ui_reaches_analysis_only_through_core_api():

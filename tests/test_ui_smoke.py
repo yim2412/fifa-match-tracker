@@ -596,15 +596,48 @@ def test_fit_label_shrinks_instead_of_clipping():
     assert QFontMetrics(lb.font()).horizontalAdvance(lb.text()) <= 329
 
 
-def test_no_table_elides_at_min_or_default_size():
-    # 예전 기본 표는 둘째 열부터 균등 분할이라 '선수 B'·'기간'·(1280 폭에서) '스코어' 가
-    # "…" 로 잘렸다. 헤더도 잰다 — 채우는 동안 정렬이 꺼져 있어 화살표 자리를 빼고
-    # 폭을 잡으면 "승률▾" 이 겹쳤다.
-    import widgets
-    # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
-    tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 21, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
-    #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
+def _table_elisions(tables) -> list:
+    """지금 창 크기에서 표마다 — 페이지 가로 잘림 · 가로 스크롤 · 열 폭 < 글자 · 헤더. 빈 표는 안 잰다."""
+    bad = []
+    for tb in tables:
+        if tb.rowCount() == 0:
+            continue
+        page = next((n for n, i in _win._page_index.items()
+                     if _win.pages.widget(i).isAncestorOf(tb)), None)
+        if page:
+            tabs = _win._page_tabs.get(page)
+            tab = next((tabs.names()[i] for i in range(len(tabs.names()))
+                        if tabs.page(i).isAncestorOf(tb)), None) if tabs else None
+            _win._go_page(page, tab)
+            _app.processEvents()
+            # 페이지 틀이 안쪽 최소 폭보다 좁으면 가로가 조용히 잘린다 — 숨은 페이지는 크기가 안 잡혀(640)
+            # 있어 연 뒤에 잰다
+            frame = _win.pages.currentWidget()
+            if frame.width() < frame.widget().minimumSizeHint().width():
+                bad.append((page, "페이지 가로 잘림", frame.width(),
+                            frame.widget().minimumSizeHint().width()))
+        hdr = tb.horizontalHeader()
+        # 세로 막대 자리를 안 빼면 가로 막대가 생기고 끝 열이 가려진다
+        if tb.horizontalScrollBar().maximum() > 0:
+            bad.append((page, "가로 스크롤", tb.horizontalScrollBar().maximum()))
+        # 헤더 화살표는 정렬 중인 열에만 그려진다 — 나머지는 화살표 없이 잰다
+        sort_col = hdr.sortIndicatorSection()
+        shown = hdr.isSortIndicatorShown()
+        hdr.setSortIndicatorShown(False)
+        bare = [hdr.sectionSizeHint(c) for c in range(tb.columnCount())]
+        hdr.setSortIndicatorShown(True)
+        arrow = [hdr.sectionSizeHint(c) for c in range(tb.columnCount())]
+        hdr.setSortIndicatorShown(shown)
+        for c in range(tb.columnCount()):
+            w = tb.columnWidth(c)
+            head = arrow[c] if c == sort_col else bare[c]
+            if w < tb.sizeHintForColumn(c) or w < head:
+                bad.append((page, tb.horizontalHeaderItem(c).text(), w,
+                            tb.sizeHintForColumn(c), head))
+    return bad
+
+
+def _check_elisions(tables) -> None:
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -613,46 +646,25 @@ def test_no_table_elides_at_min_or_default_size():
             _win.setMinimumSize(*small)
             _at_size(*size)
             assert (_win.width(), _win.height()) == tuple(size), ("그 크기로 못 줄였다", size, _win.size())
-            bad = []
-            for tb in tables:
-                if tb.rowCount() == 0:
-                    continue
-                page = next((n for n, i in _win._page_index.items()
-                             if _win.pages.widget(i).isAncestorOf(tb)), None)
-                if page:
-                    tabs = _win._page_tabs.get(page)
-                    tab = next((tabs.names()[i] for i in range(len(tabs.names()))
-                                if tabs.page(i).isAncestorOf(tb)), None) if tabs else None
-                    _win._go_page(page, tab)
-                    _app.processEvents()
-                    # 페이지 틀이 안쪽 최소 폭보다 좁으면 가로가 조용히 잘린다 — 숨은 페이지는 크기가 안 잡혀(640)
-                    # 있어 연 뒤에 잰다
-                    frame = _win.pages.currentWidget()
-                    if frame.width() < frame.widget().minimumSizeHint().width():
-                        bad.append((page, "페이지 가로 잘림", frame.width(),
-                                    frame.widget().minimumSizeHint().width()))
-                hdr = tb.horizontalHeader()
-                # 세로 막대 자리를 안 빼면 가로 막대가 생기고 끝 열이 가려진다
-                if tb.horizontalScrollBar().maximum() > 0:
-                    bad.append((page, "가로 스크롤", tb.horizontalScrollBar().maximum()))
-                # 헤더 화살표는 정렬 중인 열에만 그려진다 — 나머지는 화살표 없이 잰다
-                sort_col = hdr.sortIndicatorSection()
-                shown = hdr.isSortIndicatorShown()
-                hdr.setSortIndicatorShown(False)
-                bare = [hdr.sectionSizeHint(c) for c in range(tb.columnCount())]
-                hdr.setSortIndicatorShown(True)
-                arrow = [hdr.sectionSizeHint(c) for c in range(tb.columnCount())]
-                hdr.setSortIndicatorShown(shown)
-                for c in range(tb.columnCount()):
-                    w = tb.columnWidth(c)
-                    head = arrow[c] if c == sort_col else bare[c]
-                    if w < tb.sizeHintForColumn(c) or w < head:
-                        bad.append((page, tb.horizontalHeaderItem(c).text(), w,
-                                    tb.sizeHintForColumn(c), head))
+            bad = _table_elisions(tables)
             assert not bad, (size, bad[:5])
     finally:
         _win.setMinimumSize(*app_main.MIN_WINDOW)
         _at_size(1600, 900)
+
+
+def test_no_table_elides_at_min_or_default_size():
+    # 예전 기본 표는 둘째 열부터 균등 분할이라 '선수 B'·'기간'·(1280 폭에서) '스코어' 가
+    # "…" 로 잘렸다. 헤더도 잰다 — 채우는 동안 정렬이 꺼져 있어 화살표 자리를 빼고
+    # 폭을 잡으면 "승률▾" 이 겹쳤다.
+    import widgets
+    # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
+    tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
+    assert len(tables) == 37, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
+    #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
+    #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
+    #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
+    _check_elisions(tables)
 
 
 def test_measure_text_same_as_measuring_everything():
@@ -7314,6 +7326,221 @@ def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
             _win._elo.clear()
             _win._elo.update(keep[2])
         _win._go_page("대시보드")
+
+
+# ── 2.4.1 랭커 메타 ② 스냅숏 읽기 — 메타 분석 탭 다섯 · 주간 요약 · 순위 변동 · 카드별 ─────────────────────
+
+META_TABS = (("메타 분석", "하루 승률", "daywr", "lb_daywr_note"), ("메타 분석", "가성비", "valuescore", "lb_vscore_note"),
+             ("메타 분석", "구단가치", "valuebins", "lb_vbins_note"), ("메타 분석", "구간 평균", "tiermeans", "lb_tmeans_note"),
+             ("메타 분석", "승률→점수", "wrelo", "lb_wrelo_note"), ("랭킹 추이", "주간 요약", "weekly", "lb_weekly_note"))
+
+
+def _meta_db_moving(days=4, people=300, me=None):
+    """하루 간격 · 승패가 매일 느는 스냅숏 — 팀컬러 6종 × 50명 · 포메이션 셋 · 구단가치 제각각. 프로필 번호 900+i · 닉네임 g{i}.
+    me = (닉네임, 프로필 번호) 를 주면 15위 자리에 그 사람."""
+    import rankmeta
+    rankmeta.clear_cache()
+    base = datetime.now().replace(minute=0, second=0, microsecond=0) - timedelta(days=days)
+    c = rankcollect.open_rank_db()
+    try:
+        for d in range(days):
+            rows = [ranker.RankRow(rank=i, profile_sn=900 + i, nickname=f"g{i}", elo=3000.0 + i * 5 + d * (i % 7),
+                                   win=d * (10 + i % 5), lose=d * 10, team_value=(i + 1) * 10 ** 9,
+                                   grade=1 if i % 3 else 3, team_color=f"팀{i % 6}",
+                                   formation=("4-2-3-1", "4-1-2-3", "5-2-1-2")[i % 3])
+                    for i in range(1, people + 1)]
+            if me:
+                rows[14] = replace(rows[14], nickname=me[0], profile_sn=me[1])
+            t = base + timedelta(days=d)
+            rankcollect.save_snapshot(c, rows, t + timedelta(minutes=30), ref_time=t.isoformat(timespec="seconds"))
+    finally:
+        c.close()
+
+
+def test_rank_meta_tabs_draw_and_fit():
+    import rankmeta
+    with _MetaEnv() as env:
+        env.write(collect=0)
+        for page, tab, key, note in META_TABS:
+            _win._go_page(page, tab)
+            assert _win._current_view() == (page, tab), (page, tab)
+            _win._invalidate(key)
+            assert "[정보]" in getattr(_win, note).text(), (tab, getattr(_win, note).text())
+        assert not config.RANK_DB_PATH.exists(), "그리다 rank.db 를 만들었다"
+        env.write(collect=1)
+        _meta_db_moving()
+        for page, tab, key, _note in META_TABS:
+            _win._go_page(page, tab)
+            _win._invalidate(key)
+        assert _win.day_wr.ready and _win.daywr_tables["team_color"].rowCount() == 6, _win.day_wr
+        assert _win.daywr_tables["formation"].rowCount() == 3
+        assert _win.value_scores.scored and _win.tbl_vscore.rowCount() == 6
+        assert _win.tbl_vbins.rowCount() == 8 and _win.tbl_vcross.rowCount() == 6
+        assert _win.tbl_vcross.columnCount() == 2 + 8
+        assert _win.tmeans_tables["formation"].rowCount() == 3
+        _win.cb_tmeans_form.setCurrentIndex(1)                  # 수비 줄 수
+        assert {r.key for r in _win.tier_mean_data.tables["formation"]} == {"4백", "5백"}
+        _win.cb_tmeans_form.setCurrentIndex(0)
+        assert _win.wr_elo.ready and _win.tbl_wrelo.rowCount() == len(config.N10_BINS) + 1
+        assert _win.weekly_data.day_wins and _win.weekly_tables["wins"].rowCount() == config.WEEKLY_TOP_N
+        assert _win.weekly_tables["extremes"].rowCount() == 6
+        # B1 메타 변화도 묶기 콤보를 따른다(N6)
+        _win._go_page("랭킹 추이", "메타 변화")
+        _win._invalidate("metatrend")
+        raw = {r.key for r in _win.meta_trend.rows["formation"]}
+        _win.cb_meta_form.setCurrentIndex(1)
+        grouped = {r.key for r in _win.meta_trend.rows["formation"]}
+        assert raw == {"4-2-3-1", "4-1-2-3", "5-2-1-2"} and grouped == {"4백", "5백"}, (raw, grouped)
+        _win.cb_meta_form.setCurrentIndex(0)
+        # 1280×720 · 작은 화면에서 안 잘림 — 가장 넓은 B4 구간 × 팀컬러 표 포함
+        import widgets
+        new = [t for t in _win.findChildren(widgets.FitTableWidget)
+               if any(_win._page_tabs[p].page(i).isAncestorOf(t) for p in ("메타 분석", "랭킹 추이")
+                      for i in range(len(_win._page_tabs[p].names())))]
+        assert len([t for t in new if t.rowCount()]) >= 12, len(new)
+        _check_elisions(new)
+        rankmeta.clear_cache()
+    _win._go_page("랭킹 추이", "추이")
+    _win._go_page("메타 분석", "하루 승률")
+    _win._go_page("대시보드")
+
+
+def test_rank_views_invalidate_on_four_paths():
+    """rank.db 가 바뀌는 길 넷이 같은 키 묶음(RANK_VIEW_KEYS)을 무효화 — 정리는 바뀐 게 있을 때만."""
+    from types import SimpleNamespace
+    W = app_main.MainWindow
+    assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
+                                     "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards"}
+    seen = []
+    keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
+    _win._invalidate_rank_views = lambda: seen.append(1)
+    try:
+        _win._ouid = None                                          # 회차 끝의 ELO 다시 읽기는 빼고
+        _win._on_rank_collect_outcome(SimpleNamespace(kind="ok", disabled_by_block=False))     # ① 회차 끝
+        assert len(seen) == 1
+        _win._on_rank_collect_outcome(SimpleNamespace(kind="failed", disabled_by_block=False))
+        assert len(seen) == 1
+        _win._teamcolor_pending = []                               # ② 팀컬러 목록을 스냅숏으로
+        _win._teamcolor_loader = SimpleNamespace(saved_snapshot=SimpleNamespace(kind="ok"), failed_pages=0, fetched_at=None)
+        _win._on_teamcolor_finished()
+        assert len(seen) == 2
+        _win._teamcolor_loader = SimpleNamespace(saved_snapshot=None, failed_pages=0, fetched_at=None)
+        _win._on_teamcolor_finished()
+        assert len(seen) == 2
+        _win._on_rank_maintained({"pruned": 0, "anon": 0, "person": 0, "purged": False, "rolled": False})   # ③ 정리
+        _win._on_rank_maintained({"missing": True})
+        _win._on_rank_maintained({"locked": True})
+        assert len(seen) == 2, "바뀐 것 없는 정리에 다시 그렸다(매시간 돈다)"
+        _win._on_rank_maintained({"pruned": 3})
+        assert len(seen) == 3
+        sched = app_main.RankCollectScheduler()                    # 예약기 → 창 신호
+        sched.check = lambda maint=True: None
+        _win.attach_rank_sched(sched)
+        sched._on_maint_done({"anon": 1})
+        assert len(seen) == 4
+        _win._rank_sched = None                                    # 예약 없는 창 — 작업자를 직접
+        with _MetaEnv():
+            c = rankcollect.open_rank_db()
+            try:
+                rankcollect.save_snapshot(c, [ranker.RankRow(rank=1, profile_sn=1, nickname="x", elo=3000.0)],
+                                          datetime.now() - timedelta(days=30))
+            finally:
+                c.close()
+            _win._maintain_rank()                                  # 14일 지난 원본을 지운다 → 바뀜
+            _wait_maint()
+            assert len(seen) == 5, seen
+            _win.sync_ranker_pick_data()                           # ④ 끄기·지우기의 한 자리
+            _wait_maint()
+            assert len(seen) == 6, seen
+    finally:
+        del _win._invalidate_rank_views
+        _win._ouid, _win._rank_sched, _win._teamcolor_loader = keep[0], keep[1], keep[2]
+        _win._teamcolor_pending = keep[3]
+
+
+def test_rank_move_follows_late_profile_sn():
+    """[순위 변동] — 닉네임으로 못 찾으면 안내, 늦게 온 프로필 번호(rank_ready)로 다시 그린다. 판정·이력 두 표."""
+    import rankmeta
+    keep = (_win._ouid, _win._nick, _win._rank)
+    with _MetaEnv():
+        try:
+            _meta_db_moving(me=("다른이름", 4242))
+            _win._ouid, _win._nick, _win._rank = "rm-ouid", "검색한이름", None
+            _win._go_page("승률 그래프", "순위 변동")
+            _win._invalidate("rankmove")
+            assert "1만 위 안에 없거나" in _win.lb_rmove_note.text() and _win.tbl_rmove.rowCount() == 0
+            info = ranker.RankerInfo(nickname="검색한이름", rank=15, elo=3075.0, profile_sn=4242)
+            _win._on_rank_ready("rm-ouid", info)
+            assert _win.rank_move_data is not None and _win.rank_move_data.found
+            assert _win.tbl_rmove.rowCount() == 3 and _win.tbl_rhist.rowCount() == 4
+            assert _win.tbl_rmove.item(0, 5).text() == rankmeta.V_GAME, _win.tbl_rmove.item(0, 5).text()
+            _win._on_rank_ready("다른-ouid", None)                  # 다른 계정의 늦은 신호는 버린다
+            assert _win.tbl_rmove.rowCount() == 3
+        finally:
+            _win._ouid, _win._nick, _win._rank = keep
+            rankmeta.clear_cache()
+    _win._go_page("승률 그래프", "승률·등급")   # 보던 탭을 기억한다 — 다음 테스트가 첫 탭을 본다
+    _win._go_page("대시보드")
+    _win._render_all()
+
+
+def test_opp_cards_tab_filters():
+    """[카드별] — 자리 콤보 · 팀컬러 필터(자기 콤보) · 1만 위 안 상대만(rank.db 없으면 꺼짐)."""
+    import rankmeta
+    saved_colors = dict(_win._team_colors)
+    try:
+        _rank_files_gone()
+        _win._go_page("포지션별 최다 상대", "카드별")
+        assert _win._current_view() == ("포지션별 최다 상대", "카드별")
+        _win._invalidate("oppcards")
+        all_cards = _win.opp_cards
+        assert all_cards and _win.cb_oppcard_pos.count() == len(all_cards) and _win.tbl_oppcard.rowCount() > 0
+        assert not _win.chk_oppcard_ranked.isEnabled() and _win.chk_oppcard_ranked.toolTip()
+        assert not config.RANK_DB_PATH.exists()
+        opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+        # 보이는 탭만 그리는 상태로 — LAZY_RENDER=False 면 "teamcolor" 하나가 두 콤보를 다 채워 길이 안 갈린다
+        _win.LAZY_RENDER = True
+        try:
+            _win._go_page("포지션별 최다 상대", "축구장")
+            _win._team_colors[opps[1]] = "축구장컬러"
+            _win._invalidate_teamcolor()                           # [축구장] 이 그리며 [카드별] 콤보도 같이 채운다
+            assert _win.cb_oppcard_color.findText("축구장컬러") > 0, "[축구장] 의 목록 갱신이 [카드별] 콤보를 안 채웠다"
+            _win._go_page("포지션별 최다 상대", "카드별")
+            _win._team_colors[opps[0]] = "카드컬러"
+            _win._invalidate_teamcolor()                           # 팀컬러를 새로 읽은 길 — 보이는 [카드별] 이 바로
+            i = _win.cb_oppcard_color.findText("카드컬러")
+            assert i > 0, "[카드별] 팀컬러 콤보가 안 채워졌다"
+        finally:
+            _win.LAZY_RENDER = False
+        del _win._team_colors[opps[1]]
+        _win.cb_oppcard_color.setCurrentIndex(i)
+        met = sum(c.met for cards in _win.opp_cards.values() for c in cards)
+        total = sum(c.met for cards in all_cards.values() for c in cards)
+        assert 0 < met < total, (met, total)
+        assert _win.cb_position_color.currentText() == _win.POSITION_COLOR_ALL, "고른 값은 탭마다 따로"
+        _win.cb_oppcard_color.setCurrentIndex(0)
+        # 1만 위 안 상대만 — rank.db 에 그 상대 하나
+        c = rankcollect.open_rank_db()
+        try:
+            rankcollect.save_snapshot(c, [ranker.RankRow(rank=1, profile_sn=1, nickname=opps[0], elo=3000.0)],
+                                      datetime.now())
+        finally:
+            c.close()
+        rankmeta.clear_cache()
+        _win._invalidate("oppcards")
+        assert _win.chk_oppcard_ranked.isEnabled()
+        _win.chk_oppcard_ranked.setChecked(True)
+        met2 = sum(c.met for cards in _win.opp_cards.values() for c in cards)
+        assert met2 == met and "닉네임을 바꾼" in _win.lb_oppcard_note.text(), (met2, met)
+        _win.chk_oppcard_ranked.setChecked(False)
+    finally:
+        _win._team_colors.clear()
+        _win._team_colors.update(saved_colors)
+        _rank_files_gone()
+        rankmeta.clear_cache()
+    _win._go_page("포지션별 최다 상대", "축구장")
+    _win._go_page("대시보드")
+    _win._render_all()
 
 
 def test_about_rank_status_shows_ref_time_and_meta_counts():

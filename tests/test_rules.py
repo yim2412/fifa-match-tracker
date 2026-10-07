@@ -193,7 +193,7 @@ def check_colors(srcs: dict[str, str]) -> list[str]:
 
 # ── SQL 실행 계획 ────────────────────────────────────────────────────────────
 
-SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py")
+SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py", "rankmeta.py")
 
 
 def collect_sql() -> dict[str, set[str]]:
@@ -218,13 +218,13 @@ def collect_sql() -> dict[str, set[str]]:
 
     sqlite3.connect = connect
     try:
-        for name in ("test_parsing", "test_rankcollect", "test_trades"):
+        for name in ("test_parsing", "test_rankcollect", "test_trades", "test_rankmeta"):
             spec = importlib.util.spec_from_file_location(f"_rules_{name}", ROOT / "tests" / f"{name}.py")
             mod = importlib.util.module_from_spec(spec)
             with contextlib.redirect_stdout(io.StringIO()):
                 spec.loader.exec_module(mod)
                 for k, v in sorted(vars(mod).items()):
-                    if k.startswith("test_") and callable(v):
+                    if k.startswith("test_") and "budget" not in k and callable(v):   # 예산 테스트는 14만 행 — trace 로 느려 뺀다
                         try:
                             v()
                         except Exception:  # noqa: BLE001 — 그 테스트의 성패는 그 파일이 본다

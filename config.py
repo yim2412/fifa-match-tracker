@@ -13,7 +13,7 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
-APP_VERSION = "v2.3.1"
+APP_VERSION = "v2.4.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 # 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 다 뺐다 —
@@ -183,6 +183,22 @@ RANK_GAPS_WARN = 50                 # 빈 순위가 이만큼 이상이면 [정�
 RANK_CONT_MAX_H = 36                # 앞 스냅숏과 데이터 시각 차가 이 안이면 이어진 것 — 넘으면 틈(연속·첫 챔스를 자른다)
 RANK_ELO_BIN = 50                   # 점수 분포 막대 칸 폭(R9: 2,934~4,538 → 34칸 남짓)
 META_MIN_USERS = 5                  # 메타 변화 표 — 두 시점 다 이보다 적은 줄은 흐림
+CHAMP_GRADE_MAX = 1                 # 등급 칸 번호 — 0 슈퍼챔피언스 · 1 챔피언스. 판정은 rankcollect.is_champ 한 곳
+# 랭커 메타 ② 스냅숏 읽기(2.4.1 · rankmeta.py) — 근거는 ROADMAP 2.4.1 실측 장부
+META_TOP_TIERS = (200, 2000, 5000, 10000)   # "상위 N명" 누적 구간(추이 탭의 띠 구간 TREND_TIERS 와 다르다)
+B3_WEIGHTS = {"elo": 300, "rate": 200, "value": 300, "champ": 200}   # 가성비 1,000점 — 구단가치는 낮을수록
+B3_MIN_USERS = 20                   # 가성비 점수 · 구단가치 × 팀컬러 표에 넣는 팀컬러 인원(R7)
+B3_MIN_TEAMS = 5                    # 점수를 낼 팀컬러 수 — 백분위는 이보다 적으면 칸 몇 개로 갈려 뜻이 없다(R7: 상위 200 은 2종)
+B4_BINS = 8                         # 구단가치 구간 수(경계 = 그 스냅숏 분위 · 두 자리 반올림)
+N10_MIN_GAMES = 10                  # 하루 판 수가 이보다 적은 걸음은 뺀다 — 승률이 0·50·100% 로 튄다
+N10_BINS = (35, 40, 45, 50, 55, 60, 65)   # 하루 승률 칸 경계(%) — 35 밑·65 위는 한 칸씩
+N10_PEER_RATE = 2.5                 # 검색 계정 한 줄 — 하루 승률 ±이만큼(%p)
+N10_PEER_BANDS = (100, 200)         # 같은 점수대 ±(차례로 넓힌다 — 걸음이 PREDICT_MIN_STEPS 미만이면)
+WEEKLY_CUTS = (200, 1000, 10000)    # 주간 요약 컷 변화
+WEEKLY_TOP_N = 10                   # 급상승 · 하루 최다 승 줄 수
+WEEKLY_PARK_RANK = 200              # 주차 중 — 이 순위 안 · 시즌 종료 WEEKLY_PARK_DAYS 일 안 · 이웃 쌍 사이 0판
+WEEKLY_PARK_DAYS = 7
+OPP_CARD_MIN = 5                    # 상대가 쓰는 카드 — 만난 판이 이보다 적으면 흐림
 N12_START_DAYS = 3                  # 시즌 시작일보다 이만큼 넘게 뒤에 처음 본 사람은 첫 챔스 판수를 '늦게 봄'으로
 RANK_CKPT_WARN = 24                 # WAL 비우기가 이만큼 이어서 막히면 [정보] 에 한 줄
 ELO_TRACK_MAX = 5                   # 하루 한 번 ELO 를 이어서 기록할 구단주 — 사용자가 직접 고른다(1.3.1 사용자 ⑥)

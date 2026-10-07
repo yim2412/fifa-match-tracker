@@ -16,9 +16,14 @@ from models import (
     MatchSummary, current_streak, longest_streaks, moving_win_rate, opponent_stats, parse_match, period_stats,
     summarize, win_rate_trend,
 )
-from predict import Prediction, describe as describe_prediction, predict_for
+from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
 from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
-                         meta_trend, rank_trend_series)
+                         is_champ, meta_trend, rank_trend_series)
+from rankmeta import (
+    FORMATION_HOWS, DayWinrate, Peers, RankMoves, TierMeans, ValueBins, ValueScore, Weekly, WinrateElo, blank_label,
+    day_winrate, find_sn, formation_group, group_meta, latest_pair, my_day_rate, pair_text, rank_moves,
+    ranked_nicknames, tier_means, value_bins, value_score, weekly, winrate_peers, winrate_to_elo,
+)
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
     ranker_pick_summary, recommend, recommend_candidates,
@@ -33,7 +38,7 @@ from stats import (
     Discipline, PositionOpponent, StreakAfter, after_streak_rates, aggregate_players, clutch_summary,
     daily_division, discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
-    opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
+    OppCard, opponent_cards, opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_baseline, team_color_stats, team_profile, time_of_day_rates, time_weekday_rates,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
@@ -47,13 +52,18 @@ __all__ = [
     "MatchSummary", "current_streak", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend",
     # predict — 시즌 말 순위 예측(38단계에서 비공개로 옮길 1순위)
-    "Prediction", "describe_prediction", "predict_for",
+    "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
     "PickCard", "PickSummary", "ranker_pick_summary",
     # rankerpick — 11-lite 추천(17단계) · rankcollect — 랭킹 추이(P2, rank.db 영구 집계)
     "SRC_OPP", "SRC_PICK", "SRC_RECOMMEND", "RecCard", "Recommend", "Standing", "my_team_color", "recommend",
     "recommend_candidates", "RankTrend", "rank_trend_series",
-    "MetaTrend", "meta_trend", "EloHist", "elo_hist_series", "elo_marker", "data_time", "meta_status",
+    "MetaTrend", "meta_trend", "EloHist", "elo_hist_series", "elo_marker", "data_time", "meta_status", "is_champ",
+    # rankmeta — 랭커 메타 ② 스냅숏 읽기(2.4.1)
+    "FORMATION_HOWS", "DayWinrate", "Peers", "RankMoves", "TierMeans", "ValueBins", "ValueScore", "Weekly",
+    "WinrateElo", "blank_label", "day_winrate", "find_sn", "formation_group", "group_meta", "latest_pair",
+    "my_day_rate", "pair_text", "rank_moves", "ranked_nicknames", "tier_means", "value_bins", "value_score", "weekly",
+    "winrate_peers", "winrate_to_elo",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",
@@ -64,7 +74,7 @@ __all__ = [
     "after_streak_rates", "aggregate_players", "clutch_summary", "daily_division", "discipline_stats",
     "division_entries", "division_stats", "division_trend", "finishing_ranking", "formation_of", "formation_stats",
     "goal_minute_buckets", "is_champion_or_above",
-    "opponent_position_players", "opponent_squad", "own_squad", "pass_style", "player_finishing_trend",
+    "OppCard", "opponent_cards", "opponent_position_players", "opponent_squad", "own_squad", "pass_style", "player_finishing_trend",
     "position_line", "possession_stats", "ranker_compare", "ranker_targets", "ranker_values", "rating_trend",
     "result_breakdown", "season_divisions", "season_id_of",
     "shot_distance_breakdown", "shot_map",

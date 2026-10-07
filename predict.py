@@ -369,6 +369,32 @@ def guess_end(today: date, start: date, recent_lengths: list[int], notice_end: d
     return EndGuess(tuple((e - today).days for e in ends), "estimate", text)
 
 
+@dataclass(frozen=True)
+class SeasonEnd:
+    start: date | None                  # 지금 시즌 시작(공지와 시즌표 대조 뒤) — 모르면 None
+    notice_end: date | None             # 쓸 공지 종료일
+    table_start: date | None            # 시즌표의 마지막 끝난 시즌 종료일
+    guess: EndGuess | None              # 시작을 모르면 None
+
+    def days_left(self) -> int | None:
+        """남은 날(후보의 중앙) — 모르면 None. "곧 끝남"은 후보 1~14 의 중앙."""
+        if self.guess is None or not self.guess.days:
+            return None
+        d = sorted(self.guess.days)
+        return d[(len(d) - 1) // 2]
+
+
+def season_end_estimate(seasons: list, notice: tuple[date, date] | None, today: date) -> SeasonEnd:
+    """시즌 종료일 — 공지 → 끝난 시즌 길이로 추정(예측과 주간 요약이 같이 쓴다 · 2.4.1 N13)."""
+    ended = sorted((s for s in seasons if s.end <= today), key=lambda s: s.end, reverse=True)
+    table_start = ended[0].end if ended else None
+    notice_end, start = resolve_notice(notice, table_start)
+    guess = None
+    if start is not None:
+        guess = guess_end(today, start, [(s.end - s.start).days for s in ended], notice_end)
+    return SeasonEnd(start, notice_end, table_start, guess)
+
+
 # ── 내 상태 ────────────────────────────────────────────────────────────────
 
 def my_state(elo_rows: list[dict]) -> tuple[float | None, tuple, int | None]:
@@ -491,9 +517,8 @@ def predict_for(*, elo_rows: list[dict], match_dates: list[datetime], rank_conn,
     if sum(daily) < analysis.MIN_BASE:
         return Prediction(False, MSG_FEW_GAMES)
 
-    ended = sorted((s for s in seasons if s.end <= today), key=lambda s: s.end, reverse=True)
-    table_start = ended[0].end if ended else None
-    notice_end, start = resolve_notice(notice, table_start)
+    est = season_end_estimate(seasons, notice, today)
+    notice_end, start, table_start, end = est.notice_end, est.start, est.table_start, est.guess
     cuts = rankcollect.season_cuts(rank_conn)
     length = {s.no: (s.end - s.start).days for s in seasons}
     past = [(length.get(no), c) for no, c in sorted(cuts.items(), reverse=True)]
@@ -501,8 +526,6 @@ def predict_for(*, elo_rows: list[dict], match_dates: list[datetime], rank_conn,
         return Prediction(False, MSG_NO_SEASONS)
     if notice_end is not None and notice_end <= today and table_start == start:
         return Prediction(False, MSG_CLOSING)
-    recent = [(s.end - s.start).days for s in ended]
-    end = guess_end(today, start, recent, notice_end)
 
     res = simulate(SimInput(elo, hist, daily, now_cuts), steps, past, list(end.days),
                    (today - start).days, rng or random.Random(config.PREDICT_SEED), n)
