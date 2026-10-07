@@ -36,7 +36,7 @@
 | `playerinfo.py` | 선수 카드 상세·능력치 시뮬레이터 스크래핑 · 급여·OVR 은 **본 카드 구역에서만** · 세부는 머리말 |
 | `store.py` | SQLite 누적(`fifa.db`) — **화면은 API 가 아니라 이 DB 를 본다** · **모든 연결 `secure_delete=ON`** · 새 쿼리는 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 없는지(`test_rules`) · 세부는 머리말 |
 | `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·랭킹 수집 스위치(`RANK_COLLECT`·`RANK_*` 상수 — `read_env_switches` 가 디스크에서 다시 읽는다)·UA, 매치 종류·조회 개수 기본값 |
-| `notice.py` | 이용 안내·개인정보·오픈소스 목록. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다** · 새 패키지는 `THIRD_PARTY` 에 한 줄 · 세부는 머리말 |
+| `notice.py` | 이용 안내·개인정보·오픈소스 목록. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(문구 골든 `test_notice_text_bumps_version` 이 짝을 지킨다 · 바뀐 점은 `CHANGES` 에 버전별 한 덩이) · 새 패키지는 `THIRD_PARTY` 에 한 줄 · 세부는 머리말 |
 | `crashlog.py` | 처리 안 된 예외 → `crash.log`. exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다 · 세부는 머리말 |
 | `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트(SHA256 대조 후 설치) · 첨부 이름 `SETUP_ASSET` 은 `tools/release.py` 와 같아야 · 세부는 머리말 |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
