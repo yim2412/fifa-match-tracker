@@ -9,41 +9,41 @@
 
 | 파일 | 역할 |
 |------|------|
-| `app_main.py` | PyQt6 UI — 랭킹 추이는 탭 셋(추이 · 메타 변화 · 점수 분포 — 2.3.1). rank.db 정리는 `RankMaintWorker`(예약기 `RankCollectScheduler.maintain` — 켤 때 VACUUM 포함 · 1시간 확인마다 · 끄는 길 `sync_ranker_pick_data` · 겹치면 끝난 뒤 한 번 · 수집과 겹치면 수집이 기다림). 검색 화면 → 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드 포함), 조회 워커 스레드(`MatchLoader`). 메뉴를 늘리려면 `NAV` 에 한 줄 — 한 메뉴 안의 구획은 `Tabs`(페이지 안 탭, 2.1.1 · 보던 탭은 `view/tab/<sid>`) · 아직 빈 메뉴는 `config.HIDDEN_NAV_UNTIL_READY`(남아 있으면 `release.py` 가 멈춘다) · 1.x 메뉴 이름 복원은 `OLD_PAGE_NAMES`. ELO 그래프(1.3.1)는 `EloLoader`(작업 스레드 — fifa.db `elo_history`·`elo_track` + rank.db 컷 읽기 전용)가 읽고 창은 `self._elo[ouid]` 로 그리기만 — 띄우는 곳은 `_on_loaded`(모든 열기)·로더 `elo_saved`·수집 회차 끝 셋, 요청 번호로 늦은 읽기를 버린다. 옛 동의자 다시 묻기는 `ask_notice_update_once`(창이 **보일 때** — 일반 실행·트레이 [열기]·두 번째 실행). 로더는 계정 확인 뒤 저장된 경기 읽기(`load_saved`)·랭킹·메타를 넥슨 조회와 **나란히** 돌리고, 켤 때 마지막 계정을 미리 읽어 둔다(`SavedPrefetch` — 화면엔 안 그림). 랭킹이 늦으면 `rank_ready` 로 카드만 뒤따른다 |
+| `app_main.py` | PyQt6 UI — 왼쪽 메뉴(`NAV` 표)·페이지·작업 스레드 로더들. 메뉴를 늘리려면 `NAV` 에 한 줄(그리기 표는 PyQt 7) · 세부는 머리말 |
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |
-| `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다. 1.4.1: 패스 종류(`pass_style`) · 주별 평점(`rating_trend`) · 랭커 비교(`ranker_targets`·`ranker_compare`·`ranker_values` — **랭커 값은 이미 경기당 평균이라 다시 나누지 않는다**, `test_ranker_values_are_per_game`) · 슛의 어시 위치(`Shot.assist_x/y`). 2.1.1: 축구장 줄 배치(`pitch_rows` — 위=공격 → 아래=GK, 줄 안 x 순 `PITCH_X`) · 스쿼드 가치(`squad_value` — 모르는 시세는 0 이 아니라 따로 셈) · 강화 반영 OVR(`card_ovr` — `config.GRADE_OVR_BONUS`) · 키플레이어(`key_players`) |
+| `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과·랭커 비교·축구장 배치. 역산 상수가 여기 · 세부는 머리말 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵. 조건부 승률 문장은 `Insight.basis`(`Basis` — 화면의 근거 막대)를 싣는다 — **새 규칙 함수는 `BASIS_RULES`/`NO_BASIS_RULES` 둘 중 하나에** 넣는다(test_analysis 가 모듈의 규칙 함수와 대조) |
-| `predict.py` | 시즌 말 순위 예측(1.3.1) — `day_steps`(rank.db 원본의 이웃 스냅숏 하루 걸음 · 원본 id 목록으로 캐시) → `simulate`(점수대 ±띠 · 경기 수 4분위 · 직전 사흘 3분위 칸에서 뽑아 이어 붙임 · 사흘 묶음) → `predict_for`(조건을 차례로 보고 못 내면 원인 문구 `MSG_*`) · 종료일은 `season_end_estimate`(공지 → 끝난 시즌 길이 — 주간 요약 주차와 같이 쓴다 · 2.4.1). 칸 경계는 **실행 때 표본에서** 잰다(상수 아님). 상수는 `config.PREDICT_*`. 화면은 `core_api` 로만, 계산은 `app_main.PredictWorker`(EloLoader 뒤 · 요청 번호) — 숫자를 내면 `fifa.db predictions` 에 하루 한 줄. **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저 본다** |
-| `core_api.py` | **화면 ↔ 분석 경계**(19단계) — 화면 쪽(`app_main`·`dashboard`·`check_api`)은 analysis·stats·models 를 여기서만 가져온다. 화면에서 새 분석 함수를 쓰려면 import 와 `__all__` 에 한 줄씩. 나중에 핵심을 비공개 모듈로 옮길 때 고칠 곳이 여기 하나가 되게(ROADMAP "배포 보호 준비"). 이름을 복사해 오므로 **테스트에서 바꿔 끼울 땐 `core_api` 쪽을**(`app_main.core.narrate`). `test_ui_reaches_analysis_only_through_core_api` 가 지킨다 |
+| `predict.py` | 시즌 말 순위 예측 — 상수는 `config.PREDICT_*` · **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저** · 세부는 머리말 |
+| `core_api.py` | **화면 ↔ 분석 경계** — 화면 쪽은 analysis·stats·models 를 여기서만. 새 함수는 import 와 `__all__` 에 한 줄 · 테스트에서 바꿔 끼울 땐 `core_api` 쪽을 |
 | `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) |
-| `charts.py` | 그래프(QPainter) — 대시보드·승률 그래프·기간별 추이·시즌별 막대 · 점수 분포(`HistogramChart` — 2.3.1, 맨 왼쪽 칸 흐림 · 비교 선 · 세로선). 색은 `theme.CHART_*` — 앱의 GREEN/RED 는 적록 색약에서 구분이 안 돼 그래프엔 안 쓴다. 히트맵(`HeatmapChart` — 칸 안 글자 · 흐린 칸은 색 없음 · 색 상한 `HEAT_MAX_MIX` 는 글자 대비 4.5 로 잼)·도넛 조각(`donut_segments` — 6개 넘으면 "기타"). 추이는 **`AreaTrendChart` 하나**(1.3.1) — 축(`Axis` · `PCT_AXIS`/`Axis.fit`)·기준선·이동평균·경기 수 띠·날짜 x·기준 계단선은 전부 `set_data` 인자. **기본값 그림은 확장 전과 픽셀까지 같아야** 한다(대시보드·선수 카드가 기본값만 쓴다) — `tests/legacy_area_chart.py`(얼린 사본, 고치지 않는다)와 `test_area_chart_defaults_unchanged` 가 대조 |
-| `widgets.py` | 화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 v2(`PitchWidget` — 2.1.1: `PitchCard` 줄 목록을 받아 줄마다 폭을 사람 수로 나눈다 · 칩은 QPainter 로 크기에 맞춰 그리고 작아지면 얼굴 → 시세 줄 순으로 뺀다 · 위 띠 = 스쿼드 가치·급여 + 자동 읽기가 막힌 이유와 [안내 보기]. OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) · 접는 구획(`Collapsible`), 좁으면 접히는 바(`WrapBar`)·페이지 안 탭(`PageTabs` — 숨기기/보이기라 숨은 탭이 최소 폭을 안 넓힌다 · 탭줄은 `Card.add_to_title_row` 로 제목 옆)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등 |
+| `charts.py` | 그래프(QPainter) — 색은 `theme.CHART_*` · 추이는 `AreaTrendChart` 하나, **기본값 그림은 얼린 사본과 픽셀까지 같아야**(`test_area_chart_defaults_unchanged`) · 세부는 머리말 |
+| `widgets.py` | 화면 부품 — 표(`FitTableWidget`)·축구장(`PitchWidget`)·`PageTabs`·`WrapBar`·`VScrollArea`·`FitLabel` 등 · 세부는 머리말 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회는 상대가 적으면 상대마다 검색(`fetch_manager_rank`), 500명보다 많으면 1만 위 목록 500쪽(`fetch_rank_page`) — 목록은 **행 단위로 잘라 읽는다**(팀컬러 빈 행에서 뒤가 밀린다) |
-| `teamcolor.py` | 팀컬러 효과표(2.2.1) — 데이터센터 목록(`fetch_list`)·상세 단계(`fetch_detail`)·적용 선수 JSON(`fetch_players` — 한 번 100명, `more_players` 가 OVR 상한으로 이어 받고 같은 OVR 이 100명을 넘으면 상한 −1). 상세·선수는 **`X-Requested-With` 헤더가 있어야** 200(사용자 U4 — 붙인다) · `allow_redirects=False`(302 = 오류, 오류 페이지 주소엔 안 간다) · 실패 종류 `TeamColorError.kind`(off·down·format·rate) → 문구 `MESSAGES`. **이름이 같은 팀컬러 11쌍**(`config.TEAMCOLOR_DUP_NAMES` — 상수, 받은 목록으로 넓히지 않는다: 창을 열기 전후로 표가 바뀐다)은 화면 키 `label(이름, 엠블럼)`("이름 · 강화"/"이름 · 클럽"/"이름 (구분 전)")으로 가르고, 랭커 쪽과 맞댈 땐 `name_of`. 효과 창은 `app_main.TeamColorDialog`(모달 아님 · 하나만) + `TeamColorEffectLoader`(캐시 `store.load_teamcolor_meta/steps` 7일 · 받은 선수 급여는 `store.save_card_salary` — 급여 열만, JSON 의 OVR 은 선수 페이지와 달라 안 쓴다) |
-| `rankcollect.py` | 랭킹 1만 명 수집(1.1.1, 기본 꺼짐 `config.RANK_COLLECT`) — `rank.db`(fifa.db 와 **따로** — 지우기가 파일 삭제) 에 스냅숏 원본(14일)·집계(영구)·수집 상태·잠금. 팀컬러 엠블럼은 **옆 표 `snapshot_emblems`**(2.2.1 — `snapshot_rows` 는 옛 버전의 열 이름 없는 16칸 INSERT 때문에 안 건드린다 · 원본 없는 스냅숏 줄은 `prune_raw` 가 지운다). `collect()` 한 번 = 한 회차: `.env` 다시 읽기 → 잠금 → 500쪽(작업자 6, 첫 실패에 나머지 취소) → 한 트랜잭션 저장 → `record_result`(실패 대기 1~24h · 차단 3회차면 스스로 끔 D6 · 연결 안 됨·정각 걸침은 안 셈). 예약은 앱 몫 — `is_due`·`pick_start`·`start_still_valid` 만 준다(앱은 `app_main.RankCollectScheduler` — 1시간 확인·예약 하나·늦게 터지면 다시 고름). 회차 끝(수집·팀컬러 목록 저장 둘 다)에 `sync_tracked_elo` — 사용자가 고른 따라가기 계정(최대 5)의 ELO 를 원본이 남은 14일 전부에서 fifa.db `elo_history`(source="snapshot")로 옮긴다(멱등 · 커밋 뒤 · 계정마다 cancel · 실패는 건너뜀). 화면 읽기는 `open_rank_db_ro`(없으면 None — 만들지 않는다). 팀컬러 목록(`RankListLoader`)과 **목록 읽기 차례**(`acquire_list_read`)를 나눠, 하루 안의 스냅숏이 있으면 팀컬러는 거기서(요청 0) · 겹치면 뒤에 온 쪽이 기다린다 · 팀컬러가 다 읽은 목록은 수집이 켜져 있으면 스냅숏으로(`save_from_pages`). 토글은 `set_enabled_at`(.env 와 rank.db 사본 둘 다). 스레드 우선순위는 ctypes 로 낮추는데 **핸들 형을 안 적으면 64비트에서 조용히 실패**했다(테스트가 잡음). 랭킹 추이 화면(17단계)은 `rank_trend_series` — 영구 집계만 · 지금 시즌 · 하루에 둘이면 그날 마지막. **2.3.1 랭커 메타**: 쪽마다 넥슨 기준 시각(`ranker.parse_ref_time` — 정규식은 `ranker._REF_TIME` 하나) → 걸침은 기준 시각끼리(없으면 Date 의 시) · 1쪽이 지난 스냅숏과 같으면 `same`(나머지 요청 0 · 안 셈 · `same_since`). 옆 표만 늘렸다(`snapshot_meta` 기준 시각·빈 순위·처리 깃발 · `elo_hist` · 사람별 `run_open`·`elo_season`·`champ_watch` · 익명 `_done`·`champ_first` · `pick_days`·`pick_counted`) — `snapshot_rows`·`snapshots` 의 열과 INSERT 는 옛 버전 때문에 안 건드린다. 처리는 `process_meta`(저장 커밋 뒤 · 정리 때 — 깃발은 그 처리와 같은 트랜잭션 · 연속은 경과 시간 `RANK_CONT_MAX_H` · 시즌은 신호 둘을 **같은 출처끼리 숫자·날짜로** `_season_verdict`). 새 읽기의 시각은 `data_time`(기준 시각, 없으면 taken_at) — **`elo_history` 는 그대로 taken_at**(바꾸면 `ux_elo_src` 가 못 막는다). 사람별 지우기는 **표시가 아니라 상태로** 판정(`purge_person_if_needed` — 꺼짐·동의 6 전인데 줄 있음 · `person_epoch` ≠ `.env` 의 켠 시각). 정리는 `maintenance`(작업 스레드 · 수집 잠금 · 없으면 안 만든다 `open_rank_db_existing` — `mode=rw` URI) — **화면 스레드는 rank.db 에 쓰지 않는다**(토글 사본도 `app_main.RankMaintWorker`). 모든 연결 `secure_delete` · 정리 뒤 `checkpoint`(WAL TRUNCATE) · VACUUM 은 secure_delete 없이 지운 흔적(`raw_pruned` 0 인데 원본 없음)이 있을 때만. `is_due` 는 **마지막 회차의 정각** + 23시간(지터가 안 쌓인다 — 시뮬 테스트 셋) |
-| `rankmeta.py` | 랭커 메타 ② 스냅숏 읽기(2.4.1 · 31단계) — rank.db 를 **읽기만**(요청 0 · 쓰기 0). 파일 머리말 표가 규칙: 지금 시즌 · `data_time` · 이웃 쌍 `latest_pair`(원본 남은 마지막 둘 · ≤ `RANK_CONT_MAX_H`) · **N10 하루 걸음만 `predict._gap_ok`(수집 시각)** · 음수 차 뺌 · 하루 승률·승률→점수는 **앞 스냅숏 순위**로 구간 · 랭커 승률 승÷(승+패). 함수: `day_winrate`(B2) · `value_score`(B3 — `B3_MIN_USERS` 이상 팀컬러끼리 백분위 · `B3_MIN_TEAMS` 미만이면 점수 없음) · `value_bins`(B4) · `tier_means`(B6) · `formation_group`/`group_meta`(N6 — B1 은 화면이 묶는다) · `winrate_to_elo`/`winrate_peers`/`my_day_rate`(N10) · `weekly`(N13) · `rank_moves`/`judge`(N8·N9 — 판정 순서는 `judge` 한 곳) · `find_sn` · `ranked_nicknames`(N7 — DISTINCT 대신 파이썬 집합). 결과는 (DB 파일, 지금 시즌 스냅숏, 원본 목록, 인자) 키로 캐시(`clear_cache` — 테스트). 1만 행 × 14스냅숏 첫 계산이 전부 CPU 0.3초 안이라 작업 스레드 없이 화면 스레드에서 읽는다(`test_rankmeta` 예산). 챔스 판정은 `rankcollect.is_champ` 한 곳. 화면은 `core_api` 로만 — rank.db 가 바뀌는 길 넷(회차 끝 · 팀컬러 목록 저장 · 정리 끝 `maintained` · 끄기/지우기 `sync_ranker_pick_data`)은 `app_main.RANK_VIEW_KEYS` 를 같이 무효화 |
-| `rankerstats.py` | 랭커 기록 받기(1.4.1 13단계) — `collect` 가 하루 캐시(fifa.db `ranker_stats`)에 없는 쌍만 `nexon_api.get_ranker_stats` 로(묶음 `RANKER_STATS_BATCH` 50 — 한 요청 상한은 **URL 길이**, 81쌍까지 · 묶음마다 한 트랜잭션). 넥슨이 응답에서 뺀 쌍(데이터 없음)도 NULL 로 그날 기억한다. 띄우기는 `app_main.RankerStatsLoader` — "선수 지표 › [랭커 비교]" 탭(N1)과 선수 카드 [랭커 기록] 탭(N2 · 탭을 처음 열 때)이 같이 쓴다 |
-| `tradecollect.py` | 거래 기록 받기(1.4.1) — 넥슨 거래 API 는 **ouid 를 무시하고 API 키 주인 것만** 준다(docs/DONE.md 1.4.1 R1·R2) → `fifa.db trades` 에 ouid 열이 없고 `get_trades` 는 ouid 를 안 받는다. `collect()` 한 번: 키 지문(`trade_state.key_fp`)이 다르면 **판정하지 않고 옛 주인 거래를 `trades_prev`(지문별)로 옮기고 다시**(옮긴 커밋 뒤 `on_wiped` → 화면 `_invalidate` · 그 키로 돌아와 다 받으면 넥슨이 더는 안 주는 줄만 되돌린다 — 넥슨이 옛 거래를 버리는지 몰라 지우지 않는다) → 위쪽(0쪽부터 `top_stop` − 7일 이하까지 · 하루 한 번 `fetched_at`) → 아래쪽(`done_<kind>` 가 아니면 저장 수 − 100쪽부터 빈 쪽까지). 받는 규칙은 검토 1~5회차 [상]이 나온 자리라 파일 머리말 표를 먼저 읽는다. 띄우기·양보는 `app_main.TradeLoader`/`start_trades`(검색·비교 끝 · 키 바꾼 직후 · 첫 실행 키 입력 뒤 · 거래 화면 열 때 / 새 검색·비교 시작 때 `cancel()` 만). 시세 캐시(`card_prices`)는 `playerinfo.collect_prices`(하루 상한은 **시도 수**로 — 시세가 빈 카드도 센다) |
-| `rankerpick.py` | 랭커 픽(2.1.1 · 16단계 · 2.3.1 N15 `record_pick_days` — 한 바퀴 끝에 그날 아는 픽을 rank.db `pick_days` 에 **더한다**: 날짜 = 마지막 경기 날짜 · 출처 PICK 상위 200만 · 센 것은 `pick_counted`("경기/프로필 번호" · 14일) · 14일보다 옛 경기는 안 셈. 띄우기 `RankerPickLoader._record_days`(만들지 않는 열기)) — `top_rankers`(rank.db 원본이 남은 마지막 스냅숏 상위 200) → `collect`(파일 머리말 표: 실제 요청 직전에만 `api_budget` 계수 · `attempts=1` · 간격 0.25초 · 429 는 60초를 1초씩 쉬고 한 번 더 → 또 429 면 그날 `hit_429` · 그날 다른 로더 최종 429 면 시작 안 함 · 3일 · 닉네임 바뀌면 바로) → 상세는 `store.save_matches` 그대로(**`accounts` 엔 안 넣는다**) + `ranker_matches` 표시. 화면 집계 `ranker_pick_summary`(core_api). 띄우기는 `app_main.RankerPickLoader`/`start_ranker_pick` — **랭커 픽 화면과 창이 보일 때만**(메뉴 이동·숨김·최소화면 cancel · 다시 보이면 잇는다) · 오픈API 백그라운드는 하나씩(검색·비교·거래·랭커 기록 뒤). 지우기는 화면 스레드 한 함수 `purge_ranker_pick_data`(로더가 돌면 끝난 뒤) — 끄는 길은 전부 `sync_ranker_pick_data` 를 거친다(수집이 꺼져 있으면 전부, 켜져 있으면 14일 · 켤 때도 한 번). 추천(17단계 · [추천] 탭): `my_team_color`(스냅숏 내 행 → 검색 때 읽은 팀컬러·캐시 → 모르면 None, 짐작 안 함) → `recommend_candidates`(① 받아 둔 상위 200 · ② 색인의 내 상대 중 1만 위 안 · 30일 — 요청 0 · ③ 받아 둔 201~1,000) → `recommend`(문턱 `RECOMMEND_MIN_RANKERS` 미만이면 표 없음). ③ 받기는 `recommend_targets` — 로더가 **[추천] 이 보일 때만 싣고 상위 200보다 먼저**(200명이 하루 상한을 혼자 다 쓴다). [픽] 로더가 도는 중 [추천] 을 열면 멈추고 실어서 다시(`_pick_restart`) |
-| `squad_timeline.py` · `trade_book.py` | 스쿼드 타임라인 · 이적시장 가계부(1.4.1 · 12단계) — 화면 없이 계산만, 화면은 `core_api` 로. 경기(선발만 — 교체 명단 28 은 출전 아님) + 거래 → 사건(구매·판매·첫/마지막 출전·강화 변화) · 앞뒤 `TIMELINE_WINDOW` 경기 · 구매↔판매 **같은 spid 선입선출, 전체 이력으로 짝 맞춘 뒤 범위로 자른다** · 짝 없는 구매의 상태(보유 중 → 최근 구매 → 미출전 → 최근 경기에 안 씀, 위에서부터 먼저 맞는 것 · 보유는 spid 마다 한 장). **같은 초는 "산 뒤 썼다"**, 산 지 정확히 `HOLD_GRACE_DAYS` 일이면 아직 최근 구매(경계 테스트가 지킨다). 거래는 **내 계정으로 정했을 때만** 붙인다 — 판정은 `app_main._timeline_for_screen` 한 곳(가계부·타임라인이 같이 씀, 같은 입력이면 다시 안 계산). 거래가 바뀌는 길은 `_invalidate_trades`(가계부·타임라인 둘 다). 시세(`PriceLoader`)는 가계부를 그릴 때 하루 한 번 · 보유·최근 구매만 · 거래 받기가 돌면 그 뒤 |
-| `tray.py` | 트레이 상주(1.1.1) — `AppShell`(트레이 · 수집 예약 · 6시간 업데이트 확인 · 숨긴 30분 뒤 내려놓기)과 **종료 진입점 하나 `quit_app(fast)`** (파일 머리말 표 — 새 종료 경로는 여기를 거친다). 창(`MainWindow`)은 정리를 `shutdown(fast)` 로 내주고, closeEvent 는 `_quitting` 이면 받기만(`app.quit()` 이 다시 부른다). 한 번만 실행(`SingleInstance`)은 **뮤텍스로 판정** — 윈도우에선 같은 이름 `QLocalServer` 의 두 번째 listen 도 성공한다(2026-10-04 실측). 파이프는 "창 앞으로"와 **종료 부탁(`--quit` — 제거기가 부른다. 제거기는 설치기와 달리 떠 있는 앱을 안 닫아 폴더가 통째로 남았다, 1.1.1 실측)**만. `--quit` 은 떠 있는 게 없으면 아무것도 켜지 않는다(`.iss` `QuitArg` 와 같아야 — 테스트가 대조). **트레이 풍선 알림은 없다**(2026-10-05 사용자 — exe 실측 중 뜬 알림을 보고 "알림 자체는 안 보내도록"). 숨긴 중 생긴 일은 창을 열 때 — `test_no_tray_balloon_from_any_path` 가 `showMessage(` 를 소스에서 막는다 |
+| `teamcolor.py` | 팀컬러 효과표(목록·단계·적용 선수) — `X-Requested-With` 필요 · 이름 같은 팀컬러는 `config.TEAMCOLOR_DUP_NAMES` · 세부는 머리말 |
+| `rankcollect.py` | 랭킹 1만 명 수집 · `rank.db`(fifa.db 와 따로) · 기본 꺼짐. **`snapshot_rows`·`snapshots` 의 열·INSERT 는 옛 버전 때문에 안 건드린다(옆 표만)** · **화면 스레드는 rank.db 에 쓰지 않는다** · 세부는 머리말 |
+| `rankmeta.py` | 랭커 메타 ② — rank.db **읽기만**(요청 0 · 쓰기 0). rank.db 가 바뀌는 길은 `app_main.RANK_VIEW_KEYS` 를 무효화 · 세부는 머리말 |
+| `rankerstats.py` | 랭커 기록 받기 — 하루 캐시(`ranker_stats`)에 없는 쌍만 · 한 요청 상한은 URL 길이 |
+| `tradecollect.py` | 거래 기록 받기 — 넥슨 거래 API 는 **ouid 를 무시하고 키 주인 것만** 준다(`trades` 에 ouid 열 없음) · 받는 규칙은 머리말 표를 먼저 |
+| `rankerpick.py` | 랭커 픽·추천 — 상위 랭커 마지막 경기를 오픈API 로(하루 계수 `api_budget` · 429 · **화면이 보일 때만**) · 지우기는 `purge_ranker_pick_data` 한 곳 · 세부는 머리말 |
+| `squad_timeline.py` · `trade_book.py` | 스쿼드 타임라인 · 이적시장 가계부 — 계산만(화면은 `core_api`) · 거래는 내 계정일 때만(`app_main._timeline_for_screen`) · 세부는 `squad_timeline.py` 머리말 |
+| `tray.py` | 트레이 상주 · **종료 진입점 하나 `quit_app(fast)`**(새 종료 경로는 여기를 거친다) · 한 번만 실행은 뮤텍스 · **트레이 풍선 알림 없음** · 세부는 머리말 |
 | `autostart.py` | 자동 실행 — HKCU Run 에 `"<exe>" --tray`. exe 에서만 · 값 이름을 설치판(`VALUE_INSTALLED` — `.iss` 제거기와 같아야)·포터블로 나눈다 · 경로는 없어졌을 때만 고친다(`repair`) |
 | `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
-| `playerinfo.py` | 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑. 급여·OVR 은 **본 카드 구역**(`playerThumb` … `infoWrap`)에서만 — 페이지에 다른 카드 값이 수십 개다. 카드 캐시 채우기 `collect_cards`(쓰임별 하루 계수 `KIND_CHIP`·`KIND_LEDGER` — 요청 직전에만 `store.budget_take` · 웹 데이터 꺼짐은 요청도 계수도 0) · `save_card`(시세 + `card_info`) |
-| `store.py` | SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL — 팀컬러는 넥슨 이름 + `emblem` 열 "읽은 시각\t엠블럼 키", 시각이 `fetched_at` 과 다르면 옛 버전이 이름만 바꾼 줄이라 엠블럼 없음 · 화면 글자가 아니라 로더 원값 `_teamcolor_raw` 를 저장)·팀컬러 효과 캐시(`teamcolor_meta`·`teamcolor_steps` 7일)·검색한 구단주 ELO(`elo_history` — 메인 검색 로더만 `record_elo=True`, 비교 로더는 안 적는다 · 따라가기 계정은 수집이 snapshot 줄을 더한다 · 같은 (계정, 시각, 출처)는 `ux_elo_src` 가 막는다)·따라가기 목록(`elo_track`, 최대 `config.ELO_TRACK_MAX`)·거래(`trades`·`trade_state`·카드 시세 `card_prices` — 1.4.1, 받는 규칙은 `tradecollect`)·카드 정보(`card_info` — 급여·1강 OVR, 30일)·하루 요청 계수(`api_budget` — `budget_take` 는 BEGIN IMMEDIATE 로 읽고-더하기, 재시작해도 남는다 · `hit_429` 는 그날 랭커 픽을 막는 표시)·선수 색인(`match_squads` + `squad_owner`·`squad_match` — 2.1.1 · 정수 키, `matches.rowid` 를 안 가리킨다. 새 경기는 `save_matches` 안에서 `index_squads`(SAVEPOINT — 한 경기 실패는 그 경기만, 그래도 `squad_match` 줄은 남겨 다시 안 훑는다) · 옛 경기는 `backfill_squads`(1,000경기 · PK 순 정렬해 넣기 — 경기마다 넣으면 2배) · 찾기 `owners_using_card`)·랭커 픽(`ranker_squads`·`ranker_matches` · 지우기 `purge_ranker_data`). **모든 연결이 `secure_delete=ON`** — 지우는 연결에서만 켜면 그 전 삽입·재배치로 페이지 빈칸에 남은 다른 구단주 닉네임이 그대로였다(2026-10-06 테스트가 파일 바이트로 잡음). **화면은 API 가 아니라 이 DB 를 본다**. 검색 결과는 바탕(화면이 가진 목록 · 미리 읽은 것 · 새로 읽은 것) + DB 에만 있는 경기(`known_ids` 대조 — 시각으로 자르면 이어 받은 옛 경기를 빠뜨린다)를 `merge_details`. 열 때 `PRAGMA optimize` 로 통계를 갱신하는데, **통계가 생기면 SQLite 가 계획을 바꾼다** — `load_details` 는 본문을 통째로 임시 정렬하는 계획을 골라 SQL 이 3배가 됐다(2026-10-04). 그래서 `(종류, 날짜)` 인덱스를 직접 지정한다. 새 쿼리를 붙이면 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 가 없는지 본다. 해석은 `orjson`(없으면 json, 배포판엔 `release.py` 가 확인) |
+| `playerinfo.py` | 선수 카드 상세·능력치 시뮬레이터 스크래핑 · 급여·OVR 은 **본 카드 구역에서만** · 세부는 머리말 |
+| `store.py` | SQLite 누적(`fifa.db`) — **화면은 API 가 아니라 이 DB 를 본다** · **모든 연결 `secure_delete=ON`** · 새 쿼리는 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 없는지(`test_rules`) · 세부는 머리말 |
 | `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·랭킹 수집 스위치(`RANK_COLLECT`·`RANK_*` 상수 — `read_env_switches` 가 디스크에서 다시 읽는다)·UA, 매치 종류·조회 개수 기본값 |
-| `notice.py` | 이용 안내·개인정보·웹 데이터 고지·오픈소스 목록(`THIRD_PARTY`) — 첫 실행 `NoticeDialog` 와 [정보] `AboutDialog` 가 같은 글을 쓴다. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(이미 동의한 사람에게 다시 보이게). `NOTICE_BASE_VERSION` 이상 동의자는 막지 않고 창이 보일 때 다시 묻기만(지금 체크 값 그대로) — 올릴 때 "옛 동의로 계속 써도 되나"로 BASE 를 판단하고, 새 기록만 따로 막는다(`track_allowed`). 새 패키지를 묶으면 `THIRD_PARTY` 에 한 줄 — spec 이 라이선스 전문을 `_internal/licenses/` 에 넣고 `release.py` 가 빠진 걸 막는다 |
-| `crashlog.py` | 처리 안 된 예외 → `%LOCALAPPDATA%\피파전적관리\logs\crash.log`. **exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다. **faulthandler 는 윈도우에서 처리된 네이티브 예외도 "fatal" 로 적는다**(1.1.1 exe 실측 — COM 0x8001010d) → 실행마다 `crash.fault.<PID>` 에 받고 정상 종료(atexit)면 버리고, 다음 실행 때 남은 것(지울 수 있는 것 = 쥔 프로세스가 죽은 것)만 crash.log 로 옮긴다 |
-| `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다). 창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다. 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조) |
+| `notice.py` | 이용 안내·개인정보·오픈소스 목록. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다** · 새 패키지는 `THIRD_PARTY` 에 한 줄 · 세부는 머리말 |
+| `crashlog.py` | 처리 안 된 예외 → `crash.log`. exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다 · 세부는 머리말 |
+| `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트(SHA256 대조 후 설치) · 첨부 이름 `SETUP_ASSET` 은 `tools/release.py` 와 같아야 · 세부는 머리말 |
 | `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
-| `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip · 설치 파일(Inno Setup 6) → 개인정보 검사(대조 문자열이 안 잡히면 멈춤) → `gh release` 명령 **출력만**. `.iss` 는 **UTF-8 BOM**(없으면 한글이 ANSI 로 읽힌다)이고 `AppId` GUID 는 바꾸지 않는다(바뀌면 업데이트가 별개 프로그램으로 깔린다). **릴리스 첨부 이름은 영문**(`ASSET_PREFIX`) — GitHub 가 한글을 지워 v0.2.0 zip 이 `-v0.2.0.zip` 으로 올라갔다(2026-10-02) |
-| `tests/` | `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) · `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스 — 자식은 `FIFA_DATA_DIR` 임시 폴더로, 안 주면 실제 fifa.db 를 열었다) · `test_rankcollect.py`(수집기 — 가짜 목록) · `test_trades.py`(거래 받기·시세 캐시·랭커 기록 캐시 — 가짜 거래·랭커 목록) · `test_timeline.py`(타임라인·가계부 — 지어낸 경기·거래 · 1만 경기 예산) · `test_rankerpick.py`(선수 색인·백필 · 랭커 픽 받기 규칙 · 지우기 — 가짜 API · 2만 경기 예산) · `test_predict.py`(예측 — 가짜 스냅숏) · `test_rankmeta.py`(랭커 메타 ② — 지어낸 rank.db · 1만 행 × 14스냅숏 CPU 예산) · `test_tray.py`(트레이·종료·한 번만 실행·자동 실행 — 창과 엮이는 X 숨김·내려놓기는 `test_ui_smoke`) · `test_release.py`(배포 검사) · `test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py`. pytest 없이 파일을 직접 실행. **모든 `main()` 루프는 `watchdog.limit`** 안에서 테스트를 돈다 — 하나가 300초(`TEST_LIMIT_S`)를 넘기면 이름·호출 스택을 찍고 종료 코드 3(2026-10-06 스모크가 실패 대신 18분 멈췄다 · 재현 못 함). 새 테스트 파일도 같은 루프로 |
-| `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(릴리스 본문의 `<!-- season-end: … start: … -->` 한 줄만 바꾼 파일 + `gh release edit` **출력만** · `docs/season_end.txt` 도 — `release.py` 가 새 릴리스에 이어 붙인다) · 시즌 뒤 예측 대조(저장된 프로필 번호로). 앱은 `updatecheck.check_full` 로 공지를 받아 `settings.ini season/*` 에 두고, 지금 시즌과의 대조는 **쓸 때**(`predict.resolve_notice`) |
+| `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip·설치 파일 → 개인정보 검사 → `gh release` 명령 **출력만**. `.iss` 는 UTF-8 BOM · `AppId` 불변 · 첨부 이름은 영문 · 세부는 `tools/release.py` 머리말 |
+| `tests/` | pytest 없이 파일을 직접 실행 · **모든 `main()` 루프는 `watchdog.limit` 안에서**(새 테스트 파일도) · 파일별 범위는 `tests/README.md` |
+| `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(본문 한 줄 바꾼 파일 + `gh release edit` **출력만**) · 시즌 뒤 예측 대조 · 세부는 `tools/season_notice.py` 머리말 |
 | `tools/review_kit.py` | 계획 검토 준비(ROADMAP "검토 방법" 11~13) — `bundle`(절이 짚은 코드 조각 · 정의/쓰임만/없음) · `diff`(회차 사이 바뀐 줄 + 진입점 표 행) · `ledger`(주장 장부 빈 표). 검토자에게 파일을 통째로 읽히지 않으려고 |
-| `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 기능 공개 전부터 재료를 쌓는다(2026-10-07): ① rank.db 스냅숏 원본을 14일 정리 전에 `DATA_DIR/dev_archive.db` 로(키는 `taken_at` — rank.db 를 지우면 id 가 1부터) ② 데이터센터 `rank_advice` 의 기준 시각 ③ `rankerpick.collect` + 상위 200 선발을 날짜별 `pick_days` — `.env` 에 `DEV_NEXON_API_KEY`(서비스 단계 키 · 2026-10-07 발급)가 있으면 그 키로, 계수 `ranker_pick_dev`·상한 5,000·하루마다 다시(앱 키의 계수·429 와 따로 — `collect` 의 `budget_kind`·`daily_cap`·`stale_days`, 기본값은 앱 그대로). 앱 키 `NEXON_API_KEY` 는 안 바꾼다(바꾸면 거래가 '키 바뀜'으로 `trades_prev` 로 옮겨진다). 작업 스케줄러 `FifaDevArchive`(pythonw · 로그온 2분 뒤·매일 09:00 · 그날 성공했으면 건너뜀). ⚠ 소스로 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` 로 돌리거나 옛 버전 호환부터 본다. 로그 `logs/dev_archive.log`. 테스트 `tests/test_dev_archive.py` |
+| `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 작업 스케줄러 `FifaDevArchive` · `.env` `DEV_NEXON_API_KEY` · ⚠ 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` · 세부는 머리말 |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
@@ -125,92 +125,29 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 
 ## PyQt6 규칙 (실수 방지 — 실제로 당한 것들)
 
-> 일반 Qt 함정(`NoScrollComboBox` · 위젯 import 확인 · 네트워크는 UI 스레드 밖 ·
-> 닫을 때 워커 정리 · 재할당 전역은 모듈 경유)은 전역 규칙 8번.
-> 이 앱의 해당 지점: 워커는 `MatchLoader`, 정리는 `closeEvent` 의 `cancel()` → `wait()`.
-> 아래 둘은 **표(`QTableWidget`) 고유의 함정**이라 여기 남긴다.
+> 일반 Qt 함정(`NoScrollComboBox` · 위젯 import 확인 · 네트워크는 UI 스레드 밖 · 닫을 때 워커 정리 · 재할당 전역은 모듈 경유)은
+> 전역 규칙 8번. 아래 번호는 코드·테스트가 "PyQt N" 으로 가리키니 **바꾸지 않는다**. 언제 어떻게 당했나는 `docs/LESSONS.md`.
 
-1. **`QTableWidget.setSortingEnabled(True)`를 다시 부르면, 헤더에 이미 정렬
-   상태(이전에 `sortByColumn`을 부른 적 있음)가 남아 있을 때 Qt가 그 자리에서
-   즉시 재정렬한다(문서화된 동작).** `_fill()`로 표를 다시 채운 직후 이 재정렬이
-   일어나면, "방금 채운 순서 = 원본 리스트 순서"라고 믿고 인덱스로 색을 칠하거나
-   데이터를 붙이는 후처리 코드가 엉뚱한 행을 건드린다 — 실제로 선수 지표 표의
-   공격력/수비력 색이 틀린 값에 칠해지는 버그로 나타났다(재검색 등 **두 번째
-   렌더부터**만 터져서 처음엔 안 보였다). 후처리가 있는 표는 `_fill(..., enable_sort=False)`로
-   채우고, 후처리를 다 끝낸 뒤에만 `setSortingEnabled(True)`를 직접 부를 것.
-
-2. **`QTableWidgetItem.setBackground()`에 반투명(alpha) 색을 쓰면 alternating
-   row 색(짝/홀 행이 다름) 위에 섞여서, 값이 같아도 행 위치에 따라 진하기가
-   달라 보인다.** 값 크기에 비례해 배경을 칠하는 강조(공격력/수비력 등)는
-   알파 대신 고정 배경색(`T.PANEL`) 기준으로 직접 섞은 **불투명** 색을 써야
-   행마다 일관되게 보인다.
-
-3. **전역 QSS 에 `font-size`/`font-family` 를 넣지 않는다 — QSS 의 글꼴은 `setFont()` 를
-   이긴다.** 다크 테마 시절 `QWidget { font-size: 15px }` 하나 때문에 코드의 모든
-   `setFont` 크기(검색 제목 30pt · 랭커 타일 30pt · `FitTableWidget` 의 자동 축소)가
-   **조용히 15px 로 눌려 있었다**(2026-10-01 밝은 테마 전환 중 발견). 표 자동 축소는
-   "글자는 그대로, 열만 좁아지는" 상태였다. 기본 글꼴은 `theme.apply()` 의
-   `QApplication.setFont` 로 건다.
-   `test_ui_smoke.test_setfont_sizes_survive_stylesheet` 가 지킨다.
-
-4. **`FitTableWidget` 의 열 여백은 상수가 아니라 `_measure_pad()` 로 Qt 에게 묻는다.**
-   선수 표는 표 전용 QSS(`QTableWidget::item { padding: … }`)가 셀마다 여백을 얹어서,
-   글자 폭만 보고 상수를 줄였더니 "33.3" 이 53px 칸에서 "3…" 로 잘렸다(Qt 계산 필요 폭 60).
-   `test_player_table_cells_not_elided` 가 "열 폭 ≥ `sizeHintForColumn`" 으로 지킨다.
-
-5. **창은 `MIN_WINDOW`(1280×720) 밑으로 안 줄고, 그 크기에서 아무것도 안 잘리는 게 기준이다**
-   (2026-10-01). 그 전엔 위쪽 바가 한 줄이라 창이 1566×866 밑으로 안 줄었고(1366 노트북에서
-   넘침), 그 위에서도 표는 둘째 열부터 균등 분할이라 긴 글자가 "…" 로 잘렸다. 지금 장치:
-   - **모든 표는 `_make_table` → `FitTableWidget`**, 폭은 `_fill` 끝에서 `refit()`. `_fill` 을 안
-     거치는 표(구단주 비교)는 직접 `refit()` 한다. 정렬 화살표 자리는 **정렬 중인 열에만**
-     준다 — 전부에 주면 19열 선수 지표가 최소 글꼴로도 안 들어간다.
-   - 위쪽 바는 `WrapBar` — 좁으면 두 줄. 페이지는 `VScrollArea` 로 감싸 **세로만** 스크롤.
-     `QScrollArea` 는 기본으로 안쪽 최소 폭을 밖에 안 알려 가로가 조용히 잘리므로 그걸 알린다.
-   - 큰 숫자 칸은 `FitLabel`(잘리는 대신 글꼴 축소).
-   - **명시적 최소 폭(`setMinimumWidth`)은 Qt 의 힌트를 이긴다** — 시즌 칸의 `150` 이 그래서
-     글자를 눌렀다. 줄 수 없는 폭이면 상수 대신 `sizeHint()` 로 준다.
-   검사는 offscreen 스모크(`test_window_shrinks_…`·`test_no_table_elides_…` 등)와, 실데이터로
-   메뉴마다 위젯 폭을 재는 스크래치 스크립트. ⚠ **가로 스크롤이 보이면 원인부터 재 본다** —
-   경기 목록의 가로 막대를 "세로 막대 자리를 안 빼서"로 읽고 장치를 넣었는데, 실화면에서
-   그 장치를 빼도 결과가 같았다. 진짜 원인은 화살표 자리를 모든 열에 준 것이었다(장치는 뺐다).
-
-6. **offscreen 테스트에서 모달은 안 닫힌다 — 회귀가 "실패"가 아니라 "멈춤"으로 나타난다.**
-   2026-10-02 하루에 세 번(못 찾음 안내 창 · 키 창 `exec()` · `app.exec()`), 매번 그 자리만
-   가로채다가 장치로 바꿨다: `test_ui_smoke.py` 머리에서 `QMessageBox.warning/information/
-   critical/question` · `QDialog.exec` · `QApplication.exec` 를 **부르면 즉시 `ModalCalled`**
-   로 막는다. 창이 떠야 정상인 테스트는 그 함수를 직접 가로챈다(지금처럼). 새 종류의 모달
-   (`QFileDialog`·`QInputDialog`·`QMenu.exec` 등)을 쓰기 시작하면 거기에도 한 줄 더한다.
-   검증: 오늘 멈췄던 두 경우가 장치로 4초 만에 FAIL, 장치를 빼면 다시 60초 멈춤.
-
-7. **화면은 보이는 자리(메뉴, 탭)만 그린다 — 새 메뉴·탭은 `VIEW_OF_KEY`·`_renderers()` 에 넣는다**(2026-10-02 · 2.1.1 탭 단위).
-   예전엔 `_render_all` 이 18개 메뉴를 매번 다 그려 시즌 "전체"(1만 경기) 전환에 3.2~3.5초 창이 굳었다
-   → 지금 0.55초. `_render_all` 은 전부 낡음 표시 + 보이는 것만, 나머지는 `_on_nav_changed`·`_on_tab_changed` 에서 그린다.
-   - **`_go_page(메뉴, 탭)` 은 없는 이름이면 아무것도 안 한다**(예외 없음 — 예전엔 묶음 제목 줄로 갔다). 탭이 None 이면 첫 탭.
-     2.1.1 에서 메뉴 이름을 옮기자 테스트 넷이 옛 이름으로 `_go_page` 를 불러 **엉뚱한 화면을 잰 채 통과**하던 것이 하나 있었다 —
-     테스트 안의 `_win._go_page("…")` 이름은 `test_go_page_literals_in_tests_exist` 가 NAV 와 대조한다.
-   - 표에 안 넣은 자리는 **조용히 안 그려진다**(예외 없음). 일부러 뺀 자리는 `VIEW_EXEMPT` 에 이유와 함께 —
-     `test_every_nav_page_has_a_renderer` 가 `NAV` 와 두 표·`_renderers()` 를 대조한다(2026-10-06 추가, 변이 3건 FAIL 확인). 데이터가 바뀌어 한 메뉴만 다시 그려야 하면
-     직접 `_render_x()` 대신 `_invalidate("키")` — 보이면 바로, 아니면 열 때.
-   - 대시보드와 흐름 분석 메뉴는 `_narrate_scope()` 결과를 같이 쓴다(따로 계산하던 게 그리기의 55%).
-     캐시 키는 목록 `id`·길이·맨 앞 경기 — 목록을 제자리에서 고치면(같은 객체·같은 길이) 안 잡힌다.
-   - 테스트는 `_win.LAZY_RENDER = False` 로 다 그린 상태를 본다. 지연 동작은 `test_lazy_*` 가 켜서 잰다.
-
-8. **스레드 → 화면 신호에 큰 데이터를 실을 땐 `pyqtSignal(object)` — `list`·`dict` 로 선언하지 않는다**(2026-10-02).
-   `pyqtSignal(list, …)` 은 PyQt 가 중첩 dict 를 Qt 형식으로 통째로 깊은 복사했다 되돌린다. 1만 경기 기록이
-   직접 읽으면 786MB 인데 앱에선 최대 4.5GB, 로더 끝 → 화면까지 6초였다. 몇 달 동안 안 보인 이유: 메모리를
-   늘 화면 함수를 **직접** 불러 쟀다(신호를 안 거침) — 실제 경로(exe 를 켜서 프로세스 메모리)로 재야 보인다.
-   `test_loader_signals_pass_objects_without_copying` 이 "받은 게 같은 객체(is)"로 지킨다.
-
-9. **창·대화상자 크기는 고정값으로 열지 않는다 — 화면(배율 반영 · 작업 표시줄 뺀 것)에 맞춘다**(1.0.3, 2026-10-04).
-   1600×900 고정이 FHD 150%(논리 1280×720)·1366×768 에서 넘쳤고, 최소 1280×720 조차 안 들어갔다. 지금 장치:
-   `initial_window`(규칙) · `_apply_plan`(최소 크기 → 저장 크기 복원 순서 — 복원보다 최소를 늦게 걸면 Qt 의 '화면에 맞춰
-   줄임'이 무시된다) · 띄운 뒤 `_check_fits` · 모니터/배율 변경 때 `_refit`(한 바퀴 뒤 — 바로 하면 Qt 가 덮어쓴다).
-   **새 대화상자는 부모(메인 창)를 주고 `fit_to_screen(dlg, w, h)`** 로 연다 — 크기뿐 아니라 **메인 창 위 가운데에 직접 놓는다**
-   (`place_over_parent` · 최소화 중이면 돌아올 자리 기준), 메인 창이 움직이면 `moveEvent → _follow_dialogs` 가 열린 대화상자를 끌고 간다
-   (2026-10-06 사용자: 안내 창이 프로그램과 다른 모니터에 — 메인 창만 옮겨져 주 모니터에 홀로 남았다. 다시 묻는 안내는 최소화 중엔 미룬다). 그리고 내용 최소 높이가 657(150% 노트북 창 안쪽)을 넘으면 세로 스크롤
-   안에 넣는다(스쿼드 창이 그랬다). `tests/test_window_size.py` 가 흉내 낸 화면 5종에서 실제 창으로 잰다.
-
----
+1. **후처리가 있는 표는 `_fill(..., enable_sort=False)` 로 채우고 후처리 뒤에만 `setSortingEnabled(True)`** — 다시 켜는 순간 Qt 가
+   이전 정렬로 즉시 재정렬해, "채운 순서 = 원본 순서"로 칠한 색이 엉뚱한 행에 간다(두 번째 렌더부터만 터진다).
+2. **값 비례 배경색은 알파 대신 `T.PANEL` 과 섞은 불투명 색** — 알파는 줄무늬 행 색과 섞여 같은 값이 행마다 다르게 보인다.
+3. **전역 QSS 에 `font-size`/`font-family` 금지** — QSS 글꼴이 `setFont()` 를 이긴다. 기본 글꼴은 `theme.apply()` 의
+   `QApplication.setFont`. `test_setfont_sizes_survive_stylesheet`.
+4. **`FitTableWidget` 열 여백은 `_measure_pad()` 로 Qt 에 묻는다**(상수 금지 — 표 QSS 의 셀 padding). `test_player_table_cells_not_elided`.
+5. **창은 `MIN_WINDOW`(1280×720) 밑으로 안 줄고 그 크기에서 아무것도 안 잘린다** — 모든 표는 `_make_table` → `FitTableWidget`
+   (`_fill` 끝 `refit()` · 안 거치는 표는 직접) · 정렬 화살표 자리는 정렬 중인 열에만 · 위쪽 바 `WrapBar` · 페이지 `VScrollArea`(세로만) ·
+   큰 숫자 `FitLabel` · 명시적 `setMinimumWidth` 대신 `sizeHint()`. ⚠ 가로 스크롤이 보이면 원인부터 재 본다.
+6. **offscreen 테스트에서 모달은 안 닫힌다(회귀가 "멈춤"으로 나온다)** — `test_ui_smoke.py` 머리가 `QMessageBox.*`·`QDialog.exec`·
+   `QApplication.exec` 를 `ModalCalled` 로 막는다. 새 종류의 모달(`QFileDialog`·`QInputDialog`·`QMenu.exec` 등)을 쓰면 거기 한 줄.
+7. **화면은 보이는 자리(메뉴·탭)만 그린다 — 새 메뉴·탭은 `VIEW_OF_KEY`·`_renderers()` 에**(뺄 자리는 `VIEW_EXEMPT` 에 이유와).
+   표에 없으면 예외 없이 조용히 안 그려진다(`test_every_nav_page_has_a_renderer`). 다시 그리기는 직접 `_render_x()` 대신 `_invalidate("키")`.
+   `_go_page` 는 없는 이름이면 아무것도 안 한다 — 테스트 안 이름은 `test_go_page_literals_in_tests_exist` 가 대조.
+   대시보드·흐름 분석은 `_narrate_scope()` 캐시를 같이 쓴다(키: 목록 id·길이·맨 앞 — 제자리 수정은 안 잡힌다). 테스트는 `LAZY_RENDER = False`.
+8. **스레드 → 화면 신호에 큰 데이터는 `pyqtSignal(object)`** — `list`·`dict` 선언은 통째로 깊은 복사(1만 경기 4.5GB · 6초).
+   메모리는 실제 경로(exe 프로세스)로 잰다. `test_loader_signals_pass_objects_without_copying`.
+9. **창·대화상자 크기는 화면(배율·작업 표시줄 반영)에 맞춘다** — 새 대화상자는 부모를 주고 `fit_to_screen(dlg, w, h)`
+   (메인 창 위 가운데 · 메인 창이 움직이면 따라감 · 내용 최소 높이가 657 넘으면 세로 스크롤 안에). 창은 `initial_window`·`_apply_plan`
+   (최소 크기 → 저장 크기 순)·`_check_fits`·`_refit`. `tests/test_window_size.py` 가 흉내 낸 화면 5종에서 잰다.
 
 ## 작업 방식 (이 앱 고유분)
 
@@ -237,30 +174,7 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 
 ## 알려진 버그 — 해결 이력
 
-2026-07-18 팀컬러 기능 세션에서 코드 리뷰로 찾은 항목들. 같은 날 전부 수정 완료.
-
-- `_on_fetch_team_colors` — 조회 중 범위가 넓어져 재호출되면 `_teamcolor_retry_pending`
-  플래그를 세워 `_on_teamcolor_finished`에서 자동 재시도하도록 고침.
-- `_on_loaded` — `ouid`가 실제로 바뀔 때만 `_trend_reset_pending`을 세우도록 고쳐서,
-  같은 계정 재검색/새 경기 확인 시 승률 그래프 "최근 N일" 설정이 유지되게 함.
-- `_on_teamcolor_finished` — 상태 메시지를 세션 누적(`self._team_colors`) 대신 이번
-  라운드(`self._teamcolor_pending`/`fetched`) 기준으로 바꿈.
-- `TeamColorLoader.run()`, `MatchLoader.run()` — `RuntimeError`뿐 아니라
-  `concurrent.futures.CancelledError`도 잡도록 고쳐서, 조회 중 창을 닫아도 트레이스백
-  없이 종료되게 함.
-- 죽은 코드였던 `self._img_loader` 필드·`closeEvent`의 관련 체크 제거.
-- 아웃라인 버튼 스타일시트를 `theme.OUTLINE_BUTTON_QSS` 상수로 통합(3곳 복붙 제거).
-- "포지션별 최다 상대" 정렬고정+색칠 시퀀스는 확인 결과 이미 `_position_opp_rows`/
-  `_tint_position_rows` 공용 메서드로 분리돼 있어 추가 조치 불필요.
-- `widgets.py` `FitTableWidget._fit()` — 기준 폰트 크기의 텍스트 폭을
-  `set_content_widths()`(데이터 변경 시)에서만 캐시하고, 리사이즈 중엔 그 캐시로
-  후보 폰트 크기를 산술 추정 + 폰트 크기별 결과 캐시(`_fit_cache`)로 재사용하도록 바꿔
-  드래그 중 반복 전체 스캔을 없앰.
-
-`_on_teamcolor_loaded`의 10개 단위 재계산은 그대로 둠 — 표시 구간이 수십~백 건
-규모라 체감 성능 이슈가 없고, 지금 손대면 과한 최적화(YAGNI).
-
----
+2026-07-18 팀컬러 세션의 코드 리뷰 결과(전부 수정)는 `docs/LESSONS.md` 로 옮겼다.
 
 ## 나중에 (필요가 생기면 도입 — 지금은 과함)
 
