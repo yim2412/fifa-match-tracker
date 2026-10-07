@@ -5742,18 +5742,20 @@ def test_clear_elo_failure_not_silent():
 def test_notice_versions_split_first_and_reask():
     keep = config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT
     try:
+        config.RANK_COLLECT = True   # 수집을 켠 사람 — 7 이전은 전부 다시 묻는다(끈 사람은 test_notice7_asked_only_when_collecting)
         for acc, needed, pending, track in [(0, True, False, False), (1, True, False, False),
                                             (2, False, True, False), (3, False, True, True),
                                             (4, False, True, True), (5, False, True, True),
-                                            (6, False, False, True)]:
+                                            (6, False, True, True), (7, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
         # 1.4.1: 4 = 거래 기록·시세 자동 읽기 — 옛 동의(2·3)는 막지 않고 다시 묻기만, 자동 시세만 4 뒤부터
         # 2.1.1: 5 = 축구장 칩 카드 정보 자동 읽기(랭커 픽은 16단계가 같은 5 를 쓴다)
         # 2.3.1: 6 = 다른 구단주의 사람별 값을 그 시즌 동안(U1) — 옛 동의(5)는 다시 묻기만, 사람별 표만 6 뒤부터
-        assert (config.NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (6, 6, 5, 4, 3, 2)
+        # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
+        assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (7, 7, 6, 5, 4, 3, 2)
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -5783,6 +5785,147 @@ def test_reask_dialog_keeps_current_web_choice():
     finally:
         config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED = keep
         config.ENV_PATH = saved_env
+
+
+def test_notice7_asked_only_when_collecting():
+    """6 동의자에게 남은 7 은 수집을 켠 사람 몫(U6) — 끈 사람은 창이 보여도 안 묻는다."""
+    keep = config.NOTICE_ACCEPTED, config.RANK_COLLECT
+    try:
+        config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION - 1
+        for collect in (False, True):
+            config.RANK_COLLECT = collect
+            assert config.notice_update_pending() is collect, collect
+        config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION
+        assert not config.notice_update_pending()
+    finally:
+        config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
+
+
+def test_notice_below6_still_asked_when_not_collecting():
+    """RANK_COLLECT 를 조건에 통째로 붙이면 수집을 끈 5 이하 동의자가 시세·칩(4·5)을 영영 못 받는다(검토 A [상])."""
+    keep = config.NOTICE_ACCEPTED, config.RANK_COLLECT
+    try:
+        config.RANK_COLLECT = False
+        for acc in range(config.NOTICE_BASE_VERSION, config.NOTICE_COLLECT_ONLY_FROM):
+            config.NOTICE_ACCEPTED = acc
+            assert config.notice_update_pending(), acc
+    finally:
+        config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
+
+
+def test_reask_shows_only_changes_after_accepted():
+    assert max(notice.CHANGES) == config.NOTICE_VERSION, "안내를 올렸는데 바뀐 점(notice.CHANGES)을 안 더했다"
+    six, five = notice.changes_html(6), notice.changes_html(5)
+    assert "포지션 특성" in six and "슈퍼챔피언스" not in six, "6 동의자에게 이미 본 6 을 또 보였다"
+    assert "포지션 특성" in five and "슈퍼챔피언스" in five, "5 동의자가 6 의 바뀐 점을 못 본다"
+    assert notice.changes_html(config.NOTICE_VERSION) == ""
+
+
+# 렌더한 안내 전문(숫자는 config 상수로 그린다)의 해시 — 버전과 짝. 글·상수가 바뀌어 FAIL 이면:
+# 실질 변경이면 config.NOTICE_VERSION 을 올리고 새 줄을 더한다 · 맞춤법·표현만이면 이 버전의 값만 고친다.
+NOTICE_GOLDEN = {7: "410b2df025725408"}
+
+
+def _notice_digest() -> str:
+    import hashlib
+    text = (notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML + notice.RANK_COLLECT_HTML
+            + notice.TRAY_HTML + "".join(notice.CHANGES[v] for v in sorted(notice.CHANGES)))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def test_notice_text_bumps_version():
+    """숫자를 상수로 그리면 상수만 올려도 버전 없이 동의 내용이 바뀐다(검토 B) — 글·숫자가 바뀌었는데 버전이 그대로면 FAIL."""
+    import importlib
+    assert NOTICE_GOLDEN.get(config.NOTICE_VERSION) == _notice_digest(), \
+        (config.NOTICE_VERSION, _notice_digest(), "안내 글·숫자가 바뀌었다 — 위 NOTICE_GOLDEN 주석대로")
+    keep = config.TRAIT_WEB_DAILY_REQ
+    try:   # 상수 하나만 바꿔도 잡히나 — 다시 그린다
+        config.TRAIT_WEB_DAILY_REQ = keep + 1
+        importlib.reload(notice)
+        assert _notice_digest() != NOTICE_GOLDEN[config.NOTICE_VERSION], "상수가 바뀌었는데 해시가 같다 — 검사가 비었다"
+    finally:
+        config.TRAIT_WEB_DAILY_REQ = keep
+        importlib.reload(notice)
+
+
+def _collect_on_env(dlg_log, notice_cls):
+    """[정보] 수집 켜기 — maintain·sync·다시 묻는 창을 기록으로 바꿔 끼운다."""
+    keep = (_win._maintain_rank, _win.sync_ranker_pick_data, app_main.NoticeDialog)
+    _win._maintain_rank = lambda enabled=None, **k: dlg_log.append(("maintain", enabled, config.RANK_COLLECT))
+    _win.sync_ranker_pick_data = lambda: dlg_log.append(("sync",))
+    app_main.NoticeDialog = notice_cls
+    return keep
+
+
+def _collect_on_restore(keep):
+    _win._maintain_rank, _win.sync_ranker_pick_data, app_main.NoticeDialog = keep
+
+
+def test_collect_on_asks_notice7():
+    log = []
+
+    class _Notice:
+        def __init__(self, parent=None, reask=False):
+            log.append(("ask", parent, reask, config.RANK_COLLECT))
+
+        def exec(self):
+            return app_main.QDialog.DialogCode.Rejected
+
+    keep = _collect_on_env(log, _Notice)
+    try:
+        with _RankSwitches(web=True, collect=False) as sw:
+            config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION - 1
+            dlg = app_main.AboutDialog(_win)
+            dlg._sched = lambda: None
+            dlg.chk_rank.setChecked(True)
+            asks = [e for e in log if e[0] == "ask"]
+            assert len(asks) == 1 and asks[0][1] is dlg and asks[0][2] and asks[0][3], (log, "부모·다시 묻기·수집 켠 뒤")
+            assert [e[0] for e in log][:2] == ["maintain", "ask"], ("토글 처리를 다 한 뒤 맨 끝에서 묻는다", log)
+            assert config.RANK_COLLECT and not config.trait_allowed(), "거절하면 수집은 켜진 채 특성만 막힌다"
+            assert "켰습니다" in dlg.lb_msg.text()
+            dlg.deleteLater()
+            # 이미 7 에 동의했으면 · 끌 때는 묻지 않는다
+            for acc, on in ((config.TRAIT_NOTICE_VERSION, True), (config.TRAIT_NOTICE_VERSION - 1, False)):
+                sw.write(True, not on)
+                config.NOTICE_ACCEPTED = acc
+                log.clear()
+                dlg = app_main.AboutDialog(_win)
+                dlg._sched = lambda: None
+                dlg.chk_rank.setChecked(on)
+                assert not [e for e in log if e[0] == "ask"], (acc, on, log)
+                dlg.deleteLater()
+    finally:
+        _collect_on_restore(keep)
+
+
+def test_collect_on_notice_web_off_consistent():
+    """다시 묻는 창에서 웹 데이터 체크를 끄고 동의 → set_web_data(False) 가 수집까지 끈다 — 체크·정리·글이 그걸 따른다."""
+    log = []
+
+    class _Notice:
+        def __init__(self, parent=None, reask=False):
+            pass
+
+        def exec(self):
+            config.accept_notice(False)
+            return app_main.QDialog.DialogCode.Accepted
+
+    keep = _collect_on_env(log, _Notice)
+    try:
+        with _RankSwitches(web=True, collect=False):
+            config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION - 1
+            dlg = app_main.AboutDialog(_win)
+            dlg._sched = lambda: None
+            dlg.chk_rank.setChecked(True)
+            assert config.read_env_switches() == (False, False)
+            assert not dlg.chk_web.isChecked() and not dlg.chk_rank.isChecked() and not dlg.chk_rank.isEnabled()
+            maint = [e[1] for e in log if e[0] == "maintain"]
+            assert maint == [(True, ""), (False, "user")], ("켬 → 끔 한 번씩(중첩이면 끔이 둘)", maint)
+            assert [e for e in log if e[0] == "sync"] == [("sync",)], ("뒷처리는 ask_notice_update 한 번", log)
+            assert "같이 꺼졌" in dlg.lb_msg.text(), dlg.lb_msg.text()
+            dlg.deleteLater()
+    finally:
+        _collect_on_restore(keep)
 
 
 def _count_reask(fn):

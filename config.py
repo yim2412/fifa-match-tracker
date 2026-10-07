@@ -110,10 +110,11 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 6  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 7  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
 #                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속·최고점·첫 챔스(U1)
+#                     7 = 2.5.1 포지션 특성 — 상위 TRAIT_TOP 명의 카드 특성·코치(스쿼드메이커)와 201~500위 경기
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
@@ -122,7 +123,10 @@ PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 �
 CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
 RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
 META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
-TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터 — 안내 7 은 32단계 단계 5 에서 올린다
+TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터
+# 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
+# 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다.
+NOTICE_COLLECT_ONLY_FROM = 6
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -419,8 +423,12 @@ def notice_needed() -> bool:
 
 
 def notice_update_pending() -> bool:
-    """옛 동의(기본 범위는 계속 돎) + 새 안내를 아직 안 봄 — 창을 사용자에게 보일 때 한 번 다시 묻는다."""
-    return NOTICE_BASE_VERSION <= NOTICE_ACCEPTED < NOTICE_VERSION
+    """옛 동의(기본 범위는 계속 돎) + 새 안내를 아직 안 봄 — 창을 사용자에게 보일 때 한 번 다시 묻는다.
+    남은 바뀐 점이 수집 쪽뿐이면(NOTICE_COLLECT_ONLY_FROM 이상) 수집을 켠 사람에게만 — 통째로 RANK_COLLECT 를 붙이면
+    수집을 끈 5 이하 동의자가 시세·칩 자동 읽기(4·5)를 영영 못 받는다(32단계 검토 A [상])."""
+    if not NOTICE_BASE_VERSION <= NOTICE_ACCEPTED < NOTICE_VERSION:
+        return False
+    return RANK_COLLECT or NOTICE_ACCEPTED < NOTICE_COLLECT_ONLY_FROM
 
 
 def track_allowed() -> bool:

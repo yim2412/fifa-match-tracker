@@ -2302,8 +2302,9 @@ class MainWindow(QMainWindow):
         self._notice_asked = True
         self.ask_notice_update()
 
-    def ask_notice_update(self) -> bool:
-        ok = NoticeDialog(self, reask=True).exec() == QDialog.DialogCode.Accepted
+    def ask_notice_update(self, parent: QWidget | None = None) -> bool:
+        """다시 묻는 창 + 뒷처리 한 곳 — 창이 보일 때 · 빈 탭 [안내 보고 동의] · [정보] 수집 켜기(parent = 그 창)가 같이 쓴다."""
+        ok = NoticeDialog(parent or self, reask=True).exec() == QDialog.DialogCode.Accepted
         self._render_elo()   # 따라가기 버튼 툴팁이 동의 여부를 따른다
         self._refresh_pitch_cards()   # 동의 직후 — 막혀 있던 축구장 칩이 바로 읽기 시작(ROADMAP 2.1.1 3회차)
         # 다시 묻는 창에서 웹 데이터를 끄면 수집도 꺼진다 — 그 길로도 랭커 픽 데이터를 지운다. 동의했으면 바로 받기 시작(E9b)
@@ -9650,7 +9651,7 @@ class NoticeDialog(QDialog):
         self.reask = reask
         self.setWindowTitle(f"{config.APP_NAME} — 이용 안내" + (" (바뀐 점)" if reask else ""))
         v = QVBoxLayout(self)
-        v.addWidget(_notice_browser((notice.CHANGES_HTML if reask else "")
+        v.addWidget(_notice_browser((notice.changes_html(config.NOTICE_ACCEPTED) if reask else "")
                                     + notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML
                                     + notice.RANK_COLLECT_HTML + notice.TRAY_HTML), 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
@@ -9810,8 +9811,33 @@ class AboutDialog(QDialog):
                 pass
         if not on:
             self._sync_pick()
-        self.lb_msg.setText("랭킹 수집을 켰습니다 — 하루 한 번, 정각 뒤 몇십 분 사이에 읽습니다." if on else
-                            "랭킹 수집을 껐습니다.")
+        msg = ("랭킹 수집을 켰습니다 — 하루 한 번, 정각 뒤 몇십 분 사이에 읽습니다." if on else "랭킹 수집을 껐습니다.")
+        if on and config.notice_update_pending():
+            msg = self._ask_notice_after_collect_on(maintain) or msg
+        self.lb_msg.setText(msg)
+
+    def _ask_notice_after_collect_on(self, maintain) -> str | None:
+        """수집을 켠 6 동의자에게 안내 7 을 묻는다(32단계 U6) — 토글 처리를 다 한 뒤 맨 끝에서. 거절해도 수집은 켜진 채
+        특성만 막힌다. 그 창에서 웹 데이터를 끄면 set_web_data 가 수집까지 끈다 → 디스크에서 다시 읽어 체크·정리를 맞춘다.
+        → 메시지를 바꿔야 하면 그 글."""
+        ask = getattr(self.parent(), "ask_notice_update", None)
+        if ask is None:
+            return None
+        ask(parent=self)
+        web, rank = config.read_env_switches()
+        if rank:
+            return None
+        for chk, val in ((self.chk_web, web), (self.chk_rank, False)):
+            chk.blockSignals(True)   # 안 감싸면 _on_rank_toggled(False) 가 중첩된다
+            chk.setChecked(val)
+            chk.blockSignals(False)
+        self.chk_rank.setEnabled(web)
+        sched = self._sched()
+        if sched is not None:
+            sched.stop()
+        if maintain is not None:
+            maintain(enabled=(False, "user"))
+        return "안내에서 홈페이지 데이터를 꺼 랭킹 수집도 같이 꺼졌습니다."
 
     def _on_auto_toggled(self, on: bool) -> None:
         try:
