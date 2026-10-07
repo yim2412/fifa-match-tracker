@@ -178,10 +178,11 @@
 
 ## 2.3.1 — 랭커 메타 ① 쌓기 (30단계 · 계획 검토 중)
 
-> **상태: 3회차 검토 전**(2026-10-07) — U1~U3 답 받음(셋 다 추천안).
+> **상태: 4회차 검토 전**(2026-10-07) — U1~U3 답 받음(셋 다 추천안). 3회차에 [상]이 나와 한 회 더(바뀐 줄 + 계획 전체 한 명).
 >
 > **검토 기록** 1회차 A [상] 5(연속을 달력 날짜로 · 처음 본 사람 잘림 표시 없음 · 끄기 뒤 이어 보기 상태 · 끄기와 처리가 서로 안 막음 · `pick_days` 모집단 섞임) [중] 6 · B [상] 2(시즌 끝 지우기를 놓치는 길 · WAL·되돌리기 뒤 빈 페이지) [중] 7 — 전부 반영. 토큰 A 15.9만 · B 12.8만.
 > → 2회차(바뀐 줄) A [상] 2(`pick_days` 덮어쓰기가 다음 날 경기한 랭커를 앞 날짜에서 뺌 · 시즌 옮기기 뒤 `season_seq`·`person_prev` 그대로) [중] 6 · B [상] 1(`season_seq` 가 안 바뀐 채 매일 처리하면 시즌 끝 지우기가 영영 안 돎) [중] 5 — 시즌 키를 시즌표 시작일로(`season_key`) · 처리할 때 그 자리에서 넘김 · `pick_days` 더하기(`pick_counted`) · VACUUM 은 옛 지우기 흔적이 있을 때만 · 끄기 표시 `person_purge` · 수집 간격을 달력 날짜에 붙임. 토큰(누적) A 18.0만 · B 14.8만.
+> → 3회차(A 계획 전체 · B 바뀐 줄 — 새 검토자) 겹친 것을 합쳐 [상] 4: 수집 간격이 상시 PC 를 하루 두 번(0시대·12시대)에 가둠(A·B) · `season_key` 문자열 비교가 출처 섞임에서 깨짐(A·B) · 시즌표가 창 만들 때 한 번뿐이라 낡은 채 시즌을 넘김(A·B) · `person_purge` 를 화면 스레드가 써 굳고·다시 할 길 없고·파일을 만듦(B [상] · A [중]) / [중] 4(`pick_counted` 14일 뒤 다시 셈 · `_done` UNIQUE 불가 · `open_rank_db_existing` 경합 · 체크포인트 무한 재시도) — 전부 반영: 간격은 `_hour(taken_at)`+23시간 · 시즌은 신호 둘 + 늦은 신호 7일 + 시즌표 다시 받기 · 지우기는 표시 대신 상태 판정(`person_epoch`). 토큰 A 17.7만 · B 14.1만.
 
 **규모** 중간~높음. 새 넥슨 요청: **0**(기준 시각은 이미 받는 랭킹 쪽에 있다 — R1). 오픈API 요청 0.
 저장 형식: rank.db 새 표 열(옆 표 꼴 — **`snapshot_rows`·`snapshots` 의 열과 INSERT 는 안 건드린다**, 2.2.1 T13) · fifa.db 그대로.
@@ -225,7 +226,7 @@
   **`ref_time` 은 `taken_at` 과 같은 ISO 형식(`YYYY-MM-DDTHH:MM:SS`)으로 바꿔 저장**(1회차 A — 페이지 글자는 공백이라 섞으면 정렬·±1일 비교가 틀린다).
 - **"데이터 시각"** = `ref_time`, 없으면(옛 버전이 쓴 스냅숏) `taken_at`. 함수 하나 `rankcollect.data_time(row)` — 이번에 새로 만드는 읽기(B1·N3·N11·N12)는 전부 이걸 쓴다. **`elo_history` 는 그대로 `taken_at`**(R15 — 바꾸면 같은 스냅숏이 다른 시각으로 다시 들어가 `ux_elo_src` 가 못 막는다). `rank_trend_series` 의 x 날짜는 `data_time` 으로(하루에 둘이면 그날 마지막 — 지금 규칙).
 - 화면: [정보] 수집 상태에 "넥슨 데이터 기준 10-07 07:00 · 빈 순위 0"(빈 순위가 `config.RANK_GAPS_WARN`(초안 50) 이상이면 노란 글자) · 랭킹 추이 안내 줄의 날짜도 데이터 시각.
-  `same` 이 이어지면(1회차 B) `collect_state` 에 `same_since`(처음 같다고 본 이 PC 시각)를 두고 [정보] 에 "넥슨 데이터가 **07:00 기준**(마지막 `ref_time`)에서 멈춰 있습니다 — 10-08 09:12 부터 확인(점검 중일 수 있음)" — 저장하면 지우고, **끄는 길 전부(`person_purge` 와 같은 자리)·D6 끔에서도 지운다**(2회차 B). 알림은 없다.
+  `same` 이 이어지면(1회차 B) `collect_state` 에 `same_since`(처음 같다고 본 이 PC 시각)를 두고 [정보] 에 "넥슨 데이터가 **07:00 기준**(마지막 `ref_time`)에서 멈춰 있습니다 — 10-08 09:12 부터 확인(점검 중일 수 있음)" — 저장하면 지우고, **사람별 지우기와 같은 작업(조건 판정 — 아래 '지우기 · 보관')·D6 끔에서도 지운다**(2회차 B). 알림은 없다.
 - `check_api` 에 한 줄: 1쪽에서 기준 시각을 찾았나 · 받은 시각과의 차이(2시간 넘으면 [WARN]).
 
 ### 처리 — 스냅숏 하나씩 이어서 (`rankcollect.process_meta`)
@@ -234,7 +235,10 @@ N3·N11·N12·B5 는 "앞 스냅숏 다음" 순서로 먹어야 한다. 저장�
 - **처리 표시는 한 곳 — `snapshot_meta` 의 두 깃발**(1회차 A·B: `collect_state` 의 `upto` 키는 뺐다). `anon_done`(익명 집계 B5) · `person_done`(사람별 N3·N11·N12). 깃발은 그 처리와 **같은 트랜잭션**에서 올린다 → 도중에 죽으면 그 스냅숏의 그 처리만 다시(두 번 세지 않음).
 - 대상: 원본이 남아 있고 깃발이 0 이거나 `snapshot_meta` 줄이 없는(옛 버전이 쓴 — 그때 줄을 만든다, `ref_time` NULL) 스냅숏 — 데이터 시각 순. 동의 전엔 `person_done` 대상을 아예 고르지 않는다(매 회차 훑지 않게 — 동의를 확인한 뒤에만 그 질의).
 - **연속은 날짜가 아니라 경과 시간으로**(1회차 A [상] — 수집 간격 24시간 + 지터 +5~+50분이라 매일 켜도 달력 날짜가 빈다, config.py:163·rankcollect.py:480): 앞에 사람별 처리한 스냅숏과 데이터 시각 차이가 `config.RANK_CONT_MAX_H`(초안 36) 이하면 이어진 것, 넘으면 **틈**. 같은 날 둘이어도 둘 다 처리한다(경과 시간으로 재므로 길이가 두 번 늘지 않는다 — 1회차 A·B).
-  **수집 간격도 고친다**(2회차 A — PC 를 정해진 시간에만 켜면 시작이 매일 +5~+50분 밀리다 켜 둔 시간 밖으로 나가 하루를 건너뛰고(약 44시간) 잘린다): `is_due` = 24시간 지남 **또는** (마지막 스냅숏의 데이터 날짜가 오늘보다 앞 **이고** `config.RANK_COLLECT_MIN_GAP_H`(초안 12)시간 지남). 하루 한 번(안내 문구 그대로)이되 달력 날짜에 붙는다. `is_due` 를 쓰는 곳(팀컬러 목록 `save_from_pages` · 기다린 수집)도 같이 — `test_rankcollect` 에 "매일 18~23시만 켜는 PC 열흘 → 날짜 빠짐 0".
+  **수집 간격도 고친다**(2회차 A — PC 를 정해진 시간에만 켜면 시작이 매일 +5~+50분 밀리다 켜 둔 시간 밖으로 나가 하루를 건너뛰고(약 44시간) 잘린다):
+  `is_due` = 지금 ≥ **`_hour(마지막 taken_at)` + `RANK_COLLECT_INTERVAL_H`(24) − 1시간**. 정각으로 내린 뒤 재므로 지터가 쌓이지 않고, −1시간이 1시간 확인의 위상(확인이 :50 뒤면 다음 시각으로 넘어감)을 흡수한다 → 시작 시각은 **앞으로만**(늦게는 안) 움직인다.
+  ~~데이터 날짜가 오늘보다 앞이면 12시간~~(3회차 A·B [상] — 0시 5~50분 회차의 `ref_time` 은 전날 23시라(R2) 늘 켜 둔 PC 가 "0시대 + 12시대" 하루 두 번에 갇히고, 모든 상시 PC 가 0시대로 몰린다). 이 PC 시계(`taken_at`)만 쓰고 데이터 시각은 안 쓴다.
+  `is_due` 를 쓰는 곳(팀컬러 목록 `save_from_pages` · 기다린 수집)도 같이 — `test_rankcollect`: "매일 18~23시만 켜는 PC 열흘 → 날짜 빠짐 0" · "**상시 켠 PC 30일**(확인 위상 무작위) → 날짜 빠짐 0 · 같은 날 두 번 ≤ 2회(자정을 돌아 넘을 때만)" · "상시 PC 1,000대 시뮬 → 시작 시(時) 분포가 한 시각에 몰리지 않음".
   "앞에 처리한 스냅숏"은 `collect_state` 키 `person_prev`(데이터 시각) 하나 — 사람별 표와 같은 트랜잭션에서 바꾸고, **사람별 표를 지울 때 같이 지운다**(1회차 A [상] — 끄고 이틀 안에 다시 켜면 이어진 것으로 읽혔다).
 - 부르는 곳: 저장 커밋 뒤(`_collect_locked`·`save_from_pages` — 순서 `sync_tracked_elo` → `process_meta` → `prune_raw`) · **앱이 켤 때 한 번 — 작업 스레드**(수집 예약기가 띄운다 · 순서 `process_meta` → `prune_raw` → 조건부 VACUUM · 1회차 A: 정리를 먼저 하면 미처리 원본이 틈이 되고, 화면 스레드면 창이 굳는다).
 - **잠금 · 다시 확인**(1회차 A·B [상]): `process_meta` 는 `CollectLock` 안에서, 사람별 처리 직전에 **켜짐·동의를 디스크에서 다시 읽고**(`config.read_env_switches` + 동의 값) 꺼졌으면 사람별은 건너뛴다. 끄는 길의 지우기도 같은 잠금을 잡는다(아래 "지우기") — 그래서 "지운 뒤 다시 씀"이 없다.
@@ -256,17 +260,21 @@ N3·N11·N12·B5 는 "앞 스냅숏 다음" 순서로 먹어야 한다. 저장�
 
 - 사람별(U1): `run_open(season_seq, profile_sn, start_at, last_at, censored_start, PK(season_seq, profile_sn))` · 끝난 것: `run_done(season_seq, hours, censored_start, censored_end)` — 번호 없음. 길이는 **`last_at − start_at`(데이터 시각)** — 화면에서 일로 바꾼다.
 - 처리마다(앞 스냅숏과 이어진 경우): 등급 0 인 사람 — 열린 줄이 있으면 `last_at` 을 늘리고, 없으면 연다 — **앞 스냅숏 원본에서 0 이 아니었거나 목록에 없던 사람은 `censored_start=0`, 앞에서도 0 이었는데 열린 줄이 없으면(어긋난 상태) `censored_start=1`**(2회차 A — 조용히 빠졌다). 열린 줄인데 이번에 0 이 아니거나 목록에 없으면 닫는다(`run_done` 한 줄 + 열린 줄 지움).
-- **잘림**(1회차 A [상] — 처음 본 사람의 시작이 진짜 시작처럼 남았다): 앞 스냅숏이 없거나(첫 처리 · 시즌 첫 스냅숏 · 다시 켠 뒤 · 지운 뒤) **틈**이면 — 열린 줄 전부 `censored_end=1` 로 닫고, 이번 0 인 사람은 전부 `censored_start=1` 로 연다. 새 시즌(`season_seq` 바뀜)도 전부 잘림으로 닫는다. 분포는 나중에 **양쪽 다 안 잘린 줄만**.
+- **잘림**(1회차 A [상] — 처음 본 사람의 시작이 진짜 시작처럼 남았다): 앞 스냅숏이 없거나(첫 처리 · 시즌 첫 스냅숏 · 다시 켠 뒤 · 지운 뒤) **틈**이면 — 열린 줄 전부 `censored_end=1` 로 닫고, 이번 0 인 사람은 전부 `censored_start=1` 로 연다. 새 시즌(넘김 — N11 의 신호 둘 규칙)도 전부 잘림으로 닫는다. 분포는 나중에 **양쪽 다 안 잘린 줄만**.
 
 ### N11 시즌 최고점 · 최대 낙폭 (쌓기만)
 
 - 사람별: `elo_season(season_seq, profile_sn, peak, peak_at, max_dd, last_elo, last_at, PK(season_seq, profile_sn))`. 처리마다 1만 명 각자: `peak = max(peak, elo)` · `max_dd = max(max_dd, peak − elo)`.
-- **사람별 표의 시즌 키는 `season_seq` 가 아니라 `season_key`**(2회차 A·B [상] — `season_seq` 는 행 수 급감·`ended_season` 을 둘 다 놓치면 안 바뀌어 새 시즌 값이 옛 줄에 이어 쓰이고, 시즌표로만 옮기면 같은 `season_seq` 로 다시 쌓여 `_done` 이 두 번 들어간다):
-  `season_key` = 그 스냅숏 **데이터 시각이 속한 시즌의 시작일** — 시즌표(`seasons.season_of` — 마지막 끝난 시즌 종료일 이후면 그 종료일)로, 시즌표가 없으면 `"seq:" + season_seq`. 위 세 표의 `season_seq` 칸은 전부 `season_key` 로 읽는다. `_done` 표의 키도 같다(같은 키는 한 번만 — `INSERT OR IGNORE`).
-- **시즌 넘김은 처리할 때 그 자리에서**: 사람별 처리마다 이번 스냅숏의 `season_key` 를 `collect_state` 의 `person_season` 과 비교 —
-  같으면 그대로 · **더 새것이면** 옛 키의 `elo_season` 을 `elo_season_done` 으로 옮기고 사람별 세 표의 옛 키 줄을 지우고(`run_open` 은 잘림으로 닫아 `run_done`) `person_prev` 를 지운 뒤 새 키로 처리(첫 처리 = 잘림으로 연다) · **더 옛것이면**(동의 뒤 따라잡기가 지난 시즌 스냅숏을 만남 — 2회차 A) 사람별은 건너뛰고 `person_done=1` 만.
-  데이터 시각이 `person_prev` 보다 앞선 스냅숏도 같은 꼴로 건너뛴다(2회차 A — 경과 시간이 음수가 됐다). 전부 한 트랜잭션.
-- **앱 켤 때 · 회차 끝에도 한 번**: 시즌표상 지금 시즌 시작일이 `person_season` 보다 새것이면 위 옮기기만(새 스냅숏이 없어도 — 시즌 뒤 앱만 켜고 수집이 실패하는 경우). 시즌표를 못 받았으면 `person_prev` 가 `config.ELO_FALLBACK_DAYS`(70)일 넘게 지났을 때.
+- **사람별 표의 시즌은 신호 둘로 가른다 — `season_seq`(행 수 급감·`ended_season`)와 시즌표 시작일**(2회차 A·B [상] → 3회차 A·B [상]: 2회차의 `season_key` 하나는 ① `"seq:N"` 과 날짜를 **문자열로** 앞뒤 비교해 시즌표를 처음 받는 날 전부 "더 옛것"이 되어 사람별이 영영 건너뛰어졌고 ② 시즌표는 창을 만들 때 한 번만 읽어(app_main.py:1849 — 트레이 상주면 며칠 낡는다) 새 시즌 값이 옛 줄에 이어 쓰였고 ③ `season_seq` 의 빠른 신호를 버렸다).
+  상태 `collect_state.person_season` = `{seq, start, at}`(JSON — `start` 는 시즌표 시작일 또는 null, `at` = 이 시즌으로 넘긴 스냅숏의 데이터 시각). 사람별 세 표의 `season_seq` 칸은 이 `at` 을 담는 `season_at` 으로 읽는다.
+  - **비교는 같은 출처끼리만, 숫자·날짜로**(문자열 비교 없음): seq 는 정수로 · start 는 **둘 다 있을 때만** 날짜로.
+  - **넘김** = seq 가 커졌거나 · 둘 다 있는 start 가 늦어졌다. **같은 넘김의 늦은 신호**: 다른 쪽 신호가 마지막 넘김(`at`)에서 `config.SEASON_SIGNAL_LAG_D`(초안 7)일 안에 뒤따라 바뀌면 값만 받아 적고 다시 넘기지 않는다(시즌은 약 80일 — 2회차의 "`_done` 두 번"을 이걸로 막는다).
+  - **더 옛것** = seq 가 작거나 둘 다 있는 start 가 이르다(동의 뒤 따라잡기가 지난 시즌 스냅숏을 만남 — 2회차 A) → 사람별은 건너뛰고 `person_done=1` 만. 한쪽 start 가 null 이면 seq 로만 판정.
+  - **시즌표를 먼저 새로 받는다**: `process_meta` 는 사람별 처리 전에 시즌표 캐시가 `SEASON_TTL`(1일)보다 낡았으면 작업 스레드에서 다시 받는다(웹 데이터는 수집 조건상 켜져 있다 · 실패하면 캐시 그대로 + seq 신호).
+- **시즌 넘김은 처리할 때 그 자리에서**: 넘김이면 옛 시즌 `elo_season` 을 `elo_season_done` 으로 옮기고 사람별 세 표의 옛 줄을 지우고(`run_open` 은 잘림으로 닫아 `run_done`) `person_prev` 를 지운 뒤 새 시즌으로 처리(첫 처리 = 잘림으로 연다).
+  데이터 시각이 `person_prev` 보다 앞선 스냅숏도 "더 옛것"과 같은 꼴로 건너뛴다(2회차 A — 경과 시간이 음수가 됐다). 전부 한 트랜잭션.
+  `_done` 표는 **번호 없는 익명 줄이라 UNIQUE 를 걸지 않는다**(3회차 A — 같은 `hours`·`max_dd=0` 이 정당하게 겹친다). 두 번 들어가지 않는 건 "옮기기 + 옛 줄 지우기 = 한 트랜잭션"과 위의 늦은 신호 규칙이 지킨다.
+- **앱 켤 때 · 회차 끝에도 한 번**: 위 규칙으로 지금(새 스냅숏 없이 — 시즌 뒤 앱만 켜고 수집이 실패하는 경우)이 넘김이면 옮기기만. 두 신호 다 없으면 `person_prev` 가 `config.ELO_FALLBACK_DAYS`(70)일 넘게 지났을 때.
 - 1만 위 밖 구간은 안 보인다(낙폭이 실제보다 얕다 — 후보 표에 이미 적음).
 
 ### N12 첫 챔스 판수 (쌓기만)
@@ -280,8 +288,8 @@ N3·N11·N12·B5 는 "앞 스냅숏 다음" 순서로 먹어야 한다. 저장�
 - 새 표(rank.db) `pick_days(day, kind, key, n, rankers, PK(day, kind, key)) WITHOUT ROWID` — 영구 · 익명. **`day` = 랭커의 마지막 경기 날짜**(1회차 B — 받은 날로 세면 3일 규칙(R13) 때문에 같은 스쿼드가 사흘 연속 들어가고, 익명이라 나중에 못 가른다). `kind`: `card`(spid) · `card_grade`(spid:강화) · `team_color`. `rankers` = 그 날짜에 경기가 있는 셈에 든 랭커 수(분모).
 - **모집단은 출처 `PICK` 이고 그 회차 상위 `RANKER_PICK_TOP` 안만**(1회차 A [상] — `ranker_squads` 엔 [추천] 의 201~1,000위(`RECOMMEND`)와 이 PC 의 dev_archive 몫까지 섞여 날마다 모집단이 바뀐다, store.py:1122·1140).
 - 쓰는 곳: `RankerPickLoader` 가 한 바퀴를 끝낼 때(취소 아님) — **더하기**(2회차 A [상] — "최근 사흘 다시 세어 덮어쓰기"는 `ranker_squads` 가 랭커마다 마지막 경기 하나뿐이라(R13) 다음 날 또 경기한 랭커(R14: 거의 전원)가 앞 날짜에서 빠졌다):
-  위 모집단 중 **아직 안 센 경기**(`match_id`)마다 그 경기 날짜 줄에 +1 · `rankers` +1. 센 경기는 새 표 `pick_counted(match_id PK, day)` 로 표시 — 경기 번호라 원본과 같이 **14일 뒤 지운다**(`prune_raw` 와 같은 자리). 요청 0. 같은 랭커가 같은 날 여러 경기면 받은 것(마지막 하나)만 — 날짜 칸의 뜻은 "그날 경기가 잡힌 랭커들의 픽".
-- **rank.db 를 만들지 않는 열기로**(1회차 A — `open_rank_db` 는 파일을 만든다, rankcollect.py:106 · [수집 기록 지우기] 직후 로더가 끝나면 rank.db 가 되살아났다): 새 `rankcollect.open_rank_db_existing()`(없으면 None) + 쓰기 직전 `config.ranker_pick_allowed()` 다시 확인 + `CollectLock` 이 아니라 짧은 트랜잭션(로더는 화면 밖 스레드).
+  위 모집단 중 **아직 안 센 경기**(`match_id`)마다 그 경기 날짜 줄에 +1 · `rankers` +1. 센 경기는 새 표 `pick_counted(match_id PK, day)` 로 표시 — 경기 번호라 원본과 같이 **14일 뒤 지운다**(`prune_raw` 와 같은 자리). 요청 0. 경기 날짜가 14일(`pick_counted` 보관)보다 옛것이면 **세지 않는다**(3회차 A·B [중] — 14일 넘게 쉰 랭커의 같은 옛 경기가 표시가 지워진 뒤 3일마다 다시 +1). 같은 랭커가 같은 날 여러 경기면 받은 것(마지막 하나)만 — 날짜 칸의 뜻은 "그날 경기가 잡힌 랭커들의 픽".
+- **rank.db 를 만들지 않는 열기로**(1회차 A — `open_rank_db` 는 파일을 만든다, rankcollect.py:106 · [수집 기록 지우기] 직후 로더가 끝나면 rank.db 가 되살아났다): 새 `rankcollect.open_rank_db_existing()`(없으면 None — **`exists()` 뒤 connect 가 아니라 `file:…?mode=rw` URI 로**, 3회차 A [중]: [수집 기록 지우기]와 경합하면 파일이 되살아난다. 앱 켤 때 작업은 `delete_pending` 처리 뒤에 연다) + 쓰기 직전 `config.ranker_pick_allowed()` 다시 확인 + `CollectLock` 이 아니라 짧은 트랜잭션(로더는 화면 밖 스레드).
 - rank.db 에 두는 이유: 랭커 픽은 수집 토글 하나로 묶였고(2.1.1) 지우기가 파일 삭제 하나로 끝난다.
 
 ### 지우기 · 보관 (U1 + R11·R12)
@@ -293,9 +301,11 @@ N3·N11·N12·B5 는 "앞 스냅숏 다음" 순서로 먹어야 한다. 저장�
 | 수집 끄기 — 끄는 길 전부(`sync_ranker_pick_data` 한 자리를 거친다) | `prune_raw`(새) | 지움(새) + `person_prev` 지움 | 둠 |
 | [수집 기록 지우기] | 파일 삭제(지금) | 파일 삭제 | 파일 삭제 |
 - **끄는 길의 지우기는 작업 스레드에서 `CollectLock` 을 잡고**(1회차 A·B [상] — `sync_ranker_pick_data` 는 화면 스레드라(app_main.py:4183) 돌던 회차의 `process_meta` 가 지운 뒤 다시 썼고, 10만 줄 + secure_delete 는 창을 굳힌다).
-  **끄는 순간 화면 스레드가 표시 하나만 남긴다** — `collect_state.person_purge = 1`(키 한 줄 · 짧은 트랜잭션). 지우기는 **이 표시가 있으면 지금 켜져 있든 아니든** 사람별 표 + `person_prev` + `person_season` 을 지우고 표시를 내린다(2회차 B — 미뤄진 사이 다시 켜면 "지금 꺼져 있나"로 건너뛰어 끈 사이가 이어진 것으로 읽혔다).
-  누가 부르나(2회차 A): 끄는 길이 바로 작업 하나를 띄우고 · 못 잡으면 **수집 예약기의 1시간 확인 · 회차 끝 · 앱 켤 때**가 표시를 보고 다시. `process_meta` 는 사람별 처리 전에 표시가 있으면 지우기부터. 남은 잠금은 지금 장치(`RANK_LOCK_STALE_MIN` 10분)가 푼다.
-- **rank.db 연결은 전부 `secure_delete=ON`**(R11 — `open_rank_db` · `open_rank_db_existing`). 지우기·정리 뒤에는 **`PRAGMA wal_checkpoint(TRUNCATE)`**(1회차 B [상] — rank.db 는 WAL 이라(rankcollect.py:113) 지운 줄이 `-wal` 프레임에 남는다) — 결과의 busy 칸이 1 이면(화면의 읽기 연결 — 2회차 A) `collect_state.ckpt_pending=1` 을 두고 다음 1시간 확인에 다시.
+  **화면 스레드는 rank.db 에 아무것도 안 쓴다**(3회차 A·B [상] — 2회차의 `person_purge` 표시를 화면 스레드가 쓰면 `process_meta` 의 긴 트랜잭션 뒤에서 최대 15초(`OPEN_TIMEOUT_S`) 창이 굳고, 못 쓰면 다시 할 길이 없었고, `open_rank_db` 라 수집을 켠 적 없는 사람에게 파일이 생겼다(켤 때마다 `sync_ranker_pick_data` — app_main.py:8683)).
+  대신 **지우기 조건을 표시가 아니라 상태로 판정**한다 — 작업 스레드가 잠금 안에서: ① 지금 꺼져 있거나 동의 전(디스크에서 다시 읽음)인데 사람별 줄이 있다 **또는** ② `collect_state.person_epoch` ≠ `.env` 의 `RANK_COLLECT_ON_AT`(수집을 **켤 때마다** `config.set_rank_collect(True)` 가 새 시각을 적는다 — 이미 화면 스레드가 쓰는 .env 한 줄이라 잠금 없음) → 사람별 표 + `person_prev` + `person_season` 을 지우고 `person_epoch` 를 지금 값으로. ②가 2회차 B(미뤄진 사이 다시 켜면 이어진 것으로 읽힘)를 막는다 — 껐다 켜면 값이 바뀐다. `person_epoch` 는 사람별 처리와 같은 트랜잭션에서 적는다.
+  누가 부르나(2회차 A): 끄는 길이 바로 작업 하나를 띄우고 · 못 잡으면 **수집 예약기의 1시간 확인 · 회차 끝 · 앱 켤 때**가 같은 조건을 다시 본다(상태 판정이라 놓친 회차가 다음에 그대로 잡힌다). `process_meta` 는 사람별 처리 전에 조건부터. 남은 잠금은 지금 장치(`RANK_LOCK_STALE_MIN` 10분)가 푼다.
+  ⚠ `.env` 를 손으로 껐다 1시간 확인 전에 다시 켜면 ②가 안 바뀐다 — 앱이 꺼짐을 본 적이 없으니 "끈 사이"도 없다(받은 데이터가 없다). 테스트로 남긴다.
+- **rank.db 연결은 전부 `secure_delete=ON`**(R11 — `open_rank_db` · `open_rank_db_existing`). 지우기·정리 뒤에는 **`PRAGMA wal_checkpoint(TRUNCATE)`**(1회차 B [상] — rank.db 는 WAL 이라(rankcollect.py:113) 지운 줄이 `-wal` 프레임에 남는다) — 결과의 busy 칸이 1 이면(화면의 읽기 연결 — 2회차 A) `collect_state.ckpt_pending=1` 을 두고 다음 1시간 확인에 다시. 화면 읽기는 `open_rank_db_ro` 로 읽고 바로 닫는다(지금 규칙 — 탭을 열어 둬도 연결을 쥐지 않는다) · 24번 넘게 이어지면 [정보] 수집 상태에 한 줄(3회차 B [중] — 매시간 실패만 반복하고 알아챌 길이 없었다).
   **VACUUM 은 secure_delete 없이 지운 흔적이 있을 때만**(2회차 A·B — `freelist_count > 0` 은 새 `prune_raw` 뒤 늘 참이라 켤 때마다 전체 재작성 · 로그온 직후 디스크): 새 `prune_raw` 는 지운 스냅숏의 `snapshot_meta.raw_pruned = 1`. 앱 켤 때 **원본이 없는데 `raw_pruned` 가 아닌 스냅숏**(업그레이드 전 · 옛 버전으로 되돌렸던 사이에 지워진 것)이 있으면 VACUUM → 성공하면 그 스냅숏들에 `raw_pruned = 1`. 실패(잠금 등)는 **하루 한 번만** 다시(`collect_state.vacuum_tried_on`). 작업 스레드 · 수집 잠금 안.
   테스트는 파일 바이트로 — **`rank.db` 와 `-wal` 둘 다**(store 의 10-06 테스트 꼴) + "새 버전만 쓴 DB 는 켤 때 VACUUM 안 함".
 - **제거해도 남는다**(2회차 B — 제거기는 `%LOCALAPPDATA%\피파전적관리` 를 안 지운다, `.iss`:54): 이용 안내 랭킹 수집 목록에 "프로그램을 제거해도 이 PC 의 기록은 남습니다 — 지우려면 먼저 [수집 기록 지우기]" 한 줄. 제거기가 지울지 묻는 안은 이번 범위 밖(제거기 동작 변경 — 버전 미정 후보로).
@@ -317,9 +327,9 @@ N3·N11·N12·B5 는 "앞 스냅숏 다음" 순서로 먹어야 한다. 저장�
 | 스냅숏 저장(둘) | `snapshot_meta` 같은 트랜잭션 · 커밋 뒤 `process_meta` | `test_rankcollect` 두 길 다 |
 | `process_meta` — 저장 뒤 · 앱 켤 때(작업 스레드) | 데이터 시각 순 · 하나 = 한 트랜잭션(깃발 같이) · 경과 시간 연속(36시간) · 틈 · 잠금 · 사람별 직전 켜짐·동의 다시 읽기 | `test_rankcollect`: 옛 버전 스냅숏(meta 없음) 따라잡기 · 도중 예외 뒤 다시(두 번 세지 않음 — 깃발과 같은 트랜잭션) · **24시간 30분 간격 열흘(달력 날짜가 빔) → 안 잘림** · 37시간 → 잘림 · 같은 날 둘 → 길이 한 번 · 동의 전 → 사람별 0줄, 동의 뒤 따라잡기 · 처리 중 `.env` 끔 → 사람별 0줄 |
 | N3·N11·N12 규칙 | 위 각 절 | `test_rankcollect` 지어낸 스냅숏: 첫 처리에 이미 0 → `censored_start=1` · 연속 길이 · 시즌 바뀜 옮기기(`run_open`·`elo_season`·`champ_watch` 셋) · 상태 0~3 · 빠졌다 들어옴 → 3 · `first_seen_late` 는 시즌표 시작일 기준 |
-| 시즌 끝 옮기기 — `season_seq` 바뀜 · 앱 켤 때 · 회차 끝 | 시즌표 시작일(없으면 70일)로 지난 시즌 사람별 줄 판정 | `test_rankcollect`: `season_seq` 가 안 바뀐 채 시즌표 시작일이 지남 → 사람별 0줄 · 익명 줄 생김 |
+| 시즌 끝 옮기기 — 사람별 처리 · 앱 켤 때 · 회차 끝 | 신호 둘(`season_seq` · 시즌표 시작일)을 같은 출처끼리 숫자·날짜로 · 늦은 신호는 7일 안이면 다시 안 넘김 · 낡은 시즌표는 먼저 다시 받음(둘 다 없으면 70일) | `test_rankcollect`: `season_seq` 가 안 바뀐 채 시즌표 시작일이 지남 → 사람별 0줄 · 익명 줄 생김 · **시즌표 없음 → 생김(사람별 계속 쌓임 · 건너뜀 0)** · **seq 만 바뀜(시즌표 낡음) → 넘김** · **seq 넘김 사흘 뒤 시즌표가 따라옴 → `_done` 한 번** · seq 10 > 9 |
 | 랭커 픽 한 바퀴 끝 | `pick_days` — 날짜 = 마지막 경기 날짜 · 출처 `PICK` 상위 200 · 만들지 않는 열기 · 켜짐 다시 확인 · 취소면 안 씀 | `test_rankerpick`: `RECOMMEND` 줄 안 셈 · rank.db 없으면 안 만듦 · 같은 스쿼드 사흘 → 한 날짜 |
-| 원본 정리 — 회차 끝 · 앱 켤 때 · 끌 때 | `prune_raw` · 사람별 표 + `person_prev` 지움(꺼짐) · 끄기는 작업 스레드 + `CollectLock` | `test_rankcollect` + `test_ui_smoke`(끄는 길 하나로 `sync_ranker_pick_data` 를 거쳐 사람별 0줄 · 끄고 바로 켜도 다음 처리는 잘림으로 연다) |
+| 원본 정리 — 회차 끝 · 앱 켤 때 · 끌 때 | `prune_raw` · 사람별 지우기는 **상태 판정**(꺼짐·동의 전인데 줄 있음 · `person_epoch` ≠ `RANK_COLLECT_ON_AT`) · 작업 스레드 + `CollectLock` · 화면 스레드는 rank.db 에 안 씀 | `test_rankcollect` + `test_ui_smoke`(끄는 길 하나로 `sync_ranker_pick_data` 를 거쳐 사람별 0줄 · 끄고 바로 켜도 다음 처리는 잘림으로 연다 · **첫 지우기 작업이 잠금을 못 잡아도 다음 1시간 확인에 지움** · 수집을 켠 적 없는 PC 에서 켤 때 rank.db 안 생김) |
 | 지운 바이트 | `secure_delete` · `wal_checkpoint(TRUNCATE)` · 빈 페이지 있으면 VACUUM | `test_rankcollect`: 닉네임 바이트가 정리 뒤 `rank.db`·`-wal` 둘 다에 없다 · 옛 방식(secure_delete 끔)으로 지운 파일 → 켤 때 VACUUM 뒤 없다 |
 | 다시 묻는 안내 "바뀐 점" | `notice.CHANGES_HTML` 을 v6 내용으로(지금은 v5 — 1회차 B) | `test_ui_smoke` 다시 묻기 창의 글에 사람별 보관 문장 |
 | 읽기 — 추이·메타·분포·상태 | `open_rank_db_ro` · `data_time` | `test_ui_smoke` 세 탭 · `test_rules` SQL 계획(새 읽기 함수가 안 돌면 `_drive_uncovered`) |
