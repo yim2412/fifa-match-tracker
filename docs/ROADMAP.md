@@ -23,7 +23,7 @@
 18(**2.2.1 공개** 2026-10-06 — 팀컬러 엠블럼 가르기 · 효과 창 `teamcolor.py` · 팀컬러 표 개선 `28e5a7f`) ·
 30(**2.3.1 공개** 2026-10-07 — 기준 시각 · 메타 처리·사람별 표 · 랭킹 추이 탭 둘 · 안내 6 `a3032c1`).
 **1.2.1 부터의 나눔은 제안** — 그 버전 계획 검토(①~⑩·⑫) 때 고친다. **버전마다 첫 단계 앞에 계획 검토가 붙는다** —
-**2.3.1 공개 끝**(2026-10-07 — 30단계 · 상세는 `docs/DONE.md`) — **31단계(2.4.1) 계획 검토 중**(아래 "2.4.1" 절 · 나눔 이유는 표 아래). 끝난 버전의 상세는 `docs/DONE.md`.
+**2.3.1 공개 끝**(2026-10-07 — 30단계 · 상세는 `docs/DONE.md`) — **31단계(2.4.1) 계획 확정**(아래 "2.4.1" 절 — 2회차 [상] 0) · 다음은 **31단계 구현**(새 세션). 끝난 버전의 상세는 `docs/DONE.md`.
 37~39(보호 빌드)는 기능이 거의 완성된 뒤 한 번에 — 번호·버전은 제안이고, 그 사이 기능 단계가 늘면 그 앞에 끼우고 번호를 다시 매긴다.
 
 난이도는 낮음·중간·높음(2026-10-06 사용자: 계획을 보여 줄 때 늘 같이) — 계획 검토 때 다시 매긴다.
@@ -178,9 +178,10 @@
 
 ## 2.4.1 — 랭커 메타 ② 스냅숏 읽기 (31단계) — 계획 검토 중
 
-> **상태: 2회차 검토 전**(2026-10-07). 검토자 **1명**(검토 기준 7번 — 있는 데이터를 읽기만 한다).
+> **상태: 계획 확정**(2026-10-07 — 2회차 [상] 0). 검토자 **1명**(검토 기준 7번 — 있는 데이터를 읽기만 한다). 다음은 새 세션에서 구현.
 >
 > **검토 기록** 1회차 [상] 3(N7 팀컬러 필터가 [축구장] 탭에만 · 원본이 바뀌는 길 중 수집 회차 끝만 무효화 · N8 쌍을 그 사람 줄로 만들면 1만 위 밖이 "수집 빠짐"으로) [중] 10 — 전부 반영. 토큰 약 20만.
+> → 2회차(같은 검토자 · 바뀐 줄 + 계획 전체) **[상] 0** · [중] 4(`is_champ` 자리가 순환 import · 정리 끝 신호가 창에 없고 매시간 돈다 · `RankMetaLoader` 스레드 규칙 · 탭마다 쌍의 시각 기준이 다름) — 전부 반영. 토큰 3.5만.
 
 **규모** 낮음~중간. 새 넥슨 요청 **0** · 오픈API 요청 0 · **rank.db·fifa.db 에 쓰는 것 0**(새 표·열 없음 — 되돌리기·업그레이드 걱정이 없다).
 읽는 것은 rank.db 원본(`snapshot_rows` — **14일**) · 영구 집계(`cut_elo`·`tier_counts`) · 화면이 이미 가진 경기 상세. 계산은 새 모듈 **`rankmeta.py`**(화면 없음 · 읽기만) → 화면은 `core_api` 로.
@@ -224,6 +225,7 @@
 - **스냅숏은 지금 시즌만**(`rankcollect._season_snaps` — 데이터 시각 순) · 시각은 전부 `rankcollect.data_time`(2.3.1 규칙).
 - **이웃 쌍** `latest_pair(conn)` = 지금 시즌 원본이 남은 마지막 두 스냅숏, 데이터 시각 차가 `config.RANK_CONT_MAX_H`(36) 이하일 때만. 아니면 None → 탭마다 "하루 차이를 못 냅니다 — 마지막 두 수집이 N시간 떨어져 있습니다". 제목에 실제 시간("24.9시간 사이").
   **하루 걸음**(N10)은 예측과 같은 `config.PREDICT_STEP_GAP_H`(20~28시간) 안의 쌍만 — 점수 변화는 간격에 비례해서. **간격은 예측과 똑같이 `taken_at` 으로 잰다**(1회차 [중] — `predict._gap_ok` 가 `taken_at`, predict.py:95. `data_time` 으로 재면 같은 rank.db 로 예측은 "모으는 중"인데 N10 은 숫자를 내는 일이 생긴다). 판정 함수는 `predict._gap_ok` 를 그대로 쓴다. 나머지 새 읽기는 `data_time`(2.3.1 규칙).
+  그래서 **같은 마지막 쌍이 B2·N13·N8 에서는 쓰이고 N10 에서는 빠질 수 있다**(2회차 [중] — 0시대 회차는 기준 시각이 전날 23시). 안내 줄의 "N시간 사이"는 탭마다 어느 시각으로 잰 값인지 적는다(B2·N13·N8 = 넥슨 데이터 시각 · N10 = 수집 시각). `test_rankmeta`: `taken_at` 간격 29시간 · `data_time` 간격 26시간인 쌍 → N10 은 빼고 B2 는 쓴다.
 - **차가 음수인 사람은 뺀다**(R17 — 시즌 경계 · 넥슨 보정) — 뺀 수를 안내 줄에.
 - **순위 구간은 "상위 N명" 누적** `config.META_TOP_TIERS = (200, 2000, 5000, 10000)`(B6 의 구간 그대로 — 추이 탭의 `TREND_TIERS` 는 띠 구간이라 다르다. 콤보 이름 "상위 200명"으로 구별).
   **하루 승률(B2)·승률→점수(N10)는 앞 스냅숏 순위로 가른다** — 뒤 순위로 가르면 이긴 사람이 상위로 올라와 승률이 부풀려진다.
@@ -231,10 +233,11 @@
 - **팀컬러 키는 이름**(B1 과 같다 — 2.2.1 "랭커 묶음은 이름 그대로"). 빈 팀컬러·`-` 포메이션은 "팀컬러 안 씀"·"모름" 줄로.
 - **무승부**: 랭커 데이터 승률(B2·B3·B4·N10)은 **승÷(승+패)** — 등급이 섞인 1만 명이라(후보 표 A6 규칙의 앞당김, 무승부 5.7% R5). 내 경기 승률(N7)은 앱 지금 규칙 승÷전체(R15 — 33단계 A6 가 한꺼번에 바꾼다). 표 머리에 어느 쪽인지 적는다.
 - **표본**: 줄마다 인원·판수를 같이 보이고, 인원 `config.META_MIN_USERS`(5) 미만은 흐림(1.2.1 흐림 규칙 · B1 과 같다).
-- **챔스 이상** = 지금 등급 칸 `grade` ≤ `config.CHAMP_GRADE_MAX`(1) — 판정은 `rankmeta.is_champ(grade)` 한 곳(1회차 [중] — 등급 칸이 셋이다: `grade`·`best_grade`·`prev_grade`). 2.3.1 의 `grade <= 1`(rankcollect.py:1240)도 이 함수로 바꾼다(값 그대로).
+- **챔스 이상** = 지금 등급 칸 `grade` ≤ `config.CHAMP_GRADE_MAX`(1) — 판정은 **`rankcollect.is_champ(grade)`** 한 곳(1회차 [중] — 등급 칸이 셋이다: `grade`·`best_grade`·`prev_grade`). 2.3.1 의 `grade <= 1`(rankcollect.py:1240)도 이 함수로 바꾼다(값 그대로). rankcollect 에 두는 이유(2회차 [중]): rankmeta 가 rankcollect 를 가져다 쓰므로 거꾸로 부르면 순환 import — rankmeta·`core_api` 는 다시 내보내기만.
 - **캐시**: `rankmeta` 결과는 (원본 스냅숏 id 목록, 인자) 키로 프로세스 안에 하나씩(`predict.day_steps` 꼴) — 새 스냅숏이면 다시.
 - **읽기 연결**: 화면이 `open_rank_db_ro` 로 열고 바로 닫는다(지금 규칙) · 화면 스레드에서(R13 — 2만 행 0.034초) · 예산은 아래 ⑦.
   **넘칠 때를 지금 정한다**(1회차 [중] — N10 은 14스냅숏 13만 걸음, `ranked_nicknames` 는 14만 행이라 R13 비례로 읽기만 약 0.24초): 지어낸 1만 행 × 14스냅숏에서 첫 계산(캐시 없음)이 CPU 0.3초를 넘는 함수는 **작업 스레드 `RankMetaLoader`**(EloLoader·PredictWorker 꼴 — 요청 번호로 늦은 결과를 버린다 · `pyqtSignal(object)`)로 돌리고 화면은 "읽는 중" 한 줄. 넘는지는 구현 첫 단계에서 재서 커밋 메시지에.
+  그때의 규칙(2회차 [중]): 결과 캐시는 잠금 하나(`predict._steps_lock` 꼴 — 작업·화면 스레드가 같이 만진다) · 연결은 작업 스레드 안에서 `open_rank_db_ro` 로 따로(연결을 스레드 너머로 안 넘긴다) · 결과가 오면 요청 번호를 대조한 뒤 그 키를 `_invalidate` · `test_rankmeta` 에 "늦게 온 옛 요청 결과를 버림".
 
 ### B2 하루 승률 — [메타 분석 › 하루 승률]
 
@@ -321,7 +324,7 @@
   랭킹 추이 Tabs 에 `("주간 요약", "_build_weekly_tab")` · 승률 그래프 Tabs("trend") 에 `("순위 변동", "_build_rank_move_tab")` ·
   "포지션별 최다 상대" 를 `Tabs("posopp", (("축구장", "_build_position_opp_tab"), ("카드별", "_build_opp_cards_tab")))` 로.
 - `VIEW_OF_KEY`: 새 키 `daywr`·`valuescore`·`valuebins`·`tiermeans`·`wrelo`·`weekly`(rank.db — 검색 결과에 안 묶임) · `rankmove`(검색 계정) · `oppcards`(검색 결과 · 시즌 콤보). 기존 `teamcolor` 키의 `("포지션별 최다 상대", None)` → `("포지션별 최다 상대", "축구장")`.
-  **rank.db 가 바뀌는 길 전부에서 같은 키 목록을 무효화**(1회차 [상] — 초안은 수집 회차 끝(app_main.py:2271)만 봤다): 키는 상수 하나 `RANK_VIEW_KEYS` = 기존 다섯(`rankerpick`·`recommend`·`ranktrend`·`metatrend`·`elodist`) + 새 여덟(`daywr`·`valuescore`·`valuebins`·`tiermeans`·`wrelo`·`weekly`·`rankmove`·`oppcards`). 길은 넷: ① 수집 회차 끝 ② 팀컬러 목록 저장(`RankListLoader.saved_snapshot`, app_main.py:1214 — 지금은 아무도 안 읽어 기존 다섯도 낡은 채였다) ③ 정리 끝(`RankMaintWorker` — `prune_raw` 로 14일 집합이 바뀐다) ④ 수집 끄기·[수집 기록 지우기].
+  **rank.db 가 바뀌는 길 전부에서 같은 키 목록을 무효화**(1회차 [상] — 초안은 수집 회차 끝(app_main.py:2271)만 봤다): 키는 상수 하나 `RANK_VIEW_KEYS` = 기존 다섯(`rankerpick`·`recommend`·`ranktrend`·`metatrend`·`elodist`) + 새 여덟(`daywr`·`valuescore`·`valuebins`·`tiermeans`·`wrelo`·`weekly`·`rankmove`·`oppcards`). 길은 넷: ① 수집 회차 끝 ② 팀컬러 목록 저장(`RankListLoader.saved_snapshot`, app_main.py:1214 — 지금은 아무도 안 읽어 기존 다섯도 낡은 채였다) ③ 정리 끝(`RankMaintWorker` — `prune_raw` 로 14일 집합이 바뀐다. 2회차 [중]: 지금 `done` 은 예약기 `RankCollectScheduler._on_maint_done`(app_main.py:1689·1693)에만 닿고 창은 `status`·`outcome` 만 받는다(app_main.py:2257) → 예약기에 새 신호 `maintained(out)` 을 두고 창이 받는다 · 창이 직접 띄우는 길 `_maintain_rank`(app_main.py:4293 — 예약기 없는 창)도 같은 처리. 정리는 1시간 확인마다 도니 **`out` 에 지운 원본이나 처리한 메타가 있을 때만** 무효화한다 — 아니면 보이는 탭이 매시간 다시 그려진다) ④ 수집 끄기·[수집 기록 지우기].
 - 메뉴 이름이 안 바뀌어 `OLD_PAGE_NAMES` 는 그대로 · 저장된 `view/page` "포지션별 최다 상대" 는 첫 탭(축구장)으로.
 - 랭킹 수집이 꺼져 있거나 rank.db 가 없으면 새 탭마다 같은 안내 한 줄("랭킹 수집을 켜면 … [정보] 에서") — 메타 변화 탭 문구를 함수 하나로 모은다.
 - `core_api`: `day_winrate` · `value_score` · `value_bins` · `tier_means` · `formation_group` · `group_meta` · `is_champ` · `winrate_to_elo` · `weekly` · `rank_moves` · `find_sn` · `ranked_nicknames` · `opponent_cards` · `season_end_estimate`.
@@ -341,7 +344,7 @@
 | 순위 변동 판정 — N8 | 원본 스냅숏 전부로 쌍 · 판정 순서 · 구단가치·등급 안 씀 | `test_rankmeta` 판정마다 한 쌍 · **가운데 스냅숏에서 빠짐 → "1만 위 밖" 두 줄** · 0판에 순위·ELO 둘 다 바뀜 → "점수만 바뀜" |
 | 1만 위 안 닉네임 — N7 | 원본 남은 지금 시즌 스냅숏 | `test_rankmeta` · `test_ui_smoke` rank.db 없음 → 체크 꺼짐 |
 | 화면 읽기 — 새 탭 전부 | `open_rank_db_ro` 열고 닫기 · `VIEW_OF_KEY`·`_renderers()` · 수집 꺼짐 안내 | `test_ui_smoke` 새 탭마다(지어낸 rank.db) · `test_every_nav_page_has_a_renderer` · `test_rules` SQL 계획(새 읽기는 `_drive_uncovered`) |
-| 무효화 — rank.db 가 바뀌는 길 넷(회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기) | `RANK_VIEW_KEYS` 하나 | `test_ui_smoke`: 길마다 신호 뒤 보이는 탭이 다시 그려짐 · 길 넷이 같은 상수를 쓰는지 |
+| 무효화 — rank.db 가 바뀌는 길 넷(회차 끝 · 팀컬러 목록 저장 `saved_snapshot` · 정리 끝 `maintained`/`_maintain_rank` · 끄기/지우기) | `RANK_VIEW_KEYS` 하나 · 정리는 바뀐 게 있을 때만 | `test_ui_smoke`: 길마다 신호 뒤 보이는 탭이 다시 그려짐 · 길 넷이 같은 상수를 쓰는지 · 정리 결과가 "바뀐 것 없음"이면 다시 안 그림 |
 | 무효화 — 새 검색 · 시즌 콤보 · 늦은 프로필 번호(`rank_ready`) · EloLoader 끝 · 팀컬러 로드 · [카드별] 팀컬러 콤보 | `rankmove`·`wrelo`·`weekly` / `oppcards` | `test_ui_smoke`: `rank_ready` 뒤 [순위 변동] 이 "없음"에서 표로 · [카드별] 콤보로 표가 걸러짐 |
 | 시즌 종료일 — N13 주차 · 예측 | `predict.season_end_estimate` 한 곳 | `test_predict` 골든 그대로 + 새 단위 |
 | 화면 → 분석 | `core_api` 에 이름(`group_meta`·`is_champ` 포함) | `test_ui_reaches_analysis_only_through_core_api` — **`tests/test_parsing.CORE_MODULES` 에 `rankmeta` 를 넣는다**(1회차 [중] — 안 넣으면 화면이 rankmeta 를 직접 import 해도 통과) |
@@ -373,6 +376,8 @@
 - 이웃 쌍이 하나뿐이라 R6·R12 의 크기는 표본 하나 — 구현 때 그동안 쌓인 쌍으로 다시 찍어 커밋 메시지에(구조는 그대로).
 - 탭마다 그리기 시간 — `test_rankmeta` 예산 + 실제 rank.db 사본.
 - B4 구간 × 팀컬러 표의 1280×720 폭 — `test_window_size`.
+- 화면 스레드 계산이 0.3초 안에 드는지(N10 · `ranked_nicknames`) — `test_rankmeta` 예산. 넘으면 `RankMetaLoader`(위 규칙).
+- `ranked_nicknames` 의 DISTINCT 실행 계획 — `test_rules`.
 
 ### 단계
 
