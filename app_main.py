@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gc
+import html
 import sqlite3
 import sys
 import tempfile
@@ -953,11 +954,30 @@ class RankerPickLoader(QThread):
                                                  on_ranker=self.ranker.emit)
                         res.checked += first.checked
                         res.requests += first.requests
+                        if not (self._cancel or res.cancelled):
+                            self._record_days(conn, targets)
                 finally:
                     conn.close()
         except Exception as e:  # DB 잠김 등 — 랭커 픽 하나 때문에 앱이 죽지 않게. 다음 기회에 이어서
             res.error = f"{type(e).__name__}: {e}"
         self.done.emit(res)
+
+    @staticmethod
+    def _record_days(conn, targets) -> None:
+        """한 바퀴 끝 — 그날 아는 픽을 rank.db 날짜별 익명 집계로(N15). 만들지 않는 열기([수집 기록 지우기] 직후 끝나도
+        파일이 되살아나지 않게) · 쓰기 직전 켜짐을 디스크에서 다시 · 짧은 트랜잭션(수집 잠금 아님). 실패는 다음 바퀴."""
+        config.read_env_switches()
+        if not config.ranker_pick_allowed():
+            return
+        rconn = rankcollect.open_rank_db_existing()
+        if rconn is None:
+            return
+        try:
+            rankerpick.record_pick_days(rconn, conn, targets)
+        except sqlite3.Error:
+            pass
+        finally:
+            rconn.close()
 
 
 class AbilitySimLoader(QThread):
@@ -1576,6 +1596,29 @@ class RankCollectWorker(QThread):
         self.done.emit(out)
 
 
+class RankMaintWorker(QThread):
+    """rank.db 정리 한 번(rankcollect.maintenance) — 지우기 조건 · 메타 처리 · 원본 정리 · (켤 때) VACUUM · WAL 비우기.
+    **화면 스레드는 rank.db 에 쓰지 않는다**(2.3.1 — 메타 처리의 긴 트랜잭션 뒤에서 창이 15초 굳었다): 토글의 켜짐 사본도 여기서."""
+    done = pyqtSignal(object)   # dict — maintenance 결과
+
+    def __init__(self, vacuum: bool = False, enabled: tuple | None = None):
+        super().__init__()
+        self.vacuum, self.enabled = vacuum, enabled   # enabled = (켬, 이유) — 토글이 준다
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            if self.enabled is not None:
+                rankcollect.sync_enabled_copy(*self.enabled)
+            out = rankcollect.maintenance(vacuum=self.vacuum, cancel=self._cancel)
+        except Exception as e:  # rank.db 를 못 여는 등 — 정리 하나 때문에 크래시 로그가 쌓이지 않게(다음 확인에 다시)
+            out = {"error": f"{type(e).__name__}: {e}"}
+        self.done.emit(out)
+
+
 def collect_outcome_text(out) -> tuple[str, bool]:
     """수집 결과 → (상태줄 글, 오래 보여야 하나). 알릴 게 없으면 ("", False)."""
     k = out.kind
@@ -1591,7 +1634,7 @@ def collect_outcome_text(out) -> tuple[str, bool]:
         return "랭킹 수집 — 연결이 안 돼 다음 확인에 다시 합니다", False
     if k in ("straddle", "locked"):
         return f"랭킹 수집 — {out.message}", False
-    return "", False  # disabled · cancelled · fresh
+    return "", False  # disabled · cancelled · fresh · same(멈춰 있음은 [정보] 에만)
 
 
 class RankCollectScheduler(QObject):
@@ -1614,6 +1657,10 @@ class RankCollectScheduler(QObject):
         self._start_timer.timeout.connect(self._fire)
         self.planned: datetime | None = None
         self.worker: RankCollectWorker | None = None
+        # 정리(2.3.1) — 켤 때 한 번(VACUUM 포함) · 1시간 확인마다 · 끄는 길 · 동의 직후. 하나씩 — 돌 때 온 요청은 끝난 뒤 한 번
+        self.maint: RankMaintWorker | None = None
+        self._maint_next: dict | None = None
+        self._run_after_maint = False
 
     @staticmethod
     def can_run() -> bool:
@@ -1622,19 +1669,53 @@ class RankCollectScheduler(QObject):
     def running(self) -> bool:
         return self.worker is not None and self.worker.isRunning()
 
+    def maint_running(self) -> bool:
+        return self.maint is not None and self.maint.isRunning()
+
     def start(self) -> None:
         self._check_timer.start()
-        self.check()
+        self.maintain(vacuum=True)   # 앱 켤 때 — 메타 따라잡기 · 원본 정리(수집이 꺼져 있어도 — R12) · 옛 흔적 VACUUM
+        self.check(maint=False)
 
-    def check(self) -> None:
+    def maintain(self, vacuum: bool = False, enabled: tuple | None = None) -> None:
+        """작업 스레드에서 rank.db 정리. 지우기 조건은 상태로 판정하므로(rankcollect.purge_person_if_needed) 놓친 요청은
+        다음 1시간 확인이 그대로 잡는다 — 여기선 겹쳐 돌지 않게만."""
+        if self.maint_running():
+            nxt = self._maint_next or {"vacuum": False, "enabled": None}
+            self._maint_next = {"vacuum": nxt["vacuum"] or vacuum,
+                                "enabled": enabled if enabled is not None else nxt["enabled"]}
+            return
+        w = RankMaintWorker(vacuum, enabled)
+        w.done.connect(self._on_maint_done)
+        self.maint = w
+        w.start()
+
+    def _on_maint_done(self, _out) -> None:
+        nxt, self._maint_next = self._maint_next, None
+        if nxt is not None:
+            self.maintain(**nxt)
+            return
+        if self._run_after_maint:
+            self._run_after_maint = False
+            self.run_now()
+        else:
+            self.check(maint=False)   # 켜짐 사본이 바뀌었을 수 있다(토글) — 예약을 다시 본다
+
+    def check(self, maint: bool = True) -> None:
+        if maint:
+            self.maintain()
         if not self.can_run() or self.planned is not None or self.running():
             return
         try:
-            conn = rankcollect.open_rank_db()
-            try:
-                due = rankcollect.is_due(conn, self._now())
-            finally:
-                conn.close()
+            # 읽기 전용 — 화면 스레드는 rank.db 에 쓰지 않는다(스키마도). 아직 없으면 첫 수집 차례
+            conn = rankcollect.open_rank_db_ro()
+            if conn is None:
+                due = True
+            else:
+                try:
+                    due = rankcollect.is_due(conn, self._now())
+                finally:
+                    conn.close()
         except Exception:
             return  # rank.db 를 못 열면 다음 확인에
         if due:
@@ -1655,6 +1736,9 @@ class RankCollectScheduler(QObject):
         self.run_now()
 
     def run_now(self) -> None:
+        if self.maint_running():
+            self._run_after_maint = True   # 같은 잠금을 다툰다 — 정리가 끝난 뒤 바로(잠김으로 한 시간 밀리지 않게)
+            return
         self.worker = RankCollectWorker()
         self.worker.progress.connect(lambda d, n: self.status.emit(f"랭킹 수집 {d} / {n}쪽…", False))
         self.worker.done.connect(self._on_done)
@@ -1670,26 +1754,34 @@ class RankCollectScheduler(QObject):
         """예약을 지우고 도는 회차를 멈춘다(토글 끔·기록 지우기). 1시간 확인은 그대로 — 다시 켜면 거기서 잡는다."""
         self._start_timer.stop()
         self.planned = None
+        self._run_after_maint = False
         w = self.worker
         if w is not None and w.isRunning():
             w.cancel()
             if not w.wait(wait_ms):
                 w.terminate()
                 w.wait(1000)
+        m = self.maint
+        if m is not None and m.isRunning():
+            # 정리는 끊지 않는다(terminate 금지 — VACUUM·트랜잭션 도중일 수 있다). 스냅숏 사이에서 멈추고 기다린다
+            m.cancel()
+            m.wait(wait_ms * 3)
 
     def shutdown(self, fast: bool = False) -> list:
         """끝낼 때(quit_app). fast 면 기다리지 않고 멈춤 요청만 → 아직 도는 스레드(호출부가 합계 시간만 기다린다)."""
         self._check_timer.stop()
+        self._maint_next = None
         if not fast:
             self.stop()
             return []
         self._start_timer.stop()
         self.planned = None
-        w = self.worker
-        if w is not None and w.isRunning():
-            w.cancel()  # 한 트랜잭션이라 끊겨도 반쪽 스냅숏이 안 남는다
-            return [w]
-        return []
+        left = []
+        for w in (self.worker, self.maint):
+            if w is not None and w.isRunning():
+                w.cancel()  # 한 트랜잭션이라 끊겨도 반쪽 스냅숏·반쪽 처리가 안 남는다
+                left.append(w)
+        return left
 
 
 class MainWindow(QMainWindow):
@@ -1808,6 +1900,7 @@ class MainWindow(QMainWindow):
         self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
         self._narrate_found: list = []
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
+        self._maint_workers: list[RankMaintWorker] = []       # 예약이 없을 때만(테스트 창) — _maintain_rank
         self.shell = None          # tray.AppShell — 없으면(테스트) X 가 예전처럼 정리하고 닫는다
         self._quitting = False     # quit_app 이 세운다 — closeEvent 는 받기만
         self._released = False     # 숨긴 지 오래돼 경기 기록을 내려놓았다(release_memory) — 열 때 다시 읽는다
@@ -2175,7 +2268,7 @@ class MainWindow(QMainWindow):
         if getattr(out, "kind", None) in ("ok", "fresh") and self._ouid:
             self._load_elo(self._ouid)
         if getattr(out, "kind", None) in ("ok", "fresh"):
-            for key in ("rankerpick", "recommend", "ranktrend"):  # 새 스냅숏 — 대상·후보·추이가 바뀌었다
+            for key in ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist"):  # 새 스냅숏 — 대상·후보·추이가 바뀌었다
                 self._invalidate(key)
 
     def _on_rank_collect_status(self, text: str, important: bool) -> None:
@@ -2557,7 +2650,9 @@ class MainWindow(QMainWindow):
         ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
                    ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
         # 2.1.1 새 묶음 — 아직 빈 메뉴는 config.HIDDEN_NAV_UNTIL_READY 에 이름을 넣어 숨긴다(16·17단계가 채웠다)
-        ("랭커", [("랭킹 추이", "_build_rank_trend_tab"),
+        ("랭커", [("랭킹 추이", Tabs("ranktrend", (("추이", "_build_rank_trend_tab"),
+                                              ("메타 변화", "_build_meta_trend_tab"),
+                                              ("점수 분포", "_build_elo_dist_tab")))),
                  ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
                                               ("추천", "_build_recommend_tab")))),
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
@@ -4182,9 +4277,24 @@ class MainWindow(QMainWindow):
 
     def sync_ranker_pick_data(self) -> None:
         """수집이 꺼져 있으면 랭커 픽 데이터를 전부 지운다 — 끄는 길(토글 · 웹 데이터 끄기 · D6 · 다시 묻는 창 · .env 손 수정)
-        어디서 왔든 이 한 자리를 거친다. 켜져 있으면 14일 정리만(켤 때)."""
+        어디서 왔든 이 한 자리를 거친다. 켜져 있으면 14일 정리만(켤 때).
+        rank.db 쪽(사람별 표 · 14일 원본 · 동의 직후 따라잡기 — 2.3.1)은 작업 스레드의 정리 한 번으로 — 조건은 거기서 상태로 판정."""
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
         self._invalidate_pick()
+        self._maintain_rank()
+
+    def _maintain_rank(self, enabled: tuple | None = None) -> None:
+        """rank.db 정리를 작업 스레드에서 — 예약(창 밖)이 있으면 거기로(겹쳐 돌지 않게), 없으면(테스트 창) 직접."""
+        if self._quitting:
+            return
+        sched = self._rank_sched
+        if sched is not None:
+            sched.maintain(enabled=enabled)
+            return
+        self._maint_workers = [w for w in self._maint_workers if w.isRunning()]
+        w = RankMaintWorker(enabled=enabled)
+        self._maint_workers.append(w)
+        w.start()
 
     # ── 랭커 픽(6) — 화면 ─────────────────────────────────────────────
     PICK_SHARE_COLUMNS = ["이름", "인원", "비율"]
@@ -4629,6 +4739,152 @@ class MainWindow(QMainWindow):
                 else charts.Axis.fit(allv, fmt=fmt, name=axis_name))
         chart.set_data(pts, axis=axis, avg=False, x_dates=xd, ref_series=refs)
         self.rtrend_titles[key].setText(f"{title} · 실선 {main_name}")
+
+    # ── 랭킹 추이 [메타 변화](2.3.1 B1) · [점수 분포](B5) — rank.db 영구 집계, 요청 0 ─────────────
+    META_COLUMNS = ["이름", "지금", "그때", "변화"]
+    META_BLANK = {"team_color": "안 씀", "formation": "모름"}
+
+    def _build_meta_trend_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.lb_meta_note = QLabel("")
+        self.lb_meta_note.setWordWrap(True)
+        self.lb_meta_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        top.addWidget(self.lb_meta_note, 1)
+        top.addWidget(QLabel("순위 구간"))
+        self.cb_meta_tier = NoScrollComboBox()
+        for label, tier in self.TREND_TIERS:
+            self.cb_meta_tier.addItem(label, tier)
+        self.cb_meta_tier.currentIndexChanged.connect(lambda _i: self._invalidate("metatrend"))
+        top.addWidget(self.cb_meta_tier)
+        v.addLayout(top)
+        row = QHBoxLayout()
+        self.meta_tables: dict[str, FitTableWidget] = {}
+        self.meta_titles: dict[str, QLabel] = {}
+        for kind, name in (("team_color", "팀컬러"), ("formation", "포메이션")):
+            box = QVBoxLayout()
+            title = QLabel(name)
+            title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            table = self._make_table(self.META_COLUMNS)
+            box.addWidget(title)
+            box.addWidget(table, 1)
+            row.addLayout(box, 1)
+            self.meta_tables[kind], self.meta_titles[kind] = table, title
+        v.addLayout(row, 1)
+        self.meta_trend: rankcollect.MetaTrend | None = None   # 테스트가 본다
+        return w
+
+    def _render_meta_trend(self) -> None:
+        trend = rankcollect.MetaTrend()
+        tier = self.cb_meta_tier.currentData() or 200
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            if rconn is not None:
+                try:
+                    trend = core.meta_trend(rconn, tier)
+                finally:
+                    rconn.close()
+        except sqlite3.Error:
+            pass
+        self.meta_trend = trend
+        if trend.collecting:
+            self.lb_meta_note.setText(
+                "모으는 중 — 같은 시즌 스냅숏이 3일치 넘게 쌓이면 비교합니다(하루 한 번 수집)." if config.RANK_COLLECT else
+                "랭킹 수집을 켜면 하루 한 번 1만 명 순위를 모아 메타 변화를 보여 줍니다 — [정보] 에서 켤 수 있습니다.")
+            for kind, table in self.meta_tables.items():
+                self._fill(table, [])
+                self.meta_titles[kind].setText("팀컬러" if kind == "team_color" else "포메이션")
+            return
+        days = round(trend.days or 0)
+        self.lb_meta_note.setText(
+            f"넥슨 데이터 기준 {trend.now_at[5:16].replace('T', ' ')} 과 {trend.then_at[5:16].replace('T', ' ')}"
+            f"({days}일 전) 비교 · 1만 위 안 랭킹 그대로 · 이름이 같은 팀컬러는 합쳐서 셉니다 · "
+            f"두 시점 다 {config.META_MIN_USERS}명 미만인 줄은 흐리게")
+        for kind, table in self.meta_tables.items():
+            self.meta_titles[kind].setText(f"{'팀컬러' if kind == 'team_color' else '포메이션'} — {days}일 전 대비")
+            rows = trend.rows.get(kind) or []
+            self._fill(table, [[r.key or self.META_BLANK[kind], (f"{r.now_pct:.1f}% ({r.now_n:,})", r.now_pct),
+                                (f"{r.then_pct:.1f}% ({r.then_n:,})", r.then_pct),
+                                (f"{r.diff_pp:+.1f}%p", r.diff_pp)] for r in rows], enable_sort=False)
+            for i, r in enumerate(rows):
+                diff = table.item(i, 3)
+                if diff is not None and abs(r.diff_pp) >= 0.05:
+                    diff.setForeground(QColor(T.CHART_UP if r.diff_pp > 0 else T.CHART_DOWN))
+                if r.thin:
+                    for c in range(table.columnCount()):
+                        it = table.item(i, c)
+                        if it is not None:
+                            it.setForeground(QColor(T.TEXT_DIM))
+            table.setSortingEnabled(True)
+
+    ELO_DIST_COMPARE = [("7일 전", "7d"), ("시즌 첫 스냅숏", "season"), ("비교 없음", "none")]
+
+    def _build_elo_dist_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.lb_edist_note = QLabel("")
+        self.lb_edist_note.setWordWrap(True)
+        self.lb_edist_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        top.addWidget(self.lb_edist_note, 1)
+        top.addWidget(QLabel("비교"))
+        self.cb_edist_cmp = NoScrollComboBox()
+        for label, key in self.ELO_DIST_COMPARE:
+            self.cb_edist_cmp.addItem(label, key)
+        self.cb_edist_cmp.currentIndexChanged.connect(lambda _i: self._invalidate("elodist"))
+        top.addWidget(self.cb_edist_cmp)
+        v.addLayout(top)
+        self.edist_chart = charts.HistogramChart()
+        v.addWidget(self.edist_chart, 1)
+        self.elo_dist: rankcollect.EloHist | None = None   # 테스트가 본다
+        self.elo_dist_marker: tuple | None = None
+        return w
+
+    def _render_elo_dist(self) -> None:
+        hist = rankcollect.EloHist()
+        try:
+            rconn = rankcollect.open_rank_db_ro()
+            if rconn is not None:
+                try:
+                    hist = core.elo_hist_series(rconn, self.cb_edist_cmp.currentData() or "7d")
+                finally:
+                    rconn.close()
+        except sqlite3.Error:
+            pass
+        self.elo_dist = hist
+        if not hist.bins:
+            self.lb_edist_note.setText(
+                "모으는 중 — 다음 랭킹 수집부터 점수 분포를 그립니다." if config.RANK_COLLECT else
+                "랭킹 수집을 켜면 하루 한 번 1만 명 점수 분포를 그립니다 — [정보] 에서 켤 수 있습니다.")
+            self.edist_chart.set_data([], 1, [])
+            self.elo_dist_marker = None
+            return
+        width = hist.bin_width
+        keys = sorted(set(hist.bins) | set(hist.cmp))
+        bins = list(range(int(keys[0]), int(keys[-1]) + width, width))
+        main = [hist.bins.get(b, 0) for b in bins]
+        cmp = [hist.cmp.get(b, 0) for b in bins] if hist.cmp else None
+        at = hist.now_at[5:16].replace("T", " ")
+        marks = [(e, f"{r:,}위", T.CHART_AXIS, True) for r, e in sorted(hist.cuts.items())]
+        series = self._elo.get(self._ouid) if self._ouid else None
+        marker = core.elo_marker(series.rows if series is not None else [], hist)
+        self.elo_dist_marker = marker
+        note = [f"넥슨 데이터 기준 {at} · 1만 위 안만 · 왼쪽 끝 칸은 일부(1만 위 컷에서 잘림)"]
+        if cmp is not None:
+            note.append(f"선 = {self.cb_edist_cmp.currentText()}({hist.cmp_at[5:16].replace('T', ' ')})")
+        elif self.cb_edist_cmp.currentData() != "none":
+            note.append("비교할 스냅숏이 아직 없습니다")
+        if marker is not None:
+            elo, when = marker
+            name = self._nick or "검색한 계정"
+            marks.append((elo, f"{name} {elo:,.0f}", T.CHART_CATS[1], False))
+            note.append(f"{name} 선은 검색 때 기록 {when[5:16].replace('T', ' ')}")
+            if elo < bins[0]:
+                note.append(f"{name} 은 1만 위 밖")
+        self.lb_edist_note.setText(" · ".join(note))
+        self.edist_chart.set_data(bins, width, main, "지금", cmp, self.cb_edist_cmp.currentText(), marks,
+                                  faint_first=True)
 
     # ── 선수로 구단주 찾기(12) — 화면 ────────────────────────────────
     CARD_OWNER_COLUMNS = ["구단주", "마지막 사용", "경기", "포지션", "강화", "팀컬러", "순위"]
@@ -5870,7 +6126,8 @@ class MainWindow(QMainWindow):
         "teamcolor": [("포지션별 최다 상대", None), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
         "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")],
-        "ranktrend": [("랭킹 추이", None)],
+        "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
+        "elodist": [("랭킹 추이", "점수 분포")],
     }
     KEY_OF_VIEW = {view: key for key, views in VIEW_OF_KEY.items() for view in views}
     # 위 표 밖의 자리 — 이유 없이 빠진 자리는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
@@ -5908,6 +6165,8 @@ class MainWindow(QMainWindow):
             "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
             "recommend": self._render_recommend,     # 후보는 DB(랭커 픽 · 내 상대) · "내 스쿼드"는 최근 경기
             "ranktrend": self._render_rank_trend,    # rank.db 영구 집계 — 검색 결과에 안 묶인다
+            "metatrend": self._render_meta_trend,    # rank.db 영구 집계(tier_counts) — 같은 이유
+            "elodist": self._render_elo_dist,        # rank.db elo_hist + 검색 계정 ELO 선(EloLoader 결과)
         }
 
     def _render_all(self) -> None:
@@ -7343,6 +7602,7 @@ class MainWindow(QMainWindow):
         self._elo[ouid] = data
         if ouid == self._ouid:
             self._render_elo()
+            self._invalidate("elodist")   # 점수 분포의 검색 계정 선
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
@@ -7965,6 +8225,8 @@ class MainWindow(QMainWindow):
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],
+            # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
+            *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
             # 팀컬러 효과 창 — 요청 사이에서 멈춘다(요청 하나 타임아웃 teamcolor.TIMEOUT_S 10초). 저장은 표 하나씩 한 트랜잭션
             *[(ld, cancel(ld), (teamcolor.TIMEOUT_S + 2) * 1000, False) for ld in self._tc_effect_loaders],
             # cancel 이 없다 — GET 한 번이라 타임아웃(10초)까지만 붙잡는다
@@ -8522,16 +8784,21 @@ class AboutDialog(QDialog):
 
     def _on_rank_toggled(self, on: bool) -> None:
         try:
-            rankcollect.set_enabled_at(on, "" if on else "user")
-        except (OSError, sqlite3.Error) as e:
+            config.set_rank_collect(on)   # .env 만 — 켜짐 사본(rank.db)은 작업 스레드가(4회차 A: 여기서 쓰면 15초 굳었다)
+        except OSError as e:
             self.lb_msg.setText(f"저장하지 못했습니다: {e}")
             return
         sched = self._sched()
-        if sched is not None:
-            if on:
-                sched.check()
-            else:
-                sched.stop()
+        if sched is not None and not on:
+            sched.stop()      # 끄기는 수집이 먼저 .env 를 다시 읽으므로 사본 없이도 막힌다
+        maintain = getattr(self.parent(), "_maintain_rank", None)
+        if maintain is not None:
+            maintain(enabled=(on, "" if on else "user"))   # 사본 → 정리(끄면 사람별 지우기) → 예약 다시 보기
+        else:
+            try:
+                rankcollect.sync_enabled_copy(on, "" if on else "user")   # 메인 창 없이 연 창(테스트)
+            except sqlite3.Error:
+                pass
         if not on:
             self._sync_pick()
         self.lb_msg.setText("랭킹 수집을 켰습니다 — 하루 한 번, 정각 뒤 몇십 분 사이에 읽습니다." if on else
@@ -8602,7 +8869,31 @@ def rank_status_text(st: dict) -> str:
     if fails:
         retry = (st.get("retry_at") or "")[:16].replace("T", " ")
         parts.append(f"연속 실패 {fails}번 · 다음 시도 {retry} 이후")
-    return " · ".join(parts)
+    lines = [html.escape(" · ".join(parts))]
+    # 2.3.1 N14 — 넥슨 데이터 기준 시각 · 빈 순위 · 멈춰 있음 · WAL 비우기 실패 · 쌓는 중
+    if st.get("meta_ref"):
+        gaps = st.get("meta_gaps")
+        gap_text = f"빈 순위 {int(gaps or 0):,}"
+        if gaps is not None and int(gaps) >= config.RANK_GAPS_WARN:
+            gap_text = f"<span style='color:{T.YELLOW}'>{gap_text}</span>"
+        lines.append(f"넥슨 데이터 기준 {st['meta_ref'][5:16].replace('T', ' ')} · {gap_text}")
+    if st.get("same_since") and st.get("meta_ref"):
+        lines.append(f"넥슨 데이터가 <b>{st['meta_ref'][11:16]} 기준</b>(마지막 수집)에서 멈춰 있습니다 — "
+                     f"{st['same_since'][5:16].replace('T', ' ')} 부터 확인(점검 중일 수 있음)")
+    try:
+        ckpt = int(st.get("ckpt_fail") or 0)
+    except ValueError:
+        ckpt = 0
+    if ckpt >= config.RANK_CKPT_WARN:
+        lines.append(f"지운 기록의 파일 정리가 {ckpt}번 이어서 막혔습니다 — 앱을 다시 켜면 다시 시도합니다")
+    if st.get("snapshots"):
+        if config.meta_person_allowed():
+            lines.append(f"쌓는 중 — 슈챔 연속 {int(st.get('n_runs') or 0):,}건 · 시즌 최고점 {int(st.get('n_peak') or 0):,}명"
+                         f" · 첫 챔스 {int(st.get('n_first') or 0):,}건 · 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일")
+        else:
+            lines.append(f"쌓는 중 — 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일 · 슈챔 연속·시즌 최고점·첫 챔스는 "
+                         "새 안내 동의 뒤부터")
+    return "<br>".join(lines)
 
 
 def clear_rank_records(sched, keep_ouid: str | None) -> tuple[bool, int | None]:

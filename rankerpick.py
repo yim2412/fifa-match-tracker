@@ -211,6 +211,52 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
     return res
 
 
+def record_pick_days(rank_conn, conn, targets: list[dict], today: date | None = None) -> int:
+    """N15(2.3.1) — 한 바퀴 끝에 그날 아는 픽을 rank.db pick_days 에 **더한다**(익명 · 영구). → 센 경기 수.
+
+    - 모집단: 이 바퀴의 대상(스냅숏 상위 RANKER_PICK_TOP) 중 출처 PICK 줄만(1회차 A — ranker_squads 엔 추천 201~1,000위와
+      개발용 수집 몫이 섞여 날마다 모집단이 바뀐다).
+    - 날짜 = 랭커의 마지막 경기 날짜(1회차 B — 받은 날로 세면 3일 규칙 때문에 같은 스쿼드가 사흘 들어간다).
+    - 덮어쓰지 않고 안 센 경기만 +1(2회차 A — ranker_squads 는 랭커마다 마지막 경기 하나라, 다시 세면 다음 날 또 경기한
+      랭커가 앞 날짜에서 빠졌다). 센 것은 pick_counted("경기/프로필 번호" — 랭커 둘이 맞붙은 경기도 둘 다 센다).
+      그 표는 원본과 같이 14일 뒤 지우므로, 그보다 옛 경기는 세지 않는다(3회차 — 표시가 지워진 뒤 다시 +1)."""
+    today = today or date.today()
+    oldest = (today - timedelta(days=config.RANK_RAW_KEEP_DAYS)).isoformat()
+    have = store.ranker_squads(conn)
+    counted = {r[0] for r in rank_conn.execute("SELECT match_id FROM pick_counted")}
+    todo = []
+    for t in targets:
+        if (t.get("rank") or 0) > config.RANKER_PICK_TOP:
+            continue
+        h = have.get(t["profile_sn"])
+        if (h is None or h.get("source") != store.PICK or not h.get("match_id") or h.get("nickname") != t["nickname"]
+                or not h.get("match_day") or h["match_day"] < oldest):
+            continue
+        key = f"{h['match_id']}/{t['profile_sn']}"
+        if key in counted:
+            continue
+        detail = store.load_match(conn, h["match_id"])
+        players = _starters(detail, h.get("ouid")) if detail else []
+        if not players:
+            continue
+        keys = {("card", str(p["spId"])) for p in players}
+        keys |= {("card_grade", f"{p['spId']}:{p.get('spGrade')}") for p in players}
+        keys.add(("team_color", t.get("team_color") or ""))
+        todo.append((key, h["match_day"], sorted(keys)))
+    if not todo:
+        return 0
+    with rank_conn:
+        for key, day, keys in todo:
+            rank_conn.execute("UPDATE pick_days SET rankers = rankers + 1 WHERE day = ?", (day,))
+            row = rank_conn.execute("SELECT rankers FROM pick_days WHERE day = ? LIMIT 1", (day,)).fetchone()
+            total = row[0] if row else 1
+            rank_conn.executemany("INSERT INTO pick_days (day, kind, key, n, rankers) VALUES (?, ?, ?, 1, ?)"
+                                  " ON CONFLICT(day, kind, key) DO UPDATE SET n = n + 1",
+                                  [(day, k, v, total) for k, v in keys])
+            rank_conn.execute("INSERT INTO pick_counted (match_id, day) VALUES (?, ?)", (key, day))
+    return len(todo)
+
+
 # ── 집계(화면은 core_api 로) ──────────────────────────────────────────────
 
 @dataclass

@@ -118,6 +118,16 @@ config.DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "ui.db"
 # 실제 .env 를 읽으면 config.WEB_DATA 가 이 PC 값으로 바뀐다.
 config.RANK_DB_PATH = pathlib.Path(tempfile.mkdtemp()) / "rank.db"
 config.ENV_PATH = config.RANK_DB_PATH.with_name(".env")
+# 메타 처리(2.3.1)가 낡은 시즌표를 넥슨에서 다시 받는다 — 테스트는 네트워크 없이(캐시 그대로)
+import rankcollect as _rc  # noqa: E402
+import seasons as _seasons  # noqa: E402
+
+
+def _no_season_fetch():
+    raise _seasons.SeasonError("테스트 — 네트워크 없음")
+
+
+_rc._fetch_seasons = _no_season_fetch
 # 한 번만 실행(tray.SingleInstance) — main() 을 부르는 테스트가 이 PC 에 떠 있는 앱을 앞으로 부르거나 그 때문에 끝나지 않게
 config.SINGLE_INSTANCE = False
 _seed = store.open_db(config.DB_PATH)
@@ -396,7 +406,7 @@ def test_go_page_rejects_unknown_or_hidden():
     finally:
         config.HIDDEN_NAV_UNTIL_READY = keep
     _win._go_page("랭킹 추이")
-    assert _win._current_view() == ("랭킹 추이", None), "숨김을 풀면 열린다"
+    assert _win._current_view() == ("랭킹 추이", "추이"), "숨김을 풀면 열린다(탭 없이 부르면 첫 탭)"
     assert config.HIDDEN_NAV_UNTIL_READY == (), "2.1.1 공개판엔 숨긴 메뉴가 없다(release.py 도 막는다)"
     shown = [_win.nav.item(r) for r in range(_win.nav.count())
              if _win.nav.item(r).text() in ("랭커", "랭킹 추이", "랭커 픽", "선수로 구단주 찾기")]
@@ -593,7 +603,8 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 19, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
+    assert len(tables) == 21, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
+    #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     # 작은 화면(FHD 150% 등)의 최소 크기 — 폭 1264(화면 폭 − 테두리) · 낮춘 높이. 높이가 낮아 페이지에 세로 막대가
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
@@ -3260,7 +3271,7 @@ def test_settings_remember_window_page_and_season():
 def test_restore_old_page_names():
     """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 모르는 이름은 대시보드."""
     cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("없는 메뉴", ("대시보드", None)),
-             ("랭킹 추이", ("랭킹 추이", None))]
+             ("랭킹 추이", ("랭킹 추이", "추이"))]
     assert len(cases) == 5
     try:
         for old, want in cases:
@@ -5712,20 +5723,26 @@ def test_clear_elo_failure_not_silent():
 # ── 다시 묻는 동의(1.3.1 사용자 ⑤) ──
 
 def test_notice_versions_split_first_and_reask():
-    keep = config.NOTICE_ACCEPTED
+    keep = config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT
     try:
         for acc, needed, pending, track in [(0, True, False, False), (1, True, False, False),
                                             (2, False, True, False), (3, False, True, True),
-                                            (4, False, True, True), (5, False, False, True)]:
+                                            (4, False, True, True), (5, False, True, True),
+                                            (6, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
         # 1.4.1: 4 = 거래 기록·시세 자동 읽기 — 옛 동의(2·3)는 막지 않고 다시 묻기만, 자동 시세만 4 뒤부터
         # 2.1.1: 5 = 축구장 칩 카드 정보 자동 읽기(랭커 픽은 16단계가 같은 5 를 쓴다)
-        assert (config.NOTICE_VERSION, config.CHIP_NOTICE_VERSION, config.PRICE_NOTICE_VERSION,
-                config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (5, 5, 4, 3, 2)
+        # 2.3.1: 6 = 다른 구단주의 사람별 값을 그 시즌 동안(U1) — 옛 동의(5)는 다시 묻기만, 사람별 표만 6 뒤부터
+        assert (config.NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (6, 6, 5, 4, 3, 2)
+        config.WEB_DATA = config.RANK_COLLECT = True
+        for acc, person in ((5, False), (6, True)):
+            config.NOTICE_ACCEPTED = acc
+            assert config.meta_person_allowed() is person, acc
     finally:
-        config.NOTICE_ACCEPTED = keep
+        config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT = keep
 
 
 def test_reask_dialog_keeps_current_web_choice():
@@ -7178,6 +7195,236 @@ def test_card_owner_find():
             conn.close()
         _win._backfill_left = None
         _win._go_page("대시보드")
+
+# ── 2.3.1 랭커 메타 — 랭킹 추이 탭 셋 · [정보] 수집 상태 · 끄는 길의 사람별 지우기(작업 스레드) ──────────
+
+def _wait_maint(ms=15000):
+    for w in list(_win._maint_workers):
+        assert w.wait(ms), "정리 작업자가 안 끝났다"
+    s = _win._rank_sched
+    if s is not None and s.maint is not None:
+        assert s.maint.wait(ms)
+    _app.processEvents()
+
+
+def _rank_files_gone():
+    for suffix in ("", "-wal", "-shm"):
+        pathlib.Path(str(config.RANK_DB_PATH) + suffix).unlink(missing_ok=True)
+
+
+class _MetaEnv:
+    """수집 켜짐 · 안내 6 동의 · 켠 시각 — 디스크의 .env 로(사람별 표는 거기서 다시 읽는다). 끝나면 정리 작업자를 기다리고 지운다."""
+    ON_AT = "2026-10-10T08:00:00.000001"
+
+    def __enter__(self):
+        _wait_maint()
+        self.keep_start = app_main.RankMaintWorker.start
+        app_main.RankMaintWorker.start = lambda w: w.run()   # 스모크는 QThread.start 를 막는다 — 정리를 그 자리에서
+        self.keep = (config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED,
+                     {v: os.environ.get(v) for v in (config.WEB_DATA_VAR, config.RANK_COLLECT_VAR,
+                                                     config.RANK_COLLECT_ON_AT_VAR, config.NOTICE_VAR)})
+        _rank_files_gone()
+        self.write()
+        return self
+
+    def write(self, collect=1, notice=None, on_at=ON_AT):
+        notice = config.NOTICE_VERSION if notice is None else notice
+        text = f"{config.WEB_DATA_VAR}=1\n{config.RANK_COLLECT_VAR}={collect}\n{config.NOTICE_VAR}={notice}\n"
+        if on_at:
+            text += f"{config.RANK_COLLECT_ON_AT_VAR}={on_at}\n"
+        config.ENV_PATH.write_text(text, encoding="utf-8")
+        config.read_env_switches()
+        config.NOTICE_ACCEPTED = notice
+
+    def __exit__(self, *exc):
+        _wait_maint()
+        app_main.RankMaintWorker.start = self.keep_start
+        config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED, env = self.keep
+        for k, v in env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        config.ENV_PATH.unlink(missing_ok=True)
+        _rank_files_gone()
+        return False
+
+
+def _meta_db(days=8, people=300):
+    """rank.db 에 하루 간격 스냅숏(같은 시즌 · 기준 시각 있음) + 메타 처리. 1~3위는 슈챔(등급 0)."""
+    rows = [ranker.RankRow(rank=i, profile_sn=800 + i, nickname=f"m{i}", elo=3000.0 + i * 5, grade=0 if i <= 3 else 2,
+                           team_color="팀A" if i % 2 else "팀B", formation="4-4-2" if i % 3 else "4-3-3")
+            for i in range(1, people + 1)]
+    base = datetime.now().replace(minute=0, second=0, microsecond=0) - timedelta(days=days)
+    c = rankcollect.open_rank_db()
+    try:
+        for d in range(days):
+            t = base + timedelta(days=d)
+            rankcollect.save_snapshot(c, rows, t + timedelta(minutes=30), ref_time=t.isoformat(timespec="seconds"))
+        rankcollect.process_meta(c, datetime.now(), season_ends=[])
+    finally:
+        c.close()
+
+
+def _person_rows() -> int:
+    c = rankcollect.open_rank_db()
+    try:
+        return sum(c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in rankcollect.PERSON_TABLES)
+    finally:
+        c.close()
+
+
+def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
+    with _MetaEnv():
+        _win._go_page("랭킹 추이", "메타 변화")
+        assert _win._current_view() == ("랭킹 추이", "메타 변화")
+        _win._invalidate("metatrend")
+        assert "모으는 중" in _win.lb_meta_note.text() and _win.meta_tables["team_color"].rowCount() == 0
+        assert not config.RANK_DB_PATH.exists(), "그리다 rank.db 를 만들었다"
+        _meta_db()
+        _win._invalidate("metatrend")
+        t = _win.meta_trend
+        assert not t.collecting and round(t.days) == 7, t
+        assert _win.meta_tables["team_color"].rowCount() == 2 and "7일 전 대비" in _win.meta_titles["team_color"].text()
+        assert "합쳐서" in _win.lb_meta_note.text(), "이름이 같은 팀컬러를 합친다는 안내가 없다"
+        _win._go_page("랭킹 추이", "점수 분포")
+        _win._invalidate("elodist")                    # 앱에선 회차 끝(_on_rank_collect_outcome)이 낡음 표시를 한다
+        h = _win.elo_dist
+        assert sum(h.bins.values()) == 300 and h.cmp and 200 in h.cuts, h
+        ch = _win.edist_chart
+        assert ch._main and ch._cmp and ch._faint_first and any(m[1] == "200위" for m in ch._marks), ch._marks
+        assert "왼쪽 끝 칸은 일부" in _win.lb_edist_note.text()
+        _win.cb_edist_cmp.setCurrentIndex(2)          # 비교 없음
+        assert _win.edist_chart._cmp is None
+        _win.cb_edist_cmp.setCurrentIndex(0)
+        # 검색한 계정의 ELO — 막대 데이터 시각 ±1일 안의 기록만 선으로
+        keep = (_win._ouid, _win._nick, dict(_win._elo))
+        try:
+            _win._ouid, _win._nick = "meta-ouid", "나"
+            when = h.now_at
+            _win._elo_req["meta-ouid"] = 7                 # EloLoader 가 끝난 길 그대로 — 점수 분포를 다시 그려야 선이 생긴다
+            _win._on_elo_ready("meta-ouid", app_main.EloSeries(req=7, rows=[{"taken_at": when, "elo": 3500.0}], cuts={}))
+            assert _win.elo_dist_marker == (3500.0, when) and any(m[1].startswith("나 ") for m in _win.edist_chart._marks)
+            old = (datetime.fromisoformat(when) - timedelta(days=5)).isoformat()
+            _win._elo["meta-ouid"] = app_main.EloSeries(req=1, rows=[{"taken_at": old, "elo": 3500.0}], cuts={})
+            _win._invalidate("elodist")
+            assert _win.elo_dist_marker is None, "닷새 전 기록을 지금 분포 위에 그렸다"
+        finally:
+            _win._ouid, _win._nick = keep[0], keep[1]
+            _win._elo.clear()
+            _win._elo.update(keep[2])
+        _win._go_page("대시보드")
+
+
+def test_about_rank_status_shows_ref_time_and_meta_counts():
+    with _MetaEnv() as env:
+        _meta_db(days=2)
+        text = app_main.rank_status_text(rankcollect.read_status())
+        assert "넥슨 데이터 기준" in text and "빈 순위 0" in text and "쌓는 중 — 슈챔 연속" in text, text
+        c = rankcollect.open_rank_db()
+        try:
+            c.execute("UPDATE snapshot_meta SET rank_gaps = ?", (config.RANK_GAPS_WARN,))
+            c.commit()
+            rankcollect._set_state(c, same_since="2026-10-08T09:12:00", ckpt_fail=config.RANK_CKPT_WARN)
+        finally:
+            c.close()
+        text = app_main.rank_status_text(rankcollect.read_status())
+        assert T.YELLOW in text and "멈춰 있습니다" in text and "파일 정리가" in text, text
+        env.write(notice=config.META_NOTICE_VERSION - 1)
+        assert "새 안내 동의 뒤부터" in app_main.rank_status_text(rankcollect.read_status())
+
+
+def test_collect_off_purges_person_rows_on_worker_and_on_again_restarts():
+    with _MetaEnv() as env:
+        _meta_db(days=3)
+        assert _person_rows() > 0, "사람별 줄이 없다 — 아래 검사가 공허"
+        dlg = app_main.AboutDialog(_win)
+        try:
+            dlg._on_rank_toggled(False)
+            _wait_maint()
+            assert _person_rows() == 0, "수집을 껐는데 사람별 줄이 남았다"
+            assert rankcollect.read_status()["enabled"] == "0", "켜짐 사본을 작업 스레드가 안 썼다"
+            dlg._on_rank_toggled(True)
+            _wait_maint()
+            on_at = config.read_rank_on_at()
+            assert on_at and on_at != env.ON_AT, "켤 때 켠 시각을 새로 안 적었다"
+            assert rankcollect.read_status()["enabled"] == "1"
+        finally:
+            dlg.deleteLater()
+        c = rankcollect.open_rank_db()
+        try:
+            rows = [ranker.RankRow(rank=1, profile_sn=801, nickname="m1", elo=3000.0, grade=0)]
+            rankcollect.save_snapshot(c, rows, datetime.now())
+            rankcollect.process_meta(c, datetime.now(), season_ends=[])
+            assert [r[0] for r in c.execute("SELECT censored_start FROM run_open")] == [1], "끄고 켠 사이를 이어 봤다"
+            assert rankcollect.get_state(c)["person_epoch"] == on_at
+        finally:
+            c.close()
+
+
+def test_every_off_path_purges_through_sync_ranker_pick_data():
+    """끄는 길(웹 데이터 끄기 · D6 · 다시 묻는 창 · .env 손 수정)은 전부 sync_ranker_pick_data 를 거친다 — 거기서 rank.db 정리."""
+    with _MetaEnv() as env:
+        _meta_db(days=2)
+        assert _person_rows() > 0
+        env.write(collect=0)                              # .env 손 수정처럼 — 토글을 안 거친다
+        _win.sync_ranker_pick_data()
+        _wait_maint()
+        assert _person_rows() == 0, "sync_ranker_pick_data 가 rank.db 정리를 안 띄웠다"
+
+
+def test_purge_missed_by_lock_is_done_on_next_hourly_check():
+    with _MetaEnv() as env:
+        _meta_db(days=2)
+        holder = rankcollect.open_rank_db()
+        lock = rankcollect.CollectLock(holder)
+        assert lock.acquire()
+        sched = app_main.RankCollectScheduler()
+        try:
+            env.write(collect=0)
+            _win.sync_ranker_pick_data()                  # 끄는 길 — 첫 정리는 잠금을 못 잡는다
+            _wait_maint()
+            assert _person_rows() > 0, "잠금을 못 잡았는데 지웠다(아래 검사가 공허)"
+            lock.release()
+            sched.check()                                 # 1시간 확인 — 상태 판정이라 그대로 잡는다
+            assert sched.maint is not None and sched.maint.wait(15000)
+            assert _person_rows() == 0, "놓친 지우기를 다음 확인이 안 했다"
+        finally:
+            sched.shutdown()
+            holder.close()
+
+
+def test_rank_paths_never_create_rank_db():
+    with _MetaEnv() as env:
+        env.write(collect=0)
+        _win.sync_ranker_pick_data()
+        _wait_maint()
+        assert not config.RANK_DB_PATH.exists(), "수집을 켠 적 없는 PC 에 rank.db 가 생겼다(정리)"
+        env.write(collect=1)
+        sched = app_main.RankCollectScheduler()
+        ran = []
+        sched.run_now = lambda: ran.append(1)
+        try:
+            sched.check(maint=False)
+            assert sched.planned is not None and not config.RANK_DB_PATH.exists(), "예약 확인이 rank.db 를 만들었다"
+        finally:
+            sched.shutdown()
+        conn = store.open_db(config.DB_PATH)
+        try:
+            app_main.RankerPickLoader._record_days(conn, [])
+        finally:
+            conn.close()
+        assert not config.RANK_DB_PATH.exists(), "랭커 픽 끝이 rank.db 를 되살렸다"
+
+
+def test_reask_notice_explains_person_values():
+    dlg = app_main.NoticeDialog(_win, reask=True)
+    try:
+        text = " ".join(b.toPlainText() for b in dlg.findChildren(app_main.QTextBrowser))
+        assert "프로필 번호" in text and "그 시즌 동안" in text, "다시 묻는 창이 v6 의 바뀐 점을 안 알린다"
+    finally:
+        dlg.deleteLater()
+
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 

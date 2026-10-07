@@ -139,7 +139,8 @@ class RankRow:
 class RankPageResult:
     page: int
     rows: list[RankRow]
-    date: str = ""                   # 응답 Date 헤더 — 회차가 정각을 걸쳤는지 가른다
+    date: str = ""                   # 응답 Date 헤더 — 기준 시각이 없을 때 회차가 정각을 걸쳤는지 가른다
+    ref_time: str | None = None      # 쪽의 "※ … 기준 데이터" 시각(ISO "YYYY-MM-DDTHH:MM:SS") — 못 찾으면 None(2.3.1 N14)
 
 
 class RankerError(Exception):
@@ -253,6 +254,17 @@ def fetch_manager_rank(nickname: str, timeout: int = 10, season_no: int = 0) -> 
     return info
 
 
+# 랭킹 쪽마다 붙는 넥슨 데이터 기준 시각(2.3.1 R1 — "※ 2026-10-07 07:00:00 기준 데이터로 …"). 정각이고 늦게 붙는다(R2).
+# 정규식은 여기 하나 — tools/dev_archive 도 이걸 가져다 쓴다
+_REF_TIME = re.compile(r'rank_advice">\s*※\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*기준')
+
+
+def parse_ref_time(html: str) -> str | None:
+    """랭킹 쪽 → 기준 시각 ISO(taken_at 과 같은 꼴 — 페이지 글자는 공백이라 섞으면 정렬·날짜 비교가 틀린다). 없으면 None."""
+    m = _REF_TIME.search(html or "")
+    return m.group(1).replace(" ", "T") if m else None
+
+
 def parse_rank_page(html: str) -> list[tuple[str, str, int | None, str]]:
     """목록 페이지 → [(닉네임, 팀컬러, 구단가치, 엠블럼 키)]. 팀컬러를 안 쓰는 사람은 "".
 
@@ -358,7 +370,8 @@ def fetch_rank_rows(page: int, timeout: int = config.RANK_PAGE_TIMEOUT_S, season
         raise RankerError(f"랭킹 목록 {page}쪽이 다른 페이지로 넘어갔습니다")
     if "점검 진행 중" in html or "fc_logo_inspection" in html:
         raise RankerError("넥슨 웹 점검 중입니다 — 잠시 후 다시 시도해주세요")
-    return RankPageResult(page, parse_rank_rows(html), getattr(res, "headers", {}).get("Date", ""))
+    return RankPageResult(page, parse_rank_rows(html), getattr(res, "headers", {}).get("Date", ""),
+                          parse_ref_time(html))
 
 
 def fetch_season_cut(season_no: int, rank: int, timeout: int = config.RANK_PAGE_TIMEOUT_S) -> float | None:

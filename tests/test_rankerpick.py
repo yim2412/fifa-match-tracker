@@ -411,6 +411,49 @@ def test_ranker_pick_refreshes_fetched_on():
     assert got == later.date().isoformat(), "같은 경기를 다시 확인하면 오늘로 — 14일 정리에 안 지워지게"
 
 
+def test_pick_days_add_once_by_match_day_only_pick_top():
+    """N15(2.3.1) — 날짜 = 마지막 경기 날짜 · 출처 PICK 상위 200만 · 안 센 경기만 더한다 · 14일보다 옛 경기는 안 센다."""
+    import rankcollect
+    with tempfile.TemporaryDirectory() as d:
+        rconn = rankcollect.open_rank_db(Path(d) / "rank.db")
+        try:
+            conn = _db()
+            day1 = TODAY - timedelta(days=1)
+            targets, api = _rankers(3, day1)
+            _collect(api, conn, targets)
+            # 추천(201~1,000위) 랭커 — 선발이 있는 진짜 경기라 출처로만 걸러진다
+            store.save_matches(conn, [_match("rec1", day1, [("rx", "추천", _squad(7200)), ("y", "상대", _squad(8000))])])
+            store.save_ranker_squad(conn, 9999, nickname="추천", ouid="rx", rank=500, match_id="rec1", match_day=day1.isoformat(),
+                                    fetched_at=NOW.isoformat(), fail=None, source=store.RECOMMEND)
+            # 지금은 상위 200 안이지만 줄은 예전에 추천으로 받은 것(3일 안이라 PICK 이 아직 다시 안 받음) — 출처로 걸러진다
+            mixed = targets + [{"rank": 150, "profile_sn": 9999, "nickname": "추천", "team_color": "팀C"}]
+            assert rp.record_pick_days(rconn, conn, mixed, TODAY) == 3
+            rows = {(r["day"], r["kind"], r["key"]): (r["n"], r["rankers"]) for r in rconn.execute("SELECT * FROM pick_days")}
+            assert {k[0] for k in rows} == {day1.isoformat()}, "받은 날로 셌다"
+            assert rows[(day1.isoformat(), "card", "7005")] == (3, 3) and rows[(day1.isoformat(), "card", "7000")] == (1, 3)
+            assert rows[(day1.isoformat(), "team_color", "팀B")] == (2, 3), rows
+            assert not any(k[2] == "팀C" for k in rows), "추천 출처(201~1,000위)가 모집단에 섞였다"
+            assert all(v[1] == 3 for v in rows.values()), "그날 줄의 분모가 다르다"
+            for k in (1, 2):                                       # 같은 스쿼드를 사흘 — 다시 안 센다
+                assert rp.record_pick_days(rconn, conn, targets, TODAY + timedelta(days=k)) == 0
+            # 다음 날 또 경기한 랭커 — 그 날짜에 더하고 앞 날짜는 그대로(덮어쓰면 빠졌다 — 2회차 A)
+            api.players["랭커0"] = ("r0", _match("rm0b", TODAY, [("r0", "랭커0", _squad(7100)), ("x0", "상대0", _squad(8000))]))
+            _collect(api, conn, targets[:1], now_fn=lambda: NOW + timedelta(days=4))
+            assert rp.record_pick_days(rconn, conn, targets, TODAY) == 1
+            again = {(r["day"], r["kind"], r["key"]): (r["n"], r["rankers"]) for r in rconn.execute("SELECT * FROM pick_days")}
+            assert again[(day1.isoformat(), "card", "7005")] == (3, 3), "앞 날짜에서 빠졌다"
+            assert again[(TODAY.isoformat(), "card", "7100")] == (1, 1)
+            # 14일보다 옛 경기는 안 센다 — 센 표시(pick_counted)가 14일 뒤 지워지면 다시 +1 이 된다
+            old_t, old_api = _rankers(1, TODAY - timedelta(days=config.RANK_RAW_KEEP_DAYS + 1))
+            old_t[0]["profile_sn"], old_t[0]["nickname"] = 6000, "옛랭커"
+            old_api.players = {"옛랭커": old_api.players["랭커0"]}
+            conn2 = _db()
+            _collect(old_api, conn2, old_t)
+            assert rp.record_pick_days(rconn, conn2, old_t, TODAY) == 0
+        finally:
+            rconn.close()
+
+
 def test_ranker_pick_summary():
     conn = _db()
     targets, api = _rankers(4)

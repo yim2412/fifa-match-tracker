@@ -26,7 +26,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import sqlite3
 import sys
 import time
@@ -37,11 +36,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config  # noqa: E402
+import ranker  # noqa: E402
 
 ARCHIVE_PATH = config.DATA_DIR / "dev_archive.db"
 LOG_PATH = config.DATA_DIR / "logs" / "dev_archive.log"
 PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
-REF_RE = re.compile(r'rank_advice">\s*※\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*기준')
+REF_RE = ranker._REF_TIME   # 정규식은 ranker 한 곳(2.3.1 N14) — 여기는 페이지 글자(공백 꼴) 그대로 적는다
 PICK_TOP = config.RANKER_PICK_TOP
 # 서비스 단계 키(2026-10-07 — 하루 2,000만 · 초당 500)가 .env 에 있으면 ③ 은 그 키로, 계수·429 도 앱 키와 따로.
 # 앱 키(NEXON_API_KEY)는 그대로 둔다 — 바꾸면 거래 받기가 '키 바뀜'으로 옛 거래를 trades_prev 로 옮긴다
@@ -137,7 +137,6 @@ def parse_ref_time(html: str) -> str | None:
 def record_ref_time(arc: sqlite3.Connection, now: datetime, fetch=None) -> str | None:
     """1쪽 하나를 받아 기준 시각을 적는다. 못 찾으면 None 을 적는다(구조 변경 신호)."""
     if fetch is None:
-        import ranker
         if not config.WEB_DATA:
             raise RuntimeError(config.WEB_DATA_OFF_MSG)
         res = ranker.web_get(ranker._session, ranker.RANK_URL,

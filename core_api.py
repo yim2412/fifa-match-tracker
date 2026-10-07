@@ -17,7 +17,8 @@ from models import (
     summarize, win_rate_trend,
 )
 from predict import Prediction, describe as describe_prediction, predict_for
-from rankcollect import RankTrend, rank_trend_series
+from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
+                         meta_trend, rank_trend_series)
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
     ranker_pick_summary, recommend, recommend_candidates,
@@ -52,6 +53,7 @@ __all__ = [
     # rankerpick — 11-lite 추천(17단계) · rankcollect — 랭킹 추이(P2, rank.db 영구 집계)
     "SRC_OPP", "SRC_PICK", "SRC_RECOMMEND", "RecCard", "Recommend", "Standing", "my_team_color", "recommend",
     "recommend_candidates", "RankTrend", "rank_trend_series",
+    "MetaTrend", "meta_trend", "EloHist", "elo_hist_series", "elo_marker", "data_time", "meta_status",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",

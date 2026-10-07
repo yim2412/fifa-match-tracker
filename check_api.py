@@ -188,6 +188,14 @@ def main() -> int:
         page = ranker.fetch_rank_rows(1)
         verdict = ranker.judge_page(1, page.rows, None)  # 구조가 바뀌었으면 여기서 예외
         print(f"[OK]   랭킹 목록 1쪽(수집용): {len(page.rows)}행 · 판정 {verdict} · Date {page.date}")
+        # 2.3.1 N14 — 넥슨 데이터 기준 시각. 못 찾으면 갱신 걸침 판정이 응답 Date 의 시(時)로 돌아간다(R3)
+        if page.ref_time is None:
+            print("[FAIL] 랭킹 기준 시각: 1쪽에서 'rank_advice' 문구를 못 찾음(구조가 바뀌었을 수 있음)")
+        else:
+            from datetime import datetime
+            lag_h = (datetime.now() - datetime.fromisoformat(page.ref_time)).total_seconds() / 3600
+            tag = "[WARN]" if lag_h > 2 else "[OK]  "
+            print(f"{tag} 랭킹 기준 시각: {page.ref_time} · 지금과 {lag_h:.1f}시간 차(R2: 보통 1시간 안팎)")
     except Exception as e:
         print(f"[WARN] 랭킹 목록 수집 읽기 실패(수집만 영향): {type(e).__name__}: {e}")
         page = None

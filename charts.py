@@ -731,6 +731,112 @@ class GroupedBarChart(_Chart):
                        Qt.AlignmentFlag.AlignCenter, lb)
 
 
+class HistogramChart(_Chart):
+    """점수 분포(2.3.1 B5) — 같은 폭 칸의 세로 막대 + 비교 선 하나 + 세로선들(검색 계정 실선 · 순위 컷 점선).
+    faint_first: 맨 왼쪽 칸을 흐리게(1만 위 컷에서 잘려 일부만 센다). 막대 위 숫자는 없다 — 툴팁과 아래 축 글자."""
+
+    def __init__(self):
+        super().__init__(min_h=220)
+        self._bins: list[float] = []      # 칸 왼쪽 끝
+        self._width = 1.0
+        self._main: list[float] = []
+        self._main_name = ""
+        self._cmp: list[float] | None = None
+        self._cmp_name = ""
+        self._marks: list[tuple[float, str, str, bool]] = []   # (값, 글자, 색, 점선)
+        self._faint_first = False
+        self.mark_rects: list[QRectF] = []   # 테스트가 글자 겹침을 잰다
+
+    def set_data(self, bins: list[float], width: float, main: list[float], main_name: str = "",
+                 cmp: list[float] | None = None, cmp_name: str = "",
+                 marks: list[tuple[float, str, str, bool]] | None = None, faint_first: bool = False) -> None:
+        self._bins, self._width, self._main, self._main_name = list(bins), float(width), list(main), main_name
+        self._cmp, self._cmp_name = (list(cmp) if cmp else None), cmp_name
+        self._marks = list(marks or ())
+        self._faint_first = faint_first
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hits = []
+        self.mark_rects = []
+        vmax = max([*self._main, *(self._cmp or [])], default=0)
+        if not self._bins or vmax <= 0:
+            self._empty(p, "기록 없음")
+            return
+        small = _small_font(self.font())
+        fm = QFontMetrics(small)
+        p.setFont(small)
+        w, h = self.width(), self.height()
+        mt, mb, ml, mr = fm.height() * 2 + 8, fm.height() + 8, 4, 4
+        bottom = h - mb
+        plot_h = max(bottom - mt, 1)
+        lo, hi = self._bins[0], self._bins[-1] + self._width
+        span = (hi - lo) or 1.0
+
+        def xat(v: float) -> float:
+            return ml + (w - ml - mr) * (v - lo) / span
+
+        slot = (w - ml - mr) / len(self._bins)
+        bar = max(2.0, slot - GAP)
+        p.setPen(QPen(QColor(T.CHART_AXIS), 1))
+        p.drawLine(QPointF(ml, bottom), QPointF(w - mr, bottom))
+        for i, (b, v) in enumerate(zip(self._bins, self._main)):
+            x = xat(b) + GAP / 2
+            bh = plot_h * v / vmax
+            faint = self._faint_first and i == 0
+            if bh > 0:
+                r = min(BAR_RADIUS, bar / 2, bh)
+                path = QPainterPath()
+                path.moveTo(x, bottom)
+                path.lineTo(x, bottom - bh + r)
+                path.quadTo(x, bottom - bh, x + r, bottom - bh)
+                path.lineTo(x + bar - r, bottom - bh)
+                path.quadTo(x + bar, bottom - bh, x + bar, bottom - bh + r)
+                path.lineTo(x + bar, bottom)
+                path.closeSubpath()
+                p.fillPath(path, _color(T.CHART_UP, 0.35 if faint else 1.0))
+            tip = f"{b:,.0f}~{b + self._width:,.0f} · {self._main_name} {v:,.0f}명"
+            if self._cmp is not None and i < len(self._cmp):
+                tip += f" · {self._cmp_name} {self._cmp[i]:,.0f}명"
+            if faint:
+                tip += " (1만 위 컷에서 잘려 일부만)"
+            self._hits.append((QRectF(x - GAP, mt, bar + GAP * 2, plot_h), tip))
+        if self._cmp is not None:
+            pts = [QPointF(xat(b) + self._width * (w - ml - mr) / span / 2, bottom - plot_h * v / vmax)
+                   for b, v in zip(self._bins, self._cmp)]
+            pen = QPen(QColor(T.CHART_NEUTRAL), LINE_W)
+            p.setPen(pen)
+            p.drawPolyline(QPolygonF(pts))
+        # 세로선 — 글자는 위 두 줄에 번갈아(가까운 선끼리 겹치지 않게)
+        for k, (v, text, col, dashed) in enumerate(sorted(self._marks, key=lambda m: m[0])):
+            if not lo <= v <= hi:
+                continue
+            x = xat(v)
+            pen = QPen(QColor(col), LINE_W)
+            if dashed:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(x, mt - 2), QPointF(x, bottom))
+            tw = fm.horizontalAdvance(text) + 4
+            row = k % 2
+            rect = QRectF(min(max(x - tw / 2, 0), w - tw), row * (fm.height() + 2), tw, fm.height())
+            if any(rect.intersects(o) for o in self.mark_rects):
+                rect.moveTop((1 - row) * (fm.height() + 2))
+            self.mark_rects.append(rect)
+            p.setPen(QColor(T.TEXT))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        # 아래 축 — 칸 경계 글자를 겹치지 않을 만큼만
+        p.setPen(QColor(T.TEXT_DIM))
+        step = max(1, math.ceil((fm.horizontalAdvance("4,500") + 8) / max(slot, 1)))
+        for i in range(0, len(self._bins), step):
+            b = self._bins[i]
+            lw = fm.horizontalAdvance(f"{b:,.0f}") + 4
+            x0 = min(max(xat(b) - lw / 2, 0), w - lw)    # 양 끝 글자가 창 밖으로 잘리지 않게("2,900" 이 "900" 으로 보였다)
+            p.drawText(QRectF(x0, bottom + 4, lw, fm.height()), Qt.AlignmentFlag.AlignCenter, f"{b:,.0f}")
+
+
 class RadarChart(_Chart):
     """나 vs 상대 평균. axes: (축 이름, 내 몫 0~1, 툴팁 글). 0.5 = 동률.
 

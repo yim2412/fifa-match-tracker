@@ -273,7 +273,8 @@ def _drive_uncovered() -> None:
     for t in (trp.test_save_indexes_squads, trp.test_backfill_resumes_and_skips_indexed, trp.test_owner_lookup_window_and_grade,
               trp.test_ranker_pick_collects_and_saves, trp.test_ranker_pick_second_429_stops_for_the_day,
               trp.test_ranker_pick_summary, trp.test_clear_removes_ranker_pick_data,
-              trp.test_recommend_candidates_sources):   # 11-lite 추천 후보(17단계 — 색인·내 상대 마지막 경기)
+              trp.test_recommend_candidates_sources,    # 11-lite 추천 후보(17단계 — 색인·내 상대 마지막 경기)
+              trp.test_pick_days_add_once_by_match_day_only_pick_top):   # 랭커 픽 날짜별(2.3.1 N15)
         t()
 
 

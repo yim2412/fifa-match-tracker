@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -20,6 +21,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config
 import ranker
 import rankcollect as rc
+import seasons
+
+
+def _no_season_fetch():
+    raise seasons.SeasonError("테스트 — 네트워크 없음")
+
+
+rc._fetch_seasons = _no_season_fetch   # 메타 처리가 낡은 시즌표를 넥슨에서 다시 받지 않게
 
 DATE = "Sun, 04 Oct 2026 13:42:06 GMT"
 NOW = datetime(2026, 10, 4, 22, 42, 0)
@@ -38,6 +47,7 @@ class World:
         self.people, self.date, self.sleep = people, date, sleep
         self.calls, self.fail = [], {}          # fail: 쪽 → 던질 예외 또는 rows 를 바꾸는 함수
         self.dates = {}
+        self.ref, self.refs = None, {}        # 넥슨 기준 시각(2.3.1) — 쪽마다 바꿀 수 있다
         self.lock = threading.Lock()
         self.now = self.peak = 0
 
@@ -58,7 +68,7 @@ class World:
             rows = [_row(r) for r in range(lo, min(lo + ranker.RANK_PAGE_SIZE, self.people + 1))]
             if callable(f):
                 rows = f(rows)
-            return ranker.RankPageResult(page, rows, self.dates.get(page, self.date))
+            return ranker.RankPageResult(page, rows, self.dates.get(page, self.date), self.refs.get(page, self.ref))
         finally:
             with self.lock:
                 self.now -= 1
@@ -79,9 +89,13 @@ class Env:
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         self.write(web, collect)
 
-    def write(self, web="1", collect="1"):
-        config.ENV_PATH.write_text(f"{config.WEB_DATA_VAR}={web}\n{config.RANK_COLLECT_VAR}={collect}\n",
-                                   encoding="utf-8")
+    def write(self, web="1", collect="1", notice=None, on_at=None):
+        # 사람별 표(2.3.1)는 디스크의 동의 값·켠 시각을 다시 읽는다 — 기본은 지금 안내에 동의, 켠 시각 없음(옛 버전에서 켬)
+        notice = config.NOTICE_VERSION if notice is None else notice
+        text = f"{config.WEB_DATA_VAR}={web}\n{config.RANK_COLLECT_VAR}={collect}\n{config.NOTICE_VAR}={notice}\n"
+        if on_at:
+            text += f"{config.RANK_COLLECT_ON_AT_VAR}={on_at}\n"
+        config.ENV_PATH.write_text(text, encoding="utf-8")
 
     def conn(self):
         return rc.open_rank_db(self.db)
@@ -462,12 +476,94 @@ def test_is_due_follows_interval_and_backoff():
         assert rc.is_due(c, NOW)
         rc.save_snapshot(c, [_row(1)], NOW)
         h = config.RANK_COLLECT_INTERVAL_H
-        assert not rc.is_due(c, NOW + timedelta(hours=h - 1))
-        assert rc.is_due(c, NOW + timedelta(hours=h))
-        rc.record_result(c, "failed", NOW + timedelta(hours=h))
-        assert not rc.is_due(c, NOW + timedelta(hours=h, minutes=59))
-        assert rc.is_due(c, NOW + timedelta(hours=h + 1))
+        # 마지막 회차의 정각(22:00)부터 h − 1시간 — 지터(+42분)가 쌓이지 않는다(2.3.1 2회차 A)
+        due_at = NOW.replace(minute=0) + timedelta(hours=h - 1)
+        assert not rc.is_due(c, due_at - timedelta(seconds=1))
+        assert rc.is_due(c, due_at)
+        rc.record_result(c, "failed", due_at)
+        assert not rc.is_due(c, due_at + timedelta(minutes=59))
+        assert rc.is_due(c, due_at + timedelta(hours=1))
         c.close()
+
+
+def _simulate(on_hours, days, phase_min, start_hour=18, start_min=30, seed=1):
+    """수집 예약을 흉내 낸다 — 켜져 있는 시(on_hours)에 앱이 켜질 때 한 번 + RANK_CHECK_EVERY_MIN 마다 is_due 를 보고,
+    맞으면 pick_start 에 시작(start_still_valid 가 아니면 다시 고름). → 회차 시각들. 회차는 1분 걸린다고 본다."""
+    rng = random.Random(seed)
+    with Env() as env:
+        c = env.conn()
+        t0 = datetime(2026, 10, 1, start_hour, start_min)
+        rc.save_snapshot(c, [_row(1)], t0)
+        taken, planned = [t0], None
+        t = t0.replace(minute=0) + timedelta(hours=1, minutes=phase_min)
+        end = t0 + timedelta(days=days)
+        was_on = True
+        while t < end:
+            on = t.hour in on_hours
+            if on and not was_on:
+                t = t.replace(minute=0)          # 앱을 켠 순간 한 번 확인
+            if on:
+                if planned is not None and planned <= t + timedelta(minutes=config.RANK_CHECK_EVERY_MIN):
+                    if rc.start_still_valid(planned, planned):
+                        rc.save_snapshot(c, [_row(1)], planned)
+                        taken.append(planned)
+                    planned = None
+                if planned is None and rc.is_due(c, t):
+                    planned = rc.pick_start(t, rng)
+                    if planned.hour not in on_hours:
+                        planned = None           # 그 시각엔 꺼져 있다
+            else:
+                planned = None
+            was_on = on
+            t = t.replace(minute=0) + timedelta(hours=1, minutes=phase_min) if on else t + timedelta(hours=1)
+        c.close()
+    return taken
+
+
+def test_evening_only_pc_never_skips_a_day():
+    # 매일 18~23시만 켜는 PC 열흘 — 옛 규칙(마지막 + 24시간)은 지터가 쌓여 켜 둔 시간 밖으로 밀려 하루를 건너뛰었다
+    for phase in (0, 20, 55):
+        taken = _simulate(range(18, 24), 10, phase)
+        days = sorted({t.date() for t in taken})
+        span = (days[-1] - days[0]).days + 1
+        assert len(days) == span and span >= 10, (phase, [str(t) for t in taken])
+
+
+def test_always_on_pc_misses_no_day_and_doubles_rarely():
+    for phase in (0, 10, 30, 49, 51, 59):
+        taken = _simulate(range(24), 30, phase, start_hour=12)
+        days = [t.date() for t in taken]
+        span = (days[-1] - days[0]).days + 1
+        assert len(set(days)) == span, (phase, "날짜가 빠졌다")
+        doubles = len(days) - len(set(days))
+        assert doubles <= 2, (phase, doubles, [str(t) for t in taken])   # 자정을 돌아 넘을 때만
+
+
+def test_start_hours_do_not_pile_up_across_many_pcs():
+    # 상시 PC 1,000대(첫 시각·확인 위상 무작위) 30일 뒤 — 시작 시(時)가 한 시각에 몰리지 않는다(3회차: 0시대로 몰렸다)
+    rng = random.Random(7)
+    last_hours = Counter()
+    for i in range(1000):
+        h = rng.randrange(24)
+        taken = _simulate_fast(rng.randrange(60), h, 30)
+        last_hours[taken.hour] += 1
+    assert max(last_hours.values()) < 1000 * 0.12, last_hours
+
+
+def _simulate_fast(phase, start_hour, days):
+    """_simulate 의 상시 켬판 — DB 없이 is_due 규칙만(1,000대를 빠르게). 같은 규칙인지는 위 테스트가 DB 로 잰다."""
+    rng = random.Random(phase * 100 + start_hour)
+    last = datetime(2026, 10, 1, start_hour, 30)
+    t = last.replace(minute=0) + timedelta(hours=1, minutes=phase)
+    end = last + timedelta(days=days)
+    while t < end:
+        if t >= last.replace(minute=0) + timedelta(hours=config.RANK_COLLECT_INTERVAL_H - 1):
+            p = rc.pick_start(t, rng)
+            last = p
+            t = p.replace(minute=0) + timedelta(hours=1, minutes=phase)
+        else:
+            t += timedelta(hours=1)
+    return last
 
 
 # ── 시작 시각 ───────────────────────────────────────────────────────────────
@@ -1064,6 +1160,580 @@ def test_open_rank_db_ro_does_not_create_and_reads():
         r.close()
         assert rc.delete_db(env.db), "읽기 연결을 닫았는데 못 지웠다"
 
+# ── 2.3.1 랭커 메타 — 기준 시각 · 안 바뀐 데이터 · 따라잡기 처리 · 사람별 표 · 지우기 ────────────────
+
+T0 = datetime(2026, 10, 10, 9, 0)
+ENDS = ["2026-08-27", "2026-10-01"]       # 끝난 시즌 종료일 — 지금 시즌은 10-01 시작
+
+
+def _p(sn, grade=2, elo=3000.0, games=10, value=1000, nick=None):
+    return ranker.RankRow(rank=sn, profile_sn=sn, nickname=nick or f"p{sn}", elo=elo, grade=grade, win=games,
+                          team_value=value)
+
+
+def _msnap(c, when, rows, ref=None, ended=None):
+    return rc.save_snapshot(c, rows, when, ended_season=ended, ref_time=ref)
+
+
+def _proc(c, now=datetime(2026, 12, 1), ends=ENDS):
+    return rc.process_meta(c, now, season_ends=ends)
+
+
+def _rows_of(c, table):
+    return [dict(r) for r in c.execute(f"SELECT * FROM {table}")]
+
+
+def _res(page, ref, date=DATE):
+    return ranker.RankPageResult(page, [_row(page)], date, ref)
+
+
+def test_parse_ref_time_iso():
+    html = '<p class="rank_advice">※ 2026-10-07 07:00:00 기준 데이터로 현재와 다를 수 있으며</p>'
+    assert ranker.parse_ref_time(html) == "2026-10-07T07:00:00"       # taken_at 과 같은 꼴(공백 → T)
+    assert ranker.parse_ref_time("<p>점검 중</p>") is None and ranker.parse_ref_time("") is None
+
+
+def test_ref_time_decides_straddle_when_every_page_has_it():
+    ref = "2026-10-07T06:00:00"
+    h13, h14 = "Sun, 04 Oct 2026 13:59:59 GMT", "Sun, 04 Oct 2026 14:00:01 GMT"
+    try:
+        rc.rows_from_pages({1: _res(1, ref), 2: _res(2, "2026-10-07T07:00:00")}, 2)
+        raise AssertionError("같은 시(時)인데 기준 시각이 달라 두 데이터가 섞였다(R3)")
+    except rc.Straddle as e:
+        assert "갱신" in str(e)
+    rows, _ = rc.rows_from_pages({1: _res(1, ref, h13), 2: _res(2, ref, h14)}, 2)   # 시는 걸쳤지만 데이터는 하나
+    assert len(rows) == 2
+    try:
+        rc.rows_from_pages({1: _res(1, ref, h13), 2: _res(2, None, h14)}, 2)        # 하나라도 없으면 Date 의 시
+        raise AssertionError("기준 시각이 빠진 쪽이 있는데 Date 규칙을 안 썼다")
+    except rc.Straddle as e:
+        assert "정각" in str(e)
+    assert rc.round_ref({1: _res(1, ref), 2: _res(2, ref)}) == ref
+    assert rc.round_ref({1: _res(1, ref), 2: _res(2, None)}) is None
+
+
+def test_same_data_reads_one_page_and_is_not_counted():
+    with Env() as env:
+        w = World(200)
+        w.ref = "2026-10-04T21:00:00"
+        assert rc.collect(db_path=env.db, fetch=w, pages=10, now_fn=lambda: NOW).kind == "ok"
+        later = NOW + timedelta(days=1)
+        for i, when in enumerate((later, later + timedelta(hours=1))):
+            w2 = World(200)
+            w2.ref = w.ref
+            out = rc.collect(db_path=env.db, fetch=w2, pages=10, now_fn=lambda: when)
+            assert out.kind == "same" and w2.calls == [1], (out, w2.calls)   # 나머지 쪽은 요청 0(U3)
+            st = rc.get_state(env.conn())
+            assert st.get("fail_count") in (None, "0") and not st.get("retry_at"), "안 바뀐 데이터를 실패로 셌다"
+            assert st["same_since"] == later.isoformat(), "처음 같다고 본 시각이 아니다"
+            assert rc.is_due(env.conn(), when + timedelta(hours=1)), "다음 확인에 다시 보지 않는다"
+        w3 = World(200)
+        w3.ref = "2026-10-05T21:00:00"
+        assert rc.collect(db_path=env.db, fetch=w3, pages=10, now_fn=lambda: later + timedelta(hours=2)).kind == "ok"
+        c = env.conn()
+        assert rc.get_state(c)["same_since"] == "", "저장했는데 '멈춰 있음'이 남았다"
+        assert [(m["ref_time"], m["rank_gaps"]) for m in _rows_of(c, "snapshot_meta")] == \
+            [(w.ref, 0), (w3.ref, 0)]
+        # 팀컬러 목록이 읽은 500쪽 — 같은 판정으로 저장 안 함
+        results = {p: w3(p) for p in range(1, 11)}
+        n = _count(c, "snapshots")
+        assert rc.save_from_pages(results, later + timedelta(days=3), pages=10, db_path=env.db,
+                                  now_fn=lambda: later + timedelta(days=3)) is None
+        assert _count(c, "snapshots") == n
+        w3.ref = "2026-10-08T21:00:00"
+        results = {p: w3(p) for p in range(1, 11)}
+        out = rc.save_from_pages(results, later + timedelta(days=3), pages=10, db_path=env.db,
+                                 now_fn=lambda: later + timedelta(days=3), season_ends=ENDS)
+        assert out is not None and out.kind == "ok"
+        assert rc.last_ref_time(c) == w3.ref and _count(c, "elo_hist") > 0, "save_from_pages 길이 meta·처리를 안 거쳤다"
+        c.close()
+
+
+def test_rank_gaps():
+    assert rc.rank_gaps([_p(1), _p(2), _p(4), _p(5)]) == 1 and rc.rank_gaps([]) == 0
+
+
+def test_process_meta_catches_up_old_version_snapshots_once():
+    with Env() as env:
+        c = env.conn()
+        rows = [_p(i, elo=3000 + i * 10) for i in range(1, 21)]
+        a = _msnap(c, T0, rows)
+        _msnap(c, T0 + timedelta(days=1), rows)
+        c.execute("DELETE FROM snapshot_meta")       # 옛 버전이 쓴 스냅숏 — meta 줄이 없다
+        c.commit()
+        out = _proc(c)
+        assert (out["anon"], out["person"]) == (2, 2), out
+        assert all(m["ref_time"] is None and m["anon_done"] == m["person_done"] == 1 for m in _rows_of(c, "snapshot_meta"))
+        hist = dict(c.execute("SELECT bin, n FROM elo_hist WHERE snapshot_id = ?", (a,)).fetchall())
+        assert hist == {3000: 4, 3050: 5, 3100: 5, 3150: 5, 3200: 1}, hist
+        again = _proc(c)
+        assert (again["anon"], again["person"]) == (0, 0), "처리한 스냅숏을 다시 셌다"
+        c.close()
+
+
+def test_process_meta_failure_redoes_only_that_snapshot():
+    with Env() as env:
+        c = env.conn()
+        for i, g2 in enumerate((3, 3, 1)):
+            _msnap(c, T0 + timedelta(days=i), [_p(1, grade=0), _p(2, grade=g2)])
+        orig, calls = rc._person_apply, [0]
+
+        def boom(*a):
+            calls[0] += 1
+            if calls[0] == 2:
+                raise sqlite3.OperationalError("잠김")
+            return orig(*a)
+        rc._person_apply = boom
+        try:
+            _proc(c)
+            raise AssertionError("심은 실패가 안 올라왔다 — 아래 검사가 공허")
+        except sqlite3.OperationalError:
+            pass
+        finally:
+            rc._person_apply = orig
+        assert [r[0] for r in c.execute("SELECT person_done FROM snapshot_meta ORDER BY snapshot_id")] == [1, 0, 0]
+        _proc(c)
+        run = _rows_of(c, "run_open")
+        assert [(r["profile_sn"], r["start_at"], r["last_at"]) for r in run] == \
+            [(1, T0.isoformat(), (T0 + timedelta(days=2)).isoformat())], run
+        assert len(_rows_of(c, "champ_first")) == 1 and _count(c, "elo_season") == 2, "실패한 스냅숏을 두 번 셌다"
+        c.close()
+
+
+def test_runs_follow_elapsed_time_not_calendar_days():
+    with Env() as env:
+        c = env.conn()
+        times = [T0.replace(hour=22) + timedelta(hours=24.5 * i) for i in range(10)]   # 22시 시작 — 나흘째 자정을 넘긴다
+        assert len({t.date() for t in times}) == 10 and (times[-1].date() - times[0].date()).days == 10, \
+            "달력 날짜가 비는 간격이 아니다 — 아래 검사가 공허"
+        rows = [_p(1, grade=0), _p(2)]
+        for t in times:
+            _msnap(c, t, rows)
+        _proc(c)
+        assert [(r["profile_sn"], r["start_at"], r["last_at"], r["censored_start"]) for r in _rows_of(c, "run_open")] \
+            == [(1, times[0].isoformat(), times[-1].isoformat(), 1)], "24시간 30분 간격이 끊겼다"
+        assert _count(c, "run_done") == 0
+        gap = times[-1] + timedelta(hours=config.RANK_CONT_MAX_H + 1)
+        _msnap(c, gap, rows)
+        _proc(c)
+        done = _rows_of(c, "run_done")
+        assert [(round(d["hours"], 1), d["censored_start"], d["censored_end"]) for d in done] == [(24.5 * 9, 1, 1)], done
+        assert [(r["start_at"], r["censored_start"]) for r in _rows_of(c, "run_open")] == [(gap.isoformat(), 1)]
+        c.close()
+
+
+def test_two_snapshots_same_day_count_length_once():
+    with Env() as env:
+        c = env.conn()
+        for h in (0, 3, 24):
+            _msnap(c, T0 + timedelta(hours=h), [_p(1, grade=0), _p(2)])
+        _proc(c)
+        r = _rows_of(c, "run_open")[0]
+        assert rc._hours(r["start_at"], r["last_at"]) == 24, r
+        c.close()
+
+
+def test_super_champ_run_censoring():
+    with Env() as env:
+        c = env.conn()
+        t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
+        _msnap(c, t1, [_p(1, grade=0), _p(2, grade=2), _p(3, grade=0)])
+        _msnap(c, t2, [_p(1, grade=0), _p(2, grade=0), _p(3, grade=0)])
+        _msnap(c, t3, [_p(1, grade=1), _p(2, grade=0), _p(9, grade=2)])   # 3 은 목록에서 빠졌다
+        _proc(c)
+        opened = {r["profile_sn"]: (r["start_at"], r["censored_start"]) for r in _rows_of(c, "run_open")}
+        assert opened == {2: (t2.isoformat(), 0)}, opened                 # 앞에서 2 였다 — 시작을 안다
+        done = sorted((d["hours"], d["censored_start"], d["censored_end"]) for d in _rows_of(c, "run_done"))
+        assert done == [(24.0, 1, 0), (24.0, 1, 0)], done                 # 1·3 — 첫 처리에 이미 0 이라 시작 잘림
+        c.close()
+
+
+def test_first_champ_states():
+    with Env() as env:
+        c = env.conn()
+        t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
+        _msnap(c, t1, [_p(1, grade=1), _p(2, grade=3, games=40, value=7), _p(3, grade=3), _p(4, grade=3)])
+        _msnap(c, t2, [_p(1, grade=1), _p(2, grade=1, games=55, value=8), _p(5, grade=3), _p(4, grade=3)])
+        _msnap(c, t3, [_p(1, grade=1), _p(2, grade=1), _p(3, grade=1), _p(4, grade=3)])
+        _proc(c, ends=["2026-10-09"])                                  # 시즌 시작 10-09 — 10-10 첫 관측은 3일 안
+        states = {r["profile_sn"]: r["state"] for r in _rows_of(c, "champ_watch")}
+        assert states == {1: 0, 2: 2, 3: 3, 4: 1, 5: 1}, states        # 3 = 빠졌다 들어와 처음 닿은 때를 모른다
+        first = [(f["games"], f["team_value"], f["at"], f["first_seen_late"]) for f in _rows_of(c, "champ_first")]
+        assert first == [(55, 8, t2.isoformat(), 0)], first
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(2, grade=3)])
+        _msnap(c, T0 + timedelta(days=1), [_p(2, grade=1)])
+        _proc(c)                                                       # 시즌 시작 10-01 — 열흘 뒤에 처음 봤다
+        assert [f["first_seen_late"] for f in _rows_of(c, "champ_first")] == [1]
+        c.close()
+
+
+def test_season_peak_and_drawdown():
+    with Env() as env:
+        c = env.conn()
+        for i, e in enumerate((3000.0, 3200.0, 3100.0, 3150.0)):
+            _msnap(c, T0 + timedelta(days=i), [_p(1, elo=e)])
+        _proc(c)
+        r = _rows_of(c, "elo_season")[0]
+        assert (r["peak"], r["peak_at"], r["max_dd"], r["last_elo"]) == \
+            (3200.0, (T0 + timedelta(days=1)).isoformat(), 100.0, 3150.0), r
+        c.close()
+
+
+def test_person_tables_wait_for_consent_then_catch_up():
+    with Env() as env:
+        env.write(notice=config.META_NOTICE_VERSION - 1)              # 옛 동의자(5)
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=0)])
+        _msnap(c, T0 + timedelta(days=1), [_p(1, grade=0)])
+        out = _proc(c)
+        assert out["anon"] == 2 and out["person"] == 0
+        assert all(_count(c, t) == 0 for t in rc.PERSON_TABLES), "동의 전에 사람별 표에 썼다"
+        assert [m["person_done"] for m in _rows_of(c, "snapshot_meta")] == [0, 0], "동의 전에 깃발을 올렸다"
+        env.write()                                                    # 동의
+        assert _proc(c)["person"] == 2
+        assert [r["censored_start"] for r in _rows_of(c, "run_open")] == [1], "따라잡기 첫 처리는 잘림으로 연다"
+        c.close()
+
+
+def test_turning_off_mid_processing_stops_and_next_run_purges():
+    with Env() as env:
+        c = env.conn()
+        for i in range(3):
+            _msnap(c, T0 + timedelta(days=i), [_p(1, grade=0)])
+        orig = rc._person_one
+
+        def once_then_off(*a):
+            v = orig(*a)
+            env.write(collect="0")
+            return v
+        rc._person_one = once_then_off
+        try:
+            assert _proc(c)["person"] == 1, "처리 중 .env 끔을 안 봤다"
+        finally:
+            rc._person_one = orig
+        _proc(c)
+        assert all(_count(c, t) == 0 for t in rc.PERSON_TABLES), "꺼졌는데 사람별 줄이 남았다"
+        assert not rc.get_state(c).get("person_prev") and not rc.get_state(c).get("person_season")
+        c.close()
+
+
+def test_turning_collect_off_then_on_restarts_runs():
+    with Env() as env:
+        env.write(on_at="2026-10-10T08:00:00.000001")
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=0)])
+        _proc(c)
+        assert rc.get_state(c)["person_epoch"] == "2026-10-10T08:00:00.000001"
+        env.write(on_at="2026-10-10T20:00:00.000001")                  # 껐다 켰다 — 켠 시각이 바뀐다
+        _msnap(c, T0 + timedelta(days=1), [_p(1, grade=0)])
+        out = _proc(c)
+        assert out["purged"], "껐다 켠 사이를 이어진 것으로 읽었다"
+        r = _rows_of(c, "run_open")[0]
+        assert (r["start_at"], r["censored_start"]) == ((T0 + timedelta(days=1)).isoformat(), 1), r
+        c.close()
+    with Env() as env:                                                 # 켠 시각이 둘 다 없음 = 같음(옛 버전에서 켬)
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=0)])
+        _proc(c)
+        _msnap(c, T0 + timedelta(days=1), [_p(1, grade=0)])
+        assert not _proc(c)["purged"], "옛 버전에서 켠 사람의 기록을 매번 지운다"
+        assert _rows_of(c, "run_open")[0]["start_at"] == T0.isoformat()
+        # ⚠ .env 를 손으로 껐다 확인 전에 다시 켜면 켠 시각이 그대로라 이어진 것으로 읽힌다(앱이 꺼짐을 본 적이 없다) — 받아들임
+        env.write(collect="0")
+        env.write(collect="1")
+        assert not _proc(c)["purged"]
+        c.close()
+
+
+def test_season_verdict_compares_like_with_like():
+    v = rc._season_verdict
+    ps = {"seq": 9, "start": "2026-10-01", "at": "2026-10-02T09:00:00", "via": "init"}
+    assert v(ps, 10, "2026-10-01") == ("roll", "seq"), "seq 10 > 9 를 숫자로 안 봤다"
+    assert v(ps, 8, "2026-10-01")[0] == "older" and v(ps, 9, "2026-08-27")[0] == "older"
+    assert v(ps, 9, "2026-11-20") == ("roll", "start") and v(ps, 10, "2026-11-20") == ("roll", "both")
+    assert v({**ps, "start": None}, 9, "2026-10-01")[0] == "update", "시즌표를 처음 받는 날 넘기거나 건너뛰었다"
+    assert v(ps, 9, None)[0] == "same" and v({**ps, "start": None}, 9, None)[0] == "same"
+    seq_first = {**ps, "seq": 10, "at": "2026-11-20T09:00:00", "via": "seq"}
+    assert v(seq_first, 10, "2026-11-20")[0] == "update" and v(seq_first, 10, "2026-11-21")[0] == "update"
+    assert v(seq_first, 10, "2026-11-22")[0] == "roll", "늦은 신호 창(at + 1일)을 넘긴 시작일도 같은 넘김으로 봤다"
+    start_first = {**ps, "start": "2026-11-20", "via": "start"}
+    assert v(start_first, 10, "2026-11-20")[0] == "update", "시즌표로 넘긴 뒤 따라온 seq 로 한 번 더 넘겼다"
+
+
+def test_season_rolls_by_table_without_seq_change():
+    with Env() as env:
+        c = env.conn()
+        rows = [_p(1, grade=0, elo=3500), _p(2, elo=3100)]
+        _msnap(c, T0, rows)
+        _msnap(c, T0 + timedelta(days=1), rows)
+        _proc(c)
+        new_ends = ENDS + ["2026-11-20"]
+        out = _proc(c, now=datetime(2026, 11, 21, 9), ends=new_ends)  # 스냅숏 없이 앱만 켬 — seq 는 그대로
+        assert out["rolled"]
+        assert all(_count(c, t) == 0 for t in rc.PERSON_TABLES), "새 시즌인데 옛 사람별 줄이 남았다"
+        assert _count(c, "elo_season_done") == 2 and _rows_of(c, "run_done")[0]["censored_end"] == 1
+        assert _count(c, "elo_hist") > 0
+        _msnap(c, datetime(2026, 11, 21, 10), rows)
+        _proc(c, now=datetime(2026, 11, 22), ends=new_ends)
+        assert _count(c, "elo_season_done") == 2, "같은 넘김을 두 번 옮겼다"
+        assert {r["season_at"] for r in _rows_of(c, "elo_season")} == {"2026-11-21T09:00:00"}
+        c.close()
+
+
+def test_no_season_table_keeps_accumulating():
+    with Env() as env:
+        c = env.conn()
+        for i in range(3):
+            _msnap(c, T0 + timedelta(days=i), [_p(1, grade=0)])
+        _proc(c, ends=[])
+        assert [m["person_done"] for m in _rows_of(c, "snapshot_meta")] == [1, 1, 1]
+        _msnap(c, T0 + timedelta(days=3), [_p(1, grade=0)])
+        _proc(c, ends=ENDS)                                            # 시즌표가 생겼다 — 시작일만 적고 이어 간다
+        assert _count(c, "elo_season_done") == 0 and _count(c, "run_done") == 0
+        assert _rows_of(c, "run_open")[0]["start_at"] == T0.isoformat()
+        c.close()
+
+
+def test_seq_roll_then_late_table_moves_once():
+    for lag in (3, 10):
+        with Env() as env:
+            c = env.conn()
+            full = [_p(i, grade=0 if i == 1 else 2) for i in range(1, 41)]
+            _msnap(c, T0, full)
+            _msnap(c, T0 + timedelta(days=1), full)
+            _proc(c)
+            t_roll = datetime(2026, 11, 20, 9)
+            _msnap(c, t_roll, full[:10])                                # 행 수 급감 — seq 가 먼저 넘긴다(시즌표는 낡음)
+            _proc(c, now=t_roll)
+            assert _count(c, "elo_season_done") == 40, lag
+            later = t_roll + timedelta(days=lag)
+            _proc(c, now=later, ends=ENDS + ["2026-11-20"])            # 앱만 켬(새 스냅숏 없음) — 같은 늦은 신호
+            assert _count(c, "elo_season_done") == 40, (lag, "앱 켤 때 늦은 시즌표로 한 번 더 넘겼다")
+            _msnap(c, later, full[:10])
+            _proc(c, now=later, ends=ENDS + ["2026-11-20"])            # 시즌표가 lag 일 늦게 따라왔다
+            assert _count(c, "elo_season_done") == 40, (lag, "늦은 시즌표로 한 번 더 넘겼다")
+            c.close()
+
+
+def test_no_table_falls_back_to_70_days():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=0)])
+        _proc(c, ends=[])
+        assert not _proc(c, now=T0 + timedelta(days=config.ELO_FALLBACK_DAYS - 1), ends=[])["rolled"]
+        assert _proc(c, now=T0 + timedelta(days=config.ELO_FALLBACK_DAYS + 1), ends=[])["rolled"]
+        assert all(_count(c, t) == 0 for t in rc.PERSON_TABLES)
+        c.close()
+
+
+def _secret_rows(n=200, tag="비밀닉"):
+    return [ranker.RankRow(rank=i, profile_sn=i, nickname=f"{tag}{i:04d}", elo=3000.0) for i in range(1, n + 1)]
+
+
+def _has_bytes(env, needle: bytes) -> list[str]:
+    return [f.name for f in (env.db, env.db.with_name(env.db.name + "-wal")) if f.exists() and needle in f.read_bytes()]
+
+
+def test_pruned_nicknames_leave_no_bytes_in_db_or_wal():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, NOW - timedelta(days=config.RANK_RAW_KEEP_DAYS + 1), _secret_rows())
+        _msnap(c, NOW, _secret_rows(tag="남는닉"))
+        assert _has_bytes(env, "비밀닉".encode()), "심은 닉네임이 파일에 없다 — 아래 검사가 공허"
+        rc.prune_raw(c, NOW)
+        assert rc.checkpoint(c)
+        c.close()
+        assert not _has_bytes(env, "비밀닉".encode()), _has_bytes(env, "비밀닉".encode())
+        assert _has_bytes(env, "남는닉".encode())
+        c = env.conn()
+        assert [m["raw_pruned"] for m in _rows_of(c, "snapshot_meta")] == [1, 0]
+        assert not rc.vacuum_if_needed(c, NOW), "새 버전만 지운 DB 를 켤 때마다 VACUUM 한다"
+        c.close()
+
+
+def test_wal_is_emptied_after_prune_while_a_reader_is_open():
+    """화면의 읽기 연결이 열려 있으면 마지막 연결이 닫혀도 SQLite 가 WAL 을 안 비운다 — 지운 닉네임이 -wal 프레임에 남는다.
+    정리(maintenance)·회차 끝(collect) 둘 다 TRUNCATE 로 비우는지 — 연결 하나를 열어 둔 채로 잰다."""
+    for path in ("maintenance", "collect"):
+        with Env() as env:
+            c = env.conn()
+            _msnap(c, NOW - timedelta(days=config.RANK_RAW_KEEP_DAYS + 1), _secret_rows())
+            c.close()
+            reader = rc.open_rank_db_ro(env.db)                  # 쉬는 읽기 연결(트랜잭션 없음) — 화면이 잠깐 연 것
+            reader.execute("SELECT COUNT(*) FROM snapshots").fetchone()
+            try:
+                assert _has_bytes(env, "비밀닉".encode()), "심은 닉네임이 없다 — 아래 검사가 공허"
+                if path == "maintenance":
+                    out = rc.maintenance(env.db, lambda: NOW, season_ends=ENDS)
+                    assert out["pruned"] == 200, out
+                else:
+                    w = World(200)
+                    w.ref = "2026-10-04T21:00:00"
+                    assert rc.collect(db_path=env.db, fetch=w, pages=10, now_fn=lambda: NOW,
+                                      season_ends=ENDS).kind == "ok"
+                assert not _has_bytes(env, "비밀닉".encode()), (path, _has_bytes(env, "비밀닉".encode()))
+            finally:
+                reader.close()
+
+
+def test_load_season_ends_refreshes_stale_table_only_with_web_data():
+    import store
+    from datetime import date as _d
+    calls = []
+
+    def fake():
+        calls.append(1)
+        return [seasons.Season(no=90, name="시즌 9", start=_d(2026, 10, 1), end=_d(2026, 11, 20))]
+    keep = rc._fetch_seasons, config.WEB_DATA
+    try:
+        rc._fetch_seasons = fake
+        with Env() as env:
+            config.WEB_DATA = False
+            assert rc.load_season_ends(env.fifa) == [] and calls == [], "웹 데이터가 꺼졌는데 넥슨에 물었다"
+            config.WEB_DATA = True
+            assert rc.load_season_ends(env.fifa) == ["2026-11-20"] and calls == [1], "낡은 시즌표를 다시 안 받았다"
+            assert rc.load_season_ends(env.fifa) == ["2026-11-20"] and calls == [1], "새 시즌표를 또 받았다"
+            f = store.open_db(env.fifa)
+            f.execute("UPDATE seasons SET fetched_at = '2000-01-01T00:00:00'")
+            f.commit()
+            f.close()
+            rc.load_season_ends(env.fifa)
+            assert calls == [1, 1], "TTL 이 지났는데 다시 안 받았다"
+    finally:
+        rc._fetch_seasons, config.WEB_DATA = keep
+
+
+def test_old_style_prune_is_vacuumed_at_startup():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, NOW - timedelta(days=20), _secret_rows())
+        _msnap(c, NOW, _secret_rows(tag="남는닉"))
+        c.close()
+        raw = sqlite3.connect(env.db)                                  # 옛 버전 — secure_delete 없이 지웠다
+        raw.execute("PRAGMA secure_delete=OFF")
+        raw.execute("DELETE FROM snapshot_rows WHERE snapshot_id = 1")
+        raw.commit()
+        raw.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        raw.close()
+        assert _has_bytes(env, "비밀닉".encode()), "옛 방식 지우기가 바이트를 안 남긴다 — 아래 검사가 공허"
+        out = rc.maintenance(env.db, lambda: NOW, vacuum=True, season_ends=ENDS)
+        assert out.get("vacuumed"), out
+        assert not _has_bytes(env, "비밀닉".encode()), _has_bytes(env, "비밀닉".encode())
+        assert not rc.maintenance(env.db, lambda: NOW, vacuum=True, season_ends=ENDS).get("vacuumed"), "다시 VACUUM 했다"
+
+
+def test_maintenance_never_creates_rank_db_and_prunes_when_off():
+    with Env() as env:
+        missing = env.dir / "없음.db"
+        assert rc.maintenance(missing, lambda: NOW) == {"missing": True} and not missing.exists()
+        assert rc.open_rank_db_existing(missing) is None and not missing.exists()
+        c = env.conn()
+        _msnap(c, NOW - timedelta(days=20), [_p(1, grade=0)])
+        _msnap(c, NOW - timedelta(days=19), [_p(1, grade=0)])
+        _msnap(c, NOW, [_p(1, grade=0)])
+        _proc(c)
+        assert _count(c, "run_open") == 1
+        c.close()
+        env.write(collect="0")                                         # 수집을 끔 — 회차는 더 안 돈다(R12)
+        out = rc.maintenance(env.db, lambda: NOW, season_ends=ENDS)
+        c = env.conn()
+        assert out["purged"] and all(_count(c, t) == 0 for t in rc.PERSON_TABLES)
+        assert out["pruned"] == 2 and _count(c, "snapshot_rows") == 1, "수집이 꺼졌다고 14일 지난 원본을 안 지웠다"
+        assert _count(c, "collect_lock") == 0
+        c.close()
+
+
+def test_maintenance_waits_for_collect_lock():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=0)])
+        other = rc.CollectLock(env.conn(), datetime.now)
+        assert other.acquire()
+        assert rc.maintenance(env.db, lambda: NOW, season_ends=ENDS) == {"locked": True}
+        assert _count(c, "elo_hist") == 0, "남이 잠갔는데 처리했다"
+        other.release()
+        assert rc.maintenance(env.db, lambda: NOW, season_ends=ENDS)["anon"] == 1
+        c.close()
+
+
+def test_meta_trend_compares_within_season():
+    def rows(n_a):
+        return [ranker.RankRow(rank=i, profile_sn=i, nickname=f"m{i}", elo=3000.0, team_color="A" if i <= n_a else "B",
+                               formation="4-2-3-1" if i <= 3 else "4-4-2") for i in range(1, 101)]
+    assert rc.meta_trend(None, 200).collecting
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, rows(20))
+        _msnap(c, T0 + timedelta(days=2), rows(30))
+        assert rc.meta_trend(c, 200).collecting, "이틀 차로 비교했다(3일 미만은 표 없음)"
+        _msnap(c, T0 + timedelta(days=4), rows(40))
+        t = rc.meta_trend(c, 200)
+        assert not t.collecting and round(t.days) == 4, t                # 7일 전이 없어 시즌 가장 옛것(4일 전)
+        _msnap(c, T0 + timedelta(days=9), rows(50))
+        t = rc.meta_trend(c, 200)
+        assert (t.then_at, round(t.days)) == ((T0 + timedelta(days=2)).isoformat(), 7), t
+        a = next(r for r in t.rows["team_color"] if r.key == "A")
+        assert (a.now_n, a.then_n, round(a.diff_pp, 1), a.thin) == (50, 30, 20.0, False), a
+        f = next(r for r in t.rows["formation"] if r.key == "4-2-3-1")
+        assert f.thin and t.rows["team_color"][0].key == "A", "적은 줄 흐림 · 변화 내림차순"
+        c.close()
+
+
+def test_elo_hist_series_and_marker():
+    with Env() as env:
+        c = env.conn()
+        assert not rc.elo_hist_series(c).bins
+        rows = [_p(i, elo=3000.0 + i) for i in range(1, 251)]
+        first = _msnap(c, T0, rows, ref="2026-10-10T08:00:00")
+        _msnap(c, T0 + timedelta(days=7), [_p(i, elo=3100.0 + i) for i in range(1, 251)], ref="2026-10-17T08:00:00")
+        _proc(c)
+        h = rc.elo_hist_series(c, "7d")
+        assert h.now_at == "2026-10-17T08:00:00" and h.cmp_at == "2026-10-10T08:00:00", h
+        assert sum(h.bins.values()) == 250 and sum(h.cmp.values()) == 250 and 200 in h.cuts
+        assert rc.elo_hist_series(c, "none").cmp == {}
+        assert rc.elo_hist_series(c, "season").cmp_at == "2026-10-10T08:00:00"
+        elo_rows = [{"taken_at": "2026-10-03T10:00:00", "elo": 2900.0},          # 시즌 전 · 2주 전
+                    {"taken_at": "2026-10-16T21:30:00", "elo": 3333.0},          # 막대 데이터 시각 ±1일 안
+                    {"taken_at": "2026-10-19T10:00:00", "elo": 3400.0}]          # 이틀 뒤
+        assert rc.elo_marker(elo_rows, h) == (3333.0, "2026-10-16T21:30:00")
+        assert rc.elo_marker(elo_rows[:1] + elo_rows[2:], h) is None, "몇 주 전·지난 시즌 값을 지금 분포 위에 그렸다"
+        assert first == 1
+        c.close()
+
+
+def test_process_meta_budget_10k_rows():
+    """⑦ — 1만 행 · 하루 1,156명 바뀜(R8) 스냅숏 30개, 하나 0.5초 이하."""
+    rng = random.Random(3)
+    with Env() as env:
+        c = env.conn()
+        people = list(range(1, 10001))
+        nxt = 10001
+        worst = 0.0
+        for d in range(30):
+            rows = [_p(sn, grade=rng.choice((0, 1, 1, 1, 2)), elo=3000.0 + rng.random() * 1500, nick=f"n{sn}")
+                    for sn in people]
+            for i, r in enumerate(rows, 1):
+                r.rank = i
+            _msnap(c, T0 + timedelta(days=d), rows)
+            t = time.perf_counter()
+            _proc(c)
+            worst = max(worst, time.perf_counter() - t)
+            for _ in range(1156):
+                people[rng.randrange(len(people))] = nxt
+                nxt += 1
+            people = list(dict.fromkeys(people))
+            while len(people) < 10000:
+                people.append(nxt)
+                nxt += 1
+        print(f"       메타 처리 1만 행 최악 {worst:.2f}s · 사람별 {_count(c, 'elo_season'):,}줄")
+        assert worst <= 0.5, worst
+        c.close()
+
+
+import sqlite3  # noqa: E402
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

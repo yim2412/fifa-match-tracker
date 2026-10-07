@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
@@ -12,7 +13,7 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
-APP_VERSION = "v2.2.1"
+APP_VERSION = "v2.3.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 # 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 다 뺐다 —
@@ -109,9 +110,10 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 5  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 6  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
+#                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속·최고점·첫 챔스(U1)
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
@@ -119,6 +121,7 @@ TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)
 PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 이 버전 동의 뒤부터 — 사용자가 연 [시세] 탭은 그대로
 CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
 RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
+META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -159,6 +162,8 @@ RANK_PAGE_TIMEOUT_S = 10
 # set_rank_collect 가 재할당한다 — 다른 모듈은 config.RANK_COLLECT 로 읽는다.
 RANK_COLLECT_VAR = "FIFA_RANK_COLLECT"
 RANK_COLLECT = os.getenv(RANK_COLLECT_VAR, "0").strip() == "1"
+# 수집을 켤 때마다 새 시각(set_rank_collect) — 사람별 표가 "끈 사이를 건너 이어진 것"으로 읽히지 않게(rankcollect.person_epoch)
+RANK_COLLECT_ON_AT_VAR = "FIFA_RANK_COLLECT_ON_AT"
 RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
 RANK_COLLECT_INTERVAL_H = 24
 RANK_CHECK_EVERY_MIN = 60           # 앱이 켜져 있는 동안 간격이 지났는지 보는 주기
@@ -173,6 +178,13 @@ RANK_TIERS = (200, 1000, 10000)     # 집계 구간의 끝 순위 — 1~200 · 2
 RANK_CUT_RANKS = (1, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000)
 RANK_START_JITTER_MIN = (5, 50)     # 간격이 지난 시각의 +5~+50분 — 50분이면 약 1.5분 수집이 다음 정각 전에 끝난다
 RANK_RAW_KEEP_DAYS = 14             # 다른 구단주 1만 명분 원본은 이만큼만. 집계는 계속
+# 랭커 메타(2.3.1 · rankcollect.process_meta) — 초안 값들. 근거는 ROADMAP 2.3.1 실측 장부
+RANK_GAPS_WARN = 50                 # 빈 순위가 이만큼 이상이면 [정보] 에 노란 글자(R4: 지금 0)
+RANK_CONT_MAX_H = 36                # 앞 스냅숏과 데이터 시각 차가 이 안이면 이어진 것 — 넘으면 틈(연속·첫 챔스를 자른다)
+RANK_ELO_BIN = 50                   # 점수 분포 막대 칸 폭(R9: 2,934~4,538 → 34칸 남짓)
+META_MIN_USERS = 5                  # 메타 변화 표 — 두 시점 다 이보다 적은 줄은 흐림
+N12_START_DAYS = 3                  # 시즌 시작일보다 이만큼 넘게 뒤에 처음 본 사람은 첫 챔스 판수를 '늦게 봄'으로
+RANK_CKPT_WARN = 24                 # WAL 비우기가 이만큼 이어서 막히면 [정보] 에 한 줄
 ELO_TRACK_MAX = 5                   # 하루 한 번 ELO 를 이어서 기록할 구단주 — 사용자가 직접 고른다(1.3.1 사용자 ⑥)
 ELO_CUT_LINES = (200, 1000)         # ELO 그래프에 시계열로 긋는 순위 컷 — 1만 위는 축을 넓혀 그래프를 찌그러뜨려 툴팁만
 ELO_FALLBACK_DAYS = 70              # 시즌표도 스냅숏도 없을 때 "지금 시즌"으로 볼 기간 — 최근 시즌 최장(ROADMAP R5)
@@ -307,10 +319,39 @@ def set_web_data(on: bool) -> None:
 
 
 def set_rank_collect(on: bool) -> None:
-    """랭킹 수집을 켜고 끈다 — 저장하고 이 프로세스에도 바로 반영."""
+    """랭킹 수집을 켜고 끈다 — 저장하고 이 프로세스에도 바로 반영. 켤 때마다 켠 시각을 새로 적는다(read_rank_on_at)."""
     global RANK_COLLECT
+    if on:
+        _save_env(RANK_COLLECT_ON_AT_VAR, datetime.now().isoformat(timespec="microseconds"))
     _save_env(RANK_COLLECT_VAR, "1" if on else "0")
     RANK_COLLECT = on
+
+
+def _read_env_disk() -> dict | None:
+    try:
+        return dotenv_values(ENV_PATH, encoding="utf-8-sig") if ENV_PATH.exists() else {}
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def read_rank_on_at() -> str | None:
+    """수집을 마지막으로 켠 시각(.env 를 디스크에서 다시) — 없으면 None(옛 버전에서 켠 사람). 못 읽으면 None."""
+    vals = _read_env_disk()
+    return ((vals or {}).get(RANK_COLLECT_ON_AT_VAR) or "").strip() or None
+
+
+def read_person_allowed() -> bool:
+    """사람별 표에 써도 되나 — 디스크의 .env 로 다시(다른 실행본·손 수정): 웹 데이터 · 수집 · 안내 META_NOTICE_VERSION 동의.
+    못 읽으면 False(쓰지 않는 쪽으로)."""
+    vals = _read_env_disk()
+    if vals is None:
+        return False
+    try:
+        accepted = int((vals.get(NOTICE_VAR) or "0").strip() or 0)
+    except ValueError:
+        accepted = 0
+    return ((vals.get(WEB_DATA_VAR) or "0").strip() == "1" and (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
+            and accepted >= META_NOTICE_VERSION)
 
 
 def read_env_switches() -> tuple[bool, bool]:
@@ -319,9 +360,8 @@ def read_env_switches() -> tuple[bool, bool]:
     load_dotenv 는 이미 든 환경 변수를 덮지 않아서 못 쓴다. 읽은 값으로 이 프로세스의 전역도 맞춘다.
     """
     global WEB_DATA, RANK_COLLECT
-    try:
-        vals = dotenv_values(ENV_PATH, encoding="utf-8-sig") if ENV_PATH.exists() else {}
-    except (OSError, UnicodeError, ValueError):
+    vals = _read_env_disk()
+    if vals is None:
         return WEB_DATA, RANK_COLLECT  # 못 읽으면 아는 값 그대로
     WEB_DATA = (vals.get(WEB_DATA_VAR) or "0").strip() == "1"
     RANK_COLLECT = (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
@@ -360,6 +400,11 @@ def price_auto_allowed() -> bool:
 def chip_auto_allowed() -> bool:
     """축구장 칩의 카드 정보를 자동으로 읽어도 되나 — 그 안내(CHIP_NOTICE_VERSION) 동의 + 웹 데이터 켜짐."""
     return WEB_DATA and NOTICE_ACCEPTED >= CHIP_NOTICE_VERSION
+
+
+def meta_person_allowed() -> bool:
+    """사람별 표(슈챔 연속·최고점·첫 챔스)에 써도 되나 — 이 프로세스 값으로. 쓰기 직전엔 read_person_allowed 로 다시."""
+    return (not notice_needed() and WEB_DATA and RANK_COLLECT and NOTICE_ACCEPTED >= META_NOTICE_VERSION)
 
 
 def ranker_pick_allowed() -> bool:

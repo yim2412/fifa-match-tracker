@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import sqlite3
@@ -92,7 +93,44 @@ CREATE TABLE IF NOT EXISTS collect_state (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS collect_lock (
     id INTEGER PRIMARY KEY CHECK (id = 1), owner TEXT NOT NULL, pid INTEGER, heartbeat_at TEXT NOT NULL
 );
+-- ── 2.3.1 랭커 메타 — 전부 옆 표(snapshots·snapshot_rows 의 열과 INSERT 는 그대로 — 옛 버전이 같은 DB 로 수집한다) ──
+-- 스냅숏마다 한 줄: 넥슨 데이터 기준 시각(N14) · 빈 순위 · 처리 깃발(그 처리와 같은 트랜잭션에서 올린다)
+-- raw_pruned = 새 prune_raw 가 secure_delete 로 원본을 지웠다(아니면 옛 버전이 지운 흔적 → 켤 때 VACUUM)
+CREATE TABLE IF NOT EXISTS snapshot_meta (
+    snapshot_id INTEGER PRIMARY KEY, ref_time TEXT, rank_gaps INTEGER,
+    anon_done INTEGER NOT NULL DEFAULT 0, person_done INTEGER NOT NULL DEFAULT 0, raw_pruned INTEGER NOT NULL DEFAULT 0
+);
+-- 익명 · 영구: 점수 분포(B5)
+CREATE TABLE IF NOT EXISTS elo_hist (
+    snapshot_id INTEGER NOT NULL, bin INTEGER NOT NULL, n INTEGER NOT NULL, PRIMARY KEY (snapshot_id, bin)
+) WITHOUT ROWID;
+-- 사람별(U1) — 닉네임 없이 프로필 번호만 · 그 시즌 동안만(season_at = 그 시즌으로 넘긴 데이터 시각). 끄거나 동의 전이면 지운다
+CREATE TABLE IF NOT EXISTS run_open (
+    season_at TEXT NOT NULL, profile_sn INTEGER NOT NULL, start_at TEXT NOT NULL, last_at TEXT NOT NULL,
+    censored_start INTEGER NOT NULL, PRIMARY KEY (season_at, profile_sn)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS elo_season (
+    season_at TEXT NOT NULL, profile_sn INTEGER NOT NULL, peak REAL, peak_at TEXT, max_dd REAL,
+    last_elo REAL, last_at TEXT, PRIMARY KEY (season_at, profile_sn)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS champ_watch (
+    season_at TEXT NOT NULL, profile_sn INTEGER NOT NULL, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
+    state INTEGER NOT NULL, PRIMARY KEY (season_at, profile_sn)
+) WITHOUT ROWID;
+-- 끝난 기록 — 번호 없는 익명 줄이라 영구(UNIQUE 없음: 같은 값이 정당하게 겹친다)
+CREATE TABLE IF NOT EXISTS run_done (season_at TEXT, hours REAL, censored_start INTEGER, censored_end INTEGER);
+CREATE TABLE IF NOT EXISTS elo_season_done (season_at TEXT, peak REAL, max_dd REAL, last_elo REAL);
+CREATE TABLE IF NOT EXISTS champ_first (season_at TEXT, games INTEGER, team_value INTEGER, at TEXT, first_seen_late INTEGER);
+-- 랭커 픽 날짜별(N15) — 익명 · 영구. day = 랭커의 마지막 경기 날짜, rankers = 그 날짜에 센 랭커 수(분모 — 그날 줄 전부 같은 값)
+CREATE TABLE IF NOT EXISTS pick_days (
+    day TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL, rankers INTEGER NOT NULL,
+    PRIMARY KEY (day, kind, key)
+) WITHOUT ROWID;
+-- 센 경기 — 경기 번호라 원본과 같이 RANK_RAW_KEEP_DAYS 뒤 지운다(prune_raw)
+CREATE TABLE IF NOT EXISTS pick_counted (match_id TEXT PRIMARY KEY, day TEXT NOT NULL);
 """
+PERSON_TABLES = ("run_open", "elo_season", "champ_watch")
+PERSON_STATE = ("person_prev", "person_season")
 
 OPEN_TIMEOUT_S = 15
 _OPEN_LOCK = threading.Lock()  # WAL 전환은 잠금 대기를 안 거친다 — store._OPEN_LOCK 과 같은 이유
@@ -107,13 +145,33 @@ def open_rank_db(path: Path | str | None = None) -> sqlite3.Connection:
     """rank.db 를 열고 없으면 만든다. 스레드마다 따로 연다."""
     p = Path(path) if path else config.RANK_DB_PATH
     p.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(p), timeout=OPEN_TIMEOUT_S)
+    return _prepare(sqlite3.connect(str(p), timeout=OPEN_TIMEOUT_S))
+
+
+def _prepare(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
+    # 모든 연결이 secure_delete(R11) — 지우는 연결에서만 켜면 그 전 삽입·재배치로 빈 페이지에 남은 닉네임이 그대로다(store 와 같은 이유)
+    conn.execute("PRAGMA secure_delete=ON")
     with _OPEN_LOCK:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.executescript(SCHEMA)
         conn.commit()
     return conn
+
+
+def open_rank_db_existing(path: Path | str | None = None) -> sqlite3.Connection | None:
+    """있을 때만 쓰기로 연다 — 없으면 None(만들지 않는다). exists() 뒤 connect 가 아니라 mode=rw URI 라
+    [수집 기록 지우기]가 그 사이 파일을 지워도 되살리지 않는다."""
+    p = Path(path) if path else config.RANK_DB_PATH
+    try:
+        conn = sqlite3.connect(p.resolve().as_uri() + "?mode=rw", uri=True, timeout=OPEN_TIMEOUT_S)
+    except (sqlite3.Error, ValueError, OSError):
+        return None
+    try:
+        return _prepare(conn)
+    except sqlite3.Error:
+        conn.close()
+        return None
 
 
 # ── 집계 ────────────────────────────────────────────────────────────────────
@@ -169,9 +227,15 @@ def dedup(rows: list[ranker.RankRow]) -> tuple[list[ranker.RankRow], int]:
 
 # ── 저장 ────────────────────────────────────────────────────────────────────
 
+def rank_gaps(rows: list[ranker.RankRow]) -> int:
+    """1~마지막 순위 중 빈 순위 수(N14 — R4: 지금 0). 같은 순위 둘은 세지 않는다."""
+    ranks = {r.rank for r in rows if r.rank is not None}
+    return (max(ranks) - len(ranks)) if ranks else 0
+
+
 def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at: datetime,
-                  dup_count: int = 0, ended_season: int | None = None) -> int:
-    """원본 + 집계를 한 트랜잭션으로 — 도중에 죽어도 반쪽이 안 남는다. → 스냅숏 id."""
+                  dup_count: int = 0, ended_season: int | None = None, ref_time: str | None = None) -> int:
+    """원본 + 집계(+ snapshot_meta)를 한 트랜잭션으로 — 도중에 죽어도 반쪽이 안 남는다. → 스냅숏 id."""
     prev = conn.execute("SELECT row_count, season_seq, ended_season FROM snapshots "
                         "ORDER BY taken_at DESC, id DESC LIMIT 1").fetchone()
     if ended_season is None and prev is not None:
@@ -199,19 +263,29 @@ def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at
         conn.executemany("INSERT INTO tier_counts VALUES (?,?,?,?,?)", [(sid, *c) for c in counts])
         conn.executemany("INSERT INTO tier_values VALUES (?,?,?,?,?)", [(sid, *v) for v in values])
         conn.executemany("INSERT INTO cut_elo VALUES (?,?,?)", [(sid, *c) for c in cuts])
+        conn.execute("INSERT INTO snapshot_meta (snapshot_id, ref_time, rank_gaps) VALUES (?, ?, ?)",
+                     (sid, ref_time, rank_gaps(rows)))
     return sid
 
 
 def prune_raw(conn: sqlite3.Connection, now: datetime) -> int:
-    """RANK_RAW_KEEP_DAYS 지난 스냅숏의 원본만 지운다(집계는 남긴다). → 지운 행 수."""
+    """RANK_RAW_KEEP_DAYS 지난 스냅숏의 원본만 지운다(집계는 남긴다) + 센 랭커 픽 경기 번호. → 지운 원본 행 수.
+    지운 스냅숏엔 raw_pruned = 1 — secure_delete 로 지웠으니 VACUUM 이 필요 없다는 표시."""
     cutoff = _iso(now - timedelta(days=config.RANK_RAW_KEEP_DAYS))
     with conn:
+        ids = [r[0] for r in conn.execute(
+            "SELECT s.id FROM snapshots s WHERE s.taken_at < ? AND EXISTS"
+            " (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)", (cutoff,))]
         cur = conn.execute("DELETE FROM snapshot_rows WHERE snapshot_id IN "
                            "(SELECT id FROM snapshots WHERE taken_at < ?)", (cutoff,))
         # 엠블럼은 원본이 없는 스냅숏 것 전부 — 옛 버전(2.1.1 이하)이 원본만 지우고 남긴 줄까지. snapshots 는 영구라
         # 날짜 조건으로는 그 줄이 안 잡힌다
         conn.execute("DELETE FROM snapshot_emblems WHERE snapshot_id NOT IN (SELECT DISTINCT snapshot_id FROM snapshot_rows)")
-    return cur.rowcount
+        conn.executemany("INSERT INTO snapshot_meta (snapshot_id, raw_pruned) VALUES (?, 1)"
+                         " ON CONFLICT(snapshot_id) DO UPDATE SET raw_pruned = 1", [(i,) for i in ids])
+        n = cur.rowcount
+        conn.execute("DELETE FROM pick_counted WHERE day < ?", (cutoff[:10],))
+    return n
 
 
 def last_snapshot_at(conn: sqlite3.Connection) -> datetime | None:
@@ -439,7 +513,12 @@ def record_result(conn: sqlite3.Connection, kind: str, now: datetime, message: s
     out = {"disabled": False, "fail_notice": False}
     if kind == "ok":
         _set_state(conn, fail_count=0, block_rounds=0, retry_at="", last_success_at=_iso(now),
-                   last_result=kind, last_message="")
+                   last_result=kind, last_message="", same_since="")
+        return out
+    if kind == "same":
+        # 넥슨 데이터가 안 바뀌었다(U3 — 점검 등) — 세지 않고, 처음 같다고 본 시각만 남긴다([정보] "멈춰 있습니다")
+        _set_state(conn, last_result=kind, last_message=message, **({} if st.get("same_since") else
+                                                                    {"same_since": _iso(now)}))
         return out
     if kind not in ("failed", "blocked"):
         # 연결 안 됨 · 정각 걸침 · 취소 · 잠김 — 세지 않는다(다음 확인에 그냥 다시)
@@ -453,6 +532,7 @@ def record_result(conn: sqlite3.Connection, kind: str, now: datetime, message: s
     out["fail_notice"] = fails >= config.RANK_FAIL_NOTICE_ROUNDS
     if blocks >= config.RANK_BLOCK_ROUNDS:
         set_enabled(conn, False, "blocked")
+        _set_state(conn, same_since="")
         try:
             config.set_rank_collect(False)
         except OSError:
@@ -462,7 +542,12 @@ def record_result(conn: sqlite3.Connection, kind: str, now: datetime, message: s
 
 
 def is_due(conn: sqlite3.Connection, now: datetime) -> bool:
-    """간격(실패 중이면 늘어난 대기)이 지났나."""
+    """간격(실패 중이면 늘어난 대기)이 지났나.
+
+    간격은 마지막 회차의 **정각**(_hour)부터 INTERVAL − 1시간(2.3.1 2회차 A) — 마지막 시각 + 24시간이면 시작 지터
+    (+5~+50분)가 날마다 쌓여, 정해진 시간에만 켜는 PC 는 하루를 건너뛰었다(연속이 잘린다). 정각으로 내리면 지터가 안
+    쌓이고, −1시간이 1시간 확인의 위상을 흡수해 시작은 앞으로만 움직인다. 데이터 시각(ref_time)은 안 쓴다 —
+    0시대 회차의 기준 시각은 전날 23시라(R2) 상시 PC 를 하루 두 번에 가뒀다(3회차 A·B)."""
     st = get_state(conn)
     if st.get("enabled") == "0":
         return False
@@ -470,7 +555,7 @@ def is_due(conn: sqlite3.Connection, now: datetime) -> bool:
     if retry and now < datetime.fromisoformat(retry):
         return False
     last = last_snapshot_at(conn)
-    return last is None or now >= last + timedelta(hours=config.RANK_COLLECT_INTERVAL_H)
+    return last is None or now >= _hour(last) + timedelta(hours=config.RANK_COLLECT_INTERVAL_H - 1)
 
 
 def _hour(dt: datetime) -> datetime:
@@ -538,7 +623,11 @@ class Cancelled(Exception):
 
 
 class Straddle(Exception):
-    """응답 Date 가 두 시각에 걸쳤다 — 넥슨 갱신이 끼었을 수 있어 버린다(실패로 안 센다)."""
+    """넥슨 데이터 기준 시각이 쪽마다 다르다(없으면 응답 Date 가 두 시각에 걸쳤다) — 갱신이 끼어 버린다(실패로 안 센다)."""
+
+
+class SameData(Exception):
+    """1쪽의 기준 시각이 마지막 스냅숏과 같다(U3 — 점검 등으로 안 바뀜) — 나머지 쪽을 안 받는다(실패로 안 센다)."""
 
 
 def _kernel32():
@@ -580,7 +669,14 @@ def _hour_key(date_header: str):
 def run_round(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = None,
               cancel: threading.Event | None = None, progress=None, heartbeat=None
               ) -> tuple[list[ranker.RankRow], int]:
-    """1..pages 쪽을 읽어 판정·겹침 제거까지 → (행, 버린 수). 실패는 예외(RankerError 계열·Straddle·Cancelled).
+    """1..pages 쪽을 읽어 판정·겹침 제거까지 → (행, 버린 수). 실패는 예외(RankerError 계열·Straddle·Cancelled)."""
+    return rows_from_pages(read_pages(fetch, pages, workers, cancel, progress, heartbeat), pages)
+
+
+def read_pages(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = None,
+               cancel: threading.Event | None = None, progress=None, heartbeat=None, last_ref: str | None = None
+               ) -> dict[int, ranker.RankPageResult]:
+    """1쪽을 먼저 혼자 받고(기준 시각이 last_ref 와 같으면 SameData — 나머지 요청 0, U3) 나머지를 나눠 받는다.
 
     첫 실패에서 아직 안 나간 요청을 전부 취소한다 — 이미 버릴 회차에 넥슨 요청을 더 보내지 않게.
     """
@@ -610,8 +706,14 @@ def run_round(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = 
     results: dict[int, ranker.RankPageResult] = {}
     pool = ThreadPoolExecutor(max_workers=workers or config.RANK_COLLECT_WORKERS, initializer=_low_priority, thread_name_prefix="rankcollect")
     try:
-        futs = [pool.submit(one, p) for p in range(1, pages + 1)]
-        for done, fut in enumerate(as_completed(futs), 1):
+        first = pool.submit(one, 1).result()    # 작업자에서 — 1쪽도 낮은 우선순위로
+        if last_ref and first.ref_time == last_ref:
+            raise SameData("넥슨 데이터가 지난 수집 뒤로 갱신되지 않았습니다 — 다음 시각에 다시")
+        results[1] = first
+        if progress:
+            progress(1, pages)
+        futs = [pool.submit(one, p) for p in range(2, pages + 1)]
+        for done, fut in enumerate(as_completed(futs), 2):
             res = fut.result()           # 첫 실패가 여기서 올라와 finally 에서 나머지를 취소한다
             results[res.page] = res
             if cancel is not None and cancel.is_set():
@@ -623,15 +725,29 @@ def run_round(fetch=None, pages: int = ranker.RANK_PAGES, workers: int | None = 
     finally:
         stop.set()
         pool.shutdown(wait=True, cancel_futures=True)
-    return rows_from_pages(results, pages)
+    return results
+
+
+def round_ref(results: dict[int, ranker.RankPageResult]) -> str | None:
+    """회차의 넥슨 기준 시각 — 쪽 전부에 있고 하나일 때만(아니면 None)."""
+    refs = {r.ref_time for r in results.values()}
+    return next(iter(refs)) if len(refs) == 1 and None not in refs else None
 
 
 def rows_from_pages(results: dict[int, ranker.RankPageResult], pages: int
                     ) -> tuple[list[ranker.RankRow], int]:
-    """다 읽은 쪽들 → (행, 버린 수). 정각 걸침은 Straddle, 구조 변경은 RankStructureError."""
-    keys = {k for k in (_hour_key(r.date) for r in results.values() if r.date) if k}
-    if len(keys) > 1:
-        raise Straddle("수집 중에 정각을 넘겼습니다 — 다음 시각에 다시")
+    """다 읽은 쪽들 → (행, 버린 수). 갱신 걸침은 Straddle, 구조 변경은 RankStructureError.
+
+    걸침은 기준 시각이 **전부 있으면 그것끼리**(R3 — 데이터는 정각 + 36분 넘어 바뀌어, 응답 Date 의 시(時)로 가르면
+    07:40~07:50 회차가 두 데이터를 섞어도 통과했다), 하나라도 없으면 지금처럼 Date 의 시로."""
+    refs = [r.ref_time for r in results.values()]
+    if refs and all(refs):
+        if len(set(refs)) > 1:
+            raise Straddle("수집 중에 넥슨 데이터가 갱신됐습니다 — 다음 시각에 다시")
+    else:
+        keys = {k for k in (_hour_key(r.date) for r in results.values() if r.date) if k}
+        if len(keys) > 1:
+            raise Straddle("수집 중에 정각을 넘겼습니다 — 다음 시각에 다시")
     out, prev = [], None
     for p in range(1, pages + 1):
         rows = results[p].rows
@@ -757,27 +873,29 @@ def delete_pending(db_path: Path | str | None = None) -> bool:
 
 
 def read_status(db_path: Path | str | None = None) -> dict:
-    """[정보] 창 표시용 — 마지막 성공·실패 횟수·끈 이유·스냅숏 수. rank.db 가 없으면 빈 dict(만들지 않는다)."""
-    p = Path(db_path) if db_path else config.RANK_DB_PATH
-    if not p.exists():
+    """[정보] 창 표시용 — 마지막 성공·실패 횟수·끈 이유·스냅숏 수 + 메타(meta_status). rank.db 가 없으면 빈 dict.
+    화면 스레드가 부른다 — 읽기 전용으로 연다(만들지도, 스키마를 쓰지도 않는다)."""
+    conn = open_rank_db_ro(db_path)
+    if conn is None:
         return {}
-    conn = open_rank_db(p)
     try:
         st = get_state(conn)
         st["snapshots"] = conn.execute("SELECT COUNT(*) FROM snapshots").fetchone()[0]
-        last = conn.execute("SELECT taken_at, row_count FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
+        last = conn.execute("SELECT id, taken_at, row_count FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
                             ).fetchone()
         if last is not None:
             st["last_taken_at"], st["last_rows"] = last["taken_at"], last["row_count"]
+        st.update(meta_status(conn))
         return st
+    except sqlite3.Error:
+        return {}
     finally:
         conn.close()
 
 
-def set_enabled_at(on: bool, reason: str = "", db_path: Path | str | None = None) -> None:
-    """토글 — .env 와 rank.db 사본을 같이(사본이 D6 끔을 붙잡고 있어 .env 만 켜면 계속 disabled 다).
+def sync_enabled_copy(on: bool, reason: str = "", db_path: Path | str | None = None) -> None:
+    """토글의 rank.db 쪽(켜짐 사본) — 작업 스레드에서(4회차 A: 화면 스레드가 쓰면 메타 처리 뒤에서 15초 굳었다).
     끌 때 rank.db 가 없으면 만들지 않는다."""
-    config.set_rank_collect(on)
     p = Path(db_path) if db_path else config.RANK_DB_PATH
     if not on and not p.exists():
         return
@@ -788,9 +906,16 @@ def set_enabled_at(on: bool, reason: str = "", db_path: Path | str | None = None
         conn.close()
 
 
+def set_enabled_at(on: bool, reason: str = "", db_path: Path | str | None = None) -> None:
+    """토글 — .env 와 rank.db 사본을 같이(사본이 D6 끔을 붙잡고 있어 .env 만 켜면 계속 disabled 다).
+    앱은 .env 는 화면 스레드에서, 사본은 작업 스레드에서 따로(sync_enabled_copy) — 이건 한 번에 하는 터미널·테스트용."""
+    config.set_rank_collect(on)
+    sync_enabled_copy(on, reason, db_path)
+
+
 @dataclass
 class Outcome:
-    kind: str                 # ok · failed · blocked · offline · straddle · cancelled · locked · disabled · fresh
+    kind: str                 # ok · failed · blocked · offline · straddle · same · cancelled · locked · disabled · fresh
     message: str = ""
     snapshot_id: int | None = None
     rows: int = 0
@@ -800,8 +925,9 @@ class Outcome:
 
 def collect(*, db_path: Path | str | None = None, now_fn=datetime.now, fetch=None,
             cancel: threading.Event | None = None, progress=None, ended_season: int | None = None,
-            pages: int = ranker.RANK_PAGES) -> Outcome:
-    """한 회차 수집 — 스위치 확인 → 잠금 → 읽기 → 저장 → 상태 반영. 예약(언제 부를지)은 부르는 쪽."""
+            pages: int = ranker.RANK_PAGES, season_ends: list | None = None) -> Outcome:
+    """한 회차 수집 — 스위치 확인 → 잠금 → 읽기 → 저장 → 상태 반영. 예약(언제 부를지)은 부르는 쪽.
+    season_ends: 사람별 처리의 시즌표(끝난 시즌 종료일들) — None 이면 fifa.db 캐시(낡았으면 다시 받는다)."""
     web, on = config.read_env_switches()
     if config.notice_needed() or not web or not on:
         return Outcome("disabled", "랭킹 수집이 꺼져 있습니다(넥슨 홈페이지 데이터가 꺼져 있으면 잠깁니다)")
@@ -809,12 +935,24 @@ def collect(*, db_path: Path | str | None = None, now_fn=datetime.now, fetch=Non
     if not got:
         return Outcome("cancelled")
     try:
-        return _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, pages, waited)
+        return _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, pages, waited, season_ends)
     finally:
         release_list_read()
 
 
-def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, pages, waited) -> Outcome:
+def _after_save(conn, taken: datetime, lock: CollectLock, cancel=None, season_ends=None) -> None:
+    """스냅숏 커밋 뒤 — 따라가기 ELO → 메타 처리 → 원본 정리 → WAL 비우기. 순서가 뜻이다: 정리를 먼저 하면 미처리
+    원본이 틈이 되고(1회차 A), 따라가기는 지울 원본도 한 번 더 옮길 기회다. 메타 실패는 회차 성공과 무관(다음에 이어서)."""
+    sync_tracked_elo(conn, cancel=cancel)
+    try:
+        process_meta(conn, taken, season_ends=season_ends, cancel=cancel, heartbeat=lock.heartbeat)
+    except sqlite3.Error:
+        pass
+    prune_raw(conn, taken)
+    checkpoint(conn)
+
+
+def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, pages, waited, season_ends=None) -> Outcome:
     conn = open_rank_db(db_path)
     try:
         if get_state(conn).get("enabled") == "0":
@@ -829,17 +967,20 @@ def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, page
             taken = now_fn()
             out = Outcome("ok")
             try:
-                rows, dups = run_round(fetch, pages=pages, cancel=cancel, progress=progress, heartbeat=lock.heartbeat)
-                out.snapshot_id = save_snapshot(conn, rows, taken, dups, ended_season)
+                results = read_pages(fetch, pages, cancel=cancel, progress=progress, heartbeat=lock.heartbeat,
+                                     last_ref=last_ref_time(conn))
+                rows, dups = rows_from_pages(results, pages)
+                out.snapshot_id = save_snapshot(conn, rows, taken, dups, ended_season, round_ref(results))
                 out.rows = len(rows)
-                sync_tracked_elo(conn, cancel=cancel)   # 커밋 뒤 · prune 전(지울 원본도 한 번 더 옮길 기회)
-                prune_raw(conn, taken)
+                _after_save(conn, taken, lock, cancel, season_ends)
                 try:
                     fetch_season_cuts(conn, ended_season, taken, cancel=cancel)
                 except (sqlite3.Error, ranker.RankerError):
                     pass   # 예측용 지난 시즌 컷 — 회차 성공과 무관, 다음 회차가 빠진 시즌만 다시 받는다
             except Cancelled:
                 out = Outcome("cancelled")
+            except SameData as e:
+                out = Outcome("same", str(e))
             except Straddle as e:
                 out = Outcome("straddle", str(e))
             except ranker.RankBlocked as e:
@@ -861,9 +1002,10 @@ def _collect_locked(db_path, now_fn, fetch, cancel, progress, ended_season, page
 
 def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, *,
                     pages: int = ranker.RANK_PAGES, ended_season: int | None = None,
-                    db_path: Path | str | None = None, now_fn=datetime.now) -> Outcome | None:
+                    db_path: Path | str | None = None, now_fn=datetime.now,
+                    season_ends: list | None = None) -> Outcome | None:
     """팀컬러 때문에 500쪽을 다 읽었으면 그걸 스냅숏으로 — 수집이 켜져 있고 간격이 지났을 때만. 목록 읽기 차례
-    (acquire_list_read)를 쥔 채 부른다. 저장 안 했으면 None. 쪽 판정·정각 걸침은 collect 와 같은 규칙."""
+    (acquire_list_read)를 쥔 채 부른다. 저장 안 했으면 None. 쪽 판정·갱신 걸침·안 바뀐 데이터는 collect 와 같은 규칙."""
     web, on = config.read_env_switches()
     if config.notice_needed() or not web or not on:
         return None
@@ -877,6 +1019,9 @@ def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, 
         if not lock.acquire():
             return None
         try:
+            ref = round_ref(results)
+            if ref is not None and ref == last_ref_time(conn):
+                return None                      # 안 바뀐 데이터(U3) — 세지 않는다
             try:
                 rows, dups = rows_from_pages(results, pages)
             except Straddle:
@@ -886,15 +1031,581 @@ def save_from_pages(results: dict[int, ranker.RankPageResult], taken: datetime, 
                 flags = record_result(conn, "failed", now_fn(), out.message)
                 out.disabled_by_block, out.fail_notice = flags["disabled"], flags["fail_notice"]
                 return out
-            out = Outcome("ok", snapshot_id=save_snapshot(conn, rows, taken, dups, ended_season), rows=len(rows))
-            sync_tracked_elo(conn)
-            prune_raw(conn, taken)
+            out = Outcome("ok", snapshot_id=save_snapshot(conn, rows, taken, dups, ended_season, ref), rows=len(rows))
+            _after_save(conn, taken, lock, season_ends=season_ends)
             record_result(conn, "ok", now_fn())
             return out
         finally:
             lock.release()
     finally:
         conn.close()
+
+
+# ── 랭커 메타(2.3.1) — 데이터 시각 · 따라잡기 처리 · 사람별 표 · 지우기 ──────────────────────────────
+# 처리 표시는 snapshot_meta 의 깃발 둘(anon_done · person_done) 한 곳 — 그 처리와 같은 트랜잭션에서 올린다(두 번 세지 않음).
+# 사람별 표는 그 시즌 동안만이고(U1), 수집을 끄거나 동의 전이면 지운다 — 지우기 조건은 표시가 아니라 상태로 판정한다
+# (purge_person_if_needed — 화면 스레드는 rank.db 에 쓰지 않는다). 규칙의 근거는 ROADMAP 2.3.1 각 절.
+
+def data_time(row) -> str:
+    """스냅숏의 데이터 시각 — 넥슨 기준 시각(ref_time), 없으면(옛 버전이 쓴 스냅숏) taken_at. 이번에 새로 만든 읽기는
+    전부 이걸 쓴다. elo_history 는 그대로 taken_at(R15 — 바꾸면 같은 스냅숏이 다른 시각으로 다시 들어가 ux_elo_src 가 못 막는다)."""
+    try:
+        ref = row["ref_time"]
+    except (KeyError, IndexError):
+        ref = None
+    return ref or row["taken_at"]
+
+
+def last_ref_time(conn: sqlite3.Connection) -> str | None:
+    """마지막 스냅숏의 넥슨 기준 시각 — 없으면 None(옛 버전이 썼거나 페이지에 없었다)."""
+    row = conn.execute("SELECT m.ref_time FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
+                       " ORDER BY s.taken_at DESC, s.id DESC LIMIT 1").fetchone()
+    return row[0] if row else None
+
+
+def _put_state(conn: sqlite3.Connection, **kv) -> None:
+    """부르는 쪽 트랜잭션 안에서(_set_state 는 스스로 커밋한다)."""
+    conn.executemany("INSERT INTO collect_state (key, value) VALUES (?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                     [(k, None if v is None else str(v)) for k, v in kv.items()])
+
+
+def _json_state(st: dict, key: str):
+    try:
+        return json.loads(st.get(key) or "null")
+    except ValueError:
+        return None
+
+
+def _hours(a: str, b: str) -> float:
+    return (datetime.fromisoformat(b) - datetime.fromisoformat(a)).total_seconds() / 3600
+
+
+def _day_after(at: str) -> str:
+    return (datetime.fromisoformat(at).date() + timedelta(days=1)).isoformat()
+
+
+# 시즌표 — fifa.db 캐시. 테스트가 바꿔 끼운다(네트워크 없이)
+def _fetch_seasons():
+    import seasons
+    return seasons.fetch_seasons()
+
+
+def load_season_ends(fifa_path: Path | str | None = None, refresh: bool = True) -> list[str]:
+    """끝난 시즌 종료일(ISO 날짜, 오름차순) — fifa.db 시즌표 캐시. 캐시가 SEASON_TTL 보다 낡았으면 먼저 다시 받는다
+    (3회차 A·B — 창을 만들 때 한 번만 읽던 시즌표가 트레이 상주면 며칠 낡아 새 시즌 값이 옛 줄에 이어 쓰였다).
+    작업 스레드에서만. 실패하면 캐시 그대로, 캐시도 없으면 [] (사람별 시즌은 season_seq 신호로만)."""
+    try:
+        fconn = store.open_db(fifa_path or config.DB_PATH)
+    except sqlite3.Error:
+        return []
+    try:
+        if refresh and config.WEB_DATA and store.seasons_stale(fconn):
+            try:
+                store.save_seasons(fconn, _fetch_seasons())
+            except Exception:
+                pass
+        return sorted({s.end.isoformat() for s in store.load_seasons(fconn)})
+    except sqlite3.Error:
+        return []
+    finally:
+        fconn.close()
+
+
+def season_start_of(ends: list, when: str) -> str | None:
+    """그 시각이 든 시즌의 시작일 — 앞 시즌 종료일 == 다음 시즌 시작일(seasons.py). 모르면 None."""
+    d = when[:10]
+    starts = [str(e)[:10] for e in ends or () if str(e)[:10] <= d]
+    return max(starts) if starts else None
+
+
+def _pending(conn: sqlite3.Connection, person: bool) -> list[dict]:
+    """처리할 스냅숏 — 원본이 남았고 깃발이 0 이거나 meta 줄이 없는 것, 데이터 시각 순. 동의 전엔 person 대상을 안 고른다."""
+    cond = "m.snapshot_id IS NULL OR m.anon_done = 0" + (" OR m.person_done = 0" if person else "")
+    out = [dict(r) for r in conn.execute(
+        "SELECT s.id, s.taken_at, s.season_seq, m.ref_time, m.snapshot_id AS has_meta, m.anon_done, m.person_done"
+        " FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
+        f" WHERE ({cond}) AND EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)")]
+    for r in out:
+        r["dt"] = data_time(r)
+    out.sort(key=lambda r: (r["dt"], r["id"]))
+    return out
+
+
+def _anon_one(conn: sqlite3.Connection, s: dict) -> None:
+    """익명 집계 — 점수 분포(B5). 옛 버전이 쓴 스냅숏이면 meta 줄도 이때(ref_time NULL)."""
+    bins: Counter = Counter()
+    ranks = set()
+    for rank, elo in conn.execute("SELECT rank, elo FROM snapshot_rows WHERE snapshot_id = ?", (s["id"],)):
+        ranks.add(rank)
+        if elo is not None:
+            bins[int(elo // config.RANK_ELO_BIN) * config.RANK_ELO_BIN] += 1
+    gaps = (max(ranks) - len(ranks)) if ranks else 0
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO snapshot_meta (snapshot_id, rank_gaps) VALUES (?, ?)", (s["id"], gaps))
+        conn.execute("DELETE FROM elo_hist WHERE snapshot_id = ?", (s["id"],))
+        conn.executemany("INSERT INTO elo_hist (snapshot_id, bin, n) VALUES (?, ?, ?)",
+                         [(s["id"], b, n) for b, n in sorted(bins.items())])
+        conn.execute("UPDATE snapshot_meta SET anon_done = 1 WHERE snapshot_id = ?", (s["id"],))
+
+
+def _mark_person(conn: sqlite3.Connection, sid: int) -> None:
+    conn.execute("INSERT INTO snapshot_meta (snapshot_id, person_done) VALUES (?, 1)"
+                 " ON CONFLICT(snapshot_id) DO UPDATE SET person_done = 1", (sid,))
+
+
+def _season_verdict(ps: dict, seq: int, start: str | None) -> tuple[str, str]:
+    """사람별 표의 시즌 — 신호 둘(season_seq · 시즌표 시작일)을 **같은 출처끼리 숫자·날짜로**(3회차 A·B: 섞어 문자열로
+    비교하면 시즌표를 처음 받는 날 전부 '더 옛것'이 됐다). → (판정, 넘긴 신호).
+    판정: same · older(건너뜀) · roll(넘김) · update(같은 넘김의 늦은 신호 — 값만 받아 적는다)."""
+    pseq, pstart = int(ps.get("seq") or 0), ps.get("start")
+    both = bool(start and pstart)
+    if seq < pseq or (both and start < pstart):
+        return "older", ""
+    seq_up, start_up = seq > pseq, both and start > pstart
+    if seq_up and start_up:
+        return "roll", "both"
+    if seq_up:
+        if ps.get("via") == "start" and both and start == pstart:
+            return "update", ""        # 시즌표로 먼저 넘겼다 — 다음 저장의 ended_season 이 seq 를 따라 올렸다
+        return "roll", "seq"
+    if start_up:
+        if ps.get("via") == "seq" and start <= _day_after(ps["at"]):
+            return "update", ""        # seq 로 먼저 넘겼다 — 시즌표가 늦게 따라왔다(4회차 A: 고정 7일은 8일 넘게 늦으면 틀렸다)
+        return "roll", "start"
+    if start and not pstart:
+        return "update", ""            # 한쪽 시작일이 없으면 seq 로만 판정 — 이제 알게 된 시작일만 적는다
+    return "same", ""
+
+
+def _roll(conn: sqlite3.Connection) -> None:
+    """시즌 넘김 — 옛 시즌 사람별 줄을 번호 없는 줄로 옮기고 지운다(부르는 쪽 트랜잭션 안). 열린 연속은 잘림으로 닫는다."""
+    conn.execute("INSERT INTO elo_season_done (season_at, peak, max_dd, last_elo)"
+                 " SELECT season_at, peak, max_dd, last_elo FROM elo_season")
+    conn.execute("INSERT INTO run_done (season_at, hours, censored_start, censored_end)"
+                 " SELECT season_at, (julianday(last_at) - julianday(start_at)) * 24, censored_start, 1 FROM run_open")
+    for t in PERSON_TABLES:
+        conn.execute(f"DELETE FROM {t}")
+    conn.execute("DELETE FROM collect_state WHERE key = 'person_prev'")
+
+
+def _late(first_at: str, start: str | None) -> int:
+    """N12 — 시즌 시작일보다 N12_START_DAYS 넘게 뒤에 처음 봤나(1회차 A: 앱이 본 첫 스냅숏과 비교하면 시즌 중간에 켠
+    사람의 첫날이 '온전'이 됐다). 시즌표를 모르면 1."""
+    if not start:
+        return 1
+    return int(datetime.fromisoformat(first_at) > datetime.fromisoformat(start) + timedelta(days=config.N12_START_DAYS))
+
+
+def _person_apply(conn: sqlite3.Connection, sid: int, t: str, ps: dict, prev: dict | None) -> None:
+    """스냅숏 하나를 사람별 표에 — N3 슈챔 연속 · N11 최고점·낙폭 · N12 첫 챔스(부르는 쪽 트랜잭션 안).
+    연속은 날짜가 아니라 경과 시간(1회차 A — 간격 24시간 + 지터라 매일 켜도 달력 날짜가 빈다)."""
+    season_at = ps["at"]
+    rows = conn.execute("SELECT profile_sn, grade, elo, win, draw, lose, team_value FROM snapshot_rows"
+                        " WHERE snapshot_id = ?", (sid,)).fetchall()
+    prev_grade = None
+    if prev is not None and 0 < _hours(prev["at"], t) <= config.RANK_CONT_MAX_H:
+        prev_grade = {r[0]: r[1] for r in conn.execute(
+            "SELECT profile_sn, grade FROM snapshot_rows WHERE snapshot_id = ?", (prev["sid"],))} or None
+    cont = prev_grade is not None       # 앞 원본이 없으면(옛 버전만 14일 넘게 돈 사이 지워짐) 틈
+    # N3 — 등급 0(슈퍼챔피언스, R5) 연속
+    open_ = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
+        "SELECT profile_sn, start_at, last_at, censored_start FROM run_open WHERE season_at = ?", (season_at,))}
+    cur0 = {r["profile_sn"] for r in rows if r["grade"] == 0}
+    closes = [(sn, a, b, cs) for sn, (a, b, cs) in open_.items() if not cont or sn not in cur0]
+    conn.executemany("INSERT INTO run_done (season_at, hours, censored_start, censored_end) VALUES (?, ?, ?, ?)",
+                     [(season_at, _hours(a, b), cs, 0 if cont else 1) for _sn, a, b, cs in closes])
+    conn.executemany("DELETE FROM run_open WHERE season_at = ? AND profile_sn = ?", [(season_at, c[0]) for c in closes])
+    conn.executemany("UPDATE run_open SET last_at = ? WHERE season_at = ? AND profile_sn = ?",
+                     [(t, season_at, sn) for sn in cur0 if cont and sn in open_])
+    # 앞에서도 0 이었는데 열린 줄이 없으면(어긋난 상태) 시작을 모른다 — 잘림(2회차 A: 조용히 빠졌다)
+    conn.executemany("INSERT OR REPLACE INTO run_open (season_at, profile_sn, start_at, last_at, censored_start)"
+                     " VALUES (?, ?, ?, ?, ?)",
+                     [(season_at, sn, t, t, 1 if (not cont or prev_grade.get(sn) == 0) else 0)
+                      for sn in cur0 if not (cont and sn in open_)])
+    # N11 — 1만 위 안에서 본 값만(밖 구간은 안 보여 낙폭이 실제보다 얕다). SET 의 오른쪽은 전부 옛 값을 본다
+    conn.executemany(
+        "INSERT INTO elo_season (season_at, profile_sn, peak, peak_at, max_dd, last_elo, last_at) VALUES (?, ?, ?, ?, 0, ?, ?)"
+        " ON CONFLICT(season_at, profile_sn) DO UPDATE SET"
+        " peak_at = CASE WHEN excluded.peak > peak THEN excluded.peak_at ELSE peak_at END,"
+        " max_dd = MAX(max_dd, MAX(peak, excluded.peak) - excluded.last_elo),"
+        " peak = MAX(peak, excluded.peak), last_elo = excluded.last_elo, last_at = excluded.last_at",
+        [(season_at, r["profile_sn"], r["elo"], t, r["elo"], t) for r in rows if r["elo"] is not None])
+    # N12 — 챔스(등급 ≤ 1) 처음 닿은 판수. 상태: 0 처음 볼 때 이미 챔스 · 1 보는 중 · 2 기록함 · 3 틈(제외)
+    watch = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
+        "SELECT profile_sn, first_at, last_at, state FROM champ_watch WHERE season_at = ?", (season_at,))}
+    firsts, upd = [], []
+    for r in rows:
+        sn = r["profile_sn"]
+        champ = r["grade"] is not None and r["grade"] <= 1
+        w = watch.get(sn)
+        if w is None:
+            upd.append((season_at, sn, t, t, 0 if champ else 1))
+            continue
+        first_at, last_at, state = w
+        if state == 1:
+            if not cont or last_at != prev["at"]:
+                state = 3                  # 틈이거나, 그 사이 목록에서 빠졌다 들어왔다 — 처음 닿은 때를 모른다
+            elif champ:
+                games = (r["win"] or 0) + (r["draw"] or 0) + (r["lose"] or 0)
+                firsts.append((season_at, games, r["team_value"], t, _late(first_at, ps.get("start"))))
+                state = 2
+        upd.append((season_at, sn, first_at, t, state))
+    conn.executemany("INSERT INTO champ_first (season_at, games, team_value, at, first_seen_late) VALUES (?, ?, ?, ?, ?)",
+                     firsts)
+    conn.executemany("INSERT OR REPLACE INTO champ_watch (season_at, profile_sn, first_at, last_at, state)"
+                     " VALUES (?, ?, ?, ?, ?)", upd)
+
+
+def _person_one(conn: sqlite3.Connection, s: dict, ends: list, on_at: str | None) -> str:
+    """스냅숏 하나의 사람별 처리 — 시즌 판정 → (넘김) → 적용 → 상태·깃발, 전부 한 트랜잭션. → 판정."""
+    sid, t = s["id"], s["dt"]
+    start = season_start_of(ends, t)
+    st = get_state(conn)
+    ps, prev = _json_state(st, "person_season"), _json_state(st, "person_prev")
+    with conn:
+        if prev and t <= prev["at"]:
+            verdict, via = "older", ""   # 데이터 시각이 앞에 처리한 것보다 앞섰다(2회차 A — 경과 시간이 음수가 됐다)
+        elif ps is None:
+            verdict, via = "init", "init"
+        else:
+            verdict, via = _season_verdict(ps, int(s["season_seq"]), start)
+        if verdict == "older":
+            _mark_person(conn, sid)
+            return verdict
+        if verdict in ("init", "roll"):
+            if verdict == "roll":
+                _roll(conn)
+            ps, prev = {"seq": int(s["season_seq"]), "start": start, "at": t, "via": via}, None
+        elif verdict == "update":
+            ps = {**ps, "seq": max(int(ps.get("seq") or 0), int(s["season_seq"])),
+                  "start": start or ps.get("start"), "via": "both"}
+        _person_apply(conn, sid, t, ps, prev)
+        _put_state(conn, person_season=json.dumps(ps), person_prev=json.dumps({"sid": sid, "at": t}),
+                   person_epoch=on_at or "")
+        _mark_person(conn, sid)
+    return verdict
+
+
+def _roll_if_due(conn: sqlite3.Connection, now: datetime, ends: list) -> bool:
+    """새 스냅숏 없이 시즌을 넘겨야 하나(앱 켤 때 · 회차 끝) — 시즌 뒤 앱만 켜고 수집이 실패하는 경우.
+    시즌표가 없으면 앞 처리가 ELO_FALLBACK_DAYS 넘게 지났을 때(seq 는 스냅숏이 있으면 늘 있어 '둘 다 없음'은 없다). → 넘겼나."""
+    st = get_state(conn)
+    ps = _json_state(st, "person_season")
+    if ps is None:
+        return False
+    now_iso = _iso(now)
+    start = season_start_of(ends, now_iso)
+    with conn:
+        if start and ps.get("start") and start > ps["start"]:
+            if ps.get("via") == "seq" and start <= _day_after(ps["at"]):
+                _put_state(conn, person_season=json.dumps({**ps, "start": start, "via": "both"}))
+                return False
+            _roll(conn)
+            _put_state(conn, person_season=json.dumps({"seq": ps.get("seq"), "start": start, "at": now_iso,
+                                                       "via": "start"}))
+            return True
+        if not ends:
+            prev = _json_state(st, "person_prev")
+            if prev and now - datetime.fromisoformat(prev["at"]) > timedelta(days=config.ELO_FALLBACK_DAYS):
+                _roll(conn)
+                _put_state(conn, person_season=json.dumps({"seq": ps.get("seq"), "start": None, "at": now_iso,
+                                                           "via": "fallback"}))
+                return True
+    return False
+
+
+def _has_person(conn: sqlite3.Connection, st: dict) -> bool:
+    if any(st.get(k) for k in PERSON_STATE):
+        return True
+    for t in PERSON_TABLES:     # 생성식 안에서 부르면 SQL 계획 검사(test_rules)가 이 함수로 못 센다
+        if conn.execute(f"SELECT 1 FROM {t} LIMIT 1").fetchone():
+            return True
+    return False
+
+
+def purge_person_if_needed(conn: sqlite3.Connection) -> bool:
+    """사람별 표 지우기 — 표시가 아니라 **상태로** 판정한다(3회차: 화면 스레드가 표시를 쓰면 굳고, 못 쓰면 다시 할 길이
+    없었다). ① 꺼짐·동의 전(디스크에서 다시)인데 사람별 줄이 있다 ② 수집을 켠 시각(.env)이 사람별 처리 때와 다르다
+    (껐다 켠 사이를 이어진 것으로 읽지 않게 — 2회차 B). 둘 다 없음 = 같음(옛 버전에서 켠 업그레이드 사용자).
+    수집 잠금(CollectLock) 안에서 부른다. 꺼져 있으면 '멈춰 있음'(same_since)도 지운다. → 지운 게 있었나."""
+    _web, on = config.read_env_switches()
+    allowed = config.read_person_allowed()
+    on_at = config.read_rank_on_at()
+    st = get_state(conn)
+    has = _has_person(conn, st)
+    if not on and st.get("same_since"):
+        _set_state(conn, same_since="")
+    if not ((not allowed and has) or (allowed and (st.get("person_epoch") or None) != on_at)):
+        return False
+    with conn:
+        for t in PERSON_TABLES:
+            conn.execute(f"DELETE FROM {t}")
+        conn.execute(f"DELETE FROM collect_state WHERE key IN ({','.join('?' * len(PERSON_STATE))})", PERSON_STATE)
+        if allowed:
+            _put_state(conn, person_epoch=on_at or "")
+    return has
+
+
+def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list | None = None,
+                 fifa_path: Path | str | None = None, cancel: threading.Event | None = None, heartbeat=None) -> dict:
+    """따라잡기 처리 — 지우기 조건 → 익명 집계(B5, 동의 무관) → 사람별(N3·N11·N12, 동의 뒤) → 스냅숏 없는 시즌 넘김.
+    스냅숏 하나 = 한 트랜잭션(깃발 같이). 수집 잠금 안에서 부른다(저장 커밋 뒤 · 앱 켤 때 작업 스레드).
+    사람별 직전마다 켜짐·동의를 디스크에서 다시 읽는다 — 처리 중에 끄면 거기서 멈춘다(1회차 A·B)."""
+    out = {"purged": purge_person_if_needed(conn), "anon": 0, "person": 0, "rolled": False}
+
+    def stopped():
+        return cancel is not None and cancel.is_set()
+
+    allowed = config.read_person_allowed()
+    snaps = _pending(conn, person=allowed)
+    for s in snaps:
+        if stopped():
+            return out
+        if not s["has_meta"] or not s["anon_done"]:
+            _anon_one(conn, s)
+            out["anon"] += 1
+            if heartbeat:
+                heartbeat()
+    if not allowed:
+        return out
+    ends = season_ends if season_ends is not None else load_season_ends(fifa_path)
+    on_at = config.read_rank_on_at()
+    for s in snaps:
+        if s.get("person_done"):
+            continue
+        if stopped() or not config.read_person_allowed():
+            return out
+        _person_one(conn, s, ends, on_at)
+        out["person"] += 1
+        if heartbeat:
+            heartbeat()
+    out["rolled"] = _roll_if_due(conn, now, ends)
+    return out
+
+
+def checkpoint(conn: sqlite3.Connection) -> bool:
+    """WAL 비우기(TRUNCATE) — 지운 줄이 -wal 프레임에 남지 않게(1회차 B). 화면의 읽기 연결 등으로 막히면(busy)
+    다음 1시간 확인에 다시(ckpt_pending · 이어진 실패 수 ckpt_fail). → 비웠나."""
+    try:
+        busy = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]
+    except sqlite3.Error:
+        busy = 1
+    st = get_state(conn)
+    want = {"ckpt_pending": "1" if busy else "0", "ckpt_fail": str(_int(st, "ckpt_fail") + 1 if busy else 0)}
+    if any((st.get(k) or "0") != v for k, v in want.items()):
+        _set_state(conn, **want)
+    return not busy
+
+
+def vacuum_if_needed(conn: sqlite3.Connection, now: datetime) -> bool:
+    """secure_delete 없이 지운 흔적이 있을 때만 VACUUM — 원본이 없는데 raw_pruned 가 아닌 스냅숏(업그레이드 전 ·
+    옛 버전으로 되돌렸던 사이에 지워진 것). freelist 로 재면 새 prune_raw 뒤 늘 참이라 켤 때마다 전체 재작성이 된다(2회차).
+    실패(잠김)는 하루 한 번만 다시. → 했나."""
+    ids = [r[0] for r in conn.execute(
+        "SELECT s.id FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
+        " WHERE COALESCE(m.raw_pruned, 0) = 0 AND NOT EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)")]
+    if not ids:
+        return False
+    today = now.date().isoformat()
+    if get_state(conn).get("vacuum_tried_on") == today:
+        return False
+    try:
+        conn.commit()
+        conn.execute("VACUUM")
+    except sqlite3.Error:
+        _set_state(conn, vacuum_tried_on=today)
+        return False
+    with conn:
+        conn.executemany("INSERT INTO snapshot_meta (snapshot_id, raw_pruned) VALUES (?, 1)"
+                         " ON CONFLICT(snapshot_id) DO UPDATE SET raw_pruned = 1", [(i,) for i in ids])
+    return True
+
+
+def maintenance(db_path: Path | str | None = None, now_fn=datetime.now, *, vacuum: bool = False,
+                season_ends: list | None = None, cancel: threading.Event | None = None) -> dict:
+    """작업 스레드의 정리 한 번 — 앱 켤 때(vacuum=True) · 1시간 확인 · 끄는 길 · 동의 직후. 수집 잠금 안에서
+    지우기 조건 → 메타 처리 → 원본 정리(수집이 꺼져 있어도 — R12) → (VACUUM) → WAL 비우기.
+    rank.db 가 없으면 아무것도 안 한다(만들지 않는다). 잠금을 못 잡으면 {"locked": True} — 다음 확인이 같은 조건을 다시 본다."""
+    conn = open_rank_db_existing(db_path)
+    if conn is None:
+        return {"missing": True}
+    try:
+        lock = CollectLock(conn, now_fn)
+        try:
+            if not lock.acquire():
+                return {"locked": True}
+        except sqlite3.Error:
+            return {"locked": True}
+        try:
+            now = now_fn()
+            out = process_meta(conn, now, season_ends=season_ends, cancel=cancel, heartbeat=lock.heartbeat)
+            out["pruned"] = prune_raw(conn, now)
+            if vacuum:
+                out["vacuumed"] = vacuum_if_needed(conn, now)
+            out["checkpoint"] = checkpoint(conn)
+            return out
+        finally:
+            lock.release()
+    except sqlite3.Error as e:
+        return {"error": str(e)}
+    finally:
+        conn.close()
+
+
+# ── 랭커 메타 읽기(화면 — 읽기 전용 연결) ─────────────────────────────────────
+
+def _season_snaps(conn: sqlite3.Connection) -> list[dict]:
+    """지금 시즌(마지막 season_seq) 스냅숏 — 데이터 시각 순."""
+    out = [dict(r) for r in conn.execute(
+        "SELECT s.id, s.taken_at, s.season_seq, m.ref_time FROM snapshots s LEFT JOIN snapshot_meta m"
+        " ON m.snapshot_id = s.id WHERE s.season_seq ="
+        " (SELECT season_seq FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1)")]
+    for r in out:
+        r["dt"] = data_time(r)
+    out.sort(key=lambda r: (r["dt"], r["id"]))
+    return out
+
+
+def _nearest(snaps: list[dict], target: datetime, within: timedelta) -> dict | None:
+    best = min(snaps, key=lambda s: abs(datetime.fromisoformat(s["dt"]) - target), default=None)
+    if best is None or abs(datetime.fromisoformat(best["dt"]) - target) > within:
+        return None
+    return best
+
+
+@dataclass
+class MetaRow:
+    key: str                # "" = 팀컬러 안 씀 · 포메이션 모름
+    now_n: int
+    now_pct: float
+    then_n: int
+    then_pct: float
+    diff_pp: float
+    thin: bool              # 두 시점 다 META_MIN_USERS 명 미만 — 흐림
+
+
+@dataclass
+class MetaTrend:
+    now_at: str | None = None
+    then_at: str | None = None
+    days: float | None = None            # 실제로 비교한 일수(제목 "N일 전 대비")
+    rows: dict = field(default_factory=dict)   # "team_color" · "formation" → [MetaRow] 변화 내림차순
+    collecting: bool = True              # 비교할 스냅숏이 아직 없다("모으는 중")
+
+
+def meta_trend(conn: sqlite3.Connection | None, tier: int, days: int = 7) -> MetaTrend:
+    """B1 — 팀컬러·포메이션 비율의 변화. 기준 = 마지막 스냅숏, 비교 = 같은 시즌에서 데이터 시각이 days 일 전에 가장
+    가까운 것(±1일). 없으면 그 시즌 가장 오래된 것이 3일 이상 전이면 그것(실제 일수를 제목에), 3일도 안 되면 표 없음.
+    영구 집계(tier_counts)만 읽는다."""
+    out = MetaTrend()
+    if conn is None:
+        return out
+    snaps = _season_snaps(conn)
+    if len(snaps) < 2:
+        return out
+    base = snaps[-1]
+    base_t = datetime.fromisoformat(base["dt"])
+    older = snaps[:-1]
+    then = _nearest(older, base_t - timedelta(days=days), timedelta(days=1))
+    if then is None and base_t - datetime.fromisoformat(older[0]["dt"]) >= timedelta(days=3):
+        then = older[0]
+    if then is None:
+        return out
+    out.collecting = False
+    out.now_at, out.then_at = base["dt"], then["dt"]
+    out.days = (base_t - datetime.fromisoformat(then["dt"])).total_seconds() / 86400
+    counts: dict[tuple[int, str], dict[str, int]] = {}
+    for sid, kind, key, n in conn.execute(
+            "SELECT snapshot_id, kind, key, n FROM tier_counts WHERE snapshot_id IN (?, ?) AND tier = ?",
+            (base["id"], then["id"], tier)):
+        counts.setdefault((sid, kind), {})[key] = n
+    for kind in ("team_color", "formation"):
+        a, b = counts.get((base["id"], kind), {}), counts.get((then["id"], kind), {})
+        ta, tb = sum(a.values()), sum(b.values())
+        rows = []
+        for key in set(a) | set(b):
+            na, nb = a.get(key, 0), b.get(key, 0)
+            pa = na * 100 / ta if ta else 0.0
+            pb = nb * 100 / tb if tb else 0.0
+            rows.append(MetaRow(key, na, pa, nb, pb, pa - pb,
+                                na < config.META_MIN_USERS and nb < config.META_MIN_USERS))
+        rows.sort(key=lambda r: (-r.diff_pp, r.key))
+        out.rows[kind] = rows
+    return out
+
+
+@dataclass
+class EloHist:
+    now_at: str | None = None
+    bins: dict = field(default_factory=dict)       # 칸 왼쪽 끝 ELO → 인원(마지막 스냅숏)
+    cmp_at: str | None = None
+    cmp: dict = field(default_factory=dict)        # 비교 스냅숏 — 없으면 {}
+    cuts: dict = field(default_factory=dict)       # 순위 → ELO (200 · 1,000 — 막대 스냅숏)
+    season_first_at: str | None = None             # 지금 시즌 첫 스냅숏 데이터 시각(검색 ELO 선을 고를 때)
+    bin_width: int = config.RANK_ELO_BIN
+
+
+def elo_hist_series(conn: sqlite3.Connection | None, compare: str = "7d") -> EloHist:
+    """B5 — 마지막 스냅숏의 점수 분포 + 비교 선 하나(compare: "7d" · "season"(시즌 첫 스냅숏) · "none")."""
+    out = EloHist()
+    if conn is None:
+        return out
+    have = {r[0] for r in conn.execute("SELECT DISTINCT snapshot_id FROM elo_hist")}
+    snaps = [s for s in _season_snaps(conn) if s["id"] in have]
+    if not snaps:
+        return out
+    base = snaps[-1]
+    out.now_at, out.season_first_at = base["dt"], snaps[0]["dt"]
+    cmp = None
+    if compare == "7d" and len(snaps) > 1:
+        cmp = _nearest(snaps[:-1], datetime.fromisoformat(base["dt"]) - timedelta(days=7), timedelta(days=1))
+    elif compare == "season" and len(snaps) > 1:
+        cmp = snaps[0]
+    ids = (base["id"],) + ((cmp["id"],) if cmp else ())
+    for sid, b, n in conn.execute(f"SELECT snapshot_id, bin, n FROM elo_hist WHERE snapshot_id IN ({','.join('?' * len(ids))})",
+                                  ids):
+        (out.bins if sid == base["id"] else out.cmp)[b] = n
+    if cmp:
+        out.cmp_at = cmp["dt"]
+    out.cuts = {r: e for r, e in cut_elo(conn, base["id"]).items() if r in config.ELO_CUT_LINES and e is not None}
+    return out
+
+
+def elo_marker(rows: list[dict], hist: EloHist) -> tuple[float, str] | None:
+    """점수 분포 위 검색 계정의 세로선 — fifa.db elo_history 중 **지금 시즌이고 막대 스냅숏 데이터 시각 ±1일 안**의
+    가장 가까운 값(1회차 B: 몇 주 전·지난 시즌 값이 지금 분포 위에 그려졌다). → (ELO, 기록 시각) 또는 None."""
+    if not hist.now_at:
+        return None
+    base = datetime.fromisoformat(hist.now_at)
+    first = hist.season_first_at or hist.now_at
+    best = None
+    for r in rows or ():
+        at, elo = r.get("taken_at"), r.get("elo")
+        if not at or elo is None or at < first[:10]:
+            continue
+        gap = abs(datetime.fromisoformat(at) - base)
+        if gap <= timedelta(days=1) and (best is None or gap < best[0]):
+            best = (gap, float(elo), at)
+    return (best[1], best[2]) if best else None
+
+
+def meta_status(conn: sqlite3.Connection) -> dict:
+    """[정보] 수집 상태용 — 마지막 스냅숏의 기준 시각·빈 순위 · 쌓는 중인 수. 새 표가 없는 DB(옛 버전이 만든 채 아직
+    새 버전 작업 스레드가 안 연 것)면 빈 값."""
+    out: dict = {}
+    try:
+        r = conn.execute("SELECT m.ref_time, m.rank_gaps FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
+                         " ORDER BY s.taken_at DESC, s.id DESC LIMIT 1").fetchone()
+        if r is not None:
+            out["meta_ref"], out["meta_gaps"] = r[0], r[1]
+        out["n_runs"] = sum(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("run_open", "run_done"))
+        out["n_peak"] = conn.execute("SELECT COUNT(*) FROM elo_season").fetchone()[0]
+        out["n_first"] = conn.execute("SELECT COUNT(*) FROM champ_first").fetchone()[0]
+        out["n_pick_days"] = conn.execute("SELECT COUNT(*) FROM (SELECT day FROM pick_days GROUP BY day)").fetchone()[0]
+    except sqlite3.Error:
+        pass
+    return out
 
 
 def _main(argv: list[str]) -> int:
