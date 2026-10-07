@@ -39,6 +39,7 @@ from squad_timeline import (
     HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, build_timeline, parse_trades,
 )
 from trade_book import Ledger, ledger, price_targets
+from traitcollect import TraitSlot, TraitUsage, trait_usage
 from stats import (
     END_KINDS, MIN_BUCKET_SHOTS, PITCH_ROWS, SquadValue, card_ovr, pitch_rows, squad_value, KeyPlayers, key_players, PASS_KINDS, PASS_MIN_TRIES, PERIODS, PLAYER_RATING_MIN_GAMES, PLAYER_TREND_MIN_SHOTS, RANKER_METRICS,
     SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET, SUB_POSITION, SUPER_CHAMPION_DIVISION_ID,
@@ -62,6 +63,8 @@ __all__ = [
     "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
     "PickCard", "PickSummary", "ranker_pick_summary",
+    # traitcollect — 포지션 특성 집계(32단계). 받기(traitcollect.run)는 로더가 부른다
+    "TraitSlot", "TraitUsage", "trait_usage",
     # rankerpick — 11-lite 추천(17단계) · rankcollect — 랭킹 추이(P2, rank.db 영구 집계)
     "SRC_OPP", "SRC_PICK", "SRC_RECOMMEND", "RecCard", "Recommend", "Standing", "my_team_color", "recommend",
     "recommend_candidates", "RankTrend", "rank_trend_series",

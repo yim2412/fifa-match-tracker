@@ -883,6 +883,107 @@ def test_trait_disk_budget():
     assert size < 15 * 1024 * 1024, size
 
 
+# ── 집계([포지션 특성] 탭) ─────────────────────────────────────────────────────
+
+def _put(conn, sn, cards, *, formation="4-2-3-1", state="ok", day=None, rank=1):
+    """cards = [(자리, (일반, 신규, 훈련), 코치 | None)] — 집계가 보는 칸만 지어낸다."""
+    body = [[900000 + i, pos, 11, list(tr), list(co) if co is not None else None] for i, (pos, tr, co) in enumerate(cards)]
+    store.save_trait_squad(conn, sn, source=store.PICK, rank=rank, match_id=f"m{sn}", formation=formation, team="1-0",
+                           body=body if state == "ok" else None, state=state, collect_on_at=ON_AT,
+                           match_day=(day or TODAY).isoformat(), checked_at=f"{TODAY.isoformat()}T10:00:00")
+
+
+def test_trait_tiers_match_ranges():
+    assert config.TRAIT_TIERS[0] == config.RANKER_PICK_TOP and config.TRAIT_TIERS[-1] == config.TRAIT_TOP
+
+
+def test_trait_usage_counts_whole_position():
+    """분모 = 그 포지션 선수 전부(잠긴 칸 포함 — U5) · 코치는 한 선수 안 같은 코치를 한 번만 · 포지션은 공격 → GK."""
+    conn = store.open_db(":memory:")
+    _put(conn, 1, [(0, (28, -1, -2), None), (25, (28, 55, 13), (2, 2, 12))])   # GK 를 먼저 — 저장 순서가 아니라 줄 순서로
+    _put(conn, 2, [(25, (28, -2, -2), None), (0, (-1, -2, -2), (12, -1, -1))])
+    u = tc.trait_usage(conn, [{"profile_sn": 1, "rank": 1}, {"profile_sn": 2, "rank": 2}], today=TODAY)
+    assert u.used == 2 and u.formation == "4-2-3-1" and u.people == 2, u
+    assert [s.position for s in u.slots] == [25, 0], "공격이 위, GK 가 아래여야"
+    st = u.slots[0]
+    assert st.players == 2
+    n28, n55, c2, c12 = (tcodes.name_of("normal", 28), tcodes.name_of("new", 55),
+                         tcodes.name_of("coach", 2), tcodes.name_of("coach", 12))
+    assert st.top("normal", 3) == [(n28, 2, 1.0)]
+    assert st.top("new", 3) == [(n55, 1, 0.5)], "잠긴 칸 선수를 분모에서 뺐다(U5 는 전부)"
+    assert dict((n, c) for n, c, _ in st.top("coach", 3)) == {c2: 1, c12: 1}, "같은 코치 두 칸을 두 번 셌다"
+    gk = u.slots[1]
+    assert gk.top("normal", 3) == [(n28, 1, 0.5)] and gk.top("train", 3) == [] and gk.top("coach", 3) == [(c12, 1, 0.5)]
+
+
+def test_trait_usage_formation_choice():
+    conn = store.open_db(":memory:")
+    for sn in (1, 2):
+        _put(conn, sn, [(25, (28, -1, -1), None)], formation="4-2-3-1")
+    _put(conn, 3, [(25, (30, -1, -1), None)], formation="4-4-2")
+    ts = [{"profile_sn": sn, "rank": sn} for sn in (1, 2, 3)]
+    u = tc.trait_usage(conn, ts, today=TODAY)
+    assert u.formations == [("4-2-3-1", 2), ("4-4-2", 1)] and u.formation == "4-2-3-1"
+    u = tc.trait_usage(conn, ts, formation="4-4-2", today=TODAY)
+    assert u.formation == "4-4-2" and u.people == 1 and u.slots[0].players == 1, "고른 포메이션만 세야"
+    assert u.few, f"{config.TRAIT_MIN_PEOPLE}명 미만인데 흐림이 아니다"
+    assert tc.trait_usage(conn, ts, formation="3-5-2", today=TODAY).formation == "4-2-3-1", "없는 포메이션이면 가장 많은 것"
+
+
+def test_trait_usage_drops_old_matches():
+    """checked_at 은 다시 확인마다 새로라 몇 달 전 한 판뿐인 사람도 정리에 안 걸린다 → 집계가 경기 날로 뺀다(검토 3회차)."""
+    conn = store.open_db(":memory:")
+    _put(conn, 1, [(25, (28, -1, -1), None)])
+    _put(conn, 2, [(25, (30, -1, -1), None)], day=TODAY - timedelta(days=config.RANKER_PICK_MAX_AGE_DAYS + 1))
+    u = tc.trait_usage(conn, [{"profile_sn": 1, "rank": 1}, {"profile_sn": 2, "rank": 2}], today=TODAY)
+    assert u.used == 1 and u.old == 1 and u.slots[0].players == 1, u
+
+
+def test_trait_usage_stale_tier_and_cover():
+    """낡은 값은 집계 밖 · 구간은 순위로 · 확보는 구간마다 · 첫 바퀴(위만 참)엔 thin 과 닿은 순위."""
+    conn = store.open_db(":memory:")
+    _put(conn, 1, [(25, (28, -1, -1), None)], rank=1)
+    _put(conn, 2, [], state="stale", rank=2)
+    _put(conn, 3, [(25, (30, -1, -1), None)], rank=300)
+    ts = [{"profile_sn": sn, "rank": r} for sn, r in ((1, 1), (2, 2), (3, 300), (4, 3), (5, 400))]
+    u = tc.trait_usage(conn, ts, top=200, today=TODAY)
+    assert (u.targets, u.have, u.used, u.stale) == (3, 2, 1, 1), u
+    assert u.cover == {200: 2, config.TRAIT_TOP: 3}, u.cover
+    assert not u.thin and u.reach == 2, "3명 중 2명이면 50% 이상"
+    u = tc.trait_usage(conn, ts, top=config.TRAIT_TOP, today=TODAY)
+    assert (u.targets, u.used, u.reach) == (5, 2, 300) and u.formations == [("4-2-3-1", 2)]
+    conn2 = store.open_db(":memory:")
+    _put(conn2, 1, [(25, (28, -1, -1), None)], rank=1)
+    assert tc.trait_usage(conn2, ts, today=TODAY).thin, "5명 중 1명인데 모으는 중이 아니다"
+
+
+def test_trait_usage_bad_card_skipped():
+    """모양이 틀린 카드 하나가 그 사람·집계를 죽이지 않는다 — 그 카드만 뺀다."""
+    conn = store.open_db(":memory:")
+    _put(conn, 1, [(25, (28, -1, -1), None)])
+    row = store.trait_squads(conn)[1]["body"]
+    row.append(["x"]); row.append([1, "ST", 11, [1], None])
+    conn.execute("UPDATE trait_squads SET body = ? WHERE profile_sn = 1", (json.dumps(row),))
+    conn.commit()
+    u = tc.trait_usage(conn, [{"profile_sn": 1, "rank": 1}], today=TODAY)
+    assert u.used == 1 and [s.players for s in u.slots] == [1]
+
+
+def test_trait_usage_budget():
+    """⑦ 집계 CPU — 500명 × 11장이 0.3초 안(첫 바퀴 뒤 매번 탭을 열 때)."""
+    import time
+    conn = store.open_db(":memory:")
+    poss = [25, 22, 27, 18, 14, 12, 16, 7, 5, 3, 0]
+    for sn in range(1, 501):
+        _put(conn, sn, [(p, (28 + sn % 3, 55, 13), (2, 12, 42)) for p in poss], rank=sn)
+    ts = [{"profile_sn": sn, "rank": sn} for sn in range(1, 501)]
+    t0 = time.perf_counter()
+    u = tc.trait_usage(conn, ts, today=TODAY)
+    dt = time.perf_counter() - t0
+    assert u.used == 500 and len(u.slots) == 11, u
+    assert dt < 0.3, f"{dt:.3f}초"
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

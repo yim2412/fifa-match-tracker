@@ -2718,7 +2718,8 @@ class MainWindow(QMainWindow):
                                               ("가성비", "_build_value_score_tab"),
                                               ("구단가치", "_build_value_bins_tab"),
                                               ("구간 평균", "_build_tier_means_tab"),
-                                              ("승률→점수", "_build_wr_elo_tab")))),
+                                              ("승률→점수", "_build_wr_elo_tab"),
+                                              ("포지션 특성", "_build_position_trait_tab")))),
                  ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
                                               ("추천", "_build_recommend_tab")))),
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
@@ -2869,7 +2870,7 @@ class MainWindow(QMainWindow):
         if key == "trades":
             self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
             self.start_trades()
-        if key in self.PICK_KEYS:
+        if key in self.PICK_DATA_KEYS:
             self._dirty.add(key)  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다
         if key in self.PICK_KEYS or key == self.TRAIT_KEY:
             self.start_visible_api_loader()  # 다른 쪽 로더는 거기서 멈추게 하고, 그게 끝나면(finished) 이쪽이 뜬다
@@ -4326,12 +4327,13 @@ class MainWindow(QMainWindow):
             self._trait_loader.cancel()
 
     def _on_trait_person(self) -> None:
-        self._invalidate_pick()   # 1~200 의 마지막 경기는 랭커 픽과 같은 줄이다 — 탭 그리기는 탭 단계에서 여기에
+        self._invalidate_pick()   # 특성 탭 + 1~200 의 마지막 경기는 랭커 픽과 같은 줄이다(PICK_DATA_KEYS)
 
     def _on_trait_done(self, out) -> None:
         self._trait_result = out
         if out.block_streak >= config.TRAIT_BLOCK_DAYS:
             self.set_trait_off("blocked")   # 랭킹 수집은 안 끈다 — 특성 받기만(계획 "막힘")
+        self._invalidate(self.TRAIT_KEY)   # 멈춘 까닭 문구
 
     def _on_trait_finished(self) -> None:
         if self._trait_loader is not None:
@@ -4578,7 +4580,8 @@ class MainWindow(QMainWindow):
         elif res is not None and res.quota:
             status = "넥슨 호출 한도에 걸려 오늘은 멈췄습니다 — 내일 이어서 받습니다."
         elif res is not None and res.limit:
-            status = f"오늘 한도({config.RANKER_PICK_DAILY_REQ}요청) — {summary.used if summary else 0}/{len(targets)}명, 내일 이어서 받습니다."
+            status = (f"오늘 한도({config.RANKER_PICK_DAILY_REQ}요청 · [포지션 특성] 탭과 나눠 씀) — "
+                      f"{summary.used if summary else 0}/{len(targets)}명, 내일 이어서 받습니다.")
         elif running:
             status = f"랭커 경기를 받는 중… (받은 랭커 {(summary.total - summary.pending) if summary else 0}/{len(targets)})"
         elif res is not None and res.error:
@@ -4655,14 +4658,15 @@ class MainWindow(QMainWindow):
         self._pick_pitch_loaders = self._start_pitch_loaders(pitch, card_info=False)  # 칩 카드 정보 요청 0 — 픽률이 본론
 
     # ── 11-lite 추천(17단계) — 랭커 픽 [추천] 탭 ─────────────────────────
-    TRAIT_KEY = "traits"   # [포지션 특성] 탭(32단계 단계 4 에서 VIEW_OF_KEY 에) — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
+    TRAIT_KEY = "traits"   # [메타 분석 › 포지션 특성] — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
     PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
+    PICK_DATA_KEYS = PICK_KEYS + (TRAIT_KEY,)  # 무효화 목록 — 랭커 픽·특성 로더 진행 · 끄기/지우기 · 정리 끝
     REC_CARD_COLUMNS = ["줄", "선수", "후보", "비율", "강화", "시세"]
     REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
     REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
 
     def _invalidate_pick(self) -> None:
-        for key in self.PICK_KEYS:
+        for key in self.PICK_DATA_KEYS:
             self._invalidate(key)
 
     def _my_latest_starters(self) -> list[dict]:
@@ -5077,7 +5081,8 @@ class MainWindow(QMainWindow):
     # ── 랭커 메타 ② 스냅숏 읽기(2.4.1) — rank.db 원본 14일 · 영구 집계, 요청 0 · 쓰기 0 ───────────────
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
     RANK_VIEW_KEYS = ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist",
-                      "daywr", "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards")
+                      "daywr", "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
+                      "traits")
 
     def _invalidate_rank_views(self) -> None:
         for key in self.RANK_VIEW_KEYS:
@@ -5168,6 +5173,165 @@ class MainWindow(QMainWindow):
             top.addWidget(QLabel(name))
             top.addWidget(cb)
         v.addLayout(top)
+
+    # [메타 분석 › 포지션 특성] 32단계 — 상위 랭커가 카드에 넣어 둔 특성·코치(스쿼드메이커). 받기는 이 탭이 보일 때만(TraitLoader)
+    TRAIT_COLUMNS = ["포지션", "일반 (5강~)", "신규 (8강~)", "훈련 (11강~)", "훈련 코치"]
+    TRAIT_KIND_COLUMNS = ("normal", "new", "train", "coach")   # 위 표 1~4열
+
+    def _build_position_trait_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.lb_trait_status = self._note_label()
+        self.btn_trait_action = QPushButton("")
+        self.btn_trait_action.clicked.connect(self._on_trait_action)
+        self.btn_trait_action.setVisible(False)
+        row.addWidget(self.lb_trait_status, 1)
+        row.addWidget(self.btn_trait_action)
+        v.addLayout(row)
+        self.lb_trait_note = self._note_label()
+        self.cb_trait_tier = NoScrollComboBox()
+        for n in config.TRAIT_TIERS:
+            self.cb_trait_tier.addItem(f"상위 {n:,}명", n)
+        self.cb_trait_tier.setCurrentIndex(len(config.TRAIT_TIERS) - 1)
+        self.cb_trait_tier.currentIndexChanged.connect(lambda _i: self._invalidate(self.TRAIT_KEY))
+        self.cb_trait_form = NoScrollComboBox()   # 항목은 그릴 때 — 모인 포메이션(사람 수 순)
+        self.cb_trait_form.currentIndexChanged.connect(lambda _i: self._invalidate(self.TRAIT_KEY))
+        self._meta_top(v, self.lb_trait_note, ("순위 구간", self.cb_trait_tier), ("포메이션", self.cb_trait_form))
+        self.tbl_traits = self._make_table(self.TRAIT_COLUMNS)
+        self.tbl_traits.setSortingEnabled(False)   # 포지션 순서(공격 → GK)가 정보다
+        v.addWidget(self.tbl_traits, 1)
+        lb = self._note_label()
+        lb.setText("% = 이 포메이션·포지션 선수 전부(칸이 안 열린 선수 포함) 중 넣은 비율 — 신규(8강~)·훈련(11강~)은 칸이 열린"
+                   " 선수가 적어 낮게 나옵니다 · 코치는 한 선수 셋까지라 합이 100%를 넘습니다 · 게임 안에서 팀 전술을 저장한 때"
+                   f" 기준 — 오래 저장 안 한 구단주는 뺍니다 · 마지막 경기가 {config.RANKER_PICK_MAX_AGE_DAYS}일 넘은 구단주도 뺍니다")
+        v.addWidget(lb)
+        self.trait_usage: core.TraitUsage | None = None   # 테스트가 본다
+        return w
+
+    def trait_status(self, has_targets: bool = True) -> tuple[str, str]:
+        """탭 위 한 줄과 버튼("notice" 안내 보고 동의 · "reenable" 다시 켜기 · "" 없음) — 원인마다 문구 하나(계획 "빈 상태")."""
+        if not config.WEB_DATA:
+            return ("웹 데이터가 꺼져 있어 포지션 특성을 모으지 않습니다 — [정보] 에서 켤 수 있습니다.", "")
+        if not config.RANK_COLLECT:
+            return (f"랭킹 수집을 켜면 상위 {config.TRAIT_TOP}명이 카드에 넣은 특성·코치를 모읍니다 — [정보] 에서 켤 수 있습니다"
+                    " (이 탭을 열어 둔 동안만 받습니다).", "")
+        if config.notice_needed() or config.NOTICE_ACCEPTED < config.TRAIT_NOTICE_VERSION:
+            return ("새 이용 안내에 동의해야 포지션 특성을 모읍니다.", "notice")
+        if self._trait_off_reason():
+            return ("넥슨이 여러 날 이어서 막아 특성 받기를 스스로 껐습니다(랭킹 수집은 그대로).", "reenable")
+        if not has_targets:
+            return ("랭킹 스냅숏이 아직 없습니다 — 랭킹 수집 첫 회차가 끝나면(하루 안) 모읍니다.", "")
+        res = self._trait_result
+        webs = res.web if res is not None else []
+        pick = res.pick if res is not None else None
+        for why in ("format", "rate"):   # 그날 멈춤
+            if any(w.stop == why for w in webs):
+                return (traitcollect.MESSAGES[why] + " — 내일 다시 봅니다.", "")
+        if pick is not None and pick.quota:
+            return ("넥슨 호출 한도에 걸려 오늘은 멈췄습니다 — 내일 이어서 받습니다.", "")
+        if any(w.limit for w in webs):
+            return (f"오늘 넥슨 웹 상한({config.TRAIT_WEB_DAILY_REQ:,}요청) — 내일 이어서 받습니다.", "")
+        if pick is not None and pick.limit:
+            return (f"오늘 한도({config.RANKER_PICK_DAILY_REQ}요청 · 랭커 픽과 나눠 씀) — 내일 이어서 받습니다.", "")
+        if pick is not None and pick.share_spent:
+            return ("오늘 특성 몫을 다 썼습니다(랭커 픽과 나눠 씀) — 201위 아래는 내일 이어서 받습니다.", "")
+        if self._trait_running():
+            return ("특성을 받는 중… — 이 탭을 열어 둔 동안만 받습니다.", "")
+        err = next((w.error for w in webs if w.stop), "") or (res.error if res is not None else "") \
+            or (pick.error if pick is not None else "")
+        if err:
+            return (f"받다가 멈췄습니다 — {err} · 이 탭을 다시 열면 이어서 받습니다.", "")
+        return ("", "")
+
+    def _on_trait_action(self) -> None:
+        kind = self.btn_trait_action.property("kind")
+        if kind == "notice":
+            self.ask_notice_update()
+        elif kind == "reenable":
+            self.set_trait_off("")
+            self._trait_result = None   # 막혔던 바퀴의 문구를 지운다 — 다시 막히면 로더가 다시 알린다
+            self.start_visible_api_loader()
+        self._invalidate(self.TRAIT_KEY)
+
+    def _trait_left_text(self) -> str:
+        day = date.today().isoformat()
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                web = store.budget_used(conn, day, store.BUDGET_TRAIT_WEB)
+                api = store.budget_used(conn, day, store.BUDGET_RANKER_PICK)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return ""
+        return (f"오늘 남은 요청 — 넥슨 웹 {max(0, config.TRAIT_WEB_DAILY_REQ - web):,} · "
+                f"오픈API {max(0, config.RANKER_PICK_DAILY_REQ - api)}(랭커 픽과 나눠 씀)")
+
+    def _fill_trait_forms(self, usage) -> None:
+        """포메이션 고르기 — 모인 포메이션을 사람 수 순으로 · 표본 TRAIT_MIN_PEOPLE 미만은 흐림 · 고른 값은 이어서."""
+        cb = self.cb_trait_form
+        cb.blockSignals(True)   # 다시 채우는 동안 currentIndexChanged → _invalidate 가 다시 그리기를 부르지 않게
+        try:
+            cb.clear()
+            for i, (form, n) in enumerate(usage.formations if usage else []):
+                cb.addItem(f"{form or '모름'} ({n}명)", form)
+                if n < config.TRAIT_MIN_PEOPLE:
+                    cb.setItemData(i, QColor(T.TEXT_DIM), Qt.ItemDataRole.ForegroundRole)
+            idx = cb.findData(usage.formation) if usage and usage.formation is not None else -1
+            cb.setCurrentIndex(idx)
+        finally:
+            cb.blockSignals(False)
+
+    def _render_position_traits(self) -> None:
+        targets = self._rank_read(lambda r: rankerpick.top_rankers(r, limit=config.TRAIT_TOP)[1]) or []
+        status, button = self.trait_status(bool(targets))
+        self.lb_trait_status.setText(status)
+        self.lb_trait_status.setVisible(bool(status))
+        self.btn_trait_action.setProperty("kind", button)
+        self.btn_trait_action.setText({"notice": "안내 보고 동의", "reenable": "다시 켜기"}.get(button, ""))
+        self.btn_trait_action.setVisible(bool(button))
+        usage = None
+        if targets:
+            top = self.cb_trait_tier.currentData() or config.TRAIT_TOP
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    usage = core.trait_usage(conn, targets, top=top, formation=self.cb_trait_form.currentData())
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                usage = None
+        self.trait_usage = usage
+        self._fill_trait_forms(usage)
+        if usage is None:
+            self.lb_trait_note.setText("")
+            self._fill(self.tbl_traits, [], enable_sort=False)
+            return
+        cover = " · ".join(f"상위 {t:,}: {usage.cover.get(t, 0)}/{min(t, len(targets))}" for t in config.TRAIT_TIERS)
+        notes = [f"특성을 본 구단주 {usage.used}명 / 낡은 값 {usage.stale}명 / 대상 {usage.targets}명",
+                 f"확보 {cover}"]
+        if usage.old:
+            notes.append(f"마지막 경기가 오래된 {usage.old}명 뺌")
+        if usage.thin:
+            notes.append(f"아직 모으는 중 — 위 순위부터 차므로 지금 값은 상위 {usage.reach}위까지" if usage.reach
+                         else "아직 모으는 중")
+        if usage.formation is not None and usage.few:
+            notes.append(f"이 포메이션은 {config.TRAIT_MIN_PEOPLE}명 미만이라 흐리게 — 참고만")
+        left = self._trait_left_text()
+        if left:
+            notes.append(left)
+        notes.append("이 탭을 열어 둔 동안만 모읍니다")
+        self.lb_trait_note.setText(" · ".join(notes))
+        rows = []
+        for s in usage.slots:
+            tops = [s.top(kind, config.TRAIT_TOP_NAMES) for kind in self.TRAIT_KIND_COLUMNS]
+            for i in range(max(1, max(len(t) for t in tops))):
+                head = f"{self._positions.get(s.position, str(s.position))} · {s.players}명" if i == 0 else ""
+                rows.append([head] + [f"{t[i][0]} {t[i][2] * 100:.0f}%" if i < len(t) else "" for t in tops])
+        self._fill(self.tbl_traits, rows, enable_sort=False)
+        if usage.thin or usage.few:
+            self._dim_rows(self.tbl_traits, list(range(len(rows))))
 
     # [메타 분석 › 하루 승률] B2
     DAYWR_COLUMNS = ["이름", "인원", "승·무·패", "승률", "95% 구간", "전체 대비"]
@@ -6955,7 +7119,7 @@ class MainWindow(QMainWindow):
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
         "daywr": [("메타 분석", "하루 승률")], "valuescore": [("메타 분석", "가성비")],
         "valuebins": [("메타 분석", "구단가치")], "tiermeans": [("메타 분석", "구간 평균")],
-        "wrelo": [("메타 분석", "승률→점수")],
+        "wrelo": [("메타 분석", "승률→점수")], "traits": [("메타 분석", "포지션 특성")],
     }
     KEY_OF_VIEW = {view: key for key, views in VIEW_OF_KEY.items() for view in views}
     # 위 표 밖의 자리 — 이유 없이 빠진 자리는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
@@ -7000,6 +7164,7 @@ class MainWindow(QMainWindow):
             "tiermeans": self._render_tier_means, "wrelo": self._render_wr_elo, "weekly": self._render_weekly,
             "rankmove": self._render_rank_move,      # 검색 계정 · rank.db 원본
             "oppcards": self._render_opp_cards,      # 시즌 범위(팀컬러와 같다)
+            "traits": self._render_position_traits,  # 32단계 — rank.db 대상 × fifa.db trait_squads(검색 결과에 안 묶인다)
         }
 
     def _render_all(self) -> None:

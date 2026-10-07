@@ -31,7 +31,7 @@
 | `squad_timeline.py` · `trade_book.py` | 스쿼드 타임라인 · 이적시장 가계부 — 계산만(화면은 `core_api`) · 거래는 내 계정일 때만(`app_main._timeline_for_screen`) · 세부는 `squad_timeline.py` 머리말 |
 | `tray.py` | 트레이 상주 · **종료 진입점 하나 `quit_app(fast)`**(새 종료 경로는 여기를 거친다) · 한 번만 실행은 뮤텍스 · **트레이 풍선 알림 없음** · 세부는 머리말 |
 | `autostart.py` | 자동 실행 — HKCU Run 에 `"<exe>" --tray`. exe 에서만 · 값 이름을 설치판(`VALUE_INSTALLED` — `.iss` 제거기와 같아야)·포터블로 나눈다 · 경로는 없어졌을 때만 고친다(`repair`) |
-| `trait_codes.py` · `traitcollect.py` | 포지션 특성(32단계) — 특성·코치 이름표(번들에서 옮긴 상수 · 모르는 코드 "코드 N") · 스쿼드메이커 팀 칸 요청·해석·맞는 팀 찾기 · 받기 한 바퀴 `run`(웹 → 오픈API → 웹 · 로더 `app_main.TraitLoader`). 화면(탭)은 아직 없다 · **오픈API 백그라운드(랭커 픽·특성)를 켜는 자리는 `start_visible_api_loader`, 멈추는 자리는 `stop_api_loaders` 하나**(`test_every_api_loader_start_goes_through_one_function`) · 웹 스위치·`web_get`·`_web_calls()` 규칙은 `teamcolor` 와 같다 · 세부는 `traitcollect.py` 머리말 |
+| `trait_codes.py` · `traitcollect.py` | 포지션 특성(32단계) — 특성·코치 이름표(번들에서 옮긴 상수 · 모르는 코드 "코드 N") · 스쿼드메이커 팀 칸 요청·해석·맞는 팀 찾기 · 받기 한 바퀴 `run`(웹 → 오픈API → 웹 · 로더 `app_main.TraitLoader`) · 집계 `trait_usage` → 탭 [메타 분석 › 포지션 특성](키 `TRAIT_KEY` — **`PICK_KEYS` 에 넣지 않는다**, 무효화는 `PICK_DATA_KEYS`) · **오픈API 백그라운드(랭커 픽·특성)를 켜는 자리는 `start_visible_api_loader`, 멈추는 자리는 `stop_api_loaders` 하나**(`test_every_api_loader_start_goes_through_one_function`) · 웹 스위치·`web_get`·`_web_calls()` 규칙은 `teamcolor` 와 같다 · 세부는 `traitcollect.py` 머리말 |
 | `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
 | `playerinfo.py` | 선수 카드 상세·능력치 시뮬레이터 스크래핑 · 급여·OVR 은 **본 카드 구역에서만** · 세부는 머리말 |
 | `store.py` | SQLite 누적(`fifa.db`) — **화면은 API 가 아니라 이 DB 를 본다** · **모든 연결 `secure_delete=ON`** · 새 쿼리는 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 없는지(`test_rules`) · 세부는 머리말 |

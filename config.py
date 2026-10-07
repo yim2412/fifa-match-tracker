@@ -258,6 +258,11 @@ TRAIT_STALE_RETRY_DAYS = 7          # 낡은 웹 값(stale)인 사람은 경기�
 TRAIT_WEB_DAILY_REQ = 1000          # 스쿼드메이커 하루 요청 상한(trait_web) — 한 명 최대 6 · 다시 확인은 대개 1(R6 · 약 20MB/일)
 TRAIT_BLOCK_DAYS = 3                # 403·429·Cloudflare 가 서로 다른 날 이만큼 이어지면 특성 받기만 스스로 끈다(랭킹 수집은 안 끈다)
 TRAIT_RECHECK_MARGIN_DAYS = 2       # 받은 지 RANK_RAW_KEEP_DAYS − 이만큼 지난 랭커는 처음 보는 사람보다 먼저 다시 묻는다(정리에 지워지기 전에)
+# [포지션 특성] 탭(단계 4) — 구간은 랭커 픽 범위·특성 범위 둘. 문턱은 초안(첫 2주 채움 실측 뒤 다시)
+TRAIT_TIERS = (200, TRAIT_TOP)      # 앞은 RANKER_PICK_TOP 과 같아야 한다 — 그 상수가 아래에 있어 숫자로 두고 test_traits 가 대조
+TRAIT_MIN_PEOPLE = 30               # 고른 포메이션 인원이 이보다 적으면 표를 흐림(RANKER_PICK_MIN_RANKERS 와 같은 규칙)
+TRAIT_MIN_COVER = 0.5               # 구간 대상 중 특성 줄이 있는 비율이 이보다 낮으면 흐림 — 첫 바퀴엔 위 순위만 차 있다(검토 B)
+TRAIT_TOP_NAMES = 3                 # 포지션·칸마다 많이 넣은 순 이만큼
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}

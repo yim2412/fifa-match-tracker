@@ -1,4 +1,5 @@
-"""포지션 특성(32단계) — 랭커가 카드에 넣어 둔 특성·훈련 코치를 넥슨 스쿼드메이커에서 읽는다. 화면 없음.
+"""포지션 특성(32단계) — 랭커가 카드에 넣어 둔 특성·훈련 코치를 넥슨 스쿼드메이커에서 읽는다.
+화면은 [랭커 › 메타 분석 › 포지션 특성](app_main) — 집계 `trait_usage` 는 core_api 를 거친다.
 
     구단주 번호  POST https://fconline.nexon.com/squadmakerapi/SquadMakerProc  strMethod=getownerinfo · strCharacterName=<닉네임> → ResultData.sn
     팀 칸        〃                                                              strMethod=getingameinfo · n1TeamType · n1TeamPart · n4TeamSeq · n8TargetNexonSN=<sn>
@@ -35,8 +36,9 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Callable, Iterable
 
 import requests
@@ -46,7 +48,7 @@ import ranker  # web_get(동시 상한)
 import rankerpick
 import store
 import trait_codes
-from stats import formation_of
+from stats import PITCH_ROWS, PITCH_X, formation_of
 
 URL = "https://fconline.nexon.com/squadmakerapi/SquadMakerProc"
 _XHR = {"X-Requested-With": "XMLHttpRequest"}
@@ -466,4 +468,121 @@ def run(api, session, conn, rows: list[dict], *, on_at: str | None, cancel: Call
                 out.web.append(collect(session, conn, rows, on_at=on_at, on_person=on_person, fetch=fetch, **kw))
     if out.last_web is not None and out.last_web.stop == "rate":
         out.block_streak = store.trait_block_streak(conn)
+    return out
+
+
+# ── 집계([포지션 특성] 탭 — 화면은 core_api 로) ─────────────────────────────────
+# 분모는 그 포메이션·포지션 선수 전부(칸이 안 열린 선수 포함 — U5 "이 포지션 선수 중 몇 %가 넣었나").
+# 그래서 신규(8강~)·훈련(11강~) % 는 열린 칸 비율에 눌려 낮게 나온다 — 화면이 칸 제목에 적는다.
+# 코치는 한 선수 셋까지라 칸 % 합이 100 을 넘는다(같은 코치를 두 칸에 넣었으면 한 번만 센다).
+
+@dataclass
+class TraitSlot:
+    position: int                                   # 경기의 spPosition
+    players: int = 0                                # 분모
+    counts: dict = field(default_factory=lambda: {k: Counter() for k in trait_codes.KINDS})  # 칸 → 이름 → 선수 수
+
+    def top(self, kind: str, n: int) -> list[tuple[str, int, float]]:
+        """많이 넣은 순 (이름, 선수 수, 비율) — 같은 수면 이름 순(그릴 때마다 순서가 안 흔들리게)."""
+        rows = sorted(self.counts[kind].items(), key=lambda kv: (-kv[1], kv[0]))[:n]
+        return [(name, c, c / self.players if self.players else 0.0) for name, c in rows]
+
+
+@dataclass
+class TraitUsage:
+    top: int = 0                    # 구간(TRAIT_TIERS 중 하나)
+    targets: int = 0                # 구간 안 스냅숏 인원
+    have: int = 0                   # 구간 안 특성 줄이 있는 사람(ok · stale)
+    used: int = 0                   # 집계에 든 사람(ok · 최근 경기 · 카드 하나 이상)
+    stale: int = 0                  # 낡은 웹 값(R4) — 집계 밖
+    old: int = 0                    # 마지막 경기가 RANKER_PICK_MAX_AGE_DAYS 넘음 — 집계 밖
+    reach: int = 0                  # 특성 줄이 있는 사람 중 가장 아래 순위(첫 바퀴엔 위부터 찬다)
+    cover: dict = field(default_factory=dict)        # 구간 → 그 구간 안 특성 줄이 있는 사람
+    formations: list = field(default_factory=list)   # (포메이션, 인원) 많은 순 — 집계에 든 사람
+    formation: str | None = None    # 고른 포메이션
+    people: int = 0                 # 고른 포메이션 인원
+    slots: list = field(default_factory=list)        # TraitSlot — 위(공격) → 아래(GK), 줄 안 왼쪽 → 오른쪽
+
+    @property
+    def thin(self) -> bool:
+        """아직 모으는 중 — 구간 대상 중 특성 줄이 있는 비율이 TRAIT_MIN_COVER 미만."""
+        return not self.targets or self.have / self.targets < config.TRAIT_MIN_COVER
+
+    @property
+    def few(self) -> bool:
+        return self.people < config.TRAIT_MIN_PEOPLE
+
+
+def _slot_order(pos: int) -> tuple:
+    row = next((i for i, (_n, rng) in enumerate(PITCH_ROWS) if pos in rng), len(PITCH_ROWS))
+    return (row, PITCH_X.get(pos, 1.0), pos)
+
+
+def _card(raw) -> tuple[int, tuple, tuple] | None:
+    """저장 줄의 카드 하나 [spid, 자리, 강화, [특성3], [코치3]|None] → (자리, 특성3, 코치들). 모양이 틀리면 None(그 카드만 뺀다)."""
+    if not isinstance(raw, list) or len(raw) != 5 or not _is_int(raw[1]):
+        return None
+    traits, coach = raw[3], raw[4]
+    if not isinstance(traits, list) or len(traits) != 3:
+        return None
+    return raw[1], tuple(traits), tuple(coach) if isinstance(coach, list) else ()
+
+
+def trait_usage(conn, targets: list[dict], top: int = config.TRAIT_TOP, formation: str | None = None,
+                today: date | None = None) -> TraitUsage:
+    """스냅숏 상위(rankerpick.top_rankers 행 — rank 포함) × trait_squads → 포메이션·포지션별 특성·코치 사용률. 요청 0.
+    formation 이 None 이거나 집계에 없으면 가장 많은 포메이션."""
+    today = today or date.today()
+    oldest = (today - timedelta(days=config.RANKER_PICK_MAX_AGE_DAYS)).isoformat()
+    rows = store.trait_squads(conn)
+    out = TraitUsage(top=top, cover={t: 0 for t in config.TRAIT_TIERS})
+    kept: list[dict] = []
+    forms: Counter = Counter()
+    for t in targets:
+        rank = t.get("rank") or 0
+        r = rows.get(t.get("profile_sn"))
+        for tier in config.TRAIT_TIERS:
+            if r is not None and rank <= tier:
+                out.cover[tier] += 1
+        if rank > top:
+            continue
+        out.targets += 1
+        if r is None:
+            continue
+        out.have += 1
+        out.reach = max(out.reach, rank)
+        if r.get("state") != "ok":
+            out.stale += 1
+            continue
+        if (r.get("match_day") or "") < oldest:
+            out.old += 1
+            continue
+        if not any(_card(c) for c in r.get("body") or []):
+            continue
+        out.used += 1
+        forms[r.get("formation") or ""] += 1
+        kept.append(r)
+    out.formations = sorted(forms.items(), key=lambda kv: (-kv[1], kv[0]))
+    if not out.formations:
+        return out
+    out.formation = formation if formation in forms else out.formations[0][0]
+    out.people = forms[out.formation]
+    slots: dict[int, TraitSlot] = {}
+    for r in kept:
+        if (r.get("formation") or "") != out.formation:
+            continue
+        for raw in r["body"]:
+            card = _card(raw)
+            if card is None:
+                continue
+            pos, traits, coach = card
+            s = slots.setdefault(pos, TraitSlot(pos))
+            s.players += 1
+            for i, kind in enumerate(("normal", "new", "train")):
+                name = trait_codes.name_of(kind, traits[i])
+                if name:
+                    s.counts[kind][name] += 1
+            for name in {trait_codes.name_of("coach", c) for c in coach} - {None}:
+                s.counts["coach"][name] += 1
+    out.slots = sorted(slots.values(), key=lambda s: _slot_order(s.position))
     return out

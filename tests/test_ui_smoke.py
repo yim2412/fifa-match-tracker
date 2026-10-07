@@ -661,10 +661,11 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 37, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
+    assert len(tables) == 38, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
+    #                                        · 38 메타 분석 [포지션 특성](2.5.1 — 채운 표는 test_trait_tab_renders_usage 가 잰다)
     _check_elisions(tables)
 
 
@@ -7135,6 +7136,124 @@ def test_trait_visible_needs_trait_key():
     _win._go_page("대시보드")
 
 
+def test_trait_tab_does_not_start_pick_loader():
+    """진짜 보임 판정으로 [포지션 특성] 탭을 연다 — 특성 로더만 뜬다(TRAIT_KEY 가 PICK_KEYS 에 들면 랭커 픽 로더가 떠서 막는다, 검토 A)."""
+    with _TraitEnv():
+        del _win._ranker_pick_visible, _win._trait_visible   # 가짜 보임을 걷어 실제 판정으로
+        try:
+            _win._go_page("메타 분석", "포지션 특성")
+            assert _win._trait_visible() and not _win._ranker_pick_visible()
+            assert _FakeTraitLoader.started == 1 and _FakePickLoader.started == 0, \
+                (_FakeTraitLoader.started, _FakePickLoader.started)
+            trait = _win._trait_loader
+            _win._go_page("메타 분석", "하루 승률")
+            assert trait.cancelled, "다른 탭으로 갔는데 특성이 계속 받는다"
+        finally:
+            _win._ranker_pick_visible = lambda: False   # __exit__ 이 지운다
+            _win._trait_visible = lambda: False
+
+
+def _trait_seed(rows):
+    """(profile_sn, 포메이션, 자리 목록) — 스냅숏 900~ 에 맞춘 특성 줄. 칸마다 이름이 가장 긴 코드(표 잘림을 재려고)."""
+    import trait_codes as tc
+
+    def longest(table, n=1):
+        return sorted(table, key=lambda c: (-len(table[c]), c))[:n]
+    traits = [longest(tc.NORMAL)[0], longest(tc.NEW)[0], longest(tc.TRAIN)[0]]
+    coach = longest(tc.TRAIN, 3)
+    conn = store.open_db(config.DB_PATH)
+    try:
+        for sn, form, poss in rows:
+            store.save_trait_squad(conn, sn, source=store.PICK, rank=sn - 899, match_id=f"m{sn}", formation=form,
+                                   team="1-0", body=[[1000 + p, p, 11, traits, coach] for p in poss],
+                                   state="ok", collect_on_at=config.read_rank_on_at(),
+                                   match_day=datetime.now().date().isoformat(), checked_at=datetime.now().isoformat())
+    finally:
+        conn.close()
+
+
+def test_trait_tab_renders_usage():
+    """받아 둔 특성 줄 → 탭(요청 없이 DB 에서) — 포메이션 고르기(사람 수 순) · 포지션 표 · 고른 포메이션이 다시 그려도 남는다."""
+    with _TraitEnv():
+        config.RANK_COLLECT = False   # 받지 않게 — 이미 받아 둔 것만 그린다
+        _seed_snapshot(4)             # 넷째(903)는 아래 배선 단언에서 나중에 받는다
+        _trait_seed([(900, "4-2-3-1", [25, 0]), (901, "4-2-3-1", [25, 0]), (902, "4-4-2", [25])])
+        try:
+            _win._go_page("메타 분석", "포지션 특성")
+            u = _win.trait_usage
+            assert u is not None and u.used == 3 and u.formation == "4-2-3-1", u
+            cb = _win.cb_trait_form
+            assert [cb.itemData(i) for i in range(cb.count())] == ["4-2-3-1", "4-4-2"], "사람 수 순이 아니다"
+            # 두 포지션 × (코치 셋이 가장 긴 칸 → 상위 min(3, N)줄)
+            assert _win.tbl_traits.rowCount() == 2 * min(3, config.TRAIT_TOP_NAMES), _win.tbl_traits.rowCount()
+            assert _win.tbl_traits.item(0, 0).text().endswith("2명"), _win.tbl_traits.item(0, 0).text()
+            assert "특성을 본 구단주 3명" in _win.lb_trait_note.text(), _win.lb_trait_note.text()
+            cb.setCurrentIndex(1)                       # → 4-4-2 · 다시 채워도 고른 값이 남는다
+            assert _win.trait_usage.formation == "4-4-2" and cb.currentData() == "4-4-2"
+            assert _win.tbl_traits.item(0, 0).text().endswith("1명")
+            _win._invalidate(_win.TRAIT_KEY)
+            assert _win.trait_usage.formation == "4-4-2", "다시 그렸더니 고른 포메이션이 풀렸다"
+            few = _win.tbl_traits.item(0, 1).foreground().color().name()
+            assert few == app_main.QColor(app_main.T.TEXT_DIM).name(), "표본 미달인데 흐리지 않았다"
+            cb.setCurrentIndex(0)
+            _check_elisions([_win.tbl_traits])   # PyQt 5 — 채운 표(가장 긴 이름)가 1280×720 에서 안 잘린다
+            # 배선 — 로더가 한 사람을 저장하면(person) 보고 있는 탭이 다시 그린다 · 바퀴가 끝나면(done) 멈춘 까닭이 뜬다
+            _trait_seed([(903, "4-2-3-1", [25, 0])])
+            _win._on_trait_person()
+            assert _win.trait_usage.used == 4, "한 사람 저장 뒤 탭이 다시 안 그려졌다(PICK_DATA_KEYS)"
+            config.RANK_COLLECT = True
+            _win._on_trait_done(app_main.traitcollect.TraitRun(web=[app_main.traitcollect.TraitResult(stop="format")]))
+            assert "응답이 바뀌었" in _win.lb_trait_status.text(), _win.lb_trait_status.text()
+        finally:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.purge_ranker_data(conn, everything=True)
+            finally:
+                conn.close()
+
+
+def test_trait_empty_state_messages():
+    """원인마다 문구 하나(계획 "빈 상태") — 서로 다른 문구 · 버튼은 안내 동의·다시 켜기에만 · [다시 켜기]는 스스로 끈 것을 푼다."""
+    with _TraitEnv():
+        R, TR, W = app_main.rankerpick.PickResult, app_main.traitcollect.TraitRun, app_main.traitcollect.TraitResult
+        cases = [
+            ("web", lambda: setattr(config, "WEB_DATA", False), "웹 데이터", ""),
+            ("collect", lambda: setattr(config, "RANK_COLLECT", False), "랭킹 수집을 켜면", ""),
+            ("notice", lambda: setattr(config, "NOTICE_ACCEPTED", config.TRAIT_NOTICE_VERSION - 1), "안내에 동의", "notice"),
+            ("blocked", lambda: _win.set_trait_off("blocked"), "스스로 껐습니다", "reenable"),
+            ("format", lambda: setattr(_win, "_trait_result", TR(web=[W(stop="format")])), "응답이 바뀌었", ""),
+            ("rate", lambda: setattr(_win, "_trait_result", TR(web=[W(stop="rate")])), "잠시 막았", ""),
+            ("quota", lambda: setattr(_win, "_trait_result", TR(pick=R(quota=True))), "호출 한도", ""),
+            ("web_limit", lambda: setattr(_win, "_trait_result", TR(web=[W(limit=True)])), "웹 상한", ""),
+            ("limit", lambda: setattr(_win, "_trait_result", TR(pick=R(limit=True))), "랭커 픽과 나눠 씀", ""),
+            ("share", lambda: setattr(_win, "_trait_result", TR(pick=R(share_spent=True))), "특성 몫을 다 썼", ""),
+        ]
+        seen = set()
+        for name, setup, want, button in cases:
+            config.WEB_DATA = config.RANK_COLLECT = True
+            config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION
+            _win.set_trait_off("")
+            _win._trait_result = None
+            assert _win.trait_status() == ("", ""), f"{name}: 막힌 게 없는데 문구가 있다(아래 단언이 빈 검사)"
+            setup()
+            text, btn = _win.trait_status()
+            assert want in text and btn == button, (name, text, btn)
+            seen.add(text)
+        assert len(seen) == len(cases), "두 원인이 같은 문구다"
+        config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION
+        _win._trait_result = None
+        assert "스냅숏이 아직" in _win.trait_status(False)[0]
+        # 화면 — 스스로 끈 상태로 탭을 열면 버튼이 보이고, 누르면 풀린다
+        _win.set_trait_off("blocked")
+        _win._trait_result = app_main.traitcollect.TraitRun(web=[W(stop="rate")])   # 막혔던 바퀴 — 다시 켜면 지운다
+        _win._go_page("메타 분석", "포지션 특성")
+        assert _win.btn_trait_action.isVisibleTo(_win) and _win.btn_trait_action.text() == "다시 켜기"
+        assert "스스로 껐습니다" in _win.lb_trait_status.text()
+        _win.btn_trait_action.click()
+        assert _win._trait_off_reason() == "" and not _win.btn_trait_action.isVisibleTo(_win)
+        assert "막았" not in _win.lb_trait_status.text(), "다시 켰는데 막혔던 바퀴 문구가 남았다"
+
+
 def test_pick_to_trait_tab_starts_trait_after_pick_finishes():
     """랭커 픽 → 특성 탭: 랭커 픽 로더는 멈추게만 · 그게 끝나면(finished) 특성이 뜬다(검토 3회차)."""
     with _TraitEnv() as env:
@@ -7722,7 +7841,8 @@ def test_rank_views_invalidate_on_four_paths():
     from types import SimpleNamespace
     W = app_main.MainWindow
     assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
-                                     "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards"}
+                                     "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
+                                     "traits"}
     seen = []
     keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
     _win._invalidate_rank_views = lambda: seen.append(1)
