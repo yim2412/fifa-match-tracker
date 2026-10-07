@@ -11,6 +11,12 @@
 
 서명 인증서가 없어서, 체크섬은 "받는 도중 깨지거나 바뀐 파일"을 막을 뿐 GitHub 계정 자체가
 털린 경우는 못 막는다 — 그건 코드 서명의 영역이다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다).
+창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다.
+설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조)
 """
 from __future__ import annotations
 

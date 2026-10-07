@@ -15,6 +15,32 @@
 
 언제 돌릴지(1시간 확인 · 시작 시각 · 예약 하나)는 앱 쪽 일이고, 여기는 is_due·pick_start·start_still_valid 만 준다.
 터미널 스모크: `python rankcollect.py --pages 3`(실제 3쪽을 읽어 판정·집계만 찍는다 — 저장 안 함).
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+랭킹 1만 명 수집(1.1.1, 기본 꺼짐 `config.RANK_COLLECT`) — `rank.db`(fifa.db 와 **따로** — 지우기가 파일 삭제) 에 스냅숏 원본(14일)·집계(영구)·수집 상태·잠금.
+팀컬러 엠블럼은 **옆 표 `snapshot_emblems`**(2.2.1 — `snapshot_rows` 는 옛 버전의 열 이름 없는 16칸 INSERT 때문에 안 건드린다 ·
+원본 없는 스냅숏 줄은 `prune_raw` 가 지운다).
+`collect()` 한 번 = 한 회차: `.env` 다시 읽기 → 잠금 → 500쪽(작업자 6, 첫 실패에 나머지 취소) → 한 트랜잭션 저장 → `record_result`(실패 대기 1~24h ·
+차단 3회차면 스스로 끔 D6 · 연결 안 됨·정각 걸침은 안 셈).
+예약은 앱 몫 — `is_due`·`pick_start`·`start_still_valid` 만 준다(앱은 `app_main.RankCollectScheduler` — 1시간 확인·예약 하나·늦게 터지면 다시 고름).
+회차 끝(수집·팀컬러 목록 저장 둘 다)에 `sync_tracked_elo` — 사용자가 고른 따라가기 계정(최대 5)의 ELO 를 원본이 남은 14일 전부에서 fifa.db `elo_history`(source="snapshot")로 옮긴다(멱등 ·
+커밋 뒤 · 계정마다 cancel · 실패는 건너뜀). 화면 읽기는 `open_rank_db_ro`(없으면 None — 만들지 않는다).
+팀컬러 목록(`RankListLoader`)과 **목록 읽기 차례**(`acquire_list_read`)를 나눠, 하루 안의 스냅숏이 있으면 팀컬러는 거기서(요청 0) · 겹치면 뒤에 온 쪽이 기다린다 ·
+팀컬러가 다 읽은 목록은 수집이 켜져 있으면 스냅숏으로(`save_from_pages`). 토글은 `set_enabled_at`(.env 와 rank.db 사본 둘 다).
+스레드 우선순위는 ctypes 로 낮추는데 **핸들 형을 안 적으면 64비트에서 조용히 실패**했다(테스트가 잡음). 랭킹 추이 화면(17단계)은 `rank_trend_series` — 영구 집계만 ·
+지금 시즌 · 하루에 둘이면 그날 마지막.
+**2.3.1 랭커 메타**: 쪽마다 넥슨 기준 시각(`ranker.parse_ref_time` — 정규식은 `ranker._REF_TIME` 하나) → 걸침은 기준 시각끼리(없으면 Date 의 시) ·
+1쪽이 지난 스냅숏과 같으면 `same`(나머지 요청 0 · 안 셈 · `same_since`). 옆 표만 늘렸다(`snapshot_meta` 기준 시각·빈 순위·처리 깃발 · `elo_hist` ·
+사람별 `run_open`·`elo_season`·`champ_watch` · 익명 `_done`·`champ_first` ·
+`pick_days`·`pick_counted`) — `snapshot_rows`·`snapshots` 의 열과 INSERT 는 옛 버전 때문에 안 건드린다. 처리는 `process_meta`(저장 커밋 뒤 ·
+정리 때 — 깃발은 그 처리와 같은 트랜잭션 · 연속은 경과 시간 `RANK_CONT_MAX_H` · 시즌은 신호 둘을 **같은 출처끼리 숫자·날짜로** `_season_verdict`).
+새 읽기의 시각은 `data_time`(기준 시각, 없으면 taken_at) — **`elo_history` 는 그대로 taken_at**(바꾸면 `ux_elo_src` 가 못 막는다).
+사람별 지우기는 **표시가 아니라 상태로** 판정(`purge_person_if_needed` — 꺼짐·동의 6 전인데 줄 있음 · `person_epoch` ≠ `.env` 의 켠 시각).
+정리는 `maintenance`(작업 스레드 · 수집 잠금 ·
+없으면 안 만든다 `open_rank_db_existing` — `mode=rw` URI) — **화면 스레드는 rank.db 에 쓰지 않는다**(토글 사본도 `app_main.RankMaintWorker`).
+모든 연결 `secure_delete` · 정리 뒤 `checkpoint`(WAL TRUNCATE) ·
+VACUUM 은 secure_delete 없이 지운 흔적(`raw_pruned` 0 인데 원본 없음)이 있을 때만. `is_due` 는 **마지막 회차의 정각** + 23시간(지터가 안 쌓인다 — 시뮬 테스트 셋)
 """
 from __future__ import annotations
 

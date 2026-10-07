@@ -14,6 +14,14 @@
 - 최종 컷: 받아 둔 지난 시즌 중 하나를 시즌 길이가 가까울수록 크게 뽑고, 순위마다 지금 컷보다 낮지 않게.
 
 숫자를 못 내면 원인별 문구(`Prediction.message`). 화면은 core_api 를 거쳐 `predict_for` 만 부른다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+시즌 말 순위 예측(1.3.1) — `day_steps`(rank.db 원본의 이웃 스냅숏 하루 걸음 · 원본 id 목록으로 캐시) → `simulate`(점수대 ±띠 · 경기 수 4분위 ·
+직전 사흘 3분위 칸에서 뽑아 이어 붙임 · 사흘 묶음) → `predict_for`(조건을 차례로 보고 못 내면 원인 문구 `MSG_*`) ·
+종료일은 `season_end_estimate`(공지 → 끝난 시즌 길이 — 주간 요약 주차와 같이 쓴다 · 2.4.1). 칸 경계는 **실행 때 표본에서** 잰다(상수 아님).
+상수는 `config.PREDICT_*`. 화면은 `core_api` 로만, 계산은 `app_main.PredictWorker`(EloLoader 뒤 ·
+요청 번호) — 숫자를 내면 `fifa.db predictions` 에 하루 한 줄. **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저 본다**
 """
 from __future__ import annotations
 

@@ -7,6 +7,12 @@
 `gh release view` 로 받아 **주석 한 줄만** 바꾼 파일을 만들고, 바꾸기 전후 diff 와 `gh release edit` 명령을 **출력만** 한다
 (release.py 와 같은 원칙 — 공개는 사람이 한다). docs/season_end.txt 도 같이 고쳐 다음 릴리스가 이어 붙이게 한다.
 고친 뒤 `python check_api.py` 의 "시즌 종료 공지" 줄로 앱이 받는 값을 확인한다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+시즌 종료일 공지(릴리스 본문의 `<!-- season-end: … start: … -->` 한 줄만 바꾼 파일 + `gh release edit` **출력만** ·
+`docs/season_end.txt` 도 — `release.py` 가 새 릴리스에 이어 붙인다) · 시즌 뒤 예측 대조(저장된 프로필 번호로).
+앱은 `updatecheck.check_full` 로 공지를 받아 `settings.ini season/*` 에 두고, 지금 시즌과의 대조는 **쓸 때**(`predict.resolve_notice`)
 """
 from __future__ import annotations
 

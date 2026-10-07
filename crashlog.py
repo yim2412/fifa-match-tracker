@@ -3,6 +3,12 @@
 PyQt6 는 슬롯 안 예외를 sys.excepthook 으로 넘기고, 훅이 기본값이면 앱을 바로
 끝낸다. 여기서 훅을 바꿔 두면 기록만 남기고 앱은 계속 돈다.
 남의 PC 에서 난 오류는 이 파일 말고는 원인을 알 길이 없다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+처리 안 된 예외 → `%LOCALAPPDATA%\\피파전적관리\\logs\\crash.log`.
+**exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다** — PyQt6 는 기본 훅이면 슬롯 예외에서 프로세스를 끝낸다.
+**faulthandler 는 윈도우에서 처리된 네이티브 예외도 "fatal" 로 적는다**(1.1.1 exe 실측 — COM 0x8001010d) → 실행마다 `crash.fault.<PID>` 에 받고 정상 종료(atexit)면 버리고, 다음 실행 때 남은 것(지울 수 있는 것 = 쥔 프로세스가 죽은 것)만 crash.log 로 옮긴다
 """
 from __future__ import annotations
 

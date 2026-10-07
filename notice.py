@@ -2,6 +2,13 @@
 
 글을 실질적으로 바꾸면(책임 범위·외부 연결 목록이 달라지면) config.NOTICE_VERSION 을 올린다 —
 그래야 이미 동의한 사람에게도 다시 보인다. 맞춤법·표현만 고친 거면 올리지 않는다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+이용 안내·개인정보·웹 데이터 고지·오픈소스 목록(`THIRD_PARTY`) — 첫 실행 `NoticeDialog` 와 [정보] `AboutDialog` 가 같은 글을 쓴다.
+**글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(이미 동의한 사람에게 다시 보이게).
+`NOTICE_BASE_VERSION` 이상 동의자는 막지 않고 창이 보일 때 다시 묻기만(지금 체크 값 그대로) — 올릴 때 "옛 동의로 계속 써도 되나"로 BASE 를 판단하고, 새 기록만 따로 막는다(`track_allowed`).
+새 패키지를 묶으면 `THIRD_PARTY` 에 한 줄 — spec 이 라이선스 전문을 `_internal/licenses/` 에 넣고 `release.py` 가 빠진 걸 막는다
 """
 from __future__ import annotations
 

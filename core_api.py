@@ -5,6 +5,13 @@
 화면 파일이 analysis·stats·models·predict·squad_timeline·trade_book 을 직접 import 하면 test_parsing 의 경계 테스트가 빨개진다.
 
 ⚠ 이름을 복사해 오므로 analysis.narrate 를 바꿔 끼워도 화면에는 안 닿는다 — 테스트는 core_api 쪽을 바꾼다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+**화면 ↔ 분석 경계**(19단계) — 화면 쪽(`app_main`·`dashboard`·`check_api`)은 analysis·stats·models 를 여기서만 가져온다.
+화면에서 새 분석 함수를 쓰려면 import 와 `__all__` 에 한 줄씩. 나중에 핵심을 비공개 모듈로 옮길 때 고칠 곳이 여기 하나가 되게(ROADMAP "배포 보호 준비").
+이름을 복사해 오므로 **테스트에서 바꿔 끼울 땐 `core_api` 쪽을**(`app_main.core.narrate`).
+`test_ui_reaches_analysis_only_through_core_api` 가 지킨다
 """
 from __future__ import annotations
 

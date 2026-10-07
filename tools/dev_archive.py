@@ -20,6 +20,15 @@
     python tools/dev_archive.py --force    # 오늘 돌았어도
     python tools/dev_archive.py --only 1,2 # 고른 것만
     python tools/dev_archive.py --status   # 보관 현황
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+**개발용 상시 수집(이 PC 전용 ·
+배포판 밖)** — 기능 공개 전부터 재료를 쌓는다(2026-10-07): ① rank.db 스냅숏 원본을 14일 정리 전에 `DATA_DIR/dev_archive.db` 로(키는 `taken_at` — rank.db 를 지우면 id 가 1부터) ② 데이터센터 `rank_advice` 의 기준 시각 ③ `rankerpick.collect` + 상위 200 선발을 날짜별 `pick_days` — `.env` 에 `DEV_NEXON_API_KEY`(서비스 단계 키 ·
+2026-10-07 발급)가 있으면 그 키로, 계수 `ranker_pick_dev`·상한 5,000·하루마다 다시(앱 키의 계수·429 와 따로 — `collect` 의 `budget_kind`·`daily_cap`·`stale_days`, 기본값은 앱 그대로).
+앱 키 `NEXON_API_KEY` 는 안 바꾼다(바꾸면 거래가 '키 바뀜'으로 `trades_prev` 로 옮겨진다). 작업 스케줄러 `FifaDevArchive`(pythonw ·
+로그온 2분 뒤·매일 09:00 · 그날 성공했으면 건너뜀). ⚠ 소스로 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` 로 돌리거나 옛 버전 호환부터 본다.
+로그 `logs/dev_archive.log`. 테스트 `tests/test_dev_archive.py`
 """
 from __future__ import annotations
 

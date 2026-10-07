@@ -2,6 +2,13 @@
 
 여기 있는 상수(GOAL_TYPES, 시간 구간 인코딩, 포메이션 라인)는 공식 문서에
 없어서 실제 응답 100경기로 역산·검증한 값이다. 근거는 각 상수에 적어 뒀다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+여러 경기 집계 — 선수 지표·전술·경기 결과. 역산 상수가 여기 모여 있다. 1.4.1: 패스 종류(`pass_style`) · 주별 평점(`rating_trend`) ·
+랭커 비교(`ranker_targets`·`ranker_compare`·`ranker_values` — **랭커 값은 이미 경기당 평균이라 다시 나누지 않는다**, `test_ranker_values_are_per_game`) ·
+슛의 어시 위치(`Shot.assist_x/y`). 2.1.1: 축구장 줄 배치(`pitch_rows` — 위=공격 → 아래=GK, 줄 안 x 순 `PITCH_X`) ·
+스쿼드 가치(`squad_value` — 모르는 시세는 0 이 아니라 따로 셈) · 강화 반영 OVR(`card_ovr` — `config.GRADE_OVR_BONUS`) · 키플레이어(`key_players`)
 """
 from __future__ import annotations
 

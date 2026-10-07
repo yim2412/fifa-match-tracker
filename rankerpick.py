@@ -16,6 +16,23 @@ ouid(닉네임이 그대로면 캐시) → 최근 경기 id 1 → 상세(이미 
 | 3일 안에 받은 랭커는 다시 안 묻는다 — 단 스냅숏 닉네임이 바뀌었으면 바로 | `due` |
 | 실패(닉네임 바뀜 등)도 `fail`·`fetched_at` 을 적는다 — 탭을 열 때마다 다시 시도하지 않게 | `collect` |
 | 같은 경기를 다시 확인하면 `ranker_matches.fetched_on` 을 오늘로 — 14일 정리에 안 지워지게 | `store.mark_ranker_match` |
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+랭커 픽(2.1.1 · 16단계 · 2.3.1 N15 `record_pick_days` — 한 바퀴 끝에 그날 아는 픽을 rank.db `pick_days` 에 **더한다**: 날짜 = 마지막 경기 날짜 ·
+출처 PICK 상위 200만 · 센 것은 `pick_counted`("경기/프로필 번호" · 14일) · 14일보다 옛 경기는 안 셈.
+띄우기 `RankerPickLoader._record_days`(만들지 않는 열기)) — `top_rankers`(rank.db 원본이 남은 마지막 스냅숏 상위 200) → `collect`(파일 머리말 표: 실제 요청 직전에만 `api_budget` 계수 ·
+`attempts=1` · 간격 0.25초 · 429 는 60초를 1초씩 쉬고 한 번 더 → 또 429 면 그날 `hit_429` · 그날 다른 로더 최종 429 면 시작 안 함 · 3일 ·
+닉네임 바뀌면 바로) → 상세는 `store.save_matches` 그대로(**`accounts` 엔 안 넣는다**) + `ranker_matches` 표시.
+화면 집계 `ranker_pick_summary`(core_api).
+띄우기는 `app_main.RankerPickLoader`/`start_ranker_pick` — **랭커 픽 화면과 창이 보일 때만**(메뉴 이동·숨김·최소화면 cancel · 다시 보이면 잇는다) ·
+오픈API 백그라운드는 하나씩(검색·비교·거래·랭커 기록 뒤).
+지우기는 화면 스레드 한 함수 `purge_ranker_pick_data`(로더가 돌면 끝난 뒤) — 끄는 길은 전부 `sync_ranker_pick_data` 를 거친다(수집이 꺼져 있으면 전부, 켜져 있으면 14일 ·
+켤 때도 한 번). 추천(17단계 ·
+[추천] 탭): `my_team_color`(스냅숏 내 행 → 검색 때 읽은 팀컬러·캐시 → 모르면 None, 짐작 안 함) → `recommend_candidates`(① 받아 둔 상위 200 ·
+② 색인의 내 상대 중 1만 위 안 · 30일 — 요청 0 · ③ 받아 둔 201~1,000) → `recommend`(문턱 `RECOMMEND_MIN_RANKERS` 미만이면 표 없음).
+③ 받기는 `recommend_targets` — 로더가 **[추천] 이 보일 때만 싣고 상위 200보다 먼저**(200명이 하루 상한을 혼자 다 쓴다).
+[픽] 로더가 도는 중 [추천] 을 열면 멈추고 실어서 다시(`_pick_restart`)
 """
 from __future__ import annotations
 

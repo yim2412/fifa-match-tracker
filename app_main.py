@@ -1,6 +1,19 @@
 """감독모드 전적 분석(예전 이름 피파 전적관리) — PyQt6 앱.
 
 첫 화면은 검색창 하나. 구단주명을 넣으면 왼쪽 메뉴 + 대시보드 화면으로 전환된다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+PyQt6 UI — 랭킹 추이는 탭 셋(추이 · 메타 변화 · 점수 분포 — 2.3.1).
+rank.db 정리는 `RankMaintWorker`(예약기 `RankCollectScheduler.maintain` — 켤 때 VACUUM 포함 · 1시간 확인마다 ·
+끄는 길 `sync_ranker_pick_data` · 겹치면 끝난 뒤 한 번 · 수집과 겹치면 수집이 기다림).
+검색 화면 → 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드 포함), 조회 워커 스레드(`MatchLoader`).
+메뉴를 늘리려면 `NAV` 에 한 줄 — 한 메뉴 안의 구획은 `Tabs`(페이지 안 탭, 2.1.1 · 보던 탭은 `view/tab/<sid>`) ·
+아직 빈 메뉴는 `config.HIDDEN_NAV_UNTIL_READY`(남아 있으면 `release.py` 가 멈춘다) · 1.x 메뉴 이름 복원은 `OLD_PAGE_NAMES`.
+ELO 그래프(1.3.1)는 `EloLoader`(작업 스레드 — fifa.db `elo_history`·`elo_track` + rank.db 컷 읽기 전용)가 읽고 창은 `self._elo[ouid]` 로 그리기만 — 띄우는 곳은 `_on_loaded`(모든 열기)·로더 `elo_saved`·수집 회차 끝 셋, 요청 번호로 늦은 읽기를 버린다.
+옛 동의자 다시 묻기는 `ask_notice_update_once`(창이 **보일 때** — 일반 실행·트레이 [열기]·두 번째 실행).
+로더는 계정 확인 뒤 저장된 경기 읽기(`load_saved`)·랭킹·메타를 넥슨 조회와 **나란히** 돌리고, 켤 때 마지막 계정을 미리 읽어 둔다(`SavedPrefetch` — 화면엔 안 그림).
+랭킹이 늦으면 `rank_ready` 로 카드만 뒤따른다
 """
 from __future__ import annotations
 

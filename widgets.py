@@ -1,6 +1,14 @@
 """화면 부품 — 랭커 카드 · 요약 카드 · 막대 그래프 행.
 
 app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+화면 부품 — 랭커 카드, 표(`FitTableWidget`), 축구장 v2(`PitchWidget` — 2.1.1: `PitchCard` 줄 목록을 받아 줄마다 폭을 사람 수로 나눈다 ·
+칩은 QPainter 로 크기에 맞춰 그리고 작아지면 얼굴 → 시세 줄 순으로 뺀다 · 위 띠 = 스쿼드 가치·급여 + 자동 읽기가 막힌 이유와 [안내 보기].
+OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
+접는 구획(`Collapsible`), 좁으면 접히는 바(`WrapBar`)·페이지 안 탭(`PageTabs` — 숨기기/보이기라 숨은 탭이 최소 폭을 안 넓힌다 ·
+탭줄은 `Card.add_to_title_row` 로 제목 옆)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등
 """
 from __future__ import annotations
 

@@ -7,6 +7,24 @@
 (예전에 여기 "최근 100경기만 준다"고 적혀 있었다 — 100은 한 번에 받는 상한이다.)
 
 저장 기준은 닉네임이 아니라 ouid — 구단주명은 바뀌어도 ouid는 안 바뀐다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL — 팀컬러는 넥슨 이름 + `emblem` 열 "읽은 시각\\t엠블럼 키", 시각이 `fetched_at` 과 다르면 옛 버전이 이름만 바꾼 줄이라 엠블럼 없음 ·
+화면 글자가 아니라 로더 원값 `_teamcolor_raw` 를 저장)·팀컬러 효과 캐시(`teamcolor_meta`·`teamcolor_steps` 7일)·검색한 구단주 ELO(`elo_history` — 메인 검색 로더만 `record_elo=True`, 비교 로더는 안 적는다 ·
+따라가기 계정은 수집이 snapshot 줄을 더한다 ·
+같은 (계정, 시각, 출처)는 `ux_elo_src` 가 막는다)·따라가기 목록(`elo_track`, 최대 `config.ELO_TRACK_MAX`)·거래(`trades`·`trade_state`·카드 시세 `card_prices` — 1.4.1, 받는 규칙은 `tradecollect`)·카드 정보(`card_info` — 급여·1강 OVR, 30일)·하루 요청 계수(`api_budget` — `budget_take` 는 BEGIN IMMEDIATE 로 읽고-더하기, 재시작해도 남는다 ·
+`hit_429` 는 그날 랭커 픽을 막는 표시)·선수 색인(`match_squads` + `squad_owner`·`squad_match` — 2.1.1 ·
+정수 키, `matches.rowid` 를 안 가리킨다.
+새 경기는 `save_matches` 안에서 `index_squads`(SAVEPOINT — 한 경기 실패는 그 경기만, 그래도 `squad_match` 줄은 남겨 다시 안 훑는다) ·
+옛 경기는 `backfill_squads`(1,000경기 · PK 순 정렬해 넣기 — 경기마다 넣으면 2배) ·
+찾기 `owners_using_card`)·랭커 픽(`ranker_squads`·`ranker_matches` · 지우기 `purge_ranker_data`).
+**모든 연결이 `secure_delete=ON`** — 지우는 연결에서만 켜면 그 전 삽입·재배치로 페이지 빈칸에 남은 다른 구단주 닉네임이 그대로였다(2026-10-06 테스트가 파일 바이트로 잡음).
+**화면은 API 가 아니라 이 DB 를 본다**. 검색 결과는 바탕(화면이 가진 목록 · 미리 읽은 것 ·
+새로 읽은 것) + DB 에만 있는 경기(`known_ids` 대조 — 시각으로 자르면 이어 받은 옛 경기를 빠뜨린다)를 `merge_details`.
+열 때 `PRAGMA optimize` 로 통계를 갱신하는데, **통계가 생기면 SQLite 가 계획을 바꾼다** — `load_details` 는 본문을 통째로 임시 정렬하는 계획을 골라 SQL 이 3배가 됐다(2026-10-04).
+그래서 `(종류, 날짜)` 인덱스를 직접 지정한다. 새 쿼리를 붙이면 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 가 없는지 본다.
+해석은 `orjson`(없으면 json, 배포판엔 `release.py` 가 확인)
 """
 from __future__ import annotations
 

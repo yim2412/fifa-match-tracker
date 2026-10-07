@@ -14,6 +14,17 @@
 
 ⚠ app.quit() 은 보이는 창의 closeEvent 를 한 번 더 부른다(PyQt 6.11 실측) → 창은 `_quitting` 이면 숨김·정리 없이 받기만.
 정리는 closeEvent 가 아니라 quit_app 에서 한다 — 숨긴 상태로 끝낼 때도 돌게.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+트레이 상주(1.1.1) — `AppShell`(트레이 · 수집 예약 · 6시간 업데이트 확인 ·
+숨긴 30분 뒤 내려놓기)과 **종료 진입점 하나 `quit_app(fast)`** (파일 머리말 표 — 새 종료 경로는 여기를 거친다).
+창(`MainWindow`)은 정리를 `shutdown(fast)` 로 내주고, closeEvent 는 `_quitting` 이면 받기만(`app.quit()` 이 다시 부른다).
+한 번만 실행(`SingleInstance`)은 **뮤텍스로 판정** — 윈도우에선 같은 이름 `QLocalServer` 의 두 번째 listen 도 성공한다(2026-10-04 실측).
+파이프는 "창 앞으로"와 **종료 부탁(`--quit` — 제거기가 부른다. 제거기는 설치기와 달리 떠 있는 앱을 안 닫아 폴더가 통째로 남았다, 1.1.1 실측)**만.
+`--quit` 은 떠 있는 게 없으면 아무것도 켜지 않는다(`.iss` `QuitArg` 와 같아야 — 테스트가 대조).
+**트레이 풍선 알림은 없다**(2026-10-05 사용자 — exe 실측 중 뜬 알림을 보고 "알림 자체는 안 보내도록").
+숨긴 중 생긴 일은 창을 열 때 — `test_no_tray_balloon_from_any_path` 가 `showMessage` 호출을 소스에서 막는다
 """
 from __future__ import annotations
 

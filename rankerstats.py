@@ -2,6 +2,12 @@
 
 화면 없이 돈다 — 띄우기는 app_main.RankerStatsLoader(N1 메뉴 · N2 선수 카드 탭이 같이 쓴다).
 값은 랭커들의 **경기당 평균**이라 다시 나누지 않는다(nexon_api.EP_RANKER_STATS 주석).
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+랭커 기록 받기(1.4.1 13단계) — `collect` 가 하루 캐시(fifa.db `ranker_stats`)에 없는 쌍만 `nexon_api.get_ranker_stats` 로(묶음 `RANKER_STATS_BATCH` 50 — 한 요청 상한은 **URL 길이**, 81쌍까지 ·
+묶음마다 한 트랜잭션). 넥슨이 응답에서 뺀 쌍(데이터 없음)도 NULL 로 그날 기억한다.
+띄우기는 `app_main.RankerStatsLoader` — "선수 지표 › [랭커 비교]" 탭(N1)과 선수 카드 [랭커 기록] 탭(N2 · 탭을 처음 열 때)이 같이 쓴다
 """
 from __future__ import annotations
 

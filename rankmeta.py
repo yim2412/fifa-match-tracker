@@ -14,6 +14,19 @@
 | 구단가치는 판정에 안 쓴다 | 매일 모두 바뀐다(R3) |
 
 결과는 (DB 파일, 원본 스냅숏 목록, 인자) 키로 프로세스 안에 캐시한다(predict.day_steps 꼴 · 잠금 하나).
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+랭커 메타 ② 스냅숏 읽기(2.4.1 · 31단계) — rank.db 를 **읽기만**(요청 0 · 쓰기 0). 파일 머리말 표가 규칙: 지금 시즌 · `data_time` ·
+이웃 쌍 `latest_pair`(원본 남은 마지막 둘 · ≤ `RANK_CONT_MAX_H`) · **N10 하루 걸음만 `predict._gap_ok`(수집 시각)** · 음수 차 뺌 ·
+하루 승률·승률→점수는 **앞 스냅숏 순위**로 구간 · 랭커 승률 승÷(승+패). 함수: `day_winrate`(B2) · `value_score`(B3 — `B3_MIN_USERS` 이상 팀컬러끼리 백분위 ·
+`B3_MIN_TEAMS` 미만이면 점수 없음) · `value_bins`(B4) · `tier_means`(B6) · `formation_group`/`group_meta`(N6 — B1 은 화면이 묶는다) ·
+`winrate_to_elo`/`winrate_peers`/`my_day_rate`(N10) · `weekly`(N13) ·
+`rank_moves`/`judge`(N8·N9 — 판정 순서는 `judge` 한 곳) · `find_sn` · `ranked_nicknames`(N7 — DISTINCT 대신 파이썬 집합).
+결과는 (DB 파일, 지금 시즌 스냅숏, 원본 목록, 인자) 키로 캐시(`clear_cache` — 테스트).
+1만 행 × 14스냅숏 첫 계산이 전부 CPU 0.3초 안이라 작업 스레드 없이 화면 스레드에서 읽는다(`test_rankmeta` 예산). 챔스 판정은 `rankcollect.is_champ` 한 곳.
+화면은 `core_api` 로만 — rank.db 가 바뀌는 길 넷(회차 끝 · 팀컬러 목록 저장 · 정리 끝 `maintained` ·
+끄기/지우기 `sync_ranker_pick_data`)은 `app_main.RANK_VIEW_KEYS` 를 같이 무효화
 """
 from __future__ import annotations
 

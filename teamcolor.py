@@ -10,6 +10,16 @@
 요청은 사용자가 효과 창을 열거나 [더 보기]를 누를 때만(자동 요청 0) · 웹 데이터가 꺼져 있으면 0.
 
 이름이 같은 팀컬러 11쌍(config.TEAMCOLOR_DUP_NAMES)은 엠블럼으로 가른다 — 화면의 팀컬러 키는 label() 한 글자.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+팀컬러 효과표(2.2.1) — 데이터센터 목록(`fetch_list`)·상세 단계(`fetch_detail`)·적용 선수 JSON(`fetch_players` — 한 번 100명, `more_players` 가 OVR 상한으로 이어 받고 같은 OVR 이 100명을 넘으면 상한 −1).
+상세·선수는 **`X-Requested-With` 헤더가 있어야** 200(사용자 U4 — 붙인다) · `allow_redirects=False`(302 = 오류, 오류 페이지 주소엔 안 간다) ·
+실패 종류 `TeamColorError.kind`(off·down·format·rate) → 문구 `MESSAGES`.
+**이름이 같은 팀컬러 11쌍**(`config.TEAMCOLOR_DUP_NAMES` — 상수, 받은 목록으로 넓히지 않는다: 창을 열기 전후로 표가 바뀐다)은 화면 키 `label(이름, 엠블럼)`("이름 ·
+강화"/"이름 · 클럽"/"이름 (구분 전)")으로 가르고, 랭커 쪽과 맞댈 땐 `name_of`. 효과 창은 `app_main.TeamColorDialog`(모달 아님 ·
+하나만) + `TeamColorEffectLoader`(캐시 `store.load_teamcolor_meta/steps` 7일 ·
+받은 선수 급여는 `store.save_card_salary` — 급여 열만, JSON 의 OVR 은 선수 페이지와 달라 안 쓴다)
 """
 from __future__ import annotations
 

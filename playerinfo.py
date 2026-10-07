@@ -9,6 +9,13 @@
 
 주의: JSON API 가 아니라 HTML 스크래핑이다. 넥슨이 페이지 구조(class 이름)를
 바꾸면 파싱이 깨진다 — 그러면 실제 응답과 대조해 아래 정규식만 고치면 된다.
+
+
+규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
+선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑.
+급여·OVR 은 **본 카드 구역**(`playerThumb` … `infoWrap`)에서만 — 페이지에 다른 카드 값이 수십 개다.
+카드 캐시 채우기 `collect_cards`(쓰임별 하루 계수 `KIND_CHIP`·`KIND_LEDGER` — 요청 직전에만 `store.budget_take` · 웹 데이터 꺼짐은 요청도 계수도 0) ·
+`save_card`(시세 + `card_info`)
 """
 from __future__ import annotations
 
