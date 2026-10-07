@@ -185,12 +185,13 @@
 
 ## 2.6.1 — 내 경기 분석 ① 기준선·습관 (33단계) — 계획 검토 중
 
-> **상태: 4판**(2026-10-08). 사용자 결정 U1~U6 끝.
+> **상태: 5판**(2026-10-08). 사용자 결정 U1~U6 끝.
 >
 > **검토 기록** 1회차(검토 기준 10 ⓑ): A(Sonnet · 근거 묶음 · 코드 대조) [상] 2 · [중] 7 · 약 16만 토큰 / B(Opus · 묶음 없이 · 사용자·실패·통계) [상] 4 · [중] 12 · 약 13만 토큰.
 > [상] 6 — 견주는 두 값의 식이 갈림(A) · 공격력 점수의 승 항(A) · None 한 판이 식을 통째로 바꿈(B) · 같은 경기가 화면마다 다른 식(B → U5 사용자 결정 + 표시) · 독립 정규 근사 구간(B) · N20 다중 비교(B). **A·B 의 [상]이 안 겹쳤다** — A 는 코드 자리, B 는 통계·사용자 경험. 전부 반영(2판).
 > 2회차(새 검토자 1명 · Opus · 계획 전체 + 바뀐 줄 묶음) [상] 2(`rated` 가 표본 기준 일부에만 · N20 검정 양이 보이는 승률과 다름) · [중] 7(N20 층 섞임 · N16 p 범위 · `Discipline` 빠짐 · 작업자 띄우는 자리 · 크기 문턱은 U2 변경 → U6 · 타임라인 모순 · 주입 표 `_contrast`/연승 직후) · 약 17만 토큰 · 통계 식은 틀린 곳 없음 — 전부 반영(3판).
 > 3회차(새 검토자 · Opus · 바뀐 줄) [상] 1(`is_weak` 목록이 또 빠짐 — 2회차 [상]과 같은 종류) · [중] 4(규칙 정규식이 별칭을 못 봄 · `RATE_CLASSES` 모으기 · 그래프 일수 진입점 · N20 칸 합치기 순서) · 약 13만 토큰. **같은 종류가 두 번이라 목록을 검토자에게 맡기지 않고 문턱 이름 grep 으로 전수를 직접 뽑아 표로**(대시보드 선제골 게이지 `_pct` 가 승률 식 자리로도 새로 나왔다) — 4판.
+> 4회차(새 검토자 · Opus · 바뀐 줄) [상] 1(상대 카드 흐림 `OPP_CARD_MIN` 이 대상·제외 어디에도 없음) · [중] 5(규칙 이름 범위 · 근거 막대 `Basis` · 게이지 셋째 칸은 승률 아님 · 기간 표 평균 · `RATE_CLASSES` 범위) · 약 13만 토큰. **손 목록이 세 번째로 빠져 정의를 바꿨다** — 목록 = 규칙과 같은 grep 정의로 뽑은 53줄 전부(대상/제외), 규칙 첫 실행이 표와 같아야 한다 — 5판.
 
 **규모** 중간. 새 넥슨 요청 **0** · 오픈API 0 · **fifa.db·rank.db 에 쓰는 것 0**(새 표·열 없음). 재료는 화면이 이미 가진 경기 상세(`_details_all`)뿐.
 계산은 새 모듈 **`habits.py`**(화면 없음 · 순수 계산 — 이름은 구현 때 바꿔도 된다) + `stats.py`·`models.py` 의 기존 함수 수정 → 화면은 `core_api` 로.
@@ -257,22 +258,25 @@
   | 시즌 표 `app_main.py:8854`·`8867` | 시즌끼리 | `_matches_all` |
   | 구단주 비교 `app_main.py:6557`·`6558` | 나 대 상대 | 두 계정 경기 합친 범위 |
   | `_wr_bar_row`(app_main.py:3605) · `_show_trend_summary`(app_main.py:8831) | 막대끼리 · 기간 요약 | 화면이 넘긴 범위 |
+  | 기간 표 `_render_period`(app_main.py:3179·3183) | 줄마다 대 평균(`overall` — "평균 대비 %p" 열·행 색) | 기간 표 범위 한 번 — `period_stats(…, mixed=)` 와 `overall` 이 같은 값(4회차 [중]) |
   | `squad_timeline` 사건 앞뒤 창 · 사건 목록 표 | 앞 대 뒤 · 사건끼리 | **타임라인 하나 전체** — 타임라인에 들어간 경기 목록으로 한 번 판정해 모든 `Window` 에 같은 `mixed` 를 준다. 누적합(squad_timeline.py:158)에 칸을 더하지 않는다(2회차 [중] — 1회차 반영이 "한 번 판정"과 "누적 칸"을 같이 적어 모순이었다) |
   | `check_api.py:95` | (터미널 출력) | 받은 범위 |
-- 식은 한 곳 `models.win_pct(win, draw, lose, mixed)` — 섞임 → 승÷(승+패) · 한 집단 → 승÷(승+무+패) · 분모 0 이면 0.0. 섞임 판정은 `models.is_mixed(flags)`. **R6 의 자리 + `stats.Discipline`(stats.py:685 — `post_hit`·`my_red`·`opp_red` 승무패, app_main.py:3687 이 승률로 띄운다 · 2회차 [중]) + `widgets.rate_of`(widgets.py:1787 — 쓰는 곳 app_main.py:3440·3687·9091) + `analysis._rate`(analysis.py:124) + `win_rate_bar` 의 `wr`(widgets.py:1131) + 대시보드 선제골 게이지 `_pct`(dashboard.py:126·367~371 — 3회차 뒤 전수 grep 에서 나옴)가 전부 이 함수를 부른다**(1회차 [중] — 처음 목록에 셋이 빠졌다).
+- 식은 한 곳 `models.win_pct(win, draw, lose, mixed)` — 섞임 → 승÷(승+패) · 한 집단 → 승÷(승+무+패) · 분모 0 이면 0.0. 섞임 판정은 `models.is_mixed(flags)`. **R6 의 자리 + `stats.Discipline`(stats.py:685 — `post_hit`·`my_red`·`opp_red` 승무패, app_main.py:3687 이 승률로 띄운다 · 2회차 [중]) + `widgets.rate_of`(widgets.py:1787 — 쓰는 곳 app_main.py:3440·3687·9091) + `analysis._rate`(analysis.py:124) + `win_rate_bar` 의 `wr`(widgets.py:1131) + 대시보드 선제골 게이지 첫째·둘째 칸 `_pct`(dashboard.py:367·369 — 3회차 뒤 전수 grep 에서 나옴 · 셋째 칸 "지킨 비율"은 승률이 아니라 제외) + 기간 표 평균 `overall`(app_main.py:3183 — 4회차 [중])이 전부 이 함수를 부른다**(1회차 [중] — 처음 목록에 셋이 빠졌다).
 - **예외**: `PlayerStat._win_term`(stats.py:433 — 공격력·수비력 점수의 "5×(승/출전)")은 **승÷출전 고정**(1회차 [상] — 선수마다·표마다 식이 바뀌면 점수 순위가 조용히 바뀐다. 골든 `test_parsing.py:818`·`825` 그대로여야 한다). 선수표의 **보이는 승률 칸**만 `win_pct`(묶음 = 선수표 하나). 랭커 데이터(`rankmeta.my_day_rate`·`rankmeta._rate`)는 이미 승÷(승+패) — 그대로.
-- 집계 줄(`DivisionStat`·`TimeBandRate` 등)의 `mixed` 칸 **기본값은 None, None 이면 승률을 내지 않고 오류**(1회차 [중] — 기본값이 False 면 채우는 걸 잊은 길이 옛 식으로 조용히 남는다). `test_parsing`: 승률을 내는 집계 결과는 `models.RATE_CLASSES` 한 표(`Stats`·`OpponentStat`·`PeriodRate`·`PeriodStat`·`PlayerStat`·`FormationStat`·`TimeBandRate`·`StreakAfter`·`DivisionStat`·`PossessionBand`·`TeamColorStat`·`OppCard`·`ResultBreakdown`·`ClutchSummary`·`Discipline`·`Window`)에 있고 결과의 `mixed` 가 bool. **표가 빠지지 않게** `test_rules` 가 AST 로 `win_pct` 를 부르는 클래스 전부가 표에 있는지 대조(3회차 [중] — 필드 이름으로 모으면 `Discipline`·`ClutchSummary`(승무패가 `list[int]`)는 빠지고 `PassStyle`(`win: PassGroup`)은 잘못 걸렸다).
-- **분모 이름**(1회차 [중]): 승률 분모 `rated`(섞임 → 승+패 · 한 집단 → 승+무+패)와 경기 수 `games` 를 나눈다. **표본 기준은 전부 `rated`** — 판정은 한 함수 `models.is_weak(win, draw, lose, mixed, min_n)` 로 모으고, 승률을 곁에 띄우며 흐림·침묵·거르기를 하는 자리가 전부 그걸 부른다(2회차 [상] — 1회차 반영은 일부만 적었다). 전수 — **3회차 [상] 뒤 문턱 이름(`MIN_COND`·`MIN_FLOW`·`MIN_BASE`·`MIN_OPP`·`MIN_GAUGE_GAMES`·`min_n`·`need`·`few` 별칭) 비교를 grep 으로 전부 뽑아 한 줄씩 가렸다**(2026-10-08 — 1·2회차 목록이 두 번 다 빠졌다):
-  | 대상(승률 표본) | 자리 |
+- 집계 줄(`DivisionStat`·`TimeBandRate` 등)의 `mixed` 칸 **기본값은 None, None 이면 승률을 내지 않고 오류**(1회차 [중] — 기본값이 False 면 채우는 걸 잊은 길이 옛 식으로 조용히 남는다). `test_parsing`: 승률을 내는 집계 결과는 `models.RATE_CLASSES` 한 표(`Stats`·`OpponentStat`·`PeriodRate`·`PeriodStat`·`PlayerStat`·`FormationStat`·`TimeBandRate`·`StreakAfter`·`DivisionStat`·`PossessionBand`·`TeamColorStat`·`OppCard`·`ResultBreakdown`·`ClutchSummary`·`Discipline`·`Window`)에 있고 결과의 `mixed` 가 bool. **표가 빠지지 않게** `test_rules` 가 AST 로 **models·stats·squad_timeline 의** `win_pct` 를 부르는 클래스 전부가 표에 있는지 대조(4회차 [중] — 화면 클래스 `MainWindow`·대시보드는 집계 결과가 아니라 대상 밖)(3회차 [중] — 필드 이름으로 모으면 `Discipline`·`ClutchSummary`(승무패가 `list[int]`)는 빠지고 `PassStyle`(`win: PassGroup`)은 잘못 걸렸다).
+- **분모 이름**(1회차 [중]): 승률 분모 `rated` = `models.rated(win, draw, lose, mixed)`(섞임 → 승+패 · 한 집단 → 승+무+패)와 경기 수 `games` 를 나눈다. **표본 기준은 전부 `rated`** — 판정은 한 함수 `models.is_weak(rated, min_n)` 로 모으고, 승률을 곁에 띄우며 흐림·침묵·거르기를 하는 자리가 전부 그걸 부른다(2회차 [상]). `analysis.Basis` 는 `n` 을 `rated` 로 싣고 `mixed` 칸을 더한다(4회차 [중] — 승무패가 없어 `is_weak` 를 못 불렀다).
+  **전수 — 기계로 뽑은 목록**(4회차 [상] 뒤): 2·3·4회차 연속으로 손 목록이 빠졌다(3회차 뒤 grep 은 `MIN_` 접두만 봐 `OPP_CARD_MIN`·`TIMELINE_MIN_GAMES` 를 놓쳤다). 그래서 **이름 어디에든 `MIN` 이 든 것 · `min_n` · `need` · `few*` 와의 비교식 전부**를 아래 grep 으로 뽑아 하나도 빼지 않고 대상/제외로 갈랐다 — `test_rules` 규칙이 같은 정의로 찾으므로 **첫 실행 결과가 이 표와 정확히 같아야 한다**(다르면 표가 틀린 것).
+  `grep -nE "[<>]=?\s*[A-Za-z_.]*(MIN|min_n|\bneed\b|\bfew\w*)|(MIN\w*|min_n|\bneed\b|\bfew\w*)\s*[<>]=?"` · models·stats·analysis·widgets·dashboard·app_main·squad_timeline·check_api · Qt 크기 함수(`setMinimum`·`minimumSize`) 뺌 · 2026-10-08 커밋 `0b04e47` 기준 53줄.
+  | 대상(승률 표본 — `is_weak`) | 자리 |
   |---|---|
   | models | `moving_win_rate`(models.py:405 — 이동 물결 띠도 이 값) |
-  | analysis | `_flow`·`_patterns` 의 `s.total`·`prev.total`(analysis.py:148·168·447) · 선제골 승률 `n_first`·`n_conc`(analysis.py:233·244·255) · `need`·`.games` 거르기(analysis.py:302·330·402·423) · `_w`·`Basis.n`·`_min_cond`·`streak_min_n` |
+  | analysis | `s.total`·`prev.total`(analysis.py:148·168·447) · 선제골 승률 `n_first`·`n_conc`(analysis.py:233·244·255) · `.games` 거르기(analysis.py:302·330·402·423) |
   | widgets | `win_rate_bar`(widgets.py:1132) |
-  | dashboard | 선제골 게이지(dashboard.py:375 — 선제골 넣은 경기 중 승 = 승률이라 **식도 `win_pct`**, `_pct`(dashboard.py:126) 세 칸) · 시간대(dashboard.py:409) · 라이벌(dashboard.py:424) |
-  | app_main | 기간 표(3209·3217) · 연승 직후(3360) · 선제골 칸(3439) · 성적 진단(3528) · 팀컬러(7462) · 시즌 막대(8886) · 포메이션(9065) |
+  | dashboard | 선제골 게이지 첫째·둘째 칸(dashboard.py:375 — 선제골 경기 중 승 · 선제 실점 경기 중 역전승) · 시간대(dashboard.py:409) · 라이벌(dashboard.py:424) |
+  | app_main | 기간 표(3209·3217) · 흐름 근거 막대 `b.n < b.min_n`(3341) · 선제골 칸(3439) · 성적 진단(3528) · **상대 카드 `c.met < OPP_CARD_MIN`(5867)** · 팀컬러 `s.games < MIN_COND`(7462 — 같은 줄의 `TEAMCOLOR_MIN_OPPONENTS` 는 상대 수라 제외) · 시즌 막대(8886) · 포메이션(9065) |
   | squad_timeline | `Window.weak`(squad_timeline.py:65) |
-  | **제외(승률 표본 아님 — `WEAK_ALLOW` 에 이유)** | 골·슛 수(analysis.py:279·353·382) · 선제골 *비율* 표본(analysis.py:193·200 `_contrast`) · 선수 출전(app_main.py:6069·8920~8951) · 랭커 표본(app_main.py:8058·8109·4613·4800) · 패스 스타일 승/패 묶음(app_main.py:9163 — 승률 아닌 성공률) | 막대 흐림과 문장 침묵이 같은 분모(analysis.py:119 가 막으려던 엇갈림).
-  **`test_rules` 새 규칙**(3회차 [중] — 이름 정규식은 별칭·`.total`·지역 변수를 못 본다): AST 로 **비교식의 한쪽이 문턱 이름**(`MIN_*` · `min_n` · `need` · 같은 함수 안에서 `MIN_*` 를 대입받은 별칭 — 대입을 따라간다)이면 `is_weak` 안이거나 `WEAK_ALLOW`(파일:함수 + 이유)에 있어야 한다. 심은 위반 넷 — `if b.games < MIN_COND` · `few = core.MIN_COND; if p.games < few` · `if s.total < MIN_BASE` · `weak = games < min_n` — 을 다 잡는지 · 지금 코드에 돌리면 위 표의 자리가 전부 걸리는지(구현 전 첫 실행 = 위 표와 대조).
+  | **제외(`WEAK_ALLOW` — 줄마다 이유)** | 슛 수 stats.py:1272 · 선수 평점 출전 stats.py:1779 · 선제골 *비율* 표본 analysis.py:193·200 · 골·슛 수 analysis.py:279·353·382 · 화면 크기·좌표 widgets.py:708·713·1453·1456·1776 · 창 크기 app_main.py:124·131 · 남은 시간 app_main.py:196 · 랭커 픽 인원 app_main.py:4606·4613·4800·4828 · 메타 점유 app_main.py:4906 · 특성 인원 app_main.py:5280 · 선수 출전·랭커 app_main.py:6069·6078·8058·8096·8925·8951 · 팀컬러 상대 수 app_main.py:7462(둘째 비교) · 패스 성공률 app_main.py:9163 · **대시보드 게이지 셋째 칸**(dashboard.py:371·375 — "지킨 비율" = (승+무)÷선제골 경기라 승률이 아니다 · 식·분모 그대로 · `PCT_ALLOW` 에도 · 4회차 [중]) |
+  **`test_rules` 새 규칙**(3·4회차 [중]): AST 로 **비교식의 한쪽이 문턱 이름**(위 grep 과 같은 정의 — 이름에 `MIN` · `min_n` · `need` · `few*`, 같은 함수 안에서 그런 값을 대입받은 별칭은 대입을 따라간다)이면 `is_weak` 안이거나 `WEAK_ALLOW`(파일:줄 문맥 + 이유)에 있어야 한다. 심은 위반 다섯 — `if b.games < MIN_COND` · `few = core.MIN_COND; if p.games < few` · `if s.total < MIN_BASE` · `weak = games < min_n` · `if c.met < config.OPP_CARD_MIN` — 을 다 잡는지 · 첫 실행 = 위 표.
 - 결과: 양쪽 챔스만 하는 계정은 무승부 0 이라 두 식이 같고(R1), 챔스 아래만 하는 계정은 승÷전체, 오르내리는 계정(계정1·2)은 대부분 승÷(승+패). 계정1 전체 46.2 → 50.0%(R4).
 - **표시**(U5 — 1회차 [상] "같은 경기가 화면마다 다른 식"의 안전장치): **승률 숫자를 내는 곳은 전부 `widgets.win_rate_text(win, draw, lose, mixed)` 하나로** — "50.0% · 승÷(승+패) · 무 859" 꼴(좁은 칸은 식 대신 `*` + 툴팁). 머리·툴팁 설명은 `config.WIN_RATE_NOTE_MIXED`("무승부가 나는 경기와 안 나는 경기가 섞여 있어 무승부를 빼고 셉니다") · `WIN_RATE_NOTE_SINGLE`. [카드별](R7)도.
   **무승부 비율 이름을 둘로 가른다**(1회차 [중]): "무 N%" = 전체 경기 대비(대시보드·표) · "무승부 가능 경기 중 N%" = N20 전용 — 같은 이름에 다른 분모를 쓰지 않는다.
@@ -363,7 +367,7 @@
 | 견주는 두 값 — 위 "주입" 표 8자리 | 합친 범위로 한 번 판정한 `mixed` 를 양쪽에 | `test_ui_smoke`·`test_analysis`: **최근 20경기는 한 집단 · 시즌은 섞인** 지어낸 계정에서 대시보드 "시즌 대 최근" 두 값이 같은 식 · 흐름 문장 `Basis.rate`·`base_rate` 가 같은 식 — 주입을 빼면 FAIL 하는지(변이) |
 | `mixed` 채움 | 집계 줄 기본값 None → 승률 오류 | `test_parsing`: 모든 집계 함수(R6 클래스를 돌려주는 것 전부) 결과의 `mixed` 가 bool |
 | 표본 기준 — 위 전수 목록 | `models.is_weak`(`rated`) | `test_ui_smoke`: 섞인 묶음에서 무 10 · 승 3 · 패 2 → 막대 흐림 **그리고** 같은 조건의 문장 침묵(`test_analysis`) · `test_rules` `.games` 대 `MIN_` 규칙(심은 위반을 잡는지) |
-| 승률 표시 | `widgets.win_rate_text` 하나 · `WIN_RATE_NOTE_*` | `test_ui_smoke`: 섞인 지어낸 계정 → 대시보드·시즌 표·성적 진단 글자에 "승÷(승+패)" · 챔스 아래만 → "승÷전체" · `test_rules` 위 규칙이 `win_rate_text` 밖 승률 글자 조립도 잡는다 |
+| 승률 표시 — [카드별] 안내 글자(app_main.py:5836 고정 "승÷전체" — 4회차 [상]) 포함 | `widgets.win_rate_text` 하나 · `WIN_RATE_NOTE_*` | `test_ui_smoke`: 섞인 지어낸 계정 → 대시보드·시즌 표·성적 진단 글자에 "승÷(승+패)" · 챔스 아래만 → "승÷전체" · `test_rules` 위 규칙이 `win_rate_text` 밖 승률 글자 조립도 잡는다 |
 | 기준선 — N19·A1 | `side_totals` 하나 · `paired_diff` | `test_habits`(1회차 [중] — `team_profile` 과 대조하면 같은 코드를 두 번 부르는 동어반복): **손으로 센 기대값** — 지어낸 3경기(슛·골·태클·점유를 적어 둔 것)의 합계·짝 차이·표준오차를 숫자로 단언 · 한 경기 슛을 일부러 바꾸면 FAIL |
 | 구간 방법 — `paired_diff` | 경기 단위 선형화 | `test_habits`: 경기 안 뭉친 지어낸 자료(같은 경기에 슛 20개가 다 골/다 실패)에서 독립 근사보다 구간이 넓음 · 점유(나+상대 = 100)에서 짝 차이 구간이 독립 근사보다 √2 배 넓음을 단언(차 = 2·나 − 100) |
 | 되짚기 — N17 | `_timeline_matches_board` · 같은 시각 보류 | `test_parsing`: 자책골 경기 → 뺀 수 1 · 동시각 → 보류 |
