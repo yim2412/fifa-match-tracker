@@ -49,6 +49,7 @@ import seasons as sn  # noqa: E402
 import store  # noqa: E402
 import stats as st_mod  # noqa: E402
 import teamcolor  # noqa: E402
+import traitcollect  # noqa: E402
 import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
 
@@ -2257,6 +2258,8 @@ def _web_calls():
         ("teamcolor list", lambda: teamcolor.fetch_list(), teamcolor.TeamColorError),
         ("teamcolor detail", lambda: teamcolor.fetch_detail(1005), teamcolor.TeamColorError),
         ("teamcolor players", lambda: teamcolor.fetch_players(1005), teamcolor.TeamColorError),
+        ("trait owner", lambda: traitcollect.fetch_owner_sn(traitcollect.new_session(), "닉"), traitcollect.TraitError),
+        ("trait team", lambda: traitcollect.fetch_team(traitcollect.new_session(), 1, 1, 0), traitcollect.TraitError),
     ]
 
 

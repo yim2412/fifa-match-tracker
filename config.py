@@ -246,6 +246,11 @@ TEAMCOLOR_DUP_NAMES = frozenset({
 TEAMCOLOR_CACHE_DAYS = 7            # 효과 목록·단계 캐시 — 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다
 TEAMCOLOR_MIN_OPPONENTS = 3         # 승률 표에서 상대가 이보다 적은 팀컬러는 흐림 — 한 사람과의 반복 대전이 승률을 끌고 가지 않게(초안)
 TEAMCOLOR_PLAYERS_PAGE = 100        # 넥슨 선수 목록 한 요청의 최대 인원(쪽 넘김 없음 — OVR 상한으로 이어 받는다)
+# 포지션 특성(32단계 · traitcollect.py) — 스쿼드메이커 팀 칸 조회. 팀 = (n1TeamType 1 대표/0 클럽, n1TeamPart 0·1·2 = A·B·C)
+# 대표를 먼저 본다(랭커 경기는 대부분 대표 팀 — 맞는 팀을 일찍 찾으면 거기서 멈춘다). 이 단계는 전술 번호 0(= 전술 1) 한 칸만 본다
+TRAIT_TEAM_ORDER = ((1, 0), (1, 1), (1, 2), (0, 0), (0, 1), (0, 2))
+TRAIT_TACTIC_SEQ = 0
+TRAIT_TIMEOUT_S = 10                # 로더(다음 단계)를 붙일 때 앱 종료 대기 표에 이 값을 넣는다(teamcolor.TIMEOUT_S 꼴)
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}

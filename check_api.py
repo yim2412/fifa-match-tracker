@@ -235,6 +235,34 @@ def main() -> int:
     except Exception as e:
         print(f"[WARN] 팀컬러 효과 확인 실패(효과 창만 영향): {type(e).__name__}: {e}")
 
+    # 포지션 특성(32단계) — 스쿼드메이커 구단주 번호 · 팀 칸 구조(선수 18명 · spid·state·traits) · 이름표가 코드를 다 아는지. 구조만 본다
+    try:
+        import trait_codes
+        import traitcollect
+        sess = traitcollect.new_session()
+        sn = traitcollect.fetch_owner_sn(sess, nickname)
+        if sn is None:
+            print("[WARN] 특성 칸: 이 닉네임의 스쿼드메이커 구단주를 못 찾았습니다(특성 받기만 영향)")
+        else:
+            cards = None
+            for tt, part in config.TRAIT_TEAM_ORDER:
+                cards = traitcollect.fetch_team(sess, sn, tt, part)
+                if cards:
+                    break
+            if not cards:
+                print("[WARN] 특성 칸: 저장된 팀 칸이 없습니다 — 구조는 확인 못 함")
+            else:
+                names = [trait_codes.name_of(k, c) for card in cards
+                         for k, c in zip(("normal", "new", "train"), card.traits) if trait_codes.is_open_slot(c)]
+                names += [trait_codes.name_of("coach", c) for card in cards for c in (card.trainer or ())
+                          if trait_codes.is_open_slot(c)]
+                miss = [n for n in names if n.startswith("코드 ")]
+                print(f"{'[FAIL]' if len(cards) < 11 else '[OK]  '} 특성 칸(구단주 번호 {sn}): 선수 {len(cards)}명 · "
+                      f"선발 {sum(c.state == 1 for c in cards)} · 이름 나옴 {len(names) - len(miss)}/{len(names)}"
+                      f"{' · 이름표에 없는 코드 ' + ', '.join(sorted(set(miss))) if miss else ''}")
+    except Exception as e:
+        print(f"[WARN] 특성 칸 확인 실패(특성 받기만 영향): {type(e).__name__}: {e}")
+
     try:
         import playerinfo
         if first_sp is not None:
