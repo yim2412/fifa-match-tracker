@@ -24,7 +24,7 @@
 30(**2.3.1 공개** 2026-10-07 — 기준 시각 · 메타 처리·사람별 표 · 랭킹 추이 탭 둘 · 안내 6 `a3032c1`) ·
 31(**2.4.1 공개** 2026-10-07 — 메타 분석 탭 다섯 · 주간 요약 · 순위 변동 · 카드별 `5462753`).
 **1.2.1 부터의 나눔은 제안** — 그 버전 계획 검토(①~⑩·⑫) 때 고친다. **버전마다 첫 단계 앞에 계획 검토가 붙는다** —
-**2.4.1 공개 끝**(2026-10-07 — 31단계 · 상세는 `docs/DONE.md`) — 다음은 **32단계(2.5.1) 계획 검토** — 초안 2판(10-07 — 25명 실측에서 전술 판정 52% → 사용자가 포메이션별 포지션 특성만으로 줄임 U3) · **2회차 검토 끝**(10-07 — 1회차 [상] 6 해소 · 새 [상] 2 · 범위 1~500 U7 · 4판) → 다음은 3회차(새 검토자 1명 · 계획 전체 — 끝내는 조건). 끝난 버전의 상세는 `docs/DONE.md`.
+**2.4.1 공개 끝**(2026-10-07 — 31단계 · 상세는 `docs/DONE.md`) — 다음은 **32단계(2.5.1) 계획 검토** — 초안 2판(10-07 — 25명 실측에서 전술 판정 52% → 사용자가 포메이션별 포지션 특성만으로 줄임 U3) · **3회차 검토 끝**(10-07 — 계획 전체 · 새 [상] 1 [중] 6 · 5판) → 다음은 4회차(새 검토자 1명 · 3회차 반영 줄만 — [상] 0 이면 끝). 끝난 버전의 상세는 `docs/DONE.md`.
 37~39(보호 빌드)는 기능이 거의 완성된 뒤 한 번에 — 번호·버전은 제안이고, 그 사이 기능 단계가 늘면 그 앞에 끼우고 번호를 다시 매긴다.
 
 난이도는 낮음·중간·높음(2026-10-06 사용자: 계획을 보여 줄 때 늘 같이) — 계획 검토 때 다시 매긴다.
@@ -260,7 +260,7 @@
 **넣지 않는 것**: 수수료 계산기 · 스쿼드 메이커(추천 스쿼드 자동) — "하지 않기로 한 것" · 다른 구단주 보상 랭킹 · 랭킹 밖 수집 ·
 모든 구단주 경기를 받아야 하는 표(사용자 한 명의 API 키 한도 밖).
 
-### 포메이션별 포지션 특성 (32단계 · 2.5.1) — 계획 4판 (2026-10-07 · 2회차 검토 반영 · 3회차 전)
+### 포메이션별 포지션 특성 (32단계 · 2.5.1) — 계획 5판 (2026-10-07 · 3회차 검토 반영 · 4회차 전)
 
 > **상태: 초안.** 처음 재료는 "주 전술"(팀 전술 10칸 + 개인 전술·참여도)이었다. 25명 실측에서 전술 칸이 한 칸으로 정해지는 사람이 52%뿐이라(R1)
 > 사용자가 **팀 전술 설정은 빼고 포메이션 × 포지션 × 부여 특성·코치만** 모으기로 바꿨다(U3 — 2026-10-07).
@@ -314,9 +314,9 @@
 경기 id 가 같아도 오픈API 다시 확인이 지나가면 `checked_at` 을 갱신한다(요청 0) · `trait_squads` 줄이 없는 사람은 경기 id 와 상관없이 웹 대상에 넣는다
 (안 그러면 경기를 안 한 랭커의 특성 줄이 14일 정리에 지워진 뒤 다시 안 채워진다 — 검토 B). `test_trait_row_survives_same_match_recheck`.
 마지막 경기는 랭커 픽 길(`rankerpick.due` — 처음 보는 사람·닉네임 바뀐 사람 먼저, 그다음 오래 전에 받은 순 · 닉네임이 같으면 `stale_days` 안엔 안 묻는다).
-⚠ 초안의 "스냅숏 승·무·패가 그대로면 안 묻는다"는 **코드에 없다**(`rankerpick.py:134` — 검토 A). 다시 확인은 한 명 최소 1요청(목록) · 새 경기면 2요청.
+⚠ 초안의 "스냅숏 승·무·패가 그대로면 안 묻는다"는 **코드에 없다**(`rankerpick.py:147` — 검토 A). 다시 확인은 한 명 최소 1요청(목록) · 새 경기면 2요청.
 - 다시 묻는 주기: 1~200 은 랭커 픽 그대로 3일 · 201~500 은 `TRAIT_STALE_DAYS`(제안 **10일** — 아래 예산표에서 나온 값).
-- **한 번에 부른다**: 지금 `due`·`collect` 는 호출 한 번에 `stale_days`·`source` 가 하나다(`rankerpick.py:134`·`149`). 구간마다 따로 부르면
+- **한 번에 부른다**: 지금 `due`·`collect` 는 호출 한 번에 `stale_days`·`source` 가 하나다(`rankerpick.py:147`·`166`). 구간마다 따로 부르면
   앞 호출의 처음 보는 사람이 몫을 먼저 써서 뒤 구간의 정리 임박 줄이 지워진다(검토 A). → 대상 dict 마다 `stale_days`·`source` 를 싣고 한 번에 부른다
   (인자 없으면 지금 값 — 랭커 픽 로더·`dev_archive` 는 그대로). `test_due_mixed_targets_order` · 기존 `test_rankerpick`·`test_dev_archive` 통과.
 - **정리(14일)에 닿기 전에 다시 묻는다**: `due` 정렬에서 `fetched_at` 이 `RANK_RAW_KEEP_DAYS − 2`일 넘은 줄을 처음 보는 사람보다 **앞에** 둔다
@@ -328,19 +328,23 @@
 |---|---|---|
 | 1~200 | `rankerpick.collect`(`source=pick` · 계수 `ranker_pick`) — 랭커 픽 화면을 안 열어도 [특성] 화면이 부른다 | 오픈API **랭커 픽과 합쳐 300** · 웹 `trait_web` |
 | 201~500 | `rankerpick.collect`(`source=trait` 새 값 · 계수 **`ranker_pick` 그대로** — 새 종류 `trait_api` 는 만들지 않는다) | 〃 + 특성 몫 `TRAIT_API_SHARE`(아래) |
-- **429 는 한 키 한 장부**: `collect` 의 `budget_kind` 분기(`rankerpick.py:159` — 다른 키로 도는 `dev_archive` 용)를 앱 키에 쓰지 않는다. 계수가 `ranker_pick` 하나라
+- **429 는 한 키 한 장부**: `collect` 의 `budget_kind` 분기(`rankerpick.py:176` — 다른 키로 도는 `dev_archive` 용)를 앱 키에 쓰지 않는다. 계수가 `ranker_pick` 하나라
   검색·거래·랭커 기록의 최종 429(`openapi`)와 랭커 픽 429 를 특성 로더도 그대로 본다(검토 A·B [상]). `test_trait_respects_search_429`(검색 429 표시 → 특성 로더 요청 0).
 - 추천 ③(201~1,000 내 팀컬러)과 201~500 은 같은 사람·같은 `ranker_squads` 줄이다 — `due` 가 같은 표를 보므로 두 번 안 받는다.
 - **특성 몫(U7)**: 특성 로더의 201~500 요청은 합계(`ranker_pick` < 300)와 **자기 몫**(`trait_share` 계수 < `TRAIT_API_SHARE` = 300 − 134 − 60 = 106) 둘 다 남을 때만 —
   1~200 다시 확인·추천 ③ 을 굶기지 않게(검토 B — 특성 탭을 먼저 연 날 랭커 픽·[추천]이 상한에 걸렸다). `trait_share` 는 몫 세기만(429 는 `ranker_pick` 장부).
-  `collect` 에 몫 인자(`share_kind`·`share_cap`)를 더한다 · 특성 로더가 부르는 1~200 은 랭커 픽 몫으로 센다. 랭커 픽 화면의 상한 문구에 "[포지션 특성] 탭과 나눠 씀". `test_trait_share_leaves_pick_reserve`.
+  **몫은 대상 dict 마다** 싣는다(`t["share"] = "trait"` — 201~500 만 · 1~200 은 몫 없이 랭커 픽 몫). 호출 단위 인자로는 한 번에 부르는 1~200 과 201~500 을
+  가를 수 없다(검토 3회차 [상]). 지금 `_Session.call` 은 계수가 바닥나면 `_Limit` 을 던지고 `collect` 가 반복을 통째로 끝낸다(`rankerpick.py:97`·`216`) →
+  **몫이 바닥나면 그 대상만 건너뛰고 계속**, 합계 300 이 바닥날 때만 끝낸다(안 그러면 첫 바퀴 동안 몫이 다 차는 순간 뒤에 줄 선 1~200 다시 확인이 매일 잘린다).
+  몫 대상은 한 명분(최대 3요청)을 남은 몫으로 시작할 수 있을 때만 시작한다(ouid 만 받고 끊기면 저장이 안 돼 다음 날 다시 낸다).
+  랭커 픽 화면의 상한 문구에 "[포지션 특성] 탭과 나눠 씀". `test_trait_share_leaves_pick_reserve` · `test_pick_recheck_continues_after_share_spent`.
 - **예산표(오픈API 하루 300)**:
 
   | 몫 | 요청/일 | 근거 |
   |---|---|---|
   | 1~200 다시 확인(3일) | ≤ 134 | 67명 × 최대 2(목록·상세) |
   | 추천 ③ | ≤ 60 | `RECOMMEND_FETCH_MAX` 20명 × 3 |
-  | 특성 201~500 | ≤ 106 | 나머지 — 첫 바퀴 300명 × 3 = 900 → **약 9일**(하한 — 매일 상한까지 열어 둔다는 가정) · 그 뒤 10일 주기 30명/일 × 2 = 60 |
+  | 특성 201~500 | ≤ 106 | 나머지 — 첫 바퀴 300명 × 3 = 900 → **약 9일**(하한 — 매일 상한까지 열어 둔다는 가정 · 랭커 픽을 연 적 없는 사용자는 1~200 첫 확인 600요청이 앞서 **약 11일**) · 그 뒤 10일 주기 30명/일 × 2 = 60 |
   | 남는 것(특성 몫 안) | 약 46 | 500위 안 새 진입자(3요청)·닉네임 바뀜(3요청) — 하루 약 15명분. 실제 수는 재지 않음(아래) |
 
   주기 10일 < 정리 14일 · 정리 임박 다시 확인은 안전장치로 둔다. 실제 채움 속도는 구현 뒤 첫 2주로 잰다.
@@ -360,6 +364,8 @@ trait_squads (
   team        TEXT,              -- 찾은 팀 칸 "타입-팀"(다시 확인 때 먼저 본다)
   body        TEXT,              -- JSON [[spid, spposition, 강화, [특성3], [코치3]], …] 11줄
   state       TEXT NOT NULL,     -- ok · stale
+  collect_on_at TEXT,            -- 저장 때 .env RANK_COLLECT_ON_AT(D5 — 다르면 지운다)
+  match_day   TEXT,              -- 쓴 경기 날짜 — 집계는 RANKER_PICK_MAX_AGE_DAYS 넘은 경기를 뺀다(랭커 픽과 같은 기준)
   checked_at  TEXT NOT NULL,
   fail        TEXT               -- off · down · format · rate
 )
@@ -372,6 +378,8 @@ trait_squads (
   켤 때 정리가 "pick 인데 200 초과"로 지우고 다음 날 처음 보는 사람으로 3요청을 다시 썼다(검토 A). `record_pick_days` 가 pick 만 세는 것과 대조.
   `test_ranker_source_follows_rank_and_prune`.
 - 경기 키는 `spPosition`·`spGrade`(실제 키 — `rankerpick._starters`).
+- `checked_at` 은 다시 확인마다 갱신되니 몇 달 전 한 판뿐인 사람도 D3 에 안 걸린다 → `trait_usage` 는 `match_day` 가 `RANKER_PICK_MAX_AGE_DAYS` 넘은 줄을 뺀다
+  (`rankerpick.py:300` 랭커 픽 집계와 같은 기준 — 검토 3회차). `test_trait_usage_drops_old_matches`.
 
 #### 화면 — "랭커 › 메타 분석" 에 [포지션 특성] 탭
 
@@ -393,9 +401,23 @@ trait_squads (
 | E1 `TraitLoader`(특성 탭 보임) | ✔ | ✔ `trait_allowed()` = `ranker_pick_allowed()`(수집 켜짐 포함) 그리고 동의 ≥ 7 | ✔ | 웹 `trait_web` 요청 직전 · 오픈API `ranker_pick`(랭커 픽과 한 장부 · 429 도) | ✔ | `test_trait_loader_budget` · `test_trait_blocked_when_collect_off` |
 | E2 `check_api.py` 한 줄 | ✔ | — | ✔ | — | 구조만 | 손 실행 |
 - `start_trait` 은 `_pick_purge_pending` 도 본다(지우기가 기다리는 중엔 시작 안 함 — 지금은 `start_ranker_pick` 만 본다, 검토 A). `test_trait_not_started_while_purge_pending`.
+- **다시 켜는 자리 하나**: 지금 `start_ranker_pick()` 을 부르는 자리를 전부 "보이는 쪽 로더를 켠다" 한 함수(`start_visible_api_loader`)로 바꾼다 —
+  랭커 픽 → 특성 탭으로 옮기면 `_stop_ranker_pick` 은 cancel 만 하고 로더가 아직 돌아 특성 로더가 시작하지 않는데, 끝난 뒤 다시 켜는 자리들이 랭커 픽만 켰다(검토 3회차).
+
+  | 자리 | 지금 | 테스트 |
+  |---|---|---|
+  | 다시 묻는 동의 뒤 | `app_main.py:2268` | `test_visible_loader_after_notice` |
+  | 메뉴·탭 열 때 `_on_view_opened` | `2831` | `test_pick_to_trait_tab_starts_trait_after_pick_finishes` |
+  | 거래 받기 끝 | `4201` | 〃 꼴 |
+  | 랭커 픽 로더 끝 `_on_ranker_pick_finished` | `4252` | `test_pick_to_trait_tab_starts_trait_after_pick_finishes` |
+  | 검색·비교 끝 | `5793` | 〃 꼴 |
+  | 창이 다시 보일 때 `showEvent` | (같은 함수) | `test_visible_loader_on_show` |
+  | 특성 로더 끝 | 새로 | 〃 |
+- **N15 표본**: 특성 로더가 1~200 의 `match_id` 를 새 경기로 덮으면 랭커 픽 로더가 아직 안 센 앞 경기는 영영 안 세진다(`record_pick_days` 는 랭커 픽 바퀴 끝에만 · `app_main.py:968`).
+  → 특성 로더도 바퀴 끝(cancel 아님)에 1~200 대상으로 `_record_days` 를 부른다(검토 3회차). `test_trait_loader_records_pick_days`.
 - `fetch_team(session, sn, team_type, part)` — `teamcolor` 꼴: `X-Requested-With` · `allow_redirects=False` · `TraitError.kind`(off·down·format·rate) → 문구 `MESSAGES`. `_web_calls()` 에 한 줄.
 - **구조 검사**: `ResultCode` 1 인데 `Squadinfo.players` · 선수의 `spid`·`state`·`traits`(길이 3) 중 하나라도 없으면 `format` → 그날 멈춤 + 탭 위 "넥슨 응답이 바뀌었습니다". `-1` 은 정상 빈칸.
-- **막힘**: 403 · 429 · Cloudflare → 그날 멈춤 · 서로 다른 날 3번(`RANK_BLOCK_ROUNDS`) 이어지면 특성 받기만 스스로 끔(`settings.ini trait/off_reason=blocked` · 탭 위 [다시 켜기]). 랭킹 수집은 안 끈다.
+- **막힘**: 403 · 429 · Cloudflare → 그날 멈춤 · 서로 다른 날 3번(새 상수 `TRAIT_BLOCK_DAYS` — `RANK_BLOCK_ROUNDS` 는 "회차" 단위라 이름을 같이 쓰면 헷갈린다) 이어지면 특성 받기만 스스로 끔(`settings.ini trait/off_reason=blocked` · 탭 위 [다시 켜기]). 랭킹 수집은 안 끈다.
 - **막힘 횟수의 자리**: fifa.db `api_budget` 에 `trait_web_block` 종류로 날짜별 표시(작업 스레드가 쓴다) · 끄는 `settings.ini` 쓰기는 화면 스레드의 로더 `done` 에서(검토 A — 초안엔 자리가 없었다). `test_trait_block_three_days_turns_off`.
 - 오픈API 백그라운드는 하나씩 — `_api_background_busy` 에 특성 로더를 넣고, `start_trait` 도 랭커 픽 로더를 본다(**양쪽 다** — 지금은 랭커 픽만 남을 본다, 검토 A) · 검색이 시작되면 둘 다 양보. `test_pick_and_trait_loaders_exclusive`.
 - 화면 키: [포지션 특성] 키는 **`PICK_KEYS` 에 넣지 않는다** — `PICK_KEYS` 는 무효화 목록이기 전에 **랭커 픽 로더를 켜는 조건**이다(`_on_view_opened` `app_main.py:2829` ·
@@ -408,9 +430,9 @@ trait_squads (
 |---|---|---|
 | D1 끄는 길 전부(`sync_ranker_pick_data`) | `trait_squads` 전부 | `test_trait_purge_on_every_off_path` |
 | D2 [수집 기록 지우기] | 전부 | 〃 |
-| D3 켤 때 정리 | `checked_at` 14일(`RANK_RAW_KEEP_DAYS`) 지난 줄 · 500위 밖(rank.db `top_rankers` 로 다시 가름) | `test_trait_prune_14d` |
-| D4 로더가 도는 중 | `purge_ranker_pick_data` 가 **랭커 픽·특성 로더 둘 다** 멈추게 하고 둘 다 끝난 뒤 이어서(지금은 `_pick_loader` 만 본다 `app_main.py:4241` — 특성 로더가 `collect` 로 `ranker_squads`·`matches` 에 계속 쓴다, 검토 A [상]) | `test_trait_purge_waits_both_loaders` |
-| D5 상태로 판정 | 켤 때 수집이 꺼져 있는데 `trait_squads` 줄이 있으면 지운다(`purge_person_if_needed` 꼴 — 옛 버전으로 되돌려 끈 뒤 다시 올라온 경우 · 옛 버전의 지우기는 이 표를 모른다, 검토 B) | `test_trait_purge_by_state` |
+| D3 켤 때 정리 | `checked_at` 14일(`RANK_RAW_KEEP_DAYS`) 지난 줄 · 500위 밖(rank.db `top_rankers` 로 다시 가름 — **목록이 비면(원본 스냅숏 없음 `rankerpick.py:118` · rank.db 못 엶) 순위 정리는 건너뛴다**: 안 그러면 특성 줄이 전부 지워진다, 검토 3회차) | `test_trait_prune_14d` · `test_trait_prune_skips_without_snapshot` |
+| D4 로더가 도는 중 | `purge_ranker_pick_data` 가 **랭커 픽·특성 로더 둘 다** 멈추게 하고 둘 다 끝난 뒤 이어서(지금은 `_pick_loader` 만 본다 `app_main.py:4257` — 특성 로더가 `collect` 로 `ranker_squads`·`matches` 에 계속 쓴다, 검토 A [상]) | `test_trait_purge_waits_both_loaders` |
+| D5 상태로 판정 | 켤 때 ① 수집이 꺼져 있는데 `trait_squads` 줄이 있으면 지운다 ② 줄에 적힌 켠 시각(`collect_on_at` — 저장 때 `.env` 의 `RANK_COLLECT_ON_AT` `config.py:340`)이 지금 `.env` 와 다르면 지운다(옛 버전에서 껐다 다시 켠 경우 — ① 만으론 놓친다, 검토 3회차). `purge_person_if_needed` 꼴 | `test_trait_purge_by_state` · `test_trait_purge_when_reenabled_in_old_version` |
 - 지운 바이트 — 모든 연결 `secure_delete`(파일 바이트 테스트는 `test_rankerpick` 꼴).
 
 #### 이용 안내 · 동의
@@ -426,8 +448,10 @@ trait_squads (
 | 길 | 자리 | 거절·미룸 | 테스트 |
 |---|---|---|---|
 | 창이 보일 때(6 동의자 · 수집 켜짐) | `ask_notice_update_once` | 옛 동의 그대로 · 특성만 막힘 | `test_notice7_asked_only_when_collecting` |
-| 수집 토글을 켤 때 | `AboutDialog._on_rank_toggled`(`app_main.py:9477`) — 대화상자 안에서 여니 부모 = `AboutDialog` · `fit_to_screen` · 스모크의 `QDialog.exec` 차단 안 | 수집은 켜진 채 특성만 막힘 | `test_collect_on_asks_notice7` |
+| 수집 토글을 켤 때 | `AboutDialog._on_rank_toggled`(`app_main.py:9477`) — **토글 처리(`set_rank_collect` · `maintain`)를 다 한 뒤 맨 끝에서** 묻는다 · 부모 = `AboutDialog` · `fit_to_screen` · 스모크의 `QDialog.exec` 차단 안. 다시 묻는 창(`NoticeDialog(reask=True)`)의 웹 데이터 체크를 끄면 `set_web_data(False)` 가 수집까지 끈다(`config.py:332`) → 묻고 나서 `read_env_switches()` 로 다시 읽어 대화상자 체크·`maintain` 을 맞추고, 뒷처리(`sync`·로더 켜기)는 `ask_notice_update` 와 같은 함수 하나로(검토 3회차) | 수집은 켜진 채 특성만 막힘 | `test_collect_on_asks_notice7` · `test_collect_on_notice_web_off_consistent` |
 | 빈 탭 [안내 보고 동의] | 특성 탭 빈 상태 | 그대로 | `test_trait_empty_state_messages` |
+
+**랭커 픽 문단도 고친다** — 지금 "랭커 픽 메뉴를 열어 둔 동안에만"(`notice.py:78`)인데 특성 탭도 1~200 을 받는다.
 
 **문구와 버전을 묶는다**: 숫자를 상수로 그리면 상수만 올려도 버전 없이 동의 내용이 바뀐다(검토 B). 렌더한 안내 전문의 해시를 `NOTICE_VERSION` 과 짝지어
 골든으로 둔다 — 글·숫자가 바뀌었는데 버전이 그대로면 FAIL(`test_notice_text_bumps_version`). 특성 범위는 추천과 떼어 `config.TRAIT_TOP` 따로.
@@ -454,7 +478,8 @@ trait_squads (
 #### 재지 않은 것 (구현 때 잰다)
 
 - 201~500 의 "카드가 다 있는 팀" 비율 — 표본이 상위 200뿐(구현 뒤 첫 300명).
-- 실제 채움 속도(첫 바퀴 약 9일은 "매일 상한까지 열어 둠" 가정 · 하한) — 구현 뒤 첫 2주 · 하루 사이 500위 안에 새로 드는 사람 수 · 닉네임 바뀜 빈도 · 추천 ③ 이 실제로 쓰는 하루 요청.
+- 몫 경계에서 한 명분이 잘리는 빈도(하루 최대 2요청 추정 — 한 명분이 남을 때만 시작하므로 0 이어야 한다 · `test_trait_share_whole_person`).
+- 실제 채움 속도(첫 바퀴 약 9~11일은 "매일 상한까지 열어 둠" 가정 · 하한) — 구현 뒤 첫 2주 · 하루 사이 500위 안에 새로 드는 사람 수 · 닉네임 바뀜 빈도 · 추천 ③ 이 실제로 쓰는 하루 요청.
 - 경기 한 개의 저장 크기(`test_trait_disk_budget`) · `dev_archive` 와 앱이 같은 시각 `ranker_squads` 에 쓸 때의 잠금.
 - (재지 않았지만 **관문**이다 — 아래 "단계" 0) 스쿼드메이커 조회가 다른 구단주에게 열린 공개 기능인지.
 - 경기 강화와 칸 강화가 다른 비율 · 이름표에 없는 코드 비율(`test_trait_codes_cover_fixture` + 첫 300명).
