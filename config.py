@@ -278,6 +278,10 @@ WIN_RATE_NOTE_MIXED = "무승부가 나는 경기와 안 나는 경기가 섞여
 WIN_RATE_NOTE_SINGLE = "무승부까지 분모에 넣어 셉니다(승÷전체)."
 # 등급 체류(2.6.1 N2 — habits.division_stays) — 이웃 경기 사이가 이 날 수를 넘으면 기록 빈 구간
 N2_GAP_DAYS = 3
+# N19 칩(2.7.1 — habits.paired_diff · Diff.clear) — 같은 경기 상대 대비 차이가 이 %p 이상이어야 띄운다.
+# 임시값(2026-10-11 U7): 4계정 × 16범위 실측에서 2.0 은 태클 칩이 범위마다 켜졌다 꺼졌고 2.5 는 계정1 결정력만 늘 떴다.
+# 42단계(구단주 분포)에서 백분위 판정으로 바꾼다 — ROADMAP "크기 문턱 실측"
+N19_MIN_GAP = 2.5
 # 스쿼드 타임라인 · 가계부(12단계 · squad_timeline.py · trade_book.py) — 출전은 선발만(교체 명단 28 은 안 센다)
 HOLD_RECENT_GAMES = 50              # 이 경기 수 안에 출전한 카드 = 보유 중
 HOLD_GRACE_DAYS = 14                # 산 지 이만큼 안이면 "최근 구매 · 아직 안 씀"(평가 합계에 안 넣고 따로 소계)

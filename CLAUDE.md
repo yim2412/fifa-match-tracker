@@ -13,7 +13,7 @@
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(무승부 분모 A6 — 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
-| `habits.py` | 내 경기 습관·기준선(2.6.1) — 계산만(화면은 `core_api`) · 지금은 N2 등급 체류 `division_stays` · 세부는 머리말 |
+| `habits.py` | 내 경기 습관·기준선(2.6.1) — 계산만(화면은 `core_api`) · 지금은 N2 등급 체류 `division_stays` · 기준선 `side_totals`·`paired_diff`(나 − 같은 경기 상대, 경기 단위 짝 구간) · 세부는 머리말 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과·랭커 비교·축구장 배치. 역산 상수가 여기 · 세부는 머리말 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵. 조건부 승률 문장은 `Insight.basis`(`Basis` — 화면의 근거 막대)를 싣는다 — **새 규칙 함수는 `BASIS_RULES`/`NO_BASIS_RULES` 둘 중 하나에** 넣는다(test_analysis 가 모듈의 규칙 함수와 대조) |
 | `predict.py` | 시즌 말 순위 예측 — 상수는 `config.PREDICT_*` · **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저** · 세부는 머리말 |
