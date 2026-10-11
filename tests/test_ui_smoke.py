@@ -3376,6 +3376,25 @@ def test_restore_old_page_names():
         _win._render_all()
 
 
+def test_same_account_search_opens_dashboard_but_auto_check_keeps_menu():
+    """사용자가 연 검색은 같은 계정이어도 대시보드부터. 켤 때 자동 새 경기 확인(quiet)만 보던 메뉴를 둔다."""
+    args = (_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+            {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+    saved_quiet = _win._quiet_search
+    try:
+        for quiet, want in ((False, "대시보드"), (True, "슛 맵")):
+            _win._ouid, _win._restore = _OUID, {}   # 같은 계정 — switched 가 거짓이다
+            _win._go_page("슛 맵")
+            _win._quiet_search = quiet
+            _win._on_loaded(*args)
+            assert _win._current_page_name() == want, (quiet, _win._current_page_name())
+    finally:
+        _win._quiet_search = saved_quiet
+        _win._restore = {}
+        _win._go_page("대시보드")
+        _win._render_all()
+
+
 def test_removed_page_name_restores_to_dashboard():
     # 1.2.1 에서 "선수 조합" 메뉴를 지웠다 — 그걸 보고 닫은 사람의 settings.ini 에 이름이 남아 있다.
     # 대시보드가 아닌 메뉴에서 시작한다: 대시보드에서 시작하면 이름 검사를 빼도 _go_page 가 묶음 제목 행을

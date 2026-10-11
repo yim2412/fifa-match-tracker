@@ -7113,9 +7113,10 @@ class MainWindow(QMainWindow):
         self._rebuild_season_combo()
         self._apply_season(render=False)
 
-        # 다른 계정이면 대시보드부터. 같은 계정 재확인이면 보던 메뉴를 유지한다.
+        # 사용자가 연 검색(조회·[새 경기 확인]·등록 계정·더블클릭)은 같은 계정이어도 대시보드부터(2026-10-11 사용자).
+        # 켤 때 자동으로 하는 새 경기 확인(quiet)만 — 그사이 사용자가 옮겨 간 메뉴를 빼앗지 않게 — 보던 메뉴를 유지한다.
         self.stack.setCurrentIndex(self.PAGE_MAIN)
-        if switched:
+        if switched or not getattr(self, "_quiet_search", False):
             # 이번에 켜고 처음 그리는 계정이면 지난번에 보던 메뉴·탭으로(settings.ini), 아니면 대시보드
             self._go_page(*self._restore_view(self._restore.pop("page", None), self._restore.pop("tabs", None)))
         self._render_ranker()
