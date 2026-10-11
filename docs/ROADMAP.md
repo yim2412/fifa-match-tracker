@@ -194,12 +194,13 @@
 
 ---
 
-## 화면 그림 (40단계 · 2.6.1 앞부분) — 계획 검토 1회차 반영 (2026-10-11)
+## 화면 그림 (40단계 · 2.6.1 앞부분) — 계획 검토 2회차 반영 (2026-10-11)
 
 **왜**: 2026-10-11 사용자 — 메타·팀컬러·포지션 특성 화면이 그림 없이 글자뿐이다. 30~32단계가 "맞게 받고 맞게 센다"까지만 끝 기준으로 삼아,
 보여 주는 방식은 어느 단계 범위에도 없었다. **데이터 길은 안 바꾼다** — 이미 가진 키(엠블럼·코드·spId·division·포메이션 문자열)로 그림만 붙인다.
 
 > **검토 기록** 1회차(Opus 1명 · 근거 묶음 · 약 19.6만 토큰): [상] 3 · [중] 10 — 전부 아래에 반영. [상] ① 아이콘 폭이 `_measure_pad` 를 통해 표의 **모든 열**에 붙는다 ② I3 이 `UserRole` 의 spId 를 덮어 더블클릭이 엉뚱한 카드를 연다 ③ `NOTICE_VERSION` 만 올리면 수집 끈 6·7 동의자에게 안내가 안 뜬다. 셋 다 코드로 확인(`widgets.py:629` · `app_main.py:9083` · `config.py:436`).
+> 2회차(새 Opus 1명 · 계획 절 전체 + 바뀐 줄 묶음 · 약 18.2만 토큰): [상] 4 · [중] 9 — 전부 반영. [상] ① 정렬이 남은 표(상대 전적 `_fill` 기본 정렬 켬 `app_main.py:7427`)에 키를 채운 순서로 붙이면 행이 어긋난다(PyQt 1) ② `set_content_widths(extra)` 는 `extra` 를 **교체**한다(`widgets.py:578`) — 팀컬러 랭킹 범위 막대 열(`app_main.py:3025`)·선수 지표 강화 배지 열(`9032`) 여백이 사라진다 ③ 그림이 먼저 붙은 뒤 `refit()` 하는 표(I5 는 동기 · `tbl_vcross` `5557`)는 여전히 `_measure_pad` 가 부푼다 ④ holder 단위가 I2 행(표마다)과 진입점 표(페이지마다)에서 달랐다. 넷 다 코드로 확인.
 
 ### 실측 장부 (2026-10-11 — 넥슨 주소마다 Referer `fconline.nexon.com` 로 요청해 200)
 
@@ -226,26 +227,28 @@ CDN = `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/`
 
 | 부품 | 파일 · 이름 | 하는 일 |
 |---|---|---|
-| I1 주소 | `images.icon_url(kind, key)` — kind ∈ `trait` · `train` · `emblem` · `division` · `season` | 위 장부의 틀 한 곳(전역 규칙 6). 모르는 종류·빈 키 → `""`. **키 공간**: `division` 키 = CDN 번호(I6 결과 — rank.db `snapshot_rows.grade` 는 이미 이 번호 `ranker.py:76`, 경기 `division` 은 id 라 I6 을 거친다) · `season` 키 = seasonId(주소는 틀이 아니라 meta `seasonImg` 조회) |
-| I2 받기 | `app_main.IconLoader(QThread)` — `SeasonIconLoader`·`UrlImageLoader` 를 합친 꼴. 입력 `[(key, url)]` → `loaded(key, path)` · 같은 url 은 한 번 · **Referer `fconline.nexon.com` 을 붙인다**(지금 `images.fetch_url` 은 안 붙인다 `images.py:115` — 실측 200 은 Referer 를 붙인 값) · 403·404 는 **세션 안 부정 캐시**(다시 그릴 때 같은 요청 반복 금지) | 표·위젯마다 holder 하나(지금 `_load_season_icons` 가 표마다 holder 를 받는 이유와 같다) · 창 닫기·`tray.quit_app` 정리 목록에 등록 |
-| I3 표 칸 | `_set_cell_icons(table, col, keys, kind)` — 키는 **`ICON_KEY_ROLE = UserRole + 2`**(`UserRole` 은 선수 칸 spId — 더블클릭이 읽는다 `app_main.py:5875`·`6164`·`6211`·`7476` · `+1` 은 흐림 표시), 받으면 `setIcon` | 글자는 남긴다(정렬·복사·툴팁 그대로). 지금 `_load_season_icons` 를 이걸로 바꾼다. **열 폭은 받기 전부터 `_fit_columns_to_content(extra={col: ICON_PX + 간격})`**(선수 지표 강화 열 `app_main.py:9032` 꼴) — 아이콘이 `sizeHintForColumn` 을 키우면 `_measure_pad` 가 그 여백을 **모든 열**에 얹는다(`widgets.py:629`). 그래서 받은 뒤 `refit()` 은 하지 않는다(상대 전적 수천 행에서 받을 때마다 전 행×열 재기도 피한다) |
+| I1 주소 | `images.icon_url(kind, key, seasons=None)` — `season` 만 meta(`seasonImg`) dict 를 받는다 · kind ∈ `trait` · `train` · `emblem` · `division` · `season` | 위 장부의 틀 한 곳(전역 규칙 6). 모르는 종류·빈 키 → `""`. **키 공간**: `division` 키 = CDN 번호(I6 결과 — rank.db `snapshot_rows.grade` 는 이미 이 번호 `ranker.py:76`, 경기 `division` 은 id 라 I6 을 거친다) · `season` 키 = seasonId(주소는 틀이 아니라 meta `seasonImg` 조회) |
+| I2 받기 | `app_main.IconLoader(QThread)` — `SeasonIconLoader`·`UrlImageLoader` 를 합친 꼴. 입력 `[(key, url)]` → `loaded(key, path)` · 같은 url 은 한 번 · **holder 는 표마다 하나**(반복 생성 표·창 안 표는 표 객체 속성 — `app_main.py:9063` 주석: 공유하면 같은 렌더의 두 표가 서로의 로더를 취소한다) · **Referer `fconline.nexon.com` 을 붙인다**(지금 `images.fetch_url` 은 안 붙인다 `images.py:115` — 실측 200 은 Referer 를 붙인 값) · 403·404 는 **세션 안 부정 캐시**(다시 그릴 때 같은 요청 반복 금지) | 표·위젯마다 holder 하나(지금 `_load_season_icons` 가 표마다 holder 를 받는 이유와 같다) · 창 닫기·`tray.quit_app` 정리 목록에 등록 |
+| I3 표 칸 | `_set_cell_icons(table, col, kind)` — 키는 **`ICON_KEY_ROLE = UserRole + 2`** 에 **`_fill` 이 칸을 만들 때 같이 넣는다**(행 데이터에 키를 실어 `_cell` 이 정렬 켜기 전에 — 순서로 짝짓지 않는다 · PyQt 1 · `test_icons.test_icon_keys_follow_rows_after_resort`: 정렬 상태를 남긴 채 두 번째 렌더 → 행마다 키 = 그 행 글자의 키, 정렬 뒤 넣게 바꾸면 FAIL). 로더는 표의 `ICON_KEY_ROLE` 을 훑어 받고, 받으면 같은 키의 칸에 `setIcon` · `table.setIconSize(QSize(ICON_PX, ICON_PX))`(스타일 기본 크기로 그리면 `extra` 와 어긋난다)(`UserRole` 은 선수 칸 spId — 더블클릭이 읽는다 `app_main.py:5875`·`6164`·`6211`·`7476` · `+1` 은 흐림 표시), 받으면 `setIcon` | 글자는 남긴다(정렬·복사·툴팁 그대로). 지금 `_load_season_icons` 를 이걸로 바꾼다. **열 폭은 받기 전부터 `extra` 에 합친다** — `{**table._extra, col: ICON_PX + 간격}`(교체 금지 — 범위 막대·강화 배지 여백 · `test_icons.test_extra_merges_existing`: 팀컬러 랭킹 범위 열 폭이 그림 전·후 같다). **`_measure_pad` 는 `_extra` 에 있는 열을 재지 않는다**(`widgets.py:641` 고침) — 아이콘이 `sizeHintForColumn` 을 키워도 그 여백이 **모든 열**에 얹히지 않게, 그림을 넣은 순서와 무관하게(`test_icons.test_pad_ignores_icon_columns`: 그림을 먼저 넣고 refit → `_pad` 가 그림 없을 때와 같다 · 고치기 전 코드로 FAIL). 받은 뒤 `refit()` 은 하지 않는다(상대 전적 수천 행) |
 | I4 특성 칸 | `widgets.TraitIconDelegate` — 아이콘 + 육각 판(일반·신규 금색 · 훈련 회색) + 아래 % · 특성 이름은 툴팁 | [포지션 특성] 표의 일반·신규·훈련·**훈련 코치** 열(`TRAIT_COLUMNS`). 표는 `FitTableWidget` 그대로. **폭은 `sizeHint` 로 알리지 않는다**(`GradeBadgeDelegate` 머리말 `widgets.py:1067` 과 같은 이유) — 열 폭은 `extra`, 행 높이는 아이콘 + % 줄만큼 이 표만 `verticalHeader().setDefaultSectionSize`. **재료는 코드가 아니라 이름** — `TraitSlot.counts`·`top()` 이 이름을 키로 쓴다(`traitcollect.py:485`) → `trait_codes` 에 종류별 역표(이름 → 코드 · 종류 안 이름 중복 0 실측) · "코드 N" 같은 모르는 이름은 그림 없음 |
 | I5 작은 축구장 | `widgets.formation_pixmap(formation, px)` — "4-1-2-3-0" → 줄마다 점 · `QPixmapCache` · devicePixelRatio 반영 | 네트워크 없음. 표 칸은 I3 에 픽스맵을 바로 넣고, 위젯 자리는 `QLabel`. **형식이 둘**: 내 경기 `stats.formation_of` 는 0 줄을 포함한 고정 5줄(`4-1-2-3-0`), 랭커 쪽은 줄 수가 바뀐다(실측 `4-1-2-3` · `4-2-2-1-1`) → 0 줄은 버리고 그린다 · 같은 모양이면 같은 캐시 키(`test_icons.test_formation_forms_agree`) |
-| I6 등급 번호 | `models.division_icon_index(div_id, division_meta)` → `core_api` 재수출(`core_api` 는 `def` 없는 경계) — 지금 `app_main.py:620` 근처 계산을 꺼낸다 | 머리 배지와 표가 같은 번호를 쓰게. **재료는 켤 때 디스크에서**: 지금 화면의 `_division_names`·`_seasons` 는 검색 결과를 받을 때(`app_main.py:7100`)만 차서, 검색 전에 연 랭커 픽·추천·랭커 비교·효과 창·구단주 표는 배지 없이 조용히 그려진다 → 시작할 때 `.cache/meta_division.json`·`meta_seasonid.json`(`nexon_api.py:233`)을 읽는다(`test_icons.test_badges_before_first_search`) |
+| I6 등급 번호 | `models.division_icon_index(div_id, division_meta)` → `core_api` 재수출(`core_api` 는 `def` 없는 경계) — 지금 `app_main.py:620` 근처 계산을 꺼낸다 | 머리 배지와 표가 같은 번호를 쓰게. **재료는 켤 때 디스크에서**: 지금 화면의 `_division_names`·`_seasons` 는 검색 결과를 받을 때(`app_main.py:7100`)만 차서, 검색 전에 연 랭커 픽·추천·랭커 비교·효과 창·구단주 표는 배지 없이 조용히 그려진다 → 시작할 때 `.cache/meta_division.json`·`meta_seasonid.json`(`nexon_api.py:233`)을 **날짜와 무관하게** 읽는다(`_meta_read` 는 주간 기준일 전 파일을 `None` 으로 — `nexon_api.py:239` — 쓰면 매주 첫 검색 전 배지가 사라진다) · **원본 목록 순서를 보관**(순서 = CDN 번호 `app_main.py:621` · 이름 dict 로는 못 낸다) · 파일 없음(새 설치) → 글자만(`test_icons.test_badges_before_first_search` — 파일 있음·없음·지난주 파일 세 경우) |
 | I7 이름 → 엠블럼 | `rankmeta.emblems_by_name(conn) -> dict[str, str]` — 마지막 스냅숏 `snapshot_emblems` 에서. **한 이름에 엠블럼이 둘 이상이면 넣지 않는다** | 랭커 묶음은 팀컬러를 이름으로만 센다(버전 미정 후보 "랭커 묶음도 (이름, 엠블럼)으로") — 이름이 겹치는 `config.TEAMCOLOR_DUP_NAMES`(11쌍 · `config.py:248`)는 그림 없이 글자만(10-11 마지막 스냅숏엔 겹침 0 — 규칙은 남긴다) |
 
-### 붙이는 자리 (지금 앱 — 표 37개를 열 이름으로 전수, 2026-10-11 · 1회차에 빠진 3표 더함)
+### 붙이는 자리 (지금 앱 — 표를 열 이름으로 전수, 2026-10-11 · 1회차에 빠진 3표 더함)
+
+전수 정의(기준 14): `grep -n "_make_table(" app_main.py` — `b9c6d63` 에서 37줄(정의 1 + 부르는 곳 36 · 반복 생성 포함). 조각 ① 첫 줄에 이 grep 으로 표 → 열 이름 목록을 뽑아 아래 표와 대조하고, `_make_table` 을 안 거치는 표(대시보드 등)는 `grep -n "QTableWidget(\|FitTableWidget("` 로 따로.
 
 | 화면 | 칸 | 그림 | 재료 |
 |---|---|---|---|
-| 랭커 › 메타 분석 › 포지션 특성(`TRAIT_COLUMNS`) | 일반 · 신규 · 훈련 | I4(G1 · G2) | 특성 코드 |
-| 팀컬러 › 팀컬러 승률 · 팀컬러 랭킹 · 가치 구간 × 팀컬러(`tbl_vcross` `app_main.py:5511`) | 팀컬러 | 엠블럼(G3~G5) | **라벨 → 엠블럼** — 표는 `teamcolor.label` 로 묶여 키를 잃는다 · `team_colors` 의 79%가 엠블럼 없음(위 실측). 출처 순서: 팀컬러 목록 캐시 → 스냅숏(I7) → 없음 = 글자만 |
+| 랭커 › 메타 분석 › 포지션 특성(`TRAIT_COLUMNS`) | 일반 · 신규 · 훈련 · 훈련 코치 | I4(G1 · G2 — 코치는 훈련 표를 같이 쓴다 `trait_codes.py:70`) | 특성 이름 → 코드(I4) |
+| 팀컬러 › 팀컬러 승률 · 팀컬러 랭킹 · 가치 구간 × 팀컬러(`tbl_vcross` `app_main.py:5511`) | 팀컬러 | 엠블럼(G3~G5) | **라벨 → 엠블럼** — 표는 `teamcolor.label` 로 묶여 키를 잃는다 · `team_colors` 의 79%가 엠블럼 없음(위 실측). 출처 순서: 팀컬러 목록 캐시(`teamcolor_meta` — 웹 데이터를 켜고 효과 창을 연 사람만 `store.py:251`) → **fifa.db `team_colors` 의 엠블럼 열**(1,009행 · 고유 63 — 기본 설정 사용자의 유일한 출처) → 스냅숏(I7 — 수집 켠 사람만) → 없음 = 글자만. 이름 겹침 규칙(I7)은 모든 출처에 |
 | 승률 그래프 › 순위 변동(`RANK_HIST_COLUMNS` `app_main.py:5768`) | 포메이션 · 팀컬러 | I5 · 엠블럼 | 스냅숏 + `snapshot_emblems`(`RANK_RAW_KEEP_DAYS` 뒤 지워진 옛 행은 글자만) |
 | 선수로 구단주 찾기(`CARD_OWNER_COLUMNS` `app_main.py:5923`) | 팀컬러 · 순위 옆 등급 | 엠블럼 · 등급 | `rankerpick.snapshot_index` 가 라벨 글자만 준다(`rankerpick.py:166`) → **grade·emblem 도 돌려주게 바꾼다** · 등급은 `snapshot_rows.grade`(이미 CDN 번호 — I6 안 거침) |
 | 랭커 › 메타 분석 하루 승률 · 가성비 · 구단가치(상위 팀컬러 열) · 구간 평균 | 이름(팀컬러·포메이션) | I7 엠블럼 · I5 | 이름 |
 | 랭커 › 랭킹 추이 메타 변화 · 주간 요약 · 랭커 픽 [픽] 이름 표 | 이름 | I7 · I5 | 이름 |
 | 랭커 픽 카드 · 추천 카드 · 카드별 상대 · 가계부 · 타임라인 · 랭커 비교 · 팀컬러 효과 창 선수 · 포지션별 최다 상대(`tbl_position_opp` `6397`) · 팀컬러 포지션별 기용률 창(`7822`) | 선수 | 시즌 배지(G7) | spId — 지금은 선수 지표·결정력 두 표만 있음 |
-| 경기 목록 · 상대 전적 | 상대 | 상대 등급(G7) | 경기 상세 `matchInfo` 의 상대 `division` → `MatchSummary.opp_division`(저장 형식 아님 — `draw_possible` 과 같은 자리에서 채운다) |
+| 경기 목록 · 상대 전적 | 상대 | 상대 등급(G7) | 경기 상세 `matchInfo` 의 상대 `division` → `MatchSummary.opp_division`(저장 형식 아님 — `draw_possible` 과 같은 자리에서 채운다) · 상대 전적은 그 상대와의 **가장 최근 경기** 등급 |
 | 시즌별 성적 · 등급 체류 | 등급 | 등급(G7) | division |
 | 경기력 › 전술 | 내 포메이션 줄 · 상대 포메이션 막대 | I5 | 포메이션 문자열 |
 | 대시보드 머리 | (없음) | 등급 · 내 팀컬러 엠블럼 · 주 포메이션 I5 | 이미 받는 값 |
@@ -260,7 +263,8 @@ CDN = `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/`
 | `TeamColorEffectLoader` 의 `fetch_url`(`1384` · 효과 창 엠블럼) | Referer 없음 | 주소는 I1 로 · 받기는 그 로더 안에 남김(창 하나 · 이미 스레드) · Referer 붙임 | 있음 | `test_parsing` 효과 창 |
 | `MatchLoader._current_grade` 의 `fetch_division_icon`(`629`) | 등급 배지 | 주소는 I1 로 · 받기는 남김(경기 받기 스레드 안) | 해당 없음(그 로더) | 기존 |
 | playerinfo 특성 아이콘(`_TRAIT`) | 선수 카드 창 | 주소는 I1 `trait` 로 | 카드 창 | `test_parsing` |
-| **새** `IconLoader` holder — 표마다 · 반복 생성 표(`meta_tables`·`daywr_tables`·`tmeans_tables`·`weekly_tables`) · 대시보드 머리 | — | holder 는 **페이지 하나에 하나**(반복 표는 같은 holder 에 표 목록) | 종료 표에 holder 목록을 한 줄로 · 메모리 내려놓기에도 | `test_tray` 종료 · `test_icons` |
+| **새** `IconLoader` holder — 표마다 · 반복 생성 표(`meta_tables`·`daywr_tables`·`tmeans_tables`·`weekly_tables`) · 대시보드 머리 | — | holder 는 **표마다 하나**(I2) · 반복 생성 표는 표 객체 속성으로 · 다시 만들 때 옛 표의 로더를 cancel | 종료 표에 "살아 있는 IconLoader 전부"를 한 줄로(목록에 등록·해제) · 메모리 내려놓기에도 | `test_tray` 종료 · `test_icons` |
+| **새** 모달 창 안 표 — 팀컬러 포지션별 기용률 창(`7822`) · 효과 창 선수 표 | — | 그 창의 로더 | **창이 닫힐 때 cancel → wait**(카드 창 `app_main.py:8064` 꼴 — `exec()` 뒤 지워진 표에 `setIcon` 하면 오류) | `test_icons.test_modal_loader_stops_on_close` |
 
 - **캐시 위치**: `config.CACHE_DIR / "icons"` 는 `.cache/` 안이다 — `CachePruneWorker` 는 DB 에 있는 **경기 상세 파일만** 지우는지 구현 첫 줄에 확인하고(`icons/` 하위를 안 건드리는지) `test_icons.test_prune_keeps_icons` 로 지킨다.
 
@@ -279,8 +283,9 @@ CDN = `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/`
 - **스모크는 `QThread.start` 를 막는다** — `IconLoader` 테스트는 `start` 를 `run` 으로 바꿔 끼우고, 받기는 가짜 `images.fetch_url`.
 - **받는 양(⑦)**: 처음 화면을 열 때만 — 엠블럼 약 100장(위 실측) + 특성·시즌 배지. 첫 받기 시간·바이트는 조각 ① exe 확인 때 실받기로 잰다(캐시 비우고 · 보고에 숫자). 한 로더는 순서대로(동시 요청 늘리지 않음).
 - **실패**: 403·404·끊김 → 그 칸만 글자(지금 시즌 배지와 같음). 캐시 파일이 깨졌으면 `QPixmap.isNull()` → 지우고 글자.
+- **CI**: `tests/test_icons.py` 를 `.github/workflows/test.yml` 에 한 줄 — 지금 빠져 있는 `test_traits`·`test_predict`·`test_rankmeta`·`test_dev_archive` 도 같이 넣는다(17개 중 13개만 돈다 · `test_dev_archive` 는 이 PC 전용이면 이유를 적고 뺀다).
 - `check_api.py` 에 그림 종류마다 한 줄(G1~G5 — 각 1장 받아 `[OK]`) · **앱과 같은 받기 함수로**(Referer 포함) — 따로 받으면 앱의 403 을 못 본다.
-- **이용 안내를 고친다** — `notice.py:43` 이 넥슨 이미지 서버에서 받는 것을 "선수 얼굴·등급 배지"로만 적었다(2026-10-11 확인) → 구단·팀컬러 엠블럼·국기·특성 아이콘을 더하고 `NOTICE_VERSION` 을 8로 올린다(`test_notice_text_bumps_version`) · `CHANGES` 에 한 덩이. **`NOTICE_COLLECT_ONLY_FROM` 도 8로** — 지금 6이라 `notice_update_pending`(`config.py:436`)이 수집 끈 6·7 동의자에게 다시 묻지 않는다. 그림은 수집과 무관하게 모두에게 해당 (`test_notice.test_pending_for_collect_off_7` — 수집 끔 · 동의 7 → 참, 6 으로 되돌리면 FAIL).
+- **이용 안내를 고친다** — `notice.py:43` 이 넥슨 이미지 서버에서 받는 것을 "선수 얼굴·등급 배지"로만 적었다(2026-10-11 확인) → 구단·팀컬러 엠블럼·국기·특성 아이콘을 더하고 `NOTICE_VERSION` 을 8로 올린다(`test_notice_text_bumps_version`) · `CHANGES` 에 한 덩이. **`NOTICE_COLLECT_ONLY_FROM` 도 8로** — 지금 6이라 `notice_update_pending`(`config.py:436`)이 수집 끈 6·7 동의자에게 다시 묻지 않는다. 그림은 수집과 무관하게 모두에게 해당 (`test_ui_smoke.test_notice8_asked_when_collect_off` — 수집 끔 · 동의 7 → 참, 6 으로 되돌리면 FAIL). 같이 고칠 기존 단언: `test_notice7_asked_only_when_collecting`(`tests/test_ui_smoke.py:5866` — 6 동의·수집 끔 → 지금 거짓 단언, 8 이후엔 참) · 버전 튜플 `(7,7,6,5,4,3,2)`(`5827`).
 - 색은 `theme.py` 에만(`test_rules`). 비교한 외부 사이트의 그림·이름은 쓰지 않는다 — 넥슨 원본 주소만.
 - 선수 얼굴을 `playersActionHigh` 로 바꾸지 않는다(G6) · 전술 칩(DS1·SC1)은 "버전 미정 후보 — 랭커 팀 전술"이 정해질 때.
 
@@ -304,8 +309,8 @@ CDN = `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/`
 
 ### 구현 조각 (검토 기준 13 — 3개)
 
-① 부품 I1·I2·I3·I6 + 진입점 표 + 표 칸(시즌 배지 9표 · 엠블럼 5표 · 등급 5곳(등급 체류 포함) · `opp_division`) · `check_api` 줄 · 안내 8
-② I4 특성 칸 · I5 작은 축구장 · I7 이름 → 엠블럼 + 전술·메타·랭킹 추이·랭커 픽 표
+① 부품 I1·I2·I3·I6·I7 + `_measure_pad` 고침 + 진입점 표 + 표 칸(시즌 배지 9표 · 엠블럼 5표 · 등급 5곳(등급 체류 포함) · `opp_division`) · `check_api` 줄 · 안내 8 · CI 목록
+② I4 특성 칸 · I5 작은 축구장 + 전술·메타·랭킹 추이·랭커 픽 표(I7 은 ①에서 만든 것을 쓴다)
 ③ 대시보드 머리 · 문서(README·CLAUDE.md 파일 표·CHANGELOG 2.6.1 절) — 조각마다 끝에 위 "화면 확인"(자동 + exe 2번 모니터 PNG 목록)
 
 **계획 검토**: 기준 7 — 기존 데이터에 그림만 붙이는 단계라 **검토자 1명**(새 네트워크는 정적 CDN 하나 · 저장 형식 바뀜 없음). 근거 묶음은 `review_kit.py bundle "## 화면 그림"`.
