@@ -6,6 +6,9 @@
 | `division_stays(points, name_of)` | [성적 진단 › 등급 체류](N2) | 재료는 `stats.division_trend` — (일시, division) 오래된 것부터 |
 | `side_totals(details, ouid)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 |
 | `paired_diff(rows, metric)` | 〃 | 지표 하나의 나 − 상대 차와 95% 구간(경기 단위 짝) · 지표 이름은 `METRICS` |
+| `strength_chips(totals)` | [흐름 분석] 맨 위 칩 줄(N19) | 결정력·유효슛 비율·태클 성공 중 구간이 0 을 안 품고 크기 문턱을 넘은 것 |
+| `half_share_diff(details, ouid)` | 흐름 분석 문장 "전반·후반 어디서 새나"(N19) | 내 실점의 전반 비중 − 같은 경기 상대 실점(= 내 득점)의 전반 비중 |
+| `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |
 
 기준선의 구간(N4 · ROADMAP "구간 방법"): 나와 상대는 **같은 경기의 짝**이고 슛은 경기 안에서 뭉친다 — 두 비율을
 독립으로 놓고 정규 근사하면 구간이 좁게 나온다. 그래서 전부 경기 단위로 짝지은 값의 평균·표준편차로 낸다.
@@ -29,7 +32,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import config
-from stats import _me_opp, _num, _result_of, _wdl_of
+from models import RateMixin, draw_possible_of
+from stats import (_goal_events, _me_opp, _num, _result_of, _set_mixed, _timeline_matches_board, _wdl_of)
 
 
 @dataclass
@@ -206,9 +210,9 @@ def _sd(xs: list[float]) -> float:
     return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
 
 
-def paired_diff(totals: SideTotals, key: str) -> Diff:
-    """경기 단위로 짝지은 나 − 상대(모듈 머리말 "기준선의 구간")."""
-    m = METRICS[key]
+def paired_diff(totals: SideTotals, key: str | Metric) -> Diff:
+    """경기 단위로 짝지은 나 − 상대(모듈 머리말 "기준선의 구간"). key 는 `METRICS` 이름 또는 Metric 자체."""
+    m = key if isinstance(key, Metric) else METRICS[key]
     rows = totals.rows
     n = len(rows)
     if m.den is None:
@@ -224,3 +228,195 @@ def paired_diff(totals: SideTotals, key: str) -> Diff:
     sbar, sbar2 = s / n, s2 / n
     us = [(r.mine[m.num] - r1 * r.mine[m.den]) / sbar - (r.opp[m.num] - r2 * r.opp[m.den]) / sbar2 for r in rows]
     return Diff(m, n, r1 * 100, r2 * 100, _sd(us) / math.sqrt(n) * 100, s, s2)
+
+
+# ── N19 칩 · 문장 ─────────────────────────────────────────────────────────────
+
+# 칩 셋 — 키는 METRICS · (분모 하한 이름은 config) · 높을수록 좋은 지표뿐이다
+N19_CHIP_KEYS = (("finish", "N19_MIN_SHOTS"), ("on_target_rate", "N19_MIN_SHOTS"), ("tackle_rate", "N19_MIN_TACKLES"))
+
+
+@dataclass(frozen=True)
+class Chip:
+    """강점·약점 칩 하나 — 나 − 같은 경기 상대가 뚜렷한 지표."""
+    diff: Diff
+
+    @property
+    def label(self) -> str:
+        return self.diff.metric.label
+
+    @property
+    def strong(self) -> bool:
+        return self.diff.diff > 0
+
+    @property
+    def text(self) -> str:
+        return f"{self.label} {self.diff.diff:+.1f}%p"
+
+
+def strength_chips(totals: SideTotals) -> list[Chip]:
+    """칩 목록(차이가 큰 순). 분모(슛·태클 시도)가 하한 밑이면 그 칩은 없다 — 표본이 모자라 구간 자체를 믿기 어렵다."""
+    out = []
+    for key, floor_name in N19_CHIP_KEYS:
+        d = paired_diff(totals, key)
+        floor = getattr(config, floor_name)
+        if min(d.mine_den, d.opp_den) < floor:
+            continue
+        if d.clear(config.N19_MIN_GAP):
+            out.append(Chip(d))
+    out.sort(key=lambda c: -abs(c.diff.diff))
+    return out
+
+
+HALF_SHARE = Metric("half_share", "전반 비중", "half", "all")
+
+
+def _first_half(period: int) -> bool:
+    return period == 0
+
+
+def half_share_diff(details: list[dict], ouid: str) -> Diff:
+    """내 실점 중 전반(정규시간) 비중 − 같은 경기 상대 실점(= 내 득점) 중 전반 비중. 연장 골은 뺀다.
+
+    50:50 을 기준으로 두지 않는 이유: 추가시간 때문에 전반 비중이 구조적으로 약 50.7% 라 큰 계정에서 늘 뜬다(ROADMAP N19).
+    mine_den = 내 실점 수 · opp_den = 내 득점 수(정규시간) — 문장 하한이 이 둘을 본다."""
+    rows = []
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp:
+            continue
+        res = _wdl_of(_result_of(me))
+        if res is None:
+            continue
+        mine_in = [g for g in _goal_events(opp) if g[0] < 2]    # 내가 먹은 골 = 상대 골
+        opp_in = [g for g in _goal_events(me) if g[0] < 2]      # 상대가 먹은 골 = 내 골
+        rows.append(SideRow(d.get("matchId") or "", res,
+                            {"half": float(sum(_first_half(g[0]) for g in mine_in)), "all": float(len(mine_in))},
+                            {"half": float(sum(_first_half(g[0]) for g in opp_in)), "all": float(len(opp_in))}))
+    return paired_diff(SideTotals(rows), HALF_SHARE)
+
+
+# ── N17 골 흐름 ──────────────────────────────────────────────────────────────
+
+MAX_LEAD = 5     # 최대 리드 5골 이상은 한 줄("5+")
+GOAL_KINDS = ("앞서는", "동점", "추격", "쐐기", "벌리기")
+
+
+@dataclass
+class LeadRow(RateMixin):
+    """최대 리드가 lead 골이던 경기들의 결과(5 는 5골 이상)."""
+    lead: int
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    mixed: bool | None = None
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+
+@dataclass
+class GoalFlow:
+    leads: list[LeadRow] = field(default_factory=list)       # 리드 1~5
+    never_led: int = 0           # 한 번도 앞선 적 없는 경기(결과 있는 것 중)
+    kinds: dict = field(default_factory=lambda: {k: 0 for k in GOAL_KINDS})   # 내 골의 성격 — 합 = 되짚은 내 골 수
+    trail_goals: int = 0         # 내가 지고 있던 동안 나온 골 수
+    trail_mine: int = 0          #   그중 내가 넣은 것
+    lead_goals: int = 0          # 내가 앞서 있던 동안 나온 골 수
+    lead_theirs: int = 0         #   그중 상대가 넣은 것(= 지는 쪽이 다음 골을 넣은 것)
+    gap_bins: list[int] = field(default_factory=list)        # 골 사이 시간 — config.N17_GAP_EDGES 로 가른 칸별 수(칸 수 = 모서리 + 1)
+    gap_median: float | None = None                          # 골 사이 시간 중앙값(분)
+    replayed: int = 0            # 되짚은 경기 수
+    unreplayable: int = 0        # 슛 기록 골 수가 점수판과 달라 못 되짚은 경기(자책골 등 — clutch_summary 와 같은 기준)
+    held: int = 0                # 양쪽이 같은 시각에 넣은 골이 있어 순서를 못 정한 경기
+    mixed: bool | None = None
+
+
+def _minute_of(period: int, sec: int) -> float | None:
+    """정규시간 분(전반은 44.99 로 가둔다 — goal_minute_buckets 와 같다). 연장은 None."""
+    if period == 0:
+        return min(sec / 60, 44.99)
+    if period == 1:
+        return 45 + sec / 60
+    return None
+
+
+def goal_flow(details: list[dict], ouid: str, mixed: bool | None = None) -> GoalFlow:
+    """경기마다 골을 시간순으로 되짚어 리드·골의 성격·골 사이 시간을 센다(N17).
+
+    되짚기는 `clutch_summary` 와 같은 기준(자책골 등 점수판과 안 맞는 경기는 뺀다). 양쪽 골이 정확히 같은 시각이면
+    그 경기는 순서를 못 정해 뺀다. 연장 골은 시간 분포에서 빼고 리드·성격에는 넣는다."""
+    gf = GoalFlow()
+    _set_mixed([gf], (draw_possible_of(d, ouid) for d in details), mixed)
+    rows = {k: LeadRow(k, mixed=gf.mixed) for k in range(1, MAX_LEAD + 1)}
+    gaps: list[float] = []
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp:
+            continue
+        res = _wdl_of(_result_of(me))
+        if res is None:
+            continue
+        if not (_timeline_matches_board(me) and _timeline_matches_board(opp)):
+            gf.unreplayable += 1
+            continue
+        mine, theirs = _goal_events(me), _goal_events(opp)
+        if set(mine) & set(theirs):
+            gf.held += 1
+            continue
+        events = sorted([(g, True) for g in mine] + [(g, False) for g in theirs])
+        gf.replayed += 1
+        diff = peak = 0
+        prev_min = None
+        for g, is_mine in events:
+            if diff < 0:
+                gf.trail_goals += 1
+                gf.trail_mine += is_mine
+            elif diff > 0:
+                gf.lead_goals += 1
+                gf.lead_theirs += not is_mine
+            if is_mine:
+                kind = ("앞서는" if diff == 0 else "동점" if diff == -1 else "추격" if diff <= -2
+                        else "쐐기" if diff == 1 else "벌리기")
+                gf.kinds[kind] += 1
+            diff += 1 if is_mine else -1
+            peak = max(peak, diff)
+            minute = _minute_of(*g)
+            if minute is not None and prev_min is not None:
+                gaps.append(minute - prev_min)
+            prev_min = minute
+        if peak == 0:
+            gf.never_led += 1
+        else:
+            row = rows[min(peak, MAX_LEAD)]
+            if res == 0:
+                row.win += 1
+            elif res == 1:
+                row.draw += 1
+            else:
+                row.lose += 1
+    gf.leads = [rows[k] for k in range(1, MAX_LEAD + 1)]
+    edges = config.N17_GAP_EDGES
+    gf.gap_bins = [0] * (len(edges) + 1)
+    for g in gaps:
+        gf.gap_bins[sum(g >= e for e in edges)] += 1
+    if gaps:
+        s = sorted(gaps)
+        mid = len(s) // 2
+        gf.gap_median = s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
+    return gf
+
+
+def pct(part: int | float, total: int | float) -> float:
+    """part 이 total 의 몇 %인가 — 분모 0 이면 0.0. 화면(app_main)의 `* 100` 규칙 검사 밖에서 센다(승률이 아닌 비율)."""
+    return part / total * 100 if total else 0.0
+
+
+GOAL_KIND_NOTE = {
+    "앞서는": "동점에서 앞서가는 골",
+    "동점": "한 골 뒤진 채 따라붙는 골",
+    "추격": "두 골 이상 뒤진 채 넣는 골",
+    "쐐기": "한 골 앞선 채 달아나는 골",
+    "벌리기": "두 골 이상 앞선 채 더 넣는 골",
+}

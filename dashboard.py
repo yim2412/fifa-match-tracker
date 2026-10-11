@@ -219,7 +219,7 @@ class DashboardPage(QWidget):
             _label("바깥일수록 그 항목에서 앞선다 · 진한 고리가 동률", dim=True, wrap=True))
         grid.addWidget(self.radar_card, 0, 0)
 
-        self.clutch = self._card("승부처", ("승부처 분석", None))
+        self.clutch = self._card("승부처", ("승부처 분석", "선제골·역전"))
         gauges = QHBoxLayout()
         gauges.setSpacing(6)
         self.gauges: list[RingGauge] = []
@@ -236,7 +236,7 @@ class DashboardPage(QWidget):
         self.clutch.body.addStretch(1)
         grid.addWidget(self.clutch, 0, 1)
 
-        self.minutes = self._card("언제 넣고 먹히나", ("승부처 분석", None))
+        self.minutes = self._card("언제 넣고 먹히나", ("승부처 분석", "선제골·역전"))
         self.minutes.body.addWidget(_legend([("득점", T.CHART_UP), ("실점", T.CHART_DOWN)]))
         self.minute_chart = GroupedBarChart()
         self.minutes.body.addWidget(self.minute_chart, 1)
@@ -264,7 +264,7 @@ class DashboardPage(QWidget):
         self.story.body.addStretch(1)
         grid.addWidget(self.story, 0, 0)
 
-        self.timeband = self._card("시간대 승률", ("승부처 분석", None))
+        self.timeband = self._card("시간대 승률", ("승부처 분석", "선제골·역전"))
         self.timeband_bars = HBarList()
         self.timeband.body.addWidget(self.timeband_bars)
         self.timeband.body.addStretch(1)

@@ -18,6 +18,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import config
+from habits import half_share_diff, paired_diff, side_totals
 from models import (MatchSummary, current_streak, is_weak, mixed_of_matches, opponent_stats, rated,
                     summarize)
 from stats import (UNKNOWN_GOAL_TYPE, after_streak_rates, clutch_summary,
@@ -297,6 +299,53 @@ def _minute_rules(details: list[dict], ouid: str) -> list[Insight]:
     return out
 
 
+def _creation_rules(details: list[dict], ouid: str) -> list[Insight]:
+    """마무리인가 창출인가(N19) — 유효슛당 골(마무리)과 경기당 유효슛(창출)을 같은 경기 상대와 견준다.
+
+    마무리는 차이(%p)가 크기 문턱(config.N19_MIN_GAP)을, 창출은 상대 평균 대비 비율(%)이 config.N19_CREATE_MIN_REL 을
+    넘고 구간이 0 을 안 품어야 한다. 표본은 유효슛 수(MIN_SHOTS)·경기 수(MIN_BASE)."""
+    t = side_totals(details, ouid)
+    fin = paired_diff(t, "goals_per_on_target")
+    cre = paired_diff(t, "on_target")
+    f = c = 0
+    if min(fin.mine_den, fin.opp_den) >= MIN_SHOTS and fin.clear(config.N19_MIN_GAP):
+        f = 1 if fin.diff > 0 else -1
+    rel = cre.diff / cre.opp * 100 if cre.opp else 0.0
+    if t.games >= MIN_BASE and (cre.lo > 0 or cre.hi < 0) and abs(rel) >= config.N19_CREATE_MIN_REL:
+        c = 1 if cre.diff > 0 else -1
+    if not f and not c:
+        return []
+    head = {(-1, 1): "기회는 상대보다 많이 만드는데 마무리가 모자랍니다.",
+            (1, -1): "마무리는 상대보다 낫지만 기회를 덜 만듭니다.",
+            (-1, -1): "기회 창출도 마무리도 같은 경기 상대보다 모자랍니다.",
+            (1, 1): "기회도 더 만들고 마무리도 더 잘합니다.",
+            (-1, 0): "마무리가 같은 경기 상대보다 모자랍니다.",
+            (0, -1): "기회 창출이 같은 경기 상대보다 모자랍니다.",
+            (1, 0): "마무리가 같은 경기 상대보다 낫습니다.",
+            (0, 1): "기회를 같은 경기 상대보다 더 만듭니다."}[(f, c)]
+    section = SEC_LOSE if (f < 0 or c < 0) else SEC_WIN
+    detail = (f"유효슛당 골 {fin.mine:.1f}% 대 상대 {fin.opp:.1f}%({fin.diff:+.1f}%p) · "
+              f"경기당 유효슛 {cre.mine:.2f}개 대 상대 {cre.opp:.2f}개({rel:+.0f}%). 같은 경기의 상대와 견준 값입니다.")
+    gap = max(abs(fin.diff) if f else 0.0, abs(rel) * config.N19_MIN_GAP / config.N19_CREATE_MIN_REL if c else 0.0)
+    return [Insight(section, head, detail, _w(gap, int(fin.mine_den), MIN_SHOTS))]
+
+
+def _half_rules(details: list[dict], ouid: str) -> list[Insight]:
+    """전반·후반 어디서 새나(N19) — 내 실점의 전반 비중 대 같은 경기 상대 실점(= 내 득점)의 전반 비중.
+
+    50:50 을 기준으로 두지 않는다(추가시간 때문에 전반 비중이 구조적으로 약 50.7%). 정규시간 골만."""
+    hs = half_share_diff(details, ouid)
+    if min(hs.mine_den, hs.opp_den) < MIN_GOALS or not hs.clear(config.N19_MIN_GAP):
+        return []
+    if hs.diff > 0:
+        head = "실점이 득점보다 전반에 몰립니다."
+    else:
+        head = "실점이 득점보다 후반에 몰립니다."
+    detail = (f"내 실점 {int(hs.mine_den)}골 중 전반 {hs.mine:.0f}% · 내 득점 {int(hs.opp_den)}골 중 전반 {hs.opp:.0f}%"
+              f"({hs.diff:+.1f}%p). 정규시간 · 같은 경기 상대와 견준 값입니다.")
+    return [Insight(SEC_LOSE, head, detail, _w(hs.diff, int(hs.mine_den), MIN_GOALS))]
+
+
 def _possession_rules(details: list[dict], ouid: str, total: int, mixed: bool
                       ) -> list[Insight]:
     need = _min_cond(total)
@@ -453,6 +502,8 @@ def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
             + _possession_rules(details, ouid, n, mixed)
             + _formation_rules(details, ouid, base, n, mixed)
             + _finishing_rules(details, ouid)
+            + _creation_rules(details, ouid)
+            + _half_rules(details, ouid)
             + _goal_type_rules(details, ouid)
             + _opponent_rules(matches, base, mixed)
             + _streak_rules(matches, base, n, mixed))
@@ -470,6 +521,8 @@ NO_BASIS_RULES = {
     "_minute_rules": "골이 몰린 구간의 비중 — 승률이 아니다",
     "_finishing_rules": "기대득점 대비 골 — 승률이 아니다",
     "_goal_type_rules": "골 유형 비중 — 승률이 아니다",
+    "_creation_rules": "같은 경기 상대 대비 유효슛당 골·경기당 유효슛 — 승률이 아니다",
+    "_half_rules": "전반 실점 비중 대 상대 실점 비중 — 승률이 아니다",
 }
 
 

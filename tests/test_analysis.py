@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import analysis
+import config
 import models
 
 OUID = "me"
@@ -493,6 +494,85 @@ def test_non_rate_rules_have_no_basis():
     # 요약 줄(최근 N경기 …)도 basis 없음 — 비교 대상이 없다
     ms, ds = _seq(["승"] * 5)
     assert all(i.basis is None for i in analysis._flow(ms, ds, OUID, 5))
+
+
+# ── N19 문장 — 마무리 vs 창출 · 전반·후반 ──────────────────────────────────────
+
+def _n19_side(ouid, shots, on, goals, goals_at=()):
+    return {"ouid": ouid, "matchDetail": {"matchResult": "승", "possession": 50},
+            "shoot": {"shootTotal": shots, "effectiveShootTotal": on, "goalTotal": goals},
+            "defence": {}, "pass": {},
+            "shootDetail": [{"result": 3, "goalTime": (p << 24) | sec} for p, sec in goals_at]}
+
+
+def _creation_games(n=30, me_on=(5,), opp_on=(5,), me_goals=(1, 1, 2), opp_goals=(3, 3, 4)):
+    return [{"matchId": f"n{i}", "matchInfo": [
+        _n19_side(OUID, 10, me_on[i % len(me_on)], me_goals[i % len(me_goals)]),
+        _n19_side("opp", 10, opp_on[i % len(opp_on)], opp_goals[i % len(opp_goals)])]} for i in range(n)]
+
+
+def test_creation_rule_says_which_side_is_short():
+    # 유효슛당 골: 나 40/150 = 26.7% · 상대 100/150 = 66.7% → −40%p (마무리 약점) / 유효슛은 같아 창출은 말이 없다
+    only_fin = analysis._creation_rules(_creation_games(), OUID)
+    assert [(i.section, i.headline) for i in only_fin] == [(analysis.SEC_LOSE, "마무리가 같은 경기 상대보다 모자랍니다.")], only_fin
+    assert only_fin[0].basis is None
+    # 창출: 나는 경기당 유효슛 6~8 · 상대 5 → 상대 평균 대비 +40% → "기회는 많이 만드는데 마무리가 모자랍니다"
+    both = analysis._creation_rules(_creation_games(me_on=(6, 7, 8)), OUID)
+    assert [i.headline for i in both] == ["기회는 상대보다 많이 만드는데 마무리가 모자랍니다."], both
+    # 반대로 마무리만 낫고 창출은 모자라면 SEC_LOSE 로 간다("모자라는 쪽이 있으면 약점 쪽")
+    mixed = analysis._creation_rules(_creation_games(me_on=(3, 4, 3), opp_on=(5,), me_goals=(3, 3, 2), opp_goals=(1, 1, 1)), OUID)
+    assert [(i.section, i.headline) for i in mixed] == [(analysis.SEC_LOSE, "마무리는 상대보다 낫지만 기회를 덜 만듭니다.")], mixed
+
+
+def test_creation_rule_floors_and_thresholds_are_wired():
+    games = _creation_games(me_on=(6, 7, 8))
+    assert analysis._creation_rules(games, OUID), "기본값으로는 문장이 있어야 아래가 뜻이 있다"
+    keep = (analysis.MIN_SHOTS, analysis.MIN_BASE, config.N19_CREATE_MIN_REL, config.N19_MIN_GAP)
+    try:
+        analysis.MIN_SHOTS = 10_000                  # 유효슛 수 하한 — 마무리 쪽이 사라지고 창출만 남는다
+        assert [i.headline for i in analysis._creation_rules(games, OUID)] == ["기회를 같은 경기 상대보다 더 만듭니다."]
+        analysis.MIN_SHOTS = keep[0]
+        analysis.MIN_SHOTS = 150                     # 경계: 유효슛이 정확히 하한만큼이면 말한다("이상")
+        analysis.MIN_BASE = 30                       #       경기 수도 · 창출 문턱도 정확히 같으면 말한다
+        config.N19_CREATE_MIN_REL = 40.0
+        assert [i.headline for i in analysis._creation_rules(games, OUID)] == ["기회는 상대보다 많이 만드는데 마무리가 모자랍니다."]
+        analysis.MIN_SHOTS = keep[0]
+        analysis.MIN_BASE = 31                       # 경기 수 하한(30경기) — 창출 쪽이 사라진다
+        assert [i.headline for i in analysis._creation_rules(games, OUID)] == ["마무리가 같은 경기 상대보다 모자랍니다."]
+        analysis.MIN_BASE = keep[1]
+        config.N19_CREATE_MIN_REL = keep[2]
+        config.N19_CREATE_MIN_REL = 50.0             # 상대 대비 +40% 는 문턱 아래
+        assert [i.headline for i in analysis._creation_rules(games, OUID)] == ["마무리가 같은 경기 상대보다 모자랍니다."]
+        config.N19_CREATE_MIN_REL = keep[2]
+        config.N19_MIN_GAP = 48.0                    # 마무리 −47.6%p(유효슛 210개 중 40골 대 150개 중 100골)는 문턱 아래 → 창출만
+        found = analysis._creation_rules(games, OUID)
+        assert [(i.section, i.headline) for i in found] == [(analysis.SEC_WIN, "기회를 같은 경기 상대보다 더 만듭니다.")], found
+    finally:
+        analysis.MIN_SHOTS, analysis.MIN_BASE, config.N19_CREATE_MIN_REL, config.N19_MIN_GAP = keep
+
+
+def _half_games(mine_period, theirs_period, n=20):
+    return [{"matchId": f"h{i}", "matchInfo": [
+        _n19_side(OUID, 5, 3, 1, [(mine_period, 1200 + i)]),
+        _n19_side("opp", 5, 3, 2, [(theirs_period, 600 + i), (theirs_period, 900 + i)])]} for i in range(n)]
+
+
+def test_half_rule_compares_with_my_own_scoring_not_fifty_fifty():
+    early = analysis._half_rules(_half_games(1, 0), OUID)       # 내 득점은 후반 · 내 실점은 전반
+    assert [i.headline for i in early] == ["실점이 득점보다 전반에 몰립니다."], early
+    late = analysis._half_rules(_half_games(0, 1), OUID)
+    assert [i.headline for i in late] == ["실점이 득점보다 후반에 몰립니다."], late
+    # 실점이 전반에 몰려도 득점도 똑같이 전반에 몰리면 말하지 않는다(50:50 기준이었다면 늘 떴을 자리)
+    assert analysis._half_rules(_half_games(0, 0), OUID) == []
+    keep = analysis.MIN_GOALS
+    try:
+        analysis.MIN_GOALS = 20                       # 경계: 둘 중 적은 쪽(내 득점 20골)이 정확히 하한이면 말한다("이상")
+        assert analysis._half_rules(_half_games(1, 0), OUID)
+        analysis.MIN_GOALS = 21                       # 내 득점 20골 — 하한 밑
+        assert analysis._half_rules(_half_games(1, 0), OUID) == []
+    finally:
+        analysis.MIN_GOALS = keep
+
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 

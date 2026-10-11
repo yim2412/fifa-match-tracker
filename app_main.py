@@ -2677,7 +2677,8 @@ class MainWindow(QMainWindow):
                                               ("순위 변동", "_build_rank_move_tab")))),
                  ("기간별 추이", "_build_period_tab"),
                  ("시즌별 성적", "_build_season_tab")]),
-        ("경기력", [("승부처 분석", "_build_clutch_tab"),
+        ("경기력", [("승부처 분석", Tabs("clutch", (("선제골·역전", "_build_clutch_tab"),
+                                              ("리드·골 흐름", "_build_goal_flow_tab")))),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
                                                 ("규율·불운", "_build_discipline_tab"),
                                                 ("등급 체류", "_build_divstay_tab")))),
@@ -3239,6 +3240,10 @@ class MainWindow(QMainWindow):
         self.lb_analysis_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_analysis_note)
 
+        self.box_chips = QHBoxLayout()   # N19 칩 줄 — 같은 경기 상대와 견줘 뚜렷한 강점·약점(그리기: _render_chips)
+        self.box_chips.setSpacing(6)
+        v.addLayout(self.box_chips)
+
         gb_dots = QGroupBox(f"최근 {core.WINDOW}경기 결과 (왼쪽이 오래된 경기)")
         dl = QVBoxLayout(gb_dots)
         self.analysis_dots = charts.ResultDots()
@@ -3291,7 +3296,34 @@ class MainWindow(QMainWindow):
             self._narrate_key = key
         return self._narrate_found
 
+    def _render_chips(self) -> None:
+        """흐름 분석 맨 위 칩 줄(N19) — 시즌 범위, 같은 경기 상대 대비. 칩이 없어도 한 줄은 남겨 이유를 말한다."""
+        self._clear(self.box_chips)
+        totals = core.side_totals(self._details, self._ouid) if self._ouid else None
+        chips = core.strength_chips(totals) if totals else []
+        head = QLabel("같은 경기 상대와 견주면")
+        head.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.box_chips.addWidget(head)
+        for c in chips:
+            color = T.GREEN if c.strong else T.RED
+            lb = QLabel(("강점 " if c.strong else "약점 ") + c.text)
+            lb.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color}; border-radius: 9px;"
+                             f" padding: 2px 10px;")
+            d = c.diff
+            lb.setToolTip(f"{c.label}: 나 {d.mine:.1f}% 대 같은 경기 상대 {d.opp:.1f}% (경기 {d.n:,}판)\n"
+                          f"차이 {d.diff:+.1f}%p · 95% 구간 {d.lo:+.1f} ~ {d.hi:+.1f}%p")
+            lb.setProperty("chip", c.diff.metric.key)
+            self.box_chips.addWidget(lb)
+        if not chips:
+            none = QLabel(f"뚜렷한 강점·약점 없음 (차이 {config.N19_MIN_GAP:g}%p 이상, 95% 구간이 0 을 안 품을 때만 띄웁니다)"
+                          if totals and totals.games else "경기가 없습니다")
+            none.setStyleSheet(f"color: {T.TEXT_DIM};")
+            none.setProperty("chip", "none")
+            self.box_chips.addWidget(none)
+        self.box_chips.addStretch(1)
+
     def _render_analysis(self) -> None:
+        self._render_chips()
         found = self._narrate_scope()
         recent = self._matches[:core.WINDOW][::-1]
         self.analysis_dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
@@ -3418,6 +3450,110 @@ class MainWindow(QMainWindow):
         v.addStretch(1)
         scroll.setWidget(w)
         return scroll
+
+    def _build_goal_flow_tab(self) -> QWidget:
+        """승부처 분석 [리드·골 흐름](N17) — 최대 리드별 결과 · 내 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_goalflow_note = QLabel("")
+        self.lb_goalflow_note.setWordWrap(True)
+        self.lb_goalflow_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_goalflow_note)
+        self.box_goalflow = {}
+        for key, title in (("lead", "최대 리드별 결과 (한 번이라도 이만큼 앞섰던 경기)"),
+                           ("kind", "내 골의 성격 (넣기 직전 점수 차)"),
+                           ("next", "지고 있을 때 · 앞서 있을 때 다음 골"),
+                           ("gap", "골 사이 시간 (정규시간, 양쪽 골 합쳐서)")):
+            gb = QGroupBox(title)
+            box = QVBoxLayout(gb)
+            box.setSpacing(3)
+            self.box_goalflow[key] = box
+            v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _render_goal_flow(self, details: list[dict]) -> None:
+        gf = core.goal_flow(details, self._ouid) if self._ouid else core.GoalFlow()
+        dim = f"color: {T.TEXT_DIM};"
+
+        def line(box, text: str, tip: str = "") -> QLabel:
+            lb = QLabel(text)
+            lb.setWordWrap(True)
+            lb.setStyleSheet(dim)
+            if tip:
+                lb.setToolTip(tip)
+            box.addWidget(lb)
+            return lb
+
+        for box in self.box_goalflow.values():
+            self._clear(box)
+        skipped = []
+        if gf.unreplayable:
+            skipped.append(f"자책골 등으로 골 순서를 모르는 {gf.unreplayable}경기")
+        if gf.held:
+            skipped.append(f"양쪽이 같은 시각에 넣어 순서를 못 정한 {gf.held}경기")
+        self.lb_goalflow_note.setText(
+            f"골 순서를 되짚은 {gf.replayed:,}경기 기준 ({self._scope_text()})"
+            + (f" · 제외: {' · '.join(skipped)}" if skipped else ""))
+        if not gf.replayed:
+            line(self.box_goalflow["lead"], "골 순서를 되짚을 수 있는 경기가 없습니다.")
+            return
+
+        box = self.box_goalflow["lead"]
+        for r in gf.leads:
+            label = f"{r.lead}골 이상 리드" if r.lead >= core.MAX_LEAD else f"최대 {r.lead}골 리드"
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(f"{label} ({r.games:,})")
+            a.setStyleSheet(dim)
+            a.setFixedWidth(132)
+            h.addWidget(a)
+            if r.games:
+                h.addWidget(win_rate_bar(r.win, r.draw, r.lose,
+                                         f"{win_rate_text(r.win, r.draw, r.lose, gf.mixed, short=True)}  "
+                                         f"({wdl_text(r.win, r.draw, r.lose)})", core.MIN_COND, gf.mixed), 1)
+            else:
+                none = QLabel("경기 없음")
+                none.setStyleSheet(dim)
+                h.addWidget(none, 1)
+            box.addWidget(row)
+        line(box, f"한 번도 앞서지 못한 경기 {gf.never_led:,}판은 위에 없습니다.")
+
+        box = self.box_goalflow["kind"]
+        total = sum(gf.kinds.values())
+        bars = charts.HBarList()
+        bars.set_data([(k, core.pct(n, total), f"{n:,}골 · {n / total:.0%}" if total else "0골",
+                        f"{k}: {core.GOAL_KIND_NOTE[k]}") for k, n in gf.kinds.items()])
+        box.addWidget(bars)
+
+        box = self.box_goalflow["next"]
+        if gf.trail_goals:
+            line(box, f"내가 지고 있는 동안 나온 골 {gf.trail_goals:,}개 중 내가 넣은 것 {gf.trail_mine:,}개 "
+                      f"({gf.trail_mine / gf.trail_goals:.0%})", "뒤진 채로는 다음 골을 누가 넣는가")
+        if gf.lead_goals:
+            line(box, f"내가 앞서 있는 동안 나온 골 {gf.lead_goals:,}개 중 상대가 넣은 것 {gf.lead_theirs:,}개 "
+                      f"({gf.lead_theirs / gf.lead_goals:.0%})", "지고 있는 쪽(상대)이 다음 골을 넣는 비율")
+        if not (gf.trail_goals or gf.lead_goals):
+            line(box, "점수 차가 난 상태에서 나온 골이 없습니다.")
+
+        box = self.box_goalflow["gap"]
+        edges = config.N17_GAP_EDGES
+        names = [f"{edges[0]}분 안"] + [f"{lo}~{hi}분" for lo, hi in zip(edges, edges[1:])] + [f"{edges[-1]}분 넘게"]
+        gaps_total = sum(gf.gap_bins)
+        if gaps_total:
+            bars = charts.HBarList()
+            bars.set_data([(nm, core.pct(n, gaps_total), f"{n:,}번 · {n / gaps_total:.0%}", f"앞 골과 {nm} 간격으로 나온 골")
+                           for nm, n in zip(names, gf.gap_bins)])
+            box.addWidget(bars)
+            line(box, f"골과 골 사이 중앙값 {gf.gap_median:.1f}분 · 연장 골은 뺍니다.")
+        else:
+            line(box, "한 경기에 두 골 이상 나온 경기가 없습니다.")
 
     def _render_clutch(self, details: list[dict],
                        matches: list[MatchSummary]) -> None:
@@ -7192,7 +7328,7 @@ class MainWindow(QMainWindow):
     VIEW_OF_KEY = {
         "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", None)],
         "analysis": [("흐름 분석", None)], "period": [("기간별 추이", None)], "seasons": [("시즌별 성적", None)],
-        "clutch": [("승부처 분석", None)],
+        "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
@@ -7234,6 +7370,7 @@ class MainWindow(QMainWindow):
             "period": lambda: self._render_period(self._matches),
             "seasons": self._render_seasons,  # 시즌 필터도 무시(_matches_all)
             "clutch": lambda: self._render_clutch(self._details, self._matches),
+            "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
             "divstay": lambda: self._render_divstay(self._details),   # 시즌 범위(diagnosis 와 같다)
             "shotmap": self._render_shotmap,  # 표시 구간

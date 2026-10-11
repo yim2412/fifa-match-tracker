@@ -1248,6 +1248,51 @@ def test_divstay_tab_counts_and_note():
     _win._render_divstay(_win._details)   # 원래 데이터로 되돌린다
 
 
+def _live_widgets(layout):
+    """레이아웃에 지금 들어 있는 위젯들 — findChildren 은 deleteLater 로 지운 줄도 아직 본다."""
+    return [layout.itemAt(i).widget() for i in range(layout.count()) if layout.itemAt(i).widget() is not None]
+
+
+def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
+    # 2.7.1 N17 — 경기가 있는 최대 리드 줄마다 막대 하나 + 되짚은 경기 수 · 제외 안내
+    from PyQt6.QtWidgets import QLabel, QProgressBar
+    _win._go_page("승부처 분석", "리드·골 흐름")
+    _win._render_goal_flow(_win._details)
+    gf = app_main.core.goal_flow(_win._details, _win._ouid)
+    bars = [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(QProgressBar)]
+    assert len(bars) == sum(1 for r in gf.leads if r.games) > 0, (len(bars), [r.games for r in gf.leads])
+    assert f"{gf.replayed:,}경기" in _win.lb_goalflow_note.text(), _win.lb_goalflow_note.text()
+    # 경기가 없으면 막대 대신 한 줄
+    _win._render_goal_flow([])
+    assert not [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(QProgressBar)]
+    assert [w.text() for w in _live_widgets(_win.box_goalflow["lead"]) if isinstance(w, QLabel)] == [
+        "골 순서를 되짚을 수 있는 경기가 없습니다."]
+    _win._render_goal_flow(_win._details)
+
+
+def test_analysis_chip_row_shows_strengths_and_weaknesses():
+    # 2.7.1 N19 — 칩은 강점·약점으로 글자 앞에 말이 붙고, 없으면 이유 한 줄
+    import habits
+    keep = app_main.core.strength_chips
+    m = habits.METRICS
+    strong = habits.Chip(habits.Diff(m["tackle_rate"], 500, 72.0, 68.0, 0.5, 400, 400))
+    weak = habits.Chip(habits.Diff(m["finish"], 500, 36.0, 40.0, 0.5, 400, 400))
+
+    def chips():
+        return {w.property("chip"): w.text() for w in _live_widgets(_win.box_chips) if w.property("chip")}
+    try:
+        app_main.core.strength_chips = lambda t: [weak, strong]
+        _win._render_chips()
+        assert chips() == {"finish": "약점 결정력 -4.0%p", "tackle_rate": "강점 태클 성공 +4.0%p"}, chips()
+        app_main.core.strength_chips = lambda t: []
+        _win._render_chips()
+        assert list(chips()) == ["none"] and "뚜렷한 강점·약점 없음" in chips()["none"], chips()
+    finally:
+        app_main.core.strength_chips = keep
+        _win._render_chips()
+
+
+
 def test_sc_records_list_and_nexon_line():
     keep_max = dict(_win._max_division)
     try:
