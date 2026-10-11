@@ -2631,7 +2631,8 @@ def test_position_views_follow_teamcolor_scope():
         assert len(_win._slice()[1]) < len(_win._details), "표시 구간이 좁아지지 않아 비교가 안 된다"
         app_main.core.opponent_position_players = spy
         _win._show_teamcolor_detail = lambda *a, **k: None
-        _win._on_position_color_changed(0)
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentText("범위컬러")    # [축구장] 은 팀컬러를 골라야 그린다
         _win._on_teamcolor_double_clicked(_win.tbl_teamcolor_rank.item(0, 1))
         assert seen == [len(_win._details)] * 2, (seen, len(_win._details))
     finally:
@@ -2639,6 +2640,8 @@ def test_position_views_follow_teamcolor_scope():
         _win._show_teamcolor_detail = orig[2]
         _win._team_colors.clear()
         _win._team_colors.update(saved_colors)
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentIndex(0)
         _win.sp_to.setValue(orig[1])
         _tc_min(old_min)
         _win._render_all()
@@ -4410,6 +4413,132 @@ def test_compare_profile_rows_and_key_players():
         _win.sp_compare_n.setValue(saved)
 
 
+_PO_SYM = [0, 3, 4, 6, 7, 10, 12, 16, 18, 24, 26]     # 4-1-2-1-2 · 좌우 짝이 다 있다
+_PO_ASYM = [0, 3, 4, 6, 7, 10, 12, 13, 18, 24, 26]    # 같은 4-1-2-1-2 인데 오른쪽 RM·RCM 만(더 흔하다)
+_PO_424 = [0, 3, 4, 6, 7, 9, 11, 20, 22, 24, 26]      # 4-2-0-0-4 → "4-2-4"
+_PO_3142 = [0, 4, 5, 6, 10, 12, 13, 15, 16, 24, 26]   # 3-1-4-0-2 → "3-1-4-2"
+_PO_5032 = [0, 2, 4, 5, 6, 8, 13, 14, 15, 24, 26]     # 5-0-3-0-2 → "5-3-2" (경기 수가 같아 글자 순으로 4번째 — 칩에서 빠진다)
+_PO_OTHER = [0, 3, 4, 6, 7, 10, 13, 14, 15, 21, 23]   # 4-1-3-0-2 — 다른 팀컬러
+
+
+class _PosOppEnv:
+    """[포지션별 최다 상대 › 축구장] 합성 상대 기록 — 컬러X 9경기(4-1-2-1-2 5 · 4-2-4 2 · 3-1-4-2 1 · 5-3-2 1) + 컬러Y 4경기.
+    화면의 범위 함수(_teamcolor_scope)를 이 기록으로 갈아 끼우고, 콤보·칩 선택을 처음 상태로 돌려놓는다."""
+
+    def __enter__(self):
+        def det(nick, positions, base):
+            return {"matchId": f"po-{nick}", "matchDate": "2026-10-01T12:00:00",
+                    "matchInfo": [{"ouid": _OUID, "nickname": "나", "matchDetail": {"matchResult": "승"}, "player": []},
+                                  {"ouid": "x-" + nick, "nickname": nick, "matchDetail": {"matchResult": "패"},
+                                   "player": [{"spId": base + p, "spPosition": p, "spGrade": 1} for p in positions]
+                                   + [{"spId": 9, "spPosition": 28}]}]}
+        rows = ([(f"가{i}", _PO_SYM, 1000) for i in (1, 2)] + [(f"가{i}", _PO_ASYM, 2000) for i in (3, 4, 5)]
+                + [(f"가{i}", _PO_424, 3000) for i in (6, 7)] + [("가8", _PO_3142, 4000), ("가9", _PO_5032, 5000)]
+                + [(f"나{i}", _PO_OTHER, 6000) for i in (1, 2, 3, 4)])
+        self.details = [det(*r) for r in rows]
+        self.saved = (dict(_win._team_colors), _win._posopp_formation, config.POSITION_OPP_FORMATIONS,
+                      _win.ed_position_color.text())
+        _win._team_colors.clear()
+        for nick, _p, _b in rows:
+            _win._team_colors[nick] = "컬러X" if nick.startswith("가") else "컬러Y"
+        _win._teamcolor_scope = lambda: ([], self.details)
+        _win._posopp_formation = None
+        _win.ed_position_color.setText("")
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentIndex(0)      # "고르세요"
+        return self
+
+    def __exit__(self, *exc):
+        del _win._teamcolor_scope
+        _win._team_colors.clear()
+        _win._team_colors.update(self.saved[0])
+        _win._posopp_formation, config.POSITION_OPP_FORMATIONS = self.saved[1], self.saved[2]
+        _win.ed_position_color.setText(self.saved[3])
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentIndex(0)
+        _win._render_position_opponents(list(_win._details))
+
+
+def _pos_pitch():
+    items = [_win.box_position_pitch.itemAt(i).widget() for i in range(_win.box_position_pitch.count())]
+    return next((w for w in items if isinstance(w, app_main.PitchWidget)), None)
+
+
+def _pos_chips():
+    out = []
+    for i in range(_win.row_position_forms.count()):
+        w = _win.row_position_forms.itemAt(i).widget()
+        if w is not None:
+            out.append(w)
+    return out
+
+
+def test_position_opponents_start_empty_until_color_chosen():
+    """열면 빈 축구장 — 팀컬러를 고르기 전에는 칩도 축구장도 표도 없고 안내 한 줄뿐이다(사용자 2026-10-11)."""
+    with _PosOppEnv():
+        _win._render_position_opponents(list(_win._teamcolor_scope()[1]))
+        assert _win.cb_position_color.currentText() == _win.POSITION_COLOR_NONE
+        assert _pos_pitch() is None and _pos_chips() == []
+        assert _win.tbl_position_opp.rowCount() == 0
+        assert _win.lb_position_hint.text() == _win.POSITION_HINT_EMPTY, _win.lb_position_hint.text()
+        # 알려진 팀컬러인데 이 범위에 만난 상대가 없으면 칩·축구장 없이 "기록 없음" 안내
+        _win._team_colors["유령"] = "컬러Z"
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentText("컬러Z")
+        assert _pos_pitch() is None and _pos_chips() == []
+        assert _win.lb_position_hint.text() == "표시할 상대 기록이 없습니다.", _win.lb_position_hint.text()
+        # 기록이 있는 색을 골랐다가 다시 "고르세요"로 — 처음 상태로 돌아온다
+        _win.cb_position_color.setCurrentText("컬러Y")
+        assert _pos_chips() and _pos_pitch() is not None, "컬러Y 는 기록이 있다"
+        _win.cb_position_color.setCurrentText(_win.POSITION_COLOR_NONE)
+        assert _pos_pitch() is None and _pos_chips() == [], "처음 상태로 돌아오지 않았다"
+
+
+def test_position_opponents_formation_chips_and_eleven_slots():
+    """팀컬러를 고르면 포메이션 칩(사용 많은 순 · 최대 3) — 가장 많이 쓴 것이 자동으로 눌려 있고, 고른 포메이션의 11자리만 그린다."""
+    with _PosOppEnv():
+        _win.cb_position_color.setCurrentText("컬러X")
+        chips = _pos_chips()
+        texts = [c.text() for c in chips]
+        assert [t.split()[0] for t in texts] == ["4-1-2-1-2", "4-2-4", "3-1-4-2"], texts   # 5-3-2 는 4번째라 빠진다
+        assert "56%" in texts[0] and "5경기" in texts[0] and "22%" in texts[1] and "2경기" in texts[1], texts
+        assert [c.isChecked() for c in chips] == [True, False, False]
+        pitch = _pos_pitch()
+        codes = {c.card.pos_code for c in pitch.chips()}
+        assert codes == set(_PO_SYM) and len(pitch.chips()) == 11, sorted(codes)           # 좌우 맞는 구성(더 흔한 ASYM 이 아니라)
+        assert 13 not in codes and 16 in codes
+        assert {c.card.note for c in pitch.chips()} == {"2회 · 100%"}, {c.card.note for c in pitch.chips()}
+        assert _win.tbl_position_opp.rowCount() == 11
+        hint = _win.lb_position_hint.text()
+        assert "4-1-2-1-2" in hint and "9경기 중 5경기" in hint and "2경기 기준" in hint, hint
+        # 다른 칩을 누르면 그 포메이션의 11자리
+        chips[1].click()
+        assert [c.isChecked() for c in _pos_chips()] == [False, True, False]
+        assert {c.card.pos_code for c in _pos_pitch().chips()} == set(_PO_424) and len(_pos_pitch().chips()) == 11
+        # 컬러Y 의 포메이션이 새지 않는다
+        assert all(not t.startswith("4-1-3-2") for t in texts)
+        # 팀컬러를 바꾸면 다시 가장 많이 쓴 포메이션부터 — 4-2-4 는 "전체" 목록에도 있어, 리셋을 빼면 눌린 채로 남는다
+        _win.cb_position_color.setCurrentText(_win.POSITION_COLOR_ALL)
+        assert [c.isChecked() for c in _pos_chips()] == [True, False, False], [(c.text(), c.isChecked()) for c in _pos_chips()]
+        _win.cb_position_color.setCurrentText("컬러X")
+        _pos_chips()[1].click()
+        _win.cb_position_color.setCurrentText("컬러Y")
+        assert [t.text().split()[0] for t in _pos_chips()] == ["4-1-3-2"]
+        _win.cb_position_color.setCurrentText("컬러X")
+        assert [c.isChecked() for c in _pos_chips()] == [True, False, False]
+        # "전체" 는 모든 상대 — 컬러Y 의 포메이션도 순위에 든다
+        _win.cb_position_color.setCurrentText(_win.POSITION_COLOR_ALL)
+        assert [t.text().split()[0] for t in _pos_chips()] == ["4-1-2-1-2", "4-1-3-2", "4-2-4"]
+
+
+def test_position_opponent_chip_count_follows_config():
+    """칩 수 상수가 화면까지 이어진다 — 기본(3)이 아닌 2 로 바꿔서 잰다."""
+    with _PosOppEnv():
+        config.POSITION_OPP_FORMATIONS = 2
+        _win.cb_position_color.setCurrentText("컬러X")
+        assert len(_pos_chips()) == 2, [c.text() for c in _pos_chips()]
+
+
 def test_position_opponents_pitch_and_folded_table():
     """⑨ — 자리마다 가장 많이 만난 상대 카드가 축구장 칩으로(시세 줄 자리에 횟수·비율), 표는 아래 접힘. 카드 정보 요청 0."""
     keep = (list(_FakeCardInfoLoader.started), config.NOTICE_ACCEPTED, config.WEB_DATA)
@@ -4418,20 +4547,22 @@ def test_position_opponents_pitch_and_folded_table():
         config.NOTICE_ACCEPTED, config.WEB_DATA = config.CHIP_NOTICE_VERSION, True
         assert config.chip_auto_allowed()
         _FakeCardInfoLoader.started.clear()
-        _win._render_position_opponents(list(_DETAILS))
-        players = core.opponent_position_players(list(_DETAILS), _OUID,
-                                                 pos_name=lambda p: _win._positions.get(p, str(p)))
-        pitches = [_win.box_position_pitch.itemAt(i).widget() for i in range(_win.box_position_pitch.count())]
-        pitch = next(w for w in pitches if isinstance(w, app_main.PitchWidget))
-        chips = pitch.chips()
-        assert len(chips) == len(players) and players, (len(chips), len(players))
-        by_code = {c.card.pos_code: c for c in chips}
-        for p in players:
-            assert by_code[p.pos_code].card.note == f"{p.count}회 · {p.rate:.0f}%"
-            assert by_code[p.pos_code].card.grade is None   # 강화가 섞여 비운다
-        assert not pitch.band.isVisibleTo(pitch), "⑨ 은 합이 뜻이 없어 위 띠가 없다"
-        assert _FakeCardInfoLoader.started == [], "⑨ 이 카드 정보를 읽었다"
-        assert not _win.fold_position_opp.is_open() and _win.tbl_position_opp.rowCount() == len(players)
+        with _PosOppEnv() as env:
+            _win.cb_position_color.setCurrentText("컬러X")
+            players = core.opponent_position_players(env.details, _OUID,
+                                                     pos_name=lambda p: _win._positions.get(p, str(p)),
+                                                     nicknames={n for n, c in _win._team_colors.items() if c == "컬러X"},
+                                                     formation="4-1-2-1-2")
+            pitch = _pos_pitch()
+            chips = pitch.chips()
+            assert len(chips) == len(players) == 11, (len(chips), len(players))
+            by_code = {c.card.pos_code: c for c in chips}
+            for p in players:
+                assert by_code[p.pos_code].card.note == f"{p.count}회 · {p.rate:.0f}%"
+                assert by_code[p.pos_code].card.grade is None   # 강화가 섞여 비운다
+            assert not pitch.band.isVisibleTo(pitch), "⑨ 은 합이 뜻이 없어 위 띠가 없다"
+            assert _FakeCardInfoLoader.started == [], "⑨ 이 카드 정보를 읽었다"
+            assert not _win.fold_position_opp.is_open() and _win.tbl_position_opp.rowCount() == len(players)
     finally:
         _FakeCardInfoLoader.started[:] = keep[0]
         config.NOTICE_ACCEPTED, config.WEB_DATA = keep[1], keep[2]
@@ -8279,7 +8410,7 @@ def test_opp_cards_tab_filters():
         met = sum(c.met for cards in _win.opp_cards.values() for c in cards)
         total = sum(c.met for cards in all_cards.values() for c in cards)
         assert 0 < met < total, (met, total)
-        assert _win.cb_position_color.currentText() == _win.POSITION_COLOR_ALL, "고른 값은 탭마다 따로"
+        assert _win.cb_position_color.currentText() == _win.POSITION_COLOR_NONE, "고른 값은 탭마다 따로"
         _win.cb_oppcard_color.setCurrentIndex(0)
         # 1만 위 안 상대만 — rank.db 에 그 상대 하나
         c = rankcollect.open_rank_db()

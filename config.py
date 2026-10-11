@@ -253,6 +253,7 @@ TEAMCOLOR_DUP_NAMES = frozenset({
 TEAMCOLOR_CACHE_DAYS = 7            # 효과 목록·단계 캐시 — 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다
 TEAMCOLOR_MIN_OPPONENTS = 3         # 승률 표에서 상대가 이보다 적은 팀컬러는 흐림 — 한 사람과의 반복 대전이 승률을 끌고 가지 않게(초안)
 TEAMCOLOR_PLAYERS_PAGE = 100        # 넥슨 선수 목록 한 요청의 최대 인원(쪽 넘김 없음 — OVR 상한으로 이어 받는다)
+POSITION_OPP_FORMATIONS = 3         # [포지션별 최다 상대 › 축구장] 팀컬러마다 칩으로 보이는 포메이션 수(사용 많은 순 · 사용자 2026-10-11)
 # 포지션 특성(32단계 · traitcollect.py) — 스쿼드메이커 팀 칸 조회. 팀 = (n1TeamType 1 대표/0 클럽, n1TeamPart 0·1·2 = A·B·C)
 # 대표를 먼저 본다(랭커 경기는 대부분 대표 팀 — 맞는 팀을 일찍 찾으면 거기서 멈춘다). 이 단계는 전술 번호 0(= 전술 1) 한 칸만 본다
 TRAIT_TEAM_ORDER = ((1, 0), (1, 1), (1, 2), (0, 0), (0, 1), (0, 2))

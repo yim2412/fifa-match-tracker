@@ -1584,24 +1584,105 @@ class PositionOpponent:
         return self.count / self.total * 100 if self.total else 0.0
 
 
+# 좌우 짝 자리 — 한 줄에서 한쪽만 다른 줄 자리(RM 과 LAM)가 섞인 "자리 구성"은 정석이 아니라 고르지 않는다(사용자 2026-10-11)
+_MIRROR = {2: 8, 3: 7, 4: 6, 9: 11, 12: 16, 13: 15, 17: 19, 20: 22, 23: 27, 24: 26}
+_MIRROR.update({v: k for k, v in list(_MIRROR.items())})
+LINEUP_SIZE = 11   # 선발 인원 — 탈주로 모자란 경기는 자리 구성을 정하는 데 쓰지 않는다
+
+
+@dataclass
+class FormationUsage:
+    formation: str   # formation_of 표기(수비-수미-미드-공미-공격) — 전술 탭과 같은 키
+    games: int       # 그 포메이션을 쓴 경기 수
+    total: int       # 상대 선발이 있는 경기 수(사용률의 분모)
+
+    @property
+    def rate(self) -> float:
+        return self.games / self.total * 100 if self.total else 0.0
+
+    @property
+    def label(self) -> str:
+        return formation_label(self.formation)
+
+
+def formation_label(formation: str) -> str:
+    """"4-1-4-0-1" → "4-1-4-1" — 비어 있는 줄은 게임 표기처럼 뺀다. 줄 키(formation_of)는 그대로 두고 화면 글자만."""
+    return "-".join(g for g in formation.split("-") if g != "0") or formation
+
+
+def _starters(opp: dict) -> list[int]:
+    """상대 선발 자리 코드(교체 명단·모르는 값은 뺀다)."""
+    return [p["spPosition"] for p in (opp.get("player") or [])
+            if isinstance(p.get("spPosition"), int) and p["spPosition"] != SUB_POSITION
+            and isinstance(p.get("spId"), int)]
+
+
+def _opp_scope(details: list[dict], ouid: str, nicknames: set[str] | None):
+    """(내 기록이 있고, 지정한 닉네임이면) 상대 한 줄씩 — 포메이션·자리 구성 집계가 같은 경기 범위를 쓴다."""
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        if nicknames is not None and (opp.get("nickname") or "-") not in nicknames:
+            continue
+        yield opp
+
+
+def opponent_formations(details: list[dict], ouid: str, nicknames: set[str] | None = None) -> list[FormationUsage]:
+    """상대가 쓴 포메이션을 쓴 경기 수 내림차순으로. 선발 기록이 없는 경기(상대 탈주)는 세지 않는다.
+    같은 경기 수면 표기 글자 순 — 순서가 실행마다 달라지지 않게."""
+    counts: Counter = Counter()
+    for opp in _opp_scope(details, ouid, nicknames):
+        if _starters(opp):
+            counts[formation_of(opp.get("player") or [])] += 1
+    total = sum(counts.values())
+    return [FormationUsage(f, n, total) for f, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+
+def _symmetric(positions: tuple[int, ...]) -> bool:
+    have = set(positions)
+    return all(_MIRROR[p] in have for p in positions if p in _MIRROR)
+
+
+def common_lineup(details: list[dict], ouid: str, formation: str,
+                  nicknames: set[str] | None = None) -> tuple[int, ...] | None:
+    """그 포메이션에서 가장 많이 나온 11자리 구성(정렬한 자리 코드 묶음). 좌우가 맞는 구성을 먼저 — 하나도 없으면 좌우 무시.
+    선발 11명이 안 되는 경기는 후보에서 뺀다(그것뿐이면 그 경기라도). 같은 횟수면 코드가 작은 쪽."""
+    full: Counter = Counter()
+    short: Counter = Counter()
+    for opp in _opp_scope(details, ouid, nicknames):
+        if formation_of(opp.get("player") or []) != formation:
+            continue
+        key = tuple(sorted(_starters(opp)))
+        (full if len(key) == LINEUP_SIZE else short)[key] += 1
+    for pool in (Counter({k: v for k, v in full.items() if _symmetric(k)}), full, short):
+        if pool:
+            return min(pool.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+    return None
+
+
 def opponent_position_players(details: list[dict], ouid: str, name_of=None,
                               pos_name=None,
-                              nicknames: set[str] | None = None
+                              nicknames: set[str] | None = None,
+                              formation: str | None = None
                               ) -> list[PositionOpponent]:
     """포지션별로 상대가 가장 많이 기용한 선수.
 
     교체 명단(SUB)은 실제로 뛴 자리가 아니라서 뺀다. nicknames 를 주면 그
     닉네임들과의 경기만 집계한다 — 팀컬러 드릴다운("이 팀컬러를 쓴 상대들은
     포지션별로 주로 누굴 쓰나")에 재사용한다.
+    formation(formation_of 표기)을 주면 그 포메이션의 가장 흔한 자리 구성(common_lineup)으로 나온 경기만 센다 —
+    결과가 그 구성의 자리 수(보통 11)를 넘지 않는다.
     """
+    lineup = common_lineup(details, ouid, formation, nicknames) if formation is not None else None
+    if formation is not None and lineup is None:
+        return []
     pos_counts: dict[int, Counter] = defaultdict(Counter)
     pos_total: dict[int, int] = defaultdict(int)
 
-    for d in details:
-        me, opp = _me_opp(d, ouid)
-        if me is None:
-            continue
-        if nicknames is not None and (opp.get("nickname") or "-") not in nicknames:
+    for opp in _opp_scope(details, ouid, nicknames):
+        if lineup is not None and (formation_of(opp.get("player") or []) != formation
+                                   or tuple(sorted(_starters(opp))) != lineup):
             continue
         seen = set()
         for p in opp.get("player") or []:

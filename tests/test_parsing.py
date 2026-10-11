@@ -985,6 +985,66 @@ def test_position_group_edges_and_opponent_positions():
     assert only_ga == [(25, 2, 2), (5, 1, 1)], only_ga
 
 
+_LU_SYM = [0, 3, 4, 6, 7, 10, 12, 16, 18, 24, 26]    # 4-1-2-1-2 — 좌우 짝이 다 있다(RM·LM · RS·LS …)
+_LU_ASYM = [0, 3, 4, 6, 7, 10, 12, 13, 18, 24, 26]   # 같은 4-1-2-1-2 인데 오른쪽 RM·RCM 만 있고 왼쪽 짝이 없다
+_LU_424 = [0, 3, 4, 6, 7, 9, 11, 20, 22, 24, 26]     # 4-2-0-0-4
+_LU_3142 = [0, 4, 5, 6, 10, 12, 13, 15, 16, 24, 26]  # 3-1-4-0-2
+_LU_5032 = [0, 2, 4, 5, 6, 8, 13, 14, 15, 24, 26]    # 5-0-3-0-2
+
+
+def _lineup(positions, base=1000):
+    """선발 11명(카드 번호 = base + 자리 — 같은 base 면 경기가 달라도 같은 카드) + 교체 한 명."""
+    return [_p(base + pos, pos) for pos in positions] + [_p(9, 28)]
+
+
+def test_opponent_formations_order_label_and_scope():
+    ds = ([_d(1 + i, "승", opp="가", opp_players=_lineup(_LU_SYM)) for i in range(2)]
+          + [_d(3 + i, "승", opp="가", opp_players=_lineup(_LU_ASYM)) for i in range(3)]     # 같은 줄 구성 — 합쳐 센다
+          + [_d(6 + i, "승", opp="가", opp_players=_lineup(_LU_424)) for i in range(2)]
+          + [_d(8, "승", opp="나", opp_players=_lineup(_LU_424)),
+             _d(9, "승", opp="다", opp_players=[])])                                          # 탈주(선발 없음)는 안 센다
+    got = [(f.formation, f.games, f.total, f.label) for f in st.opponent_formations(ds, "me")]
+    assert got == [("4-1-2-1-2", 5, 8, "4-1-2-1-2"), ("4-2-0-0-4", 3, 8, "4-2-4")], got
+    assert abs(st.opponent_formations(ds, "me")[0].rate - 62.5) < 1e-9
+    only = [(f.formation, f.games, f.total) for f in st.opponent_formations(ds, "me", nicknames={"가"})]
+    assert only == [("4-1-2-1-2", 5, 7), ("4-2-0-0-4", 2, 7)], only
+    # 경기 수가 같으면 표기 글자 순 — 순서가 매번 같다
+    tie = [_d(1, "승", opp="가", opp_players=_lineup(_LU_5032)), _d(2, "승", opp="가", opp_players=_lineup(_LU_3142))]
+    assert [f.formation for f in st.opponent_formations(tie, "me")] == ["3-1-4-0-2", "5-0-3-0-2"]
+    assert st.formation_label("4-1-4-0-1") == "4-1-4-1" and st.formation_label("0-0-0-0-0") == "0-0-0-0-0"
+
+
+def test_formation_lineup_symmetric_and_at_most_eleven():
+    """같은 포메이션 안에서 가장 흔한 자리 구성 하나 — 좌우가 맞는 것을 먼저(사용자: RM 과 LAM 처럼 양쪽이 다른 줄이면 안 된다)."""
+    sym = [_d(1 + i, "승", opp="가", opp_players=_lineup(_LU_SYM)) for i in range(2)]
+    asym = [_d(3 + i, "승", opp="가", opp_players=_lineup(_LU_ASYM, base=2000)) for i in range(3)]   # 더 흔하지만 한쪽뿐
+    ds = sym + asym
+    assert st.common_lineup(ds, "me", "4-1-2-1-2") == tuple(sorted(_LU_SYM))
+    got = st.opponent_position_players(ds, "me", formation="4-1-2-1-2")
+    assert {r.pos_code for r in got} == set(_LU_SYM) and len(got) == 11, sorted(r.pos_code for r in got)
+    assert all(r.total == 2 and r.count == 2 for r in got), [(r.pos_code, r.count, r.total) for r in got]
+    assert 13 not in {r.pos_code for r in got} and 16 in {r.pos_code for r in got}
+    # 좌우 맞는 구성이 하나도 없으면 가장 흔한 것(좌우 무시)
+    assert st.common_lineup(asym, "me", "4-1-2-1-2") == tuple(sorted(_LU_ASYM))
+    # 선발이 11명이 안 되는 경기(탈주)는 구성을 정하지 못한다 — 더 많아도 온전한 쪽
+    short = [_d(10 + i, "승", opp="가", opp_players=_lineup(_LU_SYM[1:])) for i in range(3)]   # GK 없는 10명 — 같은 포메이션
+    full = [_d(14, "승", opp="가", opp_players=_lineup(_LU_SYM))]
+    assert st.common_lineup(short + full, "me", "4-1-2-1-2") == tuple(sorted(_LU_SYM))
+    assert st.common_lineup(short, "me", "4-1-2-1-2") == tuple(sorted(_LU_SYM[1:]))             # 그것뿐이면 그 경기라도
+    # 없는 포메이션 · 닉네임으로 거른 뒤 없음
+    assert st.common_lineup(ds, "me", "9-9-9-9-9") is None
+    assert st.opponent_position_players(ds, "me", formation="9-9-9-9-9") == []
+    assert st.opponent_position_players(ds, "me", nicknames={"없는"}, formation="4-1-2-1-2") == []
+    # 인자를 안 주면 예전 그대로 — 자리 구성이 달라도 모든 자리가 나온다(13 도 16 도)
+    assert {r.pos_code for r in st.opponent_position_players(ds, "me")} >= {13, 16}
+
+
+def test_mirror_pairs_are_mutual_and_same_line():
+    for a, b in st._MIRROR.items():
+        assert st._MIRROR[b] == a, (a, b)
+        assert st._POS_LINE[a] == st._POS_LINE[b], (a, b)
+
+
 def test_opponent_cards_usage_and_my_results():
     """N7(2.4.1) — 자리마다 카드 전부 · 사용률 분모 = 그 자리가 나온 판 · 내 승·무·패 · 교체 명단·같은 경기 겹침 뺌."""
     ds = [_d(4, "승", opp="가", opp_players=[_p(11, 25), _p(12, 5), _p(13, 28), _p(11, 25)]),   # 같은 (자리, 카드) 겹침

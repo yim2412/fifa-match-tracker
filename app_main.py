@@ -6358,6 +6358,8 @@ class MainWindow(QMainWindow):
             self.tbl_opponents.setRowHidden(r, hidden)
 
     POSITION_COLOR_ALL = "전체"
+    POSITION_COLOR_NONE = "— 팀컬러를 고르세요 —"
+    POSITION_HINT_EMPTY = "상대 팀컬러를 고르면 그 팀컬러 상대가 많이 쓴 포메이션 순서로 나옵니다. 포메이션을 고르면 11자리가 채워집니다."
 
     def _build_position_opp_tab(self) -> QWidget:
         w = QWidget()
@@ -6367,6 +6369,7 @@ class MainWindow(QMainWindow):
         lb = QLabel("팀컬러")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.cb_position_color = NoScrollComboBox()
+        self.cb_position_color.addItem(self.POSITION_COLOR_NONE)   # 열었을 때는 빈 축구장 — 팀컬러를 골라야 그린다
         self.cb_position_color.addItem(self.POSITION_COLOR_ALL)
         self.cb_position_color.setMinimumWidth(160)
         self.cb_position_color.currentIndexChanged.connect(
@@ -6387,7 +6390,16 @@ class MainWindow(QMainWindow):
         row.addWidget(lb_note, 1)
         v.addLayout(row)
 
-        # 축구장 — 자리마다 그 자리에서 가장 많이 만난 상대 카드(칩에 만난 횟수·비율). _render_position_opponents 가 갈아 끼운다
+        # 포메이션 칩 — 고른 팀컬러 상대가 많이 쓴 순서로 최대 POSITION_OPP_FORMATIONS 개(하나를 고르면 그 11자리만 그린다)
+        self._posopp_formation: str | None = None
+        self.row_position_forms = QHBoxLayout()
+        v.addLayout(self.row_position_forms)
+        self.lb_position_hint = QLabel(self.POSITION_HINT_EMPTY)
+        self.lb_position_hint.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_position_hint.setWordWrap(True)
+        v.addWidget(self.lb_position_hint)
+
+        # 축구장 — 고른 포메이션의 11자리마다 그 자리에서 가장 많이 만난 상대 카드(칩에 만난 횟수·비율). _render_position_opponents 가 갈아 끼운다
         self.box_position_pitch = QVBoxLayout()
         v.addLayout(self.box_position_pitch, 1)
 
@@ -6409,24 +6421,33 @@ class MainWindow(QMainWindow):
         되돌린다 — 표를 다시 그릴 때마다 필터가 조용히 풀리면 안 되니까.
         [카드별](2.4.1 N7)의 콤보도 같이 — 고른 값은 탭마다 따로.
         """
-        self._refresh_color_combo(self.cb_position_color, self.ed_position_color)
+        self._refresh_color_combo(self.cb_position_color, self.ed_position_color, self.POSITION_COLOR_NONE)
         if hasattr(self, "cb_oppcard_color"):
             self._refresh_color_combo(self.cb_oppcard_color, self.ed_oppcard_color)
 
-    def _refresh_color_combo(self, cb: NoScrollComboBox, ed: QLineEdit) -> None:
+    def _refresh_color_combo(self, cb: NoScrollComboBox, ed: QLineEdit, placeholder: str | None = None) -> None:
+        """placeholder: 맨 앞 "고르세요" 항목 — 있으면 기본이 그것이고(고른 색이 사라져도 거기로) "전체"는 그 다음."""
         current = cb.currentText()
         colors = sorted({c for c in self._team_colors.values() if c})
         needle = ed.text().strip().lower()
         shown = [c for c in colors if needle in c.lower() or c == current]
         cb.blockSignals(True)
         cb.clear()
+        if placeholder:
+            cb.addItem(placeholder)
         cb.addItem(self.POSITION_COLOR_ALL)
         cb.addItems(shown)
-        keep = current if current in colors else self.POSITION_COLOR_ALL
+        keep = current if current in colors or current == self.POSITION_COLOR_ALL else (placeholder or self.POSITION_COLOR_ALL)
         cb.setCurrentText(keep)
         cb.blockSignals(False)
 
     def _on_position_color_changed(self, _index: int) -> None:
+        self._posopp_formation = None   # 팀컬러가 바뀌면 그 팀컬러에서 가장 많이 쓴 포메이션부터
+        _, details = self._teamcolor_scope()
+        self._render_position_opponents(details)
+
+    def _on_position_formation_clicked(self, formation: str) -> None:
+        self._posopp_formation = formation
         _, details = self._teamcolor_scope()
         self._render_position_opponents(details)
 
@@ -7663,16 +7684,55 @@ class MainWindow(QMainWindow):
         if isinstance(sp_id, int):
             self._show_player_info(sp_id)
 
+    def _position_pick_empty(self, text: str) -> None:
+        """팀컬러를 안 골랐거나 상대 기록이 없다 — 칩·축구장·표를 비우고 안내 한 줄만."""
+        self._retire_loaders(self._position_pitch_loaders)
+        self._position_pitch_loaders = []
+        self._clear(self.row_position_forms)
+        self._clear(self.box_position_pitch)
+        self.box_position_pitch.addStretch(1)   # 빈 칸이 늘어나 위 줄들이 위쪽에 모이게 — 없으면 남는 높이가 줄 사이로 흩어진다
+        self._fill(self.tbl_position_opp, [], enable_sort=False)
+        self.lb_position_hint.setText(text)
+
+    def _fill_position_chips(self, forms: list[core.FormationUsage]) -> None:
+        """사용 많은 순 칩 — 고른 것이 눌린 모양. 같은 글자(줄 구성만 다른 두 포메이션)는 줄 키를 그대로 써서 가른다."""
+        self._clear(self.row_position_forms)
+        labels = [f.label for f in forms]
+        for f in forms:
+            text = f.label if labels.count(f.label) == 1 else f.formation
+            btn = QPushButton(f"{text}  {f.rate:.0f}% · {f.games}경기")
+            btn.setObjectName("pageTab")
+            btn.setCheckable(True)
+            btn.setChecked(f.formation == self._posopp_formation)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, key=f.formation: self._on_position_formation_clicked(key))
+            self.row_position_forms.addWidget(btn)
+        self.row_position_forms.addStretch(1)
+
     def _render_position_opponents(self, details: list[dict]) -> None:
-        nicknames = None
         color = self.cb_position_color.currentText()
-        if color and color != self.POSITION_COLOR_ALL:
+        if not color or color == self.POSITION_COLOR_NONE:
+            self._position_pick_empty(self.POSITION_HINT_EMPTY)
+            return
+        nicknames = None
+        if color != self.POSITION_COLOR_ALL:
             nicknames = {nick for nick, c in self._team_colors.items() if c == color}
+        forms = core.opponent_formations(details, self._ouid, nicknames)[:config.POSITION_OPP_FORMATIONS]
+        if not forms:
+            self._position_pick_empty("표시할 상대 기록이 없습니다.")
+            return
+        if self._posopp_formation not in {f.formation for f in forms}:
+            self._posopp_formation = forms[0].formation   # 가장 많이 쓴 포메이션을 먼저 보여 준다
+        self._fill_position_chips(forms)
         players = core.opponent_position_players(
             details, self._ouid,
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)),
-            nicknames=nicknames)
+            nicknames=nicknames, formation=self._posopp_formation)
+        chosen = next(f for f in forms if f.formation == self._posopp_formation)
+        lineup_games = max((p.total for p in players), default=0)
+        self.lb_position_hint.setText(
+            f"{chosen.label} — 이 팀컬러 상대 {chosen.total}경기 중 {chosen.games}경기 · 그중 가장 흔한 자리 구성 {lineup_games}경기 기준")
         # enable_sort=False 로 채우고 이 표는 정렬 자체를 계속 꺼 둔다(위
         # setSortingEnabled(False) 참고) — 공격→미들→수비→GK 순서·줄별 색이
         # 이 표의 핵심이라 헤더 클릭 정렬이 그 순서를 흐트러뜨리면 안 된다.
