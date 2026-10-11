@@ -5133,6 +5133,10 @@ def test_winrate_bar_sample_text_uses_rated():
     assert widgets.win_rate_text(3, 10, 2, False) == "20.0% · 승÷전체 · 무 10"
     assert widgets.win_rate_text(3, 10, 2, True, digits=0, short=True) == "60%*"
     assert widgets.win_rate_text(3, 10, 2, False, short=True) == "20.0%"
+    # 무승부뿐인 섞인 줄 — 분모 0 이라 "—"(0.0% 면 다 진 것처럼 읽힌다) · 한 집단이면 진짜 0%
+    assert widgets.win_rate_text(0, 1, 0, True, short=True) == "—"
+    assert widgets.win_rate_text(0, 1, 0, True) == "— · 승÷(승+패) · 무 1"
+    assert widgets.win_rate_text(0, 1, 0, False, short=True) == "0.0%"
 
 
 def test_winrate_bars_use_shared_helper():

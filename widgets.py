@@ -1135,7 +1135,10 @@ def win_rate_note(mixed: bool) -> str:
 
 def win_rate_text(win: int, draw: int, lose: int, mixed: bool, digits: int = 1, short: bool = False) -> str:
     """승률 숫자는 전부 이걸로 — "50.0% · 승÷(승+패) · 무 859"(2.6.1 A6 U5: 같은 경기가 화면마다 다른 식일 수 있어
-    숫자 옆에 식과 무승부 수를 늘 붙인다). short 는 좁은 칸 — 섞인 식이면 숫자 뒤 "*"(설명은 win_rate_note 를 툴팁으로)."""
+    숫자 옆에 식과 무승부 수를 늘 붙인다). short 는 좁은 칸 — 섞인 식이면 숫자 뒤 "*"(설명은 win_rate_note 를 툴팁으로).
+    분모가 0(섞인 식에서 무승부뿐)이면 "—" — 0.0% 는 "다 졌다"로 읽힌다(실화면 2026-10-11: 0승 1무 0패 → 0.0%*)."""
+    if core.rated(win, draw, lose, mixed) == 0:
+        return "—" if short else f"— · {'승÷(승+패)' if mixed else '승÷전체'} · 무 {draw:,}"
     pct = f"{core.win_pct(win, draw, lose, mixed):.{digits}f}%"
     if short:
         return pct + ("*" if mixed else "")
