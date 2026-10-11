@@ -145,7 +145,9 @@ class DashboardPage(QWidget):
         row.setSpacing(14)
         self.kpi_rate = self._card("승률", ("경기 목록", None))
         self.lb_rate = _label("—", pt=22, bold=True)
-        self.lb_rate_delta = _label("", dim=True)
+        # 줄바꿈 필수 — 식·무승부 수까지 붙은 한 줄("최근 20경기 15.4% ▼ 35.8%p · 승÷(승+패) · 무 249")이 카드
+        # 최소 폭을 237→385 로 밀어 대시보드가 1280 창(배율 150%)에서 106px 잘렸다(A6 이후 · 2026-10-11 실측)
+        self.lb_rate_delta = _label("", dim=True, wrap=True)
         self.kpi_rate.body.addWidget(self.lb_rate)
         self.kpi_rate.body.addWidget(self.lb_rate_delta)
 

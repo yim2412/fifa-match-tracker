@@ -559,6 +559,36 @@ def test_window_shrinks_to_min_without_squeezing():
         _at_size(1600, 900)
 
 
+def test_dashboard_kpi_row_fits_min_window_with_longest_text():
+    """승률 카드의 한 줄("최근 20경기 … · 승÷(승+패) · 무 N")이 줄바꿈 없는 라벨이라 카드 최소 폭을 밀어, 대시보드가
+    1280 창(배율 150%)에서 가로로 잘렸다. 테스트 데이터는 경기가 적어 그 줄이 짧게 나오므로, 가장 긴 글을 직접 넣어 잰다."""
+    d = _win.dashboard
+    cur = _win.pages.currentIndex()
+    saved = (d.lb_rate_delta.text(), d.lb_goals_sub.text(), d.lb_streak_sub.text())
+    try:
+        _at_size(*app_main.MIN_WINDOW)
+        _win._go_page("대시보드")
+        _app.processEvents()
+        for lb in (d.lb_rate_delta, d.lb_goals_sub, d.lb_streak_sub):
+            lb.setText("")
+        _app.processEvents()
+        base = {c: c.minimumSizeHint().width() for c in (d.kpi_rate, d.kpi_goals, d.kpi_streak)}
+        d.lb_rate_delta.setText("최근 20경기 100.0% <span style='color:#000'>▼ 100.0%p</span> · 승÷(승+패) · 무 99,999")
+        d.lb_goals_sub.setText("경기당 득·실 · 득실차 -99,999")
+        d.lb_streak_sub.setText("최장 99연승 · 99연패 (누적 전체)")
+        _app.processEvents()
+        # 글이 길어져도 카드 최소 폭이 안 늘어야 한다(줄바꿈) — 글꼴과 무관하게 잰다. 득실·연속 카드는 지금도 글이 최소 폭을
+        # 밀지만 1280 에 들어가므로(승률만 106px 넘쳤다) 상한 폭만 본다
+        assert d.kpi_rate.minimumSizeHint().width() == base[d.kpi_rate], (d.kpi_rate.minimumSizeHint().width(), base[d.kpi_rate])
+        frame = _win.pages.widget(_win._page_index["대시보드"])
+        need = d.minimumSizeHint().width()
+        assert need <= frame.viewport().width(), (need, frame.viewport().width())
+    finally:
+        d.lb_rate_delta.setText(saved[0]); d.lb_goals_sub.setText(saved[1]); d.lb_streak_sub.setText(saved[2])
+        _win.pages.setCurrentIndex(cur)
+        _at_size(1600, 900)
+
+
 def test_top_bar_wraps_only_when_narrow():
     try:
         _at_size(*app_main.MIN_WINDOW)
