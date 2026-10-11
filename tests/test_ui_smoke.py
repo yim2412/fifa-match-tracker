@@ -5815,7 +5815,8 @@ def test_notice_versions_split_first_and_reask():
         for acc, needed, pending, track in [(0, True, False, False), (1, True, False, False),
                                             (2, False, True, False), (3, False, True, True),
                                             (4, False, True, True), (5, False, True, True),
-                                            (6, False, True, True), (7, False, False, True)]:
+                                            (6, False, True, True), (7, False, True, True),
+                                            (8, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -5823,8 +5824,9 @@ def test_notice_versions_split_first_and_reask():
         # 2.1.1: 5 = 축구장 칩 카드 정보 자동 읽기(랭커 픽은 16단계가 같은 5 를 쓴다)
         # 2.3.1: 6 = 다른 구단주의 사람별 값을 그 시즌 동안(U1) — 옛 동의(5)는 다시 묻기만, 사람별 표만 6 뒤부터
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
+        # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (7, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (8, 7, 6, 5, 4, 3, 2)
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -5856,16 +5858,18 @@ def test_reask_dialog_keeps_current_web_choice():
         config.ENV_PATH = saved_env
 
 
-def test_notice7_asked_only_when_collecting():
-    """6 동의자에게 남은 7 은 수집을 켠 사람 몫(U6) — 끈 사람은 창이 보여도 안 묻는다."""
+def test_notice8_asked_when_collect_off():
+    """8(표 칸 그림)은 수집과 무관하게 모두에게 해당 — 수집을 끈 7·6 동의자에게도 다시 묻는다. 7 까지는 수집 몫이었다(U6)."""
     keep = config.NOTICE_ACCEPTED, config.RANK_COLLECT
     try:
-        config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION - 1
-        for collect in (False, True):
-            config.RANK_COLLECT = collect
-            assert config.notice_update_pending() is collect, collect
-        config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION
+        config.RANK_COLLECT = False
+        for acc in (config.NOTICE_VERSION - 1, config.TRAIT_NOTICE_VERSION - 1):   # 7 · 6
+            config.NOTICE_ACCEPTED = acc
+            assert config.notice_update_pending() is True, acc
+        config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         assert not config.notice_update_pending()
+        assert config.NOTICE_COLLECT_ONLY_FROM == config.NOTICE_VERSION, \
+            "NOTICE_COLLECT_ONLY_FROM 을 6 으로 되돌리면 수집 끈 6·7 동의자가 안내 8 을 못 본다"
     finally:
         config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
 
@@ -5884,15 +5888,17 @@ def test_notice_below6_still_asked_when_not_collecting():
 
 def test_reask_shows_only_changes_after_accepted():
     assert max(notice.CHANGES) == config.NOTICE_VERSION, "안내를 올렸는데 바뀐 점(notice.CHANGES)을 안 더했다"
-    six, five = notice.changes_html(6), notice.changes_html(5)
+    seven, six, five = notice.changes_html(7), notice.changes_html(6), notice.changes_html(5)
+    assert "표 안의 그림" in seven and "스쿼드메이커" not in seven, "7 동의자에게 이미 본 7 을 또 보였다"
     assert "포지션 특성" in six and "슈퍼챔피언스" not in six, "6 동의자에게 이미 본 6 을 또 보였다"
+    assert "표 안의 그림" in six, "6 동의자가 8 의 바뀐 점을 못 본다"
     assert "포지션 특성" in five and "슈퍼챔피언스" in five, "5 동의자가 6 의 바뀐 점을 못 본다"
     assert notice.changes_html(config.NOTICE_VERSION) == ""
 
 
 # 렌더한 안내 전문(숫자는 config 상수로 그린다)의 해시 — 버전과 짝. 글·상수가 바뀌어 FAIL 이면:
 # 실질 변경이면 config.NOTICE_VERSION 을 올리고 새 줄을 더한다 · 맞춤법·표현만이면 이 버전의 값만 고친다.
-NOTICE_GOLDEN = {7: "410b2df025725408"}
+NOTICE_GOLDEN = {8: "a3253bc7f91f6821"}   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
 
 
 def _notice_digest() -> str:
@@ -5953,8 +5959,17 @@ def test_collect_on_asks_notice7():
             assert config.RANK_COLLECT and not config.trait_allowed(), "거절하면 수집은 켜진 채 특성만 막힌다"
             assert "켰습니다" in dlg.lb_msg.text()
             dlg.deleteLater()
-            # 이미 7 에 동의했으면 · 끌 때는 묻지 않는다
-            for acc, on in ((config.TRAIT_NOTICE_VERSION, True), (config.TRAIT_NOTICE_VERSION - 1, False)):
+            # 7 동의자도 안내 8(표 칸 그림 — 2~7 동의자 전원에게 한 번 다시 묻는다)을 아직 못 봤으니 수집을 켤 때 묻는다
+            sw.write(True, False)
+            config.NOTICE_ACCEPTED = config.TRAIT_NOTICE_VERSION
+            log.clear()
+            dlg = app_main.AboutDialog(_win)
+            dlg._sched = lambda: None
+            dlg.chk_rank.setChecked(True)
+            assert len([e for e in log if e[0] == "ask"]) == 1, ("7 동의자는 8 을 보지 못했다", log)
+            dlg.deleteLater()
+            # 최신(8)에 동의했으면 · 끌 때는 묻지 않는다
+            for acc, on in ((config.NOTICE_VERSION, True), (config.TRAIT_NOTICE_VERSION - 1, False)):
                 sw.write(True, not on)
                 config.NOTICE_ACCEPTED = acc
                 log.clear()
@@ -6641,6 +6656,31 @@ def test_shutdown_stops_pitch_loaders():
         _win._pitch_card_loaders.remove(a)
         _win._retired_loaders.remove(b)
         _win._position_pitch_loaders.remove(c)
+
+
+def test_shutdown_waits_icon_loaders():
+    """표 칸 그림 로더(도는 것 + 물러난 것)가 종료 표에 있다 — 목록 줄이 빠지면 도는 QThread 를 놓아 프로세스가 죽는다.
+    효과 창·기용률 창 표의 로더도 같은 목록(_icon_loaders)이라 이 하나가 셋을 지킨다."""
+    class _Busy:
+        def __init__(self):
+            self._cancel = False
+
+        def cancel(self):
+            self._cancel = True
+
+        def isRunning(self):
+            return not self._cancel
+
+        def wait(self, *_a):
+            return True
+    a, b = _Busy(), _Busy()
+    keep = list(_win._icon_loaders)
+    _win._icon_loaders[:] = [a, b]
+    try:
+        left = _win.shutdown(fast=True)
+        assert all(x in left and x._cancel for x in (a, b)), [x in left for x in (a, b)]
+    finally:
+        _win._icon_loaders[:] = keep
 
 
 # ── 1.4.1 13단계 — 랭커 비교 · 랭커 기록 탭 · 패스 스타일 · 어시스트 · 평점 추이 ─────────────────

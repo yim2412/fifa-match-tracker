@@ -20,7 +20,7 @@ from analysis import (
     Basis, narrate, streak_min_n,
 )
 from models import (
-    MatchSummary, current_streak, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
+    MatchSummary, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
     moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
 )
 from habits import DivisionStay, DivisionStays, division_stays
@@ -29,7 +29,7 @@ from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_seri
                          is_champ, meta_trend, rank_trend_series)
 from rankmeta import (
     FORMATION_HOWS, DayWinrate, Peers, RankMoves, TierMeans, ValueBins, ValueScore, Weekly, WinrateElo, blank_label,
-    day_winrate, find_sn, formation_group, group_meta, latest_pair, my_day_rate, pair_text, rank_moves,
+    day_winrate, emblems_by_name, find_sn, formation_group, group_meta, latest_pair, my_day_rate, pair_text, rank_moves,
     ranked_nicknames, tier_means, value_bins, value_score, weekly, winrate_peers, winrate_to_elo,
 )
 from rankerpick import (
@@ -60,7 +60,7 @@ __all__ = [
     "Basis", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "current_streak", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
-    "period_stats", "summarize", "win_rate_trend",
+    "period_stats", "summarize", "win_rate_trend", "division_icon_index",
     # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
     "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",
     # habits — 내 경기 습관·기준선(2.6.1) · N2 등급 체류
@@ -77,7 +77,7 @@ __all__ = [
     "MetaTrend", "meta_trend", "EloHist", "elo_hist_series", "elo_marker", "data_time", "meta_status", "is_champ",
     # rankmeta — 랭커 메타 ② 스냅숏 읽기(2.4.1)
     "FORMATION_HOWS", "DayWinrate", "Peers", "RankMoves", "TierMeans", "ValueBins", "ValueScore", "Weekly",
-    "WinrateElo", "blank_label", "day_winrate", "find_sn", "formation_group", "group_meta", "latest_pair",
+    "WinrateElo", "blank_label", "day_winrate", "emblems_by_name", "find_sn", "formation_group", "group_meta", "latest_pair",
     "my_day_rate", "pair_text", "rank_moves", "ranked_nicknames", "tier_means", "value_bins", "value_score", "weekly",
     "winrate_peers", "winrate_to_elo",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)

@@ -1446,7 +1446,6 @@ def test_image_fetch_cache_and_failures():
         cases = [  # (함수, 인자)
             (images.fetch, (101,)),
             (images.fetch_division_icon, (3,)),
-            (images.fetch_season_icon, (201, "https://x/s.png")),
             (images.fetch_url, ("https://x/a.png",)),
         ]
         for fn, args in cases:

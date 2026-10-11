@@ -202,6 +202,7 @@ def main() -> int:
         page = None
 
     # 팀컬러(2.2.1) — 엠블럼 앵커 · 겹치는 이름 상수 · 효과 상세·선수(X-Requested-With) · 선수 JSON 단위
+    items = []   # 아래 그림 점검이 쓴다(팀컬러 목록을 못 받았으면 엠블럼은 건너뛴다)
     try:
         import playerinfo
         import teamcolor
@@ -235,6 +236,27 @@ def main() -> int:
                   f" · 1강 시세 {p0.prices[1]}/{page_price}(JSON/선수 페이지)")
     except Exception as e:
         print(f"[WARN] 팀컬러 효과 확인 실패(효과 창만 영향): {type(e).__name__}: {e}")
+
+    # 표 칸 그림(40단계) — 종류마다 한 장씩 받는다. 앱과 같은 받기 함수(images.fetch_icon — Referer 포함)로 받아야
+    # 앱의 403 이 여기서도 보인다. 사용자 캐시를 건드리지 않게 임시 폴더로 · 정적 CDN 이라 웹 데이터 스위치와 무관
+    try:
+        import tempfile
+        from pathlib import Path
+        samples = [("특성", "trait", 55), ("훈련 특성", "train", 0), ("등급 배지", "division", 3)]
+        for kind in images.EMBLEM_PATHS:   # 구단 · 국기 · 강화 팀컬러 — 실제 팀컬러 목록의 키로(없으면 건너뜀)
+            key = next((m.emblem for m in items if m.emblem.startswith(kind + "/")), "")
+            if key:
+                samples.append((f"엠블럼({kind})", "emblem", key))
+            else:
+                print(f"[WARN] 엠블럼({kind}): 팀컬러 목록에 이 종류가 없어 건너뜀")
+        with tempfile.TemporaryDirectory() as tmp:
+            for label, kind, key in samples:
+                url = images.icon_url(kind, key)
+                path = images.fetch_icon(url, Path(tmp), kind)
+                size = path.stat().st_size if path else 0
+                print(f"{'[OK]  ' if size else '[FAIL]'} 그림 {label}: {size:,}바이트 · {url.rsplit('/', 1)[-1]}")
+    except Exception as e:
+        print(f"[WARN] 표 칸 그림 확인 실패(그림만 영향): {type(e).__name__}: {e}")
 
     # 포지션 특성(32단계) — 스쿼드메이커 구단주 번호 · 팀 칸 구조(선수 18명 · spid·state·traits) · 이름표가 코드를 다 아는지. 구조만 본다
     try:

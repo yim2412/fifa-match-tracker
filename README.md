@@ -184,7 +184,7 @@ python tests/test_review_kit.py   # 계획 검토 준비 도구
 | `tray.py` | 트레이 상주(1.1.1) — 트레이 아이콘, 모든 종료가 거치는 `quit_app`, 한 번만 실행, 숨긴 창 기록 내려놓기, 상주 중 6시간마다 업데이트 확인 |
 | `autostart.py` | 자동 실행 — 윈도우 시작 프로그램(HKCU Run)에 `"<exe>" --tray` 등록(exe 에서만, 설치판·포터블 이름을 나눔) |
 | `seasons.py` | 감독모드 랭킹 시즌표(번호·이름·기간)를 데이터센터에서 긁어와 경기를 시즌에 나눠 담는다 |
-| `images.py` | 넥슨 CDN에서 선수 얼굴 이미지를 받아 디스크에 캐시(오픈API 아닌 정적 CDN, 비공식) |
+| `images.py` | 넥슨 CDN에서 선수 얼굴·등급/시즌 배지·구단/팀컬러 엠블럼·국기·특성 아이콘을 받아 디스크에 캐시(오픈API 아닌 정적 CDN, 비공식). 표 칸 그림의 주소(`icon_url`)와 받기(`fetch_icon`)는 여기 한 곳 — 화면 없이 `tests/test_icons.py` 가 잰다 |
 | `playerinfo.py` | 선수 카드 상세(능력치·특성·시세·클럽경력) — 넥슨 모바일 데이터센터 HTML 스크래핑 |
 | `config.py` | API 키 로드·저장(.env), DB 경로, 웹 데이터 스위치, 매치 종류·조회 개수 기본값 |
 | `crashlog.py` | 처리 안 된 예외를 `%LOCALAPPDATA%\피파전적관리\logs\crash.log` 에 남기고 첫 오류 때 위치를 알려 준다 |

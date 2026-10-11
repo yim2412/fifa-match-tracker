@@ -873,3 +873,20 @@ def _weekly(conn, my_sn, end_days, top) -> Weekly:
         vals = [r.value for r in last.values() if r.value is not None]
         out.my_value = (1 + sum(1 for v in vals if v > me.value), len(vals))
     return out
+
+
+def emblems_by_name(conn: sqlite3.Connection) -> dict[str, str]:
+    """팀컬러 이름 → 엠블럼 키(마지막 스냅숏 · 40단계 화면 그림). 랭커 묶음은 팀컬러를 이름으로만 세서(버전 미정 후보
+    "랭커 묶음도 (이름, 엠블럼)으로") 이름 하나에 엠블럼이 둘 이상이면 어느 그림인지 모른다 → 넣지 않는다.
+    이름이 겹치는 팀컬러(config.TEAMCOLOR_DUP_NAMES)도 같은 이유로 뺀다. 원본이 지워진 옛 스냅숏이면 빈 dict."""
+    raw = _season_raw(conn)
+    if not raw:
+        return {}
+    seen: dict[str, set] = {}
+    for color, emblem in conn.execute(
+            "SELECT r.team_color, e.emblem FROM snapshot_rows r JOIN snapshot_emblems e"
+            " ON e.snapshot_id = r.snapshot_id AND e.profile_sn = r.profile_sn WHERE r.snapshot_id = ?",
+            (raw[-1]["id"],)):
+        if color and emblem and color not in config.TEAMCOLOR_DUP_NAMES:
+            seen.setdefault(color, set()).add(emblem)
+    return {name: next(iter(keys)) for name, keys in seen.items() if len(keys) == 1}

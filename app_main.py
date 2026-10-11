@@ -68,12 +68,12 @@ from core_api import (
 )
 from nexon_api import (
     ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, FCOnlineAPI, NexonAPIError,
-    check_key,
+    check_key, read_meta_on_disk,
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
-    NA, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PageTabs,
-    RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
+    ICON_KEY_ROLE, NA, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox,
+    PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
     SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, sample_note,
     sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text,
 )
@@ -688,16 +688,15 @@ class ImageLoader(QThread):
                 self.loaded.emit(sp_id, str(path))
 
 
-class SeasonIconLoader(QThread):
-    """스쿼드 카드에 쓸 시즌(카드 클래스) 아이콘을 백그라운드로 받는다.
+class IconLoader(QThread):
+    """표 칸 그림(엠블럼·특성·등급·시즌 배지)을 백그라운드로 받는다 — 표는 글자로 먼저 뜨고 받아지는 대로 그림이 붙는다.
 
-    같은 시즌 선수가 여러 명이면 한 번만 받는다(entries 안에서 URL 이 같으면
-    재사용) — 시즌은 최대 10여 종류라 스쿼드 하나에 중복이 흔하다."""
+    entries: (종류, 키, 주소). 같은 주소는 한 번만 받는다(엠블럼은 수십 행이 같은 그림). 표 칸을 직접 읽지 않는다 —
+    화면 스레드가 _fill 뒤에 칸을 훑어 만든 평범한 목록만 받는다. 403·404 는 images.fetch_icon 이 세션 안에 기억한다."""
 
-    loaded = pyqtSignal(int, str)  # spId, 로컬 파일 경로
+    loaded = pyqtSignal(str, object, str)  # 종류, 키, 로컬 파일 경로
 
-    def __init__(self, entries: list[tuple[int, int, str]], cache_dir):
-        """entries: (spId, seasonId, seasonImg URL) 튜플 리스트."""
+    def __init__(self, entries: list[tuple[str, object, str]], cache_dir):
         super().__init__()
         self._entries = entries
         self._cache_dir = cache_dir
@@ -707,16 +706,15 @@ class SeasonIconLoader(QThread):
         self._cancel = True
 
     def run(self) -> None:
-        cache: dict[int, object] = {}
-        for sp_id, season_id, icon_url in self._entries:
+        paths: dict[str, object] = {}
+        for kind, key, url in self._entries:
             if self._cancel:
                 return
-            if season_id not in cache:
-                cache[season_id] = images.fetch_season_icon(
-                    season_id, icon_url, self._cache_dir)
-            path = cache[season_id]
+            if url not in paths:
+                paths[url] = images.fetch_icon(url, self._cache_dir, kind)
+            path = paths[url]
             if path and not self._cancel:
-                self.loaded.emit(sp_id, str(path))
+                self.loaded.emit(kind, key, str(path))
 
 
 class PlayerInfoLoader(QThread):
@@ -1060,30 +1058,6 @@ class AbilitySimLoader(QThread):
             self.loaded.emit(sim)
         except playerinfo.PlayerInfoError as e:
             self.failed.emit(str(e))
-
-
-class UrlImageLoader(QThread):
-    """선수 카드 다이얼로그의 사진·국기·특성 아이콘처럼, spId 같은 고정 키가
-    없는 잡다한 URL들을 images.fetch_url 로 받는다."""
-
-    loaded = pyqtSignal(str, str)  # url, 로컬 파일 경로
-
-    def __init__(self, urls: list[str], cache_dir):
-        super().__init__()
-        self._urls = urls
-        self._cache_dir = cache_dir
-        self._cancel = False
-
-    def cancel(self) -> None:
-        self._cancel = True
-
-    def run(self) -> None:
-        for url in self._urls:
-            if self._cancel:
-                return
-            path = images.fetch_url(url, self._cache_dir)
-            if path and not self._cancel:
-                self.loaded.emit(url, str(path))
 
 
 class TeamColorLoader(QThread):
@@ -1886,8 +1860,6 @@ class MainWindow(QMainWindow):
         self._prefetch: SavedPrefetch | None = None  # start_prefetch — 첫 검색이 가져간다
         self._quiet_search = False  # 켤 때 자동 새 경기 확인 — 실패를 상태줄로만
         self._img_cache_dir = config.CACHE_DIR / "player_images"
-        self._table_season_loader: SeasonIconLoader | None = None
-        self._finishing_icon_loader: SeasonIconLoader | None = None
         self._ouid = ""
         self._nick = ""
         self._basic: dict = {}
@@ -1922,7 +1894,15 @@ class MainWindow(QMainWindow):
         self._is_champion = False  # 감독모드 최고 등급 챔피언스 이상 — 랭커 카드 표시 여부
         self._badge_path = ""      # 등급 배지 아이콘 로컬 캐시 경로
         self._seasons: dict = {}   # seasonId -> {className, seasonImg} (get_meta("seasonid"))
-        self._season_icon_dir = config.CACHE_DIR / "season_icons"
+        # 등급 배지 번호 = get_meta("division") 원본 목록의 순서(이름 dict 로는 못 낸다) — 검색 전에 연 화면도 배지가 나오게
+        # 켤 때 디스크 캐시에서 읽는다(날짜와 무관 · 파일이 없는 새 설치는 글자만 — 40단계 I6)
+        self._division_meta: list[dict] = []
+        self._load_meta_from_disk()
+        # 팀컬러 라벨 → 엠블럼 키. _team_colors 는 라벨 글자만 들고 엠블럼을 버려서, 읽는 자리(team_colors 행)에서 따로 적어 둔다.
+        self._emblem_label: dict[str, str] = {}
+        self._emblem_cache: dict[str, str] | None = None   # 세 출처를 합친 지도 — 바뀌는 길에서만 None 으로 비운다
+        self._icon_dir = config.CACHE_DIR / config.ICON_CACHE_SUBDIR   # 표 칸 그림(IconLoader)
+        self._icon_loaders: list[IconLoader] = []   # 도는 것 + 물러난 것 — 종료 표가 전부 기다린다(finished 때 빠진다)
         # _matches/_details 는 "지금 보고 있는 것" — 시즌 필터가 걸리면 그 시즌
         # 경기만 담긴다. _matches_all/_details_all 이 누적 전체(원본)다.
         self._matches: list[MatchSummary] = []
@@ -2995,7 +2975,7 @@ class MainWindow(QMainWindow):
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
         v.addLayout(self._teamcolor_min_row())
-        self.tbl_teamcolor_rate = self._make_table(self.TEAMCOLOR_RATE_COLUMNS)
+        self.tbl_teamcolor_rate = self._make_table(self.TEAMCOLOR_RATE_COLUMNS, icons={0: "emblem"})
         self.tbl_teamcolor_rate.cellClicked.connect(
             lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, r, c))
         v.addWidget(self.tbl_teamcolor_rate, 1)
@@ -3014,7 +2994,7 @@ class MainWindow(QMainWindow):
         hint.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(hint)
         v.addLayout(self._teamcolor_min_row())
-        self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS)
+        self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS, icons={1: "emblem"})
         self.tbl_teamcolor_rank.itemDoubleClicked.connect(
             self._on_teamcolor_double_clicked)
         self.tbl_teamcolor_rank.cellClicked.connect(
@@ -3039,7 +3019,7 @@ class MainWindow(QMainWindow):
         # 시즌 승률 막대 — 오른쪽 글에 경기 수(GroupedBarChart 는 계열마다 최대값만 적어 경기 수를 못 단다)
         self.season_bars = charts.HBarList()
         v.addWidget(self.season_bars)
-        self.tbl_seasons = self._make_table(self.SEASON_COLUMNS)
+        self.tbl_seasons = self._make_table(self.SEASON_COLUMNS, icons={self.SEASON_COLUMNS.index("등급"): "division"})
         v.addWidget(self.tbl_seasons, 1)
         return w
 
@@ -3619,7 +3599,7 @@ class MainWindow(QMainWindow):
         self.lb_divstay_note.setWordWrap(True)
         self.lb_divstay_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_divstay_note)
-        self.tbl_divstay = self._make_table(self.DIVSTAY_COLUMNS)
+        self.tbl_divstay = self._make_table(self.DIVSTAY_COLUMNS, icons={0: "division"})
         v.addWidget(self.tbl_divstay, 1)
         return w
 
@@ -3627,7 +3607,7 @@ class MainWindow(QMainWindow):
         st = core.division_stays(core.division_trend(details, self._ouid) if self._ouid else [],
                                  name_of=lambda i: self._division_names.get(i, str(i)))
         # 등급 id 가 작을수록 상위 — 정렬값을 음수로 둬 "높은 등급부터"가 내림차순과 같게
-        self._fill(self.tbl_divstay, [[(r.name, -r.division), (f"{r.games:,}", r.games), (f"{r.days:,}", r.days),
+        self._fill(self.tbl_divstay, [[IconCell(r.name, -r.division, self._division_icon_key(r.division)), (f"{r.games:,}", r.games), (f"{r.days:,}", r.days),
                                        (f"{r.entries:,}", r.entries)] for r in st.rows])
         if not st.rows:
             self.lb_divstay_note.setText("등급 정보가 있는 경기가 없습니다.")
@@ -3912,7 +3892,7 @@ class MainWindow(QMainWindow):
         grid.setColumnStretch(1, 1)
         sums.body.addLayout(grid)
         lv.addWidget(sums)
-        self.tbl_ledger = self._make_table(self.LEDGER_COLUMNS)
+        self.tbl_ledger = self._make_table(self.LEDGER_COLUMNS, icons={0: "season"})
         lv.addWidget(self.tbl_ledger, 1)
         v.addWidget(self.box_ledger, 1)
         return w
@@ -3986,7 +3966,7 @@ class MainWindow(QMainWindow):
         self.lb_timeline_note.setWordWrap(True)
         self.lb_timeline_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_timeline_note)
-        self.tbl_timeline = self._make_table(self.TIMELINE_COLUMNS)
+        self.tbl_timeline = self._make_table(self.TIMELINE_COLUMNS, icons={1: "season"})
         v.addWidget(self.tbl_timeline, 1)
         return w
 
@@ -4025,7 +4005,7 @@ class MainWindow(QMainWindow):
             else:
                 grade = (str(e.grade_to) if e.grade_to is not None else "-", e.grade_to or 0)
             rows.append([(e.date.strftime("%Y-%m-%d %H:%M"), e.date.timestamp()),
-                         self._names.get(e.spid, str(e.spid)), kind, grade,
+                         IconCell(self._names.get(e.spid, str(e.spid)), None, core.season_id_of(e.spid)), kind, grade,
                          (self._bp(e.value), e.value or 0), self._window_cell(e.before), self._window_cell(e.after)])
         self._fill(self.tbl_timeline, rows, enable_sort=False)
         min_n = config.TIMELINE_MIN_GAMES
@@ -4104,7 +4084,7 @@ class MainWindow(QMainWindow):
                 t = h.trade
                 now = h.cur_grade if h.cur_grade is not None else t.grade
                 gain = None if price is None or t.value is None else price - t.value
-                rows.append([self._names.get(t.spid, str(t.spid)), status,
+                rows.append([IconCell(self._names.get(t.spid, str(t.spid)), None, core.season_id_of(t.spid)), status,
                              (t.date.strftime("%Y-%m-%d"), t.date.timestamp()), (str(t.grade or "-"), t.grade or 0),
                              (self._bp(t.value), t.value or 0), (str(now or "-"), now or 0),
                              (self._bp(price), price or 0), (self._bp(gain, sign=True), gain or 0)])
@@ -4572,7 +4552,7 @@ class MainWindow(QMainWindow):
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb.setWordWrap(True)
         v.addWidget(lb)
-        self.tbl_pick_cards = self._make_table(self.PICK_CARD_COLUMNS)
+        self.tbl_pick_cards = self._make_table(self.PICK_CARD_COLUMNS, icons={1: "season"})
         self.tbl_pick_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
         self.tbl_pick_cards.setMinimumHeight(260)
         self.tbl_pick_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
@@ -4664,7 +4644,8 @@ class MainWindow(QMainWindow):
             for c in cards:
                 grades = " · ".join(f"{g}강 {n}" for g, n in c.grades.most_common(3) if isinstance(g, int))
                 rate = c.users / summary.used if summary.used else 0.0
-                rows.append([line, f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
+                rows.append([line, IconCell(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
+                                            None, core.season_id_of(c.spid)),
                              (str(c.users), c.users), (f"{rate * 100:.0f}%", rate), grades])
         self._fill(self.tbl_pick_cards, rows, enable_sort=False)
         for r, card in enumerate(c for _ln, cs in summary.lines for c in cs):
@@ -4778,7 +4759,7 @@ class MainWindow(QMainWindow):
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb.setWordWrap(True)
         v.addWidget(lb)
-        self.tbl_rec_cards = self._make_table(self.REC_CARD_COLUMNS)
+        self.tbl_rec_cards = self._make_table(self.REC_CARD_COLUMNS, icons={1: "season"})
         self.tbl_rec_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
         self.tbl_rec_cards.setMinimumHeight(260)
         self.tbl_rec_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
@@ -4852,7 +4833,8 @@ class MainWindow(QMainWindow):
                 grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
                 grades = " · ".join(f"{g}강 {k}" for g, k in c.grades.most_common(3) if isinstance(g, int))
                 price = prices.get((c.spid, grade)) if grade is not None else None
-                rows_out.append([line, f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
+                rows_out.append([line, IconCell(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
+                                                None, core.season_id_of(c.spid)),
                                  (str(c.users), c.users), (f"{c.rate * 100:.0f}%", c.rate), grades,
                                  (self._bp(price[0]) if price else "-", price[0] if price else -1)])
                 cards.append(c)
@@ -5134,6 +5116,7 @@ class MainWindow(QMainWindow):
                       "traits")
 
     def _invalidate_rank_views(self) -> None:
+        self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
 
@@ -5508,7 +5491,7 @@ class MainWindow(QMainWindow):
         self.tbl_vbins.setSortingEnabled(False)   # 구간 순서가 정보다
         v.addWidget(self.tbl_vbins, 1)
         v.addWidget(self._title_label("구간 × 팀컬러 — 그 팀컬러 인원 중 이 구간 % · 챔스 이상 %(색 = 윌슨 하한의 구간 평균 대비)"))
-        self.tbl_vcross = self._make_table(["팀컬러", "인원"])
+        self.tbl_vcross = self._make_table(["팀컬러", "인원"], icons={0: "emblem"})
         self.tbl_vcross.setSortingEnabled(False)
         v.addWidget(self.tbl_vcross, 1)
         self.value_bin_data: core.ValueBins | None = None
@@ -5543,7 +5526,7 @@ class MainWindow(QMainWindow):
         cols = ["팀컬러", "인원"] + labels
         self.tbl_vcross.setColumnCount(len(cols))
         self.tbl_vcross.setHorizontalHeaderLabels(cols)
-        rows = [[color, f"{n:,}"] + ["" if c is None else f"{c.share:.0f}% · {c.champ:.0f}%" for c in cells]
+        rows = [[self._emblem_cell(color), f"{n:,}"] + ["" if c is None else f"{c.share:.0f}% · {c.champ:.0f}%" for c in cells]
                 for color, n, cells in res.cross]
         self._fill(self.tbl_vcross, rows, enable_sort=False)
         for i, (_color, _n, cells) in enumerate(res.cross):
@@ -5777,7 +5760,7 @@ class MainWindow(QMainWindow):
         self.tbl_rmove.setSortingEnabled(False)
         v.addWidget(self.tbl_rmove, 1)
         v.addWidget(self._title_label("변동 이력 — 바뀐 칸은 굵게"))
-        self.tbl_rhist = self._make_table(self.RANK_HIST_COLUMNS)
+        self.tbl_rhist = self._make_table(self.RANK_HIST_COLUMNS, icons={4: "emblem"})
         self.tbl_rhist.setSortingEnabled(False)
         v.addWidget(self.tbl_rhist, 1)
         self.rank_move_data: core.RankMoves | None = None
@@ -5821,7 +5804,7 @@ class MainWindow(QMainWindow):
         hist = list(reversed(res.history))
         self._fill(self.tbl_rhist, [[self._at(h.at)] + (["1만 위 밖", "", "", "", ""] if h.row is None else [
             f"{h.row.rank:,}", NA if h.row.elo is None else f"{h.row.elo:,.0f}", h.row.formation or "-",
-            h.row.color or core.blank_label("team_color"), "닉네임 바뀜" if "nickname" in h.changed else ""])
+            self._emblem_cell(h.row.color or core.blank_label("team_color")), "닉네임 바뀜" if "nickname" in h.changed else ""])
             for h in hist], enable_sort=False)
         cols = {"formation": 3, "color": 4, "nickname": 5}
         for i, h in enumerate(hist):
@@ -5864,7 +5847,7 @@ class MainWindow(QMainWindow):
         v.addLayout(row)
         self.lb_oppcard_note = self._note_label()
         v.addWidget(self.lb_oppcard_note)
-        self.tbl_oppcard = self._make_table(self.OPP_CARD_COLUMNS)
+        self.tbl_oppcard = self._make_table(self.OPP_CARD_COLUMNS, icons={0: "season"})
         self.tbl_oppcard.itemDoubleClicked.connect(self._on_oppcard_double_clicked)
         v.addWidget(self.tbl_oppcard, 1)
         self.opp_cards: dict = {}
@@ -5908,7 +5891,8 @@ class MainWindow(QMainWindow):
         self.cb_oppcard_pos.blockSignals(False)
         rows = cards.get(self.cb_oppcard_pos.currentData()) or []
         self._fill(self.tbl_oppcard, [[
-            f"{self._names.get(c.sp_id, str(c.sp_id))} ({self._season_name(c.sp_id)})",
+            IconCell(f"{self._names.get(c.sp_id, str(c.sp_id))} ({self._season_name(c.sp_id)})",
+                     None, core.season_id_of(c.sp_id)),
             (f"{c.usage:.0f}%", c.usage), (f"{c.met:,}", c.met), (f"{c.win}·{c.draw}·{c.lose}", c.win),
             (win_rate_text(c.win, c.draw, c.lose, c.mixed, digits=0, short=True), c.win_rate)] for c in rows],
             enable_sort=False)
@@ -5958,7 +5942,7 @@ class MainWindow(QMainWindow):
         self.lb_owner_backfill.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.lb_owner_backfill.setVisible(False)
         v.addWidget(self.lb_owner_backfill)
-        self.tbl_owner = self._make_table(self.CARD_OWNER_COLUMNS)
+        self.tbl_owner = self._make_table(self.CARD_OWNER_COLUMNS, icons={5: "emblem", 6: "division"})
         self.tbl_owner.itemDoubleClicked.connect(self._on_owner_double_clicked)
         v.addWidget(self.tbl_owner, 1)
         self.owner_rows: list[dict] = []   # 테스트가 결과를 본다
@@ -6029,7 +6013,7 @@ class MainWindow(QMainWindow):
         self._show_backfill_note()
         rows, shown, unknown = [], [], 0
         for o in owners:
-            rank, tc = snap.get(o["nickname"], (None, ""))
+            rank, tc, grade_icon, emblem = snap.get(o["nickname"], (None, "", None, ""))
             tc = tc or self._team_colors.get(o["nickname"] or "") or ""
             if color is not None and tc != color:
                 unknown += not tc
@@ -6039,8 +6023,10 @@ class MainWindow(QMainWindow):
                                 if isinstance(g, int))
             day = datetime.fromordinal(o["last_day"]).date().isoformat()
             rows.append([o["nickname"] or "-", (day, o["last_day"]), (str(o["games"]), o["games"]),
-                         self._positions.get(pos, str(pos)), grades, tc or "모름",
-                         (f"{rank:,}" if rank else "-", rank or 10 ** 6)])
+                         self._positions.get(pos, str(pos)), grades,
+                         # 스냅숏에 있으면 그 줄의 엠블럼, 없으면 팀컬러 표와 같은 출처 순서(M4 — 수집 끈 사용자는 전부 후자)
+                         self._emblem_cell(tc, emblem=emblem) if tc else "모름",
+                         IconCell(f"{rank:,}" if rank else "-", rank or 10 ** 6, grade_icon if rank else None)])
             shown.append(o)
         self.owner_rows = shown
         self._fill(self.tbl_owner, rows)
@@ -6075,7 +6061,7 @@ class MainWindow(QMainWindow):
         self.lb_ranker_status = QLabel("")
         self.lb_ranker_status.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_ranker_status)
-        self.tbl_ranker = self._make_table(self.RANKER_COLUMNS)
+        self.tbl_ranker = self._make_table(self.RANKER_COLUMNS, icons={1: "season"})
         self.tbl_ranker.itemDoubleClicked.connect(self._on_ranker_double_clicked)
         v.addWidget(self.tbl_ranker, 1)
         return w
@@ -6102,7 +6088,8 @@ class MainWindow(QMainWindow):
         few_r, few_me = config.RANKER_MIN_MATCHES, core.MIN_PLAYER_GAMES
         rows = []
         for r in rows_data:
-            row = [self._positions.get(r.pos, str(r.pos)), self._names.get(r.sp_id, str(r.sp_id)), (f"{r.games}", r.games)]
+            row = [self._positions.get(r.pos, str(r.pos)),
+                   IconCell(self._names.get(r.sp_id, str(r.sp_id)), None, core.season_id_of(r.sp_id)), (f"{r.games}", r.games)]
             for name, f in core.RANKER_METRICS:
                 pct = isinstance(f, tuple)
                 fmt = "{:.0f}" if pct else "{:.2f}"
@@ -6175,7 +6162,7 @@ class MainWindow(QMainWindow):
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
         note.setWordWrap(True)
         v.addWidget(note)
-        self.tbl_finishing = self._make_table(self.FINISHING_COLUMNS)
+        self.tbl_finishing = self._make_table(self.FINISHING_COLUMNS, icons={0: "season"})
         self.tbl_finishing.itemDoubleClicked.connect(
             self._on_finishing_double_clicked)
         v.addWidget(self.tbl_finishing, 1)
@@ -6187,7 +6174,7 @@ class MainWindow(QMainWindow):
         rows = []
         for p in players:
             rows.append([
-                p.name, (f"{p.shots}", p.shots), (f"{p.on_target}", p.on_target),
+                IconCell(p.name, None, core.season_id_of(p.sp_id)), (f"{p.shots}", p.shots), (f"{p.on_target}", p.on_target),
                 (f"{p.goals}", p.goals), (f"{p.conversion:.0f}%", p.conversion),
                 (f"{p.xg:.1f}", p.xg), (f"{p.xg_diff:+.1f}", p.xg_diff),
                 (f"{p.assists}", p.assists)])
@@ -6202,8 +6189,6 @@ class MainWindow(QMainWindow):
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
         self.tbl_finishing.sortByColumn(3, Qt.SortOrder.DescendingOrder)
         self.tbl_finishing.setSortingEnabled(True)
-        self._load_season_icons([p.sp_id for p in players], self.tbl_finishing, 0,
-                                "_finishing_icon_loader")
 
     def _on_finishing_double_clicked(self, item) -> None:
         """결정력 표에서 선수 더블클릭 → 선수 카드. spId 는 0열 UserRole."""
@@ -6217,7 +6202,7 @@ class MainWindow(QMainWindow):
         self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일'
 
     @staticmethod
-    def _make_table(columns: list[str]) -> FitTableWidget:
+    def _make_table(columns: list[str], icons: dict[int, str] | None = None) -> FitTableWidget:
         """모든 표 — 열은 글자 폭 기준으로 잡고 남는 폭은 비율대로 나누며, 창이
         좁으면 글꼴을 줄여 맞춘다(FitTableWidget). 예전엔 첫 열만 내용 맞춤이고
         나머지는 균등 분할(Stretch)이라, 둘째 열 이후가 길면 "…" 로 잘렸다
@@ -6235,12 +6220,14 @@ class MainWindow(QMainWindow):
         hdr.setMinimumSectionSize(0)
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         t.set_base_font_px(T.BASE_FONT_PX, T.BASE_FONT_PX)
+        if icons:
+            t.set_icon_columns(icons)   # 표를 만들 때 한 번 — 열 폭을 그림이 오기 전부터 잡는다
         return t
 
     def _build_players_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        self.tbl_players = self._make_table(self.PLAYER_COLUMNS)
+        self.tbl_players = self._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
         # 19개 열이라 전역 폰트(15px)로는 스크롤 없이 한눈에 안 들어온다.
         # 이 표만 폰트·여백을 줄인 기본 크기(14/13px)에서 시작한다 — 창이
         # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
@@ -6314,7 +6301,7 @@ class MainWindow(QMainWindow):
         row.addStretch(1)
         v.addLayout(row)
 
-        self.table = self._make_table(self.MATCH_COLUMNS)
+        self.table = self._make_table(self.MATCH_COLUMNS, icons={3: "division"})
         self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
         v.addWidget(self.table, 1)
         return w
@@ -6348,7 +6335,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.lb_opponent_note)
         v.addLayout(row)
 
-        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS)
+        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS, icons={0: "division"})
         self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
         v.addWidget(self.tbl_opponents, 1)
         return w
@@ -6394,7 +6381,7 @@ class MainWindow(QMainWindow):
         self.box_position_pitch = QVBoxLayout()
         v.addLayout(self.box_position_pitch, 1)
 
-        self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS)
+        self.tbl_position_opp = self._make_table(self.POSITION_OPP_COLUMNS, icons={1: "season"})
         # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
         # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
         self.tbl_position_opp.setSortingEnabled(False)
@@ -7100,6 +7087,7 @@ class MainWindow(QMainWindow):
             self._seasons = seasons
         if division_names:
             self._division_names = division_names
+        self._load_meta_from_disk()   # 방금 받은 원본 목록(등급 배지 번호) — 이름 dict 만 넘어와서
         self._nick = basic.get("nickname") or self._nick
         for ed in self._nick_edits:
             ed.setText(self._nick)
@@ -7323,10 +7311,75 @@ class MainWindow(QMainWindow):
             c.setToolTip("챔피언스 이상 등급에서만 넥슨 데이터센터 순위·구단가치·\n"
                          "점수를 보여줍니다. 전적은 앱이 받은 경기 기준입니다.\n" + win_rate_note(full.mixed))
 
+    def _load_meta_from_disk(self) -> None:
+        """검색 전 그림 재료 — 시즌 배지 주소(seasonid)·등급 번호(division 원본 순서). 이미 받은 값이 있으면 덮지 않는다."""
+        div = read_meta_on_disk(config.CACHE_DIR, "division")
+        if div:
+            self._division_meta = div
+            if not self._division_names:
+                self._division_names = {d["divisionId"]: d.get("divisionName", "") for d in div if "divisionId" in d}
+        sea = read_meta_on_disk(config.CACHE_DIR, "seasonid")
+        if sea and not self._seasons:
+            self._seasons = {m["seasonId"]: m for m in sea if isinstance(m, dict) and "seasonId" in m}
+
+    def _division_icon_key(self, div_id):
+        """등급 id → 등급 배지 키(CDN 번호). 모르면 None = 글자만."""
+        return core.division_icon_index(div_id, self._division_meta)
+
+    def _note_emblem(self, label: str, emblem: str) -> None:
+        """team_colors 에서 읽은 (라벨, 엠블럼 키)를 적어 둔다 — 새로 알게 됐을 때만 합친 지도를 비운다."""
+        if label and emblem and self._emblem_label.get(label) != emblem:
+            self._emblem_label[label] = emblem
+            self._emblem_cache = None
+
+    def _emblem_map(self) -> dict[str, str]:
+        """팀컬러 라벨 → 엠블럼 키. 출처 순서(앞이 이긴다): ① 팀컬러 목록 캐시(웹 데이터를 켜고 효과 창을 연 사람만 있다)
+        ② fifa.db team_colors 에서 읽은 엠블럼(기본 설정 사용자의 유일한 출처 · 2.2.1 전에 받은 행은 비어 있다)
+        ③ 랭킹 스냅숏(수집을 켠 사람만 — 이름이 겹치는 팀컬러·엠블럼이 둘인 이름은 거기서 이미 빠진다).
+        표마다 읽지 않게 한 번 만들어 두고 바뀌는 길(_note_emblem · _invalidate_rank_views)에서만 비운다."""
+        if self._emblem_cache is None:
+            out: dict[str, str] = {}
+            complete = True
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    rows, _fresh = store.load_teamcolor_meta(conn, datetime.now().date(), config.TEAMCOLOR_CACHE_DAYS)
+                finally:
+                    conn.close()
+                for r in rows:
+                    if r.get("emblem"):
+                        out.setdefault(teamcolor.label(r["name"], r["emblem"]), r["emblem"])
+            except Exception:
+                complete = False   # 잠김 같은 일시 실패 — 이번엔 이 출처 없이 그리되 지도를 확정하지 않는다(다음에 다시 읽는다)
+            for label, emblem in self._emblem_label.items():
+                out.setdefault(label, emblem)
+            for name, emblem in (self._rank_read(core.emblems_by_name) or {}).items():
+                out.setdefault(name, emblem)
+            if not complete:
+                return out
+            self._emblem_cache = out
+        return self._emblem_cache
+
+    def _refresh_emblems(self) -> None:
+        """팀컬러 목록 캐시(지도의 첫째 출처)가 새로 저장됐을 수 있을 때 — 효과 창이 목록을 받은 뒤. 지도가 실제로 달라졌을 때만
+        팀컬러 표를 다시 그린다(효과 창은 '더 보기'로도 여러 번 불려서, 매번 그리면 시즌 범위 표 렌더가 쌓인다)."""
+        old = self._emblem_cache
+        self._emblem_cache = None
+        if self._emblem_map() != (old or {}):
+            self._invalidate("teamcolor")
+
+    def _emblem_cell(self, label: str, sort_key=None, emblem: str = ""):
+        """팀컬러 칸 — 글자는 그대로 두고 엠블럼 키가 있으면 그림이 붙을 칸으로(IconCell). 모르면 글자만."""
+        # 행이 아는 키라도 주소를 못 만드는 종류(rank.db 의 teamcolor/ 13행)면 지도로 넘어간다
+        key = (emblem if images.icon_url("emblem", emblem) else "") or self._emblem_map().get(label, "")
+        return IconCell(label, sort_key, key) if key else (label if sort_key is None else (label, sort_key))
+
     @staticmethod
-    def _cell(text: str, key=None):
+    def _cell(text: str, key=None, icon_key=None):
         item = SortableItem(text, key)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        if icon_key is not None:
+            item.setData(ICON_KEY_ROLE, icon_key)   # 정렬을 켜기 전에 칸과 같이 — 순서로 짝짓지 않는다(PyQt 1)
         return item
 
     def _fill(self, table: QTableWidget, rows: list[list],
@@ -7345,12 +7398,71 @@ class MainWindow(QMainWindow):
         table.setRowCount(len(rows))
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
+                if isinstance(cell, IconCell):
+                    table.setItem(r, c, self._cell(cell.text, cell.sort_key, cell.icon_key))
+                    continue
                 text, key = cell if isinstance(cell, tuple) else (cell, None)
                 table.setItem(r, c, self._cell(text, key))
         if enable_sort:
             table.setSortingEnabled(True)
         if isinstance(table, FitTableWidget):
             table.refit()
+            self._start_icons(table)
+
+    # ── 표 칸 그림(40단계) ──────────────────────────────────────────────
+    def _start_icons(self, table: FitTableWidget) -> None:
+        """_fill 끝 한 곳 — 등록된 열(set_icon_columns)의 칸 키를 훑어 로더를 띄운다. 표당 로더 하나가 모든 열을 받는다.
+        표 칸 읽기는 여기(화면 스레드)서 끝내고 로더엔 평범한 목록만 넘긴다. 받기 전 모양은 글자 그대로(열 폭은 이미 잡혀 있다)."""
+        cols = table.icon_columns
+        if not cols:
+            return
+        old = getattr(table, "_icon_loader", None)
+        if old is not None and old.isRunning():
+            old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        entries: dict[tuple, str] = {}
+        for r in range(table.rowCount()):
+            for c, kind in cols.items():
+                item = table.item(r, c)
+                key = item.data(ICON_KEY_ROLE) if item is not None else None
+                if key is None or (kind, key) in entries:
+                    continue
+                url = images.icon_url(kind, key, self._seasons)
+                if url:
+                    entries[(kind, key)] = url
+        if not entries:
+            table._icon_loader = None
+            return
+        loader = IconLoader([(k, key, url) for (k, key), url in entries.items()], self._icon_dir)
+        loader.loaded.connect(lambda kind, key, path, t=table: self._apply_icon(t, kind, key, path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        table._icon_loader = loader
+        self._icon_loaders.append(loader)
+        loader.start()
+
+    @staticmethod
+    def _apply_icon(table: FitTableWidget, kind: str, key, path: str) -> None:
+        """받은 그림을 같은 키의 칸에 붙인다. 정렬 중인 열에 붙이면 매번 재정렬되어 큰 표가 멈춘다(실측 1만 행 1.4초) —
+        붙이는 동안 정렬을 끈다. 아이콘은 칸에 붙어 따라가므로 켤 때 재정렬돼도 제 행에 남는다."""
+        try:
+            pm = QPixmap(path)
+            if pm.isNull():
+                Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 글자만
+                return
+            icon = QIcon(pm)
+            cols = [c for c, k in table.icon_columns.items() if k == kind]
+            sort_col = table.horizontalHeader().sortIndicatorSection()
+            resort = table.isSortingEnabled() and sort_col in cols
+            if resort:
+                table.setSortingEnabled(False)
+            for r in range(table.rowCount()):
+                for c in cols:
+                    item = table.item(r, c)
+                    if item is not None and item.data(ICON_KEY_ROLE) == key:
+                        item.setIcon(icon)
+            if resort:
+                table.setSortingEnabled(True)
+        except RuntimeError:
+            pass   # 표가 이미 지워졌다 — 늦게 온 그림은 버린다
 
     @staticmethod
     def _fit_columns_to_content(table: FitTableWidget,
@@ -7364,7 +7476,8 @@ class MainWindow(QMainWindow):
         rows = []
         for m in matches:
             rows.append([
-                m.date_text, m.result, m.score, m.opponent,
+                m.date_text, m.result, m.score,
+                IconCell(m.opponent, None, self._division_icon_key(m.opp_division)),   # 그 경기 때 상대 등급
                 (f"{m.possession}%", m.possession), (f"{m.shoot_total}", m.shoot_total),
                 (f"{m.shoot_effective}", m.shoot_effective),
                 (f"{m.pass_rate:.0f}%", m.pass_rate), (f"{m.rating:.2f}", m.rating),
@@ -7418,7 +7531,8 @@ class MainWindow(QMainWindow):
         rows = []
         for s in opponent_stats(matches):
             rows.append([
-                s.nickname, wdl_text(s.win, s.draw, s.lose),
+                IconCell(s.nickname, None, self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
+                wdl_text(s.win, s.draw, s.lose),
                 (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
                 (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
                 (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
@@ -7447,7 +7561,7 @@ class MainWindow(QMainWindow):
         return info.get("className", "-") if info else "-"
 
     def _position_opp_rows(self, players: list[core.PositionOpponent]) -> list[list]:
-        return [[p.position, f"{p.name} ({self._season_name(p.sp_id)})",
+        return [[p.position, IconCell(f"{p.name} ({self._season_name(p.sp_id)})", None, core.season_id_of(p.sp_id)),
                 (str(p.count), p.count), (f"{p.rate:.1f}%", p.rate)]
                for p in players]
 
@@ -7546,7 +7660,7 @@ class MainWindow(QMainWindow):
         rate_rows = []
         for s in stats_list:
             diff = s.win_rate - base_rate
-            rate_rows.append([s.team_color, (str(s.games), s.games), (str(len(s.opponents)), len(s.opponents)),
+            rate_rows.append([self._emblem_cell(s.team_color), (str(s.games), s.games), (str(len(s.opponents)), len(s.opponents)),
                               (str(s.win), s.win), (str(s.draw), s.draw), (str(s.lose), s.lose),
                               (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
                               (f"{diff:+.1f}%p", diff) if base_n else ("-", 0.0), eff])
@@ -7574,7 +7688,7 @@ class MainWindow(QMainWindow):
         def value_cell(v):
             return (ranker.format_team_value(v), v) if v is not None else ("-", -1)
 
-        rank_rows = [[(str(i), i), s.team_color, (str(s.games), s.games),
+        rank_rows = [[(str(i), i), self._emblem_cell(s.team_color), (str(s.games), s.games),
                      value_cell(s.avg_value), value_cell(s.min_value),
                      value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1), eff]
                     for i, s in enumerate(stats_list, start=1)]
@@ -7670,6 +7784,7 @@ class MainWindow(QMainWindow):
             try:
                 for nick, (color, value, emblem) in store.load_team_colors(conn, missing).items():
                     self._team_colors[nick] = teamcolor.label(color, emblem)
+                    self._note_emblem(self._team_colors[nick], emblem)
                     self._team_values[nick] = value
             finally:
                 conn.close()
@@ -7737,6 +7852,7 @@ class MainWindow(QMainWindow):
             emblem = v[2] if len(v) > 2 else ""
             self._teamcolor_raw[nick] = (color, value, emblem)
             self._team_colors[nick] = teamcolor.label(color, emblem)   # 화면에 넣는 순간 글자 하나 — 그 뒤는 안 바뀐다
+            self._note_emblem(self._team_colors[nick], emblem)
             self._team_values[nick] = value
         self._teamcolor_loaded_count += len(batch)
         now = time.monotonic()
@@ -7819,7 +7935,7 @@ class MainWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle(f"{color} — 포지션별 기용률")
         v = QVBoxLayout(dlg)
-        tbl = self._make_table(self.POSITION_OPP_COLUMNS)
+        tbl = self._make_table(self.POSITION_OPP_COLUMNS, icons={1: "season"})
         tbl.setSortingEnabled(False)  # 이유는 tbl_position_opp 와 동일
         tbl.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
         self._fill(tbl, self._position_opp_rows(players), enable_sort=False)
@@ -7827,6 +7943,9 @@ class MainWindow(QMainWindow):
         v.addWidget(tbl)
         fit_to_screen(dlg, 560, 480)
         dlg.exec()
+        ld = getattr(tbl, "_icon_loader", None)   # 창이 닫혔다 — 멈춤만 요청한다. 로더는 self._icon_loaders 에 남아 종료 표가
+        if ld is not None:                        # 기다리고, 늦게 온 신호는 _apply_icon 이 삼킨다(최대 2초 UI 멈춤을 없앴다)
+            ld.cancel()
 
     def _pitch_rows(self, cards: list[PitchCard]) -> list[list[PitchCard]]:
         """칩 재료 → 줄 배치(core.pitch_rows — 위=공격 → 아래=GK, 줄 안 왼쪽 → 오른쪽). 줄이 없는 코드는 빠진다."""
@@ -7873,14 +7992,22 @@ class MainWindow(QMainWindow):
         loader = ImageLoader(sp_ids, self._img_cache_dir)
         loader.loaded.connect(pitch.set_face)
         loader.start()
+        # 시즌 배지는 시즌마다 한 장 — IconLoader 가 같은 주소를 한 번만 받고, 받은 시즌의 모든 선수에게 붙인다
         season_entries = []
-        for sp_id in sp_ids:
-            season_id = core.season_id_of(sp_id)
-            info = self._seasons.get(season_id)
-            if info and info.get("seasonImg"):
-                season_entries.append((sp_id, season_id, info["seasonImg"]))
-        season_loader = SeasonIconLoader(season_entries, self._season_icon_dir)
-        season_loader.loaded.connect(pitch.set_season_icon)
+        for season_id in dict.fromkeys(core.season_id_of(sp) for sp in sp_ids):
+            url = images.icon_url("season", season_id, self._seasons)
+            if url:
+                season_entries.append(("season", season_id, url))
+        season_loader = IconLoader(season_entries, self._icon_dir)
+
+        def apply_season(_kind, season_id, path, p=pitch):
+            try:
+                for sp in p.sp_ids():
+                    if core.season_id_of(sp) == season_id:
+                        p.set_season_icon(sp, path)
+            except RuntimeError:
+                pass   # 축구장이 이미 지워졌다 — 바운드 메서드와 달리 람다는 자동으로 안 끊겨서 직접 삼킨다
+        season_loader.loaded.connect(apply_season)
         season_loader.start()
         out = [loader, season_loader]
         if card_info:
@@ -8041,7 +8168,7 @@ class MainWindow(QMainWindow):
 
         img_dir = config.CACHE_DIR / self.PLAYERCARD_IMG_DIR_NAME
         info_loader = PlayerInfoLoader(sp_id)
-        img_loader: UrlImageLoader | None = None
+        img_loader: IconLoader | None = None
 
         def on_loaded(info: playerinfo.PlayerInfo) -> None:
             nonlocal img_loader
@@ -8049,9 +8176,9 @@ class MainWindow(QMainWindow):
             widgets_by_url = self._fill_player_info(body, info, current_grade)
             urls = [u for u in widgets_by_url if u]
             if urls:
-                img_loader = UrlImageLoader(urls, img_dir)
+                img_loader = IconLoader([("", u, u) for u in urls], img_dir)   # 사진·국기·특성 — 키 = 주소 그대로
                 img_loader.loaded.connect(
-                    lambda url, path: self._set_player_info_image(widgets_by_url, url, path))
+                    lambda _kind, url, path: self._set_player_info_image(widgets_by_url, url, path))
                 img_loader.start()
 
         def on_failed(msg: str) -> None:
@@ -8949,7 +9076,9 @@ class MainWindow(QMainWindow):
                 vs = (f"{diff:+.1f}%p", diff)
             else:
                 vs = ("—", -1e9)
-            grade = ((f"{name(dv[0])} → {name(dv[1])}" if dv[0] != dv[1] else name(dv[0]), -dv[1])
+            # 그림은 시즌을 끝낸 등급(dv[1]) — "A → B" 글자 앞에 B 의 배지
+            grade = (IconCell(f"{name(dv[0])} → {name(dv[1])}" if dv[0] != dv[1] else name(dv[0]), -dv[1],
+                              self._division_icon_key(dv[1]))
                      if dv else ("—", -1e9))
             tips.append(f"최고 {name(dv[2])}" if dv else "")
             rows.append([
@@ -9004,7 +9133,7 @@ class MainWindow(QMainWindow):
         rows = []
         for p in players:
             rows.append([
-                p.position, p.name, (f"{p.grade}", p.grade),
+                p.position, IconCell(p.name, None, core.season_id_of(p.sp_id)), (f"{p.grade}", p.grade),
                 (f"{p.games} ⚠" if p.games < few else f"{p.games}", p.games),
                 # 선수표는 열이 빽빽해 % 없이(예전 그대로) — 섞인 식이면 * 만(1280 폭에서 가로 스크롤이 생겼다)
                 (f"{p.win_rate:.1f}" + ("*" if p.mixed else ""), p.win_rate),
@@ -9028,9 +9157,9 @@ class MainWindow(QMainWindow):
         # "채운 순서 = players 순서"라고 믿고 매기는 게 틀어져 엉뚱한 행에
         # 색이 칠해진다(실제로 겪은 버그). 후처리를 다 끝낸 뒤에만 켠다.
         self._fill(self.tbl_players, rows, enable_sort=False)
-        # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말)
-        self._fit_columns_to_content(self.tbl_players,
-                                     extra={1: 26, 2: 2 * GradeBadgeDelegate.PAD})
+        # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말).
+        # 이름 열(1)의 시즌 배지 폭은 set_icon_columns 가 이미 갖고 있다(손으로 26 을 주던 자리)
+        self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD})
         # 공격력(5열)·수비력(6열) — 최소~최대를 넓은 단계로 칠한다. 눈금은 출전이 충분한 선수로만 잡는다.
         enough = [p.games >= few for p in players]
         atk = self._heat_scale([p.attack_power for p in players], enough)
@@ -9052,40 +9181,6 @@ class MainWindow(QMainWindow):
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
         self.tbl_players.sortByColumn(5, Qt.SortOrder.DescendingOrder)
         self.tbl_players.setSortingEnabled(True)
-        self._load_season_icons([p.sp_id for p in players], self.tbl_players, 1,
-                                "_table_season_loader")
-
-    def _load_season_icons(self, sp_ids: list[int], table: QTableWidget,
-                           name_col: int, holder: str) -> None:
-        """선수 얼굴 대신 시즌(카드 클래스) 아이콘을 표의 name_col 열에 채운다 —
-        PitchWidget 스쿼드 화면의 SeasonIconLoader 와 같은 방식(같은 시즌은 한 번만).
-
-        표마다 로더를 따로 두라고 holder(필드 이름)를 받는다 — 하나를 공유하면
-        선수 지표·결정력 표가 같은 렌더에서 서로의 로더를 취소해버린다."""
-        loader = getattr(self, holder)
-        if loader and loader.isRunning():
-            loader.cancel()
-            loader.wait(500)
-        entries = []
-        for sp_id in sp_ids:
-            season_id = core.season_id_of(sp_id)
-            icon_url = self._seasons.get(season_id, {}).get("seasonImg")
-            if icon_url:
-                entries.append((sp_id, season_id, icon_url))
-        loader = SeasonIconLoader(entries, self._season_icon_dir)
-        loader.loaded.connect(
-            lambda sid, path, t=table, c=name_col: self._apply_season_icon(t, c, sid, path))
-        setattr(self, holder, loader)
-        loader.start()
-
-    @staticmethod
-    def _apply_season_icon(table: QTableWidget, name_col: int,
-                           sp_id: int, path: str) -> None:
-        icon = QIcon(QPixmap(path))
-        for r in range(table.rowCount()):
-            item = table.item(r, name_col)
-            if item and item.data(Qt.ItemDataRole.UserRole) == sp_id:
-                item.setIcon(icon)
 
     @staticmethod
     def _heat_scale(values: list[float], enough: list[bool]) -> list[float | None]:
@@ -9302,8 +9397,7 @@ class MainWindow(QMainWindow):
             # 진행 중이던 상세 요청이 네트워크 타임아웃까지 갈 수 있어 넉넉히. DB 쓰기는 이 지점 이후라 강제 종료도 안전
             (self._loader, cancel(self._loader), 8000, True),
             (self._teamcolor_loader, cancel(self._teamcolor_loader), 3000, True),
-            (self._table_season_loader, cancel(self._table_season_loader), 500, False),
-            (self._finishing_icon_loader, cancel(self._finishing_icon_loader), 500, False),
+            *[(ld, cancel(ld), 500, False) for ld in self._icon_loaders],
             (self._compare_loader, cancel(self._compare_loader), 8000, True),
             # 쪽 사이에서 멈춘다 — 진행 중인 요청 하나(타임아웃 10초)까지. 쪽마다 한 트랜잭션이라 terminate 하지 않는다
             (self._trade_loader, cancel(self._trade_loader), 12000, False),
@@ -9531,7 +9625,7 @@ class TeamColorDialog(QDialog):
         self.lb_players = QLabel("적용 선수 — OVR 높은 순")
         self.lb_players.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_players)
-        self.tbl_players = main._make_table(self.PLAYER_COLUMNS)
+        self.tbl_players = main._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
         self.tbl_players.itemDoubleClicked.connect(main._on_player_cell_double_clicked)
         v.addWidget(self.tbl_players, 3)
         row = QHBoxLayout()
@@ -9599,6 +9693,8 @@ class TeamColorDialog(QDialog):
         if view.req != self._req:
             return   # 갈아 끼운 뒤 늦게 온 옛 결과
         self.btn_more.setEnabled(True)
+        if view.meta is not None:
+            self.main._refresh_emblems()   # 이 로더가 팀컬러 목록을 막 저장했을 수 있다 — 엠블럼 지도의 첫째 출처
         if view.candidates:
             self._show_pick(view)
             return
@@ -9625,7 +9721,8 @@ class TeamColorDialog(QDialog):
                                                   " · ".join(m.get("effects") or []) or "-"]], enable_sort=False)
             self.lb_source.setText(f"넥슨 데이터센터 기준 · 받은 날 {view.steps_day or view.meta.get('fetched_on', '')}")
         self._players += view.players or []
-        rows = [[(str(p.ovr) if p.ovr is not None else "-", p.ovr or 0), p.name, p.position,
+        rows = [[(str(p.ovr) if p.ovr is not None else "-", p.ovr or 0),
+                 IconCell(p.name, None, core.season_id_of(p.spid)), p.position,
                  (str(p.pay) if p.pay is not None else "-", p.pay or 0),
                  (MainWindow._bp(p.prices.get(1)), p.prices.get(1, -1))] for p in self._players]
         self.main._fill(self.tbl_players, rows, enable_sort=False)

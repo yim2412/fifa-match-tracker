@@ -32,6 +32,18 @@ def _week_boundary(now: datetime | None = None) -> datetime:
     delta_days = (now.weekday() - META_REFRESH_WEEKDAY) % 7
     return datetime.combine((now - timedelta(days=delta_days)).date(), datetime.min.time())
 
+def read_meta_on_disk(cache_dir: Path, name: str) -> list[dict] | None:
+    """메타 캐시 파일을 **날짜와 무관하게** 읽는다(없거나 깨졌으면 None). get_meta 의 _meta_read 는 주간 갱신일 전 파일을
+    None 으로 돌려 매주 첫 검색 전에는 비는데, 그림 주소(등급 배지 번호 = division 원본 목록 순서 · 시즌 배지 주소)는
+    낡은 값도 쓸 수 있다 — 검색 전에 연 화면도 배지가 나오게 한다(40단계 I6)."""
+    path = cache_dir / f"meta_{''.join(c for c in name if c.isalnum())}.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, list) else None
+
+
 EP_ID = "/fconline/v1/id"                    # 닉네임 → ouid
 EP_USER_BASIC = "/fconline/v1/user/basic"    # 계정 기본 정보
 EP_MAX_DIVISION = "/fconline/v1/user/maxdivision"  # 역대 최고 등급

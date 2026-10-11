@@ -372,6 +372,14 @@ def _drive_uncovered() -> None:
             r.close()
     # 선수 색인 · 랭커 픽 받기·집계·지우기(2.1.1) — 화면 없이 도는 테스트를 그대로
     sys.path.insert(0, str(ROOT / "tests"))
+    import rankmeta                                             # 이름 → 엠블럼(40단계) — 시즌 스냅숏이 있어야 JOIN 이 돈다
+    import test_rankmeta as trm
+    db = trm.DB()
+    try:
+        db.snap(trm.T0, [{"sn": 1, "rank": 1, "color": "A"}])
+        rankmeta.emblems_by_name(db.ro())
+    finally:
+        db.close()
     import test_rankerpick as trp
     for t in (trp.test_save_indexes_squads, trp.test_backfill_resumes_and_skips_indexed, trp.test_owner_lookup_window_and_grade,
               trp.test_ranker_pick_collects_and_saves, trp.test_ranker_pick_second_429_stops_for_the_day,

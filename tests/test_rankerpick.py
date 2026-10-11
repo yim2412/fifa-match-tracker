@@ -503,19 +503,22 @@ def test_owner_finder_dup_name_label():
     import ranker
     with tempfile.TemporaryDirectory() as d:
         rc = rankcollect.open_rank_db(Path(d) / "rank.db")
-        rows = [ranker.RankRow(rank=i, profile_sn=900 + i, nickname=n, team_color=c, team_color_emblem=e, elo=3000.0 - i)
+        rows = [ranker.RankRow(rank=i, profile_sn=900 + i, nickname=n, team_color=c, team_color_emblem=e, elo=3000.0 - i,
+                            grade=5 if n == "리옹" else None)
                 for i, (n, c, e) in enumerate([("강화", "Spartan", "teamcolorboost/4_l999867.png"),
                                                ("클럽", "Spartan", "crests/l130634.png"),
                                                ("옛", "Spartan", ""), ("리옹", "리옹", "crests/l66.png")], start=1)]
         try:
             rankcollect.save_snapshot(rc, rows, NOW)
             idx = rp.snapshot_index(rc)
-            assert idx == {"강화": (1, "Spartan · 강화"), "클럽": (2, "Spartan · 클럽"), "옛": (3, "Spartan (구분 전)"),
-                           "리옹": (4, "리옹")}, idx
+            # 둘째 값 뒤 둘 = 등급 그림 번호(snapshot_rows.grade — 리옹만 5, 나머지는 None) · 엠블럼 키(40단계 구단주 표의 그림)
+            assert idx == {"강화": (1, "Spartan · 강화", None, "teamcolorboost/4_l999867.png"),
+                           "클럽": (2, "Spartan · 클럽", None, "crests/l130634.png"),
+                           "옛": (3, "Spartan (구분 전)", None, ""), "리옹": (4, "리옹", 5, "crests/l66.png")}, idx
             assert [r["team_color"] for r in rp.top_rankers(rc)[1]] == ["Spartan", "Spartan", "Spartan", "리옹"]
             # 옛 rank.db(표 없음)를 읽기 전용으로 열었어도 이름으로라도 돈다
             rc.execute("DROP TABLE snapshot_emblems")
-            assert rp.snapshot_index(rc)["강화"] == (1, "Spartan (구분 전)")
+            assert rp.snapshot_index(rc)["강화"] == (1, "Spartan (구분 전)", None, "")
         finally:
             rc.close()   # 단언이 실패해도 임시 폴더를 지울 수 있게(안 닫으면 실패가 PermissionError 로 가려진다)
 

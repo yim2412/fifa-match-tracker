@@ -40,7 +40,7 @@ PRIVACY_HTML = f"""
 이 PC 에서 나가는 연결은 아래뿐입니다.</p>
 <ul>
 <li>넥슨 오픈API (open.api.nexon.com) — 전적·거래 기록 조회. 거래 기록은 넥슨이 <b>API 키 주인 계정</b> 것만 줍니다</li>
-<li>넥슨 이미지 서버 (fco.dn.nexoncdn.co.kr · ssl.nexon.com) — 선수 얼굴·등급 배지</li>
+<li>넥슨 이미지 서버 (fco.dn.nexoncdn.co.kr · ssl.nexon.com) — 선수 얼굴·등급 배지·시즌 배지·구단과 팀컬러 엠블럼·국기·특성 아이콘</li>
 <li>넥슨 홈페이지 (fconline.nexon.com · m.fconline.nexon.com) — 아래 '넥슨 홈페이지 데이터'를 켰을 때만</li>
 <li>GitHub (api.github.com · github.com) — 새 버전 확인(켤 때, 트레이에 남아 있는 동안 6시간마다)·내려받기
 · 시즌 종료일 공지(같은 응답에 실려 온다)</li>
@@ -129,6 +129,11 @@ CHANGES = {
 {config.TRAIT_TOP}명이 카드에 넣은 포지션 특성·코치를 넥슨 홈페이지(스쿼드메이커)에서 하루 최대 {config.TRAIT_WEB_DAILY_REQ:,}번 읽고,
 그들의 최근 경기를 오픈API 로 받습니다(랭커 픽과 합쳐 하루 {config.RANKER_PICK_DAILY_REQ}번 그대로). 이 PC 에
 {config.RANK_RAW_KEEP_DAYS}일만 두고 화면에는 인원·비율만 보입니다. 동의하기 전에는 받지 않습니다(아래 '랭킹 수집').</p>
+""",
+    8: """
+<p><b>표 안의 그림</b> — 표에 구단·팀컬러 엠블럼, 국기, 포지션 특성 아이콘, 시즌·등급 배지가 붙습니다. 이 그림들을
+<b>넥슨 이미지 서버</b>(fco.dn.nexoncdn.co.kr · ssl.nexon.com)에서 처음 한 번 받아 이 PC 에 두고 다시 씁니다. 해당 화면을
+열 때만 받으며(처음에는 수십~수백 장, 합쳐 수 MB), 받지 못하면 글자만 보입니다. 수집 설정과 무관하게 모두에게 해당하고, 새로 보내는 정보는 없습니다.</p>
 """,
 }
 

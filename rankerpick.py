@@ -133,7 +133,7 @@ class _Session:
 
 
 def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP) -> tuple[str | None, list[dict]]:
-    """원본이 남은 마지막 스냅숏의 상위 limit 명 → (찍은 시각, [{rank, profile_sn, nickname, team_color, formation, team_value}]).
+    """원본이 남은 마지막 스냅숏의 상위 limit 명 → (찍은 시각, [{rank, profile_sn, nickname, team_color, formation, team_value, grade}]).
     스냅숏이 없으면 (None, [])."""
     if rank_conn is None:
         return None, []
@@ -144,14 +144,16 @@ def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP) -> tuple[str | N
         return None, []
     # 정렬은 여기서 — ORDER BY rank 는 PK(snapshot_id, profile_sn) 순이 아니라 1만 행을 임시 정렬한다(test_rules)
     rows = [dict(r) for r in rank_conn.execute(
-        "SELECT rank, profile_sn, nickname, team_color, formation, team_value FROM snapshot_rows"
+        "SELECT rank, profile_sn, nickname, team_color, formation, team_value, grade FROM snapshot_rows"
         " WHERE snapshot_id = ? AND rank <= ?", (snap[0], limit))]
     rows.sort(key=lambda r: r["rank"])
     return snap[1], rows
 
 
-def snapshot_index(rank_conn) -> dict[str, tuple[int, str]]:
-    """원본이 남은 마지막 스냅숏의 닉네임 → (순위, 팀컬러 글자 teamcolor.label) — 12 찾기 결과의 팀컬러·순위 칸(요청 0).
+def snapshot_index(rank_conn) -> dict[str, tuple[int, str, int | None, str]]:
+    """원본이 남은 마지막 스냅숏의 닉네임 → (순위, 팀컬러 글자 teamcolor.label, 등급 그림 번호, 엠블럼 키) — 12 찾기 결과의
+    팀컬러·순위 칸(요청 0). 등급은 snapshot_rows.grade 그대로(이미 CDN 번호라 models.division_icon_index 를 안 거친다 —
+    모르면 None), 엠블럼 키는 모르면 "" (40단계 — 구단주 표의 그림).
     글자는 화면 콤보(상대 팀컬러 글자)와 맞대려고 여기서만 붙인다 — top_rankers 는 랭커 픽 비율·추천도 쓰므로 이름 그대로."""
     _taken, rows = top_rankers(rank_conn, limit=config.RANK_TIERS[-1])
     if not rows:
@@ -163,7 +165,8 @@ def snapshot_index(rank_conn) -> dict[str, tuple[int, str]]:
         emblems = rankcollect.snapshot_emblem_map(rank_conn, sid[0]) if sid else {}
     except sqlite3.Error:   # 옛 rank.db 를 읽기 전용으로 열었으면 표가 아직 없다
         emblems = {}
-    return {r["nickname"]: (r["rank"], teamcolor.label(r.get("team_color") or "", emblems.get(r["profile_sn"], "")))
+    return {r["nickname"]: (r["rank"], teamcolor.label(r.get("team_color") or "", emblems.get(r["profile_sn"], "")),
+                            r.get("grade"), emblems.get(r["profile_sn"], ""))
             for r in rows}
 
 

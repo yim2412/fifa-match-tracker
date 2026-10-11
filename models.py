@@ -102,6 +102,7 @@ class MatchSummary:
     my_shootout: int = 0
     opp_shootout: int = 0
     draw_possible: bool | None = None   # 무승부가 날 수 있던 경기인가(양쪽 division) — 저장 형식 아님
+    opp_division: int | None = None     # 그 경기 때 상대 등급(matchInfo 의 division — 화면 그림용) · 저장 형식 아님
 
     @property
     def is_shootout(self) -> bool:
@@ -182,6 +183,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         my_shootout=_i(shoot, "shootOutScore"),
         opp_shootout=_i(opp_shoot, "shootOutScore"),
         draw_possible=draw_possible(me.get("division"), opp.get("division")) if opp else None,
+        opp_division=opp.get("division") if opp and isinstance(opp.get("division"), int) else None,
     )
 
 
@@ -250,6 +252,7 @@ class OpponentStat(RateMixin):
     goals_against: int = 0
     last_date: str = "-"
     mixed: bool | None = None
+    opp_division: int | None = None   # 그 상대와의 가장 최근 경기 때 등급(화면 그림용 — 매번 바뀌는 값이라 최근 것)
 
     @property
     def avg_goals_for(self) -> float:
@@ -272,7 +275,8 @@ def opponent_stats(matches: list[MatchSummary], mixed: bool | None = None) -> li
     for m in matches:
         s = acc.get(m.opponent)
         if s is None:
-            s = acc[m.opponent] = OpponentStat(nickname=m.opponent, last_date=m.date_text, mixed=mixed)
+            s = acc[m.opponent] = OpponentStat(nickname=m.opponent, last_date=m.date_text, mixed=mixed,
+                                               opp_division=m.opp_division)
         s.games += 1
         if "승" in m.result:
             s.win += 1
@@ -484,3 +488,14 @@ def moving_win_rate(matches: list[MatchSummary], days: list[date], *, min_n: int
 RATE_CLASSES = ("Stats", "OpponentStat", "PeriodRate", "PeriodStat", "PlayerStat", "FormationStat",
                 "TimeBandRate", "StreakAfter", "DivisionStat", "PossessionBand", "TeamColorStat", "OppCard",
                 "ResultBreakdown", "ClutchSummary", "Discipline", "Window")
+
+
+def division_icon_index(div_id, division_meta: list[dict] | None) -> int | None:
+    """등급 id → 등급 배지 CDN 번호. 번호 = get_meta("division") 원본 목록의 순서(0 = 슈퍼챔피언스 … 17 = 프로3)라
+    이름 dict 로는 못 낸다 — 원본 목록이 필요하다. 모르면 None(그림 없이 글자만)."""
+    if div_id is None:
+        return None
+    for i, d in enumerate(division_meta or []):
+        if d.get("divisionId") == div_id:
+            return i
+    return None

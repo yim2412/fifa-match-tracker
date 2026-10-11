@@ -1,4 +1,4 @@
-# 푸시할 때마다 테스트 9종. 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
+# 푸시할 때마다 테스트 18종(tests/test_*.py 전부). 네트워크·API 키 없이 돈다(테스트가 원래 그렇다).
 # 화면 스모크는 offscreen — 글꼴은 러너의 C:/Windows/Fonts(테스트 머리에서 기본으로 준다).
 name: test
 
@@ -35,6 +35,16 @@ jobs:
         run: python tests/test_habits.py
       - name: 선수 색인 · 랭커 픽
         run: python tests/test_rankerpick.py
+      - name: 포지션 특성
+        run: python tests/test_traits.py
+      - name: 시즌 말 예측
+        run: python tests/test_predict.py
+      - name: 랭커 메타 스냅숏 읽기
+        run: python tests/test_rankmeta.py
+      - name: 개발용 상시 수집(가짜 DB — 이 PC 전용 아님)
+        run: python tests/test_dev_archive.py
+      - name: 표 칸 그림
+        run: python tests/test_icons.py
       - name: 트레이 상주
         run: python tests/test_tray.py
       - name: 배포 검사

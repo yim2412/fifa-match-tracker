@@ -13,9 +13,10 @@ OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
@@ -27,6 +28,17 @@ import core_api as core
 import theme as T
 
 NA = "—"  # API 가 안 주는 값. 그럴싸한 숫자를 지어 넣지 않는다.
+
+# 표 칸 그림 키가 사는 자리 — UserRole(선수 칸의 spId, 더블클릭이 읽는다)·UserRole+1(흐림 표시)을 건드리지 않는다
+ICON_KEY_ROLE = Qt.ItemDataRole.UserRole + 2
+
+
+class IconCell(NamedTuple):
+    """_fill 의 행 데이터에 쓰는 "그림이 붙을 칸" — 글자·정렬 값은 그대로, icon_key 는 그림 종류별 키(set_icon_columns 로
+    등록된 열의 종류 기준). 2-튜플 (글자, 정렬값) 은 그대로 쓴다 — 이 형만 분기 하나."""
+    text: str
+    sort_key: object
+    icon_key: object
 
 
 def add_shadow(w: QWidget) -> None:
@@ -534,6 +546,26 @@ class Collapsible(QWidget):
 _WIDE_SAMPLES = ("가", "뷁", "漢", "W", "M", "@", "%", "Ⅲ", "😀", "★", "■")
 
 
+_GAP_CACHE: dict[tuple, int] = {}
+
+
+def measure_icon_gap(owner: QWidget, w: int, h: int) -> int:
+    """그림이 든 칸이 글자만 든 칸보다 몇 px 더 넓어야 하나 — 그림 폭 + Qt 가 아는 간격(실측 6).
+    상수 대신 1행 표에 가짜 그림을 넣어 sizeHintForColumn 차이를 묻는다(스타일·글꼴이 바뀌어도 맞게)."""
+    key = (w, h, owner.font().pixelSize(), owner.font().pointSizeF(), owner.style().objectName())
+    if key not in _GAP_CACHE:
+        probe = QTableWidget(1, 1)
+        probe.setIconSize(QSize(w, h))
+        probe.setItem(0, 0, QTableWidgetItem("가"))
+        bare = probe.sizeHintForColumn(0)
+        pm = QPixmap(w, h)
+        pm.fill(Qt.GlobalColor.transparent)
+        probe.item(0, 0).setIcon(QIcon(pm))
+        _GAP_CACHE[key] = probe.sizeHintForColumn(0) - bare
+        probe.deleteLater()
+    return _GAP_CACHE[key]
+
+
 class FitTableWidget(QTableWidget):
     """열 너비는 값 텍스트 기준으로 잡되, 위젯이 그보다 넓으면 남는 폭을
     각 열의 원래 너비 비율대로 나눠 채운다 — 창을 넓혀도 오른쪽에 빈 칸이
@@ -555,7 +587,10 @@ class FitTableWidget(QTableWidget):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._extra: dict[int, int] = {}
+        self._user_extra: dict[int, int] = {}   # set_content_widths 로 준 열별 여백(범위 막대·배지 등)
+        self._icon_cols: dict[int, str] = {}    # set_icon_columns — 열 → 그림 종류
+        self._icon_extra: dict[int, int] = {}   # 등록 열의 그림 폭 + Qt 가 아는 간격
+        self._extra: dict[int, int] = {}        # 둘을 합친 값 — 폭 계산은 이것만 읽는다
         self._base_cell_px = 14
         self._base_header_px = 13
         self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
@@ -575,7 +610,8 @@ class FitTableWidget(QTableWidget):
         폰트 크기의 텍스트 폭을 한 번 재서 캐시해 둔다. resizeEvent 는 이
         캐시로 후보 폰트 크기를 추정만 하므로, 창을 드래그하는 동안 표
         전체를 폰트 크기 수만큼 반복 측정하지 않는다."""
-        self._extra = extra or {}
+        self._user_extra = dict(extra or {})
+        self._merge_extra()
         self._pad = self._measure_pad()
         cell_font = QFont(self.font())
         cell_font.setPixelSize(self._base_cell_px)
@@ -591,8 +627,40 @@ class FitTableWidget(QTableWidget):
         self._fit()
 
     def refit(self) -> None:
-        """내용이 바뀐 뒤 — 지난번 열별 추가 여백을 그대로 두고 다시 잰다."""
-        self.set_content_widths(self._extra)
+        """내용이 바뀐 뒤 — 지난번 열별 추가 여백을 그대로 두고 다시 잰다. 그림 열 여백은 등록이 따로 갖고 있다."""
+        self.set_content_widths(self._user_extra)
+
+    # ── 표 칸 그림(40단계) ──────────────────────────────────────────────
+    def _merge_extra(self) -> None:
+        merged = dict(self._user_extra)
+        for c, w in self._icon_extra.items():
+            merged[c] = merged.get(c, 0) + w
+        self._extra = merged
+
+    def set_icon_columns(self, cols: dict[int, str]) -> None:
+        """그림이 들어갈 열을 표를 만들 때 한 번 등록한다({열: 그림 종류}).
+
+        그림이 받아지기 **전부터** 그 열 폭을 잡아 둔다(받은 뒤 열이 넓어지며 흔들리지 않게). 간격은 상수가 아니라
+        Qt 에 물은 값(PyQt 4)이라, 등록 때 표가 비어 있어도 따로 만든 1행 표로 잰다. 열 여백은 set_content_widths 가 준 값과
+        **합쳐서** 쓴다 — 갈아 끼우지 않는다(범위 막대·강화 배지 여백이 사라지지 않게)."""
+        self._icon_cols = dict(cols)
+        widths = {c: self.icon_px_for(k)[0] for c, k in cols.items()}
+        self._icon_w = max(widths.values(), default=0)
+        self.setIconSize(QSize(self._icon_w, config.ICON_PX))
+        # 아이콘 사각형(setIconSize)은 표 하나라 가장 넓은 종류에 맞추지만, 열 여백은 그 열 그림 폭 + 간격만 — 정사각 배지 열이
+        # 국기 폭(33)만큼 넓어지지 않게(구단주 표의 등급 열)
+        gap = measure_icon_gap(self, self._icon_w, config.ICON_PX) - self._icon_w if cols else 0
+        self._icon_extra = {c: widths[c] + gap for c in cols}
+        self._merge_extra()
+
+    @staticmethod
+    def icon_px_for(kind: str) -> tuple[int, int]:
+        """그 종류 그림의 (폭, 높이) — 높이는 한 상수, 폭은 가로세로 비율."""
+        return round(config.ICON_PX * config.ICON_ASPECT.get(kind, 1.0)), config.ICON_PX
+
+    @property
+    def icon_columns(self) -> dict[int, str]:
+        return self._icon_cols
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -639,6 +707,8 @@ class FitTableWidget(QTableWidget):
         header.setSortIndicatorShown(False)
         pad = 0
         for c in range(self.columnCount()):
+            if c in self._extra:
+                continue   # 그림 때문에 sizeHint 가 커진 열을 재면 그 여백이 모든 열에 얹힌다
             if self.rowCount():
                 tw = max((cell_fm.horizontalAdvance(self.item(r, c).text())
                           for r in range(self.rowCount()) if self.item(r, c)),

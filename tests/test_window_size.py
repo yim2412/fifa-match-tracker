@@ -94,7 +94,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
 
         QDialog.exec = fake_exec
         app_main.ImageLoader.start = lambda self: None
-        app_main.SeasonIconLoader.start = lambda self: None
+        app_main.IconLoader.start = lambda self: None
         players = [{"spId": 100000001 + i, "spPosition": p, "spGrade": 5}
                    for i, p in enumerate((0, 3, 5, 6, 7, 10, 14, 16, 18, 23, 25))]
         win._show_opponent_squad("상대", players, "2026-10-04", "승")
@@ -141,7 +141,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
 
         QDialog.exec = fake_exec
         app_main.ImageLoader.start = lambda self: None
-        app_main.SeasonIconLoader.start = lambda self: None
+        app_main.IconLoader.start = lambda self: None
         app_main.PlayerInfoLoader.start = lambda self: None
         app_main.AboutDialog(win).exec()
         app_main.ApiKeyDialog(win, reason="만료").exec()
