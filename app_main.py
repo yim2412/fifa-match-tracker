@@ -6417,8 +6417,9 @@ class MainWindow(QMainWindow):
         """알려진 팀컬러 목록(self._team_colors 값)으로 필터 콤보를 다시 채운다.
 
         팀컬러가 새로 조회될 때마다(_render_teamcolor_tabs)와 찾기 칸을 고칠 때 불린다. 사용자가
-        고른 색이 새 목록에도 있으면 선택을 유지하고(찾기 칸에 안 맞아도 남긴다), 없어졌으면 '전체'로
-        되돌린다 — 표를 다시 그릴 때마다 필터가 조용히 풀리면 안 되니까.
+        고른 색이 새 목록에도 있으면 선택을 유지하고(찾기 칸에 안 맞아도 남긴다), 없어졌으면 [축구장]은
+        "— 팀컬러를 고르세요 —"(빈 화면)로, [카드별]은 '전체'로 되돌린다 — 표를 다시 그릴 때마다 필터가
+        조용히 풀리면 안 되니까.
         [카드별](2.4.1 N7)의 콤보도 같이 — 고른 값은 탭마다 따로.
         """
         self._refresh_color_combo(self.cb_position_color, self.ed_position_color, self.POSITION_COLOR_NONE)
@@ -7694,13 +7695,19 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_position_opp, [], enable_sort=False)
         self.lb_position_hint.setText(text)
 
-    def _fill_position_chips(self, forms: list[core.FormationUsage]) -> None:
-        """사용 많은 순 칩 — 고른 것이 눌린 모양. 같은 글자(줄 구성만 다른 두 포메이션)는 줄 키를 그대로 써서 가른다."""
-        self._clear(self.row_position_forms)
+    @staticmethod
+    def _formation_names(forms: list[core.FormationUsage]) -> dict[str, str]:
+        """{줄 키: 화면 글자} — 빈 줄을 뺀 글자가 같은(줄 구성만 다른: 4-1-4-1-0 · 4-1-4-0-1) 포메이션은 줄 키를 그대로 써서 가른다.
+        실데이터 6천 경기에서 같은 글자 묶음이 12개 나왔다(4-1-2-3 은 키 4개)."""
         labels = [f.label for f in forms]
+        return {f.formation: (f.label if labels.count(f.label) == 1 else f.formation) for f in forms}
+
+    def _fill_position_chips(self, forms: list[core.FormationUsage]) -> None:
+        """사용 많은 순 칩 — 고른 것이 눌린 모양."""
+        self._clear(self.row_position_forms)
+        names = self._formation_names(forms)
         for f in forms:
-            text = f.label if labels.count(f.label) == 1 else f.formation
-            btn = QPushButton(f"{text}  {f.rate:.0f}% · {f.games}경기")
+            btn = QPushButton(f"{names[f.formation]}  {f.rate:.0f}% · {f.games}경기")
             btn.setObjectName("pageTab")
             btn.setCheckable(True)
             btn.setChecked(f.formation == self._posopp_formation)
@@ -7717,7 +7724,7 @@ class MainWindow(QMainWindow):
         nicknames = None
         if color != self.POSITION_COLOR_ALL:
             nicknames = {nick for nick, c in self._team_colors.items() if c == color}
-        forms = core.opponent_formations(details, self._ouid, nicknames)[:config.POSITION_OPP_FORMATIONS]
+        forms = core.opponent_formations(details, self._ouid, nicknames)[:max(1, config.POSITION_OPP_FORMATIONS)]
         if not forms:
             self._position_pick_empty("표시할 상대 기록이 없습니다.")
             return
@@ -7731,8 +7738,10 @@ class MainWindow(QMainWindow):
             nicknames=nicknames, formation=self._posopp_formation)
         chosen = next(f for f in forms if f.formation == self._posopp_formation)
         lineup_games = max((p.total for p in players), default=0)
+        who = "모든 상대" if color == self.POSITION_COLOR_ALL else "이 팀컬러 상대"
         self.lb_position_hint.setText(
-            f"{chosen.label} — 이 팀컬러 상대 {chosen.total}경기 중 {chosen.games}경기 · 그중 가장 흔한 자리 구성 {lineup_games}경기 기준")
+            f"{self._formation_names(forms)[chosen.formation]} — {who} {chosen.total}경기 중 {chosen.games}경기 · "
+            f"그중 가장 흔한 자리 구성 {lineup_games}경기 기준")
         # enable_sort=False 로 채우고 이 표는 정렬 자체를 계속 꺼 둔다(위
         # setSortingEnabled(False) 참고) — 공격→미들→수비→GK 순서·줄별 색이
         # 이 표의 핵심이라 헤더 클릭 정렬이 그 순서를 흐트러뜨리면 안 된다.

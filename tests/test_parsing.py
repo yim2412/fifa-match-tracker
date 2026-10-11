@@ -1043,6 +1043,13 @@ def test_mirror_pairs_are_mutual_and_same_line():
     for a, b in st._MIRROR.items():
         assert st._MIRROR[b] == a, (a, b)
         assert st._POS_LINE[a] == st._POS_LINE[b], (a, b)
+    # 짝이 빠지면 그 자리만 있는 구성이 "좌우 맞음"으로 뽑히는데, 위 두 검사는 짝이 모자란 것을 못 본다(Opus 리뷰 · 변이 7건 통과) —
+    # 오른쪽 R·왼쪽 L 짝 10쌍을 손으로 적은 표와 통째로 맞댄다(자리 코드: 2 RWB 3 RB 4 RCB 9 RDM 12 RM 13 RCM 17 RAM 20 RF 23 RW 24 RS)
+    right_left = {2: 8, 3: 7, 4: 6, 9: 11, 12: 16, 13: 15, 17: 19, 20: 22, 23: 27, 24: 26}
+    assert st._MIRROR == {**right_left, **{v: k for k, v in right_left.items()}}, sorted(st._MIRROR.items())
+    # 짝이 없는 자리(SW 1 · CB 5 · CDM 10 · CM 14 · CAM 18 · CF 21 · ST 25 · GK 0)는 홀로 있어도 좌우 맞음
+    assert st._symmetric((0, 1, 5, 10, 14, 18, 21, 25))
+    assert not st._symmetric((23,)) and not st._symmetric((27,)) and not st._symmetric((12, 19))   # RW 만 · LW 만 · RM+LAM
 
 
 def test_opponent_cards_usage_and_my_results():

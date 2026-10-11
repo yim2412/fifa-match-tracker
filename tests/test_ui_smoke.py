@@ -4531,6 +4531,37 @@ def test_position_opponents_formation_chips_and_eleven_slots():
         assert [t.text().split()[0] for t in _pos_chips()] == ["4-1-2-1-2", "4-1-3-2", "4-2-4"]
 
 
+def test_position_opponent_same_label_formations_use_keys_and_hint_says_who():
+    """빈 줄을 뺀 글자가 같은 포메이션(4-1-4-1-0 · 4-1-4-0-1)은 줄 키로 가른다 — 칩도 안내 문구도(Opus 리뷰: 실데이터 6천 경기에서
+    같은 글자 묶음이 12개). "전체"를 고르면 안내는 "모든 상대"라고 말한다."""
+    a = [0, 3, 4, 6, 7, 10, 12, 13, 15, 16, 18]   # 4-1-4-1-0 (공미 CAM)
+    b = [0, 3, 4, 6, 7, 10, 12, 13, 15, 16, 25]   # 4-1-4-0-1 (공격 ST)
+    assert core.formation_label("4-1-4-1-0") == core.formation_label("4-1-4-0-1") == "4-1-4-1"
+    with _PosOppEnv() as env:
+        def det(nick, positions, base):
+            return {"matchId": f"dup-{nick}", "matchDate": "2026-10-01T12:00:00",
+                    "matchInfo": [{"ouid": _OUID, "nickname": "나", "matchDetail": {"matchResult": "승"}, "player": []},
+                                  {"ouid": "x-" + nick, "nickname": nick, "matchDetail": {"matchResult": "패"},
+                                   "player": [{"spId": base + p, "spPosition": p, "spGrade": 1} for p in positions]}]}
+        rows = [(f"쌍{i}", a, 7000) for i in (1, 2, 3)] + [(f"쌍{i}", b, 8000) for i in (4, 5)]
+        env.details = [det(*r) for r in rows]
+        for nick, _p, _b in rows:
+            _win._team_colors[nick] = "컬러D"
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentText("컬러D")
+        texts = [c.text() for c in _pos_chips()]
+        assert [t.split()[0] for t in texts] == ["4-1-4-1-0", "4-1-4-0-1"], texts          # 둘 다 키 — "4-1-4-1" 두 개가 아니다
+        assert _win.lb_position_hint.text().startswith("4-1-4-1-0 — 이 팀컬러 상대 5경기 중 3경기"), _win.lb_position_hint.text()
+        _pos_chips()[1].click()
+        assert _win.lb_position_hint.text().startswith("4-1-4-0-1 — "), _win.lb_position_hint.text()
+    with _PosOppEnv():
+        # 글자가 하나뿐이면 줄여 쓴다 · "전체" 와 팀컬러의 안내가 다르다
+        _win.cb_position_color.setCurrentText(_win.POSITION_COLOR_ALL)
+        assert _win.lb_position_hint.text().startswith("4-1-2-1-2 — 모든 상대 "), _win.lb_position_hint.text()
+        _win.cb_position_color.setCurrentText("컬러X")
+        assert _win.lb_position_hint.text().startswith("4-1-2-1-2 — 이 팀컬러 상대 "), _win.lb_position_hint.text()
+
+
 def test_position_opponent_chip_count_follows_config():
     """칩 수 상수가 화면까지 이어진다 — 기본(3)이 아닌 2 로 바꿔서 잰다."""
     with _PosOppEnv():
