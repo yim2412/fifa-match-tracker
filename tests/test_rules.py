@@ -498,7 +498,7 @@ def test_colors_only_in_theme():
 
 
 def test_weak_samples_go_through_is_weak():
-    # 심은 위반 다섯(ROADMAP 2.6.1 A6) — 직접 비교 · 별칭 · 경기 수 · 지역 문턱 · config 문턱
+    # 심은 위반 다섯(DONE.md 2.6.1 A6) — 직접 비교 · 별칭 · 경기 수 · 지역 문턱 · config 문턱
     bad = ("def a(b):\n    if b.games < MIN_COND: pass\n"
            "def c(p):\n    few = core.MIN_COND\n    if p.games < few: pass\n"
            "def d(s):\n    if s.total < MIN_BASE: pass\n"
