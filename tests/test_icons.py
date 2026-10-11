@@ -258,18 +258,19 @@ def _rows(keys, texts=None):
 
 
 def test_pad_ignores_icon_columns():
-    """그림이 sizeHintForColumn 을 키워도 그 여백이 모든 열에 얹히지 않는다 — 그림 없는 표와 _pad 가 같다."""
+    """그림이 sizeHintForColumn 을 키워도 그 여백이 모든 열에 얹히지 않는다 — **같은 표**의 그림 붙기 전·후 _pad 가 같다.
+    (다른 표와 비교하면 재는 열 집합이 달라 글꼴에 따라 1px 갈린다 — 첫 판이 그렇게 비교했다가 CI 글꼴에서 (12, 11) 로 FAIL 했다)"""
+    from PyQt6.QtGui import QIcon
     st = _Stub()
-    plain = _table()
-    st.fill(plain, [[f"선수{i}", (str(i), i), "-"] for i in range(3)], False)
     with_icon = _table({0: "season"})
     st.fill(with_icon, _rows([1, 2, 1]), False)
+    before = with_icon._pad                 # 그림이 아직 없을 때 — 같은 열 집합
     pm = QPixmap(30, 20)
     pm.fill(QColor("red"))
     for r in range(3):                      # 그림이 먼저 붙은 뒤 refit — 받은 뒤에 다시 재는 길
-        with_icon.item(r, 0).setIcon(__import__("PyQt6.QtGui", fromlist=["QIcon"]).QIcon(pm))
+        with_icon.item(r, 0).setIcon(QIcon(pm))
     with_icon.refit()
-    assert with_icon._pad == plain._pad, (with_icon._pad, plain._pad)
+    assert with_icon._pad == before, (with_icon._pad, before)
     assert with_icon._extra[0] >= with_icon.icon_px_for("season")[0], "등록 열은 그림 폭 이상의 여백을 따로 갖는다"
 
 
