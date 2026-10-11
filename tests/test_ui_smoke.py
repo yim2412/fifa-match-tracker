@@ -209,8 +209,11 @@ def test_modal_calls_fail_fast():
 
 def test_loaded_opens_dashboard():
     assert _AFTER_LOAD == (_win.PAGE_MAIN, _win._page_index["대시보드"]), _AFTER_LOAD
-    # 픽스처: 승1 무1 패1 + 오류1 — 대시보드 지표가 실제로 채워졌는지
-    assert _win.dashboard.lb_rate.text() == "33.3%", _win.dashboard.lb_rate.text()
+    # 픽스처: 승1 무1 패1 + 오류1 — 대시보드 지표가 실제로 채워졌는지.
+    # 0003 만 상대가 챔스 아래(무승부가 나는 경기) — 섞인 묶음이라 승÷(승+패) = 1/2(A6). 한 집단 식이면 33.3%
+    assert _win.dashboard.lb_rate.text() == "50.0%", _win.dashboard.lb_rate.text()
+    assert "승÷(승+패) · 무 1" in _win.dashboard.lb_rate.toolTip(), _win.dashboard.lb_rate.toolTip()
+    assert "승÷(승+패) · 무 1" in _win.dashboard.lb_rate_delta.text(), _win.dashboard.lb_rate_delta.text()
     assert _win.lb_profile.text() == "테스트구단주", _win.lb_profile.text()
 
 
@@ -661,7 +664,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 38, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1)
+    assert len(tables) == 39, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -929,8 +932,8 @@ def test_dashboard_gauge_shows_value_once_sample_is_enough():
     try:
         dashboard.MIN_GAUGE_GAMES = 1
         _win._render_dashboard()
-        # 픽스처 선제골 3경기 중 1승 → 33%
-        assert d.gauges[0]._value is not None and round(d.gauges[0]._value) == 33, \
+        # 픽스처 선제골 3경기 1승 1무 1패 — 섞인 묶음이라 승÷(승+패) = 50%(A6 · 한 집단 식이면 33%)
+        assert d.gauges[0]._value is not None and round(d.gauges[0]._value) == 50, \
             d.gauges[0]._value
     finally:
         dashboard.MIN_GAUGE_GAMES = old
@@ -1002,17 +1005,17 @@ def test_charts_draw_empty_and_single():
 
 
 def test_trend_marks_max_min_and_average():
-    # 픽스처 일별: 01/01 패(1경기 0%) · 01/02 승+무(2경기 50%) · 01/03 오류뿐(0경기).
-    # 평균은 승 합 ÷ 경기 합 = 1/3 — 날짜별 승률의 단순 평균(25%)이 아니다.
+    # 픽스처 일별: 01/01 패(1경기 0%) · 01/02 승+무(2경기 — 섞인 묶음이라 무승부를 빼 100%) · 01/03 오류뿐(0경기).
+    # 평균은 승 합 ÷ 승률 분모(rated) 합 = 1/2 — 날짜별 승률의 단순 평균(50%)과 같아 보이니 아래 경기 수 가중(66.7)도 아니어야.
     # 최저는 01/01 — 경기 없는 01/03 을 0% 로 세면 "다 졌다"로 읽힌다.
     c = _win.dashboard.trend_chart
     c.resize(600, 220)
     c.grab()
-    assert round(c.marks["avg"], 1) == 33.3, c.marks["avg"]
-    assert c.marks["max"] == (1, "50.0%"), c.marks["max"]
+    assert round(c.marks["avg"], 1) == 50.0, c.marks["avg"]   # 경기 수로 가중하면 66.7(A6 평균선 무게)
+    assert c.marks["max"] == (1, "100.0%"), c.marks["max"]
     assert c.marks["min"] == (0, "0.0%"), c.marks["min"]
-    # 승률 그래프 페이지 '평균 승률' 카드와 같은 숫자
-    assert f"{c.marks['avg']:.1f}%" == _win.card_trend_avg.value.text(), \
+    # 승률 그래프 페이지 '평균 승률' 카드와 같은 숫자(섞인 식이라 끝에 *)
+    assert f"{c.marks['avg']:.1f}%*" == _win.card_trend_avg.value.text(), \
         (c.marks["avg"], _win.card_trend_avg.value.text())
     rects = c.marks["label_rects"] + [c.marks["avg_rect"]]
     assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
@@ -1159,8 +1162,9 @@ def test_trend_page_uses_area_chart_with_counts_and_ma():
         c.grab()
     finally:
         app_main.core.moving_win_rate = real
+    # mixed 는 그래프 점과 같은 값 — 픽스처는 섞인 묶음이라 True(기본 False 와 다른 값으로 배선을 잰다)
     assert seen == [(len(_win._matches), [_date(2026, 1, 1), _date(2026, 1, 2), _date(2026, 1, 3)],
-                     {"min_n": app_main.core.MIN_COND})], seen
+                     {"min_n": app_main.core.MIN_COND, "mixed": True})], seen
     assert c.marks["ma_points"] == 3, c.marks
     # 등급 — 하루 한 점(4경기 → 3일) · 툴팁에 그날 처음·마지막·최고
     dc = _win.division_chart
@@ -1199,6 +1203,19 @@ def _sc_details(div_by_id: dict):
                 if p["ouid"] == _OUID:
                     p["division"] = div
     return out
+
+
+def test_divstay_tab_counts_and_note():
+    # 2.6.1 N2 — 0001·0002 900 → 0003 800(승격) → 0004 900(강등). 01-02 는 800 으로 끝난 날
+    _win._go_page("성적 진단", "등급 체류")
+    _win._render_divstay(_sc_details({"0003": 800}))
+    t = _win.tbl_divstay
+    rows = {t.item(r, 0).text(): [t.item(r, c).text() for c in range(1, 4)] for r in range(t.rowCount())}
+    name = lambda i: _win._division_names.get(i, str(i))  # noqa: E731
+    assert rows == {name(800): ["1", "1", "1"], name(900): ["3", "2", "1"]}, rows
+    assert "승격 1번 · 강등 1번" in _win.lb_divstay_note.text(), _win.lb_divstay_note.text()
+    assert "빈 구간" not in _win.lb_divstay_note.text()
+    _win._render_divstay(_win._details)   # 원래 데이터로 되돌린다
 
 
 def test_sc_records_list_and_nexon_line():
@@ -1335,8 +1352,9 @@ def test_season_table_compares_with_previous_season():
         rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
         assert set(rows) == {"2025 시즌 9", "2025 시즌 8"}, rows
         vs = cols.index("지난 시즌 대비")
-        # 새 시즌 33.3%(승1 무1 패1) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
-        assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 3 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
+        # 새 시즌 50%(승1 무1 패1 — 누적 전체가 섞인 묶음이라 승÷(승+패)) − 지난 시즌 100%(2승) → 음수
+        # · 가장 오래된 시즌은 비교 대상이 없다
+        assert t.item(rows["2025 시즌 9"], vs).text() == f"{50 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
         assert t.item(rows["2025 시즌 8"], vs).text() == "—"
         grade = cols.index("등급")
         assert t.item(rows["2025 시즌 9"], grade).text() == _win._division_names.get(900, "900")
@@ -1344,7 +1362,9 @@ def test_season_table_compares_with_previous_season():
         assert t.item(rows["2025 시즌 8"], grade).text() == "—"  # 상세가 없는 경기 — 등급 모름
         bars = _win.season_bars._rows
         assert [r[0] for r in bars] == ["2025 시즌 9", "2025 시즌 8"], bars
-        assert bars[0][2] == "33.3% · 3경기" and bars[0][4] is True, bars[0]  # 3경기 < MIN_COND → 흐림
+        # 섞인 식 → 숫자 뒤 * · 흐림 판정과 툴팁은 승패 판(rated = 2) 기준
+        assert bars[0][2] == "50.0%* · 3경기" and bars[0][4] is True, bars[0]  # 승패 2판 < MIN_COND → 흐림
+        assert "승패 2판이라" in bars[0][3], bars[0][3]
     finally:
         _win._rank_seasons, _win._matches_all = keep
         _win._render_seasons()
@@ -2481,6 +2501,10 @@ class _TeamColorEnv:
         _win._team_colors.clear()
         _win._teamcolor_loader = None
         self._min = _tc_min(1)   # 픽스처는 4경기라 기본 필터(최소 core.MIN_COND 경기)면 줄이 다 숨는다
+        # 픽스처는 무승부가 나는 경기·안 나는 경기가 섞여(A6) 무승부뿐인 상대는 승패 0판이라 최소 1 에도 숨는다 —
+        # 여기 테스트는 가르기·축·필터를 재므로 한 집단(승÷전체)으로 둔다. 섞인 식은 test_teamcolor_mixed_formula
+        import dataclasses
+        _win._matches = [dataclasses.replace(m, draw_possible=None) for m in _win._matches]
         return self
 
     def __exit__(self, *exc):
@@ -2738,6 +2762,21 @@ def test_teamcolor_range_axis_ignores_filter():
             assert (_win._tc_range_delegate.lo, _win._tc_range_delegate.hi) == axis, "필터가 축을 바꿨다"
         else:
             raise AssertionError(f"픽스처로 B 만 숨길 수 없다(A {games_a} · B {games_b}) — 상대 배정을 바꿀 것")
+
+
+def test_teamcolor_mixed_formula():
+    # 픽스처 그대로(섞인 묶음): 무승부뿐인 상대(0003)의 팀컬러는 승패 0판이라 최소 1 에도 숨고, 단위 글자가 "승패 판"
+    opps = sorted({m.opponent for m in _MATCHES if m.opponent})
+    draw_opp = next(m.opponent for m in _MATCHES if m.result == "무")
+    with _TeamColorEnv():
+        _win._matches = list(_MATCHES)   # 환경이 한 집단으로 바꾼 것을 되돌린다
+        _win._on_teamcolor_loaded({n: ("무색" if n == draw_opp else "유색", 1, "") for n in opps})
+        _win._render_teamcolor_tabs(*_win._teamcolor_scope())
+        names = {_win.tbl_teamcolor_rate.item(r, 0).text() for r in range(_win.tbl_teamcolor_rate.rowCount())}
+        assert names == {"유색"}, names   # games 로 거르면 "무색" 이 0.0% 로 남는다
+        assert _win._teamcolor_min_units[0].text() == "승패 판 이상만", _win._teamcolor_min_units[0].text()
+        rate = _win.tbl_teamcolor_rate.item(0, app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS.index("승률")).text()
+        assert rate.endswith("*"), rate
 
 
 def test_teamcolor_double_click_on_dup_name():
@@ -5027,8 +5066,9 @@ def _weak_sites():
     def hbar(chart, games_of):
         return [(games_of(r), bool(r[4]) if len(r) > 4 else False) for r in chart._rows if r[1] is not None]
 
-    tod = {b.label: b.games for b in app_main.core.time_of_day_rates(_win._matches)}
-    opp = {o.nickname: o.games for o in app_main.core.opponent_stats(_win._matches)}
+    # 판정 분모는 rated(A6) — 섞인 픽스처라 무승부는 표본이 아니다
+    tod = {b.label: b.rated for b in app_main.core.time_of_day_rates(_win._matches)}
+    opp = {o.nickname: o.rated for o in app_main.core.opponent_stats(_win._matches)}
     diag = lambda: _win._render_diagnosis(_win._details)  # noqa: E731
     clutch = lambda: _win._render_clutch(_win._details, _win._matches)  # noqa: E731
     # 픽스처엔 골대·퇴장 경기가 없어 막대가 안 생긴다 — 표본이 3·1·2 로 갈리게 만든 경기로 그린다
@@ -5079,6 +5119,20 @@ def test_winrate_bars_dim_small_samples():
         for n, v in saved.items():
             setattr(core_api, n, v)
         _win._render_all()
+
+
+def test_winrate_bar_sample_text_uses_rated():
+    import widgets
+    bar = widgets.win_rate_bar(3, 10, 2, "x", 8, True)
+    assert bar.property("weak") and bar.property("games") == 5, bar.property("games")
+    assert bar.format().endswith("승패 5판"), bar.format()
+    assert round(bar.value()) == 600, bar.value()   # 3/5 — 한 집단 식이면 3/15 = 20%
+    single = widgets.win_rate_bar(3, 10, 2, "x", 8, False)
+    assert not single.property("weak") and single.property("games") == 15 and round(single.value()) == 200
+    assert widgets.win_rate_text(3, 10, 2, True) == "60.0% · 승÷(승+패) · 무 10"
+    assert widgets.win_rate_text(3, 10, 2, False) == "20.0% · 승÷전체 · 무 10"
+    assert widgets.win_rate_text(3, 10, 2, True, digits=0, short=True) == "60%*"
+    assert widgets.win_rate_text(3, 10, 2, False, short=True) == "20.0%"
 
 
 def test_winrate_bars_use_shared_helper():
@@ -5234,6 +5288,16 @@ def _wait(cond, timeout=5.0):
     return cond()
 
 
+def test_basis_bar_mixed_text():
+    # 섞인 Basis — 표본 글자는 "승패 N판", 숫자 뒤 *(식은 툴팁). 흐림 판정은 n(=rated)
+    from analysis import Basis, Insight
+    rows = [Insight(app_main.core.SEC_WIN, "x", "", 1.0, Basis("선제골 넣은 경기", 80.0, 5, 50.0, 8, mixed=True))]
+    bars = app_main.MainWindow._basis_bars(rows)
+    name, v, right, tip, weak = bars._rows[0]
+    assert "승패 5판" in right and "80.0%*" in right and weak, right
+    assert "무승부를 빼고" in tip, tip
+
+
 def test_analysis_result_dots_and_basis_bars():
     from analysis import Basis, Insight
     keep = app_main.core.narrate
@@ -5258,6 +5322,7 @@ def test_analysis_result_dots_and_basis_bars():
         name, v, right, tip, weak = win_bars[0]._rows[0]
         assert (name, v, weak) == ("선제골 넣은 경기", 80.0, False) and "전체 50.0%" in right and "30경기" in right, right
         assert lose_bars[0]._rows[0][4] is True, "표본 미달인데 흐리지 않았다"
+        assert "*" not in right, "한 집단 식인데 * 를 붙였다"
         assert bars(app_main.core.SEC_FLOW) == [], "문장이 없는 섹션에 막대가 생겼다"
     finally:
         app_main.core.narrate = keep

@@ -26,7 +26,7 @@ from charts import (AreaTrendChart, DonutChart, GroupedBarChart, HBarList, Radar
                     ResultDots, RingGauge)
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
-from widgets import add_shadow, sample_note, wdl_text
+from widgets import add_shadow, sample_note, sample_text, wdl_text, win_rate_note, win_rate_text
 
 RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
 DOTS_N = 20            # 최근 결과 점 개수
@@ -46,6 +46,7 @@ class DashboardInput:
     scope_details: list[dict]
     scope_name: str                            # "현재 시즌" · "누적 전체" …
     trend_points: list[tuple[str, float, int]] = field(default_factory=list)
+    trend_weights: list[int] | None = None   # 점마다 승률 분모(rated) — 평균선 무게(A6). 없으면 경기 수
     trend_days: int = 30
     # 흐름 분석 결과(analysis.narrate) — 창이 흐름 분석 메뉴와 같이 쓰려고 미리 계산해 넘긴다.
     # 없으면 여기서 계산한다(같은 범위 · scope_matches/details)
@@ -305,22 +306,28 @@ class DashboardPage(QWidget):
     def _render_kpis(self, d: DashboardInput) -> None:
         # 승률은 시즌 전체가 큰 숫자 — 표시 구간(1~100 등)은 스핀박스에 따라 바뀌는
         # 임의의 묶음이라 기준으로 약하다. 요즘 폼은 같은 시즌의 최근 20경기와의 차이로.
+        # 시즌 대 최근 — 시즌 범위로 식 한 번(최근은 시즌 안이라 합친 범위 = 시즌)
         season = summarize(d.scope_matches)
         if not season.total:
             self.lb_rate.setText("—")
             self.lb_rate_delta.setText("경기 없음")
+            self.lb_rate.setToolTip("")
         else:
             self.lb_rate.setText(f"{season.win_rate:.1f}%")
-            recent = summarize(d.scope_matches[:RECENT_N])
+            # 손으로 승÷전체를 계산해도 왜 다른지 바로 보이게 — 식·무승부 수를 카드에 한 줄(A6 U5)
+            self.lb_rate.setToolTip(win_rate_text(season.win, season.draw, season.lose, season.mixed)
+                                    + "\n" + win_rate_note(season.mixed))
+            recent = summarize(d.scope_matches[:RECENT_N], season.mixed)
+            formula = "승÷(승+패)" if season.mixed else "승÷전체"
             if recent.total and season.total > recent.total:
                 gap = recent.win_rate - season.win_rate
                 arrow = "▲" if gap > 0 else "▼" if gap < 0 else "–"
                 col = T.CHART_UP if gap > 0 else T.CHART_DOWN if gap < 0 else T.TEXT_DIM
                 self.lb_rate_delta.setText(
                     f"최근 {RECENT_N}경기 {recent.win_rate:.1f}% "
-                    f"<span style='color:{col}'>{arrow} {abs(gap):.1f}%p</span>")
+                    f"<span style='color:{col}'>{arrow} {abs(gap):.1f}%p</span> · {formula} · 무 {season.draw:,}")
             else:
-                self.lb_rate_delta.setText(f"{season.total}경기")
+                self.lb_rate_delta.setText(f"{season.total}경기 · {formula} · 무 {season.draw:,}")
 
         s = summarize(d.range_matches)
         self.donut.set_data([("승", s.win, T.CHART_UP), ("무", s.draw, T.CHART_NEUTRAL),
@@ -350,7 +357,9 @@ class DashboardPage(QWidget):
         recent = [m for m in d.range_matches[:DOTS_N]][::-1]
         self.dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                             for m in recent])
-        self.trend_chart.set_data(d.trend_points)
+        w = d.trend_weights
+        self.trend_chart.set_data(d.trend_points, avg_weights=w,
+                                  weak=[n == 0 for n in w] if w is not None else None)
 
     def _render_radar(self, d: DashboardInput) -> None:
         prof = core.team_profile(d.range_details, d.ouid)
@@ -363,19 +372,25 @@ class DashboardPage(QWidget):
         cs = core.clutch_summary(d.scope_details, d.ouid)
         scored = sum(cs.first_scored)
         conceded = sum(cs.first_conceded)
-        vals = [
-            (_pct(cs.first_scored[0], scored), scored,
-             f"선제골 넣은 {scored:,}경기 중 {cs.first_scored[0]:,}승"),
-            (_pct(cs.comeback_win, conceded), conceded,
-             f"선제 실점한 {conceded:,}경기 중 {cs.comeback_win:,}번 역전승"),
-            (_pct(scored - cs.comeback_lose, scored), scored,
-             f"선제골 넣은 {scored:,}경기 중 {cs.comeback_lose:,}번은 역전패"),
-        ]
-        for g, (v, n, tip) in zip(self.gauges, vals):
-            if n < MIN_GAUGE_GAMES:
-                g.set_data(None, f"{n}경기", f"표본 {n}경기 — {MIN_GAUGE_GAMES}경기부터 표시")
+        # 첫째·둘째 칸은 승률(A6 식 · 분모 rated) — 둘째의 역전승 = 선제 실점 경기의 승
+        note = win_rate_note(cs.mixed)
+        for g, wdl, tip in ((self.gauges[0], cs.first_scored,
+                             f"선제골 넣은 {scored:,}경기 중 {cs.first_scored[0]:,}승"),
+                            (self.gauges[1], cs.first_conceded,
+                             f"선제 실점한 {conceded:,}경기 중 {cs.comeback_win:,}번 역전승")):
+            n = core.rated(*wdl, cs.mixed)
+            if core.is_weak(n, MIN_GAUGE_GAMES):
+                g.set_data(None, sample_text(n, cs.mixed),
+                           f"{sample_text(n, cs.mixed)} — {MIN_GAUGE_GAMES}{'판' if cs.mixed else '경기'}부터 표시")
             else:
-                g.set_data(v, f"{n:,}경기", tip)
+                g.set_data(core.win_pct(*wdl, cs.mixed), f"{n:,}{'판' if cs.mixed else '경기'}",
+                           f"{tip}\n{win_rate_text(*wdl, cs.mixed)}\n{note}")
+        # 셋째 칸 "지킨 비율" = (승+무) ÷ 선제골 경기 — 승률이 아니라 식·분모 그대로(A6 제외)
+        if scored < MIN_GAUGE_GAMES:
+            self.gauges[2].set_data(None, f"{scored}경기", f"표본 {scored}경기 — {MIN_GAUGE_GAMES}경기부터 표시")
+        else:
+            self.gauges[2].set_data(_pct(scored - cs.comeback_lose, scored), f"{scored:,}경기",
+                                    f"선제골 넣은 {scored:,}경기 중 {cs.comeback_lose:,}번은 역전패")
 
     def _render_minutes(self, d: DashboardInput) -> None:
         buckets = core.goal_minute_buckets(d.scope_details, d.ouid)
@@ -406,11 +421,13 @@ class DashboardPage(QWidget):
         rows = []
         for b in core.time_of_day_rates(d.scope_matches):
             if b.games:
-                weak = b.games < core.MIN_COND  # 표본 흐림 — 글자에도 "표본" 을 넣어 색만으로 구분하지 않는다
-                tip = f"{b.label} {b.span} · {wdl_text(b.win, b.draw, b.lose)}"
+                weak = core.is_weak(b.rated, core.MIN_COND)  # 표본 흐림 — 글자에도 "표본" 을 넣어 색만으로 구분하지 않는다
+                tip = (f"{b.label} {b.span} · {wdl_text(b.win, b.draw, b.lose)}"
+                       f" · {win_rate_text(b.win, b.draw, b.lose, b.mixed)}")
+                pct = win_rate_text(b.win, b.draw, b.lose, b.mixed, digits=0, short=True)
                 rows.append((b.label, b.win_rate,
-                             f"{b.win_rate:.0f}% · 표본 {b.games:,}" if weak else f"{b.win_rate:.0f}% · {b.games:,}",
-                             f"{tip}\n{sample_note(b.games, core.MIN_COND)}" if weak else tip, weak))
+                             f"{pct} · {sample_text(b.rated, b.mixed)}" if weak else f"{pct} · {b.games:,}",
+                             f"{tip}\n{sample_note(b.rated, core.MIN_COND, b.mixed)}" if weak else tip, weak))
             else:
                 rows.append((b.label, None, "경기 없음", f"{b.label} {b.span}"))
         self.timeband_bars.set_data(rows)
@@ -421,10 +438,10 @@ class DashboardPage(QWidget):
         # "-" 15경기가 1위로 올라왔다. 상대 전적 표에는 그대로 두고 여기서만 뺀다.
         known = [o for o in opponent_stats(d.scope_matches) if o.nickname not in ("", "-")]
         for o in known[:TOP_OPPONENTS]:
-            weak = o.games < core.MIN_OPP
-            tip = (f"{o.nickname} · {o.games}경기 · 승률 {o.win_rate:.1f}%"
+            weak = core.is_weak(o.rated, core.MIN_OPP)
+            tip = (f"{o.nickname} · {o.games}경기 · 승률 {win_rate_text(o.win, o.draw, o.lose, o.mixed)}"
                    f" · 득실 {o.goals_for}:{o.goals_against}")
             rows.append((o.nickname, o.win_rate,
-                         f"{o.win}승 {o.draw}무 {o.lose}패" + (f" · 표본 {o.games}" if weak else ""),
-                         f"{tip}\n{sample_note(o.games, core.MIN_OPP)}" if weak else tip, weak))
+                         f"{o.win}승 {o.draw}무 {o.lose}패" + (f" · {sample_text(o.rated, o.mixed)}" if weak else ""),
+                         f"{tip}\n{sample_note(o.rated, core.MIN_OPP, o.mixed)}" if weak else tip, weak))
         self.rival_bars.set_data(rows)

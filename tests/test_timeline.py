@@ -131,8 +131,18 @@ def test_window_before_after():
 
 
 def test_window_weak_threshold():
-    assert st.Window(games=config.TIMELINE_MIN_GAMES - 1).weak
-    assert not st.Window(games=config.TIMELINE_MIN_GAMES).weak
+    n = config.TIMELINE_MIN_GAMES
+    assert st.Window(games=n - 1, win=n - 1, mixed=False).weak
+    assert not st.Window(games=n, win=n, mixed=False).weak
+    # A6 — 표본은 승률 분모(rated). 섞인 묶음이면 무승부는 표본이 아니다
+    assert not st.Window(games=n, win=n - 1, draw=1, mixed=False).weak
+    assert st.Window(games=n, win=n - 1, draw=1, mixed=True).weak
+    try:
+        st.Window(games=n, win=n).weak
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("mixed 를 안 채운 창이 조용히 옛 식으로 셌다")
 
 
 # ── 짝 안 맞은 구매의 상태 ───────────────────────────────────────────────

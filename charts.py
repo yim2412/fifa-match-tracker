@@ -160,6 +160,8 @@ class AreaTrendChart(_Chart):
       ref_series [(이름, [(날짜, 값)], 색)] — 날짜에 따라 움직이는 계단선(x_dates 필요)
       x_dates    점마다 날짜 — 주면 x 를 날짜 간격으로(빈 날이 순번 간격으로 찌그러지지 않게)
       weak       점마다 표본 부족 여부 — 참인 점은 빈 고리로 흐리게, 최고·최저 표시에서 뺀다(1.4.1 평점 추이)
+      avg_weights 점마다 평균선의 무게 — 승률이면 승률 분모(rated · 2.6.1 A6). 없으면 경기 수.
+                 섞인 묶음은 무승부가 분모 밖이라, 경기 수로 가중하면 평균선이 표의 승률과 어긋난다
     """
 
     BASE_MIN_H = 170
@@ -179,13 +181,18 @@ class AreaTrendChart(_Chart):
         self._refs: tuple = ()
         self._x_dates: list | None = None
         self._weak: list[bool] | None = None
+        self._avg_weights: list[int] | None = None
         self.marks: dict = {}
 
     def set_data(self, points: list[tuple[str, float, int | None]], *, axis: Axis = PCT_AXIS,
                  avg: bool = True, baseline: float | None = None, ma: list[float | None] | None = None,
                  ma_name: str = "7일 평균", counts: bool = False, ref_series=(),
-                 x_dates: list | None = None, weak: list[bool] | None = None) -> None:
+                 x_dates: list | None = None, weak: list[bool] | None = None,
+                 avg_weights: list[int] | None = None) -> None:
         self._points = list(points)
+        if avg_weights is not None and len(avg_weights) != len(self._points):
+            raise ValueError(f"avg_weights 길이 {len(avg_weights)} != 점 {len(self._points)}")
+        self._avg_weights = list(avg_weights) if avg_weights is not None else None
         if weak is not None and len(weak) != len(self._points):
             raise ValueError(f"weak 길이 {len(weak)} != 점 {len(self._points)}")
         self._weak = list(weak) if weak is not None else None
@@ -279,13 +286,14 @@ class AreaTrendChart(_Chart):
         # 같은 식이라 두 화면 숫자가 같다. 1px 실선, 바탕에 묻히지 않을 만큼만 진하게.
         # 경기 수가 None 인 점(ELO)은 '모름'이 아니라 '세지 않는 값'이라 최고·최저 후보엔 든다.
         played = [(i, v, g) for i, (_, v, g) in enumerate(self._points) if g is None or g > 0]
-        weighted = [(i, v, g) for i, v, g in played if g is not None]
+        weighted = [(i, v, g if self._avg_weights is None else self._avg_weights[i])
+                    for i, v, g in played if g is not None]
         if self._weak:  # 가중 평균엔 두고(경기 수만큼만 무게) 최고·최저 표시에서만 뺀다
             played = [t for t in played if not self._weak[t[0]]]
         placed: list[QRectF] = []
         bold = _small_font(self.font(), SMALL_PT + 1, bold=True)
         bfm = QFontMetrics(bold)
-        show_avg = self._avg and bool(weighted)
+        show_avg = self._avg and sum(g for _, _, g in weighted) > 0
         if show_avg:
             avg = sum(v * g for _, v, g in weighted) / sum(g for _, _, g in weighted)
             ay = y_of(avg)

@@ -270,6 +270,11 @@ TRAIT_TOP_NAMES = 3                 # 포지션·칸마다 많이 넣은 순 이
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}
+# 승률 식(2.6.1 A6 — models.win_pct) — 숫자 옆 표시(widgets.win_rate_text)의 머리·툴팁 설명
+WIN_RATE_NOTE_MIXED = "무승부가 나는 경기와 안 나는 경기가 섞여 있어 무승부를 빼고 셉니다(승÷(승+패))."
+WIN_RATE_NOTE_SINGLE = "무승부까지 분모에 넣어 셉니다(승÷전체)."
+# 등급 체류(2.6.1 N2 — habits.division_stays) — 이웃 경기 사이가 이 날 수를 넘으면 기록 빈 구간
+N2_GAP_DAYS = 3
 # 스쿼드 타임라인 · 가계부(12단계 · squad_timeline.py · trade_book.py) — 출전은 선발만(교체 명단 28 은 안 센다)
 HOLD_RECENT_GAMES = 50              # 이 경기 수 안에 출전한 카드 = 보유 중
 HOLD_GRACE_DAYS = 14                # 산 지 이만큼 안이면 "최근 구매 · 아직 안 씀"(평가 합계에 안 넣고 따로 소계)

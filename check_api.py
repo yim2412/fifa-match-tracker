@@ -93,6 +93,7 @@ def main() -> int:
                   f"  (점유 {m.possession}%, 평점 {m.rating:.2f})")
         s = summarize(matches)
         print(f"\n요약: {s.win}승 {s.draw}무 {s.lose}패 · 승률 {s.win_rate:.1f}%"
+              f" ({'승÷(승+패) — 무승부 나는 경기와 안 나는 경기가 섞임' if s.mixed else '승÷전체'})"
               f" · 평균 {s.avg_goals_for:.2f}득 {s.avg_goals_against:.2f}실")
     except NexonAPIError as e:
         print(f"[FAIL] 매치 상세: {e.message}")

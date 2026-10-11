@@ -20,9 +20,10 @@ from analysis import (
     Basis, narrate, streak_min_n,
 )
 from models import (
-    MatchSummary, current_streak, longest_streaks, moving_win_rate, opponent_stats, parse_match, period_stats,
-    summarize, win_rate_trend,
+    MatchSummary, current_streak, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
+    moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
 )
+from habits import DivisionStay, DivisionStays, division_stays
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
 from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
                          is_champ, meta_trend, rank_trend_series)
@@ -48,7 +49,8 @@ from stats import (
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
     OppCard, opponent_cards, opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
-    shot_type_breakdown, team_color_baseline, team_color_stats, team_profile, time_of_day_rates, time_weekday_rates,
+    shot_type_breakdown, team_color_baseline, team_color_mixed, team_color_stats, team_profile, time_of_day_rates,
+    time_weekday_rates,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
 )
 
@@ -59,6 +61,10 @@ __all__ = [
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "current_streak", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend",
+    # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
+    "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",
+    # habits — 내 경기 습관·기준선(2.6.1) · N2 등급 체류
+    "DivisionStay", "DivisionStays", "division_stays",
     # predict — 시즌 말 순위 예측(38단계에서 비공개로 옮길 1순위)
     "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
@@ -88,6 +94,6 @@ __all__ = [
     "position_line", "possession_stats", "ranker_compare", "ranker_targets", "ranker_values", "rating_trend",
     "result_breakdown", "season_divisions", "season_id_of",
     "shot_distance_breakdown", "shot_map",
-    "shot_type_breakdown", "team_color_baseline", "team_color_stats", "team_profile", "time_of_day_rates",
+    "shot_type_breakdown", "team_color_baseline", "team_color_mixed", "team_color_stats", "team_profile", "time_of_day_rates",
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
 ]

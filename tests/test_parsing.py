@@ -1590,7 +1590,7 @@ def test_player_parsing_missing_parts():
 
 # ── 화면 ↔ 분석 경계(19단계, 2026-10-05) — 화면은 계산을 core_api 로만 ─────────────────────
 UI_FILES = ("app_main.py", "dashboard.py", "widgets.py", "charts.py", "tray.py", "check_api.py")
-CORE_MODULES = {"analysis", "stats", "models", "predict", "squad_timeline", "trade_book", "rankmeta"}
+CORE_MODULES = {"analysis", "stats", "models", "predict", "squad_timeline", "trade_book", "rankmeta", "habits"}
 
 
 def test_ui_reaches_analysis_only_through_core_api():
@@ -1648,24 +1648,39 @@ def test_moving_win_rate_calendar_window():
     # 창 경계 — 그날 포함 앞 6일(09-04)은 들고, 7일 전(09-03)은 뺀다
     ms = [_md(datetime(2026, 9, 3, 12), "승"), _md(datetime(2026, 9, 4, 12), "패"),
           _md(datetime(2026, 9, 10, 12), "승")]
-    assert mw(ms, [d(9, 10)], min_n=1) == [50.0], mw(ms, [d(9, 10)], min_n=1)  # 3일 들면 66.7 · 4일 빼면 100
+    assert mw(ms, [d(9, 10)], min_n=1, mixed=False) == [50.0], mw(ms, [d(9, 10)], min_n=1, mixed=False)  # 3일 들면 66.7 · 4일 빼면 100
     # 가중 — 하루 1승(100%) · 다음 날 3패(0%) → 1/4 = 25%(날짜별 승률의 단순 평균이면 50%)
     ms = [_md(datetime(2026, 9, 1, 12), "승")] + [_md(datetime(2026, 9, 2, h), "패") for h in (10, 11, 12)]
-    assert mw(ms, [d(9, 2)], min_n=1) == [25.0]
+    assert mw(ms, [d(9, 2)], min_n=1, mixed=False) == [25.0]
     # 경기 없는 날도 창으로 잰다 — 09-05 엔 경기가 없지만 09-01~09-05 가 창
-    assert mw(ms, [d(9, 5)], min_n=1) == [25.0]
+    assert mw(ms, [d(9, 5)], min_n=1, mixed=False) == [25.0]
     # 표본 미달이면 None(선이 끊긴다) — min_n 은 부르는 쪽이 준다
-    assert mw(ms, [d(9, 2)], min_n=5) == [None]
-    assert mw(ms, [d(9, 2)], min_n=4) == [25.0]
+    assert mw(ms, [d(9, 2)], min_n=5, mixed=False) == [None]
+    assert mw(ms, [d(9, 2)], min_n=4, mixed=False) == [25.0]
     # 창에 경기가 하나도 없으면 None(0% 가 아니다)
-    assert mw(ms, [d(9, 20)], min_n=1) == [None]
+    assert mw(ms, [d(9, 20)], min_n=1, mixed=False) == [None]
     # 연도가 바뀌는 창(12/28~01/03) — 12/27 은 빠진다
     ms = [_md(datetime(2025, 12, 27, 9), "승"), _md(datetime(2025, 12, 28, 9), "승"),
           _md(datetime(2026, 1, 3, 9), "패")]
-    assert mw(ms, [date(2026, 1, 3)], min_n=1) == [50.0]
+    assert mw(ms, [date(2026, 1, 3)], min_n=1, mixed=False) == [50.0]
     # 오류(중단) 경기는 분모에 안 든다 — PeriodRate.games 와 같은 규칙
     ms = [_md(datetime(2026, 9, 1, 9), "승"), _md(datetime(2026, 9, 1, 10), "오류")]
-    assert mw(ms, [d(9, 1)], min_n=1) == [100.0]
+    assert mw(ms, [d(9, 1)], min_n=1, mixed=False) == [100.0]
+    # A6 — 섞인 묶음이면 무승부를 분모에서 뺀다(1승 1무 1패 → 50%, 한 집단이면 33.3%). 표본도 승패 판으로 센다
+    ms = [_md(datetime(2026, 9, 1, h), r) for h, r in ((9, "승"), (10, "무"), (11, "패"))]
+    assert mw(ms, [d(9, 1)], min_n=1, mixed=True) == [50.0]
+    assert round(mw(ms, [d(9, 1)], min_n=1, mixed=False)[0], 1) == 33.3
+    assert mw(ms, [d(9, 1)], min_n=3, mixed=True) == [None], "무승부까지 표본으로 셌다"
+    assert round(mw(ms, [d(9, 1)], min_n=3, mixed=False)[0], 1) == 33.3
+
+
+def test_win_rate_trend_counts_and_window_edge():
+    # 하루 승·무·패를 따로 센다(섞인 묶음이면 무승부가 분모 밖) · 창은 최신 날 포함 days 일 — 경계 날(cutoff)도 든다
+    ms = [_m(1, "승"), _m(2, "패"), _m(3, "승"), _m(3, "무", hour=13), _m(3, "패", hour=14), _m(3, "오류", hour=15)]
+    got = models.win_rate_trend(ms, days=2)
+    assert [p.day for p in got] == [date(2026, 9, 2), date(2026, 9, 3)], got   # 9/2 = cutoff — '>' 면 빠진다
+    assert [(p.win, p.draw, p.lose) for p in got] == [(0, 0, 1), (1, 1, 1)], got
+    assert got[-1].games == 3 and got[-1].mixed is False   # 오류는 안 센다 · _m 은 division 없음 → 한 집단
 
 
 def test_win_rate_trend_points_carry_their_day():
@@ -2001,6 +2016,68 @@ def test_team_color_baseline_and_opponents():
     # 기준 = 팀컬러를 아는 경기만(1만 위 밖 상대의 패가 빠진다)
     assert st.team_color_baseline(ms, colors.get) == (4, 75.0)
     assert st.team_color_baseline([], colors.get) == (0, 0.0)
+
+# ── 2.6.1 A6 무승부 분모 — 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체 ───────────────────────
+
+def test_draw_possible_and_mixed_judgement():
+    assert models.draw_possible(900, 1000) is True and models.draw_possible(1300, 1300) is True
+    assert models.draw_possible(900, 800) is False            # 양쪽 다 챔스 이상 — 연장·승부차기
+    assert models.draw_possible(900, None) is None and models.draw_possible(None, 900) is None
+    assert models.draw_possible(901, 900) is True              # 경계: 900 은 챔스, 901 은 아래
+    # None 은 판정에서 뺀다 — division 없는 한 판이 챔스 아래만 하는 계정의 식을 바꾸지 않게(1회차 [상])
+    assert not models.is_mixed([True, True, None]) and not models.is_mixed([False, None])
+    assert models.is_mixed([True, False]) and not models.is_mixed([]) and not models.is_mixed([None])
+    assert models.win_pct(1, 1, 1, True) == 50.0 and round(models.win_pct(1, 1, 1, False), 1) == 33.3
+    assert models.win_pct(0, 3, 0, True) == 0.0 and models.rated(0, 3, 0, True) == 0   # 분모 0
+    assert models.rated(1, 1, 1, False) == 3 and models.is_weak(2, 3) and not models.is_weak(3, 3)
+    try:
+        models.win_pct(1, 0, 0, None)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("mixed 를 안 채운 승률이 조용히 옛 식으로 나왔다")
+    # 예전 이름 그대로 stats 에서도(다른 모듈이 st.is_champion_or_above 를 쓴다)
+    assert st.is_champion_or_above is models.is_champion_or_above and st.CHAMPION_DIVISION_ID == 900
+
+
+def test_every_rate_aggregate_fills_mixed():
+    # 픽스처 4경기: 0003 만 상대가 챔스 아래(무승부 가능) — 섞인 묶음. 집계마다 mixed 가 bool 이고 True,
+    # 값을 주면 그대로(견주는 자리가 합친 범위로 정한 값을 넘긴다). RATE_CLASSES 의 클래스를 전부 한 번씩 만든다
+    ouid, _, details = _load()
+    ms = [m for m in (models.parse_match(d, ouid) for d in details) if m]
+    assert [m.draw_possible for m in ms].count(True) == 1, [m.draw_possible for m in ms]
+    import squad_timeline as tl
+    made = {
+        "Stats": [models.summarize(ms)],
+        "OpponentStat": models.opponent_stats(ms),
+        "PeriodRate": models.win_rate_trend(ms, days=3650),
+        "PeriodStat": models.period_stats(ms, days=1),
+        "PlayerStat": st.aggregate_players(details, ouid),
+        "FormationStat": st.formation_stats(details, ouid),
+        "TimeBandRate": st.time_of_day_rates(ms),
+        "StreakAfter": st.after_streak_rates(ms),
+        "DivisionStat": st.division_stats(details, ouid),
+        "PossessionBand": st.possession_stats(details, ouid),
+        "TeamColorStat": st.team_color_stats(ms, lambda n: "X" if n else None),
+        "OppCard": [c for rows in st.opponent_cards(details, ouid).values() for c in rows],
+        "ResultBreakdown": [st.result_breakdown(details, ouid)],
+        "ClutchSummary": [st.clutch_summary(details, ouid)],
+        "Discipline": [st.discipline_stats(details, ouid)],
+        "Window": [tl._Games(details, ouid).window(0, len(ms))],
+    }
+    assert set(made) == set(models.RATE_CLASSES), set(made) ^ set(models.RATE_CLASSES)
+    for name, rows in made.items():
+        assert rows, f"{name}: 픽스처로 줄이 안 생겼다 — 이 클래스는 재지 못한다"
+        assert all(type(r).__name__ == name for r in rows), name
+        assert all(r.mixed is True for r in rows), (name, [r.mixed for r in rows])
+    # 주면 그대로 — 섞인 범위여도 False 를 받으면 승÷전체
+    s = models.summarize(ms, False)
+    assert s.mixed is False and round(s.win_rate, 1) == 33.3, s.win_rate
+    assert models.summarize(ms).win_rate == 50.0
+    assert all(r.mixed is False for r in st.division_stats(details, ouid, mixed=False))
+    assert st.team_color_baseline(ms, lambda n: "X" if n else None) == (2, 50.0)
+
+
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 

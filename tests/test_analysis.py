@@ -240,7 +240,7 @@ def test_lead_lost_rule_needs_three_and_twenty_percent():
         for i, r in enumerate(res):
             ga = [(1, 900), (1, 1200)] if r == "패" else []
             ds.append(_match(i, r, 1, len(ga), 50, goals[i], ga))
-        return analysis._clutch_rules(ds, OUID, base_rate=50.0)
+        return analysis._clutch_rules(ds, OUID, base_rate=50.0, mixed=False)
     assert _find(run(3), "앞서고도 진 경기가 3번")              # 3/10 = 30%
     assert not _find(run(2), "앞서고도 진 경기"), "2번인데 말했다"
 
@@ -251,7 +251,7 @@ def test_possession_rule_needs_two_bands_and_a_gap():
         for i, (poss, r) in enumerate(spec):
             gf, ga = (1, 0) if r == "승" else (0, 1)
             ds.append(_match(i, r, gf, ga, poss, [(0, 600)] if gf else [], [(0, 700)] if ga else []))
-        return analysis._possession_rules(ds, OUID, total=len(ds))
+        return analysis._possession_rules(ds, OUID, total=len(ds), mixed=False)
     n = analysis.MIN_COND
     assert build([(70, "승")] * n) == [], "구간이 하나뿐인데 비교했다"
     assert build([(70, "승")] * n + [(30, "패")] * n)              # 100% vs 0%
@@ -295,23 +295,23 @@ def test_streak_rule_gap_and_sample_edges():
     # 날짜 순 패 승 패 승 … (20경기) — 1연패 뒤 다음 경기는 10번 전부 승(100%), 1연승 뒤는 9번 전부 패(0%).
     ms, _ = _seq(["승", "패"] * 10)
     one_loss = lambda found: [i for i in found if "1연패 직후" in i.headline]  # noqa: E731
-    assert one_loss(analysis._streak_rules(ms, base_rate=88.0, total=20)), "12%p 차이인데 침묵"
-    assert not one_loss(analysis._streak_rules(ms, base_rate=91.0, total=20)), "9%p 차이인데 말했다"
-    assert one_loss(analysis._streak_rules(ms, base_rate=90.0, total=20)), "정확히 GAP 인데 침묵"
+    assert one_loss(analysis._streak_rules(ms, base_rate=88.0, total=20, mixed=False)), "12%p 차이인데 침묵"
+    assert not one_loss(analysis._streak_rules(ms, base_rate=91.0, total=20, mixed=False)), "9%p 차이인데 말했다"
+    assert one_loss(analysis._streak_rules(ms, base_rate=90.0, total=20, mixed=False)), "정확히 GAP 인데 침묵"
     # 표본 10경기: 전체 500 이면 기준 ceil(500×2%)=10 → 말한다, 501 이면 11 → 침묵
-    assert one_loss(analysis._streak_rules(ms, base_rate=50.0, total=500))
-    assert not one_loss(analysis._streak_rules(ms, base_rate=50.0, total=501)), "표본 미달인데 말했다"
+    assert one_loss(analysis._streak_rules(ms, base_rate=50.0, total=500, mixed=False))
+    assert not one_loss(analysis._streak_rules(ms, base_rate=50.0, total=501, mixed=False)), "표본 미달인데 말했다"
     # narrate 에 실제로 배선돼 있다 — 20경기 전체 승률 50% 에서 1연패 뒤 100%
     assert _find(analysis.narrate(ms, [], OUID), "1연패 직후")
 
 
 def test_opponent_rule_needs_games_and_name():
     ms, _ = _seq(["패"] * analysis.MIN_OPP, opp="천적")
-    assert _find(analysis._opponent_rules(ms, base_rate=60.0), "천적")
+    assert _find(analysis._opponent_rules(ms, base_rate=60.0, mixed=False), "천적")
     ms, _ = _seq(["패"] * (analysis.MIN_OPP - 1), opp="천적")
-    assert analysis._opponent_rules(ms, base_rate=60.0) == []
+    assert analysis._opponent_rules(ms, base_rate=60.0, mixed=False) == []
     ms, _ = _seq(["패"] * analysis.MIN_OPP, opp="-")
-    assert analysis._opponent_rules(ms, base_rate=60.0) == [], "이름 없는 상대를 말했다"
+    assert analysis._opponent_rules(ms, base_rate=60.0, mixed=False) == [], "이름 없는 상대를 말했다"
 
 
 # ── 기준값과 정확히 같을 때도 말한다(경계 변이 3순위, 2026-10-02) ─────────────────────────
@@ -333,7 +333,7 @@ def _clutch_at(spec_me, spec_opp, base_rate):
     """spec_*: 결과 문자열 목록 — 선제골 경기들과 선제 실점 경기들."""
     ds = [_g(i, "me", r) for i, r in enumerate(spec_me)]
     ds += [_g(100 + i, "opp", r) for i, r in enumerate(spec_opp)]
-    return analysis._clutch_rules(ds, OUID, base_rate=base_rate)
+    return analysis._clutch_rules(ds, OUID, base_rate=base_rate, mixed=False)
 
 
 def test_flow_compare_fires_exactly_at_gap():
@@ -391,11 +391,11 @@ def test_possession_formation_finishing_type_opponent_exact():
     for i, (poss, r) in enumerate([(70, "승")] * 13 + [(70, "패")] * 7 + [(30, "승")] * 10 + [(30, "패")] * 10):
         ds.append(_match(i, r, 1 if r == "승" else 0, 0 if r == "승" else 1, poss,
                          [(0, 600)] if r == "승" else [], [] if r == "승" else [(0, 700)]))
-    assert analysis._possession_rules(ds, OUID, total=len(ds))
+    assert analysis._possession_rules(ds, OUID, total=len(ds), mixed=False)
     # 전술: 상대 전술 8경기(기준 딱) 승률 25% · 전체 40% → 딱 -15%p / 50% · 전체 35% → 딱 +15%p
     def form(wins, base):
         ds = [_match(i, "승" if i < wins else "패", 0, 0, 50, [], []) for i in range(analysis.MIN_COND)]
-        return analysis._formation_rules(ds, OUID, base_rate=base, total=analysis.MIN_COND)
+        return analysis._formation_rules(ds, OUID, base_rate=base, total=analysis.MIN_COND, mixed=False)
     assert _find(form(2, 40.0), "나오면 승률 25%")
     assert _find(form(4, 35.0), "일 때 승률 50%")
     # 결정력: 슛 64개 × 기대득점 0.5 = 32, 40골 → 딱 +25%
@@ -415,7 +415,7 @@ def test_possession_formation_finishing_type_opponent_exact():
     assert _find(analysis._goal_type_rules([d], OUID), "헤더")
     # 상대: 4경기 1승(25%) · 전체 47.5% → 딱 22.5%p(GAP_WIDE × 1.5)
     ms, _ = _seq(["승", "패", "패", "패"], opp="천적")
-    assert _find(analysis._opponent_rules(ms, base_rate=47.5), "천적")
+    assert _find(analysis._opponent_rules(ms, base_rate=47.5, mixed=False), "천적")
 
 
 def test_patterns_start_exactly_at_min_base():
@@ -447,16 +447,16 @@ def _basis_cases():
     for i, (poss, r) in enumerate([(70, "승")] * 13 + [(70, "패")] * 7 + [(30, "승")] * 10 + [(30, "패")] * 10):
         ds.append(_match(i, r, 1 if r == "승" else 0, 0 if r == "승" else 1, poss,
                          [(0, 600)] if r == "승" else [], [] if r == "승" else [(0, 700)]))
-    out["_possession_rules"] = (analysis._possession_rules(ds, OUID, total=40), "점유율",
+    out["_possession_rules"] = (analysis._possession_rules(ds, OUID, total=40, mixed=False), "점유율",
                                 (50.0, 20, 65.0, analysis.MIN_COND))
     ds = [_match(i, "승" if i < 2 else "패", 0, 0, 50, [], []) for i in range(analysis.MIN_COND)]
-    out["_formation_rules"] = (analysis._formation_rules(ds, OUID, base_rate=40.0, total=8),
+    out["_formation_rules"] = (analysis._formation_rules(ds, OUID, base_rate=40.0, total=8, mixed=False),
                                "나오면", (25.0, 8, 40.0, analysis.MIN_COND))
     ms, _ = _seq(["승", "패", "패", "패"], opp="천적")
-    out["_opponent_rules"] = (analysis._opponent_rules(ms, base_rate=60.0), "천적",
+    out["_opponent_rules"] = (analysis._opponent_rules(ms, base_rate=60.0, mixed=False), "천적",
                               (25.0, 4, 60.0, analysis.MIN_OPP))
     ms, _ = _seq(["승", "패"] * 10)
-    out["_streak_rules"] = (analysis._streak_rules(ms, base_rate=50.0, total=20), "1연패 직후",
+    out["_streak_rules"] = (analysis._streak_rules(ms, base_rate=50.0, total=20, mixed=False), "1연패 직후",
                             (100.0, 10, 50.0, analysis.streak_min_n(20)))
     return out
 

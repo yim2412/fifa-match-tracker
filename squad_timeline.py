@@ -28,6 +28,7 @@ from datetime import date, datetime
 from typing import NamedTuple
 
 import config
+from models import RateMixin, draw_possible, is_mixed, is_weak
 
 SUB_POSITION = 28  # 교체 명단 — 출전으로 안 센다
 
@@ -47,22 +48,19 @@ class Trade(NamedTuple):
 
 
 @dataclass(frozen=True)
-class Window:
-    """사건 앞이나 뒤 경기 묶음의 성적."""
+class Window(RateMixin):
+    """사건 앞이나 뒤 경기 묶음의 성적. mixed 는 타임라인 하나 전체로 한 번 정한 식(모든 창이 같은 값)."""
     games: int = 0
     win: int = 0
     draw: int = 0
     lose: int = 0
     gf: int = 0
     ga: int = 0
-
-    @property
-    def win_rate(self) -> float:
-        return self.win / self.games * 100 if self.games else 0.0
+    mixed: bool | None = None
 
     @property
     def weak(self) -> bool:
-        return self.games < config.TIMELINE_MIN_GAMES
+        return is_weak(self.rated, config.TIMELINE_MIN_GAMES)
 
 
 @dataclass
@@ -151,13 +149,16 @@ class _Games:
             res = (me.get("matchDetail") or {}).get("matchResult") or ""
             starters = [(p.get("spId"), p.get("spGrade")) for p in me.get("player") or []
                         if p.get("spId") is not None and p.get("spPosition") != SUB_POSITION]
-            rows.append((when, res, _goals(me), _goals(opp), starters))
+            rows.append((when, res, _goals(me), _goals(opp), starters,
+                         draw_possible(me.get("division"), opp.get("division")) if opp else None))
         rows.sort(key=lambda r: r[0])
+        # 묶음 = 타임라인 하나 — 앞 대 뒤 · 사건끼리 견주므로 한 번 정해 모든 창에(누적합에 칸을 더하지 않는다)
+        self.mixed = is_mixed(r[5] for r in rows)
         self.dates = [r[0] for r in rows]
         self.starters = [r[4] for r in rows]
         self._acc = [(0, 0, 0, 0, 0)]
         w = dr = lo = gf = ga = 0
-        for _, res, f, a, _ in rows:
+        for _, res, f, a, _, _ in rows:
             if "승" in res:
                 w += 1
             elif "무" in res:
@@ -174,9 +175,9 @@ class _Games:
     def window(self, lo: int, hi: int) -> Window:
         lo, hi = max(0, lo), min(len(self.dates), hi)
         if hi <= lo:
-            return Window()
+            return Window(mixed=self.mixed)
         a, b = self._acc[lo], self._acc[hi]
-        return Window(hi - lo, b[0] - a[0], b[1] - a[1], b[2] - a[2], b[3] - a[3], b[4] - a[4])
+        return Window(hi - lo, b[0] - a[0], b[1] - a[1], b[2] - a[2], b[3] - a[3], b[4] - a[4], self.mixed)
 
     def around(self, when: datetime) -> tuple[Window, Window]:
         """앞 = 그 시각 전 N경기, 뒤 = 그 시각부터 N경기(출전 사건이면 그 경기 포함)."""

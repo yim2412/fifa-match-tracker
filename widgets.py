@@ -22,6 +22,8 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
+import config
+import core_api as core
 import theme as T
 
 NA = "—"  # API 가 안 주는 값. 그럴싸한 숫자를 지어 넣지 않는다.
@@ -1115,25 +1117,45 @@ class GradeBadgeDelegate(RowBorderDelegate):
         painter.restore()
 
 
-def sample_note(games: int, min_n: int) -> str:
-    """표본 미달 칸의 툴팁 — 승률 막대·대시보드 막대가 같은 말을 쓴다."""
-    return f"표본이 {games}경기라 승률이 크게 흔들립니다(기준 {min_n}경기)."
+def sample_text(n: int, mixed: bool) -> str:
+    """표본 글자 — 판정(is_weak)과 같은 분모(rated)로. 섞인 묶음이면 무승부를 뺀 "승패 N판"(2.6.1 A6)."""
+    return f"승패 {n:,}판" if mixed else f"표본 {n:,}"
 
 
-def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int,
+def sample_note(n: int, min_n: int, mixed: bool = False) -> str:
+    """표본 미달 칸의 툴팁 — 승률 막대·대시보드 막대가 같은 말을 쓴다. n 은 승률 분모(rated)."""
+    unit = "판" if mixed else "경기"
+    return f"표본이 {'승패 ' if mixed else ''}{n:,}{unit}{'이라' if mixed else '라'} 승률이 크게 흔들립니다(기준 {min_n}{unit})."
+
+
+def win_rate_note(mixed: bool) -> str:
+    """승률 식 설명(머리·툴팁) — 숫자 옆 식 표시를 풀어 쓴 말."""
+    return config.WIN_RATE_NOTE_MIXED if mixed else config.WIN_RATE_NOTE_SINGLE
+
+
+def win_rate_text(win: int, draw: int, lose: int, mixed: bool, digits: int = 1, short: bool = False) -> str:
+    """승률 숫자는 전부 이걸로 — "50.0% · 승÷(승+패) · 무 859"(2.6.1 A6 U5: 같은 경기가 화면마다 다른 식일 수 있어
+    숫자 옆에 식과 무승부 수를 늘 붙인다). short 는 좁은 칸 — 섞인 식이면 숫자 뒤 "*"(설명은 win_rate_note 를 툴팁으로)."""
+    pct = f"{core.win_pct(win, draw, lose, mixed):.{digits}f}%"
+    if short:
+        return pct + ("*" if mixed else "")
+    return f"{pct} · {'승÷(승+패)' if mixed else '승÷전체'} · 무 {draw:,}"
+
+
+def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int, mixed: bool,
                  height: int = 18) -> QProgressBar:
     """승률 막대 하나 — 승률을 막대로 그리는 곳은 전부 이걸 거친다(표본 흐림 규칙, 1.2.1).
 
     경기 수가 min_n 보다 적으면 막대를 바탕 쪽으로 흐리게(불투명) · 끝에 "· 표본 N".
     "프로1 (1경기) 100%" 가 꽉 찬 막대로 보여 실력처럼 읽히던 것을 막는다. 색만으로 구분하지 않게
     글자를 같이 붙인다(적록 색약). 흐렸는지는 property("weak") 로 테스트가 읽는다."""
-    games = win + draw + lose
-    wr = win / games * 100 if games else 0.0
-    weak = games < min_n
+    n = core.rated(win, draw, lose, mixed)
+    wr = core.win_pct(win, draw, lose, mixed)
+    weak = core.is_weak(n, min_n)
     bar = QProgressBar()
     bar.setRange(0, 1000)
     bar.setValue(int(wr * 10))
-    bar.setFormat(text + (f"  · 표본 {games}" if weak else ""))
+    bar.setFormat(text + (f"  · {sample_text(n, mixed)}" if weak else ""))
     bar.setFixedHeight(height)
     chunk = T.blend(T.PANEL_2, T.WIN_BAR, T.WEAK_MIX) if weak else T.WIN_BAR
     # 글자는 흐리지 않는다 — TEXT_DIM 은 흐린 막대 위에서 대비 3.6(어두운 테마, 기준 4.5)이라 안 읽혔다(1.2.1 실측).
@@ -1143,9 +1165,9 @@ def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int,
         f"color:{T.TEXT};text-align:center;}}"
         f"QProgressBar::chunk{{background:{chunk};border-radius:3px;}}")
     bar.setProperty("weak", weak)
-    bar.setProperty("games", games)
-    if weak:
-        bar.setToolTip(sample_note(games, min_n))
+    bar.setProperty("games", n)
+    tip = win_rate_note(mixed)
+    bar.setToolTip(sample_note(n, min_n, mixed) + "\n" + tip if weak else tip)
     return bar
 
 
@@ -1784,6 +1806,5 @@ def wdl_text(w: int, d: int, l: int) -> str:
     return f"{w}승 {d}무 {l}패"
 
 
-def rate_of(w: int, d: int, l: int) -> float:
-    t = w + d + l
-    return (w / t * 100) if t else 0.0
+def rate_of(w: int, d: int, l: int, mixed: bool) -> float:
+    return core.win_pct(w, d, l, mixed)

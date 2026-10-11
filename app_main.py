@@ -74,8 +74,8 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     NA, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, NoScrollComboBox, PageTabs,
     RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
-    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, rate_of, sample_note,
-    wdl_text, win_rate_bar,
+    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, sample_note,
+    sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -2696,7 +2696,8 @@ class MainWindow(QMainWindow):
                  ("시즌별 성적", "_build_season_tab")]),
         ("경기력", [("승부처 분석", "_build_clutch_tab"),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
-                                                ("규율·불운", "_build_discipline_tab")))),
+                                                ("규율·불운", "_build_discipline_tab"),
+                                                ("등급 체류", "_build_divstay_tab")))),
                    ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
                                                    ("경기 결과", "_build_results_tab"),
                                                    ("패스 스타일", "_build_pass_style_tab")))),
@@ -2808,6 +2809,7 @@ class MainWindow(QMainWindow):
         self._teamcolor_status_labels: list[QLabel] = []
         self._teamcolor_note_labels: list[QLabel] = []
         self._teamcolor_min_spins: list[QSpinBox] = []
+        self._teamcolor_min_units: list[QLabel] = []   # "경기 이상만" — 섞인 식이면 "승패 판 이상만"(거르기도 rated)
         self._page_index: dict[str, int] = {}
         self._page_tabs: dict[str, PageTabs] = {}   # 메뉴 이름 → 페이지 안 탭(Tabs 인 메뉴만)
         self._tab_sid: dict[str, str] = {}          # 메뉴 이름 → 보던 탭 설정 키(view/tab/<sid>)
@@ -2972,6 +2974,7 @@ class MainWindow(QMainWindow):
         row.addWidget(lb2)
         row.addStretch(1)
         self._teamcolor_min_spins.append(sp)
+        self._teamcolor_min_units.append(lb2)
         return row
 
     def _on_teamcolor_min_changed(self, value: int) -> None:
@@ -3176,14 +3179,16 @@ class MainWindow(QMainWindow):
         return w
 
     def _render_period(self, matches: list[MatchSummary]) -> None:
-        periods = period_stats(matches, days=self.cb_period.currentData() or 7)
+        mixed = core.mixed_of_matches(m for m in matches if m.match_date is not None)  # 표 하나 — 줄과 평균이 같은 식
+        periods = period_stats(matches, days=self.cb_period.currentData() or 7, mixed=mixed)
         self.period_chart.set_data([(p.label, p.win_rate, p.games) for p in reversed(periods)],
-                                   counts=True)
-        total = sum(p.games for p in periods)
-        overall = sum(p.win for p in periods) / total * 100 if total else 0.0
+                                   counts=True, avg_weights=[p.rated for p in reversed(periods)],
+                                   weak=[p.rated == 0 for p in reversed(periods)])
+        overall = core.win_pct(sum(p.win for p in periods), sum(p.draw for p in periods),
+                               sum(p.lose for p in periods), mixed)
         rows = [[p.label, (str(p.games), p.games), (str(p.win), p.win),
                 (str(p.draw), p.draw), (str(p.lose), p.lose),
-                (f"{p.win_rate:.1f}%", p.win_rate),
+                (win_rate_text(p.win, p.draw, p.lose, mixed, short=True), p.win_rate),
                 (f"{p.win_rate - overall:+.1f}%p", p.win_rate - overall),
                 (f"{p.avg_gf:.2f}", p.avg_gf), (f"{p.avg_ga:.2f}", p.avg_ga)]
                for p in periods]
@@ -3206,7 +3211,7 @@ class MainWindow(QMainWindow):
         rate_col = self.PERIOD_COLUMNS.index("승률")
         vs_col = self.PERIOD_COLUMNS.index("평균 대비")
         few = core.MIN_COND
-        enough = [i for i, p in enumerate(periods) if p.games >= few]
+        enough = [i for i, p in enumerate(periods) if not core.is_weak(p.rated, few)]
         best = max(enough, key=lambda i: periods[i].win_rate, default=None)
         worst = min(enough, key=lambda i: periods[i].win_rate, default=None)
         if best is not None and worst is not None and periods[best].win_rate == periods[worst].win_rate:
@@ -3214,12 +3219,15 @@ class MainWindow(QMainWindow):
         self._period_marks = {"best": best, "worst": worst}
         for r, p in enumerate(periods):
             cells = [t.item(r, rate_col), t.item(r, vs_col)]
-            if p.games < few:
+            if core.is_weak(p.rated, few):
                 for it in cells:
                     if it:
                         it.setForeground(QColor(T.TEXT_DIM))
-                        it.setToolTip(sample_note(p.games, few))
+                        it.setToolTip(sample_note(p.rated, few, p.mixed))
                 continue
+            for it in cells:
+                if it:
+                    it.setToolTip(win_rate_text(p.win, p.draw, p.lose, p.mixed) + "\n" + win_rate_note(p.mixed))
             diff = p.win_rate - overall
             frac = min(abs(diff) / self.PERIOD_HEAT_FULL_PP, 1.0)
             for it in cells:
@@ -3334,11 +3342,13 @@ class MainWindow(QMainWindow):
             if b is None:
                 continue
             gap = b.rate - b.base_rate
+            star = "*" if b.mixed else ""   # 막대 글자는 좁은 칸 — 식은 툴팁(win_rate_text 의 short 와 같은 표시)
+            n_text = f"승패 {b.n:,}판" if b.mixed else f"{b.n:,}경기"   # 표본 글자도 분모(rated)로
             data.append((b.label, b.rate,
-                         f"{b.rate:.1f}% · {b.n:,}경기 · {b.base_label} {b.base_rate:.1f}%",
-                         f"{b.label}: 승률 {b.rate:.1f}% ({b.n:,}경기)\n"
-                         f"{b.base_label} {b.base_rate:.1f}% 대비 {gap:+.1f}%p",
-                         b.n < b.min_n))
+                         f"{b.rate:.1f}%{star} · {n_text} · {b.base_label} {b.base_rate:.1f}%{star}",
+                         f"{b.label}: 승률 {b.rate:.1f}% ({n_text})\n"
+                         f"{b.base_label} {b.base_rate:.1f}% 대비 {gap:+.1f}%p\n{win_rate_note(b.mixed)}",
+                         core.is_weak(b.n, b.min_n)))
         if not data:
             return None
         bars = charts.HBarList()
@@ -3357,12 +3367,16 @@ class MainWindow(QMainWindow):
             empty.setStyleSheet(f"color: {T.TEXT_DIM};")
             box.addWidget(empty)
             return
-        need = core.streak_min_n(s.total)
+        need = core.streak_min_n(s.rated)
         base = s.win_rate
-        note = QLabel(f"전체 승률 {base:.1f}% 기준 · 흐린 줄은 표본 {need}경기 미만")
+        unit = "승패 판" if s.mixed else "경기"
+        note = QLabel(f"전체 승률 {win_rate_text(s.win, s.draw, s.lose, s.mixed)} 기준"
+                      f" · 흐린 줄은 표본 {need}{unit} 미만")
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        note.setToolTip(win_rate_note(s.mixed))
         box.addWidget(note)
-        for r in core.after_streak_rates(matches, core.STREAK_MAX):
+        # 묶음 = 시즌 범위 한 번 — 줄마다 "기준 대비 ±%p" 가 같은 식끼리 되게
+        for r in core.after_streak_rates(matches, core.STREAK_MAX, mixed=s.mixed):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
@@ -3375,8 +3389,9 @@ class MainWindow(QMainWindow):
                 gap = r.win_rate - base
                 h.addWidget(win_rate_bar(
                     r.win, r.draw, r.lose,
-                    f"{r.win_rate:.1f}%  ({wdl_text(r.win, r.draw, r.lose)})  기준 대비 {gap:+.1f}%p",
-                    need, height=16), 1)
+                    f"{win_rate_text(r.win, r.draw, r.lose, r.mixed, short=True)}  "
+                    f"({wdl_text(r.win, r.draw, r.lose)})  기준 대비 {gap:+.1f}%p",
+                    need, r.mixed, height=16), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3435,14 +3450,15 @@ class MainWindow(QMainWindow):
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(wdl_text(*wdl))
             b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            games = sum(wdl)
-            weak = games < core.MIN_COND  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
-            c = QLabel(f"({rate_of(*wdl):.1f}% · 표본 {games})" if weak else f"({rate_of(*wdl):.1f}%)")
+            n = core.rated(*wdl, cs.mixed)
+            weak = core.is_weak(n, core.MIN_COND)  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
+            text = win_rate_text(*wdl, cs.mixed)
+            c = QLabel(f"({text} · {sample_text(n, cs.mixed)})" if weak else f"({text})")
             c.setStyleSheet(f"color: {T.TEXT_DIM if weak else color}; font-weight: bold;")
             c.setProperty("weak", weak)
-            c.setProperty("games", games)
-            if weak:
-                c.setToolTip(sample_note(games, core.MIN_COND))
+            c.setProperty("games", n)
+            c.setToolTip(sample_note(n, core.MIN_COND, cs.mixed) + "\n" + win_rate_note(cs.mixed)
+                         if weak else win_rate_note(cs.mixed))
             h.addWidget(a)
             h.addStretch(1)
             h.addWidget(b)
@@ -3504,8 +3520,9 @@ class MainWindow(QMainWindow):
                 h.addWidget(a)
                 h.addWidget(win_rate_bar(
                     band.win, band.draw, band.lose,
-                    f"{band.win_rate:.1f}%  ({wdl_text(band.win, band.draw, band.lose)})",
-                    core.MIN_COND, height=16), 1)
+                    f"{win_rate_text(band.win, band.draw, band.lose, band.mixed, short=True)}  "
+                    f"({wdl_text(band.win, band.draw, band.lose)})",
+                    core.MIN_COND, band.mixed, height=16), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3525,17 +3542,19 @@ class MainWindow(QMainWindow):
                 if not c.games:
                     out.append((None, "—", f"{c.label} ({c.span}시) — 경기 없음", True))
                     continue
-                weak = c.games < few
-                tip = (f"{c.label} ({c.span}시) — 승률 {c.win_rate:.1f}%"
+                weak = core.is_weak(c.rated, few)
+                tip = (f"{c.label} ({c.span}시) — 승률 {win_rate_text(c.win, c.draw, c.lose, c.mixed)}"
                        f" ({wdl_text(c.win, c.draw, c.lose)})")
                 if weak:
-                    tip += f"\n{sample_note(c.games, few)}"
-                out.append((c.win_rate, f"표본 {c.games}" if weak else f"{c.win_rate:.0f}%", tip, weak))
+                    tip += f"\n{sample_note(c.rated, few, c.mixed)}"
+                out.append((c.win_rate, sample_text(c.rated, c.mixed) if weak
+                            else win_rate_text(c.win, c.draw, c.lose, c.mixed, digits=0, short=True), tip, weak))
             cells.append(out)
         self.clutch_heat.set_data([f"{name} {lo:02d}~{hi:02d}" for name, lo, hi in core.TIME_BANDS],
                                   list(core.WEEKDAYS), cells)
         self.lb_clutch_heat_note.setText(
-            f"경기 시작 시각(이 PC 시간대) 기준 · 50%보다 높으면 초록, 낮으면 빨강 쪽 · 회색 칸은 경기 {few}판 미만")
+            f"경기 시작 시각(이 PC 시간대) 기준 · 50%보다 높으면 초록, 낮으면 빨강 쪽 · 회색 칸은 "
+            f"{'승패' if grid[0][0].mixed else '경기'} {few}판 미만" + (" · * 무승부를 뺀 승률" if grid[0][0].mixed else ""))
 
     # ── 성적 진단 ─────────────────────────────────────────────────────────
     def _build_diagnosis_tab(self) -> QWidget:
@@ -3590,8 +3609,38 @@ class MainWindow(QMainWindow):
         scroll.setWidget(w)
         return scroll
 
+    DIVSTAY_COLUMNS = ["등급", "머문 경기", "머문 날", "들어온 횟수"]
+
+    def _build_divstay_tab(self) -> QWidget:
+        """성적 진단 [등급 체류](2.6.1 N2) — 등급마다 머문 경기·날·들어온 횟수 + 승격·강등 횟수."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_divstay_note = QLabel("")
+        self.lb_divstay_note.setWordWrap(True)
+        self.lb_divstay_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_divstay_note)
+        self.tbl_divstay = self._make_table(self.DIVSTAY_COLUMNS)
+        v.addWidget(self.tbl_divstay, 1)
+        return w
+
+    def _render_divstay(self, details: list[dict]) -> None:
+        st = core.division_stays(core.division_trend(details, self._ouid) if self._ouid else [],
+                                 name_of=lambda i: self._division_names.get(i, str(i)))
+        # 등급 id 가 작을수록 상위 — 정렬값을 음수로 둬 "높은 등급부터"가 내림차순과 같게
+        self._fill(self.tbl_divstay, [[(r.name, -r.division), (f"{r.games:,}", r.games), (f"{r.days:,}", r.days),
+                                       (f"{r.entries:,}", r.entries)] for r in st.rows])
+        if not st.rows:
+            self.lb_divstay_note.setText("등급 정보가 있는 경기가 없습니다.")
+            return
+        start = self._division_names.get(st.start_division, str(st.start_division))
+        parts = [f"승격 {st.promotions}번 · 강등 {st.demotions}번",
+                 f"머문 날 = 그날 마지막 경기의 등급 · 기록 시작 때 등급({start})은 들어온 횟수에 안 셉니다"]
+        if st.gaps:
+            parts.append(f"기록 빈 구간 {st.gaps}곳({config.N2_GAP_DAYS}일 넘게 경기 없음) — 그 사이 승강은 모릅니다")
+        self.lb_divstay_note.setText(" · ".join(parts) + f" ({self._scope_text()} 기준)")
+
     def _wr_bar_row(self, label: str, win: int, draw: int, lose: int,
-                    avg_gf: float, avg_ga: float, label_w: int = 132) -> QWidget:
+                    avg_gf: float, avg_ga: float, mixed: bool, label_w: int = 132) -> QWidget:
         """승률 막대 한 줄 — 라벨 + (승률·전적·평균득실) 막대. 승부처 탭과 같은 톤."""
         row = QWidget()
         h = QHBoxLayout(row)
@@ -3600,13 +3649,11 @@ class MainWindow(QMainWindow):
         a.setStyleSheet(f"color: {T.TEXT_DIM};")
         a.setFixedWidth(label_w)
         h.addWidget(a)
-        games = win + draw + lose
-        if games:
-            wr = win / games * 100
+        if win + draw + lose:
             h.addWidget(win_rate_bar(win, draw, lose,
-                                     f"{wr:.1f}%  ({wdl_text(win, draw, lose)})  "
-                                     f"득 {avg_gf:.2f} 실 {avg_ga:.2f}",
-                                     core.MIN_COND), 1)
+                                     f"{win_rate_text(win, draw, lose, mixed, short=True)}  "
+                                     f"({wdl_text(win, draw, lose)})  득 {avg_gf:.2f} 실 {avg_ga:.2f}",
+                                     core.MIN_COND, mixed), 1)
         else:
             none = QLabel("경기 없음")
             none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3625,7 +3672,7 @@ class MainWindow(QMainWindow):
                 for s in divs:
                     box.addWidget(self._wr_bar_row(
                         f"{s.name} ({s.games})", s.win, s.draw, s.lose,
-                        s.avg_gf, s.avg_ga))
+                        s.avg_gf, s.avg_ga, s.mixed))
             else:
                 empty = QLabel(none_text)
                 empty.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3635,7 +3682,7 @@ class MainWindow(QMainWindow):
         for b in core.possession_stats(details, self._ouid):
             self.box_diag_possession.addWidget(self._wr_bar_row(
                 f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
-                b.avg_gf, b.avg_ga))
+                b.avg_gf, b.avg_ga, b.mixed))
         self._render_discipline(details)
 
     def _render_discipline(self, details: list[dict]) -> None:
@@ -3684,8 +3731,8 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(170)
             h.addWidget(a)
             if sum(wdl):
-                h.addWidget(win_rate_bar(*wdl, f"{rate_of(*wdl):.1f}%  ({wdl_text(*wdl)})",
-                                         core.MIN_COND, height=16), 1)
+                h.addWidget(win_rate_bar(*wdl, f"{win_rate_text(*wdl, ds.mixed, short=True)}  ({wdl_text(*wdl)})",
+                                         core.MIN_COND, ds.mixed, height=16), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3947,9 +3994,9 @@ class MainWindow(QMainWindow):
     def _window_cell(w) -> tuple[str, float]:
         if not w.games:
             return "-", -1.0
-        text = f"{w.win_rate:.0f}% · 득실 {w.gf - w.ga:+d}"
+        text = f"{win_rate_text(w.win, w.draw, w.lose, w.mixed, digits=0, short=True)} · 득실 {w.gf - w.ga:+d}"
         if w.weak:
-            text += f" · 표본 {w.games}"
+            text += f" · {sample_text(w.rated, w.mixed)}"
         return text, w.win_rate
 
     def _render_timeline(self) -> None:
@@ -3988,7 +4035,8 @@ class MainWindow(QMainWindow):
                 if item is None or not w.games:
                     continue
                 item.setToolTip(f"{w.games}경기 {w.win}승 {w.draw}무 {w.lose}패 · 득점 {w.gf} 실점 {w.ga}"
-                                + (f"\n{sample_note(w.games, min_n)}" if w.weak else ""))
+                                f"\n{win_rate_text(w.win, w.draw, w.lose, w.mixed)}"
+                                + (f"\n{sample_note(w.rated, min_n, w.mixed)}" if w.weak else ""))
                 if w.weak:  # 표본 흐림 규칙(1.2.1) — 색 + "표본 N"
                     item.setForeground(QColor(T.TEXT_DIM))
                     item.setData(Qt.ItemDataRole.UserRole + 1, True)
@@ -5832,8 +5880,7 @@ class MainWindow(QMainWindow):
         self._refresh_color_combo(self.cb_oppcard_color, self.ed_oppcard_color)
         _matches, details = self._teamcolor_scope()
         nicknames = None
-        notes = [f"시즌 콤보 범위 · 교체 명단 뺌 · 사용률 = 그 자리에 그 카드가 선발로 나온 판 ÷ 그 자리가 나온 판 · "
-                 f"승률 = 승÷전체 · 만난 판 {config.OPP_CARD_MIN} 미만은 흐리게"]
+        notes = ["시즌 콤보 범위 · 교체 명단 뺌 · 사용률 = 그 자리에 그 카드가 선발로 나온 판 ÷ 그 자리가 나온 판"]
         color = self.cb_oppcard_color.currentText()
         if color and color != self.POSITION_COLOR_ALL:
             nicknames = {n for n, c in self._team_colors.items() if c == color}
@@ -5844,8 +5891,12 @@ class MainWindow(QMainWindow):
         if ranked is not None and self.chk_oppcard_ranked.isChecked():
             nicknames = set(ranked) if nicknames is None else nicknames & ranked
             notes.append("최근 14일 안 1만 위 안에 든 닉네임 · 닉네임을 바꾼 상대는 빠질 수 있음")
-        self.lb_oppcard_note.setText(" · ".join(notes))
         cards = core.opponent_cards(details, self._ouid, nicknames) if self._ouid else {}
+        mixed = next((c.mixed for rows in cards.values() for c in rows), False)
+        notes.insert(1, f"승률 = {'승÷(승+패)' if mixed else '승÷전체'} · "
+                        f"{'승패' if mixed else '만난'} 판 {config.OPP_CARD_MIN} 미만은 흐리게")
+        self.lb_oppcard_note.setText(" · ".join(notes))
+        self.lb_oppcard_note.setToolTip(win_rate_note(mixed))
         self.opp_cards = cards
         cur = self.cb_oppcard_pos.currentData()
         self.cb_oppcard_pos.blockSignals(True)
@@ -5859,12 +5910,13 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_oppcard, [[
             f"{self._names.get(c.sp_id, str(c.sp_id))} ({self._season_name(c.sp_id)})",
             (f"{c.usage:.0f}%", c.usage), (f"{c.met:,}", c.met), (f"{c.win}·{c.draw}·{c.lose}", c.win),
-            (f"{c.win_rate:.0f}%", c.win_rate)] for c in rows], enable_sort=False)
+            (win_rate_text(c.win, c.draw, c.lose, c.mixed, digits=0, short=True), c.win_rate)] for c in rows],
+            enable_sort=False)
         for i, c in enumerate(rows):
             it = self.tbl_oppcard.item(i, 0)
             if it is not None:
                 it.setData(Qt.ItemDataRole.UserRole, c.sp_id)
-        self._dim_rows(self.tbl_oppcard, [i for i, c in enumerate(rows) if c.met < config.OPP_CARD_MIN])
+        self._dim_rows(self.tbl_oppcard, [i for i, c in enumerate(rows) if core.is_weak(c.rated, config.OPP_CARD_MIN)])
         self.tbl_oppcard.setSortingEnabled(True)
 
     # ── 선수로 구단주 찾기(12) — 화면 ────────────────────────────────
@@ -6554,8 +6606,10 @@ class MainWindow(QMainWindow):
         n = self.sp_compare_n.value()
         # self._matches 는 누적 전체가 최신순으로 있으므로 앞에서 N개만 쓴다.
         my_matches = self._matches[:n]
-        my_stats = summarize(my_matches)
-        opp_stats = summarize(opp_matches)
+        # 나 대 상대 — 두 계정 경기를 합친 범위로 식 한 번(같은 식끼리 견준다)
+        mixed = core.mixed_of_matches(list(my_matches) + list(opp_matches))
+        my_stats = summarize(my_matches, mixed)
+        opp_stats = summarize(opp_matches, mixed)
         # 슛·패스·태클 줄과 키플레이어는 경기 상세에서 — 비교하는 그 경기들만(표 위 숫자와 같은 범위)
         my_details = self._details_of(self._details, my_matches)
         opp_details = self._details_of(opp_details, opp_matches)
@@ -6571,6 +6625,10 @@ class MainWindow(QMainWindow):
         for label, attr, fmt, higher_is_better in self.COMPARE_ROWS:
             mine_val = getattr(my_stats, attr)
             opp_val = getattr(opp_stats, attr)
+            if attr == "win_rate":
+                rows.append((label, *(win_rate_text(s.win, s.draw, s.lose, mixed, short=True)
+                                      for s in (my_stats, opp_stats)), mine_val, opp_val, higher_is_better))
+                continue
             rows.append((label, fmt.format(mine_val), fmt.format(opp_val),
                         mine_val, opp_val, higher_is_better))
         for label, axis, fmt, higher_is_better in self.COMPARE_PROFILE_ROWS:
@@ -6588,6 +6646,9 @@ class MainWindow(QMainWindow):
             item_opp = self._cell(opp_txt)
             self.tbl_compare.setItem(r, 1, item_mine)
             self.tbl_compare.setItem(r, 2, item_opp)
+            if label == "승률":
+                for it, s in ((item_mine, my_stats), (item_opp, opp_stats)):
+                    it.setToolTip(win_rate_text(s.win, s.draw, s.lose, mixed) + "\n" + win_rate_note(mixed))
             if higher_is_better is not None and mine_val != opp_val:
                 mine_wins = (mine_val > opp_val) == higher_is_better
                 item_mine.setForeground(QColor(T.GREEN if mine_wins else T.TEXT))
@@ -7108,6 +7169,7 @@ class MainWindow(QMainWindow):
         "analysis": [("흐름 분석", None)], "period": [("기간별 추이", None)], "seasons": [("시즌별 성적", None)],
         "clutch": [("승부처 분석", None)],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
+        "divstay": [("성적 진단", "등급 체류")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
         "shotmap": [("슛 맵", None)],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
@@ -7148,6 +7210,7 @@ class MainWindow(QMainWindow):
             "seasons": self._render_seasons,  # 시즌 필터도 무시(_matches_all)
             "clutch": lambda: self._render_clutch(self._details, self._matches),
             "diagnosis": lambda: self._render_diagnosis(self._details),
+            "divstay": lambda: self._render_divstay(self._details),   # 시즌 범위(diagnosis 와 같다)
             "shotmap": self._render_shotmap,  # 표시 구간
             "finishing": lambda: self._render_finishing(self._slice()[1]),
             "rankercmp": lambda: self._render_ranker_compare(self._slice()[1]),  # 표시 구간 — 랭커 요청은 카드 수만큼
@@ -7253,11 +7316,12 @@ class MainWindow(QMainWindow):
             # 챔피언스 미만이거나, 랭커인데 랭킹 조회에 실패한 경우 — 우리 집계로.
             full = summarize(self._matches)
             c.set("전적",
-                  f"{wdl_text(full.win, full.draw, full.lose)} ({full.win_rate:.1f}%)")
+                  f"{wdl_text(full.win, full.draw, full.lose)} "
+                  f"({win_rate_text(full.win, full.draw, full.lose, full.mixed, short=True)})")
             last = self._matches[0].date_text if self._matches else "-"
             c.note.setText(f"* {self._grade_name} · 최근 {len(self._matches)}경기 기준 · {last}")
             c.setToolTip("챔피언스 이상 등급에서만 넥슨 데이터센터 순위·구단가치·\n"
-                         "점수를 보여줍니다. 전적은 앱이 받은 경기 기준입니다.")
+                         "점수를 보여줍니다. 전적은 앱이 받은 경기 기준입니다.\n" + win_rate_note(full.mixed))
 
     @staticmethod
     def _cell(text: str, key=None):
@@ -7355,7 +7419,7 @@ class MainWindow(QMainWindow):
         for s in opponent_stats(matches):
             rows.append([
                 s.nickname, wdl_text(s.win, s.draw, s.lose),
-                (f"{s.win_rate:.1f}%", s.win_rate),
+                (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
                 (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
                 (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
                 s.last_date,
@@ -7459,18 +7523,21 @@ class MainWindow(QMainWindow):
         않게) + "(구분 전)"(같은 이름의 두 팀컬러를 합친 값이라 해석할 수 없다)."""
         if teamcolor.is_unsplit(s.team_color):
             return "예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기 — 두 팀컬러를 합친 값입니다."
-        if s.games < core.MIN_COND or len(s.opponents) < config.TEAMCOLOR_MIN_OPPONENTS:
-            return (f"표본 {s.games}경기 · 상대 {len(s.opponents)}명 — 기준({core.MIN_COND}경기 · "
-                    f"상대 {config.TEAMCOLOR_MIN_OPPONENTS}명) 미만이라 크게 흔들립니다.")
+        if core.is_weak(s.rated, core.MIN_COND) or len(s.opponents) < config.TEAMCOLOR_MIN_OPPONENTS:
+            unit = "판" if s.mixed else "경기"
+            return (f"{sample_text(s.rated, s.mixed)}{'' if s.mixed else '경기'} · 상대 {len(s.opponents)}명 — "
+                    f"기준({core.MIN_COND}{unit} · 상대 {config.TEAMCOLOR_MIN_OPPONENTS}명) 미만이라 크게 흔들립니다.")
         return ""
 
     def _render_teamcolor_tabs(self, matches: list[MatchSummary],
                                details: list[dict]) -> None:
+        # 표 줄과 "평균 대비" 기준이 같은 식 — 팀컬러를 아는 경기 범위로 한 번
+        mixed = core.team_color_mixed(matches, self._team_color_of)
         stats_all = core.team_color_stats(matches, self._team_color_of,
-                                        team_value_of=self._team_values.get)
-        base_n, base_rate = core.team_color_baseline(matches, self._team_color_of)
-        min_games = self._teamcolor_min_games()
-        stats_list = [s for s in stats_all if s.games >= min_games]
+                                        team_value_of=self._team_values.get, mixed=mixed)
+        base_n, base_rate = core.team_color_baseline(matches, self._team_color_of, mixed)
+        min_games = self._teamcolor_min_games()   # 기본 = 흐림 기준(MIN_COND) — 같은 분모(rated)로 걸러야 흐림과 안 갈린다
+        stats_list = [s for s in stats_all if not core.is_weak(s.rated, min_games)]
         weak = [self._teamcolor_weak(s) for s in stats_list]
         eff = self.TEAMCOLOR_EFFECT_TEXT
         # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
@@ -7481,7 +7548,7 @@ class MainWindow(QMainWindow):
             diff = s.win_rate - base_rate
             rate_rows.append([s.team_color, (str(s.games), s.games), (str(len(s.opponents)), len(s.opponents)),
                               (str(s.win), s.win), (str(s.draw), s.draw), (str(s.lose), s.lose),
-                              (f"{s.win_rate:.1f}%", s.win_rate),
+                              (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
                               (f"{diff:+.1f}%p", diff) if base_n else ("-", 0.0), eff])
         # 채우는 순서(PyQt 규칙 1): 정렬 끈 채로 채움 → 색·흐림 → 정렬 켬 → 기본 정렬
         self._fill(self.tbl_teamcolor_rate, rate_rows, enable_sort=False)
@@ -7532,11 +7599,16 @@ class MainWindow(QMainWindow):
         self._render_position_opponents(details)
         opps = {m.opponent for m in matches if m.opponent}
         known = sum(1 for n in opps if self._team_colors.get(n))
+        unit = "판" if mixed else "경기"
+        for lb in self._teamcolor_min_units:
+            lb.setText("승패 판 이상만" if mixed else "경기 이상만")
+            lb.setToolTip(win_rate_note(mixed))
         extra = f" 팀컬러 {len(stats_list)}종"
         if len(stats_all) > len(stats_list):
-            extra += f"(최소 {min_games}경기 미만 {len(stats_all) - len(stats_list)}종 숨김)"
+            extra += f"(최소 {'승패 ' if mixed else ''}{min_games}{unit} 미만 {len(stats_all) - len(stats_list)}종 숨김)"
         if base_n:
-            extra += f" · \"평균 대비\"는 팀컬러를 아는 {base_n:,}경기 승률 {base_rate:.1f}% 기준."
+            extra += (f" · \"평균 대비\"는 팀컬러를 아는 {'승패 ' if mixed else ''}{base_n:,}{unit} 승률 "
+                      f"{base_rate:.1f}%{'(승÷(승+패))' if mixed else ''} 기준.")
         if any(teamcolor.is_unsplit(s.team_color) for s in stats_all):
             extra += (" \"(구분 전)\" — 예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기입니다"
                       "(상대를 다시 읽으면 갈립니다). 같은 이름이 최대 세 줄로 나뉘어 줄마다 표본이 작아집니다.")
@@ -8565,10 +8637,14 @@ class MainWindow(QMainWindow):
         self.gb_trend.setTitle(f"최근 {days}일 승률 추이")
         self._trend_periods = win_rate_trend(matches, days=days)
         # 이동평균은 그래프에만 — _trend_periods 는 대시보드가 같이 쓴다. 창 앞 6일도 matches(시즌 범위) 안에서만.
-        ma = core.moving_win_rate(matches, [p.day for p in self._trend_periods], min_n=core.MIN_COND)
+        mixed = self._trend_periods[0].mixed if self._trend_periods else False   # 그래프 점과 같은 식
+        ma = core.moving_win_rate(matches, [p.day for p in self._trend_periods], min_n=core.MIN_COND, mixed=mixed)
+        self.gb_trend.setToolTip(win_rate_note(mixed))
+        # 평균선 무게는 승률 분모(rated) — 섞인 묶음이면 무승부뿐인 날은 무게 0 · 빈 고리(0% 로 읽히지 않게)
         self.trend_chart.set_data(
             [(p.label, p.win_rate, p.games) for p in self._trend_periods],
-            counts=True, baseline=50, ma=ma)
+            counts=True, baseline=50, ma=ma, avg_weights=[p.rated for p in self._trend_periods],
+            weak=[p.rated == 0 for p in self._trend_periods])
 
         # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다. 점은 하루 마지막 등급(1만 경기 → 약 100점).
         days_div = core.daily_division(core.division_trend(self._details, self._ouid))
@@ -8825,13 +8901,16 @@ class MainWindow(QMainWindow):
         """승률 그래프 페이지의 기간 요약 — 선택한 기간의 최고·평균·최저 승률."""
         periods = getattr(self, "_trend_periods", [])
         days = self.sp_trend_days.value()
-        rates = [p.win_rate for p in periods if p.games]
+        mixed = periods[0].mixed if periods else False   # win_rate_trend 가 그래프 하나로 정한 식
+        rates = [p.win_rate for p in periods if p.rated]
         total_games = sum(p.games for p in periods)
-        total_win = sum(p.win for p in periods)
-        avg_rate = (total_win / total_games * 100) if total_games else 0.0
-        self.card_trend_max.set(f"{max(rates):.1f}%" if rates else NA)
-        self.card_trend_avg.set(f"{avg_rate:.1f}%" if total_games else NA)
-        self.card_trend_min.set(f"{min(rates):.1f}%" if rates else NA)
+        wdl = [sum(p.win for p in periods), sum(p.draw for p in periods), sum(p.lose for p in periods)]
+        star = "*" if mixed else ""
+        self.card_trend_max.set(f"{max(rates):.1f}%{star}" if rates else NA)
+        self.card_trend_avg.set(win_rate_text(*wdl, mixed, short=True) if total_games else NA)
+        self.card_trend_min.set(f"{min(rates):.1f}%{star}" if rates else NA)
+        for card in (self.card_trend_max, self.card_trend_avg, self.card_trend_min):
+            card.setToolTip(win_rate_note(mixed))
         self.card_trend_games.set_title(f"{days}일 경기수")
         self.card_trend_games.set(f"{total_games}경기")
 
@@ -8845,13 +8924,15 @@ class MainWindow(QMainWindow):
             scope_matches=self._matches, scope_details=self._details,
             scope_name=self._scope_text(),
             trend_points=[(p.label, p.win_rate, p.games) for p in periods],
+            trend_weights=[p.rated for p in periods],
             trend_days=self.sp_trend_days.value(),
             story=self._narrate_scope()))
 
     def _render_seasons(self) -> None:
         groups = self._season_groups()
         last_end = max((s.end for s in self._rank_seasons), default=None)
-        sums = [summarize(group) for _, group in groups]
+        mixed = core.mixed_of_matches(self._matches_all)   # 시즌끼리 견주므로 표 하나(누적 전체)로 한 번
+        sums = [summarize(group, mixed) for _, group in groups]
         divs = core.season_divisions(core.division_trend(self._details_all, self._ouid), groups)
         name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
         rows, bars, tips = [], [], []
@@ -8863,7 +8944,7 @@ class MainWindow(QMainWindow):
                 key = int(season.start.strftime("%Y%m%d"))
             # 바로 앞 시즌 = 목록에서 다음 것(최신순) — 경기 없는 시즌은 목록에 없어 건너뛴다
             prev = sums[i + 1] if i + 1 < len(sums) else None
-            if prev is not None and s.total and prev.total:
+            if prev is not None and s.rated and prev.rated:
                 diff = s.win_rate - prev.win_rate
                 vs = (f"{diff:+.1f}%p", diff)
             else:
@@ -8876,16 +8957,18 @@ class MainWindow(QMainWindow):
                 (f"{s.total:,}", s.total),
                 (f"{s.win:,}", s.win), (f"{s.draw:,}", s.draw),
                 (f"{s.lose:,}", s.lose),
-                (f"{s.win_rate:.1f}%", s.win_rate),
+                (win_rate_text(s.win, s.draw, s.lose, mixed, short=True), s.win_rate),
                 vs, grade,
                 (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
                 (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
                 (f"{s.avg_possession:.1f}%", s.avg_possession),
                 (f"{s.avg_rating:.2f}", s.avg_rating),
             ])
-            weak = s.total < core.MIN_COND
-            bars.append((label, s.win_rate if s.total else None, f"{s.win_rate:.1f}% · {s.total:,}경기",
-                         sample_note(s.total, core.MIN_COND) if weak else f"{label} · {span}", weak))
+            weak = core.is_weak(s.rated, core.MIN_COND)
+            bars.append((label, s.win_rate if s.rated else None,
+                         f"{win_rate_text(s.win, s.draw, s.lose, mixed, short=True)} · {s.total:,}경기",
+                         sample_note(s.rated, core.MIN_COND, mixed) if weak
+                         else f"{label} · {span}\n{win_rate_note(mixed)}", weak))
         self.season_bars.set_data(bars)
         self._fill(self.tbl_seasons, rows, enable_sort=False)  # 툴팁을 채운 순서대로 붙인다(표 함정 1번)
         grade_col = self.SEASON_COLUMNS.index("등급")
@@ -8923,7 +9006,8 @@ class MainWindow(QMainWindow):
             rows.append([
                 p.position, p.name, (f"{p.grade}", p.grade),
                 (f"{p.games} ⚠" if p.games < few else f"{p.games}", p.games),
-                (f"{p.win_rate:.1f}", p.win_rate),
+                # 선수표는 열이 빽빽해 % 없이(예전 그대로) — 섞인 식이면 * 만(1280 폭에서 가로 스크롤이 생겼다)
+                (f"{p.win_rate:.1f}" + ("*" if p.mixed else ""), p.win_rate),
                 (f"{p.attack_power:.1f}", p.attack_power),
                 (f"{p.defense_power:.1f}", p.defense_power),
                 (f"{p.expected_goal_rate:.1f}", p.expected_goal_rate),
@@ -9055,22 +9139,27 @@ class MainWindow(QMainWindow):
         if mine:
             t = mine[0]
             self.lb_my_formation.setText(
-                f"{t.formation}      {t.win_rate:.1f}%      "
+                f"{t.formation}      {win_rate_text(t.win, t.draw, t.lose, t.mixed)}      "
                 f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
+            self.lb_my_formation.setToolTip(win_rate_note(t.mixed))
 
         self._clear(self.box_opp)
         few = core.MIN_COND
         opp_rows = []
-        for f in core.formation_stats(details, self._ouid):
-            weak = f.games < few
+        opp_stats = core.formation_stats(details, self._ouid)
+        mixed = opp_stats[0].mixed if opp_stats else False
+        for f in opp_stats:
+            weak = core.is_weak(f.rated, few)
             opp_rows.append((
                 f.formation, f.win_rate,
-                f"{f.win_rate:.1f}% · {wdl_text(f.win, f.draw, f.lose)}" + (f" · 표본 {f.games}" if weak else ""),
-                f"상대 {f.formation} — {f.games}경기 승률 {f.win_rate:.1f}%"
-                + (f"\n{sample_note(f.games, few)}" if weak else ""),
+                f"{win_rate_text(f.win, f.draw, f.lose, f.mixed, short=True)} · {wdl_text(f.win, f.draw, f.lose)}"
+                + (f" · {sample_text(f.rated, f.mixed)}" if weak else ""),
+                f"상대 {f.formation} — {f.games}경기 승률 {win_rate_text(f.win, f.draw, f.lose, f.mixed)}"
+                + (f"\n{sample_note(f.rated, few, f.mixed)}" if weak else ""),
                 weak))
         if opp_rows:
-            head = QLabel(f"상대 포메이션별 내 승률 · 흐린 줄은 {few}경기 미만")
+            head = QLabel(f"상대 포메이션별 내 승률 · 흐린 줄은 {'승패' if mixed else '경기'} {few}판 미만")
+            head.setToolTip(win_rate_note(mixed))
             head.setStyleSheet(f"color: {T.TEXT_DIM};")
             self.box_opp.addWidget(head)
             self.opp_formation_bars = charts.HBarList()
@@ -9088,8 +9177,9 @@ class MainWindow(QMainWindow):
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(wdl_text(*wdl))
             b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            c = QLabel(f"({rate_of(*wdl):.1f}%)")
+            c = QLabel(f"({win_rate_text(*wdl, rb.mixed, short=True)})")
             c.setStyleSheet(f"color: {T.TEXT_DIM};")
+            c.setToolTip(win_rate_note(rb.mixed))
             h.addWidget(a)
             h.addStretch(1)
             h.addWidget(b)

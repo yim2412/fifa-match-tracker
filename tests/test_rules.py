@@ -38,6 +38,44 @@ SQL_TEMP_ALLOW = {
     # 옛 DB 의 겹친 ELO 줄 정리 — 고유 인덱스를 만들기 전에 DB 마다 한 번만 돈다(인덱스가 생기면 다시 안 돈다)
     "store.py:_ensure_elo_unique": re.compile(r"DELETE FROM elo_history WHERE rowid NOT IN"),
 }
+# 승률 표본 판정(2.6.1 A6) — 문턱과의 비교식은 models.is_weak(rated, 문턱) 안에서만. 아래는 승률 표본이 아닌 비교
+# (파일, 함수, 문턱 이름) → 이유. 줄이 아니라 비교식 단위 — 한 줄에 대상·제외가 같이 있을 수 있다(팀컬러 상대 수)
+WEAK_FILES = ("models.py", "stats.py", "analysis.py", "widgets.py", "dashboard.py", "app_main.py",
+              "squad_timeline.py", "check_api.py")
+WEAK_ALLOW = {
+    ("models.py", "is_weak", "min_n"): "판정 자신",
+    ("analysis.py", "_contrast", "MIN_BASE"): "선제골 *비율* 표본(경기 수) — 승률 아님",
+    ("analysis.py", "_contrast", "MIN_FLOW"): "선제골 *비율* 표본(경기 수) — 승률 아님",
+    ("analysis.py", "_contrast", "MIN_COND"): "선제골 *비율* 표본(경기 수) — 승률 아님",
+    ("analysis.py", "_minute_rules", "MIN_GOALS"): "골 수",
+    ("analysis.py", "_finishing_rules", "MIN_SHOTS"): "슛 수",
+    ("analysis.py", "_goal_type_rules", "MIN_GOALS"): "골 수",
+    ("stats.py", "enough", "MIN_BUCKET_SHOTS"): "슛 수",
+    ("stats.py", "key_players", "min_games"): "선수 출전 수",
+    ("stats.py", "weak", "PLAYER_RATING_MIN_GAMES"): "선수 평점 출전 수",
+    ("dashboard.py", "_render_clutch", "MIN_GAUGE_GAMES"): "셋째 칸 지킨 비율 = (승+무)÷선제골 경기 — 승률 아님",
+    ("widgets.py", "_refit", "_min_pt"): "글자 크기",
+    ("widgets.py", "_fit", "MIN_FONT_PX"): "글자 크기",
+    ("widgets.py", "shows_price_line", "PRICE_MIN_H"): "위젯 높이",
+    ("widgets.py", "shows_face", "FACE_MIN_H"): "위젯 높이",
+    ("widgets.py", "_paint_assists", "X_MIN"): "좌표",
+    ("app_main.py", "eta_text", "ETA_MIN_DONE"): "남은 시간",
+    ("app_main.py", "initial_window", "MIN_WINDOW"): "창 크기",
+    ("app_main.py", "_render_ranker_pick", "RANKER_PICK_MIN_RANKERS"): "랭커 픽 인원",
+    ("app_main.py", "_render_recommend", "RANKER_PICK_MIN_RANKERS"): "랭커 픽 인원",
+    ("app_main.py", "_rec_sources_text", "RANKER_PICK_MIN_RANKERS"): "랭커 픽 인원",
+    ("app_main.py", "_render_rank_trend", "TREND_MIN_SHARE"): "메타 점유",
+    ("app_main.py", "_fill_trait_forms", "TRAIT_MIN_PEOPLE"): "특성 인원",
+    ("app_main.py", "_render_ranker_compare", "few_me"): "선수 출전 수",
+    ("app_main.py", "_render_ranker_compare", "few_r"): "랭커 표본(matchCount)",
+    ("app_main.py", "_teamcolor_weak", "TEAMCOLOR_MIN_OPPONENTS"): "상대 수",
+    ("app_main.py", "_fill_scout", "few"): "선수 출전 수",
+    ("app_main.py", "_build_my_record", "PLAYER_TREND_MIN_SHOTS"): "슛 수",
+    ("app_main.py", "_render_players", "few"): "선수 출전 수 ⚠ — 선수 지표 전체의 표본 표시",
+    ("app_main.py", "_render_pass_style", "min_tries"): "패스 시도 수",
+    ("app_main.py", "rate", "min_tries"): "패스 시도 수",
+    ("app_main.py", "_render_pass_style", "few"): "패스 스타일 경기 수 — 승률 아님",
+}
 MODAL_STATIC = {"QFileDialog", "QInputDialog", "QColorDialog", "QFontDialog", "QMessageBox"}
 MODAL_GUARDED_BASE = {"QDialog.exec", "QApplication.exec"}   # 하위 클래스의 exec() 도 이걸로 막힌다
 
@@ -188,6 +226,68 @@ def check_colors(srcs: dict[str, str]) -> list[str]:
             if isinstance(node, ast.Call) and _call_name(node) == "QColor" and len(node.args) >= 3 \
                     and all(isinstance(a, ast.Constant) for a in node.args[:3]):
                 out.append(f"{rel}:{line} QColor(r, g, b) — theme.py 에 둔다")
+    return out
+
+
+def _threshold(name: str) -> bool:
+    """문턱 이름 — 밑줄로 자른 조각에 min · need · few* (대소문자 무시). minute 같은 낱말은 안 걸린다."""
+    toks = [t.lower() for t in name.split("_") if t]
+    return any(t == "min" or t == "need" or t.startswith("few") for t in toks)
+
+
+def _operand(node) -> str | None:
+    return node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else None
+
+
+def _names_in(side) -> list[str]:
+    """비교식 한쪽 안의 이름 전부 — `MIN_WINDOW[0] + fw` 처럼 첨자·덧셈 안의 문턱도(처음엔 맨 이름만 봐 창 크기 비교를
+    놓쳤다). 불리는 함수 이름(`min(a, b)`)은 문턱이 아니라 뺀다."""
+    funcs = {id(c.func) for c in ast.walk(side) if isinstance(c, ast.Call)}
+    return [n for x in ast.walk(side) if id(x) not in funcs and (n := _operand(x))]
+
+
+def check_weak(srcs: dict[str, str], allow: dict = WEAK_ALLOW) -> list[str]:
+    """문턱과의 대소 비교는 is_weak(rated, 문턱) 로 — 승률 분모(rated)와 다른 수로 흐리면 흐림과 숫자가 어긋난다(A6).
+    같은 함수 안에서 문턱을 대입받은 이름(별칭 `few = core.MIN_COND`)도 문턱으로 본다. 예외는 allow 표로만."""
+    out = []
+    for rel, src in srcs.items():
+        for fn in ast.walk(ast.parse(src)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            alias: dict[str, str] = {}
+            for node in ast.walk(fn):
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    src_name = _operand(node.value)
+                    if src_name and (_threshold(src_name) or src_name in alias):
+                        alias[node.targets[0].id] = alias.get(src_name, src_name)
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Compare) or not any(
+                        isinstance(o, (ast.Lt, ast.LtE, ast.Gt, ast.GtE)) for o in node.ops):
+                    continue
+                for n in {n for side in (node.left, *node.comparators) for n in _names_in(side)}:
+                    if not (_threshold(n) or n in alias):
+                        continue
+                    if (rel, fn.name, n) in allow or (rel, fn.name, alias.get(n, "")) in allow:
+                        continue
+                    out.append(f"{rel}:{node.lineno} {fn.name} — `{ast.unparse(node)}` 는 is_weak(rated, {n}) 로")
+    return out
+
+
+RATE_FILES = ("models.py", "stats.py", "squad_timeline.py")
+
+
+def rate_classes(srcs: dict[str, str]) -> set[str]:
+    """승률을 내는 집계 클래스 — RateMixin 을 잇거나 몸통에서 win_pct 를 부른다(필드 이름으로 모으면
+    승무패가 list 인 Discipline·ClutchSummary 가 빠지고 win: PassGroup 인 PassStyle 이 잘못 걸린다 — 검토 3회차)."""
+    out = set()
+    for src in srcs.values():
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.ClassDef) or node.name == "RateMixin":
+                continue
+            bases = {_operand(b) for b in node.bases}
+            calls = {_call_name(c).split(".")[-1] for c in ast.walk(node) if isinstance(c, ast.Call)}
+            if "RateMixin" in bases or "win_pct" in calls:
+                out.add(node.name)
     return out
 
 
@@ -382,6 +482,44 @@ def test_colors_only_in_theme():
     assert check_colors({"playerinfo.py": "STAT_COLOR_BUCKETS = ['#ffffff']\nX = '#000000'\n"}) == \
         ["playerinfo.py:2 색 \"#000000\" — theme.py 에 둔다"]
     assert check_colors(_all(APP_FILES)) == []
+
+
+def test_weak_samples_go_through_is_weak():
+    # 심은 위반 다섯(ROADMAP 2.6.1 A6) — 직접 비교 · 별칭 · 경기 수 · 지역 문턱 · config 문턱
+    bad = ("def a(b):\n    if b.games < MIN_COND: pass\n"
+           "def c(p):\n    few = core.MIN_COND\n    if p.games < few: pass\n"
+           "def d(s):\n    if s.total < MIN_BASE: pass\n"
+           "def e(games, min_n):\n    weak = games < min_n\n"
+           "def f(c):\n    if c.met < config.OPP_CARD_MIN: pass\n")
+    assert len(check_weak({"x.py": bad})) == 5, check_weak({"x.py": bad})
+    ok = ("def a(b):\n    if core.is_weak(b.rated, MIN_COND): pass\n"
+          "def g(minute):\n    if minute < 45: pass\n"
+          "def h(a, b, x):\n    if x < min(a, b): pass\n")
+    assert check_weak({"x.py": ok}) == []
+    # 첨자·덧셈 안의 문턱도(맨 이름만 보던 첫 판은 창 크기 비교 app_main.initial_window 를 놓쳤다)
+    assert len(check_weak({"x.py": "def w(a, f):\n    return a >= LIM.MIN_N[0] + f\n"})) == 1
+    # 예외는 (파일, 함수, 이름) — 같은 파일 다른 함수는 잡힌다
+    assert check_weak({"x.py": "def z(t):\n    return t < X_MIN\n"}, {("x.py", "y", "X_MIN"): ""})
+    srcs = {f: _src(ROOT / f) for f in WEAK_FILES}
+    assert check_weak(srcs) == [], "\n".join(check_weak(srcs))
+    # 표에 쓰이지 않는 줄이 남지 않게 — 지운 코드의 예외가 남으면 다음 위반을 봐준다
+    used = set()
+    for key in WEAK_ALLOW:
+        if check_weak({key[0]: srcs[key[0]]}, {k: v for k, v in WEAK_ALLOW.items() if k != key}):
+            used.add(key)
+    assert used == set(WEAK_ALLOW), sorted(set(WEAK_ALLOW) - used)
+
+
+def test_rate_classes_table_is_complete():
+    # 표(models.RATE_CLASSES)가 빠지면 test_parsing 의 "mixed 가 bool" 검사가 그 클래스를 안 본다
+    import models
+    planted = {"x.py": "class A(RateMixin):\n    pass\n"
+                       "class B:\n    def rate(self, w):\n        return win_pct(*w, self.mixed)\n"
+                       "class C:\n    win: int = 0\n"}
+    assert rate_classes(planted) == {"A", "B"}, rate_classes(planted)
+    found = rate_classes({f: _src(ROOT / f) for f in RATE_FILES})
+    assert found == set(models.RATE_CLASSES), (sorted(found - set(models.RATE_CLASSES)),
+                                               sorted(set(models.RATE_CLASSES) - found))
 
 
 def test_every_query_avoids_temp_sort():

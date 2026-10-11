@@ -1,8 +1,86 @@
-"""매치 상세 JSON → 화면에 뿌릴 요약 자료구조."""
+"""매치 상세 JSON → 화면에 뿌릴 요약 자료구조.
+
+승률 식(2.6.1 A6 — ROADMAP "A6 무승부 분모"): 무승부는 양쪽 다 챔피언스 이상인 경기에선 안 나온다(연장·승부차기 —
+실측 0판). 그래서 승률을 내는 묶음(표 하나·그래프 하나·견주는 두 값은 합친 범위)에 무승부가 나는 경기와 안 나는 경기가
+**섞이면** 승÷(승+패), 한쪽뿐이면 승÷전체. 식은 `win_pct` 하나 · 분모 `rated` · 표본 판정 `is_weak` · 섞임 `is_mixed`.
+집계 줄의 `mixed` 는 기본 None 이고 None 이면 승률이 **오류**다 — 채우는 걸 잊은 길이 옛 식으로 조용히 남지 않게.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+
+# division 메타(오픈API get_meta('division'))는 숫자가 작을수록 높은 등급이다.
+#   800 슈퍼챔피언스 · 900 챔피언스 · 1000 슈퍼챌린지 · 1100~1300 챌린지1~3 · ...
+# "챔피언스 이상" = 900 이하. stats 가 여기서 가져간다(models 는 잎 — stats 를 import 하지 않는다).
+CHAMPION_DIVISION_ID = 900
+SUPER_CHAMPION_DIVISION_ID = 800
+
+
+def is_champion_or_above(division_id: int | None) -> bool:
+    return division_id is not None and division_id <= CHAMPION_DIVISION_ID
+
+
+def draw_possible(my_division, opp_division) -> bool | None:
+    """그 경기가 무승부로 끝날 수 있었나 — 양쪽 다 챔스 이상이 아니면 참. 한쪽이라도 division 이 없으면 None(모름)."""
+    if not isinstance(my_division, int) or not isinstance(opp_division, int):
+        return None
+    return not (is_champion_or_above(my_division) and is_champion_or_above(opp_division))
+
+
+def draw_possible_of(detail: dict, ouid: str) -> bool | None:
+    """경기 상세 하나의 draw_possible — 상대가 없으면(몰수·오류) None."""
+    infos = detail.get("matchInfo") or []
+    me = next((p for p in infos if p.get("ouid") == ouid), None)
+    opp = next((p for p in infos if p.get("ouid") != ouid), None)
+    if me is None or opp is None:
+        return None
+    return draw_possible(me.get("division"), opp.get("division"))
+
+
+def is_mixed(flags) -> bool:
+    """draw_possible 값들이 참·거짓 둘 다 있나. None 은 판정에서 뺀다 — division 없는 한 판이
+    챔스 아래만 하는 계정의 식을 통째로 바꾸지 않게(검토 1회차 [상]). 판정할 값이 없으면 한 집단."""
+    seen = {f for f in flags if f is not None}
+    return len(seen) > 1
+
+
+def mixed_of_details(details, ouid: str) -> bool:
+    return is_mixed(draw_possible_of(d, ouid) for d in details)
+
+
+def mixed_of_matches(matches) -> bool:
+    return is_mixed(getattr(m, "draw_possible", None) for m in matches)
+
+
+def rated(win: int, draw: int, lose: int, mixed: bool | None) -> int:
+    """승률 분모 — 섞임이면 승+패, 한 집단이면 승+무+패. 표본 판정도 이 값으로 한다."""
+    if mixed is None:
+        raise ValueError("mixed 를 안 채운 승률 — 묶음에서 is_mixed 로 정해 넘겨야 한다")
+    return win + lose if mixed else win + draw + lose
+
+
+def win_pct(win: int, draw: int, lose: int, mixed: bool | None) -> float:
+    """승률(%) — 앱의 내 경기 승률은 전부 이 한 식. 분모 0 이면 0.0."""
+    n = rated(win, draw, lose, mixed)
+    return win / n * 100 if n else 0.0
+
+
+def is_weak(rated_n: int, min_n: int) -> bool:
+    """승률 표본이 모자라나 — 흐림·침묵·거르기가 전부 이걸 부른다(분모는 rated)."""
+    return rated_n < min_n
+
+
+class RateMixin:
+    """win·draw·lose·mixed 를 가진 집계 줄의 승률·분모. 이 믹스인을 쓰는 클래스는 RATE_CLASSES 에 있어야 한다."""
+
+    @property
+    def rated(self) -> int:
+        return rated(self.win, self.draw, self.lose, self.mixed)
+
+    @property
+    def win_rate(self) -> float:
+        return win_pct(self.win, self.draw, self.lose, self.mixed)
 
 
 @dataclass
@@ -23,6 +101,7 @@ class MatchSummary:
     rating: float
     my_shootout: int = 0
     opp_shootout: int = 0
+    draw_possible: bool | None = None   # 무승부가 날 수 있던 경기인가(양쪽 division) — 저장 형식 아님
 
     @property
     def is_shootout(self) -> bool:
@@ -102,11 +181,12 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         rating=_f(md, "averageRating"),
         my_shootout=_i(shoot, "shootOutScore"),
         opp_shootout=_i(opp_shoot, "shootOutScore"),
+        draw_possible=draw_possible(me.get("division"), opp.get("division")) if opp else None,
     )
 
 
 @dataclass
-class Stats:
+class Stats(RateMixin):
     """조회한 경기들을 합친 통계."""
     total: int = 0
     win: int = 0
@@ -116,10 +196,7 @@ class Stats:
     goals_against: int = 0
     possession_sum: int = 0
     rating_sum: float = 0.0
-
-    @property
-    def win_rate(self) -> float:
-        return (self.win / self.total * 100) if self.total else 0.0
+    mixed: bool | None = None
 
     @property
     def avg_goals_for(self) -> float:
@@ -138,8 +215,9 @@ class Stats:
         return (self.rating_sum / self.total) if self.total else 0.0
 
 
-def summarize(matches: list[MatchSummary]) -> Stats:
-    s = Stats()
+def summarize(matches: list[MatchSummary], mixed: bool | None = None) -> Stats:
+    """mixed 를 주면 그 식으로(견주는 묶음이 합친 범위로 정한 값), 없으면 matches 로 정한다."""
+    s = Stats(mixed=mixed_of_matches(matches) if mixed is None else mixed)
     for m in matches:
         # 몰수승/몰수패도 승패로 친다. "오류"(중단된 경기)처럼 승·무·패가
         # 아닌 결과는 아예 집계에서 뺀다 — 승률 분모는 물론 평균 득실·점유율·
@@ -161,7 +239,7 @@ def summarize(matches: list[MatchSummary]) -> Stats:
 
 
 @dataclass
-class OpponentStat:
+class OpponentStat(RateMixin):
     """상대 구단주 한 명과의 상성 — 전적·평균 득실."""
     nickname: str
     games: int = 0
@@ -171,10 +249,7 @@ class OpponentStat:
     goals_for: int = 0
     goals_against: int = 0
     last_date: str = "-"
-
-    @property
-    def win_rate(self) -> float:
-        return (self.win / self.games * 100) if self.games else 0.0
+    mixed: bool | None = None
 
     @property
     def avg_goals_for(self) -> float:
@@ -185,17 +260,19 @@ class OpponentStat:
         return (self.goals_against / self.games) if self.games else 0.0
 
 
-def opponent_stats(matches: list[MatchSummary]) -> list[OpponentStat]:
+def opponent_stats(matches: list[MatchSummary], mixed: bool | None = None) -> list[OpponentStat]:
     """상대 닉네임별로 묶은 상성 — 많이 붙어본 순.
 
     matches 는 최신순으로 온다는 게 이미 전제라(화면 표시 순서 그대로),
     한 상대를 처음 만나는 순간(=가장 최근 경기)의 날짜를 last_date 로 쓴다.
+    승률 식은 표 하나(matches 전체)로 한 번 정한다.
     """
+    mixed = mixed_of_matches(matches) if mixed is None else mixed
     acc: dict[str, OpponentStat] = {}
     for m in matches:
         s = acc.get(m.opponent)
         if s is None:
-            s = acc[m.opponent] = OpponentStat(nickname=m.opponent, last_date=m.date_text)
+            s = acc[m.opponent] = OpponentStat(nickname=m.opponent, last_date=m.date_text, mixed=mixed)
         s.games += 1
         if "승" in m.result:
             s.win += 1
@@ -209,21 +286,18 @@ def opponent_stats(matches: list[MatchSummary]) -> list[OpponentStat]:
 
 
 @dataclass
-class PeriodRate:
+class PeriodRate(RateMixin):
     """하루 치 승률 — 기간별 승률 추이(그래프)의 한 점."""
     label: str
     win: int = 0
     draw: int = 0
     lose: int = 0
     day: date | None = None  # 라벨("%m/%d")엔 연도가 없어 이동평균 창을 못 잰다
+    mixed: bool | None = None
 
     @property
     def games(self) -> int:
         return self.win + self.draw + self.lose
-
-    @property
-    def win_rate(self) -> float:
-        return (self.win / self.games * 100) if self.games else 0.0
 
 
 def current_streak(matches: list[MatchSummary]) -> tuple[str, int]:
@@ -277,7 +351,7 @@ def longest_streaks(matches: list[MatchSummary]) -> tuple[int, int]:
 
 
 @dataclass
-class PeriodStat:
+class PeriodStat(RateMixin):
     """기간(1일/2일/1주/1개월 묶음) 하나의 전적 — 기간별 추이 표의 한 줄."""
     label: str
     win: int = 0
@@ -285,14 +359,11 @@ class PeriodStat:
     lose: int = 0
     goals_for: int = 0
     goals_against: int = 0
+    mixed: bool | None = None
 
     @property
     def games(self) -> int:
         return self.win + self.draw + self.lose
-
-    @property
-    def win_rate(self) -> float:
-        return (self.win / self.games * 100) if self.games else 0.0
 
     @property
     def avg_gf(self) -> float:
@@ -303,14 +374,15 @@ class PeriodStat:
         return self.goals_against / self.games if self.games else 0.0
 
 
-def period_stats(matches: list[MatchSummary], days: int = 7) -> list[PeriodStat]:
+def period_stats(matches: list[MatchSummary], days: int = 7, mixed: bool | None = None) -> list[PeriodStat]:
     """경기를 기간 단위로 묶은 전적 — 최신 기간부터.
 
     days: 1(일별) · 2(2일씩) · 7(주 — 월요일 시작) · 30(달력 월).
     7과 30은 임의 창이 아니라 달력 기준(월요일 시작 주, 그 달)으로 묶는다 —
     "이번 주" "7월" 같은 자연스러운 구간과 어긋나면 오히려 헷갈린다.
-    경기가 없던 기간은 만들지 않는다."""
+    경기가 없던 기간은 만들지 않는다. 승률 식은 표 하나(dated 전체)로 한 번 — 표의 평균(overall)도 같은 값으로."""
     dated = [m for m in matches if m.match_date is not None]
+    mixed = mixed_of_matches(dated) if mixed is None else mixed
     acc: dict = {}
     for m in dated:
         d = m.match_date.date()
@@ -331,7 +403,7 @@ def period_stats(matches: list[MatchSummary], days: int = 7) -> list[PeriodStat]
             label = f"{start:%m/%d}~{start + timedelta(days=days - 1):%m/%d}"
         s = acc.get(key)
         if s is None:
-            s = acc[key] = PeriodStat(label=label)
+            s = acc[key] = PeriodStat(label=label, mixed=mixed)
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
@@ -356,15 +428,15 @@ def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRa
         return []
     latest = max(m.match_date for m in dated).date()
     cutoff = latest - timedelta(days=days - 1)
+    shown = [m for m in dated if m.match_date.date() >= cutoff]
+    mixed = mixed_of_matches(shown)   # 묶음 = 그래프 하나(그 기간) — 이동 승률도 이 값을 받는다
 
     acc: dict = {}
-    for m in dated:
+    for m in shown:
         d = m.match_date.date()
-        if d < cutoff:
-            continue
         s = acc.get(d)
         if s is None:
-            s = acc[d] = PeriodRate(label=d.strftime("%m/%d"), day=d)
+            s = acc[d] = PeriodRate(label=d.strftime("%m/%d"), day=d, mixed=mixed)
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
@@ -374,33 +446,41 @@ def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRa
     return [acc[k] for k in sorted(acc.keys())]
 
 
-def moving_win_rate(matches: list[MatchSummary], days: list[date], *, min_n: int,
+def moving_win_rate(matches: list[MatchSummary], days: list[date], *, min_n: int, mixed: bool,
                     window_days: int = 7) -> list[float | None]:
-    """days 의 날마다 달력 window_days 일(그날 포함 앞 window_days-1 일) 승률 — 승 합 ÷ 경기 합(%).
+    """days 의 날마다 달력 window_days 일(그날 포함 앞 window_days-1 일) 승률(win_pct · %).
 
     경기에서 직접 센다 — 그래프 점(PeriodRate)은 경기 없는 날을 안 만들어서 점 7개가 7일이 아니다.
-    창 안 경기(승·무·패)가 min_n 미만이면 None(선이 끊긴다). min_n 은 부르는 쪽이 준다
-    (analysis.MIN_COND — models 가 analysis 를 import 하면 순환이다)."""
+    창 안 승률 분모(rated)가 min_n 미만이면 None(선이 끊긴다). min_n 은 부르는 쪽이 준다
+    (analysis.MIN_COND — models 가 analysis 를 import 하면 순환이다). mixed 는 그래프 점과 같은 값(win_rate_trend)."""
     per_day: dict[date, list[int]] = {}
     for m in matches:
         if m.match_date is None:
             continue
         if "승" in m.result:
-            won = 1
-        elif "무" in m.result or "패" in m.result:
-            won = 0
+            k = 0
+        elif "무" in m.result:
+            k = 1
+        elif "패" in m.result:
+            k = 2
         else:
             continue  # 오류·몰수 미상 — 승률 분모에 안 넣는다(PeriodRate.games 와 같다)
-        acc = per_day.setdefault(m.match_date.date(), [0, 0])
-        acc[0] += won
-        acc[1] += 1
+        per_day.setdefault(m.match_date.date(), [0, 0, 0])[k] += 1
     out: list[float | None] = []
     for d in days:
-        win = games = 0
+        wdl = [0, 0, 0]
         for k in range(window_days):
             acc = per_day.get(d - timedelta(days=k))
             if acc:
-                win += acc[0]
-                games += acc[1]
-        out.append(win / games * 100 if games and games >= min_n else None)
+                for i in range(3):
+                    wdl[i] += acc[i]
+        n = rated(*wdl, mixed)
+        out.append(None if n == 0 or is_weak(n, min_n) else win_pct(*wdl, mixed))
     return out
+
+
+# 승률을 내는 집계 결과 전부 — test_parsing 이 결과의 mixed 가 bool 인지, test_rules 가 win_pct·RateMixin 을 쓰는
+# 클래스가 여기 빠짐없이 있는지 대조한다. 이름만 둔다(stats·squad_timeline 을 import 하면 순환이다).
+RATE_CLASSES = ("Stats", "OpponentStat", "PeriodRate", "PeriodStat", "PlayerStat", "FormationStat",
+                "TimeBandRate", "StreakAfter", "DivisionStat", "PossessionBand", "TeamColorStat", "OppCard",
+                "ResultBreakdown", "ClutchSummary", "Discipline", "Window")

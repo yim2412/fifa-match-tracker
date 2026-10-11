@@ -18,7 +18,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from models import MatchSummary, current_streak, opponent_stats, summarize
+from models import (MatchSummary, current_streak, is_weak, mixed_of_matches, opponent_stats, rated,
+                    summarize)
 from stats import (UNKNOWN_GOAL_TYPE, after_streak_rates, clutch_summary,
                    formation_stats, goal_minute_buckets, possession_stats,
                    result_breakdown, shot_map)
@@ -69,6 +70,7 @@ class Basis:
     """조건부 승률 문장의 근거 숫자 — 화면이 "조건 막대 vs 기준 승률"로 그린다(1.3.1 ②).
 
     min_n 은 그 문장을 낸 표본 기준과 같은 값이다 — 막대 흐림이 문장 기준과 어긋나지 않게.
+    n 은 승률 분모(models.rated)다 — 섞인 묶음이면 승+패. mixed 는 rate·base_rate 가 같이 쓴 식(2.6.1 A6).
     기준이 전체 승률이 아닌 규칙(최근 vs 그 이전 · 점유율 구간끼리)은 base_label 로 밝힌다."""
     label: str
     rate: float
@@ -76,6 +78,7 @@ class Basis:
     base_rate: float
     min_n: int
     base_label: str = "전체"
+    mixed: bool = False
 
 
 @dataclass
@@ -117,13 +120,8 @@ def _min_cond(total: int) -> int:
 
 def streak_min_n(total: int) -> int:
     """연승·연패 직후 구역의 흐림 기준 — 문장 기준(_min_cond)과 같게 둬서, 막대는 굵은데
-    문장은 침묵하는 엇갈림이 없게 한다. total 은 승·무·패 경기 수."""
+    문장은 침묵하는 엇갈림이 없게 한다. total 은 승률 분모(Stats.rated)."""
     return _min_cond(total)
-
-
-def _rate(wdl: list[int]) -> float:
-    tot = sum(wdl)
-    return wdl[0] / tot * 100 if tot else 0.0
 
 
 def _wdl_text(w: int, d: int, l: int) -> str:
@@ -144,8 +142,9 @@ def _recent_details(matches: list[MatchSummary], details: list[dict],
 def _flow(matches: list[MatchSummary], details: list[dict], ouid: str,
           window: int) -> list[Insight]:
     recent = matches[:window]
-    s = summarize(recent)
-    if s.total < MIN_FLOW:
+    mixed = mixed_of_matches(matches)   # 최근 대 그 이전을 견주므로 둘 합친 범위로 한 번
+    s = summarize(recent, mixed)
+    if is_weak(s.rated, MIN_FLOW):
         return []
 
     out = [Insight(
@@ -164,8 +163,8 @@ def _flow(matches: list[MatchSummary], details: list[dict], ouid: str,
             _w(run * 10, run, 3)))
 
     # 이전 구간과 비교 — 최근이 평소보다 좋아졌나 나빠졌나.
-    prev = summarize(matches[window:])
-    if prev.total >= MIN_BASE:
+    prev = summarize(matches[window:], mixed)
+    if not is_weak(prev.rated, MIN_BASE):
         gap = s.win_rate - prev.win_rate
         if abs(gap) >= GAP:
             word = "올랐습니다" if gap > 0 else "떨어졌습니다"
@@ -173,9 +172,9 @@ def _flow(matches: list[MatchSummary], details: list[dict], ouid: str,
                 SEC_FLOW,
                 f"그 이전 {prev.total}경기 승률 {prev.win_rate:.0f}% 대비"
                 f" {abs(gap):.0f}%p {word}.",
-                "", _w(gap, min(s.total, prev.total), MIN_BASE),
-                Basis(f"최근 {s.total}경기", s.win_rate, s.total, prev.win_rate, MIN_FLOW,
-                      f"그 이전 {prev.total}경기")))
+                "", _w(gap, min(s.rated, prev.rated), MIN_BASE),
+                Basis(f"최근 {s.total}경기", s.win_rate, s.rated, prev.win_rate, MIN_FLOW,
+                      f"그 이전 {prev.total}경기", mixed)))
 
     out.extend(_contrast(matches, details, ouid, window))
     return out
@@ -224,48 +223,50 @@ def _contrast(matches: list[MatchSummary], details: list[dict], ouid: str,
 
 
 # ── 이기는 / 지는 패턴 (전체 경기 기준) ────────────────────────────────────
-def _clutch_rules(details: list[dict], ouid: str, base_rate: float
+def _clutch_rules(details: list[dict], ouid: str, base_rate: float, mixed: bool
                   ) -> list[Insight]:
-    cs = clutch_summary(details, ouid)
+    cs = clutch_summary(details, ouid, mixed)
     out = []
 
-    n_first = sum(cs.first_scored)
-    if n_first >= MIN_COND:
+    all_first = sum(cs.first_scored)       # 경기 수(글자·비율용)
+    n_first = rated(*cs.first_scored, mixed)  # 승률 분모(표본 판정용)
+    if not is_weak(n_first, MIN_COND):
         r = cs.first_scored_rate
         gap = r - base_rate
         if gap >= GAP:
             out.append(Insight(
                 SEC_WIN, f"선제골을 넣으면 승률 {r:.0f}%.",
-                f"{n_first}경기 {_wdl_text(*cs.first_scored)} —"
+                f"{all_first}경기 {_wdl_text(*cs.first_scored)} —"
                 f" 전체 승률({base_rate:.0f}%)보다 {gap:.0f}%p 높습니다."
                 f" 먼저 앞서 나가는 게 승패를 가장 크게 가릅니다.",
                 _w(gap, n_first, MIN_COND),
-                Basis("선제골 넣은 경기", r, n_first, base_rate, MIN_COND)))
-        if cs.comeback_lose >= 3 and n_first >= MIN_COND:
-            share = cs.comeback_lose / n_first * 100
+                Basis("선제골 넣은 경기", r, n_first, base_rate, MIN_COND, mixed=mixed)))
+        if cs.comeback_lose >= 3:
+            share = cs.comeback_lose / all_first * 100
             if share >= 20:
                 out.append(Insight(
                     SEC_LOSE,
                     f"앞서고도 진 경기가 {cs.comeback_lose}번입니다.",
-                    f"선제골을 넣은 {n_first}경기 중 {share:.0f}% —"
+                    f"선제골을 넣은 {all_first}경기 중 {share:.0f}% —"
                     f" 리드를 끝까지 지키지 못하고 있습니다.",
-                    _w(share - 20, n_first, MIN_COND)))
+                    _w(share - 20, all_first, MIN_COND)))
 
-    n_conc = sum(cs.first_conceded)
-    if n_conc >= MIN_COND:
+    all_conc = sum(cs.first_conceded)
+    n_conc = rated(*cs.first_conceded, mixed)
+    if not is_weak(n_conc, MIN_COND):
         r = cs.first_conceded_rate
         gap = base_rate - r
         if gap >= GAP:
             # 역전승 수(comeback_win)는 정의상 first_conceded 의 승과 같은
             # 값이라 여기 적으면 같은 숫자를 두 번 말하게 된다. 대신 "얼마나
             # 자주 먼저 먹히는가"를 붙인다 — 이게 실제로 새로운 정보다.
-            share = n_conc / (n_first + n_conc) * 100 if n_first + n_conc else 0
+            share = all_conc / (all_first + all_conc) * 100 if all_first + all_conc else 0
             out.append(Insight(
                 SEC_LOSE, f"먼저 실점하면 승률이 {r:.0f}%로 떨어집니다.",
-                f"{n_conc}경기 {_wdl_text(*cs.first_conceded)}."
+                f"{all_conc}경기 {_wdl_text(*cs.first_conceded)}."
                 f" 선제골이 갈린 경기의 {share:.0f}%에서 먼저 실점하고 있습니다.",
                 _w(gap, n_conc, MIN_COND),
-                Basis("먼저 실점한 경기", r, n_conc, base_rate, MIN_COND)))
+                Basis("먼저 실점한 경기", r, n_conc, base_rate, MIN_COND, mixed=mixed)))
     return out
 
 
@@ -296,10 +297,10 @@ def _minute_rules(details: list[dict], ouid: str) -> list[Insight]:
     return out
 
 
-def _possession_rules(details: list[dict], ouid: str, total: int
+def _possession_rules(details: list[dict], ouid: str, total: int, mixed: bool
                       ) -> list[Insight]:
     need = _min_cond(total)
-    bands = [b for b in possession_stats(details, ouid) if b.games >= need]
+    bands = [b for b in possession_stats(details, ouid, mixed) if not is_weak(b.rated, need)]
     if len(bands) < 2:
         return []
     best = max(bands, key=lambda b: b.win_rate)
@@ -318,16 +319,16 @@ def _possession_rules(details: list[dict], ouid: str, total: int
         f"{worst.games}경기 {_wdl_text(worst.win, worst.draw, worst.lose)}."
         f" 반면 {best.label}({best.span}%) 구간은 {best.games}경기에서"
         f" {best.win_rate:.0f}%. {hint}",
-        _w(best.win_rate - worst.win_rate, worst.games, MIN_COND),
-        Basis(f"점유율 {worst.span}%", worst.win_rate, worst.games, best.win_rate, need,
-              f"{best.label}({best.span}%)"))]
+        _w(best.win_rate - worst.win_rate, worst.rated, MIN_COND),
+        Basis(f"점유율 {worst.span}%", worst.win_rate, worst.rated, best.win_rate, need,
+              f"{best.label}({best.span}%)", mixed))]
 
 
 def _formation_rules(details: list[dict], ouid: str, base_rate: float,
-                     total: int) -> list[Insight]:
+                     total: int, mixed: bool) -> list[Insight]:
     need = _min_cond(total)
-    stats = [f for f in formation_stats(details, ouid, of_opponent=True)
-             if f.games >= need and f.formation != "0-0-0-0-0"]
+    stats = [f for f in formation_stats(details, ouid, of_opponent=True, mixed=mixed)
+             if not is_weak(f.rated, need) and f.formation != "0-0-0-0-0"]
     out = []
     for f in stats:
         gap = f.win_rate - base_rate
@@ -336,15 +337,15 @@ def _formation_rules(details: list[dict], ouid: str, base_rate: float,
                 SEC_LOSE, f"상대가 {f.formation}로 나오면 승률 {f.win_rate:.0f}%.",
                 f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
                 f" 전체보다 {abs(gap):.0f}%p 낮습니다.",
-                _w(gap, f.games, MIN_COND),
-                Basis(f"상대 {f.formation}", f.win_rate, f.games, base_rate, need)))
+                _w(gap, f.rated, MIN_COND),
+                Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed)))
         elif gap >= GAP_WIDE:
             out.append(Insight(
                 SEC_WIN, f"상대가 {f.formation}일 때 승률 {f.win_rate:.0f}%.",
                 f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
                 f" 전체보다 {gap:.0f}%p 높습니다.",
-                _w(gap, f.games, MIN_COND),
-                Basis(f"상대 {f.formation}", f.win_rate, f.games, base_rate, need)))
+                _w(gap, f.rated, MIN_COND),
+                Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed)))
     return out
 
 
@@ -395,11 +396,11 @@ def _goal_type_rules(details: list[dict], ouid: str) -> list[Insight]:
     return out
 
 
-def _opponent_rules(matches: list[MatchSummary], base_rate: float
+def _opponent_rules(matches: list[MatchSummary], base_rate: float, mixed: bool
                     ) -> list[Insight]:
     out = []
-    for o in opponent_stats(matches):
-        if o.games < MIN_OPP or o.nickname in ("-", ""):
+    for o in opponent_stats(matches, mixed):
+        if is_weak(o.rated, MIN_OPP) or o.nickname in ("-", ""):
             continue
         gap = base_rate - o.win_rate
         if gap >= GAP_WIDE * 1.5:
@@ -408,19 +409,19 @@ def _opponent_rules(matches: list[MatchSummary], base_rate: float
                 f"{_wdl_text(o.win, o.draw, o.lose)},"
                 f" 평균 {o.avg_goals_for:.1f}:{o.avg_goals_against:.1f}."
                 f" 반복해서 지고 있는 상대입니다.",
-                _w(gap, o.games, MIN_OPP),
-                Basis(f"{o.nickname} 상대", o.win_rate, o.games, base_rate, MIN_OPP)))
+                _w(gap, o.rated, MIN_OPP),
+                Basis(f"{o.nickname} 상대", o.win_rate, o.rated, base_rate, MIN_OPP, mixed=mixed)))
     return out
 
 
-def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int
+def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int, mixed: bool
                   ) -> list[Insight]:
     """연승·연패 직후 승률이 전체와 GAP 이상 갈릴 때만. 실DB 3계정에서 차이는 최대 5.9%p 라
     거의 안 나온다(2026-10-05) — 그게 맞는 결과다. 화면 구역이 '거의 같다'를 숫자로 보여 준다."""
     need = streak_min_n(total)
     out = []
-    for r in after_streak_rates(matches, STREAK_MAX):
-        if r.games < need:
+    for r in after_streak_rates(matches, STREAK_MAX, mixed):
+        if is_weak(r.rated, need):
             continue
         gap = r.win_rate - base_rate
         if abs(gap) < GAP:
@@ -436,25 +437,25 @@ def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int
             sec, f"{run} 직후 다음 경기 승률 {r.win_rate:.0f}%.",
             f"{r.games}경기 {_wdl_text(r.win, r.draw, r.lose)} — 전체 승률({base_rate:.0f}%)보다"
             f" {abs(gap):.0f}%p {'높습니다' if gap > 0 else '낮습니다'}. {tail}",
-            _w(gap, r.games, need),
-            Basis(f"{run} 직후", r.win_rate, r.games, base_rate, need)))
+            _w(gap, r.rated, need),
+            Basis(f"{run} 직후", r.win_rate, r.rated, base_rate, need, mixed=mixed)))
     return out
 
 
 def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
               ) -> list[Insight]:
-    s = summarize(matches)
-    if s.total < MIN_BASE:
+    s = summarize(matches)   # 패턴 범위 전체로 한 번 판정 — 모든 규칙의 조건 승률과 기준이 같은 식
+    if is_weak(s.rated, MIN_BASE):
         return []
-    base = s.win_rate
-    return (_clutch_rules(details, ouid, base)
+    base, mixed, n = s.win_rate, s.mixed, s.rated
+    return (_clutch_rules(details, ouid, base, mixed)
             + _minute_rules(details, ouid)
-            + _possession_rules(details, ouid, s.total)
-            + _formation_rules(details, ouid, base, s.total)
+            + _possession_rules(details, ouid, n, mixed)
+            + _formation_rules(details, ouid, base, n, mixed)
             + _finishing_rules(details, ouid)
             + _goal_type_rules(details, ouid)
-            + _opponent_rules(matches, base)
-            + _streak_rules(matches, base, s.total))
+            + _opponent_rules(matches, base, mixed)
+            + _streak_rules(matches, base, n, mixed))
 
 
 # ── 진입점 ───────────────────────────────────────────────────────────────
