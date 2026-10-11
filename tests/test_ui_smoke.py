@@ -5394,6 +5394,23 @@ def test_tactics_formation_bars_and_type_donuts():
     assert sum(v for _, v, _ in _win.type_donuts["gf"]._segs) == sum(rb.goal_types.values())
 
 
+def test_dashboard_head_formation_follows_account():
+    """대시보드 머리 주 포메이션 — 경기가 있으면 전술 탭 맨 위 포메이션과 같은 것이 그려지고, 경기를 비우면 숨는다(옛 계정 그림이 안 남는다)."""
+    saved = (_win._details, _win._matches)
+    try:
+        _win._render_ranker()
+        mine = app_main.core.formation_stats(_win._details, _win._ouid, of_opponent=False)
+        assert mine, "지어낸 경기에 내 포메이션이 있어야 이 테스트가 뜻이 있다"
+        card = _win.card_ranker
+        assert not card._head_pitch.isHidden() and mine[0].formation in card._head_pitch.toolTip()
+        _win._details, _win._matches = [], []
+        _win._render_ranker()
+        assert card._head_pitch.isHidden() and card._head_pitch.toolTip() == "", "경기가 없는데 옛 포메이션이 남았다"
+    finally:
+        _win._details, _win._matches = saved
+        _win._render_ranker()
+
+
 # ── 13 ELO ──
 
 def _elo_rows(points):

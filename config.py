@@ -482,6 +482,8 @@ ICON_ASPECT = {"emblem": 130 / 78, "season": 1.0, "division": 1.0, "trait": 1.0,
 # 종류별 그림 높이 — 없으면 ICON_PX. 특성은 판(육각) 위에 아이콘 + 아래 % 줄이라 더 크게(STACKED_KINDS: 글자 위에 쌓아 그리는 칸)
 ICON_HEIGHT = {"trait": TRAIT_ICON_PX, "train": TRAIT_ICON_PX, "formation": FORMATION_PX}
 STACKED_KINDS = ("trait", "train")
+EMBLEM_HEAD_PX = 32      # 대시보드 머리(구단주 카드) 엠블럼 높이 — 옆 등급 배지(32)와 같다
+FORMATION_HEAD_PX = 36   # 같은 머리의 주 포메이션 축구장(formation_pixmap 에 넘기는 높이)
 ICON_CACHE_SUBDIR = "icons"
 
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.

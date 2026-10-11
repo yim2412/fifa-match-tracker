@@ -7303,6 +7303,7 @@ class MainWindow(QMainWindow):
         c.set_name(f"{self._nick}  Lv.{lv}")
         c.set_badge(self._badge_path or None)
         c.set_best(self._max_division_text())
+        self._render_head_icons()
 
         if self._is_champion and r and r.ranked:
             c.set("순위", f"{r.rank:,}위", T.GREEN)
@@ -7322,6 +7323,36 @@ class MainWindow(QMainWindow):
             c.note.setText(f"* {self._grade_name} · 최근 {len(self._matches)}경기 기준 · {last}")
             c.setToolTip("챔피언스 이상 등급에서만 넥슨 데이터센터 순위·구단가치·\n"
                          "점수를 보여줍니다. 전적은 앱이 받은 경기 기준입니다.\n" + win_rate_note(full.mixed))
+
+    def _render_head_icons(self) -> None:
+        """대시보드 머리(구단주 카드)의 주 포메이션 축구장 · 내 팀컬러 엠블럼 — 이미 아는 값에 그림만 붙인다.
+        포메이션은 받지 않고 그리고, 엠블럼만 로더로 받는다(받기 전·실패면 숨김 — 빈 네모를 두지 않는다)."""
+        c = self.card_ranker
+        old = getattr(self, "_head_icon_loader", None)
+        if old is not None and old.isRunning():
+            old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        self._head_icon_loader = None
+        mine = core.formation_stats(self._details, self._ouid, of_opponent=False) if self._details and self._ouid else []
+        if mine:
+            t = mine[0]
+            c.set_formation(formation_pixmap(t.formation, config.FORMATION_HEAD_PX),
+                            f"주 포메이션 {t.formation} — {t.games}경기 ({self._scope_text()})")
+        else:
+            c.set_formation(None)
+        label = self._team_colors.get(self._nick or "") or self._my_color(None) or ""
+        key = self._emblem_map().get(label, "") if label else ""
+        url = images.icon_url("emblem", key) if key else ""
+        if not url:
+            c.set_emblem(None)
+            return
+        tip = f"내 팀컬러 {label}"
+        loader = IconLoader([("emblem", key, url)], self._icon_dir)
+        loader.loaded.connect(lambda _k, _key, path, tp=tip: c.set_emblem(path, tp))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        self._head_icon_loader = loader
+        self._icon_loaders.append(loader)
+        c.set_emblem(None)   # 이전 계정의 엠블럼이 남지 않게 — 받아지면 다시 붙는다
+        loader.start()
 
     def _load_meta_from_disk(self) -> None:
         """검색 전 그림 재료 — 시즌 배지 주소(seasonid)·등급 번호(division 원본 순서). 이미 받은 값이 있으면 덮지 않는다."""

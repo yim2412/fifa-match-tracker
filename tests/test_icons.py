@@ -1046,6 +1046,37 @@ def test_hbarlist_icons_make_room_and_draw():
     assert bars.minimumSizeHint().width() == plain_w, "그림을 빼면 예전 폭으로 돌아와야 한다"
 
 
+def test_ranker_card_head_icons():
+    """대시보드 머리(구단주 카드) — 포메이션·엠블럼이 있으면 줄이 보이고 서로·등급 배지와 안 겹치며, 둘 다 없으면 줄이 숨는다."""
+    from widgets import RankerCard, formation_pixmap
+    fx = Path(__file__).parent / "fixtures" / "icons"
+    card = RankerCard()
+    card.set_name("닉네임 Lv.1")
+    card.resize(560, 700)
+    card.show()
+    _app.processEvents()
+    assert card._head_icons.isHidden(), "아무것도 없으면 줄이 숨어야 한다"
+    card.set_formation(formation_pixmap("4-2-3-1", config.FORMATION_HEAD_PX, 1.0), "tip")
+    assert not card._head_icons.isHidden() and not card._head_pitch.isHidden() and card._head_emblem.isHidden()
+    card.set_emblem(str(fx / "emblem_128.png"), "엠블럼")
+    _app.processEvents()
+    em, pt = card._head_emblem, card._head_pitch
+    assert not em.isHidden() and em.pixmap().height() == config.EMBLEM_HEAD_PX, em.pixmap().height()
+    assert em.toolTip() == "엠블럼" and pt.toolTip() == "tip"
+    r_em, r_pt = em.geometry(), pt.geometry()
+    assert not r_em.intersects(r_pt), (r_em, r_pt)
+    head_rect = card._head.rect()
+    for r in (r_em, r_pt):
+        assert head_rect.contains(r), (head_rect, r)
+    assert card._head_icons.geometry().top() >= card._head_badge.geometry().bottom(), "아이콘 줄이 등급 배지를 가린다"
+    # 깨진 파일·None 은 숨김(빈 네모 없음) · 포메이션을 빼면 엠블럼만 남는다
+    card.set_emblem(str(fx / "no_such.png"), "x")
+    assert card._head_emblem.isHidden() and card._head_emblem.toolTip() == ""
+    card.set_formation(None)
+    assert card._head_icons.isHidden(), "둘 다 없으면 줄이 숨어야 한다"
+    card.close()
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

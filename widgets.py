@@ -1043,6 +1043,23 @@ class RankerCard(QFrame):
         grade_row.addStretch(1)
         head_v.addLayout(grade_row)
 
+        # 내 팀컬러 엠블럼 · 주 포메이션(40단계) — 이미 아는 값에 그림만. 없으면 이 줄 전체가 숨는다
+        self._head_icons = QWidget()
+        icons_h = QHBoxLayout(self._head_icons)
+        icons_h.setContentsMargins(0, 0, 0, 0)
+        icons_h.setSpacing(10)
+        icons_h.addStretch(1)
+        self._head_emblem = QLabel()
+        self._head_pitch = QLabel()
+        for lb in (self._head_emblem, self._head_pitch):
+            lb.setStyleSheet("border: none; background: transparent;")
+            lb.setVisible(False)
+            icons_h.addWidget(lb)
+        icons_h.addStretch(1)
+        self._head_icons.setStyleSheet("border: none; background: transparent;")
+        self._head_icons.setVisible(False)
+        head_v.addWidget(self._head_icons)
+
         # 역대 최고 등급(1.2.1) — 타일이 아니라 머리 아래 한 줄. 랭커/비랭커 두 모드 모두 같은 자리에 보이고
         # (set_mode 가 숨기지 않는다) 값이 없으면 이 줄만 숨긴다.
         self._head_best = QLabel("")
@@ -1134,6 +1151,33 @@ class RankerCard(QFrame):
         """역대 최고 등급 줄 — 없으면(None·빈 글자) 숨긴다."""
         self._head_best.setText(text or "")
         self._head_best.setVisible(bool(text))
+
+    def _sync_icons_row(self) -> None:
+        self._head_icons.setVisible(not self._head_emblem.isHidden() or not self._head_pitch.isHidden())
+
+    def set_formation(self, pixmap: QPixmap | None, tip: str = "") -> None:
+        """주 포메이션 작은 축구장. 그림이 없으면(None·빈 그림) 숨긴다."""
+        ok = pixmap is not None and not pixmap.isNull()
+        if ok:
+            self._head_pitch.setPixmap(pixmap)
+        else:
+            self._head_pitch.clear()
+        self._head_pitch.setToolTip(tip if ok else "")
+        self._head_pitch.setVisible(ok)
+        self._sync_icons_row()
+
+    def set_emblem(self, path: str | None, tip: str = "") -> None:
+        """내 팀컬러 엠블럼(받은 파일 경로). 없거나 깨졌으면 숨긴다 — 글자 자리는 두지 않는다(이름은 다른 화면에 있다)."""
+        pm = QPixmap(path) if path else QPixmap()
+        ok = not pm.isNull()
+        if ok:
+            h = config.EMBLEM_HEAD_PX
+            self._head_emblem.setPixmap(pm.scaledToHeight(h, Qt.TransformationMode.SmoothTransformation))
+        else:
+            self._head_emblem.clear()
+        self._head_emblem.setToolTip(tip if ok else "")
+        self._head_emblem.setVisible(ok)
+        self._sync_icons_row()
 
     def set_badge(self, pixmap_path: str | None) -> None:
         """등급 옆 배지 아이콘. 못 받아왔으면(경로 없음) 그냥 비워 둔다."""
