@@ -12,6 +12,7 @@ OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -39,6 +40,7 @@ class IconCell(NamedTuple):
     text: str
     sort_key: object
     icon_key: object
+    name: str = ""   # 특성 칸 — 글자는 "NN%" 만이라 이름은 툴팁·NAME_ROLE 로(TraitIconDelegate 가 그림 없을 때 대신 쓴다)
 
 
 def add_shadow(w: QWidget) -> None:
@@ -590,6 +592,7 @@ class FitTableWidget(QTableWidget):
         self._user_extra: dict[int, int] = {}   # set_content_widths 로 준 열별 여백(범위 막대·배지 등)
         self._icon_cols: dict[int, str] = {}    # set_icon_columns — 열 → 그림 종류
         self._icon_extra: dict[int, int] = {}   # 등록 열의 그림 폭 + Qt 가 아는 간격
+        self._stacked_cols: list[int] = []      # 글자 위에 그림을 쌓아 그리는 열(특성) — 행 높이가 글꼴을 따라간다
         self._extra: dict[int, int] = {}        # 둘을 합친 값 — 폭 계산은 이것만 읽는다
         self._base_cell_px = 14
         self._base_header_px = 13
@@ -644,19 +647,30 @@ class FitTableWidget(QTableWidget):
         Qt 에 물은 값(PyQt 4)이라, 등록 때 표가 비어 있어도 따로 만든 1행 표로 잰다. 열 여백은 set_content_widths 가 준 값과
         **합쳐서** 쓴다 — 갈아 끼우지 않는다(범위 막대·강화 배지 여백이 사라지지 않게)."""
         self._icon_cols = dict(cols)
-        widths = {c: self.icon_px_for(k)[0] for c, k in cols.items()}
+        sizes = {c: self.icon_px_for(k) for c, k in cols.items()}
+        widths = {c: w for c, (w, _h) in sizes.items()}
         self._icon_w = max(widths.values(), default=0)
-        self.setIconSize(QSize(self._icon_w, config.ICON_PX))
+        icon_h = max((h for _w, h in sizes.values()), default=0)
+        self.setIconSize(QSize(self._icon_w, icon_h))
         # 아이콘 사각형(setIconSize)은 표 하나라 가장 넓은 종류에 맞추지만, 열 여백은 그 열 그림 폭 + 간격만 — 정사각 배지 열이
         # 국기 폭(33)만큼 넓어지지 않게(구단주 표의 등급 열)
-        gap = measure_icon_gap(self, self._icon_w, config.ICON_PX) - self._icon_w if cols else 0
-        self._icon_extra = {c: widths[c] + gap for c in cols}
+        gap = measure_icon_gap(self, self._icon_w, icon_h) - self._icon_w if cols else 0
+        # 특성(trait·train)은 글자 옆이 아니라 **위**에 그리는 칸(TraitIconDelegate) — 열 여백은 더하지 않고(글자 폭이 곧 칸 폭,
+        # 여백 0 이라도 _extra 에는 넣어 _measure_pad 가 이 열을 건너뛴다) 행 높이만 그림 + 글자 한 줄로 키운다
+        stacked = [c for c, k in cols.items() if k in config.STACKED_KINDS]
+        self._stacked_cols = stacked
+        self._icon_extra = {c: (0 if c in stacked else widths[c] + gap) for c in cols}
+        for c in stacked:
+            self.setItemDelegateForColumn(c, TraitIconDelegate(self, cols[c]))
+        if stacked:
+            self.verticalHeader().setDefaultSectionSize(TraitIconDelegate.row_height(self.fontMetrics()))
         self._merge_extra()
 
     @staticmethod
     def icon_px_for(kind: str) -> tuple[int, int]:
-        """그 종류 그림의 (폭, 높이) — 높이는 한 상수, 폭은 가로세로 비율."""
-        return round(config.ICON_PX * config.ICON_ASPECT.get(kind, 1.0)), config.ICON_PX
+        """그 종류 그림의 (폭, 높이) — 높이는 종류별 상수(config.ICON_HEIGHT · 없으면 ICON_PX), 폭은 가로세로 비율."""
+        h = config.ICON_HEIGHT.get(kind, config.ICON_PX)
+        return round(h * config.ICON_ASPECT.get(kind, 1.0)), h
 
     @property
     def icon_columns(self) -> dict[int, str]:
@@ -787,6 +801,8 @@ class FitTableWidget(QTableWidget):
         entry = self._entry(cell_px)
         self.setFont(entry["cell_font"])
         self.horizontalHeader().setFont(entry["header_font"])
+        if self._stacked_cols:   # 글꼴이 줄면 글자 줄도 낮아진다 — 행 높이를 지금 글꼴로 다시
+            self.verticalHeader().setDefaultSectionSize(TraitIconDelegate.row_height(self.fontMetrics()))
         widths = entry["widths"]
         total = sum(widths.values())
         if total <= 0:
@@ -1132,6 +1148,133 @@ class RankerCard(QFrame):
         lb = self._vals[name]
         lb.setText(text)
         lb.setStyleSheet(f"color: {color}; border: none;")
+
+
+def formation_key(formation: str) -> str:
+    """"4-1-2-3-0"(내 경기 · 0 줄 포함 고정 5줄)과 "4-1-2-3"(랭커 · 줄 수가 바뀜)을 같은 모양으로 — 0 줄은 버린다.
+    그릴 수 없으면 ""."""
+    parts = str(formation or "").split("-")
+    if len(parts) < 2 or not all(x.isdigit() for x in parts):   # "4-2-3-1 계열"·"모름" 같은 글자는 모양이 아니다
+        return ""
+    lines = [int(x) for x in parts if int(x) > 0]
+    return "-".join(str(n) for n in lines) if lines else ""
+
+
+def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = None) -> QPixmap:
+    """작은 축구장 — 포메이션 줄마다 점. 수비 줄이 아래, 공격 줄이 위, 맨 아래 GK 한 점. 네트워크 없음 · 같은 모양이면 같은 캐시.
+    그릴 수 없는 글자("모름" 등)면 빈 QPixmap(isNull)."""
+    from PyQt6.QtGui import QGuiApplication, QPixmapCache
+    key = formation_key(formation)
+    if not key:
+        return QPixmap()
+    px = px or config.FORMATION_PX
+    if dpr is None:
+        screen = QGuiApplication.primaryScreen()
+        dpr = screen.devicePixelRatio() if screen is not None else 1.0
+    ck = f"formation:{key}:{px}:{dpr}"
+    hit = QPixmapCache.find(ck)
+    if hit is not None and not hit.isNull():
+        return hit
+    lines = [int(x) for x in key.split("-")]
+    w = round(px * config.ICON_ASPECT.get("formation", 1.0))
+    pm = QPixmap(round(w * dpr), round(px * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(T.FORMATION_PITCH))
+    p.drawRoundedRect(QRectF(0, 0, w, px), 3, 3)
+    p.setBrush(QColor(T.FORMATION_DOT))
+    rows = len(lines) + 1                      # GK + 줄들
+    r = max(1.1, px / 15)
+    pad_y = r + 1.5
+    for i in range(rows):
+        count = 1 if i == 0 else lines[i - 1]  # i=0 은 GK(맨 아래), 그 위로 수비 → 공격
+        y = px - pad_y - (px - 2 * pad_y) * i / max(1, rows - 1)
+        for j in range(count):
+            p.drawEllipse(QPointF(w * (j + 1) / (count + 1), y), r, r)
+    p.end()
+    QPixmapCache.insert(ck, pm)
+    return pm
+
+
+NAME_ROLE = Qt.ItemDataRole.UserRole + 3   # 특성 칸의 이름(그림이 없을 때 대신 쓴다 · 툴팁과 같다)
+
+
+class TraitIconDelegate(RowBorderDelegate):
+    """특성 칸 — 육각 판 위에 아이콘, 아래에 %. 그림이 아직 없거나 못 받았으면 판 자리에 이름을 줄여 쓴다.
+
+    판은 넥슨 원본이 아니라 QPainter 로 그린다(일반·신규 금색 · 훈련·코치 회색 — 색은 theme). 폭은 sizeHint 로 알리지 않는다
+    (GradeBadgeDelegate 와 같은 이유: _measure_pad 가 한 열의 큰 힌트를 모든 열에 얹는다) — 글자 "NN%" 가 곧 칸 폭이고
+    그림은 그 위에 가운데 정렬. RowBorderDelegate 를 상속해 선택 행 테두리가 이 칸에서 끊기지 않는다."""
+
+    TOP, GAP, BOTTOM = 2, 2, 2
+
+    def __init__(self, parent=None, kind: str = "trait"):
+        super().__init__(parent)
+        self.kind = kind
+        self.failed = 0   # 테스트가 읽는다 — 기록은 첫 번째만
+
+    @classmethod
+    def row_height(cls, fm: QFontMetrics) -> int:
+        return cls.TOP + config.TRAIT_ICON_PX + cls.GAP + fm.height() + cls.BOTTOM
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        option.text = ""             # 글자·그림은 직접 그린다(기본 그리기는 배경·선택만)
+        option.icon = QIcon()
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        try:
+            self._draw(painter, option, index)
+        except Exception as e:  # noqa: BLE001 — 칸 하나 그리기 실패로 표가 죽거나 로그가 불어나면 안 된다
+            self.failed += 1
+            if self.failed == 1:
+                import crashlog
+                crashlog.note("특성 칸 그리기", e)
+
+    def pad_rect(self, option) -> QRectF:
+        """판(육각)이 들어가는 정사각형 — 칸 위쪽 가운데. 테스트가 글자와 겹치는지 잴 때도 쓴다."""
+        s = config.TRAIT_ICON_PX
+        r = option.rect
+        return QRectF(r.x() + (r.width() - s) / 2, r.y() + self.TOP, s, s)
+
+    def text_rect(self, option) -> QRectF:
+        r = option.rect
+        return QRectF(r.x(), r.y() + self.TOP + config.TRAIT_ICON_PX + self.GAP, r.width(), option.fontMetrics.height())
+
+    def _draw(self, painter, option, index) -> None:
+        text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        name = str(index.data(NAME_ROLE) or "")
+        if not name:
+            return                    # 빈 칸(줄 수가 모자란 열)
+        box = self.pad_rect(option)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = box.center()
+        hexa = QPolygonF([QPointF(c.x() + box.width() / 2 * math.sin(math.radians(60 * i)),
+                                  c.y() - box.height() / 2 * math.cos(math.radians(60 * i))) for i in range(6)])
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(T.TRAIT_PAD_GOLD if self.kind == "trait" else T.TRAIT_PAD_GRAY))
+        painter.drawPolygon(hexa)
+        icon = index.data(Qt.ItemDataRole.DecorationRole)
+        pm = icon.pixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX) if isinstance(icon, QIcon) else QPixmap()
+        if not pm.isNull():
+            painter.drawPixmap(box.adjusted(3, 3, -3, -3).toRect(), pm)
+        else:
+            small = QFont(option.font)
+            small.setPixelSize(max(9, small.pixelSize() - 3) if small.pixelSize() > 0 else 10)
+            painter.setFont(small)
+            painter.setPen(QColor(T.TEXT))
+            label = QFontMetrics(small).elidedText(name, Qt.TextElideMode.ElideRight, option.rect.width() - 4)
+            painter.drawText(QRectF(option.rect.x(), box.y(), option.rect.width(), box.height()),
+                             Qt.AlignmentFlag.AlignCenter, label)
+        painter.setFont(option.font)
+        painter.setPen(QColor(T.TEXT))
+        painter.drawText(self.text_rect(option), Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
 
 class GradeBadgeDelegate(RowBorderDelegate):

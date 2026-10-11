@@ -59,6 +59,7 @@ import store
 import teamcolor
 import theme as T
 import tradecollect
+import trait_codes
 import traitcollect
 import tray
 import updatecheck
@@ -72,10 +73,10 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
-    ICON_KEY_ROLE, NA, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox,
     PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
     SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, sample_note,
-    sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text,
+    sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -4535,8 +4536,8 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_pick_summary)
 
         shares = QHBoxLayout()
-        self.tbl_pick_colors = self._make_table(self.PICK_SHARE_COLUMNS)
-        self.tbl_pick_forms = self._make_table(self.PICK_SHARE_COLUMNS)
+        self.tbl_pick_colors = self._make_table(self.PICK_SHARE_COLUMNS, icons={0: "emblem"})
+        self.tbl_pick_forms = self._make_table(self.PICK_SHARE_COLUMNS, icons={0: "formation"})
         for title, tbl in (("팀컬러", self.tbl_pick_colors), ("포메이션", self.tbl_pick_forms)):
             box = QVBoxLayout()
             lb = QLabel(title)
@@ -4634,9 +4635,10 @@ class MainWindow(QMainWindow):
         if summary.used < config.RANKER_PICK_MIN_RANKERS:
             parts.append(f"{config.RANKER_PICK_MIN_RANKERS}명 미만이라 카드 비율은 흐리게 — 참고만")
         self.lb_pick_summary.setText(" · ".join(parts))
-        for tbl, counter in ((self.tbl_pick_colors, summary.colors), (self.tbl_pick_forms, summary.formations)):
+        for tbl, counter, cell in ((self.tbl_pick_colors, summary.colors, self._emblem_cell),
+                                   (self.tbl_pick_forms, summary.formations, self._formation_cell)):
             total = sum(counter.values()) or 1
-            self._fill(tbl, [[name, (str(n), n), (f"{n / total * 100:.0f}%", n / total)]
+            self._fill(tbl, [[cell(name), (str(n), n), (f"{n / total * 100:.0f}%", n / total)]
                              for name, n in counter.most_common(self.PICK_TOP_SHARES)], enable_sort=False)
         few = summary.used < config.RANKER_PICK_MIN_RANKERS
         rows = []
@@ -4987,7 +4989,7 @@ class MainWindow(QMainWindow):
             box = QVBoxLayout()
             title = QLabel(name)
             title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            table = self._make_table(self.META_COLUMNS)
+            table = self._make_table(self.META_COLUMNS, icons={0: self.NAME_ICON[kind]})
             box.addWidget(title)
             box.addWidget(table, 1)
             row.addLayout(box, 1)
@@ -5027,7 +5029,7 @@ class MainWindow(QMainWindow):
         for kind, table in self.meta_tables.items():
             self.meta_titles[kind].setText(f"{'팀컬러' if kind == 'team_color' else '포메이션'} — {days}일 전 대비")
             rows = trend.rows.get(kind) or []
-            self._fill(table, [[r.key or core.blank_label(kind, how if kind == "formation" else "raw"), (f"{r.now_pct:.1f}% ({r.now_n:,})", r.now_pct),
+            self._fill(table, [[self._name_cell(kind, r.key or core.blank_label(kind, how if kind == "formation" else "raw")), (f"{r.now_pct:.1f}% ({r.now_n:,})", r.now_pct),
                                 (f"{r.then_pct:.1f}% ({r.then_n:,})", r.then_pct),
                                 (f"{r.diff_pp:+.1f}%p", r.diff_pp)] for r in rows], enable_sort=False)
             for i, r in enumerate(rows):
@@ -5230,7 +5232,8 @@ class MainWindow(QMainWindow):
         self.cb_trait_form = NoScrollComboBox()   # 항목은 그릴 때 — 모인 포메이션(사람 수 순)
         self.cb_trait_form.currentIndexChanged.connect(lambda _i: self._invalidate(self.TRAIT_KEY))
         self._meta_top(v, self.lb_trait_note, ("순위 구간", self.cb_trait_tier), ("포메이션", self.cb_trait_form))
-        self.tbl_traits = self._make_table(self.TRAIT_COLUMNS)
+        # 칸 = 육각 판 + 아이콘 + 아래 % (TraitIconDelegate) — 일반·신규는 traits/, 훈련·코치는 trainingTrait/ (같은 표)
+        self.tbl_traits = self._make_table(self.TRAIT_COLUMNS, icons={1: "trait", 2: "trait", 3: "train", 4: "train"})
         self.tbl_traits.setSortingEnabled(False)   # 포지션 순서(공격 → GK)가 정보다
         v.addWidget(self.tbl_traits, 1)
         lb = self._note_label()
@@ -5240,6 +5243,11 @@ class MainWindow(QMainWindow):
         v.addWidget(lb)
         self.trait_usage: core.TraitUsage | None = None   # 테스트가 본다
         return w
+
+    @staticmethod
+    def _trait_cell(kind: str, name: str, _n: int, ratio: float):
+        """특성 칸 — 글자는 "NN%" 만(이름은 툴팁·그림이 없을 때 대신). 이름 → 코드는 trait_codes 역표, "코드 N" 은 그림 없음."""
+        return IconCell(f"{ratio * 100:.0f}%", ratio, trait_codes.code_of(kind, name), name)
 
     def trait_status(self, has_targets: bool = True) -> tuple[str, str]:
         """탭 위 한 줄과 버튼("notice" 안내 보고 동의 · "reenable" 다시 켜기 · "" 없음) — 원인마다 문구 하나(계획 "빈 상태")."""
@@ -5360,7 +5368,7 @@ class MainWindow(QMainWindow):
             tops = [s.top(kind, config.TRAIT_TOP_NAMES) for kind in self.TRAIT_KIND_COLUMNS]
             for i in range(max(1, max(len(t) for t in tops))):
                 head = f"{self._positions.get(s.position, str(s.position))} · {s.players}명" if i == 0 else ""
-                rows.append([head] + [f"{t[i][0]} {t[i][2] * 100:.0f}%" if i < len(t) else "" for t in tops])
+                rows.append([head] + [self._trait_cell(kind, *t[i]) if i < len(t) else "" for kind, t in zip(self.TRAIT_KIND_COLUMNS, tops)])
         self._fill(self.tbl_traits, rows, enable_sort=False)
         if usage.thin or usage.few:
             self._dim_rows(self.tbl_traits, list(range(len(rows))))
@@ -5381,7 +5389,7 @@ class MainWindow(QMainWindow):
         for kind, name in (("team_color", "팀컬러"), ("formation", "포메이션")):
             box = QVBoxLayout()
             title = self._title_label(name)
-            table = self._make_table(self.DAYWR_COLUMNS)
+            table = self._make_table(self.DAYWR_COLUMNS, icons={0: self.NAME_ICON[kind]})
             box.addWidget(title)
             box.addWidget(table, 1)
             row.addLayout(box, 1)
@@ -5417,7 +5425,7 @@ class MainWindow(QMainWindow):
             base = f" — 이 구간 {res.rate:.1f}%" if res.rate is not None else ""
             self.daywr_titles[kind].setText(f"{'팀컬러' if kind == 'team_color' else '포메이션'}{base}")
             how_ = how if kind == "formation" else "raw"
-            self._fill(table, [[r.key or core.blank_label(kind, how_), (f"{r.users:,}", r.users),
+            self._fill(table, [[self._name_cell(kind, r.key or core.blank_label(kind, how_)), (f"{r.users:,}", r.users),
                                 (f"{r.win:,}·{r.draw:,}·{r.lose:,}", r.games),
                                 (NA if r.rate is None else f"{r.rate:.1f}%", r.rate if r.rate is not None else -1),
                                 NA if r.lo is None else f"{r.lo:.1f}~{r.hi:.1f}%",
@@ -5439,7 +5447,7 @@ class MainWindow(QMainWindow):
         self.lb_vscore_note = self._note_label()
         self.cb_vscore_tier = self._tier_combo("valuescore")
         self._meta_top(v, self.lb_vscore_note, ("순위 구간", self.cb_vscore_tier))
-        self.tbl_vscore = self._make_table(self.VALUE_SCORE_COLUMNS)
+        self.tbl_vscore = self._make_table(self.VALUE_SCORE_COLUMNS, icons={0: "emblem"})
         v.addWidget(self.tbl_vscore, 1)
         self.value_scores: core.ValueScore | None = None
         return w
@@ -5463,7 +5471,7 @@ class MainWindow(QMainWindow):
         self.lb_vscore_note.setText(" · ".join(note))
         rows = res.rows
         self._fill(self.tbl_vscore, [[
-            r.key or core.blank_label("team_color"),
+            self._emblem_cell(r.key or core.blank_label("team_color")),
             (NA if r.score is None else f"{r.score:,.0f}", -1 if r.score is None else r.score),
             (NA if r.elo is None else f"{r.elo:,.0f}", r.elo or 0),
             (NA if r.rate is None else f"{r.rate:.1f}%", r.rate or 0),
@@ -5554,7 +5562,7 @@ class MainWindow(QMainWindow):
         for kind, name in (("team_color", "팀컬러"), ("formation", "포메이션")):
             box = QVBoxLayout()
             box.addWidget(self._title_label(name))
-            table = self._make_table(self.TIER_MEAN_COLUMNS)
+            table = self._make_table(self.TIER_MEAN_COLUMNS, icons={0: self.NAME_ICON[kind]})
             box.addWidget(table, 1)
             row.addLayout(box, 1)
             self.tmeans_tables[kind] = table
@@ -5577,7 +5585,7 @@ class MainWindow(QMainWindow):
         for kind, table in self.tmeans_tables.items():
             rows = res.tables.get(kind) or []
             how_ = how if kind == "formation" else "raw"
-            self._fill(table, [[r.key or core.blank_label(kind, how_), (f"{r.users:,}", r.users),
+            self._fill(table, [[self._name_cell(kind, r.key or core.blank_label(kind, how_)), (f"{r.users:,}", r.users),
                                 (NA if r.elo is None else f"{r.elo:,.0f}", r.elo or 0),
                                 (self._won(r.value_median), r.value_median or 0)] for r in rows], enable_sort=False)
             for i, r in enumerate(rows):
@@ -5679,7 +5687,7 @@ class MainWindow(QMainWindow):
         for i, (key, name, cols) in enumerate(spec):
             box = QVBoxLayout()
             title = self._title_label(name)
-            table = self._make_table(cols)
+            table = self._make_table(cols, icons={0: "emblem"} if key == "extremes" else None)
             box.addWidget(title)
             box.addWidget(table, 1)
             grid.addLayout(box, i // 2, i % 2)
@@ -5731,7 +5739,7 @@ class MainWindow(QMainWindow):
             self._fill(tbl["wins"], [])
         ttl["extremes"].setText(f"팀컬러별 최고·최저 구단가치 — {self.cb_weekly_tier.currentText()} · "
                                 f"{config.META_MIN_USERS}명 이상")
-        self._fill(tbl["extremes"], [[c, (f"{n:,}", n), f"{hi[0]} {hi[1]:,}위 {self._won(hi[2])}",
+        self._fill(tbl["extremes"], [[self._emblem_cell(c), (f"{n:,}", n), f"{hi[0]} {hi[1]:,}위 {self._won(hi[2])}",
                                       f"{lo[0]} {lo[1]:,}위 {self._won(lo[2])}"] for c, n, hi, lo in res.extremes])
         if res.park_state == "shown":
             ttl["parked"].setText(f"주차 중 — {config.WEEKLY_PARK_RANK}위 안 · 이웃 쌍 사이 0판 · 시즌 종료 {end.guess.text}")
@@ -5760,7 +5768,7 @@ class MainWindow(QMainWindow):
         self.tbl_rmove.setSortingEnabled(False)
         v.addWidget(self.tbl_rmove, 1)
         v.addWidget(self._title_label("변동 이력 — 바뀐 칸은 굵게"))
-        self.tbl_rhist = self._make_table(self.RANK_HIST_COLUMNS, icons={4: "emblem"})
+        self.tbl_rhist = self._make_table(self.RANK_HIST_COLUMNS, icons={3: "formation", 4: "emblem"})
         self.tbl_rhist.setSortingEnabled(False)
         v.addWidget(self.tbl_rhist, 1)
         self.rank_move_data: core.RankMoves | None = None
@@ -5803,7 +5811,7 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_rmove, rows, enable_sort=False)
         hist = list(reversed(res.history))
         self._fill(self.tbl_rhist, [[self._at(h.at)] + (["1만 위 밖", "", "", "", ""] if h.row is None else [
-            f"{h.row.rank:,}", NA if h.row.elo is None else f"{h.row.elo:,.0f}", h.row.formation or "-",
+            f"{h.row.rank:,}", NA if h.row.elo is None else f"{h.row.elo:,.0f}", self._formation_cell(h.row.formation or "-"),
             self._emblem_cell(h.row.color or core.blank_label("team_color")), "닉네임 바뀜" if "nickname" in h.changed else ""])
             for h in hist], enable_sort=False)
         cols = {"formation": 3, "color": 4, "nickname": 5}
@@ -6697,7 +6705,11 @@ class MainWindow(QMainWindow):
         self.lb_my_formation.setStyleSheet(
             f"background: {T.GREEN_SOFT}; border: 1px solid {T.BORDER};"
             f" border-radius: 6px; padding: 8px;")
-        vf.addWidget(self.lb_my_formation)
+        self.lb_my_formation_pitch = QLabel()   # 작은 축구장(I5) — 글자 줄 왼쪽
+        row_f = QHBoxLayout()
+        row_f.addWidget(self.lb_my_formation_pitch)
+        row_f.addWidget(self.lb_my_formation, 1)
+        vf.addLayout(row_f)
 
         self.box_opp = QVBoxLayout()
         self.box_opp.setSpacing(2)
@@ -7374,12 +7386,27 @@ class MainWindow(QMainWindow):
         key = (emblem if images.icon_url("emblem", emblem) else "") or self._emblem_map().get(label, "")
         return IconCell(label, sort_key, key) if key else (label if sort_key is None else (label, sort_key))
 
+    NAME_ICON = {"team_color": "emblem", "formation": "formation"}   # 메타 표 이름 칸의 그림 종류
+
+    def _name_cell(self, kind: str, label: str):
+        """메타 표 이름 칸 — 팀컬러는 엠블럼, 포메이션은 작은 축구장(묶음 이름 "4백" 등은 글자만)."""
+        return self._emblem_cell(label) if kind == "team_color" else self._formation_cell(label)
+
     @staticmethod
-    def _cell(text: str, key=None, icon_key=None):
+    def _formation_cell(text: str, sort_key=None):
+        """포메이션 칸 — 글자는 그대로, 그릴 수 있는 모양이면 작은 축구장이 붙을 칸으로(IconCell). "모름" 등은 글자만."""
+        key = formation_key(text)
+        return IconCell(text, sort_key, key) if key else (text if sort_key is None else (text, sort_key))
+
+    @staticmethod
+    def _cell(text: str, key=None, icon_key=None, name: str = ""):
         item = SortableItem(text, key)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         if icon_key is not None:
             item.setData(ICON_KEY_ROLE, icon_key)   # 정렬을 켜기 전에 칸과 같이 — 순서로 짝짓지 않는다(PyQt 1)
+        if name:
+            item.setData(NAME_ROLE, name)
+            item.setToolTip(name)
         return item
 
     def _fill(self, table: QTableWidget, rows: list[list],
@@ -7399,7 +7426,7 @@ class MainWindow(QMainWindow):
         for r, row in enumerate(rows):
             for c, cell in enumerate(row):
                 if isinstance(cell, IconCell):
-                    table.setItem(r, c, self._cell(cell.text, cell.sort_key, cell.icon_key))
+                    table.setItem(r, c, self._cell(cell.text, cell.sort_key, cell.icon_key, cell.name))
                     continue
                 text, key = cell if isinstance(cell, tuple) else (cell, None)
                 table.setItem(r, c, self._cell(text, key))
@@ -7420,15 +7447,23 @@ class MainWindow(QMainWindow):
         if old is not None and old.isRunning():
             old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
         entries: dict[tuple, str] = {}
+        drawn: set[str] = set()   # 포메이션은 받지 않고 그 자리에서 그린다(I5)
         for r in range(table.rowCount()):
             for c, kind in cols.items():
                 item = table.item(r, c)
                 key = item.data(ICON_KEY_ROLE) if item is not None else None
                 if key is None or (kind, key) in entries:
                     continue
+                if kind == "formation":
+                    drawn.add(key)
+                    continue
                 url = images.icon_url(kind, key, self._seasons)
                 if url:
                     entries[(kind, key)] = url
+        for key in drawn:
+            pm = formation_pixmap(key)
+            if not pm.isNull():
+                self._put_icon(table, "formation", key, QIcon(pm))
         if not entries:
             table._icon_loader = None
             return
@@ -7443,12 +7478,15 @@ class MainWindow(QMainWindow):
     def _apply_icon(table: FitTableWidget, kind: str, key, path: str) -> None:
         """받은 그림을 같은 키의 칸에 붙인다. 정렬 중인 열에 붙이면 매번 재정렬되어 큰 표가 멈춘다(실측 1만 행 1.4초) —
         붙이는 동안 정렬을 끈다. 아이콘은 칸에 붙어 따라가므로 켤 때 재정렬돼도 제 행에 남는다."""
+        pm = QPixmap(path)
+        if pm.isNull():
+            Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 글자만
+            return
+        MainWindow._put_icon(table, kind, key, QIcon(pm))
+
+    @staticmethod
+    def _put_icon(table: FitTableWidget, kind: str, key, icon: QIcon) -> None:
         try:
-            pm = QPixmap(path)
-            if pm.isNull():
-                Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 글자만
-                return
-            icon = QIcon(pm)
             cols = [c for c, k in table.icon_columns.items() if k == kind]
             sort_col = table.horizontalHeader().sortIndicatorSection()
             resort = table.isSortingEnabled() and sort_col in cols
@@ -9237,6 +9275,9 @@ class MainWindow(QMainWindow):
                 f"{t.formation}      {win_rate_text(t.win, t.draw, t.lose, t.mixed)}      "
                 f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
             self.lb_my_formation.setToolTip(win_rate_note(t.mixed))
+            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 2)
+            self.lb_my_formation_pitch.setPixmap(pitch)
+            self.lb_my_formation_pitch.setVisible(not pitch.isNull())
 
         self._clear(self.box_opp)
         few = core.MIN_COND
@@ -9258,7 +9299,7 @@ class MainWindow(QMainWindow):
             head.setStyleSheet(f"color: {T.TEXT_DIM};")
             self.box_opp.addWidget(head)
             self.opp_formation_bars = charts.HBarList()
-            self.opp_formation_bars.set_data(opp_rows)
+            self.opp_formation_bars.set_data(opp_rows, [formation_pixmap(f.formation) for f in opp_stats])
             self.box_opp.addWidget(self.opp_formation_bars)
 
         rb = core.result_breakdown(details, self._ouid)

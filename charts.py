@@ -1011,9 +1011,16 @@ class HBarList(_Chart):
     def __init__(self):
         super().__init__(min_h=self.ROW)
         self._rows: list[tuple[str, float | None, str, str]] = []
+        self._icons: list = []   # 줄마다 이름 앞 작은 그림(QPixmap | None) — 없으면 빈 목록
 
-    def set_data(self, rows: list[tuple[str, float | None, str, str]]) -> None:
+    def _icon_w(self) -> int:
+        """이름 앞에 비워 둘 폭 — 그림이 하나라도 있으면 가장 넓은 그림 + 간격(없으면 0)."""
+        return max((round(pm.width() / pm.devicePixelRatio()) + 6 for pm in self._icons
+                    if pm is not None and not pm.isNull()), default=0)
+
+    def set_data(self, rows: list[tuple[str, float | None, str, str]], icons: list | None = None) -> None:
         self._rows = list(rows)
+        self._icons = list(icons or [])
         self.setMinimumHeight(max(len(self._rows), 1) * self.ROW)
         self.updateGeometry()
         self.update()
@@ -1023,7 +1030,7 @@ class HBarList(_Chart):
 
     def minimumSizeHint(self) -> QSize:
         fm = QFontMetrics(_small_font(self.font(), SMALL_PT + 1))
-        name_w = max((fm.horizontalAdvance(r[0]) for r in self._rows), default=0)
+        name_w = max((fm.horizontalAdvance(r[0]) for r in self._rows), default=0) + self._icon_w()
         val_w = max((fm.horizontalAdvance(r[2]) for r in self._rows), default=0)
         return QSize(name_w + val_w + 60, max(len(self._rows), 1) * self.ROW)
 
@@ -1037,7 +1044,8 @@ class HBarList(_Chart):
         f = _small_font(self.font(), SMALL_PT + 1)
         fm = QFontMetrics(f)
         p.setFont(f)
-        name_w = max(fm.horizontalAdvance(r[0]) for r in self._rows) + 10
+        icon_w = self._icon_w()
+        name_w = max(fm.horizontalAdvance(r[0]) for r in self._rows) + 10 + icon_w
         val_w = max(fm.horizontalAdvance(r[2]) for r in self._rows) + 8
         bar_x = name_w
         bar_w = max(self.width() - name_w - val_w, 10)
@@ -1046,7 +1054,10 @@ class HBarList(_Chart):
             y = i * self.ROW
             mid = y + self.ROW / 2
             p.setPen(QColor(T.TEXT_DIM))
-            p.drawText(QRectF(0, y, name_w - 6, self.ROW),
+            pm = self._icons[i] if i < len(self._icons) else None
+            if pm is not None and not pm.isNull():
+                p.drawPixmap(QPointF(0, mid - pm.height() / pm.devicePixelRatio() / 2), pm)
+            p.drawText(QRectF(icon_w, y, name_w - icon_w - 6, self.ROW),
                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, name)
             track = QRectF(bar_x, mid - self.THICK / 2, bar_w, self.THICK)
             p.setPen(Qt.PenStyle.NoPen)

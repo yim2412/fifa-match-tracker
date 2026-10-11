@@ -7439,6 +7439,14 @@ def test_trait_tab_renders_usage():
             # 두 포지션 × (코치 셋이 가장 긴 칸 → 상위 min(3, N)줄)
             assert _win.tbl_traits.rowCount() == 2 * min(3, config.TRAIT_TOP_NAMES), _win.tbl_traits.rowCount()
             assert _win.tbl_traits.item(0, 0).text().endswith("2명"), _win.tbl_traits.item(0, 0).text()
+            # 40단계 ② — 칸 글자는 "NN%" 만(이름은 툴팁·NAME_ROLE · 그림은 코드로) · 행 높이는 그림 + 글자 줄
+            c = _win.tbl_traits.item(0, 1)
+            assert c.text().endswith("%") and " " not in c.text(), c.text()
+            assert c.toolTip() and c.data(app_main.NAME_ROLE) == c.toolTip(), (c.toolTip(), c.data(app_main.NAME_ROLE))
+            assert isinstance(c.data(app_main.ICON_KEY_ROLE), int), "알려진 특성인데 그림 코드가 없다"
+            assert _win.tbl_traits.icon_columns == {1: "trait", 2: "trait", 3: "train", 4: "train"}
+            need = config.TRAIT_ICON_PX + _win.tbl_traits.fontMetrics().height()
+            assert _win.tbl_traits.verticalHeader().defaultSectionSize() >= need, "행이 그림 + 글자 줄보다 낮다"
             assert "특성을 본 구단주 3명" in _win.lb_trait_note.text(), _win.lb_trait_note.text()
             cb.setCurrentIndex(1)                       # → 4-4-2 · 다시 채워도 고른 값이 남는다
             assert _win.trait_usage.formation == "4-4-2" and cb.currentData() == "4-4-2"
@@ -8157,6 +8165,9 @@ def test_rank_move_follows_late_profile_sn():
             _win._on_rank_ready("rm-ouid", info)
             assert _win.rank_move_data is not None and _win.rank_move_data.found
             assert _win.tbl_rmove.rowCount() == 3 and _win.tbl_rhist.rowCount() == 4
+            assert _win.tbl_rhist.icon_columns == {3: "formation", 4: "emblem"}
+            first = _win.tbl_rhist.item(0, 3)
+            assert first.data(app_main.ICON_KEY_ROLE) and not first.icon().isNull(), "변동 이력 포메이션 칸에 작은 축구장이 없다"
             assert _win.tbl_rmove.item(0, 5).text() == rankmeta.V_GAME, _win.tbl_rmove.item(0, 5).text()
             _win._on_rank_ready("다른-ouid", None)                  # 다른 계정의 늦은 신호는 버린다
             assert _win.tbl_rmove.rowCount() == 3

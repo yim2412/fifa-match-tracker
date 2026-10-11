@@ -80,6 +80,15 @@ def name_of(kind: str, code) -> str | None:
     return _TABLES.get(kind, {}).get(code) or f"코드 {code}"
 
 
+def code_of(kind: str, name: str) -> int | None:
+    """이름 → 코드(그림 주소용). 집계가 이름을 키로 쓰므로 거꾸로 찾는다 — 한 표 안 이름 중복 0(실측).
+    "코드 N"(모르는 코드)·없는 이름은 None = 그림 없음."""
+    for code, nm in _TABLES.get(kind, {}).items():
+        if nm == name:
+            return code
+    return None
+
+
 def order_slots(traits: tuple[int, int, int]) -> tuple[int, int, int]:
     """(칸0, 칸1, 훈련) → (일반, 신규, 훈련). 번들 `yv` 와 같은 규칙: 거꾸로라는 증거(칸0 이 신규 표 · 칸1 이 일반 표)가 있고
     제 순서라는 증거(칸0 이 일반 표 · 칸1 이 신규 표)가 없으면 바꾼다 — 한쪽이 빈칸(-1)이어도 다른 쪽 코드로 가린다."""

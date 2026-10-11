@@ -779,6 +779,273 @@ def test_fetch_icon_replace_refused_uses_existing_file():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# ── 40단계 조각 ② — I4 특성 칸 · I5 작은 축구장 ────────────────────────────────────
+
+def test_formation_forms_agree():
+    """내 경기(0 줄 포함 고정 5줄)와 랭커(줄 수가 바뀜)가 같은 모양이면 같은 키 · 모양이 아닌 글자는 그림 없음."""
+    from widgets import formation_key, formation_pixmap
+    assert formation_key("4-1-2-3-0") == formation_key("4-1-2-3") == "4-1-2-3"
+    assert formation_key("4-2-2-1-1") == "4-2-2-1-1"
+    for bad in ("", "-", "모름", "기타·모름", "4백", "앞줄 3명", "4", "4-2-x", None):
+        assert formation_key(bad) == "", bad
+        assert formation_pixmap(bad).isNull(), bad
+    a, b = formation_pixmap("4-1-2-3-0", dpr=1.0), formation_pixmap("4-1-2-3", dpr=1.0)
+    assert a.toImage() == b.toImage(), "같은 모양인데 그림이 다르다 — 캐시 키가 갈린다"
+
+
+def test_formation_pixmap_draws_dots():
+    """줄마다 점 — 포메이션이 다르면 그림이 달라야 하고, 점 색이 실제로 찍혀야 한다(점을 빼면 모든 포메이션이 같은 빈 판)."""
+    from widgets import formation_pixmap
+    px = config.FORMATION_PX
+    imgs = {f: formation_pixmap(f, dpr=1.0).toImage() for f in ("4-4-2", "4-3-3", "3-5-2", "5-4-1")}
+    for i in imgs.values():
+        assert i.width() == round(px * config.ICON_ASPECT["formation"]) and i.height() == px, (i.width(), i.height())
+    uniq = {bytes(i.constBits().asarray(i.sizeInBytes())) for i in imgs.values()}
+    assert len(uniq) == 4, "포메이션이 달라도 그림이 같다"
+    white = QColor(app_main.T.FORMATION_DOT).rgb()
+    for f, i in imgs.items():
+        n = sum(1 for y in range(i.height()) for x in range(i.width()) if i.pixelColor(x, y).rgb() == white)
+        assert n >= sum(int(x) for x in f.split("-")), (f, n)   # 점마다 흰 픽셀이 최소 한 개씩은 있다
+    pitch = QColor(app_main.T.FORMATION_PITCH).rgb()
+    assert imgs["4-4-2"].pixelColor(1, px // 2).rgb() == pitch, "판이 pitch 색으로 안 칠해졌다"
+
+
+def test_formation_cells_need_no_loader():
+    """포메이션 칸은 받지 않고 그 자리에서 그린다 — 로더가 안 뜨고 아이콘이 붙는다 · 그릴 수 없는 글자는 글자만."""
+    cell = MW._formation_cell
+    assert isinstance(cell("4-1-2-3-0"), IconCell) and cell("4-1-2-3-0").icon_key == "4-1-2-3"
+    assert cell("모름") == "모름" and cell("4백") == "4백" and cell("-") == "-"
+    assert cell("4-4-2", 7) == IconCell("4-4-2", 7, "4-4-2") and cell("모름", 3) == ("모름", 3)
+
+    class St(_Stub):
+        _put_icon = staticmethod(MW._put_icon)
+
+        def _start_icons(self, table):
+            MW._start_icons(self, table)
+
+    st = St()
+    t = _table({0: "formation"})
+    st.fill(t, [[cell("4-4-2"), "-", "-"], [cell("모름"), "-", "-"], [cell("4-1-2-3-0"), "-", "-"]], False)
+    assert st._icon_loaders == [], "포메이션은 네트워크 없이 그리는데 로더가 떴다"
+    assert not t.item(0, 0).icon().isNull() and not t.item(2, 0).icon().isNull()
+    assert t.item(1, 0).icon().isNull(), "그릴 수 없는 글자('모름')에 그림이 붙었다"
+
+
+def test_trait_code_of_roundtrip():
+    """이름 → 코드(그림 주소용) — 모든 표에서 되돌아오고, 모르는 이름("코드 N")은 None."""
+    import trait_codes as tc
+    assert tc.code_of("normal", "승부욕") == 28 and tc.code_of("new", "2개의 심장") == 55
+    assert tc.code_of("train", "근거리 슛 향상") == 0 and tc.code_of("coach", "근거리 슛 향상") == 0, "코치는 훈련 표를 같이 쓴다"
+    assert tc.code_of("normal", "코드 99") is None and tc.code_of("nope", "승부욕") is None
+    assert tc.code_of("new", "승부욕") is None, "일반 이름을 신규 표에서 찾으면 안 된다"
+    for kind in tc.KINDS:
+        table = tc._TABLES[kind]
+        assert len(set(table.values())) == len(table), f"{kind} 표 안에 이름 중복 — 역표가 모호하다"
+        for code, name in table.items():
+            assert tc.code_of(kind, name) == code, (kind, code, name)
+
+
+def test_trait_cell_is_percent_only():
+    """칸 글자는 'NN%' 만(이름이 들어가면 _measure_text 가 긴 이름을 재 열이 넓어진다) · 이름은 칸 이름 역할·툴팁."""
+    from widgets import NAME_ROLE
+    c = MW._trait_cell("normal", "승부욕", 3, 0.456)
+    assert c == IconCell("46%", 0.456, 28, "승부욕"), c
+    assert MW._trait_cell("train", "코드 77", 1, 0.5).icon_key is None, "모르는 코드는 그림 없음(이름으로 대신)"
+    st = _Stub()
+    t = _table({0: "trait"})
+    st.fill(t, [[c, "-", "-"]], False)
+    it = t.item(0, 0)
+    assert it.text() == "46%" and it.data(NAME_ROLE) == "승부욕" and it.toolTip() == "승부욕" and it.data(ICON_KEY_ROLE) == 28
+
+
+def _trait_table():
+    t = _table({0: "trait", 1: "train"}, cols=3)
+    st = _Stub()
+    st.fill(t, [[MW._trait_cell("normal", "승부욕", 3, 0.5), MW._trait_cell("train", "근거리 슛 향상", 1, 0.25), "-"],
+                ["", "", "-"]], False)
+    return t
+
+
+def test_trait_columns_stacked_not_beside():
+    """특성 칸은 글자 옆이 아니라 위에 그린다 — 열 여백 0(그래도 _extra 에는 있어 _pad 를 안 부풀린다) · 행 높이는 그림 + 글자 한 줄."""
+    from widgets import TraitIconDelegate
+    t = _trait_table()
+    assert t._icon_extra[0] == 0 and t._icon_extra[1] == 0 and 0 in t._extra and 1 in t._extra
+    assert isinstance(t.itemDelegateForColumn(0), TraitIconDelegate) and t.itemDelegateForColumn(0).kind == "trait"
+    assert t.itemDelegateForColumn(1).kind == "train"
+    assert not isinstance(t.itemDelegateForColumn(2), TraitIconDelegate)
+    need = config.TRAIT_ICON_PX + t.fontMetrics().height()
+    assert t.verticalHeader().defaultSectionSize() >= need, (t.verticalHeader().defaultSectionSize(), need)
+    assert t.iconSize().height() == config.TRAIT_ICON_PX
+    # 같은 글자의 일반 표 — 열 폭이 그림 때문에 부풀지 않는다
+    plain = _table(None, cols=3)
+    _Stub().fill(plain, [["50%", "25%", "-"], ["", "", "-"]], False)
+    plain.refit()
+    plain.refit()
+    t.refit()
+    t.refit()
+    assert t._pad == plain._pad, (t._pad, plain._pad)
+
+
+def _paint_cell(t, row, col, icon=None):
+    from PyQt6.QtGui import QImage, QPainter
+    from PyQt6.QtWidgets import QStyleOptionViewItem
+    if icon is not None:
+        t.item(row, col).setIcon(icon)
+    idx = t.model().index(row, col)
+    t.resize(400, 200)
+    t.show()
+    t.refit()
+    opt = QStyleOptionViewItem()
+    opt.initFrom(t)
+    opt.rect = t.visualRect(idx)
+    opt.font = t.font()
+    img = QImage(t.viewport().size(), QImage.Format.Format_ARGB32)
+    img.fill(QColor("black"))
+    p = QPainter(img)
+    t.itemDelegateForColumn(col).paint(p, opt, idx)
+    p.end()
+    return img, opt
+
+
+def test_trait_cell_geometry_no_overlap():
+    """판(육각 상자)과 % 글자 상자가 안 겹치고 둘 다 칸 안에 있다."""
+    t = _trait_table()
+    _img, opt = _paint_cell(t, 0, 0)
+    d = t.itemDelegateForColumn(0)
+    pad, txt = d.pad_rect(opt), d.text_rect(opt)
+    cell = opt.rect
+    assert pad.bottom() <= txt.top(), (pad, txt)
+    assert pad.top() >= cell.top() and txt.bottom() <= cell.bottom() + 1, (pad, txt, cell)
+    assert pad.left() >= cell.left() and pad.right() <= cell.right() + 1, (pad, cell)
+
+
+def test_trait_cell_paints_pad_and_icon():
+    """그림이 있으면 판 위에 그림 · 없으면 판 위에 이름 — 둘이 다르고, 판 색은 종류(일반 금 · 훈련 회)를 따른다."""
+    import theme as T
+    from PyQt6.QtGui import QIcon
+    t = _trait_table()
+    pm = QPixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX)
+    pm.fill(QColor("#ff0000"))
+    bare, opt = _paint_cell(t, 0, 0)
+    drawn, _ = _paint_cell(t, 0, 0, QIcon(pm))
+    d = t.itemDelegateForColumn(0)
+    box = d.pad_rect(opt)
+    c = box.center().toPoint()
+    assert drawn.pixelColor(c).rgb() == QColor("#ff0000").rgb(), "아이콘이 판 가운데에 안 찍혔다"
+    assert bare.pixelColor(c).rgb() != QColor("#ff0000").rgb()
+    assert bare != drawn, "그림이 있든 없든 똑같다 — 아이콘을 안 그린다"
+    # 육각 판 위쪽 꼭짓점 바로 아래(그림 상자 가장자리 밖) — 판 색
+    top_inside = bare.pixelColor(int(box.center().x()), int(box.top()) + 1)
+    assert top_inside.rgb() == QColor(T.TRAIT_PAD_GOLD).rgb(), "일반 특성 판이 금색이 아니다"
+    img_t, opt_t = _paint_cell(t, 0, 1)
+    d1 = t.itemDelegateForColumn(1)
+    box1 = d1.pad_rect(opt_t)
+    edge_t = img_t.pixelColor(int(box1.center().x()), int(box1.top()) + 1)
+    assert edge_t.rgb() == QColor(T.TRAIT_PAD_GRAY).rgb(), "훈련 특성 판이 회색이 아니다"
+    assert d.failed == 0 and d1.failed == 0, "그리다 예외가 났다"
+
+
+def test_trait_blank_cell_draws_nothing():
+    """줄 수가 모자라 비어 있는 칸은 판도 안 그린다."""
+    t = _trait_table()
+    img, opt = _paint_cell(t, 1, 0)
+    black = QColor("black").rgb()
+    r = opt.rect
+    assert all(img.pixelColor(x, y).rgb() == black for x in range(r.left(), r.right() + 1)
+               for y in range(r.top(), r.bottom() + 1)), "빈 칸에 뭔가 그려졌다"
+
+
+def test_trait_delegate_leaves_default_drawing_to_background():
+    """기본 그리기는 배경·선택만 — 글자와 그림을 비워야 우리가 그린 글자와 겹쳐 두 번 찍히지 않는다."""
+    from PyQt6.QtWidgets import QStyleOptionViewItem
+    t = _trait_table()
+    t.item(0, 0).setIcon(app_main.QIcon(QPixmap(8, 8)))
+    d = t.itemDelegateForColumn(0)
+    opt = QStyleOptionViewItem()
+    d.initStyleOption(opt, t.model().index(0, 0))
+    assert opt.text == "" and opt.icon.isNull(), (opt.text, opt.icon.isNull())
+
+
+def test_trait_row_height_follows_font():
+    """창이 좁아 FitTableWidget 이 글꼴을 줄이면 행 높이도 그 글꼴의 글자 줄에 맞춰 다시 잡는다(처음 글꼴로 굳으면 글자가 잘린다)."""
+    from widgets import TraitIconDelegate
+    t = _trait_table()
+    t.setColumnWidth(0, 40)
+    t.resize(70, 200)        # 열 셋이 70px 에 안 들어간다 → 글꼴이 줄어든다
+    t.show()
+    t.refit()
+    assert t.font().pixelSize() < 14, t.font().pixelSize()
+    want = TraitIconDelegate.row_height(t.fontMetrics())
+    assert t.verticalHeader().defaultSectionSize() == want, (t.verticalHeader().defaultSectionSize(), want)
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "icons"
+
+
+def test_real_ratio_icons_fit_cells():
+    """진짜 비율(가로로 긴 국기 · 정사각 엠블럼·등급 · 투명 여백 큰 특성)의 지어낸 그림을 붙인 뒤에도 칸이 안 잘리고,
+    아이콘 높이는 행 높이 안에 든다(그림이 붙은 **뒤** 잰다 — 붙기 전만 재면 그림 폭을 놓친다)."""
+    from PyQt6.QtGui import QIcon
+    for fname, kind in (("flag_130x78.png", "emblem"), ("emblem_128.png", "emblem"), ("division_64.png", "division")):
+        pm = QPixmap(str(FIXTURES / fname))
+        assert not pm.isNull(), fname
+        st = _Stub()
+        t = _table({0: kind})
+        st.fill(t, [[IconCell("구단 이름 하나", None, "k"), "-", "-"], [IconCell("가", None, "k"), "-", "-"]], False)
+        t.resize(500, 200)
+        t.show()
+        t.refit()
+        before = t.columnWidth(0)
+        for r in range(2):
+            t.item(r, 0).setIcon(QIcon(pm))
+        t.refit()
+        assert t.columnWidth(0) >= t.sizeHintForColumn(0), (fname, t.columnWidth(0), t.sizeHintForColumn(0))
+        assert t.columnWidth(0) == before or abs(t.columnWidth(0) - before) <= 1, \
+            f"{fname}: 그림이 붙으며 열 폭이 흔들렸다 {before} → {t.columnWidth(0)}"
+        assert t.iconSize().height() <= t.rowHeight(0), (fname, t.iconSize().height(), t.rowHeight(0))
+
+
+def test_trait_fixture_paints_inside_pad():
+    """투명 여백이 큰 특성 그림(90×90)을 판 안에 줄여 그려도 판 상자 밖으로 안 번진다."""
+    from PyQt6.QtGui import QIcon
+    t = _trait_table()
+    pm = QPixmap(str(FIXTURES / "trait_90_pad.png"))
+    assert not pm.isNull() and pm.width() == 90
+    bare, opt = _paint_cell(t, 0, 0)
+    drawn, _ = _paint_cell(t, 0, 0, QIcon(pm))
+    d = t.itemDelegateForColumn(0)
+    box = d.pad_rect(opt)
+    assert bare != drawn
+    # 판 상자 바깥(칸 위쪽 가장자리 · 판 왼쪽)은 그림을 넣어도 달라지지 않는다
+    for x, y in ((int(box.left()) - 3, int(box.center().y())), (int(box.right()) + 3, int(box.center().y())),
+                 (int(box.center().x()), 0)):
+        assert bare.pixelColor(x, y) == drawn.pixelColor(x, y), (x, y)
+
+
+def test_hbarlist_icons_make_room_and_draw():
+    """상대 포메이션 막대(전술) — 이름 앞 작은 축구장: 그림이 있으면 최소 폭이 그만큼 늘고, 그려지며, 없으면 예전과 같다."""
+    import charts
+    from PyQt6.QtGui import QImage
+    from widgets import formation_pixmap
+    rows = [("4-4-2", 55.0, "55%", "t"), ("모름", 40.0, "40%", "t")]
+    bars = charts.HBarList()
+    bars.set_data(rows)
+    plain_w = bars.minimumSizeHint().width()
+    pms = [formation_pixmap("4-4-2", dpr=1.0), formation_pixmap("모름", dpr=1.0)]   # 둘째는 null — 그림 없는 줄
+    bars.set_data(rows, pms)
+    assert bars.minimumSizeHint().width() == plain_w + pms[0].width() + 6, (bars.minimumSizeHint().width(), plain_w)
+    bars.resize(400, bars.minimumSizeHint().height())
+    img = QImage(bars.size(), QImage.Format.Format_ARGB32)
+    img.fill(QColor("black"))
+    bars.render(img)
+    pitch = QColor(app_main.T.FORMATION_PITCH).rgb()
+    mid = int(bars.ROW / 2)
+    assert any(img.pixelColor(x, mid).rgb() == pitch for x in range(pms[0].width())), "첫 줄에 작은 축구장이 안 그려졌다"
+    bars.set_data(rows)
+    assert bars.minimumSizeHint().width() == plain_w, "그림을 빼면 예전 폭으로 돌아와야 한다"
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

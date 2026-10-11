@@ -337,6 +337,12 @@ CDN = `https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/`
 - **화면 확인에서 남은 것**: 위 "화면 확인"의 자동 목록 중 ⓐ 아이콘 높이 ≤ 행 높이 · 겹침(`subElementRect`) 검사 ⓑ 지어낸 진짜 비율 그림 `tests/fixtures/icons/*.png`(지금 어떤 테스트도 안 읽는다 — 커밋도 안 했다) ⓒ 표마다 받기 후 `columnWidth ≥ sizeHintForColumn` 을 smoke 에. 실제 프로그램 쪽은 offscreen 으로 실제 그림을 받아 표 한 장을 찍어 본 것(구단·강화·국기·등급·시즌 27/27칸)뿐 — **2번 모니터 exe PNG 6항목 표·배율 100/125/150%·밝은 테마는 아직**(사용자 데이터·API 키가 필요해 사용자와 같이).
 - 보류(리뷰 [하]): 정렬 중인 큰 표에 그림이 붙을 때 키마다 재정렬(1만 행·키 18종 약 1초 — 상대 전적 같은 큰 표) · 지도와 구단주 표가 다른 스냅숏을 기준으로 하는 경우(시즌이 막 바뀐 때) · 이름→엠블럼 "하나뿐" 규칙이 출처마다 다름(겹침 11쌍은 라벨이 갈려 실제 피해 낮음).
 
+**조각 ② 상태(2026-10-11)** — 구현·자동 검증 끝, **2번 모니터 exe PNG 확인은 아직**(조각 ①과 같이 사용자와).
+- 한 일: I4 `widgets.TraitIconDelegate`(육각 판 위 아이콘 + 아래 `NN%` · 이름은 툴팁·`NAME_ROLE` · 그림 없으면 판 자리에 이름) + `trait_codes.code_of`(이름 → 코드 역표) · I5 `widgets.formation_pixmap`/`formation_key`(받지 않고 그 자리에서 그림 — `_start_icons` 가 로더 없이 붙인다) · 표 칸: 포지션 특성 4열 · 변동 이력 포메이션 · 메타 변화/하루 승률/구간 평균(팀컬러=엠블럼·포메이션=축구장 `_name_cell`) · 가성비 · 주간 요약 최고·최저 · 랭커 픽 이름 표 둘 · 전술 탭(내 포메이션 줄 앞 축구장 + 상대 포메이션 막대 `HBarList.set_data(rows, icons)`). 색은 `theme.TRAIT_PAD_*`·`FORMATION_*`, 크기는 `config.ICON_HEIGHT`·`STACKED_KINDS`.
+- 검증: `test_icons` 14개 더해 45개 · `test_ui_smoke` 286 · `test_rules` 11 · `test_traits` 56 · `test_rankmeta` 31 · `test_window_size` 12 전부 통과. 변이 16건(점·그림·판 색·열 여백·키 정규화·글자 비움·빈 칸·역표·막대 그림) 중 15건 잡힘, 1건(등록 때 행 높이 한 줄)은 `_fit` 이 같은 값을 다시 넣어 동치.
+- 계획과 달라진 것: ⓐ 특성 칸은 열 여백 0(글자 폭이 곧 칸 폭) · 행 높이는 `_fit` 이 글꼴 따라 다시 잡는다 ⓑ 조각 ①에서 남았던 "진짜 비율 그림 `tests/fixtures/icons/` · 붙인 뒤 칸 폭 ≥ sizeHint · 아이콘 높이 ≤ 행 높이"를 `test_real_ratio_icons_fit_cells`·`test_trait_fixture_paints_inside_pad` 로 채움(픽스처 커밋) ⓒ 랭커 픽 [추천] 표(`REC_STAND_COLUMNS`)·`tbl_vscore` 외 평균 ELO 열은 이름 칸이 아니라 대상 아님.
+- 남음: 위 exe 2번 모니터 PNG(배율 100/125/150% · 밝은 테마) · ③ 대시보드 머리 + 문서.
+
 **계획 검토**: 기준 7 — 기존 데이터에 그림만 붙이는 단계라 **검토자 1명**(새 네트워크는 정적 CDN 하나 · 저장 형식 바뀜 없음). 근거 묶음은 `review_kit.py bundle "## 화면 그림"`.
 
 ## 2.6.1 — 내 경기 분석 ① 기준선·습관 (41단계 · 옛 33) — 계획 검토 끝

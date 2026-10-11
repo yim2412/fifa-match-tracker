@@ -130,6 +130,12 @@ GRADE_BADGES = ((11, "#6dd5e8", "#0a2a30"),
                 (5, "#b8bfc7", "#20242a"),
                 (1, "#c17a4a", "#2b1608"))
 
+# 특성 아이콘 뒤 육각 판(넥슨 원본이 아니라 QPainter 로 그린다) · 작은 축구장(포메이션 점) — 두 테마 같은 고정색
+TRAIT_PAD_GOLD = "#e8c545"   # 일반·신규 특성 판
+TRAIT_PAD_GRAY = "#8a929c"   # 훈련 특성·코치 판
+FORMATION_PITCH = "#2f7d4a"  # 작은 축구장 바탕
+FORMATION_DOT = "#ffffff"    # 선수 점
+
 HEAT_ATK = _P["HEAT_ATK"]   # 선수 지표 공격력 칸 끝 색
 HEAT_DEF = _P["HEAT_DEF"]   # 수비력 칸 끝 색
 POS_COLORS = {"FW": _P["POS_FW"], "MF": _P["POS_MF"], "DF": _P["POS_DF"], "GK": _P["POS_GK"]}
