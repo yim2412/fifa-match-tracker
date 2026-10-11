@@ -259,11 +259,14 @@ def _rows(keys, texts=None):
 
 def test_pad_ignores_icon_columns():
     """그림이 sizeHintForColumn 을 키워도 그 여백이 모든 열에 얹히지 않는다 — **같은 표**의 그림 붙기 전·후 _pad 가 같다.
-    (다른 표와 비교하면 재는 열 집합이 달라 글꼴에 따라 1px 갈린다 — 첫 판이 그렇게 비교했다가 CI 글꼴에서 (12, 11) 로 FAIL 했다)"""
+    (다른 표와 비교하면 재는 열 집합이 달라 글꼴에 따라 1px 갈린다 — 첫 판이 그렇게 비교했다가 CI 에서 (12, 11) 로 FAIL 했다. 같은 표로
+    바꿔도 둘째 판이 똑같이 FAIL 했다 — 첫 측정의 1px 차이를 그림 탓으로 읽은 것이라 예열을 넣었다)"""
     from PyQt6.QtGui import QIcon
     st = _Stub()
     with_icon = _table({0: "season"})
     st.fill(with_icon, _rows([1, 2, 1]), False)
+    with_icon.refit()                       # 예열 — 첫 측정만 _pad 가 1px 다르다(그림 없는 표도 9 → 10 · CI 에선 11 → 12). 그림과 무관한 기존 현상
+    with_icon.refit()
     before = with_icon._pad                 # 그림이 아직 없을 때 — 같은 열 집합
     pm = QPixmap(30, 20)
     pm.fill(QColor("red"))
