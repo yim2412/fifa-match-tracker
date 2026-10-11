@@ -1247,7 +1247,8 @@ NAME_ROLE = Qt.ItemDataRole.UserRole + 3   # 특성 칸의 이름(그림이 없�
 
 
 class TraitIconDelegate(RowBorderDelegate):
-    """특성 칸 — 육각 판 위에 아이콘, 아래에 %. 그림이 아직 없거나 못 받았으면 판 자리에 이름을 줄여 쓴다.
+    """특성 칸 — 육각 판 위에 아이콘, 아래에 %. 그림이 아직 없거나 못 받았으면(넥슨에 그림이 아예 없는 특성도 있다)
+    판 없이 그 자리에 이름을 줄여 쓴다.
 
     판은 넥슨 원본이 아니라 QPainter 로 그린다(일반·신규 금색 · 훈련·코치 회색 — 색은 theme). 폭은 sizeHint 로 알리지 않는다
     (GradeBadgeDelegate 와 같은 이유: _measure_pad 가 한 열의 큰 힌트를 모든 열에 얹는다) — 글자 "NN%" 가 곧 칸 폭이고
@@ -1297,21 +1298,23 @@ class TraitIconDelegate(RowBorderDelegate):
         box = self.pad_rect(option)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        c = box.center()
-        hexa = QPolygonF([QPointF(c.x() + box.width() / 2 * math.sin(math.radians(60 * i)),
-                                  c.y() - box.height() / 2 * math.cos(math.radians(60 * i))) for i in range(6)])
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(T.TRAIT_PAD_GOLD if self.kind == "trait" else T.TRAIT_PAD_GRAY))
-        painter.drawPolygon(hexa)
         icon = index.data(Qt.ItemDataRole.DecorationRole)
         pm = icon.pixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX) if isinstance(icon, QIcon) else QPixmap()
         if not pm.isNull():
+            c = box.center()
+            hexa = QPolygonF([QPointF(c.x() + box.width() / 2 * math.sin(math.radians(60 * i)),
+                                      c.y() - box.height() / 2 * math.cos(math.radians(60 * i))) for i in range(6)])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(T.TRAIT_PAD_GOLD if self.kind == "trait" else T.TRAIT_PAD_GRAY))
+            painter.drawPolygon(hexa)
             painter.drawPixmap(box.adjusted(3, 3, -3, -3).toRect(), pm)
         else:
+            # 그림이 없으면 판도 그리지 않는다 — 판 위에 이름을 찍으면 이름이 판 밖으로 번져 겹쳐 보였다(일반 특성 8개 —
+            # 코드 0·1·3·4·5·6·7·9 — 는 넥슨 CDN 에 그림이 아예 없다(403, 2026-10-11 실측) · 실화면에서 발견)
             small = QFont(option.font)
             small.setPixelSize(max(9, small.pixelSize() - 3) if small.pixelSize() > 0 else 10)
             painter.setFont(small)
-            painter.setPen(QColor(T.TEXT))
+            painter.setPen(QColor(T.TEXT_DIM))
             label = QFontMetrics(small).elidedText(name, Qt.TextElideMode.ElideRight, option.rect.width() - 4)
             painter.drawText(QRectF(option.rect.x(), box.y(), option.rect.width(), box.height()),
                              Qt.AlignmentFlag.AlignCenter, label)

@@ -921,7 +921,8 @@ def test_trait_cell_geometry_no_overlap():
 
 
 def test_trait_cell_paints_pad_and_icon():
-    """그림이 있으면 판 위에 그림 · 없으면 판 위에 이름 — 둘이 다르고, 판 색은 종류(일반 금 · 훈련 회)를 따른다."""
+    """그림이 있으면 판 위에 그림 · 없으면 판 없이 이름만 — 판 색은 종류(일반 금 · 훈련 회)를 따른다.
+    그림이 없을 때 판을 그리면 이름이 판 밖으로 번져 겹쳐 보였다(2026-10-11 실화면 · 일반 특성 8개는 넥슨에 그림이 없다)."""
     import theme as T
     from PyQt6.QtGui import QIcon
     t = _trait_table()
@@ -936,9 +937,12 @@ def test_trait_cell_paints_pad_and_icon():
     assert bare.pixelColor(c).rgb() != QColor("#ff0000").rgb()
     assert bare != drawn, "그림이 있든 없든 똑같다 — 아이콘을 안 그린다"
     # 육각 판 위쪽 꼭짓점 바로 아래(그림 상자 가장자리 밖) — 판 색
-    top_inside = bare.pixelColor(int(box.center().x()), int(box.top()) + 1)
+    top_inside = drawn.pixelColor(int(box.center().x()), int(box.top()) + 1)
     assert top_inside.rgb() == QColor(T.TRAIT_PAD_GOLD).rgb(), "일반 특성 판이 금색이 아니다"
-    img_t, opt_t = _paint_cell(t, 0, 1)
+    # 그림이 없으면 판이 없다 — 같은 자리가 배경(검정)이어야 한다(이름 글자는 그 아래 가운데에 있어 꼭짓점은 비어 있다)
+    assert bare.pixelColor(int(box.center().x()), int(box.top()) + 1).rgb() == QColor("black").rgb(), \
+        "그림이 없는데 판을 그렸다 — 이름이 판 위에 겹친다"
+    img_t, opt_t = _paint_cell(t, 0, 1, QIcon(pm))
     d1 = t.itemDelegateForColumn(1)
     box1 = d1.pad_rect(opt_t)
     edge_t = img_t.pixelColor(int(box1.center().x()), int(box1.top()) + 1)
