@@ -406,7 +406,7 @@ def test_go_page_rejects_unknown_or_hidden():
     try:
         for args in (("없는 메뉴",), ("랭킹 추이",), ("선수 지표", "없는 탭"), ("슛 맵", "탭"), ("랭커와 비교",)):
             _win._go_page(*args)
-            assert _win._current_view() == ("슛 맵", None), (args, _win._current_view())
+            assert _win._current_view() == ("슛 맵", "슛 맵"), (args, _win._current_view())
     finally:
         config.HIDDEN_NAV_UNTIL_READY = keep
     _win._go_page("랭킹 추이")
@@ -694,12 +694,13 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 44, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 45, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
     #                                        · 38 메타 분석 [포지션 특성](2.5.1 — 채운 표는 test_trait_tab_renders_usage 가 잰다)
     #                                        · 39~40 성적 진단 [운 범위] · 41~43 [경기 습관](2.7.1 — 채운 표는 두 탭 테스트가 잰다)
+    #                                        · 44 슛 맵 [공격 루트](2.7.1 — 채운 표는 test_attack_route_tab_… 가 잰다)
     _check_elisions(tables)
 
 
@@ -1269,6 +1270,30 @@ def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
     assert [w.text() for w in _live_widgets(_win.box_goalflow["lead"]) if isinstance(w, QLabel)] == [
         "골 순서를 되짚을 수 있는 경기가 없습니다."]
     _win._render_goal_flow(_win._details)
+
+
+def test_attack_route_tab_draws_a_row_per_route_and_waits_for_enough_shots():
+    # 2.7.1 N18 — 슛이 하한 이상이면 루트마다 한 줄 · 모자라면 표 대신 "아직 못 가릅니다" · 표시 구간이 바뀌면 새로 그린다
+    _win._go_page("슛 맵", "공격 루트")
+    assert _win._current_view() == ("슛 맵", "공격 루트")
+    old = app_main.config.N18_MIN_SHOTS
+    try:
+        app_main.config.N18_MIN_SHOTS = 1
+        _win._render_attack_route(_win._details)
+        ar = app_main.core.attack_routes(_win._details, _win._ouid)
+        assert ar.mine_total > 0 and ar.enough, ar.mine_total
+        assert _win.tbl_route.rowCount() == len(app_main.core.ROUTES), _win.tbl_route.rowCount()
+        assert [_win.tbl_route.item(r, 0).text() for r in range(_win.tbl_route.rowCount())] == list(app_main.core.ROUTES)
+        assert f"{ar.mine_total:,}개" in _win.lb_route_note.text(), _win.lb_route_note.text()
+        _check_elisions([_win.tbl_route])     # 채운 표가 최소 창 폭에서 안 잘린다
+        app_main.config.N18_MIN_SHOTS = ar.mine_total + 1
+        _win._render_attack_route(_win._details)
+        assert _win.tbl_route.rowCount() == 0 and "아직 못 가릅니다" in _win.lb_route_note.text(), _win.lb_route_note.text()
+    finally:
+        app_main.config.N18_MIN_SHOTS = old
+    _win._render_attack_route([])
+    assert _win.tbl_route.rowCount() == 0
+    _win._go_page("대시보드")
 
 
 def _synth_matches(spec):

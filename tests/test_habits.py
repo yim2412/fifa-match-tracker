@@ -613,6 +613,96 @@ def test_habit_two_groups_are_tested():
     assert t.tested and t.df == 1 and t.significant, t       # 나머지 빈 칸이 합쳐져 두 덩이 — 자유도 1
 
 
+# ── N18 공격 루트 ───────────────────────────────────────────────────────────
+
+def _shot(type_=1, inpen=True, ax=None, ay=None, x=0.9, y=0.5, result=1):
+    """shootDetail 한 칸. ax 가 None 이면 어시 없음(넥슨 값 그대로 assist 거짓 + (0.5, 0.5))."""
+    sd = {"type": type_, "inPenalty": inpen, "x": x, "y": y, "result": result, "assist": ax is not None,
+          "assistX": 0.5 if ax is None else ax, "assistY": 0.5 if ay is None else ay}
+    return sd
+
+
+def test_classify_route_order_and_edges():
+    cr = habits.classify_route
+    assert cr(_shot(14)) == "기타" and cr(_shot(99, inpen=False)) == "기타", "이름 없는 종류는 어디에도 안 끼운다"
+    assert cr(_shot(14, inpen=True, ax=0.8, ay=0.1)) == "기타", "기타가 박스·어시보다 먼저"
+    assert cr(_shot(8, inpen=False)) == cr(_shot(9)) == "세트피스"
+    assert cr(_shot(3, inpen=False)) == "헤더", "박스 밖 헤더도 헤더(중거리보다 먼저)"
+    assert cr(_shot(3, ax=0.9, ay=0.1)) == "헤더", "헤더는 크로스보다 먼저"
+    assert cr(_shot(1, inpen=False, ax=0.8, ay=0.1)) == "중거리", "박스 밖은 어시가 있어도 중거리"
+    assert cr(_shot(1)) == "어시 없음" and cr(_shot(2)) == "어시 없음"
+    both = _shot(1, ax=0.5, ay=0.5)
+    both["assist"] = True
+    assert cr(both) == "어시 없음", "assist 참이어도 (0.5, 0.5) 면 어시 없음(R13)"
+    assert cr(_shot(1, ax=0.8, ay=0.5)) == "중앙 연계"
+    # 측면 경계: |ay − 0.5| 이 config.N18_WIDE_Y(0.30) 이상이면 측면 — 정확히 0.30 은 측면
+    assert cr(_shot(1, ax=0.8, ay=0.2)) == "크로스" and cr(_shot(1, ax=0.8, ay=0.8)) == "크로스"
+    assert cr(_shot(1, ax=0.8, ay=0.21)) == "중앙 연계"
+    # 컷백: 어시 x ≥ 0.90 이고 슛 x 보다 골라인 쪽(ax > x) — 경계 0.90 은 컷백, 슛이 더 골라인 쪽이면 크로스
+    assert cr(_shot(1, ax=0.95, ay=0.1, x=0.9)) == "컷백"
+    assert cr(_shot(1, ax=0.90, ay=0.1, x=0.85)) == "컷백"
+    assert cr(_shot(1, ax=0.89, ay=0.1, x=0.85)) == "크로스"
+    assert cr(_shot(1, ax=0.95, ay=0.1, x=0.97)) == "크로스"
+    assert cr(_shot(1, ax=0.95, ay=0.1, x=0.95)) == "크로스", "같은 x 는 뒤로 내준 게 아니다"
+
+
+def test_classify_route_thresholds_are_wired():
+    # 기본값이 아닌 값으로 재야 배선이 끊겨도 참이 되는 일이 없다
+    old = config.N18_WIDE_Y, config.N18_BYLINE_X
+    try:
+        config.N18_WIDE_Y = 0.45
+        assert habits.classify_route(_shot(1, ax=0.8, ay=0.1)) == "중앙 연계", "N18_WIDE_Y 를 넓히면 같은 어시가 중앙이 된다"
+        config.N18_WIDE_Y = old[0]
+        config.N18_BYLINE_X = 0.99
+        assert habits.classify_route(_shot(1, ax=0.95, ay=0.1, x=0.9)) == "크로스", "N18_BYLINE_X 를 올리면 컷백이 크로스로"
+    finally:
+        config.N18_WIDE_Y, config.N18_BYLINE_X = old
+
+
+def _route_game(mid, mine, theirs, res="승"):
+    inv = {"승": "패", "패": "승", "무": "무"}.get(res, res)
+    a = _side("me", res, len(mine), 0, 0, 0, 0, 50)
+    b = _side("op", inv, len(theirs), 0, 0, 0, 0, 50)
+    a["shootDetail"], b["shootDetail"] = mine, theirs
+    return _game(mid, a, b)
+
+
+def test_attack_routes_by_hand():
+    cut = _shot(1, ax=0.95, ay=0.1, x=0.9, result=3)          # 컷백 골
+    games = [
+        _route_game("a", [cut, _shot(1, ax=0.95, ay=0.1, x=0.9, result=1), _shot(3, result=3), _shot(1, inpen=False, result=2)],
+                    [cut, _shot(8, result=3)]),
+        _route_game("b", [_shot(1, ax=0.8, ay=0.5, result=3), _shot(99, result=1)], [_shot(1, result=1)], "패"),
+    ]
+    games.append(_route_game("bad", [_shot(1, ax=0.95, ay=0.1, x=0.9)], [], "오류"))            # 승·무·패가 아닌 경기는 뺀다
+    games.append(_route_game("odd", [dict(_shot(1), x=None), dict(_shot(1), result=7)], []))      # 좌표 없음 · 모르는 result 는 슛이 아니다
+    ar = habits.attack_routes(games, "me")
+    by = {r.route: (r.mine_shots, r.mine_goals, r.opp_shots, r.opp_goals) for r in ar.rows}
+    assert [r.route for r in ar.rows] == list(habits.ROUTES)
+    assert by["컷백"] == (2, 1, 1, 1), by                     # 상대 슛에도 같은 분류기
+    assert by["헤더"] == (1, 1, 0, 0) and by["중거리"] == (1, 0, 0, 0), by
+    assert by["중앙 연계"] == (1, 1, 0, 0) and by["기타"] == (1, 0, 0, 0), by
+    assert by["세트피스"] == (0, 0, 1, 1) and by["어시 없음"] == (0, 0, 1, 0), by
+    assert (ar.mine_total, ar.opp_total, ar.games) == (6, 3, 3), (ar.mine_total, ar.opp_total, ar.games)
+    assert sum(r.mine_shots for r in ar.rows) == ar.mine_total, "모든 슛이 한 루트에 든다"
+    cb = next(r for r in ar.rows if r.route == "컷백")
+    assert (cb.mine_finish, cb.opp_finish) == (50.0, 100.0)
+    assert cb.diff.mine_den == 2 and cb.diff.opp_den == 1, "차이 구간의 분모 = 루트 슛 수"
+
+
+def test_attack_routes_enough_floor_is_wired():
+    games = [_route_game(f"g{i}", [_shot(1)] * 5, [_shot(1)] * 5) for i in range(4)]       # 내 슛 20개
+    old = config.N18_MIN_SHOTS
+    try:
+        config.N18_MIN_SHOTS = 21
+        assert not habits.attack_routes(games, "me").enough
+        config.N18_MIN_SHOTS = 20                       # 경계: 정확히 하한이면 된다("이상")
+        assert habits.attack_routes(games, "me").enough
+    finally:
+        config.N18_MIN_SHOTS = old
+    assert not habits.attack_routes([], "me").enough
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

@@ -25,6 +25,7 @@ from models import (
 )
 from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, DivisionStays, GoalFlow, LeadRow,
                     division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
+                    AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
                     DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
                     streak_baseline, streak_key)
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
@@ -74,6 +75,8 @@ __all__ = [
     # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
     "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
     "streak_baseline", "streak_key",
+    # habits — N18 공격 루트(2.7.1)
+    "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)
     "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다

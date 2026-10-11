@@ -2717,7 +2717,8 @@ class MainWindow(QMainWindow):
                    ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
                                                    ("경기 결과", "_build_results_tab"),
                                                    ("패스 스타일", "_build_pass_style_tab")))),
-                   ("슛 맵", "_build_shotmap_tab")]),
+                   ("슛 맵", Tabs("shotmap", (("슛 맵", "_build_shotmap_tab"),
+                                            ("공격 루트", "_build_attack_route_tab"))))]),
         ("선수", [("선수 지표", Tabs("players", (("지표", "_build_players_tab"),
                                              ("랭커 비교", "_build_ranker_compare_tab")))),
                  ("선수별 결정력", "_build_finishing_tab"),
@@ -4216,6 +4217,65 @@ class MainWindow(QMainWindow):
                          if b.enough else "")
                 box.addWidget(RatioBarRow(b.label, b.goals, b.shots, color,
                                           enough=b.enough, extra=extra))
+
+    ROUTE_COLUMNS = ["루트", "내 슛", "내 골", "내 결정력", "상대 슛", "상대 결정력", "차이 (나 − 상대)", "판정"]
+    ROUTE_NOTE = {
+        "세트피스": "프리킥·페널티킥", "헤더": "헤더로 찬 슛(세트피스 헤더 포함)", "중거리": "박스 밖에서 찬 슛(헤더·세트피스 제외)",
+        "크로스": "박스 안 슛 — 어시가 박스 폭 밖(측면)에서 온 것(컷백 제외)", "컷백": "박스 안 슛 — 측면 골라인 쪽에서 뒤로 내준 공",
+        "중앙 연계": "박스 안 슛 — 어시가 박스 폭 안(중앙)에서 온 것", "어시 없음": "박스 안 슛 — 어시 기록이 없는 것(개인 돌파 등)",
+        "기타": "넥슨이 이름을 안 붙인 슛 종류 — 헤더·세트피스로 추측하지 않고 따로 둡니다",
+    }
+
+    def _build_attack_route_tab(self) -> QWidget:
+        """슛 맵 [공격 루트](N18) — 슛을 만들어진 길(세트피스·헤더·중거리·크로스·컷백·중앙 연계·어시 없음)로 나눠 같은 경기 상대와 견준다."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_route_note = QLabel("")
+        self.lb_route_note.setWordWrap(True)
+        self.lb_route_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_route_note)
+        self.tbl_route = self._make_table(self.ROUTE_COLUMNS)
+        v.addWidget(self.tbl_route, 1)
+        return w
+
+    def _render_attack_route(self, details: list[dict]) -> None:
+        ar = core.attack_routes(details, self._ouid) if self._ouid else core.AttackRoutes()
+        scope = f"표시 구간 {ar.games:,}경기"
+        if not ar.enough:
+            self._fill(self.tbl_route, [], enable_sort=False)
+            self.lb_route_note.setText(
+                f"슛이 {ar.mine_total:,}개라 아직 못 가릅니다 — 내 슛이 {config.N18_MIN_SHOTS}개는 있어야 루트별로 나눕니다 ({scope}).")
+            return
+        rows, verdicts = [], []
+        for r in ar.rows:
+            d = r.diff
+            if min(r.mine_shots, r.opp_shots) < config.N18_MIN_ROUTE:
+                verdict = "표본 부족"
+            elif d.lo > 0:
+                verdict = "▲ 상대보다 잘 넣음"
+            elif d.hi < 0:
+                verdict = "▼ 상대보다 못 넣음"
+            else:
+                verdict = "차이 안 보임"
+            verdicts.append(verdict)
+            share = core.pct(r.mine_shots, ar.mine_total)
+            rows.append([r.route,
+                         (f"{r.mine_shots:,} ({share:.0f}%)", r.mine_shots), (f"{r.mine_goals:,}", r.mine_goals),
+                         (f"{r.mine_finish:.1f}%", r.mine_finish),
+                         (f"{r.opp_shots:,}", r.opp_shots), (f"{r.opp_finish:.1f}%", r.opp_finish),
+                         (f"{d.diff:+.1f}%p ({d.lo:+.1f} ~ {d.hi:+.1f})" if d.se != float("inf") else NA, d.diff),
+                         verdict])
+        self._fill(self.tbl_route, rows, enable_sort=False)
+        for i, verdict in enumerate(verdicts):
+            self.tbl_route.item(i, 0).setToolTip(self.ROUTE_NOTE[ar.rows[i].route])
+            color = {"▲": T.GREEN, "▼": T.RED, "표": T.TEXT_DIM}.get(verdict[0])
+            if color:
+                for c in range(self.tbl_route.columnCount()):
+                    self.tbl_route.item(i, c).setForeground(QColor(color))
+        self.lb_route_note.setText(
+            f"내 슛 {ar.mine_total:,}개 · 상대 슛 {ar.opp_total:,}개 ({scope}) · 결정력 = 골÷슛 · "
+            f"차이는 같은 경기 상대의 같은 루트와 견준 값(95% 구간이 0 을 안 품을 때만 ▲▼, 나·상대 슛이 각각 "
+            f"{config.N18_MIN_ROUTE}개 이상일 때만 판정) · 루트 이름에 마우스를 올리면 분류 기준이 보입니다.")
 
     # ── 거래 기록 · 내 계정(1.4.1 — 11단계는 띠와 받기 상태, 표는 12단계) ─────────────────────
     def _build_ledger_tab(self) -> QWidget:
@@ -7571,7 +7631,7 @@ class MainWindow(QMainWindow):
         "divstay": [("성적 진단", "등급 체류")],
         "luck": [("성적 진단", "운 범위")], "habits": [("성적 진단", "경기 습관")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
-        "shotmap": [("슛 맵", None)],
+        "shotmap": [("슛 맵", "슛 맵")], "route": [("슛 맵", "공격 루트")],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
         "finishing": [("선수별 결정력", None)],
         "teamcolor": [("포지션별 최다 상대", "축구장"), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
@@ -7615,6 +7675,7 @@ class MainWindow(QMainWindow):
             "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 띠는 그래프 '최근 N일'(sp_trend_days)
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "shotmap": self._render_shotmap,  # 표시 구간
+            "route": lambda: self._render_attack_route(self._slice()[1]),   # 표시 구간(슛 맵과 같다)
             "finishing": lambda: self._render_finishing(self._slice()[1]),
             "rankercmp": lambda: self._render_ranker_compare(self._slice()[1]),  # 표시 구간 — 랭커 요청은 카드 수만큼
             "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위

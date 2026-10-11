@@ -12,6 +12,7 @@
 | `daily_luck(periods, mixed)` | [성적 진단 › 운 범위](N16) | 하루 승률이 평균 ± 2σ(이항) 띠 밖인 날 수 대 운만이면 기대되는 날 수 · "몇 판부터" 표 |
 | `streak_baseline(matches)` | 〃 (A3) | 최장 연승·연패 대 `draw_possible` 층 안에서 순서를 섞은 기준(97.5분위) — 느려서 작업 스레드 |
 | `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대별 승률 + 표마다 카이제곱(층 보정) |
+| `classify_route(shot)` · `attack_routes(details, ouid)` | [슛 맵 › 공격 루트](N18) | 슛을 `ROUTES` 8갈래로(순서가 곧 우선순위) · 내 슛과 같은 경기 상대 슛에 같은 분류기 · 루트별 결정력 차이는 `paired_diff` |
 
 기준선의 구간(N4 · ROADMAP "구간 방법"): 나와 상대는 **같은 경기의 짝**이고 슛은 경기 안에서 뭉친다 — 두 비율을
 독립으로 놓고 정규 근사하면 구간이 좁게 나온다. 그래서 전부 경기 단위로 짝지은 값의 평균·표준편차로 낸다.
@@ -37,7 +38,8 @@ from datetime import datetime, timedelta
 
 import config
 from models import MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_mixed, is_weak, rated, win_pct
-from stats import (_goal_events, _me_opp, _num, _result_of, _set_mixed, _timeline_matches_board, _wdl_of)
+from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, _goal_events, _me_opp, _num, _result_of, _set_mixed,
+                   _timeline_matches_board, _wdl_of)
 
 
 @dataclass
@@ -410,6 +412,113 @@ def goal_flow(details: list[dict], ouid: str, mixed: bool | None = None) -> Goal
         mid = len(s) // 2
         gf.gap_median = s[mid] if len(s) % 2 else (s[mid - 1] + s[mid]) / 2
     return gf
+
+
+# ── N18 공격 루트 ────────────────────────────────────────────────────────────
+
+# 표 순서 = 분류 순서(위에서 먼저 걸리는 것이 이긴다). 어시 없음 바로 앞이 중앙 연계, 이름 없는 종류는 맨 끝 "기타".
+ROUTES = ("세트피스", "헤더", "중거리", "크로스", "컷백", "중앙 연계", "어시 없음", "기타")
+_SET_PIECE_TYPES = (8, 9)        # 프리킥 · 페널티킥(stats.GOAL_TYPES)
+_HEADER_TYPE = 3
+_NO_ASSIST_XY = (0.5, 0.5)       # 어시 없는 슛의 좌표 자리값(R13 — assist 거짓이어도 이 값이 온다)
+
+
+def classify_route(sd: dict) -> str:
+    """슛(shootDetail 한 칸) 하나의 공격 루트. 순서: 이름 없는 종류 → 세트피스 → 헤더 → 중거리(박스 밖) → [어시 없음] → 크로스 → 컷백 → 중앙 연계.
+
+    이름 없는 종류(R12 — 약 3%)는 헤더·세트피스로 추측하지 않고 "기타"로 따로 둔다.
+    크로스·컷백은 박스 안 슛만(박스 밖은 위에서 중거리로 끝났다). 컷백 = 어시가 박스 폭 밖 · 골라인 쪽이고 슛보다 골라인에 가까울 때."""
+    t = sd.get("type")
+    if t not in GOAL_TYPES:
+        return "기타"
+    if t in _SET_PIECE_TYPES:
+        return "세트피스"
+    if t == _HEADER_TYPE:
+        return "헤더"
+    if not sd.get("inPenalty"):
+        return "중거리"
+    ax, ay = sd.get("assistX"), sd.get("assistY")
+    if (not sd.get("assist") or not isinstance(ax, (int, float)) or not isinstance(ay, (int, float))
+            or (ax, ay) == _NO_ASSIST_XY):
+        return "어시 없음"
+    if abs(ay - 0.5) < config.N18_WIDE_Y:
+        return "중앙 연계"
+    x = sd.get("x")
+    if ax >= config.N18_BYLINE_X and isinstance(x, (int, float)) and ax > x:
+        return "컷백"
+    return "크로스"
+
+
+@dataclass
+class RouteRow:
+    """루트 하나 — 내 슛과 같은 경기 상대의 같은 루트 슛."""
+    route: str
+    mine_shots: int
+    mine_goals: int
+    opp_shots: int
+    opp_goals: int
+    diff: Diff                   # 결정력(골÷슛 %) 나 − 상대 — 경기 단위 짝 구간
+
+    @property
+    def mine_finish(self) -> float:
+        return pct(self.mine_goals, self.mine_shots)
+
+    @property
+    def opp_finish(self) -> float:
+        return pct(self.opp_goals, self.opp_shots)
+
+
+@dataclass
+class AttackRoutes:
+    rows: list[RouteRow] = field(default_factory=list)   # ROUTES 순서
+    mine_total: int = 0
+    opp_total: int = 0
+    games: int = 0
+    enough: bool = False         # 내 슛이 config.N18_MIN_SHOTS 이상인가 — 아니면 표 대신 "아직 못 가릅니다"
+
+
+ROUTE_FINISH = Metric("route_finish", "루트 결정력", "goals", "shots")
+
+
+def _route_counts(p: dict) -> dict:
+    """한 쪽의 루트별 (슛, 골). 좌표·result 가 비정상인 슛은 슛 맵(`stats.shot_map`)과 같은 기준으로 뺀다."""
+    out = {r: [0, 0] for r in ROUTES}
+    for sd in p.get("shootDetail") or []:
+        if (not isinstance(sd.get("x"), (int, float)) or not isinstance(sd.get("y"), (int, float))
+                or sd.get("result") not in _SHOT_RESULTS):
+            continue
+        c = out[classify_route(sd)]
+        c[0] += 1
+        c[1] += sd.get("result") == SHOT_GOAL
+    return out
+
+
+def attack_routes(details: list[dict], ouid: str) -> AttackRoutes:
+    """내 슛과 같은 경기 상대 슛을 같은 분류기로 루트에 나눈다(N18). 승·무·패가 아닌 경기와 상대 없는 경기는 뺀다(`side_totals` 와 같은 기준)."""
+    per_route = {r: [] for r in ROUTES}
+    out = AttackRoutes()
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp:
+            continue
+        res = _wdl_of(_result_of(me))
+        if res is None:
+            continue
+        out.games += 1
+        mc, oc = _route_counts(me), _route_counts(opp)
+        mid = d.get("matchId") or ""
+        for r in ROUTES:
+            per_route[r].append(SideRow(mid, res, {"shots": float(mc[r][0]), "goals": float(mc[r][1])},
+                                        {"shots": float(oc[r][0]), "goals": float(oc[r][1])}))
+    for r in ROUTES:
+        tot = SideTotals(per_route[r])
+        ms, mg = int(tot.total("mine", "shots")), int(tot.total("mine", "goals"))
+        os_, og = int(tot.total("opp", "shots")), int(tot.total("opp", "goals"))
+        out.rows.append(RouteRow(r, ms, mg, os_, og, paired_diff(tot, ROUTE_FINISH)))
+        out.mine_total += ms
+        out.opp_total += os_
+    out.enough = out.mine_total >= config.N18_MIN_SHOTS
+    return out
 
 
 def pct(part: int | float, total: int | float) -> float:

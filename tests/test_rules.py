@@ -65,6 +65,7 @@ WEAK_ALLOW = {
     ("widgets.py", "_paint_assists", "X_MIN"): "좌표",
     ("app_main.py", "eta_text", "ETA_MIN_DONE"): "남은 시간",
     ("app_main.py", "initial_window", "MIN_WINDOW"): "창 크기",
+    ("app_main.py", "_render_attack_route", "N18_MIN_ROUTE"): "루트 슛 수 — 결정력(골÷슛) 차이 표본, 승률 아님(N18)",
     ("app_main.py", "_render_ranker_pick", "RANKER_PICK_MIN_RANKERS"): "랭커 픽 인원",
     ("app_main.py", "_render_recommend", "RANKER_PICK_MIN_RANKERS"): "랭커 픽 인원",
     ("app_main.py", "_rec_sources_text", "RANKER_PICK_MIN_RANKERS"): "랭커 픽 인원",
