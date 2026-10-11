@@ -3289,13 +3289,14 @@ def test_settings_remember_window_page_and_season():
         assert got_geo == [want_geo], "저장한 창 위치·크기가 복원에 안 쓰였다"
         tabs = _win._restore.pop("tabs", {})
         assert tabs.get("players") == "랭커 비교" and tabs.get("trend") == "승률·등급", tabs
-        assert _win._restore == {"page": "슛 맵", "season": want_season}, _win._restore
+        # 켤 때는 늘 대시보드 — 저장돼 있는 "슛 맵" 을 읽지 않는다(읽으면 아래 대시보드 단언이 FAIL)
+        assert _win._restore == {"season": want_season}, _win._restore
         _win._restore["tabs"] = tabs
         # 처음 그리는 계정이면 그 메뉴·시즌으로
         _win._ouid, _win._season_picked = "", False
         _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
-        assert _win._current_page_name() == "슛 맵", _win._current_page_name()
+        assert _win._current_page_name() == "대시보드", _win._current_page_name()
         assert _win._page_tabs["선수 지표"].current_name() == "랭커 비교", "보던 탭을 안 되살렸다"
         assert _win._season_key(_win.cb_season.currentData()) == want_season, _win.cb_season.currentText()
         assert _win._restore == {}, "한 번 쓴 복원값이 남아 다음 계정에도 적용된다"

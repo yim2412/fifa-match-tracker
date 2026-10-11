@@ -2029,7 +2029,9 @@ class MainWindow(QMainWindow):
                 self._apply_plan(self._screen_of_window(), keep_size=True)
             else:
                 self._apply_plan(QApplication.primaryScreen(), center=True)
-            out = {k: s.value(f"view/{k}") for k in ("page", "season") if s.value(f"view/{k}")}
+            # 켤 때는 늘 대시보드(2026-10-11 사용자) — 보던 메뉴는 복원하지 않는다. 탭·시즌은 그대로.
+            # (보던 메뉴를 쓰는 자리는 메모리를 내려놓았다 다시 열 때 — _release 의 _restore)
+            out = {k: s.value(f"view/{k}") for k in ("season",) if s.value(f"view/{k}")}
             tabs = {sid: s.value(f"view/tab/{sid}") for sid in self._tab_sid.values() if s.value(f"view/tab/{sid}")}
             if tabs:
                 out["tabs"] = tabs
