@@ -13,7 +13,7 @@
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(무승부 분모 A6 — 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
-| `habits.py` | 내 경기 습관·기준선(2.6.1) — 계산만(화면은 `core_api`) · N2 등급 체류 `division_stays` · 기준선 `side_totals`·`paired_diff`(나 − 같은 경기 상대, 경기 단위 짝 구간) · N19 칩 `strength_chips`·전반 비중 `half_share_diff` · N17 골 흐름 `goal_flow` · 세부는 머리말 |
+| `habits.py` | 내 경기 습관·기준선(2.6.1) — 계산만(화면은 `core_api`) · N2 등급 체류 `division_stays` · 기준선 `side_totals`·`paired_diff`(나 − 같은 경기 상대, 경기 단위 짝 구간) · N19 칩 `strength_chips`·전반 비중 `half_share_diff` · N17 골 흐름 `goal_flow` · N16 운 범위 `daily_luck` · A3 연승·연패 기준 `streak_baseline`(느려서 `app_main.HabitsWorker`) · N20 경기 습관 `habit_tables`(카이제곱 `chi2_sf` 직접 구현 — scipy 없음) · 세부는 머리말 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과·랭커 비교·축구장 배치. 역산 상수가 여기 · 세부는 머리말 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵. 조건부 승률 문장은 `Insight.basis`(`Basis` — 화면의 근거 막대)를 싣는다 — **새 규칙 함수는 `BASIS_RULES`/`NO_BASIS_RULES` 둘 중 하나에** 넣는다(test_analysis 가 모듈의 규칙 함수와 대조) |
 | `predict.py` | 시즌 말 순위 예측 — 상수는 `config.PREDICT_*` · **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저** · 세부는 머리말 |
@@ -55,7 +55,7 @@ python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크
 python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
 python tests/test_trades.py    # 거래 받기(끊김·겹침·429·키 바뀜) · 시세 캐시 하루 상한 · 랭커 기록 캐시 — 가짜 목록(네트워크 없음)
 python tests/test_traits.py    # 포지션 특성 — 이름표·팀 칸 해석·팀 찾기·요청 오류 분류 · trait_squads 저장·지우기(가짜 응답·가짜 세션, 네트워크 없음)
-python tests/test_habits.py    # 습관·기준선(등급 체류 · 칩 · 전반 비중 · 골 흐름) — 손으로 센 지어낸 입력(네트워크 없음)
+python tests/test_habits.py    # 습관·기준선(등급 체류 · 칩 · 전반 비중 · 골 흐름 · 운 범위 · 연승 섞기 · 카이제곱) — 손으로 센 지어낸 입력(네트워크 없음)
 python tests/test_icons.py     # 표 칸 그림(40단계) — 주소 틀 · 받기(Referer·부정 캐시·반쯤 쓴 파일) · 열 폭 · 키가 행을 따라가나 · 로더 정리 · 엠블럼 지도(가짜 세션, 네트워크 없음)
 python tests/test_timeline.py  # 스쿼드 타임라인 · 가계부(짝·보유 상태·경계·앞뒤 창) — 지어낸 경기·거래(네트워크 없음)
 python tests/test_predict.py   # 시즌 말 예측 — 가짜 스냅숏(네트워크 없음)

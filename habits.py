@@ -9,6 +9,9 @@
 | `strength_chips(totals)` | [흐름 분석] 맨 위 칩 줄(N19) | 결정력·유효슛 비율·태클 성공 중 구간이 0 을 안 품고 크기 문턱을 넘은 것 |
 | `half_share_diff(details, ouid)` | 흐름 분석 문장 "전반·후반 어디서 새나"(N19) | 내 실점의 전반 비중 − 같은 경기 상대 실점(= 내 득점)의 전반 비중 |
 | `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |
+| `daily_luck(periods, mixed)` | [성적 진단 › 운 범위](N16) | 하루 승률이 평균 ± 2σ(이항) 띠 밖인 날 수 대 운만이면 기대되는 날 수 · "몇 판부터" 표 |
+| `streak_baseline(matches)` | 〃 (A3) | 최장 연승·연패 대 `draw_possible` 층 안에서 순서를 섞은 기준(97.5분위) — 느려서 작업 스레드 |
+| `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대별 승률 + 표마다 카이제곱(층 보정) |
 
 기준선의 구간(N4 · ROADMAP "구간 방법"): 나와 상대는 **같은 경기의 짝**이고 슛은 경기 안에서 뭉친다 — 두 비율을
 독립으로 놓고 정규 근사하면 구간이 좁게 나온다. 그래서 전부 경기 단위로 짝지은 값의 평균·표준편차로 낸다.
@@ -28,11 +31,12 @@
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import config
-from models import RateMixin, draw_possible_of
+from models import MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_mixed, is_weak, rated, win_pct
 from stats import (_goal_events, _me_opp, _num, _result_of, _set_mixed, _timeline_matches_board, _wdl_of)
 
 
@@ -420,3 +424,386 @@ GOAL_KIND_NOTE = {
     "쐐기": "한 골 앞선 채 달아나는 골",
     "벌리기": "두 골 이상 앞선 채 더 넣는 골",
 }
+
+
+# ── N16 하루 승률 운 범위 ───────────────────────────────────────────────────
+@dataclass
+class DayLuck:
+    """하루 치 — 승률(A6 식)이 평균의 띠 안인가."""
+    day: object
+    win: int
+    draw: int
+    lose: int
+    n: int                  # 그날 승률 분모(rated)
+    rate: float             # 그날 승률(%)
+    lo: float               # 띠(%) — 그날 판수 n 으로
+    hi: float
+    weak: bool              # n < N16_MIN_DAY — 점만 흐리고 띠 밖 날 수에서 뺀다
+    outside: bool           # 띠 밖(weak 이면 늘 False)
+
+
+@dataclass
+class RequiredRow:
+    diff: float             # 두 계정 승률 차(%p)
+    n: int                  # 각 계정 승률 분모(rated)
+    games: int              # 실제 경기 수 — 섞인 묶음이면 n ÷ (1 − 이 계정 무승부 비율)
+
+
+@dataclass
+class Luck:
+    days: list[DayLuck] = field(default_factory=list)
+    mixed: bool = False
+    p: float = 0.0                  # 기간 전체 승률(0~1) — 띠의 가운데
+    judged: int = 0                 # 판정한 날(weak 아님)
+    outside: int = 0                # 띠 밖인 날
+    expected: float = 0.0           # 운만이면 띠 밖일 날 수(날마다 이항 정확히)
+    draw_ratio: float = 0.0         # 이 계정 무승부 / 전체
+    required: list[RequiredRow] = field(default_factory=list)
+
+
+def _binom_outside_prob(n: int, p: float, lo: float, hi: float) -> float:
+    """n 판 중 승 수 k 의 비율 k/n 이 띠 [lo, hi] 밖일 확률(이항 정확히). lo·hi 는 비율(0~1)."""
+    if n <= 0:
+        return 0.0
+    if p <= 0.0 or p >= 1.0:
+        k = round(p * n)
+        return 0.0 if lo <= k / n <= hi else 1.0
+    lg = math.lgamma
+    base = lg(n + 1)
+    lp, lq = math.log(p), math.log(1 - p)
+    tot = 0.0
+    for k in range(n + 1):
+        r = k / n
+        if r < lo - 1e-12 or r > hi + 1e-12:
+            tot += math.exp(base - lg(k + 1) - lg(n - k + 1) + k * lp + (n - k) * lq)
+    return tot
+
+
+def daily_luck(periods: list[PeriodRate], mixed: bool | None = None) -> Luck:
+    """하루 승률이 같은 기간 평균 ± `N16_BAND_SIGMA`σ 띠 밖인가. periods 는 `models.win_rate_trend` 결과(그 기간 하루씩)
+    — 묶음은 그래프 전체 기간이라 mixed 도 거기서 온다. 하루 `N16_MIN_DAY` 판(rated) 미만은 점만 흐리게 두고 세지 않는다."""
+    out = Luck()
+    if not periods:
+        return out
+    out.mixed = periods[0].mixed if mixed is None else mixed
+    w = sum(p.win for p in periods)
+    d = sum(p.draw for p in periods)
+    l = sum(p.lose for p in periods)
+    rated_all = rated(w, d, l, out.mixed)
+    out.p = w / rated_all if rated_all else 0.0
+    total = w + d + l
+    out.draw_ratio = d / total if total else 0.0
+    sig = config.N16_BAND_SIGMA
+    for p in periods:
+        n = rated(p.win, p.draw, p.lose, out.mixed)
+        half = sig * math.sqrt(out.p * (1 - out.p) / n) if n else 0.0
+        lo, hi = max(0.0, out.p - half), min(1.0, out.p + half)
+        weak = is_weak(n, config.N16_MIN_DAY)
+        rate = win_pct(p.win, p.draw, p.lose, out.mixed)
+        outside = (not weak) and not (lo * 100 - 1e-9 <= rate <= hi * 100 + 1e-9)
+        out.days.append(DayLuck(p.day, p.win, p.draw, p.lose, n, rate, lo * 100, hi * 100, weak, outside))
+        if not weak:
+            out.judged += 1
+            out.outside += outside
+            out.expected += _binom_outside_prob(n, out.p, lo, hi)
+    pq = out.p * (1 - out.p)
+    for diff in config.N16_REQUIRED_DIFFS:
+        n = math.ceil(2 * sig * sig * pq / ((diff / 100) ** 2)) if pq else 0
+        games = math.ceil(n / (1 - out.draw_ratio)) if out.mixed and out.draw_ratio < 1 else n
+        out.required.append(RequiredRow(diff, n, games))
+    return out
+
+
+# ── A3 연승·연패 우연 기준 ──────────────────────────────────────────────────
+@dataclass
+class StreakBaseline:
+    games: int = 0
+    win_run: int = 0                # 실제 최장 연승
+    lose_run: int = 0
+    win_cut: int = 0                # 섞은 순서의 A3_QUANTILE 분위(이보다 길면 우연 밖)
+    lose_cut: int = 0
+    win_median: int = 0
+    lose_median: int = 0
+    win_longer: int = 0             # 섞은 N번 중 실제보다 긴 횟수
+    lose_longer: int = 0
+    shuffles: int = 0
+    win_outside: bool = False
+    lose_outside: bool = False
+
+
+def _result_value(result: str) -> str:
+    """승/무/패 — models.longest_streaks 와 같은 기준(몰수승/패도 승패). 그 밖(오류)은 빈 글자 = 연속을 끊는다."""
+    return "승" if "승" in result else ("패" if "패" in result else ("무" if "무" in result else ""))
+
+
+def _runs(vals: list[str]) -> tuple[int, int]:
+    """(최장 연승, 최장 연패) — 무승부·오류는 연속을 끊는다."""
+    best_w = best_l = run = 0
+    prev = ""
+    for v in vals:
+        if v in ("승", "패"):
+            run = run + 1 if v == prev else 1
+        else:
+            run = 0
+        prev = v
+        if v == "승":
+            best_w = max(best_w, run)
+        elif v == "패":
+            best_l = max(best_l, run)
+    return best_w, best_l
+
+
+def shuffle_within_strata(vals: list[str], strata: dict, rng: random.Random) -> list[str]:
+    """층(draw_possible 참·거짓)마다 그 층 자리끼리만 결과를 섞는다. 층에 안 든 자리(None)는 제자리."""
+    cur = list(vals)
+    for idx in strata.values():
+        pool = [vals[i] for i in idx]
+        rng.shuffle(pool)
+        for i, v in zip(idx, pool):
+            cur[i] = v
+    return cur
+
+
+def streak_key(matches: list[MatchSummary]) -> tuple:
+    """캐시 키 — 같은 경기 목록(순서·결과·층)이면 같다."""
+    return (len(matches), hash(tuple((m.match_id, m.result, m.draw_possible) for m in matches)))
+
+
+def streak_baseline(matches: list[MatchSummary], shuffles: int | None = None, seed: int | None = None,
+                    cancelled=None) -> StreakBaseline:
+    """실제 최장 연승·연패 대 순서를 섞은 기준. **섞기는 draw_possible 층 안에서만**(통째로 섞으면 무승부가 무승부 불가
+    챔스 경기 자리에 들어가 연속을 인위로 끊어 기준이 낮아진다). 층이 None 인 경기는 제자리. 시드 고정."""
+    n_shuf = config.A3_SHUFFLES if shuffles is None else shuffles
+    rng = random.Random(config.A3_SEED if seed is None else seed)
+    dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
+    vals = [_result_value(m.result) for m in dated]
+    out = StreakBaseline(games=len(dated), shuffles=n_shuf)
+    out.win_run, out.lose_run = _runs(vals)
+    strata: dict = {}
+    for i, m in enumerate(dated):
+        if m.draw_possible is not None:
+            strata.setdefault(m.draw_possible, []).append(i)
+    wins: list[int] = []
+    loses: list[int] = []
+    for _ in range(n_shuf):
+        if cancelled is not None and cancelled():
+            return out
+        bw, bl = _runs(shuffle_within_strata(vals, strata, rng))
+        wins.append(bw)
+        loses.append(bl)
+    if not wins:
+        return out
+    wins.sort()
+    loses.sort()
+    cut = max(0, min(len(wins) - 1, math.ceil(config.A3_QUANTILE * len(wins)) - 1))
+    out.win_cut, out.lose_cut = wins[cut], loses[cut]
+    out.win_median, out.lose_median = wins[len(wins) // 2], loses[len(loses) // 2]
+    out.win_longer = sum(1 for x in wins if x > out.win_run)
+    out.lose_longer = sum(1 for x in loses if x > out.lose_run)
+    out.win_outside = out.win_run > out.win_cut
+    out.lose_outside = out.lose_run > out.lose_cut
+    return out
+
+
+# ── N20 경기 습관 — 표마다 카이제곱 ─────────────────────────────────────────
+def chi2_sf(x: float, df: int) -> float:
+    """카이제곱 분포의 상위 꼬리 확률 P(X ≥ x) — 정규화 상위 불완전 감마 Q(df/2, x/2). scipy 없이."""
+    if df <= 0 or x <= 0:
+        return 1.0
+    a, z = df / 2.0, x / 2.0
+    gln = math.lgamma(a)
+    if z < a + 1:                      # 급수로 P 를 구해 1 − P
+        ap, term = a, 1.0 / a
+        tot = term
+        for _ in range(1000):
+            ap += 1
+            term *= z / ap
+            tot += term
+            if abs(term) < abs(tot) * 1e-15:
+                break
+        return max(0.0, min(1.0, 1.0 - tot * math.exp(-z + a * math.log(z) - gln)))
+    tiny = 1e-300                      # 연분수(Lentz)로 Q
+    b = z + 1 - a
+    c = 1 / tiny
+    d = 1 / b
+    h = d
+    for i in range(1, 1000):
+        an = -i * (i - a)
+        b += 2
+        d = an * d + b
+        d = tiny if abs(d) < tiny else d
+        c = b + an / c
+        c = tiny if abs(c) < tiny else c
+        d = 1 / d
+        delta = d * c
+        h *= delta
+        if abs(delta - 1) < 1e-15:
+            break
+    return max(0.0, min(1.0, math.exp(-z + a * math.log(z) - gln) * h))
+
+
+@dataclass
+class HabitBin:
+    label: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    possible: int = 0          # draw_possible 참인 경기 수 — "무승부 가능 경기 중 N%" 의 분모
+    possible_draw: int = 0     # 그중 무승부
+    group: int = 0             # 카이제곱에서 합쳐진 칸 번호(같으면 한 칸)
+    flag: int = 0              # 강조: +1 평균보다 잘 이김 · −1 못 이김 · 0 없음
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+
+@dataclass
+class HabitTable:
+    name: str
+    bins: list[HabitBin] = field(default_factory=list)
+    mixed: bool = False
+    games: int = 0
+    stat: float = 0.0
+    df: int = 0
+    p: float = 1.0
+    tested: bool = False       # 검정할 만큼 표본이 있었나
+    significant: bool = False  # p < N20_ALPHA
+    dropped_strata: int = 0    # 한 층에 기대 빈도 5 미만 칸이 남아 뺀 층 수
+    note: str = ""
+
+
+def _bin_index(value: float, edges) -> int:
+    return sum(value >= e for e in edges)
+
+
+def _chi_table(name: str, labels: list[str], rows: list[tuple[int, MatchSummary]], mixed: bool) -> HabitTable:
+    """rows = (칸 번호, 경기). 결과 두 갈래는 보이는 승률과 같은 양 — 섞임이면 승 대 패(무 뺌), 한 집단이면 승 대 (무+패)."""
+    t = HabitTable(name, [HabitBin(lb) for lb in labels], mixed)
+    cells: dict = {}      # (층, 칸) → [승, 그 밖]
+    for b, m in rows:
+        hb = t.bins[b]
+        v = _result_value(m.result)
+        if v == "승":
+            hb.win += 1
+        elif v == "무":
+            hb.draw += 1
+        elif v == "패":
+            hb.lose += 1
+        else:
+            continue
+        t.games += 1
+        if m.draw_possible:
+            hb.possible += 1
+            hb.possible_draw += v == "무"
+        if m.draw_possible is None:
+            continue                       # 층을 모르는 경기는 검정에서 뺀다(승·무·패 셈에는 들어간다)
+        if mixed and v == "무":
+            continue
+        c = cells.setdefault((bool(m.draw_possible), b), [0, 0])
+        c[0 if v == "승" else 1] += 1
+    k = len(labels)
+    # ① 칸 합치기 — 층을 합친 표 전체 기대 빈도로 먼저 고정(화면 칸과 검정 칸이 같다)
+    tot = [[sum(cells.get((s, b), [0, 0])[c] for s in (True, False)) for c in (0, 1)] for b in range(k)]
+    grand_w = sum(x[0] for x in tot)
+    grand_o = sum(x[1] for x in tot)
+    grand = grand_w + grand_o
+    groups = [[b] for b in range(k)]
+
+    def small(g: list[int]) -> bool:
+        n_w = sum(tot[b][0] for b in g)
+        n_o = sum(tot[b][1] for b in g)
+        n = n_w + n_o
+        if not grand:
+            return True
+        return min(n * grand_w / grand, n * grand_o / grand) < config.N20_MIN_EXPECTED
+
+    while len(groups) > 1:
+        idx = next((i for i, g in enumerate(groups) if small(g)), None)
+        if idx is None:
+            break
+        if idx == 0:
+            j = 1
+        elif idx == len(groups) - 1:
+            j = idx - 1
+        else:   # 이웃 둘 중 판 수가 적은 쪽과 합친다
+            left = sum(sum(tot[b]) for b in groups[idx - 1])
+            right = sum(sum(tot[b]) for b in groups[idx + 1])
+            j = idx - 1 if left <= right else idx + 1
+        lo, hi = sorted((idx, j))
+        groups[lo:hi + 1] = [groups[lo] + groups[hi]]
+    for gi, g in enumerate(groups):
+        for b in g:
+            t.bins[b].group = gi
+    if len(groups) < 2 or grand_w == 0 or grand_o == 0:
+        t.note = "표본이 모자라 판정하지 않습니다"
+        return t
+    # ② 층마다 카이제곱 — 기대 빈도 5 미만 칸이 남는 층은 뺀다
+    stat, df = 0.0, 0
+    exp_w = [0.0] * len(groups)
+    obs_w = [0.0] * len(groups)
+    for s in (True, False):
+        gw = [sum(cells.get((s, b), [0, 0])[0] for b in g) for g in groups]
+        go = [sum(cells.get((s, b), [0, 0])[1] for b in g) for g in groups]
+        sw, so = sum(gw), sum(go)
+        sn = sw + so
+        if sn == 0:
+            continue
+        if sw == 0 or so == 0:
+            t.dropped_strata += 1
+            continue
+        ew = [(a + b) * sw / sn for a, b in zip(gw, go)]
+        eo = [(a + b) * so / sn for a, b in zip(gw, go)]
+        if min(ew + eo) < config.N20_MIN_EXPECTED:
+            t.dropped_strata += 1
+            continue
+        stat += sum((a - e) ** 2 / e for a, e in zip(gw, ew)) + sum((a - e) ** 2 / e for a, e in zip(go, eo))
+        df += len(groups) - 1
+        for i in range(len(groups)):
+            exp_w[i] += ew[i]
+            obs_w[i] += gw[i]
+    if df == 0:
+        t.note = "표본이 모자라 판정하지 않습니다"
+        return t
+    t.tested, t.stat, t.df = True, stat, df
+    t.p = chi2_sf(stat, df)
+    t.significant = t.p < config.N20_ALPHA
+    if t.significant:
+        for gi in range(len(groups)):
+            if exp_w[gi] <= 0:      # 방어 — 쓰는 층은 칸마다 기대 빈도 5 이상이라 올 일이 없다(변이 검증: 동치)
+                continue
+            z = (obs_w[gi] - exp_w[gi]) / math.sqrt(exp_w[gi])
+            flag = 1 if z > config.N20_RESID_Z else (-1 if z < -config.N20_RESID_Z else 0)
+            for b in groups[gi]:
+                t.bins[b].flag = flag
+    return t
+
+
+def habit_tables(matches: list[MatchSummary]) -> list[HabitTable]:
+    """경기 습관 표 셋 — 직전 경기와의 간격 · 세션 안 몇 번째 판 · 시간대. 날짜 없는 경기는 뺀다.
+    세션 = `SESSION_GAP_MIN` 분 넘게 쉬면 끊음. 간격은 '앞 경기 시작 → 이 경기 시작'이라 앞 경기가 연장까지 갔으면 길게 잡힌다."""
+    dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
+    gap_rows, ses_rows, hour_rows = [], [], []
+    ordinal = 0
+    prev = None
+    for m in dated:
+        gap_min = None if prev is None else (m.match_date - prev).total_seconds() / 60
+        ordinal = 1 if gap_min is None or gap_min > config.SESSION_GAP_MIN else ordinal + 1
+        prev = m.match_date
+        if gap_min is not None:
+            gap_rows.append((_bin_index(gap_min - 1e-9, config.N20_GAP_EDGES), m))   # 칸은 (a, b] — 13분 딱 맞으면 '13분 이하'
+        ses_rows.append((_bin_index(ordinal, config.N20_SESSION_EDGES), m))
+        hour_rows.append((m.match_date.hour // config.N20_HOUR_STEP, m))
+    ge, se = config.N20_GAP_EDGES, config.N20_SESSION_EDGES
+    gap_labels = [f"{ge[0]}분 이하(바로 이어서)"] + [f"{lo}~{hi}분" for lo, hi in zip(ge, ge[1:])] + [f"{ge[-1]}분 넘게"]
+    ses_labels = ["첫 판"] + [f"{lo}번째" if hi - lo == 1 else f"{lo}~{hi - 1}번째"
+                              for lo, hi in zip(se, se[1:])] + [f"{se[-1]}번째~"]
+    hs = config.N20_HOUR_STEP
+    hour_labels = [f"{h:02d}~{h + hs:02d}시" for h in range(0, 24, hs)]
+    out = []
+    for name, labels, rows in (("직전 경기와의 간격", gap_labels, gap_rows),
+                               ("세션 안 몇 번째 판", ses_labels, ses_rows),
+                               ("시간대", hour_labels, hour_rows)):
+        mixed = is_mixed(m.draw_possible for _, m in rows)
+        out.append(_chi_table(name, labels, rows, mixed))
+    return out

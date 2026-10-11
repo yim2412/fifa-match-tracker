@@ -1509,6 +1509,32 @@ class PredictWorker(QThread):
             self.pred_ready.emit(self._ouid, (self._req, pr))
 
 
+class HabitsWorker(QThread):
+    """연승·연패 우연 기준(A3 · habits.streak_baseline) — 순서를 200번 섞어 1만 판이면 0.5~0.8초라 화면 스레드 예산
+    (0.3초)을 넘는다. 새 검색·범위·시즌이 바뀐 직후 한 번 띄운다(_launch_streak). 요청 번호로 늦은 결과를 버린다.
+    계산 예외는 그 구역만 "계산하지 못했습니다"(결과 None)."""
+    streak_ready = pyqtSignal(object)   # (요청 번호, 캐시 키, StreakBaseline | None) — object 인 이유는 PyQt 규칙 8
+
+    def __init__(self, req: int, key: tuple, matches: list):
+        super().__init__()
+        self._req, self._key, self._matches = req, key, matches
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        try:
+            out = core.streak_baseline(self._matches, cancelled=lambda: self._cancel)
+        except Exception as e:  # noqa: BLE001 — 한 구역 때문에 화면이 죽지 않게
+            if not getattr(HabitsWorker, "_noted", False):
+                HabitsWorker._noted = True      # crash.log 에 실행당 한 번만
+                crashlog.note("habits", e)
+            out = None
+        if not self._cancel:
+            self.streak_ready.emit((self._req, self._key, out))
+
+
 def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료일(반개구간이라 그날 0시부터) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일."""
@@ -1874,6 +1900,10 @@ class MainWindow(QMainWindow):
         self._pred: dict = {}                       # ouid → Prediction (EloLoader 뒤 PredictWorker 가 채운다)
         self._pred_req: dict[str, int] = {}
         self._pred_workers: list[PredictWorker] = []
+        # 연승·연패 우연 기준(A3) — 마지막으로 끝난 (캐시 키, 결과). 키가 지금 경기 목록과 같을 때만 쓴다
+        self._streak_req = 0
+        self._streak_done: tuple | None = None     # (키, StreakBaseline | None(계산 실패))
+        self._habits_workers: list[HabitsWorker] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
         self._notice_after_restore = False  # 최소화 중이라 미뤘다 — 창이 돌아오면 묻는다
         # 거래 기록(1.4.1) — 받기는 한 번에 하나. 도는 중에 다시 띄우라는 요청(키 바꿈 등)이 오면 끝난 뒤 한 번 더
@@ -2681,7 +2711,9 @@ class MainWindow(QMainWindow):
                                               ("리드·골 흐름", "_build_goal_flow_tab")))),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
                                                 ("규율·불운", "_build_discipline_tab"),
-                                                ("등급 체류", "_build_divstay_tab")))),
+                                                ("등급 체류", "_build_divstay_tab"),
+                                                ("운 범위", "_build_luck_tab"),
+                                                ("경기 습관", "_build_habits_tab")))),
                    ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
                                                    ("경기 결과", "_build_results_tab"),
                                                    ("패스 스타일", "_build_pass_style_tab")))),
@@ -3757,6 +3789,211 @@ class MainWindow(QMainWindow):
         if st.gaps:
             parts.append(f"기록 빈 구간 {st.gaps}곳({config.N2_GAP_DAYS}일 넘게 경기 없음) — 그 사이 승강은 모릅니다")
         self.lb_divstay_note.setText(" · ".join(parts) + f" ({self._scope_text()} 기준)")
+
+    # ── 성적 진단 [운 범위] · [경기 습관] (2.7.1 N16·A3·N20) ───────────────────────
+    def _launch_streak(self) -> None:
+        """연승·연패 섞기(A3)를 띄운다 — 검색 결과·범위·시즌이 바뀐 직후(_render_all) 한 번. 같은 경기 목록이면 들고 있는 값을 쓴다.
+        요청 번호를 올려 두고 streak_ready 는 마지막 번호만 받는다(늦게 끝난 옛 계산이 새 값을 덮지 않게)."""
+        key = core.streak_key(self._matches)
+        if self._streak_done is not None and self._streak_done[0] == key:
+            return
+        self._streak_done = None
+        for w in self._habits_workers:
+            w.cancel()      # 앞 계산은 필요 없다 — 섞기 한 번 사이에서 멈춘다
+        self._habits_workers = [w for w in self._habits_workers if w.isRunning()]
+        self._streak_req += 1
+        w = HabitsWorker(self._streak_req, key, list(self._matches))
+        w.streak_ready.connect(self._on_streak_ready)
+        self._habits_workers.append(w)
+        w.start()
+
+    def _on_streak_ready(self, payload) -> None:
+        req, key, result = payload
+        if req != self._streak_req:
+            return
+        self._streak_done = (key, result)
+        self._invalidate("luck")
+
+    LUCK_DAY_COLUMNS = ["날짜", "판수", "승률", "운만이면 이 범위", "판정"]
+
+    def _build_luck_tab(self) -> QWidget:
+        """성적 진단 [운 범위](N16·A3) — 하루 승률이 평균 ± 2σ 밖인 날 수 · 몇 판부터 실력 차이로 읽나 · 최장 연승·연패의 우연 기준."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_luck_note = QLabel("")
+        self.lb_luck_note.setWordWrap(True)
+        self.lb_luck_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_luck_note)
+        gb = QGroupBox("하루 승률은 운만으로 얼마나 흔들리나")
+        box = QVBoxLayout(gb)
+        self.lb_luck_summary = QLabel("")
+        self.lb_luck_summary.setWordWrap(True)
+        box.addWidget(self.lb_luck_summary)
+        self.tbl_luck_days = self._make_table(self.LUCK_DAY_COLUMNS)
+        self.tbl_luck_days.setMinimumHeight(220)
+        box.addWidget(self.tbl_luck_days)
+        v.addWidget(gb)
+        gb = QGroupBox("몇 판부터 실력 차이로 읽나 (두 계정의 승률 차를 2σ 로 가르려면)")
+        box = QVBoxLayout(gb)
+        self.tbl_luck_required = self._make_table(["승률 차", "각 계정 승률 분모", "실제 경기 수"])
+        self.tbl_luck_required.setMinimumHeight(140)
+        box.addWidget(self.tbl_luck_required)
+        self.lb_luck_required = QLabel("")
+        self.lb_luck_required.setWordWrap(True)
+        self.lb_luck_required.setStyleSheet(f"color: {T.TEXT_DIM};")
+        box.addWidget(self.lb_luck_required)
+        v.addWidget(gb)
+        gb = QGroupBox("최장 연승·연패는 우연으로 나올 길이인가")
+        self.box_luck_streak = QVBoxLayout(gb)
+        v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _render_luck(self, matches: list[MatchSummary]) -> None:
+        days = self.sp_trend_days.value()
+        lk = core.daily_luck(core.win_rate_trend(matches, days=days))
+        self.lb_luck_note.setText(
+            f"최근 {days}일(승률 그래프와 같은 기간, {self._scope_text()}) · {win_rate_note(lk.mixed)} "
+            f"· 승패에는 운 몫이 커서, 승률이 오르내린 게 실력인지 운인지 숫자로 가늠하는 화면입니다.")
+        dim = f"color: {T.TEXT_DIM};"
+        if not lk.days:
+            self.lb_luck_summary.setText("경기가 없습니다.")
+            self._fill(self.tbl_luck_days, [], enable_sort=False)
+            self._fill(self.tbl_luck_required, [], enable_sort=False)
+            self.lb_luck_required.setText("")
+        else:
+            self.lb_luck_summary.setText(
+                f"기간 평균 승률 {lk.p * 100:.1f}% · 하루 {config.N16_MIN_DAY}판 이상인 {lk.judged}일 중 "
+                f"평균 ± {config.N16_BAND_SIGMA:g}σ 띠 밖인 날 {lk.outside}일 — 운만이면 약 {lk.expected:.1f}일이 나옵니다"
+                + ("" if lk.judged else f" (하루 {config.N16_MIN_DAY}판 미만인 날은 판정하지 않습니다)"))
+            ordered = list(reversed(lk.days))
+            rows = []
+            for d in ordered:
+                if d.weak:
+                    verdict = "표본 부족"
+                elif d.outside:
+                    verdict = "띠 밖 ▲ 평소보다 잘함" if d.rate > d.hi else "띠 밖 ▼ 평소보다 못함"
+                else:
+                    verdict = "띠 안"
+                rows.append([(f"{d.day:%Y-%m-%d}", d.day.toordinal()), (f"{d.n:,}", d.n),
+                             (win_rate_text(d.win, d.draw, d.lose, lk.mixed, short=True), d.rate),
+                             f"{d.lo:.1f}% ~ {d.hi:.1f}%", verdict])
+            self._fill(self.tbl_luck_days, rows, enable_sort=False)
+            for r, d in enumerate(ordered):
+                if d.weak or d.outside:
+                    color = QColor(T.TEXT_DIM if d.weak else (T.GREEN if d.rate > d.hi else T.RED))
+                    for c in range(self.tbl_luck_days.columnCount()):
+                        self.tbl_luck_days.item(r, c).setForeground(color)
+            self._fill(self.tbl_luck_required,
+                       [[f"{r.diff:g}%p", (f"{r.n:,}판", r.n), (f"{r.games:,}판", r.games)] for r in lk.required],
+                       enable_sort=False)
+            self.lb_luck_required.setText(
+                "표본이 이만큼 쌓이기 전의 승률 차는 운과 구분이 안 됩니다."
+                + (f" 이 계정은 무승부가 전체의 {lk.draw_ratio:.0%}라 승+패 분모에 맞추려면 경기가 그만큼 더 필요합니다."
+                   if lk.mixed else ""))
+        box = self.box_luck_streak
+        self._clear(box)
+
+        def line(text: str, bold: bool = False) -> None:
+            lb = QLabel(text)
+            lb.setWordWrap(True)
+            lb.setStyleSheet("font-weight: bold;" if bold else dim)
+            box.addWidget(lb)
+
+        done = self._streak_done
+        if done is None or done[0] != core.streak_key(self._matches):
+            line("계산 중… (순서를 섞어 기준을 만드는 중입니다)")
+            return
+        sb = done[1]
+        if sb is None:
+            line("계산하지 못했습니다.")
+            return
+        if sb.games < 2:
+            line("경기가 모자랍니다.")
+            return
+        for name, run, cut, med, longer, outside in (
+                ("연승", sb.win_run, sb.win_cut, sb.win_median, sb.win_longer, sb.win_outside),
+                ("연패", sb.lose_run, sb.lose_cut, sb.lose_median, sb.lose_longer, sb.lose_outside)):
+            verdict = (f"섞은 순서 {sb.shuffles}번 중 이보다 긴 경우가 {longer}번 — 우연으로 보기 어렵습니다" if outside
+                       else "순서를 섞어도 이 정도 길이는 흔히 나옵니다")
+            line(f"최장 {name} {run} · 섞은 순서의 가운데 {med} · 상위 {(1 - config.A3_QUANTILE) * 100:.1f}% 문턱 {cut}  →  {verdict}",
+                 bold=outside)
+        line(f"무승부가 날 수 있는 경기와 없는 경기(챔피언스 이상끼리)를 따로 섞었습니다 · {sb.games:,}경기 · "
+             f"연승·연패를 각각 문턱과 견주므로 둘 중 하나라도 밖일 확률은 우연만으로 약 5% 입니다.")
+
+    HABIT_COLUMNS = ["구간", "경기", "승률", "무승부 가능 경기 비중", "무승부 가능 경기 중 무승부"]
+
+    def _build_habits_tab(self) -> QWidget:
+        """성적 진단 [경기 습관](N20) — 직전 경기와의 간격 · 세션 안 몇 번째 판 · 시간대별 승률. 표마다 한 번 판정(카이제곱)."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_habits_note = QLabel("")
+        self.lb_habits_note.setWordWrap(True)
+        self.lb_habits_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_habits_note)
+        self.habit_boxes = []
+        for title in ("직전 경기와의 간격", "세션 안 몇 번째 판", "시간대"):
+            gb = QGroupBox(title)
+            box = QVBoxLayout(gb)
+            tbl = self._make_table(self.HABIT_COLUMNS)
+            tbl.horizontalHeaderItem(3).setToolTip("양쪽 다 챔피언스 이상이 아니라 무승부가 날 수 있던 경기의 비중")
+            tbl.horizontalHeaderItem(4).setToolTip("무승부가 날 수 있던 경기만 놓고 센 무승부 비율 — 전체 대비 무 %와 분모가 다르다")
+            tbl.setMinimumHeight(60 + 30 * (8 if title == "시간대" else 4))
+            box.addWidget(tbl)
+            verdict = QLabel("")
+            verdict.setWordWrap(True)
+            box.addWidget(verdict)
+            self.habit_boxes.append((tbl, verdict))
+            v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _render_habits(self, matches: list[MatchSummary]) -> None:
+        tables = core.habit_tables(matches)
+        self.lb_habits_note.setText(
+            f"{self._scope_text()} · 표마다 따로 판정합니다(셋 중 하나가 우연히 뜰 확률이 약 14% 라 한 표만 뜨면 가볍게 보세요) · "
+            f"간격은 앞 경기 시작부터라 연장이 있던 경기 뒤는 길게 잡힙니다 · 세션 = {config.SESSION_GAP_MIN}분 넘게 쉬면 끊음 · "
+            f"감독모드는 경기를 사람이 직접 하지 않아 효과가 없는 게 보통입니다.")
+        dim = f"color: {T.TEXT_DIM};"
+        for (tbl, verdict), t in zip(self.habit_boxes, tables):
+            rows = []
+            for b in t.bins:
+                has = b.games > 0
+                rows.append([b.label, (f"{b.games:,}", b.games),
+                             (win_rate_text(b.win, b.draw, b.lose, t.mixed, short=True) if has else "—",
+                              core.win_pct(b.win, b.draw, b.lose, t.mixed) if has else -1.0),
+                             (f"{core.pct(b.possible, b.games):.0f}%" if has else "—", core.pct(b.possible, b.games)),
+                             (f"{core.pct(b.possible_draw, b.possible):.1f}%" if b.possible else "—",
+                              core.pct(b.possible_draw, b.possible))])
+            self._fill(tbl, rows, enable_sort=False)
+            for r, b in enumerate(t.bins):
+                if b.flag:
+                    for c in range(tbl.columnCount()):
+                        tbl.item(r, c).setForeground(QColor(T.GREEN if b.flag > 0 else T.RED))
+            if not t.tested:
+                verdict.setText(f"{t.note or '표본이 모자라 판정하지 않습니다'} ({t.games:,}경기)")
+                verdict.setStyleSheet(dim)
+                continue
+            form = "승 대 패(무승부 뺌)" if t.mixed else "승 대 (무+패)"
+            tail = (f" · 무승부 가능 경기와 아닌 경기를 따로 견줘 합쳤고 칸이 모자라 뺀 층 {t.dropped_strata}개"
+                    if t.dropped_strata else " · 무승부 가능 경기와 아닌 경기를 따로 견줘 합쳤습니다")
+            stat = f"카이제곱 {t.stat:.1f}, 자유도 {t.df}, p = {t.p:.3f} · {form}{tail}"
+            if t.significant:
+                verdict.setText(f"차이가 뚜렷합니다 — 색이 칠해진 구간(초록 = 평소보다 잘 이김, 빨강 = 못 이김). {stat}")
+                verdict.setStyleSheet("font-weight: bold;")
+            else:
+                verdict.setText(f"차이가 안 보입니다 — {stat}")
+                verdict.setStyleSheet(dim)
 
     def _wr_bar_row(self, label: str, win: int, draw: int, lose: int,
                     avg_gf: float, avg_ga: float, mixed: bool, label_w: int = 132) -> QWidget:
@@ -6346,6 +6583,7 @@ class MainWindow(QMainWindow):
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
         self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일'
+        self._invalidate("luck")       # 운 범위의 띠도 같은 '최근 N일' 평균
 
     @staticmethod
     def _make_table(columns: list[str], icons: dict[int, str] | None = None) -> FitTableWidget:
@@ -7331,6 +7569,7 @@ class MainWindow(QMainWindow):
         "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
+        "luck": [("성적 진단", "운 범위")], "habits": [("성적 진단", "경기 습관")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
         "shotmap": [("슛 맵", None)],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
@@ -7373,6 +7612,8 @@ class MainWindow(QMainWindow):
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
             "divstay": lambda: self._render_divstay(self._details),   # 시즌 범위(diagnosis 와 같다)
+            "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 띠는 그래프 '최근 N일'(sp_trend_days)
+            "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "shotmap": self._render_shotmap,  # 표시 구간
             "finishing": lambda: self._render_finishing(self._slice()[1]),
             "rankercmp": lambda: self._render_ranker_compare(self._slice()[1]),  # 표시 구간 — 랭커 요청은 카드 수만큼
@@ -7407,6 +7648,7 @@ class MainWindow(QMainWindow):
         self._render_trend(self._matches)
         self._ranker_failed, self._ranker_note = None, ""  # 새 데이터면 실패했던 랭커 요청도 다시 해 본다
         self._dirty = set(self._renderers())
+        self._launch_streak()
         if self.LAZY_RENDER:
             self._render_current_page()
         else:
@@ -9700,6 +9942,8 @@ class MainWindow(QMainWindow):
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
             *[(ld, cancel(ld), 1000, False) for ld in self._elo_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],
+            # 연승·연패 섞기 — 섞기 한 번(수 ms)마다 취소를 본다
+            *[(ld, cancel(ld), 1000, False) for ld in self._habits_workers],
             # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
             *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
             # 팀컬러 효과 창 — 요청 사이에서 멈춘다(요청 하나 타임아웃 teamcolor.TIMEOUT_S 10초). 저장은 표 하나씩 한 트랜잭션

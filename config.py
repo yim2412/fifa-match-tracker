@@ -289,6 +289,22 @@ N19_MIN_SHOTS = 60                  # 결정력·유효슛 비율 칩 — 나·�
 N19_MIN_TACKLES = 60                # 태클 성공 칩 — 태클 시도 하한
 # N17 골 사이 시간(habits.goal_flow) — 이 분 모서리로 가른다: <5 · 5~10 · 10~20 · 20+
 N17_GAP_EDGES = (5, 10, 20)
+# N16 하루 승률 운 범위(2.7.1 — habits.daily_luck) — 하루 이 판(승률 분모 rated) 미만은 점만 흐리고 띠 밖 날 수에서도 뺀다
+N16_MIN_DAY = 20
+N16_BAND_SIGMA = 2.0                # 띠 = 평균 승률 ± 이 σ(이항)
+N16_REQUIRED_DIFFS = (1, 2, 3, 5)   # "몇 판부터 실력 차이로 읽나" 표 — 두 계정 승률 차(%p)
+# A3 연승·연패 우연 기준(habits.streak_baseline) — draw_possible 층 안에서 순서를 이 횟수만큼 섞는다. 시드 고정(같은 목록 = 같은 값)
+A3_SHUFFLES = 200
+A3_SEED = 20261011
+A3_QUANTILE = 0.975                 # 연승·연패 각각 이 분위를 넘으면 우연 밖(둘 합쳐 약 5%)
+# N20 경기 습관(habits.habit_tables) — 세션 = 이 분 넘게 쉬면 끊는다
+SESSION_GAP_MIN = 30
+N20_GAP_EDGES = (13, 20, 60)        # 직전 경기 시작과의 간격(분) 모서리: ~13 · 13~20 · 20~60 · 60+  (13분 이하 = 바로 이어서 — 앞 경기 길이가 섞인다)
+N20_SESSION_EDGES = (2, 6, 21)      # 세션 안 몇 번째 판: 1 · 2~5 · 6~20 · 21+
+N20_HOUR_STEP = 3                   # 시간대 칸 폭(시) — 8칸
+N20_MIN_EXPECTED = 5                # 카이제곱 칸 기대 빈도가 이보다 적으면 이웃 칸과 합친다
+N20_ALPHA = 0.05                    # 표마다 따로 판정
+N20_RESID_Z = 2.0                   # 강조할 칸 잔차 문턱
 # 스쿼드 타임라인 · 가계부(12단계 · squad_timeline.py · trade_book.py) — 출전은 선발만(교체 명단 28 은 안 센다)
 HOLD_RECENT_GAMES = 50              # 이 경기 수 안에 출전한 카드 = 보유 중
 HOLD_GRACE_DAYS = 14                # 산 지 이만큼 안이면 "최근 구매 · 아직 안 씀"(평가 합계에 안 넣고 따로 소계)

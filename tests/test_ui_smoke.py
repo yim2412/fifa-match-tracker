@@ -694,11 +694,12 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 39, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 44, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
     #                                        · 38 메타 분석 [포지션 특성](2.5.1 — 채운 표는 test_trait_tab_renders_usage 가 잰다)
+    #                                        · 39~40 성적 진단 [운 범위] · 41~43 [경기 습관](2.7.1 — 채운 표는 두 탭 테스트가 잰다)
     _check_elisions(tables)
 
 
@@ -1268,6 +1269,201 @@ def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
     assert [w.text() for w in _live_widgets(_win.box_goalflow["lead"]) if isinstance(w, QLabel)] == [
         "골 순서를 되짚을 수 있는 경기가 없습니다."]
     _win._render_goal_flow(_win._details)
+
+
+def _synth_matches(spec):
+    """spec = [(날짜 datetime, 결과, draw_possible)] → MatchSummary 목록(최신 먼저 — 화면 목록과 같은 순서)."""
+    out = [app_main.MatchSummary(match_id=f"s{i}", match_date=when, match_type=52, my_nickname="me", opponent="x",
+                                 result=res, my_goals=0, opp_goals=0, possession=50, shoot_total=0, shoot_effective=0,
+                                 pass_try=0, pass_success=0, rating=0.0, draw_possible=dp)
+           for i, (when, res, dp) in enumerate(spec)]
+    return sorted(out, key=lambda m: m.match_date, reverse=True)
+
+
+class _SynthScope:
+    """화면이 들고 있는 경기 목록을 지어낸 것으로 갈아 끼웠다 되돌린다(승률 그래프 일수 범위까지)."""
+
+    def __init__(self, matches):
+        self.matches = matches
+
+    def __enter__(self):
+        self.saved = (_win._matches, _win.sp_trend_days.value(), _win._streak_done, _win._streak_req)
+        _win._matches = self.matches
+        _win._render_trend(self.matches)
+        return self
+
+    def __exit__(self, *exc):
+        _win._matches = self.saved[0]
+        _win._streak_done, _win._streak_req = self.saved[2], self.saved[3]
+        _win._render_trend(_win._matches)
+        _win.sp_trend_days.setValue(self.saved[1])
+        _win._on_trend_days_apply()
+
+
+def _days_spec():
+    # 10일 × 하루 20판: 앞 5일(9/1~9/5)은 전승, 뒤 5일(9/6~9/10)은 전패 → 10일 평균 50% · 최근 5일 평균 0%
+    return [(datetime(2026, 9, 1 + d, 10, i), "승" if d < 5 else "패", True) for d in range(10) for i in range(20)]
+
+
+def test_luck_tab_band_follows_trend_days():
+    # 2.7.1 N16 — 띠의 평균 p 는 승률 그래프와 같은 '최근 N일'. 일수를 적용하면 다시 그려진다(키에 기간이 안 들어가면 FAIL)
+    with _SynthScope(_synth_matches(_days_spec())):
+        _win._go_page("성적 진단", "운 범위")
+        _win.sp_trend_days.setValue(10)
+        _win._on_trend_days_apply()
+        assert "최근 10일" in _win.lb_luck_note.text() and "평균 승률 50.0%" in _win.lb_luck_summary.text(), \
+            (_win.lb_luck_note.text(), _win.lb_luck_summary.text())
+        assert _win.tbl_luck_days.rowCount() == 10
+        _win.sp_trend_days.setValue(5)
+        _win._on_trend_days_apply()
+        assert "최근 5일" in _win.lb_luck_note.text() and "평균 승률 0.0%" in _win.lb_luck_summary.text(), \
+            _win.lb_luck_summary.text()
+        assert _win.tbl_luck_days.rowCount() == 5
+
+
+def test_luck_tab_counts_outside_days_and_required_table():
+    with _SynthScope(_synth_matches(_days_spec())):
+        _win._go_page("성적 진단", "운 범위")
+        _win.sp_trend_days.setValue(10)
+        _win._on_trend_days_apply()
+        # 하루 20판 전승·전패 → 평균 50% 의 띠(±22%p) 밖 10일 전부 — 운만이면 하루 약 4% 라 약 0.4일
+        assert "띠 밖인 날 10일" in _win.lb_luck_summary.text(), _win.lb_luck_summary.text()
+        verdicts = {_win.tbl_luck_days.item(r, 4).text() for r in range(10)}
+        assert verdicts == {"띠 밖 ▲ 평소보다 잘함", "띠 밖 ▼ 평소보다 못함"}, verdicts
+        req = {_win.tbl_luck_required.item(r, 0).text(): _win.tbl_luck_required.item(r, 1).text()
+               for r in range(_win.tbl_luck_required.rowCount())}
+        assert req["3%p"] == "2,223판", req
+        _check_elisions([_win.tbl_luck_days, _win.tbl_luck_required])    # 채운 표도 최소 크기에서 안 잘린다
+
+
+def test_luck_tab_streak_states():
+    # 계산 중 → 작업자 결과 → 늦은 요청 번호는 버림 → 계산 실패
+    import habits
+    spec = [(datetime(2026, 9, 1, 10, 0) + timedelta(minutes=10 * i), "승" if i < 25 else "패", True) for i in range(50)]
+    ms = _synth_matches(spec)
+    texts = lambda: " | ".join(w.text() for w in _live_widgets(_win.box_luck_streak))  # noqa: E731
+    with _SynthScope(ms):
+        _win._go_page("성적 진단", "운 범위")
+        key = app_main.core.streak_key(ms)
+        _win._streak_done = None
+        _win._invalidate("luck")
+        assert "계산 중" in texts(), texts()
+        _win._streak_req = 7
+        _win._on_streak_ready((6, key, habits.streak_baseline(ms)))           # 늦게 끝난 옛 요청
+        assert _win._streak_done is None and "계산 중" in texts()
+        _win._on_streak_ready((7, key, habits.streak_baseline(ms)))
+        assert "최장 연승 25" in texts() and "우연으로 보기 어렵습니다" in texts(), texts()
+        assert "최장 연패 25" in texts()
+        _win._on_streak_ready((7, key, None))
+        assert "계산하지 못했습니다" in texts(), texts()
+        # 경기 목록이 바뀌면(키가 달라지면) 들고 있던 결과를 쓰지 않는다
+        _win._streak_done = (("다른", 0), habits.streak_baseline(ms))
+        _win._invalidate("luck")
+        assert "계산 중" in texts(), texts()
+
+
+def test_render_all_launches_streak_worker_once_per_list():
+    # 새 검색·범위·시즌이 바뀐 직후(_render_all) 한 번 띄운다. 같은 경기 목록이면 다시 안 띄운다(결과가 들어 있으니)
+    keep = app_main.HabitsWorker.start
+    started = []
+    app_main.HabitsWorker.start = lambda self: started.append(self)      # 스모크는 QThread.start 를 막는다 — 띄운 것만 센다
+    try:
+        _win._streak_done = None
+        before = _win._streak_req
+        _win._render_all()
+        assert len(started) == 1 and _win._streak_req == before + 1, (len(started), before, _win._streak_req)
+        w = started[0]
+        _win._on_streak_ready((w._req, w._key, None))
+        _win._render_all()
+        assert len(started) == 1, "같은 목록이면 다시 띄우지 않는다"
+        _win._streak_done = None
+        _win._render_all()
+        assert len(started) == 2 and started[0]._cancel, "앞 계산은 취소하고 새로 띄운다"
+    finally:
+        app_main.HabitsWorker.start = keep
+        _win._habits_workers = [x for x in _win._habits_workers if x not in started]
+
+
+def test_habits_worker_failure_is_one_line_and_noted():
+    keep = (app_main.core.streak_baseline, crashlog.note, getattr(app_main.HabitsWorker, "_noted", False))
+    got, notes = [], []
+    try:
+        def boom(*a, **k):
+            raise RuntimeError("섞기 실패")
+        app_main.core.streak_baseline = boom
+        crashlog.note = lambda tag, e: notes.append((tag, str(e)))
+        app_main.HabitsWorker._noted = False
+        w = app_main.HabitsWorker(3, ("k", 1), [])
+        w.streak_ready.connect(got.append)
+        w.run()
+        w2 = app_main.HabitsWorker(4, ("k", 1), [])
+        w2.streak_ready.connect(got.append)
+        w2.run()
+        assert [g[2] for g in got] == [None, None] and [g[0] for g in got] == [3, 4], got
+        assert notes == [("habits", "섞기 실패")], notes       # crash.log 에는 실행당 한 번만
+        # 취소하면 신호를 안 낸다
+        app_main.core.streak_baseline, app_main.HabitsWorker._noted = keep[0], keep[2]
+        w3 = app_main.HabitsWorker(5, ("k", 1), [])
+        w3.streak_ready.connect(got.append)
+        w3.cancel()
+        w3.run()
+        assert len(got) == 2, got
+    finally:
+        app_main.core.streak_baseline, crashlog.note, app_main.HabitsWorker._noted = keep
+
+
+def test_shutdown_stops_habits_workers():
+    class _Busy(app_main.HabitsWorker):
+        def isRunning(self):
+            return not self._cancel
+
+        def wait(self, *a):
+            return True
+
+    w = _Busy(1, ("k", 0), [])
+    _win._habits_workers.append(w)
+    try:
+        left = _win.shutdown(fast=True)
+        assert w in left and w._cancel, "종료 정리 목록에 HabitsWorker 가 없다"
+    finally:
+        _win._habits_workers = [x for x in _win._habits_workers if x is not w]
+
+
+def test_habits_tab_flags_a_real_effect_and_stays_quiet_otherwise():
+    # 2.7.1 N20 — 시간대 칸 하나에 효과를 심으면 그 칸이 칠해지고, 효과가 없으면 "차이가 안 보입니다"
+    def spec(effect):
+        out, n = [], 0
+        for hour in range(0, 24, 3):
+            for k in range(40):
+                win = (k < 36) if (effect and hour == 0) else (k < 20)
+                out.append((datetime(2026, 1, 1, hour) + timedelta(days=n), "승" if win else "패", True))
+                n += 1
+        return out
+
+    _win._go_page("성적 진단", "경기 습관")
+    hour_tbl, hour_verdict = _win.habit_boxes[2]
+    with _SynthScope(_synth_matches(spec(False))):
+        _win._render_habits(_win._matches)
+        assert [t.rowCount() for t, _ in _win.habit_boxes] == [4, 4, 8], [t.rowCount() for t, _ in _win.habit_boxes]
+        assert hour_verdict.text().startswith("차이가 안 보입니다"), hour_verdict.text()
+        assert all(hour_tbl.item(r, 0).foreground().color().name() == hour_tbl.item(r, 1).foreground().color().name()
+                   for r in range(8))
+    with _SynthScope(_synth_matches(spec(True))):
+        _win._render_habits(_win._matches)
+        assert hour_verdict.text().startswith("차이가 뚜렷합니다"), hour_verdict.text()
+        from PyQt6.QtGui import QColor
+        green = QColor(T.GREEN).name()
+        assert hour_tbl.item(0, 0).foreground().color().name() == green, "효과를 심은 칸이 안 칠해졌다"
+        assert hour_tbl.item(1, 0).foreground().color().name() != green
+        assert hour_tbl.item(0, 2).text().startswith("90.0%"), hour_tbl.item(0, 2).text()
+        _check_elisions([t for t, _ in _win.habit_boxes])
+
+
+def test_habits_tab_empty_and_note():
+    with _SynthScope(_synth_matches([(datetime(2026, 9, 1, 10), "승", True)])):
+        _win._render_habits(_win._matches)
+        assert all("판정하지 않습니다" in v.text() for _, v in _win.habit_boxes), [v.text() for _, v in _win.habit_boxes]
+    assert "표마다 따로 판정" in _win.lb_habits_note.text()
 
 
 def test_analysis_chip_row_shows_strengths_and_weaknesses():

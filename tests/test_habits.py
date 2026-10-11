@@ -4,14 +4,19 @@
 """
 from __future__ import annotations
 
+import math
 import os
+import random
 import sys
-from datetime import datetime
+import time
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config  # noqa: E402
 import habits  # noqa: E402
+import models  # noqa: E402
+from models import MatchSummary, PeriodRate  # noqa: E402
 
 
 def _t(day, hour=12):
@@ -283,6 +288,329 @@ def test_goal_flow_five_kinds_sum_to_my_goals():
     gf = habits.goal_flow(games, "me", mixed=False)
     assert sum(gf.kinds.values()) == 5, gf.kinds
     assert gf.kinds["추격"] == 2 and gf.kinds["벌리기"] == 1, gf.kinds     # p 의 셋째 골 d=+2 → 벌리기 · r 의 골 d=−3 → 추격
+
+
+# ── N16 하루 승률 운 범위 ────────────────────────────────────────────────────
+
+def _pr(day, win, draw, lose, mixed):
+    return PeriodRate(label=f"09/{day:02d}", win=win, draw=draw, lose=lose, day=date(2026, 9, day), mixed=mixed)
+
+
+def test_daily_luck_expected_is_exact_binomial_not_4_55_percent():
+    # 하루 20판 10승 10패 → p = 0.5 · 띠 0.5 ± 2√(0.25/20) = 0.2764 ~ 0.7236 → 승 수 5 이하·15 이상이 띠 밖
+    # P = 2·P(X ≤ 5) = 2·21700/2^20 = 0.041389 (정규 근사의 4.55% 가 아니다)
+    lk = habits.daily_luck([_pr(1, 10, 0, 10, False)])
+    assert (lk.judged, lk.outside) == (1, 0), lk
+    assert abs(lk.expected - 2 * 21700 / 2 ** 20) < 1e-9, lk.expected
+
+
+def test_daily_luck_weak_day_is_dimmed_not_counted():
+    days = [_pr(1, 10, 0, 10, False), _pr(2, 9, 0, 10, False)]        # 둘째 날 19판 < N16_MIN_DAY(20)
+    lk = habits.daily_luck(days)
+    assert [d.weak for d in lk.days] == [False, True], lk.days
+    assert lk.judged == 1, "띠 밖 날 수 분모에서도 뺀다"
+    one = habits.daily_luck([_pr(1, 10, 0, 10, False)])
+    # 둘째 날은 기대값에도 안 들어간다(평균 p 는 둘 다로 구하므로 첫날 기대값은 같지 않아도 둘째 날 몫이 더해지지는 않는다)
+    assert lk.expected < 2 * one.expected, lk.expected
+
+
+def test_daily_luck_counts_outside_days():
+    # 40판씩: 하루는 36승 4패(90%), 하루는 4승 36패(10%) → 평균 50% · 띠 ±15.8%p → 둘 다 밖
+    lk = habits.daily_luck([_pr(1, 36, 0, 4, False), _pr(2, 4, 0, 36, False)])
+    assert (lk.judged, lk.outside) == (2, 2), lk
+    assert [d.outside for d in lk.days] == [True, True]
+    assert abs(lk.days[0].lo - 34.19) < 0.05 and abs(lk.days[0].hi - 65.81) < 0.05, lk.days[0]
+
+
+def test_daily_luck_mixed_uses_win_over_win_plus_lose():
+    # 섞인 묶음: 하루 10승 100무 10패 → 분모 20 · 승률 50%. 한 집단이면 분모 120 · 8.3%
+    mx = habits.daily_luck([_pr(1, 10, 100, 10, True)])
+    sg = habits.daily_luck([_pr(1, 10, 100, 10, False)])
+    assert (mx.days[0].n, round(mx.days[0].rate, 1)) == (20, 50.0), mx.days[0]
+    assert (sg.days[0].n, round(sg.days[0].rate, 1)) == (120, 8.3), sg.days[0]
+
+
+def test_daily_luck_required_games_table():
+    # n = 2·(2σ)²·p(1−p)/d² = 8·0.25/0.0009 = 2222.2 → 2223 (3%p) · 후보 표의 "약 250판"이 아니다
+    lk = habits.daily_luck([_pr(1, 10, 0, 10, False)])
+    by = {r.diff: r for r in lk.required}
+    assert by[3].n == 2223 and by[3].games == 2223, by[3]
+    assert by[1].n == 20000 and by[5].n == 800, (by[1], by[5])
+    # 섞인 계정 — 무승부가 전체의 절반이면 실제 경기 수는 두 배
+    mx = habits.daily_luck([_pr(1, 10, 20, 10, True)])
+    r3 = {r.diff: r for r in mx.required}[3]
+    assert r3.games == math.ceil(r3.n / 0.5), r3
+
+
+def test_daily_luck_config_is_wired():
+    old = (config.N16_MIN_DAY, config.N16_BAND_SIGMA)
+    try:
+        config.N16_MIN_DAY = 21
+        assert habits.daily_luck([_pr(1, 10, 0, 10, False)]).days[0].weak, "N16_MIN_DAY 배선"
+        config.N16_MIN_DAY = 20
+        config.N16_BAND_SIGMA = 1.0
+        d = habits.daily_luck([_pr(1, 10, 0, 10, False)]).days[0]
+        assert abs((d.hi - d.lo) / 2 - 100 * math.sqrt(0.25 / 20)) < 1e-6, "N16_BAND_SIGMA 배선"
+    finally:
+        config.N16_MIN_DAY, config.N16_BAND_SIGMA = old
+
+
+def test_daily_luck_empty():
+    assert habits.daily_luck([]).days == []
+
+
+# ── A3 연승·연패 우연 기준 ───────────────────────────────────────────────────
+
+def _ms(i, result, dp, when=None):
+    base = datetime(2026, 9, 1, 10) + timedelta(minutes=10 * i)
+    return MatchSummary(match_id=f"m{i}", match_date=when or base, match_type=52, my_nickname="me", opponent="x",
+                        result=result, my_goals=0, opp_goals=0, possession=50, shoot_total=0, shoot_effective=0,
+                        pass_try=0, pass_success=0, rating=0.0, draw_possible=dp)
+
+
+def test_streak_actual_matches_models_longest_streaks():
+    res = ["승", "승", "무", "승", "승", "승", "패", "패", "몰수승", "패", "오류", "패", "패", "패", "패"]
+    ms = [_ms(i, r, True) for i, r in enumerate(res)]
+    sb = habits.streak_baseline(ms, shuffles=5)
+    assert (sb.win_run, sb.lose_run) == models.longest_streaks(ms) == (3, 4), sb
+
+
+def test_streak_shuffle_stays_inside_layer():
+    # 챔스 층(draw_possible 거짓)은 무승부가 날 수 없다 — 섞은 순서마다 그 자리에 무승부가 없어야 한다
+    vals = ["승", "패"] * 15 + ["승", "무", "패", "무", "승", "패"] * 5
+    strata = {False: list(range(30)), True: list(range(30, 60))}
+    rng = random.Random(1)
+    moved = 0
+    for _ in range(40):
+        cur = habits.shuffle_within_strata(vals, strata, rng)
+        assert all(cur[i] != "무" for i in strata[False]), "무승부가 챔스 층 자리로 샜다"
+        assert sorted(cur[:30]) == sorted(vals[:30]) and sorted(cur[30:]) == sorted(vals[30:])
+        moved += cur != vals
+    assert moved > 30, "섞이지 않았다"
+    # 층을 합쳐 통째로 섞으면 샌다 — 위 단언에 이빨이 있는지(막지 않았다면 무슨 일이 일어났을까)
+    leaked = 0
+    for _ in range(40):
+        cur = habits.shuffle_within_strata(vals, {"all": list(range(60))}, rng)
+        leaked += any(cur[i] == "무" for i in range(30))
+    assert leaked > 30, leaked
+
+
+def test_streak_baseline_none_layer_stays_put():
+    vals = ["승", "무", "패", "승"]
+    cur = habits.shuffle_within_strata(vals, {True: [0, 1]}, random.Random(3))
+    assert cur[2:] == ["패", "승"], "층 밖(None) 자리는 제자리"
+
+
+def test_streak_baseline_deterministic_and_outside_judgement():
+    # 승 25 연속 뒤 패 25 연속(전부 같은 층) — 섞으면 길이가 6 안팎이라 둘 다 우연 밖
+    ms = [_ms(i, "승" if i < 25 else "패", True) for i in range(50)]
+    a = habits.streak_baseline(ms)
+    b = habits.streak_baseline(ms)
+    assert a == b, "시드 고정 — 같은 목록이면 같은 값"
+    assert (a.win_run, a.lose_run) == (25, 25)
+    assert a.win_outside and a.lose_outside and a.win_longer == 0 and a.lose_longer == 0, a
+    assert a.win_cut < 25 and a.shuffles == config.A3_SHUFFLES
+    # 번갈아 나오는 순서 — 우연 안
+    alt = [_ms(i, "승" if i % 2 == 0 else "패", True) for i in range(50)]
+    c = habits.streak_baseline(alt)
+    assert not c.win_outside and not c.lose_outside and c.win_run == 1, c
+
+
+def test_streak_baseline_unshufflable_is_not_outside():
+    # 전부 승 — 섞어도 같은 길이라 "우연 밖"이 아니다(97.5분위와 같다)
+    ms = [_ms(i, "승", True) for i in range(30)]
+    s = habits.streak_baseline(ms)
+    assert s.win_run == 30 and s.win_cut == 30 and not s.win_outside, s
+
+
+def test_streak_baseline_cancel_and_key():
+    ms = [_ms(i, "승" if i % 3 else "패", True) for i in range(20)]
+    calls = []
+    out = habits.streak_baseline(ms, cancelled=lambda: calls.append(1) or True)
+    assert out.win_cut == 0 and len(calls) == 1, "취소하면 섞기를 하지 않고 돌아온다"
+    k1 = habits.streak_key(ms)
+    ms2 = list(ms)
+    ms2[3] = _ms(3, "승", True)
+    assert habits.streak_key(ms2) != k1, "결과가 바뀌면 키도 바뀐다"
+    assert habits.streak_key(list(ms)) == k1
+
+
+def test_streak_baseline_budget_ten_thousand_games():
+    import random as _r
+    rnd = _r.Random(5)
+    ms = [_ms(i, rnd.choice(["승", "패", "무"]), i % 3 != 0) for i in range(10000)]
+    t0 = time.perf_counter()
+    habits.streak_baseline(ms)
+    dt = time.perf_counter() - t0
+    assert dt < 6.0, f"1만 판 섞기 {dt:.2f}초 — 작업 스레드 예산(참고: 계획 R21 은 0.54초)"
+    print(f"        (1만 판 × {config.A3_SHUFFLES}회 섞기 {dt:.2f}초)")
+
+
+# ── N20 경기 습관 ────────────────────────────────────────────────────────────
+
+def test_chi2_sf_known_values():
+    for x, df, want in [(3.841459, 1, 0.05), (5.991465, 2, 0.05), (9.487729, 4, 0.05), (11.0705, 5, 0.05),
+                        (18.307, 10, 0.05), (30.0, 10, 0.000857), (0.5, 3, 0.91893)]:
+        got = habits.chi2_sf(x, df)
+        assert abs(got - want) < 2e-4, (x, df, got, want)
+    assert habits.chi2_sf(0, 3) == 1.0 and habits.chi2_sf(500, 3) < 1e-50
+
+
+def _hour_games(spec, dp=True):
+    """spec = {시(0~23 중 칸 대표): (승, 무, 패)} — 날마다 한 판씩 다른 날에."""
+    out, n = [], 0
+    for hour, (w, d, l) in spec.items():
+        for res, k in (("승", w), ("무", d), ("패", l)):
+            for _ in range(k):
+                out.append(_ms(n, res, dp, when=datetime(2026, 1, 1, hour, 0) + timedelta(days=n)))
+                n += 1
+    return out
+
+
+def _table(ms, name="시간대"):
+    return next(t for t in habits.habit_tables(ms) if t.name == name)
+
+
+def test_habit_no_effect_says_no_difference():
+    spec = {h: (20, 0, 20) for h in range(0, 24, 3)}                  # 여덟 칸 모두 50%
+    t = _table(_hour_games(spec))
+    assert t.tested and not t.significant and t.stat == 0.0 and t.p == 1.0, t
+    assert all(b.flag == 0 for b in t.bins)
+    assert (t.df, len(set(b.group for b in t.bins))) == (7, 8), "칸이 안 합쳐졌다"
+
+
+def test_habit_effect_in_one_cell_is_flagged():
+    spec = {h: (20, 0, 20) for h in range(0, 24, 3)}
+    spec[0] = (36, 0, 4)
+    t = _table(_hour_games(spec))
+    assert t.significant and t.p < 0.01, t
+    assert [b.flag for b in t.bins] == [1] + [0] * 7, [b.flag for b in t.bins]
+
+
+def test_habit_composition_only_difference_is_corrected_by_layers():
+    # 층(무승부 가능 참·거짓)마다 승률이 다르고(30% / 70%) 칸마다 층 구성이 달라 칸 승률이 갈리지만 층 안 효과는 없다
+    # 칸 0~3 에 여덟 칸 중 앞 넷만 쓴다 — 나머지 칸은 비어 합쳐진다
+    ms, n = [], 0
+    for hour, t_true in zip((0, 3, 6, 9), (280, 240, 200, 160)):
+        t_false = 400 - t_true
+        for dp, cnt, rate in ((True, t_true, 0.3), (False, t_false, 0.7)):
+            wins = round(cnt * rate)
+            for k in range(cnt):
+                ms.append(_ms(n, "승" if k < wins else "패", dp, when=datetime(2026, 1, 1, hour) + timedelta(days=n)))
+                n += 1
+    t = _table(ms)
+    assert t.mixed and t.tested and not t.significant and t.stat < 1e-9, t
+    # 이빨: 층을 무시하고 한 덩이로 보면 같은 자료가 뚜렷하게 갈린다 — 층 보정을 빼면 이 테스트가 FAIL
+    pooled = _table([_ms(i, m.result, True, when=m.match_date) for i, m in enumerate(ms)])
+    assert pooled.significant, "층 보정을 안 했다면 차이가 났을 자료여야 한다"
+    assert pooled.p < 0.05 <= t.p
+
+
+def test_habit_result_classes_follow_the_visible_rate():
+    # 한 집단(전부 무승부 가능): 승 대 (무+패). 칸 0: 승20 무20 패0 · 나머지 승20 패20 → 칸마다 승 20/40 이라 차이 없음
+    spec = {h: (20, 0, 20) for h in range(0, 24, 3)}
+    spec[0] = (20, 20, 0)
+    one = _table(_hour_games(spec))
+    assert not one.mixed and one.tested and not one.significant, one
+    # 챔스 층 한 판이 섞이면 섞임 — 승 대 패(무 뺌): 칸 0 은 승20 패0 이라 갈린다
+    ms = _hour_games(spec) + [_ms(999, "승", False, when=datetime(2026, 1, 1, 21) + timedelta(days=999))]
+    mx = _table(ms)
+    assert mx.mixed and mx.significant and mx.bins[0].flag == 1, (mx, mx.bins[0])
+    assert mx.dropped_strata == 1, "한 판뿐인 챔스 층은 검정에서 뺀다"
+
+
+def test_habit_small_cells_merge_and_tiny_table_is_not_tested():
+    spec = {0: (30, 0, 30), 3: (2, 0, 1), 6: (30, 0, 30), 9: (30, 0, 30)}     # 칸 1 은 기대 빈도 < 5
+    t = _table(_hour_games(spec))
+    assert t.bins[1].group in (t.bins[0].group, t.bins[2].group), "작은 칸은 이웃과 합친다"
+    assert t.tested
+    tiny = _table(_hour_games({0: (2, 0, 2), 3: (1, 0, 3)}))
+    assert not tiny.tested and tiny.note, tiny
+
+
+def test_habit_gap_and_session_bins_by_hand():
+    #  9:00 · 9:10(간격 10) · 9:25(15) · 10:30(65 — 새 세션) · 10:35(5)
+    times = [(9, 0), (9, 10), (9, 25), (10, 30), (10, 35)]
+    ms = [_ms(i, "승", True, when=datetime(2026, 9, 1, h, m)) for i, (h, m) in enumerate(times)]
+    gap = _table(ms, "직전 경기와의 간격")
+    assert [b.games for b in gap.bins] == [2, 1, 0, 1], [b.games for b in gap.bins]    # 첫 경기는 간격이 없어 뺀다
+    ses = _table(ms, "세션 안 몇 번째 판")
+    assert [b.games for b in ses.bins] == [2, 3, 0, 0], [b.games for b in ses.bins]     # 순번 1,2,3,1,2
+    assert ses.bins[0].label == "첫 판"
+
+
+def test_habit_gap_boundaries():
+    # 간격: 정확히 13분은 '13분 이하' · 13분 1초는 위 칸. 세션: 정확히 30분은 안 끊기고 30분 1초는 끊긴다
+    base = datetime(2026, 9, 1, 9, 0)
+    offs = [timedelta(0), timedelta(minutes=13), timedelta(minutes=26, seconds=1)]       # 간격 13분 · 13분 1초
+    ms = [_ms(i, "승", True, when=base + o) for i, o in enumerate(offs)]
+    gap = _table(ms, "직전 경기와의 간격")
+    assert [b.games for b in gap.bins] == [1, 1, 0, 0], [b.games for b in gap.bins]
+    t0 = datetime(2026, 9, 2, 9, 0)
+    ms = [_ms(0, "승", True, when=t0), _ms(1, "승", True, when=t0 + timedelta(minutes=30)),
+          _ms(2, "승", True, when=t0 + timedelta(minutes=60, seconds=1))]                # 간격 30분 · 30분 1초
+    ses = _table(ms, "세션 안 몇 번째 판")
+    assert [b.games for b in ses.bins] == [2, 1, 0, 0], [b.games for b in ses.bins]      # 순번 1, 2, 1
+
+
+# ── 변이 검증(2026-10-11)이 짚은 경계 — 위 테스트가 안 지키던 줄 ─────────────────────────
+
+def test_binom_outside_prob_edges_by_hand():
+    f = habits._binom_outside_prob
+    assert f(0, 0.5, 0.0, 1.0) == 0.0, "판수 0 이면 확률 0(0 나누기 없음)"
+    assert f(10, 0.0, 0.0, 1.0) == 0.0 and f(10, 1.0, 0.0, 1.0) == 0.0     # p 가 0·1 이어도 로그 오류 없음
+    assert f(10, 1.0, 1.0, 1.0) == 0.0, "k/n 이 띠 끝과 딱 같으면 안쪽"
+    assert f(10, 1.0, 0.0, 0.5) == 1.0
+    # 띠 끝이 격자 위(0.25 · 0.75)인 n = 20 — 승 5·15 는 안쪽: 밖 = 2·P(X ≤ 4) = 2·6196/2^20
+    assert abs(f(20, 0.5, 0.25, 0.75) - 2 * 6196 / 2 ** 20) < 1e-12
+
+
+def test_daily_luck_all_draw_mixed_has_no_division_by_zero():
+    lk = habits.daily_luck([_pr(1, 0, 30, 0, True)])
+    assert lk.days[0].n == 0 and lk.days[0].weak and lk.judged == 0, lk
+    assert all(r.n == 0 and r.games == 0 for r in lk.required), lk.required
+
+
+def test_chi2_sf_zero_degrees_of_freedom():
+    assert habits.chi2_sf(5.0, 0) == 1.0
+
+
+def test_streak_baseline_unshufflable_counts_nothing_longer():
+    ms = [_ms(i, "승", True) for i in range(30)]
+    s = habits.streak_baseline(ms)
+    assert s.win_longer == 0 and s.lose_longer == 0 and not s.lose_outside, s    # 같은 길이는 '더 긴'이 아니다
+
+
+def test_habit_possible_counts_only_draw_possible_games():
+    spec = [(0, "승", True)] * 6 + [(0, "무", True)] * 3 + [(0, "패", True)] * 1 + [(0, "승", False)] * 5 + [(0, "패", False)] * 5
+    ms = [_ms(i, r, dp, when=datetime(2026, 1, 1, h) + timedelta(days=i)) for i, (h, r, dp) in enumerate(spec)]
+    b = _table(ms).bins[0]
+    assert (b.games, b.possible, b.possible_draw) == (20, 10, 3), b       # 무승부가 날 수 있던 10판 중 무 3
+
+
+def test_habit_expected_exactly_at_threshold_is_kept():
+    # 두 칸 모두 5승 5패 → 기대 빈도가 딱 5(문턱과 같음) — 합치지도 층을 빼지도 않고 판정한다(p = 1)
+    spec = {0: (5, 0, 5), 3: (5, 0, 5)}
+    t = _table(_hour_games(spec))
+    assert t.tested and t.df == 1 and t.p == 1.0 and not t.significant, t
+    assert t.bins[0].group != t.bins[1].group
+
+
+def test_habit_small_bin_merges_into_smaller_neighbor_left_on_tie():
+    spec = {0: (30, 0, 30), 3: (2, 0, 1), 6: (30, 0, 30)}              # 가운데가 작고 양옆 판 수가 같다 → 왼쪽
+    t = _table(_hour_games(spec))
+    assert t.bins[1].group == t.bins[0].group != t.bins[2].group, [b.group for b in t.bins]
+    spec = {0: (30, 0, 30), 3: (2, 0, 1), 6: (40, 0, 40)}              # 오른쪽이 크면 왼쪽(작은 쪽)
+    t = _table(_hour_games(spec))
+    assert t.bins[1].group == t.bins[0].group, [b.group for b in t.bins]
+    spec = {0: (40, 0, 40), 3: (2, 0, 1), 6: (30, 0, 30)}              # 왼쪽이 크면 오른쪽
+    t = _table(_hour_games(spec))
+    assert t.bins[1].group == t.bins[2].group, [b.group for b in t.bins]
+
+
+def test_habit_two_groups_are_tested():
+    t = _table(_hour_games({0: (30, 0, 10), 3: (10, 0, 30)}))
+    assert t.tested and t.df == 1 and t.significant, t       # 나머지 빈 칸이 합쳐져 두 덩이 — 자유도 1
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

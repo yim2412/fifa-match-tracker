@@ -24,7 +24,9 @@ from models import (
     moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
 )
 from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, DivisionStays, GoalFlow, LeadRow,
-                    division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips)
+                    division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
+                    DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
+                    streak_baseline, streak_key)
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
 from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
                          is_champ, meta_trend, rank_trend_series)
@@ -69,6 +71,9 @@ __all__ = [
     # habits — N19 칩 · N17 골 흐름(2.7.1)
     "GOAL_KIND_NOTE", "GOAL_KINDS", "MAX_LEAD", "Chip", "GoalFlow", "LeadRow", "goal_flow", "half_share_diff",
     "paired_diff", "pct", "side_totals", "strength_chips",
+    # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
+    "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
+    "streak_baseline", "streak_key",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)
     "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
