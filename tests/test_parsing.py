@@ -2172,6 +2172,7 @@ def test_every_rate_aggregate_fills_mixed():
     ouid, _, details = _load()
     ms = [m for m in (models.parse_match(d, ouid) for d in details) if m]
     assert [m.draw_possible for m in ms].count(True) == 1, [m.draw_possible for m in ms]
+    import rankmeta
     import squad_timeline as tl
     made = {
         "Stats": [models.summarize(ms)],
@@ -2190,6 +2191,8 @@ def test_every_rate_aggregate_fills_mixed():
         "ClutchSummary": [st.clutch_summary(details, ouid)],
         "Discipline": [st.discipline_stats(details, ouid)],
         "Window": [tl._Games(details, ouid).window(0, len(ms))],
+        "OppBand": (lambda t: t.by_rank + t.by_gap)(
+            rankmeta.opp_rank_table(details, ouid, {d["matchId"]: (200, 3) for d in details})),
     }
     assert set(made) == set(models.RATE_CLASSES), set(made) ^ set(models.RATE_CLASSES)
     for name, rows in made.items():

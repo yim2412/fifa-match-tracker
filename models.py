@@ -487,7 +487,7 @@ def moving_win_rate(matches: list[MatchSummary], days: list[date], *, min_n: int
 # 클래스가 여기 빠짐없이 있는지 대조한다. 이름만 둔다(stats·squad_timeline 을 import 하면 순환이다).
 RATE_CLASSES = ("Stats", "OpponentStat", "PeriodRate", "PeriodStat", "PlayerStat", "FormationStat",
                 "TimeBandRate", "StreakAfter", "DivisionStat", "PossessionBand", "TeamColorStat", "OppCard",
-                "ResultBreakdown", "ClutchSummary", "Discipline", "Window")
+                "ResultBreakdown", "ClutchSummary", "Discipline", "Window", "OppBand")
 
 
 def division_icon_index(div_id, division_meta: list[dict] | None) -> int | None:

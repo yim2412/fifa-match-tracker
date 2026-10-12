@@ -278,7 +278,7 @@ def check_weak(srcs: dict[str, str], allow: dict = WEAK_ALLOW) -> list[str]:
     return out
 
 
-RATE_FILES = ("models.py", "stats.py", "squad_timeline.py")
+RATE_FILES = ("models.py", "stats.py", "squad_timeline.py", "rankmeta.py")
 
 
 def rate_classes(srcs: dict[str, str]) -> set[str]:

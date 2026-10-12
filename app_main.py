@@ -4413,9 +4413,10 @@ class MainWindow(QMainWindow):
         return "mine"
 
     def _invalidate_trades(self) -> None:
-        """거래를 쓰는 화면 전부 — 가계부·타임라인."""
+        """거래를 쓰는 화면 전부 — 가계부·타임라인 · 상대 순위(내 계정 확정에 달렸다)."""
         self._invalidate("trades")
         self._invalidate("timeline")
+        self._invalidate("opprank")
 
     @staticmethod
     def _bp(v: int | None, sign: bool = False) -> str:
@@ -5706,12 +5707,12 @@ class MainWindow(QMainWindow):
     def _opp_table_rows(self, bands) -> list:
         rows = []
         for b in bands:
-            n = core.rated(b.win, b.draw, b.lose, b.mixed)
+            n = b.rated
             text = win_rate_text(b.win, b.draw, b.lose, b.mixed, short=True) if b.games else "—"
             if b.games and core.is_weak(n, config.OPP_ROW_MIN):
                 text += f" · {sample_text(n, b.mixed)}"
             rows.append([b.label, (f"{b.games:,}", b.games), (f"{b.win:,}", b.win), (f"{b.draw:,}", b.draw),
-                         (f"{b.lose:,}", b.lose), (text, core.win_pct(b.win, b.draw, b.lose, b.mixed) if b.games else -1.0)])
+                         (f"{b.lose:,}", b.lose), (text, b.win_rate if b.games else -1.0)])
         return rows
 
     def _render_opp_rank(self) -> None:

@@ -40,6 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 import config
+import models
 import predict
 import rankcollect
 from rankcollect import is_champ  # noqa: F401 — core_api 가 여기서도 가져갈 수 있게(정본은 rankcollect)
@@ -919,7 +920,7 @@ def opp_gap_label(i: int) -> str:
 
 
 @dataclass
-class OppBand:
+class OppBand(models.RateMixin):
     label: str
     win: int = 0
     draw: int = 0
@@ -948,7 +949,6 @@ class OppRank:
 def opp_rank_table(details: list, ouid: str, rows: dict) -> OppRank:
     """내 경기를 상대 순위 구간별·점수 격차 칸별로 가른 전적. rows 에 줄이 없는 경기(아직 안 채움·시즌 넘김)는 분모에도 안 넣는다.
     승률 식은 표 전체가 하나(A6) — 두 표가 같은 경기 집합이 아니어도(격차는 내 점수를 알 때만) 식은 같게."""
-    import models
     out = OppRank()
     out.by_rank = [OppBand(opp_rank_label(b)) for b in config.OPP_RANK_BANDS]
     out.by_gap = [OppBand(opp_gap_label(i)) for i in range(len(config.OPP_GAP_EDGES) + 1)]
