@@ -56,6 +56,9 @@ def test_icon_url_table():
     assert images.icon_url("emblem", "teamcolor/x.png") == "", "표 밖 종류(rank.db 의 ssl 키 13행)는 그림 없음"
     assert images.icon_url("emblem", "crests/") == "" and images.icon_url("emblem", "crests") == ""
     assert images.icon_url("division", 3) == images.division_icon_url(3)
+    # 2026-07-30 패치 뒤 새 폴더(21장) — 옛 폴더(18장)는 마스터 아래가 한 칸씩 어긋난다. 번호 6~8 이 마스터다
+    base = "https://ssl.nexon.com/s2/game/fo4/obt/rank/large/update_2026"
+    assert images.division_icon_url(6) == f"{base}/ico_rank6_m.png" and images.division_icon_url(20) == f"{base}/ico_rank20_m.png"
     seasons = {101: {"seasonImg": "https://x/s101.png"}}
     assert images.icon_url("season", 101, seasons) == "https://x/s101.png"
     assert images.icon_url("season", 999, seasons) == "" and images.icon_url("season", 101) == ""
@@ -96,6 +99,23 @@ def test_fetch_icon_sends_referer_and_caches():
         assert sess.calls[0][1]["headers"]["Referer"] == "https://fconline.nexon.com/", "Referer 없이 받으면 403 인 주소가 있다"
         assert images.fetch_icon("https://x/a.png", d, "emblem") == p and len(sess.calls) == 1, "캐시에 있으면 다시 안 받는다"
         assert not list(d.rglob("*.tmp")), "임시 파일이 남았다"
+    finally:
+        images._session = old
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_division_icon_ignores_cache_from_the_old_folder():
+    # 옛 폴더에서 받아 둔 division_8.png 는 마스터3 자리에 월드클래스3 그림이 들어 있다. 새 이름으로 읽지 않으면
+    # (막지 않았으면) 업데이트한 사람이 계속 어긋난 배지를 본다 — 옛 파일이 실제로 있고 읽을 수 있다는 것을 먼저 단언한다
+    d, sess = _tmp(), _Sess(_Resp(200, b"NEW"))
+    old = _with_session(sess)
+    try:
+        (d / "division_8.png").write_bytes(b"OLD")
+        assert (d / "division_8.png").read_bytes() == b"OLD"
+        p = images.fetch_division_icon(8, d)
+        assert p is not None and p.read_bytes() == b"NEW" and p.name != "division_8.png", p
+        assert sess.calls and "update_2026/ico_rank8_m.png" in sess.calls[0][0], sess.calls
+        assert images.fetch_division_icon(8, d) == p and len(sess.calls) == 1, "새 캐시는 다시 안 받는다"
     finally:
         images._session = old
         shutil.rmtree(d, ignore_errors=True)

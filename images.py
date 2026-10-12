@@ -61,9 +61,13 @@ def fetch(sp_id: int, cache_dir: Path, timeout: int = 6) -> Path | None:
 
 # ── 등급(division) 배지 ─────────────────────────────────────────────────
 # 오픈API get_meta("division") 이 주는 리스트 순서(=800 슈퍼챔피언스부터
-# 3100 프로3까지 오름차순, 인덱스 0~17) 그대로가 이 CDN의 번호다.
+# 3100 유망주3까지 오름차순, 인덱스 0~20) 그대로가 이 CDN의 번호다.
 # 넥슨 웹 화면(fconline.nexon.com) 소스에서 실제로 쓰는 경로를 확인했다.
-DIVISION_CDN_BASE = "https://ssl.nexon.com/s2/game/fo4/obt/rank/large/update_2009"
+# 2026-07-30 패치로 마스터 1~3부(인덱스 6~8)가 끼어 18 → 21장이 됐고 넥슨이 폴더를 update_2026 으로 새로 만들었다 —
+# 옛 update_2009 는 18장 그대로라 마스터 아래 등급의 배지가 한 칸씩 어긋나고 유망주는 404 였다(2026-10-13 실측:
+# 0~5 번만 두 폴더가 같은 그림). 폴더가 또 바뀌면 이 상수 한 곳과 test_icons 의 주소 단언만 고친다.
+DIVISION_ICON_SET = "update_2026"
+DIVISION_CDN_BASE = f"https://ssl.nexon.com/s2/game/fo4/obt/rank/large/{DIVISION_ICON_SET}"
 
 
 def division_icon_url(rank_index: int) -> str:
@@ -71,7 +75,8 @@ def division_icon_url(rank_index: int) -> str:
 
 
 def division_icon_cached_path(rank_index: int, cache_dir: Path) -> Path:
-    return cache_dir / f"division_{rank_index}.png"
+    # 폴더 이름을 캐시 이름에 넣는다 — 번호만 쓰면 옛 폴더에서 받아 둔 어긋난 그림(division_8.png 등)이 계속 읽힌다
+    return cache_dir / f"division_{DIVISION_ICON_SET}_{rank_index}.png"
 
 
 def fetch_division_icon(rank_index: int, cache_dir: Path,

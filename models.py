@@ -491,7 +491,7 @@ RATE_CLASSES = ("Stats", "OpponentStat", "PeriodRate", "PeriodStat", "PlayerStat
 
 
 def division_icon_index(div_id, division_meta: list[dict] | None) -> int | None:
-    """등급 id → 등급 배지 CDN 번호. 번호 = get_meta("division") 원본 목록의 순서(0 = 슈퍼챔피언스 … 17 = 프로3)라
+    """등급 id → 등급 배지 CDN 번호. 번호 = get_meta("division") 원본 목록의 순서(0 = 슈퍼챔피언스 … 20 = 유망주3)라
     이름 dict 로는 못 낸다 — 원본 목록이 필요하다. 모르면 None(그림 없이 글자만)."""
     if div_id is None:
         return None
