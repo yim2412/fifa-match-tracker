@@ -51,23 +51,34 @@ min_sigma = {k: G[k] / A.Z for k in KEYS}
 print("  " + " · ".join(f"{LAB[k][:4]} {min_sigma[k]:.2f}" for k in KEYS))
 
 # ── 판정 대상(분리비 점추정 ≥ min_ratio AND σ ≥ min_sigma) — 정규 근사 검사는 아래
-print("\n[⑤ 정규 근사: 가중 경험 CDF 대 Φ((x−m)/√v) 최대 차 (%p)] — 5%p 넘으면 판정 대상에서 뺀다")
-ks = {}
+print("\n[⑤ 정규 근사: 가중 경험 CDF 대 Φ((x−m)/√v) 최대 차 (%p)] — 참값이 정규일 때 같은 가중·같은 표본에서 나오는 KS 의 95% 점을 넘으면 뺀다")
+print("   (고정 5%p 는 n_eff 75 에서 표본 오차만으로 약 15%p 라 통과 불가였다 — 10-12 단계 0 1차)")
+
+
+def weighted_ks(xs, w, m, sd):
+    ds = sorted(zip(xs, w)); tot = sum(w); acc = 0; mx = 0
+    for x, wi in ds:
+        acc += wi
+        p = A.PHI((x - m) / sd)
+        mx = max(mx, abs(acc / tot - p), abs((acc - wi) / tot - p))
+    return mx
+
+
+KS_REPS = 500
+ks, ks95 = {}, {}
 for k in KEYS:
-    r = res["res"][k]
-    ds = sorted(zip([d[k].diff for d in D], ws)); tot = sum(ws); acc = 0; mx = 0
-    for x, w in ds:
-        acc += w
-        mx = max(mx, abs(acc / tot - A.PHI((x - r["m"]) / math.sqrt(r["v"]))), abs((acc - w) / tot - A.PHI((x - r["m"]) / math.sqrt(r["v"]))))
-    ks[k] = 100 * mx
-print("  " + " · ".join(f"{LAB[k][:4]} {ks[k]:.1f}" for k in KEYS))
+    r = res["res"][k]; sd = math.sqrt(r["v"])
+    ks[k] = 100 * weighted_ks([d[k].diff for d in D], ws, r["m"], sd)
+    null = sorted(100 * weighted_ks([rng.gauss(r["m"], sd) for _ in ws], ws, r["m"], sd) for _ in range(KS_REPS))
+    ks95[k] = null[int(0.95 * KS_REPS) - 1]
+print("  " + " · ".join(f"{LAB[k][:4]} {ks[k]:.1f}(95%점 {ks95[k]:.1f})" for k in KEYS))
 
 target = {}
 for k in KEYS:
     r = res["res"][k]
     ok_ratio = min_ratio[k] is not None and r["ratio"] >= min_ratio[k]
     ok_sig = r["sigma"] >= min_sigma[k]
-    ok_norm = ks[k] <= 5.0
+    ok_norm = ks[k] <= ks95[k]
     target[k] = ok_ratio and ok_sig and ok_norm
     print(f"  {LAB[k]:10s} 분리비 {r['ratio']:.2f}≥{min_ratio[k]} {'O' if ok_ratio else 'X'} · σ {r['sigma']:.2f}≥{min_sigma[k]:.2f} {'O' if ok_sig else 'X'} · 정규 {ks[k]:.1f} {'O' if ok_norm else 'X'}  → {'판정 대상' if target[k] else '41단계 유지'}")
 print("  판정 대상:", [LAB[k] for k in KEYS if target[k]])
@@ -121,4 +132,4 @@ for label, days in (("전체 범위", None), ("최근 14일", 14), ("최근 3일
             if (p <= 10 or p >= 90) and abs(d - r["m"]) >= 2 * math.sqrt(se * se + se_m * se_m):
                 chips += 1; per.setdefault(i, []).append(LAB[k])
     print(f"  {label}: 칩 {chips}/{tot} = {100*chips/tot if tot else float('nan'):.0f}%  계정별 {per}")
-json.dump({"min_ratio": min_ratio, "min_sigma": min_sigma, "ks": ks, "target": target, "stab": stab, "final": final}, open(A.HERE / "res1.json", "w"), ensure_ascii=False, indent=1)
+json.dump({"min_ratio": min_ratio, "min_sigma": min_sigma, "ks": ks, "ks95": ks95, "target": target, "stab": stab, "final": final}, open(A.HERE / "res1.json", "w"), ensure_ascii=False, indent=1)
