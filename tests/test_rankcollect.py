@@ -5,6 +5,7 @@ pytest 없이 `python tests/test_rankcollect.py`. 실제 넥슨에 붙는 스모
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import shutil
@@ -1840,6 +1841,32 @@ def test_opp_rank_season_boundary_is_rank_db_one():
             assert set(_opp_rows(w.c)) == {"in"}, _opp_rows(w.c)
         finally:
             w.close()
+
+
+def test_opp_rank_season_boundary_when_seq_rolls_before_the_season_table():
+    # M7 — 시즌 초기화로 목록이 줄어 seq 가 먼저 오르고 시즌표(ENDS)는 새 종료일을 아직 모른다. 이때 start 는 옛 시즌 시작일이라
+    # 그걸 경계로 쓰면 지난 시즌 마지막 날 밤 경기가 새 시즌 스냅숏 순위로 채워진다
+    ms = [_opp_match("old", "2026-10-10T22:00:00", "상대A"), _opp_match("new", "2026-10-11T13:00:00", "상대A")]
+    with Env() as env:
+        w = OppEnv(env, ms)
+        try:
+            _proc(w.c)
+            _msnap(w.c, datetime(2026, 10, 11, 12, 0), [_p(150, elo=1500.0, nick="상대A", grade=5)])
+            _proc(w.c)
+            ps = json.loads(rc.get_state(w.c)["person_season"])
+            assert ps["via"] == "seq", ps          # 이 테스트가 재려는 경로(시즌표 없이 seq 로 넘김)에 실제로 들어왔다
+            assert set(_opp_rows(w.c)) == {"new"}, _opp_rows(w.c)
+        finally:
+            w.close()
+
+
+def test_opp_band_edges():
+    # 손으로 센 경계 — 순위는 상한 포함(200 은 첫 구간), 격차는 칸의 아래 끝 포함(-300 은 둘째 칸)
+    assert [rc.opp_rank_band(r) for r in (1, 200, 201, 1000, 1001, 3000, 3001, 10000, 10001)] == \
+        [200, 200, 1000, 1000, 3000, 3000, 10000, 10000, None]
+    assert [rc.opp_gap_band(1000 + g, 1000) for g in (-301, -300, -151, -150, -51, -50, 49, 50, 149, 150, 299, 300)] == \
+        [0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6]
+    assert rc.opp_gap_band(None, 1000) is None and rc.opp_rank_band(None) is None
 
 
 def test_opp_rank_cleared_when_the_season_rolls():

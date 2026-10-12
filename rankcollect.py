@@ -1441,7 +1441,8 @@ def fill_opp_rank(conn: sqlite3.Connection, now: datetime, *, fifa_path: Path | 
     ps = _json_state(get_state(conn), "person_season")
     if not ps or not ps.get("at"):
         return 0
-    boundary = str(ps.get("start") or ps["at"])[:10]
+    # seq 로 먼저 넘긴 시즌의 start 는 아직 옛 시즌 시작일이다(시즌표가 늦게 따라온다) — 그 넘김 시각을 경계로
+    boundary = str(ps["at"] if ps.get("via") == "seq" else (ps.get("start") or ps["at"]))[:10]
     try:
         fconn = store.open_db(fifa_path or config.DB_PATH)
     except sqlite3.Error:
