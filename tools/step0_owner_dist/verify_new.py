@@ -18,7 +18,8 @@ MIN_GAMES = 800                                # 이만큼 못 받은 구단주�
 MAX_STALE_DAYS = 30                            # 마지막 경기가 수집일보다 이만큼 오래면 뺀다
 POP = {1: 200, 2: 800, 3: 2000}                # 층 가중(모집단 크기)
 CHIP_P = 10                                    # 칩: 백분위 ≤10 또는 ≥90
-SURE_P = 25                                    # 구간 안쪽 끝이 하위 25% / 상위 25% 안 (임시값 — 여기서 검증)
+SURE_P = 50                                    # 구간 안쪽 끝이 중앙값을 안 넘음. 1회차(25)는 ⓑ 77%·ⓓ 4/8 미달 → 2회차는 50 으로, 아래 NEW_FILE 의 또 다른 새 구단주로 검증
+NEW_FILE = "/rows1k_new2.jsonl"                # 2회차 새 표본 (1회차 rows1k_new.jsonl 은 SURE_P=25 로 미달)
 SAME_DIR_P = 25                                # ⓑ 다른 창이 같은 방향이라 보는 기준: 백분위 ≤25 / ≥75
 WINDOW = 1000                                  # 내 값 창(최근→과거로 1000판씩, 최대 8개)
 MAX_WINDOWS = 8
@@ -68,7 +69,7 @@ def wpct(vals, ws, x):
 
 
 def main():
-    new = load(TOOLS + r"\rows1k_new.jsonl")
+    new = load(TOOLS + NEW_FILE)
     old_all = load(TOOLS + r"\rows1k.jsonl")
     # 마지막 경기 기준일 = 새 표본에서 가장 늦은 마지막 경기(수집일 근처)
     ref = max(o["last"] for o in new if o.get("last"))

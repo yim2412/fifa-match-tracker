@@ -14,10 +14,12 @@ import collect0  # noqa: E402  (sample/sample4/dev_key 재사용)
 
 HERE = Path(__file__).parent
 OUT = HERE / "rows1k.jsonl"
-OUT_NEW = HERE / "rows1k_new.jsonl"       # 49단계 조각 ① 새 표본 검증 — OUT 에 있는 사람은 뽑지 않는다
+OUT_NEW2 = HERE / "rows1k_new2.jsonl"     # 49단계 조각 ① 2회차 — 앞 두 표본에 쓴 사람은 모두 뺀다
+OUT_NEW = HERE / "rows1k_new.jsonl"      # 49단계 조각 ① 새 표본 검증 — OUT 에 있는 사람은 뽑지 않는다
 PROG = Path.home() / ".claude" / "bg-progress.d" / "owner1k.txt"
 SEED = 20261013
 SEED_NEW = 20261014
+SEED_NEW2 = 20261015
 PAGE = 100
 PAUSE_429 = 60
 
@@ -30,7 +32,7 @@ def _keys(path):
     return {(j["stratum"], j["rank"]) for j in map(json.loads, path.read_text(encoding="utf-8").splitlines())} if path.exists() else set()
 
 
-def pick(per_stratum, fresh=False):
+def pick(per_stratum, fresh=False, fresh2=False):
     """collect0 의 3·4차 표본(닉네임 포함, rank.db 스냅숏 7 고정)에서 1~3층만, 층마다 per_stratum 명.
     fresh: 첫 1k 표본(rows1k.jsonl)에 쓴 사람을 뺀 나머지에서 새 시드로 — 조각 ① 새 표본 검증용."""
     pool = collect0.sample() + collect0.sample4()
@@ -38,13 +40,13 @@ def pick(per_stratum, fresh=False):
     for s in pool:
         if s[0] in (1, 2, 3):
             got.setdefault((s[0], s[1]), s)
-    if fresh:
-        used = _keys(OUT)
+    if fresh or fresh2:
+        used = _keys(OUT) | (_keys(OUT_NEW) if fresh2 else set())
         got = {k: v for k, v in got.items() if k not in used}
     out = []
     for st in (1, 2, 3):
         rows = sorted(v for k, v in got.items() if k[0] == st)
-        out += random.Random((SEED_NEW if fresh else SEED) + st).sample(rows, min(per_stratum, len(rows)))
+        out += random.Random((SEED_NEW2 if fresh2 else SEED_NEW if fresh else SEED) + st).sample(rows, min(per_stratum, len(rows)))
     return out
 
 
@@ -55,11 +57,12 @@ def main():
     ap.add_argument("--per-stratum", type=int, default=50)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--fresh", action="store_true", help="새 표본 검증 — rows1k_new.jsonl 로, 첫 표본 사람은 뺀다")
+    ap.add_argument("--fresh2", action="store_true", help="2회차 새 표본 — rows1k_new2.jsonl, 앞 두 표본 사람은 뺀다")
     a = ap.parse_args()
     key = collect0.dev_key()
-    out_path = OUT_NEW if a.fresh else OUT
+    out_path = OUT_NEW2 if a.fresh2 else OUT_NEW if a.fresh else OUT
     done = _keys(out_path)
-    todo = [s for s in pick(a.per_stratum, a.fresh) if (s[0], s[1]) not in done]
+    todo = [s for s in pick(a.per_stratum, a.fresh, a.fresh2) if (s[0], s[1]) not in done]
     by = {k: [s for s in todo if s[0] == k] for k in (1, 2, 3)}
     order = [by[k][i] for i in range(max(map(len, by.values()), default=0)) for k in (1, 2, 3) if i < len(by[k])]
     if a.limit:
