@@ -17,6 +17,8 @@ SEED = 20261012
 TIERS = [(1, 200), (201, 1000), (1001, 3000), (3001, 10000)]
 MATCHTYPE = 52
 N_MATCH = 100
+# 표본을 뽑는 스냅숏 고정(10-12 단계 0 당시 최신). "최신" 으로 두면 수집 도중 새 스냅숏이 쌓일 때 재개분이 다른 사람들로 섞인다
+SNAPSHOT_ID = 7
 
 
 def dev_key() -> str:
@@ -28,7 +30,7 @@ def dev_key() -> str:
 
 def sample(per: int):
     rc = sqlite3.connect(f"file:{config.DATA_DIR / 'rank.db'}?mode=ro", uri=True)
-    sid = rc.execute("SELECT id FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1").fetchone()[0]
+    sid = SNAPSHOT_ID
     out = []
     for i, (lo, hi) in enumerate(TIERS):
         rows = rc.execute("SELECT rank, profile_sn, nickname FROM snapshot_rows WHERE snapshot_id=? AND rank BETWEEN ? AND ? ORDER BY rank",
