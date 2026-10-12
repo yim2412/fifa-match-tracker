@@ -517,6 +517,67 @@ def run_2b(db_path) -> None:
     print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
 
 
+def _mark_mine(S, matches, db_path):
+    conn = sqlite3.connect("file:" + str(db_path).replace("\\", "/") + "?mode=ro", uri=True)
+    accounts = [r[0] for r in conn.execute("SELECT ouid FROM accounts")]
+    conn.close()
+    side_ouid = np.array([matches[m][2][s] if s < len(matches[m][2]) else None for m, s in zip(S["match"], S["side"])],
+                         dtype=object)
+    S["is_mine"] = np.isin(side_ouid, np.array(accounts, dtype=object))
+    S["shooter"] = side_ouid
+    return accounts
+
+
+def _unseen(S, label, tr, te, accounts) -> str:
+    """측정 2c 판정 1·2 — 처음 보는 슈터(내 계정 검증 슛)에게 보정이 맞나. 고른 표 이름('C1o'·'C1'·None)을 돌려준다."""
+    mine_te = te[S["is_mine"][te]]
+    print(f"\n[2c · {label}] 학습 {len(tr):,}(내 계정 아닌 쪽 {int((~S['is_mine'][tr]).sum()):,}) · 판정 무리 = 검증의 내 계정 슛 {len(mine_te):,}")
+    c1o = C1o().fit(S, tr)
+    print(f"  C1o 격자 칸 {c1o.cells} · 학습 슛 {int(GRID_K)}개 미만 칸 {c1o.thin} (k 당김)")
+    m = metrics(S, mine_te, c1o.predict(S, mine_te))
+    ok, why = calib_ok(m)
+    print(f"  [판정 1 · C1o] 로그손실 {m['logloss']:.4f} · ECE {m['ece']*100:.2f}%p · 평균 차 {m['mean_diff']*100:.2f}%p → {why}")
+    per = []
+    for a in accounts:
+        g = mine_te[S["shooter"][mine_te] == a]
+        if len(g):
+            per.append((len(g), float(c1o.predict(S, g).mean() - S["goal"][g].mean())))
+    per.sort(reverse=True)
+    print("  보고 · 계정별(검증 슛 수, 예측−실제 %p): " + " · ".join(f"{n:,} {d*100:+.1f}" for n, d in per))
+    if ok:
+        return "C1o"
+    preds, idxs = [], []
+    for a in accounts:
+        g = mine_te[S["shooter"][mine_te] == a]
+        if not len(g):
+            continue
+        model = C1().fit(S, tr[S["shooter"][tr] != a])
+        preds.append(model.predict(S, g))
+        idxs.append(g)
+    allg = np.concatenate(idxs)
+    m2 = metrics(S, allg, np.concatenate(preds))
+    ok2, why2 = calib_ok(m2)
+    print(f"  [판정 2 · 계정 하나씩 빼고 C1] {len(allg):,}슛 · 로그손실 {m2['logloss']:.4f} · ECE {m2['ece']*100:.2f}%p · "
+          f"평균 차 {m2['mean_diff']*100:.2f}%p → {why2}")
+    return "C1" if ok2 else None
+
+
+def run_2c(db_path) -> None:
+    """측정 2c(ROADMAP 43 "측정 2c — 처음 보는 슈터에게 맞나", 시작 커밋 34ca596)."""
+    t0 = datetime.now()
+    S, matches = load_shots(db_path)
+    accounts = _mark_mine(S, matches, db_path)
+    pk = S["type"] == PK_TYPE
+    train_m, test_m, _recent, _cut = time_split(S, matches)
+    idx = np.arange(len(S["goal"]))
+    a5 = _unseen(S, "A5 전체 슛", idx[train_m & ~pk], idx[test_m & ~pk], accounts)
+    print(f"  ⇒ A5 실을 표: {a5 or '없음 — C0 유지 · A5 를 뺀다'}")
+    ot = S["on_target"]
+    a4 = _unseen(S, "A4 유효슛", idx[train_m & ~pk & ot], idx[test_m & ~pk & ot], accounts)
+    print(f"  ⇒ A4 유효슛 표: {a4 or '없음 — A4 를 뺀다'}")
+    print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
+
+
 # ── 자기 점검 ──────────────────────────────────────────────────────────────
 def _fake(n_match: int, truth: str, rng) -> tuple[dict, list]:
     """지어낸 슛 — truth='c0' 면 골이 C0 확률대로, 'grid' 면 C0 와 다른 칸별 확률대로(헤더·먼 거리에서 크게 어긋나게)."""
@@ -575,10 +636,13 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--2b", dest="m2b", action="store_true", help="측정 2b — 내 계정 슛을 뺀 격자(C1o)")
+    ap.add_argument("--2c", dest="m2c", action="store_true", help="측정 2c — 처음 보는 슈터(내 계정 슛)로 보정 판정")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
-    if a.m2b:
+    if a.m2c:
+        run_2c(config.DB_PATH)
+    elif a.m2b:
         run_2b(config.DB_PATH)
     else:
         run(config.DB_PATH)
