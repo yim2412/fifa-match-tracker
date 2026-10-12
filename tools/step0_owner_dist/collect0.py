@@ -53,6 +53,31 @@ def sample(target=TARGET, prefix=PREFIX):
     return out
 
 
+OUT4 = Path(__file__).parent / "rows4.jsonl"
+TARGET4 = {2: 240, 3: 240}               # 4차 Q2 — 층 1 은 3차 전원(rows100)을 다시 쓰므로 안 받는다
+
+
+def sample4(target=TARGET4):
+    """4차 Q2: 층 2·3 에서 3차에 쓴 사람(rows100.jsonl 의 (층, 순위))을 빼고 새 시드 SEED+400+층번호-1 로 뽑는다."""
+    used = set()
+    for line in OUT.read_text(encoding="utf-8").splitlines():
+        j = json.loads(line)
+        used.add((j["stratum"], j["rank"]))
+    rc = sqlite3.connect(f"file:{config.DATA_DIR / 'rank.db'}?mode=ro", uri=True)
+    out = []
+    for i, (lo, hi) in enumerate(TIERS):
+        st = i + 1
+        if st not in target:
+            continue
+        rows = rc.execute("SELECT rank, profile_sn, nickname FROM snapshot_rows WHERE snapshot_id=? AND rank BETWEEN ? AND ? ORDER BY rank",
+                          (SNAPSHOT_ID, lo, hi)).fetchall()
+        fresh = [r for r in rows if (st, r[0]) not in used]
+        for r in random.Random(SEED + 400 + i).sample(fresh, target[st]):
+            out.append((st, r[0], r[1], r[2]))
+    rc.close()
+    return out
+
+
 class Stop(Exception):
     pass
 
@@ -61,24 +86,27 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--workers", type=int, default=WORKERS)
+    ap.add_argument("--round", type=int, default=3, choices=(3, 4))
     a = ap.parse_args()
+    out_path = OUT4 if a.round == 4 else OUT
     key = dev_key()
     fc0 = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True)
     known_ouid = {r[0] for r in fc0.execute("SELECT ouid FROM ranker_squads WHERE ouid IS NOT NULL")}
     fc0.close()
     done = set()
-    if OUT.exists():
-        for line in OUT.read_text(encoding="utf-8").splitlines():
+    if out_path.exists():
+        for line in out_path.read_text(encoding="utf-8").splitlines():
             j = json.loads(line)
             done.add((j["stratum"], j["rank"]))
-    todo = [s for s in sample() if (s[0], s[1]) not in done]
+    todo = [s for s in (sample4() if a.round == 4 else sample()) if (s[0], s[1]) not in done]
     # 층을 번갈아 — 중간에 멈춰도 층 균형이 유지된다
     by = {k: [s for s in todo if s[0] == k] for k in range(1, 5)}
     order = [by[k][i] for i in range(max(map(len, by.values()), default=0)) for k in range(1, 5) if i < len(by[k])]
     if a.limit:
         order = order[: a.limit]
     total = len(order)
-    print(f"표본 {sum(TARGET.values())}명 중 받은 것 {len(done)} · 이번에 {total}명 · 동시 {a.workers}", flush=True)
+    want = sum((TARGET4 if a.round == 4 else TARGET).values())
+    print(f"{a.round}차 · 표본 {want}명 중 받은 것 {len(done)} · 이번에 {total}명 · 동시 {a.workers} · → {out_path.name}", flush=True)
 
     local = threading.local()
     lock = threading.Lock()
@@ -156,11 +184,11 @@ def main():
             print(f"건너뜀 층{stratum} {rank}위: {type(e).__name__} {str(e)[:80]}", flush=True)
             return
         with lock:
-            with OUT.open("a", encoding="utf-8") as f:
+            with out_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
             st["done"] += 1
             el = time.time() - t_start
-            msg = (f"owner0 3차 {st['done']}/{total} · 경과 {int(el)}초 · 요청 {st['req']} · "
+            msg = (f"owner0 {a.round}차 {st['done']}/{total} · 경과 {int(el)}초 · 요청 {st['req']} · "
                    f"초당 {st['req']/max(el,1):.0f}요청 · 응답 {st['sec']/max(st['req'],1):.2f}초")
             PROG.parent.mkdir(parents=True, exist_ok=True)
             PROG.write_text(msg, encoding="utf-8")

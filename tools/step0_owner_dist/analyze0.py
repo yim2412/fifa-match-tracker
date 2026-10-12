@@ -1,7 +1,7 @@
 """42단계 단계 0 분석 — rows100.jsonl(구단주 160명 · 100판) + fifa.db(내 계정 4개, 읽기 전용). 판정 규칙은 ROADMAP 단계 0 시작 커밋(4c35486) 그대로.
     python analyze0.py [--boot 1000]
 """
-import argparse, json, math, random, sqlite3, statistics, sys
+import argparse, json, math, os, random, sqlite3, statistics, sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -40,6 +40,11 @@ def stats_of(ds, ses, ws):
 
 ROWS_FILE = "rows100.jsonl"           # collect0.OUT 과 같아야 한다 (30판 때는 rows.jsonl)
 SNAP_DAY = datetime(2026, 10, 12)
+# 4차(ROADMAP "단계 0 4차 — 새 계획") — 범위 1~3000위 · 층 1 은 3차 전원 재사용 · 층 2·3 은 rows4.jsonl(새 표본)
+ROUND = int(os.environ.get("OWNER0_ROUND", "3"))
+RES_FILE = "res.json" if ROUND == 3 else f"res_r{ROUND}.json"
+if ROUND == 4:
+    POP = {1: 200, 2: 800, 3: 2000}
 
 
 def keep_owners(owners):
@@ -53,13 +58,21 @@ def keep_owners(owners):
     return out
 
 
-def load_owners():
+def _read_rows(name, strata=None):
     out = []
-    for line in (HERE / ROWS_FILE).read_text(encoding="utf-8").splitlines():
+    for line in (HERE / name).read_text(encoding="utf-8").splitlines():
         j = json.loads(line)
-        if "error" in j:
+        if "error" in j or (strata is not None and j["stratum"] not in strata):
             continue
         out.append(j)
+    return out
+
+
+def load_owners():
+    if ROUND == 4:
+        out = _read_rows(ROWS_FILE, {1}) + _read_rows("rows4.jsonl", {2, 3})   # 4차 Q2
+    else:
+        out = _read_rows(ROWS_FILE)
     seen = {}
     for j in out:                       # 첫 수집이 안 죽고 두 프로세스가 같은 구단주를 두 번 적었다 — 먼저 적힌 것만
         seen.setdefault((j["stratum"], j["rank"]), j)
@@ -169,14 +182,15 @@ def main():
     P.append(("P2 계정1 유효슛당 골 d<m", mine_all[1][1]["goals_per_on_target"].diff < res["goals_per_on_target"]["m"]))
     P.append(("P3 m(결정력)>0", res["finish"]["m"] > 0))
     med = {t: statistics.median([d["finish"].diff for d, o in zip(D, keep) if o["stratum"] == t]) for t in POP}
-    P.append(("P4 층1 결정력 중앙값 > 층4", med[1] > med[4]))
+    last = max(POP)                       # 4차는 층 4 가 없다 → 층1 > 층3 (Q4)
+    P.append((f"P4 층1 결정력 중앙값 > 층{last}", med[1] > med[last]))
     P.append(("P5 분리비 점유율>결정력", res["possession"]["ratio"] > res["finish"]["ratio"]))
     P.append(("P6 분리비 경기당슛>유효슛당골", res["shots"]["ratio"] > res["goals_per_on_target"]["ratio"]))
     P.append(("P7 분리비 롱·스루>결정력", res["long_through_rate"]["ratio"] > res["finish"]["ratio"]))
     for n, ok in P:
         print(f"  {'맞음' if ok else '틀림'}  {n}")
     print(f"  → {sum(ok for _, ok in P)}/7 (통과 ≥6)")
-    json.dump({"res": res, "G": G, "my_days": my_days}, open(HERE / "res.json", "w"), ensure_ascii=False, indent=1)
+    json.dump({"res": res, "G": G, "my_days": my_days}, open(HERE / RES_FILE, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
 
 if __name__ == "__main__":

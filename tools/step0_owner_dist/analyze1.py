@@ -9,7 +9,7 @@ owners = A.keep_owners(A.load_owners())
 D = [A.owner_diffs(o) for o in owners]
 ws = A.weights(owners)
 strata = [o["stratum"] for o in owners]
-res = json.load(open(A.HERE / "res.json", encoding="utf-8"))
+res = json.load(open(A.HERE / A.RES_FILE, encoding="utf-8"))
 G = res["G"]
 KEYS = A.KEYS
 LAB = {k: habits.METRICS[k].label for k in KEYS}
@@ -82,7 +82,8 @@ for k in KEYS:
     target[k] = ok_ratio and ok_sig and ok_norm
     print(f"  {LAB[k]:10s} 분리비 {r['ratio']:.2f}≥{min_ratio[k]} {'O' if ok_ratio else 'X'} · σ {r['sigma']:.2f}≥{min_sigma[k]:.2f} {'O' if ok_sig else 'X'} · 정규 {ks[k]:.1f} {'O' if ok_norm else 'X'}  → {'판정 대상' if target[k] else '41단계 유지'}")
 print("  판정 대상:", [LAB[k] for k in KEYS if target[k]])
-CHIP = ("finish", "on_target_rate", "tackle_rate")
+CHIP = ("finish", "on_target_rate", "tackle_rate") if A.ROUND == 3 else ("finish", "goals_per_on_target")   # 4차 Q3
+CHIP_NEED = 2                                                                                          # 3차: 셋 중 2 · 4차: 둘 다
 AX = ("possession", "shots", "long_through_rate", "tackles")
 print(f"  (안정성 전) 칩 지표 셋 중 {sum(target[k] for k in CHIP)}/3 · A1 축 넷 중 {sum(target[k] for k in AX)}/4 — A1 은 3차 R1 로 판정 밖")
 
@@ -112,7 +113,7 @@ print("  " + " · ".join(f"{LAB[k][:4]} {stab[k]:.1f}" for k in KEYS))
 final = {k: target[k] and stab[k] <= 8.0 for k in KEYS}
 print("  안정성 ≤8 && 위 대상 →", [LAB[k] for k in KEYS if final[k]])
 n_chip = sum(final[k] for k in CHIP)
-print(f"  [기준 4 · 3차 R1] 칩 지표 셋 중 판정 대상 {n_chip}/3 (2 이상) → {'✓' if n_chip >= 2 else '✗'}")
+print(f"  [기준 4 · {A.ROUND}차] 칩 지표 {[LAB[k] for k in CHIP]} 중 판정 대상 {n_chip}/{len(CHIP)} ({CHIP_NEED} 이상) → {'✓' if n_chip >= CHIP_NEED else '✗'}")
 
 # ── 칩 발생률: 판정 대상 지표 × 4계정. 판정 창은 3차 R2 로 '최근 100판'(구단주 쪽 판수와 같게) — 나머지는 보고만
 today = datetime(2026, 10, 12, 23, 59)
@@ -140,4 +141,5 @@ for label, days, games in (("최근 100판 [판정 · 3차 R2]", None, 100), ("�
     if games == 100:
         verdict = f" → [기준 3] {'✓' if tot and 0 < rate <= 30 else '✗'} (0 초과 30% 이하)"
     print(f"  {label}: 칩 {chips}/{tot} = {rate:.0f}%  계정별 {per}{verdict}")
-json.dump({"min_ratio": min_ratio, "min_sigma": min_sigma, "ks": ks, "ks95": ks95, "target": target, "stab": stab, "final": final}, open(A.HERE / "res1.json", "w"), ensure_ascii=False, indent=1)
+json.dump({"min_ratio": min_ratio, "min_sigma": min_sigma, "ks": ks, "ks95": ks95, "target": target, "stab": stab, "final": final},
+          open(A.HERE / A.RES_FILE.replace("res", "res1", 1), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
