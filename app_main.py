@@ -48,6 +48,7 @@ import config
 import core_api as core
 import crashlog
 import images
+import methods
 import notice
 import playerinfo
 import rankcollect
@@ -2701,7 +2702,8 @@ class MainWindow(QMainWindow):
     NAV = [
         (None, [("대시보드", "_build_dashboard_page")]),
         ("경기", [("경기 목록", "_build_matches_tab"),
-                 ("상대 전적", "_build_opponents_tab"),
+                 ("상대 전적", Tabs("opps", (("전적", "_build_opponents_tab"),
+                                            ("상대 순위", "_build_opp_rank_tab")))),
                  ("구단주 비교", "_build_compare_tab")]),
         ("흐름", [("흐름 분석", "_build_analysis_tab"),
                  ("승률 그래프", Tabs("trend", (("승률·등급", "_build_trend_tab"),
@@ -2715,7 +2717,8 @@ class MainWindow(QMainWindow):
                                                 ("규율·불운", "_build_discipline_tab"),
                                                 ("등급 체류", "_build_divstay_tab"),
                                                 ("운 범위", "_build_luck_tab"),
-                                                ("경기 습관", "_build_habits_tab")))),
+                                                ("경기 습관", "_build_habits_tab"),
+                                                ("FC 보상", "_build_rewards_tab")))),
                    ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
                                                    ("경기 결과", "_build_results_tab"),
                                                    ("패스 스타일", "_build_pass_style_tab")))),
@@ -2744,6 +2747,7 @@ class MainWindow(QMainWindow):
                  ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
                                               ("추천", "_build_recommend_tab")))),
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
+        ("도움말", [("산출 방법", "_build_methods_page")]),    # 2.9.1 D2 — 정적 글(methods.py)
     ]
     # 1.x 메뉴 이름 → 2.1.1 의 (메뉴, 탭). settings.ini 의 view/page 가 옛 이름이면 새 자리로 연다(U4 — 알림 띠는 없다)
     OLD_PAGE_NAMES = {
@@ -3792,6 +3796,57 @@ class MainWindow(QMainWindow):
         if st.gaps:
             parts.append(f"기록 빈 구간 {st.gaps}곳({config.N2_GAP_DAYS}일 넘게 경기 없음) — 그 사이 승강은 모릅니다")
         self.lb_divstay_note.setText(" · ".join(parts) + f" ({self._scope_text()} 기준)")
+
+    REWARD_COLUMNS = ["등급", "이긴 판", "FC 합계"]
+
+    def _build_rewards_tab(self) -> QWidget:
+        """성적 진단 [FC 보상](43단계 A2) — 이긴 경기의 그 당시 등급 × 승리당 FC 표(config.FC_REWARDS)."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_rewards_summary = QLabel("")
+        self.lb_rewards_summary.setWordWrap(True)
+        v.addWidget(self.lb_rewards_summary)
+        self.lb_rewards_note = QLabel("")
+        self.lb_rewards_note.setWordWrap(True)
+        self.lb_rewards_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_rewards_note)
+        self.tbl_rewards = self._make_table(self.REWARD_COLUMNS, icons={0: "division"})
+        v.addWidget(self.tbl_rewards, 1)
+        return w
+
+    def _reward_rule_text(self) -> str:
+        """보상 규칙 글 — 표(config.FC_REWARDS)에서 만든다. 값이 바뀌면 글도 같이 바뀐다."""
+        latest: dict[int, int] = {}
+        for start, div, fc in sorted(config.FC_REWARDS, key=lambda r: r[0]):
+            latest[div] = fc
+        return " · ".join(f"{self._division_names.get(d, str(d))} {fc} FC"
+                          for d, fc in sorted(latest.items(), reverse=True))
+
+    def _render_rewards(self, details: list[dict]) -> None:
+        rows = core.win_divisions(details, self._ouid) if self._ouid else []
+        r = core.win_rewards(rows)
+        # 높은 등급부터(id 작은 것 — 정렬값을 음수로, 등급 체류 표와 같다)
+        self._fill(self.tbl_rewards, [[IconCell(self._division_names.get(d, str(d)), -d, self._division_icon_key(d)),
+                                       (f"{n:,}", n), (f"{fc:,}", fc)]
+                                      for d, (n, fc) in sorted(r.by_division.items())])
+        if not r.games:
+            self.lb_rewards_summary.setText("이긴 경기를 셀 경기가 없습니다.")
+            self.lb_rewards_note.setText("")
+            return
+        if not r.rewarded_wins:
+            self.lb_rewards_summary.setText(f"이긴 {r.wins:,}판 중 FC 를 주는 등급({self._reward_rule_text()})에서 이긴 판이 없습니다.")
+        else:
+            self.lb_rewards_summary.setText(
+                f"이긴 {r.wins:,}판 중 {r.rewarded_wins:,}판에서 FC {r.fc:,} · 100판당 {r.per_100:,.0f} FC")
+        parts = [f"기준: 이긴 판마다 {self._reward_rule_text()} — 넥슨 공식 수치가 아닌 확인값이라 바뀌면 틀릴 수 있습니다",
+                 f"이 PC 에 저장된 {r.games:,}판 기준(넥슨은 약 한 달치만 줘서 앱을 안 켠 기간은 빠집니다)",
+                 "지난 시즌에도 지금 보상값을 그대로 적용",
+                 "경기에 기록된 등급 그대로 셉니다(승격한 경기도 따로 다루지 않습니다)"]
+        if r.forfeit_wins:
+            parts.append(f"상대 탈주로 이긴 {r.forfeit_wins:,}판 포함")
+        if r.unknown_wins:
+            parts.append(f"등급 기록이 없는 승리 {r.unknown_wins:,}판은 합계에서 뺐습니다")
+        self.lb_rewards_note.setText(" · ".join(parts) + f" ({self._scope_text()})")
 
     # ── 성적 진단 [운 범위] · [경기 습관] (2.7.1 N16·A3·N20) ───────────────────────
     def _launch_streak(self) -> None:
@@ -5552,7 +5607,7 @@ class MainWindow(QMainWindow):
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
     RANK_VIEW_KEYS = ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist",
                       "daywr", "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                      "traits")
+                      "traits", "opprank")
 
     def _invalidate_rank_views(self) -> None:
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
@@ -5564,7 +5619,8 @@ class MainWindow(QMainWindow):
         """정리 결과에 화면이 읽는 것을 바꾼 일이 있나 — 1시간 확인마다 돌아서, 없으면 다시 그리지 않는다."""
         if not isinstance(out, dict):
             return False
-        return bool(out.get("pruned") or out.get("anon") or out.get("person") or out.get("purged") or out.get("rolled"))
+        return bool(out.get("pruned") or out.get("anon") or out.get("person") or out.get("purged") or out.get("rolled")
+                    or out.get("opp"))
 
     def _on_rank_maintained(self, out) -> None:
         if self.maint_changed(out):
@@ -5588,6 +5644,111 @@ class MainWindow(QMainWindow):
                 rconn.close()
         except sqlite3.Error:
             return None
+
+    def _build_methods_page(self) -> QWidget:
+        """도움말 › 산출 방법(2.9.1 D2) — 글은 methods.py 가 만든다(수치는 config·xg_grid·analysis 에서 읽음)."""
+        tb = _notice_browser(methods.page_html(self._division_names))
+        self.tb_methods = tb
+        return tb
+
+    # ── 상대 전적 [상대 순위](43단계 N23) — 내 경기 × rank.db match_opp_rank(그 시즌 동안만) ─────────────────────
+    OPP_RANK_COLUMNS = ["상대 순위", "경기", "승", "무", "패", "승률"]
+    OPP_GAP_COLUMNS = ["점수 격차 (상대 − 나)", "경기", "승", "무", "패", "승률"]
+
+    def _build_opp_rank_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_opprank_note = self._note_label()
+        v.addWidget(self.lb_opprank_note)
+        gb = QGroupBox("상대가 그날 몇 위였나")
+        box = QVBoxLayout(gb)
+        self.tbl_opprank = self._make_table(self.OPP_RANK_COLUMNS)
+        self.tbl_opprank.setSortingEnabled(False)   # 순위 순서가 정보다
+        self.tbl_opprank.setMinimumHeight(170)
+        box.addWidget(self.tbl_opprank)
+        v.addWidget(gb)
+        gb = QGroupBox("점수가 나보다 얼마나 높았나")
+        box = QVBoxLayout(gb)
+        self.lb_oppgap_note = self._note_label()
+        box.addWidget(self.lb_oppgap_note)
+        self.tbl_oppgap = self._make_table(self.OPP_GAP_COLUMNS)
+        self.tbl_oppgap.setSortingEnabled(False)
+        self.tbl_oppgap.setMinimumHeight(220)
+        box.addWidget(self.tbl_oppgap)
+        v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _opp_rank_block(self) -> str:
+        """[상대 순위] 를 못 그리는 이유 한 줄 — 안 막혔으면 "". 순서: 수집 꺼짐 → 동의 → 내 계정(거래 화면과 같은 판정)."""
+        if not (config.WEB_DATA and config.RANK_COLLECT):
+            return self.rank_off_note("내 경기마다 상대가 그날 몇 위였는지를 붙입니다")
+        if config.NOTICE_ACCEPTED < config.OPP_RANK_NOTICE_VERSION:
+            return "새 이용 안내(상대 순위 구간)에 동의해야 모읍니다 — 창을 다시 열면 안내가 보입니다."
+        snap = self._trade_snapshot()
+        if snap is None:
+            return "내 계정을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다."
+        st = snap["state"]
+        mode = self._trade_mode(st)
+        if mode == "checking":
+            return "API 키 확인 중 — 끝나면 내 계정을 다시 맞춥니다."
+        if mode == "other":
+            return f"상대 순위는 내 계정({snap['names'].get(st.get('my_ouid'))})의 경기에서만 볼 수 있습니다."
+        if mode != "mine":
+            return "내 계정이 확인되지 않았습니다 — [스쿼드·이적 › 가계부] 에서 이 계정이 내 계정이라고 알려 주세요."
+        return ""
+
+    def _opp_table_rows(self, bands) -> list:
+        rows = []
+        for b in bands:
+            n = core.rated(b.win, b.draw, b.lose, b.mixed)
+            text = win_rate_text(b.win, b.draw, b.lose, b.mixed, short=True) if b.games else "—"
+            if b.games and core.is_weak(n, config.OPP_ROW_MIN):
+                text += f" · {sample_text(n, b.mixed)}"
+            rows.append([b.label, (f"{b.games:,}", b.games), (f"{b.win:,}", b.win), (f"{b.draw:,}", b.draw),
+                         (f"{b.lose:,}", b.lose), (text, core.win_pct(b.win, b.draw, b.lose, b.mixed) if b.games else -1.0)])
+        return rows
+
+    def _render_opp_rank(self) -> None:
+        why = self._opp_rank_block()
+        tr = None
+        if not why:
+            rows = self._rank_read(lambda c: core.opp_rank_rows(c, self._ouid))
+            if rows is None:
+                why = self.rank_off_note("내 경기마다 상대가 그날 몇 위였는지를 붙입니다")
+            elif not rows:
+                why = ("아직 채운 경기가 없습니다 — 수집 정리가 돌 때마다 이 시즌 안 최근 "
+                       f"{config.RANK_RAW_KEEP_DAYS}일 경기를 채웁니다(시즌이 바뀌면 지난 시즌 구간은 지워집니다).")
+            else:
+                tr = core.opp_rank_table(self._details, self._ouid, rows)
+                if core.is_weak(tr.known, config.OPP_MIN_KNOWN):
+                    why = (f"상대 순위를 알아낸 경기가 {tr.known:,}판입니다 — {config.OPP_MIN_KNOWN}판부터 표를 냅니다"
+                           f"(줄이 있는 내 경기 {tr.games:,}판 · 1만 위 밖이거나 닉네임이 바뀐 상대는 모릅니다).")
+        if why:
+            self.lb_opprank_note.setText(why)
+            self.lb_oppgap_note.setText("")
+            self._fill(self.tbl_opprank, [], enable_sort=False)
+            self._fill(self.tbl_oppgap, [], enable_sort=False)
+            return
+        self._fill(self.tbl_opprank, self._opp_table_rows(tr.by_rank), enable_sort=False)
+        self.lb_opprank_note.setText(
+            f"{self._scope_text()} · 줄이 있는 내 경기 {tr.games:,}판 중 상대 순위를 안 판 {tr.known:,}판(나머지 {tr.unknown:,}판은 "
+            f"1만 위 밖이거나 닉네임이 바뀌어 모릅니다) · 경기 시각 ±{config.OPP_SNAP_WINDOW_H}시간의 스냅숏으로 찾고 "
+            f"구간만 저장합니다(정확한 순위·점수는 안 남김) · 이 시즌 동안만 둡니다 · 1만 위 안 상대만 보여서 "
+            f"더 센 상대 쪽으로 치우쳐 있습니다")
+        if not core.is_weak(tr.gap_known, config.OPP_MIN_KNOWN):
+            self._fill(self.tbl_oppgap, self._opp_table_rows(tr.by_gap), enable_sort=False)
+            self.lb_oppgap_note.setText(f"내 점수도 안 {tr.gap_known:,}판 기준 — 상대 점수 − 내 점수(그날 스냅숏)")
+        else:
+            self._fill(self.tbl_oppgap, [], enable_sort=False)
+            self.lb_oppgap_note.setText(
+                f"점수 격차는 내 점수도 1만 위 안일 때만 잴 수 있습니다 — 알아낸 경기 {tr.gap_known:,}판"
+                f"({config.OPP_MIN_KNOWN}판부터 표를 냅니다).")
 
     @staticmethod
     def _note_label() -> QLabel:
@@ -7625,12 +7786,14 @@ class MainWindow(QMainWindow):
     # 2.1.1 — 그리기 단위는 (메뉴, 탭). 키 → 그 키가 그리는 자리들. 한 키를 여러 자리가 쓰면(teamcolor · 한 함수가
     # 탭 여럿을 채우는 diagnosis·tactics) 자리를 여럿 적는다 — 그중 하나가 보이면 그린다.
     VIEW_OF_KEY = {
-        "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", None)],
+        "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", "전적")],
+        "opprank": [("상대 전적", "상대 순위")],
         "analysis": [("흐름 분석", None)], "period": [("기간별 추이", None)], "seasons": [("시즌별 성적", None)],
         "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
         "luck": [("성적 진단", "운 범위")], "habits": [("성적 진단", "경기 습관")],
+        "rewards": [("성적 진단", "FC 보상")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
         "shotmap": [("슛 맵", "슛 맵")], "route": [("슛 맵", "공격 루트")],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
@@ -7652,6 +7815,7 @@ class MainWindow(QMainWindow):
         ("승률 그래프", "승률·등급"): "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
         ("승률 그래프", "점수·예측"): "_render_elo 가 EloLoader·PredictWorker 결과로 그린다(검색 결과에 안 묶인다)",
         ("선수로 구단주 찾기", None): "사용자가 [찾기] 를 눌러야 그린다 — 검색 결과에 안 묶인다(구단주 비교와 같다)",
+        ("산출 방법", None): "정적 글 — 만들 때 한 번 채우고(methods.page_html) 검색 결과에 안 묶인다",
     }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
 
@@ -7665,6 +7829,7 @@ class MainWindow(QMainWindow):
             "tactics": lambda: self._render_tactics(self._slice()[1]),
             # 시즌 범위 — 표시 구간(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
             "opponents": lambda: self._render_opponents(self._matches),
+            "opprank": self._render_opp_rank,   # 시즌 범위(self._details) × rank.db 의 N23 줄 — 그 시즌 동안만 있다
             # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
             "teamcolor": lambda: self._render_teamcolor_tabs(*self._teamcolor_scope()),
             "period": lambda: self._render_period(self._matches),
@@ -7675,6 +7840,7 @@ class MainWindow(QMainWindow):
             "divstay": lambda: self._render_divstay(self._details),   # 시즌 범위(diagnosis 와 같다)
             "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 띠는 그래프 '최근 N일'(sp_trend_days)
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
+            "rewards": lambda: self._render_rewards(self._details),   # 시즌 범위(diagnosis 와 같다)
             "shotmap": self._render_shotmap,  # 표시 구간
             "route": lambda: self._render_attack_route(self._slice()[1]),   # 표시 구간(슛 맵과 같다)
             "finishing": lambda: self._render_finishing(self._slice()[1]),

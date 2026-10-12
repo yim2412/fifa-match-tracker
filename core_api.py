@@ -35,6 +35,7 @@ from rankmeta import (
     FORMATION_HOWS, DayWinrate, Peers, RankMoves, TierMeans, ValueBins, ValueScore, Weekly, WinrateElo, blank_label,
     day_winrate, emblems_by_name, find_sn, formation_group, group_meta, latest_pair, my_day_rate, pair_text, rank_moves,
     ranked_nicknames, tier_means, value_bins, value_score, weekly, winrate_peers, winrate_to_elo,
+    OppBand, OppRank, opp_rank_rows, opp_rank_table,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -56,6 +57,7 @@ from stats import (
     shot_type_breakdown, team_color_baseline, team_color_mixed, team_color_stats, team_profile, time_of_day_rates,
     time_weekday_rates,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
+    WinDivision, WinRewards, reward_for, win_divisions, win_rewards,
 )
 
 __all__ = [
@@ -92,6 +94,8 @@ __all__ = [
     "WinrateElo", "blank_label", "day_winrate", "emblems_by_name", "find_sn", "formation_group", "group_meta", "latest_pair",
     "my_day_rate", "pair_text", "rank_moves", "ranked_nicknames", "tier_means", "value_bins", "value_score", "weekly",
     "winrate_peers", "winrate_to_elo",
+    # rankmeta — N23 상대 순위 구간(2.9.1)
+    "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",
@@ -108,4 +112,6 @@ __all__ = [
     "shot_distance_breakdown", "shot_map",
     "shot_type_breakdown", "team_color_baseline", "team_color_mixed", "team_color_stats", "team_profile", "time_of_day_rates",
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
+    # stats — A2 FC 보상(43단계)
+    "WinDivision", "WinRewards", "reward_for", "win_divisions", "win_rewards",
 ]

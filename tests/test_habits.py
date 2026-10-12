@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import config  # noqa: E402
 import habits  # noqa: E402
 import models  # noqa: E402
+import stats as stats_  # noqa: E402
 from models import MatchSummary, PeriodRate  # noqa: E402
 
 
@@ -701,6 +702,48 @@ def test_attack_routes_enough_floor_is_wired():
     finally:
         config.N18_MIN_SHOTS = old
     assert not habits.attack_routes([], "me").enough
+
+
+# ── A2 FC 보상 (43단계) ───────────────────────────────────────────────────────
+
+def _det(day, hour, result, division, mt=52, ouid="me"):
+    return {"matchId": f"{day}-{hour}", "matchType": mt, "matchDate": f"2026-09-{day:02d}T{hour:02d}:00:00",
+            "matchInfo": [{"ouid": ouid, "division": division, "matchDetail": {"matchResult": result}},
+                          {"ouid": "x", "division": 1000, "matchDetail": {"matchResult": "패"}}]}
+
+
+def test_win_rewards_counts_by_hand():
+    ds = [_det(1, 9, "승", 900), _det(1, 10, "승", 800), _det(1, 11, "패", 900), _det(1, 12, "무", 800),
+          _det(2, 9, "몰수승", 900), _det(2, 10, "승", 1000), _det(2, 11, "승", None), _det(2, 12, "오류", 900)]
+    r = stats_.win_rewards(stats_.win_divisions(ds, "me"))
+    # 900 승 2(일반 1 + 몰수 1) = 30 · 800 승 1 = 20 · 1000 승은 0 · division 없는 승 1 은 모름 · "오류" 는 분모에서도 뺀다
+    assert (r.games, r.wins, r.rewarded_wins, r.fc) == (7, 5, 3, 50), r
+    assert (r.unknown_wins, r.forfeit_wins) == (1, 1), r
+    assert r.by_division == {900: (2, 30), 800: (1, 20)}, r.by_division
+    assert abs(r.per_100 - 50 / 7 * 100) < 1e-9
+
+
+def test_win_rewards_ignores_other_match_types_and_other_players():
+    ds = [_det(1, 9, "승", 800, mt=40), _det(1, 10, "승", 800), _det(1, 11, "승", 800, ouid="other")]
+    r = stats_.win_rewards(stats_.win_divisions(ds, "me"))
+    assert (r.games, r.fc) == (1, 20), "다른 경기 종류·내가 안 낀 경기는 센 것이 없어야"
+
+
+def test_reward_table_dates_and_first_row_is_date_min():
+    assert all(start == date.min for start, _d, _fc in config.FC_REWARDS), "첫 줄 시작일은 맨 앞이어야 그 전 승리가 0 이 안 된다"
+    assert {d for _s, d, _f in config.FC_REWARDS} == {models.CHAMPION_DIVISION_ID, models.SUPER_CHAMPION_DIVISION_ID}
+    ds = [_det(1, 9, "승", 900), _det(10, 9, "승", 900)]
+    table = ((date.min, 900, 15), (date(2026, 9, 5), 900, 25))   # 9/5 부터 값이 바뀜
+    r = stats_.win_rewards(stats_.win_divisions(ds, "me"), table)
+    assert r.fc == 15 + 25, "경기 당시의 날짜로 값을 골라야(같은 표를 지난 경기에 소급하지 않는다)"
+    assert stats_.reward_for(900, date(2026, 9, 5), table) == 25 and stats_.reward_for(900, date(2026, 9, 4), table) == 15
+    assert stats_.reward_for(1000, date(2026, 9, 5), table) == 0
+
+
+def test_win_divisions_skips_unreadable():
+    ds = [_det(1, 9, "승", 900), {"matchInfo": [{"ouid": "me", "matchDetail": {"matchResult": "승"}}]},
+          {"matchDate": "엉망", "matchInfo": [{"ouid": "me", "matchDetail": {"matchResult": "승"}}]}]
+    assert len(stats_.win_divisions(ds, "me")) == 1
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

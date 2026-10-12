@@ -1,0 +1,78 @@
+"""산출 방법(2.9.1 D2) — 화면의 숫자가 어떻게 나왔는지 한곳에. 글은 정적이지만 **수치는 config·xg_grid·analysis 에서 읽는다**:
+상수를 고치면 글이 따라와서, 글만 낡아 거짓말이 되는 일이 없다(`test_parsing` 이 글에 상수가 실제로 들어가는지 본다).
+
+화면(`app_main`)은 `page_html()` 하나만 부른다. 색은 안 쓴다 — 읽는 위젯의 팔레트를 따른다(색은 theme.py 에서만).
+"""
+from __future__ import annotations
+
+import analysis
+import config
+import models
+import xg_grid
+
+# xG 격자를 세울 때 시험 경기(학습에 안 쓴 뒤쪽 30%)에서 잰 값 — ROADMAP 43단계 측정 2·2b·2d. 표를 다시 세우면 다시 잰다.
+XG_TEST_GAIN = "11%"             # 이전 식 대비 예측 오차(로그손실)가 줄어든 정도
+XG_TEST_CALIB = "1%p"            # 예측과 실제 골 비율 사이 평균 어긋남(보정 오차)
+
+
+def _grade(names: dict | None, division_id: int) -> str:
+    return (names or {}).get(division_id) or str(division_id)
+
+
+def _reward_rows(names: dict | None) -> str:
+    """보상표의 가장 새 값 — config.FC_REWARDS 에서(시작일이 늦은 줄이 이긴다)."""
+    latest: dict[int, int] = {}
+    for _start, div, fc in sorted(config.FC_REWARDS, key=lambda r: r[0]):
+        latest[div] = fc
+    return " · ".join(f"{_grade(names, d)} {fc} FC" for d, fc in sorted(latest.items(), reverse=True))
+
+
+def sections(names: dict | None = None) -> list[tuple[str, str]]:
+    """[(제목, 본문 html)] — 순서가 화면 순서. names = 등급 id → 이름(없으면 번호로)."""
+    checked = sorted(analysis.XG_CHECKED_DIVISIONS)
+    cell_d, cell_w, max_d, max_w = xg_grid.SHOT["cell"]
+    return [
+        ("승률", f"""
+<p>무승부는 <b>양쪽 다 {_grade(names, models.CHAMPION_DIVISION_ID)} 이상</b>인 경기에서는 나지 않습니다(연장·승부차기로 끝납니다).
+그래서 표 하나(그래프 하나)에 <b>무승부가 나는 경기와 안 나는 경기가 섞여 있으면 승÷(승+패)</b>,
+한쪽뿐이면 <b>승÷전체</b>로 셉니다. 어느 식인지는 숫자 옆에 늘 적혀 있습니다.</p>
+<p>경기 수가 적은 줄은 승률이 크게 흔들려서 막대를 흐리게 하거나 "표본 N" 을 붙입니다. 기준은 화면마다 다릅니다
+(표 한 줄 {config.OPP_ROW_MIN}판 · 결정력 문장은 슛 {analysis.MIN_SHOTS}개 …).</p>"""),
+        ("기대득점(xG)", f"""
+<p>슛 하나가 골이 될 확률을 <b>슛 위치(골대까지 거리·좌우 폭)와 슛 종류</b>로 어림한 값입니다. 경기장을 가로 {cell_d:g}m × 세로 {cell_w:g}m
+칸으로 나눠(거리 {max_d}칸 · 폭 {max_w}칸까지, 그 밖은 끝 칸에 합침) 칸마다 그 종류의 슛이 실제로 골이 된 비율을 담은 표입니다.
+슛이 적은 칸은 이웃 칸의 평균 쪽으로 당겨 값이 튀지 않게 했습니다. 페널티킥은 위치와 무관하게 {xg_grid.PK_RATE:.0%} 입니다.</p>
+<ul>
+<li><b>어디서 세웠나</b> — 감독모드 경기 {xg_grid.GENERATED} 기준 슛 {xg_grid.SHOT['shots']:,}개(페널티킥 제외). 개발자 PC 의 계정 슛은 빼서,
+자기 슛으로 자기 결정력을 재는 일이 없게 했습니다.</li>
+<li><b>얼마나 맞나</b> — 학습에 안 쓴 시험 경기에서 이전 식보다 예측 오차가 약 {XG_TEST_GAIN} 줄었고, 예측과 실제 골 비율의
+평균 어긋남은 약 {XG_TEST_CALIB} 였습니다.</li>
+<li><b>확인한 범위</b> — 슈터의 등급이 {_grade(names, checked[0])}~{_grade(names, checked[-1])}({", ".join(str(d) for d in checked)}번) 안인 경기에서 보정을
+확인했습니다. 그 밖의 등급은 슛이 모자라 못 쟀고, 내 주 등급이 밖이면 결정력 문장에 "확인하지 못했습니다" 가 붙습니다.</li>
+<li><b>한계</b> — 표본의 대부분이 상위 랭커끼리의 경기입니다. 슛 종류 코드 중 이름을 못 붙인 것(화면의 "알 수 없음")은 코드별로 따로 칸을
+가집니다. 골대에서 아주 먼 슛(끝 칸)은 전체 평균 쪽으로 당겨져 실제보다 높게 보일 수 있습니다.</li>
+<li><b>2.9.1 에서 바뀜</b> — 계산 방식이 바뀌어 <b>지난 경기의 xG 도 새 값으로 다시 계산됩니다</b>. 선수별 골−xG 의 부호가 바뀌는 카드가 있을 수 있습니다.</li>
+</ul>"""),
+        ("결정력 문장", f"""
+<p>"기대보다 잘/못 넣고 있다" 는 문장은 실제 골이 xG 합계보다 <b>{analysis.FINISH_GAP:.0f}% 이상</b> 벗어났고 슛이
+<b>{analysis.MIN_SHOTS}개 이상</b>일 때만 나옵니다. 방향만 보고 절대량은 믿지 않는 게 좋습니다(xG 는 어림값입니다).</p>"""),
+        ("FC 보상", f"""
+<p>[성적 진단 › FC 보상] 은 <b>이긴 경기마다 그 경기에 기록된 내 등급</b>으로 승리 보상을 더한 값입니다: {_reward_rows(names)}.
+그 밖의 등급은 보상이 없고, 상대 탈주로 이긴 경기도 센 것으로 둡니다.</p>
+<p>이 값은 <b>넥슨 공식 수치가 아니라 사용자가 확인해 준 값</b>이라 넥슨이 바꾸면 틀릴 수 있습니다. 지난 시즌에도 지금 값을 그대로 쓰고,
+이 PC 에 저장된 경기만 셉니다(넥슨은 약 한 달치만 줘서 앱을 안 켠 기간은 빠집니다).</p>"""),
+        ("상대 순위", f"""
+<p>[상대 전적 › 상대 순위] 는 랭킹 수집이 켜져 있을 때 <b>내 계정</b> 경기마다, 경기 시각 앞뒤 {config.OPP_SNAP_WINDOW_H}시간 안의
+랭킹 스냅숏에서 상대 닉네임을 찾아 <b>순위 구간</b>({" · ".join(str(b) for b in config.OPP_RANK_BANDS)}위 이하)과 <b>점수 격차 구간</b>을
+붙인 것입니다. 정확한 순위·점수는 저장하지 않고 이 시즌 동안만 둡니다.</p>
+<p>랭킹은 1만 위까지라 <b>그 밖의 상대·닉네임을 바꾼 상대는 모릅니다</b>. 보이는 상대는 더 센 쪽으로 치우쳐 있습니다.
+점수 격차는 내 점수도 1만 위 안일 때만 잴 수 있고, 알아낸 경기가 {config.OPP_MIN_KNOWN}판 밑이면 표를 내지 않습니다.</p>"""),
+        ("역산한 값과 근사치", """
+<p>슛 종류 이름·시간 구간 인코딩·포메이션 줄처럼 넥슨 공식 문서에 없는 값은 <b>실제 응답으로 역산</b>했습니다.
+근거는 코드 주석에 있고, 모르는 코드는 "알 수 없음" 으로 둡니다. 팀컬러·구단가치·랭킹은 넥슨 홈페이지의 <b>그 시점 값</b>이라
+경기 당시와 다를 수 있습니다.</p>"""),
+    ]
+
+
+def page_html(names: dict | None = None) -> str:
+    return "".join(f"<h3>{title}</h3>{body}" for title, body in sections(names))

@@ -270,7 +270,7 @@ class DashboardPage(QWidget):
         self.timeband.body.addStretch(1)
         grid.addWidget(self.timeband, 0, 1)
 
-        self.rivals = self._card("자주 만난 상대", ("상대 전적", None))
+        self.rivals = self._card("자주 만난 상대", ("상대 전적", "전적"))
         self.rival_bars = HBarList()
         self.rivals.body.addWidget(self.rival_bars)
         self.rivals.body.addStretch(1)

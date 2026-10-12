@@ -44,6 +44,7 @@ VACUUM 은 secure_delete 없이 지운 흔적(`raw_pruned` 0 인데 원본 없�
 """
 from __future__ import annotations
 
+import bisect
 import json
 import os
 import random
@@ -154,6 +155,12 @@ CREATE TABLE IF NOT EXISTS pick_days (
 ) WITHOUT ROWID;
 -- 센 경기 — 경기 번호라 원본과 같이 RANK_RAW_KEEP_DAYS 뒤 지운다(prune_raw)
 CREATE TABLE IF NOT EXISTS pick_counted (match_id TEXT PRIMARY KEY, day TEXT NOT NULL);
+-- 2.9.1 N23 — 내 계정 경기마다 상대의 그날 순위 구간(rank_band = 상한 순위 · NULL = 모름) · 점수 격차 구간(gap_band · NULL = 모름).
+-- 정확한 순위·점수·상대 닉네임은 안 남긴다(경기 기록의 상대와는 match_id 로 이어진다 — 안내에 적었다). 그 시즌 동안만:
+-- 시즌 넘김(_roll) · 관문 미달(purge_opp_rank_if_needed) · 수집 기록 지우기에서 지운다. 옛 버전은 이 표를 모른다(옆 표만)
+CREATE TABLE IF NOT EXISTS match_opp_rank (
+    match_id TEXT PRIMARY KEY, my_ouid TEXT NOT NULL, rank_band INTEGER, gap_band INTEGER, snap_day TEXT NOT NULL
+) WITHOUT ROWID;
 """
 PERSON_TABLES = ("run_open", "elo_season", "champ_watch")
 PERSON_STATE = ("person_prev", "person_season")
@@ -1218,6 +1225,7 @@ def _roll(conn: sqlite3.Connection) -> None:
                  " SELECT season_at, (julianday(last_at) - julianday(start_at)) * 24, censored_start, 1 FROM run_open")
     for t in PERSON_TABLES:
         conn.execute(f"DELETE FROM {t}")
+    conn.execute("DELETE FROM match_opp_rank")       # N23 도 그 시즌 동안만(PERSON_TABLES 와 따로 — 관문이 다르다)
     conn.execute("DELETE FROM collect_state WHERE key = 'person_prev'")
 
 
@@ -1379,12 +1387,139 @@ def purge_person_if_needed(conn: sqlite3.Connection) -> bool:
     return has
 
 
+def opp_rank_band(rank) -> int | None:
+    """상대 순위 → 구간(상한 순위). 1만 위 밖·모름은 None."""
+    if not isinstance(rank, int):
+        return None
+    return next((b for b in config.OPP_RANK_BANDS if rank <= b), None)
+
+
+def opp_gap_band(opp_elo, my_elo) -> int | None:
+    """점수 격차(상대 − 나) → 칸 번호. 한쪽이라도 모르면 None."""
+    if opp_elo is None or my_elo is None:
+        return None
+    return bisect.bisect_right(config.OPP_GAP_EDGES, opp_elo - my_elo)
+
+
+def purge_opp_rank_if_needed(conn: sqlite3.Connection) -> bool:
+    """N23 줄 지우기 — 사람별 표(purge_person_if_needed)와 **따로 판정**한다(M4: 관문 버전이 달라, 한 블록에 태우면 동의 6 으로
+    쌓은 사람별 줄이 같이 지워진다). ① 관문(.env 를 디스크에서 다시) 미달인데 줄이 있다 ② 수집을 켠 시각이 줄을 채운 때와 다르다.
+    수집 잠금 안에서 부른다. → 지운 게 있었나."""
+    allowed = config.read_opp_rank_allowed()
+    on_at = config.read_rank_on_at()
+    has = conn.execute("SELECT 1 FROM match_opp_rank LIMIT 1").fetchone() is not None
+    stale = allowed and (get_state(conn).get("opp_epoch") or None) != on_at
+    if not ((not allowed and has) or stale):
+        return False
+    with conn:
+        conn.execute("DELETE FROM match_opp_rank")
+        if allowed:
+            _put_state(conn, opp_epoch=on_at or "")
+    return has
+
+
+def _opp_snap_for(snaps: list[tuple[int, datetime, str]], when: datetime):
+    """경기 시각에 가장 가까운 스냅숏 — OPP_SNAP_WINDOW_H 안일 때만."""
+    best = min(snaps, key=lambda s: abs(s[1] - when), default=None)
+    if best is None or abs(best[1] - when) > timedelta(hours=config.OPP_SNAP_WINDOW_H):
+        return None
+    return best
+
+
+def fill_opp_rank(conn: sqlite3.Connection, now: datetime, *, fifa_path: Path | str | None = None,
+                  cancel: threading.Event | None = None) -> int:
+    """N23 채우기 — 내 계정의 감독모드 경기마다, 경기 시각 ±OPP_SNAP_WINDOW_H 의 스냅숏(지금 시즌 · 원본이 남은 14일)에서 상대 닉네임을
+    찾아 순위 구간·점수 격차 구간을 match_opp_rank 에 적는다. 못 찾은 상대(1만 위 밖·닉네임 바뀜)도 NULL 줄로 남긴다(M2 —
+    '아직 안 채운 경기' 와 '모르는 경기' 를 가른다). 가까운 스냅숏이 없는 경기는 줄을 안 만든다(나중 스냅숏이 올 수 있다).
+
+    조건: 관문(read_opp_rank_allowed) · 내 계정 = fifa.db trade_state 의 my_ouid **이고** key_fp 가 지금 API 키와 같을 때(M3 —
+    키가 바뀐 확인 전에는 안 채운다) · 시즌 기준은 rank.db 의 person_season(M7 — 시작일, 없으면 그 처리 시각) 하나.
+    내 계정이 바뀌면 옛 my_ouid 줄을 지운다. process_meta 의 사람별 처리 **뒤**에서만(그 첫 줄이 시즌 넘김으로 이 표를 지운다).
+    시간 상한 OPP_FILL_MAX_S — 넘으면 거기서 멈추고 다음 바퀴가 이어 채운다. 읽기만 하는 fifa.db 는 작업 스레드 연결. → 넣은 줄 수."""
+    if not config.read_opp_rank_allowed():
+        return 0
+    ps = _json_state(get_state(conn), "person_season")
+    if not ps or not ps.get("at"):
+        return 0
+    boundary = str(ps.get("start") or ps["at"])[:10]
+    try:
+        fconn = store.open_db(fifa_path or config.DB_PATH)
+    except sqlite3.Error:
+        return 0
+    try:
+        ts = store.trade_state(fconn)
+        mine = ts.get("my_ouid")
+        if not mine or ts.get("key_fp") != store.key_fingerprint(config.API_KEY):
+            return 0
+        with conn:
+            conn.execute("DELETE FROM match_opp_rank WHERE my_ouid != ?", (mine,))
+        seq = int(ps.get("seq") or 0)
+        snaps = []
+        for r in conn.execute(
+                "SELECT s.id, s.taken_at, m.ref_time FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
+                " WHERE s.season_seq >= ? AND EXISTS (SELECT 1 FROM snapshot_rows w WHERE w.snapshot_id = s.id)", (seq,)):
+            at = data_time(r)
+            if at[:10] >= boundary:
+                snaps.append((r["id"], datetime.fromisoformat(at), at[:10]))
+        if not snaps:
+            return 0
+        cutoff = max(boundary, (min(s[1] for s in snaps) - timedelta(hours=config.OPP_SNAP_WINDOW_H)).isoformat())
+        done = {r[0] for r in conn.execute("SELECT match_id FROM match_opp_rank")}
+        by_snap: dict[int, list[str]] = {}
+        day_of = {s[0]: s[2] for s in snaps}
+        for r in fconn.execute(
+                "SELECT m.match_id, m.match_date FROM matches m INDEXED BY idx_matches_type_date"
+                " JOIN match_players p ON p.match_id = m.match_id"
+                " WHERE p.ouid = ? AND m.match_type = ? AND m.match_date >= ?",
+                (mine, config.DEFAULT_MATCH_TYPE, cutoff)):
+            if r["match_id"] in done:
+                continue
+            try:
+                when = datetime.fromisoformat(r["match_date"])
+            except (TypeError, ValueError):
+                continue
+            snap = _opp_snap_for(snaps, when)
+            if snap is not None:
+                by_snap.setdefault(snap[0], []).append(r["match_id"])
+        started, added = time.monotonic(), 0
+        for sid, ids in by_snap.items():
+            people = {r["nickname"]: (r["rank"], r["elo"]) for r in conn.execute(
+                "SELECT nickname, rank, elo FROM snapshot_rows WHERE snapshot_id = ?", (sid,))}
+            batch = []
+            for mid in ids:
+                if (cancel is not None and cancel.is_set()) or time.monotonic() - started > config.OPP_FILL_MAX_S:
+                    break
+                row = fconn.execute("SELECT payload FROM matches WHERE match_id = ?", (mid,)).fetchone()
+                try:
+                    infos = store._loads(row["payload"]).get("matchInfo") or []
+                except Exception:       # 깨진 한 경기가 나머지를 막지 않는다(전역 규칙 7)
+                    continue
+                me = next((p for p in infos if p.get("ouid") == mine), None)
+                opp = next((p for p in infos if p.get("ouid") != mine), None)
+                o = people.get(opp.get("nickname")) if opp else None
+                m = people.get(me.get("nickname")) if me else None
+                batch.append((mid, mine, opp_rank_band(o[0]) if o else None,
+                              opp_gap_band(o[1] if o else None, m[1] if m else None), day_of[sid]))
+            with conn:
+                conn.executemany("INSERT OR IGNORE INTO match_opp_rank (match_id, my_ouid, rank_band, gap_band, snap_day)"
+                                 " VALUES (?, ?, ?, ?, ?)", batch)
+            added += len(batch)
+            if (cancel is not None and cancel.is_set()) or time.monotonic() - started > config.OPP_FILL_MAX_S:
+                break
+        return added
+    except sqlite3.Error:
+        return 0       # fifa.db 잠김 등 — 다음 바퀴가 이어 채운다(수집 본체는 계속)
+    finally:
+        fconn.close()
+
+
 def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list | None = None,
                  fifa_path: Path | str | None = None, cancel: threading.Event | None = None, heartbeat=None) -> dict:
     """따라잡기 처리 — 지우기 조건 → 익명 집계(B5, 동의 무관) → 사람별(N3·N11·N12, 동의 뒤) → 스냅숏 없는 시즌 넘김.
     스냅숏 하나 = 한 트랜잭션(깃발 같이). 수집 잠금 안에서 부른다(저장 커밋 뒤 · 앱 켤 때 작업 스레드).
     사람별 직전마다 켜짐·동의를 디스크에서 다시 읽는다 — 처리 중에 끄면 거기서 멈춘다(1회차 A·B)."""
-    out = {"purged": purge_person_if_needed(conn), "anon": 0, "person": 0, "rolled": False}
+    out = {"purged": purge_person_if_needed(conn), "anon": 0, "person": 0, "rolled": False, "opp": 0}
+    out["purged"] = purge_opp_rank_if_needed(conn) or out["purged"]
 
     def stopped():
         return cancel is not None and cancel.is_set()
@@ -1413,6 +1548,11 @@ def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list |
         if heartbeat:
             heartbeat()
     out["rolled"] = _roll_if_due(conn, now, ends)
+    if not stopped():
+        try:
+            out["opp"] = fill_opp_rank(conn, now, cancel=cancel)
+        except Exception:      # 채우기가 죽어도 수집 본체·정리는 계속(전역 규칙 7) — 다음 바퀴가 이어 채운다
+            out["opp"] = 0
     return out
 
 

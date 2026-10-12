@@ -2205,6 +2205,25 @@ def test_every_rate_aggregate_fills_mixed():
 
 
 
+def test_methods_page_reads_its_numbers_from_the_constants():
+    # 43단계 D2 — 글이 상수와 따로 놀면 거짓말이 된다. 상수를 바꾸면 글이 따라와야 한다(막지 않았으면 글은 그대로였을 것)
+    import methods
+    base = methods.page_html({900: "챔피언스"})
+    assert f"{xg_grid.SHOT['shots']:,}" in base and xg_grid.GENERATED in base
+    assert f"{xg_grid.PK_RATE:.0%}" in base and "챔피언스 15 FC" in base
+    assert f"{config.OPP_SNAP_WINDOW_H}시간" in base and f"{config.OPP_MIN_KNOWN}판" in base
+    saved, saved_min = config.FC_REWARDS, config.OPP_MIN_KNOWN
+    try:
+        config.FC_REWARDS = saved + ((date(2027, 1, 1), 900, 99),)      # 새 시작일 줄 — 가장 새 값이 글에 나와야
+        assert "챔피언스 99 FC" in methods.page_html({900: "챔피언스"}) and "챔피언스 15 FC" not in methods.page_html({900: "챔피언스"})
+        config.OPP_MIN_KNOWN = 77
+        assert "77판" in methods.page_html()
+    finally:
+        config.FC_REWARDS = saved
+        config.OPP_MIN_KNOWN = saved_min
+    assert [t for t, _ in methods.sections()][:2] == ["승률", "기대득점(xG)"]
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

@@ -121,6 +121,88 @@ def season_divisions(points: list[tuple[datetime, int]],
     return out
 
 
+class WinDivision(NamedTuple):
+    """경기 하나 — A2 보상용. division 은 그 경기 때 내 등급(없으면 None) · outcome 은 승/무/패 · forfeit 은 몰수승·몰수패."""
+    when: datetime
+    division: int | None
+    outcome: str
+    forfeit: bool
+
+
+def win_divisions(details: list, ouid: str) -> list[WinDivision]:
+    """경기마다 (일시, 내 division, 결과) — 오래된 경기부터. `division_trend` 는 결과를 버려 승리를 짝지을 수 없어 따로 둔다.
+
+    감독모드 경기만(matchType 이 있고 다르면 뺀다). 일시를 못 읽은 경기와 승·무·패가 아닌 결과("오류")는 뺀다
+    — summarize 와 같은 기준(몰수승/몰수패는 승패로 친다)."""
+    out: list[WinDivision] = []
+    for d in details:
+        mt = d.get("matchType")
+        if mt is not None and mt != config.DEFAULT_MATCH_TYPE:
+            continue
+        me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ouid), None)
+        if me is None:
+            continue
+        result = (me.get("matchDetail") or {}).get("matchResult") or ""
+        outcome = "승" if "승" in result else "무" if "무" in result else "패" if "패" in result else None
+        raw = d.get("matchDate")
+        if outcome is None or not raw:
+            continue
+        try:
+            when = datetime.fromisoformat(raw)
+        except (ValueError, TypeError):
+            continue
+        div = me.get("division")
+        out.append(WinDivision(when, div if isinstance(div, int) else None, outcome, "몰수" in result))
+    out.sort(key=lambda w: w.when)
+    return out
+
+
+def reward_for(division: int, day: date, table=None) -> int:
+    """그날 그 등급의 승리당 FC — 표에서 시작일이 day 이하인 줄 중 가장 늦은 것. 없으면 0."""
+    best = None
+    for start, div, fc in (config.FC_REWARDS if table is None else table):
+        if div == division and start <= day and (best is None or start >= best[0]):
+            best = (start, fc)
+    return best[1] if best else 0
+
+
+@dataclass
+class WinRewards:
+    games: int = 0                  # 승·무·패 전부(분모 — 100판당)
+    wins: int = 0
+    rewarded_wins: int = 0          # FC 가 나온 승리
+    fc: int = 0
+    unknown_wins: int = 0           # division 이 빠진 승리 — 합계에 못 넣고 따로 센다
+    forfeit_wins: int = 0           # 보상에 센 몰수승(사용자 확인값 — 화면 기준 글에)
+    by_division: dict = field(default_factory=dict)    # division → (이긴 판, FC)
+
+    @property
+    def per_100(self) -> float:
+        return self.fc / self.games * 100 if self.games else 0.0
+
+
+def win_rewards(rows: list[WinDivision], table=None) -> WinRewards:
+    """이긴 판마다 그 경기 당시 등급 × 보상표 → 합계. 승격 경기는 따로 다루지 않는다 — 기록된 등급 그대로(U5)."""
+    r = WinRewards()
+    for w in rows:
+        r.games += 1
+        if w.outcome != "승":
+            continue
+        r.wins += 1
+        if w.division is None:
+            r.unknown_wins += 1
+            continue
+        fc = reward_for(w.division, w.when.date(), table)
+        if not fc:
+            continue
+        r.rewarded_wins += 1
+        r.fc += fc
+        r.forfeit_wins += int(w.forfeit)
+        wins, total = r.by_division.get(w.division, (0, 0))
+        r.by_division[w.division] = (wins + 1, total + fc)
+    return r
+
+
 # 슛 유형. 공식 문서에 매핑이 없어 실제 응답으로 확정했다.
 #  - type 8/9 는 shoot.goalFreekick / goalPenaltyKick 집계와 200개 선수-경기
 #    행에서 경기별로 정확히 일치 → 확정.

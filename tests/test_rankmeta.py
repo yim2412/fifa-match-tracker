@@ -548,6 +548,54 @@ def test_rankmeta_behind_core_api():
         assert hasattr(core_api, name) and name in core_api.__all__, name
 
 
+# ── N23 상대 순위 구간(2.9.1) — 구간 이름 · 손으로 센 표 ────────────────────────────────────────────────
+
+def _opp_detail(mid, result, my_div=1000, opp_div=1000):
+    return {"matchId": mid, "matchType": 52, "matchDate": "2026-10-10T08:00:00",
+            "matchInfo": [{"ouid": "me", "nickname": "나", "division": my_div, "matchDetail": {"matchResult": result}},
+                          {"ouid": "x", "nickname": "상대", "division": opp_div, "matchDetail": {"matchResult": "패"}}]}
+
+
+def test_opp_labels_follow_config_edges():
+    assert [M.opp_rank_label(b) for b in config.OPP_RANK_BANDS] == ["1~200위", "201~1,000위", "1,001~3,000위", "3,001~10,000위"]
+    labels = [M.opp_gap_label(i) for i in range(len(config.OPP_GAP_EDGES) + 1)]
+    assert labels[0].startswith("-300 미만") and labels[-1].startswith("+300 이상") and labels[3] == "-50 ~ +50", labels
+    assert len(set(labels)) == len(labels) == 7
+
+
+def test_opp_rank_table_counts_by_hand():
+    # a~e: 순위 구간 200 에 승 2·패 1 · 1000 에 무 1 · 모름 1(승). 격차 칸: a·b 는 칸 6, c 칸 2, d 칸 0, 나머지 모름
+    rows = {"a": (200, 6), "b": (200, 6), "c": (200, 2), "d": (1000, 0), "e": (None, None)}
+    ds = [_opp_detail("a", "승"), _opp_detail("b", "승"), _opp_detail("c", "패"), _opp_detail("d", "무"), _opp_detail("e", "승"),
+          _opp_detail("f", "승")]                     # f 는 줄이 없다 — 분모에도 안 들어간다(아직 안 채움)
+    t = M.opp_rank_table(ds, "me", rows)
+    assert (t.games, t.known, t.unknown, t.gap_known) == (5, 4, 1, 4), t
+    assert [(b.win, b.draw, b.lose) for b in t.by_rank] == [(2, 0, 1), (0, 1, 0), (0, 0, 0), (0, 0, 0)], t.by_rank
+    assert [(b.win, b.draw, b.lose) for b in t.by_gap] == [(0, 1, 0), (0, 0, 0), (0, 0, 1), (0, 0, 0), (0, 0, 0), (0, 0, 0),
+                                                           (2, 0, 0)], t.by_gap
+    assert t.mixed is False and all(b.mixed is False for b in t.by_rank + t.by_gap), "챔스 아래끼리면 무승부 분모 한 집단"
+
+
+def test_opp_rank_table_mixed_is_one_value_for_the_whole_table():
+    # 한 판이라도 양쪽 챔스 이상(무승부 불가)이면 섞인 묶음 — 두 표가 같은 식을 쓴다
+    rows = {"a": (200, 6), "b": (1000, 3)}
+    ds = [_opp_detail("a", "승", my_div=900, opp_div=900), _opp_detail("b", "승")]
+    t = M.opp_rank_table(ds, "me", rows)
+    assert t.mixed is True and all(b.mixed is True for b in t.by_rank + t.by_gap), t
+
+
+def test_opp_rank_rows_reads_only_my_account():
+    db = DB()
+    try:
+        with db.conn:
+            db.conn.executemany("INSERT INTO match_opp_rank VALUES (?, ?, ?, ?, ?)",
+                                [("a", "me", 200, 6, "2026-10-10"), ("b", "me", None, None, "2026-10-10"),
+                                 ("c", "other", 200, 1, "2026-10-10")])
+        assert M.opp_rank_rows(db.conn, "me") == {"a": (200, 6), "b": (None, None)}
+    finally:
+        db.conn.close()
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

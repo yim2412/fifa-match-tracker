@@ -890,3 +890,89 @@ def emblems_by_name(conn: sqlite3.Connection) -> dict[str, str]:
         if color and emblem and color not in config.TEAMCOLOR_DUP_NAMES:
             seen.setdefault(color, set()).add(emblem)
     return {name: next(iter(keys)) for name, keys in seen.items() if len(keys) == 1}
+
+
+# ── N23 상대 순위 구간(2.9.1 · 43단계) — 내 경기 × rank.db match_opp_rank ──────────────────────────────
+
+def opp_rank_rows(conn: sqlite3.Connection, my_ouid: str) -> dict[str, tuple[int | None, int | None]]:
+    """내 계정 경기의 {match_id: (순위 구간 상한 | None, 점수 격차 칸 | None)} — None = 모름. 줄이 있다 = 채워 봤다(M2)."""
+    return {r[0]: (r[1], r[2]) for r in conn.execute(
+        "SELECT match_id, rank_band, gap_band FROM match_opp_rank WHERE my_ouid = ?", (my_ouid,))}
+
+
+def opp_rank_label(band: int) -> str:
+    """순위 구간 이름 — OPP_RANK_BANDS 의 앞 구간 끝 다음부터 이 구간 끝까지."""
+    bands = config.OPP_RANK_BANDS
+    i = bands.index(band)
+    lo = 1 if i == 0 else bands[i - 1] + 1
+    return f"{lo:,}~{band:,}위"
+
+
+def opp_gap_label(i: int) -> str:
+    """점수 격차(상대 − 나) 칸 이름 — 음수 = 상대가 약함."""
+    e = config.OPP_GAP_EDGES
+    if i <= 0:
+        return f"{e[0]:+d} 미만 (상대가 훨씬 약함)"
+    if i >= len(e):
+        return f"{e[-1]:+d} 이상 (상대가 훨씬 강함)"
+    return f"{e[i - 1]:+d} ~ {e[i]:+d}"
+
+
+@dataclass
+class OppBand:
+    label: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    mixed: bool | None = None       # 표 전체가 같은 식(묶음마다 한 번 — models.is_mixed)
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+
+@dataclass
+class OppRank:
+    games: int = 0                  # 줄이 있는 내 경기 중 승·무·패로 끝난 판(분모)
+    known: int = 0                  # 그중 상대 순위를 안 판(1만 위 안)
+    gap_known: int = 0              # 그중 점수 격차까지 안 판(내 점수도 1만 위 안)
+    mixed: bool = False
+    by_rank: list = field(default_factory=list)     # OppBand — OPP_RANK_BANDS 순서, 판 없는 구간도 둔다
+    by_gap: list = field(default_factory=list)      # OppBand — 격차 칸 순서
+
+    @property
+    def unknown(self) -> int:
+        return self.games - self.known
+
+
+def opp_rank_table(details: list, ouid: str, rows: dict) -> OppRank:
+    """내 경기를 상대 순위 구간별·점수 격차 칸별로 가른 전적. rows 에 줄이 없는 경기(아직 안 채움·시즌 넘김)는 분모에도 안 넣는다.
+    승률 식은 표 전체가 하나(A6) — 두 표가 같은 경기 집합이 아니어도(격차는 내 점수를 알 때만) 식은 같게."""
+    import models
+    out = OppRank()
+    out.by_rank = [OppBand(opp_rank_label(b)) for b in config.OPP_RANK_BANDS]
+    out.by_gap = [OppBand(opp_gap_label(i)) for i in range(len(config.OPP_GAP_EDGES) + 1)]
+    picked = []
+    for d in details:
+        got = rows.get(d.get("matchId"))
+        if got is None:
+            continue
+        m = models.parse_match(d, ouid)
+        if m is None or not any(k in m.result for k in "승무패"):
+            continue
+        picked.append((m, got))
+    out.mixed = models.is_mixed(m.draw_possible for m, _ in picked)
+    for band in out.by_rank + out.by_gap:
+        band.mixed = out.mixed
+    for m, (rank_band, gap_band) in picked:
+        out.games += 1
+        field_ = "win" if "승" in m.result else "draw" if "무" in m.result else "lose"
+        if rank_band in config.OPP_RANK_BANDS:
+            out.known += 1
+            b = out.by_rank[config.OPP_RANK_BANDS.index(rank_band)]
+            setattr(b, field_, getattr(b, field_) + 1)
+        if gap_band is not None and 0 <= gap_band < len(out.by_gap):
+            out.gap_known += 1
+            b = out.by_gap[gap_band]
+            setattr(b, field_, getattr(b, field_) + 1)
+    return out

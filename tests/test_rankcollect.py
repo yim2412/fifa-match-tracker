@@ -1735,7 +1735,145 @@ def test_process_meta_budget_10k_rows():
         c.close()
 
 
+# ── 2.9.1 N23 상대 순위 구간 — 채우기 · 관문 · 지우기 ────────────────────────────────────────────────
+
+ME = "ouid-me"
+
+
+def _opp_match(mid, when, opp_nick, my_nick="내닉", opp_ouid=None, result="승"):
+    return {"matchId": mid, "matchType": 52, "matchDate": when,
+            "matchInfo": [{"ouid": ME, "nickname": my_nick, "matchDetail": {"matchResult": result}},
+                          {"ouid": opp_ouid or f"ouid-{opp_nick}", "nickname": opp_nick, "matchDetail": {"matchResult": "패"}}]}
+
+
+class OppEnv:
+    """Env + 가짜 fifa.db(경기·내 계정·키 지문) + 스냅숏 하나 — 순위 150 '상대A'(4000) · 500 '상대B'(3500) · 900 '내닉'(3600)."""
+
+    def __init__(self, env, matches, snap_at=T0, key="키-1", mine=ME, rows=None):
+        self.env, self.key0 = env, config.API_KEY
+        config.API_KEY = key
+        f = store.open_db(env.fifa)
+        store.save_matches(f, matches)
+        store.set_trade_state(f, my_ouid=mine, key_fp=store.key_fingerprint(key))
+        f.close()
+        self.c = env.conn()
+        _msnap(self.c, snap_at, rows or [_p(150, elo=4000.0, nick="상대A", grade=0), _p(500, elo=3500.0, nick="상대B"),
+                                         _p(900, elo=3600.0, nick="내닉")])
+
+    def close(self):
+        self.c.close()
+        config.API_KEY = self.key0
+
+
+def _opp_rows(c):
+    return {r["match_id"]: (r["rank_band"], r["gap_band"], r["snap_day"]) for r in c.execute("SELECT * FROM match_opp_rank")}
+
+
+def test_opp_rank_fills_bands_gaps_and_unknown_rows():
+    # 스냅숏 10-10 09:00. m1 상대A 150위(→ 상한 200) 점수 +400(→ 칸 6) · m2 상대B 500위(→ 1000) −100(→ 칸 2)
+    # m3 목록에 없는 상대 → 구간 NULL 이지만 줄은 있다(M2) · m4 하루 넘게 먼 경기·m5 지난 시즌 경기는 줄이 없다
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A"), _opp_match("m2", "2026-10-10T10:00:00", "상대B"),
+          _opp_match("m3", "2026-10-10T07:00:00", "유령"), _opp_match("m4", "2026-10-20T09:00:00", "상대A"),
+          _opp_match("m5", "2026-09-20T09:00:00", "상대A")]
+    with Env() as env:
+        w = OppEnv(env, ms)
+        try:
+            out = _proc(w.c)
+            assert out["opp"] == 3, out
+            assert _opp_rows(w.c) == {"m1": (200, 6, "2026-10-10"), "m2": (1000, 2, "2026-10-10"),
+                                      "m3": (None, None, "2026-10-10")}, _opp_rows(w.c)
+            assert _proc(w.c)["opp"] == 0, "두 번째 바퀴에 모름 줄까지 다시 찾았다(M2)"
+        finally:
+            w.close()
+
+
+def test_opp_rank_waits_for_its_own_consent_and_keeps_person_tables():
+    # M4 — 동의 6 으로 쌓은 사람별 줄은 새 관문(9) 미달이어도 그대로. 막지 않았으면(PERSON_TABLES 에 태웠으면) 같이 지워졌을 것이다
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]
+    with Env() as env:
+        env.write(notice=config.OPP_RANK_NOTICE_VERSION - 1)
+        w = OppEnv(env, ms)
+        try:
+            out = _proc(w.c)
+            assert out["person"] == 1 and _count(w.c, "run_open") == 1, out
+            assert out["opp"] == 0 and _count(w.c, "match_opp_rank") == 0, "새 안내 전에 상대 순위를 채웠다"
+            env.write()                                                  # 동의 9
+            assert _proc(w.c)["opp"] == 1
+            env.write(notice=config.OPP_RANK_NOTICE_VERSION - 1)         # 동의 철회에 가까운 낮은 값
+            out = _proc(w.c)
+            assert out["purged"] and _count(w.c, "match_opp_rank") == 0, "관문 미달인데 줄이 남았다"
+            assert _count(w.c, "run_open") == 1, "상대 순위 관문이 사람별 줄까지 지웠다(M4)"
+        finally:
+            w.close()
+
+
+def test_opp_rank_follows_key_and_account():
+    # M3 — 키가 바뀐 확인 전(key_fp 불일치)엔 안 채우고, 내 계정이 바뀌면 옛 계정 줄을 지운다
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]
+    with Env() as env:
+        w = OppEnv(env, ms)
+        try:
+            f = store.open_db(env.fifa)
+            store.set_trade_state(f, key_fp=store.key_fingerprint("다른 키"))
+            f.close()
+            assert _proc(w.c)["opp"] == 0 and _count(w.c, "match_opp_rank") == 0, "키가 바뀐 확인 전에 채웠다"
+            f = store.open_db(env.fifa)
+            store.set_trade_state(f, key_fp=store.key_fingerprint("키-1"))
+            f.close()
+            assert _proc(w.c)["opp"] == 1
+            f = store.open_db(env.fifa)
+            store.set_trade_state(f, my_ouid="ouid-다른계정")
+            f.close()
+            _proc(w.c)
+            assert _count(w.c, "match_opp_rank") == 0, "내 계정이 바뀌었는데 옛 계정 줄이 남았다"
+        finally:
+            w.close()
+
+
+def test_opp_rank_season_boundary_is_rank_db_one():
+    # M7 — 시즌표가 없으면(ends=[]) rank.db 의 사람별 처리 시각의 날(10-10)이 경계. 그날 00:30 은 들고 전날 23:50 은 뺀다
+    ms = [_opp_match("in", "2026-10-10T00:30:00", "상대A"), _opp_match("out", "2026-10-09T23:50:00", "상대A")]
+    with Env() as env:
+        w = OppEnv(env, ms)
+        try:
+            _proc(w.c, ends=[])
+            assert set(_opp_rows(w.c)) == {"in"}, _opp_rows(w.c)
+        finally:
+            w.close()
+
+
+def test_opp_rank_cleared_when_the_season_rolls():
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]
+    with Env() as env:
+        w = OppEnv(env, ms)
+        try:
+            assert _proc(w.c)["opp"] == 1
+            out = _proc(w.c, ends=ENDS + ["2026-10-11"])        # 10-11 에 새 시즌이 시작 — 앱 켤 때의 넘김
+            assert out["rolled"] and _count(w.c, "match_opp_rank") == 0, out
+            assert out["opp"] == 0, "지난 시즌 경기를 새 시즌 줄로 다시 채웠다"
+        finally:
+            w.close()
+
+
+def test_opp_rank_cleared_when_collection_is_turned_off_and_on():
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]
+    with Env() as env:
+        env.write(on_at="2026-10-10T08:00:00.000001")
+        w = OppEnv(env, ms)
+        try:
+            assert _proc(w.c)["opp"] == 1
+            env.write(on_at="2026-10-10T20:00:00.000001")        # 껐다 켰다 — 켠 시각이 달라졌다
+            out = _proc(w.c)
+            assert out["purged"] and _count(w.c, "match_opp_rank") == 0, "껐다 켠 사이를 이어진 것으로 읽었다"
+            # 사람별 처리 상태도 같이 비워져(purge_person_if_needed) 다음 스냅숏부터 다시 시작한다 — 그때 다시 채워진다
+            _msnap(w.c, T0 + timedelta(hours=6), [_p(150, elo=4000.0, nick="상대A", grade=0)])
+            assert _proc(w.c)["opp"] == 1 and set(_opp_rows(w.c)) == {"m1"}, _opp_rows(w.c)
+        finally:
+            w.close()
+
+
 import sqlite3  # noqa: E402
+import store  # noqa: E402
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

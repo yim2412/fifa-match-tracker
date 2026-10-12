@@ -5,7 +5,7 @@ import os
 import shutil
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from dotenv import dotenv_values, load_dotenv
@@ -110,12 +110,13 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 8  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 9  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
 #                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속·최고점·첫 챔스(U1)
 #                     7 = 2.5.1 포지션 특성 — 상위 TRAIT_TOP 명의 카드 특성·코치(스쿼드메이커)와 201~500위 경기
 #                     8 = 2.6.1 표 칸 그림 — 구단·팀컬러 엠블럼·국기·특성 아이콘·시즌 배지를 넥슨 이미지 서버에서 받는다(수집과 무관)
+#                     9 = 2.9.1 내 계정 경기마다 상대의 그날 순위 구간을 그 시즌 동안 붙인다(N23 — 랭킹 수집을 켠 사람만)
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
@@ -125,6 +126,7 @@ CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardIn
 RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
 META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
 TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터
+OPP_RANK_NOTICE_VERSION = 9   # 상대 순위 구간(rank.db match_opp_rank — 내 경기마다 상대의 그날 순위 구간)은 이 버전 동의 뒤부터
 # 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
 # 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다 — 8 이 그렇다(그림은 수집과 무관하게
 # 모두에게 해당 · 2026-10-11 사용자: 2~7 동의자 전원에게 한 번 다시 묻는다).
@@ -278,6 +280,22 @@ WIN_RATE_NOTE_MIXED = "무승부가 나는 경기와 안 나는 경기가 섞여
 WIN_RATE_NOTE_SINGLE = "무승부까지 분모에 넣어 셉니다(승÷전체)."
 # 등급 체류(2.6.1 N2 — habits.division_stays) — 이웃 경기 사이가 이 날 수를 넘으면 기록 빈 구간
 N2_GAP_DAYS = 3
+# N23 상대 순위 구간(43단계 — rank.db match_opp_rank). 순위 구간 = 상한 순위(이하) — 모르면(1만 위 밖·못 찾음) NULL.
+# 점수 격차(상대 − 나) 구간 = 모서리 사이의 칸 번호(bisect_right) — 0 은 첫 모서리보다 아래, 마지막 번호는 마지막 모서리 이상
+OPP_RANK_BANDS = (200, 1000, 3000, 10000)
+OPP_GAP_EDGES = (-300, -150, -50, 50, 150, 300)
+OPP_SNAP_WINDOW_H = 24             # 경기 시각 ±이 시간 안의 스냅숏만 쓴다(그보다 멀면 상대 순위가 달라졌을 수 있다)
+OPP_ROW_MIN = 10                   # 표 한 줄의 승률 분모(rated)가 이보다 적으면 "표본 N" 을 붙여 흐리게
+OPP_MIN_KNOWN = 30               # 순위를 아는 경기가 이보다 적으면 표를 안 낸다(빈 화면 문구)
+OPP_FILL_MAX_S = 30                # 채우기 한 번의 시간 상한(초) — 넘으면 거기서 멈추고 다음 바퀴가 이어 채운다
+# A2 FC 보상(43단계 — stats.win_rewards) — (적용 시작일, 경기 때 내 division, 승리당 FC). **넥슨 공식 수치가 아니라 사용자 확인값**(2026-10-12):
+# 이긴 판마다 챔피언스(900) 15 · 슈퍼챔피언스(800) 20, 그 밖의 등급은 없다. 몰수승(상대 탈주)도 나온다(사용자 확인).
+# 넥슨이 바꾸면 사용자가 알려 줘야 한다 — 바뀐 값은 새 시작일 줄로 더한다(옛 줄은 두어 지난 경기가 그때 값으로 센다).
+# 첫 줄 시작일은 맨 앞(date.min) — 확인일로 두면 그 전 승리가 조용히 0 이 된다. 900·800 은 models.CHAMPION/SUPER_CHAMPION_DIVISION_ID 와 같아야 한다(test_habits 가 대조)
+FC_REWARDS = (
+    (date.min, 900, 15),
+    (date.min, 800, 20),
+)
 # N19 칩(2.7.1 — habits.paired_diff · Diff.clear) — 같은 경기 상대 대비 차이가 이 %p 이상이어야 띄운다.
 # 임시값(2026-10-11 U7): 4계정 × 16범위 실측에서 2.0 은 태클 칩이 범위마다 켜졌다 꺼졌고 2.5 는 계정1 결정력만 늘 떴다.
 # 42단계(구단주 분포)에서 백분위 판정으로 바꾼다 — docs/DONE.md 41단계 "크기 문턱 실측"
@@ -422,9 +440,8 @@ def read_rank_on_at() -> str | None:
     return ((vals or {}).get(RANK_COLLECT_ON_AT_VAR) or "").strip() or None
 
 
-def read_person_allowed() -> bool:
-    """사람별 표에 써도 되나 — 디스크의 .env 로 다시(다른 실행본·손 수정): 웹 데이터 · 수집 · 안내 META_NOTICE_VERSION 동의.
-    못 읽으면 False(쓰지 않는 쪽으로)."""
+def _read_collect_gate(version: int) -> bool:
+    """디스크의 .env 로 다시: 웹 데이터 · 수집 켜짐 · 안내 version 이상 동의. 못 읽으면 False(쓰지 않는 쪽으로)."""
     vals = _read_env_disk()
     if vals is None:
         return False
@@ -433,7 +450,19 @@ def read_person_allowed() -> bool:
     except ValueError:
         accepted = 0
     return ((vals.get(WEB_DATA_VAR) or "0").strip() == "1" and (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
-            and accepted >= META_NOTICE_VERSION)
+            and accepted >= version)
+
+
+def read_person_allowed() -> bool:
+    """사람별 표에 써도 되나 — 디스크의 .env 로 다시(다른 실행본·손 수정): 웹 데이터 · 수집 · 안내 META_NOTICE_VERSION 동의.
+    못 읽으면 False(쓰지 않는 쪽으로)."""
+    return _read_collect_gate(META_NOTICE_VERSION)
+
+
+def read_opp_rank_allowed() -> bool:
+    """상대 순위 구간(N23 match_opp_rank)을 채워도 되나 — read_person_allowed 와 같되 안내는 OPP_RANK_NOTICE_VERSION.
+    사람별 관문(6)만 넘은 옛 동의자는 새 안내(9)를 보기 전까지 쌓이지 않는다."""
+    return _read_collect_gate(OPP_RANK_NOTICE_VERSION)
 
 
 def read_env_switches() -> tuple[bool, bool]:

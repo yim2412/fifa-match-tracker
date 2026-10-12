@@ -694,13 +694,14 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 45, len(tables)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 48, len(tables)   # 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
     #                                        · 38 메타 분석 [포지션 특성](2.5.1 — 채운 표는 test_trait_tab_renders_usage 가 잰다)
     #                                        · 39~40 성적 진단 [운 범위] · 41~43 [경기 습관](2.7.1 — 채운 표는 두 탭 테스트가 잰다)
     #                                        · 44 슛 맵 [공격 루트](2.7.1 — 채운 표는 test_attack_route_tab_… 가 잰다)
+    #                                        · 46 성적 진단 [FC 보상](2.9.1 A2 — 채운 표는 test_rewards_tab_… 가 확인)
     _check_elisions(tables)
 
 
@@ -1248,6 +1249,77 @@ def test_divstay_tab_counts_and_note():
     assert "승격 1번 · 강등 1번" in _win.lb_divstay_note.text(), _win.lb_divstay_note.text()
     assert "빈 구간" not in _win.lb_divstay_note.text()
     _win._render_divstay(_win._details)   # 원래 데이터로 되돌린다
+
+
+def test_rewards_tab_counts_and_note():
+    # 43단계 A2 — 900 승 + 900 몰수승 + 800 승 + 1000 승(0) + 900 패 → 챔스 2판 30 + 슈챔 1판 20 = 50 FC
+    def det(i, result, div):
+        return {"matchId": f"r{i}", "matchType": 52, "matchDate": f"2026-09-0{i}T12:00:00",
+                "matchInfo": [{"ouid": _OUID, "division": div, "matchDetail": {"matchResult": result}}]}
+    ds = [det(1, "승", 900), det(2, "몰수승", 900), det(3, "승", 800), det(4, "승", 1000), det(5, "패", 900)]
+    _win._go_page("성적 진단", "FC 보상")
+    _win._render_rewards(ds)
+    t = _win.tbl_rewards
+    rows = {t.item(r, 0).text(): [t.item(r, c).text() for c in range(1, 3)] for r in range(t.rowCount())}
+    name = lambda i: _win._division_names.get(i, str(i))  # noqa: E731
+    assert rows == {name(900): ["2", "30"], name(800): ["1", "20"]}, rows
+    assert "FC 50" in _win.lb_rewards_summary.text() and "100판당 1,000" in _win.lb_rewards_summary.text(), _win.lb_rewards_summary.text()
+    note = _win.lb_rewards_note.text()
+    assert "5판 기준" in note and "탈주로 이긴 1판 포함" in note and "공식 수치가 아닌 확인값" in note, note
+    _win._render_rewards([])
+    assert _win.tbl_rewards.rowCount() == 0 and "셀 경기가 없습니다" in _win.lb_rewards_summary.text()
+    _win._render_rewards(_win._details)   # 원래 데이터로 되돌린다
+
+
+def test_opp_rank_tab_gates_and_draws():
+    # 43단계 N23 — 막는 이유 한 줄(수집 꺼짐 · 동의 · 내 계정) → 줄이 없음 → 하한 미만 → 표
+    import copy
+    cfg_keep = (config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED)
+    keep = (_win._trade_snapshot, _win._rank_read, _win._details)
+    fake_state = {"key_fp": None, "my_ouid": _OUID}
+    _win._trade_snapshot = lambda: {"state": {**fake_state, "key_fp": store.key_fingerprint(config.API_KEY)},
+                                    "names": {_OUID: "나"}}
+    txt = lambda: _win.lb_opprank_note.text()  # noqa: E731
+    try:
+        _win._go_page("상대 전적", "상대 순위")
+        config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED = True, False, config.OPP_RANK_NOTICE_VERSION
+        _win._render_opp_rank()
+        assert "랭킹 수집을 켜면" in txt() and _win.tbl_opprank.rowCount() == 0, txt()
+        config.RANK_COLLECT, config.NOTICE_ACCEPTED = True, config.OPP_RANK_NOTICE_VERSION - 1
+        _win._render_opp_rank()
+        assert "새 이용 안내" in txt(), txt()
+        config.NOTICE_ACCEPTED = config.OPP_RANK_NOTICE_VERSION
+        _win._trade_snapshot = lambda: {"state": {"key_fp": store.key_fingerprint(config.API_KEY), "my_ouid": "누군가"},
+                                        "names": {"누군가": "남"}}
+        _win._render_opp_rank()
+        assert "내 계정(남)" in txt(), txt()
+        _win._trade_snapshot = lambda: {"state": {"key_fp": store.key_fingerprint(config.API_KEY)}, "names": {}}
+        _win._render_opp_rank()
+        assert "내 계정이 확인되지 않았습니다" in txt(), txt()
+        _win._trade_snapshot = lambda: {"state": {"key_fp": store.key_fingerprint(config.API_KEY), "my_ouid": _OUID},
+                                        "names": {_OUID: "나"}}
+        _win._rank_read = lambda fn: {}
+        _win._render_opp_rank()
+        assert "아직 채운 경기가 없습니다" in txt(), txt()
+        # 하한(OPP_MIN_KNOWN) 밑이면 표를 안 낸다 — 이 판수는 픽스처 4경기라 줄 4개를 모두 알아도 하한 밑이다
+        ids = [d["matchId"] for d in _win._details]
+        _win._rank_read = lambda fn: {i: (200, 6) for i in ids}
+        _win._render_opp_rank()
+        assert f"{config.OPP_MIN_KNOWN}판부터" in txt() and _win.tbl_opprank.rowCount() == 0, txt()
+        # 하한을 낮추면 같은 줄로 표가 나온다 — 하한이 배선돼 있다
+        saved_min = config.OPP_MIN_KNOWN
+        config.OPP_MIN_KNOWN = 1
+        try:
+            _win._render_opp_rank()
+        finally:
+            config.OPP_MIN_KNOWN = saved_min
+        t = _win.tbl_opprank
+        assert t.rowCount() == len(config.OPP_RANK_BANDS), t.rowCount()
+        assert t.item(0, 0).text() == "1~200위" and int(t.item(0, 1).text()) == 3, [t.item(0, c).text() for c in range(6)]
+        assert "줄이 있는 내 경기 3판" in txt(), txt()   # 픽스처 4경기 중 승·무·패로 끝난 것이 3판
+    finally:
+        config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED = cfg_keep
+        _win._trade_snapshot, _win._rank_read, _win._details = keep
 
 
 def _live_widgets(layout):
@@ -6311,7 +6383,7 @@ def test_notice_versions_split_first_and_reask():
                                             (2, False, True, False), (3, False, True, True),
                                             (4, False, True, True), (5, False, True, True),
                                             (6, False, True, True), (7, False, True, True),
-                                            (8, False, False, True)]:
+                                            (8, False, True, True), (9, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -6321,7 +6393,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (8, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (9, 7, 6, 5, 4, 3, 2)
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -6358,12 +6430,18 @@ def test_notice8_asked_when_collect_off():
     keep = config.NOTICE_ACCEPTED, config.RANK_COLLECT
     try:
         config.RANK_COLLECT = False
-        for acc in (config.NOTICE_VERSION - 1, config.TRAIT_NOTICE_VERSION - 1):   # 7 · 6
+        for acc in (config.TRAIT_NOTICE_VERSION, config.TRAIT_NOTICE_VERSION - 1):   # 7 · 6
             config.NOTICE_ACCEPTED = acc
             assert config.notice_update_pending() is True, acc
+        # 9(상대 순위 구간)는 수집을 켠 사람 몫 — 8 동의자는 수집을 끄면 다시 안 묻고, 켜면 묻는다
+        config.NOTICE_ACCEPTED = 8
+        assert not config.notice_update_pending()
+        config.RANK_COLLECT = True
+        assert config.notice_update_pending()
+        config.RANK_COLLECT = False
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         assert not config.notice_update_pending()
-        assert config.NOTICE_COLLECT_ONLY_FROM == config.NOTICE_VERSION, \
+        assert config.NOTICE_COLLECT_ONLY_FROM == 8, \
             "NOTICE_COLLECT_ONLY_FROM 을 6 으로 되돌리면 수집 끈 6·7 동의자가 안내 8 을 못 본다"
     finally:
         config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
@@ -6393,7 +6471,7 @@ def test_reask_shows_only_changes_after_accepted():
 
 # 렌더한 안내 전문(숫자는 config 상수로 그린다)의 해시 — 버전과 짝. 글·상수가 바뀌어 FAIL 이면:
 # 실질 변경이면 config.NOTICE_VERSION 을 올리고 새 줄을 더한다 · 맞춤법·표현만이면 이 버전의 값만 고친다.
-NOTICE_GOLDEN = {8: "a3253bc7f91f6821"}   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
+NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f"}   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
 
 
 def _notice_digest() -> str:
@@ -8597,7 +8675,7 @@ def test_rank_views_invalidate_on_four_paths():
     W = app_main.MainWindow
     assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
                                      "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                                     "traits"}
+                                     "traits", "opprank"}
     seen = []
     keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
     _win._invalidate_rank_views = lambda: seen.append(1)
