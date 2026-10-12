@@ -10,13 +10,13 @@ ROOT = Path(r"C:\Users\준\Desktop\피파전적관리")
 sys.path.insert(0, str(ROOT))
 import config, habits, nexon_api  # noqa: E402
 
-OUT = Path(__file__).parent / "rows.jsonl"
+OUT = Path(__file__).parent / "rows100.jsonl"
 PROG = Path.home() / ".claude" / "bg-progress.d" / "owner0.txt"
 GAP = 0.25
 SEED = 20261012
 TIERS = [(1, 200), (201, 1000), (1001, 3000), (3001, 10000)]
 MATCHTYPE = 52
-N_MATCH = 30
+N_MATCH = 100
 
 
 def dev_key() -> str:

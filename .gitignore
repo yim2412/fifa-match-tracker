@@ -23,3 +23,6 @@ dist/
 
 # 백그라운드 작업 진행 보고용 임시 파일
 _bgtask.meta
+
+# 42단계 단계 0 수집 결과 — 구단주별 요약이라 저장소에 안 둔다
+tools/step0_owner_dist/rows*.jsonl
