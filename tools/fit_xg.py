@@ -578,6 +578,52 @@ def run_2c(db_path) -> None:
     print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
 
 
+def _shooter_holdout(S, label, tr, te, folds=5) -> bool:
+    """측정 2d — 내 계정이 아닌 슈터를 사람 단위 무작위 5조로. 조마다 '그 조 아닌 사람 · 앞 70%' 로 맞추고 '그 조 · 뒤 30%' 를 예측,
+    모아서 보정 문턱. 통과 여부를 돌려준다."""
+    others = sorted({o for o in S["shooter"][~S["is_mine"]] if o is not None})
+    order = np.random.default_rng(SEED).permutation(len(others))
+    fold_of = {others[j]: k % folds for k, j in enumerate(order)}
+    fold = np.array([fold_of.get(o, -1) for o in S["shooter"]])
+    preds, idxs, rows = [], [], []
+    for g in range(folds):
+        a = tr[(~S["is_mine"][tr]) & (fold[tr] != g) & (fold[tr] >= 0)]
+        b = te[(~S["is_mine"][te]) & (fold[te] == g)]
+        if not len(b):
+            continue
+        p = C1().fit(S, a).predict(S, b)
+        preds.append(p); idxs.append(b)
+        rows.append((g, len(a), len(b), float(p.mean() - S["goal"][b].mean())))
+    allb = np.concatenate(idxs)
+    m = metrics(S, allb, np.concatenate(preds))
+    ok, why = calib_ok(m)
+    print(f"\n[2d · {label}] 내 계정 아닌 슈터 {len(others):,}명 · 5조 · 검증 슛 합 {len(allb):,}")
+    print("  조별(학습 슛, 검증 슛, 예측−실제 %p): " + " · ".join(f"{g}: {na:,}/{nb:,} {d*100:+.2f}" for g, na, nb, d in rows))
+    print(f"  [판정] 로그손실 {m['logloss']:.4f} · ECE {m['ece']*100:.2f}%p · 평균 차 {m['mean_diff']*100:.2f}%p → {why}")
+    mine_te = te[S["is_mine"][te]]
+    if len(mine_te):
+        c1o = C1o().fit(S, tr)
+        d = c1o.predict(S, mine_te).mean() - S["goal"][mine_te].mean()
+        print(f"  보고 · 내 계정 검증 슛 {len(mine_te):,}: C1o 예측 − 실제 {d*100:+.2f}%p (이 계정들의 결정력 — 판정에 안 씀)")
+    return ok
+
+
+def run_2d(db_path) -> None:
+    """측정 2d(ROADMAP 43 "측정 2d — 사람 단위 무작위로 떼어 낸 슈터", 시작 커밋 13b99bc)."""
+    t0 = datetime.now()
+    S, matches = load_shots(db_path)
+    _mark_mine(S, matches, db_path)
+    pk = S["type"] == PK_TYPE
+    train_m, test_m, _recent, _cut = time_split(S, matches)
+    idx = np.arange(len(S["goal"]))
+    a5 = _shooter_holdout(S, "A5 전체 슛", idx[train_m & ~pk], idx[test_m & ~pk])
+    print("  ⇒ A5: " + ("C1o 를 싣는다" if a5 else "미달 — A5 를 뺀다"))
+    ot = S["on_target"]
+    a4 = _shooter_holdout(S, "A4 유효슛", idx[train_m & ~pk & ot], idx[test_m & ~pk & ot])
+    print("  ⇒ A4: " + ("유효슛 C1o 를 싣는다" if a4 else "미달 — A4 를 뺀다"))
+    print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
+
+
 # ── 자기 점검 ──────────────────────────────────────────────────────────────
 def _fake(n_match: int, truth: str, rng) -> tuple[dict, list]:
     """지어낸 슛 — truth='c0' 면 골이 C0 확률대로, 'grid' 면 C0 와 다른 칸별 확률대로(헤더·먼 거리에서 크게 어긋나게)."""
@@ -637,10 +683,13 @@ if __name__ == "__main__":
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--2b", dest="m2b", action="store_true", help="측정 2b — 내 계정 슛을 뺀 격자(C1o)")
     ap.add_argument("--2c", dest="m2c", action="store_true", help="측정 2c — 처음 보는 슈터(내 계정 슛)로 보정 판정")
+    ap.add_argument("--2d", dest="m2d", action="store_true", help="측정 2d — 사람 단위 무작위 5조로 떼어 낸 슈터")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
-    if a.m2c:
+    if a.m2d:
+        run_2d(config.DB_PATH)
+    elif a.m2c:
         run_2c(config.DB_PATH)
     elif a.m2b:
         run_2b(config.DB_PATH)
