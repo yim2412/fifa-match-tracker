@@ -101,6 +101,10 @@ def load_shots(db_path) -> tuple[dict, list]:
                 cols["dist"].append(dist)
                 cols["ang"].append(ang)
                 cols["c0"].append(stats.shot_xg(float(x), float(y), in_pen, tname))
+                dv = p.get("division")
+                cols["div"].append(int(dv) if isinstance(dv, int) else -1)       # 슈터 등급(측정 2b 보고)
+                sp = sd.get("spId")
+                cols["spid"].append(int(sp) if isinstance(sp, int) else -1)      # 카드별 xG 차(측정 2b 보고)
     conn.close()
     S = {k: np.asarray(v) for k, v in cols.items()}
     S["date"] = np.asarray([matches[i][1] for i in S["match"]]) if len(S.get("match", [])) else np.asarray([])
@@ -234,6 +238,14 @@ class C1:
                     v = self.v1.get((a,), self.root)
             out[i] = v
         return np.clip(out, EPS, 1 - EPS)
+
+
+class C1o(C1):
+    """측정 2b — C1 과 같은 절차인데 학습 슛에서 내 계정(accounts 표)이 찬 슛을 뺀다(자기 참조 없애기)."""
+    name = "C1o"
+
+    def fit(self, S, idx):
+        return super().fit(S, idx[~S["is_mine"][idx]])
 
 
 # ── 지표 ──────────────────────────────────────────────────────────────────
@@ -435,6 +447,76 @@ def run(db_path) -> None:
     print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
 
 
+def run_2b(db_path) -> None:
+    """측정 2b(ROADMAP 43 "측정 2b — 자기 참조 판정 규칙", 3판 시작 커밋 def359d) — C1 대신 C1o 로 같은 규칙 1~3,
+    덧붙여 검증 구간의 내 계정이 아닌 쪽 슛만으로도 ECE·평균 차 문턱. 통과하면 C1o, 못 넘으면 C1 을 싣는다."""
+    t0 = datetime.now()
+    S, matches = load_shots(db_path)
+    conn = sqlite3.connect("file:" + str(db_path).replace("\\", "/") + "?mode=ro", uri=True)
+    accounts = {r[0] for r in conn.execute("SELECT ouid FROM accounts")}
+    conn.close()
+    side_ouid = np.array([matches[m][2][s] if s < len(matches[m][2]) else None for m, s in zip(S["match"], S["side"])],
+                         dtype=object)
+    S["is_mine"] = np.array([o in accounts for o in side_ouid])
+    pk = S["type"] == PK_TYPE
+    train_m, test_m, recent_m, cut_date = time_split(S, matches)
+    idx = np.arange(len(S["goal"]))
+    tr, te, rc = idx[train_m & ~pk], idx[test_m & ~pk], idx[recent_m & ~pk]
+    print(f"[재료] 슛 {len(S['goal']):,} · 내 계정이 찬 슛 {int(S['is_mine'].sum()):,} ({S['is_mine'].mean():.1%})")
+    print(f"  학습 {len(tr):,}(그중 내 계정 아닌 쪽 {int((~S['is_mine'][tr]).sum()):,} — C1o 가 쓰는 것) · 검증 {len(te):,} · 최근 {len(rc):,}")
+
+    print("\n[2b · 전체 슛] 판정 ①(시간) — C0 → C0r → C2 → C1o")
+    chosen, info = judge(S, tr, te, rc, [C0(), C0r(), C2(), C1o()])
+    final = "C1"
+    if chosen == "C1o":
+        te_nm = te[~S["is_mine"][te]]
+        m = metrics(S, te_nm, info["fitted"]["C1o"].predict(S, te_nm))
+        ok = m["ece"] <= ECE_MAX and m["mean_diff"] <= MEAN_DIFF_MAX
+        print(f"  [덧붙인 문턱] 검증의 내 계정 아닌 쪽 {m['n']:,}슛: ECE {m['ece']*100:.2f}%p · 평균 차 {m['mean_diff']*100:.2f}%p → {'통과' if ok else '미달'}")
+        if ok:
+            final = "C1o"
+    print(f"  ⇒ 실을 표: {final}" + ("" if final == "C1o" else "  (C1o 미달 → C1 · '내 계정 슛이 기준의 절반' 을 D2 에)"))
+
+    fitted = dict(info["fitted"])
+    if final == "C1":
+        fitted["C1"] = C1().fit(S, tr)
+    model = fitted[final]
+
+    print("\n[보고 · 결정력 문장] " + finishing_flips(S, matches, final, fitted, list(accounts)))
+
+    # 카드별 xG 차 부호 — 내 계정 슛 · 슛 30개 이상 카드 · 페널티킥은 실측 비율
+    allidx = idx
+    pn = np.array(S["c0"], dtype=float)
+    pn[allidx[~pk]] = model.predict(S, allidx[~pk])
+    pk_rate = float(S["goal"][pk & train_m].mean()) if (pk & train_m).any() else 0.76
+    pn[pk] = pk_rate
+    mine = S["is_mine"]
+    cards = defaultdict(lambda: [0, 0.0, 0.0, 0.0])        # 슛, 골, C0 합, 새 합
+    for i in allidx[mine]:
+        c = cards[int(S["spid"][i])]
+        c[0] += 1; c[1] += S["goal"][i]; c[2] += S["c0"][i]; c[3] += pn[i]
+    big = {k: v for k, v in cards.items() if v[0] >= 30 and k != -1}
+    flip = sum(1 for v in big.values() if np.sign(v[1] - v[2]) != np.sign(v[1] - v[3]))
+    print(f"[보고 · 카드 xG 차] 내 계정 카드 중 슛 30개 이상 {len(big)}장 · 골−xG 부호가 C0 대비 바뀐 카드 {flip}장")
+
+    # 슈터 등급별 보정 — 검증 슛 1,000개 넘는 등급
+    print("[보고 · 슈터 등급별 보정] 검증 구간 · (실을 표) 예측 평균 − 실제 / (C0) 같은 값")
+    over = []
+    for dv in np.unique(S["div"][te]):
+        g = te[S["div"][te] == dv]
+        if len(g) < TYPE_MIN_TEST:
+            continue
+        y = S["goal"][g].mean()
+        dn = model.predict(S, g).mean() - y
+        d0 = np.clip(S["c0"][g], EPS, 1 - EPS).mean() - y
+        print(f"  division {int(dv):5}  {len(g):6,}슛  실제 {y:.1%} · {final} {dn*100:+.1f}%p · C0 {d0*100:+.1f}%p")
+        if abs(dn) > TYPE_DIFF_MAX:
+            over.append(int(dv))
+    print("  → 5%p 넘는 등급: " + (", ".join(map(str, over)) if over else "없음") +
+          ("  (결정력 문장 옆 '기준' 글에 적는다)" if over else ""))
+    print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
+
+
 # ── 자기 점검 ──────────────────────────────────────────────────────────────
 def _fake(n_match: int, truth: str, rng) -> tuple[dict, list]:
     """지어낸 슛 — truth='c0' 면 골이 C0 확률대로, 'grid' 면 C0 와 다른 칸별 확률대로(헤더·먼 거리에서 크게 어긋나게)."""
@@ -492,7 +574,11 @@ def selftest() -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--2b", dest="m2b", action="store_true", help="측정 2b — 내 계정 슛을 뺀 격자(C1o)")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
-    run(config.DB_PATH)
+    if a.m2b:
+        run_2b(config.DB_PATH)
+    else:
+        run(config.DB_PATH)
