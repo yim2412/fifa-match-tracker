@@ -1,4 +1,4 @@
-"""42단계 단계 0 분석 — rows.jsonl(구단주 160명) + fifa.db(내 계정 4개, 읽기 전용). 판정 규칙은 ROADMAP 단계 0 시작 커밋(4c35486) 그대로.
+"""42단계 단계 0 분석 — rows100.jsonl(구단주 160명 · 100판) + fifa.db(내 계정 4개, 읽기 전용). 판정 규칙은 ROADMAP 단계 0 시작 커밋(4c35486) 그대로.
     python analyze0.py [--boot 1000]
 """
 import argparse, json, math, random, sqlite3, statistics, sys
@@ -38,9 +38,24 @@ def stats_of(ds, ses, ws):
             "ratio": (sig2 / v) if v > 0 else 0.0, "neff": neff}
 
 
+ROWS_FILE = "rows100.jsonl"           # collect0.OUT 과 같아야 한다 (30판 때는 rows.jsonl)
+SNAP_DAY = datetime(2026, 10, 12)
+
+
+def keep_owners(owners):
+    """설계의 제외 규칙 — 판수 20 미만 · 마지막 경기 30일 초과. analyze0/1 이 같은 집합을 보게 한 곳에만."""
+    out = []
+    for o in owners:
+        last = o.get("last")
+        old = last is None or (SNAP_DAY - datetime.fromisoformat(last)).days > 30
+        if o["n_games"] >= 20 and not old:
+            out.append(o)
+    return out
+
+
 def load_owners():
     out = []
-    for line in (HERE / "rows.jsonl").read_text(encoding="utf-8").splitlines():
+    for line in (HERE / ROWS_FILE).read_text(encoding="utf-8").splitlines():
         j = json.loads(line)
         if "error" in j:
             continue
@@ -83,14 +98,7 @@ def main():
     owners = load_owners()
     print(f"받은 구단주 {len(owners)}명 · 층별 { {k: sum(1 for o in owners if o['stratum']==k) for k in POP} }")
     # ── 제외(설계: 판수 20 미만 · 마지막 경기 30일 초과)
-    snap_day = datetime(2026, 10, 12)
-    keep = []
-    for o in owners:
-        last = o.get("last")
-        old = last is None or (snap_day - datetime.fromisoformat(last)).days > 30
-        if o["n_games"] < 20 or old:
-            continue
-        keep.append(o)
+    keep = keep_owners(owners)
     print(f"제외 뒤 {len(keep)}명 (제외 {len(owners)-len(keep)}명 = {100*(len(owners)-len(keep))/len(owners):.1f}%)")
     D = [owner_diffs(o) for o in keep]
     ws = weights(keep)
@@ -103,12 +111,12 @@ def main():
     print(f"\n[③] 구단주당 요청 평균 {statistics.mean(reqs):.1f} · 요청당 응답 {sum(secs)/sum(reqs):.3f}초 · "
           f"ouid 적중 {100*sum(1 for o in owners if o.get('ouid_hit'))/len(owners):.0f}% · "
           f"상세 적중 {100*sum(o['detail_hits'] for o in owners)/max(1,sum(o['n_ids'] for o in owners)):.1f}%")
-    # ── ④ 30판이 덮는 기간
+    # ── ④ 받은 판수(rows 파일의 N_MATCH)가 덮는 기간
     spans = []
     for o in keep:
         if o["first"] and o["last"]:
             spans.append((datetime.fromisoformat(o["last"]) - datetime.fromisoformat(o["first"])).total_seconds() / 86400)
-    print(f"[④] 30판 덮는 기간 중앙값 {statistics.median(spans):.1f}일 (층별 중앙값 " +
+    print(f"[④] 받은 판수가 덮는 기간 중앙값 {statistics.median(spans):.1f}일 (층별 중앙값 " +
           ", ".join(f"{k}:{statistics.median([s for s,o in zip(spans,keep) if o['stratum']==k]):.1f}" for k in POP) + ")")
     # ── ① 지표별 분리비
     res = {}

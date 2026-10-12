@@ -5,7 +5,7 @@ import analyze0 as A
 import config, habits, store
 
 rng = random.Random(20261012)
-owners = [o for o in A.load_owners() if o["n_games"] >= 20]
+owners = A.keep_owners(A.load_owners())
 D = [A.owner_diffs(o) for o in owners]
 ws = A.weights(owners)
 strata = [o["stratum"] for o in owners]
