@@ -83,8 +83,11 @@ def weights(sample):
     return [POP[o["stratum"]] / cnt[o["stratum"]] for o in sample]
 
 
-def mine_diffs(conn, ouid, days=None, today=None):
+def mine_diffs(conn, ouid, days=None, today=None, games=None):
+    """games 를 주면 최근 그 판수만(load_details 가 최신순) — 3차 R2: 구단주 쪽과 같은 판수로 비교."""
     det = store.load_details(conn, ouid, config.DEFAULT_MATCH_TYPE)
+    if games is not None:
+        det = det[:games]
     if days is not None:
         since = (today - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
         det = [d for d in det if (d.get("matchDate") or "") >= since]

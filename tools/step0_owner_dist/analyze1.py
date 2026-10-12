@@ -84,7 +84,7 @@ for k in KEYS:
 print("  판정 대상:", [LAB[k] for k in KEYS if target[k]])
 CHIP = ("finish", "on_target_rate", "tackle_rate")
 AX = ("possession", "shots", "long_through_rate", "tackles")
-print(f"  칩 지표 셋 중 {sum(target[k] for k in CHIP)}/3 · A1 축 넷 중 {sum(target[k] for k in AX)}/4 (과반 = 각각 2 이상 / 3 이상)")
+print(f"  (안정성 전) 칩 지표 셋 중 {sum(target[k] for k in CHIP)}/3 · A1 축 넷 중 {sum(target[k] for k in AX)}/4 — A1 은 3차 R1 로 판정 밖")
 
 # ── 안정성: 층 균형 반쪽 20회, 같은 계정 백분위(축소 전) 차이 중앙값 ≤ 8%p
 conn = sqlite3.connect(f"file:{config.DB_PATH}?mode=ro", uri=True); conn.row_factory = sqlite3.Row
@@ -111,14 +111,18 @@ for k in KEYS:
 print("  " + " · ".join(f"{LAB[k][:4]} {stab[k]:.1f}" for k in KEYS))
 final = {k: target[k] and stab[k] <= 8.0 for k in KEYS}
 print("  안정성 ≤8 && 위 대상 →", [LAB[k] for k in KEYS if final[k]])
+n_chip = sum(final[k] for k in CHIP)
+print(f"  [기준 4 · 3차 R1] 칩 지표 셋 중 판정 대상 {n_chip}/3 (2 이상) → {'✓' if n_chip >= 2 else '✗'}")
 
-# ── 칩 발생률: 판정 대상 지표 × 4계정 (전체 범위 / 최근 14일 / 최근 3일)
+# ── 칩 발생률: 판정 대상 지표 × 4계정. 판정 창은 3차 R2 로 '최근 100판'(구단주 쪽 판수와 같게) — 나머지는 보고만
 today = datetime(2026, 10, 12, 23, 59)
 print("\n[③ 칩 발생률 — 축소 백분위 ≤10 또는 ≥90 AND |d−m| ≥ 2√(se_me²+se_m²)]")
-for label, days in (("전체 범위", None), ("최근 14일", 14), ("최근 3일", 3)):
+for label, days, games in (("최근 100판 [판정 · 3차 R2]", None, 100), ("전체 범위", None, None),
+                           ("최근 14일", 14, None), ("최근 3일", 3, None)):
     tot = chips = 0; per = {}
     for i, (n, ou) in enumerate(accts, 1):
-        g, md = A.mine_diffs(conn, ou, days=days, today=today) if days else (mine[i][0], mine[i][1])
+        g, md = (A.mine_diffs(conn, ou, days=days, today=today, games=games) if (days or games)
+                 else (mine[i][0], mine[i][1]))
         for k in KEYS:
             if not final[k] or g < 20:
                 continue
@@ -131,5 +135,9 @@ for label, days in (("전체 범위", None), ("최근 14일", 14), ("최근 3일
             tot += 1
             if (p <= 10 or p >= 90) and abs(d - r["m"]) >= 2 * math.sqrt(se * se + se_m * se_m):
                 chips += 1; per.setdefault(i, []).append(LAB[k])
-    print(f"  {label}: 칩 {chips}/{tot} = {100*chips/tot if tot else float('nan'):.0f}%  계정별 {per}")
+    rate = 100 * chips / tot if tot else float("nan")
+    verdict = ""
+    if games == 100:
+        verdict = f" → [기준 3] {'✓' if tot and 0 < rate <= 30 else '✗'} (0 초과 30% 이하)"
+    print(f"  {label}: 칩 {chips}/{tot} = {rate:.0f}%  계정별 {per}{verdict}")
 json.dump({"min_ratio": min_ratio, "min_sigma": min_sigma, "ks": ks, "ks95": ks95, "target": target, "stab": stab, "final": final}, open(A.HERE / "res1.json", "w"), ensure_ascii=False, indent=1)
