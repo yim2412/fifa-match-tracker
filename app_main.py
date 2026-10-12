@@ -83,6 +83,8 @@ PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
 # 1.2.1 에서 몰수 판정을 종료 유형으로 바꿨다 — 업데이트한 사람이 "정상 종료 수가 왜 줄었나"를 여기서 본다.
 FORFEIT_TIP = ("넥슨 경기 종료 유형으로 셉니다 — 상대나 내가 나가서 끝난 경기.\n"
                "내 쪽 기록이 '오류'로 남은 몰수패도 포함해서, 승률 계산에는 아직 안 들어간 경기가 있습니다.")
+# 2.9.1 에서 xG 를 격자 표로 바꿨다 — 지난 경기 값도 한꺼번에 바뀌므로 xG 를 보여 주는 자리에 같이 적는다(43 B[중]3)
+XG_METHOD_NOTE = "xG는 넥슨이 주지 않는 추정치 · 2.9.1부터 실제 경기 슛으로 세운 표로 계산(지난 경기 값도 바뀜)"
 # 새 경기 상세를 동시에 몇 개 받나. 2026-10-04 서비스 키 실측(250건씩): 6 → 초당 27~30건, 12 → 55,
 # 24 → 97, 48 → 124(응답 상위 10% 가 235 → 427ms 로 늘어남). 처음 보는 계정 3천 경기가 113초 → 약 32초.
 # 429(호출 한도)를 한 번이라도 받으면 그 검색은 THROTTLED 로 내린다 — 개발 단계 키는 초당 5건이다.
@@ -1847,7 +1849,7 @@ class MainWindow(QMainWindow):
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
                       "블록%", "선방력", "평점"]
-    # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 비공식 근사치.
+    # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 추정치(stats.shot_xg).
     FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
     # 공격력/수비력/기대득점률/가로채기/선방력은 오픈API가 안 주는 값이라 직접 만든
@@ -4167,7 +4169,7 @@ class MainWindow(QMainWindow):
         note = QLabel(
             f"분모는 골이 아니라 <b>슛</b>이다 — \"그 방식으로 찼을 때 들어가는 "
             f"비율\".<br>슛 {core.MIN_BUCKET_SHOTS}개 미만인 칸은 비율을 내지 "
-            f"않는다({NA}).<br>괄호는 유효슛률 · xG는 비공식 근사치.")
+            f"않는다({NA}).<br>괄호는 유효슛률 · {XG_METHOD_NOTE}.")
         note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
         note.setWordWrap(True)
         sv.addWidget(note)
@@ -6596,12 +6598,11 @@ class MainWindow(QMainWindow):
             self._show_player_info(sp_id)
 
     def _build_finishing_tab(self) -> QWidget:
-        """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 비공식 근사치."""
+        """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 추정치(stats.shot_xg)."""
         w = QWidget()
         v = QVBoxLayout(w)
         note = QLabel("표시 구간 기준 · 내 슛만 · 골이 많은 순  "
-                      "(xG=기대득점, 넥슨이 안 주는 비공식 근사치 · "
-                      "골−xG가 +면 근사 기대보다 더 넣은 것)")
+                      f"(xG=기대득점 · 골−xG가 +면 기대보다 더 넣은 것)<br>{XG_METHOD_NOTE}")
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
         note.setWordWrap(True)
         v.addWidget(note)

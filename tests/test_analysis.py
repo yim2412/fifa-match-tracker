@@ -261,11 +261,14 @@ def test_possession_rule_needs_two_bands_and_a_gap():
 
 
 def test_finishing_rule_direction_and_floor():
-    from stats import shot_xg, goal_type_name
-    xg1 = shot_xg(0.9, 0.5, True, goal_type_name(1))             # _shot 기본 좌표의 기대득점
+    from stats import shot_xg
+    # 21m 중앙 — 격자 xG(2.9.1)는 10.5m 가 0.8 을 넘어 "+30%" 골 수가 슛 수를 넘으므로 더 먼 칸에서 잰다
+    x = 0.8
+    xg1 = shot_xg(x, 0.5, False, 1)
 
     def build(n_shots, n_goals):
-        shots = [_shot(3) for _ in range(n_goals)] + [_shot(1) for _ in range(n_shots - n_goals)]
+        shots = ([_shot(3, x=x, pen=False) for _ in range(n_goals)]
+                 + [_shot(1, x=x, pen=False) for _ in range(n_shots - n_goals)])
         d = _match(0, "승", n_goals, 0, 50, [], [])
         d["matchInfo"][0]["shootDetail"] = shots
         return analysis._finishing_rules([d], OUID)
@@ -276,6 +279,20 @@ def test_finishing_rule_direction_and_floor():
     assert _find(build(n, hi), "잘 넣고") and _find(build(n, lo), "못 넣고")
     assert build(n, round(expect)) == [], "기대만큼 넣었는데 말했다"
     assert build(n - 1, hi) == [], "슛이 기준보다 적은데 말했다"
+    # 보정을 잰 등급(900~1300) 밖이면 "확인 못 함" 을 붙인다 — _match 는 900(잰 등급)
+    assert analysis.XG_UNCHECKED_NOTE not in build(n, hi)[0].detail
+    for dv in (800, 1400, None):
+        d = _match(0, "승", hi, 0, 50, [], [])
+        d["matchInfo"][0]["shootDetail"] = ([_shot(3, x=x, pen=False) for _ in range(hi)]
+                                             + [_shot(1, x=x, pen=False) for _ in range(n - hi)])
+        d["matchInfo"][0]["division"] = dv
+        got = analysis._finishing_rules([d], OUID)
+        assert got and got[0].detail.endswith(analysis.XG_UNCHECKED_NOTE), (dv, got)
+    # 주 등급은 가장 많이 찍힌 것 — 900 둘 · 800 하나면 900
+    ds = [_match(i, "승", 0, 0, 50, [], []) for i in range(3)]
+    ds[0]["matchInfo"][0]["division"] = 800
+    ds[1]["matchInfo"][1]["division"] = 800                          # 상대 쪽은 안 센다
+    assert analysis._main_division(ds, OUID) == 900
 
 
 def test_goal_type_rule_needs_enough_and_share():

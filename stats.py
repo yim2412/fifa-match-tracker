@@ -20,6 +20,8 @@ from itertools import combinations
 from typing import NamedTuple
 
 import config
+import xg_grid
+import xgmodel
 # 등급 상수·판정은 models 에 있다(A6 의 draw_possible 이 써서) — 예전 이름 그대로 다시 내보낸다.
 from models import (CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, RateMixin,  # noqa: F401
                     draw_possible_of, is_champion_or_above, is_mixed, rated, win_pct)
@@ -124,6 +126,9 @@ def season_divisions(points: list[tuple[datetime, int]],
 #    행에서 경기별로 정확히 일치 → 확정.
 #  - 1/2/3/6/7 은 같은 계정 100경기의 유형별 골 수 대조로 합계가 전부 일치 → 확정.
 #  - 4/10/13/14 는 근거가 없어 비워 둔다(= "알 수 없음").
+#    14 는 슛의 약 2%로 꽤 많다(골 59% · 어시 88% · 대부분 10~25m). 2026-10-12 최근 3,000경기에서 요약(`shoot`)
+#    집계 어느 것과도 안 맞았고 shootHeading·shootFreekick 에도 안 들어간다(14 가 있는 458쪽 중 0) — 이름은 못 붙였다.
+#    xG 격자에는 이름이 아니라 코드로 들어가 14 도 자기 칸을 가진다.
 GOAL_TYPES = {
     1: "일반(D)",
     2: "감아차기(ZD)",
@@ -1133,34 +1138,31 @@ SHOT_ON_TARGET = 1
 SHOT_OFF_TARGET = 2
 _SHOT_RESULTS = (SHOT_GOAL, SHOT_ON_TARGET, SHOT_OFF_TARGET)
 
-# ── 기대득점(xG) 근사 ──────────────────────────────────────────────────────
-# ⚠️ 넥슨은 xG 정답값을 주지 않는다 — 이건 순수 근사 모델이다(비공식).
-# 슛 좌표(거리·골대 각도)와 박스 안 여부·슛 유형만으로 득점 확률을 추정한다.
-# 공개 xG 튜토리얼(거리·각도 로지스틱)의 형태를 따르되, 계수는 실제 캐시에서
-# 전체 xG 합이 실제 골 수와 같은 규모가 되도록 맞췄다(자기 계정 기준 캘리브레이션).
+# ── 기대득점(xG) ──────────────────────────────────────────────────────────
+# ⚠️ 넥슨은 xG 정답값을 주지 않는다 — 비공식 추정이다.
+# 2.9.1 부터 실제 경기 슛으로 세운 격자 표(골라인 거리 5m × 중앙 폭 5m × 슛 종류)를 쓴다 — 표는 xg_grid.py
+# (생성물 · tools/fit_xg.py --write), 읽기는 xgmodel.predict. 그전 식(거리·각도 로지스틱 + 헤더 ×0.7)은 평균은
+# 맞았지만 칸마다 어긋났다(검증 슛 ECE 6.9%p → 격자 0.8%p · ROADMAP 43 측정 2). 옛 식은 fit_xg.c0_frozen 에 얼려 있다.
 _PITCH_LEN = 105.0   # m — x(0~1)가 경기장 전체 길이 비율
 _PITCH_WID = 68.0    # m — y(0~1)가 폭 비율, 0.5 가 중앙
-_GOAL_WIDTH = 7.32   # m
 
 
-def shot_xg(x: float, y: float, in_penalty: bool = False,
-            type_name: str = "") -> float:
-    """슛 하나의 기대득점(0~1) 근사. 정답값 없는 비공식 추정."""
-    if type_name == "페널티킥":
-        return 0.76  # 실측 PK 성공률 근사 — 위치와 무관
-    dx = max(0.01, (1.0 - x) * _PITCH_LEN)      # 골라인까지 거리
-    dy = abs(y - 0.5) * _PITCH_WID              # 중앙에서 좌우로 벗어난 폭
-    dist = math.hypot(dx, dy)
-    # 골대 양 포스트가 슛 지점에서 이루는 각(넓을수록 넣기 쉽다)
-    denom = dx * dx + dy * dy - (_GOAL_WIDTH / 2) ** 2
-    angle = math.atan2(_GOAL_WIDTH * dx, denom)
-    if angle < 0:
-        angle += math.pi
-    z = -0.15 + 0.115 * dist - 3.2 * angle
-    xg = 1.0 / (1.0 + math.exp(z))
-    if type_name == "헤더":
-        xg *= 0.7   # 헤더는 같은 위치라도 득점 확률이 낮다
-    return max(0.0, min(0.99, xg))
+def shot_type_code(t) -> int | None:
+    """payload 의 슛 type → shot_xg 에 넘길 코드. 정수가 아니면 None('기타' 칸) — 넥슨이 형을 바꿔도
+    (예: "9") 슛 맵 전체가 예외로 죽지 않고 그 슛만 기타 칸 값이 된다(전역 규칙 7 · 43 M6)."""
+    return t if isinstance(t, int) and not isinstance(t, bool) else None
+
+
+def shot_xg(x: float, y: float, in_penalty: bool = False, type_code: int | None = None) -> float:
+    """슛 하나의 기대득점(0~1). type_code 는 넥슨 슛 종류 **코드**(shot_type_code 로 거른 값).
+    in_penalty 는 격자가 안 쓴다(좌표 칸이 이미 박스를 가른다) — 호출 꼴을 지키려고 남겼다.
+    이름 문자열을 넘기면 TypeError — 옛 호출(goal_type_name)이 남아 있으면 예외 없이 '기타' 칸 값이 나와
+    조용히 틀리므로 개발 중에 터지게 한다(43 3회차 A[중]2). 넥슨 값은 호출부가 shot_type_code 로 거른다."""
+    if isinstance(type_code, str):
+        raise TypeError(f"shot_xg 는 슛 종류 코드(int)를 받는다 — 이름 {type_code!r} 을 넘겼다")
+    if type_code == xg_grid.PK_TYPE:
+        return xg_grid.PK_RATE       # 위치와 무관한 상수 — 표와 같은 학습분의 성공 비율
+    return xgmodel.predict(xg_grid.SHOT, x, y, type_code)
 
 
 @dataclass
@@ -1175,6 +1177,9 @@ class Shot:
     # 어시스트 위치(1.4.1 N6) — 넥슨이 assist=True 로 준 슛만(골의 90%, 실측 R11). 없으면 None
     assist_x: float | None = None
     assist_y: float | None = None
+    # 슛 종류 코드(2.9.1 — xG 격자 칸). 이름(type_name)은 모르는 코드를 "알 수 없음" 하나로 뭉친다.
+    # 맨 끝 · 기본값 있음 — 위치 인자로 Shot 을 만드는 곳(테스트)이 그대로 돈다
+    type_code: int | None = None
 
 
 @dataclass
@@ -1241,14 +1246,15 @@ def shot_map(details: list[dict], ouid: str, mine: bool = True,
             if r not in _SHOT_RESULTS:
                 continue
             tname = goal_type_name(sd.get("type"))
+            tcode = shot_type_code(sd.get("type"))
             in_pen = bool(sd.get("inPenalty"))
             ax, ay = sd.get("assistX"), sd.get("assistY")
             has_assist = (bool(sd.get("assist")) and isinstance(ax, (int, float))
                           and isinstance(ay, (int, float)))
             sm.shots.append(Shot(
                 float(x), float(y), int(r), tname, in_pen,
-                bool(sd.get("hitPost")), shot_xg(float(x), float(y), in_pen, tname),
-                float(ax) if has_assist else None, float(ay) if has_assist else None))
+                bool(sd.get("hitPost")), shot_xg(float(x), float(y), in_pen, tcode),
+                float(ax) if has_assist else None, float(ay) if has_assist else None, tcode))
     return sm
 
 
@@ -1425,7 +1431,7 @@ def player_finishing_trend(details: list[dict], ouid: str, sp_id: int) -> list[W
             x, y = sd.get("x"), sd.get("y")
             if isinstance(x, (int, float)) and isinstance(y, (int, float)):
                 w.xg += shot_xg(float(x), float(y), bool(sd.get("inPenalty")),
-                                goal_type_name(sd.get("type")))
+                                shot_type_code(sd.get("type")))
     return [weeks[k] for k in sorted(weeks)]
 
 
@@ -1460,7 +1466,7 @@ def finishing_ranking(details: list[dict], ouid: str,
                 x, y = sd.get("x"), sd.get("y")
                 if isinstance(x, (int, float)) and isinstance(y, (int, float)):
                     pf.xg += shot_xg(float(x), float(y), bool(sd.get("inPenalty")),
-                                     goal_type_name(sd.get("type")))
+                                     shot_type_code(sd.get("type")))
                 if r == SHOT_GOAL:
                     pf.goals += 1
                     if sd.get("assist"):

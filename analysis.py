@@ -53,9 +53,13 @@ CONC_SHARE = 1.5     # 한 구간 실점 비중이 균등분포(1/6)의 몇 배�
 TYPE_SHARE = 25.0    # 특수 골 유형이 전체의 몇 %부터 "치우쳤다"고 볼 것인가
 FINISH_GAP = 25.0    # 골이 xG 대비 몇 % 벗어나야 결정력을 말할 것인가
 
-# xG 는 슛 좌표 기반 근사(stats.shot_xg)라 편차가 크게 나올 수 있다. 정렬
+# xG 는 넥슨이 주지 않는 추정(stats.shot_xg — 2.9.1 부터 격자 표)이라 편차가 크게 나올 수 있다. 정렬
 # 가중치에서만 상한을 씌운다 — 문장에 적는 숫자는 실제 값 그대로 둔다.
 _FINISH_CAP = 40.0
+# xG 격자의 보정을 잰 슈터 등급(division) — ROADMAP 43 측정 2b: 검증 슛이 1,000개 넘은 등급만 잴 수 있었고
+# 전부 문턱(5%p) 안이었다. 내 주 등급이 이 밖이면 결정력 문장에 "보정 확인 안 됨" 을 붙인다(표가 다시 세워지면 다시 잰다).
+XG_CHECKED_DIVISIONS = frozenset({900, 1000, 1100, 1200, 1300})
+XG_UNCHECKED_NOTE = " 이 등급에서는 기대득점의 보정을 확인하지 못했습니다."
 
 # "일반(D)"·"땅볼(DD)"은 대부분의 골이 여기 속하는 기본 유형이라, 비중이
 # 높다는 사실 자체에 정보가 없다("득점의 100%가 일반 유형입니다"). 헤더·
@@ -405,18 +409,30 @@ def _finishing_rules(details: list[dict], ouid: str) -> list[Insight]:
     gap = (sm.goals - sm.xg) / sm.xg * 100
     if abs(gap) < FINISH_GAP:
         return []
-    # xG 는 슛 좌표로 근사한 값이다(stats.shot_xg). 절대량이 아니라 방향만 본다.
+    # xG 는 추정값이다(stats.shot_xg). 절대량이 아니라 방향만 본다.
+    note = "" if _main_division(details, ouid) in XG_CHECKED_DIVISIONS else XG_UNCHECKED_NOTE
     if gap > 0:
         return [Insight(
             SEC_WIN, "슛 기회를 기대치보다 잘 넣고 있습니다.",
             f"슛 {sm.total}개 · 기대득점 {sm.xg:.1f} 대비 실제 {sm.goals}골"
-            f"(+{gap:.0f}%). 골 전환율 {sm.conversion:.0f}%.",
+            f"(+{gap:.0f}%). 골 전환율 {sm.conversion:.0f}%." + note,
             _w(min(gap, _FINISH_CAP), sm.total, MIN_SHOTS))]
     return [Insight(
         SEC_LOSE, "만든 기회를 못 넣고 있습니다.",
         f"슛 {sm.total}개 · 기대득점 {sm.xg:.1f}인데 실제는 {sm.goals}골"
-        f"({gap:.0f}%). 유효슛률 {sm.effective_rate:.0f}%.",
+        f"({gap:.0f}%). 유효슛률 {sm.effective_rate:.0f}%." + note,
         _w(max(gap, -_FINISH_CAP), sm.total, MIN_SHOTS))]
+
+
+def _main_division(details: list[dict], ouid: str) -> int | None:
+    """그 경기들에서 내 쪽에 가장 많이 찍힌 등급(division). 기록이 없으면 None."""
+    seen: dict[int, int] = {}
+    for d in details:
+        for p in d.get("matchInfo") or []:
+            dv = p.get("division")
+            if p.get("ouid") == ouid and isinstance(dv, int):
+                seen[dv] = seen.get(dv, 0) + 1
+    return max(seen, key=lambda k: (seen[k], -k)) if seen else None
 
 
 def _goal_type_rules(details: list[dict], ouid: str) -> list[Insight]:

@@ -37,6 +37,8 @@ import models
 import ranker
 import seasons as sn
 import stats as st
+import xg_grid
+import xgmodel
 
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 
@@ -246,11 +248,69 @@ def test_possession_stats():
     assert bands["열세"].games == 0 and bands["우세"].games == 0
 
 
-def test_shot_xg_deterministic():
-    # 순수 함수 — 좌표만으로 결정. 계수를 바꾸면(모델 재튜닝) 여기가 깨진다(의도).
-    assert abs(st.shot_xg(0.90, 0.50, True, "일반(D)") - 0.7482) < 1e-3
-    assert st.shot_xg(0.88, 0.50, True, "페널티킥") == 0.76
+# xG 격자 골든(43 A5) — numpy·fifa.db 없이 CI 에서 돈다. 표(xg_grid.py)를 다시 생성하면 값이 바뀐다(의도 —
+# fit_xg --write 가 안에서 판정 코드와 대조했으니 여기 값만 새로 옮긴다). 점은 칸 경계 양옆·끝 칸·종류 배선.
+def _xy(dx_m, dy_m):
+    return 1 - dx_m / 105.0, 0.5 + dy_m / 68.0
+
+
+XG_GOLDEN = [  # (골라인 거리 m, 중앙 폭 m, 종류 코드, 기대값)
+    (4.9, 0.0, 1, 0.8428861777309077),    # 거리 칸 0
+    (5.1, 0.0, 1, 0.835614754229821),     # 거리 칸 1 — 4.9 와 달라야 경계 배선이 재진다
+    (12, 4.9, 1, 0.829285838042604),      # 폭 칸 0
+    (12, 5.1, 1, 0.7291859695480805),     # 폭 칸 1
+    (12, 1, 3, 0.22016159132614416),      # 헤더 — 같은 칸 일반의 1/4
+    (12, 1, 14, 0.8576146545920343),      # 이름 없는 코드 14 도 자기 칸(그룹)이 있다
+    (12, 1, 4, 0.5451277630520646),       # 그룹 밖 → 기타 칸
+    (12, 1, None, 0.5451277630520646),    # None → 기타 칸
+    (80, 1, 1, 0.4413222788087797),       # 끝 칸(60m 넘음)
+    (62, 1, 1, 0.4413222788087797),       # 같은 끝 칸
+    (12, 33, 1, 0.5471085030967304),      # 폭 끝 칸(30m 넘음)
+    (12, 31, 1, 0.5471085030967304),
+]
+
+
+def test_shot_xg_grid_golden():
+    for dx, dy, t, want in XG_GOLDEN:
+        got = st.shot_xg(*_xy(dx, dy), False, t)
+        assert abs(got - want) < 1e-12, (dx, dy, t, got, want)
+    # 페널티킥은 위치와 무관한 상수(표와 같은 학습분의 비율)
+    assert st.shot_xg(*_xy(11, 0), True, 9) == st.shot_xg(*_xy(30, 20), False, 9) == xg_grid.PK_RATE
+    assert 0.6 < xg_grid.PK_RATE < 0.9
+    # 표의 머리 — 판정 커밋·칸 규칙이 표 안에 같이 실려 있어야 xgmodel 이 판정 코드와 같은 칸을 쓴다
+    for tbl in (xg_grid.SHOT, xg_grid.ON_TARGET):
+        assert tbl["cell"] == (5.0, 5.0, 12, 6) and tbl["pitch"] == (105.0, 68.0), tbl["cell"]
+        assert tbl["shots"] > 50_000 and 9 not in tbl["groups"], tbl["groups"]
+    # 유효슛 표는 전체 슛 표보다 같은 칸에서 높다(빗나간 슛이 분모에 없다) — 두 표가 뒤바뀌면 깨진다
+    x, y = _xy(12, 1)
+    assert xgmodel.predict(xg_grid.ON_TARGET, x, y, 1) > xgmodel.predict(xg_grid.SHOT, x, y, 1)
     assert st.decode_goal_time((1 << 24) | 300) == (1, 300)
+
+
+def test_shot_xg_type_code_guard():
+    # 이름을 넘기면 개발 중에 터진다(옛 호출이 남으면 예외 없이 기타 칸 값이 나와 조용히 틀린다)
+    try:
+        st.shot_xg(0.9, 0.5, True, "헤더")
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("이름 문자열이 TypeError 없이 통과했다")
+    # 넥슨 값은 호출부가 거른다 — type 이 문자열 "3"·실수·bool 이면 예외 없이 기타 칸(43 M6)
+    assert [st.shot_type_code(v) for v in (3, "3", 3.0, True, None)] == [3, None, None, None, None]
+    x, y = _xy(12, 1)
+    d = {"matchInfo": [{"ouid": "me", "shootDetail": [
+        {"x": x, "y": y, "result": st.SHOT_GOAL, "type": "3", "spId": 1},
+        {"x": x, "y": y, "result": st.SHOT_GOAL, "type": 3, "spId": 1}], "player": []},
+        {"ouid": "op", "shootDetail": [], "player": []}], "matchDate": "2026-10-12T12:00:00"}
+    sm = st.shot_map([d], "me")
+    assert [s.type_code for s in sm.shots] == [None, 3]
+    assert [s.xg for s in sm.shots] == [st.shot_xg(x, y, False, None), st.shot_xg(x, y, False, 3)]
+    assert sm.shots[0].xg != sm.shots[1].xg          # 헤더 칸과 기타 칸이 달라야 위 단언이 뭔가를 잰다
+    # 주별 카드 xG · 결정력 표도 같은 정규화를 탄다(호출 3곳)
+    fin = st.finishing_ranking([d], "me")[0]
+    assert abs(fin.xg - sum(s.xg for s in sm.shots)) < 1e-12
+    wk = st.player_finishing_trend([d], "me", 1)[0]
+    assert abs(wk.xg - fin.xg) < 1e-12
 
 
 def test_shot_breakdown():
@@ -969,8 +1029,8 @@ def test_shot_buckets_on_target_distance_and_enough():
         assert st._distance_label(shots[0]) == st.DIST_MID
     finally:
         st.shot_distance_m = orig
-    # 골대 바로 앞일수록 기대득점이 높다(각도가 음수로 꺾이는 구간 포함)
-    assert st.shot_xg(0.999, 0.5, True, "일반") > st.shot_xg(0.95, 0.5, True, "일반") > 0.3
+    # 골대 바로 앞일수록 기대득점이 높다(0.1m 칸 0 · 5.25m 칸 1)
+    assert st.shot_xg(0.999, 0.5, True, 1) > st.shot_xg(0.95, 0.5, True, 1) > 0.3
 
 
 def test_position_group_edges_and_opponent_positions():

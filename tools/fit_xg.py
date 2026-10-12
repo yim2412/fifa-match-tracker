@@ -5,8 +5,11 @@
 
     python tools/fit_xg.py              # 실제 DB(읽기 전용)로 판정 보고
     python tools/fit_xg.py --selftest   # 지어낸 슛으로 고르는 규칙이 맞게 고르는지
+    python tools/fit_xg.py --write      # 판정한 C1o 표 둘을 xg_grid.py 로(안에서 대조 · 어긋나면 안 씀)
 
 numpy 를 쓴다(이 PC 에만 있으면 된다 — 앱은 결과 표만 읽는다). 원본 슛·닉네임은 아무 파일에도 안 남긴다.
+C0 는 앱의 `stats.shot_xg` 가 아니라 **2.9.1 전 식을 얼린 사본**(`c0_frozen`)이다 — 앱이 격자로 바뀐 뒤 다시 돌려도
+측정 2~2d 의 판정이 재현되게.
 """
 from __future__ import annotations
 
@@ -14,6 +17,7 @@ import argparse
 import math
 import sqlite3
 import sys
+import types
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 import config  # noqa: E402
 import stats  # noqa: E402
 import store  # noqa: E402
+import xgmodel  # noqa: E402
 
 # ── 판정 규칙(ROADMAP 43 측정 2 — 시작 커밋 4f026fb) ─────────────────────────
 MATCH_TYPE = 52
@@ -46,9 +51,30 @@ RARE_TYPE_SHARE = 0.01
 FINISH_GAP = 25.0        # analysis.FINISH_GAP 과 같은 값(보고용)
 FINISH_MIN_SHOTS = 60    # analysis.MIN_SHOTS 와 같은 값(보고용)
 EPS = 1e-6
+JUDGED_COMMIT = "3554fa7"   # 측정 2d 결과 — C1o 둘을 싣기로 한 판정(xg_grid 머리말에 적는다)
+GRID_OUT = ROOT / "xg_grid.py"
 
 
 # ── 재료 ──────────────────────────────────────────────────────────────────
+def c0_frozen(x: float, y: float, in_penalty: bool = False, type_name: str = "") -> float:
+    """2.9.1 전 `stats.shot_xg` 를 그대로 얼린 사본(측정 2 의 C0). 앱 쪽 식이 바뀌어도 여기는 안 바꾼다."""
+    if type_name == "페널티킥":
+        return 0.76
+    dx = max(0.01, (1.0 - x) * 105.0)
+    dy = abs(y - 0.5) * 68.0
+    dist = math.hypot(dx, dy)
+    denom = dx * dx + dy * dy - (7.32 / 2) ** 2
+    angle = math.atan2(7.32 * dx, denom)
+    if angle < 0:
+        angle += math.pi
+    z = -0.15 + 0.115 * dist - 3.2 * angle
+    xg = 1.0 / (1.0 + math.exp(z))
+    if type_name == "헤더":
+        xg *= 0.7
+    return max(0.0, min(0.99, xg))
+
+
+
 def _geom(x: float, y: float) -> tuple[float, float, float, float]:
     """stats.shot_xg 와 같은 거리·각도 — (골라인 거리 m, 중앙 폭 m, 직선 거리, 골대 각)."""
     dx = max(0.01, (1.0 - x) * 105.0)
@@ -96,11 +122,13 @@ def load_shots(db_path) -> tuple[dict, list]:
                 cols["type"].append(t if isinstance(t, int) else -1)
                 cols["in_pen"].append(1.0 if in_pen else 0.0)
                 cols["assist"].append(1.0 if has_ast else 0.0)
+                cols["x"].append(float(x))
+                cols["y"].append(float(y))
                 cols["dx"].append(dx)
                 cols["dy"].append(dy)
                 cols["dist"].append(dist)
                 cols["ang"].append(ang)
-                cols["c0"].append(stats.shot_xg(float(x), float(y), in_pen, tname))
+                cols["c0"].append(c0_frozen(float(x), float(y), in_pen, tname))
                 dv = p.get("division")
                 cols["div"].append(int(dv) if isinstance(dv, int) else -1)       # 슈터 등급(측정 2b 보고)
                 sp = sd.get("spId")
@@ -209,8 +237,9 @@ class C1:
         ti = _type_code(S, idx, self.groups)
         return di, wi, ti
 
-    def fit(self, S, idx):
-        self.groups = _type_groups(S, idx)
+    def fit(self, S, idx, groups=None):
+        """groups 를 안 주면 학습 슛(idx)에서 정한다 — C1o 는 내 계정을 뺀 idx 로 부르므로 그 idx 의 그룹이다."""
+        self.groups = _type_groups(S, idx) if groups is None else list(groups)
         di, wi, ti = self._keys(S, idx)
         y = S["goal"][idx]
         self.root = float(y.mean())
@@ -224,6 +253,7 @@ class C1:
         self.v3 = {k: (g + GRID_K * self.v2[k[:2]]) / (n + GRID_K) for k, (g, n) in acc[3].items()}
         self.cells = len(self.v3)
         self.thin = sum(1 for k, (g, n) in acc[3].items() if n < GRID_K)
+        self.n = int(len(idx))
         return self
 
     def predict(self, S, idx):
@@ -624,6 +654,100 @@ def run_2d(db_path) -> None:
     print(f"\n끝 · {(datetime.now()-t0).total_seconds():.0f}초")
 
 
+# ── 싣기(--write) — 판정한 바로 그 C1o 를 상수로 ──────────────────────────────
+def _table_dict(m: C1) -> dict:
+    """xgmodel.predict 가 읽는 꼴 — 되짚기 순서(v3 → v2 → v1 → root)와 칸 규칙을 표 안에 같이."""
+    return {
+        "pitch": (105.0, 68.0),                      # _geom 과 같은 값(골라인 거리·중앙 폭 환산)
+        "cell": (GRID_DIST_M, GRID_WID_M, int(GRID_DIST_MAX // GRID_DIST_M), int(GRID_WID_MAX // GRID_WID_M)),
+        "groups": tuple(int(g) for g in m.groups),
+        "eps": EPS,
+        "shots": m.n,
+        "root": float(m.root),
+        "v1": {int(k[0]): float(v) for k, v in sorted(m.v1.items())},
+        "v2": {(int(k[0]), int(k[1])): float(v) for k, v in sorted(m.v2.items())},
+        "v3": {(int(k[0]), int(k[1]), int(k[2])): float(v) for k, v in sorted(m.v3.items())},
+    }
+
+
+def _render(tables: dict, pk_rate: float, pk_n: int, meta: dict) -> str:
+    def block(name, t):
+        lines = [f"{name} = {{"]
+        for key in ("pitch", "cell", "groups", "eps", "shots", "root"):
+            lines.append(f"    {key!r}: {t[key]!r},")
+        for key in ("v1", "v2", "v3"):
+            lines.append(f"    {key!r}: {{")
+            items = list(t[key].items())
+            for i in range(0, len(items), 4):
+                lines.append("        " + " ".join(f"{k!r}: {v!r}," for k, v in items[i:i + 4]))
+            lines.append("    },")
+        lines.append("}")
+        return "\n".join(lines)
+    head = f'''"""xG 격자 표 — **생성물. 손으로 고치지 않는다**(`python tools/fit_xg.py --write` 가 쓴다).
+
+판정: ROADMAP 43단계 측정 2d(커밋 {meta["commit"]}) — C1o(내 계정 슛을 뺀 격자) 둘을 싣는다.
+생성 {meta["generated"]} · 감독모드 {meta["matches"]:,}경기({meta["first"]} ~ {meta["last"]}) · 뺀 계정 {meta["excluded"]}개
+학습 슛: 전체 {tables["SHOT"]["shots"]:,} · 유효슛 {tables["ON_TARGET"]["shots"]:,} (페널티킥 제외 · 내 계정 제외)
+페널티킥은 칸 없이 상수 PK_RATE(같은 학습분 {pk_n:,}개의 성공 비율).
+읽는 쪽은 `xgmodel.predict(표, x, y, 종류 코드)` 하나뿐이다.
+"""
+
+GENERATED = {meta["generated"]!r}
+JUDGED_COMMIT = {meta["commit"]!r}
+PK_TYPE = {PK_TYPE!r}
+PK_RATE = {pk_rate!r}
+'''
+    return head + "\n" + block("SHOT", tables["SHOT"]) + "\n\n" + block("ON_TARGET", tables["ON_TARGET"]) + "\n"
+
+
+def write_grid(db_path, out: Path = GRID_OUT) -> int:
+    """측정 2d 가 통과시킨 C1o 를 전체 기간(내 계정 슛 제외)으로 맞춰 xg_grid.py 로. 쓰기 전에 대조한다:
+    ① 생성한 글을 모듈로 읽어 xgmodel.predict 가 C1o.predict 와 같은 값을 내나(모든 비PK 슛 · 6자리)
+    ② C1o 표 ≠ 내 계정을 안 뺀 C1 표(빼는 줄이 안 돌면 둘이 같다). 하나라도 어긋나면 파일을 안 쓰고 1."""
+    S, matches = load_shots(db_path)
+    accounts = _mark_mine(S, matches, db_path)
+    pk = S["type"] == PK_TYPE
+    idx = np.arange(len(S["goal"]))
+    tables, fitted, bad = {}, {}, 0
+    for name, sel in (("SHOT", ~pk), ("ON_TARGET", ~pk & S["on_target"])):
+        m = C1o().fit(S, idx[sel])
+        full = C1().fit(S, idx[sel])
+        if m.v3 == full.v3:
+            print(f"[FAIL] {name}: C1o 표가 C1 표와 같다 — 내 계정 슛을 빼는 줄이 안 돌았다")
+            bad += 1
+        tables[name], fitted[name] = _table_dict(m), (m, idx[sel])
+        print(f"  {name}: 학습 슛 {m.n:,}(전체 {int(sel.sum()):,} 중 내 계정 제외) · 칸 {m.cells} · "
+              f"{int(GRID_K)}개 미만 칸 {m.thin} · 종류 그룹 {m.groups}")
+    pk_mask = pk & ~S["is_mine"]
+    pk_rate = float(S["goal"][pk_mask].mean())
+    print(f"  페널티킥: 내 계정 제외 {int(pk_mask.sum()):,}개 성공 {pk_rate:.4f}"
+          f" (내 계정 포함이면 {float(S['goal'][pk].mean()):.4f})")
+    meta = {"commit": JUDGED_COMMIT, "generated": datetime.now().strftime("%Y-%m-%d"),
+            "matches": len(matches), "first": matches[0][1][:10], "last": matches[-1][1][:10],
+            "excluded": len(accounts)}
+    text = _render(tables, pk_rate, int(pk_mask.sum()), meta)
+    mod = types.ModuleType("xg_grid_new")
+    exec(compile(text, "xg_grid_new", "exec"), mod.__dict__)
+    for name, (m, ix) in fitted.items():
+        want = m.predict(S, ix)
+        table = getattr(mod, name)
+        worst = 0.0
+        for i, w in zip(ix, want):
+            t = int(S["type"][i])
+            got = xgmodel.predict(table, float(S["x"][i]), float(S["y"][i]), None if t == -1 else t)
+            worst = max(worst, abs(got - float(w)))
+        ok = worst < 5e-7
+        bad += not ok
+        print(f"{'[OK]  ' if ok else '[FAIL]'} {name}: 생성한 표로 xgmodel.predict 대 C1o.predict — "
+              f"{len(ix):,}슛 최대 차 {worst:.2e}")
+    if bad:
+        print(f"[FAIL] 대조 {bad}건 어긋남 — {out.name} 를 쓰지 않았다")
+        return 1
+    out.write_text(text, encoding="utf-8")
+    print(f"[OK]   {out.name} 씀 · {len(text.encode('utf-8')):,}바이트")
+    return 0
+
+
 # ── 자기 점검 ──────────────────────────────────────────────────────────────
 def _fake(n_match: int, truth: str, rng) -> tuple[dict, list]:
     """지어낸 슛 — truth='c0' 면 골이 C0 확률대로, 'grid' 면 C0 와 다른 칸별 확률대로(헤더·먼 거리에서 크게 어긋나게)."""
@@ -638,7 +762,7 @@ def _fake(n_match: int, truth: str, rng) -> tuple[dict, list]:
             t = int(rng.choice([1, 2, 3, 6, 7], p=[0.5, 0.15, 0.15, 0.1, 0.1]))
             tname = stats.goal_type_name(t)
             in_pen = (1 - x) * 105 < 16.5 and abs(y - 0.5) * 68 < 20.16
-            c0 = stats.shot_xg(x, y, in_pen, tname)
+            c0 = c0_frozen(x, y, in_pen, tname)
             dx, dy, dist, ang = _geom(x, y)
             if truth == "c0":
                 p = c0
@@ -684,9 +808,12 @@ if __name__ == "__main__":
     ap.add_argument("--2b", dest="m2b", action="store_true", help="측정 2b — 내 계정 슛을 뺀 격자(C1o)")
     ap.add_argument("--2c", dest="m2c", action="store_true", help="측정 2c — 처음 보는 슈터(내 계정 슛)로 보정 판정")
     ap.add_argument("--2d", dest="m2d", action="store_true", help="측정 2d — 사람 단위 무작위 5조로 떼어 낸 슈터")
+    ap.add_argument("--write", action="store_true", help="C1o 표 둘을 xg_grid.py 로(안에서 대조 · 어긋나면 안 씀)")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
+    if a.write:
+        sys.exit(write_grid(config.DB_PATH))
     if a.m2d:
         run_2d(config.DB_PATH)
     elif a.m2c:
