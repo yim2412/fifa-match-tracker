@@ -11,7 +11,8 @@ import models
 import xg_grid
 
 # xG 격자를 세울 때 시험 경기(학습에 안 쓴 뒤쪽 30%)에서 잰 값 — ROADMAP 43단계 측정 2·2b·2d. 표를 다시 세우면 다시 잰다.
-XG_TEST_GAIN = "11%"             # 이전 식 대비 예측 오차(로그손실)가 줄어든 정도
+XG_TEST_FOR = "2026-10-12"       # 아래 두 값을 잰 격자의 생성일 — xg_grid.GENERATED 와 다르면 test_parsing 이 빨개진다
+XG_TEST_GAIN = "11%"            # 이전 식 대비 예측 오차(로그손실)가 줄어든 정도
 XG_TEST_CALIB = "1%p"            # 예측과 실제 골 비율 사이 평균 어긋남(보정 오차)
 
 

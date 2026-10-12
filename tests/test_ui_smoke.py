@@ -1322,6 +1322,23 @@ def test_opp_rank_tab_gates_and_draws():
         _win._trade_snapshot, _win._rank_read, _win._details = keep
 
 
+def test_opp_table_row_min_is_wired_to_config():
+    # 승패 5판 줄은 기본(10판) 문턱이면 "표본 5" 를 붙이고, 문턱을 5 로 내리면 안 붙인다 · 30판 줄은 어느 쪽이든 안 붙는다.
+    # 첫 단언이 "문턱을 안 읽는 코드"를 못 잡으므로(상수가 박혀 있어도 기본값에선 같다) 문턱을 바꾼 두 번째 단언이 배선을 잰다
+    import rankmeta
+    bands = [rankmeta.OppBand("작은", win=3, lose=2, mixed=False), rankmeta.OppBand("큰", win=20, lose=10, mixed=False)]
+    text = lambda: [r[5][0] for r in _win._opp_table_rows(bands)]  # noqa: E731
+    saved = config.OPP_ROW_MIN
+    try:
+        small, big = text()
+        assert "표본 5" in small and "표본" not in big, (small, big)
+        config.OPP_ROW_MIN = 5
+        small, big = text()
+        assert "표본" not in small and "표본" not in big, (small, big)
+    finally:
+        config.OPP_ROW_MIN = saved
+
+
 def _live_widgets(layout):
     """레이아웃에 지금 들어 있는 위젯들 — findChildren 은 deleteLater 로 지운 줄도 아직 본다."""
     return [layout.itemAt(i).widget() for i in range(layout.count()) if layout.itemAt(i).widget() is not None]

@@ -1788,6 +1788,41 @@ def test_opp_rank_fills_bands_gaps_and_unknown_rows():
             w.close()
 
 
+def test_opp_snap_window_hours_is_wired_to_config():
+    # 스냅숏 09:00 · m1 은 1시간 앞 · m2 는 5시간 뒤. 기본(24시간)이면 둘 다 줄이 생긴다 — 이걸 먼저 단언해야
+    # "창이 3시간이라 하나만 남았다"가 설정에서 왔다는 증거가 된다(코드에 24 가 박혀 있어도 첫 단언은 통과하므로 둘 다 본다)
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A"), _opp_match("m2", "2026-10-10T14:00:00", "상대B")]
+    saved = config.OPP_SNAP_WINDOW_H
+    try:
+        for hours, want in ((saved, {"m1", "m2"}), (3, {"m1"})):
+            config.OPP_SNAP_WINDOW_H = hours
+            with Env() as env:
+                w = OppEnv(env, ms)
+                try:
+                    _proc(w.c)
+                    assert set(_opp_rows(w.c)) == want, (hours, _opp_rows(w.c))
+                finally:
+                    w.close()
+    finally:
+        config.OPP_SNAP_WINDOW_H = saved
+
+
+def test_opp_fill_time_cap_is_wired_to_config_and_next_round_continues():
+    # 상한이 이미 지난 값(-1)이면 첫 경기 앞에서 멈춘다 — 줄 0. 막지 않았으면(기본 30초) 3줄이 생겼을 것이고, 다음 바퀴가 이어 채운다
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A"), _opp_match("m2", "2026-10-10T10:00:00", "상대B")]
+    saved = config.OPP_FILL_MAX_S
+    with Env() as env:
+        w = OppEnv(env, ms)
+        try:
+            config.OPP_FILL_MAX_S = -1
+            assert _proc(w.c)["opp"] == 0 and _count(w.c, "match_opp_rank") == 0, "상한이 지났는데 채웠다"
+            config.OPP_FILL_MAX_S = saved
+            assert _proc(w.c)["opp"] == 2 and set(_opp_rows(w.c)) == {"m1", "m2"}, "다음 바퀴가 이어 채우지 못했다"
+        finally:
+            config.OPP_FILL_MAX_S = saved
+            w.close()
+
+
 def test_opp_rank_waits_for_its_own_consent_and_keeps_person_tables():
     # M4 — 동의 6 으로 쌓은 사람별 줄은 새 관문(9) 미달이어도 그대로. 막지 않았으면(PERSON_TABLES 에 태웠으면) 같이 지워졌을 것이다
     ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]

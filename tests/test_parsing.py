@@ -2208,6 +2208,15 @@ def test_every_rate_aggregate_fills_mixed():
 
 
 
+def test_methods_xg_test_numbers_belong_to_this_grid():
+    # XG_TEST_GAIN·CALIB 는 손으로 적은 문구라 xg_grid 를 다시 만들어도 그대로 남는다 — 새 표로 다시 재지 않은 낡은 숫자가
+    # "얼마나 맞나" 문장에 실리는 길이다. 잰 격자의 생성일(XG_TEST_FOR)이 지금 격자와 다르면 빨개져 다시 재게 한다
+    import methods
+    assert methods.XG_TEST_FOR == xg_grid.GENERATED, (
+        f"xg_grid 가 {xg_grid.GENERATED} 로 다시 만들어졌다 — tools/fit_xg.py 로 시험 경기 값을 다시 재고 "
+        f"methods.XG_TEST_GAIN·XG_TEST_CALIB·XG_TEST_FOR 를 함께 고친다")
+
+
 def test_methods_page_reads_its_numbers_from_the_constants():
     # 43단계 D2 — 글이 상수와 따로 놀면 거짓말이 된다. 상수를 바꾸면 글이 따라와야 한다(막지 않았으면 글은 그대로였을 것)
     import methods
