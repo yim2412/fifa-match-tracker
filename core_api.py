@@ -30,6 +30,7 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, Di
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS)
 from ownerdist import OwnerDist, load_dist as load_owner_dist
+from predict_check import judge_row as judge_predict_row, results as predict_final_results
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
 from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
                          is_champ, meta_trend, rank_trend_series)
@@ -85,6 +86,7 @@ __all__ = [
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)
     "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
+    "judge_predict_row", "predict_final_results",   # B8 예측 되짚기(50단계)
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
     "PickCard", "PickSummary", "ranker_pick_summary",
     # traitcollect — 포지션 특성 집계(32단계). 받기(traitcollect.run)는 로더가 부른다

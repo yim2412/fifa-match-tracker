@@ -2916,7 +2916,8 @@ class MainWindow(QMainWindow):
         ("랭커", [("랭킹 추이", Tabs("ranktrend", (("추이", "_build_rank_trend_tab"),
                                               ("메타 변화", "_build_meta_trend_tab"),
                                               ("점수 분포", "_build_elo_dist_tab"),
-                                              ("주간 요약", "_build_weekly_tab")))),
+                                              ("주간 요약", "_build_weekly_tab"),
+                                              ("예측 되짚기", "_build_predict_check_tab")))),
                  ("메타 분석", Tabs("rankmeta", (("하루 승률", "_build_day_wr_tab"),
                                               ("가성비", "_build_value_score_tab"),
                                               ("구단가치", "_build_value_bins_tab"),
@@ -5841,7 +5842,7 @@ class MainWindow(QMainWindow):
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
     RANK_VIEW_KEYS = ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist",
                       "daywr", "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                      "traits", "opprank")
+                      "traits", "opprank", "predcheck")
 
     def _invalidate_rank_views(self) -> None:
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
@@ -5853,8 +5854,9 @@ class MainWindow(QMainWindow):
         """정리 결과에 화면이 읽는 것을 바꾼 일이 있나 — 1시간 확인마다 돌아서, 없으면 다시 그리지 않는다."""
         if not isinstance(out, dict):
             return False
+        pc = out.get("predict_check")
         return bool(out.get("pruned") or out.get("anon") or out.get("person") or out.get("purged") or out.get("rolled")
-                    or out.get("opp"))
+                    or out.get("opp") or (isinstance(pc, dict) and pc.get("asked")))
 
     def _on_rank_maintained(self, out) -> None:
         if self.maint_changed(out):
@@ -6585,6 +6587,63 @@ class MainWindow(QMainWindow):
             self.lb_weekly_me.setText(f"{self._nick} 구단가치 {n:,}등 / {total:,}(상위 {n * 100 / total:.1f}%)")
         else:
             self.lb_weekly_me.setText("")
+
+    # [랭킹 추이 › 예측 되짚기] B8 — 끝난 시즌마다 그 시즌에 낸 예측과 내 계정의 실제 최종 순위(내 계정 하나)
+    PREDICT_CHECK_COLUMNS = ["시즌", "예측한 날", "200위 안", "1,000위 안", "예상 순위 80% 범위", "최종 순위", "판정"]
+
+    def _build_predict_check_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_pcheck_note = self._note_label()
+        v.addWidget(self.lb_pcheck_note)
+        self.tbl_pcheck = self._make_table(self.PREDICT_CHECK_COLUMNS)
+        v.addWidget(self.tbl_pcheck, 1)
+        return w
+
+    def _render_predict_check(self) -> None:
+        """남겨 둔 예측 × 최종 순위. 내 계정이 확인 전(키 바뀜·미지정)이면 새로 받지 않고 지난 기록만 보여 준다 — 문구로 알린다."""
+        rows, note = [], ""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                st = store.trade_state(conn)
+                mine = st.get("my_ouid")
+                if st.get("key_fp") != store.key_fingerprint(config.API_KEY) or not mine:
+                    note = "내 계정 확인 전 — 지난 기록은 남아 있습니다. [스쿼드·이적]에서 내 계정을 정하면 이어집니다."
+                    mine = mine or st.get("my_ouid_unconfirmed")
+                seasons = {s.start.isoformat(): s for s in store.load_seasons(conn)}
+                results = core.predict_final_results(conn, mine) if mine else []
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            results = []
+        for res in results:
+            season = seasons.get(res["season_start"])
+            label = season.label if season else (res["season_start"] or "-")
+            rank = res["rank"] if res["state"] == "found" else None
+            for r in res["days"]:
+                in_top, in_range = core.judge_predict_row(r, rank)
+                p200, p1000 = r.get("p200"), r.get("p1000")
+                lo, hi = r.get("lo"), r.get("hi")
+                if res["state"] == "found":
+                    final = f"{rank:,}위"
+                    verdict = " · ".join((("실제 200위 안" if in_top else "실제 200위 밖") if in_top is not None else "",
+                                          ("범위 안" if in_range else "범위 밖") if in_range is not None else "")).strip(" ·")
+                elif res["state"] == "not_found":
+                    final, verdict = "확인 불가", "1만 위 밖이거나 닉네임을 바꿨을 수 있습니다"
+                else:
+                    final, verdict = "시즌 진행 중", ""
+                rows.append([label, r["day"],
+                             NA if p200 is None else f"{p200 * 100:.0f}%", NA if p1000 is None else f"{p1000 * 100:.0f}%",
+                             NA if lo is None or hi is None else f"{lo:,}~{hi:,}위", final, verdict])
+        if not rows or not note:
+            if not rows:
+                note = ("아직 남은 예측이 없습니다 — 예측 카드가 숫자를 내면 하루 한 줄씩 남습니다." if config.WEB_DATA
+                        else "넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다. 남아 있는 예측만 보입니다.")
+            else:
+                note = "끝난 시즌의 내 최종 순위는 넥슨 홈페이지에서 한 번 확인해 같이 둡니다(안내에 동의한 뒤부터)."
+        self.lb_pcheck_note.setText(note)
+        self._fill(self.tbl_pcheck, rows, enable_sort=False)
 
     # [승률 그래프 › 순위 변동] N8 · N9 (검색 계정)
     RANK_MOVE_COLUMNS = ["날짜", "순위", "ELO", "승·무·패", "기록된 경기", "판정"]
@@ -8039,6 +8098,7 @@ class MainWindow(QMainWindow):
         "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")],
         "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
+        "predcheck": [("랭킹 추이", "예측 되짚기")],
         "daywr": [("메타 분석", "하루 승률")], "valuescore": [("메타 분석", "가성비")],
         "valuebins": [("메타 분석", "구단가치")], "tiermeans": [("메타 분석", "구간 평균")],
         "wrelo": [("메타 분석", "승률→점수")], "traits": [("메타 분석", "포지션 특성")],
@@ -8094,6 +8154,7 @@ class MainWindow(QMainWindow):
             "tiermeans": self._render_tier_means, "wrelo": self._render_wr_elo, "weekly": self._render_weekly,
             "rankmove": self._render_rank_move,      # 검색 계정 · rank.db 원본
             "oppcards": self._render_opp_cards,      # 시즌 범위(팀컬러와 같다)
+            "predcheck": self._render_predict_check,  # 50단계 B8 — fifa.db predictions × trade_state(내 계정 하나 · 검색 결과에 안 묶인다)
             "traits": self._render_position_traits,  # 32단계 — rank.db 대상 × fifa.db trait_squads(검색 결과에 안 묶인다)
         }
 

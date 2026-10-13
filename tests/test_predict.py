@@ -393,6 +393,65 @@ def test_fetch_season_cuts_skips_failures_and_fetches_missing():
         env.close()
 
 
+def test_end_cuts_same_paths_as_hits():
+    """B7·N26·보상 FC — 한 경로 집합에서 나온다: 컷 목록 길이 = 경로 수, 200위 확률 = 컷 위 경로 비율, 보상 판정 = p200."""
+    def go(env):
+        conn = rc.open_rank_db_ro(env.db)
+        try:
+            st = P.day_steps(conn)
+        finally:
+            conn.close()
+        res = P.simulate(P.SimInput(4300.0, (), (60,), CUTS), st, [(63, c) for c in [CUTS] * 3], [20], 40,
+                         random.Random(2), n=300)
+        assert len(res.end_cuts[200]) == len(res.end_cuts[1000]) == 300
+        assert len(res.hit_ranks) == round(res.p[200] * 300), (len(res.hit_ranks), res.p[200])
+        assert all(r <= 200 for r in res.hit_ranks), "컷 위 경로는 200위 안 순위여야"
+    with_world(go)
+
+
+def test_cut_summary_median_and_range():
+    vals = [float(v) for v in range(100, 200)][::-1]      # 섞인 순서여도
+    assert P.cut_summary(vals) == (150.0, 110.0, 190.0), P.cut_summary(vals)
+    assert P.cut_summary([4500.0]) == (4500.0, 4500.0, 4500.0)
+
+
+def test_reward_bracket_and_text():
+    d = date(2026, 10, 20)
+    assert P.reward_brackets(d) == [(10, 8000), (50, 6000), (100, 5000), (200, 4400)]
+    assert P.main_reward([150, 160, 5, 120], d) == (101, 200, 4400)
+    assert P.main_reward([5, 8, 150], d) == (1, 10, 8000)
+    assert P.main_reward([], d) is None
+    # 새 시작일 줄이 옛 줄을 이긴다 — 옛 날짜는 옛 값
+    old = config.RANK_REWARDS
+    try:
+        config.RANK_REWARDS = old + ((date(2026, 11, 1), 200, 5000),)
+        assert P.main_reward([150], date(2026, 10, 20)) == (101, 200, 4400)
+        assert P.main_reward([150], date(2026, 11, 2)) == (101, 200, 5000)
+    finally:
+        config.RANK_REWARDS = old
+
+
+def test_prediction_lines_need_and_negative():
+    def go(env):
+        tomorrow = (NOW.date() + timedelta(days=1), START)
+        far = run(env, CUTS[200] + 300, notice=tomorrow)
+        assert far.need is not None and far.need < 0, far.need
+        assert "컷보다" in P.describe(far)
+        low = run(env, CUTS[200] - 300, notice=tomorrow)
+        assert low.need > 0 and "더 필요" in P.describe(low)
+        assert low.reward is None and "FC" not in P.describe(low), "200위 안 경로가 없으면 보상 줄을 안 낸다"
+        assert far.reward is not None and "확인값" in P.describe(far)
+        m, a, b = far.cuts[200]
+        assert a <= m <= b
+        assert far.pace == 60.0
+    with_world(go, hi=4900.0)
+
+
+def test_predict_check_gate_placeholder():
+    """안내 자리 — 값이 지금 NOTICE_VERSION 보다 커서 확정 전엔 아무도 통과 못 한다."""
+    assert config.PREDICT_CHECK_NOTICE_VERSION > config.NOTICE_VERSION
+
+
 def test_predict_is_behind_core_api():
     import core_api
     assert core_api.predict_for is P.predict_for and core_api.Prediction is P.Prediction

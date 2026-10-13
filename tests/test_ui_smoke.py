@@ -694,7 +694,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 48, len(tables)   # 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 49, len(tables)   # 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -8863,7 +8863,7 @@ def test_rank_views_invalidate_on_four_paths():
     W = app_main.MainWindow
     assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
                                      "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                                     "traits", "opprank"}
+                                     "traits", "opprank", "predcheck"}
     seen = []
     keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
     _win._invalidate_rank_views = lambda: seen.append(1)
@@ -8909,6 +8909,54 @@ def test_rank_views_invalidate_on_four_paths():
         del _win._invalidate_rank_views
         _win._ouid, _win._rank_sched, _win._teamcolor_loader = keep[0], keep[1], keep[2]
         _win._teamcolor_pending = keep[3]
+
+
+def test_predict_check_tab_renders_and_fits():
+    """[랭킹 추이 › 예측 되짚기](50단계 B8) — 기록 없음 안내 · 확인 전 안내 · 찾은 시즌/못 찾은 시즌 판정 · 안 잘림."""
+    import json
+    ouid, start = "pc-ouid", "2026-07-09"
+    _win._go_page("랭킹 추이", "예측 되짚기")
+    keep_web = config.WEB_DATA
+    config.WEB_DATA = True          # 앞선 테스트가 꺼 둔 채일 수 있다 — 안내 문구가 이 값에 달렸다
+    c = store.open_db(config.DB_PATH)
+    try:
+        c.execute("DELETE FROM predictions")
+        c.execute("DELETE FROM trade_state")
+        c.commit()
+        _win._invalidate("predcheck")
+        assert _win.tbl_pcheck.rowCount() == 0 and "아직 남은 예측이 없습니다" in _win.lb_pcheck_note.text()
+        for day, lo, hi in (("2026-08-01", 100, 300), ("2026-08-02", 10, 90)):
+            store.save_prediction(c, ouid, datetime.fromisoformat(day), profile_sn=7, season_start=start,
+                                  end_source="estimate", p200=0.3, p1000=0.9, lo=lo, hi=hi)
+        store.set_trade_state(c, my_ouid_unconfirmed=ouid)       # 키가 바뀌어 내 계정이 '확인 전' — 지난 기록은 보인다
+        _win._invalidate("predcheck")
+        assert _win.tbl_pcheck.rowCount() == 2 and "내 계정 확인 전" in _win.lb_pcheck_note.text()
+        store.set_trade_state(c, my_ouid=ouid, key_fp=store.key_fingerprint(config.API_KEY),
+                              **{f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}": json.dumps({"state": "found", "rank": 120})})
+        _win._invalidate("predcheck")
+        t = _win.tbl_pcheck
+        assert t.rowCount() == 2
+        by_day = {t.item(r, 1).text(): [t.item(r, k).text() for k in range(t.columnCount())] for r in range(2)}
+        assert by_day["2026-08-01"][5:] == ["120위", "실제 200위 안 · 범위 안"], by_day
+        assert by_day["2026-08-02"][5:] == ["120위", "실제 200위 안 · 범위 밖"], by_day
+        store.set_trade_state(c, **{f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}": json.dumps({"state": "not_found"})})
+        _win._invalidate("predcheck")
+        assert t.item(0, 5).text() == "확인 불가" and "닉네임" in t.item(0, 6).text()
+        store.set_trade_state(c, **{f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}": None})
+        _win._invalidate("predcheck")
+        assert t.item(0, 5).text() == "시즌 진행 중"
+        _check_elisions([t])
+        c.execute("DELETE FROM predictions")
+        c.commit()
+        config.WEB_DATA = False         # 기록이 없고 웹 데이터가 꺼졌으면 그 까닭을 알린다
+        _win._invalidate("predcheck")
+        assert t.rowCount() == 0 and "꺼져 있어" in _win.lb_pcheck_note.text(), _win.lb_pcheck_note.text()
+    finally:
+        config.WEB_DATA = keep_web
+        c.execute("DELETE FROM predictions")
+        c.execute("DELETE FROM trade_state")
+        c.commit()
+        c.close()
 
 
 def test_rank_move_follows_late_profile_sn():

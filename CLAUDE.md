@@ -18,6 +18,7 @@
 | `xgmodel.py` · `xg_grid.py` | xG 격자(2.9.1 · 43 A5) — `xgmodel.predict(표, x, y, 종류 코드)` 읽기만(numpy 없음) · `xg_grid.py` 는 **생성물**(`python tools/fit_xg.py --write` — 판정 코드와 안에서 대조, 어긋나면 안 씀 · 손으로 안 고친다). `stats.shot_xg` 는 종류 **코드**를 받는다(이름이면 `TypeError` · payload 값은 `shot_type_code` 로 거른다) · 다시 생성하면 `test_parsing.XG_GOLDEN` 을 새로 옮긴다 |
 | `analysis.py` | 집계 → 문장(`narrate`). **임계값·최소 표본 상수가 전부 여기 상단에.** 표본 미달이면 침묵. 조건부 승률 문장은 `Insight.basis`(`Basis` — 화면의 근거 막대)를 싣는다 — **새 규칙 함수는 `BASIS_RULES`/`NO_BASIS_RULES` 둘 중 하나에** 넣는다(test_analysis 가 모듈의 규칙 함수와 대조) |
 | `predict.py` | 시즌 말 순위 예측 — 상수는 `config.PREDICT_*` · **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저** · 세부는 머리말 |
+| `predict_check.py` | 예측 되짚기(50단계 B8) — 끝난 시즌의 **내 계정 하나** 최종 순위를 넥슨 홈페이지에서 한 번 확인(`run` — `rankcollect.process_meta` 끝에서 매 회차 판정) · 정본은 `trade_state` 의 `predict_final:<ouid>:<시즌 시작>` JSON, `predictions.final_*` 는 화면용 사본 · 관문 `config.predict_check_allowed()`(디스크 `.env` — 값 `PREDICT_CHECK_NOTICE_VERSION` 은 ④ 에서 확정 전까지 `NOTICE_VERSION` 보다 커서 아무도 통과 못 한다) · 요청은 `ranker.fetch_manager_rank` 하나 · 세부는 머리말 |
 | `core_api.py` | **화면 ↔ 분석 경계** — 화면 쪽은 analysis·stats·models 를 여기서만. 새 함수는 import 와 `__all__` 에 한 줄 · 테스트에서 바꿔 끼울 땐 `core_api` 쪽을 |
 | `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) |
 | `charts.py` | 그래프(QPainter) — 색은 `theme.CHART_*` · 추이는 `AreaTrendChart` 하나, **기본값 그림은 얼린 사본과 픽셀까지 같아야**(`test_area_chart_defaults_unchanged`) · 세부는 머리말 |
@@ -62,6 +63,7 @@ python tests/test_habits.py    # 습관·기준선(등급 체류 · 칩 · 전�
 python tests/test_icons.py     # 표 칸 그림(40단계) — 주소 틀 · 받기(Referer·부정 캐시·반쯤 쓴 파일) · 열 폭 · 키가 행을 따라가나 · 로더 정리 · 엠블럼 지도(가짜 세션, 네트워크 없음)
 python tests/test_timeline.py  # 스쿼드 타임라인 · 가계부(짝·보유 상태·경계·앞뒤 창) — 지어낸 경기·거래(네트워크 없음)
 python tests/test_predict.py   # 시즌 말 예측 — 가짜 스냅숏(네트워크 없음)
+python tests/test_predict_check.py   # 예측 되짚기(B8) — 가짜 fifa.db·가짜 순위 조회(관문·키 지문·sn 대조·다시 묻기 3일·취소·지우기 — 네트워크 없음)
 python tests/test_rankmeta.py  # 랭커 메타 ② 스냅숏 읽기(하루 승률·가성비·구단가치·구간 평균·승률→점수·주간 요약·순위 변동) — 지어낸 rank.db(네트워크 없음)
 # 팀컬러 효과(2.2.1) 파싱·가르기는 test_parsing(실목록 픽스처 teamcolor_list.html.gz) · 창은 test_ui_smoke · 실제 넥슨은 check_api 의 팀컬러 줄
 python tests/test_ownerdist.py    # 구단주 분포 받기 — 계수·상한·429·끊김 이어 받기·nocache·바퀴 상태·지우기(소금·해시가 파일 바이트에 없는지까지) — 가짜 API(네트워크 없음)

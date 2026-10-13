@@ -352,6 +352,11 @@ def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Conne
         for col, typ in (("snap_id", "INTEGER"), ("snap_taken", "TEXT")):
             if col not in have:
                 conn.execute(f"ALTER TABLE owner_dist_state ADD COLUMN {col} {typ}")
+        # 예측 되짚기(50단계 B8) — 정본은 trade_state 의 predict_final:* 키, 이 열은 화면용 사본(옛 save_prediction 의 REPLACE 가 비워도 다시 채운다)
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(predictions)")}
+        for col, typ in (("final_rank", "INTEGER"), ("final_state", "TEXT"), ("final_checked_at", "TEXT")):
+            if col not in have:
+                conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {typ}")
         _ensure_elo_unique(conn)
         conn.commit()
         # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
@@ -874,6 +879,9 @@ def elo_history(conn: sqlite3.Connection, ouid: str) -> list[dict]:
         " WHERE ouid = ? ORDER BY taken_at", (ouid,))]
 
 
+PREDICT_FINAL_PREFIX = "predict_final:"      # trade_state 키 predict_final:<ouid>:<season_start> = JSON {rank, state, first, last}
+
+
 def clear_elo(conn: sqlite3.Connection, keep_ouid: str | None = None) -> int:
     """ELO 기록 지우기 — keep_ouid 가 있으면 그 계정 것만 남긴다. → 지운 줄 수."""
     # 따라가기 목록도 같은 규칙 — 남길 계정 외에는 같이 빠진다(지운 사람이 다음 회차에 다시 쌓이지 않게)
@@ -881,10 +889,13 @@ def clear_elo(conn: sqlite3.Connection, keep_ouid: str | None = None) -> int:
         cur = conn.execute("DELETE FROM elo_history WHERE ouid <> ?", (keep_ouid,))
         conn.execute("DELETE FROM elo_track WHERE ouid <> ?", (keep_ouid,))
         conn.execute("DELETE FROM predictions WHERE ouid <> ?", (keep_ouid,))
+        conn.execute("DELETE FROM trade_state WHERE key LIKE ? AND key NOT LIKE ?",
+                     (PREDICT_FINAL_PREFIX + "%", f"{PREDICT_FINAL_PREFIX}{keep_ouid}:%"))
     else:
         cur = conn.execute("DELETE FROM elo_history")
         conn.execute("DELETE FROM elo_track")
         conn.execute("DELETE FROM predictions")
+        conn.execute("DELETE FROM trade_state WHERE key LIKE ?", (PREDICT_FINAL_PREFIX + "%",))
     conn.commit()
     return cur.rowcount
 
@@ -912,6 +923,16 @@ def save_prediction(conn: sqlite3.Connection, ouid: str, made_at: datetime, *, p
                      " p200, p1000, lo, hi) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (ouid, made_at.date().isoformat(), made_at.isoformat(timespec="seconds"), profile_sn,
                       season_start, end_source, p200, p1000, lo, hi))
+
+
+def set_prediction_final(conn: sqlite3.Connection, ouid: str, season_start: str, *, rank: int | None, state: str,
+                         checked_at: str) -> int:
+    """그 계정·시즌의 예측 줄 중 결과가 비어 있는(또는 다른) 것에 최종 순위 사본을 채운다 → 바꾼 줄 수."""
+    with conn:
+        cur = conn.execute("UPDATE predictions SET final_rank = ?, final_state = ?, final_checked_at = ?"
+                           " WHERE ouid = ? AND season_start = ? AND (final_state IS NOT ? OR final_rank IS NOT ?)",
+                           (rank, state, checked_at, ouid, season_start, state, rank))
+    return cur.rowcount
 
 
 def predictions(conn: sqlite3.Connection, ouid: str | None = None) -> list[dict]:

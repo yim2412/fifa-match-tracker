@@ -12,6 +12,10 @@
 - 경기 수 칸 경계(4분위)·3분위 경계는 **실행 때 표본에서** 잰다. 계획은 구현 첫 날 잰 값을 상수로 둘 생각이었는데,
   그날 스냅숏이 1개뿐이라(쌍 0) 잴 수 없었다 — 표본이 바뀌면 경계도 따라가는 쪽이 맞다.
 - 최종 컷: 받아 둔 지난 시즌 중 하나를 시즌 길이가 가까울수록 크게 뽑고, 순위마다 지금 컷보다 낮지 않게.
+- 예상 컷 B7·더 필요한 점수 N26·보상 구간(50단계): 별도 계산이 아니라 **같은 경로 집합**에서 나온다 — `SimResult.end_cuts`(경로별 최종 컷, 경로
+  순서 그대로)의 중앙값·10~90% 가 B7, `중앙값 − 지금 ELO` 가 N26, 200위 안에 든 경로(`hit_ranks` — 판정은 `hits` 와 같은 `e >= cuts[200]`)의
+  끝 순위 중 가장 많은 구간이 `main_reward`. 기록만 더하고 RNG 호출 순서는 안 건드려 골든이 그대로다. 기대값(경로 평균 FC)은 내지 않는다.
+  보상표는 `config.RANK_REWARDS`(사용자 확인값 — "확인값" 표시). 쉬면 감점(96시간)은 일부러 넣지 않는다(U7).
 
 숫자를 못 내면 원인별 문구(`Prediction.message`). 화면은 core_api 를 거쳐 `predict_for` 만 부른다.
 
@@ -252,6 +256,8 @@ class SimResult:
     end_elos: list[float]
     widened: float                     # 띠를 넓힌 경로 비율
     late: float                        # 지금 컷이 뽑은 최종 컷을 넘은 경로 비율
+    end_cuts: dict = field(default_factory=dict)    # {목표 순위: 경로별 최종 컷} — 경로 순서 그대로(B7·N26 이 같은 경로 집합에서 나오게)
+    hit_ranks: list = field(default_factory=list)   # 200위 안에 든 경로의 끝 순위(보상 구간용 — 판정은 hits 와 같은 e >= cuts[200])
 
 
 def rank_of(elo: float, cuts: dict[int, float]) -> int:
@@ -296,6 +302,9 @@ def simulate(inp: SimInput, steps: Steps, seasons: list[tuple[int | None, dict]]
     hits = Counter()
     ranks, end_elos = [], []
     widened = late = 0
+    end_cuts = {t: [] for t in targets}
+    hit_ranks = []
+    top = targets[0]
     choice, candidates, min_blocks = rng.choice, picker.candidates, config.PREDICT_MIN_BLOCKS
     lens = [L for L, _c in seasons]
     for _ in range(n):
@@ -336,10 +345,14 @@ def simulate(inp: SimInput, steps: Steps, seasons: list[tuple[int | None, dict]]
         ranks.append(r)
         end_elos.append(e)
         for t in targets:
-            if t in cuts and e >= cuts[t]:
-                hits[t] += 1
+            if t in cuts:
+                end_cuts[t].append(cuts[t])
+                if e >= cuts[t]:
+                    hits[t] += 1
+        if top in cuts and e >= cuts[top]:
+            hit_ranks.append(r)
     ranks.sort()
-    return SimResult({t: hits[t] / n for t in targets}, ranks, end_elos, widened / n, late / n)
+    return SimResult({t: hits[t] / n for t in targets}, ranks, end_elos, widened / n, late / n, end_cuts, hit_ranks)
 
 
 # ── 종료일 ─────────────────────────────────────────────────────────────────
@@ -454,6 +467,49 @@ class Prediction:
     notes: tuple = ()
     season_start: date | None = None
     profile_sn: int | None = None
+    cuts: dict = field(default_factory=dict)       # B7 {목표 순위: (중앙값, 10%, 90%)} 예상 최종 컷
+    need: float | None = None          # N26 200위 컷까지 더 필요한 점수(중앙값) — 음수면 지금이 컷 위
+    pace: float | None = None          # 최근 하루 평균 판수
+    reward: tuple | None = None        # (구간 아래 순위, 구간 위 순위, FC) — 200위 안에 들면 주로 받을 구간
+    late: bool = False
+
+
+def _median(vals: list[float]) -> float:
+    s = sorted(vals)
+    return s[len(s) // 2]
+
+
+def cut_summary(vals: list[float]) -> tuple:
+    """경로별 최종 컷 → (중앙값, 10%, 90%) — B7 의 "예상 컷 + 범위"."""
+    s = sorted(vals)
+    return (s[len(s) // 2], s[int(config.PREDICT_RANGE[0] * len(s))],
+            s[min(len(s) - 1, int(config.PREDICT_RANGE[1] * len(s)))])
+
+
+def reward_brackets(day: date) -> list[tuple[int, int]]:
+    """day 에 적용되는 순위 보상표 [(순위 상한, FC)] 상한 오름차순 — 상한마다 시작일이 가장 늦은(≤ day) 줄."""
+    best: dict[int, tuple[date, int]] = {}
+    for start, cap, fc in config.RANK_REWARDS:
+        if start <= day and (cap not in best or start >= best[cap][0]):
+            best[cap] = (start, fc)
+    return sorted((cap, v[1]) for cap, v in best.items())
+
+
+def main_reward(ranks: list[int], day: date) -> tuple | None:
+    """200위 안에 든 경로들의 끝 순위 → 가장 많은 보상 구간 (아래 순위, 위 순위, FC). 기대값은 내지 않는다."""
+    table = reward_brackets(day)
+    if not ranks or not table:
+        return None
+    caps = [c for c, _fc in table]
+    cnt = Counter()
+    for r in ranks:
+        i = next((k for k, c in enumerate(caps) if r <= c), None)
+        if i is not None:
+            cnt[i] += 1
+    if not cnt:
+        return None
+    i = max(sorted(cnt), key=lambda k: cnt[k])
+    return (caps[i - 1] + 1 if i else 1, caps[i], table[i][1])
 
 
 def _pct(p: float) -> str:
@@ -476,6 +532,24 @@ def describe(pr: Prediction) -> str:
     rng_ = _rank_txt(pr.lo) if pr.lo == pr.hi else f"{_rank_txt(pr.lo)}~{_rank_txt(pr.hi)}"
     lines = [f"지금 흐름이 이어지면 — {probs} · 예상 순위 80% 범위 {rng_}",
              f"가정: 시즌 종료 {pr.end_text}"]
+    if pr.cuts:
+        parts = [f"{t:,}위 {m:,.0f}({a:,.0f}~{b:,.0f})" for t, (m, a, b) in pr.cuts.items()]
+        lines.append("시즌 말 예상 컷 — " + " · ".join(parts))
+    if pr.need is not None:
+        top = config.PREDICT_TARGETS[0]
+        if pr.need > 0:
+            s = f"{top:,}위 컷까지 약 {pr.need:,.0f}점 더 필요"
+        else:
+            s = f"지금 점수가 예상 {top:,}위 컷보다 {-pr.need:,.0f}점 위"
+        if pr.pace is not None:
+            s += f" · 최근 하루 평균 {pr.pace:.0f}판"
+        if pr.late:
+            s += f" ({NOTE_LATE})"
+        lines.append(s)
+    if pr.reward is not None:
+        lo_r, hi_r, fc = pr.reward
+        lines.append(f"{config.PREDICT_TARGETS[0]:,}위 안 {_pct(pr.p.get(config.PREDICT_TARGETS[0], 0.0))} · "
+                     f"들면 주로 {lo_r:,}~{hi_r:,}위({fc:,} FC · 확인값)")
     lines.append(" · ".join((*pr.notes, NOTE_UNVERIFIED)))
     return "\n".join(lines)
 
@@ -543,6 +617,11 @@ def predict_for(*, elo_rows: list[dict], match_dates: list[datetime], rank_conn,
     if res.late > config.PREDICT_WARN_SHARE:
         notes.append(NOTE_LATE)
     q = lambda f: res.ranks[min(len(res.ranks) - 1, int(f * len(res.ranks)))]  # noqa: E731
-    return Prediction(True, p=res.p, lo=q(config.PREDICT_RANGE[0]), hi=q(config.PREDICT_RANGE[1]),
+    cut_rows = {t: cut_summary(vals) for t, vals in res.end_cuts.items() if vals}
+    top = config.PREDICT_TARGETS[0]
+    need = _median(res.end_cuts[top]) - elo if res.end_cuts.get(top) else None
+    pace = sum(daily) / len(daily) if daily else None
+    return Prediction(True, cuts=cut_rows, need=need, pace=pace, late=NOTE_LATE in notes,
+                      reward=main_reward(res.hit_ranks, today), p=res.p, lo=q(config.PREDICT_RANGE[0]), hi=q(config.PREDICT_RANGE[1]),
                       end_text=end.text, end_source=end.source, notes=tuple(notes), season_start=start,
                       profile_sn=sn)

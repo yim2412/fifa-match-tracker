@@ -244,6 +244,18 @@ PREDICT_RECENT_SEASONS = 12         # 종료일 추정에 쓰는 최근 시즌 �
 PREDICT_SOON_DAYS = 14              # 경과일이 최근 시즌 전부보다 길면 "곧 끝남" — 1~이만큼 고르게
 PREDICT_WARN_SHARE = 0.10           # 띠를 넓힌 경로 · 지금 컷이 최종 컷을 넘은 경로가 이 비율을 넘으면 경고
 PREDICT_RANGE = (0.10, 0.90)        # "예상 순위 80% 범위"
+# 순위 보상 FC(50단계 — predict.main_reward) — (적용 시작일, 순위 상한, FC). **넥슨 공식 수치가 아니라 사용자 확인값**(2026-10-13):
+# 시즌 말 200위 안만 — 1~10위 8,000 · 11~50위 6,000 · 51~100위 5,000 · 101~200위 4,400. 바뀌면 새 시작일 줄로 더한다(옛 줄은 둔다)
+RANK_REWARDS = (
+    (date.min, 10, 8000),
+    (date.min, 50, 6000),
+    (date.min, 100, 5000),
+    (date.min, 200, 4400),
+)
+# B8 예측 되짚기(내 계정의 시즌 최종 순위를 넥슨 홈페이지에서 한 번 확인) — 이 안내 버전 동의 뒤부터.
+# 조각 ① 은 자리만: 값을 지금 NOTICE_VERSION 보다 크게 둬 확정 전엔 아무도 통과하지 못한다. 마지막 조각(④)에서 NOTICE_VERSION 과 같이 확정
+PREDICT_CHECK_NOTICE_VERSION = 99
+PREDICT_CHECK_RETRY_DAYS = 3        # 처음 물은 날부터 이 기간은 not_found 도 하루 한 번 다시 묻는다
 SEASON_NOTICE_MAX_DAYS = 120        # 공지 종료일이 시작일 + 이만큼 안일 때만 받는다
 RANK_EMPTY_RETRIES = 2              # 빈 쪽은 그 쪽만 이만큼 다시 받는다 — 10-05 실측: 500쪽 중 빈 쪽 하나가 회차 전체를 버렸다
 RANK_EMPTY_RETRY_WAIT_S = 1.0       # 다시 받기 전 대기. 진짜 구조 변경이면 다시 받아도 비어 그대로 실패한다
@@ -581,6 +593,11 @@ def ranker_pick_allowed() -> bool:
 def trait_allowed() -> bool:
     """포지션 특성을 받아도 되나 — 랭커 픽 조건(수집 켜짐 포함) + 특성 안내(TRAIT_NOTICE_VERSION) 동의."""
     return ranker_pick_allowed() and NOTICE_ACCEPTED >= TRAIT_NOTICE_VERSION
+
+
+def predict_check_allowed() -> bool:
+    """예측 되짚기(B8)로 넥슨 웹에 물어도 되나 — 디스크의 .env 로 다시(트레이에서 새 안내를 안 본 사람에게 안 나가게)."""
+    return _read_collect_gate(PREDICT_CHECK_NOTICE_VERSION)
 
 
 def owner_dist_prereq() -> bool:

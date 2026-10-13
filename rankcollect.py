@@ -1554,6 +1554,12 @@ def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list |
             out["opp"] = fill_opp_rank(conn, now, cancel=cancel)
         except Exception:      # 채우기가 죽어도 수집 본체·정리는 계속(전역 규칙 7) — 다음 바퀴가 이어 채운다
             out["opp"] = 0
+    if not stopped():
+        try:
+            import predict_check        # B8 — 끝난 시즌의 내 최종 순위(관문 · 시즌 넘김과 무관하게 매 회차 판정)
+            out["predict_check"] = predict_check.run(cancel=cancel)
+        except Exception:      # 되짚기가 죽어도 수집 본체는 계속 — 다음 바퀴가 다시
+            pass
     return out
 
 
