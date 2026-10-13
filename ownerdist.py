@@ -125,15 +125,16 @@ def summarize_owner(totals: habits.SideTotals, stratum: int, last_match: str | N
 
 
 def eligible(row: dict, now: datetime) -> bool:
-    """분포에 넣을 구단주 — 판수가 모자라거나 마지막 경기가 너무 오래면 뺀다."""
+    """분포에 넣을 구단주 — 판수가 모자라거나 마지막 경기가 너무 오래면 뺀다.
+    날짜끼리 비교한다 — 저장값은 날짜만이다(store._day_only · 50단계 V1). 옛 시각 문자열 줄도 앞 10자로 같이 읽는다."""
     if (row.get("n_games") or 0) < config.OWNER_DIST_MIN_GAMES:
         return False
     last = row.get("last_match") or ""
     try:
-        t = datetime.fromisoformat(last[:19])
+        d = date.fromisoformat(last[:10])
     except ValueError:
         return False
-    return t >= now - timedelta(days=config.OWNER_DIST_MAX_AGE_DAYS)
+    return d >= now.date() - timedelta(days=config.OWNER_DIST_MAX_AGE_DAYS)
 
 
 def _strata_ok(strata: list[int]) -> bool:

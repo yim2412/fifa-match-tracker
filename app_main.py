@@ -1890,6 +1890,7 @@ class OwnerDistScheduler(QObject):
         self.loader: OwnerDistLoader | None = None
         self._purge: bool | None = None   # 로더가 끝난 뒤 지울 것 — True 전부 · False 진행 바퀴만 · None 없음
         self._quitting = False
+        self._mixed = False   # 옛 done 바퀴 섞기(_mix_pending)를 마쳤나
 
     def running(self) -> bool:
         return self.loader is not None and self.loader.isRunning()
@@ -1904,6 +1905,8 @@ class OwnerDistScheduler(QObject):
     def sync(self, start: bool = False) -> None:
         """설정이 바뀌었다(전제 꺼짐 길 sync_ranker_pick_data · [정보] 토글 · 키 바꿈) — 바로 맞춘다.
         start 면 받을 차례일 때 로더도 띄운다(틱 · 토글을 켰을 때)."""
+        if not self._mixed and not self.running():
+            self._mix_pending()   # 토글·전제 분기 앞 — 토글을 끈 사용자에게 남은 옛 분포도 섞는다(50단계 6회차 Y2)
         gate = config.read_owner_dist()
         if gate is None:
             return   # .env 를 못 읽었다 — 모르는 상태에서 지우지 않는다
@@ -1913,6 +1916,19 @@ class OwnerDistScheduler(QObject):
             return
         if start and not self.running() and not self._quitting:
             self._maybe_start()
+
+    def _mix_pending(self) -> None:
+        """옛 버전이 끝낸 done 바퀴를 한 번 섞는다(store.owner_dist_mix_pending) — 성공하면 이 프로세스에서 다시 안 본다.
+        새 버전이 끝내는 바퀴는 owner_round_end 가 그 자리에서 섞는다."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.owner_dist_mix_pending(conn)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return   # 잠김 — 다음 틱에
+        self._mixed = True
 
     def _stop_and_purge(self, everything: bool) -> None:
         if self.running():

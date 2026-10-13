@@ -366,6 +366,11 @@ def _drive_uncovered() -> None:
             store.owner_req_since(conn, "2026-10-01T00:00:00")
             store.owner_round_results(conn, "2026-10-01")       # 구단주 분포 예약(49단계 ③a) — test_ownerdist 가 부른다
             store.owner_dist_has_data(conn)
+            # 줄 섞기(50단계 V1) — 옛 done 바퀴 하나를 심어 안쪽 SELECT 까지 돌린다(test_ownerdist 가 부른다)
+            conn.execute("INSERT INTO owner_dist_state (seed, started_at, ended_at, result) VALUES (1, 'a', 'b', 'done')")
+            conn.execute("INSERT INTO owner_dist (round_id, stratum, n_games) VALUES (1, 1, 1)")
+            conn.commit()
+            store.owner_dist_mix_pending(conn)
         finally:
             conn.close()
         import rankcollect

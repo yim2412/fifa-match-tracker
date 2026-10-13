@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import sqlite3
 import threading
 from collections.abc import Callable
@@ -349,7 +350,8 @@ def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Conne
         # snap_taken(그 스냅숏의 taken_at)은 id 와 짝으로 대조한다 — snapshots.id 는 AUTOINCREMENT 가 아니라 rank.db 를 지웠다 다시
         # 만들면 1부터 재사용되고, 그러면 같은 번호에 다른 사람들이 선 새 스냅숏이 이어 받기에 그대로 걸린다
         have = {r["name"] for r in conn.execute("PRAGMA table_info(owner_dist_state)")}
-        for col, typ in (("snap_id", "INTEGER"), ("snap_taken", "TEXT")):
+        # mixed(50단계 V1) — done 바퀴 줄을 무작위 순서로 다시 넣고 last_match 를 날짜로 자른 표시(owner_dist_mix)
+        for col, typ in (("snap_id", "INTEGER"), ("snap_taken", "TEXT"), ("mixed", "INTEGER")):
             if col not in have:
                 conn.execute(f"ALTER TABLE owner_dist_state ADD COLUMN {col} {typ}")
         # 예측 되짚기(50단계 B8) — 정본은 trade_state 의 predict_final:* 키, 이 열은 화면용 사본(옛 save_prediction 의 REPLACE 가 비워도 다시 채운다)
@@ -1521,19 +1523,61 @@ def owner_done_hashes(conn: sqlite3.Connection, round_id: int) -> set[str]:
     return {r[0] for r in conn.execute("SELECT h FROM owner_dist_done WHERE round_id = ?", (round_id,))}
 
 
+OWNER_ROW_COLS = ("stratum", "n_games", "last_match") + OWNER_METRICS
+_OWNER_INSERT = (f"INSERT INTO owner_dist (round_id, {', '.join(OWNER_ROW_COLS)})"
+                 f" VALUES (?, {', '.join('?' * len(OWNER_ROW_COLS))})")
+
+
+def _day_only(last_match):
+    """마지막 경기는 날짜만 남긴다(50단계 V1) — 시각까지 두면 rank.db 원본과 맞대 줄 ↔ 사람을 좁히는 재료가 된다."""
+    return last_match[:10] if isinstance(last_match, str) else last_match
+
+
 def owner_dist_add(conn: sqlite3.Connection, round_id: int, h: str, row: dict) -> None:
-    """구단주 한 명이 끝났다 — 요약 줄과 이어 받기 표시를 한 트랜잭션으로. row: stratum · n_games · last_match · OWNER_METRICS."""
-    cols = ("stratum", "n_games", "last_match") + OWNER_METRICS
+    """구단주 한 명이 끝났다 — 요약 줄과 이어 받기 표시를 한 트랜잭션으로. row: stratum · n_games · last_match · OWNER_METRICS.
+    last_match 는 넣을 때부터 날짜만 — done 판정(run_round)과 읽기(build_dist)가 같은 저장값을 본다(4회차 W1)."""
     with conn:
-        conn.execute(f"INSERT INTO owner_dist (round_id, {', '.join(cols)}) VALUES (?, {', '.join('?' * len(cols))})",
-                     (round_id, *[row.get(c) for c in cols]))
+        conn.execute(_OWNER_INSERT, (round_id, *[_day_only(row.get(c)) if c == "last_match" else row.get(c)
+                                                 for c in OWNER_ROW_COLS]))
         conn.execute("INSERT OR IGNORE INTO owner_dist_done (round_id, h) VALUES (?, ?)", (round_id, h))
 
 
 def owner_dist_rows(conn: sqlite3.Connection, round_id: int) -> list[dict]:
-    cols = ("stratum", "n_games", "last_match") + OWNER_METRICS
     return [dict(r) for r in conn.execute(
-        f"SELECT {', '.join(cols)} FROM owner_dist WHERE round_id = ?", (round_id,))]
+        f"SELECT {', '.join(OWNER_ROW_COLS)} FROM owner_dist WHERE round_id = ?", (round_id,))]
+
+
+def owner_dist_mix(conn: sqlite3.Connection, round_id: int) -> None:
+    """done 바퀴의 줄을 무작위 순서로 다시 넣고(새 id) last_match 를 날짜로 자른 뒤 mixed=1 — **부르는 쪽의 트랜잭션 안에서**.
+    id 가 받은 순서 그대로면, 시드(바퀴 시작 날짜)로 표본 명단을 다시 만들 수 있는 rank.db 원본 14일 동안 줄 ↔ 사람이
+    맞대진다(50단계 V1 — 49 에 있던 위험). 순서는 SystemRandom — 시드로 다시 만들 수 없게. 값은 그대로라 분포가 안 바뀐다."""
+    rows = [tuple(r) for r in conn.execute(
+        f"SELECT {', '.join(OWNER_ROW_COLS)} FROM owner_dist WHERE round_id = ?", (round_id,))]
+    random.SystemRandom().shuffle(rows)
+    at = OWNER_ROW_COLS.index("last_match")
+    conn.execute("DELETE FROM owner_dist WHERE round_id = ?", (round_id,))
+    conn.executemany(_OWNER_INSERT, [(round_id, *r[:at], _day_only(r[at]), *r[at + 1:]) for r in rows])
+    conn.execute("UPDATE owner_dist_state SET mixed = 1 WHERE round_id = ?", (round_id,))
+
+
+def owner_dist_mix_pending(conn: sqlite3.Connection) -> int:
+    """옛 버전(2.10.1)이 끝낸 done 바퀴 중 아직 안 섞은 것(줄이 남은 것만)을 섞는다 — 자기 트랜잭션. → 섞은 바퀴 수.
+    부르는 자리는 구단주 분포 예약(로더가 안 돌 때 · 토글·전제 분기 **앞** — 6회차 Y2). 섞을 것이 없으면 쓰지 않는다."""
+    q = ("SELECT round_id FROM owner_dist_state s WHERE result = 'done' AND mixed IS NULL"
+         " AND EXISTS (SELECT 1 FROM owner_dist d WHERE d.round_id = s.round_id)")
+    if conn.execute(q).fetchone() is None:
+        return 0
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        ids = [r[0] for r in conn.execute(q)]
+        for rid in ids:
+            owner_dist_mix(conn, rid)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    _checkpoint_quiet(conn)
+    return len(ids)
 
 
 def owner_round_end(conn: sqlite3.Connection, round_id: int, result: str, ended_at: str) -> None:
@@ -1545,6 +1589,7 @@ def owner_round_end(conn: sqlite3.Connection, round_id: int, result: str, ended_
     try:
         if result == "done":
             conn.execute("DELETE FROM owner_dist WHERE round_id <> ?", (round_id,))
+            owner_dist_mix(conn, round_id)
         else:
             conn.execute("DELETE FROM owner_dist WHERE round_id = ?", (round_id,))
         conn.execute("DELETE FROM owner_dist_done WHERE round_id = ?", (round_id,))

@@ -229,6 +229,59 @@ def test_prereq_off_purges_distribution_toggle_off_keeps_it():
         assert e.rows(done) == 0, "전제(수집)가 꺼졌는데 분포를 안 지웠다"
 
 
+def _legacy_done(conn) -> int:
+    """2.10.1 이 끝낸 done 바퀴 — 시각까지 있는 last_match · mixed NULL(owner_round_end 를 거치지 않는다)."""
+    rid = conn.execute("INSERT INTO owner_dist_state (seed, started_at, ended_at, result) VALUES (1, '2026-09-20T00:00:00',"
+                       " '2026-09-21T00:00:00', 'done')").lastrowid   # 14일 넘게 전 — 새 바퀴 차례(로더가 뜬다)
+    conn.execute("INSERT INTO owner_dist (round_id, stratum, n_games, last_match) VALUES (?, 1, 900, '2026-10-01T21:30:00')", (rid,))
+    conn.commit()
+    return rid
+
+
+def _mixed(conn, rid):
+    return conn.execute("SELECT mixed FROM owner_dist_state WHERE round_id = ?", (rid,)).fetchone()[0]
+
+
+def test_old_done_round_is_mixed_on_first_sync_even_with_toggle_off():
+    """6회차 Y2 — 섞기를 로더 분기 안에 두면 토글을 끈 사용자에게 남은 옛 분포는 영영 안 섞인다."""
+    with Env() as e:
+        rid = _legacy_done(e.conn)
+        e.set(on="")
+        s = _sched()
+        s.sync()
+        assert _mixed(e.conn, rid) == 1, "토글 꺼짐에서 옛 done 바퀴를 안 섞었다"
+        assert store.owner_dist_rows(e.conn, rid)[0]["last_match"] == "2026-10-01", "날짜로 안 잘랐다"
+        assert e.rows(rid) == 1, "토글 끔이 받아 둔 분포를 지웠다"
+
+
+def test_mixing_waits_while_the_loader_runs():
+    """첫 섞기가 잠김으로 실패하고 로더가 먼저 뜬 경우 — 도는 동안은 미루고, 끝난 뒤 다음 sync 에서."""
+    import sqlite3
+    with Env() as e:
+        rid = _legacy_done(e.conn)
+        real, calls = store.owner_dist_mix_pending, []
+
+        def locked_once(conn):
+            calls.append(1)
+            if len(calls) == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return real(conn)
+        store.owner_dist_mix_pending = locked_once
+        try:
+            s = _sched()
+            s.tick()
+            assert FakeLoader.made, "전제: 잠김 뒤에도 로더는 뜬다"
+            ld = FakeLoader.made[0]
+            assert _mixed(e.conn, rid) is None and len(calls) == 1
+            s.sync()
+        finally:
+            store.owner_dist_mix_pending = real
+        assert _mixed(e.conn, rid) is None, "로더가 도는 동안 섞었다(바퀴 저장과 겹친다)"
+        ld.finish(od.RoundResult())
+        s.sync()
+        assert _mixed(e.conn, rid) == 1, "로더가 끝난 뒤에도 안 섞었다"
+
+
 def test_purge_waits_for_the_running_loader():
     with Env() as e:
         s = _sched()

@@ -210,7 +210,11 @@ def test_eligible_boundaries():
         ok = {"n_games": 5, "last_match": (NOW - timedelta(days=9)).isoformat()}
         assert od.eligible(ok, NOW)
         assert not od.eligible({**ok, "n_games": 4}, NOW), "판수 하한 밑"
-        assert not od.eligible({**ok, "last_match": (NOW - timedelta(days=9, seconds=1)).isoformat()}, NOW), "9일 초과"
+        # 50단계 V1 — 날짜끼리 비교(저장값이 날짜만): 9일 전 날짜면 그날 밤이어도 통과, 10일 전 날짜면 탈락
+        day9 = (NOW - timedelta(days=9)).date().isoformat()
+        assert od.eligible({**ok, "last_match": day9}, NOW), "9일 전 날짜(날짜만)"
+        assert od.eligible({**ok, "last_match": (NOW - timedelta(days=9, hours=11)).isoformat()}, NOW), "9일 전 날짜의 이른 시각(옛 시각 문자열)"
+        assert not od.eligible({**ok, "last_match": (NOW - timedelta(days=10)).date().isoformat()}, NOW), "10일 전 날짜"
         assert not od.eligible({**ok, "last_match": None}, NOW) and not od.eligible({**ok, "last_match": "엉망"}, NOW)
 
 
@@ -414,6 +418,81 @@ def test_old_db_gets_the_snap_id_column():
         conn = store.open_db(p)
         try:
             assert store.owner_round_running(conn)["snap_id"] is None, "옛 줄은 snap_id 가 비어 있어야 한다(→ 새 바퀴로 다시 시작)"
+            assert "mixed" in {r["name"] for r in conn.execute("PRAGMA table_info(owner_dist_state)")}, "mixed 열 이주가 없다"
+        finally:
+            conn.close()
+
+
+# ── 50단계 V1 — 줄 순서 섞기 · last_match 날짜만 ───────────────────────────────
+
+def _raw_round(conn, result, rows):
+    """옛 버전(2.10.1)이 쓴 것처럼 — 시각까지 있는 last_match · 받은 순서 id · mixed NULL."""
+    cur = conn.execute("INSERT INTO owner_dist_state (seed, started_at, result, ended_at) VALUES (1, ?, ?, ?)",
+                       (NOW.isoformat(), result, NOW.isoformat() if result else None))
+    rid = cur.lastrowid
+    for i, (stratum, last) in enumerate(rows):
+        conn.execute("INSERT INTO owner_dist (round_id, stratum, n_games, last_match, shots) VALUES (?, ?, ?, ?, ?)",
+                     (rid, stratum, 900 + i, last, float(i)))
+    conn.commit()
+    return rid
+
+
+def _id_order(conn, rid):
+    return [r[0] for r in conn.execute("SELECT n_games FROM owner_dist WHERE round_id = ? ORDER BY id", (rid,))]
+
+
+def _spearman(a, _b=None):
+    """id 순서로 읽은 값(받은 순서대로 커지게 넣었다)의 순위 ↔ 자리 순위 상관 — 안 섞었으면 1."""
+    import statistics
+    rank = {v: i for i, v in enumerate(sorted(a))}
+    return statistics.correlation([rank[v] for v in a], list(range(len(a))))
+
+
+def test_done_reinserts_rows_in_random_order_with_the_same_values():
+    with tempfile.TemporaryDirectory() as d:
+        conn = store.open_db(Path(d) / "f.db")
+        try:
+            rows = [(1 + i % 3, f"2026-10-0{1 + i % 9}T2{i % 4}:3{i % 6}:00") for i in range(60)]
+            rid = _raw_round(conn, None, rows)
+            before = sorted(store.owner_dist_rows(conn, rid), key=lambda r: r["n_games"])
+            assert _id_order(conn, rid) == sorted(_id_order(conn, rid)), "전제: 섞지 않으면 id 순서 = 받은 순서"
+            store.owner_round_end(conn, rid, "done", NOW.isoformat())
+            order = _id_order(conn, rid)
+            assert abs(_spearman(order, order)) < 0.5, \
+                "done 뒤에도 id 순서가 받은 순서를 따른다(줄 ↔ 사람 맞대기 · V1)"
+            after = sorted(store.owner_dist_rows(conn, rid), key=lambda r: r["n_games"])
+            assert [{**r, "last_match": r["last_match"][:10]} for r in before] == after, "섞기가 값을 바꿨다(날짜 자르기 말고)"
+            assert all(len(r["last_match"]) == 10 for r in after), "running 때 들어온 시각 문자열이 done 에서 안 잘렸다"
+            assert conn.execute("SELECT mixed FROM owner_dist_state WHERE round_id = ?", (rid,)).fetchone()[0] == 1
+            ref = NOW.isoformat()
+            assert od.build_dist(before, rid, ref) == od.build_dist(after, rid, ref), "섞기 전후 분포가 다르다"
+        finally:
+            conn.close()
+
+
+def test_new_rows_store_the_last_match_date_only():
+    with env() as e:
+        r = e.run()
+        assert r.result == "done"
+        rows = store.owner_dist_rows(e.conn, r.round_id)
+        assert rows and all(x["last_match"] == "2026-10-12" for x in rows), rows   # 지어낸 경기는 2026-10-12T1x:00:00
+        assert b"2026-10-12T1" not in e.files(), "마지막 경기 시각이 파일 바이트에 남았다"
+
+
+def test_mix_pending_migrates_old_done_rounds_once():
+    with tempfile.TemporaryDirectory() as d:
+        conn = store.open_db(Path(d) / "f.db")
+        try:
+            rid = _raw_round(conn, "done", [(1, "2026-10-05T21:30:00")] * 3 + [(2, "2026-10-06T08:15:00")] * 3)
+            emptied = _raw_round(conn, "done", [])          # purge everything 뒤처럼 줄이 없는 done 바퀴
+            running = _raw_round(conn, None, [(3, "2026-10-07T09:00:00")])
+            assert store.owner_dist_mix_pending(conn) == 1, "옛 done 바퀴(줄 있음)만 섞어야 한다"
+            assert all(len(x["last_match"]) == 10 for x in store.owner_dist_rows(conn, rid))
+            mixed = dict(conn.execute("SELECT round_id, mixed FROM owner_dist_state").fetchall())
+            assert mixed[rid] == 1 and mixed[emptied] is None and mixed[running] is None, mixed
+            assert store.owner_dist_rows(conn, running)[0]["last_match"] == "2026-10-07T09:00:00", "진행 바퀴를 건드렸다"
+            n = conn.total_changes
+            assert store.owner_dist_mix_pending(conn) == 0 and conn.total_changes == n, "두 번째에도 썼다"
         finally:
             conn.close()
 
