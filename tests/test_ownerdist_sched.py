@@ -31,7 +31,7 @@ NOW = datetime(2026, 10, 13, 12, 0, 0)
 ON_DAY = "2026-10-10"
 _REAL_LOADER = app_main.OwnerDistLoader
 _KEYS = ("ENV_PATH", "DB_PATH", "RANK_DB_PATH", "WEB_DATA", "RANK_COLLECT", "NOTICE_ACCEPTED", "API_KEY",
-         "OWNER_DIST_ON", "OWNER_DIST_OFF", "OWNER_DIST_TICK_S")
+         "OWNER_DIST_ON", "OWNER_DIST_OFF", "OWNER_DIST_TICK_S", "OWNER_DIST_HALT_WAIT_MS")
 
 
 class _Sig:
@@ -52,6 +52,7 @@ class FakeLoader:
     def __init__(self):
         self.done = _Sig()
         self.running = self.cancelled = self.terminated = False
+        self.waits: list[int] = []
         FakeLoader.made.append(self)
 
     def start(self):
@@ -64,6 +65,7 @@ class FakeLoader:
         self.cancelled = True
 
     def wait(self, ms=0):
+        self.waits.append(ms)
         return True
 
     def terminate(self):
@@ -351,6 +353,44 @@ def test_done_emits_dist_changed_only_for_done():
             s.tick()
             FakeLoader.made[-1].finish(res)
             assert got == want, (res, got)
+
+
+def test_clear_rank_records_halts_owner_loader_before_deleting_rank_db():
+    """③b(③a 리뷰 [하]) — 로더가 표본을 뽑는 몇 ms 동안 rank.db 를 연다. 지우기 전에 멈추고 기다려야 윈도우가 삭제를 안 막는다."""
+    with Env() as e:
+        config.OWNER_DIST_HALT_WAIT_MS = 1234   # 기본값(2000)이 아닌 값 — 기다림 상한 배선을 잰다
+        s = _sched()
+        s.tick()
+        ld = FakeLoader.made[0]
+        done = e.seed_done()   # 틱 뒤에 — 먼저 넣으면 11일 전 done 이 기준점이라 새 바퀴 차례가 아니다
+        seen = []
+        keep = app_main.rankcollect.delete_db
+
+        def delete_db():
+            seen.append((ld.cancelled, list(ld.waits)))
+            return True
+        app_main.rankcollect.delete_db = delete_db
+        try:
+            app_main.clear_rank_records(None, None, s)
+        finally:
+            app_main.rankcollect.delete_db = keep
+        assert seen == [(True, [1234])], f"rank.db 를 지울 때 로더가 멈춰 있지 않았다(멈춤·기다림): {seen}"
+        assert e.rows(done) == 3, "로더가 도는 중에 분포를 지웠다(저장과 겹친다)"
+        ld.finish(od.RoundResult(cancelled=True))
+        assert e.rows(done) == 0, "수집이 꺼졌는데(전제) 로더가 끝난 뒤 분포를 안 지웠다"
+    with Env():
+        s = _sched()
+        s.halt_for_delete()   # 도는 로더가 없으면 기다리지 않는다
+        assert FakeLoader.made == []
+    with Env():   # [정보] › [수집 기록 지우기] 버튼이 창의 예약을 넘기는가(배선)
+        p = _Parent()
+        halts = []
+        p._owner_sched.halt_for_delete = lambda: halts.append(1)
+        dlg = app_main.AboutDialog(p)
+        dlg._ask_clear = lambda keep: "all"
+        dlg._on_clear_rank()
+        dlg.deleteLater()
+        assert halts == [1], "[수집 기록 지우기] 가 구단주 분포 로더를 멈추지 않는다"
 
 
 def test_key_change_turns_the_toggle_off():

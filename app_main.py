@@ -1973,6 +1973,16 @@ class OwnerDistScheduler(QObject):
         if res.result == "done":
             self.dist_changed.emit()
 
+    def halt_for_delete(self) -> None:
+        """[수집 기록 지우기] 가 rank.db 파일을 지우기 **전에**(수집을 끈 뒤) — 전제 꺼짐으로 멈추고(분포 지우기는 로더 끝에서)
+        잠깐 기다린다. 로더는 표본을 뽑는 몇 ms 동안만 rank.db 를 열고, 멈춤 요청 뒤 첫 확인에서 돌아온다 — 그 사이에 지우면
+        윈도우가 삭제를 막아 "다른 실행본이 열고 있어"로 잘못 안내했다(③a 리뷰). 도는 요청(타임아웃 10초)까지 다 기다리지는
+        않는다 — 그때는 rank.db 가 이미 닫혀 있다."""
+        self.sync()
+        w = self.loader
+        if w is not None and w.isRunning():
+            w.wait(config.OWNER_DIST_HALT_WAIT_MS)
+
     def shutdown(self, fast: bool = False) -> list:
         """끝낼 때(quit_app) — 진행 바퀴는 running 으로 남는다(다음 실행이 이어 받는다). fast 면 멈춤 요청만 → 아직 도는 스레드."""
         self._quitting = True
@@ -2115,6 +2125,8 @@ class MainWindow(QMainWindow):
         self._dirty: set[str] = set()  # 낡은 화면 키(VIEW_OF_KEY) — 열 때 그린다
         self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
         self._narrate_found: list = []
+        self._dist_key = None          # 구단주 분포 판정 재료 캐시(_dist_basis) — 칩·문장이 같이 쓴다
+        self._dist_val = None
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
         self._owner_sched: OwnerDistScheduler | None = None   # 구단주 분포 예약 — 같은 셸이 붙여 준다
         self._maint_workers: list[RankMaintWorker] = []       # 예약이 없을 때만(테스트 창) — _maintain_rank
@@ -2487,14 +2499,18 @@ class MainWindow(QMainWindow):
         """구단주 분포 예약도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_owner_dist) 알림만 받는다."""
         self._owner_sched = sched
         sched.switched_off.connect(self._on_owner_dist_off)
+        sched.dist_changed.connect(self.refresh_owner_dist_views)   # 새 done 분포 — 칩·문장 다시(PyQt 7: _invalidate)
 
     def _on_owner_dist_off(self, reason: str) -> None:
         self.statusBar().showMessage(f"구단주 분포 받기 — {ownerdist.OFF_REASON_TEXT.get(reason, reason)}", 0)
+        self.refresh_owner_dist_views()   # 꺼졌다 — 분포 판정을 거둔다
 
     def _sync_owner_dist(self) -> None:
-        """끄는 길(수집·웹 데이터·동의·지우기·키)에서 — 예약이 .env 를 다시 읽어 멈추고 지운다(창만 있는 테스트에선 없음)."""
+        """끄는 길(수집·웹 데이터·동의·지우기·키)에서 — 예약이 .env 를 다시 읽어 멈추고 지운다(창만 있는 테스트에선 없음).
+        분포 판정도 거둔다(허용이 꺼졌으면 _dist_basis 가 None) — 예약이 없는 창에서도."""
         if self._owner_sched is not None:
             self._owner_sched.sync()
+        self.refresh_owner_dist_views()
 
     def _on_rank_collect_outcome(self, out) -> None:
         """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드).
@@ -3490,18 +3506,56 @@ class MainWindow(QMainWindow):
         (시즌 전환·새 경기·다른 계정) 키가 달라져 다시 계산한다 — 목록을 갈아끼우든(id) 앞에
         이어 붙이든(길이·맨 앞 경기) 잡히게."""
         m, d = self._matches, self._details
-        key = (self._ouid, id(m), len(m), m[0].match_id if m else None, id(d), len(d))
+        basis = self._dist_basis()
+        key = (self._ouid, id(m), len(m), m[0].match_id if m else None, id(d), len(d), self._dist_key if basis else None)
         if key != self._narrate_key:
-            self._narrate_found = core.narrate(m, d, self._ouid)
+            self._narrate_found = core.narrate(m, d, self._ouid, basis=basis)
             self._narrate_key = key
         return self._narrate_found
 
+    def _dist_basis(self):
+        """구단주 분포 판정 재료(49단계 ③b) — 칩(_render_chips)·문장(_narrate_scope)이 같이 쓴다. 허용(동의·웹·수집·토글·키)이
+        아니거나 분포·내 감독모드 최신 OWNER_DIST_MATCHES 판이 없으면 None(같은 경기 상대 판정 그대로).
+
+        분포는 매번 fifa.db 에서 읽는다(최신 done 바퀴 한 줄 + 구단주 150줄) — 지우기·새 바퀴·45일 낡음이 다른 신호 없이 잡히게.
+        비싼 쪽(내 1000판 side_totals)만 캐시: 키 = 분포 바퀴 · 계정 · _details_all(시즌 범위 무관 — 내 값은 늘 최신 1000판)의
+        id·길이·맨 앞 경기. 감독모드 밖 매치 종류면 dist_basis 의 matchType 거르기가 None 을 낸다."""
+        if not self._ouid or not config.owner_dist_allowed():
+            return None
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                dist = core.load_owner_dist(conn, datetime.now())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None   # 잠김 등 — 이번 그리기만 같은 경기 상대 판정
+        if dist is None:
+            return None
+        d = self._details_all
+        key = (dist.round_id, dist.ended_at, self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
+        if key != self._dist_key:
+            self._dist_val = core.dist_basis(dist, d, self._ouid)
+            self._dist_key = key
+        return self._dist_val
+
+    def refresh_owner_dist_views(self) -> None:
+        """분포가 바뀌었다(새 바퀴 · 지움 · 토글 · 전제 꺼짐) — 칩·문장을 쓰는 화면(흐름 분석·대시보드)을 낡음으로."""
+        if not self._ouid:
+            return
+        for key in ("analysis", "dashboard"):
+            self._invalidate(key)
+
     def _render_chips(self) -> None:
-        """흐름 분석 맨 위 칩 줄(N19) — 시즌 범위, 같은 경기 상대 대비. 칩이 없어도 한 줄은 남겨 이유를 말한다."""
+        """흐름 분석 맨 위 칩 줄(N19) — 시즌 범위, 같은 경기 상대 대비. 칩이 없어도 한 줄은 남겨 이유를 말한다.
+        구단주 분포(49단계)를 쓸 수 있으면 결정력·태클은 분포 속 내 위치(내 최근 1000판 — 시즌 범위 무관)로 판정한다."""
         self._clear(self.box_chips)
         totals = core.side_totals(self._details, self._ouid) if self._ouid else None
-        chips = core.strength_chips(totals) if totals else []
-        head = QLabel("같은 경기 상대와 견주면")
+        basis = self._dist_basis() if totals else None
+        chips = core.strength_chips(totals, basis) if totals else []
+        top_rank = config.OWNER_DIST_STRATA[-1]
+        dist_chips = any(c.basis == "dist" for c in chips)
+        head = QLabel(f"1~{top_rank:,}위 구단주 분포 · 같은 경기 상대와 견주면" if dist_chips else "같은 경기 상대와 견주면")
         head.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.box_chips.addWidget(head)
         for c in chips:
@@ -3510,13 +3564,24 @@ class MainWindow(QMainWindow):
             lb.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color}; border-radius: 9px;"
                              f" padding: 2px 10px;")
             d = c.diff
-            lb.setToolTip(f"{c.label}: 나 {d.mine:.1f}% 대 같은 경기 상대 {d.opp:.1f}% (경기 {d.n:,}판)\n"
-                          f"차이 {d.diff:+.1f}%p · 95% 구간 {d.lo:+.1f} ~ {d.hi:+.1f}%p")
+            if c.basis == "dist":
+                dist = basis.dist
+                top = 100 - c.pct if c.strong else c.pct
+                lb.setToolTip(f"{c.label}: 1~{top_rank:,}위 구단주 {dist.n_owners}명 대비 "
+                              f"{'상위' if c.strong else '하위'} {max(1, round(top))}%\n"
+                              f"(내 최근 {d.n:,}판 · 나 − 같은 경기 상대 {d.diff:+.1f}%p)\n"
+                              f"분포 기준일 {dist.ended_at[:10]} · 경향이며 확정이 아닙니다")
+            else:
+                lb.setToolTip(f"{c.label}: 나 {d.mine:.1f}% 대 같은 경기 상대 {d.opp:.1f}% (경기 {d.n:,}판)\n"
+                              f"차이 {d.diff:+.1f}%p · 95% 구간 {d.lo:+.1f} ~ {d.hi:+.1f}%p")
             lb.setProperty("chip", c.diff.metric.key)
             self.box_chips.addWidget(lb)
         if not chips:
-            none = QLabel(f"뚜렷한 강점·약점 없음 (차이 {config.N19_MIN_GAP:g}%p 이상, 95% 구간이 0 을 안 품을 때만 띄웁니다)"
-                          if totals and totals.games else "경기가 없습니다")
+            gap = f"차이 {config.N19_MIN_GAP:g}%p 이상, 95% 구간이 0 을 안 품을 때만 띄웁니다"
+            if basis is not None:
+                gap = (f"결정력·태클 성공은 1~{top_rank:,}위 구단주 분포의 양 끝 {config.OWNER_DIST_CHIP_P}%일 때만, "
+                       f"유효슛 비율은 {gap}")
+            none = QLabel(f"뚜렷한 강점·약점 없음 ({gap})" if totals and totals.games else "경기가 없습니다")
             none.setStyleSheet(f"color: {T.TEXT_DIM};")
             none.setProperty("chip", "none")
             self.box_chips.addWidget(none)
@@ -10381,6 +10446,7 @@ class MainWindow(QMainWindow):
         self._matches_all, self._details_all = [], []
         self._matches, self._details = [], []
         self._narrate_found, self._narrate_key = [], None
+        self._dist_val, self._dist_key = None, None
         if self._prefetch is not None:
             self._prefetch.discard()  # discard 는 멈춤 표시만 — 끝난 Future 의 결과는 참조를 놓아야 풀린다
         self._prefetch = None
@@ -10919,6 +10985,9 @@ class AboutDialog(QDialog):
         sched = getattr(self.parent(), "_owner_sched", None)
         if sched is not None:
             sched.sync(start=on)   # 켜면 받을 차례일 때 바로, 끄면 로더 멈춤 + 진행 바퀴만 off
+        refresh = getattr(self.parent(), "refresh_owner_dist_views", None)
+        if refresh is not None:
+            refresh()   # 끄면 남긴 분포를 판정에 안 쓴다 · 켜면 남아 있던 분포를 다시 쓴다
         self.lb_msg.setText(
             "구단주 분포 받기를 켰습니다 — 바퀴마다 내 API 키로 많은 요청을 보냅니다(서비스 단계 키)." if on else
             "구단주 분포 받기를 껐습니다 — 받던 바퀴는 버리고, 받아 둔 분포는 남깁니다.")
@@ -11031,7 +11100,8 @@ class AboutDialog(QDialog):
         if stop is not None:
             stop()      # 예측 작업자가 predictions 에 쓰는 중이면 지운 뒤에 한 줄이 되살아난다
         try:
-            done, n = clear_rank_records(self._sched(), keep_ouid if choice == "keep" else None)
+            done, n = clear_rank_records(self._sched(), keep_ouid if choice == "keep" else None,
+                                         getattr(self.parent(), "_owner_sched", None))
         except OSError as e:
             self.lb_msg.setText(f"설정을 저장하지 못해 지우지 않았습니다: {e}")
             return
@@ -11090,13 +11160,16 @@ def rank_status_text(st: dict) -> str:
     return "<br>".join(lines)
 
 
-def clear_rank_records(sched, keep_ouid: str | None) -> tuple[bool, int | None]:
+def clear_rank_records(sched, keep_ouid: str | None, owner_sched=None) -> tuple[bool, int | None]:
     """수집 기록 지우기 — 수집을 끄고(.env 를 못 쓰면 OSError — 그러면 아무것도 안 지운다: 켜진 채 지우면 다음
     확인이 곧바로 다시 모은다) 멈춘 뒤 rank.db 를 지우고 fifa.db 의 ELO 기록·따라가기 목록을 지운다.
+    구단주 분포 로더도 rank.db 를 지우기 **전에** 멈춘다(표본을 뽑는 동안 rank.db 를 연다 — OwnerDistScheduler.halt_for_delete).
     → (rank.db 를 다 지웠나, ELO 줄 수 — 못 지웠으면 None: 표시를 남겨 다음에 켤 때 지운다)."""
     config.set_rank_collect(False)
     if sched is not None:
         sched.stop()      # 수집 스레드가 fifa.db 에도 쓴다(따라가기 — 계정마다 cancel 을 본다)
+    if owner_sched is not None:
+        owner_sched.halt_for_delete()
     done = rankcollect.delete_db()
     try:
         conn = store.open_db(config.DB_PATH)

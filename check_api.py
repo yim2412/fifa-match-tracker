@@ -349,6 +349,32 @@ def main() -> int:
         print(f"[FAIL] DB: {type(e).__name__}: {e}")
         return 1
 
+    # 49단계 구단주 분포 — 상태 한 줄(받는 중·최근 바퀴·쓰는 분포) + 로더와 같은 요청 꼴 탐침: 목록 한 쪽(OWNER_DIST_PAGE ·
+    # 재시도 없음)과 캐시 없는 상세 1건. 남의 닉네임 대신 이 계정 ouid 로 — 상세가 .cache 에 안 쓰이는지도 본다(14.6만 파일 방지)
+    try:
+        from datetime import datetime as _dt
+        import ownerdist
+        conn = store.open_db(config.DB_PATH)
+        try:
+            status = ownerdist.status_text(conn, _dt.now())
+        finally:
+            conn.close()
+        print(f"[OK]   구단주 분포: {'켜짐' if config.owner_dist_allowed() else '꺼짐'} · {status}")
+        page = api.get_match_ids(ouid, matchtype=config.DEFAULT_MATCH_TYPE, offset=0, limit=config.OWNER_DIST_PAGE,
+                                 attempts=1)
+        fresh = next((m for m in page if not api._cache_path(m).exists()), None)
+        if fresh is None:
+            print(f"[WARN] 구단주 분포 탐침: 목록 {len(page)}건 — 캐시에 없는 경기가 없어 nocache 는 확인 못 함")
+        else:
+            d = api.get_match_detail_nocache(fresh)
+            wrote = api._cache_path(fresh).exists()
+            print(f"{'[FAIL]' if wrote else '[OK]  '} 구단주 분포 탐침: 목록 {len(page)}건 · 캐시 없는 상세 "
+                  f"{len(d.get('matchInfo') or [])}명분 · .cache 에 {'썼음!' if wrote else '안 씀'}")
+    except NexonAPIError as e:
+        print(f"[WARN] 구단주 분포 탐침 실패(분포 받기만 영향): {e.message}  (code={e.code}, status={e.status})")
+    except Exception as e:
+        print(f"[WARN] 구단주 분포 확인 실패(분포 받기만 영향): {type(e).__name__}: {e}")
+
     try:
         import seasons as sn
         rank_seasons = sn.fetch_seasons()

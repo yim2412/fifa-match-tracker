@@ -1591,16 +1591,169 @@ def test_analysis_chip_row_shows_strengths_and_weaknesses():
     def chips():
         return {w.property("chip"): w.text() for w in _live_widgets(_win.box_chips) if w.property("chip")}
     try:
-        app_main.core.strength_chips = lambda t: [weak, strong]
+        app_main.core.strength_chips = lambda t, b=None: [weak, strong]
         _win._render_chips()
         assert chips() == {"finish": "약점 결정력 -4.0%p", "tackle_rate": "강점 태클 성공 +4.0%p"}, chips()
-        app_main.core.strength_chips = lambda t: []
+        app_main.core.strength_chips = lambda t, b=None: []
         _win._render_chips()
         assert list(chips()) == ["none"] and "뚜렷한 강점·약점 없음" in chips()["none"], chips()
     finally:
         app_main.core.strength_chips = keep
         _win._render_chips()
 
+
+class _FakeDist:
+    """ownerdist.OwnerDist 꼴 — 모든 값이 백분위 p(양 끝이면 칩 · 안쪽 끝도 같은 값이라 SURE_P 를 통과)."""
+
+    def __init__(self, round_id=7, p=5.0):
+        self.round_id, self.ended_at, self.n_owners, self.p = round_id, "2026-10-12T03:00:00", 143, p
+        self.values = {}
+
+    def pct(self, key, x):
+        return self.p
+
+
+class _OwnerDistOn:
+    """구단주 분포 허용(동의·웹·수집·토글·키) + 분포 읽기를 가짜로. 내 1000판은 창의 경기로 채운 DistBasis(바꿔 끼운 dist_basis)."""
+    NAMES = ("WEB_DATA", "RANK_COLLECT", "NOTICE_ACCEPTED", "OWNER_DIST_ON", "API_KEY")
+
+    def __init__(self, dist):
+        self.dist, self.loads, self.bases = dist, [], []
+
+    def __enter__(self):
+        import habits
+        self._saved = {k: getattr(config, k) for k in self.NAMES}
+        self._core = (app_main.core.load_owner_dist, app_main.core.dist_basis)
+        config.WEB_DATA = config.RANK_COLLECT = True
+        config.NOTICE_ACCEPTED, config.OWNER_DIST_ON = config.NOTICE_VERSION, "2026-10-10T00:00:00"
+        config.API_KEY = config.API_KEY or "k"
+
+        def load(conn, now):
+            self.loads.append(1)
+            return self.dist
+
+        def basis(dist, details_all, ouid):
+            self.bases.append(dist.round_id)
+            return habits.DistBasis(dist, habits.side_totals(_win._details, ouid))
+        app_main.core.load_owner_dist, app_main.core.dist_basis = load, basis
+        _win._dist_key = _win._narrate_key = None
+        return self
+
+    def __exit__(self, *exc):
+        for k, v in self._saved.items():
+            setattr(config, k, v)
+        app_main.core.load_owner_dist, app_main.core.dist_basis = self._core
+        _win._dist_key = _win._narrate_key = None
+        _win._render_all()
+
+
+def _chip_widgets():
+    return {w.property("chip"): w for w in _live_widgets(_win.box_chips) if w.property("chip")}
+
+
+def test_owner_dist_chip_tooltip_head_and_off_switch():
+    # 49단계 ③b — 분포를 쓸 수 있으면 결정력·태클은 분포 칩(하위 N%) · 툴팁에 인원·내 판수·기준일·"경향" · 머리가 두 기준을 다 말함
+    with _OwnerDistOn(_FakeDist()) as od:
+        _win._render_chips()
+        w = _chip_widgets()
+        assert "finish" in w and w["finish"].text() == "약점 결정력 하위 5%", {k: v.text() for k, v in w.items()}
+        tip = w["finish"].toolTip()
+        assert f"1~{config.OWNER_DIST_STRATA[-1]:,}위 구단주 143명 대비 하위 5%" in tip and "2026-10-12" in tip, tip
+        assert "경향" in tip and "나 − 같은 경기 상대" in tip, tip
+        head = _live_widgets(_win.box_chips)[0].text()
+        assert "구단주 분포" in head and "같은 경기 상대" in head, head
+        assert od.loads and od.bases == [7], (od.loads, od.bases)
+        keep = app_main.core.strength_chips
+        try:
+            app_main.core.strength_chips = lambda t, b=None: []   # 칩이 없을 때 이유도 두 기준을 말한다
+            _win._render_chips()
+            none = _chip_widgets()["none"].text()
+            assert f"양 끝 {config.OWNER_DIST_CHIP_P}%" in none and "유효슛 비율" in none, none
+        finally:
+            app_main.core.strength_chips = keep
+        config.OWNER_DIST_ON = ""   # 토글 끔 — 받아 둔 분포는 남아도 판정엔 안 쓴다
+        n = len(od.loads)
+        _win._render_chips()
+        assert len(od.loads) == n, "꺼졌는데 분포를 읽었다"
+        assert all("하위" not in x.text() and "상위" not in x.text() for x in _chip_widgets().values()), \
+            [x.text() for x in _chip_widgets().values()]
+        assert _live_widgets(_win.box_chips)[0].text() == "같은 경기 상대와 견주면"
+
+
+def test_owner_dist_reaches_narrate_and_cache_follows_round():
+    # 문장도 같은 basis — 캐시 키가 분포 바퀴를 따라간다(같은 바퀴면 다시 안 하고, 새 바퀴면 다시)
+    calls = []
+    real = app_main.core.narrate
+
+    def spy(m, d, ouid, *a, **k):
+        calls.append(k.get("basis"))
+        return real(m, d, ouid, *a, **k)
+    with _OwnerDistOn(_FakeDist(round_id=7)) as od:
+        app_main.core.narrate = spy
+        try:
+            _win._narrate_scope()
+            _win._narrate_scope()
+            assert len(calls) == 1 and calls[0] is not None and calls[0].dist.round_id == 7, calls
+            assert od.bases == [7], f"같은 바퀴·같은 경기인데 내 1000판을 다시 셌다: {od.bases}"
+            od.dist = _FakeDist(round_id=8)
+            _win._narrate_scope()
+            assert len(calls) == 2 and calls[1].dist.round_id == 8, "새 바퀴인데 문장을 다시 안 냈다"
+            config.OWNER_DIST_ON = ""
+            _win._narrate_scope()
+            assert len(calls) == 3 and calls[2] is None, "꺼졌는데 분포 문장 캐시를 그대로 썼다"
+        finally:
+            app_main.core.narrate = real
+
+
+def test_owner_dist_basis_none_outside_manager_mode():
+    # 감독모드 밖 매치 종류(공식경기 등)를 검색하면 내 감독모드 1000판이 없다 — 진짜 dist_basis 의 matchType 거르기
+    with _OwnerDistOn(_FakeDist()) as od:
+        app_main.core.dist_basis = od._core[1]
+        keep = _win._details_all
+        try:
+            base = [{"matchId": f"m{i}", "matchType": config.DEFAULT_MATCH_TYPE, "matchInfo": []}
+                    for i in range(config.OWNER_DIST_MATCHES)]
+            _win._details_all = base
+            assert _win._dist_basis() is not None, "대조군 — 감독모드 1000판이면 판정 재료가 있어야"
+            _win._details_all = [dict(d, matchType=config.DEFAULT_MATCH_TYPE + 1) for d in base]
+            assert _win._dist_basis() is None, "감독모드가 아닌 경기로 분포 판정을 했다"
+        finally:
+            _win._details_all = keep
+
+
+def test_owner_dist_changed_signal_redraws_analysis_and_dashboard():
+    # 분포를 늦게 넣으면(바퀴가 끝남) 칩·문장을 다시 그린다 — 예약의 dist_changed · 스스로 끔 switched_off
+    keep_sched = _win._owner_sched
+    drawn = []
+    sched = app_main.OwnerDistScheduler()
+    try:
+        _win.attach_owner_sched(sched)
+        _win._render_analysis = lambda: drawn.append("analysis")
+        _win._render_dashboard = lambda: drawn.append("dashboard")
+        sched.dist_changed.emit()
+        assert sorted(drawn) == ["analysis", "dashboard"], drawn
+        drawn.clear()
+        sched.switched_off.emit("fail")
+        assert sorted(drawn) == ["analysis", "dashboard"], f"스스로 꺼진 뒤 분포 칩이 남는다: {drawn}"
+        drawn.clear()
+        sched.sync = lambda start=False: None   # 끄는 길(수집·웹·동의·지우기·키) — .env 는 안 건드린다
+        _win._sync_owner_dist()
+        assert sorted(drawn) == ["analysis", "dashboard"], f"끄는 길이 분포 칩을 안 거뒀다: {drawn}"
+        drawn.clear()
+        dlg = app_main.AboutDialog(_win)   # [정보] 토글 — 켜고 끄는 것도 다시 그린다
+        keep_set = config.set_owner_dist
+        config.set_owner_dist = lambda on, reason="": None
+        try:
+            dlg._on_owner_toggled(False)
+        finally:
+            config.set_owner_dist = keep_set
+            dlg.deleteLater()
+        assert sorted(drawn) == ["analysis", "dashboard"], f"[정보] 토글이 분포 칩을 안 다시 그렸다: {drawn}"
+    finally:
+        del _win._render_analysis, _win._render_dashboard
+        _win._owner_sched = keep_sched
+        sched.deleteLater()
+        _win._render_all()
 
 
 def test_sc_records_list_and_nexon_line():
