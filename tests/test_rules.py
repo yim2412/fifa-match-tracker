@@ -364,6 +364,9 @@ def _drive_uncovered() -> None:
             store.owner_done_hashes(conn, 1)
             store.owner_dist_rows(conn, 1)
             store.owner_req_total(conn)
+            store.owner_req_total(conn, "2026-10-01")
+            store.owner_round_results(conn, "2026-10-01")       # 구단주 분포 예약(49단계 ③a) — test_ownerdist 가 부른다
+            store.owner_dist_has_data(conn)
         finally:
             conn.close()
         import rankcollect

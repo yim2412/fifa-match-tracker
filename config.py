@@ -110,13 +110,14 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 9  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 10  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
 #                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속·최고점·첫 챔스(U1)
 #                     7 = 2.5.1 포지션 특성 — 상위 TRAIT_TOP 명의 카드 특성·코치(스쿼드메이커)와 201~500위 경기
 #                     8 = 2.6.1 표 칸 그림 — 구단·팀컬러 엠블럼·국기·특성 아이콘·시즌 배지를 넥슨 이미지 서버에서 받는다(수집과 무관)
 #                     9 = 2.9.1 내 계정 경기마다 상대의 그날 순위 구간을 그 시즌 동안 붙인다(N23 — 랭킹 수집을 켠 사람만)
+#                    10 = 2.10.1 구단주 분포 — 1~3000위 150명의 최근 1000판을 내 키로 받아 이름 없는 구단주별 요약(랭킹 수집 + 따로 켠 사람만)
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
@@ -127,6 +128,7 @@ RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API �
 META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
 TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터
 OPP_RANK_NOTICE_VERSION = 9   # 상대 순위 구간(rank.db match_opp_rank — 내 경기마다 상대의 그날 순위 구간)은 이 버전 동의 뒤부터
+OWNER_DIST_NOTICE_VERSION = 10   # 구단주 분포(49단계 · ownerdist.py)는 이 버전 동의 뒤부터
 # 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
 # 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다 — 8 이 그렇다(그림은 수집과 무관하게
 # 모두에게 해당 · 2026-10-11 사용자: 2~7 동의자 전원에게 한 번 다시 묻는다).
@@ -173,6 +175,13 @@ RANK_COLLECT_VAR = "FIFA_RANK_COLLECT"
 RANK_COLLECT = os.getenv(RANK_COLLECT_VAR, "0").strip() == "1"
 # 수집을 켤 때마다 새 시각(set_rank_collect) — 사람별 표가 "끈 사이를 건너 이어진 것"으로 읽히지 않게(rankcollect.person_epoch)
 RANK_COLLECT_ON_AT_VAR = "FIFA_RANK_COLLECT_ON_AT"
+# 구단주 분포(49단계) — 값은 켠 날짜(빈 값 = 꺼짐). 켜기가 "서비스 단계 키다"라는 자가 신고다 — 개발 키 오신고 판정은 이 날 이후
+# 누적만 센다(키를 바꾸면 꺼지고, 다시 켜면 새로 센다). _OFF 는 앱이 스스로 끈 사유(devkey|fail|key — 사용자가 끄면 빈 값).
+# set_owner_dist 가 재할당한다 — 다른 모듈은 config.OWNER_DIST_ON 으로 읽는다.
+OWNER_DIST_VAR = "FIFA_OWNER_DIST"
+OWNER_DIST_OFF_VAR = "FIFA_OWNER_DIST_OFF"
+OWNER_DIST_ON = os.getenv(OWNER_DIST_VAR, "").strip()
+OWNER_DIST_OFF = os.getenv(OWNER_DIST_OFF_VAR, "").strip()
 RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
 RANK_COLLECT_INTERVAL_H = 24
 RANK_CHECK_EVERY_MIN = 60           # 앱이 켜져 있는 동안 간격이 지났는지 보는 주기
@@ -376,6 +385,7 @@ OWNER_DIST_STALE_DAYS = 45                    # 분포가 이보다 낡으면 41
 OWNER_DIST_FAIL_MAX = 3                       # dropped|aborted 연속 이만큼이면 토글 끔(③)
 OWNER_DIST_SELFCHECK_REQ = 5000               # 누적 요청이 이보다 적은데 429 면 개발 키 오신고로 본다(③)
 OWNER_DIST_SEED = 20261016                    # + 바퀴 시작일 ordinal + 층 번호
+OWNER_DIST_TICK_S = 600                       # 예약이 "받을 차례인가"를 보는 간격(③ — 진행 바퀴가 있거나 새 바퀴 차례면 로더 시작)
 # 11-lite 랭커 기반 추천(17단계 — rankerpick.recommend). 문턱 10 근거: 2026-10-06 스냅숏 1,000위 안에서 10명 이상인
 # 팀컬러가 52개 중 23개 · 그 23개가 1,000명 중 938명(94%) — 대부분의 사람은 추천을 받고, 그 밖은 "N명뿐"이 맞다
 RANK_TREND_CUTS = (1, 10, 50, 100, 200)  # 랭킹 추이의 컷 그래프(1위 실선 · 나머지 점선) — "상위 구간 200위"까지
@@ -428,6 +438,9 @@ def save_api_key(key: str) -> None:
     """
     global API_KEY
     key = key.strip()
+    if key != API_KEY and OWNER_DIST_ON:
+        # 구단주 분포 토글은 "이 키가 서비스 단계"라는 자가 신고다 — 키가 바뀌면 신고도 무효(끄기를 먼저: 못 끄면 키도 안 바꾼다)
+        set_owner_dist(False, "key")
     _save_env(API_KEY_VAR, key)
     API_KEY = key
 
@@ -449,6 +462,16 @@ def set_rank_collect(on: bool) -> None:
         _save_env(RANK_COLLECT_ON_AT_VAR, datetime.now().isoformat(timespec="microseconds"))
     _save_env(RANK_COLLECT_VAR, "1" if on else "0")
     RANK_COLLECT = on
+
+
+def set_owner_dist(on: bool, reason: str = "") -> None:
+    """구단주 분포 토글 — 켜면 오늘 날짜(개발 키 오신고 판정의 시작점), 끄면 빈 값과 사유(devkey|fail|key · 사용자가 끄면 "")."""
+    global OWNER_DIST_ON, OWNER_DIST_OFF
+    day = datetime.now().date().isoformat() if on else ""
+    why = "" if on else reason
+    _save_env(OWNER_DIST_VAR, day)
+    _save_env(OWNER_DIST_OFF_VAR, why)
+    OWNER_DIST_ON, OWNER_DIST_OFF = day, why
 
 
 def _read_env_disk() -> dict | None:
@@ -556,6 +579,37 @@ def ranker_pick_allowed() -> bool:
 def trait_allowed() -> bool:
     """포지션 특성을 받아도 되나 — 랭커 픽 조건(수집 켜짐 포함) + 특성 안내(TRAIT_NOTICE_VERSION) 동의."""
     return ranker_pick_allowed() and NOTICE_ACCEPTED >= TRAIT_NOTICE_VERSION
+
+
+def owner_dist_prereq() -> bool:
+    """구단주 분포의 전제(이 프로세스 값) — 처음 동의 · 웹 데이터 · 랭킹 수집 · 안내 OWNER_DIST_NOTICE_VERSION 동의.
+    전제가 꺼지면 받은 분포까지 지운다 — 토글만 끈 것(분포는 남김)과 다르다."""
+    return (not notice_needed() and WEB_DATA and RANK_COLLECT
+            and NOTICE_ACCEPTED >= OWNER_DIST_NOTICE_VERSION)
+
+
+def owner_dist_allowed() -> bool:
+    """구단주 분포를 받아도 되나 — 전제 + 토글 + 키(이 프로세스 값). 예약은 매 틱 read_owner_dist 로 디스크도 다시 본다."""
+    return owner_dist_prereq() and bool(OWNER_DIST_ON) and bool(API_KEY)
+
+
+def read_owner_dist() -> tuple[bool, bool] | None:
+    """.env 를 디스크에서 다시 읽어 구단주 분포의 (전제, 토글·키) — 다른 실행본·손 수정. 토글·사유 전역도 맞춘다.
+    전제·토글은 이 프로세스 값과 **둘 다** 켜져야 켜짐이다. 못 읽으면 None — 모르는 상태라 아무것도 하지 않는다
+    (False 로 돌려주면 .env 를 잠깐 못 읽은 것만으로 받은 분포를 지운다)."""
+    global OWNER_DIST_ON, OWNER_DIST_OFF
+    vals = _read_env_disk()
+    if vals is None:
+        return None
+    OWNER_DIST_ON = (vals.get(OWNER_DIST_VAR) or "").strip()
+    OWNER_DIST_OFF = (vals.get(OWNER_DIST_OFF_VAR) or "").strip()
+    try:
+        accepted = int((vals.get(NOTICE_VAR) or "0").strip() or 0)
+    except ValueError:
+        accepted = 0
+    disk = ((vals.get(WEB_DATA_VAR) or "0").strip() == "1" and (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
+            and accepted >= OWNER_DIST_NOTICE_VERSION)
+    return disk and owner_dist_prereq(), bool(OWNER_DIST_ON) and bool(API_KEY)
 
 # ── 표 칸 그림(40단계) ───────────────────────────────────────────────────
 # 크기·비율은 여기 한 곳. ICON_PX 는 표 칸 그림의 높이, 폭은 종류별 가로세로 비율로 정한다.

@@ -50,6 +50,7 @@ import crashlog
 import images
 import methods
 import notice
+import ownerdist
 import playerinfo
 import rankcollect
 import rankerpick
@@ -1843,6 +1844,152 @@ class RankCollectScheduler(QObject):
         return left
 
 
+class OwnerDistLoader(QThread):
+    """구단주 분포 바퀴 한 호출(ownerdist.run_round)을 UI 스레드 밖에서 — 몇 시간 걸린다. 끊으면 도는 한 명만 버리고
+    바퀴는 running 으로 남는다(다음 틱에 이어 받는다). rank.db 는 표본을 뽑는 동안만 연다(rank_open)."""
+    done = pyqtSignal(object)   # ownerdist.RoundResult
+
+    def __init__(self):
+        super().__init__()
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        key = config.API_KEY   # 시작 때 키 — 키가 바뀌면 save_api_key 가 토글을 끄고 예약이 이 로더를 멈춘다
+        try:
+            res = ownerdist.run_round(config.DB_PATH, None, lambda: FCOnlineAPI(key, cache_dir=config.CACHE_DIR),
+                                      cancel=self._cancel.is_set, rank_open=rankcollect.open_rank_db_ro)
+        except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등. 메시지엔 남의 닉네임이 URL 로 실릴 수 있어 종류만
+            res = ownerdist.RoundResult(error=type(e).__name__)
+        self.done.emit(res)
+
+
+class OwnerDistScheduler(QObject):
+    """구단주 분포 예약(49단계 ③) — 셸 수명(tray.AppShell 이 쥔다): --tray 로 창 없이도 돌고, 로더가 창 밖이라 숨긴 창의
+    메모리 내려놓기(busy_for_release)와 무관하다. 랭커 픽·특성·검색·거래 로더와 **엮지 않는다** — 양보·우선순위 사슬 없음
+    (서비스 키 초당 약 20 ≪ 한도 500 · 검색마다 끊으면 한 명분을 버려 바퀴 상한에 닿는다. ROADMAP "조각 ③ 설계").
+
+    OWNER_DIST_TICK_S 마다 tick = sync(start=True): .env 를 디스크에서 다시 읽어(손 수정·다른 실행본)
+    - 전제(동의 10·웹 데이터·랭킹 수집)가 꺼졌으면 로더를 멈추고 **받은 분포까지** 지운다
+    - 토글·키가 꺼졌으면 로더를 멈추고 진행 바퀴만 off(받아 둔 분포는 남는다)
+    - 켜져 있고 ownerdist.should_run 이면 로더 시작(화면 스레드의 fifa.db 읽기 한 번).
+    지우기는 로더가 돌면 그 끝(_on_done)에서 — 돌던 저장과 겹치지 않게. 상태로 판정하므로 놓친 지우기는 다음 틱이 잡는다."""
+
+    round_done = pyqtSignal(object)   # ownerdist.RoundResult
+    dist_changed = pyqtSignal()       # 새 done 분포 — 창이 칩·문장을 다시 그린다(③b)
+    switched_off = pyqtSignal(str)    # 스스로 껐다 — 사유(ownerdist.OFF_REASON_TEXT 의 키)
+
+    def __init__(self, parent=None, now_fn=datetime.now):
+        super().__init__(parent)
+        self._now = now_fn
+        self._timer = QTimer(self)
+        self._timer.setInterval(config.OWNER_DIST_TICK_S * 1000)
+        self._timer.timeout.connect(self.tick)
+        self.loader: OwnerDistLoader | None = None
+        self._purge: bool | None = None   # 로더가 끝난 뒤 지울 것 — True 전부 · False 진행 바퀴만 · None 없음
+        self._quitting = False
+
+    def running(self) -> bool:
+        return self.loader is not None and self.loader.isRunning()
+
+    def start(self) -> None:
+        self._timer.start()
+
+    def tick(self) -> None:
+        if not self._quitting:
+            self.sync(start=True)
+
+    def sync(self, start: bool = False) -> None:
+        """설정이 바뀌었다(전제 꺼짐 길 sync_ranker_pick_data · [정보] 토글 · 키 바꿈) — 바로 맞춘다.
+        start 면 받을 차례일 때 로더도 띄운다(틱 · 토글을 켰을 때)."""
+        gate = config.read_owner_dist()
+        if gate is None:
+            return   # .env 를 못 읽었다 — 모르는 상태에서 지우지 않는다
+        prereq, on = gate
+        if not (prereq and on):
+            self._stop_and_purge(everything=not prereq)
+            return
+        if start and not self.running() and not self._quitting:
+            self._maybe_start()
+
+    def _stop_and_purge(self, everything: bool) -> None:
+        if self.running():
+            self._purge = everything if self._purge is None else (self._purge or everything)
+            self.loader.cancel()
+            return
+        self._do_purge(everything)
+
+    def _do_purge(self, everything: bool) -> None:
+        try:
+            ownerdist.purge(config.DB_PATH, everything=everything, now=self._now())
+        except sqlite3.Error:
+            pass   # 잠김 — 지울 것은 상태로 남아 다음 틱이 다시 본다
+
+    def _maybe_start(self) -> None:
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                due = ownerdist.should_run(conn, self._now())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return   # 다음 틱에
+        if not due:
+            return
+        w = OwnerDistLoader()
+        w.done.connect(self._on_done)
+        self.loader = w
+        w.start()
+
+    def _on_done(self, res) -> None:
+        self.round_done.emit(res)
+        pending, self._purge = self._purge, None
+        if pending is not None:
+            self._do_purge(pending)
+            return
+        if self._quitting:
+            return
+        on_day = config.OWNER_DIST_ON
+        reason = ""
+        if on_day:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    reason = ownerdist.off_reason_after(conn, res, on_day)
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                reason = ""   # 다음 바퀴 끝에 다시 본다
+        if reason:
+            try:
+                config.set_owner_dist(False, reason)
+            except OSError:
+                reason = ""   # .env 를 못 썼다 — 켜진 채, 다음 바퀴 끝에 다시
+            else:
+                self._do_purge(False)   # 끈 것과 같다 — 429 로 멈춘 진행 바퀴는 off
+                self.switched_off.emit(reason)
+        if res.result == "done":
+            self.dist_changed.emit()
+
+    def shutdown(self, fast: bool = False) -> list:
+        """끝낼 때(quit_app) — 진행 바퀴는 running 으로 남는다(다음 실행이 이어 받는다). fast 면 멈춤 요청만 → 아직 도는 스레드."""
+        self._quitting = True
+        self._timer.stop()
+        self._purge = None   # 지울 것은 상태로 남아 다음 실행의 첫 틱이 지운다
+        w = self.loader
+        if w is None or not w.isRunning():
+            return []
+        w.cancel()
+        if fast:
+            return [w]
+        if not w.wait(3000):   # 도는 요청(타임아웃 10초)이 끝나기를 다 기다리지 않는다 — 버리는 건 한 명분
+            w.terminate()
+            w.wait(1000)
+        return []
+
+
 class MainWindow(QMainWindow):
     MATCH_COLUMNS =["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
                      "패스성공률", "평점"]
@@ -1969,6 +2116,7 @@ class MainWindow(QMainWindow):
         self._narrate_key = None       # 흐름 분석 결과 캐시 — 대시보드·흐름 분석 메뉴가 같이 쓴다
         self._narrate_found: list = []
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
+        self._owner_sched: OwnerDistScheduler | None = None   # 구단주 분포 예약 — 같은 셸이 붙여 준다
         self._maint_workers: list[RankMaintWorker] = []       # 예약이 없을 때만(테스트 창) — _maintain_rank
         self.shell = None          # tray.AppShell — 없으면(테스트) X 가 예전처럼 정리하고 닫는다
         self._quitting = False     # quit_app 이 세운다 — closeEvent 는 받기만
@@ -2334,6 +2482,19 @@ class MainWindow(QMainWindow):
         sched.status.connect(self._on_rank_collect_status)
         sched.outcome.connect(self._on_rank_collect_outcome)
         sched.maintained.connect(self._on_rank_maintained)   # 길 ③ 정리 끝(바뀐 게 있을 때만)
+
+    def attach_owner_sched(self, sched: OwnerDistScheduler) -> None:
+        """구단주 분포 예약도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_owner_dist) 알림만 받는다."""
+        self._owner_sched = sched
+        sched.switched_off.connect(self._on_owner_dist_off)
+
+    def _on_owner_dist_off(self, reason: str) -> None:
+        self.statusBar().showMessage(f"구단주 분포 받기 — {ownerdist.OFF_REASON_TEXT.get(reason, reason)}", 0)
+
+    def _sync_owner_dist(self) -> None:
+        """끄는 길(수집·웹 데이터·동의·지우기·키)에서 — 예약이 .env 를 다시 읽어 멈추고 지운다(창만 있는 테스트에선 없음)."""
+        if self._owner_sched is not None:
+            self._owner_sched.sync()
 
     def _on_rank_collect_outcome(self, out) -> None:
         """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드).
@@ -4986,6 +5147,7 @@ class MainWindow(QMainWindow):
         어디서 왔든 이 한 자리를 거친다. 켜져 있으면 14일 정리만(켤 때).
         rank.db 쪽(사람별 표 · 14일 원본 · 동의 직후 따라잡기 — 2.3.1)은 작업 스레드의 정리 한 번으로 — 조건은 거기서 상태로 판정."""
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
+        self._sync_owner_dist()   # 구단주 분포 — 전제가 꺼졌으면 로더 멈춤 + 분포까지 지움(양보 사슬과 무관하게 따로)
         self._invalidate_pick()
         self._invalidate_rank_views()   # 길 ④ 끄기·[수집 기록 지우기] — 전부 이 함수를 거친다
         self._maintain_rank()
@@ -7211,6 +7373,7 @@ class MainWindow(QMainWindow):
         dlg = ApiKeyDialog(self, reason=reason)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._api.set_key(config.API_KEY)
+            self._sync_owner_dist()   # 키가 바뀌면 save_api_key 가 구단주 분포를 껐다 — 옛 키로 돌던 로더를 멈춘다
             self.statusBar().showMessage("API 키를 바꿨습니다. 다시 검색하세요.")
             # 거래는 키 주인 것 — 새 키로 바로 다시 맞춘다("API 키 확인 중"이 다음 검색까지 안 풀리지 않게)
             self._yield_trades()
@@ -10679,6 +10842,16 @@ class AboutDialog(QDialog):
         self.lb_rank.setWordWrap(True)
         self.lb_rank.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_rank)
+        # 구단주 분포(49단계 ③) — 랭킹 수집 아래. 전제가 꺼져 있으면 비활성 + 이유 한 줄. 상태는 창을 열 때(그리고 토글 뒤) 읽는다
+        self.chk_owner = QCheckBox(notice.OWNER_DIST_CHECK)
+        self.chk_owner.toggled.connect(self._on_owner_toggled)
+        v.addWidget(self.chk_owner)
+        self.lb_owner = QLabel("")
+        self.lb_owner.setTextFormat(Qt.TextFormat.PlainText)
+        self.lb_owner.setWordWrap(True)
+        self.lb_owner.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_owner)
+        self._refresh_owner_row()
         # 자동 실행(D2) — 앱 토글 하나. exe 에서만(소스 실행은 python.exe 를 등록하게 된다)
         self.chk_auto = QCheckBox(notice.AUTOSTART_CHECK)
         avail = autostart.available()
@@ -10709,6 +10882,48 @@ class AboutDialog(QDialog):
     def _sched(self):
         return getattr(self.parent(), "_rank_sched", None)
 
+    @staticmethod
+    def _owner_block_reason() -> str:
+        """구단주 분포 토글을 못 켜는 이유 — 켤 수 있으면 ""."""
+        if config.notice_needed() or config.NOTICE_ACCEPTED < config.OWNER_DIST_NOTICE_VERSION:
+            return "바뀐 이용 안내에 동의하면 켤 수 있습니다"
+        if not (config.WEB_DATA and config.RANK_COLLECT):
+            return "랭킹 수집을 켜야 켤 수 있습니다"
+        if not config.API_KEY:
+            return "API 키가 없습니다"
+        return ""
+
+    def _refresh_owner_row(self) -> None:
+        why = self._owner_block_reason()
+        self.chk_owner.blockSignals(True)
+        self.chk_owner.setChecked(not why and bool(config.OWNER_DIST_ON))
+        self.chk_owner.blockSignals(False)
+        self.chk_owner.setEnabled(not why)
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                status = ownerdist.status_text(conn, datetime.now())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            status = ""
+        self.lb_owner.setText(" · ".join(x for x in (why, status) if x))
+
+    def _on_owner_toggled(self, on: bool) -> None:
+        try:
+            config.set_owner_dist(on)   # 켜기 = 서비스 단계 키라는 자가 신고(켠 날부터 개발 키 오신고를 센다)
+        except OSError as e:
+            self.lb_msg.setText(f"저장하지 못했습니다: {e}")
+            self._refresh_owner_row()
+            return
+        sched = getattr(self.parent(), "_owner_sched", None)
+        if sched is not None:
+            sched.sync(start=on)   # 켜면 받을 차례일 때 바로, 끄면 로더 멈춤 + 진행 바퀴만 off
+        self.lb_msg.setText(
+            "구단주 분포 받기를 켰습니다 — 바퀴마다 내 API 키로 많은 요청을 보냅니다(서비스 단계 키)." if on else
+            "구단주 분포 받기를 껐습니다 — 받던 바퀴는 버리고, 받아 둔 분포는 남깁니다.")
+        self._refresh_owner_row()
+
     def _sync_pick(self) -> None:
         """수집이 꺼졌으면 랭커 픽 데이터를 지운다(E12) — 메인 창의 한 함수로(로더를 먼저 멈춘다)."""
         sync = getattr(self.parent(), "sync_ranker_pick_data", None)
@@ -10732,6 +10947,7 @@ class AboutDialog(QDialog):
         self.chk_rank.setEnabled(on)
         self.lb_msg.setText("켰습니다 — 다음 조회부터 반영됩니다." if on else
                             "껐습니다 — 다음 조회부터 넥슨 홈페이지를 읽지 않습니다.")
+        self._refresh_owner_row()
 
     def _on_rank_toggled(self, on: bool) -> None:
         try:
@@ -10756,6 +10972,7 @@ class AboutDialog(QDialog):
         if on and config.notice_update_pending():
             msg = self._ask_notice_after_collect_on(maintain) or msg
         self.lb_msg.setText(msg)
+        self._refresh_owner_row()
 
     def _ask_notice_after_collect_on(self, maintain) -> str | None:
         """수집을 켠 6 동의자에게 안내 7 을 묻는다(32단계 U6) — 토글 처리를 다 한 뒤 맨 끝에서. 거절해도 수집은 켜진 채
@@ -10827,6 +11044,7 @@ class AboutDialog(QDialog):
                else "ELO 기록은 지금 쓰는 중이라 다음에 켤 때 지웁니다.")
         self.lb_msg.setText(elo if done else
                             f"{elo} 랭킹 수집 기록은 다른 실행본이 열고 있어 다음에 켤 때 지웁니다.")
+        self._refresh_owner_row()
 
 
 def rank_status_text(st: dict) -> str:
@@ -10978,7 +11196,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0  # 이미 떠 있다 — 그 창을 앞으로 불렀다
     # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
     shell = tray.AppShell(app, open_window=lambda: _open_window(shell),
-                          sched=RankCollectScheduler(), single=single)
+                          sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler())
     if tray_mode:
         # 부팅 때 자동 실행 — 창·막는 창·미리 읽기 없이 트레이만. 동의·키가 필요하면 창도 만들지 않는다
         # (창을 만들면 시즌표를 넥슨 웹에 요청한다) — 사용자가 트레이에서 열 때 안내·키 창.

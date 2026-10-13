@@ -1956,6 +1956,9 @@ def test_main_starts_update_check_after_show():
         def attach_rank_sched(self, sched):
             calls.append("랭킹 수집")  # 예약은 창 밖(AppShell)에 살고 창은 상태만 받는다
 
+        def attach_owner_sched(self, sched):
+            calls.append("구단주 분포")  # 같은 셸이 쥐고 붙여 준다(49단계 ③a)
+
         def open_last_account(self):
             calls.append("마지막 계정")
 
@@ -1995,8 +1998,8 @@ def test_main_starts_update_check_after_show():
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
     tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
-    assert run(False) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", *tail, "미리 읽기"], calls
-    assert run(True) == ["창", "랭킹 수집", "show", "새 버전 확인", "캐시 정리", *tail, "마지막 계정"], calls
+    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "show", "새 버전 확인", "캐시 정리", *tail, "미리 읽기"], calls
+    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "show", "새 버전 확인", "캐시 정리", *tail, "마지막 계정"], calls
 
 
 def _stop_shell():
@@ -2007,6 +2010,8 @@ def _stop_shell():
             t.stop()
         if sh.sched is not None:
             sh.sched.shutdown()
+        if sh.owner_sched is not None:
+            sh.owner_sched.shutdown()
     app_main._SHELL = None
 
 
@@ -2018,6 +2023,9 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
             calls.append("창")
 
         def attach_rank_sched(self, sched):
+            pass
+
+        def attach_owner_sched(self, sched):
             pass
 
         def schedule_backfill(self, delay_s):
@@ -2038,6 +2046,7 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
         sh = app_main._SHELL
         assert sh is not None and sh.window is not None
         assert sh.sched._check_timer.isActive(), "--tray 인데 수집 예약을 안 걸었다 — 상주하는 이유가 수집이다"
+        assert sh.owner_sched._timer.isActive(), "--tray 인데 구단주 분포 예약을 안 걸었다"
     finally:
         _stop_shell()
         (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, app_main._SHELL) = orig
@@ -6400,7 +6409,8 @@ def test_notice_versions_split_first_and_reask():
                                             (2, False, True, False), (3, False, True, True),
                                             (4, False, True, True), (5, False, True, True),
                                             (6, False, True, True), (7, False, True, True),
-                                            (8, False, True, True), (9, False, False, True)]:
+                                            (8, False, True, True), (9, False, True, True),
+                                            (10, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -6410,7 +6420,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (9, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (10, 7, 6, 5, 4, 3, 2)
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -6488,7 +6498,8 @@ def test_reask_shows_only_changes_after_accepted():
 
 # 렌더한 안내 전문(숫자는 config 상수로 그린다)의 해시 — 버전과 짝. 글·상수가 바뀌어 FAIL 이면:
 # 실질 변경이면 config.NOTICE_VERSION 을 올리고 새 줄을 더한다 · 맞춤법·표현만이면 이 버전의 값만 고친다.
-NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f"}   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
+NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
+                 10: "8ce00c5021fb0806"}                           # 10 = 2.10.1 구단주 분포 받기(49단계)
 
 
 def _notice_digest() -> str:

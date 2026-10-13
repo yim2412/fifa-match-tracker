@@ -618,6 +618,129 @@ def test_devkey_suspected():
         assert not od.devkey_suspected(e.conn), "누적 5,000 이상이면 서비스 키로 본다"
 
 
+def test_devkey_counts_only_since_the_day_it_was_turned_on():
+    with env() as e:
+        old, on = "2026-10-01", NOW.date().isoformat()
+        for _ in range(config.OWNER_DIST_SELFCHECK_REQ):
+            store.budget_take(e.conn, old, store.BUDGET_OWNER_DIST, None)   # 옛 키(또는 앞서 켰던 때)의 누적
+        store.budget_mark_429(e.conn, on, store.BUDGET_OWNER_DIST)
+        assert not od.devkey_suspected(e.conn), "기준일 없이 재면 옛 누적이 서비스 키로 보이게 한다(대조군)"
+        assert od.devkey_suspected(e.conn, on), "켠 날 이후 누적이 0 인데 429 — 옛 키의 누적이 새 키를 가렸다"
+
+
+def test_should_run_needs_running_or_due_and_no_429_today():
+    with env() as e:
+        assert od.should_run(e.conn, NOW), "아무 바퀴도 없으면 첫 바퀴 차례"
+        r = e.run()
+        assert r.result == "done"
+        assert not od.should_run(e.conn, NOW + timedelta(days=config.OWNER_DIST_ROUND_DAYS - 1)), "직전 종료 뒤 주기 전에 띄웠다"
+        later = NOW + timedelta(days=config.OWNER_DIST_ROUND_DAYS)
+        assert od.should_run(e.conn, later), "주기가 지났는데 안 띄웠다"
+        store.owner_round_start(e.conn, 1, NOW.isoformat(), "s")   # 진행 바퀴 — 주기와 무관하게 이어 받는다
+        assert od.should_run(e.conn, NOW + timedelta(days=1))
+        store.budget_mark_429(e.conn, later.date().isoformat(), store.BUDGET_OPENAPI)
+        assert not od.should_run(e.conn, later), "그날 다른 로더의 429 표시가 있는데 띄웠다"
+
+
+def _ended(conn, result, started):
+    rid = store.owner_round_start(conn, 1, started, "s")
+    store.owner_round_end(conn, rid, result, started)
+
+
+def test_off_reason_after_fail_streak_since_on_day_skipping_off():
+    with env() as e:
+        on = "2026-10-05"
+        _ended(e.conn, "aborted", "2026-10-01T00:00:00")          # 켜기 전 — 안 센다
+        _ended(e.conn, "dropped", "2026-10-05T00:00:00")
+        _ended(e.conn, "off", "2026-10-06T00:00:00")              # 끊김(토글·스냅숏) — 실패도 성공도 아님
+        _ended(e.conn, "aborted", "2026-10-07T00:00:00")
+        fail = od.RoundResult(result="aborted")
+        assert od.off_reason_after(e.conn, fail, on) == "", "켜기 전 바퀴까지 셌거나 실패 두 번에 껐다"
+        assert od.off_reason_after(e.conn, fail, "2026-09-01") == "fail", "켜기 전 바퀴도 세면 셋 — 대조군"
+        _ended(e.conn, "dropped", "2026-10-08T00:00:00")
+        assert od.off_reason_after(e.conn, od.RoundResult(result="dropped"), on) == "fail", "off 를 건너 이어진 실패 셋인데 안 껐다"
+        assert od.off_reason_after(e.conn, od.RoundResult(result="done"), on) == "", "실패가 아닌 결과에서 껐다"
+        _ended(e.conn, "done", "2026-10-09T00:00:00")
+        _ended(e.conn, "aborted", "2026-10-10T00:00:00")
+        assert od.off_reason_after(e.conn, fail, on) == "", "done 이 연속을 끊지 않았다"
+        with _cfg(OWNER_DIST_FAIL_MAX=1):
+            assert od.off_reason_after(e.conn, fail, on) == "fail", "실패 한도가 설정과 이어져 있지 않다"
+
+
+def test_off_reason_devkey_only_on_quota():
+    with env() as e:
+        day = NOW.date().isoformat()
+        store.budget_mark_429(e.conn, day, store.BUDGET_OWNER_DIST)
+        assert od.off_reason_after(e.conn, od.RoundResult(quota=True), day) == "devkey"
+        assert od.off_reason_after(e.conn, od.RoundResult(), day) == "", "429 로 멈추지 않은 호출에서 개발 키로 껐다"
+
+
+def test_purge_helper_skips_when_nothing_and_keeps_done_on_toggle_off():
+    with env() as e:
+        assert not od.purge(e.db, everything=True, now=NOW), "지울 게 없는데 썼다"
+        r = e.run()
+        assert not od.purge(e.db, everything=False, now=NOW), "진행 바퀴가 없는데 토글 끔이 무언가 지웠다"
+        assert len(store.owner_dist_rows(e.conn, r.round_id)) == N_OWNERS
+        rid = store.owner_round_start(e.conn, 1, NOW.isoformat(), "s")
+        assert od.purge(e.db, everything=False, now=NOW)
+        assert store.owner_round_running(e.conn) is None and len(store.owner_dist_rows(e.conn, r.round_id)) == N_OWNERS, \
+            "토글 끔이 진행 바퀴를 안 끝냈거나 done 분포를 지웠다"
+        assert store.owner_round_last_end(e.conn)["round_id"] == rid
+        assert od.purge(e.db, everything=True, now=NOW) and store.owner_dist_rows(e.conn, r.round_id) == []
+        assert not store.owner_dist_has_data(e.conn)
+
+
+def test_rank_open_is_closed_before_fetching():
+    with env() as e:
+        state = {"opened": 0, "closed": 0, "seen_open": False}
+
+        class _Rank:
+            def __init__(self, real):
+                self.real = real
+
+            def execute(self, *a):
+                return self.real.execute(*a)
+
+            def close(self):
+                state["closed"] += 1
+
+        def opener():
+            state["opened"] += 1
+            return _Rank(e.rank)
+
+        def hook(name, n):
+            if name == "detail" and state["closed"] == 0:
+                state["seen_open"] = True
+        e.api.hook = hook
+        r = od.run_round(e.db, None, lambda: e.api, sleep=e.clock.sleep, clock=e.clock.now, now_fn=lambda: e.now,
+                         rank_open=opener)
+        assert r.result == "done" and state["opened"] == 1, (r, state)
+        assert not state["seen_open"], "경기를 받는 동안 rank.db 를 붙잡고 있었다 — [수집 기록 지우기]의 파일 삭제를 막는다"
+        assert state["closed"] >= 1
+
+
+def test_status_text_lines():
+    with env() as e:
+        assert "아직" in od.status_text(e.conn, NOW)
+        rid = store.owner_round_start(e.conn, 1, NOW.isoformat(), "s")
+        store.owner_done_add(e.conn, rid, "h1")
+        t = od.status_text(e.conn, NOW)
+        assert f"받는 중 1/{config.OWNER_DIST_PER_STRATUM * len(config.OWNER_DIST_STRATA)}명" in t, t
+        store.purge_owner_dist(e.conn, everything=False, now=NOW.isoformat())
+        r = e.run()
+        t = od.status_text(e.conn, NOW)
+        assert "최근 바퀴 완료" in t and f"구단주 {N_OWNERS}명" in t, t
+        keep = (config.OWNER_DIST_ON, config.OWNER_DIST_OFF)
+        try:
+            config.OWNER_DIST_ON, config.OWNER_DIST_OFF = "", "devkey"
+            assert "개발 단계 키" in od.status_text(e.conn, NOW)
+            config.OWNER_DIST_ON = "2026-10-13"
+            assert "개발 단계 키" not in od.status_text(e.conn, NOW), "다시 켰는데 옛 꺼진 사유를 보였다"
+        finally:
+            config.OWNER_DIST_ON, config.OWNER_DIST_OFF = keep
+        assert r.round_id
+
+
 def test_no_snapshot_starts_nothing():
     with env() as e:
         e.rank.close()

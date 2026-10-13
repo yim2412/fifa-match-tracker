@@ -348,26 +348,107 @@ def new_round_due(conn, now: datetime) -> bool:
     return datetime.fromisoformat(last["ended_at"]) + timedelta(days=config.OWNER_DIST_ROUND_DAYS) <= now
 
 
-def devkey_suspected(conn) -> bool:
+def devkey_suspected(conn, since_day: str | None = None) -> bool:
     """개발 키를 서비스 키로 잘못 신고했나 — 누적 요청이 OWNER_DIST_SELFCHECK_REQ 미만인데 최종 429 가 났다.
-    개발 키(하루 1,000)는 첫 1,000건 안에 429 가 나고, 서비스 키는 한도가 500배라 점검 말고는 거의 안 난다."""
-    total, hit = store.owner_req_total(conn)
+    개발 키(하루 1,000)는 첫 1,000건 안에 429 가 나고, 서비스 키는 한도가 500배라 점검 말고는 거의 안 난다.
+    since_day = 토글을 켠 날 — 그 뒤 누적만 센다(키를 바꿔 다시 켜면 새로)."""
+    total, hit = store.owner_req_total(conn, since_day)
     return hit and total < config.OWNER_DIST_SELFCHECK_REQ
 
 
+def should_run(conn, now: datetime) -> bool:
+    """예약 틱에서 로더를 띄울까 — 진행 바퀴가 있거나 새 바퀴 차례이고, 오늘 (openapi·랭커 픽·구단주 분포) 429 표시가 없을 때.
+    run_round 도 같은 것을 다시 보지만, 여기서 걸러 10분마다 스레드를 헛되이 띄우지 않는다."""
+    if store.budget_hit_429(conn, now.date().isoformat()):
+        return False
+    return store.owner_round_running(conn) is not None or new_round_due(conn, now)
+
+
+def off_reason_after(conn, res: RoundResult, on_day: str) -> str:
+    """바퀴 호출 하나가 끝난 뒤 토글을 스스로 끌 사유 — "devkey" · "fail" · ""(그대로).
+    devkey: 켠 날 이후 누적이 적은데 최종 429(res.quota 일 때만 본다 — 429 가 아니면 판정 재료가 안 바뀐다).
+    fail: 켠 날 이후 시작한 바퀴가 끝에서부터 dropped|aborted 로 OWNER_DIST_FAIL_MAX 번 이어졌다(off 는 실패도 성공도 아니라 건너뛴다)."""
+    if res.quota and devkey_suspected(conn, on_day):
+        return "devkey"
+    if res.result not in ("dropped", "aborted"):
+        return ""
+    streak = 0
+    for r in reversed(store.owner_round_results(conn, on_day)):
+        if r == "off":
+            continue
+        if r not in ("dropped", "aborted"):
+            break
+        streak += 1
+    return "fail" if streak >= config.OWNER_DIST_FAIL_MAX else ""
+
+
+def purge(db_path, *, everything: bool, now: datetime) -> bool:
+    """돌던 바퀴를 off 로 끝내고, everything 이면 받은 분포까지(store.purge_owner_dist). 지울 게 없으면 열기만 하고 안 쓴다.
+    로더가 도는 동안 부르면 안 된다(그 저장과 겹친다) — 예약이 로더가 끝난 뒤에 부른다. → 무언가 지웠나."""
+    conn = store.open_db(db_path)
+    try:
+        if not store.owner_dist_has_data(conn):
+            return False
+        if not everything and store.owner_round_running(conn) is None:
+            return False
+        store.purge_owner_dist(conn, everything=everything, now=now.isoformat(timespec="seconds"))
+        return True
+    finally:
+        conn.close()
+
+
+OFF_REASON_TEXT = {
+    "devkey": "넥슨이 호출 한도를 알려 껐습니다 — 개발 단계 키로 보입니다(서비스 단계 키가 필요합니다)",
+    "fail": f"바퀴가 {config.OWNER_DIST_FAIL_MAX}번 이어서 끝나지 못해 껐습니다",
+    "key": "API 키를 바꿔 껐습니다 — 새 키가 서비스 단계면 다시 켜세요",
+}
+RESULT_TEXT = {"done": "완료", "thin": "인원 부족", "dropped": "기한 넘김", "aborted": "요청 상한", "off": "중단"}
+
+
+def status_text(conn, now: datetime) -> str:
+    """[정보] 창의 구단주 분포 상태 한 줄 — 받는 중 N/전체 · 최근 바퀴 결과·날짜 · 쓰는 분포 기준일·인원 · 꺼진 사유.
+    창을 열 때 한 번(화면 스레드의 fifa.db 읽기)."""
+    parts = []
+    run = store.owner_round_running(conn)
+    if run is not None:
+        n = len(store.owner_done_hashes(conn, run["round_id"]))
+        parts.append(f"받는 중 {n}/{config.OWNER_DIST_PER_STRATUM * len(config.OWNER_DIST_STRATA)}명"
+                     f" ({run['started_at'][:10]} 시작)")
+    last = store.owner_round_last_end(conn)
+    if last is not None and last.get("ended_at"):
+        parts.append(f"최근 바퀴 {RESULT_TEXT.get(last['result'], last['result'])} {last['ended_at'][:10]}")
+    dist = load_dist(conn, now)
+    if dist is not None:
+        parts.append(f"쓰는 분포 {dist.ended_at[:10]} 기준 · 구단주 {dist.n_owners}명")
+    elif run is None and last is None:
+        parts.append("아직 받은 분포가 없습니다")
+    if not config.OWNER_DIST_ON and config.OWNER_DIST_OFF in OFF_REASON_TEXT:
+        parts.append(OFF_REASON_TEXT[config.OWNER_DIST_OFF])
+    return " · ".join(parts)
+
+
 def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = lambda: False,
-              sleep=time.sleep, clock=time.monotonic, now_fn=datetime.now) -> RoundResult:
+              sleep=time.sleep, clock=time.monotonic, now_fn=datetime.now,
+              rank_open: Callable[[], object] | None = None) -> RoundResult:
     """바퀴를 이어 받거나(running) 새로 열어(due 일 때만) 구단주를 차례로 받는다. 끊기면 running 을 그대로 두고 돌아온다.
 
-    api_factory() → FCOnlineAPI 꼴(스레드마다 하나씩 부른다). db_path 는 fifa.db — 연결은 여기서·스레드마다 연다."""
+    api_factory() → FCOnlineAPI 꼴(스레드마다 하나씩 부른다). db_path 는 fifa.db — 연결은 여기서·스레드마다 연다.
+    rank_conn 대신 rank_open(열기 함수)을 주면 표본을 뽑는 동안만 열고 바로 닫는다 — 바퀴는 몇 시간이고, 열린 rank.db
+    연결이 [수집 기록 지우기]의 파일 삭제를 막는다(rankcollect.open_rank_db_ro 주석)."""
     res = RoundResult()
     conn = store.open_db(db_path)
+    own_rank = None
     try:
         now = now_fn()
         day = now.date().isoformat()
         if store.budget_hit_429(conn, day):
             res.quota = True
             return res
+        if rank_conn is None and rank_open is not None:
+            try:
+                own_rank = rank_conn = rank_open()
+            except Exception:  # noqa: BLE001 — 못 열면 None 과 같다(아래 no_sample)
+                rank_conn = None
         run = store.owner_round_running(conn)
         if run and datetime.fromisoformat(run["started_at"]) + timedelta(days=config.OWNER_DIST_ROUND_MAX_DAYS) <= now:
             store.owner_round_end(conn, run["round_id"], "dropped", now.isoformat(timespec="seconds"))
@@ -404,6 +485,9 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
             used = 0
         else:
             salt, rid, used = run["salt"], run["round_id"], run["req_count"]
+        if own_rank is not None:
+            own_rank.close()   # 표본은 뽑았다 — 남은 몇 시간 동안 rank.db 를 붙잡지 않는다
+            own_rank = None
         res.round_id, res.owners_total = rid, len(targets)
         done = store.owner_done_hashes(conn, rid)
         res.owners_done = len(done)
@@ -470,4 +554,6 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
             store.owner_round_end(conn, rid, res.result, end)
         return res
     finally:
+        if own_rank is not None:
+            own_rank.close()
         conn.close()

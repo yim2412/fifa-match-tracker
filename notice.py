@@ -17,6 +17,7 @@ from importlib import metadata
 from pathlib import Path
 
 import config
+import store
 
 # 상표 고지 — 화면 이름에서 FIFA·FC ONLINE 을 뺀 것과 짝이다(2026-10-02 결정).
 UNOFFICIAL = ("넥슨(NEXON)·EA 와 관련 없는 비공식 프로그램입니다. "
@@ -64,6 +65,10 @@ WEB_DATA_HTML = f"""
 선수 카드를 직접 열 때는 지금처럼 상한 없이 읽습니다.</p>
 """
 
+# 구단주 분포(49단계) 안내의 숫자 — 상수에서 그린다(상수만 바꿔도 NOTICE_GOLDEN 이 잡는다)
+_OWNER_N = config.OWNER_DIST_PER_STRATUM * len(config.OWNER_DIST_STRATA)
+_OWNER_REQ_MAN = round(_OWNER_N * (1 + -(-config.OWNER_DIST_MATCHES // config.OWNER_DIST_PAGE) + config.OWNER_DIST_MATCHES) / 10_000)
+
 RANK_COLLECT_HTML = f"""
 <h3>랭킹 수집 (선택 · 기본 꺼짐)</h3>
 <p>[정보] 에서 켜면, 앱이 켜져 있는 동안 <b>하루 한 번</b> 넥슨 홈페이지의 감독모드 랭킹 목록 500쪽(1만 명)을
@@ -97,6 +102,14 @@ RANK_COLLECT_HTML = f"""
 <li>수집이 켜져 있으면 <b>내 계정</b>(내 계정 띠에서 고른 계정)의 경기마다, 상대가 그날 몇 위 구간이었는지(예: 201~1,000위)와
 두 사람의 점수 차 구간을 그 경기 기록에 붙여 <b>그 시즌 동안</b> 둡니다. 경기 기록에는 상대 닉네임이 들어 있으므로 이 구간은
 그 상대와 이어집니다. 정확한 순위·점수는 남기지 않습니다. 시즌이 끝나거나 수집을 끄면 바로 지웁니다. 동의하기 전에는 쓰지 않습니다.</li>
+<li><b>구단주 분포 받기</b>(선택 · 기본 꺼짐) — 수집이 켜져 있고 [정보] 에서 이것을 따로 켜면, {config.OWNER_DIST_ROUND_DAYS}일에 한 번
+랭킹 1~{config.OWNER_DIST_STRATA[-1]:,}위 중 {_OWNER_N}명을 골라 각자의 최근 감독모드 {config.OWNER_DIST_MATCHES:,}판을 <b>넥슨 오픈API(내 API 키)</b>로
+받습니다. 한 바퀴에 약 {_OWNER_REQ_MAN}만 건(바퀴 최대 {config.OWNER_DIST_ROUND_REQ:,}건 · 하루 최대 {config.OWNER_DIST_DAILY_REQ:,}건)을 보내는
+<b>대량 호출</b>이라 <b>서비스 단계 키</b>가 필요하고, 넥슨 정책에 따라 키 이용이 제한될 수 있습니다 — 켜는 것은 사용자의 선택입니다.
+받은 경기는 바로 요약하고 버리며, 이 PC 에는 <b>이름 없는 구단주별 요약</b>(한 사람당 결정력·태클 같은 지표 {len(store.OWNER_METRICS)}개와 판수·순위 층·마지막
+경기 시각)만 둡니다 — 닉네임·프로필 번호·경기 내용은 남기지 않습니다. 이 요약으로 내 지표가 상위 구단주들 사이에서 어디쯤인지 보여 줍니다.
+넥슨이 호출 한도를 알리면 그날은 멈추고, 개발 단계 키로 보이면 스스로 끕니다. 이것만 끄면 받던 바퀴를 버리고 받아 둔 요약은 남기며,
+수집을 끄거나 아래 지우기를 하면 요약까지 지웁니다.</li>
 <li>[정보] 의 <b>수집 기록 지우기</b>로 둘 다 지울 수 있습니다. 이 기록을 밖으로 보내는 기능은 없습니다.
 프로그램을 제거해도 이 PC 의 기록은 남습니다 — 지우려면 제거하기 전에 <b>수집 기록 지우기</b>를 누르세요.</li>
 </ul>
@@ -144,6 +157,11 @@ CHANGES = {
 이어집니다. 정확한 순위·점수는 남기지 않으며, 시즌이 끝나거나 수집을 끄면 바로 지웁니다. 동의하기 전에는 쓰지 않습니다
 (아래 '랭킹 수집'). 새로 요청하는 것은 없습니다.</p>
 """,
+    10: f"""
+<p><b>구단주 분포 받기</b>(선택 · 기본 꺼짐) — 랭킹 수집과 별개로 [정보] 에서 켜면, {config.OWNER_DIST_ROUND_DAYS}일에 한 번 랭킹 1~{config.OWNER_DIST_STRATA[-1]:,}위
+구단주 {_OWNER_N}명의 최근 감독모드 {config.OWNER_DIST_MATCHES:,}판을 내 API 키로 받아(한 바퀴 약 {_OWNER_REQ_MAN}만 건 — 서비스 단계 키 필요) <b>이름 없는
+구단주별 요약</b>만 이 PC 에 둡니다. 넥슨 정책에 따라 키 이용이 제한될 수 있습니다. 켜지 않으면 아무것도 받지 않습니다(아래 '랭킹 수집').</p>
+""",
 }
 
 
@@ -159,6 +177,7 @@ def changes_html(accepted: int) -> str:
 WEB_DATA_CHECK = "넥슨 홈페이지 데이터 읽기 켜기 (선택)"
 WEB_DATA_ON_NOW = "지금 켜져 있음 — 계속 쓰려면 체크"   # 안내 글이 바뀌어 다시 동의받을 때(D5)
 RANK_COLLECT_CHECK = "랭킹 수집 켜기 — 하루 한 번 랭킹 1만 명 (선택)"
+OWNER_DIST_CHECK = "구단주 분포 받기 — 서비스 단계 키가 필요합니다 (선택)"
 AUTOSTART_CHECK = "윈도우를 켤 때 트레이로 자동 실행 (선택)"
 AGREE_CHECK ="위 내용을 읽었고 동의합니다"
 
