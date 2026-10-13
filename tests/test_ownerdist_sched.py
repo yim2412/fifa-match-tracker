@@ -378,6 +378,23 @@ def test_clear_rank_records_halts_owner_loader_before_deleting_rank_db():
         assert e.rows(done) == 3, "로더가 도는 중에 분포를 지웠다(저장과 겹친다)"
         ld.finish(od.RoundResult(cancelled=True))
         assert e.rows(done) == 0, "수집이 꺼졌는데(전제) 로더가 끝난 뒤 분포를 안 지웠다"
+    with Env() as e:   # .env 를 못 읽어도(sync 가 아무것도 안 한다) 멈춤은 보낸다 — 분포는 안 지운다(모르는 상태)
+        s = _sched()
+        s.tick()
+        ld = FakeLoader.made[0]
+        done = e.seed_done()
+        keep = config._read_env_disk
+        try:
+            config._read_env_disk = lambda: None
+            s.sync()
+            assert not ld.cancelled, "대조군 — .env 를 못 읽은 sync 는 로더를 안 멈춘다"
+            s.halt_for_delete()
+        finally:
+            config._read_env_disk = keep
+        assert ld.cancelled and ld.waits == [config.OWNER_DIST_HALT_WAIT_MS], \
+            f".env 를 못 읽으면 멈추지 않고 기다리기만 했다: {(ld.cancelled, ld.waits)}"
+        ld.finish(od.RoundResult(cancelled=True))
+        assert e.rows(done) == 3, ".env 를 못 읽었는데 분포를 지웠다"
     with Env():
         s = _sched()
         s.halt_for_delete()   # 도는 로더가 없으면 기다리지 않는다

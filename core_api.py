@@ -27,7 +27,8 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, Di
                     division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
                     AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
                     DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
-                    streak_baseline, streak_key, DistBasis, dist_basis)
+                    streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
+                    METRICS as HABIT_METRICS, N19_CHIP_KEYS)
 from ownerdist import OwnerDist, load_dist as load_owner_dist
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
 from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
@@ -76,7 +77,7 @@ __all__ = [
     "GOAL_KIND_NOTE", "GOAL_KINDS", "MAX_LEAD", "Chip", "GoalFlow", "LeadRow", "goal_flow", "half_share_diff",
     "paired_diff", "pct", "side_totals", "strength_chips",
     # habits·ownerdist — 구단주 분포 판정(49단계 조각 ②) · 받기(ownerdist.run_round)는 로더가 부른다
-    "DistBasis", "dist_basis", "OwnerDist", "load_owner_dist",
+    "DistBasis", "dist_basis", "dist_judged", "HABIT_METRICS", "N19_CHIP_KEYS", "OwnerDist", "load_owner_dist",
     # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
     "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
     "streak_baseline", "streak_key",

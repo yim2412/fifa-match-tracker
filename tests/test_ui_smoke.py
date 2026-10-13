@@ -1669,8 +1669,15 @@ def test_owner_dist_chip_tooltip_head_and_off_switch():
             _win._render_chips()
             none = _chip_widgets()["none"].text()
             assert f"양 끝 {config.OWNER_DIST_CHIP_P}%" in none and "유효슛 비율" in none, none
+            assert "결정력·태클 성공은 1~" in none, none
+            # 태클 분포가 층 표본 미달로 빠지면 태클은 같은 경기 상대 판정 — 문구도 그쪽으로(③b 리뷰 L2)
+            od.dist.pct = lambda key, x: None if key == "tackle_rate" else 5.0
+            _win._render_chips()
+            none = _chip_widgets()["none"].text()
+            assert "결정력은 1~" in none and "유효슛 비율·태클 성공은 차이" in none, none
         finally:
             app_main.core.strength_chips = keep
+            od.dist.__dict__.pop("pct", None)
         config.OWNER_DIST_ON = ""   # 토글 끔 — 받아 둔 분포는 남아도 판정엔 안 쓴다
         n = len(od.loads)
         _win._render_chips()

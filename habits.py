@@ -304,20 +304,28 @@ def dist_side(dist, key: str, d: Diff) -> tuple[int, float | None]:
     return 0, p
 
 
+def dist_judged(basis: DistBasis | None) -> tuple[str, ...]:
+    """strength_chips 가 분포로 판정하는 칩 키 — 층 표본이 모자라 분포에서 빠진 지표(pct None)는 같은 경기 상대로 돌아간다.
+    화면의 "칩 없음" 문구가 판정과 같은 조건을 쓰게 여기 하나로(pct 가 None 인지는 x 와 무관하다)."""
+    if basis is None:
+        return ()
+    return tuple(k for k in DIST_CHIP_KEYS if basis.dist.pct(k, 0.0) is not None)
+
+
 def strength_chips(totals: SideTotals, basis: DistBasis | None = None) -> list[Chip]:
     """칩 목록 — 분포 칩 먼저(|백분위 − 50| 큰 순), 이어서 같은 경기 상대 칩(차이가 큰 순). 단위가 다른 둘을 한 정렬에 섞지 않는다.
 
     basis 가 있고 그 지표 분포를 쓸 수 있으면 DIST_CHIP_KEYS 는 분포로만 판정한다(같은 경기 상대 판정으로 되돌아가지 않는다).
     같은 경기 상대 판정: 분모(슛·태클 시도)가 하한 밑이면 그 칩은 없다 — 표본이 모자라 구간 자체를 믿기 어렵다."""
     dist_out, out = [], []
+    by_dist = dist_judged(basis)
     for key, floor_name in N19_CHIP_KEYS:
-        if basis is not None and key in DIST_CHIP_KEYS:
+        if key in by_dist:
             d = paired_diff(basis.my, key)
             side, p = dist_side(basis.dist, key, d)
-            if p is not None:
-                if side:
-                    dist_out.append(Chip(d, p))
-                continue
+            if side:
+                dist_out.append(Chip(d, p))
+            continue
         d = paired_diff(totals, key)
         floor = getattr(config, floor_name)
         if min(d.mine_den, d.opp_den) < floor:

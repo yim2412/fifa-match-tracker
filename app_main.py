@@ -1977,10 +1977,12 @@ class OwnerDistScheduler(QObject):
         """[수집 기록 지우기] 가 rank.db 파일을 지우기 **전에**(수집을 끈 뒤) — 전제 꺼짐으로 멈추고(분포 지우기는 로더 끝에서)
         잠깐 기다린다. 로더는 표본을 뽑는 몇 ms 동안만 rank.db 를 열고, 멈춤 요청 뒤 첫 확인에서 돌아온다 — 그 사이에 지우면
         윈도우가 삭제를 막아 "다른 실행본이 열고 있어"로 잘못 안내했다(③a 리뷰). 도는 요청(타임아웃 10초)까지 다 기다리지는
-        않는다 — 그때는 rank.db 가 이미 닫혀 있다."""
+        않는다 — 그때는 rank.db 가 이미 닫혀 있다.
+        .env 를 못 읽으면 sync 가 아무것도 안 한다 — 수집은 이 프로세스에서 이미 껐으니 멈춤만은 직접(지우기는 다음 틱)."""
         self.sync()
         w = self.loader
         if w is not None and w.isRunning():
+            w.cancel()
             w.wait(config.OWNER_DIST_HALT_WAIT_MS)
 
     def shutdown(self, fast: bool = False) -> list:
@@ -3578,9 +3580,13 @@ class MainWindow(QMainWindow):
             self.box_chips.addWidget(lb)
         if not chips:
             gap = f"차이 {config.N19_MIN_GAP:g}%p 이상, 95% 구간이 0 을 안 품을 때만 띄웁니다"
-            if basis is not None:
-                gap = (f"결정력·태클 성공은 1~{top_rank:,}위 구단주 분포의 양 끝 {config.OWNER_DIST_CHIP_P}%일 때만, "
-                       f"유효슛 비율은 {gap}")
+            # 층 표본이 모자라 분포에서 빠진 지표는 같은 경기 상대로 판정된다 — 문구도 판정과 같은 조건(dist_judged)으로
+            by_dist = core.dist_judged(basis)
+            if by_dist:
+                label = {k: core.HABIT_METRICS[k].label for k, _ in core.N19_CHIP_KEYS}
+                rest = [label[k] for k in label if k not in by_dist]
+                gap = (f"{'·'.join(label[k] for k in by_dist)}은 1~{top_rank:,}위 구단주 분포의 양 끝 "
+                       f"{config.OWNER_DIST_CHIP_P}%일 때만" + (f", {'·'.join(rest)}은 {gap}" if rest else ""))
             none = QLabel(f"뚜렷한 강점·약점 없음 ({gap})" if totals and totals.games else "경기가 없습니다")
             none.setStyleSheet(f"color: {T.TEXT_DIM};")
             none.setProperty("chip", "none")
