@@ -255,6 +255,12 @@ RANK_REWARDS = (
 # B8 예측 되짚기(내 계정의 시즌 최종 순위를 넥슨 홈페이지에서 한 번 확인) — 이 안내 버전 동의 뒤부터.
 # 조각 ① 은 자리만: 값을 지금 NOTICE_VERSION 보다 크게 둬 확정 전엔 아무도 통과하지 못한다. 마지막 조각(④)에서 NOTICE_VERSION 과 같이 확정
 PREDICT_CHECK_NOTICE_VERSION = 99
+# 구단주 분포 v2 재료(50단계 C4 — owner_dist.pos_json · 자리 줄별 지수 재료) — 바퀴를 시작할 때 이 안내 버전에 동의했으면 그 바퀴가 v2.
+# 자리 값: PREDICT_CHECK_NOTICE_VERSION 과 같이 ④ 에서 확정(그 전엔 v2 바퀴가 생기지 않는다)
+OWNER_DIST_V2_NOTICE_VERSION = 99
+# C4 칸 — 측정 C(2026-10-13 · ROADMAP 50 "측정 C·D 결과")를 통과한 (자리 줄, 쪽)만. 지표는 선수 status 키
+C4_CELLS = (("MF", "atk"), ("DF", "atk"), ("DF", "def"))
+C4_METRICS = {"atk": ("goal", "effectiveShoot", "assist", "dribbleSuccess"), "def": ("tackle", "block", "intercept")}
 PREDICT_CHECK_RETRY_DAYS = 3        # 처음 물은 날부터 이 기간은 not_found 도 하루 한 번 다시 묻는다
 SEASON_NOTICE_MAX_DAYS = 120        # 공지 종료일이 시작일 + 이만큼 안일 때만 받는다
 RANK_EMPTY_RETRIES = 2              # 빈 쪽은 그 쪽만 이만큼 다시 받는다 — 10-05 실측: 500쪽 중 빈 쪽 하나가 회차 전체를 버렸다
@@ -598,6 +604,11 @@ def trait_allowed() -> bool:
 def predict_check_allowed() -> bool:
     """예측 되짚기(B8)로 넥슨 웹에 물어도 되나 — 디스크의 .env 로 다시(트레이에서 새 안내를 안 본 사람에게 안 나가게)."""
     return _read_collect_gate(PREDICT_CHECK_NOTICE_VERSION)
+
+
+def owner_dist_v2_allowed() -> bool:
+    """새 구단주 분포 바퀴에 자리 재료(pos_json)까지 계산해도 되나 — 디스크의 .env 로(트레이에서 새 안내를 안 본 사람은 v2 NULL)."""
+    return _read_collect_gate(OWNER_DIST_V2_NOTICE_VERSION)
 
 
 def owner_dist_prereq() -> bool:

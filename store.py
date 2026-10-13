@@ -235,6 +235,8 @@ CREATE TABLE IF NOT EXISTS ranker_matches (
 -- "이름 없는 구단주별 요약"(닉네임·ouid·profile_sn 없음 — 익명 집계가 아니다). 지표 열은 habits.paired_diff 의 diff(나 − 같은 경기 상대), 못 재면 NULL.
 -- owner_dist_done 의 h = sha256(profile_sn + 그 바퀴의 소금) — 이어 받기 표시. 바퀴가 어떤 결과로든 끝나면 해시·소금은 지운다.
 -- 보관: 최신 done 바퀴 + 진행 중 바퀴만. 옛 버전이 열어도 새 표라 안 깨진다
+-- 50단계(open_db 가 ALTER 로 늘린다): owner_dist.pos_json(C4 칸별 재료 — v2 바퀴만) · owner_dist_state.v2(바퀴 시작 때 한 번)·mixed(V1 섞기 표시).
+-- done 때 줄은 무작위 순서로 다시 넣고 last_match 는 날짜만(owner_dist_mix)
 CREATE TABLE IF NOT EXISTS owner_dist_state (
     round_id   INTEGER PRIMARY KEY AUTOINCREMENT,
     seed       INTEGER NOT NULL,
@@ -351,9 +353,13 @@ def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Conne
         # 만들면 1부터 재사용되고, 그러면 같은 번호에 다른 사람들이 선 새 스냅숏이 이어 받기에 그대로 걸린다
         have = {r["name"] for r in conn.execute("PRAGMA table_info(owner_dist_state)")}
         # mixed(50단계 V1) — done 바퀴 줄을 무작위 순서로 다시 넣고 last_match 를 날짜로 자른 표시(owner_dist_mix)
-        for col, typ in (("snap_id", "INTEGER"), ("snap_taken", "TEXT"), ("mixed", "INTEGER")):
+        # v2(50단계 C4) — 바퀴를 시작할 때 한 번 정한다: 1 이면 그 바퀴의 모든 구단주가 pos_json 을 계산한다(도중 동의로 섞이지 않게 · T2)
+        for col, typ in (("snap_id", "INTEGER"), ("snap_taken", "TEXT"), ("mixed", "INTEGER"), ("v2", "INTEGER")):
             if col not in have:
                 conn.execute(f"ALTER TABLE owner_dist_state ADD COLUMN {col} {typ}")
+        # pos_json — 구단주 한 명의 C4 칸별 재료(habits.PosTotals.summary · 카드 번호 없음). v2 바퀴가 아니거나 계산이 실패하면 NULL
+        if "pos_json" not in {r["name"] for r in conn.execute("PRAGMA table_info(owner_dist)")}:
+            conn.execute("ALTER TABLE owner_dist ADD COLUMN pos_json TEXT")
         # 예측 되짚기(50단계 B8) — 정본은 trade_state 의 predict_final:* 키, 이 열은 화면용 사본(옛 save_prediction 의 REPLACE 가 비워도 다시 채운다)
         have = {r["name"] for r in conn.execute("PRAGMA table_info(predictions)")}
         for col, typ in (("final_rank", "INTEGER"), ("final_state", "TEXT"), ("final_checked_at", "TEXT")):
@@ -1489,7 +1495,8 @@ OWNER_RESULTS = ("done", "thin", "dropped", "aborted", "off")
 
 def owner_round_running(conn: sqlite3.Connection) -> dict | None:
     """끝나지 않은 바퀴(이어 받을 수 있다) — 없으면 None."""
-    r = conn.execute("SELECT round_id, seed, started_at, salt, req_count, snap_id, snap_taken FROM owner_dist_state"
+    # v2 를 같이 읽는다 — 빠지면 재시작 뒤 이어 받는 구단주에 재료가 빠져 한 바퀴에 섞인다(3회차 V3)
+    r = conn.execute("SELECT round_id, seed, started_at, salt, req_count, snap_id, snap_taken, v2 FROM owner_dist_state"
                      " WHERE result IS NULL ORDER BY round_id DESC LIMIT 1").fetchone()
     return dict(r) if r else None
 
@@ -1506,10 +1513,10 @@ def owner_round_last_end(conn: sqlite3.Connection, results=None) -> dict | None:
 
 
 def owner_round_start(conn: sqlite3.Connection, seed: int, started_at: str, salt: str,
-                      snap_id: int | None = None, snap_taken: str | None = None) -> int:
+                      snap_id: int | None = None, snap_taken: str | None = None, v2: bool = False) -> int:
     with conn:
-        cur = conn.execute("INSERT INTO owner_dist_state (seed, started_at, salt, snap_id, snap_taken) VALUES (?, ?, ?, ?, ?)",
-                           (seed, started_at, salt, snap_id, snap_taken))
+        cur = conn.execute("INSERT INTO owner_dist_state (seed, started_at, salt, snap_id, snap_taken, v2) VALUES (?, ?, ?, ?, ?, ?)",
+                           (seed, started_at, salt, snap_id, snap_taken, 1 if v2 else None))
     return cur.lastrowid
 
 
@@ -1523,7 +1530,7 @@ def owner_done_hashes(conn: sqlite3.Connection, round_id: int) -> set[str]:
     return {r[0] for r in conn.execute("SELECT h FROM owner_dist_done WHERE round_id = ?", (round_id,))}
 
 
-OWNER_ROW_COLS = ("stratum", "n_games", "last_match") + OWNER_METRICS
+OWNER_ROW_COLS = ("stratum", "n_games", "last_match") + OWNER_METRICS + ("pos_json",)
 _OWNER_INSERT = (f"INSERT INTO owner_dist (round_id, {', '.join(OWNER_ROW_COLS)})"
                  f" VALUES (?, {', '.join('?' * len(OWNER_ROW_COLS))})")
 
@@ -1534,7 +1541,8 @@ def _day_only(last_match):
 
 
 def owner_dist_add(conn: sqlite3.Connection, round_id: int, h: str, row: dict) -> None:
-    """구단주 한 명이 끝났다 — 요약 줄과 이어 받기 표시를 한 트랜잭션으로. row: stratum · n_games · last_match · OWNER_METRICS.
+    """구단주 한 명이 끝났다 — 요약 줄과 이어 받기 표시를 한 트랜잭션으로. row: stratum · n_games · last_match · OWNER_METRICS
+    · pos_json(v2 바퀴의 C4 재료 JSON 글자 — 없으면 NULL).
     last_match 는 넣을 때부터 날짜만 — done 판정(run_round)과 읽기(build_dist)가 같은 저장값을 본다(4회차 W1)."""
     with conn:
         conn.execute(_OWNER_INSERT, (round_id, *[_day_only(row.get(c)) if c == "last_match" else row.get(c)

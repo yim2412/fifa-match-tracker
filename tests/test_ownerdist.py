@@ -5,6 +5,7 @@ pytest 없이 `python tests/test_ownerdist.py`. 닉네임·ouid·경기 id 는 �
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import sys
@@ -56,9 +57,19 @@ def _side(ouid, res, shots, on, goals, tk_try, tk_ok, poss, lt=0, pas=0):
             "pass": {"passTry": pas, "longPassTry": lt, "throughPassTry": 0}}
 
 
-def _detail(mid: str, ouid: str, i: int) -> dict:
+def _pl(pos, goal=0, eff=0, assist=0, drib=0, tackle=0, block=0, icpt=0, sp=101):
+    """선수 한 명(C4 재료) — pos 는 포지션 코드(14 CM = MF · 5 CB = DF · 25 ST = FW · 0 GK · 28 SUB)."""
+    return {"spId": sp, "spPosition": pos, "spGrade": 5,
+            "status": {"goal": goal, "effectiveShoot": eff, "assist": assist, "dribbleSuccess": drib,
+                       "tackle": tackle, "block": block, "intercept": icpt, "spRating": 7.0}}
+
+
+def _detail(mid: str, ouid: str, i: int, players: bool = True) -> dict:
     me = _side(ouid, "승", 4 + i % 3, 2 + i % 2, 1, 10, 6 + i % 3, 55, 3, 40)
     op = _side("상대", "패", 3, 1, 0, 9, 5, 45, 2, 40)
+    if players:   # 지표 값은 i 에 따라 흔든다 — 구단주·경기마다 다르게
+        me["player"] = [_pl(14, goal=i % 2, drib=2), _pl(14, eff=1), _pl(5, tackle=2 + i % 3, block=1), _pl(25, goal=1), _pl(0)]
+        op["player"] = [_pl(14, drib=1), _pl(5, tackle=1), _pl(25)]
     return {"matchId": mid, "matchDate": f"2026-10-12T{10 + i % 10:02d}:00:00", "matchInfo": [me, op]}
 
 
@@ -71,6 +82,8 @@ class FakeAPI:
         self.calls: list[tuple[str, object, int]] = []
         self.errors: dict[int, Exception] = {}
         self.hook = None             # 호출 직전 부르는 콜백(이름, 순번)
+        self.delay = 0.002           # 상세 한 건의 가짜 응답 시간
+        self.no_players: set[int] = set()   # 이 경기 번호들은 선수 목록이 빈 상세(몰수·튕김 흉내 — 6회차 Y1)
         self.inflight = self.max_inflight = 0
         self._lock = threading.Lock()
 
@@ -100,9 +113,9 @@ class FakeAPI:
             self.max_inflight = max(self.max_inflight, self.inflight)
         try:
             self._hit("detail", match_id, attempts)
-            time.sleep(0.002)
+            time.sleep(self.delay)
             ouid, i = match_id.rsplit("#", 1)
-            return _detail(match_id, ouid, int(i))
+            return _detail(match_id, ouid, int(i), players=int(i) not in self.no_players)
         finally:
             with self._lock:
                 self.inflight -= 1
@@ -253,6 +266,9 @@ def test_detail_never_touches_disk_cache():
 
 def test_concurrency_is_bounded_by_workers():
     with env(games=30) as e, _cfg(OWNER_DIST_WORKERS=3, OWNER_DIST_MATCHES=30):   # 기본값(4)이 아닌 값 — 배선이 끊겨도 4 라 통과하지 않게
+        # 응답 시간은 요청마다 도는 하루 계수(budget_take · BEGIN IMMEDIATE)보다 충분히 길게 — 2ms 였을 때 디스크가 느린 밤
+        # (계수 중앙 3.1ms · 2026-10-14 실측) 스레드가 계수 잠금에 줄 서서 한 번도 안 겹쳐 max_inflight 1 로 FAIL 했다
+        e.api.delay = 0.02
         e.run()
         assert 2 <= e.api.max_inflight <= 3, e.api.max_inflight
     with env() as e, _cfg(OWNER_DIST_WORKERS=1):
@@ -477,6 +493,173 @@ def test_new_rows_store_the_last_match_date_only():
         rows = store.owner_dist_rows(e.conn, r.round_id)
         assert rows and all(x["last_match"] == "2026-10-12" for x in rows), rows   # 지어낸 경기는 2026-10-12T1x:00:00
         assert b"2026-10-12T1" not in e.files(), "마지막 경기 시각이 파일 바이트에 남았다"
+
+
+# ── 50단계 C4 재료(pos_json · v2 바퀴) ─────────────────────────────────────────
+
+@contextmanager
+def _v2(allowed: bool):
+    keep = config.owner_dist_v2_allowed
+    config.owner_dist_v2_allowed = lambda: allowed
+    try:
+        yield
+    finally:
+        config.owner_dist_v2_allowed = keep
+
+
+def _pos(conn, rid):
+    return [json.loads(r["pos_json"]) if r["pos_json"] else None for r in store.owner_dist_rows(conn, rid)]
+
+
+def _v2_of(conn, rid):
+    return conn.execute("SELECT v2 FROM owner_dist_state WHERE round_id = ?", (rid,)).fetchone()[0]
+
+
+def test_pos_diff_by_hand():
+    d = _detail("m", "me", 0)   # 손으로: MF 나 [0,0,0,2]·[0,1,0,0] → 평균 [0,.5,0,1] − 상대 [0,0,0,1] · DF 나 태클 2·블록 1 − 상대 태클 1
+    got = habits.pos_diff(d, "me")
+    assert got == {"MF.atk": [0, 0.5, 0, 0], "DF.atk": [0, 0, 0, 0], "DF.def": [1, 1, 0]}, got
+    assert set(got) == {habits.c4_cell(*c) for c in config.C4_CELLS}, "칸이 config.C4_CELLS 와 다르다"
+    assert habits.pos_diff(_detail("m", "me", 0, players=False), "me") == {}, "선수 없는 경기는 빈 칸(실패 아님)"
+    draw = _detail("m", "me", 0)
+    draw["matchInfo"][0]["matchDetail"]["matchResult"] = "몰수"
+    assert habits.pos_diff(draw, "me") is None, "side_totals 가 빼는 경기(승무패 아님)는 None"
+    with _cfg(C4_CELLS=(("DF", "def"),)):   # 배선 — 칸 표를 줄이면 결과도 준다
+        assert set(habits.pos_diff(d, "me")) == {"DF.def"}
+
+
+def test_v2_round_stores_pos_json_for_every_owner():
+    with env() as e, _v2(True):
+        r = e.run()
+        assert r.result == "done" and _v2_of(e.conn, r.round_id) == 1
+        pos = _pos(e.conn, r.round_id)
+        assert len(pos) == N_OWNERS and all(p and p["MF.atk"]["n"] == 7 and len(p["DF.def"]["d"]) == 3 for p in pos), pos
+        # 경기 0~6 의 MF 골 평균 차 = (i%2)/2 의 평균 → 3/7 × 0.5
+        assert all(abs(p["MF.atk"]["d"][0] - 3 / 14) < 1e-9 for p in pos), pos[0]
+
+
+def test_round_without_v2_consent_keeps_pos_json_null():
+    with env() as e, _v2(False):
+        r = e.run()
+        assert r.result == "done" and _v2_of(e.conn, r.round_id) is None
+        assert _pos(e.conn, r.round_id) == [None] * N_OWNERS, "동의 전 바퀴가 재료를 계산했다"
+        assert all(x["shots"] is not None for x in store.owner_dist_rows(e.conn, r.round_id)), "기본 6지표가 빠졌다"
+
+
+def test_consent_midway_does_not_mix_a_round():
+    """도중 동의 — 바퀴를 시작할 때 정한 v2 그대로(T2). 반대로 v2 바퀴는 재시작 뒤에도 v2(V3 — 이어 받기가 v2 를 읽는다)."""
+    with env() as e:
+        with _v2(False):
+            e.run(cancel=lambda: len(e.api.calls) > REQ_PER_OWNER * 2)
+        rid = store.owner_round_running(e.conn)["round_id"]
+        with _v2(True):
+            assert e.run().result == "done"
+        assert _pos(e.conn, rid) == [None] * N_OWNERS, "도중 동의로 뒤 구단주만 재료가 생겼다"
+    with env() as e:
+        with _v2(True):
+            e.run(cancel=lambda: len(e.api.calls) > REQ_PER_OWNER * 2)
+        rid = store.owner_round_running(e.conn)["round_id"]
+        assert store.owner_round_running(e.conn)["v2"] == 1
+        with _v2(False):
+            assert e.run().result == "done"
+        assert all(_pos(e.conn, rid)), "재시작 뒤 이어 받은 구단주의 재료가 빠졌다"
+
+
+def test_force_opens_a_v2_round_even_when_not_due_or_consented():
+    with env() as e, _v2(False):
+        assert e.run().result == "done"
+        assert e.run().not_due, "전제: 주기 안에는 새 바퀴를 안 연다"
+        r = e.run(force=True)
+        assert r.result == "done" and _v2_of(e.conn, r.round_id) == 1 and all(_pos(e.conn, r.round_id))
+
+
+def test_games_without_players_are_skipped_not_failed():
+    with env() as e, _v2(True):
+        e.api.no_players = {2}
+        r = e.run()
+        pos = _pos(e.conn, r.round_id)
+        assert all(p and p["MF.atk"]["n"] == 6 for p in pos), "선수 없는 경기를 실패로 쳤거나 칸에 셌다"
+
+
+def test_v2_failure_in_a_game_nulls_only_that_owner_and_round_finishes():
+    real = habits.pos_diff
+    first: list[str] = []
+    lock = threading.Lock()
+
+    def boom(d, ouid):   # 처음 받은 구단주의 3번 경기 하나만 터뜨린다(다른 경기는 정상)
+        with lock:
+            if not first:
+                first.append(ouid)
+        if ouid == first[0] and d["matchId"].endswith("#3"):
+            raise ValueError("깨진 자리 칸")
+        return real(d, ouid)
+    with env() as e, _v2(True):
+        habits.pos_diff = boom
+        try:
+            r = e.run()
+        finally:
+            habits.pos_diff = real
+        assert r.result == "done", "새 계산의 예외가 바퀴를 멈췄다(49 회귀)"
+        rows = store.owner_dist_rows(e.conn, r.round_id)
+        assert len(rows) == N_OWNERS and all(x["n_games"] == 7 for x in rows), "기본 지표 줄이 깎였다(경기 전체가 실패로 바뀜)"
+        assert sum(x["pos_json"] is None for x in rows) == 1, "실패 단위가 그 구단주 하나가 아니다(남은 경기로 조용히 만듦 · M1)"
+
+
+def test_v2_failure_at_owner_level_keeps_the_row_and_round():
+    real = habits.PosTotals.summary
+    calls = []
+
+    def boom(self):
+        calls.append(1)
+        if len(calls) == 2:
+            raise ZeroDivisionError("구단주 단위 계산")
+        return real(self)
+    with env() as e, _v2(True):
+        habits.PosTotals.summary = boom
+        try:
+            r = e.run()
+        finally:
+            habits.PosTotals.summary = real
+        assert r.result == "done", "구단주 단위 예외가 바퀴 밖으로 올라갔다(5회차 X1)"
+        pos = _pos(e.conn, r.round_id)
+        assert len(pos) == N_OWNERS and sum(p is None for p in pos) == 1, pos
+
+
+def test_v2_gate_reads_disk_env_with_notice_version():
+    keep = config._read_env_disk
+    want = config.OWNER_DIST_V2_NOTICE_VERSION
+    assert want > config.NOTICE_VERSION, "확정 전 자리 값은 지금 안내 버전보다 커야 한다(④ 에서 확정)"
+
+    def fake(notice, web="1", collect="1"):
+        return lambda: {config.NOTICE_VAR: str(notice), config.WEB_DATA_VAR: web, config.RANK_COLLECT_VAR: collect}
+    try:
+        config._read_env_disk = fake(want)
+        assert config.owner_dist_v2_allowed() is True
+        config._read_env_disk = fake(want - 1)
+        assert config.owner_dist_v2_allowed() is False, "한 칸 낮은 동의로 v2 가 열렸다"
+        config._read_env_disk = fake(want, collect="0")
+        assert config.owner_dist_v2_allowed() is False
+    finally:
+        config._read_env_disk = keep
+
+
+def test_old_db_gets_pos_json_and_v2_columns():
+    with tempfile.TemporaryDirectory() as d:
+        import sqlite3
+        p = Path(d) / "old.db"
+        c = sqlite3.connect(str(p))
+        c.execute("CREATE TABLE owner_dist (id INTEGER PRIMARY KEY AUTOINCREMENT, round_id INTEGER NOT NULL, stratum INTEGER NOT NULL,"
+                  " n_games INTEGER NOT NULL, last_match TEXT, finish REAL, goals_per_on_target REAL, tackle_rate REAL,"
+                  " long_through_rate REAL, possession REAL, shots REAL)")
+        c.execute("INSERT INTO owner_dist (round_id, stratum, n_games) VALUES (1, 1, 900)")
+        c.commit()
+        c.close()
+        conn = store.open_db(p)
+        try:
+            assert store.owner_dist_rows(conn, 1)[0]["pos_json"] is None
+            assert "v2" in {r["name"] for r in conn.execute("PRAGMA table_info(owner_dist_state)")}
+        finally:
+            conn.close()
 
 
 def test_mix_pending_migrates_old_done_rounds_once():

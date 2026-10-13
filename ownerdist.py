@@ -16,6 +16,8 @@
 | 상세는 `get_match_detail_nocache` — `.cache` 를 읽지도 쓰지도 않는다 | `_fetch_owner` |
 | 이어 받기 표시는 sha256(profile_sn + 바퀴 소금). 바퀴가 끝나면 해시·소금 삭제 | `owner_hash` · `store.owner_round_end` |
 | 닉네임·ouid·profile_sn·경기 상세는 저장하지 않는다 | `summarize_owner` |
+| C4 재료(`pos_json` · 50단계)는 바퀴 시작 때 정한 v2 바퀴에서만 · 계산은 경기 단위·구단주 단위 **두 자리 다 따로 막아** 실패하면 그 구단주의 재료만 NULL(기본 6지표·바퀴는 그대로) | `_fetch_owner.one` · `pos_json_of` |
+| done 바퀴 줄은 무작위 순서로 다시 넣고 마지막 경기는 날짜만(50단계 V1) | `store.owner_dist_mix` · `store.owner_dist_add` |
 | 이어 받기는 **바퀴를 시작한 rank.db 스냅숏**(`snap_id`)에서 뽑는다 — 같은 시드도 새 스냅숏이면 같은 순위에 다른 사람이 서서 층 균형이 조용히 깨진다. 그 스냅숏이 없거나 원본이 지워졌으면 이어 붙이지 않고 `off` 로 끝내 새로 연다 | `run_round` |
 | "끝남"은 **닉네임이 사라진 경우(`OPENAPI00004`)만**. 네트워크·5xx·키 거절·깨진 응답·한 사람의 상세 전부 실패는 `_Transient` — 그 사람을 끝낸 걸로 치지 않고 이번 호출을 멈춘다(바퀴는 running) | `_fetch_owner` |
 
@@ -26,6 +28,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import secrets
 import threading
@@ -278,8 +281,14 @@ class _Gate:
 
 # ── 한 명 받기 ───────────────────────────────────────────────────────────────
 
-def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecutor) -> tuple[habits.SideTotals, str | None] | None:
-    """구단주 한 명의 최근 판 → (SideTotals, 마지막 경기 시각). 닉네임이 사라졌으면 None. _Halt 는 그대로 올라가고,
+_V2_FAIL = object()   # 한 경기의 C4 재료 계산이 예외로 실패했다는 표시
+
+
+def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecutor,
+                 v2: bool = False) -> tuple[habits.SideTotals, str | None, habits.PosTotals | None] | None:
+    """구단주 한 명의 최근 판 → (SideTotals, 마지막 경기 시각, C4 재료). 닉네임이 사라졌으면 None. _Halt 는 그대로 올라가고,
+    C4 재료는 v2 바퀴일 때만 — 한 경기라도 그 계산이 **예외**로 실패하면 그 구단주는 None(남은 경기로 조용히 만들면 판수가
+    엇나간다 · 7판 M1). 그 계산은 따로 try 라 기본 6지표(rows)는 그대로 남는다(4회차 W2). 자리 데이터가 빈 경기는 실패가 아니다(Y1).
     그 사람 탓이 아닌 실패(네트워크·5xx·키 거절·깨진 응답)는 _Transient 로 올린다 — "끝남"으로 치면 그 사람이 바퀴에서 영구히 빠진다.
     pool 은 바퀴 내내 쓰는 풀이다 — 구단주마다 새로 만들면 스레드마다 DB 연결이 새로 열려 바퀴가 끝날 때까지 쌓인다."""
     api = api_for_thread()
@@ -311,14 +320,21 @@ def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecuto
     def one(mid: str):
         try:
             d = gate.call(lambda: api_for_thread().get_match_detail_nocache(mid))
-            rows = habits.side_totals([d], ouid).rows   # 상세 원본은 여기서 버린다 — 요약 재료(SideRow)만 남는다
-            return rows, (d.get("matchDate") or "")
+            rows = habits.side_totals([d], ouid).rows   # 상세 원본은 여기서 버린다 — 요약 재료(SideRow · C4 칸 값)만 남는다
+            pos = None
+            if v2:
+                try:
+                    pos = habits.pos_diff(d, ouid)
+                except Exception:  # noqa: BLE001 — 새 계산의 실패가 기본 지표를 깎지 않게
+                    pos = _V2_FAIL
+            return rows, (d.get("matchDate") or ""), pos
         except _Halt:
             raise
         except Exception as e:  # noqa: BLE001 — 한 경기 실패(응답·파싱)가 나머지를 막지 않는다
             return e
 
     totals = habits.SideTotals()
+    pos_tot: habits.PosTotals | None = habits.PosTotals() if v2 else None
     last = ""
     failed: list[Exception] = []
     futs = [pool.submit(one, mid) for mid in ids]
@@ -330,13 +346,30 @@ def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecuto
                 continue
             totals.rows += got[0]
             last = max(last, got[1])
+            if pos_tot is not None:
+                if got[2] is _V2_FAIL:
+                    pos_tot = None
+                elif got[2]:
+                    pos_tot.add(got[2])
     finally:
         for f in futs:
             f.cancel()
         wait(futs)   # 돌던 요청이 다 끝난 뒤에야 gate.requests 를 센다
     if ids and len(failed) == len(ids):
         raise _Transient(failed[0])   # 전부 실패 — 그 사람이 경기가 없는 게 아니라 받는 쪽이 막힌 것
-    return totals, (last or None)
+    return totals, (last or None), pos_tot
+
+
+def pos_json_of(pos: habits.PosTotals | None) -> str | None:
+    """구단주 단위 C4 재료 → pos_json 글자. 실패하면 None — **부르는 쪽 try 대신 여기서 막는다**: 감싸지 않으면 예외가 바퀴 밖으로
+    올라가 running 으로 남고, 같은 구단주에서 틱마다 다시 터져 dropped → 토글 꺼짐이 된다(5회차 X1)."""
+    if pos is None:
+        return None
+    try:
+        s = pos.summary()
+        return json.dumps(s, separators=(",", ":")) if s else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ── 바퀴 ─────────────────────────────────────────────────────────────────────
@@ -433,12 +466,16 @@ def status_text(conn, now: datetime) -> str:
 
 def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = lambda: False,
               sleep=time.sleep, clock=time.monotonic, now_fn=datetime.now,
-              rank_open: Callable[[], object] | None = None) -> RoundResult:
+              rank_open: Callable[[], object] | None = None, force: bool = False) -> RoundResult:
     """바퀴를 이어 받거나(running) 새로 열어(due 일 때만) 구단주를 차례로 받는다. 끊기면 running 을 그대로 두고 돌아온다.
 
     api_factory() → FCOnlineAPI 꼴(스레드마다 하나씩 부른다). db_path 는 fifa.db — 연결은 여기서·스레드마다 연다.
     rank_conn 대신 rank_open(열기 함수)을 주면 표본을 뽑는 동안만 열고 바로 닫는다 — 바퀴는 몇 시간이고, 열린 rank.db
-    연결이 [수집 기록 지우기]의 파일 삭제를 막는다(rankcollect.open_rank_db_ro 주석)."""
+    연결이 [수집 기록 지우기]의 파일 삭제를 막는다(rankcollect.open_rank_db_ro 주석).
+
+    v2(C4 재료 pos_json)는 **새 바퀴를 열 때 한 번** config.owner_dist_v2_allowed()(디스크 .env)로 정해 바퀴에 적고, 이어 받을 때는
+    그 값을 읽는다 — 도중 동의·업그레이드로 한 바퀴에 재료가 있는/없는 구단주가 섞이지 않게(2회차 T2).
+    force: **개발·측정 전용**(앱은 안 쓴다) — new_round_due 를 무시하고 새 바퀴를 v2 로 연다(동의 판정도 넘긴다 · 조각 ② 끝 기준의 강제 바퀴)."""
     res = RoundResult()
     conn = store.open_db(db_path)
     own_rank = None
@@ -473,7 +510,7 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                 store.owner_round_end(conn, run["round_id"], "off", now.isoformat(timespec="seconds"))
                 run = None
         if run is None:
-            if not new_round_due(conn, now):
+            if not force and not new_round_due(conn, now):
                 res.not_due = True
                 return res
             seed = config.OWNER_DIST_SEED + now.date().toordinal()
@@ -484,11 +521,13 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                 res.no_sample = True
                 return res
             salt = secrets.token_hex(16)
+            v2 = force or config.owner_dist_v2_allowed()
             rid = store.owner_round_start(conn, seed, now.isoformat(timespec="seconds"), salt,
-                                          snap[0], snap[1])
+                                          snap[0], snap[1], v2=v2)
             used = 0
         else:
             salt, rid, used = run["salt"], run["round_id"], run["req_count"]
+            v2 = run.get("v2") == 1
         if own_rank is not None:
             own_rank.close()   # 표본은 뽑았다 — 남은 몇 시간 동안 rank.db 를 붙잡지 않는다
             own_rank = None
@@ -525,7 +564,7 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                     break
                 before = gate.requests
                 try:
-                    got = _fetch_owner(gate, api_for_thread, t, pool)
+                    got = _fetch_owner(gate, api_for_thread, t, pool, v2)
                 except (_Halt, _Transient) as stop:
                     store.owner_round_add_req(conn, rid, gate.requests - before)   # 버린 사람의 요청도 바퀴 상한에는 든다
                     if isinstance(stop, _Transient):
@@ -536,7 +575,9 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                 if got is None or not got[0].games:
                     store.owner_done_add(conn, rid, h)
                 else:
-                    store.owner_dist_add(conn, rid, h, summarize_owner(got[0], t.stratum, got[1]))
+                    row = summarize_owner(got[0], t.stratum, got[1])
+                    row["pos_json"] = pos_json_of(got[2])
+                    store.owner_dist_add(conn, rid, h, row)
                 done.add(h)
                 res.owners_done += 1
         finally:

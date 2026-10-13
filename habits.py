@@ -6,6 +6,7 @@
 | `division_stays(points, name_of)` | [성적 진단 › 등급 체류](N2) | 재료는 `stats.division_trend` — (일시, division) 오래된 것부터 |
 | `side_totals(details, ouid)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 |
 | `paired_diff(rows, metric)` | 〃 | 지표 하나의 나 − 상대 차와 95% 구간(경기 단위 짝) · 지표 이름은 `METRICS` |
+| `pos_diff(detail, ouid)` · `PosTotals` | (C4 자리별 수준 — 50단계 · 구단주 분포 바퀴가 `pos_json` 으로) | 칸(`config.C4_CELLS`)마다 같은 줄 선수 한 명 평균의 나 − 상대 |
 | `strength_chips(totals)` | [흐름 분석] 맨 위 칩 줄(N19) | 결정력·유효슛 비율·태클 성공 중 구간이 0 을 안 품고 크기 문턱을 넘은 것 |
 | `half_share_diff(details, ouid)` | 흐름 분석 문장 "전반·후반 어디서 새나"(N19) | 내 실점의 전반 비중 − 같은 경기 상대 실점(= 내 득점)의 전반 비중 |
 | `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |
@@ -38,8 +39,8 @@ from datetime import datetime, timedelta
 
 import config
 from models import MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_mixed, is_weak, rated, win_pct
-from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, _goal_events, _me_opp, _num, _result_of, _set_mixed,
-                   _timeline_matches_board, _wdl_of)
+from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, _goal_events, _me_opp, _num, _played, _result_of, _set_mixed,
+                   _timeline_matches_board, _wdl_of, position_line)
 
 
 @dataclass
@@ -155,6 +156,62 @@ def side_totals(details: list[dict], ouid: str) -> SideTotals:
             continue
         out.rows.append(SideRow(d.get("matchId") or "", res, _side_values(me), _side_values(opp)))
     return out
+
+
+# ── C4 자리 줄 재료(50단계) — 칸은 config.C4_CELLS(측정 C 를 통과한 것만) ───────────────
+def c4_cell(line: str, side: str) -> str:
+    return f"{line}.{side}"
+
+
+def _line_means(side: dict) -> dict[str, list[float]]:
+    """한 팀의 자리 줄별 **선수 한 명 평균**(줄 합계가 아니다 — 공격수 1명 대 2명 포메이션에 안 흔들리게 · 계획 C4 ⓐ).
+    지표는 C4_METRICS 의 공격 다음 수비 순서. 교체(SUB)·GK 는 줄이 없어 빠진다."""
+    keys = config.C4_METRICS["atk"] + config.C4_METRICS["def"]
+    acc: dict[str, list[list[float]]] = {}
+    for p in side.get("player") or []:
+        if not isinstance(p.get("spId"), int) or not _played(p):
+            continue
+        line = position_line(p.get("spPosition"))
+        if line in (None, "GK"):
+            continue
+        st = p.get("status") or {}
+        acc.setdefault(line, []).append([_num(st, k) for k in keys])
+    return {L: [sum(c) / len(v) for c in zip(*v)] for L, v in acc.items()}
+
+
+def pos_diff(d: dict, ouid: str) -> dict[str, list[float]] | None:
+    """경기 하나 → {칸: [지표마다 나 − 같은 경기 상대(같은 줄 선수 한 명 평균)]}. side_totals 와 같은 경기만(승·무·패 · 상대 있음),
+    아니면 None. 그 줄 선수가 어느 한쪽에 없으면 그 칸만 빠진다 — 몰수·튕김처럼 자리 데이터가 빈 경기는 실패가 아니다
+    (6회차 Y1 · 측정 C 에서 0.16%). 예외는 그대로 올린다(부르는 쪽이 v2 실패로 센다)."""
+    me, opp = _me_opp(d, ouid)
+    if me is None or not opp or _wdl_of(_result_of(me)) is None:
+        return None
+    keys = config.C4_METRICS["atk"] + config.C4_METRICS["def"]
+    m, o = _line_means(me), _line_means(opp)
+    out = {}
+    for line, side in config.C4_CELLS:
+        if line in m and line in o:
+            idx = [keys.index(k) for k in config.C4_METRICS[side]]
+            out[c4_cell(line, side)] = [m[line][i] - o[line][i] for i in idx]
+    return out
+
+
+@dataclass
+class PosTotals:
+    """구단주 한 명의 칸별 경기 값 합 — 바퀴는 이 평균(pos_json)만 저장한다."""
+    n: dict = field(default_factory=dict)
+    s: dict = field(default_factory=dict)
+
+    def add(self, pd: dict) -> None:
+        for cell, v in pd.items():
+            self.n[cell] = self.n.get(cell, 0) + 1
+            acc = self.s.setdefault(cell, [0.0] * len(v))
+            for i, x in enumerate(v):
+                acc[i] += x
+
+    def summary(self) -> dict:
+        """{칸: {"n": 경기 수, "d": [지표 평균]}} — 경기가 없는 칸은 빠진다."""
+        return {c: {"n": n, "d": [x / n for x in self.s[c]]} for c, n in self.n.items() if n}
 
 
 @dataclass(frozen=True)
