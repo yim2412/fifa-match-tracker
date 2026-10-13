@@ -404,8 +404,8 @@ def test_end_cuts_same_paths_as_hits():
         res = P.simulate(P.SimInput(4300.0, (), (60,), CUTS), st, [(63, c) for c in [CUTS] * 3], [20], 40,
                          random.Random(2), n=300)
         assert len(res.end_cuts[200]) == len(res.end_cuts[1000]) == 300
-        assert len(res.hit_ranks) == round(res.p[200] * 300), (len(res.hit_ranks), res.p[200])
-        assert all(r <= 200 for r in res.hit_ranks), "컷 위 경로는 200위 안 순위여야"
+        assert len(res.hit_paths) == round(res.p[200] * 300), (len(res.hit_paths), res.p[200])
+        assert all(e >= cuts[200] for e, cuts in res.hit_paths), "200위 안 경로는 그 경로의 200위 컷 위여야"
     with_world(go)
 
 
@@ -418,15 +418,19 @@ def test_cut_summary_median_and_range():
 def test_reward_bracket_and_text():
     d = date(2026, 10, 20)
     assert P.reward_brackets(d) == [(10, 8000), (50, 6000), (100, 5000), (200, 4400)]
-    assert P.main_reward([150, 160, 5, 120], d) == (101, 200, 4400)
-    assert P.main_reward([5, 8, 150], d) == (1, 10, 8000)
+    c = {10: 4650.0, 50: 4600.0, 100: 4560.0, 200: 4500.0}
+    P_ = lambda *es: [(e, c) for e in es]       # noqa: E731 — 끝 ELO 들 → 경로(같은 컷)
+    assert P.main_reward(P_(4510, 4520, 4700, 4505), d) == (101, 200, 4400)
+    assert P.main_reward(P_(4700, 4660, 4510), d) == (1, 10, 8000)
     assert P.main_reward([], d) is None
+    # 컷 바로 밑(10위 컷 −1)은 위 구간이 아니다 — rank_of 반올림으로 구간을 고르면 여기서 1~10위로 샌다
+    assert P.main_reward(P_(4649.9, 4649.9, 4700), d) == (11, 50, 6000)
     # 새 시작일 줄이 옛 줄을 이긴다 — 옛 날짜는 옛 값
     old = config.RANK_REWARDS
     try:
         config.RANK_REWARDS = old + ((date(2026, 11, 1), 200, 5000),)
-        assert P.main_reward([150], date(2026, 10, 20)) == (101, 200, 4400)
-        assert P.main_reward([150], date(2026, 11, 2)) == (101, 200, 5000)
+        assert P.main_reward(P_(4510), date(2026, 10, 20)) == (101, 200, 4400)
+        assert P.main_reward(P_(4510), date(2026, 11, 2)) == (101, 200, 5000)
     finally:
         config.RANK_REWARDS = old
 

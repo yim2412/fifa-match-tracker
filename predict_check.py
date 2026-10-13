@@ -92,7 +92,9 @@ def run(*, fifa_path: Path | str | None = None, today: date | None = None, fetch
             if rec is None or not _settled(rec, today):
                 if not nick or _asked_today(rec, today):
                     continue
-                sn = items[-1]["profile_sn"]
+                sn = next((r["profile_sn"] for r in reversed(items) if r["profile_sn"]), None)
+                if sn is None:      # 대조할 프로필 번호가 없으면 결과가 not_found 로 정해져 있다 — 헛요청을 안 보낸다
+                    continue
                 try:
                     info = fetch(nick, by_start[start].no)
                 except Exception:       # 오류·점검·꺼짐은 줄을 안 쓴다 — 다음 회차가 다시 (전역 규칙 7)
@@ -125,8 +127,10 @@ def judge_row(row: dict, final_rank: int | None) -> tuple:
     return in_top, (None if lo is None or hi is None else lo <= final_rank <= hi)
 
 
-def results(conn: sqlite3.Connection, ouid: str) -> list[dict]:
-    """화면용 — 시즌마다 {season_start, state, rank, days: 그 시즌 예측 줄들}. 결과 없는 시즌은 state None."""
+def results(conn: sqlite3.Connection, ouid: str, today: date | None = None) -> list[dict]:
+    """화면용 — 시즌마다 {season_start, state, rank, pending, days: 그 시즌 예측 줄들}. 결과 없는 시즌은 state None.
+    pending = not_found 인데 다시 묻는 기간이 안 끝났다(아직 굳지 않음 — "확인 중")."""
+    today = today or date.today()
     st = store.trade_state(conn)
     groups: dict[str, list[dict]] = {}
     for r in store.predictions(conn, ouid):
@@ -134,5 +138,6 @@ def results(conn: sqlite3.Connection, ouid: str) -> list[dict]:
     out = []
     for start, items in sorted(groups.items(), reverse=True):
         rec = _load(st.get(_key(ouid, start))) or {}
-        out.append({"season_start": start, "state": rec.get("state"), "rank": rec.get("rank"), "days": items})
+        out.append({"season_start": start, "state": rec.get("state"), "rank": rec.get("rank"),
+                    "pending": rec.get("state") == "not_found" and not _settled(rec, today), "days": items})
     return out

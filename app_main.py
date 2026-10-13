@@ -3076,8 +3076,8 @@ class MainWindow(QMainWindow):
         if key == "trades":
             self._dirty.add("trades")  # 상태는 DB 에 있다 — 열 때마다 다시 읽는다(키 확인 중 · 받는 중)
             self.start_trades()
-        if key in self.PICK_DATA_KEYS:
-            self._dirty.add(key)  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다
+        if key in self.PICK_DATA_KEYS or key == "predcheck":
+            self._dirty.add(key)  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다(예측 되짚기는 내 계정 확정·새 예측 줄에 달려 작은 표 둘)
         if key in self.PICK_KEYS or key == self.TRAIT_KEY:
             self.start_visible_api_loader()  # 다른 쪽 로더는 거기서 멈추게 하고, 그게 끝나면(finished) 이쪽이 뜬다
         else:
@@ -6602,14 +6602,14 @@ class MainWindow(QMainWindow):
 
     def _render_predict_check(self) -> None:
         """남겨 둔 예측 × 최종 순위. 내 계정이 확인 전(키 바뀜·미지정)이면 새로 받지 않고 지난 기록만 보여 준다 — 문구로 알린다."""
-        rows, note = [], ""
+        rows, note, unconfirmed = [], "", False
         try:
             conn = store.open_db(config.DB_PATH)
             try:
                 st = store.trade_state(conn)
                 mine = st.get("my_ouid")
                 if st.get("key_fp") != store.key_fingerprint(config.API_KEY) or not mine:
-                    note = "내 계정 확인 전 — 지난 기록은 남아 있습니다. [스쿼드·이적]에서 내 계정을 정하면 이어집니다."
+                    unconfirmed = True
                     mine = mine or st.get("my_ouid_unconfirmed")
                 seasons = {s.start.isoformat(): s for s in store.load_seasons(conn)}
                 results = core.predict_final_results(conn, mine) if mine else []
@@ -6629,19 +6629,29 @@ class MainWindow(QMainWindow):
                     final = f"{rank:,}위"
                     verdict = " · ".join((("실제 200위 안" if in_top else "실제 200위 밖") if in_top is not None else "",
                                           ("범위 안" if in_range else "범위 밖") if in_range is not None else "")).strip(" ·")
+                elif res["state"] == "not_found" and res.get("pending"):
+                    final, verdict = "확인 중", "못 찾았습니다 — 며칠 더 다시 확인합니다"
                 elif res["state"] == "not_found":
                     final, verdict = "확인 불가", "1만 위 밖이거나 닉네임을 바꿨을 수 있습니다"
+                elif season is not None and season.end <= date.today():
+                    final, verdict = "확인 전", "끝난 시즌 — 아직 최종 순위를 확인하지 않았습니다(웹 데이터·수집·안내 동의 필요)"
                 else:
                     final, verdict = "시즌 진행 중", ""
                 rows.append([label, r["day"],
                              NA if p200 is None else f"{p200 * 100:.0f}%", NA if p1000 is None else f"{p1000 * 100:.0f}%",
                              NA if lo is None or hi is None else f"{lo:,}~{hi:,}위", final, verdict])
-        if not rows or not note:
-            if not rows:
-                note = ("아직 남은 예측이 없습니다 — 예측 카드가 숫자를 내면 하루 한 줄씩 남습니다." if config.WEB_DATA
-                        else "넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다. 남아 있는 예측만 보입니다.")
-            else:
-                note = "끝난 시즌의 내 최종 순위는 넥슨 홈페이지에서 한 번 확인해 같이 둡니다(안내에 동의한 뒤부터)."
+        if not rows:
+            note = ("아직 남은 예측이 없습니다 — 예측 카드가 숫자를 내면 하루 한 줄씩 남습니다." if config.WEB_DATA
+                    else "넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다. 남아 있는 예측만 보입니다.")
+        else:
+            notes = []
+            if unconfirmed:
+                notes.append("내 계정 확인 전 — 지난 기록은 남아 있습니다. [스쿼드·이적]에서 내 계정을 정하면 이어집니다.")
+            if not config.WEB_DATA:
+                notes.append("넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다.")
+            if not notes:
+                notes.append("끝난 시즌의 내 최종 순위는 넥슨 홈페이지에서 한 번 확인해 같이 둡니다(안내에 동의한 뒤부터).")
+            note = " ".join(notes)
         self.lb_pcheck_note.setText(note)
         self._fill(self.tbl_pcheck, rows, enable_sort=False)
 

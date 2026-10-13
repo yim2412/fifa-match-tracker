@@ -1557,7 +1557,7 @@ def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list |
     if not stopped():
         try:
             import predict_check        # B8 — 끝난 시즌의 내 최종 순위(관문 · 시즌 넘김과 무관하게 매 회차 판정)
-            out["predict_check"] = predict_check.run(cancel=cancel)
+            out["predict_check"] = predict_check.run(fifa_path=fifa_path, today=now.date(), cancel=cancel)
         except Exception:      # 되짚기가 죽어도 수집 본체는 계속 — 다음 바퀴가 다시
             pass
     return out

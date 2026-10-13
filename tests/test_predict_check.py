@@ -211,6 +211,84 @@ def test_old_schema_gets_columns_and_replace_is_refilled():
     with_env(go)
 
 
+def test_sn_taken_from_latest_line_that_has_one():
+    """마지막 줄의 프로필 번호가 비어도 앞 줄 것으로 대조한다 · 전부 비면 묻지 않는다(결과가 not_found 로 정해져 있다)."""
+    def go(env):
+        c = store.open_db(env.db)
+        store.save_prediction(c, MINE, datetime(2026, 8, 3), profile_sn=None, season_start=START.isoformat(),
+                              end_source="estimate", p200=0.3, p1000=0.9, lo=1, hi=2)
+        c.close()
+        assert run(env, env.fetch_with(123))["found"] == 1
+    with_env(go)
+    def none_at_all(env):
+        c = store.open_db(env.db)
+        c.execute("UPDATE predictions SET profile_sn = NULL")
+        c.commit()
+        c.close()
+        assert run(env, env.fetch_with(123)) == {"asked": 0, "found": 0} and env.calls == []
+    with_env(none_at_all)
+
+
+def test_results_pending_flag():
+    def go(env):
+        c = store.open_db(env.db)
+        try:
+            run(env, env.fetch_with(None))
+            assert PC.results(c, MINE, TODAY)[0]["pending"] is True, "다시 묻는 동안은 아직 굳지 않았다"
+            settle = date.fromordinal(TODAY.toordinal() + config.PREDICT_CHECK_RETRY_DAYS)
+            assert PC.results(c, MINE, settle)[0]["pending"] is False
+        finally:
+            c.close()
+    with_env(go)
+
+
+def test_gate_reads_disk_env_with_notice_version():
+    """관문 배선 — 디스크 .env 의 동의 버전이 PREDICT_CHECK_NOTICE_VERSION 이상일 때만 참(이 PC 의 실제 .env 에 달리지 않게 가짜로)."""
+    keep = config._read_env_disk
+    want = config.PREDICT_CHECK_NOTICE_VERSION
+    def fake(notice, web="1", collect="1"):
+        return lambda: {config.NOTICE_VAR: str(notice), config.WEB_DATA_VAR: web, config.RANK_COLLECT_VAR: collect}
+    try:
+        config._read_env_disk = fake(want)
+        assert config.predict_check_allowed() is True
+        config._read_env_disk = fake(want - 1)
+        assert config.predict_check_allowed() is False, "한 칸 낮은 동의로는 못 연다"
+        config._read_env_disk = fake(want, web="0")
+        assert config.predict_check_allowed() is False, "웹 데이터가 꺼지면 닫힌다"
+        config._read_env_disk = fake(want, collect="0")
+        assert config.predict_check_allowed() is False, "수집이 꺼지면 닫힌다"
+    finally:
+        config._read_env_disk = keep
+
+
+def test_process_meta_calls_run_with_cancel_and_paths():
+    """수집 정리가 되짚기를 실제로 부르고(배선) cancel·DB 경로·오늘을 그대로 넘긴다 · 되짚기가 죽어도 정리는 계속."""
+    import rankcollect as rc
+    seen = []
+    keep = PC.run
+    ev = threading.Event()
+    env = Env()
+    try:
+        PC.run = lambda **kw: seen.append(kw) or {"asked": 1}
+        conn = rc.open_rank_db(env.dir / "rank.db")
+        try:
+            out = rc.process_meta(conn, datetime(2026, 9, 12, 12, 0), season_ends=[], fifa_path=env.db, cancel=ev)
+        finally:
+            conn.close()
+        assert len(seen) == 1 and seen[0]["cancel"] is ev and seen[0]["fifa_path"] == env.db, seen
+        assert seen[0]["today"] == date(2026, 9, 12) and out["predict_check"] == {"asked": 1}
+        PC.run = lambda **kw: 1 / 0
+        conn = rc.open_rank_db(env.dir / "rank2.db")
+        try:
+            out = rc.process_meta(conn, datetime(2026, 9, 12, 12, 0), season_ends=[])
+        finally:
+            conn.close()
+        assert "predict_check" not in out and out["rolled"] is False, "되짚기 예외가 정리를 막았다"
+    finally:
+        PC.run = keep
+        env.close()
+
+
 def test_results_for_screen():
     def go(env):
         c = store.open_db(env.db)

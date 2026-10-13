@@ -8939,13 +8939,27 @@ def test_predict_check_tab_renders_and_fits():
         by_day = {t.item(r, 1).text(): [t.item(r, k).text() for k in range(t.columnCount())] for r in range(2)}
         assert by_day["2026-08-01"][5:] == ["120위", "실제 200위 안 · 범위 안"], by_day
         assert by_day["2026-08-02"][5:] == ["120위", "실제 200위 안 · 범위 밖"], by_day
-        store.set_trade_state(c, **{f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}": json.dumps({"state": "not_found"})})
+        key = f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}"
+        store.set_trade_state(c, **{key: json.dumps({"state": "not_found", "first": _date.today().isoformat()})})
+        _win._invalidate("predcheck")
+        assert t.item(0, 5).text() == "확인 중", "다시 묻는 동안 굳은 '확인 불가' 로 보이면 안 된다"
+        store.set_trade_state(c, **{key: json.dumps({"state": "not_found", "first": "2020-01-01"})})
         _win._invalidate("predcheck")
         assert t.item(0, 5).text() == "확인 불가" and "닉네임" in t.item(0, 6).text()
-        store.set_trade_state(c, **{f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}": None})
+        store.set_trade_state(c, **{key: None})
         _win._invalidate("predcheck")
-        assert t.item(0, 5).text() == "시즌 진행 중"
+        assert t.item(0, 5).text() == "시즌 진행 중", "시즌표에 없는(진행 중) 시즌"
+        store.save_seasons(c, [sn.Season(no=9099, name="시즌 임시", start=_date.fromisoformat(start), end=_date(2026, 9, 10))])
+        _win._invalidate("predcheck")
+        assert t.item(0, 5).text() == "확인 전", "끝난 시즌을 '진행 중' 으로 보이면 안 된다(M2)"
+        # M1 — 화면이 이미 그려진 뒤 DB 만 바뀌어도 탭을 다시 열면 새로 읽는다(_invalidate 가 안 가는 길: 내 계정 확정·새 예측 줄)
+        store.set_trade_state(c, **{key: json.dumps({"state": "found", "rank": 77})})
+        _win._on_view_opened()
+        assert t.item(0, 5).text() == "77위", "탭을 다시 열었는데 낡은 표다"
         _check_elisions([t])
+        assert app_main.MainWindow.maint_changed({"predict_check": {"asked": 1}}) is True
+        assert app_main.MainWindow.maint_changed({"predict_check": {"asked": 0}}) is False
+        assert app_main.MainWindow.maint_changed({"predict_check": {"skipped": "gate"}}) is False
         c.execute("DELETE FROM predictions")
         c.commit()
         config.WEB_DATA = False         # 기록이 없고 웹 데이터가 꺼졌으면 그 까닭을 알린다
@@ -8955,6 +8969,7 @@ def test_predict_check_tab_renders_and_fits():
         config.WEB_DATA = keep_web
         c.execute("DELETE FROM predictions")
         c.execute("DELETE FROM trade_state")
+        c.execute("DELETE FROM seasons WHERE no = 9099")
         c.commit()
         c.close()
 
