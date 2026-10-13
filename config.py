@@ -352,6 +352,27 @@ RANKER_PICK_MAX_AGE_DAYS = 14       # 마지막 경기가 이보다 오래된 �
 RANKER_PICK_GAP_S = 0.25            # 요청 사이 — 개발 단계 키 초당 5 미만
 RANKER_PICK_429_WAIT_S = 60         # 429 를 받으면 이만큼 쉬고 한 번 더 → 또 429 면 그날 멈춘다(초당·하루 429 가 같은 코드라)
 RANKER_PICK_MIN_RANKERS = 30        # 이보다 적은 랭커로 낸 카드 비율은 흐림(표본 흐림 규칙 — 1.2.1)
+# 구단주 분포 v2(49단계 · ownerdist.py) — 사용자 앱이 자기 서비스 키로 1~3000위 구단주 150명의 최근 1000판을 받는다.
+# 표본·층 가중은 2026-10-13 새 표본 검증(ROADMAP "49단계" 조각 ①)에서 통과한 값 그대로 — 바꾸면 검증을 다시 한다
+OWNER_DIST_STRATA = (200, 1000, 3000)         # 층 상한 순위 — 1~200 · 201~1000 · 1001~3000
+OWNER_DIST_STRATA_POP = (200, 800, 2000)      # 층 인구(= 가중) — 표본은 층당 같은 수라 가중이 모집단 비율을 되살린다
+OWNER_DIST_PER_STRATUM = 50
+OWNER_DIST_MATCHES = 1000                     # 구단주당 최근 판수
+OWNER_DIST_PAGE = 100                         # 목록 한 번에 받는 상한
+OWNER_DIST_WORKERS = 4                        # 한 구단주 안에서 상세를 받는 동시 요청 수
+OWNER_DIST_MIN_GAMES = 800                    # 이만큼 못 받은 구단주는 분포에서 뺀다
+OWNER_DIST_MAX_AGE_DAYS = 30                  # 마지막 경기가 바퀴 기준일보다 이만큼 오래면 뺀다
+OWNER_DIST_MIN_OWNERS = 100                   # 제외 뒤 이보다 적으면 그 바퀴는 thin(분포로 안 쓴다)
+OWNER_DIST_DAILY_REQ = 200_000                # 하루 요청 상한 — 서비스 키 한도(2,000만)의 1%
+OWNER_DIST_ROUND_REQ = 170_000                # 바퀴 요청 상한
+OWNER_DIST_PERSON_REQ = 1020                  # 한 명분 최대(ouid 1 + 목록 10 + 상세 1000 + 여유) — 이만큼 남을 때만 시작
+OWNER_DIST_429_WAIT_S = 60                    # 429 를 받으면 전원 이만큼 쉬고 한 번 더 → 또 429 면 그날 멈춘다
+OWNER_DIST_ROUND_DAYS = 14                    # 직전 종료 뒤 이만큼 지나야 새 바퀴(②·③이 읽는다)
+OWNER_DIST_ROUND_MAX_DAYS = 7                 # 시작 뒤 이만큼 안에 못 끝내면 dropped
+OWNER_DIST_STALE_DAYS = 45                    # 분포가 이보다 낡으면 41단계 판정으로(②)
+OWNER_DIST_FAIL_MAX = 3                       # dropped|aborted 연속 이만큼이면 토글 끔(③)
+OWNER_DIST_SELFCHECK_REQ = 5000               # 누적 요청이 이보다 적은데 429 면 개발 키 오신고로 본다(③)
+OWNER_DIST_SEED = 20261016                    # + 바퀴 시작일 ordinal + 층 번호
 # 11-lite 랭커 기반 추천(17단계 — rankerpick.recommend). 문턱 10 근거: 2026-10-06 스냅숏 1,000위 안에서 10명 이상인
 # 팀컬러가 52개 중 23개 · 그 23개가 1,000명 중 938명(94%) — 대부분의 사람은 추천을 받고, 그 밖은 "N명뿐"이 맞다
 RANK_TREND_CUTS = (1, 10, 50, 100, 200)  # 랭킹 추이의 컷 그래프(1위 실선 · 나머지 점선) — "상위 구간 200위"까지

@@ -230,6 +230,38 @@ CREATE TABLE IF NOT EXISTS ranker_matches (
     match_id   TEXT PRIMARY KEY,
     fetched_on TEXT NOT NULL
 );
+-- 구단주 분포 v2(49단계 · ownerdist.py) — 바퀴(round) 하나가 1~3000위 구단주 150명의 최근 1000판 요약이다. owner_dist 는 사람 한 명당 한 줄인
+-- "이름 없는 구단주별 요약"(닉네임·ouid·profile_sn 없음 — 익명 집계가 아니다). 지표 열은 habits.paired_diff 의 diff(나 − 같은 경기 상대), 못 재면 NULL.
+-- owner_dist_done 의 h = sha256(profile_sn + 그 바퀴의 소금) — 이어 받기 표시. 바퀴가 어떤 결과로든 끝나면 해시·소금은 지운다.
+-- 보관: 최신 done 바퀴 + 진행 중 바퀴만. 옛 버전이 열어도 새 표라 안 깨진다
+CREATE TABLE IF NOT EXISTS owner_dist_state (
+    round_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    seed       INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at   TEXT,
+    result     TEXT,
+    salt       TEXT,
+    req_count  INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS owner_dist_done (
+    round_id INTEGER NOT NULL,
+    h        TEXT NOT NULL,
+    PRIMARY KEY (round_id, h)
+);
+CREATE TABLE IF NOT EXISTS owner_dist (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    round_id            INTEGER NOT NULL,
+    stratum             INTEGER NOT NULL,
+    n_games             INTEGER NOT NULL,
+    last_match          TEXT,
+    finish              REAL,
+    goals_per_on_target REAL,
+    tackle_rate         REAL,
+    long_through_rate   REAL,
+    possession          REAL,
+    shots               REAL
+);
+CREATE INDEX IF NOT EXISTS ix_owner_dist_round ON owner_dist (round_id);
 -- 포지션 특성(32단계 · traitcollect.py) — 랭커 한 사람 한 줄(덮어씀). body = JSON [[spid, 자리, 강화, [특성3], [코치3]|null], …].
 -- 지우기: 전부(purge_ranker_data everything) · 14일·500위 밖·켠 시각이 다름(prune_trait_squads). 옛 버전이 열어도 새 표라 그대로
 CREATE TABLE IF NOT EXISTS trait_squads (
@@ -293,9 +325,10 @@ OPEN_TIMEOUT_S = 15
 _OPEN_LOCK = threading.Lock()
 
 
-def open_db(path: Path | str) -> sqlite3.Connection:
-    """DB를 열고 없으면 만든다. 스레드마다 따로 열 것 — 커넥션 공유 금지."""
-    conn = sqlite3.connect(str(path), timeout=OPEN_TIMEOUT_S)
+def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Connection:
+    """DB를 열고 없으면 만든다. 스레드마다 따로 열 것 — 커넥션 공유 금지.
+    close_elsewhere: 작업 스레드가 연 연결을 끝에 다른 스레드가 닫아야 할 때(구단주 분포 게이트) — 쓰는 건 여전히 한 스레드뿐."""
+    conn = sqlite3.connect(str(path), timeout=OPEN_TIMEOUT_S, check_same_thread=not close_elsewhere)
     conn.row_factory = sqlite3.Row
     with _OPEN_LOCK:
         # 조회(UI)와 저장(워커)이 겹칠 수 있어 WAL 로 둔다.
@@ -1125,6 +1158,7 @@ def budget_used(conn: sqlite3.Connection, day: str, kind: str) -> int:
 
 BUDGET_OPENAPI = "openapi"          # 다른 로더(검색·거래·랭커 기록)의 최종 429 표시만
 BUDGET_RANKER_PICK = "ranker_pick"
+BUDGET_OWNER_DIST = "owner_dist"    # 구단주 분포(49단계) — 자기 429 는 BUDGET_OPENAPI 에도 남겨 다른 로더가 같이 멈춘다
 # 포지션 특성(32단계) — 오픈API 는 ranker_pick 한 장부(429 도)에 더해 201~500 몫만 따로 센다(trait_share · 429 는 안 적는다).
 # 웹(스쿼드메이커)은 trait_web 이 하루 요청 · 그날 멈춤 표시는 hit_429 칸에: 막힘(403·429·Cloudflare)은 trait_web_block,
 # 응답 구조 바뀜은 trait_web_format — 막힘 날짜가 이어진 수(trait_block_streak)로 스스로 끈다
@@ -1141,7 +1175,8 @@ def budget_mark_429(conn: sqlite3.Connection, day: str, kind: str) -> None:
                      " ON CONFLICT(day, kind) DO UPDATE SET hit_429 = 1", (day, kind))
 
 
-def budget_hit_429(conn: sqlite3.Connection, day: str, kinds=(BUDGET_OPENAPI, BUDGET_RANKER_PICK)) -> bool:
+def budget_hit_429(conn: sqlite3.Connection, day: str,
+                   kinds=(BUDGET_OPENAPI, BUDGET_RANKER_PICK, BUDGET_OWNER_DIST)) -> bool:
     q = ",".join("?" * len(kinds))
     return conn.execute(f"SELECT 1 FROM api_budget WHERE day = ? AND kind IN ({q}) AND hit_429 = 1 LIMIT 1",
                         (day, *kinds)).fetchone() is not None
@@ -1412,3 +1447,107 @@ def save_ranker_stats(conn: sqlite3.Connection, asked, rows: list[dict], matchty
             "INSERT OR REPLACE INTO ranker_stats (spid, po, matchtype, fetched_on, payload) VALUES (?, ?, ?, ?, ?)",
             [(s, p, matchtype, day, json.dumps(got[(s, p)], ensure_ascii=False) if (s, p) in got else None)
              for s, p in set(asked) | set(got)])
+
+
+# ── 구단주 분포 v2(49단계) ───────────────────────────────────────────────────
+
+OWNER_METRICS = ("finish", "goals_per_on_target", "tackle_rate", "long_through_rate", "possession", "shots")
+OWNER_RESULTS = ("done", "thin", "dropped", "aborted", "off")
+
+
+def owner_round_running(conn: sqlite3.Connection) -> dict | None:
+    """끝나지 않은 바퀴(이어 받을 수 있다) — 없으면 None."""
+    r = conn.execute("SELECT round_id, seed, started_at, salt, req_count FROM owner_dist_state"
+                     " WHERE result IS NULL ORDER BY round_id DESC LIMIT 1").fetchone()
+    return dict(r) if r else None
+
+
+def owner_round_last_end(conn: sqlite3.Connection, results=None) -> dict | None:
+    """가장 최근에 끝난 바퀴 (round_id, ended_at, result) — results 로 결과를 좁힐 수 있다."""
+    q = "SELECT round_id, ended_at, result FROM owner_dist_state WHERE result IS NOT NULL"
+    args: tuple = ()
+    if results:
+        q += f" AND result IN ({','.join('?' * len(results))})"
+        args = tuple(results)
+    r = conn.execute(q + " ORDER BY round_id DESC LIMIT 1", args).fetchone()
+    return dict(r) if r else None
+
+
+def owner_round_start(conn: sqlite3.Connection, seed: int, started_at: str, salt: str) -> int:
+    with conn:
+        cur = conn.execute("INSERT INTO owner_dist_state (seed, started_at, salt) VALUES (?, ?, ?)",
+                           (seed, started_at, salt))
+    return cur.lastrowid
+
+
+def owner_round_add_req(conn: sqlite3.Connection, round_id: int, n: int) -> None:
+    if n:
+        with conn:
+            conn.execute("UPDATE owner_dist_state SET req_count = req_count + ? WHERE round_id = ?", (n, round_id))
+
+
+def owner_done_hashes(conn: sqlite3.Connection, round_id: int) -> set[str]:
+    return {r[0] for r in conn.execute("SELECT h FROM owner_dist_done WHERE round_id = ?", (round_id,))}
+
+
+def owner_dist_add(conn: sqlite3.Connection, round_id: int, h: str, row: dict) -> None:
+    """구단주 한 명이 끝났다 — 요약 줄과 이어 받기 표시를 한 트랜잭션으로. row: stratum · n_games · last_match · OWNER_METRICS."""
+    cols = ("stratum", "n_games", "last_match") + OWNER_METRICS
+    with conn:
+        conn.execute(f"INSERT INTO owner_dist (round_id, {', '.join(cols)}) VALUES (?, {', '.join('?' * len(cols))})",
+                     (round_id, *[row.get(c) for c in cols]))
+        conn.execute("INSERT OR IGNORE INTO owner_dist_done (round_id, h) VALUES (?, ?)", (round_id, h))
+
+
+def owner_dist_rows(conn: sqlite3.Connection, round_id: int) -> list[dict]:
+    cols = ("stratum", "n_games", "last_match") + OWNER_METRICS
+    return [dict(r) for r in conn.execute(
+        f"SELECT {', '.join(cols)} FROM owner_dist WHERE round_id = ?", (round_id,))]
+
+
+def owner_round_end(conn: sqlite3.Connection, round_id: int, result: str, ended_at: str) -> None:
+    """바퀴를 끝낸다 — 어떤 결과든 해시·소금을 지운다. done 이면 이전 바퀴 줄을 지우고(분포는 최신 done 하나),
+    그 밖(thin·dropped·aborted·off)은 이 바퀴 줄을 지운다(이미 있는 done 분포는 그대로)."""
+    if result not in OWNER_RESULTS:
+        raise ValueError(f"바퀴 결과 {result!r}")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if result == "done":
+            conn.execute("DELETE FROM owner_dist WHERE round_id <> ?", (round_id,))
+        else:
+            conn.execute("DELETE FROM owner_dist WHERE round_id = ?", (round_id,))
+        conn.execute("DELETE FROM owner_dist_done WHERE round_id = ?", (round_id,))
+        conn.execute("UPDATE owner_dist_state SET result = ?, ended_at = ?, salt = NULL WHERE round_id = ?",
+                     (result, ended_at, round_id))
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    _checkpoint_quiet(conn)
+
+
+def purge_owner_dist(conn: sqlite3.Connection, *, everything: bool, now: str) -> None:
+    """돌던 바퀴를 off 로 끝내고(진행 줄·해시·소금 삭제), everything 이면 완료된 분포까지 지운다.
+    바퀴 기록(state)은 남긴다 — 하루 계수(api_budget)와 같이 "직전 종료" 기준점이다."""
+    run = owner_round_running(conn)
+    if run:
+        owner_round_end(conn, run["round_id"], "off", now)
+    if everything:
+        with conn:
+            conn.execute("DELETE FROM owner_dist")
+            conn.execute("DELETE FROM owner_dist_done")
+            conn.execute("UPDATE owner_dist_state SET salt = NULL")
+        _checkpoint_quiet(conn)
+
+
+def owner_done_add(conn: sqlite3.Connection, round_id: int, h: str) -> None:
+    """요약 줄 없이 이어 받기 표시만 — 닉네임이 바뀌었거나 경기를 못 받은 구단주를 이어 받을 때 다시 안 묻게."""
+    with conn:
+        conn.execute("INSERT OR IGNORE INTO owner_dist_done (round_id, h) VALUES (?, ?)", (round_id, h))
+
+
+def owner_req_total(conn: sqlite3.Connection) -> tuple[int, bool]:
+    """구단주 분포가 지금까지 보낸 요청 합과, 최종 429 표시가 한 번이라도 있었나 — 개발 키 오신고 판정 재료."""
+    r = conn.execute("SELECT COALESCE(SUM(attempts), 0), COALESCE(MAX(hit_429), 0) FROM api_budget WHERE kind = ?",
+                     (BUDGET_OWNER_DIST,)).fetchone()
+    return int(r[0]), bool(r[1])

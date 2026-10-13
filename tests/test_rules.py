@@ -359,6 +359,11 @@ def _drive_uncovered() -> None:
             store.trait_squads(conn)                            # 포지션 특성(32단계) — test_traits 가 부른다
             store.prune_trait_squads(conn, on_at=None, keep={1})
             store.trait_block_streak(conn)                      # 특성 막힘 날짜(32단계 단계 3) — test_traits 가 부른다
+            store.owner_round_running(conn)                     # 구단주 분포(49단계) — test_ownerdist 가 부른다
+            store.owner_round_last_end(conn, ("done",))
+            store.owner_done_hashes(conn, 1)
+            store.owner_dist_rows(conn, 1)
+            store.owner_req_total(conn)
         finally:
             conn.close()
         import rankcollect

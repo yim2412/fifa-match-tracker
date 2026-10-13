@@ -202,6 +202,11 @@ class FCOnlineAPI:
         self._cache_write(match_id, data)
         return data
 
+    def get_match_detail_nocache(self, match_id: str, attempts: int = 1) -> dict:
+        """매치 상세 — 디스크 캐시를 읽지도 쓰지도 않는다. 남의 경기를 대량으로 받는 구단주 분포(49단계)용:
+        캐시에 쓰면 한 바퀴에 14.6만 파일이 쌓이고 prune 도 DB 에 없는 경기는 안 지운다."""
+        return self._get(EP_MATCH_DETAIL, attempts=attempts, matchid=match_id)
+
     # ── 거래 ──────────────────────────────────────────────────────────
     def get_trades(self, tradetype: str, offset: int = 0, limit: int = TRADE_PAGE) -> list[dict]:
         """키 주인 계정의 거래(최신순) — tradetype 은 buy | sell. 끝을 지나면 빈 목록."""
