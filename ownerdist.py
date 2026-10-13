@@ -1,6 +1,7 @@
 """구단주 분포 v2(49단계 · 조각 ①) — 사용자 앱이 자기 서비스 키로 1~3000위 구단주 150명의 최근 1000판을 받아 요약한다.
 
-화면 없이 테스트한다(tests/test_ownerdist.py). 분포 계산·판정(백분위·칩)은 조각 ② 의 일이라 여기엔 없다 — 여기는 받기·저장·지우기까지.
+화면 없이 테스트한다(tests/test_ownerdist.py). 받기·저장·지우기(조각 ①)와 분포 읽기·백분위(`load_dist`·`OwnerDist.pct` — 조각 ②).
+칩 판정은 `habits.strength_chips(…, basis)`, 문장은 `analysis._creation_rules` 가 이 분포를 쓴다.
 
 받는 규칙(ROADMAP "49단계") — 위반하면 조용히 넥슨 한도·약속을 넘으므로 표로 둔다:
 
@@ -133,6 +134,68 @@ def eligible(row: dict, now: datetime) -> bool:
     except ValueError:
         return False
     return t >= now - timedelta(days=config.OWNER_DIST_MAX_AGE_DAYS)
+
+
+def _strata_ok(strata: list[int]) -> bool:
+    """합계 OWNER_DIST_MIN_OWNERS 이상 · 층마다 OWNER_DIST_MIN_PER_STRATUM 이상(층이 비면 가중이 그 층 인구를 잃는다)."""
+    return (len(strata) >= config.OWNER_DIST_MIN_OWNERS
+            and all(strata.count(i) >= config.OWNER_DIST_MIN_PER_STRATUM
+                    for i in range(1, len(config.OWNER_DIST_STRATA) + 1)))
+
+
+# ── 분포 읽기 · 백분위(조각 ②) ──────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class OwnerDist:
+    """최신 done 바퀴의 구단주 분포. values[지표] = ((구단주 diff, 층 가중), …) — 쓸 수 없는 지표는 키가 없다."""
+    round_id: int
+    ended_at: str
+    n_owners: int
+    values: dict
+
+    def pct(self, key: str, x: float) -> float | None:
+        """x 의 층 가중 경험 CDF 백분위(0~100) — 같은 값은 반만 센다(새 표본 검증 verify_new.wpct 와 같은 식).
+        그 지표를 쓸 수 없으면 None(쓰는 쪽이 41단계 판정으로)."""
+        vw = self.values.get(key)
+        if not vw:
+            return None
+        tot = lo = eq = 0.0
+        for v, w in vw:
+            tot += w
+            if v < x:
+                lo += w
+            elif v == x:
+                eq += w
+        return 100 * (lo + eq / 2) / tot
+
+
+def build_dist(rows: list[dict], round_id: int, ended_at: str) -> OwnerDist | None:
+    """owner_dist 줄 → OwnerDist. 거르기 기준 시각은 바퀴 종료 시각이다 — 읽는 날(now)로 재면 낡아 가는 분포에서
+    '마지막 경기 30일 안' 조건에 구단주가 하나둘 빠져 같은 분포가 날마다 달라진다(바퀴를 끝낼 때 run_round 도 그 시각으로 쟀다)."""
+    ref = datetime.fromisoformat(ended_at[:19])
+    ok = [r for r in rows if eligible(r, ref)]
+    if not _strata_ok([r["stratum"] for r in ok]):
+        return None
+    pop = config.OWNER_DIST_STRATA_POP
+    values = {}
+    for k in store.OWNER_METRICS:
+        have = [r for r in ok if r.get(k) is not None]
+        strata = [r["stratum"] for r in have]
+        if not _strata_ok(strata):
+            continue   # 이 지표만 41단계로
+        cnt = {i: strata.count(i) for i in set(strata)}
+        values[k] = tuple((float(r[k]), pop[r["stratum"] - 1] / cnt[r["stratum"]]) for r in have)
+    return OwnerDist(round_id, ended_at, len(ok), values)
+
+
+def load_dist(conn, now: datetime) -> OwnerDist | None:
+    """화면이 쓸 분포 — 최신 done 바퀴. 없거나 OWNER_DIST_STALE_DAYS 넘게 낡았거나 표본이 모자라면 None(41단계 판정)."""
+    last = store.owner_round_last_end(conn, ("done",))
+    if last is None or not last.get("ended_at"):
+        return None
+    if datetime.fromisoformat(last["ended_at"][:19]) + timedelta(days=config.OWNER_DIST_STALE_DAYS) < now:
+        return None
+    return build_dist(store.owner_dist_rows(conn, last["round_id"]), last["round_id"], last["ended_at"])
 
 
 # ── 요청 게이트 ──────────────────────────────────────────────────────────────
@@ -401,8 +464,9 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
             store.owner_round_end(conn, rid, "aborted", end)
             res.result = "aborted"
         elif not gate.reason and res.owners_done >= res.owners_total:
-            ok = sum(1 for r in store.owner_dist_rows(conn, rid) if eligible(r, now_fn()))
-            res.result = "done" if ok >= config.OWNER_DIST_MIN_OWNERS else "thin"
+            ref = datetime.fromisoformat(end)   # 읽는 쪽(build_dist)도 이 종료 시각으로 거른다 — 같은 판정이 나와야 한다
+            ok = [r["stratum"] for r in store.owner_dist_rows(conn, rid) if eligible(r, ref)]
+            res.result = "done" if _strata_ok(ok) else "thin"
             store.owner_round_end(conn, rid, res.result, end)
         return res
     finally:

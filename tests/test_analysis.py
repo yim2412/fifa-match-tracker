@@ -568,6 +568,66 @@ def test_creation_rule_floors_and_thresholds_are_wired():
         analysis.MIN_SHOTS, analysis.MIN_BASE, config.N19_CREATE_MIN_REL, config.N19_MIN_GAP = keep
 
 
+class _Dist:
+    """pct 를 지표별 함수로 — 49단계 조각 ② 문장 테스트용(분포 자체는 test_ownerdist 가 잰다)."""
+    n_owners, ended_at = 123, "2026-10-01T09:00:00"
+
+    def __init__(self, fn=None, absent=()):
+        self.fn, self.absent = fn, set(absent)
+
+    def pct(self, key, x):
+        return None if key in self.absent else self.fn(x)
+
+
+def _basis(dist, games):
+    from habits import DistBasis, side_totals
+    return DistBasis(dist, side_totals(games, OUID))
+
+
+def test_creation_rule_finish_uses_distribution_when_given():
+    scope = _creation_games()                                            # 화면 범위: 마무리 −40%p(같은 경기 상대 판정이면 약점)
+    recent = _creation_games(me_goals=(4, 3, 3), opp_goals=(1, 1, 2))     # 최근 1000판: 마무리가 상대보다 낫다
+    assert analysis._creation_rules(scope, OUID)[0].headline == "마무리가 같은 경기 상대보다 모자랍니다.", "전제"
+    up = _Dist(lambda x: 97.0)                                           # 최근 값·구간 끝 모두 상위
+    found = analysis._creation_rules(scope, OUID, _basis(up, recent))
+    assert [(i.section, i.headline) for i in found] == [(analysis.SEC_WIN, "마무리가 상위 구단주들보다 나은 편입니다.")], found
+    assert "구단주 123명 중 상위 3%" in found[0].detail and "2026-10-01" in found[0].detail and "경향" in found[0].detail, found[0].detail
+    assert "유효슛당 골 66.7%" in found[0].detail and "최근 30판" in found[0].detail, \
+        "설명 숫자가 최근 판(100/150)이 아니라 화면 범위 값이다"
+    # 분포 마무리는 중간(칩 아님) + 창출만 있음 → 같은 경기 상대 문구 그대로(분포 문구 표에 (0, c) 는 없다)
+    cre = analysis._creation_rules(_creation_games(me_on=(6, 7, 8)), OUID, _basis(_Dist(lambda x: 50.0), recent))
+    assert [i.headline for i in cre] == ["기회를 같은 경기 상대보다 더 만듭니다."], cre
+    assert "상위 50%" in cre[0].detail, "정확히 50 은 칩(Chip.strong ≥ 50)과 같게 '상위' — 설명과 칩이 갈리면 안 된다"
+    mid = _Dist(lambda x: 50.0)
+    assert analysis._creation_rules(scope, OUID, _basis(mid, recent)) == [], \
+        "분포로 판정했으면 칩이 없을 때 같은 경기 상대 판정으로 되돌아가면 안 된다"
+    # 분포가 그 지표를 못 쓰면 41단계 판정 그대로(화면 범위)
+    gone = analysis._creation_rules(scope, OUID, _basis(_Dist(absent={"goals_per_on_target"}), recent))
+    assert [i.headline for i in gone] == ["마무리가 같은 경기 상대보다 모자랍니다."], gone
+    # 창출은 늘 같은 경기 상대 대비 — 분포 마무리 하위 + 창출 많음
+    both = analysis._creation_rules(_creation_games(me_on=(6, 7, 8)), OUID,
+                                    _basis(_Dist(lambda x: 3.0), _creation_games()))
+    assert [i.headline for i in both] == ["기회는 상대보다 많이 만드는데 마무리는 상위 구단주들보다 낮은 편입니다."], both
+    assert "하위 3%" in both[0].detail and "같은 경기의 상대와 견준" in both[0].detail
+
+
+def test_narrate_passes_basis_through():
+    ms, ds = _seq(["승", "패"] * 40)
+    called = []
+
+    def spy(details, ouid, basis=None):
+        called.append(basis)
+        return []
+    keep = analysis._creation_rules
+    analysis._creation_rules = spy
+    try:
+        b = object()
+        analysis.narrate(ms, ds, OUID, basis=b)
+        assert called and called[-1] is b, "narrate 가 basis 를 문장 규칙까지 안 넘겼다"
+    finally:
+        analysis._creation_rules = keep
+
+
 def _half_games(mine_period, theirs_period, n=20):
     return [{"matchId": f"h{i}", "matchInfo": [
         _n19_side(OUID, 5, 3, 1, [(mine_period, 1200 + i)]),

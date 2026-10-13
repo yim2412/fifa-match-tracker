@@ -196,6 +196,96 @@ def test_strength_chips_tackle_uses_its_own_floor():
         config.N19_MIN_TACKLES = old
 
 
+# ── 49단계 조각 ② 구단주 분포 칩 ─────────────────────────────────────────────
+
+class FakeDist:
+    """pct(key, x) 를 표로 — (지표, 값) → 백분위, 없으면 50. absent 지표는 None(그 지표 분포를 못 씀). 물은 지표를 적는다."""
+
+    def __init__(self, table=None, absent=()):
+        self.table, self.absent, self.asked = dict(table or {}), set(absent), set()
+        self.n_owners, self.ended_at = 120, "2026-10-01T09:00:00"
+
+    def pct(self, key, x):
+        self.asked.add(key)
+        if key in self.absent:
+            return None
+        return self.table.get((key, x), 50.0)
+
+
+def _cfg_set(**kw):
+    keep = {k: getattr(config, k) for k in kw}
+    for k, v in kw.items():
+        setattr(config, k, v)
+    return keep
+
+
+def test_dist_chip_boundaries_and_no_fallback_to_pair():
+    t = habits.side_totals(_chip_games(opp_goals=(4, 3, 3)), "me")   # 골이 엇갈려야 se > 0 (diff·hi·lo 가 다른 값)
+    assert [c.label for c in habits.strength_chips(t)] == ["결정력"], "전제: 같은 경기 상대 판정이면 결정력 칩이 뜬다"
+    d = habits.paired_diff(t, "finish")
+    weak = lambda p, hi: habits.strength_chips(t, habits.DistBasis(FakeDist({("finish", d.diff): p, ("finish", d.hi): hi}), t))
+    chips = weak(10.0, 50.0)
+    assert [(c.label, c.basis, c.strong, c.pct) for c in chips] == [("결정력", "dist", False, 10.0)], chips
+    assert chips[0].text == "결정력 하위 10%", chips[0].text
+    assert weak(10.001, 1.0) == [], "백분위가 문턱 밖인데 칩이 떴다 — 또는 같은 경기 상대 판정으로 되돌아갔다"
+    assert weak(1.0, 50.001) == [], "구간 안쪽 끝이 중앙값을 넘었는데 칩이 떴다"
+    strong = lambda p, lo: habits.strength_chips(t, habits.DistBasis(FakeDist({("finish", d.diff): p, ("finish", d.lo): lo}), t))
+    c = strong(90.0, 50.0)
+    assert [(x.strong, x.text) for x in c] == [(True, "결정력 상위 10%")], c
+    assert strong(89.999, 99.0) == [] and strong(99.0, 49.999) == []
+    assert habits.Chip(d, 0.2).text == "결정력 하위 1%", "0% 라고 쓰면 안 된다"
+
+
+def test_dist_chip_thresholds_are_wired_to_config():
+    t = habits.side_totals(_chip_games(opp_goals=(4, 3, 3)), "me")
+    d = habits.paired_diff(t, "finish")
+    keep = _cfg_set(OWNER_DIST_CHIP_P=20, OWNER_DIST_SURE_P=40)   # 기본값(10·50)이 아닌 값
+    try:
+        go = lambda p, hi: habits.strength_chips(t, habits.DistBasis(FakeDist({("finish", d.diff): p, ("finish", d.hi): hi}), t))
+        assert go(15.0, 40.0), "CHIP_P 가 설정과 안 이어졌다(기본 10 이면 15 는 칩이 아니다)"
+        assert go(15.0, 45.0) == [], "SURE_P 가 설정과 안 이어졌다(기본 50 이면 45 는 칩이다)"
+        up = lambda p, lo: habits.strength_chips(t, habits.DistBasis(FakeDist({("finish", d.diff): p, ("finish", d.lo): lo}), t))
+        assert up(85.0, 60.0), "상위 쪽 CHIP_P 가 설정과 안 이어졌다(100 − 20 = 80 이상이면 칩)"
+        assert up(85.0, 59.0) == [], "상위 쪽 SURE_P 가 100 − 40 = 60 이 아니다(50 이나 40 으로 재면 59 가 칩이 된다)"
+    finally:
+        _cfg_set(**keep)
+
+
+def test_dist_chip_unusable_metric_falls_back_and_on_target_stays_pair():
+    scope = habits.side_totals(_chip_games(), "me")
+    mine = habits.side_totals(_chip_games(me_goals=(3, 3, 3), opp_goals=(3, 3, 3)), "me")   # 최근 1000판은 차이 없음
+    f = FakeDist(absent={"finish"})
+    chips = habits.strength_chips(scope, habits.DistBasis(f, mine))
+    assert [(c.label, c.basis, c.text) for c in chips] == [("결정력", "pair", "결정력 -25.0%p")], \
+        "분포를 못 쓰는 지표가 화면 범위의 같은 경기 상대 판정으로 돌아가지 않았다"
+    assert "on_target_rate" not in f.asked, "유효슛 비율(분포에서 뺀 지표)을 분포에 물었다"
+    assert f.asked == {"finish", "tackle_rate"}
+
+
+def test_dist_chips_sorted_by_group():
+    games = [_game(f"o{i}", _side("me", "승", 8, 6, (1, 1, 2)[i % 3], 10, 7, 50),
+                   _side("op", "패", 8, 2, (4, 3, 3)[i % 3], 10, 7, 50)) for i in range(30)]
+    t = habits.side_totals(games, "me")
+    fin, tk = habits.paired_diff(t, "finish"), habits.paired_diff(t, "tackle_rate")
+    table = {("finish", fin.diff): 5.0, ("finish", fin.hi): 10.0, ("tackle_rate", tk.diff): 97.0, ("tackle_rate", tk.lo): 97.0}
+    chips = habits.strength_chips(t, habits.DistBasis(FakeDist(table), t))
+    assert [(c.label, c.basis) for c in chips] == [("태클 성공", "dist"), ("결정력", "dist"), ("유효슛 비율", "pair")], \
+        [(c.label, c.basis) for c in chips]
+
+
+def test_dist_basis_needs_full_window_of_manager_games():
+    g = lambda i, mt=52: dict(_chip_games(1)[0], matchId=f"b{i}", matchType=mt)
+    keep = _cfg_set(OWNER_DIST_MATCHES=5)   # 기본값(1000)이 아닌 값
+    try:
+        dist = FakeDist()
+        assert habits.dist_basis(None, [g(i) for i in range(9)], "me") is None
+        assert habits.dist_basis(dist, [g(i) for i in range(4)] + [g(9, 50)] * 3, "me") is None, "감독모드가 아닌 경기를 셌다"
+        b = habits.dist_basis(dist, [g(i) for i in range(4)] + [g(7, 50)] + [g(i) for i in range(4, 9)], "me")
+        assert b is not None and [r.match_id for r in b.my.rows] == ["b0", "b1", "b2", "b3", "b4"], "최신 N판이 아니다"
+    finally:
+        _cfg_set(**keep)
+
+
 # ── N19 전반 비중 ───────────────────────────────────────────────────────────
 
 def _gt(period, sec):

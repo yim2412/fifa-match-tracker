@@ -322,6 +322,8 @@
 - "마무리 vs 창출": 마무리(유효슛당 골)만 분포 기준 · 창출(경기당 유효슛 — 분포에 없음)은 41단계 그대로 · 문구는 "경향".
 - 지표 하나만 모자라면 그 지표만 41단계로.
 - ③ 으로 넘김: `_narrate_scope` 캐시 키에 round_id·내 1000판 맨 앞 경기 · 칩 툴팁 · 하위 등급 조건 · 감독모드 밖 매치 종류에선 분포 끔.
+- **구현 (2026-10-13)**: `ownerdist.build_dist`·`load_dist`·`OwnerDist.pct` · `habits.DistBasis`·`dist_basis`·`dist_side` · `Chip.pct`/`basis` · `analysis._creation_rules(…, basis)`·`narrate(…, basis=None)` · `core_api` 에 `DistBasis`·`dist_basis`·`OwnerDist`·`load_owner_dist`. 화면은 아직 안 부른다.
+  검증: 테스트 ownerdist 30→35 · habits 55→60 · analysis 30→32, 회귀 7종(rules·parsing·ui_smoke 307·rankerpick 포함) 통과 · **손 변이 34건 전부 FAIL**(바뀐 줄만 — 조건 16 · 비조건 18. `mutate.js` 는 줄 지정이 없어 세 파일 옛 조건까지 수백 건이라 안 썼다). 첫 판에서 놓친 둘: 상위 칩 SURE_P(배선 테스트가 하위 쪽만 쟀다 — 기본 50 에선 `100−SURE_P` 와 `SURE_P` 가 같다) · 문장 설명이 정확히 50 일 때 상위/하위 — 단언을 넣고 다시 재 잡혔다.
 
 ① **새 표본 검증 + `ownerdist.py` 수집·저장·지우기 + nocache**(Sonnet 구현 + Opus 리뷰) ② **분포 계산·판정 교체**(`habits`·`analysis`·`core_api` — Opus) ③ **화면(칩 툴팁 "N명 대비 백분위")·설정 토글·동의·안내·`check_api.py` 한 줄·문서**(Sonnet + Opus 리뷰).
 

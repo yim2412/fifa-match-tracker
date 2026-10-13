@@ -29,7 +29,7 @@ from nexon_api import QUOTA_CODE, NexonAPIError
 NOW = datetime(2026, 10, 13, 12, 0, 0)
 RANKS = [1, 2, 3, 4, 201, 202, 203, 204, 1001, 1002, 1003, 1004, 3500]   # 3500 은 표본 밖(3000 초과)
 SMALL = dict(OWNER_DIST_PER_STRATUM=2, OWNER_DIST_MATCHES=7, OWNER_DIST_PAGE=3, OWNER_DIST_MIN_GAMES=5,
-             OWNER_DIST_MIN_OWNERS=4, OWNER_DIST_PERSON_REQ=11, OWNER_DIST_WORKERS=4,
+             OWNER_DIST_MIN_OWNERS=4, OWNER_DIST_MIN_PER_STRATUM=2, OWNER_DIST_PERSON_REQ=11, OWNER_DIST_WORKERS=4,
              OWNER_DIST_DAILY_REQ=10_000, OWNER_DIST_ROUND_REQ=10_000,
              # 아래 넷은 일부러 config 기본값(60·14·7·30)이 아닌 값 — 코드에 기본값을 박아도 테스트가 통과하지 않게
              OWNER_DIST_429_WAIT_S=7, OWNER_DIST_ROUND_DAYS=5, OWNER_DIST_ROUND_MAX_DAYS=3, OWNER_DIST_MAX_AGE_DAYS=10)
@@ -301,7 +301,7 @@ GONE = {"구단주1", "구단주2", "구단주3", "구단주4", "구단주201", 
 
 
 def test_nickname_gone_is_remembered_without_a_row():
-    with env(gone=GONE) as e, _cfg(OWNER_DIST_MIN_OWNERS=2):
+    with env(gone=GONE) as e, _cfg(OWNER_DIST_MIN_OWNERS=2, OWNER_DIST_MIN_PER_STRATUM=0):   # 층 기준은 아래 별도 테스트
         r = e.run()
         assert r.owners_done == r.owners_total == N_OWNERS and r.result == "done", r
         assert r.requests == 4 + 2 * REQ_PER_OWNER == len(e.api.calls), "사라진 닉네임은 ouid 요청 1번으로 끝나야 한다"
@@ -555,6 +555,17 @@ def test_thin_keeps_previous_done_and_done_replaces_it():
             "새 done 이 옛 done 줄을 지우지 않았다(같은 구단주가 두 바퀴 겹친다)"
 
 
+def test_an_empty_stratum_makes_the_round_thin():
+    """합계만 보면 층 하나가 비어도 done 이 되어 가중이 그 층 인구를 잃는다 — 층마다 OWNER_DIST_MIN_PER_STRATUM."""
+    gone = {"구단주1", "구단주2", "구단주3", "구단주4"}   # 1층 전원 → 2층 2 · 3층 2 = 합계 4
+    with env(gone=gone) as e, _cfg(OWNER_DIST_MIN_PER_STRATUM=0):
+        assert e.run().result == "done", "전제: 층 기준이 없으면 합계 4(= MIN_OWNERS)로 done 이 된다"
+    with env(gone=gone) as e:
+        assert e.run().result == "thin", "1층이 비었는데 done 이 됐다"
+    with env(gone={"구단주1", "구단주2", "구단주3"}) as e:   # 1층 넷 중 둘을 뽑으니 적어도 하나가 사라짐 → 1층 ≤1 < 2 · 합계 ≥4
+        assert e.run().result == "thin", "층 하나가 기준 밑인데 done 이 됐다"
+
+
 def test_old_games_exclude_owners_from_the_distribution():
     with env(games=3) as e:   # MIN_GAMES=5 보다 적은 판 → 전원 제외 → thin
         r = e.run()
@@ -616,6 +627,93 @@ def test_no_snapshot_starts_nothing():
             e.rank.close()
             e.rank = _rank_db(e._d.name)
         assert r.no_sample and store.owner_round_running(e.conn) is None and not e.api.calls
+
+
+# ── 조각 ② 분포 읽기 · 백분위 ────────────────────────────────────────────────
+
+E = "2026-10-01T09:00:00"     # 바퀴 종료 시각
+DIST_CFG = dict(OWNER_DIST_STRATA_POP=(10, 20, 30), OWNER_DIST_MIN_OWNERS=6, OWNER_DIST_MIN_PER_STRATUM=1,
+                OWNER_DIST_MIN_GAMES=5, OWNER_DIST_MAX_AGE_DAYS=30, OWNER_DIST_STALE_DAYS=45)   # 가중은 기본값(200·800·2000)이 아닌 값
+
+
+def _orow(stratum, finish, last=E, n_games=9, **kw):
+    r = {"stratum": stratum, "n_games": n_games, "last_match": last, "finish": finish}
+    for k in store.OWNER_METRICS:
+        r.setdefault(k, kw.get(k, 0.0 if k != "finish" else finish))
+    return r
+
+
+DIST_ROWS = [_orow(1, 1.0), _orow(1, 3.0), _orow(2, 2.0), _orow(3, 2.0), _orow(3, 4.0), _orow(3, 6.0)]
+
+
+def test_pct_is_stratum_weighted_with_half_ties():
+    with _cfg(**DIST_CFG):
+        d = od.build_dist(DIST_ROWS, 7, E)
+        assert d is not None and d.n_owners == 6
+        # 층 가중: 1층 값마다 10/2=5 · 2층 20 · 3층 값마다 30/3=10, 합 60
+        assert abs(d.pct("finish", 1.5) - 100 * 5 / 60) < 1e-9, "층 가중이 아니다(가중 없이 세면 16.7)"
+        assert abs(d.pct("finish", 2.0) - 100 * (5 + 30 / 2) / 60) < 1e-9, "같은 값은 반만 세야 한다"
+        assert d.pct("finish", -1) == 0 and d.pct("finish", 99) == 100
+        assert d.pct("없는지표", 0) is None
+
+
+def test_distribution_filters_by_round_end_not_today():
+    old = [dict(r, last_match="2026-09-11T09:00:00") for r in DIST_ROWS]   # 종료 20일 전 경기
+    now = datetime(2026, 11, 10, 9, 0, 0)                                   # 종료 40일 뒤에 읽는다
+    with _cfg(**DIST_CFG):
+        assert not any(od.eligible(r, now) for r in old), "전제: 읽는 날로 거르면 전원 빠진다"
+        d = od.build_dist(old, 7, E)
+        assert d is not None and d.n_owners == 6, "읽는 날로 걸러 낡아 가는 분포에서 구단주가 빠졌다"
+        assert od.build_dist([dict(r, last_match="2026-08-31T09:00:00") for r in DIST_ROWS], 7, E) is None, \
+            "종료 시각 기준 30일 넘은 경기도 남았다"
+
+
+def test_distribution_needs_every_stratum_and_metric_falls_back_alone():
+    with _cfg(**DIST_CFG):
+        assert od.build_dist([r for r in DIST_ROWS if r["stratum"] != 2], 7, E) is None, "층 하나가 빈 분포를 썼다"
+        with _cfg(OWNER_DIST_MIN_OWNERS=5):
+            assert od.build_dist([r for r in DIST_ROWS if r["stratum"] != 2], 7, E) is None, "합계가 넘어도 빈 층이면 안 된다"
+        rows = [dict(r, tackle_rate=None) if r["stratum"] == 2 else r for r in DIST_ROWS]
+        d = od.build_dist(rows, 7, E)
+        assert d is not None and d.pct("finish", 2.0) is not None, "지표 하나 때문에 분포 전체를 버렸다"
+        assert d.pct("tackle_rate", 0.0) is None, "층이 빈 지표를 썼다"
+        rows = [dict(r, shots=None) if i == 0 else r for i, r in enumerate(DIST_ROWS)]
+        assert od.build_dist(rows, 7, E).pct("shots", 0.0) is None, "구단주가 MIN_OWNERS 밑인 지표를 썼다"
+        assert od.build_dist([dict(r, n_games=4) if i == 0 else r for i, r in enumerate(DIST_ROWS)], 7, E) is None, \
+            "판수 모자란 구단주를 셌다"
+
+
+def _dist_db(d):
+    c = store.open_db(Path(d) / "fifa.db")
+    rid = store.owner_round_start(c, 1, "2026-09-28T00:00:00", "s")
+    for i, r in enumerate(DIST_ROWS):
+        store.owner_dist_add(c, rid, f"h{i}", r)
+    store.owner_round_end(c, rid, "done", E)
+    return c, rid
+
+
+def test_load_dist_takes_latest_done_and_goes_stale():
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c, rid = _dist_db(d)
+        try:
+            base = datetime.fromisoformat(E)
+            assert od.load_dist(c, base).round_id == rid
+            r2 = store.owner_round_start(c, 2, "2026-10-05T00:00:00", "t")
+            store.owner_round_end(c, r2, "thin", "2026-10-06T00:00:00")
+            assert od.load_dist(c, base).round_id == rid, "뒤에 온 thin 이 done 분포를 가렸다"
+            edge = base + timedelta(days=config.OWNER_DIST_STALE_DAYS)
+            assert od.load_dist(c, edge) is not None, "정확히 45일은 아직 쓴다"
+            assert od.load_dist(c, edge + timedelta(seconds=1)) is None, "45일 넘게 낡은 분포를 썼다"
+            with _cfg(OWNER_DIST_STALE_DAYS=10):
+                assert od.load_dist(c, base + timedelta(days=11)) is None, "낡음 기준이 설정과 이어져 있지 않다"
+        finally:
+            c.close()
+    with tempfile.TemporaryDirectory() as d:
+        c = store.open_db(Path(d) / "fifa.db")
+        try:
+            assert od.load_dist(c, datetime.fromisoformat(E)) is None, "분포가 없는데 무언가를 돌려줬다"
+        finally:
+            c.close()
 
 
 def test_metric_names_exist_in_habits():

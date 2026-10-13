@@ -19,7 +19,7 @@ import math
 from dataclasses import dataclass
 
 import config
-from habits import half_share_diff, paired_diff, side_totals
+from habits import dist_side, half_share_diff, paired_diff, side_totals
 from models import (MatchSummary, current_streak, is_weak, mixed_of_matches, opponent_stats, rated,
                     summarize)
 from stats import (UNKNOWN_GOAL_TYPE, after_streak_rates, clutch_summary,
@@ -303,16 +303,34 @@ def _minute_rules(details: list[dict], ouid: str) -> list[Insight]:
     return out
 
 
-def _creation_rules(details: list[dict], ouid: str) -> list[Insight]:
+_CREATION_HEADS_DIST = {
+    (-1, 1): "기회는 상대보다 많이 만드는데 마무리는 상위 구단주들보다 낮은 편입니다.",
+    (1, -1): "마무리는 상위 구단주들보다 나은 편이지만 기회는 상대보다 덜 만듭니다.",
+    (-1, -1): "마무리는 상위 구단주들보다 낮은 편이고 기회 창출도 같은 경기 상대보다 모자랍니다.",
+    (1, 1): "마무리는 상위 구단주들보다 나은 편이고 기회도 상대보다 더 만듭니다.",
+    (-1, 0): "마무리가 상위 구단주들보다 낮은 편입니다.",
+    (1, 0): "마무리가 상위 구단주들보다 나은 편입니다.",
+}
+
+
+def _creation_rules(details: list[dict], ouid: str, basis=None) -> list[Insight]:
     """마무리인가 창출인가(N19) — 유효슛당 골(마무리)과 경기당 유효슛(창출)을 같은 경기 상대와 견준다.
 
     마무리는 차이(%p)가 크기 문턱(config.N19_MIN_GAP)을, 창출은 상대 평균 대비 비율(%)이 config.N19_CREATE_MIN_REL 을
-    넘고 구간이 0 을 안 품어야 한다. 표본은 유효슛 수(MIN_SHOTS)·경기 수(MIN_BASE)."""
+    넘고 구간이 0 을 안 품어야 한다. 표본은 유효슛 수(MIN_SHOTS)·경기 수(MIN_BASE).
+    basis(habits.DistBasis)가 있고 유효슛당 골 분포를 쓸 수 있으면 **마무리만** 구단주 분포로 판정한다(내 최신 1000판 ·
+    habits.dist_side — 문구는 "경향"). 경기당 유효슛은 분포에 없는 지표라 창출은 늘 같은 경기 상대 대비(ROADMAP 49단계)."""
     t = side_totals(details, ouid)
     fin = paired_diff(t, "goals_per_on_target")
     cre = paired_diff(t, "on_target")
     f = c = 0
-    if min(fin.mine_den, fin.opp_den) >= MIN_SHOTS and fin.clear(config.N19_MIN_GAP):
+    fp = None
+    if basis is not None:
+        bfin = paired_diff(basis.my, "goals_per_on_target")
+        side, fp = dist_side(basis.dist, "goals_per_on_target", bfin)
+        if fp is not None:
+            fin, f = bfin, side
+    if fp is None and min(fin.mine_den, fin.opp_den) >= MIN_SHOTS and fin.clear(config.N19_MIN_GAP):
         f = 1 if fin.diff > 0 else -1
     rel = cre.diff / cre.opp * 100 if cre.opp else 0.0
     if t.games >= MIN_BASE and (cre.lo > 0 or cre.hi < 0) and abs(rel) >= config.N19_CREATE_MIN_REL:
@@ -327,9 +345,17 @@ def _creation_rules(details: list[dict], ouid: str) -> list[Insight]:
             (0, -1): "기회 창출이 같은 경기 상대보다 모자랍니다.",
             (1, 0): "마무리가 같은 경기 상대보다 낫습니다.",
             (0, 1): "기회를 같은 경기 상대보다 더 만듭니다."}[(f, c)]
+    if fp is not None and f:
+        head = _CREATION_HEADS_DIST[(f, c)]
     section = SEC_LOSE if (f < 0 or c < 0) else SEC_WIN
-    detail = (f"유효슛당 골 {fin.mine:.1f}% 대 상대 {fin.opp:.1f}%({fin.diff:+.1f}%p) · "
-              f"경기당 유효슛 {cre.mine:.2f}개 대 상대 {cre.opp:.2f}개({rel:+.0f}%). 같은 경기의 상대와 견준 값입니다.")
+    if fp is not None:
+        top = f"상위 {max(1, round(100 - fp))}%" if fp >= 50 else f"하위 {max(1, round(fp))}%"
+        detail = (f"유효슛당 골 {fin.mine:.1f}% 대 상대 {fin.opp:.1f}%({fin.diff:+.1f}%p) — 최근 {fin.n:,}판, "
+                  f"1~3000위 구단주 {basis.dist.n_owners}명 중 {top}(분포 기준일 {basis.dist.ended_at[:10]} · 경향) · "
+                  f"경기당 유효슛 {cre.mine:.2f}개 대 상대 {cre.opp:.2f}개({rel:+.0f}%) — 같은 경기의 상대와 견준 값입니다.")
+    else:
+        detail = (f"유효슛당 골 {fin.mine:.1f}% 대 상대 {fin.opp:.1f}%({fin.diff:+.1f}%p) · "
+                  f"경기당 유효슛 {cre.mine:.2f}개 대 상대 {cre.opp:.2f}개({rel:+.0f}%). 같은 경기의 상대와 견준 값입니다.")
     gap = max(abs(fin.diff) if f else 0.0, abs(rel) * config.N19_MIN_GAP / config.N19_CREATE_MIN_REL if c else 0.0)
     return [Insight(section, head, detail, _w(gap, int(fin.mine_den), MIN_SHOTS))]
 
@@ -507,7 +533,7 @@ def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int, mix
     return out
 
 
-def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
+def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str, basis=None
               ) -> list[Insight]:
     s = summarize(matches)   # 패턴 범위 전체로 한 번 판정 — 모든 규칙의 조건 승률과 기준이 같은 식
     if is_weak(s.rated, MIN_BASE):
@@ -518,7 +544,7 @@ def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str
             + _possession_rules(details, ouid, n, mixed)
             + _formation_rules(details, ouid, base, n, mixed)
             + _finishing_rules(details, ouid)
-            + _creation_rules(details, ouid)
+            + _creation_rules(details, ouid, basis)
             + _half_rules(details, ouid)
             + _goal_type_rules(details, ouid)
             + _opponent_rules(matches, base, mixed)
@@ -543,13 +569,14 @@ NO_BASIS_RULES = {
 
 
 def narrate(matches: list[MatchSummary], details: list[dict], ouid: str,
-            window: int = WINDOW, per_section: int = 3) -> list[Insight]:
+            window: int = WINDOW, per_section: int = 3, basis=None) -> list[Insight]:
     """분석 문장 목록 — 섹션 순서(흐름 → 이기는 → 지는), 섹션 안은 weight 순.
+    basis(habits.DistBasis)는 구단주 분포 판정 재료 — None 이면 41단계 판정 그대로(_creation_rules).
 
     matches 는 최신순이 전제(화면 표시 순서 그대로). 표본이 모자라면 해당
     섹션이 통째로 비는 게 정상이다.
     """
-    found = _flow(matches, details, ouid, window) + _patterns(matches, details, ouid)
+    found = _flow(matches, details, ouid, window) + _patterns(matches, details, ouid, basis)
     out: list[Insight] = []
     for sec in SECTIONS:
         group = sorted((i for i in found if i.section == sec),

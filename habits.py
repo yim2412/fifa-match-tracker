@@ -244,8 +244,14 @@ N19_CHIP_KEYS = (("finish", "N19_MIN_SHOTS"), ("on_target_rate", "N19_MIN_SHOTS"
 
 @dataclass(frozen=True)
 class Chip:
-    """강점·약점 칩 하나 — 나 − 같은 경기 상대가 뚜렷한 지표."""
+    """강점·약점 칩 하나 — 나 − 같은 경기 상대가 뚜렷한 지표(basis "pair"), 또는 그 diff 가 구단주 분포의
+    양 끝인 지표(basis "dist" — pct 가 내 백분위)."""
     diff: Diff
+    pct: float | None = None
+
+    @property
+    def basis(self) -> str:
+        return "pair" if self.pct is None else "dist"
 
     @property
     def label(self) -> str:
@@ -253,25 +259,74 @@ class Chip:
 
     @property
     def strong(self) -> bool:
-        return self.diff.diff > 0
+        return self.diff.diff > 0 if self.pct is None else self.pct >= 50
 
     @property
     def text(self) -> str:
-        return f"{self.label} {self.diff.diff:+.1f}%p"
+        if self.pct is None:
+            return f"{self.label} {self.diff.diff:+.1f}%p"
+        top = 100 - self.pct if self.strong else self.pct
+        return f"{self.label} {'상위' if self.strong else '하위'} {max(1, round(top))}%"
 
 
-def strength_chips(totals: SideTotals) -> list[Chip]:
-    """칩 목록(차이가 큰 순). 분모(슛·태클 시도)가 하한 밑이면 그 칩은 없다 — 표본이 모자라 구간 자체를 믿기 어렵다."""
-    out = []
+# 구단주 분포(49단계)로 판정하는 칩 — 나머지 칩(유효슛 비율)은 분포에서 뺀 지표라 늘 같은 경기 상대 대비(ROADMAP 49단계)
+DIST_CHIP_KEYS = ("finish", "tackle_rate")
+
+
+@dataclass(frozen=True)
+class DistBasis:
+    """분포 판정 재료 — dist 는 ownerdist.OwnerDist(pct(key, x) 만 쓴다 · 순환 import 를 피해 형만 맞춘다),
+    my 는 내 감독모드 최신 OWNER_DIST_MATCHES 판의 side_totals(분포와 같은 판수 규모 — 화면 범위와 무관)."""
+    dist: object
+    my: SideTotals
+
+
+def dist_basis(dist, details_all: list[dict], ouid: str) -> DistBasis | None:
+    """details_all 은 최신순 전체(시즌 범위 아님). 분포가 없거나 감독모드가 OWNER_DIST_MATCHES 판 미만이면 None(41단계)."""
+    if dist is None or not ouid:
+        return None
+    mine = [d for d in details_all if d.get("matchType") == config.DEFAULT_MATCH_TYPE][:config.OWNER_DIST_MATCHES]
+    if len(mine) < config.OWNER_DIST_MATCHES:
+        return None
+    return DistBasis(dist, side_totals(mine, ouid))
+
+
+def dist_side(dist, key: str, d: Diff) -> tuple[int, float | None]:
+    """분포 판정 — (−1 하위 칩 · 1 상위 칩 · 0 없음, 내 백분위). 백분위가 양 끝(OWNER_DIST_CHIP_P)이고 ±1.96se 의
+    안쪽 끝도 OWNER_DIST_SURE_P 를 안 넘을 때만(새 표본 검증 규칙 그대로). 그 지표 분포를 못 쓰면 (0, None)."""
+    p = dist.pct(key, d.diff)
+    if p is None:
+        return 0, None
+    if p <= config.OWNER_DIST_CHIP_P and dist.pct(key, d.hi) <= config.OWNER_DIST_SURE_P:
+        return -1, p
+    if p >= 100 - config.OWNER_DIST_CHIP_P and dist.pct(key, d.lo) >= 100 - config.OWNER_DIST_SURE_P:
+        return 1, p
+    return 0, p
+
+
+def strength_chips(totals: SideTotals, basis: DistBasis | None = None) -> list[Chip]:
+    """칩 목록 — 분포 칩 먼저(|백분위 − 50| 큰 순), 이어서 같은 경기 상대 칩(차이가 큰 순). 단위가 다른 둘을 한 정렬에 섞지 않는다.
+
+    basis 가 있고 그 지표 분포를 쓸 수 있으면 DIST_CHIP_KEYS 는 분포로만 판정한다(같은 경기 상대 판정으로 되돌아가지 않는다).
+    같은 경기 상대 판정: 분모(슛·태클 시도)가 하한 밑이면 그 칩은 없다 — 표본이 모자라 구간 자체를 믿기 어렵다."""
+    dist_out, out = [], []
     for key, floor_name in N19_CHIP_KEYS:
+        if basis is not None and key in DIST_CHIP_KEYS:
+            d = paired_diff(basis.my, key)
+            side, p = dist_side(basis.dist, key, d)
+            if p is not None:
+                if side:
+                    dist_out.append(Chip(d, p))
+                continue
         d = paired_diff(totals, key)
         floor = getattr(config, floor_name)
         if min(d.mine_den, d.opp_den) < floor:
             continue
         if d.clear(config.N19_MIN_GAP):
             out.append(Chip(d))
+    dist_out.sort(key=lambda c: -abs(c.pct - 50))
     out.sort(key=lambda c: -abs(c.diff.diff))
-    return out
+    return dist_out + out
 
 
 HALF_SHARE = Metric("half_share", "전반 비중", "half", "all")
