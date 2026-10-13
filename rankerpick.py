@@ -132,14 +132,29 @@ class _Session:
         raise AssertionError("unreachable")
 
 
-def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP) -> tuple[str | None, list[dict]]:
-    """원본이 남은 마지막 스냅숏의 상위 limit 명 → (찍은 시각, [{rank, profile_sn, nickname, team_color, formation, team_value, grade}]).
-    스냅숏이 없으면 (None, [])."""
+def latest_raw_snapshot(rank_conn) -> tuple[int, str] | None:
+    """원본이 남은 마지막 스냅숏 (id, taken_at) — 없으면 None."""
     if rank_conn is None:
-        return None, []
+        return None
     snap = rank_conn.execute(
         "SELECT s.id, s.taken_at FROM snapshots s WHERE EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)"
         " ORDER BY s.taken_at DESC, s.id DESC LIMIT 1").fetchone()
+    return (snap[0], snap[1]) if snap else None
+
+
+def top_rankers(rank_conn, limit: int = config.RANKER_PICK_TOP, snapshot_id: int | None = None) -> tuple[str | None, list[dict]]:
+    """원본이 남은 마지막 스냅숏(snapshot_id 를 주면 그 스냅숏 — 원본이 지워졌으면 빈 결과)의 상위 limit 명
+    → (찍은 시각, [{rank, profile_sn, nickname, team_color, formation, team_value, grade}]). 스냅숏이 없으면 (None, [])."""
+    if rank_conn is None:
+        return None, []
+    if snapshot_id is None:
+        snap = rank_conn.execute(
+            "SELECT s.id, s.taken_at FROM snapshots s WHERE EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)"
+            " ORDER BY s.taken_at DESC, s.id DESC LIMIT 1").fetchone()
+    else:
+        snap = rank_conn.execute(
+            "SELECT s.id, s.taken_at FROM snapshots s WHERE s.id = ?"
+            " AND EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)", (snapshot_id,)).fetchone()
     if snap is None:
         return None, []
     # 정렬은 여기서 — ORDER BY rank 는 PK(snapshot_id, profile_sn) 순이 아니라 1만 행을 임시 정렬한다(test_rules)

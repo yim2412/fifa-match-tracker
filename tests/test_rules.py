@@ -377,6 +377,8 @@ def _drive_uncovered() -> None:
                       " VALUES (1, '2026-10-06T10:00:00', 1, 0, 1, 0)")
             r.execute("INSERT INTO snapshot_rows (snapshot_id, rank, profile_sn, nickname) VALUES (1, 1, 5, 'n')")
             rankerpick.top_rankers(r)
+            rankerpick.top_rankers(r, snapshot_id=1)             # 구단주 분포 이어 받기(49단계) — 바퀴를 시작한 스냅숏
+            rankerpick.latest_raw_snapshot(r)
             rankerpick.snapshot_index(r)
         finally:
             r.close()

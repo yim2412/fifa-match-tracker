@@ -15,9 +15,12 @@
 | 상세는 `get_match_detail_nocache` — `.cache` 를 읽지도 쓰지도 않는다 | `_fetch_owner` |
 | 이어 받기 표시는 sha256(profile_sn + 바퀴 소금). 바퀴가 끝나면 해시·소금 삭제 | `owner_hash` · `store.owner_round_end` |
 | 닉네임·ouid·profile_sn·경기 상세는 저장하지 않는다 | `summarize_owner` |
+| 이어 받기는 **바퀴를 시작한 rank.db 스냅숏**(`snap_id`)에서 뽑는다 — 같은 시드도 새 스냅숏이면 같은 순위에 다른 사람이 서서 층 균형이 조용히 깨진다. 그 스냅숏이 없거나 원본이 지워졌으면 이어 붙이지 않고 `off` 로 끝내 새로 연다 | `run_round` |
+| "끝남"은 **닉네임이 사라진 경우(`OPENAPI00004`)만**. 네트워크·5xx·키 거절·깨진 응답·한 사람의 상세 전부 실패는 `_Transient` — 그 사람을 끝낸 걸로 치지 않고 이번 호출을 멈춘다(바퀴는 running) | `_fetch_owner` |
 
 동시 요청은 구단주 한 명 **안에서** `OWNER_DIST_WORKERS` 개(상세 1000건). 구단주끼리는 차례로 — 끊기면 버리는 몫이 한 명분(약 50초)이다.
-스레드마다 DB 연결을 따로 연다(`store.open_db` 규칙) — 계수는 `budget_take` 의 BEGIN IMMEDIATE 가 지킨다.
+풀은 바퀴 내내 하나다(구단주마다 새로 만들면 스레드마다 DB 연결이 새로 열려 바퀴가 끝날 때까지 쌓인다). 스레드마다 DB 연결을 따로 연다
+(`store.open_db` 규칙) — 계수는 `budget_take` 의 BEGIN IMMEDIATE 가 지킨다. 한 경기의 어떤 예외도(깨진 JSON 포함) 그 경기만 건너뛴다.
 """
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ import secrets
 import threading
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -64,6 +67,17 @@ class _Halt(Exception):
     """이번 호출을 끝낸다(원인은 Gate.reason)."""
 
 
+class _Transient(Exception):
+    """네트워크·5xx·키 거절처럼 그 사람 탓이 아닌 실패 — 그 구단주를 "끝남"으로 치지 않고 이번 호출을 멈춘다(다음에 이어 받는다)."""
+
+    def __init__(self, cause: BaseException):
+        super().__init__(f"{type(cause).__name__}: {cause}")
+        self.cause = cause
+
+
+NICKNAME_GONE_CODE = "OPENAPI00004"   # 맞는 키로 없는 닉네임을 물으면 온다(nexon_api.check_key 주석) — 이것만 "그 사람이 사라짐"
+
+
 # ── 표본 · 요약 ─────────────────────────────────────────────────────────────
 
 def stratum_of(rank: int) -> int | None:
@@ -73,11 +87,16 @@ def stratum_of(rank: int) -> int | None:
     return None
 
 
-def plan_round(rank_conn, seed: int, per_stratum: int | None = None) -> list[Target]:
-    """rank.db 마지막 스냅숏 1~3000위에서 층마다 같은 수를 시드로 뽑는다(읽기만). 스냅숏이 없으면 []."""
+def plan_round(rank_conn, seed: int, per_stratum: int | None = None, snap_id: int | None = None,
+               snap_taken: str | None = None) -> list[Target]:
+    """rank.db 1~3000위에서 층마다 같은 수를 시드로 뽑는다(읽기만). snap_id 를 주면 그 스냅숏에서(이어 받기 — 같은 시드라도
+    스냅숏이 바뀌면 같은 순위 자리에 다른 사람이 뽑힌다), 안 주면 마지막 스냅숏. 스냅숏이 없거나 원본이 지워졌으면 [].
+    snap_taken 을 같이 주면 그 스냅숏의 찍은 시각이 같을 때만 쓴다 — id 는 rank.db 를 지웠다 다시 만들면 재사용된다."""
     import rankerpick   # 순환 import 를 피한다(rankerpick 이 store·config 만 쓰지만 이쪽이 더 늦게 불린다)
     n = config.OWNER_DIST_PER_STRATUM if per_stratum is None else per_stratum
-    _taken, rows = rankerpick.top_rankers(rank_conn, limit=config.OWNER_DIST_STRATA[-1])
+    taken, rows = rankerpick.top_rankers(rank_conn, limit=config.OWNER_DIST_STRATA[-1], snapshot_id=snap_id)
+    if snap_taken is not None and taken != snap_taken:
+        return []
     by: dict[int, list[Target]] = {}
     for r in rows:
         st = stratum_of(r["rank"])
@@ -195,13 +214,21 @@ class _Gate:
 
 # ── 한 명 받기 ───────────────────────────────────────────────────────────────
 
-def _fetch_owner(gate: _Gate, api_for_thread, t: Target) -> tuple[habits.SideTotals, str | None] | None:
-    """구단주 한 명의 최근 판 → (SideTotals, 마지막 경기 시각). 닉네임을 못 찾으면 None. _Halt 는 그대로 올라간다."""
+def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecutor) -> tuple[habits.SideTotals, str | None] | None:
+    """구단주 한 명의 최근 판 → (SideTotals, 마지막 경기 시각). 닉네임이 사라졌으면 None. _Halt 는 그대로 올라가고,
+    그 사람 탓이 아닌 실패(네트워크·5xx·키 거절·깨진 응답)는 _Transient 로 올린다 — "끝남"으로 치면 그 사람이 바퀴에서 영구히 빠진다.
+    pool 은 바퀴 내내 쓰는 풀이다 — 구단주마다 새로 만들면 스레드마다 DB 연결이 새로 열려 바퀴가 끝날 때까지 쌓인다."""
     api = api_for_thread()
     try:
         ouid = gate.call(lambda: api.get_ouid(t.nickname, attempts=1))
-    except NexonAPIError:
-        return None
+    except _Halt:
+        raise
+    except NexonAPIError as e:
+        if e.code == NICKNAME_GONE_CODE:
+            return None
+        raise _Transient(e) from e
+    except Exception as e:  # noqa: BLE001 — 깨진 JSON(ValueError)·dict 가 아닌 응답(AttributeError)
+        raise _Transient(e) from e
     ids: list[str] = []
     while len(ids) < config.OWNER_DIST_MATCHES:
         want = min(config.OWNER_DIST_PAGE, config.OWNER_DIST_MATCHES - len(ids))
@@ -209,8 +236,10 @@ def _fetch_owner(gate: _Gate, api_for_thread, t: Target) -> tuple[habits.SideTot
         try:
             page = gate.call(lambda: api.get_match_ids(ouid, matchtype=config.DEFAULT_MATCH_TYPE,
                                                        offset=off, limit=want, attempts=1))
-        except NexonAPIError:
-            return None
+        except _Halt:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise _Transient(e) from e
         ids += page
         if len(page) < want:
             break
@@ -218,22 +247,31 @@ def _fetch_owner(gate: _Gate, api_for_thread, t: Target) -> tuple[habits.SideTot
     def one(mid: str):
         try:
             d = gate.call(lambda: api_for_thread().get_match_detail_nocache(mid))
-        except NexonAPIError:
-            return None   # 한 경기 실패가 나머지를 막지 않는다
-        rows = habits.side_totals([d], ouid).rows   # 상세 원본은 여기서 버린다 — 요약 재료(SideRow)만 남는다
-        return rows, (d.get("matchDate") or "")
+            rows = habits.side_totals([d], ouid).rows   # 상세 원본은 여기서 버린다 — 요약 재료(SideRow)만 남는다
+            return rows, (d.get("matchDate") or "")
+        except _Halt:
+            raise
+        except Exception as e:  # noqa: BLE001 — 한 경기 실패(응답·파싱)가 나머지를 막지 않는다
+            return e
 
     totals = habits.SideTotals()
     last = ""
-    ex = ThreadPoolExecutor(max_workers=config.OWNER_DIST_WORKERS)
+    failed: list[Exception] = []
+    futs = [pool.submit(one, mid) for mid in ids]
     try:
-        for got in ex.map(one, ids):
-            if got is None:
+        for f in futs:
+            got = f.result()
+            if isinstance(got, Exception):
+                failed.append(got)
                 continue
             totals.rows += got[0]
             last = max(last, got[1])
     finally:
-        ex.shutdown(wait=True, cancel_futures=True)
+        for f in futs:
+            f.cancel()
+        wait(futs)   # 돌던 요청이 다 끝난 뒤에야 gate.requests 를 센다
+    if ids and len(failed) == len(ids):
+        raise _Transient(failed[0])   # 전부 실패 — 그 사람이 경기가 없는 게 아니라 받는 쪽이 막힌 것
     return totals, (last or None)
 
 
@@ -272,24 +310,37 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
             store.owner_round_end(conn, run["round_id"], "dropped", now.isoformat(timespec="seconds"))
             res.round_id, res.result = run["round_id"], "dropped"
             return res
+        targets: list[Target] = []
+        if run is not None:
+            # 이어 받기는 바퀴를 시작한 스냅숏에서 뽑는다. 스냅숏 id 가 없는 옛 줄이거나 그 스냅숏의 원본이 지워졌으면
+            # 같은 표본을 다시 만들 수 없다 — 다른 사람들로 이어 붙이면 층 균형이 조용히 깨지므로 버리고 새로 연다.
+            # off 로 끝낸다(기준점이 아니라서 아래에서 바로 새 바퀴가 열린다 — dropped 였다면 14일을 기다린다).
+            if rank_conn is None:   # 열기가 한 번 실패한 것일 수 있다 — 진행분을 버리지 않고 다음에 이어 받는다
+                res.no_sample = True
+                return res
+            pinned = run["snap_id"] is not None and run["snap_taken"] is not None
+            targets = (plan_round(rank_conn, run["seed"], snap_id=run["snap_id"], snap_taken=run["snap_taken"])
+                       if pinned else [])
+            if not targets:
+                store.owner_round_end(conn, run["round_id"], "off", now.isoformat(timespec="seconds"))
+                run = None
         if run is None:
             if not new_round_due(conn, now):
                 res.not_due = True
                 return res
             seed = config.OWNER_DIST_SEED + now.date().toordinal()
-            targets = plan_round(rank_conn, seed)
+            import rankerpick
+            snap = rankerpick.latest_raw_snapshot(rank_conn)
+            targets = plan_round(rank_conn, seed, snap_id=snap[0], snap_taken=snap[1]) if snap else []
             if not targets:
                 res.no_sample = True
                 return res
             salt = secrets.token_hex(16)
-            rid = store.owner_round_start(conn, seed, now.isoformat(timespec="seconds"), salt)
+            rid = store.owner_round_start(conn, seed, now.isoformat(timespec="seconds"), salt,
+                                          snap[0], snap[1])
             used = 0
         else:
-            seed, salt, rid, used = run["seed"], run["salt"], run["round_id"], run["req_count"]
-            targets = plan_round(rank_conn, seed)
-            if not targets:
-                res.no_sample = True
-                return res
+            salt, rid, used = run["salt"], run["round_id"], run["req_count"]
         res.round_id, res.owners_total = rid, len(targets)
         done = store.owner_done_hashes(conn, rid)
         res.owners_done = len(done)
@@ -303,6 +354,7 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                 local.api = api_factory()
             return local.api
 
+        pool = ThreadPoolExecutor(max_workers=config.OWNER_DIST_WORKERS)
         try:
             for t in targets:
                 if res.owners_done >= res.owners_total:
@@ -322,9 +374,12 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                     break
                 before = gate.requests
                 try:
-                    got = _fetch_owner(gate, api_for_thread, t)
-                except _Halt:
+                    got = _fetch_owner(gate, api_for_thread, t, pool)
+                except (_Halt, _Transient) as stop:
                     store.owner_round_add_req(conn, rid, gate.requests - before)   # 버린 사람의 요청도 바퀴 상한에는 든다
+                    if isinstance(stop, _Transient):
+                        gate.reason = gate.reason or "error"   # 바퀴는 running 으로 남아 다음에 이어 받는다
+                        res.error = f"{type(stop.cause).__name__} {getattr(stop.cause, 'code', '')}".strip()   # 메시지에는 남의 닉네임이 URL 로 실린다
                     break
                 store.owner_round_add_req(conn, rid, gate.requests - before)
                 if got is None or not got[0].games:
@@ -334,6 +389,7 @@ def run_round(db_path, rank_conn, api_factory, *, cancel: Callable[[], bool] = l
                 done.add(h)
                 res.owners_done += 1
         finally:
+            pool.shutdown(wait=True, cancel_futures=True)
             gate.close()
         res.requests = gate.requests
         res.cancelled = gate.reason == "cancel"

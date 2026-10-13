@@ -30,7 +30,9 @@ NOW = datetime(2026, 10, 13, 12, 0, 0)
 RANKS = [1, 2, 3, 4, 201, 202, 203, 204, 1001, 1002, 1003, 1004, 3500]   # 3500 은 표본 밖(3000 초과)
 SMALL = dict(OWNER_DIST_PER_STRATUM=2, OWNER_DIST_MATCHES=7, OWNER_DIST_PAGE=3, OWNER_DIST_MIN_GAMES=5,
              OWNER_DIST_MIN_OWNERS=4, OWNER_DIST_PERSON_REQ=11, OWNER_DIST_WORKERS=4,
-             OWNER_DIST_DAILY_REQ=10_000, OWNER_DIST_ROUND_REQ=10_000, OWNER_DIST_429_WAIT_S=60)
+             OWNER_DIST_DAILY_REQ=10_000, OWNER_DIST_ROUND_REQ=10_000,
+             # 아래 넷은 일부러 config 기본값(60·14·7·30)이 아닌 값 — 코드에 기본값을 박아도 테스트가 통과하지 않게
+             OWNER_DIST_429_WAIT_S=7, OWNER_DIST_ROUND_DAYS=5, OWNER_DIST_ROUND_MAX_DAYS=3, OWNER_DIST_MAX_AGE_DAYS=10)
 REQ_PER_OWNER = 1 + 3 + 7     # ouid 1 · 목록 3쪽(3·3·1) · 상세 7
 N_OWNERS = 6
 
@@ -179,7 +181,7 @@ def test_plan_round_is_stratified_seeded_and_in_range():
         assert sorted(t.stratum for t in a) == [1, 1, 2, 2, 3, 3]
         assert all(t.rank <= 3000 for t in a), "3000위 밖(3500)이 표본에 들어왔다"
         assert a == od.plan_round(e.rank, 111), "같은 시드는 같은 표본"
-        assert {t.profile_sn for t in a} != {t.profile_sn for t in od.plan_round(e.rank, 222)} or True
+        assert {t.profile_sn for t in a} != {t.profile_sn for t in od.plan_round(e.rank, 222)}, "다른 시드가 같은 표본을 뽑았다"
         assert od.plan_round(None, 1) == [], "스냅숏이 없으면 빈 표본"
         # 층 경계: 200 은 1층, 201 은 2층, 1000 은 2층, 1001 은 3층, 3000 은 3층, 3001 은 밖
         assert [od.stratum_of(r) for r in (200, 201, 1000, 1001, 3000, 3001)] == [1, 2, 2, 3, 3, None]
@@ -204,11 +206,11 @@ def test_summarize_owner_by_hand():
 
 
 def test_eligible_boundaries():
-    with _cfg(OWNER_DIST_MIN_GAMES=5):
-        ok = {"n_games": 5, "last_match": (NOW - timedelta(days=30)).isoformat()}
+    with _cfg(OWNER_DIST_MIN_GAMES=5, OWNER_DIST_MAX_AGE_DAYS=9):   # 기본값(30)이 아닌 값
+        ok = {"n_games": 5, "last_match": (NOW - timedelta(days=9)).isoformat()}
         assert od.eligible(ok, NOW)
         assert not od.eligible({**ok, "n_games": 4}, NOW), "판수 하한 밑"
-        assert not od.eligible({**ok, "last_match": (NOW - timedelta(days=30, seconds=1)).isoformat()}, NOW), "30일 초과"
+        assert not od.eligible({**ok, "last_match": (NOW - timedelta(days=9, seconds=1)).isoformat()}, NOW), "9일 초과"
         assert not od.eligible({**ok, "last_match": None}, NOW) and not od.eligible({**ok, "last_match": "엉망"}, NOW)
 
 
@@ -295,12 +297,185 @@ def test_cancel_midway_discards_partial_owner_and_resume_has_no_duplicates():
         assert len(first) == N_OWNERS - 2 and len(e.api.calls) == (N_OWNERS - 2) * REQ_PER_OWNER, "이미 끝난 구단주를 다시 물었다"
 
 
+GONE = {"구단주1", "구단주2", "구단주3", "구단주4", "구단주201", "구단주202", "구단주203", "구단주204"}   # 1·2층 전원 — 3층 둘만 남는다
+
+
 def test_nickname_gone_is_remembered_without_a_row():
-    with env(gone={"구단주1", "구단주2", "구단주3", "구단주4", "구단주201", "구단주202", "구단주203", "구단주204"}) as e:
+    with env(gone=GONE) as e, _cfg(OWNER_DIST_MIN_OWNERS=2):
         r = e.run()
-        rows = store.owner_dist_rows(e.conn, r.round_id) if r.round_id else []
-        assert r.owners_done == r.owners_total, r
-        assert len(rows) <= N_OWNERS
+        assert r.owners_done == r.owners_total == N_OWNERS and r.result == "done", r
+        assert r.requests == 4 + 2 * REQ_PER_OWNER == len(e.api.calls), "사라진 닉네임은 ouid 요청 1번으로 끝나야 한다"
+        assert [x["stratum"] for x in store.owner_dist_rows(e.conn, r.round_id)] == [3, 3], "사라진 닉네임이 줄을 만들었다"
+    with env(gone=GONE) as e:
+        e.run(cancel=lambda: len(e.api.calls) >= 4)   # 사라진 넷을 처리하고 멈춘다
+        run = store.owner_round_running(e.conn)
+        assert store.owner_dist_rows(e.conn, run["round_id"]) == [], "사라진 닉네임이 줄을 만들었다"
+        assert len(store.owner_done_hashes(e.conn, run["round_id"])) == 4, "사라진 닉네임이 이어 받기 표시에 안 남았다"
+        e.api.calls = []
+        r = e.run()
+        assert not any(c[0] == "ouid" and c[1] in GONE for c in e.api.calls), "이어 받으며 사라진 닉네임을 다시 물었다"
+        assert len(e.api.calls) == 2 * REQ_PER_OWNER and len(store.owner_done_hashes(e.conn, run["round_id"])) == 0 and r.result == "thin"
+
+
+def _second_snapshot(e, hours=1):
+    """같은 순위에 다른 사람(새N)이 선 새 스냅숏 — 랭킹 수집이 12시간마다 찍는 것."""
+    rows = [ranker.RankRow(rank=r, profile_sn=5000 + r, nickname=f"새{r}", team_color="팀", elo=3000.0 - r) for r in RANKS]
+    return rankcollect.save_snapshot(e.rank, rows, NOW + timedelta(hours=hours))
+
+
+def _ouid_names(e) -> set[str]:
+    return {c[1] for c in e.api.calls if c[0] == "ouid"}   # ouid 호출이 적는 인자는 닉네임이다
+
+
+def test_resume_keeps_the_snapshot_the_round_started_on():
+    """이어 받는 사이 새 스냅숏이 생겨도 같은 사람들을 받는다 — 아니면 앞 층이 두 번 채워지고 뒤 층이 빈다."""
+    with env() as e:
+        e.run(cancel=lambda: len(e.api.calls) >= 2 * REQ_PER_OWNER)
+        run = store.owner_round_running(e.conn)
+        assert run["snap_id"] is not None and len(store.owner_done_hashes(e.conn, run["round_id"])) == 2
+        first = _ouid_names(e)
+        _second_snapshot(e)
+        # 전제: 막지 않았다면 — 같은 시드라도 새 스냅숏에서 뽑으면 전혀 다른 사람들이다
+        assert all(t.nickname.startswith("새") for t in od.plan_round(e.rank, run["seed"])), "전제: 새 스냅숏이 마지막이어야 한다"
+        e.api.calls = []
+        r = e.run()
+        assert r.result == "done" and r.owners_done == N_OWNERS, r
+        assert not any(n.startswith("새") for n in _ouid_names(e)), "이어 받으며 새 스냅숏의 다른 사람을 받았다"
+        assert not (_ouid_names(e) & first), "앞서 끝낸 사람을 다시 받았다"
+        assert sorted(x["stratum"] for x in store.owner_dist_rows(e.conn, r.round_id)) == [1, 1, 2, 2, 3, 3], "층 균형이 깨졌다"
+        e.now = NOW + timedelta(days=config.OWNER_DIST_ROUND_DAYS, seconds=1)   # 다음 바퀴는 새 스냅숏에서 시작한다
+        e.api.calls = []
+        e.run(cancel=lambda: len(e.api.calls) >= 1)
+        assert store.owner_round_running(e.conn)["snap_id"] != run["snap_id"]
+
+
+def test_resume_without_a_usable_snapshot_starts_a_fresh_round():
+    """스냅숏 id 가 없는 옛 줄 · 그 스냅숏의 원본이 지워진 줄은 이어 붙이지 않고 off 로 끝내 바로 새로 연다."""
+    for how in ("legacy", "pruned"):
+        with env() as e:
+            e.run(cancel=lambda: len(e.api.calls) >= 2 * REQ_PER_OWNER)
+            old = store.owner_round_running(e.conn)
+            if how == "legacy":
+                e.conn.execute("UPDATE owner_dist_state SET snap_id = NULL")
+                e.conn.commit()
+            else:
+                e.rank.execute("DELETE FROM snapshot_rows WHERE snapshot_id = ?", (old["snap_id"],))
+                e.rank.commit()
+            _second_snapshot(e)
+            e.api.calls = []
+            r = e.run()
+            assert r.result == "done" and r.round_id != old["round_id"], (how, r)
+            ended = e.conn.execute("SELECT result FROM owner_dist_state WHERE round_id = ?", (old["round_id"],)).fetchone()
+            assert ended["result"] == "off", (how, dict(ended))
+            assert store.owner_done_hashes(e.conn, old["round_id"]) == set() and store.owner_dist_rows(e.conn, old["round_id"]) == []
+            assert _ouid_names(e) and all(n.startswith("새") for n in _ouid_names(e)), how
+
+
+def test_recreated_rank_db_with_reused_snapshot_id_is_not_resumed():
+    """snapshots.id 는 AUTOINCREMENT 가 아니라 "수집 기록 지우기" 뒤엔 1부터 다시 매겨진다 — id 만 대조하면 다른 사람들이 이어 붙는다."""
+    with env() as e:
+        e.run(cancel=lambda: len(e.api.calls) >= 2 * REQ_PER_OWNER)
+        old = store.owner_round_running(e.conn)
+        e.rank.close()
+        for suffix in ("", "-wal", "-shm"):
+            p = Path(str(e.dir / "rank.db") + suffix)
+            if p.exists():
+                p.unlink()
+        e.rank = rankcollect.open_rank_db(e.dir / "rank.db")
+        new_id = _second_snapshot(e)
+        assert new_id == old["snap_id"], "전제: 새 DB 의 첫 스냅숏이 같은 번호를 받아야 한다"
+        e.api.calls = []
+        r = e.run()
+        assert r.result == "done" and r.round_id != old["round_id"], r
+        assert _ouid_names(e) and all(n.startswith("새") for n in _ouid_names(e))
+        assert sorted(x["stratum"] for x in store.owner_dist_rows(e.conn, r.round_id)) == [1, 1, 2, 2, 3, 3], "층 균형이 깨졌다"
+
+
+def test_unopenable_rank_db_keeps_the_running_round():
+    with env() as e:
+        e.run(cancel=lambda: len(e.api.calls) >= 2 * REQ_PER_OWNER)
+        old = store.owner_round_running(e.conn)
+        r = od.run_round(e.db, None, lambda: e.api, sleep=e.clock.sleep, clock=e.clock.now, now_fn=lambda: e.now)
+        assert r.no_sample, r
+        assert store.owner_round_running(e.conn)["round_id"] == old["round_id"], "한 번 못 연 것으로 진행분을 버렸다"
+        assert len(store.owner_done_hashes(e.conn, old["round_id"])) == 2
+
+
+def test_old_db_gets_the_snap_id_column():
+    with tempfile.TemporaryDirectory() as d:
+        import sqlite3
+        p = Path(d) / "old.db"
+        c = sqlite3.connect(str(p))
+        c.execute("CREATE TABLE owner_dist_state (round_id INTEGER PRIMARY KEY AUTOINCREMENT, seed INTEGER NOT NULL,"
+                  " started_at TEXT NOT NULL, ended_at TEXT, result TEXT, salt TEXT, req_count INTEGER NOT NULL DEFAULT 0)")
+        c.execute("INSERT INTO owner_dist_state (seed, started_at, salt) VALUES (1, '2026-10-01T00:00:00', 'x')")
+        c.commit()
+        c.close()
+        conn = store.open_db(p)
+        try:
+            assert store.owner_round_running(conn)["snap_id"] is None, "옛 줄은 snap_id 가 비어 있어야 한다(→ 새 바퀴로 다시 시작)"
+        finally:
+            conn.close()
+
+
+def test_transient_failure_does_not_finish_the_owner():
+    """네트워크·5xx·키 거절·깨진 응답은 그 사람 탓이 아니다 — 끝낸 걸로 치면 바퀴가 몇 요청 만에 thin 으로 끝나 14일을 기다린다."""
+    errs = {
+        "network": NexonAPIError("네트워크 오류: url=/id?nickname=%EA%B5%AC%EB%8B%A8%EC%A3%BC1 구단주1", code=nexon_api.NETWORK_CODE),
+        "key": NexonAPIError("키", code="OPENAPI00005", status=401),
+        "5xx": NexonAPIError("서버", code="OPENAPI00001", status=500),
+        "json": ValueError("깨진 JSON"),
+        "shape": AttributeError("dict 가 아니다"),
+    }
+    for call_no, where in ((1, "ouid"), (2, "목록")):
+        for name, err in errs.items():
+            with env() as e:
+                e.api.errors = {call_no: err}
+                r = e.run()
+                tag = (where, name)
+                assert r.result is None and r.owners_done == 0 and r.error, (tag, r)
+                assert "구단주" not in r.error and "nickname" not in r.error and "%EA" not in r.error, ("오류 글에 남의 닉네임이 실렸다", tag, r.error)
+                run = store.owner_round_running(e.conn)
+                assert run is not None and store.owner_done_hashes(e.conn, run["round_id"]) == set(), tag
+                assert run["req_count"] == len(e.api.calls) == r.requests, ("바퀴 계수가 요청과 다르다", tag, run["req_count"], len(e.api.calls))
+                assert store.budget_used(e.conn, NOW.date().isoformat(), store.BUDGET_OWNER_DIST) == len(e.api.calls), tag
+                e.api.errors, e.api.calls = {}, []
+                r2 = e.run()
+                assert r2.result == "done" and len(store.owner_dist_rows(e.conn, r2.round_id)) == N_OWNERS, (tag, r2)
+
+
+def test_one_failed_match_is_skipped_but_all_failed_is_transient():
+    with env() as e:   # 호출 순번 1=ouid · 2~4=목록 · 5~11=첫 구단주의 상세 7건
+        e.api.errors = {5: ValueError("깨진 JSON")}
+        r = e.run()
+        assert r.result == "done", r
+        games = sorted(x["n_games"] for x in store.owner_dist_rows(e.conn, r.round_id))
+        assert games == [6] + [7] * (N_OWNERS - 1), "한 경기 실패가 그 사람 전체나 이번 실행을 날렸다"
+        assert store.budget_used(e.conn, NOW.date().isoformat(), store.BUDGET_OWNER_DIST) == len(e.api.calls)
+    with env() as e:
+        e.api.errors = {n: NexonAPIError("끊김", code=nexon_api.NETWORK_CODE) for n in range(5, 5 + 7)}
+        r = e.run()
+        assert r.result is None and r.owners_done == 0 and r.error, "상세가 전부 실패했는데 경기 없는 사람으로 쳐서 끝냈다"
+        assert store.owner_done_hashes(e.conn, r.round_id) == set()
+
+
+def test_db_connections_are_reused_across_owners():
+    """구단주마다 풀을 새로 만들면 스레드마다 연결이 새로 열려 바퀴가 끝날 때까지 쌓인다(150명이면 수백 개)."""
+    opened = []
+    real = store.open_db
+
+    def spy(path, *, close_elsewhere=False):
+        if close_elsewhere:
+            opened.append(1)
+        return real(path, close_elsewhere=close_elsewhere)
+
+    store.open_db = spy
+    try:
+        with env(games=30) as e, _cfg(OWNER_DIST_WORKERS=3, OWNER_DIST_MATCHES=30):   # 기본값(4)이 아닌 값
+            assert e.run().result == "done"
+    finally:
+        store.open_db = real
+    assert 0 < len(opened) <= 3 + 1, f"연결 {len(opened)}개 — 작업 스레드 3 + 호출 스레드 1 을 넘으면 구단주마다 새로 연 것이다"
 
 
 def test_429_once_waits_then_retries_and_is_not_a_stop():

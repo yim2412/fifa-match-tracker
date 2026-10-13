@@ -241,7 +241,9 @@ CREATE TABLE IF NOT EXISTS owner_dist_state (
     ended_at   TEXT,
     result     TEXT,
     salt       TEXT,
-    req_count  INTEGER NOT NULL DEFAULT 0
+    req_count  INTEGER NOT NULL DEFAULT 0,
+    snap_id    INTEGER,
+    snap_taken TEXT
 );
 CREATE TABLE IF NOT EXISTS owner_dist_done (
     round_id INTEGER NOT NULL,
@@ -343,6 +345,13 @@ def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Conne
             conn.execute("ALTER TABLE team_colors ADD COLUMN team_value INTEGER")
         if "emblem" not in cols:   # 2.2.1 — 값은 "읽은 시각\t엠블럼 키"(load_team_colors 가 시각을 대조한다)
             conn.execute("ALTER TABLE team_colors ADD COLUMN emblem TEXT")
+        # snap_id(바퀴를 시작한 rank.db 스냅숏) 는 49단계 리뷰에서 생겼다 — 없으면 이어 받을 때 표본이 새 스냅숏의 다른 사람들로 바뀐다
+        # snap_taken(그 스냅숏의 taken_at)은 id 와 짝으로 대조한다 — snapshots.id 는 AUTOINCREMENT 가 아니라 rank.db 를 지웠다 다시
+        # 만들면 1부터 재사용되고, 그러면 같은 번호에 다른 사람들이 선 새 스냅숏이 이어 받기에 그대로 걸린다
+        have = {r["name"] for r in conn.execute("PRAGMA table_info(owner_dist_state)")}
+        for col, typ in (("snap_id", "INTEGER"), ("snap_taken", "TEXT")):
+            if col not in have:
+                conn.execute(f"ALTER TABLE owner_dist_state ADD COLUMN {col} {typ}")
         _ensure_elo_unique(conn)
         conn.commit()
         # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
@@ -1457,7 +1466,7 @@ OWNER_RESULTS = ("done", "thin", "dropped", "aborted", "off")
 
 def owner_round_running(conn: sqlite3.Connection) -> dict | None:
     """끝나지 않은 바퀴(이어 받을 수 있다) — 없으면 None."""
-    r = conn.execute("SELECT round_id, seed, started_at, salt, req_count FROM owner_dist_state"
+    r = conn.execute("SELECT round_id, seed, started_at, salt, req_count, snap_id, snap_taken FROM owner_dist_state"
                      " WHERE result IS NULL ORDER BY round_id DESC LIMIT 1").fetchone()
     return dict(r) if r else None
 
@@ -1473,10 +1482,11 @@ def owner_round_last_end(conn: sqlite3.Connection, results=None) -> dict | None:
     return dict(r) if r else None
 
 
-def owner_round_start(conn: sqlite3.Connection, seed: int, started_at: str, salt: str) -> int:
+def owner_round_start(conn: sqlite3.Connection, seed: int, started_at: str, salt: str,
+                      snap_id: int | None = None, snap_taken: str | None = None) -> int:
     with conn:
-        cur = conn.execute("INSERT INTO owner_dist_state (seed, started_at, salt) VALUES (?, ?, ?)",
-                           (seed, started_at, salt))
+        cur = conn.execute("INSERT INTO owner_dist_state (seed, started_at, salt, snap_id, snap_taken) VALUES (?, ?, ?, ?, ?)",
+                           (seed, started_at, salt, snap_id, snap_taken))
     return cur.lastrowid
 
 
