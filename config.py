@@ -175,8 +175,9 @@ RANK_COLLECT_VAR = "FIFA_RANK_COLLECT"
 RANK_COLLECT = os.getenv(RANK_COLLECT_VAR, "0").strip() == "1"
 # 수집을 켤 때마다 새 시각(set_rank_collect) — 사람별 표가 "끈 사이를 건너 이어진 것"으로 읽히지 않게(rankcollect.person_epoch)
 RANK_COLLECT_ON_AT_VAR = "FIFA_RANK_COLLECT_ON_AT"
-# 구단주 분포(49단계) — 값은 켠 날짜(빈 값 = 꺼짐). 켜기가 "서비스 단계 키다"라는 자가 신고다 — 개발 키 오신고 판정은 이 날 이후
-# 누적만 센다(키를 바꾸면 꺼지고, 다시 켜면 새로 센다). _OFF 는 앱이 스스로 끈 사유(devkey|fail|key — 사용자가 끄면 빈 값).
+# 구단주 분포(49단계) — 값은 켠 시각(초까지 · 빈 값 = 꺼짐). 켜기가 "서비스 단계 키다"라는 자가 신고다 — 개발 키 오신고·연속 실패
+# 판정은 이 시각 이후 시작한 바퀴만 센다(키를 바꾸면 꺼지고, 다시 켜면 새로 센다). 날짜로 재면 키를 바꿔 같은 날 다시 켤 때
+# 옛 키의 그날 요청이 새 키 누적에 섞여 개발 키가 서비스 키로 보인다(③a 리뷰). _OFF 는 앱이 스스로 끈 사유(devkey|fail|key — 사용자가 끄면 빈 값).
 # set_owner_dist 가 재할당한다 — 다른 모듈은 config.OWNER_DIST_ON 으로 읽는다.
 OWNER_DIST_VAR = "FIFA_OWNER_DIST"
 OWNER_DIST_OFF_VAR = "FIFA_OWNER_DIST_OFF"
@@ -465,13 +466,13 @@ def set_rank_collect(on: bool) -> None:
 
 
 def set_owner_dist(on: bool, reason: str = "") -> None:
-    """구단주 분포 토글 — 켜면 오늘 날짜(개발 키 오신고 판정의 시작점), 끄면 빈 값과 사유(devkey|fail|key · 사용자가 끄면 "")."""
+    """구단주 분포 토글 — 켜면 지금 시각(개발 키 오신고·연속 실패 판정의 시작점), 끄면 빈 값과 사유(devkey|fail|key · 사용자가 끄면 "")."""
     global OWNER_DIST_ON, OWNER_DIST_OFF
-    day = datetime.now().date().isoformat() if on else ""
+    at = datetime.now().isoformat(timespec="seconds") if on else ""
     why = "" if on else reason
-    _save_env(OWNER_DIST_VAR, day)
+    _save_env(OWNER_DIST_VAR, at)
     _save_env(OWNER_DIST_OFF_VAR, why)
-    OWNER_DIST_ON, OWNER_DIST_OFF = day, why
+    OWNER_DIST_ON, OWNER_DIST_OFF = at, why
 
 
 def _read_env_disk() -> dict | None:

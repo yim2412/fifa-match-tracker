@@ -609,23 +609,30 @@ def test_purge_keeps_done_distribution_unless_everything():
 
 def test_devkey_suspected():
     with env() as e:
-        day = NOW.date().isoformat()
-        assert not od.devkey_suspected(e.conn)
-        store.budget_mark_429(e.conn, day, store.BUDGET_OWNER_DIST)
-        assert od.devkey_suspected(e.conn), "누적 0 에서 429 면 개발 키 오신고"
-        for _ in range(config.OWNER_DIST_SELFCHECK_REQ):
-            store.budget_take(e.conn, day, store.BUDGET_OWNER_DIST, None)
-        assert not od.devkey_suspected(e.conn), "누적 5,000 이상이면 서비스 키로 본다"
+        on = NOW.isoformat(timespec="seconds")
+        hit = od.RoundResult(quota=True, requests=2)
+        assert not od.devkey_suspected(e.conn, od.RoundResult(requests=2), on), "429 없이 개발 키로 봤다"
+        assert od.devkey_suspected(e.conn, hit, on), "누적 0 에서 429 면 개발 키 오신고"
+        assert not od.devkey_suspected(e.conn, od.RoundResult(quota=True), on), \
+            "요청 0 인 quota(그날 앞선 다른 429 로 시작도 안 함)를 개발 키로 봤다"
+        rid = store.owner_round_start(e.conn, 1, on, "s")
+        store.owner_round_add_req(e.conn, rid, config.OWNER_DIST_SELFCHECK_REQ - 1)
+        assert od.devkey_suspected(e.conn, hit, on), "문턱 바로 아래인데 서비스 키로 봤다"
+        store.owner_round_add_req(e.conn, rid, 1)
+        assert not od.devkey_suspected(e.conn, hit, on), "누적 5,000 이상이면 서비스 키로 본다"
+        with _cfg(OWNER_DIST_SELFCHECK_REQ=config.OWNER_DIST_SELFCHECK_REQ + 1):
+            assert od.devkey_suspected(e.conn, hit, on), "문턱이 설정과 이어져 있지 않다"
 
 
-def test_devkey_counts_only_since_the_day_it_was_turned_on():
+def test_devkey_counts_only_rounds_started_since_it_was_turned_on():
     with env() as e:
-        old, on = "2026-10-01", NOW.date().isoformat()
-        for _ in range(config.OWNER_DIST_SELFCHECK_REQ):
-            store.budget_take(e.conn, old, store.BUDGET_OWNER_DIST, None)   # 옛 키(또는 앞서 켰던 때)의 누적
-        store.budget_mark_429(e.conn, on, store.BUDGET_OWNER_DIST)
-        assert not od.devkey_suspected(e.conn), "기준일 없이 재면 옛 누적이 서비스 키로 보이게 한다(대조군)"
-        assert od.devkey_suspected(e.conn, on), "켠 날 이후 누적이 0 인데 429 — 옛 키의 누적이 새 키를 가렸다"
+        day = NOW.date().isoformat()
+        old = store.owner_round_start(e.conn, 1, f"{day}T08:00:00", "s")   # 같은 날 옛 키(또는 앞서 켰던 때)의 바퀴
+        store.owner_round_add_req(e.conn, old, 3 * config.OWNER_DIST_SELFCHECK_REQ)
+        hit = od.RoundResult(quota=True, requests=1000)
+        assert not od.devkey_suspected(e.conn, hit, f"{day}T07:00:00"), "그 바퀴 전에 켰으면 센다(대조군)"
+        assert od.devkey_suspected(e.conn, hit, f"{day}T10:00:00"), \
+            "켠 뒤 바퀴 누적이 0 인데 429 — 같은 날 옛 바퀴의 누적이 새 키를 가렸다"
 
 
 def test_should_run_needs_running_or_due_and_no_429_today():
@@ -640,6 +647,23 @@ def test_should_run_needs_running_or_due_and_no_429_today():
         assert od.should_run(e.conn, NOW + timedelta(days=1))
         store.budget_mark_429(e.conn, later.date().isoformat(), store.BUDGET_OPENAPI)
         assert not od.should_run(e.conn, later), "그날 다른 로더의 429 표시가 있는데 띄웠다"
+
+
+def test_should_run_skips_when_daily_cap_has_no_room_for_one_owner():
+    """하루 상한에 닿은 날 진행 바퀴가 있다고 자정까지 10분마다 띄우지 않는다 — run_round 의 left_day 판정과 같은 문턱."""
+    with env() as e:
+        store.owner_round_start(e.conn, 1, NOW.isoformat(), "s")
+        day = NOW.date().isoformat()
+        with _cfg(OWNER_DIST_DAILY_REQ=1000, OWNER_DIST_PERSON_REQ=100):
+            with e.conn:
+                e.conn.execute("INSERT INTO api_budget (day, kind, attempts, hit_429) VALUES (?, ?, 900, 0)",
+                               (day, store.BUDGET_OWNER_DIST))
+            assert od.should_run(e.conn, NOW), "한 명분(100)이 딱 남았는데 안 띄웠다"
+            with e.conn:
+                e.conn.execute("UPDATE api_budget SET attempts = 901 WHERE day = ? AND kind = ?",
+                               (day, store.BUDGET_OWNER_DIST))
+            assert not od.should_run(e.conn, NOW), "한 명분이 안 남았는데 띄웠다"
+            assert od.should_run(e.conn, NOW + timedelta(days=1)), "다음 날에도 막았다"
 
 
 def _ended(conn, result, started):
@@ -669,10 +693,9 @@ def test_off_reason_after_fail_streak_since_on_day_skipping_off():
 
 def test_off_reason_devkey_only_on_quota():
     with env() as e:
-        day = NOW.date().isoformat()
-        store.budget_mark_429(e.conn, day, store.BUDGET_OWNER_DIST)
-        assert od.off_reason_after(e.conn, od.RoundResult(quota=True), day) == "devkey"
-        assert od.off_reason_after(e.conn, od.RoundResult(), day) == "", "429 로 멈추지 않은 호출에서 개발 키로 껐다"
+        on = NOW.isoformat(timespec="seconds")
+        assert od.off_reason_after(e.conn, od.RoundResult(quota=True, requests=2), on) == "devkey"
+        assert od.off_reason_after(e.conn, od.RoundResult(requests=2), on) == "", "429 로 멈추지 않은 호출에서 개발 키로 껐다"
 
 
 def test_purge_helper_skips_when_nothing_and_keeps_done_on_toggle_off():

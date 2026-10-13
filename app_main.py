@@ -1951,13 +1951,13 @@ class OwnerDistScheduler(QObject):
             return
         if self._quitting:
             return
-        on_day = config.OWNER_DIST_ON
+        on_at = config.OWNER_DIST_ON
         reason = ""
-        if on_day:
+        if on_at:
             try:
                 conn = store.open_db(config.DB_PATH)
                 try:
-                    reason = ownerdist.off_reason_after(conn, res, on_day)
+                    reason = ownerdist.off_reason_after(conn, res, on_at)
                 finally:
                     conn.close()
             except sqlite3.Error:
@@ -10911,7 +10911,7 @@ class AboutDialog(QDialog):
 
     def _on_owner_toggled(self, on: bool) -> None:
         try:
-            config.set_owner_dist(on)   # 켜기 = 서비스 단계 키라는 자가 신고(켠 날부터 개발 키 오신고를 센다)
+            config.set_owner_dist(on)   # 켜기 = 서비스 단계 키라는 자가 신고(켠 시각부터 개발 키 오신고를 센다)
         except OSError as e:
             self.lb_msg.setText(f"저장하지 못했습니다: {e}")
             self._refresh_owner_row()
@@ -11013,7 +11013,7 @@ class AboutDialog(QDialog):
         """→ "all" · "keep"(지금 계정 ELO 는 남김) · None(취소)."""
         box = QMessageBox(self)
         box.setWindowTitle("수집 기록 지우기")
-        box.setText("랭킹 수집 기록(다른 구단주 1만 명분과 집계)과 검색한 구단주의 ELO 기록을 지웁니다.\n"
+        box.setText("랭킹 수집 기록(다른 구단주 1만 명분과 집계)·구단주 분포 요약과 검색한 구단주의 ELO 기록을 지웁니다.\n"
                     "랭킹 수집은 꺼집니다.")
         b_all = box.addButton("전부 지우기", QMessageBox.ButtonRole.DestructiveRole)
         b_keep = box.addButton("지금 계정 ELO 는 남기기", QMessageBox.ButtonRole.AcceptRole) if keep_ouid else None

@@ -348,32 +348,35 @@ def new_round_due(conn, now: datetime) -> bool:
     return datetime.fromisoformat(last["ended_at"]) + timedelta(days=config.OWNER_DIST_ROUND_DAYS) <= now
 
 
-def devkey_suspected(conn, since_day: str | None = None) -> bool:
-    """개발 키를 서비스 키로 잘못 신고했나 — 누적 요청이 OWNER_DIST_SELFCHECK_REQ 미만인데 최종 429 가 났다.
-    개발 키(하루 1,000)는 첫 1,000건 안에 429 가 나고, 서비스 키는 한도가 500배라 점검 말고는 거의 안 난다.
-    since_day = 토글을 켠 날 — 그 뒤 누적만 센다(키를 바꿔 다시 켜면 새로)."""
-    total, hit = store.owner_req_total(conn, since_day)
-    return hit and total < config.OWNER_DIST_SELFCHECK_REQ
+def devkey_suspected(conn, res: RoundResult, since: str) -> bool:
+    """개발 키를 서비스 키로 잘못 신고했나 — 이번 호출이 요청을 보내다 최종 429 로 멈췄는데, 켠 시각(since) 이후 시작한
+    바퀴들의 요청 합이 OWNER_DIST_SELFCHECK_REQ 미만. 개발 키(하루 1,000)는 첫 1,000건 안에 429 가 나고, 서비스 키는 한도가
+    500배라 점검 말고는 거의 안 난다. 요청 0 인 quota(그날 앞서 다른 로더·내 검색의 429 표시로 시작도 안 함)는 판정하지 않는다."""
+    return (res.quota and res.requests > 0
+            and store.owner_req_since(conn, since) < config.OWNER_DIST_SELFCHECK_REQ)
 
 
 def should_run(conn, now: datetime) -> bool:
-    """예약 틱에서 로더를 띄울까 — 진행 바퀴가 있거나 새 바퀴 차례이고, 오늘 (openapi·랭커 픽·구단주 분포) 429 표시가 없을 때.
-    run_round 도 같은 것을 다시 보지만, 여기서 걸러 10분마다 스레드를 헛되이 띄우지 않는다."""
-    if store.budget_hit_429(conn, now.date().isoformat()):
+    """예약 틱에서 로더를 띄울까 — 진행 바퀴가 있거나 새 바퀴 차례이고, 오늘 (openapi·랭커 픽·구단주 분포) 429 표시가 없고,
+    오늘 하루 상한에 한 명분이 남았을 때. run_round 도 같은 것을 다시 보지만, 여기서 걸러 10분마다 스레드를 헛되이 띄우지 않는다."""
+    day = now.date().isoformat()
+    if store.budget_hit_429(conn, day):
         return False
+    if config.OWNER_DIST_DAILY_REQ - store.budget_used(conn, day, store.BUDGET_OWNER_DIST) < config.OWNER_DIST_PERSON_REQ:
+        return False   # run_round 의 left_day 와 같은 판정 — 상한에 닿은 날 자정까지 틱마다 rank.db 를 열지 않게
     return store.owner_round_running(conn) is not None or new_round_due(conn, now)
 
 
-def off_reason_after(conn, res: RoundResult, on_day: str) -> str:
-    """바퀴 호출 하나가 끝난 뒤 토글을 스스로 끌 사유 — "devkey" · "fail" · ""(그대로).
-    devkey: 켠 날 이후 누적이 적은데 최종 429(res.quota 일 때만 본다 — 429 가 아니면 판정 재료가 안 바뀐다).
-    fail: 켠 날 이후 시작한 바퀴가 끝에서부터 dropped|aborted 로 OWNER_DIST_FAIL_MAX 번 이어졌다(off 는 실패도 성공도 아니라 건너뛴다)."""
-    if res.quota and devkey_suspected(conn, on_day):
+def off_reason_after(conn, res: RoundResult, on_at: str) -> str:
+    """바퀴 호출 하나가 끝난 뒤 토글을 스스로 끌 사유 — "devkey" · "fail" · ""(그대로). on_at = 토글을 켠 시각.
+    devkey: devkey_suspected(이번 호출의 최종 429 일 때만 — 429 가 아니면 판정 재료가 안 바뀐다).
+    fail: 켠 시각 이후 시작한 바퀴가 끝에서부터 dropped|aborted 로 OWNER_DIST_FAIL_MAX 번 이어졌다(off 는 실패도 성공도 아니라 건너뛴다)."""
+    if devkey_suspected(conn, res, on_at):
         return "devkey"
     if res.result not in ("dropped", "aborted"):
         return ""
     streak = 0
-    for r in reversed(store.owner_round_results(conn, on_day)):
+    for r in reversed(store.owner_round_results(conn, on_at)):
         if r == "off":
             continue
         if r not in ("dropped", "aborted"):

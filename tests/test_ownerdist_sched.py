@@ -293,7 +293,7 @@ def test_devkey_429_turns_off_and_drops_the_running_round():
         s.tick()
         run = e.seed_running()
         store.budget_mark_429(e.conn, NOW.date().isoformat(), store.BUDGET_OWNER_DIST)
-        FakeLoader.made[0].finish(od.RoundResult(round_id=run, quota=True))
+        FakeLoader.made[0].finish(od.RoundResult(round_id=run, quota=True, requests=2))
         assert offs == ["devkey"] and config.OWNER_DIST_OFF == "devkey", offs
         assert store.owner_round_running(e.conn) is None, "개발 키로 끈 뒤 진행 바퀴가 남았다"
     with Env() as e:
@@ -301,11 +301,43 @@ def test_devkey_429_turns_off_and_drops_the_running_round():
         offs = []
         s.switched_off.connect(offs.append)
         s.tick()
+        run = e.seed_running()   # 켠 뒤 시작한 바퀴가 이미 5,000건을 보냈다 — 서비스 키
+        _spend(e.conn, NOW.date().isoformat(), run, config.OWNER_DIST_SELFCHECK_REQ)
         store.budget_mark_429(e.conn, NOW.date().isoformat(), store.BUDGET_OWNER_DIST)
-        for _ in range(config.OWNER_DIST_SELFCHECK_REQ):
-            store.budget_take(e.conn, ON_DAY, store.BUDGET_OWNER_DIST, None)
-        FakeLoader.made[0].finish(od.RoundResult(quota=True))
-        assert offs == [] and config.OWNER_DIST_ON == ON_DAY, "켠 날 이후 누적이 많은 서비스 키를 껐다"
+        FakeLoader.made[0].finish(od.RoundResult(round_id=run, quota=True, requests=2))
+        assert offs == [] and config.OWNER_DIST_ON == ON_DAY, "켠 뒤 누적이 많은 서비스 키를 껐다"
+
+
+def _spend(conn, day: str, rid: int, n: int) -> None:
+    """바퀴 rid 가 그날 n 건을 보냈다 — 바퀴 계수와 하루 계수를 같이."""
+    store.owner_round_add_req(conn, rid, n)
+    with conn:
+        conn.execute("INSERT INTO api_budget (day, kind, attempts, hit_429) VALUES (?, ?, ?, 0)"
+                     " ON CONFLICT(day, kind) DO UPDATE SET attempts = attempts + excluded.attempts",
+                     (day, store.BUDGET_OWNER_DIST, n))
+
+
+def test_devkey_after_same_day_key_change():
+    """키를 바꿔 같은 날 다시 켰는데 새 키가 개발 키 — 옛 키의 그날 요청이 새 키 누적에 섞이면 서비스 키로 보여 안 꺼진다
+    (그러면 날마다 새 키의 하루 1,000건을 먼저 다 써 사용자 검색이 429). 켠 시각 이후 시작한 바퀴만 센다."""
+    with Env() as e:
+        s = _sched()
+        offs = []
+        s.switched_off.connect(offs.append)
+        today = datetime.now().date().isoformat()
+        old = store.owner_round_start(e.conn, 1, f"{today}T00:00:00", "s")   # 옛 키 A(서비스 단계)의 오늘 바퀴
+        _spend(e.conn, today, old, 3 * config.OWNER_DIST_SELFCHECK_REQ)
+        config.save_api_key("new")
+        s.sync()
+        assert config.OWNER_DIST_OFF == "key" and store.owner_round_running(e.conn) is None
+        config.set_owner_dist(True)   # 같은 날 다시 켬 — B 는 사실 개발 키
+        s.tick()
+        assert len(FakeLoader.made) == 1, "다시 켰는데 바퀴를 안 띄웠다"
+        new = store.owner_round_start(e.conn, 2, datetime.now().isoformat(timespec="seconds"), "s")
+        _spend(e.conn, today, new, 1000)
+        store.budget_mark_429(e.conn, today, store.BUDGET_OWNER_DIST)
+        FakeLoader.made[0].finish(od.RoundResult(round_id=new, quota=True, requests=1000))
+        assert offs == ["devkey"], f"옛 키의 같은 날 누적이 개발 키를 가렸다: {offs}"
 
 
 def test_done_emits_dist_changed_only_for_done():
@@ -333,12 +365,15 @@ def test_key_change_turns_the_toggle_off():
         assert config.OWNER_DIST_OFF == "", "꺼져 있는데 키 사유를 덮어썼다"
 
 
-def test_set_owner_dist_writes_today_and_clears_reason():
+def test_set_owner_dist_writes_the_moment_and_clears_reason():
     with Env() as e:
         e.set(on="", off="fail")
+        before = datetime.now().isoformat(timespec="seconds")
         config.set_owner_dist(True)
-        today = datetime.now().date().isoformat()
-        assert config.OWNER_DIST_ON == today and e.env_line(config.OWNER_DIST_VAR) == today
+        after = datetime.now().isoformat(timespec="seconds")
+        at = config.OWNER_DIST_ON
+        assert before <= at <= after and "T" in at, f"켠 시각(초까지)이 아니다: {at!r} — 날짜만이면 같은 날 옛 바퀴가 섞인다"
+        assert e.env_line(config.OWNER_DIST_VAR) == at
         assert config.OWNER_DIST_OFF == "" and e.env_line(config.OWNER_DIST_OFF_VAR) == ""
 
 
@@ -412,7 +447,7 @@ def test_about_dialog_toggle_and_block_reasons():
         assert "아직" in dlg.lb_owner.text(), dlg.lb_owner.text()
         dlg.chk_owner.setChecked(True)
         today = datetime.now().date().isoformat()
-        assert e.env_line(config.OWNER_DIST_VAR) == today and p.synced == [True], (p.synced,)
+        assert e.env_line(config.OWNER_DIST_VAR).startswith(today) and p.synced == [True], (p.synced,)
         dlg.chk_owner.setChecked(False)
         assert e.env_line(config.OWNER_DIST_VAR) == "" and p.synced == [True, False]
         dlg.chk_web.setChecked(False)   # 웹 데이터를 끄면 수집도 꺼진다 — 토글이 잠긴다

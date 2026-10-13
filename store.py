@@ -1556,16 +1556,16 @@ def owner_done_add(conn: sqlite3.Connection, round_id: int, h: str) -> None:
         conn.execute("INSERT OR IGNORE INTO owner_dist_done (round_id, h) VALUES (?, ?)", (round_id, h))
 
 
-def owner_req_total(conn: sqlite3.Connection, since_day: str | None = None) -> tuple[int, bool]:
-    """구단주 분포가 보낸 요청 합과, 최종 429 표시가 한 번이라도 있었나 — 개발 키 오신고 판정 재료.
-    since_day(토글을 켠 날)를 주면 그날부터만 — 키를 바꿔 다시 켜면 옛 키의 누적이 새 키를 서비스 키로 보이게 하지 않게."""
-    r = conn.execute("SELECT COALESCE(SUM(attempts), 0), COALESCE(MAX(hit_429), 0) FROM api_budget"
-                     " WHERE kind = ? AND day >= ?", (BUDGET_OWNER_DIST, since_day or "")).fetchone()
-    return int(r[0]), bool(r[1])
+def owner_req_since(conn: sqlite3.Connection, since: str) -> int:
+    """since(토글을 켠 시각) 이후 시작한 바퀴들이 보낸 요청 합 — 개발 키 오신고 판정 재료.
+    하루 계수(api_budget)는 날짜 단위라 키를 바꿔 같은 날 다시 켜면 옛 키의 요청이 섞인다 — 바퀴 계수로 센다."""
+    r = conn.execute("SELECT COALESCE(SUM(req_count), 0) FROM owner_dist_state WHERE started_at >= ?",
+                     (since,)).fetchone()
+    return int(r[0])
 
 
 def owner_round_results(conn: sqlite3.Connection, since: str = "") -> list[str]:
-    """since(시각 문자열) 이후 시작해 끝난 바퀴의 결과 — 오래된 것부터. 연속 실패 판정 재료."""
+    """since(토글을 켠 시각) 이후 시작해 끝난 바퀴의 결과 — 오래된 것부터. 연속 실패 판정 재료."""
     return [r[0] for r in conn.execute(
         "SELECT result FROM owner_dist_state WHERE result IS NOT NULL AND started_at >= ? ORDER BY round_id", (since,))]
 
