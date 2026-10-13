@@ -79,11 +79,14 @@ class Dist:
                 continue
             vs.append(v)
             ws.append(o["w"])
-        self.params = [wstats([v[i] for v in vs], ws) for i in idx]
-        self.idx = idx
-        self.scores = sorted(zip((self.index(v) for v in vs), ws))
+        # σ = 0 인 지표(그 줄에서 늘 같은 값 — 정보가 없다)는 지수에서 뺀다. 빠진 지표는 dropped 로 찍는다(fb796f1 뒤 버그 수정)
+        params = [(i, wstats([v[i] for v in vs], ws)) for i in idx]
+        self.dropped = [KEYS[i] for i, (_, sd) in params if sd <= 0]
+        self.idx = [i for i, (_, sd) in params if sd > 0]
+        self.params = [p for _, p in params if p[1] > 0]
+        self.ok = bool(self.idx)
+        self.scores = sorted(zip((self.index(v) for v in vs), ws)) if self.ok else []
         self.ws = sum(ws)
-        self.ok = all(sd > 0 for _, sd in self.params)
 
     def index(self, v):
         return sum((v[i] - mu) / sd for i, (mu, sd) in zip(self.idx, self.params)) / len(self.idx)
@@ -146,6 +149,9 @@ def measure_c(owners, accounts):
     passed = 0
     for L, side in CELLS:
         d = Dist(owners, L, side)
+        if not d.ok:
+            print(f"[FAIL] {L}·{side}: 쓸 지표 없음(σ=0: {d.dropped})")
+            continue
         # ⓐ 반분
         def half(o, h):
             gs = o["games"]
@@ -154,13 +160,13 @@ def measure_c(owners, accounts):
         d0 = Dist(owners, L, side, lambda o: half(o, 0))
         d1 = Dist(owners, L, side, lambda o: half(o, 1))
         a0, a1 = [], []
-        for o in owners:
+        for o in (owners if d0.ok and d1.ok else []):
             v0, v1 = mean_vec(diffs(half(o, 0), L)), mean_vec(diffs(half(o, 1), L))
             if v0 and v1:
                 a0.append(d0.index(v0))
                 a1.append(d1.index(v1))
-        r = spearman(a0, a1)
-        sb = 2 * r / (1 + r)
+        r = spearman(a0, a1) if len(a0) >= 3 else 0.0
+        sb = 2 * r / (1 + r) if r > -1 else 0.0
         # 창
         per_acc, held, tot = {}, 0, 0
         for acc in accounts:
@@ -187,7 +193,7 @@ def measure_c(owners, accounts):
         ok = sb >= SB_MIN and npairs > 0 and stab >= STABLE_MIN and held > 0
         passed += ok
         print(f"[{'OK' if ok else 'FAIL'}] {L}·{side}: ⓐ r={r:.3f} SB={sb:.3f}(≥{SB_MIN}) · "
-              f"ⓑ {good}/{npairs}={stab:.0%}(≥{STABLE_MIN:.0%}) · ⓒ 판정 {held}/{tot} 창 · σ>0 {d.ok}")
+              f"ⓑ {good}/{npairs}={stab:.0%}(≥{STABLE_MIN:.0%}) · ⓒ 판정 {held}/{tot} 창 · 뺀 지표 {d.dropped or '없음'}")
         for name, (stages, g_, n_) in per_acc.items():
             print(f"      {name}: 창 단계 {['보류' if s is None else s + 1 for s in stages]} · 쌍 {g_}/{n_}")
     verdict = passed >= 2
