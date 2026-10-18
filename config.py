@@ -261,7 +261,9 @@ OWNER_DIST_V2_NOTICE_VERSION = 99
 # C4 칸 — 측정 C(2026-10-13 · ROADMAP 50 "측정 C·D 결과")를 통과한 (자리 줄, 쪽)만. 지표는 선수 status 키
 C4_CELLS = (("MF", "atk"), ("DF", "atk"), ("DF", "def"))
 C4_METRICS = {"atk": ("goal", "effectiveShoot", "assist", "dribbleSuccess"), "def": ("tackle", "block", "intercept")}
-# C4 판정 — 측정 C 판정기(tools/step0_owner_dist/analyze50.py)와 같은 값. 바꾸면 측정 C 를 다시 잰다
+# C4 판정 — 측정 C 판정기(tools/step0_owner_dist/analyze50.py)와 같은 값. 바꾸면 측정 C 를 다시 잰다.
+# 식은 두 군데 다르다(앱 쪽이 맞는 식 · 강제 v2 바퀴는 129명 전원이 세 칸을 가져 값 차이 0): 같은 값은 반만 센다(판정기는 다 셈) ·
+# 층 가중은 칸마다 그 칸 재료가 있는 사람 수로 나눈다(판정기는 구단주 전체 수)
 C4_CUTS = (20, 40, 60, 80)          # 5단계 경계 = 구단주 지수의 층 가중 백분위(95 꼬리는 150명 중 약 7명이 정해 흔들린다 — 계획 ⓓ)
 C4_STAGES = ("미달", "1인분", "잘함", "에이스", "압도")
 C4_MIN_LINE_GAMES = 300             # 내 그 줄 출전이 이보다 적으면 판정 보류(계획 ⓔ)

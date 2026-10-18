@@ -7,7 +7,7 @@
 | `side_totals(details, ouid)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 |
 | `paired_diff(rows, metric)` | 〃 | 지표 하나의 나 − 상대 차와 95% 구간(경기 단위 짝) · 지표 이름은 `METRICS` |
 | `pos_diff(detail, ouid)` · `PosTotals` | (C4 자리별 수준 — 50단계 · 구단주 분포 바퀴가 `pos_json` 으로) | 칸(`config.C4_CELLS`)마다 같은 줄 선수 한 명 평균의 나 − 상대 |
-| `pos_level(pos_dist, details_all, ouid)` | [성적 진단 › 자리별 수준](C4) | 내 최신 1000판 칸별 지수 → 분포 백분위 · 5단계 또는 보류 — 1000판 짝짓기라 작업 스레드(`app_main.PosLevelWorker`) |
+| `pos_level(pos_dist, details_all, ouid)` | [성적 진단 › 자리별 수준](C4) | 내 최신 1000판 칸별 지수 → 분포 백분위 · 5단계 또는 보류 — 실측 0.06~0.08초라 화면 스레드 + 캐시(`app_main._render_poslevel` · `_dist_basis` 와 같은 꼴) |
 | `strength_chips(totals)` | [흐름 분석] 맨 위 칩 줄(N19) | 결정력·유효슛 비율·태클 성공 중 구간이 0 을 안 품고 크기 문턱을 넘은 것 |
 | `half_share_diff(details, ouid)` | 흐름 분석 문장 "전반·후반 어디서 새나"(N19) | 내 실점의 전반 비중 − 같은 경기 상대 실점(= 내 득점)의 전반 비중 |
 | `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |

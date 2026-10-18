@@ -1778,6 +1778,18 @@ def test_poslevel_empty_states_stage_names_and_cache():
             _win._poslevel_in_pop = lambda: None
             _win._render_poslevel()
             assert _poslevel_rows()[0][1] == "—" and "순위 기록이 없어" in _win.lb_poslevel_summary.text()
+            # 판정 난 자리가 없을 때 — 사유는 칸마다 그대로(분포 부족을 "범위·출전"으로 뭉뚱그리지 않는다)
+            keep_lv = lv
+            lv = habits.PosLevel(1000, (habits.PosCell("MF", "atk", 995, why="dist"),) + keep_lv.cells[1:])
+            _win._poslevel_in_pop = lambda: True
+            _win._poslevel_key = None
+            _win._render_poslevel()
+            s = _win.lb_poslevel_summary.text()
+            assert "미드필더 · 공격 분포 부족" in s and "수비수 · 수비 판정 보류 (범위" in s, s
+            lv = keep_lv
+            _win._poslevel_key = None
+            _win._render_poslevel()   # 원래 판정으로 되돌린다(아래 캐시 단언의 전제)
+            calls[:] = [7]
             assert calls == [7], f"같은 바퀴·같은 경기인데 내 1000판을 다시 셌다: {calls}"
             pd = _PosFake(round_id=8)
             _win._render_poslevel()
@@ -1792,15 +1804,33 @@ def test_poslevel_empty_states_stage_names_and_cache():
 
 def test_poslevel_in_pop_reads_the_latest_rank():
     # 라벨 조건(계획 ⓗ) — 가장 최근 ELO 기록의 순위가 1~3000위 안인가. 경계 3000 은 안 · 3001 은 밖 · 순위 없는 줄은 건너뛴다
-    keep = store.elo_history
+    # EloLoader 가 읽어 둔 self._elo 를 본다(DB 직접 읽기는 이번 검색 순위 저장 전 값으로 굳었다 — ③ 리뷰 [중])
+    keep = _win._elo.pop(_OUID, None)
     try:
+        assert _win._poslevel_in_pop() is None, "아직 안 읽었는데 판정했다"
         for rows, want in (([], None), ([{"rank": 5}, {"rank": None}], True),
                            ([{"rank": 10}, {"rank": config.OWNER_DIST_STRATA[-1]}], True),
                            ([{"rank": 10}, {"rank": config.OWNER_DIST_STRATA[-1] + 1}], False)):
-            store.elo_history = lambda conn, ouid, rows=rows: rows
+            _win._elo[_OUID] = app_main.EloSeries(1, rows, {})
             assert _win._poslevel_in_pop() is want, (rows, want)
     finally:
-        store.elo_history = keep
+        _win._elo.pop(_OUID, None)
+        if keep is not None:
+            _win._elo[_OUID] = keep
+
+
+def test_poslevel_redraws_when_elo_arrives():
+    # 이번 검색의 순위는 _save_elo 가 늦게 적는다 → EloLoader 가 끝나면(elo_ready) 라벨 조건을 다시 봐야 한다
+    keep = _win._elo.get(_OUID)
+    drawn = []
+    _win._render_poslevel = lambda: drawn.append("poslevel")
+    try:
+        _win._on_elo_ready(_OUID, _elo_data([{"taken_at": "2026-10-18T10:00:00", "elo": 3000.0, "rank": 100}]))
+        assert drawn == ["poslevel"], f"순위가 들어왔는데 자리별 수준을 다시 안 그렸다: {drawn}"
+    finally:
+        del _win._render_poslevel
+        if keep is not None:
+            _win._elo[_OUID] = keep
 
 
 def test_owner_dist_changed_signal_redraws_every_dist_view():

@@ -4131,15 +4131,11 @@ class MainWindow(QMainWindow):
 
     def _poslevel_in_pop(self) -> bool | None:
         """내 계정이 분포 모집단(1~OWNER_DIST_STRATA[-1]위) 안인가 — 가장 최근 ELO 기록의 순위로. 기록이 없으면 None(모른다).
-        5단계 이름은 안일 때만 낸다(계획 ⓗ — 밖이면 백분위 숫자만)."""
-        try:
-            conn = store.open_db(config.DB_PATH)
-            try:
-                rows = store.elo_history(conn, self._ouid)
-            finally:
-                conn.close()
-        except sqlite3.Error:
-            return None
+        5단계 이름은 안일 때만 낸다(계획 ⓗ — 밖이면 백분위 숫자만).
+        DB 를 직접 읽지 않고 EloLoader 가 읽어 둔 self._elo 를 본다 — 이번 검색의 순위는 _save_elo 가 늦게 적고,
+        그 뒤 _on_elo_ready 가 poslevel 을 다시 그린다(직접 읽으면 저장 전 값으로 굳는다 · ③ 리뷰 [중])."""
+        data = self._elo.get(self._ouid)
+        rows = data.rows if data is not None else []
         rank = next((r["rank"] for r in reversed(rows) if r.get("rank")), None)
         return None if rank is None else rank <= config.OWNER_DIST_STRATA[-1]
 
@@ -4202,7 +4198,9 @@ class MainWindow(QMainWindow):
                          (f"{c.n:,}판", c.n)])
         self._fill(self.tbl_poslevel, rows, enable_sort=False)
         if in_pop:
-            say(" · ".join(judged) if judged else "세 자리 모두 판정 보류 — 범위가 단계 경계에 걸치거나 출전이 모자랍니다.")
+            say(" · ".join(judged) if judged else
+                "판정이 난 자리가 없습니다 — " + " · ".join(f"{self.POSLEVEL_NAMES.get((c.line, c.side), c.line)} {r[1]}"
+                                                        for c, r in zip(lv.cells, rows)))
         else:
             say(f"상위 {top:,}위 구단주들과 견준 값입니다 — "
                 + ("내 순위 기록이 없어" if in_pop is None else f"{top:,}위 밖이라")
@@ -4216,7 +4214,7 @@ class MainWindow(QMainWindow):
             + " · ".join(f"{'공격' if s == 'atk' else '수비'} = " + "·".join(self.POSLEVEL_METRIC_NAMES.get(k, k) for k in ks)
                          for s, ks in config.C4_METRICS.items())
             + f" · 단계 경계 백분위 {cuts}({names}) · 90% 범위가 경계에 걸치면 판정 보류"
-            f" · 같은 사람을 다시 재도 단계가 유지되던 자리만 보여 줍니다")
+            f" · 같은 사람을 다시 재도 단계가 한 칸 안에서 유지되던 자리만 보여 줍니다")
 
     # ── 성적 진단 [운 범위] · [경기 습관] (2.7.1 N16·A3·N20) ───────────────────────
     def _launch_streak(self) -> None:
@@ -10006,6 +10004,7 @@ class MainWindow(QMainWindow):
             self._render_elo()
             self._invalidate("elodist")   # 점수 분포의 검색 계정 선
             self._invalidate("wrelo")     # 승률→점수의 내 ELO(마지막 스냅숏에 없을 때)
+            self._invalidate("poslevel")  # 자리별 수준의 라벨 조건(ⓗ — 가장 최근 순위)
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
