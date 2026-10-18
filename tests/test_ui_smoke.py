@@ -1919,7 +1919,9 @@ def test_sc_records_list_and_nexon_line():
 def test_sc_day_peak_on_division_chart_and_best_date_from_matches():
     """2026-10-19 사용자 — 슈챔에 올랐다 그날 내려온 날도 등급 추이에 슈챔 점이 보이고, 대시보드 '최고티어 최근 달성일' 은
     넥슨 값보다 저장된 경기의 진입이 늦으면 그 날짜."""
-    keep_max = dict(_win._max_division)
+    keep_max, keep_names = dict(_win._max_division), dict(_win._division_names)
+    # 등급 이름 메타 — CI 에는 넥슨 키·캐시가 없어 비어 있다(이름을 모르면 최고티어 줄 자체가 None · 이 PC 에선 캐시로 통과했다)
+    _win._division_names.update({800: "슈퍼 챔피언스", 900: "챔피언스"})
     try:
         # 0002(01-02 12:00) 800 → 0003(01-02 13:00) 900 : 그날 마지막은 챔스 — 막지 않았으면 점이 챔스 줄에만 있다
         det = _sc_details({"0002": 800})
@@ -1939,6 +1941,8 @@ def test_sc_day_peak_on_division_chart_and_best_date_from_matches():
         assert "최근 달성일 2025-12-01 " in (_win._max_division_text() or ""), _win._max_division_text()
     finally:
         _win._max_division = keep_max
+        _win._division_names.clear()
+        _win._division_names.update(keep_names)
         _restore_account()
 
 
