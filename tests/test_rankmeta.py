@@ -576,6 +576,20 @@ def test_opp_rank_table_counts_by_hand():
     assert t.mixed is False and all(b.mixed is False for b in t.by_rank + t.by_gap), "챔스 아래끼리면 무승부 분모 한 집단"
 
 
+def _a6(fn):
+    """A6 섞임 규칙 자체를 잰다 — 앱은 2026-10-19 부터 승÷전체(config.WIN_RATE_DRAWS_IN)라 스위치를 끈 채로."""
+    def run():
+        keep = config.WIN_RATE_DRAWS_IN
+        config.WIN_RATE_DRAWS_IN = False
+        try:
+            fn()
+        finally:
+            config.WIN_RATE_DRAWS_IN = keep
+    run.__name__ = fn.__name__
+    return run
+
+
+@_a6
 def test_opp_rank_table_mixed_is_one_value_for_the_whole_table():
     # 한 판이라도 양쪽 챔스 이상(무승부 불가)이면 섞인 묶음 — 두 표가 같은 식을 쓴다
     rows = {"a": (200, 6), "b": (1000, 3)}

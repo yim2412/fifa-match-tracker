@@ -651,6 +651,29 @@ def test_habit_effect_in_one_cell_is_flagged():
     assert [b.flag for b in t.bins] == [1] + [0] * 7, [b.flag for b in t.bins]
 
 
+def _a6(fn):
+    """A6 섞임 규칙 자체를 잰다 — 앱은 2026-10-19 부터 승÷전체(config.WIN_RATE_DRAWS_IN)라 스위치를 끈 채로."""
+    def run():
+        keep = config.WIN_RATE_DRAWS_IN
+        config.WIN_RATE_DRAWS_IN = False
+        try:
+            fn()
+        finally:
+            config.WIN_RATE_DRAWS_IN = keep
+    run.__name__ = fn.__name__
+    return run
+
+
+def test_habit_classes_with_draws_in_are_win_vs_rest():
+    """승÷전체(기본)에선 챔스 층 한 판이 섞여도 한 집단 — 칸 0 의 무 20 은 '안 이김' 으로 세어 차이가 없다."""
+    spec = {h: (20, 0, 20) for h in range(0, 24, 3)}
+    spec[0] = (20, 20, 0)
+    ms = _hour_games(spec) + [_ms(999, "승", False, when=datetime(2026, 1, 1, 21) + timedelta(days=999))]
+    t = _table(ms)
+    assert not t.mixed and not t.significant, t
+
+
+@_a6
 def test_habit_composition_only_difference_is_corrected_by_layers():
     # 층(무승부 가능 참·거짓)마다 승률이 다르고(30% / 70%) 칸마다 층 구성이 달라 칸 승률이 갈리지만 층 안 효과는 없다
     # 칸 0~3 에 여덟 칸 중 앞 넷만 쓴다 — 나머지 칸은 비어 합쳐진다
@@ -670,6 +693,7 @@ def test_habit_composition_only_difference_is_corrected_by_layers():
     assert pooled.p < 0.05 <= t.p
 
 
+@_a6
 def test_habit_result_classes_follow_the_visible_rate():
     # 한 집단(전부 무승부 가능): 승 대 (무+패). 칸 0: 승20 무20 패0 · 나머지 승20 패20 → 칸마다 승 20/40 이라 차이 없음
     spec = {h: (20, 0, 20) for h in range(0, 24, 3)}

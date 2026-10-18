@@ -264,6 +264,13 @@ PITCH_X = {0: 0.50, 1: 0.50, 2: 0.87, 3: 0.80, 4: 0.62, 5: 0.50, 6: 0.38, 7: 0.2
            17: 0.65, 18: 0.50, 19: 0.35, 20: 0.65, 21: 0.50, 22: 0.35,
            23: 0.85, 24: 0.60, 25: 0.50, 26: 0.40, 27: 0.15}
 _PITCH_ROW_OF = {pos: i for i, (_, rng) in enumerate(PITCH_ROWS) for pos in rng}
+# 포메이션 아이콘의 세로 자리(0 = GK · 5 = 최전방) — 줄마다 고르게 펴던 때는 4-1-2-3(공격 줄 없음)이 최전방 3명처럼,
+# 풀백·윙어가 가운데로 모여 보였다(2026-10-19 사용자 "하나도 안 맞아"). 가로는 PITCH_X 를 같이 쓴다
+PITCH_Y = {0: 0.0, 1: 0.7, 2: 1.6, 3: 1.15, 4: 1.0, 5: 1.0, 6: 1.0, 7: 1.15, 8: 1.6,
+           9: 2.0, 10: 2.0, 11: 2.0, 12: 2.9, 13: 2.8, 14: 2.8, 15: 2.8, 16: 2.9,
+           17: 3.8, 18: 3.8, 19: 3.8, 20: 4.5, 21: 4.5, 22: 4.5,
+           23: 4.3, 24: 5.0, 25: 5.0, 26: 5.0, 27: 4.3}
+PITCH_Y_MAX = 5.0
 
 
 def pitch_rows(codes: list) -> list[list[int]]:
@@ -624,6 +631,7 @@ class FormationStat(RateMixin):
     draw: int = 0
     lose: int = 0
     mixed: bool | None = None
+    positions: tuple = ()   # 이 전술에서 가장 많이 선 자리 코드 묶음(정렬) — 아이콘이 실제 자리에 점을 찍는다
 
 
 def formation_stats(details: list[dict], ouid: str,
@@ -635,6 +643,7 @@ def formation_stats(details: list[dict], ouid: str,
     상대가 탈주해 선수 기록이 없으면 0-0-0-0-0 으로 잡힌다.
     """
     acc: dict[str, FormationStat] = {}
+    shapes: dict[str, Counter] = defaultdict(Counter)
     flags = []
     for d in details:
         me, opp = _me_opp(d, ouid)
@@ -642,9 +651,12 @@ def formation_stats(details: list[dict], ouid: str,
             continue
         flags.append(draw_possible_of(d, ouid))
         side = opp if of_opponent else me
-        f = formation_of(side.get("player") or [])
+        players = side.get("player") or []
+        f = formation_of(players)
         s = acc.setdefault(f, FormationStat(formation=f))
         s.games += 1
+        shapes[f][tuple(sorted(p["spPosition"] for p in players
+                               if isinstance(p.get("spPosition"), int) and p["spPosition"] in PITCH_X))] += 1
         res = _result_of(me)
         if "승" in res:
             s.win += 1
@@ -652,6 +664,8 @@ def formation_stats(details: list[dict], ouid: str,
             s.draw += 1
         elif "패" in res:
             s.lose += 1
+    for f, s in acc.items():
+        s.positions = max(shapes[f].items(), key=lambda kv: (kv[1], kv[0]))[0] if shapes[f] else ()
     _set_mixed(acc.values(), flags, mixed)
     return sorted(acc.values(), key=lambda s: -s.games)
 

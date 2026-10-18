@@ -4,11 +4,15 @@
 실측 0판). 그래서 승률을 내는 묶음(표 하나·그래프 하나·견주는 두 값은 합친 범위)에 무승부가 나는 경기와 안 나는 경기가
 **섞이면** 승÷(승+패), 한쪽뿐이면 승÷전체. 식은 `win_pct` 하나 · 분모 `rated` · 표본 판정 `is_weak` · 섞임 `is_mixed`.
 집계 줄의 `mixed` 는 기본 None 이고 None 이면 승률이 **오류**다 — 채우는 걸 잊은 길이 옛 식으로 조용히 남지 않게.
+2026-10-19 사용자: 승률은 전부 무승부를 넣어(승÷전체) — `config.WIN_RATE_DRAWS_IN` 이 켜져 있으면 `is_mixed` 가 늘 거짓이다.
+위 섞임 규칙은 스위치를 끄면 그대로 돌아온다(테스트가 둘 다 잰다).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+
+import config
 
 # division 메타(오픈API get_meta('division'))는 숫자가 작을수록 높은 등급이다.
 #   800 슈퍼챔피언스 · 900 챔피언스 · 1000 슈퍼챌린지 · 1100~1300 챌린지1~3 · ...
@@ -40,7 +44,10 @@ def draw_possible_of(detail: dict, ouid: str) -> bool | None:
 
 def is_mixed(flags) -> bool:
     """draw_possible 값들이 참·거짓 둘 다 있나. None 은 판정에서 뺀다 — division 없는 한 판이
-    챔스 아래만 하는 계정의 식을 통째로 바꾸지 않게(검토 1회차 [상]). 판정할 값이 없으면 한 집단."""
+    챔스 아래만 하는 계정의 식을 통째로 바꾸지 않게(검토 1회차 [상]). 판정할 값이 없으면 한 집단.
+    config.WIN_RATE_DRAWS_IN 이 켜져 있으면 늘 한 집단(승÷전체) — 앱의 승률 식은 전부 여기를 거친다."""
+    if config.WIN_RATE_DRAWS_IN:
+        return False
     seen = {f for f in flags if f is not None}
     return len(seen) > 1
 

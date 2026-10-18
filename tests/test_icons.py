@@ -830,6 +830,32 @@ def test_formation_pixmap_draws_dots():
     assert imgs["4-4-2"].pixelColor(1, px // 2).rgb() == pitch, "판이 pitch 색으로 안 칠해졌다"
 
 
+def test_formation_pixmap_places_dots_at_real_positions():
+    """2026-10-19 사용자("하나도 안 맞아") — 자리 코드를 주면 그 자리에 찍는다. 4-1-2-3(RAM·CAM·LAM · 공격 줄 없음)은 맨 위
+    띠가 비어야 하고 풀백은 바깥에 있어야 한다. 막지 않았으면(줄 인원으로 고르게 펴면) 맨 위 줄에 점 셋이 찍힌다."""
+    import stats
+    from widgets import formation_pixmap
+    px = 120
+    pos = (0, 3, 4, 6, 7, 10, 13, 15, 17, 18, 19)
+    white = QColor(app_main.T.FORMATION_DOT).rgb()
+
+    def dots_in(img, y0, y1, x0=0, x1=None):
+        x1 = img.width() if x1 is None else x1
+        return sum(1 for y in range(y0, y1) for x in range(x0, x1) if img.pixelColor(x, y).rgb() == white)
+    by_count = formation_pixmap("4-1-2-3-0", px, 1.0).toImage()
+    real = formation_pixmap("4-1-2-3-0", px, 1.0, positions=pos).toImage()
+    assert dots_in(by_count, 0, px // 8) > 0, "전제가 바뀌었다 — 줄 인원 그림에서도 맨 위가 비면 이 테스트가 재는 게 없다"
+    assert dots_in(real, 0, px // 8) == 0, "공격 줄이 없는데 맨 위에 점을 찍었다"
+    assert dots_in(real, px // 2, px, 0, px // 8) > 0 and dots_in(real, px // 2, px, px - px // 8) > 0, "풀백이 바깥에 없다"
+    # FormationStat.positions — 그 전술에서 가장 많이 선 자리 묶음
+    def side(codes):
+        return {"ouid": "me", "player": [{"spPosition": c} for c in codes] + [{"spPosition": 28}]}
+    det = [{"matchInfo": [side(pos), {"ouid": "o", "player": []}]} for _ in range(2)] + \
+          [{"matchInfo": [side((0, 2, 4, 6, 8, 10, 13, 15, 17, 18, 19)), {"ouid": "o", "player": []}]}]
+    st = stats.formation_stats(det, "me", of_opponent=False)
+    assert st[0].formation == "4-1-2-3-0" and st[0].positions == pos, st
+
+
 def test_formation_cells_need_no_loader():
     """포메이션 칸은 받지 않고 그 자리에서 그린다 — 로더가 안 뜨고 아이콘이 붙는다 · 그릴 수 없는 글자는 글자만."""
     cell = MW._formation_cell

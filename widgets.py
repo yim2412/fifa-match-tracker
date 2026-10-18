@@ -1204,9 +1204,10 @@ def formation_key(formation: str) -> str:
     return "-".join(str(n) for n in lines) if lines else ""
 
 
-def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = None) -> QPixmap:
+def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = None, positions=()) -> QPixmap:
     """작은 축구장 — 포메이션 줄마다 점. 수비 줄이 아래, 공격 줄이 위, 맨 아래 GK 한 점. 네트워크 없음 · 같은 모양이면 같은 캐시.
-    그릴 수 없는 글자("모름" 등)면 빈 QPixmap(isNull)."""
+    positions(경기 자리 코드 — FormationStat.positions)를 주면 줄 인원을 고르게 펴지 않고 **그 자리**에 찍는다
+    (core.PITCH_X · PITCH_Y). 자리를 모르는 길(랭커 포메이션 글자)은 줄 인원으로. 그릴 수 없는 글자("모름" 등)면 빈 QPixmap(isNull)."""
     from PyQt6.QtGui import QGuiApplication, QPixmapCache
     key = formation_key(formation)
     if not key:
@@ -1215,6 +1216,9 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
     if dpr is None:
         screen = QGuiApplication.primaryScreen()
         dpr = screen.devicePixelRatio() if screen is not None else 1.0
+    spots = [c for c in positions if c in core.PITCH_X and c in core.PITCH_Y]
+    if spots:
+        return _formation_spots_pixmap(tuple(sorted(spots)), px, dpr)
     ck = f"formation:{key}:{px}:{dpr}"
     hit = QPixmapCache.find(ck)
     if hit is not None and not hit.isNull():
@@ -1238,6 +1242,39 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
         y = px - pad_y - (px - 2 * pad_y) * i / max(1, rows - 1)
         for j in range(count):
             p.drawEllipse(QPointF(w * (j + 1) / (count + 1), y), r, r)
+    p.end()
+    QPixmapCache.insert(ck, pm)
+    return pm
+
+
+FORMATION_SPREAD = 1.5   # 포메이션 아이콘의 가로 넓힘(가운데 0.5 에서) — 1.0 이면 큰 축구장과 같은 좌표
+
+
+def _formation_spots_pixmap(spots: tuple, px: int, dpr: float) -> QPixmap:
+    """formation_pixmap 의 자리 그림 — 점마다 그 자리 좌표(위 = 최전방). 같은 자리 묶음이면 같은 캐시."""
+    from PyQt6.QtGui import QPixmapCache
+    ck = f"formation-spots:{','.join(map(str, spots))}:{px}:{dpr}"
+    hit = QPixmapCache.find(ck)
+    if hit is not None and not hit.isNull():
+        return hit
+    w = round(px * config.ICON_ASPECT.get("formation", 1.0))
+    pm = QPixmap(round(w * dpr), round(px * dpr))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(T.FORMATION_PITCH))
+    p.drawRoundedRect(QRectF(0, 0, w, px), 3, 3)
+    p.setBrush(QColor(T.FORMATION_DOT))
+    r = max(1.1, px / 15)
+    pad = r + 1.5
+    for c in spots:
+        # PITCH_X 는 큰 축구장(칩 폭)에 맞춘 값이라 작은 그림에선 RAM·CAM·LAM 이 한 덩이로 붙는다 — 가운데에서 넓힌다
+        spread = min(1.0, max(0.0, 0.5 + (core.PITCH_X[c] - 0.5) * FORMATION_SPREAD))
+        x = pad + (w - 2 * pad) * spread
+        y = px - pad - (px - 2 * pad) * core.PITCH_Y[c] / core.PITCH_Y_MAX
+        p.drawEllipse(QPointF(x, y), r, r)
     p.end()
     QPixmapCache.insert(ck, pm)
     return pm
@@ -1536,7 +1573,9 @@ class DivisionChart(QWidget):
     작을수록 높다 — Y축은 위가 높은 등급이 되게 뒤집어 그린다.
     Y 레벨은 데이터에 나온 등급들만 쓴다(전체 18단계를 다 그리면 실제 변화
     폭이 눌려서 안 보인다).
-    tips: 점마다 툴팁(그날 처음·마지막·최고) · markers: 세로 점선을 그을 점 번호(슈챔 진입한 날)."""
+    tips: 점마다 툴팁(그날 처음·마지막·최고) · markers: 세로 점선을 그을 점 번호(슈챔 진입한 날) ·
+    peaks: {점 번호: 등급} — 그날 마지막보다 높이 올랐던 등급(슈챔에 올랐다 내려온 날). 계단은 마지막 등급 그대로 두고 그 등급 줄에
+    점을 하나 더 찍는다 — 하루 한 점(마지막)이라 슈챔에 오른 날도 챔스로만 보였다(2026-10-19 사용자)."""
 
     def __init__(self):
         super().__init__()
@@ -1544,17 +1583,19 @@ class DivisionChart(QWidget):
         self._names: dict[int, str] = {}
         self._tips: list[str] = []
         self._markers: list[int] = []
+        self._peaks: dict[int, int] = {}
         self._hits: list[tuple[QRectF, str]] = []
         self.marks: dict = {}
         self.setMinimumHeight(220)
         self.setMouseTracking(True)
 
     def set_data(self, points: list[tuple[str, int]], names: dict[int, str],
-                 tips: list[str] | None = None, markers=()) -> None:
+                 tips: list[str] | None = None, markers=(), peaks: dict[int, int] | None = None) -> None:
         self._points = points
         self._names = names
         self._tips = list(tips) if tips is not None else []
         self._markers = sorted(set(markers))
+        self._peaks = dict(peaks or {})
         self.update()
 
     def mouseMoveEvent(self, event) -> None:
@@ -1590,8 +1631,10 @@ class DivisionChart(QWidget):
                       "표시 구간에 등급 정보가 있는 경기가 없습니다.")
             return
 
-        # id 내림차순 = 낮은 등급부터 → y 아래에서 위로
-        levels = sorted({div for _, div in self._points}, reverse=True)
+        n = len(self._points)
+        peaks = {i: div for i, div in self._peaks.items() if 0 <= i < n}
+        # id 내림차순 = 낮은 등급부터 → y 아래에서 위로. 그날 최고(peaks)의 등급도 줄을 갖는다
+        levels = sorted({div for _, div in self._points} | set(peaks.values()), reverse=True)
         y_of = {div: (mt + plot_h - (plot_h * i / max(len(levels) - 1, 1))
                       if len(levels) > 1 else mt + plot_h / 2)
                 for i, div in enumerate(levels)}
@@ -1604,8 +1647,6 @@ class DivisionChart(QWidget):
             p.drawText(2, int(y) - 7, ml - 8, 14,
                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                       self._names.get(div, str(div)))
-
-        n = len(self._points)
 
         def x_of(i: int) -> float:
             return ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
@@ -1636,6 +1677,18 @@ class DivisionChart(QWidget):
             if div != prev_div:  # 등급이 바뀐 지점만 점을 찍는다 — 다 찍으면 떡칠
                 p.drawEllipse(pt, 3.5, 3.5)
                 prev_div = div
+
+        # 그날 최고 — 마지막 등급 점에서 그 줄까지 점선 + 큰 점(계단과 헷갈리지 않게 선은 잇지 않는다)
+        line = QPen(QColor(T.YELLOW), 1)
+        line.setStyle(Qt.PenStyle.DotLine)
+        for i, div in sorted(peaks.items()):
+            top = QPointF(pts[i].x(), y_of[div])
+            p.setPen(line)
+            p.drawLine(pts[i], top)
+            p.setPen(QPen(QColor(T.PANEL), 1))
+            p.setBrush(QColor(T.YELLOW))
+            p.drawEllipse(top, 4.5, 4.5)
+        self.marks["peaks"] = len(peaks)
 
         p.setPen(QColor(T.TEXT_DIM))
         step = max(1, n // 6)

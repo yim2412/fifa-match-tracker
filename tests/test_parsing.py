@@ -2145,6 +2145,34 @@ def test_team_color_baseline_and_opponents():
 
 # ── 2.6.1 A6 무승부 분모 — 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체 ───────────────────────
 
+def _a6(fn):
+    """A6 섞임 규칙 자체를 잰다 — 앱은 2026-10-19 부터 승÷전체(config.WIN_RATE_DRAWS_IN 켜짐)라 스위치를 끈 채로 돌린다."""
+    def run():
+        keep = config.WIN_RATE_DRAWS_IN
+        config.WIN_RATE_DRAWS_IN = False
+        try:
+            fn()
+        finally:
+            config.WIN_RATE_DRAWS_IN = keep
+    run.__name__ = fn.__name__
+    return run
+
+
+def test_win_rate_counts_draws_app_wide():
+    """2026-10-19 사용자: 승률은 전부 무승부 포함(승÷전체). 판정 한 곳(is_mixed)이 스위치를 본다 — 섞인 묶음도 한 집단."""
+    assert config.WIN_RATE_DRAWS_IN is True, "사용자가 고른 기본값이 바뀌었다"
+    assert models.is_mixed([True, False, None]) is False, "섞인 묶음인데 무승부를 뺐다"
+    assert models.win_pct(5, 2, 3, models.is_mixed([True, False])) == 50.0
+    keep = config.WIN_RATE_DRAWS_IN
+    try:   # 막지 않았으면: 스위치를 끄면 A6 섞임 규칙(승÷(승+패))으로 돌아간다 — 같은 자료가 다른 값
+        config.WIN_RATE_DRAWS_IN = False
+        assert models.is_mixed([True, False]) is True
+        assert models.win_pct(5, 2, 3, models.is_mixed([True, False])) == 62.5
+    finally:
+        config.WIN_RATE_DRAWS_IN = keep
+
+
+@_a6
 def test_draw_possible_and_mixed_judgement():
     assert models.draw_possible(900, 1000) is True and models.draw_possible(1300, 1300) is True
     assert models.draw_possible(900, 800) is False            # 양쪽 다 챔스 이상 — 연장·승부차기
@@ -2166,6 +2194,7 @@ def test_draw_possible_and_mixed_judgement():
     assert st.is_champion_or_above is models.is_champion_or_above and st.CHAMPION_DIVISION_ID == 900
 
 
+@_a6
 def test_every_rate_aggregate_fills_mixed():
     # 픽스처 4경기: 0003 만 상대가 챔스 아래(무승부 가능) — 섞인 묶음. 집계마다 mixed 가 bool 이고 True,
     # 값을 주면 그대로(견주는 자리가 합친 범위로 정한 값을 넘긴다). RATE_CLASSES 의 클래스를 전부 한 번씩 만든다

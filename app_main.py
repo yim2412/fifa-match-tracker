@@ -8666,7 +8666,14 @@ class MainWindow(QMainWindow):
         name = self._division_names.get(info.get("division")) if info else None
         if not name:
             return None
-        date = f" {info['date']}" if info.get("date") else ""
+        day = info.get("date") or ""
+        if info.get("division") == core.SUPER_CHAMPION_DIVISION_ID:
+            # 넥슨 값이 늦게 갱신된다(2026-10-19 실측: 10-18 에 일곱 번 올랐는데 넥슨은 07-05 그대로) — 저장된 경기의
+            # 마지막 슈챔 진입이 더 늦으면 그 날짜(같은 정의 — division_entries 가 achievementDate 와 초 단위로 맞았다)
+            entries = self._sc_entries()[0]
+            if entries and f"{entries[-1]:%Y-%m-%d}" > day:
+                day = f"{entries[-1]:%Y-%m-%d}"
+        date = f" {day}" if day else ""
         return f"최고티어 최근 달성일{date}  [ {name} ]"
 
     def _render_ranker(self) -> None:
@@ -8716,7 +8723,7 @@ class MainWindow(QMainWindow):
         mine = core.formation_stats(self._details, self._ouid, of_opponent=False) if self._details and self._ouid else []
         if mine:
             t = mine[0]
-            c.set_formation(formation_pixmap(t.formation, config.FORMATION_HEAD_PX),
+            c.set_formation(formation_pixmap(t.formation, config.FORMATION_HEAD_PX, positions=t.positions),
                             f"주 포메이션 {t.formation} — {t.games}경기 ({self._scope_text()})")
         else:
             c.set_formation(None)
@@ -10282,7 +10289,10 @@ class MainWindow(QMainWindow):
             [(f"{d.day:%m/%d}", d.last) for d in days_div], self._division_names,
             tips=[f"{d.day:%Y-%m-%d} · 마지막 {name(d.last)} · 처음 {name(d.first)} · 최고 {name(d.best)}"
                   for d in days_div],
-            markers=[i for i, d in enumerate(days_div) if d.day in entry_days])
+            markers=[i for i, d in enumerate(days_div) if d.day in entry_days],
+            # 슈챔에 올랐다가 그날 마지막엔 내려온 날 — 점은 하루 마지막 등급이라 슈챔 줄에 따로 한 점(2026-10-19 사용자)
+            peaks={i: d.best for i, d in enumerate(days_div)
+                   if d.best == core.SUPER_CHAMPION_DIVISION_ID and d.last != d.best})
 
         self._show_trend_summary()
         self._render_sc_records()
@@ -10735,7 +10745,7 @@ class MainWindow(QMainWindow):
                 f"{t.formation}      {win_rate_text(t.win, t.draw, t.lose, t.mixed)}      "
                 f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
             self.lb_my_formation.setToolTip(win_rate_note(t.mixed))
-            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 2)
+            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 2, positions=t.positions)
             self.lb_my_formation_pitch.setPixmap(pitch)
             self.lb_my_formation_pitch.setVisible(not pitch.isNull())
 
@@ -10759,7 +10769,7 @@ class MainWindow(QMainWindow):
             head.setStyleSheet(f"color: {T.TEXT_DIM};")
             self.box_opp.addWidget(head)
             self.opp_formation_bars = charts.HBarList()
-            self.opp_formation_bars.set_data(opp_rows, [formation_pixmap(f.formation) for f in opp_stats])
+            self.opp_formation_bars.set_data(opp_rows, [formation_pixmap(f.formation, positions=f.positions) for f in opp_stats])
             self.box_opp.addWidget(self.opp_formation_bars)
 
         rb = core.result_breakdown(details, self._ouid)

@@ -210,10 +210,10 @@ def test_modal_calls_fail_fast():
 def test_loaded_opens_dashboard():
     assert _AFTER_LOAD == (_win.PAGE_MAIN, _win._page_index["대시보드"]), _AFTER_LOAD
     # 픽스처: 승1 무1 패1 + 오류1 — 대시보드 지표가 실제로 채워졌는지.
-    # 0003 만 상대가 챔스 아래(무승부가 나는 경기) — 섞인 묶음이라 승÷(승+패) = 1/2(A6). 한 집단 식이면 33.3%
-    assert _win.dashboard.lb_rate.text() == "50.0%", _win.dashboard.lb_rate.text()
-    assert "승÷(승+패) · 무 1" in _win.dashboard.lb_rate.toolTip(), _win.dashboard.lb_rate.toolTip()
-    assert "승÷(승+패) · 무 1" in _win.dashboard.lb_rate_delta.text(), _win.dashboard.lb_rate_delta.text()
+    # 승률은 무승부 포함 승÷전체(2026-10-19 사용자 · config.WIN_RATE_DRAWS_IN) = 1/3. A6 섞임 식이었다면 50.0%
+    assert _win.dashboard.lb_rate.text() == "33.3%", _win.dashboard.lb_rate.text()
+    assert "승÷전체" in _win.dashboard.lb_rate.toolTip(), _win.dashboard.lb_rate.toolTip()
+    assert "승÷전체" in _win.dashboard.lb_rate_delta.text(), _win.dashboard.lb_rate_delta.text()
     assert _win.lb_profile.text() == "테스트구단주", _win.lb_profile.text()
 
 
@@ -965,8 +965,8 @@ def test_dashboard_gauge_shows_value_once_sample_is_enough():
     try:
         dashboard.MIN_GAUGE_GAMES = 1
         _win._render_dashboard()
-        # 픽스처 선제골 3경기 1승 1무 1패 — 섞인 묶음이라 승÷(승+패) = 50%(A6 · 한 집단 식이면 33%)
-        assert d.gauges[0]._value is not None and round(d.gauges[0]._value) == 50, \
+        # 픽스처 선제골 3경기 1승 1무 1패 — 승÷전체 = 33%(A6 섞임 식이었다면 50%)
+        assert d.gauges[0]._value is not None and round(d.gauges[0]._value) == 33, \
             d.gauges[0]._value
     finally:
         dashboard.MIN_GAUGE_GAMES = old
@@ -1044,11 +1044,12 @@ def test_trend_marks_max_min_and_average():
     c = _win.dashboard.trend_chart
     c.resize(600, 220)
     c.grab()
-    assert round(c.marks["avg"], 1) == 50.0, c.marks["avg"]   # 경기 수로 가중하면 66.7(A6 평균선 무게)
-    assert c.marks["max"] == (1, "100.0%"), c.marks["max"]
+    # 승÷전체(2026-10-19): 01/02 승+무 = 50% · 평균 = 승 1 ÷ 3경기(날짜별 단순 평균 25% 가 아니어야)
+    assert round(c.marks["avg"], 1) == 33.3, c.marks["avg"]
+    assert c.marks["max"] == (1, "50.0%"), c.marks["max"]
     assert c.marks["min"] == (0, "0.0%"), c.marks["min"]
-    # 승률 그래프 페이지 '평균 승률' 카드와 같은 숫자(섞인 식이라 끝에 *)
-    assert f"{c.marks['avg']:.1f}%*" == _win.card_trend_avg.value.text(), \
+    # 승률 그래프 페이지 '평균 승률' 카드와 같은 숫자(한 집단 식이라 * 없음)
+    assert f"{c.marks['avg']:.1f}%" == _win.card_trend_avg.value.text(), \
         (c.marks["avg"], _win.card_trend_avg.value.text())
     rects = c.marks["label_rects"] + [c.marks["avg_rect"]]
     assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
@@ -1190,11 +1191,14 @@ def test_trend_page_uses_area_chart_with_counts_and_ma():
         seen.append((len(matches), list(days), kw))
         return [40.0] * len(days)
     app_main.core.moving_win_rate = spy
+    keep_rule = config.WIN_RATE_DRAWS_IN
+    config.WIN_RATE_DRAWS_IN = False   # 배선은 기본값이 아닌 값(True)으로 잰다 — 승÷전체(기본)에선 mixed 가 늘 False 라 빈 검사가 된다
     try:
         _win._render_trend(_win._matches)
         c.grab()
     finally:
         app_main.core.moving_win_rate = real
+        config.WIN_RATE_DRAWS_IN = keep_rule
     # mixed 는 그래프 점과 같은 값 — 픽스처는 섞인 묶음이라 True(기본 False 와 다른 값으로 배선을 잰다)
     assert seen == [(len(_win._matches), [_date(2026, 1, 1), _date(2026, 1, 2), _date(2026, 1, 3)],
                      {"min_n": app_main.core.MIN_COND, "mixed": True})], seen
@@ -1912,6 +1916,32 @@ def test_sc_records_list_and_nexon_line():
         _restore_account()
 
 
+def test_sc_day_peak_on_division_chart_and_best_date_from_matches():
+    """2026-10-19 사용자 — 슈챔에 올랐다 그날 내려온 날도 등급 추이에 슈챔 점이 보이고, 대시보드 '최고티어 최근 달성일' 은
+    넥슨 값보다 저장된 경기의 진입이 늦으면 그 날짜."""
+    keep_max = dict(_win._max_division)
+    try:
+        # 0002(01-02 12:00) 800 → 0003(01-02 13:00) 900 : 그날 마지막은 챔스 — 막지 않았으면 점이 챔스 줄에만 있다
+        det = _sc_details({"0002": 800})
+        _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        dc = _win.division_chart
+        assert all(div != 800 for _, div in dc._points), "전제가 바뀌었다 — 그날 마지막이 슈챔이면 이 테스트가 재는 게 없다"
+        assert dc._peaks == {1: 800}, dc._peaks
+        dc.grab()
+        assert dc.marks.get("peaks") == 1, dc.marks
+        # 최고티어 날짜 — 넥슨이 옛 날짜면 저장된 진입 날짜 · 넥슨이 더 늦으면 넥슨 그대로
+        _win._on_max_division(_OUID, {"division": 800, "date": "2025-12-01", "at": "2025-12-01T10:00:00"})
+        assert "최근 달성일 2026-01-02 " in (_win._max_division_text() or ""), _win._max_division_text()
+        _win._on_max_division(_OUID, {"division": 800, "date": "2026-02-01", "at": "2026-02-01T10:00:00"})
+        assert "최근 달성일 2026-02-01 " in (_win._max_division_text() or ""), _win._max_division_text()
+        _win._on_max_division(_OUID, {"division": 900, "date": "2025-12-01"})   # 최고가 챔스면 슈챔 진입을 안 끌어온다
+        assert "최근 달성일 2025-12-01 " in (_win._max_division_text() or ""), _win._max_division_text()
+    finally:
+        _win._max_division = keep_max
+        _restore_account()
+
+
 def test_sc_nexon_line_arrives_after_loader_finishes():
     # maxdivision 신호는 finished_ok 뒤에 온다 — _render_trend 에서만 그리면 넥슨 줄이 늘 빠진다. 진짜 로더로.
     tmp, saved = _loader_db(4)
@@ -2006,9 +2036,8 @@ def test_season_table_compares_with_previous_season():
         rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
         assert set(rows) == {"2025 시즌 9", "2025 시즌 8"}, rows
         vs = cols.index("지난 시즌 대비")
-        # 새 시즌 50%(승1 무1 패1 — 누적 전체가 섞인 묶음이라 승÷(승+패)) − 지난 시즌 100%(2승) → 음수
-        # · 가장 오래된 시즌은 비교 대상이 없다
-        assert t.item(rows["2025 시즌 9"], vs).text() == f"{50 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
+        # 새 시즌 33.3%(승1 무1 패1 — 승÷전체) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
+        assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 3 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
         assert t.item(rows["2025 시즌 8"], vs).text() == "—"
         grade = cols.index("등급")
         assert t.item(rows["2025 시즌 9"], grade).text() == _win._division_names.get(900, "900")
@@ -2016,9 +2045,8 @@ def test_season_table_compares_with_previous_season():
         assert t.item(rows["2025 시즌 8"], grade).text() == "—"  # 상세가 없는 경기 — 등급 모름
         bars = _win.season_bars._rows
         assert [r[0] for r in bars] == ["2025 시즌 9", "2025 시즌 8"], bars
-        # 섞인 식 → 숫자 뒤 * · 흐림 판정과 툴팁은 승패 판(rated = 2) 기준
-        assert bars[0][2] == "50.0%* · 3경기" and bars[0][4] is True, bars[0]  # 승패 2판 < MIN_COND → 흐림
-        assert "승패 2판이라" in bars[0][3], bars[0][3]
+        # 한 집단 식 → * 없음 · 흐림 판정은 3경기(rated) 기준
+        assert bars[0][2] == "33.3% · 3경기" and bars[0][4] is True, bars[0]  # 3경기 < MIN_COND → 흐림
     finally:
         _win._rank_seasons, _win._matches_all = keep
         _win._render_seasons()
@@ -3439,6 +3467,15 @@ def test_teamcolor_range_axis_ignores_filter():
 
 
 def test_teamcolor_mixed_formula():
+    keep = config.WIN_RATE_DRAWS_IN
+    config.WIN_RATE_DRAWS_IN = False   # A6 섞임 식의 화면 처리 자체를 잰다 — 앱 기본(승÷전체)에선 섞임이 없다
+    try:
+        _teamcolor_mixed_formula()
+    finally:
+        config.WIN_RATE_DRAWS_IN = keep
+
+
+def _teamcolor_mixed_formula():
     # 픽스처 그대로(섞인 묶음): 무승부뿐인 상대(0003)의 팀컬러는 승패 0판이라 최소 1 에도 숨고, 단위 글자가 "승패 판"
     opps = sorted({m.opponent for m in _MATCHES if m.opponent})
     draw_opp = next(m.opponent for m in _MATCHES if m.result == "무")
