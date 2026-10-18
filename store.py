@@ -303,6 +303,42 @@ CREATE TABLE IF NOT EXISTS teamcolor_steps (
     fetched_on TEXT NOT NULL,
     PRIMARY KEY (id, step)
 ) WITHOUT ROWID;
+-- 카드 정보 자동 채우기(51단계 · cardcollect.py) — 사람과 이어지지 않아 끄기·지우기 대상이 아니다(G3).
+-- card_info 에 열을 더하지 않는다: 옛 버전의 save_card_info(INSERT OR REPLACE)가 줄을 지우고 넣으면 새 열이 NULL 인데
+-- fetched_on 은 새것이라 "신선" 으로 보고 다시 안 읽는다. 페이지 쪽(page_on)·시뮬레이터 쪽(sim_on)은 따로 채운다(G4).
+-- pos_ovr = JSON {"ST": 105, …}(시뮬레이터 1강 16칸) · club_tc·rel_tc = JSON [[id, 이름], …] · c6_grade = C6 표본의 고정 강화
+CREATE TABLE IF NOT EXISTS card_extra (
+    spid     INTEGER PRIMARY KEY,
+    height   INTEGER,
+    weight   INTEGER,
+    body     TEXT,
+    page_on  TEXT,
+    pos_ovr  TEXT,
+    club_tc  TEXT,
+    rel_tc   TEXT,
+    sim_on   TEXT,
+    c6_grade INTEGER
+) WITHOUT ROWID;
+-- 시도 기록(51단계 3판) — key: c:<spid>:page · c:<spid>:sim · t:<팀컬러 id> · p:<spid>(칩·가계부 길). 그날 시도한 대상은
+-- 성공·실패 모두 그날 다시 안 고른다 · fails 는 형식 실패만 센다(막힘·점검은 안 센다) · CARD_TRY_MAX 면 CARD_TRY_REST_DAYS 쉰다
+CREATE TABLE IF NOT EXISTS card_tries (
+    key   TEXT PRIMARY KEY,
+    day   TEXT NOT NULL,
+    fails INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+-- 날짜별 시세(51단계 U4) — src 비트: 1 내 카드(C5) · 2 C6 표본. price NULL = 그날 읽었는데 그 강화 매물이 없었다(관측은 했다).
+-- 보관 CARD_PRICE_KEEP_DAYS(출처와 무관) — 켤 때 정리(prune_card_price_days). [수집 기록 지우기]는 안 지운다(남의 기록이 아니다)
+CREATE TABLE IF NOT EXISTS card_price_days (
+    spid  INTEGER NOT NULL,
+    grade INTEGER NOT NULL,
+    day   TEXT NOT NULL,
+    price INTEGER,
+    src   INTEGER NOT NULL,
+    PRIMARY KEY (spid, grade, day)
+) WITHOUT ROWID;
+-- 카드 수요(cardcollect.demand) — 구단주 → 그 경기 · 경기 → 양쪽 선발. match_squads PK 가 spid 로 시작해 이 둘로는 못 찾는다
+CREATE INDEX IF NOT EXISTS ix_ms_owner_day ON match_squads (owner, day);
+CREATE INDEX IF NOT EXISTS ix_ms_match ON match_squads (match);
 """
 
 # 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
@@ -1271,6 +1307,77 @@ def trait_block_streak(conn: sqlite3.Connection) -> int:
             break
         n += 1
     return n
+
+
+# 카드 정보 자동 채우기(51단계) — 앱은 card_backfill, 개발 PC 측정 도구는 card_backfill_dev(앱 장부를 인자로 우회하지 않게).
+# 그날 멈춤 표시는 hit_429 칸에: <kind>_block(403·429·Cloudflare) · <kind>_format(구조 바뀜). 팀컬러 상세 몫은 <kind>_tc
+BUDGET_CARD = "card_backfill"
+BUDGET_CARD_DEV = "card_backfill_dev"
+
+
+def card_block_kinds() -> tuple[str, ...]:
+    """같은 IP 의 웹 길 막힘 표시 — 하나라도 그날 있으면 카드 백필(앱·측정 도구 둘 다)은 그날 시작하지 않는다(B[중]11 · 5판)."""
+    return (BUDGET_TRAIT_WEB_BLOCK, f"{BUDGET_CARD}_block", f"{BUDGET_CARD_DEV}_block")
+
+
+def card_block_streak(conn: sqlite3.Connection, kind: str, since_day: str) -> int:
+    """카드 백필이 막힌 날이 몇 번 이어졌나 — trait_block_streak 와 같은 셈이되 since_day(토글을 켠 날) **뒤** 날만.
+    켠 날 자체는 안 센다 — 막힘 기록이 날짜 단위라 켜기 전 막힘과 못 가른다(5판 · 대가: 하루 늦게 꺼진다)."""
+    days: dict[str, bool] = {}
+    block = f"{kind}_block"
+    for day, k in conn.execute("SELECT day, kind FROM api_budget WHERE kind IN (?, ?) AND day > ?"
+                               " AND (attempts > 0 OR hit_429 = 1)", (kind, block, since_day)):
+        days[day] = days.get(day, False) or k == block
+    n = 0
+    for day in sorted(days, reverse=True):
+        if not days[day]:
+            break
+        n += 1
+    return n
+
+
+def try_skip(conn: sqlite3.Connection, key: str, day: str) -> bool:
+    """오늘 이미 시도했거나(성공·실패 모두) 형식 실패가 쌓여 쉬는 중이면 참 — 그 대상은 이번에 고르지 않는다."""
+    r = conn.execute("SELECT day, fails FROM card_tries WHERE key = ?", (key,)).fetchone()
+    if r is None:
+        return False
+    if r[0] == day:
+        return True
+    if r[1] >= config.CARD_TRY_MAX:
+        try:
+            return (date.fromisoformat(day) - date.fromisoformat(r[0])).days < config.CARD_TRY_REST_DAYS
+        except ValueError:
+            return False
+    return False
+
+
+def try_record(conn: sqlite3.Connection, key: str, day: str, ok: bool) -> None:
+    """시도 하나를 적는다 — 성공이면 fails 0, 형식 실패면 1 더한다(쉼이 끝난 뒤의 첫 실패는 1 부터)."""
+    with conn:
+        r = conn.execute("SELECT day, fails FROM card_tries WHERE key = ?", (key,)).fetchone()
+        fails = 0
+        if not ok:
+            prev = r[1] if r is not None else 0
+            fails = 1 if prev >= config.CARD_TRY_MAX else prev + 1
+        conn.execute("INSERT OR REPLACE INTO card_tries (key, day, fails) VALUES (?, ?, ?)", (key, day, fails))
+
+
+def save_card_price_days(conn: sqlite3.Connection, rows) -> None:
+    """rows: (spid, grade, day, price 또는 None, src 비트). 같은 날 같은 강화를 두 쓰임이 적으면 비트를 합친다."""
+    rows = list(rows)
+    if not rows:
+        return
+    with conn:
+        conn.executemany("INSERT INTO card_price_days (spid, grade, day, price, src) VALUES (?, ?, ?, ?, ?)"
+                         " ON CONFLICT(spid, grade, day) DO UPDATE SET price = excluded.price,"
+                         " src = src | excluded.src", rows)
+
+
+def prune_card_price_days(conn: sqlite3.Connection, today: date) -> int:
+    """보관(CARD_PRICE_KEEP_DAYS)이 지난 날짜별 시세를 지운다 — 출처·관문과 무관(꺼 둬도 안내문의 날 수가 거짓이 안 되게)."""
+    cut = (today - timedelta(days=config.CARD_PRICE_KEEP_DAYS)).isoformat()
+    with conn:
+        return conn.execute("DELETE FROM card_price_days WHERE day < ?", (cut,)).rowcount
 
 
 def mark_final_429(day: str, db_path: Path | str | None = None) -> None:

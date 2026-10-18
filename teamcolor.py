@@ -40,8 +40,6 @@ _XHR = {"X-Requested-With": "XMLHttpRequest"}
 TIMEOUT_S = 10   # 앱 종료 표가 이 + 2초를 기다린다(app_main.shutdown)
 # 선수 목록 양식 — 상세 페이지의 teacolorSearchform 그대로(2026-10-06). 포지션 필터는 안 쓴다(GK 코드가 0명 — T8)
 PLAYERS_ORDER = "overallrating descending, salary descending"
-# 오류 페이지·점검 표시 — 200 으로 와도 이걸 품으면 실패
-_ERROR_MARKERS = ("bulletin.nexon.com", "nxk/error", "점검 진행 중", "fc_logo_inspection")
 
 # 목록 한 항목 — 앵커는 wrapper class(라벨 글자 아님)
 _ITEM_START = '<div class="teamcolor_item">'
@@ -243,14 +241,14 @@ def _get(url: str, params=None, xhr: bool = True) -> str:
     except requests.RequestException as e:
         raise TeamColorError(f"팀컬러 조회 실패: {e}", "down") from e
     status = getattr(res, "status_code", 200)
-    if status == 429:
-        raise TeamColorError("팀컬러 조회가 막혔습니다(HTTP 429)", "rate")
-    if status != 200:   # 302(오류 페이지로 넘김) · 5xx 등 — 넘김은 따라가지 않는다
-        raise TeamColorError(f"팀컬러 조회 실패(HTTP {status})", "down")
-    body = res.text
-    if any(m in body[:4096] for m in _ERROR_MARKERS):
-        raise TeamColorError("넥슨 오류·점검 페이지가 왔습니다", "down")
-    return body
+    # 403·429·Cloudflare 는 막힘(rate) — 51단계 카드 백필이 그날 멈추는 기준. 302(오류 페이지로 넘김)·5xx·오류·점검 페이지는 down
+    kind = ranker.classify_web_response(res)
+    if kind == "rate":
+        raise TeamColorError(f"팀컬러 조회가 막혔습니다(HTTP {status})", "rate")
+    if kind is not None:
+        raise TeamColorError(f"팀컬러 조회 실패(HTTP {status})" if status != 200 else "넥슨 오류·점검 페이지가 왔습니다",
+                             "down")
+    return res.text
 
 
 def fetch_list() -> list[TeamColorMeta]:

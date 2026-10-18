@@ -301,7 +301,7 @@ def rate_classes(srcs: dict[str, str]) -> set[str]:
 
 # ── SQL 실행 계획 ────────────────────────────────────────────────────────────
 
-SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py", "rankmeta.py")
+SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py", "rankmeta.py", "cardcollect.py")
 
 
 def collect_sql() -> dict[str, set[str]]:
@@ -343,6 +343,44 @@ def collect_sql() -> dict[str, set[str]]:
     return seen
 
 
+def _drive_cardcollect(path: Path) -> None:
+    """카드 백필 한 바퀴(51단계) — 내 계정 · 상대 · 팀컬러 목록을 심고 가짜 넥슨으로 run 을 두 날(① ② ③ ④ ⑤ 의 SELECT 가 다 돈다)."""
+    from datetime import date, timedelta
+    import cardcollect
+    import config
+    import playerinfo
+    import store
+    import teamcolor
+    conn = store.open_db(path)
+    store.upsert_account(conn, "me", "me")
+    store.set_trade_state(conn, my_ouid="me")
+    day = date(2026, 10, 18)
+    m = conn.execute("INSERT INTO squad_match (match_id) VALUES ('m1')").lastrowid
+    for ouid, spid in (("me", 1), ("opp", 2)):
+        o = conn.execute("INSERT INTO squad_owner (ouid, nickname, last_day) VALUES (?, ?, ?) RETURNING id",
+                         (ouid, ouid, day.toordinal())).fetchone()[0]
+        conn.execute("INSERT INTO match_squads (spid, day, match, owner, po, grade) VALUES (?, ?, ?, ?, 25, 3)",
+                     (spid, day.toordinal(), m, o))
+    conn.commit()
+    store.save_teamcolor_meta(conn, [teamcolor.TeamColorMeta(7, "팀", "teamcolor/a.png", "", 1, 3, [])], day.isoformat())
+    conn.close()
+    page = lambda s: playerinfo.PlayerInfo(sp_id=s, name="가", ovr=1, height="180cm", body_type="보통",  # noqa: E731
+                                           prices={3: "1,000 BP"})
+    sim = lambda s: playerinfo.AbilitySim(ovr=1, groups={}, abilities={}, club_options=[(7, "팀")],  # noqa: E731
+                                          position_ovrs={c: 1 for c in config.SIM_POS_OF.values()})
+    keep = config.WEB_DATA
+    config.WEB_DATA = True
+    try:
+        for d in (day, day + timedelta(days=40)):
+            cardcollect.run(path, d, 600, fetch_page=page, fetch_sim=sim, sleep=lambda s: None,
+                            fetch_detail=lambda t: ("", [teamcolor.Step(1, 3, [])]), fetch_list=lambda: [])
+        conn = store.open_db(path)
+        cardcollect.status(conn, day)
+        conn.close()
+    finally:
+        config.WEB_DATA = keep
+
+
 def _drive_uncovered() -> None:
     """파싱·수집 테스트가 안 부르는 읽기 함수 — 화면 스모크만 부른다(Qt 를 띄우기엔 무겁다)."""
     import store
@@ -362,6 +400,8 @@ def _drive_uncovered() -> None:
             store.trait_squads(conn)                            # 포지션 특성(32단계) — test_traits 가 부른다
             store.prune_trait_squads(conn, on_at=None, keep={1})
             store.trait_block_streak(conn)                      # 특성 막힘 날짜(32단계 단계 3) — test_traits 가 부른다
+            store.card_block_streak(conn, "card_backfill", "2026-10-01")   # 카드 백필(51단계) — test_cardcollect 가 부른다
+            _drive_cardcollect(Path(d) / "c.db")
             store.owner_round_running(conn)                     # 구단주 분포(49단계) — test_ownerdist 가 부른다
             store.owner_round_last_end(conn, ("done",))
             store.owner_done_hashes(conn, 1)

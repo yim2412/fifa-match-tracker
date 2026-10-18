@@ -319,6 +319,21 @@ def main() -> int:
     except Exception as e:
         print(f"[WARN] 능력치 시뮬레이터 조회 실패(전적엔 영향 없음): {e}")
 
+    # 카드 정보 자동 채우기(51단계) — 백필이 새로 기대는 칸(키·체형 · 포지션 16칸 · 소속 팀컬러)이 깨지면 여기서 먼저 보이게. 저장 안 함
+    try:
+        import playerinfo
+        if not config.WEB_DATA:
+            print("[WARN] 카드 백필 1장: 웹 데이터 꺼짐 — 건너뜀")
+        elif first_sp is not None:
+            info = playerinfo.fetch_player_info(first_sp)
+            sim = playerinfo.fetch_player_ability(first_sp, 1)
+            ok = playerinfo.page_ok(info) and info.body_type != "-" and playerinfo.sim_ok(sim)
+            print(f"{'[OK]  ' if ok else '[FAIL]'} 카드 백필 1장: 키 {playerinfo.parse_cm(info.height)}cm · 체형 {info.body_type}"
+                  f" · 포지션 {len(sim.position_ovrs)}칸(기대 {len(set(config.SIM_POS_OF.values()))})"
+                  f" · 소속 팀컬러 {len(sim.club_options)}개 · 관계 {len(sim.feature_options)}개")
+    except Exception as e:
+        print(f"[WARN] 카드 백필 1장 확인 실패(카드 정보 자동 채우기만 영향): {e}")
+
     try:
         names = {m["divisionId"]: m["divisionName"] for m in api.get_meta("division")}
         me = next((p for p in details[0]["matchInfo"] if p["ouid"] == ouid), None)

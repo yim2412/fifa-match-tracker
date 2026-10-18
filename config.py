@@ -110,7 +110,7 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 11  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 12  # 2 =1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
 #                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속·최고점·첫 챔스(U1)
@@ -119,6 +119,7 @@ NOTICE_VERSION = 11  # 2 = 1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 �
 #                     9 = 2.9.1 내 계정 경기마다 상대의 그날 순위 구간을 그 시즌 동안 붙인다(N23 — 랭킹 수집을 켠 사람만)
 #                    10 = 2.10.1 구단주 분포 — 1~3000위 150명의 최근 1000판을 내 키로 받아 이름 없는 구단주별 요약(랭킹 수집 + 따로 켠 사람만)
 #                    11 = 2.11.1 시즌 뒤 내 계정 최종 순위 한 번 확인(B8 예측 되짚기) · 구단주 요약에 미드필더·수비수 자리의 공격·수비 값(C4) — 둘 다 랭킹 수집이 켜져야
+#                    12 = 2.12.1 카드 정보 자동 채우기(51단계 — 따로 켠 사람만 · 랭킹 수집과 무관)
 # 옛 동의로 계속 써도 되는 가장 낮은 버전 — 이보다 낮으면 처음 동의(빈 칸)로, 이상이면 창을 보일 때 다시 묻기만.
 # 안내를 또 올릴 땐 "옛 동의자가 모르는 새 기록이 그 사이에 생겼나"로 판단해 고친다(새 기록만 아래처럼 따로 막는다).
 NOTICE_BASE_VERSION = 2
@@ -130,6 +131,7 @@ META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·el
 TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터
 OPP_RANK_NOTICE_VERSION = 9   # 상대 순위 구간(rank.db match_opp_rank — 내 경기마다 상대의 그날 순위 구간)은 이 버전 동의 뒤부터
 OWNER_DIST_NOTICE_VERSION = 10   # 구단주 분포(49단계 · ownerdist.py)는 이 버전 동의 뒤부터
+CARD_BACKFILL_NOTICE_VERSION = 12   # 카드 정보 자동 채우기(51단계 · cardcollect.py)는 이 버전 동의 뒤부터
 # 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
 # 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다 — 8 이 그렇다(그림은 수집과 무관하게
 # 모두에게 해당 · 2026-10-11 사용자: 2~7 동의자 전원에게 한 번 다시 묻는다).
@@ -184,6 +186,12 @@ OWNER_DIST_VAR = "FIFA_OWNER_DIST"
 OWNER_DIST_OFF_VAR = "FIFA_OWNER_DIST_OFF"
 OWNER_DIST_ON = os.getenv(OWNER_DIST_VAR, "").strip()
 OWNER_DIST_OFF = os.getenv(OWNER_DIST_OFF_VAR, "").strip()
+# 카드 정보 자동 채우기(51단계 U5) — 구단주 분포와 같은 꼴: 값은 켠 시각(빈 값 = 꺼짐) · _OFF 는 스스로 끈 사유(blocked — 사용자가 끄면 빈 값).
+# 랭킹 수집과 무관하다(카드 정보는 사람과 이어지지 않는다). set_card_backfill 이 재할당한다 — 다른 모듈은 config.CARD_BACKFILL_ON 으로 읽는다.
+CARD_BACKFILL_VAR = "FIFA_CARD_BACKFILL"
+CARD_BACKFILL_OFF_VAR = "FIFA_CARD_BACKFILL_OFF"
+CARD_BACKFILL_ON = os.getenv(CARD_BACKFILL_VAR, "").strip()
+CARD_BACKFILL_OFF = os.getenv(CARD_BACKFILL_OFF_VAR, "").strip()
 RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
 RANK_COLLECT_INTERVAL_H = 24
 RANK_CHECK_EVERY_MIN = 60           # 앱이 켜져 있는 동안 간격이 지났는지 보는 주기
@@ -414,6 +422,35 @@ OWNER_DIST_SELFCHECK_REQ = 5000               # 누적 요청이 이보다 적�
 OWNER_DIST_SEED = 20261016                    # + 바퀴 시작일 ordinal + 층 번호
 OWNER_DIST_TICK_S = 600                       # 예약이 "받을 차례인가"를 보는 간격(③ — 진행 바퀴가 있거나 새 바퀴 차례면 로더 시작)
 OWNER_DIST_HALT_WAIT_MS = 2000                # [수집 기록 지우기] 가 rank.db 를 지우기 전 로더 멈춤을 기다리는 상한(③b — 화면 스레드가 멈춘다)
+# 카드 정보 자동 채우기(51단계 · cardcollect.py) — 카드 페이지 + 능력치 시뮬레이터 + 팀컬러 상세를 한 장부(card_backfill)로.
+# 근거는 ROADMAP "## 51단계"(F1~F8 · U2) — 상한은 가계부(PRICE_FETCH_MAX)·칩(CHIP_FETCH_MAX)과 따로 센다
+CARD_BACKFILL_DAILY_REQ = 600                 # 하루 요청 상한(U2 — 카드 한 장 = 페이지 + 시뮬레이터 2요청)
+# 그중 팀컬러 상세 몫 — 2026-10-18 조각 ① 실측: 상세 한 장이 325KB(페이지 109KB · 시뮬레이터 71KB)라, 백필 둘째 날 팀컬러 수백 개가
+# 몰리면 하루 내려받기가 ⑦ 상한 100MB 를 넘는다(600 × 325KB ≈ 195MB). 120 이면 39MB + 나머지 480 × 약 90KB ≈ 82MB
+CARD_BACKFILL_TC_DAILY_REQ = 120
+CARD_BACKFILL_DAYS = 30                       # 수요 = 검색한 구단주의 최근 이만큼 경기 양쪽 선발(G5)
+CARD_BACKFILL_TICK_S = 600                    # 예약 간격
+CARD_BACKFILL_FIRST_S = 120                   # 앱을 켠 뒤 첫 틱 — 첫 화면(공통 기준 3)에 안 끼게, 10분 안에 닫는 날도 조금은 채우게
+CARD_BACKFILL_TICK_REQ = 40                   # 틱 하나의 요청 상한 — 600 을 한 틱에 몰지 않고 앱이 켜진 약 2.5시간에 퍼뜨린다
+CARD_BACKFILL_GAP_S = 2                       # 요청 사이(취소로 끊긴다)
+CARD_BACKFILL_FORMAT_STOP = 5                 # 서로 다른 대상이 이만큼 이어 형식 실패하면 그날 멈춤(card_backfill_format)
+CARD_MY_DAYS = 7                              # 요청 순서 ① — 확정 내 계정의 최근 이만큼 선발 카드 시세를 날마다(C5)
+CARD_TRY_MAX = 3                              # 형식 실패가 이만큼이면 그 대상은 CARD_TRY_REST_DAYS 쉰다(card_tries)
+CARD_TRY_REST_DAYS = 7
+CARD_PRICE_KEEP_DAYS = 70                     # card_price_days 보관 — 출처와 무관(켤 때 CachePruneWorker 가 정리)
+C6_PANEL_SHARE = 0.90                         # C6 표본 = 등장의 이 비율을 덮는 상위 카드(F5 기준 654장)
+C6_REFRESH_DAYS = 7                           # 표본 카드 시세를 다시 읽는 간격(이상)
+C6_GAP_MIN = 7                                # 주간 시세 변화가 쓰는 관측 간격(일) — 앱을 하루 안 켜도 9일
+C6_GAP_MAX = 10
+C6_MIN_CARDS = 200                            # 최근 7일 간격 조건을 만족한 관측이 이보다 적으면 "모으는 중"
+C2_GAP_MAX = 1                                # 팀컬러 상성 — 전력 차 절댓값이 이 안인 경기만
+# 경기 기록 spPosition(0~27) → 능력치 시뮬레이터 포지션 칸(16칸 — position_ovrs 의 키). 2026-10-18 조각 ① 실측: 시뮬레이터가 주는 칸은
+# ST LW CF RW CAM LM CM RM CDM LWB CB RWB LB SW RB GK 열여섯 — 좌우가 갈린 자리(RCB·LCB 등)는 가운데 칸으로. 28(SUB)은 없다
+SIM_POS_OF = {
+    0: "GK", 1: "SW", 2: "RWB", 3: "RB", 4: "CB", 5: "CB", 6: "CB", 7: "LB", 8: "LWB",
+    9: "CDM", 10: "CDM", 11: "CDM", 12: "RM", 13: "CM", 14: "CM", 15: "CM", 16: "LM",
+    17: "CAM", 18: "CAM", 19: "CAM", 20: "CF", 21: "CF", 22: "CF", 23: "RW", 24: "ST", 25: "ST", 26: "ST", 27: "LW",
+}
 # 11-lite 랭커 기반 추천(17단계 — rankerpick.recommend). 문턱 10 근거: 2026-10-06 스냅숏 1,000위 안에서 10명 이상인
 # 팀컬러가 52개 중 23개 · 그 23개가 1,000명 중 938명(94%) — 대부분의 사람은 추천을 받고, 그 밖은 "N명뿐"이 맞다
 RANK_TREND_CUTS = (1, 10, 50, 100, 200)  # 랭킹 추이의 컷 그래프(1위 실선 · 나머지 점선) — "상위 구간 200위"까지
@@ -481,6 +518,8 @@ def set_web_data(on: bool) -> None:
     if not on and RANK_COLLECT:
         # 웹 데이터를 끄면 수집도 끈다 — 웹 데이터를 다시 켜도 수집은 따로 다시 고르게(조용히 되살아나지 않게)
         set_rank_collect(False)
+    if not on and CARD_BACKFILL_ON:
+        set_card_backfill(False)   # 같은 이유 — 카드 정보 자동 채우기도 따로 다시 켜게(51단계 5판)
 
 
 def set_rank_collect(on: bool) -> None:
@@ -500,6 +539,16 @@ def set_owner_dist(on: bool, reason: str = "") -> None:
     _save_env(OWNER_DIST_VAR, at)
     _save_env(OWNER_DIST_OFF_VAR, why)
     OWNER_DIST_ON, OWNER_DIST_OFF = at, why
+
+
+def set_card_backfill(on: bool, reason: str = "") -> None:
+    """카드 정보 자동 채우기 토글 — 켜면 지금 시각(막힘이 이어진 날은 이 뒤 날만 센다), 끄면 빈 값과 사유(blocked · 사용자가 끄면 "")."""
+    global CARD_BACKFILL_ON, CARD_BACKFILL_OFF
+    at = datetime.now().isoformat(timespec="seconds") if on else ""
+    why = "" if on else reason
+    _save_env(CARD_BACKFILL_VAR, at)
+    _save_env(CARD_BACKFILL_OFF_VAR, why)
+    CARD_BACKFILL_ON, CARD_BACKFILL_OFF = at, why
 
 
 def _read_env_disk() -> dict | None:
@@ -648,6 +697,30 @@ def read_owner_dist() -> tuple[bool, bool] | None:
     disk = ((vals.get(WEB_DATA_VAR) or "0").strip() == "1" and (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
             and accepted >= OWNER_DIST_NOTICE_VERSION)
     return disk and owner_dist_prereq(), bool(OWNER_DIST_ON) and bool(API_KEY)
+
+
+def card_backfill_allowed() -> bool:
+    """카드 정보 자동 채우기를 해도 되나(이 프로세스 값) — 처음 동의 · 웹 데이터 · 안내 CARD_BACKFILL_NOTICE_VERSION · 토글.
+    랭킹 수집은 안 본다(U5 — 카드 정보는 사람과 이어지지 않는다). 예약은 매 틱 read_card_backfill 로 디스크도 다시 본다."""
+    return (not notice_needed() and WEB_DATA and NOTICE_ACCEPTED >= CARD_BACKFILL_NOTICE_VERSION
+            and bool(CARD_BACKFILL_ON))
+
+
+def read_card_backfill() -> bool | None:
+    """.env 를 디스크에서 다시 읽어 카드 정보 자동 채우기가 켜졌나 — 다른 실행본·손 수정. 토글·사유 전역도 맞춘다.
+    디스크와 이 프로세스 값이 **둘 다** 허락해야 참이다. 못 읽으면 None — 그 틱은 아무것도 안 한다(켜지도 끄지도 않음)."""
+    global CARD_BACKFILL_ON, CARD_BACKFILL_OFF
+    vals = _read_env_disk()
+    if vals is None:
+        return None
+    CARD_BACKFILL_ON = (vals.get(CARD_BACKFILL_VAR) or "").strip()
+    CARD_BACKFILL_OFF = (vals.get(CARD_BACKFILL_OFF_VAR) or "").strip()
+    try:
+        accepted = int((vals.get(NOTICE_VAR) or "0").strip() or 0)
+    except ValueError:
+        accepted = 0
+    disk = (vals.get(WEB_DATA_VAR) or "0").strip() == "1" and accepted >= CARD_BACKFILL_NOTICE_VERSION
+    return disk and card_backfill_allowed()
 
 # ── 표 칸 그림(40단계) ───────────────────────────────────────────────────
 # 크기·비율은 여기 한 곳. ICON_PX 는 표 칸 그림의 높이, 폭은 종류별 가로세로 비율로 정한다.

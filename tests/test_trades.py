@@ -297,12 +297,16 @@ def _web_on(fn):
     return run
 
 
+# 형식대로 온 페이지(playerinfo.page_ok — 이름·OVR·키). 이게 없으면 save_card 가 아무것도 안 쓴다(51단계 A[중]5)
+_FORM = dict(name="선수", ovr=100, height="180cm")
+
+
 def _fake_fetch(calls, empty=()):
     def fetch(spid):
         calls.append(spid)
         if spid in empty:
-            return playerinfo.PlayerInfo(sp_id=spid, prices={1: "-"})
-        return playerinfo.PlayerInfo(sp_id=spid, prices={1: f"{spid},000 BP", 5: f"{spid * 3},000 BP"})
+            return playerinfo.PlayerInfo(sp_id=spid, prices={1: "-"}, **_FORM)
+        return playerinfo.PlayerInfo(sp_id=spid, prices={1: f"{spid},000 BP", 5: f"{spid * 3},000 BP"}, **_FORM)
     return fetch
 
 
@@ -350,7 +354,7 @@ def test_price_failure_skips_one():
     def fetch(spid):
         if spid == 2:
             raise playerinfo.PlayerInfoError("x")
-        return playerinfo.PlayerInfo(sp_id=spid, prices={1: "1,000 BP"})
+        return playerinfo.PlayerInfo(sp_id=spid, prices={1: "1,000 BP"}, **_FORM)
     done, _ = playerinfo.collect_prices(c, [1, 2, 3], "2026-10-07", cap=10, fetch=fetch)
     assert done == 2
 
@@ -507,7 +511,7 @@ def _info_fetch(calls, empty=()):
         calls.append(spid)
         prices = {1: "-"} if spid in empty else {1: f"{spid},000 BP", 8: f"{spid * 9},000 BP"}
         return playerinfo.PlayerInfo(sp_id=spid, name=f"선수{spid}", position="CM", ovr=100 + spid % 10,
-                                     salary=10 + spid % 5, prices=prices)
+                                     salary=10 + spid % 5, prices=prices, height="180cm")
     return fetch
 
 

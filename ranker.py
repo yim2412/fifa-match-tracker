@@ -78,6 +78,23 @@ _BEST_START = 'class="td rank_best"'
 # 차단으로 보는 응답 — D6: 서로 다른 회차에 이어지면 수집을 스스로 끈다(rankcollect)
 _BLOCK_STATUS = (403, 429)
 _CF_MARKERS = ("challenge-platform", "cf-chl-", "Just a moment...")
+# 넥슨 오류·점검 페이지 — 200 으로 와도 앞 ERROR_HEAD 바이트에 이게 있으면 실패(teamcolor · playerinfo 가 같이 본다 — 51단계 3판 A[중]6)
+ERROR_MARKERS = ("bulletin.nexon.com", "nxk/error", "점검 진행 중", "fc_logo_inspection")
+ERROR_HEAD = 4096
+
+
+def classify_web_response(res) -> str | None:
+    """홈페이지 응답 하나 → 실패 종류(None = 정상). "rate"(403·429·Cloudflare 확인) · "down"(그 밖의 비 200 · 오류·점검 페이지).
+    넘김(302)은 따라가지 않는 호출부를 위해 down 으로 본다."""
+    status = getattr(res, "status_code", 200)
+    headers = getattr(res, "headers", None) or {}
+    head = (getattr(res, "text", "") or "")[:ERROR_HEAD]
+    if status in _BLOCK_STATUS or str(headers.get("cf-mitigated", "")).lower() == "challenge" \
+            or any(m in head for m in _CF_MARKERS):
+        return "rate"
+    if status != 200 or any(m in head for m in ERROR_MARKERS):
+        return "down"
+    return None
 
 # 랭킹 목록(닉네임 없이 n4pageno 만) — 한 페이지 20명, 1만 위까지 500페이지.
 # 2026-10-02 실측: 501페이지 이후는 500페이지(9,981~10,000위)를 그대로 반복한다.

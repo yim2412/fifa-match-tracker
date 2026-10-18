@@ -229,16 +229,17 @@ def finish_threads(threads, budget_ms: int) -> None:
 
 # ── 앱 껍데기 ─────────────────────────────────────────────────────────
 class AppShell(QObject):
-    """창 밖에서 사는 것들 — 트레이 · 랭킹 수집 예약 · 구단주 분포 예약 · 상주 중 업데이트 확인 · 종료 · 숨긴 창 내려놓기.
+    """창 밖에서 사는 것들 — 트레이 · 랭킹 수집 예약 · 구단주 분포 예약 · 카드 정보 자동 채우기 예약 · 상주 중 업데이트 확인 · 종료 · 숨긴 창 내려놓기.
     창(MainWindow)은 없을 수도 있다(--tray 로 켰는데 안내 동의·키가 필요할 때 — 열 때 만든다)."""
 
     def __init__(self, app: QApplication, open_window: Callable[[], object] | None = None, sched=None,
-                 single: SingleInstance | None = None, owner_sched=None):
+                 single: SingleInstance | None = None, owner_sched=None, card_sched=None):
         super().__init__()
         self.app = app
         self._open_window = open_window
         self.sched = sched
         self.owner_sched = owner_sched   # 구단주 분포 예약(49단계) — 랭킹 수집 예약처럼 창 밖에서 산다
+        self.card_sched = card_sched     # 카드 정보 자동 채우기 예약(51단계) — 같은 식
         self.window = None
         self.tray: QSystemTrayIcon | None = None
         self._quitting = False
@@ -269,6 +270,8 @@ class AppShell(QObject):
             win.attach_rank_sched(self.sched)
         if self.owner_sched is not None:
             win.attach_owner_sched(self.owner_sched)
+        if self.card_sched is not None:
+            win.attach_card_sched(self.card_sched)
 
     def start(self, tray_mode: bool = False) -> None:
         """tray_mode(--tray): 트레이가 아직 없으면(부팅 직후) TRAY_WAIT_S 까지 다시 보고, 끝내 없으면 창을 활성화하지 않고
@@ -279,6 +282,8 @@ class AppShell(QObject):
             self.sched.start()   # 도는 조건(동의·웹 데이터·토글)은 예약이 매번 본다
         if self.owner_sched is not None:
             self.owner_sched.start()   # 같은 식 — 틱마다 .env 를 다시 읽는다(창이 없어도 돈다)
+        if self.card_sched is not None:
+            self.card_sched.start()
         if config.UPDATE_CHECK:
             self._update_timer.start()
 
@@ -408,6 +413,8 @@ class AppShell(QObject):
             left += self.sched.shutdown(fast=fast) or []
         if self.owner_sched is not None:
             left += self.owner_sched.shutdown(fast=fast) or []   # 진행 바퀴는 running 으로 남는다(다음 실행이 이어 받는다)
+        if self.card_sched is not None:
+            left += self.card_sched.shutdown(fast=fast) or []    # 한 요청 = 한 트랜잭션 — 다음 실행이 날짜 열로 이어 받는다
         if fast:
             finish_threads(left, config.FAST_QUIT_WAIT_S * 1000)
         if self.tray is not None:

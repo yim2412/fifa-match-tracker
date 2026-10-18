@@ -43,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 import autostart
+import cardcollect
 import charts
 import config
 import core_api as core
@@ -2018,6 +2019,113 @@ class OwnerDistScheduler(QObject):
         return []
 
 
+class CardBackfillLoader(QThread):
+    """카드 정보 자동 채우기 한 바퀴(cardcollect.run — 틱 하나 최대 CARD_BACKFILL_TICK_REQ 요청)를 UI 스레드 밖에서.
+    요청 사이 간격은 취소 이벤트의 wait — 끊으면 기다림 없이 돌아온다(끊긴 뒤 기다림 ≤ 도는 요청 하나의 타임아웃)."""
+    done = pyqtSignal(object)   # cardcollect.RunResult
+
+    def __init__(self, today: date):
+        super().__init__()
+        self._cancel = threading.Event()
+        self._today = today
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            res = cardcollect.run(config.DB_PATH, self._today, config.CARD_BACKFILL_DAILY_REQ, self._cancel.is_set,
+                                  sleep=self._cancel.wait)
+        except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등. 다음 틱이 다시 본다
+            res = cardcollect.RunResult(error=type(e).__name__)
+        self.done.emit(res)
+
+
+class CardBackfillScheduler(QObject):
+    """카드 정보 자동 채우기 예약(51단계 G2) — 셸 수명(tray.AppShell 이 쥔다): --tray 로 창 없이도 돈다. 화면 로더(랭커 픽·특성·검색)와
+    **엮지 않는다** — 요청을 하나씩 + 간격으로 보내 web_get 동시 칸을 하나만 쓴다(⑧).
+
+    CARD_BACKFILL_TICK_S 마다 tick = sync(start=True): .env 를 디스크에서 다시 읽어(read_card_backfill — 손 수정·다른 실행본)
+    - 못 읽으면 아무것도 안 한다(켜지도 끄지도 않음)
+    - 꺼졌으면 도는 로더를 멈춘다 — 지우기는 없다(G3 · 카드 정보는 사람과 이어지지 않는다)
+    - 켜져 있으면 로더 시작. 바퀴 끝에 켠 날 뒤로 막힘이 TRAIT_BLOCK_DAYS 이어졌으면 스스로 끈다(사유 blocked)."""
+
+    finished = pyqtSignal(object)     # cardcollect.RunResult — 창이 [정보] 상태 줄·카드 화면을 다시
+    switched_off = pyqtSignal(str)    # 스스로 껐다 — 사유(cardcollect.OFF_REASON_TEXT 의 키)
+
+    def __init__(self, parent=None, now_fn=datetime.now):
+        super().__init__(parent)
+        self._now = now_fn
+        self._timer = QTimer(self)
+        self._timer.setInterval(config.CARD_BACKFILL_TICK_S * 1000)
+        self._timer.timeout.connect(self.tick)
+        self._first = QTimer(self)
+        self._first.setSingleShot(True)
+        self._first.setInterval(config.CARD_BACKFILL_FIRST_S * 1000)
+        self._first.timeout.connect(self.tick)
+        self.loader: CardBackfillLoader | None = None
+        self._quitting = False
+
+    def running(self) -> bool:
+        return self.loader is not None and self.loader.isRunning()
+
+    def start(self) -> None:
+        self._timer.start()
+        self._first.start()   # 첫 틱은 켠 뒤 조금 있다가 — 앱을 10분 안 쓰고 닫는 날에도 조금은 채우게(첫 화면엔 안 끼게)
+
+    def tick(self) -> None:
+        if not self._quitting:
+            self.sync(start=True)
+
+    def sync(self, start: bool = False) -> None:
+        """설정이 바뀌었다(토글 · 웹 데이터 · 동의 · 다시 묻는 창) — 바로 맞춘다. start 면 켜져 있을 때 로더도 띄운다."""
+        on = config.read_card_backfill()
+        if on is None:
+            return   # .env 를 못 읽었다 — 모르는 상태
+        if not on:
+            if self.running():
+                self.loader.cancel()
+            return
+        if start and not self.running() and not self._quitting:
+            w = CardBackfillLoader(self._now().date())
+            w.done.connect(self._on_done)
+            self.loader = w
+            w.start()
+
+    def _on_done(self, res) -> None:
+        if not self._quitting and getattr(res, "blocked", False) and config.CARD_BACKFILL_ON:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    off = cardcollect.should_turn_off(conn, config.CARD_BACKFILL_ON)
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                off = False   # 다음 바퀴 끝에 다시 본다
+            if off:
+                try:
+                    config.set_card_backfill(False, "blocked")
+                except OSError:
+                    pass   # .env 를 못 썼다 — 켜진 채, 다음 바퀴 끝에 다시
+                else:
+                    self.switched_off.emit("blocked")
+        self.finished.emit(res)
+
+    def shutdown(self, fast: bool = False) -> list:
+        """끝낼 때(quit_app) — 한 요청 = 한 트랜잭션이라 끊겨도 반쪽이 안 남는다. fast 면 멈춤 요청만 → 아직 도는 스레드."""
+        self._quitting = True
+        self._timer.stop()
+        self._first.stop()
+        w = self.loader
+        if w is None or not w.isRunning():
+            return []
+        w.cancel()
+        if fast:
+            return [w]
+        w.wait(config.RANK_PAGE_TIMEOUT_S * 1000 + 2000)   # 도는 요청 하나(타임아웃 10초)까지 — terminate 안 함(저장 도중일 수 있다)
+        return []
+
+
 class MainWindow(QMainWindow):
     MATCH_COLUMNS =["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
                      "패스성공률", "평점"]
@@ -2149,6 +2257,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val = None
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
         self._owner_sched: OwnerDistScheduler | None = None   # 구단주 분포 예약 — 같은 셸이 붙여 준다
+        self._card_sched: CardBackfillScheduler | None = None  # 카드 정보 자동 채우기 예약 — 같은 셸이 붙여 준다
         self._maint_workers: list[RankMaintWorker] = []       # 예약이 없을 때만(테스트 창) — _maintain_rank
         self.shell = None          # tray.AppShell — 없으면(테스트) X 가 예전처럼 정리하고 닫는다
         self._quitting = False     # quit_app 이 세운다 — closeEvent 는 받기만
@@ -2506,6 +2615,7 @@ class MainWindow(QMainWindow):
         # 다시 묻는 창에서 웹 데이터를 끄면 수집도 꺼진다 — 그 길로도 랭커 픽 데이터를 지운다. 동의했으면 바로 받기 시작(E9b)
         self.sync_ranker_pick_data()
         self.start_visible_api_loader()
+        self._sync_card_backfill(start=ok)   # 안내 12 수락 직후 — 토글이 켜져 있을 때만 받기 시작(꺼져 있으면 아무것도 안 함)
         return ok
 
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
@@ -2520,6 +2630,19 @@ class MainWindow(QMainWindow):
         self._owner_sched = sched
         sched.switched_off.connect(self._on_owner_dist_off)
         sched.dist_changed.connect(self.refresh_owner_dist_views)   # 새 done 분포 — 칩·문장 다시(PyQt 7: _invalidate)
+
+    def attach_card_sched(self, sched: CardBackfillScheduler) -> None:
+        """카드 정보 자동 채우기 예약도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_card_backfill) 알림만 받는다."""
+        self._card_sched = sched
+        sched.switched_off.connect(self._on_card_backfill_off)
+
+    def _on_card_backfill_off(self, reason: str) -> None:
+        self.statusBar().showMessage(f"카드 정보 자동 채우기 — {cardcollect.OFF_REASON_TEXT.get(reason, reason)}", 0)
+
+    def _sync_card_backfill(self, start: bool = False) -> None:
+        """끄는 길(웹 데이터·동의·다시 묻는 창)과 안내 12 수락에서 — 예약이 .env 를 다시 읽어 맞춘다(창만 있는 테스트에선 없음)."""
+        if self._card_sched is not None:
+            self._card_sched.sync(start=start)
 
     def _on_owner_dist_off(self, reason: str) -> None:
         self.statusBar().showMessage(f"구단주 분포 받기 — {ownerdist.OFF_REASON_TEXT.get(reason, reason)}", 0)
@@ -5365,6 +5488,7 @@ class MainWindow(QMainWindow):
         rank.db 쪽(사람별 표 · 14일 원본 · 동의 직후 따라잡기 — 2.3.1)은 작업 스레드의 정리 한 번으로 — 조건은 거기서 상태로 판정."""
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
         self._sync_owner_dist()   # 구단주 분포 — 전제가 꺼졌으면 로더 멈춤 + 분포까지 지움(양보 사슬과 무관하게 따로)
+        self._sync_card_backfill()   # 카드 정보 자동 채우기 — 웹 데이터·동의가 꺼졌으면 멈춤만(지우기 없음 · 수집과 무관)
         self._invalidate_pick()
         self._invalidate_rank_views()   # 길 ④ 끄기·[수집 기록 지우기] — 전부 이 함수를 거친다
         self._maintain_rank()
@@ -10886,6 +11010,11 @@ class CachePruneWorker(QThread):
 
     def run(self) -> None:
         try:
+            # 카드 날짜별 시세 보관(51단계) — 관문과 무관한 자리라 꺼 둔 사람도 안내문의 날 수대로 지워진다
+            cardcollect.prune(config.DB_PATH, date.today())
+        except Exception:
+            pass
+        try:
             conn = store.open_db(config.DB_PATH)
             try:
                 ids = store.all_match_ids(conn)
@@ -11316,6 +11445,16 @@ class AboutDialog(QDialog):
         self.lb_owner.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_owner)
         self._refresh_owner_row()
+        # 카드 정보 자동 채우기(51단계 U5) — 랭킹 수집과 무관 · 웹 데이터가 꺼졌으면 회색 · 안내 12 전이면 누를 때 묻는다
+        self.chk_card = QCheckBox(notice.CARD_BACKFILL_CHECK)
+        self.chk_card.toggled.connect(self._on_card_toggled)
+        v.addWidget(self.chk_card)
+        self.lb_card = QLabel("")
+        self.lb_card.setTextFormat(Qt.TextFormat.PlainText)
+        self.lb_card.setWordWrap(True)
+        self.lb_card.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_card)
+        self._refresh_card_row()
         # 자동 실행(D2) — 앱 토글 하나. exe 에서만(소스 실행은 python.exe 를 등록하게 된다)
         self.chk_auto = QCheckBox(notice.AUTOSTART_CHECK)
         avail = autostart.available()
@@ -11391,6 +11530,60 @@ class AboutDialog(QDialog):
             "구단주 분포 받기를 껐습니다 — 받던 바퀴는 버리고, 받아 둔 분포는 남깁니다.")
         self._refresh_owner_row()
 
+    def _refresh_card_row(self) -> None:
+        on = config.WEB_DATA and bool(config.CARD_BACKFILL_ON) and config.NOTICE_ACCEPTED >= config.CARD_BACKFILL_NOTICE_VERSION
+        self.chk_card.blockSignals(True)
+        self.chk_card.setChecked(on)
+        self.chk_card.blockSignals(False)
+        self.chk_card.setEnabled(config.WEB_DATA)
+        why = "" if config.WEB_DATA else "넥슨 홈페이지 데이터를 켜야 켤 수 있습니다"
+        if not why and config.CARD_BACKFILL_OFF:
+            why = cardcollect.OFF_REASON_TEXT.get(config.CARD_BACKFILL_OFF, config.CARD_BACKFILL_OFF)
+        status = ""
+        if on or config.CARD_BACKFILL_OFF:
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    status = cardcollect.status_text(cardcollect.status(conn, date.today()))
+                finally:
+                    conn.close()
+            except sqlite3.Error:
+                status = ""
+        self.lb_card.setText(" · ".join(x for x in (why, status) if x))
+
+    def _on_card_toggled(self, on: bool) -> None:
+        if on and config.NOTICE_ACCEPTED < config.CARD_BACKFILL_NOTICE_VERSION:
+            # 수집을 끈 8~11 동의자는 다시 묻는 창을 못 받는다(notice_update_pending) — 회색이면 영영 못 켠다(5판 2회차 A[상]1)
+            ask = getattr(self.parent(), "ask_notice_update", None)
+            if ask is not None:
+                ask(parent=self)
+            else:
+                NoticeDialog(self, reask=True).exec()
+            config.read_env_switches()
+            if config.NOTICE_ACCEPTED < config.CARD_BACKFILL_NOTICE_VERSION or not config.WEB_DATA:
+                self.lb_msg.setText("이용 안내에 동의하지 않았거나 홈페이지 데이터를 꺼 카드 정보 자동 채우기를 켜지 않았습니다.")
+                for chk, val in ((self.chk_web, config.WEB_DATA), (self.chk_rank, config.WEB_DATA and config.RANK_COLLECT)):
+                    chk.blockSignals(True)   # 그 창에서 웹 데이터를 껐으면 수집도 꺼졌다 — 체크를 맞춘다(토글 처리는 창이 이미 했다)
+                    chk.setChecked(val)
+                    chk.blockSignals(False)
+                self.chk_rank.setEnabled(config.WEB_DATA)
+                self._refresh_card_row()
+                self._refresh_owner_row()
+                return
+        try:
+            config.set_card_backfill(on)   # 켜기 = 지금 시각(막힘이 이어진 날은 이 뒤만 센다)
+        except OSError as e:
+            self.lb_msg.setText(f"저장하지 못했습니다: {e}")
+            self._refresh_card_row()
+            return
+        sched = getattr(self.parent(), "_card_sched", None)
+        if sched is not None:
+            sched.sync(start=on)   # 켜면 바로 한 바퀴, 끄면 로더 멈춤(받아 둔 카드 정보는 남긴다)
+        self.lb_msg.setText(
+            f"카드 정보 자동 채우기를 켰습니다 — 하루 최대 {config.CARD_BACKFILL_DAILY_REQ}번, 10분마다 조금씩 읽습니다." if on else
+            "카드 정보 자동 채우기를 껐습니다 — 받아 둔 카드 정보는 남깁니다.")
+        self._refresh_card_row()
+
     def _sync_pick(self) -> None:
         """수집이 꺼졌으면 랭커 픽 데이터를 지운다(E12) — 메인 창의 한 함수로(로더를 먼저 멈춘다)."""
         sync = getattr(self.parent(), "sync_ranker_pick_data", None)
@@ -11415,6 +11608,7 @@ class AboutDialog(QDialog):
         self.lb_msg.setText("켰습니다 — 다음 조회부터 반영됩니다." if on else
                             "껐습니다 — 다음 조회부터 넥슨 홈페이지를 읽지 않습니다.")
         self._refresh_owner_row()
+        self._refresh_card_row()   # 끄면 카드 정보 자동 채우기도 꺼졌다(set_web_data) — 예약은 _sync_pick 이 멈췄다
 
     def _on_rank_toggled(self, on: bool) -> None:
         try:
@@ -11667,7 +11861,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0  # 이미 떠 있다 — 그 창을 앞으로 불렀다
     # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
     shell = tray.AppShell(app, open_window=lambda: _open_window(shell),
-                          sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler())
+                          sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler(),
+                          card_sched=CardBackfillScheduler())
     if tray_mode:
         # 부팅 때 자동 실행 — 창·막는 창·미리 읽기 없이 트레이만. 동의·키가 필요하면 창도 만들지 않는다
         # (창을 만들면 시즌표를 넥슨 웹에 요청한다) — 사용자가 트레이에서 열 때 안내·키 창.

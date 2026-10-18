@@ -63,6 +63,12 @@ WEB_DATA_HTML = f"""
 <p>켜 두면 스쿼드 축구장(스쿼드 창·구단주 비교)을 열 때 그 칸에 놓인 카드의 시세·급여·OVR 을 <b>하루 최대
 {config.CHIP_FETCH_MAX}장</b> 자동으로 읽어 이 PC 에 둡니다(시세는 하루, 급여·OVR 은 {config.CARD_INFO_TTL_DAYS}일 동안 다시 안 읽음).
 선수 카드를 직접 열 때는 지금처럼 상한 없이 읽습니다.</p>
+<p><b>카드 정보 자동 채우기</b>(선택 · 기본 꺼짐) — [정보] 에서 이것을 따로 켜 두면, 창을 닫아도(트레이·자동 실행) 검색한 구단주의
+최근 {config.CARD_BACKFILL_DAYS}일 경기에 나온 선수 카드의 정보(키·체형·자리별 능력치·팀컬러·시세)를 넥슨 홈페이지에서
+<b>하루 최대 {config.CARD_BACKFILL_DAILY_REQ}번</b> 읽어 이 PC 에 둡니다. 넥슨에는 카드·팀컬러 번호만 보내고 구단주 정보는 보내지 않습니다.
+랭킹 수집과는 무관합니다. 카드 정보는 사람과 이어지지 않아 꺼도, [수집 기록 지우기]를 해도 지우지 않습니다. 카드의 날짜별 시세
+(내 계정이 쓴 카드 · 시세 변화 표본)는 {config.CARD_PRICE_KEEP_DAYS}일 뒤 지웁니다. 홈페이지 데이터를 끄면 이 설정도 꺼집니다.
+넥슨이 요청을 서로 다른 날 {config.TRAIT_BLOCK_DAYS}번 이어서 막으면 스스로 끕니다.</p>
 """
 
 # 구단주 분포(49단계) 안내의 숫자 — 상수에서 그린다(상수만 바꿔도 NOTICE_GOLDEN 이 잡는다)
@@ -171,6 +177,12 @@ CHANGES = {
 <p><b>구단주 분포 받기</b>를 켠 사람은, 다음 바퀴부터 구단주별 요약에 미드필더·수비수 자리의 공격·수비 값(이름 없음)이 더해집니다 —
 [성적 진단 › 자리별 수준] 에 씁니다. 받는 양은 그대로입니다. 동의하기 전에는 둘 다 하지 않습니다(아래 '랭킹 수집').</p>
 """,
+    12: f"""
+<p><b>카드 정보 자동 채우기</b>(선택 · 기본 꺼짐) — [정보] 에서 따로 켜면, 검색한 구단주의 최근 {config.CARD_BACKFILL_DAYS}일 경기에 나온
+선수 카드의 키·체형·자리별 능력치·팀컬러·시세를 넥슨 홈페이지에서 하루 최대 {config.CARD_BACKFILL_DAILY_REQ}번 읽어 이 PC 에 둡니다
+(창을 닫아도 트레이에서). 카드·팀컬러 번호만 보내고, 카드 정보는 꺼도 지우지 않으며, 날짜별 시세는 {config.CARD_PRICE_KEEP_DAYS}일 뒤 지웁니다.
+랭킹 수집과 무관하고, 켜지 않으면 아무것도 읽지 않습니다(아래 '넥슨 홈페이지 데이터').</p>
+""",
 }
 
 
@@ -187,7 +199,22 @@ WEB_DATA_CHECK = "넥슨 홈페이지 데이터 읽기 켜기 (선택)"
 WEB_DATA_ON_NOW = "지금 켜져 있음 — 계속 쓰려면 체크"   # 안내 글이 바뀌어 다시 동의받을 때(D5)
 RANK_COLLECT_CHECK = "랭킹 수집 켜기 — 하루 한 번 랭킹 1만 명 (선택)"
 OWNER_DIST_CHECK = "구단주 분포 받기 — 서비스 단계 키가 필요합니다 (선택)"
+CARD_BACKFILL_CHECK = f"카드 정보 자동 채우기 — 하루 최대 {config.CARD_BACKFILL_DAILY_REQ}번 (선택)"
 AUTOSTART_CHECK = "윈도우를 켤 때 트레이로 자동 실행 (선택)"
+
+
+def card_empty_text(state) -> str:
+    """카드 정보를 쓰는 화면의 빈 화면 글 — 사유별(cardcollect.screen_state). 따라 할 수 있는 안내만(5판 B[중]10)."""
+    if state == "web_off":
+        return "[정보] 에서 넥슨 홈페이지 데이터를 먼저 켜야 카드 정보를 채울 수 있습니다."
+    if state == "toggle_off":
+        return "[정보] 에서 '카드 정보 자동 채우기'를 켜면 채웁니다."
+    if state == "blocked":
+        return "넥슨이 오늘 요청을 막아 내일 다시 채웁니다."
+    if isinstance(state, tuple) and state and state[0] == "filling":
+        _, known, need = state
+        return f"카드 정보를 채우는 중입니다 · {known:,}/{need:,}장"
+    return ""
 AGREE_CHECK ="위 내용을 읽었고 동의합니다"
 
 # ── 오픈소스 고지 ─────────────────────────────────────────────────────

@@ -32,6 +32,7 @@
 | `tradecollect.py` | 거래 기록 받기 — 넥슨 거래 API 는 **ouid 를 무시하고 키 주인 것만** 준다(`trades` 에 ouid 열 없음) · 받는 규칙은 머리말 표를 먼저 |
 | `rankerpick.py` | 랭커 픽·추천 — 상위 랭커 마지막 경기를 오픈API 로(하루 계수 `api_budget` · 429 · **화면이 보일 때만**) · 지우기는 `purge_ranker_pick_data` 한 곳 · 세부는 머리말 |
 | `ownerdist.py` | 구단주 분포 v2(49단계 조각 ①) — 1~3000위 150명의 최근 1000판을 **사용자 서비스 키로** 받아 이름 없는 요약으로 저장(`run_round`) · **예약(③a)은 `app_main.OwnerDistScheduler`(셸 수명 · 10분 틱 · 랭커 픽·검색 로더와 엮지 않는다 — 양보 없음) · 토글 `config.OWNER_DIST_ON`(켠 시각 — 오신고·연속 실패는 그 뒤 시작한 바퀴만)·`OWNER_DIST_OFF`(사유)는 재할당 전역 · 전제 꺼짐 길은 `sync_ranker_pick_data` 한 줄(분포까지 지움) · 토글 끔·키 바뀜은 진행 바퀴만** · 요청 직전에만 하루 계수·바퀴 상한·`attempts=1`·429 전원 쉼 · 상세는 `get_match_detail_nocache` · 구단주 한 명이 끝날 때만 저장 · 분포 읽기 `load_dist`(최신 done · 45일 낡음 · 층마다 `OWNER_DIST_MIN_PER_STRATUM` · **거르기 기준 시각은 바퀴 `ended_at`**)·`OwnerDist.pct`(층 가중 경험 CDF) · 칩 판정은 `habits.dist_side`·`strength_chips(…, basis)` · 문장은 `analysis._creation_rules(…, basis)`(마무리만) · **화면은 `app_main._dist_basis()` 한 곳**(칩·문장이 같이 · 분포는 매번 fifa.db 에서 · 내 1000판만 캐시 · 바뀌는 길은 `refresh_owner_dist_views`) · 규칙 표는 파일 머리말 |
+| `cardcollect.py` | 카드 정보 자동 채우기(51단계 조각 ①) — 검색한 구단주 경기의 양쪽 선발 카드를 카드 페이지·시뮬레이터 1강·팀컬러 상세로 채운다(`card_extra`·`card_price_days`·`card_tries`) · **관문 `config.card_backfill_allowed`·`read_card_backfill`(웹 데이터·안내 12·토글 — 랭킹 수집은 안 본다)** · 예약 `app_main.CardBackfillScheduler`(셸 수명 · 10분 틱 · 첫 틱 120초) · 요청 직전에만 하루 계수(`card_backfill` 600 · 팀컬러 몫 120) · 막힘·형식·시도 기록 규칙은 파일 머리말 표 · 끄거나 지워도 카드 정보는 안 지운다 · 측정 도구는 kind `card_backfill_dev` + `window` |
 | `squad_timeline.py` · `trade_book.py` | 스쿼드 타임라인 · 이적시장 가계부 — 계산만(화면은 `core_api`) · 거래는 내 계정일 때만(`app_main._timeline_for_screen`) · 세부는 `squad_timeline.py` 머리말 |
 | `methods.py` | 산출 방법 페이지(2.9.1 D2) — 글은 정적이고 **수치는 config·xg_grid·analysis 에서 읽는다**(`page_html()` 하나만 부른다 · 색 안 씀) · `XG_TEST_*` 만 손으로 적은 문구라 xG 표를 다시 세우면 같이 고친다 · 세부는 머리말 |
 | `tray.py` | 트레이 상주 · **종료 진입점 하나 `quit_app(fast)`**(새 종료 경로는 여기를 거친다) · 한 번만 실행은 뮤텍스 · **트레이 풍선 알림 없음** · 세부는 머리말 |
@@ -69,6 +70,7 @@ python tests/test_rankmeta.py  # 랭커 메타 ② 스냅숏 읽기(하루 승�
 # 팀컬러 효과(2.2.1) 파싱·가르기는 test_parsing(실목록 픽스처 teamcolor_list.html.gz) · 창은 test_ui_smoke · 실제 넥슨은 check_api 의 팀컬러 줄
 python tests/test_ownerdist.py    # 구단주 분포 받기 — 계수·상한·429·끊김 이어 받기·nocache·바퀴 상태·지우기(소금·해시가 파일 바이트에 없는지까지) — 가짜 API(네트워크 없음)
 python tests/test_ownerdist_sched.py   # 구단주 분포 예약·토글·동의 10·지우기 — 가짜 로더(네트워크 없음 · 창이 로더를 양보시키면 FAIL)
+python tests/test_cardcollect.py   # 카드 정보 자동 채우기(51단계) — 순서·계수·시도 기록·막힘·형식·날짜별 시세·예약·토글 · 시뮬레이터 칸 골든(sim_*.html.gz)
 python tests/test_rankerpick.py   # 선수 색인 · 랭커 픽 받기(상한·429·닉네임 바뀜) · 지우기(파일 바이트까지) — 가짜 API(네트워크 없음)
 python tools/season_notice.py 2026-11-12   # 종료일 공지 — 바꾼 본문 파일 + gh 명령 출력(공개는 사람이)
 python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175% 를 흉내 내 실제 창을 띄워 잰다

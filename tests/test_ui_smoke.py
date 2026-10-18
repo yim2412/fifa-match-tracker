@@ -2228,6 +2228,9 @@ def test_main_starts_update_check_after_show():
         def attach_owner_sched(self, sched):
             calls.append("구단주 분포")  # 같은 셸이 쥐고 붙여 준다(49단계 ③a)
 
+        def attach_card_sched(self, sched):
+            calls.append("카드 정보")  # 같은 셸이 쥐고 붙여 준다(51단계 G2)
+
         def open_last_account(self):
             calls.append("마지막 계정")
 
@@ -2267,8 +2270,8 @@ def test_main_starts_update_check_after_show():
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
     tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
-    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "show", "새 버전 확인", "캐시 정리", *tail, "미리 읽기"], calls
-    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "show", "새 버전 확인", "캐시 정리", *tail, "마지막 계정"], calls
+    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", *tail, "미리 읽기"], calls
+    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", *tail, "마지막 계정"], calls
 
 
 def _stop_shell():
@@ -2281,6 +2284,8 @@ def _stop_shell():
             sh.sched.shutdown()
         if sh.owner_sched is not None:
             sh.owner_sched.shutdown()
+        if sh.card_sched is not None:
+            sh.card_sched.shutdown()
     app_main._SHELL = None
 
 
@@ -2295,6 +2300,9 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
             pass
 
         def attach_owner_sched(self, sched):
+            pass
+
+        def attach_card_sched(self, sched):
             pass
 
         def schedule_backfill(self, delay_s):
@@ -6761,7 +6769,8 @@ def test_notice_versions_split_first_and_reask():
                                             (6, False, True, True), (7, False, True, True),
                                             (8, False, True, True), (9, False, True, True),
                                             (10, False, True, True),    # 11 이 올라서 10 동의자도 수집을 켰으면 다시 묻는다
-                                            (11, False, False, True)]:
+                                            (11, False, True, True),    # 12 가 올라서 11 동의자도(수집을 끈 사람은 토글을 누를 때 — 51단계 5판)
+                                            (12, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -6771,10 +6780,12 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (11, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (12, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         assert config.NOTICE_COLLECT_ONLY_FROM == 8
+        # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
+        assert config.CARD_BACKFILL_NOTICE_VERSION == 12
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -6854,7 +6865,8 @@ def test_reask_shows_only_changes_after_accepted():
 # 실질 변경이면 config.NOTICE_VERSION 을 올리고 새 줄을 더한다 · 맞춤법·표현만이면 이 버전의 값만 고친다.
 NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
                  10: "8ce00c5021fb0806",                          # 10 = 2.10.1 구단주 분포 받기(49단계)
-                 11: "75573220bc230e22"}                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
+                 11: "75573220bc230e22",                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
+                 12: "94ce0c28423b70b9"}                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계)
 
 
 def _notice_digest() -> str:
@@ -7517,7 +7529,7 @@ def test_price_tab_fills_cache():
     """선수 카드 [시세] 탭이 읽은 시세는 작업 스레드가 카드 시세 캐시에 넣는다(화면 스레드에서 DB 쓰기 안 함)."""
     keep = playerinfo.fetch_player_info
     playerinfo.fetch_player_info = lambda sp, timeout=10: playerinfo.PlayerInfo(
-        sp_id=sp, prices={0: "-", 1: "308,000 BP", 8: "17,400,000 BP"})
+        sp_id=sp, name="가", ovr=100, height="180cm", prices={0: "-", 1: "308,000 BP", 8: "17,400,000 BP"})
     try:
         ld = app_main.PlayerInfoLoader(424242)
         got = []
@@ -7536,7 +7548,7 @@ def test_user_opened_card_fills_card_info_without_budget():
     """사용자가 연 선수 카드는 급여·OVR 도 캐시에(card_info) — 하루 계수는 안 한다(상한 없음 · ROADMAP B)."""
     keep = playerinfo.fetch_player_info
     playerinfo.fetch_player_info = lambda sp, timeout=10: playerinfo.PlayerInfo(
-        sp_id=sp, name="가", position="CM", ovr=119, salary=30, prices={1: "1,000 BP"})
+        sp_id=sp, name="가", position="CM", ovr=119, salary=30, height="180cm", prices={1: "1,000 BP"})
     def used():
         c = store.open_db(config.DB_PATH)
         try:
@@ -7562,7 +7574,7 @@ def test_card_info_loader_reads_once_then_cache():
 
     def fetch(sp, timeout=10):
         calls.append(sp)
-        return playerinfo.PlayerInfo(sp_id=sp, ovr=100, salary=20, prices={1: "2,000 BP"})
+        return playerinfo.PlayerInfo(sp_id=sp, name="가", ovr=100, height="180cm", salary=20, prices={1: "2,000 BP"})
     playerinfo.fetch_player_info = fetch
     config.WEB_DATA = True
     try:

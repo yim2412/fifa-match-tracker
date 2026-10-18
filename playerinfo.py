@@ -154,7 +154,22 @@ def _selector_items(html: str, wrapper_class: str) -> list[tuple[int, str]]:
 
 
 class PlayerInfoError(Exception):
-    pass
+    """kind: "off"(웹 데이터 꺼짐) · "down"(연결 실패·넘김·5xx·오류·점검 페이지) · "rate"(403·429·Cloudflare 확인 — 막힘) ·
+    "format"(형식이 바뀜). teamcolor.TeamColorError · traitcollect.TraitError 와 같은 갈래 — 카드 백필(51단계)은 rate 면 그날 멈추고,
+    down 이면 그 바퀴만 끝낸다(점검을 막힘으로 세지 않는다)."""
+
+    def __init__(self, message: str, kind: str = "down"):
+        super().__init__(message)
+        self.kind = kind
+
+
+def _checked(res, what: str) -> str:
+    """응답 → 본문. 막힘·오류·점검 페이지는 PlayerInfoError — 예전엔 200 점검 페이지를 그대로 파싱해 빈 카드로 저장했다(51단계 A[중]6)."""
+    kind = ranker.classify_web_response(res)
+    if kind is not None:
+        status = getattr(res, "status_code", 200)
+        raise PlayerInfoError(f"{what} 실패(HTTP {status})" if status != 200 else f"{what} — 넥슨 오류·점검 페이지", kind)
+    return res.text
 
 
 # 강화(1~13강) 선택지 — PC 데이터센터 선수 정보 변경 팝업과 동일한 범위.
@@ -274,14 +289,13 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
         "n1Change": 0, "strPlayerImg": "",
     }
     if not config.WEB_DATA:
-        raise PlayerInfoError(config.WEB_DATA_OFF_MSG)
+        raise PlayerInfoError(config.WEB_DATA_OFF_MSG, "off")
     try:
         res = ranker.web_get(_session, PLAYER_ABILITY_URL, "post", data=data, timeout=timeout)
-        res.raise_for_status()
     except requests.RequestException as e:
         raise PlayerInfoError(f"능력치 시뮬레이터 조회 실패: {e}") from e
 
-    html = res.text
+    html = _checked(res, "능력치 시뮬레이터 조회")
     groups: dict[str, int] = {}
     abilities: dict[str, int] = {}
     # 6분류 요약이 개별 능력치보다 먼저 온다. "드리블"은 요약과 개별 능력치
@@ -312,14 +326,13 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
 def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:
     """선수 카드 상세를 가져온다. 네트워크·파싱 실패는 PlayerInfoError."""
     if not config.WEB_DATA:
-        raise PlayerInfoError(config.WEB_DATA_OFF_MSG)
+        raise PlayerInfoError(config.WEB_DATA_OFF_MSG, "off")
     try:
         res = ranker.web_get(_session, PLAYER_INFO_URL, params={"spid": sp_id}, timeout=timeout)
-        res.raise_for_status()
     except requests.RequestException as e:
         raise PlayerInfoError(f"선수 정보 조회 실패: {e}") from e
 
-    html = res.text
+    html = _checked(res, "선수 정보 조회")
     info = PlayerInfo(sp_id=sp_id)
 
     m = _NAME.search(html)
@@ -397,15 +410,66 @@ def prices_as_int(info: PlayerInfo) -> dict[int, int]:
     return out
 
 
+_CM = re.compile(r"(\d+)\s*cm")
+_KG = re.compile(r"(\d+)\s*kg")
+
+
+def parse_cm(text) -> int | None:
+    """"193cm" → 193. 못 읽으면 None."""
+    m = _CM.search(text or "")
+    return int(m.group(1)) if m else None
+
+
+def parse_kg(text) -> int | None:
+    m = _KG.search(text or "")
+    return int(m.group(1)) if m else None
+
+
+def page_ok(info: PlayerInfo) -> bool:
+    """선수 페이지가 형식대로 왔나 — 이름·OVR·키. 점검·깨진 페이지는 셋 다 비어 온다."""
+    return info.name != "-" and info.ovr is not None and parse_cm(info.height) is not None
+
+
 def save_card(conn, info: PlayerInfo, day: str) -> bool:
-    """선수 페이지 한 번 읽은 것을 두 캐시에 — 시세(card_prices · 하루)와 카드 정보(card_info · 30일). 시세가 있었나를 돌려준다."""
+    """선수 페이지 한 번 읽은 것을 두 캐시에 — 시세(card_prices · 하루)와 카드 정보(card_info · 30일). 시세가 있었나를 돌려준다.
+    형식대로 오지 않은 페이지(page_ok)는 아무것도 안 쓴다 — 예전엔 이름·OVR 없는 줄을 오늘 날짜로 덮어 칩·가계부의 카드 정보가
+    30일 비었다(card_info_fresh 는 날짜만 본다 · 51단계 A[중]5)."""
     import store  # store → seasons → … 순환을 피해 여기서
+    if not page_ok(info):
+        return False
     prices = prices_as_int(info)
     if prices:
         store.save_card_prices(conn, info.sp_id, prices, day)
     store.save_card_info(conn, info.sp_id, info.name if info.name != "-" else None,
                          info.position if info.position != "-" else None, info.ovr, info.salary, day)
     return bool(prices)
+
+
+def sim_ok(sim: AbilitySim) -> bool:
+    """시뮬레이터가 형식대로 왔나 — 포지션 16칸(config.SIM_POS_OF 의 칸 전부)."""
+    return set(sim.position_ovrs) == set(config.SIM_POS_OF.values())
+
+
+def save_card_extra_page(conn, info: PlayerInfo, day: str) -> None:
+    """카드 백필(51단계) — 페이지 쪽(키·몸무게·체형). 시뮬레이터 쪽 열은 건드리지 않는다(G4 — 한쪽만 성공하면 그쪽만)."""
+    with conn:
+        conn.execute("INSERT INTO card_extra (spid, height, weight, body, page_on) VALUES (?, ?, ?, ?, ?)"
+                     " ON CONFLICT(spid) DO UPDATE SET height = excluded.height, weight = excluded.weight,"
+                     " body = excluded.body, page_on = excluded.page_on",
+                     (info.sp_id, parse_cm(info.height), parse_kg(info.weight),
+                      info.body_type if info.body_type != "-" else None, day))
+
+
+def save_card_extra_sim(conn, spid: int, sim: AbilitySim, day: str) -> None:
+    """카드 백필 — 시뮬레이터 1강 쪽(포지션 16칸 OVR · 소속·관계 팀컬러). 강화 팀컬러는 카드가 아니라 강화 단계로 정해져 안 둔다(F2)."""
+    import json
+    with conn:
+        conn.execute("INSERT INTO card_extra (spid, pos_ovr, club_tc, rel_tc, sim_on) VALUES (?, ?, ?, ?, ?)"
+                     " ON CONFLICT(spid) DO UPDATE SET pos_ovr = excluded.pos_ovr, club_tc = excluded.club_tc,"
+                     " rel_tc = excluded.rel_tc, sim_on = excluded.sim_on",
+                     (spid, json.dumps(sim.position_ovrs, ensure_ascii=False, sort_keys=True),
+                      json.dumps([list(x) for x in sim.club_options], ensure_ascii=False),
+                      json.dumps([list(x) for x in sim.feature_options], ensure_ascii=False), day))
 
 
 # 쓰임별 하루 계수 이름(store.api_budget.kind)
@@ -420,12 +484,14 @@ def collect_cards(conn, spids, day: str, kind: str, cap: int, cancel=lambda: Fal
     need(spid) 가 참인 카드만(기본: 오늘 시세가 없는 카드). 요청 직전에만 그날 그 쓰임(kind)의 계수를 1 더하고
     상한(cap)에 닿으면 멈춘다 — 실행이 여러 번이어도, 시세가 비어 와 저장되지 않는 카드도 센다.
     웹 데이터가 꺼졌으면 요청도 계수도 없이 멈춘다. 한 장 = 한 트랜잭션, 카드 사이마다 cancel.
-    한 장 실패는 건너뛴다(나머지를 막지 않게). on_card(PlayerInfo) — 읽은 카드를 화면에 바로 넘길 때."""
+    한 장 실패는 건너뛴다(나머지를 막지 않게). on_card(PlayerInfo) — 읽은 카드를 화면에 바로 넘길 때.
+    그날 읽은 카드(시세가 비어 왔어도 · 형식이 깨져 와도)는 그날 다시 안 읽는다 — 시도 기록 card_tries 의 "p:<spid>"
+    (카드 백필의 "c:" 와 따로 · 51단계 4회차 [중]). 형식 실패가 CARD_TRY_MAX 번이면 CARD_TRY_REST_DAYS 쉰다."""
     import store
     fetch = fetch or fetch_player_info
     need = need or (lambda s: not store.card_price_fresh(conn, s, day))
     done = skipped = 0
-    todo = [s for s in dict.fromkeys(spids) if need(s)]
+    todo = [s for s in dict.fromkeys(spids) if need(s) and not store.try_skip(conn, f"p:{s}", day)]
     for i, spid in enumerate(todo):
         if cancel() or not config.WEB_DATA:
             break
@@ -434,7 +500,13 @@ def collect_cards(conn, spids, day: str, kind: str, cap: int, cancel=lambda: Fal
             break
         try:
             info = fetch(spid)
-        except PlayerInfoError:
+        except PlayerInfoError as e:
+            if e.kind == "format":
+                store.try_record(conn, f"p:{spid}", day, ok=False)
+            continue
+        ok = page_ok(info)
+        store.try_record(conn, f"p:{spid}", day, ok=ok)
+        if not ok:
             continue
         save_card(conn, info, day)
         done += 1
