@@ -1979,9 +1979,9 @@ class ShotMapWidget(QWidget):
 
     X_MIN = 0.45  # 이보다 뒤(자기 진영)의 슛은 거의 없다 — 아래 경계로 삼는다.
 
-    def __init__(self):
+    def __init__(self, min_size: tuple[int, int] = (560, 460)):
         super().__init__()
-        self.setMinimumSize(560, 460)
+        self.setMinimumSize(*min_size)   # 구단주 비교는 둘을 나란히 놓아 더 작게 준다(1280 창에서 가로 스크롤이 안 생기게)
         self._shots: list = []
         self._assists = False
 

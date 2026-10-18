@@ -694,7 +694,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 50, len(tables)   # 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 52, len(tables)   # 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -1752,6 +1752,8 @@ def test_poslevel_empty_states_stage_names_and_cache():
                                 habits.PosCell("DF", "def", 995, 93.0, 76.0, 100.0, None, "range")))
     with _OwnerDistOn(_FakeDist()):
         try:
+            # 관문 값이 자리 값 99 이던 때는 늘 "동의 전"이었다 — 확정(11) 뒤엔 동의 전 상태를 직접 만든다
+            config.OWNER_DIST_V2_NOTICE_VERSION = config.NOTICE_ACCEPTED + 1
             for why, text in (("none", _win.POSLEVEL_NO_ROUND), ("thin", _win.POSLEVEL_THIN), ("v1", _win.POSLEVEL_NEED_NOTICE)):
                 app_main.core.load_pos_dist = lambda conn, now, why=why: (None, why)
                 _win._render_poslevel()
@@ -5044,6 +5046,84 @@ def test_compare_profile_rows_and_key_players():
         _win.sp_compare_n.setValue(saved)
 
 
+def test_compare_extra_tabs_render_and_fit():
+    """구단주 비교 D1(50단계) — 탭 셋 · 차이 요약 문구 · 슛 지도·골 흐름 둘 · 자리별 표, 1280×720 에서 가로 스크롤 없이."""
+    saved = (_win.sp_compare_n.value(), config.WEB_DATA, _win.stack.currentIndex(), _win._matches, _win._details)
+    config.WEB_DATA = False
+    real_summary = app_main.core.compare_summary
+    try:
+        assert _win.pt_compare.names() == ["지표·스쿼드", "슛·골 흐름", "자리별"]
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        _at_size(*app_main.MIN_WINDOW)
+        _win._go_page("구단주 비교")
+        many = list(_DETAILS) * 3                       # 같은 경기 12개 — 요약이 나올 수 있는 최소 경기 수를 넘긴다
+        assert len(many) >= app_main.core.COMPARE_MIN_GAMES
+        _win._details = many
+        _win.sp_compare_n.setValue(len(_MATCHES))
+        # 경기가 적으면 요약 대신 이유를 말한다
+        _win._render_compare("상대", list(_MATCHES), _OUID, list(_DETAILS))
+        assert "이상일 때" in _win.lb_compare_summary.text(), _win.lb_compare_summary.text()
+        # 요약: 고르는 건 core.compare_summary 고 화면은 표 값을 그대로 적는다 — 가짜로 바꿔 끼워 문구를 본다
+        fake = app_main.core.CompareDiff("경기당 슛", 3.0, True, 15.0, 7.0)
+        seen = []
+        app_main.core.compare_summary = lambda *a, **k: (seen.append((a, k)), [fake])[1]
+        _win._render_compare("상대", list(_MATCHES), _OUID, many)
+        txt = _win.lb_compare_summary.text()
+        assert "경기당 슛" in txt and "15.0" in txt and "7.0" in txt and "내게 좋음" in txt, txt
+        # 고르기에는 표 값이 같이 간다 — 승률·경기수 줄은 빼고 나머지 8행(방향 검사 재료)
+        table = seen[-1][0][4]
+        assert table and "승률" not in table and "경기수" not in table and "경기당 슛" in table and "평균 득점" in table, table
+        t_row = {_win.tbl_compare.item(r, 0).text(): r for r in range(_win.tbl_compare.rowCount())}["평균 득점"]
+        assert f"{table['평균 득점'][0]:.2f}" == _win.tbl_compare.item(t_row, 1).text(), "표에 보이는 값과 다른 값이 갔다"
+        app_main.core.compare_summary = lambda *a, **k: []
+        _win._render_compare("상대", list(_MATCHES), _OUID, many)
+        assert "뚜렷한 차이 없음" in _win.lb_compare_summary.text()
+        # 슛 지도·골 흐름·자리별은 같은 상세에서
+        used = _win._details_of(many, _MATCHES)
+        sm = app_main.core.shot_map(used, _OUID, mine=True)
+        assert [len(w._shots) for w in _win.shotmap_compare] == [len(sm.shots)] * 2 and sm.shots, "슛 지도가 비었다"
+        assert "기준" in _win.lb_compare_shot_note.text() and "기준" in _win.lb_compare_line_note.text()
+        t = _win.tbl_compare_lines
+        pairs = app_main.core.line_pairs(used, _OUID, used, _OUID)
+        assert pairs and t.rowCount() == 2 * len(pairs), (t.rowCount(), len(pairs))
+        assert t.item(0, 0).text() == _win.COMPARE_LINE_NAME[pairs[0].line]
+        assert t.item(0, 3).text() == str(pairs[0].mine.games)
+        # 좌우 상세가 다르면 각자 자기 것 — 상대는 경기 하나만(슛 수가 내 쪽과 다르다)
+        opp_ms = [m for m in _MATCHES if len(app_main.core.shot_map(_win._details_of(many, [m]), _OUID).shots) > 0][:1]
+        opp_used = _win._details_of(many, opp_ms)
+        assert len(opp_used) == 3 and len(app_main.core.shot_map(opp_used, _OUID).shots) != len(sm.shots)
+        _win._render_compare("상대", opp_ms, _OUID, many)
+        assert [len(w._shots) for w in _win.shotmap_compare] == [len(sm.shots), len(
+            app_main.core.shot_map(opp_used, _OUID).shots)], "상대 슛 지도가 상대 경기가 아니다"
+        for i, det in enumerate((used, opp_used)):
+            flow = _win.box_compare_flow[i]
+            gf = app_main.core.goal_flow(det, _OUID)   # 되짚은 경기 수는 mixed 와 무관
+            assert flow.count() > 1 and f"{gf.replayed:,}경기" in flow.itemAt(0).widget().text(), \
+                (i, gf.replayed, flow.itemAt(0).widget().text())
+        # 1280×720 — 슛 지도 둘이 나란히, 안쪽 스크롤에 가로 막대 없음 / 자리별 표도 안 잘린다
+        _win.pt_compare.set_current("슛·골 흐름")
+        _app.processEvents()
+        _app.processEvents()
+        scroll = _win.pt_compare.page(1)   # 이 탭은 자기 QScrollArea 라 바깥 페이지의 최소 크기에는 안 잡힌다
+        assert not scroll.horizontalScrollBar().isVisible(), "슛 지도 둘이 1280 창에 안 들어간다"
+        a, b = sorted(_win.shotmap_compare, key=lambda s: s.mapTo(scroll, s.rect().topLeft()).x())
+        assert a.mapTo(scroll, a.rect().topRight()).x() < b.mapTo(scroll, b.rect().topLeft()).x(), "나란히가 아니다"
+        assert b.mapTo(scroll, b.rect().topRight()).x() <= scroll.viewport().width(), "오른쪽 지도가 잘렸다"
+        _win.pt_compare.set_current("자리별")
+        _app.processEvents()
+        frame = _win.pages.currentWidget()
+        assert not frame.horizontalScrollBar().isVisible()
+        _check_elisions([_win.tbl_compare_lines])
+    finally:
+        app_main.core.compare_summary = real_summary
+        _win._matches, _win._details = saved[3], saved[4]
+        _win.pt_compare.set_current("지표·스쿼드")
+        _win.sp_compare_n.setValue(saved[0])
+        config.WEB_DATA = saved[1]
+        _win.stack.setCurrentIndex(saved[2])
+        _at_size(1600, 900)
+
+
 _PO_SYM = [0, 3, 4, 6, 7, 10, 12, 16, 18, 24, 26]     # 4-1-2-1-2 · 좌우 짝이 다 있다
 _PO_ASYM = [0, 3, 4, 6, 7, 10, 12, 13, 18, 24, 26]    # 같은 4-1-2-1-2 인데 오른쪽 RM·RCM 만(더 흔하다)
 _PO_424 = [0, 3, 4, 6, 7, 9, 11, 20, 22, 24, 26]      # 4-2-0-0-4 → "4-2-4"
@@ -6677,7 +6757,8 @@ def test_notice_versions_split_first_and_reask():
                                             (4, False, True, True), (5, False, True, True),
                                             (6, False, True, True), (7, False, True, True),
                                             (8, False, True, True), (9, False, True, True),
-                                            (10, False, False, True)]:
+                                            (10, False, True, True),    # 11 이 올라서 10 동의자도 수집을 켰으면 다시 묻는다
+                                            (11, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -6687,7 +6768,10 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (10, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (11, 7, 6, 5, 4, 3, 2)
+        # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
+        assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
+        assert config.NOTICE_COLLECT_ONLY_FROM == 8
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -6766,7 +6850,8 @@ def test_reask_shows_only_changes_after_accepted():
 # 렌더한 안내 전문(숫자는 config 상수로 그린다)의 해시 — 버전과 짝. 글·상수가 바뀌어 FAIL 이면:
 # 실질 변경이면 config.NOTICE_VERSION 을 올리고 새 줄을 더한다 · 맞춤법·표현만이면 이 버전의 값만 고친다.
 NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
-                 10: "8ce00c5021fb0806"}                           # 10 = 2.10.1 구단주 분포 받기(49단계)
+                 10: "8ce00c5021fb0806",                          # 10 = 2.10.1 구단주 분포 받기(49단계)
+                 11: "75573220bc230e22"}                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
 
 
 def _notice_digest() -> str:
@@ -8769,6 +8854,64 @@ def test_card_owner_find():
             conn.close()
         _win._backfill_left = None
         _win._go_page("대시보드")
+
+def test_card_owner_find_player_scope():
+    """N30(50단계) — [카드/선수] 전환: 선수면 pid 가 같은 시즌 카드를 합쳐 찾고 카드별·강화별 사용자 표가 나온다."""
+    d1 = json.loads(json.dumps(_DETAILS[0]))
+    d1["matchId"], d1["matchDate"] = "ownerp1", datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    sp = next(p["spId"] for p in next(p for p in d1["matchInfo"] if p["ouid"] == _OUID)["player"]
+              if p.get("spPosition") not in (None, 28))
+    sp2 = sp + 1_000_000 if sp < 900_000_000 else sp - 1_000_000       # 같은 선수(pid)의 다른 시즌 카드
+    d2 = json.loads(json.dumps(d1))
+    d2["matchId"] = "ownerp2"
+    opp = next(p for p in d2["matchInfo"] if p["ouid"] != _OUID)
+    next(p for p in opp["player"] if p.get("spPosition") not in (None, 28))["spId"] = sp2   # 상대는 다른 시즌 카드
+    keep = dict(_win._names)
+    conn = store.open_db(config.DB_PATH)
+    try:
+        store.save_matches(conn, [d1, d2])
+    finally:
+        conn.close()
+    try:
+        _win._names = {sp: "테스트카드선수", sp2: "테스트카드선수", sp + 1: "테스트카드선수"}   # sp+1 = 이름만 같은 다른 선수
+        _win._go_page("선수로 구단주 찾기")
+        _win.ed_owner_name.setText("테스트")
+        _win.cb_owner_card.setCurrentIndex(_win.cb_owner_card.findData(sp))
+        assert _win.cb_owner_scope.currentData() == _win.OWNER_SCOPE_CARD, "기본은 카드 하나"
+        assert _win.cb_owner_scope.isVisibleTo(_win), "전환 콤보가 화면에 안 달렸다"
+        _win.btn_owner_find.click()
+        card_only = {o["ouid"] for o in _win.owner_rows}
+        assert _OUID in card_only and not _win.fold_owner_cards.isVisibleTo(_win), "카드 모드엔 카드별 표가 없다"
+        _win.cb_owner_scope.setCurrentIndex(_win.cb_owner_scope.findData(_win.OWNER_SCOPE_PLAYER))
+        _win.btn_owner_find.click()
+        both = {o["ouid"] for o in _win.owner_rows}
+        opp_ouid = opp["ouid"]
+        assert {_OUID, opp_ouid} <= both and opp_ouid not in card_only, "다른 시즌 카드를 쓴 상대가 선수 모드에만 나온다"
+        assert _win.fold_owner_cards.isVisibleTo(_win)
+        t = _win.tbl_owner_cards
+        cards = {t.item(r, 0).text() for r in range(t.rowCount())}
+        assert t.rowCount() == 2 and all("테스트카드선수" in c for c in cards), cards   # sp·sp2 둘 — 이름만 같은 sp+1 은 없다
+        assert f"시즌 카드 2장" in _win.lb_owner_status.text(), _win.lb_owner_status.text()
+        assert all(t.item(r, 1).text() and t.item(r, 3).text() for r in range(t.rowCount()))
+        # 카드 모드로 돌아오면 카드별 표는 다시 숨는다
+        _win.cb_owner_scope.setCurrentIndex(_win.cb_owner_scope.findData(_win.OWNER_SCOPE_CARD))
+        _win.btn_owner_find.click()
+        assert not _win.fold_owner_cards.isVisibleTo(_win)
+    finally:
+        _win._names = keep
+        _win.cb_owner_scope.setCurrentIndex(0)
+        conn = store.open_db(config.DB_PATH)
+        try:
+            for t_ in ("match_squads", "squad_match", "squad_owner"):
+                conn.execute(f"DELETE FROM {t_}")
+            conn.execute("DELETE FROM match_players WHERE match_id IN ('ownerp1', 'ownerp2')")
+            conn.execute("DELETE FROM matches WHERE match_id IN ('ownerp1', 'ownerp2')")
+            conn.commit()
+        finally:
+            conn.close()
+        _win._backfill_left = None
+        _win._go_page("대시보드")
+
 
 # ── 2.3.1 랭커 메타 — 랭킹 추이 탭 셋 · [정보] 수집 상태 · 끄는 길의 사람별 지우기(작업 스레드) ──────────
 

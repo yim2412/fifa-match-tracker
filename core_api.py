@@ -61,6 +61,7 @@ from stats import (
     time_weekday_rates,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
     WinDivision, WinRewards, reward_for, win_divisions, win_rewards,
+    COMPARE_LINES, COMPARE_MIN_GAMES, CompareDiff, LineCard, LinePair, compare_summary, line_pairs,
 )
 
 __all__ = [
@@ -121,4 +122,6 @@ __all__ = [
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
     # stats — A2 FC 보상(43단계)
     "WinDivision", "WinRewards", "reward_for", "win_divisions", "win_rewards",
+    # stats — D1 구단주 비교 확장(50단계)
+    "COMPARE_LINES", "COMPARE_MIN_GAMES", "CompareDiff", "LineCard", "LinePair", "compare_summary", "line_pairs",
 ]

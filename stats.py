@@ -2161,3 +2161,134 @@ def ranker_compare(details: list[dict], ouid: str, ranker: dict, limit: int | No
             row.ranker_games, row.ranker_date, row.ranker = got
         rows.append(row)
     return rows
+
+
+# ── 구단주 비교 확장(50단계 D1) ─────────────────────────────────────────────
+COMPARE_MIN_GAMES = 10     # 어느 한쪽이 이보다 적은 경기면 그 행은 z 를 못 낸다(표본분산이 흔들린다)
+COMPARE_Z_MIN = 2.5        # 요약에 올리는 문턱 — 후보 8행이라 우연히 하나 섞일 기대가 약 0.1 (ROADMAP 5판 V4)
+COMPARE_TOP = 4            # 요약 최대 줄 수
+
+
+def _share(ok: float, tries: float) -> float | None:
+    """시도 0 인 경기는 그 행에서 뺀다(None) — 0% 로 읽으면 평균을 끌어내린다."""
+    return ok / tries * 100 if tries else None
+
+
+# (표 행 이름, 클수록 좋음, 한 경기 값(me, opp) → float | None). 이름은 app_main.COMPARE_ROWS·COMPARE_PROFILE_ROWS 라벨과 같다.
+# 평균 득점·실점·점유율·평점은 표(summarize) 와 같은 필드에서, 아래 넷은 team_profile 과 같은 필드에서 경기별로 다시 센다.
+COMPARE_FEATURES = (
+    ("평균 득점", True, lambda me, opp: _num(me.get("shoot") or {}, "goalTotal")),
+    ("평균 실점", False, lambda me, opp: _num(opp.get("shoot") or {}, "goalTotal")),
+    ("평균 점유율", True, lambda me, opp: _num(me.get("matchDetail") or {}, "possession")),
+    ("평균 평점", True, lambda me, opp: _num(me.get("matchDetail") or {}, "averageRating")),
+    ("경기당 슛", True, lambda me, opp: _num(me.get("shoot") or {}, "shootTotal")),
+    ("유효슛 비율", True, lambda me, opp: _share(_num(me.get("shoot") or {}, "effectiveShootTotal"),
+                                              _num(me.get("shoot") or {}, "shootTotal"))),
+    ("패스 성공률", True, lambda me, opp: _share(_num(me.get("pass") or {}, "passSuccess"),
+                                              _num(me.get("pass") or {}, "passTry"))),
+    ("태클 성공률", True, lambda me, opp: _share(_num(me.get("defence") or {}, "tackleSuccess"),
+                                              _num(me.get("defence") or {}, "tackleTry"))),
+)
+
+
+def _per_match(details: list[dict], ouid: str) -> dict[str, list[float]]:
+    """행 이름 → 경기별 값. 승·무·패가 아닌 경기("오류" 등)는 summarize 와 같은 기준으로 뺀다."""
+    out: dict[str, list[float]] = {name: [] for name, _, _ in COMPARE_FEATURES}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or _wdl_of(_result_of(me)) is None:
+            continue
+        for name, _, fn in COMPARE_FEATURES:
+            v = fn(me, opp)
+            if v is not None:
+                out[name].append(v)
+    return out
+
+
+def _mean_var(xs: list[float]) -> tuple[float, float]:
+    n = len(xs)
+    m = sum(xs) / n
+    return m, (sum((x - m) ** 2 for x in xs) / (n - 1) if n > 1 else 0.0)
+
+
+@dataclass
+class CompareDiff:
+    label: str
+    z: float                   # (내 평균 − 상대 평균) / SE — 고르는 데만 쓴다. 보이는 숫자는 표 값
+    higher_is_better: bool
+    mine: float | None = None  # 표 값 (table 을 안 줬으면 경기별 평균)
+    opp: float | None = None
+
+    @property
+    def mine_better(self) -> bool:
+        return (self.z > 0) == self.higher_is_better
+
+
+def compare_summary(my_details: list[dict], my_ouid: str, opp_details: list[dict], opp_ouid: str,
+                    table: dict[str, tuple[float, float]] | None = None) -> list[CompareDiff]:
+    """두 구단주 사이 차이가 뚜렷한 지표 — |z| ≥ COMPARE_Z_MIN 인 행을 큰 순으로 최대 COMPARE_TOP 개.
+
+    z 는 경기별 값의 표본분산으로 낸다(같은 경기 안 슛의 묶임을 이항으로 보지 않는다). 어느 쪽이든 경기가
+    COMPARE_MIN_GAMES 보다 적거나 분모가 0 이면 그 행은 뺀다. table(행 이름 → (내 표 값, 상대 표 값))을 주면
+    경기별 평균과 표 값의 방향이 반대인 행도 뺀다 — 표는 합계 비율이라 경기별 평균과 어긋날 수 있다.
+    승률은 후보가 아니다(표 맨 위 줄이 이미 승률이고 무승부 분모 식이 경기별 값으로 안 떨어진다)."""
+    a, b = _per_match(my_details, my_ouid), _per_match(opp_details, opp_ouid)
+    out = []
+    for name, higher, _ in COMPARE_FEATURES:
+        xs, ys = a[name], b[name]
+        if len(xs) < COMPARE_MIN_GAMES or len(ys) < COMPARE_MIN_GAMES:
+            continue
+        (m1, v1), (m2, v2) = _mean_var(xs), _mean_var(ys)
+        se = math.sqrt(v1 / len(xs) + v2 / len(ys))
+        if se <= 0:
+            continue
+        z = (m1 - m2) / se
+        if abs(z) < COMPARE_Z_MIN:
+            continue
+        mine, opp = table[name] if table and name in table else (m1, m2)
+        if (mine - opp) * z <= 0:
+            continue
+        out.append(CompareDiff(name, z, higher, mine, opp))
+    out.sort(key=lambda r: -abs(r.z))
+    return out[:COMPARE_TOP]
+
+
+# 같은 자리 줄 선수 나란히 — 줄마다 가장 많이 세운 카드 하나씩
+COMPARE_LINES = ("FW", "MF", "DF", "GK")
+
+
+@dataclass
+class LineCard:
+    sp_id: int
+    games: int                                   # 그 줄에 그 카드를 세운 경기
+    values: dict = field(default_factory=dict)   # RANKER_METRICS 이름 → 경기당 값(비율은 %)
+
+
+@dataclass
+class LinePair:
+    line: str
+    mine: LineCard | None = None
+    opp: LineCard | None = None
+
+
+def _top_cards_by_line(details: list[dict], ouid: str) -> dict[str, LineCard]:
+    """줄(FW·MF·DF·GK) → 가장 많이 세운 카드. 같은 카드가 줄 안 여러 자리에 섰으면 합친다. 교체 명단은 자리가 없어 뺀다."""
+    by_line: dict[str, dict[int, dict]] = defaultdict(dict)
+    for (sp_id, pos), a in _my_pair_sums(details, ouid).items():
+        line = position_line(pos)
+        if line is None:
+            continue
+        acc = by_line[line].setdefault(sp_id, defaultdict(float))
+        for k, v in a.items():
+            acc[k] += v
+    out = {}
+    for line, cards in by_line.items():
+        sp_id, a = max(cards.items(), key=lambda kv: (kv[1]["games"], -kv[0]))   # 동률은 카드 번호 작은 쪽 — 실행마다 같게
+        out[line] = LineCard(sp_id, int(a["games"]), _metric_values(a, a["games"]))
+    return out
+
+
+def line_pairs(my_details: list[dict], my_ouid: str, opp_details: list[dict], opp_ouid: str) -> list[LinePair]:
+    """줄마다 (내 대표 카드, 상대 대표 카드) — 어느 한쪽이라도 있는 줄만, COMPARE_LINES 순서."""
+    mine, opp = _top_cards_by_line(my_details, my_ouid), _top_cards_by_line(opp_details, opp_ouid)
+    return [LinePair(line, mine.get(line), opp.get(line)) for line in COMPARE_LINES if line in mine or line in opp]

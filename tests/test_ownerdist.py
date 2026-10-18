@@ -628,7 +628,12 @@ def test_v2_failure_at_owner_level_keeps_the_row_and_round():
 def test_v2_gate_reads_disk_env_with_notice_version():
     keep = config._read_env_disk
     want = config.OWNER_DIST_V2_NOTICE_VERSION
-    assert want > config.NOTICE_VERSION, "확정 전 자리 값은 지금 안내 버전보다 커야 한다(④ 에서 확정)"
+    import notice
+    # ④(2026-10-18)에서 확정 — 이 관문은 "그 재료를 설명한 안내" 이상 동의자만 연다. 안내를 더 올려도 관문은 그 버전에 머문다
+    assert 0 < want <= config.NOTICE_VERSION and want in notice.CHANGES, \
+        "관문 값이 아직 안 쓰인 안내를 가리킨다(자리 값 99 로 되돌아갔거나 CHANGES 에 그 버전 줄이 없다)"
+    assert "자리의 공격·수비 값" in notice.CHANGES[want] and "자리의 공격·수비 값" in notice.RANK_COLLECT_HTML.replace(
+        "<b>", "").replace("</b>", ""), "안내 글이 pos_json 재료를 말하지 않는다"
 
     def fake(notice, web="1", collect="1"):
         return lambda: {config.NOTICE_VAR: str(notice), config.WEB_DATA_VAR: web, config.RANK_COLLECT_VAR: collect}

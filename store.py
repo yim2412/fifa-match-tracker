@@ -520,21 +520,38 @@ def backfill_squads(conn: sqlite3.Connection, stop: Callable[[], bool] = lambda:
     return done
 
 
-def owners_using_card(conn: sqlite3.Connection, spid: int, since_day: int, grade: int | None = None) -> list[dict]:
-    """그 카드를 since_day(toordinal) 이후 선발로 쓴 구단주 — 마지막 사용일 최신순.
-    [{ouid, nickname, last_day, games, positions: {po: n}, grades: {grade: n}}]"""
-    sql = ("SELECT owner, day, match, po, grade FROM match_squads WHERE spid = ? AND day >= ?")
-    args: list = [spid, since_day]
+PLAYER_ID_MOD = 1_000_000   # spid = 시즌 × 1,000,000 + 선수 번호(pid) — 같은 선수의 시즌 카드는 pid 가 같다
+
+
+def card_ids_of_player(names, spid: int) -> list[int]:
+    """spid 와 같은 선수(pid)인 모든 시즌 카드 — names 는 메타의 {spid: 이름}. 자기 자신은 메타에 없어도 넣는다.
+    메타 8만 건을 매번 훑지만 한 번의 클릭이라 색인을 따로 두지 않는다(0.01초대)."""
+    pid = spid % PLAYER_ID_MOD
+    return sorted({s for s in names if isinstance(s, int) and s % PLAYER_ID_MOD == pid} | {spid})
+
+
+def owners_using_cards(conn: sqlite3.Connection, spids: list[int], since_day: int,
+                       grade: int | None = None) -> list[dict]:
+    """그 카드들(같은 선수의 시즌 카드 묶음)을 since_day(toordinal) 이후 선발로 쓴 구단주 — 마지막 사용일 최신순.
+    [{ouid, nickname, last_day, games, positions: {po: n}, grades: {grade: n}, cards: {spid: {games, grades: {grade: n}}}}]
+    games 는 구단주가 그 카드들을 쓴 서로 다른 경기 수(같은 경기에 두 카드를 세울 수는 없지만 같은 카드를 두 자리에
+    세운 줄은 한 경기로 센다). 카드가 58장인 선수도 IN 이 58개라 나눠 읽을 필요가 없다(측정 E · 10-18)."""
+    q = ",".join("?" * len(spids))   # 빈 목록이면 IN () — SQLite 는 오류 없이 빈 결과를 준다
+    sql = f"SELECT spid, owner, day, match, po, grade FROM match_squads WHERE spid IN ({q}) AND day >= ?"
+    args: list = [*spids, since_day]
     if grade is not None:
         sql += " AND grade = ?"
         args.append(grade)
     by: dict[int, dict] = {}
-    for owner, day, match, po, gr in conn.execute(sql, args):
-        o = by.setdefault(owner, {"last_day": day, "matches": set(), "positions": {}, "grades": {}})
+    for spid, owner, day, match, po, gr in conn.execute(sql, args):
+        o = by.setdefault(owner, {"last_day": day, "matches": set(), "positions": {}, "grades": {}, "cards": {}})
         o["last_day"] = max(o["last_day"], day)
         o["matches"].add(match)
         o["positions"][po] = o["positions"].get(po, 0) + 1
         o["grades"][gr] = o["grades"].get(gr, 0) + 1
+        c = o["cards"].setdefault(spid, {"matches": set(), "grades": {}})
+        c["matches"].add(match)
+        c["grades"][gr] = c["grades"].get(gr, 0) + 1
     if not by:
         return []
     names = {}
@@ -550,9 +567,30 @@ def owners_using_card(conn: sqlite3.Connection, spid: int, since_day: int, grade
         if ouid is None:
             continue
         out.append({"ouid": ouid, "nickname": nick, "last_day": o["last_day"], "games": len(o["matches"]),
-                    "positions": o["positions"], "grades": o["grades"]})
+                    "positions": o["positions"], "grades": o["grades"],
+                    "cards": {s: {"games": len(c["matches"]), "grades": c["grades"]} for s, c in o["cards"].items()}})
     out.sort(key=lambda o: (o["last_day"], o["games"]), reverse=True)
     return out
+
+
+def owners_using_card(conn: sqlite3.Connection, spid: int, since_day: int, grade: int | None = None) -> list[dict]:
+    """한 카드만 — owners_using_cards 의 [spid] 한 장짜리(구단주 찾기 [카드])."""
+    return owners_using_cards(conn, [spid], since_day, grade)
+
+
+def card_usage(owners: list[dict]) -> list[dict]:
+    """구단주 목록 → 카드별 사용자 수·경기 수·강화별 사용자 수 (사용자 많은 카드부터).
+    [{spid, owners, games, grades: {grade: 사용자 수}}] — 강화별은 "그 강화로 그 카드를 쓴 구단주 수"(한 구단주가
+    여러 강화를 쓰면 각각에 센다)."""
+    by: dict[int, dict] = {}
+    for o in owners:
+        for spid, c in (o.get("cards") or {}).items():
+            u = by.setdefault(spid, {"spid": spid, "owners": 0, "games": 0, "grades": {}})
+            u["owners"] += 1
+            u["games"] += c["games"]
+            for gr in c["grades"]:
+                u["grades"][gr] = u["grades"].get(gr, 0) + 1
+    return sorted(by.values(), key=lambda u: (-u["owners"], -u["games"], u["spid"]))
 
 
 def known_ids(conn: sqlite3.Connection, ouid: str,

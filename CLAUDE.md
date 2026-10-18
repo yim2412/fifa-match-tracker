@@ -64,6 +64,7 @@ python tests/test_icons.py     # 표 칸 그림(40단계) — 주소 틀 · 받�
 python tests/test_timeline.py  # 스쿼드 타임라인 · 가계부(짝·보유 상태·경계·앞뒤 창) — 지어낸 경기·거래(네트워크 없음)
 python tests/test_predict.py   # 시즌 말 예측 — 가짜 스냅숏(네트워크 없음)
 python tests/test_predict_check.py   # 예측 되짚기(B8) — 가짜 fifa.db·가짜 순위 조회(관문·키 지문·sn 대조·다시 묻기 3일·취소·지우기 — 네트워크 없음)
+python tests/test_compare.py   # 구단주 비교 확장(50단계 D1) — 차이 요약 z·표 값 방향·최소 경기 수 · 자리 줄 대표 카드 짝짓기 — 지어낸 경기 상세(네트워크 없음)
 python tests/test_rankmeta.py  # 랭커 메타 ② 스냅숏 읽기(하루 승률·가성비·구단가치·구간 평균·승률→점수·주간 요약·순위 변동) — 지어낸 rank.db(네트워크 없음)
 # 팀컬러 효과(2.2.1) 파싱·가르기는 test_parsing(실목록 픽스처 teamcolor_list.html.gz) · 창은 test_ui_smoke · 실제 넥슨은 check_api 의 팀컬러 줄
 python tests/test_ownerdist.py    # 구단주 분포 받기 — 계수·상한·429·끊김 이어 받기·nocache·바퀴 상태·지우기(소금·해시가 파일 바이트에 없는지까지) — 가짜 API(네트워크 없음)

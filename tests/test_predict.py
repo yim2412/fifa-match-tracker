@@ -451,9 +451,14 @@ def test_prediction_lines_need_and_negative():
     with_world(go, hi=4900.0)
 
 
-def test_predict_check_gate_placeholder():
-    """안내 자리 — 값이 지금 NOTICE_VERSION 보다 커서 확정 전엔 아무도 통과 못 한다."""
-    assert config.PREDICT_CHECK_NOTICE_VERSION > config.NOTICE_VERSION
+def test_predict_check_gate_points_at_a_written_notice():
+    """④(2026-10-18)에서 확정 — 관문이 실제로 쓰인 안내를 가리킨다(자리 값 99 였을 땐 아무도 통과 못 했다).
+    안내 글이 최종 순위 확인을 말하지 않으면 동의 없이 요청이 나가는 셈이라 글 쪽도 같이 본다."""
+    import notice
+    v = config.PREDICT_CHECK_NOTICE_VERSION
+    assert 0 < v <= config.NOTICE_VERSION and v in notice.CHANGES
+    assert "최종 순위" in notice.CHANGES[v] and "최종 순위를 넥슨 홈페이지에서 한 번 확인" in notice.RANK_COLLECT_HTML
+    assert "다른 구단주의 최종 순위는 묻지 않습니다" in notice.RANK_COLLECT_HTML
 
 
 def test_predict_is_behind_core_api():

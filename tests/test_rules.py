@@ -56,6 +56,9 @@ WEAK_ALLOW = {
     ("analysis.py", "_half_rules", "MIN_GOALS"): "골 수(N19)",
     ("stats.py", "enough", "MIN_BUCKET_SHOTS"): "슛 수",
     ("stats.py", "key_players", "min_games"): "선수 출전 수",
+    ("stats.py", "compare_summary", "COMPARE_Z_MIN"): "z 값 문턱 — 표본이 아니다(D1)",
+    ("stats.py", "compare_summary", "COMPARE_MIN_GAMES"): "경기별 값의 분산을 낼 최소 경기 수 — 승률 표본 아님(D1)",
+    ("app_main.py", "_render_compare_extra", "COMPARE_MIN_GAMES"): "위와 같은 경기 수 — 요약을 못 내는 이유 문구(D1)",
     ("stats.py", "weak", "PLAYER_RATING_MIN_GAMES"): "선수 평점 출전 수",
     ("dashboard.py", "_render_clutch", "MIN_GAUGE_GAMES"): "셋째 칸 지킨 비율 = (승+무)÷선제골 경기 — 승률 아님",
     ("widgets.py", "_refit", "_min_pt"): "글자 크기",
@@ -401,6 +404,8 @@ def _drive_uncovered() -> None:
         db.close()
     import test_rankerpick as trp
     for t in (trp.test_save_indexes_squads, trp.test_backfill_resumes_and_skips_indexed, trp.test_owner_lookup_window_and_grade,
+              trp.test_player_scope_owners_merge_cards_and_count_once,   # 선수 단위 조회(50단계 N30) — IN (카드들)
+
               trp.test_ranker_pick_collects_and_saves, trp.test_ranker_pick_second_429_stops_for_the_day,
               trp.test_ranker_pick_summary, trp.test_clear_removes_ranker_pick_data,
               trp.test_recommend_candidates_sources,    # 11-lite 추천 후보(17단계 — 색인·내 상대 마지막 경기)

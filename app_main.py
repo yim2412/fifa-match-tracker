@@ -3770,6 +3770,38 @@ class MainWindow(QMainWindow):
         scroll.setWidget(w)
         return scroll
 
+    @staticmethod
+    def _goal_flow_lead_rows(box: QVBoxLayout, gf) -> None:
+        """최대 리드별 결과 줄들 — [리드·골 흐름]과 구단주 비교(D1)가 같이 쓴다."""
+        dim = f"color: {T.TEXT_DIM};"
+        for r in gf.leads:
+            label = f"{r.lead}골 이상 리드" if r.lead >= core.MAX_LEAD else f"최대 {r.lead}골 리드"
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(4, 2, 4, 2)
+            a = QLabel(f"{label} ({r.games:,})")
+            a.setStyleSheet(dim)
+            a.setFixedWidth(132)
+            h.addWidget(a)
+            if r.games:
+                h.addWidget(win_rate_bar(r.win, r.draw, r.lose,
+                                         f"{win_rate_text(r.win, r.draw, r.lose, gf.mixed, short=True)}  "
+                                         f"({wdl_text(r.win, r.draw, r.lose)})", core.MIN_COND, gf.mixed), 1)
+            else:
+                none = QLabel("경기 없음")
+                none.setStyleSheet(dim)
+                h.addWidget(none, 1)
+            box.addWidget(row)
+
+    @staticmethod
+    def _goal_flow_kind_bars(box: QVBoxLayout, gf) -> None:
+        """내 골의 성격 막대 — 위와 같은 이유로 한 곳."""
+        total = sum(gf.kinds.values())
+        bars = charts.HBarList()
+        bars.set_data([(k, core.pct(n, total), f"{n:,}골 · {n / total:.0%}" if total else "0골",
+                        f"{k}: {core.GOAL_KIND_NOTE[k]}") for k, n in gf.kinds.items()])
+        box.addWidget(bars)
+
     def _render_goal_flow(self, details: list[dict]) -> None:
         gf = core.goal_flow(details, self._ouid) if self._ouid else core.GoalFlow()
         dim = f"color: {T.TEXT_DIM};"
@@ -3798,32 +3830,10 @@ class MainWindow(QMainWindow):
             return
 
         box = self.box_goalflow["lead"]
-        for r in gf.leads:
-            label = f"{r.lead}골 이상 리드" if r.lead >= core.MAX_LEAD else f"최대 {r.lead}골 리드"
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
-            a = QLabel(f"{label} ({r.games:,})")
-            a.setStyleSheet(dim)
-            a.setFixedWidth(132)
-            h.addWidget(a)
-            if r.games:
-                h.addWidget(win_rate_bar(r.win, r.draw, r.lose,
-                                         f"{win_rate_text(r.win, r.draw, r.lose, gf.mixed, short=True)}  "
-                                         f"({wdl_text(r.win, r.draw, r.lose)})", core.MIN_COND, gf.mixed), 1)
-            else:
-                none = QLabel("경기 없음")
-                none.setStyleSheet(dim)
-                h.addWidget(none, 1)
-            box.addWidget(row)
+        self._goal_flow_lead_rows(box, gf)
         line(box, f"한 번도 앞서지 못한 경기 {gf.never_led:,}판은 위에 없습니다.")
 
-        box = self.box_goalflow["kind"]
-        total = sum(gf.kinds.values())
-        bars = charts.HBarList()
-        bars.set_data([(k, core.pct(n, total), f"{n:,}골 · {n / total:.0%}" if total else "0골",
-                        f"{k}: {core.GOAL_KIND_NOTE[k]}") for k, n in gf.kinds.items()])
-        box.addWidget(bars)
+        self._goal_flow_kind_bars(self.box_goalflow["kind"], gf)
 
         box = self.box_goalflow["next"]
         if gf.trail_goals:
@@ -6949,7 +6959,9 @@ class MainWindow(QMainWindow):
 
     # ── 선수로 구단주 찾기(12) — 화면 ────────────────────────────────
     CARD_OWNER_COLUMNS = ["구단주", "마지막 사용", "경기", "포지션", "강화", "팀컬러", "순위"]
+    CARD_USAGE_COLUMNS = ["카드", "사용자", "경기", "강화별 사용자"]
     CARD_OWNER_MAX_CANDIDATES = 50   # 이름 후보 콤보에 이만큼
+    OWNER_SCOPE_CARD, OWNER_SCOPE_PLAYER = "card", "player"
 
     def _build_card_owner_tab(self) -> QWidget:
         w = QWidget()
@@ -6963,6 +6975,10 @@ class MainWindow(QMainWindow):
         self.ed_owner_name.textChanged.connect(lambda _t: self._refresh_owner_candidates())
         self.cb_owner_card = NoScrollComboBox()
         self.cb_owner_card.setMinimumWidth(220)
+        # [카드 / 선수](50단계 N30) — 선수면 고른 카드와 pid 가 같은 모든 시즌 카드를 한꺼번에 본다
+        self.cb_owner_scope = NoScrollComboBox()
+        self.cb_owner_scope.addItem("이 카드만", self.OWNER_SCOPE_CARD)
+        self.cb_owner_scope.addItem("선수(모든 시즌 카드)", self.OWNER_SCOPE_PLAYER)
         self.cb_owner_grade = NoScrollComboBox()
         self.cb_owner_grade.addItem("강화 전체", None)
         for g in range(1, 14):
@@ -6972,8 +6988,8 @@ class MainWindow(QMainWindow):
         self.btn_owner_find = QPushButton("찾기")
         self.btn_owner_find.setObjectName("primary")
         self.btn_owner_find.clicked.connect(self._on_owner_find)
-        for wd in (lb, self.ed_owner_name, self.cb_owner_card, self.cb_owner_grade, self.cb_owner_color,
-                   self.btn_owner_find):
+        for wd in (lb, self.ed_owner_name, self.cb_owner_card, self.cb_owner_scope, self.cb_owner_grade,
+                   self.cb_owner_color, self.btn_owner_find):
             row.addWidget(wd)
         row.addStretch(1)
         v.addLayout(row)
@@ -6986,6 +7002,11 @@ class MainWindow(QMainWindow):
         self.lb_owner_backfill.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.lb_owner_backfill.setVisible(False)
         v.addWidget(self.lb_owner_backfill)
+        # 선수 모드에서만 — 카드별·강화별 사용자 수(어느 시즌 카드를 많이 쓰나)
+        self.tbl_owner_cards = self._make_table(self.CARD_USAGE_COLUMNS, icons={0: "season"})
+        self.fold_owner_cards = Collapsible("카드별 · 강화별 사용자", self.tbl_owner_cards, opened=True)
+        self.fold_owner_cards.setVisible(False)
+        v.addWidget(self.fold_owner_cards)
         self.tbl_owner = self._make_table(self.CARD_OWNER_COLUMNS, icons={5: "emblem", 6: "division"})
         self.tbl_owner.itemDoubleClicked.connect(self._on_owner_double_clicked)
         v.addWidget(self.tbl_owner, 1)
@@ -7035,12 +7056,14 @@ class MainWindow(QMainWindow):
             self.lb_owner_status.setText("선수 이름을 2글자 이상 넣고 카드를 고르세요.")
             return
         grade, color = self.cb_owner_grade.currentData(), self.cb_owner_color.currentData()
+        player = self.cb_owner_scope.currentData() == self.OWNER_SCOPE_PLAYER
+        spids = store.card_ids_of_player(self._names, sp) if player else [sp]
         since = datetime.now().date().toordinal() - config.CARD_OWNER_DAYS
         snap: dict = {}
         try:
             conn = store.open_db(config.DB_PATH)
             try:
-                owners = store.owners_using_card(conn, sp, since, grade=grade)
+                owners = store.owners_using_cards(conn, spids, since, grade=grade)
                 left = store.unindexed_count(conn)
             finally:
                 conn.close()
@@ -7074,11 +7097,27 @@ class MainWindow(QMainWindow):
             shown.append(o)
         self.owner_rows = shown
         self._fill(self.tbl_owner, rows)
-        name = self.cb_owner_card.currentText()
+        self._fill_card_usage(shown if player else [])
+        if player:
+            who = self._names.get(sp) or self.cb_owner_card.currentText()
+            name = f"{who} — 시즌 카드 {len(spids)}장 합쳐서"
+        else:
+            name = self.cb_owner_card.currentText()
         note = f"{name} — 구단주 {len(rows)}명(최근 {config.CARD_OWNER_DAYS}일 선발)"
         if color is not None:
             note += f" · 팀컬러를 모르는 구단주 {unknown}명은 빠졌습니다(랭킹 1만 명 안이거나 팀컬러를 불러온 상대만 압니다)"
         self.lb_owner_status.setText(note)
+
+    def _fill_card_usage(self, owners: list[dict]) -> None:
+        """선수 모드의 카드별·강화별 사용자 표 — 카드 모드(owners 비어 있음)에서는 접어 숨긴다."""
+        self.fold_owner_cards.setVisible(bool(owners))
+        rows = []
+        for u in store.card_usage(owners):
+            grades = " · ".join(f"{g}강 {n}명" for g, n in sorted(u["grades"].items()) if isinstance(g, int))
+            rows.append([IconCell(f"{self._names.get(u['spid'], str(u['spid']))} ({self._season_name(u['spid'])})",
+                                  None, core.season_id_of(u["spid"])),
+                         (f"{u['owners']:,}", u["owners"]), (f"{u['games']:,}", u["games"]), grades or "-"])
+        self._fill(self.tbl_owner_cards, rows)
 
     def _on_owner_double_clicked(self, item) -> None:
         name_item = self.tbl_owner.item(item.row(), 0)
@@ -7502,6 +7541,10 @@ class MainWindow(QMainWindow):
         ("태클 성공률", "태클 성공률", "{:.1f}%", True),
     ]
 
+    COMPARE_SHOTMAP_MIN = (380, 330)
+    COMPARE_LINE_COLUMNS = ["자리", "구단주", "선수", "경기"] + [name for name, _ in core.RANKER_METRICS]
+    COMPARE_LINE_NAME = {"FW": "공격", "MF": "미드필더", "DF": "수비", "GK": "골키퍼"}
+
     @staticmethod
     def _details_of(details: list[dict], matches: list) -> list[dict]:
         """그 경기들의 상세만(순서는 details 그대로 — 최신순)."""
@@ -7561,6 +7604,18 @@ class MainWindow(QMainWindow):
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(note)
 
+        # 탭 셋(50단계 D1) — [지표·스쿼드](지금까지 화면 + 차이 요약) · [슛·골 흐름] · [자리별]
+        self.pt_compare = PageTabs()
+        v.addWidget(self.pt_compare, 1)
+        page_main = QWidget()
+        pv = QVBoxLayout(page_main)
+        pv.setContentsMargins(0, 0, 0, 0)
+        self.lb_compare_summary = QLabel("")
+        self.lb_compare_summary.setWordWrap(True)
+        self.lb_compare_summary.setTextFormat(Qt.TextFormat.RichText)
+        self.lb_compare_summary.setStyleSheet(f"color: {T.TEXT_DIM};")
+        pv.addWidget(self.lb_compare_summary)
+
         # 지표 카드(접었다 폄) — 지표 표 + 키플레이어(양쪽 골·평점 상위)
         metrics = QWidget()
         mv = QVBoxLayout(metrics)
@@ -7577,7 +7632,7 @@ class MainWindow(QMainWindow):
             keys.addWidget(lb, 1)
         mv.addLayout(keys)
         self.fold_compare_metrics = Collapsible("지표 · 키플레이어", metrics, opened=True)
-        v.addWidget(self.fold_compare_metrics)
+        pv.addWidget(self.fold_compare_metrics)
 
         # 각 구단주가 가장 최근 경기에 낸 스쿼드를 나란히 — 축구장 v2 는 폭에 맞춰 칩을 줄여서
         # 1280×720 창에도 가로 스크롤 없이 둘이 들어간다(test_compare_two_pitches_fit_min_window).
@@ -7590,7 +7645,51 @@ class MainWindow(QMainWindow):
         gb_opp.setLayout(self.box_compare_opp_squad)
         squad_row.addWidget(gb_my, 1)
         squad_row.addWidget(gb_opp, 1)
-        v.addLayout(squad_row, 1)
+        pv.addLayout(squad_row, 1)
+        self.pt_compare.add_tab("지표·스쿼드", page_main)
+
+        # [슛·골 흐름] — 두 사람의 슛 지도와 골 흐름을 좌우로. 폭이 모자라 둘이 들어가도록 슛 지도를 작게 둔다
+        page_shot, sv = self._tactics_scroll()
+        self.lb_compare_shot_note = QLabel("")
+        self.lb_compare_shot_note.setWordWrap(True)
+        self.lb_compare_shot_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        sv.addWidget(self.lb_compare_shot_note)
+        shot_row = QHBoxLayout()
+        self.gb_compare_shot = []
+        self.lb_compare_shot_sum, self.shotmap_compare, self.box_compare_flow = [], [], []
+        for _ in range(2):
+            gb = QGroupBox("")
+            gv = QVBoxLayout(gb)
+            lb = QLabel("")
+            lb.setWordWrap(True)
+            lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            gv.addWidget(lb)
+            sm = ShotMapWidget(self.COMPARE_SHOTMAP_MIN)
+            gv.addWidget(sm)
+            flow = QVBoxLayout()
+            flow.setSpacing(3)
+            gv.addLayout(flow)
+            self.gb_compare_shot.append(gb)
+            self.lb_compare_shot_sum.append(lb)
+            self.shotmap_compare.append(sm)
+            self.box_compare_flow.append(flow)
+            shot_row.addWidget(gb, 1)
+        sv.addLayout(shot_row)
+        sv.addStretch(1)
+        self.pt_compare.add_tab("슛·골 흐름", page_shot)
+
+        # [자리별] — 줄(공격·미드·수비·GK)마다 가장 많이 세운 카드끼리 경기당 값
+        page_line = QWidget()
+        lv = QVBoxLayout(page_line)
+        lv.setContentsMargins(0, 0, 0, 0)
+        self.lb_compare_line_note = QLabel("")
+        self.lb_compare_line_note.setWordWrap(True)
+        self.lb_compare_line_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        lv.addWidget(self.lb_compare_line_note)
+        self.tbl_compare_lines = self._make_table(self.COMPARE_LINE_COLUMNS)
+        self.tbl_compare_lines.setSortingEnabled(False)   # 줄 순서(공격→GK)와 나·상대 짝이 정보다
+        lv.addWidget(self.tbl_compare_lines, 1)
+        self.pt_compare.add_tab("자리별", page_line)
         return w
 
     def _on_compare_search(self) -> None:
@@ -7709,12 +7808,96 @@ class MainWindow(QMainWindow):
                 item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
         self.tbl_compare.refit()  # _fill 을 안 거치는 표
 
+        self._render_compare_extra(opp_nick, my_details, opp_details, opp_ouid, mixed,
+                                   {r[0]: (r[3], r[4]) for r in rows if r[5] is not None and r[0] != "승률"})
+
         self._retire_loaders(self._compare_squad_loaders)
         self._compare_squad_loaders = []
         self._fill_compare_squad(self.box_compare_my_squad, self._ouid, self._details,
                                  self._nick)
         self._fill_compare_squad(self.box_compare_opp_squad, opp_ouid, opp_details,
                                  opp_nick)
+
+    def _render_compare_extra(self, opp_nick: str, my_details: list[dict], opp_details: list[dict],
+                              opp_ouid: str, mixed: bool, table: dict) -> None:
+        """D1 — 차이 요약 · 슛 지도 둘 · 골 흐름 둘 · 같은 자리 선수. 새 요청 0 (이미 받은 상세만 쓴다).
+
+        상대 상세가 일부 못 받아졌으면 그 경기만큼 적다 — 두 탭 위에 경기 수를 적는다."""
+        esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;")  # noqa: E731
+        fmt = {label: f for label, _a, f, _h in self.COMPARE_ROWS}
+        fmt.update({label: f for label, _a, f, _h in self.COMPARE_PROFILE_ROWS})
+
+        # ① 차이 요약 — 고르기는 z, 보이는 숫자와 방향은 표 값
+        if min(len(my_details), len(opp_details)) < core.COMPARE_MIN_GAMES:
+            self.lb_compare_summary.setText(
+                f"차이 요약은 양쪽 모두 상세가 {core.COMPARE_MIN_GAMES}경기 이상일 때 냅니다"
+                f"(지금 내 {len(my_details)} · 상대 {len(opp_details)}경기).")
+        else:
+            diffs = core.compare_summary(my_details, self._ouid, opp_details, opp_ouid, table)
+            if not diffs:
+                self.lb_compare_summary.setText("두 사람 사이에 뚜렷한 차이 없음")
+            else:
+                lines = []
+                for d in diffs:
+                    f = fmt.get(d.label, "{:.2f}")
+                    who = "내가" if d.mine > d.opp else "상대가"
+                    tone = "좋음" if d.mine_better else "아쉬움"
+                    lines.append(f"<b>{esc(d.label)}</b> {esc(self._nick)} {f.format(d.mine)} · {esc(opp_nick)} {f.format(d.opp)}"
+                                 f" — {who} 더 {'높음' if d.mine > d.opp else '낮음'}"
+                                 f"({'내게 ' + tone})")
+                self.lb_compare_summary.setText("차이가 큰 지표<br>" + "<br>".join(lines))
+
+        basis = f"내 {len(my_details)}경기 · 상대 {len(opp_details)}경기 기준(받은 상세만)"
+
+        # ② 슛 지도 둘 · 골 흐름 둘
+        self.lb_compare_shot_note.setText(basis)
+        for i, (nick, details, ouid) in enumerate(((self._nick, my_details, self._ouid),
+                                                   (opp_nick, opp_details, opp_ouid))):
+            sm = core.shot_map(details, ouid, mine=True)
+            self.gb_compare_shot[i].setTitle(nick)
+            self.lb_compare_shot_sum[i].setText(
+                f"슛 {sm.total} · 골 {sm.goals} · 유효슛 {sm.effective} ({sm.effective_rate:.0f}%) · "
+                f"전환율 {sm.conversion:.0f}% · xG {sm.xg:.1f}")
+            self.shotmap_compare[i].set_shots(sm.shots)
+            self._fill_goal_flow_compact(self.box_compare_flow[i], core.goal_flow(details, ouid, mixed))
+
+        # ③ 같은 자리 줄에서 가장 많이 세운 카드끼리
+        self.lb_compare_line_note.setText(
+            f"{basis} · 줄마다 가장 많이 세운 카드 하나씩, 경기당 값(비율은 %)")
+        pairs = core.line_pairs(my_details, self._ouid, opp_details, opp_ouid)
+        t = self.tbl_compare_lines
+        t.setRowCount(0)
+        rows = []
+        for pair in pairs:
+            for nick, card in ((self._nick, pair.mine), (opp_nick, pair.opp)):
+                rows.append((pair.line, nick, card))
+        t.setRowCount(len(rows))
+        for r, (line, nick, card) in enumerate(rows):
+            t.setItem(r, 0, self._cell(self.COMPARE_LINE_NAME.get(line, line)))
+            t.setItem(r, 1, self._cell(nick))
+            if card is None:
+                t.setItem(r, 2, self._cell("-"))
+                for c in range(3, len(self.COMPARE_LINE_COLUMNS)):
+                    t.setItem(r, c, self._cell("-"))
+                continue
+            t.setItem(r, 2, self._cell(self._names.get(card.sp_id, str(card.sp_id))))
+            t.setItem(r, 3, self._cell(str(card.games)))
+            for c, (name, field_) in enumerate(core.RANKER_METRICS, start=4):
+                v = card.values.get(name, 0.0)
+                t.setItem(r, c, self._cell(f"{v:.0f}%" if isinstance(field_, tuple) else f"{v:.2f}"))
+        t.refit()
+
+    def _fill_goal_flow_compact(self, box: QVBoxLayout, gf) -> None:
+        """비교 탭용 골 흐름 — 최대 리드별 결과 · 내 골의 성격만(전체는 승부처 분석의 [리드·골 흐름])."""
+        self._clear(box)
+        dim = f"color: {T.TEXT_DIM};"
+        head = QLabel(f"골 흐름 — 되짚은 {gf.replayed:,}경기" if gf.replayed else "골 순서를 되짚을 수 있는 경기가 없습니다.")
+        head.setStyleSheet(dim)
+        box.addWidget(head)
+        if not gf.replayed:
+            return
+        self._goal_flow_lead_rows(box, gf)
+        self._goal_flow_kind_bars(box, gf)
 
     def _fill_compare_squad(self, box: QVBoxLayout, ouid: str, details: list[dict],
                             label: str) -> None:

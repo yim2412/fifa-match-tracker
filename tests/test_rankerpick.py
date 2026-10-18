@@ -89,6 +89,74 @@ def test_owner_lookup_window_and_grade():
     assert len(store.owners_using_card(conn, 100, 0, grade=g)) == 2
 
 
+CARD_A, CARD_B, CARD_OTHER = 100_000_007, 200_000_007, 200_000_008   # A·B = 같은 선수(pid 7)의 두 시즌 카드, OTHER = 다른 선수
+
+
+def _with_card(base: int, card: int, grade: int | None = None) -> list[int]:
+    return [card] + [base + i for i in range(10)]
+
+
+def _player_scope_db():
+    """o1 이 A(m1)·B(m3, 5강) · o2 가 B(m2·m5) · o3 가 다른 선수(m4) · o4 가 한 경기에 A·B 둘 다(m6 — 게임에선
+    없지만 데이터가 그래도 한 경기로 센다)."""
+    conn = _db()
+    m3 = _match("m3", TODAY, [("o1", "가", _with_card(3000, CARD_B))])
+    next(p for p in m3["matchInfo"][0]["player"] if p["spId"] == CARD_B)["spGrade"] = 5
+    both = [CARD_A, CARD_B] + [6000 + i for i in range(9)]
+    store.save_matches(conn, [
+        _match("m1", TODAY, [("o1", "가", _with_card(1000, CARD_A))]),
+        _match("m2", TODAY, [("o2", "나", _with_card(2000, CARD_B))]),
+        m3,
+        _match("m4", TODAY, [("o3", "다", _with_card(4000, CARD_OTHER))]),
+        _match("m5", TODAY, [("o2", "나", _with_card(5000, CARD_B))]),
+        _match("m6", TODAY, [("o4", "라", both)]),
+    ])
+    return conn
+
+
+def test_card_ids_of_player_matches_pid_not_name():
+    names = {CARD_A: "같은 이름", CARD_B: "같은 이름", CARD_OTHER: "같은 이름", "x": "이상한 키"}
+    assert store.card_ids_of_player(names, CARD_A) == [CARD_A, CARD_B], "pid 가 같은 시즌 카드만(이름이 같아도 pid 가 다르면 다른 선수)"
+    assert store.card_ids_of_player({}, CARD_A) == [CARD_A], "메타에 없어도 자기 자신은 남는다"
+    assert store.card_ids_of_player(names, CARD_OTHER) == [CARD_OTHER]
+
+
+def test_player_scope_owners_merge_cards_and_count_once():
+    conn = _player_scope_db()
+    one = store.owners_using_card(conn, CARD_A, 0)
+    assert sorted(o["ouid"] for o in one) == ["o1", "o4"], "카드 하나로는 그 카드를 쓴 사람만(B 만 쓴 o2 는 빠진다)"
+    both = store.owners_using_cards(conn, [CARD_A, CARD_B], 0)
+    assert sorted(o["ouid"] for o in both) == ["o1", "o2", "o4"], "선수 단위 — 두 시즌 카드 사용자가 다 들어온다(다른 선수 o3 는 빠진다)"
+    by = {o["ouid"]: o for o in both}
+    assert by["o1"]["games"] == 2, "두 카드를 쓴 구단주도 한 사람이고 경기는 서로 다른 경기만 센다"
+    assert {s: c["games"] for s, c in by["o1"]["cards"].items()} == {CARD_A: 1, CARD_B: 1}
+    assert by["o1"]["cards"][CARD_B]["grades"] == {5: 1}
+    assert by["o2"]["games"] == 2 and by["o2"]["cards"][CARD_B]["games"] == 2, "같은 카드를 두 경기에 쓴 구단주"
+    assert by["o4"]["games"] == 1, "한 경기에 두 카드가 있어도 한 경기"
+    assert {s: c["games"] for s, c in by["o4"]["cards"].items()} == {CARD_A: 1, CARD_B: 1}
+    assert store.owners_using_cards(conn, [], 0) == []
+
+
+def test_player_scope_honours_window_and_grade():
+    conn = _player_scope_db()
+    old = TODAY.toordinal() + 1
+    assert store.owners_using_cards(conn, [CARD_A, CARD_B], old) == [], "창 밖"
+    five = store.owners_using_cards(conn, [CARD_A, CARD_B], 0, grade=5)
+    assert [o["ouid"] for o in five] == ["o1"] and list(five[0]["cards"]) == [CARD_B], five
+    assert store.owners_using_cards(conn, [CARD_A, CARD_B], 0, grade=13) == []
+
+
+def test_card_usage_counts_owners_per_card_and_grade():
+    conn = _player_scope_db()
+    use = store.card_usage(store.owners_using_cards(conn, [CARD_A, CARD_B], 0))
+    assert [(u["spid"], u["owners"], u["games"]) for u in use] == [(CARD_B, 3, 4), (CARD_A, 2, 2)], use   # 사용자 많은 카드 먼저
+    g8 = CARD_B % 8 + 1   # _match 가 강화를 spid 끝자리로 정한다(A·B 둘 다 8)
+    assert use[0]["grades"] == {5: 1, g8: 2}, use[0]["grades"]   # 강화별 = 그 강화로 쓴 구단주 수 (5강은 o1 한 명)
+    assert use[1]["grades"] == {g8: 2}, use[1]["grades"]
+    assert store.card_usage([]) == []
+    assert store.card_usage([{"ouid": "x"}]) == [], "cards 가 없는 옛 꼴 구단주도 죽지 않는다"
+
+
 def _raw_insert(conn, details):
     """옛 버전이 저장한 것처럼 — 색인 없이 matches 만."""
     import json
@@ -166,6 +234,16 @@ def test_owner_lookup_budget():
     spid = conn.execute("SELECT spid FROM match_squads GROUP BY spid ORDER BY COUNT(*) DESC LIMIT 1").fetchone()[0]
     best = min(_timed(lambda: store.owners_using_card(conn, spid, TODAY.toordinal() - 30)) for _ in range(3))
     assert best <= 0.05, f"{best * 1000:.1f}ms"
+
+
+def test_player_lookup_budget():
+    """선수 단위 조회 ≤ 0.3초(50단계 측정 E · 개발 PC 사본: 카드 18장 · 2만 줄 10ms · 카드 최다 선수 58장)."""
+    conn = _syn_db()
+    if store.unindexed_count(conn)[0]:
+        store.backfill_squads(conn)
+    top = [r[0] for r in conn.execute("SELECT spid FROM match_squads GROUP BY spid ORDER BY COUNT(*) DESC LIMIT 58")]
+    best = min(_timed(lambda: store.owners_using_cards(conn, top, TODAY.toordinal() - 30)) for _ in range(3))
+    assert best <= 0.3, f"{best * 1000:.1f}ms"
 
 
 def _timed(fn) -> float:

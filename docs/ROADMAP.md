@@ -554,7 +554,7 @@ A 18.0만 토큰 [상]1·[중]6 · B 15.8만 토큰 [상]2·[중]6. 새 [상] 3 
 | ① | B7(`simulate` 경로별 최종 컷 · 골든 그대로) + N26(예측 카드 한 줄) + B8(`predict_check.py` · `predictions` 에 열 · 내 계정만 · 그래프) + 보상 FC(`RANK_REWARDS`) · **안내는 자리만**(`config.PREDICT_CHECK_NOTICE_VERSION` — 값은 **지금 `NOTICE_VERSION` 보다 크게** 두어 확정 전엔 아무도 통과 못 한다 · 단언 테스트) | 중간 — Sonnet + Opus 리뷰 · **끝(10-13 797bba7 + 리뷰 반영)** — 아래 "조각 ① 결과" |
 | ② | 측정 C·D(관문 — **끝 · C4 통과 3칸 · N27 미달**) → **49 표본 줄 순서 섞기(V1 — 끝 c314911)** → 49 바퀴 넓히기(`pos_json` 열 · ~~`owner_dist_card` 바퀴 합계~~(N27 미달) · `owner_dist_state.v2` · `OWNER_DIST_V2_NOTICE_VERSION` · 지우기 경로 전부 — 진입점 표) | 높음 — Opus · **끝 기준 데이터**: 실제 v2 바퀴는 직전 done 뒤 `OWNER_DIST_ROUND_DAYS` 가 지나야 돈다 → 개발 키로 **강제 바퀴 하나**(`run_round` 를 `new_round_due` 무시 · **v2 동의 판정도 넘기는** 테스트 전용 인자 — 확정 전 자리 값이라 그대로면 v2 NULL 바퀴가 된다)를 돌려 ⑦ 실측과 ③ 실화면 재료로 · **끝(10-18 — 강제 v2 바퀴 150명 pos_json NULL 0% · ⑦ 은 "바퀴 시간 +1%" 로 고쳐 통과)** |
 | ③ | C4 화면 — **통과한 세 칸만**(MF·공격 · DF·공격 · DF·수비 — 아래 "측정 C·D 결과") · ~~N27~~ 측정 D 미달로 뺐다 | 중간 — Sonnet + Opus 리뷰 · **구현 끝(10-18 — 아래 "조각 ③ 구현") · 리뷰 반영 끝(10-18 — [상] 0 · [중] 1)** |
-| ④ | D1(비교 화면 탭 셋) · N30([카드/선수] 전환) · **마지막 조각 — 안내 문장·`NOTICE_VERSION`·두 관문 값 확정**(③ 이 없어져도 ④ 가 마지막) · ⚠ ④ 전에는 공개하지 않는다 — `OWNER_DIST_V2_NOTICE_VERSION` 이 자리 값(99)이라 ③ 의 `POSLEVEL_NEED_NOTICE`("새 이용 안내에 동의하면")가 아직 없는 안내를 가리킨다 | 중간 — Sonnet + Opus 리뷰 |
+| ④ | D1(비교 화면 탭 셋) · N30([카드/선수] 전환) · **마지막 조각 — 안내 문장·`NOTICE_VERSION`·두 관문 값 확정**(③ 이 없어져도 ④ 가 마지막) · ⚠ ④ 전에는 공개하지 않는다 — `OWNER_DIST_V2_NOTICE_VERSION` 이 자리 값(99)이라 ③ 의 `POSLEVEL_NEED_NOTICE`("새 이용 안내에 동의하면")가 아직 없는 안내를 가리킨다 | 중간 — Sonnet + Opus 리뷰 · **구현 끝(10-18 — 아래 "조각 ④ 구현") · Opus 리뷰·실화면 전**(안내 11 은 확정됨 — 공개 금지 사유 해소) |
 
 #### 조각 ① 결과 (2026-10-13 · ② 이후가 쓸 것만)
 
@@ -609,6 +609,16 @@ A 18.0만 토큰 [상]1·[중]6 · B 15.8만 토큰 [상]2·[중]6. 새 [상] 3 
 - `CHANGES[11]`: "랭킹 수집이 켜져 있으면, 시즌이 끝난 뒤 **내 계정**의 최종 순위를 넥슨 홈페이지에서 한 번 확인해 그 시즌의 예측 기록 옆에 둡니다(찾지 못하면 3일 동안 하루 한 번 다시). 다른 구단주의 순위는 묻지 않습니다." + "**구단주 분포 받기**를 켠 사람은, 다음 바퀴부터 구단주별 요약에 미드필더·수비수 자리의 공격·수비 값(이름 없음)이 더해집니다 — [성적 진단 › 자리별 수준] 에 씁니다. 받는 양은 그대로입니다. 동의하기 전에는 둘 다 하지 않습니다(아래 '랭킹 수집')." — 숫자(3일)는 상수에서 그린다.
 - "받는 양은 그대로" 근거: `pos_json` 은 받은 상세에서 계산만(조각 ② 실측 바퀴 +0.5%).
 - 순서: D1 → N30(측정 E 포함) → **안내 확정은 맨 마지막**(문구 골든 `test_notice_text_bumps_version` · `test_ui_smoke` 다시 묻기 · 99 를 전제로 한 `> NOTICE_VERSION` 단언 테스트를 같이 고친다). 모델: 구현 Sonnet → Opus diff 리뷰 → 실화면 100%·150%.
+
+#### 조각 ④ 구현 (2026-10-18 · D1 · N30 · 안내 11 확정)
+
+- **D1**: 계산은 `stats.compare_summary`(z — 후보 8행 `COMPARE_FEATURES` · 문턱 `COMPARE_Z_MIN` 2.5 · 최소 `COMPARE_MIN_GAMES` 10 · 최대 `COMPARE_TOP` 4 · 표 값 방향이 반대인 행은 뺀다)·`line_pairs`(줄마다 가장 많이 세운 카드 · 동률은 작은 카드 번호) · 화면은 `PageTabs` 셋 [지표·스쿼드]·[슛·골 흐름]·[자리별]. 새 요청 0.
+  - **계획과 다르게 한 것**: ⓐ 슛 지도 최소 크기를 `ShotMapWidget(min_size)` 인자로 380×330 으로 줄였다 — 기본 560×460 둘은 1280 창의 안쪽 폭(1010)에 안 들어간다(변이로 확인: 560 으로 되돌리면 `test_compare_extra_tabs_render_and_fit` 이 빨개진다). ⓑ "탭 제목에 N경기 기준" 은 `PageTabs` 에 제목을 바꾸는 길이 없어 **탭 안 첫 줄**("내 N경기 · 상대 M경기 기준(받은 상세만)")로 했다. ⓒ 골 흐름은 두 사람 모두 [최대 리드별 결과]·[내 골의 성격] 둘만(전체는 승부처 분석 › [리드·골 흐름]) — 줄 그리기는 `_goal_flow_lead_rows`·`_goal_flow_kind_bars` 로 뽑아 두 화면이 같이 쓴다. ⓓ 자리별은 줄마다 두 행(나·상대) 한 표.
+- **N30**: `store.owners_using_cards(spids)`(`IN (카드들)` 한 질의 · 구단주별 `cards`) · `card_ids_of_player(names, spid)`(pid = `spid % 1_000_000` 이 같은 메타 카드) · `card_usage(owners)`(카드별 사용자·경기·강화별 사용자). `owners_using_card` 는 한 장짜리 감싸개로 그대로. 화면은 [이 카드만 / 선수(모든 시즌 카드)] 콤보 + 선수 모드에서만 [카드별·강화별 사용자] 표.
+  - **측정 E(개발 PC 사본 · match_squads 619,916줄 · 경기 28,450)**: 카드가 가장 많은 선수 **58장**(pid 20801, 다음 56·52) · 중앙값 1장 · 95% 4장. 가장 많이 쓰인 선수 셋(15~18장, 줄 약 2만)의 `IN` 질의 **최소 9.8~10.4ms** · 계획 `SEARCH match_squads USING PRIMARY KEY (spid=? AND day>?)`(TEMP B-TREE 없음). 58장도 1.3ms. → 상한 0.3초에 크게 못 미치고 `IN` 이 58개라 **나눠 읽기는 안 한다**(실패 표의 대응은 필요 없었다). 합성 2만 경기 예산 테스트도 같은 상한.
+- **안내 11 확정**: `NOTICE_VERSION` 10→11 · `PREDICT_CHECK_NOTICE_VERSION`·`OWNER_DIST_V2_NOTICE_VERSION` 99→11 · `NOTICE_COLLECT_ONLY_FROM` 8 그대로. `notice.py` "예측 기록" 뒤 항목 · "구단주 분포 받기" 괄호의 "미드필더·수비수 자리의 공격·수비 값" · `CHANGES[11]`(숫자 3일은 `PREDICT_CHECK_RETRY_DAYS` 에서). 99 를 전제로 한 `> NOTICE_VERSION` 단언 둘(`test_v2_gate_…`·`test_predict_check_gate_…`)은 "관문 값이 실제 쓰인 안내(`CHANGES`)를 가리키고 글이 그 재료를 말한다" 로 바꿨다 — 안내를 더 올려도 관문은 11 에 머문다. 문구 골든 `NOTICE_GOLDEN[11]` 추가.
+- **검증**: `test_compare.py` 11개(손으로 센 z · 변이 15/15 잡힘) · 화면 `test_compare_extra_tabs_render_and_fit`(변이 8/8) · `test_card_owner_find_player_scope`(변이 6/6) · `test_rankerpick` 선수 단위 4+예산 1(변이 9/9) · 표 개수 단언 50→52 · `test_rules` 예외 표 3줄(승률 표본이 아닌 문턱).
+- **아직 안 한 것(공개 전 조건)**: Opus diff 리뷰 · 실제 윈도우 100%·150% 실화면(`test_window_size` + 2번 모니터) · exe 빌드와 크래시 로그 · `CHANGELOG.md` 의 v2.11.1 절·`APP_VERSION` 은 공개 때. 안내 11 이 확정돼 **③ 의 `POSLEVEL_NEED_NOTICE` 가 가리키는 안내가 이제 있다** — 위 셋이 끝나면 공개해도 된다.
 
 순서 의존: ③ 은 ② 뒤 · ①·④ 는 독립. ② 가 관문에서 둘 다 막히면 ③ 은 없어진다.
 
