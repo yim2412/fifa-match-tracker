@@ -135,11 +135,17 @@ def test_errors_write_nothing():
 
 def test_gate_and_account_and_unfinished_season():
     env = Env()
+    keep_env = config.ENV_PATH
     try:
-        # 관문 닫힘(기본: 값이 NOTICE_VERSION 보다 크다) — 요청이 안 나간다. 이게 없으면 아래 "안 나감"이 공허하다
+        # 관문 닫힘 — 디스크 .env 가 안내 11 전이면 요청이 안 나간다. 이게 없으면 아래 "안 나감"이 공허하다.
+        # 임시 .env 로 — 예전엔 진짜 .env 를 읽어 수집을 켠 개발 PC 에서만 실패했다(CI 는 .env 가 없어 통과)
+        config.ENV_PATH = Path(tempfile.mkdtemp()) / ".env"
+        config.ENV_PATH.write_text(f"{config.WEB_DATA_VAR}=1\n{config.RANK_COLLECT_VAR}=1\n"
+                                   f"{config.NOTICE_VAR}={config.PREDICT_CHECK_NOTICE_VERSION - 1}\n", encoding="utf-8")
         assert config.predict_check_allowed() is False
         assert run(env, env.fetch_with(5)) == {"skipped": "gate"} and env.calls == []
     finally:
+        config.ENV_PATH = keep_env
         env.close()
     def no_acct(env):
         assert run(env, env.fetch_with(5)) == {"skipped": "no_account"} and env.calls == []
