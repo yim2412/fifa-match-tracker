@@ -2165,7 +2165,7 @@ def ranker_compare(details: list[dict], ouid: str, ranker: dict, limit: int | No
 
 # ── 구단주 비교 확장(50단계 D1) ─────────────────────────────────────────────
 COMPARE_MIN_GAMES = 10     # 어느 한쪽이 이보다 적은 경기면 그 행은 z 를 못 낸다(표본분산이 흔들린다)
-COMPARE_Z_MIN = 2.5        # 요약에 올리는 문턱 — 후보 8행이라 우연히 하나 섞일 기대가 약 0.1 (ROADMAP 5판 V4)
+COMPARE_Z_MIN = 2.5        # 요약에 올리는 문턱 — 후보 8행이라 우연히 하나 섞일 기대가 약 0.2 (10 대 10경기 Welch 자유도 ≈18 → P(|t|>2.5)≈0.022 × 8 — 정규 근사의 0.1 은 낮다)
 COMPARE_TOP = 4            # 요약 최대 줄 수
 
 

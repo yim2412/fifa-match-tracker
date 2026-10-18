@@ -5073,6 +5073,9 @@ def test_compare_extra_tabs_render_and_fit():
         # 고르기에는 표 값이 같이 간다 — 승률·경기수 줄은 빼고 나머지 8행(방향 검사 재료)
         table = seen[-1][0][4]
         assert table and "승률" not in table and "경기수" not in table and "경기당 슛" in table and "평균 득점" in table, table
+        # 행 이름은 문자열로만 이어져 있다 — 라벨이 어긋나면 방향 검사가 조용히 빈 검사가 된다
+        import stats as _stats
+        assert {n for n, _h, _f in _stats.COMPARE_FEATURES} == set(table), (set(table), [n for n, _h, _f in _stats.COMPARE_FEATURES])
         t_row = {_win.tbl_compare.item(r, 0).text(): r for r in range(_win.tbl_compare.rowCount())}["평균 득점"]
         assert f"{table['평균 득점'][0]:.2f}" == _win.tbl_compare.item(t_row, 1).text(), "표에 보이는 값과 다른 값이 갔다"
         app_main.core.compare_summary = lambda *a, **k: []

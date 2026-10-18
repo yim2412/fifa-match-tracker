@@ -7113,7 +7113,7 @@ class MainWindow(QMainWindow):
         self.fold_owner_cards.setVisible(bool(owners))
         rows = []
         for u in store.card_usage(owners):
-            grades = " · ".join(f"{g}강 {n}명" for g, n in sorted(u["grades"].items()) if isinstance(g, int))
+            grades = " · ".join(f"{g}강 {n}명" for g, n in sorted((g, n) for g, n in u["grades"].items() if isinstance(g, int)))
             rows.append([IconCell(f"{self._names.get(u['spid'], str(u['spid']))} ({self._season_name(u['spid'])})",
                                   None, core.season_id_of(u["spid"])),
                          (f"{u['owners']:,}", u["owners"]), (f"{u['games']:,}", u["games"]), grades or "-"])
