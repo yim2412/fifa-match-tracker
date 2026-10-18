@@ -1124,6 +1124,98 @@ def test_load_dist_takes_latest_done_and_goes_stale():
             c.close()
 
 
+# ── 50단계 ③ C4 분포 읽기 ─────────────────────────────────────────────────────
+
+def _pj(x, df_def=None):
+    """pos_json — MF.atk 첫 지표만 x(나머지 셋은 0 이라 σ = 0 → 지수에서 빠진다) · DF.atk 는 그대로 · DF.def 는 df_def."""
+    out = {"MF.atk": {"n": 9, "d": [x, 0.0, 0.0, 0.0]}, "DF.atk": {"n": 9, "d": [x, 0.0, 0.0, 0.0]}}
+    if df_def is not None:
+        out["DF.def"] = {"n": 9, "d": [df_def, 0.0, 0.0]}
+    return json.dumps(out)
+
+
+POS_ROWS = [dict(r, pos_json=_pj(r["finish"], r["finish"])) for r in DIST_ROWS]   # x = 1 3 / 2 / 2 4 6
+
+
+def test_pos_dist_by_hand():
+    with _cfg(**DIST_CFG):
+        pd = od.build_pos_dist(POS_ROWS, 7, E)
+        cd = pd.cells["MF.atk"]
+        # 층 가중 5·5·20·10·10·10(합 60) — μ = 180/60 = 3 · 분산 = (5·4 + 0 + 20·1 + 10·1 + 10·1 + 10·9)/60 = 2.5
+        assert len(cd.params) == 1, f"σ = 0 인 지표를 빼지 않았다: {cd.params}"
+        i, mu, sd = cd.params[0]
+        assert i == 0 and abs(mu - 3) < 1e-12 and abs(sd - math.sqrt(2.5)) < 1e-12, cd.params
+        assert cd.index([3.0, 99, 99, 99]) == 0.0, "뺀 지표가 지수에 들어갔다"
+        # x < 3 → 1·2·2(5+20+10=35) · x == 3 → 5 의 절반 — 가중 없이 세면 3.5/6 = 58.3
+        assert abs(cd.pct(0.0) - 100 * 37.5 / 60) < 1e-9, cd.pct(0.0)
+        assert cd.n_owners == 6 and set(pd.cells) == {"MF.atk", "DF.atk", "DF.def"}
+
+
+def test_pos_dist_checks_the_stratum_floor_per_cell():
+    # 6회차 Y4 — 재료가 NULL 인 구단주(계산 실패 · 다운그레이드 사이 구간)로 한 층이 비면 그 칸을 안 쓴다
+    with _cfg(**DIST_CFG):
+        rows = [dict(r, pos_json=None) if r["stratum"] == 2 else r for r in POS_ROWS]
+        assert od.build_dist(rows, 7, E) is not None, "전제: 기본 6지표 분포는 그대로 쓴다"
+        assert od.build_pos_dist(rows, 7, E).cells == {}, "재료가 빈 층으로 칸을 만들었다"
+        rows = [dict(r, pos_json=_pj(r["finish"])) if r["stratum"] == 2 else r for r in POS_ROWS]
+        assert set(od.build_pos_dist(rows, 7, E).cells) == {"MF.atk", "DF.atk"}, "한 칸만 빈 층인데 다른 칸까지 버렸거나 그 칸을 썼다"
+        rows = [dict(r, pos_json="{깨짐") if r["stratum"] == 2 else r for r in POS_ROWS]
+        assert od.build_pos_dist(rows, 7, E).cells == {}, "깨진 JSON 줄을 셌다"
+        rows = [dict(r, n_games=4) if r["stratum"] == 2 else r for r in POS_ROWS]
+        assert od.build_pos_dist(rows, 7, E).cells == {}, "판수 모자란 구단주(eligible 밖)를 셌다"
+
+
+def _pos_db(d, v2=True, rows=POS_ROWS):
+    c = store.open_db(Path(d) / "fifa.db")
+    rid = store.owner_round_start(c, 1, "2026-09-28T00:00:00", "s", v2=v2)
+    for i, r in enumerate(rows):
+        store.owner_dist_add(c, rid, f"h{i}", r)
+    store.owner_round_end(c, rid, "done", E)
+    return c, rid
+
+
+def test_load_pos_dist_reasons():
+    base = datetime.fromisoformat(E)
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c = store.open_db(Path(d) / "fifa.db")
+        try:
+            assert od.load_pos_dist(c, base) == (None, "none")
+        finally:
+            c.close()
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c, rid = _pos_db(d, v2=False)
+        try:
+            assert od.load_dist(c, base) is not None, "전제: 49 분포는 v2 와 무관하게 쓴다"
+            assert od.load_pos_dist(c, base) == (None, "v1"), "재료 없는 바퀴(v2 NULL)를 C4 에 썼다"
+        finally:
+            c.close()
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c, rid = _pos_db(d)
+        try:
+            pd, why = od.load_pos_dist(c, base)
+            assert why == "" and pd.round_id == rid and set(pd.cells) == {"MF.atk", "DF.atk", "DF.def"}
+            r2 = store.owner_round_start(c, 2, "2026-10-05T00:00:00", "t", v2=True)
+            store.owner_round_end(c, r2, "thin", "2026-10-06T00:00:00")
+            assert od.load_pos_dist(c, base)[0].round_id == rid, "뒤에 온 thin 이 done 분포를 가렸다"
+            edge = base + timedelta(days=config.OWNER_DIST_STALE_DAYS)
+            assert od.load_pos_dist(c, edge)[1] == "" and od.load_pos_dist(c, edge + timedelta(seconds=1)) == (None, "none"), \
+                "낡음 기준이 load_dist 와 다르다"
+        finally:
+            c.close()
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c, _ = _pos_db(d, rows=[dict(r, pos_json=None) for r in POS_ROWS])
+        try:
+            assert od.load_pos_dist(c, base) == (None, "thin"), "v2 바퀴인데 재료가 없는 경우를 다른 이유로 말했다"
+        finally:
+            c.close()
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c, _ = _pos_db(d, rows=POS_ROWS[:3])   # 3층이 빈 바퀴 — load_dist 부터 None
+        try:
+            assert od.load_dist(c, base) is None and od.load_pos_dist(c, base) == (None, "none")
+        finally:
+            c.close()
+
+
 def test_metric_names_exist_in_habits():
     for k in store.OWNER_METRICS:
         assert k in habits.METRICS, k

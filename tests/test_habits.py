@@ -286,6 +286,79 @@ def test_dist_basis_needs_full_window_of_manager_games():
         _cfg_set(**keep)
 
 
+# ── C4 자리별 수준(50단계 ③) ─────────────────────────────────────────────────
+
+class _Cell:
+    """지수 = 첫 지표 그대로 · 백분위 = 50 + 10·x (0~100 으로 자름) — 단계 경계 20·40·60·80 은 x = −3·−1·1·3."""
+    def index(self, v):
+        return v[0]
+
+    def pct(self, x):
+        return max(0.0, min(100.0, 50 + 10 * x))
+
+
+class _PosDist:
+    def __init__(self, cells=("MF.atk", "DF.atk", "DF.def")):
+        self.cells = {c: _Cell() for c in cells}
+
+
+def _c4_game(mid, goal, mt=52, opp_df=True):
+    """MF 줄 골 차 = goal(상대 MF 0) · DF 줄은 상대에 수비수가 없으면 그 칸만 빠진다."""
+    me = {"ouid": "me", "matchDetail": {"matchResult": "승"},
+          "player": [{"spId": 1, "spPosition": 14, "status": {"goal": goal}}, {"spId": 2, "spPosition": 5, "status": {}}]}
+    op = {"ouid": "op", "matchDetail": {"matchResult": "패"},
+          "player": [{"spId": 3, "spPosition": 14, "status": {}}] + ([{"spId": 4, "spPosition": 5, "status": {}}] if opp_df else [])}
+    return {"matchId": mid, "matchType": mt, "matchInfo": [me, op]}
+
+
+def test_pos_level_stage_hold_and_guards():
+    keep = _cfg_set(C4_MIN_LINE_GAMES=6, OWNER_DIST_MATCHES=8)   # 기본값(300·1000)이 아닌 값
+    try:
+        games = [_c4_game(f"g{i}", 2) for i in range(8)]
+        lv = habits.pos_level(_PosDist(), games, "me")
+        mf = lv.cells[0]
+        assert (mf.line, mf.side, mf.n, mf.pct, mf.stage, mf.why) == ("MF", "atk", 8, 70.0, 3, ""), mf
+        assert config.C4_STAGES[mf.stage] == "에이스"
+        assert lv.cells[2].stage == 2 and lv.cells[2].pct == 50.0, "DF 차 0 은 가운데 단계(잘함)"
+        # 감독모드 밖 경기는 안 세고, 최신 OWNER_DIST_MATCHES 판까지만
+        mixed = [_c4_game("x", 9, mt=50)] + games + [_c4_game("old", -9)] * 5
+        assert habits.pos_level(_PosDist(), mixed, "me").cells[0].pct == 70.0, "감독모드 밖이나 창 밖 경기를 셌다"
+        # 판수 미달 — 숫자는 내고 단계는 보류
+        few = habits.pos_level(_PosDist(), games[:5], "me").cells[0]
+        assert (few.n, few.pct, few.stage, few.why) == (5, 70.0, None, "games"), few
+        # 범위가 경계(x = 1)에 걸침 — 0 과 2.4 를 번갈아(평균 1.2 · se 0.45 → 1.645se 아래 끝이 1 밑)
+        wob = [_c4_game(f"w{i}", (0, 2.4)[i % 2]) for i in range(8)]
+        c = habits.pos_level(_PosDist(), wob, "me").cells[0]
+        assert c.why == "range" and c.stage is None and c.lo < 60 < c.hi, c
+        # 상대에 수비수가 없는 경기는 DF 칸만 빠진다(실패가 아니다)
+        no_df = games[:6] + [_c4_game(f"n{i}", 2, opp_df=False) for i in range(2)]
+        lv = habits.pos_level(_PosDist(), no_df, "me")
+        assert lv.cells[0].n == 8 and lv.cells[1].n == 6 and lv.cells[1].why == "", lv.cells
+        # 분포에 없는 칸
+        assert habits.pos_level(_PosDist(("MF.atk",)), games, "me").cells[1].why == "dist"
+    finally:
+        _cfg_set(**keep)
+
+
+def test_pos_level_z_and_cuts_are_wired_to_config():
+    keep = _cfg_set(C4_MIN_LINE_GAMES=6, OWNER_DIST_MATCHES=8)
+    try:
+        wob = [_c4_game(f"w{i}", (1.6, 2.4)[i % 2]) for i in range(8)]   # 평균 2 · se ≈ 0.151
+        assert habits.pos_level(_PosDist(), wob, "me").cells[0].stage == 3, "전제: 기본 Z 면 판정이 난다"
+        k2 = _cfg_set(C4_Z=8.0)
+        try:
+            assert habits.pos_level(_PosDist(), wob, "me").cells[0].why == "range", "C4_Z 가 설정과 안 이어졌다"
+        finally:
+            _cfg_set(**k2)
+        k3 = _cfg_set(C4_CUTS=(20, 40, 60, 65))
+        try:
+            assert habits.pos_level(_PosDist(), wob, "me").cells[0].stage == 4, "C4_CUTS 가 설정과 안 이어졌다(70 은 65 위)"
+        finally:
+            _cfg_set(**k3)
+    finally:
+        _cfg_set(**keep)
+
+
 # ── N19 전반 비중 ───────────────────────────────────────────────────────────
 
 def _gt(period, sec):

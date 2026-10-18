@@ -694,7 +694,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 49, len(tables)   # 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 50, len(tables)   # 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -1728,24 +1728,101 @@ def test_owner_dist_basis_none_outside_manager_mode():
             _win._details_all = keep
 
 
-def test_owner_dist_changed_signal_redraws_analysis_and_dashboard():
-    # 분포를 늦게 넣으면(바퀴가 끝남) 칩·문장을 다시 그린다 — 예약의 dist_changed · 스스로 끔 switched_off
+class _PosFake:
+    """ownerdist.PosDist 꼴 — 화면은 round_id·ended_at·cells[칸].n_owners 만 본다."""
+    def __init__(self, round_id=7):
+        self.round_id, self.ended_at = round_id, "2026-10-12T03:00:00"
+        self.cells = {c: type("C", (), {"n_owners": 129})() for c in ("MF.atk", "DF.atk", "DF.def")}
+
+
+def _poslevel_rows():
+    t = _win.tbl_poslevel
+    return [[t.item(r, c).text() for c in range(t.columnCount())] for r in range(t.rowCount())]
+
+
+def test_poslevel_empty_states_stage_names_and_cache():
+    # 50단계 C4 — 빈 화면 문구(켜는 길을 숨기지 않는다) · 모집단 안에서만 5단계 이름 · 보류 사유 · 내 1000판 판정 캐시
+    import habits
+    _win._render_poslevel()
+    assert _win.lb_poslevel_summary.text() == _win.POSLEVEL_OFF, "토글이 꺼졌는데 켜는 길을 말하지 않았다"
+    keep = (app_main.core.load_pos_dist, app_main.core.pos_level, _win._poslevel_in_pop, config.OWNER_DIST_V2_NOTICE_VERSION)
+    calls = []
+    lv = habits.PosLevel(1000, (habits.PosCell("MF", "atk", 995, 73.4, 54.0, 81.0, 3, ""),
+                                habits.PosCell("DF", "atk", 120, 34.0, 14.0, 63.0, None, "games"),
+                                habits.PosCell("DF", "def", 995, 93.0, 76.0, 100.0, None, "range")))
+    with _OwnerDistOn(_FakeDist()):
+        try:
+            for why, text in (("none", _win.POSLEVEL_NO_ROUND), ("thin", _win.POSLEVEL_THIN), ("v1", _win.POSLEVEL_NEED_NOTICE)):
+                app_main.core.load_pos_dist = lambda conn, now, why=why: (None, why)
+                _win._render_poslevel()
+                assert _win.lb_poslevel_summary.text() == text and not _poslevel_rows(), (why, _win.lb_poslevel_summary.text())
+            config.OWNER_DIST_V2_NOTICE_VERSION = config.NOTICE_ACCEPTED   # 이미 동의 — 다음 바퀴를 기다릴 뿐
+            _win._render_poslevel()
+            assert _win.lb_poslevel_summary.text() == _win.POSLEVEL_NEXT_ROUND
+            pd = _PosFake()
+            app_main.core.load_pos_dist = lambda conn, now: (pd, "")
+            app_main.core.pos_level = lambda d, det, ouid: (calls.append(d.round_id), lv)[1]
+            _win._poslevel_key = None
+            _win._poslevel_in_pop = lambda: True
+            _win._render_poslevel()
+            rows = _poslevel_rows()
+            assert [r[1] for r in rows] == ["에이스", f"판정 보류 (출전 {config.C4_MIN_LINE_GAMES}판 미만)",
+                                            "판정 보류 (범위가 단계 경계에 걸침)"], rows
+            assert rows[0][2:] == ["73", "54 ~ 81", "995판"], rows[0]
+            assert _win.lb_poslevel_summary.text() == "미드필더 · 공격 에이스"
+            assert "2026-10-12" in _win.lb_poslevel_note.text() and "같은 경기 상대" in _win.lb_poslevel_note.text()
+            _win._poslevel_in_pop = lambda: False
+            _win._render_poslevel()
+            assert _poslevel_rows()[0][1] == "—", "모집단 밖인데 5단계 이름을 냈다"
+            assert f"{config.OWNER_DIST_STRATA[-1]:,}위 밖" in _win.lb_poslevel_summary.text()
+            _win._poslevel_in_pop = lambda: None
+            _win._render_poslevel()
+            assert _poslevel_rows()[0][1] == "—" and "순위 기록이 없어" in _win.lb_poslevel_summary.text()
+            assert calls == [7], f"같은 바퀴·같은 경기인데 내 1000판을 다시 셌다: {calls}"
+            pd = _PosFake(round_id=8)
+            _win._render_poslevel()
+            assert calls == [7, 8], "새 바퀴인데 판정을 다시 안 냈다"
+        finally:
+            (app_main.core.load_pos_dist, app_main.core.pos_level, _win._poslevel_in_pop,
+             config.OWNER_DIST_V2_NOTICE_VERSION) = keep
+            if "_poslevel_in_pop" in vars(_win):
+                del _win._poslevel_in_pop
+            _win._poslevel_key = None
+
+
+def test_poslevel_in_pop_reads_the_latest_rank():
+    # 라벨 조건(계획 ⓗ) — 가장 최근 ELO 기록의 순위가 1~3000위 안인가. 경계 3000 은 안 · 3001 은 밖 · 순위 없는 줄은 건너뛴다
+    keep = store.elo_history
+    try:
+        for rows, want in (([], None), ([{"rank": 5}, {"rank": None}], True),
+                           ([{"rank": 10}, {"rank": config.OWNER_DIST_STRATA[-1]}], True),
+                           ([{"rank": 10}, {"rank": config.OWNER_DIST_STRATA[-1] + 1}], False)):
+            store.elo_history = lambda conn, ouid, rows=rows: rows
+            assert _win._poslevel_in_pop() is want, (rows, want)
+    finally:
+        store.elo_history = keep
+
+
+def test_owner_dist_changed_signal_redraws_every_dist_view():
+    # 분포를 늦게 넣으면(바퀴가 끝남) 칩·문장·자리별 수준(50단계 C4)을 다시 그린다 — 예약의 dist_changed · 스스로 끔 switched_off
     keep_sched = _win._owner_sched
     drawn = []
+    want = ["analysis", "dashboard", "poslevel"]
     sched = app_main.OwnerDistScheduler()
     try:
         _win.attach_owner_sched(sched)
         _win._render_analysis = lambda: drawn.append("analysis")
         _win._render_dashboard = lambda: drawn.append("dashboard")
+        _win._render_poslevel = lambda: drawn.append("poslevel")
         sched.dist_changed.emit()
-        assert sorted(drawn) == ["analysis", "dashboard"], drawn
+        assert sorted(drawn) == want, drawn
         drawn.clear()
         sched.switched_off.emit("fail")
-        assert sorted(drawn) == ["analysis", "dashboard"], f"스스로 꺼진 뒤 분포 칩이 남는다: {drawn}"
+        assert sorted(drawn) == want, f"스스로 꺼진 뒤 분포 화면이 남는다: {drawn}"
         drawn.clear()
         sched.sync = lambda start=False: None   # 끄는 길(수집·웹·동의·지우기·키) — .env 는 안 건드린다
         _win._sync_owner_dist()
-        assert sorted(drawn) == ["analysis", "dashboard"], f"끄는 길이 분포 칩을 안 거뒀다: {drawn}"
+        assert sorted(drawn) == want, f"끄는 길이 분포 화면을 안 거뒀다: {drawn}"
         drawn.clear()
         dlg = app_main.AboutDialog(_win)   # [정보] 토글 — 켜고 끄는 것도 다시 그린다
         keep_set = config.set_owner_dist
@@ -1755,9 +1832,9 @@ def test_owner_dist_changed_signal_redraws_analysis_and_dashboard():
         finally:
             config.set_owner_dist = keep_set
             dlg.deleteLater()
-        assert sorted(drawn) == ["analysis", "dashboard"], f"[정보] 토글이 분포 칩을 안 다시 그렸다: {drawn}"
+        assert sorted(drawn) == want, f"[정보] 토글이 분포 화면을 안 다시 그렸다: {drawn}"
     finally:
-        del _win._render_analysis, _win._render_dashboard
+        del _win._render_analysis, _win._render_dashboard, _win._render_poslevel
         _win._owner_sched = keep_sched
         sched.deleteLater()
         _win._render_all()
@@ -6917,11 +6994,13 @@ class _TradeKey:
         c.close()
 
     def ready(self, bought=(), **kv):
-        """지금 키로 다 받은 상태 + 산 (카드, 강화)."""
+        """지금 키로 다 받은 상태 + 산 (카드, 강화). 날짜는 오늘 기준 — 고정 날짜(09-30)였을 때 2주 뒤 "최근 구매" 창을
+        벗어나 test_price_loader_targets_held_only 가 날짜만으로 깨졌다(2026-10-14~)."""
+        day = lambda n: (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%dT10:00:00")
         c = store.open_db(config.DB_PATH)
-        store.save_trades(c, "buy", [{"tradeDate": "2026-09-30T10:00:00", "saleSn": f"b{i}", "spid": s,
+        store.save_trades(c, "buy", [{"tradeDate": day(2), "saleSn": f"b{i}", "spid": s,
                                       "grade": g, "value": 100} for i, (s, g) in enumerate(bought)])
-        store.save_trades(c, "sell", [{"tradeDate": "2026-09-29T10:00:00", "saleSn": "s0", "spid": 1,
+        store.save_trades(c, "sell", [{"tradeDate": day(3), "saleSn": "s0", "spid": 1,
                                        "grade": 1, "value": 50}])
         store.set_trade_state(c, key_fp=store.key_fingerprint(self.key), done_buy="1", done_sell="1", **kv)
         c.close()
@@ -7086,7 +7165,7 @@ def test_price_loader_targets_held_only():
             _trade_view()
             assert len(_FakePriceLoader.made) == 1, "같은 날 다시 그릴 때 또 띄웠다"
             # 시세를 다 읽으면 가계부를 다시 그린다 — 안 그러면 "시세 없음"이 다음 검색까지 남는다
-            assert "시세 없음" in _win.lb_ledger["recent"].text(), _win.lb_ledger["recent"].text()  # 09-30 구매 = 최근 구매
+            assert "시세 없음" in _win.lb_ledger["recent"].text(), _win.lb_ledger["recent"].text()  # 이틀 전 구매 = 최근 구매
             c = store.open_db(config.DB_PATH)
             for s, _g in held:
                 store.save_card_prices(c, s, {g: 10 ** 12 for g in range(1, 14)}, datetime.now().date().isoformat())
@@ -7105,7 +7184,8 @@ def test_my_account_banner():
         banner, hint, status, vis = _trade_view()
         assert "이 계정(테스트구단주)이 내 계정인가요" in banner and vis == {"mine": True, "yes": False, "change": False}, (banner, vis)
         assert "%" in hint and "참고" in hint, hint
-        assert "마지막 거래 9월 30일" in status and "구매 2 · 판매 1건" in status, status
+        last = datetime.now() - timedelta(days=2)   # _TradeKey.ready 의 구매일(오늘 기준)
+        assert f"마지막 거래 {last.month}월 {last.day}일" in status and "구매 2 · 판매 1건" in status, status
         _win.btn_trade_mine.click()
         assert store.trade_state(store.open_db(config.DB_PATH)).get("my_ouid") == _OUID
         banner, hint, status, vis = _trade_view()

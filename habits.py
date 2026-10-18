@@ -7,6 +7,7 @@
 | `side_totals(details, ouid)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 |
 | `paired_diff(rows, metric)` | 〃 | 지표 하나의 나 − 상대 차와 95% 구간(경기 단위 짝) · 지표 이름은 `METRICS` |
 | `pos_diff(detail, ouid)` · `PosTotals` | (C4 자리별 수준 — 50단계 · 구단주 분포 바퀴가 `pos_json` 으로) | 칸(`config.C4_CELLS`)마다 같은 줄 선수 한 명 평균의 나 − 상대 |
+| `pos_level(pos_dist, details_all, ouid)` | [성적 진단 › 자리별 수준](C4) | 내 최신 1000판 칸별 지수 → 분포 백분위 · 5단계 또는 보류 — 1000판 짝짓기라 작업 스레드(`app_main.PosLevelWorker`) |
 | `strength_chips(totals)` | [흐름 분석] 맨 위 칩 줄(N19) | 결정력·유효슛 비율·태클 성공 중 구간이 0 을 안 품고 크기 문턱을 넘은 것 |
 | `half_share_diff(details, ouid)` | 흐름 분석 문장 "전반·후반 어디서 새나"(N19) | 내 실점의 전반 비중 − 같은 경기 상대 실점(= 내 득점)의 전반 비중 |
 | `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |
@@ -212,6 +213,65 @@ class PosTotals:
     def summary(self) -> dict:
         """{칸: {"n": 경기 수, "d": [지표 평균]}} — 경기가 없는 칸은 빠진다."""
         return {c: {"n": n, "d": [x / n for x in self.s[c]]} for c, n in self.n.items() if n}
+
+
+@dataclass(frozen=True)
+class PosCell:
+    """C4 한 칸의 내 판정. why: "" 판정 남 · games(그 줄 출전 C4_MIN_LINE_GAMES 미만) · range(± C4_Z se 가 두 단계에 걸침)
+    · dist(그 칸 분포가 층 하한 미달). pct·lo·hi 는 games 여도 n ≥ 2 면 낸다(화면이 숫자는 보여 준다)."""
+    line: str
+    side: str
+    n: int
+    pct: float | None = None
+    lo: float | None = None
+    hi: float | None = None
+    stage: int | None = None     # 0~4 = config.C4_STAGES · 보류면 None
+    why: str = ""
+
+
+@dataclass(frozen=True)
+class PosLevel:
+    games: int                   # 쓴 내 감독모드 경기(최신 OWNER_DIST_MATCHES 판까지)
+    cells: tuple                 # PosCell — config.C4_CELLS 순서
+
+
+def c4_stage(p: float) -> int:
+    return sum(p > c for c in config.C4_CUTS)
+
+
+def pos_level(pos_dist, details_all: list[dict], ouid: str) -> PosLevel:
+    """C4 자리별 수준(50단계 ③) — 내 감독모드 최신 OWNER_DIST_MATCHES 판(49 칩과 같은 창 · 계획 ⓕ)의 칸별 지수를 분포에 댄다.
+    pos_dist 는 ownerdist.PosDist(cells[칸].index·pct 만 쓴다 — 순환 import 를 피해 형만 맞춘다). 측정 C 판정기와 같은 식:
+    경기마다 지수(그 경기 나 − 상대 값을 분포의 μ·σ 로 z 평균) → 평균이 내 지수 · se = 경기 지수 SD/√n(해석적 구간 · 5판 V5).
+    보류는 엄격하게 — ± C4_Z se 양 끝의 단계가 다르면(경계 하나라도 걸치면) 보류."""
+    mine = [d for d in details_all if d.get("matchType") == config.DEFAULT_MATCH_TYPE][:config.OWNER_DIST_MATCHES]
+    per: dict[str, list[list[float]]] = {c4_cell(L, s): [] for L, s in config.C4_CELLS}
+    for d in mine:
+        pd = pos_diff(d, ouid)
+        for cell, v in (pd or {}).items():
+            per[cell].append(v)
+    cells = []
+    for line, side in config.C4_CELLS:
+        vs = per[c4_cell(line, side)]
+        cd = pos_dist.cells.get(c4_cell(line, side))
+        if cd is None:
+            cells.append(PosCell(line, side, len(vs), why="dist"))
+            continue
+        if len(vs) < 2:
+            cells.append(PosCell(line, side, len(vs), why="games"))
+            continue
+        xs = [cd.index(v) for v in vs]
+        x = sum(xs) / len(xs)
+        se = math.sqrt(sum((a - x) ** 2 for a in xs) / (len(xs) - 1) / len(xs))
+        p, lo, hi = cd.pct(x), cd.pct(x - config.C4_Z * se), cd.pct(x + config.C4_Z * se)
+        if len(vs) < config.C4_MIN_LINE_GAMES:
+            why, stage = "games", None
+        elif c4_stage(lo) != c4_stage(hi):
+            why, stage = "range", None
+        else:
+            why, stage = "", c4_stage(p)
+        cells.append(PosCell(line, side, len(vs), p, lo, hi, stage, why))
+    return PosLevel(len(mine), tuple(cells))
 
 
 @dataclass(frozen=True)

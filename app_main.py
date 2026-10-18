@@ -2145,6 +2145,8 @@ class MainWindow(QMainWindow):
         self._narrate_found: list = []
         self._dist_key = None          # 구단주 분포 판정 재료 캐시(_dist_basis) — 칩·문장이 같이 쓴다
         self._dist_val = None
+        self._poslevel_key = None      # C4 내 1000판 판정 캐시(_render_poslevel)
+        self._poslevel_val = None
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
         self._owner_sched: OwnerDistScheduler | None = None   # 구단주 분포 예약 — 같은 셸이 붙여 준다
         self._maint_workers: list[RankMaintWorker] = []       # 예약이 없을 때만(테스트 창) — _maintain_rank
@@ -2913,7 +2915,8 @@ class MainWindow(QMainWindow):
                                                 ("등급 체류", "_build_divstay_tab"),
                                                 ("운 범위", "_build_luck_tab"),
                                                 ("경기 습관", "_build_habits_tab"),
-                                                ("FC 보상", "_build_rewards_tab")))),
+                                                ("FC 보상", "_build_rewards_tab"),
+                                                ("자리별 수준", "_build_poslevel_tab")))),
                    ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
                                                    ("경기 결과", "_build_results_tab"),
                                                    ("패스 스타일", "_build_pass_style_tab")))),
@@ -3558,11 +3561,13 @@ class MainWindow(QMainWindow):
             self._dist_key = key
         return self._dist_val
 
+    OWNER_DIST_VIEW_KEYS = ("analysis", "dashboard", "poslevel")   # 구단주 분포가 바뀌는 길이 같이 무효화하는 키
+
     def refresh_owner_dist_views(self) -> None:
-        """분포가 바뀌었다(새 바퀴 · 지움 · 토글 · 전제 꺼짐) — 칩·문장을 쓰는 화면(흐름 분석·대시보드)을 낡음으로."""
+        """분포가 바뀌었다(새 바퀴 · 지움 · 토글 · 전제 꺼짐) — 분포를 쓰는 화면(흐름 분석·대시보드 칩·문장 · 자리별 수준)을 낡음으로."""
         if not self._ouid:
             return
-        for key in ("analysis", "dashboard"):
+        for key in self.OWNER_DIST_VIEW_KEYS:
             self._invalidate(key)
 
     def _render_chips(self) -> None:
@@ -4096,6 +4101,122 @@ class MainWindow(QMainWindow):
         if r.unknown_wins:
             parts.append(f"등급 기록이 없는 승리 {r.unknown_wins:,}판은 합계에서 뺐습니다")
         self.lb_rewards_note.setText(" · ".join(parts) + f" ({self._scope_text()})")
+
+    # ── 성적 진단 [자리별 수준] (50단계 C4) ─────────────────────────────────────
+    POSLEVEL_COLUMNS = ["자리", "판정", "백분위", "90% 범위", "출전"]
+    POSLEVEL_NAMES = {("MF", "atk"): "미드필더 · 공격", ("DF", "atk"): "수비수 · 공격", ("DF", "def"): "수비수 · 수비"}
+    POSLEVEL_METRIC_NAMES = {"goal": "골", "effectiveShoot": "유효슛", "assist": "어시스트", "dribbleSuccess": "드리블 성공",
+                             "tackle": "태클", "block": "블록", "intercept": "인터셉트"}
+    # 빈 화면 문구 — 켜는 길을 숨기지 않고 말한다(계획 B[중] · 테스트가 문구를 고정)
+    POSLEVEL_OFF = "구단주 분포를 받으면 볼 수 있습니다 — [정보] 창에서 '구단주 분포 받기'를 켜면(서비스 단계 키 필요) 다음 바퀴부터 채워집니다."
+    POSLEVEL_NO_ROUND = "아직 쓸 수 있는 구단주 분포가 없습니다 — 받는 바퀴가 끝나면 채워집니다."
+    POSLEVEL_NEED_NOTICE = "최근 분포에 자리 재료가 없습니다 — 창을 열어 새 이용 안내에 동의하면 다음 바퀴부터 받습니다."
+    POSLEVEL_NEXT_ROUND = "최근 분포는 자리 재료가 없는 바퀴입니다(업그레이드 직후이거나 이전 버전이 받은 바퀴) — 다음 바퀴부터 채워집니다."
+    POSLEVEL_THIN = f"자리 재료가 있는 구단주가 층마다 {config.OWNER_DIST_MIN_PER_STRATUM}명이 안 돼 판정하지 않습니다 — 다음 바퀴를 기다립니다."
+
+    def _build_poslevel_tab(self) -> QWidget:
+        """성적 진단 [자리별 수준](50단계 C4) — 미드필더·수비수 줄의 공격·수비가 상위 구단주 분포 안 몇 분위인가 → 5단계 또는 보류."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_poslevel_summary = QLabel("")
+        self.lb_poslevel_summary.setWordWrap(True)
+        v.addWidget(self.lb_poslevel_summary)
+        self.tbl_poslevel = self._make_table(self.POSLEVEL_COLUMNS)
+        v.addWidget(self.tbl_poslevel, 1)
+        self.lb_poslevel_note = QLabel("")
+        self.lb_poslevel_note.setWordWrap(True)
+        self.lb_poslevel_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_poslevel_note)
+        return w
+
+    def _poslevel_in_pop(self) -> bool | None:
+        """내 계정이 분포 모집단(1~OWNER_DIST_STRATA[-1]위) 안인가 — 가장 최근 ELO 기록의 순위로. 기록이 없으면 None(모른다).
+        5단계 이름은 안일 때만 낸다(계획 ⓗ — 밖이면 백분위 숫자만)."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                rows = store.elo_history(conn, self._ouid)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+        rank = next((r["rank"] for r in reversed(rows) if r.get("rank")), None)
+        return None if rank is None else rank <= config.OWNER_DIST_STRATA[-1]
+
+    def _render_poslevel(self) -> None:
+        """분포는 매번 fifa.db 에서(지우기·새 바퀴·낡음이 다른 신호 없이 잡히게 — _dist_basis 와 같다), 내 1000판 판정만 캐시.
+        계획은 작업 스레드였지만 1000판 짝짓기가 실측 0.06~0.08초라(2026-10-18 개발 PC) 화면 스레드 + 캐시로 — _dist_basis 와 같은 꼴."""
+        self._fill(self.tbl_poslevel, [], enable_sort=False)
+        self.lb_poslevel_note.setText("")
+        say = self.lb_poslevel_summary.setText
+        if not self._ouid:
+            say("검색한 계정이 없습니다.")
+            return
+        if not config.owner_dist_allowed():
+            say(self.POSLEVEL_OFF)
+            return
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                pd, why = core.load_pos_dist(conn, datetime.now())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            say("구단주 분포를 읽지 못했습니다 — 잠시 뒤 다시 엽니다.")
+            return
+        if pd is None:
+            if why == "v1":
+                say(self.POSLEVEL_NEED_NOTICE if config.NOTICE_ACCEPTED < config.OWNER_DIST_V2_NOTICE_VERSION
+                    else self.POSLEVEL_NEXT_ROUND)
+            else:
+                say(self.POSLEVEL_THIN if why == "thin" else self.POSLEVEL_NO_ROUND)
+            return
+        d = self._details_all
+        key = (pd.round_id, pd.ended_at, self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
+        if key != self._poslevel_key:
+            self._poslevel_val = core.pos_level(pd, d, self._ouid)
+            self._poslevel_key = key
+        lv = self._poslevel_val
+        if not lv.games:
+            say("감독모드 경기가 없습니다.")
+            return
+        in_pop = self._poslevel_in_pop()
+        top = config.OWNER_DIST_STRATA[-1]
+        rows, judged = [], []
+        for c in lv.cells:
+            name = self.POSLEVEL_NAMES.get((c.line, c.side), f"{c.line} · {c.side}")
+            if c.why == "dist":
+                verdict = "분포 부족"
+            elif c.why == "games":
+                verdict = f"판정 보류 (출전 {config.C4_MIN_LINE_GAMES}판 미만)"
+            elif c.why == "range":
+                verdict = "판정 보류 (범위가 단계 경계에 걸침)"
+            elif in_pop:
+                verdict = config.C4_STAGES[c.stage]
+                judged.append(f"{name} {verdict}")
+            else:
+                verdict = "—"
+            rows.append([name, verdict,
+                         ("—", -1.0) if c.pct is None else (f"{c.pct:.0f}", c.pct),
+                         "—" if c.lo is None else f"{c.lo:.0f} ~ {c.hi:.0f}",
+                         (f"{c.n:,}판", c.n)])
+        self._fill(self.tbl_poslevel, rows, enable_sort=False)
+        if in_pop:
+            say(" · ".join(judged) if judged else "세 자리 모두 판정 보류 — 범위가 단계 경계에 걸치거나 출전이 모자랍니다.")
+        else:
+            say(f"상위 {top:,}위 구단주들과 견준 값입니다 — "
+                + ("내 순위 기록이 없어" if in_pop is None else f"{top:,}위 밖이라")
+                + " 단계 이름 없이 백분위만 보여 줍니다.")
+        cuts = "·".join(str(x) for x in config.C4_CUTS)
+        names = " · ".join(config.C4_STAGES)
+        self.lb_poslevel_note.setText(
+            f"1~{top:,}위 구단주 {min(c.n_owners for c in pd.cells.values())}명 이상 분포({pd.ended_at[:10]} 기준) · "
+            f"같은 경기 상대의 같은 자리 대비(절대 수준이 아닙니다) · 선수 한 명의 한 경기 평균 · "
+            f"내 감독모드 최근 {lv.games:,}판(분포와 기간이 다를 수 있습니다, 시즌 선택과 무관) · "
+            + " · ".join(f"{'공격' if s == 'atk' else '수비'} = " + "·".join(self.POSLEVEL_METRIC_NAMES.get(k, k) for k in ks)
+                         for s, ks in config.C4_METRICS.items())
+            + f" · 단계 경계 백분위 {cuts}({names}) · 90% 범위가 경계에 걸치면 판정 보류"
+            f" · 같은 사람을 다시 재도 단계가 유지되던 자리만 보여 줍니다")
 
     # ── 성적 진단 [운 범위] · [경기 습관] (2.7.1 N16·A3·N20) ───────────────────────
     def _launch_streak(self) -> None:
@@ -8113,7 +8234,7 @@ class MainWindow(QMainWindow):
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
         "luck": [("성적 진단", "운 범위")], "habits": [("성적 진단", "경기 습관")],
-        "rewards": [("성적 진단", "FC 보상")],
+        "rewards": [("성적 진단", "FC 보상")], "poslevel": [("성적 진단", "자리별 수준")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
         "shotmap": [("슛 맵", "슛 맵")], "route": [("슛 맵", "공격 루트")],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
@@ -8162,6 +8283,7 @@ class MainWindow(QMainWindow):
             "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 띠는 그래프 '최근 N일'(sp_trend_days)
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "rewards": lambda: self._render_rewards(self._details),   # 시즌 범위(diagnosis 와 같다)
+            "poslevel": self._render_poslevel,   # 50단계 C4 — 시즌 범위 무관(내 감독모드 최신 1000판 · 49 칩과 같은 창)
             "shotmap": self._render_shotmap,  # 표시 구간
             "route": lambda: self._render_attack_route(self._slice()[1]),   # 표시 구간(슛 맵과 같다)
             "finishing": lambda: self._render_finishing(self._slice()[1]),
@@ -10540,6 +10662,7 @@ class MainWindow(QMainWindow):
         self._matches, self._details = [], []
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
+        self._poslevel_val, self._poslevel_key = None, None
         if self._prefetch is not None:
             self._prefetch.discard()  # discard 는 멈춤 표시만 — 끝난 Future 의 결과는 참조를 놓아야 풀린다
         self._prefetch = None

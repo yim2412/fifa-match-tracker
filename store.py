@@ -1502,8 +1502,8 @@ def owner_round_running(conn: sqlite3.Connection) -> dict | None:
 
 
 def owner_round_last_end(conn: sqlite3.Connection, results=None) -> dict | None:
-    """가장 최근에 끝난 바퀴 (round_id, ended_at, result) — results 로 결과를 좁힐 수 있다."""
-    q = "SELECT round_id, ended_at, result FROM owner_dist_state WHERE result IS NOT NULL"
+    """가장 최근에 끝난 바퀴 (round_id, ended_at, result, v2) — results 로 결과를 좁힐 수 있다."""
+    q = "SELECT round_id, ended_at, result, v2 FROM owner_dist_state WHERE result IS NOT NULL"
     args: tuple = ()
     if results:
         q += f" AND result IN ({','.join('?' * len(results))})"

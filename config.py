@@ -261,6 +261,11 @@ OWNER_DIST_V2_NOTICE_VERSION = 99
 # C4 칸 — 측정 C(2026-10-13 · ROADMAP 50 "측정 C·D 결과")를 통과한 (자리 줄, 쪽)만. 지표는 선수 status 키
 C4_CELLS = (("MF", "atk"), ("DF", "atk"), ("DF", "def"))
 C4_METRICS = {"atk": ("goal", "effectiveShoot", "assist", "dribbleSuccess"), "def": ("tackle", "block", "intercept")}
+# C4 판정 — 측정 C 판정기(tools/step0_owner_dist/analyze50.py)와 같은 값. 바꾸면 측정 C 를 다시 잰다
+C4_CUTS = (20, 40, 60, 80)          # 5단계 경계 = 구단주 지수의 층 가중 백분위(95 꼬리는 150명 중 약 7명이 정해 흔들린다 — 계획 ⓓ)
+C4_STAGES = ("미달", "1인분", "잘함", "에이스", "압도")
+C4_MIN_LINE_GAMES = 300             # 내 그 줄 출전이 이보다 적으면 판정 보류(계획 ⓔ)
+C4_Z = 1.645                        # 내 지수 ± 이만큼의 se 가 두 단계에 걸치면 판정 보류(90% — 49 SURE_P 와 같은 뜻)
 PREDICT_CHECK_RETRY_DAYS = 3        # 처음 물은 날부터 이 기간은 not_found 도 하루 한 번 다시 묻는다
 SEASON_NOTICE_MAX_DAYS = 120        # 공지 종료일이 시작일 + 이만큼 안일 때만 받는다
 RANK_EMPTY_RETRIES = 2              # 빈 쪽은 그 쪽만 이만큼 다시 받는다 — 10-05 실측: 500쪽 중 빈 쪽 하나가 회차 전체를 버렸다

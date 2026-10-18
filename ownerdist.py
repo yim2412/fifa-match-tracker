@@ -2,6 +2,7 @@
 
 화면 없이 테스트한다(tests/test_ownerdist.py). 받기·저장·지우기(조각 ①)와 분포 읽기·백분위(`load_dist`·`OwnerDist.pct` — 조각 ②).
 칩 판정은 `habits.strength_chips(…, basis)`, 문장은 `analysis._creation_rules` 가 이 분포를 쓴다.
+C4 자리별 수준(50단계 ③)은 `load_pos_dist`(같은 바퀴 + v2 + 칸마다 층 하한) → 판정 `habits.pos_level`.
 
 받는 규칙(ROADMAP "49단계") — 위반하면 조용히 넥슨 한도·약속을 넘으므로 표로 둔다:
 
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import random
 import secrets
 import threading
@@ -200,6 +202,100 @@ def load_dist(conn, now: datetime) -> OwnerDist | None:
     if datetime.fromisoformat(last["ended_at"][:19]) + timedelta(days=config.OWNER_DIST_STALE_DAYS) < now:
         return None
     return build_dist(store.owner_dist_rows(conn, last["round_id"]), last["round_id"], last["ended_at"])
+
+
+# ── C4 자리별 수준 분포(50단계 ③) — 칸은 config.C4_CELLS · 식은 측정 C 판정기(analyze50.Dist)와 같다 ──────────
+
+@dataclass(frozen=True)
+class PosCellDist:
+    """한 칸의 기준 — params = ((지표 자리, 층 가중 μ, 층 가중 σ), …)(σ = 0 인 지표는 정보가 없어 뺀다),
+    scores = ((구단주 지수, 층 가중), …). 지수 = 그 칸 지표들 z 의 평균."""
+    params: tuple
+    scores: tuple
+    n_owners: int
+
+    def index(self, v: list[float]) -> float:
+        return sum((v[i] - mu) / sd for i, mu, sd in self.params) / len(self.params)
+
+    def pct(self, x: float) -> float:
+        """층 가중 경험 CDF 백분위 — OwnerDist.pct 와 같은 식(같은 값은 반만)."""
+        tot = lo = eq = 0.0
+        for s, w in self.scores:
+            tot += w
+            if s < x:
+                lo += w
+            elif s == x:
+                eq += w
+        return 100 * (lo + eq / 2) / tot
+
+
+@dataclass(frozen=True)
+class PosDist:
+    """최신 done v2 바퀴의 칸별 기준 — 층 하한을 못 넘은 칸은 cells 에 없다."""
+    round_id: int
+    ended_at: str
+    cells: dict
+
+
+def _wstats(vals: list[float], ws: list[float]) -> tuple[float, float]:
+    sw = sum(ws)
+    mu = sum(v * w for v, w in zip(vals, ws)) / sw
+    return mu, math.sqrt(sum(w * (v - mu) ** 2 for v, w in zip(vals, ws)) / sw)
+
+
+def build_pos_dist(rows: list[dict], round_id: int, ended_at: str) -> PosDist:
+    """owner_dist 줄 → PosDist. 대상은 build_dist 와 같은 eligible 구단주 중 그 칸 재료(pos_json)가 있는 사람이고,
+    **칸마다 층 하한을 다시 본다** — v2 바퀴라도 재료 계산이 실패한 구단주(NULL)나 다운그레이드 사이 구간(6회차 Y4)으로
+    한 층이 비면 가중이 그 층 인구를 잃는다. 깨진 JSON 줄은 그 사람만 뺀다."""
+    ref = datetime.fromisoformat(ended_at[:19])
+    have: dict[str, list[tuple[int, list[float]]]] = {habits.c4_cell(L, s): [] for L, s in config.C4_CELLS}
+    for r in rows:
+        if not r.get("pos_json") or not eligible(r, ref):
+            continue
+        try:
+            pj = json.loads(r["pos_json"])
+            for cell, got in have.items():
+                if cell in pj and pj[cell].get("n"):
+                    got.append((r["stratum"], [float(x) for x in pj[cell]["d"]]))
+        except (ValueError, TypeError, KeyError, AttributeError):
+            continue
+    pop = config.OWNER_DIST_STRATA_POP
+    cells = {}
+    for cell, got in have.items():
+        strata = [s for s, _ in got]
+        if not got or not _strata_ok(strata):
+            continue
+        cnt = {i: strata.count(i) for i in set(strata)}
+        ws = [pop[s - 1] / cnt[s] for s in strata]
+        vs = [v for _, v in got]
+        params = []
+        for i in range(len(vs[0])):
+            mu, sd = _wstats([v[i] for v in vs], ws)
+            if sd > 0:
+                params.append((i, mu, sd))
+        if not params:
+            continue
+        scores = [sum((v[i] - mu) / sd for i, mu, sd in params) / len(params) for v in vs]   # = PosCellDist.index
+        cells[cell] = PosCellDist(tuple(params), tuple(zip(scores, ws)), len(got))
+    return PosDist(round_id, ended_at, cells)
+
+
+def load_pos_dist(conn, now: datetime) -> tuple[PosDist | None, str]:
+    """C4 가 쓸 분포 — load_dist 가 고르는 **같은** 최신 done 바퀴(낡음·thin 규칙도 같다)이고 그 바퀴가 v2 일 때만(5판 V2 —
+    load_dist 자체는 v2 를 안 본다: 49 칩이 회귀하지 않게). → (분포, 이유) — 이유: "" | none(쓸 바퀴 없음) | v1(재료 없는
+    바퀴) | thin(재료가 있는 구단주가 층 하한 미달)."""
+    last = store.owner_round_last_end(conn, ("done",))
+    if last is None or not last.get("ended_at"):
+        return None, "none"
+    if datetime.fromisoformat(last["ended_at"][:19]) + timedelta(days=config.OWNER_DIST_STALE_DAYS) < now:
+        return None, "none"
+    rows = store.owner_dist_rows(conn, last["round_id"])
+    if build_dist(rows, last["round_id"], last["ended_at"]) is None:
+        return None, "none"
+    if last.get("v2") != 1:
+        return None, "v1"
+    pd = build_pos_dist(rows, last["round_id"], last["ended_at"])
+    return (pd, "") if pd.cells else (None, "thin")
 
 
 # ── 요청 게이트 ──────────────────────────────────────────────────────────────
