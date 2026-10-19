@@ -113,7 +113,7 @@ NOTICE_VAR = "FIFA_NOTICE"
 NOTICE_VERSION = 12  # 2 =1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
-#                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속·최고점·첫 챔스(U1)
+#                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속(55 에서 '상위 20 연속' 으로 바로잡음)·최고점·첫 챔스(U1)
 #                     7 = 2.5.1 포지션 특성 — 상위 TRAIT_TOP 명의 카드 특성·코치(스쿼드메이커)와 201~500위 경기
 #                     8 = 2.6.1 표 칸 그림 — 구단·팀컬러 엠블럼·국기·특성 아이콘·시즌 배지를 넥슨 이미지 서버에서 받는다(수집과 무관)
 #                     9 = 2.9.1 내 계정 경기마다 상대의 그날 순위 구간을 그 시즌 동안 붙인다(N23 — 랭킹 수집을 켠 사람만)
@@ -127,7 +127,7 @@ TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)
 PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 이 버전 동의 뒤부터 — 사용자가 연 [시세] 탭은 그대로
 CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
 RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
-META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch · 55 sc_watch·fc_season)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
+META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch · 55 fc_season)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
 TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터
 OPP_RANK_NOTICE_VERSION = 9   # 상대 순위 구간(rank.db match_opp_rank — 내 경기마다 상대의 그날 순위 구간)은 이 버전 동의 뒤부터
 OWNER_DIST_NOTICE_VERSION = 10   # 구단주 분포(49단계 · ownerdist.py)는 이 버전 동의 뒤부터
@@ -213,10 +213,10 @@ RANK_GAPS_WARN = 50                 # 빈 순위가 이만큼 이상이면 [정�
 RANK_CONT_MAX_H = 36                # 앞 스냅숏과 데이터 시각 차가 이 안이면 이어진 것 — 넘으면 틈(연속·첫 챔스를 자른다)
 RANK_ELO_BIN = 50                   # 점수 분포 막대 칸 폭(R9: 2,934~4,538 → 34칸 남짓)
 META_MIN_USERS = 5                  # 메타 변화 표 — 두 시점 다 이보다 적은 줄은 흐림
-CHAMP_GRADE_MAX = 1                 # 등급 칸 번호 — 0 슈퍼챔피언스 · 1 챔피언스. 판정은 rankcollect.is_champ 한 곳
-SUPER_GRADE = 0                     # 슈퍼챔피언스 칸(55 H5 — rankcollect.is_super)
-# 랭킹 등급 칸 → 경기 division(FC 보상표 FC_REWARDS 의 키 · 55 H6 rankcollect.grade_fc). 챔스 아래 칸은 보상이 없어 안 적는다
-RANK_GRADE_DIVISION = {0: 800, 1: 900}
+CHAMP_GRADE_MAX = 1                 # 등급 칸 번호 — 0 상위 20 표시 · 1 챔피언스(둘 다 챔스 이상). 판정은 rankcollect.is_champ 한 곳
+# 랭킹 화면 등급 칸 0 — 챔피언스 중 상위 20위에 붙는 표시라 슈퍼챔피언스가 **아니다**(55 M1 실측: 칸 0 = 정확히 20명 ·
+# 데이터센터 용어 정의). N3 "상위 20 연속"(rankcollect.is_top20_mark)만 쓴다. FC 보상은 칸으로 슈챔을 모르니 범위로(grade_fc_range)
+TOP20_MARK_GRADE = 0
 # 랭커 메타 ② 스냅숏 읽기(2.4.1 · rankmeta.py) — 근거는 ROADMAP 2.4.1 실측 장부
 META_TOP_TIERS = (200, 2000, 5000, 10000)   # "상위 N명" 누적 구간(추이 탭의 띠 구간 TREND_TIERS 와 다르다)
 B3_WEIGHTS = {"elo": 300, "rate": 200, "value": 300, "champ": 200}   # 가성비 1,000점 — 구단가치는 낮을수록
@@ -663,7 +663,7 @@ def chip_auto_allowed() -> bool:
 
 
 def meta_person_allowed() -> bool:
-    """사람별 표(슈챔 연속·최고점·첫 챔스)에 써도 되나 — 이 프로세스 값으로. 쓰기 직전엔 read_person_allowed 로 다시."""
+    """사람별 표(상위 20 연속·최고점·첫 챔스·시즌 FC)에 써도 되나 — 이 프로세스 값으로. 쓰기 직전엔 read_person_allowed 로 다시."""
     return (not notice_needed() and WEB_DATA and RANK_COLLECT and NOTICE_ACCEPTED >= META_NOTICE_VERSION)
 
 

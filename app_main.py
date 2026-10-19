@@ -11770,11 +11770,11 @@ def rank_status_text(st: dict) -> str:
         lines.append(f"지운 기록의 파일 정리가 {ckpt}번 이어서 막혔습니다 — 앱을 다시 켜면 다시 시도합니다")
     if st.get("snapshots"):
         if config.meta_person_allowed():
-            lines.append(f"쌓는 중 — 슈챔 연속 {int(st.get('n_runs') or 0):,}건 · 시즌 최고점 {int(st.get('n_peak') or 0):,}명"
-                         f" · 첫 챔스 {int(st.get('n_first') or 0):,}건 · 첫 슈챔 {int(st.get('n_sc_first') or 0):,}건"
+            lines.append(f"쌓는 중 — 상위 20 연속 {int(st.get('n_runs') or 0):,}건 · 시즌 최고점 {int(st.get('n_peak') or 0):,}명"
+                         f" · 첫 챔스 {int(st.get('n_first') or 0):,}건"
                          f" · 시즌 FC {int(st.get('n_fc') or 0):,}명 · 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일")
         else:
-            lines.append(f"쌓는 중 — 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일 · 슈챔 연속·시즌 최고점·첫 챔스·첫 슈챔·시즌 FC는 "
+            lines.append(f"쌓는 중 — 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일 · 상위 20 연속·시즌 최고점·첫 챔스·시즌 FC는 "
                          "새 안내 동의 뒤부터")
     return "<br>".join(lines)
 

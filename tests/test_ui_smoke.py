@@ -6916,7 +6916,7 @@ def test_reask_shows_only_changes_after_accepted():
 NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
                  10: "8ce00c5021fb0806",                          # 10 = 2.10.1 구단주 분포 받기(49단계)
                  11: "75573220bc230e22",                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
-                 12: "3bcd79d7382a30c4"}                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 첫 슈챔·시즌 FC·구단가치 기록(공개 전이라 같은 버전)
+                 12: "b9157edc4717602e"}                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 시즌 FC·구단가치 기록 · '상위 20 연속' 이름 바로잡음(공개 전이라 같은 버전)
 
 
 def _notice_digest() -> str:
@@ -9384,7 +9384,7 @@ def test_about_rank_status_shows_ref_time_and_meta_counts():
     with _MetaEnv() as env:
         _meta_db(days=2)
         text = app_main.rank_status_text(rankcollect.read_status())
-        assert "넥슨 데이터 기준" in text and "빈 순위 0" in text and "쌓는 중 — 슈챔 연속" in text, text
+        assert "넥슨 데이터 기준" in text and "빈 순위 0" in text and "쌓는 중 — 상위 20 연속" in text and "슈챔" not in text, text
         c = rankcollect.open_rank_db()
         try:
             c.execute("UPDATE snapshot_meta SET rank_gaps = ?", (config.RANK_GAPS_WARN,))

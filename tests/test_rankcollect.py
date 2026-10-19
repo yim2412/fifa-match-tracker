@@ -1405,22 +1405,22 @@ def test_first_champ_states():
         c.close()
 
 
-def test_first_super_champ_states():
-    """55 H5 — 슈챔(등급 0) 첫 달성. 챔스 표와 따로 — 같은 사람이 챔스는 이미, 슈챔은 나중일 수 있다."""
+def test_sc_tables_dropped():
+    """55 J1 — 조각 ① 개발판이 만든 sc_watch·sc_first(랭킹 화면 칸 0 = 상위 20 표시를 슈챔으로 읽은 것)는 열 때 지운다."""
+    def tables(c):
+        return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     with Env() as env:
         c = env.conn()
-        t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
-        _msnap(c, t1, [_p(1, grade=0), _p(2, grade=1, games=40, value=7), _p(3, grade=1), _p(4, grade=2)])
-        _msnap(c, t2, [_p(1, grade=0), _p(2, grade=0, games=55, value=8), _p(5, grade=1), _p(4, grade=1, games=30)])
-        _msnap(c, t3, [_p(1, grade=0), _p(2, grade=0), _p(3, grade=0), _p(4, grade=1)])
-        _proc(c, ends=["2026-10-09"])
-        states = {r["profile_sn"]: r["state"] for r in _rows_of(c, "sc_watch")}
-        assert states == {1: 0, 2: 2, 3: 3, 4: 1, 5: 1}, states        # 3 = 빠졌다 들어와 처음 닿은 때를 모른다
-        first = [(f["games"], f["team_value"], f["at"], f["first_seen_late"]) for f in _rows_of(c, "sc_first")]
-        assert first == [(55, 8, t2.isoformat(), 0)], first
-        # 챔스 표는 제 규칙대로 — 2 는 처음부터 챔스(0), 4 는 t2 에 챔스가 됐다
-        champ = [(f["games"], f["at"]) for f in _rows_of(c, "champ_first")]
-        assert champ == [(30, t2.isoformat())], champ
+        assert "fc_season" in tables(c) and not {"sc_watch", "sc_first"} & tables(c), tables(c)
+        with c:                                     # 조각 ① 개발판이 남긴 표 흉내
+            c.execute("CREATE TABLE sc_watch (season_at TEXT, profile_sn INTEGER)")
+            c.execute("CREATE TABLE sc_first (season_at TEXT, games INTEGER)")
+            c.execute("INSERT INTO sc_first VALUES ('2026-10-01', 9)")
+        assert {"sc_watch", "sc_first"} <= tables(c), "옛 표 흉내가 안 됐다"
+        c.close()
+        c = env.conn()
+        assert not {"sc_watch", "sc_first"} & tables(c), tables(c)
+        assert "sc_watch" not in rc.PERSON_TABLES
         c.close()
 
 
@@ -1428,10 +1428,16 @@ def _fc(c):
     return {r["profile_sn"]: (r["fc_lo"], r["fc_hi"], r["first_seen_late"]) for r in _rows_of(c, "fc_season")}
 
 
+def _fc_started(c):
+    return {k: v for k, v in rc.get_state(c).items() if k.startswith(rc.FC_STARTED)}
+
+
 def test_fc_season_bounds():
-    """55 H6 — 하루 사이 등급이 바뀌면 앞뒤 보상 중 작은 쪽이 하한·큰 쪽이 상한 · 목록 밖 사이는 하한 0."""
-    assert rc.grade_fc(0, T0.date()) == 20 and rc.grade_fc(1, T0.date()) == 15 and rc.grade_fc(2, T0.date()) == 0
-    assert rc.grade_fc(None, T0.date()) == 0
+    """55 H6·U6·U9 — 칸 0·1(챔스 이상)은 15~20 · 하루 사이 등급이 바뀌면 두 칸 하한 중 작은 쪽·상한 중 큰 쪽 ·
+    목록 밖 사이(틈)와 처음 보기 전 승리는 하한 0 · 상한 20."""
+    d = T0.date()
+    assert rc.grade_fc_range(0, d) == (15, 20) and rc.grade_fc_range(1, d) == (15, 20), "칸 0 을 슈챔으로 읽었다(M1)"
+    assert rc.grade_fc_range(2, d) == (0, 0) and rc.grade_fc_range(None, d) == (0, 0)
     with Env() as env:
         c = env.conn()
         t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
@@ -1441,17 +1447,26 @@ def test_fc_season_bounds():
         _msnap(c, t3, [_p(1, grade=0, games=15), _p(2, grade=2, games=12), _p(3, grade=1, games=20),
                        _p(4, grade=0, games=13)])
         _proc(c, ends=["2026-10-09"])
-        assert _fc(c) == {1: (4 * 15 + 15, 4 * 15 + 20, 0),      # 그대로 챔스 4승 → 챔스·슈챔 사이 1승
-                          2: (0, 2 * 15, 0),                     # 챔스 아래 → 챔스: 0 ~ 15
-                          3: (0, 10 * 15, 0),                    # t2 에 목록 밖 — 그 사이 10승은 하한 0
-                          4: (3 * 20, 3 * 20, 0)}, _fc(c)
+        first = 10 * 20                                          # 처음 보기 전 10승 — 등급을 모른다(U9: 0 ~ 20)
+        assert _fc(c) == {1: (5 * 15, first + 5 * 20, 0),        # 챔스 4승 + 칸 1→0 1승 — 칸 0 도 15~20
+                          2: (0, first + 2 * 20, 0),             # 챔스 아래 → 챔스: 두 칸 하한 0 · 상한 20
+                          3: (0, first + 10 * 20, 0),            # t2 에 목록 밖 — 그 사이 10승은 0 ~ 20(앞뒤가 챔스여도)
+                          4: (3 * 15, first + 3 * 20, 0)}, _fc(c)
+        assert _fc_started(c) == {rc.FC_STARTED + T0.isoformat(): T0.isoformat()}, _fc_started(c)
         c.close()
     with Env() as env:
         c = env.conn()
         _msnap(c, T0, [_p(1, grade=1, games=10)])
         _msnap(c, T0 + timedelta(days=3), [_p(1, grade=1, games=14)])   # RANK_CONT_MAX_H 넘는 틈 — 이어진 게 아니다
         _proc(c)                                                         # 시즌 시작 10-01 — 열흘 뒤 처음 봤다
-        assert _fc(c) == {1: (0, 4 * 15, 1)}, _fc(c)
+        assert _fc(c) == {1: (0, 14 * 20, 1)}, _fc(c)
+        c.close()
+    with Env() as env:                       # 앞뒤 둘 다 챔스 아래인 틈 — 그래도 상한 20(1회차 [중] · 옛 코드는 0)
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=3, games=10)])
+        _msnap(c, T0 + timedelta(days=3), [_p(1, grade=3, games=14)])
+        _proc(c)
+        assert _fc(c)[1][:2] == (0, 14 * 20), _fc(c)
         c.close()
     with Env() as env:
         c = env.conn()
@@ -1459,15 +1474,45 @@ def test_fc_season_bounds():
         _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=8)])    # 넥슨이 승수를 깎았다(보정)
         _msnap(c, T0 + timedelta(days=2), [_p(1, grade=1, games=9)])
         _proc(c)
-        assert _fc(c)[1][:2] == (15, 15), "승수가 줄어든 날을 음수로 셌다"
+        assert _fc(c)[1][:2] == (15, 10 * 20 + 20), "승수가 줄어든 날을 음수로 셌다"
         c.close()
 
 
+def test_fc_season_reward_table_change_inside_interval():
+    """보상표가 구간 안에서 바뀌면 앞뒤 날짜 둘 다로 — 상한 20 을 박지 않는다(2회차 [중] · 1회차 [중] 뒤쪽 날짜만 보던 것)."""
+    import config as cfg
+    old = cfg.FC_REWARDS
+    up = ((T0.date() + timedelta(days=1), 800, 30), (T0.date() + timedelta(days=1), 900, 10))     # 하루 뒤 넓어짐
+    down = ((T0.date() + timedelta(days=1), 800, 18), (T0.date() + timedelta(days=1), 900, 16))   # 하루 뒤 좁아짐
+    try:
+        cfg.FC_REWARDS = old + up
+        with Env() as env:
+            c = env.conn()
+            _msnap(c, T0, [_p(1, grade=1, games=10)])
+            _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=12)])
+            _msnap(c, T0 + timedelta(days=4), [_p(1, grade=1, games=13)])     # 틈 — 그 사이 가장 큰 보상
+            _proc(c)
+            assert _fc(c)[1][:2] == (2 * 10, 10 * 20 + 2 * 30 + 30), _fc(c)
+            c.close()
+        cfg.FC_REWARDS = old + down        # 앞 날짜 쪽이 끝값 — 뒤쪽 날짜만 보면 하한이 오르고 상한이 내려간다
+        with Env() as env:
+            c = env.conn()
+            _msnap(c, T0, [_p(1, grade=1, games=10), _p(2, grade=1, games=10)])
+            _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=12)])
+            _msnap(c, T0 + timedelta(days=4), [_p(2, grade=1, games=13)])     # 2 는 T0 → +4일 틈(앞 날짜 20)
+            _proc(c)
+            assert _fc(c)[1][:2] == (2 * 15, 10 * 20 + 2 * 20), _fc(c)
+            assert _fc(c)[2][:2] == (0, 10 * 20 + 3 * 20), _fc(c)
+            c.close()
+    finally:
+        cfg.FC_REWARDS = old
+
+
 def _old_version_forgets_55(c):
-    """옛 버전이 처리한 것처럼 — 사람별 처리 깃발은 섰는데 55 표는 비었다."""
+    """옛 버전이 처리한 것처럼 — 사람별 처리 깃발은 섰는데 55 표·FC 시작 시각은 비었다."""
     with c:
-        for t in ("sc_watch", "sc_first", "fc_season"):
-            c.execute(f"DELETE FROM {t}")
+        c.execute("DELETE FROM fc_season")
+        c.execute("DELETE FROM collect_state WHERE key LIKE ?", (rc.FC_STARTED + "%",))
 
 
 def test_backfill_55_replays_kept_snapshots_once():
@@ -1480,9 +1525,9 @@ def test_backfill_55_replays_kept_snapshots_once():
         for i, rows in enumerate(days):
             _msnap(c, T0 + timedelta(days=i), rows)
         _proc(c, ends=["2026-10-09"])
-        want = (_fc(c), sorted(_rows_of(c, "sc_first"), key=str), sorted(_rows_of(c, "sc_watch"), key=str))
+        want = (_fc(c), _fc_started(c))
         c.close()
-    assert want[0][1][:2] == (60 + 15 + 3 * 20, 60 + 20 + 3 * 20) and len(want[1]) == 2, want   # 빈 대조군이면 아래가 비어 있다
+    assert want[0][1][:2] == (8 * 15, 10 * 20 + 8 * 20) and want[1], want   # 빈 대조군이면 아래가 비어 있다
     with Env() as env:
         c = env.conn()
         for i, rows in enumerate(days[:3]):
@@ -1493,7 +1538,7 @@ def test_backfill_55_replays_kept_snapshots_once():
         _msnap(c, T0 + timedelta(days=3), days[3])
         out = _proc(c, ends=["2026-10-09"])
         assert out["backfill_55"] == 3, out
-        got = (_fc(c), sorted(_rows_of(c, "sc_first"), key=str), sorted(_rows_of(c, "sc_watch"), key=str))
+        got = (_fc(c), _fc_started(c))
         assert got == want, ("남은 원본으로 다시 채운 값이 처음부터 쌓은 값과 다르다", got, want)
         assert _proc(c, ends=["2026-10-09"])["backfill_55"] == 0
         assert _fc(c) == want[0], "두 번째에 또 훑어 두 번 셌다"
@@ -1501,10 +1546,9 @@ def test_backfill_55_replays_kept_snapshots_once():
 
 
 def _55_state(c):
-    """이번 시즌 줄만 — 지난 시즌 첫 슈챔은 옛 버전이 안 썼으니 다시 채울 수 없다(원본도 이번 시즌만 훑는다)."""
+    """이번 시즌 줄만(원본도 이번 시즌만 훑는다) — FC 와 이번 시즌 FC 시작 시각."""
     season = json.loads(rc.get_state(c)["person_season"])["at"]
-    return (_fc(c), sorted(str(r) for r in _rows_of(c, "sc_first") if r["season_at"] == season),
-            sorted(map(str, _rows_of(c, "sc_watch"))))
+    return _fc(c), {k: v for k, v in _fc_started(c).items() if k == rc.FC_STARTED + season}
 
 
 def _backfill_matches_fresh(first, then, ends):
@@ -1556,7 +1600,7 @@ def test_backfill_55_skips_when_new_tables_already_fill():
         _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=12)])
         _proc(c)                                                       # 새 버전이 처음부터 쌓았다
         before = _fc(c)
-        assert _proc(c)["backfill_55"] == 0 and _fc(c) == before == {1: (30, 30, 1)}, (before, _fc(c))
+        assert _proc(c)["backfill_55"] == 0 and _fc(c) == before == {1: (30, 10 * 20 + 2 * 20, 1)}, (before, _fc(c))
         c.close()
 
 
@@ -1568,9 +1612,10 @@ def test_fc_season_rolls_into_done_without_numbers():
         _proc(c)
         new_ends = ENDS + ["2026-11-20"]
         assert _proc(c, now=datetime(2026, 11, 21, 9), ends=new_ends)["rolled"]
-        assert _count(c, "fc_season") == 0 and _count(c, "sc_watch") == 0, "새 시즌인데 옛 사람별 줄이 남았다"
+        assert _count(c, "fc_season") == 0, "새 시즌인데 옛 사람별 줄이 남았다"
+        assert _fc_started(c) == {}, "옛 시즌 FC 시작 시각이 남아 새 시즌 판정을 흐린다"
         done = sorted((r["fc_lo"], r["fc_hi"], r["first_seen_late"]) for r in _rows_of(c, "fc_season_done"))
-        assert done == [(20, 20, 1), (30, 30, 1)], done
+        assert done == [(15, 5 * 20 + 20, 1), (30, 10 * 20 + 2 * 20, 1)], done
         assert "profile_sn" not in _rows_of(c, "fc_season_done")[0], "끝난 기록에 번호가 남았다"
         c.close()
 
