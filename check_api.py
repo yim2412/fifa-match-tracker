@@ -16,6 +16,7 @@ import core_api as core
 import images
 import store
 from core_api import parse_match, summarize
+import nexon_api
 from nexon_api import FCOnlineAPI, NexonAPIError
 
 
@@ -38,6 +39,22 @@ def main() -> int:
     except NexonAPIError as e:
         print(f"[FAIL] 닉네임 조회: {e.message}  (code={e.code}, status={e.status})")
         return 1
+
+    # 중앙 서버(1단계 ⓐ · .env FIFA_SERVER_URL 이 있을 때만) — 살아 있나 · 서버를 거친 ouid 가 직접과 같은가
+    if config.SERVER_URL:
+        import requests
+        try:
+            ok = requests.get(f"{config.SERVER_URL.rstrip('/')}/health", timeout=5).status_code == 200
+            print(f"[{'OK' if ok else 'FAIL'}]   중앙 서버 /health ({config.SERVER_URL})")
+        except requests.RequestException as e:
+            print(f"[FAIL] 중앙 서버 /health: {e}")
+        srv = FCOnlineAPI(config.API_KEY, cache_dir=None, server=True, server_url=config.SERVER_URL,
+                          install_id=config.install_id())
+        try:
+            same = srv._get_server(nexon_api.EP_ID, 1, {"nickname": nickname}).get("ouid") == ouid
+            print(f"[{'OK' if same else 'FAIL'}]   서버 경유 ouid {'== 직접' if same else '!= 직접'}")
+        except NexonAPIError as e:
+            print(f"[FAIL] 서버 경유 닉네임 조회: {e.message}  (code={e.code}, status={e.status})")
 
     try:
         basic = api.get_user_basic(ouid)

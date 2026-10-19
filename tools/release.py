@@ -172,6 +172,27 @@ def missing_licenses(names: list[str]) -> list[str]:
 REQUIRED_MODULES = ["orjson", "PyQt6/QtNetwork.pyd"]
 
 
+def bundle_pyz_names() -> list[str] | None:
+    """빌드가 남긴 PYZ 의 모듈 이름들 — 없거나 못 읽으면 None."""
+    pyz = ROOT / "build" / SPEC.stem / "PYZ-00.pyz"
+    if not pyz.is_file():
+        return None
+    try:
+        from PyInstaller.archive.readers import ZlibArchiveReader
+        return list(ZlibArchiveReader(str(pyz)).toc)
+    except Exception:
+        return None
+
+
+def server_modules_in_bundle(pyz_names: list[str]) -> list[str] | None:
+    """번들 PYZ 목차의 중앙 서버 모듈들(docs/CENTRAL_SERVER.md 11절 — 서버 코드는 exe 에 안 들어간다).
+    목차에 nexon_api 가 없으면 None — 목차를 못 읽은 것이라(빈 검사) 통과로 치지 않는다. 파일 목록만 보면 빈 검사다:
+    모듈은 PYZ 안에 들어간다."""
+    if "nexon_api" not in pyz_names:
+        return None
+    return [n for n in pyz_names if n == "server" or n.startswith("server.")]
+
+
 def missing_modules(names: list[str]) -> list[str]:
     """배포물 파일 이름들에 그 모듈의 확장 모듈(.pyd)이 없는 것."""
     low = [n.lower() for n in names]
@@ -298,6 +319,13 @@ def main() -> int:
     if not (app_dir / f"{APP_DIR_NAME}.exe").is_file():
         fail(f"{app_dir} 에 exe 가 없다")
     ok("빌드 결과 있음")
+    names = bundle_pyz_names()
+    srv_mods = server_modules_in_bundle(names) if names is not None else None
+    if srv_mods is None:
+        fail("번들 PYZ 목차를 못 읽었다(build/…/PYZ-00.pyz) — 서버 코드가 안 들어갔는지 모른다")
+    if srv_mods:
+        fail(f"중앙 서버 모듈이 exe 에 들어갔다 {srv_mods[:5]} — 앱 쪽이 server 를 import 한다")
+    ok("번들에 중앙 서버 모듈 없음")
 
     setup_name, zip_name, sums_name = asset_names(version)
     zip_path = DIST / zip_name

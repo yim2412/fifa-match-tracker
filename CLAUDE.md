@@ -53,6 +53,7 @@
 | `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 작업 스케줄러 `FifaDevArchive` · `.env` `DEV_NEXON_API_KEY` · ⚠ 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` · 세부는 머리말 |
 | `cardstats.py` | 카드 정보 계산(51단계) — 계산만 · 지금은 실효 OVR `effective_ovr`·선발 평균 `lineup_strength` 만(측정 도구와 앱이 **같은 식**을 쓰게 — 측정 A 가 맞춘 `C1_LOGIT_*` 가 앱의 Δ 와 어긋나지 않게) · C1~C6 집계는 조각 ②③ 에서 |
 | `tools/measure_cards.py` | **51단계 측정 A~C(이 PC 전용 · 배포판 밖)** — 판정 규칙 상수는 ROADMAP 측정 절을 옮긴 것(`RULE_COMMIT` · 결과를 보고 안 바꾼다) · `--start` 로 D0 를 잡기 전엔 백필·얼리기가 안 돈다 · **앱 토글이 켜졌으면 거부** · 결과는 `DATA_DIR/measure/`(닉네임 없음) · 명령 표는 머리말 |
+| `server/` | **중앙 조회 서버 1단계 ⓐ(배포판 밖 · 정본 `docs/CENTRAL_SERVER.md` 11절)** — 넥슨 경로를 같은 모양으로 받아 대신 묻고 저장(표준 `http.server` · 프로세스 하나) · 상수는 `server/settings.py` 에만 · **`config` 를 import 하지 않는다**(사용자 `.env` 의 키가 서버 환경에 실린다 — `test_server_import_does_not_load_config`) · 키·DB 는 저장소 밖 `%LOCALAPPDATA%\피파전적관리\server\`(`server.env`·`server.db`) · 실행 `python -m server.run_local`(게임·`dev_matches`·`measure_cards` 가 돌면 거부 · **`GAME_PROCESSES` 가 비면 거부**) · 앱은 `.env` `FIFA_SERVER_URL` 이 있을 때만 — **서버를 켜는 생성 자리는 `app_main` 검색 `api` 와 `check_api` 둘뿐**(키 확인·구단주 분포·dev 도구는 늘 직접) · 서버 사정은 `nexon_api.SERVER_CODES`(키 창·`_mark_final_429` 에 안 잡힌다) · 거래는 늘 직접 |
 | `tools/dev_matches.py` | **개발 PC 경기 수집(이 PC 전용 · 배포판 밖)** — 1만 위 랭커 감독모드 경기 요약을 `DATA_DIR/dev_matches.db` 에 · 작업 스케줄러 `FifaDevMatches`(dev_archive 와 따로 — 엮으면 홈페이지 요청이 2시간마다 돈다) · **서비스 키에만**(없으면 요청 0) · fifa.db 에 안 쓴다 · 하루 상한 `next_cap`(×1.5 · 막히면 절반 + 3일) · 커서 규칙은 머리말 표 · 상수 `config.DEV_MATCH_*` |
 
 ```powershell
@@ -88,6 +89,9 @@ python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevM
 python tools/measure_cards.py --status   # 51 측정 현황(D0 2026-10-19 · 오늘 할 일) · 판정 규칙 시험은 --selftest · 매일 도는 것은 작업 스케줄러 FifaMeasureCards(--daily · 로그 DATA_DIR/measure/run.log)
 python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
 python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
+python tests/test_server.py            # 중앙 서버 쪽 — 영구 저장·동시 한 번·부정 캐시·허용 목록·서버 코드·IP/전체 몫·키·닉네임 안 샘(가짜 넥슨)
+python tests/test_server_mode.py       # 중앙 서버 앱 쪽 — 서버 주소가 비면 요청 바이트 골든 · 키 안 나감 · 거래 직접 · 실패 한 건도 직접 재요청 · 폴백(가짜 어댑터)
+python -m server.run_local             # 이 PC 시험 서버(127.0.0.1:8765 · 게임 중이면 거부) — 앱은 스크래치 FIFA_DATA_DIR 의 .env 에 FIFA_SERVER_URL 로만
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
 

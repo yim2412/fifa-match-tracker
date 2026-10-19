@@ -4780,6 +4780,24 @@ def test_quota_stops_without_saving_holes():
     assert len(hit["quota"]) == 1 and "서비스 단계" in hit["quota"][0], hit["quota"]
 
 
+def test_server_fail_stops_without_saving_holes_or_key_dialog():
+    # 중앙 서버도 직접도 응답이 없었다(nexon_api.SERVER_CODES) — 한도처럼 저장하지 않고 멈추되, 서버 사정이라
+    # 키 창(quota_hit)·그날 랭커 픽 끄기(_mark_final_429)는 안 한다(docs/CENTRAL_SERVER.md 11절 · 1회차 검토 [상]3)
+    first = sorted(d["matchId"] for d in _DETAILS)[:1]
+    marks = []
+    orig = store.mark_final_429
+    store.mark_final_429 = lambda day: marks.append(day)
+    try:
+        for code in sorted(nexon_api.SERVER_CODES):
+            hit = _run_loader(_DetailApi(first, code))
+            assert hit["db"] == 0 and not hit["ok"], (code, hit)
+            assert not hit["quota"], f"{code} 가 키 창으로 갔다"
+            assert len(hit["failed"]) == 1 and "중앙 서버" in hit["failed"][0], (code, hit["failed"])
+        assert not marks, "서버 사정으로 그날 랭커 픽을 껐다"
+    finally:
+        store.mark_final_429 = orig
+
+
 def test_quota_signal_reaches_key_dialog():
     # 배선 — 검색 로더의 quota_hit 이 키 변경 창으로 이어져야 한다(QThread.start 는 막혀 있다)
     asked = []

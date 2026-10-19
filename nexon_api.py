@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -69,6 +70,10 @@ ERROR_MESSAGES = {
     "OPENAPI00009": "존재하지 않는 데이터입니다.",
     "OPENAPI00010": "게임 점검 중입니다.",
     "OPENAPI00011": "API 점검 중입니다.",
+    # 중앙 서버의 사정(아래 SERVER_*) — 넥슨 코드와 섞지 않는다: 서버 키 거절을 00005 로 넘기면 전원에게 "키가 틀렸다" 창이 뜬다
+    "SERVER_BUSY": "중앙 서버가 지금 바쁩니다. 잠시 후 다시 시도하세요.",
+    "SERVER_UNAVAILABLE": "중앙 서버를 지금 쓸 수 없습니다. 잠시 후 다시 시도하세요.",
+    "SERVER_DOWN": "중앙 서버 응답이 없습니다. 잠시 후 다시 시도하세요.",
 }
 
 # 키 확인 — 2026-10-02 실측: 틀린 키는 OPENAPI00005, 맞는 키로 없는 닉네임을 물으면
@@ -80,6 +85,53 @@ KEY_INVALID_CODE = "OPENAPI00005"
 #  2026-10-04 동시 24개로 3,130건 38초 · 429 0건, 같은 때 6개는 119초).
 QUOTA_CODE = "OPENAPI00007"
 NETWORK_CODE = "NETWORK"  # 응답을 못 받았다(넥슨 코드 아님) — 랭커 픽이 "그 랭커 실패"와 "이번 회차 멈춤"을 가른다
+
+# 중앙 서버(docs/CENTRAL_SERVER.md 11절 — 1단계 ⓐ: 이 PC 안 시험). 서버 모드는 인스턴스마다(server=True) — 생성 자리
+# 둘(app_main 검색·check_api)만 켠다. 키 확인·구단주 분포·dev 도구가 서버로 가면 서버 키로 검사·서버 몫을 태운다.
+# 이 모듈은 config 를 import 하지 않는다 — 서버가 EP_* 를 import 할 때 load_dotenv 가 사용자 .env 의 키를 서버 환경에 싣는다.
+SERVER_INSTALL_HEADER = "x-fifa-install"
+SERVER_BUSY_CODE = "SERVER_BUSY"                # 서버 한도·넥슨 429(서버가 재시도한 뒤) — 503 + Retry-After
+SERVER_UNAVAILABLE_CODE = "SERVER_UNAVAILABLE"  # 서버 키가 거절됨 — 503
+SERVER_DOWN_CODE = "SERVER_DOWN"                # 앱 쪽 판정: 응답 없음 · OPENAPI 코드 없는 5xx · JSON 아님
+SERVER_CODES = frozenset({SERVER_BUSY_CODE, SERVER_UNAVAILABLE_CODE, SERVER_DOWN_CODE})
+SERVER_FALLBACK_AFTER = 3    # 시작값(근거 없음 — ⓐ 실측으로 고친다): 서버 신호 연속 이만큼이면 한동안 직접
+SERVER_FALLBACK_S = 600      # 시작값: 그 "한동안"(초). SERVER_BUSY 의 Retry-After 가 더 길면 그쪽
+
+
+class _ServerHealth:
+    """서버로 보낼지 — 모듈에 하나(인스턴스마다 따로면 로더마다 판정이 갈린다). 연속 실패 수는 다음 요청의 경로만 정한다:
+    실패한 그 요청은 수와 상관없이 _get 이 직접으로 한 번 더 묻는다(3회차 검토 [상]1)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.fails = 0
+        self.direct_until = 0.0
+
+    def use_server(self) -> bool:
+        with self._lock:
+            return time.monotonic() >= self.direct_until
+
+    def ok(self) -> None:
+        with self._lock:
+            self.fails = 0
+
+    def fail(self, retry_after: float = 0.0, told: bool = False) -> None:
+        """told — 서버가 스스로 '바쁨·못 씀'이라고 했다: 문턱을 기다리지 않고 바로 한동안 직접."""
+        with self._lock:
+            self.fails += 1
+            if self.fails >= SERVER_FALLBACK_AFTER or told:
+                self.direct_until = time.monotonic() + max(SERVER_FALLBACK_S, retry_after)
+                self.fails = 0
+
+
+_server_health = _ServerHealth()
+_NOT_JSON = object()  # 서버 응답 본문이 JSON 이 아니었다(None 은 JSON null 과 헷갈린다)
+
+
+def reset_server_health() -> None:
+    """테스트 머리에서 — 모듈 전역이라 앞 테스트의 실패 수·직접 모드가 남는다."""
+    global _server_health
+    _server_health = _ServerHealth()
 # 동시에 열어 둘 연결 수 — 상세 조회를 여러 스레드로 할 때(app_main.DETAIL_WORKERS) 그보다 커야 한다.
 # requests 기본은 10이라 그 이상이면 연결을 버리고 다시 맺는다.
 HTTP_POOL_SIZE = 32
@@ -115,12 +167,22 @@ def check_key(api_key: str, timeout: int = 10) -> str | None:
 
 
 class FCOnlineAPI:
-    def __init__(self, api_key: str, timeout: int = 10, cache_dir: Path | None = None):
+    def __init__(self, api_key: str, timeout: int = 10, cache_dir: Path | None = None,
+                 server: bool = False, server_url: str = "", install_id: str = ""):
         if not api_key:
             raise NexonAPIError("API 키가 비어 있습니다. .env 파일에 NEXON_API_KEY를 넣어주세요.")
+        # 직접(넥슨) 세션 — 키 헤더는 이 세션에만 있다. 서버 세션과 나눈 것은 키를 바꾸거나(set_key) 폴백으로 오갈 때
+        # 공유 세션의 헤더·주소를 바꾸면 상세 24스레드·로더들 사이 경합으로 키가 서버로 나가서다(1회차 검토 [상]1·2)
         self._session = requests.Session()
         self._session.headers.update({"x-nxopen-api-key": api_key})
         self._session.mount("https://", HTTPAdapter(pool_maxsize=HTTP_POOL_SIZE))
+        self._server_base = server_url.rstrip("/") if server and server_url else ""
+        self._server_session: requests.Session | None = None
+        if self._server_base:
+            self._server_session = requests.Session()
+            self._server_session.headers.update({SERVER_INSTALL_HEADER: install_id})
+            for scheme in ("http://", "https://"):  # 이 PC 시험은 http — 풀이 https 에만 붙으면 기본 10 < 상세 24
+                self._server_session.mount(scheme, HTTPAdapter(pool_maxsize=HTTP_POOL_SIZE))
         self._timeout = timeout
         self.throttled = 0  # 429(호출 한도)를 받은 횟수 — 재시도로 넘어간 것도 센다. 로더가 동시 요청을 줄일 신호
         self._cache_dir = cache_dir
@@ -128,10 +190,79 @@ class FCOnlineAPI:
             cache_dir.mkdir(parents=True, exist_ok=True)
 
     def set_key(self, api_key: str) -> None:
-        self._session.headers.update({"x-nxopen-api-key": api_key})
+        self._session.headers.update({"x-nxopen-api-key": api_key})  # 직접 세션만 — 서버 세션엔 키가 없다
+
+    @property
+    def server_mode(self) -> bool:
+        return bool(self._server_base)
 
     # ── 공통 ──────────────────────────────────────────────────────────
     def _get(self, path: str, attempts: int = 3, **params: Any) -> Any:
+        """서버 모드면 서버 먼저(거래는 늘 직접) — 서버 신호로 실패하면 그 요청을 직접으로 한 번 더 묻는다.
+        직접까지 응답을 못 받으면(네트워크·5xx) 서버 쪽 오류를 올린다 — 로더가 '서버 문제'로 멈추게(저장 안 함)."""
+        if not self._server_base or path == EP_USER_TRADE or not _server_health.use_server():
+            return self._get_direct(path, attempts, params)
+        try:
+            return self._get_server(path, attempts, params)
+        except NexonAPIError as e:
+            if e.code not in SERVER_CODES:
+                raise
+            server_err = e
+        try:
+            return self._get_direct(path, attempts, params)
+        except NexonAPIError as e:
+            if e.code == NETWORK_CODE or (e.status or 0) >= 500:
+                raise server_err from e
+            raise
+
+    def _get_server(self, path: str, attempts: int, params: dict) -> Any:
+        url = f"{self._server_base}{path}"
+        last = attempts - 1
+        for attempt in range(attempts):
+            try:
+                res = self._server_session.get(url, params=params, timeout=self._timeout)
+            except requests.RequestException as e:
+                if attempt == last:
+                    _server_health.fail()
+                    raise NexonAPIError(ERROR_MESSAGES[SERVER_DOWN_CODE], code=SERVER_DOWN_CODE) from e
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            try:
+                body = res.json()
+            except ValueError:  # 터널·프록시의 HTML 오류 쪽 — 본문을 화면에 쓰지 않는다
+                body = _NOT_JSON
+            err = body.get("error") if isinstance(body, dict) else None
+            code = err.get("name", "") if isinstance(err, dict) else ""
+            if res.status_code == 200 and body is not _NOT_JSON:
+                _server_health.ok()
+                return body
+            if code in (SERVER_BUSY_CODE, SERVER_UNAVAILABLE_CODE):
+                # 코드를 상태보다 먼저 — 503 이지만 재시도하지 않는다(서버 몫을 세 배로 먹는다)
+                try:
+                    retry_after = float(res.headers.get("Retry-After") or 0)
+                except ValueError:
+                    retry_after = 0.0
+                _server_health.fail(retry_after, told=True)
+                raise NexonAPIError(ERROR_MESSAGES[code], code=code, status=res.status_code)
+            if body is _NOT_JSON or (res.status_code >= 500 and not code.startswith("OPENAPI")):
+                if attempt < last:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                _server_health.fail()
+                raise NexonAPIError(ERROR_MESSAGES[SERVER_DOWN_CODE], code=SERVER_DOWN_CODE,
+                                    status=res.status_code)
+            # 넥슨이 요청에 준 오류를 서버가 그대로 넘겼다 — 서버는 살아 있다. 처리는 직접과 같다
+            _server_health.ok()
+            code, msg = self._parse_error(res)
+            if res.status_code == 429:
+                self.throttled += 1
+            if res.status_code in (429, 500, 503) and attempt < last:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            raise NexonAPIError(msg, code=code, status=res.status_code)
+        raise NexonAPIError("요청에 반복 실패했습니다.")
+
+    def _get_direct(self, path: str, attempts: int, params: dict) -> Any:
         url = f"{BASE_URL}{path}"
         last = attempts - 1
         for attempt in range(attempts):
@@ -235,7 +366,20 @@ class FCOnlineAPI:
         cached = self._meta_read(name)
         if cached is not None:
             return cached
+        if self._server_base and _server_health.use_server():
+            try:
+                res = self._server_session.get(f"{self._server_base}/static/fconline/meta/{name}.json",
+                                               timeout=self._timeout)
+                if res.status_code == 200:
+                    data = res.json()
+                    _server_health.ok()
+                    self._meta_write(name, data)
+                    return data
+            except (requests.RequestException, ValueError):
+                pass
+            _server_health.fail()  # 메타는 키가 필요 없어 그대로 직접으로
         try:
+            # 직접은 세션 없이 — 직접 세션을 타면 키 헤더가 붙는다(이 파일은 인증 없이 열린다)
             res = requests.get(f"{META_URL}/{name}.json", timeout=self._timeout)
             res.raise_for_status()
             data = res.json()

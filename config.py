@@ -97,6 +97,12 @@ API_KEY_VAR = "NEXON_API_KEY"
 load_dotenv(ENV_PATH)
 API_KEY = os.getenv(API_KEY_VAR, "").strip()
 
+# 중앙 서버(docs/CENTRAL_SERVER.md 11절 · 1단계 ⓐ — 숨은 스위치, 화면·안내 변화 없음). 비면 지금과 같다(직접).
+# 설치 ID 는 서버 모드일 때만 만든다(install_id()) — 서버를 안 쓰는 사람에게 식별자가 생기지 않게.
+SERVER_URL_VAR = "FIFA_SERVER_URL"
+INSTALL_ID_VAR = "FIFA_INSTALL_ID"
+SERVER_URL = os.getenv(SERVER_URL_VAR, "").strip()
+
 # 넥슨 웹(데이터센터) 페이지 읽기 — 오픈API 에 없는 랭킹·팀가치·시즌표·선수 능력치.
 # 오픈API 약관 밖이라 **기본 꺼짐**이고, 첫 실행 안내 창(또는 [정보])에서 사용자가 켠다
 # (.env 의 FIFA_WEB_DATA=1). 끄면 ranker·playerinfo·seasons 가 요청 없이 WebDataOff 계열 예외를 던진다.
@@ -522,6 +528,23 @@ def _save_env(var: str, value: str) -> None:
     finally:
         tmp.unlink(missing_ok=True)
     os.environ[var] = value
+
+
+def install_id() -> str:
+    """서버 모드의 설치 ID — .env 에 있으면 그것, 없으면 무작위로 만들어 적는다. 서버 주소가 없으면 ""(만들지 않는다).
+    이름·키와 무관한 값이고, 상한이 아니라 문제 추적용이다(아무나 새로 만들 수 있다)."""
+    if not SERVER_URL:
+        return ""
+    cur = os.getenv(INSTALL_ID_VAR, "").strip()
+    if cur:
+        return cur
+    import uuid
+    new = uuid.uuid4().hex
+    try:
+        _save_env(INSTALL_ID_VAR, new)
+    except OSError:
+        os.environ[INSTALL_ID_VAR] = new  # 못 적어도 이번 실행은 같은 값으로
+    return new
 
 
 def save_api_key(key: str) -> None:

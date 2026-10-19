@@ -217,6 +217,16 @@ def test_missing_modules_needs_the_pyd():
     assert release.missing_modules([]) == ["orjson", "PyQt6/QtNetwork.pyd"]
 
 
+def test_server_modules_never_in_bundle():
+    assert release.server_modules_in_bundle(["nexon_api", "app_main", "serverless"]) == []
+    assert release.server_modules_in_bundle(["nexon_api", "server", "server.app"]) == ["server", "server.app"]
+    assert release.server_modules_in_bundle(["app_main"]) is None, "목차를 못 읽었는데(nexon_api 없음) 통과했다"
+    # 이 PC 에 빌드가 남아 있으면 그 진짜 목차로 — 지금 exe 에 서버가 안 들어가는지
+    names = release.bundle_pyz_names()
+    if names is not None:
+        assert release.server_modules_in_bundle(names) == [], "지금 빌드에 서버 모듈이 들어 있다"
+
+
 def test_uninstaller_removes_installed_autostart_value():
     # 제거기가 다른 이름을 지우면 제거한 뒤에도 부팅마다 '없는 exe' 를 실행하려 한다
     import autostart
@@ -268,7 +278,8 @@ class _FakeProc:
         self.stdout, self.returncode = stdout, returncode
 
 
-def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False, hidden=()):
+def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False, hidden=(),
+              pyz=("nexon_api", "app_main")):
     """가짜 빌드 결과(dist/피파전적관리)로 release.main 을 돌린다 → (종료 코드, 출력)."""
     import contextlib
     root, dist = tmp / "root", tmp / "root" / "dist"
@@ -303,8 +314,9 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
 
     saved = (release.ROOT, release.DIST, release.ISS, release.find_iscc, release.run,
              release.subprocess.run, release.changelog_section, release.private_needles, sys.argv,
-             release.config.HIDDEN_NAV_UNTIL_READY)
+             release.config.HIDDEN_NAV_UNTIL_READY, release.bundle_pyz_names)
     release.config.HIDDEN_NAV_UNTIL_READY = hidden
+    release.bundle_pyz_names = lambda: None if pyz is None else list(pyz)
     release.ROOT, release.DIST, release.ISS = root, dist, iss
     release.find_iscc = lambda: (Path("iscc.exe") if iscc else None)
     release.run, release.subprocess.run = fake_run, fake_sub
@@ -320,7 +332,7 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
     finally:
         (release.ROOT, release.DIST, release.ISS, release.find_iscc, release.run,
          release.subprocess.run, release.changelog_section, release.private_needles, sys.argv,
-         release.config.HIDDEN_NAV_UNTIL_READY) = saved
+         release.config.HIDDEN_NAV_UNTIL_READY, release.bundle_pyz_names) = saved
     return code, out.getvalue()
 
 
@@ -337,6 +349,9 @@ def test_release_main_stops_on_every_gate():
         ("설치 파일 안 생김", {"make_setup": False}, True, "설치 파일이 안 생겼다"),
         ("개인정보 섞임", {"leak": True}, True, "개인정보가 들어 있다"),
         ("숨긴 메뉴 남음", {"hidden": ("랭커 픽",)}, True, "숨긴 메뉴"),
+        ("서버 모듈 섞임", {"pyz": ("nexon_api", "server.app")}, True, "중앙 서버 모듈이 exe 에"),
+        ("PYZ 목차 못 읽음", {"pyz": None}, True, "PYZ 목차를 못 읽었다"),
+        ("PYZ 목차 빔", {"pyz": ()}, True, "PYZ 목차를 못 읽었다"),
     ]
     for name, kw, should_stop, needle in cases:
         tmp = _P(tempfile.mkdtemp())

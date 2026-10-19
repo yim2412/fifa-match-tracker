@@ -71,7 +71,7 @@ from core_api import (
     period_stats, summarize, win_rate_trend,
 )
 from nexon_api import (
-    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, FCOnlineAPI, NexonAPIError,
+    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, SERVER_CODES, FCOnlineAPI, NexonAPIError,
     check_key, read_meta_on_disk,
 )
 from dashboard import DashboardInput, DashboardPage
@@ -319,6 +319,8 @@ class MatchLoader(QThread):
         self._prefetch = prefetch
         self._cancel = False
         self._quota_hit = False
+        # 중앙 서버도 직접도 응답을 못 줬다(nexon_api.SERVER_CODES) — 한도처럼 저장 없이 멈추되 키 창·랭커 픽 끄기는 안 한다
+        self._server_fail = False
         self._pool: ThreadPoolExecutor | None = None
         self._side: ThreadPoolExecutor | None = None  # 넥슨 조회와 나란히 도는 DB 읽기·랭킹·메타
         self._slots = _Slots(DETAIL_WORKERS)
@@ -433,7 +435,7 @@ class MatchLoader(QThread):
                         for detail in self._pool.map(self._safe_detail, todo):
                             if self._cancel:
                                 return
-                            if self._quota_hit:
+                            if self._quota_hit or self._server_fail:
                                 break
                             done += 1
                             self.progress.emit(done, len(todo),
@@ -457,6 +459,12 @@ class MatchLoader(QThread):
                         "받은 경기는 캐시에 있어, 다시 검색하면 나머지만 이어서 받습니다.\n\n"
                         "개발 단계 키는 하루 1,000건이라 첫 조회(수천 건)를 끝내지 못합니다 — "
                         "넥슨 오픈API에서 애플리케이션을 '서비스 단계'로 등록해 받은 키로 바꿔 주세요.")
+                    return
+                if self._server_fail:
+                    # 한도와 같은 이유로 저장하지 않는다(듬성듬성한 결과는 안 메워진다) — 서버 사정이라 키 창은 안 띄운다
+                    self.failed.emit(
+                        f"중앙 서버와 넥슨 모두 응답이 없어 조회를 멈췄습니다({done}/{len(todo)}경기). "
+                        "받은 경기는 캐시에 있어, 다시 검색하면 나머지만 이어서 받습니다.")
                     return
                 new = store.save_matches(conn, fresh)
                 # DB 에 들어간 경기의 디스크 캐시는 지운다 — DB 가 정본이고, 캐시는 한도에 걸려
@@ -565,11 +573,11 @@ class MatchLoader(QThread):
 
     def _safe_detail(self, match_id: str):
         """한 경기가 실패해도 전체 조회를 죽이지 않는다."""
-        if self._cancel or self._quota_hit:
+        if self._cancel or self._quota_hit or self._server_fail:
             return None
         try:
             with self._slots:
-                if self._cancel or self._quota_hit:  # 자리를 기다리는 사이 멈췄을 수 있다
+                if self._cancel or self._quota_hit or self._server_fail:  # 자리를 기다리는 사이 멈췄을 수 있다
                     return None
                 try:
                     return self._api.get_match_detail(match_id)
@@ -580,6 +588,8 @@ class MatchLoader(QThread):
             # 재시도(_get)까지 거친 429 — 개발 단계 키(초당 5·하루 1,000건)일 때 난다
             if e.code == QUOTA_CODE:
                 self._quota_hit = True
+            elif e.code in SERVER_CODES:
+                self._server_fail = True
             return None
 
     def _safe_meta(self, name: str, key: str, val: str) -> dict:
@@ -12322,7 +12332,9 @@ def _open_window(shell: tray.AppShell, show: bool = True):
         store.clear_elo_pending(config.DB_PATH)  # 같은 지우기에서 ELO 기록이 잠겨 못 지운 것
     except Exception:
         pass
-    api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
+    # 서버 모드는 이 자리(검색·랭커 픽·특성·랭커 기록이 같이 쓰는 self._api)만 — 키 확인·구단주 분포는 따로 만들어 늘 직접
+    api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR, server=bool(config.SERVER_URL),
+                      server_url=config.SERVER_URL, install_id=config.install_id())
     win = MainWindow(api)
     shell.attach_window(win)
     if show:

@@ -49,7 +49,7 @@ import config
 import rankcollect
 import store
 import teamcolor
-from nexon_api import NETWORK_CODE, QUOTA_CODE, NexonAPIError
+from nexon_api import NETWORK_CODE, QUOTA_CODE, SERVER_CODES, NexonAPIError
 from stats import PITCH_ROWS, SUB_POSITION, formation_of, pitch_rows
 
 
@@ -262,9 +262,9 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
                     mday = str((stored or {}).get("matchDate") or "")[:10] or None
                     store.mark_ranker_match(conn, mid, day)
             except NexonAPIError as e:
-                if e.code == NETWORK_CODE:
+                if e.code == NETWORK_CODE or e.code in SERVER_CODES:
                     res.error = e.message
-                    break  # 연결이 없다 — 이 랭커를 실패로 적지 않고 다음 기회에
+                    break  # 연결이 없다(중앙 서버 포함) — 이 랭커를 실패로 적지 않고 다음 기회에
                 fail = e.message  # 닉네임 바뀜(00004·00009) 등 — 그 랭커만
         except _Stop:
             res.cancelled = True

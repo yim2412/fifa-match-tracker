@@ -278,3 +278,20 @@ G1·G2·G5 는 사용자가 확인했다(근거 조항·답변은 이 문서에 
 **계획 검토 끝**(2026-10-20 — 4판 바뀐 줄 확인에서 새 [상] 0 · [하] 1(설치 ID 도 생성 인자로)은 반영). 재지 않은 것(구현·실측 때 잰다): 상세가 경기 직후 언제부터 준비되나(부정 캐시 60초의 근거) · gzip 효과 · 폴백 3번·10분 · IP 몫 10,000 · 서버 경유 속도 · 서버 CPU·메모리 · 게임 프로세스 이름 · 새 키의 단계.
 
 1회차 [중] 은 대부분 위 표·완료 기준에 넣었다(접근 로그 · worker 1 · DB 경로 저장소 밖 · KST · 연결 풀 http · PYZ 검사 · 바이트 골든 · 메타 우회 · 502/HTML · 부정 캐시 · 81쌍 · 본문 id 대조 · 게임 감시 장치 · INSTALL_ID 서버 모드만 · 같은 키 U1). [하] 8건은 구현 때.
+
+### ⓐ 구현 결과 (2026-10-20 — 실측 전)
+설계와 다르게 간 것(이견 — 무엇 / 왜 / 대안):
+- **FastAPI 대신 표준 `http.server`(ThreadingHTTPServer)** — 이 PC 에 FastAPI 가 없고, 프로세스 하나라 경기 id 잠금(single flight)이 그대로 맞고, 테스트에 설치할 것이 없다. 대안: Oracle 에서 동시 처리가 모자라면 그때 FastAPI·uvicorn(worker 1).
+- **서버가 스스로 `SERVER_BUSY`·`SERVER_UNAVAILABLE` 을 말하면 문턱(연속 3번)을 기다리지 않고 바로 한동안 직접** — 4판은 Retry-After 만 보고 나머지는 문턱을 기다렸다. 서버가 바쁘다고 한 뒤에도 두 번 더 서버로 보내는 것은 서버 몫만 태운다(`test_server_busy_no_retry_not_throttled_then_direct` 가 처음에 이걸로 빨개졌다).
+- 서버 테스트는 `server/tests/` 가 아니라 `tests/test_server.py`(다른 테스트와 같은 자리·같은 `watchdog` 루프).
+- 서버 자체 거절이 아닌 "넥슨까지 가서 받은 경기 상세 본문의 id 가 다름" 은 `SERVER_UNAVAILABLE` 로 — 그 요청은 앱이 직접으로 다시 묻는다.
+
+들어간 것: `server/`(settings · cache · upstream · app · run_local) · `nexon_api`(세션 둘 · `_get_server`/`_get_direct` · 모듈 폴백 상태 · 서버 코드 셋) · `config.SERVER_URL`·`install_id()` ·
+`app_main`(검색 `api` 만 서버 모드 · `MatchLoader._server_fail`) · `rankerpick`(서버 코드 = 회차 멈춤 — 특성 로더도 이 길) · `check_api` 서버 줄 · `tools/release.py` 번들 PYZ 검사 · `.gitignore`.
+테스트: `test_server` 22 · `test_server_mode` 12 · `test_release` +4 경우 · `test_ui_smoke` +1(서버 실패면 저장 안 함·키 창 없음·랭커 픽 안 끔).
+손 변이 20건 중 19 잡힘 → 못 잡은 1(저장소의 본문 id 대조 — 서비스가 앞에서 막아 안 닿았다)에 저장소 단독 테스트를 더해 잡힘 확인.
+
+실측 전에 남은 것:
+- `settings.GAME_PROCESSES` 가 비어 있어 `run_local` 이 일부러 안 뜬다 — 사용자가 하는 게임을 켠 채 이름을 읽어 채운다.
+- 서버 키: `server.env` 에 들어 있다(101자). 처음 넣은 키가 화면 캡처에 찍혀 재발급을 권했고, 사용자가 "옛 키로" 정했다 — 포털에서 재발급이 이미 됐다면 실측 첫 요청이 `SERVER_UNAVAILABLE` 로 드러난다.
+- 서비스 단계인지(실측 선행 조건) — 첫 검색이 429 없이 끝나는지로 같이 드러난다.

@@ -26,3 +26,9 @@ _bgtask.meta
 
 # 42단계 단계 0 수집 결과 — 구단주별 요약이라 저장소에 안 둔다
 tools/step0_owner_dist/rows*.jsonl
+
+# 중앙 서버 — DB·키는 저장소 밖(%LOCALAPPDATA%\피파전적관리\server\)이 기본. 실수로 안에 만들어도 안 올라가게
+server/**/*.db
+server/**/*.db-*
+server/**/*.env
+server/**/*.log
