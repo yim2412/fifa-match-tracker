@@ -164,7 +164,7 @@ G1·G2·G5 는 사용자가 확인했다(근거 조항·답변은 이 문서에 
 | 파일 | 역할 |
 |---|---|
 | `server/app.py` | FastAPI — 허용 목록 경로만(그 밖 404) · `/health` · **uvicorn worker 1개 고정**(경기 id 잠금이 프로세스 안 잠금이라) · **접근 로그 끔**(기본 접근 로그는 쿼리의 닉네임을 그대로 찍는다) |
-| `server/upstream.py` | 넥슨 요청 한 곳 — 서비스 키(환경 변수 `NEXON_SERVICE_KEY` 만) · 동시 상한 24(10-04 직접 실측과 같은 조건) · 하루 계수 · **클라이언트 헤더는 넥슨에 안 넘긴다** |
+| `server/upstream.py` | 넥슨 요청 한 곳 — 서비스 키(환경 변수 `NEXON_SERVICE_KEY` 만 · 이 PC 에서는 `run_local.py` 가 `%LOCALAPPDATA%/피파전적관리/server/server.env` 에서 읽어 서버 프로세스 환경에만 넣는다 — 앱의 `.env` 와 따로 둔 것은 `config` 의 `load_dotenv` 가 `.env` 를 통째로 앱에 싣기 때문 · 2026-10-20 빈 칸 파일 만듦) · 동시 상한 24(10-04 직접 실측과 같은 조건) · 하루 계수 · **클라이언트 헤더는 넥슨에 안 넘긴다** |
 | `server/cache.py` | SQLite(WAL · `busy_timeout` · 쓰기는 한 스레드로 줄 세움) — 표 셋(아래) · DB 경로는 환경 변수 `FIFA_SERVER_DB`(기본: 이 PC 의 `%LOCALAPPDATA%/피파전적관리/server/` — **저장소 밖**. `.gitignore` 에 `server/**/*.db` 도 보험으로) |
 | `server/limits.py` | 상한(아래 "상한") |
 | `server/settings.py` | 상수 전부 + **시간대 KST 명시**(하루 예산·메타 금요일 경계 — Oracle 은 UTC) |
