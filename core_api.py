@@ -29,7 +29,8 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, Di
                     DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
-                    DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report)
+                    DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
+                    CalDay, CalSummary, cal_summary, calendar_days)
 from ownerdist import OwnerDist, PosDist, load_dist as load_owner_dist, load_pos_dist
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
@@ -89,6 +90,8 @@ __all__ = [
     # habits·rankmeta — 55 구단 머리 줄·점수 리포트(H1~H6 · R1~R3)
     "DaySummary", "FirstReach", "ScoreReport", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
     "ClubHead", "club_head", "dd_band", "fc_rank_range", "rank_of",
+    # habits — 55 D1 일별 기록 달력
+    "CalDay", "CalSummary", "cal_summary", "calendar_days",
     # habits — N18 공격 루트(2.7.1)
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)

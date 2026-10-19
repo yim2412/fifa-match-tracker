@@ -12,8 +12,10 @@ OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
 """
 from __future__ import annotations
 
+import calendar
 import math
 from dataclasses import dataclass
+from datetime import date
 from typing import NamedTuple
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
@@ -1703,6 +1705,216 @@ class DivisionChart(QWidget):
             label, div = self._points[i]
             tip = self._tips[i] if i < len(self._tips) else f"{label} · {self._names.get(div, div)}"
             self._hits.append((QRectF(pt.x() - half, mt, 2 * half, plot_h), tip))
+
+
+class ZoomBar(QWidget):
+    """그래프 구간 확대 막대(55 G1) — 점 n 개 중 [lo, hi] 를 고른다. 양끝 손잡이를 끌거나, 가운데를 끌어 옮기거나,
+    바깥을 눌러 가까운 끝을 그리로. 두 번 누르면 전체. 그래프는 손대지 않고 쓰는 쪽이 range_changed 를 받아 잘라 다시 그린다
+    (AreaTrendChart 기본값 그림이 얼린 사본과 같아야 해서 — charts 머리말)."""
+    range_changed = pyqtSignal(int, int)
+    PAD = 10        # 양끝 손잡이가 잘리지 않게
+    GRAB = 8        # 손잡이를 잡았다고 보는 거리(px)
+
+    def __init__(self):
+        super().__init__()
+        self._labels: list[str] = []
+        self._lo = self._hi = 0
+        self._drag: tuple[str, float, int, int] | None = None   # (무엇, 누른 x, 그때 lo, 그때 hi)
+        self.setMinimumHeight(34)
+        self.setMouseTracking(True)
+        self.setToolTip("양끝을 끌어 구간을 좁힙니다 · 두 번 누르면 전체")
+
+    def set_labels(self, labels: list[str]) -> None:
+        """점마다 이름(날짜). 이름이 그대로면 고른 구간을 지키고, 바뀌면(새 점·다른 계정) 전체로."""
+        labels = list(labels)
+        if labels != self._labels:
+            self._labels = labels
+            self._lo, self._hi = 0, max(len(labels) - 1, 0)
+        self.update()
+
+    def span(self) -> tuple[int, int]:
+        return self._lo, self._hi
+
+    def is_full(self) -> bool:
+        return self._lo == 0 and self._hi >= len(self._labels) - 1
+
+    def set_span(self, lo: int, hi: int) -> None:
+        n = len(self._labels)
+        if n == 0:
+            return
+        lo, hi = max(0, min(lo, n - 1)), max(0, min(hi, n - 1))
+        if lo > hi:
+            lo, hi = hi, lo
+        if lo == hi and n > 1:   # 점 하나면 선이 안 그려진다 — 늘 둘 이상
+            lo, hi = (lo, lo + 1) if lo < n - 1 else (lo - 1, lo)
+        if (lo, hi) != (self._lo, self._hi):
+            self._lo, self._hi = lo, hi
+            self.update()
+            self.range_changed.emit(lo, hi)
+
+    def _x_of(self, i: int) -> float:
+        n = len(self._labels)
+        w = max(self.width() - 2 * self.PAD, 1)
+        return self.PAD + (w * i / (n - 1) if n > 1 else w / 2)
+
+    def _i_of(self, x: float) -> int:
+        n = len(self._labels)
+        w = max(self.width() - 2 * self.PAD, 1)
+        return max(0, min(n - 1, round((x - self.PAD) / w * (n - 1)))) if n > 1 else 0
+
+    def mousePressEvent(self, event) -> None:
+        if len(self._labels) < 2:
+            return
+        x = event.position().x()
+        xl, xh = self._x_of(self._lo), self._x_of(self._hi)
+        if abs(x - xl) <= self.GRAB and abs(x - xl) <= abs(x - xh):
+            what = "lo"
+        elif abs(x - xh) <= self.GRAB:
+            what = "hi"
+        elif xl < x < xh:
+            what = "move"
+        else:   # 바깥 — 가까운 끝을 그리로
+            what = "lo" if x < xl else "hi"
+            i = self._i_of(x)
+            self.set_span(i, self._hi) if what == "lo" else self.set_span(self._lo, i)
+        self._drag = (what, x, self._lo, self._hi)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag is None:
+            return
+        what, x0, lo0, hi0 = self._drag
+        n = len(self._labels)
+        if what == "move":
+            step = self._i_of(event.position().x()) - self._i_of(x0)
+            step = max(-lo0, min(n - 1 - hi0, step))
+            self.set_span(lo0 + step, hi0 + step)
+        elif what == "lo":
+            self.set_span(min(self._i_of(event.position().x()), self._hi - 1), self._hi)
+        else:
+            self.set_span(self._lo, max(self._i_of(event.position().x()), self._lo + 1))
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag = None
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.set_span(0, len(self._labels) - 1)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        n = len(self._labels)
+        if n < 2:
+            return
+        font = p.font()
+        font.setPointSize(9)
+        p.setFont(font)
+        cy = 9
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(T.CHART_GRID))
+        p.drawRoundedRect(QRectF(self.PAD, cy - 3, self.width() - 2 * self.PAD, 6), 3, 3)
+        xl, xh = self._x_of(self._lo), self._x_of(self._hi)
+        p.setBrush(QColor(T.CHART_NEUTRAL))
+        p.drawRoundedRect(QRectF(xl, cy - 3, max(xh - xl, 1), 6), 3, 3)
+        p.setPen(QPen(QColor(T.PANEL), 2))
+        p.setBrush(QColor(T.TEXT_DIM))
+        for x in (xl, xh):
+            p.drawRoundedRect(QRectF(x - 4, cy - 8, 8, 16), 3, 3)
+        p.setPen(QColor(T.TEXT_DIM))
+        lo_t, hi_t = self._labels[self._lo], self._labels[self._hi]
+        p.drawText(QRectF(0, cy + 9, self.width() / 2, 16), Qt.AlignmentFlag.AlignLeft, lo_t)
+        p.drawText(QRectF(self.width() / 2, cy + 9, self.width() / 2, 16), Qt.AlignmentFlag.AlignRight,
+                   hi_t if self.is_full() else f"{hi_t}  (두 번 눌러 전체)")
+
+
+class CalCell(NamedTuple):
+    """달력 한 칸의 글 — 화면이 계산해 넘긴다(위젯은 계산 안 한다)."""
+    rate: str           # "56%"
+    sub: str            # "14판 · 60 FC"
+    arrow: int          # +1 ▲ · −1 ▼ · 0
+    tip: str
+    weak: bool = False  # 판수가 적어 화살표를 안 잰 날 — 흐리게
+
+
+class CalendarGrid(QWidget):
+    """한 달 달력(55 D1) — 일요일부터 7칸 × 주. 경기가 있던 날만 칸을 채운다."""
+    HEAD_H = 22
+    MIN_CELL_H = 54
+
+    def __init__(self):
+        super().__init__()
+        self._year, self._month = 2000, 1
+        self._cells: dict[int, CalCell] = {}
+        self._today = None
+        self._hits: list[tuple[QRectF, str]] = []
+        self.setMouseTracking(True)
+        self.setMinimumHeight(self.HEAD_H + 6 * self.MIN_CELL_H)
+
+    def set_data(self, year: int, month: int, cells: dict[int, CalCell], today=None) -> None:
+        self._year, self._month, self._cells, self._today = year, month, dict(cells), today
+        self.update()
+
+    def mouseMoveEvent(self, event) -> None:
+        pos = event.position()
+        for area, text in self._hits:
+            if area.contains(pos):
+                QToolTip.showText(event.globalPosition().toPoint(), text, self)
+                return
+        QToolTip.hideText()
+
+    def leaveEvent(self, event) -> None:
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), QColor(T.PANEL))
+        self._hits = []
+        weeks = calendar.Calendar(firstweekday=6).monthdayscalendar(self._year, self._month)   # 6 = 일요일부터
+        cw = self.width() / 7
+        ch = max((self.height() - self.HEAD_H) / max(len(weeks), 1), 1)
+        base = p.font()
+        small = QFont(base)
+        small.setPointSize(9)
+        big = QFont(base)
+        big.setPointSize(base.pointSize() + 1)
+        big.setBold(True)
+        p.setFont(small)
+        p.setPen(QColor(T.TEXT_DIM))
+        for i, name in enumerate("일월화수목금토"):
+            p.drawText(QRectF(i * cw, 0, cw, self.HEAD_H), Qt.AlignmentFlag.AlignCenter, name)
+        for r, week in enumerate(weeks):
+            for c, d in enumerate(week):
+                if not d:
+                    continue
+                rect = QRectF(c * cw + 2, self.HEAD_H + r * ch + 2, cw - 4, ch - 4)
+                cell = self._cells.get(d)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(T.PANEL_2 if cell else T.PANEL))
+                p.drawRoundedRect(rect, 4, 4)
+                is_today = self._today is not None and self._today == date(self._year, self._month, d)
+                p.setPen(QPen(QColor(T.CHART_NEUTRAL if is_today else T.BORDER), 2 if is_today else 1))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawRoundedRect(rect, 4, 4)
+                p.setFont(small)
+                p.setPen(QColor(T.TEXT_DIM))
+                p.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, str(d))
+                if cell is None:
+                    continue
+                arrow = {1: ("▲", T.CHART_UP), -1: ("▼", T.CHART_DOWN)}.get(cell.arrow)
+                if arrow:
+                    p.setPen(QColor(arrow[1]))
+                    p.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+                               arrow[0])
+                p.setFont(big)
+                p.setPen(QColor(T.TEXT_DIM if cell.weak else T.TEXT))
+                p.drawText(rect.adjusted(4, 0, -4, -ch * 0.18), Qt.AlignmentFlag.AlignCenter, cell.rate)
+                p.setFont(small)
+                p.setPen(QColor(T.TEXT_DIM))
+                fm = QFontMetrics(small)
+                p.drawText(rect.adjusted(4, 0, -4, -3), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                           fm.elidedText(cell.sub, Qt.TextElideMode.ElideRight, int(rect.width() - 8)))
+                self._hits.append((rect, cell.tip))
 
 
 def _grade_badge_colors(grade) -> tuple[str, str]:

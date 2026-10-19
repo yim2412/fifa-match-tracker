@@ -1007,6 +1007,66 @@ def test_decisive_rate_drops_draws():
     assert habits.decisive_rate([_wd(1, 9, 900, "무")], datetime(2026, 10, 1)) is None
 
 
+# ── 55 D1 달력 ────────────────────────────────────────────────────────────
+
+def _day_games(day, w, d, l, div=900):
+    out = []
+    for i, k in enumerate(["승"] * w + ["무"] * d + ["패"] * l):
+        out.append(stats_.WinDivision(datetime(2026, 10, day, 9) + timedelta(minutes=i), div, k, False))
+    return out
+
+
+def test_calendar_days_by_hand():
+    rows = _day_games(1, 9, 0, 1) + _day_games(2, 1, 0, 9) + _day_games(3, 4, 0, 0) + _day_games(4, 3, 1, 1)
+    one = lambda _d: 0  # noqa: E731 — 한 시즌
+    days = habits.calendar_days(rows, date(2026, 10, 1), date(2026, 10, 31), one, False)
+    assert [d.day.day for d in days] == [1, 2, 3, 4]
+    p = 17 / 29                                                    # 승 9+1+4+3 / 29경기
+    d1, d2, d3, d4 = days
+    assert abs(d1.base - p * 100) < 1e-9
+    half = config.N16_BAND_SIGMA * math.sqrt(p * (1 - p) / 10)
+    assert abs(d1.hi - (p + half) * 100) < 1e-9 and abs(d1.lo - (p - half) * 100) < 1e-9
+    assert (d1.rate, d1.arrow, d1.fc) == (90.0, 1, 9 * 15), d1     # 90% > 띠 위 끝(약 89.0%)
+    assert (d2.rate, d2.arrow) == (10.0, -1), d2
+    assert (d3.judged, d3.arrow) == (False, 0), "D1_MIN_GAMES 미만은 100% 라도 안 잰다"
+    assert (d4.judged, d4.games, d4.n, d4.arrow) == (True, 5, 5, 0), "정확히 D1_MIN_GAMES 판은 잰다 · 무승부도 분모"
+    calls = []
+    habits.calendar_days(rows, date(2026, 10, 1), date(2026, 10, 31), lambda d: calls.append(d) or 0, False)
+    assert sorted(calls) == [date(2026, 10, i) for i in (1, 2, 3, 4)], "season_key 를 날짜마다 한 번이 아니라 경기마다 불렀다(시즌표 훑기 · 1만 경기 167ms)"
+    only = habits.calendar_days(rows, date(2026, 10, 2), date(2026, 10, 3), one, False)
+    assert [d.day.day for d in only] == [2, 3], "first~last 둘 다 포함"
+    assert abs(only[0].base - p * 100) < 1e-9, "기준선은 고른 구간이 아니라 그 시즌 전부"
+
+
+def test_calendar_min_games_comes_from_config():
+    rows = _day_games(1, 9, 0, 1) + _day_games(3, 4, 0, 0)
+    old = config.D1_MIN_GAMES
+    try:
+        config.D1_MIN_GAMES = 4
+        d3 = habits.calendar_days(rows, date(2026, 10, 1), date(2026, 10, 31), lambda _d: 0, False)[1]
+        assert d3.judged, "D1_MIN_GAMES 를 config 에서 안 읽는다"
+    finally:
+        config.D1_MIN_GAMES = old
+
+
+def test_calendar_baseline_is_the_days_own_season():
+    # 옛 시즌 18승 2패(90%) · 새 시즌 이틀 1승 9패씩(10%) — 같은 달 안 시즌 경계(1회차 [중])
+    rows = _day_games(1, 18, 0, 2) + _day_games(11, 1, 0, 9) + _day_games(12, 1, 0, 9)
+    key = lambda d: d < date(2026, 10, 10)  # noqa: E731
+    days = habits.calendar_days(rows, date(2026, 10, 1), date(2026, 10, 31), key, False)
+    assert [(d.day.day, round(d.base), d.arrow) for d in days] == [(1, 90, 0), (11, 10, 0), (12, 10, 0)], \
+        [(d.day, d.base, d.arrow) for d in days]                   # 둘을 합친 기준선(50%)이면 새 시즌 날이 ▼
+
+
+def test_cal_summary_per_day():
+    rows = _day_games(1, 9, 0, 1) + _day_games(2, 1, 1, 0, div=800)
+    s = habits.cal_summary(rows)
+    assert (s.days, s.games, s.win, s.draw, s.lose, s.fc) == (2, 12, 10, 1, 1, 9 * 15 + 20), s
+    assert s.per_day == 6.0 and s.fc_per_day == (9 * 15 + 20) / 2
+    assert abs(s.rate(False) - 1000 / 12) < 1e-9
+    assert habits.cal_summary([]).per_day == 0.0
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

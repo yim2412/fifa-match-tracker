@@ -9597,6 +9597,181 @@ def test_elo_score_report_needs_enough_points():
         _win._go_page("대시보드")
 
 
+# ── 55 조각 ③ — 달력(D1) · 포메이션 묶기(F1) · 상대 팀컬러 필터(F2) · 확대 막대(G1) · 구단가치 일별(V1) ──
+
+def _wd_day(day, w, lose, div=900, month=10):
+    out = []
+    for i, k in enumerate(["승"] * w + ["패"] * lose):
+        out.append(st_mod.WinDivision(datetime(2026, month, day, 9) + timedelta(minutes=i), div, k, False))
+    return out
+
+
+def test_calendar_tab_cells_arrows_and_month_nav():
+    keep = _win.__dict__.get("_season_wins")
+    rows = _wd_day(1, 9, 1) + _wd_day(2, 1, 9) + _wd_day(3, 3, 0) + _wd_day(30, 2, 3, month=9)
+    _win._season_wins = lambda: rows
+    try:
+        _win._cal_month = None
+        _win._go_page("승률 그래프", "일별 기록")
+        _app.processEvents()
+        _win._render_calendar()
+        g = _win.cal_grid
+        assert (g._year, g._month) == (2026, 10) and _win.lb_cal_month.text() == "2026년 10월", "마지막 경기 달로 안 열었다"
+        assert sorted(g._cells) == [1, 2, 3], g._cells
+        assert (g._cells[1].arrow, g._cells[2].arrow, g._cells[3].arrow) == (1, -1, 0), g._cells
+        assert g._cells[3].weak and "판 미만" in g._cells[3].tip and not g._cells[1].weak
+        assert g._cells[1].sub == "10판 · 135 FC", g._cells[1].sub
+        assert "이 달: 3일 · 하루 7.7판" in _win.lb_cal_summary.text(), _win.lb_cal_summary.text()
+        assert "▲ 1일 · ▼ 1일" in _win.lb_cal_note.text(), _win.lb_cal_note.text()
+        g.grab()
+        assert len(g._hits) == 3, "칸 툴팁이 경기 있는 날만큼이 아니다"
+        _win._on_cal_step(-1)
+        assert _win.lb_cal_month.text() == "2026년 9월" and sorted(g._cells) == [30]
+        _win._on_cal_step(0)
+        assert _win.lb_cal_month.text() == "2026년 10월", "최근 달 단추가 안 돌아왔다"
+        _win._on_cal_step(-1)
+        _win._ouid, keep_ouid = "다른계정", _win._ouid
+        _win._render_calendar()
+        assert _win.lb_cal_month.text() == "2026년 10월", "계정이 바뀌었는데 보던 달에 남았다"
+        _win._ouid = keep_ouid
+    finally:
+        if keep is None:
+            _win.__dict__.pop("_season_wins", None)
+        _win._cal_month = None
+        _win._go_page("대시보드")
+
+
+def test_tactics_opp_formation_grouping():
+    cb = _win.cb_tactics_form
+    try:
+        _win._render_tactics(_win._details)
+        raw = list(_win.opp_formation_bars._rows)
+        assert _win.lb_tactics_form_note.isHidden()
+        cb.setCurrentIndex(cb.findData("back"))       # 콤보가 전술 탭을 무효화 → LAZY_RENDER=False 라 바로 그린다
+        grouped = _win.opp_formation_bars._rows
+        opp = app_main.core.formation_stats(_win._details, _win._ouid)
+        want = {}
+        for f in opp:
+            k = app_main.core.formation_group(f.formation, "back") or app_main.core.blank_label("formation", "back")
+            want[k] = want.get(k, 0) + f.games
+        assert {r[0] for r in grouped} == set(want) and all(k.endswith("백") or k == "기타·모름" for k in want), grouped
+        assert len(grouped) <= len(raw) and not _win.lb_tactics_form_note.isHidden()
+        g = app_main.group_formation_stats(opp, "front")
+        assert sum(s.games for s in g) == sum(f.games for f in opp) and all(s.positions == () for s in g)
+        assert opp[0].positions != () or not opp, "묶기가 원본 FormationStat 을 고쳤다"
+    finally:
+        cb.setCurrentIndex(cb.findData("raw"))
+
+
+def test_match_list_opponent_teamcolor_filter():
+    keep = dict(_win._team_colors)
+    try:
+        _win._render_matches(_win._slice()[0])
+        t = _win.table
+        opps = [t.item(r, 3).text() for r in range(t.rowCount())]
+        assert len(set(opps)) >= 2, "상대가 둘 이상이어야 이 테스트가 뜻이 있다"
+        _win._team_colors[opps[0]] = "테스트컬러"
+        _win._invalidate_teamcolor()
+        cb = _win.cb_match_color
+        assert cb.findText("테스트컬러") >= 0, "새 팀컬러가 경기 목록 콤보에 안 들어왔다"
+        cb.setCurrentText("테스트컬러")
+        shown = [t.item(r, 3).text() for r in range(t.rowCount()) if not t.isRowHidden(r)]
+        assert shown and set(shown) == {opps[0]}, shown
+        _win._match_filter_btns["승"].setChecked(False)   # 결과 필터와 겹쳐도 둘 다 지킨다
+        _win._apply_match_filter()
+        assert all(t.isRowHidden(r) for r in range(t.rowCount())
+                   if "승" in t.item(r, 1).text() or t.item(r, 3).text() != opps[0])
+        _win._match_filter_btns["승"].setChecked(True)
+        cb.setCurrentText(_win.POSITION_COLOR_ALL)
+        assert not any(t.isRowHidden(r) for r in range(t.rowCount())), "전체로 돌렸는데 숨은 줄이 남았다"
+        _win._render_matches(_win._slice()[0])                # 다시 그려도 고른 색이 남는다
+    finally:
+        _win._team_colors.clear()
+        _win._team_colors.update(keep)
+        _win._match_filter_btns["승"].setChecked(True)
+        _win._refresh_match_color_options()
+        _win.cb_match_color.setCurrentText(_win.POSITION_COLOR_ALL)
+
+
+def test_zoom_bar_span_rules():
+    z = app_main.ZoomBar()
+    got = []
+    z.range_changed.connect(lambda a, b: got.append((a, b)))
+    z.set_labels([f"d{i}" for i in range(10)])
+    assert z.span() == (0, 9) and z.is_full()
+    z.set_span(3, 3)
+    assert z.span() == (3, 4) and got == [(3, 4)], "점 하나 구간을 허락했다(선이 안 그려진다)"
+    z.set_span(9, 9)
+    assert z.span() == (8, 9)
+    z.set_labels([f"d{i}" for i in range(10)])
+    assert z.span() == (8, 9), "같은 이름인데 고른 구간을 버렸다"
+    z.set_labels([f"d{i}" for i in range(11)])
+    assert z.span() == (0, 10), "점이 바뀌었는데 옛 구간에 남았다"
+    z.set_span(2, 5)
+    z.mouseDoubleClickEvent(None)
+    assert z.is_full()
+
+
+def test_division_zoom_switches_to_games_when_short():
+    keep_days = _win.sp_trend_days.value()
+    keep_g = config.G1_GAME_LEVEL_DAYS
+    det = _sc_details({})
+    try:
+        _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        dc, z = _win.division_chart, _win.zoom_division
+        days = len(_win._div_days)
+        assert days >= 3, "날이 셋 이상이어야 확대를 잴 수 있다"
+        assert len(dc._points) == days and z.is_full()
+        z.set_span(0, 1)
+        first, last = _win._div_days[0].day, _win._div_days[1].day
+        n_games = sum(1 for t, _ in _win._div_games if first <= t.date() <= last)
+        assert len(dc._points) == n_games and ":" in dc._points[0][0], "짧게 확대했는데 경기마다가 아니다"
+        assert "경기마다" in _win.gb_division.title(), _win.gb_division.title()
+        config.G1_GAME_LEVEL_DAYS = 1                          # 배선 — 기본값이 아닌 값으로
+        _win._draw_division()
+        assert len(dc._points) == 2 and ":" not in dc._points[0][0], "G1_GAME_LEVEL_DAYS 를 config 에서 안 읽는다"
+        z.set_span(0, days - 1)
+        assert len(dc._points) == days and "최근" in _win.gb_division.title()
+    finally:
+        config.G1_GAME_LEVEL_DAYS = keep_g
+        _win.sp_trend_days.setValue(keep_days)
+        _restore_account()
+
+
+def test_elo_zoom_and_team_value_chart():
+    from datetime import date as _d
+    keep = (_win._rank_seasons, dict(_win._elo), config.WEB_DATA)
+    try:
+        config.WEB_DATA = True
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+        rows = _elo_rows([(f"2026-09-{d:02d}T10:00:00", 3000.0 + d, 500, "search") for d in range(11, 21)])
+        for i, r in enumerate(rows):
+            r["team_value"] = None if i == 3 else (1_000_000_000_000 + i * 10 ** 10)
+        rows.append({**rows[-1], "taken_at": "2026-09-20T09:00:00", "team_value": 1})   # 같은 날 앞 시각 — 늦은 값이 이긴다
+        rows.sort(key=lambda r: r["taken_at"])
+        _win._on_elo_ready(_OUID, _elo_data(rows))
+        _win._go_page("승률 그래프", "점수·예측")
+        _app.processEvents()
+        assert len(_win.elo_chart._points) == 10 and _win.zoom_elo.isVisibleTo(_win)
+        _win.zoom_elo.set_span(2, 5)
+        assert [p[0] for p in _win.elo_chart._points] == ["09/13", "09/14", "09/15", "09/16"], _win.elo_chart._points
+        tv = _win.team_value_chart
+        assert _win.gb_team_value.isVisibleTo(_win) and tv.isVisibleTo(_win)
+        assert len(tv._points) == 9, "빈 값 날을 0 으로 그렸거나 같은 날 둘을 다 넣었다"
+        assert tv._points[0][1] == 10000.0 and tv._axis.fmt.endswith("억"), (tv._points[0], tv._axis.fmt)
+        assert tv._points[-1][1] == (1_000_000_000_000 + 9 * 10 ** 10) / 1e8, "같은 날은 늦은 값"
+        assert "데이터센터" in _win.lb_team_value_note.text()
+        _win.zoom_team_value.set_span(0, 2)
+        assert len(tv._points) == 3
+        _win._on_elo_ready(_OUID, _elo_data(_elo_rows([("2026-09-12T10:00:00", 3000.0, 500, "search")])))
+        assert not tv.isVisibleTo(_win) and "모자랍니다" in _win.lb_team_value_note.text()
+    finally:
+        _win._rank_seasons, _win._elo, config.WEB_DATA = keep
+        _win._render_elo()
+        _win._go_page("대시보드")
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

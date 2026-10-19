@@ -16,6 +16,7 @@
 | `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대별 승률 + 표마다 카이제곱(층 보정) |
 | `club_day(wins, day)` · `day_delta(points, day)` · `first_reach(wins, start, division)` | 대시보드 맨 위 "이번 시즌 구단"(55 H1·H5) | 재료는 `stats.win_divisions` — 화면 글은 `app_main.club_cells` |
 | `score_report(points, marks)` · `decisive_rate(wins, since)` | [승률 그래프 › 점수·예측] 리포트(55 R1~R3) | 평균은 하루 한 점 · 최고점·낙폭은 기록 전부 · 무승부 뺀 승률은 이 해설만(U1) |
+| `calendar_days(wins, first, last, season_key, mixed)` · `cal_summary(wins)` | [승률 그래프 › 일별 기록](55 D1) | 화살표 = 그날 시즌 승률 ± `luck_band`(N16 과 같은 식) · 하한 `D1_MIN_GAMES` |
 | `classify_route(shot)` · `attack_routes(details, ouid)` | [슛 맵 › 공격 루트](N18) | 슛을 `ROUTES` 8갈래로(순서가 곧 우선순위) · 내 슛과 같은 경기 상대 슛에 같은 분류기 · 루트별 결정력 차이는 `paired_diff` |
 
 기준선의 구간(N4 · docs/DONE.md 41단계 "구간 방법"): 나와 상대는 **같은 경기의 짝**이고 슛은 경기 안에서 뭉친다 — 두 비율을
@@ -770,6 +771,12 @@ def _binom_outside_prob(n: int, p: float, lo: float, hi: float) -> float:
     return tot
 
 
+def luck_band(p: float, n: int) -> tuple[float, float]:
+    """n 판 승률의 우연 띠(비율 0~1) — p ± `N16_BAND_SIGMA`·√(p(1−p)/n). 운 범위(N16)·달력 화살표(D1)가 같은 식을 쓴다."""
+    half = config.N16_BAND_SIGMA * math.sqrt(p * (1 - p) / n) if n else 0.0
+    return max(0.0, p - half), min(1.0, p + half)
+
+
 def daily_luck(periods: list[PeriodRate], mixed: bool | None = None) -> Luck:
     """하루 승률이 같은 기간 평균 ± `N16_BAND_SIGMA`σ 띠 밖인가. periods 는 `models.win_rate_trend` 결과(그 기간 하루씩)
     — 묶음은 그래프 전체 기간이라 mixed 도 거기서 온다. 하루 `N16_MIN_DAY` 판(rated) 미만은 점만 흐리게 두고 세지 않는다."""
@@ -787,8 +794,7 @@ def daily_luck(periods: list[PeriodRate], mixed: bool | None = None) -> Luck:
     sig = config.N16_BAND_SIGMA
     for p in periods:
         n = rated(p.win, p.draw, p.lose, out.mixed)
-        half = sig * math.sqrt(out.p * (1 - out.p) / n) if n else 0.0
-        lo, hi = max(0.0, out.p - half), min(1.0, out.p + half)
+        lo, hi = luck_band(out.p, n)
         weak = is_weak(n, config.N16_MIN_DAY)
         rate = win_pct(p.win, p.draw, p.lose, out.mixed)
         outside = (not weak) and not (lo * 100 - 1e-9 <= rate <= hi * 100 + 1e-9)
@@ -1203,3 +1209,98 @@ def decisive_rate(rows: list[WinDivision], since: datetime) -> tuple[float, int]
     w = sum(1 for r in rows if r.when >= since and r.outcome == "승")
     lose = sum(1 for r in rows if r.when >= since and r.outcome == "패")
     return (w / (w + lose) * 100, w + lose) if w + lose else None
+
+
+# ── 55 D1 일별 기록 달력 ─────────────────────────────────────────────────────
+# 칸마다 그날 승률·FC · 화살표 = 그날이 속한 시즌의 승률 ± N16 과 같은 띠(luck_band) 밖. 판수 하한만 다르다(D1_MIN_GAMES · U3).
+
+@dataclass
+class CalDay:
+    """달력 한 칸 — 경기가 있던 날만."""
+    day: date
+    win: int
+    draw: int
+    lose: int
+    fc: int
+    n: int                  # 승률 분모(rated)
+    rate: float             # 그날 승률(%)
+    base: float             # 그날이 속한 시즌의 승률(%) — 띠의 가운데
+    lo: float               # 띠(%)
+    hi: float
+    judged: bool            # n ≥ D1_MIN_GAMES — 아니면 화살표 없음
+    arrow: int              # +1 띠 위 · −1 띠 아래 · 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+
+@dataclass
+class CalSummary:
+    """여러 날 묶음(이 달 · 이 시즌) — 경기가 있던 날 기준 하루 평균."""
+    days: int = 0
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    fc: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    @property
+    def per_day(self) -> float:
+        return self.games / self.days if self.days else 0.0
+
+    @property
+    def fc_per_day(self) -> float:
+        return self.fc / self.days if self.days else 0.0
+
+    def rate(self, mixed: bool) -> float:
+        return win_pct(self.win, self.draw, self.lose, mixed)
+
+
+def _wdl(rows: list[WinDivision]) -> tuple[int, int, int]:
+    return tuple(sum(1 for w in rows if w.outcome == k) for k in ("승", "무", "패"))
+
+
+def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, mixed: bool) -> list[CalDay]:
+    """first~last(둘 다 포함) 중 경기가 있던 날 — 날짜순. season_key(date) 는 그날이 속한 시즌을 가리는 값(같으면 같은 시즌)
+    · 기준선은 그 시즌의 rows 전부로 센다(달 안에 시즌 경계가 있으면 날마다 기준선이 다르다 · 1회차 [중])."""
+    keys: dict[date, object] = {}     # season_key 는 날짜마다 한 번만(시즌표 훑기라 경기마다 부르면 1만 경기 167ms — 실측)
+    by_season: dict = {}
+    for w in rows:
+        d = w.when.date()
+        if d not in keys:
+            keys[d] = season_key(d)
+        by_season.setdefault(keys[d], []).append(w)
+    base_of = {}
+    for key, ws in by_season.items():
+        wn, dn, ln = _wdl(ws)
+        n = rated(wn, dn, ln, mixed)
+        base_of[key] = wn / n if n else 0.0
+    by_day: dict[date, list[WinDivision]] = {}
+    for w in rows:
+        d = w.when.date()
+        if first <= d <= last:
+            by_day.setdefault(d, []).append(w)
+    out = []
+    for d in sorted(by_day):
+        ws = by_day[d]
+        wn, dn, ln = _wdl(ws)
+        n = rated(wn, dn, ln, mixed)
+        p = base_of[keys[d]]
+        lo, hi = luck_band(p, n)
+        rate = win_pct(wn, dn, ln, mixed)
+        judged = not is_weak(n, config.D1_MIN_GAMES)
+        arrow = 0
+        if judged:
+            arrow = 1 if rate > hi * 100 + 1e-9 else (-1 if rate < lo * 100 - 1e-9 else 0)
+        out.append(CalDay(d, wn, dn, ln, win_rewards(ws).fc, n, rate, p * 100, lo * 100, hi * 100, judged, arrow))
+    return out
+
+
+def cal_summary(rows: list[WinDivision]) -> CalSummary:
+    """rows(이미 고른 구간) 의 경기 있던 날 수·승·무·패·FC."""
+    wn, dn, ln = _wdl(rows)
+    return CalSummary(len({w.when.date() for w in rows}), wn, dn, ln, win_rewards(rows).fc)
