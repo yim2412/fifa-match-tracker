@@ -649,7 +649,8 @@ class MatchLoader(QThread):
             conn = store.open_db(config.DB_PATH)
             try:
                 wrote = store.save_elo(conn, ouid, info.elo, info.rank, profile_sn=info.profile_sn,
-                                       nickname=info.nickname or self._nickname)
+                                       nickname=info.nickname or self._nickname,
+                                       team_value=getattr(info, "team_value", 0) or None)   # 0 = 못 읽음
             finally:
                 conn.close()
             if wrote and not self._cancel:   # 같은 값이라 안 적었거나 실패면 안 낸다(rank_ready 와 같은 규칙)
@@ -11755,9 +11756,10 @@ def rank_status_text(st: dict) -> str:
     if st.get("snapshots"):
         if config.meta_person_allowed():
             lines.append(f"쌓는 중 — 슈챔 연속 {int(st.get('n_runs') or 0):,}건 · 시즌 최고점 {int(st.get('n_peak') or 0):,}명"
-                         f" · 첫 챔스 {int(st.get('n_first') or 0):,}건 · 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일")
+                         f" · 첫 챔스 {int(st.get('n_first') or 0):,}건 · 첫 슈챔 {int(st.get('n_sc_first') or 0):,}건"
+                         f" · 시즌 FC {int(st.get('n_fc') or 0):,}명 · 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일")
         else:
-            lines.append(f"쌓는 중 — 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일 · 슈챔 연속·시즌 최고점·첫 챔스는 "
+            lines.append(f"쌓는 중 — 랭커 픽 날짜 {int(st.get('n_pick_days') or 0):,}일 · 슈챔 연속·시즌 최고점·첫 챔스·첫 슈챔·시즌 FC는 "
                          "새 안내 동의 뒤부터")
     return "<br>".join(lines)
 

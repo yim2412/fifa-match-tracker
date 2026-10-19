@@ -11,7 +11,7 @@
 
 규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
 SQLite 누적(`fifa.db`) — 경기·계정·최근 검색·팀컬러/시즌 캐시(TTL — 팀컬러는 넥슨 이름 + `emblem` 열 "읽은 시각\\t엠블럼 키", 시각이 `fetched_at` 과 다르면 옛 버전이 이름만 바꾼 줄이라 엠블럼 없음 ·
-화면 글자가 아니라 로더 원값 `_teamcolor_raw` 를 저장)·팀컬러 효과 캐시(`teamcolor_meta`·`teamcolor_steps` 7일)·검색한 구단주 ELO(`elo_history` — 메인 검색 로더만 `record_elo=True`, 비교 로더는 안 적는다 ·
+화면 글자가 아니라 로더 원값 `_teamcolor_raw` 를 저장)·팀컬러 효과 캐시(`teamcolor_meta`·`teamcolor_steps` 7일)·검색한 구단주 ELO(`elo_history` — 55 부터 구단가치 열 `team_value` 도 · 메인 검색 로더만 `record_elo=True`, 비교 로더는 안 적는다 ·
 따라가기 계정은 수집이 snapshot 줄을 더한다 ·
 같은 (계정, 시각, 출처)는 `ux_elo_src` 가 막는다)·따라가기 목록(`elo_track`, 최대 `config.ELO_TRACK_MAX`)·거래(`trades`·`trade_state`·카드 시세 `card_prices` — 1.4.1, 받는 규칙은 `tradecollect`)·카드 정보(`card_info` — 급여·1강 OVR, 30일)·하루 요청 계수(`api_budget` — `budget_take` 는 BEGIN IMMEDIATE 로 읽고-더하기, 재시작해도 남는다 ·
 `hit_429` 는 그날 랭커 픽을 막는 표시)·선수 색인(`match_squads` + `squad_owner`·`squad_match` — 2.1.1 ·
@@ -102,7 +102,8 @@ CREATE TABLE IF NOT EXISTS elo_history (
     taken_at   TEXT NOT NULL,
     elo        REAL NOT NULL,
     rank       INTEGER,
-    source     TEXT NOT NULL
+    source     TEXT NOT NULL,
+    team_value INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_elo_ouid_taken ON elo_history(ouid, taken_at);
 -- ELO 따라가기 목록(1.3.1) — 수집 스레드·다른 실행본도 읽어야 해서 settings.ini 가 아니라 DB
@@ -401,6 +402,10 @@ def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Conne
         for col, typ in (("final_rank", "INTEGER"), ("final_state", "TEXT"), ("final_checked_at", "TEXT")):
             if col not in have:
                 conn.execute(f"ALTER TABLE predictions ADD COLUMN {col} {typ}")
+        # team_value(55 V1 — 넥슨 데이터센터 구단가치 · 원 단위) — 점수와 같은 순간·같은 출처라 새 표 대신 열 하나.
+        # 지우기(clear_elo)·중복 막기(ux_elo_src)가 그대로 따라온다. 옛 버전은 열 이름을 적어 넣어 이 열을 비워 둔다
+        if "team_value" not in {r["name"] for r in conn.execute("PRAGMA table_info(elo_history)")}:
+            conn.execute("ALTER TABLE elo_history ADD COLUMN team_value INTEGER")
         _ensure_elo_unique(conn)
         conn.commit()
         # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
@@ -866,31 +871,35 @@ def save_team_colors(conn: sqlite3.Connection,
 
 def save_elo(conn: sqlite3.Connection, ouid: str, elo: float, rank: int | None,
              profile_sn: int | None = None, nickname: str = "", source: str = "search",
-             taken_at: datetime | None = None) -> bool:
-    """검색 때 받은 ELO 를 한 줄 — 마지막 줄과 점수·순위가 같으면 안 적는다(같은 날 재검색이 줄을 불리지 않게).
+             taken_at: datetime | None = None, team_value: int | None = None) -> bool:
+    """검색 때 받은 ELO 를 한 줄 — 마지막 줄과 점수·순위·구단가치가 같으면 안 적는다(같은 날 재검색이 줄을 불리지 않게).
     → 적었나."""
     # 같은 출처의 마지막 줄과만 비교한다 — 마지막 줄이 스냅숏 출처면 같은 검색 값이 매번 새 줄이 됐다(1.3.1 검토 B 2-12)
-    last = conn.execute("SELECT elo, rank FROM elo_history WHERE ouid = ? AND source = ?"
+    last = conn.execute("SELECT elo, rank, team_value FROM elo_history WHERE ouid = ? AND source = ?"
                         " ORDER BY taken_at DESC LIMIT 1", (ouid, source)).fetchone()
-    if last is not None and last["elo"] == elo and last["rank"] == rank:
+    if last is not None and last["elo"] == elo and last["rank"] == rank and last["team_value"] == team_value:
         return False
-    cur = conn.execute("INSERT OR IGNORE INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
-                       " VALUES (?, ?, ?, ?, ?, ?, ?)",
+    cur = conn.execute("INSERT OR IGNORE INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source,"
+                       " team_value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                        (ouid, profile_sn, nickname, (taken_at or datetime.now()).isoformat(timespec="seconds"),
-                        elo, rank, source))
+                        elo, rank, source, team_value))
     conn.commit()
     return cur.rowcount > 0
 
 
 def save_elo_snapshots(conn: sqlite3.Connection, ouid: str, rows: list[tuple]) -> int:
-    """따라가기 계정의 스냅숏 점들 — rows: (taken_at ISO, elo, rank, profile_sn, nickname). 이미 있으면 건너뜀
-    (ux_elo_src — 14일치를 매번 다시 넘겨도 멱등). 한 계정 한 트랜잭션(수집을 끊을 때 잠금이 오래 안 남게). → 넣은 줄 수."""
+    """따라가기 계정의 스냅숏 점들 — rows: (taken_at ISO, elo, rank, profile_sn, nickname, team_value). 이미 있으면
+    빈 구단가치만 채운다(ux_elo_src — 14일치를 매번 다시 넘겨도 멱등 · 55 전에 넣은 줄도 다음 회차에 찬다).
+    한 계정 한 트랜잭션(수집을 끊을 때 잠금이 오래 안 남게). → 새로 넣은 줄 수(구단가치만 채운 줄은 안 센다)."""
+    count = "SELECT COUNT(*) FROM elo_history WHERE ouid = ?"
     with conn:
-        before = conn.total_changes
-        conn.executemany("INSERT OR IGNORE INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
-                         " VALUES (?, ?, ?, ?, ?, ?, 'snapshot')",
-                         [(ouid, sn, nick, t, elo, rank) for t, elo, rank, sn, nick in rows])
-        return conn.total_changes - before
+        before = conn.execute(count, (ouid,)).fetchone()[0]
+        conn.executemany("INSERT INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source, team_value)"
+                         " VALUES (?, ?, ?, ?, ?, ?, 'snapshot', ?)"
+                         " ON CONFLICT(ouid, taken_at, source) DO UPDATE SET"
+                         " team_value = COALESCE(elo_history.team_value, excluded.team_value)",
+                         [(ouid, sn, nick, t, elo, rank, tv) for t, elo, rank, sn, nick, tv in rows])
+        return conn.execute(count, (ouid,)).fetchone()[0] - before
 
 
 def _clear_marker(db_path: Path | str) -> Path:
@@ -957,7 +966,7 @@ def track_remove(conn: sqlite3.Connection, ouid: str) -> None:
 
 def elo_history(conn: sqlite3.Connection, ouid: str) -> list[dict]:
     return [dict(r) for r in conn.execute(
-        "SELECT taken_at, elo, rank, profile_sn, nickname, source FROM elo_history"
+        "SELECT taken_at, elo, rank, profile_sn, nickname, source, team_value FROM elo_history"
         " WHERE ouid = ? ORDER BY taken_at", (ouid,))]
 
 

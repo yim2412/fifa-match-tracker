@@ -127,7 +127,7 @@ TRACK_NOTICE_VERSION = 3   # 따라가기 기록(elo_track 계정의 하루 ELO)
 PRICE_NOTICE_VERSION = 4   # 가계부용 시세 자동 읽기(PriceLoader)는 이 버전 동의 뒤부터 — 사용자가 연 [시세] 탭은 그대로
 CHIP_NOTICE_VERSION = 5    # 축구장 칩의 카드 정보 자동 읽기(CardInfoLoader)는 이 버전 동의 뒤부터
 RANKER_PICK_NOTICE_VERSION = 5  # 랭커 픽(상위 랭커 경기를 오픈API 로 받기)은 이 버전 동의 뒤부터
-META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
+META_NOTICE_VERSION = 6    # 랭킹 수집의 사람별 표(rank.db run_open·elo_season·champ_watch · 55 sc_watch·fc_season)는 이 버전 동의 뒤부터 — 익명 집계는 그 전부터
 TRAIT_NOTICE_VERSION = 7   # 포지션 특성(스쿼드메이커 읽기 · 201~500 경기)은 이 버전 동의 뒤부터
 OPP_RANK_NOTICE_VERSION = 9   # 상대 순위 구간(rank.db match_opp_rank — 내 경기마다 상대의 그날 순위 구간)은 이 버전 동의 뒤부터
 OWNER_DIST_NOTICE_VERSION = 10   # 구단주 분포(49단계 · ownerdist.py)는 이 버전 동의 뒤부터
@@ -212,6 +212,9 @@ RANK_CONT_MAX_H = 36                # 앞 스냅숏과 데이터 시각 차가 �
 RANK_ELO_BIN = 50                   # 점수 분포 막대 칸 폭(R9: 2,934~4,538 → 34칸 남짓)
 META_MIN_USERS = 5                  # 메타 변화 표 — 두 시점 다 이보다 적은 줄은 흐림
 CHAMP_GRADE_MAX = 1                 # 등급 칸 번호 — 0 슈퍼챔피언스 · 1 챔피언스. 판정은 rankcollect.is_champ 한 곳
+SUPER_GRADE = 0                     # 슈퍼챔피언스 칸(55 H5 — rankcollect.is_super)
+# 랭킹 등급 칸 → 경기 division(FC 보상표 FC_REWARDS 의 키 · 55 H6 rankcollect.grade_fc). 챔스 아래 칸은 보상이 없어 안 적는다
+RANK_GRADE_DIVISION = {0: 800, 1: 900}
 # 랭커 메타 ② 스냅숏 읽기(2.4.1 · rankmeta.py) — 근거는 ROADMAP 2.4.1 실측 장부
 META_TOP_TIERS = (200, 2000, 5000, 10000)   # "상위 N명" 누적 구간(추이 탭의 띠 구간 TREND_TIERS 와 다르다)
 B3_WEIGHTS = {"elo": 300, "rate": 200, "value": 300, "champ": 200}   # 가성비 1,000점 — 구단가치는 낮을수록

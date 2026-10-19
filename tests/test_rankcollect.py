@@ -986,9 +986,43 @@ def test_sync_tracked_elo_only_tracked_and_idempotent():
         r.close()
         c = _fifa(env)
         h = store.elo_history(c, "me")
-        assert [(x["rank"], x["elo"], x["source"]) for x in h] == [(3, 4997.0, "snapshot")] * 2, h
+        assert [(x["rank"], x["elo"], x["source"], x["team_value"]) for x in h] == [(3, 4997.0, "snapshot", 1000)] * 2, h
         assert [x["source"] for x in store.elo_history(c, "searched")] == ["search"], "목록 밖 계정까지 옮겼다"
         c.close()
+
+
+def test_elo_team_value_fills_old_rows_and_clears_with_elo():
+    """55 V1 — 구단가치는 elo_history 의 열. 55 전에 넣은 스냅숏 줄(구단가치 없음)은 다음 회차에 채우고 줄은 안 늘린다 ·
+    이미 있는 값은 안 덮는다 · 같은 점수라도 구단가치가 바뀌면 검색 줄을 새로 적는다 · ELO 지우기가 같이 지운다."""
+    import store
+    d = Path(tempfile.mkdtemp())
+    try:
+        c = store.open_db(d / "f.db")
+        t = NOW.isoformat()
+        assert store.save_elo_snapshots(c, "o", [(t, 4100.0, 5, 1, "n", None)]) == 1
+        assert store.save_elo_snapshots(c, "o", [(t, 4100.0, 5, 1, "n", 777)]) == 0, "구단가치만 채웠는데 새 줄로 셌다"
+        assert store.save_elo_snapshots(c, "o", [(t, 4100.0, 5, 1, "n", 999)]) == 0
+        assert [r["team_value"] for r in store.elo_history(c, "o")] == [777], "빈 구단가치를 못 채웠거나 있는 값을 덮었다"
+        assert store.save_elo(c, "o", 4000.0, 9, taken_at=NOW, team_value=10)
+        assert store.save_elo(c, "o", 4000.0, 9, taken_at=NOW + timedelta(hours=1), team_value=11), \
+            "구단가치가 바뀌었는데 같은 값이라 안 적었다"
+        assert not store.save_elo(c, "o", 4000.0, 9, taken_at=NOW + timedelta(hours=2), team_value=11)
+        store.clear_elo(c)
+        assert c.execute("SELECT COUNT(*) FROM elo_history WHERE team_value IS NOT NULL").fetchone()[0] == 0
+        c.close()
+        # 옛 DB(열 없음)는 열 때 늘린다 — 옛 버전처럼 열 이름을 적어 넣은 줄도 그대로 읽힌다
+        old = sqlite3.connect(d / "old.db")
+        old.execute("CREATE TABLE elo_history (ouid TEXT NOT NULL, profile_sn INTEGER, nickname TEXT,"
+                    " taken_at TEXT NOT NULL, elo REAL NOT NULL, rank INTEGER, source TEXT NOT NULL)")
+        old.execute("INSERT INTO elo_history (ouid, profile_sn, nickname, taken_at, elo, rank, source)"
+                    " VALUES ('o', 1, 'n', ?, 4000.0, 3, 'search')", (t,))
+        old.commit()
+        old.close()
+        c = store.open_db(d / "old.db")
+        assert [(r["elo"], r["team_value"]) for r in store.elo_history(c, "o")] == [(4000.0, None)]
+        c.close()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_sync_survives_prune_and_new_track_gets_14_days():
@@ -1112,7 +1146,7 @@ def test_save_elo_compares_only_with_last_search_row():
     try:
         c = store.open_db(d / "f.db")
         assert store.save_elo(c, "o", 4000.0, 9, taken_at=NOW)
-        store.save_elo_snapshots(c, "o", [((NOW + timedelta(hours=1)).isoformat(), 4100.0, 5, 1, "n")])
+        store.save_elo_snapshots(c, "o", [((NOW + timedelta(hours=1)).isoformat(), 4100.0, 5, 1, "n", None)])
         assert not store.save_elo(c, "o", 4000.0, 9, taken_at=NOW + timedelta(hours=2)), \
             "마지막 줄이 스냅숏이라 같은 검색 값을 또 적었다"
         # 같은 초 같은 출처는 DB 가 막는다 — 예외 없이 False
@@ -1368,6 +1402,79 @@ def test_first_champ_states():
         _msnap(c, T0 + timedelta(days=1), [_p(2, grade=1)])
         _proc(c)                                                       # 시즌 시작 10-01 — 열흘 뒤에 처음 봤다
         assert [f["first_seen_late"] for f in _rows_of(c, "champ_first")] == [1]
+        c.close()
+
+
+def test_first_super_champ_states():
+    """55 H5 — 슈챔(등급 0) 첫 달성. 챔스 표와 따로 — 같은 사람이 챔스는 이미, 슈챔은 나중일 수 있다."""
+    with Env() as env:
+        c = env.conn()
+        t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
+        _msnap(c, t1, [_p(1, grade=0), _p(2, grade=1, games=40, value=7), _p(3, grade=1), _p(4, grade=2)])
+        _msnap(c, t2, [_p(1, grade=0), _p(2, grade=0, games=55, value=8), _p(5, grade=1), _p(4, grade=1, games=30)])
+        _msnap(c, t3, [_p(1, grade=0), _p(2, grade=0), _p(3, grade=0), _p(4, grade=1)])
+        _proc(c, ends=["2026-10-09"])
+        states = {r["profile_sn"]: r["state"] for r in _rows_of(c, "sc_watch")}
+        assert states == {1: 0, 2: 2, 3: 3, 4: 1, 5: 1}, states        # 3 = 빠졌다 들어와 처음 닿은 때를 모른다
+        first = [(f["games"], f["team_value"], f["at"], f["first_seen_late"]) for f in _rows_of(c, "sc_first")]
+        assert first == [(55, 8, t2.isoformat(), 0)], first
+        # 챔스 표는 제 규칙대로 — 2 는 처음부터 챔스(0), 4 는 t2 에 챔스가 됐다
+        champ = [(f["games"], f["at"]) for f in _rows_of(c, "champ_first")]
+        assert champ == [(30, t2.isoformat())], champ
+        c.close()
+
+
+def _fc(c):
+    return {r["profile_sn"]: (r["fc_lo"], r["fc_hi"], r["first_seen_late"]) for r in _rows_of(c, "fc_season")}
+
+
+def test_fc_season_bounds():
+    """55 H6 — 하루 사이 등급이 바뀌면 앞뒤 보상 중 작은 쪽이 하한·큰 쪽이 상한 · 목록 밖 사이는 하한 0."""
+    assert rc.grade_fc(0, T0.date()) == 20 and rc.grade_fc(1, T0.date()) == 15 and rc.grade_fc(2, T0.date()) == 0
+    assert rc.grade_fc(None, T0.date()) == 0
+    with Env() as env:
+        c = env.conn()
+        t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
+        _msnap(c, t1, [_p(1, grade=1, games=10), _p(2, grade=2, games=10), _p(3, grade=1, games=10),
+                       _p(4, grade=0, games=10)])
+        _msnap(c, t2, [_p(1, grade=1, games=14), _p(2, grade=1, games=12), _p(4, grade=0, games=13)])
+        _msnap(c, t3, [_p(1, grade=0, games=15), _p(2, grade=2, games=12), _p(3, grade=1, games=20),
+                       _p(4, grade=0, games=13)])
+        _proc(c, ends=["2026-10-09"])
+        assert _fc(c) == {1: (4 * 15 + 15, 4 * 15 + 20, 0),      # 그대로 챔스 4승 → 챔스·슈챔 사이 1승
+                          2: (0, 2 * 15, 0),                     # 챔스 아래 → 챔스: 0 ~ 15
+                          3: (0, 10 * 15, 0),                    # t2 에 목록 밖 — 그 사이 10승은 하한 0
+                          4: (3 * 20, 3 * 20, 0)}, _fc(c)
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=1, games=10)])
+        _msnap(c, T0 + timedelta(days=3), [_p(1, grade=1, games=14)])   # RANK_CONT_MAX_H 넘는 틈 — 이어진 게 아니다
+        _proc(c)                                                         # 시즌 시작 10-01 — 열흘 뒤 처음 봤다
+        assert _fc(c) == {1: (0, 4 * 15, 1)}, _fc(c)
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=1, games=10)])
+        _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=8)])    # 넥슨이 승수를 깎았다(보정)
+        _msnap(c, T0 + timedelta(days=2), [_p(1, grade=1, games=9)])
+        _proc(c)
+        assert _fc(c)[1][:2] == (15, 15), "승수가 줄어든 날을 음수로 셌다"
+        c.close()
+
+
+def test_fc_season_rolls_into_done_without_numbers():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=1, games=10), _p(2, grade=0, games=5)])
+        _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=12), _p(2, grade=0, games=6)])
+        _proc(c)
+        new_ends = ENDS + ["2026-11-20"]
+        assert _proc(c, now=datetime(2026, 11, 21, 9), ends=new_ends)["rolled"]
+        assert _count(c, "fc_season") == 0 and _count(c, "sc_watch") == 0, "새 시즌인데 옛 사람별 줄이 남았다"
+        done = sorted((r["fc_lo"], r["fc_hi"], r["first_seen_late"]) for r in _rows_of(c, "fc_season_done"))
+        assert done == [(20, 20, 1), (30, 30, 1)], done
+        assert "profile_sn" not in _rows_of(c, "fc_season_done")[0], "끝난 기록에 번호가 남았다"
         c.close()
 
 

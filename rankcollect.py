@@ -32,7 +32,7 @@
 지금 시즌 · 하루에 둘이면 그날 마지막.
 **2.3.1 랭커 메타**: 쪽마다 넥슨 기준 시각(`ranker.parse_ref_time` — 정규식은 `ranker._REF_TIME` 하나) → 걸침은 기준 시각끼리(없으면 Date 의 시) ·
 1쪽이 지난 스냅숏과 같으면 `same`(나머지 요청 0 · 안 셈 · `same_since`). 옆 표만 늘렸다(`snapshot_meta` 기준 시각·빈 순위·처리 깃발 · `elo_hist` ·
-사람별 `run_open`·`elo_season`·`champ_watch` · 익명 `_done`·`champ_first` ·
+사람별 `run_open`·`elo_season`·`champ_watch` · 익명 `_done`·`champ_first` · 55 사람별 `sc_watch`·`fc_season`(하한·상한) · 익명 `sc_first`·`fc_season_done` ·
 `pick_days`·`pick_counted`) — `snapshot_rows`·`snapshots` 의 열과 INSERT 는 옛 버전 때문에 안 건드린다. 처리는 `process_meta`(저장 커밋 뒤 ·
 정리 때 — 깃발은 그 처리와 같은 트랜잭션 · 연속은 경과 시간 `RANK_CONT_MAX_H` · 시즌은 신호 둘을 **같은 출처끼리 숫자·날짜로** `_season_verdict`).
 새 읽기의 시각은 `data_time`(기준 시각, 없으면 taken_at) — **`elo_history` 는 그대로 taken_at**(바꾸면 `ux_elo_src` 가 못 막는다).
@@ -63,6 +63,7 @@ from pathlib import Path
 
 import config
 import ranker
+import stats
 import store
 
 SCHEMA = """
@@ -148,6 +149,18 @@ CREATE TABLE IF NOT EXISTS champ_watch (
 CREATE TABLE IF NOT EXISTS run_done (season_at TEXT, hours REAL, censored_start INTEGER, censored_end INTEGER);
 CREATE TABLE IF NOT EXISTS elo_season_done (season_at TEXT, peak REAL, max_dd REAL, last_elo REAL);
 CREATE TABLE IF NOT EXISTS champ_first (season_at TEXT, games INTEGER, team_value INTEGER, at TEXT, first_seen_late INTEGER);
+-- 55단계(H5·H6) — 슈챔 첫 달성(champ_* 와 같은 꼴) · 시즌 FC 하한·상한(fc_season). 옛 버전은 이 표들을 모른다(옆 표만)
+CREATE TABLE IF NOT EXISTS sc_watch (
+    season_at TEXT NOT NULL, profile_sn INTEGER NOT NULL, first_at TEXT NOT NULL, last_at TEXT NOT NULL,
+    state INTEGER NOT NULL, PRIMARY KEY (season_at, profile_sn)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sc_first (season_at TEXT, games INTEGER, team_value INTEGER, at TEXT, first_seen_late INTEGER);
+CREATE TABLE IF NOT EXISTS fc_season (
+    season_at TEXT NOT NULL, profile_sn INTEGER NOT NULL, fc_lo INTEGER NOT NULL, fc_hi INTEGER NOT NULL,
+    last_win INTEGER NOT NULL, last_grade INTEGER, last_at TEXT NOT NULL, first_seen_late INTEGER NOT NULL,
+    PRIMARY KEY (season_at, profile_sn)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS fc_season_done (season_at TEXT, fc_lo INTEGER, fc_hi INTEGER, first_seen_late INTEGER);
 -- 랭커 픽 날짜별(N15) — 익명 · 영구. day = 랭커의 마지막 경기 날짜, rankers = 그 날짜에 센 랭커 수(분모 — 그날 줄 전부 같은 값)
 CREATE TABLE IF NOT EXISTS pick_days (
     day TEXT NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL, rankers INTEGER NOT NULL,
@@ -162,7 +175,7 @@ CREATE TABLE IF NOT EXISTS match_opp_rank (
     match_id TEXT PRIMARY KEY, my_ouid TEXT NOT NULL, rank_band INTEGER, gap_band INTEGER, snap_day TEXT NOT NULL
 ) WITHOUT ROWID;
 """
-PERSON_TABLES = ("run_open", "elo_season", "champ_watch")
+PERSON_TABLES = ("run_open", "elo_season", "champ_watch", "sc_watch", "fc_season")
 PERSON_STATE = ("person_prev", "person_season")
 
 OPEN_TIMEOUT_S = 15
@@ -444,8 +457,9 @@ def sync_tracked_elo(rank_conn: sqlite3.Connection, fifa_path: Path | str | None
                     continue
                 sn = hit["profile_sn"]
                 store.track_add(fconn, t["ouid"], sn, t["nickname"] or "")
-            rows = [(r["taken_at"], r["elo"], r["rank"], r["profile_sn"], r["nickname"]) for r in rank_conn.execute(
-                "SELECT s.taken_at, r.elo, r.rank, r.profile_sn, r.nickname FROM snapshot_rows r"
+            rows = [(r["taken_at"], r["elo"], r["rank"], r["profile_sn"], r["nickname"], r["team_value"])
+                    for r in rank_conn.execute(
+                "SELECT s.taken_at, r.elo, r.rank, r.profile_sn, r.nickname, r.team_value FROM snapshot_rows r"
                 " JOIN snapshots s ON s.id = r.snapshot_id WHERE r.profile_sn = ? AND r.elo IS NOT NULL", (sn,))]
             if rows:
                 added += store.save_elo_snapshots(fconn, t["ouid"], rows)
@@ -1085,6 +1099,17 @@ def is_champ(grade) -> bool:
     return grade is not None and grade <= config.CHAMP_GRADE_MAX
 
 
+def is_super(grade) -> bool:
+    """슈퍼챔피언스 — 데이터센터 등급 칸 0(55 H5 · 첫 달성 판수의 기준)."""
+    return grade == config.SUPER_GRADE
+
+
+def grade_fc(grade, day) -> int:
+    """등급 칸 → 그날 승리당 FC(보상표는 config.FC_REWARDS 한 곳 — stats.reward_for). 모르는 칸·챔스 아래는 0."""
+    div = config.RANK_GRADE_DIVISION.get(grade)
+    return stats.reward_for(div, day) if div is not None else 0
+
+
 def data_time(row) -> str:
     """스냅숏의 데이터 시각 — 넥슨 기준 시각(ref_time), 없으면(옛 버전이 쓴 스냅숏) taken_at. 이번에 새로 만든 읽기는
     전부 이걸 쓴다. elo_history 는 그대로 taken_at(R15 — 바꾸면 같은 스냅숏이 다른 시각으로 다시 들어가 ux_elo_src 가 못 막는다)."""
@@ -1223,6 +1248,8 @@ def _roll(conn: sqlite3.Connection) -> None:
                  " SELECT season_at, peak, max_dd, last_elo FROM elo_season")
     conn.execute("INSERT INTO run_done (season_at, hours, censored_start, censored_end)"
                  " SELECT season_at, (julianday(last_at) - julianday(start_at)) * 24, censored_start, 1 FROM run_open")
+    conn.execute("INSERT INTO fc_season_done (season_at, fc_lo, fc_hi, first_seen_late)"
+                 " SELECT season_at, fc_lo, fc_hi, first_seen_late FROM fc_season")
     for t in PERSON_TABLES:
         conn.execute(f"DELETE FROM {t}")
     conn.execute("DELETE FROM match_opp_rank")       # N23 도 그 시즌 동안만(PERSON_TABLES 와 따로 — 관문이 다르다)
@@ -1251,7 +1278,7 @@ def _person_apply(conn: sqlite3.Connection, sid: int, t: str, ps: dict, prev: di
     # N3 — 등급 0(슈퍼챔피언스, R5) 연속
     open_ = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
         "SELECT profile_sn, start_at, last_at, censored_start FROM run_open WHERE season_at = ?", (season_at,))}
-    cur0 = {r["profile_sn"] for r in rows if r["grade"] == 0}
+    cur0 = {r["profile_sn"] for r in rows if is_super(r["grade"])}
     closes = [(sn, a, b, cs) for sn, (a, b, cs) in open_.items() if not cont or sn not in cur0]
     conn.executemany("INSERT INTO run_done (season_at, hours, censored_start, censored_end) VALUES (?, ?, ?, ?)",
                      [(season_at, _hours(a, b), cs, 0 if cont else 1) for _sn, a, b, cs in closes])
@@ -1271,30 +1298,68 @@ def _person_apply(conn: sqlite3.Connection, sid: int, t: str, ps: dict, prev: di
         " max_dd = MAX(max_dd, MAX(peak, excluded.peak) - excluded.last_elo),"
         " peak = MAX(peak, excluded.peak), last_elo = excluded.last_elo, last_at = excluded.last_at",
         [(season_at, r["profile_sn"], r["elo"], t, r["elo"], t) for r in rows if r["elo"] is not None])
-    # N12 — 챔스(등급 ≤ 1) 처음 닿은 판수. 상태: 0 처음 볼 때 이미 챔스 · 1 보는 중 · 2 기록함 · 3 틈(제외)
+    # N12 — 챔스(등급 ≤ 1) · 55 H5 — 슈챔(등급 0) 처음 닿은 판수. 같은 규칙이라 표만 바꿔 같은 코드
+    _first_reach(conn, "champ_watch", "champ_first", is_champ, rows, season_at, t, ps, prev, cont)
+    _first_reach(conn, "sc_watch", "sc_first", is_super, rows, season_at, t, ps, prev, cont)
+    _fc_apply(conn, rows, season_at, t, ps, prev, cont)
+
+
+def _first_reach(conn: sqlite3.Connection, watch_t: str, first_t: str, reached, rows, season_at: str, t: str,
+                 ps: dict, prev: dict | None, cont: bool) -> None:
+    """처음 닿은 판수(부르는 쪽 트랜잭션 안). 상태: 0 처음 볼 때 이미 닿음(제외) · 1 보는 중 · 2 기록함 · 3 틈(제외)."""
     watch = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
-        "SELECT profile_sn, first_at, last_at, state FROM champ_watch WHERE season_at = ?", (season_at,))}
+        f"SELECT profile_sn, first_at, last_at, state FROM {watch_t} WHERE season_at = ?", (season_at,))}
     firsts, upd = [], []
     for r in rows:
         sn = r["profile_sn"]
-        champ = is_champ(r["grade"])
+        hit = reached(r["grade"])
         w = watch.get(sn)
         if w is None:
-            upd.append((season_at, sn, t, t, 0 if champ else 1))
+            upd.append((season_at, sn, t, t, 0 if hit else 1))
             continue
         first_at, last_at, state = w
         if state == 1:
             if not cont or last_at != prev["at"]:
                 state = 3                  # 틈이거나, 그 사이 목록에서 빠졌다 들어왔다 — 처음 닿은 때를 모른다
-            elif champ:
+            elif hit:
                 games = (r["win"] or 0) + (r["draw"] or 0) + (r["lose"] or 0)
                 firsts.append((season_at, games, r["team_value"], t, _late(first_at, ps.get("start"))))
                 state = 2
         upd.append((season_at, sn, first_at, t, state))
-    conn.executemany("INSERT INTO champ_first (season_at, games, team_value, at, first_seen_late) VALUES (?, ?, ?, ?, ?)",
+    conn.executemany(f"INSERT INTO {first_t} (season_at, games, team_value, at, first_seen_late) VALUES (?, ?, ?, ?, ?)",
                      firsts)
-    conn.executemany("INSERT OR REPLACE INTO champ_watch (season_at, profile_sn, first_at, last_at, state)"
+    conn.executemany(f"INSERT OR REPLACE INTO {watch_t} (season_at, profile_sn, first_at, last_at, state)"
                      " VALUES (?, ?, ?, ?, ?)", upd)
+
+
+def _fc_apply(conn: sqlite3.Connection, rows, season_at: str, t: str, ps: dict, prev: dict | None,
+              cont: bool) -> None:
+    """55 H6 — 사람별 시즌 FC 하한·상한(부르는 쪽 트랜잭션 안). 스냅숏이 하루 한 번이라 그 사이 승리가 어느 등급 때인지
+    모른다(10-19 실측: 챔스권 8,600명 중 하루 사이 등급이 바뀐 사람 20~30%) → 앞뒤 등급 보상 중 작은 쪽을 하한, 큰 쪽을 상한에.
+    목록 밖에 있던 사이(틈)의 승리는 하한 0 · 상한은 큰 쪽(9,501~10,000위의 76% 가 챔스라 밖 승리를 0 으로 볼 수 없다).
+    처음 볼 때 이미 있던 승리는 등급을 몰라 안 센다 — 시즌 시작 N12_START_DAYS 넘어 처음 봤으면 first_seen_late."""
+    have = {r[0]: (r[1], r[2], r[3], r[4], r[5]) for r in conn.execute(
+        "SELECT profile_sn, fc_lo, fc_hi, last_win, last_grade, last_at FROM fc_season WHERE season_at = ?", (season_at,))}
+    day = datetime.fromisoformat(t).date()
+    upd = []
+    for r in rows:
+        sn, win, grade = r["profile_sn"], r["win"] or 0, r["grade"]
+        h = have.get(sn)
+        if h is None:
+            upd.append((season_at, sn, 0, 0, win, grade, t, _late(t, ps.get("start"))))
+            continue
+        lo, hi, last_win, last_grade, last_at = h
+        d = max(0, win - last_win)
+        a, b = grade_fc(last_grade, day), grade_fc(grade, day)
+        joined = cont and last_at == prev["at"]
+        lo += d * (min(a, b) if joined else 0)
+        hi += d * max(a, b)
+        upd.append((season_at, sn, lo, hi, win, grade, t, 0))   # 늦게 봄은 처음 넣을 때만(아래 UPDATE 가 안 건드린다)
+    conn.executemany(
+        "INSERT INTO fc_season (season_at, profile_sn, fc_lo, fc_hi, last_win, last_grade, last_at, first_seen_late)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        " ON CONFLICT(season_at, profile_sn) DO UPDATE SET fc_lo = excluded.fc_lo, fc_hi = excluded.fc_hi,"
+        " last_win = excluded.last_win, last_grade = excluded.last_grade, last_at = excluded.last_at", upd)
 
 
 def _person_one(conn: sqlite3.Connection, s: dict, ends: list, on_at: str | None) -> str:
@@ -1782,6 +1847,9 @@ def meta_status(conn: sqlite3.Connection) -> dict:
         out["n_peak"] = conn.execute("SELECT COUNT(*) FROM elo_season").fetchone()[0]
         out["n_first"] = conn.execute("SELECT COUNT(*) FROM champ_first").fetchone()[0]
         out["n_pick_days"] = conn.execute("SELECT COUNT(*) FROM (SELECT day FROM pick_days GROUP BY day)").fetchone()[0]
+        # 55 표는 맨 뒤 — 옛 버전이 만든 DB 라 표가 아직 없으면 여기서 멈춰도 앞 값은 남는다
+        out["n_sc_first"] = conn.execute("SELECT COUNT(*) FROM sc_first").fetchone()[0]
+        out["n_fc"] = conn.execute("SELECT COUNT(*) FROM fc_season").fetchone()[0]
     except sqlite3.Error:
         pass
     return out

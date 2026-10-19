@@ -138,7 +138,10 @@ def test_group_meta_regroups_and_recomputes():
 def test_is_champ_one_place():
     assert rc.is_champ(0) and rc.is_champ(1) and not rc.is_champ(2) and not rc.is_champ(None)
     src = Path(rc.__file__).read_text(encoding="utf-8")
-    assert '"grade"] <= 1' not in src and "is_champ(r[\"grade\"])" in src
+    assert '"grade"] <= 1' not in src and '"grade"] == 0' not in src
+    # 첫 달성(N12 챔스 · 55 슈챔)은 판정 함수를 받아 같은 코드로 돈다 — 챔스 쪽이 is_champ 를 넘기는지
+    assert '_first_reach(conn, "champ_watch", "champ_first", is_champ,' in src
+    assert rc.is_super(0) and not rc.is_super(1) and not rc.is_super(None)
 
 
 # ── B2 하루 승률 ─────────────────────────────────────────────────────────

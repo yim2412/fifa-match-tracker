@@ -5522,13 +5522,20 @@ def test_main_loader_records_elo_and_compare_does_not():
     tmp, saved = _loader_db(4)
     gate = threading.Event()
     orig = app_main.MatchLoader._safe_rank
-    info = ranker.RankerInfo(nickname="테스트구단주", rank=12, elo=2345.0, profile_sn=77)
+    info = ranker.RankerInfo(nickname="테스트구단주", rank=12, elo=2345.0, profile_sn=77, team_value=5_000_000)
     app_main.MatchLoader._safe_rank = lambda self: (gate.wait(5), info)[1]
 
     def rows():
         c = store.open_db(config.DB_PATH)
         try:
             return [(r["elo"], r["rank"], r["profile_sn"], r["source"]) for r in store.elo_history(c, _OUID)]
+        finally:
+            c.close()
+
+    def values():    # 55 V1 — 검색 때 받은 구단가치도 같은 줄에(0 = 못 읽음 → 빈 값)
+        c = store.open_db(config.DB_PATH)
+        try:
+            return [r["team_value"] for r in store.elo_history(c, _OUID)]
         finally:
             c.close()
     try:
@@ -5547,6 +5554,7 @@ def test_main_loader_records_elo_and_compare_does_not():
                 break
             time.sleep(0.05)
         assert rows() == [(2345.0, 12, 77, "search")], rows()
+        assert values() == [5_000_000], values()
         # 창을 닫는 중에 온 값은 버린다
         from concurrent.futures import Future
         f = Future()
@@ -5562,6 +5570,7 @@ def test_main_loader_records_elo_and_compare_does_not():
         time.sleep(1.05)          # 같은 초 같은 출처는 DB 가 한 줄로 막는다(ux_elo_src) — 다음 초로
         ld._save_elo(_OUID, f)   # 대조군 — 막는 게 없으면 적힌다
         assert len(rows()) == 2
+        assert values()[-1] is None, "구단가치를 못 읽은(0) 줄에 0 을 적었다"
     finally:
         gate.set()
         app_main.MatchLoader._safe_rank = orig
@@ -6896,7 +6905,7 @@ def test_reask_shows_only_changes_after_accepted():
     assert max(notice.CHANGES) == config.NOTICE_VERSION, "안내를 올렸는데 바뀐 점(notice.CHANGES)을 안 더했다"
     seven, six, five = notice.changes_html(7), notice.changes_html(6), notice.changes_html(5)
     assert "표 안의 그림" in seven and "스쿼드메이커" not in seven, "7 동의자에게 이미 본 7 을 또 보였다"
-    assert "포지션 특성" in six and "슈퍼챔피언스" not in six, "6 동의자에게 이미 본 6 을 또 보였다"
+    assert "포지션 특성" in six and "슈퍼챔피언스 연속 기간" not in six, "6 동의자에게 이미 본 6 을 또 보였다"
     assert "표 안의 그림" in six, "6 동의자가 8 의 바뀐 점을 못 본다"
     assert "포지션 특성" in five and "슈퍼챔피언스" in five, "5 동의자가 6 의 바뀐 점을 못 본다"
     assert notice.changes_html(config.NOTICE_VERSION) == ""
@@ -6907,7 +6916,7 @@ def test_reask_shows_only_changes_after_accepted():
 NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
                  10: "8ce00c5021fb0806",                          # 10 = 2.10.1 구단주 분포 받기(49단계)
                  11: "75573220bc230e22",                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
-                 12: "94ce0c28423b70b9"}                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계)
+                 12: "3bcd79d7382a30c4"}                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 첫 슈챔·시즌 FC·구단가치 기록(공개 전이라 같은 버전)
 
 
 def _notice_digest() -> str:
