@@ -85,7 +85,7 @@ python tests/test_rules.py     # 규칙 검사(정적 + SQL 실행 계획 — �
 python tools/review_kit.py bundle "## 2.1.1"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
 python tools/dev_archive.py --status   # 개발용 상시 수집 현황(이 PC 전용 — 작업 스케줄러 FifaDevArchive 가 로그온·09:00 에 돈다)
 python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevMatches — 로그온 5분 뒤 + 2시간마다) · 시험은 --cap 300 --force
-python tools/measure_cards.py --status   # 51 측정 현황(D0 · 오늘 할 일) · 판정 규칙 시험은 --selftest
+python tools/measure_cards.py --status   # 51 측정 현황(D0 2026-10-19 · 오늘 할 일) · 판정 규칙 시험은 --selftest · 매일 도는 것은 작업 스케줄러 FifaMeasureCards(--daily · 로그 DATA_DIR/measure/run.log)
 python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
 python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
