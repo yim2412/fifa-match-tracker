@@ -438,6 +438,19 @@ CARD_BACKFILL_DAILY_REQ = 600                 # 하루 요청 상한(U2 — 카�
 CARD_BACKFILL_TC_DAILY_REQ = 120
 CARD_BACKFILL_DAYS = 30                       # 수요 = 검색한 구단주의 최근 이만큼 경기 양쪽 선발(G5)
 CARD_BACKFILL_TICK_S = 600                    # 예약 간격
+# 개발 PC 경기 수집(tools/dev_matches.py — 이 PC 전용 · 배포판은 안 읽는다). 근거는 ROADMAP "개발 PC 수집 확장" 2판
+DEV_MATCH_TOP = 10_000                        # 대상 = rank.db 마지막 스냅숏 이 순위까지
+DEV_MATCH_CAP_START = 30_000                  # 첫날 하루 요청 상한(단 1 — 1만 명 마지막 경기 한 판씩)
+DEV_MATCH_CAP_GROWTH = 1.5                    # 전날이 막힘 없이 제시간에 끝났으면 다음 날 이만큼 곱한다
+DEV_MATCH_CAP_MAX = 350_000                   # 끝 상한 — 같은 경기를 두 번 안 받으면 하루 25만~32만(E2)
+DEV_MATCH_DAY_HOURS = 6                       # 한 번 실행이 스스로 멈추는 시간 · "제시간" 기준
+DEV_MATCH_WORKERS = 8                         # 동시에 훑는 사람 수(사람 안에서는 차례로)
+DEV_MATCH_PAGE = 100                          # 목록 한 번에 받는 수(넥슨 상한)
+DEV_MATCH_429_WAIT_S = 60                     # 429 → 전원 쉬고 한 번 더 → 또 429 면 그날 멈춤(막힘)
+DEV_MATCH_FAIL_STREAK = 20                    # 5xx·네트워크가 이만큼 연달아면 그날 멈춤(막힘 아님)
+DEV_MATCH_BLOCK_HOLD_DAYS = 3                 # 막힌 날 뒤 이만큼(달력 날) 절반 상한 유지
+DEV_MATCH_FLOOR_DAYS = 1                      # 커서 없는 사람은 실행 날 이만큼 전 00:00 KST 보다 옛 경기에서 멈춘다
+DEV_MATCH_MISSING_TRIES = 3                   # 상세 실패 경기를 이만큼 다시 받아 보고 포기
 CARD_BACKFILL_FIRST_S = 120                   # 앱을 켠 뒤 첫 틱 — 첫 화면(공통 기준 3)에 안 끼게, 10분 안에 닫는 날도 조금은 채우게
 CARD_BACKFILL_TICK_REQ = 40                   # 틱 하나의 요청 상한 — 600 을 한 틱에 몰지 않고 앱이 켜진 약 2.5시간에 퍼뜨린다
 CARD_BACKFILL_GAP_S = 2                       # 요청 사이(취소로 끊긴다)

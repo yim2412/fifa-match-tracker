@@ -51,6 +51,7 @@
 | `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(본문 한 줄 바꾼 파일 + `gh release edit` **출력만**) · 시즌 뒤 예측 대조 · 세부는 `tools/season_notice.py` 머리말 |
 | `tools/review_kit.py` | 계획 검토 준비(ROADMAP "검토 방법" 11~13) — `bundle`(절이 짚은 코드 조각 · 정의/쓰임만/없음) · `diff`(회차 사이 바뀐 줄 + 진입점 표 행) · `ledger`(주장 장부 빈 표). 검토자에게 파일을 통째로 읽히지 않으려고 |
 | `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 작업 스케줄러 `FifaDevArchive` · `.env` `DEV_NEXON_API_KEY` · ⚠ 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` · 세부는 머리말 |
+| `tools/dev_matches.py` | **개발 PC 경기 수집(이 PC 전용 · 배포판 밖)** — 1만 위 랭커 감독모드 경기 요약을 `DATA_DIR/dev_matches.db` 에 · 작업 스케줄러 `FifaDevMatches`(dev_archive 와 따로 — 엮으면 홈페이지 요청이 2시간마다 돈다) · **서비스 키에만**(없으면 요청 0) · fifa.db 에 안 쓴다 · 하루 상한 `next_cap`(×1.5 · 막히면 절반 + 3일) · 커서 규칙은 머리말 표 · 상수 `config.DEV_MATCH_*` |
 
 ```powershell
 python check_api.py <닉네임>   # API 점검
@@ -81,6 +82,8 @@ python tests/test_release.py   # 배포 검사 로직(빌드 없이)
 python tests/test_rules.py     # 규칙 검사(정적 + SQL 실행 계획 — 파싱·수집 테스트를 같이 돌려 쿼리를 모은다)
 python tools/review_kit.py bundle "## 2.1.1"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
 python tools/dev_archive.py --status   # 개발용 상시 수집 현황(이 PC 전용 — 작업 스케줄러 FifaDevArchive 가 로그온·09:00 에 돈다)
+python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevMatches — 로그온 5분 뒤 + 2시간마다) · 시험은 --cap 300 --force
+python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
 
