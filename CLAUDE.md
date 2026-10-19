@@ -51,6 +51,8 @@
 | `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(본문 한 줄 바꾼 파일 + `gh release edit` **출력만**) · 시즌 뒤 예측 대조 · 세부는 `tools/season_notice.py` 머리말 |
 | `tools/review_kit.py` | 계획 검토 준비(ROADMAP "검토 방법" 11~13) — `bundle`(절이 짚은 코드 조각 · 정의/쓰임만/없음) · `diff`(회차 사이 바뀐 줄 + 진입점 표 행) · `ledger`(주장 장부 빈 표). 검토자에게 파일을 통째로 읽히지 않으려고 |
 | `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 작업 스케줄러 `FifaDevArchive` · `.env` `DEV_NEXON_API_KEY` · ⚠ 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` · 세부는 머리말 |
+| `cardstats.py` | 카드 정보 계산(51단계) — 계산만 · 지금은 실효 OVR `effective_ovr`·선발 평균 `lineup_strength` 만(측정 도구와 앱이 **같은 식**을 쓰게 — 측정 A 가 맞춘 `C1_LOGIT_*` 가 앱의 Δ 와 어긋나지 않게) · C1~C6 집계는 조각 ②③ 에서 |
+| `tools/measure_cards.py` | **51단계 측정 A~C(이 PC 전용 · 배포판 밖)** — 판정 규칙 상수는 ROADMAP 측정 절을 옮긴 것(`RULE_COMMIT` · 결과를 보고 안 바꾼다) · `--start` 로 D0 를 잡기 전엔 백필·얼리기가 안 돈다 · **앱 토글이 켜졌으면 거부** · 결과는 `DATA_DIR/measure/`(닉네임 없음) · 명령 표는 머리말 |
 | `tools/dev_matches.py` | **개발 PC 경기 수집(이 PC 전용 · 배포판 밖)** — 1만 위 랭커 감독모드 경기 요약을 `DATA_DIR/dev_matches.db` 에 · 작업 스케줄러 `FifaDevMatches`(dev_archive 와 따로 — 엮으면 홈페이지 요청이 2시간마다 돈다) · **서비스 키에만**(없으면 요청 0) · fifa.db 에 안 쓴다 · 하루 상한 `next_cap`(×1.5 · 막히면 절반 + 3일) · 커서 규칙은 머리말 표 · 상수 `config.DEV_MATCH_*` |
 
 ```powershell
@@ -83,6 +85,8 @@ python tests/test_rules.py     # 규칙 검사(정적 + SQL 실행 계획 — �
 python tools/review_kit.py bundle "## 2.1.1"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
 python tools/dev_archive.py --status   # 개발용 상시 수집 현황(이 PC 전용 — 작업 스케줄러 FifaDevArchive 가 로그온·09:00 에 돈다)
 python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevMatches — 로그온 5분 뒤 + 2시간마다) · 시험은 --cap 300 --force
+python tools/measure_cards.py --status   # 51 측정 현황(D0 · 오늘 할 일) · 판정 규칙 시험은 --selftest
+python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
 python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
