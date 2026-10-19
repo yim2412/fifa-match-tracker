@@ -1463,6 +1463,103 @@ def test_fc_season_bounds():
         c.close()
 
 
+def _old_version_forgets_55(c):
+    """옛 버전이 처리한 것처럼 — 사람별 처리 깃발은 섰는데 55 표는 비었다."""
+    with c:
+        for t in ("sc_watch", "sc_first", "fc_season"):
+            c.execute(f"DELETE FROM {t}")
+
+
+def test_backfill_55_replays_kept_snapshots_once():
+    days = [[_p(1, grade=1, games=10), _p(2, grade=2, games=5)],
+            [_p(1, grade=1, games=14), _p(2, grade=0, games=9, value=3)],
+            [_p(1, grade=0, games=15), _p(2, grade=0, games=12)],
+            [_p(1, grade=0, games=18), _p(2, grade=1, games=13)]]
+    with Env() as env:                                          # 대조군 — 처음부터 새 버전
+        c = env.conn()
+        for i, rows in enumerate(days):
+            _msnap(c, T0 + timedelta(days=i), rows)
+        _proc(c, ends=["2026-10-09"])
+        want = (_fc(c), sorted(_rows_of(c, "sc_first"), key=str), sorted(_rows_of(c, "sc_watch"), key=str))
+        c.close()
+    assert want[0][1][:2] == (60 + 15 + 3 * 20, 60 + 20 + 3 * 20) and len(want[1]) == 2, want   # 빈 대조군이면 아래가 비어 있다
+    with Env() as env:
+        c = env.conn()
+        for i, rows in enumerate(days[:3]):
+            _msnap(c, T0 + timedelta(days=i), rows)
+        _proc(c, ends=["2026-10-09"])
+        _old_version_forgets_55(c)
+        assert _fc(c) == {}, "옛 버전 흉내가 안 됐다"
+        _msnap(c, T0 + timedelta(days=3), days[3])
+        out = _proc(c, ends=["2026-10-09"])
+        assert out["backfill_55"] == 3, out
+        got = (_fc(c), sorted(_rows_of(c, "sc_first"), key=str), sorted(_rows_of(c, "sc_watch"), key=str))
+        assert got == want, ("남은 원본으로 다시 채운 값이 처음부터 쌓은 값과 다르다", got, want)
+        assert _proc(c, ends=["2026-10-09"])["backfill_55"] == 0
+        assert _fc(c) == want[0], "두 번째에 또 훑어 두 번 셌다"
+        c.close()
+
+
+def _55_state(c):
+    """이번 시즌 줄만 — 지난 시즌 첫 슈챔은 옛 버전이 안 썼으니 다시 채울 수 없다(원본도 이번 시즌만 훑는다)."""
+    season = json.loads(rc.get_state(c)["person_season"])["at"]
+    return (_fc(c), sorted(str(r) for r in _rows_of(c, "sc_first") if r["season_at"] == season),
+            sorted(map(str, _rows_of(c, "sc_watch"))))
+
+
+def _backfill_matches_fresh(first, then, ends):
+    """first 를 처리한 뒤 옛 버전처럼 55 표를 비우고 then 을 넣어 처리한 결과 == 처음부터 새 버전으로 처리한 결과."""
+    with Env() as env:
+        c = env.conn()
+        for when, rows in first:
+            _msnap(c, when, rows)
+        _proc(c, ends=ends)
+        for when, rows in then:
+            _msnap(c, when, rows)
+        _proc(c, ends=ends)
+        want = _55_state(c)
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        for when, rows in first:
+            _msnap(c, when, rows)
+        _proc(c, ends=ends)
+        _old_version_forgets_55(c)
+        for when, rows in then:
+            _msnap(c, when, rows)
+        _proc(c, ends=ends)
+        got = _55_state(c)
+        c.close()
+    return got, want
+
+
+def test_backfill_55_leaves_out_late_unprocessed_and_old_season():
+    a = [_p(1, grade=1, games=10), _p(2, grade=2, games=5)]
+    b = [_p(1, grade=1, games=14), _p(2, grade=0, games=9)]
+    late = [_p(1, grade=0, games=40), _p(2, grade=0, games=40)]   # 늦게 온 스냅숏 — 사람별 처리는 건너뛴다
+    d = [_p(1, grade=0, games=18), _p(2, grade=1, games=13)]
+    got, want = _backfill_matches_fresh([(T0, a), (T0 + timedelta(days=1), b)],
+                                        [(T0 + timedelta(hours=12), late), (T0 + timedelta(days=2), d)], ["2026-10-09"])
+    assert got == want and want[0][1][1] < 40 * 15, (got, want)
+    # 시즌이 바뀐 뒤 — 원본에 남은 지난 시즌 스냅숏은 다시 훑지 않는다(이번 시즌 줄에 옛 승리가 섞인다)
+    ends = ["2026-10-01", "2026-10-12"]
+    got, want = _backfill_matches_fresh(
+        [(T0, a), (T0 + timedelta(days=1), b), (T0 + timedelta(days=2, hours=1), b), (T0 + timedelta(days=3), d)],
+        [(T0 + timedelta(days=4), [_p(1, grade=0, games=19), _p(2, grade=1, games=14)])], ends)
+    assert got == want and want[0], (got, want)
+
+
+def test_backfill_55_skips_when_new_tables_already_fill():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_p(1, grade=1, games=10)])
+        _msnap(c, T0 + timedelta(days=1), [_p(1, grade=1, games=12)])
+        _proc(c)                                                       # 새 버전이 처음부터 쌓았다
+        before = _fc(c)
+        assert _proc(c)["backfill_55"] == 0 and _fc(c) == before == {1: (30, 30, 1)}, (before, _fc(c))
+        c.close()
+
+
 def test_fc_season_rolls_into_done_without_numbers():
     with Env() as env:
         c = env.conn()

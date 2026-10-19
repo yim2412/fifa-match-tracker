@@ -1264,16 +1264,55 @@ def _late(first_at: str, start: str | None) -> int:
     return int(datetime.fromisoformat(first_at) > datetime.fromisoformat(start) + timedelta(days=config.N12_START_DAYS))
 
 
-def _person_apply(conn: sqlite3.Connection, sid: int, t: str, ps: dict, prev: dict | None) -> None:
-    """스냅숏 하나를 사람별 표에 — N3 슈챔 연속 · N11 최고점·낙폭 · N12 첫 챔스(부르는 쪽 트랜잭션 안).
-    연속은 날짜가 아니라 경과 시간(1회차 A — 간격 24시간 + 지터라 매일 켜도 달력 날짜가 빈다)."""
-    season_at = ps["at"]
+def _snap_rows(conn: sqlite3.Connection, sid: int, t: str, prev: dict | None):
+    """스냅숏 줄 + 앞 스냅숏의 등급표(이어졌을 때만 · 아니면 None)."""
     rows = conn.execute("SELECT profile_sn, grade, elo, win, draw, lose, team_value FROM snapshot_rows"
                         " WHERE snapshot_id = ?", (sid,)).fetchall()
     prev_grade = None
     if prev is not None and 0 < _hours(prev["at"], t) <= config.RANK_CONT_MAX_H:
         prev_grade = {r[0]: r[1] for r in conn.execute(
             "SELECT profile_sn, grade FROM snapshot_rows WHERE snapshot_id = ?", (prev["sid"],))} or None
+    return rows, prev_grade
+
+
+def backfill_55(conn: sqlite3.Connection) -> int:
+    """55 — 새 사람별 표(sc_watch·fc_season)가 이 시즌에 비었으면, 옛 버전이 이미 처리한 원본 스냅숏(최대
+    RANK_RAW_KEEP_DAYS)을 처음부터 다시 훑어 채운다. 업데이트한 날이 아니라 원본이 남은 날부터 잡으려고(10-19 — 2.12.1
+    공개 전엔 옛 버전이 돈다). 표가 비었을 때만이라 한 번 채우면 다시 안 돈다(따로 깃발을 두지 않는다 — 변이로 같은 뜻임을
+    확인했다). **사람별 처리 직전에** 부른다 — 새 스냅숏이 먼저 들어가면 그 앞을 다시 셀 수 없다. 고르는 것은 사람별 처리가
+    본 범위와 같게: 이번 시즌(데이터 시각 ≥ 시즌 시작) · 처리 끝(person_done — 그 뒤 시각은 전부 처리 전이라 따로 안 자른다) · 늦게 온 스냅숏
+    (아직 처리 전 · 시각이 앞섬)은 사람별 처리가 건너뛰므로 여기서도 뺀다. 옛 버전이 이미 건너뛴 늦은 스냅숏은 시각 순으로
+    들어간다(드물고, 시각 순이 오히려 맞다). → 다시 훑은 수."""
+    st = get_state(conn)
+    ps, last = _json_state(st, "person_season"), _json_state(st, "person_prev")
+    if ps is None or last is None:
+        return 0
+    season_at = ps["at"]
+    if any(conn.execute(f"SELECT 1 FROM {t} WHERE season_at = ? LIMIT 1", (season_at,)).fetchone()
+           for t in ("sc_watch", "fc_season")):
+        return 0                            # 새 버전이 이미 쌓기 시작했다 — 다시 훑으면 두 번 센다
+    snaps = [dict(r) for r in conn.execute(
+        "SELECT s.id, s.taken_at, m.ref_time FROM snapshots s JOIN snapshot_meta m ON m.snapshot_id = s.id"
+        " WHERE m.person_done = 1 AND EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)")]
+    for s in snaps:
+        s["dt"] = data_time(s)
+    snaps = sorted((s for s in snaps if season_at <= s["dt"]), key=lambda s: (s["dt"], s["id"]))
+    with conn:
+        prev = None
+        for s in snaps:
+            rows, prev_grade = _snap_rows(conn, s["id"], s["dt"], prev)
+            cont = prev_grade is not None
+            _first_reach(conn, "sc_watch", "sc_first", is_super, rows, season_at, s["dt"], ps, prev, cont)
+            _fc_apply(conn, rows, season_at, s["dt"], ps, prev, cont)
+            prev = {"sid": s["id"], "at": s["dt"]}
+    return len(snaps)
+
+
+def _person_apply(conn: sqlite3.Connection, sid: int, t: str, ps: dict, prev: dict | None) -> None:
+    """스냅숏 하나를 사람별 표에 — N3 슈챔 연속 · N11 최고점·낙폭 · N12 첫 챔스(부르는 쪽 트랜잭션 안).
+    연속은 날짜가 아니라 경과 시간(1회차 A — 간격 24시간 + 지터라 매일 켜도 달력 날짜가 빈다)."""
+    season_at = ps["at"]
+    rows, prev_grade = _snap_rows(conn, sid, t, prev)
     cont = prev_grade is not None       # 앞 원본이 없으면(옛 버전만 14일 넘게 돈 사이 지워짐) 틈
     # N3 — 등급 0(슈퍼챔피언스, R5) 연속
     open_ = {r[0]: (r[1], r[2], r[3]) for r in conn.execute(
@@ -1604,6 +1643,7 @@ def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list |
         return out
     ends = season_ends if season_ends is not None else load_season_ends(fifa_path)
     on_at = config.read_rank_on_at()
+    out["backfill_55"] = backfill_55(conn)
     for s in snaps:
         if s.get("person_done"):
             continue
