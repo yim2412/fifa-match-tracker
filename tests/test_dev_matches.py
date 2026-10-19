@@ -189,6 +189,7 @@ def test_next_cap_table():
         assert M.next_cap([_day("2026-10-19", 600)], "2026-10-20") == 1000, "끝 상한에서 멈춘다"
         assert M.next_cap([_day("2026-10-19", 100, fin=False)], "2026-10-20") == 100, "못 끝냄 → 그대로"
         assert M.next_cap([_day("2026-10-19", 100, hours=4)], "2026-10-20") == 100, "제시간(3시간) 넘김 → 그대로"
+        assert M.next_cap([_day("2026-10-19", 100, hours=3)], "2026-10-20") == 200, "딱 3시간은 제시간"
         assert M.next_cap([_day("2026-10-19", 100, key=1)], "2026-10-20") == 100, "키 거절 → 그대로"
         assert M.next_cap([_day("2026-10-17", 100)], "2026-10-20") == 100, "어제 줄 없음 → 마지막 줄 상한"
         b = [_day("2026-10-15", 400, blocked=1, fin=False)]
@@ -197,6 +198,8 @@ def test_next_cap_table():
         assert M.next_cap(b, "2026-10-17") == 200, "달력 날 — 꺼진 날도 센다(2일째)"
         assert M.next_cap(b + [_day("2026-10-17", 200)], "2026-10-18") == 400, "유지(2일) 뒤엔 다시 배율"
         assert M.next_cap(b + [_day("2026-10-20", 5)], "2026-10-16") == 200, "오늘 이후 줄은 안 본다"
+        assert M.next_cap([_day("2026-10-19", 100), _day("2026-10-20", 5, blocked=1)], "2026-10-20") == 200, \
+            "오늘 줄도 안 본다(오늘 막혀도 오늘 상한은 이미 정해졌다)"
 
 
 # ── 요약 ──────────────────────────────────────────────────────────────────────
@@ -266,12 +269,13 @@ def test_cursor_d_floor_for_new_person():
         w.person("가", "A")
         w.game("new", h(2), "A")
         w.game("y", FLOOR + timedelta(hours=1), "A")
+        w.game("at", FLOOR, "A")   # 딱 바닥 — 옛 경기가 아니라 멈추지 않는다(멈추면 old1 이 빠진다)
         w.game("old1", FLOOR - timedelta(hours=1), "A")
         w.game("old2", FLOOR - timedelta(hours=2), "A")
         r = rank_db(d, ["가"])
         go(d, r, w)
         got = games_in(d)
-        assert {"new", "y", "old1"} <= got and "old2" not in got, f"바닥 아래 첫 경기에서 멈춘다: {got}"
+        assert {"new", "y", "at", "old1"} <= got and "old2" not in got, f"바닥 아래 첫 경기에서 멈춘다: {got}"
         assert q1(d, "SELECT top_id FROM cursor")[0] == "new"
 
 
@@ -602,10 +606,12 @@ def test_unexpected_error_counts_and_skips_person():
         finally:
             FakeAPI.get_ouid = orig
         assert res.errors == 2 and res.notes and "m1" in games_in(d), res
+        # 개수만으로는 못 잰다 — 조건을 뒤집으면 "나" 의 성공 두 번이 세여 2 가 그대로 나온다
+        assert all("NETWORK" in n for n in res.notes), res.notes
 
 
 def test_run_log_and_status_cli():
-    with tmp(DEV_MATCH_WORKERS=1) as d:
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_MISSING_TRIES=2) as d:
         import io
         from contextlib import redirect_stdout
         from dev_archive import DEV_KEY_VAR
@@ -618,6 +624,8 @@ def test_run_log_and_status_cli():
         w.game("m1", h(1), "A")
         r = rank_db(d, ["가"])
         go(d, r, w)
+        with sqlite3.connect(d / "dm.db") as c:   # 포기 = tries 가 상한에 닿은 것(상한과 같으면 포기)
+            c.executemany("INSERT INTO missing (match_id, owner, tries) VALUES (?, 1, ?)", [("g", 2), ("r", 1)])
         saved_env, saved_db = os.environ.get(DEV_KEY_VAR), M.DB_PATH
         os.environ[DEV_KEY_VAR] = "k"
         M.DB_PATH = d / "dm.db"
@@ -625,9 +633,10 @@ def test_run_log_and_status_cli():
             buf = io.StringIO()
             with redirect_stdout(buf):
                 assert M.main(["--status"]) == 0
-                for _ in range(2):   # run 은 실제 시계 — 첫 번째가 오늘을 끝내고 두 번째가 건너뛴다
+                for _ in range(2):   # 날짜는 실제 — 첫 번째가 오늘을 끝내고 두 번째가 건너뛴다
+                    # 시계는 멈춤 — 걸린 시간 0 이어도 초당 요청 계산이 0 으로 나누지 않아야(Windows 시계는 15ms 단위)
                     M.run(db_path=d / "dm.db", lock_path=d / "l", fifa_db=d / "f.db", rank_open=lambda: rank_db(d, ["가"]),
-                          api_cls=lambda k: FakeAPI(w))
+                          api_cls=lambda k: FakeAPI(w), clock=lambda: 100.0)
         finally:
             M.DB_PATH = saved_db
             if saved_env is None:
@@ -636,6 +645,7 @@ def test_run_log_and_status_cli():
                 os.environ[DEV_KEY_VAR] = saved_env
         out = buf.getvalue()
         assert "경기 1" in out and "날" in out, out
+        assert "missing (2, 1)" in out, out
         assert "끝남 — 건너뜀" in (d / "log.txt").read_text(encoding="utf-8"), "끝난 날은 로그에 건너뜀"
 
 
