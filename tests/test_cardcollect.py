@@ -116,12 +116,15 @@ class Net:
         self.bad_page: set[int] = set()
         self.bad_sim: set[int] = set()
         self.no_price: set[int] = set()
+        self.no_club: set[int] = set()
         self.raise_kind: dict[tuple[str, int], str] = {}
         self.tc_of = tc_of
         self.hook = None
 
     def _raise(self, what, key):
         k = self.raise_kind.get((what, key))
+        if k == "bug":
+            raise ValueError("파싱 버그 흉내")
         if k is not None:
             raise (playerinfo.PlayerInfoError if what != "tc" else teamcolor.TeamColorError)("x", k)
 
@@ -141,7 +144,7 @@ class Net:
         self.calls.append(("sim", spid))
         self._raise("sim", spid)
         pos = {} if spid in self.bad_sim else {c: 100 for c in _ALL16}
-        return playerinfo.AbilitySim(ovr=100, groups={}, abilities={}, club_options=[(self.tc_of(spid), "팀")],
+        return playerinfo.AbilitySim(ovr=100, groups={}, abilities={}, club_options=[] if spid in self.no_club else [(self.tc_of(spid), "팀")],
                                      feature_options=[], position_ovrs=pos)
 
     def detail(self, tid):
@@ -552,6 +555,69 @@ def test_web_response_kinds():
         finally:
             ranker.web_get, config.WEB_DATA = keep
     assert ranker.classify_web_response(_Res(200, "<html>정상</html>")) is None
+
+
+def test_sim_without_club_teamcolor_is_format_fail():
+    """16칸은 맞는데 소속 팀컬러가 비어 왔다(마크업 바뀜) — 저장하면 '팀컬러 없음'이 30일 신선하게 남는다(리뷰 [중]1)."""
+    with Env() as e:
+        account(e.conn)
+        add_match(e.conn, TODAY, {"me": [(1, 1, 25)]})
+        meta(e.conn, [1000])
+        net = Net()
+        net.no_club = {1}
+        net.run()
+        assert ('sim', 1) in net.calls, net.calls   # 전제: 시뮬레이터를 실제로 읽었다
+        row = e.conn.execute("SELECT sim_on, club_tc FROM card_extra WHERE spid = 1").fetchone()
+        assert row is not None and row[0] is None and row[1] is None, tuple(row)
+        assert e.conn.execute("SELECT fails FROM card_tries WHERE key = 'c:1:sim'").fetchone()[0] == 1
+
+
+def test_unexpected_parse_error_records_and_moves_on():
+    """요청 함수 안의 예상 못 한 예외 — 그 카드만 형식 실패로 적고 다음 카드로. 바퀴째 끝나면 맨 앞 카드가 틱마다 막는다(리뷰 [하]1)."""
+    with Env() as e:
+        account(e.conn)
+        add_match(e.conn, TODAY, {"me": _cards(2)})
+        meta(e.conn, [1000])
+        net = Net()
+        net.raise_kind[("page", 1)] = "bug"
+        r = net.run()
+        assert ("page", 2) in net.calls and not r.error, (r, net.calls)
+        assert e.conn.execute("SELECT fails FROM card_tries WHERE key = 'c:1:page'").fetchone()[0] == 1
+        net.run()
+        assert net.calls.count(("page", 1)) == 1, "같은 날 다시 읽었다"
+
+
+def test_run_carries_status_and_info_row_reads_it():
+    """[정보] 줄은 예약이 들고 있는 마지막 바퀴 상태만 읽는다 — 화면 스레드에서 수요를 세면 0.4초 멈춘다(리뷰 [중]2)."""
+    with Env() as e:
+        account(e.conn)
+        add_match(e.conn, TODAY, {"me": _cards(2)})
+        meta(e.conn, [1000])
+        r = Net().run()
+        assert r.status is not None and (r.status.known, r.status.need) == (2, 2), r.status
+        s = _sched()
+
+        class P(QWidget):
+            _card_sched = s
+        p = P()
+        keep = cc.status
+
+        def no_ui_status(*_a, **_k):
+            raise AssertionError("화면 스레드에서 수요를 셌다")
+        cc.status = no_ui_status
+        try:
+            dlg = app_main.AboutDialog(p)
+            assert "첫 바퀴" in dlg.lb_card.text(), dlg.lb_card.text()
+            s.tick()
+            FakeLoader.made[-1].finish(cc.RunResult(status=cc.Status(5, 10, 3, False)))
+            assert s.last == cc.Status(5, 10, 3, False) and "5/10장" in dlg.lb_card.text(), dlg.lb_card.text()
+            dlg.done(0)
+            s.tick()
+            FakeLoader.made[-1].finish(cc.RunResult(status=cc.Status(7, 10, 3, False)))
+            assert "5/10장" in dlg.lb_card.text(), "닫은 창을 계속 고쳤다(신호를 안 끊었다)"
+            dlg.deleteLater()
+        finally:
+            cc.status = keep
 
 
 def test_sim_pos_of_golden():

@@ -446,8 +446,10 @@ def save_card(conn, info: PlayerInfo, day: str) -> bool:
 
 
 def sim_ok(sim: AbilitySim) -> bool:
-    """시뮬레이터가 형식대로 왔나 — 포지션 16칸(config.SIM_POS_OF 의 칸 전부)."""
-    return set(sim.position_ovrs) == set(config.SIM_POS_OF.values())
+    """시뮬레이터가 형식대로 왔나 — 포지션 16칸(config.SIM_POS_OF 의 칸 전부) + 소속 팀컬러가 하나 이상.
+    소속 팀컬러는 카드마다 5~6개(국가·클럽·Home Grown·단일팀 — F2)라 비어 오면 마크업이 바뀐 것이다 — 안 보면 "팀컬러 없음"이
+    30일 신선하게 쌓여 N29·C2 가 조용히 틀린다(51 조각 ① 리뷰)."""
+    return set(sim.position_ovrs) == set(config.SIM_POS_OF.values()) and bool(sim.club_options)
 
 
 def save_card_extra_page(conn, info: PlayerInfo, day: str) -> None:

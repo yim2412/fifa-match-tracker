@@ -67,6 +67,7 @@ class RunResult:
     down: bool = False       # 점검·연결 실패 — 그 바퀴만
     error: str = ""          # DB 잠김 등(종류만)
     planned: int = 0
+    status: "Status | None" = None   # 바퀴 끝 상태(앱 수요) — [정보] 줄이 화면 스레드에서 수요를 다시 세지 않게(0.4초 · 리뷰 [중]2)
 
 
 # ── 수요 · 계획 ─────────────────────────────────────────────────────────
@@ -285,14 +286,18 @@ def run(db_path: Path | str, today: date, cap: int, cancel: Callable[[], bool] =
     day = today.isoformat()
     tc_kind, block_kind, format_kind = f"{kind}_tc", f"{kind}_block", f"{kind}_format"
     conn = store.open_db(db_path)
+    measure = window is not None   # 측정 모드는 [정보] 줄 상태를 안 싣는다(앱 수요가 아니다)
     try:
         if store.budget_hit_429(conn, day, store.card_block_kinds()):
             out.blocked = True
+            if not measure:
+                _attach_status(conn, today, out)
             return out
         if store.budget_hit_429(conn, day, (format_kind,)):
             out.format_err = True
+            if not measure:
+                _attach_status(conn, today, out)
             return out
-        measure = window is not None
         dem = demand(conn, today, days=demand_days, window=window)
         ctx = plan(conn, today, dem=dem, mine={} if measure else my_cards(conn, today), measure=measure)
         out.planned = len(ctx.jobs)
@@ -338,6 +343,10 @@ def run(db_path: Path | str, today: date, cap: int, cancel: Callable[[], bool] =
                     raise
                 out.down = e.kind == "down"
                 raise _Stop(e.kind) from e
+            except Exception as e:  # noqa: BLE001 — 파싱 버그 등: 그 대상만 형식 실패로. 그냥 올리면 시도 기록이 안 남아
+                # 줄 맨 앞의 같은 카드가 틱마다 요청 하나를 쓰고 바퀴를 끝내 백필 전체가 선다(리뷰 [하]1)
+                err = teamcolor.TeamColorError if is_tc else playerinfo.PlayerInfoError
+                raise err(f"{type(e).__name__}: {e}", "format") from e
 
         i = 0
         try:
@@ -373,8 +382,6 @@ def run(db_path: Path | str, today: date, cap: int, cancel: Callable[[], bool] =
                         if not playerinfo.page_ok(info) or info.body_type == "-":
                             failed(key, ("c", job.key))
                         else:
-                            if info.sp_id != job.key:
-                                info.sp_id = job.key
                             _save_page(conn, ctx, info, day)
                             ok(key)
                 if job.sim:
@@ -395,6 +402,8 @@ def run(db_path: Path | str, today: date, cap: int, cancel: Callable[[], bool] =
                 out.skipped_cap = len(ctx.jobs) - i
         except sqlite3.Error as e:
             out.error = type(e).__name__   # 잠김 — 그 장 버리고 바퀴 끝(다음 틱이 날짜 열로 다시 고른다)
+        if not measure:
+            _attach_status(conn, today, out)
         return out
     finally:
         conn.close()
@@ -417,6 +426,13 @@ def status(conn: sqlite3.Connection, today: date) -> Status:
     day = today.isoformat()
     return Status(known, len(dem), store.budget_used(conn, day, store.BUDGET_CARD),
                   store.budget_hit_429(conn, day, store.card_block_kinds()))
+
+
+def _attach_status(conn: sqlite3.Connection, today: date, out: RunResult) -> None:
+    try:
+        out.status = status(conn, today)
+    except sqlite3.Error:
+        pass   # 잠김 — 줄은 지난 값 그대로
 
 
 def status_text(st: Status) -> str:

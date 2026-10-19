@@ -2066,6 +2066,8 @@ class CardBackfillScheduler(QObject):
         self._first.timeout.connect(self.tick)
         self.loader: CardBackfillLoader | None = None
         self._quitting = False
+        # 마지막 바퀴의 상태(cardcollect.Status) — [정보] 줄이 이걸 읽는다. 화면 스레드에서 수요를 세면 0.4초 멈춘다(51 조각 ① 리뷰)
+        self.last = None
 
     def running(self) -> bool:
         return self.loader is not None and self.loader.isRunning()
@@ -2094,6 +2096,8 @@ class CardBackfillScheduler(QObject):
             w.start()
 
     def _on_done(self, res) -> None:
+        if getattr(res, "status", None) is not None:
+            self.last = res.status
         if not self._quitting and getattr(res, "blocked", False) and config.CARD_BACKFILL_ON:
             try:
                 conn = store.open_db(config.DB_PATH)
@@ -11466,6 +11470,10 @@ class AboutDialog(QDialog):
         self.lb_card.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_card)
         self._refresh_card_row()
+        card_round = getattr(getattr(self.parent(), "_card_sched", None), "finished", None)
+        if card_round is not None:   # 창을 열어 둔 동안 바퀴가 끝나면 줄을 다시 — 닫을 때 끊는다(예약은 셸 수명)
+            card_round.connect(self._on_card_round)
+            self.finished.connect(lambda _r: self._drop_card_round(card_round))
         # 자동 실행(D2) — 앱 토글 하나. exe 에서만(소스 실행은 python.exe 를 등록하게 된다)
         self.chk_auto = QCheckBox(notice.AUTOSTART_CHECK)
         avail = autostart.available()
@@ -11552,15 +11560,22 @@ class AboutDialog(QDialog):
             why = cardcollect.OFF_REASON_TEXT.get(config.CARD_BACKFILL_OFF, config.CARD_BACKFILL_OFF)
         status = ""
         if on or config.CARD_BACKFILL_OFF:
-            try:
-                conn = store.open_db(config.DB_PATH)
-                try:
-                    status = cardcollect.status_text(cardcollect.status(conn, date.today()))
-                finally:
-                    conn.close()
-            except sqlite3.Error:
-                status = ""
+            # 예약이 들고 있는 마지막 바퀴 상태만 — 여기서 cardcollect.status 를 부르면 30일 수요를 화면 스레드에서 센다
+            st = getattr(getattr(self.parent(), "_card_sched", None), "last", None)
+            if st is not None:
+                status = cardcollect.status_text(st)
+            elif on:
+                status = "카드 정보 — 첫 바퀴가 끝나면 채운 장수가 보입니다"
         self.lb_card.setText(" · ".join(x for x in (why, status) if x))
+
+    def _on_card_round(self, _res) -> None:
+        self._refresh_card_row()
+
+    def _drop_card_round(self, sig) -> None:
+        try:
+            sig.disconnect(self._on_card_round)
+        except (TypeError, RuntimeError):
+            pass
 
     def _on_card_toggled(self, on: bool) -> None:
         if on and config.NOTICE_ACCEPTED < config.CARD_BACKFILL_NOTICE_VERSION:
