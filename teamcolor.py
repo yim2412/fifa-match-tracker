@@ -49,8 +49,9 @@ _ITEM_NUM = re.compile(r'<div class="num">\s*(\d+)\s*<')
 _ITEM_NAME = re.compile(r'<div class="name">\s*([^<]+?)\s*</div>')
 _ITEM_LEVEL = re.compile(r'<div class="level">\s*(\d+)\s*단계')
 _ITEM_EFFECT = re.compile(r'<span class="item">\s*([^<]+?)\s*</span>')
-# 상세의 단계 — <div class="level lv1"> · 단계 하나짜리는 "lvs1"
-_STEP_START = re.compile(r'<div class="level lvs?\d+">')
+# 상세의 단계 — <div class="level lv1"> · 단계 하나짜리는 "lvs1" · 강화 팀컬러(금빛 물결 등)는 "lvu1"
+# (2026-10-19 카드 백필 실측 — 몰라서 강화 팀컬러 다섯이 전부 형식 실패로 그날 백필을 세웠다)
+_STEP_START = re.compile(r'<div class="level lv[su]?\d+">')
 _STEP_NO = re.compile(r'<div class="tit">\s*(\d+)\s*단계\s*</div>')
 _STEP_NUM = _ITEM_NUM
 _STEP_EFFECT = re.compile(r"<li>\s*([^<]+?)\s*</li>")

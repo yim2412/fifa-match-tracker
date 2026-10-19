@@ -1951,6 +1951,10 @@ def test_teamcolor_detail_parse():
     assert steps[2].effects == ["전체 능력치 +3", "가속력 +2", "중거리 슛 +1"], steps[2]   # "-" 칸은 빠진다
     _, one = teamcolor.parse_detail(_tc_fixture("teamcolor_detail_30007.html"))   # 단계 하나짜리는 class="level lvs1"
     assert [(s.step, s.members, s.effects) for s in one] == [(1, 5, ["골 결정력 +3", "슛 파워 +2"])], one
+    # 강화 팀컬러는 class="level lvu1"(2026-10-19 실응답 — 몰랐을 때 다섯 개 전부 형식 실패)
+    desc, enh = teamcolor.parse_detail(_tc_fixture("teamcolor_detail_10001.html"))
+    assert desc == "8강 이상의 선수들로 구성된 팀컬러입니다.", desc
+    assert [(s.step, s.members, s.effects) for s in enh] == [(1, 5, ["전체 능력치 +3"]), (2, 8, ["전체 능력치 +4"])], enh
     try:
         teamcolor.parse_detail("<div>바뀐 구조</div>")
         raise AssertionError("단계 없는 상세를 정상으로 읽었다")
