@@ -13,6 +13,7 @@
 | `--b` · `--c` | D0 + 35 한 번 | B 판정(앞 절반 → 뒤 절반) · C 세기 |
 | `--selftest` | 아무 때(관문 검토 · 측정일) | 답을 아는 가짜 자료로 A 판정이 미달·통과를 맞게 내는지 — 끝 코드 0 통과 · 1 고정 시험 미달(규칙 버그 — 측정일이면 멈춤) · 2 검정력만 미달(측정일이면 그날 "재료 부족" 으로 기록) |
 | `--status` | 아무 때 | D0 · 오늘이 며칠째 · 다음 할 일 · 결과 파일 |
+| `--daily` | 작업 스케줄러 `FifaMeasureCards`(로그온 10분 뒤 + 매일 10:00 · pythonw) | 얼리기 → 백필 → 그날이 측정일이면 A·B·C — 사람이 재는 날을 고르지 않게. 로그 `measure/run.log` |
 
 거부하는 것: 앱 토글 "카드 정보 자동 채우기" 가 켜져 있으면(같은 IP 하루 1,200 — `.env` 를 디스크에서 읽어 본다) ·
 그날 다른 웹 길이 막혔으면(`cardcollect.run` 이 `store.card_block_kinds()` 로) · 일정 밖의 날.
@@ -1119,12 +1120,94 @@ def cmd_status(d: Path, today: date, log=print) -> int:
     return 0
 
 
+def freeze_today(fifa_path, rank_path, d: Path, today: date, log=print) -> int:
+    k = day_no(load_json(_paths(d)["meta"]), today)
+    if k is None or not 0 <= k <= FREEZE_LAST:
+        log(f"[FAIL] 얼리기는 D0 ~ D0+{FREEZE_LAST}(오늘 D0+{k})")
+        return 2
+    fconn, rconn = _ro(fifa_path), _ro(rank_path)
+    try:
+        log(str(b_freeze(fconn, rconn, _paths(d)["frozen"], datetime.now())))
+    finally:
+        fconn.close()
+        rconn.close()
+    return 0
+
+
+def daily_steps(k: int, d: Path) -> list[str]:
+    """오늘 할 일 — 얼리기 → 백필 → 그날이 측정일이면 A·B·C(얼린 카드가 그날 백필 수요에 들어가게 얼리기가 먼저)."""
+    out = []
+    if 0 <= k <= FREEZE_LAST:
+        out.append("freeze")
+    if 0 <= k <= JUDGE_DAY:
+        out.append("backfill")
+    a = load_json(_paths(d)["a"]) or {"attempts": []}
+    if not a.get("final") and k >= A_DAYS[0]:
+        out.append("a")      # cmd_a 가 놓친 회차·창 밖을 스스로 가른다
+    if k >= JUDGE_DAY:
+        out += [s for s in ("b", "c") if load_json(_paths(d)[s]) is None]
+    return out
+
+
+def cmd_daily(d: Path, today: date, *, run=None, log=print) -> int:
+    """작업 스케줄러가 매일 부르는 하나 — 측정일 판정까지 자동으로 돌려 사람이 재는 날을 고르지 않게 한다.
+    한 단계가 예외로 죽어도 나머지는 돈다(로그에 남긴다). 끝 코드 = 단계 끝 코드의 최댓값."""
+    meta = load_json(_paths(d)["meta"])
+    k = day_no(meta, today)
+    if k is None:
+        log("[FAIL] D0 가 없다 — --start 먼저")
+        return 2
+    run = run or {
+        "freeze": lambda: freeze_today(config.DB_PATH, config.RANK_DB_PATH, d, today, log=log),
+        "backfill": lambda: _backfill_with_progress(d, today, log),
+        "a": lambda: cmd_a(config.DB_PATH, d, today, log=log),
+        "b": lambda: cmd_b(config.DB_PATH, d, today, log=log),
+        "c": lambda: cmd_c(config.DB_PATH, d, today, log=log),
+    }
+    steps = daily_steps(k, d)
+    log(f"── {datetime.now().isoformat(timespec='seconds')} · D0+{k} · 할 일 {steps or '없음'}")
+    worst = 0
+    for s in steps:
+        try:
+            rc = run[s]()
+        except Exception:   # noqa: BLE001 — 한 단계가 나머지를 막지 않는다
+            import traceback
+            log(f"[FAIL] {s} 예외\n{traceback.format_exc()}")
+            rc = 1
+        log(f"{s} → {rc}")
+        worst = max(worst, rc or 0)
+    return worst
+
+
+def _backfill_with_progress(d: Path, today: date, log) -> int:
+    pr = _Progress()
+    try:
+        return backfill(config.DB_PATH, d, today, CAP_MAX, log=log, progress=pr)
+    finally:
+        pr.clear()
+
+
+def _file_log(path: Path):
+    """pythonw(작업 스케줄러)는 stdout 이 없다 — 한 줄씩 파일에 덧붙인다(줄마다 열고 닫아 도중에 죽어도 남는다)."""
+    def log(msg: str) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f"{msg}\n")
+        except OSError:
+            pass
+        if sys.stdout is not None:
+            print(msg)
+    return log
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="51단계 측정 A~C(이 PC 전용)")
     g = ap.add_mutually_exclusive_group(required=True)
     for flag, text in (("--start", "오늘을 D0 로(한 번)"), ("--backfill", "측정 백필 하루치"), ("--b-freeze", "B 얼리기"),
                        ("--count", "매일 세기만"), ("--a", "측정 A"), ("--b", "측정 B"), ("--c", "측정 C"),
-                       ("--selftest", "A 판정 규칙 자체 시험"), ("--status", "현황")):
+                       ("--selftest", "A 판정 규칙 자체 시험"), ("--status", "현황"),
+                       ("--daily", "작업 스케줄러용 하루치(얼리기 → 백필 → 측정일이면 A·B·C) · 로그 measure/run.log")):
         g.add_argument(flag, action="store_true", help=text)
     g.add_argument("--b-retry", metavar="규칙", help="앞 절반 미달 뒤 고친 규칙으로 뒤 절반 한 번")
     ap.add_argument("--cap", type=int, default=config.CARD_BACKFILL_DAILY_REQ, help="--backfill 하루 상한(기본 600)")
@@ -1152,6 +1235,8 @@ def main(argv: list[str] | None = None) -> int:
         ok, text = start(d, today)
         print(("" if ok else "[FAIL] ") + text)
         return 0 if ok else 2
+    if a.daily:
+        return cmd_daily(d, today, log=_file_log(d / "run.log"))
     if a.backfill:
         pr = _Progress()
         try:
@@ -1170,17 +1255,7 @@ def main(argv: list[str] | None = None) -> int:
             fconn.close()
         return 0
     if a.b_freeze:
-        k = day_no(meta, today)
-        if not 0 <= k <= FREEZE_LAST:
-            print(f"[FAIL] 얼리기는 D0 ~ D0+{FREEZE_LAST}(오늘 D0+{k})")
-            return 2
-        fconn, rconn = _ro(config.DB_PATH), _ro(config.RANK_DB_PATH)
-        try:
-            print(b_freeze(fconn, rconn, _paths(d)["frozen"], datetime.now()))
-        finally:
-            fconn.close()
-            rconn.close()
-        return 0
+        return freeze_today(config.DB_PATH, config.RANK_DB_PATH, d, today)
     if a.a:
         return cmd_a(config.DB_PATH, d, today)
     if a.b or a.b_retry:

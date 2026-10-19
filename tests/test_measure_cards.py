@@ -643,6 +643,31 @@ def test_cmd_a_grace_and_missed_rounds():
             M.selftest, M.judge_a = saved
 
 
+def test_daily_steps_and_isolation():
+    """--daily(작업 스케줄러) — 날마다 할 일 · 측정일 판정이 자동으로 든다 · 한 단계 예외가 나머지를 막지 않는다."""
+    with env() as (d, conn):
+        m = d / "m"
+        logs = []
+        assert M.cmd_daily(m, D0, log=logs.append) == 2, "D0 없이 돌았다"
+        M.start(m, D0)
+        assert M.daily_steps(0, m) == ["freeze", "backfill"]
+        assert M.daily_steps(21, m) == ["freeze", "backfill", "a"]
+        assert M.daily_steps(28, m) == ["backfill", "a"]
+        assert M.daily_steps(35, m) == ["backfill", "a", "b", "c"]
+        assert M.daily_steps(40, m) == ["a", "b", "c"]
+        M.save_json(m / "a_result.json", {"attempts": [{}], "final": "통과"})
+        M.save_json(m / "c_result.json", {})
+        assert M.daily_steps(36, m) == ["b"]
+        ran = []
+
+        def boom():
+            raise RuntimeError("x")
+        run = {"freeze": boom, "backfill": lambda: ran.append("backfill") or 0}
+        assert M.cmd_daily(m, D0, run=run, log=logs.append) == 1
+        assert ran == ["backfill"], "얼리기 예외가 백필을 막았다"
+        assert any("freeze 예외" in x for x in logs)
+
+
 def test_cmd_a_power_fail_records_material_short():
     """9판 — P6: 검정력만 미달이면 그 측정일을 "재료 부족" 으로 기록 — 다음 날 다시 못 돈다."""
     with env() as (d, conn):
