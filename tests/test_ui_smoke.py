@@ -9490,6 +9490,104 @@ def test_reask_notice_explains_person_values():
         dlg.deleteLater()
 
 
+# ── 55 구단 머리 줄 · 점수 리포트 ────────────────────────────────────────────
+
+def _club(**kw):
+    base = dict(season_start="2026-09-10", snap_at="2026-10-18T09:00:00", cut=4400.0,
+                values=sorted([5 * 10 ** 11, 9 * 10 ** 11, 2 * 10 ** 12]), my_value=7 * 10 ** 11,
+                fc_lo=[100, 300], fc_hi=[400, 900], fc_hidden=False, me_in_fc=True,
+                peak=4550.0, peak_at="2026-10-17T15:00:00", champ_median=500, champ_n=3, champ_hidden=False,
+                peaks_dd=[])
+    base.update(kw)
+    return core.ClubHead(**base)
+
+
+def _club_args(club, **kw):
+    from datetime import date as _d
+    W = core.WinDivision
+    wins = [W(datetime(2026, 9, 10, 9), 1000, "승", False), W(datetime(2026, 9, 11, 9), 900, "승", False),
+            W(datetime(2026, 9, 12, 9), 800, "패", False), W(datetime(2026, 10, 18, 9), 900, "승", False),
+            W(datetime(2026, 10, 18, 10), 900, "무", False)]
+    rows = _elo_rows([("2026-10-17T15:00:00", 4500.0, 9, "search"), ("2026-10-18T20:00:00", 4380.0, 230, "search")])
+    rows[-1]["team_value"] = 8 * 10 ** 11
+    args = dict(wins=wins, rows=rows, pts=app_main.elo_daily_points(rows, datetime(2026, 9, 10)), club=club,
+                season_start=datetime(2026, 9, 10), today=_d(2026, 10, 19), mixed=False)
+    args.update(kw)
+    return args
+
+
+def test_club_cells_texts():
+    keep = config.RANK_COLLECT
+    try:
+        config.RANK_COLLECT = True
+        cells = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club()))}
+        assert list(cells)[0] == "어제" and len(cells) == 6, list(cells)
+        assert cells["어제"][0] == "-120점" and cells["어제"][1] == "1승 1무 0패 · 50.0% · 15 FC", cells["어제"]
+        assert cells["지금 200위까지"][0] == "+20.00점", cells["지금 200위까지"]
+        assert cells["구단가치 등수"][0] == "3등" and "4명 중" in cells["구단가치 등수"][1] and "검색 때" in cells["구단가치 등수"][1]
+        assert cells["시즌 최고점"] == ("4,550.00", "#9 (10.17)", cells["시즌 최고점"][2]), "수집 최고점이 더 높으면 그쪽 · 순위는 같은 시각 기록"
+        assert cells["챔스·슈챔 달성"][0] == "챔스 2판 · 슈챔 3판" and "남들 중앙 500판보다 498판 빠르게" in cells["챔스·슈챔 달성"][1]
+        assert cells["시즌 FC"][0] == "30 FC" and cells["시즌 FC"][1] == "3등 / 3명", cells["시즌 FC"]
+        hidden = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(fc_hidden=True, champ_hidden=True)))}
+        assert hidden["시즌 FC"][1].startswith("등수는 다음 시즌부터") and "남들 비교는 다음 시즌부터" in hidden["챔스·슈챔 달성"][1]
+        out = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(my_value=None, me_in_fc=False)))}
+        assert out["구단가치 등수"][1].endswith("위 밖 — 등수 없음") and out["시즌 FC"][1].endswith("위 밖 — 등수 없음")
+        none = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(None, pts=[], rows=[]))}
+        assert none["지금 200위까지"][0] == "—" and none["구단가치 등수"][0] == "—" and none["시즌 최고점"][0] == "—"
+        assert none["시즌 FC"][0] == "30 FC", "rank.db 가 없어도 내 FC 는 보인다"
+        late = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(), season_start=datetime(2026, 8, 1)))}
+        assert "저장 시작 뒤부터" in late["시즌 FC"][1] and "저장 시작 뒤부터" in late["챔스·슈챔 달성"][1]
+    finally:
+        config.RANK_COLLECT = keep
+
+
+def test_dashboard_head_redraws_when_elo_arrives():
+    """J4 — 경기 받기 끝과 elo_ready 중 늦게 온 쪽이 머리 줄을 채운다(대시보드를 보는 채로 ELO 가 늦게 와도)."""
+    from datetime import date as _d
+    keep = (_win._rank_seasons, dict(_win._elo))
+    try:
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+        _win._elo.pop(_OUID, None)
+        _win._go_page("대시보드")
+        _win._render_dashboard()
+        big = [c[1].text() for c in _win.dashboard.head_cells]
+        assert big[1] == "—" and _win.dashboard.head.scope.text() == "이번 시즌", big
+        now = datetime.now()
+        rows = _elo_rows([((now - timedelta(days=1)).isoformat(timespec="seconds"), 4300.0, 300, "search")])
+        data = _elo_data(rows)
+        data.club = _club()
+        _win._on_elo_ready(_OUID, data)
+        _app.processEvents()
+        assert _win.dashboard.head_cells[1][1].text() == "+100.00점", [c[1].text() for c in _win.dashboard.head_cells]
+    finally:
+        _win._rank_seasons, _win._elo = keep[0], keep[1]
+        _win._render_dashboard()
+
+
+def test_elo_score_report_needs_enough_points():
+    from datetime import date as _d
+    keep = (_win._rank_seasons, dict(_win._elo))
+    try:
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+        def pts(n):
+            return _elo_rows([(f"2026-09-{11 + i:02d}T10:00:00", 4000.0 + 10 * i, 500, "snapshot") for i in range(n)])
+        _win._on_elo_ready(_OUID, _elo_data(pts(config.R_MIN_POINTS - 1)))
+        _win._go_page("승률 그래프", "점수·예측")
+        _app.processEvents()
+        assert not _win.lb_elo_report.isVisibleTo(_win), "점이 모자란데 리포트를 냈다"
+        _win._on_elo_ready(_OUID, _elo_data(pts(config.R_MIN_POINTS)))
+        _app.processEvents()
+        text = _win.lb_elo_report.text()
+        assert _win.lb_elo_report.isVisibleTo(_win) and "시즌 평균" in text and "가장 깊었던 하락은?" in text, text
+        assert "점수가 오르는 구간인가?" in text and "무승부 뺀 승률" in text, text
+        rows = pts(config.R_MIN_POINTS) + _elo_rows([("2026-09-12T08:00:00", 4900.0, 100, "search")])   # 하루 안 최고점
+        _win._on_elo_ready(_OUID, _elo_data(sorted(rows, key=lambda r: r["taken_at"])))
+        assert "최고 4,900점(09.12)" in _win.lb_elo_report.text(), "리포트 최고점이 하루 마지막 점만 봤다(머리 줄과 어긋남)"
+    finally:
+        _win._rank_seasons, _win._elo = keep[0], keep[1]
+        _win._go_page("대시보드")
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

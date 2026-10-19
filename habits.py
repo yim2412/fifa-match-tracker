@@ -14,6 +14,8 @@
 | `daily_luck(periods, mixed)` | [성적 진단 › 운 범위](N16) | 하루 승률이 평균 ± 2σ(이항) 띠 밖인 날 수 대 운만이면 기대되는 날 수 · "몇 판부터" 표 |
 | `streak_baseline(matches)` | 〃 (A3) | 최장 연승·연패 대 `draw_possible` 층 안에서 순서를 섞은 기준(97.5분위) — 느려서 작업 스레드 |
 | `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대별 승률 + 표마다 카이제곱(층 보정) |
+| `club_day(wins, day)` · `day_delta(points, day)` · `first_reach(wins, start, division)` | 대시보드 맨 위 "이번 시즌 구단"(55 H1·H5) | 재료는 `stats.win_divisions` — 화면 글은 `app_main.club_cells` |
+| `score_report(points, marks)` · `decisive_rate(wins, since)` | [승률 그래프 › 점수·예측] 리포트(55 R1~R3) | 평균은 하루 한 점 · 최고점·낙폭은 기록 전부 · 무승부 뺀 승률은 이 해설만(U1) |
 | `classify_route(shot)` · `attack_routes(details, ouid)` | [슛 맵 › 공격 루트](N18) | 슛을 `ROUTES` 8갈래로(순서가 곧 우선순위) · 내 슛과 같은 경기 상대 슛에 같은 분류기 · 루트별 결정력 차이는 `paired_diff` |
 
 기준선의 구간(N4 · docs/DONE.md 41단계 "구간 방법"): 나와 상대는 **같은 경기의 짝**이고 슛은 경기 안에서 뭉친다 — 두 비율을
@@ -36,12 +38,12 @@ from __future__ import annotations
 import math
 import random
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import config
 from models import MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_mixed, is_weak, rated, win_pct
-from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, _goal_events, _me_opp, _num, _played, _result_of, _set_mixed,
-                   _timeline_matches_board, _wdl_of, position_line)
+from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, WinDivision, _goal_events, _me_opp, _num, _played, _result_of,
+                   _set_mixed, _timeline_matches_board, _wdl_of, position_line, win_rewards)
 
 
 @dataclass
@@ -1096,3 +1098,108 @@ def habit_tables(matches: list[MatchSummary]) -> list[HabitTable]:
         mixed = is_mixed(m.draw_possible for _, m in rows)
         out.append(_chi_table(name, labels, rows, mixed))
     return out
+
+
+# ── 55 구단 머리 줄(H1·H5) · 점수 리포트(R1~R3) — ROADMAP 55단계 ─────────────────────────────────────────
+# 재료는 stats.win_divisions(경기마다 일시·그때 내 등급·결과)와 ELO 하루 점(app_main.elo_daily_points 의 (날짜, 점수)).
+# 승률은 앱 규칙(승÷전체 · win_pct) — R3 의 "무승부 뺀 승률" 만 따로(U1 — 점수는 승·패로만 움직인다).
+
+@dataclass
+class DaySummary:
+    """하루 요약(H1) — 그날 경기 승·무·패 · 승리 보상 FC."""
+    day: date
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    fc: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose
+
+    def rate(self, mixed: bool) -> float:
+        return win_pct(self.win, self.draw, self.lose, mixed)
+
+
+def club_day(rows: list[WinDivision], day: date) -> DaySummary:
+    """그날(이 PC 날짜 0~24시 · J7) 경기 — 승·무·패와 FC(stats.win_rewards 와 같은 보상표)."""
+    sel = [w for w in rows if w.when.date() == day]
+    out = DaySummary(day, *(sum(1 for w in sel if w.outcome == k) for k in ("승", "무", "패")))
+    out.fc = win_rewards(sel).fc
+    return out
+
+
+def day_delta(points: list[tuple[date, float]], day: date) -> float | None:
+    """그날 마지막 점수 − 그 앞 마지막 점수(전날이 없으면 더 앞 · J7). 그날 점이나 앞 점이 없으면 None."""
+    cur = next((e for d, e in points if d == day), None)
+    before = [e for d, e in points if d < day]
+    if cur is None or not before:
+        return None
+    return cur - before[-1]
+
+
+@dataclass
+class FirstReach:
+    """시즌 첫 경기부터 그 등급 첫 경기까지 친 판수(H5 — 첫 경기 포함 · 1회차 [중])."""
+    games: int
+    at: datetime
+    from_start: bool        # 저장 경기가 시즌 시작 N12_START_DAYS 안부터 있나(아니면 "저장 시작 뒤부터")
+    gap: bool               # 그 사이 저장 경기가 H5_GAP_DAYS 넘게 빈 곳이 있나(덜 셌을 수 있다 · 3회차 [중])
+
+
+def first_reach(rows: list[WinDivision], season_start: datetime, division: int) -> FirstReach | None:
+    """division 이하(그 등급 이상 — id 가 작을수록 상위)를 처음 찍은 경기까지의 승·무·패 수. 못 찍었으면 None."""
+    seq = sorted((w for w in rows if w.when >= season_start), key=lambda w: w.when)
+    hit = next((i for i, w in enumerate(seq) if w.division is not None and w.division <= division), None)
+    if hit is None:
+        return None
+    span = seq[:hit + 1]
+    gap = timedelta(days=config.H5_GAP_DAYS)
+    return FirstReach(hit + 1, seq[hit].when,
+                      seq[0].when <= season_start + timedelta(days=config.N12_START_DAYS),
+                      any(b.when - a.when > gap for a, b in zip(span, span[1:])))
+
+
+@dataclass
+class ScoreReport:
+    """지금 시즌 점수 리포트(R1~R3) — 하루 한 점 기준(하루 안 오르내림은 안 보인다)."""
+    points: int
+    first_day: date
+    avg: float              # R1 시즌 평균 점수(하루 점 평균)
+    now: float
+    peak: float             # 시즌 최고점(하루 점 중)
+    peak_day: date
+    max_dd: float           # R2 최고점 뒤 가장 깊은 하락(양수)
+    dd_day: date | None     # 그 바닥 날
+    day_avg: float          # R3 하루 평균 변화(첫 점 → 지금 ÷ 날 수)
+    up_days: int            # 앞 점보다 오른 점 수
+    steps: int              # 비교한 점 수(점 − 1)
+
+
+def score_report(points: list[tuple[date, float]], marks: list[tuple[date, float]] | None = None) -> ScoreReport | None:
+    """points 는 (날짜, 그날 마지막 점수) 오래된 것부터 — 평균·하루 변화(R1·R3)는 하루 한 점으로. 최고점·낙폭(R2)은 marks
+    (그 시즌 기록 전부 · 시각순)로 — 하루 마지막 점만 보면 하루 안 최고점을 놓쳐 머리 줄의 시즌 최고점과 어긋난다(실측 4,549 대 4,461).
+    marks 가 없으면 points. R_MIN_POINTS 미만이면 None(침묵)."""
+    if len(points) < config.R_MIN_POINTS:
+        return None
+    vals = [e for _, e in points]
+    marks = marks or points
+    run_peak, dd, dd_day = marks[0][1], 0.0, None
+    for d, e in marks:
+        run_peak = max(run_peak, e)
+        if run_peak - e > dd:
+            dd, dd_day = run_peak - e, d
+    peak = max(e for _, e in marks)
+    days = (points[-1][0] - points[0][0]).days
+    steps = list(zip(vals, vals[1:]))
+    return ScoreReport(len(points), points[0][0], sum(vals) / len(vals), vals[-1], peak,
+                       next(d for d, e in marks if e == peak), dd, dd_day,
+                       (vals[-1] - vals[0]) / days if days else 0.0,
+                       sum(1 for a, b in steps if b > a), len(steps))
+
+
+def decisive_rate(rows: list[WinDivision], since: datetime) -> tuple[float, int] | None:
+    """무승부 뺀 승률(%)과 승+패 수 — R3 해설만(U1). 승·패가 없으면 None."""
+    w = sum(1 for r in rows if r.when >= since and r.outcome == "승")
+    lose = sum(1 for r in rows if r.when >= since and r.outcome == "패")
+    return (w / (w + lose) * 100, w + lose) if w + lose else None

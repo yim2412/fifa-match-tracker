@@ -4,6 +4,7 @@
 숫자와 상세 화면 숫자가 어긋나면 어느 쪽도 믿을 수 없게 된다. 그래서 카드
 제목 옆에 범위를 작게 적는다.
 
+    이번 시즌 구단(맨 위 · 55)          → 늘 이번 시즌(표시 구간·시즌 필터와 무관) — 칸은 창이 만든다(app_main.club_cells)
     승률                               → 시즌 범위 + 그 안의 최근 20경기와 차이
     자주 만난 상대                      → 시즌 범위(사용자 요청 — 100경기 안에선 대부분 1번씩이라
                                            '자주'가 안 드러난다). 상대 전적 페이지도 같은 범위(10-02)
@@ -26,11 +27,12 @@ from charts import (AreaTrendChart, DonutChart, GroupedBarChart, HBarList, Radar
                     ResultDots, RingGauge)
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
-from widgets import add_shadow, sample_note, sample_text, wdl_text, win_rate_note, win_rate_text
+from widgets import FitLabel, add_shadow, sample_note, sample_text, wdl_text, win_rate_note, win_rate_text
 
 RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
 DOTS_N = 20            # 최근 결과 점 개수
 TOP_OPPONENTS = 5
+HEAD_CELLS = 6         # 이번 시즌 구단 칸 수(55 H1~H6)
 MIN_GAUGE_GAMES = 10   # 승부처 게이지 — 이보다 적은 표본이면 숫자 대신 "—"
 SECTION_TAG = {core.SEC_FLOW: "흐름", core.SEC_WIN: "이길 때",
                core.SEC_LOSE: "질 때"}
@@ -51,6 +53,8 @@ class DashboardInput:
     # 흐름 분석 결과(analysis.narrate) — 창이 흐름 분석 메뉴와 같이 쓰려고 미리 계산해 넘긴다.
     # 없으면 여기서 계산한다(같은 범위 · scope_matches/details)
     story: list | None = None
+    # 55 머리 줄 — (제목, 큰 글자, 작은 글자, 툴팁) 여섯 칸. None 이면 계정 없음
+    club_cells: list | None = None
 
 
 class DashCard(QFrame):
@@ -139,6 +143,24 @@ class DashboardPage(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(14)
         self.cards: list[DashCard] = []
+
+        # ⓪ 이번 시즌 구단(55) — 여섯 칸 한 줄 · 작은 글자는 줄바꿈(1280 창에서 칸이 좁다)
+        self.head = self._card("이번 시즌 구단", ("승률 그래프", "점수·예측"))
+        cells = QHBoxLayout()
+        cells.setSpacing(12)
+        self.head_cells: list[tuple[QLabel, QLabel, QLabel]] = []
+        for _ in range(HEAD_CELLS):
+            col = QVBoxLayout()
+            col.setSpacing(2)
+            title, big, small = _label("", dim=True), FitLabel("—", base_pt=15, min_pt=9), _label("", dim=True, wrap=True)
+            big.setStyleSheet(f"color: {T.TEXT};")
+            for w in (title, big, small):
+                col.addWidget(w)
+            col.addStretch(1)
+            cells.addLayout(col, 1)
+            self.head_cells.append((title, big, small))
+        self.head.body.addLayout(cells)
+        outer.addWidget(self.head)
 
         # ② 지표 4개
         row = QHBoxLayout()
@@ -295,7 +317,9 @@ class DashboardPage(QWidget):
                   self.rivals):
             c.scope.setText(scope)
         self.trend.scope.setText(f"최근 {d.trend_days}일 · 하루 단위")
+        self.head.scope.setText("이번 시즌")
 
+        self._render_head(d)
         self._render_kpis(d)
         self._render_trend(d)
         self._render_radar(d)
@@ -304,6 +328,16 @@ class DashboardPage(QWidget):
         self._render_story(d)
         self._render_timeband(d)
         self._render_rivals(d)
+
+    def _render_head(self, d: DashboardInput) -> None:
+        cells = d.club_cells or []
+        for i, (title, big, small) in enumerate(self.head_cells):
+            t, b, sm, tip = cells[i] if i < len(cells) else ("", "—", "", "")
+            title.setText(t)
+            big.setText(b)
+            small.setText(sm)
+            for w in (title, big, small):
+                w.setToolTip(tip)
 
     def _render_kpis(self, d: DashboardInput) -> None:
         # 승률은 시즌 전체가 큰 숫자 — 표시 구간(1~100 등)은 스핀박스에 따라 바뀌는

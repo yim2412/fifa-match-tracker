@@ -28,7 +28,8 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, Di
                     AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
                     DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
-                    METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level)
+                    METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
+                    DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report)
 from ownerdist import OwnerDist, PosDist, load_dist as load_owner_dist, load_pos_dist
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
 from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
@@ -39,6 +40,7 @@ from rankmeta import (
     day_winrate, emblems_by_name, find_sn, formation_group, group_meta, latest_pair, my_day_rate, pair_text, rank_moves,
     ranked_nicknames, tier_means, value_bins, value_score, weekly, winrate_peers, winrate_to_elo,
     OppBand, OppRank, opp_rank_rows, opp_rank_table,
+    ClubHead, club_head, dd_band, fc_rank_range, rank_of,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -51,7 +53,7 @@ from trade_book import Ledger, ledger, price_targets
 from traitcollect import TraitSlot, TraitUsage, trait_usage
 from stats import (
     END_KINDS, MIN_BUCKET_SHOTS, PITCH_ROWS, PITCH_X, PITCH_Y, PITCH_Y_MAX, SquadValue, card_ovr, pitch_rows, squad_value, KeyPlayers, key_players, PASS_KINDS, PASS_MIN_TRIES, PERIODS, PLAYER_RATING_MIN_GAMES, PLAYER_TREND_MIN_SHOTS, RANKER_METRICS,
-    SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET, SUB_POSITION, SUPER_CHAMPION_DIVISION_ID,
+    SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET, SUB_POSITION, SUPER_CHAMPION_DIVISION_ID, CHAMPION_DIVISION_ID,
     Discipline, PositionOpponent, StreakAfter, after_streak_rates, aggregate_players, clutch_summary,
     daily_division, discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
@@ -84,6 +86,9 @@ __all__ = [
     # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
     "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
     "streak_baseline", "streak_key",
+    # habits·rankmeta — 55 구단 머리 줄·점수 리포트(H1~H6 · R1~R3)
+    "DaySummary", "FirstReach", "ScoreReport", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
+    "ClubHead", "club_head", "dd_band", "fc_rank_range", "rank_of",
     # habits — N18 공격 루트(2.7.1)
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)
@@ -110,7 +115,7 @@ __all__ = [
     # stats — 여러 경기 집계
     "END_KINDS", "MIN_BUCKET_SHOTS", "PITCH_ROWS", "PITCH_X", "PITCH_Y", "PITCH_Y_MAX", "SquadValue", "card_ovr", "pitch_rows", "squad_value", "KeyPlayers", "key_players", "PASS_KINDS", "PASS_MIN_TRIES", "PERIODS", "PLAYER_RATING_MIN_GAMES", "PLAYER_TREND_MIN_SHOTS",
     "RANKER_METRICS", "SHOT_GOAL", "SHOT_OFF_TARGET",
-    "SHOT_ON_TARGET", "SUB_POSITION", "SUPER_CHAMPION_DIVISION_ID", "Discipline", "PositionOpponent", "StreakAfter",
+    "SHOT_ON_TARGET", "SUB_POSITION", "SUPER_CHAMPION_DIVISION_ID", "CHAMPION_DIVISION_ID", "Discipline", "PositionOpponent", "StreakAfter",
     "after_streak_rates", "aggregate_players", "clutch_summary", "daily_division", "discipline_stats",
     "division_entries", "division_stats", "division_trend", "finishing_ranking", "formation_of", "formation_stats",
     "goal_minute_buckets", "is_champion_or_above",

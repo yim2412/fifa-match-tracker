@@ -933,6 +933,80 @@ def test_win_divisions_skips_unreadable():
     assert len(stats_.win_divisions(ds, "me")) == 1
 
 
+# ── 55 구단 머리 줄 · 점수 리포트 ────────────────────────────────────────────
+
+def _wd(day, hour, div, outcome):
+    return stats_.WinDivision(datetime(2026, 10, day, hour), div, outcome, False)
+
+
+def test_club_day_by_hand():
+    rows = [_wd(17, 23, 900, "승"), _wd(18, 0, 900, "승"), _wd(18, 9, 800, "승"), _wd(18, 10, 1000, "승"),
+            _wd(18, 11, 900, "무"), _wd(18, 23, 900, "패"), _wd(19, 0, 900, "승")]
+    d = habits.club_day(rows, date(2026, 10, 18))           # 이 PC 날짜 0~24시 — 17일 23시·19일 0시는 밖
+    assert (d.win, d.draw, d.lose, d.games) == (3, 1, 1, 5), d
+    assert d.fc == 15 + 20, d.fc                              # 1000 승리는 보상 없음
+    assert d.rate(False) == 60.0 and d.rate(True) == 75.0
+    assert habits.club_day(rows, date(2026, 10, 16)).games == 0
+
+
+def test_day_delta_uses_last_point_before():
+    pts = [(date(2026, 10, 10), 4000.0), (date(2026, 10, 13), 4050.0), (date(2026, 10, 14), 4020.0)]
+    assert habits.day_delta(pts, date(2026, 10, 14)) == -30.0
+    assert habits.day_delta(pts, date(2026, 10, 13)) == 50.0, "전날이 없으면 더 앞 점과"
+    assert habits.day_delta(pts, date(2026, 10, 12)) is None and habits.day_delta(pts, date(2026, 10, 10)) is None
+
+
+def test_first_reach_counts_through_the_hit_game():
+    start = datetime(2026, 10, 1)
+    rows = [_wd(1, 9, 1100, "승"), _wd(1, 10, 1000, "패"), _wd(2, 9, 900, "승"), _wd(3, 9, 800, "무"),
+            _wd(3, 10, 900, "승")]
+    ch = habits.first_reach(rows + [stats_.WinDivision(datetime(2026, 9, 30), 900, "승", False)], start, 900)
+    assert (ch.games, ch.at, ch.from_start, ch.gap) == (3, datetime(2026, 10, 2, 9), True, False), ch  # 시즌 전 경기는 안 센다
+    sc = habits.first_reach(list(reversed(rows)), start, 800)            # 순서 무관
+    assert sc.games == 4, sc
+    assert habits.first_reach(rows, start, 700) is None
+    late = habits.first_reach(rows, datetime(2026, 9, 1), 900)            # 저장이 시즌 시작보다 한 달 늦다
+    assert not late.from_start
+    edge = habits.first_reach(rows, datetime(2026, 10, 1, 9) - timedelta(days=config.N12_START_DAYS), 900)
+    assert edge.from_start, "정확히 N12_START_DAYS 뒤는 처음부터로 본다"
+
+
+def test_first_reach_gap_flag():
+    start = datetime(2026, 10, 1)
+    g = config.H5_GAP_DAYS
+    rows = [_wd(1, 9, 1100, "승"), stats_.WinDivision(datetime(2026, 10, 1, 9) + timedelta(days=g, seconds=1), 900, "승", False)]
+    assert habits.first_reach(rows, start, 900).gap
+    rows[1] = stats_.WinDivision(datetime(2026, 10, 1, 9) + timedelta(days=g), 900, "승", False)
+    assert not habits.first_reach(rows, start, 900).gap, "정확히 H5_GAP_DAYS 는 빈 것이 아니다"
+
+
+def test_score_report_by_hand():
+    d0 = date(2026, 10, 1)
+    vals = [4000, 4100, 4050, 4200, 3900, 3950, 4300]
+    pts = [(d0 + timedelta(days=i), float(v)) for i, v in enumerate(vals)]
+    r = habits.score_report(pts)
+    assert r.points == 7 and r.avg == sum(vals) / 7 and r.now == 4300
+    assert (r.peak, r.peak_day) == (4300, d0 + timedelta(days=6)), "시즌 최고점"
+    assert (r.max_dd, r.dd_day) == (300, d0 + timedelta(days=4)), "최고점(그때까지) 뒤 가장 깊은 하락 — 4200 → 3900"
+    assert r.day_avg == 300 / 6 and (r.up_days, r.steps) == (4, 6), r
+    assert habits.score_report(pts[:config.R_MIN_POINTS - 1]) is None, "R_MIN_POINTS 미만인데 냈다"
+    # 하루 안 최고점(그날 마지막 점이 아닌 기록)은 marks 로 — 머리 줄의 시즌 최고점과 같은 값이 나와야
+    marks = sorted(pts + [(d0 + timedelta(days=3), 4400.0)])
+    r = habits.score_report(pts, marks)
+    assert (r.peak, r.peak_day, r.max_dd, r.dd_day) == (4400, d0 + timedelta(days=3), 500, d0 + timedelta(days=4)), r
+    assert r.avg == sum(vals) / 7, "평균은 하루 한 점으로"
+    flat = [(d0 + timedelta(days=i), float(v)) for i, v in enumerate([4000, 4000, 4010, 4010, 4005, 4005, 4020])]
+    assert habits.score_report(flat).up_days == 2, "제자리인 날을 오른 날로 셌다"
+
+
+def test_decisive_rate_drops_draws():
+    rows = [_wd(1, 9, 900, "승"), _wd(2, 9, 900, "무"), _wd(3, 9, 900, "패"), _wd(4, 9, 900, "승"),
+            _wd(1, 8, 900, "패")]
+    rate, n = habits.decisive_rate(rows, datetime(2026, 10, 1, 9))
+    assert abs(rate - 200 / 3) < 1e-9 and n == 3, (rate, n)            # 10-01 08시 패는 시즌 전
+    assert habits.decisive_rate([_wd(1, 9, 900, "무")], datetime(2026, 10, 1)) is None
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

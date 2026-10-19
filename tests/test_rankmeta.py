@@ -4,9 +4,11 @@ pytest 없이 `python tests/test_rankmeta.py`. 구단주·닉네임·프로필 �
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import shutil
+import statistics
 import sys
 import tempfile
 import time
@@ -611,6 +613,97 @@ def test_opp_rank_rows_reads_only_my_account():
         assert M.opp_rank_rows(db.conn, "me") == {"a": (200, 6), "b": (None, None)}
     finally:
         db.conn.close()
+
+
+# ── 55 구단 머리 줄 · 낙폭 구간 ─────────────────────────────────────────────────
+
+def _club_db(db, *, start="2026-09-28", season_at=None, fc_started=None):
+    """시즌 시작 start · 사람별 처리 시작 season_at(기본 = 시즌 시작 하루 뒤) · FC 첫 쓰기 fc_started."""
+    season_at = season_at or "2026-09-29T09:00:00"
+    db.snap(T0, [person(1, 1, value=900), person(2, 2, value=500), person(7, 3, value=700), person(3, 4)],
+            cuts={200: 4400.0, 1000: 4100.0})
+    rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": start, "at": season_at, "via": "init"}))
+    if fc_started:
+        rc._set_state(db.conn, **{rc.FC_STARTED + season_at: fc_started})
+    with db.conn:
+        db.conn.executemany("INSERT INTO fc_season VALUES (?, ?, ?, ?, 0, 1, ?, 0)",
+                            [(season_at, sn, lo, hi, season_at) for sn, lo, hi in ((1, 300, 400), (2, 100, 900), (7, 50, 60))])
+        db.conn.executemany("INSERT INTO elo_season VALUES (?, ?, ?, ?, ?, 0, ?)",
+                            [(season_at, sn, pk, "2026-10-01T09:00:00", dd, season_at)
+                             for sn, pk, dd in ((1, 4500.0, 300.0), (2, 4450.0, 100.0), (7, 4520.0, 900.0))])
+        db.conn.executemany("INSERT INTO champ_first VALUES (?, ?, 0, ?, 0)",
+                            [(season_at, g, season_at) for g in (100, 300, 500)])
+
+
+def test_club_head_others_only_and_my_row_excluded():
+    def body(db):
+        _club_db(db, fc_started="2026-09-29T09:00:00")
+        h = M.club_head(db.conn, 7)
+        assert h.cut == 4400.0, h.cut
+        assert h.values == [500, 900, 1_000_000_000] and h.my_value == 700, (h.values, h.my_value)  # 내 줄(7) 뺌
+        assert h.fc_lo == [100, 300] and h.fc_hi == [400, 900] and h.me_in_fc, (h.fc_lo, h.fc_hi)
+        assert (h.peak, h.peak_at) == (4520.0, "2026-10-01T09:00:00") and h.peaks_dd == [(4450.0, 100.0), (4500.0, 300.0)]
+        assert (h.champ_n, h.champ_median) == (3, 300) and not h.champ_hidden and not h.fc_hidden, h
+        h2 = M.club_head(db.conn, None)               # 번호를 모르면 아무도 안 빼고 내 최고점도 없다
+        assert len(h2.values) == 4 and h2.peak is None and not h2.me_in_fc and len(h2.fc_lo) == 3
+    using(body)
+
+
+def test_club_head_hides_late_seasons():
+    """U7·U9 — 시즌 시작 N12_START_DAYS 넘어 시작한 기록은 남들 비교를 숨긴다. FC 는 fc_started 로 따로(3회차 [상]1)."""
+    def body(db):       # 업그레이드 경로: 2.11.1 이 시즌 시작부터 사람별 처리 · 2.12.1 의 FC 는 원본 14일부터
+        _club_db(db, fc_started="2026-10-10T09:00:00")
+        h = M.club_head(db.conn, 7)
+        assert not h.champ_hidden and h.fc_hidden, ("업그레이드 경로에서 FC 등수가 보인다", h.champ_hidden, h.fc_hidden)
+    using(body)
+
+    def body(db):       # 사람별 처리부터 늦게 시작
+        _club_db(db, season_at="2026-10-05T16:28:11", fc_started="2026-10-05T16:28:11")
+        h = M.club_head(db.conn, 7)
+        assert h.champ_hidden and h.fc_hidden
+    using(body)
+
+    def body(db):       # 시즌 시작을 모름(via fallback) — 엄밀한 쪽
+        _club_db(db, start=None, fc_started="2026-09-29T09:00:00")
+        h = M.club_head(db.conn, 7)
+        assert h.champ_hidden and h.fc_hidden
+    using(body)
+
+    def body(db):       # 경계 — 정확히 N12_START_DAYS 뒤는 보인다
+        late = (datetime(2026, 9, 28) + timedelta(days=config.N12_START_DAYS)).isoformat(timespec="seconds")
+        _club_db(db, season_at=late, fc_started=late)
+        h = M.club_head(db.conn, 7)
+        assert not h.champ_hidden and not h.fc_hidden, late
+    using(body)
+
+
+def test_club_head_without_person_processing_and_old_db():
+    def body(db):
+        db.snap(T0, [person(1, 1, value=900)], cuts={200: 4400.0})
+        h = M.club_head(db.conn, None)
+        assert h.cut == 4400.0 and h.values == [900] and h.fc_hidden and h.champ_hidden and h.fc_lo == []
+        with db.conn:
+            db.conn.execute("DROP TABLE fc_season")       # 옛 DB 흉내(사람별 처리 상태만 있고 55 표 없음)
+        rc._set_state(db.conn, person_season='{"seq": 1, "start": "2026-09-28", "at": "2026-09-29T09:00:00"}')
+        assert M.club_head(db.conn, None) is None
+    using(body)
+
+
+def test_dd_band_window_and_minimum():
+    pairs = sorted([(4000.0 + i, float(i)) for i in range(config.R2_BAND_MIN)] + [(4500.0, 999.0)])
+    got = M.dd_band(pairs, 4000.0 + config.R2_BAND)          # 창 ±R2_BAND 의 양끝 포함 · 4500 은 밖
+    assert got == (statistics.median(range(config.R2_BAND_MIN)), config.R2_BAND_MIN), got
+    assert M.dd_band(pairs[1:], 4000.0 + config.R2_BAND) is None, "R2_BAND_MIN 미만인데 냈다"
+    top = 4000.0 + config.R2_BAND_MIN - 1
+    assert M.dd_band(pairs, top - config.R2_BAND) is not None, "창 위 끝(최고점 + R2_BAND)을 뺐다"
+    assert M.dd_band(pairs, 4500.0 + config.R2_BAND + 1) is None and M.dd_band(pairs, None) is None
+
+
+def test_rank_of_and_fc_rank_range():
+    assert M.rank_of([1, 2, 3], 3) == 1 and M.rank_of([1, 2, 3], 2) == 2 and M.rank_of([1, 2, 3], 0) == 4
+    h = M.ClubHead(fc_lo=sorted([100, 300]), fc_hi=sorted([400, 900]))
+    assert M.fc_rank_range(h, 350) == (1, 3, 3), M.fc_rank_range(h, 350)     # 300 은 확실히 아래 · 400·900 은 위일 수 있다
+    assert M.fc_rank_range(h, 1000) == (1, 1, 3)
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

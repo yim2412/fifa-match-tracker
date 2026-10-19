@@ -78,7 +78,7 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox,
     PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
-    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, sample_note,
+    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, add_shadow, sample_note, short_bp,
     sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
@@ -1414,6 +1414,7 @@ class EloSeries:
     snap_season_start: str | None = None      # 시즌표가 없을 때 쓸 시작(마지막 season_seq 의 첫 스냅숏)
     tracked: bool = False
     track_names: tuple = ()                   # 지금 따라가는 닉네임들(버튼 툴팁)
+    club: object = None                       # 55 머리 줄·리포트의 남들 값(core.ClubHead) — rank.db 없음·못 읽음이면 None
 
 
 class EloLoader(QThread):
@@ -1429,7 +1430,7 @@ class EloLoader(QThread):
         self._cancel = True
 
     def run(self) -> None:
-        rows, tl, cuts, snap = [], [], {}, None
+        rows, tl, cuts, snap, club = [], [], {}, None, None
         try:
             conn = store.open_db(config.DB_PATH)
             try:
@@ -1447,6 +1448,9 @@ class EloLoader(QThread):
                 try:
                     cuts = rankcollect.cut_series(r)
                     snap = rankcollect.season_start_by_snapshots(r)
+                    # 55 — 내 줄을 남들 목록에서 빼려고 검색 기록의 프로필 번호(없으면 빼지 않고 내 최고점도 안 낸다)
+                    my_sn = next((x["profile_sn"] for x in reversed(rows) if x.get("profile_sn")), None)
+                    club = core.club_head(r, my_sn)
                 finally:
                     r.close()
         except Exception:
@@ -1455,7 +1459,7 @@ class EloLoader(QThread):
             return
         self.elo_ready.emit(self._ouid, EloSeries(
             self._req, rows, cuts, snap, any(t["ouid"] == self._ouid for t in tl),
-            tuple(t["nickname"] or t["ouid"][:8] for t in tl)))
+            tuple(t["nickname"] or t["ouid"][:8] for t in tl), club))
 
 
 class PredictWorker(QThread):
@@ -1569,6 +1573,151 @@ def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
         if cur is None or t >= cur["at"]:
             by_day[t.date()] = {**r, "at": t}
     return [by_day[d] for d in sorted(by_day)]
+
+
+# ── 55 구단 머리 줄(대시보드 맨 위 — H1~H6) · 점수 리포트(점수·예측 탭 — R1~R3) ─────────────────────────────
+# 남들 값은 EloLoader 가 rank.db 에서 읽어 EloSeries.club 에(J4) · 내 값은 여기서 · 늘 이번 시즌(대시보드 표시 구간과 무관).
+# 둘 중 늦게 온 신호(경기 받기 끝 · elo_ready)가 대시보드를 다시 그린다 — 그 전엔 그 칸만 "—".
+
+CLUB_LATE = "다음 시즌부터(이번 시즌은 수집이 늦게 시작)"
+
+
+def _peak_rank(rows: list[dict], at) -> int | None:
+    """그 시각(±1시간) 내 점수 기록의 순위 — elo_season 엔 순위 열이 없다(H4)."""
+    best = None
+    for r in rows:
+        try:
+            gap = abs((datetime.fromisoformat(r["taken_at"]) - at).total_seconds())
+        except (TypeError, ValueError):
+            continue
+        if gap <= 3600 and r.get("rank") and (best is None or gap < best[0]):
+            best = (gap, r["rank"])
+    return best[1] if best else None
+
+
+def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_start: datetime, today: date,
+               mixed: bool) -> list[tuple[str, str, str, str]]:
+    """머리 줄 여섯 칸 — (제목, 큰 글자,작은 글자, 툴팁). wins = 저장 경기(core.win_divisions) · rows = 내 elo_history ·
+    pts = 지금 시즌 하루 점(elo_daily_points) · club = core.ClubHead 또는 None(rank.db 없음·아직 안 읽음)."""
+    out = []
+    season = [w for w in wins if w.when >= season_start]
+    from_start = bool(season) and season[0].when <= season_start + timedelta(days=config.N12_START_DAYS)
+    saved_note = "" if from_start else " · 저장 시작 뒤부터"
+    no_club = "랭킹 수집을 켜면 보입니다" if not config.RANK_COLLECT else "다음 수집 뒤부터"
+    # H1 어제
+    yday = today - timedelta(days=1)
+    ds = core.club_day(wins, yday)
+    delta = core.day_delta([(p["at"].date(), p["elo"]) for p in pts], yday)
+    out.append(("어제", f"{delta:+,.0f}점" if delta is not None else "—",
+                f"{ds.win}승 {ds.draw}무 {ds.lose}패 · {ds.rate(mixed):.1f}% · {ds.fc:,} FC" if ds.games else "어제 경기 없음",
+                f"어제({yday:%m-%d} 이 PC 날짜 0~24시) — 점수 변화는 어제 마지막 기록 − 그 앞 마지막 기록"))
+    # H2 지금 200위까지
+    cut, me = (club.cut if club else None), (pts[-1] if pts else None)
+    if cut is None or me is None:
+        out.append((f"지금 {config.HEAD_TOP_CUT}위까지", "—", no_club if cut is None else "내 점수 기록이 없습니다", ""))
+    else:
+        gap = cut - me["elo"]
+        out.append((f"지금 {config.HEAD_TOP_CUT}위까지", f"+{gap:,.2f}점" if gap > 0 else f"{config.HEAD_TOP_CUT}위 안",
+                    f"{config.HEAD_TOP_CUT}위 {cut:,.2f} · 내 {me['elo']:,.2f}({me['at']:%m/%d})",
+                    "마지막 수집의 순위 점수 − 내 마지막 점수 기록(예측 탭의 시즌 말 컷과 다른 '지금' 값)"))
+    # H3 구단가치 등수
+    mine_tv = next(((r["team_value"], "검색 때") for r in reversed(rows) if r.get("team_value")), None)
+    if mine_tv is None and club is not None and club.my_value:
+        mine_tv = (club.my_value, "마지막 수집")
+    src_tip = "넥슨 데이터센터 구단가치 — 실제로 뛴 11명 시세 합으로 다시 센 값과는 다르다"
+    if club is None or not club.values:
+        out.append(("구단가치 등수", "—", no_club, src_tip))
+    elif club.my_value is None:
+        out.append(("구단가치 등수", "—", f"{config.RANK_TIERS[-1]:,}위 밖 — 등수 없음", src_tip))
+    elif mine_tv is None:
+        out.append(("구단가치 등수", "—", "내 구단가치 기록이 없습니다", src_tip))
+    else:
+        n = len(club.values) + 1
+        out.append(("구단가치 등수", f"{core.rank_of(club.values, mine_tv[0]):,}등",
+                    f"{n:,}명 중 · {short_bp(mine_tv[0])}({mine_tv[1]})", src_tip))
+    # H4 시즌 최고점 — 내 기록과 수집 기록 중 높은 쪽
+    best = None
+    for r in rows:
+        try:
+            t = datetime.fromisoformat(r["taken_at"])
+        except (TypeError, ValueError):
+            continue
+        if t >= season_start and r.get("elo") is not None and (best is None or r["elo"] > best[0]):
+            best = (r["elo"], t, r.get("rank"))
+    if club is not None and club.peak is not None and club.peak_at and (best is None or club.peak > best[0]):
+        at = datetime.fromisoformat(club.peak_at)
+        best = (club.peak, at, _peak_rank(rows, at))
+    if best is None:
+        out.append(("시즌 최고점", "—", "점수 기록이 없습니다", ""))
+    else:
+        out.append(("시즌 최고점", f"{best[0]:,.2f}", (f"#{best[2]:,} " if best[2] else "") + f"({best[1]:%m.%d})",
+                    "검색·따라가기 기록과 랭킹 수집(하루 한 번) 중 높은 쪽 — 하루 안 최고점은 놓칠 수 있다"))
+    # H5 챔스·슈챔 달성 판수
+    ch = core.first_reach(wins, season_start, core.CHAMPION_DIVISION_ID)
+    sc = core.first_reach(wins, season_start, core.SUPER_CHAMPION_DIVISION_ID)
+    big = " · ".join(f"{name} {f.games:,}판" for name, f in (("챔스", ch), ("슈챔", sc)) if f) or "챔스 아직"
+    small = []
+    if club is not None and ch is not None:
+        if club.champ_hidden or club.champ_median is None:
+            small.append("남들 비교는 " + CLUB_LATE if club.champ_hidden else "남들 기록 없음")
+        else:
+            d = ch.games - club.champ_median
+            small.append(f"남들 중앙 {club.champ_median:,.0f}판보다 {abs(d):,.0f}판 {'느리게' if d > 0 else '빠르게'}")
+    if ch is not None and (not ch.from_start or ch.gap):
+        small.append("저장 시작 뒤부터" if not ch.from_start else "중간에 빈 곳 있음")
+    out.append(("챔스·슈챔 달성", big, " · ".join(small) or "이번 시즌 첫 경기부터 센 판수",
+                "시즌 첫 경기부터 그 등급 첫 경기까지 친 판수(그 경기 포함) · 슈챔은 경기 기록의 등급으로만"
+                " · 남들 값은 첫 달성을 확인한 수집 시각의 누적이라 최대 하루치 많다"))
+    # H6 시즌 FC
+    wr = core.win_rewards(season)
+    if club is None:
+        small = "등수는 " + no_club
+    elif club.fc_hidden:
+        small = "등수는 " + CLUB_LATE
+    elif not club.me_in_fc:
+        small = f"{config.RANK_TIERS[-1]:,}위 밖 — 등수 없음"
+    else:
+        lo, hi, n = core.fc_rank_range(club, wr.fc)
+        small = (f"{lo:,}등" if lo == hi else f"{lo:,}~{hi:,}등") + f" / {n:,}명"
+    out.append(("시즌 FC", f"{wr.fc:,} FC", small + saved_note,
+                "내 FC 는 저장 경기의 등급으로 센 값 · 남들은 랭킹 화면 칸으로 추정한 범위(챔스 이상 승리 15~20)라 등수도 범위"))
+    return out
+
+
+def score_report_lines(pts: list[dict], rows: list[dict], wins: list, club, season_start: datetime) -> list[str]:
+    """점수·예측 탭 그래프 아래 리포트(R1~R3) — 하루 점이 R_MIN_POINTS 미만이면 빈 목록(침묵). 무승부 뺀 승률은
+    점수 기록과 같은 구간(첫 점부터)으로 — 시즌 전체 승률과 기록 뒤 점수 변화를 견주면 서로 다른 기간이다."""
+    since = pts[0]["at"] if pts else season_start
+    marks = []
+    for r in rows:
+        try:
+            t = datetime.fromisoformat(r["taken_at"])
+        except (TypeError, ValueError):
+            continue
+        if t >= since and r.get("elo") is not None:
+            marks.append((t.date(), r["elo"]))
+    rep = core.score_report([(p["at"].date(), p["elo"]) for p in pts], marks)
+    if rep is None:
+        return []
+    lines = [f"<b>시즌 평균 {rep.avg:,.0f}점</b> · 지금 {rep.now:,.0f}점({rep.now - rep.avg:+,.0f})"]
+    dd = f"최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d}) 뒤 최대 −{rep.max_dd:,.0f}점"
+    if rep.dd_day is not None:
+        dd += f"({rep.dd_day:%m.%d} 바닥)"
+    band = core.dd_band(club.peaks_dd, rep.peak) if club is not None else None
+    if band is not None:
+        dd += f" · 같은 구간(최고점 ±{config.R2_BAND}) {band[1]:,}명 중앙 −{band[0]:,.0f}점"
+    lines.append(f"<b>가장 깊었던 하락은?</b> {dd} — 하루 한 점이라 하루 안 낙폭은 작게 나옵니다")
+    up = f"오른 날 {rep.up_days / rep.steps * 100:.0f}%" if rep.steps else ""
+    dr = core.decisive_rate(wins, datetime.combine(rep.first_day, datetime.min.time()))
+    verdict = ""
+    if dr is not None:
+        verdict = (f" · 무승부 뺀 승률 {dr[0]:.1f}%({dr[1]:,}판) → "
+                   + ("오르는 구간" if dr[0] > 50 else "내리는 구간" if dr[0] < 50 else "제자리"))
+    lines.append(f"<b>점수가 오르는 구간인가?</b> 하루 평균 {rep.day_avg:+,.1f}점 · {up}{verdict}"
+                 " — 점수는 승·패로만 움직여 무승부 뺀 승률 50% 가 오르내림 경계입니다")
+    if rep.first_day > (season_start + timedelta(days=config.N12_START_DAYS)).date():
+        lines.append(f"기록 시작 {rep.first_day:%m-%d} 부터")
+    return lines
 
 
 def rank_tier_index(rank: int | None) -> int:
@@ -3488,6 +3637,11 @@ class MainWindow(QMainWindow):
         ev.addWidget(self.lb_elo_note)
         self.elo_chart = charts.AreaTrendChart()
         ev.addWidget(self.elo_chart)
+        # 55 점수 리포트(R1~R3) — 하루 점이 R_MIN_POINTS 미만이면 숨김
+        self.lb_elo_report = QLabel("")
+        self.lb_elo_report.setWordWrap(True)
+        self.lb_elo_report.setStyleSheet(f"color: {T.TEXT};")
+        ev.addWidget(self.lb_elo_report)
         # 시즌 말 순위 예측(1.3.1) — 숫자를 못 내면 원인 문구. 계산은 PredictWorker(작업 스레드)
         self.lb_elo_predict = QLabel("")
         self.lb_elo_predict.setWordWrap(True)
@@ -10327,6 +10481,7 @@ class MainWindow(QMainWindow):
             self._invalidate("elodist")   # 점수 분포의 검색 계정 선
             self._invalidate("wrelo")     # 승률→점수의 내 ELO(마지막 스냅숏에 없을 때)
             self._invalidate("poslevel")  # 자리별 수준의 라벨 조건(ⓗ — 가장 최근 순위)
+            self._invalidate("dashboard")  # 55 머리 줄 — 경기 받기 끝과 둘 중 늦게 온 쪽이 완성(J4)
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
@@ -10383,6 +10538,9 @@ class MainWindow(QMainWindow):
         self.lb_elo_note.setVisible(bool(self.lb_elo_note.text()))
         self._render_elo_track_button(data)
         self._render_predict()
+        report = score_report_lines(pts, data.rows if data else [], self._season_wins(), data.club if data else None, start)
+        self.lb_elo_report.setText("<br>".join(report))
+        self.lb_elo_report.setVisible(bool(report))
         if len(pts) < 2:
             self.elo_chart.set_data([])
             self.elo_chart.setVisible(False)
@@ -10494,6 +10652,26 @@ class MainWindow(QMainWindow):
             self._sc_cache_key = key
         return self._sc_cache
 
+    def _season_wins(self) -> list:
+        """저장된 전체의 경기마다 (일시, 등급, 결과) — 55 머리 줄·리포트용 캐시(_sc_entries 와 같은 키)."""
+        d = self._details_all
+        key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
+        if getattr(self, "_wins_cache_key", None) != key:
+            self._wins_cache = core.win_divisions(d, self._ouid) if self._ouid else []
+            self._wins_cache_key = key
+        return self._wins_cache
+
+    def _club_cells(self) -> list | None:
+        """대시보드 머리 줄(55 H1~H6) — 계정이 없으면 None. 늘 이번 시즌(표시 구간과 무관)."""
+        if not self._ouid:
+            return None
+        data = self._elo.get(self._ouid)
+        now = datetime.now()
+        start = elo_season_start(self._rank_seasons, data.snap_season_start if data else None, now)
+        return club_cells(wins=self._season_wins(), rows=data.rows if data else [], pts=self._elo_points(),
+                          club=data.club if data else None, season_start=start, today=now.date(),
+                          mixed=core.mixed_of_matches(self._matches_all))
+
     SC_NEXON_MATCH_S = 60  # 넥슨 최근 달성 시각이 목록의 진입과 이만큼 안이면 같은 것으로 본다
 
     def _render_sc_records(self) -> None:
@@ -10566,7 +10744,8 @@ class MainWindow(QMainWindow):
             trend_points=[(p.label, p.win_rate, p.games) for p in periods],
             trend_weights=[p.rated for p in periods],
             trend_days=self.sp_trend_days.value(),
-            story=self._narrate_scope()))
+            story=self._narrate_scope(),
+            club_cells=self._club_cells()))
 
     def _render_seasons(self) -> None:
         groups = self._season_groups()

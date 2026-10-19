@@ -976,3 +976,93 @@ def opp_rank_table(details: list, ouid: str, rows: dict) -> OppRank:
             b = out.by_gap[gap_band]
             setattr(b, field_, getattr(b, field_) + 1)
     return out
+
+
+# ── 55 구단 머리 줄(H2·H3·H4·H5·H6)·낙폭(R2) — 남들 값만(J4) ─────────────────────────────────────────
+# 내 값과의 등수는 화면이 bisect 로 낸다(EloLoader 엔 경기가 없다 · 1회차 [상]3). 내 줄(my_sn)은 남들 목록에서 뺀다 —
+# 스냅숏의 내 값과 검색 때 값이 달라 나를 두 번 센다(1회차 [중]). 시즌 판정은 사람별 처리(person_season) 하나.
+
+@dataclass
+class ClubHead:
+    season_start: str | None = None          # 사람별 처리가 아는 시즌 시작일(없으면 시즌표를 모름 → 비교는 숨김)
+    snap_at: str | None = None               # 마지막 스냅숏 데이터 시각
+    cut: float | None = None                 # 지금 HEAD_TOP_CUT 위 점수(H2)
+    values: list = field(default_factory=list)     # 마지막 스냅숏 구단가치(내 줄 뺌 · 오름차순 · H3)
+    my_value: int | None = None              # 마지막 스냅숏의 내 구단가치(검색 때 값이 없을 때)
+    fc_lo: list = field(default_factory=list)      # 시즌 FC 하한·상한(내 줄 뺌 · 오름차순 · H6)
+    fc_hi: list = field(default_factory=list)
+    fc_hidden: bool = True                   # U9 — 이 시즌 FC 수집이 늦게 시작됐다(또는 시즌 시작을 모름)
+    me_in_fc: bool = False                   # 이 시즌 1만 위 안에서 본 적이 있나
+    peak: float | None = None                # 내 elo_season 최고점·그때(H4 — 검색 기록과 둘 중 높은 쪽은 화면이)
+    peak_at: str | None = None
+    champ_median: float | None = None        # 남들 첫 챔스 판수 중앙값(H5)
+    champ_n: int = 0
+    champ_hidden: bool = True                # U7 — 이 시즌 사람별 처리가 늦게 시작됐다
+    peaks_dd: list = field(default_factory=list)   # (시즌 최고점, 최대 낙폭) 내 줄 뺌 · 최고점 오름차순(R2)
+
+
+def _late_start(start: str | None, first_at: str | None) -> bool:
+    """그 시즌 기록이 시즌 시작 N12_START_DAYS 넘어 시작됐나 — 시작을 모르면 참(3회차 [중] — 엄밀한 쪽)."""
+    if not start or not first_at:
+        return True
+    return datetime.fromisoformat(first_at) > datetime.fromisoformat(start) + timedelta(days=config.N12_START_DAYS)
+
+
+def club_head(conn: sqlite3.Connection, my_sn: int | None) -> ClubHead | None:
+    """머리 줄의 남들 값 — 읽기만. 사람별 처리가 한 번도 안 돈 DB(수집 꺼짐·동의 전)면 스냅숏 값만 채운다. 표 없음(옛 DB)은 None."""
+    try:
+        out = ClubHead()
+        st = rankcollect.get_state(conn)
+        ps = rankcollect._json_state(st, "person_season") or {}
+        season_at, out.season_start = ps.get("at"), ps.get("start")
+        snap, rows = _last_raw(conn)
+        if snap is not None:
+            out.snap_at = snap["dt"]
+            out.cut = rankcollect.cut_elo(conn, snap["id"]).get(config.HEAD_TOP_CUT)
+            mine = rows.pop(my_sn, None) if my_sn is not None else None
+            out.my_value = mine.value if mine is not None else None
+            out.values = sorted(r.value for r in rows.values() if r.value is not None)
+        if not season_at:
+            return out
+        fc = conn.execute("SELECT profile_sn, fc_lo, fc_hi FROM fc_season WHERE season_at = ?", (season_at,)).fetchall()
+        out.me_in_fc = any(r[0] == my_sn for r in fc)
+        out.fc_lo = sorted(r[1] for r in fc if r[0] != my_sn)
+        out.fc_hi = sorted(r[2] for r in fc if r[0] != my_sn)
+        out.fc_hidden = _late_start(out.season_start, st.get(rankcollect.FC_STARTED + season_at))
+        pairs = []
+        for sn, peak, peak_at, dd in conn.execute(
+                "SELECT profile_sn, peak, peak_at, max_dd FROM elo_season WHERE season_at = ?", (season_at,)):
+            if sn == my_sn:
+                out.peak, out.peak_at = peak, peak_at
+            elif peak is not None and dd is not None:
+                pairs.append((peak, dd))
+        out.peaks_dd = sorted(pairs)
+        games = [r[0] for r in conn.execute("SELECT games FROM champ_first WHERE season_at = ?", (season_at,))]
+        out.champ_n, out.champ_median = len(games), _median(games)
+        out.champ_hidden = _late_start(out.season_start, season_at)
+        return out
+    except sqlite3.Error:
+        return None
+
+
+def dd_band(peaks_dd: list, peak: float | None) -> tuple[float, int] | None:
+    """내 시즌 최고점 ± R2_BAND 안 사람들의 최대 낙폭 중앙값과 사람 수(R2) — R2_BAND_MIN 미만이면 None."""
+    if peak is None or not peaks_dd:
+        return None
+    keys = [p for p, _ in peaks_dd]
+    lo = bisect.bisect_left(keys, peak - config.R2_BAND)
+    hi = bisect.bisect_right(keys, peak + config.R2_BAND)
+    if hi - lo < config.R2_BAND_MIN:
+        return None
+    return statistics.median(dd for _, dd in peaks_dd[lo:hi]), hi - lo
+
+
+def rank_of(sorted_vals: list, mine: float) -> int:
+    """오름차순 목록에서 나보다 큰 사람 수 + 1(같으면 같은 등수)."""
+    return len(sorted_vals) - bisect.bisect_right(sorted_vals, mine) + 1
+
+
+def fc_rank_range(head: ClubHead, my_fc: int) -> tuple[int, int, int]:
+    """시즌 FC 등수 범위(U6) — (가장 좋은 등수, 가장 나쁜 등수, 분모). 남들 하한이 나보다 큰 사람은 확실히 위,
+    상한이 나보다 큰 사람은 위일 수 있다. 분모 = 이 시즌 본 사람 + 나."""
+    return rank_of(head.fc_lo, my_fc), rank_of(head.fc_hi, my_fc), len(head.fc_hi) + 1
