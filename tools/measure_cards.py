@@ -11,7 +11,7 @@
 | `--count` | 아무 때 | 매일 세기만(A: 22장 다 아는 경기 · B: 상대 11장 팀컬러를 다 아는 경기 절반별) — 모델은 안 맞춘다 |
 | `--a` | D0 + 21 · 28 · 35(그날 또는 그 뒤 첫 실행) | `--selftest` 를 그날 실제 n·Δ 로 먼저 → 통과해야 판정 |
 | `--b` · `--c` | D0 + 35 한 번 | B 판정(앞 절반 → 뒤 절반) · C 세기 |
-| `--selftest` | 아무 때(관문 검토 · 측정일) | 답을 아는 가짜 자료로 A 판정이 미달·통과를 맞게 내는지 |
+| `--selftest` | 아무 때(관문 검토 · 측정일) | 답을 아는 가짜 자료로 A 판정이 미달·통과를 맞게 내는지 — 끝 코드 0 통과 · 1 고정 시험 미달(규칙 버그 — 측정일이면 멈춤) · 2 검정력만 미달(측정일이면 그날 "재료 부족" 으로 기록) |
 | `--status` | 아무 때 | D0 · 오늘이 며칠째 · 다음 할 일 · 결과 파일 |
 
 거부하는 것: 앱 토글 "카드 정보 자동 채우기" 가 켜져 있으면(같은 IP 하루 1,200 — `.env` 를 디스크에서 읽어 본다) ·
@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import math
 import os
 import sqlite3
 import sys
@@ -53,8 +52,8 @@ import seasons as seasons_mod  # noqa: E402
 import store  # noqa: E402
 import teamcolor  # noqa: E402
 
-# ── 판정 규칙(ROADMAP 51 측정 절 — 기준 커밋 8판) ──────────────────────────────
-RULE_COMMIT = "cd3d280"
+# ── 판정 규칙(ROADMAP 51 측정 절 — 기준 커밋 9판) ──────────────────────────────
+RULE_COMMIT = "efadb04"
 MATCH_TYPE = config.DEFAULT_MATCH_TYPE   # 감독모드 52
 W_A_DAYS = 60                # A 창 [D0 − 60일, D0)
 A_DAYS = (21, 28, 35)        # 측정 A 날(재료 부족이면 다음 날로 — 최대 3번)
@@ -67,20 +66,19 @@ BOOT = 1000
 REL_GAIN = 0.01              # M1 이 M0 보다 검증 로그손실이 상대 1% 이상 낮아야
 ECE_BINS = 5
 ECE_SIMS = 1000
-ECE_Q = 0.95
-Z95 = 1.96
+CALIB_Q = 0.975             # ③ ECE·평균 차 각각 — 둘 합쳐 맞는 모델 미달 약 5%
 RECENT_DAYS = 14             # ④ 검증 마지막 14일
 RECENT_FLOOR = -0.01         # ④ 그 구간 상대 차 95% 구간 하한
 SELF_REL = 0.02              # selftest 효과 크기 — 검증 상대 개선 2%
 SELF_SEEDS = 200
 SELF_PASS = 0.90
-SELF_N_DEFAULT = 3000        # 그날 자료가 없을 때(관문 검토) 가짜 n — 그날 실제 n 은 --a 가 넘긴다
+SELF_N_DEFAULT = 9000        # 그날 자료가 없을 때(관문 검토) 가짜 n — 이 PC W_A 상한(9,289) 근처 · 그날 실제 n 은 --a 가 넘긴다
 SELF_REAL_MIN = 100          # 실제 Δ 가 이보다 적으면 가짜 Δ 로
 B_AGREE = 0.90               # 주 팀컬러 이름 일치율
 B_MIN_HALF = 300             # 절반마다 경기
 C_MIN = 30                   # 칸마다 경기(화면 침묵 규칙과 같은 값)
 C_WINDOW_DAYS = 30           # C 의 카드 집합 = 계정의 [D0 − 30, D0) 경기 양쪽 선발
-N21_BINS = ((-99, -3), (-2, 2), (3, 99))   # 키 차(내 − 상대, cm 정수) ≤ −3 · −2~+2 · ≥ +3
+SELF_OK, SELF_FIXED_FAIL, SELF_POWER_FAIL = 0, 1, 2   # selftest 끝 코드(9판 — P6)
 C3_OVR_BIN, C3_H_BIN = 2, 5
 TC_NO_STEPS = (90000000, 91000000)   # 단일팀·단일국가 — 목록·상세가 없다(조각 ① 실측)
 
@@ -385,16 +383,32 @@ def ece_of(p: np.ndarray, y: np.ndarray, order: np.ndarray, bins: int = ECE_BINS
     return out
 
 
-def calib(p: np.ndarray, y: np.ndarray, rng) -> dict:
-    """③ — ECE ≤ 같은 n·같은 예측값의 완벽 보정 모의 ECE 95% 분위 · |평균 차| ≤ 1.96 × 표준오차."""
+def fisher_cov(a: float, b: float, x: np.ndarray) -> np.ndarray:
+    """학습 쪽 (a, b) 의 근사 공분산 — 피셔 정보의 역행렬."""
+    p = predict(a, b, x)
+    w = p * (1 - p)
+    h = np.array([[w.sum(), (w * x).sum()], [(w * x).sum(), (w * x * x).sum()]])
+    return np.linalg.inv(h + np.eye(2) * 1e-9)
+
+
+def calib(p: np.ndarray, y: np.ndarray, rng, *, x=None, theta=None, cov=None) -> dict:
+    """③ — 모델이 맞다면 나올 결과를 ECE_SIMS 번 만들어 ECE·|평균 차| 를 각자 CALIB_Q 분위와 견준다(예측값 p 는 고정).
+
+    cov 를 주면 결과를 만들 때 계수를 N(theta, cov) 에서 뽑는다(9판 — P2: 학습 쪽 추정 오차까지 품는다 · 없으면 8판처럼
+    맞는 모델도 14~17% 미달). cov 가 없으면 계수를 아는 것으로 보고 p 에서 바로 뽑는다(selftest 고정 시험)."""
     order = np.argsort(p, kind="stable")
     ece = float(ece_of(p, y, order)[0])
-    sims = rng.random((ECE_SIMS, len(p))) < p
-    ece_q = float(np.quantile(ece_of(p, sims.astype(float), order), ECE_Q))
+    if cov is None:
+        ps = np.broadcast_to(p, (ECE_SIMS, len(p)))
+    else:
+        th = rng.multivariate_normal(theta, cov, ECE_SIMS)
+        ps = 1 / (1 + np.exp(-(th[:, :1] + th[:, 1:] * np.asarray(x, dtype=float)[None, :])))
+    sims = (rng.random(ps.shape) < ps).astype(float)
+    ece_q = float(np.quantile(ece_of(p, sims, order), CALIB_Q))
     mean_diff = float(abs(y.mean() - p.mean()))
-    se = float(math.sqrt(float(np.sum(p * (1 - p)))) / len(p))
-    return {"ece": ece, "ece_q": ece_q, "mean_diff": mean_diff, "se": se,
-            "pass": ece <= ece_q and mean_diff <= Z95 * se}
+    md_q = float(np.quantile(np.abs(sims.mean(1) - p.mean()), CALIB_Q))
+    return {"ece": ece, "ece_q": ece_q, "mean_diff": mean_diff, "mean_diff_q": md_q,
+            "pass": ece <= ece_q and mean_diff <= md_q}
 
 
 def judge_a(when: list[str], delta, y, *, seed: int = SEED, boot: int = BOOT) -> dict:
@@ -417,12 +431,12 @@ def judge_a(when: list[str], delta, y, *, seed: int = SEED, boot: int = BOOT) ->
     l0, l1 = _logloss(np.full(len(yt), p0), yt), _logloss(p1, yt)
     rel, lo, hi = _rel_ci(l0, l1, rng, boot)
     out.update(a=a, b=b, p0=p0, rel=rel, ci=[lo, hi])
-    out["decidable"] = lo >= REL_GAIN or hi < REL_GAIN
+    out["decidable"] = lo > 0 or hi < 0   # 9판 — P1: 1% 는 ② 의 점추정에만
     if not out["decidable"]:
-        out.update(verdict="재료 부족", why=f"상대 차 95% 구간 [{lo:+.2%}, {hi:+.2%}] 이 1% 를 품는다")
+        out.update(verdict="재료 부족", why=f"상대 차 95% 구간 [{lo:+.2%}, {hi:+.2%}] 이 0 을 품는다")
         return out
     out["pass2"] = rel >= REL_GAIN and lo > 0
-    out["calib"] = calib(p1, yt, rng)
+    out["calib"] = calib(p1, yt, rng, x=xt, theta=[a, b], cov=fisher_cov(a, b, x[:k]))
     last = datetime.fromisoformat(ww[-1][:19]) - timedelta(days=RECENT_DAYS)
     rec = np.array([datetime.fromisoformat(w[:19]) >= last for w in ww[k:]])
     if rec.sum() >= 2:
@@ -517,10 +531,15 @@ def selftest(delta=None, *, n: int | None = None, seeds: int = SELF_SEEDS, log=p
         passed += r["verdict"] == "통과"
     share = passed / seeds
     vs = " · ".join(f"{k} {v}" for k, v in sorted(verdicts.items()))
-    check(share >= SELF_PASS, f"효과 2%(b = {b:.3f}) · 완벽 보정 · n = {n:,} · {seeds}시드 → 통과 {share:.0%} ≥ {SELF_PASS:.0%} ({vs} · {time.monotonic() - t0:.0f}초)")
+    fixed_bad = bad
+    check(share >= SELF_PASS, f"검정력 — 효과 2%(b = {b:.3f}) · 완벽 보정 · n = {n:,} · {seeds}시드 → 통과 {share:.0%} ≥ {SELF_PASS:.0%} ({vs} · {time.monotonic() - t0:.0f}초)")
+    if fixed_bad:
+        log("→ 고정 시험 미달 = 규칙 버그: 측정 전에 측정 절을 고치고 새 커밋(RULE_COMMIT)")
+        return SELF_FIXED_FAIL
     if bad:
-        log("→ 규칙이 이 n 에서 답을 못 맞힌다: 측정 전에 측정 절을 고치고 새 커밋(RULE_COMMIT)")
-    return 1 if bad else 0
+        log("→ 검정력만 미달 = 이 n 이 모자란다: 측정일이면 그날은 \"재료 부족(검정력)\"")
+        return SELF_POWER_FAIL
+    return SELF_OK
 
 
 # ── B 얼리기 · 판정 ──────────────────────────────────────────────────────────
@@ -642,17 +661,13 @@ def _greedy(pool: dict[int, set[int]], need: dict[int, list[int]]) -> list[tuple
 
 
 def active_r1(cards: list[tuple[list[int], list[int]]], need) -> list[tuple[int, int, int]]:
-    """R1 — 카드 하나는 (종류와 무관하게) 팀컬러 하나에만."""
+    """R1 — 카드 하나는 (종류와 무관하게) 팀컬러 하나에만. 강화 팀컬러는 넣지 않는다(9판 — P4)."""
     return _greedy({i: set(c) | set(r) for i, (c, r) in enumerate(cards)}, need)
 
 
-def active_r2(cards: list[tuple[list[int], list[int]]], need) -> list[tuple[int, int, int]]:
-    """R2 — 종류(소속 · 관계)마다 하나."""
-    return (_greedy({i: set(c) for i, (c, _r) in enumerate(cards)}, need)
-            + _greedy({i: set(r) for i, (_c, r) in enumerate(cards)}, need))
-
-
-RULES = {"R1": active_r1, "R2": active_r2}
+# 9판 — P3: 8판의 R2(종류마다 하나)는 뺐다 — 탐욕 배정의 첫 선택이 R1 과 늘 같아 주 팀컬러만 보는 B 로는 못 가른다.
+# 앞 절반 미달 뒤 고친 규칙은 여기에 넣고 커밋한 뒤 --b-retry <이름>.
+RULES = {"R1": active_r1}
 
 
 def main_tc(active: list[tuple[int, int, int]]) -> tuple[int, int, int] | None:
@@ -712,11 +727,10 @@ def judge_b(frozen: list[dict], ext, need, names, *, retry_rule: str | None = No
         ok_n = rb["n"] >= B_MIN_HALF
         out["verdict"] = "재료 부족" if not ok_n else ("통과" if rb["rate"] >= B_AGREE else "미달")
         return out
-    fr = {r: b_eval(front, ext, need, names, r) for r in RULES}
+    pick = "R1"
+    fr = {pick: b_eval(front, ext, need, names, pick)}
     out["front"] = fr
-    pick = max(RULES, key=lambda r: (fr[r]["rate"] or 0, r == "R1"))
     out["pick"] = pick
-    out["r1_r2_same_main"] = _same_main(front, ext, need)
     if fr[pick]["n"] < B_MIN_HALF:
         out["verdict"] = "재료 부족"
         return out
@@ -729,31 +743,15 @@ def judge_b(frozen: list[dict], ext, need, names, *, retry_rule: str | None = No
     return out
 
 
-def _same_main(frozen, ext, need) -> float | None:
-    """보고만 — R1·R2 가 같은 주 팀컬러를 내는 비율. 탐욕 배정의 첫 선택은 두 규칙이 같아 늘 1 이 나온다(관문 검토 거리)."""
-    same = n = 0
-    for fr in frozen:
-        cards = [_tc_lists(ext.get(int(s))) for s, _g, _po in fr.get("opp") or []]
-        if len(cards) != 11 or any(c is None for c in cards):
-            continue
-        a, b = main_tc(active_r1(cards, need)), main_tc(active_r2(cards, need))
-        n += 1
-        same += (a and a[0]) == (b and b[0])
-    return same / n if n else None
-
-
 # ── C 세기 ──────────────────────────────────────────────────────────────────
 
-def _bin_n21(diff: int) -> int | None:
-    for i, (lo, hi) in enumerate(N21_BINS):
-        if lo <= diff <= hi:
-            return i
-    return None
-
-
 def count_c(fifa, d0: date) -> list[dict]:
-    """계정마다 — 그 계정의 [D0 − 30, D0) 경기 양쪽 선발에 든 카드만 아는 것으로 보고 N21·C3 칸을 센다(이름 없이 경기 수 순)."""
+    """계정마다 — 그 계정의 [D0 − 30, D0) 경기 양쪽 선발에 든 카드만 아는 것으로 보고 N21·C3 칸을 센다(이름 없이 경기 수 순).
+
+    N21(9판 — P5): 승부차기 경기의 상대 GK 값(키 · 실효 OVR · 급여)을 그 계정 경기들의 중앙값으로 둘로 · 키의 두 칸 모두
+    C_MIN 이면 통과. 내 GK 는 안 본다."""
     ext = extras_of(fifa)
+    salary = {r[0]: r[1] for r in fifa.execute("SELECT spid, salary FROM card_info WHERE salary IS NOT NULL")}
     lo, hi = (d0 - timedelta(days=C_WINDOW_DAYS)).isoformat(), d0.isoformat()
     out = []
     for ouid in account_ouids(fifa):
@@ -762,8 +760,7 @@ def count_c(fifa, d0: date) -> list[dict]:
             for s in sides(d):
                 known.update(p.get("spId") for p in cardstats.starters(s))
         allm = account_matches(fifa, ouid=ouid)
-        n21 = [0, 0, 0]
-        n21_opp_h, n21_opp_ovr = [], []
+        opp_gk: dict[str, list[int]] = {"height": [], "ovr": [], "salary": []}
         cells: Counter = Counter()
         for _mid, _at, d in allm:
             ss = sides(d)
@@ -772,19 +769,17 @@ def count_c(fifa, d0: date) -> list[dict]:
             if me is None or op is None:
                 continue
             if any(_shootout(s) for s in ss):
-                gk = []
-                for s in (me, op):
-                    g = next((p for p in cardstats.starters(s) if p.get("spPosition") == 0), None)
-                    ex = ext.get(g.get("spId")) if g and g.get("spId") in known else None
-                    gk.append((ex, g))
-                if all(ex and isinstance(ex.get("height"), int) for ex, _g in gk):
-                    b = _bin_n21(gk[0][0]["height"] - gk[1][0]["height"])
-                    if b is not None:
-                        n21[b] += 1
-                    n21_opp_h.append(gk[1][0]["height"])
-                    v, _w = cardstats.effective_ovr(0, gk[1][1].get("spGrade"), gk[1][0])
+                g = next((p for p in cardstats.starters(op) if p.get("spPosition") == 0), None)
+                sp = g.get("spId") if g else None
+                if sp in known:
+                    ex = ext.get(sp)
+                    if ex and isinstance(ex.get("height"), int):
+                        opp_gk["height"].append(ex["height"])
+                    v, _w = cardstats.effective_ovr(0, g.get("spGrade"), ex)
                     if v is not None:
-                        n21_opp_ovr.append(v)
+                        opp_gk["ovr"].append(v)
+                    if isinstance(salary.get(sp), int):
+                        opp_gk["salary"].append(salary[sp])
             here = set()
             for p in cardstats.starters(me):
                 ex = ext.get(p.get("spId")) if p.get("spId") in known else None
@@ -799,19 +794,20 @@ def count_c(fifa, d0: date) -> list[dict]:
             if k >= C_MIN:
                 by_ovr.setdefault(ob, []).append(k)
         c3_bins = sorted(ob * C3_OVR_BIN for ob, ks in by_ovr.items() if len(ks) >= 2)
-        out.append({"matches": len(allm), "known_cards": len(known), "n21": n21, "n21_pass": min(n21) >= C_MIN,
-                    "n21_median_split": {"height": _median_split(n21_opp_h), "ovr": _median_split(n21_opp_ovr)},
+        split = {k: _median_split(v) for k, v in opp_gk.items()}
+        out.append({"matches": len(allm), "known_cards": len(known), "n21": split, "n21_pass": split["height"]["pass"],
                     "c3_ovr_bins": c3_bins, "c3_pass": bool(c3_bins)})
     out.sort(key=lambda r: -r["matches"])
     return out
 
 
-def _median_split(vals: list[int]) -> list[int] | None:
-    """보고만(10-19 사용자 — 관문 검토 거리): 상대 GK 값을 중앙값으로 둘로 나눴을 때 (중앙값 이하, 초과) 경기 수."""
+def _median_split(vals: list[int]) -> dict:
+    """상대 GK 값을 중앙값으로 둘로 → {median, bins: [이하, 초과] 경기 수, pass: 두 칸 모두 C_MIN}."""
     if not vals:
-        return None
+        return {"median": None, "bins": [0, 0], "pass": False}
     m = float(np.median(vals))
-    return [sum(v <= m for v in vals), sum(v > m for v in vals)]
+    bins = [sum(v <= m for v in vals), sum(v > m for v in vals)]
+    return {"median": m, "bins": bins, "pass": min(bins) >= C_MIN}
 
 
 # ── 백필 ────────────────────────────────────────────────────────────────────
@@ -925,10 +921,14 @@ def cmd_a(fifa_path, d: Path, today: date, log=print) -> int:
         fconn.close()
     log(f"W_A 경기 {rows.total:,} · 22장 다 아는 경기 {len(rows.y):,} · 뺀 것 {dict(rows.dropped)}")
     log("── selftest(그날 n·Δ) ──")
-    if selftest(rows.delta, log=log):
-        log("[FAIL] selftest 미달 — 판정하지 않는다")
+    st = selftest(rows.delta, log=log)
+    if st == SELF_FIXED_FAIL:
+        log("[FAIL] selftest 고정 시험 미달(규칙 버그) — 판정하지 않고 기록도 안 한다")
         return 1
-    r = judge_a(rows.when, rows.delta, rows.y)
+    if st == SELF_POWER_FAIL:   # 9판 — P6: 기록하고 다음 측정일로(기록 없이 멈추면 다음 날 다시 돌 수 있다)
+        r = {"verdict": "재료 부족", "why": "selftest 검정력 미달", "n": len(rows.y)}
+    else:
+        r = judge_a(rows.when, rows.delta, rows.y)
     r.update(day_no=k, date=today.isoformat(), rule_commit=RULE_COMMIT,
              dropped=dict(rows.dropped), dropped_season={f"{a}:{b}": v for (a, b), v in rows.dropped_season.items()},
              lag_days=[float(x) for x in np.percentile(rows.lag_days, [0, 50, 90, 100])] if rows.lag_days else None,
@@ -980,7 +980,7 @@ def cmd_b(fifa_path, d: Path, today: date, retry: str | None = None, log=print) 
     for half, evals in (("front", list((r.get("front") or {}).values())), ("back", [r["back"]] if r.get("back") else [])):
         for e in evals:
             log(f"{half} {e['rule']}: 일치 {e['agree']}/{e['n']} ({_pct(e['rate'])}) · 동률 {e['ties']} · 뺀 것 {e['dropped']}")
-    log(f"판정: {r['verdict']} · R1·R2 주 팀컬러 같음 {_pct(r.get('r1_r2_same_main'))}")
+    log(f"판정: {r['verdict']}")
     return 0
 
 
@@ -1000,11 +1000,12 @@ def cmd_c(fifa_path, d: Path, today: date, log=print) -> int:
     finally:
         fconn.close()
     save_json(p["c"], {"day_no": k, "date": today.isoformat(), "rule_commit": RULE_COMMIT, "accounts": rows,
-                       "n21": any(r["n21_pass"] for r in rows), "c3": any(r["c3_pass"] for r in rows)})
+                       "n21": any(r["n21_pass"] for r in rows),
+                       "n21_lines": {v: any(r["n21"][v]["pass"] for r in rows) for v in ("height", "ovr", "salary")},
+                       "c3": any(r["c3_pass"] for r in rows)})
     for i, r in enumerate(rows, 1):
-        log(f"계정 {i}: 경기 {r['matches']:,} · N21 칸 {r['n21']}{' ✔' if r['n21_pass'] else ''}"
-            f" · 중앙값 둘로(키 {r['n21_median_split']['height']} · OVR {r['n21_median_split']['ovr']})"
-            f" · C3 OVR 칸 {r['c3_ovr_bins'] or '없음'}")
+        sp = " · ".join(f"{v} 중앙 {s['median']} {s['bins']}{' ✔' if s['pass'] else ''}" for v, s in r["n21"].items())
+        log(f"계정 {i}: 경기 {r['matches']:,} · N21 상대 GK({sp}) · C3 OVR 칸 {r['c3_ovr_bins'] or '없음'}")
     return 0
 
 

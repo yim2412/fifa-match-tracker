@@ -1,7 +1,7 @@
 """51단계 측정 도구(tools/measure_cards.py) 테스트 — 지어낸 fifa.db·rank.db·가짜 백필, 네트워크 없이.
 
 pytest 없이 `python tests/test_measure_cards.py`. 닉네임·ouid·경기 id·카드 번호는 전부 지어낸 값이다.
-근거는 ROADMAP "## 51단계 › 측정으로 먼저 정할 것"(8판) — 일정 · 고정 수요 · 방향 · 뺀 이유 · B 짝짓기(가장 가까운 · 24시간 · 같은 시즌 ·
+근거는 ROADMAP "## 51단계 › 측정으로 먼저 정할 것"(9판) — 일정 · 고정 수요 · 방향 · 뺀 이유 · B 짝짓기(가장 가까운 · 24시간 · 같은 시즌 ·
 한 번만 · 닉네임 안 남김) · 절반 · C 의 카드 집합 · 토글 켜짐 거부.
 """
 from __future__ import annotations
@@ -168,25 +168,47 @@ def test_a_rows_delta_and_reasons():
 # ── A 판정 ───────────────────────────────────────────────────────────────────
 
 def test_judge_a_null_and_strong():
-    rng = np.random.default_rng(6)   # 5 는 ③ 오경보(맞는 모델도 약 17% 미달 — 관문 검토 거리)에 걸린다
+    rng = np.random.default_rng(6)
     n = 3000
     x = rng.normal(0, 4, n)
     when = M._fake_when(n)
     r = M.judge_a(when, x, (rng.random(n) < 0.5).astype(int))
     assert r["verdict"] != "통과" and not r.get("pass2"), r["verdict"]
-    r = M.judge_a(when, x, (rng.random(n) < M.predict(0, 0.5, x)).astype(int))
+    seen = []
+    real = M.calib
+    M.calib = lambda *a, **k: seen.append(k) or real(*a, **k)
+    try:
+        r = M.judge_a(when, x, (rng.random(n) < M.predict(0, 0.5, x)).astype(int))
+    finally:
+        M.calib = real
     assert r["verdict"] == "통과", r
     assert 0.3 < r["b"] < 0.7, r["b"]
+    assert seen and seen[0].get("cov") is not None and seen[0]["cov"].shape == (2, 2), "③ 에 학습 쪽 오차를 안 넘겼다(9판 — P2)"
 
 
 def test_judge_a_undecidable_is_material_short():
-    """구간이 1% 를 품으면 ②~④ 를 안 본다 — 효과 ≈ 1% · 작은 n."""
+    """구간이 0 을 품으면 ②~④ 를 안 본다 — 효과 ≈ 1% · 작은 n."""
     rng = np.random.default_rng(9)
     n = 600
     x = rng.normal(0, 4, n)
     b = M.b_for_gain(x, 0.01)
     r = M.judge_a(M._fake_when(n), x, (rng.random(n) < M.predict(0, b, x)).astype(int))
-    assert r["verdict"] == "재료 부족" and "calib" not in r, r
+    assert r["verdict"] == "재료 부족" and "calib" not in r and r["ci"][0] <= 0 <= r["ci"][1], r
+
+
+def test_judge_a_decidable_above_zero_below_one_pct():
+    """9판 — P1: 구간 하한이 0 과 1% 사이여도 결정한다(8판은 여기서 "재료 부족" — 효과 2% 에서도 대부분 미달이 됐다)."""
+    n = 9000
+    x = np.random.default_rng(7).normal(0, 4, n)
+    p = M.predict(0.0, M.b_for_gain(x, 0.02), x)
+    when = M._fake_when(n)
+    hits = 0
+    for s in range(12):
+        r = M.judge_a(when, x, (np.random.default_rng(1000 + s).random(n) < p).astype(int), seed=M.SEED + s, boot=300)
+        if 0 < r["ci"][0] < M.REL_GAIN:
+            hits += 1
+            assert r["decidable"] and r["verdict"] != "재료 부족", r
+    assert hits >= 3, f"0 < 하한 < 1% 인 경우가 {hits} 번뿐 — 이 테스트가 재지 않는다"
 
 
 def test_calib_catches_shift():
@@ -195,6 +217,24 @@ def test_calib_catches_shift():
     y = (rng.random(4000) < p).astype(float)
     assert M.calib(p, y, np.random.default_rng(1))["pass"]
     assert not M.calib(np.clip(p + 0.08, 0, 1), y, np.random.default_rng(1))["pass"]
+
+
+def test_calib_counts_training_error():
+    """9판 — P2: 맞는 모델을 학습 쪽에서 맞춰 검증 쪽에 쓰면, 학습 쪽 오차를 안 품은 ③ 은 5% 를 훌쩍 넘게 떨어뜨린다."""
+    n_tr, n_te, b_true = 2100, 900, 0.15
+    plain = with_cov = 0
+    runs = 150
+    for s in range(runs):
+        rng = np.random.default_rng(500 + s)
+        x = rng.normal(0, 4, n_tr + n_te)
+        y = (rng.random(len(x)) < M.predict(0.0, b_true, x)).astype(float)
+        a, b = M.fit_logit(x[:n_tr], y[:n_tr])
+        p1 = M.predict(a, b, x[n_tr:])
+        plain += not M.calib(p1, y[n_tr:], np.random.default_rng(s))["pass"]
+        with_cov += not M.calib(p1, y[n_tr:], np.random.default_rng(s), x=x[n_tr:], theta=[a, b],
+                                cov=M.fisher_cov(a, b, x[:n_tr]))["pass"]
+    assert plain / runs >= 0.08, f"학습 오차를 빼도 미달 {plain / runs:.0%} — 이 테스트가 보호를 재지 않는다"
+    assert with_cov / runs <= 0.07, f"학습 오차를 품고도 맞는 모델 미달 {with_cov / runs:.0%}"
 
 
 def test_b_for_gain():
@@ -244,14 +284,14 @@ def test_b_freeze_pairing():
         rk.close()
 
 
-def test_rules_r1_r2():
+def test_rule_r1_only():
     need = {1: [5, 8], 2: [3, 6], 3: [3]}
     # 8장이 1(소속) · 그중 5장이 2(관계)도 · 3장이 3(관계)
     cs = [([1], [2]) for _ in range(5)] + [([1], [3]) for _ in range(3)] + [([], []) for _ in range(3)]
-    r1, r2 = M.active_r1(cs, need), M.active_r2(cs, need)
+    r1 = M.active_r1(cs, need)
     assert r1 == [(1, 8, 2)], r1                      # 카드가 1 에 다 가서 2·3 은 0장
-    assert sorted(r2) == [(1, 8, 2), (2, 5, 1), (3, 3, 1)], r2
-    assert M.main_tc(r1)[0] == M.main_tc(r2)[0] == 1
+    assert M.main_tc(r1)[0] == 1
+    assert list(M.RULES) == ["R1"], "9판 — P3: B 는 R1 하나"
 
 
 def _frozen(n, start, tc_name="tc1"):
@@ -282,7 +322,6 @@ def test_judge_b_halves():
         conn.commit()
         e = M.b_eval(_frozen(10, 0), *M.b_material(conn), "R1")
         assert e["n"] == 0 and e["dropped"] == {"tc_unknown": 10}, e
-        assert M._same_main(_frozen(10, 0), *M.b_material(conn)[:2]) is None, "모르는 카드 경기를 R1·R2 비교에 넣었다"
 
 
 def test_b_eval_ties_and_counts():
@@ -297,7 +336,7 @@ def test_b_eval_ties_and_counts():
         for f in fr:
             f["color_count"] = 9
         fr[0]["team_color"] = ""
-        e = M.b_eval(fr, *M.b_material(conn), "R2")
+        e = M.b_eval(fr, *M.b_material(conn), "R1")
         assert e["n"] == 3 and e["dropped"] == {"snap_empty": 1} and e["agree"] == 3, e
         assert e["ties"] == 0 and e["count_diff_mean"] == 2.0, e   # 주 팀컬러 11장 − 스냅숏 9
         # 동률 — 5장 · 5장(같은 단계) → 셈 · 주 팀컬러는 id 작은 쪽
@@ -332,8 +371,8 @@ def test_count_c_known_window():
             put_extra(conn, s, 80, height=170)
         rows = {r["matches"]: r for r in M.count_c(conn, D0)}
         me = rows[32]
-        assert me["n21"] == [0, 0, 31], me["n21"]
-        assert not me["n21_pass"], "칸 셋 모두 30 이어야 한다"
+        assert me["n21"]["height"] == {"median": 185.0, "bins": [31, 0], "pass": False}, me["n21"]
+        assert not me["n21_pass"], "두 칸 모두 30 이어야 한다"
         assert me["c3_ovr_bins"] == [], "키 칸이 하나뿐인데 C3 이 통과"
         assert me["known_cards"] == 22, "창 밖 경기(300번대) 카드가 아는 것으로 들어갔다"
 
@@ -354,8 +393,31 @@ def test_count_c_c3_two_height_bins_and_median():
             put_extra(conn, 400 + 20 * i, 70 + i, height=180 + i)   # 상대 GK 키 180~183 · OVR 70~73
         me = next(r for r in M.count_c(conn, D0) if r["matches"] == 64)
         assert me["c3_ovr_bins"] == [80] and me["c3_pass"], me
-        assert me["n21_median_split"] == {"height": [2, 2], "ovr": [2, 2]}, me["n21_median_split"]
-        assert me["n21"] == [1, 3, 0], me["n21"]   # 내 GK 180 − 상대 180~183 → 0·−1·−2 셋 · −3 하나
+        assert me["n21"]["height"] == {"median": 181.5, "bins": [2, 2], "pass": False}, me["n21"]
+        assert me["n21"]["ovr"]["bins"] == [2, 2] and me["n21"]["salary"]["bins"] == [0, 0], me["n21"]
+
+
+def test_count_c_n21_median_two_bins():
+    """9판 — P5: 상대 GK 중앙값 두 칸 · 키 두 칸 모두 30 이면 통과 · 내 GK 는 몰라도 센다 · 급여는 card_info."""
+    with env() as (d, conn):
+        t = datetime.combine(D0 - timedelta(days=5), datetime.min.time())
+
+        def run(k):
+            conn.execute("DELETE FROM matches")
+            conn.execute("DELETE FROM match_players")
+            store.save_matches(conn, [match(f"s{i}", t + timedelta(minutes=i), side(ME, "무", cards(100), so=5),
+                                            side(YOU, "무", cards(200 + 20 * (i % 2)), so=4)) for i in range(k)])
+            return next(r for r in M.count_c(conn, D0) if r["matches"] == k)
+        put_extra(conn, 200, 80, height=185)   # 상대 GK 둘 · 내 카드(100번대)는 하나도 모른다
+        put_extra(conn, 220, 84, height=195)
+        store.save_card_info(conn, 200, "a", "GK", 80, 10, "2026-11-01")
+        store.save_card_info(conn, 220, "b", "GK", 84, 20, "2026-11-01")
+        conn.commit()
+        me = run(60)
+        assert me["n21"]["height"] == {"median": 190.0, "bins": [30, 30], "pass": True} and me["n21_pass"], me["n21"]
+        assert me["n21"]["salary"]["bins"] == [30, 30] and me["n21"]["ovr"]["pass"], me["n21"]
+        me = run(59)
+        assert me["n21"]["height"]["bins"] == [30, 29] and not me["n21_pass"], me["n21"]
 
 
 # ── 명령 관문 ────────────────────────────────────────────────────────────────
@@ -376,10 +438,14 @@ def test_cmd_b_c_gates_once():
         assert M.cmd_b(d / "fifa.db", m, day, retry="R1", log=logs.append) == 2, "앞 절반 미달이 아닌데 retry"
         M.save_json(m / "b_result.json", {"verdict": "앞 절반 미달"})
         assert M.cmd_b(d / "fifa.db", m, day, retry="R9", log=logs.append) == 2, "모르는 규칙"
-        assert M.cmd_b(d / "fifa.db", m, day, retry="R2", log=logs.append) == 0
-        r = M.load_json(m / "b_result.json")
-        assert r["verdict"] == "앞 절반 미달" and r["verdict_final"] == "재료 부족" and r["retry"]["back"]["rule"] == "R2", r
-        assert M.cmd_b(d / "fifa.db", m, day, retry="R2", log=logs.append) == 2, "retry 두 번"
+        M.RULES["R1b"] = M.active_r1   # 앞 절반 미달 뒤 고쳐 넣은 규칙 흉내
+        try:
+            assert M.cmd_b(d / "fifa.db", m, day, retry="R1b", log=logs.append) == 0
+            r = M.load_json(m / "b_result.json")
+            assert r["verdict"] == "앞 절반 미달" and r["verdict_final"] == "재료 부족" and r["retry"]["back"]["rule"] == "R1b", r
+            assert M.cmd_b(d / "fifa.db", m, day, retry="R1b", log=logs.append) == 2, "retry 두 번"
+        finally:
+            del M.RULES["R1b"]
         assert M.cmd_c(d / "fifa.db", m, day, log=logs.append) == 0
         c1 = M.load_json(m / "c_result.json")
         assert c1["day_no"] == 35 and c1["n21"] is False
@@ -526,7 +592,24 @@ def test_cmd_a_schedule():
             res = M.load_json(m / "a_result.json")
             assert [a["day_no"] for a in res["attempts"]] == [21, 28, 35]
             assert res["final"].startswith("미달"), res["final"]
-            M.selftest = lambda *a, **k: 1
+        finally:
+            M.selftest, M.judge_a = saved
+
+
+def test_cmd_a_power_fail_records_material_short():
+    """9판 — P6: 검정력만 미달이면 그 측정일을 "재료 부족" 으로 기록 — 다음 날 다시 못 돈다."""
+    with env() as (d, conn):
+        m = d / "m"
+        M.start(m, D0)
+        saved = (M.selftest, M.judge_a)
+        called = []
+        M.selftest = lambda *a, **k: M.SELF_POWER_FAIL
+        M.judge_a = lambda *a, **k: called.append(1) or {"verdict": "통과", "n": 0}
+        try:
+            assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=21), log=lambda *_: None) == 0
+            res = M.load_json(m / "a_result.json")
+            assert not called and [a["verdict"] for a in res["attempts"]] == ["재료 부족"] and "final" not in res, res
+            assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=22), log=lambda *_: None) == 2, "검정력 미달 다음 날 다시 쟀다"
         finally:
             M.selftest, M.judge_a = saved
 
@@ -537,7 +620,7 @@ def test_cmd_a_selftest_fail_blocks_judge():
         M.start(m, D0)
         saved = (M.selftest, M.judge_a)
         called = []
-        M.selftest = lambda *a, **k: 1
+        M.selftest = lambda *a, **k: M.SELF_FIXED_FAIL
         M.judge_a = lambda *a, **k: called.append(1) or {"verdict": "통과", "n": 0}
         try:
             assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=21), log=lambda *_: None) == 1
