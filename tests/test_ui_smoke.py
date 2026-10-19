@@ -9625,8 +9625,10 @@ def test_calendar_tab_cells_arrows_and_month_nav():
         assert "▲ 1일 · ▼ 1일" in _win.lb_cal_note.text(), _win.lb_cal_note.text()
         g.grab()
         assert len(g._hits) == 3, "칸 툴팁이 경기 있는 날만큼이 아니다"
+        assert _win.btn_cal_prev.isEnabled(), "앞 달에 경기가 있는데 ◀ 가 꺼졌다"
         _win._on_cal_step(-1)
         assert _win.lb_cal_month.text() == "2026년 9월" and sorted(g._cells) == [30]
+        assert not _win.btn_cal_prev.isEnabled(), "저장된 첫 경기 달인데 ◀ 로 더 앞 달(빈 달)로 간다"
         _win._on_cal_step(0)
         assert _win.lb_cal_month.text() == "2026년 10월", "최근 달 단추가 안 돌아왔다"
         _win._on_cal_step(-1)
@@ -9637,6 +9639,35 @@ def test_calendar_tab_cells_arrows_and_month_nav():
     finally:
         if keep is None:
             _win.__dict__.pop("_season_wins", None)
+        _win._cal_month = None
+        _win._go_page("대시보드")
+
+
+def test_calendar_labels_say_all_stored_without_season_table():
+    """시즌표가 없으면 모든 날이 한 묶음(season_of → None) — 기준선은 저장된 전체인데 "시즌 승률"·"이번 시즌" 이라 쓰면 틀린 말."""
+    from datetime import date as _d
+    keep = (_win.__dict__.get("_season_wins"), _win._rank_seasons)
+    rows = _wd_day(1, 9, 1) + _wd_day(30, 2, 3, month=9)
+    _win._season_wins = lambda: rows
+    try:
+        _win._cal_month = None
+        _win._go_page("승률 그래프", "일별 기록")
+        _win._rank_seasons = []
+        _win._render_calendar()
+        tip, summary, note = _win.cal_grid._cells[1].tip, _win.lb_cal_summary.text(), _win.lb_cal_note.text()
+        # 막지 않았으면: 9월 30일까지 한 묶음이라 기준선이 9월 경기까지 섞인다 — 그 값을 "시즌 승률" 로 적는다
+        assert "저장된 전체 승률" in tip and "시즌 승률" not in tip, tip
+        assert "저장된 전체: 2일" in summary and "이번 시즌" not in summary, summary
+        assert "시즌표가 없어" in note and "저장된 전체 승률 ±" in note, note
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 10, 1))]
+        _win._render_calendar()
+        tip, summary = _win.cal_grid._cells[1].tip, _win.lb_cal_summary.text()
+        assert "시즌 승률" in tip and "저장된 전체" not in tip, tip
+        assert "이번 시즌: 1일" in summary and "시즌표가 없어" not in _win.lb_cal_note.text(), summary
+    finally:
+        if keep[0] is None:
+            _win.__dict__.pop("_season_wins", None)
+        _win._rank_seasons = keep[1]
         _win._cal_month = None
         _win._go_page("대시보드")
 
@@ -9710,6 +9741,21 @@ def test_zoom_bar_span_rules():
     z.set_span(2, 5)
     z.mouseDoubleClickEvent(None)
     assert z.is_full()
+    labels = [f"d{i}" for i in range(11)]
+    z.set_labels(labels, "계정A")
+    z.set_span(2, 5)
+    z.set_labels(labels, "계정A")
+    assert z.span() == (2, 5), "같은 계정·같은 날짜인데 고른 구간을 버렸다"
+    z.set_labels(labels, "계정B")
+    assert z.is_full(), "계정이 바뀌었는데 날짜가 같다고 옛 계정의 좁힌 구간에 남았다"
+
+
+def test_step_decimals_keeps_tick_labels_apart():
+    assert [app_main._step_decimals(s) for s in (1000.0, 5.0, 1.0, 0.5, 0.25, 0.2, 0.025)] == [0, 0, 0, 1, 2, 1, 3]
+    for step in (0.25, 0.5, 0.025):
+        d = app_main._step_decimals(step)
+        texts = {f"{{:,.{d}f}}".format(12345 + i * step) for i in range(3)}
+        assert len(texts) == 3, (step, texts)
 
 
 def test_division_zoom_switches_to_games_when_short():
@@ -9764,6 +9810,14 @@ def test_elo_zoom_and_team_value_chart():
         assert "데이터센터" in _win.lb_team_value_note.text()
         _win.zoom_team_value.set_span(0, 2)
         assert len(tv._points) == 3
+        # 한 시즌 폭이 1억 밑이면 눈금 간격이 1억보다 촘촘하다 — 정수로 적으면 같은 눈금 글자가 겹친다
+        for i, r in enumerate(rows):
+            r["team_value"] = 1_234_500_000_000 + i * 2_000_000   # 하루 0.02억씩
+        _win._on_elo_ready(_OUID, _elo_data(rows))
+        step = tv._axis.ticks[1] - tv._axis.ticks[0]
+        assert step < 1, f"입력이 넓어 간격이 1억 이상({step}) — 막지 않아도 안 겹쳐 이 검사가 빈다"
+        ticks = [tv._axis.tick_text(t) for t in tv._axis.ticks]
+        assert len(set(ticks)) == len(ticks), ticks
         _win._on_elo_ready(_OUID, _elo_data(_elo_rows([("2026-09-12T10:00:00", 3000.0, 500, "search")])))
         assert not tv.isVisibleTo(_win) and "모자랍니다" in _win.lb_team_value_note.text()
     finally:

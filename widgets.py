@@ -1718,17 +1718,19 @@ class ZoomBar(QWidget):
     def __init__(self):
         super().__init__()
         self._labels: list[str] = []
+        self._key = None
         self._lo = self._hi = 0
         self._drag: tuple[str, float, int, int] | None = None   # (무엇, 누른 x, 그때 lo, 그때 hi)
         self.setMinimumHeight(34)
         self.setMouseTracking(True)
         self.setToolTip("양끝을 끌어 구간을 좁힙니다 · 두 번 누르면 전체")
 
-    def set_labels(self, labels: list[str]) -> None:
-        """점마다 이름(날짜). 이름이 그대로면 고른 구간을 지키고, 바뀌면(새 점·다른 계정) 전체로."""
+    def set_labels(self, labels: list[str], key=None) -> None:
+        """점마다 이름(날짜). 이름·key 가 그대로면 고른 구간을 지키고, 바뀌면(새 점·다른 계정) 전체로.
+        key 는 계정 — 이름이 날짜뿐이라 두 계정의 날짜 범위가 같으면 이름만으로는 계정이 바뀐 줄 모른다."""
         labels = list(labels)
-        if labels != self._labels:
-            self._labels = labels
+        if labels != self._labels or key != self._key:
+            self._labels, self._key = labels, key
             self._lo, self._hi = 0, max(len(labels) - 1, 0)
         self.update()
 

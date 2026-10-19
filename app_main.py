@@ -1592,6 +1592,13 @@ def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int]
     return [(d, by_day[d][1]) for d in sorted(by_day)]
 
 
+def _step_decimals(step: float) -> int:
+    """눈금 간격을 겹치지 않게 적을 소수 자리(최대 3) — 구단가치는 한 시즌 폭이 몇 억 안 되면 간격이 0.25억 같은 값이라
+    정수로 적으면 "12,345억" 이 두 번 찍힌다(55 조각 ③ 리뷰)."""
+    frac = f"{step:.3f}".rstrip("0").split(".")[1]
+    return len(frac)
+
+
 def group_formation_stats(stats: list, how: str) -> list:
     """상대 포메이션별 승패(stats.FormationStat)를 랭커 화면과 같은 묶기(rankmeta.formation_group)로 합친다(55 F1).
     묶은 줄은 자리 그림이 없다(positions 빔) · 경기 많은 순."""
@@ -3783,10 +3790,13 @@ class MainWindow(QMainWindow):
         last = date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
         mixed = core.mixed_of_matches(self._matches_all)
         days = core.calendar_days(wins, first, last, self._cal_season_key, mixed)
+        # 시즌표가 없으면(홈페이지 데이터 꺼짐 · 받은 적 없음) 모든 날이 한 묶음 — 기준선은 시즌이 아니라 저장된 전체다
+        no_table = not self._rank_seasons
+        base_name = "저장된 전체" if no_table else "시즌"
         cells = {}
         for d in days:
             if d.judged:
-                judge = (f"시즌 승률 {d.base:.1f}% · {d.n}판이면 우연 범위 {d.lo:.0f}~{d.hi:.0f}%"
+                judge = (f"{base_name} 승률 {d.base:.1f}% · {d.n}판이면 우연 범위 {d.lo:.0f}~{d.hi:.0f}%"
                          + (" — 범위 위" if d.arrow > 0 else (" — 범위 아래" if d.arrow < 0 else " — 범위 안")))
             else:
                 judge = f"{config.D1_MIN_GAMES}판 미만이라 좋고 나쁨을 안 잽니다"
@@ -3797,6 +3807,8 @@ class MainWindow(QMainWindow):
         self.lb_cal_month.setText(f"{y}년 {m}월")
         self.cal_grid.set_data(y, m, cells, date.today())
         self.btn_cal_next.setEnabled((y, m) < (date.today().year, date.today().month))
+        oldest = min(w_.when for w_ in wins).date() if wins else None
+        self.btn_cal_prev.setEnabled(oldest is not None and (y, m) > (oldest.year, oldest.month))
 
         def line(title: str, s) -> str:
             if not s.days:
@@ -3807,15 +3819,16 @@ class MainWindow(QMainWindow):
         anchor = min(last, date.today())
         season = self._cal_season_key(anchor)
         season_rows = [w_ for w_ in wins if self._cal_season_key(w_.when.date()) == season]
-        season_name = season.label if season else "이번 시즌"
+        season_name = "저장된 전체" if no_table else (season.label if season else "이번 시즌")
         self.lb_cal_summary.setText(line("이 달", core.cal_summary(month_rows)) + "<br>"
                                     + line(season_name, core.cal_summary(season_rows)))
         up = sum(1 for d in days if d.arrow > 0)
         down = sum(1 for d in days if d.arrow < 0)
         self.lb_cal_note.setText(
-            f"▲▼ = 그날 판수로 본 우연 범위(그 시즌 승률 ± {config.N16_BAND_SIGMA:g}σ) 밖 — 운만이면 스무 날 중 하루 꼴 · "
-            f"{config.D1_MIN_GAMES}판 미만인 날은 흐리게(안 잼) · 이 달 ▲ {up}일 · ▼ {down}일 · "
-            "저장된 경기만(앱을 쓰기 전 기록은 없습니다)")
+            f"▲▼ = 그날 판수로 본 우연 범위({'저장된 전체' if no_table else '그 시즌'} 승률 ± {config.N16_BAND_SIGMA:g}σ) 밖"
+            f" — 운만이면 스무 날 중 하루 꼴 · {config.D1_MIN_GAMES}판 미만인 날은 흐리게(안 잼) · 이 달 ▲ {up}일 · ▼ {down}일 · "
+            "저장된 경기만(앱을 쓰기 전 기록은 없습니다)"
+            + (" · 시즌표가 없어(홈페이지 데이터 꺼짐) 시즌을 나누지 못했습니다" if no_table else ""))
 
     PERIOD_CHOICES = [("1일", 1), ("2일", 2), ("1주", 7), ("1개월", 30)]
     PERIOD_COLUMNS = ["기간", "경기", "승", "무", "패", "승률", "평균 대비",
@@ -10655,7 +10668,7 @@ class MainWindow(QMainWindow):
             days_div = [d for d in days_div if d.day >= cutoff]
         self._div_days = days_div
         self._div_days_n = days
-        self.zoom_division.set_labels([f"{d.day:%m/%d}" for d in days_div])
+        self.zoom_division.set_labels([f"{d.day:%m/%d}" for d in days_div], self._ouid)
         self.zoom_division.setVisible(len(days_div) >= 3)
         self._draw_division()
 
@@ -10779,7 +10792,7 @@ class MainWindow(QMainWindow):
         report = score_report_lines(pts, data.rows if data else [], self._season_wins(), data.club if data else None, start)
         self.lb_elo_report.setText("<br>".join(report))
         self.lb_elo_report.setVisible(bool(report))
-        self.zoom_elo.set_labels([p["at"].strftime("%m/%d") for p in pts])
+        self.zoom_elo.set_labels([p["at"].strftime("%m/%d") for p in pts], self._ouid)
         self.zoom_elo.setVisible(len(pts) >= 3)
         self._draw_elo_chart()
         self._render_team_value(data, start)
@@ -10822,7 +10835,7 @@ class MainWindow(QMainWindow):
                     else "홈페이지 데이터가 꺼져 있어 구단가치를 받지 않습니다 — [정보·설정] · ") + note
         self.lb_team_value_note.setText(note)
         self.gb_team_value.setVisible(bool(self._ouid))
-        self.zoom_team_value.set_labels([f"{d:%m/%d}" for d, _ in self._tv_points])
+        self.zoom_team_value.set_labels([f"{d:%m/%d}" for d, _ in self._tv_points], self._ouid)
         self.zoom_team_value.setVisible(n >= 3)
         self._draw_team_value_chart()
 
@@ -10834,9 +10847,10 @@ class MainWindow(QMainWindow):
             self.team_value_chart.set_data([])
             return
         vals = [v / 1e8 for _, v in pts]   # 억 단위 — 축 글자가 원 단위면 13자리
+        axis = charts.Axis.fit(vals, "{:,.0f}억", "구단가치")
+        axis = replace(axis, fmt=f"{{:,.{_step_decimals(axis.ticks[1] - axis.ticks[0])}f}}억")
         self.team_value_chart.set_data([(f"{d:%m/%d}", x, None) for (d, _), x in zip(pts, vals)],
-                                       axis=charts.Axis.fit(vals, "{:,.0f}억", "구단가치"), avg=False,
-                                       x_dates=[d for d, _ in pts])
+                                       axis=axis, avg=False, x_dates=[d for d, _ in pts])
 
     @staticmethod
     def _elo_cut_tip(data) -> str:
