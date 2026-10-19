@@ -208,7 +208,7 @@ G1·G2·G5 는 사용자가 확인했다(근거 조항·답변은 이 문서에 
 | 자리 | 변경 |
 |---|---|
 | **서버 모드는 인스턴스마다**(2회차 [상]1 — 두 검토자 모두) | `FCOnlineAPI(…, server=False)` — **`server=True` 는 생성 자리 둘만**: `app_main.py:12325`(검색·로더가 같이 쓰는 `self._api`) · `check_api.py` 서버 줄. 나머지는 `config.SERVER_URL` 이 있어도 **늘 직접** — `check_key`(`nexon_api.py:109` · 서버로 가면 서버 키로 검사해 아무 키나 통과) · 구단주 분포(`app_main.py:2065` · 한 바퀴 약 15만 요청) · `tools/dev_archive.py:215` · `tools/dev_matches.py` · `tools/step0_owner_dist/*`. 테스트: `check_key`·ownerdist·dev 도구가 `SERVER_URL` 이 있어도 직접으로 가는지 |
-| **`nexon_api` 는 `config` 를 import 하지 않는다**(지금도 안 한다 — `nexon_api.py:6-15` · 3회차 [중]1) | 서버가 `nexon_api.EP_*` 를 import 하므로, `config` 가 따라 들어오면 `load_dotenv`(`config.py:96`)가 사용자 `.env` 의 키 둘을 서버 프로세스 환경에 싣는다. 서버 주소는 생성 인자(`server=True` 일 때 `server_url=`)로 받고, 폴백 상수는 `nexon_api` 상단에(엔드포인트 상수와 같은 자리). 서버 테스트: `server` import 뒤 `os.environ` 에 `NEXON_API_KEY`·`DEV_NEXON_API_KEY` 없음 |
+| **`nexon_api` 는 `config` 를 import 하지 않는다**(지금도 안 한다 — `nexon_api.py:6-15` · 3회차 [중]1) | 서버가 `nexon_api.EP_*` 를 import 하므로, `config` 가 따라 들어오면 `load_dotenv`(`config.py:96`)가 사용자 `.env` 의 키 둘을 서버 프로세스 환경에 싣는다. 서버 주소·설치 ID 는 생성 인자(`server=True` 일 때 `server_url=`·`install_id=`)로 받고, 폴백 상수는 `nexon_api` 상단에(엔드포인트 상수와 같은 자리). 서버 테스트: `server` import 뒤 `os.environ` 에 `NEXON_API_KEY`·`DEV_NEXON_API_KEY` 없음 |
 | `config.py` | `SERVER_URL`(`.env` `FIFA_SERVER_URL` · 없으면 "" = 지금과 같음 — `app_main`·`check_api` 가 읽어 생성 인자로 넘긴다) · `INSTALL_ID` 는 **`SERVER_URL` 이 있을 때만** 만들어 `.env` 에(서버를 안 쓰는 사람에게 식별자가 생기지 않게) · 폴백 상수(아래) · 전부 모듈 경유로 읽는다(재할당 전역) |
 | `nexon_api.FCOnlineAPI` | **세션 둘** — `_direct`(키 헤더 · 지금 세션 그대로) · `_server`(설치 ID 헤더 · **키 헤더를 절대 안 실음** · 연결 풀을 `http://`·`https://` 둘 다에). 요청마다 `_route(path)` 가 고른다: 거래 → 늘 직접 · 서버 모드이고 폴백 중이 아니면 → 서버 · 그 밖 → 직접. **공유 세션의 헤더·주소를 바꾸는 전환은 없다**(1회차 [상]2 — 상세 24스레드·랭커 픽·특성 로더가 한 `self._api` 를 같이 쓴다) |
 | `set_key`(`app_main.py:8237` 키 창 뒤) | `_direct` 세션에만 넣는다(1회차 [상]1 — 1판대로면 키를 바꾼 순간 키가 서버로 나갔다) |
@@ -274,5 +274,7 @@ G1·G2·G5 는 사용자가 확인했다(근거 조항·답변은 이 문서에 
 |---|---|---|
 | 9 | 연속 실패 문턱 전(1·2번째)에 서버 오류로 실패한 상세가 여전히 버려져 DB 에 구멍 | 서버 신호로 실패한 요청은 실패 수와 상관없이 전부 직접 재요청 · "100건 중 502 한 건" 테스트 |
 [중] 3(서버 import 가 사용자 `.env` 를 싣는 길 · 판정 전제 폴백 0 · 스크래치 앱이 실제 창을 부름)은 위 표에. [하] 3(기존 테스트의 `api._session` 바꿔 끼우기 · 200+HTML · 직접 재요청의 00009)은 앞 둘을 표에, 하나는 구현 때.
+
+**계획 검토 끝**(2026-10-20 — 4판 바뀐 줄 확인에서 새 [상] 0 · [하] 1(설치 ID 도 생성 인자로)은 반영). 재지 않은 것(구현·실측 때 잰다): 상세가 경기 직후 언제부터 준비되나(부정 캐시 60초의 근거) · gzip 효과 · 폴백 3번·10분 · IP 몫 10,000 · 서버 경유 속도 · 서버 CPU·메모리 · 게임 프로세스 이름 · 새 키의 단계.
 
 1회차 [중] 은 대부분 위 표·완료 기준에 넣었다(접근 로그 · worker 1 · DB 경로 저장소 밖 · KST · 연결 풀 http · PYZ 검사 · 바이트 골든 · 메타 우회 · 502/HTML · 부정 캐시 · 81쌍 · 본문 id 대조 · 게임 감시 장치 · INSTALL_ID 서버 모드만 · 같은 키 U1). [하] 8건은 구현 때.
