@@ -1580,6 +1580,7 @@ def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
 # 둘 중 늦게 온 신호(경기 받기 끝 · elo_ready)가 대시보드를 다시 그린다 — 그 전엔 그 칸만 "—".
 
 CLUB_LATE = "다음 시즌부터(이번 시즌은 수집이 늦게 시작)"
+CLUB_NO_SN = "내 프로필을 아직 모릅니다 — 검색하면 채워집니다"
 
 
 def _peak_rank(rows: list[dict], at) -> int | None:
@@ -1627,6 +1628,8 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
     src_tip = "넥슨 데이터센터 구단가치 — 실제로 뛴 11명 시세 합으로 다시 센 값과는 다르다"
     if club is None or not club.values:
         out.append(("구단가치 등수", "—", no_club, src_tip))
+    elif not club.me_known:
+        out.append(("구단가치 등수", "—", CLUB_NO_SN, src_tip))
     elif club.my_value is None:
         out.append(("구단가치 등수", "—", f"{config.RANK_TIERS[-1]:,}위 밖 — 등수 없음", src_tip))
     elif mine_tv is None:
@@ -1657,14 +1660,17 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
     sc = core.first_reach(wins, season_start, core.SUPER_CHAMPION_DIVISION_ID)
     big = " · ".join(f"{name} {f.games:,}판" for name, f in (("챔스", ch), ("슈챔", sc)) if f) or "챔스 아직"
     small = []
-    if club is not None and ch is not None:
+    # 저장이 시즌 처음부터가 아니면 내 판수는 덜 센 값 — 넥슨 누적인 남들과 견주면 '빠르게' 로 기운다(조각 ② 리뷰 [중])
+    if club is not None and ch is not None and ch.from_start:
         if club.champ_hidden or club.champ_median is None:
             small.append("남들 비교는 " + CLUB_LATE if club.champ_hidden else "남들 기록 없음")
         else:
             d = ch.games - club.champ_median
             small.append(f"남들 중앙 {club.champ_median:,.0f}판보다 {abs(d):,.0f}판 {'느리게' if d > 0 else '빠르게'}")
-    if ch is not None and (not ch.from_start or ch.gap):
-        small.append("저장 시작 뒤부터" if not ch.from_start else "중간에 빈 곳 있음")
+    if ch is not None and not ch.from_start:
+        small.append("저장 시작 뒤부터" + (" — 남들 비교 없음" if club is not None else ""))
+    elif ch is not None and ch.gap:
+        small.append("중간에 빈 곳 있음")
     out.append(("챔스·슈챔 달성", big, " · ".join(small) or "이번 시즌 첫 경기부터 센 판수",
                 "시즌 첫 경기부터 그 등급 첫 경기까지 친 판수(그 경기 포함) · 슈챔은 경기 기록의 등급으로만"
                 " · 남들 값은 첫 달성을 확인한 수집 시각의 누적이라 최대 하루치 많다"))
@@ -1674,6 +1680,10 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
         small = "등수는 " + no_club
     elif club.fc_hidden:
         small = "등수는 " + CLUB_LATE
+    elif not from_start:
+        small = "등수 없음(내 FC 를 덜 셌다)"   # 남들은 넥슨 누적 — 견주면 등수가 실제보다 나쁘게 나온다(조각 ② 리뷰 [중])
+    elif not club.me_known:
+        small = CLUB_NO_SN
     elif not club.me_in_fc:
         small = f"{config.RANK_TIERS[-1]:,}위 밖 — 등수 없음"
     else:
@@ -1687,7 +1697,8 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
 def score_report_lines(pts: list[dict], rows: list[dict], wins: list, club, season_start: datetime) -> list[str]:
     """점수·예측 탭 그래프 아래 리포트(R1~R3) — 하루 점이 R_MIN_POINTS 미만이면 빈 목록(침묵). 무승부 뺀 승률은
     점수 기록과 같은 구간(첫 점부터)으로 — 시즌 전체 승률과 기록 뒤 점수 변화를 견주면 서로 다른 기간이다."""
-    since = pts[0]["at"] if pts else season_start
+    # 첫날 0시부터 — 하루 점의 시각(그날 마지막 기록)부터 자르면 첫날 앞 기록의 최고점을 놓친다(무승부 뺀 승률과 같은 시작)
+    since = datetime.combine(pts[0]["at"].date(), datetime.min.time()) if pts else season_start
     marks = []
     for r in rows:
         try:

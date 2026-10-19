@@ -646,6 +646,7 @@ def test_club_head_others_only_and_my_row_excluded():
         assert (h.champ_n, h.champ_median) == (3, 300) and not h.champ_hidden and not h.fc_hidden, h
         h2 = M.club_head(db.conn, None)               # 번호를 모르면 아무도 안 빼고 내 최고점도 없다
         assert len(h2.values) == 4 and h2.peak is None and not h2.me_in_fc and len(h2.fc_lo) == 3
+        assert h.me_known and not h2.me_known, "번호를 모르는 것과 1만 위 밖을 못 가른다"
     using(body)
 
 

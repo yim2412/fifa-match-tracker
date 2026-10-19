@@ -9495,7 +9495,7 @@ def test_reask_notice_explains_person_values():
 def _club(**kw):
     base = dict(season_start="2026-09-10", snap_at="2026-10-18T09:00:00", cut=4400.0,
                 values=sorted([5 * 10 ** 11, 9 * 10 ** 11, 2 * 10 ** 12]), my_value=7 * 10 ** 11,
-                fc_lo=[100, 300], fc_hi=[400, 900], fc_hidden=False, me_in_fc=True,
+                fc_lo=[100, 300], fc_hi=[400, 900], fc_hidden=False, me_in_fc=True, me_known=True,
                 peak=4550.0, peak_at="2026-10-17T15:00:00", champ_median=500, champ_n=3, champ_hidden=False,
                 peaks_dd=[])
     base.update(kw)
@@ -9537,6 +9537,12 @@ def test_club_cells_texts():
         assert none["시즌 FC"][0] == "30 FC", "rank.db 가 없어도 내 FC 는 보인다"
         late = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(), season_start=datetime(2026, 8, 1)))}
         assert "저장 시작 뒤부터" in late["시즌 FC"][1] and "저장 시작 뒤부터" in late["챔스·슈챔 달성"][1]
+        # 저장이 늦게 시작되면 내 값은 덜 센 것 — 넥슨 누적인 남들과 견주지 않는다(조각 ② 리뷰 [중])
+        assert "등수 없음" in late["시즌 FC"][1] and "/" not in late["시즌 FC"][1], late["시즌 FC"]
+        assert "빠르게" not in late["챔스·슈챔 달성"][1] and "남들 비교 없음" in late["챔스·슈챔 달성"][1], late["챔스·슈챔 달성"]
+        unk = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(me_known=False, me_in_fc=False)))}
+        assert unk["구단가치 등수"][1] == app_main.CLUB_NO_SN and unk["시즌 FC"][1] == app_main.CLUB_NO_SN, \
+            "내 번호를 모르는데 1만 위 밖이라 했다"
     finally:
         config.RANK_COLLECT = keep
 
@@ -9583,6 +9589,9 @@ def test_elo_score_report_needs_enough_points():
         rows = pts(config.R_MIN_POINTS) + _elo_rows([("2026-09-12T08:00:00", 4900.0, 100, "search")])   # 하루 안 최고점
         _win._on_elo_ready(_OUID, _elo_data(sorted(rows, key=lambda r: r["taken_at"])))
         assert "최고 4,900점(09.12)" in _win.lb_elo_report.text(), "리포트 최고점이 하루 마지막 점만 봤다(머리 줄과 어긋남)"
+        rows = pts(config.R_MIN_POINTS) + _elo_rows([("2026-09-11T08:00:00", 4950.0, 90, "search")])   # 첫날 앞 기록
+        _win._on_elo_ready(_OUID, _elo_data(sorted(rows, key=lambda r: r["taken_at"])))
+        assert "최고 4,950점(09.11)" in _win.lb_elo_report.text(), "리포트가 첫날 마지막 기록 시각부터 잘랐다"
     finally:
         _win._rank_seasons, _win._elo = keep[0], keep[1]
         _win._go_page("대시보드")

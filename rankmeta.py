@@ -993,6 +993,7 @@ class ClubHead:
     fc_hi: list = field(default_factory=list)
     fc_hidden: bool = True                   # U9 — 이 시즌 FC 수집이 늦게 시작됐다(또는 시즌 시작을 모름)
     me_in_fc: bool = False                   # 이 시즌 1만 위 안에서 본 적이 있나
+    me_known: bool = False                   # 내 프로필 번호를 아나 — 모르면 "1만 위 밖" 이 아니라 모름(내 줄도 못 뺐다)
     peak: float | None = None                # 내 elo_season 최고점·그때(H4 — 검색 기록과 둘 중 높은 쪽은 화면이)
     peak_at: str | None = None
     champ_median: float | None = None        # 남들 첫 챔스 판수 중앙값(H5)
@@ -1011,7 +1012,7 @@ def _late_start(start: str | None, first_at: str | None) -> bool:
 def club_head(conn: sqlite3.Connection, my_sn: int | None) -> ClubHead | None:
     """머리 줄의 남들 값 — 읽기만. 사람별 처리가 한 번도 안 돈 DB(수집 꺼짐·동의 전)면 스냅숏 값만 채운다. 표 없음(옛 DB)은 None."""
     try:
-        out = ClubHead()
+        out = ClubHead(me_known=my_sn is not None)
         st = rankcollect.get_state(conn)
         ps = rankcollect._json_state(st, "person_season") or {}
         season_at, out.season_start = ps.get("at"), ps.get("start")
