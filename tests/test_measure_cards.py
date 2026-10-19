@@ -1,7 +1,7 @@
 """51단계 측정 도구(tools/measure_cards.py) 테스트 — 지어낸 fifa.db·rank.db·가짜 백필, 네트워크 없이.
 
 pytest 없이 `python tests/test_measure_cards.py`. 닉네임·ouid·경기 id·카드 번호는 전부 지어낸 값이다.
-근거는 ROADMAP "## 51단계 › 측정으로 먼저 정할 것"(9판) — 일정 · 고정 수요 · 방향 · 뺀 이유 · B 짝짓기(가장 가까운 · 24시간 · 같은 시즌 ·
+근거는 ROADMAP "## 51단계 › 측정으로 먼저 정할 것"(10판) — 일정 · 고정 수요 · 방향 · 뺀 이유 · B 짝짓기(가장 가까운 · 24시간 · 같은 시즌 ·
 한 번만 · 닉네임 안 남김) · 절반 · C 의 카드 집합 · 토글 켜짐 거부.
 """
 from __future__ import annotations
@@ -98,7 +98,27 @@ def test_start_once_and_schedule():
         ok, _t = M.start(d / "m", D0 + timedelta(days=3))
         assert not ok, "D0 를 두 번 잡았다"
         assert M.day_no(M.load_json(d / "m" / "meta.json"), D0 + timedelta(days=21)) == 21
-        assert M.load_json(d / "m" / "meta.json")["rule_commit"] == M.RULE_COMMIT
+        meta = M.load_json(d / "m" / "meta.json")
+        assert meta["rule_commit"] == M.RULE_COMMIT
+        assert set(meta["tool_sha256"]) == set(M.TOOL_FILES) and all(meta["tool_sha256"].values()), meta
+        assert M.audit_of(_c, meta, D0)["tool_changed"] == []
+        meta["tool_sha256"]["cardstats.py"] = "0" * 64
+        assert M.audit_of(_c, meta, D0)["tool_changed"] == ["cardstats.py"], "D0 뒤 도구 변경을 못 본다"
+        _c.execute("INSERT INTO api_budget (day, kind, attempts) VALUES (?, ?, 5), (?, ?, 5)",
+                   (D0.isoformat(), store.BUDGET_CARD, (D0 - timedelta(days=1)).isoformat(), store.BUDGET_CARD))
+        _c.commit()
+        assert M.audit_of(_c, meta, D0 + timedelta(days=3))["app_backfill_days"] == [D0.isoformat()]
+
+
+def test_selftest_fixed_checks_ignore_day_data():
+    """관문 검토 [상]1: 고정 시험은 그날 Δ·n 과 무관하게 늘 같다 — 그날 자료에 매이면 측정일마다 약 28% 가 "규칙 버그" 로 멈췄다."""
+    def fixed_lines(delta):
+        out = []
+        M.selftest(delta, seeds=2, log=out.append)
+        return [ln for ln in out if ln.startswith(("[OK]", "[FAIL]")) and "검정력" not in ln]
+    rng = np.random.default_rng(3)
+    a, b = fixed_lines(list(rng.normal(0, 2, 3100))), fixed_lines(list(rng.normal(1, 5, 5183)))
+    assert len(a) == 4 and a == b, (a, b)
 
 
 # ── A 재료 ───────────────────────────────────────────────────────────────────
@@ -278,7 +298,8 @@ def test_b_freeze_pairing():
         rk.execute("INSERT INTO snapshots VALUES (9, ?)", ((t + timedelta(minutes=5)).isoformat(),))
         rk.execute("INSERT INTO snapshot_rows VALUES (9, '상대', '아스널', 11)")
         rk.commit()
-        assert M.b_freeze(conn, rk, fp, now + timedelta(days=1)).get("frozen") == 1   # b5 만 새로
+        s2 = M.b_freeze(conn, rk, fp, now + timedelta(days=1))
+        assert s2.get("frozen") == 1 and not {"far", "season", "both_accounts"} & set(s2), s2   # b5 만 새로 · 뺀 경기는 다시 안 본다
         fr = M.read_frozen(fp)
         assert [f["match_id"] for f in fr] == ["b1", "b5"] and fr[0]["team_color"] == "리버풀"
         rk.close()
@@ -596,6 +617,32 @@ def test_cmd_a_schedule():
             M.selftest, M.judge_a = saved
 
 
+def test_cmd_a_grace_and_missed_rounds():
+    """관문 검토 [중]2·3: 측정일 + A_GRACE 를 넘기면 그 회차는 놓침(재료 부족) — 재는 날을 고르지 못하게."""
+    with env() as (d, conn):
+        m = d / "m"
+        M.start(m, D0)
+        saved = (M.selftest, M.judge_a)
+        M.selftest = lambda *a, **k: 0
+        M.judge_a = lambda *a, **k: {"verdict": "재료 부족", "n": 0}
+        try:
+            assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=25), log=lambda *_: None) == 2
+            res = M.load_json(m / "a_result.json")
+            assert [a["why"] for a in res["attempts"]] == ["놓침"], res
+            assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=31), log=lambda *_: None) == 0   # 2회차 마지막 날
+            assert [a["day_no"] for a in M.load_json(m / "a_result.json")["attempts"]] == [21, 31]
+            assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=40), log=lambda *_: None) == 2
+            res = M.load_json(m / "a_result.json")
+            assert res["final"].startswith("미달") and res["attempts"][2]["why"] == "놓침", res
+            # B·C 도 D0+35+A_GRACE 를 넘기면 놓침
+            assert M.cmd_b(d / "fifa.db", m, D0 + timedelta(days=39), log=lambda *_: None) == 2
+            assert M.load_json(m / "b_result.json")["why"] == "놓침"
+            assert M.cmd_c(d / "fifa.db", m, D0 + timedelta(days=39), log=lambda *_: None) == 2
+            assert M.load_json(m / "c_result.json")["n21"] is False
+        finally:
+            M.selftest, M.judge_a = saved
+
+
 def test_cmd_a_power_fail_records_material_short():
     """9판 — P6: 검정력만 미달이면 그 측정일을 "재료 부족" 으로 기록 — 다음 날 다시 못 돈다."""
     with env() as (d, conn):
@@ -624,7 +671,9 @@ def test_cmd_a_selftest_fail_blocks_judge():
         M.judge_a = lambda *a, **k: called.append(1) or {"verdict": "통과", "n": 0}
         try:
             assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=21), log=lambda *_: None) == 1
-            assert not called and M.load_json(m / "a_result.json") is None
+            res = M.load_json(m / "a_result.json")
+            assert not called and len(res["attempts"]) == 1 and "규칙 버그" in res["attempts"][0]["why"], res
+            assert M.cmd_a(d / "fifa.db", m, D0 + timedelta(days=22), log=lambda *_: None) == 2, "규칙 버그 뒤 다음 날 다시 쟀다"
         finally:
             M.selftest, M.judge_a = saved
 

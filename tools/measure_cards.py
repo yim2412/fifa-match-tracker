@@ -52,8 +52,8 @@ import seasons as seasons_mod  # noqa: E402
 import store  # noqa: E402
 import teamcolor  # noqa: E402
 
-# ── 판정 규칙(ROADMAP 51 측정 절 — 기준 커밋 9판) ──────────────────────────────
-RULE_COMMIT = "efadb04"
+# ── 판정 규칙(ROADMAP 51 측정 절 — 기준 커밋 10판) ──────────────────────────────
+RULE_COMMIT = "35ec1cf"
 MATCH_TYPE = config.DEFAULT_MATCH_TYPE   # 감독모드 52
 W_A_DAYS = 60                # A 창 [D0 − 60일, D0)
 A_DAYS = (21, 28, 35)        # 측정 A 날(재료 부족이면 다음 날로 — 최대 3번)
@@ -73,7 +73,13 @@ SELF_REL = 0.02              # selftest 효과 크기 — 검증 상대 개선 2
 SELF_SEEDS = 200
 SELF_PASS = 0.90
 SELF_N_DEFAULT = 9000        # 그날 자료가 없을 때(관문 검토) 가짜 n — 이 PC W_A 상한(9,289) 근처 · 그날 실제 n 은 --a 가 넘긴다
-SELF_REAL_MIN = 100          # 실제 Δ 가 이보다 적으면 가짜 Δ 로
+SELF_REAL_MIN = 100          # 실제 Δ 가 이보다 적으면 가짜 Δ 로(n 은 그날 n)
+SELF_FIXED_N = 3000          # 고정 시험 가짜 n — 그날 자료와 무관하게 늘 같다
+SELF_CALIB_SEEDS = 200       # ③ 고정 시험 둘의 시드 수
+SELF_CALIB_OK = 0.90         # 완벽 보정 → ③ 통과 비율(설계 95% · 오늘 92~94%)
+SELF_SHIFT_CATCH = 0.70      # 평균 5%p 밀림 → ③ 미달 비율(오늘 76~80% — 97.5% 문턱의 대가)
+A_GRACE = 3                  # 측정일 뒤 이 날수까지만 받는다 — 넘기면 그 회차는 "재료 부족(놓침)"(재는 날을 고르지 못하게)
+CAP_MAX = 600                # --cap 상한(규칙의 하루 600)
 B_AGREE = 0.90               # 주 팀컬러 이름 일치율
 B_MIN_HALF = 300             # 절반마다 경기
 C_MIN = 30                   # 칸마다 경기(화면 침묵 규칙과 같은 값)
@@ -119,11 +125,35 @@ def day_no(meta: dict | None, today: date) -> int | None:
     return None if d0 is None else (today - d0).days
 
 
+TOOL_FILES = ("tools/measure_cards.py", "cardstats.py", "cardcollect.py")
+
+
+def tool_hashes() -> dict[str, str]:
+    """측정에 쓰는 코드의 sha256 — D0 에 적고 판정 때 견준다(RULE_COMMIT 상수만으로는 D0 뒤 코드 변경이 안 보인다)."""
+    out = {}
+    for rel in TOOL_FILES:
+        try:
+            out[rel] = hashlib.sha256((ROOT / rel).read_bytes()).hexdigest()
+        except OSError:
+            out[rel] = ""
+    return out
+
+
+def audit_of(fifa, meta: dict, today: date) -> dict:
+    """판정 결과에 같이 남길 것 — D0 뒤 도구가 바뀌었나 · 측정 기간에 앱 백필이 돈 날(같은 IP · C 를 두껍게 한다)."""
+    d0 = d0_of(meta)
+    changed = sorted(k for k, v in tool_hashes().items() if (meta.get("tool_sha256") or {}).get(k) != v)
+    days = [r[0] for r in fifa.execute("SELECT day FROM api_budget WHERE kind = ? AND attempts > 0 AND day >= ? AND day <= ?"
+                                       " ORDER BY day", (store.BUDGET_CARD, d0.isoformat() if d0 else "", today.isoformat()))]
+    return {"tool_changed": changed, "app_backfill_days": days}
+
+
 def start(d: Path, today: date) -> tuple[bool, str]:
     p = _paths(d)["meta"]
     if load_json(p) is not None:
         return False, f"이미 D0 가 있다({load_json(p).get('d0')}) — 다시 잡으려면 measure 폴더를 손으로 옮긴다"
-    save_json(p, {"d0": today.isoformat(), "rule_commit": RULE_COMMIT, "created_at": datetime.now().isoformat(timespec="seconds")})
+    save_json(p, {"d0": today.isoformat(), "rule_commit": RULE_COMMIT, "tool_sha256": tool_hashes(),
+                  "created_at": datetime.now().isoformat(timespec="seconds")})
     return True, f"D0 = {today} (판정 규칙 기준 커밋 {RULE_COMMIT})"
 
 
@@ -487,13 +517,20 @@ def b_for_gain(x: np.ndarray, gain: float) -> float:
 
 
 def selftest(delta=None, *, n: int | None = None, seeds: int = SELF_SEEDS, log=print) -> int:
-    """답을 아는 자료로 A 판정을 잰다. delta = 그날 실제 Δ 분포(없거나 적으면 가짜 정규 Δ · n 은 SELF_N_DEFAULT)."""
+    """답을 아는 자료로 A 판정을 잰다.
+
+    고정 시험 넷은 그날 자료와 떼어 늘 같은 가짜 자료(SELF_FIXED_N · 시드 7)로 — 결과가 결정적이라 코드가 그대로면 측정일에도
+    D0 때(`--start`)와 같다(관문 검토 [상]1: 그날 n 에 따라 표본이 바뀌어 측정일마다 약 28% 가 "규칙 버그" 로 멈췄다).
+    검정력만 그날 Δ·n 으로(delta 가 SELF_REAL_MIN 보다 적으면 가짜 Δ 를 그날 n 만큼 · 아예 없으면 SELF_N_DEFAULT)."""
     rng = np.random.default_rng(7)
+    xf = rng.normal(0, 4, SELF_FIXED_N)
     real = delta is not None and len(delta) >= SELF_REAL_MIN
-    x = np.asarray(delta, dtype=float) if real else rng.normal(0, 4, n or SELF_N_DEFAULT)
+    if real:
+        x = np.asarray(delta, dtype=float)
+    else:
+        x = np.random.default_rng(8).normal(0, 4, n or (len(delta) if delta is not None and len(delta) else SELF_N_DEFAULT))
     n = len(x)
-    log(f"자료: {'그날 실제 Δ' if real else '가짜 Δ(정규 · 표준편차 4)'} n = {n:,}")
-    when = _fake_when(n)
+    log(f"검정력 자료: {'그날 실제 Δ' if real else '가짜 Δ(정규 · 표준편차 4)'} n = {n:,} · 고정 시험 가짜 n = {SELF_FIXED_N:,}")
     bad = 0
 
     def check(ok: bool, text: str):
@@ -501,27 +538,28 @@ def selftest(delta=None, *, n: int | None = None, seeds: int = SELF_SEEDS, log=p
         bad += not ok
         log(f"{'[OK]  ' if ok else '[FAIL]'} {text}")
 
-    y = (rng.random(n) < 0.5).astype(int)
-    r = judge_a(when, x, y)
+    wf = _fake_when(SELF_FIXED_N)
+    y = (rng.random(SELF_FIXED_N) < 0.5).astype(int)
+    r = judge_a(wf, xf, y)
     check(not r.get("pass2", False) and r["verdict"] != "통과", f"Δ 와 승 무관 → ② 미달 (판정 {r['verdict']} · 상대 차 {r.get('rel', 0):+.2%})")
-    y = (rng.random(n) < predict(0.0, 0.5, x)).astype(int)
-    r = judge_a(when, x, y)
+    y = (rng.random(SELF_FIXED_N) < predict(0.0, 0.5, xf)).astype(int)
+    r = judge_a(wf, xf, y)
     check(r["verdict"] == "통과", f"강하게 관련(b = 0.5) → 통과 (판정 {r['verdict']} · 상대 차 {r.get('rel', 0):+.2%})")
-    # ③ 단독 — 완벽 보정 n = 900 · 평균 5%p 밀림(고정 시드 하나 + 참고로 200 시드 비율)
+    # ③ 단독 — 완벽 보정 n = 900 · 평균 5%p 밀림. 한 번 뽑기는 원래 확률적이라(5%p 밀림을 n 900 에서 약 80% 만 잡는다)
+    # SELF_CALIB_SEEDS 시드 비율로 본다 — 시드가 고정이라 결과는 늘 같다(관문 검토 [상]1)
     xs = rng.normal(0, 4, 900)
     p = predict(0.0, 0.15, xs)
-    c_ok = calib(p, (rng.random(900) < p).astype(float), np.random.default_rng(1))
     rate = np.mean([calib(p, (np.random.default_rng(s).random(900) < p).astype(float), np.random.default_rng(s + 1))["pass"]
-                    for s in range(seeds)])
-    check(c_ok["pass"], f"완벽 보정 n = 900 → ③ 통과 (ECE {c_ok['ece']:.3f} ≤ {c_ok['ece_q']:.3f} · 참고 {seeds}시드 통과 {rate:.0%})")
-    yv = (rng.random(900) < p).astype(float)
-    c_bad = calib(np.clip(p + 0.05, 1e-6, 1 - 1e-6), yv, np.random.default_rng(2))
-    rate = np.mean([not calib(np.clip(p + 0.05, 1e-6, 1 - 1e-6), (np.random.default_rng(s).random(900) < p).astype(float),
-                              np.random.default_rng(s + 1))["pass"] for s in range(seeds)])
-    check(not c_bad["pass"], f"평균 5%p 밀림 → ③ 미달 (평균 차 {c_bad['mean_diff']:.3f} · 참고 {seeds}시드 미달 {rate:.0%})")
+                    for s in range(SELF_CALIB_SEEDS)])
+    check(rate >= SELF_CALIB_OK, f"완벽 보정 n = 900 → ③ 통과 {rate:.0%} ≥ {SELF_CALIB_OK:.0%}({SELF_CALIB_SEEDS}시드)")
+    pb = np.clip(p + 0.05, 1e-6, 1 - 1e-6)
+    rate = np.mean([not calib(pb, (np.random.default_rng(s).random(900) < p).astype(float), np.random.default_rng(s + 1))["pass"]
+                    for s in range(SELF_CALIB_SEEDS)])
+    check(rate >= SELF_SHIFT_CATCH, f"평균 5%p 밀림 n = 900 → ③ 미달 {rate:.0%} ≥ {SELF_SHIFT_CATCH:.0%}({SELF_CALIB_SEEDS}시드)")
     # 검정력 — 효과 있음(검증 상대 개선 2%) · 완벽 보정 · 그날 n · 시드 200 → ①~④ 를 모두 통과하는 비율
     b = b_for_gain(x, SELF_REL)
     p = predict(0.0, b, x)
+    when = _fake_when(n)
     t0 = time.monotonic()
     passed, verdicts = 0, Counter()
     for s in range(seeds):
@@ -565,7 +603,11 @@ def b_freeze(fifa, rank, frozen_path: Path, now: datetime) -> dict:
 
     한 경기는 한 번만(이미 얼린 match_id 는 건너뛴다) · 경기 뒤 PAIR_H 가 지나야 얼린다(그 뒤에 올 더 가까운 스냅숏을 놓치지 않게).
     상대 = accounts 에 없는 쪽(두 쪽 다 계정이면 안 얼린다) · 닉네임은 맞대기에만 쓰고 안 남긴다. → 센 것."""
-    done = {fr.get("match_id") for fr in read_frozen(frozen_path)}
+    # 한 번 본 경기는 얼리지 못했어도 다시 보지 않는다(관문 검토 [중]8: 다음 날 다시 보면 14일 보관으로 가장 가까운
+    # 스냅숏이 지워져 둘째로 가까운 것과 짝지을 수 있다) — 경기 뒤 PAIR_H 가 지난 것만 보므로 판단이 바뀔 것이 없다
+    skipped_path = frozen_path.with_name("b_skipped.jsonl")
+    done = {fr.get("match_id") for fr in read_frozen(frozen_path)} | {fr.get("match_id") for fr in read_frozen(skipped_path)}
+    skips: list[dict] = []
     snaps = snapshot_list(rank)
     stats: Counter = Counter()
     if not snaps:
@@ -577,6 +619,11 @@ def b_freeze(fifa, rank, frozen_path: Path, now: datetime) -> dict:
     hi = (now - timedelta(hours=PAIR_H)).isoformat()
     people: dict[int, dict] = {}
     lines, dts = [], []
+
+    def skip(mid, why):
+        stats[why] += 1
+        skips.append({"match_id": mid, "why": why})
+        done.add(mid)
     for mid, at, d in account_matches(fifa, lo, hi):
         if mid in done:
             continue
@@ -587,25 +634,25 @@ def b_freeze(fifa, rank, frozen_path: Path, now: datetime) -> dict:
         sid, t = min(snaps, key=lambda s: (abs((s[1] - when).total_seconds()), s[0]))
         dt_h = (t - when).total_seconds() / 3600
         if abs(dt_h) > PAIR_H:
-            stats["far"] += 1
+            skip(mid, "far")
             continue
         if _season_key(ss, when) != _season_key(ss, t):
-            stats["season"] += 1
+            skip(mid, "season")
             continue
         opp = [s for s in sides(d) if str(s.get("ouid")) not in accs]
         if len(opp) != 1:
-            stats["both_accounts"] += 1
+            skip(mid, "both_accounts")
             continue
         lineup = cardstats.starters(opp[0])
         if len(lineup) != 11:
-            stats["lineup"] += 1
+            skip(mid, "lineup")
             continue
         if sid not in people:
             people[sid] = {r["nickname"]: (r["team_color"] or "", r["color_count"]) for r in rank.execute(
                 "SELECT nickname, team_color, color_count FROM snapshot_rows WHERE snapshot_id = ?", (sid,))}
         hit = people[sid].get(opp[0].get("nickname"))
         if hit is None:
-            stats["not_in_rank"] += 1
+            skip(mid, "not_in_rank")
             continue
         lines.append({"match_id": mid, "match_date": at, "snap_at": t.isoformat(), "dt_h": round(dt_h, 2),
                       "team_color": hit[0], "color_count": hit[1],
@@ -616,6 +663,11 @@ def b_freeze(fifa, rank, frozen_path: Path, now: datetime) -> dict:
         frozen_path.parent.mkdir(parents=True, exist_ok=True)
         with open(frozen_path, "a", encoding="utf-8") as f:
             for ln in lines:
+                f.write(json.dumps(ln, ensure_ascii=False) + "\n")
+    if skips:
+        skipped_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(skipped_path, "a", encoding="utf-8") as f:
+            for ln in skips:
                 f.write(json.dumps(ln, ensure_ascii=False) + "\n")
     stats["frozen"] = len(lines)
     if dts:
@@ -910,25 +962,41 @@ def cmd_a(fifa_path, d: Path, today: date, log=print) -> int:
     if res.get("final"):
         log(f"이미 끝났다: {res['final']}")
         return 0
+    if k is None:
+        log("[FAIL] D0 가 없다")
+        return 2
+    # 놓친 회차(측정일 + A_GRACE 를 넘김)는 "재료 부족(놓침)" 으로 채운다 — 재는 날을 고르지 못하게(관문 검토 [중]2)
+    missed = 0
+    while len(res["attempts"]) < len(A_DAYS) and k > A_DAYS[len(res["attempts"])] + A_GRACE:
+        res["attempts"].append({"verdict": "재료 부족", "why": "놓침", "day_no": A_DAYS[len(res["attempts"])], "date": None})
+        missed += 1
     i = len(res["attempts"])
-    if k is None or i >= len(A_DAYS) or k < A_DAYS[i]:
-        log(f"[FAIL] 측정 A {i + 1}번째는 D0+{A_DAYS[min(i, len(A_DAYS) - 1)]} 부터(오늘 D0+{k})")
+    if i >= len(A_DAYS):
+        res["final"] = "미달(재료 부족 세 번)"
+        save_json(p["a"], res)
+        log(f"[FAIL] 측정일을 다 놓쳤다 — {res['final']}")
+        return 2
+    if missed:
+        save_json(p["a"], res)
+    if k < A_DAYS[i]:
+        log(f"[FAIL] 측정 A {i + 1}번째는 D0+{A_DAYS[i]} ~ D0+{A_DAYS[i] + A_GRACE}(오늘 D0+{k})")
         return 2
     fconn = _ro(fifa_path)
     try:
         rows = a_rows(fconn, d0_of(meta))
+        audit = audit_of(fconn, meta, today)
     finally:
         fconn.close()
     log(f"W_A 경기 {rows.total:,} · 22장 다 아는 경기 {len(rows.y):,} · 뺀 것 {dict(rows.dropped)}")
-    log("── selftest(그날 n·Δ) ──")
+    log("── selftest(고정 시험 + 그날 n·Δ 검정력) ──")
     st = selftest(rows.delta, log=log)
-    if st == SELF_FIXED_FAIL:
-        log("[FAIL] selftest 고정 시험 미달(규칙 버그) — 판정하지 않고 기록도 안 한다")
-        return 1
-    if st == SELF_POWER_FAIL:   # 9판 — P6: 기록하고 다음 측정일로(기록 없이 멈추면 다음 날 다시 돌 수 있다)
+    if st == SELF_FIXED_FAIL:   # 고정 시험은 결정적 — 미달이면 코드가 D0 뒤 바뀐 것. 회차는 쓴 것으로 친다(다시 돌려 고르지 못하게)
+        r = {"verdict": "재료 부족", "why": "selftest 고정 시험 미달(규칙 버그 — 판정 없음)", "n": len(rows.y)}
+    elif st == SELF_POWER_FAIL:   # 9판 — P6: 기록하고 다음 측정일로(기록 없이 멈추면 다음 날 다시 돌 수 있다)
         r = {"verdict": "재료 부족", "why": "selftest 검정력 미달", "n": len(rows.y)}
     else:
         r = judge_a(rows.when, rows.delta, rows.y)
+    r.update(audit)
     r.update(day_no=k, date=today.isoformat(), rule_commit=RULE_COMMIT,
              dropped=dict(rows.dropped), dropped_season={f"{a}:{b}": v for (a, b), v in rows.dropped_season.items()},
              lag_days=[float(x) for x in np.percentile(rows.lag_days, [0, 50, 90, 100])] if rows.lag_days else None,
@@ -945,7 +1013,7 @@ def cmd_a(fifa_path, d: Path, today: date, log=print) -> int:
     log(f"판정: {r['verdict']}" + (f" · 상대 차 {r['rel']:+.2%} [{r['ci'][0]:+.2%}, {r['ci'][1]:+.2%}]" if "rel" in r else ""))
     if res.get("final") == "통과":
         log(f"config: C1_LOGIT_A = {r['a']:.6f} · C1_LOGIT_B = {r['b']:.6f}  # 기준 커밋 {RULE_COMMIT} · W_A · 경기 {r['n']:,}")
-    return 0
+    return 1 if st == SELF_FIXED_FAIL else 0
 
 
 def cmd_b(fifa_path, d: Path, today: date, retry: str | None = None, log=print) -> int:
@@ -959,6 +1027,10 @@ def cmd_b(fifa_path, d: Path, today: date, retry: str | None = None, log=print) 
     if retry is None and old is not None:
         log(f"이미 쟀다: {old.get('verdict')}")
         return 0
+    if retry is None and k > JUDGE_DAY + A_GRACE:
+        save_json(p["b"], {"verdict": "재료 부족", "why": "놓침", "day_no": k, "date": today.isoformat(), "rule_commit": RULE_COMMIT})
+        log(f"[FAIL] 측정 B 는 D0+{JUDGE_DAY} ~ D0+{JUDGE_DAY + A_GRACE} — 놓쳐서 재료 부족으로 기록")
+        return 2
     if retry is not None and (old is None or old.get("verdict") != "앞 절반 미달" or old.get("retry")):
         log("[FAIL] --b-retry 는 앞 절반 미달 뒤 한 번만")
         return 2
@@ -968,6 +1040,7 @@ def cmd_b(fifa_path, d: Path, today: date, retry: str | None = None, log=print) 
     fconn = _ro(fifa_path)
     try:
         r = judge_b(read_frozen(p["frozen"]), *b_material(fconn), retry_rule=retry)
+        r.update(audit_of(fconn, meta, today))
     finally:
         fconn.close()
     r.update(day_no=k, date=today.isoformat(), rule_commit=RULE_COMMIT)
@@ -994,12 +1067,18 @@ def cmd_c(fifa_path, d: Path, today: date, log=print) -> int:
     if load_json(p["c"]) is not None:
         log("이미 셌다")
         return 0
+    if k > JUDGE_DAY + A_GRACE:   # 그 뒤엔 앱 백필이 카드를 더 채울 수 있다 — 세는 날을 고르지 못하게
+        save_json(p["c"], {"day_no": k, "date": today.isoformat(), "rule_commit": RULE_COMMIT, "why": "놓침",
+                           "n21": False, "c3": False})
+        log(f"[FAIL] 측정 C 는 D0+{JUDGE_DAY} ~ D0+{JUDGE_DAY + A_GRACE} — 놓쳐서 N21·C3 은 뺀 것으로 기록")
+        return 2
     fconn = _ro(fifa_path)
     try:
         rows = count_c(fconn, d0_of(meta))
+        audit = audit_of(fconn, meta, today)
     finally:
         fconn.close()
-    save_json(p["c"], {"day_no": k, "date": today.isoformat(), "rule_commit": RULE_COMMIT, "accounts": rows,
+    save_json(p["c"], {"day_no": k, "date": today.isoformat(), "rule_commit": RULE_COMMIT, "accounts": rows, **audit,
                        "n21": any(r["n21_pass"] for r in rows),
                        "n21_lines": {v: any(r["n21"][v]["pass"] for r in rows) for v in ("height", "ovr", "salary")},
                        "c3": any(r["c3_pass"] for r in rows)})
@@ -1063,7 +1142,13 @@ def main(argv: list[str] | None = None) -> int:
         return selftest(delta)
     if a.status:
         return cmd_status(d, today)
+    if a.cap > CAP_MAX:
+        print(f"[FAIL] --cap 은 {CAP_MAX} 까지(규칙의 하루 상한)")
+        return 2
     if a.start:
+        if load_json(_paths(d)["meta"]) is None and selftest() == SELF_FIXED_FAIL:
+            print("[FAIL] selftest 고정 시험 미달 — D0 를 잡지 않는다")
+            return 2
         ok, text = start(d, today)
         print(("" if ok else "[FAIL] ") + text)
         return 0 if ok else 2
