@@ -1620,6 +1620,105 @@ def test_fc_season_rolls_into_done_without_numbers():
         c.close()
 
 
+def _g(sn, grade, w, d=0, l=0):
+    return ranker.RankRow(rank=sn, profile_sn=sn, nickname=f"p{sn}", elo=3000.0, grade=grade, win=w, draw=d, lose=l,
+                          team_value=1000)
+
+
+def _fcg(c):
+    return {r["profile_sn"]: (r["g_lo"], r["g_hi"], r["first_seen_late"]) for r in _rows_of(c, "fc_games")}
+
+
+def _fcg_started(c):
+    return {k: v for k, v in rc.get_state(c).items() if k.startswith(rc.FCG_STARTED)}
+
+
+_FCG_DAYS = [[_g(1, 1, 6, 2, 2), _g(2, 2, 10), _g(3, 1, 10), _g(4, 3, 10)],
+             [_g(1, 1, 8, 3, 3), _g(2, 1, 12), _g(4, 3, 13)],
+             [_g(1, 0, 8, 4, 3), _g(2, 2, 12), _g(3, 1, 20), _g(4, 3, 13)]]
+
+
+def test_fc_games_bounds():
+    """57 ⓪ — 챔스 이상 판수(승+무+패): 앞뒤 둘 다 챔스 이상이면 하한·상한 · 한쪽만이면 상한만 · 둘 다 아니면 0 ·
+    틈·처음 보기 전은 하한 0 · 상한 전부."""
+    with Env() as env:
+        c = env.conn()
+        for i, rows in enumerate(_FCG_DAYS):
+            _msnap(c, T0 + timedelta(days=i), rows)
+        _proc(c, ends=["2026-10-09"])
+        assert _fcg(c) == {1: (4 + 1, 10 + 4 + 1, 0),     # 무·패도 판수 — 승만 세면 (2, 12)
+                           2: (0, 10 + 2, 0),             # 챔스 아래 → 챔스: 상한만
+                           3: (0, 10 + 10, 0),            # t2 에 목록 밖 — 그 사이 10판은 0 ~ 10
+                           4: (0, 10, 0)}, _fcg(c)        # 앞뒤 둘 다 챔스 아래
+        assert _fcg_started(c) == {rc.FCG_STARTED + T0.isoformat(): T0.isoformat()}, _fcg_started(c)
+        c.close()
+
+
+def _fresh_55(ends):
+    with Env() as env:
+        c = env.conn()
+        for i, rows in enumerate(_FCG_DAYS):
+            _msnap(c, T0 + timedelta(days=i), rows)
+        _proc(c, ends=ends)
+        out = (_fc(c), _fcg(c), _fcg_started(c))
+        c.close()
+    assert out[0] and out[1] and out[2], "대조군이 비었다 — 아래 비교가 공허"
+    return out
+
+
+def test_fc_games_waits_for_notice_13_then_backfills_without_touching_fc_season():
+    # 2.12.1 에서 올라온 길 — 사람별 관문(6)은 넘어 fc_season 은 차 있고, 안내 13 전이라 fc_games 는 비었다.
+    # 동의하면 남은 원본으로 fc_games 만 다시 훑는다(fc_season 을 또 훑으면 두 번 센다). 철회하면 fc_games 만 지운다.
+    want = _fresh_55(["2026-10-09"])
+    with Env() as env:
+        env.write(notice=config.FC_GAMES_NOTICE_VERSION - 1)
+        c = env.conn()
+        for i, rows in enumerate(_FCG_DAYS[:2]):
+            _msnap(c, T0 + timedelta(days=i), rows)
+        out = _proc(c, ends=["2026-10-09"])
+        assert out["person"] == 2 and _fc(c), out
+        assert _count(c, "fc_games") == 0 and not _fcg_started(c), "안내 13 전에 판수를 쌓았다"
+        env.write()                                                    # 동의 13
+        _msnap(c, T0 + timedelta(days=2), _FCG_DAYS[2])
+        out = _proc(c, ends=["2026-10-09"])
+        assert out["backfill_55"] == 2, out
+        assert (_fc(c), _fcg(c), _fcg_started(c)) == want, "다시 훑은 값이 처음부터 쌓은 값과 다르다(FC 를 두 번 셌나)"
+        assert _proc(c, ends=["2026-10-09"])["backfill_55"] == 0
+        env.write(notice=config.FC_GAMES_NOTICE_VERSION - 1)
+        out = _proc(c, ends=["2026-10-09"])
+        assert out["purged"] and _count(c, "fc_games") == 0 and not _fcg_started(c), "관문 미달인데 판수가 남았다"
+        assert _fc(c) == want[0], "판수 관문이 FC 줄까지 지웠다(PERSON_TABLES 에 태우면 이렇게 된다)"
+        c.close()
+
+
+def test_fc_games_purged_when_collection_restarted():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, _FCG_DAYS[0])
+        _proc(c, ends=["2026-10-09"])
+        assert _count(c, "fc_games") == 4
+        env.write(on_at="2026-10-15T00:00:00")                         # 껐다 켰다 — 그 사이를 이어진 것으로 읽지 않게
+        assert _proc(c, ends=["2026-10-09"])["purged"]
+        assert _count(c, "fc_games") == 0, "다시 켰는데 옛 판수 줄이 남았다"
+        assert rc.get_state(c).get("fcg_epoch") == "2026-10-15T00:00:00", "켠 시각을 안 남겨 다음에 또 지운다"
+        c.close()
+
+
+def test_fc_games_rolls_into_done_paired_with_fc():
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_g(1, 1, 10), _g(2, 0, 5)])
+        _msnap(c, T0 + timedelta(days=1), [_g(1, 1, 12), _g(2, 3, 6)])
+        _proc(c)
+        assert _proc(c, now=datetime(2026, 11, 21, 9), ends=ENDS + ["2026-11-20"])["rolled"]
+        assert _count(c, "fc_games") == 0 and not _fcg_started(c), "새 시즌인데 옛 판수 줄이 남았다"
+        done = sorted((r["fc_lo"], r["fc_hi"], r["g_lo"], r["g_hi"], r["first_seen_late"])
+                      for r in _rows_of(c, "fc_games_done"))
+        assert done == [(0, 5 * 20 + 20, 0, 5 + 1, 1), (30, 10 * 20 + 2 * 20, 2, 10 + 2, 1)], done
+        assert "profile_sn" not in _rows_of(c, "fc_games_done")[0], "끝난 기록에 번호가 남았다"
+        c.close()
+
+
 def test_season_peak_and_drawdown():
     with Env() as env:
         c = env.conn()

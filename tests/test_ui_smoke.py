@@ -6838,7 +6838,8 @@ def test_notice_versions_split_first_and_reask():
                                             (8, False, True, True), (9, False, True, True),
                                             (10, False, True, True),    # 11 이 올라서 10 동의자도 수집을 켰으면 다시 묻는다
                                             (11, False, True, True),    # 12 가 올라서 11 동의자도(수집을 끈 사람은 토글을 누를 때 — 51단계 5판)
-                                            (12, False, False, True)]:
+                                            (12, False, True, True),    # 13 이 올라서 12 동의자도 수집을 켰으면(57 ⓪)
+                                            (13, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -6848,12 +6849,17 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (12, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (13, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         assert config.NOTICE_COLLECT_ONLY_FROM == 8
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
         assert config.CARD_BACKFILL_NOTICE_VERSION == 12
+        # 2.12.2: 13 = 다른 구단주의 챔스 이상 판수(57 ⓪) — 수집을 켠 사람 몫. 끈 12 동의자에겐 안 묻는다(켤 때)
+        assert config.FC_GAMES_NOTICE_VERSION == 13
+        config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 12
+        assert not config.notice_update_pending(), "수집을 끈 12 동의자에게 수집 몫 안내를 다시 물었다"
+        assert "챔피언스 이상에서 뛴 판수" in notice.changes_html(12)
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -6934,7 +6940,8 @@ def test_reask_shows_only_changes_after_accepted():
 NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표 칸 그림(7 의 410b2df025725408 은 이미지 서버 문구·CHANGES 8 이 더해져 대체됐다)
                  10: "8ce00c5021fb0806",                          # 10 = 2.10.1 구단주 분포 받기(49단계)
                  11: "75573220bc230e22",                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
-                 12: "b9157edc4717602e"}                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 시즌 FC·구단가치 기록 · '상위 20 연속' 이름 바로잡음(공개 전이라 같은 버전)
+                 12: "b9157edc4717602e",                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 시즌 FC·구단가치 기록 · '상위 20 연속' 이름 바로잡음(공개 전이라 같은 버전)
+                 13: "fc242bfee19fa311"}                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
 
 
 def _notice_digest() -> str:
