@@ -1437,7 +1437,8 @@ def test_fc_season_bounds():
     목록 밖 사이(틈)와 처음 보기 전 승리는 하한 0 · 상한 20."""
     d = T0.date()
     assert rc.grade_fc_range(0, d) == (15, 20) and rc.grade_fc_range(1, d) == (15, 20), "칸 0 을 슈챔으로 읽었다(M1)"
-    assert rc.grade_fc_range(2, d) == (0, 0) and rc.grade_fc_range(None, d) == (0, 0)
+    assert rc.grade_fc_range(2, d) == (0, 0)
+    assert rc.grade_fc_range(None, d) == (0, 20), "칸을 못 읽은 줄을 챔스 아래로 봤다 — 상한이 실제보다 작아진다(57 ⓪ [중]2)"
     with Env() as env:
         c = env.conn()
         t1, t2, t3 = T0, T0 + timedelta(days=1), T0 + timedelta(days=2)
@@ -1651,6 +1652,41 @@ def test_fc_games_bounds():
                            3: (0, 10 + 10, 0),            # t2 에 목록 밖 — 그 사이 10판은 0 ~ 10
                            4: (0, 10, 0)}, _fcg(c)        # 앞뒤 둘 다 챔스 아래
         assert _fcg_started(c) == {rc.FCG_STARTED + T0.isoformat(): T0.isoformat()}, _fcg_started(c)
+        c.close()
+
+
+def test_fc_and_games_survive_unreadable_cells():
+    """57 ⓪ 검토 [중]1·2 — 가운데 스냅숏에서 승무패 칸이 0 으로(못 읽음) 오면, 막지 않았으면 다음 회차에 시즌 판수 전부를
+    다시 더해 하한이 실제보다 커진다. 등급 칸을 못 읽은 구간(None)은 모름 — 상한에 들어가야 한다."""
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, [_g(1, 1, 10, 2, 2), _g(2, 1, 10)])
+        _msnap(c, T0 + timedelta(days=1), [_g(1, 1, 0, 0, 0), _g(2, None, 12)])     # 1 은 칸이 비었다 · 2 는 등급을 못 읽음
+        _msnap(c, T0 + timedelta(days=2), [_g(1, 1, 12, 2, 2), _g(2, None, 13)])
+        _proc(c, ends=["2026-10-09"])
+        g, f = _fcg(c), _fc(c)
+        # 빈 줄은 건너뛴다 → 그 다음은 틈(하한 0 · 상한은 실제로 늘어난 2판·2승만). 막지 않았으면 (16, 30) · (180, 440)
+        assert g[1] == (0, 14 + 2, 0), ("빈 칸 뒤 판수를 다시 더했다", g)
+        assert f[1][:2] == (0, 10 * 20 + 2 * 20), ("빈 칸 뒤 승을 다시 더했다", f)
+        assert g[2] == (0, 10 + 3, 0), ("등급을 모르는 구간을 상한에서 뺐다", g)     # 1→None 2판 · None→None 1판
+        assert f[2][:2] == (0, 10 * 20 + 3 * 20), f
+        c.close()
+
+
+def test_fc_games_drops_rows_of_another_season():
+    """57 ⓪ 검토 [중]3 — 2.12.1 로 내려가 있던 사이 시즌이 넘어가면 옛 시즌 fc_games 줄이 번호째 남는다 → 지금 시즌 줄만."""
+    with Env() as env:
+        c = env.conn()
+        _msnap(c, T0, _FCG_DAYS[0])
+        _proc(c, ends=["2026-10-09"])
+        cur = json.loads(rc.get_state(c)["person_season"])["at"]
+        with c:
+            c.execute("INSERT INTO fc_games VALUES ('2026-08-27T00:00:00', 99, 1, 2, 2, 1, '2026-08-28T00:00:00', 0)")
+            c.execute("INSERT INTO collect_state VALUES (?, 'x')", (rc.FCG_STARTED + "2026-08-27T00:00:00",))
+        assert _count(c, "fc_games") == 5                                       # 심은 줄이 들어갔는지 먼저
+        assert _proc(c, ends=["2026-10-09"])["purged"]
+        assert {r["season_at"] for r in _rows_of(c, "fc_games")} == {cur} and _count(c, "fc_games") == 4
+        assert list(_fcg_started(c)) == [rc.FCG_STARTED + cur], _fcg_started(c)
         c.close()
 
 

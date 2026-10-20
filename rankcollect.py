@@ -1118,7 +1118,10 @@ def is_top20_mark(grade) -> bool:
 
 def grade_fc_range(grade, day) -> tuple[int, int]:
     """등급 칸 → 그날 승리당 FC 의 (하한, 상한)(55 U6). 랭킹 화면 칸으로는 슈챔을 모른다 — 챔스 이상 칸(0·1)은
-    챔스 보상 ~ 슈챔 보상 · 그 아래·모르는 칸은 (0, 0). 보상표는 config.FC_REWARDS 한 곳(stats.reward_for)."""
+    챔스 보상 ~ 슈챔 보상 · 그 아래는 (0, 0). 칸을 못 읽은 줄(None)은 틈과 같이 0 ~ 슈챔 보상(57 ⓪ 검토 [중]2 — (0, 0) 이면
+    아이콘 마크업이 바뀐 날 상한이 실제보다 작아진다). 보상표는 config.FC_REWARDS 한 곳(stats.reward_for)."""
+    if grade is None:
+        return 0, stats.reward_for(models.SUPER_CHAMPION_DIVISION_ID, day)
     if not is_champ(grade):
         return 0, 0
     return (stats.reward_for(models.CHAMPION_DIVISION_ID, day),
@@ -1411,6 +1414,13 @@ def _first_reach(conn: sqlite3.Connection, watch_t: str, first_t: str, reached, 
                      " VALUES (?, ?, ?, ?, ?)", upd)
 
 
+def _unread(r) -> bool:
+    """승·무·패 칸이 전부 비었다 — 1만 위 안에 0판인 사람은 없으니 못 읽은 줄이다. 이 줄로 last_* 를 덮으면 다음 회차에 시즌
+    승·판수 전부를 다시 더해 하한이 실제보다 커진다(57 ⓪ 검토 [중]1). 건너뛰면 그 사람은 다음 회차에 틈(하한 0 · 상한 전부)으로
+    이어진다. 승수가 실제로 깎인 줄(넥슨 보정)은 0 이 아니라 그대로 센다(test_fc_season_bounds)."""
+    return not ((r["win"] or 0) or (r["draw"] or 0) or (r["lose"] or 0))
+
+
 def _fc_apply(conn: sqlite3.Connection, rows, season_at: str, t: str, ps: dict, prev: dict | None,
               cont: bool) -> None:
     """55 H6 — 사람별 시즌 FC 하한·상한(부르는 쪽 트랜잭션 안). 랭킹 화면 칸으로는 슈챔을 모르고(U6 — 챔스 이상 승리는
@@ -1426,6 +1436,8 @@ def _fc_apply(conn: sqlite3.Connection, rows, season_at: str, t: str, ps: dict, 
     new_cap = _fc_span((0,), start_day, day)[1]
     upd = []
     for r in rows:
+        if _unread(r):
+            continue
         sn, win, grade = r["profile_sn"], r["win"] or 0, r["grade"]
         h = have.get(sn)
         if h is None:
@@ -1459,6 +1471,8 @@ def _games_apply(conn: sqlite3.Connection, rows, season_at: str, t: str, ps: dic
         "SELECT profile_sn, g_lo, g_hi, last_games, last_grade, last_at FROM fc_games WHERE season_at = ?", (season_at,))}
     upd = []
     for r in rows:
+        if _unread(r):
+            continue
         sn, grade = r["profile_sn"], r["grade"]
         games = (r["win"] or 0) + (r["draw"] or 0) + (r["lose"] or 0)
         h = have.get(sn)
@@ -1468,9 +1482,9 @@ def _games_apply(conn: sqlite3.Connection, rows, season_at: str, t: str, ps: dic
         lo, hi, last_games, last_grade, last_at = h
         d = max(0, games - last_games)
         if cont and last_at == prev["at"]:
-            champs = [is_champ(g) for g in (last_grade, grade)]
-            lo += d if all(champs) else 0
-            hi += d if any(champs) else 0
+            ends = (last_grade, grade)
+            lo += d if all(is_champ(g) for g in ends) else 0
+            hi += d if any(g is None or is_champ(g) for g in ends) else 0   # 칸을 못 읽은 줄은 모름 — 틈과 같이 상한에
         else:
             hi += d
         upd.append((season_at, sn, lo, hi, games, grade, t, 0))   # 늦게 봄은 처음 넣을 때만(아래 UPDATE 가 안 건드린다)
@@ -1610,8 +1624,20 @@ def purge_fc_games_if_needed(conn: sqlite3.Connection) -> bool:
     ① 관문 미달인데 줄이 있다 ② 수집을 켠 시각이 쌓기 시작한 때와 다르다. 수집 잠금 안에서. → 지운 게 있었나."""
     allowed = config.read_fc_games_allowed()
     on_at = config.read_rank_on_at()
+    st = get_state(conn)
     has = conn.execute("SELECT 1 FROM fc_games LIMIT 1").fetchone() is not None
-    stale = allowed and (get_state(conn).get("fcg_epoch") or None) != on_at
+    stale = allowed and (st.get("fcg_epoch") or None) != on_at
+    # ③ 옛 버전(2.12.1 — fc_games 를 모른다)으로 내려가 있던 사이 시즌이 넘어갔거나 사람별 처리가 처음부터 다시 시작됐으면
+    # 지금 시즌이 아닌 줄이 번호째 남는다(57 ⓪ 검토 [중]3) — 지금 시즌 줄만 둔다
+    ps = _json_state(st, "person_season")
+    if allowed and has and not stale:
+        cur = ps["at"] if ps else None
+        if conn.execute("SELECT 1 FROM fc_games WHERE season_at IS NOT ? LIMIT 1", (cur,)).fetchone():
+            with conn:
+                conn.execute("DELETE FROM fc_games WHERE season_at IS NOT ?", (cur,))
+                conn.execute("DELETE FROM collect_state WHERE key LIKE ? AND key <> ?",
+                             (FCG_STARTED + "%", FCG_STARTED + (cur or "")))
+            return True
     if not ((not allowed and has) or stale):
         return False
     with conn:
