@@ -9903,6 +9903,31 @@ def test_profile_action_opens_nexon_rank_page_k13():
         app_main.QDesktopServices.openUrl = orig
 
 
+def test_teamcolor_batches_do_not_redraw_match_list():
+    """57 ① 리뷰 — 팀컬러를 받는 중(2초마다) 경기 목록·상대 전적을 통째로 다시 그리지 않는다(1만 경기 약 2초 — 창이 굳는다).
+    다 받은 뒤 한 번은 그린다 — 그 길이 끊기면 상대 정보 열이 끝내 안 채워진다."""
+    calls = []
+    keep_m, keep_o = _win._render_matches, _win._render_opponents
+    keep_at = _win._teamcolor_rendered_at
+    try:
+        _win._go_page("경기 목록")
+        _win._render_matches = lambda ms: calls.append("matches")
+        _win._render_opponents = lambda ms: calls.append("opponents")
+        _win._teamcolor_rendered_at = -1e9          # 다시 그릴 간격이 지났다
+        _win._on_teamcolor_loaded({"배치상대": ("", 1, "")})
+        assert _win._teamcolor_rendered_at > 0, "받는 중 다시 그리기 길을 안 탔다(테스트가 빈다)"
+        assert "matches" not in calls, ("받는 중에 경기 목록을 통째로 다시 그렸다", calls)
+        _win._invalidate_teamcolor()                # 다 받았다(_on_teamcolor_finished 끝)
+        assert "matches" in calls, ("다 받은 뒤 경기 목록을 안 그렸다", calls)
+    finally:
+        _win._render_matches, _win._render_opponents = keep_m, keep_o
+        _win._teamcolor_rendered_at = keep_at
+        _win._team_colors.pop("배치상대", None)
+        _win._team_values.pop("배치상대", None)
+        _win._teamcolor_raw.pop("배치상대", None)
+        _win._invalidate("matches")
+
+
 def test_match_list_opponent_columns_k3():
     """57 K3 — 상대 팀컬러·구단가치(지금 값)·맞대결(시즌 범위)·상대 점수(관문 + 내 계정 · 원본 14일은 정확값, 옛 경기는 구간)."""
     keep_c, keep_v, keep_elo = dict(_win._team_colors), dict(_win._team_values), dict(_win._elo)

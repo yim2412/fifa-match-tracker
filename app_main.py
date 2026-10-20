@@ -9932,12 +9932,15 @@ class MainWindow(QMainWindow):
             self._teamcolor_dialog = TeamColorDialog(self)
         self._teamcolor_dialog.open_label(label)
 
-    def _invalidate_teamcolor(self) -> None:
-        """팀컬러를 새로 읽었다 — 팀컬러 화면과 [카드별](팀컬러 필터 목록·걸러진 표)."""
+    def _invalidate_teamcolor(self, partial: bool = False) -> None:
+        """팀컬러를 새로 읽었다 — 팀컬러 화면과 [카드별](팀컬러 필터 목록·걸러진 표).
+        partial(받는 중 2초마다)이면 경기 목록·상대 전적은 건너뛴다 — 시즌 '전체' 1만 경기 목록은 한 번 그리는 데 약 2초라
+        (57 ① 리뷰 실측) 받는 동안 창이 굳는다. 그 둘은 다 받은 뒤(_on_teamcolor_finished) 한 번."""
         self._invalidate("teamcolor")
         self._invalidate("oppcards")
-        self._invalidate("matches")     # 57 K3 — 상대 팀컬러·구단가치 열
-        self._invalidate("opponents")   # 57 K1 — 상대 구단가치 필터
+        if not partial:
+            self._invalidate("matches")     # 57 K3 — 상대 팀컬러·구단가치 열
+            self._invalidate("opponents")   # 57 K1 — 상대 구단가치 필터
         self._refresh_match_color_options()   # 경기 목록 상대 팀컬러 필터(55 F2) — 가볍다(콤보만)
 
     def _teamcolor_scope(self) -> tuple[list[MatchSummary], list[dict]]:
@@ -10030,7 +10033,7 @@ class MainWindow(QMainWindow):
         now = time.monotonic()
         if now - self._teamcolor_rendered_at >= self.TEAMCOLOR_RENDER_INTERVAL_S:
             self._teamcolor_rendered_at = now
-            self._invalidate_teamcolor()
+            self._invalidate_teamcolor(partial=True)
 
     def _on_teamcolor_progress(self, done: int, total: int) -> None:
         text = self._teamcolor_progress_fmt.format(done=done, total=total)
