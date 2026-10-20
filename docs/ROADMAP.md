@@ -833,7 +833,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 난이도 **높음** — 계획 검토 2명. 51 측정이 끝나 카드 백필 수요를 넓혀도 될 때 시작한다.
 **더함(2026-10-19)**: 상위 랭킹 1~3위 카드(57 K7)의 **"스쿼드 대비 +%p"** — 그 랭커의 스쿼드 OVR(이 단계 자료) + 58 의 C1 모델로 기대 승률 대비 실제.
 
-## 57단계 — 빠뜨린 화면 + 설정 탭 (제안 2.13.1) · 3판 (2026-10-20 · 산출 기준 다시 대조 · U1~U6 답함 — 10-20 사용자 "추천대로" · 1회차 검토 [상] 7 반영 · U7·U8 사용자 "추천대로")
+## 57단계 — 빠뜨린 화면 + 설정 탭 (제안 2.13.1) · 4판 (2026-10-20 · 산출 기준 다시 대조 · U1~U8 답함 — 10-20 사용자 "추천대로" · 1회차 [상] 7 · 2회차 [상] 1 반영)
 
 55 를 쓸 때 산출 기준 화면 20장에서 빠뜨린 것(사용자 확인 2026-10-19 · 두 번째 대조에서 K10~K13 더함) — **새 넥슨 요청 0**(저장된 경기·rank.db) · K12 만 홈페이지 1~6요청. 서로 기대지 않아 55 와 떼었다(조각 상한). 항목마다 설계는 계획 검토 때.
 
@@ -913,14 +913,15 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|---|---|
 | K1 | [상대 전적 › 전적] 위 필터 줄(U4) | `widgets.WrapBar` 안에 `NoScrollComboBox` 셋: 경기 수(전체·50·100·200·500 · 직접 지정은 `QSpinBox`) · 표본(1·3·5·10 이상) + "미만 제외" 체크 · 내 포메이션(`rankmeta.formation_group` 콤보 — 55 J5 와 같은 것) · 상대 구단가치(`_value_bins` 의 지금 분위 칸 — U3 · `team_colors.team_value` — 지금 값) · 거르기는 새 `models.filter_matches(matches, n, my_formation, opp_value_bin) -> list` 하나(화면은 `core_api` 경유) · 필터 값은 `settings.ini` 에 안 남긴다(검색마다 처음으로) | 상대 구단가치는 **조회한 상대만**(1만 위 안·웹 데이터 켜짐) — 모르는 상대는 "모름" 칸으로 따로 · 내 포메이션 = `stats.formation_of`(경기마다) |
 | K2 | → 58(U1) | — | — |
-| K3 | [경기 목록] 열 넷 더함: 상대 팀컬러(지금 · 55 F2 와 같은 캐시) · 상대 구단가치 · 그 상대와의 전적(이 PC 저장분 "3승 1무 2패") · 상대 점수 | 상대 점수: 새 `rankmeta.opp_scores(conn, matches) -> dict[match_id, (elo, rank, snap_at)]` — 원본이 남은 14일 경기만 · `_opp_snap_for` 그대로(24시간 안 · 같은 시즌) · **작업 스레드**(`EloLoader` 꼴 새 로더 또는 `EloLoader.run` 끝에 — 구현 때 둘 중 짧은 쪽) · 저장 안 함 · 그보다 옛 경기는 `match_opp_rank` 구간 · 열 머리 툴팁 "그날 수집 기준 · 저장하지 않음" · 전적은 `models` 상대 전적 집계를 그대로(새 계산 없음) | 열이 늘어 1280×720 에서 잘림(PyQt 5) → 실측 · 수집 꺼짐·관문 미달(`read_person_allowed`)이면 그 열을 숨긴다 |
+| K3 | [경기 목록] 열 넷 더함: 상대 팀컬러(지금 · 55 F2 와 같은 캐시) · 상대 구단가치 · 그 상대와의 전적(이 PC 저장분 "3승 1무 2패") · 상대 점수 | 상대 점수: 새 `rankmeta.opp_scores(conn, matches) -> dict[match_id, (elo, rank, snap_at)]` — 원본이 남은 14일 경기만 · `_opp_snap_for` 그대로(24시간 안 · 같은 시즌) · **작업 스레드**(`EloLoader` 꼴 새 로더 또는 `EloLoader.run` 끝에 — 구현 때 둘 중 짧은 쪽) · 저장 안 함 · 그보다 옛 경기는 `match_opp_rank` 구간 · 열 머리 툴팁 "그날 수집 기준 · 저장하지 않음" · 전적은 `models` 상대 전적 집계를 그대로(새 계산 없음) | 열이 늘어 1280×720 에서 잘림(PyQt 5) → 실측 · 수집 꺼짐·관문 미달(**4판: N23 과 같은 관문 9 + 내 계정 경기만 + 안내 14** — 진입점 표와 같게 · `read_person_allowed`(6) 아님)이면 점수 열을 숨긴다 · 남의 경기 목록엔 점수 열 없음 |
 | K4 | [스쿼드·이적] 새 탭 "이력"(키 `history` — `VIEW_OF_KEY`·`_renderers()` · PyQt 7) | 새 `habits.history_runs(matches, ouid) -> list[Run(kind, value, start, end, games)]` — kind 닉네임(payload `nickname`) · 포메이션(`formation_of`) · 팀컬러는 58 · **깜빡임**: 같은 값이 `config.K4_MIN_RUN`(3)경기 미만이면 앞 구간에 붙이고 "잠깐 N경기" 표시 | 포메이션은 경기마다 자리 기록이라 흔들린다 — 문턱은 구현 때 내 계정으로 재고 정한다 |
 | K5 | [승률 그래프 › 점수·예측] 그래프 | `AreaTrendChart.set_data(…, rank_series=None)` 새 인자(기본 `None` → 그림 그대로 · P9) · 점선 · 오른쪽 축은 **뒤집은 순위**(1위가 위) · 값은 `elo_history.rank`(빈 줄 건너뜀) · 확대 막대(`zoom_elo`) 구간 그대로 | 순위가 1만 위 밖인 날은 빈칸 — 선이 끊긴다 |
 | K6 | 대시보드 머리 줄 바로 아래 한 줄 | 새 `analysis.headline(insights, report) -> str \| None` — 고르는 순서는 `config.K6_ORDER`(낙폭 크기 · 연패 · 상성 · 결정력 …) 표 한 곳 · 표본 미달이면 침묵(analysis 규칙) · **새 판정 없음(E3)** | 고르는 순서가 취향 — 1회차 검토에서 볼 것 |
 | K7 | [랭킹 추이 › 추이] 위 카드 셋 | 새 `rankmeta.top3(conn) -> list[TopCard(rank, nickname, elo, games_per_day, fc_lo, fc_hi, win_pct, ref_time)]` — 마지막 스냅숏 1~3위 · 하루 판수 = 원본 14일 안 (승+무+패) 증가 ÷ 날 수 · 하루 FC = `fc_season` 범위 ÷ 날 수(이번 시즌 숨김 판정 그대로 — 55 U9) · 승률 = 그 줄의 승÷전체 | 닉네임은 원본 스냅숏(14일)에서만 — 이미 [랭킹 추이] 가 보여 주는 범위 · 사람별 값(`fc_season`)은 안내 6 관문(`read_person_allowed`) 뒤 |
 | K8 | [팀컬러 랭킹]·[메타 분석] 팀컬러 표 | 종류 콤보(전체·국가·클럽·강화 — `teamcolor_meta` 이름 → 종류) + "비주류만" 체크(`config.MINOR_USERS` = 100 · **기준은 1만 명 전체** — 구간을 좁혀도 그대로) · 포메이션 표 콤보(`FORMATION_HOWS`)에 "비주류" 묶음 한 줄 · 구단가치 칸은 손대지 않는다(U3 — `_value_bins` 분위 그대로) | 이름이 같은 팀컬러(`TEAMCOLOR_DUP_NAMES`)는 종류가 이름에 붙어 있다 — 종류는 키로 가른다 |
 | K9 | [정보·설정] 새 탭 "저장 공간" | 종류 표(이름 · 크기 · 마지막 쓴 때 · [지우기]): ① 랭킹 수집 기록 = **`AboutDialog._on_clear_rank` 핸들러째 옮김**(앞 `stop_predict_workers` · `clear_rank_records` · 뒤 `_sync_pick`·토글·문구 — `app_main.py:12195-12218` · 1회차 A[중]) ② 카드 정보(`card_extra`·`card_tries`·`card_price_days`) ③ 그림 캐시(`.cache/` 하위 그림 폴더 — P12) ④ 경기 상세 캐시(`.cache/` **최상위 `*.json` 중 `meta_` 아닌 것** — P12 · 3판 G5) ⑤ **내 기록 전부**(3판 G6 — 아래) ⑥ 구단주 분포·랭커 픽(지금 지우기 함수 그대로) · 지우기마다 **쓰는 쪽을 먼저 멈춘다**(아래 진입점 표) · 크기·지우기 모두 작업 스레드(P7·P13) · 공용 함수 `app_main.clear_kind(kind)` 하나로 · 탭 아래 **"지워지지 않는 것" 한 줄**(API 키 `.env` · `crash.log` · 설정) · ①②③④⑥ 은 "fifa.db 파일 크기는 바로 줄지 않습니다"(VACUUM 안 함) | 쓰는 쪽이 돌고 있으면 지운 뒤 다시 채워진다 — 멈춤 순서가 핵심 |
-| K9 ⑤ (3판 G6 · 1회차 B[상]3) | 내 기록 전부 | U6 의 동기가 "PC 를 넘길 때" 라 경기 표만 지우면 남의 닉네임이 남는다 → fifa.db 의 **사용자 자료 표 전부**(`matches`·`match_players`·`match_squads`·`squad_match`·`squad_owner`·`accounts`(검색 칩)·`team_colors`·`elo_history`·`elo_track`·`trades`·`trades_prev`·`predictions`·`ranker_stats`·`card_prices`·`card_info`·`card_extra`·`card_tries`·`card_price_days`·`my_traits`·구단주 분포·랭커 픽 표) + `.cache/` 전부 + rank.db(① 길) — 대상은 손 목록이 아니라 **`store` 스키마의 표 전체 − 예외 표**(예외: `api_budget`·`trade_state` 의 키 지문 같은 앱 상태 · 이유 한 줄씩)로 뽑고 테스트가 스키마와 대조(검토 기준 14) · 끝에 **VACUUM**(작업 스레드 · 빈 공간이 DB 크기만큼 필요 — 모자라면 "파일 크기는 그대로" 로 끝) · 창이 들고 있는 `_matches`·`_details` 비움 | 600MB VACUUM 시간 → ⑦ |
+| K9 ⑤ (3판 G6 · 1회차 B[상]3) | 내 기록 전부 | U6 의 동기가 "PC 를 넘길 때" 라 경기 표만 지우면 남의 닉네임이 남는다 → fifa.db 의 **사용자 자료 표 전부**(`matches`·`match_players`·`match_squads`·`squad_match`·`squad_owner`·`accounts`(검색 칩)·`team_colors`·`elo_history`·`elo_track`·`trades`·`trades_prev`·`predictions`·`ranker_stats`·`card_prices`·`card_info`·`card_extra`·`card_tries`·`card_price_days`·`my_traits`·구단주 분포·랭커 픽 표) + `.cache/` 전부 + rank.db(① 길) — 대상은 손 목록이 아니라 **`store` 스키마의 표 전체 − 남길 것**으로 뽑고 테스트가 스키마와 대조(검토 기준 14) · **(4판 · 2회차 [중]1) 남길 것은 행 단위 규칙**: `api_budget`(하루 계수 — 지우면 상한이 풀린다) · `trade_state` 는 **키 접두어로** 가른다 — 남김 = `key_fp` 같은 앱 상태 / 지움 = `my_ouid`·`predict_final:*`(남기면 `predictions.final_*` 가 되살아난다 `store.py:400·973`)·거래 커서 `done_*`·`top_stop_*`(`tradecollect.py:108·114`) · 공개 참조 표 `seasons`·`teamcolor_meta`·`teamcolor_steps` 는 **남김**(남의 자료 아님 · 웹 데이터가 꺼지면 다시 못 받는다) · **(4판 · 2회차 [중]2) 지우기 + VACUUM 대신 파일 바꿔 끼우기** — 남길 행만 새 파일로 옮기고 `fifa.db`·`-wal`·`-shm` 을 바꿔 끼운다(rank.db `delete_db` 꼴): fifa.db 는 WAL 이라 secure_delete 로 600MB 를 지우면 WAL 이 DB 만큼 자라고, VACUUM 뒤 `wal_checkpoint(TRUNCATE)` 없이는 파일이 안 준다 — 바꿔 끼우면 옛 바이트가 안 남고 빠르다 · 바꿔 끼우기는 모든 fifa.db 연결이 닫힌 뒤(걸쇠 — 아래) · 실패하면 옛 파일 그대로 + "못 지움" · 창이 들고 있는 `_matches`·`_details` 비움 | 바꿔 끼우는 시간 → ⑦ |
+| K9 걸쇠 (4판 · 2회차 [상] S1) | ②~⑤ 공통 | [정보·설정] 은 모달(`AboutDialog(self).exec()` `app_main.py:3114`)이지만 이벤트 루프가 돌아 스케줄러 틱(`OwnerDistScheduler`·`CardBackfillScheduler`·`RankCollectScheduler`)·켤 때 자동 검색이 지우는 도중 로더를 다시 띄운다 → **셸에 "지우는 중" 걸쇠 `_clearing`(종류 집합)** — 모든 `start_*`·스케줄러 틱·로더 생성 자리가 첫 줄에서 확인(`_pick_purge_pending` 꼴) · 멈춤은 손 목록이 아니라 **셸이 들고 있는 QThread 전부를 cancel → wait**(종류별로 그 저장소에 쓰는 것만 고르는 표는 테스트가 만든다) · **테스트: fifa.db·`.cache/` 에 쓰는 QThread 클래스를 grep 으로 전부 뽑아(`QThread` 하위 클래스 × `store.`/`open_db`/`_cache_dir`/`images.` 쓰기) 걸쇠 확인 대상/제외 표와 대조 — 새 로더가 생기면 FAIL**(검토 기준 14 · 2회차가 찾은 빠진 쓰는 쪽: `TradeLoader`·`PriceLoader`·`CardInfoLoader`·`PlayerInfoLoader`·`RankerStatsLoader`·`TeamColorLoader`·`RankListLoader`·`TeamColorEffectLoader`·`SeasonLoader`·`RankMaintWorker`·`CachePruneWorker`·`ImageLoader` — `app_main.py:681·769·803·831·868·1080·1153·1299·1823·1870·11500`) · **(2회차 [중]3) 작업 스레드 주인은 셸**(대화상자가 아니라 — 닫혀도 산다) · 대화상자는 진행 줄만 · 창 닫기·트레이 `quit_app` 은 지우기 스레드를 기다린다(바꿔 끼우기 직전이면 끝까지 · 그 전이면 cancel — 옛 파일 그대로) | 걸쇠를 빼면 지우는 중 틱이 로더를 띄우는 테스트가 FAIL 하는지(보호 장치 — "막지 않았으면" 먼저 단언) |
 | K10 | → 뺌(U2) | — | — |
 | K11 | [랭킹 추이] 새 탭 "보상"(키 `rewards_rank`) | 새 `rankmeta.reward_board(conn) -> RewardBoard` — **(3판 G7) 사람별 100판당 범위 = [fc_lo ÷ g_hi, fc_hi ÷ g_lo] × 100**(`fc_games_done`·`fc_games` 의 `g_lo`/`g_hi` · ⓪ 결과) · 대상 = **`g_lo` ≥ 100**(하한으로 — 0 나눔 없음) · 구간(순위 구간·구단가치 분위 칸)별 가운데 값의 **중앙값** + 구간 인원 · **사람 줄·닉네임 없음(U8)** · 구간 인원 < `config.K11_MIN_PER_BAND` 이면 그 칸 침묵 · 내 값 = 저장 경기 중 **챔스 이상 등급 판만** 거른 `stats.win_rewards`(정확값 — "남들은 추정 범위" 한 줄 · A[중]) · 순위 보상 예상은 `predict.reward_brackets(day)` 로 지금 등수(A[중] — `main_reward` 는 경로를 받는다) · **숨김 판정 = `FC_STARTED`·`FCG_STARTED` 중 늦은 쪽**(3판 G3 — 55 H6 의 판정을 그대로 쓰지 않는다) · 관문 = `read_fc_games_allowed`(13) · 2.12.1 rank.db 에 `fc_games` 가 없으면(no such table) 빈 화면 + 이유 | U5 쌓기 없이는 총량뿐 · 이번 시즌은 숨김(P4) |
 | K12 | ~~[랭커 픽 › 내 스쿼드]~~ **(3판 G4) [메타 분석 › 포지션 특성] 탭 위 "내 스쿼드(지금)" 줄** — [랭커 픽 › 내 스쿼드]는 **검색한 계정의 최근 경기** 스쿼드라(`app_main.py:8990`) 스쿼드메이커의 **내 계정 지금** 스쿼드와 대상·시점이 다르고, 그 화면이 보이면 `start_visible_api_loader` 가 특성 로더를 멈춘다(`app_main.py:5649-5651`) | `traitcollect.fetch_owner_sn`·`fetch_team` 그대로(1~6요청) · 로더는 `TraitLoader` 에 "내 계정" 한 줄 — `TRAIT_KEY` 탭이 보일 때 `start_trait` 길 그대로 · **관문 = `trait_allowed()`(수집 켜짐 + 안내 7) + 안내 14**(`MY_TRAIT_NOTICE_VERSION`) · **지우기 조건 = 관문의 부정과 같은 식**(`sync_ranker_pick_data` 의 `WEB_DATA and RANK_COLLECT` 와 어긋나 지우고 다시 받기를 되풀이하지 않게 — A[상]4) · 내 계정 = `trade_state.my_ouid` **+ `key_fp == key_fingerprint(API_KEY)`**(`fill_opp_rank` 꼴 · `rankcollect.py:1681-1684`) · 하루 요청은 `TRAIT_WEB_DAILY_REQ` 몫 안에서 · 저장 새 표 `my_traits(ouid, cards_json, fetched_at)`(P8) · 하루 한 번 | 키 주인 확인 전이면 안 받는다 |
@@ -941,15 +942,15 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|---|---|
 | K9 ① 랭킹 수집 기록 | rank.db 파일 + `elo_history`·`elo_track` | **`AboutDialog._on_clear_rank` 핸들러째**(`stop_predict_workers` → `clear_rank_records`(수집 끔 → `sched.stop` → `owner_sched.halt_for_delete` → `delete_db`) → `_sync_pick`·토글·문구) — 확인창에 "수집이 꺼집니다 · 내 계정 ELO 는 남습니다"(B[중]) | 기존 `test_ui_smoke` 지우기 테스트의 버튼 이름 고침 · 옛 [정보] 버튼이 없어졌는지 · predictions 줄이 되살아나지 않는지 |
 | K9 ② 카드 정보 | `card_extra`·`card_tries`·`card_price_days` | `CardBackfillScheduler` 에 **새 `halt_for_delete()`**(지금은 `running/start/tick/sync/_on_done/shutdown` 뿐 — A[중] · 도는 바퀴 cancel → wait) → 지움 → 토글은 그대로(창에 "토글이 켜져 있으면 다시 채웁니다") · **51 측정 기간(~11-26)엔 이 PC 에서 누르지 않는다**(P13 — `measure_cards` 가 같은 표를 읽는다 · 개발 메모만, 창에 안 씀) | 바퀴 도중 지우기 → 지운 뒤 줄 0 · 다음 틱이 다시 채움 |
-| K9 ③ 그림 캐시 | `.cache/` 하위 그림 폴더(P12) | `IconLoader` 들 · `MatchLoader._current_grade`(등급 배지 `app_main.py:645`) · 팀컬러 로더(엠블럼 `app_main.py:1375`) cancel → wait → 폴더 지움(임시 파일 포함) | 로더가 도는 중 지우기 → 반쯤 쓴 파일 없음 · 메타·상세 파일은 남는다 |
+| K9 ③ 그림 캐시 | `.cache/` 하위 그림 폴더(P12) | `IconLoader` 들 · `ImageLoader`(선수 얼굴 `app_main.py:681` — 2회차 [중]5) · `MatchLoader._current_grade`(등급 배지 `app_main.py:645`) · 팀컬러 로더(엠블럼 `app_main.py:1375`) cancel → wait → 폴더 지움(임시 파일 포함) | 로더가 도는 중 지우기 → 반쯤 쓴 파일 없음 · 메타·상세 파일은 남는다 |
 | K9 ④ 경기 상세 캐시 | `.cache/` 최상위 `*.json` 중 `meta_` 아닌 것(P12) | `MatchLoader`·`CachePruneWorker`·랭커 픽·특성 로더·비교 로더 멈춤 — **DB 에 아직 못 넣은 경기(이어 받기분)도 사라진다** → 창에 그 수 | 이어 받기분이 있을 때 경고 문구 · `meta_*.json`·그림 폴더가 남는지 |
 | K9 ⑤ 내 기록 전부(U6 · G6) | fifa.db 사용자 자료 표 전부(스키마 − 예외) + `.cache/` + rank.db | 쓰는 쪽 **이름으로 전부** 멈춤: `MatchLoader`(`app_main.py:469`)·`SquadBackfillWorker`(`:907·927`)·랭커 픽(`rankerpick.py:259` `save_matches`)·`TraitLoader`·`OwnerDistScheduler`·`CardBackfillScheduler`·`EloLoader`·예측 워커·`IconLoader` 들 → 작업 스레드에서 지움 → VACUUM → `_matches`·`_details` 비움 → `_invalidate` 전부 · 두 번 확인 · 별도 프로세스(`check_api`·`dev_archive`)는 이 PC 만의 일 | 지운 뒤 화면이 빈 화면 문구로(크래시 없음) · 로더가 다시 안 채움 · **스키마의 모든 표가 대상/예외 중 하나인지**(새 표가 생기면 FAIL) · 검색 칩 0 |
 | K9 ⑥ 구단주 분포 · 랭커 픽 | 기존 `purge_owner_dist`·`purge_ranker_pick_data` | 기존 함수 그대로 · 창에 "토글이 켜져 있어도 다음 바퀴까지 칩·문장이 비어 있습니다"(B[중] — 바퀴 기록이 남는다 `store.py:1769`) | 기존 테스트 |
 | 기존 길: 수집 끄기 · 동의 철회 · 시즌 넘김 `_roll` · `purge_person_if_needed` | ⓪ `fc_games` | **⓪ 에서 끝남** — `purge_fc_games_if_needed`(관문 13 · `PERSON_TABLES` 밖 — G2) | ⓪ 테스트(`test_rankcollect` 111) |
-| K12 `my_traits` 지우기 | 관문 꺼짐 · 키 바뀜 · K9 ⑤ | **관문(`trait_allowed` + 안내 14)의 부정과 같은 식**으로 지움(G4) · 키 바뀜은 `my_ouid`·`key_fp` 가 바뀔 때 | 끄면 0줄 · 수집 끈 웹 데이터 사용자에서 받기·지우기가 되풀이되지 않는지 |
+| K12 `my_traits` 지우기 | 관문 꺼짐 · 키 바뀜 · K9 ⑤ | **관문(`trait_allowed` + 안내 14)의 부정과 같은 식**으로 지움(G4) · **지우는 자리는 `purge_ranker_pick_data` 안 한 줄**(끄는 길이 전부 거치는 `sync_ranker_pick_data` `app_main.py:5833-5842`) **+ 켤 때 한 번 같은 판정**(.env 손 수정·2.12.x 로 내렸다 올림 — 2회차 [중]7) · 키 바뀜은 `my_ouid`·`key_fp` 가 바뀔 때 | 끄면 0줄 · 수집 끈 웹 데이터 사용자에서 받기·지우기가 되풀이되지 않는지 |
 | K3 상대 점수 읽기 | rank.db 읽기만 | `open_rank_db_ro`(없으면 안 만든다) · 작업 스레드 · **관문 = N23 과 같은 9 + 내 계정 경기만**(B[중] — `app_main.py:6554` · 6 이 아님) + 안내 14 · 같은 시즌 경계는 `fill_opp_rank` 본문의 `person_season` 판정을 함수로 떼어 같이 쓴다(A[중] — `_opp_snap_for` 는 24시간만 본다) | rank.db 없음 → 열 숨김 · 남의 경기 목록엔 점수 열 없음 |
 | K11 보상판 읽기 | rank.db 읽기만 | `read_fc_games_allowed`(13) · 숨김 = 두 시작 시각 중 늦은 쪽(G3) | `FCG_STARTED` 만 늦은 사본 → 숨김 |
-| 안내 14 | `notice.py` 글 · `NOTICE_VERSION` 14 | `test_notice_text_bumps_version` 골든 · `CHANGES[14]` · `NOTICE_COLLECT_ONLY_FROM`(U7) · 옛 버튼 자리 글 셋(`notice.py:69·122·150-151`)·README | 골든 · "[정보] 의 수집 기록 지우기" 문자열이 남아 있지 않은지 |
+| 안내 14 | `notice.py` 글 · `NOTICE_VERSION` 14 | `test_notice_text_bumps_version` 골든 · `CHANGES[14]` · `NOTICE_COLLECT_ONLY_FROM` 8 그대로(U7) — `config.py:143-147` 주석에 **두 번째 예외 14 와 이유**(바뀐 글 중 수집과 무관한 것은 버튼 자리·링크 안내뿐이라 다시 묻지 않는다)를 적고 `test_ui_smoke.py:6853` 버전 단언 갱신(2회차 [중]6) · 옛 버튼 자리 글 셋(`notice.py:69·122·150-151`)·README | 골든 · "[정보] 의 수집 기록 지우기" 문자열이 남아 있지 않은지 |
 
 ### ③ 환경 행렬
 
@@ -974,7 +975,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | ⓪ | 틈·늦게 봄 | 판수 범위 넓음 → 100판당 범위 넓음 | 범위 표시 | 다음 시즌 처음부터 |
 | K12 | 스쿼드메이커 형식 바뀜 | 아이콘 없음 | 32단계 오류 분류(`traitcollect` 의 kind) | — |
 | 옛 버전으로 되돌림 | 2.12.x 가 `my_traits` 를 모름 | 영향 없음 · `fc_games` 는 ⓪ 의 `purge_fc_games_if_needed` 가 새 버전을 켤 때 처리(G2 — `_has_person` 아님) | — | — |
-| K9 ⑤ VACUUM | 빈 공간 모자람 · 다른 실행본이 잡음 | 자료는 지워졌고 파일만 그대로 | 결과 줄 "파일 크기는 그대로" | 다음 켤 때 다시 안 함(한 번만) |
+| K9 ⑤ 바꿔 끼우기 | 다른 실행본·별도 프로세스(`dev_archive`)가 파일을 잡음 · 디스크 모자람 | 옛 파일 그대로(아무것도 안 지워짐) | 결과 줄 "지우지 못했습니다 — 다른 창을 닫고 다시" | 다시 누르기 · 반쯤 만든 새 파일은 지움 |
 
 ### ⑦ 자원 예산 (상한 → 구현 때 이 PC 사본으로 잰다)
 
@@ -984,7 +985,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | K1 거르기 · K4 이력 · K13 차 (화면 스레드) | 50ms · 1만 경기 | fifa.db 사본 |
 | K7 · K11 (작업 스레드 또는 `rankmeta` 캐시) | 0.3초 | rank.db 사본 |
 | K9 크기 재기 | 2초 · 작업 스레드(P7) | fifa.db 667MB 사본 |
-| K9 ⑤ 지우기 + VACUUM (작업 스레드 · 진행 줄) | 지우기 30초 · VACUUM 2분 · 그동안 창은 움직인다 | fifa.db 667MB 사본(`secure_delete=ON` 그대로) — 넘으면 진행 줄 문구만 고치고 상한을 실측으로 |
+| K9 ⑤ 남길 행 옮기기 + 바꿔 끼우기 (셸 작업 스레드 · 진행 줄) | 30초 · 그동안 창은 움직인다 · 디스크 여유 = 남길 행 크기만 | fifa.db 667MB 사본 — 넘으면 진행 줄 문구만 고치고 상한을 실측으로 |
 | K1 · K4 포메이션 | 50ms 안에 1만 경기 `formation_of` 가 안 들면 경기마다 한 번 계산해 캐시(`MatchSummary` 에 포메이션 없음 — `models.py:94-112` · A[중]) | fifa.db 사본 |
 | 새 넥슨 요청 | **K12 하루 1~6 · 나머지 0** | `_web_calls()` 에 K12 길이 이미 있는지 · `test_web_data_switch_blocks_every_request` |
 
@@ -1050,6 +1051,17 @@ A(코드·환경 · 묶음 11.2만 자) 22.6만 토큰 [상]5·[중]10 · B(사�
 
 [중] 반영(본문에 "A[중]·B[중]" 표시): `_on_clear_rank` 핸들러째 · `CardBackfillScheduler.halt_for_delete` 새로 · 측정이 fifa.db 를 바로 읽음 · 그림 캐시 쓰는 쪽 · ⑤ 쓰는 쪽 이름 · 지우기·VACUUM 시간 상한 · K3 관문 9 + 내 경기만 · 같은 시즌 경계 떼기 · `MatchSummary` 에 포메이션 없음 · K11 내 값 챔스 이상만 · `reward_brackets` · 2.12.1 rank.db `fc_games` 없음 · ① 확인창 문구 · ⑥ 다음 바퀴까지 빈 칩 · 옛 버튼 자리 글·README · 한 번에 공개.
 구현 때 테스트로(본문 미반영 — 구현자가 이 줄을 본다): K1·K3 구단가치는 **지금 값** 표시 · "모름" 칸 판수 · 거르면 빈 화면 문구 · 직접 지정 `QSpinBox` 휠 막기(`NoScrollComboBox` 꼴) · K1 구단가치 필터는 rank.db 없으면 숨김 · K3 툴팁 "그날 수집 원본에서 읽음(원본 14일 보관)" · K13 "전체" = K1 필터 건 같은 표 전체(그 줄 포함) · 툴팁에 판수 · K6 예시 "승률은 무난하지만" 은 새 판정이라 고르지 않는다 · 같은 문장 반복이면 다음 순서 · None 일 때 줄 자리 고정 · **K4 닉네임 이력은 내 계정만**(남의 옛 닉네임을 잇지 않게 — B[중]) · K5 순위는 점(검색한 날만) — 선으로 잇지 않음 · 로그 축 검토 · K8 종류는 엠블럼 경로로(`teamcolor_meta` 에 종류 열 없음) · 목록 없으면 콤보 숨김 · K12 하루 몫.
+
+### 2회차 검토 — 마지막 회차 (2026-10-20 · Opus 1명 · 계획 전체 · 3판 `9998c65` · 묶음 14.7만 자 · 17.3만 토큰)
+
+**새 [상] 1** — 1회차 G6 반영 자리에서 나왔다(고친 자리가 새 결함을 만드는 51 과 같은 꼴).
+
+| # | [상] | 반영(4판) |
+|---|---|---|
+| S1 | K9 ⑤ 멈춤 목록에 fifa.db·`.cache/` 에 쓰는 로더 12개가 빠졌고, [정보·설정] 이 모달이어도 이벤트 루프가 돌아 스케줄러 틱·자동 검색이 지우는 도중 로더를 다시 띄운다 — 남의 닉네임(`team_colors`)이 다시 쌓여 G6 목적이 깨진다 | 손 목록 대신 장치: 셸 걸쇠 `_clearing` + 모든 시작 자리 확인 · 쓰는 QThread 를 grep 으로 뽑아 대조하는 테스트(새 로더 → FAIL) · ②③④ 에도 |
+
+[중] 반영: `trade_state` 는 키 접두어로 가름 · 공개 참조 표 남김 · 지우기+VACUUM 대신 바꿔 끼우기(WAL·secure_delete) · 작업 스레드 주인은 셸 · 종료 대기 · K3 본문 관문 9 로 · `ImageLoader` · `config` 주석 예외 14 · K12 지우는 자리.
+
 
 ## 43단계 — 내 경기 분석 ② 모델·집계 (제안 2.9.1) · 5판 + 4회차 [중] 표 (2026-10-12 · **계획 검토 끝** — 4회차(계획 전체 · 1명) 새 [상] 0 · [상] 7→6→3→0 · [중] 7 은 "4회차 검토" 표대로 구현 때 테스트로)
 
