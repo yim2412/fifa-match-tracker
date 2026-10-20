@@ -95,5 +95,6 @@ REQUIRED = {
 
 # run_local: 이 프로세스가 보이면 서버를 안 띄우고, 도는 중 보이면 내린다. 비어 있으면 띄우기를 거부한다
 # (이름이 틀리거나 비면 감시가 조용히 안 걸린다). 이름은 이 PC 에서 게임을 켜고 확인해 채운다.
-GAME_PROCESSES: tuple[str, ...] = ()
+# 2026-10-20 이 PC 실측: fczf.exe = 게임 본체(창 "FC ONLINE") · fclauncher.exe = 게임 런처. NexonLauncher64 는 게임 없이도 상주해 뺐다
+GAME_PROCESSES: tuple[str, ...] = ("fczf.exe", "fclauncher.exe")
 WATCH_S = 30
