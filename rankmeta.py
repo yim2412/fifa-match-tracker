@@ -1163,11 +1163,8 @@ class TopCard:
 
 def top3(conn: sqlite3.Connection, person: bool = False) -> list[TopCard]:
     """마지막 원본 스냅숏 1~K7_TOP_N 위. person = 사람별 표(fc_season)를 읽어도 되나(안내 6 관문 — 화면이 판정).
-    닉네임은 원본 스냅숏(14일)에서만 — [랭킹 추이] 가 이미 보여 주는 범위."""
-    return _cached("top3", conn, (person,), lambda: _top3(conn, person))
-
-
-def _top3(conn, person: bool) -> list[TopCard]:
+    닉네임은 원본 스냅숏(14일)에서만 — [랭킹 추이] 가 이미 보여 주는 범위. 캐시하지 않는다(K11 과 같은 까닭 — 사람별 처리는
+    스냅숏 커밋 뒤에 돌고 동의 철회로 지워지는데, 캐시 키(스냅숏 목록)는 둘 다 못 본다 · 57 ② 리뷰 [중] · 이 PC 첫 계산 42ms)."""
     raw = _season_raw(conn)
     if not raw:
         return []
@@ -1228,8 +1225,9 @@ class RewardBoard:
     state: str = "ok"                  # ok · no_season(사람별 처리 전) · hidden(늦게 시작한 시즌) · no_table(옛 rank.db) · empty
     season_start: str | None = None
     snap_at: str | None = None
-    users: int = 0                     # 대상(g_lo ≥ K11_MIN_GAMES)
+    users: int = 0                     # 대상(g_lo ≥ K11_MIN_GAMES · 시즌 처음부터 본 사람)
     seen: int = 0                      # 판수를 아는 사람 전부
+    late: int = 0                      # 그중 시즌 중간에 처음 잡혀 뺀 사람
     overall: RewardBand | None = None
     by_rank: list = field(default_factory=list)      # RewardBand — OPP_RANK_BANDS 순서 · 마지막 스냅숏에 없는 사람은 "1만 위 밖·모름"
     by_value: list = field(default_factory=list)     # RewardBand — value_bins 칸 순서 + 모름
@@ -1262,13 +1260,20 @@ def reward_board(conn: sqlite3.Connection) -> RewardBoard:
         if _late_start(out.season_start, late):
             out.state = "hidden"
             return out
-        got = conn.execute("SELECT f.profile_sn, f.fc_lo, f.fc_hi, g.g_lo, g.g_hi FROM fc_season f JOIN fc_games g"
+        got = conn.execute("SELECT f.profile_sn, f.fc_lo, f.fc_hi, g.g_lo, g.g_hi,"
+                           " MAX(f.first_seen_late, g.first_seen_late) FROM fc_season f JOIN fc_games g"
                            " ON g.season_at = f.season_at AND g.profile_sn = f.profile_sn WHERE f.season_at = ?",
                            (season_at,)).fetchall()
-    except sqlite3.Error:
+    except sqlite3.Error as e:
+        if "no such table" not in str(e):
+            raise           # 잠김·손상은 "옛 버전" 이 아니다 — 화면(_rank_read)이 None(못 읽음)으로 받는다
         out.state = "no_table"
         return out
     out.seen = len(got)
+    # 시즌 중간에 처음 잡힌 사람(first_seen_late)은 뺀다 — 처음 넣을 때 fc_hi 는 시즌 전체 승리 × 최대 보상인데 g_lo 는
+    # 그 뒤 챔스 판수뿐이라 fc_hi ÷ g_lo 가 부푼다(57 ② 리뷰 [상] — 시즌 단위 숨김 G3 로는 못 막는 사람 단위 늦음)
+    out.late = sum(1 for r in got if r[5])
+    got = [r[:5] for r in got if not r[5]]
     spans = {sn: (fl * 100 / gh, fh * 100 / gl) for sn, fl, fh, gl, gh in got if gl >= config.K11_MIN_GAMES}
     out.users = len(spans)
     if not spans:

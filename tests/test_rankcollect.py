@@ -2116,7 +2116,10 @@ def test_process_meta_budget_10k_rows():
                 people.append(nxt)
                 nxt += 1
         print(f"       메타 처리 1만 행 최악 CPU {worst:.2f}s(벽시계 {worst_wall:.2f}s) · 사람별 {_count(c, 'elo_season'):,}줄")
-        assert worst <= 0.5, worst
+        # 이 PC 상한 0.5 그대로 · CI 러너만 1.5배 — 같은 코드가 CI 8회에 0.33~0.58초로 흔들렸고 문서만 바꾼 커밋(c97a1da)도
+        # 0.58 로 빨갰다(2026-10-20 · 이 PC 0.38). 러너 CPU 가 회차마다 달라 상한을 이 PC 값으로 두면 코드와 무관하게 빨개진다
+        limit = 0.5 * (1.5 if os.environ.get("GITHUB_ACTIONS") else 1)
+        assert worst <= limit, (worst, limit)
         c.close()
 
 

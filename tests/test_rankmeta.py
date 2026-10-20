@@ -824,11 +824,15 @@ def test_reward_board_spans_bands_and_min_games():
     people = [(i, i, 1500, 2000, 100, 200) for i in range(1, n + 1)]           # 1~200위 · 범위 [750, 2000] 가운데 1375
     people += [(500 + i, 500 + i, 3000, 3000, 200, 200) for i in range(n - 1)]   # 201~1,000위 · 한 명 모자람
     people += [(900, None, 1, 1, 99, 500)]                                     # g_lo < 100 — 대상 밖
+    people += [(950, 5, 9000, 9000, 500, 500)]                                 # 시즌 중간에 처음 잡힘 — 아래에서 깃발
 
     def body(db):
         _reward_db(db, people)
+        with db.conn:
+            db.conn.execute("UPDATE fc_games SET first_seen_late = 1 WHERE profile_sn = 950")   # 한쪽 표만 깃발이어도 뺀다
         b = M.reward_board(db.conn)
-        assert b.state == "ok" and b.seen == len(people) and b.users == len(people) - 1, (b.state, b.seen, b.users)
+        assert b.state == "ok" and b.seen == len(people) and b.late == 1, (b.state, b.seen, b.late)
+        assert b.users == len(people) - 2, ("늦게 잡힌 사람(fc_hi 가 시즌 전체 승리)을 넣었다 — 100판당이 부푼다", b.users)
         top = b.by_rank[0]
         assert top.users == n and top.median == (1500 * 100 / 200 + 2000 * 100 / 100) / 2, top
         assert (top.lo, top.hi) == (750.0, 2000.0), (top.lo, top.hi)

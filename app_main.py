@@ -1775,12 +1775,12 @@ def season_score_report(pts: list[dict], rows: list[dict], season_start: datetim
 
 def drawdown_headline(rep, club) -> str | None:
     """57 K6 의 낙폭 자리 — 내 최대 낙폭이 같은 구간(최고점 ±R2_BAND) 사람들 중앙보다 깊을 때만(55 R2 재료 그대로)."""
-    if rep is None or club is None or not rep.max_dd:
+    if rep is None or club is None or not rep.max_dd or rep.dd_peak is None:
         return None
     band = core.dd_band(club.peaks_dd, rep.peak)
     if band is None or rep.max_dd <= band[0]:
         return None
-    return (f"한때 최고 {rep.peak:,.0f}점에서 {rep.peak - rep.max_dd:,.0f}점까지 떨어진 적이 있습니다"
+    return (f"한때 {rep.dd_peak:,.0f}점에서 {rep.dd_peak - rep.max_dd:,.0f}점까지 떨어진 적이 있습니다"
             f" — 같은 구간 {band[1]:,}명의 중앙 낙폭 −{band[0]:,.0f}점보다 깊습니다")
 
 
@@ -1791,9 +1791,11 @@ def score_report_lines(pts: list[dict], rows: list[dict], wins: list, club, seas
     if rep is None:
         return []
     lines = [f"<b>시즌 평균 {rep.avg:,.0f}점</b> · 지금 {rep.now:,.0f}점({rep.now - rep.avg:+,.0f})"]
-    dd = f"최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d}) 뒤 최대 −{rep.max_dd:,.0f}점"
-    if rep.dd_day is not None:
-        dd += f"({rep.dd_day:%m.%d} 바닥)"
+    if rep.dd_peak is not None and rep.dd_day is not None:
+        dd = (f"{rep.dd_peak:,.0f}점에서 {rep.dd_peak - rep.max_dd:,.0f}점까지 −{rep.max_dd:,.0f}점({rep.dd_day:%m.%d} 바닥)"
+              f" · 시즌 최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d})")
+    else:
+        dd = f"하락 없음 · 시즌 최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d})"
     band = core.dd_band(club.peaks_dd, rep.peak) if club is not None else None
     if band is not None:
         dd += f" · 같은 구간(최고점 ±{config.R2_BAND}) {band[1]:,}명 중앙 −{band[0]:,.0f}점"
@@ -2454,6 +2456,7 @@ class MainWindow(QMainWindow):
         self._price_tried_on: str | None = None        # 오늘 이미 띄웠다 — 다 그린 뒤 다시 그려도 또 띄우지 않게
         self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
         self._history_cache: tuple | None = None       # (키, [HistoryRun]) — 57 K4 이력
+        self._reward_cache: tuple | None = None        # (키, WinRewards) — 57 K11 이 계정 100판당
         # 랭커 기록(13단계) — N1 메뉴 로더와 N2 카드 탭 로더는 따로(카드 창이 메뉴 로더를 끊지 않게)
         self._ranker_loader: RankerStatsLoader | None = None
         self._ranker_day: str | None = None   # _ranker_data 를 받은 날 — 바뀌면 비운다(하루 캐시)
@@ -5420,6 +5423,11 @@ class MainWindow(QMainWindow):
         self.history_runs: list = []   # 테스트가 본다
         return w
 
+    def _details_key(self) -> tuple:
+        """누적 전체 경기 목록의 캐시 키 — id·길이에 맨 앞·뒤 경기 번호(해제된 목록 주소에 같은 길이 새 목록이 와도 안 맞게)."""
+        d = self._details_all
+        return id(d), len(d), (d[0].get("matchId") if d else None), (d[-1].get("matchId") if d else None)
+
     def _history_mine(self) -> bool:
         """닉네임 이력은 내 계정일 때만(1회차 B[중] — 남의 옛 닉네임을 이어 보이지 않게) — 거래 화면과 같은 판정(키 지문까지)."""
         try:
@@ -5435,7 +5443,7 @@ class MainWindow(QMainWindow):
         mine = self._history_mine()
         kinds = ("nickname", "formation") if mine else ("formation",)
         # 1만 2천 경기 첫 계산 약 80ms(2026-10-20 이 PC) — 같은 입력이면 다시 안 한다(타임라인 캐시 꼴)
-        key = (id(self._details_all), len(self._details_all), self._ouid, kinds)
+        key = (self._details_key(), self._ouid, kinds)
         if self._history_cache is None or self._history_cache[0] != key:
             got = core.history_runs(self._details_all, self._ouid, kinds) if self._ouid else []
             self._history_cache = (key, sorted(got, key=lambda r: r.start, reverse=True))
@@ -6455,6 +6463,12 @@ class MainWindow(QMainWindow):
             series = [(k or blank, shares[k]) for k in top_keys]
             self._draw_trend(key, f"{title} — {tier_name} 상위 {len(series)}", series, dates, "{:.1f}%", "비율")
 
+    @staticmethod
+    def _champ_fc_text() -> str:
+        """챔스 이상 승리당 FC 범위 글 — 랭킹 화면 칸이 챔스 이상일 때의 하한~상한(rankcollect.grade_fc_range · 보상표 한 곳)."""
+        lo, hi = rankcollect.grade_fc_range(0, date.today())
+        return f"{lo}~{hi}"
+
     def _render_top3(self) -> None:
         """57 K7 — 카드 셋. 하루 FC 는 사람별 표(안내 6) 뒤 · 이번 시즌 늦게 시작했으면 빈칸(55 U9 와 같은 판정)."""
         person = config.meta_person_allowed()
@@ -6487,7 +6501,7 @@ class MainWindow(QMainWindow):
             card.body.addWidget(bar)
             slot[2] = bar
             card.setToolTip("하루 판수 = 원본(14일) 안 처음 본 수집 → 마지막 수집 사이 (승+무+패) 증가 ÷ 날 수 · "
-                            "하루 FC = 시즌 FC 추정 범위(챔스 이상 승리 15~20) ÷ 시즌 시작부터 날 수 · 승률 = 시즌 승÷전체")
+                            f"하루 FC = 시즌 FC 추정 범위(챔스 이상 승리 {self._champ_fc_text()}) ÷ 시즌 시작부터 날 수 · 승률 = 시즌 승÷전체")
 
     def _draw_trend(self, key: str, title: str, series: list[tuple[str, list]], dates: list, fmt: str,
                     axis_name: str) -> None:
@@ -6670,6 +6684,8 @@ class MainWindow(QMainWindow):
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
+        if self._tc_minor_only:
+            self._invalidate("teamcolor")   # 57 K8 비주류 기준(마지막 스냅숏 1만 명)이 바뀐다
 
     @staticmethod
     def maint_changed(out) -> bool:
@@ -7464,10 +7480,13 @@ class MainWindow(QMainWindow):
         if not self._ouid or not season_start:
             return ""
         start = date.fromisoformat(season_start[:10])
-        # 누적 전체에서 이 시즌만 — 시즌 필터(_details)로 지난 시즌을 골라 두면 이번 시즌 판이 없다고 나온다
-        rows = [w for w in core.win_divisions(self._details_all, self._ouid)
-                if w.when.date() >= start and w.division is not None and w.division <= core.CHAMPION_DIVISION_ID]
-        r = core.win_rewards(rows)
+        key = (self._details_key(), self._ouid, start)
+        if self._reward_cache is None or self._reward_cache[0] != key:
+            # 누적 전체에서 이 시즌만 — 시즌 필터(_details)로 지난 시즌을 골라 두면 이번 시즌 판이 없다고 나온다
+            rows = [w for w in core.win_divisions(self._details_all, self._ouid)
+                    if w.when.date() >= start and w.division is not None and w.division <= core.CHAMPION_DIVISION_ID]
+            self._reward_cache = (key, core.win_rewards(rows))
+        r = self._reward_cache[1]
         if not r.games:
             return "이 계정: 이번 시즌 챔스 이상 판이 이 PC 에 없습니다"
         return f"이 계정: 100판당 {r.per_100:,.0f} FC (이번 시즌 챔스 이상 {r.games:,}판 · 저장 경기로 센 정확값)"
@@ -7475,9 +7494,12 @@ class MainWindow(QMainWindow):
     def _rank_reward_text(self) -> str:
         """지금 등수로 본 시즌 말 순위 보상(시즌 중엔 지금 등수 기준 예상)."""
         data = self._elo.get(self._ouid) if self._ouid else None
-        rank = next((r["rank"] for r in reversed(data.rows) if r.get("rank")), None) if data is not None else None
-        if not rank:
+        pts = self._elo_points()          # 이번 시즌 하루 한 점 — 마지막 점이 지금
+        if data is None or not pts:
             return ""
+        rank = pts[-1].get("rank")
+        if not rank:
+            return f"지금 {config.RANK_TIERS[-1]:,}위 밖(또는 모름) — 순위 보상 구간 밖"
         got = next((fc for cap, fc in core.reward_brackets(date.today()) if rank <= cap), None)
         if got is None:
             return f"지금 {rank:,}위 — 순위 보상 구간 밖"
@@ -7503,9 +7525,14 @@ class MainWindow(QMainWindow):
                                       self._rank_reward_text()) if t)
         if board is None:
             gate = config.fc_games_view_allowed()
+            if gate:
+                head = "랭킹 수집 기록을 읽지 못했습니다 — 다음 수집 뒤에 다시 보입니다."
+            elif config.WEB_DATA and config.RANK_COLLECT:
+                head = "남들의 100판당 보상은 새 이용 안내(판수 기록)에 동의한 뒤부터 보입니다 — [정보] 창에서 안내를 볼 수 있습니다."
+            else:
+                head = self.rank_off_note("남들의 100판당 보상을 구간별로 보여 줍니다")
             self.lb_rboard_summary.setText(
-                (self.rank_off_note("남들의 100판당 보상을 구간별로 보여 줍니다") if not gate
-                 else "rank.db 가 없습니다 — 다음 랭킹 수집부터 보입니다.") + (f"\n{mine}" if mine else ""))
+                head + (f"\n{mine}" if mine else ""))
             self.lb_rboard_note.setText("")
             return
         if board.state != "ok":
@@ -7517,11 +7544,12 @@ class MainWindow(QMainWindow):
                 if o is not None and o.median is not None else f"전체 {board.users:,}명 — 중앙값을 낼 만큼 모이지 않았습니다")
         self.lb_rboard_summary.setText(head + (f"\n{mine}" if mine else ""))
         self.lb_rboard_note.setText(
-            f"남들은 하루 한 번 랭킹 화면으로 추정한 범위입니다 — 이긴 판 수와 등급 칸으로 FC 하한·상한(챔스 이상 승리 15~20)을, "
+            f"남들은 하루 한 번 랭킹 화면으로 추정한 범위입니다 — 이긴 판 수와 등급 칸으로 FC 하한·상한(챔스 이상 승리 {self._champ_fc_text()})을, "
             f"승·무·패 증가로 챔스 이상 판수 하한·상한을 잡아 100판당 = [FC 하한 ÷ 판수 상한, FC 상한 ÷ 판수 하한]. "
             f"사람마다 범위의 가운데 값 → 구간 중앙값 · 챔스 이상 {config.K11_MIN_GAMES}판 넘게(하한) 뛴 사람만 · "
             f"구간 인원 {config.K11_MIN_PER_BAND}명 미만은 비움 · 순위·구단가치는 마지막 수집({self._at(board.snap_at)}) 기준"
-            f" · 판수를 아는 사람 {board.seen:,}명")
+            f" · 판수를 아는 사람 {board.seen:,}명"
+            + (f"(시즌 중간에 처음 잡힌 {board.late:,}명은 처음 본 앞 승리를 판수 없이 안아 뺐습니다)" if board.late else ""))
 
     # [랭킹 추이 › 예측 되짚기] B8 — 끝난 시즌마다 그 시즌에 낸 예측과 내 계정의 실제 최종 순위(내 계정 하나)
     PREDICT_CHECK_COLUMNS = ["시즌", "예측한 날", "200위 안", "1,000위 안", "예상 순위 80% 범위", "최종 순위", "판정"]

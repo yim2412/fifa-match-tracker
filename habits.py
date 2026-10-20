@@ -1175,11 +1175,12 @@ class ScoreReport:
     now: float
     peak: float             # 시즌 최고점(하루 점 중)
     peak_day: date
-    max_dd: float           # R2 최고점 뒤 가장 깊은 하락(양수)
+    max_dd: float           # R2 가장 깊은 하락(양수) — 시즌 최고점이 아니라 **그때까지의 고점**(dd_peak)에서 잰다
     dd_day: date | None     # 그 바닥 날
     day_avg: float          # R3 하루 평균 변화(첫 점 → 지금 ÷ 날 수)
     up_days: int            # 앞 점보다 오른 점 수
     steps: int              # 비교한 점 수(점 − 1)
+    dd_peak: float | None = None   # 그 하락이 시작된 고점 — 바닥 = dd_peak − max_dd(57 ② 리뷰 [상]: peak − max_dd 는 틀린 바닥)
 
 
 def score_report(points: list[tuple[date, float]], marks: list[tuple[date, float]] | None = None) -> ScoreReport | None:
@@ -1190,18 +1191,18 @@ def score_report(points: list[tuple[date, float]], marks: list[tuple[date, float
         return None
     vals = [e for _, e in points]
     marks = marks or points
-    run_peak, dd, dd_day = marks[0][1], 0.0, None
+    run_peak, dd, dd_day, dd_peak = marks[0][1], 0.0, None, None
     for d, e in marks:
         run_peak = max(run_peak, e)
         if run_peak - e > dd:
-            dd, dd_day = run_peak - e, d
+            dd, dd_day, dd_peak = run_peak - e, d, run_peak
     peak = max(e for _, e in marks)
     days = (points[-1][0] - points[0][0]).days
     steps = list(zip(vals, vals[1:]))
     return ScoreReport(len(points), points[0][0], sum(vals) / len(vals), vals[-1], peak,
                        next(d for d, e in marks if e == peak), dd, dd_day,
                        (vals[-1] - vals[0]) / days if days else 0.0,
-                       sum(1 for a, b in steps if b > a), len(steps))
+                       sum(1 for a, b in steps if b > a), len(steps), dd_peak)
 
 
 def decisive_rate(rows: list[WinDivision], since: datetime) -> tuple[float, int] | None:

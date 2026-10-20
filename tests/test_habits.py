@@ -988,12 +988,14 @@ def test_score_report_by_hand():
     assert r.points == 7 and r.avg == sum(vals) / 7 and r.now == 4300
     assert (r.peak, r.peak_day) == (4300, d0 + timedelta(days=6)), "시즌 최고점"
     assert (r.max_dd, r.dd_day) == (300, d0 + timedelta(days=4)), "최고점(그때까지) 뒤 가장 깊은 하락 — 4200 → 3900"
+    assert r.dd_peak == 4200, ("하락이 시작된 고점은 시즌 최고점(4300)이 아니라 그때까지의 고점 — 57 ② 리뷰 [상]", r.dd_peak)
     assert r.day_avg == 300 / 6 and (r.up_days, r.steps) == (4, 6), r
     assert habits.score_report(pts[:config.R_MIN_POINTS - 1]) is None, "R_MIN_POINTS 미만인데 냈다"
     # 하루 안 최고점(그날 마지막 점이 아닌 기록)은 marks 로 — 머리 줄의 시즌 최고점과 같은 값이 나와야
     marks = sorted(pts + [(d0 + timedelta(days=3), 4400.0)])
     r = habits.score_report(pts, marks)
     assert (r.peak, r.peak_day, r.max_dd, r.dd_day) == (4400, d0 + timedelta(days=3), 500, d0 + timedelta(days=4)), r
+    assert r.dd_peak == 4400, r.dd_peak
     assert r.avg == sum(vals) / 7, "평균은 하루 한 점으로"
     flat = [(d0 + timedelta(days=i), float(v)) for i, v in enumerate([4000, 4000, 4010, 4010, 4005, 4005, 4020])]
     assert habits.score_report(flat).up_days == 2, "제자리인 날을 오른 날로 셌다"

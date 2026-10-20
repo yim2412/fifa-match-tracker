@@ -9354,6 +9354,20 @@ def test_top3_cards_and_reward_board_tab():
             assert "100판당" in got and "챔스 이상 3판" in got, got   # 픽스처 4경기 중 승·무·패 3판 · 전부 챔피언스(900)
         finally:
             _win._details = keep_details
+        # 지금 등수 = 이번 시즌 마지막 점 하나 — 최신 줄 순위가 비었으면(1만 위 밖) 며칠 전 순위를 끌어오지 않는다(② 리뷰 [중])
+        from datetime import date as _d
+        keep_elo = (_win._rank_seasons, dict(_win._elo))
+        try:
+            _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+            now = datetime.now()
+            _win._elo[_OUID] = _elo_data(_elo_rows([((now - timedelta(days=3)).isoformat(timespec="seconds"), 4300.0, 150, "search"),
+                                                    ((now - timedelta(days=1)).isoformat(timespec="seconds"), 3000.0, None, "search")]))
+            got = _win._rank_reward_text()
+            assert "150위" not in got and "밖" in got, got
+            _win._elo[_OUID] = _elo_data(_elo_rows([((now - timedelta(days=1)).isoformat(timespec="seconds"), 4300.0, 150, "search")]))
+            assert "지금 150위" in _win._rank_reward_text(), _win._rank_reward_text()
+        finally:
+            _win._rank_seasons, _win._elo = keep_elo[0], keep_elo[1]
         env.write(notice=config.FC_GAMES_NOTICE_VERSION - 1)     # 판수 안내 전 동의자 — 남들 값을 안 읽는다
         _win._invalidate("rewards_rank")
         assert _win.reward_board is None and t.rowCount() == 0, "안내 13 전인데 보상판을 읽었다"
@@ -9772,10 +9786,13 @@ def test_dashboard_headline_k6():
     import analysis
     from datetime import date as _d
     from habits import ScoreReport
-    rep = ScoreReport(10, _d(2026, 9, 1), 4000.0, 4100.0, 4500.0, _d(2026, 9, 5), 300.0, _d(2026, 9, 9), 1.0, 5, 9)
+    # 하락(4,300 → 4,000)이 시즌 최고점(4,500)보다 앞 — 글의 고점·바닥은 시즌 최고점이 아니라 그 하락의 것
+    rep = ScoreReport(10, _d(2026, 9, 1), 4000.0, 4100.0, 4500.0, _d(2026, 9, 5), 300.0, _d(2026, 9, 3), 1.0, 5, 9, 4300.0)
     club = core.ClubHead(peaks_dd=sorted((4500.0 + i, 100.0) for i in range(config.R2_BAND_MIN)))
     got = app_main.drawdown_headline(rep, club)
-    assert got and "4,500점에서 4,200점" in got and "−100점" in got, got
+    assert got and "4,300점에서 4,000점" in got and "−100점" in got, got
+    lines = app_main.score_report_lines([], [], [], None, datetime(2026, 9, 1))
+    assert lines == [], "점이 없는데 리포트를 냈다"
     assert app_main.drawdown_headline(replace(rep, max_dd=100.0), club) is None, "중앙과 같은 낙폭을 눈에 띈다고 했다"
     assert app_main.drawdown_headline(rep, core.ClubHead()) is None and app_main.drawdown_headline(None, club) is None
     keep = _win._narrate_scope
