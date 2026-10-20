@@ -108,9 +108,9 @@ class Service:
     # ── 한 요청 ───────────────────────────────────────────────────
     def handle(self, path: str, query: list[tuple[str, str]], ip: str) -> Response:
         started = time.monotonic()
-        sent_before = self.upstream.sent
+        sent_before = self.upstream.thread_sent()
         res = self._handle(path, query, ip)
-        self._log(path, res.status, self.upstream.sent - sent_before, time.monotonic() - started)
+        self._log(path, res.status, self.upstream.thread_sent() - sent_before, time.monotonic() - started)
         return res
 
     def _handle(self, path: str, query: list[tuple[str, str]], ip: str) -> Response:

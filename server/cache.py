@@ -15,6 +15,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import settings
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS detail (
     match_id   TEXT PRIMARY KEY,
@@ -59,6 +61,9 @@ class Cache:
         self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
         self._lock = threading.Lock()
         with self._lock:
+            # 새 파일에만 먹는다(WAL 로 만든 뒤엔 바뀌지 않는다) — 상세 한 줄(gzip 약 2.5KB)이 4KB 쪽에 하나씩만 들어가
+            # 쪽마다 남는 자리가 버려졌다. ⓐ 실측 2,999경기 정리본: 4KB 4.2KB/경기 · 16KB 2.95KB · 64KB 3.0KB
+            self._conn.execute(f"PRAGMA page_size = {settings.DB_PAGE_SIZE}")
             self._conn.execute("PRAGMA busy_timeout = 5000")
             self._conn.execute("PRAGMA journal_mode = WAL")
             self._conn.executescript(SCHEMA)

@@ -36,6 +36,12 @@ class Upstream:
         self._sleep = sleep
         self.sent = 0  # 켠 뒤 넥슨에 보낸 수 — 상태줄·실측용
         self._count_lock = threading.Lock()
+        # 요청 하나가 보낸 수(접근 로그) — self.sent 의 앞뒤 차이는 24동시에서 남의 요청까지 섞였다(ⓐ 실측 2026-10-20:
+        # 실제 3,035건인데 로그 합 70,984). 요청 하나는 스레드 하나에서 끝난다(ThreadingHTTPServer)
+        self._mine = threading.local()
+
+    def thread_sent(self) -> int:
+        return getattr(self._mine, "n", 0)
 
     def get(self, url: str, params: dict, allow: Callable[[], bool]) -> Reply:
         """allow() 가 False 면 그 시도를 보내지 않는다(하루 몫). 429·500·503 은 settings.UPSTREAM_ATTEMPTS 까지 다시.
@@ -74,6 +80,7 @@ class Upstream:
     def _count(self, n: int) -> None:
         with self._count_lock:
             self.sent += n
+        self._mine.n = self.thread_sent() + n
 
 
 def api_url(path: str) -> str:

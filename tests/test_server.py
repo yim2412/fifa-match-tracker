@@ -116,6 +116,36 @@ def test_same_detail_concurrently_hits_nexon_once():
     assert len(fake.calls) == 1, f"같은 경기 동시 8건에 넥슨 {len(fake.calls)}번"
 
 
+def test_log_counts_only_this_requests_upstream_under_concurrency():
+    """접근 로그의 nexon= 은 그 요청이 보낸 수 — ⓐ 실측에서 전역 수의 앞뒤 차이라 24동시에 남의 것까지 셌다(3,035건이 70,984)."""
+    with tempfile.TemporaryDirectory() as td:
+        log = Path(td) / "server.log"
+        svc, fake, _ = _service(log=log)
+        fake.delay = 0.2
+        mids = [f"{i:024x}" for i in range(8)]
+        ts = [threading.Thread(target=svc.handle, args=(nexon_api.EP_MATCH_DETAIL, _q(matchid=m), "1.1.1.1"))
+              for m in mids]
+        t0 = time.monotonic()
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert time.monotonic() - t0 < 0.2 * 4, "요청이 겹치지 않았다 — 이 테스트가 재는 상황이 아니다"
+        sent = [int(ln.split("\t")[3].split("=")[1]) for ln in log.read_text(encoding="utf-8").splitlines()]
+        assert len(fake.calls) == 8 and sent == [1] * 8, sent
+
+
+def test_new_db_uses_configured_page_size():
+    with tempfile.TemporaryDirectory() as td:
+        c = Cache(Path(td) / "s.db")
+        try:
+            ps = c._conn.execute("PRAGMA page_size").fetchone()[0]
+        finally:
+            c.close()
+    assert settings.DB_PAGE_SIZE != 4096, "기본값과 같으면 배선이 끊겨도 통과한다"
+    assert ps == settings.DB_PAGE_SIZE, ps
+
+
 def test_negative_cache_detail_is_short():
     err = _Res(400, {"error": {"name": "OPENAPI00009", "message": "x"}})
     svc, fake, clock = _service(lambda u, p: err)

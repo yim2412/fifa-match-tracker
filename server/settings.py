@@ -24,6 +24,7 @@ def _default_db() -> Path:
 
 
 DB_PATH = Path(os.getenv("FIFA_SERVER_DB") or _default_db())
+DB_PAGE_SIZE = 16384  # 새 DB 에만 — cache.Cache 주석의 실측
 ENV_FILE = DB_PATH.parent / "server.env"  # 서비스 키 — run_local 이 읽어 이 프로세스 환경에만
 
 UPSTREAM_CONCURRENCY = 24     # 10-04 직접 실측(3,130건 38초 · 429 0)과 같은 조건
