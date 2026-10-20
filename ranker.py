@@ -24,6 +24,9 @@ import requests
 import config
 
 RANK_URL = "https://fconline.nexon.com/datacenter/rank_inner"
+# 57 K13 [넥슨에서 보기] — 사용자 브라우저가 여는 주소(앱 요청이 아니라 웹 데이터 스위치 밖). 데이터센터의 프로필은 그 페이지 안
+# 레이어라 주소가 없다 — 그 닉네임으로 검색한 랭킹 페이지가 가장 가깝다(2026-10-20 실측: 200 · 검색어가 채워진 채로 열림)
+RANK_PAGE_URL = "https://fconline.nexon.com/datacenter/rank?rt=manager&strCharacterName={nick}"
 # UA 는 config.WEB_USER_AGENT(앱 이름) — 비우면 넥슨이 일부 페이지에 500 을 준다.
 # no-cache 류 헤더는 중간 프록시가 예전 응답을 재활용하는 걸 막는 안전장치다
 # (Cloudflare 는 이 페이지를 DYNAMIC 으로 표시해 자체 캐싱은 안 하는 걸 확인했지만,

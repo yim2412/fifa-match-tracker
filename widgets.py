@@ -23,7 +23,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPix
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
-    QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import config
@@ -694,6 +694,8 @@ class FitTableWidget(QTableWidget):
         char_max = max([cell_fm.maxWidth(), 1] + [cell_fm.horizontalAdvance(ch) for ch in _WIDE_SAMPLES])
         rows = self.rowCount()
         for c in range(self.columnCount()):
+            if self.isColumnHidden(c):
+                continue   # 숨긴 열(57 K3 상대 점수)은 폭 계산에서 뺀다 — 넣으면 보이는 열이 그만큼 좁아진다
             w = 0
             header_item = self.horizontalHeaderItem(c)
             if header_item:
@@ -723,7 +725,7 @@ class FitTableWidget(QTableWidget):
         header.setSortIndicatorShown(False)
         pad = 0
         for c in range(self.columnCount()):
-            if c in self._extra:
+            if c in self._extra or self.isColumnHidden(c):
                 continue   # 그림 때문에 sizeHint 가 커진 열을 재면 그 여백이 모든 열에 얹힌다
             if self.rowCount():
                 tw = max((cell_fm.horizontalAdvance(self.item(r, c).text())
@@ -875,6 +877,13 @@ class NoScrollComboBox(QComboBox):
         p.drawPolyline([QPointF(cx - 4, cy - 2), QPointF(cx, cy + 2),
                         QPointF(cx + 4, cy - 2)])
         p.end()
+
+
+class NoScrollSpinBox(QSpinBox):
+    """휠 스크롤로 값이 바뀌는 사고 방지(NoScrollComboBox 와 같은 까닭 — 57 K1 경기 수 직접 지정)."""
+
+    def wheelEvent(self, e):
+        e.ignore()
 
 
 class SortableItem(QTableWidgetItem):

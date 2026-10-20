@@ -901,6 +901,47 @@ def opp_rank_rows(conn: sqlite3.Connection, my_ouid: str) -> dict[str, tuple[int
         "SELECT match_id, rank_band, gap_band FROM match_opp_rank WHERE my_ouid = ?", (my_ouid,))}
 
 
+@dataclass(frozen=True)
+class OppScore:
+    elo: float | None
+    rank: int
+    at: str                            # 그 스냅숏의 데이터 시각(ISO)
+
+
+def opp_scores(conn: sqlite3.Connection, matches) -> dict[str, OppScore]:
+    """57 K3 — 경기 시각에 가장 가까운 스냅숏(같은 시즌 · 원본이 남은 14일 · ±OPP_SNAP_WINDOW_H — N23 과 같은 짝짓기)의
+    상대 점수·순위. matches = [(match_id, 경기 시각, 상대 닉네임)]. **저장하지 않는다** — 원본이 지워지면 같이 사라진다(안내 9 와 안 부딪힘).
+    1만 위 밖·닉네임이 바뀐 상대·가까운 스냅숏이 없는 경기는 빠진다. 관문·내 계정 판정은 부르는 쪽(EloLoader)."""
+    got = rankcollect.season_raw_snaps(conn)
+    if got is None or not got[1]:
+        return {}
+    boundary, snaps = got
+    by_snap: dict[int, list] = {}
+    for mid, when, nick in matches:
+        if when is None or not nick or when.isoformat()[:10] < boundary:
+            continue
+        snap = rankcollect._opp_snap_for(snaps, when)
+        if snap is not None:
+            by_snap.setdefault(snap[0], []).append((mid, nick))
+    at_of = {s[0]: s[1].isoformat(timespec="minutes") for s in snaps}
+    out: dict[str, OppScore] = {}
+    for sid, wanted in by_snap.items():
+        people = {r[0]: (r[1], r[2]) for r in conn.execute(
+            "SELECT nickname, rank, elo FROM snapshot_rows WHERE snapshot_id = ?", (sid,))}
+        for mid, nick in wanted:
+            got = people.get(nick)
+            if got is not None:
+                out[mid] = OppScore(got[1], got[0], at_of[sid])
+    return out
+
+
+def bin_of_value(bins: list, value) -> int | None:
+    """구단가치 → 칸 번호(value_bins 의 bins 순서 — _value_bins 와 같은 bisect) · 모르면 None. 57 K1 상대 구단가치 필터."""
+    if value is None or not bins:
+        return None
+    return bisect.bisect_right([b.lo for b in bins[1:]], value)
+
+
 def opp_rank_label(band: int) -> str:
     """순위 구간 이름 — OPP_RANK_BANDS 의 앞 구간 끝 다음부터 이 구간 끝까지."""
     bands = config.OPP_RANK_BANDS

@@ -603,6 +603,52 @@ def test_opp_rank_table_mixed_is_one_value_for_the_whole_table():
     assert t.mixed is True and all(b.mixed is True for b in t.by_rank + t.by_gap), t
 
 
+def test_opp_scores_nearest_snapshot_same_season_not_saved():
+    """57 K3 — 가장 가까운 스냅숏(±24시간)의 점수·순위 · 시즌 경계 앞 경기는 새 시즌 스냅숏과 짝짓지 않는다 · 없는 상대·시각 없음은 빠진다."""
+    db = DB()
+    try:
+        assert M.opp_scores(db.conn, [("m", T0, "가")]) == {}, "사람별 처리 전(person_season 없음)인데 짝을 지었다"
+        db.snap(datetime(2026, 9, 30, 23, 0), [person(1, 99, nick="가", elo=9999.0)], seq=1)   # 지난 시즌 마지막 스냅숏
+        s1 = db.snap(T0, [person(1, 1, nick="가", elo=4100.0), person(2, 5, nick="나", elo=3900.0)])
+        db.snap(T0 + timedelta(days=2), [person(1, 3, nick="가", elo=4000.0)])
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-10-01", "at": "2026-10-01T09:00:00",
+                                                         "via": "init"}))
+        before = db.conn.total_changes
+        got = M.opp_scores(db.conn, [
+            ("m1", T0 + timedelta(hours=1), "가"),                       # 첫 스냅숏 쪽이 가깝다
+            ("m2", T0 + timedelta(days=2, hours=-3), "가"),              # 둘째 쪽이 가깝다 — 순위가 바뀐 값
+            ("m3", T0 + timedelta(days=4, hours=1), "가"),               # 가장 가까운 것도 24시간 밖
+            ("m4", T0, "모르는 상대"),
+            ("m5", None, "가"),
+            ("m6", datetime(2026, 9, 30, 20, 0), "나"),                  # 시즌 경계(10-01) 앞 — 13시간 거리여도 안 짝짓는다
+            ("m7", T0 - timedelta(hours=2), "나"),
+            ("m8", datetime(2026, 10, 1, 0, 30), "가"),                  # 지난 시즌 스냅숏이 더 가깝지만 이번 시즌 것과
+        ])
+        assert db.conn.total_changes == before, "보여 주기만 해야 하는데 rank.db 에 썼다"
+        assert set(got) == {"m1", "m2", "m7", "m8"}, got
+        assert got["m8"].rank == 1, ("시즌 경계 앞 스냅숏과 짝지었다", got["m8"])
+        assert (got["m1"].elo, got["m1"].rank) == (4100.0, 1) and (got["m2"].elo, got["m2"].rank) == (4000.0, 3), got
+        assert (got["m7"].rank, got["m1"].at[:10]) == (5, "2026-10-01"), got
+        assert s1 == 2
+    finally:
+        db.close()
+
+
+def test_bin_of_value_uses_the_same_edges_as_value_bins():
+    def body(db):
+        rows = [person(i + 1, i + 1, value=(i + 1) * 100_000_000) for i in range(800)]
+        db.snap(T0, rows)
+        b = M.value_bins(db.conn)
+        assert len(b.bins) == 8
+        for r in rows:   # 칸 인원 세기(_value_bins)와 칸 번호(bin_of_value)가 같은 경계
+            i = M.bin_of_value(b.bins, r["value"])
+            lo, hi = b.bins[i].lo, b.bins[i].hi
+            assert (lo is None or lo <= r["value"]) and (hi is None or r["value"] < hi), (r["value"], lo, hi)
+        assert sum(1 for r in rows if M.bin_of_value(b.bins, r["value"]) == 0) == b.bins[0].users
+        assert M.bin_of_value(b.bins, None) is None and M.bin_of_value([], 5) is None
+    using(body)
+
+
 def test_opp_rank_rows_reads_only_my_account():
     db = DB()
     try:

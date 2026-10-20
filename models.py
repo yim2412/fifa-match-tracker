@@ -296,6 +296,20 @@ def opponent_stats(matches: list[MatchSummary], mixed: bool | None = None) -> li
     return sorted(acc.values(), key=lambda s: -s.games)
 
 
+def filter_matches(matches: list[MatchSummary], n: int | None = None, formation: str | None = None,
+                   formation_of=None, value_bin: int | None = None, bin_of=None) -> list[MatchSummary]:
+    """57 K1 매치업 필터 — 최근 n경기(최신순 앞에서 · None = 전부) **안에서** 내 포메이션·상대 구단가치 칸으로 거른다.
+    formation_of(경기) → 포메이션 키 · bin_of(상대 닉네임) → 칸 번호(모르면 None — value_bin=-1 이 '모름' 칸).
+    None 인 조건은 안 본다. 순서는 그대로(최신순)."""
+    out = list(matches[:n]) if n else list(matches)
+    if formation is not None:
+        out = [m for m in out if formation_of(m) == formation]
+    if value_bin is not None:
+        want = None if value_bin < 0 else value_bin
+        out = [m for m in out if bin_of(m.opponent) == want]
+    return out
+
+
 @dataclass
 class PeriodRate(RateMixin):
     """하루 치 승률 — 기간별 승률 추이(그래프)의 한 점."""

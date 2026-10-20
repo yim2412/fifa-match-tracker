@@ -352,6 +352,16 @@ def formation_of(players: list[dict]) -> str:
     return "-".join(str(c) for c in counts)
 
 
+def match_formations(details: list[dict], ouid: str) -> dict[str, str]:
+    """경기마다 내 포메이션 키(formation_of) — {match_id: 키}. 내 기록이 없는 경기는 빠진다(57 K1 내 포메이션 필터)."""
+    out = {}
+    for d in details:
+        me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ouid), None)
+        if me is not None and d.get("matchId"):
+            out[d["matchId"]] = formation_of(me.get("player") or [])
+    return out
+
+
 def _num(d: dict, key: str) -> float:
     """models._i 와 같은 이유 — 넥슨은 빈 값을 null 로 준다."""
     v = d.get(key)

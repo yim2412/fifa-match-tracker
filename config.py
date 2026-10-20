@@ -140,6 +140,9 @@ OPP_RANK_NOTICE_VERSION = 9   # 상대 순위 구간(rank.db match_opp_rank — 
 OWNER_DIST_NOTICE_VERSION = 10   # 구단주 분포(49단계 · ownerdist.py)는 이 버전 동의 뒤부터
 CARD_BACKFILL_NOTICE_VERSION = 12   # 카드 정보 자동 채우기(51단계 · cardcollect.py)는 이 버전 동의 뒤부터
 FC_GAMES_NOTICE_VERSION = 13   # 사람별 챔스 이상 판수(rank.db fc_games — 57 ⓪)는 이 버전 동의 뒤부터(사람별 관문 6 과 따로 — N23 꼴)
+# 57 K3 경기 목록의 상대 점수(그날 수집 원본에서 꺼내 보여 주기만 — 저장 안 함)는 이 버전 동의 뒤부터. 안내 14 글은 57 조각 ③ 이
+# NOTICE_VERSION 을 올리며 쓴다 — 그 전엔 아무도 14 에 동의할 수 없어 열이 늘 숨는다(①②③ 를 한 번에 2.13.1 로 공개)
+OPP_SCORE_NOTICE_VERSION = 14
 # 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
 # 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다 — 8 이 그렇다(그림은 수집과 무관하게
 # 모두에게 해당 · 2026-10-11 사용자: 2~7 동의자 전원에게 한 번 다시 묻는다).
@@ -348,6 +351,13 @@ OPP_SNAP_WINDOW_H = 24             # 경기 시각 ±이 시간 안의 스냅숏
 OPP_ROW_MIN = 10                   # 표 한 줄의 승률 분모(rated)가 이보다 적으면 "표본 N" 을 붙여 흐리게
 OPP_MIN_KNOWN = 30               # 순위를 아는 경기가 이보다 적으면 표를 안 낸다(빈 화면 문구)
 OPP_FILL_MAX_S = 30                # 채우기 한 번의 시간 상한(초) — 넘으면 거기서 멈추고 다음 바퀴가 이어 채운다
+# 57 K1 매치업 필터([상대 전적 › 전적]) — 경기 수 고르기 · 표본(상대마다 판수) 문턱 · 직접 지정 상한
+K1_GAME_COUNTS = (50, 100, 200, 500)
+K1_SAMPLE_MINS = (1, 3, 5, 10)
+K1_CUSTOM_MAX = 10000
+# 57 K3 경기 목록 상대 정보 열 넷 — 펼치면 글자가 이 크기(px) 아래로 줄어야 하는 창 폭이면 접는다(1280 폭: 열 13개에 15px 로 1,309px
+# 필요 · 표 폭 942 — 9px 까지 줄고 머리글이 잘렸다 · 2026-10-20 실화면). 11 = 1600×900 에서 펼친 채 13px 가 나오는 것보다 작게
+MATCH_EXTRA_MIN_PX = 11
 # A2 FC 보상(43단계 — stats.win_rewards) — (적용 시작일, 경기 때 내 division, 승리당 FC). **넥슨 공식 수치가 아니라 사용자 확인값**(2026-10-12):
 # 이긴 판마다 챔피언스(900) 15 · 슈퍼챔피언스(800) 20, 그 밖의 등급은 없다. 몰수승(상대 탈주)도 나온다(사용자 확인).
 # 넥슨이 바꾸면 사용자가 알려 줘야 한다 — 바뀐 값은 새 시작일 줄로 더한다(옛 줄은 두어 지난 경기가 그때 값으로 센다).
@@ -711,6 +721,12 @@ def ranker_pick_allowed() -> bool:
     수집 토글 하나로 묶었다 — 켜는 사람이 이미 "다른 구단주 데이터를 모은다"에 동의했다."""
     return (not notice_needed() and WEB_DATA and RANK_COLLECT
             and NOTICE_ACCEPTED >= RANKER_PICK_NOTICE_VERSION)
+
+
+def opp_score_allowed() -> bool:
+    """57 K3 경기 목록에 상대 점수를 보여도 되나 — N23 과 같은 관문(수집 켜짐 + 안내 9) + 안내 14. 내 계정 경기만인지는 EloLoader 가 본다."""
+    return (not notice_needed() and WEB_DATA and RANK_COLLECT
+            and NOTICE_ACCEPTED >= max(OPP_RANK_NOTICE_VERSION, OPP_SCORE_NOTICE_VERSION))
 
 
 def trait_allowed() -> bool:

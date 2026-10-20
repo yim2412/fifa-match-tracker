@@ -21,7 +21,7 @@ from analysis import (
 )
 from models import (
     MatchSummary, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
-    moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
+    filter_matches, moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
 )
 from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, DivisionStays, GoalFlow, LeadRow,
                     division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
@@ -40,7 +40,8 @@ from rankmeta import (
     FORMATION_HOWS, DayWinrate, Peers, RankMoves, TierMeans, ValueBins, ValueScore, Weekly, WinrateElo, blank_label,
     day_winrate, emblems_by_name, find_sn, formation_group, group_meta, latest_pair, my_day_rate, pair_text, rank_moves,
     ranked_nicknames, tier_means, value_bins, value_score, weekly, winrate_peers, winrate_to_elo,
-    OppBand, OppRank, opp_rank_rows, opp_rank_table,
+    OppBand, OppRank, opp_rank_rows, opp_rank_table, opp_rank_label,
+    OppScore, bin_of_value, opp_scores,
     ClubHead, club_head, dd_band, fc_rank_range, rank_of,
 )
 from rankerpick import (
@@ -57,7 +58,7 @@ from stats import (
     SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET, SUB_POSITION, SUPER_CHAMPION_DIVISION_ID, CHAMPION_DIVISION_ID,
     Discipline, PositionOpponent, StreakAfter, after_streak_rates, aggregate_players, clutch_summary,
     daily_division, discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
-    formation_of, formation_stats, goal_minute_buckets, is_champion_or_above,
+    formation_of, formation_stats, goal_minute_buckets, is_champion_or_above, match_formations,
     FormationUsage, OppCard, formation_label, opponent_cards, opponent_formations, opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_baseline, team_color_mixed, team_color_stats, team_profile, time_of_day_rates,
@@ -72,7 +73,7 @@ __all__ = [
     "MIN_COND", "MIN_OPP", "MIN_PLAYER_GAMES", "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "STREAK_MAX", "WINDOW",
     "Basis", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
-    "MatchSummary", "current_streak", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
+    "MatchSummary", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend", "division_icon_index",
     # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
     "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",
@@ -111,7 +112,9 @@ __all__ = [
     "my_day_rate", "pair_text", "rank_moves", "ranked_nicknames", "tier_means", "value_bins", "value_score", "weekly",
     "winrate_peers", "winrate_to_elo",
     # rankmeta — N23 상대 순위 구간(2.9.1)
-    "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table",
+    "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table", "opp_rank_label",
+    # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸
+    "OppScore", "bin_of_value", "opp_scores",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",
@@ -121,7 +124,7 @@ __all__ = [
     "SHOT_ON_TARGET", "SUB_POSITION", "SUPER_CHAMPION_DIVISION_ID", "CHAMPION_DIVISION_ID", "Discipline", "PositionOpponent", "StreakAfter",
     "after_streak_rates", "aggregate_players", "clutch_summary", "daily_division", "discipline_stats",
     "division_entries", "division_stats", "division_trend", "finishing_ranking", "formation_of", "formation_stats",
-    "goal_minute_buckets", "is_champion_or_above",
+    "goal_minute_buckets", "is_champion_or_above", "match_formations",
     "FormationUsage", "OppCard", "formation_label", "opponent_cards", "opponent_formations", "opponent_position_players", "opponent_squad", "own_squad", "pass_style", "player_finishing_trend",
     "position_line", "possession_stats", "ranker_compare", "ranker_targets", "ranker_values", "rating_trend",
     "result_breakdown", "season_divisions", "season_id_of",

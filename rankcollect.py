@@ -1648,6 +1648,25 @@ def purge_fc_games_if_needed(conn: sqlite3.Connection) -> bool:
     return has
 
 
+def season_raw_snaps(conn: sqlite3.Connection) -> tuple[str, list[tuple[int, datetime, str]]] | None:
+    """지금 시즌(person_season 하나 — M7)의 원본이 남은 스냅숏 [(id, 데이터 시각, 날짜)] 과 시즌 경계 날짜 — 사람별 처리 전이면 None.
+    N23 채우기(fill_opp_rank)와 57 K3 상대 점수(rankmeta.opp_scores)가 같은 경계를 쓴다(1회차 A[중] — _opp_snap_for 는 24시간만 본다)."""
+    ps = _json_state(get_state(conn), "person_season")
+    if not ps or not ps.get("at"):
+        return None
+    # seq 로 먼저 넘긴 시즌의 start 는 아직 옛 시즌 시작일이다(시즌표가 늦게 따라온다) — 그 넘김 시각을 경계로
+    boundary = str(ps["at"] if ps.get("via") == "seq" else (ps.get("start") or ps["at"]))[:10]
+    seq = int(ps.get("seq") or 0)
+    snaps = []
+    for r in conn.execute(
+            "SELECT s.id, s.taken_at, m.ref_time FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
+            " WHERE s.season_seq >= ? AND EXISTS (SELECT 1 FROM snapshot_rows w WHERE w.snapshot_id = s.id)", (seq,)):
+        at = data_time(r)
+        if at[:10] >= boundary:
+            snaps.append((r["id"], datetime.fromisoformat(at), at[:10]))
+    return boundary, snaps
+
+
 def _opp_snap_for(snaps: list[tuple[int, datetime, str]], when: datetime):
     """경기 시각에 가장 가까운 스냅숏 — OPP_SNAP_WINDOW_H 안일 때만."""
     best = min(snaps, key=lambda s: abs(s[1] - when), default=None)
@@ -1671,8 +1690,6 @@ def fill_opp_rank(conn: sqlite3.Connection, now: datetime, *, fifa_path: Path | 
     ps = _json_state(get_state(conn), "person_season")
     if not ps or not ps.get("at"):
         return 0
-    # seq 로 먼저 넘긴 시즌의 start 는 아직 옛 시즌 시작일이다(시즌표가 늦게 따라온다) — 그 넘김 시각을 경계로
-    boundary = str(ps["at"] if ps.get("via") == "seq" else (ps.get("start") or ps["at"]))[:10]
     try:
         fconn = store.open_db(fifa_path or config.DB_PATH)
     except sqlite3.Error:
@@ -1684,16 +1701,10 @@ def fill_opp_rank(conn: sqlite3.Connection, now: datetime, *, fifa_path: Path | 
             return 0
         with conn:
             conn.execute("DELETE FROM match_opp_rank WHERE my_ouid != ?", (mine,))
-        seq = int(ps.get("seq") or 0)
-        snaps = []
-        for r in conn.execute(
-                "SELECT s.id, s.taken_at, m.ref_time FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id"
-                " WHERE s.season_seq >= ? AND EXISTS (SELECT 1 FROM snapshot_rows w WHERE w.snapshot_id = s.id)", (seq,)):
-            at = data_time(r)
-            if at[:10] >= boundary:
-                snaps.append((r["id"], datetime.fromisoformat(at), at[:10]))
-        if not snaps:
+        got = season_raw_snaps(conn)
+        if got is None or not got[1]:
             return 0
+        boundary, snaps = got
         cutoff = max(boundary, (min(s[1] for s in snaps) - timedelta(hours=config.OPP_SNAP_WINDOW_H)).isoformat())
         done = {r[0] for r in conn.execute("SELECT match_id FROM match_opp_rank")}
         by_snap: dict[int, list[str]] = {}

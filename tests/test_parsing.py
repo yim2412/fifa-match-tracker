@@ -761,6 +761,30 @@ def test_opponent_stats_counts_each_result():
     assert [o.nickname for o in models.opponent_stats(ms)] == ["가", "나"]  # 많이 붙은 순
 
 
+def test_filter_matches_takes_recent_n_first_then_conditions():
+    """57 K1 — 최근 n경기 **안에서** 거른다(거른 뒤 n 이 아니다) · '모름' 칸(-1)은 구단가치를 모르는 상대만 · 순서 그대로."""
+    ms = [_m(9 - i, "승", opp) for i, opp in enumerate(["가", "나", "다", "가", "나"])]
+    form = {m.match_id: ("4-2-3-1" if m.opponent != "나" else "4-4-2") for m in ms}
+    value = {"가": 0, "나": 1}            # 다 = 모름
+    f = models.filter_matches
+    assert f(ms) == ms and f(ms, None) == ms
+    assert f(ms, 2) == ms[:2]
+    got = f(ms, 3, "4-2-3-1", lambda m: form[m.match_id])
+    assert [m.opponent for m in got] == ["가", "다"], got        # 최근 3경기 중 — 넷째 '가' 는 범위 밖
+    assert [m.opponent for m in f(ms, None, None, None, 0, value.get)] == ["가", "가"]
+    assert [m.opponent for m in f(ms, None, None, None, -1, value.get)] == ["다"]
+    assert [m.opponent for m in f(ms, 4, "4-4-2", lambda m: form[m.match_id], 1, value.get)] == ["나"]
+
+
+def test_match_formations_reads_my_side_only():
+    def side(ouid, positions):
+        return {"ouid": ouid, "player": [{"spPosition": p, "spId": 1} for p in positions]}
+    d = [{"matchId": "a", "matchInfo": [side("me", [0, 5, 3, 7, 10, 14, 25, 28]), side("op", [0, 25, 24])]},
+         {"matchId": "b", "matchInfo": [side("op", [0, 5])]},          # 내 기록 없음 — 빠진다
+         {"matchInfo": [side("me", [0])]}]                              # id 없음 — 빠진다
+    assert st.match_formations(d, "me") == {"a": "3-1-1-0-1"}, st.match_formations(d, "me")
+
+
 def test_current_streak_by_kind():
     cs = models.current_streak
     assert cs([_m(3, "패"), _m(2, "패"), _m(1, "승")]) == ("패", 2)

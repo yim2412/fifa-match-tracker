@@ -30,10 +30,11 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import quote
 
 from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6 import sip
-from PyQt6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
+from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -76,7 +77,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
     SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, ZoomBar, add_shadow, sample_note, short_bp,
     sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
@@ -1425,15 +1426,19 @@ class EloSeries:
     tracked: bool = False
     track_names: tuple = ()                   # 지금 따라가는 닉네임들(버튼 툴팁)
     club: object = None                       # 55 머리 줄·리포트의 남들 값(core.ClubHead) — rank.db 없음·못 읽음이면 None
+    # 57 K3 경기 목록의 상대 점수 — 관문 미달·내 계정 아님·rank.db 없음이면 None(열을 숨긴다). 저장 안 하고 들고만 있는다
+    opp_scores: dict | None = None            # {match_id: core.OppScore} — 원본이 남은 14일 경기
+    opp_bands: dict | None = None             # {match_id: 순위 구간 상한 | None} — N23 줄(그보다 옛 경기)
 
 
 class EloLoader(QThread):
-    """fifa.db elo_history·elo_track 과 rank.db cut_elo 를 읽는다. rank.db 는 읽기 전용 — 없으면 만들지 않는다."""
+    """fifa.db elo_history·elo_track 과 rank.db cut_elo 를 읽는다. rank.db 는 읽기 전용 — 없으면 만들지 않는다.
+    opp(57 K3): [(match_id, 경기 시각, 상대)] — 주면 내 계정(trade_state my_ouid + 키 지문)일 때만 상대 점수·N23 구간을 같이 읽는다."""
     elo_ready = pyqtSignal(str, object)   # ouid, EloSeries — object 인 이유는 PyQt 규칙 8
 
-    def __init__(self, ouid: str, req: int):
+    def __init__(self, ouid: str, req: int, opp: list | None = None):
         super().__init__()
-        self._ouid, self._req = ouid, req
+        self._ouid, self._req, self._opp = ouid, req, opp
         self._cancel = False
 
     def cancel(self) -> None:
@@ -1441,11 +1446,16 @@ class EloLoader(QThread):
 
     def run(self) -> None:
         rows, tl, cuts, snap, club = [], [], {}, None, None
+        scores = bands = None
+        mine = False
         try:
             conn = store.open_db(config.DB_PATH)
             try:
                 rows = store.elo_history(conn, self._ouid)
                 tl = store.track_list(conn)
+                if self._opp is not None:
+                    ts = store.trade_state(conn)   # N23 과 같은 판정(M3 — 키가 바뀐 확인 전엔 내 계정으로 안 본다)
+                    mine = ts.get("my_ouid") == self._ouid and ts.get("key_fp") == store.key_fingerprint(config.API_KEY)
             finally:
                 conn.close()
         except Exception:
@@ -1461,6 +1471,9 @@ class EloLoader(QThread):
                     # 55 — 내 줄을 남들 목록에서 빼려고 검색 기록의 프로필 번호(없으면 빼지 않고 내 최고점도 안 낸다)
                     my_sn = next((x["profile_sn"] for x in reversed(rows) if x.get("profile_sn")), None)
                     club = core.club_head(r, my_sn)
+                    if mine:
+                        scores = core.opp_scores(r, self._opp)
+                        bands = {k: v[0] for k, v in core.opp_rank_rows(r, self._ouid).items()}
                 finally:
                     r.close()
         except Exception:
@@ -1469,7 +1482,7 @@ class EloLoader(QThread):
             return
         self.elo_ready.emit(self._ouid, EloSeries(
             self._req, rows, cuts, snap, any(t["ouid"] == self._ouid for t in tl),
-            tuple(t["nickname"] or t["ouid"][:8] for t in tl), club))
+            tuple(t["nickname"] or t["ouid"][:8] for t in tl), club, scores, bands))
 
 
 class PredictWorker(QThread):
@@ -2343,8 +2356,17 @@ class CardBackfillScheduler(QObject):
 
 
 class MainWindow(QMainWindow):
-    MATCH_COLUMNS =["일시", "결과", "스코어", "상대", "점유율", "슈팅", "유효",
-                     "패스성공률", "평점"]
+    # 57 K3 — 상대 바로 뒤 넷(팀컬러·구단가치는 상대의 **지금** 값 · 맞대결은 이 PC 저장분 · 상대 점수는 내 계정 경기만)
+    MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "팀컬러", "구단가치", "맞대결", "상대 점수",
+                     "점유율", "슈팅", "유효", "패스성공률", "평점"]
+    MATCH_COLUMN_HELP = {
+        "팀컬러": "상대의 지금 팀컬러(팀컬러를 조회한 상대만) — 그 경기 때 팀컬러가 아닐 수 있습니다.",
+        "구단가치": "상대의 지금 구단가치(넥슨 데이터센터 · 팀컬러와 같이 조회) — 그 경기 때 값이 아닐 수 있습니다.",
+        "맞대결": "고른 시즌 안에서 이 상대와 붙은 전적(이 PC 에 저장된 경기).",
+        "상대 점수": (f"그날 수집 원본에서 읽은 상대 점수·순위(경기 시각 ±{config.OPP_SNAP_WINDOW_H}시간의 스냅숏 · 원본은 "
+                    f"{config.RANK_RAW_KEEP_DAYS}일 보관) — 저장하지 않고 보여 주기만 합니다. 그보다 옛 경기는 순위 구간. "
+                    "1만 위 밖이거나 닉네임이 바뀐 상대는 빈칸 · 내 계정 경기만."),
+    }
     PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률",
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
@@ -2371,7 +2393,7 @@ class MainWindow(QMainWindow):
                  "GK는 실제 선방, 필드 플레이어는 수비 기여도로 볼 수 있음.",
         "평점": "이 선수가 출전한 경기들의 평균 평점.",
     }
-    OPPONENT_COLUMNS = ["상대", "전적", "승률", "평균득점", "평균실점", "최근 경기"]
+    OPPONENT_COLUMNS = ["상대", "전적", "승률", "전체 대비", "평균득점", "평균실점", "최근 경기"]
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
     TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "상대 수", "승", "무", "패", "승률", "평균 대비", "효과"]
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
@@ -7853,42 +7875,90 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(self._apply_match_filter)
             row.addWidget(btn)
             self._match_filter_btns[kind] = btn
-        # 55 F2 — 상대 팀컬러로 거르기(57 K13 의 검색창과 같은 것 · J6). 목록은 조회된 상대 팀컬러(_team_colors)
+        # 55 F2 — 상대 팀컬러로 거르기 · 57 K13 — 같은 찾기 칸이 닉네임도(닉네임이나 팀컬러에 글자가 들어 있는 줄만 · J6).
+        # 콤보 목록은 조회된 상대 팀컬러(_team_colors)
         row.addSpacing(16)
-        lb_c = QLabel("상대 팀컬러")
+        lb_c = QLabel("상대")
         lb_c.setStyleSheet(f"color: {T.TEXT_DIM};")
         row.addWidget(lb_c)
         self.ed_match_color = QLineEdit()
-        self.ed_match_color.setPlaceholderText("팀컬러 찾기")
-        self.ed_match_color.setMaximumWidth(140)
-        self.ed_match_color.textChanged.connect(lambda _t: self._refresh_match_color_options())
+        self.ed_match_color.setPlaceholderText("닉네임·팀컬러 찾기")
+        self.ed_match_color.setClearButtonEnabled(True)
+        self.ed_match_color.setMaximumWidth(160)
+        self.ed_match_color.textChanged.connect(lambda _t: self._on_match_search_changed())
         row.addWidget(self.ed_match_color)
         self.cb_match_color = NoScrollComboBox()
         self.cb_match_color.addItem(self.POSITION_COLOR_ALL)
         self.cb_match_color.setToolTip("상대의 지금 팀컬러(팀컬러를 조회한 상대만) 기준 — 그 경기 때 팀컬러가 아닐 수 있습니다")
         self.cb_match_color.currentIndexChanged.connect(lambda _i: self._apply_match_filter())
         row.addWidget(self.cb_match_color)
+        row.addSpacing(16)
+        # 57 K3 — 상대 정보 열 넷. 1280 폭엔 열 13개가 안 들어간다(실측: 15px 에 1,309px 필요 · 표 폭 942) — 글자가
+        # MATCH_EXTRA_MIN_PX 아래로 줄어야 하면 접는다(_fit_match_extra). 넓히면 다시 펼친다
+        self.chk_match_extra = QCheckBox("상대 정보")
+        self.chk_match_extra.setChecked(True)
+        self.chk_match_extra.setToolTip("팀컬러 · 구단가치 · 맞대결 · 상대 점수 열")
+        self.chk_match_extra.toggled.connect(lambda _on: self._fit_match_extra())
+        row.addWidget(self.chk_match_extra)
+        self.lb_match_extra = QLabel("(창이 좁아 접힘)")
+        self.lb_match_extra.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_match_extra.setVisible(False)
+        row.addWidget(self.lb_match_extra)
         row.addStretch(1)
         v.addLayout(row)
 
-        self.table = self._make_table(self.MATCH_COLUMNS, icons={3: "division"})
+        self.table = self._make_table(self.MATCH_COLUMNS, icons={3: "division", 4: "emblem"})
+        self._match_scores_shown = False
+        self._match_fit_pending = False
+        self.table.installEventFilter(self)
+        self._set_header_help(self.table, self.MATCH_COLUMNS, self.MATCH_COLUMN_HELP)
         self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
+        self._add_profile_action(self.table, 3)
         v.addWidget(self.table, 1)
         return w
 
+    @staticmethod
+    def _set_header_help(table: QTableWidget, columns: list[str], help_: dict[str, str]) -> None:
+        for c, name in enumerate(columns):
+            item = table.horizontalHeaderItem(c)
+            if item and name in help_:
+                item.setToolTip(help_[name])
+
+    def _add_profile_action(self, table: QTableWidget, col: int) -> None:
+        """57 K13 — 줄 오른쪽 클릭 [넥슨에서 보기]. 메뉴는 Qt 가 띄운다(ActionsContextMenu — 모달 exec 를 부르지 않는다 PyQt 6).
+        여는 것은 사용자 브라우저라 앱의 넥슨 요청이 아니다(웹 데이터 스위치 밖)."""
+        table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        act = QAction("넥슨 데이터센터에서 보기", table)
+        act.triggered.connect(lambda _=False, t=table, c=col: self._open_profile(t, c))
+        table.addAction(act)
+
+    def _open_profile(self, table: QTableWidget, col: int) -> None:
+        item = table.item(table.currentRow(), col) if table.currentRow() >= 0 else None
+        nick = item.text().strip() if item else ""
+        if nick and nick != "-":
+            QDesktopServices.openUrl(QUrl(ranker.RANK_PAGE_URL.format(nick=quote(nick))))
+
+    def _on_match_search_changed(self) -> None:
+        self._refresh_match_color_options()
+        self._apply_match_filter()
+
     def _apply_match_filter(self) -> None:
         """체크한 결과만 남기고 나머지 행은 숨긴다 — 데이터는 안 지우고
-        표시만 가린다(setRowHidden), 그래서 필터 해제하면 바로 되돌아온다."""
+        표시만 가린다(setRowHidden), 그래서 필터 해제하면 바로 되돌아온다.
+        찾기 칸(57 K13)은 상대 닉네임이나 그 상대의 팀컬러에 글자가 들어 있는 줄만 — 팀컬러를 찾던 사용자의 줄은 그대로 남는다."""
         active = {k for k, b in self._match_filter_btns.items() if b.isChecked()}
         color = self.cb_match_color.currentText()
         color = "" if color == self.POSITION_COLOR_ALL else color
+        needle = self.ed_match_color.text().strip().lower()
         for r in range(self.table.rowCount()):
             item = self.table.item(r, 1)  # 결과 컬럼
             text = item.text() if item else ""
             kind = next((k for k, _ in self.MATCH_FILTER_KINDS if k in text), None)
             opp = self.table.item(r, 3)   # 상대 컬럼
-            off_color = bool(color) and self._team_colors.get(opp.text() if opp else "") != color
-            self.table.setRowHidden(r, (kind is not None and kind not in active) or off_color)
+            nick = opp.text() if opp else ""
+            off_color = bool(color) and self._team_colors.get(nick) != color
+            off_needle = bool(needle) and needle not in nick.lower() and needle not in (self._team_colors.get(nick) or "").lower()
+            self.table.setRowHidden(r, (kind is not None and kind not in active) or off_color or off_needle)
 
     def _refresh_match_color_options(self) -> None:
         """경기 목록의 상대 팀컬러 콤보 — 고른 색이 새 목록에도 있으면 유지(_refresh_color_combo)."""
@@ -7915,11 +7985,122 @@ class MainWindow(QMainWindow):
         self.lb_opponent_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         row.addWidget(self.lb_opponent_note)
         v.addLayout(row)
+        v.addLayout(self._build_opp_filter_row())
 
         self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS, icons={0: "division"})
+        self._set_header_help(self.tbl_opponents, self.OPPONENT_COLUMNS, {
+            "승률": win_rate_note(False),
+            "전체 대비": ("이 상대 승률 − 필터에 걸린 경기 전체 승률(%p). 이 상대와 "
+                       f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
         self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
+        self._add_profile_action(self.tbl_opponents, 0)
         v.addWidget(self.tbl_opponents, 1)
         return w
+
+    OPP_FILTER_ALL = "전체"
+    OPP_FILTER_CUSTOM = "직접 지정"
+    OPP_VALUE_UNKNOWN = "모름"
+
+    def _build_opp_filter_row(self) -> QHBoxLayout:
+        """57 K1 매치업 필터 — 경기 수(최근 N) · 표본(상대마다 판수) · 내 포메이션 · 상대 구단가치(지금 값의 분위 칸 — U3).
+        값은 저장하지 않는다(검색마다 처음으로 — 계획 K1). 바꾸면 _invalidate("opponents")(PyQt 7)."""
+        row = QHBoxLayout()
+
+        def dim(text: str) -> QLabel:
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            return lb
+
+        redraw = lambda *_: self._invalidate("opponents")  # noqa: E731
+        row.addWidget(dim("경기 수"))
+        self.cb_opp_games = NoScrollComboBox()
+        self.cb_opp_games.addItem(self.OPP_FILTER_ALL, None)
+        for n in config.K1_GAME_COUNTS:
+            self.cb_opp_games.addItem(f"최근 {n}", n)
+        self.cb_opp_games.addItem(self.OPP_FILTER_CUSTOM, -1)
+        self.cb_opp_games.currentIndexChanged.connect(self._on_opp_games_changed)
+        row.addWidget(self.cb_opp_games)
+        self.sp_opp_games = NoScrollSpinBox()
+        self.sp_opp_games.setRange(1, config.K1_CUSTOM_MAX)
+        self.sp_opp_games.setValue(config.K1_GAME_COUNTS[0])
+        self.sp_opp_games.setFixedWidth(64)
+        self.sp_opp_games.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.sp_opp_games.setVisible(False)
+        self.sp_opp_games.valueChanged.connect(redraw)
+        row.addWidget(self.sp_opp_games)
+        row.addSpacing(12)
+        self.chk_opp_min = QCheckBox("표본")
+        self.chk_opp_min.toggled.connect(lambda on: (self.cb_opp_min.setEnabled(on), redraw()))
+        row.addWidget(self.chk_opp_min)
+        self.cb_opp_min = NoScrollComboBox()
+        for n in config.K1_SAMPLE_MINS:
+            self.cb_opp_min.addItem(f"{n}판", n)
+        self.cb_opp_min.setCurrentIndex(min(1, self.cb_opp_min.count() - 1))
+        self.cb_opp_min.setEnabled(False)
+        self.cb_opp_min.currentIndexChanged.connect(redraw)
+        row.addWidget(self.cb_opp_min)
+        row.addWidget(dim("미만 빼기"))
+        row.addSpacing(12)
+        row.addWidget(dim("내 포메이션"))
+        self.cb_opp_form = NoScrollComboBox()
+        self.cb_opp_form.addItem(self.OPP_FILTER_ALL, None)
+        self.cb_opp_form.currentIndexChanged.connect(redraw)
+        row.addWidget(self.cb_opp_form)
+        row.addSpacing(12)
+        self.lb_opp_value = dim("상대 구단가치")
+        row.addWidget(self.lb_opp_value)
+        self.cb_opp_value = NoScrollComboBox()
+        self.cb_opp_value.addItem(self.OPP_FILTER_ALL, None)
+        self.cb_opp_value.setToolTip("상대의 지금 구단가치(팀컬러를 조회한 상대만) — 칸은 마지막 랭킹 스냅숏의 분위 · "
+                                     "'모름' = 1만 위 밖이거나 아직 조회하지 않은 상대")
+        self.cb_opp_value.currentIndexChanged.connect(redraw)
+        row.addWidget(self.cb_opp_value)
+        row.addStretch(1)
+        return row
+
+    def _reset_opp_filter(self) -> None:
+        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min):
+            w.blockSignals(True)
+        self.cb_opp_games.setCurrentIndex(0)
+        self.sp_opp_games.setVisible(False)
+        self.cb_opp_form.setCurrentIndex(0)
+        self.cb_opp_value.setCurrentIndex(0)
+        self.chk_opp_min.setChecked(False)
+        self.cb_opp_min.setEnabled(False)
+        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min):
+            w.blockSignals(False)
+
+    def _on_opp_games_changed(self, _i: int) -> None:
+        self.sp_opp_games.setVisible(self.cb_opp_games.currentData() == -1)
+        self._invalidate("opponents")
+
+    def _opp_game_count(self) -> int | None:
+        n = self.cb_opp_games.currentData()
+        return self.sp_opp_games.value() if n == -1 else n
+
+    def _match_formations(self) -> dict[str, str]:
+        """시즌 범위 경기마다 내 포메이션 — 범위·계정이 같으면 다시 안 센다(⑦ 화면 스레드 50ms)."""
+        key = (self._ouid, len(self._details), self._details[0].get("matchId") if self._details else None)
+        if getattr(self, "_formation_cache", (None, None))[0] != key:
+            self._formation_cache = (key, core.match_formations(self._details, self._ouid or ""))
+        return self._formation_cache[1]
+
+    @staticmethod
+    def _refill_combo(cb: NoScrollComboBox, items: list[tuple[str, object]]) -> None:
+        """맨 앞 '전체' 는 그대로 두고 나머지를 갈아 끼운다 — 고른 값(data)이 새 목록에도 있으면 유지, 없으면 '전체'."""
+        keep = cb.currentData()
+        cb.blockSignals(True)
+        while cb.count() > 1:
+            cb.removeItem(1)
+        for text, data in items:
+            cb.addItem(text, data)
+        i = cb.findData(keep) if keep is not None else 0
+        cb.setCurrentIndex(i if i >= 0 else 0)
+        cb.blockSignals(False)
+
+    def _opp_value_bins(self) -> list:
+        res = self._rank_read(core.value_bins)
+        return res.bins if res is not None else []
 
     def _apply_opponent_filter(self) -> None:
         needle = self.ed_opponent_filter.text().strip().lower()
@@ -8759,11 +8940,14 @@ class MainWindow(QMainWindow):
     def _diag_note_text(self) -> str:
         return f"{self._scope_text()} 기준 · 승·무·패 아닌 결과(오류 등)는 제외"
 
-    def _opponent_note_text(self) -> str:
-        return f"{self._scope_text()} 기준 · 더블클릭하면 그 상대와의 최근 경기 스쿼드"
+    def _opponent_note_text(self, picked: int | None = None, total: int | None = None) -> str:
+        head = f"{self._scope_text()} 기준"
+        if picked is not None and picked != total:
+            head += f" · 필터에 걸린 {picked:,}경기 / {total:,}경기" if picked else " · 조건에 맞는 경기가 없습니다"
+        return f"{head} · 더블클릭하면 그 상대와의 최근 경기 스쿼드"
 
     def _refresh_scope_notes(self) -> None:
-        self.lb_opponent_note.setText(self._opponent_note_text())
+        # 상대 전적 머리 글은 _render_opponents 가 쓴다 — 필터에 걸린 경기 수를 같이 적어서(57 K1). 부르는 쪽이 다시 그린다
         self.lb_analysis_note.setText(self._analysis_note_text())
         self.lb_diag_note.setText(self._diag_note_text())
         self.lb_diag_note2.setText(self._diag_note_text())
@@ -8841,6 +9025,7 @@ class MainWindow(QMainWindow):
         switched = ouid != self._ouid
         if switched:
             self._trend_reset_pending = True  # 다른 계정으로 전환 — 승률 그래프 기간을 30일로 되돌린다
+            self._reset_opp_filter()          # 57 K1 — 필터는 계정마다 처음부터(남의 포메이션이 고른 채로 남지 않게)
         self._ouid = ouid
         self._basic = basic
         if rank is not None or switched:
@@ -9320,12 +9505,34 @@ class MainWindow(QMainWindow):
         없는 표는 _fill 이 끝에서 refit() 하므로 부를 필요가 없다."""
         table.set_content_widths(extra)
 
+    def _opp_score_cell(self, data, match_id: str):
+        """57 K3 상대 점수 칸 — 원본이 남은 경기는 정확한 점수·순위, 그보다 옛 경기는 N23 순위 구간, 모르면 "-"."""
+        got = (data.opp_scores or {}).get(match_id)
+        if got is not None:
+            elo = f"{got.elo:,.0f} · " if got.elo is not None else ""   # "점" 없이 — 열 13개가 1280 폭에 들어가게(머리 툴팁이 단위)
+            return (f"{elo}{got.rank:,}위", got.rank)
+        band = (data.opp_bands or {}).get(match_id)
+        if band in config.OPP_RANK_BANDS:
+            return (core.opp_rank_label(band), band + 0.5)   # 정확한 순위보다 뒤로(같은 상한이면)
+        return ("-", 10 ** 9)
+
     def _render_matches(self, matches: list[MatchSummary]) -> None:
+        elo = self._elo.get(self._ouid) if self._ouid else None
+        scores = elo if elo is not None and elo.opp_scores is not None else None
+        self._match_scores_shown = scores is not None   # 관문 미달·남의 목록 — 상대 점수 열이 없다(_fit_match_extra)
+        h2h = {s.nickname: s for s in opponent_stats(self._matches)}   # 시즌 범위(상대 전적 탭과 같다)
         rows = []
         for m in matches:
+            color = self._team_colors.get(m.opponent) or ""
+            value = self._team_values.get(m.opponent)
+            s = h2h.get(m.opponent)
             rows.append([
                 m.date_text, m.result, m.score,
                 IconCell(m.opponent, None, self._division_icon_key(m.opp_division)),   # 그 경기 때 상대 등급
+                self._emblem_cell(color, color) if color else ("-", ""),
+                (short_bp(value), value) if value else ("-", -1),   # 짧게(110억) — 1280 폭 · 정확한 값은 [팀컬러 랭킹]
+                (wdl_text(s.win, s.draw, s.lose), s.games) if s else ("-", 0),
+                self._opp_score_cell(scores, m.match_id) if scores is not None else "",
                 (f"{m.possession}%", m.possession), (f"{m.shoot_total}", m.shoot_total),
                 (f"{m.shoot_effective}", m.shoot_effective),
                 (f"{m.pass_rate:.0f}%", m.pass_rate), (f"{m.rating:.2f}", m.rating),
@@ -9353,8 +9560,36 @@ class MainWindow(QMainWindow):
             if date_item:
                 date_item.setData(Qt.ItemDataRole.UserRole, m.match_id)
         self.table.setSortingEnabled(True)
+        self._fit_match_extra()
         self._refresh_match_color_options()
         self._apply_match_filter()
+
+    MATCH_EXTRA = ("팀컬러", "구단가치", "맞대결", "상대 점수")
+
+    def _fit_match_extra(self) -> None:
+        """57 K3 상대 정보 열 — 체크가 켜져 있으면 펼쳐 재 보고, 글자가 config.MATCH_EXTRA_MIN_PX 아래로 줄어야 하면 접는다.
+        상대 점수는 점수가 왔을 때만(관문·내 계정). 표 크기가 바뀔 때마다 다시(eventFilter — 한 번으로 모아)."""
+        self._match_fit_pending = False
+        t = self.table
+        cols = [self.MATCH_COLUMNS.index(n) for n in self.MATCH_EXTRA]
+        score = self.MATCH_COLUMNS.index("상대 점수")
+        want = self.chk_match_extra.isChecked()
+
+        def show(on: bool) -> None:
+            for c in cols:
+                t.setColumnHidden(c, not (on and (c != score or self._match_scores_shown)))
+            t.refit()
+        show(want)
+        folded = want and t.rowCount() > 0 and t.font().pixelSize() < config.MATCH_EXTRA_MIN_PX
+        if folded:
+            show(False)
+        self.lb_match_extra.setVisible(folded)
+
+    def eventFilter(self, obj, e) -> bool:
+        if obj is getattr(self, "table", None) and e.type() == QEvent.Type.Resize and not self._match_fit_pending:
+            self._match_fit_pending = True   # 끌어서 크기를 바꾸는 동안 여러 번 와도 한 번만
+            QTimer.singleShot(0, self._fit_match_extra)
+        return super().eventFilter(obj, e)
 
     def _on_match_double_clicked(self, item) -> None:
         date_item = self.table.item(item.row(), 0)
@@ -9377,17 +9612,55 @@ class MainWindow(QMainWindow):
         return QColor(T.blend(base_hex, target_hex, mix))
 
     def _render_opponents(self, matches: list[MatchSummary]) -> None:
+        # 57 K1 — 필터 칸을 지금 범위로 다시 채우고(고른 값은 남으면 유지) 경기를 거른 뒤 상대별로 센다
+        forms = self._match_formations()
+        counts: dict[str, int] = {}
+        for m in matches:
+            f = forms.get(m.match_id)
+            if f is not None:
+                counts[f] = counts.get(f, 0) + 1
+        self._refill_combo(self.cb_opp_form, [(f"{core.formation_label(f)} ({n})", f)
+                                              for f, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))])
+        bins = self._opp_value_bins()
+        self._refill_combo(self.cb_opp_value, [(self._bin_label(b), i) for i, b in enumerate(bins)]
+                           + ([(self.OPP_VALUE_UNKNOWN, -1)] if bins else []))
+        self.lb_opp_value.setVisible(bool(bins))   # rank.db 가 없으면 칸을 못 정한다 — 숨김
+        self.cb_opp_value.setVisible(bool(bins))
+        vbin = self.cb_opp_value.currentData() if bins else None
+        picked = core.filter_matches(
+            matches, self._opp_game_count(), self.cb_opp_form.currentData(), lambda m: forms.get(m.match_id),
+            vbin, lambda nick: core.bin_of_value(bins, self._team_values.get(nick)))
+        stats = opponent_stats(picked)
+        if self.chk_opp_min.isChecked():
+            k = self.cb_opp_min.currentData() or 1
+            stats = [s for s in stats if s.games >= k]
+        # 전체 대비(K13) — 기준은 필터에 걸린 경기 전체(그 줄 포함) · 같은 식(E1 — 승÷전체 그대로)
+        mixed = core.mixed_of_matches(picked)
+        w = sum(1 for m in picked if "승" in m.result)
+        d = sum(1 for m in picked if "무" in m.result)
+        lo = sum(1 for m in picked if "패" in m.result)
+        base_rated = core.rated(w, d, lo, mixed)
+        base = core.win_pct(w, d, lo, mixed)
         rows = []
-        for s in opponent_stats(matches):
+        for s in stats:
+            weak = core.is_weak(s.rated, core.MIN_COND) or not base_rated
+            diff = s.win_rate - base
             rows.append([
                 IconCell(s.nickname, None, self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
                 wdl_text(s.win, s.draw, s.lose),
                 (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
+                ("", -999.0) if weak else (f"{diff:+.1f}%p", diff),   # E2 — 몇 판짜리 큰 차이를 숨긴다
                 (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
                 (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
                 s.last_date,
             ])
         self._fill(self.tbl_opponents, rows)
+        diff_col = self.OPPONENT_COLUMNS.index("전체 대비")
+        for r in range(self.tbl_opponents.rowCount()):
+            it = self.tbl_opponents.item(r, diff_col)
+            if it is not None and it.text():
+                it.setToolTip(f"필터에 걸린 {len(picked):,}경기 전체 승률 {base:.1f}% 기준")
+        self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches)))
         self._apply_opponent_filter()
 
     def _on_opponent_double_clicked(self, item) -> None:
@@ -9663,6 +9936,8 @@ class MainWindow(QMainWindow):
         """팀컬러를 새로 읽었다 — 팀컬러 화면과 [카드별](팀컬러 필터 목록·걸러진 표)."""
         self._invalidate("teamcolor")
         self._invalidate("oppcards")
+        self._invalidate("matches")     # 57 K3 — 상대 팀컬러·구단가치 열
+        self._invalidate("opponents")   # 57 K1 — 상대 구단가치 필터
         self._refresh_match_color_options()   # 경기 목록 상대 팀컬러 필터(55 F2) — 가볍다(콤보만)
 
     def _teamcolor_scope(self) -> tuple[list[MatchSummary], list[dict]]:
@@ -10728,16 +11003,26 @@ class MainWindow(QMainWindow):
         self._elo_workers = [w for w in self._elo_workers if w.isRunning()]
         req = self._elo_req.get(ouid, 0) + 1
         self._elo_req[ouid] = req
-        w = EloLoader(ouid, req)
+        w = EloLoader(ouid, req, self._opp_score_matches(ouid))
         w.elo_ready.connect(self._on_elo_ready)
         self._elo_workers.append(w)
         w.start()
+
+    def _opp_score_matches(self, ouid: str) -> list | None:
+        """57 K3 — EloLoader 에 줄 [(match_id, 경기 시각, 상대)]. 관문 미달·지금 계정이 아니면 None(그 읽기를 안 한다).
+        원본(RANK_RAW_KEEP_DAYS) 밖 경기는 줘도 짝이 없다 — 하루 여유를 두고 자른다."""
+        if ouid != self._ouid or not config.opp_score_allowed():
+            return None
+        since = datetime.now() - timedelta(days=config.RANK_RAW_KEEP_DAYS + 1)
+        return [(m.match_id, m.match_date, m.opponent) for m in self._matches_all
+                if m.match_date is not None and m.match_date >= since]
 
     def _on_elo_ready(self, ouid: str, data) -> None:
         if data is None or data.req != self._elo_req.get(ouid):
             return
         self._elo[ouid] = data
         if ouid == self._ouid:
+            self._invalidate("matches")   # 57 K3 상대 점수 열
             self._render_elo()
             self._invalidate("elodist")   # 점수 분포의 검색 계정 선
             self._invalidate("wrelo")     # 승률→점수의 내 ELO(마지막 스냅숏에 없을 때)
