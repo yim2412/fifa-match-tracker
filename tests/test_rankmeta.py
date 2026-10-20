@@ -753,6 +753,117 @@ def test_rank_of_and_fc_rank_range():
     assert M.fc_rank_range(h, 1000) == (1, 1, 3)
 
 
+# ── 57 K7 상위 랭커 카드 · K11 보상판 ─────────────────────────────────────────────
+
+def test_top3_games_per_day_fc_and_rate():
+    def body(db):
+        db.snap(T0, [person(1, 1, w=10, d=0, l=0), person(2, 2, w=5, d=1, l=4), person(9, 50)])
+        db.snap(T0 + timedelta(days=2), [person(1, 2, w=30, d=2, l=8, nick="첫째"), person(2, 1, w=9, d=1, l=10),
+                                         person(5, 3, w=6, d=0, l=4), person(9, 4, w=99)])
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": "2026-09-28T09:00:00"}),
+                      **{rc.FC_STARTED + "2026-09-28T09:00:00": "2026-09-28T09:00:00"})
+        with db.conn:
+            db.conn.execute("INSERT INTO fc_season VALUES ('2026-09-28T09:00:00', 1, 450, 600, 0, 1, '2026-09-28T09:00:00', 0)")
+        cards = M.top3(db.conn, person=True)
+        assert [c.rank for c in cards] == [1, 2, 3] and cards[1].nickname == "첫째", cards
+        two, one, three = cards[1], cards[0], cards[2]
+        assert two.games_per_day == (40 - 10) / 2, two.games_per_day       # 2일 사이 30판
+        assert one.games_per_day == (20 - 10) / 2
+        assert three.games_per_day is None, "한 번만 본 사람에게 하루 판수를 냈다"
+        days = (T0 + timedelta(days=2) - datetime(2026, 9, 28)).total_seconds() / 86400
+        assert abs(two.fc_lo - 450 / days) < 1e-9 and abs(two.fc_hi - 600 / days) < 1e-9, (two.fc_lo, days)
+        assert one.fc_lo is None, "fc_season 에 없는 사람에게 FC 를 냈다"
+        assert two.win_pct == 30 * 100 / 40, "승률은 승÷전체(앱 규칙)"
+        M.clear_cache()
+        assert all(c.fc_lo is None for c in M.top3(db.conn, person=False)), "관문 밖인데 사람별 표를 읽었다"
+        rc._set_state(db.conn, **{rc.FC_STARTED + "2026-09-28T09:00:00": "2026-10-05T09:00:00"})
+        M.clear_cache()
+        assert M.top3(db.conn, person=True)[1].fc_lo is None, "늦게 시작한 시즌 FC 를 냈다"
+    using(body)
+
+
+def test_minor_formations_and_colors_use_the_whole_snapshot():
+    """57 K8 — 비주류 = 마지막 스냅숏 1만 명 전체에서 MINOR_USERS 미만. 순위 구간(top)을 좁혀도 같은 기준."""
+    def body(db):
+        n = config.MINOR_USERS
+        rows = [person(i, i, form="4-2-3-1", color="큰팀") for i in range(1, n + 1)]
+        rows += [person(n + i, n + i, form="5-3-2", color="작은팀") for i in range(1, n)]     # 하나 모자람
+        db.snap(T0, rows)
+        assert M.minor_formations(db.conn) == frozenset({"5-3-2"}), M.minor_formations(db.conn)
+        counts = M.usage_counts(db.conn)["team_color"]
+        assert not M.is_minor_color(counts, "큰팀") and M.is_minor_color(counts, "작은팀")
+        assert M.is_minor_color(counts, "아무도안씀"), "1만 명 중 0명인 팀컬러는 비주류다"
+        assert M.formation_group("5-3-2", "minor", M.minor_formations(db.conn)) == M.MINOR_LABEL
+        assert M.formation_group("4-2-3-1", "minor", M.minor_formations(db.conn)) == "4-2-3-1"
+        assert M.formation_group("", "minor", frozenset({""})) == "" and M.blank_label("formation", "minor") == M.BLANK_FORMATION
+        tm = M.tier_means(db.conn, n + 50, "minor")       # 위 n+50명만 봐도(그 안 5-3-2 는 50명) —  5-3-2 는 비주류로 묶인다(기준은 전체)
+        keys = {r.key: r.users for r in tm.tables["formation"]}
+        assert keys == {"4-2-3-1": n, M.MINOR_LABEL: 50}, keys
+    using(body)
+
+
+def _reward_db(db, people, *, fc_started="2026-09-28T09:00:00", fcg_started="2026-09-28T09:00:00"):
+    """people: [(sn, rank, fc_lo, fc_hi, g_lo, g_hi)] — rank None 은 마지막 스냅숏에 없음."""
+    at = "2026-09-28T09:00:00"
+    db.snap(T0, [person(sn, rk) for sn, rk, *_ in people if rk is not None])
+    st = {"person_season": json.dumps({"seq": 1, "start": "2026-09-28", "at": at})}
+    if fc_started:
+        st[rc.FC_STARTED + at] = fc_started
+    if fcg_started:
+        st[rc.FCG_STARTED + at] = fcg_started
+    rc._set_state(db.conn, **st)
+    with db.conn:
+        db.conn.executemany("INSERT INTO fc_season VALUES (?, ?, ?, ?, 0, 1, ?, 0)",
+                            [(at, sn, fl, fh, at) for sn, _r, fl, fh, _gl, _gh in people])
+        db.conn.executemany("INSERT INTO fc_games VALUES (?, ?, ?, ?, 0, 1, ?, 0)",
+                            [(at, sn, gl, gh, at) for sn, _r, _fl, _fh, gl, gh in people])
+
+
+def test_reward_board_spans_bands_and_min_games():
+    n = config.K11_MIN_PER_BAND
+    people = [(i, i, 1500, 2000, 100, 200) for i in range(1, n + 1)]           # 1~200위 · 범위 [750, 2000] 가운데 1375
+    people += [(500 + i, 500 + i, 3000, 3000, 200, 200) for i in range(n - 1)]   # 201~1,000위 · 한 명 모자람
+    people += [(900, None, 1, 1, 99, 500)]                                     # g_lo < 100 — 대상 밖
+
+    def body(db):
+        _reward_db(db, people)
+        b = M.reward_board(db.conn)
+        assert b.state == "ok" and b.seen == len(people) and b.users == len(people) - 1, (b.state, b.seen, b.users)
+        top = b.by_rank[0]
+        assert top.users == n and top.median == (1500 * 100 / 200 + 2000 * 100 / 100) / 2, top
+        assert (top.lo, top.hi) == (750.0, 2000.0), (top.lo, top.hi)
+        assert b.by_rank[1].users == n - 1 and b.by_rank[1].median is None, "인원 미달 칸에 중앙값을 냈다"
+        assert b.by_rank[-1].users == 0, "대상 밖(g_lo<100)을 셌다"
+        assert b.overall.users == 2 * n - 1 and b.overall.median is not None
+        assert sum(x.users for x in b.by_value) == b.users, "구단가치 칸 합이 대상 수와 다르다"
+    using(body)
+
+
+def test_reward_board_hidden_by_later_of_two_starts():
+    """3판 G3 — FC 는 일찍 · 판수는 늦게 시작했으면 숨긴다(판수가 늦은 사람의 100판당이 부푼다)."""
+    people = [(i, i, 10, 20, 100, 100) for i in range(1, 20)]
+    for fc, fcg, want in (("2026-09-28T09:00:00", "2026-10-10T09:00:00", "hidden"),
+                          ("2026-10-10T09:00:00", "2026-09-28T09:00:00", "hidden"),
+                          ("2026-09-28T09:00:00", None, "hidden"),
+                          ("2026-09-28T09:00:00", "2026-09-29T09:00:00", "ok")):
+        def body(db, fc=fc, fcg=fcg, want=want):
+            _reward_db(db, people, fc_started=fc, fcg_started=fcg)
+            assert M.reward_board(db.conn).state == want, (fc, fcg, want)
+        using(body)
+
+    def body(db):       # 사람별 처리 전 · 옛 rank.db(fc_games 없음)
+        db.snap(T0, [person(1, 1)])
+        assert M.reward_board(db.conn).state == "no_season"
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": "2026-09-28T09:00:00"}),
+                      **{rc.FC_STARTED + "2026-09-28T09:00:00": "2026-09-28T09:00:00",
+                         rc.FCG_STARTED + "2026-09-28T09:00:00": "2026-09-28T09:00:00"})
+        with db.conn:
+            db.conn.execute("DROP TABLE fc_games")
+        M.clear_cache()
+        assert M.reward_board(db.conn).state == "no_table"
+    using(body)
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

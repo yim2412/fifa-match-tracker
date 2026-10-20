@@ -162,6 +162,7 @@ class AreaTrendChart(_Chart):
       weak       점마다 표본 부족 여부 — 참인 점은 빈 고리로 흐리게, 최고·최저 표시에서 뺀다(1.4.1 평점 추이)
       avg_weights 점마다 평균선의 무게 — 승률이면 승률 분모(rated · 2.6.1 A6). 없으면 경기 수.
                  섞인 묶음은 무승부가 분모 밖이라, 경기 수로 가중하면 평균선이 표의 승률과 어긋난다
+      ranks      점마다 순위(57 K5) — 점선 + 오른쪽 축(로그 · 1위가 위). None 인 점에서 끊긴다
     """
 
     BASE_MIN_H = 170
@@ -182,14 +183,18 @@ class AreaTrendChart(_Chart):
         self._x_dates: list | None = None
         self._weak: list[bool] | None = None
         self._avg_weights: list[int] | None = None
+        self._ranks: list[int | None] | None = None
         self.marks: dict = {}
 
     def set_data(self, points: list[tuple[str, float, int | None]], *, axis: Axis = PCT_AXIS,
                  avg: bool = True, baseline: float | None = None, ma: list[float | None] | None = None,
                  ma_name: str = "7일 평균", counts: bool = False, ref_series=(),
                  x_dates: list | None = None, weak: list[bool] | None = None,
-                 avg_weights: list[int] | None = None) -> None:
+                 avg_weights: list[int] | None = None, ranks: list[int | None] | None = None) -> None:
         self._points = list(points)
+        if ranks is not None and len(ranks) != len(self._points):
+            raise ValueError(f"ranks 길이 {len(ranks)} != 점 {len(self._points)}")
+        self._ranks = list(ranks) if ranks is not None and any(ranks) else None
         if avg_weights is not None and len(avg_weights) != len(self._points):
             raise ValueError(f"avg_weights 길이 {len(avg_weights)} != 점 {len(self._points)}")
         self._avg_weights = list(avg_weights) if avg_weights is not None else None
@@ -222,6 +227,9 @@ class AreaTrendChart(_Chart):
         p.setFont(small)
         ml = max(fm.horizontalAdvance(ax.tick_text(t)) for t in ax.ticks) + 8
         mr = fm.horizontalAdvance(ax.text(ax.hi)) // 2 + 10
+        if self._ranks is not None:     # 오른쪽 순위 축 글자 자리
+            known = [r for r in self._ranks if r]
+            mr = max(mr, max(fm.horizontalAdvance(f"{r:,}위") for r in (min(known), max(known))) + 12)
         mt, mb = 18, fm.height() + 8
         w, h = self.width(), self.height()
         strip = max(self.COUNT_MIN, h * self.COUNT_FRAC) if self._counts else 0
@@ -276,6 +284,8 @@ class AreaTrendChart(_Chart):
         ref_ends = self._draw_ref_lines(p, y_of, ml, plot_w) if self._refs else []
         if self._ma is not None:
             self._draw_ma(p, xs, y_of)
+        if self._ranks is not None:
+            self._draw_ranks(p, fm, xs, top, bottom, w - mr)
 
         pen = QPen(QColor(T.CHART_UP), LINE_W)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -406,6 +416,8 @@ class AreaTrendChart(_Chart):
                 tip += f" · {self._ma_name} {ax.text(self._ma[i])}"
             if games is not None:
                 tip += f" ({games}경기)"
+            if self._ranks is not None and self._ranks[i]:
+                tip += f" · {self._ranks[i]:,}위"
             if self._weak and self._weak[i]:
                 tip += " · 표본 부족"
             self._hits.append((QRectF(bx, top, bw, foot - top), tip))
@@ -440,6 +452,43 @@ class AreaTrendChart(_Chart):
                 p.drawPolyline(QPolygonF(s))
         self.marks["ma_points"] = sum(len(s) for s in segs)
         self.marks["ma_segments"] = len(segs)
+
+    def _draw_ranks(self, p: QPainter, fm: QFontMetrics, xs: list[float], top: float, bottom: float,
+                    right: float) -> None:
+        """순위 점선 + 오른쪽 축(로그 — 1위와 1만 위를 한 축에). 축 글자는 가장 좋은·나쁜 순위 둘."""
+        known = [r for r in self._ranks if r]
+        lo, hi = math.log10(min(known)), math.log10(max(known))
+        if hi - lo < 0.05:              # 순위가 거의 그대로면 가운데 한 줄
+            lo, hi = lo - 0.5, hi + 0.5
+
+        def y_of(r: int) -> float:
+            return top + (bottom - top) * (math.log10(r) - lo) / (hi - lo)
+
+        pen = QPen(QColor(T.CHART_RANK), 1.5)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        p.setPen(pen)
+        segs, seg = [], []
+        for x, r in zip(xs, self._ranks):
+            if not r:
+                if seg:
+                    segs.append(seg)
+                seg = []
+            else:
+                seg.append(QPointF(x, y_of(r)))
+        if seg:
+            segs.append(seg)
+        for s in segs:
+            if len(s) == 1:
+                p.drawEllipse(s[0], 1.5, 1.5)
+            else:
+                p.drawPolyline(QPolygonF(s))
+        p.setPen(QColor(T.CHART_RANK))
+        for r in sorted({min(known), max(known)}):
+            y = y_of(r)
+            p.drawText(QRectF(right + 6, y - fm.height() / 2, 200, fm.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{r:,}위")
+        self.marks["rank_segments"] = len(segs)
+        self.marks["rank_axis"] = (min(known), max(known))
 
     def _draw_ref_lines(self, p: QPainter, y_of, ml: float, plot_w: float) -> list:
         """기준 계단선 — 그 날짜에 유효했던 값(그날 이전 마지막 값)을 오른쪽으로 잇는다.

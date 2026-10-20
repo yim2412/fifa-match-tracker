@@ -696,7 +696,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 52, len(tables)   # 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 55, len(tables)   # 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -1128,6 +1128,21 @@ def test_area_chart_defaults_unchanged():
             (new.marks, om)
         assert [(_rect(r), t) for r, t in new._hits] == [(_rect(r), t) for r, t in old._hits]
         assert new.minimumHeight() == old.minimumHeight()
+
+
+def test_area_chart_rank_line_k5():
+    """57 K5 — 순위 점선: None 에서 끊기고 오른쪽 축은 가장 좋은·나쁜 순위 · 전부 None 이면 안 넘긴 것과 픽셀까지 같다."""
+    import charts
+    c = _drawn(charts.AreaTrendChart(), ranks=[120, None, 80, 95])
+    assert c.marks["rank_segments"] == 2 and c.marks["rank_axis"] == (80, 120), c.marks
+    assert "80위" in c._hits[2][1] and "위" not in c._hits[1][1], [t for _r, t in c._hits]
+    a, b = _drawn(charts.AreaTrendChart(), ranks=[None] * 4), _drawn(charts.AreaTrendChart())
+    assert a.grab().toImage() == b.grab().toImage() and "rank_segments" not in a.marks
+    try:
+        _drawn(charts.AreaTrendChart(), ranks=[1, 2])
+        raise AssertionError("길이가 다른 순위를 받았다")
+    except ValueError:
+        pass
 
 
 def _drawn(c, w=500, h=240, **kw):
@@ -9235,7 +9250,7 @@ def test_rank_views_invalidate_on_four_paths():
     W = app_main.MainWindow
     assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
                                      "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                                     "traits", "opprank", "predcheck"}
+                                     "traits", "opprank", "predcheck", "rewards_rank"}
     seen = []
     keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
     _win._invalidate_rank_views = lambda: seen.append(1)
@@ -9281,6 +9296,102 @@ def test_rank_views_invalidate_on_four_paths():
         del _win._invalidate_rank_views
         _win._ouid, _win._rank_sched, _win._teamcolor_loader = keep[0], keep[1], keep[2]
         _win._teamcolor_pending = keep[3]
+
+
+def test_top3_cards_and_reward_board_tab():
+    """57 K7 카드 셋(마지막 스냅숏 1~3위) · K11 [랭킹 추이 › 보상] — 상태 문구 · 구간 표 · 관문 밖이면 비움."""
+    import json
+    with _MetaEnv() as env:
+        _win._go_page("랭킹 추이", "추이")
+        _win._invalidate("ranktrend")
+        assert not _win.top3_box.isVisibleTo(_win) and _win.top3_data == [], "rank.db 가 없는데 카드가 보인다"
+        _meta_db()
+        _win._invalidate("ranktrend")
+        cards = _win.top3_data
+        assert [c.rank for c in cards] == [1, 2, 3] and _win.top3_box.isVisibleTo(_win), cards
+        assert _win.top3_cards[0][0].title.text() == "1위 m1", _win.top3_cards[0][0].title.text()
+        assert "하루 0.0판" in _win.top3_cards[0][1].text(), _win.top3_cards[0][1].text()   # 지어낸 스냅숏은 승무패가 안 는다
+
+        _win._go_page("랭킹 추이", "보상")
+        assert _win._current_view() == ("랭킹 추이", "보상")
+        _win._invalidate("rewards_rank")
+        b = _win.reward_board
+        assert b is not None and b.state != "ok", b
+        assert app_main.MainWindow.REWARD_BOARD_STATES[b.state] in _win.lb_rboard_summary.text()
+        at = "2026-09-28T09:00:00"
+        c = rankcollect.open_rank_db()
+        try:
+            rankcollect._set_state(c, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": at}),
+                                   **{rankcollect.FC_STARTED + at: at, rankcollect.FCG_STARTED + at: at})
+            with c:
+                c.execute("DELETE FROM fc_season")
+                c.execute("DELETE FROM fc_games")
+                n = config.K11_MIN_PER_BAND
+                c.executemany("INSERT INTO fc_season VALUES (?, ?, 1500, 2000, 0, 1, ?, 0)", [(at, 800 + i, at) for i in range(1, n + 1)])
+                c.executemany("INSERT INTO fc_games VALUES (?, ?, 100, 200, 0, 1, ?, 0)", [(at, 800 + i, at) for i in range(1, n + 1)])
+        finally:
+            c.close()
+        _win._invalidate("rewards_rank")
+        b = _win.reward_board
+        assert b.state == "ok" and b.users == config.K11_MIN_PER_BAND, b
+        t = _win.tbl_rboard_rank
+        assert t.item(0, 0).text() == "1~200위" and t.item(0, 2).text() == "1,375 FC", [t.item(0, k).text() for k in range(4)]
+        assert "1,375 FC" in _win.lb_rboard_summary.text(), _win.lb_rboard_summary.text()
+        # K7 하루 FC 는 사람별 관문(안내 6) 뒤 — 위에서 시즌 시작·FC 시작을 앞당기고 1위(801)의 fc_season 을 넣었다
+        import rankmeta
+        rankmeta.clear_cache()
+        _win._invalidate("ranktrend")
+        assert _win.top3_data[0].fc_lo is not None, "관문 안인데 하루 FC 가 없다 — 아래 검사가 빈다"
+        env.write(notice=config.META_NOTICE_VERSION - 1)
+        rankmeta.clear_cache()
+        _win._invalidate("ranktrend")
+        assert _win.top3_data[0].fc_lo is None, "안내 6 전인데 카드가 사람별 표(fc_season)를 읽었다"
+        env.write()
+        keep_details = _win._details
+        try:
+            _win._details = []                                  # 시즌 필터로 다른 시즌을 고른 상태 — 이 계정 값은 누적 전체에서
+            got = _win._my_reward_text("2025-12-01")
+            assert "100판당" in got and "챔스 이상 3판" in got, got   # 픽스처 4경기 중 승·무·패 3판 · 전부 챔피언스(900)
+        finally:
+            _win._details = keep_details
+        env.write(notice=config.FC_GAMES_NOTICE_VERSION - 1)     # 판수 안내 전 동의자 — 남들 값을 안 읽는다
+        _win._invalidate("rewards_rank")
+        assert _win.reward_board is None and t.rowCount() == 0, "안내 13 전인데 보상판을 읽었다"
+
+
+def test_teamcolor_kind_and_minor_filters_are_shared():
+    """57 K8 — 팀컬러 종류·비주류만 거르기는 표 다섯이 같은 값 · 재료(엠블럼·rank.db)가 없으면 그 부품을 숨긴다."""
+    keep_minor, keep_cache = config.MINOR_USERS, _win._emblem_cache
+    with _MetaEnv():
+        try:
+            _meta_db(people=301)                     # 팀A 151명 · 팀B 150명
+            config.MINOR_USERS = 151                 # 팀B 만 비주류
+            _win._go_page("메타 분석", "가성비")
+            _win._invalidate("valuescore")
+            names = lambda: sorted(_win.tbl_vscore.item(r, 0).text() for r in range(_win.tbl_vscore.rowCount()))
+            assert names() == ["팀A", "팀B"], names()
+            lb, cb, chk = _win._tc_filters[0]
+            assert not chk.isHidden(), "rank.db 가 있는데 비주류 체크를 숨겼다"
+            _win._tc_filters[-1][2].setChecked(True)            # 다른 표의 체크 — 모두 같은 값으로
+            assert all(c.isChecked() for _l, _c, c in _win._tc_filters), "거르기 값이 표마다 갈렸다"
+            assert names() == ["팀B"], names()
+            _win._tc_filters[0][2].setChecked(False)
+            _win._emblem_cache = {"팀A": "crests/1.png", "팀B": "countries/2.png"}
+            _win._tc_filters[1][1].setCurrentIndex(_win._tc_filters[1][1].findData("crests"))
+            assert all(c.currentData() == "crests" for _l, c, _k in _win._tc_filters)
+            assert names() == ["팀A"], names()
+            _win._go_page("메타 분석", "구간 평균")
+            _win._invalidate("tiermeans")
+            t = _win.tmeans_tables["team_color"]
+            assert [t.item(r, 0).text() for r in range(t.rowCount())] == ["팀A"]
+            assert _win.tmeans_tables["formation"].rowCount() == 2, "팀컬러 거르기가 포메이션 표까지 걸렀다"
+            _win._emblem_cache = {}
+            _win._invalidate("tiermeans")
+            assert t.rowCount() == 2 and cb.isHidden(), "엠블럼을 모르는데 종류 거르기가 걸리거나 보인다"
+        finally:
+            config.MINOR_USERS = keep_minor
+            _win._emblem_cache = keep_cache
+            _win._on_tc_filter(None, False)
 
 
 def test_predict_check_tab_renders_and_fits():
@@ -9621,6 +9732,64 @@ def test_dashboard_head_redraws_when_elo_arrives():
         assert _win.dashboard.head_cells[1][1].text() == "+100.00점", [c[1].text() for c in _win.dashboard.head_cells]
     finally:
         _win._rank_seasons, _win._elo = keep[0], keep[1]
+        _win._render_dashboard()
+
+
+def test_history_tab_nickname_only_for_my_account():
+    """57 K4 [스쿼드·이적 › 이력] — 포메이션 이력은 늘 · 닉네임 이력은 내 계정(키 지문까지)일 때만."""
+    _win._go_page("스쿼드·이적", "이력")
+    assert _win._current_view() == ("스쿼드·이적", "이력")
+    c = store.open_db(config.DB_PATH)
+    try:
+        keep = store.trade_state(c)
+        c.execute("DELETE FROM trade_state")
+        c.commit()
+        _win._invalidate("history")
+        kinds = {r.kind for r in _win.history_runs}
+        assert kinds == {"formation"} and _win.tbl_history.rowCount() == len(_win.history_runs) > 0, kinds
+        assert "내 계정" in _win.lb_history_note.text()
+        store.set_trade_state(c, my_ouid="다른-계정", key_fp=store.key_fingerprint(config.API_KEY))
+        _win._invalidate_trades()
+        assert {r.kind for r in _win.history_runs} == {"formation"}, "내 계정이 다른 계정인데 닉네임 이력을 냈다"
+        store.set_trade_state(c, my_ouid=_OUID, key_fp="다른 키")
+        _win._invalidate_trades()
+        assert {r.kind for r in _win.history_runs} == {"formation"}, "키가 바뀌었는데 닉네임 이력을 냈다"
+        store.set_trade_state(c, key_fp=store.key_fingerprint(config.API_KEY))
+        _win._invalidate_trades()
+        assert {r.kind for r in _win.history_runs} == {"nickname", "formation"}, {r.kind for r in _win.history_runs}
+        starts = [r.start for r in _win.history_runs]
+        assert starts == sorted(starts, reverse=True), "최근 구간이 위가 아니다"
+    finally:
+        c.execute("DELETE FROM trade_state")
+        if keep:
+            store.set_trade_state(c, **keep)
+        c.close()
+        _win._invalidate_trades()
+
+
+def test_dashboard_headline_k6():
+    """57 K6 — 머리 칸 아래 한 줄: 순서표대로 고른 문장 · 없으면 빈 줄(자리 그대로) · 낙폭은 같은 구간 중앙보다 깊을 때만."""
+    import analysis
+    from datetime import date as _d
+    from habits import ScoreReport
+    rep = ScoreReport(10, _d(2026, 9, 1), 4000.0, 4100.0, 4500.0, _d(2026, 9, 5), 300.0, _d(2026, 9, 9), 1.0, 5, 9)
+    club = core.ClubHead(peaks_dd=sorted((4500.0 + i, 100.0) for i in range(config.R2_BAND_MIN)))
+    got = app_main.drawdown_headline(rep, club)
+    assert got and "4,500점에서 4,200점" in got and "−100점" in got, got
+    assert app_main.drawdown_headline(replace(rep, max_dd=100.0), club) is None, "중앙과 같은 낙폭을 눈에 띈다고 했다"
+    assert app_main.drawdown_headline(rep, core.ClubHead()) is None and app_main.drawdown_headline(None, club) is None
+    keep = _win._narrate_scope
+    lb = _win.dashboard.lb_headline
+    try:
+        _win._narrate_scope = lambda: [analysis.Insight(analysis.SEC_LOSE, "연패 뒤 무너집니다", weight=1.0, rule="_streak_rules")]
+        _win._render_dashboard()
+        assert lb.text() == "연패 뒤 무너집니다", lb.text()
+        h = lb.minimumHeight()
+        _win._narrate_scope = lambda: []
+        _win._render_dashboard()
+        assert lb.text() == "" and lb.minimumHeight() == h > 0, "빈 줄일 때 자리를 잃었다"
+    finally:
+        _win._narrate_scope = keep
         _win._render_dashboard()
 
 
@@ -10144,6 +10313,7 @@ def test_elo_zoom_and_team_value_chart():
         assert len(_win.elo_chart._points) == 10 and _win.zoom_elo.isVisibleTo(_win)
         _win.zoom_elo.set_span(2, 5)
         assert [p[0] for p in _win.elo_chart._points] == ["09/13", "09/14", "09/15", "09/16"], _win.elo_chart._points
+        assert _win.elo_chart._ranks == [500] * 4, ("57 K5 순위 점선이 확대 구간을 안 따른다", _win.elo_chart._ranks)
         tv = _win.team_value_chart
         assert _win.gb_team_value.isVisibleTo(_win) and tv.isVisibleTo(_win)
         assert len(tv._points) == 9, "빈 값 날을 0 으로 그렸거나 같은 날 둘을 다 넣었다"

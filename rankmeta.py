@@ -48,7 +48,8 @@ from rankcollect import is_champ  # noqa: F401 — core_api 가 여기서도 가
 BLANK_COLOR = "안 씀"
 BLANK_FORMATION = "모름"
 BLANK_GROUP = "기타·모름"
-FORMATION_HOWS = (("그대로", "raw"), ("수비 줄 수", "back"), ("앞줄 수", "front"))
+FORMATION_HOWS = (("그대로", "raw"), ("수비 줄 수", "back"), ("앞줄 수", "front"), ("비주류 묶음", "minor"))
+MINOR_LABEL = "비주류"
 
 Row = namedtuple("Row", "sn rank nick value elo win draw lose color formation grade")
 _COLS = "profile_sn, rank, nickname, team_value, elo, win, draw, lose, team_color, formation, grade"
@@ -56,13 +57,16 @@ _COLS = "profile_sn, rank, nickname, team_value, elo, win, draw, lose, team_colo
 
 # ── 공통 ──────────────────────────────────────────────────────────────────
 
-def formation_group(text: str | None, how: str = "raw") -> str:
-    """포메이션 묶기(N6) — "" = 모름(그대로) · 기타·모름(묶기). 수비 줄 수 = 첫 숫자, 앞줄 수 = 끝 숫자(R10)."""
+def formation_group(text: str | None, how: str = "raw", minor: frozenset = frozenset()) -> str:
+    """포메이션 묶기(N6) — "" = 모름(그대로) · 기타·모름(묶기). 수비 줄 수 = 첫 숫자, 앞줄 수 = 끝 숫자(R10).
+    비주류 묶음(57 K8) = minor(minor_formations — 1만 명 전체 기준) 에 든 것만 "비주류" 한 줄로, 나머지는 그대로."""
     t = (text or "").strip()
     if t in ("", "-"):
         return ""
     if how == "raw":
         return t
+    if how == "minor":
+        return MINOR_LABEL if t in minor else t
     parts = t.split("-")
     if not all(p.isdigit() for p in parts) or len(parts) < 2 or not 3 <= int(parts[0]) <= 5:
         return ""
@@ -72,7 +76,7 @@ def formation_group(text: str | None, how: str = "raw") -> str:
 def blank_label(kind: str, how: str = "raw") -> str:
     if kind == "team_color":
         return BLANK_COLOR
-    return BLANK_FORMATION if how == "raw" else BLANK_GROUP
+    return BLANK_FORMATION if how in ("raw", "minor") else BLANK_GROUP
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -236,6 +240,7 @@ def _day_winrate(conn, top, how) -> DayWinrate:
     if not out.ready:
         return out
     ra, rb = _rows(conn, out.pair.a["id"]), _rows(conn, out.pair.b["id"])
+    minor = minor_formations(conn) if how == "minor" else frozenset()
     aw = al = 0
     groups: dict[str, dict] = {"team_color": {}, "formation": {}}
     out.changed = {"team_color": 0, "formation": 0}
@@ -254,7 +259,7 @@ def _day_winrate(conn, top, how) -> DayWinrate:
         out.users += 1
         out.win, out.draw, out.lose = out.win + d[0], out.draw + d[1], out.lose + d[2]
         for kind, ka, kb in (("team_color", a.color or "", b.color or ""),
-                             ("formation", formation_group(a.formation, how), formation_group(b.formation, how))):
+                             ("formation", formation_group(a.formation, how, minor), formation_group(b.formation, how, minor))):
             if ka != kb:
                 out.changed[kind] += 1
                 continue
@@ -282,6 +287,33 @@ def _day_winrate(conn, top, how) -> DayWinrate:
 
 
 # ── B3 가성비 · B6 구간 평균 — 마지막 원본 스냅숏 ────────────────────────────
+
+def usage_counts(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
+    """마지막 원본 스냅숏 1만 명 전체의 팀컬러·포메이션별 인원(57 K8 비주류 기준 — 순위 구간을 좁혀도 이 값). 원본이 없으면 빈 dict."""
+    return _cached("usage_counts", conn, (), lambda: _usage_counts(conn))
+
+
+def _usage_counts(conn) -> dict[str, dict[str, int]]:
+    _snap, rows = _last_raw(conn)
+    if not rows:
+        return {}
+    out: dict[str, dict[str, int]] = {"team_color": {}, "formation": {}}
+    for r in rows.values():
+        for kind, key in (("team_color", (r.color or "").strip()), ("formation", (r.formation or "").strip())):
+            if key and key != "-":
+                out[kind][key] = out[kind].get(key, 0) + 1
+    return out
+
+
+def minor_formations(conn: sqlite3.Connection) -> frozenset:
+    """비주류 포메이션 — 1만 명 중 MINOR_USERS 미만(산출 기준의 팀컬러 정의를 포메이션에 넓힌 것)."""
+    return frozenset(k for k, n in usage_counts(conn).get("formation", {}).items() if n < config.MINOR_USERS)
+
+
+def is_minor_color(counts: dict[str, int], name: str) -> bool:
+    """팀컬러 이름이 비주류인가 — 1만 명 중 MINOR_USERS 미만(아무도 안 쓰면 0명이라 비주류). counts = usage_counts()["team_color"]."""
+    return counts.get(name, 0) < config.MINOR_USERS
+
 
 def _last_raw(conn) -> tuple[dict | None, dict[int, Row]]:
     raw = _season_raw(conn)
@@ -392,7 +424,9 @@ def _tier_means(conn, top, how) -> TierMeans:
     out = TierMeans(at=snap["dt"] if snap else None)
     if snap is None:
         return out
-    for kind, keyf in (("team_color", lambda r: r.color or ""), ("formation", lambda r: formation_group(r.formation, how))):
+    minor = minor_formations(conn) if how == "minor" else frozenset()
+    for kind, keyf in (("team_color", lambda r: r.color or ""),
+                       ("formation", lambda r: formation_group(r.formation, how, minor))):
         by: dict[str, list[Row]] = {}
         for r in rows.values():
             if r.rank <= top:
@@ -492,14 +526,14 @@ def _value_bins(conn) -> ValueBins:
 
 # ── B1 메타 변화의 포메이션 묶기(N6) ──────────────────────────────────────
 
-def group_meta(trend: rankcollect.MetaTrend, how: str) -> rankcollect.MetaTrend:
-    """메타 변화(B1) 포메이션 줄을 묶음 키로 더하고 비율·차·흐림을 다시 계산한다. raw 면 그대로."""
+def group_meta(trend: rankcollect.MetaTrend, how: str, minor: frozenset = frozenset()) -> rankcollect.MetaTrend:
+    """메타 변화(B1) 포메이션 줄을 묶음 키로 더하고 비율·차·흐림을 다시 계산한다. raw 면 그대로. minor = minor_formations."""
     if how == "raw" or trend.collecting or "formation" not in trend.rows:
         return trend
     now: dict[str, int] = {}
     then: dict[str, int] = {}
     for r in trend.rows["formation"]:
-        k = formation_group(r.key, how)
+        k = formation_group(r.key, how, minor)
         now[k] = now.get(k, 0) + r.now_n
         then[k] = then.get(k, 0) + r.then_n
     ta, tb = sum(now.values()), sum(then.values())
@@ -1108,3 +1142,158 @@ def fc_rank_range(head: ClubHead, my_fc: int) -> tuple[int, int, int]:
     """시즌 FC 등수 범위(U6) — (가장 좋은 등수, 가장 나쁜 등수, 분모). 남들 하한이 나보다 큰 사람은 확실히 위,
     상한이 나보다 큰 사람은 위일 수 있다. 분모 = 이 시즌 본 사람 + 나."""
     return rank_of(head.fc_lo, my_fc), rank_of(head.fc_hi, my_fc), len(head.fc_hi) + 1
+
+
+# ── 57 K7 상위 랭커 카드 · K11 보상판 — 읽기만 ─────────────────────────────────────────────────
+
+@dataclass
+class TopCard:
+    rank: int
+    nickname: str
+    elo: float | None
+    games_per_day: float | None        # 원본 14일 안 처음 본 스냅숏 → 마지막 스냅숏의 (승+무+패) 증가 ÷ 날 수(한 번만 봤으면 None)
+    fc_lo: float | None                # 하루 FC 하한·상한 = 시즌 FC 범위 ÷ 시즌 시작부터 날 수(사람별 관문 밖·늦게 시작한 시즌은 None)
+    fc_hi: float | None
+    win_pct: float | None              # 시즌 승÷전체 %(앱 규칙)
+    ref_time: str                      # 마지막 스냅숏 데이터 시각
+    win: int = 0                       # 시즌 승·무·패(막대 — widgets.win_rate_bar 가 받는다)
+    draw: int = 0
+    lose: int = 0
+
+
+def top3(conn: sqlite3.Connection, person: bool = False) -> list[TopCard]:
+    """마지막 원본 스냅숏 1~K7_TOP_N 위. person = 사람별 표(fc_season)를 읽어도 되나(안내 6 관문 — 화면이 판정).
+    닉네임은 원본 스냅숏(14일)에서만 — [랭킹 추이] 가 이미 보여 주는 범위."""
+    return _cached("top3", conn, (person,), lambda: _top3(conn, person))
+
+
+def _top3(conn, person: bool) -> list[TopCard]:
+    raw = _season_raw(conn)
+    if not raw:
+        return []
+    last = raw[-1]
+    rows = _rows(conn, last["id"])
+    top = sorted((r for r in rows.values() if r.rank is not None and r.rank <= config.K7_TOP_N), key=lambda r: r.rank)
+    if not top:
+        return []
+    fc: dict[int, tuple[int, int]] = {}
+    fc_days = None
+    if person:
+        try:
+            st = rankcollect.get_state(conn)
+            ps = rankcollect._json_state(st, "person_season") or {}
+            season_at, start = ps.get("at"), ps.get("start")
+            if season_at and start and not _late_start(start, st.get(rankcollect.FC_STARTED + season_at)):
+                fc_days = (datetime.fromisoformat(last["dt"]) - datetime.fromisoformat(start)).total_seconds() / 86400
+                fc = {sn: (lo, hi) for sn, lo, hi in conn.execute(
+                    "SELECT profile_sn, fc_lo, fc_hi FROM fc_season WHERE season_at = ?", (season_at,))}
+        except sqlite3.Error:
+            fc = {}
+    firsts: dict[int, tuple[str, int]] = {}
+    want = [r.sn for r in top]
+    for s in raw[:-1]:
+        q = f"SELECT profile_sn, win, draw, lose FROM snapshot_rows WHERE snapshot_id = ? AND profile_sn IN ({','.join('?' * len(want))})"
+        for sn, w, d, lose in conn.execute(q, (s["id"], *want)):
+            firsts.setdefault(sn, (s["dt"], (w or 0) + (d or 0) + (lose or 0)))
+    out = []
+    for r in top:
+        games = (r.win or 0) + (r.draw or 0) + (r.lose or 0)
+        per_day = None
+        if r.sn in firsts:
+            at0, g0 = firsts[r.sn]
+            days = _hours(at0, last["dt"]) / 24
+            if days > 0 and games >= g0:
+                per_day = (games - g0) / days
+        lo = hi = None
+        if r.sn in fc and fc_days and fc_days > 0:
+            lo, hi = fc[r.sn][0] / fc_days, fc[r.sn][1] / fc_days
+        out.append(TopCard(r.rank, r.nick or "", r.elo, per_day, lo, hi,
+                           r.win * 100 / games if games and r.win is not None else None, last["dt"],
+                           r.win or 0, r.draw or 0, r.lose or 0))
+    return out
+
+
+@dataclass
+class RewardBand:
+    label: str
+    users: int = 0
+    median: float | None = None        # 사람마다 100판당 범위의 가운데 값 → 그 중앙값(인원 K11_MIN_PER_BAND 미만이면 None)
+    lo: float | None = None            # 같은 사람들의 하한·상한 중앙값(범위 폭을 같이 보이려고)
+    hi: float | None = None
+    bin: ValueBin | None = None        # 구단가치 칸이면 그 칸 — 이름은 화면이 다른 구단가치 표와 같은 글로 붙인다
+
+
+@dataclass
+class RewardBoard:
+    state: str = "ok"                  # ok · no_season(사람별 처리 전) · hidden(늦게 시작한 시즌) · no_table(옛 rank.db) · empty
+    season_start: str | None = None
+    snap_at: str | None = None
+    users: int = 0                     # 대상(g_lo ≥ K11_MIN_GAMES)
+    seen: int = 0                      # 판수를 아는 사람 전부
+    overall: RewardBand | None = None
+    by_rank: list = field(default_factory=list)      # RewardBand — OPP_RANK_BANDS 순서 · 마지막 스냅숏에 없는 사람은 "1만 위 밖·모름"
+    by_value: list = field(default_factory=list)     # RewardBand — value_bins 칸 순서 + 모름
+
+
+def _reward_band(label: str, spans: list[tuple[float, float]]) -> RewardBand:
+    b = RewardBand(label, len(spans))
+    if len(spans) >= config.K11_MIN_PER_BAND:
+        b.median = statistics.median((lo + hi) / 2 for lo, hi in spans)
+        b.lo = statistics.median(lo for lo, _ in spans)
+        b.hi = statistics.median(hi for _, hi in spans)
+    return b
+
+
+def reward_board(conn: sqlite3.Connection) -> RewardBoard:
+    """100판당 보상(57 K11 · U8 — 구간별 중앙값만, 사람 줄·닉네임 없음). 사람마다 범위 = [fc_lo ÷ g_hi, fc_hi ÷ g_lo] × 100.
+    대상 = g_lo ≥ K11_MIN_GAMES. 숨김 = FC_STARTED·FCG_STARTED 중 늦은 쪽이 시즌 시작 N12_START_DAYS 넘어(3판 G3 — 판수가 늦게
+    시작한 사람의 100판당이 부푼다). 관문(안내 13 · read_fc_games_allowed)은 화면이 본다.
+    캐시하지 않는다 — 캐시 키(스냅숏 목록)는 동의 철회·지우기로 fc_games 가 비는 것을 못 본다."""
+    out = RewardBoard()
+    try:
+        st = rankcollect.get_state(conn)
+        ps = rankcollect._json_state(st, "person_season") or {}
+        season_at, out.season_start = ps.get("at"), ps.get("start")
+        if not season_at:
+            out.state = "no_season"
+            return out
+        firsts = [st.get(rankcollect.FC_STARTED + season_at), st.get(rankcollect.FCG_STARTED + season_at)]
+        late = None if None in firsts else max(firsts)
+        if _late_start(out.season_start, late):
+            out.state = "hidden"
+            return out
+        got = conn.execute("SELECT f.profile_sn, f.fc_lo, f.fc_hi, g.g_lo, g.g_hi FROM fc_season f JOIN fc_games g"
+                           " ON g.season_at = f.season_at AND g.profile_sn = f.profile_sn WHERE f.season_at = ?",
+                           (season_at,)).fetchall()
+    except sqlite3.Error:
+        out.state = "no_table"
+        return out
+    out.seen = len(got)
+    spans = {sn: (fl * 100 / gh, fh * 100 / gl) for sn, fl, fh, gl, gh in got if gl >= config.K11_MIN_GAMES}
+    out.users = len(spans)
+    if not spans:
+        out.state = "empty"
+        return out
+    out.overall = _reward_band("전체", list(spans.values()))
+    snap, rows = _last_raw(conn)
+    out.snap_at = snap["dt"] if snap else None
+    by_rank: dict = {b: [] for b in config.OPP_RANK_BANDS}
+    by_rank[None] = []
+    for sn, sp in spans.items():
+        r = rows.get(sn)
+        band = next((b for b in config.OPP_RANK_BANDS if r is not None and r.rank is not None and r.rank <= b), None)
+        by_rank[band].append(sp)
+    out.by_rank = [_reward_band(opp_rank_label(b), by_rank[b]) for b in config.OPP_RANK_BANDS]
+    out.by_rank.append(_reward_band("1만 위 밖·모름", by_rank[None]))
+    bins = value_bins(conn).bins
+    cells: list[list] = [[] for _ in range(len(bins) + 1)]
+    for sn, sp in spans.items():
+        r = rows.get(sn)
+        i = bin_of_value(bins, r.value if r is not None else None)
+        cells[len(bins) if i is None else i].append(sp)
+    for i, b in enumerate(bins):
+        band = _reward_band("", cells[i])
+        band.bin = b
+        out.by_value.append(band)
+    out.by_value.append(_reward_band("모름", cells[-1]))
+    return out

@@ -55,6 +55,7 @@ class DashboardInput:
     story: list | None = None
     # 55 머리 줄 — (제목, 큰 글자, 작은 글자, 툴팁) 여섯 칸. None 이면 계정 없음
     club_cells: list | None = None
+    headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
 
 
 class DashCard(QFrame):
@@ -160,6 +161,10 @@ class DashboardPage(QWidget):
             cells.addLayout(col, 1)
             self.head_cells.append((title, big, small))
         self.head.body.addLayout(cells)
+        # 57 K6 — 머리 칸 아래 한 줄. 없을 때도 자리를 지켜 카드 높이가 검색마다 출렁이지 않게
+        self.lb_headline = _label("", wrap=True)
+        self.lb_headline.setMinimumHeight(self.lb_headline.fontMetrics().height())
+        self.head.body.addWidget(self.lb_headline)
         outer.addWidget(self.head)
 
         # ② 지표 4개
@@ -330,6 +335,7 @@ class DashboardPage(QWidget):
         self._render_rivals(d)
 
     def _render_head(self, d: DashboardInput) -> None:
+        self.lb_headline.setText(d.headline or "")
         cells = d.club_cells or []
         for i, (title, big, small) in enumerate(self.head_cells):
             t, b, sm, tip = cells[i] if i < len(cells) else ("", "—", "", "")

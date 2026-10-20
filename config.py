@@ -358,6 +358,19 @@ K1_CUSTOM_MAX = 10000
 # 57 K3 경기 목록 상대 정보 열 넷 — 펼치면 글자가 이 크기(px) 아래로 줄어야 하는 창 폭이면 접는다(1280 폭: 열 13개에 15px 로 1,309px
 # 필요 · 표 폭 942 — 9px 까지 줄고 머리글이 잘렸다 · 2026-10-20 실화면). 11 = 1600×900 에서 펼친 채 13px 가 나오는 것보다 작게
 MATCH_EXTRA_MIN_PX = 11
+# 57 K7 [랭킹 추이 › 추이] 위 상위 랭커 카드 — 마지막 스냅숏 1~N위
+K7_TOP_N = 3
+# 57 K11 [랭킹 추이 › 보상] — 100판당 보상(산출 기준 "효율 랭킹": 챔스 이상에서 100판 넘게 뛴 사람만 · 판수는 하한 g_lo 로 거른다)
+K11_MIN_GAMES = 100
+K11_MIN_PER_BAND = 10               # 구간 인원이 이보다 적으면 그 칸은 중앙값을 안 낸다(표본 미달 — 칸이 비어 보인다)
+# 57 K8 비주류 팀컬러 — 1만 명 중 이 인원 미만(산출 기준 "1% 미만" · 순위 구간을 좁혀도 기준은 전체)
+MINOR_USERS = 100
+# 57 K4 [스쿼드·이적 › 이력] — 같은 값이 이 경기 수 미만이면 깜빡임으로 보고 앞 구간에 붙인다(habits.history_runs)
+K4_MIN_RUN = 3
+# 57 K6 대시보드 한 줄 총평 — 이 순서로 처음 나오는 문장 하나(analysis.headline · 새 판정 없음 E3).
+# "drawdown" = 점수 리포트의 최대 낙폭이 같은 구간 사람들 중앙보다 깊을 때(55 R2 재료) · 나머지는 analysis 규칙 함수 이름
+K6_ORDER = ("drawdown", "_streak_rules", "_opponent_rules", "_finishing_rules", "_flow", "_clutch_rules",
+            "_creation_rules", "_possession_rules", "_formation_rules", "_half_rules", "_minute_rules", "_goal_type_rules")
 # A2 FC 보상(43단계 — stats.win_rewards) — (적용 시작일, 경기 때 내 division, 승리당 FC). **넥슨 공식 수치가 아니라 사용자 확인값**(2026-10-12):
 # 이긴 판마다 챔피언스(900) 15 · 슈퍼챔피언스(800) 20, 그 밖의 등급은 없다. 몰수승(상대 탈주)도 나온다(사용자 확인).
 # 넥슨이 바꾸면 사용자가 알려 줘야 한다 — 바뀐 값은 새 시작일 줄로 더한다(옛 줄은 두어 지난 경기가 그때 값으로 센다).
@@ -714,6 +727,12 @@ def chip_auto_allowed() -> bool:
 def meta_person_allowed() -> bool:
     """사람별 표(상위 20 연속·최고점·첫 챔스·시즌 FC)에 써도 되나 — 이 프로세스 값으로. 쓰기 직전엔 read_person_allowed 로 다시."""
     return (not notice_needed() and WEB_DATA and RANK_COLLECT and NOTICE_ACCEPTED >= META_NOTICE_VERSION)
+
+
+def fc_games_view_allowed() -> bool:
+    """57 K11 보상판(fc_games 를 읽는다)을 보여도 되나 — 이 프로세스 값으로(meta_person_allowed 꼴). 쓰기는 read_fc_games_allowed."""
+    return (not notice_needed() and WEB_DATA and RANK_COLLECT
+            and NOTICE_ACCEPTED >= max(META_NOTICE_VERSION, FC_GAMES_NOTICE_VERSION))
 
 
 def ranker_pick_allowed() -> bool:

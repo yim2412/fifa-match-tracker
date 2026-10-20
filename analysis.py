@@ -95,6 +95,7 @@ class Insight:
     detail: str = ""
     weight: float = 0.0
     basis: Basis | None = None
+    rule: str = ""          # 낸 규칙 함수 이름(narrate 가 단다) — 한 줄 총평(headline)이 고르는 순서에 쓴다
 
     def text(self) -> str:
         return f"{self.headline} {self.detail}".strip()
@@ -539,16 +540,23 @@ def _patterns(matches: list[MatchSummary], details: list[dict], ouid: str, basis
     if is_weak(s.rated, MIN_BASE):
         return []
     base, mixed, n = s.win_rate, s.mixed, s.rated
-    return (_clutch_rules(details, ouid, base, mixed)
-            + _minute_rules(details, ouid)
-            + _possession_rules(details, ouid, n, mixed)
-            + _formation_rules(details, ouid, base, n, mixed)
-            + _finishing_rules(details, ouid)
-            + _creation_rules(details, ouid, basis)
-            + _half_rules(details, ouid)
-            + _goal_type_rules(details, ouid)
-            + _opponent_rules(matches, base, mixed)
-            + _streak_rules(matches, base, n, mixed))
+    return (_tag(_clutch_rules, details, ouid, base, mixed)
+            + _tag(_minute_rules, details, ouid)
+            + _tag(_possession_rules, details, ouid, n, mixed)
+            + _tag(_formation_rules, details, ouid, base, n, mixed)
+            + _tag(_finishing_rules, details, ouid)
+            + _tag(_creation_rules, details, ouid, basis)
+            + _tag(_half_rules, details, ouid)
+            + _tag(_goal_type_rules, details, ouid)
+            + _tag(_opponent_rules, matches, base, mixed)
+            + _tag(_streak_rules, matches, base, n, mixed))
+
+
+def _tag(rule, *args) -> list[Insight]:
+    out = rule(*args)
+    for i in out:
+        i.rule = rule.__name__
+    return out
 
 
 # ── 진입점 ───────────────────────────────────────────────────────────────
@@ -576,10 +584,29 @@ def narrate(matches: list[MatchSummary], details: list[dict], ouid: str,
     matches 는 최신순이 전제(화면 표시 순서 그대로). 표본이 모자라면 해당
     섹션이 통째로 비는 게 정상이다.
     """
-    found = _flow(matches, details, ouid, window) + _patterns(matches, details, ouid, basis)
+    found = _tag(_flow, matches, details, ouid, window) + _patterns(matches, details, ouid, basis)
     out: list[Insight] = []
     for sec in SECTIONS:
         group = sorted((i for i in found if i.section == sec),
                        key=lambda i: -i.weight)
         out.extend(group[:per_section])
     return out
+
+
+# ── 한 줄 총평(57 K6) — 새 판정 없이 위 문장 중 하나를 고른다(E3) ────────────────────────────
+
+DRAWDOWN = "drawdown"   # K6_ORDER 안의 점수 낙폭 자리(글은 화면이 55 리포트 재료로 만들어 넘긴다)
+
+
+def headline(insights: list[Insight], drawdown: str | None = None) -> str | None:
+    """config.K6_ORDER 순서대로 처음 나오는 것 — 규칙 자리면 그 규칙 문장 중 가중치가 가장 큰 것의 결론(headline),
+    DRAWDOWN 자리면 drawdown 글. 아무것도 없으면 None(표본 미달 — 침묵)."""
+    for key in config.K6_ORDER:
+        if key == DRAWDOWN:
+            if drawdown:
+                return drawdown
+            continue
+        got = [i for i in insights if i.rule == key]
+        if got:
+            return max(got, key=lambda i: i.weight).headline
+    return None

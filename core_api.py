@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from analysis import (
     MIN_COND, MIN_OPP, MIN_PLAYER_GAMES, SEC_FLOW, SEC_LOSE, SEC_WIN, SECTIONS, STREAK_MAX, WINDOW,
-    Basis, narrate, streak_min_n,
+    Basis, headline, narrate, streak_min_n,
 )
 from models import (
     MatchSummary, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
@@ -30,10 +30,11 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, Di
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
                     DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
-                    CalDay, CalSummary, cal_summary, calendar_days)
+                    CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
 from ownerdist import OwnerDist, PosDist, load_dist as load_owner_dist, load_pos_dist
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
-from predict import Prediction, SeasonEnd, describe as describe_prediction, predict_for, season_end_estimate
+from predict import (Prediction, SeasonEnd, describe as describe_prediction, predict_for, reward_brackets,
+                     season_end_estimate)
 from rankcollect import (EloHist, MetaTrend, RankTrend, data_time, elo_hist_series, elo_marker, meta_status,
                          is_champ, meta_trend, rank_trend_series)
 from rankmeta import (
@@ -43,6 +44,8 @@ from rankmeta import (
     OppBand, OppRank, opp_rank_rows, opp_rank_table, opp_rank_label,
     OppScore, bin_of_value, opp_scores,
     ClubHead, club_head, dd_band, fc_rank_range, rank_of,
+    RewardBand, RewardBoard, TopCard, reward_board, top3,
+    MINOR_LABEL, is_minor_color, minor_formations, usage_counts,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -71,7 +74,7 @@ from stats import (
 __all__ = [
     # analysis — 집계 → 문장
     "MIN_COND", "MIN_OPP", "MIN_PLAYER_GAMES", "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "STREAK_MAX", "WINDOW",
-    "Basis", "narrate", "streak_min_n",
+    "Basis", "headline", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend", "division_icon_index",
@@ -89,14 +92,16 @@ __all__ = [
     "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
     "streak_baseline", "streak_key",
     # habits·rankmeta — 55 구단 머리 줄·점수 리포트(H1~H6 · R1~R3)
-    "DaySummary", "FirstReach", "ScoreReport", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
+    "DaySummary", "FirstReach", "ScoreReport", "HistoryRun", "history_runs", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
     "ClubHead", "club_head", "dd_band", "fc_rank_range", "rank_of",
+    "RewardBand", "RewardBoard", "TopCard", "reward_board", "top3",
+    "MINOR_LABEL", "is_minor_color", "minor_formations", "usage_counts",
     # habits — 55 D1 일별 기록 달력
     "CalDay", "CalSummary", "cal_summary", "calendar_days",
     # habits — N18 공격 루트(2.7.1)
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)
-    "Prediction", "describe_prediction", "predict_for", "SeasonEnd", "season_end_estimate",
+    "Prediction", "describe_prediction", "predict_for", "reward_brackets", "SeasonEnd", "season_end_estimate",
     "judge_predict_row", "predict_final_results",   # B8 예측 되짚기(50단계)
     # rankerpick — 랭커 픽 집계(2.1.1 · 6). 받기(rankerpick.collect)는 화면이 아니라 로더가 부른다
     "PickCard", "PickSummary", "ranker_pick_summary",

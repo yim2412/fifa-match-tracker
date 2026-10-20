@@ -119,6 +119,7 @@ CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
 CHART_CATS = _P["CHART_CATS"]        # 도넛 조각 색(순서대로) — 넘치는 조각은 CHART_NEUTRAL "기타"
+CHART_RANK = CHART_CATS[1]           # 점수 그래프의 순위 점선·오른쪽 축(57 K5) — 초록 점수선과 색약에서도 갈리는 주황
 
 CHART_ON_MARK = "#ffffff"            # 색 점·골대 맞은 슛 위의 흰 글자·테두리(두 테마 같음)
 

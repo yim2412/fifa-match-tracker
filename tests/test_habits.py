@@ -1067,6 +1067,40 @@ def test_cal_summary_per_day():
     assert habits.cal_summary([]).per_day == 0.0
 
 
+# ── 57 K4 이력 ────────────────────────────────────────────────────────────────
+
+def _hist_detail(i: int, nick: str, form_positions: list[int], ouid="me"):
+    when = datetime(2026, 10, 1, 9) + timedelta(hours=i)
+    return {"matchId": f"h{i}", "matchDate": when.isoformat(timespec="seconds"),
+            "matchInfo": [{"ouid": ouid, "nickname": nick, "player": [{"spPosition": p} for p in form_positions]},
+                          {"ouid": "opp", "nickname": "상대", "player": []}]}
+
+
+def test_history_runs_merge_blips_and_rejoin():
+    """K4 — 손으로 센 순서: 닉네임 A×5 → B×1(깜빡임) → A×4 → C×K4_MIN_RUN. 포메이션은 4백 → 3백 바꿈 한 번."""
+    import habits
+    four = [0, 3, 4, 5, 6, 13, 14, 15, 16, 25, 21]        # 수비 4 · 미드 4 · 공격 2(GK·자리 번호는 stats._LINES)
+    three = [0, 4, 5, 6, 13, 14, 15, 16, 18, 25, 21]
+    names = ["A"] * 5 + ["B"] + ["A"] * 4 + ["C"] * config.K4_MIN_RUN
+    ds = [_hist_detail(i, n, four if i < 7 else three) for i, n in enumerate(names)]
+    ds.reverse()                                              # 최신순으로 줘도 시간순으로 센다
+    runs = habits.history_runs(ds, "me")
+    nick = [r for r in runs if r.kind == "nickname"]
+    assert [(r.value, r.games, r.blips) for r in nick] == [("A", 9, [("B", 1)]), ("C", config.K4_MIN_RUN, [])], \
+        [(r.value, r.games, r.blips) for r in nick]
+    assert nick[0].start.hour == 9 and nick[0].end == datetime(2026, 10, 1, 18), (nick[0].start, nick[0].end)
+    form = [r for r in runs if r.kind == "formation"]
+    assert len(form) == 2 and form[0].games == 7 and form[1].games == len(names) - 7, [(r.value, r.games) for r in form]
+    assert form[0].value != form[1].value
+    short = habits.history_runs([_hist_detail(0, "Z", four)], "me", kinds=("nickname",))
+    assert [(r.value, r.games) for r in short] == [("Z", 1)], "맨 앞 짧은 구간을 버렸다"
+    assert habits.history_runs([_hist_detail(0, "Z", four, ouid="남")], "me") == [], "내 줄이 없는 경기를 셌다"
+    # 빈 선발(몰수 등 — 0-0-0-0-0) 경기가 사이에 끼어도 구간을 안 끊는다(이 PC 실측 28경기 · 안 빼면 1경기짜리 구간이 생긴다)
+    gap = [_hist_detail(i, "A", [] if i in (3, 4, 5) else four) for i in range(10)]
+    runs = habits.history_runs(gap, "me", kinds=("formation",))
+    assert [(r.games, r.blips) for r in runs] == [(7, [])], [(r.value, r.games, r.blips) for r in runs]
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

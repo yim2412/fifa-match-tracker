@@ -651,6 +651,34 @@ def test_half_rule_compares_with_my_own_scoring_not_fifty_fifty():
         analysis.MIN_GOALS = keep
 
 
+# ── 57 K6 한 줄 총평 ─────────────────────────────────────────────────────────
+
+def test_narrate_tags_every_insight_with_its_rule():
+    ms, ds = _seq(["패"] * analysis.MIN_OPP + ["승"] * 30, opp="천적")
+    for m in ms[analysis.MIN_OPP:]:
+        m.opponent = "기타"
+    found = analysis.narrate(ms, ds, OUID)
+    assert found and all(i.rule in analysis.BASIS_RULES or i.rule in analysis.NO_BASIS_RULES for i in found), \
+        [(i.rule, i.headline) for i in found]
+    assert any(i.rule == "_opponent_rules" for i in found), [(i.rule, i.headline) for i in found]
+
+
+def test_headline_follows_k6_order_and_is_silent_without_sentences():
+    I = analysis.Insight
+    found = [I(analysis.SEC_WIN, "포메이션 문장", weight=9.0, rule="_formation_rules"),
+             I(analysis.SEC_LOSE, "약한 상성", weight=1.0, rule="_opponent_rules"),
+             I(analysis.SEC_LOSE, "센 상성", weight=5.0, rule="_opponent_rules")]
+    assert analysis.headline(found) == "센 상성", "순서표보다 가중치를 먼저 봤거나 같은 규칙 안에서 약한 문장을 골랐다"
+    assert analysis.headline(found, "낙폭 글") == "낙폭 글", "drawdown 자리가 맨 앞이 아니다"
+    assert analysis.headline(found[:1]) == "포메이션 문장"
+    assert analysis.headline([]) is None and analysis.headline([I(analysis.SEC_WIN, "꼬리표 없음")]) is None
+    assert analysis.DRAWDOWN in config.K6_ORDER
+    rules = set(analysis.BASIS_RULES) | set(analysis.NO_BASIS_RULES)
+    assert set(config.K6_ORDER) - {analysis.DRAWDOWN} <= rules, "순서표에 없는 규칙 이름이 있다"
+    missing = rules - set(config.K6_ORDER) - {"_contrast"}   # _contrast 는 _flow 안에서 나온다(꼬리표 _flow)
+    assert not missing, f"순서표에 빠진 규칙 {missing} — 그 규칙 문장은 총평에 영영 안 뽑힌다"
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
