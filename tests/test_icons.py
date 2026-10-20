@@ -678,6 +678,7 @@ def test_emblem_cell_cache_and_invalidation():
         assert st.cell("Alpha", emblem="crests/l77.png").icon_key == "crests/l77.png", "지도에 있어도 행이 아는 키가 이긴다(구단주 표 스냅숏 줄)"
         st._invalidate = lambda key: None
         st.RANK_VIEW_KEYS = MW.RANK_VIEW_KEYS
+        st._tc_minor_only = False        # 57 K8 — 비주류 거르기가 켜졌을 때만 팀컬러 화면도 무효화한다
         MW._invalidate_rank_views(st)
         assert st._emblem_cache is None, "rank.db 가 바뀌는 길은 합친 지도를 비운다(스냅숏 출처가 낡지 않게)"
         assert st.cell("", ) == "" and st._note_emblem("", "x") is None
