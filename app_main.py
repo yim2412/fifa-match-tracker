@@ -13196,7 +13196,8 @@ class AboutDialog(QDialog):
             self._set_storage_busy(True)
             self.lb_storage.setText("지우는 중…")
         self._measure_storage()
-        return w
+        # 여섯 줄 표가 정보 창 최소 높이를 밀어 FHD 150% 에서 창이 화면보다 컸다(774 > 720 · CI test_window_size) — 세로 스크롤 안에
+        return VScrollArea(w)
 
     @staticmethod
     def _drop_signal(sig, slot) -> None:
