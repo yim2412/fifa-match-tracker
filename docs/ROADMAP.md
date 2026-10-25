@@ -212,7 +212,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 기준 화면의 팀컬러 · 포메이션 · 통계(랭킹 전체) 페이지 그래프 — 우리 랭킹 추이 · 메타 분석 · 팀컬러 화면과 짝. 구단 페이지의 슈팅 분석 · 스쿼드 · 경기 기록 · 매치업은 글로만 대조했다(그림은 아직).
 
-## 63단계 — 경기 시각 UTC → KST (제안 2.13.2) · 3판 (2026-10-25 · **U1~U3 사용자 "추천대로"** · 1·2회차 검토 [상] 3·3 반영)
+## 63단계 — 경기 시각 UTC → KST (제안 2.13.2) · 4판 (2026-10-25 · **U1~U3 사용자 "추천대로" · U2 는 3회차 뒤 다시 물어 KST 로** · 1~3회차 검토 [상] 3·3·3 반영)
 
 **한 줄**: 넥슨 `matchDate` 는 UTC 다(T0). 읽는 곳마다 따로 파싱하던 것을 **한 모듈 `matchtime.py`** 로 모으고, 거기서 +9시간 한 **KST 벽시계(naive)** 를 돌려준다. 저장 원본(`matches.match_date` 열 · payload 문자열)은 **안 바꾼다** — 옛 버전이 같은 DB 를 열어도 그대로 읽고, 읽는 쪽만 바뀌니 지난 경기도 같이 맞는다.
 난이도 **중간~높음** — 고칠 함수는 작지만 닿는 곳이 앱 전체이고, 옛 값으로 **저장된 파생 값**(아래 표 B)이 섞이는 자리가 있다.
@@ -228,7 +228,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | 이름 | 하는 일 |
 |---|---|
 | `config.MATCH_DATE_OFFSET_H = 9` | 넥슨 UTC → KST. 상수는 한 곳(전역 6) |
-| `matchtime.parse(raw) -> datetime \| None` | 원문(fifa.db 3만 183경기 전부 `YYYY-MM-DDTHH:MM:SS` 한 꼴 · 10-25 실측 — 공백 꼴은 옛 코드 호환으로만 받는다) → **KST naive**. 깨졌으면 None |
+| `matchtime.parse(raw) -> datetime \| None` | 원문(fifa.db 3만 183경기 전부 `YYYY-MM-DDTHH:MM:SS` 한 꼴 · 10-25 실측 — 공백 꼴은 옛 코드 호환으로만 받는다) → **KST naive**. 깨졌으면 None. **(4판) 날짜만(`YYYY-MM-DD`)은 None** — 시각 없이는 KST 날을 모른다 · 실데이터엔 없다 · 그런 입력을 단언하던 테스트(`test_parsing` :1261 `_match_day({"matchDate": "2026-10-02"})`)는 입력을 시각 있는 꼴(−9시간)로 바꾼다(3회차 [중]3) |
 | `matchtime.day(raw) -> date \| None` | `parse(raw).date()` — `raw[:10]` 을 대신한다(UTC 15시 뒤 경기가 다음 날로) |
 | `matchtime.raw_bound(kst) -> str` | KST 경계(datetime · 날짜만 `YYYY-MM-DD` · 소수초 붙은 ISO — `fill_opp_rank`:1708 의 `cutoff` 가 날짜만 `boundary` 와 `isoformat()` 의 문자열 max 라 둘 다 온다) → **반드시 `%Y-%m-%dT%H:%M:%S`(소수초 없음)** UTC 문자열 — 같은 초에서 `>=` 문자열 비교가 어긋나지 않게. 단위 테스트에 두 입력 꼴. **SQL 의 `match_date >= ?` 에 넣는 값은 전부 이걸 거친다** — 원문 열을 SQL 안에서 고치면 `idx_matches_type_date` 를 못 써 `TEMP B-TREE`·풀스캔(`test_rules`) |
 | `matchtime.epoch(raw) -> int \| None` | 진짜 epoch 초(UTC 로 읽음) — `dev_matches.kst_epoch` 를 대신 |
@@ -249,16 +249,22 @@ naive 로 두는 이유: 앱 전체가 `datetime.now()`(이 PC 벽시계 = KST)�
 | `rankerpick` :389 · :483 (`[:10] < oldest`) | `[:10]` | `day` |
 | `store.date_range`(:752 · `check_api` 기간 줄) | MIN/MAX 원문 | 원문 그대로 받아 부르는 쪽이 `parse` |
 | `ownerdist` :426 → `owner_dist.last_match`(날짜만 저장) | `[:10]` 꼴 | 저장 전에 `day` — 45일 낡음 판정(`eligible`)만 쓰고 9시간은 판정을 거의 안 바꾼다. 옛 줄은 그대로 읽는다 |
+| `stats._match_day` 의 두 번째 호출 :2007(3회차 [중]4) | `[:10]` | 함수만 바꾸면 같이 맞는다 |
+| **(4판) 슈챔 달성 `achievementDate`**(3회차 [상]1) — `app_main` :618(`at` · 화면 '최근 달성일' `at[:10]`) · :9764(날짜 비교) · :11820(`fromisoformat` → 목록 진입 시각과 ±`SC_NEXON_MATCH_S` 대조) · `check_api` :71 | 원문 UTC(경기 시각과 초 단위로 같다 — `stats` :88 1.2.1 실측) | `parse`·`day` — **경기만 고치면 대조가 한 번도 안 맞아 "저장된 경기에서는 못 찾음"이 늘 뜬다** |
+| **(4판) 거래 `tradeDate`**(3회차 [상]2) — `squad_timeline._parse` :129(`trade_date` · 타임라인·가계부의 경기와 앞뒤 창) · `check_api` :82 | 원문 | `parse` — 경기만 옮기면 거래와 경기의 앞뒤가 9시간 움직인다. 받기 쪽(`tradecollect` :116 · `store` :1124~:1157)은 원문끼리 비교·저장이라 그대로. **UTC 근거**: 이 PC 거래 16,124건을 원문 시로 세면 19~22시가 0~1%(다른 시는 3~8%) — UTC 면 KST 04~07시(잠자는 때), KST 면 저녁 황금 시간이 비는 꼴(10-25 실측 · 분포라 확정은 아니다 — 조각 ① 첫 일에 거래 하나를 게임 안 거래 기록 시각과 맞춘다) |
+| **(4판) 랭커 기록 `createDate`** — `stats` :2175(화면 기준일 `[:10]`) · `check_api` :174 | `[:10]` | `day` — 같은 넥슨 오픈API 라 같은 시간대로 본다(구현 때 한 건 확인 · 날짜만 보이는 자리) |
+
+**(4판) `matchtime` 은 넥슨 오픈API 시각 전부**(matchDate · achievementDate · tradeDate · createDate)를 맡는다 — 이름은 그대로 두되 머리말에 적는다. 넥슨 웹(데이터센터)·rank.db 시각은 이미 KST 라 넣지 않는다. `test_rules` 규칙의 ⓐ 원문 키에 이 넷을 다 넣는다.
 
 ### B. 원문에서 만든 값을 **저장**하는 곳 — 옛 값과 섞인다 (사용자 답 U2·U3)
 
 | 저장 | 쓰는 곳 | 안 고치면 | 제안 |
 |---|---|---|---|
-| fifa.db `match_squads.day`(`store.match_day` · toordinal) | `cardcollect` 30일 창 · `store.owners_using_cards` 최근 사용일 | 화면에 날짜로는 안 나온다(창 판정만) | **U2 → 원문 날(UTC)로 둔다** · 함수 이름만 `store.match_day_utc` 로 바꿔 뜻을 박는다(**열 이름 `day` 는 그대로** — 옛 버전이 같은 표를 쓴다). 다시 채우면 옛 버전이 새 줄을 UTC 로 또 쓰고(내려가기) 섞인다 · 30일 창에 9시간은 무시 |
+| fifa.db `match_squads.day` + **`squad_owner.last_day`**(같은 `day` 의 MAX · `store` :528 · 3회차 [상]3)(`store.match_day` · toordinal) | `cardcollect` 30일 창 · **'카드 쓴 구단주' 표의 마지막 사용일 칸(`app_main` :8088 — 화면에 나온다)** · `rankerpick` :548 추천 상대 창 | 그 칸만 KST 00~09시 경기를 전날로 보인다 | **(4판) U2 다시 물음 → 사용자 "추천대로"(10-25): KST 날로 한 번 다시 채운다.** 1판 U2 의 근거("화면에 안 나온다")가 틀렸다. `store.match_day` 는 `matchtime.day` 로(열 이름 그대로) · 표시 `collect_state` `squad_day_t0` 가 없으면 `match_squads` 65만 7,778줄(10-25 실측)·`squad_owner` 1만 4,450줄을 `squad_match` → `matches.match_date` 로 다시 셈. **`day` 가 `WITHOUT ROWID` 기본키 안**(:216)이라 UPDATE 는 b-tree 를 다시 쓴다 — 제자리 UPDATE 와 새 표에 정렬해 넣고 바꿔 끼우기(storage 의 방식) 중 **사본에서 시간을 재고** 고른다(조각 ② 첫 일 · 상한: 앱 시작 뒤 작업 스레드에서 10초 · 넘으면 묶음으로 나눠 이어 하기). 작업 스레드는 `app_main.Worker` 를 물려받고 `WRITES` 에 fifa.db(지우기 걸쇠 규칙). ⑥ 내려가기: 옛 버전이 새로 쓰는 줄만 UTC 날 — 표시가 있어 다시 안 고친다 · 감수(새벽 경기 하루 차이 · 30일 창). **51 측정은 영향 없다** — `measure_cards` 는 `cardcollect.run(window=고정 집합)` 이라 `demand` 의 `day` 창을 안 읽는다(:9 · `cardcollect` :81) |
 | fifa.db `ranker_squads.match_day`(`rankerpick` :262) | 14일 낡음(:309) | 같음 | 새로 쓰는 줄부터 `day` · 옛 줄은 14일 안에 다 바뀐다(덮어쓰는 표) |
 | fifa.db `trait_squads.match_day`(`traitcollect` :300 → :411 · 1회차 [중]4) | 낡음 비교 :308 · :645(`oldest`) | 같음 | `ranker_squads` 와 같이 — 새로 쓰는 줄부터 `day` · 14일 동안 옛 줄·새 줄을 같이 본다(경계 9시간 · 낡음 판정만) |
-| rank.db `match_opp_rank`(N23 · `rankcollect.fill_opp_rank` · 1회차 [상]1) | N23 상대 순위 구간 화면 | **이미 채운 경기는 `done`(:1709)으로 건너뛰고 `INSERT OR IGNORE`(:1746)** — 9시간 어긋난 스냅숏으로 고른 `rank_band`·`gap_band`·`snap_day` 가 그대로 남는다. 스냅숏 12시간 간격이라 고른 스냅숏이 자주 바뀐다 · 그때 세는 57 K3(`rankmeta.opp_scores`)와 값이 갈린다 | **(3판) 다시 채울 수 있는 줄만 한 번 지운다**: `collect_state` 에 `opp_rank_t0` 표시가 없으면 원본 스냅숏이 남은 범위(`fill_opp_rank` 의 `cutoff` · `match_date >= raw_bound(cutoff)`)의 match_id 줄만 지우고 표시 → 같은 실행의 채우기가 새 짝으로 다시 넣는다. 통째로 지우면 14일보다 오래된 이번 시즌 줄이 **영구로 사라진다**(이 표는 시즌 동안 쌓고 시즌이 바뀔 때만 비운다 :1290 · 2회차 [상]1). **그 밖의 옛 줄은 9시간 어긋난 짝으로 남는다** — 다음 시즌 시작에 비워지면 끝. ⑥ 내려가기: 옛 버전이 다시 채운 줄은 옛 짝으로 섞인다 — rank.db 에 버전 흔적이 없고(`WITHOUT ROWID` :186) 옛 버전은 앞으로도 안 남기니 **감수한다**(시즌이 바뀌면 사라진다 · 2회차 [중]2) |
-| `DATA_DIR/dev_matches.db` 시각 열 `games.at` · `cursor.top_at` · `cursor.base_at` · `owners.gap_at`(`base_at` 에서 나옴 :844 · :458 · 1회차 [중]5) | `--check-fc` · 단 3·4 창 · `:843 base_at >= self.season_at`(rank.db 진짜 KST epoch) | 전부 9시간 이르다 | **U3 → 한 번 옮긴다**: `meta` 에 `at_fixed=1` 이 없으면 `games.at` · `base_at` · `gap_at` 은 전부, **`top_at` 은 `WHERE top_id IS NOT NULL` 만** `+ 32400` 을 한 트랜잭션(경기가 없던 사람은 `top_at` 이 진짜 지금 epoch :724 — 더하면 9시간 미래가 돼 `:668 stop_at` 이 늦어져 그 몫의 경기를 놓친다 · 2회차 [상]2) · `base_id`·`depth` 는 시각이 아니라 안 건드린다 · 주석 :31 · :95 도. **`kst_epoch` 는 지우지 않는다** — `:569` 가 rank.db `snapshots.taken_at`(진짜 KST)에 쓴다(1회차 [상]2). matchDate 자리 `:181` · `--check-fc` 의 `:1177`·`:1180` 만 `matchtime.epoch` 로 — 옮기기와 **같은 조각**(안 그러면 창 끝 9시간 몫이 "dev 가 빠뜨린 경기"로 나온다) |
+| rank.db `match_opp_rank`(N23 · `rankcollect.fill_opp_rank` · 1회차 [상]1) | N23 상대 순위 구간 화면 | **이미 채운 경기는 `done`(:1709)으로 건너뛰고 `INSERT OR IGNORE`(:1746)** — 9시간 어긋난 스냅숏으로 고른 `rank_band`·`gap_band`·`snap_day` 가 그대로 남는다. 스냅숏 12시간 간격이라 고른 스냅숏이 자주 바뀐다 · 그때 세는 57 K3(`rankmeta.opp_scores`)와 값이 갈린다 | **(3판) 다시 채울 수 있는 줄만 한 번 지운다**: `collect_state` 에 `opp_rank_t0` 표시가 없으면 원본 스냅숏이 남은 범위(`fill_opp_rank` 의 `cutoff` · `match_date >= raw_bound(cutoff)`)의 match_id 줄만 지우고 표시 → 같은 실행의 채우기가 새 짝으로 다시 넣는다. **지우기는 `done` 집합(:1709)을 만들기 전에**(뒤면 같은 실행에서 다시 안 채운다 · 3회차 [중]2). 통째로 지우면 14일보다 오래된 이번 시즌 줄이 **영구로 사라진다**(이 표는 시즌 동안 쌓고 시즌이 바뀔 때만 비운다 :1290 · 2회차 [상]1). **그 밖의 옛 줄은 9시간 어긋난 짝으로 남는다** — 다음 시즌 시작에 비워지면 끝. ⑥ 내려가기: 옛 버전이 다시 채운 줄은 옛 짝으로 섞인다 — rank.db 에 버전 흔적이 없고(`WITHOUT ROWID` :186) 옛 버전은 앞으로도 안 남기니 **감수한다**(시즌이 바뀌면 사라진다 · 2회차 [중]2) |
+| `DATA_DIR/dev_matches.db` 시각 열 `games.at` · `cursor.top_at` · `cursor.base_at` · `owners.gap_at`(`base_at` 에서 나옴 :844 · :458 · 1회차 [중]5) | `--check-fc` · 단 3·4 창 · `:843 base_at >= self.season_at`(rank.db 진짜 KST epoch) | 전부 9시간 이르다 | **U3 → 한 번 옮긴다**: (4판) dev_matches.db 에 `meta` 표가 없다(:79~119) — **새 표 `meta(key TEXT PRIMARY KEY, value TEXT)`** 를 만들고, 옮기기는 **잠금(:1086)을 쥔 수집 실행 경로에서만**(`open_db` 안이면 `--status`·`--check-fc` 도 옮기고, 그사이 잠금을 쥔 옛 코드 실행이 이른 `at` 을 계속 써도 표시가 붙어 다시 안 고친다 · 3회차 [중]1). `at_fixed=1` 이 없으면 `games.at` · `base_at` · `gap_at` 은 전부, **`top_at` 은 `WHERE top_id IS NOT NULL` 만** `+ 32400` 을 한 트랜잭션(경기가 없던 사람은 `top_at` 이 진짜 지금 epoch :724 — 더하면 9시간 미래가 돼 `:668 stop_at` 이 늦어져 그 몫의 경기를 놓친다 · 2회차 [상]2) · `base_id`·`depth` 는 시각이 아니라 안 건드린다 · 주석 :31 · :95 도. **`kst_epoch` 는 지우지 않는다** — `:569` 가 rank.db `snapshots.taken_at`(진짜 KST)에 쓴다(1회차 [상]2). matchDate 자리 `:181` · `--check-fc` 의 `:1177`·`:1180` 만 `matchtime.epoch` 로 — 옮기기와 **같은 조각**(안 그러면 창 끝 9시간 몫이 "dev 가 빠뜨린 경기"로 나온다) |
 | `server/cache.py` `detail.match_date` | 저장만 | — | 원문 그대로(바꿀 것 없음) |
 
 ### C. 순서만 보는 곳 — 그대로 (9시간을 더해도 순서가 같다)
@@ -273,20 +279,20 @@ naive 로 두는 이유: 앱 전체가 `datetime.now()`(이 PC 벽시계 = KST)�
 ### 검증
 
 1. **단위 — 경계 지어낸 입력**(`tests/test_parsing.py` 새 함수): UTC `2026-10-24T15:30:00` → KST 10-25 00:30 · 달력·`club_day`·시즌 첫날(앞 시즌 종료일 00:00 KST 직전·직후)·N23 짝(스냅숏 ±1시간)·`raw_bound` 왕복. **변이**: `MATCH_DATE_OFFSET_H` 를 0 으로 · `parse` 를 원문 그대로로 되돌리면 전부 FAIL 해야.
-2. **전수 — 남은 직접 파싱이 없는지**(`test_rules` 새 규칙 · **함수 단위** — 1회차 [상]3): `ast` 로 함수마다 ⓐ **원문**을 읽고(`"matchDate"` 문자열 · SQL 문자열 안 `match_date` · Row 키 `"match_date"` — **`MatchSummary.match_date` 속성은 이미 KST 라 넣지 않는다** · 2회차 [중]1 `app_main` :7820) ⓑ `fromisoformat`·`strptime`·`date.fromisoformat`·문자열 자르기(`[:10]`·`[:19]`)를 같은 함수 안에서 하거나 **ⓑ 를 하는 같은 모듈 함수를 부르면(한 단계 따라가기)** FAIL — `matchtime.py` 밖(2회차 [상]3 — 같은 함수 안 ⓐ∧ⓑ 만으로는 도우미 꼴이 정의상 안 걸린다). 규칙이 못 보는 셋은 **표로 직접**: `ownerdist` :426(원문을 돌려주고 자르기는 저장 쪽 — 저장 전 `day` 를 단위 테스트로) · `store.match_day_utc`(인자 이름일 뿐 — U2 로 UTC 가 의도 · 예외 표) · 2회차 스캔 실측 함수 단위 14곳 걸림(`scratchpad/ast63.py` 꼴을 규칙 첫 실행 표와 대조). 원문을 받는 줄과 파싱하는 줄이 갈라진 자리(`stats` :49→:56 · :147→:151 · :1508→:1512 · `models` :177→:156(도우미 함수 건너 — 그래서 `models._parse_date` 는 지운다) · `squad_timeline` :145→:115(같음 — `_parse` 를 지운다))가 줄 단위 검사로는 빠지기 때문. **가짜 소스는 두 줄 꼴**(변수에 받고 다음 줄에서 파싱)과 도우미 함수 꼴을 넣어 잡는지 단언. 예외 표(줄마다 이유): 표 C 의 정렬 자리 · **`tools/measure_cards.py` :330 · :471 · :472 · :632 — "U1 · 11-26 판정 뒤 지운다"**(지금 고치면 `TOOL_FILES` 해시 :129 · :146 가 바뀌어 감사에 남는다 · 1회차 [중]6) · `tools/step0_owner_dist/`(접은 1회용).
+2. **전수 — 남은 직접 파싱이 없는지**(`test_rules` 새 규칙 · **함수 단위** — 1회차 [상]3): `ast` 로 함수마다 ⓐ **원문**을 읽고(`"matchDate"` 문자열 · SQL 문자열 안 `match_date` · Row 키 `"match_date"` — **`MatchSummary.match_date` 속성은 이미 KST 라 넣지 않는다** · 2회차 [중]1 `app_main` :7820) ⓑ `fromisoformat`·`strptime`·`date.fromisoformat`·문자열 자르기(`[:10]`·`[:19]`)를 같은 함수 안에서 하거나 **ⓑ 를 하는 같은 모듈 함수를 부르면(한 단계 따라가기)** FAIL — `matchtime.py` 밖(2회차 [상]3 — 같은 함수 안 ⓐ∧ⓑ 만으로는 도우미 꼴이 정의상 안 걸린다). 규칙이 못 보는 셋은 **표로 직접**: `ownerdist` :426(원문을 돌려주고 자르기는 저장 쪽 — 저장 전 `day` 를 단위 테스트로) · `store.match_day`(인자 이름일 뿐 — 4판 U2 로 `matchtime.day` 를 부르게 되니 규칙에 안 걸린다 · 단위 테스트로) · 2회차 스캔 실측 함수 단위 14곳 걸림(`scratchpad/ast63.py` 꼴을 규칙 첫 실행 표와 대조). 원문을 받는 줄과 파싱하는 줄이 갈라진 자리(`stats` :49→:56 · :147→:151 · :1508→:1512 · `models` :177→:156(도우미 함수 건너 — 그래서 `models._parse_date` 는 지운다) · `squad_timeline` :145→:115(같음 — `_parse` 를 지운다))가 줄 단위 검사로는 빠지기 때문. **가짜 소스는 두 줄 꼴**(변수에 받고 다음 줄에서 파싱)과 도우미 함수 꼴을 넣어 잡는지 단언. 예외 표(줄마다 이유): 표 C 의 정렬 자리 · **`tools/measure_cards.py` :330 · :471 · :472 · :632 — "U1 · 11-26 판정 뒤 지운다"**(지금 고치면 `TOOL_FILES` 해시 :129 · :146 가 바뀌어 감사에 남는다 · 1회차 [중]6) · `tools/step0_owner_dist/`(접은 1회용).
 3. **골든 — 기준 화면 달력 23일**: 10-01~10-23 날마다 승·무·패·FC 를 기준 화면 값으로 적은 표(내 계정 실데이터라 **저장소에 안 넣는다** — `DATA_DIR/measure/` 옆 `t0_golden.json` · 이 PC 전용 `tools/check_t0.py` 가 fifa.db 로 다시 세어 `[OK]`/`[FAIL]`). 지금 코드로 돌리면 FAIL, 63 뒤 오차 0 이 끝 조건.
-3-1. **시각에 기대는 기존 테스트**(1회차 [중]7) — 지어낸 matchDate 로 날짜·시각 경계를 단언하는 파일: `test_habits`(:897 · :946 "17일 23시·19일 0시는 밖" 꼴) · `test_parsing`(23곳) · `test_ui_smoke`(20곳) · `test_rankerpick` · `test_timeline` · `test_predict` · `test_rankmeta` · `test_ownerdist` · `test_dev_matches` · `test_rankcollect`(N23 :2157) · `test_analysis` · `test_dev_archive` · `test_measure_cards` · `test_server` · `test_storage`(2회차 [중]3). **고치는 법: 단언 값은 그대로 두고 입력 matchDate 를 −9시간 옮긴다**(테스트가 "KST 로 이 시각인 경기"를 뜻하게) — 기대값을 새 출력에 맞추면 오프셋 변이를 다시 심어도 초록일 수 있다. **예외 — 원문 날을 그대로 쓰는 경로의 테스트는 안 옮긴다**: `match_squads.day`(U2 UTC) · `measure_cards`(U1 · 11-26 까지 얼림) · `server`(원문 저장) — 옮기면 오히려 깨진다. 픽스처(익명 실응답 4경기)는 원문 그대로 두고 그 시각이 든 골든만 옮긴다(커밋에 이유). 조각 ① 첫 일로 정의 grep(`grep -ln "matchDate" tests/*.py`)을 다시 떠서 이 목록과 대조.
+3-1. **시각에 기대는 기존 테스트**(1회차 [중]7) — 지어낸 matchDate 로 날짜·시각 경계를 단언하는 파일: `test_habits`(:897 · :946 "17일 23시·19일 0시는 밖" 꼴) · `test_parsing`(23곳) · `test_ui_smoke`(20곳) · `test_rankerpick` · `test_timeline` · `test_predict` · `test_rankmeta` · `test_ownerdist` · `test_dev_matches` · `test_rankcollect`(N23 :2157) · `test_analysis` · `test_dev_archive` · `test_measure_cards` · `test_server` · `test_storage`(2회차 [중]3). **고치는 법: 단언 값은 그대로 두고 입력 matchDate 를 −9시간 옮긴다**(테스트가 "KST 로 이 시각인 경기"를 뜻하게) — 기대값을 새 출력에 맞추면 오프셋 변이를 다시 심어도 초록일 수 있다. **예외 — 원문 날을 그대로 쓰는 경로의 테스트는 안 옮긴다**: `measure_cards`(U1 · 11-26 까지 얼림) · `server`(원문 저장) · 받기 쪽 거래 원문 비교(`tradecollect`) — 옮기면 오히려 깨진다. (4판: `match_squads.day` 는 U2 를 KST 로 바꿔 예외에서 뺐다 — 옮기는 쪽.) 픽스처(익명 실응답 4경기)는 원문 그대로 두고 그 시각이 든 골든만 옮긴다(커밋에 이유). 조각 ① 첫 일로 정의 grep(`grep -ln "matchDate" tests/*.py`)을 다시 떠서 이 목록과 대조.
 4. `check_api.py` 의 기간 줄이 KST 로 찍히는지 눈으로 · exe 빌드 → 2번 모니터에서 경기 목록 맨 위 시각이 게임 안 시각과 같은지.
 
 ### 진입점 · 상호작용 · 실패
 
 - ⑧ **55 쌓기**(`backfill_55` · `sc_first`)·**51 백필**(`cardcollect`)·**구단주 분포**는 원문을 저장하거나 날짜만 쓴다 — 표 A·B 로 다 덮였다. 55 `club_day`·달력·운 범위는 저장하지 않고 화면이 그때 센다(`app_main` :1755 · :4009 · :4973 — 10-25 grep)라 옮길 값이 없다.
-- ⑥ 내려가기: 63 버전이 쓴 DB 를 2.13.1 이 열어도 저장 형식이 같아 그대로(B 의 `match_squads` 를 UTC 로 두는 이유). 올라가기: 옛 줄을 고칠 것 없음.
+- ⑥ 내려가기: 63 버전이 쓴 DB 를 2.13.1 이 열어도 저장 형식(열·표)이 같아 그대로 연다 — 값이 섞이는 자리는 표 B 의 `match_squads`·`match_opp_rank` 둘이고 둘 다 감수(표 B). 올라가기: 표시 셋(`squad_day_t0` · `opp_rank_t0` · dev `at_fixed`)이 한 번씩.
 - ⑨ 사용자 눈에 바뀌는 것: 모든 경기 시각이 9시간 늦게(맞게) · 새벽 경기가 다른 날로 · 시간대 분석 칸 이동 · 시즌 마지막 날 9시간 몫이 다음 시즌으로. `CHANGELOG` 에 "경기 시각이 9시간 이르게 보이던 것을 고쳤다 — 지난 기록도 같이 바뀐다" 한 절.
 
 ### 조각 (2개)
 
-① `matchtime.py` + 표 A 전부 + `test_rules` 전수 규칙 + 단위 경계 테스트 + 골든 도구(지금 FAIL 확인 → 고친 뒤 OK) · ② 표 B(`match_squads` 함수 이름 · `ranker_squads` · `trait_squads` · `match_opp_rank` 다시 채우기 · `dev_matches.db` 옮기기 + `matchtime.epoch` 두 자리) + 51 측정 처리(U1 답대로 — 예외 표만) + exe·CHANGELOG. 계획 검토는 **Opus 1명씩**(검토 기준 7 — 새 데이터 길 없음 · 저장 형식 그대로 · 옮기기는 값만).
+① `matchtime.py` + 표 A 전부 + `test_rules` 전수 규칙 + 단위 경계 테스트 + 골든 도구(지금 FAIL 확인 → 고친 뒤 OK) · ② 표 B(`match_squads`·`squad_owner` KST 다시 채우기(사본 시간 실측 먼저) · `ranker_squads` · `trait_squads` · `match_opp_rank` 다시 채우기 · `dev_matches.db` 옮기기 + `matchtime.epoch` 두 자리) + 51 측정 처리(U1 답대로 — 예외 표만) + exe·CHANGELOG. 계획 검토는 **Opus 1명씩**(검토 기준 7 — 새 데이터 길 없음 · 저장 형식 그대로 · 옮기기는 값만).
 
 ### 1회차 검토 (2026-10-25 · Opus 1명 · 1판 `833469a` · 근거 묶음 · 약 15만 토큰)
 
@@ -296,12 +302,16 @@ naive 로 두는 이유: 앱 전체가 `datetime.now()`(이 PC 벽시계 = KST)�
 
 새 [상] 3: `match_opp_rank` 통째 지우기는 14일 밖 이번 시즌 줄을 영구로 잃는다 → 다시 채울 범위만 · `top_at` 일괄 +9h 는 경기 없던 사람(지금 epoch)을 미래로 → `top_id IS NOT NULL` 만 · 함수 단위 규칙은 도우미 꼴을 정의상 못 잡는다 → 한 단계 따라가기 + 셋은 표로. [중] 3: ⓐ 에서 KST 속성 빼기 · 내려가기 흔적이 없다 → 감수 · 테스트 목록 6개 더 + UTC 유지 경로 예외. 전부 반영(코드로 확인 — `dev_matches.py:724` · `rankcollect.py:1290`). [상] 수 3 → 3 이라 3회차(계획 전체 · 1명)로 닫는다.
 
+### 3회차 검토 (2026-10-25 · Opus 1명 · 계획 전체 3판 `f93549a` · 약 15만 토큰)
+
+새 [상] 3: 슈챔 `achievementDate` 도 UTC 라 경기만 고치면 대조가 늘 실패 · `tradeDate` 시간대를 안 재고 공용 `_parse` 를 지운다 · **U2 의 근거("화면에 안 나온다")가 틀렸다**(`app_main` :8088 마지막 사용일 칸 · `squad_owner.last_day` 가 표 밖). [중] 4: dev `meta` 표가 없고 옮기는 자리가 정해지지 않음 · `match_opp_rank` 지우는 순서 · 날짜만 입력 · `_match_day` :2007. 전부 반영 — U2 는 사용자에게 다시 물어 **KST 로 다시 채우기**(10-25 "추천대로"). 거래 시각은 분포로만 UTC 를 뒷받침했다(표 A). 반영 확인(1·2회차): `top_at` 조건 · `kst_epoch` 남김 · K3 저절로 맞음 · 51 얼림 성립. 4회차는 바뀐 줄만 1명.
+
 ### 사용자에게 묻는 것
 
 | | 질문 | 추천 | 이유 |
 |---|---|---|---|
 | U1 | 51 측정 도구를 지금 고칠까 | **11-26 까지 그대로 · 판정 뒤 B 만 고쳐 다시 대조** | 규칙 커밋 뒤 기준을 바꾸면 측정 전체를 못 믿는다 |
-| U2 | `match_squads.day`(카드 색인 날짜) | **UTC 날로 두고 이름만 바꾼다** | 화면에 안 나오고 30일 창뿐 · 다시 채우면 옛 버전과 섞인다 |
+| U2 | `match_squads.day`(카드 색인 날짜) | ~~UTC 날로 두고 이름만 바꾼다~~ → **(4판 · 다시 물음 · "추천대로") KST 날로 한 번 다시 채운다** | 1판 근거 "화면에 안 나온다"가 틀렸다(3회차 [상]3) · 내려가기 섞임은 새 줄만이라 감수 |
 | U3 | 개발 PC 경기 DB(`games.at`) | **한 번 +9시간 옮긴다** | 배포판 밖 · 앞으로 개발용 분석이 이 시각을 믿는다 |
 
 ### 재지 않은 것
