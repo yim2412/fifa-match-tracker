@@ -495,7 +495,9 @@ def collect_mine(session, conn, ouid: str, *, now_fn=datetime.now, cancel: Calla
     fetch, fetch_sn = fetch or fetch_team, fetch_sn or fetch_owner_sn
     now = now_fn()
     day = now.date().isoformat()
-    for kind, why in ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TRAIT_WEB_FORMAT, "format")):
+    # 못 찾은 닉네임은 그날 다시 안 묻는다 — 줄을 안 남겨 탭을 열 때마다 1요청씩 다시 물었다(57 ③ 리뷰)
+    for kind, why in ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TRAIT_WEB_FORMAT, "format"),
+                      (store.BUDGET_TRAIT_MINE_NOUSER, "nouser")):
         if store.budget_hit_429(conn, day, (kind,)):
             return why
     row = store.my_traits(conn, ouid)
@@ -535,6 +537,7 @@ def collect_mine(session, conn, ouid: str, *, now_fn=datetime.now, cancel: Calla
             take()
             sn = fetch_sn(session, nick)
             if sn is None:
+                store.budget_mark_429(conn, day, store.BUDGET_TRAIT_MINE_NOUSER)
                 return "nouser"
         starters = [(p["spId"], p["spPosition"], p.get("spGrade")) for p in players]
         found = find_team(starters, one, _team_order((row or {}).get("team")))

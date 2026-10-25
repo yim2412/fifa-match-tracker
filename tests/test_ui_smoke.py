@@ -6082,6 +6082,10 @@ def test_storage_tab_replaces_clear_button_and_clears_cards():
         dlg._on_clear_kind("cards")
         assert "지웠습니다" in dlg.lb_storage.text(), dlg.lb_storage.text()
         assert not app_main.CLEARING, "끝났는데 걸쇠가 남았다 — 그 저장소에 쓰는 로더가 영영 못 뜬다"
+        again = _win._size_workers[-1]
+        assert again is not size, "지운 뒤 크기를 다시 안 쟀다 — 지우기 전 숫자가 남는다"
+        again.run()
+        assert dlg._storage_size["cards"].text() == app_main._size_text(0), dlg._storage_size["cards"].text()
         c = store.open_db(config.DB_PATH)
         assert c.execute("SELECT COUNT(*) FROM card_tries").fetchone()[0] == 0
         c.close()
@@ -6156,6 +6160,49 @@ def test_storage_latch_holds_scheduler_ticks():
         finally:
             app_main.CLEARING.clear()
         assert calls == [True], (cls.__name__, "지우는 중에 틱이 돌았다")
+
+
+def test_clearing_does_not_lock_search_buttons():
+    """57 ③ 리뷰 — 지우기는 창을 닫아도 돈다. 그 사이 검색·비교·팀컬러를 누르면 로더 start 가 걸쇠에 막혀 끝 신호가 안 오고,
+    먼저 꺼 둔 버튼이 영영 안 풀렸다. 화면을 바꾸기 전에 묻고 글로 돌려보낸다."""
+    probe = app_main.MatchLoader(_NoApi(), "x", config.DEFAULT_MATCH_TYPE)
+    app_main.CLEARING.add(app_main.STORE_DETAILS)
+    try:
+        probe.start()
+        assert probe.blocked, "걸쇠가 검색 로더를 안 막는다 — 아래 단언이 비었다"
+        saved = (_win._loader, _win._compare_loader, _win._teamcolor_loader, config.WEB_DATA,
+                 dict(_win._team_colors), [lb.text() for lb in _win._teamcolor_status_labels], _win._released)
+        try:
+            _win._loader = _win._compare_loader = _win._teamcolor_loader = None
+            _win._api_search("지우는중검색")
+            assert _win.ed_search.isEnabled() and not _win.progress.isVisible(), "지우는 중 검색이 버튼을 잠갔다"
+            assert _win.lb_search_msg.text() == app_main.CLEARING_WAIT_MSG
+            _win.ed_compare_nick.setText("비교상대")
+            _win._on_compare_search()
+            assert _win.btn_compare.isEnabled() and _win._compare_loader is None, "지우는 중 비교가 버튼을 잠갔다"
+            # 팀컬러 로더는 fifa.db 에만 쓴다 — 상세 캐시를 지우는 동안엔 원래 띄운다. 막히는 것은 내 기록 전부("all")
+            app_main.CLEARING.add("all")
+            config.WEB_DATA = True
+            _win._team_colors.clear()
+            _win._load_cached_team_colors = lambda _opps: None
+            app_main.MainWindow._on_fetch_team_colors(_win)
+            assert _win._teamcolor_loader is None and all(b.isEnabled() for b in _win._teamcolor_fetch_btns), \
+                ("지우는 중 팀컬러 조회가 버튼을 잠갔다", _win._teamcolor_loader)
+            _win._released = True
+            _win.reload_after_release()
+            assert _win._released and _win._loader is None, "지우는 중 다시 읽기를 띄웠다(막혀 영영 '다시 읽는 중')"
+        finally:
+            (_win._loader, _win._compare_loader, _win._teamcolor_loader, config.WEB_DATA) = saved[:4]
+            _win._team_colors.clear()
+            _win._team_colors.update(saved[4])
+            _win.__dict__.pop("_load_cached_team_colors", None)   # 인스턴스에 덮은 것만 지운다(클래스 함수로 돌아간다)
+            _win._released = saved[6]
+            _win.ed_compare_nick.setText("")
+            _win.lb_search_msg.setText("")
+            for lb, t in zip(_win._teamcolor_status_labels, saved[5]):
+                lb.setText(t)
+    finally:
+        app_main.CLEARING.clear()
 
 
 def test_my_traits_row_above_trait_table():

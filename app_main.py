@@ -284,6 +284,7 @@ def _mark_final_429() -> None:
 # 에서 start 를 막는다. 제자리로만 바꾼다(재할당 금지 — 다른 모듈이 이름으로 읽어도 같은 집합).
 CLEARING: set[str] = set()
 STORE_FIFA, STORE_CARDS, STORE_IMAGES, STORE_DETAILS, STORE_RANK = "fifa", "cards", "images", "details", "rank"
+CLEARING_WAIT_MSG = "저장 공간을 지우는 중입니다 — 끝난 뒤 다시 눌러 주세요."
 
 
 def clearing_blocks(writes: frozenset) -> bool:
@@ -8871,6 +8872,9 @@ class MainWindow(QMainWindow):
             return
         if self._compare_loader and self._compare_loader.isRunning():
             return
+        if self._held_by_clearing(MatchLoader):
+            self.lb_compare_status.setText(CLEARING_WAIT_MSG)
+            return
         self.btn_compare.setEnabled(False)
         self.lb_compare_status.setText(f"'{nick}' 조회 중…")
         # 내 계정과 같은 방식(MatchLoader) 재사용 — 이미 DB 캐시·중복 방지가 있어
@@ -9235,6 +9239,11 @@ class MainWindow(QMainWindow):
         """quiet: 켤 때 자동으로 하는 새 경기 확인 — 실패해도 경고 창 없이 상태줄에만(화면은 DB 로 이미 떠 있다).
         키가 거절된 경우만은 그래도 묻는다(사용자가 해야 할 일이 있다)."""
         if self._loader and self._loader.isRunning():
+            return
+        if self._held_by_clearing(MatchLoader):
+            if not quiet:
+                self.lb_search_msg.setText(CLEARING_WAIT_MSG)
+                self.statusBar().showMessage(CLEARING_WAIT_MSG)
             return
         self._nick = nick
         self._quiet_search = quiet
@@ -10491,6 +10500,10 @@ class MainWindow(QMainWindow):
             if remaining:  # 꺼져 있다 — 상대마다 실패를 쌓는 대신 이유를 한 번만 보인다
                 for lb in self._teamcolor_status_labels:
                     lb.setText(config.WEB_DATA_OFF_MSG)
+            return
+        if self._held_by_clearing(RankListLoader, TeamColorLoader):
+            for lb in self._teamcolor_status_labels:
+                lb.setText(CLEARING_WAIT_MSG)
             return
         if len(remaining) > ranker.RANK_PAGES or self._rank_snapshot_fresh():
             # 목록을 읽는 김에 이 계정의 모든 시즌 상대를 같이 찾는다(요청 수는 같다).
@@ -12263,6 +12276,12 @@ class MainWindow(QMainWindow):
     def clearing(self) -> bool:
         return self._clear_worker is not None and self._clear_worker.isRunning()
 
+    @staticmethod
+    def _held_by_clearing(*classes) -> bool:
+        """화면을 '조회 중' 으로 바꾸고 띄우는 로더(검색·비교·팀컬러·다시 읽기)는 먼저 묻는다 — 걸쇠에 막힌 start 는 신호가 없어
+        버튼이 꺼진 채 영영 안 풀렸다(57 ③ 리뷰 · 지우기는 창을 닫아도 돈다)."""
+        return any(clearing_blocks(getattr(c, "WRITES", frozenset())) for c in classes)   # Worker 가 아니면 start 도 안 막힌다
+
     def measure_storage(self) -> None:
         """크기를 작업 스레드에서 재고 storage_measured 로(P7 — fifa.db 667MB · 그림 수천 장)."""
         self._size_workers = [w for w in self._size_workers if w.isRunning()]
@@ -12318,6 +12337,8 @@ class MainWindow(QMainWindow):
             self._card_sched.sync()   # 토글이 켜져 있으면 다음 틱이 다시 채운다(지금 바로 띄우지 않는다)
         if res.kind == "all":
             self.sync_ranker_pick_data()   # 수집이 꺼졌다 — 예약·토글·랭킹 화면을 맞춘다
+        if self._released and self.isVisible():
+            self.reload_after_release()   # 지우는 동안 창을 다시 열었다 — 그때 미룬 다시 읽기
 
     def _forget_everything(self) -> None:
         """내 기록 전부를 지운 뒤 — 창이 들고 있는 것도 놓고 검색 화면으로(지운 계정이 화면에 남지 않게)."""
@@ -12371,8 +12392,8 @@ class MainWindow(QMainWindow):
 
     def reload_after_release(self) -> None:
         """다시 열 때 — 그 계정의 저장된 경기를 DB 에서 다시 읽는다(1만 경기 약 1~2초). 넥슨에는 묻지 않는다."""
-        if not self._released:
-            return
+        if not self._released or self._held_by_clearing(MatchLoader):
+            return   # 지우는 중이면 놓은 채로 — 끝나면 _on_storage_cleared 가 다시 부른다
         self._released = False
         if not self._ouid:
             self.start_prefetch()  # 검색 전에 놓은 미리 읽기 — 첫 검색이 다시 빠르게

@@ -323,6 +323,26 @@ def test_collect_mine_stops_on_block_and_limits():
             conn.close()
 
 
+def test_collect_mine_nouser_asks_once_a_day():
+    with tempfile.TemporaryDirectory() as d:
+        conn = _mine_env(Path(d))
+        try:
+            asked = []
+
+            def fetch_sn(_s, nick):
+                asked.append(nick)
+                return None
+
+            assert tc.collect_mine(None, conn, ME, now_fn=lambda: NOW, fetch_sn=fetch_sn) == "nouser"
+            assert asked == ["나"], "처음엔 묻는다 — 아래 단언이 비었다"
+            assert tc.collect_mine(None, conn, ME, now_fn=lambda: NOW, fetch_sn=fetch_sn) == "nouser"
+            assert asked == ["나"], ("못 찾은 날 탭을 다시 열 때 또 물었다", asked)
+            assert tc.collect_mine(None, conn, ME, now_fn=lambda: NOW.replace(day=21), fetch_sn=fetch_sn) == "nouser"
+            assert asked == ["나", "나"], "다음 날엔 다시 묻는다"
+        finally:
+            conn.close()
+
+
 def test_prune_my_traits():
     with tempfile.TemporaryDirectory() as d:
         conn = store.open_db(Path(d) / "f.db")

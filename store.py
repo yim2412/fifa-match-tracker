@@ -1312,6 +1312,7 @@ BUDGET_TRAIT_SHARE = "trait_share"
 BUDGET_TRAIT_WEB = "trait_web"
 BUDGET_TRAIT_WEB_BLOCK = "trait_web_block"
 BUDGET_TRAIT_WEB_FORMAT = "trait_web_format"
+BUDGET_TRAIT_MINE_NOUSER = "trait_mine_nouser"   # 57 K12 — 내 닉네임을 스쿼드메이커에서 못 찾은 날(그날 다시 안 묻는다)
 
 
 def budget_mark_429(conn: sqlite3.Connection, day: str, kind: str) -> None:
