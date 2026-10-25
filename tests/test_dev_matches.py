@@ -125,16 +125,16 @@ class Clock:
 def tmp(**cfg):
     d = Path(tempfile.mkdtemp(prefix="devmatch_"))
     saved = {k: getattr(config, k) for k in cfg}
-    saved_paths = (M.LOG_PATH, M.PROGRESS_DIR)
+    saved_paths = (M.LOG_PATH, M.PROGRESS_DIR, M.ARCHIVE_PATH)
     for k, v in cfg.items():
         setattr(config, k, v)
-    M.LOG_PATH, M.PROGRESS_DIR = d / "log.txt", d / "prog"
+    M.LOG_PATH, M.PROGRESS_DIR, M.ARCHIVE_PATH = d / "log.txt", d / "prog", d / "archive.db"
     try:
         yield d
     finally:
         for k, v in saved.items():
             setattr(config, k, v)
-        M.LOG_PATH, M.PROGRESS_DIR = saved_paths
+        M.LOG_PATH, M.PROGRESS_DIR, M.ARCHIVE_PATH = saved_paths
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -659,7 +659,8 @@ def test_unexpected_error_counts_and_skips_person():
             FakeAPI.get_ouid = orig
         assert res.errors == 2 and res.notes and "m1" in games_in(d), res
         # 개수만으로는 못 잰다 — 조건을 뒤집으면 "나" 의 성공 두 번이 세여 2 가 그대로 나온다
-        assert all("NETWORK" in n for n in res.notes), res.notes
+        errs = [n for n in res.notes if n.startswith(("단 1:", "단 2:")) and "건너뜀" not in n]
+        assert len(errs) == 2 and all("NETWORK" in n for n in errs), res.notes
 
 
 def test_run_log_and_status_cli():
@@ -699,6 +700,321 @@ def test_run_log_and_status_cli():
         assert "경기 1" in out and "날" in out, out
         assert "missing (2, 1)" in out, out
         assert "끝남 — 건너뜀" in (d / "log.txt").read_text(encoding="utf-8"), "끝난 날은 로그에 건너뜀"
+
+
+# ── 조각 ② — 단 3 · 단 4 · 시즌 시작 · --check-fc ─────────────────────────────
+
+def ep(n):   # NOW 에서 n 시간 전의 epoch(KST)
+    return int((NOW - timedelta(hours=n)).timestamp())
+
+
+def cursor_row(d, ouid):
+    c = sqlite3.connect(str(d / "dm.db"))
+    c.row_factory = sqlite3.Row
+    try:
+        r = c.execute("SELECT c.* FROM cursor c JOIN owners o ON o.id = c.owner WHERE o.ouid = ?", (ouid,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        c.close()
+
+
+def archive(d, snaps):
+    """snaps = [(taken_at, new_season, [(rank, profile_sn, nickname)])] — WAL 로 만든다(실파일과 같은 꼴)."""
+    c = sqlite3.connect(str(d / "archive.db"))
+    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("CREATE TABLE snap (id INTEGER PRIMARY KEY, taken_at TEXT UNIQUE, season_seq INTEGER, new_season INTEGER)")
+    c.execute("CREATE TABLE snap_rows (snap_id INTEGER, rank INTEGER, profile_sn INTEGER, nickname TEXT,"
+              " PRIMARY KEY (snap_id, profile_sn)) WITHOUT ROWID")
+    for i, (taken, new, rows) in enumerate(snaps, 1):
+        c.execute("INSERT INTO snap VALUES (?, ?, 1, ?)", (i, taken, new))
+        c.executemany("INSERT INTO snap_rows VALUES (?, ?, ?, ?)", [(i, *r) for r in rows])
+    c.commit()
+    c.close()
+
+
+def manual_run(d, w, day_now=NOW, season=None):
+    conn = M.open_db(d / "dm.db")
+    run = M._Run(M._Db(conn), M._Gate(10 ** 6, 0, lambda: False, lambda s: None, lambda: 0.0),
+                 lambda: FakeAPI(w), lambda: day_now, 0)
+    run.season_at = season
+    return conn, run
+
+
+def test_open_db_adds_cursor_columns_to_old_table():
+    with tmp() as d:
+        c = sqlite3.connect(str(d / "dm.db"))
+        c.execute("CREATE TABLE cursor (owner INTEGER PRIMARY KEY, top_id TEXT, top_at INTEGER,"
+                  " back_done INTEGER NOT NULL DEFAULT 0)")
+        c.execute("INSERT INTO cursor (owner, top_id, top_at) VALUES (1, 'm', 5)")
+        c.commit()
+        c.close()
+        M.open_db(d / "dm.db").close()
+        assert q1(d, "SELECT depth, base_id, back_day, back_req FROM cursor") == (None, None, None, 0), \
+            "옛 커서는 depth 모름(NULL) — 단 4 가 걸어서 잰다"
+
+
+def test_plan_outside_uses_last_new_season_not_max_seq():
+    with tmp() as d:
+        archive(d, [("2026-10-01T09:00:00", 0, [(5, 1, "옛시즌")]),          # rank.db 를 지우기 전 시즌(seq 2 였다)
+                    ("2026-10-10T09:00:00", 1, [(9, 2, "둘"), (7, 3, "셋")]),
+                    ("2026-10-12T09:00:00", 0, [(4, 3, "셋"), (8, 4, "넷옛"), (3, 2, "둘")]),
+                    ("2026-10-13T09:00:00", 0, [(6, 4, "넷")])])
+        before = (d / "archive.db").read_bytes()
+        out, note = M.plan_outside(d / "archive.db", exclude={3})
+        assert not note, note
+        assert [(t.profile_sn, t.rank, t.nickname) for t in out] == [(2, 3, "둘"), (4, 6, "넷")], \
+            f"마지막 새 시즌부터 · 지금 1만 명(3) 빼고 · 가장 높았던 순위 · 마지막 닉네임: {out}"
+        wal = d / "archive.db-wal"   # 읽기 전용으로 WAL 파일을 열면 SQLite 가 빈 -wal·-shm 을 남긴다(내용은 0)
+        assert (d / "archive.db").read_bytes() == before and (not wal.exists() or wal.stat().st_size == 0), "보관에 안 쓴다"
+        assert M.plan_outside(d / "없음.db", set())[0] == []
+
+
+def test_season_start_prefers_later_of_table_and_new_season_snapshot():
+    with tmp() as d:
+        f = sqlite3.connect(str(d / "f.db"))
+        f.execute("CREATE TABLE seasons (no INTEGER PRIMARY KEY, name TEXT, start_date TEXT, end_date TEXT, fetched_at TEXT)")
+        f.executemany("INSERT INTO seasons VALUES (?, 'x', ?, ?, '')", [(1, "2026-07-01", "2026-08-01"),
+                                                                          (2, "2026-08-01", "2026-09-10")])
+        f.commit()
+        f.close()
+        r = rank_db(d, ["가"])   # 첫 스냅숏 · new_season 0 — 시즌 중간에 수집을 시작했다
+        sep10 = int(datetime(2026, 9, 10, tzinfo=M.KST).timestamp())
+        assert M.season_start_at(d / "f.db", r) == sep10, "시즌표의 마지막 종료일 = 지금 시즌 시작"
+        r.execute("UPDATE snapshots SET new_season = 1")
+        r.commit()
+        snap_at = M.kst_epoch(r.execute("SELECT taken_at FROM snapshots").fetchone()[0])
+        assert snap_at > sep10 and M.season_start_at(d / "f.db", r) == snap_at, "시즌표가 늦으면 새 시즌 스냅숏 쪽"
+        assert M.season_start_at(d / "없음.db", r) == snap_at, "시즌표가 없으면 새 시즌 스냅숏만"
+        r.execute("UPDATE snapshots SET new_season = 0")
+        assert M.season_start_at(d / "없음.db", r) is None, "둘 다 모르면 None(단 4 안 함)"
+
+
+def b_world():
+    """B 의 목록(최신 먼저): h1 · h5 · h20 · [바닥 h34] · h40 · h45 · h55 · ab(h65 · A 와) · h80. 시즌 시작 h70."""
+    w = World()
+    w.person("가", "B")
+    w.person("나", "A")
+    for n in (1, 5, 20, 40, 45, 55, 80):
+        w.game(f"b{n}", h(n), "B")
+    w.game("ab", h(65), "A", "B")
+    return w
+
+
+def test_back_starts_from_own_base_not_games_min():
+    """H1 — 남(A)이 먼저 넣은 A 대 B 경기(h65)가 B 의 가장 옛 경기로 보여도, 단 4 는 B 의 base(h40)에서 옛날로 간다."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        res = go(d, rank_db(d, ["나", "가"]), w, season_at=ep(70))
+        assert res.stage_done == "done", res
+        assert {"b45", "b55", "ab", "b80"} <= games_in(d), f"base 와 시즌 시작 사이 B 경기 전부: {games_in(d)}"
+        c = cursor_row(d, "B")
+        assert c["back_done"] == 1 and c["top_id"] == "b1" and c["top_at"] == ep(1), f"단 4 는 top 을 안 건드린다: {c}"
+        assert c["base_id"] == "b80" and c["depth"] == 8, c
+
+
+def test_back_finds_base_after_list_shifts():
+    """H2 — 단 4 사이에 새 경기가 맨 앞에 쌓여도 base 를 그 쪽에서 찾아 이어 간다(빠짐·겹침 없음)."""
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_BACK_PER_PERSON=2) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=ep(70))
+        c = cursor_row(d, "B")
+        assert c["base_id"] == "b45" and c["back_done"] == 0, f"목록 1 + 상세 1 에서 멈춤: {c}"
+        for n in (0.5, 0.2):                       # 새 경기 둘이 맨 앞에(커서는 그대로 — 단 2 를 안 돌린다)
+            w.game(f"new{n}", NOW.replace(tzinfo=None) - timedelta(hours=n) + timedelta(hours=3), "B")
+        conn, run = manual_run(d, w, NOW + timedelta(days=1), ep(70))
+        run.day = "2026-10-21"
+        lists = w.count("list")
+        run.back(M.Target(2, 700001, "가"))
+        conn.close()
+        c = cursor_row(d, "B")
+        # 목록 1 + b55 상세 1 · ab 는 A 가 받아 요청 없이 지나간다 → b80 에서 상한. 목록 자리 8 − 밀림 2 + 1
+        assert c["base_id"] == "ab" and c["depth"] == 7, f"밀린 두 칸을 빼고 depth 를 잰다: {c}"
+        assert w.count("list") == lists + 1 and "b55" in games_in(d) and "new0.5" not in games_in(d), \
+            "base 쪽 하나만 읽고 새 경기(단 2 몫)는 안 받는다"
+
+
+def test_back_per_person_cap_holds_within_day():
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_BACK_PER_PERSON=2) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=ep(70))
+        n = w.count()
+        conn, run = manual_run(d, w, NOW, ep(70))
+        run.day = NOW.date().isoformat()
+        run.back(M.Target(2, 700001, "가"))
+        assert w.count() == n, "같은 날 다시 돌아도 사람별 상한이 다시 안 찬다"
+        run.day = "2026-10-21"
+        run.back(M.Target(2, 700001, "가"))
+        conn.close()
+        assert w.count() > n and cursor_row(d, "B")["back_req"] == 2, "다음 날은 새로"
+
+
+def test_back_walks_when_depth_unknown():
+    """옛 커서(depth NULL)는 맨 앞부터 걸어 top 자리로 depth 를 다시 잰다 — 아는 경기는 상세 없이."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=None)   # 시즌 시작을 몰라 단 4 는 안 돈다
+        c = sqlite3.connect(str(d / "dm.db"))
+        c.execute("UPDATE cursor SET depth = NULL, base_id = NULL, base_at = NULL")
+        c.commit()
+        c.close()
+        details = w.count("detail")
+        conn, run = manual_run(d, w, NOW, ep(70))
+        run.day = NOW.date().isoformat()
+        run.back(M.Target(2, 700001, "가"))
+        conn.close()
+        cr = cursor_row(d, "B")
+        assert cr["depth"] == 8 and cr["base_id"] == "b80" and cr["back_done"] == 1, cr
+        assert w.count("detail") - details == 3, "모르던 b45·b55·b80 만 받는다(ab 는 A 가 이미)"
+
+
+def test_back_base_aged_out_marks_done_and_gap():
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_BACK_PER_PERSON=2) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=ep(70))
+        assert cursor_row(d, "B")["base_id"] == "b45"
+        w.lists["B"] = w.lists["B"][:4]           # 오픈API 창이 밀려 b40 뒤가 빠졌다
+        conn, run = manual_run(d, w, NOW, ep(70))
+        run.day = "2026-10-21"
+        run.back(M.Target(2, 700001, "가"))
+        conn.close()
+        assert cursor_row(d, "B")["back_done"] == 1
+        assert q1(d, "SELECT gap_at FROM owners WHERE ouid = 'B'")[0] == ep(45), "그 앞이 빈다"
+
+
+def test_stage_3_and_4_wait_for_stage_2():
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        archive(d, [("2026-10-10T09:00:00", 1, [(1, 900, "밖")])])
+        w.person("밖", "X")
+        res = go(d, rank_db(d, ["나", "가"]), w, cap=8, season_at=ep(70))
+        assert res.stage_done == "1" and res.reason == "cap", res
+        assert q1(d, "SELECT COUNT(*) FROM cursor WHERE back_day IS NOT NULL")[0] == 0, "단 4 요청 0"
+        assert ("ouid", "밖") not in w.calls, "단 3 요청 0"
+        res = go(d, rank_db(d, ["나", "가"]), w, cap=500, season_at=ep(70), force=True)
+        assert res.stage_done == "done" and ("ouid", "밖") in w.calls, res
+        assert all(res.notes), f"빈 사유를 적지 않는다: {res.notes}"
+
+
+def test_scan_records_base_first_then_adds_new_games():
+    """_new_base — 첫 훑기는 바닥 밖 첫 경기까지(depth 4) · 다음 날 top 을 만나면 depth += 새 경기 수 · base 는 그대로."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        r = rank_db(d, ["나", "가"])
+        go(d, r, w, season_at=None)
+        c = cursor_row(d, "B")
+        assert (c["depth"], c["base_id"], c["base_at"], c["back_done"]) == (4, "b40", ep(40), 0), c
+        for n in (2, 1):
+            w.game(f"n{n}", NOW.replace(tzinfo=None) + timedelta(hours=24 - n), "B")
+        go(d, r, w, now=NOW + timedelta(days=1), season_at=None)
+        c = cursor_row(d, "B")
+        assert (c["depth"], c["base_id"], c["top_id"]) == (6, "b40", "n1"), c
+        a = cursor_row(d, "A")
+        assert (a["depth"], a["base_id"]) == (1, "ab"), f"A 는 첫 경기가 바닥 밖: {a}"
+
+
+def test_scan_to_api_end_marks_back_done():
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = World()
+        w.person("다", "C")
+        for n in (1, 3, 9):
+            w.game(f"c{n}", h(n), "C")
+        go(d, rank_db(d, ["다"]), w, season_at=None)
+        c = cursor_row(d, "C")
+        assert (c["depth"], c["base_id"], c["back_done"]) == (3, "c9", 1), f"목록을 끝까지 다 봤다: {c}"
+
+
+def test_back_hits_api_end_before_season_start():
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=ep(500))
+        c = cursor_row(d, "B")
+        assert c["back_done"] == 1 and c["base_id"] == "b80", c
+        assert q1(d, "SELECT gap_at FROM owners WHERE ouid = 'B'")[0] == ep(80), "시즌 시작 전에 끝났다 — 그 앞이 빈다"
+
+
+def test_back_season_start_is_inclusive():
+    """시즌 시작 시각과 같은 경기는 이번 시즌 — 거기서 멈추지 않고 하나 더 옛 경기에서 멈춘다."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        w.game("b90", h(90), "B")
+        go(d, rank_db(d, ["나", "가"]), w, season_at=ep(80))
+        c = cursor_row(d, "B")
+        assert c["base_id"] == "b90" and c["back_done"] == 1, c
+
+
+def test_back_paging_counts_requests_and_page_edges():
+    """쪽이 꽉 찼으면 다음 쪽을 읽는다(끝이 아니다) · 사람별 상한은 목록 요청도 센다 · 꽉 찬 쪽에 base 가 없으면 끝 아님."""
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_PAGE=2, DEV_MATCH_BACK_PER_PERSON=2) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=None)          # B: depth 4 · base b40
+        c = sqlite3.connect(str(d / "dm.db"))
+        c.execute("UPDATE cursor SET depth = NULL")                  # 걸어야 하는 옛 커서 — 목록만 든다
+        c.commit()
+        c.close()
+        conn, run = manual_run(d, w, NOW, ep(70))
+        run.day = NOW.date().isoformat()
+        lists = w.count("list")
+        run.back(M.Target(2, 700001, "가"))
+        assert w.count("list") - lists == 2, "상한 2 — 목록 두 쪽까지만"
+        cr = cursor_row(d, "B")
+        assert cr["back_done"] == 0 and cr["depth"] == 4 and cr["base_id"] == "b40", f"쪽 4칸이 꽉 차 끝이 아니다: {cr}"
+        w.lists["B"] = ["z1", "z2"] + w.lists["B"]                   # 꽉 찬 쪽에 base 가 없게 — 끝으로 치면 안 된다
+        w.lists["B"].remove("b40")
+        w.lists["B"].insert(9, "b40")
+        run.day = "2026-10-21"
+        run.back(M.Target(2, 700001, "가"))
+        conn.close()
+        assert cursor_row(d, "B")["back_done"] == 0, "꽉 찬 쪽에 없으면 건너뜀(끝 아님)"
+
+
+def test_main_check_fc_flag_runs_only_check():
+    seen = []
+    orig_c, orig_r = M.check_fc, M.run
+    M.check_fc, M.run = (lambda: seen.append("check") or 7), (lambda **k: seen.append("run") or 0)
+    try:
+        assert M.main(["--check-fc"]) == 7 and seen == ["check"], seen
+        assert M.main([]) == 0 and seen == ["check", "run"], seen
+    finally:
+        M.check_fc, M.run = orig_c, orig_r
+
+
+def fifa_for_check(d, my, rows):
+    f = sqlite3.connect(str(d / "f.db"))
+    f.execute("CREATE TABLE trade_state (key TEXT PRIMARY KEY, value TEXT)")
+    f.execute("CREATE TABLE matches (match_id TEXT PRIMARY KEY, match_type INTEGER, match_date TEXT, payload TEXT)")
+    f.execute("CREATE TABLE match_players (match_id TEXT, ouid TEXT, PRIMARY KEY (match_id, ouid))")
+    if my:
+        f.execute("INSERT INTO trade_state VALUES ('my_ouid', ?)", (my,))
+    for mid, when, mt in rows:
+        f.execute("INSERT INTO matches VALUES (?, ?, ?, '{}')", (mid, mt, when.strftime("%Y-%m-%dT%H:%M:%S")))
+        f.execute("INSERT INTO match_players VALUES (?, ?)", (mid, my))
+    f.commit()
+    f.close()
+
+
+def test_check_fc_counts_matches_dev_missed():
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = b_world()
+        go(d, rank_db(d, ["나", "가"]), w, season_at=ep(70))   # B 는 base b80 ~ top b1 을 끝까지 훑었다
+        mt = config.DEFAULT_MATCH_TYPE
+        fifa_for_check(d, "B", [("b1", h(1), mt), ("b45", h(45), mt), ("b80", h(80), mt), ("lost", h(30), mt),
+                                ("other", h(30), mt + 1), ("old", h(200), mt)])
+        out = []
+        assert M.check_fc(d / "dm.db", d / "f.db", out=out.append) == 1, out
+        assert any("빠뜨린 경기 1" in s and "lost" in s for s in out), f"창 밖(old)·다른 종류(other)는 안 센다: {out}"
+        assert any("앱에 없는 dev 경기 5" in s for s in out), f"창 양 끝(top b1 · base b80)도 창 안: {out}"
+        c = sqlite3.connect(str(d / "f.db"))
+        c.execute("DELETE FROM matches WHERE match_id = 'lost'")
+        c.commit()
+        c.close()
+        out = []
+        assert M.check_fc(d / "dm.db", d / "f.db", out=out.append) == 0, out
+        c = sqlite3.connect(str(d / "f.db"))
+        c.execute("DELETE FROM trade_state")
+        c.commit()
+        c.close()
+        out = []
+        assert M.check_fc(d / "dm.db", d / "f.db", out=out.append) == 1 and "확인 전" in out[0], out
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
