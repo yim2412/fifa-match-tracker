@@ -85,7 +85,7 @@ def _no_modal(name):
     return blocked
 
 
-from PyQt6.QtWidgets import QDialog, QMessageBox  # noqa: E402
+from PyQt6.QtWidgets import QDialog, QMessageBox, QTabWidget  # noqa: E402
 
 for _n in ("warning", "information", "critical", "question"):
     setattr(QMessageBox, _n, staticmethod(_no_modal(f"QMessageBox.{_n}")))
@@ -696,7 +696,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 55, len(tables)   # 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 56, len(tables)   # 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -6054,6 +6054,147 @@ def test_clear_rank_records_stops_turns_off_and_deletes():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _notice_all_text() -> str:
+    return (notice.TERMS_HTML + notice.PRIVACY_HTML + notice.WEB_DATA_HTML + notice.RANK_COLLECT_HTML
+            + notice.TRAY_HTML + "".join(notice.CHANGES.values()))
+
+
+def test_storage_tab_replaces_clear_button_and_clears_cards():
+    """57 K9 — [수집 기록 지우기] 는 [정보 › 저장 공간] 으로 옮겼다(옛 자리 글이 남으면 안내가 틀린다) · 크기 · 카드 정보 지우기."""
+    tmp, saved = _loader_db(0)
+    run = app_main.ClearWorker.start
+    try:
+        c = store.open_db(config.DB_PATH)
+        c.execute("INSERT INTO card_tries (key, day, fails) VALUES ('p:1', '2026-10-20', 0)")
+        c.commit()
+        c.close()
+        dlg = app_main.AboutDialog(_win)
+        tabs = dlg.findChild(QTabWidget)
+        assert "저장 공간" in [tabs.tabText(i) for i in range(tabs.count())]
+        assert set(dlg._storage_btn) == set(app_main.storage.KINDS)
+        assert dlg.btn_clear_rank is dlg._storage_btn["rank"], "수집 기록 지우기가 저장 공간 탭에 없다"
+        assert "[정보] 의 <b>수집 기록 지우기" not in _notice_all_text() and "[정보] 의 수집 기록" not in _notice_all_text()
+        size = _win._size_workers[-1]          # 스모크는 start 를 막는다 — 띄운 것을 직접 돌린다
+        size.run()
+        assert dlg._storage_size["cards"].text() not in ("…", "?"), dlg._storage_size["cards"].text()
+        dlg._ask_storage = lambda kind: True
+        app_main.ClearWorker.start = lambda self: self.run()
+        dlg._on_clear_kind("cards")
+        assert "지웠습니다" in dlg.lb_storage.text(), dlg.lb_storage.text()
+        assert not app_main.CLEARING, "끝났는데 걸쇠가 남았다 — 그 저장소에 쓰는 로더가 영영 못 뜬다"
+        c = store.open_db(config.DB_PATH)
+        assert c.execute("SELECT COUNT(*) FROM card_tries").fetchone()[0] == 0
+        c.close()
+        dlg.close()
+    finally:
+        app_main.ClearWorker.start = run
+        app_main.CLEARING.clear()
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_storage_clear_all_wipes_and_resets_window():
+    """57 K9 ⑤ — fifa.db 바꿔 끼우기 · rank.db · .cache 전부 · 창이 들고 있던 계정을 놓고 검색 화면으로. 검색 중이면 거절."""
+    tmp, saved = _loader_db(len(_DETAILS))
+    keep_cache, run = config.CACHE_DIR, app_main.ClearWorker.start
+    w = None
+    try:
+        config.CACHE_DIR = tmp / ".cache"
+        (config.CACHE_DIR / "icons").mkdir(parents=True)
+        (config.CACHE_DIR / "icons" / "a.png").write_bytes(b"x")
+        with _RankSwitches():
+            _rank_snapshot(datetime.now(), {})
+            w = app_main.MainWindow(_NoApi())
+            w.LAZY_RENDER = False
+            w._on_fetch_team_colors = lambda: None
+            w._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+            assert w._matches_all and w._ouid
+
+            class _Busy:
+                def isRunning(self):
+                    return True
+            w._loader = _Busy()
+            assert "검색" in (w.clear_storage("all") or ""), "검색 중에 내 기록 전부를 지우기 시작했다"
+            assert not app_main.CLEARING and config.RANK_DB_PATH.exists()
+            w._loader = None
+            seen = []
+            w.storage_cleared.connect(seen.append)
+            app_main.ClearWorker.start = lambda self: self.run()
+            assert w.clear_storage("all") is None
+            assert seen and seen[0].state == "ok", seen
+            assert not app_main.CLEARING
+            assert w._ouid == "" and not w._matches_all and w.stack.currentIndex() == w.PAGE_SEARCH
+            assert not config.RANK_DB_PATH.exists() and not config.RANK_COLLECT
+            assert not list(config.CACHE_DIR.iterdir())
+            c = store.open_db(config.DB_PATH)
+            assert c.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == 0
+            assert c.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 0
+            c.close()
+    finally:
+        app_main.ClearWorker.start = run
+        app_main.CLEARING.clear()
+        config.CACHE_DIR = keep_cache
+        if w is not None:
+            w.shutdown()
+            w.deleteLater()
+        config.DB_PATH, config.WEB_DATA = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_storage_latch_holds_scheduler_ticks():
+    """보호 장치 — 걸쇠가 없으면 틱이 돈다(먼저 단언) · 지우는 중엔 화면 스레드의 fifa.db 열기·로더 띄우기를 미룬다."""
+    for cls in (app_main.OwnerDistScheduler, app_main.CardBackfillScheduler):
+        s = cls()
+        calls = []
+        s.sync = lambda start=False, c=calls: c.append(start)
+        s.tick()
+        assert calls == [True], (cls.__name__, "걸쇠 없이도 틱이 안 돈다 — 아래 단언이 비었다")
+        app_main.CLEARING.add("all")
+        try:
+            s.tick()
+        finally:
+            app_main.CLEARING.clear()
+        assert calls == [True], (cls.__name__, "지우는 중에 틱이 돌았다")
+
+
+def test_my_traits_row_above_trait_table():
+    """57 K12 — 관문(특성 + 안내 14)·내 계정(키 지문)일 때만 표 · 관문이 꺼지면 지우는 자리는 purge_ranker_pick_data."""
+    keep_key = config.API_KEY
+    c = store.open_db(config.DB_PATH)
+    keep_ts = store.trade_state(c)
+    c.close()
+    try:
+        with _RankSwitches():
+            config.API_KEY = "test_key"
+            c = store.open_db(config.DB_PATH)
+            store.set_trade_state(c, key_fp=store.key_fingerprint("test_key"), my_ouid=_OUID)
+            body = [[101 + i, 1 + i, 5, [28, 55, -2], [2, 12, 42] if i else None] for i in range(11)]
+            store.save_my_traits(c, _OUID, sn=1, match_id="m", team="1-0", state="ok", body=body, fetched_at="2026-10-20T09:00:00")
+            c.close()
+            _win._render_my_traits()
+            t = _win.tbl_my_traits
+            assert t.rowCount() == 11 and not t.isHidden(), t.rowCount()
+            assert t.item(0, 5).text() == "-", "잠긴 훈련 칸에 이름을 붙였다"
+            assert "기준" in _win.lb_my_trait.text()
+            config.NOTICE_ACCEPTED = config.MY_TRAIT_NOTICE_VERSION - 1
+            assert not config.my_trait_allowed() and config.trait_allowed()
+            _win._render_my_traits()
+            assert t.rowCount() == 0 and t.isHidden() and "새 이용 안내" in _win.lb_my_trait.text()
+            _win.purge_ranker_pick_data(everything=False)
+            c = store.open_db(config.DB_PATH)
+            assert store.my_traits(c, _OUID) is None, "관문이 꺼졌는데 내 특성 줄이 남았다"
+            c.close()
+    finally:
+        config.API_KEY = keep_key
+        c = store.open_db(config.DB_PATH)
+        c.execute("DELETE FROM trade_state")
+        c.commit()
+        if keep_ts:
+            store.set_trade_state(c, **keep_ts)
+        c.close()
+
+
 def test_notice_dialog_says_web_data_is_on_now_and_mentions_collection():
     keep = config.WEB_DATA
     try:
@@ -6883,7 +7024,8 @@ def test_notice_versions_split_first_and_reask():
                                             (10, False, True, True),    # 11 이 올라서 10 동의자도 수집을 켰으면 다시 묻는다
                                             (11, False, True, True),    # 12 가 올라서 11 동의자도(수집을 끈 사람은 토글을 누를 때 — 51단계 5판)
                                             (12, False, True, True),    # 13 이 올라서 12 동의자도 수집을 켰으면(57 ⓪)
-                                            (13, False, False, True)]:
+                                            (13, False, True, True),    # 14 가 올라서 13 동의자도 수집을 켰으면(57 ③)
+                                            (14, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -6893,7 +7035,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (13, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (14, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         assert config.NOTICE_COLLECT_ONLY_FROM == 8
@@ -6901,6 +7043,11 @@ def test_notice_versions_split_first_and_reask():
         assert config.CARD_BACKFILL_NOTICE_VERSION == 12
         # 2.12.2: 13 = 다른 구단주의 챔스 이상 판수(57 ⓪) — 수집을 켠 사람 몫. 끈 12 동의자에겐 안 묻는다(켤 때)
         assert config.FC_GAMES_NOTICE_VERSION == 13
+        # 2.13.1: 14 = 상대 점수 보여 주기·내 특성(수집 몫) + 버튼 자리·넥슨 페이지 안내 — COLLECT_ONLY_FROM 은 8 그대로(U7)
+        assert config.OPP_SCORE_NOTICE_VERSION == config.MY_TRAIT_NOTICE_VERSION == 14
+        config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 13
+        assert not config.notice_update_pending(), "수집을 끈 13 동의자에게 14 를 다시 물었다(U7)"
+        assert "저장 공간" in notice.changes_html(13)
         config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 12
         assert not config.notice_update_pending(), "수집을 끈 12 동의자에게 수집 몫 안내를 다시 물었다"
         assert "챔피언스 이상에서 뛴 판수" in notice.changes_html(12)
@@ -6972,7 +7119,7 @@ def test_notice_below6_still_asked_when_not_collecting():
 def test_reask_shows_only_changes_after_accepted():
     assert max(notice.CHANGES) == config.NOTICE_VERSION, "안내를 올렸는데 바뀐 점(notice.CHANGES)을 안 더했다"
     seven, six, five = notice.changes_html(7), notice.changes_html(6), notice.changes_html(5)
-    assert "표 안의 그림" in seven and "스쿼드메이커" not in seven, "7 동의자에게 이미 본 7 을 또 보였다"
+    assert "표 안의 그림" in seven and "카드에 넣은 포지션 특성" not in seven, "7 동의자에게 이미 본 7 을 또 보였다"
     assert "포지션 특성" in six and "슈퍼챔피언스 연속 기간" not in six, "6 동의자에게 이미 본 6 을 또 보였다"
     assert "표 안의 그림" in six, "6 동의자가 8 의 바뀐 점을 못 본다"
     assert "포지션 특성" in five and "슈퍼챔피언스" in five, "5 동의자가 6 의 바뀐 점을 못 본다"
@@ -6985,7 +7132,8 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  10: "8ce00c5021fb0806",                          # 10 = 2.10.1 구단주 분포 받기(49단계)
                  11: "75573220bc230e22",                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
                  12: "b9157edc4717602e",                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 시즌 FC·구단가치 기록 · '상위 20 연속' 이름 바로잡음(공개 전이라 같은 버전)
-                 13: "fc242bfee19fa311"}                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
+                 13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
+                 14: "ca182e7bf1bf2efc"}                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
 
 
 def _notice_digest() -> str:
@@ -7793,7 +7941,7 @@ class _RankerApi:
 class _RankerEnv:
     """임시 DB(하루 캐시가 테스트끼리 안 섞이게) · 가짜 API · 키 — 끝나면 되돌린다."""
 
-    def __init__(self, api):
+    def __init__(self, api, mine=False):
         self.api = api
 
     def __enter__(self):
@@ -8413,7 +8561,7 @@ def test_purge_waits_for_running_loader():
 class _FakeTraitLoader(_FakePickLoader):
     started = 0
 
-    def __init__(self, api):
+    def __init__(self, api, mine=False):
         super().__init__(api)
         self.person = self._S()
 

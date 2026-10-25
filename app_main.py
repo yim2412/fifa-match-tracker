@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import weakref
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -59,6 +60,7 @@ import rankerpick
 import rankerstats
 import ranker
 import seasons as sn
+import storage
 import store
 import teamcolor
 import theme as T
@@ -276,8 +278,62 @@ def _mark_final_429() -> None:
     store.mark_final_429(datetime.now().date().isoformat())
 
 
-class MatchLoader(QThread):
+# ── 지우는 중 걸쇠(57 K9) ─────────────────────────────────────────────
+# [정보 › 저장 공간] 의 지우기가 도는 동안 지우는 저장소 이름이 들어 있다("all" = 전부). 모달이어도 이벤트 루프가 돌아 예약 틱·
+# 끝난 로더의 다음 로더가 지우는 도중 새 로더를 띄웠다(2회차 S1) → 띄우는 자리마다 확인하는 대신 모든 작업 스레드의 바탕(Worker)
+# 에서 start 를 막는다. 제자리로만 바꾼다(재할당 금지 — 다른 모듈이 이름으로 읽어도 같은 집합).
+CLEARING: set[str] = set()
+STORE_FIFA, STORE_CARDS, STORE_IMAGES, STORE_DETAILS, STORE_RANK = "fifa", "cards", "images", "details", "rank"
+
+
+def clearing_blocks(writes: frozenset) -> bool:
+    """그 저장소들에 쓰는 작업을 지금 띄우면 안 되나 — 아무것도 안 쓰는 작업(writes 빔)은 늘 띄운다."""
+    return bool(writes) and ("all" in CLEARING or bool(writes & CLEARING))
+
+
+class Worker(QThread):
+    """앱의 모든 작업 스레드 바탕 — WRITES(쓰는 저장소)가 지우는 중이면 start 를 하지 않는다(blocked 가 선다 · 신호 없음).
+    띄운 스레드는 LIVE 에 남아(약한 참조) 지우기가 손 목록 없이 도는 것 전부를 멈추고 기다린다(test_rules 가 새 QThread 를 잡는다)."""
+
+    WRITES: frozenset = frozenset()
+    LIVE: "weakref.WeakSet" = None   # 아래에서 채운다(클래스 몸체에서 weakref 를 안 부르려고)
+    blocked = False
+
+    def start(self, *args) -> None:
+        if clearing_blocks(self.WRITES):
+            self.blocked = True
+            return
+        Worker.LIVE.add(self)
+        super().start(*args)
+
+    def request_stop(self) -> None:
+        """멈춤 요청만 — 로더마다 이름이 달라(cancel · requestInterruption) 한 자리에서 고른다. 멈춤이 없는 것(GET 한 번)은 끝나기를 기다린다."""
+        stop = getattr(self, "cancel", None)
+        if callable(stop):
+            stop()
+        else:
+            self.requestInterruption()
+
+
+Worker.LIVE = weakref.WeakSet()
+
+
+def running_writers(stores: set[str]) -> list[Worker]:
+    """그 저장소("all" = 전부)에 쓰는, 지금 도는 작업 — 지우기 전에 멈추고 기다릴 대상."""
+    out = []
+    for t in list(Worker.LIVE):
+        try:
+            alive = t.isRunning()
+        except RuntimeError:   # C++ 쪽이 이미 지워졌다
+            continue
+        if alive and t.WRITES and ("all" in stores or t.WRITES & stores):
+            out.append(t)
+    return out
+
+
+class MatchLoader(Worker):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
+    WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_IMAGES})   # 경기 저장 · 상세 캐시 · 등급 배지
 
     progress = pyqtSignal(int, int, str)
     # [MatchSummary], [원본 detail], ouid, basic, spId→이름, 포지션코드→이름,
@@ -679,12 +735,13 @@ class MatchLoader(QThread):
             return None
 
 
-class ImageLoader(QThread):
+class ImageLoader(Worker):
     """선수 지표 표에 쓸 얼굴 이미지를 백그라운드로 받는다.
 
     UI 스레드에서 네트워크 대기를 하면 표를 그린 직후 창이 잠깐 얼어서,
     받는 족족 loaded 시그널로 하나씩 넘긴다 — 표는 이미지 없이 먼저 뜨고
     받아지는 대로 채워진다."""
+    WRITES = frozenset({STORE_IMAGES})
 
     loaded = pyqtSignal(int, str)  # spId, 로컬 파일 경로
 
@@ -706,11 +763,12 @@ class ImageLoader(QThread):
                 self.loaded.emit(sp_id, str(path))
 
 
-class IconLoader(QThread):
+class IconLoader(Worker):
     """표 칸 그림(엠블럼·특성·등급·시즌 배지)을 백그라운드로 받는다 — 표는 글자로 먼저 뜨고 받아지는 대로 그림이 붙는다.
 
     entries: (종류, 키, 주소). 같은 주소는 한 번만 받는다(엠블럼은 수십 행이 같은 그림). 표 칸을 직접 읽지 않는다 —
     화면 스레드가 _fill 뒤에 칸을 훑어 만든 평범한 목록만 받는다. 403·404 는 images.fetch_icon 이 세션 안에 기억한다."""
+    WRITES = frozenset({STORE_IMAGES})
 
     loaded = pyqtSignal(str, object, str)  # 종류, 키, 로컬 파일 경로
 
@@ -735,13 +793,14 @@ class IconLoader(QThread):
                 self.loaded.emit(kind, key, str(path))
 
 
-class PlayerInfoLoader(QThread):
+class PlayerInfoLoader(Worker):
     """선수 카드 상세(playerinfo.fetch_player_info)를 백그라운드로 받는다.
 
     스쿼드 화면에서 선수를 클릭할 때마다 하나씩 조회하는 일회성 요청이라
     (팀컬러처럼 수백 건을 한 번에 훑지 않는다) 풀 없이 스레드 하나로 충분하다.
     받은 시세·급여·OVR 은 카드 캐시(card_prices · card_info)에도 넣는다 — 화면 스레드에서 DB 를 쓰지 않으려고 여기서.
     사용자가 직접 연 카드라 하루 상한은 없다(계수도 안 한다 — ROADMAP 2.1.1 B)."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
     loaded = pyqtSignal(object)   # playerinfo.PlayerInfo
     failed = pyqtSignal(str)
@@ -767,11 +826,12 @@ class PlayerInfoLoader(QThread):
             pass  # 캐시 실패가 카드 창을 막으면 안 된다 — 다음에 다시 읽는다
 
 
-class TradeLoader(QThread):
+class TradeLoader(Worker):
     """거래 기록 받기(tradecollect.collect — 키 주인 것만). 한 번에 하나.
 
     다른 오픈API 로더(새 검색·구단주 비교)가 시작되면 화면이 cancel() 로 양보시킨다 — 쪽 사이에서 멈추고 다음 기회에
     이어 받는다. 쪽마다 한 트랜잭션이라 끊겨도 반쪽이 안 남아 terminate 하지 않는다(shutdown 표)."""
+    WRITES = frozenset({STORE_FIFA})
 
     wiped = pyqtSignal()        # 키가 바뀌어 옛 주인 거래를 지웠다(커밋 뒤) — 화면이 들고 있던 걸 버린다
     done = pyqtSignal(object)   # tradecollect.TradeResult
@@ -801,9 +861,10 @@ class TradeLoader(QThread):
         self.done.emit(res)
 
 
-class PriceLoader(QThread):
+class PriceLoader(Worker):
     """가계부 평가용 카드 시세를 하루 캐시로(playerinfo.collect_prices). 띄우는 곳은 12단계 가계부 —
     config.price_auto_allowed() 뒤에서만. 카드 사이마다 cancel 을 본다(한 장 = 한 트랜잭션)."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
     done = pyqtSignal(int, int)  # 이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
 
@@ -829,10 +890,11 @@ class PriceLoader(QThread):
         self.done.emit(got, skipped)
 
 
-class CardInfoLoader(QThread):
+class CardInfoLoader(Worker):
     """축구장 칩의 카드 정보(시세·급여·OVR) — playerinfo.collect_cards(쓰임 card_chip · 하루 CHIP_FETCH_MAX).
     오늘 시세가 있고 카드 정보가 CARD_INFO_TTL_DAYS 안이면 안 읽는다. 띄우는 곳은 _start_card_info(chip_auto_allowed 뒤).
     카드 사이마다 cancel · 한 장 = 한 트랜잭션이라 terminate 하지 않는다(shutdown 표)."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
     card = pyqtSignal(object)    # playerinfo.PlayerInfo — 읽는 대로 칩에
     done = pyqtSignal(int, int)  # 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
@@ -866,9 +928,10 @@ class CardInfoLoader(QThread):
             self.done.emit(got, skipped)
 
 
-class RankerStatsLoader(QThread):
+class RankerStatsLoader(Worker):
     """랭커 기록(rankerstats.collect — 하루 캐시 우선) — N1 메뉴 "랭커와 비교"와 N2 선수 카드 [랭커 기록]이 같이 쓴다.
     요청은 묶음(RANKER_STATS_BATCH)마다 하나 · 묶음마다 한 트랜잭션이라 terminate 하지 않는다(shutdown 표)."""
+    WRITES = frozenset({STORE_FIFA})
 
     done = pyqtSignal(object)   # (spid, po) → 응답 한 줄 | None
     failed = pyqtSignal(str)
@@ -905,9 +968,10 @@ class RankerStatsLoader(QThread):
             self.done.emit(res)
 
 
-class SquadBackfillWorker(QThread):
+class SquadBackfillWorker(Worker):
     """선수 색인 백필(store.backfill_squads — 2.1.1 · 12). 낮은 우선순위 · 묶음(1,000경기 · 한 트랜잭션) 사이에서 멈춘다.
     끊겨도 다음 실행이 LEFT JOIN 으로 이어서 찾아 terminate 하지 않는다(shutdown 표)."""
+    WRITES = frozenset({STORE_FIFA})
 
     progress = pyqtSignal(int, int)   # 남은 경기, 전체 경기
 
@@ -933,9 +997,10 @@ class SquadBackfillWorker(QThread):
             pass  # DB 잠김 등 — 다음 실행이 잇는다
 
 
-class RankerPickLoader(QThread):
+class RankerPickLoader(Worker):
     """랭커 픽 받기(rankerpick.collect) — 마지막 스냅숏 상위 RANKER_PICK_TOP 명. 화면(랭커 픽)이 보이는 동안만 돈다.
     랭커 사이에서 멈추고(받은 만큼은 남는다), 429 대기도 1초씩 cancel 을 본다. 랭커마다 저장이 끝나 terminate 하지 않는다."""
+    WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_RANK})
 
     ranker = pyqtSignal()        # 한 명 끝 — 화면이 집계를 다시 그린다
     done = pyqtSignal(object)    # rankerpick.PickResult
@@ -1010,23 +1075,26 @@ class RankerPickLoader(QThread):
             rconn.close()
 
 
-class TraitLoader(QThread):
+class TraitLoader(Worker):
     """포지션 특성 받기(32단계 · traitcollect.run) — 스냅숏 상위 TRAIT_TOP. [포지션 특성] 탭과 창이 보이는 동안만 돈다.
     사람 사이에서 멈추고(받은 만큼은 남는다) 한 사람 = 한 트랜잭션이라 terminate 하지 않는다. 오픈API 는 랭커 픽과 한 장부."""
+    WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_RANK})
 
     person = pyqtSignal()        # 한 명 끝 — 화면이 다시 그린다
     done = pyqtSignal(object)    # traitcollect.TraitRun
 
-    def __init__(self, api: FCOnlineAPI):
+    def __init__(self, api: FCOnlineAPI, mine: bool = False):
         super().__init__()
         self._api = api
         self._cancel = False
+        self._mine = mine   # 57 K12 내 스쿼드 특성도 — 관문(config.my_trait_allowed)은 화면 스레드가 띄울 때 본다
 
     def cancel(self) -> None:
         self._cancel = True
 
     def run(self) -> None:
         out = traitcollect.TraitRun()
+        mine = ""
         try:
             rconn = rankcollect.open_rank_db_ro()
             try:
@@ -1034,22 +1102,29 @@ class TraitLoader(QThread):
             finally:
                 if rconn is not None:
                     rconn.close()
-            if rows:
+            if rows or self._mine:
                 conn = store.open_db(config.DB_PATH)
                 session = traitcollect.new_session()
                 try:
-                    out = traitcollect.run(self._api, session, conn, rows, on_at=config.read_rank_on_at(),
-                                           cancel=lambda: self._cancel, on_person=self.person.emit,
-                                           record_days=lambda ts: RankerPickLoader._record_days(conn, ts))
+                    if self._mine:   # 먼저 — 하루 한 번 · 최대 7요청. 내 계정 = my_ouid + 키 지문(N23 · fill_opp_rank 와 같은 정의)
+                        ts = store.trade_state(conn)
+                        ouid = ts.get("my_ouid")
+                        if ouid and ts.get("key_fp") == store.key_fingerprint(config.API_KEY):
+                            mine = traitcollect.collect_mine(session, conn, ouid, cancel=lambda: self._cancel)
+                    if rows and not self._cancel:
+                        out = traitcollect.run(self._api, session, conn, rows, on_at=config.read_rank_on_at(),
+                                               cancel=lambda: self._cancel, on_person=self.person.emit,
+                                               record_days=lambda ts: RankerPickLoader._record_days(conn, ts))
                 finally:
                     session.close()
                     conn.close()
         except Exception as e:  # DB 잠김 등 — 특성 하나 때문에 앱이 죽지 않게. 다음 기회에 이어서
             out.error = f"{type(e).__name__}: {e}"
+        out.mine = mine
         self.done.emit(out)
 
 
-class AbilitySimLoader(QThread):
+class AbilitySimLoader(Worker):
     """능력치 시뮬레이터(playerinfo.fetch_player_ability)를 백그라운드로 받는다.
 
     강화·팀컬러 콤보박스를 바꿀 때마다 PC 데이터센터에 새로 물어봐야 해서
@@ -1078,7 +1153,7 @@ class AbilitySimLoader(QThread):
             self.failed.emit(str(e))
 
 
-class TeamColorLoader(QThread):
+class TeamColorLoader(Worker):
     """상대 닉네임별 팀컬러를 백그라운드로 조회한다(넥슨 데이터센터 스크래핑,
     ranker.fetch_manager_rank 재사용).
 
@@ -1097,6 +1172,7 @@ class TeamColorLoader(QThread):
     TIMEOUT 을 짧게 잡은 이유: 실측 정상 응답이 평균 0.2초대라 5초면 이미
     넉넉하고, 응답 없는 상대 하나가 스레드를 오래 붙잡아 나머지를 늦추는
     걸 막는다."""
+    WRITES = frozenset({STORE_FIFA})
 
     MAX_WORKERS = 8
     TIMEOUT = 5
@@ -1151,7 +1227,7 @@ class TeamColorLoader(QThread):
             self.finished_all.emit()
 
 
-class RankListLoader(QThread):
+class RankListLoader(Worker):
     """감독모드 랭킹 1만 위 목록(ranker.RANK_PAGES 쪽)을 통째로 읽어 wanted 의 팀컬러를 찾는다.
 
     상대가 많을 때 TeamColorLoader(상대마다 검색) 대신 쓴다 — 찾을 수 있는 범위(1만 위 안)는
@@ -1165,6 +1241,7 @@ class RankListLoader(QThread):
     수집이 지금 돌고 있으면 끝나기를 기다렸다 그 스냅숏을 쓴다. 스스로 500쪽을 다 읽었으면 수집이 켜져 있을 때만
     스냅숏으로도 남긴다. 실패 규칙은 쓰는 쪽마다 — 여기는 못 읽은 쪽만 빼고 쓰고, 스냅숏은 한 쪽이라도 빠지면 버린다.
     """
+    WRITES = frozenset({STORE_FIFA, STORE_RANK})
 
     MAX_WORKERS = TeamColorLoader.MAX_WORKERS  # 같은 페이지·같은 예의
     TIMEOUT = 10  # 목록 한 쪽은 검색 결과보다 크다(약 50KB)
@@ -1297,10 +1374,11 @@ class TeamColorView:
     more: bool = False                       # [더 보기] 결과(이어 붙인다)
 
 
-class TeamColorEffectLoader(QThread):
+class TeamColorEffectLoader(Worker):
     """효과 창 — 목록(7일 캐시 · 없는 (이름, 엠블럼)이면 그날 한 번 다시) → 단계(7일 캐시) → 선수 첫 100명.
     [더 보기]는 선수만(have 를 주면). 요청은 사용자가 누른 이 한 번뿐이고 웹 데이터가 꺼져 있으면 0 —
     캐시가 있으면 그걸 날짜와 같이 보인다. 받은 선수의 급여·시세는 카드 캐시(B)에 — 급여 열만·0 시세는 안 쓴다."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS, STORE_IMAGES})
 
     loaded = pyqtSignal(object)   # TeamColorView
 
@@ -1431,9 +1509,10 @@ class EloSeries:
     opp_bands: dict | None = None             # {match_id: 순위 구간 상한 | None} — N23 줄(그보다 옛 경기)
 
 
-class EloLoader(QThread):
+class EloLoader(Worker):
     """fifa.db elo_history·elo_track 과 rank.db cut_elo 를 읽는다. rank.db 는 읽기 전용 — 없으면 만들지 않는다.
     opp(57 K3): [(match_id, 경기 시각, 상대)] — 주면 내 계정(trade_state my_ouid + 키 지문)일 때만 상대 점수·N23 구간을 같이 읽는다."""
+    WRITES = frozenset({STORE_FIFA})
     elo_ready = pyqtSignal(str, object)   # ouid, EloSeries — object 인 이유는 PyQt 규칙 8
 
     def __init__(self, ouid: str, req: int, opp: list | None = None):
@@ -1485,9 +1564,10 @@ class EloLoader(QThread):
             tuple(t["nickname"] or t["ouid"][:8] for t in tl), club, scores, bands))
 
 
-class PredictWorker(QThread):
+class PredictWorker(Worker):
     """시즌 말 순위 예측(1.3.1 · predict.py) — EloLoader 가 끝난 뒤 그 계정으로. rank.db 는 읽기 전용(없으면 만들지 않음).
     숫자를 내면 fifa.db predictions 에 그날 한 줄(시즌 뒤 대조용). 계산 예외는 그 구역만 "계산하지 못했습니다"."""
+    WRITES = frozenset({STORE_FIFA})
     pred_ready = pyqtSignal(str, object)   # ouid, (요청 번호, Prediction)
 
     FAILED = "예측을 계산하지 못했습니다"
@@ -1542,7 +1622,7 @@ class PredictWorker(QThread):
             self.pred_ready.emit(self._ouid, (self._req, pr))
 
 
-class HabitsWorker(QThread):
+class HabitsWorker(Worker):
     """연승·연패 우연 기준(A3 · habits.streak_baseline) — 순서를 200번 섞어 1만 판이면 0.5~0.8초라 화면 스레드 예산
     (0.3초)을 넘는다. 새 검색·범위·시즌이 바뀐 직후 한 번 띄운다(_launch_streak). 요청 번호로 늦은 결과를 버린다.
     계산 예외는 그 구역만 "계산하지 못했습니다"(결과 None)."""
@@ -1851,13 +1931,14 @@ def rank_tier_change_text(points: list[dict]) -> str:
     return f"{text} · 지난 기록({when}) {rank_tier_label(prev_i)}에서 {way}"
 
 
-class SeasonLoader(QThread):
+class SeasonLoader(Worker):
     """감독모드 랭킹 시즌표를 백그라운드로 받아 온다(데이터센터 스크래핑).
 
     한 번의 GET 이라 금방 끝나지만, 넥슨이 느리거나 점검 중이면 몇 초씩
     걸릴 수 있어 UI 스레드에서 부르면 안 된다. 실패해도 조용히 지나간다 —
     시즌 기능만 못 쓰고 판수 기준 화면은 그대로 돌아가야 한다.
     """
+    WRITES = frozenset({STORE_FIFA})
 
     loaded = pyqtSignal(object)  # list[sn.Season] — object 인 이유는 MatchLoader.finished_ok
 
@@ -1877,8 +1958,9 @@ class SeasonLoader(QThread):
         self.loaded.emit(items)
 
 
-class RankCollectWorker(QThread):
+class RankCollectWorker(Worker):
     """랭킹 수집 한 회차(rankcollect.collect)를 UI 스레드 밖에서."""
+    WRITES = frozenset({STORE_FIFA, STORE_RANK})
     progress = pyqtSignal(int, int)  # 읽은 쪽, 전체 쪽
     done = pyqtSignal(object)        # rankcollect.Outcome
 
@@ -1898,9 +1980,10 @@ class RankCollectWorker(QThread):
         self.done.emit(out)
 
 
-class RankMaintWorker(QThread):
+class RankMaintWorker(Worker):
     """rank.db 정리 한 번(rankcollect.maintenance) — 지우기 조건 · 메타 처리 · 원본 정리 · (켤 때) VACUUM · WAL 비우기.
     **화면 스레드는 rank.db 에 쓰지 않는다**(2.3.1 — 메타 처리의 긴 트랜잭션 뒤에서 창이 15초 굳었다): 토글의 켜짐 사본도 여기서."""
+    WRITES = frozenset({STORE_RANK})
     done = pyqtSignal(object)   # dict — maintenance 결과
 
     def __init__(self, vacuum: bool = False, enabled: tuple | None = None):
@@ -2088,9 +2171,10 @@ class RankCollectScheduler(QObject):
         return left
 
 
-class OwnerDistLoader(QThread):
+class OwnerDistLoader(Worker):
     """구단주 분포 바퀴 한 호출(ownerdist.run_round)을 UI 스레드 밖에서 — 몇 시간 걸린다. 끊으면 도는 한 명만 버리고
     바퀴는 running 으로 남는다(다음 틱에 이어 받는다). rank.db 는 표본을 뽑는 동안만 연다(rank_open)."""
+    WRITES = frozenset({STORE_FIFA, STORE_RANK})
     done = pyqtSignal(object)   # ownerdist.RoundResult
 
     def __init__(self):
@@ -2143,7 +2227,7 @@ class OwnerDistScheduler(QObject):
         self._timer.start()
 
     def tick(self) -> None:
-        if not self._quitting:
+        if not self._quitting and not CLEARING:   # 지우는 중엔 화면 스레드의 fifa.db 열기도 미룬다(57 K9 — 다음 틱에)
             self.sync(start=True)
 
     def sync(self, start: bool = False) -> None:
@@ -2233,6 +2317,11 @@ class OwnerDistScheduler(QObject):
         if res.result == "done":
             self.dist_changed.emit()
 
+    def purge_all(self) -> None:
+        """[정보 › 저장 공간] 의 구단주 분포 지우기(57 K9 ⑥) — 진행 바퀴와 받은 분포 전부. 로더가 돌면 그 끝에서(겹치지 않게).
+        토글은 그대로 — 켜져 있으면 다음 틱이 새 바퀴를 시작한다."""
+        self._stop_and_purge(everything=True)
+
     def halt_for_delete(self) -> None:
         """[수집 기록 지우기] 가 rank.db 파일을 지우기 **전에**(수집을 끈 뒤) — 전제 꺼짐으로 멈추고(분포 지우기는 로더 끝에서)
         잠깐 기다린다. 로더는 표본을 뽑는 몇 ms 동안만 rank.db 를 열고, 멈춤 요청 뒤 첫 확인에서 돌아온다 — 그 사이에 지우면
@@ -2262,9 +2351,10 @@ class OwnerDistScheduler(QObject):
         return []
 
 
-class CardBackfillLoader(QThread):
+class CardBackfillLoader(Worker):
     """카드 정보 자동 채우기 한 바퀴(cardcollect.run — 틱 하나 최대 CARD_BACKFILL_TICK_REQ 요청)를 UI 스레드 밖에서.
     요청 사이 간격은 취소 이벤트의 wait — 끊으면 기다림 없이 돌아온다(끊긴 뒤 기다림 ≤ 도는 요청 하나의 타임아웃)."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS})
     done = pyqtSignal(object)   # cardcollect.RunResult
 
     def __init__(self, today: date):
@@ -2319,7 +2409,7 @@ class CardBackfillScheduler(QObject):
         self._first.start()   # 첫 틱은 켠 뒤 조금 있다가 — 앱을 10분 안 쓰고 닫는 날에도 조금은 채우게(첫 화면엔 안 끼게)
 
     def tick(self) -> None:
-        if not self._quitting:
+        if not self._quitting and not CLEARING:   # 지우는 중엔 화면 스레드의 fifa.db 열기도 미룬다(57 K9 — 다음 틱에)
             self.sync(start=True)
 
     def sync(self, start: bool = False) -> None:
@@ -2357,6 +2447,12 @@ class CardBackfillScheduler(QObject):
                 else:
                     self.switched_off.emit("blocked")
         self.finished.emit(res)
+
+    def halt_for_delete(self) -> None:
+        """[정보 › 저장 공간] 이 카드 정보를 지우기 전에 — 도는 바퀴에 멈춤 요청만(기다리기는 지우기 작업 스레드가 · 57 K9 ②).
+        토글은 그대로라 지운 뒤 다음 틱이 다시 채운다."""
+        if self.running():
+            self.loader.cancel()
 
     def shutdown(self, fast: bool = False) -> list:
         """끝낼 때(quit_app) — 한 요청 = 한 트랜잭션이라 끊겨도 반쪽이 안 남는다. fast 면 멈춤 요청만 → 아직 도는 스레드."""
@@ -2547,6 +2643,9 @@ class MainWindow(QMainWindow):
         # 포지션 특성(32단계) — [포지션 특성] 탭이 보이는 동안만. 랭커 픽 로더와 하나씩(같은 오픈API 장부) · 지우기는 둘 다 끝난 뒤
         self._trait_loader: TraitLoader | None = None
         self._trait_result: traitcollect.TraitRun | None = None
+        # [정보 › 저장 공간](57 K9) — 지우기·크기 재기 스레드의 주인은 창(대화상자가 닫혀도 산다 · 종료 표가 기다린다)
+        self._clear_worker: ClearWorker | None = None
+        self._size_workers: list[StorageSizeWorker] = []
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -5850,7 +5949,7 @@ class MainWindow(QMainWindow):
             return
         if self._trait_running() or self._pick_running() or self._api_background_busy():
             return  # 그 로더가 끝나면(finished) start_visible_api_loader 로 다시 여기로
-        ld = TraitLoader(self._api)
+        ld = TraitLoader(self._api, mine=config.my_trait_allowed())
         ld.person.connect(self._on_trait_person)
         ld.done.connect(self._on_trait_done)
         ld.finished.connect(self._on_trait_finished)
@@ -5943,6 +6042,10 @@ class MainWindow(QMainWindow):
                 n = store.purge_ranker_data(conn, everything=everything, cache_dir=config.CACHE_DIR)
                 if not everything:   # 포지션 특성 켤 때 정리(32단계 D3·D5 ②) — 전부 지우기는 위 everything 이 같이 한다
                     store.prune_trait_squads(conn, on_at=config.read_rank_on_at(), keep=keep)
+                # 57 K12 내 특성 — 지우는 조건 = 받는 관문의 부정(어긋나면 지우고 다시 받기를 되풀이) + 내 계정·키가 바뀐 줄
+                ts = store.trade_state(conn)
+                mine = ts.get("my_ouid") if ts.get("key_fp") == store.key_fingerprint(config.API_KEY) else None
+                store.prune_my_traits(conn, mine if config.my_trait_allowed() else None)
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -6892,6 +6995,8 @@ class MainWindow(QMainWindow):
     # [메타 분석 › 포지션 특성] 32단계 — 상위 랭커가 카드에 넣어 둔 특성·코치(스쿼드메이커). 받기는 이 탭이 보일 때만(TraitLoader)
     TRAIT_COLUMNS = ["포지션", "일반 (5강~)", "신규 (8강~)", "훈련 (11강~)", "훈련 코치"]
     TRAIT_KIND_COLUMNS = ("normal", "new", "train", "coach")   # 위 표 1~4열
+    MY_TRAIT_COLUMNS = ["포지션", "선수", "강화", "일반", "신규", "훈련", "훈련 코치"]
+    MY_TRAIT_MAX_H = 220   # 내 스쿼드 표 — 11줄을 다 보이려 하면 랭커 표가 1280×720 에서 눌린다(넘치면 표 안 스크롤)
 
     def _build_position_trait_tab(self) -> QWidget:
         w = QWidget()
@@ -6912,6 +7017,13 @@ class MainWindow(QMainWindow):
         self.cb_trait_tier.currentIndexChanged.connect(lambda _i: self._invalidate(self.TRAIT_KEY))
         self.cb_trait_form = NoScrollComboBox()   # 항목은 그릴 때 — 모인 포메이션(사람 수 순)
         self.cb_trait_form.currentIndexChanged.connect(lambda _i: self._invalidate(self.TRAIT_KEY))
+        # 57 K12 내 스쿼드(지금) — 스쿼드메이커의 내 계정 팀 칸(검색한 계정의 옛 경기가 아니다). 관문이 꺼졌으면 줄만
+        self.lb_my_trait = self._note_label()
+        v.addWidget(self.lb_my_trait)
+        self.tbl_my_traits = self._make_table(self.MY_TRAIT_COLUMNS, icons={3: "trait", 4: "trait", 5: "train"})
+        self.tbl_my_traits.setSortingEnabled(False)   # 자리 순서(공격 → GK)
+        self.tbl_my_traits.setMaximumHeight(self.MY_TRAIT_MAX_H)
+        v.addWidget(self.tbl_my_traits)
         self._meta_top(v, self.lb_trait_note, ("순위 구간", self.cb_trait_tier), ("포메이션", self.cb_trait_form))
         # 칸 = 육각 판 + 아이콘 + 아래 % (TraitIconDelegate) — 일반·신규는 traits/, 훈련·코치는 trainingTrait/ (같은 표)
         self.tbl_traits = self._make_table(self.TRAIT_COLUMNS, icons={1: "trait", 2: "trait", 3: "train", 4: "train"})
@@ -7004,7 +7116,62 @@ class MainWindow(QMainWindow):
         finally:
             cb.blockSignals(False)
 
+    def my_trait_status(self, row: dict | None) -> str:
+        """내 스쿼드 줄 위 한 줄 — 관문·내 계정·받은 상태마다 문구 하나."""
+        if not config.my_trait_allowed():
+            if config.trait_allowed():
+                return "내 스쿼드의 특성·코치는 새 이용 안내에 동의하면 보입니다(내 닉네임으로 넥슨 스쿼드메이커를 읽습니다)."
+            return ""   # 랭커 쪽 상태 줄(trait_status)이 까닭을 말한다
+        if row is None:
+            mine = (self._trait_result.mine if self._trait_result is not None else "")
+            text = traitcollect.MINE_STATES.get(mine) or traitcollect.MESSAGES.get(mine, "")
+            return text or "내 스쿼드(지금) — 내 계정(내 계정 띠)을 정하면 이 탭을 열 때 하루 한 번 읽습니다."
+        when = (row.get("fetched_at") or "")[:16].replace("T", " ")
+        if row.get("state") != "ok" or not row.get("body"):
+            return f"내 스쿼드(지금) — {traitcollect.MINE_STATES['stale']} ({when} 기준)"
+        return f"내 스쿼드(지금) — 넥슨 스쿼드메이커의 내 팀 칸 · {when} 기준 · 최근 경기 선발 중 강화가 같은 카드만"
+
+    def _my_trait_row(self) -> dict | None:
+        if not config.my_trait_allowed():
+            return None
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                ts = store.trade_state(conn)
+                ouid = ts.get("my_ouid")
+                if not ouid or ts.get("key_fp") != store.key_fingerprint(config.API_KEY):
+                    return None
+                return store.my_traits(conn, ouid)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+
+    def _render_my_traits(self) -> None:
+        row = self._my_trait_row()
+        status = self.my_trait_status(row)
+        self.lb_my_trait.setText(status)
+        self.lb_my_trait.setVisible(bool(status))
+        body = row.get("body") if row and row.get("state") == "ok" else None
+        rows = []
+        for raw in body or []:
+            if not isinstance(raw, list) or len(raw) != 5 or not isinstance(raw[3], list) or len(raw[3]) != 3:
+                continue   # 모양이 틀린 카드만 뺀다(trait_usage 와 같은 규칙)
+            spid, pos, grade, traits, coach = raw
+            cells = [(self._positions.get(pos, str(pos)), traitcollect._slot_order(pos)),
+                     (self._names.get(spid) or str(spid), spid), (f"+{grade}" if grade else "-", grade or 0)]
+            for kind, code in zip(("normal", "new", "train"), traits):
+                name = trait_codes.name_of(kind, code)   # 잠김·빈칸은 None → "-"
+                cells.append(IconCell(name, name, trait_codes.code_of(kind, name), name) if name else ("-", ""))
+            names = [n for n in (trait_codes.name_of("coach", c) for c in coach or []) if n]
+            cells.append((" · ".join(names) or "-", len(names)))
+            rows.append(cells)
+        rows.sort(key=lambda r: r[0][1])
+        self._fill(self.tbl_my_traits, rows, enable_sort=False)
+        self.tbl_my_traits.setVisible(bool(rows))
+
     def _render_position_traits(self) -> None:
+        self._render_my_traits()
         targets = self._rank_read(lambda r: rankerpick.top_rankers(r, limit=config.TRAIT_TOP)[1]) or []
         status, button = self.trait_status(bool(targets))
         self.lb_trait_status.setText(status)
@@ -12062,6 +12229,9 @@ class MainWindow(QMainWindow):
             (self._season_loader, None, 3000, True),
             (self._ability_sim_loader, None, 2000, False),
             (self._position_ovr_loader, None, 2000, False),
+            # 저장 공간 지우기(57 K9) — 바꿔 끼우기 전이면 멈추고(옛 파일 그대로), 바꿔 끼우는 중이면 끝까지. 크기 재기는 읽기만
+            (self._clear_worker, cancel(self._clear_worker), (config.CLEAR_HALT_WAIT_S + 30) * 1000, False),
+            *[(ld, ld.requestInterruption, 2000, False) for ld in self._size_workers],
         ]
         running = [(t, stop, ms, term) for t, stop, ms, term in table if t is not None and t.isRunning()]
         # 멈춤 요청을 전부 먼저 — 하나씩 "요청 → 기다림"이면 뒤 스레드가 앞의 기다림 동안 계속 돌아 최악이 합이 된다
@@ -12079,9 +12249,96 @@ class MainWindow(QMainWindow):
 
     # ── 숨긴 창 기록 내려놓기(1.1.1) ────────────────────────────────────
     def busy_for_release(self) -> bool:
-        """검색·팀컬러·비교 조회 중이면 미룬다 — 도중에 목록을 비우면 끝난 결과가 빈 화면에 쏟아진다."""
+        """검색·팀컬러·비교 조회 중이면 미룬다 — 도중에 목록을 비우면 끝난 결과가 빈 화면에 쏟아진다.
+        저장 공간 지우기(57 K9) 중에도 — 끝나면 창이 들고 있는 목록을 비우는 쪽이 따로 있다."""
         return any(t is not None and t.isRunning()
-                   for t in (self._loader, self._teamcolor_loader, self._compare_loader))
+                   for t in (self._loader, self._teamcolor_loader, self._compare_loader, self._clear_worker))
+
+    # ── 저장 공간(57 K9) ─────────────────────────────────────────────
+    storage_measured = pyqtSignal(object)   # storage.Sizes — 열린 [저장 공간] 탭이 받는다
+    storage_cleared = pyqtSignal(object)    # ClearResult
+    # 지우는 종류 → 걸쇠에 넣는 저장소. rank·dist 는 기존 길(화면 스레드에서 바로 · 각자 멈춤)이라 여기 없다
+    CLEAR_STORES = {"cards": {STORE_CARDS}, "images": {STORE_IMAGES}, "details": {STORE_DETAILS}, "all": {"all"}}
+
+    def clearing(self) -> bool:
+        return self._clear_worker is not None and self._clear_worker.isRunning()
+
+    def measure_storage(self) -> None:
+        """크기를 작업 스레드에서 재고 storage_measured 로(P7 — fifa.db 667MB · 그림 수천 장)."""
+        self._size_workers = [w for w in self._size_workers if w.isRunning()]
+        if self._quitting or self._size_workers:
+            return
+        w = StorageSizeWorker()
+        w.done.connect(self.storage_measured.emit)
+        self._size_workers.append(w)
+        w.start()
+
+    def clear_storage(self, kind: str) -> str | None:
+        """[정보 › 저장 공간] 지우기 시작 → 시작 못 한 까닭(글) · None(시작함 — 끝나면 storage_cleared).
+        순서: 걸쇠(새로 띄우는 쪽 막기) → 그 저장소에 쓰는 도는 작업에 멈춤 요청 → 작업 스레드가 그들이 끝나기를 기다린 뒤 지운다."""
+        if self.clearing():
+            return "이미 지우는 중입니다."
+        if kind in ("images", "details", "all") and self.busy_for_release():
+            return "검색·팀컬러 조회가 끝난 뒤 다시 눌러 주세요."
+        stores = self.CLEAR_STORES[kind]
+        if kind == "all":
+            # 랭킹 수집 기록부터 — ① 과 같은 길(수집 끔 · 예약 멈춤 · 구단주 분포 로더 멈춤 · rank.db). .env 를 못 쓰면 아무것도 안 지운다
+            self.stop_predict_workers()
+            try:
+                clear_rank_records(self._rank_sched, None, self._owner_sched)
+            except OSError as e:
+                return f"설정을 저장하지 못해 지우지 않았습니다: {e}"
+            self._backfill_timer.stop()
+            if self._prefetch is not None:
+                self._prefetch.discard()   # 미리 읽기가 fifa.db 를 열고 있으면 바꿔 끼우기가 "다시" 로 끝난다
+                self._prefetch = None
+        CLEARING.update(stores)
+        if kind in ("cards", "all") and self._card_sched is not None:
+            self._card_sched.halt_for_delete()   # 구단주 분포 로더는 위 clear_rank_records 가 멈췄다("all")
+        targets = running_writers(stores)
+        for t in targets:
+            t.request_stop()
+        w = ClearWorker(kind, targets)
+        w.done.connect(self._on_storage_cleared)
+        self._clear_worker = w
+        w.start()
+        return None
+
+    def _on_storage_cleared(self, res) -> None:
+        CLEARING.difference_update(self.CLEAR_STORES[res.kind])
+        if res.kind == "all" and res.state == "ok":
+            self._forget_everything()
+        elif res.kind in ("cards", "images") and res.state == "ok":
+            if res.kind == "images":
+                self._emblem_cache = None
+            self._dirty = set(self._renderers())   # 카드 정보·그림을 쓰는 화면 전부 — 보이는 것은 바로, 나머지는 열 때
+            self._render_current_page()
+        self.storage_cleared.emit(res)
+        if res.kind in ("cards", "all") and self._card_sched is not None:
+            self._card_sched.sync()   # 토글이 켜져 있으면 다음 틱이 다시 채운다(지금 바로 띄우지 않는다)
+        if res.kind == "all":
+            self.sync_ranker_pick_data()   # 수집이 꺼졌다 — 예약·토글·랭킹 화면을 맞춘다
+
+    def _forget_everything(self) -> None:
+        """내 기록 전부를 지운 뒤 — 창이 들고 있는 것도 놓고 검색 화면으로(지운 계정이 화면에 남지 않게)."""
+        self._matches_all, self._details_all, self._matches, self._details = [], [], [], []
+        self._narrate_found, self._narrate_key = [], None
+        self._dist_val, self._dist_key = None, None
+        self._poslevel_val, self._poslevel_key = None, None
+        self._timeline_cache = self._history_cache = self._reward_cache = None
+        self._elo.clear()
+        self._pred.clear()
+        self._max_division.clear()
+        self._team_colors, self._team_values, self._teamcolor_raw = {}, {}, {}
+        self._emblem_label, self._emblem_cache = {}, None
+        self._pick_result = self._trait_result = self._trade_result = None
+        self._ouid, self._nick, self._basic, self._rank = "", "", {}, None
+        for name in ("_loader", "_compare_loader", "_teamcolor_loader"):
+            setattr(self, name, None)
+        self._dirty = set(self._renderers())   # 다음 검색의 _render_all 이 다시 그린다
+        self._refresh_recent()
+        self._refresh_accounts()
+        self._go_search()
 
     def release_memory(self) -> None:
         """숨긴 지 RELEASE_AFTER_HIDE_MIN 지나면 경기 기록을 놓는다(1만 경기면 수백 MB). 붙잡는 곳 전부 —
@@ -12131,9 +12388,83 @@ class MainWindow(QMainWindow):
         self._loader.start()
 
 
-class CachePruneWorker(QThread):
+class StorageSizeWorker(Worker):
+    """[정보 › 저장 공간] 크기 재기(57 K9) — 읽기만(WRITES 없음 · 지우는 중에도 띄운다)."""
+    done = pyqtSignal(object)   # storage.Sizes
+
+    def run(self) -> None:
+        try:
+            res = storage.measure(config.DB_PATH, config.RANK_DB_PATH, config.CACHE_DIR, stop=self.isInterruptionRequested)
+        except Exception:   # noqa: BLE001 — 크기 하나 때문에 창이 죽지 않게. 칸은 "?"
+            res = storage.Sizes()
+        self.done.emit(res)
+
+
+@dataclass
+class ClearResult:
+    kind: str
+    state: str          # "ok" · "busy"(쓰는 쪽이 안 멈춤 · 파일을 잡고 있음) · "cancelled" · "error"
+    removed: int = 0    # 지운 줄·파일·폴더 수
+    failed: int = 0     # 못 지운 파일·폴더 수(다른 실행본이 열고 있음)
+
+
+class ClearWorker(Worker):
+    """[정보 › 저장 공간] 지우기 한 번(57 K9) — 먼저 멈춤 요청을 받은 쓰는 쪽(targets)이 끝나기를 기다리고, 그 뒤에 지운다.
+    주인은 창(대화상자가 닫혀도 산다) · 지우는 동안 새로 띄우는 쪽은 걸쇠(CLEARING)가 막는다. 종료 표가 기다린다 —
+    바꿔 끼우기 전이면 cancel 로 멈춰 옛 파일 그대로(reset_db 의 "cancelled")."""
+    done = pyqtSignal(object)   # ClearResult
+
+    def __init__(self, kind: str, targets: list):
+        super().__init__()
+        self.kind = kind
+        self._targets = targets
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        deadline = time.monotonic() + config.CLEAR_HALT_WAIT_S
+        for t in self._targets:
+            try:
+                t.wait(max(0, int((deadline - time.monotonic()) * 1000)))
+            except RuntimeError:
+                pass   # C++ 쪽이 이미 지워졌다 — 끝났다
+        if any(_alive(t) for t in self._targets):
+            self.done.emit(ClearResult(self.kind, "busy"))
+            return
+        try:
+            self.done.emit(self._clear())
+        except Exception:   # noqa: BLE001 — DB 잠김·디스크 등. 지운 데까지만 — 다시 누르면 이어서
+            self.done.emit(ClearResult(self.kind, "error"))
+
+    def _clear(self) -> ClearResult:
+        k = self.kind
+        if self._cancel.is_set():
+            return ClearResult(k, "cancelled")
+        if k == "cards":
+            return ClearResult(k, "ok", storage.clear_cards(config.DB_PATH))
+        if k in ("images", "details"):
+            ok, bad = (storage.clear_images if k == "images" else storage.clear_details)(config.CACHE_DIR)
+            return ClearResult(k, "ok", ok, bad)
+        state = storage.reset_db(config.DB_PATH, cancel=self._cancel.is_set)   # "all" — 바꿔 끼우기가 먼저(실패면 캐시도 그대로)
+        if state != "ok":
+            return ClearResult(k, state)
+        ok, bad = storage.clear_cache(config.CACHE_DIR)
+        return ClearResult(k, "ok", ok, bad)
+
+
+def _alive(t) -> bool:
+    try:
+        return t.isRunning()
+    except RuntimeError:
+        return False
+
+
+class CachePruneWorker(Worker):
     """켤 때 한 번 — 이미 DB 에 있는 경기의 디스크 캐시를 지운다(FCOnlineAPI.prune_detail_cache).
     수만 개 파일을 훑으니 UI 스레드에서 하지 않는다. 실패는 조용히 — 다음에 켤 때 다시."""
+    WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_CARDS})
     done = pyqtSignal(int, int)  # 지운 수, 바이트
 
     def __init__(self, api: FCOnlineAPI):
@@ -12157,7 +12488,7 @@ class CachePruneWorker(QThread):
             pass
 
 
-class UpdateCheckWorker(QThread):
+class UpdateCheckWorker(Worker):
     """GitHub 최신 릴리스 확인(updatecheck.check)을 UI 스레드 밖에서."""
     found = pyqtSignal(object)  # updatecheck.Release — 새 버전이 있을 때만
     latest = pyqtSignal()       # 실제로 확인했고 지금이 최신일 때만
@@ -12180,7 +12511,7 @@ class UpdateCheckWorker(QThread):
             self.unknown.emit()
 
 
-class UpdateDownloadWorker(QThread):
+class UpdateDownloadWorker(Worker):
     """설치 파일 내려받기 + 체크섬 검증(updatecheck.download_verified)."""
     progress = pyqtSignal(int, int)  # (받은 바이트, 전체 바이트 — 모르면 0)
     done = pyqtSignal(str)           # 검증을 통과한 설치 파일 경로
@@ -12208,7 +12539,7 @@ class UpdateDownloadWorker(QThread):
         self.done.emit(str(path))
 
 
-class KeyCheckWorker(QThread):
+class KeyCheckWorker(Worker):
     """키 확인 호출(nexon_api.check_key)을 UI 스레드 밖에서 한다."""
     checked = pyqtSignal(str, str)  # (키, 실패 이유 — 통과면 빈 문자열)
 
@@ -12542,6 +12873,7 @@ class AboutDialog(QDialog):
         tabs.addTab(_notice_browser(notice.RANK_COLLECT_HTML), "랭킹 수집")
         tabs.addTab(_notice_browser(notice.TRAY_HTML), "트레이·자동 실행")
         tabs.addTab(_notice_browser(notice.licenses_html()), "오픈소스 라이선스")
+        tabs.addTab(self._build_storage_tab(), "저장 공간")
         v.addWidget(tabs, 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
         self.chk_web.setChecked(config.WEB_DATA)
@@ -12559,9 +12891,6 @@ class AboutDialog(QDialog):
         self.chk_rank.toggled.connect(self._on_rank_toggled)
         rank_row.addWidget(self.chk_rank)
         rank_row.addStretch(1)
-        self.btn_clear_rank = QPushButton("수집 기록 지우기")
-        self.btn_clear_rank.clicked.connect(self._on_clear_rank)
-        rank_row.addWidget(self.btn_clear_rank)
         v.addLayout(rank_row)
         self.lb_rank = QLabel(rank_status_text(st))
         self.lb_rank.setWordWrap(True)
@@ -12813,6 +13142,165 @@ class AboutDialog(QDialog):
         self.lb_msg.setText("윈도우를 켜면 트레이로 조용히 시작합니다 — 창을 닫아도(X) 트레이에 남습니다." if on else
                             "자동 실행을 껐습니다.")
 
+    # ── 저장 공간(57 K9) ─────────────────────────────────────────────
+    # (종류, 이름, 무엇 · 지우면) — 크기는 작업 스레드가 재서 채운다. rank 는 [수집 기록 지우기] 핸들러째(_on_clear_rank)
+    STORAGE_ROWS = (
+        ("rank", "랭킹 수집 기록", "다른 구단주 1만 명분과 집계 · 구단주 분포 요약 · 검색한 구단주의 ELO 기록 — 랭킹 수집이 꺼집니다"),
+        ("cards", "카드 정보", "카드 정보 자동 채우기가 읽은 키·체형·자리별 능력치·팀컬러·날짜별 시세 — 토글이 켜져 있으면 다시 채웁니다"),
+        ("images", "그림 캐시", "선수 얼굴·등급과 시즌 배지·엠블럼·국기·특성 아이콘 — 화면을 열 때 다시 받습니다"),
+        ("details", "경기 상세 캐시", "넥슨에서 받아 아직 기록에 넣지 않은 경기 상세 — 한도에 걸려 못 넣은 경기는 처음부터 다시 받습니다"),
+        ("dist", "구단주 분포 · 랭커 픽", "구단주 분포 요약 · 랭커 픽 경기 · 포지션 특성 — 토글이 켜져 있어도 다음 바퀴까지 칩·문장이 비어 있습니다"),
+        ("all", "내 기록 전부", "위 전부 + 경기 기록·검색 칩·팀컬러·ELO·거래·예측 — 되돌릴 수 없습니다"),
+    )
+    STORAGE_KEEPS = ("지워지지 않는 것: API 키(.env) · 오류 기록(crash.log) · 창 설정(settings.ini) · 하루 요청 계수 · 시즌표 · 팀컬러 효과표. "
+                     "랭킹 수집 기록·카드 정보·구단주 분포를 지워도 fifa.db 파일 크기는 바로 줄지 않습니다(내 기록 전부는 줄어듭니다).")
+
+    def _build_storage_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        grid = QGridLayout()
+        self._storage_size: dict[str, QLabel] = {}
+        self._storage_btn: dict[str, QPushButton] = {}
+        win = self.parent()
+        for r, (kind, name, what) in enumerate(self.STORAGE_ROWS):
+            lb = QLabel(f"<b>{html.escape(name)}</b><br><span style='color:{T.TEXT_DIM}'>{html.escape(what)}</span>")
+            lb.setWordWrap(True)
+            grid.addWidget(lb, r, 0)
+            size = QLabel("…")
+            size.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(size, r, 1)
+            btn = QPushButton("지우기")
+            btn.clicked.connect(lambda _=False, k=kind: self._on_clear_kind(k))
+            # 창 없이 연 창(테스트)·창이 지우기를 못 하는 종류 — 수집 기록만 예전처럼 직접
+            btn.setEnabled(kind == "rank" or hasattr(win, "clear_storage"))
+            grid.addWidget(btn, r, 2)
+            self._storage_size[kind], self._storage_btn[kind] = size, btn
+        grid.setColumnStretch(0, 1)
+        v.addLayout(grid)
+        self.btn_clear_rank = self._storage_btn["rank"]   # 옛 이름 — [수집 기록 지우기] 는 여기로 옮겨 왔다(테스트·안내가 가리킨다)
+        self.lb_storage = QLabel("")
+        self.lb_storage.setWordWrap(True)
+        v.addWidget(self.lb_storage)
+        keep = QLabel(self.STORAGE_KEEPS)
+        keep.setWordWrap(True)
+        keep.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(keep)
+        v.addStretch(1)
+        self._storage_sizes = None
+        for sig, slot in ((getattr(win, "storage_measured", None), self._on_storage_sizes),
+                          (getattr(win, "storage_cleared", None), self._on_storage_cleared)):
+            if sig is not None:   # 창을 열어 둔 동안만 — 닫을 때 끊는다(작업 스레드는 창 수명)
+                sig.connect(slot)
+                self.finished.connect(lambda _r, s=sig, f=slot: self._drop_signal(s, f))
+        if getattr(win, "clearing", None) is not None and win.clearing():
+            self._set_storage_busy(True)
+            self.lb_storage.setText("지우는 중…")
+        self._measure_storage()
+        return w
+
+    @staticmethod
+    def _drop_signal(sig, slot) -> None:
+        try:
+            sig.disconnect(slot)
+        except (TypeError, RuntimeError):
+            pass
+
+    def _measure_storage(self) -> None:
+        measure = getattr(self.parent(), "measure_storage", None)
+        if measure is not None:
+            measure()
+
+    def _on_storage_sizes(self, sizes) -> None:
+        self._storage_sizes = sizes
+        for kind, lb in self._storage_size.items():
+            b = sizes.bytes.get(kind)
+            lb.setText("?" if b is None else _size_text(b))
+
+    def _set_storage_busy(self, busy: bool) -> None:
+        win = self.parent()
+        for kind, btn in self._storage_btn.items():
+            btn.setEnabled(not busy and (kind == "rank" or hasattr(win, "clear_storage")))
+
+    def _ask_storage(self, kind: str) -> bool:
+        """지우기 확인 — 내 기록 전부는 두 번(U6). 경기 상세 캐시는 아직 못 넣은 경기 수를 적는다."""
+        name, what = next((n, w) for k, n, w in self.STORAGE_ROWS if k == kind)
+        text = f"{name} 을(를) 지웁니다.\n{what}"
+        pend = getattr(self._storage_sizes, "pending", 0)
+        if kind == "details" and pend:
+            text += f"\n\n아직 기록에 넣지 못한 경기 {pend:,}개도 사라집니다 — 넥슨이 아직 주는 경기면 다음 검색 때 다시 받습니다."
+        if QMessageBox.question(self, "저장 공간 지우기", text) != QMessageBox.StandardButton.Yes:
+            return False
+        if kind != "all":
+            return True
+        return QMessageBox.warning(
+            self, "내 기록 전부 지우기",
+            "정말 지울까요? 넥슨은 약 한 달치 경기만 다시 줍니다 — 그보다 옛 경기는 영영 사라집니다.\n"
+            "랭킹 수집도 꺼집니다.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+
+    def _on_clear_kind(self, kind: str) -> None:
+        if kind == "rank":
+            self._on_clear_rank()
+            self._measure_storage()
+            return
+        if not self._ask_storage(kind):
+            return
+        if kind == "dist":
+            self._clear_dist()
+            self._measure_storage()
+            return
+        # 시작 전에 — 끝 신호(_on_storage_cleared)가 먼저 와도 결과 글을 덮지 않게
+        self._set_storage_busy(True)
+        self.lb_storage.setText("지우는 중… — 도는 작업을 멈춘 뒤 지웁니다(창을 닫아도 이어서 지웁니다).")
+        why = self.parent().clear_storage(kind)
+        if why:
+            self._set_storage_busy(False)
+            self.lb_storage.setText(why)
+
+    def _clear_dist(self) -> None:
+        """구단주 분포·랭커 픽 — 기존 지우기 그대로(로더가 돌면 그 끝에서)."""
+        win = self.parent()
+        sched = getattr(win, "_owner_sched", None)
+        if sched is not None:
+            sched.purge_all()
+        else:
+            try:
+                ownerdist.purge(config.DB_PATH, everything=True, now=datetime.now())
+            except sqlite3.Error:
+                pass
+        purge = getattr(win, "purge_ranker_pick_data", None)
+        if purge is not None:
+            purge(everything=True)
+        refresh = getattr(win, "refresh_owner_dist_views", None)
+        if refresh is not None:
+            refresh()
+        self.lb_storage.setText("구단주 분포·랭커 픽을 지웠습니다 — 받는 중이던 것은 멈춘 뒤 지웁니다.")
+        self._refresh_owner_row()
+
+    CLEAR_TEXT = {"busy": "도는 작업이 멈추지 않았거나 다른 창(실행본)이 파일을 쓰고 있어 지우지 못했습니다 — 다른 창을 닫고 다시 눌러 주세요.",
+                  "cancelled": "앱을 닫느라 지우기를 멈췄습니다 — 아무것도 바뀌지 않았습니다.",
+                  "error": "지우다가 멈췄습니다(디스크 등) — 다시 눌러 주세요."}
+
+    def _on_storage_cleared(self, res) -> None:
+        self._set_storage_busy(False)
+        if res.state == "ok":
+            text = "지웠습니다." + (f" 다른 실행본이 열고 있는 {res.failed}개는 못 지웠습니다." if res.failed else "")
+            if res.kind == "all":
+                text += " 랭킹 수집도 꺼졌습니다."
+                self.chk_rank.blockSignals(True)
+                self.chk_rank.setChecked(False)
+                self.chk_rank.blockSignals(False)
+                self.lb_rank.setText(rank_status_text({}))
+        else:
+            text = self.CLEAR_TEXT.get(res.state, res.state)
+            if res.kind == "all":   # 수집 기록은 시작할 때 먼저 지웠다(clear_storage)
+                text += " 랭킹 수집 기록은 이미 지웠고 수집은 꺼졌습니다."
+        self.lb_storage.setText(text)
+        self._refresh_owner_row()
+        self._refresh_card_row()
+        self._measure_storage()
+
     def _ask_clear(self, keep_ouid: str | None) -> str | None:
         """→ "all" · "keep"(지금 계정 ELO 는 남김) · None(취소)."""
         box = QMessageBox(self)
@@ -12850,6 +13338,16 @@ class AboutDialog(QDialog):
         self.lb_msg.setText(elo if done else
                             f"{elo} 랭킹 수집 기록은 다른 실행본이 열고 있어 다음에 켤 때 지웁니다.")
         self._refresh_owner_row()
+
+
+def _size_text(n: int) -> str:
+    """[저장 공간] 크기 칸 — 약 값이라 자리 하나만."""
+    if n < 1024:
+        return f"{n} B" if n else "0"
+    for unit, div in (("GB", 2**30), ("MB", 2**20), ("KB", 2**10)):
+        if n >= div:
+            return f"{n / div:.1f} {unit}"
+    return f"{n} B"
 
 
 def rank_status_text(st: dict) -> str:

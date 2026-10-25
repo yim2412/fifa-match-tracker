@@ -435,6 +435,7 @@ class TraitRun:
     pick: rankerpick.PickResult | None = None
     block_streak: int = 0       # 막힌 날이 이어진 수 — TRAIT_BLOCK_DAYS 면 화면 스레드가 특성 받기를 끈다
     error: str = ""             # DB 잠김 등
+    mine: str = ""              # 57 K12 내 스쿼드 — collect_mine 의 상태("" = 안 봄)
 
     @property
     def last_web(self) -> TraitResult | None:
@@ -469,6 +470,90 @@ def run(api, session, conn, rows: list[dict], *, on_at: str | None, cancel: Call
     if out.last_web is not None and out.last_web.stop == "rate":
         out.block_streak = store.trait_block_streak(conn)
     return out
+
+
+# ── 내 계정(57 K12) — [포지션 특성] 탭 위 "내 스쿼드(지금)" ─────────────────────
+# 랭커 길과 같은 함수(find_team · _post · 하루 계수 trait_web)를 쓰되 대상이 내 계정 하나 — 경기는 fifa.db 의 내 최근 경기,
+# 구단주 번호는 닉네임으로 한 번 묻고(1요청) 줄에 둔다. 하루 한 번(my_traits.fetched_at) · 한 번에 최대 1 + 6 요청.
+# 내 계정인지(trade_state my_ouid + 키 지문)·관문(config.my_trait_allowed)은 부르는 쪽(TraitLoader)이 본다.
+
+MINE_STATES = {   # → 탭 위 한 줄
+    "fresh": "",
+    "ok": "",
+    "stale": "게임 안 팀 칸에 최근 경기 선발이 다 있는 팀이 없습니다 — 팀 전술을 저장하면 다음 날 다시 봅니다",
+    "nomatch": "저장된 내 경기가 없습니다 — 내 계정을 검색하면 채워집니다",
+    "nouser": "넥슨 스쿼드메이커에서 내 닉네임을 찾지 못했습니다",
+    "limit": f"오늘 넥슨 웹 상한({config.TRAIT_WEB_DAILY_REQ:,}요청)이라 내일 받습니다",
+    "cancelled": "",
+}
+
+
+def collect_mine(session, conn, ouid: str, *, now_fn=datetime.now, cancel: Callable[[], bool] = lambda: False,
+                 sleep=time.sleep, clock=time.monotonic, fetch=None, fetch_sn=None) -> str:
+    """내 계정의 지금 스쿼드 특성 → 상태(MINE_STATES 의 키 · 또는 TraitError.kind "rate"·"format"·"down"·"off").
+    fetch(session, sn, team_type, part)·fetch_sn(session, nickname) 은 테스트가 바꿔 끼운다."""
+    fetch, fetch_sn = fetch or fetch_team, fetch_sn or fetch_owner_sn
+    now = now_fn()
+    day = now.date().isoformat()
+    for kind, why in ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TRAIT_WEB_FORMAT, "format")):
+        if store.budget_hit_429(conn, day, (kind,)):
+            return why
+    row = store.my_traits(conn, ouid)
+    if row is not None and (row.get("fetched_at") or "")[:10] == day:
+        return "fresh"
+    detail, players = None, []
+    for d in store.load_details(conn, ouid, config.DEFAULT_MATCH_TYPE, limit=config.MY_TRAIT_RECENT):
+        players = rankerpick._starters(d, ouid)
+        if players:   # 몰수 등 빈 선발은 건너뛴다(57 K4 와 같은 까닭)
+            detail = d
+            break
+    if detail is None:
+        return "nomatch"
+    last: list[float | None] = [None]
+
+    def take() -> None:
+        if cancel():
+            raise _Stop
+        if not store.budget_take(conn, day, store.BUDGET_TRAIT_WEB, config.TRAIT_WEB_DAILY_REQ):
+            raise _WebLimit
+        if last[0] is not None:
+            wait = last[0] + config.RANKER_PICK_GAP_S - clock()
+            if wait > 0:
+                sleep(wait)
+        last[0] = clock()
+
+    def one(team_type: int, part: int):
+        take()
+        return fetch(session, sn, team_type, part)
+
+    try:
+        sn = row.get("sn") if row else None
+        if sn is None:
+            nick = store.account_nickname(conn, ouid)
+            if not nick:
+                return "nomatch"
+            take()
+            sn = fetch_sn(session, nick)
+            if sn is None:
+                return "nouser"
+        starters = [(p["spId"], p["spPosition"], p.get("spGrade")) for p in players]
+        found = find_team(starters, one, _team_order((row or {}).get("team")))
+    except _Stop:
+        return "cancelled"
+    except _WebLimit:
+        return "limit"
+    except TraitError as e:
+        if e.kind == "rate":
+            store.budget_mark_429(conn, day, store.BUDGET_TRAIT_WEB_BLOCK)
+        elif e.kind == "format":
+            store.budget_mark_429(conn, day, store.BUDGET_TRAIT_WEB_FORMAT)
+        return e.kind
+    body = ([[c.spid, c.position, c.grade, list(c.traits), list(c.trainer) if c.trainer else None] for c in found.pick.cards]
+            if found.pick is not None else None)
+    store.save_my_traits(conn, ouid, sn=sn, match_id=detail.get("matchId"),
+                         team=_team_key(found.pick.team) if found.pick else None, state=found.state, body=body,
+                         fetched_at=now.isoformat(timespec="seconds"))
+    return found.state
 
 
 # ── 집계([포지션 특성] 탭 — 화면은 core_api 로) ─────────────────────────────────

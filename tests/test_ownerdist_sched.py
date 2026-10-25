@@ -532,7 +532,9 @@ def test_main_window_never_yields_or_stops_the_owner_loader():
     """양보·우선순위 사슬을 넣지 않는다(ROADMAP 조각 ③ 설계) — 창에서 예약을 만지는 곳은 붙이기·끄는 길 동기화뿐."""
     meths = _main_window_methods()
     touching = {name for name, body in meths.items() if "_owner_sched" in body}
-    assert touching == {"__init__", "attach_owner_sched", "_sync_owner_dist"}, touching
+    # clear_storage(57 K9 내 기록 전부) — 양보가 아니라 지우기 길: [수집 기록 지우기] 와 같은 clear_rank_records 에 예약을 넘긴다
+    assert touching == {"__init__", "attach_owner_sched", "_sync_owner_dist", "clear_storage"}, touching
+    assert "clear_rank_records(self._rank_sched, None, self._owner_sched)" in meths["clear_storage"]
     for name in ("_api_background_busy", "_api_loader_busy", "stop_api_loaders", "busy_for_release", "hideEvent",
                  "release_memory"):
         assert name in meths, f"{name} 이 없어졌다 — 검사 목록을 고친다"

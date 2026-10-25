@@ -41,6 +41,7 @@
 | `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
 | `playerinfo.py` | 선수 카드 상세·능력치 시뮬레이터 스크래핑 · 급여·OVR 은 **본 카드 구역에서만** · 세부는 머리말 |
 | `store.py` | SQLite 누적(`fifa.db`) — **화면은 API 가 아니라 이 DB 를 본다** · **모든 연결 `secure_delete=ON`** · 새 쿼리는 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 없는지(`test_rules`) · 세부는 머리말 |
+| `storage.py` | [정보 › 저장 공간](57 K9) — 종류별 크기·지우기(작업 스레드에서만) · 내 기록 전부는 `store.RESET_KEEP` 행만 새 파일로 옮겨 fifa.db 바꿔 끼우기(**새 표를 만들면 `RESET_KEEP`/`RESET_WIPE` 중 하나에** — `test_storage` 가 스키마와 대조) · **새 작업 스레드는 `app_main.Worker` 를 물려받고 쓰는 저장소를 `WRITES` 에**(지우는 동안 걸쇠 `CLEARING` 이 start 를 막고 `running_writers` 가 멈출 대상을 찾는다 — 손 목록 없음 · `test_storage` 가 QThread 직접 상속·빈 WRITES 를 잡는다) |
 | `config.py` | `.env`에서 API 키 로드·저장(`save_api_key`), 웹 데이터 스위치(`WEB_DATA`)·랭킹 수집 스위치(`RANK_COLLECT`·`RANK_*` 상수 — `read_env_switches` 가 디스크에서 다시 읽는다)·UA, 매치 종류·조회 개수 기본값 |
 | `notice.py` | 이용 안내·개인정보·오픈소스 목록. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(문구 골든 `test_notice_text_bumps_version` 이 짝을 지킨다 · 바뀐 점은 `CHANGES` 에 버전별 한 덩이) · 새 패키지는 `THIRD_PARTY` 에 한 줄 · 세부는 머리말 |
 | `crashlog.py` | 처리 안 된 예외 → `crash.log`. exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다 · 세부는 머리말 |
@@ -75,6 +76,7 @@ python tests/test_rankmeta.py  # 랭커 메타 ② 스냅숏 읽기(하루 승�
 python tests/test_ownerdist.py    # 구단주 분포 받기 — 계수·상한·429·끊김 이어 받기·nocache·바퀴 상태·지우기(소금·해시가 파일 바이트에 없는지까지) — 가짜 API(네트워크 없음)
 python tests/test_ownerdist_sched.py   # 구단주 분포 예약·토글·동의 10·지우기 — 가짜 로더(네트워크 없음 · 창이 로더를 양보시키면 FAIL)
 python tests/test_cardcollect.py   # 카드 정보 자동 채우기(51단계) — 순서·계수·시도 기록·막힘·형식·날짜별 시세·예약·토글 · 시뮬레이터 칸 골든(sim_*.html.gz)
+python tests/test_storage.py      # 저장 공간(57 K9) 바꿔 끼우기·캐시 지우기·걸쇠 · 내 스쿼드 특성(K12) — 임시 폴더(네트워크 없음)
 python tests/test_rankerpick.py   # 선수 색인 · 랭커 픽 받기(상한·429·닉네임 바뀜) · 지우기(파일 바이트까지) — 가짜 API(네트워크 없음)
 python tools/season_notice.py 2026-11-12   # 종료일 공지 — 바꾼 본문 파일 + gh 명령 출력(공개는 사람이)
 python tests/test_window_size.py  # 창 크기 — FHD 100·125·150%·1366·175% 를 흉내 내 실제 창을 띄워 잰다

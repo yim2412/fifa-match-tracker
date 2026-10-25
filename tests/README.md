@@ -4,6 +4,7 @@
 
 `test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) ·
 `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스 — 자식은 `FIFA_DATA_DIR` 임시 폴더로, 안 주면 실제 fifa.db 를 열었다) ·
+`test_storage.py`(57 ③ 저장 공간 — 바꿔 끼우기·캐시 지우기·스키마 표 대조 · 걸쇠(`Worker.WRITES`) · 내 스쿼드 특성 받기 — 임시 폴더) ·
 `test_rankcollect.py`(수집기 — 가짜 목록) · `test_trades.py`(거래 받기·시세 캐시·랭커 기록 캐시 — 가짜 거래·랭커 목록) ·
 `test_traits.py`(포지션 특성 단계 1 — 이름표 · 팀 칸 응답 해석·구조 검사 · 맞는 팀 찾기(멈춤·stale·강화 다른 카드) · 요청 오류 분류 — 실응답 한 칸 픽스처 `squadmaker_team.json.gz` · 가짜 세션) ·
 `test_timeline.py`(타임라인·가계부 — 지어낸 경기·거래 · 1만 경기 예산) · `test_habits.py`(습관·기준선 2.6.1 — 등급 체류 · 구단주 분포 칩 판정(가짜 분포) · 손으로 센 지어낸 입력) · `test_rankerpick.py`(선수 색인·백필 · 랭커 픽 받기 규칙 · 지우기 — 가짜 API ·

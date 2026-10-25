@@ -340,7 +340,32 @@ CREATE TABLE IF NOT EXISTS card_price_days (
 -- 카드 수요(cardcollect.demand) — 구단주 → 그 경기 · 경기 → 양쪽 선발. match_squads PK 가 spid 로 시작해 이 둘로는 못 찾는다
 CREATE INDEX IF NOT EXISTS ix_ms_owner_day ON match_squads (owner, day);
 CREATE INDEX IF NOT EXISTS ix_ms_match ON match_squads (match);
+-- 내 계정 카드별 포지션 특성·코치(57 K12 — 스쿼드메이커 · 하루 한 번 덮어씀). trait_squads(랭커 · 켤 때 500위 밖을 지운다)와 따로.
+-- body = [[spid, 자리, 강화, [특성3], [코치3]|None], …] (trait_squads 와 같은 꼴) · sn 은 다음 날 구단주 번호를 다시 묻지 않으려고
+CREATE TABLE IF NOT EXISTS my_traits (
+    ouid       TEXT PRIMARY KEY,
+    sn         INTEGER,
+    match_id   TEXT,
+    team       TEXT,
+    state      TEXT NOT NULL,
+    body       TEXT,
+    fetched_at TEXT NOT NULL
+);
 """
+
+# [정보 › 저장 공간] 내 기록 전부(57 K9 ⑤) — fifa.db 를 바꿔 끼울 때 새 파일로 옮기는 표와 거르는 조건. 나머지 표는 전부 버린다
+# (RESET_WIPE — 스키마의 모든 표가 둘 중 하나에 있어야 한다: test_store 가 대조 · 새 표를 만들면 여기서 고른다).
+# api_budget 은 하루 계수라 지우면 상한이 풀린다 · 시즌표·팀컬러 효과표는 남의 자료가 아니고 웹 데이터가 꺼지면 다시 못 받는다.
+# trade_state 는 키 지문만 — my_ouid(사람)·predict_final:*(지우면 predictions 를 되살리는 정본)·거래 커서 done_*·top_stop_* 는 버린다.
+RESET_KEEP = {"api_budget": "", "seasons": "", "teamcolor_meta": "", "teamcolor_steps": "",
+              "trade_state": "WHERE key IN ('key_fp')"}
+RESET_WIPE = ("matches", "match_players", "accounts", "team_colors", "elo_history", "elo_track", "predictions",
+              "trades", "trades_prev", "card_prices", "card_info", "ranker_stats", "squad_owner", "squad_match",
+              "match_squads", "ranker_squads", "ranker_matches", "owner_dist_state", "owner_dist_done", "owner_dist",
+              "trait_squads", "card_extra", "card_tries", "card_price_days", "my_traits")
+# [저장 공간] 의 카드 정보(51 — K9 ②) · 구단주 분포·랭커 픽(K9 ⑥ — 크기만 · 지우기는 기존 purge 함수)
+CARD_TABLES = ("card_extra", "card_tries", "card_price_days")
+DIST_TABLES = ("owner_dist_state", "owner_dist_done", "owner_dist", "ranker_squads", "ranker_matches", "trait_squads")
 
 # 같은 (계정, 시각, 출처) 를 두 번 안 적는다 — 두 진입점(수집 회차 끝 · 팀컬러 목록 저장)이 차례 밖에서 겹쳐도
 # DB 가 막는다(확인 뒤 쓰기는 그 사이에 끼인다). 옛 DB 에 이미 겹친 줄이 있으면 만들기가 실패하므로 먼저 하나만 남긴다.
@@ -1802,3 +1827,88 @@ def owner_dist_has_data(conn: sqlite3.Connection) -> bool:
     """지울 것이 있나(진행 바퀴 · 분포 줄 · 이어 받기 표시) — 꺼진 동안 틱마다 빈 지우기(쓰기·체크포인트)를 하지 않게."""
     return conn.execute("SELECT EXISTS(SELECT 1 FROM owner_dist_state WHERE result IS NULL)"
                         " OR EXISTS(SELECT 1 FROM owner_dist) OR EXISTS(SELECT 1 FROM owner_dist_done)").fetchone()[0] == 1
+
+
+# ── 내 계정 특성(57 K12) ──────────────────────────────────────────────
+
+def my_traits(conn: sqlite3.Connection, ouid: str) -> dict | None:
+    """그 계정의 내 특성 줄 — body 는 풀어서. 없으면 None."""
+    r = conn.execute("SELECT * FROM my_traits WHERE ouid = ?", (ouid,)).fetchone()
+    if r is None:
+        return None
+    d = dict(r)
+    try:
+        d["body"] = json.loads(d["body"]) if d.get("body") else None
+    except ValueError:
+        d["body"] = None
+    return d
+
+
+def save_my_traits(conn: sqlite3.Connection, ouid: str, *, sn: int | None, match_id: str | None, team: str | None,
+                   state: str, body: list | None, fetched_at: str) -> None:
+    """하루 한 번 덮어쓴다 — 다른 계정 줄은 지운다(내 계정은 하나 · 키를 바꾸면 남의 줄이 남지 않게)."""
+    with conn:
+        conn.execute("DELETE FROM my_traits WHERE ouid != ?", (ouid,))
+        conn.execute("INSERT OR REPLACE INTO my_traits (ouid, sn, match_id, team, state, body, fetched_at)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                     (ouid, sn, match_id, team, state, json.dumps(body) if body is not None else None, fetched_at))
+
+
+def prune_my_traits(conn: sqlite3.Connection, keep_ouid: str | None) -> int:
+    """keep_ouid 밖 줄을 지운다(None = 전부) — 관문이 꺼졌거나 내 계정·키가 바뀌었을 때. → 지운 줄 수."""
+    if keep_ouid is None:
+        if conn.execute("SELECT 1 FROM my_traits LIMIT 1").fetchone() is None:
+            return 0   # 꺼진 동안 켤 때마다 빈 쓰기를 하지 않게
+        with conn:
+            return conn.execute("DELETE FROM my_traits").rowcount
+    if conn.execute("SELECT 1 FROM my_traits WHERE ouid != ? LIMIT 1", (keep_ouid,)).fetchone() is None:
+        return 0
+    with conn:
+        return conn.execute("DELETE FROM my_traits WHERE ouid != ?", (keep_ouid,)).rowcount
+
+
+# ── 저장 공간(57 K9) ─────────────────────────────────────────────────
+
+def table_bytes(conn: sqlite3.Connection, tables) -> int:
+    """표들의 값 바이트 합(근사 — 숫자는 자릿수로 센다). 이 PC 의 SQLite 에 dbstat 이 없어(57 P7) 파일 안 크기를 직접 못 잰다.
+    큰 본문 표(matches)에는 쓰지 않는다 — 600MB 를 다 읽는다."""
+    total = 0
+    for t in tables:
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({t})")]
+        if not cols:
+            continue
+        expr = " + ".join(f"COALESCE(LENGTH({c}), 0)" for c in cols)
+        total += int(conn.execute(f"SELECT COALESCE(SUM({expr}), 0) FROM {t}").fetchone()[0])
+    return total
+
+
+def clear_tables(conn: sqlite3.Connection, tables) -> int:
+    """표들을 비운다(한 트랜잭션 · secure_delete) → 지운 줄 수."""
+    n = 0
+    with conn:
+        for t in tables:
+            n += conn.execute(f"DELETE FROM {t}").rowcount
+    _checkpoint_quiet(conn)
+    return n
+
+
+def copy_kept(src_path: Path | str, dst_path: Path | str) -> int:
+    """내 기록 전부 지우기(K9 ⑤)의 새 파일 — dst 에 스키마를 만들고 src 에서 RESET_KEEP 만 옮긴다 → 옮긴 줄 수.
+    열은 이름으로 맞춘다(옛 DB 는 ALTER 로 늘린 열 순서가 다를 수 있다). 다 옮기면 dst 를 한 파일(-wal 없음)로 닫는다."""
+    dst = open_db(dst_path)
+    try:
+        dst.execute("ATTACH DATABASE ? AS old", (str(src_path),))
+        n = 0
+        with dst:
+            for t, where in RESET_KEEP.items():
+                have = {r["name"] for r in dst.execute(f"PRAGMA old.table_info({t})")}
+                cols = [r["name"] for r in dst.execute(f"PRAGMA main.table_info({t})") if r["name"] in have]
+                if not cols:
+                    continue   # 옛 파일에 없는 표
+                col = ", ".join(cols)
+                n += dst.execute(f"INSERT INTO main.{t} ({col}) SELECT {col} FROM old.{t} {where}").rowcount
+        dst.execute("DETACH DATABASE old")
+        dst.execute("PRAGMA journal_mode=DELETE")   # WAL 을 본 파일에 합치고 -wal 을 없앤다 — 바꿔 끼울 파일은 하나여야
+        return n
+    finally:
+        dst.close()
