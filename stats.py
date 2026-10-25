@@ -173,12 +173,14 @@ class WinRewards:
     rewarded_wins: int = 0          # FC 가 나온 승리
     fc: int = 0
     unknown_wins: int = 0           # division 이 빠진 승리 — 합계에 못 넣고 따로 센다
+    unknown_games: int = 0          # division 이 빠진 판(승·무·패) — 100판당 분모에서도 뺀다(합계에 못 넣은 승리가 분모에만 남지 않게)
     forfeit_wins: int = 0           # 보상에 센 몰수승(사용자 확인값 — 화면 기준 글에)
     by_division: dict = field(default_factory=dict)    # division → (이긴 판, FC)
 
     @property
     def per_100(self) -> float:
-        return self.fc / self.games * 100 if self.games else 0.0
+        known = self.games - self.unknown_games
+        return self.fc / known * 100 if known else 0.0
 
 
 def win_rewards(rows: list[WinDivision], table=None) -> WinRewards:
@@ -186,6 +188,7 @@ def win_rewards(rows: list[WinDivision], table=None) -> WinRewards:
     r = WinRewards()
     for w in rows:
         r.games += 1
+        r.unknown_games += w.division is None
         if w.outcome != "승":
             continue
         r.wins += 1

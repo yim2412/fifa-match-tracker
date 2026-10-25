@@ -1314,6 +1314,11 @@ def test_rewards_tab_counts_and_note():
     assert "FC 50" in _win.lb_rewards_summary.text() and "100판당 1,000" in _win.lb_rewards_summary.text(), _win.lb_rewards_summary.text()
     note = _win.lb_rewards_note.text()
     assert "5판 기준" in note and "탈주로 이긴 1판 포함" in note and "공식 수치가 아닌 확인값" in note, note
+    assert "등급 기록이 없는" not in note, note
+    # 등급 기록이 없는 승·패는 FC 합계에 못 넣으니 100판당 분모에서도 뺀다 — 넣으면 50/7 → 714 로 내려간다
+    _win._render_rewards(ds + [det(6, "승", None), det(7, "패", None)])
+    assert "100판당 1,000" in _win.lb_rewards_summary.text(), _win.lb_rewards_summary.text()
+    assert "등급 기록이 없는 2판(승리 1판)은 합계와 100판당에서 뺐습니다" in _win.lb_rewards_note.text(), _win.lb_rewards_note.text()
     _win._render_rewards([])
     assert _win.tbl_rewards.rowCount() == 0 and "셀 경기가 없습니다" in _win.lb_rewards_summary.text()
     _win._render_rewards(_win._details)   # 원래 데이터로 되돌린다
@@ -4370,6 +4375,24 @@ def test_max_division_survives_account_switch():
         config.DB_PATH, config.WEB_DATA = saved
         shutil.rmtree(tmp, ignore_errors=True)
         _win._division_names, _win._max_division = keep_names, keep_max
+        _restore_account()
+
+
+def test_methods_page_gets_division_names_late():
+    # 첫 실행(메타 캐시 없음)엔 산출 방법 글이 등급 번호로 만들어진다 — 조회로 이름이 오면 글도 이름으로 바뀌어야
+    champ = str(models.CHAMPION_DIVISION_ID)
+    keep_names = dict(_win._division_names)
+    try:
+        _win._division_names = {}
+        _win._refresh_methods_page()
+        assert f"양쪽 다 {champ} 이상" in _win.tb_methods.toPlainText(), "이름 없이 만든 글이 번호가 아니다(전제)"
+        _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {models.CHAMPION_DIVISION_ID: "늦은챔스"})
+        text = _win.tb_methods.toPlainText()
+        assert "양쪽 다 늦은챔스 이상" in text and f"양쪽 다 {champ} 이상" not in text, "이름이 와도 글이 번호 그대로"
+    finally:
+        _win._division_names = keep_names
+        _win._refresh_methods_page()
         _restore_account()
 
 

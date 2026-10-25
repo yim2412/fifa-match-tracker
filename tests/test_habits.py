@@ -905,9 +905,10 @@ def test_win_rewards_counts_by_hand():
     r = stats_.win_rewards(stats_.win_divisions(ds, "me"))
     # 900 승 2(일반 1 + 몰수 1) = 30 · 800 승 1 = 20 · 1000 승은 0 · division 없는 승 1 은 모름 · "오류" 는 분모에서도 뺀다
     assert (r.games, r.wins, r.rewarded_wins, r.fc) == (7, 5, 3, 50), r
-    assert (r.unknown_wins, r.forfeit_wins) == (1, 1), r
+    assert (r.unknown_wins, r.unknown_games, r.forfeit_wins) == (1, 1, 1), r
     assert r.by_division == {900: (2, 30), 800: (1, 20)}, r.by_division
-    assert abs(r.per_100 - 50 / 7 * 100) < 1e-9
+    # division 없는 판은 FC 합계에 못 넣으니 100판당 분모에서도 뺀다(7판이 아니라 6판)
+    assert abs(r.per_100 - 50 / 6 * 100) < 1e-9, r.per_100
 
 
 def test_win_rewards_ignores_other_match_types_and_other_players():

@@ -4786,8 +4786,8 @@ class MainWindow(QMainWindow):
                  "경기에 기록된 등급 그대로 셉니다(승격한 경기도 따로 다루지 않습니다)"]
         if r.forfeit_wins:
             parts.append(f"상대 탈주로 이긴 {r.forfeit_wins:,}판 포함")
-        if r.unknown_wins:
-            parts.append(f"등급 기록이 없는 승리 {r.unknown_wins:,}판은 합계에서 뺐습니다")
+        if r.unknown_games:
+            parts.append(f"등급 기록이 없는 {r.unknown_games:,}판(승리 {r.unknown_wins:,}판)은 합계와 100판당에서 뺐습니다")
         self.lb_rewards_note.setText(" · ".join(parts) + f" ({self._scope_text()})")
 
     # ── 성적 진단 [자리별 수준] (50단계 C4) ─────────────────────────────────────
@@ -6825,9 +6825,20 @@ class MainWindow(QMainWindow):
 
     def _build_methods_page(self) -> QWidget:
         """도움말 › 산출 방법(2.9.1 D2) — 글은 methods.py 가 만든다(수치는 config·xg_grid·analysis 에서 읽음)."""
-        tb = _notice_browser(methods.page_html(self._division_names))
+        self._methods_html = methods.page_html(self._division_names)
+        tb = _notice_browser(self._methods_html)
         self.tb_methods = tb
         return tb
+
+    def _refresh_methods_page(self) -> None:
+        """등급 이름을 늦게 알게 되면(첫 실행 — 메타 캐시 없음) 산출 방법 글의 번호를 이름으로. 글이 같으면 안 건드린다(스크롤 유지)."""
+        tb = getattr(self, "tb_methods", None)
+        if tb is None:
+            return
+        html = methods.page_html(self._division_names)
+        if html != self._methods_html:
+            self._methods_html = html
+            tb.setHtml(html)
 
     # ── 상대 전적 [상대 순위](43단계 N23) — 내 경기 × rank.db match_opp_rank(그 시즌 동안만) ─────────────────────
     OPP_RANK_COLUMNS = ["상대 순위", "경기", "승", "무", "패", "승률"]
@@ -9831,6 +9842,7 @@ class MainWindow(QMainWindow):
         sea = read_meta_on_disk(config.CACHE_DIR, "seasonid")
         if sea and not self._seasons:
             self._seasons = {m["seasonId"]: m for m in sea if isinstance(m, dict) and "seasonId" in m}
+        self._refresh_methods_page()
 
     def _division_icon_key(self, div_id):
         """등급 id → 등급 배지 키(CDN 번호). 모르면 None = 글자만."""
