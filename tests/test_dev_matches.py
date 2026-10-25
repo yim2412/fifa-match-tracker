@@ -191,6 +191,10 @@ def test_next_cap_table():
         assert M.next_cap([_day("2026-10-19", 100, hours=4)], "2026-10-20") == 100, "제시간(3시간) 넘김 → 그대로"
         assert M.next_cap([_day("2026-10-19", 100, hours=3)], "2026-10-20") == 200, "딱 3시간은 제시간"
         assert M.next_cap([_day("2026-10-19", 100, key=1)], "2026-10-20") == 100, "키 거절 → 그대로"
+        assert M.next_cap([_day("2026-10-19", 100, hours=11) | {"run_s": 3 * 3600}], "2026-10-20") == 200, \
+            "돈 시간(run_s)이 있으면 벽시계 대신 그것 — 딱 3시간은 제시간"
+        assert M.next_cap([_day("2026-10-19", 100, hours=1) | {"run_s": 3 * 3600 + 1}], "2026-10-20") == 100, \
+            "돈 시간이 넘으면 벽시계가 짧아도 그대로"
         assert M.next_cap([_day("2026-10-17", 100)], "2026-10-20") == 100, "어제 줄 없음 → 마지막 줄 상한"
         b = [_day("2026-10-15", 400, blocked=1, fin=False)]
         assert M.next_cap(b, "2026-10-16") == 200, "막힘 → 절반"
@@ -445,6 +449,54 @@ def test_deadline_finishes_current_person_then_stops():
         assert res.reason == "deadline" and not res.finished, res
         assert q1(d, "SELECT finished_at FROM days")[0] is None
         assert games_in(d) == {"m0a"}, f"돌던 사람(단 1 의 p0)은 마치고 새 사람은 안 받는다: {games_in(d)}"
+
+
+def test_open_db_adds_run_s_to_old_days_table():
+    """run_s 전의 dm.db(이 PC 에 이미 있다)를 열면 열이 붙고 옛 줄은 NULL — 벽시계 판정으로 남는다."""
+    with tmp() as d:
+        c = sqlite3.connect(str(d / "dm.db"))
+        c.execute("CREATE TABLE days (day TEXT PRIMARY KEY, cap INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0,"
+                  " blocked INTEGER NOT NULL DEFAULT 0, key_rejected INTEGER NOT NULL DEFAULT 0, stop TEXT,"
+                  " started_at TEXT NOT NULL, finished_at TEXT, stage TEXT)")
+        c.execute("INSERT INTO days (day, cap, started_at) VALUES ('2026-10-19', 5, '2026-10-19T09:00:00')")
+        c.commit()
+        c.close()
+        M.open_db(d / "dm.db").close()
+        assert q1(d, "SELECT run_s FROM days") == (None,)
+
+
+def test_run_seconds_exclude_gap_between_runs():
+    """제시간은 실행들이 실제로 돈 시간의 합 — 끊긴 뒤 11시간 지나 이어 끝내도 벽시계로 재지 않는다(10-22~24 상한 정체)."""
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_DAY_HOURS=6, DEV_MATCH_CAP_GROWTH=2.0) as d:
+        w = World()
+        for i in range(3):
+            w.person(f"p{i}", f"O{i}")
+            w.game(f"m{i}a", h(1), f"O{i}")
+        c = Clock()
+        n = [0]
+        orig = FakeAPI.get_match_detail_nocache
+
+        def slow(self, mid, attempts=1):
+            c.t += 100
+            n[0] += 1
+            return orig(self, mid, attempts)
+        FakeAPI.get_match_detail_nocache = slow
+        try:
+            r = rank_db(d, ["p0", "p1", "p2"])
+            res1 = go(d, r, w, clock=c, deadline=c.t + 50)
+            assert not res1.finished, res1
+            c.t += 11 * 3600          # PC 꺼짐 — 다음 실행까지 11시간
+            res2 = go(d, r, w, clock=c, now=NOW + timedelta(hours=11))
+            assert res2.finished, res2
+        finally:
+            FakeAPI.get_match_detail_nocache = orig
+        row = dict(zip(("cap", "run_s", "started_at", "finished_at"),
+                       q1(d, "SELECT cap, run_s, started_at, finished_at FROM days")))
+        assert n[0] == 3 and row["run_s"] == 300, f"상세 셋 × 100초만 센다(사이 11시간은 빼고): {row} · 상세 {n[0]}"
+        assert (datetime.fromisoformat(row["finished_at"]) - datetime.fromisoformat(row["started_at"])
+                ).total_seconds() > 6 * 3600, "벽시계로는 제시간을 넘긴 날이어야 이 테스트가 뜻이 있다"
+        nxt = (NOW + timedelta(days=1)).date().isoformat()
+        assert M.next_cap([row | {"day": NOW.date().isoformat(), "blocked": 0, "key_rejected": 0}], nxt) == row["cap"] * 2
 
 
 # ── 키 · 잠금 · fifa.db ───────────────────────────────────────────────────────

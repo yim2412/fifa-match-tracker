@@ -9,7 +9,8 @@
 |---|---|
 | 서비스 키(`DEV_NEXON_API_KEY`)가 없으면 요청 0 — 앱 키로 넘어가지 않는다(앱 한도를 태우면 앱이 원인 모를 429 를 받는다 · H4) | `run` |
 | 같은 날 ③(랭커 픽 dev)이 429 를 받았으면 시작 안 함 — fifa.db 는 읽기 전용 URI 로만, **한 줄도 안 쓴다** | `_pick_dev_hit_429` |
-| 하루 상한 `next_cap`: 전날 막힘 0 · 끝냄 · 6시간 안 → ×1.5(끝 35만) · 막힘 → 절반 + 달력 3일 유지 · 그 밖 그대로 | `next_cap` |
+| 하루 상한 `next_cap`: 전날 막힘 0 · 끝냄 · 실제로 돈 시간(`days.run_s`) 6시간 안 → ×1.5(끝 35만) · 막힘 → 절반 + 달력 3일 유지 · 그 밖 그대로 | `next_cap` |
+| "제시간"은 시작~끝 벽시계가 아니라 **실행들이 실제로 돈 시간의 합** — 00:00 실행이 PC 꺼짐으로 끊기고 아침에 이어 끝내면 벽시계로 11시간이 돼 10-22~24 사흘 상한이 안 올랐다(실제 7~45분). 사람마다 반영하니 끊긴 실행도 끊기기 전까지는 센다 | `_good_day` · `run_day` |
 | 요청마다: 취소·멈춤 → 429 쉼 대기 → 상한 → 요청(재시도 끔). 429 → 전원 60초 쉬고 한 번 더 → 또 429 면 막힘. 403 막힘 · 키 거절·400 → 그날 멈춤 · 5xx·네트워크 20연속 → 그날 멈춤(막힘 아님) | `_Gate.call` |
 | 목록 훑기는 **커서 `top_id` 에서만** 멈춘다 — games 에 있는지는 상세를 건너뛸지에만(상대가 먼저 넣은 경기에서 멈추면 그 아래가 빈다 · H3) | `_Run.scan` |
 | 커서는 옛 커서(또는 바닥)까지 다 훑은 뒤에만 올린다 — 중간에 끊기면 그대로, 다음 실행이 맨 앞부터 | `_Run.scan` |
@@ -112,7 +113,8 @@ CREATE TABLE IF NOT EXISTS days (
     stop TEXT,                      -- 그날 멈춘 사유(outage · key · blocked) — 다음 트리거가 그날 다시 안 돈다
     started_at TEXT NOT NULL,
     finished_at TEXT,               -- 할 일을 다 끝냈거나 상한을 다 썼다(제시간 판정 · 그날 다시 안 돈다)
-    stage TEXT                      -- 끝낸 단: '1' · 'done'
+    stage TEXT,                     -- 끝낸 단: '1' · 'done'
+    run_s REAL                      -- 그날 실행들이 실제로 돈 초의 합(제시간 판정) · NULL = 이 열 전의 줄(벽시계로 본다)
 );
 """
 
@@ -184,6 +186,8 @@ def summarize(detail) -> GameRow | None:
 def _good_day(r: dict) -> bool:
     if r["blocked"] or r["key_rejected"] or not r.get("finished_at"):
         return False
+    if r.get("run_s") is not None:
+        return r["run_s"] <= config.DEV_MATCH_DAY_HOURS * 3600
     took = datetime.fromisoformat(r["finished_at"]) - datetime.fromisoformat(r["started_at"])
     return took <= timedelta(hours=config.DEV_MATCH_DAY_HOURS)
 
@@ -328,6 +332,8 @@ def open_db(path: Path | str | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript(SCHEMA)
+    if "run_s" not in {r[1] for r in conn.execute("PRAGMA table_info(days)")}:
+        conn.execute("ALTER TABLE days ADD COLUMN run_s REAL")
     return conn
 
 
@@ -425,9 +431,10 @@ class _Db:
             if gap is not None:
                 self.conn.execute("UPDATE owners SET gap_at = MAX(COALESCE(gap_at, 0), ?) WHERE id = ?", (gap[1], gap[0]))
 
-    def set_used(self, day: str, used: int) -> None:
+    def set_used(self, day: str, used: int, run_s: float = 0.0) -> None:
         with self.lock, self.conn:
-            self.conn.execute("UPDATE days SET used = ? WHERE day = ?", (used, day))
+            self.conn.execute("UPDATE days SET used = ?, run_s = COALESCE(run_s, 0) + ? WHERE day = ?",
+                              (used, run_s, day))
 
 
 # ── 한 번 실행 ────────────────────────────────────────────────────────────────
@@ -737,6 +744,12 @@ def run_day(db_path, rank_conn, api_factory, *, cancel=lambda: False, clock=time
 
         run = _Run(db, gate, api_for_thread, now_fn, floor_at)
         stage = today["stage"]
+        flushed = [clock()]
+
+        def save_used():
+            t = clock()
+            db.set_used(day, gate.used, t - flushed[0])
+            flushed[0] = t
         pool = ThreadPoolExecutor(max_workers=config.DEV_MATCH_WORKERS, initializer=_worker_init)
 
         soft = []   # 새 사람만 안 받는 멈춤(시간 다 됨 · 취소) — 돌던 사람은 마친다. gate.reason 에 넣으면 돌던 사람이 반쪽으로 끊긴다
@@ -770,7 +783,7 @@ def run_day(db_path, rank_conn, api_factory, *, cancel=lambda: False, clock=time
                     if e is not None and not isinstance(e, _Halt):
                         run._bump(errors=1)
                         res.notes.append(f"{name}: {type(e).__name__}: {e}"[:300])
-                db.set_used(day, gate.used)
+                save_used()
                 if progress:
                     progress.set(f"{name} · {done_n:,}/{len(targets):,}명 · 요청 {gate.used:,}/{gate.cap:,}")
             res.persons += done_n
@@ -793,7 +806,7 @@ def run_day(db_path, rank_conn, api_factory, *, cancel=lambda: False, clock=time
             pass
         finally:
             pool.shutdown(wait=True, cancel_futures=True)
-        db.set_used(day, gate.used)
+        save_used()
         res.used, res.requests, res.reason = gate.used, gate.requests, gate.reason or (soft[0] if soft else "")
         res.new_games, res.errors = run.new_games, run.errors
         res.stage_done = stage
