@@ -196,7 +196,7 @@ CREATE TABLE IF NOT EXISTS ranker_stats (
 );
 -- 선수 색인(2.1.1 · 12 "선수로 구단주 찾기") — 카드 → 그 카드를 선발로 쓴 구단주. 정수 키라 2만 경기에 12MB 대
 -- (텍스트 키는 90MB — ROADMAP R2). matches.rowid 를 가리키지 않는다(TEXT PK 표의 rowid 는 VACUUM 때 바뀔 수 있다 — R12).
--- day = 경기 날짜의 date.toordinal(). 감독모드 경기만 줄을 쓰고, 다른 종류·선발 0명 경기도 squad_match 줄은 쓴다(다시 안 훑게)
+-- day = 경기 KST 날짜의 date.toordinal()(63 전 줄은 UTC 날 — fix_squad_days 가 한 번 다시 센다). 감독모드 경기만 줄을 쓰고, 다른 종류·선발 0명 경기도 squad_match 줄은 쓴다(다시 안 훑게)
 CREATE TABLE IF NOT EXISTS squad_owner (
     id       INTEGER PRIMARY KEY,
     ouid     TEXT UNIQUE NOT NULL,
@@ -489,8 +489,55 @@ SQUAD_BATCH = 1000        # 백필 한 트랜잭션 — 끊겨도 다음 실행�
 
 
 def match_day(match_date) -> int:
-    """경기 날짜 → 색인의 day(date.toordinal). 깨졌으면 ValueError."""
-    return date.fromisoformat(str(match_date)[:10]).toordinal()
+    """넥슨 matchDate 원문 → 색인의 day(KST 날의 date.toordinal — 63). 깨졌으면 ValueError."""
+    d = matchtime.day(match_date)
+    if d is None:
+        raise ValueError(f"경기 시각을 못 읽음: {match_date!r}")
+    return d.toordinal()
+
+
+SQUAD_DAY_FIX_KEY = "squad_day_t0"   # trade_state — 63 이전 버전이 UTC 날로 쓴 match_squads.day 를 KST 날로 다시 셌다는 표시
+SQUAD_DAY_FIX_BATCH = 20000          # 한 트랜잭션에 옮기는 줄 — 사본 실측(ROADMAP 63 조각 ②)으로 묶음 하나가 다른 쓰기의 대기(OPEN_TIMEOUT_S) 한참 안
+
+
+def fix_squad_days(conn: sqlite3.Connection, stop: Callable[[], bool] = lambda: False,
+                   batch: int = SQUAD_DAY_FIX_BATCH) -> bool:
+    """63 조각 ② — match_squads.day · squad_owner.last_day 를 KST 날로 한 번 다시 센다 → 끝났으면 True(표시를 남긴다).
+
+    날은 matches.match_date 원문에서 다시 세니 몇 번 돌아도 같은 값이다 — 묶음 사이에서 멈추면 다음 실행이 처음부터 다시 훑고,
+    이미 옮긴 줄은 건너뛴다. 바꿔 끼우기(새 표)는 기각: 그사이 index_squads 가 옛 표에 넣은 줄이 영구로 사라진다(M3).
+    줄을 읽은 뒤 지워진 경기(랭커 픽 지우기)는 UPDATE 가 아무것도 안 해 되살아나지 않는다.
+    last_day 는 match_squads 줄이 있는 구단주만 — 줄 없이 남은 검색 계정은 옛 값 그대로(M2)."""
+    if conn.execute("SELECT 1 FROM trade_state WHERE key = ?", (SQUAD_DAY_FIX_KEY,)).fetchone():
+        return True
+    days: dict[int, int] = {}
+    for sid, raw in conn.execute("SELECT s.id, m.match_date FROM squad_match s JOIN matches m ON m.match_id = s.match_id"):
+        d = matchtime.day(raw)
+        if d is not None:
+            days[sid] = d.toordinal()
+    moves: list[tuple] = []
+    owner_max: dict[int, int] = {}
+    for spid, day, match, owner, po in conn.execute("SELECT spid, day, match, owner, po FROM match_squads"):
+        new = days.get(match, day)   # 경기 본문이 없으면 옛 날 그대로
+        if new != day:
+            moves.append((new, spid, day, match, owner, po))
+        if new > owner_max.get(owner, -1):
+            owner_max[owner] = new
+    for i in range(0, len(moves), batch):
+        if stop():
+            return False
+        # OR REPLACE — 옛 버전과 번갈아 써서 새 날 줄이 이미 있으면 하나로 합친다(같은 경기·같은 자리)
+        conn.executemany("UPDATE OR REPLACE match_squads SET day = ?"
+                         " WHERE spid = ? AND day = ? AND match = ? AND owner = ? AND po = ?", moves[i:i + batch])
+        conn.commit()
+    if stop():
+        return False
+    conn.executemany("UPDATE squad_owner SET last_day = ? WHERE id = ? AND last_day IS NOT ?",
+                     [(d, o, d) for o, d in owner_max.items()])
+    conn.execute("INSERT OR REPLACE INTO trade_state (key, value) VALUES (?, ?)",
+                 (SQUAD_DAY_FIX_KEY, datetime.now().isoformat(timespec="seconds")))
+    conn.commit()
+    return True
 
 
 _SQUAD_INSERT = "INSERT OR IGNORE INTO match_squads (spid, day, match, owner, po, grade) VALUES (?, ?, ?, ?, ?, ?)"

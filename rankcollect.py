@@ -190,6 +190,7 @@ PERSON_TABLES = ("run_open", "elo_season", "champ_watch", "fc_season")
 FC_STARTED = "fc_started:"     # + season_at — 이 시즌 fc_season 이 처음 반영한 스냅숏의 데이터 시각(U9 등수 숨김 판정 · 한 번만 쓴다)
 FCG_STARTED = "fcg_started:"   # + season_at — 같은 것의 fc_games 판(57 ⓪ — 관문이 달라 시작이 다를 수 있다)
 PERSON_STATE = ("person_prev", "person_season")
+OPP_RANK_FIX_KEY = "opp_rank_t0"   # 63 — 옛 버전이 9시간 이른 경기 시각으로 고른 N23 짝을 (다시 채울 수 있는 범위만) 한 번 지웠다
 
 OPEN_TIMEOUT_S = 15
 _OPEN_LOCK = threading.Lock()  # WAL 전환은 잠금 대기를 안 거친다 — store._OPEN_LOCK 과 같은 이유
@@ -1707,14 +1708,25 @@ def fill_opp_rank(conn: sqlite3.Connection, now: datetime, *, fifa_path: Path | 
             return 0
         boundary, snaps = got
         cutoff = max(boundary, (min(s[1] for s in snaps) - timedelta(hours=config.OPP_SNAP_WINDOW_H)).isoformat())
+        mine_rows = fconn.execute(
+            "SELECT m.match_id, m.match_date FROM matches m INDEXED BY idx_matches_type_date"
+            " JOIN match_players p ON p.match_id = m.match_id"
+            " WHERE p.ouid = ? AND m.match_type = ? AND m.match_date >= ?",
+            (mine, config.DEFAULT_MATCH_TYPE, matchtime.raw_bound(cutoff))).fetchall()   # 스냅숏은 KST · 원문은 UTC
+        if not conn.execute("SELECT 1 FROM collect_state WHERE key = ?", (OPP_RANK_FIX_KEY,)).fetchone():
+            # 63 — 옛 버전이 9시간 이른 시각으로 고른 짝을 한 번 지운다. 원본 스냅숏이 남은 범위(cutoff 뒤)만 — 그보다 오래된
+            # 이번 시즌 줄은 다시 못 채워 지우면 영구로 사라진다(옛 짝으로 남고 시즌이 바뀔 때 비워진다). done 을 만들기 전에
+            ids = [r["match_id"] for r in mine_rows]
+            with conn:
+                for i in range(0, len(ids), 500):
+                    chunk = ids[i:i + 500]
+                    conn.execute(f"DELETE FROM match_opp_rank WHERE match_id IN ({','.join('?' * len(chunk))})", chunk)
+                conn.execute("INSERT OR REPLACE INTO collect_state (key, value) VALUES (?, ?)",
+                             (OPP_RANK_FIX_KEY, now.isoformat(timespec="seconds")))
         done = {r[0] for r in conn.execute("SELECT match_id FROM match_opp_rank")}
         by_snap: dict[int, list[str]] = {}
         day_of = {s[0]: s[2] for s in snaps}
-        for r in fconn.execute(
-                "SELECT m.match_id, m.match_date FROM matches m INDEXED BY idx_matches_type_date"
-                " JOIN match_players p ON p.match_id = m.match_id"
-                " WHERE p.ouid = ? AND m.match_type = ? AND m.match_date >= ?",
-                (mine, config.DEFAULT_MATCH_TYPE, matchtime.raw_bound(cutoff))):   # 스냅숏은 KST · 원문은 UTC
+        for r in mine_rows:
             if r["match_id"] in done:
                 continue
             when = matchtime.parse(r["match_date"])

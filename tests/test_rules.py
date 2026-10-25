@@ -312,9 +312,6 @@ RAW_TIME_SLICES = {10, 16, 19}
 RAW_TIME_ALLOW = {   # (파일, 함수, 따라간 도우미 — "" 는 그 함수 안 직접) → 이유. 조각·판정이 끝나면 지운다
     ("rankcollect.py", "fill_opp_rank", "season_raw_snaps"): "도우미의 [:10] 은 rank.db 상태(KST) 자르기 · 원문은 raw_bound/parse",
     ("tradecollect.py", "_top", "_overlap_floor"): "받기 쪽 — tradeDate 원문끼리 비교(경계도 원문 꼴) · 시각으로 안 읽는다",
-    ("store.py", "_squad_rows", "match_day"): "match_squads.day — 63 조각 ② 에서 match_day 를 matchtime.day 로(옛 줄 다시 채우기와 같이)",
-    ("tools/dev_matches.py", "summarize", "kst_epoch"): "dev_matches.db games.at — 63 조각 ② 에서 matchtime.epoch 로(+9h 옮기기와 같이)",
-    ("tools/dev_matches.py", "check_fc", "kst_epoch"): "같음 — 63 조각 ② (at_fixed 없으면 거부 M5)",
     ("tools/check_t0.py", "reference", ""): "63 골든 — 앱 코드(matchtime)와 독립인 기준 계산이라 일부러 원문을 직접 읽는다",
     ("check_api.py", "main", ""): "점검 수십 개가 한 함수 — 직접 파싱은 웹 랭킹 기준 시각(KST · ref_time)뿐, 넥슨 시각은 matchtime",
     ("tools/measure_cards.py", "b_freeze", ""): "51 측정 U1 — 11-26 판정까지 도구를 얼린다(:330·:471·:472 도 그때 같이 · 규칙이 못 보는 꼴)",
@@ -480,6 +477,7 @@ def _drive_uncovered() -> None:
             store.load_team_colors(conn, ["가", "나"])
             store.recent_searches(conn)
             store.match_dates(conn, "a", "2026-01-01")          # 예측(1.3.1) — test_predict·화면 스모크가 부른다
+            store.fix_squad_days(conn)                          # 63 옛 줄 날 다시 세기 — test_rankerpick·test_storage 가 부른다
             store.predictions(conn)
             store.predictions(conn, "a")
             store.account_nickname(conn, "a")                   # 거래 화면 띠(1.4.1) — 화면 스모크가 부른다

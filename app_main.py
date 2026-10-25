@@ -982,6 +982,7 @@ class SquadBackfillWorker(Worker):
     def __init__(self):
         super().__init__()
         self._cancel = False
+        self.day_fix_left = False   # 63 — 옛 줄 날 다시 세기(store.fix_squad_days)가 양보로 멈췄다
 
     def cancel(self) -> None:
         self._cancel = True
@@ -991,6 +992,8 @@ class SquadBackfillWorker(Worker):
         try:
             conn = store.open_db(config.DB_PATH)
             try:
+                # 색인보다 먼저 — 한 번만(표시가 있으면 바로 끝) · 사본 실측 5초
+                self.day_fix_left = not store.fix_squad_days(conn, stop=lambda: self._cancel)
                 left, total = store.unindexed_count(conn)
                 self.progress.emit(left, total)
                 store.backfill_squads(conn, stop=lambda: self._cancel,
@@ -6096,7 +6099,8 @@ class MainWindow(QMainWindow):
 
     def _on_backfill_finished(self) -> None:
         left = self._backfill_left[0] if self._backfill_left else 0
-        if left and not self._quitting:
+        w = self._backfill_worker
+        if (left or (w is not None and w.day_fix_left)) and not self._quitting:
             self._backfill_timer.start(self.BACKFILL_RETRY_S * 1000)  # 양보로 멈췄다 — 이어서
         self._show_backfill_note()
 

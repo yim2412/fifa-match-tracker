@@ -2177,6 +2177,34 @@ def test_opp_rank_fills_bands_gaps_and_unknown_rows():
             w.close()
 
 
+def test_opp_rank_refills_old_pairs_once():
+    """63 — 옛 버전이 9시간 이른 시각으로 고른 짝: 원본 스냅숏이 남은 범위의 줄만 한 번 지우고 다시 채운다(opp_rank_t0).
+    그보다 오래된 줄(다시 못 채우는 이번 시즌 줄)은 남긴다."""
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]
+    stale = ("m1", ME, 5000, 0, "2026-10-09")
+    for marked, want_m1 in ((True, (5000, 0, "2026-10-09")), (False, (200, 6, "2026-10-10"))):
+        with Env() as env:
+            w = OppEnv(env, ms)
+            try:
+                with w.c:
+                    w.c.executemany("INSERT INTO match_opp_rank (match_id, my_ouid, rank_band, gap_band, snap_day)"
+                                    " VALUES (?, ?, ?, ?, ?)", [stale, ("gone", ME, 200, 3, "2026-09-25")])
+                    if marked:   # 표시가 있으면(이미 지운 뒤) 옛 짝이 그대로 남는다 — 아래 단언이 지우기에서 왔다는 증거
+                        w.c.execute("INSERT INTO collect_state (key, value) VALUES (?, 'x')", (rc.OPP_RANK_FIX_KEY,))
+                _proc(w.c)
+                rows = _opp_rows(w.c)
+                assert rows["m1"] == want_m1, (marked, rows)
+                assert rows["gone"] == (200, 3, "2026-09-25"), "다시 못 채우는 줄을 지웠다 — 영구로 사라진다"
+                assert rc.OPP_RANK_FIX_KEY in rc.get_state(w.c)
+                if not marked:
+                    with w.c:
+                        w.c.execute("UPDATE match_opp_rank SET rank_band = 7 WHERE match_id = 'm1'")
+                    _proc(w.c)
+                    assert _opp_rows(w.c)["m1"][0] == 7, "두 번째 바퀴에 또 지웠다 — 한 번만이어야"
+            finally:
+                w.close()
+
+
 def test_opp_snap_window_hours_is_wired_to_config():
     # 스냅숏 09:00 · m1 은 1시간 앞 · m2 는 5시간 뒤. 기본(24시간)이면 둘 다 줄이 생긴다 — 이걸 먼저 단언해야
     # "창이 3시간이라 하나만 남았다"가 설정에서 왔다는 증거가 된다(코드에 24 가 박혀 있어도 첫 단언은 통과하므로 둘 다 본다)

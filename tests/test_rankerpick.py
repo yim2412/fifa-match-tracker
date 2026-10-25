@@ -193,6 +193,83 @@ def test_backfill_terminates_when_row_cannot_be_written():
     assert len(batches) <= 1, f"같은 경기를 {len(batches)}번 다시 집었다"
 
 
+def _late(m: dict) -> dict:
+    """원문 UTC 16시(KST 다음 날 01시) 경기로."""
+    return dict(m, matchDate=m["matchDate"][:10] + "T16:00:00")
+
+
+def _old_save(conn, details) -> None:
+    """63 전 버전이 색인한 것처럼 — match_squads.day 를 원문 앞 10글자(UTC 날)로."""
+    keep = store.match_day
+    store.match_day = lambda md: date.fromisoformat(str(md)[:10]).toordinal()
+    try:
+        store.save_matches(conn, details)
+    finally:
+        store.match_day = keep
+
+
+def _days(conn, match_id: str) -> set[int]:
+    return {r[0] for r in conn.execute("SELECT DISTINCT q.day FROM match_squads q JOIN squad_match s ON s.id = q.match"
+                                       " WHERE s.match_id = ?", (match_id,))}
+
+
+def _last_day(conn, ouid: str):
+    return conn.execute("SELECT last_day FROM squad_owner WHERE ouid = ?", (ouid,)).fetchone()[0]
+
+
+def test_new_index_uses_kst_day():
+    """63 — 새로 색인하는 경기는 KST 날(UTC 16시 = 다음 날 01시)."""
+    conn = _db()
+    store.save_matches(conn, [_late(_match("n", TODAY, [("o1", "가", _squad(100))]))])
+    assert _days(conn, "n") == {TODAY.toordinal() + 1}
+    assert _last_day(conn, "o1") == TODAY.toordinal() + 1
+
+
+def test_squad_day_fix_moves_old_rows_to_kst():
+    conn = _db()
+    late = _late(_match("late", TODAY, [("o1", "가", _squad(100)), ("o2", "나", _squad(200))]))
+    early = _match("early", TODAY - timedelta(days=2), [("o1", "가", _squad(100)), ("o3", "다", _squad(300))])
+    _old_save(conn, [late, early])
+    # 고치지 않으면 무엇이 남나 — 늦은 경기 줄이 UTC 날(TODAY)에 있다
+    assert _days(conn, "late") == {TODAY.toordinal()} and _last_day(conn, "o2") == TODAY.toordinal()
+    # 줄 없이 남은 구단주(랭커 픽 지우기가 남긴 검색 계정 · M2) — 옛 값 그대로여야
+    conn.execute("INSERT INTO squad_owner (ouid, nickname, last_day) VALUES ('lonely', '라', 12345)")
+    conn.commit()
+    rows = conn.execute("SELECT COUNT(*) FROM match_squads").fetchone()[0]
+    assert store.fix_squad_days(conn) is True
+    assert _days(conn, "late") == {TODAY.toordinal() + 1}, "KST 다음 날로 옮겨야"
+    assert _days(conn, "early") == {TODAY.toordinal() - 2}, "UTC 10시 경기는 그날 그대로"
+    assert conn.execute("SELECT COUNT(*) FROM match_squads").fetchone()[0] == rows, "줄 수는 그대로(옮기기만)"
+    assert _last_day(conn, "o1") == _last_day(conn, "o2") == TODAY.toordinal() + 1, "last_day 도 KST MAX"
+    assert _last_day(conn, "o3") == TODAY.toordinal() - 2
+    assert _last_day(conn, "lonely") == 12345, "줄 없는 구단주는 건드리지 않는다(M2)"
+    assert store.SQUAD_DAY_FIX_KEY in store.trade_state(conn), "표시가 없으면 켤 때마다 다시 훑는다"
+    o = _owners(conn, 200, days=0)
+    assert [x["ouid"] for x in o] == ["o2"] and o[0]["last_day"] == TODAY.toordinal() + 1, o
+
+
+def test_squad_day_fix_resumes_with_new_rows_in_between():
+    """M3 — 묶음 사이에 멈추고 그사이 새 경기가 색인돼도 줄이 안 사라지고, 다시 돌면 같은 값(몇 번 돌아도 같다)."""
+    conn = _db()
+    old = [_late(_match(f"m{i}", TODAY - timedelta(days=i), [(f"o{i}", f"n{i}", _squad(100 + i * 20))])) for i in range(4)]
+    _old_save(conn, old)
+    calls = []
+    assert store.fix_squad_days(conn, stop=lambda: calls.append(1) or len(calls) > 1, batch=11) is False, \
+        "묶음 하나 뒤 멈춤"
+    assert store.SQUAD_DAY_FIX_KEY not in store.trade_state(conn), "멈췄으면 표시를 안 남긴다"
+    moved = sum(1 for m in old if _days(conn, m["matchId"]) == {date.fromisoformat(m["matchDate"][:10]).toordinal() + 1})
+    assert moved == 1, f"묶음 하나(11줄 = 한 경기)만 옮겼어야: {moved}"
+    store.save_matches(conn, [_late(_match("new", TODAY, [("o9", "새", _squad(900))]))])   # 새 코드가 그사이 색인
+    assert store.fix_squad_days(conn) is True
+    for m in old + [_late(_match("new", TODAY, []))]:
+        assert _days(conn, m["matchId"]) == {date.fromisoformat(m["matchDate"][:10]).toordinal() + 1}, m["matchId"]
+    assert conn.execute("SELECT COUNT(*) FROM match_squads").fetchone()[0] == 5 * 11, "줄이 사라졌거나 늘었다"
+    conn.execute("DELETE FROM trade_state WHERE key = ?", (store.SQUAD_DAY_FIX_KEY,))
+    before = conn.execute("SELECT * FROM match_squads ORDER BY 1, 2, 3, 4, 5").fetchall()
+    assert store.fix_squad_days(conn) is True
+    assert conn.execute("SELECT * FROM match_squads ORDER BY 1, 2, 3, 4, 5").fetchall() == before, "두 번째에 값이 바뀌었다"
+
+
 def _synthetic(n: int) -> list[dict]:
     rnd = random.Random(7)
     pool = list(range(100000000, 100003000))

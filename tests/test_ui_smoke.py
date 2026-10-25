@@ -9166,6 +9166,43 @@ def test_backfill_waits_for_loaders_and_yields():
         _win._backfill_left = None
 
 
+def test_backfill_worker_fixes_squad_days_and_retries_when_stopped():
+    """63 — 색인 작업이 옛 줄 날 다시 세기(store.fix_squad_days)를 부른다 · 그게 양보로 멈췄으면 남은 경기가 0 이어도 다시 예약."""
+    conn = store.open_db(config.DB_PATH)
+    try:
+        conn.execute("DELETE FROM trade_state WHERE key = ?", (store.SQUAD_DAY_FIX_KEY,))
+        conn.commit()
+    finally:
+        conn.close()
+    w = app_main.SquadBackfillWorker()
+    low = app_main.rankcollect.lower_thread_priority
+    app_main.rankcollect.lower_thread_priority = lambda: None   # 화면 스레드에서 직접 돌린다 — 우선순위는 그대로
+    try:
+        w.run()
+    finally:
+        app_main.rankcollect.lower_thread_priority = low
+    conn = store.open_db(config.DB_PATH)
+    try:
+        assert store.SQUAD_DAY_FIX_KEY in store.trade_state(conn), "색인 작업이 날 다시 세기를 안 불렀다"
+    finally:
+        conn.close()
+    assert w.day_fix_left is False
+    keep = _win._backfill_worker
+    try:
+        _win._backfill_timer.stop()
+        _win._backfill_left = (0, 10)
+        _win._backfill_worker = w
+        _win._on_backfill_finished()
+        assert not _win._backfill_timer.isActive(), "할 일이 없는데 다시 예약했다 — 아래 단언이 비었다"
+        w.day_fix_left = True
+        _win._on_backfill_finished()
+        assert _win._backfill_timer.isActive(), "날 다시 세기가 멈췄는데 다시 예약하지 않았다"
+    finally:
+        _win._backfill_timer.stop()
+        _win._backfill_worker = keep
+        _win._backfill_left = None
+
+
 def test_card_owner_find():
     """12 — 이름 후보 → 카드 → 최근 30일 선발 구단주 · 색인 안 된 경기가 있으면 "색인 중" 줄."""
     d = json.loads(json.dumps(_DETAILS[0]))

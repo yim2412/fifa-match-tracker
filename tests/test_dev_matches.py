@@ -41,7 +41,12 @@ def detail(mid: str, at: datetime, a: str, b: str | None, *, res=("승", "패"),
                 "player": [{"spId": 100000000 + base * 100 + k, "spPosition": k, "spGrade": 5} for k in range(11)]
                 + [{"spId": 999, "spPosition": M.SUB_POSITION, "spGrade": 1}]}
     infos = [side(a, res[0], lineup[0])] + ([side(b, res[1], lineup[1])] if b else [])
-    return {"matchId": mid, "matchDate": at.strftime("%Y-%m-%dT%H:%M:%S"), "matchType": 52, "matchInfo": infos}
+    return {"matchId": mid, "matchDate": _raw(at), "matchType": 52, "matchInfo": infos}
+
+
+def _raw(at: datetime) -> str:
+    """at 은 KST 벽시계 — 넥슨 원문은 UTC 라 글자 그대로 9시간 뺀다(63 · 오프셋 상수로 빼면 오프셋 변이가 초록이 된다)."""
+    return (at - timedelta(hours=9)).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class World:
@@ -212,6 +217,7 @@ def test_summarize_and_lineup():
     d = detail("m1", h(1), "A", "B")
     g = M.summarize(d)
     assert g and g.match_id == "m1" and len(g.sides) == 2
+    assert g.at == int(h(1).replace(tzinfo=M.KST).timestamp()), "at 은 진짜 epoch(원문 UTC · 63)"
     assert g.sides[0].result == 1 and g.sides[1].result == -1 and g.sides[0].goals == 2 and g.sides[0].division == 800
     assert len(g.sides[0].lineup) == 66, "선발 11명 × 6바이트 — 교체 명단은 뺀다"
     p = d["matchInfo"][0]["player"]
@@ -986,7 +992,7 @@ def fifa_for_check(d, my, rows):
     if my:
         f.execute("INSERT INTO trade_state VALUES ('my_ouid', ?)", (my,))
     for mid, when, mt in rows:
-        f.execute("INSERT INTO matches VALUES (?, ?, ?, '{}')", (mid, mt, when.strftime("%Y-%m-%dT%H:%M:%S")))
+        f.execute("INSERT INTO matches VALUES (?, ?, ?, '{}')", (mid, mt, _raw(when)))
         f.execute("INSERT INTO match_players VALUES (?, ?)", (mid, my))
     f.commit()
     f.close()
@@ -1015,6 +1021,50 @@ def test_check_fc_counts_matches_dev_missed():
         c.close()
         out = []
         assert M.check_fc(d / "dm.db", d / "f.db", out=out.append) == 1 and "확인 전" in out[0], out
+
+
+def _old_db(d):
+    """63 전 dev_matches.db — meta 표 없이 9시간 이른 시각 열."""
+    c = sqlite3.connect(str(d / "dm.db"))
+    c.executescript(M.SCHEMA.replace("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);", ""))
+    c.executescript("""
+        INSERT INTO owners (id, ouid, gap_at) VALUES (1, 'A', 1000), (2, 'B', NULL);
+        INSERT INTO games (match_id, at, o1) VALUES ('g1', 5000, 1);
+        INSERT INTO cursor (owner, top_id, top_at, base_id, base_at) VALUES (1, 'g1', 5000, 'g0', 4000), (2, NULL, 7000, NULL, NULL);
+    """)
+    c.commit()
+    c.close()
+
+
+def test_fix_at_moves_match_times_once():
+    with tmp() as d:
+        _old_db(d)
+        conn = M.open_db(d / "dm.db")
+        try:
+            assert M.fix_at(conn) is True
+            assert M.fix_at(conn) is False, "두 번째는 표시가 있어 안 옮긴다"
+        finally:
+            conn.close()
+        assert q1(d, "SELECT at FROM games")[0] == 5000 + 32400
+        assert q1(d, "SELECT top_at, base_at FROM cursor WHERE owner = 1") == (5000 + 32400, 4000 + 32400)
+        assert q1(d, "SELECT top_at FROM cursor WHERE owner = 2")[0] == 7000, \
+            "경기가 없던 사람의 top_at 은 진짜 지금 epoch — 더하면 9시간 미래"
+        assert q1(d, "SELECT gap_at FROM owners WHERE id = 1")[0] == 1000 + 32400
+        assert q1(d, "SELECT gap_at FROM owners WHERE id = 2")[0] is None
+
+
+def test_run_day_moves_times_but_status_and_check_do_not():
+    """옮기기는 잠금을 쥔 수집(run_day)에서만 — --status·--check-fc 는 안 옮긴다(M5: 옮기기 전엔 check 가 거부)."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        _old_db(d)
+        fifa_for_check(d, "A", [])
+        M.status(d / "dm.db")
+        out = []
+        assert M.check_fc(d / "dm.db", d / "f.db", out=out.append) == 1 and "안 옮겼다" in out[0], out
+        assert q1(d, "SELECT at FROM games")[0] == 5000, "status·check 가 옮겼다"
+        w = World()
+        go(d, rank_db(d, []), w)
+        assert q1(d, "SELECT at FROM games WHERE match_id = 'g1'")[0] == 5000 + 32400, "수집 실행이 안 옮겼다"
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

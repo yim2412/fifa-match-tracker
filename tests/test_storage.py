@@ -44,6 +44,7 @@ def _fill(db: Path) -> None:
         conn.execute("INSERT INTO api_budget (day, kind, attempts) VALUES ('2026-10-20', 'trait_web', 7)")
         conn.execute("INSERT INTO card_tries (key, day, fails) VALUES ('p:1', '2026-10-20', 0)")
         conn.commit()
+        assert store.fix_squad_days(conn), "63 날 다시 세기 표시(squad_day_t0) — 초기화가 지우는지 아래에서 본다"
     finally:
         conn.close()
 
@@ -78,6 +79,9 @@ def test_reset_db_keeps_only_listed_rows():
             assert conn.execute("SELECT COUNT(*) FROM card_tries").fetchone()[0] == 0
             assert store.trade_state(conn) == {"key_fp": "fp1"}, "키 지문 밖 trade_state 가 남았다(my_ouid·predict_final·커서)"
             assert store.budget_used(conn, "2026-10-20", "trait_web") == 7, "하루 계수가 지워졌다 — 상한이 풀린다"
+            # 63 M1 — 표시가 지워져 날 다시 세기가 한 번 더 돌지만 match_squads 도 비었으니 빈 표에서 바로 끝난다
+            assert store.fix_squad_days(conn) and store.SQUAD_DAY_FIX_KEY in store.trade_state(conn)
+            assert conn.execute("SELECT COUNT(*) FROM match_squads").fetchone()[0] == 0
         finally:
             conn.close()
 

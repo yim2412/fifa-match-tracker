@@ -28,7 +28,8 @@
 | 저장하지 않는 것: 경기 상세 원본 · 슛·패스 · 상대 닉네임 · `.cache`(`get_match_detail_nocache`) | `summarize` |
 | 두 개가 동시에 못 돈다 — `msvcrt.locking`(프로세스가 죽으면 OS 가 푼다 · M7) | `acquire_lock` |
 
-**시각**: `games.at` 은 경기 상세 `matchDate`(앱 전체가 KST 로 읽는다)를 KST 로 본 epoch 초. "날"은 실행을 **시작한** KST 날짜(L3).
+**시각**: `games.at`·커서 `top_at`·`base_at`·`owners.gap_at` 은 진짜 epoch 초(`matchtime.epoch` — 넥슨 `matchDate` 는 UTC).
+63 전 줄은 UTC 원문을 KST 로 읽어 9시간 일렀다 — 수집 실행이 한 번 옮기고 `meta.at_fixed` 를 남긴다(`fix_at`). "날"은 실행을 **시작한** KST 날짜(L3).
 
 작업 스케줄러 `FifaDevMatches`(로그온 5분 뒤 + 2시간마다 · pythonw · 실행 제한 PT7H · 겹침 IgnoreNew) — 등록은 XML 로
 (`schtasks /create /tn FifaDevMatches /xml <파일>`). XML 은 이 PC 경로가 들어가 저장소에 두지 않는다.
@@ -61,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config  # noqa: E402
+import matchtime  # noqa: E402
 from nexon_api import KEY_INVALID_CODE, NETWORK_CODE, QUOTA_CODE, NexonAPIError  # noqa: E402
 
 DB_PATH = config.DATA_DIR / "dev_matches.db"
@@ -92,7 +94,7 @@ CREATE TABLE IF NOT EXISTS lineups (
 );
 CREATE TABLE IF NOT EXISTS games (
     match_id TEXT PRIMARY KEY,
-    at INTEGER NOT NULL,            -- matchDate 를 KST 로 본 epoch 초
+    at INTEGER NOT NULL,            -- matchDate(UTC)의 epoch 초(matchtime.epoch)
     end_type INTEGER,
     o1 INTEGER NOT NULL, d1 INTEGER, r1 INTEGER, g1 INTEGER, l1 INTEGER,
     o2 INTEGER, d2 INTEGER, r2 INTEGER, g2 INTEGER, l2 INTEGER
@@ -128,6 +130,7 @@ CREATE TABLE IF NOT EXISTS days (
     stage TEXT,                     -- 끝낸 단: '1' · '2' · '3' · 'done'(단 4 까지)
     run_s REAL                      -- 그날 실행들이 실제로 돈 초의 합(제시간 판정) · NULL = 이 열 전의 줄(벽시계로 본다)
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
 
 
@@ -151,6 +154,7 @@ class GameRow:
 
 
 def kst_epoch(s: str) -> int | None:
+    """KST 벽시계 문자열 → epoch — rank.db snapshots.taken_at 처럼 이미 KST 인 값에만(넥슨 matchDate 는 matchtime.epoch)."""
     try:
         return int(datetime.fromisoformat(s).replace(tzinfo=KST).timestamp())
     except (TypeError, ValueError):
@@ -178,7 +182,7 @@ def summarize(detail) -> GameRow | None:
     """경기 상세 → 한 경기 한 줄(양쪽). 깨졌으면 None — 그 경기만."""
     try:
         mid = detail.get("matchId")
-        at = kst_epoch(detail.get("matchDate") or "")
+        at = matchtime.epoch(detail.get("matchDate"))
         infos = [i for i in detail.get("matchInfo") or [] if isinstance(i, dict) and i.get("ouid")]
         if not mid or at is None or not infos:
             return None
@@ -355,6 +359,28 @@ _ADDED_COLUMNS = (   # 조각 ① 의 dm.db 가 이 PC 에 있다 — 새 열은
     ("cursor", "depth", "INTEGER"), ("cursor", "base_id", "TEXT"), ("cursor", "base_at", "INTEGER"),
     ("cursor", "back_day", "TEXT"), ("cursor", "back_req", "INTEGER NOT NULL DEFAULT 0"),
 )
+
+
+AT_FIXED_KEY = "at_fixed"   # meta — 63 전 시각 열(UTC 원문을 KST 로 읽어 9시간 이름)을 옮겼다
+
+
+def fix_at(conn: sqlite3.Connection) -> bool:
+    """63 — 경기에서 온 시각 열을 한 번 +MATCH_DATE_OFFSET_H 옮긴다 → 이번에 옮겼으면 True.
+
+    잠금을 쥔 수집 실행(run_day)에서만 부른다 — open_db 안이면 --status·--check-fc 도 옮기고, 그사이 잠금을 쥔 옛 코드
+    실행이 이른 at 을 계속 써도 표시가 붙어 다시 안 고친다. top_at 은 top_id 가 있는 줄만 — 경기가 없던 사람은 진짜 지금
+    epoch 라(_Run.scan) 더하면 9시간 미래가 돼 그 몫의 경기를 놓친다. base_id·depth 는 시각이 아니라 안 건드린다."""
+    if conn.execute("SELECT 1 FROM meta WHERE key = ?", (AT_FIXED_KEY,)).fetchone():
+        return False
+    s = config.MATCH_DATE_OFFSET_H * 3600
+    with conn:
+        conn.execute("UPDATE games SET at = at + ?", (s,))
+        conn.execute("UPDATE cursor SET top_at = top_at + ? WHERE top_id IS NOT NULL", (s,))
+        conn.execute("UPDATE cursor SET base_at = base_at + ? WHERE base_at IS NOT NULL", (s,))
+        conn.execute("UPDATE owners SET gap_at = gap_at + ? WHERE gap_at IS NOT NULL", (s,))
+        conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)",
+                     (AT_FIXED_KEY, datetime.now(KST).isoformat(timespec="seconds")))
+    return True
 
 
 def lineup_hash(body: bytes) -> int:
@@ -931,6 +957,7 @@ def run_day(db_path, rank_conn, api_factory, *, cancel=lambda: False, clock=time
     conn = open_db(db_path)
     db = _Db(conn)
     try:
+        fix_at(conn)
         rows = [dict(r) for r in conn.execute("SELECT * FROM days")]
         today = next((r for r in rows if r["day"] == day), None)
         if today is None:
@@ -1157,6 +1184,10 @@ def check_fc(db_path=None, fifa_db=None, out=print) -> int:
     f = _ro(fp)
     d = _ro(dp)
     try:
+        if d.execute("SELECT 1 FROM meta WHERE key = ?", (AT_FIXED_KEY,)).fetchone() is None:
+            # 63 M5 — 옮기기 전 games.at(9시간 이름)과 matchtime.epoch 를 비교하면 창 끝 몫이 "빠뜨린 경기"로 나온다
+            out("[FAIL] dev 경기 시각을 아직 안 옮겼다(63) — 수집을 한 번 돌린 뒤(--cap 1 --force 면 충분)")
+            return 1
         r = f.execute("SELECT value FROM trade_state WHERE key = 'my_ouid'").fetchone()
         mine = r[0] if r else None
         if not mine:
@@ -1177,7 +1208,7 @@ def check_fc(db_path=None, fifa_db=None, out=print) -> int:
         for mid, when in f.execute("SELECT m.match_id, m.match_date FROM matches m JOIN match_players p"
                                    " ON p.match_id = m.match_id WHERE p.ouid = ? AND m.match_type = ?",
                                    (mine, config.DEFAULT_MATCH_TYPE)):
-            at = kst_epoch(when)
+            at = matchtime.epoch(when)
             if at is not None and lo <= at <= hi:
                 app.add(mid)
     finally:
