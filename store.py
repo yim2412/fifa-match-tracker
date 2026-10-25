@@ -497,7 +497,7 @@ def match_day(match_date) -> int:
 
 
 SQUAD_DAY_FIX_KEY = "squad_day_t0"   # trade_state — 63 이전 버전이 UTC 날로 쓴 match_squads.day 를 KST 날로 다시 셌다는 표시
-SQUAD_DAY_FIX_BATCH = 20000          # 한 트랜잭션에 옮기는 줄 — 사본 실측(ROADMAP 63 조각 ②)으로 묶음 하나가 다른 쓰기의 대기(OPEN_TIMEOUT_S) 한참 안
+SQUAD_DAY_FIX_BATCH = 20000          # 한 트랜잭션에 옮기는 줄 — 사본 실측(docs/DONE.md 63 조각 ②)으로 묶음 하나가 다른 쓰기의 대기(OPEN_TIMEOUT_S) 한참 안
 
 
 def fix_squad_days(conn: sqlite3.Connection, stop: Callable[[], bool] = lambda: False,
