@@ -46,6 +46,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import config
+import matchtime
 import rankcollect
 import store
 import teamcolor
@@ -259,7 +260,7 @@ def collect(api, conn, targets: list[dict], *, source: str = store.PICK, now_fn=
                         store.save_matches(conn, [detail])
                         api.forget_details([mid])
                     stored = store.load_match(conn, mid)
-                    mday = str((stored or {}).get("matchDate") or "")[:10] or None
+                    mday = _detail_day(stored) or None
                     store.mark_ranker_match(conn, mid, day)
             except NexonAPIError as e:
                 if e.code == NETWORK_CODE or e.code in SERVER_CODES:
@@ -386,7 +387,7 @@ def ranker_pick_summary(conn, taken_at: str | None, targets: list[dict], today: 
         if detail is None:
             out.refetch += 1
             continue
-        if str(detail.get("matchDate") or "")[:10] < oldest:
+        if _detail_day(detail) < oldest:
             out.old += 1
             continue
         players = _starters(detail, h.get("ouid"))
@@ -480,9 +481,15 @@ def _ranker_players(conn, h: dict | None, t: dict, oldest: str) -> list[dict] | 
     if h is None or not h.get("match_id") or h.get("nickname") != t["nickname"]:
         return None
     detail = store.load_match(conn, h["match_id"])
-    if detail is None or str(detail.get("matchDate") or "")[:10] < oldest:
+    if detail is None or _detail_day(detail) < oldest:
         return None
     return _starters(detail, h.get("ouid")) or None
+
+
+def _detail_day(detail: dict | None) -> str:
+    """경기의 KST 날짜 `YYYY-MM-DD`(넥슨 원문은 UTC) — 없거나 깨졌으면 "". 낡음 비교·ranker_squads.match_day 가 이 꼴."""
+    d = matchtime.day((detail or {}).get("matchDate"))
+    return d.isoformat() if d else ""
 
 
 def _latest_detail(conn, ouid: str) -> dict | None:

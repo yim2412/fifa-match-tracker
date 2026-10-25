@@ -300,6 +300,91 @@ def rate_classes(srcs: dict[str, str]) -> set[str]:
     return out
 
 
+# ── 넥슨 시각 원문은 matchtime 에서만(63단계) ──────────────────────────────────
+# 넥슨 오픈API 시각은 UTC 라 직접 파싱하면 9시간 이르다(KST 로 읽던 27곳이 그랬다). 함수 단위로 ⓐ 원문을 읽고(키·SQL 열 문자열)
+# ⓑ 같은 함수에서 — 또는 그 함수가 부르는 같은 모듈 함수 한 단계 안에서 — fromisoformat·strptime·`[:10]` 꼴 자르기를 하면 걸린다.
+# 원문을 받는 줄과 파싱하는 줄이 갈라진 자리(변수에 받고 다음 줄 · 도우미 함수)가 줄 단위 검사로는 빠지기 때문이다.
+# `MatchSummary.match_date` 속성은 이미 KST 라 ⓐ 가 아니다(속성 이름 · 문자열 아님).
+RAW_TIME_FILES = ("*.py", "tools/*.py", "server/*.py")
+RAW_TIME_KEYS = {"matchDate", "achievementDate", "tradeDate", "createDate", "match_date", "trade_date"}
+RAW_TIME_SQL = re.compile(r"\b(match_date|trade_date)\b")
+RAW_TIME_SLICES = {10, 16, 19}
+RAW_TIME_ALLOW = {   # (파일, 함수, 따라간 도우미 — "" 는 그 함수 안 직접) → 이유. 조각·판정이 끝나면 지운다
+    ("rankcollect.py", "fill_opp_rank", "season_raw_snaps"): "도우미의 [:10] 은 rank.db 상태(KST) 자르기 · 원문은 raw_bound/parse",
+    ("tradecollect.py", "_top", "_overlap_floor"): "받기 쪽 — tradeDate 원문끼리 비교(경계도 원문 꼴) · 시각으로 안 읽는다",
+    ("store.py", "_squad_rows", "match_day"): "match_squads.day — 63 조각 ② 에서 match_day 를 matchtime.day 로(옛 줄 다시 채우기와 같이)",
+    ("tools/dev_matches.py", "summarize", "kst_epoch"): "dev_matches.db games.at — 63 조각 ② 에서 matchtime.epoch 로(+9h 옮기기와 같이)",
+    ("tools/dev_matches.py", "check_fc", "kst_epoch"): "같음 — 63 조각 ② (at_fixed 없으면 거부 M5)",
+    ("tools/check_t0.py", "reference", ""): "63 골든 — 앱 코드(matchtime)와 독립인 기준 계산이라 일부러 원문을 직접 읽는다",
+    ("check_api.py", "main", ""): "점검 수십 개가 한 함수 — 직접 파싱은 웹 랭킹 기준 시각(KST · ref_time)뿐, 넥슨 시각은 matchtime",
+    ("tools/measure_cards.py", "b_freeze", ""): "51 측정 U1 — 11-26 판정까지 도구를 얼린다(:330·:471·:472 도 그때 같이 · 규칙이 못 보는 꼴)",
+    ("tools/measure_cards.py", "b_freeze", "snapshot_list"): "같음(U1) — 도우미는 rank.db 스냅숏(KST) 읽기",
+}
+
+
+def _docstring_nodes(tree) -> set[int]:
+    out = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)) and n.body:
+            first = n.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant):
+                out.add(id(first.value))
+    return out
+
+
+def _raw_time_read(fn, docs: set[int]) -> int | None:
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docs:
+            if n.value in RAW_TIME_KEYS or RAW_TIME_SQL.search(n.value):
+                return n.lineno
+    return None
+
+
+def _time_parse(fn) -> int | None:
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("fromisoformat", "strptime"):
+            return n.lineno
+        if isinstance(n, ast.Subscript) and isinstance(n.slice, ast.Slice):
+            s = n.slice
+            if s.lower is None and s.step is None and _const(s.upper) in RAW_TIME_SLICES:
+                return n.lineno
+    return None
+
+
+def _local_calls(fn) -> set[str]:
+    out = set()
+    for n in ast.walk(fn):
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Name):
+                out.add(f.id)
+            elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in ("self", "cls"):
+                out.add(f.attr)
+    return out
+
+
+def check_raw_time(srcs: dict[str, str], allow: dict = RAW_TIME_ALLOW) -> list[str]:
+    out = []
+    for rel, src in srcs.items():
+        if rel == "matchtime.py":
+            continue
+        tree = ast.parse(src)
+        docs = _docstring_nodes(tree)
+        fns = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        parse_at = {f.name: _time_parse(f) for f in fns}
+        for f in fns:
+            a = _raw_time_read(f, docs)
+            if a is None:
+                continue
+            hits = [("", _time_parse(f))] + [(c, parse_at[c]) for c in sorted(_local_calls(f)) if parse_at.get(c)]
+            for via, b in hits:
+                if b is not None and (rel, f.name, via) not in allow:
+                    where = f":{b} ({via}() 안)" if via else f":{b}"
+                    out.append(f"{rel}:{a} {f.name}() — 넥슨 시각 원문을 {where} 에서 직접 파싱 · matchtime 으로")
+                    break
+    return out
+
+
 # ── SQL 실행 계획 ────────────────────────────────────────────────────────────
 
 SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py", "rankmeta.py", "cardcollect.py")
@@ -621,6 +706,40 @@ def test_temp_sort_check_catches_unindexed_order():
                          "ORDER BY m.payload": {"store.py:z"}})
     # 작은 표만 읽는 정렬은 봐주되, 큰 표가 하나라도 끼면 잡는다
     assert n == 4 and len(bad) == 2, (n, bad)
+
+def test_nexon_times_are_parsed_only_in_matchtime():
+    planted = {
+        "a.py": "def f(d):\n    return datetime.fromisoformat(d.get('matchDate'))\n",                 # 한 줄
+        "b.py": "def f(d):\n    raw = d['matchDate']\n    when = datetime.fromisoformat(raw)\n",        # 두 줄 꼴
+        "c.py": "def _p(s):\n    return datetime.strptime(s, '%Y')\n"
+                "def f(d):\n    return _p(d.get('matchDate'))\n",                                     # 도우미 함수 꼴
+        "d.py": "class L:\n    def _p(self, s):\n        return s[:10]\n"
+                "    def f(self, r):\n        return self._p(r['achievementDate'])\n",                 # 메서드 도우미
+        "e.py": "def f(c):\n    for r in c.execute('SELECT match_date FROM matches'):\n        yield r[0][:19]\n",  # SQL 열
+        "f.py": "def f(r):\n    return r.get('trade_date')[:10]\n",                                    # M4 Row 키
+        "g.py": "def f(r):\n    return str(r.get('createDate') or '')[:10]\n",
+    }
+    found = check_raw_time(planted, allow={})
+    assert len(found) == len(planted), found
+    ok = {"x.py": "def f(d):\n    '''matchDate 를 [:10] 으로 자르지 않는다'''\n    return matchtime.day(d.get('matchDate'))\n",
+          "y.py": "def f(ms):\n    return [m.match_date.isoformat()[:10] for m in ms]\n",     # KST 속성 — 원문 아님
+          "matchtime.py": "def parse(raw):\n    return datetime.fromisoformat(raw['matchDate'])\n"}
+    assert check_raw_time(ok, allow={}) == [], check_raw_time(ok, allow={})
+    files = [p for g in RAW_TIME_FILES for p in sorted(ROOT.glob(g))]
+    srcs = _all(files)
+    assert check_raw_time(srcs) == [], "\n".join(check_raw_time(srcs))
+    # 예외는 (함수, 도우미) 한 쌍만 가린다 — 같은 함수에 직접 파싱을 더 심으면 다시 걸린다(함수 통째로 가리면 fill_opp_rank 안
+    # 직접 파싱이 숨는다)
+    planted_fill = {"rankcollect.py": srcs["rankcollect.py"].replace(
+        "when = matchtime.parse(r[\"match_date\"])", "when = datetime.fromisoformat(r[\"match_date\"])")}
+    assert planted_fill["rankcollect.py"] != srcs["rankcollect.py"], "심을 자리가 바뀌었다"
+    assert any("fill_opp_rank()" in s for s in check_raw_time(planted_fill)), "예외가 함수 통째를 가린다"
+    # 예외 표가 실제로 걸리는 자리만 — 고쳐진 자리를 표에 남기면 다시 생겨도 못 잡는다
+    for k in RAW_TIME_ALLOW:
+        rest = {kk: v for kk, v in RAW_TIME_ALLOW.items() if kk != k}
+        assert any(f" {k[1]}()" in s for s in check_raw_time({k[0]: srcs.get(k[0], "")}, allow=rest)), \
+            f"예외 표에 더는 안 걸리는 자리: {k}"
+
 
 def test_watchdog_kills_hung_test():
     """테스트 감시(tests/watchdog.py)가 정말 끊는다 — 끝나지 않는 테스트를 1초 한도로 돌리면 종료 코드 3 · 이름 · 멈춘 줄.

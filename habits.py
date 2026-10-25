@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import config
+import matchtime
 from models import MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_mixed, is_weak, rated, win_pct
 from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, WinDivision, _goal_events, _me_opp, _num, _played, _result_of,
                    _set_mixed, _timeline_matches_board, _wdl_of, formation_of, position_line, win_rewards)
@@ -1325,11 +1326,8 @@ def history_runs(details: list[dict], ouid: str, kinds: tuple = ("nickname", "fo
     seq: list[tuple[datetime, str, str]] = []
     for d in details:
         me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ouid), None)
-        try:
-            when = datetime.fromisoformat(d.get("matchDate") or "")
-        except (TypeError, ValueError):
-            continue
-        if me is None:
+        when = matchtime.parse(d.get("matchDate"))
+        if when is None or me is None:
             continue
         seq.append((when, (me.get("nickname") or "").strip(), formation_of(me.get("player") or [])))
     seq.sort(key=lambda t: t[0])

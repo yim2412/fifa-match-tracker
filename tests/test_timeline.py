@@ -22,7 +22,8 @@ TODAY = date(2026, 10, 7)
 def _match(when: datetime, result: str = "승", gf: int = 1, ga: int = 0, starters=(), subs=()) -> dict:
     players = [{"spId": s, "spGrade": g, "spPosition": 5} for s, g in starters]
     players += [{"spId": s, "spGrade": g, "spPosition": st.SUB_POSITION} for s, g in subs]
-    return {"matchId": when.isoformat(), "matchDate": when.isoformat(timespec="seconds"),
+    raw = when - timedelta(hours=9)   # when 은 KST — 넥슨 원문은 UTC(63)
+    return {"matchId": when.isoformat(), "matchDate": raw.isoformat(timespec="seconds"),
             "matchInfo": [
                 {"ouid": "me", "matchDetail": {"matchResult": result}, "shoot": {"goalTotal": gf}, "player": players},
                 {"ouid": "opp", "matchDetail": {"matchResult": "패"}, "shoot": {"goalTotal": ga},

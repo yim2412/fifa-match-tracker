@@ -14,6 +14,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import config
 import core_api as core
 import images
+import matchtime
 import store
 from core_api import parse_match, summarize
 import nexon_api
@@ -68,7 +69,7 @@ def main() -> int:
         if row:
             names = {d.get("divisionId"): d.get("divisionName") for d in api.get_meta("division")}
             name = names.get(row.get("division"), row.get("division"))
-            print(f"[OK]   최고티어(감독모드): {name} · 최근 달성일 {str(row.get('achievementDate') or '')[:10]}")
+            print(f"[OK]   최고티어(감독모드): {name} · 최근 달성일 {matchtime.day(row.get('achievementDate')) or '-'}")
         else:
             print("[WARN] 역대 최고(감독모드): 기록 없음")
     except NexonAPIError as e:
@@ -79,7 +80,7 @@ def main() -> int:
     for kind in ("buy", "sell"):
         try:
             rows = api.get_trades(kind)
-            last = str(rows[0].get("tradeDate") or "")[:16] if rows else "-"
+            last = matchtime.label(rows[0].get("tradeDate")) if rows else "-"
             print(f"[OK]   거래 기록({kind}, 키 주인 것): 첫 쪽 {len(rows)}건 · 마지막 거래 {last}")
         except NexonAPIError as e:
             print(f"[WARN] 거래 기록({kind}): {e.message}  (code={e.code}, status={e.status})")
@@ -171,7 +172,7 @@ def main() -> int:
                 r = max(rows, key=lambda x: (x.get("status") or {}).get("matchCount") or 0)
                 st = r.get("status") or {}
                 print(f"[OK]   랭커 기록: 포지션 {len(rows)}/28곳 · 표본 {st.get('matchCount')}경기"
-                      f" · 경기당 슛 {st.get('shoot')} · 기준일 {str(r.get('createDate') or '')[:10]}")
+                      f" · 경기당 슛 {st.get('shoot')} · 기준일 {matchtime.day(r.get('createDate')) or '-'}")
             else:
                 print("[OK]   랭커 기록: 그 카드는 랭커 기록 없음(요청은 성공)")
     except NexonAPIError as e:
@@ -369,7 +370,7 @@ def main() -> int:
             total = store.match_count(conn, ouid, config.DEFAULT_MATCH_TYPE)
             a, b = store.date_range(conn, ouid, config.DEFAULT_MATCH_TYPE)
             print(f"[OK]   DB({config.DB_PATH.name}): 이번에 {new}건 저장 · "
-                  f"누적 {total}경기 ({a} ~ {b})")
+                  f"누적 {total}경기 ({matchtime.label(a)} ~ {matchtime.label(b)} KST)")
             elo = store.elo_history(conn, ouid)
             tracked = any(t["ouid"] == ouid for t in store.track_list(conn))
             print(f"[OK]   ELO 기록: 검색 {sum(r['source'] == 'search' for r in elo)}점 · "

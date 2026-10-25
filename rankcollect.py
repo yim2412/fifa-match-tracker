@@ -63,6 +63,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import config
+import matchtime
 import models
 import ranker
 import stats
@@ -1713,12 +1714,11 @@ def fill_opp_rank(conn: sqlite3.Connection, now: datetime, *, fifa_path: Path | 
                 "SELECT m.match_id, m.match_date FROM matches m INDEXED BY idx_matches_type_date"
                 " JOIN match_players p ON p.match_id = m.match_id"
                 " WHERE p.ouid = ? AND m.match_type = ? AND m.match_date >= ?",
-                (mine, config.DEFAULT_MATCH_TYPE, cutoff)):
+                (mine, config.DEFAULT_MATCH_TYPE, matchtime.raw_bound(cutoff))):   # 스냅숏은 KST · 원문은 UTC
             if r["match_id"] in done:
                 continue
-            try:
-                when = datetime.fromisoformat(r["match_date"])
-            except (TypeError, ValueError):
+            when = matchtime.parse(r["match_date"])
+            if when is None:
                 continue
             snap = _opp_snap_for(snaps, when)
             if snap is not None:

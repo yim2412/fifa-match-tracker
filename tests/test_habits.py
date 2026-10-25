@@ -1073,7 +1073,7 @@ def test_cal_summary_per_day():
 # ── 57 K4 이력 ────────────────────────────────────────────────────────────────
 
 def _hist_detail(i: int, nick: str, form_positions: list[int], ouid="me"):
-    when = datetime(2026, 10, 1, 9) + timedelta(hours=i)
+    when = datetime(2026, 10, 1, 9) + timedelta(hours=i) - timedelta(hours=9)   # 원문은 UTC(63) — 단언은 KST 9시부터
     return {"matchId": f"h{i}", "matchDate": when.isoformat(timespec="seconds"),
             "matchInfo": [{"ouid": ouid, "nickname": nick, "player": [{"spPosition": p} for p in form_positions]},
                           {"ouid": "opp", "nickname": "상대", "player": []}]}

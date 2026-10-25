@@ -848,6 +848,10 @@ EMBLEM_HEAD_PX = 32      # 대시보드 머리(구단주 카드) 엠블럼 높�
 FORMATION_HEAD_PX = 36   # 같은 머리의 주 포메이션 축구장(formation_pixmap 에 넘기는 높이)
 ICON_CACHE_SUBDIR = "icons"
 
+# 넥슨 오픈API 시각(matchDate·achievementDate·tradeDate·createDate)은 UTC 다 — 2026-10-25 실측(경기 원문 07:54 = 기준 화면
+# 16:54 · 거래 원문 10:21 = 게임 거래 기록 19:21). 앱은 KST 벽시계로 쓴다. 읽기는 matchtime.py 한 곳(63단계)
+MATCH_DATE_OFFSET_H = 9
+
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다
 FALLBACK_MATCH_TYPES = [

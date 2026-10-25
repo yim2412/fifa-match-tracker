@@ -13,6 +13,7 @@
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(2026-10-19 사용자: 무승부 포함 승÷전체 — `config.WIN_RATE_DRAWS_IN` 이 `is_mixed` 를 늘 거짓으로 · 끄면 A6 섞임 규칙 · 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
+| `matchtime.py` | **넥슨 오픈API 시각(matchDate·achievementDate·tradeDate·createDate)은 UTC** — 읽기는 여기서만(`parse` KST naive · `day` · `label` · SQL 경계 `raw_bound` · `epoch`) · 오프셋 `config.MATCH_DATE_OFFSET_H` · 저장 원문은 안 바꾼다 · 밖에서 직접 파싱하면 `test_rules`(함수 단위 + 도우미 한 단계 · 예외 표 `RAW_TIME_ALLOW`) · 63단계 |
 | `habits.py` | 내 경기 습관·기준선(2.6.1) — 계산만(화면은 `core_api`) · N2 등급 체류 `division_stays` · 기준선 `side_totals`·`paired_diff`(나 − 같은 경기 상대, 경기 단위 짝 구간) · N19 칩 `strength_chips`·전반 비중 `half_share_diff` · N17 골 흐름 `goal_flow` · N16 운 범위 `daily_luck` · A3 연승·연패 기준 `streak_baseline`(느려서 `app_main.HabitsWorker`) · 55 머리 줄·점수 리포트 `club_day`·`first_reach`·`score_report` · 55 달력 `calendar_days`(띠는 N16 과 같은 `luck_band`)(남들 값은 `rankmeta.club_head` — `EloLoader` 가 읽어 `EloSeries.club` · 글은 `app_main.club_cells`) · N20 경기 습관 `habit_tables`(카이제곱 `chi2_sf` 직접 구현 — scipy 없음) · N18 공격 루트 `classify_route`·`attack_routes`(상대 슛에도 같은 분류기 · 문턱 `config.N18_*` 에 실측 근거) · C4 자리별 수준 `pos_level`(분포는 `ownerdist.load_pos_dist` — v2 바퀴 · 칸마다 층 하한 · 상수 `config.C4_*` 는 측정 C 판정기와 같은 값) · 57 K4 이력 `history_runs`(깜빡임 `config.K4_MIN_RUN` · 빈 선발은 뺀다) · 세부는 머리말 |
 | `stats.py` | 여러 경기 집계 — 선수 지표·전술·경기 결과·랭커 비교·축구장 배치. 역산 상수가 여기 · 세부는 머리말 |
 | `xgmodel.py` · `xg_grid.py` | xG 격자(2.9.1 · 43 A5) — `xgmodel.predict(표, x, y, 종류 코드)` 읽기만(numpy 없음) · `xg_grid.py` 는 **생성물**(`python tools/fit_xg.py --write` — 판정 코드와 안에서 대조, 어긋나면 안 씀 · 손으로 안 고친다). `stats.shot_xg` 는 종류 **코드**를 받는다(이름이면 `TypeError` · payload 값은 `shot_type_code` 로 거른다) · 다시 생성하면 `test_parsing.XG_GOLDEN` 을 새로 옮긴다 |
@@ -89,6 +90,7 @@ python tools/review_kit.py bundle "## 2.1.1"   # 계획 검토 근거 묶음 (di
 python tools/dev_archive.py --status   # 개발용 상시 수집 현황(이 PC 전용 — 작업 스케줄러 FifaDevArchive 가 로그온·09:00 에 돈다)
 python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevMatches — 로그온 5분 뒤 + 2시간마다) · 시험은 --cap 300 --force
 python tools/measure_cards.py --status   # 51 측정 현황(D0 2026-10-19 · 오늘 할 일) · 판정 규칙 시험은 --selftest · 매일 도는 것은 작업 스케줄러 FifaMeasureCards(--daily · 로그 DATA_DIR/measure/run.log)
+python tools/check_t0.py               # 63 골든 — 내 계정 10-01~10-23 날마다 승·무·패·FC 를 앱 계산으로(이 PC 전용 · 골든은 DATA_DIR/t0_golden.json · --write)
 python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
 python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
 python tests/test_server.py            # 중앙 서버 쪽 — 영구 저장·동시 한 번·부정 캐시·허용 목록·서버 코드·IP/전체 몫·키·닉네임 안 샘(가짜 넥슨)
@@ -193,7 +195,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 
 계획 검토 때 검토자가 매번 눈으로 대조하던 규칙을 기계로 옮겼다 — 여기 있는 것은 **검토에서 다시 보지 않는다**.
 `QComboBox` 직접 생성 · 대화상자 `fit_to_screen` · 글자 파일·`subprocess(text=True)` 의 `encoding=` · `pyqtSignal(list/dict)` ·
-앱이 쓰는 모달이 화면 스모크 차단에 있는지 · **색은 `theme.py` 에서만** · **모든 SQL 의 실행 계획에 큰 표 `TEMP B-TREE` 없음**.
+앱이 쓰는 모달이 화면 스모크 차단에 있는지 · **색은 `theme.py` 에서만** · **모든 SQL 의 실행 계획에 큰 표 `TEMP B-TREE` 없음** ·
+**넥슨 시각 원문(UTC)은 `matchtime` 에서만 파싱**(63 — 테스트에 지어낸 원문을 쓸 땐 KST 로 뜻한 시각에서 **글자 그대로 9시간** 뺀다 ·
+`config.MATCH_DATE_OFFSET_H` 로 빼면 오프셋 변이가 초록이 된다).
 - 규칙마다 **위반을 심은 가짜 소스를 잡는지** 같이 단언한다(빈 검사 방지). 새 규칙도 그 꼴로.
 - SQL 은 파싱·수집 테스트를 그대로 돌리며 trace 로 모은다 — **SELECT 를 품은 함수가 한 번도 안 돌면 FAIL**(검사 밖이 생기지 않게).
   새 읽기 함수를 그 두 테스트가 안 부르면 `_drive_uncovered()` 에 한 줄.

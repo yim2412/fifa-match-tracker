@@ -1928,18 +1928,18 @@ def test_owner_dist_changed_signal_redraws_every_dist_view():
 def test_sc_records_list_and_nexon_line():
     keep_max = dict(_win._max_division)
     try:
-        # 0002(01-02 12:00) 900 → 0003(01-02 13:00) 800 → 0004(01-03) 900 : 진입 한 번
+        # 0002(01-02 12:00) 900 → 0003(01-02 13:00) 800 → 0004(01-03) 900 : 진입 한 번 — 픽스처 원문은 UTC 라 화면은 KST 21:00·22:00(63)
         det = _sc_details({"0003": 800})
         _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
-        assert _win.lb_sc_list.text() == "2026-01-02 · 1번 (13:00)", _win.lb_sc_list.text()
+        assert _win.lb_sc_list.text() == "2026-01-02 · 1번 (22:00)", _win.lb_sc_list.text()
         assert "2026-01-01 ~" in _win.lb_sc_note.text(), _win.lb_sc_note.text()
         assert _win.division_chart._markers == [1], _win.division_chart._markers  # 그날(01-02)에 세로 점선
         # 넥슨 최근 달성이 목록의 진입과 60초 안이면 같은 것 — 줄을 안 낸다
-        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T13:00:30"})
+        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T22:00:30"})
         assert _win.lb_sc_nexon.isHidden(), _win.lb_sc_nexon.text()
         # 5분 어긋나면 목록에 없는 것
-        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T13:05:00"})
+        _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T22:05:00"})
         assert not _win.lb_sc_nexon.isHidden()
         assert _win.lb_sc_nexon.text().startswith("넥슨 기록상 최근 달성 2026-01-02 (저장된 경기에서는 못 찾음"), \
             _win.lb_sc_nexon.text()
@@ -4305,7 +4305,7 @@ def test_loader_uses_prefetch_only_for_that_account():
 
 
 _MAXDIV_ROWS = [{"matchType": 50, "division": 900, "achievementDate": "2025-01-01T00:00:00"},
-                {"matchType": 52, "division": 800, "achievementDate": "2026-07-05T18:37:53"}]
+                {"matchType": 52, "division": 800, "achievementDate": "2026-07-05T09:37:53"}]   # 원문 UTC(63) = KST 18:37
 
 
 class _MaxDivApi(_DetailApi):

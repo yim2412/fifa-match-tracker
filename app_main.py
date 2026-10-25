@@ -51,6 +51,7 @@ import config
 import core_api as core
 import crashlog
 import images
+import matchtime
 import methods
 import notice
 import ownerdist
@@ -615,8 +616,10 @@ class MatchLoader(Worker):
                     and r.get("matchType") == config.DEFAULT_MATCH_TYPE), None)
         if row is None or row.get("division") is None:
             return {}
-        at = str(row.get("achievementDate") or "")
-        return {"division": row.get("division"), "date": at[:10], "at": at}
+        # KST 로 바꿔 담는다 — 넥슨 원문은 경기 시각과 같은 UTC 라, 경기(KST)와 ±60초 대조가 원문으로는 한 번도 안 맞는다
+        at = matchtime.parse(row.get("achievementDate"))
+        return {"division": row.get("division"), "date": f"{at:%Y-%m-%d}" if at else "",
+                "at": at.isoformat() if at else ""}
 
     def _send_max_division(self, fut, ouid: str) -> None:
         """끝났으면 지금, 아니면 끝나는 스레드에서. 여기서 기다리지 않는다(스레드가 살아 있으면 새 검색이 막힌다)."""

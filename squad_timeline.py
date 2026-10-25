@@ -28,6 +28,7 @@ from datetime import date, datetime
 from typing import NamedTuple
 
 import config
+import matchtime
 from models import RateMixin, draw_possible, is_mixed, is_weak
 
 SUB_POSITION = 28  # 교체 명단 — 출전으로 안 센다
@@ -108,15 +109,6 @@ class Timeline:
     has_trades: bool = False    # 내 계정이라 거래를 붙였다
 
 
-def _parse(raw) -> datetime | None:
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw.replace(" ", "T")[:19])
-    except ValueError:
-        return None
-
-
 def _goals(p: dict) -> int:
     v = (p.get("shoot") or {}).get("goalTotal")
     return int(v) if isinstance(v, (int, float)) else 0
@@ -126,7 +118,7 @@ def parse_trades(rows) -> list[Trade]:
     """store.load_trades 줄 → Trade(시간순). 날짜·카드가 빠진 줄만 버린다."""
     out = []
     for r in rows:
-        when, spid = _parse(r.get("trade_date")), r.get("spid")
+        when, spid = matchtime.parse(r.get("trade_date")), r.get("spid")   # 거래 원문도 UTC(10-25 게임 거래 기록과 대조)
         if when is None or spid is None or r.get("kind") not in (KIND_BUY, KIND_SELL):
             continue
         out.append(Trade(r["kind"], str(r.get("sale_sn")), when, int(spid), r.get("grade"), r.get("value")))
@@ -142,7 +134,7 @@ class _Games:
         for d in details:
             infos = d.get("matchInfo") or []
             me = next((p for p in infos if p.get("ouid") == ouid), None)
-            when = _parse(d.get("matchDate"))
+            when = matchtime.parse(d.get("matchDate"))
             if me is None or when is None:
                 continue
             opp = next((p for p in infos if p.get("ouid") != ouid), {})

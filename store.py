@@ -49,6 +49,7 @@ except ImportError:  # pragma: no cover — 설치 안 된 환경
     JSON_ENGINE = "json"
 
 import config
+import matchtime
 from seasons import Season
 
 SCHEMA = """
@@ -1019,15 +1020,16 @@ def clear_elo(conn: sqlite3.Connection, keep_ouid: str | None = None) -> int:
 # ── 시즌 말 순위 예측 (1.3.1) ────────────────────────────────────────────────
 
 def match_dates(conn: sqlite3.Connection, ouid: str, since: str, match_type: int = config.DEFAULT_MATCH_TYPE) -> list[datetime]:
-    """그 계정의 since(ISO) 뒤 경기 시각 — 예측의 내 하루 경기 수. 몰수·오류 경기도 넥슨 ELO 에 들어가므로 다 센다."""
+    """그 계정의 since(KST · ISO 또는 날짜) 뒤 경기 시각(KST) — 예측의 내 하루 경기 수. 몰수·오류 경기도 넥슨 ELO 에
+    들어가므로 다 센다. 원문 열은 UTC 라 경계를 원문 꼴로 바꿔 비교한다(열을 SQL 안에서 고치면 색인을 못 쓴다)."""
     out = []
     for r in conn.execute("SELECT m.match_date FROM matches m INDEXED BY idx_matches_type_date"
                           " JOIN match_players p ON p.match_id = m.match_id"
-                          " WHERE m.match_type = ? AND m.match_date >= ? AND p.ouid = ?", (match_type, since, ouid)):
-        try:
-            out.append(datetime.fromisoformat(r["match_date"]))
-        except (TypeError, ValueError):
-            continue
+                          " WHERE m.match_type = ? AND m.match_date >= ? AND p.ouid = ?",
+                          (match_type, matchtime.raw_bound(since), ouid)):
+        when = matchtime.parse(r["match_date"])
+        if when is not None:
+            out.append(when)
     return out
 
 

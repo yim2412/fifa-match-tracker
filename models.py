@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 import config
+import matchtime
 
 # division 메타(오픈API get_meta('division'))는 숫자가 작을수록 높은 등급이다.
 #   800 슈퍼챔피언스 · 900 챔피언스 · 1000 슈퍼챌린지 · 1100~1300 챌린지1~3 · ...
@@ -148,17 +149,6 @@ def _f(d: dict, key: str) -> float:
     return float(v) if isinstance(v, (int, float)) else 0.0
 
 
-def _parse_date(raw: str) -> datetime | None:
-    if not raw:
-        return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try:
-            return datetime.strptime(raw, fmt)
-        except ValueError:
-            continue
-    return None
-
-
 def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
     """내 ouid 기준으로 한 경기를 요약한다. 내가 안 낀 경기면 None."""
     infos = detail.get("matchInfo") or []
@@ -174,7 +164,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
 
     return MatchSummary(
         match_id=detail.get("matchId", ""),
-        match_date=_parse_date(detail.get("matchDate", "")),
+        match_date=matchtime.parse(detail.get("matchDate")),   # KST — 넥슨 원문은 UTC
         match_type=detail.get("matchType", 0),
         my_nickname=me.get("nickname") or "-",
         opponent=opp.get("nickname") or "-",

@@ -2129,7 +2129,9 @@ ME = "ouid-me"
 
 
 def _opp_match(mid, when, opp_nick, my_nick="내닉", opp_ouid=None, result="승"):
-    return {"matchId": mid, "matchType": 52, "matchDate": when,
+    """when 은 KST(스냅숏과 같은 시계) — 넥슨 원문은 UTC 라 9시간 빼서 담는다(63)."""
+    raw = (datetime.fromisoformat(when) - timedelta(hours=9)).isoformat(timespec="seconds")
+    return {"matchId": mid, "matchType": 52, "matchDate": raw,
             "matchInfo": [{"ouid": ME, "nickname": my_nick, "matchDetail": {"matchResult": result}},
                           {"ouid": opp_ouid or f"ouid-{opp_nick}", "nickname": opp_nick, "matchDetail": {"matchResult": "패"}}]}
 

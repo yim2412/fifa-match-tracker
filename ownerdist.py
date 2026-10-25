@@ -42,6 +42,7 @@ from datetime import date, datetime, timedelta
 
 import config
 import habits
+import matchtime
 import store
 from nexon_api import QUOTA_CODE, NexonAPIError
 
@@ -423,7 +424,8 @@ def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecuto
                     pos = habits.pos_diff(d, ouid)
                 except Exception:  # noqa: BLE001 — 새 계산의 실패가 기본 지표를 깎지 않게
                     pos = _V2_FAIL
-            return rows, (d.get("matchDate") or ""), pos
+            day = matchtime.day(d.get("matchDate"))   # KST 날(넥슨 원문은 UTC) — 저장값이 날짜만이라 여기서 바꾼다
+            return rows, (day.isoformat() if day else ""), pos
         except _Halt:
             raise
         except Exception as e:  # noqa: BLE001 — 한 경기 실패(응답·파싱)가 나머지를 막지 않는다

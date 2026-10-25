@@ -20,6 +20,7 @@ from itertools import combinations
 from typing import NamedTuple
 
 import config
+import matchtime
 import xg_grid
 import xgmodel
 # 등급 상수·판정은 models 에 있다(A6 의 draw_possible 이 써서) — 예전 이름 그대로 다시 내보낸다.
@@ -46,14 +47,14 @@ def division_trend(details: list, ouid: str) -> list[tuple[datetime, int]]:
     날짜나 division 이 빠진 경기는 건너뛴다."""
     out: list[tuple[datetime, int]] = []
     for d in details:
-        raw = d.get("matchDate")
+        when = matchtime.parse(d.get("matchDate"))
         me = next((p for p in d.get("matchInfo") or []
                    if p.get("ouid") == ouid), None)
         div = me.get("division") if me else None
-        if not raw or div is None:
+        if when is None or div is None:
             continue
         try:
-            out.append((datetime.fromisoformat(raw), int(div)))
+            out.append((when, int(div)))
         except (ValueError, TypeError):
             continue
     out.sort(key=lambda t: t[0])
@@ -144,12 +145,8 @@ def win_divisions(details: list, ouid: str) -> list[WinDivision]:
             continue
         result = (me.get("matchDetail") or {}).get("matchResult") or ""
         outcome = "승" if "승" in result else "무" if "무" in result else "패" if "패" in result else None
-        raw = d.get("matchDate")
-        if outcome is None or not raw:
-            continue
-        try:
-            when = datetime.fromisoformat(raw)
-        except (ValueError, TypeError):
+        when = matchtime.parse(d.get("matchDate"))
+        if outcome is None or when is None:
             continue
         div = me.get("division")
         out.append(WinDivision(when, div if isinstance(div, int) else None, outcome, "몰수" in result))
@@ -415,7 +412,7 @@ def own_squad(details: list[dict], ouid: str):
         me, _ = _me_opp(d, ouid)
         if me is None:
             continue
-        return me.get("player") or [], d.get("matchDate", "-"), _result_of(me)
+        return me.get("player") or [], matchtime.label(d.get("matchDate")), _result_of(me)
     return None
 
 
@@ -432,7 +429,7 @@ def opponent_squad(details: list[dict], ouid: str, opponent_nickname: str):
             continue
         if (opp.get("nickname") or "-") != opponent_nickname:
             continue
-        return opp.get("player") or [], d.get("matchDate", "-"), _result_of(me)
+        return opp.get("player") or [], matchtime.label(d.get("matchDate")), _result_of(me)
     return None
 
 
@@ -1505,13 +1502,7 @@ def _played(p: dict) -> bool:
 
 
 def _match_day(d: dict) -> date | None:
-    s = d.get("matchDate")
-    if not isinstance(s, str) or len(s) < 10:
-        return None
-    try:
-        return date.fromisoformat(s[:10])
-    except ValueError:
-        return None
+    return matchtime.day(d.get("matchDate"))
 
 
 def player_finishing_trend(details: list[dict], ouid: str, sp_id: int) -> list[WeekFinishing]:
@@ -2172,7 +2163,8 @@ def ranker_values(r: dict | None) -> tuple[int, str, dict] | None:
     n = _num(st, "matchCount")
     if not r or not n:
         return None
-    return int(n), str(r.get("createDate") or "")[:10], _metric_values(st, 1)
+    day = matchtime.day(r.get("createDate"))   # 넥슨 원문 UTC(실측 `…T17:30:00` = KST 다음 날 02:30 — 받은 날과 같다)
+    return int(n), day.isoformat() if day else "", _metric_values(st, 1)
 
 
 def ranker_compare(details: list[dict], ouid: str, ranker: dict, limit: int | None = None) -> list[RankerRow]:

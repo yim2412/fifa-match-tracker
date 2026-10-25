@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import config
@@ -1234,7 +1234,7 @@ def test_ranker_values_are_per_game():
     """랭커 값은 이미 경기당 평균이다(실측 — matchCount 20 이면 0.05 단위) — matchCount 로 또 나누면 조용히 틀린다."""
     r = _ranker(1, 25, shoot=0.75, goal=0.4, passTry=10.0, passSuccess=9.0, dribbleTry=0, matchCount=20)
     n, day, vals = st.ranker_values(r)
-    assert (n, day) == (20, "2026-10-05")
+    assert (n, day) == (20, "2026-10-06")   # 원문 10-05T17:30 은 UTC(63) = KST 10-06 02:30 — 넥슨 실값 꼴이라 입력은 그대로
     assert vals["슛"] == 0.75 and vals["골"] == 0.4, vals
     assert vals["패스 성공률"] == 90.0 and vals["드리블 성공률"] == 0.0, vals
     assert st.ranker_values(None) is None and st.ranker_values(_ranker(1, 2, shoot=1, matchCount=0)) is None
@@ -1257,8 +1257,9 @@ def test_ranker_compare_uses_most_played_position_only():
 
 
 def test_match_day_needs_full_date():
-    assert st._match_day({"matchDate": "2026-10-02T10:00:00"}).isoformat() == "2026-10-02"
-    assert st._match_day({"matchDate": "2026-10-02"}).isoformat() == "2026-10-02"  # 시각 없이 날짜만(딱 10자)
+    assert st._match_day({"matchDate": "2026-10-02T01:00:00"}).isoformat() == "2026-10-02"   # 원문 UTC(63) = KST 10시
+    assert st._match_day({"matchDate": "2026-10-01T15:00:00"}).isoformat() == "2026-10-02"   # KST 자정 딱
+    assert st._match_day({"matchDate": "2026-10-02"}) is None   # 날짜만 — 시각 없이는 KST 날을 모른다(63 4판 · 실데이터엔 없다)
     assert st._match_day({"matchDate": "2026-10-0"}) is None and st._match_day({}) is None
 
 
@@ -2291,6 +2292,83 @@ def test_methods_page_reads_its_numbers_from_the_constants():
         config.FC_REWARDS = saved
         config.OPP_MIN_KNOWN = saved_min
     assert [t for t, _ in methods.sections()][:2] == ["승률", "기대득점(xG)"]
+
+
+# ── 63단계: 넥슨 시각은 UTC → 앱은 KST(matchtime) ─────────────────────────────
+
+def _t0_detail(raw: str, result: str = "승") -> dict:
+    return {"matchId": raw, "matchType": 52, "matchDate": raw, "matchInfo": [
+        {"ouid": "me", "nickname": "나", "division": 900, "matchDetail": {"matchResult": result}, "player": []},
+        {"ouid": "op", "nickname": "너", "division": 900, "matchDetail": {"matchResult": "패"}, "player": []}]}
+
+
+def test_matchtime_reads_nexon_utc_as_kst():
+    import matchtime
+    # 2026-10-25 실측: 원문 07:54:04 = 기준 화면 16:54:04 KST
+    assert matchtime.parse("2026-10-25T07:54:04") == datetime(2026, 10, 25, 16, 54, 4)
+    assert matchtime.parse("2026-10-24T15:30:00") == datetime(2026, 10, 25, 0, 30)   # UTC 15시 뒤 = KST 다음 날
+    assert matchtime.parse("2026-10-24 15:30:00") == datetime(2026, 10, 25, 0, 30)   # 옛 공백 꼴
+    assert matchtime.day("2026-10-24T14:59:59") == date(2026, 10, 24)
+    assert matchtime.day("2026-10-24T15:00:00") == date(2026, 10, 25)
+    for bad in ("2026-10-24", "", None, "2026-10-2", "x" * 19):   # 날짜만은 KST 날을 모른다(4판)
+        assert matchtime.parse(bad) is None and matchtime.day(bad) is None, bad
+    assert matchtime.label("2026-10-24T15:30:00") == "2026-10-25 00:30" and matchtime.label(None) == "-"
+    assert matchtime.epoch("2026-10-24T15:30:00") == int(datetime(2026, 10, 24, 15, 30, tzinfo=timezone.utc).timestamp())
+    # 경계 → 원문 꼴(소수초 없음) — datetime · 날짜만 · 소수초 ISO 셋 다(fill_opp_rank 의 cutoff 가 둘 다 온다)
+    assert matchtime.raw_bound(datetime(2026, 10, 25, 0, 30)) == "2026-10-24T15:30:00"
+    assert matchtime.raw_bound("2026-10-25") == "2026-10-24T15:00:00"
+    assert matchtime.raw_bound(date(2026, 10, 25)) == "2026-10-24T15:00:00"
+    assert matchtime.raw_bound("2026-10-25T00:30:00.250000") == "2026-10-24T15:30:00"
+    for kst in (datetime(2026, 10, 25, 0, 30), datetime(2026, 1, 1, 8, 59, 59)):
+        assert matchtime.parse(matchtime.raw_bound(kst)) == kst
+    # 같은 초에서 원문 >= 경계가 참(문자열 비교)
+    assert "2026-10-24T15:30:00" >= matchtime.raw_bound(datetime(2026, 10, 25, 0, 30))
+
+
+def test_kst_day_boundaries_follow_matchtime():
+    """화면이 보는 길마다 UTC 15:30 경기가 KST 다음 날로 — 오프셋을 0 으로 되돌리면 전부 FAIL."""
+    import habits
+    import rankcollect
+    late = _t0_detail("2026-10-24T15:30:00")         # KST 10-25 00:30
+    early = _t0_detail("2026-10-24T14:30:00", "패")   # KST 10-24 23:30
+    m = models.parse_match(late, "me")
+    assert m.match_date == datetime(2026, 10, 25, 0, 30) and m.date_text == "2026-10-25 00:30"
+    rows = st.win_divisions([late, early], "me")
+    assert (habits.club_day(rows, date(2026, 10, 25)).win, habits.club_day(rows, date(2026, 10, 25)).lose) == (1, 0)
+    assert (habits.club_day(rows, date(2026, 10, 24)).win, habits.club_day(rows, date(2026, 10, 24)).lose) == (0, 1)
+    assert [w for w, _ in st.division_trend([late], "me")] == [datetime(2026, 10, 25, 0, 30)]
+    assert st._match_day(late) == date(2026, 10, 25)
+    assert st.own_squad([late], "me")[1] == "2026-10-25 00:30"           # 상대 스쿼드 제목 — 원문이 아니라 KST 글
+    assert st.opponent_squad([late], "me", "너")[1] == "2026-10-25 00:30"
+    # 시즌 첫날 — 새 시즌 5-28 00:00 KST 직전·직후(원문은 5-27 15:00 UTC 앞뒤)
+    s_before = models.parse_match(_t0_detail("2026-05-27T14:59:00"), "me").match_date
+    s_after = models.parse_match(_t0_detail("2026-05-27T15:01:00"), "me").match_date
+    assert sn.season_of(_SEASONS, s_before) == _S2 and sn.season_of(_SEASONS, s_after) == _S3
+    # N23 짝 — 스냅숏(KST)이 경기 KST 시각 ±1시간이면 그 스냅숏(원문 그대로 읽으면 9시간 어긋나 창 밖)
+    snaps = [(1, datetime(2026, 10, 25, 1, 0), "2026-10-25"), (2, datetime(2026, 10, 24, 15, 0), "2026-10-24")]
+    saved = config.OPP_SNAP_WINDOW_H
+    try:
+        config.OPP_SNAP_WINDOW_H = 2
+        assert rankcollect._opp_snap_for(snaps, m.match_date)[0] == 1
+    finally:
+        config.OPP_SNAP_WINDOW_H = saved
+
+
+def test_match_dates_bound_is_kst():
+    """예측의 하루 경기 수 — 경계(KST)를 원문(UTC) 꼴로 바꿔 SQL 에 넣는다. 원문과 그대로 비교하면 KST 00~09시 경기가 빠진다."""
+    import tempfile
+    import store
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        conn = store.open_db(tmp / "t.db")
+        store.save_matches(conn, [_t0_detail("2026-10-24T15:30:00"), _t0_detail("2026-10-24T14:30:00", "패")])
+        assert store.match_dates(conn, "me", "2026-10-25") == [datetime(2026, 10, 25, 0, 30)]
+        assert sorted(store.match_dates(conn, "me", "2026-10-24T23:30:00")) == [datetime(2026, 10, 24, 23, 30),
+                                                                               datetime(2026, 10, 25, 0, 30)]
+        conn.close()
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

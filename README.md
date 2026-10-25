@@ -341,6 +341,9 @@ https://fconline.nexon.com/datacenter/rank_inner?rt=manager&strCharacterName=<�
 오픈API 는 경기에 시즌을 달아주지 않는다(`matchDate` 만 준다). 대신 데이터센터
 랭킹 페이지가 **시즌 목록을 기간과 함께** 갖고 있어서, 그 기간표로 경기를 나눈다.
 
+- 넥슨 오픈API 시각(`matchDate` 등)은 **UTC** 다 — `matchtime.py` 가 KST 로 바꿔 읽는다(2026-10-25 실측 ·
+  그전엔 모든 경기 시각이 9시간 일렀다). 시즌표 날짜는 KST 그대로 경기의 KST 시각과 견준다.
+
 ```
 https://fconline.nexon.com/datacenter/rank?rt=manager
 → ChangeSeason(89) "시즌 3 (2026-05-28~2026-07-30)"

@@ -70,7 +70,8 @@ def _detail(mid: str, ouid: str, i: int, players: bool = True) -> dict:
     if players:   # 지표 값은 i 에 따라 흔든다 — 구단주·경기마다 다르게
         me["player"] = [_pl(14, goal=i % 2, drib=2), _pl(14, eff=1), _pl(5, tackle=2 + i % 3, block=1), _pl(25, goal=1), _pl(0)]
         op["player"] = [_pl(14, drib=1), _pl(5, tackle=1), _pl(25)]
-    return {"matchId": mid, "matchDate": f"2026-10-12T{10 + i % 10:02d}:00:00", "matchInfo": [me, op]}
+    # 원문은 UTC(63) — 01~10시 = KST 10~19시, 같은 날
+    return {"matchId": mid, "matchDate": f"2026-10-12T{1 + i % 10:02d}:00:00", "matchInfo": [me, op]}
 
 
 class FakeAPI:
@@ -491,8 +492,8 @@ def test_new_rows_store_the_last_match_date_only():
         r = e.run()
         assert r.result == "done"
         rows = store.owner_dist_rows(e.conn, r.round_id)
-        assert rows and all(x["last_match"] == "2026-10-12" for x in rows), rows   # 지어낸 경기는 2026-10-12T1x:00:00
-        assert b"2026-10-12T1" not in e.files(), "마지막 경기 시각이 파일 바이트에 남았다"
+        assert rows and all(x["last_match"] == "2026-10-12" for x in rows), rows   # 지어낸 경기는 원문 2026-10-12T0x·T10
+        assert b"2026-10-12T" not in e.files(), "마지막 경기 시각이 파일 바이트에 남았다"
 
 
 # ── 50단계 C4 재료(pos_json · v2 바퀴) ─────────────────────────────────────────

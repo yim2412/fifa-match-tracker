@@ -297,7 +297,7 @@ def _starters_of(conn, h: dict) -> tuple[list[dict], str | None]:
     detail = store.load_match(conn, h["match_id"])
     if detail is None:
         return [], None
-    return rankerpick._starters(detail, h.get("ouid")), (str(detail.get("matchDate") or "")[:10] or None)
+    return rankerpick._starters(detail, h.get("ouid")), (rankerpick._detail_day(detail) or None)
 
 
 def _web_due(t: dict, h: dict | None, tr: dict | None, now: datetime) -> bool | None:
