@@ -12965,8 +12965,10 @@ class AboutDialog(QDialog):
         v.addLayout(row)
         # 폭은 탭 줄이 원하는 만큼 — 고정 620 이던 때 탭 6개(합 837)가 안 들어가 ◀ ▶ 로 넘겨야 했고
         # 마지막 탭은 아예 안 보였다(2026-10-05). 화면보다 넓으면 fit_to_screen 이 줄인다.
+        # 높이 780 — 600 이던 때 [저장 공간] 표(여섯 줄)가 아래 토글 묶음에 밀려 두 줄만 보였다(57 ③ 실화면). 작은 화면은
+        # fit_to_screen 이 줄이고 그 탭의 세로 스크롤이 받는다
         m = v.contentsMargins()
-        fit_to_screen(self, max(620, tabs.tabBar().sizeHint().width() + m.left() + m.right()), 600)
+        fit_to_screen(self, max(620, tabs.tabBar().sizeHint().width() + m.left() + m.right()), 780)
 
     def _sched(self):
         return getattr(self.parent(), "_rank_sched", None)
