@@ -207,6 +207,45 @@ def test_modal_calls_fail_fast():
             pass
 
 
+def _stray_windows_while(build) -> list[str]:
+    """build() 동안 최상위 창으로 보이게 된 위젯(돌려준 창 자신은 빼고) — 켤 때 작은 창이 깜빡이던 원인을 잰다."""
+    from PyQt6.QtCore import QObject
+
+    class _Watch(QObject):
+        def __init__(self):
+            super().__init__()
+            self.shown = []
+
+        def eventFilter(self, obj, ev):
+            if ev.type() == QEvent.Type.Show and getattr(obj, "isWindow", lambda: False)():
+                self.shown.append(obj)
+            return False
+
+    w = _Watch()
+    _app.installEventFilter(w)
+    try:
+        made = build()
+    finally:
+        _app.removeEventFilter(w)
+    return [f"{type(o).__name__} {o.objectName()!r}" for o in w.shown if o is not made]
+
+
+def test_main_window_build_shows_no_stray_windows():
+    from PyQt6.QtWidgets import QLabel
+    # 재는 장치부터: 레이아웃에 넣기 전에 보이면 부모 없는 위젯이 창으로 잡혀야 한다(안 잡히면 아래 검사가 빈 것)
+    lone = QLabel("t")
+    assert _stray_windows_while(lambda: lone.setVisible(True)), "부모 없는 QLabel 을 창으로 못 잡았다"
+    lone.hide()
+    lone.deleteLater()
+    # 2.13.3 — Card 제목(widgets.Card)·WrapBar 구분선이 addWidget 전에 보여 켤 때 작은 창이 4번 깜빡였다
+    made = []
+    stray = _stray_windows_while(lambda: made.append(app_main.MainWindow(_NoApi())) or made[0])
+    for w in made:
+        w.close()
+        w.deleteLater()
+    assert not stray, f"메인 창을 만드는 동안 따로 뜬 창 {len(stray)}개: {stray[:5]}"
+
+
 def test_loaded_opens_dashboard():
     assert _AFTER_LOAD == (_win.PAGE_MAIN, _win._page_index["대시보드"]), _AFTER_LOAD
     # 픽스처: 승1 무1 패1 + 오류1 — 대시보드 지표가 실제로 채워졌는지.

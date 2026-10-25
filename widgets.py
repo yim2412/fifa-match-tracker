@@ -293,8 +293,8 @@ class WrapBar(QFrame):
             self._row2.addStretch(1)
         else:
             if self._sep is not None:
-                self._sep.show()
                 self._row1.addWidget(self._sep)
+                self._sep.show()
             self._row1.addWidget(self._middle)
             self._row1.addStretch(1)
             self._row1.addWidget(self._right)
@@ -497,8 +497,9 @@ class Card(QFrame):
         v.setSpacing(10)
         self.title = QLabel(title)
         self.title.setObjectName("cardTitle")
-        self.title.setVisible(bool(title))
+        # 레이아웃에 넣기 전에 보이면 부모 없는 QLabel 이 혼자 창으로 뜬다(켤 때 작은 창 깜빡임 · 2.13.3)
         v.addWidget(self.title)
+        self.title.setVisible(bool(title))
         self.body = QVBoxLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
         v.addLayout(self.body, 1)
