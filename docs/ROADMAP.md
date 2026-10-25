@@ -212,7 +212,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 기준 화면의 팀컬러 · 포메이션 · 통계(랭킹 전체) 페이지 그래프 — 우리 랭킹 추이 · 메타 분석 · 팀컬러 화면과 짝. 구단 페이지의 슈팅 분석 · 스쿼드 · 경기 기록 · 매치업은 글로만 대조했다(그림은 아직).
 
-## 63단계 — 경기 시각 UTC → KST (제안 2.13.2) · 1판 (2026-10-25 · 사용자 답 전)
+## 63단계 — 경기 시각 UTC → KST (제안 2.13.2) · 1판 (2026-10-25 · **U1~U3 사용자 "추천대로"**)
 
 **한 줄**: 넥슨 `matchDate` 는 UTC 다(T0). 읽는 곳마다 따로 파싱하던 것을 **한 모듈 `matchtime.py`** 로 모으고, 거기서 +9시간 한 **KST 벽시계(naive)** 를 돌려준다. 저장 원본(`matches.match_date` 열 · payload 문자열)은 **안 바꾼다** — 옛 버전이 같은 DB 를 열어도 그대로 읽고, 읽는 쪽만 바뀌니 지난 경기도 같이 맞는다.
 난이도 **중간~높음** — 고칠 함수는 작지만 닿는 곳이 앱 전체이고, 옛 값으로 **저장된 파생 값**(아래 표 B)이 섞이는 자리가 있다.
@@ -254,7 +254,7 @@ naive 로 두는 이유: 앱 전체가 `datetime.now()`(이 PC 벽시계 = KST)�
 
 | 저장 | 쓰는 곳 | 안 고치면 | 제안 |
 |---|---|---|---|
-| fifa.db `match_squads.day`(`store.match_day` · toordinal) | `cardcollect` 30일 창 · `store.owners_using_cards` 최근 사용일 | 화면에 날짜로는 안 나온다(창 판정만) | **U2 → 원문 날(UTC)로 둔다** · 이름을 `match_day_utc` 로 바꿔 뜻을 박는다. 다시 채우면 옛 버전이 새 줄을 UTC 로 또 쓰고(내려가기) 섞인다 · 30일 창에 9시간은 무시 |
+| fifa.db `match_squads.day`(`store.match_day` · toordinal) | `cardcollect` 30일 창 · `store.owners_using_cards` 최근 사용일 | 화면에 날짜로는 안 나온다(창 판정만) | **U2 → 원문 날(UTC)로 둔다** · 함수 이름만 `store.match_day_utc` 로 바꿔 뜻을 박는다(**열 이름 `day` 는 그대로** — 옛 버전이 같은 표를 쓴다). 다시 채우면 옛 버전이 새 줄을 UTC 로 또 쓰고(내려가기) 섞인다 · 30일 창에 9시간은 무시 |
 | fifa.db `ranker_squads.match_day`(`rankerpick` :262) | 14일 낡음(:309) | 같음 | 새로 쓰는 줄부터 `day` · 옛 줄은 14일 안에 다 바뀐다(덮어쓰는 표) |
 | `DATA_DIR/dev_matches.db` `games.at` · 커서 `base_id`/`depth` 시각 | `--check-fc` · 단 3·4 창 · 51 뒤 개발용 분석 | 모든 `at` 이 9시간 이르다(epoch 가 틀렸다) | **U3 → 한 번 옮긴다**: `meta` 에 `at_fixed=1` 이 없으면 `UPDATE games SET at = at + 32400` 과 커서 시각을 한 트랜잭션 · 배포판 밖이라 내려가기 걱정 없음 |
 | `server/cache.py` `detail.match_date` | 저장만 | — | 원문 그대로(바꿀 것 없음) |
