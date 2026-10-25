@@ -1658,7 +1658,7 @@ def test_habits_tab_flags_a_real_effect_and_stays_quiet_otherwise():
         _win._render_habits(_win._matches)
         assert hour_verdict.text().startswith("차이가 뚜렷합니다"), hour_verdict.text()
         from PyQt6.QtGui import QColor
-        green = QColor(T.GREEN).name()
+        green = QColor(T.GOOD).name()
         assert hour_tbl.item(0, 0).foreground().color().name() == green, "효과를 심은 칸이 안 칠해졌다"
         assert hour_tbl.item(1, 0).foreground().color().name() != green
         assert hour_tbl.item(0, 2).text().startswith("90.0%"), hour_tbl.item(0, 2).text()
@@ -5015,7 +5015,7 @@ def test_compare_colors_the_better_side():
     import dataclasses
     from models import summarize as summ
     from PyQt6.QtGui import QColor
-    green = QColor(T.GREEN).name()
+    green = QColor(T.GOOD).name()
     mine = [dataclasses.replace(m, result="승") for m in _MATCHES]
     opp = [dataclasses.replace(m, result="패", match_id=f"o{i}") for i, m in enumerate(_MATCHES)]
     saved = (_win._matches, _win._fill_compare_squad, _win.sp_compare_n.value())
@@ -6447,7 +6447,7 @@ def test_winrate_bars_use_shared_helper():
 
 
 def test_heat_colors_keep_text_readable():
-    # 선수 지표 칸은 글자 위에 칠한다 — 두 팔레트 × 공격/수비 × 11단계 전부 TEXT 대비 4.5 이상. 원색 RED 를 끝 색으로
+    # 선수 지표 칸은 글자 위에 칠한다 — 두 팔레트 × 공격/수비 × 11단계 전부 TEXT 대비 4.5 이상. 원색 빨강을 끝 색으로
     # 쓰면(예전) 어두운 테마에서 밝은 글자가 안 읽힌다. 포지션 글자는 PANEL 위 4.5 이상. 흐린 승률 막대 위 글자(TEXT)도.
     f = app_main.MainWindow.HEAT_FLOOR
     bad = []
@@ -6463,8 +6463,64 @@ def test_heat_colors_keep_text_readable():
         if T.contrast(p["TEXT"], T.blend(p["PANEL_2"], p["WIN_BAR"], T.WEAK_MIX)) < 4.5:
             bad.append((mode, "흐린 막대 글자"))
     assert not bad, bad
-    # 화면이 실제로 그 끝 색을 쓰는지(배선) — 기본 RED/BLUE 가 아니다
-    assert (T.HEAT_ATK, T.HEAT_DEF) == (T._P["HEAT_ATK"], T._P["HEAT_DEF"]) and T.HEAT_ATK != T.RED
+    # 화면이 실제로 그 끝 색을 쓰는지(배선) — 기본 BAD/BLUE 가 아니다
+    assert (T.HEAT_ATK, T.HEAT_DEF) == (T._P["HEAT_ATK"], T._P["HEAT_DEF"]) and T.HEAT_ATK != T.BAD
+
+
+def _palette_contrast_failures(p: dict) -> list:
+    """한 팔레트에서 글자/바탕 짝마다 대비 4.5 미만인 것 — 테스트와 '심은 팔레트' 검사가 같은 표를 쓴다."""
+    pairs = []
+    for key in ("TEXT", "TEXT_DIM", "ACCENT", "GOOD", "BAD", "WARN"):        # 글자 토큰 × 카드·칸
+        pairs += [(key, p[key], base, p[base]) for base in ("PANEL", "PANEL_2")]
+    for key in ("GOOD", "BAD", "WARN", "TEXT_DIM", "ACCENT"):                # 태그 꼴 — 그 색 글자 + 그 색 10% 바탕
+        pairs.append((key, p[key], "10% 바탕", T.blend(p["PANEL"], p[key], 0.10)))
+    pairs += [("ON_PRIMARY", p["ON_PRIMARY"], k, p[k]) for k in ("PRIMARY", "PRIMARY_HOVER")]
+    pairs += [(k, p[k], "ACCENT_SOFT", p["ACCENT_SOFT"]) for k in ("ACCENT", "TEXT")]
+    for bar in ("WIN_BAR", "LOSE_BAR"):                                       # 위에 글자를 겹치는 막대 — 꽉 찬 것·흐린 것
+        pairs.append(("TEXT", p["TEXT"], bar, p[bar]))
+        pairs.append(("TEXT", p["TEXT"], f"흐린 {bar}", T.blend(p["PANEL_2"], p[bar], T.WEAK_MIX)))
+    pairs += [("BG", p["BG"], f"켜진 {k} 필터", p[k]) for k in ("GOOD", "TEXT_DIM", "BAD")]   # 경기 목록 결과 필터
+    return [(fg_name, bg_name, round(T.contrast(fg, bg), 2)) for fg_name, fg, bg_name, bg in pairs
+            if T.contrast(fg, bg) < 4.5]
+
+
+def test_palette_text_contrast():
+    # 강조·좋음·나쁨·주의 글자는 카드(PANEL)와 칸(PANEL_2) 둘 다 위에서 읽혀야 한다 — 밝은 테마의 채움 값
+    # (#009966 등)을 글자로 쓰면 3점대라, 글자 토큰과 *_FILL 을 나눴다. 두 팔레트 전부.
+    bad = {mode: _palette_contrast_failures(p) for mode, p in T._PALETTES.items()}
+    assert not any(bad.values()), bad
+    # 검사가 실제로 무언가를 재는지 — 밝은 쪽 GOOD 을 채움 값으로 되돌리면 걸려야 한다
+    planted = dict(T._PALETTES["light"], GOOD=T._PALETTES["light"]["GOOD_FILL"])
+    assert ("GOOD", "PANEL", 3.65) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
+    planted = dict(T._PALETTES["dark"], WIN_BAR=T._PALETTES["dark"]["GOOD_FILL"])
+    assert any(b == "WIN_BAR" for _, b, _ in _palette_contrast_failures(planted))
+
+
+def test_palette_tokens_reach_widgets():
+    # 모듈 이름이 MODE 팔레트 값을 그대로 싣는지(배선) + 승/패는 좋음/나쁨 · 강조는 그와 다른 색
+    for key in ("ACCENT", "ACCENT_FILL", "ACCENT_SOFT", "PRIMARY", "PRIMARY_HOVER", "ON_PRIMARY",
+                "GOOD", "BAD", "WARN", "GOOD_FILL", "BAD_FILL", "WARN_FILL", "CHIP_GK", "CHIP_MF", "CHIP_FW", "ON_CHIP"):
+        assert getattr(T, key) == T._P[key], key
+    assert (T.WIN, T.LOSE) == (T.GOOD, T.BAD) and T.ACCENT not in (T.GOOD, T.BAD)
+    # 꽉 칠한 버튼은 PRIMARY 로 그려진다 — 찍어서 본다
+    from PyQt6.QtWidgets import QPushButton
+    b = QPushButton("확인")
+    b.setObjectName("primary")
+    b.resize(120, 40)
+    img = b.grab().toImage()
+    assert img.pixelColor(10, 20).name() == T.PRIMARY, (img.pixelColor(10, 20).name(), T.PRIMARY)
+
+
+def test_cvd_delta_matches_known_values():
+    # 그래프 색을 고를 때 쓴 검증기 값(theme 의 CHART_* 주석)과 같아야 이 도구로 새 색을 잰다
+    assert round(T.cvd_delta("#3fb950", "#ef6268"), 1) == 2.0           # 옛 앱 초록/빨강
+    assert round(T.cvd_delta(*[T._PALETTES["dark"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == 6.5
+    assert round(T.cvd_delta(*[T._PALETTES["light"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == 6.9
+    assert T.cvd_delta("#123456", "#123456") == 0
+    # 좋음/나쁨 짝은 6 미만이라 색만으로 승패를 말하지 않는다(theme 주석) — 값이 바뀌면 주석과 쓰는 자리를 다시 본다
+    got = {(m, k): round(T.cvd_delta(p[f"GOOD{k}"], p[f"BAD{k}"]), 1)
+           for m, p in T._PALETTES.items() for k in ("", "_FILL")}
+    assert got == {("dark", ""): 5.3, ("dark", "_FILL"): 5.3, ("light", ""): 5.0, ("light", "_FILL"): 6.6}, got
 
 
 def test_heat_scale_degenerate():
@@ -9866,7 +9922,7 @@ def test_about_rank_status_shows_ref_time_and_meta_counts():
         finally:
             c.close()
         text = app_main.rank_status_text(rankcollect.read_status())
-        assert T.YELLOW in text and "멈춰 있습니다" in text and "파일 정리가" in text, text
+        assert T.WARN in text and "멈춰 있습니다" in text and "파일 정리가" in text, text
         env.write(notice=config.META_NOTICE_VERSION - 1)
         assert "새 안내 동의 뒤부터" in app_main.rank_status_text(rankcollect.read_status())
 

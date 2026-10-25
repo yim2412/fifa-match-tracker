@@ -16,6 +16,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -317,6 +318,27 @@ RAW_TIME_ALLOW = {   # (파일, 함수, 따라간 도우미 — "" 는 그 함�
     ("tools/measure_cards.py", "b_freeze", ""): "51 측정 U1 — 11-26 판정까지 도구를 얼린다(:330·:471·:472 도 그때 같이 · 규칙이 못 보는 꼴)",
     ("tools/measure_cards.py", "b_freeze", "snapshot_list"): "같음(U1) — 도우미는 rank.db 스냅숏(KST) 읽기",
 }
+
+
+OLD_COLOR_NAMES = ("GREEN", "GREEN_SOFT", "GREEN_HOVER", "RED", "YELLOW", "ON_ACCENT")
+_OLD_COLOR_RE = re.compile(r"\b(" + "|".join(OLD_COLOR_NAMES) + r")\b")
+_STRING_TOKENS = {tokenize.STRING} | {getattr(tokenize, n) for n in ("FSTRING_MIDDLE", "TSTRING_MIDDLE")
+                                      if hasattr(tokenize, n)}
+
+
+def check_old_color_names(srcs: dict[str, str]) -> list[str]:
+    """옛 색 이름(3.1.1 에 지움 — 강조 ACCENT · 좋음/나쁨/주의 GOOD·BAD·WARN 으로 갈랐다)이 코드·글에 없다.
+
+    속성은 그 줄이 실행될 때 읽히므로 스모크가 안 지나는 분기에 남은 `T.GREEN` 은 exe 에서 처음 터진다 —
+    그래서 소스로 잰다. 주석은 빼고 문자열(f-string 의 `{GREEN}` · docstring)은 센다."""
+    out = []
+    for rel, src in srcs.items():
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.NAME and tok.string in OLD_COLOR_NAMES:
+                out.append(f"{rel}:{tok.start[0]} 옛 색 이름 {tok.string}")
+            elif tok.type in _STRING_TOKENS:
+                out += [f"{rel}:{tok.start[0]} 글 속 옛 색 이름 {m.group(1)}" for m in _OLD_COLOR_RE.finditer(tok.string)]
+    return out
 
 
 def _docstring_nodes(tree) -> set[int]:
@@ -645,6 +667,16 @@ def test_colors_only_in_theme():
     assert check_colors({"playerinfo.py": "STAT_COLOR_BUCKETS = ['#ffffff']\nX = '#000000'\n"}) == \
         ["playerinfo.py:2 색 \"#000000\" — theme.py 에 둔다"]
     assert check_colors(_all(APP_FILES)) == []
+
+
+def test_old_color_names_are_gone():
+    bad = ('c = T.GREEN\nQSS = f"a {{ color: {GREEN}; }}"\ndef f():\n    """ON_ACCENT 위 글자"""\n'
+           "x = theme.RED  # 주석의 YELLOW 는 안 센다\n")
+    found = check_old_color_names({"x.py": bad})
+    assert [f.split(":")[1].split()[0] for f in found] == ["1", "2", "4", "5"], found
+    assert not check_old_color_names({"x.py": "c = T.GOOD  # 옛 GREEN\nd = T.ACCENT_SOFT\ne = 'GREENISH'\n"})
+    # test_rules 자신은 위의 심은 위반을 품고 있어 뺀다
+    assert check_old_color_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
 
 
 def test_weak_samples_go_through_is_weak():

@@ -27,7 +27,7 @@ from charts import (AreaTrendChart, DonutChart, GroupedBarChart, HBarList, Radar
                     ResultDots, RingGauge)
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
-from widgets import FitLabel, add_shadow, sample_note, sample_text, wdl_text, win_rate_note, win_rate_text
+from widgets import FitLabel, sample_note, sample_text, wdl_text, win_rate_note, win_rate_text
 
 RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
 DOTS_N = 20            # 최근 결과 점 개수
@@ -308,7 +308,6 @@ class DashboardPage(QWidget):
     def _card(self, title: str, target: tuple[str, str | None] | None = None) -> DashCard:
         c = DashCard(title, target)
         c.clicked.connect(self.navigate)
-        add_shadow(c)
         self.cards.append(c)
         return c
 

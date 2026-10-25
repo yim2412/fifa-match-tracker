@@ -82,7 +82,7 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
-    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, ZoomBar, add_shadow, sample_note, short_bp,
+    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, ZoomBar, sample_note, short_bp,
     sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
@@ -3144,7 +3144,7 @@ class MainWindow(QMainWindow):
         box.setMaximumWidth(760)
         box.setStyleSheet(
             f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 16px; }}")
+            f" border-radius: {T.RADIUS}px; }}")
         box_v = QVBoxLayout(box)
         box_v.setContentsMargins(40, 36, 40, 32)
         box_v.setSpacing(0)
@@ -3155,7 +3155,7 @@ class MainWindow(QMainWindow):
         f.setPointSize(30)
         f.setBold(True)
         title.setFont(f)
-        title.setStyleSheet(f"color: {T.GREEN}; border: none;")
+        title.setStyleSheet(f"color: {T.ACCENT}; border: none;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         box_v.addWidget(title)
 
@@ -3187,7 +3187,7 @@ class MainWindow(QMainWindow):
 
         self.lb_search_msg = QLabel("")
         self.lb_search_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lb_search_msg.setStyleSheet(f"color: {T.RED}; border: none;")
+        self.lb_search_msg.setStyleSheet(f"color: {T.BAD}; border: none;")
         box_v.addSpacing(10)
         box_v.addWidget(self.lb_search_msg)
 
@@ -3202,7 +3202,6 @@ class MainWindow(QMainWindow):
         self.row_recent.addStretch(1)
         box_v.addLayout(self.row_recent)
 
-        add_shadow(box)
         centering.addWidget(box)
         centering.addStretch(1)
         outer.addLayout(centering)
@@ -3640,7 +3639,6 @@ class MainWindow(QMainWindow):
         """대시보드 — 카드 배치·채우기는 dashboard.DashboardPage. 랭커 카드만
         여기서 만들어 넘긴다(_render_ranker 가 데이터센터 값으로 채운다)."""
         self.card_ranker = RankerCard()
-        add_shadow(self.card_ranker)
         self.dashboard = DashboardPage(self.card_ranker)
         self.dashboard.navigate.connect(self._go_target)
         return self.dashboard
@@ -3852,9 +3850,9 @@ class MainWindow(QMainWindow):
         # 선택한 기간의 최고·평균·최저 승률 — 예전엔 상단 요약 카드를 이 탭에서만
         # 바꿔치기했는데, 요약 카드가 대시보드로 옮겨 가 여기 따로 둔다.
         trow = QHBoxLayout()
-        self.card_trend_max = StatCard("최고 승률", T.GREEN)
+        self.card_trend_max = StatCard("최고 승률", T.GOOD)
         self.card_trend_avg = StatCard("평균 승률")
-        self.card_trend_min = StatCard("최저 승률", T.RED)
+        self.card_trend_min = StatCard("최저 승률", T.BAD)
         self.card_trend_games = StatCard("경기수")
         for c in (self.card_trend_max, self.card_trend_avg,
                   self.card_trend_min, self.card_trend_games):
@@ -3863,7 +3861,7 @@ class MainWindow(QMainWindow):
 
         self.gb_trend = QGroupBox("최근 30일 승률 추이")
         gv = QVBoxLayout(self.gb_trend)
-        # 1.3.1 — 옛 widgets.TrendChart(GREEN 꺾은선)를 대시보드와 같은 그래프로. 50% 기준선 ·
+        # 1.3.1 — 옛 widgets.TrendChart(초록 꺾은선)를 대시보드와 같은 그래프로. 50% 기준선 ·
         # 7일 이동평균(달력 7일, 표본 미달이면 끊김) · 아래 띠에 그날 경기 수.
         self.trend_chart = charts.AreaTrendChart()
         gv.addWidget(self.trend_chart)
@@ -4267,7 +4265,7 @@ class MainWindow(QMainWindow):
         head.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.box_chips.addWidget(head)
         for c in chips:
-            color = T.GREEN if c.strong else T.RED
+            color = T.GOOD if c.strong else T.BAD
             lb = QLabel(("강점 " if c.strong else "약점 ") + c.text)
             lb.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color}; border-radius: 9px;"
                              f" padding: 2px 10px;")
@@ -4306,8 +4304,8 @@ class MainWindow(QMainWindow):
         self.analysis_dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                                      for m in recent])
         colors = {core.SEC_FLOW: T.TEXT,
-                  core.SEC_WIN: T.GREEN,
-                  core.SEC_LOSE: T.RED}
+                  core.SEC_WIN: T.GOOD,
+                  core.SEC_LOSE: T.BAD}
         for sec, box in self.box_analysis.items():
             self._clear(box)
             rows = [i for i in found if i.section == sec]
@@ -4547,8 +4545,8 @@ class MainWindow(QMainWindow):
         cs = core.clutch_summary(details, self._ouid)
         self._clear(self.box_clutch_first)
         for label, wdl, color in (
-                ("내가 선제골", cs.first_scored, T.GREEN),
-                ("선제 실점", cs.first_conceded, T.RED)):
+                ("내가 선제골", cs.first_scored, T.GOOD),
+                ("선제 실점", cs.first_conceded, T.BAD)):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
@@ -5006,7 +5004,7 @@ class MainWindow(QMainWindow):
             self._fill(self.tbl_luck_days, rows, enable_sort=False)
             for r, d in enumerate(ordered):
                 if d.weak or d.outside:
-                    color = QColor(T.TEXT_DIM if d.weak else (T.GREEN if d.rate > d.hi else T.RED))
+                    color = QColor(T.TEXT_DIM if d.weak else (T.GOOD if d.rate > d.hi else T.BAD))
                     for c in range(self.tbl_luck_days.columnCount()):
                         self.tbl_luck_days.item(r, c).setForeground(color)
             self._fill(self.tbl_luck_required,
@@ -5099,7 +5097,7 @@ class MainWindow(QMainWindow):
             for r, b in enumerate(t.bins):
                 if b.flag:
                     for c in range(tbl.columnCount()):
-                        tbl.item(r, c).setForeground(QColor(T.GREEN if b.flag > 0 else T.RED))
+                        tbl.item(r, c).setForeground(QColor(T.GOOD if b.flag > 0 else T.BAD))
             if not t.tested:
                 verdict.setText(f"{t.note or '표본이 모자라 판정하지 않습니다'} ({t.games:,}경기)")
                 verdict.setStyleSheet(dim)
@@ -5195,7 +5193,7 @@ class MainWindow(QMainWindow):
             box.addWidget(row)
 
         sep = QLabel("이런 경기의 승률")
-        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 3px;")
+        sep.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold; padding-top: 3px;")
         box.addWidget(sep)
         for label, wdl in (("골대 맞힌 경기", ds.post_hit), ("내가 퇴장당한 경기", ds.my_red),
                            ("상대가 퇴장당한 경기", ds.opp_red)):
@@ -5235,8 +5233,8 @@ class MainWindow(QMainWindow):
         ctrl.addSpacing(16)
         # 결과 종류별 표시 토글(범례 겸용). result 코드로 필터한다.
         self.chk_shotmap_result: dict[int, QCheckBox] = {}
-        for result, text, color in ((core.SHOT_GOAL, "● 골", T.GREEN),
-                                    (core.SHOT_ON_TARGET, "● 유효슛", T.YELLOW),
+        for result, text, color in ((core.SHOT_GOAL, "● 골", T.GOOD),
+                                    (core.SHOT_ON_TARGET, "● 유효슛", T.WARN),
                                     (core.SHOT_OFF_TARGET, "● 빗나감", T.TEXT_DIM)):
             chk = QCheckBox(text)
             chk.setChecked(True)
@@ -5321,7 +5319,7 @@ class MainWindow(QMainWindow):
 
     def _render_shot_buckets(self, sm, mine: bool) -> None:
         """슛 유형·거리별 효율 패널. 내 슛이면 초록, 상대 슛(=내 실점)이면 빨강."""
-        color = T.GREEN if mine else T.RED
+        color = T.GOOD if mine else T.BAD
         for box, buckets in (
                 (self.box_shot_type, core.shot_type_breakdown(sm)),
                 (self.box_shot_dist, core.shot_distance_breakdown(sm))):
@@ -5387,7 +5385,7 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_route, rows, enable_sort=False)
         for i, verdict in enumerate(verdicts):
             self.tbl_route.item(i, 0).setToolTip(self.ROUTE_NOTE[ar.rows[i].route])
-            color = {"▲": T.GREEN, "▼": T.RED, "표": T.TEXT_DIM}.get(verdict[0])
+            color = {"▲": T.GOOD, "▼": T.BAD, "표": T.TEXT_DIM}.get(verdict[0])
             if color:
                 for c in range(self.tbl_route.columnCount()):
                     self.tbl_route.item(i, c).setForeground(QColor(color))
@@ -8269,7 +8267,7 @@ class MainWindow(QMainWindow):
         peak = max((abs(p.xg_diff) for p in players), default=1) or 1
         for r, p in enumerate(players):
             self._tint(self.tbl_finishing.item(r, 6), abs(p.xg_diff), peak,
-                       T.GREEN if p.xg_diff >= 0 else T.RED)
+                       T.GOOD if p.xg_diff >= 0 else T.BAD)
             name_item = self.tbl_finishing.item(r, 0)
             if name_item:
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
@@ -8361,7 +8359,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tbl_players, 1)
         return w
 
-    MATCH_FILTER_KINDS = (("승", T.GREEN), ("무", T.TEXT_DIM), ("패", T.RED))
+    MATCH_FILTER_KINDS = (("승", T.GOOD), ("무", T.TEXT_DIM), ("패", T.BAD))
 
     def _build_matches_tab(self) -> QWidget:
         w = QWidget()
@@ -8377,10 +8375,11 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setFixedWidth(48)
+            # 켜진 칸 글자는 바탕색 — 두 테마 모두 GOOD·TEXT_DIM·BAD 위 대비 5 이상(테스트가 잰다)
             btn.setStyleSheet(
                 f"QPushButton {{ border: 1px solid {T.BORDER}; border-radius: 6px;"
                 f" padding: 4px; }}"
-                f"QPushButton:checked {{ background: {color}; color: {T.ON_ACCENT};"
+                f"QPushButton:checked {{ background: {color}; color: {T.BG};"
                 f" font-weight: bold; border-color: {color}; }}")
             btn.clicked.connect(self._apply_match_filter)
             row.addWidget(btn)
@@ -8996,8 +8995,8 @@ class MainWindow(QMainWindow):
                     it.setToolTip(win_rate_text(s.win, s.draw, s.lose, mixed) + "\n" + win_rate_note(mixed))
             if higher_is_better is not None and mine_val != opp_val:
                 mine_wins = (mine_val > opp_val) == higher_is_better
-                item_mine.setForeground(QColor(T.GREEN if mine_wins else T.TEXT))
-                item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
+                item_mine.setForeground(QColor(T.GOOD if mine_wins else T.TEXT))
+                item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GOOD))
         self.tbl_compare.refit()  # _fill 을 안 거치는 표
 
         self._render_compare_extra(opp_nick, my_details, opp_details, opp_ouid, mixed,
@@ -9137,7 +9136,7 @@ class MainWindow(QMainWindow):
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
         self.lb_my_formation.setStyleSheet(
-            f"background: {T.GREEN_SOFT}; border: 1px solid {T.BORDER};"
+            f"background: {T.ACCENT_SOFT}; border: 1px solid {T.BORDER};"
             f" border-radius: 6px; padding: 8px;")
         self.lb_my_formation_pitch = QLabel()   # 작은 축구장(I5) — 글자 줄 왼쪽
         row_f = QHBoxLayout()
@@ -9791,7 +9790,7 @@ class MainWindow(QMainWindow):
         self._render_head_icons()
 
         if self._is_champion and r and r.ranked:
-            c.set("순위", f"{r.rank:,}위", T.GREEN)
+            c.set("순위", f"{r.rank:,}위", T.ACCENT)
             c.set("전적", f"{r.record_text} ({r.win_rate})")
             c.set("구단가치", r.team_value_text or NA)
             c.set("점수", f"{r.elo:g}" if r.elo is not None else NA)
@@ -10442,7 +10441,7 @@ class MainWindow(QMainWindow):
             item = table.item(i, eff_col)
             if item is not None:
                 item.setData(Qt.ItemDataRole.UserRole, s.team_color)
-                item.setForeground(QColor(T.TEXT_DIM if weak[i] else T.GREEN))
+                item.setForeground(QColor(T.TEXT_DIM if weak[i] else T.ACCENT))
                 item.setToolTip("넥슨 데이터센터의 단계별 효과·적용 선수(누를 때만 읽습니다)")
 
     def _on_teamcolor_cell_clicked(self, table, columns: list[str], row: int, col: int) -> None:
@@ -11053,7 +11052,7 @@ class MainWindow(QMainWindow):
         photo = QLabel()
         photo.setFixedSize(96, 96)
         photo.setScaledContents(True)
-        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: 8px;")
+        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: {T.RADIUS}px;")
         header.addWidget(photo)
         if info.photo_url:
             widgets_by_url[info.photo_url] = photo
@@ -11088,7 +11087,7 @@ class MainWindow(QMainWindow):
 
         stars = "★" * info.skill_moves + "☆" * max(info.skill_moves_max - info.skill_moves, 0)
         fame_lb = QLabel(f"명성 {info.fame}  ·  개인기 {stars}")
-        fame_lb.setStyleSheet(f"color: {T.YELLOW};")
+        fame_lb.setStyleSheet(f"color: {T.WARN};")
         text_col.addWidget(fame_lb)
         text_col.addStretch(1)
         header.addLayout(text_col, 1)
@@ -11225,13 +11224,13 @@ class MainWindow(QMainWindow):
         v.addLayout(tc_row3)
 
         ovr_lb = QLabel("OVR -")
-        ovr_lb.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")
+        ovr_lb.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold;")
         v.addWidget(ovr_lb)
 
         group_cards: dict[str, StatCard] = {}
         grow_row = QHBoxLayout()
         for name in playerinfo.GROUP_NAMES:
-            card = StatCard(name, T.GREEN)
+            card = StatCard(name, T.ACCENT)
             group_cards[name] = card
             grow_row.addWidget(card)
         v.addLayout(grow_row)
@@ -11399,7 +11398,7 @@ class MainWindow(QMainWindow):
             cell = QFrame()
             cell.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL}; border: 1px solid "
-                f"{T.GREEN if grade == current_grade else T.BORDER}; border-radius: 6px; }}")
+                f"{T.ACCENT if grade == current_grade else T.BORDER}; border-radius: 6px; }}")
             cv = QVBoxLayout(cell)
             cv.setContentsMargins(8, 6, 8, 6)
             grade_lb = QLabel(f"{grade}강" if grade else "기본")
@@ -12116,7 +12115,7 @@ class MainWindow(QMainWindow):
             self.box_result.addWidget(row)
 
         sep = QLabel("시간대별 득실")
-        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 3px;")
+        sep.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold; padding-top: 3px;")
         self.box_result.addWidget(sep)
         for k in sorted(rb.periods):
             v = rb.periods[k]
@@ -12126,9 +12125,9 @@ class MainWindow(QMainWindow):
             a = QLabel(core.PERIODS.get(k, str(k)))
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(f"{v.scored}득점")
-            b.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")
+            b.setStyleSheet(f"color: {T.GOOD}; font-weight: bold;")
             c = QLabel(f"{v.conceded}실점")
-            c.setStyleSheet(f"color: {T.RED}; font-weight: bold;")
+            c.setStyleSheet(f"color: {T.BAD}; font-weight: bold;")
             h.addWidget(a)
             h.addStretch(1)
             h.addWidget(b)
@@ -12787,7 +12786,7 @@ class ApiKeyDialog(QDialog):
         v.addWidget(self.ed_key)
         self.lb_msg = QLabel(reason)
         self.lb_msg.setWordWrap(True)
-        self.lb_msg.setStyleSheet(f"color: {T.RED};")
+        self.lb_msg.setStyleSheet(f"color: {T.BAD};")
         v.addWidget(self.lb_msg)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -13415,7 +13414,7 @@ def rank_status_text(st: dict) -> str:
         gaps = st.get("meta_gaps")
         gap_text = f"빈 순위 {int(gaps or 0):,}"
         if gaps is not None and int(gaps) >= config.RANK_GAPS_WARN:
-            gap_text = f"<span style='color:{T.YELLOW}'>{gap_text}</span>"
+            gap_text = f"<span style='color:{T.WARN}'>{gap_text}</span>"
         lines.append(f"넥슨 데이터 기준 {st['meta_ref'][5:16].replace('T', ' ')} · {gap_text}")
     if st.get("same_since") and st.get("meta_ref"):
         lines.append(f"넥슨 데이터가 <b>{st['meta_ref'][11:16]} 기준</b>(마지막 수집)에서 멈춰 있습니다 — "

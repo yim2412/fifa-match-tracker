@@ -2,37 +2,52 @@
 
 창 배경(BG) 위에 카드(PANEL)를 띄우는 대시보드형. 팔레트는 어두운 것과 밝은 것
 둘을 두고 MODE 로 고른다 — 2026-10-01 하루에 다크 → 밝은 → 다크로 두 번 바뀌어서,
-다시 바뀔 때 값을 git 에서 캐내지 않게 둘 다 남긴다. 강조색은 앱 정체성인 초록.
+다시 바뀔 때 값을 git 에서 캐내지 않게 둘 다 남긴다. 앱 정체성: 보라 강조(3.1.1 — 그전엔 초록).
+카드는 모서리 6px · 1px 테두리 · 그림자 없음.
 바꿀 일이 생기면 여기만 고친다.
 """
 from __future__ import annotations
+
+import math
 
 MODE = "dark"           # "dark" | "light"
 
 _PALETTES = {
     "dark": dict(
-        BG="#111418",          # 창 배경(카드 사이)
-        PANEL="#1a1e24",       # 카드·패널
-        PANEL_2="#22272e",     # 표 헤더·교차행·카드 안 타일
-        BORDER="#2e343d",
-        TEXT="#dfe3e8",        # 순백 대신 — 검은 바탕에서 눈부심을 줄인다
-        TEXT_DIM="#8a919c",
-        GREEN="#3fb950",
-        GREEN_HOVER="#4fc960",
-        GREEN_SOFT="#173322",
-        RED="#ef6268",
+        BG="#09090b",          # 창 배경(카드 사이)
+        PANEL="#18181b",       # 카드·패널
+        PANEL_2="#2c2c30",     # 표 헤더·교차행·카드 안 타일
+        BORDER="#313135",
+        TEXT="#fafafa",
+        TEXT_DIM="#a1a1aa",
+        # 글자 토큰(ACCENT·GOOD·BAD·WARN)은 PANEL·PANEL_2 둘 다 대비 4.5 이상 — 테스트가 잰다.
+        # *_FILL 은 막대·점·채움용(글자로 안 쓴다). 어두운 쪽은 채움 값을 글자로 써도 되는데 ACCENT 만 칸 위
+        # 대비(4.49)가 모자라 한 단계 밝혔다.
+        ACCENT="#9194ee",      # 강조 글자 — 제목·구분선·OVR·선택된 메뉴
+        ACCENT_FILL="#8689ea",
+        ACCENT_SOFT="#272737", # 선택된 메뉴·탭 바탕(위 글자 ACCENT)
+        PRIMARY="#373cbe",     # 꽉 칠한 버튼·선택 바탕(위 글자 ON_PRIMARY)
+        PRIMARY_HOVER="#4549cc",
+        ON_PRIMARY="#ffffff",
+        GOOD="#00d492",        # 좋음 — 승·득점·▲
+        BAD="#ff637e",         # 나쁨 — 패·실점·▼
+        WARN="#ffb900",        # 주의
+        GOOD_FILL="#00d492",
+        BAD_FILL="#ff637e",
+        WARN_FILL="#ffb900",
         BLUE="#5b8cff",
-        YELLOW="#e3b341",
         PURPLE="#a08cff",
-        ON_ACCENT="#08210f",   # 밝은 초록 위 흰 글자는 대비가 2.3:1 이라 진한 글자
-        DRAW="#6e7681",
-        WIN_BAR="#2c6a40",     # 위에 밝은 글자를 겹쳐 쓰므로 진하게
-        LOSE_BAR="#7a3438",
+        # 선수 카드 포지션 칩(widgets.SquadCardWidget) — 옛 강조 팔레트 값 그대로. 칩 색은 따로 재서 정한다.
+        CHIP_GK="#e3b341",
+        CHIP_MF="#3fb950",
+        CHIP_FW="#ef6268",
+        ON_CHIP="#08210f",
+        DRAW="#71717a",
+        WIN_BAR="#0b6b4d",     # 위에 밝은 글자를 겹쳐 쓰므로 진하게
+        LOSE_BAR="#a02c42",
         ROW_TINT=0.35,
-        SCROLL="#3a414b",
-        SCROLL_HOVER="#4b535f",
-        SHADOW_RGB=(0, 0, 0),
-        SHADOW_ALPHA=90,
+        SCROLL="#3f3f46",
+        SCROLL_HOVER="#52525b",
         CHART_UP="#199e70",
         CHART_DOWN="#e66767",
         CHART_NEUTRAL="#6e7681",
@@ -41,7 +56,7 @@ _PALETTES = {
         # 부분-전체 조각(득점·실점 유형 도넛) — Okabe-Ito 색약 안전 팔레트에서 바탕과 구분되는 다섯. 여섯째는 "기타"=회색.
         CHART_CATS=("#56b4e9", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
         # 선수 지표 공격력·수비력 칸 — PANEL 에서 이 색까지 섞는다. 끝 색은 '모든 단계에서 TEXT 대비 ≥ 4.6'
-        # 을 만족하는 가장 밝은 값으로 계산해 골랐다(1.2.1). 원색 RED 는 그 위 밝은 글자가 안 읽힌다.
+        # 을 만족하는 가장 밝은 값으로 계산해 골랐다(1.2.1). 원색 빨강은 그 위 밝은 글자가 안 읽힌다.
         HEAT_ATK="#c41c1c",
         HEAT_DEF="#2055df",
         # 포지션 글자색 — PANEL 위 대비 ≥ 4.6. 글자(ST·CB…)가 같이 있어 색은 보조다(적록 색약).
@@ -51,28 +66,37 @@ _PALETTES = {
         POS_GK="#a9821e",
     ),
     "light": dict(
-        BG="#f3f5f9",
+        BG="#f6f7f9",
         PANEL="#ffffff",
-        PANEL_2="#f6f8fb",
-        BORDER="#e3e7ee",
-        TEXT="#1f2533",
-        TEXT_DIM="#7a8193",
-        GREEN="#1f9d55",       # 흰 바탕에서 글자로도 읽히게 한 단계 진하게
-        GREEN_HOVER="#23b05f",
-        GREEN_SOFT="#e6f5ec",
-        RED="#e5484d",
+        PANEL_2="#e7e9ee",
+        BORDER="#d3d7de",
+        TEXT="#09090b",
+        TEXT_DIM="#616875",
+        ACCENT="#373cbe",
+        ACCENT_FILL="#373cbe",
+        ACCENT_SOFT="#ebebf8",
+        PRIMARY="#373cbe",
+        PRIMARY_HOVER="#4549cc",
+        ON_PRIMARY="#ffffff",
+        # 흰 바탕에서 채움 값(#009966 3.65 · #e17100 3.20 · #ec003f 칸 위 3.73)은 글자로 안 읽혀 글자만 진하게
+        GOOD="#065f46",
+        BAD="#be123c",
+        WARN="#92400e",
+        GOOD_FILL="#009966",
+        BAD_FILL="#ec003f",
+        WARN_FILL="#e17100",
         BLUE="#3b6fe0",
-        YELLOW="#d99a00",
         PURPLE="#7c5cf0",
-        ON_ACCENT="#ffffff",
+        CHIP_GK="#d99a00",
+        CHIP_MF="#1f9d55",
+        CHIP_FW="#e5484d",
+        ON_CHIP="#ffffff",
         DRAW="#9aa1b0",
-        WIN_BAR="#93d6ae",     # 위에 진한 글자를 겹쳐 쓰므로 옅게
-        LOSE_BAR="#f2a3a6",
+        WIN_BAR="#8fdcbc",     # 위에 진한 글자를 겹쳐 쓰므로 옅게
+        LOSE_BAR="#f4a3b1",
         ROW_TINT=0.18,
         SCROLL="#cfd5df",
         SCROLL_HOVER="#b4bcc9",
-        SHADOW_RGB=(16, 24, 40),
-        SHADOW_ALPHA=22,
         CHART_UP="#138a60",
         CHART_DOWN="#e34948",
         CHART_NEUTRAL="#9aa1b0",
@@ -96,20 +120,33 @@ BORDER = _P["BORDER"]
 TEXT = _P["TEXT"]
 TEXT_DIM = _P["TEXT_DIM"]
 
-GREEN = _P["GREEN"]             # 강조·승·득점
-GREEN_HOVER = _P["GREEN_HOVER"]
-GREEN_SOFT = _P["GREEN_SOFT"]   # 선택된 메뉴·강조 배경
-RED = _P["RED"]                 # 패·실점
-BLUE = _P["BLUE"]               # 수비력
-YELLOW = _P["YELLOW"]
+# 강조(앱 정체성 · 보라)와 좋음/나쁨(승·패)은 다른 토큰이다 — 한 색에 두 뜻을 싣던 시절엔 강조를 바꾸면
+# 승·골까지 같이 바뀌었다. 좋음/나쁨 짝도 적록 색약 색차가 6 안팎(cvd_delta: 어두운 5.3 · 밝은 글자 5.0 · 채움 6.6)이라
+# 색만으로 승패를 말하지 않는다 — 쓰는 자리마다 글자·부호(승/패 · +/− · ▲▼)가 같이 있다.
+ACCENT = _P["ACCENT"]               # 강조 글자·테두리
+ACCENT_FILL = _P["ACCENT_FILL"]     # 강조 채움(진행 막대 등)
+ACCENT_SOFT = _P["ACCENT_SOFT"]     # 선택된 메뉴·탭 바탕
+PRIMARY = _P["PRIMARY"]             # 꽉 칠한 버튼·선택 바탕
+PRIMARY_HOVER = _P["PRIMARY_HOVER"]
+ON_PRIMARY = _P["ON_PRIMARY"]       # PRIMARY 위 글자
+GOOD = _P["GOOD"]                   # 좋음 글자 — 승·득점
+BAD = _P["BAD"]                     # 나쁨 글자 — 패·실점
+WARN = _P["WARN"]                   # 주의 글자
+GOOD_FILL = _P["GOOD_FILL"]         # 위 셋의 막대·점·채움 값
+BAD_FILL = _P["BAD_FILL"]
+WARN_FILL = _P["WARN_FILL"]
+BLUE = _P["BLUE"]                   # 수비력
 PURPLE = _P["PURPLE"]
-ON_ACCENT = _P["ON_ACCENT"]     # 초록 등 강조색 위의 글자
+CHIP_GK = _P["CHIP_GK"]             # 선수 카드 포지션 칩(수비는 BLUE)
+CHIP_MF = _P["CHIP_MF"]
+CHIP_FW = _P["CHIP_FW"]
+ON_CHIP = _P["ON_CHIP"]
 
-WIN = GREEN
+WIN = GOOD
 DRAW = _P["DRAW"]
-LOSE = RED
+LOSE = BAD
 
-# 대시보드 그래프(charts.py) 색 — 앱의 GREEN/RED 짝은 적록 색약에서 색차 2.0 으로
+# 대시보드 그래프(charts.py) 색 — 옛 앱 초록/빨강 짝(#3fb950/#ef6268)은 적록 색약에서 색차 2.0 으로
 # 구분이 안 된다(dataviz 검증기, 기준 6). 그래서 그래프만 청록 쪽 초록 + 밝은
 # 빨강으로 다시 골랐다: 다크 6.5 · 밝은 6.9 — 6~8 은 '보조 표시가 있을 때만'
 # 허용이라 그래프에는 범례·2px 틈·글자 표기를 항상 같이 둔다. 무승부·상대는 회색.
@@ -143,7 +180,7 @@ POS_COLORS = {"FW": _P["POS_FW"], "MF": _P["POS_MF"], "DF": _P["POS_DF"], "GK": 
 
 FONT_FAMILY = "Malgun Gothic"  # 한글이 대부분이라 명시 — 미지정이면 플랫폼 따라 들쭉날쭉
 BASE_FONT_PX = 15
-RADIUS = 14             # 카드 모서리
+RADIUS = 6              # 카드·표·입력·버튼 모서리 — 그림 안 작은 막대·칩(2~4px)은 각자
 # 글자를 위에 겹쳐 쓰는 막대(승부처·시간대 등) — 원색이면 글자가 묻힌다.
 WIN_BAR = _P["WIN_BAR"]
 LOSE_BAR = _P["LOSE_BAR"]
@@ -176,25 +213,53 @@ def contrast(a_hex: str, b_hex: str) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-# 잔디 위 색 — 밝은 테마의 진한 GREEN 은 잔디와 명도가 비슷해 골 점이 묻힌다.
+# Machado·Oliveira·Fernandes(2009) 심도 1.0 — 선형 RGB 에 곱한다.
+_CVD = {"protan": ((0.152286, 1.052583, -0.204868), (0.114503, 0.786281, 0.099216), (-0.003882, -0.048116, 1.051998)),
+        "deutan": ((0.367322, 0.860646, -0.227968), (0.280085, 0.672501, 0.047413), (-0.011820, 0.042940, 0.968881))}
+
+
+def cvd_delta(a_hex: str, b_hex: str) -> float:
+    """적록 색약(1형·2형 중 나쁜 쪽)에서 두 색의 차이 — OKLab 거리 × 100.
+
+    8 이상이면 색만으로 갈린다 · 6~8 은 글자·부호가 같이 있을 때만 · 6 미만은 색으로 구분 안 됨.
+    그래프 색을 고를 때 쓴 dataviz 검증기와 같은 식이다(옛 초록/빨강 2.0 · CHART_UP/DOWN 6.5·6.9 를 그대로 낸다)."""
+    def lin(h: str) -> list[float]:
+        out = []
+        for i in (1, 3, 5):
+            c = int(h[i:i + 2], 16) / 255
+            out.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+        return out
+
+    def oklab(r: float, g: float, b: float) -> tuple[float, float, float]:
+        l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+        m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+        s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+        return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+                1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+
+    def sim(h: str, mat) -> tuple[float, float, float]:
+        rgb = lin(h)
+        return tuple(max(0.0, min(1.0, sum(k * c for k, c in zip(row, rgb)))) for row in mat)
+
+    return min(100 * math.dist(oklab(*sim(a_hex, m)), oklab(*sim(b_hex, m))) for m in _CVD.values())
+
+
+# 잔디 위 색 — 밝은 테마의 진한 초록은 잔디와 명도가 비슷해 골 점이 묻힌다.
 PITCH = "#1e5c34"
 PITCH_GOAL = "#5ee08f"
 PITCH_MISS = "#c3c9d4"
 PITCH_ASSIST = "#8ec9ff"   # 어시스트 위치 → 슛 선(슛 맵 [어시스트]) — 골 초록·빗나감 회색과 갈리게 파랑
 SIDEBAR_W = 230
-SHADOW_BLUR = 24        # 카드 그림자 — widgets.add_shadow
-SHADOW_Y = 3
-SHADOW_RGB = _P["SHADOW_RGB"]
-SHADOW_ALPHA = _P["SHADOW_ALPHA"]
 SCROLL = _P["SCROLL"]
 SCROLL_HOVER = _P["SCROLL_HOVER"]
 
 # "적용"/"불러오기" 류 강조 버튼(윤곽선만, 채우지 않음) — 3곳 이상에서 반복 사용.
 OUTLINE_BUTTON_QSS = f"""
-QPushButton {{ background: transparent; color: {GREEN};
-    border: 1px solid {GREEN}; border-radius: 8px; padding: 6px 16px;
+QPushButton {{ background: transparent; color: {ACCENT};
+    border: 1px solid {ACCENT}; border-radius: {RADIUS}px; padding: 6px 16px;
     font-weight: bold; }}
-QPushButton:hover {{ background: {GREEN_SOFT}; }}
+QPushButton:hover {{ background: {ACCENT_SOFT}; }}
 QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; }}
 """
 
@@ -227,7 +292,7 @@ QFrame#sidebar {{
     border: none;
     border-right: 1px solid {BORDER};
 }}
-QLabel#brand {{ color: {GREEN}; font-size: 22px; font-weight: bold; }}
+QLabel#brand {{ color: {ACCENT}; font-size: 22px; font-weight: bold; }}
 QLabel#brandSub {{ color: {TEXT_DIM}; font-size: 12px; }}
 QListWidget#nav {{
     background: transparent;
@@ -238,13 +303,13 @@ QListWidget#nav {{
 QListWidget#nav::item {{
     padding: 5px 12px;
     margin: 0 10px;
-    border-radius: 8px;
+    border-radius: {RADIUS}px;
     color: {TEXT};
 }}
 QListWidget#nav::item:hover {{ background: {PANEL_2}; }}
 QListWidget#nav::item:selected {{
-    background: {GREEN_SOFT};
-    color: {GREEN};
+    background: {ACCENT_SOFT};
+    color: {ACCENT};
     font-weight: bold;
 }}
 QListWidget#nav::item:disabled {{
@@ -255,7 +320,7 @@ QListWidget#nav::item:disabled {{
 QFrame#profileBox {{
     background: {PANEL_2};
     border: none;
-    border-radius: 10px;
+    border-radius: {RADIUS}px;
 }}
 
 QScrollArea {{ background: transparent; border: none; }}
@@ -264,46 +329,46 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QLineEdit {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: {RADIUS}px;
     padding: 7px 12px;
     color: {TEXT};
-    selection-background-color: {GREEN};
-    selection-color: {ON_ACCENT};
+    selection-background-color: {PRIMARY};
+    selection-color: {ON_PRIMARY};
 }}
-QLineEdit:focus {{ border: 2px solid {GREEN}; }}
-QLineEdit#bigSearch {{ border: 2px solid {GREEN}; border-radius: 12px; }}
+QLineEdit:focus {{ border: 2px solid {ACCENT}; }}
+QLineEdit#bigSearch {{ border: 2px solid {ACCENT}; border-radius: {RADIUS}px; }}
 
 QPushButton {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: {RADIUS}px;
     padding: 7px 16px;
     color: {TEXT};
 }}
-QPushButton:hover {{ border-color: {GREEN}; color: {GREEN}; }}
+QPushButton:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
 QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; }}
 QPushButton#primary {{
-    background: {GREEN};
+    background: {PRIMARY};
     border: none;
-    color: {ON_ACCENT};
+    color: {ON_PRIMARY};
     font-weight: bold;
 }}
-QPushButton#primary:hover {{ background: {GREEN_HOVER}; color: {ON_ACCENT}; }}
+QPushButton#primary:hover {{ background: {PRIMARY_HOVER}; color: {ON_PRIMARY}; }}
 QPushButton#primary:disabled {{ background: {BORDER}; color: {TEXT_DIM}; }}
 QPushButton#pageTab {{
     background: transparent;
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: {RADIUS}px;
     padding: 5px 16px;
     color: {TEXT_DIM};
 }}
-QPushButton#pageTab:hover {{ border-color: {GREEN}; color: {GREEN}; }}
-QPushButton#pageTab:checked {{ background: {GREEN_SOFT}; border-color: {GREEN}; color: {GREEN}; }}
+QPushButton#pageTab:hover {{ border-color: {ACCENT}; color: {ACCENT}; }}
+QPushButton#pageTab:checked {{ background: {ACCENT_SOFT}; border-color: {ACCENT}; color: {ACCENT}; }}
 
 QGroupBox {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: 12px;
+    border-radius: {RADIUS}px;
     margin-top: 12px;
     padding-top: 10px;
     font-weight: bold;
@@ -317,7 +382,7 @@ QGroupBox::title {{
 
 QTabWidget::pane {{
     border: 1px solid {BORDER};
-    border-radius: 12px;
+    border-radius: {RADIUS}px;
     background: {PANEL};
     top: -1px;
 }}
@@ -326,14 +391,14 @@ QTabBar::tab {{
     color: {TEXT_DIM};
     border: 1px solid {BORDER};
     border-bottom: none;
-    border-top-left-radius: 8px;
-    border-top-right-radius: 8px;
+    border-top-left-radius: {RADIUS}px;
+    border-top-right-radius: {RADIUS}px;
     padding: 9px 20px;
     margin-right: 2px;
 }}
 QTabBar::tab:selected {{
     background: {PANEL};
-    color: {GREEN};
+    color: {ACCENT};
     font-weight: bold;
 }}
 
@@ -342,7 +407,7 @@ QTableWidget {{
     alternate-background-color: {PANEL_2};
     gridline-color: {BORDER};
     border: 1px solid {BORDER};
-    border-radius: 10px;
+    border-radius: {RADIUS}px;
     color: {TEXT};
 }}
 QTableWidget::item:selected {{ background: transparent; color: {TEXT}; }}
@@ -360,17 +425,17 @@ QTableCornerButton::section {{ background: {PANEL_2}; border: none; }}
 QComboBox, QSpinBox {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: 8px;
+    border-radius: {RADIUS}px;
     padding: 5px 8px;
     color: {TEXT};
 }}
-QComboBox:hover, QSpinBox:hover {{ border-color: {GREEN}; }}
+QComboBox:hover, QSpinBox:hover {{ border-color: {ACCENT}; }}
 QComboBox::drop-down {{ border: none; width: 24px; }}
 QComboBox QAbstractItemView {{
     background: {PANEL};
     color: {TEXT};
-    selection-background-color: {GREEN_SOFT};
-    selection-color: {GREEN};
+    selection-background-color: {ACCENT_SOFT};
+    selection-color: {ACCENT};
     border: 1px solid {BORDER};
 }}
 QCheckBox {{ color: {TEXT}; }}
@@ -381,7 +446,7 @@ QProgressBar {{
     text-align: center;
     color: {TEXT};
 }}
-QProgressBar::chunk {{ background: {GREEN}; border-radius: 5px; }}
+QProgressBar::chunk {{ background: {ACCENT_FILL}; border-radius: 5px; }}
 QStatusBar {{ background: {PANEL}; color: {TEXT_DIM}; border-top: 1px solid {BORDER}; }}
 QToolTip {{
     background: {PANEL};
@@ -427,8 +492,8 @@ def apply(app) -> None:
         QPalette.ColorRole.ButtonText: TEXT,
         QPalette.ColorRole.ToolTipBase: PANEL,
         QPalette.ColorRole.ToolTipText: TEXT,
-        QPalette.ColorRole.Highlight: GREEN,
-        QPalette.ColorRole.HighlightedText: ON_ACCENT,
+        QPalette.ColorRole.Highlight: PRIMARY,
+        QPalette.ColorRole.HighlightedText: ON_PRIMARY,
         QPalette.ColorRole.PlaceholderText: TEXT_DIM,
     }
     for role, color in roles.items():

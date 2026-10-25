@@ -21,7 +21,7 @@ from typing import NamedTuple
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
-    QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
+    QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
@@ -45,16 +45,6 @@ class IconCell(NamedTuple):
     name: str = ""   # 특성 칸 — 글자는 "NN%" 만이라 이름은 툴팁·NAME_ROLE 로(TraitIconDelegate 가 그림 없을 때 대신 쓴다)
 
 
-def add_shadow(w: QWidget) -> None:
-    """카드 아래 옅은 그림자. 그림자 효과는 창 크기를 바꿀 때마다 다시
-    그려져 비싸다 — 화면에 동시에 보이는 카드 몇 장에만 건다."""
-    eff = QGraphicsDropShadowEffect(w)
-    eff.setBlurRadius(T.SHADOW_BLUR)
-    eff.setOffset(0, T.SHADOW_Y)
-    eff.setColor(QColor(*T.SHADOW_RGB, T.SHADOW_ALPHA))
-    w.setGraphicsEffect(eff)
-
-
 class UpdateCard(QFrame):
     """창 오른쪽 아래에 떠 있는 '새 버전' 카드 — 런처의 업데이트 알림처럼.
 
@@ -73,8 +63,8 @@ class UpdateCard(QFrame):
         self.setObjectName("updateCard")
         self.setFixedWidth(self.WIDTH)
         self.setStyleSheet(
-            f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.GREEN};"
-            f" border-radius: 12px; }} QLabel {{ border: none; }}")
+            f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.ACCENT};"
+            f" border-radius: {T.RADIUS}px; }} QLabel {{ border: none; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(16, 12, 16, 12)
         v.setSpacing(6)
@@ -105,7 +95,6 @@ class UpdateCard(QFrame):
         row.addWidget(self.btn_later)
         row.addWidget(self.btn_update)
         v.addLayout(row)
-        add_shadow(self)
         self.mode = ""  # "release"(새 버전) · "latest"(최신) — 최신 카드는 메인 화면에서 닫힌다
         self.hide()
 
@@ -489,7 +478,7 @@ class VScrollArea(QScrollArea):
 class Card(QFrame):
     """흰 카드 — 제목(선택) + 본문. 본문 레이아웃은 .body 로 채운다."""
 
-    def __init__(self, title: str = "", shadow: bool = False, margin: int = 18):
+    def __init__(self, title: str = "", margin: int = 18):
         super().__init__()
         self.setObjectName("card")
         v = QVBoxLayout(self)
@@ -503,8 +492,6 @@ class Card(QFrame):
         self.body = QVBoxLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
         v.addLayout(self.body, 1)
-        if shadow:
-            add_shadow(self)
 
     def add_to_title_row(self, w: QWidget) -> None:
         """제목 줄 오른쪽에 붙인다(페이지 안 탭줄) — 제목 아래 따로 두면 그 높이만큼 작은 화면에서 세로 막대가
@@ -849,7 +836,7 @@ class RowBorderDelegate(QStyledItemDelegate):
         if not selected:
             return
         painter.save()
-        painter.setPen(QPen(QColor(T.GREEN), 1))
+        painter.setPen(QPen(QColor(T.ACCENT), 1))
         rect = option.rect.adjusted(0, 0, -1, -1)
         table = self.parent()
         last_col = table.columnCount() - 1 if table is not None else index.column()
@@ -968,7 +955,7 @@ class StatCard(QFrame):
         super().__init__()
         self.setStyleSheet(
             f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 8px; }}")
+            f" border-radius: {T.RADIUS}px; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
         v.setSpacing(4)
@@ -1017,7 +1004,7 @@ class RankerCard(QFrame):
         super().__init__()
         self.setStyleSheet(
             f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 12px; }}")
+            f" border-radius: {T.RADIUS}px; }}")
         self.setMaximumWidth(720)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
@@ -1092,7 +1079,7 @@ class RankerCard(QFrame):
             r, col = divmod(i, 2)
             tile = QFrame()
             tile.setStyleSheet(
-                f"QFrame {{ background: {T.PANEL_2}; border-radius: 10px; }}")
+                f"QFrame {{ background: {T.PANEL_2}; border-radius: {T.RADIUS}px; }}")
             tv = QVBoxLayout(tile)
             tv.setContentsMargins(20, 20, 20, 20)
             tv.setSpacing(6)
@@ -1139,15 +1126,15 @@ class RankerCard(QFrame):
         self._head_grade.setText(text)
         if is_ranker:
             self._head.setStyleSheet(
-                f"QFrame {{ background: {T.GREEN}; border: none;"
-                f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
-            self._head_name.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
-            self._head_grade.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
-            self._head_best.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
+                f"QFrame {{ background: {T.PRIMARY}; border: none;"
+                f" border-top-left-radius: {T.RADIUS}px; border-top-right-radius: {T.RADIUS}px; }}")
+            self._head_name.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
+            self._head_grade.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
+            self._head_best.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
         else:
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL_2}; border: none;"
-                f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
+                f" border-top-left-radius: {T.RADIUS}px; border-top-right-radius: {T.RADIUS}px; }}")
             self._head_name.setStyleSheet(f"color: {T.TEXT}; border: none;")
             self._head_grade.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
             self._head_best.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
@@ -1677,13 +1664,13 @@ class DivisionChart(QWidget):
         self.marks["markers"] = len(shown_markers)
 
         # 계단형 — 등급은 경기 사이에 "서서히"가 아니라 딱 바뀌는 값이다
-        p.setPen(QPen(QColor(T.YELLOW), 2))
+        p.setPen(QPen(QColor(T.WARN_FILL), 2))
         for a, b in zip(pts, pts[1:]):
             p.drawLine(a, QPointF(b.x(), a.y()))
             p.drawLine(QPointF(b.x(), a.y()), b)
 
         p.setPen(QPen(QColor(T.PANEL), 1))
-        p.setBrush(QColor(T.YELLOW))
+        p.setBrush(QColor(T.WARN_FILL))
         prev_div = None
         for pt, (_, div) in zip(pts, self._points):
             if div != prev_div:  # 등급이 바뀐 지점만 점을 찍는다 — 다 찍으면 떡칠
@@ -1691,14 +1678,14 @@ class DivisionChart(QWidget):
                 prev_div = div
 
         # 그날 최고 — 마지막 등급 점에서 그 줄까지 점선 + 큰 점(계단과 헷갈리지 않게 선은 잇지 않는다)
-        line = QPen(QColor(T.YELLOW), 1)
+        line = QPen(QColor(T.WARN_FILL), 1)
         line.setStyle(Qt.PenStyle.DotLine)
         for i, div in sorted(peaks.items()):
             top = QPointF(pts[i].x(), y_of[div])
             p.setPen(line)
             p.drawLine(pts[i], top)
             p.setPen(QPen(QColor(T.PANEL), 1))
-            p.setBrush(QColor(T.YELLOW))
+            p.setBrush(QColor(T.WARN_FILL))
             p.drawEllipse(top, 4.5, 4.5)
         self.marks["peaks"] = len(peaks)
 
@@ -2041,7 +2028,7 @@ class _PlayerChip(QWidget):
         p.setBrush(QColor(self.accent))
         pos_r = QRectF(4, 4, pos_w, top_h - 2)
         p.drawRoundedRect(pos_r, 3, 3)
-        p.setPen(QColor(T.ON_ACCENT))
+        p.setPen(QColor(T.ON_CHIP))
         p.drawText(pos_r, Qt.AlignmentFlag.AlignCenter, self.card.pos_name)
         if self.card.grade is not None:
             gbg, gfg = _grade_badge_colors(self.card.grade)
@@ -2238,12 +2225,12 @@ class PitchWidget(QWidget):
         · 최전방 공격(20-27) 빨강. 공미(17-19, RAM/CAM/LAM)도 미드필더로 친다 —
         스트라이커·윙어처럼 빨강으로 보이면 헷갈린다는 지적을 반영."""
         if sp_position == 0:
-            return T.YELLOW
+            return T.CHIP_GK
         if 1 <= sp_position <= 8:
             return T.BLUE
         if 9 <= sp_position <= 19:
-            return T.GREEN
-        return T.RED
+            return T.CHIP_MF
+        return T.CHIP_FW
 
 
 class ShotMapWidget(QWidget):
@@ -2306,7 +2293,7 @@ class ShotMapWidget(QWidget):
 
         if self._assists:
             self._paint_assists(p, w, h, m)
-        colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.YELLOW), 2: QColor(T.PITCH_MISS)}
+        colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.WARN_FILL), 2: QColor(T.PITCH_MISS)}
         # 빗나감 → 유효 → 골 순으로 그려서 골이 맨 위에 오게 한다.
         order = sorted(self._shots, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
         for s in order:
