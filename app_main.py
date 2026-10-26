@@ -80,10 +80,11 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
     SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
+    RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows,
     sample_text, tag_qss, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
@@ -2537,7 +2538,6 @@ class MainWindow(QMainWindow):
                  "GK는 실제 선방, 필드 플레이어는 수비 기여도로 볼 수 있음.",
         "평점": "이 선수가 출전한 경기들의 평균 평점.",
     }
-    OPPONENT_COLUMNS = ["상대", "전적", "승률", "전체 대비", "평균득점", "평균실점", "최근 경기"]
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
     TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "상대 수", "승", "무", "패", "승률", "평균 대비", "효과"]
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
@@ -2660,6 +2660,10 @@ class MainWindow(QMainWindow):
         self._live_pitches: list = []           # 카드 정보를 쓰는 축구장 — 동의 직후 막혔던 것을 다시 읽는다
         self._position_pitch_loaders: list = [] # ⑨ 축구장의 얼굴·시즌 아이콘
         self._retired_loaders: list = []        # 갈아 끼운 축구장의 로더 — 끝날 때까지 쥔다(_retire_loaders)
+        self._gk_face_loader: ImageLoader | None = None   # 승부차기 상대 GK 카드 얼굴(65 M6) — 앞 것은 _retire_loaders 로
+        self._gk_faces: dict[int, QPixmap] = {}
+        self._gk_face_labels: dict[int, QLabel] = {}
+        self.shootout_cards: list = []
         self._ability_sim_loader: AbilitySimLoader | None = None
         self._position_ovr_loader: AbilitySimLoader | None = None
         # 선수 색인 백필(12) — schedule_backfill 이 첫 화면 뒤에 띄운다. 남은 수는 찾기 화면의 "색인 중 N/M"
@@ -5138,28 +5142,15 @@ class MainWindow(QMainWindow):
                 verdict.setText(f"차이가 안 보입니다 — {stat}")
                 verdict.setStyleSheet(dim)
 
-    def _wr_bar_row(self, label: str, win: int, draw: int, lose: int,
-                    avg_gf: float, avg_ga: float, mixed: bool, label_w: int = 132) -> QWidget:
-        """승률 막대 한 줄 — 라벨 + (승률·전적·평균득실) 막대. 승부처 탭과 같은 톤."""
-        row = QWidget()
-        h = QHBoxLayout(row)
-        h.setContentsMargins(4, 2, 4, 2)
-        a = QLabel(label)
-        a.setStyleSheet(f"color: {T.TEXT_DIM};")
-        a.setFixedWidth(label_w)
-        h.addWidget(a)
-        if win + draw + lose:
-            h.addWidget(win_rate_bar(win, draw, lose,
-                                     f"{win_rate_text(win, draw, lose, mixed, short=True)}  "
-                                     f"({wdl_text(win, draw, lose)})  득 {avg_gf:.2f} 실 {avg_ga:.2f}",
-                                     core.MIN_COND, mixed), 1)
-        else:
-            none = QLabel("경기 없음")
-            none.setStyleSheet(f"color: {T.TEXT_DIM};")
-            h.addWidget(none, 1)
-        return row
+    def _rate_list(self, rows: list[RateRow], mixed: bool) -> RateRowList:
+        """스크롤 페이지 안 승률 줄 목록(65 P4) — 줄 수만큼 높이 고정 · 그림은 목록 로더로."""
+        lst = RateRowList(fixed=True, tips={"rate": win_rate_note(mixed)})
+        lst.set_rows(rows)
+        self._start_list_icons(lst)
+        return lst
 
     def _render_diagnosis(self, details: list[dict]) -> None:
+        # 묶음은 그대로(내 등급 · 상대 등급 · 점유율 구간) · 꼴만 줄 목록으로(65 M4 — 위 필터 줄은 상대 전적에만)
         for box, mine, none_text in (
                 (self.box_diag_my_division, True, "등급 정보가 있는 경기가 없습니다."),
                 (self.box_diag_division, False, "상대 등급 정보가 있는 경기가 없습니다.")):
@@ -5168,20 +5159,22 @@ class MainWindow(QMainWindow):
                 details, self._ouid,
                 name_of=lambda i: self._division_names.get(i, str(i)), by_mine=mine)
             if divs:
-                for s in divs:
-                    box.addWidget(self._wr_bar_row(
-                        f"{s.name} ({s.games})", s.win, s.draw, s.lose,
-                        s.avg_gf, s.avg_ga, s.mixed))
+                box.addWidget(self._rate_list([
+                    self._rate_row(s.name, s.win, s.draw, s.lose, s.mixed, None,
+                                   sub=f"득 {s.avg_gf:.2f} · 실 {s.avg_ga:.2f}",
+                                   icon=("division", self._division_icon_key(s.division_id)), key=s.division_id)
+                    for s in divs], bool(divs[0].mixed)))
             else:
                 empty = QLabel(none_text)
                 empty.setStyleSheet(f"color: {T.TEXT_DIM};")
                 box.addWidget(empty)
 
         self._clear(self.box_diag_possession)
-        for b in core.possession_stats(details, self._ouid):
-            self.box_diag_possession.addWidget(self._wr_bar_row(
-                f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
-                b.avg_gf, b.avg_ga, b.mixed))
+        bands = core.possession_stats(details, self._ouid)
+        self.box_diag_possession.addWidget(self._rate_list([
+            self._rate_row(f"{b.label} ({b.span}%)", b.win, b.draw, b.lose, b.mixed, None,
+                           sub=f"득 {b.avg_gf:.2f} · 실 {b.avg_ga:.2f}")
+            for b in bands], bool(bands and bands[0].mixed)))
         self._render_discipline(details)
 
     def _render_discipline(self, details: list[dict]) -> None:
@@ -8548,27 +8541,66 @@ class MainWindow(QMainWindow):
         lb = QLabel("상대 검색")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.ed_opponent_filter = QLineEdit()
-        self.ed_opponent_filter.setPlaceholderText("닉네임 일부만 입력해도 찾습니다")
-        self.ed_opponent_filter.setMaximumWidth(240)
+        self.ed_opponent_filter.setPlaceholderText("이름 일부만 입력해도 찾습니다")
+        self.ed_opponent_filter.setFixedWidth(240)   # 옆에 묶음·정렬 콤보가 붙어 늘어나지 않으면 안내 글이 잘린다(실화면)
         self.ed_opponent_filter.textChanged.connect(self._apply_opponent_filter)
         row.addWidget(lb)
         row.addWidget(self.ed_opponent_filter)
+        row.addSpacing(12)
+        row.addWidget(self._dim_label("묶음"))
+        self.cb_opp_group = NoScrollComboBox()
+        for key, text in self.OPP_GROUPS:
+            self.cb_opp_group.addItem(text, key)
+        self.cb_opp_group.setToolTip("상대 팀컬러는 그 상대의 지금 팀컬러(조회한 상대만) — 그 경기 때 팀컬러가 아닐 수 있습니다")
+        self.cb_opp_group.currentIndexChanged.connect(lambda *_: self._invalidate("opponents"))
+        row.addWidget(self.cb_opp_group)
+        row.addSpacing(12)
+        row.addWidget(self._dim_label("정렬"))
+        self.cb_opp_sort = NoScrollComboBox()
+        self.cb_opp_sort.currentIndexChanged.connect(lambda *_: self._show_opp_rows())
+        row.addWidget(self.cb_opp_sort)
         row.addStretch(1)
-        self.lb_opponent_note = QLabel(self._opponent_note_text())
-        self.lb_opponent_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        row.addWidget(self.lb_opponent_note)
         v.addLayout(row)
         v.addLayout(self._build_opp_filter_row())
 
-        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS, icons={0: "division"})
-        self._set_header_help(self.tbl_opponents, self.OPPONENT_COLUMNS, {
-            "승률": win_rate_note(False),
-            "전체 대비": ("이 상대 승률 − 필터에 걸린 경기 전체 승률(%p). 이 상대와 "
-                       f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
-        self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
-        self._add_profile_action(self.tbl_opponents, lambda: self._table_nick(self.tbl_opponents, 0))
-        v.addWidget(self.tbl_opponents, 1)
+        # 승률 카드(매치업 꼴) — 필터에 걸린 경기 전체(줄의 "(±차)" 기준과 같은 값)
+        top = QHBoxLayout()
+        self.card_opp_rate = StatCard("승률 · 필터에 걸린 경기")
+        self.card_opp_rate.setToolTip(win_rate_note(False))
+        self.opp_rate_bar = WdlBar()
+        self.card_opp_rate.layout().insertWidget(3, self.opp_rate_bar)
+        self.card_opp_rate.setMinimumWidth(260)
+        top.addWidget(self.card_opp_rate)
+        # 범위 글은 카드 옆 — 위 줄(찾기·묶음·정렬)에 두면 1280 폭에서 찾기 칸이 눌려 안내 글이 "…" 로 잘렸다(실화면)
+        self.lb_opponent_note = QLabel(self._opponent_note_text())
+        self.lb_opponent_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_opponent_note.setWordWrap(True)
+        top.addWidget(self.lb_opponent_note, 1, Qt.AlignmentFlag.AlignBottom)
+        v.addLayout(top)
+
+        self.opp_list = RateRowList(tips={
+            "rate": win_rate_note(False),
+            "diff": ("이 줄 승률 − 필터에 걸린 경기 전체 승률(%p). "
+                     f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
+        self.opp_list.doubleClicked.connect(self._on_opponent_double_clicked)
+        self._add_profile_action(self.opp_list, self._opp_row_nick)
+        self._opp_rows: list[RateRow] = []
+        self._opp_picked_details: list[dict] = []
+        v.addWidget(self.opp_list, 1)
         return w
+
+    # 상대 전적 묶음(65 M4) — 구단주 줄만 더블클릭(그 상대와의 최근 경기)·프로필 메뉴가 있다. 내 팀컬러 조합별은 58(3판 S1)
+    OPP_GROUPS = (("owner", "구단주"), ("formation", "상대 포메이션"), ("color", "상대 팀컬러"))
+
+    @staticmethod
+    def _dim_label(text: str) -> QLabel:
+        lb = QLabel(text)
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        return lb
+
+    def _opp_row_nick(self) -> str:
+        row = self.opp_list.current()
+        return row.key if row is not None and self.cb_opp_group.currentData() == "owner" else ""
 
     OPP_FILTER_ALL = "전체"
     OPP_FILTER_CUSTOM = "직접 지정"
@@ -8632,15 +8664,16 @@ class MainWindow(QMainWindow):
         return row
 
     def _reset_opp_filter(self) -> None:
-        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min):
+        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min, self.cb_opp_group):
             w.blockSignals(True)
+        self.cb_opp_group.setCurrentIndex(0)
         self.cb_opp_games.setCurrentIndex(0)
         self.sp_opp_games.setVisible(False)
         self.cb_opp_form.setCurrentIndex(0)
         self.cb_opp_value.setCurrentIndex(0)
         self.chk_opp_min.setChecked(False)
         self.cb_opp_min.setEnabled(False)
-        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min):
+        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min, self.cb_opp_group):
             w.blockSignals(False)
 
     def _on_opp_games_changed(self, _i: int) -> None:
@@ -8676,11 +8709,9 @@ class MainWindow(QMainWindow):
         return res.bins if res is not None else []
 
     def _apply_opponent_filter(self) -> None:
+        """찾기 칸 — 줄 이름(닉네임 · 포메이션 · 팀컬러)에 글자가 들어 있는 줄만. 모델 안 목록에서 거른다(65 대응표)."""
         needle = self.ed_opponent_filter.text().strip().lower()
-        for r in range(self.tbl_opponents.rowCount()):
-            item = self.tbl_opponents.item(r, 0)  # 상대 컬럼
-            hidden = bool(needle) and (not item or needle not in item.text().lower())
-            self.tbl_opponents.setRowHidden(r, hidden)
+        self.opp_list.set_filter((lambda r: needle in r.label.lower()) if needle else None)
 
     POSITION_COLOR_ALL = "전체"
     POSITION_COLOR_NONE = "— 팀컬러를 고르세요 —"
@@ -9194,19 +9225,37 @@ class MainWindow(QMainWindow):
         vf = QVBoxLayout(gb_f)
         vf.setSpacing(5)
 
+        # 대표 포메이션 카드(65 M5) — 미니 축구장 크게 · 포메이션 · 승률 · 승무패 막대 · 경기 수
+        card = QFrame()
+        card.setObjectName("myFormationCard")
+        card.setStyleSheet(f"QFrame#myFormationCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+                           f" border-radius: {T.RADIUS}px; }}")
+        row_f = QHBoxLayout(card)
+        row_f.setContentsMargins(12, 10, 12, 10)
+        self.lb_my_formation_pitch = QLabel()
+        row_f.addWidget(self.lb_my_formation_pitch)
+        col = QVBoxLayout()
+        col.setSpacing(3)
+        col.addWidget(self._dim_label("가장 많이 쓴 내 포메이션"))
         self.lb_my_formation = QLabel("-")
         mf = QFont()
-        mf.setPointSize(14)
+        mf.setPointSize(16)
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
-        self.lb_my_formation.setStyleSheet(
-            f"background: {T.ACCENT_SOFT}; border: 1px solid {T.BORDER};"
-            f" border-radius: 6px; padding: 8px;")
-        self.lb_my_formation_pitch = QLabel()   # 작은 축구장(I5) — 글자 줄 왼쪽
-        row_f = QHBoxLayout()
-        row_f.addWidget(self.lb_my_formation_pitch)
-        row_f.addWidget(self.lb_my_formation, 1)
-        vf.addLayout(row_f)
+        col.addWidget(self.lb_my_formation)
+        self.lb_my_formation_rate = QLabel("")
+        self.lb_my_formation_rate.setStyleSheet("font-weight: bold;")
+        col.addWidget(self.lb_my_formation_rate)
+        self.my_formation_bar = WdlBar()
+        col.addWidget(self.my_formation_bar)
+        self.lb_my_formation_sub = self._dim_label("")
+        col.addWidget(self.lb_my_formation_sub)
+        col.addStretch(1)
+        row_f.addLayout(col, 1)
+        row_card = QHBoxLayout()
+        row_card.addWidget(card)
+        row_card.addStretch(1)
+        vf.addLayout(row_card)
 
         # 55 F1 — 상대 포메이션 묶기. 랭커 화면과 같은 콤보·같은 함수(rankmeta.formation_group · J5)
         row_g = QHBoxLayout()
@@ -9230,20 +9279,37 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _build_results_tab(self) -> QWidget:
+        """경기 결과(65 M6) — 위: 결과 줄(정규·연장·승부차기·몰수) + 시간대별 득실 · 가운데: 득점·실점 유형(슛 타입 분포 꼴) ·
+        아래: 승부차기에서 만난 상대 GK 카드."""
         scroll, v = self._tactics_scroll()
         gb_r = QGroupBox("경기 결과")
-        rl = QHBoxLayout(gb_r)
-        self.box_result = QVBoxLayout()
-        self.box_gf = QVBoxLayout()
-        self.box_ga = QVBoxLayout()
-        for box, title in ((self.box_result, "경기 결과"),
-                           (self.box_gf, "득점 유형"),
-                           (self.box_ga, "실점 유형")):
-            box.setSpacing(2)
-            holder = QGroupBox(title)
-            holder.setLayout(box)
-            rl.addWidget(holder, 1)
+        self.box_result = QVBoxLayout(gb_r)
+        self.box_result.setSpacing(2)
         v.addWidget(gb_r)
+        row = QHBoxLayout()
+        self.shot_types, self.shot_type_notes = {}, {}
+        for key, title, tone in (("gf", "득점 유형 — 내 슛", T.GOOD_FILL), ("ga", "실점 유형 — 상대 슛", T.BAD_FILL)):
+            gb = QGroupBox(title)
+            box = QVBoxLayout(gb)
+            self.shot_types[key] = ShotTypeRows(tone)
+            box.addWidget(self.shot_types[key])
+            note = self._dim_label("")
+            note.setWordWrap(True)
+            box.addWidget(note)
+            box.addStretch(1)
+            self.shot_type_notes[key] = note
+            row.addWidget(gb, 1)
+        v.addLayout(row)
+        gb_k = QGroupBox("승부차기에서 만난 상대 골키퍼")
+        kv = QVBoxLayout(gb_k)
+        self.lb_shootout_note = self._dim_label("")
+        self.lb_shootout_note.setWordWrap(True)
+        kv.addWidget(self.lb_shootout_note)
+        self.grid_shootout = QGridLayout()
+        self.grid_shootout.setHorizontalSpacing(8)
+        self.grid_shootout.setVerticalSpacing(8)
+        kv.addLayout(self.grid_shootout)
+        v.addWidget(gb_k)
         v.addStretch(1)
         return scroll
 
@@ -9525,7 +9591,7 @@ class MainWindow(QMainWindow):
         head = f"{self._scope_text()} 기준"
         if picked is not None and picked != total:
             head += f" · 필터에 걸린 {picked:,}경기 / {total:,}경기" if picked else " · 조건에 맞는 경기가 없습니다"
-        return f"{head} · 더블클릭하면 그 상대와의 최근 경기 스쿼드"
+        return f"{head} · 구단주 줄을 더블클릭하면 그 상대와의 최근 경기"
 
     def _refresh_scope_notes(self) -> None:
         # 상대 전적 머리 글은 _render_opponents 가 쓴다 — 필터에 걸린 경기 수를 같이 적어서(57 K1). 부르는 쪽이 다시 그린다
@@ -10208,47 +10274,100 @@ class MainWindow(QMainWindow):
         picked = core.filter_matches(
             matches, self._opp_game_count(), self.cb_opp_form.currentData(), lambda m: forms.get(m.match_id),
             vbin, lambda nick: core.bin_of_value(bins, self._team_values.get(nick)))
-        stats = opponent_stats(picked)
-        if self.chk_opp_min.isChecked():
-            k = self.cb_opp_min.currentData() or 1
-            stats = [s for s in stats if s.games >= k]
-        # 전체 대비(K13) — 기준은 필터에 걸린 경기 전체(그 줄 포함) · 같은 식(E1 — 승÷전체 그대로)
+        by_id = {d.get("matchId"): d for d in self._details}
+        self._opp_picked_details = [by_id[m.match_id] for m in picked if m.match_id in by_id]   # 최신순 그대로
+        # 승률 카드·"(±차)" 기준 — 필터에 걸린 경기 전체(그 줄 포함) · 같은 식(E1 — 승÷전체 그대로)
         mixed = core.mixed_of_matches(picked)
         w = sum(1 for m in picked if "승" in m.result)
         d = sum(1 for m in picked if "무" in m.result)
         lo = sum(1 for m in picked if "패" in m.result)
-        base_rated = core.rated(w, d, lo, mixed)
-        base = core.win_pct(w, d, lo, mixed)
-        rows = []
-        for s in stats:
-            weak = core.is_weak(s.rated, core.MIN_COND) or not base_rated
-            diff = s.win_rate - base
-            rows.append([
-                IconCell(s.nickname, None, self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
-                wdl_text(s.win, s.draw, s.lose),
-                (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
-                ("", -999.0) if weak else (f"{diff:+.1f}%p", diff),   # E2 — 몇 판짜리 큰 차이를 숨긴다
-                (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
-                (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
-                s.last_date,
-            ])
-        self._fill(self.tbl_opponents, rows)
-        diff_col = self.OPPONENT_COLUMNS.index("전체 대비")
-        for r in range(self.tbl_opponents.rowCount()):
-            it = self.tbl_opponents.item(r, diff_col)
-            if it is not None and it.text():
-                it.setToolTip(f"필터에 걸린 {len(picked):,}경기 전체 승률 {base:.1f}% 기준")
-                delta_item(it, it._key)   # 정렬이 켜진 뒤라 행 = stats 순서가 아니다 — 칸의 정렬 값(차이)을 읽는다
+        self.card_opp_rate.set(win_rate_text(w, d, lo, mixed, short=True))
+        self.card_opp_rate.set_sub(f"{len(picked):,}경기")
+        self.opp_rate_bar.set_counts(w, d, lo, core.is_weak(core.rated(w, d, lo, mixed), core.MIN_COND))
+        group = self.cb_opp_group.currentData() or "owner"
+        if group == "formation":
+            rows = self._opp_formation_rows(self._opp_picked_details, (w, d, lo))
+        elif group == "color":
+            rows = self._opp_color_rows(picked)
+        else:
+            rows = self._opp_owner_rows(picked, core.win_pct(w, d, lo, mixed), core.rated(w, d, lo, mixed))
+        if self.chk_opp_min.isChecked():
+            k = self.cb_opp_min.currentData() or 1
+            rows = [r for r in rows if r.games >= k]
+        self._opp_rows = rows
+        sorts = [s for s in RATE_SORTS if group == "owner" or s[0] != "recent"]   # 묶음 줄엔 최근 경기가 없다
+        keep = self.cb_opp_sort.currentData()
+        self.cb_opp_sort.blockSignals(True)
+        self.cb_opp_sort.clear()
+        for key, text in sorts:
+            self.cb_opp_sort.addItem(text, key)
+        i = self.cb_opp_sort.findData(keep)
+        self.cb_opp_sort.setCurrentIndex(max(0, i))
+        self.cb_opp_sort.blockSignals(False)
         self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches)))
+        self._show_opp_rows()
         self._apply_opponent_filter()
+        self._start_list_icons(self.opp_list)
 
-    def _on_opponent_double_clicked(self, item) -> None:
-        row = item.row()
-        name_item = self.tbl_opponents.item(row, 0)
-        if not name_item:
+    def _show_opp_rows(self) -> None:
+        self.opp_list.set_rows(sort_rate_rows(self._opp_rows, self.cb_opp_sort.currentData() or "games"))
+
+    @staticmethod
+    def _rate_row(label: str, win: int, draw: int, lose: int, mixed: bool, base: float | None,
+                  games: int | None = None, **kw) -> RateRow:
+        """승률 줄 하나 — 표본 흐림(is_weak · rated 분모) · 기준 대비는 표본이 될 때만(E2).
+        games 를 주면 경기 수는 그 값(집계가 "오류" 경기까지 센다 — 표 시절 '전적' 열과 같은 수)."""
+        n = core.rated(win, draw, lose, mixed)
+        weak = core.is_weak(n, core.MIN_COND)
+        rate = core.win_pct(win, draw, lose, mixed)
+        return RateRow(label, win, draw, lose, win_rate_text(win, draw, lose, mixed, short=True), rate,
+                       None if weak or base is None else rate - base, weak=weak,
+                       sample=sample_text(n, mixed) if weak else "", rated=n,
+                       other=max(0, (games or 0) - win - draw - lose), **kw)
+
+    def _opp_owner_rows(self, picked: list[MatchSummary], base: float, base_rated: int) -> list[RateRow]:
+        first: dict[str, int] = {}
+        for i, m in enumerate(picked):
+            first.setdefault(m.opponent, i)
+        return [self._rate_row(s.nickname, s.win, s.draw, s.lose, s.mixed, base if base_rated else None, s.games,
+                               sub=f"득 {s.avg_goals_for:.2f} · 실 {s.avg_goals_against:.2f} · 최근 {s.last_date}",
+                               icon=("division", self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
+                               key=s.nickname, recent=first.get(s.nickname, 0))
+                for s in opponent_stats(picked)]
+
+    def _opp_formation_rows(self, details: list[dict], wdl: tuple[int, int, int]) -> list[RateRow]:
+        stats = core.formation_stats(details, self._ouid or "")
+        mixed = stats[0].mixed if stats else False   # 묶음마다 식 한 번 — 기준도 같은 식으로
+        base = core.win_pct(*wdl, mixed) if core.rated(*wdl, mixed) else None
+        rows = []
+        for f in stats:
+            pm = formation_pixmap(f.formation, positions=f.positions)
+            if not pm.isNull():
+                self.opp_list.put_icon("formation", f.formation, pm)   # 자리 점은 이 묶음의 실제 자리 — 받기 전에 붙인다
+            rows.append(self._rate_row(core.formation_label(f.formation), f.win, f.draw, f.lose, f.mixed, base,
+                                       f.games, icon=("formation", f.formation), key=f.formation))
+        return rows
+
+    def _opp_color_rows(self, picked: list[MatchSummary]) -> list[RateRow]:
+        """상대 팀컬러별 — [팀컬러 승률] 과 같은 근사(상대의 지금 팀컬러 · 찾아진 상대만) · 기준도 같은 함수."""
+        mixed = core.team_color_mixed(picked, self._team_color_of)
+        base_n, base = core.team_color_baseline(picked, self._team_color_of, mixed)
+        rows = []
+        for s in core.team_color_stats(picked, self._team_color_of, team_value_of=self._team_values.get, mixed=mixed):
+            cell = self._emblem_cell(s.team_color)
+            rows.append(self._rate_row(s.team_color, s.win, s.draw, s.lose, s.mixed, base if base_n else None, s.games,
+                                       sub=f"상대 {len(s.opponents):,}명",
+                                       icon=("emblem", cell.icon_key) if isinstance(cell, IconCell) else (),
+                                       key=s.team_color))
+        return rows
+
+    def _on_opponent_double_clicked(self, index) -> None:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        if row is None or self.cb_opp_group.currentData() != "owner":
             return
-        nickname = name_item.text()
-        detail = core.latest_match_with(self._details, self._ouid, nickname)  # 표와 같은 범위(K1 필터 경기로는 ③ 에서)
+        nickname = row.key
+        # 목록과 같은 범위 — K1 필터를 거친 경기(5판 [중] — 예전엔 시즌 범위 전체에서 찾았다)
+        detail = core.latest_match_with(self._opp_picked_details, self._ouid, nickname)
         if detail is None:
             QMessageBox.information(
                 self, "경기 상세",
@@ -12364,62 +12483,54 @@ class MainWindow(QMainWindow):
         mine = core.formation_stats(details, self._ouid, of_opponent=False)
         if mine:
             t = mine[0]
-            self.lb_my_formation.setText(
-                f"{t.formation}      {win_rate_text(t.win, t.draw, t.lose, t.mixed)}      "
-                f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
-            self.lb_my_formation.setToolTip(win_rate_note(t.mixed))
-            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 2, positions=t.positions)
+            total = sum(f.games for f in mine)
+            self.lb_my_formation.setText(core.formation_label(t.formation))
+            self.lb_my_formation_rate.setText(win_rate_text(t.win, t.draw, t.lose, t.mixed))
+            self.lb_my_formation_rate.setToolTip(win_rate_note(t.mixed))
+            self.my_formation_bar.set_counts(t.win, t.draw, t.lose, core.is_weak(t.rated, core.MIN_COND))
+            self.lb_my_formation_sub.setText(f"{t.games:,}경기 · 전체의 {core.pct(t.games, total):.0f}%")
+            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 3, positions=t.positions)
             self.lb_my_formation_pitch.setPixmap(pitch)
             self.lb_my_formation_pitch.setVisible(not pitch.isNull())
 
         self._clear(self.box_opp)
         few = core.MIN_COND
-        opp_rows = []
         opp_stats = core.formation_stats(details, self._ouid)
-        mixed = opp_stats[0].mixed if opp_stats else False
+        mixed = bool(opp_stats[0].mixed) if opp_stats else False
         how = self.cb_tactics_form.currentData() or "raw"
         self.lb_tactics_form_note.setVisible(how != "raw")
         if how != "raw":
             opp_stats = group_formation_stats(opp_stats, how)
-        for f in opp_stats:
-            weak = core.is_weak(f.rated, few)
-            opp_rows.append((
-                f.formation, f.win_rate,
-                f"{win_rate_text(f.win, f.draw, f.lose, f.mixed, short=True)} · {wdl_text(f.win, f.draw, f.lose)}"
-                + (f" · {sample_text(f.rated, f.mixed)}" if weak else ""),
-                f"상대 {f.formation} — {f.games}경기 승률 {win_rate_text(f.win, f.draw, f.lose, f.mixed)}"
-                + (f"\n{sample_note(f.rated, few, f.mixed)}" if weak else ""),
-                weak))
-        if opp_rows:
+        self.opp_formation_list = None
+        if opp_stats:
             head = QLabel(f"상대 포메이션별 내 승률 · 흐린 줄은 {'승패' if mixed else '경기'} {few}판 미만")
             head.setToolTip(win_rate_note(mixed))
             head.setStyleSheet(f"color: {T.TEXT_DIM};")
             self.box_opp.addWidget(head)
-            self.opp_formation_bars = charts.HBarList()
-            self.opp_formation_bars.set_data(opp_rows, [formation_pixmap(f.formation, positions=f.positions)
-                                                        if how == "raw" else None for f in opp_stats])
-            self.box_opp.addWidget(self.opp_formation_bars)
+            rows = [self._rate_row(core.formation_label(f.formation) if how == "raw" else f.formation,
+                                   f.win, f.draw, f.lose, f.mixed, None, f.games,
+                                   icon=("formation", f.formation) if how == "raw" else (), key=f.formation,
+                                   tip=f"상대 {f.formation} — {f.games}경기 승률 {win_rate_text(f.win, f.draw, f.lose, f.mixed)}"
+                                       + (f"\n{sample_note(f.rated, few, f.mixed)}" if core.is_weak(f.rated, few) else ""))
+                    for f in opp_stats]
+            lst = RateRowList(fixed=True, tips={"rate": win_rate_note(mixed)})
+            if how == "raw":
+                for f in opp_stats:   # 자리 점은 그 상대들이 실제로 선 자리 — 받기(포메이션 이름만으로 그림) 전에 붙인다
+                    pm = formation_pixmap(f.formation, positions=f.positions)
+                    if not pm.isNull():
+                        lst.put_icon("formation", f.formation, pm)
+            lst.set_rows(rows)   # 경기 많은 순 그대로(formation_stats 순서)
+            self._start_list_icons(lst)
+            self.opp_formation_list = lst
+            self.box_opp.addWidget(lst)
 
         rb = core.result_breakdown(details, self._ouid)
         self._clear(self.box_result)
-        for label, wdl in (("전후반", rb.normal), ("연장전", rb.extra),
-                           ("승부차기", rb.shootout), ("몰수", rb.forfeit)):
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
-            a = QLabel(label)
-            a.setStyleSheet(f"color: {T.TEXT_DIM};")
-            b = WdlBar(*wdl)
-            c = QLabel(f"({win_rate_text(*wdl, rb.mixed, short=True)})")
-            c.setStyleSheet(f"color: {T.TEXT_DIM};")
-            c.setToolTip(win_rate_note(rb.mixed))
-            h.addWidget(a)
-            h.addStretch(1)
-            h.addWidget(b)
-            h.addWidget(c)
-            if wdl is rb.forfeit:
-                row.setToolTip(FORFEIT_TIP)
-            self.box_result.addWidget(row)
+        rows = [self._rate_row(label, *wdl, bool(rb.mixed), None, tip=FORFEIT_TIP if wdl is rb.forfeit else "")
+                for label, wdl in (("전후반", rb.normal), ("연장전", rb.extra), ("승부차기", rb.shootout), ("몰수", rb.forfeit))]
+        self.result_list = RateRowList(fixed=True, tips={"rate": win_rate_note(bool(rb.mixed))})
+        self.result_list.set_rows(rows)
+        self.box_result.addWidget(self.result_list)
 
         sep = QLabel("시간대별 득실")
         sep.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold; padding-top: 3px;")
@@ -12441,20 +12552,97 @@ class MainWindow(QMainWindow):
             h.addWidget(c)
             self.box_result.addWidget(row)
 
-        self.type_donuts = {}
-        for key, box, counter, word in (("gf", self.box_gf, rb.goal_types, "득점"),
-                                        ("ga", self.box_ga, rb.concede_types, "실점")):
-            self._clear(box)
-            total = sum(counter.values())
-            segs = charts.donut_segments(list(counter.items()))
-            donut = charts.DonutChart(size=120)
-            donut.set_data(segs, center=f"{total:,}", sub=word)
-            self.type_donuts[key] = donut
-            box.addWidget(donut, 0, Qt.AlignmentFlag.AlignHCenter)
-            for name, n, col in segs:   # 범례 겸 숫자 — 조각과 같은 색
-                box.addWidget(BarRow(name, n, total, col))
-            box.addStretch(1)
+        # 득점·실점 유형 = 슛 타입 분포(시도·유효·골 + 전환율) — 슛 맵의 유형별 표와 같은 줄(shot_type_counts)
+        for key, buckets in zip(("gf", "ga"), core.shot_type_counts(details, self._ouid)):
+            self.shot_types[key].set_data(buckets, core.MIN_BUCKET_SHOTS)
+            shots, goals = sum(b.shots for b in buckets), sum(b.goals for b in buckets)
+            self.shot_type_notes[key].setText(
+                f"슛 {shots:,} · 골 {goals:,} · 전환율(골 ÷ 시도)은 시도 {core.MIN_BUCKET_SHOTS}회 미만이면 숨김"
+                " · 위치 기록이 있는 슛만" if shots else "슛 기록이 없습니다.")
+        self._render_shootout_keepers(details)
         self._render_pass_style(details)
+
+    def _render_shootout_keepers(self, details: list[dict]) -> None:
+        """승부차기 상대 GK 카드(65 M6) — 많이 만난 순 SHOOTOUT_GK_MAX 장 · 표본 미달 카드는 흐림 + "표본 N"."""
+        self._clear(self.grid_shootout)
+        keepers = core.shootout_keepers(details, self._ouid or "")
+        self.shootout_cards = []
+        self._gk_face_labels = {}
+        n_games = sum(k.games for k in keepers)
+        if not keepers:
+            self.lb_shootout_note.setText("승부차기까지 간 경기가 없습니다.")
+            return
+        shown = keepers[:config.SHOOTOUT_GK_MAX]
+        self.lb_shootout_note.setText(
+            f"승부차기 {n_games:,}경기 · 상대 골키퍼 {len(keepers):,}장 중 많이 만난 {len(shown)}장 · 카드(시즌)마다 따로 · "
+            f"흐린 카드는 {core.MIN_COND}경기 미만 · 승부차기 승률 = 승 ÷ (승+패)")
+        cols = config.SHOOTOUT_GK_COLS
+        for i, k in enumerate(shown):
+            card = self._shootout_card(k)
+            self.shootout_cards.append(card)
+            self.grid_shootout.addWidget(card, i // cols, i % cols)
+        self._start_shootout_faces([k.sp_id for k in shown])
+
+    def _shootout_card(self, k) -> QFrame:
+        weak = core.is_weak(k.games, core.MIN_COND)
+        card = QFrame()
+        card.setObjectName("gkCard")
+        card.setStyleSheet(f"QFrame#gkCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+                           f" border-radius: {T.RADIUS}px; }}")
+        h = QHBoxLayout(card)
+        h.setContentsMargins(8, 6, 8, 6)
+        face = QLabel()
+        face.setFixedSize(config.SHOOTOUT_GK_FACE_PX, config.SHOOTOUT_GK_FACE_PX)
+        face.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        face.setStyleSheet("border: none;")
+        pm = self._gk_faces.get(k.sp_id)
+        if pm is not None:
+            face.setPixmap(pm)
+        h.addWidget(face)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        # 이름은 길면 글꼴을 줄인다(카드 넷이 1280 폭에 들어가게 — 실화면에서 카드 하나 226px 이 4px 넘쳤다)
+        name = FitLabel(self._names.get(k.sp_id, str(k.sp_id)), base_pt=config.SHOOTOUT_GK_NAME_PT[0],
+                        min_pt=config.SHOOTOUT_GK_NAME_PT[1])
+        name.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; border: none;")
+        col.addWidget(name)
+        rate = QLabel(win_rate_text(k.win, 0, k.lose, False, short=True)
+                      + (f"  {sample_text(k.games, False)}" if weak else ""))
+        rate.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold; border: none;")
+        col.addWidget(rate)
+        sub = QLabel(f"{k.games}경기 · {k.win}승 {k.lose}패")
+        sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+        col.addWidget(sub)
+        h.addLayout(col, 1)
+        card.setToolTip(f"{self._names.get(k.sp_id, str(k.sp_id))} ({self._season_name(k.sp_id)}) — "
+                        f"승부차기 {k.games}경기 {k.win}승 {k.lose}패"
+                        + (f"\n{sample_note(k.games, core.MIN_COND)}" if weak else ""))
+        card.setProperty("weak", weak)
+        card.setProperty("sp_id", k.sp_id)
+        self._gk_face_labels[k.sp_id] = face
+        return card
+
+    def _start_shootout_faces(self, sp_ids: list[int]) -> None:
+        """GK 카드 얼굴 — 이미 받은 얼굴은 다시 안 받는다. 앞 로더는 물러나 종료 표(_retired_loaders)가 기다린다."""
+        need = [sp for sp in sp_ids if sp not in self._gk_faces]
+        if not need:
+            return
+        self._retire_loaders([ld for ld in (self._gk_face_loader,) if ld is not None])
+        loader = ImageLoader(need, self._img_cache_dir)
+        loader.loaded.connect(self._on_gk_face)
+        self._gk_face_loader = loader
+        loader.start()
+
+    def _on_gk_face(self, sp_id: int, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            return
+        px = config.SHOOTOUT_GK_FACE_PX
+        pm = pm.scaled(px, px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self._gk_faces[sp_id] = pm
+        face = self._gk_face_labels.get(sp_id)
+        if face is not None and not sip.isdeleted(face):
+            face.setPixmap(pm)
 
     def _render_pass_style(self, details: list[dict]) -> None:
         """패스 종류 6가지 — 비중(6종 합 대비)·경기당·성공률, 이긴/진 경기 나란히(N5). 원인 단정 없이 숫자만."""
@@ -12551,7 +12739,8 @@ class MainWindow(QMainWindow):
             # 색인 백필 — 묶음(1,000경기 약 0.2초) 사이에서 멈춘다. 끊겨도 다음 실행이 잇는다
             (self._backfill_worker, cancel(self._backfill_worker), 3000, False),
             *[(ld, cancel(ld), 500, False)
-              for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders],
+              for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders
+              + [x for x in (self._gk_face_loader,) if x is not None]],
             # 축구장 칩 카드 정보 — 카드 사이에서 멈춘다(한 장 = 한 트랜잭션 · 요청 하나 타임아웃 10초)
             *[(ld, cancel(ld), 12000, False) for ld in self._pitch_card_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
@@ -12701,6 +12890,7 @@ class MainWindow(QMainWindow):
             self._restore = {}
         self._matches_all, self._details_all = [], []
         self._matches, self._details = [], []
+        self._opp_picked_details = []   # 상대 전적 K1 범위 경기(더블클릭 찾기용 — 65 M4)
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None

@@ -783,6 +783,49 @@ def result_breakdown(details: list[dict], ouid: str, mixed: bool | None = None) 
     return rb
 
 
+@dataclass
+class ShootoutKeeper:
+    """승부차기에서 만난 상대 선발 GK 카드 하나(65 M6) — 승부차기엔 무승부가 없어 승률 = 승 ÷ (승+패)."""
+    sp_id: int
+    win: int = 0
+    lose: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+
+def shootout_keepers(details: list[dict], ouid: str) -> list[ShootoutKeeper]:
+    """승부차기 경기의 상대 선발 GK(spPosition 0)별 내 승부차기 성적 — 많이 만난 순(같으면 spId 순).
+
+    승부차기 판정은 result_breakdown 과 같다(몰수 빼고 · 어느 쪽이든 shootOutScore 가 있으면). 상대 GK 가 없거나
+    결과가 승·패가 아닌 경기는 뺀다. 카드(spId)마다 따로 — 같은 선수라도 시즌이 다르면 다른 줄이다."""
+    acc: dict[int, ShootoutKeeper] = {}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or end_kind(me, opp) in ("몰수승", "몰수패"):
+            continue
+        if not (_num(me.get("shoot") or {}, "shootOutScore") or _num(opp.get("shoot") or {}, "shootOutScore")):
+            continue
+        res = _result_of(me)
+        if "승" not in res and "패" not in res:
+            continue
+        gk = next((p.get("spId") for p in opp.get("player") or []
+                   if p.get("spPosition") == GK_POSITION and isinstance(p.get("spId"), int)), None)
+        if gk is None:
+            continue
+        k = acc.setdefault(gk, ShootoutKeeper(gk))
+        if "승" in res:
+            k.win += 1
+        else:
+            k.lose += 1
+    return sorted(acc.values(), key=lambda k: (-k.games, k.sp_id))
+
+
 # ── 규율·불운 ─────────────────────────────────────────────────────────────
 # (이름, matchDetail 키) — 골대는 matchDetail 이 아니라 shootDetail[].hitPost 에 있다(None 자리).
 DISCIPLINE_AXES = [
@@ -1440,6 +1483,34 @@ def shot_type_breakdown(sm: ShotMap) -> list[ShotBucket]:
     """슛 유형별 효율. 슛이 많은 순 — 실제로 자주 쓰는 수단부터 보게."""
     buckets = _bucketize(sm.shots, lambda s: s.type_name)
     return sorted(buckets.values(), key=lambda b: (-b.shots, b.label))
+
+
+def shot_type_counts(details: list[dict], ouid: str) -> tuple[list[ShotBucket], list[ShotBucket]]:
+    """(내 슛, 상대 슛) 각각 shot_type_breakdown(shot_map(...)) 과 같은 줄(같은 거르기 · 같은 순서) — xG 는 0.
+    Shot 을 안 만들고 한 번 돌며 양쪽을 센다 — [경기 결과](65 M6)에서 shot_map 두 번은 1만 경기 첫 방문을 0.3초 늘렸다(실측)."""
+    sides: tuple[dict, dict] = ({}, {})
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        for p, buckets in ((me, sides[0]), (opp, sides[1])):
+            for sd in p.get("shootDetail") or []:
+                r = sd.get("result")
+                if r not in _SHOT_RESULTS or not isinstance(sd.get("x"), (int, float)) \
+                        or not isinstance(sd.get("y"), (int, float)):
+                    continue
+                name = goal_type_name(sd.get("type"))
+                b = buckets.get(name)
+                if b is None:
+                    b = buckets[name] = ShotBucket(name)
+                b.shots += 1
+                if r == SHOT_GOAL:
+                    b.goals += 1
+                    b.on_target += 1
+                elif r == SHOT_ON_TARGET:
+                    b.on_target += 1
+    mine, theirs = (sorted(s.values(), key=lambda b: (-b.shots, b.label)) for s in sides)
+    return mine, theirs
 
 
 def shot_distance_breakdown(sm: ShotMap) -> list[ShotBucket]:

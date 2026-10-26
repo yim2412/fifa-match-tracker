@@ -794,7 +794,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 55, len(tables)   # 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 54, len(tables)   # 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -914,8 +914,8 @@ def test_fit_table_never_scrolls_sideways_above_min_font():
 
 def test_sorted_column_gets_arrow_room_after_resort():
     # 화살표 자리는 정렬 중인 열에만 준다 — 사용자가 다른 열을 누르면 다시 재야 한다.
-    tb = _win.tbl_opponents
-    _win._go_page("상대 전적")
+    tb = _win.tbl_teamcolor_rate   # 65 M4 — 상대 전적은 줄 목록이 됐다 · 정렬이 켜진 실제 표로
+    _win._go_page("팀컬러 승률")
     _app.processEvents()
     hdr = tb.horizontalHeader()
     for c in range(tb.columnCount()):
@@ -1037,7 +1037,7 @@ def test_dashboard_rivals_skip_unknown_nickname():
 
 def test_opponents_page_uses_season_scope_not_range():
     # 표시 구간을 1경기로 좁혀도 상대 전적은 시즌 범위 전체를 센다(대시보드 '자주 만난 상대'와 같게)
-    tb = _win.tbl_opponents
+    lst = _win.opp_list
     old = (_win.sp_from.value(), _win.sp_to.value())
     shown = []
     orig_show, orig_info = _win._show_match_detail, app_main.QMessageBox.information
@@ -1053,7 +1053,7 @@ def test_opponents_page_uses_season_scope_not_range():
         in_range = {m.opponent for m in _win._slice()[0]}
         in_scope = {m.opponent for m in _win._matches}
         assert len(in_range) < len(in_scope), (in_range, in_scope)  # 픽스처가 차이를 만들어야 의미가 있다
-        names = {tb.item(r, 0).text() for r in range(tb.rowCount())}
+        names = {r.label for r in lst.rows()}
         assert names == in_scope, (names, in_scope)
         # 시즌을 바꾸면 문구도 따라가야 한다 — 처음 만든 문구가 우연히 맞는 것과 구분
         _win._scope_text = lambda: "가짜 시즌"
@@ -1062,8 +1062,8 @@ def test_opponents_page_uses_season_scope_not_range():
         assert "가짜 시즌" in _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
         # 표시 구간 밖 상대도 더블클릭하면 스쿼드가 열린다
         outside = next(iter(in_scope - in_range))
-        row = next(r for r in range(tb.rowCount()) if tb.item(r, 0).text() == outside)
-        _win._on_opponent_double_clicked(tb.item(row, 0))
+        row = next(r for r in range(lst.rowCount()) if lst.row(r).key == outside)
+        _win._on_opponent_double_clicked(lst.model().index(row, 0))
         assert shown == [(outside, "스쿼드", "opp")], shown
     finally:
         _win._show_match_detail, app_main.QMessageBox.information = orig_show, orig_info
@@ -6431,6 +6431,16 @@ def _weak_sites():
     def hbar(chart, games_of):
         return [(games_of(r), bool(r[4]) if len(r) > 4 else False) for r in chart._rows if r[1] is not None]
 
+    def rate_rows(*lists):   # 65 P4 줄 목록 — 줄마다 (분모, 흐림) · 상자를 받으면 그 안의 목록 전부
+        from widgets import RateRowList
+        out = []
+        for x in lists:
+            found = [x] if isinstance(x, RateRowList) else [
+                w for i in range(x.count()) if isinstance(w := x.itemAt(i).widget(), RateRowList)]
+            for lst in found:
+                out += [(r.rated, r.weak) for r in lst.all_rows()]
+        return out
+
     # 판정 분모는 rated(A6) — 섞인 픽스처라 무승부는 표본이 아니다
     tod = {b.label: b.rated for b in app_main.core.time_of_day_rates(_win._matches)}
     opp = {o.nickname: o.rated for o in app_main.core.opponent_stats(_win._matches)}
@@ -6439,8 +6449,13 @@ def _weak_sites():
     # 픽스처엔 골대·퇴장 경기가 없어 막대가 안 생긴다 — 표본이 3·1·2 로 갈리게 만든 경기로 그린다
     disc = lambda: _win._render_discipline(_discipline_details())  # noqa: E731
     return {
-        "성적 진단": (diag, lambda: bars(_win.box_diag_my_division, _win.box_diag_division, _win.box_diag_possession),
+        "성적 진단": (diag, lambda: rate_rows(_win.box_diag_my_division, _win.box_diag_division, _win.box_diag_possession),
                    "MIN_COND"),
+        # 65 M4~M6 — 상대 전적 · 전술 상대 포메이션 · 경기 결과 줄
+        "상대 전적": (lambda: _win._render_opponents(_win._matches), lambda: rate_rows(_win.opp_list), "MIN_COND"),
+        "전술 상대 포메이션": (lambda: _win._render_tactics(_win._details),
+                       lambda: rate_rows(_win.opp_formation_list), "MIN_COND"),
+        "경기 결과": (lambda: _win._render_tactics(_win._details), lambda: rate_rows(_win.result_list), "MIN_COND"),
         "성적 진단 규율": (disc, lambda: bars(_win.box_diag_discipline), "MIN_COND"),
         # 흐름 분석 메뉴 그리기(_render_analysis)를 거쳐 재야 그 구역이 실제로 불리는지도 잰다
         "흐름 분석 연승": (_win._render_analysis, lambda: bars(_win.box_streak), "streak_min_n"),
@@ -6853,15 +6868,39 @@ def test_donut_groups_tail_into_other():
     assert [s[0] for s in few] == ["나", "가"] and "기타" not in [s[0] for s in few]
 
 
-def test_tactics_formation_bars_and_type_donuts():
+def test_tactics_formation_rows_and_shot_types():
+    # 65 M5·M6 — 상대 포메이션 줄 · 경기 결과 줄 · 득점/실점 유형(슛 타입 분포 꼴)
     _win._render_tactics(_win._details)
-    bars = _win.opp_formation_bars
-    opp = app_main.core.formation_stats(_win._details, _win._ouid)
-    assert [r[0] for r in bars._rows] == [f.formation for f in opp]
-    assert all(r[4] == (f.games < app_main.core.MIN_COND) for r, f in zip(bars._rows, opp))
-    assert set(_win.type_donuts) == {"gf", "ga"}
-    rb = app_main.core.result_breakdown(_win._details, _win._ouid)
-    assert sum(v for _, v, _ in _win.type_donuts["gf"]._segs) == sum(rb.goal_types.values())
+    core = app_main.core
+    rows = _win.opp_formation_list.all_rows()
+    opp = core.formation_stats(_win._details, _win._ouid)
+    assert [r.key for r in rows] == [f.formation for f in opp]
+    assert [r.label for r in rows] == [core.formation_label(f.formation) for f in opp]
+    assert [(r.win, r.draw, r.lose) for r in rows] == [(f.win, f.draw, f.lose) for f in opp]
+    assert all(r.weak == (f.rated < core.MIN_COND) for r, f in zip(rows, opp))
+    rb = core.result_breakdown(_win._details, _win._ouid)
+    res = {r.label: (r.win, r.draw, r.lose) for r in _win.result_list.all_rows()}
+    assert res == {"전후반": tuple(rb.normal), "연장전": tuple(rb.extra), "승부차기": tuple(rb.shootout),
+                   "몰수": tuple(rb.forfeit)}, res
+    # 스크롤 페이지 안 목록은 줄 수만큼 높이를 고정한다(안쪽 스크롤이 생기면 줄이 가려진다)
+    rl = _win.result_list
+    assert rl.height() == 4 * rl.rate_delegate.row_height(rl.font()) + 2 * rl.frameWidth() + 2, \
+        (rl.height(), rl.rate_delegate.row_height(rl.font()))
+    # 상대 포메이션 그림은 그 상대들이 실제로 선 자리(positions)로 — 이름만으로 그린 그림이 아니다
+    import widgets
+    f0 = next(f for f in opp if f.positions)
+    got = _win.opp_formation_list.icon("formation", f0.formation).toImage()
+    assert got == widgets.formation_pixmap(f0.formation, positions=f0.positions).toImage()
+    assert got != widgets.formation_pixmap(f0.formation).toImage(), "자리 점이 이름만으로 그린 그림과 같다 — 검사가 빈다"
+    for key, mine in (("gf", True), ("ga", False)):
+        sm = core.shot_map(_win._details, _win._ouid, mine=mine)
+        got = _win.shot_types[key].rows
+        assert sum(r[1] for r in got) == sm.total and sum(r[3] for r in got) == sm.goals, (key, got)
+        assert all(r[3] <= r[2] <= r[1] for r in got), got   # 골 ⊂ 유효 ⊂ 시도
+        # 시도가 문턱 미만인 줄은 전환율을 숨긴다(작은 표본) — 문턱 이상이면 골÷시도
+        for name, shots, _on, goals, conv in got:
+            want = f"{goals / shots * 100:.0f}%" if shots >= core.MIN_BUCKET_SHOTS else app_main.NA
+            assert conv == want, (name, shots, goals, conv)
 
 
 def test_dashboard_head_formation_follows_account():
@@ -10392,10 +10431,12 @@ def test_tactics_opp_formation_grouping():
     cb = _win.cb_tactics_form
     try:
         _win._render_tactics(_win._details)
-        raw = list(_win.opp_formation_bars._rows)
+        raw = _win.opp_formation_list.all_rows()
         assert _win.lb_tactics_form_note.isHidden()
+        assert all(r.icon == ("formation", r.key) for r in raw), "묶지 않은 줄은 자리 그림이 있어야"
         cb.setCurrentIndex(cb.findData("back"))       # 콤보가 전술 탭을 무효화 → LAZY_RENDER=False 라 바로 그린다
-        grouped = _win.opp_formation_bars._rows
+        grouped = [(r.label, r.icon) for r in _win.opp_formation_list.all_rows()]
+        assert all(icon == () for _l, icon in grouped), "묶은 줄은 자리 그림이 없다"
         opp = app_main.core.formation_stats(_win._details, _win._ouid)
         want = {}
         for f in opp:
@@ -10442,14 +10483,13 @@ def test_match_list_opponent_teamcolor_filter():
 
 
 def _opp_rows():
-    t = _win.tbl_opponents
-    return {t.item(r, 0).text(): t.item(r, 1).text() for r in range(t.rowCount())}
+    import widgets
+    return {r.key: widgets.wdl_text(r.win, r.draw, r.lose) for r in _win.opp_list.rows()}
 
 
 def test_opponent_matchup_filter_k1():
     """57 K1 — 경기 수(최근 N · 직접 지정) · 표본 미만 빼기 · 내 포메이션 · 상대 구단가치 칸('모름' 포함) · 계정이 바뀌면 처음으로."""
     keep_vals, keep_bins = dict(_win._team_values), _win._opp_value_bins
-    t = _win.tbl_opponents
     try:
         _win._go_page("상대 전적")
         all_rows = _opp_rows()
@@ -10505,28 +10545,36 @@ def test_opponent_matchup_filter_k1():
 
 
 def test_opponent_diff_column_hides_weak_rows_k13():
-    """57 K13 — '전체 대비' = 그 상대 승률 − 필터에 걸린 경기 전체 승률 · 표본 흐림 줄은 비운다(E2)."""
-    t = _win.tbl_opponents
-    col = _win.OPPONENT_COLUMNS.index("전체 대비")
+    """57 K13 — '(±차)' = 그 상대 승률 − 필터에 걸린 경기 전체 승률 · 표본 흐림 줄은 비운다(E2) · 65 M4 줄 목록에서도."""
+    import widgets
+    lst = _win.opp_list
     keep = app_main.core.MIN_COND
+
+    from PyQt6.QtCore import QRectF
+
+    def diff_seg(row):
+        segs = lst.rate_delegate.layout(row, QRectF(0, 0, 900, 60), lst.font())
+        return next((s.text for s in segs if s.role == "diff"), "")
     try:
         _win._go_page("상대 전적")
-        assert all(t.item(r, col).text() == "" for r in range(t.rowCount())), "몇 판짜리 줄에 차이를 보였다"
+        assert all(r.diff is None and diff_seg(r) == "" for r in lst.rows()), "몇 판짜리 줄에 차이를 보였다"
         app_main.core.MIN_COND = 1
         _win._invalidate("opponents")
         ms = _win._matches
         base = core.win_pct(sum("승" in m.result for m in ms), sum("무" in m.result for m in ms),
                             sum("패" in m.result for m in ms), core.mixed_of_matches(ms))
         stats = {s.nickname: s for s in app_main.opponent_stats(ms)}
-        for r in range(t.rowCount()):
-            s = stats[t.item(r, 0).text()]
-            want = f"{s.win_rate - base:+.1f}%p" if s.rated else ""     # 분모 0(몰수뿐)은 승률도 '—' 라 차이가 없다
-            assert t.item(r, col).text() == want, (t.item(r, col).text(), s.win_rate, base)
-            if want:   # 3.1.1 P3 — 차이 칸 색이 그 줄의 차이를 따른다(정렬된 뒤라 행 순서가 아니라 칸 값으로)
-                import widgets
-                got = t.item(r, col).foreground().color().name()
+        for row in lst.rows():
+            s = stats[row.key]
+            want = f"({s.win_rate - base:+.1f})" if s.rated else ""     # 분모 0(몰수뿐)은 승률도 '—' 라 차이가 없다
+            assert diff_seg(row) == want, (diff_seg(row), s.win_rate, base)
+            if want:   # 3.1.1 P3 — 차이 글자 색이 그 줄의 차이를 따른다
+                got = lst.rate_delegate.colors(row)["diff"]
                 assert got == widgets.delta_color(s.win_rate - base) != T.TEXT, (got, s.win_rate - base)
-        assert any(t.item(r, col).text() for r in range(t.rowCount())), "차이를 보인 줄이 없다 — 검사가 비었다"
+        assert any(diff_seg(r) for r in lst.rows()), "차이를 보인 줄이 없다 — 검사가 비었다"
+        # 승률 카드 = 같은 기준(필터에 걸린 경기 전체)
+        assert _win.card_opp_rate.value.text() == widgets.win_rate_text(
+            *(sum(k in m.result for m in ms) for k in "승무패"), core.mixed_of_matches(ms), short=True)
     finally:
         app_main.core.MIN_COND = keep
         _win._invalidate("opponents")
@@ -10560,19 +10608,24 @@ def test_profile_action_opens_nexon_rank_page_k13():
     app_main.QDesktopServices.openUrl = lambda url: opened.append(url.toString())   # toString 은 한글을 풀어 준다
     try:
         lst = _win.match_list
-        for view in (lst, _win.tbl_opponents):
+        for view in (lst, _win.opp_list):
             _win._render_all()
             _win._render_matches(_win._slice()[0])
             assert view.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu and view.actions(), "오른쪽 클릭 메뉴가 없다"
-            if view is lst:   # 65 M2 — 카드 목록은 고른 줄의 상대(둘째 줄 — 첫 줄과 다른 상대여야 '고른 줄' 을 잰다)
-                r = next(i for i in range(lst.rowCount()) if lst.row(i).opponent != lst.row(0).opponent)
-                lst.setCurrentIndex(lst.model().index(r, 0))
-                nick = lst.row(r).opponent
-            else:
-                view.setCurrentCell(0, 0)
-                nick = view.item(0, 0).text()
+            # 65 M2·M4 — 줄 목록은 고른 줄의 상대(첫 줄과 다른 상대여야 '고른 줄' 을 잰다)
+            nick_of = (lambda i: lst.row(i).opponent) if view is lst else (lambda i: view.row(i).key)
+            r = next(i for i in range(view.rowCount()) if nick_of(i) != nick_of(0))
+            view.setCurrentIndex(view.model().index(r, 0))
+            nick = nick_of(r)
             view.actions()[0].trigger()
             assert opened and opened[-1].endswith(nick) and "datacenter/rank" in opened[-1], opened
+        # 상대 전적의 묶음 줄(포메이션·팀컬러)은 사람이 아니다 — 메뉴를 눌러도 아무 데도 안 연다
+        _win.cb_opp_group.setCurrentIndex(_win.cb_opp_group.findData("formation"))
+        n = len(opened)
+        _win.opp_list.setCurrentIndex(_win.opp_list.model().index(0, 0))
+        _win.opp_list.actions()[0].trigger()
+        assert len(opened) == n, opened[n:]
+        _win.cb_opp_group.setCurrentIndex(0)
     finally:
         app_main.QDesktopServices.openUrl = orig
 
@@ -10965,9 +11018,9 @@ def test_wdl_bars_replace_wdl_text_rows():
     import widgets
     rb = app_main.core.result_breakdown(_win._details, _win._ouid)
     _win._render_all()
-    got = [w.counts() for w in _win.findChildren(widgets.WdlBar) if w.parent() and
-           w.parent().parent() is not None and _win.box_result.indexOf(w.parent()) >= 0]
+    got = [(r.win, r.draw, r.lose) for r in _win.result_list.all_rows()]   # 65 M6 — 줄 목록(승무패 막대 꼴 그대로)
     assert got == [tuple(x) for x in (rb.normal, rb.extra, rb.shootout, rb.forfeit)], got
+    assert _win.box_result.indexOf(_win.result_list) >= 0
     cs = app_main.core.clutch_summary(_win._details, _win._ouid)
     _win._render_clutch(_win._details, _win._matches)
     got = [w.counts() for w in _win.findChildren(widgets.WdlBar)
@@ -11162,6 +11215,187 @@ def test_match_detail_head_counts_only_that_season():
         assert _win._season_h2h_text(this) == f"이 시즌 맞대결 3판 · {app_main.wdl_text(2, 0, 1)} (저장된 전체)"
     finally:
         _win._rank_seasons, _win._matches_all = keep
+
+
+def test_rate_row_list_65():
+    """65 P4 승률 줄 목록 — 정렬 넷(승률 순에선 표본 미달이 아래) · 상대 전적 묶음 셋 · 찾기 · 큰 창~1280 잘림 없음 · 막대 꼴."""
+    import dataclasses
+    import widgets
+    R = widgets.RateRow
+    rows = [R("a", 1, 0, 0, rate=100.0, weak=True, recent=0), R("b", 6, 2, 2, rate=60.0, recent=2),
+            R("c", 3, 3, 5, rate=27.3, recent=1), R("d", 0, 0, 1, rate=0.0, weak=True, recent=3)]
+    order = lambda how: [r.label for r in widgets.sort_rate_rows(rows, how)]  # noqa: E731
+    assert order("high") == ["b", "c", "a", "d"], order("high")      # 몇 판짜리 100% 가 맨 위로 안 온다(⑧)
+    assert order("low") == ["c", "b", "d", "a"], order("low")        # 몇 판짜리 0% 가 맨 위로 안 온다
+    assert order("games") == ["c", "b", "a", "d"], order("games")
+    assert order("recent") == ["a", "c", "b", "d"], order("recent")
+    # 줄 막대는 WdlBar 의 compact 꼴(E6 — 같은 색 함수) · 흐림은 바탕 쪽으로
+    WB = widgets.WdlBar
+    assert WB.colors_for(False, True)[0] == T.blend(T.PANEL, T.GOOD_FILL, WB.COMPACT_MIX) != T.GOOD_FILL
+    assert WB.colors_for(False)[0] == T.GOOD_FILL and WB.colors_for(False)[2] == T.BAD_FILL
+    assert widgets.WdlBar(1, 0, 1, compact=True).strip.colors() == widgets.WdlBar.colors_for(False, True)
+    assert widgets.WdlBar.colors_for(True, True)[0] == T.blend(T.PANEL_2, widgets.WdlBar.colors_for(False, True)[0],
+                                                               T.WEAK_MIX)
+    col = widgets.RateRowDelegate.colors
+    assert col(rows[1])["bar"] == widgets.WdlBar.colors_for(False, True) and col(rows[1])["win"] == T.GOOD
+    assert col(rows[0])["bar"] == widgets.WdlBar.colors_for(True, True)
+    assert all(col(rows[0])[k] == T.TEXT_DIM for k in ("win", "lose", "rate", "label")), col(rows[0])   # 흐림은 색도
+    lst = _win.opp_list
+    # 표본 미달 줄은 차이를 들고 와도 안 그리고 "표본 N" 을 붙인다(색만으로 말하지 않게)
+    from PyQt6.QtCore import QRectF
+    w_row = R("w", 1, 0, 0, rate_text="100.0%", rate=100.0, diff=50.0, weak=True, sample="표본 1")
+    roles = {s.role: s.text for s in lst.rate_delegate.layout(w_row, QRectF(0, 0, 900, 60), lst.font())}
+    assert "diff" not in roles and roles.get("sample") == "표본 1", roles
+    cb_g, cb_s = _win.cb_opp_group, _win.cb_opp_sort
+    keep_c = dict(_win._team_colors)
+    try:
+        _win._go_page("상대 전적")
+        owners = lst.all_rows()
+        assert {r.key for r in owners} == {s.nickname for s in app_main.opponent_stats(_win._matches)}
+        assert all(r.icon[0] == "division" for r in owners)
+        assert [cb_s.itemData(i) for i in range(cb_s.count())] == ["games", "high", "low", "recent"]
+        cb_s.setCurrentIndex(cb_s.findData("recent"))
+        assert [r.key for r in lst.rows()] == list(dict.fromkeys(m.opponent for m in _win._matches)), lst.rows()
+        # 더블클릭은 목록과 같은 범위(K1 필터를 거친 경기)에서 찾는다 — 범위가 비면 시즌 전체를 뒤지지 않고 안내만
+        shown = []
+        orig_show, orig_info = _win._show_match_detail, app_main.QMessageBox.information
+        keep_picked = _win._opp_picked_details
+        _win._show_match_detail = lambda *a, **k: shown.append("창")
+        app_main.QMessageBox.information = lambda *a, **k: shown.append("안내")
+        try:
+            _win._on_opponent_double_clicked(lst.model().index(0, 0))
+            _win._opp_picked_details = []
+            _win._on_opponent_double_clicked(lst.model().index(0, 0))
+            assert shown == ["창", "안내"], shown
+        finally:
+            _win._show_match_detail, app_main.QMessageBox.information = orig_show, orig_info
+            _win._opp_picked_details = keep_picked
+        # 상대 포메이션 묶음 — formation_stats 그대로 · 최근 경기 정렬은 없다(그 자리는 경기 수 순으로)
+        cb_g.setCurrentIndex(cb_g.findData("formation"))
+        f = core.formation_stats(_win._details, _OUID)
+        assert sorted(r.key for r in lst.all_rows()) == sorted(x.formation for x in f), lst.all_rows()
+        assert "recent" not in [cb_s.itemData(i) for i in range(cb_s.count())] and cb_s.currentData() == "games"
+        assert all(lst.icon("formation", r.key) is not None for r in lst.all_rows()), "포메이션 그림을 안 붙였다"
+        f0 = next(x for x in f if x.positions)   # 자리 점은 실제로 선 자리 — 이름만으로 그린 그림이 아니다
+        assert lst.icon("formation", f0.formation).toImage() == widgets.formation_pixmap(
+            f0.formation, positions=f0.positions).toImage()
+        # 묶음 줄은 사람이 아니다 — 더블클릭해도 창도 안내도 없다
+        shown = []
+        orig_show, orig_info = _win._show_match_detail, app_main.QMessageBox.information
+        _win._show_match_detail = lambda *a, **k: shown.append("창")
+        app_main.QMessageBox.information = lambda *a, **k: shown.append("안내")
+        try:
+            _win._on_opponent_double_clicked(lst.model().index(0, 0))
+            assert shown == [], shown
+        finally:
+            _win._show_match_detail, app_main.QMessageBox.information = orig_show, orig_info
+        # 상대 팀컬러 묶음 — 아는 상대만 · 상대 수
+        opps = list(dict.fromkeys(m.opponent for m in _win._matches))
+        _win._team_colors.clear()
+        _win._team_colors.update({opps[0]: "팀가", opps[1]: "팀가"})
+        cb_g.setCurrentIndex(cb_g.findData("color"))
+        got = [(r.label, r.games, r.sub) for r in lst.all_rows()]
+        n = sum(1 for m in _win._matches if m.opponent in opps[:2])
+        assert got == [("팀가", n, "상대 2명")], got
+        _win.ed_opponent_filter.setText("없는글자")
+        assert lst.rowCount() == 0 and len(lst.all_rows()) == 1
+        _win.ed_opponent_filter.setText("가")
+        assert lst.rowCount() == 1
+        _win.ed_opponent_filter.setText("")
+        cb_g.setCurrentIndex(0)
+        # 같은 상대를 여러 번 — 최근 순서는 그 상대의 가장 최근 경기(목록 맨 앞에서 처음 나온 자리) · 팀컬러 상대 수는 사람 수
+        m0 = _win._matches[0]
+        ms = [dataclasses.replace(m0, opponent=n, match_id=f"r{i}") for i, n in enumerate(("가", "나", "가"))]
+        rec = {r.key: r.recent for r in _win._opp_owner_rows(ms, 50.0, 3)}
+        assert rec == {"가": 0, "나": 1}, rec
+        _win._team_colors.update({"가": "팀나", "나": "팀나"})
+        got = [(r.label, r.games, r.sub) for r in _win._opp_color_rows(ms)]
+        assert got == [("팀나", 3, "상대 2명")], got
+        # 큰 창 ~ 1280×720 · 작은 화면에서 이름·숫자가 안 잘린다(보조 글은 잘려도 툴팁). 실데이터 길이로 채운다
+        dlg = lst.rate_delegate
+        long = dataclasses.replace(lst.all_rows()[0], label="가나다라마바사아자차카타", win=1234, draw=567, lose=1089,
+                                   rate_text="49.9%*", diff=-12.3, sub="득 1.23 · 실 2.34 · 최근 2026-10-26 23:59",
+                                   icon=("division", 1))
+        weak_long = dataclasses.replace(long, weak=True, diff=None, sample="승패 1,234판")
+        small = app_main.initial_window(1280, 688).min_size
+        try:
+            for size in (app_main.MIN_WINDOW, small, (1600, 900), app_main.LARGE_WINDOW):
+                _win.setMinimumSize(*small)
+                _at_size(*size)
+                w = lst.viewport().width()
+                assert w > 600, (size, w)
+                assert not dlg.overflow(long, w, lst.font()) and not dlg.overflow(weak_long, w, lst.font()), (size, w)
+            assert dlg.overflow(long, 300, lst.font()), "좁은 폭에서도 넘침이 0 — overflow 가 아무것도 안 잰다"
+        finally:
+            _win.setMinimumSize(*app_main.MIN_WINDOW)
+            _at_size(1600, 900)
+        lst.viewport().grab()   # 대리자 그리기가 예외 없이 도는지(그림 경로)
+        assert lst.visualRect(lst.model().index(0, 0)).height() == dlg.row_height(lst.font())
+    finally:
+        _win.ed_opponent_filter.setText("")
+        _win._team_colors.clear()
+        _win._team_colors.update(keep_c)
+        cb_g.setCurrentIndex(0)
+        cb_s.setCurrentIndex(0)
+
+
+def test_shootout_keeper_cards_65():
+    """65 M6 — 승부차기 상대 GK 카드: 많이 만난 순 SHOOTOUT_GK_MAX 장 · 표본 미달 흐림 · 얼굴은 받은 것을 다시 안 받는다."""
+    from pathlib import Path
+    from PyQt6.QtGui import QPixmap
+
+    def so_game(i, gk, res):
+        return {"matchId": f"so{i}", "matchInfo": [
+            {"ouid": _OUID, "nickname": "나", "matchDetail": {"matchResult": res, "matchEndType": 0},
+             "shoot": {"shootOutScore": 4}},
+            {"ouid": "x", "nickname": "상대", "matchDetail": {"matchEndType": 0}, "shoot": {"shootOutScore": 3},
+             "player": [{"spId": gk, "spPosition": 0}]}]}
+    big = core.MIN_COND
+    dets = [so_game(f"a{i}", 100, "승" if i % 2 else "패") for i in range(big)] + \
+        [so_game(f"b{i}", 101 + i // 2, "승") for i in range(26)]          # 13장 × 2경기
+    try:
+        _win._render_shootout_keepers(dets)
+        cards = _win.shootout_cards
+        assert len(cards) == app_main.config.SHOOTOUT_GK_MAX < 14, len(cards)
+        assert cards[0].property("sp_id") == 100 and not cards[0].property("weak")
+        assert all(c.property("weak") for c in cards[1:]), "2경기 카드가 흐리지 않다"
+        assert "상대 골키퍼 14장" in _win.lb_shootout_note.text(), _win.lb_shootout_note.text()
+        assert _win.grid_shootout.count() == len(cards)
+        asked = list(_win._gk_face_loader._sp_ids)
+        assert asked == [c.property("sp_id") for c in cards], asked
+        # 얼굴이 오면 그 카드에 붙고 · 다시 그릴 때 그 얼굴은 다시 안 받는다
+        path = Path(tempfile.mkdtemp()) / "f.png"
+        pm = QPixmap(10, 10)
+        pm.fill()
+        pm.save(str(path))
+        _win._on_gk_face(100, str(path))
+        assert not _win._gk_face_labels[100].pixmap().isNull()
+        _win._render_shootout_keepers(dets)
+        assert not _win._gk_face_labels[100].pixmap().isNull(), "다시 그렸더니 받은 얼굴이 사라졌다"
+        assert 100 not in _win._gk_face_loader._sp_ids, _win._gk_face_loader._sp_ids
+        # 1280×720 에서 카드 넷이 가로로 안 넘친다 — 실화면(사본 12장)에서 4px 넘쳐 가로 스크롤이 생겼던 자리. 긴 이름으로
+        from PyQt6.QtWidgets import QScrollArea
+        keep_names = dict(_win._names)
+        _win._names.update({sp: "가나다라마바사아자차카타파하" for sp in range(100, 115)})
+        try:
+            _win._go_page("전술·경기 결과", "경기 결과")
+            _win._render_shootout_keepers(dets)
+            _at_size(*app_main.MIN_WINDOW)
+            areas = [s for s in _win.findChildren(QScrollArea)   # 바깥 페이지 스크롤과 탭 안 스크롤 둘 다
+                     if s.isVisible() and s.widget().isAncestorOf(_win.shootout_cards[0])]
+            assert len(areas) >= 2, areas
+            over = [(s.viewport().width(), s.widget().minimumSizeHint().width()) for s in areas
+                    if s.horizontalScrollBar().maximum() > 0]
+            assert not over, over
+        finally:
+            _win._names.clear()
+            _win._names.update(keep_names)
+            _at_size(1600, 900)
+        _win._render_shootout_keepers([])
+        assert not _win.shootout_cards and "없습니다" in _win.lb_shootout_note.text()
+    finally:
+        _win._gk_faces.pop(100, None)
+        _win._render_all()
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

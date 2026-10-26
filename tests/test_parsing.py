@@ -189,6 +189,49 @@ def test_result_breakdown():
     assert rb.forfeit == [0, 0, 1], rb.forfeit
 
 
+def test_shootout_keepers():
+    # 65 M6 — 손으로 지은 경기: 승부차기 넷(같은 GK 셋 · 다른 GK 하나) + 승부차기 아님 + 몰수 + GK 없음 + 결과 오류
+    def game(mid, res, gk=900, so=(5, 4), my_end=0, opp_end=0):
+        players = [{"spId": 7, "spPosition": 25}] + ([{"spId": gk, "spPosition": 0}] if gk else []) \
+            + [{"spId": 901, "spPosition": 28}]   # 교체 명단의 골키퍼는 선발이 아니다
+        me = {"matchDetail": {"matchResult": res, "matchEndType": my_end}, "shoot": {"shootOutScore": so[0]}}
+        opp = {"matchDetail": {"matchEndType": opp_end}, "shoot": {"shootOutScore": so[1]}, "player": players}
+        return _detail_game(mid, me=me, opp=opp)
+    details = [game("a", "승"), game("b", "패", so=(3, 4)), game("c", "승", so=(0, 2)),   # 내 점수 0 이어도 승부차기
+               game("d", "승", gk=800),
+               game("e", "승", so=(0, 0)),                    # 승부차기 아님
+               game("f", "승", my_end=1),                      # 몰수승 — 승부차기 점수가 있어도 뺀다
+               game("g", "승", gk=None),                        # 상대 선발 GK 가 없다
+               game("h", "오류")]
+    got = [(k.sp_id, k.win, k.lose) for k in st.shootout_keepers(details, "me")]
+    assert got == [(900, 2, 1), (800, 1, 0)], got   # 많이 만난 순
+    k = st.shootout_keepers(details, "me")[0]
+    assert k.games == 3 and abs(k.win_rate - 200 / 3) < 1e-9, (k.games, k.win_rate)
+    # 같은 수면 spId 순 · 내가 없는 경기는 건너뛴다
+    tie = [game("x", "승", gk=5), game("y", "패", gk=3), _detail_game("z", me={"ouid": "남"})]
+    assert [k.sp_id for k in st.shootout_keepers(tie, "me")] == [3, 5]
+    # 같은 경기 묶음을 result_breakdown 도 승부차기로 센다(판정이 같은 기준)
+    rb = st.result_breakdown(details[:4], "me")
+    assert rb.shootout == [3, 0, 1], rb.shootout
+
+
+def test_shot_type_counts_matches_shot_map_path():
+    # 65 M6 빠른 길 — shot_type_breakdown(shot_map(...)) 과 같은 줄(이름·시도·유효·골·순서). 실응답 픽스처 + 거르기 경계
+    ouid, _, details = _load()
+    for mine, side in zip((True, False), st.shot_type_counts(details, ouid)):
+        want = [(b.label, b.shots, b.on_target, b.goals) for b in st.shot_type_breakdown(st.shot_map(details, ouid, mine))]
+        got = [(b.label, b.shots, b.on_target, b.goals) for b in side]
+        assert got == want and got, (mine, got, want)
+    me = {"shootDetail": [{"x": 0.9, "y": 0.5, "result": 3, "type": 1}, {"x": 0.9, "y": 0.5, "result": 1, "type": 1},
+                          {"x": None, "y": 0.5, "result": 3, "type": 1},       # 좌표 없음 — 뺀다
+                          {"x": 0.9, "y": 0.5, "result": 9, "type": 3},        # 모르는 결과 — 뺀다
+                          {"x": 0.8, "y": 0.4, "result": 2, "type": 3}]}
+    d = [_detail_game("s", me=me)]
+    got = [(b.label, b.shots, b.on_target, b.goals) for b in st.shot_type_counts(d, "me")[0]]
+    want = [(b.label, b.shots, b.on_target, b.goals) for b in st.shot_type_breakdown(st.shot_map(d, "me"))]
+    assert got == want == [(st.GOAL_TYPES[1], 2, 2, 1), (st.GOAL_TYPES[3], 1, 0, 0)], (got, want)
+
+
 def _end_game(my_end, my_res, opp_end=0, opp_res="승"):
     return {"matchId": "e", "matchInfo": [
         {"ouid": "me", "matchDetail": {"matchResult": my_res, "matchEndType": my_end}},
