@@ -107,6 +107,11 @@ MIN_HEIGHT_SMALL = 480  # 레이아웃 하한 434(실측) 위 여유 — 434~640
 # 창을 띄우기 전엔 실제 테두리 크기를 모른다 — 판정할 땐 이만큼 더해 보고, 띄운 뒤 실제 값으로 한 번 더 확인한다.
 # 윈도우 11 의 제목줄 약 31 + 위아래 테두리, 좌우 테두리.
 FRAME_ALLOWANCE = (16, 40)
+# 넓은 화면(QHD 100%·125% · 4K 150% 등)의 기본 — 테두리까지 1920x1080(2026-10-26 사용자). 안쪽 크기로 정하면
+# 흔한 QHD 125%(쓸 수 있는 높이 약 1114)에 제목줄까지 안 들어가 1600x900 으로 떨어진다. 판정은 해상도가 아니라
+# 쓸 수 있는 넓이로(배율 반영) — 해상도로 정하면 배율 큰 화면에서 넘친다(1.0.3).
+LARGE_WINDOW_OUTER = (1920, 1080)
+LARGE_WINDOW = (LARGE_WINDOW_OUTER[0] - FRAME_ALLOWANCE[0], LARGE_WINDOW_OUTER[1] - FRAME_ALLOWANCE[1])
 NARROW_SCREEN_MSG = ("화면 배율이 커서 일부가 잘릴 수 있습니다 — 윈도우 디스플레이 설정에서 배율을 125% 이하로 "
                      "낮추면 전부 보입니다.")
 
@@ -129,6 +134,8 @@ def initial_window(avail_w: int, avail_h: int) -> WindowPlan:
     """쓸 수 있는 화면 크기(배율 반영 · 작업 표시줄 뺀 것)로 창을 어떻게 열지 정한다.
     모니터 해상도로 정하면 FHD 150% 노트북에서 1600x900 이 화면 밖으로 넘친다."""
     fw, fh = FRAME_ALLOWANCE
+    if avail_w >= LARGE_WINDOW[0] + fw and avail_h >= LARGE_WINDOW[1] + fh:
+        return WindowPlan(LARGE_WINDOW, False, MIN_WINDOW, False)
     if avail_w >= DEFAULT_WINDOW[0] + fw and avail_h >= DEFAULT_WINDOW[1] + fh:
         return WindowPlan(DEFAULT_WINDOW, False, MIN_WINDOW, False)
     if avail_w >= MIN_WINDOW[0] + fw and avail_h >= MIN_WINDOW[1] + fh:
@@ -2742,7 +2749,7 @@ class MainWindow(QMainWindow):
         """그 화면에 맞는 최소 크기를 걸고, 창이 화면보다 크면 줄인다.
         keep_size: 저장된 크기를 살린다(화면보다 클 때만 줄임). 아니면 규칙의 기본 크기로."""
         if screen is None:
-            self.resize(*DEFAULT_WINDOW)
+            self.resize(*DEFAULT_WINDOW)  # 화면을 모를 땐 넘치지 않을 쪽(큰 창은 넓이를 잰 뒤에만)
             self.setMinimumSize(*MIN_WINDOW)
             return None
         avail = screen.availableGeometry()

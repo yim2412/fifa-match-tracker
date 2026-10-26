@@ -717,7 +717,7 @@ def _check_elisions(tables) -> None:
     # 생기고 그 폭만큼 가로가 준다(1.0.3).
     small = app_main.initial_window(1280, 688).min_size
     try:
-        for size in (app_main.MIN_WINDOW, small, (1600, 900)):
+        for size in (app_main.MIN_WINDOW, small, (1600, 900), app_main.LARGE_WINDOW):
             _win.setMinimumSize(*small)
             _at_size(*size)
             assert (_win.width(), _win.height()) == tuple(size), ("그 크기로 못 줄였다", size, _win.size())

@@ -68,7 +68,8 @@ def _child(case: str, screen: str, settings_path: str) -> None:
     if case == "move":
         win.show_initial()
         app.processEvents()
-        big_ok = win.width() == app_main.DEFAULT_WINDOW[0]
+        av = win.screen().availableGeometry()
+        big_ok = win.width() == app_main.initial_window(av.width(), av.height()).size[0]
         win.move(1920 + 100, 50)  # 오른쪽 모니터(150%, 논리 1280x720)로
         for _ in range(5):
             app.processEvents()
@@ -237,6 +238,11 @@ def test_rules_by_usable_screen_size():
     import app_main as a
     # 쓸 수 있는 크기 = 배율 반영 해상도 − 작업 표시줄(윈도우 11 48px → 100% 48 · 125% 38 · 150% 32)
     cases = {
+        # 넓은 화면(2026-10-26) — 테두리까지 1920x1080. QHD 125% 가 큰 창이 되는 게 바깥 크기로 정한 이유다
+        "QHD 100%": ((2560, 1392), a.LARGE_WINDOW, False),
+        "QHD 125%": ((2048, 1114), a.LARGE_WINDOW, False),
+        "4K 150%": ((2560, 1408), a.LARGE_WINDOW, False),
+        "QHD 150%": ((1706, 928), a.MIN_WINDOW, False),   # 1600x900 + 제목줄(940)도 안 들어간다
         "FHD 100%": ((1920, 1032), a.DEFAULT_WINDOW, False),
         "FHD 125%": ((1536, 826), a.MIN_WINDOW, False),
         "FHD 150%": ((1280, 688), None, True),
@@ -257,6 +263,10 @@ def test_rules_by_usable_screen_size():
     fw, fh = a.FRAME_ALLOWANCE
     dw, dh = a.DEFAULT_WINDOW
     mw, mh = a.MIN_WINDOW
+    assert a.LARGE_WINDOW[0] + fw == 1920 and a.LARGE_WINDOW[1] + fh == 1080, a.LARGE_WINDOW  # 테두리까지 1920x1080
+    assert a.initial_window(1920, 1080).size == a.LARGE_WINDOW
+    assert a.initial_window(1919, 1080).size == a.DEFAULT_WINDOW
+    assert a.initial_window(1920, 1079).size == a.DEFAULT_WINDOW
     assert a.initial_window(dw + fw, dh + fh).size == a.DEFAULT_WINDOW
     assert a.initial_window(dw + fw - 1, dh + fh).size == a.MIN_WINDOW
     assert a.initial_window(dw + fw, dh + fh - 1).size == a.MIN_WINDOW
@@ -280,11 +290,15 @@ def test_old_behavior_overflows_small_screen():
 
 
 def test_first_run_on_each_screen():
-    big = _run("first", "fhd100")
-    assert big["size"] == [1600, 900] and not big["maximized"] and _inside(big), big
-    ax, ay, aw, ah = big["avail"]
-    fx, fy, fw, fh = big["frame"]
-    assert abs((fx + fw / 2) - (ax + aw / 2)) <= 2 and abs((fy + fh / 2) - (ay + ah / 2)) <= 2, ("가운데가 아니다", big)
+    import app_main as a
+    # 흉내 화면엔 작업 표시줄이 없어 FHD 100% 도 1920x1080 이 다 쓰인다 → 큰 창(테두리까지 1920x1080)이 들어간다.
+    # 작업 표시줄이 있는 진짜 FHD 100%(높이 1032)가 1600x900 인 것은 test_rules_by_usable_screen_size 가 잰다.
+    for screen in ("fhd100", "qhd125"):
+        big = _run("first", screen)
+        assert big["size"] == list(a.LARGE_WINDOW) and not big["maximized"] and _inside(big), (screen, big)
+        ax, ay, aw, ah = big["avail"]
+        fx, fy, fw, fh = big["frame"]
+        assert abs((fx + fw / 2) - (ax + aw / 2)) <= 2 and abs((fy + fh / 2) - (ay + ah / 2)) <= 2, ("가운데가 아니다", screen, big)
     mid = _run("first", "fhd125")
     assert mid["size"] == [1280, 720] and not mid["maximized"] and _inside(mid), mid
     # 흉내 화면엔 작업 표시줄이 없어 1366x768 은 높이 768 이 다 쓰인다 → 1280x720 이 들어간다(규칙대로).
