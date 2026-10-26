@@ -11048,6 +11048,9 @@ def test_match_card_icons_follow_keys_after_sort():
     keep_meta = _win._division_meta
     try:
         app_main.IconLoader = FakeLoader
+        # 등급 원본 목록은 테스트가 짓는다 — 디스크 메타 캐시에 기대면 캐시 없는 CI 에서 키가 전부 None 이 된다(fbde918 CI)
+        divs = sorted({m.opp_division for m in _win._slice()[0] if m.opp_division is not None})
+        _win._division_meta = [{"divisionId": d} for d in divs]
         _win._render_matches(_win._slice()[0])
         keys = {c.division_key for c in lst.all_rows()}
         assert len(keys - {None}) >= 2, ("등급 배지 키가 둘 이상이어야 뜻이 있다", keys)
