@@ -902,8 +902,9 @@ def test_dashboard_cards_filled_from_fixture():
     # 손계산: 승·무·패 3경기(오류 제외) — 득 1+4+1, 실 2+3+1. 오류 경기도 '표시 구간'
     # 4경기에는 들어간다(경기 목록과 같은 범위).
     d = _win.dashboard
-    assert [lb.text() for lb in d.wdl_rows] == ["승 1 (33%)", "무 1 (33%)", "패 1 (33%)"], \
-        [lb.text() for lb in d.wdl_rows]
+    assert d.wdl_bar.counts() == (1, 1, 1), d.wdl_bar.counts()
+    assert d.lb_wdl_total.text() == "3경기", d.lb_wdl_total.text()
+    assert d.lb_wdl_share.text() == "승 33% · 무 33% · 패 33%", d.lb_wdl_share.text()
     assert d.lb_goals.text() == "2.00 : 2.00", d.lb_goals.text()
     assert "득실차 +0" in d.lb_goals_sub.text(), d.lb_goals_sub.text()
     assert len(d.radar._axes) == 6, d.radar._axes
@@ -6479,7 +6480,6 @@ def _palette_contrast_failures(p: dict) -> list:
     for bar in ("WIN_BAR", "LOSE_BAR"):                                       # 위에 글자를 겹치는 막대 — 꽉 찬 것·흐린 것
         pairs.append(("TEXT", p["TEXT"], bar, p[bar]))
         pairs.append(("TEXT", p["TEXT"], f"흐린 {bar}", T.blend(p["PANEL_2"], p[bar], T.WEAK_MIX)))
-    pairs += [("BG", p["BG"], f"켜진 {k} 필터", p[k]) for k in ("GOOD", "TEXT_DIM", "BAD")]   # 경기 목록 결과 필터
     return [(fg_name, bg_name, round(T.contrast(fg, bg), 2)) for fg_name, fg, bg_name, bg in pairs
             if T.contrast(fg, bg) < 4.5]
 
@@ -10395,6 +10395,10 @@ def test_opponent_diff_column_hides_weak_rows_k13():
             s = stats[t.item(r, 0).text()]
             want = f"{s.win_rate - base:+.1f}%p" if s.rated else ""     # 분모 0(몰수뿐)은 승률도 '—' 라 차이가 없다
             assert t.item(r, col).text() == want, (t.item(r, col).text(), s.win_rate, base)
+            if want:   # 3.1.1 P3 — 차이 칸 색이 그 줄의 차이를 따른다(정렬된 뒤라 행 순서가 아니라 칸 값으로)
+                import widgets
+                got = t.item(r, col).foreground().color().name()
+                assert got == widgets.delta_color(s.win_rate - base) != T.TEXT, (got, s.win_rate - base)
         assert any(t.item(r, col).text() for r in range(t.rowCount())), "차이를 보인 줄이 없다 — 검사가 비었다"
     finally:
         app_main.core.MIN_COND = keep
@@ -10703,6 +10707,140 @@ def test_elo_zoom_and_team_value_chart():
         _win._rank_seasons, _win._elo, config.WEB_DATA = keep
         _win._render_elo()
         _win._go_page("대시보드")
+
+
+def test_wdl_bar_segments_and_text():
+    # P2 — 칸 폭은 경기 수 비례 · 0경기 칸은 없음 · 흐리면 세 칸 다 바탕 쪽으로 · 글은 승·패만 색
+    import widgets
+    b = widgets.WdlBar(1861, 404, 1774)
+    segs = b.strip.segments()
+    assert [round(w, 3) for w, _ in segs] == [round(n / 4039, 3) for n in (1861, 404, 1774)], segs
+    assert [c for _, c in segs] == [T.GOOD_FILL, T.blend(T.PANEL, T.TEXT_DIM, 0.4), T.BAD_FILL], segs
+    html = b.label.text()
+    assert "1,861승" in html and "404무" in html and "1,774패" in html, html
+    assert html.index(T.GOOD) < html.index("1,861승") < html.index(T.BAD) < html.index("1,774패"), html
+    assert b.accessibleName() == "1861승 404무 1774패"
+    b.set_counts(3, 0, 1, weak=True)
+    segs = b.strip.segments()
+    assert [round(w, 2) for w, _ in segs] == [0.75, 0.25], "0경기 칸(무)이 남았다"
+    assert [c for _, c in segs] == [T.blend(T.PANEL_2, T.GOOD_FILL, T.WEAK_MIX),
+                                    T.blend(T.PANEL_2, T.BAD_FILL, T.WEAK_MIX)], segs
+    b.set_counts(0, 0, 0)
+    assert b.strip.segments() == []
+    assert b.strip.height() == widgets.WdlBar.HEIGHT == 6
+
+
+def test_delta_text_arrow_and_color():
+    # P3 — ▲▼ 와 색이 부호를 따른다 · 반올림하면 0 인 차이는 흐린 "–"
+    import widgets
+    assert widgets.delta_text(52.0, 50.0) == ("▲ 2.0%p", T.GOOD)
+    assert widgets.delta_text(47.5, 50.0) == ("▼ 2.5%p", T.BAD)
+    assert widgets.delta_text(50.04, 50.0) == ("– 0.0%p", T.TEXT_DIM)
+    assert widgets.delta_text(50.06, 50.0) == ("▲ 0.1%p", T.GOOD)
+    assert widgets.delta_text(10, 7, unit="골", digits=0) == ("▲ 3골", T.GOOD)
+    assert widgets.delta_text(7.4, 7, unit="", digits=0)[1] == T.TEXT_DIM   # 0.4 → 정수로 0
+    from PyQt6.QtWidgets import QTableWidgetItem
+    it = widgets.delta_item(QTableWidgetItem("-3.0%p"), -3.0)
+    assert it.foreground().color().name() == T.BAD
+    assert widgets.delta_item(QTableWidgetItem("+0.0%p"), 0.01).foreground().color().name() == T.TEXT_DIM
+    assert widgets.delta_item(None, 1.0) is None
+
+
+def test_stat_card_sub_and_delta_hide_when_empty():
+    # P5 — 보조·변화 줄은 값이 있을 때만 보이고, 변화 색은 delta_text 를 따른다
+    import widgets
+    c = widgets.StatCard("최고 승률", T.GOOD)
+    assert c.sub.isHidden() and c.delta.isHidden()
+    c.set_sub("3승 1무 2패")
+    c.set_delta(60.0, 50.0, label="평균 대비")
+    assert not c.sub.isHidden() and not c.delta.isHidden()
+    assert "▲ 10.0%p" in c.delta.text() and "평균 대비" in c.delta.text()
+    assert c.delta.property("delta_color") == T.GOOD
+    c.set_delta(40.0, 50.0)
+    assert c.delta.property("delta_color") == T.BAD
+    c.set_delta(None, 50.0)
+    c.set_sub("")
+    assert c.sub.isHidden() and c.delta.isHidden() and c.delta.property("delta_color") is None
+
+
+def test_trend_cards_show_delta_against_average():
+    # 승률 그래프 요약 카드 — 최고·최저 카드의 변화 줄이 평균 카드 값과 견준 것인지(배선)
+    import widgets
+    _win._show_trend_summary()
+    periods = _win._trend_periods
+    rated = [p.win_rate for p in periods if p.rated]
+    assert len(set(rated)) >= 2, ("최고·최저가 같아 방향을 못 잰다", rated)
+    wdl = [sum(p.win for p in periods), sum(p.draw for p in periods), sum(p.lose for p in periods)]
+    avg = app_main.core.win_pct(*wdl, periods[0].mixed)
+    for card, v, col in ((_win.card_trend_max, max(rated), T.GOOD), (_win.card_trend_min, min(rated), T.BAD)):
+        want, got_col = widgets.delta_text(v, avg)
+        assert not card.delta.isHidden() and want in card.delta.text(), (card.delta.text(), want)
+        assert card.delta.property("delta_color") == got_col == col, (card.cap.text(), got_col)
+    assert _win.card_trend_games.sub.text() == app_main.wdl_text(*wdl)
+
+
+def test_tag_kinds():
+    # P10 — 종류마다 그 색 글자 + 그 색 10% 바탕 · 모르는 종류는 조용히 회색이 되지 않는다
+    import widgets
+    want = {"good": T.GOOD, "bad": T.BAD, "warn": T.WARN, "muted": T.TEXT_DIM}   # 표를 베끼지 않고 손으로
+    assert set(widgets.Tag.KINDS) == set(want)
+    for kind, col in want.items():
+        t = widgets.Tag("3연승", kind)
+        assert t.color == col and f"color: {col};" in t.styleSheet(), (kind, t.styleSheet())
+        assert f"background: {T.blend(T.PANEL, col, 0.10)};" in t.styleSheet()
+    try:
+        widgets.Tag("x", "green")
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("모르는 kind 를 받아 줬다")
+
+
+def test_dashboard_streak_tag_follows_kind():
+    # 연속 카드 — 숫자는 큰 글자에 한 번, "연승"·"연패" 는 태그(색이 종류를 따른다)
+    import dashboard
+    d = _win.dashboard
+    pick = lambda word: next(m for m in _win._matches if word in m.result)  # noqa: E731
+    try:
+        for ms, big, tag, kind, wdl in (([pick("승")] * 3, "3", "연승", "good", (3, 0, 0)),
+                                        ([pick("패")] * 2 + [pick("승")], "2", "연패", "bad", (1, 0, 2)),
+                                        ([pick("무"), pick("승")], "1", "무", "muted", (1, 1, 0))):
+            d._render_kpis(dashboard.DashboardInput(_win._ouid, ms, [], ms, [], "시험"))
+            assert (d.lb_streak.text(), d.tag_streak.text(), d.tag_streak.kind) == (big, tag, kind), \
+                (d.lb_streak.text(), d.tag_streak.text(), d.tag_streak.kind)
+            assert d.wdl_bar.counts() == wdl, (d.wdl_bar.counts(), wdl)   # 픽스처는 1·1·1 이라 순서를 못 잰다
+            assert not d.tag_streak.isHidden()
+        d._render_kpis(dashboard.DashboardInput(_win._ouid, [], [], [], [], "시험"))
+        assert d.lb_streak.text() == "—" and d.tag_streak.isHidden()
+    finally:
+        _win._render_dashboard()
+
+
+def test_match_filter_buttons_use_tag_look():
+    # S1 — 켜진 결과 필터는 꽉 칠한 바탕 + 바탕색 글자가 아니라 그 색 글자 + 10% 바탕 + 그 색 테두리 · 꺼짐은 흐린 글자
+    for kind, color in app_main.MainWindow.MATCH_FILTER_KINDS:
+        qss = _win._match_filter_btns[kind].styleSheet()
+        off, on = qss.split("QPushButton:checked")
+        assert f"color: {T.TEXT_DIM};" in off, off
+        assert f"color: {color};" in on and f"background: {T.blend(T.PANEL, color, 0.10)};" in on, on
+        assert f"border-color: {color};" in on and "font-weight: bold" in on, on
+        assert f"color: {T.BG}" not in on, "꽉 칠한 바탕 위 글자로 돌아갔다"
+        assert on != off
+
+
+def test_wdl_bars_replace_wdl_text_rows():
+    # 경기 결과(전후반·연장·승부차기·몰수)와 승부처 선제골 줄 — 승무패 글 대신 WdlBar, 숫자는 계산 결과 그대로
+    import widgets
+    rb = app_main.core.result_breakdown(_win._details, _win._ouid)
+    _win._render_all()
+    got = [w.counts() for w in _win.findChildren(widgets.WdlBar) if w.parent() and
+           w.parent().parent() is not None and _win.box_result.indexOf(w.parent()) >= 0]
+    assert got == [tuple(x) for x in (rb.normal, rb.extra, rb.shootout, rb.forfeit)], got
+    cs = app_main.core.clutch_summary(_win._details, _win._ouid)
+    _win._render_clutch(_win._details, _win._matches)
+    got = [w.counts() for w in _win.findChildren(widgets.WdlBar)
+           if w.parent() is not None and _win.box_clutch_first.indexOf(w.parent()) >= 0]
+    assert got == [tuple(cs.first_scored), tuple(cs.first_conceded)], got
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

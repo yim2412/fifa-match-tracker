@@ -82,8 +82,8 @@ from dashboard import DashboardInput, DashboardPage
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
-    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, ZoomBar, sample_note, short_bp,
-    sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
+    SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
+    sample_text, tag_qss, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -4552,10 +4552,9 @@ class MainWindow(QMainWindow):
             h.setContentsMargins(4, 2, 4, 2)
             a = QLabel(label)
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
-            b = QLabel(wdl_text(*wdl))
-            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
             n = core.rated(*wdl, cs.mixed)
-            weak = core.is_weak(n, core.MIN_COND)  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
+            weak = core.is_weak(n, core.MIN_COND)
+            b = WdlBar(*wdl, weak=weak)  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
             text = win_rate_text(*wdl, cs.mixed)
             c = QLabel(f"({text} · {sample_text(n, cs.mixed)})" if weak else f"({text})")
             c.setStyleSheet(f"color: {T.TEXT_DIM if weak else color}; font-weight: bold;")
@@ -6706,8 +6705,7 @@ class MainWindow(QMainWindow):
                                 (f"{r.diff_pp:+.1f}%p", r.diff_pp)] for r in rows], enable_sort=False)
             for i, r in enumerate(rows):
                 diff = table.item(i, 3)
-                if diff is not None and abs(r.diff_pp) >= 0.05:
-                    diff.setForeground(QColor(T.CHART_UP if r.diff_pp > 0 else T.CHART_DOWN))
+                delta_item(diff, r.diff_pp)
                 if r.thin:
                     for c in range(table.columnCount()):
                         it = table.item(i, c)
@@ -7302,8 +7300,8 @@ class MainWindow(QMainWindow):
                                  r.diff_pp if r.diff_pp is not None else 0)] for r in rows], enable_sort=False)
             for i, r in enumerate(rows):
                 diff = table.item(i, 5)
-                if diff is not None and not r.no_diff and r.diff_pp is not None:
-                    diff.setForeground(QColor(T.CHART_UP if r.diff_pp > 0 else T.CHART_DOWN))
+                if not r.no_diff and r.diff_pp is not None:
+                    delta_item(diff, r.diff_pp)
             self._dim_rows(table, [i for i, r in enumerate(rows) if r.thin or r.no_diff])
             table.setSortingEnabled(True)
 
@@ -7414,7 +7412,7 @@ class MainWindow(QMainWindow):
                     continue
                 it.setToolTip(f"{c.users}명 · 챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}%)")
                 if c.vs_bin is not None and abs(c.vs_bin) >= 5:
-                    it.setForeground(QColor(T.CHART_UP if c.vs_bin > 0 else T.CHART_DOWN))
+                    delta_item(it, c.vs_bin)
         self.tbl_vcross.refit()
 
     # [메타 분석 › 구간 평균] B6
@@ -7540,8 +7538,8 @@ class MainWindow(QMainWindow):
             NA if b.p5 is None else f"{b.p5:+,.0f} ~ {b.p95:+,.0f}"] for b in res.bins], enable_sort=False)
         for i, b in enumerate(res.bins):
             it = self.tbl_wrelo.item(i, 3)
-            if it is not None and b.median:
-                it.setForeground(QColor(T.CHART_UP if b.median > 0 else T.CHART_DOWN))
+            if b.median:
+                delta_item(it, b.median, eps=0.5)   # 칸은 정수로 적는다
 
     # [랭킹 추이 › 주간 요약] N13
     def _build_weekly_tab(self) -> QWidget:
@@ -8375,12 +8373,13 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setFixedWidth(48)
-            # 켜진 칸 글자는 바탕색 — 두 테마 모두 GOOD·TEXT_DIM·BAD 위 대비 5 이상(테스트가 잰다)
+            # 태그 꼴(S1) — 꽉 칠한 좋음/나쁨 위 글자는 대비가 안 나온다. 켜짐 = 그 색 글자·10% 바탕·그 색 테두리·굵게,
+            # 꺼짐 = 흐린 글자. 켜진 "무"(TEXT_DIM 글자)가 꺼진 칸과 갈리는 건 테두리·굵기·바탕이다
             btn.setStyleSheet(
-                f"QPushButton {{ border: 1px solid {T.BORDER}; border-radius: 6px;"
-                f" padding: 4px; }}"
-                f"QPushButton:checked {{ background: {color}; color: {T.BG};"
-                f" font-weight: bold; border-color: {color}; }}")
+                f"QPushButton {{ color: {T.TEXT_DIM}; border: 1px solid {T.BORDER};"
+                f" border-radius: {T.RADIUS}px; padding: 4px; }}"
+                + tag_qss(color, "QPushButton:checked",
+                          f"border-color: {color}; border-radius: {T.RADIUS}px; padding: 4px; font-weight: bold; "))
             btn.clicked.connect(self._apply_match_filter)
             row.addWidget(btn)
             self._match_filter_btns[kind] = btn
@@ -10181,6 +10180,7 @@ class MainWindow(QMainWindow):
             it = self.tbl_opponents.item(r, diff_col)
             if it is not None and it.text():
                 it.setToolTip(f"필터에 걸린 {len(picked):,}경기 전체 승률 {base:.1f}% 기준")
+                delta_item(it, it._key)   # 정렬이 켜진 뒤라 행 = stats 순서가 아니다 — 칸의 정렬 값(차이)을 읽는다
         self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches)))
         self._apply_opponent_filter()
 
@@ -11849,8 +11849,12 @@ class MainWindow(QMainWindow):
         self.card_trend_min.set(f"{min(rates):.1f}%{star}" if rates else NA)
         for card in (self.card_trend_max, self.card_trend_avg, self.card_trend_min):
             card.setToolTip(win_rate_note(mixed))
+        avg = core.win_pct(*wdl, mixed) if rates and core.rated(*wdl, mixed) else None   # 평균 카드와 같은 값
+        self.card_trend_max.set_delta(max(rates) if rates else None, avg, label="평균 대비")
+        self.card_trend_min.set_delta(min(rates) if rates else None, avg, label="평균 대비")
         self.card_trend_games.set_title(f"{days}일 경기수")
         self.card_trend_games.set(f"{total_games}경기")
+        self.card_trend_games.set_sub(wdl_text(*wdl) if total_games else "")
 
     def _render_dashboard(self) -> None:
         """대시보드 — 카드마다 자기 상세 페이지와 같은 범위를 넘긴다."""
@@ -12101,8 +12105,7 @@ class MainWindow(QMainWindow):
             h.setContentsMargins(4, 2, 4, 2)
             a = QLabel(label)
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
-            b = QLabel(wdl_text(*wdl))
-            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            b = WdlBar(*wdl)
             c = QLabel(f"({win_rate_text(*wdl, rb.mixed, short=True)})")
             c.setStyleSheet(f"color: {T.TEXT_DIM};")
             c.setToolTip(win_rate_note(rb.mixed))

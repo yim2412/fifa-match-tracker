@@ -9,6 +9,10 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
 접는 구획(`Collapsible`), 좁으면 접히는 바(`WrapBar`)·페이지 안 탭(`PageTabs` — 숨기기/보이기라 숨은 탭이 최소 폭을 안 넓힌다 ·
 탭줄은 `Card.add_to_title_row` 로 제목 옆)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등
+
+공통 표현 부품(3.1.1 · 64단계): 승·무·패 세 칸 막대 `WdlBar`(승률 한 값 막대는 `win_rate_bar` 그대로) ·
+평균 대비 `delta_text`(▲▼ + 색 — 색만으로 말하지 않는다)·표 칸은 `delta_item` · 숫자 카드 `StatCard`(라벨 → 숫자 → 보조 → 변화) ·
+태그 `Tag`/`tag_qss`(그 색 글자 + 10% 바탕 — 켜진 결과 필터도 이 꼴). 새 글자/바탕 짝은 test_ui_smoke 대비 표에 한 줄.
 """
 from __future__ import annotations
 
@@ -19,7 +23,7 @@ from datetime import date
 from typing import NamedTuple
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
@@ -949,7 +953,7 @@ class RangeBarDelegate(RowBorderDelegate):
 
 
 class StatCard(QFrame):
-    """요약 카드 — 제목 + 큰 값. (전적 / 승률 / 평균 득점 / 평균 실점)"""
+    """숫자 카드(P5) — 작은 라벨 → 큰 숫자 → 흐린 보조 줄 → 변화(▲▼). 보조·변화는 비어 있으면 숨는다."""
 
     def __init__(self, title: str, color: str = T.TEXT):
         super().__init__()
@@ -958,25 +962,52 @@ class StatCard(QFrame):
             f" border-radius: {T.RADIUS}px; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(4)
+        v.setSpacing(2)
 
         self.cap = QLabel(title)
+        cf = QFont()
+        cf.setPixelSize(12)
+        self.cap.setFont(cf)
         self.cap.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
-        self.cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.value = QLabel("-")
         f = QFont()
-        f.setPointSize(14)
+        f.setPointSize(16)
         f.setBold(True)
         self.value.setFont(f)
         self.value.setStyleSheet(f"color: {color}; border: none;")
-        self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        v.addWidget(self.cap)
-        v.addWidget(self.value)
+        self.sub = QLabel()
+        self.sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+        self.sub.hide()
+        self.delta = QLabel()
+        self.delta.setTextFormat(Qt.TextFormat.RichText)
+        self.delta.setStyleSheet("border: none;")
+        self.delta.hide()
+
+        for lb in (self.cap, self.value, self.sub, self.delta):
+            v.addWidget(lb)
+        v.addStretch(1)
 
     def set(self, text: str) -> None:
         self.value.setText(text)
+
+    def set_sub(self, text: str) -> None:
+        self.sub.setText(text)
+        self.sub.setVisible(bool(text))
+
+    def set_delta(self, v: float | None, base: float | None, unit: str = "%p", label: str = "") -> None:
+        """기준(base) 대비 변화 줄 — 둘 중 하나라도 없으면 숨긴다. label 은 뒤에 붙는 흐린 말("평균 대비")."""
+        if v is None or base is None:
+            self.delta.setText("")
+            self.delta.setProperty("delta_color", None)
+            self.delta.hide()
+            return
+        text, color = delta_text(v, base, unit)
+        self.delta.setText(f"<span style='color:{color}'>{text}</span>"
+                           + (f" <span style='color:{T.TEXT_DIM}'>{label}</span>" if label else ""))
+        self.delta.setProperty("delta_color", color)
+        self.delta.show()
 
     def set_title(self, title: str) -> None:
         self.cap.setText(title)
@@ -1468,6 +1499,134 @@ def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int, mixed: b
     tip = win_rate_note(mixed)
     bar.setToolTip(sample_note(n, min_n, mixed) + "\n" + tip if weak else tip)
     return bar
+
+
+def delta_color(diff: float, eps: float = 0.05) -> str:
+    """차이 부호 → 색(P3). |diff| < eps 는 반올림하면 0 이라 흐린 글자 — "+0.0%p" 가 초록으로 보이지 않게."""
+    return T.GOOD if diff >= eps else T.BAD if diff <= -eps else T.TEXT_DIM
+
+
+def delta_text(v: float, base: float, unit: str = "%p", digits: int = 1) -> tuple[str, str]:
+    """평균(기준) 대비 차이(P3) → ("▲ 3.2%p", 색). 색만으로 말하지 않게 ▲▼ 를 늘 붙인다(적록 색약 — theme 머리말)."""
+    diff = v - base
+    eps = 0.5 / 10 ** digits
+    arrow = "▲" if diff >= eps else "▼" if diff <= -eps else "–"
+    return f"{arrow} {abs(diff):.{digits}f}{unit}", delta_color(diff, eps)
+
+
+def delta_item(item: QTableWidgetItem | None, diff: float, eps: float = 0.05) -> QTableWidgetItem | None:
+    """표 칸의 차이 글자(+3.2%p 꼴 — 부호가 이미 있다)에 delta_color 를 입힌다. 칸이 없으면 None 그대로."""
+    if item is not None:
+        item.setForeground(QColor(delta_color(diff, eps)))
+    return item
+
+
+class _WdlStrip(QWidget):
+    """WdlBar 의 막대 — 양 끝 둥근 띠를 경기 수 비례로 승·무·패 세 칸."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedHeight(WdlBar.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.counts = (0, 0, 0)
+        self.weak = False
+
+    def sizeHint(self) -> QSize:
+        return QSize(60, WdlBar.HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(24, WdlBar.HEIGHT)
+
+    def colors(self) -> list[str]:
+        cols = [T.GOOD_FILL, T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX), T.BAD_FILL]
+        return [T.blend(T.PANEL_2, c, T.WEAK_MIX) for c in cols] if self.weak else cols
+
+    def segments(self) -> list[tuple[float, str]]:
+        """(폭 비율, 색) — 0경기 칸은 뺀다. 테스트가 그림 대신 읽는다."""
+        total = sum(self.counts)
+        return [(n / total, c) for n, c in zip(self.counts, self.colors()) if n] if total else []
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        h = r.height()
+        path = QPainterPath()
+        path.addRoundedRect(r, h / 2, h / 2)
+        p.setClipPath(path)
+        p.fillRect(r, QColor(T.PANEL_2))
+        x = r.left()
+        for share, c in self.segments():
+            w = r.width() * share
+            p.fillRect(QRectF(x, r.top(), w, h), QColor(c))
+            x += w
+        p.end()
+
+
+class WdlBar(QWidget):
+    """승·무·패 막대(P2) — 6px 세 칸 막대 + "1,861승 404무 1,774패"(승·패만 색 · 글자가 같이 있어 색은 보조).
+
+    weak 면 막대를 바탕 쪽으로 흐린다(WEAK_MIX — win_rate_bar 와 같은 표본 흐림) · 글자는 흐리지 않는다.
+    칸 폭은 경기 수 비례 · 0경기면 빈 띠. 승률 한 값 막대는 win_rate_bar 그대로(이건 세 값을 다 보인다)."""
+    HEIGHT = 6
+    DRAW_MIX = 0.4   # 무 칸 = 흐린 글자색 40%
+
+    def __init__(self, w: int = 0, d: int = 0, l: int = 0, weak: bool = False, text_first: bool = False):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 2, 0, 2)
+        v.setSpacing(4)
+        self.strip = _WdlStrip(self)
+        self.label = QLabel()
+        self.label.setTextFormat(Qt.TextFormat.RichText)
+        self.label.setStyleSheet("border: none; font-weight: bold;")
+        for x in ((self.label, self.strip) if text_first else (self.strip, self.label)):
+            v.addWidget(x)
+        self.set_counts(w, d, l, weak)
+
+    def set_counts(self, w: int, d: int, l: int, weak: bool = False) -> None:
+        self.strip.counts = (w, d, l)
+        self.strip.weak = weak
+        self.label.setText(wdl_html(w, d, l))
+        self.setAccessibleName(wdl_text(w, d, l))
+        self.strip.update()
+
+    def counts(self) -> tuple[int, int, int]:
+        return self.strip.counts
+
+
+def wdl_html(w: int, d: int, l: int) -> str:
+    """승·무·패 글 줄(리치 텍스트) — 승은 좋음, 패는 나쁨, 무는 보통 글자."""
+    return (f"<span style='color:{T.GOOD}'>{w:,}승</span> <span style='color:{T.TEXT}'>{d:,}무</span>"
+            f" <span style='color:{T.BAD}'>{l:,}패</span>")
+
+
+def tag_qss(color: str, selector: str, extra: str = "") -> str:
+    """태그 꼴 QSS — 글자 = 그 색 · 바탕 = 그 색 10%(불투명 섞음 · PyQt 2번). Tag 와 켜진 결과 필터가 같이 쓴다
+    (extra 는 같은 덩이 뒤에 붙어 앞 값을 덮는다). 대비는 test_ui_smoke 의 "10% 바탕" 행이 잰다."""
+    soft = T.blend(T.PANEL, color, 0.10)
+    return (f"{selector} {{ color: {color}; background: {soft}; border: 1px solid {soft};"
+            f" border-radius: 4px; padding: 2px 6px; {extra}}}")
+
+
+class Tag(QLabel):
+    """작은 태그(P10) — 연승·연패·진행 중 같은 상태 한 마디. 모서리 4 · 12px · 굵기 500.
+    kind: good · bad · warn · muted. 모르는 kind 는 KeyError — 조용히 회색이 되지 않게."""
+    KINDS = {"good": "GOOD", "bad": "BAD", "warn": "WARN", "muted": "TEXT_DIM"}
+
+    def __init__(self, text: str = "", kind: str = "muted"):
+        super().__init__(text)
+        f = QFont()
+        f.setPixelSize(12)
+        f.setWeight(QFont.Weight.Medium)
+        self.setFont(f)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.set_kind(kind)
+
+    def set_kind(self, kind: str) -> None:
+        self.color = getattr(T, self.KINDS[kind])
+        self.kind = kind
+        self.setStyleSheet(tag_qss(self.color, "QLabel"))
 
 
 class BarRow(QWidget):

@@ -23,11 +23,12 @@ from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePoli
 
 import core_api as core
 import theme as T
-from charts import (AreaTrendChart, DonutChart, GroupedBarChart, HBarList, RadarChart,
+from charts import (AreaTrendChart, GroupedBarChart, HBarList, RadarChart,
                     ResultDots, RingGauge)
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
-from widgets import FitLabel, sample_note, sample_text, wdl_text, win_rate_note, win_rate_text
+from widgets import (FitLabel, Tag, WdlBar, delta_text, sample_note, sample_text, wdl_text, win_rate_note,
+                     win_rate_text)
 
 RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
 DOTS_N = 20            # 최근 결과 점 개수
@@ -179,23 +180,12 @@ class DashboardPage(QWidget):
         self.kpi_rate.body.addWidget(self.lb_rate_delta)
 
         self.kpi_wdl = self._card("승무패", ("경기 목록", None))
-        wdl = QHBoxLayout()
-        self.donut = DonutChart(size=96)
-        wdl.addWidget(self.donut)
-        self.lb_wdl_legend = QVBoxLayout()
-        self.lb_wdl_legend.setSpacing(2)
-        self.wdl_rows = []
-        for name, col in (("승", T.CHART_UP), ("무", T.CHART_NEUTRAL), ("패", T.CHART_DOWN)):
-            line = QHBoxLayout()
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {col};")
-            lb = _label(name)
-            line.addWidget(dot)
-            line.addWidget(lb, 1)
-            self.lb_wdl_legend.addLayout(line)
-            self.wdl_rows.append(lb)
-        wdl.addLayout(self.lb_wdl_legend, 1)
-        self.kpi_wdl.body.addLayout(wdl)
+        # 3.1.1 P2 — 도넛 + 범례 세 줄 대신 경기 수 + 세 칸 막대 + 비율 한 줄(다른 지표 카드와 같은 꼴: 큰 숫자 → 보조)
+        self.lb_wdl_total = _label("—", pt=22, bold=True)
+        self.wdl_bar = WdlBar()
+        self.lb_wdl_share = _label("", dim=True)
+        for w in (self.lb_wdl_total, self.wdl_bar, self.lb_wdl_share):
+            self.kpi_wdl.body.addWidget(w)
 
         self.kpi_goals = self._card("득실", ("경기 목록", None))
         self.lb_goals = _label("—", pt=22, bold=True)
@@ -205,8 +195,17 @@ class DashboardPage(QWidget):
 
         self.kpi_streak = self._card("연속", ("경기 목록", None))
         self.lb_streak = _label("—", pt=22, bold=True)
+        self.tag_streak = Tag()   # 숫자 옆 "연승"·"연패" — 숫자는 큰 글자 한 번만
+        self.tag_streak.hide()
+        streak_row = QWidget()
+        sh = QHBoxLayout(streak_row)
+        sh.setContentsMargins(0, 0, 0, 0)
+        sh.setSpacing(8)
+        sh.addWidget(self.lb_streak)
+        sh.addWidget(self.tag_streak, 0, Qt.AlignmentFlag.AlignVCenter)
+        sh.addStretch(1)
         self.lb_streak_sub = _label("", dim=True)
-        self.kpi_streak.body.addWidget(self.lb_streak)
+        self.kpi_streak.body.addWidget(streak_row)
         self.kpi_streak.body.addWidget(self.lb_streak_sub)
         for c in (self.kpi_rate, self.kpi_wdl, self.kpi_goals, self.kpi_streak):
             for i in range(c.body.count()):
@@ -361,23 +360,18 @@ class DashboardPage(QWidget):
             recent = summarize(d.scope_matches[:RECENT_N], season.mixed)
             formula = "승÷(승+패)" if season.mixed else "승÷전체"
             if recent.total and season.total > recent.total:
-                gap = recent.win_rate - season.win_rate
-                arrow = "▲" if gap > 0 else "▼" if gap < 0 else "–"
-                col = T.CHART_UP if gap > 0 else T.CHART_DOWN if gap < 0 else T.TEXT_DIM
+                text, col = delta_text(recent.win_rate, season.win_rate)
                 self.lb_rate_delta.setText(
                     f"최근 {RECENT_N}경기 {recent.win_rate:.1f}% "
-                    f"<span style='color:{col}'>{arrow} {abs(gap):.1f}%p</span> · {formula} · 무 {season.draw:,}")
+                    f"<span style='color:{col}'>{text}</span> · {formula} · 무 {season.draw:,}")
             else:
                 self.lb_rate_delta.setText(f"{season.total}경기 · {formula} · 무 {season.draw:,}")
 
         s = summarize(d.range_matches)
-        self.donut.set_data([("승", s.win, T.CHART_UP), ("무", s.draw, T.CHART_NEUTRAL),
-                             ("패", s.lose, T.CHART_DOWN)],
-                            center=f"{s.total:,}", sub="경기")
-        for lb, (name, n) in zip(self.wdl_rows, (("승", s.win), ("무", s.draw),
-                                                 ("패", s.lose))):
-            share = f" ({n / s.total * 100:.0f}%)" if s.total else ""
-            lb.setText(f"{name} {n:,}{share}")
+        self.lb_wdl_total.setText(f"{s.total:,}경기" if s.total else "—")
+        self.wdl_bar.set_counts(s.win, s.draw, s.lose)
+        self.lb_wdl_share.setText(" · ".join(f"{name} {n / s.total * 100:.0f}%" for name, n in
+                                             (("승", s.win), ("무", s.draw), ("패", s.lose))) if s.total else "")
         self.kpi_wdl.setToolTip(wdl_text(s.win, s.draw, s.lose))
 
         if s.total:
@@ -389,8 +383,11 @@ class DashboardPage(QWidget):
             self.lb_goals_sub.setText("")
 
         kind, n = current_streak(d.range_matches)
-        self.lb_streak.setText(f"{n}연{kind}" if kind in ("승", "패") and n
-                               else f"{n}{kind}" if kind else "—")
+        run = kind in ("승", "패") and n
+        self.lb_streak.setText(str(n) if kind else "—")
+        self.tag_streak.setText(f"연{kind}" if run else kind)
+        self.tag_streak.set_kind("good" if kind == "승" and run else "bad" if kind == "패" and run else "muted")
+        self.tag_streak.setVisible(bool(kind))
         best_win, best_lose = longest_streaks(d.scope_matches)
         self.lb_streak_sub.setText(f"최장 {best_win}연승 · {best_lose}연패 ({d.scope_name})")
 
