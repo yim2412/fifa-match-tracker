@@ -1970,6 +1970,87 @@ def team_profile(details: list[dict], ouid: str) -> TeamProfile:
     return prof
 
 
+# ── 나와 상대(3.1.1 · 65 M1) ───────────────────────────────────────────────
+# (이름, 단위, 클수록 좋음 — None 은 좋고 나쁨이 없는 성향, 값 = (분자 키, 분모 키 | None=경기 수)).
+# team_profile(레이더·구단주 비교 축)과 따로 둔다 — 그 축 이름을 구단주 비교가 읽는다.
+VERSUS_ROWS = (
+    ("점유율", "%", None, ("possession", None)),
+    ("경기당 슛", "회", True, ("shots", None)),
+    ("유효슛 결정력", "%", True, ("goals", "on_target")),
+    ("패스 성공률", "%", True, ("pass_ok", "pass_try")),
+    ("긴 패스 비중", "%", None, ("long_through", "pass_try")),   # 긴 패스 + 스루 — 기준 화면 같은 계정 28% 와 맞는 정의(10-26)
+    ("경기당 드리블", "회", None, ("dribble", None)),
+    ("태클 성공률", "%", True, ("tackle_ok", "tackle_try")),
+)
+
+
+@dataclass
+class VersusLine:
+    name: str
+    unit: str
+    better_high: bool | None
+    mine: float
+    opp: float
+
+    @property
+    def share(self) -> float:
+        tot = self.mine + self.opp
+        return self.mine / tot if tot else 0.5
+
+    @property
+    def gap(self) -> bool:
+        """'벌어진 곳' — 좋고 나쁨이 있는 줄에서 내가 문턱 넘게 뒤질 때. 비율 줄은 %p, 횟수 줄은 상대 대비 비율."""
+        if self.better_high is None:
+            return False
+        diff = (self.mine - self.opp) if self.better_high else (self.opp - self.mine)
+        if self.unit == "%":
+            return diff <= -config.VERSUS_GAP_PCTP
+        return bool(self.opp) and diff / self.opp <= -config.VERSUS_GAP_REL
+
+
+@dataclass
+class VersusProfile:
+    games: int = 0
+    lines: list[VersusLine] = field(default_factory=list)
+
+    @property
+    def gaps(self) -> list[VersusLine]:
+        return [ln for ln in self.lines if ln.gap]
+
+
+def versus_profile(details: list[dict], ouid: str) -> VersusProfile:
+    """같은 경기들의 나 / 상대 일곱 줄. 승·무·패가 아닌 경기("오류")와 **몰수**는 뺀다 — 몰수 경기는 슛·패스가
+    없거나 끊겨 평균을 흔든다. 비율 줄은 전체 합의 비율(team_profile 과 같은 이유)."""
+    sums = {side: defaultdict(float) for side in ("mine", "opp")}
+    games = 0
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp or _wdl_of(_result_of(me)) is None or end_kind(me, opp) != "정상":
+            continue
+        games += 1
+        for side, p in (("mine", me), ("opp", opp)):
+            shoot, pas, dfn = p.get("shoot") or {}, p.get("pass") or {}, p.get("defence") or {}
+            md = p.get("matchDetail") or {}
+            s = sums[side]
+            s["possession"] += _num(md, "possession")
+            s["dribble"] += _num(md, "dribble")
+            s["shots"] += _num(shoot, "shootTotal")
+            s["on_target"] += _num(shoot, "effectiveShootTotal")
+            s["goals"] += _num(shoot, "goalTotal")
+            s["pass_try"] += _num(pas, "passTry")
+            s["pass_ok"] += _num(pas, "passSuccess")
+            s["long_through"] += _num(pas, "longPassTry") + _num(pas, "throughPassTry")
+            s["tackle_try"] += _num(dfn, "tackleTry")
+            s["tackle_ok"] += _num(dfn, "tackleSuccess")
+    out = VersusProfile(games=games)
+    if not games:
+        return out
+    for name, unit, better, (num, den) in VERSUS_ROWS:
+        val = [(_ratio(sums[s][num], sums[s][den]) if den else sums[s][num] / games) for s in ("mine", "opp")]
+        out.lines.append(VersusLine(name, unit, better, val[0], val[1]))
+    return out
+
+
 # ── 평점 추이(1.4.1 N9) ────────────────────────────────────────────────────
 @dataclass
 class WeekRating:

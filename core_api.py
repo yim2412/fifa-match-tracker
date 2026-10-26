@@ -65,7 +65,7 @@ from stats import (
     FormationUsage, OppCard, formation_label, opponent_cards, opponent_formations, opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_baseline, team_color_mixed, team_color_stats, team_profile, time_of_day_rates,
-    time_weekday_rates,
+    time_weekday_rates, VERSUS_ROWS, VersusLine, VersusProfile, versus_profile,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
     WinDivision, WinRewards, reward_for, win_divisions, win_rewards,
     COMPARE_LINES, COMPARE_MIN_GAMES, CompareDiff, LineCard, LinePair, compare_summary, line_pairs,
@@ -136,6 +136,7 @@ __all__ = [
     "shot_distance_breakdown", "shot_map",
     "shot_type_breakdown", "team_color_baseline", "team_color_mixed", "team_color_stats", "team_profile", "time_of_day_rates",
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
+    "VERSUS_ROWS", "VersusLine", "VersusProfile", "versus_profile",   # 65 M1 대시보드 나와 상대
     # stats — A2 FC 보상(43단계)
     "WinDivision", "WinRewards", "reward_for", "win_divisions", "win_rewards",
     # stats — D1 구단주 비교 확장(50단계)

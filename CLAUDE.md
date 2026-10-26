@@ -21,7 +21,7 @@
 | `predict.py` | 시즌 말 순위 예측 — 상수는 `config.PREDICT_*` · **골든(`test_predict.GOLDEN_VALUE`)이 바뀌면 의도인지 먼저** · 세부는 머리말 |
 | `predict_check.py` | 예측 되짚기(50단계 B8) — 끝난 시즌의 **내 계정 하나** 최종 순위를 넥슨 홈페이지에서 한 번 확인(`run` — `rankcollect.process_meta` 끝에서 매 회차 판정) · 정본은 `trade_state` 의 `predict_final:<ouid>:<시즌 시작>` JSON, `predictions.final_*` 는 화면용 사본 · 관문 `config.predict_check_allowed()`(디스크 `.env` — 값 `PREDICT_CHECK_NOTICE_VERSION` = 안내 11(확정 — `COLLECT_ONLY_FROM` 8 은 그대로)) · 요청은 `ranker.fetch_manager_rank` 하나 · 세부는 머리말 |
 | `core_api.py` | **화면 ↔ 분석 경계** — 화면 쪽은 analysis·stats·models 를 여기서만. 새 함수는 import 와 `__all__` 에 한 줄 · 테스트에서 바꿔 끼울 땐 `core_api` 쪽을 |
-| `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) |
+| `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) · 머리 칸은 `club_cells` 의 **제목**으로 찾는다(순서 아님) · 나와 상대는 `stats.versus_profile`(레이더 `team_profile` 은 구단주 비교가 축 이름으로 읽어 따로 둔다) |
 | `charts.py` | 그래프(QPainter) — 색은 `theme.CHART_*` · 추이는 `AreaTrendChart` 하나, **기본값 그림은 얼린 사본과 픽셀까지 같아야**(`test_area_chart_defaults_unchanged`) · 세부는 머리말 |
 | `widgets.py` | 화면 부품 — 표(`FitTableWidget`)·축구장(`PitchWidget`)·`PageTabs`·`WrapBar`·`VScrollArea`·`FitLabel` · 그래프 확대 막대 `ZoomBar`(그래프는 안 건드리고 쓰는 쪽이 잘라 다시 그린다)·달력 `CalendarGrid` · 승무패 막대 `WdlBar`·평균 대비 `delta_text`·태그 `Tag`(3.1.1) 등 · 세부는 머리말 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 · **표 칸 그림(40단계)은 주소 `icon_url(kind, key)` 한 곳 + 받기 `fetch_icon`(Referer · 403·404 부정 캐시 · 임시 파일 뒤 `os.replace`) 한 곳** — 표는 `widgets.FitTableWidget.set_icon_columns`·`app_main.IconLoader` 로 붙인다(세부는 ROADMAP "화면 그림") |

@@ -4,11 +4,13 @@
 숫자와 상세 화면 숫자가 어긋나면 어느 쪽도 믿을 수 없게 된다. 그래서 카드
 제목 옆에 범위를 작게 적는다.
 
-    이번 시즌 구단(맨 위 · 55)          → 늘 이번 시즌(표시 구간·시즌 필터와 무관) — 칸은 창이 만든다(app_main.club_cells)
-    승률                               → 시즌 범위 + 그 안의 최근 20경기와 차이
+    이번 시즌 구단(맨 위 · 55 · 65)     → 늘 이번 시즌(표시 구간·시즌 필터와 무관) — 칸은 창이 만든다(app_main.club_cells)
+                                           · 그 안 승률 카드만 시즌 범위(위 셋은 이번 시즌 = 기본 시즌 범위와 같다)
+    이 구단 리포트(65)                  → 이번 시즌 점수 기록(점수·예측 탭 리포트와 같은 계산) · 최근 20경기는 시즌 범위
     자주 만난 상대                      → 시즌 범위(사용자 요청 — 100경기 안에선 대부분 1번씩이라
                                            '자주'가 안 드러난다). 상대 전적 페이지도 같은 범위(10-02)
-    승무패 · 득실 · 연속 · 레이더       → 표시 구간(시작~끝)
+    경기 결과 · 골·실점 · 나와 상대    → 표시 구간(시작~끝) — 나와 상대는 몰수·오류 뺌(stats.versus_profile)
+    점수 해설(65)                       → 리포트와 같은 재료
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
     승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(표시 구간에 안 갇힘)
 """
@@ -18,23 +20,24 @@ from dataclasses import dataclass, field
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy,
+from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                              QVBoxLayout, QWidget)
 
+import config
 import core_api as core
 import theme as T
-from charts import (AreaTrendChart, GroupedBarChart, HBarList, RadarChart,
-                    ResultDots, RingGauge)
+from charts import AreaTrendChart, GroupedBarChart, HBarList, ResultDots, RingGauge
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
-from widgets import (FitLabel, Tag, WdlBar, delta_text, sample_note, sample_text, wdl_text, win_rate_note,
-                     win_rate_text)
+from widgets import (Collapsible, StatCard, Tag, VersusBar, WdlBar, delta_text, sample_note, sample_text,
+                     wdl_text, win_rate_note, win_rate_text)
 
-RECENT_N = 20          # 승률 카드의 '최근' 비교 구간
+RECENT_N = 20          # 리포트 '최근' 승률 구간
 DOTS_N = 20            # 최근 결과 점 개수
 TOP_OPPONENTS = 5
-HEAD_CELLS = 6         # 이번 시즌 구단 칸 수(55 H1~H6)
 MIN_GAUGE_GAMES = 10   # 승부처 게이지 — 이보다 적은 표본이면 숫자 대신 "—"
+# 점수 해설(P9) 질문 — 재료가 있는 둘만(스쿼드 기대 승률 · 같은 스쿼드 사이 위치는 59)
+NOTE_QUESTIONS = ("점수가 오르는 구간인가?", "가장 깊었던 하락은?")
 SECTION_TAG = {core.SEC_FLOW: "흐름", core.SEC_WIN: "이길 때",
                core.SEC_LOSE: "질 때"}
 
@@ -57,6 +60,15 @@ class DashboardInput:
     # 55 머리 줄 — (제목, 큰 글자, 작은 글자, 툴팁) 여섯 칸. None 이면 계정 없음
     club_cells: list | None = None
     headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
+    report: ScoreParts | None = None           # 65 M1 리포트·해설 — 점수 기록이 모자라면 None
+
+
+@dataclass
+class ScoreParts:
+    """리포트·해설 재료 — 점수·예측 탭 리포트(app_main.score_report_lines)와 같은 계산."""
+    rep: object                         # habits.ScoreReport
+    band: tuple[float, int] | None      # 같은 구간(최고점 ±R2_BAND) 중앙 낙폭·사람 수 — rank.db 없으면 None
+    decisive: tuple[float, int] | None  # 무승부 뺀 승률(%)·승+패 수
 
 
 class DashCard(QFrame):
@@ -146,75 +158,109 @@ class DashboardPage(QWidget):
         outer.setSpacing(14)
         self.cards: list[DashCard] = []
 
-        # ⓪ 이번 시즌 구단(55) — 여섯 칸 한 줄 · 작은 글자는 줄바꿈(1280 창에서 칸이 좁다)
+        # ⓪ 이번 시즌 구단(55 · 65 M1) — 숫자 카드 넷 → 오늘·어제 줄 → 시즌 기록 줄 → K6 한 줄
         self.head = self._card("이번 시즌 구단", ("승률 그래프", "점수·예측"))
-        cells = QHBoxLayout()
-        cells.setSpacing(12)
-        self.head_cells: list[tuple[QLabel, QLabel, QLabel]] = []
-        for _ in range(HEAD_CELLS):
-            col = QVBoxLayout()
-            col.setSpacing(2)
-            title, big, small = _label("", dim=True), FitLabel("—", base_pt=15, min_pt=9), _label("", dim=True, wrap=True)
-            big.setStyleSheet(f"color: {T.TEXT};")
-            for w in (title, big, small):
-                col.addWidget(w)
-            col.addStretch(1)
-            cells.addLayout(col, 1)
-            self.head_cells.append((title, big, small))
-        self.head.body.addLayout(cells)
+        nums = QHBoxLayout()
+        nums.setSpacing(10)
+        self.card_score = StatCard("랭킹 점수")
+        self.card_value = StatCard("구단가치 등수")
+        self.card_fc = StatCard("시즌 FC")
+        self.kpi_rate = StatCard("승률")
+        # 승률 카드의 큰 숫자·보조 줄 — 테스트·툴팁이 이 이름으로 읽는다(예전 지표 줄의 승률 카드 자리)
+        self.lb_rate, self.lb_rate_delta = self.kpi_rate.value, self.kpi_rate.sub
+        # 보조 줄은 줄바꿈 — 식·무승부 수까지 붙은 한 줄이 카드 최소 폭을 밀어 1280 창에서 잘렸다(2026-10-11 실측)
+        for c in (self.card_score, self.card_value, self.card_fc, self.kpi_rate):
+            c.sub.setWordWrap(True)
+            nums.addWidget(c, 1)
+        self.head.body.addLayout(nums)
+        self.lb_days = _label("", wrap=True)          # 오늘 · 어제
+        self.lb_days.setTextFormat(Qt.TextFormat.RichText)
+        self.lb_record = _label("", dim=True, wrap=True)   # 시즌 기록 — 최고점 · 챔스·슈챔 달성
+        self.head.body.addWidget(self.lb_days)
+        self.head.body.addWidget(self.lb_record)
         # 57 K6 — 머리 칸 아래 한 줄. 없을 때도 자리를 지켜 카드 높이가 검색마다 출렁이지 않게
         self.lb_headline = _label("", wrap=True)
         self.lb_headline.setMinimumHeight(self.lb_headline.fontMetrics().height())
         self.head.body.addWidget(self.lb_headline)
+        self.head_vals: dict[str, str] = {}   # 칸 제목 → 큰 글자(테스트가 읽는다)
         outer.addWidget(self.head)
 
-        # ② 지표 4개
+        # ① 리포트 넷(65 M1 — 점수·예측 탭 R1~R3 와 같은 재료 · 스쿼드 대비·같은 OVR 대비는 59)
+        self.report = self._card("이 구단 리포트", ("승률 그래프", "점수·예측"))
+        rep_row = QHBoxLayout()
+        rep_row.setSpacing(10)
+        self.card_day = StatCard("하루 점수")
+        self.card_avg = StatCard("시즌 평균 점수")
+        self.card_dd = StatCard("최대 낙폭")
+        self.card_recent = StatCard(f"최근 {RECENT_N}경기 승률")
+        for c in (self.card_day, self.card_avg, self.card_dd, self.card_recent):
+            c.sub.setWordWrap(True)
+            rep_row.addWidget(c, 1)
+        self.report.body.addLayout(rep_row)
+        outer.addWidget(self.report)
+
+        # ② 경기 결과 · 골·실점 · 나와 상대(표시 구간)
         row = QHBoxLayout()
         row.setSpacing(14)
-        self.kpi_rate = self._card("승률", ("경기 목록", None))
-        self.lb_rate = _label("—", pt=22, bold=True)
-        # 줄바꿈 필수 — 식·무승부 수까지 붙은 한 줄("최근 20경기 15.4% ▼ 35.8%p · 승÷(승+패) · 무 249")이 카드
-        # 최소 폭을 237→385 로 밀어 대시보드가 1280 창(배율 150%)에서 106px 잘렸다(A6 이후 · 2026-10-11 실측)
-        self.lb_rate_delta = _label("", dim=True, wrap=True)
-        self.kpi_rate.body.addWidget(self.lb_rate)
-        self.kpi_rate.body.addWidget(self.lb_rate_delta)
-
-        self.kpi_wdl = self._card("승무패", ("경기 목록", None))
-        # 3.1.1 P2 — 도넛 + 범례 세 줄 대신 경기 수 + 세 칸 막대 + 비율 한 줄(다른 지표 카드와 같은 꼴: 큰 숫자 → 보조)
-        self.lb_wdl_total = _label("—", pt=22, bold=True)
+        self.kpi_wdl = self._card("경기 결과", ("전술·경기 결과", "경기 결과"))
         self.wdl_bar = WdlBar()
-        self.lb_wdl_share = _label("", dim=True)
-        for w in (self.lb_wdl_total, self.wdl_bar, self.lb_wdl_share):
-            self.kpi_wdl.body.addWidget(w)
-
-        self.kpi_goals = self._card("득실", ("경기 목록", None))
-        self.lb_goals = _label("—", pt=22, bold=True)
-        self.lb_goals_sub = _label("", dim=True)
-        self.kpi_goals.body.addWidget(self.lb_goals)
-        self.kpi_goals.body.addWidget(self.lb_goals_sub)
-
-        self.kpi_streak = self._card("연속", ("경기 목록", None))
-        self.lb_streak = _label("—", pt=22, bold=True)
-        self.tag_streak = Tag()   # 숫자 옆 "연승"·"연패" — 숫자는 큰 글자 한 번만
-        self.tag_streak.hide()
+        self.lb_wdl_total = _label("—", dim=True)
         streak_row = QWidget()
         sh = QHBoxLayout(streak_row)
         sh.setContentsMargins(0, 0, 0, 0)
         sh.setSpacing(8)
+        sh.addWidget(_label("현재", dim=True))
+        self.lb_streak = _label("—", bold=True)
+        self.tag_streak = Tag()   # 숫자 옆 "연승"·"연패" — 숫자는 한 번만
+        self.tag_streak.hide()
         sh.addWidget(self.lb_streak)
         sh.addWidget(self.tag_streak, 0, Qt.AlignmentFlag.AlignVCenter)
         sh.addStretch(1)
-        self.lb_streak_sub = _label("", dim=True)
-        self.kpi_streak.body.addWidget(streak_row)
-        self.kpi_streak.body.addWidget(self.lb_streak_sub)
-        for c in (self.kpi_rate, self.kpi_wdl, self.kpi_goals, self.kpi_streak):
-            for i in range(c.body.count()):
-                item = c.body.itemAt(i)
-                if item.widget() is not None:
-                    item.widget().setSizePolicy(QSizePolicy.Policy.Preferred,
-                                                QSizePolicy.Policy.Fixed)
+        self.lb_streak_sub = _label("", dim=True, wrap=True)
+        self.lb_forfeit = _label("", dim=True, wrap=True)
+        self.lb_forfeit.setTextFormat(Qt.TextFormat.RichText)
+        for w in (self.wdl_bar, self.lb_wdl_total, streak_row, self.lb_streak_sub, self.lb_forfeit):
+            self.kpi_wdl.body.addWidget(w)
+
+        self.kpi_goals = self._card("골·실점", ("경기 목록", None))
+        trio = QHBoxLayout()
+        trio.setSpacing(8)
+        self.goal_nums: list[QLabel] = []
+        for cap, col in (("경기당 골", T.GOOD), ("경기당 실점", T.BAD), ("결정력", T.TEXT)):
+            box = QVBoxLayout()
+            box.setSpacing(0)
+            big = _label("—", pt=18, bold=True)
+            big.setStyleSheet(f"color: {col};")
+            big.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            lb = _label(cap, dim=True)
+            lb.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            box.addWidget(big)
+            box.addWidget(lb)
+            trio.addLayout(box, 1)
+            self.goal_nums.append(big)
+        self.lb_goals_sub = _label("", dim=True, wrap=True)
+        self.kpi_goals.body.addLayout(trio)
+        self.kpi_goals.body.addWidget(self.lb_goals_sub)
+
+        self.versus_card = self._card("나와 상대")
+        self.versus_rows = [VersusBar(name) for name, *_ in core.VERSUS_ROWS]
+        for vb in self.versus_rows:
+            self.versus_card.body.addWidget(vb)
+        gap_row = QWidget()
+        self.gap_box = QHBoxLayout(gap_row)
+        self.gap_box.setContentsMargins(0, 4, 0, 0)
+        self.gap_box.setSpacing(6)
+        self.lb_gap = _label("벌어진 곳", dim=True)
+        self.gap_box.addWidget(self.lb_gap)
+        self.gap_tags: list[Tag] = []
+        self.gap_box.addStretch(1)
+        self.versus_card.body.addWidget(gap_row)
+
+        for c in (self.kpi_wdl, self.kpi_goals):
             c.body.addStretch(1)
-            row.addWidget(c, 1)
+        row.addWidget(self.kpi_wdl, 1)
+        row.addWidget(self.kpi_goals, 1)
+        row.addWidget(self.versus_card, 2)
         outer.addLayout(row)
 
         # ① 구단주 + ③ 승률 흐름
@@ -231,19 +277,24 @@ class DashboardPage(QWidget):
         row.addWidget(self.trend, 2)
         outer.addLayout(row)
 
-        # ③ 레이더 + ④ 승부처 · 15분 득실
+        # ③ 점수 해설(65 M1 · P9) + ④ 승부처 · 15분 득실
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         for c in range(3):
             grid.setColumnStretch(c, 1)
-        self.radar_card = self._card("나 vs 상대 평균")
-        self.radar_card.body.addWidget(
-            _legend([("나", T.CHART_UP), ("같은 경기 상대 평균", T.CHART_NEUTRAL)]))
-        self.radar = RadarChart()
-        self.radar_card.body.addWidget(self.radar, 1)
-        self.radar_card.body.addWidget(
-            _label("바깥일수록 그 항목에서 앞선다 · 진한 고리가 동률", dim=True, wrap=True))
-        grid.addWidget(self.radar_card, 0, 0)
+        # 눌러서 넘어가지 않는다 — 안의 접기 단추와 카드 누르기가 겹친다
+        self.notes = self._card("점수 해설")
+        self.note_items: list[tuple[QLabel, QLabel]] = []
+        for q in NOTE_QUESTIONS:
+            conclusion = _label("", wrap=True)
+            conclusion.setTextFormat(Qt.TextFormat.RichText)
+            explain = _label("", dim=True, wrap=True)
+            fold = Collapsible(q, explain)
+            fold.layout().insertWidget(1, conclusion)   # 결론은 늘 보이고 설명만 접는다
+            self.notes.body.addWidget(fold)
+            self.note_items.append((conclusion, explain))
+        self.notes.body.addStretch(1)
+        grid.addWidget(self.notes, 0, 0)
 
         self.clutch = self._card("승부처", ("승부처 분석", "선제골·역전"))
         gauges = QHBoxLayout()
@@ -314,18 +365,20 @@ class DashboardPage(QWidget):
     def render(self, d: DashboardInput) -> None:
         rng = f"표시 구간 {len(d.range_matches):,}경기"
         scope = f"{d.scope_name} {len(d.scope_matches):,}경기"
-        for c in (self.kpi_wdl, self.kpi_goals, self.kpi_streak, self.radar_card):
+        for c in (self.kpi_wdl, self.kpi_goals):
             c.scope.setText(rng)
-        for c in (self.kpi_rate, self.clutch, self.minutes, self.timeband, self.story,
-                  self.rivals):
+        for c in (self.clutch, self.minutes, self.timeband, self.story, self.rivals):
             c.scope.setText(scope)
         self.trend.scope.setText(f"최근 {d.trend_days}일 · 하루 단위")
         self.head.scope.setText("이번 시즌")
+        self.report.scope.setText("이번 시즌 점수 기록")
+        self.notes.scope.setText("이번 시즌 점수 기록")
 
         self._render_head(d)
         self._render_kpis(d)
+        self._render_report(d)
         self._render_trend(d)
-        self._render_radar(d)
+        self._render_versus(d)
         self._render_clutch(d)
         self._render_minutes(d)
         self._render_story(d)
@@ -334,54 +387,65 @@ class DashboardPage(QWidget):
 
     def _render_head(self, d: DashboardInput) -> None:
         self.lb_headline.setText(d.headline or "")
-        cells = d.club_cells or []
-        for i, (title, big, small) in enumerate(self.head_cells):
-            t, b, sm, tip = cells[i] if i < len(cells) else ("", "—", "", "")
-            title.setText(t)
-            big.setText(b)
-            small.setText(sm)
-            for w in (title, big, small):
-                w.setToolTip(tip)
+        cells = {c[0]: c[1:] for c in (d.club_cells or [])}
+        self.head_vals = {t: v[0] for t, v in cells.items()}
+        none = ("—", "", "")
+        # 숫자 카드 셋 — (카드, 큰 글자 칸, 보조 줄 칸). 랭킹 점수 보조 줄 = "200위까지 +N점"(H2 의 큰 글자)
+        cut_title = f"지금 {config.HEAD_TOP_CUT}위까지"
+        cut = cells.get(cut_title, none)
+        score_sub = f"{config.HEAD_TOP_CUT}위까지 {cut[0]}" if cut[0] not in ("—", "") else cut[1]
+        for card, title, sub, tip in (
+                (self.card_score, "랭킹 점수", score_sub, cut[2]),
+                (self.card_value, "구단가치 등수", None, None),
+                (self.card_fc, "시즌 FC", None, None)):
+            big, small, ctip = cells.get(title, none)
+            card.set(big)
+            card.set_sub(small if sub is None else sub)
+            card.setToolTip(ctip if tip is None else f"{ctip}\n{tip}".strip())
+        # 오늘 · 어제 줄 — 점수 변화는 좋음/나쁨 색(글자 부호가 같이 있다)
+        parts = []
+        for title in ("오늘", "어제"):
+            big, small, _tip = cells.get(title, none)
+            col = T.GOOD if big.startswith("+") and big != "+0점" else T.BAD if big.startswith("-") else T.TEXT
+            parts.append(f"<span style='color:{T.TEXT_DIM}'>{title}</span> <b style='color:{col}'>{big}</b>"
+                         f" <span style='color:{T.TEXT_DIM}'>{small}</span>")
+        self.lb_days.setText("&nbsp;&nbsp;│&nbsp;&nbsp;".join(parts))
+        self.lb_days.setToolTip("\n".join(cells.get(t, none)[2] for t in ("오늘", "어제")))
+        best, reach = cells.get("시즌 최고점", none), cells.get("챔스·슈챔 달성", none)
+        self.lb_record.setText(f"시즌 기록 · 최고 {best[0]} {best[1]} · {reach[0]} · {reach[1]}"
+                               if d.club_cells else "")
+        self.lb_record.setToolTip(f"{best[2]}\n{reach[2]}".strip())
 
     def _render_kpis(self, d: DashboardInput) -> None:
         # 승률은 시즌 전체가 큰 숫자 — 표시 구간(1~100 등)은 스핀박스에 따라 바뀌는
-        # 임의의 묶음이라 기준으로 약하다. 요즘 폼은 같은 시즌의 최근 20경기와의 차이로.
-        # 시즌 대 최근 — 시즌 범위로 식 한 번(최근은 시즌 안이라 합친 범위 = 시즌)
+        # 임의의 묶음이라 기준으로 약하다. 요즘 폼(최근 20경기)은 리포트 카드에.
         season = summarize(d.scope_matches)
         if not season.total:
-            self.lb_rate.setText("—")
-            self.lb_rate_delta.setText("경기 없음")
+            self.kpi_rate.set("—")
+            self.kpi_rate.set_sub("경기 없음")
             self.lb_rate.setToolTip("")
         else:
-            self.lb_rate.setText(f"{season.win_rate:.1f}%")
+            self.kpi_rate.set(f"{season.win_rate:.1f}%")
             # 손으로 승÷전체를 계산해도 왜 다른지 바로 보이게 — 식·무승부 수를 카드에 한 줄(A6 U5)
             self.lb_rate.setToolTip(win_rate_text(season.win, season.draw, season.lose, season.mixed)
                                     + "\n" + win_rate_note(season.mixed))
-            recent = summarize(d.scope_matches[:RECENT_N], season.mixed)
             formula = "승÷(승+패)" if season.mixed else "승÷전체"
-            if recent.total and season.total > recent.total:
-                text, col = delta_text(recent.win_rate, season.win_rate)
-                self.lb_rate_delta.setText(
-                    f"최근 {RECENT_N}경기 {recent.win_rate:.1f}% "
-                    f"<span style='color:{col}'>{text}</span> · {formula} · 무 {season.draw:,}")
-            else:
-                self.lb_rate_delta.setText(f"{season.total}경기 · {formula} · 무 {season.draw:,}")
+            self.kpi_rate.set_sub(f"{wdl_text(season.win, season.draw, season.lose)} · {formula} · {d.scope_name}")
+        recent = summarize(d.scope_matches[:RECENT_N], season.mixed)
+        if recent.total and season.total > recent.total:
+            self.card_recent.set(f"{recent.win_rate:.1f}%")
+            self.card_recent.set_sub(f"{d.scope_name} {season.win_rate:.1f}% 대비")
+            self.card_recent.set_delta(recent.win_rate, season.win_rate)
+        else:
+            self.card_recent.set("—")
+            self.card_recent.set_sub(f"{RECENT_N}경기보다 적습니다" if season.total else "경기 없음")
+            self.card_recent.set_delta(None, None)
 
         s = summarize(d.range_matches)
-        self.lb_wdl_total.setText(f"{s.total:,}경기" if s.total else "—")
         self.wdl_bar.set_counts(s.win, s.draw, s.lose)
-        self.lb_wdl_share.setText(" · ".join(f"{name} {n / s.total * 100:.0f}%" for name, n in
-                                             (("승", s.win), ("무", s.draw), ("패", s.lose))) if s.total else "")
+        formula = "승÷(승+패)" if s.mixed else "승÷전체"
+        self.lb_wdl_total.setText(f"{s.total:,}경기 · 승률 {s.win_rate:.1f}%({formula})" if s.total else "경기 없음")
         self.kpi_wdl.setToolTip(wdl_text(s.win, s.draw, s.lose))
-
-        if s.total:
-            self.lb_goals.setText(f"{s.avg_goals_for:.2f} : {s.avg_goals_against:.2f}")
-            diff = s.goals_for - s.goals_against
-            self.lb_goals_sub.setText(f"경기당 득·실 · 득실차 {diff:+,}")
-        else:
-            self.lb_goals.setText("—")
-            self.lb_goals_sub.setText("")
-
         kind, n = current_streak(d.range_matches)
         run = kind in ("승", "패") and n
         self.lb_streak.setText(str(n) if kind else "—")
@@ -390,6 +454,70 @@ class DashboardPage(QWidget):
         self.tag_streak.setVisible(bool(kind))
         best_win, best_lose = longest_streaks(d.scope_matches)
         self.lb_streak_sub.setText(f"최장 {best_win}연승 · {best_lose}연패 ({d.scope_name})")
+        rb = core.result_breakdown(d.range_details, d.ouid)
+        errors = sum(1 for m in d.range_matches if m.result not in ("승", "무", "패"))
+        bits = [(f"몰수승 {rb.forfeit[0]}", rb.forfeit[0]), (f"몰수패 {rb.forfeit[2]}", rb.forfeit[2]),
+                (f"오류 {errors}", errors)]
+        self.lb_forfeit.setText(" · ".join(f"<span style='color:{T.WARN if n else T.TEXT_DIM}'>{t}</span>"
+                                           for t, n in bits))
+
+        if s.total:
+            shots = sum(m.shoot_total for m in d.range_matches if m.result in ("승", "무", "패"))
+            for lb, text in zip(self.goal_nums, (f"{s.avg_goals_for:.2f}", f"{s.avg_goals_against:.2f}",
+                                                 f"{s.goals_for / shots * 100:.0f}%" if shots else "—")):
+                lb.setText(text)
+            self.lb_goals_sub.setText(f"득실차 {s.goals_for - s.goals_against:+,} · 결정력 = 골 ÷ 슛")
+        else:
+            for lb in self.goal_nums:
+                lb.setText("—")
+            self.lb_goals_sub.setText("")
+
+    def _render_report(self, d: DashboardInput) -> None:
+        """리포트 셋(하루 점수 · 시즌 평균 · 최대 낙폭) + 점수 해설 둘 — 점수 기록이 모자라면 침묵(점수 탭과 같다)."""
+        parts = d.report
+        cards = (self.card_day, self.card_avg, self.card_dd)
+        if parts is None:
+            for c in cards:
+                c.set("—")
+                c.set_sub("점수 기록이 모자랍니다")
+                c.set_delta(None, None)
+            for conclusion, explain in self.note_items:
+                conclusion.setText("점수 기록이 모자라 아직 말할 수 없습니다.")
+                explain.setText("")
+            return
+        rep, band, dr = parts.rep, parts.band, parts.decisive
+        up = f"오른 날 {rep.up_days / rep.steps * 100:.0f}%" if rep.steps else ""
+        self.card_day.set(f"{rep.day_avg:+,.0f}점")
+        self.card_day.set_color(T.GOOD if rep.day_avg > 0 else T.BAD if rep.day_avg < 0 else T.TEXT)
+        self.card_day.set_sub(" · ".join(x for x in (f"무승부 뺀 {dr[0]:.1f}%" if dr else "", up) if x))
+        self.card_avg.set(f"{rep.avg:,.0f}점")
+        self.card_avg.set_sub(f"지금 {rep.now:,.0f}점 ({rep.now - rep.avg:+,.0f})")
+        self.card_dd.set(f"−{rep.max_dd:,.0f}점" if rep.max_dd else "하락 없음")
+        self.card_dd.set_color(T.BAD if rep.max_dd else T.TEXT)
+        self.card_dd.set_sub(f"시즌 최고 {rep.peak:,.0f}점"
+                             + (f" · 같은 구간 중앙 −{band[0]:,.0f}점" if band else ""))
+        # 해설 — 결론 한 줄(핵심 숫자 색) + 접은 설명
+        (c1, e1), (c2, e2) = self.note_items
+        if dr is None:
+            c1.setText(f"하루 평균 {rep.day_avg:+,.1f}점 — 승·패가 아직 없습니다.")
+        else:
+            up_ok = dr[0] > 50
+            col = T.GOOD if up_ok else T.BAD if dr[0] < 50 else T.TEXT
+            word = "오르는 구간" if up_ok else "내리는 구간" if dr[0] < 50 else "제자리"
+            c1.setText(f"무승부 뺀 승률 <b style='color:{col}'>{dr[0]:.1f}%</b> — 점수가 {word}입니다.")
+        e1.setText(f"점수는 승·패로만 움직여 무승부 뺀 승률 50% 가 오르내림 경계입니다 · 하루 평균 {rep.day_avg:+,.1f}점"
+                   + (f" · {up}" if up else "") + (f" · {dr[1]:,}판" if dr else ""))
+        if not rep.max_dd or rep.dd_peak is None:
+            c2.setText("이번 시즌엔 아직 떨어진 적이 없습니다.")
+            e2.setText(f"시즌 최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d})")
+        else:
+            deep = band is not None and rep.max_dd > band[0]
+            judge = (" — 같은 구간 사람들보다 깊은 편입니다" if deep else " — 같은 구간 사람들과 비슷하거나 얕습니다") if band else ""
+            c2.setText(f"한 번에 가장 크게 떨어진 폭 <b style='color:{T.BAD}'>{rep.max_dd:,.0f}점</b>{judge}.")
+            e2.setText(f"{rep.dd_peak:,.0f}점에서 {rep.dd_peak - rep.max_dd:,.0f}점까지"
+                       + (f"({rep.dd_day:%m.%d} 바닥)" if rep.dd_day else "")
+                       + (f" · 같은 구간(최고점 ±{config.R2_BAND}) {band[1]:,}명 중앙 −{band[0]:,.0f}점" if band else "")
+                       + " · 하루 한 점이라 하루 안 낙폭은 작게 나옵니다")
 
     def _render_trend(self, d: DashboardInput) -> None:
         recent = [m for m in d.range_matches[:DOTS_N]][::-1]
@@ -399,12 +527,27 @@ class DashboardPage(QWidget):
         self.trend_chart.set_data(d.trend_points, avg_weights=w,
                                   weak=[n == 0 for n in w] if w is not None else None)
 
-    def _render_radar(self, d: DashboardInput) -> None:
-        prof = core.team_profile(d.range_details, d.ouid)
-        self.radar.set_data([
-            (a.name, a.share,
-             f"{a.name} — 나 {a.mine:.1f} · 상대 {a.opp:.1f} {a.unit} ({prof.games}경기)")
-            for a in prof.axes])
+    def _render_versus(self, d: DashboardInput) -> None:
+        prof = core.versus_profile(d.range_details, d.ouid)
+        self.versus_card.scope.setText(f"표시 구간 {prof.games:,}판 · 몰수·오류 뺌")
+        for vb, ln in zip(self.versus_rows, prof.lines):
+            vb.set_values(ln.mine, ln.opp, "{:.0f}" if ln.unit == "%" else "{:.1f}", ln.unit)
+            vb.setToolTip(f"{ln.name} — 나 {ln.mine:.1f}{ln.unit} · 상대 {ln.opp:.1f}{ln.unit} ({prof.games:,}경기 평균)")
+        for vb in self.versus_rows[len(prof.lines):]:   # 경기 없음 — 줄은 두고 비운다
+            vb.nums.setText("—")
+            vb.strip.share = 0.5
+            vb.strip.update()
+        for t in self.gap_tags:
+            self.gap_box.removeWidget(t)
+            t.deleteLater()
+        self.gap_tags = []
+        gaps = prof.gaps
+        for ln in gaps:
+            diff = ln.mine - ln.opp
+            t = Tag(f"{ln.name} {diff:+.1f}{'%p' if ln.unit == '%' else ln.unit}", "bad")
+            self.gap_box.insertWidget(self.gap_box.count() - 1, t)
+            self.gap_tags.append(t)
+        self.lb_gap.setText("벌어진 곳" if gaps else "벌어진 곳 없음")
 
     def _render_clutch(self, d: DashboardInput) -> None:
         cs = core.clutch_summary(d.scope_details, d.ouid)

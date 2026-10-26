@@ -78,7 +78,7 @@ from nexon_api import (
     ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, SERVER_CODES, FCOnlineAPI, NexonAPIError,
     check_key, read_meta_on_disk,
 )
-from dashboard import DashboardInput, DashboardPage
+from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
@@ -1756,7 +1756,7 @@ def _peak_rank(rows: list[dict], at) -> int | None:
 
 def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_start: datetime, today: date,
                mixed: bool) -> list[tuple[str, str, str, str]]:
-    """머리 줄 여섯 칸 — (제목, 큰 글자,작은 글자, 툴팁). wins = 저장 경기(core.win_divisions) · rows = 내 elo_history ·
+    """머리 칸 여덟 — (제목, 큰 글자, 작은 글자, 툴팁). 대시보드는 순서가 아니라 제목으로 찾는다(65 M1 배치). wins = 저장 경기(core.win_divisions) · rows = 내 elo_history ·
     pts = 지금 시즌 하루 점(elo_daily_points) · club = core.ClubHead 또는 None(rank.db 없음·아직 안 읽음)."""
     out = []
     season = [w for w in wins if w.when >= season_start]
@@ -1849,6 +1849,15 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
         small = (f"{lo:,}등" if lo == hi else f"{lo:,}~{hi:,}등") + f" / {n:,}명"
     out.append(("시즌 FC", f"{wr.fc:,} FC", small + saved_note,
                 "내 FC 는 저장 경기의 등급으로 센 값 · 남들은 랭킹 화면 칸으로 추정한 범위(챔스 이상 승리 15~20)라 등수도 범위"))
+    # 65 M1 — 오늘(H1 과 같은 식을 오늘 날짜로) · 랭킹 점수(내 마지막 점수 기록 — H2 의 "내" 값을 큰 글자로)
+    ts = core.club_day(wins, today)
+    tdelta = core.day_delta([(p["at"].date(), p["elo"]) for p in pts], today)
+    out.append(("오늘", f"{tdelta:+,.0f}점" if tdelta is not None else "—",
+                f"{ts.win}승 {ts.draw}무 {ts.lose}패 · {ts.rate(mixed):.1f}% · {ts.fc:,} FC" if ts.games else "오늘 경기 없음",
+                f"오늘({today:%m-%d} 이 PC 날짜 0시부터) — 점수 변화는 오늘 마지막 기록 − 그 앞 마지막 기록"))
+    out.append(("랭킹 점수", f"{me['elo']:,.2f}" if me else "—",
+                f"{me['at']:%m/%d %H:%M} 기록" if me else "내 점수 기록이 없습니다",
+                "검색·따라가기·랭킹 수집 중 마지막 점수 기록"))
     return out
 
 
@@ -11891,7 +11900,22 @@ class MainWindow(QMainWindow):
             trend_days=self.sp_trend_days.value(),
             story=self._narrate_scope(),
             club_cells=self._club_cells(),
-            headline=self._headline()))
+            headline=self._headline(),
+            report=self._dashboard_report()))
+
+    def _dashboard_report(self) -> ScoreParts | None:
+        """65 M1 리포트·해설 재료 — 점수·예측 탭 리포트(R1~R3)와 같은 계산(season_score_report)."""
+        data = self._elo.get(self._ouid) if self._ouid else None
+        if data is None:
+            return None
+        pts = self._elo_points()
+        start = elo_season_start(self._rank_seasons, data.snap_season_start, datetime.now())
+        rep = season_score_report(pts, data.rows, start)
+        if rep is None:
+            return None
+        band = core.dd_band(data.club.peaks_dd, rep.peak) if data.club is not None else None
+        dr = core.decisive_rate(self._season_wins(), datetime.combine(rep.first_day, datetime.min.time()))
+        return ScoreParts(rep, band, dr)
 
     def _headline(self) -> str | None:
         """57 K6 — 흐름 분석 문장(같은 범위 캐시)과 점수 리포트 낙폭 중 순서표대로 하나."""

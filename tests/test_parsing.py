@@ -114,6 +114,32 @@ def test_team_profile():
     assert empty.games == 0 and empty.axes == []
 
 
+def test_versus_profile():
+    # 65 M1 대시보드 "나와 상대" — 손계산(승·무·패 3경기 · 0004 는 오류): 유효슛 결정력 골 6÷유효 14 · 패스 345÷379 vs
+    # 268÷309 · 긴 패스 비중 = (긴 + 스루) 92÷379 vs 83÷309 · 드리블 308÷3 vs 234÷3 · 태클 61.11 vs 64.52(−3.41%p → 벌어진 곳)
+    ouid, _, details = _load()
+    p = st.versus_profile(details, ouid)
+    got = {ln.name: (round(ln.mine, 2), round(ln.opp, 2)) for ln in p.lines}
+    assert p.games == 3 and [ln.name for ln in p.lines] == [r[0] for r in st.VERSUS_ROWS], (p.games, got)
+    assert got == {"점유율": (52.33, 47.67), "경기당 슛": (5.67, 5.33), "유효슛 결정력": (42.86, 42.86),
+                   "패스 성공률": (91.03, 86.73), "긴 패스 비중": (24.27, 26.86), "경기당 드리블": (102.67, 78.0),
+                   "태클 성공률": (61.11, 64.52)}, got
+    assert [ln.name for ln in p.gaps] == ["태클 성공률"], [ln.name for ln in p.gaps]
+    # 몰수는 뺀다 — 막지 않았으면 3경기 그대로였다(먼저 단언) · 정상 경기 하나를 몰수승으로 바꾸면 2경기
+    forfeit = copy.deepcopy(details)
+    me, _opp = st._me_opp(forfeit[0], ouid)
+    assert st.end_kind(me, _opp) == "정상"
+    me.setdefault("matchDetail", {})["matchEndType"] = st.END_FORFEIT_WIN
+    assert st.versus_profile(forfeit, ouid).games == 2
+    assert st.versus_profile([], ouid).lines == []
+    # 문턱 — 비율 줄은 %p, 횟수 줄은 상대 대비 비율 · 좋고 나쁨이 없는 줄(None)은 벌어진 곳이 아니다
+    pp, rel = config.VERSUS_GAP_PCTP, config.VERSUS_GAP_REL
+    assert st.VersusLine("a", "%", True, 50 - pp, 50).gap and not st.VersusLine("a", "%", True, 50 - pp + 0.01, 50).gap
+    assert st.VersusLine("a", "%", False, 50 + pp, 50).gap, "작을수록 좋은 줄의 방향"
+    assert st.VersusLine("a", "회", True, 10 * (1 - rel), 10).gap and not st.VersusLine("a", "회", True, 9.5, 10).gap
+    assert not st.VersusLine("a", "%", None, 0, 90).gap and not st.VersusLine("a", "회", True, 0, 0).gap
+
+
 def test_result_breakdown():
     ouid, _, details = _load()
     rb = st.result_breakdown(details, ouid)

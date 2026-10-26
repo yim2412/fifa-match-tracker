@@ -278,7 +278,60 @@ def test_trend_page_has_own_summary():
     _win._go_page("승률 그래프")
     assert _win.card_trend_games.value.text().endswith("경기"), \
         _win.card_trend_games.value.text()
-    assert _win.dashboard.kpi_rate.title.text() == "승률", _win.dashboard.kpi_rate.title.text()
+    assert _win.dashboard.kpi_rate.cap.text() == "승률", _win.dashboard.kpi_rate.cap.text()
+
+
+def test_dashboard_65_layout():
+    """65 M1 — 머리 숫자 카드(제목으로 칸을 찾는다) · 오늘/어제 줄 · 나와 상대 일곱 줄 + 벌어진 곳 · 리포트·해설(재료 없으면 침묵)."""
+    import dashboard
+    from habits import ScoreReport
+    from datetime import date as _d
+    d = _win.dashboard
+    cells = [("어제", "+12점", "2승 0무 1패 · 66.7% · 30 FC", "t어제"), ("지금 200위까지", "+100.00점", "작은", "t컷"),
+             ("구단가치 등수", "3,300등", "10,000명 중", "t가치"), ("시즌 최고점", "4,549.30", "#8 (10.18)", "t최고"),
+             ("챔스·슈챔 달성", "챔스 1,042판", "남들 중앙", "t챔스"), ("시즌 FC", "26,015 FC", "1,057등", "tFC"),
+             ("오늘", "-143점", "36승 8무 25패", "t오늘"), ("랭킹 점수", "4,103.09", "10/26 기록", "t점수")]
+    ms, ds = list(_win._matches), list(_win._details)
+    inp = dashboard.DashboardInput(_win._ouid, ms, ds, ms, ds, "시험", club_cells=cells)
+    try:
+        d.render(inp)
+        # 순서가 아니라 제목으로 — 칸 순서를 섞어도 같은 카드에 간다
+        assert (d.card_score.value.text(), d.card_score.sub.text()) == ("4,103.09", "200위까지 +100.00점"), \
+            (d.card_score.value.text(), d.card_score.sub.text())
+        assert d.card_value.value.text() == "3,300등" and d.card_fc.sub.text() == "1,057등"
+        assert d.kpi_rate.sub.text().endswith(" · 시험"), ("승률 카드가 어느 범위인지 안 적었다", d.kpi_rate.sub.text())
+        d.render(replace(inp, club_cells=cells[::-1]))
+        assert d.card_value.value.text() == "3,300등" and d.head_vals["지금 200위까지"] == "+100.00점"
+        days = d.lb_days.text()
+        assert days.index("오늘") < days.index("어제") and f"color:{T.BAD}'>-143점" in days \
+            and f"color:{T.GOOD}'>+12점" in days, days
+        assert "4,549.30" in d.lb_record.text() and "챔스 1,042판" in d.lb_record.text()
+        # 나와 상대 — 픽스처 손계산 값(test_parsing.test_versus_profile) · 태클만 벌어진 곳
+        prof = core.versus_profile(ds, _win._ouid)
+        assert [vb.name.text() for vb in d.versus_rows] == [ln.name for ln in prof.lines]
+        assert [t.text() for t in d.gap_tags] == ["태클 성공률 -3.4%p"], [t.text() for t in d.gap_tags]
+        assert "몰수·오류 뺌" in d.versus_card.scope.text() and "3판" in d.versus_card.scope.text()
+        drib = d.versus_rows[5]
+        assert drib.mine_ahead and f"color:{T.ACCENT}" in drib.nums.text(), drib.nums.text()   # 102.7 vs 78.0
+        assert abs(drib.strip.share - 102.67 / (102.67 + 78.0)) < 0.001
+        tackle = d.versus_rows[6]
+        assert not tackle.mine_ahead and f"color:{T.ACCENT}" not in tackle.nums.text()
+        # 리포트 — 재료 없으면 "—" + 해설은 말하지 않는다
+        assert d.card_day.value.text() == "—" and "모자라" in d.note_items[0][0].text()
+        rep = ScoreReport(10, _d(2026, 9, 1), 4000.0, 4100.0, 4500.0, _d(2026, 9, 5), 300.0, _d(2026, 9, 3),
+                          12.4, 6, 9, 4300.0)
+        d.render(replace(inp, report=dashboard.ScoreParts(rep, (200.0, 30), (53.2, 400))))
+        assert d.card_day.value.text() == "+12점" and "무승부 뺀 53.2%" in d.card_day.sub.text()
+        assert d.card_avg.value.text() == "4,000점" and "(+100)" in d.card_avg.sub.text()
+        assert d.card_dd.value.text() == "−300점" and "같은 구간 중앙 −200점" in d.card_dd.sub.text()
+        assert "오르는 구간" in d.note_items[0][0].text() and "깊은 편" in d.note_items[1][0].text()
+        d.render(replace(inp, report=dashboard.ScoreParts(rep, (400.0, 30), (47.0, 400))))
+        assert "내리는 구간" in d.note_items[0][0].text() and "깊은 편" not in d.note_items[1][0].text()
+        # 경기 결과 카드 — 픽스처 0004 는 내 쪽 오류 + 상대 몰수승 = 몰수패 1 · 오류 1
+        assert "몰수패 1" in d.lb_forfeit.text() and "오류 1" in d.lb_forfeit.text(), d.lb_forfeit.text()
+        assert f"color:{T.WARN}'>몰수패 1" in d.lb_forfeit.text() and f"color:{T.TEXT_DIM}'>몰수승 0" in d.lb_forfeit.text()
+    finally:
+        _win._render_dashboard()
 
 
 class _CountRenders:
@@ -603,29 +656,35 @@ def test_dashboard_kpi_row_fits_min_window_with_longest_text():
     1280 창(배율 150%)에서 가로로 잘렸다. 테스트 데이터는 경기가 적어 그 줄이 짧게 나오므로, 가장 긴 글을 직접 넣어 잰다."""
     d = _win.dashboard
     cur = _win.pages.currentIndex()
-    saved = (d.lb_rate_delta.text(), d.lb_goals_sub.text(), d.lb_streak_sub.text())
+    # 65 M1 — 숫자 카드 여덟(머리 넷 · 리포트 넷)의 보조 줄과 머리 두 줄에 실제로 들어갈 가장 긴 글
+    longest = {d.kpi_rate.sub: "99,999승 99,999무 99,999패 · 승÷(승+패)",
+               d.card_score.sub: "200위까지 +9,999.99점", d.card_value.sub: "10,001명 중 · 999억 9,999만(마지막 수집)",
+               d.card_fc.sub: "9,999~9,999등 / 99,999명 · 저장 시작 뒤부터",
+               d.card_day.sub: "무승부 뺀 100.0% · 오른 날 100%", d.card_avg.sub: "지금 9,999점 (+9,999)",
+               d.card_dd.sub: "시즌 최고 9,999점 · 같은 구간 중앙 −9,999점", d.card_recent.sub: "누적 전체 100.0% 대비",
+               d.lb_goals_sub: "득실차 -99,999 · 결정력 = 골 ÷ 슛", d.lb_streak_sub: "최장 99연승 · 99연패 (누적 전체)",
+               d.lb_days: "오늘 -9,999점 99승 99무 99패 · 100.0% · 9,999 FC  │  어제 -9,999점 99승 99무 99패 · 100.0% · 9,999 FC",
+               d.lb_record: "시즌 기록 · 최고 9,999.99 #9,999 (12.31) · 챔스 9,999판 · 슈챔 9,999판 · 남들 중앙 9,999판보다 9,999판 느리게"}
+    saved = {lb: lb.text() for lb in longest}
     try:
         _at_size(*app_main.MIN_WINDOW)
         _win._go_page("대시보드")
         _app.processEvents()
-        for lb in (d.lb_rate_delta, d.lb_goals_sub, d.lb_streak_sub):
-            lb.setText("")
+        for lb, text in longest.items():
+            lb.setText(text)
+            lb.setVisible(True)
         _app.processEvents()
-        base = {c: c.minimumSizeHint().width() for c in (d.kpi_rate, d.kpi_goals, d.kpi_streak)}
-        d.lb_rate_delta.setText("최근 20경기 100.0% <span style='color:#000'>▼ 100.0%p</span> · 승÷(승+패) · 무 99,999")
-        d.lb_goals_sub.setText("경기당 득·실 · 득실차 -99,999")
-        d.lb_streak_sub.setText("최장 99연승 · 99연패 (누적 전체)")
-        _app.processEvents()
-        # 글이 길어져도 카드 최소 폭이 안 늘어야 한다(줄바꿈) — 글꼴과 무관하게 잰다. 득실·연속 카드는 지금도 글이 최소 폭을
-        # 밀지만 1280 에 들어가므로(승률만 106px 넘쳤다) 상한 폭만 본다
-        assert d.kpi_rate.minimumSizeHint().width() == base[d.kpi_rate], (d.kpi_rate.minimumSizeHint().width(), base[d.kpi_rate])
+        # 보조 줄은 줄바꿈이어야 한다 — 꺼지면 한 줄 글이 카드 최소 폭을 밀어 1280 창에서 잘렸다(2026-10-11 실측 106px)
+        assert all(lb.wordWrap() for lb in longest), [lb.text() for lb in longest if not lb.wordWrap()]
         frame = _win.pages.widget(_win._page_index["대시보드"])
         need = d.minimumSizeHint().width()
         assert need <= frame.viewport().width(), (need, frame.viewport().width())
     finally:
-        d.lb_rate_delta.setText(saved[0]); d.lb_goals_sub.setText(saved[1]); d.lb_streak_sub.setText(saved[2])
+        for lb, text in saved.items():
+            lb.setText(text)
         _win.pages.setCurrentIndex(cur)
         _at_size(1600, 900)
+        _win._render_dashboard()
 
 
 def test_top_bar_wraps_only_when_narrow():
@@ -901,13 +960,13 @@ def test_ranker_tiles_shrink_to_fit():
 def test_dashboard_cards_filled_from_fixture():
     # 손계산: 승·무·패 3경기(오류 제외) — 득 1+4+1, 실 2+3+1. 오류 경기도 '표시 구간'
     # 4경기에는 들어간다(경기 목록과 같은 범위).
+    # 결정력 = 골 6 ÷ 슛 17(2+8+7 — 오류 경기 슛은 안 센다)
     d = _win.dashboard
     assert d.wdl_bar.counts() == (1, 1, 1), d.wdl_bar.counts()
-    assert d.lb_wdl_total.text() == "3경기", d.lb_wdl_total.text()
-    assert d.lb_wdl_share.text() == "승 33% · 무 33% · 패 33%", d.lb_wdl_share.text()
-    assert d.lb_goals.text() == "2.00 : 2.00", d.lb_goals.text()
+    assert d.lb_wdl_total.text() == "3경기 · 승률 33.3%(승÷전체)", d.lb_wdl_total.text()
+    assert [lb.text() for lb in d.goal_nums] == ["2.00", "2.00", "35%"], [lb.text() for lb in d.goal_nums]
     assert "득실차 +0" in d.lb_goals_sub.text(), d.lb_goals_sub.text()
-    assert len(d.radar._axes) == 6, d.radar._axes
+    assert len(d.versus_rows) == 7 and all(vb.nums.text() != "—" for vb in d.versus_rows)
     assert len(d.dots._items) == 4, d.dots._items
     assert d.dots._items[-1][0] == "오류"  # 오래된 것 → 최신, 최신이 오류 경기
     assert sum(d.minute_chart._series[0][1]) == 6, d.minute_chart._series  # 득점 6골
@@ -916,7 +975,7 @@ def test_dashboard_cards_filled_from_fixture():
     # 선제골 표본 3경기 < 최소 표본 — 숫자 대신 "—"
     assert all(g._value is None for g in d.gauges), [g._value for g in d.gauges]
     assert d.kpi_wdl.scope.text() == "표시 구간 4경기", d.kpi_wdl.scope.text()
-    assert d.kpi_rate.scope.text().startswith(_win._scope_text()), d.kpi_rate.scope.text()
+    assert d.head.scope.text() == "이번 시즌", d.head.scope.text()
     assert d.clutch.scope.text().startswith(_win._scope_text()), d.clutch.scope.text()
     assert d.trend.scope.text().startswith(f"최근 {_win.sp_trend_days.value()}일")
 
@@ -10105,8 +10164,15 @@ def test_club_cells_texts():
     keep = config.RANK_COLLECT
     try:
         config.RANK_COLLECT = True
-        cells = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club()))}
-        assert list(cells)[0] == "어제" and len(cells) == 6, list(cells)
+        args = _club_args(_club())
+        cells = {c[0]: c[1:] for c in app_main.club_cells(**args)}
+        assert list(cells)[0] == "어제" and len(cells) == 8, list(cells)
+        # 65 M1 — 랭킹 점수 = 마지막 점수 기록 · 오늘 = 어제와 같은 식(club_day)을 오늘 날짜로
+        assert cells["랭킹 점수"][0] == f"{args['pts'][-1]['elo']:,.2f}", cells["랭킹 점수"]
+        td = core.club_day(args["wins"], args["today"])
+        assert (f"{td.win}승 {td.draw}무 {td.lose}패" in cells["오늘"][1]) if td.games else cells["오늘"][1] == "오늘 경기 없음"
+        none_today = {c[0]: c[1:] for c in app_main.club_cells(**{**args, "pts": [], "rows": []})}
+        assert none_today["랭킹 점수"][0] == "—" and none_today["오늘"][0] == "—"
         assert cells["어제"][0] == "-120점" and cells["어제"][1] == "1승 1무 0패 · 50.0% · 15 FC", cells["어제"]
         assert cells["지금 200위까지"][0] == "+20.00점", cells["지금 200위까지"]
         assert cells["구단가치 등수"][0] == "3등" and "4명 중" in cells["구단가치 등수"][1] and "검색 때" in cells["구단가치 등수"][1]
@@ -10141,15 +10207,16 @@ def test_dashboard_head_redraws_when_elo_arrives():
         _win._elo.pop(_OUID, None)
         _win._go_page("대시보드")
         _win._render_dashboard()
-        big = [c[1].text() for c in _win.dashboard.head_cells]
-        assert big[1] == "—" and _win.dashboard.head.scope.text() == "이번 시즌", big
+        big = _win.dashboard.head_vals
+        assert big["지금 200위까지"] == "—" and _win.dashboard.head.scope.text() == "이번 시즌", big
         now = datetime.now()
         rows = _elo_rows([((now - timedelta(days=1)).isoformat(timespec="seconds"), 4300.0, 300, "search")])
         data = _elo_data(rows)
         data.club = _club()
         _win._on_elo_ready(_OUID, data)
         _app.processEvents()
-        assert _win.dashboard.head_cells[1][1].text() == "+100.00점", [c[1].text() for c in _win.dashboard.head_cells]
+        assert _win.dashboard.head_vals["지금 200위까지"] == "+100.00점", _win.dashboard.head_vals
+        assert _win.dashboard.card_score.sub.text() == "200위까지 +100.00점", _win.dashboard.card_score.sub.text()
     finally:
         _win._rank_seasons, _win._elo = keep[0], keep[1]
         _win._render_dashboard()

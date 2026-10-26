@@ -1701,6 +1701,71 @@ class Tag(QLabel):
         self.setStyleSheet(tag_qss(self.color, "QLabel"))
 
 
+class _ShareStrip(QWidget):
+    """VersusBar 의 막대 — 왼쪽부터 내 몫(share) · 나머지는 상대 색(없으면 빈 띠)."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedHeight(VersusBar.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.share = 0.5
+        self.mine_color = T.ACCENT_FILL
+        self.opp_color: str | None = None
+
+    def sizeHint(self) -> QSize:
+        return QSize(60, VersusBar.HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(24, VersusBar.HEIGHT)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        path = QPainterPath()
+        path.addRoundedRect(r, r.height() / 2, r.height() / 2)
+        p.setClipPath(path)
+        p.fillRect(r, QColor(self.opp_color or T.PANEL_2))
+        p.fillRect(QRectF(r.left(), r.top(), r.width() * self.share, r.height()), QColor(self.mine_color))
+        p.end()
+
+
+class VersusBar(QWidget):
+    """나와 상대 한 줄(65 M1 · 상세 창 경기 정보 M3 도 이 부품) — 위: 라벨 · 오른쪽 "나 vs 상대"(내가 크면 내 숫자 강조색),
+    아래: 내 몫 막대. opp_color 를 주면 두 색으로 갈린 막대(상세 창 꼴), 안 주면 빈 띠 위 내 몫만(대시보드 꼴)."""
+    HEIGHT = 6
+
+    def __init__(self, label: str, opp_color: str | None = None):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 2, 0, 2)
+        v.setSpacing(3)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        self.name = QLabel(label)
+        self.name.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+        self.nums = QLabel("")
+        self.nums.setTextFormat(Qt.TextFormat.RichText)
+        self.nums.setStyleSheet("border: none;")
+        top.addWidget(self.name)
+        top.addStretch(1)
+        top.addWidget(self.nums)
+        v.addLayout(top)
+        self.strip = _ShareStrip(self)
+        self.strip.opp_color = opp_color
+        v.addWidget(self.strip)
+
+    def set_values(self, mine: float, opp: float, fmt: str = "{:.0f}", unit: str = "") -> None:
+        ahead = mine > opp
+        col = T.ACCENT if ahead else T.TEXT
+        self.nums.setText(f"<b style='color:{col}'>{fmt.format(mine)}{unit}</b>"
+                          f" <span style='color:{T.TEXT_DIM}'>vs {fmt.format(opp)}{unit}</span>")
+        tot = mine + opp
+        self.strip.share = mine / tot if tot else 0.5
+        self.mine_ahead = ahead
+        self.strip.update()
+
+
 class BarRow(QWidget):
     """유형별 골 한 줄 — 이름 · 골수 · 비율 · 막대."""
 
