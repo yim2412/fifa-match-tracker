@@ -802,6 +802,18 @@ def test_fetch_icon_replace_refused_uses_existing_file():
 
 # ── 40단계 조각 ② — I4 특성 칸 · I5 작은 축구장 ────────────────────────────────────
 
+def _dot_rgbs() -> set[int]:
+    """작은 축구장 점 색(줄 색 다섯 + GK) — 64 P7 부터 점이 줄마다 색이 다르다."""
+    return {QColor(c).rgb() for c in app_main.T.FORMATION_LINE_COLORS}
+
+
+def _is_pitch(c: QColor) -> bool:
+    """판 그라데이션(위 → 아래) 사이 색인가 — 두 끝 색의 채널 범위 안(±2)."""
+    a, b = QColor(app_main.T.FORMATION_PITCH_TOP), QColor(app_main.T.FORMATION_PITCH_BOTTOM)
+    return all(min(x, y) - 2 <= z <= max(x, y) + 2
+               for x, y, z in ((a.red(), b.red(), c.red()), (a.green(), b.green(), c.green()), (a.blue(), b.blue(), c.blue())))
+
+
 def test_formation_forms_agree():
     """내 경기(0 줄 포함 고정 5줄)와 랭커(줄 수가 바뀜)가 같은 모양이면 같은 키 · 모양이 아닌 글자는 그림 없음."""
     from widgets import formation_key, formation_pixmap
@@ -823,12 +835,35 @@ def test_formation_pixmap_draws_dots():
         assert i.width() == round(px * config.ICON_ASPECT["formation"]) and i.height() == px, (i.width(), i.height())
     uniq = {bytes(i.constBits().asarray(i.sizeInBytes())) for i in imgs.values()}
     assert len(uniq) == 4, "포메이션이 달라도 그림이 같다"
-    white = QColor(app_main.T.FORMATION_DOT).rgb()
+    dots = _dot_rgbs()
     for f, i in imgs.items():
-        n = sum(1 for y in range(i.height()) for x in range(i.width()) if i.pixelColor(x, y).rgb() == white)
-        assert n >= sum(int(x) for x in f.split("-")), (f, n)   # 점마다 흰 픽셀이 최소 한 개씩은 있다
-    pitch = QColor(app_main.T.FORMATION_PITCH).rgb()
-    assert imgs["4-4-2"].pixelColor(1, px // 2).rgb() == pitch, "판이 pitch 색으로 안 칠해졌다"
+        n = sum(1 for y in range(i.height()) for x in range(i.width()) if i.pixelColor(x, y).rgb() in dots)
+        assert n >= sum(int(x) for x in f.split("-")), (f, n)   # 점마다 점 색 픽셀이 최소 한 개씩은 있다
+    assert _is_pitch(imgs["4-4-2"].pixelColor(1, px // 2)), "판이 pitch 색으로 안 칠해졌다"
+
+
+def test_formation_dot_colors_follow_lines():
+    """64 P7 — 점 색은 줄(높이 띠). 자리 그림 4-1-2-3-0 은 최전방이 없어 빨강이 없고 미드 노랑이 있다 · 줄 인원 그림 4-2-3-1 은
+    네 줄을 수비·수미·공미·공격에 놓아 노랑이 없고 빨강이 있다. 띠를 안 가르면(한 색) 두 그림의 색 집합이 같아진다."""
+    from widgets import formation_pixmap
+    T = app_main.T
+    atk, am, mid, dm, df, gk = (QColor(c).rgb() for c in T.FORMATION_LINE_COLORS)
+
+    def colors(img):
+        return {img.pixelColor(x, y).rgb() for y in range(img.height()) for x in range(img.width())} & _dot_rgbs()
+    spots = colors(formation_pixmap("4-1-2-3-0", 60, 1.0, positions=(0, 3, 4, 6, 7, 10, 13, 15, 17, 18, 19)).toImage())
+    assert spots == {gk, df, dm, mid, am}, "자리 그림의 줄 색이 다르다"
+    lines = colors(formation_pixmap("4-2-3-1", 60, 1.0).toImage())
+    assert lines == {gk, df, dm, am, atk}, "줄 인원 그림의 줄 색이 다르다"
+    # 선은 큰 그림에서만(config.FORMATION_LINES_FROM_PX) — 하프라인 자리(가로 가장자리 근처)가 선 색이냐 판 색이냐
+    line = QColor(T.FORMATION_LINE)
+
+    def near_line(c):
+        return all(abs(a - b) <= 12 for a, b in ((c.red(), line.red()), (c.green(), line.green()), (c.blue(), line.blue())))
+    big = formation_pixmap("4-4-2", 120, 1.0).toImage()
+    assert near_line(big.pixelColor(6, 60)), big.pixelColor(6, 60).name()
+    small = formation_pixmap("4-4-2", config.FORMATION_PX, 1.0).toImage()
+    assert config.FORMATION_PX < config.FORMATION_LINES_FROM_PX and _is_pitch(small.pixelColor(2, config.FORMATION_PX // 2))
 
 
 def test_formation_pixmap_places_dots_at_real_positions():
@@ -838,11 +873,11 @@ def test_formation_pixmap_places_dots_at_real_positions():
     from widgets import formation_pixmap
     px = 120
     pos = (0, 3, 4, 6, 7, 10, 13, 15, 17, 18, 19)
-    white = QColor(app_main.T.FORMATION_DOT).rgb()
+    dots = _dot_rgbs()
 
     def dots_in(img, y0, y1, x0=0, x1=None):
         x1 = img.width() if x1 is None else x1
-        return sum(1 for y in range(y0, y1) for x in range(x0, x1) if img.pixelColor(x, y).rgb() == white)
+        return sum(1 for y in range(y0, y1) for x in range(x0, x1) if img.pixelColor(x, y).rgb() in dots)
     by_count = formation_pixmap("4-1-2-3-0", px, 1.0).toImage()
     real = formation_pixmap("4-1-2-3-0", px, 1.0, positions=pos).toImage()
     assert dots_in(by_count, 0, px // 8) > 0, "전제가 바뀌었다 — 줄 인원 그림에서도 맨 위가 비면 이 테스트가 재는 게 없다"
@@ -1090,9 +1125,8 @@ def test_hbarlist_icons_make_room_and_draw():
     img = QImage(bars.size(), QImage.Format.Format_ARGB32)
     img.fill(QColor("black"))
     bars.render(img)
-    pitch = QColor(app_main.T.FORMATION_PITCH).rgb()
     mid = int(bars.ROW / 2)
-    assert any(img.pixelColor(x, mid).rgb() == pitch for x in range(pms[0].width())), "첫 줄에 작은 축구장이 안 그려졌다"
+    assert any(_is_pitch(img.pixelColor(x, mid)) for x in range(pms[0].width())), "첫 줄에 작은 축구장이 안 그려졌다"
     bars.set_data(rows)
     assert bars.minimumSizeHint().width() == plain_w, "그림을 빼면 예전 폭으로 돌아와야 한다"
 

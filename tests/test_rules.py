@@ -341,6 +341,51 @@ def check_old_color_names(srcs: dict[str, str]) -> list[str]:
     return out
 
 
+GRADE_FILES = ("app_main.py", "dashboard.py")
+_GRADE_NAME = re.compile(r"grade(?!s)")
+
+
+def _mentions_grade(node) -> bool:
+    return any(isinstance(n, ast.Name) and _GRADE_NAME.search(n.id)
+               or isinstance(n, ast.Attribute) and _GRADE_NAME.search(n.attr) for n in ast.walk(node))
+
+
+def _grade_text(node) -> bool:
+    """표 칸 (글자, 정렬 키) 의 글자가 강화 하나뿐인가 — f"{g}" · f"+{g}" · str(g …) · 그 셋의 `… if … else "-"`.
+    "3 → 5" 처럼 값이 둘인 글이나 "5강 12 · 3강 4" 같은 목록은 배지가 아니다(글자 그대로)."""
+    if isinstance(node, ast.IfExp):
+        return _grade_text(node.body)
+    if isinstance(node, ast.JoinedStr):
+        vals = [v for v in node.values if isinstance(v, ast.FormattedValue)]
+        lits = [v.value for v in node.values if isinstance(v, ast.Constant)]
+        return len(vals) == 1 and all(t in ("", "+") for t in lits) and _mentions_grade(vals[0].value)
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "str"
+            and len(node.args) == 1 and _mentions_grade(node.args[0]))
+
+
+def grade_cells(srcs: dict[str, str]) -> dict[str, int]:
+    """함수 이름 → 강화 하나뿐인 표 칸 튜플 수(64 P8 진입점 정의 — 첫 실행이 곧 진입점 표)."""
+    out: dict[str, int] = {}
+
+    def walk(node, fn):
+        for ch in ast.iter_child_nodes(node):
+            here = ch.name if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+            if isinstance(ch, ast.Tuple) and len(ch.elts) == 2 and fn and _grade_text(ch.elts[0]):
+                out[fn] = out.get(fn, 0) + 1
+            walk(ch, here)
+    for src in srcs.values():
+        walk(ast.parse(src), None)
+    return out
+
+
+def check_grade_badges(srcs: dict[str, str], table: dict) -> list[str]:
+    """강화 숫자 칸을 만드는 함수 ↔ app_main.GRADE_BADGE_COLUMNS(배지 대리자를 거는 열) — 함수도 칸 수도 같아야."""
+    found = grade_cells(srcs)
+    want = {fn: len(cols) for fn, (_t, cols) in table.items()}
+    return [f"{fn}: 강화 칸 {found.get(fn, 0)}개 · 배지 열 {want.get(fn, 0)}개"
+            for fn in sorted(set(found) | set(want)) if found.get(fn, 0) != want.get(fn, 0)]
+
+
 def _docstring_nodes(tree) -> set[int]:
     out = set()
     for n in ast.walk(tree):
@@ -677,6 +722,21 @@ def test_old_color_names_are_gone():
     assert not check_old_color_names({"x.py": "c = T.GOOD  # 옛 GREEN\nd = T.ACCENT_SOFT\ne = 'GREENISH'\n"})
     # test_rules 자신은 위의 심은 위반을 품고 있어 뺀다
     assert check_old_color_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
+
+
+def test_grade_cells_are_badged():
+    # 64 P8 — 강화 숫자 하나만 든 표 칸은 배지로. 심은 소스: 잡혀야 할 넷(f"{}"·f"+{}"·str()·if-else) · 아닌 셋(변화·목록·라벨)
+    planted = ("def a(r, e, t):\n"
+               "    r.append([(f'{e.grade}', 1), (f'+{t.cur_grade}' if t else '-', 0)])\n"
+               "def b(e, now_grade):\n    return [(str(now_grade or '-'), 0), (str(e.grade_to) if e else '-', 0)]\n"
+               "def c(e, c2):\n    x = (f'{e.grade_from} → {e.grade_to}', 0)\n"
+               "    y = (' · '.join(f'{g}강' for g in c2.grades), 0)\n    z = QLabel(f'{e.grade}강')\n")
+    assert grade_cells({"x.py": planted}) == {"a": 2, "b": 2}, grade_cells({"x.py": planted})
+    assert check_grade_badges({"x.py": planted}, {"a": ("t", (1, 2)), "b": ("t", (3,))}) == ["b: 강화 칸 2개 · 배지 열 1개"]
+    import app_main
+    srcs = {f: _src(ROOT / f) for f in GRADE_FILES}
+    bad = check_grade_badges(srcs, app_main.MainWindow.GRADE_BADGE_COLUMNS)
+    assert bad == [], bad
 
 
 def test_weak_samples_go_through_is_weak():

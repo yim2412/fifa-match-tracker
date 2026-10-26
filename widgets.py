@@ -511,27 +511,47 @@ class Card(QFrame):
 
 
 class Collapsible(QWidget):
-    """누르면 접히고 펴지는 구획 — 머리(▸ 제목) + 본문. 접힌 본문은 숨김이라 크기 계산에서 빠진다."""
+    """누르면 접히고 펴지는 구획(P9) — 머리 한 줄(왼쪽 흐린 제목 · 오른쪽 흐린 12px "펼치기 ▾"/"접기 ▴") + 본문.
+    제목·오른쪽 글 어느 쪽을 눌러도 같다 · 올리면 글자가 밝아진다. 접힌 본문은 숨김이라 크기 계산에서 빠진다."""
+
+    HINT = {False: "펼치기 ▾", True: "접기 ▴"}
 
     def __init__(self, title: str, body: QWidget, opened: bool = False):
         super().__init__()
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
+        qss = f"QToolButton {{ border: none; color: {T.TEXT_DIM}; }} QToolButton:hover {{ color: {T.TEXT}; }}"
         self.head = QToolButton()
         self.head.setText(title)
         self.head.setCheckable(True)
-        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.head.setStyleSheet(f"QToolButton {{ border: none; color: {T.TEXT_DIM}; font-weight: bold; }}")
+        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.head.setStyleSheet(qss)
+        bold = QFont(self.head.font())
+        bold.setBold(True)
+        self.head.setFont(bold)
+        self.hint = QToolButton()
+        self.hint.setStyleSheet(qss)
+        small = QFont(self.hint.font())
+        small.setPixelSize(12)
+        self.hint.setFont(small)
+        for b in (self.head, self.hint):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.hint.clicked.connect(self.head.toggle)
         self.head.toggled.connect(self.set_open)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.head)
+        row.addStretch(1)
+        row.addWidget(self.hint)
         self.body = body
-        v.addWidget(self.head)
+        v.addLayout(row)
         v.addWidget(body)
         self.head.setChecked(opened)
         self.set_open(opened)
 
     def set_open(self, on: bool) -> None:
-        self.head.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.hint.setText(self.HINT[on])
         self.body.setVisible(on)
 
     def is_open(self) -> bool:
@@ -1260,18 +1280,16 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(T.FORMATION_PITCH))
-    p.drawRoundedRect(QRectF(0, 0, w, px), 3, 3)
-    p.setBrush(QColor(T.FORMATION_DOT))
+    _formation_board(p, w, px)
     rows = len(lines) + 1                      # GK + 줄들
     r = max(1.1, px / 15)
     pad_y = r + 1.5
     for i in range(rows):
         count = 1 if i == 0 else lines[i - 1]  # i=0 은 GK(맨 아래), 그 위로 수비 → 공격
         y = px - pad_y - (px - 2 * pad_y) * i / max(1, rows - 1)
+        color = T.FORMATION_LINE_COLORS[-1] if i == 0 else _formation_band_color(i - 1, len(lines))
         for j in range(count):
-            p.drawEllipse(QPointF(w * (j + 1) / (count + 1), y), r, r)
+            _formation_dot(p, QPointF(w * (j + 1) / (count + 1), y), r, color, px)
     p.end()
     QPixmapCache.insert(ck, pm)
     return pm
@@ -1280,8 +1298,51 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
 FORMATION_SPREAD = 1.5   # 포메이션 아이콘의 가로 넓힘(가운데 0.5 에서) — 1.0 이면 큰 축구장과 같은 좌표
 
 
+def _formation_band_color(i: int, n: int) -> str:
+    """줄 인원 그림의 i 번째 줄(0 = 수비) 색 — 줄이 n 개면 수비~공격 다섯 띠에 고르게 놓는다(4줄 = 수비·수미·공미·공격).
+    랭커 포메이션 글자는 빈 줄(0)을 안 싣고 내 경기와 같은 키를 쓰므로 정확한 띠를 모른다 — 그림 속 높이를 따른다."""
+    bands = len(T.FORMATION_LINE_COLORS) - 1          # GK 뺀 다섯
+    k = 0 if n <= 1 else round(i * (bands - 1) / (n - 1))
+    return T.FORMATION_LINE_COLORS[bands - 1 - min(bands - 1, k)]
+
+
+def _formation_board(p: QPainter, w: float, h: float) -> None:
+    """작은 축구장 판 — 위→아래 그라데이션, 클 때만(config.FORMATION_LINES_FROM_PX) 테두리·하프라인·센터서클·두 박스."""
+    from PyQt6.QtGui import QLinearGradient
+    g = QLinearGradient(0, 0, 0, h)
+    g.setColorAt(0, QColor(T.FORMATION_PITCH_TOP))
+    g.setColorAt(1, QColor(T.FORMATION_PITCH_BOTTOM))
+    rad = max(2.0, w * 0.08)
+    p.setBrush(g)
+    if h < config.FORMATION_LINES_FROM_PX:
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(0, 0, w, h), rad, rad)
+        return
+    line = QColor(T.FORMATION_LINE)
+    thick = max(0.8, w / 60)
+    p.setPen(QPen(line, thick))
+    p.drawRoundedRect(QRectF(thick / 2, thick / 2, w - thick, h - thick), rad, rad)
+    p.drawLine(QPointF(0, h / 2), QPointF(w, h / 2))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QPen(line, thick / 2))
+    p.drawEllipse(QPointF(w / 2, h / 2), w * 0.11, w * 0.11)
+    bw, bh = w * 0.6, h * 0.156
+    p.drawRect(QRectF((w - bw) / 2, 0, bw, bh))
+    p.drawRect(QRectF((w - bw) / 2, h - bh, bw, bh))
+
+
+def _formation_dot(p: QPainter, at: QPointF, r: float, color: str, h: float) -> None:
+    """점 하나 — 테두리(검정 40%)는 선과 같이 큰 그림에서만. 표 칸(r 1.3px)에선 테두리가 점 색을 덮는다."""
+    if h < config.FORMATION_LINES_FROM_PX:
+        p.setPen(Qt.PenStyle.NoPen)
+    else:
+        p.setPen(QPen(QColor(T.FORMATION_DOT_EDGE), max(0.4, r * 0.12)))
+    p.setBrush(QColor(color))
+    p.drawEllipse(at, r, r)
+
+
 def _formation_spots_pixmap(spots: tuple, px: int, dpr: float) -> QPixmap:
-    """formation_pixmap 의 자리 그림 — 점마다 그 자리 좌표(위 = 최전방). 같은 자리 묶음이면 같은 캐시."""
+    """formation_pixmap 의 자리 그림 — 점마다 그 자리 좌표(위 = 최전방) · 색은 그 자리의 줄(core.PITCH_ROWS). 같은 자리 묶음이면 같은 캐시."""
     from PyQt6.QtGui import QPixmapCache
     ck = f"formation-spots:{','.join(map(str, spots))}:{px}:{dpr}"
     hit = QPixmapCache.find(ck)
@@ -1293,18 +1354,16 @@ def _formation_spots_pixmap(spots: tuple, px: int, dpr: float) -> QPixmap:
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(T.FORMATION_PITCH))
-    p.drawRoundedRect(QRectF(0, 0, w, px), 3, 3)
-    p.setBrush(QColor(T.FORMATION_DOT))
+    _formation_board(p, w, px)
     r = max(1.1, px / 15)
     pad = r + 1.5
+    band = {c: i for i, (_, rng) in enumerate(core.PITCH_ROWS) for c in rng}
     for c in spots:
         # PITCH_X 는 큰 축구장(칩 폭)에 맞춘 값이라 작은 그림에선 RAM·CAM·LAM 이 한 덩이로 붙는다 — 가운데에서 넓힌다
         spread = min(1.0, max(0.0, 0.5 + (core.PITCH_X[c] - 0.5) * FORMATION_SPREAD))
         x = pad + (w - 2 * pad) * spread
         y = px - pad - (px - 2 * pad) * core.PITCH_Y[c] / core.PITCH_Y_MAX
-        p.drawEllipse(QPointF(x, y), r, r)
+        _formation_dot(p, QPointF(x, y), r, T.FORMATION_LINE_COLORS[band.get(c, len(core.PITCH_ROWS) - 1)], px)
     p.end()
     QPixmapCache.insert(ck, pm)
     return pm
@@ -1397,7 +1456,7 @@ class GradeBadgeDelegate(RowBorderDelegate):
     RowBorderDelegate 를 상속한다: 표 전체에 걸린 선택 행 테두리가 이 칸에서 끊기지 않게.
     배지 여백(PAD)은 sizeHint 로 알리지 않는다 — FitTableWidget._measure_pad 가 열마다 잰 여백 중
     가장 큰 값 하나를 19열 전부에 쓰므로, 한 열만 키워도 표 전체가 넓어진다. 열 폭은 app_main 이
-    _fit_columns_to_content(extra=…) 로 이 열에만 준다(1.2.1 계획 검토 A).
+    app_main._grade_badges 로 이 열에만 준다(1.2.1 계획 검토 A · 쓰는 표는 MainWindow.GRADE_BADGE_COLUMNS).
     그리기 예외는 다시 그릴 때마다 되풀이되므로 글자만 그리는 쪽으로 넘기고 한 번만 기록한다."""
 
     PAD = 8  # 배지 안쪽 좌우 여백(px) — 열에 더할 폭은 2 × PAD
@@ -1406,13 +1465,26 @@ class GradeBadgeDelegate(RowBorderDelegate):
         super().__init__(parent)
         self.failed = 0  # 테스트가 읽는다 — 기록은 첫 번째만
 
+    @staticmethod
+    def grade_of(text) -> int | None:
+        """칸 글자 → 배지로 그릴 강화(1 이상). "+5" 도 5(int 가 + 를 읽는다) · "3 → 5"(강화 변화)·"-"·0 은 None — 그 칸은 글자 그대로."""
+        try:
+            g = int(str(text or ""))
+        except ValueError:
+            return None
+        return g if g >= 1 else None
+
     def initStyleOption(self, option, index) -> None:
         super().initStyleOption(option, index)
-        option.text = ""  # 글자는 배지 안에 직접 그린다(기본 그리기는 배경·선택 테두리만)
+        if self.grade_of(index.data()) is not None:
+            option.text = ""  # 글자는 배지 안에 직접 그린다(기본 그리기는 배경·선택 테두리만)
 
     def paint(self, painter, option, index) -> None:
         super().paint(painter, option, index)
-        text = str(index.data() or "")
+        g = self.grade_of(index.data())
+        if g is None:
+            return
+        text = str(g)
         try:
             self._badge(painter, option, text)
         except Exception as e:  # noqa: BLE001 — 칸 하나 그리기 실패로 표가 죽거나 로그가 불어나면 안 된다
@@ -2184,10 +2256,10 @@ class _PlayerChip(QWidget):
         fm = QFontMetrics(small)
         pos_w = min(w // 2 - 4, fm.horizontalAdvance(self.card.pos_name) + 8)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(self.accent))
+        p.setBrush(QColor(T.blend(T.PANEL, self.accent, T.CHIP_SOFT_MIX)))   # 태그 꼴 — 글자 = 그 색 · 바탕 = 그 색 10%
         pos_r = QRectF(4, 4, pos_w, top_h - 2)
         p.drawRoundedRect(pos_r, 3, 3)
-        p.setPen(QColor(T.ON_CHIP))
+        p.setPen(QColor(self.accent))
         p.drawText(pos_r, Qt.AlignmentFlag.AlignCenter, self.card.pos_name)
         if self.card.grade is not None:
             gbg, gfg = _grade_badge_colors(self.card.grade)
@@ -2386,7 +2458,7 @@ class PitchWidget(QWidget):
         if sp_position == 0:
             return T.CHIP_GK
         if 1 <= sp_position <= 8:
-            return T.BLUE
+            return T.CHIP_DF
         if 9 <= sp_position <= 19:
             return T.CHIP_MF
         return T.CHIP_FW

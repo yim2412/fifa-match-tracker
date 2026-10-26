@@ -37,11 +37,15 @@ _PALETTES = {
         WARN_FILL="#ffb900",
         BLUE="#5b8cff",
         PURPLE="#a08cff",
-        # 선수 카드 포지션 칩(widgets.SquadCardWidget) — 옛 강조 팔레트 값 그대로. 칩 색은 따로 재서 정한다.
-        CHIP_GK="#e3b341",
-        CHIP_MF="#3fb950",
-        CHIP_FW="#ef6268",
-        ON_CHIP="#08210f",
+        # 선수 카드 포지션 칩 — 태그 꼴(글자 = 그 색 · 바탕 = 그 색 10%). 글자라 PANEL·PANEL_2·10% 바탕 모두 4.5 이상
+        CHIP_GK="#ffb900",
+        CHIP_DF="#50a2ff",
+        CHIP_MF="#00d492",
+        CHIP_FW="#ff637e",
+        # 작은 축구장(포메이션 그림) — 판 위→아래 그라데이션 · 선
+        FORMATION_PITCH_TOP="#0d2818",
+        FORMATION_PITCH_BOTTOM="#0a1f12",
+        FORMATION_LINE="#9bbeac",
         DRAW="#71717a",
         WIN_BAR="#0b6b4d",     # 위에 밝은 글자를 겹쳐 쓰므로 진하게
         LOSE_BAR="#a02c42",
@@ -87,10 +91,14 @@ _PALETTES = {
         WARN_FILL="#e17100",
         BLUE="#3b6fe0",
         PURPLE="#7c5cf0",
-        CHIP_GK="#d99a00",
-        CHIP_MF="#1f9d55",
-        CHIP_FW="#e5484d",
-        ON_CHIP="#ffffff",
+        # 칩 글자 — 기준 한 단계(GK·MF 는 두 단계) 진한 값: 흰 칸 위 #bb4d00 4.14 · #007a55 4.42 라 글자로 미달
+        CHIP_GK="#973c00",
+        CHIP_DF="#1447e6",
+        CHIP_MF="#006045",
+        CHIP_FW="#c70036",
+        FORMATION_PITCH_TOP="#2d6045",
+        FORMATION_PITCH_BOTTOM="#214a34",
+        FORMATION_LINE="#e8f0e8",
         DRAW="#9aa1b0",
         WIN_BAR="#8fdcbc",     # 위에 진한 글자를 겹쳐 쓰므로 옅게
         LOSE_BAR="#f4a3b1",
@@ -137,10 +145,11 @@ BAD_FILL = _P["BAD_FILL"]
 WARN_FILL = _P["WARN_FILL"]
 BLUE = _P["BLUE"]                   # 수비력
 PURPLE = _P["PURPLE"]
-CHIP_GK = _P["CHIP_GK"]             # 선수 카드 포지션 칩(수비는 BLUE)
+CHIP_GK = _P["CHIP_GK"]             # 선수 카드 포지션 칩 글자·테두리(바탕은 CHIP_SOFT_MIX 만큼 섞음)
+CHIP_DF = _P["CHIP_DF"]
 CHIP_MF = _P["CHIP_MF"]
 CHIP_FW = _P["CHIP_FW"]
-ON_CHIP = _P["ON_CHIP"]
+CHIP_SOFT_MIX = 0.10                # 태그 꼴 바탕 — widgets.tag_qss 와 같은 비율
 
 WIN = GOOD
 DRAW = _P["DRAW"]
@@ -171,8 +180,12 @@ GRADE_BADGES = ((11, "#6dd5e8", "#0a2a30"),
 # 특성 아이콘 뒤 육각 판(넥슨 원본이 아니라 QPainter 로 그린다) · 작은 축구장(포메이션 점) — 두 테마 같은 고정색
 TRAIT_PAD_GOLD = "#e8c545"   # 일반·신규 특성 판
 TRAIT_PAD_GRAY = "#8a929c"   # 훈련 특성·코치 판
-FORMATION_PITCH = "#2f7d4a"  # 작은 축구장 바탕
-FORMATION_DOT = "#ffffff"    # 선수 점
+# 작은 축구장 — 점 색은 그림 속 높이 띠(stats.PITCH_ROWS 순서: 공격 · 공미 · 미드 · 수미 · 수비 · GK). GK 는 흰색(선 색과 갈리게)
+FORMATION_PITCH_TOP = _P["FORMATION_PITCH_TOP"]
+FORMATION_PITCH_BOTTOM = _P["FORMATION_PITCH_BOTTOM"]
+FORMATION_LINE = _P["FORMATION_LINE"]
+FORMATION_LINE_COLORS = ("#f87171", "#fb923c", "#facc15", "#84cc16", "#38bdf8", "#ffffff")
+FORMATION_DOT_EDGE = "#66000000"    # 점 테두리(검정 · 알파 40%)
 
 HEAT_ATK = _P["HEAT_ATK"]   # 선수 지표 공격력 칸 끝 색
 HEAT_DEF = _P["HEAT_DEF"]   # 수비력 칸 끝 색

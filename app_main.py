@@ -2521,6 +2521,9 @@ class MainWindow(QMainWindow):
                               "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위", "효과"]
     TEAMCOLOR_EFFECT_TEXT = "보기"     # "효과" 열 — 이 열의 한 번 클릭만 효과 창을 연다(더블클릭·화살표 이동은 안 연다)
     TEAMCOLOR_RANGE_W = 150            # 팀가치 범위 막대 열 폭(글자가 없어 FitTableWidget 이 최소 폭으로 누른다)
+    # 강화 숫자 칸 = 배지(64 P8) — {칸을 채우는 함수: (표, 열)}. test_rules 가 강화 하나만 든 칸을 만드는 함수를 세어 이 표와 대조한다
+    GRADE_BADGE_COLUMNS = {"_render_players": ("tbl_players", (2,)), "_render_timeline": ("tbl_timeline", (3,)),
+                           "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,))}
     TEAMCOLOR_TINT_FULL_PP = 15.0      # 승률 칸 색 — 기준선과 이만큼(%p) 벌어지면 가장 진하게(T.ROW_TINT)
     SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
                       "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
@@ -5445,6 +5448,7 @@ class MainWindow(QMainWindow):
         sums.body.addLayout(grid)
         lv.addWidget(sums)
         self.tbl_ledger = self._make_table(self.LEDGER_COLUMNS, icons={0: "season"})
+        self._grade_badges("_render_ledger")
         lv.addWidget(self.tbl_ledger, 1)
         v.addWidget(self.box_ledger, 1)
         return w
@@ -5576,6 +5580,7 @@ class MainWindow(QMainWindow):
         self.lb_timeline_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_timeline_note)
         self.tbl_timeline = self._make_table(self.TIMELINE_COLUMNS, icons={1: "season"})
+        self._grade_badges("_render_timeline")
         v.addWidget(self.tbl_timeline, 1)
         return w
 
@@ -5691,11 +5696,11 @@ class MainWindow(QMainWindow):
         for group, status in ((lg.held, "보유 중"), (lg.recent, "최근 구매")):
             for h, price in group.rows:
                 t = h.trade
-                now = h.cur_grade if h.cur_grade is not None else t.grade
+                now_grade = h.cur_grade if h.cur_grade is not None else t.grade
                 gain = None if price is None or t.value is None else price - t.value
                 rows.append([IconCell(self._names.get(t.spid, str(t.spid)), None, core.season_id_of(t.spid)), status,
                              (t.date.strftime("%Y-%m-%d"), t.date.timestamp()), (str(t.grade or "-"), t.grade or 0),
-                             (self._bp(t.value), t.value or 0), (str(now or "-"), now or 0),
+                             (self._bp(t.value), t.value or 0), (str(now_grade or "-"), now_grade or 0),
                              (self._bp(price), price or 0), (self._bp(gain, sign=True), gain or 0)])
         self._fill(self.tbl_ledger, rows)
         self._maybe_start_prices(tl)
@@ -7037,6 +7042,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_my_trait)
         self.tbl_my_traits = self._make_table(self.MY_TRAIT_COLUMNS, icons={3: "trait", 4: "trait", 5: "train"})
         self.tbl_my_traits.setSortingEnabled(False)   # 자리 순서(공격 → GK)
+        self._grade_badges("_render_my_traits")
         self.tbl_my_traits.setMaximumHeight(self.MY_TRAIT_MAX_H)
         v.addWidget(self.tbl_my_traits)
         self._meta_top(v, self.lb_trait_note, ("순위 구간", self.cb_trait_tier), ("포메이션", self.cb_trait_form))
@@ -8350,7 +8356,7 @@ class MainWindow(QMainWindow):
                 if item:
                     item.setToolTip(help_text)
         self.tbl_players.setIconSize(QSize(18, 18))
-        self.tbl_players.setItemDelegateForColumn(2, GradeBadgeDelegate(self.tbl_players))
+        self._grade_badges("_render_players")
         # "선수" 열(1번)에 spId 를 UserRole 로 붙여두고(_render_players)
         # 더블클릭하면 상대 스쿼드 화면과 같은 선수 카드 다이얼로그를 연다.
         self.tbl_players.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
@@ -10016,6 +10022,14 @@ class MainWindow(QMainWindow):
                 table.setSortingEnabled(True)
         except RuntimeError:
             pass   # 표가 이미 지워졌다 — 늦게 온 그림은 버린다
+
+    def _grade_badges(self, filler: str) -> None:
+        """GRADE_BADGE_COLUMNS 의 표에 배지 대리자 + 열 여백(배지 좌우 PAD — refit 이 계속 쓴다)."""
+        attr, cols = self.GRADE_BADGE_COLUMNS[filler]
+        table = getattr(self, attr)
+        for c in cols:
+            table.setItemDelegateForColumn(c, GradeBadgeDelegate(table))
+        table.set_content_widths({c: 2 * GradeBadgeDelegate.PAD for c in cols})
 
     @staticmethod
     def _fit_columns_to_content(table: FitTableWidget,

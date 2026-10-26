@@ -5211,11 +5211,17 @@ def test_compare_profile_rows_and_key_players():
         labels = [t.item(r, 0).text() for r in range(t.rowCount())]
         prof1 = {a.name: a.mine for a in core.team_profile(one, _OUID).axes}
         assert t.item(labels.index("경기당 슛"), 1).text() == f"{prof1['슈팅']:.1f}"
-        # 지표 카드는 접힌다
-        _win.fold_compare_metrics.head.click()
-        assert not _win.fold_compare_metrics.is_open()
-        _win.fold_compare_metrics.head.click()
-        assert _win.fold_compare_metrics.is_open()
+        # 지표 카드는 접힌다 — 제목을 눌러도, 오른쪽 "접기/펼치기"(P9)를 눌러도 같다
+        fold = _win.fold_compare_metrics
+        assert fold.hint.text() == fold.HINT[True]
+        fold.head.click()
+        assert not fold.is_open() and fold.hint.text() == fold.HINT[False]
+        fold.hint.click()
+        assert fold.is_open() and fold.hint.text() == fold.HINT[True]
+        fold.hint.click()
+        assert not fold.is_open()
+        fold.head.click()
+        assert fold.is_open()
     finally:
         _win.sp_compare_n.setValue(saved)
 
@@ -6475,6 +6481,9 @@ def _palette_contrast_failures(p: dict) -> list:
         pairs += [(key, p[key], base, p[base]) for base in ("PANEL", "PANEL_2")]
     for key in ("GOOD", "BAD", "WARN", "TEXT_DIM", "ACCENT"):                # 태그 꼴 — 그 색 글자 + 그 색 10% 바탕
         pairs.append((key, p[key], "10% 바탕", T.blend(p["PANEL"], p[key], 0.10)))
+    for key in ("CHIP_GK", "CHIP_DF", "CHIP_MF", "CHIP_FW"):                 # 포지션 칩(태그 꼴) — 카드 위 · 칩 바탕 위
+        pairs += [(key, p[key], base, p[base]) for base in ("PANEL", "PANEL_2")]
+        pairs.append((key, p[key], "칩 바탕", T.blend(p["PANEL"], p[key], T.CHIP_SOFT_MIX)))
     pairs += [("ON_PRIMARY", p["ON_PRIMARY"], k, p[k]) for k in ("PRIMARY", "PRIMARY_HOVER")]
     pairs += [(k, p[k], "ACCENT_SOFT", p["ACCENT_SOFT"]) for k in ("ACCENT", "TEXT")]
     for bar in ("WIN_BAR", "LOSE_BAR"):                                       # 위에 글자를 겹치는 막대 — 꽉 찬 것·흐린 것
@@ -6494,12 +6503,16 @@ def test_palette_text_contrast():
     assert ("GOOD", "PANEL", 3.65) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
     planted = dict(T._PALETTES["dark"], WIN_BAR=T._PALETTES["dark"]["GOOD_FILL"])
     assert any(b == "WIN_BAR" for _, b, _ in _palette_contrast_failures(planted))
+    # 칩 행도 잰다 — 밝은 쪽 GK 칩을 기준 값(#bb4d00 · 칸 위 4.14)으로 되돌리면 걸려야 한다
+    planted = dict(T._PALETTES["light"], CHIP_GK="#bb4d00")
+    assert any(f == "CHIP_GK" for f, _, _ in _palette_contrast_failures(planted)), _palette_contrast_failures(planted)
 
 
 def test_palette_tokens_reach_widgets():
     # 모듈 이름이 MODE 팔레트 값을 그대로 싣는지(배선) + 승/패는 좋음/나쁨 · 강조는 그와 다른 색
     for key in ("ACCENT", "ACCENT_FILL", "ACCENT_SOFT", "PRIMARY", "PRIMARY_HOVER", "ON_PRIMARY",
-                "GOOD", "BAD", "WARN", "GOOD_FILL", "BAD_FILL", "WARN_FILL", "CHIP_GK", "CHIP_MF", "CHIP_FW", "ON_CHIP"):
+                "GOOD", "BAD", "WARN", "GOOD_FILL", "BAD_FILL", "WARN_FILL", "CHIP_GK", "CHIP_DF", "CHIP_MF", "CHIP_FW",
+                "FORMATION_PITCH_TOP", "FORMATION_PITCH_BOTTOM", "FORMATION_LINE"):
         assert getattr(T, key) == T._P[key], key
     assert (T.WIN, T.LOSE) == (T.GOOD, T.BAD) and T.ACCENT not in (T.GOOD, T.BAD)
     # 꽉 칠한 버튼은 PRIMARY 로 그려진다 — 찍어서 본다
@@ -6626,6 +6639,49 @@ def test_badge_paint_failure_falls_back():
         widgets._grade_badge_colors, crashlog.note = real_colors, real_note
         dg.failed = 0
         _win._go_page("대시보드")
+
+
+def test_grade_badge_columns_wired():
+    # 64 P8 — GRADE_BADGE_COLUMNS 의 표마다 그 열에 배지 대리자 + 배지 여백(test_rules 가 칸을 만드는 함수와 대조한다)
+    import widgets
+    from PyQt6.QtWidgets import QStyleOptionViewItem, QTableWidgetItem
+    for fn, (attr, cols) in app_main.MainWindow.GRADE_BADGE_COLUMNS.items():
+        tb = getattr(_win, attr)
+        for c in cols:
+            assert isinstance(tb.itemDelegateForColumn(c), widgets.GradeBadgeDelegate), (fn, attr, c)
+            assert tb._user_extra.get(c) == 2 * widgets.GradeBadgeDelegate.PAD, (attr, c, tb._user_extra)
+    # 배지는 강화 하나일 때만 — "+5" 는 배지, 변화("3 → 5")·"-"·0 은 글자 그대로(지우면 빈 칸이 된다)
+    g = widgets.GradeBadgeDelegate.grade_of
+    assert [g(t) for t in ("5", "+5", "13", "3 → 5", "-", "0", "", None)] == [5, 5, 13, None, None, None, None, None]
+    tb = widgets.FitTableWidget(4, 1)
+    dg = widgets.GradeBadgeDelegate(tb)
+    tb.setItemDelegateForColumn(0, dg)
+    for r, t in enumerate(("+5", "3 → 5", "-", "7")):
+        tb.setItem(r, 0, QTableWidgetItem(t))
+    shown = []
+    for r in range(4):
+        opt = QStyleOptionViewItem()
+        dg.initStyleOption(opt, tb.model().index(r, 0))
+        shown.append(opt.text)
+    assert shown == ["", "3 → 5", "-", ""], shown
+
+
+def test_player_chip_is_tag_style():
+    # 64 조각 ③ — 포지션 칩은 꽉 칠한 색 + 진한 글자(밝은 쪽 대비 2.45)가 아니라 태그 꼴: 바탕 = 그 색 10% · 글자 = 그 색
+    import widgets
+    from PyQt6.QtGui import QColor
+    acc = widgets.PitchWidget._accent_for
+    assert [acc(0), acc(5), acc(10), acc(18), acc(25)] == [T.CHIP_GK, T.CHIP_DF, T.CHIP_MF, T.CHIP_MF, T.CHIP_FW]
+    chip = widgets._PlayerChip(widgets.PitchCard(25, "ST", "선수", None), T.CHIP_FW)
+    chip.resize(110, 100)
+    img = chip.grab().toImage()
+    soft = QColor(T.blend(T.PANEL, T.CHIP_FW, T.CHIP_SOFT_MIX)).rgb()
+    assert img.pixelColor(6, 6).rgb() == soft, (img.pixelColor(6, 6).name(), QColor(soft).name())
+    top_h = max(16, int(100 * 0.2))
+    near = [img.pixelColor(x, y) for y in range(4, 4 + top_h - 2) for x in range(4, 40)]
+    fw = QColor(T.CHIP_FW)
+    assert any(abs(c.red() - fw.red()) + abs(c.green() - fw.green()) + abs(c.blue() - fw.blue()) < 40 for c in near), \
+        "칩 글자가 칩 색으로 안 찍혔다"
 
 
 # ── 9단계(1.3.1): ② 흐름 분석 띠·근거 막대 · ⑥ 히트맵·도넛·포메이션 막대 · 13 ELO · 다시 묻는 동의 ───────────

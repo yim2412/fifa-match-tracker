@@ -846,6 +846,7 @@ ICON_HEIGHT = {"trait": TRAIT_ICON_PX, "train": TRAIT_ICON_PX, "formation": FORM
 STACKED_KINDS = ("trait", "train")
 EMBLEM_HEAD_PX = 32      # 대시보드 머리(구단주 카드) 엠블럼 높이 — 옆 등급 배지(32)와 같다
 FORMATION_HEAD_PX = 36   # 같은 머리의 주 포메이션 축구장(formation_pixmap 에 넘기는 높이)
+FORMATION_LINES_FROM_PX = 30   # 이 높이부터 작은 축구장에 선(하프라인·박스)을 긋는다 — 표 칸(20px)에선 선이 점을 흐린다
 ICON_CACHE_SUBDIR = "icons"
 
 # 넥슨 오픈API 시각(matchDate·achievementDate·tradeDate·createDate)은 UTC 다 — 2026-10-25 실측(경기 원문 07:54 = 기준 화면
