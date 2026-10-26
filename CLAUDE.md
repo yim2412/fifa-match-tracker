@@ -23,7 +23,7 @@
 | `core_api.py` | **화면 ↔ 분석 경계** — 화면 쪽은 analysis·stats·models 를 여기서만. 새 함수는 import 와 `__all__` 에 한 줄 · 테스트에서 바꿔 끼울 땐 `core_api` 쪽을 |
 | `dashboard.py` | 대시보드 — 카드 배치·채우기. **카드마다 눌러서 가는 상세 페이지와 같은 범위**를 센다(파일 머리말 표) · 머리 칸은 `club_cells` 의 **제목**으로 찾는다(순서 아님) · 나와 상대는 `stats.versus_profile`(레이더 `team_profile` 은 구단주 비교가 축 이름으로 읽어 따로 둔다) |
 | `charts.py` | 그래프(QPainter) — 색은 `theme.CHART_*` · 추이는 `AreaTrendChart` 하나, **기본값 그림은 얼린 사본과 픽셀까지 같아야**(`test_area_chart_defaults_unchanged`) · 세부는 머리말 |
-| `widgets.py` | 화면 부품 — 표(`FitTableWidget`)·축구장(`PitchWidget`)·`PageTabs`·`WrapBar`·`VScrollArea`·`FitLabel` · 그래프 확대 막대 `ZoomBar`(그래프는 안 건드리고 쓰는 쪽이 잘라 다시 그린다)·달력 `CalendarGrid` · 승무패 막대 `WdlBar`·평균 대비 `delta_text`·태그 `Tag`(3.1.1) 등 · 세부는 머리말 |
+| `widgets.py` | 화면 부품 — 표(`FitTableWidget`)·축구장(`PitchWidget`)·`PageTabs`·`WrapBar`·`VScrollArea`·`FitLabel` · 그래프 확대 막대 `ZoomBar`(그래프는 안 건드리고 쓰는 쪽이 잘라 다시 그린다)·달력 `CalendarGrid` · 승무패 막대 `WdlBar`·평균 대비 `delta_text`·태그 `Tag`(3.1.1) · 줄 카드 목록 `CardListView`(65 — 위젯이 아니라 대리자 그림 · 거르기는 모델 안 · 그림은 (종류, 키) 표 — 경기 목록 `MatchCardList`) 등 · 세부는 머리말 |
 | `images.py` | 선수 얼굴·등급 배지·시즌 아이콘 — 넥슨 CDN/메타 기반, 디스크 캐시 · **표 칸 그림(40단계)은 주소 `icon_url(kind, key)` 한 곳 + 받기 `fetch_icon`(Referer · 403·404 부정 캐시 · 임시 파일 뒤 `os.replace`) 한 곳** — 표는 `widgets.FitTableWidget.set_icon_columns`·`app_main.IconLoader` 로 붙인다(세부는 ROADMAP "화면 그림") |
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회는 상대가 적으면 상대마다 검색(`fetch_manager_rank`), 500명보다 많으면 1만 위 목록 500쪽(`fetch_rank_page`) — 목록은 **행 단위로 잘라 읽는다**(팀컬러 빈 행에서 뒤가 밀린다) |
 | `teamcolor.py` | 팀컬러 효과표(목록·단계·적용 선수) — `X-Requested-With` 필요 · 이름 같은 팀컬러는 `config.TEAMCOLOR_DUP_NAMES` · 세부는 머리말 |

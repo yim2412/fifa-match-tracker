@@ -37,7 +37,7 @@ from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer,
 from PyQt6 import sip
 from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
+    QApplication, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
@@ -83,6 +83,7 @@ from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
     SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
+    ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     sample_text, tag_qss, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
@@ -2493,9 +2494,8 @@ class CardBackfillScheduler(QObject):
 
 
 class MainWindow(QMainWindow):
-    # 57 K3 — 상대 바로 뒤 넷(팀컬러·구단가치는 상대의 **지금** 값 · 맞대결은 이 PC 저장분 · 상대 점수는 내 계정 경기만)
-    MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "팀컬러", "구단가치", "맞대결", "상대 점수",
-                     "점유율", "슈팅", "유효", "패스성공률", "평점"]
+    # 57 K3 — 상대 정보 넷(팀컬러·구단가치는 상대의 **지금** 값 · 맞대결은 이 PC 저장분 · 상대 점수는 내 계정 경기만).
+    # 65 M2 부터 경기 목록은 카드라 머리글이 없다 — 같은 글을 카드 조각 툴팁(MATCH_CARD_TIPS)과 상세 창 구단가치에 쓴다
     MATCH_COLUMN_HELP = {
         "팀컬러": "상대의 지금 팀컬러(팀컬러를 조회한 상대만) — 그 경기 때 팀컬러가 아닐 수 있습니다.",
         "구단가치": "상대의 지금 구단가치(넥슨 데이터센터 · 팀컬러와 같이 조회) — 그 경기 때 값이 아닐 수 있습니다.",
@@ -2503,6 +2503,13 @@ class MainWindow(QMainWindow):
         "상대 점수": (f"그날 수집 원본에서 읽은 상대 점수·순위(경기 시각 ±{config.OPP_SNAP_WINDOW_H}시간의 스냅숏 · 원본은 "
                     f"{config.RANK_RAW_KEEP_DAYS}일 보관) — 저장하지 않고 보여 주기만 합니다. 그보다 옛 경기는 순위 구간. "
                     "1만 위 밖이거나 닉네임이 바뀐 상대는 빈칸 · 내 계정 경기만."),
+    }
+    MATCH_CARD_TIPS = {   # 카드 조각 이름(MatchCardDelegate.layout) → 툴팁
+        "color": MATCH_COLUMN_HELP["팀컬러"], "emblem": MATCH_COLUMN_HELP["팀컬러"],
+        "value": MATCH_COLUMN_HELP["구단가치"], "h2h": MATCH_COLUMN_HELP["맞대결"],
+        "oppscore": MATCH_COLUMN_HELP["상대 점수"], "badge": "그 경기 때 상대 등급",
+        "pad": "상대 입력 장치: 패드(키보드면 아이콘이 없습니다)",
+        "stat": "점유율 · 슛(유효/전체) · 패스 성공률 · 평점 — 내 기록",
     }
     PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률",
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
@@ -8423,29 +8430,61 @@ class MainWindow(QMainWindow):
         self.cb_match_color.currentIndexChanged.connect(lambda _i: self._apply_match_filter())
         row.addWidget(self.cb_match_color)
         row.addSpacing(16)
-        # 57 K3 — 상대 정보 열 넷. 1280 폭엔 열 13개가 안 들어간다(실측: 15px 에 1,309px 필요 · 표 폭 942) — 글자가
-        # MATCH_EXTRA_MIN_PX 아래로 줄어야 하면 접는다(_fit_match_extra). 넓히면 다시 펼친다
+        # 57 K3 — 상대 정보(카드 셋째 줄). 표일 때는 1280 폭에 열 13개가 안 들어가 저절로 접었지만, 카드는 줄이 따로라
+        # 폭 때문에 접을 일이 없다(65 M2 — 1280 에서 긴 글로 잰다 · test_match_list_opponent_columns_k3). 끄면 줄 높이가 준다
         self.chk_match_extra = QCheckBox("상대 정보")
         self.chk_match_extra.setChecked(True)
-        self.chk_match_extra.setToolTip("팀컬러 · 구단가치 · 맞대결 · 상대 점수 열")
-        self.chk_match_extra.toggled.connect(lambda _on: self._fit_match_extra())
+        self.chk_match_extra.setToolTip("팀컬러 · 구단가치 · 맞대결 · 상대 점수 줄")
+        self.chk_match_extra.toggled.connect(lambda on: self.match_list.set_show_extra(on))
         row.addWidget(self.chk_match_extra)
-        self.lb_match_extra = QLabel("(창이 좁아 접힘)")
-        self.lb_match_extra.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.lb_match_extra.setVisible(False)
-        row.addWidget(self.lb_match_extra)
+        row.addSpacing(16)
+        # 정렬(U1) — 표의 열 정렬 대신 콤보 하나. 고른 값은 settings.ini 에 남는다(없거나 모르는 값이면 최신순)
+        lb_s = QLabel("정렬")
+        lb_s.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(lb_s)
+        self.cb_match_sort = NoScrollComboBox()
+        for label, key in self.MATCH_SORTS:
+            self.cb_match_sort.addItem(label, key)
+        try:
+            saved = str(self._settings().value("view/match_sort", "") or "")
+        except Exception:
+            saved = ""
+        self.cb_match_sort.setCurrentIndex(max(0, self.cb_match_sort.findData(saved)))
+        self.cb_match_sort.currentIndexChanged.connect(lambda _i: self._on_match_sort_changed())
+        row.addWidget(self.cb_match_sort)
         row.addStretch(1)
         v.addLayout(row)
 
-        self.table = self._make_table(self.MATCH_COLUMNS, icons={3: "division", 4: "emblem"})
-        self._match_scores_shown = False
-        self._match_fit_pending = False
-        self.table.installEventFilter(self)
-        self._set_header_help(self.table, self.MATCH_COLUMNS, self.MATCH_COLUMN_HELP)
-        self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
-        self._add_profile_action(self.table, 3)
-        v.addWidget(self.table, 1)
+        self.match_list = MatchCardList(self.MATCH_CARD_TIPS)
+        self._match_cards: list[MatchCard] = []   # 정렬 전(최신순) — 정렬을 바꿀 때 다시 만들지 않는다
+        self.match_list.doubleClicked.connect(self._on_match_double_clicked)
+        self._add_profile_action(self.match_list, lambda: getattr(self.match_list.current(), "opponent", ""))
+        v.addWidget(self.match_list, 1)
         return w
+
+    MATCH_SORTS = (("최신순", "recent"), ("점수 차", "diff"), ("평점", "rating"))
+
+    def _on_match_sort_changed(self) -> None:
+        try:
+            s = self._settings()
+            s.setValue("view/match_sort", self.cb_match_sort.currentData())
+            s.sync()
+        except Exception:
+            pass   # 설정 파일 하나 때문에 정렬이 안 바뀌면 안 된다
+        self._show_match_cards()
+
+    def _sorted_match_cards(self) -> list[MatchCard]:
+        """최신순(넥슨 순서) → 고른 정렬. 같은 값이면 최신이 앞(정렬은 안정적)."""
+        key = self.cb_match_sort.currentData()
+        cards = list(self._match_cards)
+        if key == "diff":
+            cards.sort(key=lambda c: -c.goal_diff)
+        elif key == "rating":
+            cards.sort(key=lambda c: -c.rating)
+        return cards
+
+    def _show_match_cards(self) -> None:
+        self.match_list.set_rows(self._sorted_match_cards())
 
     @staticmethod
     def _set_header_help(table: QTableWidget, columns: list[str], help_: dict[str, str]) -> None:
@@ -8454,17 +8493,21 @@ class MainWindow(QMainWindow):
             if item and name in help_:
                 item.setToolTip(help_[name])
 
-    def _add_profile_action(self, table: QTableWidget, col: int) -> None:
+    def _add_profile_action(self, view: QWidget, nick_of) -> None:
         """57 K13 — 줄 오른쪽 클릭 [넥슨에서 보기]. 메뉴는 Qt 가 띄운다(ActionsContextMenu — 모달 exec 를 부르지 않는다 PyQt 6).
-        여는 것은 사용자 브라우저라 앱의 넥슨 요청이 아니다(웹 데이터 스위치 밖)."""
-        table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
-        act = QAction("넥슨 데이터센터에서 보기", table)
-        act.triggered.connect(lambda _=False, t=table, c=col: self._open_profile(t, c))
-        table.addAction(act)
+        여는 것은 사용자 브라우저라 앱의 넥슨 요청이 아니다(웹 데이터 스위치 밖). nick_of() → 고른 줄의 닉네임(표·카드 목록 공용)."""
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        act = QAction("넥슨 데이터센터에서 보기", view)
+        act.triggered.connect(lambda _=False, f=nick_of: self._open_profile(f()))
+        view.addAction(act)
 
-    def _open_profile(self, table: QTableWidget, col: int) -> None:
+    @staticmethod
+    def _table_nick(table: QTableWidget, col: int) -> str:
         item = table.item(table.currentRow(), col) if table.currentRow() >= 0 else None
-        nick = item.text().strip() if item else ""
+        return item.text() if item else ""
+
+    def _open_profile(self, nick: str) -> None:
+        nick = (nick or "").strip()
         if nick and nick != "-":
             QDesktopServices.openUrl(QUrl(ranker.RANK_PAGE_URL.format(nick=quote(nick))))
 
@@ -8473,22 +8516,22 @@ class MainWindow(QMainWindow):
         self._apply_match_filter()
 
     def _apply_match_filter(self) -> None:
-        """체크한 결과만 남기고 나머지 행은 숨긴다 — 데이터는 안 지우고
-        표시만 가린다(setRowHidden), 그래서 필터 해제하면 바로 되돌아온다.
+        """체크한 결과만 남긴다 — 카드는 그대로 두고 모델의 보이는 줄만 거른다(필터를 풀면 바로 되돌아온다).
         찾기 칸(57 K13)은 상대 닉네임이나 그 상대의 팀컬러에 글자가 들어 있는 줄만 — 팀컬러를 찾던 사용자의 줄은 그대로 남는다."""
         active = {k for k, b in self._match_filter_btns.items() if b.isChecked()}
         color = self.cb_match_color.currentText()
         color = "" if color == self.POSITION_COLOR_ALL else color
         needle = self.ed_match_color.text().strip().lower()
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, 1)  # 결과 컬럼
-            text = item.text() if item else ""
-            kind = next((k for k, _ in self.MATCH_FILTER_KINDS if k in text), None)
-            opp = self.table.item(r, 3)   # 상대 컬럼
-            nick = opp.text() if opp else ""
-            off_color = bool(color) and self._team_colors.get(nick) != color
-            off_needle = bool(needle) and needle not in nick.lower() and needle not in (self._team_colors.get(nick) or "").lower()
-            self.table.setRowHidden(r, (kind is not None and kind not in active) or off_color or off_needle)
+        colors = self._team_colors
+
+        def keep(c: MatchCard) -> bool:
+            kind = next((k for k, _ in self.MATCH_FILTER_KINDS if k in c.result), None)
+            if kind is not None and kind not in active:
+                return False
+            if color and colors.get(c.opponent) != color:
+                return False
+            return not needle or needle in c.opponent.lower() or needle in (colors.get(c.opponent) or "").lower()
+        self.match_list.set_filter(keep)
 
     def _refresh_match_color_options(self) -> None:
         """경기 목록의 상대 팀컬러 콤보 — 고른 색이 새 목록에도 있으면 유지(_refresh_color_combo)."""
@@ -8523,7 +8566,7 @@ class MainWindow(QMainWindow):
             "전체 대비": ("이 상대 승률 − 필터에 걸린 경기 전체 승률(%p). 이 상대와 "
                        f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
         self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
-        self._add_profile_action(self.tbl_opponents, 0)
+        self._add_profile_action(self.tbl_opponents, lambda: self._table_nick(self.tbl_opponents, 0))
         v.addWidget(self.tbl_opponents, 1)
         return w
 
@@ -10011,6 +10054,43 @@ class MainWindow(QMainWindow):
         self._icon_loaders.append(loader)
         loader.start()
 
+    def _start_list_icons(self, view: CardListView) -> None:
+        """줄 카드 목록(65 P4)의 그림 — 표의 _start_icons 와 같은 길(목록당 로더 하나 · 같은 주소 한 번 · 포메이션은 그린다).
+        받은 그림은 (종류, 키) 표에 붙어 정렬·거르기가 바뀌어도 제 줄을 따라간다(CardListView)."""
+        old = getattr(view, "_icon_loader", None)
+        if old is not None and old.isRunning():
+            old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        entries = []
+        for kind, key in sorted(view.icon_entries(), key=repr):
+            if view.icon(kind, key) is not None:
+                continue   # 이미 붙었다 — 다시 그릴 때마다 받지 않는다
+            if kind == "formation":
+                pm = formation_pixmap(key)
+                if not pm.isNull():
+                    view.put_icon(kind, key, pm)
+                continue
+            url = images.icon_url(kind, key, self._seasons)
+            if url:
+                entries.append((kind, key, url))
+        if not entries:
+            view._icon_loader = None
+            return
+        loader = IconLoader(entries, self._icon_dir)
+        loader.loaded.connect(lambda kind, key, path, v=view: self._apply_list_icon(v, kind, key, path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        view._icon_loader = loader
+        self._icon_loaders.append(loader)
+        loader.start()
+
+    @staticmethod
+    def _apply_list_icon(view: CardListView, kind: str, key, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 그림 없이
+            return
+        if not sip.isdeleted(view):
+            view.put_icon(kind, key, pm)
+
     @staticmethod
     def _apply_icon(table: FitTableWidget, kind: str, key, path: str) -> None:
         """받은 그림을 같은 키의 칸에 붙인다. 정렬 중인 열에 붙이면 매번 재정렬되어 큰 표가 멈춘다(실측 1만 행 1.4초) —
@@ -10066,96 +10146,44 @@ class MainWindow(QMainWindow):
             return (core.opp_rank_label(band), band + 0.5)   # 정확한 순위보다 뒤로(같은 상한이면)
         return ("-", 10 ** 9)
 
+    def _match_card(self, m: MatchSummary, scores, h2h: dict) -> MatchCard:
+        color = self._team_colors.get(m.opponent) or ""
+        value = self._team_values.get(m.opponent)
+        s = h2h.get(m.opponent)
+        emblem = self._emblem_cell(color, color) if color else None
+        return MatchCard(
+            match_id=m.match_id, date_text=m.date_text, result=m.result,
+            score=f"{m.my_goals} : {m.opp_goals}",
+            shootout=f"승부차기 {m.my_shootout}:{m.opp_shootout}" if m.is_shootout else "",
+            opponent=m.opponent,
+            division_key=self._division_icon_key(m.opp_division),   # 그 경기 때 상대 등급
+            opp_pad=m.opp_pad,
+            stats=(("점유", f"{m.possession}%"), ("슛", f"{m.shoot_effective}/{m.shoot_total}"),
+                   ("패스", f"{m.pass_rate:.0f}%"), ("평점", f"{m.rating:.2f}")),
+            color=color, emblem_key=emblem.icon_key if isinstance(emblem, IconCell) else None,
+            value_text=short_bp(value) if value else "",   # 짧게(110억) — 정확한 값은 [팀컬러 랭킹]
+            h2h_text=wdl_text(s.win, s.draw, s.lose) if s else "",
+            opp_score=self._opp_score_cell(scores, m.match_id)[0] if scores is not None else None,
+            when=m.match_date, goal_diff=m.my_goals - m.opp_goals, rating=m.rating)
+
     def _render_matches(self, matches: list[MatchSummary]) -> None:
+        """경기 목록(65 M2) — 카드를 만들고(최신순) 고른 정렬로 보인다. 상대 점수 칸은 점수가 왔을 때만(관문·내 계정)."""
         elo = self._elo.get(self._ouid) if self._ouid else None
         scores = elo if elo is not None and elo.opp_scores is not None else None
-        self._match_scores_shown = scores is not None   # 관문 미달·남의 목록 — 상대 점수 열이 없다(_fit_match_extra)
         h2h = {s.nickname: s for s in opponent_stats(self._matches)}   # 시즌 범위(상대 전적 탭과 같다)
-        rows = []
-        for m in matches:
-            color = self._team_colors.get(m.opponent) or ""
-            value = self._team_values.get(m.opponent)
-            s = h2h.get(m.opponent)
-            rows.append([
-                m.date_text, m.result, m.score,
-                IconCell(m.opponent, None, self._division_icon_key(m.opp_division)),   # 그 경기 때 상대 등급
-                self._emblem_cell(color, color) if color else ("-", ""),
-                (short_bp(value), value) if value else ("-", -1),   # 짧게(110억) — 1280 폭 · 정확한 값은 [팀컬러 랭킹]
-                (wdl_text(s.win, s.draw, s.lose), s.games) if s else ("-", 0),
-                self._opp_score_cell(scores, m.match_id) if scores is not None else "",
-                (f"{m.possession}%", m.possession), (f"{m.shoot_total}", m.shoot_total),
-                (f"{m.shoot_effective}", m.shoot_effective),
-                (f"{m.pass_rate:.0f}%", m.pass_rate), (f"{m.rating:.2f}", m.rating),
-            ])
-        # enable_sort=False — 선수 지표에서 겪은 것과 같은 이유(재정렬 타이밍
-        # 버그). 행 배경색을 매기는 동안은 채운 순서 = matches 순서가 보장돼야
-        # 한다.
-        self._fill(self.table, rows, enable_sort=False)
-        for r, m in enumerate(matches):
-            if "승" in m.result:
-                bg = T.WIN
-            elif "패" in m.result:
-                bg = T.LOSE
-            else:
-                bg = None
-            for c in range(self.table.columnCount()):
-                item = self.table.item(r, c)
-                if not item:
-                    continue
-                if bg:
-                    item.setBackground(self._blend(T.PANEL, bg, T.ROW_TINT))
-                    item.setForeground(QColor(T.TEXT))
-            # 더블클릭하면 이 경기 스쿼드를 바로 찾을 수 있게 match_id 를 붙인다.
-            date_item = self.table.item(r, 0)
-            if date_item:
-                date_item.setData(Qt.ItemDataRole.UserRole, m.match_id)
-        self.table.setSortingEnabled(True)
-        self._fit_match_extra()
+        self._match_cards = [self._match_card(m, scores, h2h) for m in matches]
         self._refresh_match_color_options()
-        self._apply_match_filter()
+        self._apply_match_filter()        # 거르기 조건을 먼저 — 줄은 아래 한 번만 채운다
+        self._show_match_cards()
+        self._start_list_icons(self.match_list)
 
-    MATCH_EXTRA = ("팀컬러", "구단가치", "맞대결", "상대 점수")
-
-    def _fit_match_extra(self) -> None:
-        """57 K3 상대 정보 열 — 체크가 켜져 있으면 펼쳐 재 보고, 글자가 config.MATCH_EXTRA_MIN_PX 아래로 줄어야 하면 접는다.
-        상대 점수는 점수가 왔을 때만(관문·내 계정). 표 크기가 바뀔 때마다 다시(eventFilter — 한 번으로 모아)."""
-        self._match_fit_pending = False
-        t = self.table
-        cols = [self.MATCH_COLUMNS.index(n) for n in self.MATCH_EXTRA]
-        score = self.MATCH_COLUMNS.index("상대 점수")
-        want = self.chk_match_extra.isChecked()
-
-        def show(on: bool) -> None:
-            for c in cols:
-                t.setColumnHidden(c, not (on and (c != score or self._match_scores_shown)))
-            t.refit()
-        show(want)
-        folded = want and t.rowCount() > 0 and t.font().pixelSize() < config.MATCH_EXTRA_MIN_PX
-        if folded:
-            show(False)
-        self.lb_match_extra.setVisible(folded)
-
-    def eventFilter(self, obj, e) -> bool:
-        if obj is getattr(self, "table", None) and e.type() == QEvent.Type.Resize and not self._match_fit_pending:
-            self._match_fit_pending = True   # 끌어서 크기를 바꾸는 동안 여러 번 와도 한 번만
-            QTimer.singleShot(0, self._fit_match_extra)
-        return super().eventFilter(obj, e)
-
-    def _on_match_double_clicked(self, item) -> None:
-        date_item = self.table.item(item.row(), 0)
-        opp_item = self.table.item(item.row(), 3)
-        if not date_item or not opp_item:
+    def _on_match_double_clicked(self, index) -> None:
+        card = index.data(ROW_ROLE) if index.isValid() else None
+        if card is None:
             return
-        match_id = date_item.data(Qt.ItemDataRole.UserRole)
-        detail = next((d for d in self._details if d.get("matchId") == match_id), None)
-        if detail is None:
-            return
-        opponent = opp_item.text()
-        found = core.opponent_squad([detail], self._ouid, opponent)
-        if found is None:
-            return
-        players, match_date, result = found
-        self._show_opponent_squad(opponent, players, match_date, result)
+        detail = next((d for d in self._details if d.get("matchId") == card.match_id), None)
+        if detail is not None:
+            self._show_match_detail(detail, tab="스쿼드", side="opp")
 
     @staticmethod
     def _blend(base_hex: str, target_hex: str, mix: float) -> QColor:
@@ -10220,14 +10248,13 @@ class MainWindow(QMainWindow):
         if not name_item:
             return
         nickname = name_item.text()
-        found = core.opponent_squad(self._details, self._ouid, nickname)  # 표와 같은 범위
-        if found is None:
+        detail = core.latest_match_with(self._details, self._ouid, nickname)  # 표와 같은 범위(K1 필터 경기로는 ③ 에서)
+        if detail is None:
             QMessageBox.information(
-                self, "상대 스쿼드",
-                f"{self._scope_text()} 안에서 이 상대와 붙은 경기의 스쿼드를 찾지 못했습니다.")
+                self, "경기 상세",
+                f"{self._scope_text()} 안에서 이 상대와 붙은 경기를 찾지 못했습니다.")
             return
-        players, match_date, result = found
-        self._show_opponent_squad(nickname, players, match_date, result)
+        self._show_match_detail(detail, tab="스쿼드", side="opp")   # 지금까지와 같은 첫 화면 — 그 상대 스쿼드
 
     def _season_name(self, sp_id: int) -> str:
         info = self._seasons.get(core.season_id_of(sp_id))
@@ -10839,37 +10866,269 @@ class MainWindow(QMainWindow):
             if p.window().isVisible() and p.btn_notice.isVisibleTo(p):
                 self._start_card_info(p)
 
-    def _show_opponent_squad(self, nickname: str, players: list[dict],
-                             match_date: str, result: str) -> None:
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"{nickname} 스쿼드")
-        fit_to_screen(dlg, 600, 760)
-        # 내용은 세로 스크롤 안에 — 축구장 최소 560x640 + 제목이 약 688 이라 FHD 150% 노트북(창 안쪽 약 657)에선
-        # 대화상자를 화면에 맞춰 줄여도 안 들어갔다(2026-10-04 실측)
-        outer = QVBoxLayout(dlg)
-        outer.setContentsMargins(0, 0, 0, 0)
-        body = QWidget()
-        v = QVBoxLayout(body)
-        outer.addWidget(VScrollArea(body))
+    # ── 경기 상세 창(65 M3) ────────────────────────────────────────────
+    # 여는 자리는 셋 — 경기 목록 더블클릭 · 상대 전적 더블클릭(둘 다 스쿼드 탭의 상대 칸 = 예전 상대 스쿼드 창과 같은 첫 화면)
+    # · ④ 슛 맵 최다 득점/실점 매치(요약 탭). 창은 모달(3판 S3) — 로더 정리는 _close_match_detail 한 곳.
+    def _show_match_detail(self, detail: dict, tab: str = "요약", side: str = "opp") -> None:
+        dlg = self._make_match_detail(detail, tab, side)
+        try:
+            dlg.exec()
+        finally:
+            self._close_match_detail(dlg)
 
-        formation = core.formation_of(players)
-        title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
-        title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-        title.setWordWrap(True)
-        v.addWidget(title)
-
-        pitch, _sp_ids = self._make_pitch_from_players(players)
-        v.addWidget(pitch, 1)
-
-        # 얼굴 이미지·시즌 아이콘·카드 정보는 백그라운드로 — 다이얼로그는 모달이지만
-        # Qt 이벤트 루프는 계속 돌아서 시그널이 도착하는 대로 칩에 채워진다.
-        loaders = self._start_pitch_loaders(pitch)
-        dlg.exec()
-        for ld in loaders:
+    @staticmethod
+    def _close_match_detail(dlg: "MatchDetailDialog") -> None:
+        for ld in dlg.loaders:
             ld.cancel()
-        for ld in loaders:
+        for ld in dlg.loaders:
             if not isinstance(ld, CardInfoLoader):  # 카드 정보는 요청 하나(타임아웃 10초)까지 — 창 표가 종료 때 기다린다
                 ld.wait(500)
+
+    def _make_match_detail(self, detail: dict, tab: str = "요약", side: str = "opp") -> "MatchDetailDialog":
+        me, opp = core.match_sides(detail, self._ouid)
+        m = core.parse_match(detail, self._ouid)
+        dlg = MatchDetailDialog(self, m.opponent if m else "-")
+        if m is None or me is None:
+            dlg.v.addWidget(QLabel("이 경기에서 내 기록을 찾지 못했습니다."))
+            return dlg
+        dlg.v.addWidget(self._detail_head(m, me, opp))
+        dlg.tabs.addTab(self._detail_summary(dlg, detail, m), "요약")
+        dlg.tabs.addTab(self._detail_squads(dlg, me, opp, m), "스쿼드")
+        dlg.tabs.addTab(self._detail_shots(dlg, detail), "슛")
+        dlg.tabs.addTab(self._detail_h2h(dlg, m), "상대 전적")
+        dlg.v.addWidget(dlg.tabs, 1)
+        dlg.tabs.setCurrentIndex(max(0, MatchDetailDialog.TABS.index(tab) if tab in MatchDetailDialog.TABS else 0))
+        dlg.show_side(side)
+        return dlg
+
+    def _detail_side(self, p: dict, nickname: str, right: bool, value_tip: str = "") -> QWidget:
+        """머리 한쪽 — 작은 축구장 · 닉네임 · 등급 · 평점(+ 상대는 지금 구단가치)."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        align = Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft
+        players = [x for x in p.get("player") or [] if x.get("spPosition") != core.SUB_POSITION]
+        pm = formation_pixmap(core.formation_of(players), config.FORMATION_HEAD_PX,
+                              positions=tuple(x.get("spPosition") for x in players))
+        icon = QLabel()
+        if not pm.isNull():
+            icon.setPixmap(pm)
+            icon.setToolTip(core.formation_label(core.formation_of(players)))
+        name = QLabel(nickname)
+        name.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        md = p.get("matchDetail") or {}
+        div = p.get("division")
+        bits = [self._division_names.get(div, "") if isinstance(div, int) else ""]
+        rating = md.get("averageRating")
+        if isinstance(rating, (int, float)):
+            bits.append(f"평점 {rating:.2f}")
+        sub = QLabel(" · ".join(b for b in bits if b) or "-")
+        sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+        for x in (icon, name, sub):
+            x.setAlignment(align)
+            v.addWidget(x, 0, align)
+        if right:
+            value = self._team_values.get(nickname)
+            lb = QLabel(f"구단가치 {short_bp(value)}" if value else "구단가치 -")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            lb.setToolTip(value_tip)
+            v.addWidget(lb, 0, align)
+        return w
+
+    def _detail_head(self, m: MatchSummary, me: dict, opp: dict) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setContentsMargins(4, 4, 4, 8)
+        g.addWidget(self._detail_side(me, self._nick or m.my_nickname, False), 0, 0)
+        g.addWidget(self._detail_side(opp, m.opponent, True, self.MATCH_COLUMN_HELP["구단가치"]), 0, 2)
+        mid = QVBoxLayout()
+        mid.setSpacing(2)
+        score = QLabel(f"{m.my_goals} : {m.opp_goals}")
+        f = score.font()
+        f.setPixelSize(round(T.BASE_FONT_PX * 2))
+        f.setBold(True)
+        score.setFont(f)
+        score.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mid.addWidget(score)
+        if m.is_shootout:
+            so = QLabel(f"승부차기 {m.my_shootout} : {m.opp_shootout}")
+            so.setStyleSheet(f"color: {T.TEXT_DIM};")
+            so.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            mid.addWidget(so)
+        tag = Tag(m.result, "good" if "승" in m.result else ("bad" if "패" in m.result else "muted"))
+        mid.addWidget(tag, 0, Qt.AlignmentFlag.AlignCenter)
+        when = QLabel(m.date_text)
+        when.setStyleSheet(f"color: {T.TEXT_DIM};")
+        when.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mid.addWidget(when)
+        g.addLayout(mid, 0, 1)
+        g.setColumnStretch(0, 1)
+        g.setColumnStretch(2, 1)
+        h2h = QLabel(self._season_h2h_text(m))
+        h2h.setObjectName("detailH2h")
+        h2h.setStyleSheet(f"color: {T.TEXT_DIM};")
+        h2h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        h2h.setWordWrap(True)
+        g.addWidget(h2h, 1, 0, 1, 3)
+        return w
+
+    def _season_h2h_text(self, m: MatchSummary) -> str:
+        """머리 "이 시즌 맞대결" — 그 경기가 든 시즌(시즌표 · matchtime KST 경계 63) 안 이 상대와의 저장된 경기 전부.
+        시즌표가 없으면 저장된 전체. 상대 전적 탭(지금 고른 범위)과 범위가 다를 수 있어 범위 이름을 같이 단다."""
+        pool = [x for x in self._matches_all if x.opponent == m.opponent]
+        if self._rank_seasons:
+            season = sn.season_of(self._rank_seasons, m.match_date)
+            pool = [x for x in pool if sn.season_of(self._rank_seasons, x.match_date) == season]
+            scope = season.label if season is not None else "현재 시즌"
+        else:
+            scope = "저장된 전체"
+        w = sum(1 for x in pool if "승" in x.result)
+        d = sum(1 for x in pool if "무" in x.result)
+        lo = sum(1 for x in pool if "패" in x.result)
+        return f"이 시즌 맞대결 {len(pool)}판 · {wdl_text(w, d, lo)} ({scope})"
+
+    def _detail_summary(self, dlg: "MatchDetailDialog", detail: dict, m: MatchSummary) -> QWidget:
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setSpacing(8)
+
+        def head(text: str) -> None:
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-weight: bold;")
+            v.addWidget(lb)
+        head("경기 흐름")
+        goals = core.match_goals(detail, self._ouid)
+        dlg.timeline = GoalTimeline()
+        dlg.timeline.set_goals([(g.minute, g.mine) for g in goals])
+        v.addWidget(dlg.timeline)
+
+        def who(sp) -> str:
+            return self._names.get(sp, "?") if sp is not None else "?"
+        lines = []
+        for mine, label in ((True, "나"), (False, "상대")):
+            got = [f"{g.minute:.0f}' {who(g.sp_id)}" for g in goals if g.mine == mine]
+            lines.append(f"{label}: " + (", ".join(got) if got else "골 없음"))
+        dlg.goal_text = QLabel("\n".join(lines))
+        dlg.goal_text.setStyleSheet(f"color: {T.TEXT_DIM};")
+        dlg.goal_text.setWordWrap(True)
+        v.addWidget(dlg.goal_text)
+
+        head("기대 골(xG)")
+        xg = [core.shot_map([detail], self._ouid, mine=s).xg for s in (True, False)]
+        for label, mine, opp, fmt in (("기대 골", xg[0], xg[1], "{:.2f}"), ("실제 골", m.my_goals, m.opp_goals, "{:.0f}")):
+            bar = VersusBar(label, T.OPP_FILL)
+            bar.set_values(mine, opp, fmt)
+            v.addWidget(bar)
+        xg_note = QLabel(XG_METHOD_NOTE)
+        xg_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        xg_note.setWordWrap(True)
+        v.addWidget(xg_note)
+
+        mvp = core.match_mvp(detail, self._ouid)
+        dlg.mvp = QLabel(f"MVP  {who(mvp[1])} ({'나' if mvp[0] else '상대'} · 평점 {mvp[2]:.1f})" if mvp else "MVP  -")
+        dlg.mvp.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        v.addWidget(dlg.mvp)
+
+        head("경기 정보 (나 vs 상대)")
+        dlg.versus = []
+        for ln in core.match_versus(detail, self._ouid):
+            bar = VersusBar(ln.name, T.OPP_FILL)
+            bar.set_values(ln.mine, ln.opp, "{:.2f}" if ln.name == "평균 평점" else ("{:.1f}" if ln.unit == "%" and
+                           ln.name != "점유율" else "{:.0f}"), ln.unit)
+            dlg.versus.append(bar)
+            v.addWidget(bar)
+        v.addStretch(1)
+        return VScrollArea(body)
+
+    def _detail_squads(self, dlg: "MatchDetailDialog", me: dict, opp: dict, m: MatchSummary) -> QWidget:
+        """스쿼드 탭 — 나 / 상대 두 칸 전환(나란히 두면 축구장 최소 폭 둘이 600 을 넘는다). 축구장 둘은 지금 만든다 —
+        로더 정리 목록(dlg.loaders)이 탭을 눌렀는지와 무관하게 정해진다(5판 [중])."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        grp = QButtonGroup(w)
+        grp.setExclusive(True)
+        stack = QStackedWidget()
+        for i, (key, label, p, nick) in enumerate((("mine", "나", me, self._nick or m.my_nickname),
+                                                    ("opp", "상대", opp, m.opponent))):
+            btn = QPushButton(f"{label} · {nick}")
+            btn.setCheckable(True)
+            btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+            btn.clicked.connect(lambda _=False, k=key: dlg.show_side(k))
+            grp.addButton(btn)
+            row.addWidget(btn)
+            dlg.side_buttons[key] = btn
+            page = QWidget()
+            pv = QVBoxLayout(page)
+            players = p.get("player") or []
+            title = QLabel(f"{nick}  ·  {core.formation_of(players)}  ·  {m.date_text}")
+            title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            title.setWordWrap(True)
+            pv.addWidget(title)
+            pitch, _sp_ids = self._make_pitch_from_players(players)
+            pv.addWidget(pitch, 1)
+            dlg.pitches[key] = pitch
+            # 얼굴·시즌 아이콘·카드 정보는 백그라운드로 — 모달이어도 이벤트 루프가 돌아 오는 대로 칩에 채워진다.
+            # 카드 정보 요청은 예전 상대 스쿼드 창과 같은 관문(chip_auto_allowed) 뒤 — 창 하나에 축구장 둘이라 최대 두 배
+            dlg.loaders.extend(self._start_pitch_loaders(pitch))
+            stack.addWidget(VScrollArea(page))
+            dlg.side_pages[key] = i
+        row.addStretch(1)
+        v.addLayout(row)
+        v.addWidget(stack, 1)
+        dlg.squad_stack = stack
+        return w
+
+    def _detail_shots(self, dlg: "MatchDetailDialog", detail: dict) -> QWidget:
+        body = QWidget()
+        v = QVBoxLayout(body)
+        row = QHBoxLayout()
+        dlg.cb_shot_side = NoScrollComboBox()
+        dlg.cb_shot_side.addItem("내 슛", True)
+        dlg.cb_shot_side.addItem("상대 슛", False)
+        row.addWidget(dlg.cb_shot_side)
+        dlg.shot_note = QLabel("")
+        dlg.shot_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(dlg.shot_note, 1)
+        v.addLayout(row)
+        dlg.shot_map = ShotMapWidget()
+        v.addWidget(dlg.shot_map, 1)
+
+        def show() -> None:
+            sm = core.shot_map([detail], self._ouid, mine=bool(dlg.cb_shot_side.currentData()))
+            dlg.shot_map.set_shots(sm.shots)
+            dlg.shot_note.setText(f"슛 {sm.total} · 유효 {sm.effective} · 골 {sm.goals} · xG {sm.xg:.2f}")
+        dlg.cb_shot_side.currentIndexChanged.connect(lambda _i: show())
+        show()
+        return VScrollArea(body)
+
+    def _detail_h2h(self, dlg: "MatchDetailDialog", m: MatchSummary) -> QWidget:
+        """상대 전적 탭 — 지금 불러온 범위(시즌 필터) 안 이 상대와의 경기. 줄은 보기만(창을 열지 않는다 — 4판 A2: 모달이 겹겹이 쌓인다)."""
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setSpacing(4)
+        games = [x for x in self._matches if x.opponent == m.opponent]
+        w = sum(1 for x in games if "승" in x.result)
+        d = sum(1 for x in games if "무" in x.result)
+        lo = sum(1 for x in games if "패" in x.result)
+        dlg.h2h_note = QLabel(f"{self._scope_text()} 안 이 상대와 {len(games)}판 · {wdl_text(w, d, lo)}")
+        dlg.h2h_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        dlg.h2h_note.setWordWrap(True)
+        v.addWidget(dlg.h2h_note)
+        dlg.h2h_rows = []
+        for x in games:
+            row = QHBoxLayout()
+            row.addWidget(Tag(x.result, "good" if "승" in x.result else ("bad" if "패" in x.result else "muted")))
+            lb = QLabel(f"{x.score}   ·   {x.date_text}" + ("   (이 경기)" if x.match_id == m.match_id else ""))
+            if x.match_id == m.match_id:
+                lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            row.addWidget(lb, 1)
+            v.addLayout(row)
+            dlg.h2h_rows.append(x.match_id)
+        v.addStretch(1)
+        return VScrollArea(body)
 
     PLAYERCARD_IMG_DIR_NAME = "player_card_images"
 
@@ -12938,6 +13197,36 @@ class NoticeDialog(QDialog):
             QMessageBox.warning(self, "저장 실패", f"설정을 저장하지 못했습니다: {e}")
             return
         self.accept()
+
+
+class MatchDetailDialog(QDialog):
+    """경기 상세 창(65 M3) — 머리(양쪽 작은 축구장 · 점수 · 결과 · 이 시즌 맞대결) + 탭 넷. 채우기는 MainWindow._make_match_detail,
+    닫은 뒤 로더 정리는 MainWindow._close_match_detail(모달 — 3판 S3). 테스트는 아래 속성으로 읽는다."""
+    TABS = ("요약", "스쿼드", "슛", "상대 전적")
+
+    def __init__(self, parent: QWidget, opponent: str):
+        super().__init__(parent)
+        self.setWindowTitle(f"{opponent} 경기 상세")
+        fit_to_screen(self, 600, 760)   # 예전 상대 스쿼드 창과 같은 크기 — 탭 안은 세로 스크롤(PyQt 9)
+        self.v = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        self.loaders: list = []
+        self.pitches: dict[str, PitchWidget] = {}
+        self.side_buttons: dict[str, QPushButton] = {}
+        self.side_pages: dict[str, int] = {}
+        self.squad_stack: QStackedWidget | None = None
+
+    def show_side(self, key: str) -> None:
+        """스쿼드 탭의 나 / 상대 칸."""
+        if self.squad_stack is None or key not in self.side_pages:
+            return
+        self.squad_stack.setCurrentIndex(self.side_pages[key])
+        self.side_buttons[key].setChecked(True)
+
+    def side(self) -> str | None:
+        if self.squad_stack is None:
+            return None
+        return next((k for k, i in self.side_pages.items() if i == self.squad_stack.currentIndex()), None)
 
 
 class AboutDialog(QDialog):

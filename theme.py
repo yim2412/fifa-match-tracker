@@ -144,6 +144,7 @@ GOOD_FILL = _P["GOOD_FILL"]         # 위 셋의 막대·점·채움 값
 BAD_FILL = _P["BAD_FILL"]
 WARN_FILL = _P["WARN_FILL"]
 BLUE = _P["BLUE"]                   # 수비력
+OPP_FILL = BLUE                     # 경기 상세 창 비교 막대·골 점의 상대 몫(65 M3 — 내 몫은 ACCENT_FILL)
 PURPLE = _P["PURPLE"]
 CHIP_GK = _P["CHIP_GK"]             # 선수 카드 포지션 칩 글자·테두리(바탕은 CHIP_SOFT_MIX 만큼 섞음)
 CHIP_DF = _P["CHIP_DF"]

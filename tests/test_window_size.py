@@ -22,6 +22,21 @@ SCREENS = os.path.join(_ROOT, "tests", "screens")
 sys.path.insert(0, _ROOT)
 
 
+def _detail(win, players: list) -> dict:
+    """경기 상세 창(65 M3)을 열 지어낸 경기 하나 — 양쪽 같은 선수 11명 · 내 골 하나."""
+    win._ouid = "me"
+    shot = [{"goalTime": 600, "x": 0.9, "y": 0.5, "type": 2, "result": 3, "spId": players[-1]["spId"]}]
+
+    def side(ouid, nick, res, goals):
+        return {"ouid": ouid, "nickname": nick, "division": 800,
+                "matchDetail": {"matchResult": res, "possession": 50, "averageRating": 6.5, "controller": "keyboard"},
+                "shoot": {"goalTotal": goals, "shootTotal": 3, "effectiveShootTotal": 2},
+                "pass": {"passTry": 100, "passSuccess": 80}, "defence": {"tackleTry": 5, "tackleSuccess": 2},
+                "player": players, "shootDetail": shot[:goals]}
+    return {"matchId": "m1", "matchDate": "2026-10-04T03:00:00", "matchType": 52,
+            "matchInfo": [side("me", "나", "승", 1), side("op", "상대", "패", 0)]}
+
+
 # ── 자식 프로세스: 흉내 낸 화면에서 실제 창을 띄우고 잰 값을 JSON 한 줄로 ──────────────
 def _child(case: str, screen: str, settings_path: str) -> None:
     os.chdir(SCREENS)
@@ -98,7 +113,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         app_main.IconLoader.start = lambda self: None
         players = [{"spId": 100000001 + i, "spPosition": p, "spGrade": 5}
                    for i, p in enumerate((0, 3, 5, 6, 7, 10, 14, 16, 18, 23, 25))]
-        win._show_opponent_squad("상대", players, "2026-10-04", "승")
+        win._show_match_detail(_detail(win, players), tab="스쿼드")   # 65 M3 — 예전 상대 스쿼드 창 자리
         d = QDialog(win)
         d.setWindowTitle("고정 600x760")
         app_main.fit_to_screen(d, 600, 760)
@@ -148,7 +163,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         app_main.ApiKeyDialog(win, reason="만료").exec()
         players = [{"spId": 100000001 + i, "spPosition": p, "spGrade": 5}
                    for i, p in enumerate((0, 3, 5, 6, 7, 10, 14, 16, 18, 23, 25))]
-        win._show_opponent_squad("상대", players, "2026-10-04", "승")
+        win._show_match_detail(_detail(win, players), tab="스쿼드")   # 65 M3 — 예전 상대 스쿼드 창 자리
         out["main_screen"] = win.screen().name()
         # 대화상자가 열린 채 메인 창만 다른 모니터로 옮겨진다(실제 윈도우 실측 — 안내 창이 주 모니터에 홀로 남았다)
         d = QDialog(win)
@@ -350,8 +365,10 @@ def test_dialogs_fit_small_screen():
     # '줄일 수 있나'는 작업 표시줄을 뺀 실제 150% 노트북 높이로 — 흉내 화면은 작업 표시줄이 없어 720 을 다 쓴다.
     # 720 으로 재면 스크롤 없는 스쿼드 창(내용 최소 677)도 통과해 버렸다(변이로 확인).
     real_h = 720 - 32
+    assert "상대 경기 상세" in res["dialogs"], ("경기 상세 창(65 M3)을 안 쟀다", list(res["dialogs"]))
     for title, (w, h, mw, mh) in res["dialogs"].items():
         assert h + fh <= ah, ("대화상자가 화면보다 크다", title, h, ah)
+        assert mw + a.FRAME_ALLOWANCE[0] <= res["avail"][2], ("내용 최소 폭이 화면보다 넓다", title, mw)
         assert mh + fh <= real_h, ("내용 최소 크기 때문에 줄일 수 없다 — 스크롤 안에 넣어야", title, mh, real_h)
 
 

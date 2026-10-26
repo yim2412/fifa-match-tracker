@@ -22,11 +22,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractListModel, QModelIndex, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
+    QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
+    QLabel, QListView, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
@@ -1757,13 +1757,444 @@ class VersusBar(QWidget):
 
     def set_values(self, mine: float, opp: float, fmt: str = "{:.0f}", unit: str = "") -> None:
         ahead = mine > opp
-        col = T.ACCENT if ahead else T.TEXT
-        self.nums.setText(f"<b style='color:{col}'>{fmt.format(mine)}{unit}</b>"
-                          f" <span style='color:{T.TEXT_DIM}'>vs {fmt.format(opp)}{unit}</span>")
+        if self.strip.opp_color is None:
+            col = T.ACCENT if ahead else T.TEXT
+            self.nums.setText(f"<b style='color:{col}'>{fmt.format(mine)}{unit}</b>"
+                              f" <span style='color:{T.TEXT_DIM}'>vs {fmt.format(opp)}{unit}</span>")
+        else:
+            # 상세 창 꼴 — 파울처럼 적을수록 좋은 줄도 있어 좋고 나쁨 색 대신 큰 쪽만 굵게(작은 쪽 흐림 · 같으면 둘 다 보통)
+            def num(v: float, big: bool, same: bool) -> str:
+                text = f"{fmt.format(v)}{unit}"
+                if same:
+                    return f"<span style='color:{T.TEXT}'>{text}</span>"
+                return f"<b style='color:{T.TEXT}'>{text}</b>" if big else f"<span style='color:{T.TEXT_DIM}'>{text}</span>"
+            same = fmt.format(mine) == fmt.format(opp)
+            self.nums.setText(f"{num(mine, ahead, same)} <span style='color:{T.TEXT_DIM}'>vs</span> "
+                              f"{num(opp, opp > mine, same)}")
         tot = mine + opp
         self.strip.share = mine / tot if tot else 0.5
         self.mine_ahead = ahead
         self.strip.update()
+
+
+class GoalTimeline(QWidget):
+    """경기 흐름(65 M3 요약) — 가로 시간 줄 위에 내 골(위 · 강조색) · 아래에 상대 골(OPP_FILL). 연장이 있으면 120분까지.
+    색만으로 말하지 않게 화면은 줄 아래에 "12' 이름" 글을 같이 둔다."""
+    HEIGHT = 52
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(self.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.goals: list[tuple[float, bool]] = []
+
+    def set_goals(self, goals: list[tuple[float, bool]]) -> None:
+        self.goals = list(goals)
+        self.update()
+
+    @property
+    def span(self) -> int:
+        return 120 if any(m > 90 for m, _ in self.goals) else 90
+
+    def x_of(self, minute: float) -> float:
+        m = 8
+        return m + (self.width() - 2 * m) * min(max(minute, 0.0), self.span) / self.span
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        mid = self.height() / 2 - 6
+        p.setPen(QPen(QColor(T.BORDER), 2))
+        p.drawLine(QPointF(self.x_of(0), mid), QPointF(self.x_of(self.span), mid))
+        f = QFont(self.font())
+        f.setPixelSize(11)
+        p.setFont(f)
+        p.setPen(QColor(T.TEXT_DIM))
+        for tick in (0, 45, 90, 120):
+            if tick > self.span:
+                continue
+            x = self.x_of(tick)
+            p.drawLine(QPointF(x, mid - 4), QPointF(x, mid + 4))
+            p.drawText(QRectF(x - 20, mid + 14, 40, 14), Qt.AlignmentFlag.AlignCenter, f"{tick}'")
+        p.setPen(Qt.PenStyle.NoPen)
+        for minute, mine in self.goals:
+            p.setBrush(QColor(T.ACCENT_FILL if mine else T.OPP_FILL))
+            p.drawEllipse(QPointF(self.x_of(minute), mid - 9 if mine else mid + 9), 5, 5)
+        p.end()
+
+
+# ── 줄 카드 목록(3.1.1 P4 · 65) ─────────────────────────────────────────────
+# 줄은 위젯이 아니라 대리자가 그리는 그림이다 — 1만 경기를 카드 위젯으로 만들면 메뉴 전환을 못 지킨다(65 E2).
+# 거르기·정렬은 모델 안 목록에서 끝낸다(QListView.setRowHidden 은 숨은 줄을 목록으로 들고 있어 1만 줄이면 느리다).
+ROW_ROLE = Qt.ItemDataRole.UserRole
+
+
+class _RowModel(QAbstractListModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.all: list = []
+        self.shown: list = []
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self.shown)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or index.row() >= len(self.shown):
+            return None
+        row = self.shown[index.row()]
+        if role == ROW_ROLE:
+            return row
+        if role == Qt.ItemDataRole.AccessibleTextRole:
+            return getattr(row, "accessible", "")
+        return None
+
+    def reset_rows(self, rows: list, pred) -> None:
+        self.beginResetModel()
+        self.all = list(rows)
+        self.shown = [r for r in self.all if pred(r)] if pred is not None else list(self.all)
+        self.endResetModel()
+
+
+class CardListView(QListView):
+    """줄 카드 목록의 틀 — 모델(전체 줄 · 보이는 줄) · 거르기 · 그림 표. 줄 그리기는 대리자가, 줄 모양은 물려받은 쪽이 정한다.
+
+    그림(등급 배지·엠블럼)은 (종류, 키) → 그림 표 하나에 붙는다 — 줄이 아니라 키에 붙어서 정렬·거르기가 바뀌어도
+    제 줄을 따라간다(40단계 표 칸 그림의 '키가 행을 따라가나' 와 같은 약속). 받은 뒤엔 보이는 줄만 다시 그린다."""
+
+    def __init__(self):
+        super().__init__()
+        self._model = _RowModel(self)
+        self.setModel(self._model)
+        self._pred = None
+        self._icons: dict[tuple, QPixmap] = {}
+        self.setUniformItemSizes(True)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setMouseTracking(True)
+        self.setStyleSheet(f"QListView {{ background: {T.BG}; border: none; }}")
+
+    def set_rows(self, rows: list) -> None:
+        self._model.reset_rows(rows, self._pred)
+
+    def set_filter(self, pred) -> None:
+        """pred(줄) → 보일까. None 이면 전부."""
+        self._pred = pred
+        self._model.reset_rows(self._model.all, pred)
+
+    def relayout(self) -> None:
+        """줄 높이가 바뀌었을 때(대리자 꼴) — 같은 줄로 다시 그린다."""
+        self._model.reset_rows(self._model.all, self._pred)
+
+    def rowCount(self) -> int:
+        return len(self._model.shown)
+
+    def row(self, r: int):
+        return self._model.shown[r]
+
+    def rows(self) -> list:
+        """보이는 줄(거른 뒤)."""
+        return list(self._model.shown)
+
+    def all_rows(self) -> list:
+        return list(self._model.all)
+
+    def current(self):
+        idx = self.currentIndex()
+        return self.row(idx.row()) if idx.isValid() and idx.row() < self.rowCount() else None
+
+    def icon_keys(self, row) -> tuple:
+        """줄이 쓰는 그림 (종류, 키) — 물려받는 쪽이 정한다."""
+        return ()
+
+    def icon_entries(self) -> set:
+        out = set()
+        for row in self._model.all:
+            out.update(k for k in self.icon_keys(row) if k[1] is not None)
+        return out
+
+    def put_icon(self, kind: str, key, pm: QPixmap) -> None:
+        self._icons[(kind, key)] = pm
+        self.viewport().update()
+
+    def icon(self, kind: str, key) -> QPixmap | None:
+        return self._icons.get((kind, key)) if key is not None else None
+
+
+@dataclass
+class MatchCard:
+    """경기 목록 카드 한 줄(65 M2) — 글자는 화면(app_main)이 다 만들어 넣는다. 대리자는 그리기만 한다."""
+    match_id: str
+    date_text: str
+    result: str                     # 승 · 무 · 패 · 몰수승 …
+    score: str                      # "3 : 1"
+    shootout: str = ""              # "승부차기 4:2" | ""
+    opponent: str = "-"
+    division_key: object = None     # 그 경기 때 상대 등급 배지 키
+    opp_pad: bool = False           # 상대 입력 장치가 패드(U4 — 패드일 때만 아이콘)
+    stats: tuple = ()               # ((라벨, 값), …) 오른쪽 — 점유 · 슛 · 패스 · 평점
+    color: str = ""                 # 상대 지금 팀컬러
+    emblem_key: object = None
+    value_text: str = ""            # 상대 지금 구단가치(짧게)
+    h2h_text: str = ""              # 맞대결(시즌 범위)
+    opp_score: str | None = None    # None = 칸이 없다(관문 미달·남의 목록)
+    when: object = None             # 정렬 키
+    goal_diff: int = 0
+    rating: float = 0.0
+
+    @property
+    def kind(self) -> str:
+        return "win" if "승" in self.result else ("lose" if "패" in self.result else "other")
+
+    @property
+    def accessible(self) -> str:
+        return f"{self.date_text} {self.result} {self.score} {self.opponent}"
+
+
+class CardSeg(NamedTuple):
+    role: str       # 그린 조각 이름 — 툴팁·넘침 검사가 읽는다
+    rect: QRectF
+    text: str
+    full: float     # 글자가 다 들어가는 폭(그림 조각은 0)
+
+
+class MatchCardDelegate(QStyledItemDelegate):
+    """경기 목록 카드 그리기 — 왼쪽 결과 띠 + 연한 결과 바탕(옛 표 행 색과 같은 T.WIN/LOSE · ROW_TINT),
+    ① 일시 ② 결과 알약 · 점수(크게) · 승부차기 · vs 상대 · 등급 배지 · 패드 / 오른쪽 점유·슛·패스·평점
+    ③ (상대 정보) 엠블럼 · 팀컬러 · 구단가치 · 맞대결 · 상대 점수. 자리는 layout() 한 곳이 정하고 그리기·툴팁·넘침 검사가 같이 쓴다."""
+    MARGIN = 3          # 카드 사이 위아래
+    STRIPE = 4
+    PAD_X = 12
+    PAD_Y = 7
+    GAP = 3
+    ITEM_GAP = 14       # 오른쪽 숫자 묶음 사이
+
+    def __init__(self, view: CardListView, tips: dict[str, str] | None = None):
+        super().__init__(view)
+        self.view = view
+        self.tips = dict(tips or {})
+        self.show_extra = True
+
+    # ── 글꼴 ──
+    @staticmethod
+    def fonts(base: QFont) -> dict[str, QFont]:
+        from PyQt6.QtGui import QFontInfo
+        px = QFontInfo(base).pixelSize() or T.BASE_FONT_PX
+        out = {}
+        for name, scale, bold in (("small", 0.85, False), ("main", 1.0, False), ("bold", 1.0, True), ("big", 1.3, True)):
+            f = QFont(base)
+            f.setPixelSize(max(9, round(px * scale)))
+            f.setBold(bold)
+            out[name] = f
+        return out
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        h = (2 * self.MARGIN + 2 * self.PAD_Y + QFontMetrics(f["small"]).height() + self.GAP
+             + QFontMetrics(f["big"]).height())
+        if self.show_extra:
+            h += self.GAP + QFontMetrics(f["main"]).height()
+        return h
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    @staticmethod
+    def colors(card: MatchCard) -> dict[str, str]:
+        """카드 색 — 테스트가 그림 대신 읽는다."""
+        tone = {"win": T.WIN, "lose": T.LOSE}.get(card.kind)
+        fill = {"win": T.GOOD_FILL, "lose": T.BAD_FILL}.get(card.kind)
+        return {"bg": T.blend(T.PANEL, tone, T.ROW_TINT) if tone else T.PANEL,
+                "stripe": fill or T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX),
+                "pill": tone or T.TEXT_DIM}
+
+    # ── 자리 ──
+    def layout(self, card: MatchCard, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        fm = {k: QFontMetrics(v) for k, v in f.items()}
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left = r.left() + self.STRIPE + self.PAD_X
+        right = r.right() - self.PAD_X
+        segs: list[CardSeg] = []
+
+        def put(role: str, x: float, y: float, h: float, text: str, font: str, limit: float | None = None) -> float:
+            full = fm[font].horizontalAdvance(text) if text else 0
+            w = full if limit is None else max(0.0, min(full, limit - x))
+            segs.append(CardSeg(role, QRectF(x, y, w, h), text, full))
+            return x + w
+
+        y1 = r.top() + self.PAD_Y
+        h1 = fm["small"].height()
+        put("date", left, y1, h1, card.date_text, "small", right)
+        y2 = y1 + h1 + self.GAP
+        h2 = fm["big"].height()
+        # 오른쪽 숫자 묶음 — 폭을 먼저 재서 왼쪽 상대 이름이 쓸 수 있는 끝을 정한다
+        items = [(lab, val, fm["small"].horizontalAdvance(lab + " "), fm["bold"].horizontalAdvance(val))
+                 for lab, val in card.stats]
+        total = sum(a + b for _l, _v, a, b in items) + self.ITEM_GAP * max(0, len(items) - 1)
+        x = right - total
+        stats_left = x
+        for lab, val, a, b in items:
+            segs.append(CardSeg("stat_label", QRectF(x, y2, a, h2), lab, a))
+            segs.append(CardSeg("stat", QRectF(x + a, y2, b, h2), val, b))
+            x += a + b + self.ITEM_GAP
+        limit = stats_left - 16
+        pill_w = fm["small"].horizontalAdvance(card.result) + 14
+        segs.append(CardSeg("result", QRectF(left, y2 + (h2 - h1 - 4) / 2, pill_w, h1 + 4), card.result,
+                            fm["small"].horizontalAdvance(card.result) + 14))
+        x = left + pill_w + 10
+        x = put("score", x, y2, h2, card.score, "big", limit) + 6
+        if card.shootout:
+            x = put("shootout", x, y2, h2, card.shootout, "small", limit) + 6
+        x = put("vs", x, y2, h2, "vs", "small", limit) + 5
+        icon_h = fm["main"].height()
+        reserve = (icon_h * 1.4 + 4 if card.division_key is not None else 0) + (icon_h * 1.3 + 6 if card.opp_pad else 0)
+        x = put("opp", x, y2, h2, card.opponent, "bold", limit - reserve) + 4
+        if card.division_key is not None:
+            segs.append(CardSeg("badge", QRectF(x, y2 + (h2 - icon_h) / 2, icon_h * 1.4, icon_h), "", 0))
+            x += icon_h * 1.4 + 4
+        if card.opp_pad:
+            segs.append(CardSeg("pad", QRectF(x, y2 + (h2 - icon_h) / 2, icon_h * 1.3, icon_h), "", 0))
+        if self.show_extra:
+            y3 = y2 + h2 + self.GAP
+            h3 = fm["main"].height()
+            x = left
+            if card.emblem_key is not None:
+                segs.append(CardSeg("emblem", QRectF(x, y3, h3, h3), "", 0))
+                x += h3 + 4
+            x = put("color", x, y3, h3, card.color or "-", "main", right)
+            parts = [("value", "구단가치", card.value_text or "-"), ("h2h", "맞대결", card.h2h_text or "-")]
+            if card.opp_score is not None:
+                parts.append(("oppscore", "상대 점수", card.opp_score))
+            for role, lab, val in parts:
+                x = put(role + "_label", x + 12, y3, h3, lab, "small", right) + 4
+                x = put(role, x, y3, h3, val, "main", right)
+        return segs
+
+    def overflow(self, card: MatchCard, width: int, base: QFont) -> list[str]:
+        """그 폭에서 잘리는 글자 조각 — 스모크가 1280·150% 에서 잰다(PyQt 5 의 카드판)."""
+        return [s.role for s in self.layout(card, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.full > s.rect.width() + 0.5]
+
+    # ── 그리기 ──
+    def paint(self, painter, option, index) -> None:
+        card = index.data(ROW_ROLE)
+        if card is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, card)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, card: MatchCard) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(card)
+        r = QRectF(option.rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = col["bg"]
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = T.blend(bg, T.TEXT, 0.04)
+        path = QPainterPath()
+        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        p.fillPath(path, QColor(bg))
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(QRectF(r.left(), r.top(), self.STRIPE, r.height()), QColor(col["stripe"]))
+        p.restore()
+        if option.state & QStyle.StateFlag.State_Selected:
+            p.setPen(QPen(QColor(T.ACCENT), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        fonts = {"date": "small", "score": "big", "shootout": "small", "vs": "small", "opp": "bold",
+                 "stat_label": "small", "stat": "bold", "color": "main"}
+        dim = {"date", "shootout", "vs", "stat_label"}
+        for s in self.layout(card, option.rect, option.font):
+            if s.role == "result":
+                soft = T.blend(T.PANEL, col["pill"], 0.10)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(soft))
+                p.drawRoundedRect(s.rect, 4, 4)
+                p.setPen(QColor(col["pill"]))
+                p.setFont(f["small"])
+                p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
+                continue
+            if s.role in ("badge", "emblem"):
+                key = card.division_key if s.role == "badge" else card.emblem_key
+                pm = self.view.icon("division" if s.role == "badge" else "emblem", key)
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left(), s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            if s.role == "pad":
+                self._pad(p, s.rect)
+                continue
+            if not s.text:
+                continue
+            font = fonts.get(s.role) or ("small" if s.role.endswith("_label") else "main")
+            p.setFont(f[font])
+            p.setPen(QColor(T.TEXT_DIM if s.role in dim or s.role.endswith("_label") else T.TEXT))
+            fmx = QFontMetrics(f[font])
+            text = s.text if s.full <= s.rect.width() + 0.5 else fmx.elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
+    @staticmethod
+    def _pad(p: QPainter, rect: QRectF) -> None:
+        """패드 모양(U4) — 이모지 글꼴은 PC 마다 달라 직접 그린다. 둥근 몸통 + 왼쪽 십자 + 오른쪽 단추 둘."""
+        h = rect.height() * 0.62
+        body = QRectF(rect.left(), rect.center().y() - h / 2, rect.width(), h)
+        p.setPen(QPen(QColor(T.TEXT_DIM), 1.4))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(body, h / 2, h / 2)
+        cx, cy, a = body.left() + body.width() * 0.3, body.center().y(), h * 0.22
+        p.drawLine(QPointF(cx - a, cy), QPointF(cx + a, cy))
+        p.drawLine(QPointF(cx, cy - a), QPointF(cx, cy + a))
+        p.setBrush(QColor(T.TEXT_DIM))
+        for dx, dy in ((0.66, -0.12), (0.78, 0.12)):
+            p.drawEllipse(QPointF(body.left() + body.width() * dx, cy + h * dy), h * 0.09, h * 0.09)
+
+    def tip_at(self, card: MatchCard, rect, base: QFont, pos) -> str:
+        for s in self.layout(card, rect, base):
+            if s.rect.adjusted(-2, -2, 2, 2).contains(QPointF(pos)):
+                role = s.role.removesuffix("_label")
+                if role == "opp" and s.full > s.rect.width() + 0.5:
+                    return card.opponent
+                if role in self.tips:
+                    return self.tips[role]
+        return ""
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        card = index.data(ROW_ROLE) if index.isValid() else None
+        tip = self.tip_at(card, option.rect, option.font, event.pos()) if card is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class MatchCardList(CardListView):
+    """경기 목록(65 M2) — 카드 한 줄 = 경기 하나. 더블클릭 → 경기 상세 창(app_main 이 잇는다)."""
+
+    def __init__(self, tips: dict[str, str] | None = None):
+        super().__init__()
+        self.card_delegate = MatchCardDelegate(self, tips)
+        self.setItemDelegate(self.card_delegate)
+
+    def icon_keys(self, row: MatchCard) -> tuple:
+        return (("division", row.division_key), ("emblem", row.emblem_key))
+
+    @property
+    def show_extra(self) -> bool:
+        return self.card_delegate.show_extra
+
+    def set_show_extra(self, on: bool) -> None:
+        if self.card_delegate.show_extra != on:
+            self.card_delegate.show_extra = on
+            self.relayout()
 
 
 class BarRow(QWidget):

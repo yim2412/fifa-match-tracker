@@ -2051,6 +2051,106 @@ def versus_profile(details: list[dict], ouid: str) -> VersusProfile:
     return out
 
 
+# ── 경기 상세 창(3.1.1 · 65 M3) ─────────────────────────────────────────────
+# 한 경기의 나 / 상대 줄 — (이름, 단위, 클수록 좋음 — None 은 성향 · False 는 적을수록 좋음, (묶음, 키) | (묶음, 분자, 분모)).
+# 원문에 양쪽 다 없는 줄은 뺀다(match_versus) — 넥슨이 필드를 빼도 0 줄을 지어내지 않는다.
+MATCH_VERSUS_ROWS = (
+    ("점유율", "%", None, ("matchDetail", "possession")),
+    ("슈팅", "", True, ("shoot", "shootTotal")),
+    ("유효 슈팅", "", True, ("shoot", "effectiveShootTotal")),
+    ("박스 안 슈팅", "", True, ("shoot", "shootInPenalty")),
+    ("헤딩 슈팅", "", None, ("shoot", "shootHeading")),
+    ("패스 시도", "", None, ("pass", "passTry")),
+    ("패스 성공률", "%", True, ("pass", "passSuccess", "passTry")),
+    ("짧은 패스", "", None, ("pass", "shortPassTry")),
+    ("긴 패스", "", None, ("pass", "longPassTry")),
+    ("스루 패스", "", None, ("pass", "throughPassTry")),
+    ("드리블", "", None, ("matchDetail", "dribble")),
+    ("태클 성공", "", True, ("defence", "tackleSuccess")),
+    ("블록 성공", "", True, ("defence", "blockSuccess")),
+    ("코너킥", "", None, ("matchDetail", "cornerKick")),
+    ("오프사이드", "", False, ("matchDetail", "offsideCount")),
+    ("파울", "", False, ("matchDetail", "foul")),
+    ("경고", "", False, ("matchDetail", "yellowCards")),
+    ("퇴장", "", False, ("matchDetail", "redCards")),
+    ("평균 평점", "", True, ("matchDetail", "averageRating")),
+)
+# goalTime 구간 → 그 구간이 시작하는 분(전반 0 · 후반 45 · 연장 전반 90 · 연장 후반 105)
+PERIOD_START_MIN = {0: 0, 1: 45, 2: 90, 3: 105}
+
+
+def match_sides(detail: dict, ouid: str) -> tuple[dict | None, dict]:
+    """한 경기의 (내 matchInfo, 상대 matchInfo) — 화면(경기 상세 창)이 원문을 직접 훑지 않게. 내가 없으면 (None, …)."""
+    return _me_opp(detail, ouid)
+
+
+def match_versus(detail: dict, ouid: str) -> list[VersusLine]:
+    """한 경기의 나 / 상대 줄(MATCH_VERSUS_ROWS 순서). 양쪽 원문에 그 키가 없는 줄은 빠진다. 내가 없는 경기면 []."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return []
+    out = []
+    for name, unit, better, src in MATCH_VERSUS_ROWS:
+        group, keys = src[0], src[1:]
+        parts = [p.get(group) or {} for p in (me, opp or {})]
+        if not any(all(k in part for k in keys) for part in parts):
+            continue
+        if len(keys) == 2:
+            vals = [_ratio(_num(part, keys[0]), _num(part, keys[1])) for part in parts]
+        else:
+            vals = [_num(part, keys[0]) for part in parts]
+        out.append(VersusLine(name, unit, better, vals[0], vals[1]))
+    return out
+
+
+def latest_match_with(details: list[dict], ouid: str, nickname: str) -> dict | None:
+    """그 상대와 붙은 가장 최근 경기 원문(details 최신순 전제 — opponent_squad 와 같은 판정). 못 찾으면 None."""
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is not None and (opp.get("nickname") or "-") == nickname:
+            return d
+    return None
+
+
+class MatchGoal(NamedTuple):
+    minute: float      # 경기 시작부터(연장은 90분 뒤로)
+    mine: bool
+    sp_id: int | None
+
+
+def match_goals(detail: dict, ouid: str) -> list[MatchGoal]:
+    """한 경기의 골 — 시간 순. 슛 기록(shootDetail)의 골만이라 자책골은 없다(goalTotal 과 다를 수 있다)."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return []
+    out = []
+    for mine, p in ((True, me), (False, opp or {})):
+        for sd in p.get("shootDetail") or []:
+            if sd.get("result") != GOAL_RESULT:
+                continue
+            period, sec = decode_goal_time(sd.get("goalTime"))
+            sp = sd.get("spId")
+            out.append(MatchGoal(PERIOD_START_MIN.get(period, 0) + sec / 60, mine, sp if isinstance(sp, int) else None))
+    out.sort(key=lambda g: g.minute)
+    return out
+
+
+def match_mvp(detail: dict, ouid: str) -> tuple[bool, int, float] | None:
+    """양쪽 선수 중 평점(status.spRating)이 가장 높은 한 명 — (내 쪽인가, spId, 평점). 평점이 하나도 없으면 None.
+    같은 평점이면 내 쪽 · 원문 앞 순서."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return None
+    best = None
+    for mine, p in ((True, me), (False, opp or {})):
+        for pl in p.get("player") or []:
+            r = _num(pl.get("status") or {}, "spRating")
+            sp = pl.get("spId")
+            if r > 0 and isinstance(sp, int) and (best is None or r > best[2]):
+                best = (mine, sp, r)
+    return best
+
+
 # ── 평점 추이(1.4.1 N9) ────────────────────────────────────────────────────
 @dataclass
 class WeekRating:

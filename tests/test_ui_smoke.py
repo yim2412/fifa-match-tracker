@@ -28,7 +28,7 @@ if os.path.isdir("C:/Windows/Fonts"):
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-from PyQt6.QtCore import QEvent, QThread, QTimer, Qt  # noqa: E402
+from PyQt6.QtCore import QEvent, QRectF, QThread, QTimer, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
@@ -794,7 +794,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 56, len(tables)   # 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 55, len(tables)   # 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -1040,8 +1040,10 @@ def test_opponents_page_uses_season_scope_not_range():
     tb = _win.tbl_opponents
     old = (_win.sp_from.value(), _win.sp_to.value())
     shown = []
-    orig_show, orig_info = _win._show_opponent_squad, app_main.QMessageBox.information
-    _win._show_opponent_squad = lambda nick, *a: shown.append(nick)
+    orig_show, orig_info = _win._show_match_detail, app_main.QMessageBox.information
+    # 65 M3 — 경기 상세 창(스쿼드 탭의 상대 칸)으로 연다 · 그 상대와의 가장 최근 경기
+    _win._show_match_detail = lambda d, tab="요약", side="opp": shown.append(
+        (core.match_sides(d, _OUID)[1].get("nickname"), tab, side))
     # 못 찾으면 뜨는 안내 창은 모달이라 offscreen 에서 영원히 멈춘다 — 기록만 남긴다
     app_main.QMessageBox.information = lambda *a, **k: shown.append("못 찾음 창")
     try:
@@ -1062,9 +1064,9 @@ def test_opponents_page_uses_season_scope_not_range():
         outside = next(iter(in_scope - in_range))
         row = next(r for r in range(tb.rowCount()) if tb.item(r, 0).text() == outside)
         _win._on_opponent_double_clicked(tb.item(row, 0))
-        assert shown == [outside], shown
+        assert shown == [(outside, "스쿼드", "opp")], shown
     finally:
-        _win._show_opponent_squad, app_main.QMessageBox.information = orig_show, orig_info
+        _win._show_match_detail, app_main.QMessageBox.information = orig_show, orig_info
         _win.sp_from.setValue(old[0])
         _win.sp_to.setValue(old[1])
         _win._render_all()
@@ -5056,17 +5058,18 @@ def test_match_rows_tinted_by_result():
     _win._render_matches(ms)
     want = {"승": T.WIN, "몰수승": T.WIN, "패": T.LOSE, "몰수패": T.LOSE}
     seen = set()
-    for r in range(_win.table.rowCount()):
-        res = _win.table.item(r, 1).text()
-        bg = _win.table.item(r, 0).background().color().name().lower()
-        tinted = _win._blend(T.PANEL, want[res], T.ROW_TINT).name().lower() if res in want else None
+    lst = _win.match_list
+    for r in range(lst.rowCount()):   # 65 M2 — 카드 바탕(옛 표 행 색과 같은 토큰) + 왼쪽 결과 띠
+        card = lst.row(r)
+        col = lst.card_delegate.colors(card)
+        tinted = T.blend(T.PANEL, want[card.result], T.ROW_TINT) if card.result in want else None
         if tinted:
-            assert bg == tinted, (res, bg, tinted)
+            assert col["bg"] == tinted, (card.result, col, tinted)
+            assert col["stripe"] == (T.GOOD_FILL if want[card.result] == T.WIN else T.BAD_FILL), col
         else:
-            assert bg not in (_win._blend(T.PANEL, T.WIN, T.ROW_TINT).name().lower(),
-                              _win._blend(T.PANEL, T.LOSE, T.ROW_TINT).name().lower()), (res, bg)
-        assert _win.table.item(r, 0).data(Qt.ItemDataRole.UserRole), "더블클릭용 경기 id 가 안 붙었다"
-        seen.add(res)
+            assert col["bg"] == T.PANEL and col["stripe"] not in (T.GOOD_FILL, T.BAD_FILL), (card.result, col)
+        assert card.match_id, "더블클릭용 경기 id 가 안 붙었다"
+        seen.add(card.result)
     assert seen == set(results), seen
     _win._render_matches(_win._matches)
 
@@ -10411,24 +10414,25 @@ def test_match_list_opponent_teamcolor_filter():
     keep = dict(_win._team_colors)
     try:
         _win._render_matches(_win._slice()[0])
-        t = _win.table
-        opps = [t.item(r, 3).text() for r in range(t.rowCount())]
+        t = _win.match_list
+        opps = [c.opponent for c in t.all_rows()]
         assert len(set(opps)) >= 2, "상대가 둘 이상이어야 이 테스트가 뜻이 있다"
         _win._team_colors[opps[0]] = "테스트컬러"
         _win._invalidate_teamcolor()
         cb = _win.cb_match_color
         assert cb.findText("테스트컬러") >= 0, "새 팀컬러가 경기 목록 콤보에 안 들어왔다"
         cb.setCurrentText("테스트컬러")
-        shown = [t.item(r, 3).text() for r in range(t.rowCount()) if not t.isRowHidden(r)]
-        assert shown and set(shown) == {opps[0]}, shown
+        shown = [c.opponent for c in t.rows()]
+        assert shown and set(shown) == {opps[0]} and len(shown) == opps.count(opps[0]), shown
         _win._match_filter_btns["승"].setChecked(False)   # 결과 필터와 겹쳐도 둘 다 지킨다
         _win._apply_match_filter()
-        assert all(t.isRowHidden(r) for r in range(t.rowCount())
-                   if "승" in t.item(r, 1).text() or t.item(r, 3).text() != opps[0])
+        assert t.rows() == [c for c in t.all_rows() if "승" not in c.result and c.opponent == opps[0]], t.rows()
         _win._match_filter_btns["승"].setChecked(True)
         cb.setCurrentText(_win.POSITION_COLOR_ALL)
-        assert not any(t.isRowHidden(r) for r in range(t.rowCount())), "전체로 돌렸는데 숨은 줄이 남았다"
+        assert len(t.rows()) == len(t.all_rows()) == len(opps), "전체로 돌렸는데 숨은 줄이 남았다"
+        cb.setCurrentText("테스트컬러")
         _win._render_matches(_win._slice()[0])                # 다시 그려도 고른 색이 남는다
+        assert cb.currentText() == "테스트컬러" and {c.opponent for c in t.rows()} == {opps[0]}, t.rows()
     finally:
         _win._team_colors.clear()
         _win._team_colors.update(keep)
@@ -10530,20 +10534,20 @@ def test_opponent_diff_column_hides_weak_rows_k13():
 
 def test_match_list_search_matches_nickname_or_color_k13():
     keep = dict(_win._team_colors)
-    t = _win.table
+    t = _win.match_list
     try:
         _win._render_matches(_win._slice()[0])
-        opps = [t.item(r, 3).text() for r in range(t.rowCount())]
+        opps = [c.opponent for c in t.all_rows()]
         a, b = opps[0], next(o for o in opps if o != opps[0])
         _win._team_colors[b] = "찾는팀컬러"
         _win.ed_match_color.setText(a[1:] or a)          # 닉네임 일부
-        shown = {t.item(r, 3).text() for r in range(t.rowCount()) if not t.isRowHidden(r)}
+        shown = {c.opponent for c in t.rows()}
         assert a in shown and b not in shown, shown
         _win.ed_match_color.setText("찾는팀")               # 팀컬러 글자 — 팀컬러를 찾던 줄은 남는다
-        shown = {t.item(r, 3).text() for r in range(t.rowCount()) if not t.isRowHidden(r)}
+        shown = {c.opponent for c in t.rows()}
         assert shown == {b}, shown
         _win.ed_match_color.setText("")
-        assert not any(t.isRowHidden(r) for r in range(t.rowCount()))
+        assert len(t.rows()) == len(t.all_rows())
     finally:
         _win.ed_match_color.setText("")
         _win._team_colors.clear()
@@ -10555,12 +10559,19 @@ def test_profile_action_opens_nexon_rank_page_k13():
     orig = app_main.QDesktopServices.openUrl
     app_main.QDesktopServices.openUrl = lambda url: opened.append(url.toString())   # toString 은 한글을 풀어 준다
     try:
-        for table, col in ((_win.table, 3), (_win.tbl_opponents, 0)):
+        lst = _win.match_list
+        for view in (lst, _win.tbl_opponents):
             _win._render_all()
-            assert table.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu and table.actions(), "오른쪽 클릭 메뉴가 없다"
-            table.setCurrentCell(0, col)
-            nick = table.item(0, col).text()
-            table.actions()[0].trigger()
+            _win._render_matches(_win._slice()[0])
+            assert view.contextMenuPolicy() == Qt.ContextMenuPolicy.ActionsContextMenu and view.actions(), "오른쪽 클릭 메뉴가 없다"
+            if view is lst:   # 65 M2 — 카드 목록은 고른 줄의 상대(둘째 줄 — 첫 줄과 다른 상대여야 '고른 줄' 을 잰다)
+                r = next(i for i in range(lst.rowCount()) if lst.row(i).opponent != lst.row(0).opponent)
+                lst.setCurrentIndex(lst.model().index(r, 0))
+                nick = lst.row(r).opponent
+            else:
+                view.setCurrentCell(0, 0)
+                nick = view.item(0, 0).text()
+            view.actions()[0].trigger()
             assert opened and opened[-1].endswith(nick) and "datacenter/rank" in opened[-1], opened
     finally:
         app_main.QDesktopServices.openUrl = orig
@@ -10593,10 +10604,9 @@ def test_teamcolor_batches_do_not_redraw_match_list():
 
 def test_match_list_opponent_columns_k3():
     """57 K3 — 상대 팀컬러·구단가치(지금 값)·맞대결(시즌 범위)·상대 점수(관문 + 내 계정 · 원본 14일은 정확값, 옛 경기는 구간)."""
+    import dataclasses
     keep_c, keep_v, keep_elo = dict(_win._team_colors), dict(_win._team_values), dict(_win._elo)
-    t = _win.table
-    cols = _win.MATCH_COLUMNS
-    sc = cols.index("상대 점수")
+    t = _win.match_list
     try:
         ms = _win._slice()[0]
         a = ms[0].opponent
@@ -10606,24 +10616,23 @@ def test_match_list_opponent_columns_k3():
         _win._team_colors[a] = "어떤팀"
         _win._team_values[a] = 1_234_000_000_000
         _win._invalidate_teamcolor()          # 팀컬러를 새로 읽었다 — 보이는 경기 목록이 다시 그려져야 한다
-        r0 = next(r for r in range(t.rowCount()) if t.item(r, 0).data(Qt.ItemDataRole.UserRole) == ms[0].match_id)
-        assert t.item(r0, cols.index("팀컬러")).text() == "어떤팀"
-        assert t.item(r0, cols.index("구단가치")).text() == "1.2조", t.item(r0, cols.index("구단가치")).text()   # 짧게(1280 폭)
+        c0 = next(c for c in t.all_rows() if c.match_id == ms[0].match_id)
+        assert c0.color == "어떤팀"
+        assert c0.value_text == "1.2조", c0.value_text   # 짧게
         s = {x.nickname: x for x in app_main.opponent_stats(_win._matches)}[a]
-        assert t.item(r0, cols.index("맞대결")).text() == app_main.wdl_text(s.win, s.draw, s.lose)
-        assert t.isColumnHidden(sc), "관문·내 계정 확인 없이 상대 점수 열이 보인다"
-        # 점수가 오면 열이 보이고 — 정확값 · 구간 · 모름
+        assert c0.h2h_text == app_main.wdl_text(s.win, s.draw, s.lose)
+        assert all(c.opp_score is None for c in t.all_rows()), "관문·내 계정 확인 없이 상대 점수 칸이 있다"
+        # 점수가 오면 칸이 생기고 — 정확값 · 구간 · 모름
         data = app_main.EloSeries(1, [], {}, opp_scores={ms[0].match_id: core.OppScore(4100.0, 7, "2026-01-03T10:00")},
                                   opp_bands={ms[1].match_id: 1000})
         _win._elo[_OUID] = data
         _win._render_matches(ms)
-        assert not t.isColumnHidden(sc)
-        by_id = {t.item(r, 0).data(Qt.ItemDataRole.UserRole): t.item(r, sc).text() for r in range(t.rowCount())}
+        by_id = {c.match_id: c.opp_score for c in t.all_rows()}
         assert by_id[ms[0].match_id] == "4,100 · 7위", by_id
         assert by_id[ms[1].match_id] == core.opp_rank_label(1000), by_id
         assert all(v == "-" for k, v in by_id.items() if k not in (ms[0].match_id, ms[1].match_id)), by_id
-        # 열 넷이 늘어도 1280×720 에서 안 잘린다(PyQt 5) — 픽스처 글자는 짧아 실데이터 길이로 채운다(실화면에서 머리글이
-        # 잘린 것을 이 테스트가 못 봤다: 긴 팀컬러 이름 · 억 단위 구단가치 · 네 자리 점수·순위)
+        # 65 M2 — 1280×720 · 작은 화면 · 기본 · 큰 창에서 카드 글자가 안 잘린다(PyQt 5 의 카드판). 픽스처 글자는 짧아
+        # 실데이터 길이로 채운다(긴 팀컬러 이름 · 억 단위 구단가치 · 네 자리 점수·순위 · 열두 글자 닉네임 · 승부차기 · 패드)
         for m in ms:
             _win._team_colors[m.opponent] = "맨체스터 유나이티드"
             _win._team_values[m.opponent] = 75_312_345_678
@@ -10631,34 +10640,35 @@ def test_match_list_opponent_columns_k3():
             m.match_id: core.OppScore(4321.0, 9876, "2026-01-03T10:00") for m in ms}, opp_bands={})
         _win._go_page("경기 목록")
         _win._render_matches(ms)
-        _check_elisions([t])
-        extra = [cols.index(n) for n in _win.MATCH_EXTRA]
+        long_cards = [dataclasses.replace(c, opponent="가나다라마바사아자차카타", shootout="승부차기 10:9", opp_pad=True,
+                                          division_key=1, emblem_key="x", h2h_text="1,234승 567무 1,089패",
+                                          stats=(("점유", "100%"), ("슛", "18/25"), ("패스", "100%"), ("평점", "10.00")))
+                      for c in t.all_rows()[:1]]
+        dlg = t.card_delegate
+        small = app_main.initial_window(1280, 688).min_size
         try:
-            # 1280 — 펼치면 글자가 최소까지 줄어 머리글이 잘렸다(실화면) → 접고 표시. 막지 않았으면 작아졌다는 것부터
-            _at_size(*app_main.MIN_WINDOW)
-            _app.processEvents()
-            for c in extra:
-                t.setColumnHidden(c, False)
-            t.refit()
-            assert t.font().pixelSize() < config.MATCH_EXTRA_MIN_PX, ("접지 않아도 들어간다 — 이 검사가 빈다", t.font().pixelSize())
-            _at_size(1600, 900)                 # 표 크기가 바뀌면 스스로 다시 잰다(eventFilter) — 직접 부르지 않는다
-            _app.processEvents()
-            _app.processEvents()
-            assert not any(t.isColumnHidden(c) for c in extra) and not _win.lb_match_extra.isVisibleTo(_win), "넓혔는데 안 펼쳤다"
-            _at_size(*app_main.MIN_WINDOW)
-            _app.processEvents()
-            _app.processEvents()
-            assert all(t.isColumnHidden(c) for c in extra) and _win.lb_match_extra.isVisibleTo(_win), "좁은데 안 접었다"
-            assert t.font().pixelSize() >= config.MATCH_EXTRA_MIN_PX, t.font().pixelSize()
+            for size in (app_main.MIN_WINDOW, small, (1600, 900), app_main.LARGE_WINDOW):
+                _win.setMinimumSize(*small)
+                _at_size(*size)
+                w = t.viewport().width()
+                assert w > 600, (size, w)
+                bad = [(c.opponent, dlg.overflow(c, w, t.font())) for c in t.all_rows() + long_cards
+                       if dlg.overflow(c, w, t.font())]
+                assert not bad, (size, w, bad[:3])
+            # 이 검사가 비지 않게 — 아주 좁으면 잘린다고 말해야 한다
+            assert dlg.overflow(long_cards[0], 420, t.font()), "좁은 폭에서도 넘침이 0 — overflow 가 아무것도 안 잰다"
         finally:
+            _win.setMinimumSize(*app_main.MIN_WINDOW)
             _at_size(1600, 900)
-        _app.processEvents()
-        _app.processEvents()
-        assert not any(t.isColumnHidden(c) for c in extra) and not _win.lb_match_extra.isVisibleTo(_win), "넓혔는데 안 펼쳤다"
+        t.viewport().grab()   # 대리자 그리기가 예외 없이 도는지(그림 경로)
+        h_on = dlg.row_height(t.font())
         _win.chk_match_extra.setChecked(False)
-        assert all(t.isColumnHidden(c) for c in extra) and not _win.lb_match_extra.isVisibleTo(_win), "끄기를 안 따랐다"
+        assert not t.show_extra and dlg.row_height(t.font()) < h_on, "끄기를 안 따랐다(셋째 줄이 그대로)"
+        assert not any(s.role in ("color", "value", "h2h", "oppscore")
+                       for s in dlg.layout(t.all_rows()[0], QRectF(0, 0, 900, 200), t.font()))
+        assert t.visualRect(t.model().index(0, 0)).height() == dlg.row_height(t.font()), "줄 높이를 다시 안 잡았다"
         _win.chk_match_extra.setChecked(True)
-        assert not any(t.isColumnHidden(c) for c in extra)
+        assert t.show_extra and t.visualRect(t.model().index(0, 0)).height() == h_on
     finally:
         _win._team_colors.clear()
         _win._team_colors.update(keep_c)
@@ -10699,15 +10709,14 @@ def test_opp_score_gate_and_my_account_k3():
         d = run({"my_ouid": _OUID, "key_fp": fp})
         assert d.opp_scores == {"x": core.OppScore(1.0, 1, "t")} and got_args[-1] is opp, d.opp_scores
         assert d.opp_bands == {}, d.opp_bands
-        # 결과가 오면 보이는 경기 목록이 다시 그려져 열이 나타난다
-        sc = _win.MATCH_COLUMNS.index("상대 점수")
+        # 결과가 오면 보이는 경기 목록이 다시 그려져 카드에 상대 점수 칸이 생긴다
         _win._go_page("경기 목록")
-        assert _win.table.isColumnHidden(sc)
+        assert all(c.opp_score is None for c in _win.match_list.all_rows())
         keep_elo, keep_req = dict(_win._elo), dict(_win._elo_req)
         try:
             _win._elo_req[_OUID] = d.req
             _win._on_elo_ready(_OUID, d)
-            assert not _win.table.isColumnHidden(sc), "상대 점수가 왔는데 경기 목록을 다시 안 그렸다"
+            assert all(c.opp_score is not None for c in _win.match_list.all_rows()), "상대 점수가 왔는데 경기 목록을 다시 안 그렸다"
         finally:
             _win._elo.clear()
             _win._elo.update(keep_elo)
@@ -10964,6 +10973,192 @@ def test_wdl_bars_replace_wdl_text_rows():
     got = [w.counts() for w in _win.findChildren(widgets.WdlBar)
            if w.parent() is not None and _win.box_clutch_first.indexOf(w.parent()) >= 0]
     assert got == [tuple(cs.first_scored), tuple(cs.first_conceded)], got
+
+
+# ── 65 조각 ② — 경기 목록 카드(M2) · 경기 상세 창(M3) ──────────────────────────
+def test_match_cards_sort_combo_u1():
+    """U1 — 정렬 콤보(최신순 · 점수 차 · 평점) · 고른 값은 settings.ini 에 · 거르기와 같이 돌아도 둘 다 지킨다."""
+    lst, cb = _win.match_list, _win.cb_match_sort
+    ms = _win._slice()[0]
+    try:
+        _win._render_matches(ms)
+        assert [c.match_id for c in lst.rows()] == [m.match_id for m in ms], "최신순(넥슨 순서)이 아니다"
+        cb.setCurrentIndex(cb.findData("diff"))
+        diffs = [c.goal_diff for c in lst.rows()]
+        assert diffs == sorted(diffs, reverse=True) and len(set(diffs)) > 1, diffs   # 값이 섞여야 정렬을 잰다
+        assert str(_win._settings().value("view/match_sort")) == "diff", "고른 정렬을 안 남겼다"
+        cb.setCurrentIndex(cb.findData("rating"))
+        ratings = [c.rating for c in lst.rows()]
+        assert ratings == sorted(ratings, reverse=True) and len(set(ratings)) > 1, ratings
+        _win._match_filter_btns["승"].setChecked(False)
+        _win._apply_match_filter()
+        rows = lst.rows()
+        assert rows and all("승" not in c.result for c in rows) and \
+            [c.rating for c in rows] == sorted((c.rating for c in rows), reverse=True), rows
+        _win._render_matches(ms)          # 다시 그려도 정렬·거르기가 남는다
+        assert all("승" not in c.result for c in lst.rows()) and cb.currentData() == "rating"
+    finally:
+        _win._match_filter_btns["승"].setChecked(True)
+        cb.setCurrentIndex(0)
+        _win._render_matches(_win._slice()[0])
+
+
+def test_match_card_pad_icon_only_for_gamepad_u4():
+    """U4 — 상대 입력 장치 아이콘은 패드일 때만(원문 matchDetail.controller). 키보드·없음이면 자리도 없다."""
+    import dataclasses
+    import copy
+    d = copy.deepcopy(_DETAILS[0])
+    opp = core.match_sides(d, _OUID)[1]
+    for ctl, want in (("gamepad", True), ("keyboard", False), (None, False)):
+        md = opp.setdefault("matchDetail", {})
+        md.pop("controller", None)
+        if ctl:
+            md["controller"] = ctl
+        m = app_main.parse_match(d, _OUID)
+        assert m.opp_pad is want, (ctl, m.opp_controller)
+        card = _win._match_card(m, None, {})
+        segs = _win.match_list.card_delegate.layout(card, QRectF(0, 0, 1000, 120), _win.match_list.font())
+        assert ("pad" in {s.role for s in segs}) is want, (ctl, [s.role for s in segs])
+    # 툴팁 — 조각마다 옛 표 머리 툴팁과 같은 글
+    card = dataclasses.replace(_win._match_card(app_main.parse_match(d, _OUID), None, {}), opp_pad=True,
+                               value_text="1.2조", opp_score="4,100 · 7위")
+    dlg = _win.match_list.card_delegate
+    segs = {s.role: s for s in dlg.layout(card, QRectF(0, 0, 1000, 120), _win.match_list.font())}
+    f = _win.match_list.font()
+    for role, want in (("value", _win.MATCH_COLUMN_HELP["구단가치"]), ("oppscore", _win.MATCH_COLUMN_HELP["상대 점수"]),
+                       ("pad", _win.MATCH_CARD_TIPS["pad"]), ("h2h", _win.MATCH_COLUMN_HELP["맞대결"])):
+        got = dlg.tip_at(card, QRectF(0, 0, 1000, 120), f, segs[role].rect.center().toPoint())
+        assert got == want, (role, got)
+
+
+def test_match_card_icons_follow_keys_after_sort():
+    """그림은 (종류, 키) 에 붙는다 — 정렬·거르기를 바꿔도 제 카드에 남고, 이미 받은 그림은 다시 받지 않는다."""
+    lst = _win.match_list
+    built = []
+    real = app_main.IconLoader
+
+    class FakeLoader(real):
+        def __init__(self, entries, cache_dir):
+            super().__init__(entries, cache_dir)
+            built.append(entries)
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "b.png"
+    pm = app_main.QPixmap(8, 8)
+    pm.fill(app_main.QColor("red"))
+    pm.save(str(tmp), "PNG")
+    keep_meta = _win._division_meta
+    try:
+        app_main.IconLoader = FakeLoader
+        _win._render_matches(_win._slice()[0])
+        keys = {c.division_key for c in lst.all_rows()}
+        assert len(keys - {None}) >= 2, ("등급 배지 키가 둘 이상이어야 뜻이 있다", keys)
+        assert built and {k for kind, k, _u in built[-1] if kind == "division"} == keys - {None}, built[-1:]
+        a = sorted(keys - {None}, key=repr)[0]
+        _win._apply_list_icon(lst, "division", a, str(tmp))
+        _win.cb_match_sort.setCurrentIndex(_win.cb_match_sort.findData("rating"))
+        for c in lst.rows():
+            assert (lst.icon("division", c.division_key) is not None) is (c.division_key == a), c
+        n = len(built)
+        _win._render_matches(_win._slice()[0])
+        assert all(k != a for kind, k, _u in (built[-1] if len(built) > n else [])), "이미 붙은 그림을 다시 받는다"
+    finally:
+        app_main.IconLoader = real
+        _win._division_meta = keep_meta
+        _win.cb_match_sort.setCurrentIndex(0)
+        _win._render_matches(_win._slice()[0])
+
+
+def test_match_card_double_click_opens_detail_on_opponent_squad():
+    """M2 → M3 — 카드 더블클릭은 그 경기 상세 창을 스쿼드 탭의 상대 칸으로(예전 상대 스쿼드 창과 같은 첫 화면)."""
+    got = []
+    keep = _win._show_match_detail
+    _win._show_match_detail = lambda d, tab="요약", side="opp": got.append((d.get("matchId"), tab, side))
+    try:
+        _win._render_matches(_win._slice()[0])
+        lst = _win.match_list
+        r = min(2, lst.rowCount() - 1)
+        lst.doubleClicked.emit(lst.model().index(r, 0))
+        assert got == [(lst.row(r).match_id, "스쿼드", "opp")], got
+    finally:
+        _win._show_match_detail = keep
+
+
+def test_match_detail_dialog_m3():
+    """M3 — 머리 · 탭 넷 · 축구장 둘을 만들 때 같이(로더 정리 목록에 둘 다) · 요약(경기 정보 줄 = match_versus) ·
+    슛 탭 내/상대 전환 · 상대 전적 탭(지금 범위 · 줄은 창을 안 연다) · 닫으면 로더 전부 멈춤. exec 는 모달이라 직접 만든다."""
+    d = next(x for x in _DETAILS if app_main.parse_match(x, _OUID) and core.match_goals(x, _OUID))
+    m = app_main.parse_match(d, _OUID)
+    dlg = _win._make_match_detail(d, tab="스쿼드", side="opp")
+    try:
+        assert [dlg.tabs.tabText(i) for i in range(dlg.tabs.count())] == list(app_main.MatchDetailDialog.TABS)
+        assert dlg.tabs.currentIndex() == 1 and dlg.side() == "opp", (dlg.tabs.currentIndex(), dlg.side())
+        assert set(dlg.pitches) == {"mine", "opp"}, "축구장 둘을 창을 만들 때 같이 만들어야 한다"
+        mine_ids = {p["spId"] for p in core.match_sides(d, _OUID)[0]["player"] if p.get("spPosition") != core.SUB_POSITION}
+        assert set(dlg.pitches["mine"].sp_ids()) == mine_ids
+        assert len(dlg.loaders) >= 4, dlg.loaders   # 얼굴 · 시즌 아이콘 × 둘(+ 카드 정보 — 관문)
+        dlg.side_buttons["mine"].click()
+        assert dlg.side() == "mine"
+        # 요약 — 경기 정보 줄은 계산 함수 그대로 · 골 글 · MVP
+        lines = core.match_versus(d, _OUID)
+        assert [b.name.text() for b in dlg.versus] == [ln.name for ln in lines] and len(lines) >= 15, len(lines)
+        goals = core.match_goals(d, _OUID)
+        assert dlg.timeline.goals == [(g.minute, g.mine) for g in goals]
+        assert dlg.goal_text.text().count("'") == len(goals), dlg.goal_text.text()
+        assert dlg.mvp.text().startswith("MVP") and "평점" in dlg.mvp.text()
+        # 슛 탭 — 내 슛 / 상대 슛
+        mine, opp = (core.shot_map([d], _OUID, mine=s).total for s in (True, False))
+        assert len(dlg.shot_map._shots) == mine and mine != opp, (mine, opp)   # 둘이 달라야 전환을 잰다
+        dlg.cb_shot_side.setCurrentIndex(1)
+        assert len(dlg.shot_map._shots) == opp and f"슛 {opp}" in dlg.shot_note.text()
+        # 상대 전적 탭 — 지금 범위의 그 상대 경기 · 범위 글
+        want = [x.match_id for x in _win._matches if x.opponent == m.opponent]
+        assert dlg.h2h_rows == want and m.match_id in want, (dlg.h2h_rows, want)
+        assert _win._scope_text() in dlg.h2h_note.text()
+        head = dlg.findChild(app_main.QLabel, "detailH2h")
+        assert head is not None and "이 시즌 맞대결" in head.text() and "판" in head.text(), head
+    finally:
+        dlg.deleteLater()
+    # 닫으면 로더 전부 멈춤 — 막지 않았으면 로더가 남는다는 것부터(목록이 비면 이 검사가 빈다)
+    cancelled = []
+    dlg2 = _win._make_match_detail(d)
+    assert dlg2.loaders and dlg2.tabs.currentIndex() == 0
+    for ld in dlg2.loaders:
+        ld.cancel = lambda ld=ld: cancelled.append(ld)
+    try:
+        keep = _win._make_match_detail
+        _win._make_match_detail = lambda *a, **k: dlg2
+        try:
+            _win._show_match_detail(d)
+        except ModalCalled:
+            pass   # 스모크는 모달을 막는다 — 그래도 finally 가 정리해야 한다
+        finally:
+            _win._make_match_detail = keep
+        assert len(cancelled) == len(dlg2.loaders), (len(cancelled), len(dlg2.loaders))
+    finally:
+        dlg2.deleteLater()
+
+
+def test_match_detail_head_counts_only_that_season():
+    """M3 머리 "이 시즌 맞대결" — 그 경기가 든 시즌 안 그 상대만. 시즌표가 없으면 저장된 전체(범위 이름도 같이)."""
+    keep = (_win._rank_seasons, _win._matches_all)
+    old = sn.Season(no=89, name="시즌 8", start=_date(2025, 10, 1), end=_date(2025, 12, 1))
+    new = sn.Season(no=90, name="시즌 9", start=_date(2025, 12, 1), end=_date(2026, 2, 1))
+    base = _MATCHES[0]
+
+    def g(mid, day, res, opp="같은상대"):
+        return models.MatchSummary(**{**base.__dict__, "match_id": mid, "result": res, "opponent": opp,
+                                      "match_date": datetime(2025, *day, 12)})
+    this = g("a", (12, 10), "승")
+    pool = [this, g("b", (12, 20), "패"), g("c", (11, 10), "승"), g("d", (12, 15), "승", "다른상대")]
+    try:
+        _win._matches_all = pool
+        _win._rank_seasons = [new, old]
+        text = _win._season_h2h_text(this)
+        # 시즌을 안 갈랐다면 지난 시즌 경기까지 3판 — 2판이어야 한다
+        assert text == f"이 시즌 맞대결 2판 · {app_main.wdl_text(1, 0, 1)} (2025 시즌 9)", text
+        _win._rank_seasons = []
+        assert _win._season_h2h_text(this) == f"이 시즌 맞대결 3판 · {app_main.wdl_text(2, 0, 1)} (저장된 전체)"
+    finally:
+        _win._rank_seasons, _win._matches_all = keep
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

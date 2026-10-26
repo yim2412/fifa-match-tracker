@@ -45,7 +45,6 @@ WEAK_FILES = ("models.py", "stats.py", "analysis.py", "widgets.py", "dashboard.p
               "squad_timeline.py", "check_api.py")
 WEAK_ALLOW = {
     ("models.py", "is_weak", "min_n"): "판정 자신",
-    ("app_main.py", "_fit_match_extra", "MATCH_EXTRA_MIN_PX"): "글꼴 크기(px) — 표본이 아니다(57 K3 상대 정보 열 접기)",
     ("analysis.py", "_contrast", "MIN_BASE"): "선제골 *비율* 표본(경기 수) — 승률 아님",
     ("analysis.py", "_contrast", "MIN_FLOW"): "선제골 *비율* 표본(경기 수) — 승률 아님",
     ("analysis.py", "_contrast", "MIN_COND"): "선제골 *비율* 표본(경기 수) — 승률 아님",

@@ -140,6 +140,45 @@ def test_versus_profile():
     assert not st.VersusLine("a", "%", None, 0, 90).gap and not st.VersusLine("a", "회", True, 0, 0).gap
 
 
+def _detail_game(mid, opp_nick="가", me=None, opp=None):
+    return {"matchId": mid, "matchInfo": [dict({"ouid": "me", "nickname": "나"}, **(me or {})),
+                                          dict({"ouid": "op", "nickname": opp_nick}, **(opp or {}))]}
+
+
+def test_match_detail_stats():
+    # 65 M3 경기 상세 창 — 손으로 지은 한 경기
+    me = {"shoot": {"shootTotal": 5, "effectiveShootTotal": 3},
+          "pass": {"passTry": 100, "passSuccess": 80},
+          "matchDetail": {"dribble": 12},
+          "shootDetail": [{"result": 3, "goalTime": (1 << 24) + 600, "spId": 11},    # 후반 10분 = 55분
+                          {"result": 1, "goalTime": 30, "spId": 11},                 # 골 아님
+                          {"result": 3, "goalTime": (2 << 24) + 120, "spId": 12}],   # 연장 전반 2분 = 92분
+          "player": [{"spId": 11, "status": {"spRating": 8.0}}, {"spId": 12, "status": {"spRating": 0}}]}
+    opp = {"shoot": {"shootTotal": 4, "effectiveShootTotal": 1},
+           "pass": {"passTry": 50, "passSuccess": 40},
+           "shootDetail": [{"result": 3, "goalTime": 750, "spId": 21}],                # 전반 12.5분
+           "player": [{"spId": 21, "status": {"spRating": 8.0}}, {"spId": 22, "status": {"spRating": 7.5}}]}
+    d = _detail_game("m", me=me, opp=opp)
+    got = {ln.name: (ln.mine, ln.opp) for ln in st.match_versus(d, "me")}
+    # 양쪽 다 없는 줄(파울·점유율 …)은 빠진다 · 한쪽만 있으면(드리블) 다른 쪽 0 · 성공률은 % · 순서는 표 그대로
+    assert got == {"슈팅": (5, 4), "유효 슈팅": (3, 1), "패스 시도": (100, 50), "패스 성공률": (80.0, 80.0),
+                   "드리블": (12, 0)}, got
+    assert list(got) == [r[0] for r in st.MATCH_VERSUS_ROWS if r[0] in got]
+    assert st.match_versus(d, "없음") == []
+    goals = st.match_goals(d, "me")
+    assert [(g.minute, g.mine, g.sp_id) for g in goals] == [(12.5, False, 21), (55.0, True, 11), (92.0, True, 12)], goals
+    # MVP — 같은 평점이면 내 쪽 · 평점 0 은 안 센다 · 상대가 더 높으면 상대
+    assert st.match_mvp(d, "me") == (True, 11, 8.0)
+    opp["player"][1]["status"]["spRating"] = 9.1
+    assert st.match_mvp(d, "me") == (False, 22, 9.1)
+    assert st.match_mvp(_detail_game("z"), "me") is None
+    # 그 상대와의 가장 최근 경기 — 목록은 최신순 · 내가 없는 경기는 건너뛴다
+    new, old, other = _detail_game("new"), _detail_game("old"), _detail_game("other", "나라")
+    stray = {"matchId": "x", "matchInfo": [{"ouid": "a", "nickname": "가"}, {"ouid": "b", "nickname": "가"}]}
+    assert st.latest_match_with([stray, other, new, old], "me", "가") is new
+    assert st.latest_match_with([new], "me", "다") is None
+
+
 def test_result_breakdown():
     ouid, _, details = _load()
     rb = st.result_breakdown(details, ouid)
