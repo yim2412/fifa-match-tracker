@@ -82,7 +82,7 @@ from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RowBorderDelegate, ShotMapWidget,
-    SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
+    Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
     sample_text, tag_qss, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
@@ -1664,23 +1664,51 @@ class HabitsWorker(Worker):
             self.streak_ready.emit((self._req, self._key, out))
 
 
-def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
+def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료일(반개구간이라 그날 0시부터) ·
-    시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일."""
+    시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
+    → (시작, 시즌을 아는가). 마지막 대체 길이면 False — 화면은 그 70일을 "시즌" 이라 부르지 않는다(66 R2)."""
     ended = [s.end for s in rank_seasons if s.end <= now.date()]
     if ended:
-        return datetime.combine(max(ended), datetime.min.time())
+        return datetime.combine(max(ended), datetime.min.time()), True
     if snap_start:
         try:
-            return datetime.fromisoformat(snap_start)
+            return datetime.fromisoformat(snap_start), True
         except ValueError:
             pass
-    return now - timedelta(days=config.ELO_FALLBACK_DAYS)
+    return now - timedelta(days=config.ELO_FALLBACK_DAYS), False
+
+
+def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
+    return season_span(rank_seasons, snap_start, now)[0]
+
+
+def season_title(start: datetime, known: bool) -> str:
+    """그래프 제목 꼬리 — "지금 시즌 (MM/DD~)" · 시즌을 모르면 "최근 70일"(66 R2)."""
+    return f"지금 시즌 ({start:%m/%d}~)" if known else f"최근 {config.ELO_FALLBACK_DAYS}일"
+
+
+BAND_NOTE = "띠는 검색·수집 때 적은 값 사이입니다 — 실제 하루 폭보다 좁을 수 있습니다"
+
+
+def day_band(lo: float, hi: float, n: int) -> tuple[float, float] | None:
+    """그날 적은 점들의 최저~최고(66 U3) — 점이 둘 이상이고 폭이 있는 날만(점 하나면 폭 0 띠가 선과 겹친다)."""
+    return (lo, hi) if n >= 2 and hi > lo else None
+
+
+def won_text(v: int) -> str:
+    """구단가치 큰 글자 — "134억 5,440만"(만 아래는 버림 · 1억 밑이면 "5,440만")."""
+    eok, man = divmod(int(v) // 10 ** 4, 10 ** 4)
+    if not eok:
+        return f"{man:,}만"
+    return f"{eok:,}억" + (f" {man:,}만" if man else "")
 
 
 def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
-    """시작 이후 줄을 하루 한 점으로 — 같은 날 둘이면 늦은 것(검색·스냅숏 출처 무관). 오래된 것부터."""
+    """시작 이후 줄을 하루 한 점으로 — 같은 날 둘이면 늦은 것(검색·스냅숏 출처 무관). 오래된 것부터.
+    점마다 그날 적은 값들의 lo·hi·n 도 싣는다(66 U3 띠 — 선은 그대로 그날 마지막 값)."""
     by_day: dict = {}
+    vals: dict = {}
     for r in rows:
         try:
             t = datetime.fromisoformat(r["taken_at"])
@@ -1688,15 +1716,18 @@ def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
             continue
         if t < start or r.get("elo") is None:
             continue
+        vals.setdefault(t.date(), []).append(r["elo"])
         cur = by_day.get(t.date())
         if cur is None or t >= cur["at"]:
             by_day[t.date()] = {**r, "at": t}
-    return [by_day[d] for d in sorted(by_day)]
+    return [{**by_day[d], "lo": min(vals[d]), "hi": max(vals[d]), "n": len(vals[d])} for d in sorted(by_day)]
 
 
-def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int]]:
-    """55 V1 — 시작 이후 elo_history.team_value 를 하루 한 점(그날 마지막 값)으로. 값이 빈 줄(옛 버전·못 읽음)은 건너뛴다."""
+def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int, int, int, int]]:
+    """55 V1 — 시작 이후 elo_history.team_value 를 하루 한 점(그날 마지막 값)으로. 값이 빈 줄(옛 버전·못 읽음)은 건너뛴다.
+    → (날, 마지막, 그날 최저, 최고, 점 수) — 뒤 셋은 66 U3 띠."""
     by_day: dict = {}
+    vals: dict = {}
     for r in rows:
         v = r.get("team_value")
         try:
@@ -1705,10 +1736,11 @@ def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int]
             continue
         if t < start or not v:
             continue
+        vals.setdefault(t.date(), []).append(int(v))
         cur = by_day.get(t.date())
         if cur is None or t >= cur[0]:
             by_day[t.date()] = (t, int(v))
-    return [(d, by_day[d][1]) for d in sorted(by_day)]
+    return [(d, by_day[d][1], min(vals[d]), max(vals[d]), len(vals[d])) for d in sorted(by_day)]
 
 
 def _step_decimals(step: float) -> int:
@@ -3941,6 +3973,8 @@ class MainWindow(QMainWindow):
         self.btn_elo_track = QPushButton("")
         self.btn_elo_track.setStyleSheet(T.OUTLINE_BUTTON_QSS)
         self.btn_elo_track.clicked.connect(self._on_elo_track_clicked)
+        self.seg_elo = self._day_hour_switch()
+        top.addWidget(self.seg_elo, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(self.btn_elo_track)
         ev.addLayout(top)
         self.lb_elo_note = QLabel("")
@@ -3949,6 +3983,9 @@ class MainWindow(QMainWindow):
         ev.addWidget(self.lb_elo_note)
         self.elo_chart = charts.AreaTrendChart()
         ev.addWidget(self.elo_chart)
+        self.lb_elo_band = self._note_label()
+        self.lb_elo_band.setText(BAND_NOTE)
+        ev.addWidget(self.lb_elo_band)
         self.zoom_elo = ZoomBar()   # 55 G1
         self.zoom_elo.range_changed.connect(lambda _a, _b: self._draw_elo_chart())
         ev.addWidget(self.zoom_elo)
@@ -3967,15 +4004,29 @@ class MainWindow(QMainWindow):
         self.gb_team_value = QGroupBox("구단가치 — 지금 시즌")
         tv = QVBoxLayout(self.gb_team_value)
         self.lb_team_value_note = self._note_label()
-        tv.addWidget(self.lb_team_value_note)
+        self.seg_team_value = self._day_hour_switch()
+        row = QHBoxLayout()
+        row.addWidget(self.lb_team_value_note, 1)
+        row.addWidget(self.seg_team_value, 0, Qt.AlignmentFlag.AlignTop)
+        tv.addLayout(row)
         self.team_value_chart = charts.AreaTrendChart()
         tv.addWidget(self.team_value_chart)
+        self.lb_team_value_band = self._note_label()
+        self.lb_team_value_band.setText(BAND_NOTE)
+        tv.addWidget(self.lb_team_value_band)
         self.zoom_team_value = ZoomBar()
         self.zoom_team_value.range_changed.connect(lambda _a, _b: self._draw_team_value_chart())
         tv.addWidget(self.zoom_team_value)
         v.addWidget(self.gb_team_value)
         v.addStretch(1)
         return w
+
+    @staticmethod
+    def _day_hour_switch() -> Segmented:
+        """[일별 | 시간별] — 시간별은 자리만(66 E6 · 10-25 사용자 "추천대로"): 하루 몇 점뿐이라 시간별이라 부르면 거짓."""
+        seg = Segmented(["일별", "시간별"])
+        seg.set_option_enabled(1, False, "시간별 기록은 아직 모으지 않습니다")
+        return seg
 
     def _build_calendar_tab(self) -> QWidget:
         """승률 그래프 [일별 기록] 탭(55 D1) — 한 달 달력. 저장된 전체(시즌 필터 무시) · 그리기는 _render_calendar."""
@@ -12121,8 +12172,9 @@ class MainWindow(QMainWindow):
         """들고 있는 self._elo[self._ouid] 로만 그린다(읽기 없음 — _render_trend 가 검색·시즌 전환마다 부른다)."""
         data = self._elo.get(self._ouid) if self._ouid else None
         pts = self._elo_points()
-        start = elo_season_start(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
-        self.gb_elo.setTitle(f"ELO(랭킹 점수) — 지금 시즌 ({start:%m/%d}~)")
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        self.gb_elo.setTitle(f"ELO(랭킹 점수) — {season_title(start, known)}")
+        self.gb_team_value.setTitle(f"구단가치 — {season_title(start, known)}")
         self.lb_elo_tier.setText(rank_tier_change_text(pts))
         self.lb_elo_tier.setVisible(bool(pts))
         self.lb_elo_note.setText(self._elo_note(data, pts))
@@ -12145,9 +12197,11 @@ class MainWindow(QMainWindow):
         if len(pts) < 2:
             self.elo_chart.set_data([])
             self.elo_chart.setVisible(False)
+            self.lb_elo_band.setVisible(False)
             return
         self.elo_chart.setVisible(True)
-        vals = [p["elo"] for p in pts]
+        band = [day_band(p["lo"], p["hi"], p["n"]) for p in pts]
+        vals = [p["elo"] for p in pts] + [v for b in band if b for v in b]   # 축이 띠까지 덮게(M6)
         refs = []
         for i, rank in enumerate(config.ELO_CUT_LINES):
             series = []   # 창 앞 값도 넘긴다 — 계단선이 첫 점 날짜에 유효했던 컷부터 긋는다
@@ -12158,11 +12212,15 @@ class MainWindow(QMainWindow):
                     continue
             if series:
                 refs.append((f"{rank:,}위", series, T.CHART_NEUTRAL if i else T.CHART_DOWN))
+        ranks = [p.get("rank") or None for p in pts]
+        legend = [("점수", T.CHART_LINE, False)] + ([("순위", T.CHART_RANK, True)] if any(ranks) else [])
         self.elo_chart.set_data(
             [(p["at"].strftime("%m/%d"),
               p["elo"], None) for p in pts],
             axis=charts.Axis.fit(vals), avg=False, x_dates=[p["at"].date() for p in pts], ref_series=refs,
-            ranks=[p.get("rank") or None for p in pts])   # 57 K5 — 순위 점선(오른쪽 축) · 1만 위 밖인 날은 끊긴다
+            ranks=ranks,   # 57 K5 — 순위 점선(오른쪽 축) · 1만 위 밖인 날은 끊긴다
+            band=band, legend=legend, headline=f"{self._elo_points()[-1]['elo']:,.2f}")
+        self.lb_elo_band.setVisible(any(band))
         self.elo_chart.setToolTip(self._elo_cut_tip(data))
 
     def _render_team_value(self, data, start: datetime) -> None:
@@ -12176,7 +12234,7 @@ class MainWindow(QMainWindow):
                     else "홈페이지 데이터가 꺼져 있어 구단가치를 받지 않습니다 — [정보·설정] · ") + note
         self.lb_team_value_note.setText(note)
         self.gb_team_value.setVisible(bool(self._ouid))
-        self.zoom_team_value.set_labels([f"{d:%m/%d}" for d, _ in self._tv_points], self._ouid)
+        self.zoom_team_value.set_labels([f"{t[0]:%m/%d}" for t in self._tv_points], self._ouid)
         self.zoom_team_value.setVisible(n >= 3)
         self._draw_team_value_chart()
 
@@ -12186,12 +12244,16 @@ class MainWindow(QMainWindow):
         self.team_value_chart.setVisible(len(pts) >= 2)
         if len(pts) < 2:
             self.team_value_chart.set_data([])
+            self.lb_team_value_band.setVisible(False)
             return
-        vals = [v / 1e8 for _, v in pts]   # 억 단위 — 축 글자가 원 단위면 13자리
-        axis = charts.Axis.fit(vals, "{:,.0f}억", "구단가치")
+        vals = [t[1] / 1e8 for t in pts]   # 억 단위 — 축 글자가 원 단위면 13자리
+        band = [day_band(lo / 1e8, hi / 1e8, n) for _d, _v, lo, hi, n in pts]
+        axis = charts.Axis.fit(vals + [v for b in band if b for v in b], "{:,.0f}억", "구단가치")   # 띠까지(M6)
         axis = replace(axis, fmt=f"{{:,.{_step_decimals(axis.ticks[1] - axis.ticks[0])}f}}억")
-        self.team_value_chart.set_data([(f"{d:%m/%d}", x, None) for (d, _), x in zip(pts, vals)],
-                                       axis=axis, avg=False, x_dates=[d for d, _ in pts])
+        self.team_value_chart.set_data([(f"{t[0]:%m/%d}", x, None) for t, x in zip(pts, vals)],
+                                       axis=axis, avg=False, x_dates=[t[0] for t in pts], band=band,
+                                       color=T.CHART_VALUE, headline=won_text(self._tv_points[-1][1]))
+        self.lb_team_value_band.setVisible(any(band))
 
     @staticmethod
     def _elo_cut_tip(data) -> str:

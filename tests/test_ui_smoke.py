@@ -1147,7 +1147,6 @@ def test_charts_draw_empty_and_single():
         (charts.AreaTrendChart(), [[], [("01/01", 50.0, 3)]]),
         (charts.DonutChart(), [[], [("승", 1, T.CHART_UP)]]),
         (charts.GroupedBarChart(), [([], []), (["0–15"], [("득점", [0], T.CHART_UP)])]),
-        (charts.RadarChart(), [[], [("a", 0.5, ""), ("b", 0.9, ""), ("c", 0.1, "")]]),
         (charts.ResultDots(), [[], [("승", "")]]),
         (charts.HBarList(), [[], [("오전", None, "경기 없음", "")]]),
     ]
@@ -1290,11 +1289,14 @@ def test_area_chart_options_each_change_the_drawing():
     assert (c.marks["ma_points"], c.marks["ma_segments"]) == (3, 2), c.marks
     assert c._hits[3][1] == "09/04 · 승률 48.0% · 7일 평균 58.5% (20경기)", c._hits[3][1]
     assert c._hits[1][1] == "09/02 · 승률 55.0% (12경기)", c._hits[1][1]
-    # counts — 경기 있는 점마다 막대, 가장 큰 값만 숫자 · 띠만큼 그래프가 위로 줄어 최소 높이가 는다
+    # counts — 경기 있는 점마다 막대, 가장 큰 값만 숫자 · 66 P6: 선 뒤 막대라 그래프가 줄지 않는다(아래 띠 없음)
     plain = _drawn(charts.AreaTrendChart())
     c = _drawn(charts.AreaTrendChart(), pts=[("a", 40.0, 3), ("b", 50.0, 0), ("c", 60.0, 5)], counts=True)
     assert c.marks["count_bars"] == 2 and c.marks["count_peak"] == (2, "5경기"), c.marks
-    assert c.minimumHeight() > plain.minimumHeight()
+    assert c.minimumHeight() == plain.minimumHeight()
+    assert c._hits[0][0].bottom() == plain._hits[0][0].bottom(), "막대 띠만큼 그래프가 위로 줄었다"
+    top, bottom = c._hits[0][0].top(), c._hits[0][0].bottom()
+    assert min(c._count_tops.values()) >= bottom - (bottom - top) * c.COUNT_FRAC - 0.01, c._count_tops
     # x_dates — 날짜 간격(하루 · 9일)이 순번 간격으로 찌그러지지 않는다
     days = [_d(2026, 9, 1), _d(2026, 9, 2), _d(2026, 9, 11)]
     pts3 = [("09/01", 40.0, 5), ("09/02", 50.0, 5), ("09/11", 60.0, 5)]
@@ -11029,6 +11031,143 @@ def test_elo_zoom_and_team_value_chart():
         assert len(set(ticks)) == len(ticks), ticks
         _win._on_elo_ready(_OUID, _elo_data(_elo_rows([("2026-09-12T10:00:00", 3000.0, 500, "search")])))
         assert not tv.isVisibleTo(_win) and "모자랍니다" in _win.lb_team_value_note.text()
+    finally:
+        _win._rank_seasons, _win._elo, config.WEB_DATA = keep
+        _win._render_elo()
+        _win._go_page("대시보드")
+
+
+# ── 66단계 조각 ① — 그래프 공통 꼴(G0) · 점수(G2) · 구단가치(G3) ─────────────────────────
+def _chart_color_failures(p: dict) -> list:
+    """M17 — 새 그래프 토큰은 카드 위 그래픽 대비 3.0 · 같은 그래프에 같이 그려지는 선끼리 색약 6 이상."""
+    bad = []
+    line = p["ACCENT_FILL"]   # T.CHART_LINE
+    for name, c in (("CHART_LINE", line), ("CHART_RANK", p["CHART_RANK"]), ("CHART_VALUE", p["CHART_VALUE"])):
+        if T.contrast(c, p["PANEL"]) < 3.0:
+            bad.append(("contrast", name, round(T.contrast(c, p["PANEL"]), 2)))
+    score = {"line": line, "rank": p["CHART_RANK"], "cut200": p["CHART_DOWN"], "cut1000": p["CHART_NEUTRAL"]}
+    keys = list(score)
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            d = T.cvd_delta(score[a], score[b])
+            if d < 6:
+                bad.append(("cvd", a, b, round(d, 1)))
+    return bad
+
+
+def test_chart_tokens_contrast_and_cvd_66():
+    bad = {m: _chart_color_failures(p) for m, p in T._PALETTES.items()}
+    assert not any(bad.values()), bad
+    assert (T.CHART_LINE, T.CHART_RANK, T.CHART_VALUE) == (T._P["ACCENT_FILL"], T._P["CHART_RANK"], T._P["CHART_VALUE"])
+    # 검사가 무언가를 재는지 — 밝은 쪽 순위선을 옛 주황(CHART_CATS[1] · 2.25)으로, 색약 짝이 붙는 색(#b45309 · 컷 5.9)으로
+    light = T._PALETTES["light"]
+    assert ("contrast", "CHART_RANK", 2.25) in _chart_color_failures(dict(light, CHART_RANK=light["CHART_CATS"][1]))
+    assert ("cvd", "rank", "cut200", 5.9) in _chart_color_failures(dict(light, CHART_RANK="#b45309"))
+
+
+def test_elo_and_team_value_daily_band_material():
+    rows = _elo_rows([("2026-09-11T09:00:00", 3100.0, 4000, "snapshot"),
+                      ("2026-09-11T21:00:00", 3150.0, 3900, "search"),
+                      ("2026-09-11T15:00:00", 3080.0, 3950, "search"),     # 늦지 않지만 가장 낮다 — 띠 아래 끝
+                      ("2026-09-13T08:00:00", 3200.0, 900, "snapshot")])
+    pts = app_main.elo_daily_points(rows, datetime(2026, 9, 10))
+    assert [(p["elo"], p["lo"], p["hi"], p["n"]) for p in pts] == [(3150.0, 3080.0, 3150.0, 3), (3200.0, 3200.0, 3200.0, 1)], pts
+    assert app_main.day_band(3080.0, 3150.0, 3) == (3080.0, 3150.0)
+    assert app_main.day_band(3200.0, 3200.0, 1) is None, "점 하나인 날에 띠"
+    assert app_main.day_band(3200.0, 3200.0, 2) is None, "폭 0 띠"
+    for r, v in zip(rows, (11 * 10 ** 11, 13 * 10 ** 11, 9 * 10 ** 11, 12 * 10 ** 11)):
+        r["team_value"] = v
+    tv = app_main.team_value_daily(rows, datetime(2026, 9, 10))
+    from datetime import date as _d
+    assert tv == [(_d(2026, 9, 11), 13 * 10 ** 11, 9 * 10 ** 11, 13 * 10 ** 11, 3),
+                  (_d(2026, 9, 13), 12 * 10 ** 11, 12 * 10 ** 11, 12 * 10 ** 11, 1)], tv
+    assert app_main.won_text(13_454_400_000) == "134억 5,440만"
+    assert app_main.won_text(13_400_000_000) == "134억" and app_main.won_text(54_400_000) == "5,440만"
+
+
+def test_area_chart_band_legend_headline_66():
+    import charts
+    pts = [(f"09/0{i}", v, None) for i, v in enumerate((40.0, 50.0, 45.0, 55.0, 60.0), 1)]
+    band = [(35.0, 42.0), (45.0, 52.0), None, (50.0, 58.0), None]
+    c = _drawn(charts.AreaTrendChart(), pts=pts, avg=False, band=band)
+    assert c.marks["band"] == (1, 1), ("이어진 두 날은 면 하나, 혼자인 날은 세로 막대(M10)", c.marks["band"])
+    assert "그날 35.0%~42.0%" in c._hits[0][1] and "그날" not in c._hits[2][1], [t for _r, t in c._hits]
+    plain = _drawn(charts.AreaTrendChart(), pts=pts, avg=False)
+    assert "band" not in plain.marks and plain.grab().toImage() != c.grab().toImage()
+    none = _drawn(charts.AreaTrendChart(), pts=pts, avg=False, band=[None] * 5)
+    assert none.grab().toImage() == plain.grab().toImage(), "띠가 전부 None 이면 안 넘긴 것과 같아야"
+    try:
+        _drawn(charts.AreaTrendChart(), pts=pts, band=[None])
+        raise AssertionError("길이가 다른 띠를 받았다")
+    except ValueError:
+        pass
+    # 범례·큰 값 — 머리 줄만큼 그래프가 내려가고, 큰 값은 오른쪽 끝
+    c = _drawn(charts.AreaTrendChart(), pts=pts, avg=False, legend=[("점수", T.CHART_LINE, False), ("순위", T.CHART_RANK, True)],
+               headline="4,222.83")
+    assert c.marks["legend"] == ["점수", "순위"] and c.marks["headline"][0] == "4,222.83"
+    assert c._hits[0][0].top() > plain._hits[0][0].top(), "머리 줄 자리를 안 비웠다"
+    assert abs(c.marks["headline"][1].right() - (c.width() - 4)) < 1, c.marks["headline"]
+    # 색 — 기본은 CHART_LINE, color 를 주면 그 색(구단가치)
+    img = _drawn(charts.AreaTrendChart(), pts=pts, avg=False, color=T.CHART_VALUE).grab().toImage()
+    cols = {img.pixelColor(x, y).name() for x in range(img.width()) for y in range(img.height())}
+    assert T.CHART_VALUE in cols and T.CHART_LINE not in cols, "color 가 선·점에 안 닿는다"
+
+
+def test_season_span_unknown_says_recent_days():
+    from datetime import date as _d
+    now = datetime(2026, 10, 5, 12, 0)
+    assert app_main.season_span([], None, now) == (now - timedelta(days=config.ELO_FALLBACK_DAYS), False)
+    assert app_main.season_span([], "2026-09-20T03:00:00", now) == (datetime(2026, 9, 20, 3), True)
+    ss = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+    assert app_main.season_span(ss, None, now) == (datetime(2026, 9, 10), True)
+    assert app_main.season_title(datetime(2026, 9, 10), True) == "지금 시즌 (09/10~)"
+    assert app_main.season_title(now, False) == f"최근 {config.ELO_FALLBACK_DAYS}일"
+    keep = (_win._rank_seasons, dict(_win._elo), config.WEB_DATA)
+    try:
+        config.WEB_DATA = True
+        _win._rank_seasons = []
+        _win._on_elo_ready(_OUID, _elo_data(_elo_rows([(datetime.now().isoformat(timespec="seconds"), 3000.0, 5000, "search")])))
+        assert _win.gb_elo.title().endswith(f"최근 {config.ELO_FALLBACK_DAYS}일"), _win.gb_elo.title()
+        assert _win.gb_team_value.title().endswith(f"최근 {config.ELO_FALLBACK_DAYS}일"), _win.gb_team_value.title()
+        assert "시즌" not in _win.gb_elo.title(), "시즌을 모르는데 시즌이라고 불렀다(R2)"
+    finally:
+        _win._rank_seasons, _win._elo, config.WEB_DATA = keep
+        _win._render_elo()
+
+
+def test_elo_and_team_value_charts_66():
+    from datetime import date as _d
+    keep = (_win._rank_seasons, dict(_win._elo), config.WEB_DATA)
+    try:
+        config.WEB_DATA = True
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+        rows = _elo_rows([("2026-09-11T10:00:00", 3000.0, 900, "search"),
+                          ("2026-09-12T08:00:00", 2600.0, 950, "search"),    # 그날 최저 — 마지막 값보다 크게 낮다(M6)
+                          ("2026-09-12T20:00:00", 3050.0, 880, "search"),
+                          ("2026-09-13T10:00:00", 3100.0, 850, "search")])
+        for i, r in enumerate(rows):
+            r["team_value"] = 13_000_000_000 + i * 100_000_000
+        rows[1]["team_value"] = 12_000_000_000
+        _win._on_elo_ready(_OUID, _elo_data(rows))
+        _win._go_page("승률 그래프", "점수·예측")
+        _app.processEvents()
+        ch = _win.elo_chart
+        assert ch._band == [None, (2600.0, 3050.0), None], ch._band
+        assert ch._axis.lo <= 2600.0, ("축이 띠를 안 덮는다(M6)", ch._axis)
+        assert ch._color is None and ch._headline == "3,100.00", (ch._color, ch._headline)
+        assert [n for n, _c, _d in ch._legend] == ["점수", "순위"]
+        assert _win.lb_elo_band.isVisibleTo(_win) and "좁을 수" in _win.lb_elo_band.text()
+        seg = _win.seg_elo
+        assert seg.isVisibleTo(_win) and seg.current() == 0
+        assert not seg.buttons[1].isEnabled() and "모으지 않습니다" in seg.buttons[1].toolTip(), "시간별을 켤 수 있다(E6)"
+        tv = _win.team_value_chart
+        assert tv._color == T.CHART_VALUE and tv._band == [None, (120.0, 132.0), None], (tv._color, tv._band)
+        assert tv._headline == "133억", tv._headline
+        assert _win.lb_team_value_band.isVisibleTo(_win) and not _win.seg_team_value.buttons[1].isEnabled()
+        # 띠 날이 없으면 안내도 숨는다
+        _win._on_elo_ready(_OUID, _elo_data([r for i, r in enumerate(rows) if i != 1]))
+        assert ch._band is None and not _win.lb_elo_band.isVisibleTo(_win)
+        assert not _win.lb_team_value_band.isVisibleTo(_win)
     finally:
         _win._rank_seasons, _win._elo, config.WEB_DATA = keep
         _win._render_elo()

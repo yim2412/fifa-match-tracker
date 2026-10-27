@@ -2860,6 +2860,47 @@ class DivisionChart(QWidget):
             self._hits.append((QRectF(pt.x() - half, mt, 2 * half, plot_h), tip))
 
 
+class Segmented(QFrame):
+    """작은 전환 단추 묶음(66 G2 — [일별 | 시간별]). 하나만 눌린다 · 못 고르는 칸은 set_option_enabled 로 끄고 이유는 툴팁."""
+    changed = pyqtSignal(int)
+
+    def __init__(self, options: list[str], current: int = 0):
+        super().__init__()
+        self.setObjectName("segmented")
+        self.setStyleSheet(
+            f"QFrame#segmented {{ border: 1px solid {T.BORDER}; border-radius: 6px; }}"
+            f"QFrame#segmented QPushButton {{ border: none; border-radius: 5px; padding: 2px 10px;"
+            f" background: transparent; color: {T.TEXT_DIM}; }}"
+            f"QFrame#segmented QPushButton:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; }}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(2)
+        self.buttons: list[QPushButton] = []
+        for i, text in enumerate(options):
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.setChecked(i == current)
+            b.clicked.connect(lambda _=False, k=i: self.set_current(k, emit=True))
+            lay.addWidget(b)
+            self.buttons.append(b)
+        self._current = current
+
+    def current(self) -> int:
+        return self._current
+
+    def set_current(self, i: int, emit: bool = False) -> None:
+        for k, b in enumerate(self.buttons):
+            b.setChecked(k == i)
+        if i != self._current:
+            self._current = i
+            if emit:
+                self.changed.emit(i)
+
+    def set_option_enabled(self, i: int, enabled: bool, tip: str = "") -> None:
+        self.buttons[i].setEnabled(enabled)
+        self.buttons[i].setToolTip(tip)
+
+
 class ZoomBar(QWidget):
     """그래프 구간 확대 막대(55 G1) — 점 n 개 중 [lo, hi] 를 고른다. 양끝 손잡이를 끌거나, 가운데를 끌어 옮기거나,
     바깥을 눌러 가까운 끝을 그리로. 두 번 누르면 전체. 그래프는 손대지 않고 쓰는 쪽이 range_changed 를 받아 잘라 다시 그린다

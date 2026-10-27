@@ -59,6 +59,8 @@ _PALETTES = {
         CHART_AXIS="#3a414b",
         # 부분-전체 조각(득점·실점 유형 도넛) — Okabe-Ito 색약 안전 팔레트에서 바탕과 구분되는 다섯. 여섯째는 "기타"=회색.
         CHART_CATS=("#56b4e9", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
+        CHART_RANK="#e69f00",
+        CHART_VALUE="#f59e0b",
         # 선수 지표 공격력·수비력 칸 — PANEL 에서 이 색까지 섞는다. 끝 색은 '모든 단계에서 TEXT 대비 ≥ 4.6'
         # 을 만족하는 가장 밝은 값으로 계산해 골랐다(1.2.1). 원색 빨강은 그 위 밝은 글자가 안 읽힌다.
         HEAT_ATK="#c41c1c",
@@ -111,6 +113,10 @@ _PALETTES = {
         CHART_GRID="#eceff4",
         CHART_AXIS="#d5dae3",
         CHART_CATS=("#0072b2", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
+        # 흰 카드 위 그래픽 대비 3.0 — 어두운 쪽 주황(#e69f00 · 2.25)·#f59e0b(2.15)는 미달이라 한 단계 진하게(66 E2).
+        # 순위선은 같은 그래프의 200위 컷(CHART_DOWN)과 색약 6 이상이어야 해 붉은 쪽(#b45309 는 5.9)
+        CHART_RANK="#c2410c",
+        CHART_VALUE="#b45309",
         HEAT_ATK="#e96363",    # 밝은 테마는 반대로 — 진한 글자가 읽히는 가장 어두운 값
         HEAT_DEF="#678ce9",
         POS_FW="#db3333",
@@ -166,7 +172,9 @@ CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
 CHART_CATS = _P["CHART_CATS"]        # 도넛 조각 색(순서대로) — 넘치는 조각은 CHART_NEUTRAL "기타"
-CHART_RANK = CHART_CATS[1]           # 점수 그래프의 순위 점선·오른쪽 축(57 K5) — 초록 점수선과 색약에서도 갈리는 주황
+CHART_LINE = ACCENT_FILL             # 추이 그래프 기본 선(3.1.1 — 66 G0)
+CHART_RANK = _P["CHART_RANK"]        # 점수 그래프의 순위 점선·오른쪽 축(57 K5) — 보라 점수선·컷 선과 색약에서도 갈리는 주황
+CHART_VALUE = _P["CHART_VALUE"]      # 구단가치 그래프 선·띠(66 G3)
 
 CHART_ON_MARK = "#ffffff"            # 색 점·골대 맞은 슛 위의 흰 글자·테두리(두 테마 같음)
 
