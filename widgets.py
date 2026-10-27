@@ -2889,10 +2889,19 @@ class CalCell(NamedTuple):
     arrow: int          # +1 ▲ · −1 ▼ · 0
     tip: str
     weak: bool = False  # 판수가 적어 화살표를 안 잰 날 — 흐리게
+    fc: int = 0         # 그날 승리 보상 FC — 칸 배경 진하기(66 G5)
+
+
+def cal_cell_colors(fc: int, fc_max: int, weak: bool) -> tuple[str, str]:
+    """칸 (배경, 흐린 글자색) — 배경 = PANEL_2 에 ACCENT_FILL 을 그날 FC ÷ 이 달 최대 × `CAL_FC_MAX_MIX` 만큼(66 G5).
+    미달 날·최대 0 은 0(M11 — 미달 날은 흐린 글자 그대로 보여야). 날짜·판수 글자는 TEXT_DIM 이 4.5 밑이면 TEXT 로(M4)."""
+    mix = 0.0 if weak or fc_max <= 0 else min(max(fc, 0) / fc_max, 1.0) * config.CAL_FC_MAX_MIX
+    bg = T.blend(T.PANEL_2, T.ACCENT_FILL, mix)
+    return bg, (T.TEXT_DIM if T.contrast(T.TEXT_DIM, bg) >= 4.5 else T.TEXT)
 
 
 class CalendarGrid(QWidget):
-    """한 달 달력(55 D1) — 일요일부터 7칸 × 주. 경기가 있던 날만 칸을 채운다."""
+    """한 달 달력(55 D1) — 일요일부터 7칸 × 주. 경기가 있던 날만 칸을 채운다 · 배경 진하기 = 그날 FC(66 G5)."""
     HEAD_H = 22
     MIN_CELL_H = 54
 
@@ -2901,12 +2910,14 @@ class CalendarGrid(QWidget):
         self._year, self._month = 2000, 1
         self._cells: dict[int, CalCell] = {}
         self._today = None
+        self._fc_max = 0
         self._hits: list[tuple[QRectF, str]] = []
         self.setMouseTracking(True)
         self.setMinimumHeight(self.HEAD_H + 6 * self.MIN_CELL_H)
 
-    def set_data(self, year: int, month: int, cells: dict[int, CalCell], today=None) -> None:
+    def set_data(self, year: int, month: int, cells: dict[int, CalCell], today=None, fc_max: int = 0) -> None:
         self._year, self._month, self._cells, self._today = year, month, dict(cells), today
+        self._fc_max = fc_max
         self.update()
 
     def mouseMoveEvent(self, event) -> None:
@@ -2945,28 +2956,30 @@ class CalendarGrid(QWidget):
                     continue
                 rect = QRectF(c * cw + 2, self.HEAD_H + r * ch + 2, cw - 4, ch - 4)
                 cell = self._cells.get(d)
+                bg, dim = cal_cell_colors(cell.fc, self._fc_max, cell.weak) if cell else (T.PANEL, T.TEXT_DIM)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(T.PANEL_2 if cell else T.PANEL))
+                p.setBrush(QColor(bg))
                 p.drawRoundedRect(rect, 4, 4)
                 is_today = self._today is not None and self._today == date(self._year, self._month, d)
                 p.setPen(QPen(QColor(T.CHART_NEUTRAL if is_today else T.BORDER), 2 if is_today else 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRoundedRect(rect, 4, 4)
                 p.setFont(small)
-                p.setPen(QColor(T.TEXT_DIM))
+                p.setPen(QColor(dim))
                 p.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, str(d))
                 if cell is None:
                     continue
-                arrow = {1: ("▲", T.CHART_UP), -1: ("▼", T.CHART_DOWN)}.get(cell.arrow)
+                # ▲▼ 는 글자 토큰(GOOD/BAD) — 밝은 CHART_DOWN 은 섞기 0 에서도 3.25 라 진한 칸에서 3.0 을 못 지킨다(66 G5)
+                arrow = {1: ("▲", T.GOOD), -1: ("▼", T.BAD)}.get(cell.arrow)
                 if arrow:
                     p.setPen(QColor(arrow[1]))
                     p.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
                                arrow[0])
                 p.setFont(big)
-                p.setPen(QColor(T.TEXT_DIM if cell.weak else T.TEXT))
+                p.setPen(QColor(dim if cell.weak else T.TEXT))
                 p.drawText(rect.adjusted(4, 0, -4, -ch * 0.18), Qt.AlignmentFlag.AlignCenter, cell.rate)
                 p.setFont(small)
-                p.setPen(QColor(T.TEXT_DIM))
+                p.setPen(QColor(dim))
                 fm = QFontMetrics(small)
                 p.drawText(rect.adjusted(4, 0, -4, -3), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                            fm.elidedText(cell.sub, Qt.TextElideMode.ElideRight, int(rect.width() - 8)))

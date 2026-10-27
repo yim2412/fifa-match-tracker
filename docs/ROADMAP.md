@@ -907,6 +907,18 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 - **남은 것 — ③ 으로**: `club_cells`(M16 · 대시보드 머리 줄의 "시즌")에 `season_span` 의 `known` 넘기기 — G5 카드와 같은 "시즌 FC" 라 같이 한다.
 - 기본 시즌표의 스모크 픽스처(2026-01-01~03)는 끝난 시즌이라 계단이 빈다 — G1 테스트는 `_g1_season()` 으로 시즌표를 바꿔 잰다.
 
+#### 조각 ③ 에서 정한 것 (2026-10-27 · 67 이 알아야 할 것만)
+
+- **진입점 grep**: `daily_luck(` 앱 1(범위 전체 일수를 넘긴다 · M1) · `N16_MIN_DAY` 0 줄(config 에서 지움 · 하한은 `D1_MIN_GAMES` 하나) · `DayLuck` 지움 · `win_rewards(` 앱 4 → 카드는 `season_rows` 한 길(H6 과 같은 줄 · M3·M15) · `_rank_reward_text` 의 숫자는 `rank_reward(pts, today)` 하나.
+- **G4 재료**: `MainWindow._luck_days(matches)` — 범위 = `self._matches` 의 첫~마지막 경기 날 · 재료 `_season_wins()`(저장된 전체) · 묶음 `mixed_of_matches(_matches_all)` · `calendar_days` 그대로 → 같은 날 달력과 같은 판정(스모크가 `WIN_RATE_DRAWS_IN` 켜고·끄고 둘 다 잰다). "운이면 N일" = `habits.luck_expected(days)`(퍼센트 → 비율 · M13). "몇 판부터" 표는 `daily_luck` 이 범위 전체 승률로(M8 글).
+- **점 그림** `charts.LuckDotRows` — 두 열 문턱 `TWO_COL_W`(= 2 × 한 열 최소 + 틈) · 세로로 먼저 채운다 · 최소 높이를 열 수로 다시 잡는다(숨은 위젯은 resizeEvent 를 보일 때까지 미뤄 테스트는 `show()`).
+- **(이견 — M4 대안을 탔다)** 달력 칸 진하기 상한 `CAL_FC_MAX_MIX` **0.32**. 계획대로 승률 글자를 ▲ 날 `GOOD`·▼ 날 `BAD` 로 칠하면 어두운 `BAD` 4.5 가 섞기 **0.05** 에서 깨져(밝은 쪽 0.08) 진하기가 안 보인다 → **승률은 `TEXT` 그대로 · 색은 ▲▼ 에만**. 그리고 ▲▼ 를 `CHART_UP`/`CHART_DOWN` 그대로 두면 밝은 `CHART_DOWN` 이 섞기 0 에서도 3.25 라 상한이 0.05 로 묶인다 → **▲▼ 를 글자 토큰 `GOOD`/`BAD` 로**(두 팔레트 3.0 이상인 최대 섞기가 0.32 · TEXT 4.5 는 여유). 날짜·판수 글자는 칸마다 `TEXT_DIM` 이 4.5 밑이면 `TEXT`(어두운 0.13 · 밝은 0.02 부터). 테스트 `test_calendar_fc_shade_keeps_text_readable_66` 이 0~상한 전부를 두 팔레트에서 잰다. 미달 날·이 달 최대 0 은 진하기 0(M11) · 최대는 판정한 날에서만.
+- **달력 요약**은 아래 글 두 줄 → 오른쪽 작은 표(`tbl_cal_summary` — 하루 판수·승률·하루 FC·날 수 × 이 달·시즌) · 머리 "N일 · X FC"(`lb_cal_month_sum`).
+- **M16**: `club_cells(…, known=)` — 시즌을 모르면 H4·H5·H6 작은 글에 " · 최근 70일(시즌 모름)" · 제목은 대시보드가 찾는 열쇠라 그대로.
+- **다시 그리기(M2)**: 시즌표 도착 → `luck`·`calendar`·`rewards`·G1 · ELO 도착 → `calendar`·`rewards`(카드의 시즌 시작·순위 보상) · "최근 N일" 적용은 운 범위를 안 건드린다.
+- **⑦ 시간**(이 PC 실데이터 13,121경기 사본 · 읽기 전용): `calendar_days` 50일 0.016초 · 400일 0.023초 · `luck_expected` 0.002~0.006초 — 기준 0.3초 안.
+- methods 글: 달력 절에 칸 진하기 · 운 범위 점 그림·"운이면 N일"·"몇 판부터" 기준을 같이 적었다.
+
 ### ③ 환경 행렬
 
 | 환경 | 볼 것 | 상태 |

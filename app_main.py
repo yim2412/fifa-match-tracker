@@ -1788,14 +1788,34 @@ def _peak_rank(rows: list[dict], at) -> int | None:
     return best[1] if best else None
 
 
+def season_rows(wins: list, season_start: datetime) -> tuple[list, bool]:
+    """이번 시즌 줄과 "시즌 첫 경기부터 저장됐나" — 머리 줄 H6 과 FC 카드(66 G5 · M3·M15)가 같은 줄·같은 판정을 쓴다."""
+    season = [w for w in wins if w.when >= season_start]
+    return season, bool(season) and season[0].when <= season_start + timedelta(days=config.N12_START_DAYS)
+
+
+def season_word(known: bool) -> str:
+    """시즌을 모를 때(시즌표·스냅숏 없음 — 66 R2) "시즌" 대신 쓰는 말."""
+    return "이번 시즌" if known else f"최근 {config.ELO_FALLBACK_DAYS}일"
+
+
+def rank_reward(pts: list[dict], today: date) -> tuple[int | None, int | None]:
+    """지금 등수로 본 시즌 말 순위 보상 — (등수 | None(1만 위 밖·모름), FC | None(보상권 밖))."""
+    rank = pts[-1].get("rank") if pts else None
+    if not rank:
+        return None, None
+    return rank, next((fc for cap, fc in core.reward_brackets(today) if rank <= cap), None)
+
+
 def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_start: datetime, today: date,
-               mixed: bool) -> list[tuple[str, str, str, str]]:
+               mixed: bool, known: bool) -> list[tuple[str, str, str, str]]:
     """머리 칸 여덟 — (제목, 큰 글자, 작은 글자, 툴팁). 대시보드는 순서가 아니라 제목으로 찾는다(65 M1 배치). wins = 저장 경기(core.win_divisions) · rows = 내 elo_history ·
     pts = 지금 시즌 하루 점(elo_daily_points) · club = core.ClubHead 또는 None(rank.db 없음·아직 안 읽음)."""
     out = []
-    season = [w for w in wins if w.when >= season_start]
-    from_start = bool(season) and season[0].when <= season_start + timedelta(days=config.N12_START_DAYS)
+    season, from_start = season_rows(wins, season_start)
     saved_note = "" if from_start else " · 저장 시작 뒤부터"
+    # 시즌을 모르면(R2 · M16) 최근 70일을 "시즌" 이라 부르지 않는다 — 제목은 대시보드가 찾는 열쇠라 그대로 두고 작은 글에
+    span_note = "" if known else f" · {season_word(False)}(시즌 모름)"
     no_club = "랭킹 수집을 켜면 보입니다" if not config.RANK_COLLECT else "다음 수집 뒤부터"
     # H1 어제
     yday = today - timedelta(days=1)
@@ -1845,7 +1865,7 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
     if best is None:
         out.append(("시즌 최고점", "—", "점수 기록이 없습니다", ""))
     else:
-        out.append(("시즌 최고점", f"{best[0]:,.2f}", (f"#{best[2]:,} " if best[2] else "") + f"({best[1]:%m.%d})",
+        out.append(("시즌 최고점", f"{best[0]:,.2f}", (f"#{best[2]:,} " if best[2] else "") + f"({best[1]:%m.%d})" + span_note,
                     "검색·따라가기 기록과 랭킹 수집(하루 한 번) 중 높은 쪽 — 하루 안 최고점은 놓칠 수 있다"))
     # H5 챔스·슈챔 달성 판수
     ch = core.first_reach(wins, season_start, core.CHAMPION_DIVISION_ID)
@@ -1863,7 +1883,7 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
         small.append("저장 시작 뒤부터" + (" — 남들 비교 없음" if club is not None else ""))
     elif ch is not None and ch.gap:
         small.append("중간에 빈 곳 있음")
-    out.append(("챔스·슈챔 달성", big, " · ".join(small) or "이번 시즌 첫 경기부터 센 판수",
+    out.append(("챔스·슈챔 달성", big, (" · ".join(small) or "이번 시즌 첫 경기부터 센 판수") + span_note,
                 "시즌 첫 경기부터 그 등급 첫 경기까지 친 판수(그 경기 포함) · 슈챔은 경기 기록의 등급으로만"
                 " · 남들 값은 첫 달성을 확인한 수집 시각의 누적이라 최대 하루치 많다"))
     # H6 시즌 FC
@@ -1881,7 +1901,7 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
     else:
         lo, hi, n = core.fc_rank_range(club, wr.fc)
         small = (f"{lo:,}등" if lo == hi else f"{lo:,}~{hi:,}등") + f" / {n:,}명"
-    out.append(("시즌 FC", f"{wr.fc:,} FC", small + saved_note,
+    out.append(("시즌 FC", f"{wr.fc:,} FC", small + saved_note + span_note,
                 "내 FC 는 저장 경기의 등급으로 센 값 · 남들은 랭킹 화면 칸으로 추정한 범위(챔스 이상 승리 15~20)라 등수도 범위"))
     # 65 M1 — 오늘(H1 과 같은 식을 오늘 날짜로) · 랭킹 점수(내 마지막 점수 기록 — H2 의 "내" 값을 큰 글자로)
     ts = core.club_day(wins, today)
@@ -4036,6 +4056,7 @@ class MainWindow(QMainWindow):
         """승률 그래프 [일별 기록] 탭(55 D1) — 한 달 달력. 저장된 전체(시즌 필터 무시) · 그리기는 _render_calendar."""
         w = QWidget()
         v = QVBoxLayout(w)
+        self.cal_fc_cards = self._make_fc_reward_cards(v)   # 66 G5 — FC 보상량 + 카드 셋(늘 이번 시즌)
         bar = QHBoxLayout()
         self.btn_cal_prev = QPushButton("◀")
         self.btn_cal_next = QPushButton("▶")
@@ -4048,14 +4069,20 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.lb_cal_month)
         bar.addWidget(self.btn_cal_next)
         bar.addWidget(self.btn_cal_now)
+        self.lb_cal_month_sum = QLabel("")
+        bar.addWidget(self.lb_cal_month_sum)
         bar.addStretch(1)
         v.addLayout(bar)
+        body = QHBoxLayout()
         self.cal_grid = CalendarGrid()
-        v.addWidget(self.cal_grid, 1)
-        self.lb_cal_summary = QLabel("")
-        self.lb_cal_summary.setWordWrap(True)
-        self.lb_cal_summary.setStyleSheet(f"color: {T.TEXT};")
-        v.addWidget(self.lb_cal_summary)
+        body.addWidget(self.cal_grid, 1)
+        side = QVBoxLayout()
+        # 오른쪽 작은 표(66 G5) — 줄 = 하루 판수·승률·하루 FC·날 수 · 열 = 이 달·시즌
+        self.tbl_cal_summary = self._make_table(["", "이 달", "시즌"])
+        side.addWidget(self.tbl_cal_summary)
+        side.addStretch(1)
+        body.addLayout(side)
+        v.addLayout(body, 1)
         self.lb_cal_note = self._note_label()
         v.addWidget(self.lb_cal_note)
         self._cal_month: tuple[int, int] | None = None   # None = 마지막 경기가 있는 달
@@ -4109,28 +4136,33 @@ class MainWindow(QMainWindow):
             cells[d.day.day] = CalCell(
                 f"{d.rate:.0f}%", f"{d.games}판 · {d.fc:,} FC" if d.fc else f"{d.games}판", d.arrow,
                 f"{d.day:%Y-%m-%d} · {d.win}승 {d.draw}무 {d.lose}패 · 승률 {d.rate:.1f}% · {d.fc:,} FC\n{judge}",
-                weak=not d.judged)
+                weak=not d.judged, fc=d.fc)
         self.lb_cal_month.setText(f"{y}년 {m}월")
-        self.cal_grid.set_data(y, m, cells, date.today())
+        # 진하기는 이 달 최대 FC 대비 — 미달 날은 진하기 0 이라 최대에서도 뺀다(M11)
+        self.cal_grid.set_data(y, m, cells, date.today(), fc_max=max((d.fc for d in days if d.judged), default=0))
+        self._fill_fc_reward_cards(self.cal_fc_cards)
         self.btn_cal_next.setEnabled((y, m) < (date.today().year, date.today().month))
         oldest = min(w_.when for w_ in wins).date() if wins else None
         self.btn_cal_prev.setEnabled(oldest is not None and (y, m) > (oldest.year, oldest.month))
 
-        def line(title: str, s) -> str:
-            if not s.days:
-                return f"{title}: 경기 없음"
-            return (f"{title}: {s.days}일 · 하루 {s.per_day:.1f}판 · 승률 {s.rate(mixed):.1f}% · "
-                    f"하루 {s.fc_per_day:,.0f} FC")
         month_rows = [w_ for w_ in wins if first <= w_.when.date() <= last]
         anchor = min(last, date.today())
         season = self._cal_season_key(anchor)
-        season_rows = [w_ for w_ in wins if self._cal_season_key(w_.when.date()) == season]
+        in_season = [w_ for w_ in wins if self._cal_season_key(w_.when.date()) == season]
         season_name = "저장된 전체" if no_table else (season.label if season else "이번 시즌")
-        self.lb_cal_summary.setText(line("이 달", core.cal_summary(month_rows)) + "<br>"
-                                    + line(season_name, core.cal_summary(season_rows)))
+        ms, ss = core.cal_summary(month_rows), core.cal_summary(in_season)
+        self.lb_cal_month_sum.setText(f"  {ms.days}일 · {ms.fc:,} FC" if ms.days else "  경기 없음")
+        self.tbl_cal_summary.setHorizontalHeaderLabels(["", "이 달", season_name])
+        cell = lambda s, text: text if s.days else "—"   # noqa: E731
+        self._fill(self.tbl_cal_summary, [
+            ["하루 판수", cell(ms, f"{ms.per_day:.1f}판"), cell(ss, f"{ss.per_day:.1f}판")],
+            ["승률", cell(ms, f"{ms.rate(mixed):.1f}%"), cell(ss, f"{ss.rate(mixed):.1f}%")],
+            ["하루 FC", cell(ms, f"{ms.fc_per_day:,.0f}"), cell(ss, f"{ss.fc_per_day:,.0f}")],
+            ["날 수", cell(ms, f"{ms.days}일"), cell(ss, f"{ss.days}일")]], enable_sort=False)
         up = sum(1 for d in days if d.arrow > 0)
         down = sum(1 for d in days if d.arrow < 0)
         self.lb_cal_note.setText(
+            "칸 진하기 = 그날 승리 보상 FC(이 달 가장 많은 날이 가장 진하게) · "
             f"▲▼ = 그날 판수로 본 우연 범위({'저장된 전체' if no_table else '그 시즌'} 승률 ± {config.N16_BAND_SIGMA:g}σ) 밖"
             f" — 운만이면 스무 날 중 하루 꼴 · {config.D1_MIN_GAMES}판 미만인 날은 흐리게(안 잼) · 이 달 ▲ {up}일 · ▼ {down}일 · "
             "저장된 경기만(앱을 쓰기 전 기록은 없습니다)"
@@ -4833,6 +4865,7 @@ class MainWindow(QMainWindow):
         """성적 진단 [FC 보상](43단계 A2) — 이긴 경기의 그 당시 등급 × 승리당 FC 표(config.FC_REWARDS)."""
         w = QWidget()
         v = QVBoxLayout(w)
+        self.rewards_cards = self._make_fc_reward_cards(v)   # 66 G5b — 이번 시즌 카드 · 아래 등급별 표는 지금 범위 그대로
         self.lb_rewards_summary = QLabel("")
         self.lb_rewards_summary.setWordWrap(True)
         v.addWidget(self.lb_rewards_summary)
@@ -4852,7 +4885,48 @@ class MainWindow(QMainWindow):
         return " · ".join(f"{self._division_names.get(d, str(d))} {fc} FC"
                           for d, fc in sorted(latest.items(), reverse=True))
 
+    def _make_fc_reward_cards(self, v: QVBoxLayout) -> tuple[QLabel, list[StatCard]]:
+        """FC 보상량 줄 + 카드 셋(66 G5·G5b — 달력 탭과 FC 보상 탭이 같은 것) · 채우기는 `_fill_fc_reward_cards`."""
+        rule = QLabel("")
+        rule.setWordWrap(True)
+        rule.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(rule)
+        row = QHBoxLayout()
+        cards = [StatCard("이번 시즌 매치 보상", T.ACCENT), StatCard("예상 순위 보상"), StatCard("합계")]
+        for c in cards:
+            row.addWidget(c, 1)
+        v.addLayout(row)
+        return rule, cards
+
+    def _fill_fc_reward_cards(self, box: tuple[QLabel, list[StatCard]]) -> None:
+        """재료는 늘 이번 시즌(표시 범위와 무관) — 머리 줄 H6 과 같은 `season_rows`(M3·M15) · 시즌을 모르면 최근 70일(R2)."""
+        rule, (match, rank_c, total) = box
+        rule.setText(f"FC 보상량 — 이긴 판마다 {self._reward_rule_text()}")
+        data = self._elo.get(self._ouid) if self._ouid else None
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        season, from_start = season_rows(self._season_wins(), start)
+        wr = core.win_rewards(season)
+        match.set_title(f"{season_word(known)} 매치 보상")
+        match.set(f"{wr.fc:,} FC")
+        wins = " · ".join(f"{self._division_names.get(d, str(d))} {n:,}승"
+                          for d, (n, fc) in sorted(wr.by_division.items()) if fc)
+        match.set_sub((wins or "보상 등급에서 이긴 판 없음") + ("" if from_start else " · 저장 시작 뒤부터"))
+        pts = self._elo_points()
+        rank, fc = rank_reward(pts, date.today())
+        if data is None or not pts:
+            rank_c.set("—")
+            rank_c.set_sub((self._elo_note(data, pts) if self._ouid else "") or "점수 기록이 없습니다")
+        elif not rank:
+            rank_c.set("0 FC")
+            rank_c.set_sub(f"지금 {config.RANK_TIERS[-1]:,}위 밖(또는 모름) · 보상권 밖")
+        else:
+            rank_c.set(f"{fc or 0:,} FC")
+            rank_c.set_sub(f"현재 {rank:,}등 · " + ("이대로 끝나면" if fc else "보상권 밖"))
+        total.set(f"{wr.fc + (fc or 0):,} FC")
+        total.set_sub("순위 보상은 예상치")
+
     def _render_rewards(self, details: list[dict]) -> None:
+        self._fill_fc_reward_cards(self.rewards_cards)
         rows = core.win_divisions(details, self._ouid) if self._ouid else []
         r = core.win_rewards(rows)
         # 높은 등급부터(id 작은 것 — 정렬값을 음수로, 등급 체류 표와 같다)
@@ -5016,8 +5090,6 @@ class MainWindow(QMainWindow):
         self._streak_done = (key, result)
         self._invalidate("luck")
 
-    LUCK_DAY_COLUMNS = ["날짜", "판수", "승률", "운만이면 이 범위", "판정"]
-
     def _build_luck_tab(self) -> QWidget:
         """성적 진단 [운 범위](N16·A3) — 하루 승률이 평균 ± 2σ 밖인 날 수 · 몇 판부터 실력 차이로 읽나 · 최장 연승·연패의 우연 기준."""
         scroll = QScrollArea()
@@ -5032,12 +5104,14 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_luck_note)
         gb = QGroupBox("하루 승률은 운만으로 얼마나 흔들리나")
         box = QVBoxLayout(gb)
-        self.lb_luck_summary = QLabel("")
-        self.lb_luck_summary.setWordWrap(True)
-        box.addWidget(self.lb_luck_summary)
-        self.tbl_luck_days = self._make_table(self.LUCK_DAY_COLUMNS)
-        self.tbl_luck_days.setMinimumHeight(220)
-        box.addWidget(self.tbl_luck_days)
+        cards = QHBoxLayout()
+        self.card_luck_base = StatCard("시즌 평균")
+        self.card_luck_out = StatCard("범위 밖 날")
+        for c in (self.card_luck_base, self.card_luck_out):
+            cards.addWidget(c, 1)
+        box.addLayout(cards)
+        self.luck_dots = charts.LuckDotRows()
+        box.addWidget(self.luck_dots)
         v.addWidget(gb)
         gb = QGroupBox("몇 판부터 실력 차이로 읽나 (두 계정의 승률 차를 2σ 로 가르려면)")
         box = QVBoxLayout(gb)
@@ -5056,46 +5130,80 @@ class MainWindow(QMainWindow):
         scroll.setWidget(w)
         return scroll
 
+    def _luck_days(self, matches: list[MatchSummary]) -> tuple[list, bool]:
+        """운 범위 날(66 G4 · U2) — 성적 진단 범위(matches 의 첫~마지막 경기 날) 안의 날을 달력과 같은 `calendar_days` 로.
+        재료는 저장된 전체의 `_season_wins()` · 묶음은 달력과 같은 `_matches_all` 값(M14) — 같은 날이면 달력과 같은 판정."""
+        dated = [m.match_date for m in matches if m.match_date is not None]
+        mixed = core.mixed_of_matches(self._matches_all)
+        if not dated:
+            return [], mixed
+        first, last = min(dated).date(), max(dated).date()
+        return core.calendar_days(self._season_wins(), first, last, self._cal_season_key, mixed), mixed
+
+    def _fill_luck_cards(self, days: list, mixed: bool, no_table: bool) -> None:
+        """G4 카드 둘 — 기준(한 시즌이면 그 시즌 승률 · 여러 시즌이면 "시즌마다" · 시즌표가 없으면 저장된 전체 · M12) ·
+        범위 밖 날 대 운만이면 나올 날 수(`luck_expected` — 날마다 그 시즌 기준)."""
+        base, out = self.card_luck_base, self.card_luck_out
+        if not days:
+            for c, t in ((base, "시즌 평균"), (out, "범위 밖 날")):
+                c.set_title(t)
+                c.set("-")
+                c.set_sub("경기가 없습니다")
+            out.set_color(T.TEXT)
+            return
+        wins = self._season_wins()
+        keys = {self._cal_season_key(d.day) for d in days}
+        if no_table or len(keys) == 1:
+            key = next(iter(keys))
+            n = sum(1 for w in wins if self._cal_season_key(w.when.date()) == key)
+            base.set_title("저장된 전체 승률" if no_table else "시즌 평균")
+            base.set(f"{days[0].base:.1f}%")
+            # 진행 중인 시즌은 시즌표에 없어 키가 None(seasons.season_of)
+            base.set_sub(f"{n:,}판" if no_table else f"{key.label if key else '이번 시즌'} · {n:,}판")
+        else:
+            base.set_title("시즌 평균")
+            base.set("시즌마다")
+            base.set_sub(f"{len(keys)}개 시즌 — 날마다 그 시즌 승률이 기준(흰 세로선)")
+        judged = sum(1 for d in days if d.judged)
+        outside = sum(1 for d in days if d.arrow)
+        out.set_title("범위 밖 날")
+        out.set(f"{outside}일")
+        out.set_color(T.WARN if outside else T.TEXT)
+        out.set_sub(f"운이면 {core.luck_expected(days):.1f}일 · 판정한 {judged}일 중" if judged
+                    else f"하루 {config.D1_MIN_GAMES}판 이상인 날이 없어 안 잽니다")
+
     def _render_luck(self, matches: list[MatchSummary]) -> None:
-        days = self.sp_trend_days.value()
-        lk = core.daily_luck(core.win_rate_trend(matches, days=days))
+        days, mixed = self._luck_days(matches)
+        no_table = not self._rank_seasons
         self.lb_luck_note.setText(
-            f"최근 {days}일(승률 그래프와 같은 기간, {self._scope_text()}) · {win_rate_note(lk.mixed)} "
-            f"· 승패에는 운 몫이 커서, 승률이 오르내린 게 실력인지 운인지 숫자로 가늠하는 화면입니다.")
+            f"{self._scope_text()} 의 경기가 있던 날마다 · {win_rate_note(mixed)} · 띠 = 그날이 속한 "
+            f"{'저장된 전체' if no_table else '시즌'}의 내 승률 ± {config.N16_BAND_SIGMA:g}σ(그날 판수로) — 달력 ▲▼ 와 같은 판정"
+            f" · 하루 {config.D1_MIN_GAMES}판 미만은 빈 고리로(안 잼)"
+            " · 승패에는 운 몫이 커서, 승률이 오르내린 게 실력인지 운인지 숫자로 가늠하는 화면입니다.")
+        self._fill_luck_cards(days, mixed, no_table)
+        rows = []
+        for d in reversed(days):
+            verdict = ("판수 미달 — 안 잼" if not d.judged else
+                       ("범위 위 — 평소보다 잘함" if d.arrow > 0 else ("범위 아래 — 평소보다 못함" if d.arrow < 0 else "범위 안")))
+            rows.append(charts.LuckRow(
+                f"{d.day:%m/%d}", d.games, d.rate, d.lo, d.hi, d.base, d.judged, d.arrow,
+                f"{d.day:%Y-%m-%d} · {d.games}판 · 승률 {win_rate_text(d.win, d.draw, d.lose, mixed, short=True)}"
+                f" · 운만이면 {d.lo:.1f}% ~ {d.hi:.1f}%(기준 {d.base:.1f}%) · {verdict}"))
+        self.luck_dots.set_data(rows)
+        # "몇 판부터" 는 범위 전체 승률 기준(M8) — 일수를 넘기지 않으면 win_rate_trend 기본 30일이 조용히 들어간다(M1)
+        dated = [m.match_date for m in matches if m.match_date is not None]
+        span = (max(dated).date() - min(dated).date()).days + 1 if dated else 1
+        lk = core.daily_luck(core.win_rate_trend(matches, days=span))
         dim = f"color: {T.TEXT_DIM};"
-        if not lk.days:
-            self.lb_luck_summary.setText("경기가 없습니다.")
-            self._fill(self.tbl_luck_days, [], enable_sort=False)
+        if not dated:
             self._fill(self.tbl_luck_required, [], enable_sort=False)
             self.lb_luck_required.setText("")
         else:
-            self.lb_luck_summary.setText(
-                f"기간 평균 승률 {lk.p * 100:.1f}% · 하루 {config.N16_MIN_DAY}판 이상인 {lk.judged}일 중 "
-                f"평균 ± {config.N16_BAND_SIGMA:g}σ 띠 밖인 날 {lk.outside}일 — 운만이면 약 {lk.expected:.1f}일이 나옵니다"
-                + ("" if lk.judged else f" (하루 {config.N16_MIN_DAY}판 미만인 날은 판정하지 않습니다)"))
-            ordered = list(reversed(lk.days))
-            rows = []
-            for d in ordered:
-                if d.weak:
-                    verdict = "표본 부족"
-                elif d.outside:
-                    verdict = "띠 밖 ▲ 평소보다 잘함" if d.rate > d.hi else "띠 밖 ▼ 평소보다 못함"
-                else:
-                    verdict = "띠 안"
-                rows.append([(f"{d.day:%Y-%m-%d}", d.day.toordinal()), (f"{d.n:,}", d.n),
-                             (win_rate_text(d.win, d.draw, d.lose, lk.mixed, short=True), d.rate),
-                             f"{d.lo:.1f}% ~ {d.hi:.1f}%", verdict])
-            self._fill(self.tbl_luck_days, rows, enable_sort=False)
-            for r, d in enumerate(ordered):
-                if d.weak or d.outside:
-                    color = QColor(T.TEXT_DIM if d.weak else (T.GOOD if d.rate > d.hi else T.BAD))
-                    for c in range(self.tbl_luck_days.columnCount()):
-                        self.tbl_luck_days.item(r, c).setForeground(color)
             self._fill(self.tbl_luck_required,
                        [[f"{r.diff:g}%p", (f"{r.n:,}판", r.n), (f"{r.games:,}판", r.games)] for r in lk.required],
                        enable_sort=False)
             self.lb_luck_required.setText(
-                "표본이 이만큼 쌓이기 전의 승률 차는 운과 구분이 안 됩니다."
+                f"이 범위 전체 승률 {lk.p * 100:.1f}% 기준 — 표본이 이만큼 쌓이기 전의 승률 차는 운과 구분이 안 됩니다."
                 + (f" 이 계정은 무승부가 전체의 {lk.draw_ratio:.0%}라 승+패 분모에 맞추려면 경기가 그만큼 더 필요합니다."
                    if lk.mixed else ""))
         box = self.box_luck_streak
@@ -7857,10 +7965,9 @@ class MainWindow(QMainWindow):
         pts = self._elo_points()          # 이번 시즌 하루 한 점 — 마지막 점이 지금
         if data is None or not pts:
             return ""
-        rank = pts[-1].get("rank")
+        rank, got = rank_reward(pts, date.today())
         if not rank:
             return f"지금 {config.RANK_TIERS[-1]:,}위 밖(또는 모름) — 순위 보상 구간 밖"
-        got = next((fc for cap, fc in core.reward_brackets(date.today()) if rank <= cap), None)
         if got is None:
             return f"지금 {rank:,}위 — 순위 보상 구간 밖"
         return f"지금 {rank:,}위 — 이대로 끝나면 순위 보상 {got:,} FC"
@@ -8459,8 +8566,7 @@ class MainWindow(QMainWindow):
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
-        self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일'
-        self._invalidate("luck")       # 운 범위의 띠도 같은 '최근 N일' 평균
+        self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일' — 운 범위는 시즌 범위라 안 건드린다(66 M2)
 
     @staticmethod
     def _make_table(columns: list[str], icons: dict[int, str] | None = None) -> FitTableWidget:
@@ -9666,6 +9772,8 @@ class MainWindow(QMainWindow):
         self._render_elo()   # 지금 시즌 시작이 바뀐다 — 들고 있는 값으로 다시 그림(읽기 없음)
         self._render_division()   # 등급 계단도 같은 시즌 시작(66 M2)
         self._invalidate("calendar")   # 달력 기준선(그날 시즌 승률)이 시즌표를 쓴다
+        self._invalidate("luck")       # 운 범위도 같은 기준선(66 M2)
+        self._invalidate("rewards")    # FC 카드의 시즌 시작(66 R2)
         self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
@@ -9966,7 +10074,7 @@ class MainWindow(QMainWindow):
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
             "divstay": lambda: self._render_divstay(self._details),   # 시즌 범위(diagnosis 와 같다)
-            "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 띠는 그래프 '최근 N일'(sp_trend_days)
+            "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 날 판정은 달력과 같은 calendar_days(66 U2)
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "rewards": lambda: self._render_rewards(self._details),   # 시즌 범위(diagnosis 와 같다)
             "poslevel": self._render_poslevel,   # 50단계 C4 — 시즌 범위 무관(내 감독모드 최신 1000판 · 49 칩과 같은 창)
@@ -12142,6 +12250,8 @@ class MainWindow(QMainWindow):
             self._invalidate("poslevel")  # 자리별 수준의 라벨 조건(ⓗ — 가장 최근 순위)
             self._invalidate("dashboard")  # 55 머리 줄 — 경기 받기 끝과 둘 중 늦게 온 쪽이 완성(J4)
             self._invalidate("rewards_rank")   # 57 K11 지금 등수로 본 순위 보상
+            self._invalidate("calendar")       # 66 G5 카드 — 시즌 시작·예상 순위 보상
+            self._invalidate("rewards")        # 66 G5b 같은 카드
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
@@ -12382,10 +12492,10 @@ class MainWindow(QMainWindow):
             return None
         data = self._elo.get(self._ouid)
         now = datetime.now()
-        start = elo_season_start(self._rank_seasons, data.snap_season_start if data else None, now)
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, now)
         return club_cells(wins=self._season_wins(), rows=data.rows if data else [], pts=self._elo_points(),
                           club=data.club if data else None, season_start=start, today=now.date(),
-                          mixed=core.mixed_of_matches(self._matches_all))
+                          mixed=core.mixed_of_matches(self._matches_all), known=known)
 
     SC_NEXON_MATCH_S = 60  # 넥슨 최근 달성 시각이 목록의 진입과 이만큼 안이면 같은 것으로 본다
 

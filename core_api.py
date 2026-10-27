@@ -26,7 +26,7 @@ from models import (
 from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, DivisionStay, DivisionStays, GoalFlow, LeadRow,
                     division_runs, division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
                     AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
-                    DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
+                    HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables, luck_expected,
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
                     DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
@@ -92,7 +92,7 @@ __all__ = [
     "DistBasis", "dist_basis", "dist_judged", "HABIT_METRICS", "N19_CHIP_KEYS", "OwnerDist", "load_owner_dist",
     "PosCell", "PosDist", "PosLevel", "load_pos_dist", "pos_level",   # C4 자리별 수준(50단계 ③)
     # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
-    "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
+    "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables", "luck_expected",
     "streak_baseline", "streak_key",
     # habits·rankmeta — 55 구단 머리 줄·점수 리포트(H1~H6 · R1~R3)
     "DaySummary", "FirstReach", "ScoreReport", "HistoryRun", "history_runs", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",

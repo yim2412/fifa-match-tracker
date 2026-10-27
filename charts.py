@@ -1274,7 +1274,108 @@ class DivisionRunChart(_Chart):
             self._hits.append((QRectF(x_of(i), mt, slot, plot_h), tip))
 
 
-DONUT_MAX = 6   # 도넛 조각 상한 — 넘치면 앞 DONUT_MAX-1 개 + "기타"
+@dataclass
+class LuckRow:
+    """운 범위 한 줄(66 G4) — 화면이 `CalDay` 에서 만든다. 퍼센트(0~100)."""
+    label: str          # "10/27"
+    games: int
+    rate: float
+    lo: float
+    hi: float
+    base: float         # 그날 기준(그 시즌 승률) — 흰 세로선
+    judged: bool        # False = 판수 미달 — 빈 고리 + 흐린 글자
+    arrow: int          # +1 위 · −1 아래 · 0 안 — 밖이면 위아래 같은 주의 색
+    tip: str
+
+
+class LuckDotRows(_Chart):
+    """날마다 한 줄 — 날짜 · 판수 · 트랙(가로 0~100% 고정) 위 운 범위 띠 · 기준 세로선 · 그날 승률 점 · 오른쪽 승률(66 G4).
+    폭이 `TWO_COL_W` 이상이면 두 열(세로로 먼저 채운다) — 1280 창에서 한 열 폭이 트랙을 못 담으면 한 열."""
+
+    ROW_H = 24
+    LABEL_W = 44
+    GAMES_W = 44
+    RATE_W = 52
+    TRACK_MIN = 160
+    COL_GAP = 28
+    COL_MIN = LABEL_W + GAMES_W + TRACK_MIN + RATE_W + 24
+    TWO_COL_W = 2 * COL_MIN + COL_GAP
+    DOT_R = 5
+    EMPTY = "경기가 있는 날이 없습니다."
+
+    def __init__(self):
+        super().__init__(min_h=self.ROW_H * 2)
+        self._rows: list[LuckRow] = []
+        self.cols = 1
+
+    def set_data(self, rows: list[LuckRow]) -> None:
+        self._rows = list(rows)
+        self._fit_height()
+        self.update()
+
+    def _columns(self, width: int) -> int:
+        return 2 if width >= self.TWO_COL_W and len(self._rows) > 1 else 1
+
+    def _fit_height(self) -> None:
+        self.cols = self._columns(self.width())
+        per = math.ceil(len(self._rows) / self.cols) if self._rows else 2
+        self.setMinimumHeight(per * self.ROW_H + 4)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._columns(self.width()) != self.cols:
+            self._fit_height()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hits = []
+        f = _small_font(self.font())
+        p.setFont(f)
+        if not self._rows:
+            self._empty(p, self.EMPTY)
+            return
+        cols = self.cols
+        per = math.ceil(len(self._rows) / cols)
+        col_w = (self.width() - self.COL_GAP * (cols - 1)) / cols
+        for i, r in enumerate(self._rows):
+            c, k = divmod(i, per)
+            x0 = c * (col_w + self.COL_GAP)
+            y = 2 + k * self.ROW_H
+            dim = not r.judged
+            p.setPen(QColor(T.TEXT_DIM if dim else T.TEXT))
+            p.drawText(QRectF(x0, y, self.LABEL_W, self.ROW_H), Qt.AlignmentFlag.AlignVCenter, r.label)
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(x0 + self.LABEL_W, y, self.GAMES_W, self.ROW_H),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, f"{r.games}판")
+            tx = x0 + self.LABEL_W + self.GAMES_W + 12
+            tw = max(col_w - (tx - x0) - self.RATE_W - 12, 10)
+            cy = y + self.ROW_H / 2
+            track = QRectF(tx, cy - 4, tw, 8)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(T.PANEL_2))
+            p.drawRoundedRect(track, 4, 4)
+            x_of = lambda v: tx + tw * min(max(v, 0.0), 100.0) / 100.0   # noqa: E731
+            if r.judged:
+                p.setBrush(_color(T.CHART_NEUTRAL, 0.45))
+                p.drawRoundedRect(QRectF(x_of(r.lo), cy - 4, max(x_of(r.hi) - x_of(r.lo), 2), 8), 4, 4)
+            p.setPen(QPen(QColor(T.TEXT), 1.5))
+            p.drawLine(QPointF(x_of(r.base), cy - 7), QPointF(x_of(r.base), cy + 7))
+            dot = QPointF(x_of(r.rate), cy)
+            if r.judged:
+                p.setPen(QPen(QColor(T.PANEL), RING_W))
+                p.setBrush(QColor(T.WARN_FILL if r.arrow else T.ACCENT_FILL))
+            else:
+                p.setPen(QPen(QColor(T.CHART_NEUTRAL), 1.5))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawEllipse(dot, self.DOT_R, self.DOT_R)
+            p.setPen(QColor(T.TEXT_DIM if dim else (T.WARN if r.arrow else T.TEXT)))
+            p.drawText(QRectF(x0 + col_w - self.RATE_W, y, self.RATE_W, self.ROW_H),
+                       Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight, f"{r.rate:.1f}%")
+            self._hits.append((QRectF(x0, y, col_w, self.ROW_H), r.tip))
+
+
+DONUT_MAX = 6  # 도넛 조각 상한 — 넘치면 앞 DONUT_MAX-1 개 + "기타"
 
 
 def donut_segments(counts: list[tuple[str, float]], max_n: int = DONUT_MAX

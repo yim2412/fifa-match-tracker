@@ -1580,35 +1580,123 @@ def _days_spec():
     return [(datetime(2026, 9, 1 + d, 10, i), "승" if d < 5 else "패", True) for d in range(10) for i in range(20)]
 
 
-def test_luck_tab_band_follows_trend_days():
-    # 2.7.1 N16 — 띠의 평균 p 는 승률 그래프와 같은 '최근 N일'. 일수를 적용하면 다시 그려진다(키에 기간이 안 들어가면 FAIL)
-    with _SynthScope(_synth_matches(_days_spec())):
+def _wd_spec(spec):
+    """_days_spec 꼴 → 저장 경기(WinDivision) — 운 범위(66 G4)·달력은 _season_wins() 를 본다."""
+    return [st_mod.WinDivision(when, 900, res, False) for when, res, _dp in spec]
+
+
+class _LuckScope(_SynthScope):
+    """경기 목록(범위)과 저장 경기(_season_wins)를 같은 spec 으로 갈아 끼운다 · 시즌표도."""
+
+    def __init__(self, spec, seasons=()):
+        super().__init__(_synth_matches(spec))
+        self.rows, self.seasons = _wd_spec(spec), list(seasons)
+
+    def __enter__(self):
+        self.keep2 = (_win.__dict__.get("_season_wins"), _win._rank_seasons)
+        _win._season_wins = lambda: self.rows
+        _win._rank_seasons = self.seasons
+        return super().__enter__()
+
+    def __exit__(self, *exc):
+        if self.keep2[0] is None:
+            _win.__dict__.pop("_season_wins", None)
+        _win._rank_seasons = self.keep2[1]
+        return super().__exit__(*exc)
+
+
+def test_luck_tab_season_range_cards_and_dots_66():
+    """66 G4 · U2 — 날 = 성적 진단 범위의 경기 있는 날 전부(그래프 '최근 N일' 과 끊음) · 기준 = 그날이 속한 시즌 승률 ·
+    시즌표가 없으면 저장된 전체(M12) · 여러 시즌이면 "시즌마다"."""
+    from datetime import date as _d
+    with _LuckScope(_days_spec()):
         _win._go_page("성적 진단", "운 범위")
-        _win.sp_trend_days.setValue(10)
-        _win._on_trend_days_apply()
-        assert "최근 10일" in _win.lb_luck_note.text() and "평균 승률 50.0%" in _win.lb_luck_summary.text(), \
-            (_win.lb_luck_note.text(), _win.lb_luck_summary.text())
-        assert _win.tbl_luck_days.rowCount() == 10
+        _win._render_luck(_win._matches)
+        rows = _win.luck_dots._rows
+        assert len(rows) == 10 and rows[0].label == "09/10" and rows[-1].label == "09/01", [r.label for r in rows]
+        # 시즌표 없음 → 저장된 전체 50% · 20판 전승/전패라 10일 모두 띠 밖
+        assert _win.card_luck_base.cap.text() == "저장된 전체 승률" and _win.card_luck_base.value.text() == "50.0%"
+        assert _win.card_luck_base.sub.text() == "200판", _win.card_luck_base.sub.text()
+        assert _win.card_luck_out.value.text() == "10일" and "운이면 0." in _win.card_luck_out.sub.text(), \
+            _win.card_luck_out.sub.text()
+        assert all(r.arrow and r.judged and abs(r.base - 50.0) < 1e-9 for r in rows), rows
+        assert "이 범위 전체 승률 50.0%" in _win.lb_luck_required.text(), _win.lb_luck_required.text()
+        # M2 — '최근 N일' 을 바꿔도 운 범위는 그대로(시즌 범위)
         _win.sp_trend_days.setValue(5)
         _win._on_trend_days_apply()
-        assert "최근 5일" in _win.lb_luck_note.text() and "평균 승률 0.0%" in _win.lb_luck_summary.text(), \
-            _win.lb_luck_summary.text()
-        assert _win.tbl_luck_days.rowCount() == 5
+        _win._render_luck(_win._matches)
+        assert len(_win.luck_dots._rows) == 10, "운 범위가 아직 '최근 N일' 을 따른다"
+    # 한 시즌(진행 중 — 시즌표에 없는 시즌) → "시즌 평균" · 이번 시즌
+    with _LuckScope(_days_spec(), [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 8, 31))]):
+        _win._render_luck(_win._matches)
+        assert _win.card_luck_base.cap.text() == "시즌 평균" and _win.card_luck_base.value.text() == "50.0%"
+        assert _win.card_luck_base.sub.text() == "이번 시즌 · 200판", _win.card_luck_base.sub.text()
+    # 두 시즌(09/06 경계) → 앞 5일 기준 100% · 뒤 5일 0% — 날마다 그 시즌이라 띠 밖 날 0
+    with _LuckScope(_days_spec(), [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 6))]):
+        _win._render_luck(_win._matches)
+        assert _win.card_luck_base.value.text() == "시즌마다" and "2개 시즌" in _win.card_luck_base.sub.text()
+        assert {round(r.base) for r in _win.luck_dots._rows} == {0, 100}, _win.luck_dots._rows
+        assert _win.card_luck_out.value.text() == "0일", _win.card_luck_out.value.text()
 
 
-def test_luck_tab_counts_outside_days_and_required_table():
-    with _SynthScope(_synth_matches(_days_spec())):
-        _win._go_page("성적 진단", "운 범위")
-        _win.sp_trend_days.setValue(10)
-        _win._on_trend_days_apply()
-        # 하루 20판 전승·전패 → 평균 50% 의 띠(±22%p) 밖 10일 전부 — 운만이면 하루 약 4% 라 약 0.4일
-        assert "띠 밖인 날 10일" in _win.lb_luck_summary.text(), _win.lb_luck_summary.text()
-        verdicts = {_win.tbl_luck_days.item(r, 4).text() for r in range(10)}
-        assert verdicts == {"띠 밖 ▲ 평소보다 잘함", "띠 밖 ▼ 평소보다 못함"}, verdicts
-        req = {_win.tbl_luck_required.item(r, 0).text(): _win.tbl_luck_required.item(r, 1).text()
-               for r in range(_win.tbl_luck_required.rowCount())}
-        assert req["3%p"] == "2,223판", req
-        _check_elisions([_win.tbl_luck_days, _win.tbl_luck_required])    # 채운 표도 최소 크기에서 안 잘린다
+def test_luck_tab_judgement_matches_calendar_66():
+    """U2 — 같은 날이면 달력 ▲▼ 와 같은 판정(재료·묶음·하한이 같다 · M14) · 묶음 규칙을 꺼도(A6 섞임) 같아야."""
+    from datetime import date as _d
+    spec = []
+    for day, (w, d, l) in enumerate([(9, 0, 1), (1, 1, 8), (3, 0, 0), (4, 1, 0), (5, 0, 5), (12, 2, 6)], start=1):
+        k = 0
+        for res, cnt in (("승", w), ("무", d), ("패", l)):
+            for _ in range(cnt):
+                spec.append((datetime(2026, 9, day, 9) + timedelta(minutes=k), res, True))
+                k += 1
+    keep = config.WIN_RATE_DRAWS_IN
+    try:
+        for rule in (True, False):
+            config.WIN_RATE_DRAWS_IN = rule
+            with _LuckScope(spec, [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 8, 31))]):
+                _win._render_luck(_win._matches)
+                luck = {int(r.label[-2:]): (r.judged, r.arrow) for r in _win.luck_dots._rows}
+                _win._cal_month = (2026, 9)
+                _win._render_calendar()
+                cal = {day: (not c.weak, c.arrow) for day, c in _win.cal_grid._cells.items()}
+                assert luck == cal, (rule, luck, cal)
+                assert any(a for _j, a in luck.values()), "빈 검사 — 띠 밖 날이 하나는 있어야"
+                assert any(not j for j, _a in luck.values()), "빈 검사 — 미달 날이 하나는 있어야(3판 날)"
+    finally:
+        config.WIN_RATE_DRAWS_IN = keep
+        _win._cal_month = None
+
+
+def test_luck_required_table_uses_whole_range_not_30_days_66():
+    """M1 — "몇 판부터" 의 기준 p 는 범위 전체. 일수를 안 넘기면 win_rate_trend 기본 30일이 조용히 들어간다."""
+    spec = [(datetime(2026, 8, 1 + d, 10, i), "승", True) for d in range(10) for i in range(20)]
+    spec += [(datetime(2026, 8, 11, 10) + timedelta(days=d), "패", True) for d in range(30)]
+    with _LuckScope(spec):
+        _win._render_luck(_win._matches)
+        want = f"이 범위 전체 승률 {200 / 230 * 100:.1f}%"
+        assert want in _win.lb_luck_required.text(), (want, _win.lb_luck_required.text())
+
+
+def test_luck_dot_rows_columns_and_hits_66():
+    """두 열은 폭이 TWO_COL_W 이상일 때만(1280 에서 트랙이 안 눌리게) · 높이는 열 수로 · 줄마다 툴팁."""
+    ch = charts.LuckDotRows()
+    rows = [charts.LuckRow(f"09/{i:02d}", 20, 50.0 + i, 30.0, 70.0, 50.0, i != 3, (1 if i == 9 else 0), f"t{i}")
+            for i in range(1, 11)]
+    ch.set_data(rows)
+    ch.show()      # 숨은 위젯은 resizeEvent 를 보일 때까지 미룬다
+    ch.resize(ch.TWO_COL_W + 10, 400)
+    _app.processEvents()
+    assert ch.cols == 2 and ch.minimumHeight() == 5 * ch.ROW_H + 4, (ch.cols, ch.minimumHeight())
+    ch.grab()
+    assert len(ch._hits) == 10 and [t for _a, t in ch._hits][0] == "t1"
+    assert ch._hits[5][0].left() > ch._hits[0][0].right(), "둘째 열이 첫 열 오른쪽이 아니다"
+    ch.resize(ch.TWO_COL_W - 10, 400)
+    _app.processEvents()
+    assert ch.cols == 1 and ch.minimumHeight() == 10 * ch.ROW_H + 4, (ch.cols, ch.minimumHeight())
+    ch.set_data([])
+    ch.grab()
+    assert ch._hits == []
+    ch.close()
 
 
 def test_luck_tab_streak_states():
@@ -10351,7 +10439,7 @@ def _club_args(club, **kw):
     rows = _elo_rows([("2026-10-17T15:00:00", 4500.0, 9, "search"), ("2026-10-18T20:00:00", 4380.0, 230, "search")])
     rows[-1]["team_value"] = 8 * 10 ** 11
     args = dict(wins=wins, rows=rows, pts=app_main.elo_daily_points(rows, datetime(2026, 9, 10)), club=club,
-                season_start=datetime(2026, 9, 10), today=_d(2026, 10, 19), mixed=False)
+                season_start=datetime(2026, 9, 10), today=_d(2026, 10, 19), mixed=False, known=True)
     args.update(kw)
     return args
 
@@ -10387,6 +10475,11 @@ def test_club_cells_texts():
         # 저장이 늦게 시작되면 내 값은 덜 센 것 — 넥슨 누적인 남들과 견주지 않는다(조각 ② 리뷰 [중])
         assert "등수 없음" in late["시즌 FC"][1] and "/" not in late["시즌 FC"][1], late["시즌 FC"]
         assert "빠르게" not in late["챔스·슈챔 달성"][1] and "남들 비교 없음" in late["챔스·슈챔 달성"][1], late["챔스·슈챔 달성"]
+        assert all("시즌 모름" not in v[1] for v in cells.values()), cells
+        # M16 — 시즌을 모르면(R2) 최근 70일을 "시즌" 이라 부르지 않는다 · 제목(대시보드 열쇠)은 그대로
+        guess = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(), known=False))}
+        for k in ("시즌 FC", "시즌 최고점", "챔스·슈챔 달성"):
+            assert f"최근 {config.ELO_FALLBACK_DAYS}일(시즌 모름)" in guess[k][1], (k, guess[k])
         unk = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(me_known=False, me_in_fc=False)))}
         assert unk["구단가치 등수"][1] == app_main.CLUB_NO_SN and unk["시즌 FC"][1] == app_main.CLUB_NO_SN, \
             "내 번호를 모르는데 1만 위 밖이라 했다"
@@ -10530,7 +10623,12 @@ def test_calendar_tab_cells_arrows_and_month_nav():
         assert (g._cells[1].arrow, g._cells[2].arrow, g._cells[3].arrow) == (1, -1, 0), g._cells
         assert g._cells[3].weak and "판 미만" in g._cells[3].tip and not g._cells[1].weak
         assert g._cells[1].sub == "10판 · 135 FC", g._cells[1].sub
-        assert "이 달: 3일 · 하루 7.7판" in _win.lb_cal_summary.text(), _win.lb_cal_summary.text()
+        t = _win.tbl_cal_summary
+        assert (t.item(0, 0).text(), t.item(0, 1).text(), t.item(3, 1).text()) == ("하루 판수", "7.7판", "3일"), \
+            [t.item(r, 1).text() for r in range(t.rowCount())]
+        assert _win.lb_cal_month_sum.text().strip() == "3일 · 195 FC", _win.lb_cal_month_sum.text()
+        assert g._fc_max == 135, "진하기 최대 = 이 달 최대 FC"
+        assert g._cells[1].fc == 135 and g._cells[3].fc == 45, g._cells
         assert "▲ 1일 · ▼ 1일" in _win.lb_cal_note.text(), _win.lb_cal_note.text()
         g.grab()
         assert len(g._hits) == 3, "칸 툴팁이 경기 있는 날만큼이 아니다"
@@ -10563,14 +10661,17 @@ def test_calendar_labels_say_all_stored_without_season_table():
         _win._go_page("승률 그래프", "일별 기록")
         _win._rank_seasons = []
         _win._render_calendar()
-        tip, summary, note = _win.cal_grid._cells[1].tip, _win.lb_cal_summary.text(), _win.lb_cal_note.text()
+        t = _win.tbl_cal_summary
+        tip, note = _win.cal_grid._cells[1].tip, _win.lb_cal_note.text()
+        summary = f"{t.horizontalHeaderItem(2).text()}: {t.item(3, 2).text()}"
         # 막지 않았으면: 9월 30일까지 한 묶음이라 기준선이 9월 경기까지 섞인다 — 그 값을 "시즌 승률" 로 적는다
         assert "저장된 전체 승률" in tip and "시즌 승률" not in tip, tip
         assert "저장된 전체: 2일" in summary and "이번 시즌" not in summary, summary
         assert "시즌표가 없어" in note and "저장된 전체 승률 ±" in note, note
         _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 10, 1))]
         _win._render_calendar()
-        tip, summary = _win.cal_grid._cells[1].tip, _win.lb_cal_summary.text()
+        tip = _win.cal_grid._cells[1].tip
+        summary = f"{t.horizontalHeaderItem(2).text()}: {t.item(3, 2).text()}"
         assert "시즌 승률" in tip and "저장된 전체" not in tip, tip
         assert "이번 시즌: 1일" in summary and "시즌표가 없어" not in _win.lb_cal_note.text(), summary
     finally:
@@ -10579,6 +10680,89 @@ def test_calendar_labels_say_all_stored_without_season_table():
         _win._rank_seasons = keep[1]
         _win._cal_month = None
         _win._go_page("대시보드")
+
+
+def test_fc_reward_cards_match_head_line_66():
+    """66 G5·G5b — 카드 셋은 늘 이번 시즌 · "매치 보상" 은 머리 줄 H6 "시즌 FC" 와 같은 숫자(M3) · 저장이 늦게 시작하면
+    같은 꼬리(M15) · 시즌을 모르면 "최근 70일"(R2) · 순위 보상은 지금 등수로(rank_reward)."""
+    from datetime import date as _d
+    W = core.WinDivision
+    rows = [W(datetime(2026, 9, 10, 9), 900, "승", False), W(datetime(2026, 9, 11, 9), 800, "승", False),
+            W(datetime(2026, 9, 12, 9), 800, "패", False), W(datetime(2026, 8, 20, 9), 800, "승", False)]
+    keep = (_win.__dict__.get("_season_wins"), _win._rank_seasons, dict(_win._elo), config.WEB_DATA)
+
+    def texts(box):
+        return [(c.cap.text(), c.value.text(), c.sub.text()) for c in box[1]]
+    try:
+        config.WEB_DATA = True
+        _win._season_wins = lambda: rows
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
+        _win._elo.pop(_OUID, None)
+        _win._go_page("성적 진단", "FC 보상")
+        _win._render_rewards(_win._details)
+        head = {c[0]: c for c in _win._club_cells()}
+        match, rank_c, total = texts(_win.rewards_cards)
+        assert match[0] == "이번 시즌 매치 보상" and match[1] == head["시즌 FC"][1], (match, head["시즌 FC"])
+        fc = core.win_rewards([r for r in rows if r.when >= datetime(2026, 9, 10)]).fc
+        assert match[1] == f"{fc:,} FC" and fc > 0, "8/20 경기(지난 시즌)를 넣었다"
+        assert "저장 시작 뒤부터" not in match[2], match
+        assert rank_c[1] == "—" and total[1] == f"{fc:,} FC", (rank_c, total)
+        _win._go_page("승률 그래프", "일별 기록")
+        _win._render_calendar()
+        assert texts(_win.cal_fc_cards) == texts(_win.rewards_cards), "달력 카드와 FC 보상 카드가 다르다"
+        assert "FC 보상량 — 이긴 판마다" in _win.cal_fc_cards[0].text(), _win.cal_fc_cards[0].text()
+        # 순위 보상 — 지금 등수(마지막 점)로
+        data = _elo_data(_elo_rows([("2026-09-12T10:00:00", 4500.0, 150, "search")]))
+        _win._on_elo_ready(_OUID, data)
+        _win._render_rewards(_win._details)
+        rank, got = app_main.rank_reward(_win._elo_points(), _d.today())
+        assert rank == 150, rank
+        match, rank_c, total = texts(_win.rewards_cards)
+        assert rank_c[2].startswith("현재 150등") and total[1] == f"{fc + (got or 0):,} FC", (rank_c, total)
+        # M15 — 시즌 시작이 8/1 이면 첫 저장 경기(8/20)가 N12_START_DAYS 밖 → 같은 꼬리
+        _win._elo.pop(_OUID, None)
+        _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 7, 1), _d(2026, 8, 1))]
+        _win._render_rewards(_win._details)
+        assert "저장 시작 뒤부터" in texts(_win.rewards_cards)[0][2], texts(_win.rewards_cards)
+        assert "저장 시작 뒤부터" in {c[0]: c for c in _win._club_cells()}["시즌 FC"][2]
+        # R2 — 시즌표·스냅숏 없음
+        _win._rank_seasons = []
+        _win._render_rewards(_win._details)
+        assert texts(_win.rewards_cards)[0][0] == f"최근 {config.ELO_FALLBACK_DAYS}일 매치 보상", texts(_win.rewards_cards)
+        assert "시즌 모름" in {c[0]: c for c in _win._club_cells()}["시즌 FC"][2]
+    finally:
+        if keep[0] is None:
+            _win.__dict__.pop("_season_wins", None)
+        _win._rank_seasons, config.WEB_DATA = keep[1], keep[3]
+        _win._elo.clear()
+        _win._elo.update(keep[2])
+        _win._go_page("대시보드")
+
+
+def test_calendar_fc_shade_keeps_text_readable_66():
+    """66 G5 · M4 — 진하기 0~상한 전부에서, 두 팔레트 모두 칸 위 승률(TEXT) 4.5 · ▲▼(GOOD/BAD) 3.0 · 날짜·판수 글자 4.5.
+    미달 날·이 달 최대 0 은 진하기 0(M11). 상한이 0.06 밑이면 진하기가 안 보인다 — 그것도 FAIL."""
+    import widgets
+    names = ("PANEL_2", "ACCENT_FILL", "TEXT", "TEXT_DIM", "GOOD", "BAD")
+    keep = {k: getattr(T, k) for k in names}
+    assert config.CAL_FC_MAX_MIX >= 0.06, config.CAL_FC_MAX_MIX
+    try:
+        for mode, pal in T._PALETTES.items():
+            for k in names:
+                setattr(T, k, pal[k])
+            for i in range(0, 101):
+                bg, dim = widgets.cal_cell_colors(i, 100, False)
+                for k, need in (("TEXT", 4.5), ("GOOD", 3.0), ("BAD", 3.0)):
+                    assert T.contrast(pal[k], bg) >= need, (mode, i, k, T.contrast(pal[k], bg))
+                assert T.contrast(dim, bg) >= 4.5, (mode, i, dim)
+            top, _ = widgets.cal_cell_colors(100, 100, False)
+            assert top == T.blend(pal["PANEL_2"], pal["ACCENT_FILL"], config.CAL_FC_MAX_MIX) and top != pal["PANEL_2"], mode
+            assert widgets.cal_cell_colors(100, 100, True) == (pal["PANEL_2"], pal["TEXT_DIM"]), "미달 날이 칠해졌다"
+            assert widgets.cal_cell_colors(0, 0, False)[0] == pal["PANEL_2"], "최대 0 에서 칠했다"
+            assert widgets.cal_cell_colors(500, 100, False)[0] == top, "최대를 넘는 값이 상한을 넘었다"
+    finally:
+        for k, v in keep.items():
+            setattr(T, k, v)
 
 
 def test_tactics_opp_formation_grouping():

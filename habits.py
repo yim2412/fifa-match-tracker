@@ -12,7 +12,7 @@
 | `strength_chips(totals)` | [흐름 분석] 맨 위 칩 줄(N19) | 결정력·유효슛 비율·태클 성공 중 구간이 0 을 안 품고 크기 문턱을 넘은 것 |
 | `half_share_diff(details, ouid)` | 흐름 분석 문장 "전반·후반 어디서 새나"(N19) | 내 실점의 전반 비중 − 같은 경기 상대 실점(= 내 득점)의 전반 비중 |
 | `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |
-| `daily_luck(periods, mixed)` | [성적 진단 › 운 범위](N16) | 하루 승률이 평균 ± 2σ(이항) 띠 밖인 날 수 대 운만이면 기대되는 날 수 · "몇 판부터" 표 |
+| `daily_luck(periods, mixed)` · `luck_expected(days)` | [성적 진단 › 운 범위](N16 · 66 G4) | 범위 승률·"몇 판부터" 표 · 날 판정은 `calendar_days`(달력과 한 판정) — 운만이면 띠 밖일 날 수는 날마다 그 시즌 기준 이항 |
 | `streak_baseline(matches)` | 〃 (A3) | 최장 연승·연패 대 `draw_possible` 층 안에서 순서를 섞은 기준(97.5분위) — 느려서 작업 스레드 |
 | `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대별 승률 + 표마다 카이제곱(층 보정) |
 | `club_day(wins, day)` · `day_delta(points, day)` · `first_reach(wins, start, division)` | 대시보드 맨 위 "이번 시즌 구단"(55 H1·H5) | 재료는 `stats.win_divisions` — 화면 글은 `app_main.club_cells` |
@@ -746,21 +746,6 @@ GOAL_KIND_NOTE = {
 
 # ── N16 하루 승률 운 범위 ───────────────────────────────────────────────────
 @dataclass
-class DayLuck:
-    """하루 치 — 승률(A6 식)이 평균의 띠 안인가."""
-    day: object
-    win: int
-    draw: int
-    lose: int
-    n: int                  # 그날 승률 분모(rated)
-    rate: float             # 그날 승률(%)
-    lo: float               # 띠(%) — 그날 판수 n 으로
-    hi: float
-    weak: bool              # n < N16_MIN_DAY — 점만 흐리고 띠 밖 날 수에서 뺀다
-    outside: bool           # 띠 밖(weak 이면 늘 False)
-
-
-@dataclass
 class RequiredRow:
     diff: float             # 두 계정 승률 차(%p)
     n: int                  # 각 계정 승률 분모(rated)
@@ -769,12 +754,9 @@ class RequiredRow:
 
 @dataclass
 class Luck:
-    days: list[DayLuck] = field(default_factory=list)
+    """범위 전체 승률과 "몇 판부터" 표 — 날마다의 판정은 `calendar_days`(66 U2 · 달력과 한 판정)."""
     mixed: bool = False
-    p: float = 0.0                  # 기간 전체 승률(0~1) — 띠의 가운데
-    judged: int = 0                 # 판정한 날(weak 아님)
-    outside: int = 0                # 띠 밖인 날
-    expected: float = 0.0           # 운만이면 띠 밖일 날 수(날마다 이항 정확히)
+    p: float = 0.0                  # 범위 전체 승률(0~1)
     draw_ratio: float = 0.0         # 이 계정 무승부 / 전체
     required: list[RequiredRow] = field(default_factory=list)
 
@@ -804,8 +786,8 @@ def luck_band(p: float, n: int) -> tuple[float, float]:
 
 
 def daily_luck(periods: list[PeriodRate], mixed: bool | None = None) -> Luck:
-    """하루 승률이 같은 기간 평균 ± `N16_BAND_SIGMA`σ 띠 밖인가. periods 는 `models.win_rate_trend` 결과(그 기간 하루씩)
-    — 묶음은 그래프 전체 기간이라 mixed 도 거기서 온다. 하루 `N16_MIN_DAY` 판(rated) 미만은 점만 흐리게 두고 세지 않는다."""
+    """범위 전체 승률 p · 무승부 비율 · "몇 판부터 실력 차이로" 표. periods 는 `models.win_rate_trend` 결과 — 부르는 쪽이
+    범위 전체 일수를 넘긴다(기본 30일이 조용히 들어가지 않게 · 66 M1). 날 판정은 `calendar_days`(66 U2)."""
     out = Luck()
     if not periods:
         return out
@@ -818,17 +800,6 @@ def daily_luck(periods: list[PeriodRate], mixed: bool | None = None) -> Luck:
     total = w + d + l
     out.draw_ratio = d / total if total else 0.0
     sig = config.N16_BAND_SIGMA
-    for p in periods:
-        n = rated(p.win, p.draw, p.lose, out.mixed)
-        lo, hi = luck_band(out.p, n)
-        weak = is_weak(n, config.N16_MIN_DAY)
-        rate = win_pct(p.win, p.draw, p.lose, out.mixed)
-        outside = (not weak) and not (lo * 100 - 1e-9 <= rate <= hi * 100 + 1e-9)
-        out.days.append(DayLuck(p.day, p.win, p.draw, p.lose, n, rate, lo * 100, hi * 100, weak, outside))
-        if not weak:
-            out.judged += 1
-            out.outside += outside
-            out.expected += _binom_outside_prob(n, out.p, lo, hi)
     pq = out.p * (1 - out.p)
     for diff in config.N16_REQUIRED_DIFFS:
         n = math.ceil(2 * sig * sig * pq / ((diff / 100) ** 2)) if pq else 0
@@ -837,7 +808,13 @@ def daily_luck(periods: list[PeriodRate], mixed: bool | None = None) -> Luck:
     return out
 
 
-# ── A3 연승·연패 우연 기준 ──────────────────────────────────────────────────
+def luck_expected(days) -> float:
+    """운만이면 띠 밖일 날 수 — 판정한 날(`CalDay.judged`)마다 그날 기준(그 시즌 승률)으로 이항 정확히 더한다(66 G4).
+    CalDay 의 base·lo·hi 는 퍼센트라 비율로 바꿔 넘긴다(66 M13 — 그대로면 띠가 0~1 밖이라 조용히 틀린다)."""
+    return sum(_binom_outside_prob(d.n, d.base / 100, d.lo / 100, d.hi / 100) for d in days if d.judged)
+
+
+# ── A3 연승·연패 우연 기준──────────────────────────────────────────────────
 @dataclass
 class StreakBaseline:
     games: int = 0

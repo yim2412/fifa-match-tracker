@@ -460,38 +460,47 @@ def _pr(day, win, draw, lose, mixed):
     return PeriodRate(label=f"09/{day:02d}", win=win, draw=draw, lose=lose, day=date(2026, 9, day), mixed=mixed)
 
 
-def test_daily_luck_expected_is_exact_binomial_not_4_55_percent():
-    # 하루 20판 10승 10패 → p = 0.5 · 띠 0.5 ± 2√(0.25/20) = 0.2764 ~ 0.7236 → 승 수 5 이하·15 이상이 띠 밖
+def _cal(day, n, win, base, lo, hi, judged=True):
+    return habits.CalDay(date(2026, 9, day), win, 0, n - win, 0, n, win / n * 100 if n else 0.0, base, lo, hi, judged, 0)
+
+
+def test_luck_expected_is_exact_binomial_not_4_55_percent():
+    # 하루 20판 · 기준 50% · 띠 50 ± 2√(0.25/20) = 27.64 ~ 72.36% → 승 수 5 이하·15 이상이 띠 밖
     # P = 2·P(X ≤ 5) = 2·21700/2^20 = 0.041389 (정규 근사의 4.55% 가 아니다)
-    lk = habits.daily_luck([_pr(1, 10, 0, 10, False)])
-    assert (lk.judged, lk.outside) == (1, 0), lk
-    assert abs(lk.expected - 2 * 21700 / 2 ** 20) < 1e-9, lk.expected
+    lo, hi = (x * 100 for x in habits.luck_band(0.5, 20))
+    exp = habits.luck_expected([_cal(1, 20, 10, 50.0, lo, hi)])
+    assert abs(exp - 2 * 21700 / 2 ** 20) < 1e-9, exp
 
 
-def test_daily_luck_weak_day_is_dimmed_not_counted():
-    days = [_pr(1, 10, 0, 10, False), _pr(2, 9, 0, 10, False)]        # 둘째 날 19판 < N16_MIN_DAY(20)
-    lk = habits.daily_luck(days)
-    assert [d.weak for d in lk.days] == [False, True], lk.days
-    assert lk.judged == 1, "띠 밖 날 수 분모에서도 뺀다"
-    one = habits.daily_luck([_pr(1, 10, 0, 10, False)])
-    # 둘째 날은 기대값에도 안 들어간다(평균 p 는 둘 다로 구하므로 첫날 기대값은 같지 않아도 둘째 날 몫이 더해지지는 않는다)
-    assert lk.expected < 2 * one.expected, lk.expected
+def test_luck_expected_takes_percent_not_ratio():
+    # 66 M13 — CalDay 의 base·lo·hi 는 퍼센트. 비율로 바꾸지 않고 넘기면 띠가 [27.6, 72.4] 라 k/n(0~1)이 늘 띠 밖 → 1.0
+    lo, hi = (x * 100 for x in habits.luck_band(0.5, 20))
+    exp = habits.luck_expected([_cal(1, 20, 10, 50.0, lo, hi)])
+    assert 0.0 < exp < 0.05, exp
 
 
-def test_daily_luck_counts_outside_days():
-    # 40판씩: 하루는 36승 4패(90%), 하루는 4승 36패(10%) → 평균 50% · 띠 ±15.8%p → 둘 다 밖
+def test_luck_expected_skips_unjudged_days_and_uses_each_days_base():
+    lo, hi = (x * 100 for x in habits.luck_band(0.5, 20))
+    one = habits.luck_expected([_cal(1, 20, 10, 50.0, lo, hi)])
+    assert habits.luck_expected([_cal(1, 20, 10, 50.0, lo, hi), _cal(2, 4, 2, 50.0, 0.0, 100.0, judged=False)]) == one, \
+        "판정 안 한 날(미달)을 더했다"
+    # 날마다 기준 — 같은 판수라도 기준 90% 인 날은 띠가 좁아 밖 확률이 다르다(기준을 하나로 두면 같은 값)
+    lo9, hi9 = (x * 100 for x in habits.luck_band(0.9, 20))
+    two = habits.luck_expected([_cal(1, 20, 10, 50.0, lo, hi), _cal(2, 20, 18, 90.0, lo9, hi9)])
+    other = habits._binom_outside_prob(20, 0.9, lo9 / 100, hi9 / 100)
+    assert abs(two - (one + other)) < 1e-12 and abs(other - one) > 1e-3, (one, other, two)
+
+
+def test_daily_luck_p_is_whole_range_rate():
     lk = habits.daily_luck([_pr(1, 36, 0, 4, False), _pr(2, 4, 0, 36, False)])
-    assert (lk.judged, lk.outside) == (2, 2), lk
-    assert [d.outside for d in lk.days] == [True, True]
-    assert abs(lk.days[0].lo - 34.19) < 0.05 and abs(lk.days[0].hi - 65.81) < 0.05, lk.days[0]
+    assert abs(lk.p - 0.5) < 1e-12 and not hasattr(lk, "days"), lk
 
 
 def test_daily_luck_mixed_uses_win_over_win_plus_lose():
-    # 섞인 묶음: 하루 10승 100무 10패 → 분모 20 · 승률 50%. 한 집단이면 분모 120 · 8.3%
+    # 섞인 묶음: 10승 100무 10패 → 분모 20 · 승률 50%. 한 집단이면 분모 120 · 8.3%
     mx = habits.daily_luck([_pr(1, 10, 100, 10, True)])
     sg = habits.daily_luck([_pr(1, 10, 100, 10, False)])
-    assert (mx.days[0].n, round(mx.days[0].rate, 1)) == (20, 50.0), mx.days[0]
-    assert (sg.days[0].n, round(sg.days[0].rate, 1)) == (120, 8.3), sg.days[0]
+    assert round(mx.p, 3) == 0.5 and round(sg.p, 3) == 0.083, (mx.p, sg.p)
 
 
 def test_daily_luck_required_games_table():
@@ -507,20 +516,19 @@ def test_daily_luck_required_games_table():
 
 
 def test_daily_luck_config_is_wired():
-    old = (config.N16_MIN_DAY, config.N16_BAND_SIGMA)
+    old = config.N16_BAND_SIGMA
     try:
-        config.N16_MIN_DAY = 21
-        assert habits.daily_luck([_pr(1, 10, 0, 10, False)]).days[0].weak, "N16_MIN_DAY 배선"
-        config.N16_MIN_DAY = 20
+        base = habits.daily_luck([_pr(1, 10, 0, 10, False)]).required[0].n
         config.N16_BAND_SIGMA = 1.0
-        d = habits.daily_luck([_pr(1, 10, 0, 10, False)]).days[0]
-        assert abs((d.hi - d.lo) / 2 - 100 * math.sqrt(0.25 / 20)) < 1e-6, "N16_BAND_SIGMA 배선"
+        assert habits.daily_luck([_pr(1, 10, 0, 10, False)]).required[0].n * 4 in range(base - 4, base + 5), \
+            "N16_BAND_SIGMA 배선(σ 절반이면 필요 판수 1/4)"
     finally:
-        config.N16_MIN_DAY, config.N16_BAND_SIGMA = old
+        config.N16_BAND_SIGMA = old
 
 
 def test_daily_luck_empty():
-    assert habits.daily_luck([]).days == []
+    lk = habits.daily_luck([])
+    assert lk.p == 0.0 and lk.required == []
 
 
 # ── A3 연승·연패 우연 기준 ───────────────────────────────────────────────────
@@ -755,7 +763,7 @@ def test_binom_outside_prob_edges_by_hand():
 
 def test_daily_luck_all_draw_mixed_has_no_division_by_zero():
     lk = habits.daily_luck([_pr(1, 0, 30, 0, True)])
-    assert lk.days[0].n == 0 and lk.days[0].weak and lk.judged == 0, lk
+    assert lk.p == 0.0, lk
     assert all(r.n == 0 and r.games == 0 for r in lk.required), lk.required
 
 
