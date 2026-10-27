@@ -28,7 +28,7 @@
 | `ranker.py` | 넥슨 데이터센터 HTML 스크래핑(감독모드 순위·구단가치 — 오픈API엔 없음). 팀컬러 조회는 상대가 적으면 상대마다 검색(`fetch_manager_rank`), 500명보다 많으면 1만 위 목록 500쪽(`fetch_rank_page`) — 목록은 **행 단위로 잘라 읽는다**(팀컬러 빈 행에서 뒤가 밀린다) |
 | `teamcolor.py` | 팀컬러 효과표(목록·단계·적용 선수) — `X-Requested-With` 필요 · 이름 같은 팀컬러는 `config.TEAMCOLOR_DUP_NAMES` · 세부는 머리말 |
 | `rankcollect.py` | 랭킹 1만 명 수집 · `rank.db`(fifa.db 와 따로) · 기본 꺼짐. **`snapshot_rows`·`snapshots` 의 열·INSERT 는 옛 버전 때문에 안 건드린다(옆 표만)** · **화면 스레드는 rank.db 에 쓰지 않는다** · 세부는 머리말 |
-| `rankmeta.py` | 랭커 메타 ② — rank.db **읽기만**(요청 0 · 쓰기 0). rank.db 가 바뀌는 길은 `app_main.RANK_VIEW_KEYS` 를 무효화 · 55 `club_head`(남들 값만 · 내 줄 뺌 · 늦게 시작한 시즌은 숨김 판정 — FC 는 `collect_state` `fc_started:`) · 57 `top3`(K7) · `reward_board`(K11 — 캐시 안 함 · 숨김은 `fc_started:`·`fcg_started:` 중 늦은 쪽) · 비주류 `usage_counts`·`minor_formations`(K8 — 늘 1만 명 전체 기준) · 세부는 머리말 |
+| `rankmeta.py` | 랭커 메타 ② — rank.db **읽기만**(요청 0 · 쓰기 0). rank.db 가 바뀌는 길은 `app_main.RANK_VIEW_KEYS` 를 무효화 · 55 `club_head`(남들 값만 · 내 줄 뺌 · 늦게 시작한 시즌은 숨김 판정 — FC 는 `collect_state` `fc_started:`) · 57 `top3`(K7) · `reward_board`(K11 — 캐시 안 함 · 숨김은 `fc_started:`·`fcg_started:` 중 늦은 쪽) · 비주류 `usage_counts`·`minor_formations`(K8 — 늘 1만 명 전체 기준) · 67 `team_color_board`(R1) · `tc_detail`·`tc_top_owners`(R2 팀컬러 창 — 지난주는 `snap_id` · 사람 줄이라 캐시 안 함 · 열어 둔 창은 `_invalidate_rank_views` 가 다시 읽힌다) · 세부는 머리말 |
 | `rankerstats.py` | 랭커 기록 받기 — 하루 캐시(`ranker_stats`)에 없는 쌍만 · 한 요청 상한은 URL 길이 |
 | `tradecollect.py` | 거래 기록 받기 — 넥슨 거래 API 는 **ouid 를 무시하고 키 주인 것만** 준다(`trades` 에 ouid 열 없음) · 받는 규칙은 머리말 표를 먼저 |
 | `rankerpick.py` | 랭커 픽·추천 — 상위 랭커 마지막 경기를 오픈API 로(하루 계수 `api_budget` · 429 · **화면이 보일 때만**) · 지우기는 `purge_ranker_pick_data` 한 곳 · 세부는 머리말 |

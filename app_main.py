@@ -2592,15 +2592,14 @@ class MainWindow(QMainWindow):
         "평점": "이 선수가 출전한 경기들의 평균 평점.",
     }
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
-    TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "상대 수", "승", "무", "패", "승률", "평균 대비", "효과"]
+    # [팀컬러 승률] 은 승률 줄 목록(67 R3 — tc_rate_list) · [팀컬러 랭킹] 은 표 그대로(범위 막대 대리자 · 여러 열 정렬 — E7).
+    # 두 탭 같은 규칙: 한 번 누름 = 고르기 · 두 번 = 그 팀컬러 상대들이 쓴 선수 · 팀컬러 창은 위 [팀컬러 정보] 단추(옛 "효과" 열)
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
-                              "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위", "효과"]
-    TEAMCOLOR_EFFECT_TEXT = "보기"     # "효과" 열 — 이 열의 한 번 클릭만 효과 창을 연다(더블클릭·화살표 이동은 안 연다)
+                              "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위"]
     TEAMCOLOR_RANGE_W = 150            # 팀가치 범위 막대 열 폭(글자가 없어 FitTableWidget 이 최소 폭으로 누른다)
     # 강화 숫자 칸 = 배지(64 P8) — {칸을 채우는 함수: (표, 열)}. test_rules 가 강화 하나만 든 칸을 만드는 함수를 세어 이 표와 대조한다
     GRADE_BADGE_COLUMNS = {"_render_players": ("tbl_players", (2,)), "_render_timeline": ("tbl_timeline", (3,)),
                            "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,))}
-    TEAMCOLOR_TINT_FULL_PP = 15.0      # 승률 칸 색 — 기준선과 이만큼(%p) 벌어지면 가장 진하게(T.ROW_TINT)
     SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
                       "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
 
@@ -3870,17 +3869,46 @@ class MainWindow(QMainWindow):
     def _teamcolor_min_games(self) -> int:
         return self._teamcolor_min_spins[0].value() if self._teamcolor_min_spins else core.MIN_COND
 
+    TC_INFO_TIP = "고른 팀컬러의 랭커 1만 명 숫자와 넥슨 데이터센터의 단계별 효과·적용 선수"
+
+    def _teamcolor_pick_row(self, min_row: QHBoxLayout) -> tuple[QHBoxLayout, QPushButton]:
+        """최소 경기 줄 + 오른쪽 [팀컬러 정보](고른 줄이 없으면 꺼짐 — ⑥). 한 번 누름이 두 번 누름 앞에 오는 함정을 피해
+        창은 단추로만 연다(1·2회차 [중])."""
+        btn = QPushButton("팀컬러 정보")
+        btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        btn.setToolTip(self.TC_INFO_TIP)
+        btn.setEnabled(False)
+        min_row.addWidget(btn)
+        return min_row, btn
+
     def _build_teamcolor_rate_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         row, _, _ = self._build_teamcolor_fetch_row()
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
-        v.addLayout(self._teamcolor_min_row())
-        self.tbl_teamcolor_rate = self._make_table(self.TEAMCOLOR_RATE_COLUMNS, icons={0: "emblem"})
-        self.tbl_teamcolor_rate.cellClicked.connect(
-            lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, r, c))
-        v.addWidget(self.tbl_teamcolor_rate, 1)
+        min_row = self._teamcolor_min_row()
+        self.cb_tc_rate_sort = NoScrollComboBox()
+        for key, text in RATE_SORTS:
+            if key != "recent":   # 묶음 줄엔 최근 경기가 없다
+                self.cb_tc_rate_sort.addItem(text, key)
+        self.cb_tc_rate_sort.currentIndexChanged.connect(lambda _i: self._show_tc_rate_rows())
+        min_row.insertWidget(min_row.count() - 1, self.cb_tc_rate_sort)   # 늘어남 앞
+        min_row, self.btn_tc_rate_info = self._teamcolor_pick_row(min_row)
+        v.addLayout(min_row)
+        hint = QLabel("두 번 누르면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수 · (±) 는 팀컬러를 아는 경기 승률 대비")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(hint)
+        self.tc_rate_list = RateRowList()
+        self.tc_rate_list.doubleClicked.connect(
+            lambda idx: self._show_teamcolor_players(idx.data(ROW_ROLE).key) if idx.isValid() else None)
+        self.tc_rate_list.selectionModel().currentChanged.connect(
+            lambda cur, _p: self.btn_tc_rate_info.setEnabled(cur.isValid()))
+        self.btn_tc_rate_info.clicked.connect(
+            lambda: self._open_teamcolor_effect(self.tc_rate_list.current().key) if self.tc_rate_list.current() else None)
+        self._tc_rate_rows: list[RateRow] = []
+        v.addWidget(self.tc_rate_list, 1)
         return w
 
     def _build_teamcolor_rank_tab(self) -> QWidget:
@@ -3889,18 +3917,21 @@ class MainWindow(QMainWindow):
         row, _, _ = self._build_teamcolor_fetch_row()
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
-        hint = QLabel("팀컬러 이름을 더블클릭하면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수를,"
-                     " \"효과\" 열의 [보기] 를 누르면 넥슨 데이터센터의 단계별 효과와 적용 선수를 볼 수 있습니다."
+        hint = QLabel("팀컬러를 두 번 누르면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수를,"
+                     " 고른 뒤 [팀컬러 정보] 를 누르면 랭커 1만 명 숫자와 넥슨 데이터센터의 단계별 효과·적용 선수를 볼 수 있습니다."
                      " 범위 막대는 로그 눈금입니다(점 = 평균).")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(hint)
-        v.addLayout(self._teamcolor_min_row())
+        min_row, self.btn_tc_rank_info = self._teamcolor_pick_row(self._teamcolor_min_row())
+        v.addLayout(min_row)
         self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS, icons={1: "emblem"})
         self.tbl_teamcolor_rank.itemDoubleClicked.connect(
             self._on_teamcolor_double_clicked)
-        self.tbl_teamcolor_rank.cellClicked.connect(
-            lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rank, self.TEAMCOLOR_RANK_COLUMNS, r, c))
+        self.tbl_teamcolor_rank.itemSelectionChanged.connect(
+            lambda: self.btn_tc_rank_info.setEnabled(self._tc_rank_selected() is not None))
+        self.btn_tc_rank_info.clicked.connect(
+            lambda: self._open_teamcolor_effect(self._tc_rank_selected()) if self._tc_rank_selected() else None)
         rc = self.TEAMCOLOR_RANK_COLUMNS.index("팀가치 범위")
         self._tc_range_delegate = RangeBarDelegate(self.tbl_teamcolor_rank)
         self.tbl_teamcolor_rank.setItemDelegateForColumn(rc, self._tc_range_delegate)
@@ -6434,8 +6465,6 @@ class MainWindow(QMainWindow):
         w.start()
 
     # ── 랭커 픽(6) — 화면 ─────────────────────────────────────────────
-    PICK_SHARE_COLUMNS = ["이름", "인원", "비율"]
-    PICK_CARD_COLUMNS = ["줄", "선수", "랭커", "비율", "강화"]
     PICK_TOP_SHARES = 10
 
     def _build_ranker_pick_tab(self) -> QWidget:
@@ -6457,29 +6486,28 @@ class MainWindow(QMainWindow):
         self.lb_pick_summary.setWordWrap(True)
         v.addWidget(self.lb_pick_summary)
 
+        # 67 R10 — 팀컬러·포메이션 상위 10 · 줄별 카드를 줄 목록으로(비율만큼 바탕 채움 · 많은 순이 정보라 정렬 없음)
         shares = QHBoxLayout()
-        self.tbl_pick_colors = self._make_table(self.PICK_SHARE_COLUMNS, icons={0: "emblem"})
-        self.tbl_pick_forms = self._make_table(self.PICK_SHARE_COLUMNS, icons={0: "formation"})
-        for title, tbl in (("팀컬러", self.tbl_pick_colors), ("포메이션", self.tbl_pick_forms)):
+        self.pick_colors_list = MetricRowList(fixed=True)
+        self.pick_forms_list = MetricRowList(fixed=True)
+        for title, lst in (("팀컬러", self.pick_colors_list), ("포메이션", self.pick_forms_list)):
             box = QVBoxLayout()
-            lb = QLabel(title)
-            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-            box.addWidget(lb)
-            tbl.setMinimumHeight(200)
-            tbl.setSortingEnabled(False)  # 많은 순이 정보다 — 켜 두면 머리글의 기본 정렬(이름)로 다시 섞였다(17단계 실화면)
-            box.addWidget(tbl)
+            box.addWidget(self._title_label(title))
+            box.addWidget(lst)
+            box.addStretch(1)
             shares.addLayout(box, 1)
         v.addLayout(shares)
 
-        lb = QLabel("줄별 많이 쓴 카드 — 랭커 = 그 줄에 그 카드를 선발로 쓴 사람 수 · 강화는 사람 수(많은 순)")
+        v.addWidget(self._title_label("줄별 많이 쓴 카드"))
+        lb = QLabel("랭커 = 그 줄에 그 카드를 선발로 쓴 사람 수 · 강화는 가장 많이 쓴 단계(툴팁에 나머지) · 두 번 누르면 선수 카드")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb.setWordWrap(True)
         v.addWidget(lb)
-        self.tbl_pick_cards = self._make_table(self.PICK_CARD_COLUMNS, icons={1: "season"})
-        self.tbl_pick_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
-        self.tbl_pick_cards.setMinimumHeight(260)
-        self.tbl_pick_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
-        v.addWidget(self.tbl_pick_cards)
+        self.pick_line_chips = self._line_chips(lambda: self._apply_line_filter(self.pick_cards_list, self.pick_line_chips))
+        v.addWidget(self.pick_line_chips)
+        self.pick_cards_list = MetricRowList(fixed=True)
+        self.pick_cards_list.doubleClicked.connect(self._on_card_row_double_clicked)
+        v.addWidget(self.pick_cards_list)
 
         lb = QLabel("내 스쿼드 vs 랭커 — 최근 경기 선발 · 칩 아래 = 그 카드를 선발로 쓴 랭커 비율")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -6544,8 +6572,8 @@ class MainWindow(QMainWindow):
         self.lb_pick_status.setVisible(bool(status))
         if summary is None:
             self.lb_pick_summary.setText("")
-            for tbl in (self.tbl_pick_colors, self.tbl_pick_forms, self.tbl_pick_cards):
-                self._fill(tbl, [])
+            for lst in (self.pick_colors_list, self.pick_forms_list, self.pick_cards_list):
+                lst.set_rows([])
             self._render_pick_pitch(None)
             return
         when = (taken or "")[:16].replace("T", " ")
@@ -6557,31 +6585,60 @@ class MainWindow(QMainWindow):
         if summary.used < config.RANKER_PICK_MIN_RANKERS:
             parts.append(f"{config.RANKER_PICK_MIN_RANKERS}명 미만이라 카드 비율은 흐리게 — 참고만")
         self.lb_pick_summary.setText(" · ".join(parts))
-        for tbl, counter, cell in ((self.tbl_pick_colors, summary.colors, self._emblem_cell),
-                                   (self.tbl_pick_forms, summary.formations, self._formation_cell)):
+        for lst, counter, kind in ((self.pick_colors_list, summary.colors, "emblem"),
+                                   (self.pick_forms_list, summary.formations, "formation")):
             total = sum(counter.values()) or 1
-            self._fill(tbl, [[cell(name), (str(n), n), (f"{n / total * 100:.0f}%", n / total)]
-                             for name, n in counter.most_common(self.PICK_TOP_SHARES)], enable_sort=False)
+            top = counter.most_common(self.PICK_TOP_SHARES)
+            peak = max((n for _name, n in top), default=0) or 1
+            lst.set_rows([MetricRow(name, "", (MetricCell(f"{n:,}명", "인원"), MetricCell(f"{n / total * 100:.0f}%", "비율", T.ACCENT)),
+                                    rank=i, icon=self._emblem_icon(name) if kind == "emblem" else
+                                    (("formation", formation_key(name)) if formation_key(name) else ()),
+                                    fill=n / peak, key=name)
+                          for i, (name, n) in enumerate(top, 1)])
+            self._start_list_icons(lst)
         few = summary.used < config.RANKER_PICK_MIN_RANKERS
-        rows = []
-        for line, cards in summary.lines:
-            for c in cards:
-                grades = " · ".join(f"{g}강 {n}" for g, n in c.grades.most_common(3) if isinstance(g, int))
-                rate = c.users / summary.used if summary.used else 0.0
-                rows.append([line, IconCell(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
-                                            None, core.season_id_of(c.spid)),
-                             (str(c.users), c.users), (f"{rate * 100:.0f}%", rate), grades])
-        self._fill(self.tbl_pick_cards, rows, enable_sort=False)
-        for r, card in enumerate(c for _ln, cs in summary.lines for c in cs):
-            item = self.tbl_pick_cards.item(r, 1)
-            if item is not None:
-                item.setData(Qt.ItemDataRole.UserRole, card.spid)  # 더블클릭 → 선수 카드
-            if few:
-                for col in range(len(self.PICK_CARD_COLUMNS)):
-                    it = self.tbl_pick_cards.item(r, col)
-                    if it is not None:
-                        it.setForeground(QColor(T.TEXT_DIM))
+        self._set_card_rows(self.pick_cards_list, self.pick_line_chips,
+                            [(line, c, c.users / summary.used if summary.used else 0.0, None)
+                             for line, cards in summary.lines for c in cards], few)
         self._render_pick_pitch(summary)
+
+    # ── 67 R10 줄별 카드 목록(랭커 픽 [픽] · [추천] 같이) ──
+    def _line_chips(self, on_change) -> ChoiceChips:
+        """[전체 | 공격 | 공미 | 미드 | 수미 | 수비 | GK] — 줄 이름은 축구장 줄(PITCH_ROWS) 그대로."""
+        chips = ChoiceChips([("전체", None)] + [(name, name) for name, _rng in core.PITCH_ROWS])
+        chips.currentIndexChanged.connect(lambda _i: on_change())
+        return chips
+
+    @staticmethod
+    def _apply_line_filter(lst: MetricRowList, chips: ChoiceChips) -> None:
+        line = chips.currentData()
+        lst.set_filter(None if line is None else (lambda r, ln=line: r.sort.get("line") == ln))
+
+    def _set_card_rows(self, lst: MetricRowList, chips: ChoiceChips, cards: list, few: bool, who: str = "랭커") -> None:
+        """cards = [(줄, PickCard|RecCard, 비율 0~1, 시세 글 | None)] — 줄 순서(공격 → GK) 그대로. 순위는 줄 안에서.
+        그림은 카드 시즌 배지 · 줄은 보조 글 · 강화는 가장 많은 단계 하나(툴팁에 셋)."""
+        peak = max((rate for _l, _c, rate, _p in cards), default=0) or 1
+        rows, seen = [], Counter()
+        for line, c, rate, price in cards:
+            seen[line] += 1
+            grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
+            grades = " · ".join(f"{g}강 {k}명" for g, k in c.grades.most_common(3) if isinstance(g, int))
+            cells = [MetricCell(f"{c.users:,}명", who), MetricCell(f"{rate * 100:.0f}%", "비율", T.ACCENT),
+                     MetricCell(f"{grade}강" if grade is not None else NA, "많이 쓴 강화", None, grades)]
+            if price is not None:
+                cells.append(MetricCell(price, "시세"))
+            rows.append(MetricRow(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})", line,
+                                  tuple(cells), rank=seen[line], icon=("season", core.season_id_of(c.spid)),
+                                  fill=rate / peak, dim=few, key=c.spid, sort={"line": line},
+                                  tip="참고만 — 랭커 수가 적습니다" if few else ""))
+        lst.set_rows(rows)
+        self._apply_line_filter(lst, chips)
+        self._start_list_icons(lst)
+
+    def _on_card_row_double_clicked(self, index) -> None:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        if row is not None and isinstance(row.key, int):
+            self._show_player_info(row.key)
 
     def _render_pick_pitch(self, summary) -> None:
         """내 최근 경기 선발 — 칩에 그 카드의 랭커 픽률(같은 카드를 어느 자리든 선발로 쓴 비율)."""
@@ -6615,7 +6672,6 @@ class MainWindow(QMainWindow):
     TRAIT_KEY = "traits"   # [메타 분석 › 포지션 특성] — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
     PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
     PICK_DATA_KEYS = PICK_KEYS + (TRAIT_KEY,)  # 무효화 목록 — 랭커 픽·특성 로더 진행 · 끄기/지우기 · 정리 끝
-    REC_CARD_COLUMNS = ["줄", "선수", "후보", "비율", "강화", "시세"]
     REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
     REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
 
@@ -6683,11 +6739,12 @@ class MainWindow(QMainWindow):
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb.setWordWrap(True)
         v.addWidget(lb)
-        self.tbl_rec_cards = self._make_table(self.REC_CARD_COLUMNS, icons={1: "season"})
-        self.tbl_rec_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
-        self.tbl_rec_cards.setMinimumHeight(260)
-        self.tbl_rec_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
-        v.addWidget(self.tbl_rec_cards, 1)
+        self.rec_line_chips = self._line_chips(lambda: self._apply_line_filter(self.rec_cards_list, self.rec_line_chips))
+        v.addWidget(self.rec_line_chips)
+        self.rec_cards_list = MetricRowList()   # 67 R10 — 줄 순서(공격 → GK)가 정보다 · 두 번 누르면 선수 카드
+        self.rec_cards_list.setMinimumHeight(260)
+        self.rec_cards_list.doubleClicked.connect(self._on_card_row_double_clicked)
+        v.addWidget(self.rec_cards_list, 1)
         self.rec: core.Recommend | None = None  # 테스트가 집계를 본다
         return w
 
@@ -6737,7 +6794,7 @@ class MainWindow(QMainWindow):
         if rec is None or not rec.enough:
             self.lb_rec_summary.setText(self._rec_sources_text(rec) if rec is not None and rec.total else "")
             self._fill(self.tbl_rec_stand, [], enable_sort=False)
-            self._fill(self.tbl_rec_cards, [], enable_sort=False)
+            self.rec_cards_list.set_rows([])
             return
         self.lb_rec_summary.setText(self._rec_sources_text(rec))
         stand = []
@@ -6751,27 +6808,13 @@ class MainWindow(QMainWindow):
         stand.append(["포메이션", form or "모름", "-", f"후보 {n}명 중 {same}명이 같은 배치" if form else "-"])
         self._fill(self.tbl_rec_stand, stand, enable_sort=False)
         few = rec.total < config.RANKER_PICK_MIN_RANKERS
-        rows_out, cards = [], []
+        cards = []
         for line, cs in rec.lines:
             for c in cs:
                 grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
-                grades = " · ".join(f"{g}강 {k}" for g, k in c.grades.most_common(3) if isinstance(g, int))
                 price = prices.get((c.spid, grade)) if grade is not None else None
-                rows_out.append([line, IconCell(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
-                                                None, core.season_id_of(c.spid)),
-                                 (str(c.users), c.users), (f"{c.rate * 100:.0f}%", c.rate), grades,
-                                 (self._bp(price[0]) if price else "-", price[0] if price else -1)])
-                cards.append(c)
-        self._fill(self.tbl_rec_cards, rows_out, enable_sort=False)
-        for r, c in enumerate(cards):
-            item = self.tbl_rec_cards.item(r, 1)
-            if item is not None:
-                item.setData(Qt.ItemDataRole.UserRole, c.spid)  # 더블클릭 → 선수 카드
-            if few:
-                for col in range(len(self.REC_CARD_COLUMNS)):
-                    it = self.tbl_rec_cards.item(r, col)
-                    if it is not None:
-                        it.setForeground(QColor(T.TEXT_DIM))
+                cards.append((line, c, c.rate, self._bp(price[0]) if price else NA))   # 시세 = 가장 많이 쓴 강화의 받아 둔 값
+        self._set_card_rows(self.rec_cards_list, self.rec_line_chips, cards, few, "후보")
 
     def _rec_sources_text(self, rec) -> str:
         """후보 출처별 인원 — ②(내가 만난 상대)는 ①과 뽑힌 방식이 달라 섞이면 편향된다(ROADMAP 11-lite)."""
@@ -7106,6 +7149,9 @@ class MainWindow(QMainWindow):
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
+        dlg = self._teamcolor_dialog
+        if dlg is not None and not sip.isdeleted(dlg) and dlg.isVisible():
+            dlg.refresh_rank()   # 67 3회차 M11 — 열어 둔 팀컬러 창은 무효화 표 밖이라 여기서 1만 명 칸만
         if self._tc_minor_only:
             self._invalidate("teamcolor")   # 57 K8 비주류 기준(마지막 스냅숏 1만 명)이 바뀐다
 
@@ -10899,35 +10945,21 @@ class MainWindow(QMainWindow):
         if keep is not None:
             stats_list = [s for s in stats_list if keep(s.team_color)]
         weak = [self._teamcolor_weak(s) for s in stats_list]
-        eff = self.TEAMCOLOR_EFFECT_TEXT
-        # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
-        # "10"을 "9"보다 뒤로 보내는 문자열 정렬 대신 실제 크기로 정렬한다
-        # (안 그러면 헤더 클릭 정렬이 9,88,80,8,8,8,75... 식으로 깨진다).
+        # [팀컬러 승률] — 승률 줄(65 매치업 꼴 · 67 R3). 기준 대비는 표본이 될 때만 · 흐린 줄은 어느 정렬이든 아래(옛 표의 sink)
         rate_rows = []
-        for s in stats_list:
-            diff = s.win_rate - base_rate
-            rate_rows.append([self._emblem_cell(s.team_color), (str(s.games), s.games), (str(len(s.opponents)), len(s.opponents)),
-                              (str(s.win), s.win), (str(s.draw), s.draw), (str(s.lose), s.lose),
-                              (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
-                              (f"{diff:+.1f}%p", diff) if base_n else ("-", 0.0), eff])
-        # 채우는 순서(PyQt 규칙 1): 정렬 끈 채로 채움 → 색·흐림 → 정렬 켬 → 기본 정렬
-        self._fill(self.tbl_teamcolor_rate, rate_rows, enable_sort=False)
-        rate_col = self.TEAMCOLOR_RATE_COLUMNS.index("승률")
-        for i, s in enumerate(stats_list):
-            if not weak[i] and base_n:
-                item = self.tbl_teamcolor_rate.item(i, rate_col)
-                diff = s.win_rate - base_rate
-                mix = min(1.0, abs(diff) / self.TEAMCOLOR_TINT_FULL_PP) * T.ROW_TINT
-                item.setBackground(self._blend(T.PANEL, T.CHART_UP if diff >= 0 else T.CHART_DOWN, mix))
-                item.setForeground(QColor(T.TEXT))
-        self._mark_teamcolor_rows(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, stats_list, weak)
-        # 표를 다시 채울 때마다(범위 변경·새 경기 확인 등) 사용자가 전에
-        # 다른 열로 정렬해 뒀어도 "경기 많은 순"으로 되돌린다 — 이 표는
-        # 열어보면 항상 이 기준으로 보이는 게 목적이라, 헤더 클릭 정렬
-        # 상태가 재렌더 사이에 남아 있으면 안 된다.
-        self.tbl_teamcolor_rate.setSortingEnabled(True)
-        self.tbl_teamcolor_rate.sortByColumn(
-            self.TEAMCOLOR_RATE_COLUMNS.index("경기"), Qt.SortOrder.DescendingOrder)
+        for s, why in zip(stats_list, weak):
+            cell = self._emblem_cell(s.team_color)
+            r = self._rate_row(s.team_color, s.win, s.draw, s.lose, s.mixed, base_rate if base_n else None, s.games,
+                               sub=f"상대 {len(s.opponents):,}명",
+                               icon=("emblem", cell.icon_key) if isinstance(cell, IconCell) and cell.icon_key else (),
+                               key=s.team_color)
+            if why:
+                r.weak, r.diff, r.tip = True, None, why
+                r.sample = r.sample or ("구분 전" if teamcolor.is_unsplit(s.team_color) else f"상대 {len(s.opponents)}명")
+            rate_rows.append(r)
+        self._tc_rate_rows = rate_rows
+        self._show_tc_rate_rows()
+        self._start_list_icons(self.tc_rate_list)
         # 팀가치는 넥슨식 축약("10경 9,631조")으로 보여주고 정렬은 원 단위로.
         # 팀가치를 아는 상대가 없는 팀컬러(구버전 캐시 등)는 "-" — 다음
         # 조회(TTL 만료·백필) 때 채워진다.
@@ -10936,9 +10968,10 @@ class MainWindow(QMainWindow):
 
         rank_rows = [[(str(i), i), self._emblem_cell(s.team_color), (str(s.games), s.games),
                      value_cell(s.avg_value), value_cell(s.min_value),
-                     value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1), eff]
+                     value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1)]
                     for i, s in enumerate(stats_list, start=1)]
         self._fill(self.tbl_teamcolor_rank, rank_rows, enable_sort=False)
+        self.btn_tc_rank_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
         # 범위 막대 축은 필터와 무관하게 표의 전체 행 — 스핀을 바꿔도 막대 길이가 안 변하게
         lows = [s.min_value for s in stats_all if s.min_value]
         highs = [s.max_value for s in stats_all if s.max_value]
@@ -10950,7 +10983,7 @@ class MainWindow(QMainWindow):
                 item.setData(RANGE_ROLE, (s.min_value, s.avg_value, s.max_value))
                 item.setToolTip(f"최저 {ranker.format_team_value(s.min_value)} · 평균 "
                                 f"{ranker.format_team_value(s.avg_value)} · 최고 {ranker.format_team_value(s.max_value)}")
-        self._mark_teamcolor_rows(self.tbl_teamcolor_rank, self.TEAMCOLOR_RANK_COLUMNS, stats_list, weak)
+        self._mark_teamcolor_rows(self.tbl_teamcolor_rank, stats_list, weak)
         self.tbl_teamcolor_rank.setSortingEnabled(True)
         self.tbl_teamcolor_rank.sortByColumn(
             self.TEAMCOLOR_RANK_COLUMNS.index("만난 횟수"), Qt.SortOrder.DescendingOrder)
@@ -10977,36 +11010,33 @@ class MainWindow(QMainWindow):
         for lb in self._teamcolor_note_labels:
             lb.setText(self._teamcolor_note_text(len(opps), known) + extra)
 
-    def _mark_teamcolor_rows(self, table, columns: list[str], stats_list: list, weak: list[str]) -> None:
-        """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink) · "효과" 칸에 팀컬러 글자와 안내."""
-        eff_col = columns.index("효과")
-        for i, s in enumerate(stats_list):
+    def _mark_teamcolor_rows(self, table, stats_list: list, weak: list[str]) -> None:
+        """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink)."""
+        for i, _s in enumerate(stats_list):
+            if not weak[i]:
+                continue
             for c in range(table.columnCount()):
                 item = table.item(i, c)
                 if item is None:
                     continue
-                if weak[i]:
-                    item.sink = True
-                    item.setForeground(QColor(T.TEXT_DIM))
-                    item.setToolTip(weak[i])
-                    item.setData(Qt.ItemDataRole.UserRole + 1, True)
-            item = table.item(i, eff_col)
-            if item is not None:
-                item.setData(Qt.ItemDataRole.UserRole, s.team_color)
-                item.setForeground(QColor(T.TEXT_DIM if weak[i] else T.ACCENT))
-                item.setToolTip("넥슨 데이터센터의 단계별 효과·적용 선수(누를 때만 읽습니다)")
+                item.sink = True
+                item.setForeground(QColor(T.TEXT_DIM))
+                item.setToolTip(weak[i])
+                item.setData(Qt.ItemDataRole.UserRole + 1, True)
 
-    def _on_teamcolor_cell_clicked(self, table, columns: list[str], row: int, col: int) -> None:
-        """"효과" 열의 한 번 클릭에서만 연다 — 한 번 클릭은 더블클릭 앞에 오므로 다른 열에서 열면 랭킹 탭의
-        포지션 창과 겹친다. 화살표 키 이동(currentChanged)에는 안 묶는다."""
-        if col != columns.index("효과"):
-            return
-        item = table.item(row, col)
-        label = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if label:
-            self._open_teamcolor_effect(label)
+    def _show_tc_rate_rows(self) -> None:
+        rows = sort_rate_rows(self._tc_rate_rows, self.cb_tc_rate_sort.currentData() or "games")
+        rows.sort(key=lambda r: r.weak)   # 흐린 줄은 매치수 순에서도 아래(옛 표 sink — 안정 정렬이라 순서는 그대로)
+        self.tc_rate_list.set_rows(rows)
+        self.btn_tc_rate_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
+
+    def _tc_rank_selected(self) -> str | None:
+        items = self.tbl_teamcolor_rank.selectedItems()
+        item = self.tbl_teamcolor_rank.item(items[0].row(), 1) if items else None
+        return item.text() if item is not None and item.text() else None
 
     def _open_teamcolor_effect(self, label: str) -> None:
+        """팀컬러 정보 창을 여는 한 자리(67 R1 목록 · R3 내 상대 두 탭 — 같은 창 하나)."""
         if self._teamcolor_dialog is None:
             self._teamcolor_dialog = TeamColorDialog(self)
         self._teamcolor_dialog.open_label(label)
@@ -11170,13 +11200,14 @@ class MainWindow(QMainWindow):
             self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
 
     def _on_teamcolor_double_clicked(self, item) -> None:
-        if item.column() == self.TEAMCOLOR_RANK_COLUMNS.index("효과"):
-            return   # 효과 열은 한 번 클릭(효과 창) — 포지션 창을 같이 띄우지 않는다
-        row = item.row()
-        color_item = self.tbl_teamcolor_rank.item(row, 1)
-        if not color_item:
+        color_item = self.tbl_teamcolor_rank.item(item.row(), 1)
+        if color_item:
+            self._show_teamcolor_players(color_item.text())
+
+    def _show_teamcolor_players(self, color: str | None) -> None:
+        """그 팀컬러 상대들이 포지션별로 주로 쓴 선수 — [팀컬러 승률] 줄 · [팀컬러 랭킹] 표의 두 번 누름(같은 규칙 · R3)."""
+        if not color:
             return
-        color = color_item.text()
         nicknames = {nick for nick, c in self._team_colors.items() if c == color}
         if not nicknames:
             return
@@ -13534,13 +13565,16 @@ class KeyCheckWorker(Worker):
 
 
 class TeamColorDialog(QDialog):
-    """팀컬러 효과·적용 선수(2.2.1 · U3 — 별도 창 · 모달 아님 · 하나만). 같은 팀컬러를 다시 누르면 요청 없이 앞으로만,
-    다른 팀컬러면 내용만 바꾼다. 받기는 TeamColorEffectLoader — 도는 로더는 갈아 끼울 때 cancel 하고 메인 창의
-    _tc_effect_loaders 에 끝날 때까지 남겨 종료 표가 기다린다(창이 먼저 닫혀도)."""
+    """팀컬러 정보 창(2.2.1 효과 창 · 67 R2 에서 넓힘 — 별도 창 · 모달 아님 · 하나만). 머리(엠블럼 · 이름 · 점유율) +
+    탭 둘: [랭커 1만 명](rank.db — 카드 다섯 · 구단가치 구간별 · 대표 구단주 · 요청 0) · [효과 · 적용 선수](넥슨 데이터센터).
+    같은 팀컬러를 다시 누르면 요청 없이 앞으로만, 다른 팀컬러면 내용만 바꾼다. 받기는 TeamColorEffectLoader — 도는 로더는
+    갈아 끼울 때 cancel 하고 메인 창의 _tc_effect_loaders 에 끝날 때까지 남겨 종료 표가 기다린다(창이 먼저 닫혀도).
+    1만 명 칸은 rank.db 가 바뀌면 메인 창의 _invalidate_rank_views 가 다시 읽힌다(3회차 M11)."""
 
     STEP_COLUMNS = ["단계", "인원", "효과"]
     PLAYER_COLUMNS = ["OVR", "선수", "포지션", "급여", "1강 시세"]
-    SIZE = (640, 720)
+    TABS = ("랭커 1만 명", "효과 · 적용 선수")
+    SIZE = (760, 780)
     EMBLEM_PX = 44
 
     def __init__(self, main: "MainWindow"):
@@ -13551,6 +13585,7 @@ class TeamColorDialog(QDialog):
         self._label = ""
         self._meta: dict | None = None
         self._players: list = []
+        self.detail: core.TcDetail | None = None   # 테스트가 본다
         v = QVBoxLayout(self)
         head = QHBoxLayout()
         self.lb_emblem = QLabel()
@@ -13563,7 +13598,16 @@ class TeamColorDialog(QDialog):
         self.lb_title.setWordWrap(True)
         head.addWidget(self.lb_emblem)
         head.addWidget(self.lb_title, 1)
+        self.card_share = StatCard("1만 명 중 점유율", T.ACCENT)
+        self.card_share.setVisible(False)
+        head.addWidget(self.card_share)
         v.addLayout(head)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_rank_page(), self.TABS[0])
+        eff = QWidget()
+        self.tabs.addTab(eff, self.TABS[1])
+        v.addWidget(self.tabs, 1)
+        v = QVBoxLayout(eff)
         self.lb_status = QLabel("")
         self.lb_status.setWordWrap(True)
         self.lb_status.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -13592,14 +13636,133 @@ class TeamColorDialog(QDialog):
         v.addLayout(row)
         fit_to_screen(self, *self.SIZE)
 
+    # ── 랭커 1만 명 칸(67 R2) ──
+    # (제목, TcBoardRow 필드, 단위, 자리수, 좋고 나쁨 없음) — 변화는 지난주 스냅숏 대비(주간 요약과 같은 고르기)
+    RANK_CARDS = (("가성비", "score", "점", 0, False), ("평균 점수", "elo", "점", 0, False),
+                  ("시즌 승률 승÷(승+패)", "rate", "%p", 1, False), ("구단가치 중앙값", "value", "억", 1, True),
+                  ("챔스 이상", "champ", "%p", 1, False))
+
+    def _build_rank_page(self) -> QWidget:
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        self.lb_rank_note = QLabel("")
+        self.lb_rank_note.setWordWrap(True)
+        self.lb_rank_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_rank_note)
+        self.rank_body = QWidget()
+        b = QVBoxLayout(self.rank_body)
+        b.setContentsMargins(0, 0, 0, 0)
+        grid = QGridLayout()
+        self.rank_cards: dict[str, StatCard] = {}
+        for i, (title, key, *_rest) in enumerate(self.RANK_CARDS):
+            card = StatCard(title)
+            self.rank_cards[key] = card
+            grid.addWidget(card, i // 3, i % 3)
+        b.addLayout(grid)
+        self.lb_bins_title = MainWindow._title_label("구단가치 구간별 — 이 팀컬러를 쓰는 사람이 어느 구간에 있나")
+        b.addWidget(self.lb_bins_title)
+        self.bins_list = MetricRowList(fixed=True)
+        b.addWidget(self.bins_list)
+        self.lb_owners_title = MainWindow._title_label("대표 구단주 — 이 팀컬러에서 점수 높은 순")
+        b.addWidget(self.lb_owners_title)
+        self.owners_list = MetricRowList(fixed=True)
+        b.addWidget(self.owners_list)
+        v.addWidget(self.rank_body)
+        v.addStretch(1)
+        return VScrollArea(inner)
+
+    def refresh_rank(self) -> bool:
+        """1만 명 칸을 rank.db 에서 다시 — 보일 것이 있으면 True. 맨 이름 단위라 겹치는 이름은 두 종류의 합(안내 줄)."""
+        name = teamcolor.name_of(self._label)
+        res = self.main._rank_read(lambda c: core.tc_detail(c, name)) if name else None
+        self.detail = res
+        if res is None or res.at is None:
+            self._rank_empty(MainWindow.rank_off_note("1만 명 중 이 팀컬러의 숫자를 보여 줍니다") if not config.RANK_COLLECT
+                             else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+            return False
+        if res.now is None:
+            self._rank_empty(f"넥슨 데이터 기준 {MainWindow._at(res.at)} — 랭킹 1만 명 중 이 팀컬러를 쓰는 사람이 없습니다.")
+            return False
+        now, then = res.now, res.then
+        note = [f"넥슨 데이터 기준 {MainWindow._at(res.at)} · 1만 위 안 {now.users:,}명"]
+        note.append(f"변화는 {MainWindow._at(res.then_at)} 대비" if then is not None
+                    else "지난주 원본 스냅숏이 없어 변화는 숨깁니다")
+        if name in config.TEAMCOLOR_DUP_NAMES:
+            note.append("같은 이름 팀컬러를 합친 숫자입니다(1만 명 순위표는 이름만 줍니다)")
+        if now.score is None:
+            note.append(f"가성비는 {config.B3_MIN_USERS}명 이상 팀컬러끼리 백분위라 이 팀컬러는 안 냅니다")
+        self.lb_rank_note.setText(" · ".join(note))
+        self.rank_body.setVisible(True)
+        self.card_share.setVisible(True)
+        self.card_share.set(f"{now.share:.1f}%")
+        self.card_share.set_sub(f"{now.users:,}명")
+        self.card_share.set_delta(now.share, then.share if then else None, "%p", "지난주 대비", neutral=True)
+        for _title, key, unit, digits, neutral in self.RANK_CARDS:
+            card, val = self.rank_cards[key], getattr(now, key)
+            old = getattr(then, key) if then is not None else None
+            if key == "value":
+                card.set(MainWindow._won(val))
+                val, old = (None if val is None else val / 1e8), (None if old is None else old / 1e8)
+            elif key in ("rate", "champ"):
+                card.set(NA if val is None else f"{val:.1f}%" if key == "rate" else f"{val:.0f}%")
+            else:
+                card.set(NA if val is None else f"{val:,.0f}")
+            card.set_delta(val, old, unit, "지난주 대비", digits, neutral)
+        day = NA if now.day_thin or now.day_rate is None else f"{now.day_rate:.1f}%"
+        self.rank_cards["rate"].set_sub(f"하루 {day}")
+        self.rank_cards["rate"].setToolTip("하루 승률은 어제 순위로 가른 하루 승÷(승+패) — 인원이 적거나 쌍이 없으면 —")
+        rows = []
+        for i, (b, c) in enumerate(res.bins):
+            label = self.main._bin_label(b)
+            if c is None:
+                rows.append(MetricRow(label, "", (MetricCell(NA, "이 팀컬러 중"), MetricCell(NA, "챔스 이상")),
+                                      dim=True, key=i, tip=f"이 구간 인원 {config.META_MIN_USERS}명 미만"))
+                continue
+            tone = delta_color(c.vs_bin) if c.vs_bin is not None and abs(c.vs_bin) >= 5 else None
+            rows.append(MetricRow(label, f"{c.users:,}명", (
+                MetricCell(f"{c.share:.0f}%", "이 팀컬러 중"),
+                MetricCell(f"{c.champ:.0f}%", "챔스 이상", tone,
+                           f"챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}% · 구간 평균 대비 "
+                           f"{0 if c.vs_bin is None else c.vs_bin:+.0f}%p)")),
+                fill=c.share / 100, key=i))
+        self.lb_bins_title.setVisible(bool(rows))
+        self.bins_list.setVisible(bool(rows))
+        self.bins_list.set_rows(rows)
+        owners = []
+        for o in res.owners:
+            games = o.win + o.draw + o.lose
+            rate = f"{o.win * 100 / games:.1f}%" if games else NA
+            fkey = formation_key(o.formation) if o.formation else None
+            owners.append(MetricRow(o.nickname, " · ".join(x for x in ("챔스 이상" if o.champ else "", o.formation) if x), (
+                MetricCell(NA if o.elo is None else f"{o.elo:,.0f}", "점수"),
+                MetricCell(rate, "시즌 승÷전체"),
+                MetricCell(wdl_text(o.win, o.draw, o.lose), "승·무·패"),
+                MetricCell(MainWindow._won(o.value), "구단가치")),
+                rank=o.rank, icon=("formation", fkey) if fkey else (), key=o.nickname))
+        self.lb_owners_title.setVisible(bool(owners))
+        self.owners_list.setVisible(bool(owners))
+        self.owners_list.set_rows(owners)
+        self.main._start_list_icons(self.owners_list)
+        return True
+
+    def _rank_empty(self, text: str) -> None:
+        self.lb_rank_note.setText(text)
+        self.rank_body.setVisible(False)
+        self.card_share.setVisible(False)
+        self.bins_list.set_rows([])
+        self.owners_list.set_rows([])
+
     # ── 열기 ──
     def open_label(self, label: str) -> None:
         if label == self._label and (self._meta is not None or self._busy()):
+            self.refresh_rank()
             self.show()
             self.raise_()
             self.activateWindow()
             return
         self._start(label)
+        # 1만 명 숫자가 있으면 그 탭부터(목록·내 상대 화면에서 여는 자리) — 없으면 효과 탭(지금까지의 첫 화면)
+        self.tabs.setCurrentIndex(0 if self.refresh_rank() else 1)
         self.show()
         self.raise_()
         self.activateWindow()
@@ -13614,7 +13777,7 @@ class TeamColorDialog(QDialog):
         self.main._tc_effect_loaders = [x for x in self.main._tc_effect_loaders if x.isRunning()]
         if have is None:
             self._label, self._meta, self._players = label, None, []
-            self.setWindowTitle(f"{label} — 팀컬러 효과")
+            self.setWindowTitle(f"{label} — 팀컬러 정보")
             self.lb_title.setText(label)
             self.lb_emblem.clear()
             self._clear_pick()

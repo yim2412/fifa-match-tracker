@@ -46,7 +46,7 @@ from rankmeta import (
     ClubHead, club_head, dd_band, fc_rank_range, rank_of,
     RewardBand, RewardBoard, TopCard, reward_board, top3,
     MINOR_LABEL, is_minor_color, minor_formations, usage_counts,
-    TcBoard, TcBoardRow, team_color_board,
+    TcBoard, TcBoardRow, team_color_board, TcDetail, TcOwner, tc_detail, tc_top_owners,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -121,6 +121,7 @@ __all__ = [
     "my_day_rate", "pair_text", "rank_moves", "ranked_nicknames", "tier_means", "value_bins", "value_score", "weekly",
     "winrate_peers", "winrate_to_elo",
     "TcBoard", "TcBoardRow", "team_color_board",   # 67 R1 팀컬러 목록
+    "TcDetail", "TcOwner", "tc_detail", "tc_top_owners",   # 67 R2 팀컬러 상세 창
     # rankmeta — N23 상대 순위 구간(2.9.1)
     "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table", "opp_rank_label",
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸

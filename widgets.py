@@ -1038,14 +1038,18 @@ class StatCard(QFrame):
         self.sub.setText(text)
         self.sub.setVisible(bool(text))
 
-    def set_delta(self, v: float | None, base: float | None, unit: str = "%p", label: str = "") -> None:
-        """기준(base) 대비 변화 줄 — 둘 중 하나라도 없으면 숨긴다. label 은 뒤에 붙는 흐린 말("평균 대비")."""
+    def set_delta(self, v: float | None, base: float | None, unit: str = "%p", label: str = "",
+                  digits: int = 1, neutral: bool = False) -> None:
+        """기준(base) 대비 변화 줄 — 둘 중 하나라도 없으면 숨긴다. label 은 뒤에 붙는 흐린 말("평균 대비").
+        neutral = 오르내림에 좋고 나쁨이 없는 값(구단가치·점유율 — 67 R2) — ▲▼ 만, 색은 흐림."""
         if v is None or base is None:
             self.delta.setText("")
             self.delta.setProperty("delta_color", None)
             self.delta.hide()
             return
-        text, color = delta_text(v, base, unit)
+        text, color = delta_text(v, base, unit, digits)
+        if neutral:
+            color = T.TEXT_DIM
         self.delta.setText(f"<span style='color:{color}'>{text}</span>"
                            + (f" <span style='color:{T.TEXT_DIM}'>{label}</span>" if label else ""))
         self.delta.setProperty("delta_color", color)

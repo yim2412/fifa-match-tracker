@@ -1144,6 +1144,37 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 - 줄 바탕 채움 색 `T.ROW_FILL`(PANEL ← ACCENT_FILL 12%) — 18% 면 밝은 쪽 흐린 글자 4.12 로 미달이라 낮췄고, 대비 표에 행을 더했다(18% 로 되돌리면 FAIL).
 - 구단가치 탭의 구간 × 팀컬러 넓은 표는 **구간을 고르면 그 구간 팀컬러 줄 목록**으로(평균 점수 상위는 제목 줄) — 한눈에 아홉 구간을 견주던 표가 사라지는 대가. 포지션 특성 자리 줄은 종류마다 1위 하나(그림 없이 % + 이름 · 그림은 접힌 표에).
 
+### 조각 ② 첫 커밋 표 (2026-10-27 · 브랜치 `4322e87` 위에서) — **조각 ② 끝**(전체 테스트 28/28 · 손 변이 22/22 · 실데이터 창 첫 계산 0.17~0.20초 · exe offscreen 20초 크래시 0) · 다음은 ③
+
+**잰 것**(이 PC · 읽기 전용 · 10-27 17:45 스냅숏):
+- **E3 팀컬러별 랭커 픽 표본** — 상위 200명 중 경기를 받은 153명: 맨유 36 · 아스널 30 · 브라질·리버풀·독일 9 · 레알 7 · 나머지 6 이하. 둘 말고는 10명 미만이라 **상세 창의 "선수 · 픽률" 탭은 안 만든다**(E3 그대로).
+- **R10 픽 지표 재료** — 랭커 픽은 랭커마다 **마지막 한 경기** 선발(`ranker_squads.match_id` 하나 · 본문은 `matches.payload`). 골·도움·평점은 그 한 판 값뿐이라 지표 칩을 **안 붙인다**(한 판 평점을 선수 지표처럼 보이게 하지 않는다).
+
+**옛 위젯 이름 → 새 부품**(3회차 M9 — 이 조각 빌더가 만드는 `self.` 이름):
+
+| 빌더 | 옛 이름 | 새 이름 | 단언 옮긴 곳 |
+|---|---|---|---|
+| `_build_teamcolor_rate_tab` | `tbl_teamcolor_rate` · `TEAMCOLOR_RATE_COLUMNS` · `TEAMCOLOR_TINT_FULL_PP` | `tc_rate_list`(`RateRowList`) · `cb_tc_rate_sort` · `btn_tc_rate_info` · `_tc_rate_rows` | 팀컬러 테스트 아홉 — 줄 글·경기 수·흐림(어느 정렬이든 아래)·섞임 식 `*`·엠블럼 전후 같음(`_rate_dump`) |
+| `_build_teamcolor_rank_tab` | "효과" 열 · `TEAMCOLOR_EFFECT_TEXT` · `_on_teamcolor_cell_clicked` | `btn_tc_rank_info` · `_tc_rank_selected` · 표 그대로 | `test_teamcolor_info_opens_only_from_button`(옛 `…_effect_opens_only_from_column`) · `test_sorted_column_gets_arrow_room_after_resort` 는 랭킹 표로 |
+| `_build_ranker_pick_tab` | `tbl_pick_colors` · `tbl_pick_forms` · `tbl_pick_cards` · `PICK_SHARE_COLUMNS` · `PICK_CARD_COLUMNS` | `pick_colors_list` · `pick_forms_list` · `pick_line_chips` · `pick_cards_list` | `test_ranker_pick_renders_summary`(줄 칩 거르기 · 줄 안 순위 · 두 번 누름 · 안 잘림) · `…_share_tables_most_common_first`(바탕 채움) |
+| `_build_recommend_tab` | `tbl_rec_cards` · `REC_CARD_COLUMNS` | `rec_line_chips` · `rec_cards_list` · `tbl_rec_stand` 는 표 그대로(넷 줄 비교 — E7) | `test_recommend_renders_from_db`(칸 라벨 "후보"·"시세") |
+| `TeamColorDialog` | 창 한 장(효과) | 머리 `card_share` · 탭 `tabs`(랭커 1만 명 · 효과 · 적용 선수) · `rank_cards` · `bins_list` · `owners_list` · `refresh_rank` | 새 `test_teamcolor_dialog_rank_tab` · 효과 테스트 셋 그대로 |
+
+**새 rank.db 읽기**: `rankmeta.tc_detail`(지금 줄 · 지난주 줄 · 구간별 · 대표 셋 — 캐시 안 함) · `tc_top_owners`(SQL 하나 `WHERE snapshot_id = ? AND team_color = ?` · 정렬은 파이썬 — `TEMP B-TREE` 없음) · `value_score`·`team_color_board` 에 `snap_id`(캐시 키에 들어간다 · 지난 시점은 하루 승률 비움). `test_rankmeta` 예산 표 `tc_detail` 첫 계산 CPU 0.188초(지어낸 1만 명 × 14 스냅숏).
+
+**이 조각에서 계획과 다르게 한 것**:
+- `_tier_means` 에는 `snap_id` 를 **안 더했다** — 상세 창이 구간 평균을 안 읽는다(평균 점수·구단가치 중앙값은 `value_score` 에 다 있다). 쓰는 곳 없는 인자를 만들지 않았다.
+- S 카드 다섯 중 "시즌 승률" 카드에 **하루 승률을 보조 줄로**(하루 승률은 지난 시점 짝이 없어 변화를 못 낸다 — 카드를 따로 두면 변화 칸만 늘 빈다). 구단가치·점유율 변화는 **색 없이 ▲▼**(오르면 좋은 값이 아니다 — `StatCard.set_delta(neutral=True)`).
+- 창의 첫 탭: 1만 명 숫자가 있으면 [랭커 1만 명], 없으면(수집 꺼짐·모으는 중·그 팀컬러 0명) [효과 · 적용 선수] — 지금까지 창을 열던 사람의 첫 화면이 빈 칸이 되지 않게. 효과는 지금처럼 창을 열 때 받는다(단추를 누른 것이 요청 신호 — 옛 "효과" 열 누름과 같다).
+- 대표 구단주 줄의 승률은 **승÷전체**(top3 카드와 같은 앱 규칙 · 라벨 "시즌 승÷전체"), 팀컬러 카드의 승률은 묶음 정의 그대로 승÷(승+패)(라벨에 식).
+- [팀컬러 랭킹] 의 **"효과" 열을 지웠다** — R3 "한 번 누름 = 고르기만" 과 맞추려면 칸 누름으로 여는 길이 없어야 한다. 창은 두 탭 위 [팀컬러 정보] 단추 하나(고른 줄이 없거나 다시 채우면 꺼짐).
+- R10 팀컬러·포메이션 상위 10 표도 줄 목록으로(비율만큼 바탕 · 가장 많은 줄 = 100%) — 카드 목록만 바꾸면 한 탭 안에 표와 줄 목록이 섞인다. 줄 칩 이름은 축구장 줄 그대로(공격 · 공미 · 미드 · 수미 · 수비 · GK — 계획의 "공격 · 미드 · 수비 · GK" 넷이 아니라 데이터의 여섯).
+- 강화는 "가장 많이 쓴 단계" 한 칸 + 툴팁에 셋(배지 그림 대신 글자 — `MetricRow` 칸에 그림 자리가 없다).
+- 대표 구단주 줄의 등급은 **"챔스 이상" 여부만**(`is_champ`) — 스냅숏 등급 칸은 코드라 이름 표가 없다(칸 0 은 "상위 20 표시" — 55 M1). 첫 판은 코드 숫자를 글자로 이으려다 스모크에서 터졌다.
+- 테스트 정리 `_rank_files_gone` 이 `rankmeta.clear_cache()` 도 부른다 — 새 창 테스트가 같은 시간대에 같은 꼴 rank.db 를 만들자 다음 테스트(비주류 거르기)가 앞 테스트의 인원을 캐시에서 읽었다(캐시 키 = 경로 · 스냅숏 id·시각이라 같다). 앱에서는 rank.db 를 지우고 같은 시각 스냅숏을 다시 만들 일이 없어 테스트만 고쳤다.
+
+**검증**: 손 변이 **22건 — 22 잡힘**(rankmeta 일곱 · 창 넷 · R3 여섯 · R10 다섯). 처음엔 **셋이 초록**이었다: ① 지난 시점 하루 승률 비우기 — 테스트 스냅숏 둘이 7일 떨어져 "지금" 쪽도 하루 짝이 없었다 → 하루 안 스냅숏을 끼우고 "지금은 있다"를 먼저 단언 ② 흐린 줄 아래로 — 픽스처의 흐린 줄이 경기도 적어 원래 아래였다 → 흐린 줄이 더 많은 지어낸 줄 ③ [팀컬러 정보] 첫 상태 꺼짐 — 그리기가 늘 다시 꺼서 구분이 안 됐다 → 새로 만든 단추를 직접 단언. 화면 스모크 386/386(1분 36초) · rankmeta 48/48 · 규칙 14/14(SQL 실행 계획 — `tc_top_owners` 포함) · 전체 28 파일(6분 20초 · test_icons 스텁에 `_teamcolor_dialog` 한 줄 더한 뒤 49/49). **실데이터**(이 PC rank.db 읽기 전용 · 상위 셋): 창 첫 계산 0.17~0.20초 · 다시 0.005초 · 지난주 = 10-20 16:00 스냅숏 · 구간 8/8 · 대표 3명. **exe**: 스크래치 폴더로 빌드(브랜치 `dist` 의 exe 가 떠 있어 덮어쓰기가 막혔다 — 끄지 않았다) · offscreen + 스크래치 데이터 폴더로 20초 · crash.log 없음. 창을 실제 화면에서 눈으로 본 것은 아니다 — 2번 모니터 실화면은 ③ 과 같이(카드 여섯 줄바꿈과 함께).
+
 ### ③ 환경 행렬
 
 | 환경 | 볼 것 | 상태 |

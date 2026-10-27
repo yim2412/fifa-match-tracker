@@ -257,6 +257,36 @@ def test_team_color_board_bundles_by_hand():
     using(body)
 
 
+def test_tc_detail_week_change_bins_owners():
+    """67 R2 — 지난주 시점 묶음(snap_id)이 지금과 다른 값(시점 인자가 빠지거나 캐시 키에 없으면 둘이 같아진다 · 2회차 [상] 1) ·
+    구간별 줄 = value_bins.cross 의 그 줄 · 대표 구단주 = 그 팀컬러 안에서 점수 높은 순 셋(다른 팀컬러의 더 높은 사람은 안 든다)."""
+    def body(db):
+        def rows(p_elo, p_w):
+            return (_team(1000, "P", 20, p_elo, p_w, 10, 5_000_000_000, 10) + _team(2000, "Q", 20, 3900.0, 50, 50, 4_000_000_000, 20)
+                    + _team(3000, "R", 20, 3800.0, 50, 50, 3_000_000_000, 20) + _team(4000, "S", 20, 3700.0, 45, 55, 2_000_000_000, 20)
+                    + _team(5000, "U", 20, 3600.0, 40, 60, 1_000_000_000, 20))
+        first = db.snap(T0, rows(3500.0, 10))
+        last = rows(4000.0, 30)
+        last[0]["elo"], last[1]["elo"] = 4500.0, 4400.0     # P 안 점수 순 — n1000 · n1001 이 위
+        last[20]["elo"] = 4450.0                              # Q 의 한 사람이 P 둘째보다 높다 — 팀컬러 거르기를 잰다
+        db.snap(T0 + timedelta(days=6, hours=12), rows(3900.0, 20))   # 하루 안 짝 — 지금 쪽엔 하루 승률이 있어야 아래 단언이 잰다
+        db.snap(T0 + timedelta(days=7), last)
+        d = M.tc_detail(db.conn, "P")
+        assert d.now is not None and d.then is not None and d.then_at[:10] == T0.date().isoformat(), d.then_at
+        assert abs(d.then.elo - 3500.0) < 1e-9 and d.now.elo > 4000.0, (d.then.elo, d.now.elo)
+        assert d.then.rate == 50.0 and d.now.rate == 75.0, (d.then.rate, d.now.rate)   # 10승 10패 → 30승 10패
+        assert [o.nickname for o in d.owners] == ["n1000", "n1001", "n1002"], d.owners
+        assert (d.owners[0].rank, d.owners[0].win, d.owners[0].lose) == (1000, 30, 10)
+        cross = {c: cells for c, _n, cells in M.value_bins(db.conn).cross}
+        assert d.bins and [c for _b, c in d.bins] == cross["P"]
+        assert M.tc_detail(db.conn, "없음").now is None
+        assert M.team_color_board(db.conn).day_ready and d.now.day_rate is not None
+        assert M.team_color_board(db.conn, snap_id=first).day_ready is False, "지난 시점에 오늘 하루 승률을 붙였다"
+        assert d.then.day_rate is None
+        assert M.value_score(db.conn, snap_id=first).at[:10] == T0.date().isoformat()
+    using(body)
+
+
 def test_percentiles_ties():
     p = M._percentiles({"a": 1, "b": 1, "c": 3})
     assert p["a"] == p["b"] == 25.0 and p["c"] == 100.0
@@ -548,6 +578,7 @@ def test_budget_first_call_cpu():
             for name, fn in (("day_winrate", lambda: M.day_winrate(conn, 10000)),
                              ("value_score", lambda: M.value_score(conn, 10000)),
                              ("team_color_board", lambda: M.team_color_board(conn, 10000)),   # 67 R1 — 위 둘을 처음부터
+                             ("tc_detail", lambda: M.tc_detail(conn, "C1")),   # 67 R2 — 지금·지난주 묶음 + 구간 + 대표 셋(창을 열 때 화면 스레드)
                              ("value_bins", lambda: M.value_bins(conn)),
                              ("tier_means", lambda: M.tier_means(conn, 10000)),
                              ("winrate_to_elo", lambda: M.winrate_to_elo(conn, 10000)),
@@ -572,7 +603,7 @@ BUDGET_S: dict = {}
 
 def test_rankmeta_behind_core_api():
     import core_api
-    for name in ("day_winrate", "value_score", "team_color_board", "value_bins", "tier_means", "formation_group", "group_meta", "is_champ",
+    for name in ("day_winrate", "value_score", "team_color_board", "tc_detail", "tc_top_owners", "value_bins", "tier_means", "formation_group", "group_meta", "is_champ",
                  "winrate_to_elo", "weekly", "rank_moves", "find_sn", "ranked_nicknames", "season_end_estimate"):
         assert hasattr(core_api, name) and name in core_api.__all__, name
 

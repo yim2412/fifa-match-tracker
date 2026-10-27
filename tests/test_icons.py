@@ -679,6 +679,7 @@ def test_emblem_cell_cache_and_invalidation():
         st._invalidate = lambda key: None
         st.RANK_VIEW_KEYS = MW.RANK_VIEW_KEYS
         st._tc_minor_only = False        # 57 K8 — 비주류 거르기가 켜졌을 때만 팀컬러 화면도 무효화한다
+        st._teamcolor_dialog = None      # 67 M11 — 열어 둔 팀컬러 창이 있을 때만 1만 명 칸을 다시 읽는다
         MW._invalidate_rank_views(st)
         assert st._emblem_cache is None, "rank.db 가 바뀌는 길은 합친 지도를 비운다(스냅숏 출처가 낡지 않게)"
         assert st.cell("", ) == "" and st._note_emblem("", "x") is None

@@ -43,6 +43,7 @@ import nexon_api  # noqa: E402
 import notice  # noqa: E402
 import playerinfo  # noqa: E402
 import rankcollect  # noqa: E402
+import rankmeta  # noqa: E402
 import ranker  # noqa: E402
 import requests  # noqa: E402
 import seasons as sn  # noqa: E402
@@ -826,7 +827,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 49, len(tables)   # 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 44, len(tables)   # 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -946,8 +947,8 @@ def test_fit_table_never_scrolls_sideways_above_min_font():
 
 def test_sorted_column_gets_arrow_room_after_resort():
     # 화살표 자리는 정렬 중인 열에만 준다 — 사용자가 다른 열을 누르면 다시 재야 한다.
-    tb = _win.tbl_teamcolor_rate   # 65 M4 — 상대 전적은 줄 목록이 됐다 · 정렬이 켜진 실제 표로
-    _win._go_page("팀컬러 승률")
+    tb = _win.tbl_teamcolor_rank   # 65 M4 상대 전적 · 67 R3 팀컬러 승률은 줄 목록이 됐다 · 정렬이 켜진 실제 표로
+    _win._go_page("팀컬러 랭킹")
     _app.processEvents()
     hdr = tb.horizontalHeader()
     for c in range(tb.columnCount()):
@@ -3538,8 +3539,8 @@ def test_teamcolor_results_reach_table_and_db():
         assert all(_win._team_colors.get(n) == "즉시컬러" for n in opps), _win._team_colors
         assert all("조회 완료" in lb.text() for lb in _win._teamcolor_status_labels), \
             [lb.text() for lb in _win._teamcolor_status_labels]
-        tbl = _win.tbl_teamcolor_rate
-        assert tbl.rowCount() == 1 and tbl.item(0, 0).text() == "즉시컬러"
+        lst = _win.tc_rate_list
+        assert lst.rowCount() == 1 and lst.row(0).label == "즉시컬러"
         conn = store.open_db(config.DB_PATH)
         try:
             saved = store.load_team_colors(conn, opps)
@@ -3614,10 +3615,8 @@ def test_teamcolor_counts_season_scope_not_display_range():
         _win._render_all()
         n = sum(1 for m in _win._matches if m.opponent)
         assert len(_win._slice()[0]) == 1 and n > 1, n
-        tbl = _win.tbl_teamcolor_rate
-        col = app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS.index("경기")
-        assert tbl.rowCount() == 1 and tbl.item(0, col).text() == str(n), \
-            [tbl.item(0, c).text() for c in range(tbl.columnCount())]
+        lst = _win.tc_rate_list
+        assert lst.rowCount() == 1 and lst.row(0).games == n, [(r.label, r.games) for r in lst.rows()]
         note = _win._teamcolor_note_labels[0].text()
         assert f"상대 {len({m.opponent for m in _win._matches if m.opponent})}명 중" in note, note
     finally:
@@ -3637,6 +3636,11 @@ def _table_dump(tbl):
             for r in range(tbl.rowCount())]
 
 
+def _rate_dump(lst):
+    """승률 줄 목록 → 줄마다 보이는 값(67 R3 — [팀컬러 승률] 이 표에서 줄 목록으로)."""
+    return [(r.label, r.sub, r.games, r.win, r.draw, r.lose, r.rate_text, r.diff, r.weak, r.icon) for r in lst.rows()]
+
+
 def test_teamcolor_dup_names_split_and_save_raw():
     # 같은 이름(Spartan)의 강화·클럽 팀컬러를 쓰는 두 상대 → 두 줄 · 저장은 넥슨 이름 + "시각\t키"(화면 글자 아님)
     opps = sorted({m.opponent for m in _MATCHES if m.opponent})
@@ -3646,7 +3650,7 @@ def test_teamcolor_dup_names_split_and_save_raw():
         _win._on_teamcolor_loaded({opps[0]: ("Spartan", 7, BOOST), opps[1]: ("Spartan", 9, CLUB)})
         assert (_win._team_colors[opps[0]], _win._team_colors[opps[1]]) == ("Spartan · 강화", "Spartan · 클럽")
         _win._on_teamcolor_finished()
-        names = {_win.tbl_teamcolor_rate.item(r, 0).text() for r in range(_win.tbl_teamcolor_rate.rowCount())}
+        names = {r.label for r in _win.tc_rate_list.rows()}
         assert {"Spartan · 강화", "Spartan · 클럽"} <= names, names
         c = store.open_db(config.DB_PATH)
         try:
@@ -3670,7 +3674,7 @@ def test_teamcolor_table_same_before_and_after_meta():
         _win._on_teamcolor_loaded({opps[0]: ("Spartan", 7, BOOST), opps[1]: ("Spartan", 9, ""),
                                    opps[2]: ("리옹", 3, "crests/l66.png")})
         _win._render_teamcolor_tabs(*_win._teamcolor_scope())
-        before = _table_dump(_win.tbl_teamcolor_rate), _table_dump(_win.tbl_teamcolor_rank)
+        before = _rate_dump(_win.tc_rate_list), _table_dump(_win.tbl_teamcolor_rank)
         assert any(r[0] == "Spartan (구분 전)" for r in before[0]), before[0]
         c = store.open_db(config.DB_PATH)
         try:
@@ -3681,7 +3685,7 @@ def test_teamcolor_table_same_before_and_after_meta():
         finally:
             c.close()
         _win._render_teamcolor_tabs(*_win._teamcolor_scope())
-        assert (_table_dump(_win.tbl_teamcolor_rate), _table_dump(_win.tbl_teamcolor_rank)) == before
+        assert (_rate_dump(_win.tc_rate_list), _table_dump(_win.tbl_teamcolor_rank)) == before
 
 
 def test_teamcolor_weak_rows_sink_both_ways_and_stay_uncolored():
@@ -3700,19 +3704,38 @@ def test_teamcolor_weak_rows_sink_both_ways_and_stay_uncolored():
                 _win._render_teamcolor_tabs(*_win._teamcolor_scope())
             finally:
                 app_main.core.MIN_COND = orig_cond
-            tbl = _win.tbl_teamcolor_rate
-            cols = app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS
-            rows = {tbl.item(r, 0).text(): r for r in range(tbl.rowCount())}
+            # [팀컬러 승률] 줄 목록(67 R3) — 흐린 줄은 기준 대비 칸이 없고 숫자·막대가 흐리며 어느 정렬이든 맨 아래
+            import widgets
+            lst = _win.tc_rate_list
+            rows = {r.label: r for r in lst.rows()}
             assert set(rows) == {"X", "Y"}, rows
-            weak = tbl.item(rows["Y"], cols.index("승률"))
-            strong = tbl.item(rows["X"], cols.index("승률"))
-            assert weak.sink and not strong.sink and weak.toolTip(), weak.toolTip()
-            assert weak.foreground().color().name() == QColor(T.TEXT_DIM).name()
-            assert weak.background().style() == Qt.BrushStyle.NoBrush, "흐린 줄에 색을 칠했다"
-            for col in ("승률", "경기", "평균 대비", "팀컬러"):
+            weak, strong = rows["Y"], rows["X"]
+            assert weak.weak and not strong.weak and weak.tip and weak.diff is None, (weak.tip, weak.diff)
+            assert strong.diff is not None, "기준 대비가 없으면 '흐린 줄만 칸이 없다' 단언이 아무것도 못 잰다"
+            col = widgets.RateRowDelegate.colors(weak)
+            assert col["rate"] == T.TEXT_DIM and col["diff"] == T.TEXT_DIM, col
+            for i in range(_win.cb_tc_rate_sort.count()):
+                _win.cb_tc_rate_sort.setCurrentIndex(i)
+                assert lst.row(lst.rowCount() - 1).label == "Y", (_win.cb_tc_rate_sort.currentText(), _rate_dump(lst))
+            _win.cb_tc_rate_sort.setCurrentIndex(0)
+            # 픽스처는 흐린 줄이 경기도 적어 매치수 순에선 원래 아래다 — 흐린 줄이 더 많은 지어낸 줄로(구분 전 · 상대 수 미달)
+            keep_rows = _win._tc_rate_rows
+            try:
+                _win._tc_rate_rows = [widgets.RateRow("많은흐림", 50, 0, 50, weak=True), widgets.RateRow("적은", 3, 0, 1)]
+                _win._show_tc_rate_rows()
+                assert [r.label for r in lst.rows()] == ["적은", "많은흐림"], _rate_dump(lst)
+            finally:
+                _win._tc_rate_rows = keep_rows
+                _win._show_tc_rate_rows()
+            # [팀컬러 랭킹] 은 표 그대로 — 흐린 줄 sink
+            tbl = _win.tbl_teamcolor_rank
+            cols = app_main.MainWindow.TEAMCOLOR_RANK_COLUMNS
+            r_y = next(r for r in range(tbl.rowCount()) if tbl.item(r, 1).text() == "Y")
+            assert tbl.item(r_y, 2).sink and tbl.item(r_y, 2).foreground().color().name() == QColor(T.TEXT_DIM).name()
+            for c in ("만난 횟수", "팀컬러"):
                 for order in (Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder):
-                    tbl.sortByColumn(cols.index(col), order)
-                    assert tbl.item(tbl.rowCount() - 1, 0).text() == "Y", (col, order, _table_dump(tbl))
+                    tbl.sortByColumn(cols.index(c), order)
+                    assert tbl.item(tbl.rowCount() - 1, 1).text() == "Y", (c, order, _table_dump(tbl))
         finally:
             config.TEAMCOLOR_MIN_OPPONENTS = saved_min
 
@@ -3723,11 +3746,11 @@ def test_teamcolor_min_games_filter_hides_and_counts():
         _win._on_teamcolor_loaded({n: ("필터컬러", 1, "") for n in opps})
         games = sum(1 for m in _win._matches if m.opponent)
         _win._render_teamcolor_tabs(*_win._teamcolor_scope())
-        assert _win.tbl_teamcolor_rate.rowCount() == 1
+        assert _win.tc_rate_list.rowCount() == 1
         _win._teamcolor_min_spins[1].setValue(games + 1)   # 다른 탭의 스핀 — 두 탭이 같은 값
         assert _win._teamcolor_min_spins[0].value() == games + 1
         _win._render_teamcolor_tabs(*_win._teamcolor_scope())
-        assert _win.tbl_teamcolor_rate.rowCount() == 0 and _win.tbl_teamcolor_rank.rowCount() == 0
+        assert _win.tc_rate_list.rowCount() == 0 and _win.tbl_teamcolor_rank.rowCount() == 0
         assert "1종 숨김" in _win._teamcolor_note_labels[0].text(), _win._teamcolor_note_labels[0].text()
 
 
@@ -3770,10 +3793,10 @@ def _teamcolor_mixed_formula():
         _win._matches = list(_MATCHES)   # 환경이 한 집단으로 바꾼 것을 되돌린다
         _win._on_teamcolor_loaded({n: ("무색" if n == draw_opp else "유색", 1, "") for n in opps})
         _win._render_teamcolor_tabs(*_win._teamcolor_scope())
-        names = {_win.tbl_teamcolor_rate.item(r, 0).text() for r in range(_win.tbl_teamcolor_rate.rowCount())}
+        names = {r.label for r in _win.tc_rate_list.rows()}
         assert names == {"유색"}, names   # games 로 거르면 "무색" 이 0.0% 로 남는다
         assert _win._teamcolor_min_units[0].text() == "승패 판 이상만", _win._teamcolor_min_units[0].text()
-        rate = _win.tbl_teamcolor_rate.item(0, app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS.index("승률")).text()
+        rate = _win.tc_rate_list.row(0).rate_text
         assert rate.endswith("*"), rate
 
 
@@ -3794,33 +3817,48 @@ def test_teamcolor_double_click_on_dup_name():
             r = next(r for r in range(tbl.rowCount()) if tbl.item(r, 1).text() == "Spartan · 강화")
             _win._on_teamcolor_double_clicked(tbl.item(r, 1))
             assert got == ["Spartan · 강화"] and seen == [{opps[0]}], (got, seen)
-            # 효과 열의 더블클릭은 아무것도 안 한다(한 번 클릭이 효과 창을 연다)
-            _win._on_teamcolor_double_clicked(tbl.item(r, app_main.MainWindow.TEAMCOLOR_RANK_COLUMNS.index("효과")))
-            assert got == ["Spartan · 강화"], got
+            # [팀컬러 승률] 줄 목록의 두 번 누름도 같은 길(67 R3 — 두 탭 같은 규칙)
+            lst = _win.tc_rate_list
+            i = next(i for i, row in enumerate(lst.rows()) if row.label == "Spartan · 강화")
+            lst.doubleClicked.emit(lst.model().index(i, 0))
+            assert got == ["Spartan · 강화"] * 2 and seen == [{opps[0]}] * 2, (got, seen)
         finally:
             _win._show_teamcolor_detail = orig
             app_main.core.opponent_position_players = orig_pp
 
 
-def test_teamcolor_effect_opens_only_from_column():
+def test_teamcolor_info_opens_only_from_button():
+    # 67 R3 — 한 번 누름은 고르기만(창 안 엶 · 두 번 누름 앞에 오는 함정) · [팀컬러 정보] 는 고른 줄이 있을 때만 켜지고 그 줄을 연다
     opps = sorted({m.opponent for m in _MATCHES if m.opponent})
     opened = []
     orig = _win._open_teamcolor_effect
     with _TeamColorEnv():
-        _win._on_teamcolor_loaded({opps[0]: ("Spartan", 1, CLUB)})
+        _win._on_teamcolor_loaded({opps[0]: ("Spartan", 1, CLUB), opps[1]: ("리옹", 1, "crests/l66.png")})
         _win._render_teamcolor_tabs(*_win._teamcolor_scope())
         _win._open_teamcolor_effect = opened.append
         try:
-            for tbl, cols in ((_win.tbl_teamcolor_rate, app_main.MainWindow.TEAMCOLOR_RATE_COLUMNS),
-                              (_win.tbl_teamcolor_rank, app_main.MainWindow.TEAMCOLOR_RANK_COLUMNS)):
-                # 다른 열 칸에도 글자를 심는다 — 열 검사 없이 "칸에 글자가 있으면 연다"로 바뀌어도 잡히게
-                for c in range(tbl.columnCount()):
-                    if c != cols.index("효과") and tbl.item(0, c) is not None:
-                        tbl.item(0, c).setData(Qt.ItemDataRole.UserRole, "다른 열")
-                for c in range(tbl.columnCount()):
-                    tbl.cellClicked.emit(0, c)
-                assert tbl.item(0, cols.index("효과")).text() == "보기"
-            assert opened == ["Spartan · 클럽"] * 2, opened
+            tbl, lst = _win.tbl_teamcolor_rank, _win.tc_rate_list
+            from PyQt6.QtWidgets import QHBoxLayout
+            _row, fresh = _win._teamcolor_pick_row(QHBoxLayout())   # 처음 그리기 전(탭을 아직 안 연 창)에도 꺼져 있다
+            assert not fresh.isEnabled()
+            fresh.deleteLater()
+            for btn in (_win.btn_tc_rank_info, _win.btn_tc_rate_info):
+                assert not btn.isEnabled(), "고른 줄이 없는데 단추가 켜져 있다"
+                btn.click()
+            assert opened == [], opened
+            r = next(r for r in range(tbl.rowCount()) if tbl.item(r, 1).text() == "리옹")
+            for c in range(tbl.columnCount()):
+                tbl.cellClicked.emit(r, c)   # 옛 "효과" 열 꼴 — 칸 누름으로는 안 연다
+            tbl.selectRow(r)
+            assert opened == [] and _win.btn_tc_rank_info.isEnabled()
+            _win.btn_tc_rank_info.click()
+            i = next(i for i, row in enumerate(lst.rows()) if row.label == "Spartan · 클럽")
+            lst.setCurrentIndex(lst.model().index(i, 0))
+            assert _win.btn_tc_rate_info.isEnabled()
+            _win.btn_tc_rate_info.click()
+            assert opened == ["리옹", "Spartan · 클럽"], opened
+            _win._render_teamcolor_tabs(*_win._teamcolor_scope())   # 다시 채우면 고른 줄이 사라진다 → 단추 꺼짐
+            assert not _win.btn_tc_rank_info.isEnabled() and not _win.btn_tc_rate_info.isEnabled()
         finally:
             _win._open_teamcolor_effect = orig
 
@@ -8949,8 +8987,27 @@ def test_ranker_pick_renders_summary():
             _win._go_page("랭커 픽")
             s = _win.pick_summary
             assert s is not None and (s.total, s.used, s.pending) == (3, 1, 2), s
-            assert _win.tbl_pick_colors.rowCount() == 1 and _win.tbl_pick_cards.rowCount() > 0
+            assert _win.pick_colors_list.rowCount() == 1 and _win.pick_cards_list.rowCount() > 0
             assert "3명 중 1명" in _win.lb_pick_summary.text(), _win.lb_pick_summary.text()
+            # 67 R10 줄 칩 — 고른 줄의 카드만 · 줄 안 순위 · 두 번 누르면 그 카드
+            lst, chips = _win.pick_cards_list, _win.pick_line_chips
+            every = lst.all_rows()
+            lines = [ln for ln in dict.fromkeys(r.sort["line"] for r in every)]
+            assert len(lines) > 1, "줄이 하나뿐이면 거르기가 아무것도 못 잰다"
+            chips.setCurrentIndex(chips.findData(lines[-1]))
+            assert lst.rowCount() == sum(1 for r in every if r.sort["line"] == lines[-1]) < len(every)
+            assert {r.sort["line"] for r in lst.rows()} == {lines[-1]} and lst.row(0).rank == 1
+            chips.setCurrentIndex(0)
+            assert lst.rowCount() == len(every)
+            got = []
+            keep_info = _win._show_player_info
+            _win._show_player_info = got.append
+            try:
+                lst.doubleClicked.emit(lst.model().index(0, 0))
+            finally:
+                _win._show_player_info = keep_info
+            assert got == [every[0].key] and isinstance(every[0].key, int), got
+            _check_metric_lists([lst])
             assert _win.box_pick_pitch.count() == 1 and isinstance(_win.box_pick_pitch.itemAt(0).widget(),
                                                                    app_main.PitchWidget)
         finally:
@@ -8976,8 +9033,9 @@ def test_ranker_pick_share_tables_most_common_first():
             r.close()
         _win._go_page("랭커 픽", "픽")
         _win._invalidate("rankerpick")
-        names = [_win.tbl_pick_colors.item(i, 0).text() for i in range(_win.tbl_pick_colors.rowCount())]
+        names = [r.name for r in _win.pick_colors_list.rows()]
         assert names == ["나", "다", "가"], names
+        assert [r.fill for r in _win.pick_colors_list.rows()] == [1.0, 2 / 3, 1 / 3]   # 바탕 = 가장 많은 줄 대비
 
 
 def test_recommend_tab_loads_with_recommend_args():
@@ -9028,16 +9086,16 @@ def test_recommend_renders_from_db():
             _win._go_page("랭커 픽", "추천")
             rec = _win.rec
             assert rec is not None and rec.total == 1 and not rec.enough, rec
-            assert "1명뿐" in _win.lb_rec_status.text() and _win.tbl_rec_cards.rowCount() == 0, _win.lb_rec_status.text()
+            assert "1명뿐" in _win.lb_rec_status.text() and _win.rec_cards_list.rowCount() == 0, _win.lb_rec_status.text()
             assert _win.tbl_rec_stand.rowCount() == 0, "문턱 미만인데 내 위치를 냈다"
             config.RECOMMEND_MIN_RANKERS = config.RECOMMEND_MIN_USERS = 1
             _win._invalidate("recommend")
             rec = _win.rec
             assert rec.enough and rec.by_source[core.SRC_PICK] == 1, rec
             mine = {p.get("spId") for p in _win._my_latest_starters()}
-            shown = [_win.tbl_rec_cards.item(r, 1).data(app_main.Qt.ItemDataRole.UserRole)
-                     for r in range(_win.tbl_rec_cards.rowCount())]
+            shown = [r.key for r in _win.rec_cards_list.rows()]
             assert shown and not (set(shown) & mine), "내가 이미 쓰는 카드를 추천했다"
+            assert all(r.cells[0].label == "후보" and r.cells[-1].label == "시세" for r in _win.rec_cards_list.rows())
             assert _win.tbl_rec_stand.rowCount() == 3 and "상위 200 1" in _win.lb_rec_summary.text()
         finally:
             _win._nick, _win._rank, config.RECOMMEND_MIN_RANKERS, config.RECOMMEND_MIN_USERS = keep
@@ -9871,6 +9929,9 @@ def _wait_maint(ms=15000):
 def _rank_files_gone():
     for suffix in ("", "-wal", "-shm"):
         pathlib.Path(str(config.RANK_DB_PATH) + suffix).unlink(missing_ok=True)
+    # rankmeta 캐시 키는 (경로 · 스냅숏 id·시각) — 테스트마다 같은 꼴(같은 시간대 _meta_db)로 다시 만들면 키가 같아
+    # 앞 테스트의 값을 읽는다(67 ② — 팀컬러 창 테스트 뒤 비주류 거르기 테스트가 옛 인원을 읽었다)
+    rankmeta.clear_cache()
 
 
 class _MetaEnv:
@@ -9933,6 +9994,41 @@ def _person_rows() -> int:
         return sum(c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in rankcollect.PERSON_TABLES)
     finally:
         c.close()
+
+
+def test_teamcolor_dialog_rank_tab():
+    """67 R2 — 팀컬러 정보 창의 [랭커 1만 명]: 재료 없으면 이유 글 + 효과 탭부터 · 쌓인 뒤엔 열어 둔 창이 rank.db 무효화에
+    다시 읽힌다(3회차 M11) · 점유율·카드 · 지난주 대비(같은 값이면 –) · 대표 구단주 = 그 팀컬러 점수 높은 순 셋 · 안 잘림."""
+    with _MetaEnv(), _TcFake():
+        if _win._teamcolor_dialog is not None:
+            _win._teamcolor_dialog._label = ""
+        dlg = _tc_dialog_open("팀A")
+        try:
+            assert dlg.detail is None and "모으는 중" in dlg.lb_rank_note.text(), dlg.lb_rank_note.text()
+            assert dlg.rank_body.isHidden() and dlg.tabs.currentIndex() == 1, "1만 명 숫자가 없는데 그 탭부터 열었다"
+            _meta_db()
+            _win._invalidate_rank_views()
+            d = dlg.detail
+            assert d is not None and d.now is not None and d.now.users == 150, d
+            assert not dlg.rank_body.isHidden() and dlg.card_share.value.text() == "50.0%"
+            assert dlg.rank_cards["elo"].value.text() == f"{d.now.elo:,.0f}"
+            assert d.then is not None and "–" in dlg.rank_cards["elo"].delta.text(), dlg.rank_cards["elo"].delta.text()
+            card = app_main.StatCard("t")   # 구단가치·점유율은 오르내림에 좋고 나쁨이 없다 — ▲ 는 붙되 색은 흐림
+            card.set_delta(12.0, 10.0, "억", neutral=True)
+            assert card.delta.property("delta_color") == T.TEXT_DIM and "▲ 2.0억" in card.delta.text()
+            card.set_delta(12.0, 10.0, "억")
+            assert card.delta.property("delta_color") == T.GOOD
+            assert [r.name for r in dlg.owners_list.rows()] == ["m299", "m297", "m295"], [r.name for r in dlg.owners_list.rows()]
+            assert dlg.bins_list.isHidden(), "구단가치가 없는 스냅숏인데 구간 줄을 보였다"
+            _tc_dialog_open("팀B")
+            assert dlg.tabs.currentIndex() == 0 and [r.name for r in dlg.owners_list.rows()][0] == "m300"
+            w = dlg.owners_list.viewport().width()
+            bad = [r.name for r in dlg.owners_list.rows() if dlg.owners_list.itemDelegate().overflow(r, w, dlg.owners_list.font())]
+            assert not bad and w > 200, (w, bad)
+            _tc_dialog_open("없는팀")
+            assert "쓰는 사람이 없습니다" in dlg.lb_rank_note.text() and dlg.rank_body.isHidden()
+        finally:
+            dlg.close()
 
 
 def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
