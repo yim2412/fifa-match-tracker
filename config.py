@@ -399,6 +399,24 @@ SHOOTOUT_GK_MAX = 12
 SHOOTOUT_GK_COLS = 4
 SHOOTOUT_GK_FACE_PX = 44
 SHOOTOUT_GK_NAME_PT = (11, 8)   # 이름 글꼴(기본 · 줄여도 되는 하한) — 긴 이름이 카드 폭을 밀지 않게
+# [슛 맵] 오른쪽 골·어시스트 순위(65 M8) — 내 선수 이만큼만(골 + 어시 많은 순)
+SHOT_RANK_MAX = 10
+# [패스 스타일] 종류 카드(65 M7) 한 줄 칸 수 — 여섯 종류가 두 줄(1280 폭에서 카드 하나 약 310px)
+PASS_CARD_COLS = 3
+# [선수 지표] 공격력·수비력 칸 색(65 M9 · G8) — 표 안 값과 무관한 고정 눈금(이 아래는 안 칠함 · 위 끝부터 끝 색).
+# 같은 계정 공격력 최고 808 · GK 수비력 885 가 이 눈금에 그대로 들어온다(ROADMAP 65 "우리 쪽에서 잰 것").
+G8_SCALE = (210, 860)
+# 포지션 기준 점수(공격력, 수비력) — 그 칸 값이 이보다 낮으면 "▽"(다른 기준 화면 G8 · 같은 계정 11줄로 확인).
+# 키는 넥슨 포지션 이름(spposition 메타) — 없는 이름은 기준 없음.
+G8_POS_FLOOR = {
+    "GK": (0, 0),
+    **dict.fromkeys(("SW", "RCB", "CB", "LCB"), (180, 450)),
+    **dict.fromkeys(("RB", "LB", "RWB", "LWB"), (200, 400)),
+    **dict.fromkeys(("RDM", "CDM", "LDM"), (250, 260)),
+    **dict.fromkeys(("RCM", "CM", "LCM"), (500, 220)),
+    **dict.fromkeys(("RM", "LM"), (600, 220)),
+    **dict.fromkeys(("RAM", "CAM", "LAM", "RF", "CF", "LF", "RW", "LW", "RS", "ST", "LS"), (650, 220)),
+}
 D1_MIN_GAMES = 5                    # 달력 화살표(D1) — 그날 승률 분모가 이보다 적으면 안 잰다(U3 · 띠 식은 N16 과 같고 하한만 다르다)
 G1_GAME_LEVEL_DAYS = 14             # 등급 그래프를 확대해 이 날 수 이하만 보이면 하루 한 점 대신 경기마다 한 점(U4)
 # N19 칩(2.7.1 — habits.paired_diff · Diff.clear) — 같은 경기 상대 대비 차이가 이 %p 이상이어야 띄운다.

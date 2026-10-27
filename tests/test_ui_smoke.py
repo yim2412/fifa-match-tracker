@@ -5997,6 +5997,9 @@ def test_release_drops_every_reference():
         _win._on_loaded(matches, details, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(matches), None, "-", False, "", {}, {})
         _win._narrate_scope()
+        _win._shot_sum_key = None
+        _win._render_shot_summary(details)   # 슛 맵 요약이 최다 득점·실점 경기 원문을 쥔다(65 M8)
+        assert _win.shot_sum is not None and _win.shot_sum.best is not None
         probe = details[0]
         # 끝난 로더가 화면 목록(_prev)을 쥐고 있는 경우까지
         _win._loader = app_main.MatchLoader(_NoApi(), "x", 52, prev=(_OUID, list(matches), list(details)))
@@ -6020,6 +6023,7 @@ def test_release_drops_every_reference():
         left = [type(r).__name__ for r in gc.get_referrers(probe) if id(r) not in mine]
         try:
             assert left == [], f"내려놓은 뒤에도 경기 기록을 쥐고 있다: {left}"
+            assert _win.shot_sum is None, "슛 맵 요약이 경기 원문(최다 득점·실점)을 쥐고 있다"
             # 다시 열기는 저장본 경로라 maxdivision 을 다시 안 부른다 — 비우면 줄이 다음 검색까지 사라진다
             assert _win._max_division.get(_OUID), "내려놓기가 역대 최고 등급을 비웠다"
             assert _win._ouid == _OUID, "계정을 비우면 다시 읽을 때 승률 그래프 기간이 초기화된다"
@@ -6613,23 +6617,133 @@ def test_cvd_delta_matches_known_values():
     assert got == {("dark", ""): 5.3, ("dark", "_FILL"): 5.3, ("light", ""): 5.0, ("light", "_FILL"): 6.6}, got
 
 
-def test_heat_scale_degenerate():
-    hs = app_main.MainWindow._heat_scale
-    assert hs([], []) == []
-    assert hs([3.0, 9.0], [True, False]) == [None, None]          # 기준 넘는 선수 1명 — 눈금 못 잡음
-    assert hs([5.0, 5.0, 1.0], [True, True, False]) == [None, None, None]  # 전부 같은 값
-    assert hs([2.0, 4.0, 3.0, 99.0], [True, True, True, False]) == [0.0, 1.0, 0.5, None]  # 99 는 눈금 밖
+def test_g8_cells_match_reference():
+    # 65 M9 — 다른 기준 화면 같은 계정 표의 실제 칸 색(ROADMAP "G8 색 규칙" 확인 줄)을 그 화면 바탕 rgb(23,29,40) 으로 그대로 낸다.
+    # 앱은 우리 PANEL 에서 섞는다(바탕만 다르고 눈금 위치 t·끝 색·반올림은 같다 — 이 단언이 그 셋을 잰다)
+    g8, scale, ref = T.g8_cell, app_main.config.G8_SCALE, "#171d28"
+    assert scale == (210, 860)
+    assert g8(839.9, "atk", scale, "dark", ref)[0] == "#c13343"      # 193,51,67
+    assert g8(494.9, "atk", scale, "dark", ref)[0] == "#642734"      # 100,39,52
+    for v in (193.4, 149.5):                                           # 바탕 그대로 · 흐린 글자
+        assert g8(v, "atk", scale, "dark", ref) == (None, T._PALETTES["dark"]["TEXT_DIM"])
+    assert g8(884, "def", scale, "dark", ref)[0] == T.G8_END["def"] == "#3062cd"   # 끝 색(860 이상)
+    assert g8(1527, "atk", scale, "dark", ref)[0] == T.G8_END["atk"] == "#c63444"
+    assert g8(210, "atk", scale, "dark", ref)[0] == ref                 # 아래 끝은 칠하되 바탕과 같은 색
+    assert g8(210, "atk", scale, "dark")[0] == T._PALETTES["dark"]["PANEL"]   # 앱은 PANEL 에서
+    # 밝은 식(값 ÷ 900 — 눈금과 다른 식) · 아래 끝 밑은 안 칠함
+    assert g8(900, "atk", scale, "light")[0] == "#ff4d66" and g8(900, "def", scale, "light")[0] == "#0000ff"
+    assert g8(209.9, "def", scale, "light")[0] is None and g8(210, "def", scale, "light")[0] is not None
+    # 모든 값·두 테마·두 칸에서 글자 대비 4.5 이상(밝은 쪽 글자색은 대비 큰 쪽을 고른다 — 기준 화면의 "700 넘으면 흰색" 은 미달)
+    bad = []
+    for mode, p in T._PALETTES.items():
+        for kind in ("atk", "def"):
+            for v in range(0, 1600, 5):
+                bg, fg = g8(v, kind, scale, mode)
+                if T.contrast(fg, bg or p["PANEL"]) < 4.5:
+                    bad.append((mode, kind, v, bg, fg))
+    assert not bad, bad[:5]
+
+
+def test_players_g8_wiring():
+    # 화면이 g8_cell·G8_SCALE·G8_POS_FLOOR 를 실제로 쓰는지 — 기본값이 아닌 눈금·기준으로 잰다(같으면 배선이 끊겨도 참)
+    import core_api
+    players = app_main.core.aggregate_players(_win._slice()[1], _win._ouid,
+                                              pos_name=lambda p: _win._positions.get(p, str(p)))
+    vals = sorted(p.attack_power for p in players)
+    lo = (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2      # 픽스처 값 가운데 — 칠한 칸·안 칠한 칸이 둘 다 나온다
+    scale = (lo, lo + 100)
+    victim = max(players, key=lambda p: p.defense_power)
+    keep = (core_api.MIN_PLAYER_GAMES, app_main.config.G8_SCALE, app_main.config.G8_POS_FLOOR)
+    core_api.MIN_PLAYER_GAMES = 1
+    app_main.config.G8_SCALE = scale
+    app_main.config.G8_POS_FLOOR = {victim.position: (0, victim.defense_power + 1)}
+    try:
+        _win._render_players(_win._slice()[1])
+        tb = _win.tbl_players
+        by_id = {tb.item(r, 1).data(Qt.ItemDataRole.UserRole): r for r in range(tb.rowCount())}
+        res = [m.result for m in _win._slice()[0]]
+        team = app_main.core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed)
+        painted = 0
+        for p in players:
+            r = by_id[p.sp_id]
+            for c, kind, v in ((5, "atk", p.attack_power), (6, "def", p.defense_power)):
+                bg, fg = T.g8_cell(v, kind, scale)
+                it = tb.item(r, c)
+                got = it.background().color().name() if it.background().style() != Qt.BrushStyle.NoBrush else None
+                assert got == bg and it.foreground().color().name() == fg, (p.name, kind, v, got, bg)
+                painted += bg is not None
+                marked = p.position == victim.position and kind == "def" and v < victim.defense_power + 1
+                assert ("▽" in it.text()) == marked and bool(it.toolTip()) == marked, (p.name, kind, it.text())
+            rate = tb.item(r, 4)
+            assert rate.foreground().color().name() == app_main.delta_color(p.win_rate - team), (p.name, p.win_rate, team)
+        assert 0 < painted < 2 * len(players), painted
+        # 픽스처 선수는 다 같은 경기를 뛰어 승률이 같다 — 팀 승률을 끝으로 밀어 방향을 잰다(0% 면 좋음 · 100% 면 나쁨)
+        keep_slice = _win._slice
+        ms, ds = keep_slice()
+        mid = [p for p in players if 0 < p.win_rate < 100]
+        assert mid, [p.win_rate for p in players]
+        try:
+            for res, color in (("패", T.GOOD), ("승", T.BAD)):
+                _win._slice = lambda res=res: ([replace(m, result=res) for m in ms], ds)
+                _win._render_players(ds)
+                by_id = {tb.item(r, 1).data(Qt.ItemDataRole.UserRole): r for r in range(tb.rowCount())}
+                got = {tb.item(by_id[p.sp_id], 4).foreground().color().name() for p in mid}
+                assert got == {color.lower()}, (res, got, color)
+        finally:
+            _win._slice = keep_slice
+            _win._render_players(ds)
+        # 승률 굵게는 대리자가 그릴 때 — 표 글꼴을 줄여도 따라가고, 폭(sizeHint)은 보통 글꼴로 알린다
+        from PyQt6.QtGui import QFont
+        from PyQt6.QtWidgets import QStyleOptionViewItem
+        import widgets
+        dg = tb.itemDelegateForColumn(4)
+        assert isinstance(dg, widgets.BoldColumnDelegate), dg
+        opt = QStyleOptionViewItem()
+        opt.font = QFont(tb.font())
+        dg.initStyleOption(opt, tb.model().index(0, 4))
+        assert opt.font.bold() and not tb.item(0, 4).font().bold(), "칸에 굵은 글꼴을 박으면 글꼴 축소 때 잘린다"
+        plain = QStyleOptionViewItem()
+        plain.font = QFont(tb.font())
+        w_bold = dg.sizeHint(plain, tb.model().index(0, 4)).width()
+        assert w_bold == widgets.RowBorderDelegate(tb).sizeHint(plain, tb.model().index(0, 4)).width(), w_bold
+        # 그래서 굵은 만큼은 그 열 여백으로 — 가장 작은 창(글꼴이 줄어든 상태)에서도 굵은 글자 + 칸 여백이 열 폭 안
+        from PyQt6.QtGui import QFontMetrics
+        _win._go_page("선수 지표")
+        try:
+            _at_size(*app_main.MIN_WINDOW)
+            bf = QFont(tb.font())
+            bf.setBold(True)
+            fm = QFontMetrics(bf)
+            short = [(tb.item(r, 4).text(), tb.columnWidth(4), fm.horizontalAdvance(tb.item(r, 4).text()) + tb._pad)
+                     for r in range(tb.rowCount()) if tb.columnWidth(4) < fm.horizontalAdvance(tb.item(r, 4).text()) + tb._pad]
+            assert not short, short[:3]
+        finally:
+            _at_size(1600, 900)
+        assert "▽" in tb.item(by_id[victim.sp_id], 6).text()
+        # 출전 미달이면 색·▽ 를 안 붙인다(승률 굵게는 그대로)
+        core_api.MIN_PLAYER_GAMES = 10 ** 6
+        _win._render_players(_win._slice()[1])
+        for r in range(tb.rowCount()):
+            for c in (5, 6):
+                it = tb.item(r, c)
+                assert it.background().style() == Qt.BrushStyle.NoBrush and "▽" not in it.text(), (r, c, it.text())
+            assert tb.item(r, 4).data(Qt.ItemDataRole.ForegroundRole) is None
+    finally:
+        core_api.MIN_PLAYER_GAMES, app_main.config.G8_SCALE, app_main.config.G8_POS_FLOOR = keep
+        _win._render_players(_win._slice()[1])
 
 
 def _player_rows():
-    """선수 지표 표 → {spId: (출전 글자, 출전 툴팁, 공격력 배경, 수비력 배경, 포지션 글자색)}."""
+    """선수 지표 표 → {spId: (출전 글자, 출전 툴팁, 공격력 칸 칠함, 수비력 칸 칠함, 포지션 글자색)}.
+    칠함 = G8 이 글자색을 정했다(아래 끝 밑의 값은 배경 없이 흐린 글자라 배경으로는 못 잰다)."""
     tb = _win.tbl_players
+    fg = Qt.ItemDataRole.ForegroundRole
     out = {}
     for r in range(tb.rowCount()):
         sid = tb.item(r, 1).data(Qt.ItemDataRole.UserRole)
         out[sid] = (tb.item(r, 3).text(), tb.item(r, 3).toolTip(),
-                    tb.item(r, 5).background().style() != Qt.BrushStyle.NoBrush,
-                    tb.item(r, 6).background().style() != Qt.BrushStyle.NoBrush,
+                    tb.item(r, 5).data(fg) is not None,
+                    tb.item(r, 6).data(fg) is not None,
                     tb.item(r, 0).foreground().color().name())
     return out
 
@@ -8408,12 +8522,39 @@ def test_pass_style_section_in_tactics():
     # 픽스처 4경기 전부 종류 필드가 있고, 하나는 "오류"(승무패 아님)라 뺀다
     wdl = [m for m in _win._slice()[0] if m.result in ("승", "무", "패")]
     assert ps.all.games == len(wdl) == 3, (ps.all.games, len(wdl))
-    g = _win.grid_pass
-    assert g.rowCount() == 1 + len(st_mod.PASS_KINDS), g.rowCount()
-    assert g.itemAtPosition(1, 0).widget().text() == "짧은 패스"
-    # 이긴/진 경기 칸은 표본(MIN_COND) 미만이면 흐림 — 픽스처는 몇 경기뿐이라 흐리다
-    cell = g.itemAtPosition(1, 4).widget()
-    assert app_main.T.TEXT_DIM in cell.styleSheet() and cell.toolTip(), cell.styleSheet()
+    # 65 M7 — 종류마다 카드(PASS_CARD_COLS 칸) · 성공률 크게 · 경기당 시도/성공 · 성공률 막대(파랑)
+    import core_api
+    from PyQt6.QtWidgets import QLabel
+    from widgets import MeterBar
+    g, cols = _win.grid_pass, app_main.config.PASS_CARD_COLS
+    cards = _win.pass_cards
+    assert len(cards) == len(st_mod.PASS_KINDS) == g.count(), (len(cards), g.count())
+    for i, (card, k) in enumerate(zip(cards, ps.all.kinds)):
+        assert g.itemAtPosition(i // cols, i % cols).widget() is card, i
+        texts = [lb.text() for lb in card.findChildren(QLabel)]
+        assert texts[0] == k.name, texts
+        ok = k.tries >= st_mod.PASS_MIN_TRIES
+        assert texts[1] == (f"{k.rate:.0f}%" if ok else app_main.NA), (texts[1], k.rate, k.tries)
+        assert texts[2].startswith(f"경기당 시도 {k.tries / ps.all.games:.1f} · 성공 {k.success / ps.all.games:.1f}"), texts[2]
+        bar = card.findChild(MeterBar)
+        assert abs(bar.frac - (k.rate / 100 if ok else 0.0)) < 1e-9 and (bar.color == app_main.T.BLUE) is ok, \
+            (k.name, ok, bar.frac, bar.color)
+        # 이긴/진 경기 줄은 표본(MIN_COND) 미만이면 흐림 + 툴팁 — 픽스처는 몇 경기뿐이라 흐리다
+        for lb in card.findChildren(QLabel)[3:]:
+            assert app_main.T.TEXT_DIM in lb.styleSheet() and lb.toolTip(), (lb.text(), lb.styleSheet())
+    assert any(k.tries >= st_mod.PASS_MIN_TRIES for k in ps.all.kinds), "픽스처에 성공률을 내는 종류가 없다 — 위 단언이 NA 만 잰다"
+    # 시도 문턱을 못 넘으면 성공률·막대를 숨기고 카드를 흐린다
+    keep = core_api.PASS_MIN_TRIES
+    core_api.PASS_MIN_TRIES = 10 ** 9
+    try:
+        _win._render_pass_style(_win._slice()[1])
+        for card in _win.pass_cards:
+            assert card.findChildren(QLabel)[1].text() == app_main.NA and card.property("weak")
+            bar = card.findChild(MeterBar)
+            assert bar.frac == 0 and bar.color != app_main.T.BLUE, (bar.frac, bar.color)
+    finally:
+        core_api.PASS_MIN_TRIES = keep
+        _win._render_pass_style(_win._slice()[1])
 
 
 def test_shotmap_assist_toggle():
@@ -11396,6 +11537,122 @@ def test_shootout_keeper_cards_65():
     finally:
         _win._gk_faces.pop(100, None)
         _win._render_all()
+
+
+def test_shotmap_panel_65():
+    """65 M8 — 슛 맵 오른쪽: 슛 요약 · 최다 득점/실점(누르면 상세 창 요약 탭) · 슛 타입 · 박스 안/밖 · 골·어시스트 순위."""
+    import core_api
+    from PyQt6.QtCore import QRectF
+    from widgets import ScorerRow
+    _win._go_page("슛 맵")
+    _win.cb_shotmap_side.setCurrentIndex(0)
+    details = _win._slice()[1]
+    _win._shot_sum_key = None
+    _win._render_shotmap()
+    # 다시 그리기 사이에 지우기 예약(deleteLater)이 실제로 처리되면 — 칸을 지우며 범위 글까지 지워 두 번째 그리기가
+    # "지워진 QLabel" 로 죽었다(실데이터 실화면에서만 — 오프스크린 스모크는 사이에 지우기가 안 돌아 못 봤다)
+    from PyQt6.QtCore import QEvent
+    from PyQt6 import sip
+    _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    _win._render_shotmap()
+    _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+    assert not sip.isdeleted(_win.lb_shot_sum_scope) and "경기" in _win.lb_shot_sum_scope.text()
+    ss = core_api.shot_summary(details, _OUID)
+    assert ss.games and ss.mine.shots and ss.opp.shots, (ss.games, ss.mine, ss.opp)
+    cells = _win.shot_sum_cells
+    assert cells["경기당 골"] == f"{ss.mine.goals / ss.games:.2f}" and cells["경기당 실점"] == f"{ss.opp.goals / ss.games:.2f}", cells
+    assert cells["결정력"] == f"{ss.mine.goals / ss.mine.shots * 100:.1f}%", cells
+    assert cells["기대 골 대비"] == f"{ss.mine.goals - ss.mine.xg:+.1f}", cells
+    assert cells["내준 기대 골 대비"] == f"{ss.opp.goals - ss.opp.xg:+.1f}", cells
+    assert len(cells) == 8, cells
+    # 최다 득점/실점 — 글자는 그 경기 점수 · 누르면 그 경기 상세 창 요약 탭
+    best, worst = (app_main.core.parse_match(d, _OUID) for d in (ss.best, ss.worst))
+    assert f"{best.my_goals} : {best.opp_goals}" in _win.btn_shot_best.text(), _win.btn_shot_best.text()
+    assert f"{worst.my_goals} : {worst.opp_goals}" in _win.btn_shot_worst.text(), _win.btn_shot_worst.text()
+    got, keep = [], _win._show_match_detail
+    _win._show_match_detail = lambda d, tab="요약", side="opp": got.append((d.get("matchId"), tab))
+    try:
+        _win.btn_shot_best.click()
+        _win.btn_shot_worst.click()
+    finally:
+        _win._show_match_detail = keep
+    assert got == [(ss.best["matchId"], "요약"), (ss.worst["matchId"], "요약")], got
+    # 픽스처는 최다 득점·실점이 같은 경기이고 골·실점 수가 같다 — 갈리는 요약을 끼워 칸·버튼 짝을 잰다(같은 구간 키라 캐시를 쓴다)
+    fake = core_api.ShotSummary(games=4, mine=core_api.ShotSide(10, 5, 2, 1.0), opp=core_api.ShotSide(8, 4, 6, 3.0),
+                                best=ss.best, worst=next(d for d in details if d is not ss.best))
+    keep_sum = _win.shot_sum
+    _win.shot_sum = fake
+    got.clear()
+    _win._show_match_detail = lambda d, tab="요약", side="opp": got.append(d.get("matchId"))
+    try:
+        _win._render_shotmap()
+        c = _win.shot_sum_cells
+        assert (c["경기당 골"], c["경기당 실점"], c["기대 골 대비"], c["내준 기대 골 대비"]) == ("0.50", "1.50", "+1.0", "+3.0"), c
+        assert (c["결정력"], c["상대 결정력"], c["경기당 슛"], c["유효슛 비율"]) == ("20.0%", "75.0%", "2.5", "50%"), c
+        _win.btn_shot_best.click()
+        _win.btn_shot_worst.click()
+        assert got == [fake.best["matchId"], fake.worst["matchId"]] and got[0] != got[1], got
+    finally:
+        _win._show_match_detail = keep
+        _win.shot_sum = keep_sum
+        _win._render_shotmap()
+    # 순위 — 골 + 어시 많은 순 · 시즌 배지 키 · 강화
+    rows = _win.shot_scorers.rows()
+    want = ss.scorers[:app_main.config.SHOT_RANK_MAX]
+    assert rows and [(r.goals, r.assists, r.grade) for r in rows] == [(s.goals, s.assists, s.grade) for s in want], rows
+    assert [r.rank for r in rows] == list(range(1, len(rows) + 1))
+    assert _win.shot_scorers.icon_entries() == {("season", core_api.season_id_of(s.sp_id)) for s in want} - {("season", None)}
+    dg = _win.shot_scorers.scorer_delegate
+    long = ScorerRow(10, "가나다라마바사아자차카타파하" * 2, 99, 99, 13, None)
+    assert dg.overflow(long, 300, _win.shot_scorers.font()) == [], dg.overflow(long, 300, _win.shot_scorers.font())
+    assert "goals" in dg.overflow(long, 60, _win.shot_scorers.font()), "넘침 검사가 아무것도 못 잡는다"
+    keep_max = app_main.config.SHOT_RANK_MAX
+    app_main.config.SHOT_RANK_MAX = 1
+    try:
+        _win._render_shotmap()
+        assert len(_win.shot_scorers.rows()) == 1 and _win.shot_scorers.height() < 2 * dg.row_height(_win.shot_scorers.font())
+    finally:
+        app_main.config.SHOT_RANK_MAX = keep_max
+        _win._render_shotmap()
+    assert len(rows) >= 2, "픽스처 순위가 한 줄뿐이라 위 상한 검사가 뜻이 없다"
+    segs = {s.role: s for s in dg.layout(long, QRectF(0, 0, 300, 30), _win.shot_scorers.font())}
+    assert segs["grade"].rect.right() <= segs["goals"].rect.left(), "강화 배지가 숫자를 덮는다"
+    # 슛 타입·박스 안/밖은 콤보(내/상대)를 따른다 — 색과 줄 · 요약은 다시 세지 않는다(구간이 같으면)
+    for mine, tone in ((True, T.GOOD_FILL), (False, T.BAD_FILL)):
+        calls = []
+        real = core_api.shot_summary
+        core_api.shot_summary = lambda *a: calls.append(1) or real(*a)
+        try:
+            _win.cb_shotmap_side.setCurrentIndex(0 if mine else 1)
+            _win._render_shotmap()
+        finally:
+            core_api.shot_summary = real
+        assert calls == [], "콤보를 바꿀 때마다 요약을 다시 센다"
+        sm = core_api.shot_map(details, _OUID, mine=mine)
+        assert _win.shotmap_types.tone == tone and _win.shotmap_dist.tone == tone
+        assert [r[:4] for r in _win.shotmap_types.rows] == \
+            [(b.label, b.shots, b.on_target, b.goals) for b in core_api.shot_type_breakdown(sm)]
+        assert [r[0] for r in _win.shotmap_dist.rows] == [b.label for b in core_api.shot_distance_breakdown(sm)]
+    _win.cb_shotmap_side.setCurrentIndex(0)
+    # 1280×720 에서 오른쪽 패널이 가로로 안 넘친다(가로 막대를 끈 대신 내용 최소 폭이 보이는 폭 안이어야)
+    try:
+        _at_size(*app_main.MIN_WINDOW)
+        side = _win.shotmap_side
+        assert side.widget().minimumSizeHint().width() <= side.viewport().width(), \
+            (side.widget().minimumSizeHint().width(), side.viewport().width())
+    finally:
+        _at_size(1600, 900)
+    # 경기가 없으면 빈 글 · 버튼은 꺼진다
+    _win._shot_sum_key = None
+    keep_slice = _win._slice
+    _win._slice = lambda: ([], [])
+    try:
+        _win._render_shotmap()
+        assert not _win.btn_shot_best.isEnabled() and not _win.shot_scorers.rows() and not _win.shot_sum_cells
+    finally:
+        _win._slice = keep_slice
+        _win._shot_sum_key = None
+        _win._render_shotmap()
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

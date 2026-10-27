@@ -232,6 +232,44 @@ def test_shot_type_counts_matches_shot_map_path():
     assert got == want == [(st.GOAL_TYPES[1], 2, 2, 1), (st.GOAL_TYPES[3], 1, 0, 0)], (got, want)
 
 
+def test_shot_summary():
+    # 65 M8 슛 맵 오른쪽 패널 — 손으로 지은 경기: 정상 셋 + 몰수 + 오류 + 내가 없는 경기
+    def shot(r, x=0.9, y=0.5, t=1):
+        return {"x": x, "y": y, "result": r, "type": t}
+
+    def game(mid, res, gf, ga, mine=(), theirs=(), players=(), my_end=0):
+        me = {"matchDetail": {"matchResult": res, "matchEndType": my_end}, "shoot": {"goalTotal": gf},
+              "shootDetail": list(mine), "player": list(players)}
+        return _detail_game(mid, me=me, opp={"shoot": {"goalTotal": ga}, "shootDetail": list(theirs)})
+
+    def pl(sp, goal=0, assist=0, grade=1, pos=25):
+        return {"spId": sp, "spPosition": pos, "spGrade": grade, "status": {"goal": goal, "assist": assist}}
+    a = game("a", "승", 3, 1, mine=(shot(3), shot(1, 0.8, 0.4), shot(2, 0.7, 0.3, 3)), theirs=(shot(3),),
+             players=(pl(11, goal=2, grade=7), pl(12, assist=1, grade=3), pl(14), pl(13, goal=5, pos=28)))
+    b = game("b", "패", 0, 4, mine=(shot(2),), theirs=(shot(3), shot(3, 0.85)), players=(pl(11, assist=1, grade=5),))
+    c = game("c", "승", 3, 4)                                     # 최다 득점·실점이 앞 경기와 같다 — 앞(최근)이 남는다
+    details = [a, b, c, game("f", "승", 9, 0, mine=(shot(3),) * 9, my_end=1),   # 몰수승 — 뺀다
+               game("h", "오류", 0, 0, mine=(shot(3),)), _detail_game("z", me={"ouid": "남"})]
+    ss = st.shot_summary(details, "me")
+    assert ss.games == 3, ss.games
+    m, o = ss.mine, ss.opp
+    assert (m.shots, m.on_target, m.goals) == (4, 2, 1), m
+    assert (o.shots, o.on_target, o.goals) == (3, 3, 3), o
+    kept = [a, b, c]   # 같은 경기만 남긴 shot_map 과 xG 가 같다(같은 식 · 같은 거르기)
+    for side, mine in ((m, True), (o, False)):
+        sm = st.shot_map(kept, "me", mine=mine)
+        assert side.shots == sm.total and abs(side.xg - sm.xg) < 1e-9 and side.xg > 0, (side, sm.total, sm.xg)
+    assert ss.best is a and ss.worst is b, (ss.best and ss.best["matchId"], ss.worst and ss.worst["matchId"])
+    assert ss.per_game(m.goals) == 1 / 3 and st.ShotSummary().per_game(5) == 0.0
+    got = [(s.sp_id, s.goals, s.assists, s.grade, s.games) for s in ss.scorers]
+    # 11: 2골 1어시 · 강화는 가장 높은 값(앞 경기 7 · 뒤 경기 5 — 마지막 값이 아니다) · 13 은 교체 명단에 기록 없음(안 뛰었다) · 14 는 골·어시 0 이라 뺀다
+    assert got == [(11, 2, 1, 7, 2), (12, 0, 1, 3, 1)], got
+    # 같은 합이면 골 많은 쪽 → 경기 많은 쪽 → spId
+    tie = [game("t", "승", 1, 0, players=(pl(21, assist=1), pl(22, goal=1), pl(20, goal=1)))]
+    assert [s.sp_id for s in st.shot_summary(tie, "me").scorers] == [20, 22, 21]
+    assert st.shot_summary([], "me").best is None
+
+
 def _end_game(my_end, my_res, opp_end=0, opp_res="승"):
     return {"matchId": "e", "matchInfo": [
         {"ouid": "me", "matchDetail": {"matchResult": my_res, "matchEndType": my_end}},

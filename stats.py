@@ -1513,6 +1513,91 @@ def shot_type_counts(details: list[dict], ouid: str) -> tuple[list[ShotBucket], 
     return mine, theirs
 
 
+@dataclass
+class ShotSide:
+    """한쪽(나 · 상대)의 슛 합 — [슛 맵] 요약 카드(65 M8)."""
+    shots: int = 0
+    on_target: int = 0   # 골 포함
+    goals: int = 0
+    xg: float = 0.0
+
+
+@dataclass
+class Scorer:
+    """골·어시스트 순위 한 줄 — 카드(spId)마다. 강화는 그 카드로 나선 경기 중 가장 높은 값(aggregate_players 와 같다)."""
+    sp_id: int
+    goals: int = 0
+    assists: int = 0
+    grade: int = 0
+    games: int = 0
+
+
+@dataclass
+class ShotSummary:
+    games: int = 0
+    mine: ShotSide = field(default_factory=ShotSide)
+    opp: ShotSide = field(default_factory=ShotSide)
+    best: dict | None = None      # 가장 많이 넣은 경기 원문(같으면 최근) — 상세 창을 연다
+    worst: dict | None = None     # 가장 많이 내준 경기 원문
+    scorers: list = field(default_factory=list)   # Scorer — 골 + 어시 많은 순
+
+    def per_game(self, n: float) -> float:
+        return n / self.games if self.games else 0.0
+
+
+def shot_summary(details: list[dict], ouid: str) -> ShotSummary:
+    """[슛 맵] 오른쪽 패널(65 M8) — 양쪽 슛·골·xG, 최다 득점·실점 경기, 내 골·어시스트 순위를 한 번 돌며.
+    경기는 versus_profile 과 같은 기준(승·무·패가 아닌 "오류" · 몰수 뺌 — 슛이 없거나 끊겨 경기당 값을 흔든다).
+    슛은 shot_map 과 같은 거르기(좌표·결과가 정상인 것) · 최다 경기는 점수(goalTotal) · details 최신순이라 같은 수면 앞(최근)."""
+    out = ShotSummary()
+    best = worst = -1.0
+    acc: dict[int, Scorer] = {}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp or _wdl_of(_result_of(me)) is None or end_kind(me, opp) != "정상":
+            continue
+        out.games += 1
+        for p, side in ((me, out.mine), (opp, out.opp)):
+            for sd in p.get("shootDetail") or []:
+                x, y, r = sd.get("x"), sd.get("y"), sd.get("result")
+                if r not in _SHOT_RESULTS or not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    continue
+                side.shots += 1
+                side.xg += shot_xg(float(x), float(y), bool(sd.get("inPenalty")), shot_type_code(sd.get("type")))
+                if r == SHOT_GOAL:
+                    side.goals += 1
+                    side.on_target += 1
+                elif r == SHOT_ON_TARGET:
+                    side.on_target += 1
+        gf, ga = _num(me.get("shoot") or {}, "goalTotal"), _num(opp.get("shoot") or {}, "goalTotal")
+        if gf > best:
+            best, out.best = gf, d
+        if ga > worst:
+            worst, out.worst = ga, d
+        # 선수 줄이 경기마다 18개라 1만 경기면 23만 번 — 시즌 전부 구간 첫 방문에서 이 고리가 0.3초였다(실측).
+        # _played 는 교체 명단(28)일 때만 부르고 0 인 기록은 더하지 않는다(같은 결과 · 약 절반)
+        for p in me.get("player") or ():
+            sp_id = p.get("spId")
+            if not isinstance(sp_id, int) or (p.get("spPosition") == SUB_POSITION and not _played(p)):
+                continue
+            s = acc.get(sp_id)
+            if s is None:
+                s = acc[sp_id] = Scorer(sp_id)
+            s.games += 1
+            st = p.get("status")
+            if st:
+                if st.get("goal"):
+                    s.goals += int(_num(st, "goal"))
+                if st.get("assist"):
+                    s.assists += int(_num(st, "assist"))
+            grade = p.get("spGrade")
+            if grade and grade > s.grade:
+                s.grade = int(_num(p, "spGrade"))
+    out.scorers = sorted((s for s in acc.values() if s.goals or s.assists),
+                         key=lambda s: (-(s.goals + s.assists), -s.goals, -s.games, s.sp_id))
+    return out
+
+
 def shot_distance_breakdown(sm: ShotMap) -> list[ShotBucket]:
     """거리별 효율. 가까운 순 고정 — 순서가 바뀌면 구간 비교가 안 된다."""
     buckets = _bucketize(sm.shots, _distance_label)

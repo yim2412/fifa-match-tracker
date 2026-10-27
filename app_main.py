@@ -81,10 +81,10 @@ from nexon_api import (
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
-    CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
+    CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RowBorderDelegate, ShotMapWidget,
     SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
-    RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows,
+    RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
     sample_text, tag_qss, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
 )
 
@@ -5276,9 +5276,9 @@ class MainWindow(QMainWindow):
         self.lb_shotmap_summary.setWordWrap(True)
         v.addWidget(self.lb_shotmap_summary)
 
-        # 좌: 슛 좌표 산점도 / 우: 같은 슛을 유형·거리로 쪼갠 효율.
-        # 한 화면에 둬야 "먼 거리 효율이 낮다"와 "그 점들이 여기 몰려 있다"가
-        # 같이 읽힌다. 위쪽 콤보(내 슛/상대 슛)가 양쪽에 동시에 걸린다.
+        # 좌: 슛 좌표 산점도 / 우: 슈팅 분석(65 M8 — 슛 요약 · 최다 득점/실점 경기 · 슛 타입 분포 · 박스 안/밖 · 골·어시스트 순위).
+        # 한 화면에 둬야 "먼 거리 효율이 낮다"와 "그 점들이 여기 몰려 있다"가 같이 읽힌다. 위쪽 콤보(내 슛/상대 슛)는
+        # 그림·타입·거리에 걸리고, 요약·최다 경기·순위는 양쪽(또는 내 선수)을 늘 같이 보인다.
         body = QHBoxLayout()
         self.shotmap = ShotMapWidget()
         body.addWidget(self.shotmap, 3)
@@ -5286,23 +5286,62 @@ class MainWindow(QMainWindow):
         side = QScrollArea()
         side.setWidgetResizable(True)
         side.setFrameShape(QScrollArea.Shape.NoFrame)
-        side.setMinimumWidth(300)
+        side.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        side.setMinimumWidth(340)
+        self.shotmap_side = side
         host = QWidget()
         sv = QVBoxLayout(host)
         sv.setSpacing(8)
 
-        gb_type = QGroupBox("슛 유형별 득점률")
-        self.box_shot_type = QVBoxLayout(gb_type)
+        gb_sum = QGroupBox("슛 요약")
+        sumv = QVBoxLayout(gb_sum)
+        self.grid_shot_sum = QGridLayout()   # 칸만 — 다시 그릴 때 통째로 지운다(범위 글은 밖에: 같이 지우면 다음 그리기가 지워진 라벨을 만진다)
+        sumv.addLayout(self.grid_shot_sum)
+        self.grid_shot_sum.setHorizontalSpacing(12)
+        self.grid_shot_sum.setVerticalSpacing(2)
+        self.lb_shot_sum_scope = QLabel("")
+        self.lb_shot_sum_scope.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        self.lb_shot_sum_scope.setWordWrap(True)
+        sumv.addWidget(self.lb_shot_sum_scope)
+        sv.addWidget(gb_sum)
+
+        gb_best = QGroupBox("최다 득점 · 최다 실점 경기")
+        bv = QVBoxLayout(gb_best)
+        self.btn_shot_best, self.btn_shot_worst = QPushButton(), QPushButton()
+        for b, which in ((self.btn_shot_best, "best"), (self.btn_shot_worst, "worst")):
+            b.setFlat(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(f"QPushButton {{ text-align: left; padding: 3px 4px; color: {T.TEXT}; }}"
+                            f"QPushButton:hover {{ background: {T.PANEL_2}; }}")
+            b.setToolTip("눌러서 경기 상세")
+            b.clicked.connect(lambda _=False, k=which: self._open_shot_extreme(k))
+            bv.addWidget(b)
+        sv.addWidget(gb_best)
+
+        gb_type = QGroupBox("슛 타입 분포")
+        tv = QVBoxLayout(gb_type)
+        self.shotmap_types = ShotTypeRows(stacked=True)
+        tv.addWidget(self.shotmap_types)
         sv.addWidget(gb_type)
 
-        gb_dist = QGroupBox("거리별 득점률")
-        self.box_shot_dist = QVBoxLayout(gb_dist)
+        gb_dist = QGroupBox("박스 안 · 밖")
+        dv = QVBoxLayout(gb_dist)
+        self.shotmap_dist = ShotTypeRows(stacked=True)
+        dv.addWidget(self.shotmap_dist)
         sv.addWidget(gb_dist)
 
+        gb_rank = QGroupBox("골 · 어시스트 순위 (내 선수)")
+        rv = QVBoxLayout(gb_rank)
+        self.shot_scorers = ScorerList()
+        rv.addWidget(self.shot_scorers)
+        self.lb_shot_rank_note = QLabel("")
+        self.lb_shot_rank_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        rv.addWidget(self.lb_shot_rank_note)
+        sv.addWidget(gb_rank)
+
         note = QLabel(
-            f"분모는 골이 아니라 <b>슛</b>이다 — \"그 방식으로 찼을 때 들어가는 "
-            f"비율\".<br>슛 {core.MIN_BUCKET_SHOTS}개 미만인 칸은 비율을 내지 "
-            f"않는다({NA}).<br>괄호는 유효슛률 · {XG_METHOD_NOTE}.")
+            f"전환율 = 골 ÷ 시도 — 시도 {core.MIN_BUCKET_SHOTS}개 미만인 줄은 숨긴다({NA}).<br>"
+            f"막대는 골 ⊂ 유효슛 ⊂ 시도(길이는 가장 많은 줄 대비).<br>{XG_METHOD_NOTE}.")
         note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
         note.setWordWrap(True)
         sv.addWidget(note)
@@ -5310,6 +5349,8 @@ class MainWindow(QMainWindow):
         side.setWidget(host)
         body.addWidget(side, 2)
         v.addLayout(body, 1)
+        self._shot_sum_key = None
+        self.shot_sum = None
         return w
 
     def _render_shotmap(self) -> None:
@@ -5317,6 +5358,7 @@ class MainWindow(QMainWindow):
         mine = bool(self.cb_shotmap_side.currentData())
         sm = core.shot_map(details, self._ouid, mine=mine)
         self._render_shot_buckets(sm, mine)
+        self._render_shot_summary(details)
         # 체크된 결과 종류만 화면에 찍는다(요약 수치는 전체 기준 유지).
         shown = {r for r, chk in self.chk_shotmap_result.items() if chk.isChecked()}
         shots = [s for s in sm.shots if s.result in shown]
@@ -5336,22 +5378,81 @@ class MainWindow(QMainWindow):
         self.lb_shotmap_summary.setText(text)
 
     def _render_shot_buckets(self, sm, mine: bool) -> None:
-        """슛 유형·거리별 효율 패널. 내 슛이면 초록, 상대 슛(=내 실점)이면 빨강."""
-        color = T.GOOD if mine else T.BAD
-        for box, buckets in (
-                (self.box_shot_type, core.shot_type_breakdown(sm)),
-                (self.box_shot_dist, core.shot_distance_breakdown(sm))):
-            self._clear(box)
-            if not buckets:
-                lb = QLabel("표시할 슛이 없습니다.")
+        """슛 타입 분포·박스 안/밖(65 M8) — [경기 결과] 득점/실점 유형과 같은 부품(ShotTypeRows). 내 슛 좋음 색 · 상대 슛 나쁨 색."""
+        tone = T.GOOD_FILL if mine else T.BAD_FILL
+        for rows, buckets in ((self.shotmap_types, core.shot_type_breakdown(sm)),
+                              (self.shotmap_dist, core.shot_distance_breakdown(sm))):
+            rows.tone = tone
+            rows.set_data(buckets, core.MIN_BUCKET_SHOTS)
+
+    def _render_shot_summary(self, details: list[dict]) -> None:
+        """슛 요약 · 최다 득점/실점 경기 · 골·어시스트 순위 — 콤보(내/상대)와 무관해 구간이 같으면 다시 세지 않는다
+        (그리기는 매번 — 선수 이름이 늦게 와도 따라가게)."""
+        # 구간 목록은 부를 때마다 새로 짓는다(_slice) — id 대신 원본 목록·길이·양 끝 경기로 잰다(_narrate_scope 와 같은 꼴)
+        key = (self._ouid, id(self._details), len(self._details), len(details),
+               details[0].get("matchId") if details else None, details[-1].get("matchId") if details else None)
+        if key != self._shot_sum_key or self.shot_sum is None:
+            self._shot_sum_key = key
+            self.shot_sum = core.shot_summary(details, self._ouid or "")
+        ss = self.shot_sum
+        g = self.grid_shot_sum
+        self._clear(g)
+        self.shot_sum_cells: dict[str, str] = {}   # 테스트가 읽는다(라벨 → 값 글)
+        if not ss.games:
+            lb = QLabel("슛 기록이 있는 경기가 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            g.addWidget(lb, 0, 0)
+        else:
+            m, o = ss.mine, ss.opp
+            xg_for, xg_against = m.goals - m.xg, o.goals - o.xg
+            cells = (
+                ("경기당 골", f"{ss.per_game(m.goals):.2f}", T.GOOD, ""),
+                ("경기당 실점", f"{ss.per_game(o.goals):.2f}", T.BAD, ""),
+                ("결정력", f"{core.pct(m.goals, m.shots):.1f}%", T.TEXT, "골 ÷ 슛"),
+                ("상대 결정력", f"{core.pct(o.goals, o.shots):.1f}%", T.TEXT, "상대 골 ÷ 상대 슛"),
+                ("기대 골 대비", f"{xg_for:+.1f}", delta_color(xg_for), f"골 {m.goals:,} − 기대 골 {m.xg:.1f} (+면 기대보다 더 넣음)"),
+                ("내준 기대 골 대비", f"{xg_against:+.1f}", delta_color(-xg_against),
+                 f"실점 {o.goals:,} − 내준 기대 골 {o.xg:.1f} (−면 기대보다 덜 먹음)"),
+                ("경기당 슛", f"{ss.per_game(m.shots):.1f}", T.TEXT, f"상대 {ss.per_game(o.shots):.1f}"),
+                ("유효슛 비율", f"{core.pct(m.on_target, m.shots):.0f}%", T.TEXT,
+                 f"유효슛(골 포함) ÷ 슛 · 상대 {core.pct(o.on_target, o.shots):.0f}%"),
+            )
+            for i, (label, val, color, tip) in enumerate(cells):
+                r, c = divmod(i, 2)
+                lb = QLabel(label)
                 lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-                box.addWidget(lb)
-                continue
-            for b in buckets:
-                extra = (f"유효 {b.effective_rate:.0f}% · xG {b.xg:.1f}"
-                         if b.enough else "")
-                box.addWidget(RatioBarRow(b.label, b.goals, b.shots, color,
-                                          enough=b.enough, extra=extra))
+                vl = QLabel(val)
+                vl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 18px;")
+                for x in (lb, vl):
+                    x.setToolTip(tip)
+                g.addWidget(lb, 2 * r, c)
+                g.addWidget(vl, 2 * r + 1, c)
+                self.shot_sum_cells[label] = val
+        self.lb_shot_sum_scope.setText(f"표시 구간 {ss.games:,}경기 · 몰수·오류 경기는 뺌 · 위치 기록이 있는 슛만")
+
+        for btn, d, head in ((self.btn_shot_best, ss.best, "최다 득점"), (self.btn_shot_worst, ss.worst, "최다 실점")):
+            ms = core.parse_match(d, self._ouid) if d is not None else None
+            btn.setEnabled(ms is not None)
+            # 두 줄 — 한 줄이면 긴 닉네임·날짜가 1280 폭의 오른쪽 패널(약 365px)을 넘는다
+            btn.setText(f"{head}  {ms.my_goals} : {ms.opp_goals}\nvs {ms.opponent} · {ms.date_text}"
+                        if ms is not None else f"{head}  —")
+
+        rows = []
+        for i, s in enumerate(ss.scorers[:config.SHOT_RANK_MAX], 1):
+            name = self._names.get(s.sp_id, str(s.sp_id))
+            rows.append(ScorerRow(i, name, s.goals, s.assists, s.grade, core.season_id_of(s.sp_id),
+                                  tip=f"{name} ({self._season_name(s.sp_id)}) — {s.games}경기 {s.goals}골 {s.assists}어시"
+                                      f" · 강화는 그 카드로 나선 경기 중 가장 높은 값"))
+        self.shot_scorers.set_rows(rows)
+        self._start_list_icons(self.shot_scorers)
+        self.lb_shot_rank_note.setText(
+            f"골 + 어시 많은 순 {len(rows)}명 · 카드(시즌)마다 따로" if rows else "골·어시스트 기록이 없습니다.")
+
+    def _open_shot_extreme(self, which: str) -> None:
+        """최다 득점/실점 경기 → 경기 상세 창 요약 탭(4판 A2 — 상세 창은 하나로)."""
+        d = getattr(self.shot_sum, which, None) if self.shot_sum is not None else None
+        if d is not None:
+            self._show_match_detail(d, tab="요약")
 
     ROUTE_COLUMNS = ["루트", "내 슛", "내 골", "내 결정력", "상대 슛", "상대 결정력", "차이 (나 − 상대)", "판정"]
     ROUTE_NOTE = {
@@ -8333,6 +8434,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
+        self.tbl_players.setItemDelegateForColumn(4, BoldColumnDelegate(self.tbl_players))   # 승률 굵게(65 M9 · E7)
         # 19개 열이라 전역 폰트(15px)로는 스크롤 없이 한눈에 안 들어온다.
         # 이 표만 폰트·여백을 줄인 기본 크기(14/13px)에서 시작한다 — 창이
         # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
@@ -9315,12 +9417,12 @@ class MainWindow(QMainWindow):
 
     def _build_pass_style_tab(self) -> QWidget:
         scroll, v = self._tactics_scroll()
-        # 1.4.1 N5 — 경기 상세의 패스 종류 6가지(R10). 표(FitTableWidget)는 스크롤 안에서 높이가 안 잡혀 글자 칸으로
+        # 1.4.1 N5 — 경기 상세의 패스 종류 6가지(R10) · 65 M7 종류마다 카드(성공률 크게 · 경기당 시도·성공 · 막대) — 칸은 config.PASS_CARD_COLS
         gb_p = QGroupBox("패스 스타일")
         pv = QVBoxLayout(gb_p)
         self.grid_pass = QGridLayout()
-        self.grid_pass.setHorizontalSpacing(18)
-        self.grid_pass.setVerticalSpacing(3)
+        self.grid_pass.setHorizontalSpacing(8)
+        self.grid_pass.setVerticalSpacing(8)
         pv.addLayout(self.grid_pass)
         self.lb_pass_note = QLabel("")
         self.lb_pass_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
@@ -12380,15 +12482,16 @@ class MainWindow(QMainWindow):
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)))
         few = core.MIN_PLAYER_GAMES
+        enough = [p.games >= few for p in players]
         rows = []
-        for p in players:
+        for p, ok in zip(players, enough):
             rows.append([
                 p.position, IconCell(p.name, None, core.season_id_of(p.sp_id)), (f"{p.grade}", p.grade),
                 (f"{p.games} ⚠" if p.games < few else f"{p.games}", p.games),
                 # 선수표는 열이 빽빽해 % 없이(예전 그대로) — 섞인 식이면 * 만(1280 폭에서 가로 스크롤이 생겼다)
                 (f"{p.win_rate:.1f}" + ("*" if p.mixed else ""), p.win_rate),
-                (f"{p.attack_power:.1f}", p.attack_power),
-                (f"{p.defense_power:.1f}", p.defense_power),
+                (f"{p.attack_power:.1f}" + (" ▽" if ok and self._g8_floor(p, 0) else ""), p.attack_power),
+                (f"{p.defense_power:.1f}" + (" ▽" if ok and self._g8_floor(p, 1) else ""), p.defense_power),
                 (f"{p.expected_goal_rate:.1f}", p.expected_goal_rate),
                 (f"{p.attack_point}", p.attack_point),
                 (f"{p.goal}", p.goal), (f"{p.assist}", p.assist),
@@ -12407,16 +12510,36 @@ class MainWindow(QMainWindow):
         # "채운 순서 = players 순서"라고 믿고 매기는 게 틀어져 엉뚱한 행에
         # 색이 칠해진다(실제로 겪은 버그). 후처리를 다 끝낸 뒤에만 켠다.
         self._fill(self.tbl_players, rows, enable_sort=False)
+        # 승률(4열)은 굵게(BoldColumnDelegate) — 폭은 표 글꼴(보통)로 재므로 굵은 글자가 더 쓰는 만큼을 그 열에만 더한다(안 하면 끝이 잘린다)
+        bold = QFont(self.tbl_players.font())
+        bold.setBold(True)
+        fm, fb = QFontMetrics(self.tbl_players.font()), QFontMetrics(bold)
+        bold_extra = max((fb.horizontalAdvance(r[4][0]) - fm.horizontalAdvance(r[4][0]) for r in rows), default=0)
         # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말).
         # 이름 열(1)의 시즌 배지 폭은 set_icon_columns 가 이미 갖고 있다(손으로 26 을 주던 자리)
-        self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD})
-        # 공격력(5열)·수비력(6열) — 최소~최대를 넓은 단계로 칠한다. 눈금은 출전이 충분한 선수로만 잡는다.
-        enough = [p.games >= few for p in players]
-        atk = self._heat_scale([p.attack_power for p in players], enough)
-        dfn = self._heat_scale([p.defense_power for p in players], enough)
+        self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2})
+        # 공격력(5열)·수비력(6열) — 고정 눈금 G8(theme.g8_cell — 표 안 다른 선수와 무관) · 포지션 기준 점수 미만은 "▽"
+        # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 표시 구간 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
+        # 높은 승률이 나쁨으로 읽힌다). 출전 미달 선수는 색·▽ 를 안 붙인다(색은 few 경기부터 — 예전과 같은 규칙).
+        res = [m.result for m in self._slice()[0]]
+        team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
         for r, p in enumerate(players):
-            self._heat(self.tbl_players.item(r, 5), atk[r], T.HEAT_ATK)
-            self._heat(self.tbl_players.item(r, 6), dfn[r], T.HEAT_DEF)
+            for c, kind, v in ((5, "atk", p.attack_power), (6, "def", p.defense_power)):
+                it = self.tbl_players.item(r, c)
+                if it is None or not enough[r]:
+                    continue
+                bg, fg = T.g8_cell(v, kind, config.G8_SCALE)
+                if bg is not None:
+                    it.setBackground(QColor(bg))
+                it.setForeground(QColor(fg))
+                cut = self._g8_floor(p, 0 if kind == "atk" else 1)
+                if cut:
+                    it.setToolTip(f"{p.position} 기준 점수인 {cut}점 미만입니다.")
+            rate_item = self.tbl_players.item(r, 4)
+            if rate_item is not None:
+                if enough[r]:
+                    delta_item(rate_item, p.win_rate - team)
+                    rate_item.setToolTip(f"표시 구간 팀 승률 {team:.1f}% 대비 {p.win_rate - team:+.1f}%p")
             pos_item = self.tbl_players.item(r, 0)
             line = core.position_line(p.pos_code)
             if pos_item and line:
@@ -12433,17 +12556,11 @@ class MainWindow(QMainWindow):
         self.tbl_players.setSortingEnabled(True)
 
     @staticmethod
-    def _heat_scale(values: list[float], enough: list[bool]) -> list[float | None]:
-        """값 → 0~1 단계((값−최소)/(최대−최소)). 최소·최대는 enough 인 것만으로 잡는다 — 1경기 선수 하나가
-        눈금을 늘이지 않게. enough 가 아니거나 눈금을 못 잡으면(대상 0~1명 · 전부 같은 값) None = 안 칠함."""
-        pool = [v for v, ok in zip(values, enough) if ok]
-        if len(pool) < 2:
-            return [None] * len(values)
-        lo, hi = min(pool), max(pool)
-        if hi <= lo:
-            return [None] * len(values)
-        return [max(0.0, min((v - lo) / (hi - lo), 1.0)) if ok else None
-                for v, ok in zip(values, enough)]
+    def _g8_floor(p, i: int) -> int:
+        """그 선수(가장 자주 선 자리)의 기준 점수(i 0 공격 · 1 수비) — 칸 값이 그보다 낮을 때만 그 점수, 아니면 0(기준 없는 자리도 0)."""
+        floor = config.G8_POS_FLOOR.get(p.position)
+        cut = floor[i] if floor else 0
+        return cut if (p.attack_power, p.defense_power)[i] < cut else 0
 
     # 가장 낮은 단계도 바탕과 구분되게 — 0 이면 칠하지 않은 칸과 같아 보인다
     HEAT_FLOOR = 0.12
@@ -12645,11 +12762,13 @@ class MainWindow(QMainWindow):
             face.setPixmap(pm)
 
     def _render_pass_style(self, details: list[dict]) -> None:
-        """패스 종류 6가지 — 비중(6종 합 대비)·경기당·성공률, 이긴/진 경기 나란히(N5). 원인 단정 없이 숫자만."""
+        """패스 종류 6가지(65 M7 — 기준 화면 꼴) — 종류마다 카드: 성공률 크게 · 경기당 시도/성공 · 성공률 막대 · 비중,
+        아래 이긴/진 경기 비중·성공률(N5). 원인 단정 없이 숫자만."""
         ps = core.pass_style(details, self._ouid)
         self.pass_style = ps  # 테스트가 계산 결과를 본다
         g = self.grid_pass
         self._clear(g)
+        self.pass_cards: list[QFrame] = []
         if not ps.all.games:
             lb = QLabel("패스 종류 기록이 있는 경기가 없습니다.")
             lb.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -12661,25 +12780,42 @@ class MainWindow(QMainWindow):
         def rate(k) -> str:
             return f"{k.rate:.0f}%" if k.tries >= min_tries else NA
 
-        heads = ["종류", "비중", "경기당", "성공률",
-                 f"이긴 경기 {ps.win.games} — 비중 · 성공률", f"진 경기 {ps.lose.games} — 비중 · 성공률"]
-        for c, text in enumerate(heads):
-            lb = QLabel(text)
-            lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-weight: bold;")
-            g.addWidget(lb, 0, c)
-        for r, (k, kw, kl) in enumerate(zip(ps.all.kinds, ps.win.kinds, ps.lose.kinds), 1):
-            cells = [(k.name, False), (f"{ps.all.share(k):.0f}%", False), (f"{ps.all.per_game(k):.1f}", False),
-                     (rate(k), False)]
+        for i, (k, kw, kl) in enumerate(zip(ps.all.kinds, ps.win.kinds, ps.lose.kinds)):
+            card = QFrame()
+            card.setObjectName("passCard")
+            card.setStyleSheet(f"QFrame#passCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+                               f" border-radius: {T.RADIUS}px; }} QLabel {{ border: none; }}")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(10, 8, 10, 8)
+            v.setSpacing(3)
+            top = QHBoxLayout()
+            name = QLabel(k.name)
+            name.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            top.addWidget(name)
+            top.addStretch(1)
+            weak = k.tries < min_tries
+            big = QLabel(rate(k))
+            big.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold; font-size: 22px;")
+            big.setToolTip(f"성공 ÷ 시도 — 시도 {min_tries}회 미만이면 숨깁니다" if weak else "성공 ÷ 시도")
+            top.addWidget(big)
+            v.addLayout(top)
+            sub = QLabel(f"경기당 시도 {ps.all.per_game(k):.1f} · 성공 {k.success / ps.all.games:.1f}"
+                         f" · 비중 {ps.all.share(k):.0f}%")
+            sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+            v.addWidget(sub)
+            v.addWidget(MeterBar(k.rate / 100 if not weak else 0.0, T.BLUE, weak))
             for grp, kk in ((ps.win, kw), (ps.lose, kl)):
-                cells.append((f"{grp.share(kk):.0f}% · {rate(kk)}" if grp.games else NA, grp.games < few))
-            for c, (text, weak) in enumerate(cells):
-                lb = QLabel(text)
-                lb.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT};" + (" font-weight: bold;" if c == 0 else ""))
-                if weak:  # 표본 흐림 규칙(1.2.1)
-                    lb.setToolTip(sample_note(ps.win.games if c == 4 else ps.lose.games, few))
-                g.addWidget(lb, r, c)
+                lb = QLabel(f"{grp.label}({grp.games}판) 비중 {grp.share(kk):.0f}% · 성공 {rate(kk)}" if grp.games
+                            else f"{grp.label}: {NA}")
+                lb.setStyleSheet(f"color: {T.TEXT_DIM if grp.games < few else T.TEXT}; font-size: 13px;")
+                if grp.games < few:  # 표본 흐림 규칙(1.2.1)
+                    lb.setToolTip(sample_note(grp.games, few))
+                v.addWidget(lb)
+            card.setProperty("weak", weak)
+            self.pass_cards.append(card)
+            g.addWidget(card, i // config.PASS_CARD_COLS, i % config.PASS_CARD_COLS)
         note = (f"비중은 6가지 종류 합 대비 · 성공률은 시도 {min_tries}회 미만이면 {NA} · "
-                f"흐린 칸은 {few}경기 미만 · 무승부는 전체에만 들어갑니다.")
+                f"흐린 이긴/진 경기 줄은 {few}경기 미만 · 무승부는 전체에만 들어갑니다.")
         if ps.skipped:
             note += f" 종류 기록이 없는 {ps.skipped}경기는 뺐습니다."
         self.lb_pass_note.setText(note)
@@ -12891,6 +13027,7 @@ class MainWindow(QMainWindow):
         self._matches_all, self._details_all = [], []
         self._matches, self._details = [], []
         self._opp_picked_details = []   # 상대 전적 K1 범위 경기(더블클릭 찾기용 — 65 M4)
+        self.shot_sum, self._shot_sum_key = None, None   # 슛 맵 최다 득점·실점 경기 원문(65 M8)
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None

@@ -188,8 +188,15 @@ FORMATION_LINE = _P["FORMATION_LINE"]
 FORMATION_LINE_COLORS = ("#f87171", "#fb923c", "#facc15", "#84cc16", "#38bdf8", "#ffffff")
 FORMATION_DOT_EDGE = "#66000000"    # 점 테두리(검정 · 알파 40%)
 
-HEAT_ATK = _P["HEAT_ATK"]   # 선수 지표 공격력 칸 끝 색
-HEAT_DEF = _P["HEAT_DEF"]   # 수비력 칸 끝 색
+HEAT_ATK = _P["HEAT_ATK"]   # 기간 표 승률 칸(평균보다 높음) 끝 색 — 선수 지표 칸은 3.1.1 부터 G8(아래 g8_cell)
+HEAT_DEF = _P["HEAT_DEF"]   # 같은 표 낮음 쪽
+# 선수 지표 공격력·수비력 칸(65 M9 · G8) — 다른 기준 화면 코드에서 읽은 값(ROADMAP "G8 색 규칙"). 어두운 화면은 바탕에서
+# 끝 색까지 직선, 밝은 화면은 값 ÷ G8_LIGHT_SPAN 으로 채널마다 따로 — 두 식이 다르다(기준 화면 그대로)
+G8_END = {"atk": "#c63444", "def": "#3062cd"}   # rgb(198,52,68) · rgb(48,98,205)
+G8_LIGHT_SPAN = 900
+# 밝은 화면 칸 글자 후보 — TEXT(#09090b)·흰색 둘 다 4.5 에 모자라는 구간이 있다(수비 535 언저리 #6767e9 위 4.46·4.47).
+# 순수 검정이면 4.7 — 세 후보 중 대비 큰 쪽(test_g8_cells_match_reference 가 0~1600 전부 잰다)
+G8_LIGHT_INKS = ("#000000",)
 POS_COLORS = {"FW": _P["POS_FW"], "MF": _P["POS_MF"], "DF": _P["POS_DF"], "GK": _P["POS_GK"]}
 
 FONT_FAMILY = "Malgun Gothic"  # 한글이 대부분이라 명시 — 미지정이면 플랫폼 따라 들쭉날쭉
@@ -225,6 +232,32 @@ def contrast(a_hex: str, b_hex: str) -> float:
         return 0.2126 * out[0] + 0.7152 * out[1] + 0.0722 * out[2]
     hi, lo = sorted((lum(a_hex), lum(b_hex)), reverse=True)
     return (hi + 0.05) / (lo + 0.05)
+
+
+def g8_cell(v: float, kind: str, scale: tuple[float, float], mode: str = MODE,
+            base: str | None = None) -> tuple[str | None, str]:
+    """선수 지표 공격력(kind "atk")·수비력("def") 칸 → (배경 '#rrggbb' — None 이면 안 칠함, 글자색). 표 안 값과 무관한 고정 눈금.
+
+    어두운: 값 < 아래 끝 → 안 칠함 + 흐린 글자 · 그 위 t = min((값 − 아래) / (위 − 아래), 1) 만큼 바탕(base · 기본 PANEL)에서
+    G8_END 로(채널마다 반올림). 밝은: 값 < 아래 끝 → 안 칠함 · 그 위는 값 ÷ G8_LIGHT_SPAN 식(기준 화면) — 글자는 기준 화면의
+    "700 넘으면 흰색" 대신 TEXT·ON_PRIMARY·G8_LIGHT_INKS 중 대비가 큰 쪽(그 규칙은 공격 끝에서 흰 글자 3.9 · 수비 600 근처 검정 3.9 로 4.5 미달)."""
+    p = _PALETTES[mode]
+    lo, hi = scale
+    if v < lo:
+        return None, p["TEXT_DIM"] if mode == "dark" else p["TEXT"]
+    if mode == "dark":
+        t = min((v - lo) / (hi - lo), 1.0)
+        b, e = base or p["PANEL"], G8_END[kind]
+        rgb = [int(b[i:i + 2], 16) + (int(e[i:i + 2], 16) - int(b[i:i + 2], 16)) * t for i in (1, 3, 5)]
+        return "#" + "".join(f"{int(c + 0.5):02x}" for c in rgb), p["TEXT"]   # 0.5 는 올림(round() 는 짝수 쪽 — 기준 화면과 1 어긋난다)
+    # 기준 화면 글에는 공격 R 이 "200 + 값/900·255/55" 로 적혀 있다 — 수비 B 와 같은 "·55" 가 깨진 것으로 읽었다
+    # (그대로면 R 이 200~205 에 머물러 빨강이 안 된다 · min(…, 255) 가 붙은 까닭도 ·55 일 때만 선다)
+    f = v / G8_LIGHT_SPAN
+    rgb = ((200 + f * 55, 255 - f * 178.5, 255 - f * 153) if kind == "atk"
+           else (255 - f * 255, 255 - f * 255, 200 + f * 55))
+    bg = "#" + "".join(f"{int(max(0.0, min(c, 255.0)) + 0.5):02x}" for c in rgb)
+    fg = max((p["TEXT"], p["ON_PRIMARY"], *G8_LIGHT_INKS), key=lambda c: contrast(c, bg))
+    return bg, fg
 
 
 # Machado·Oliveira·Fernandes(2009) 심도 1.0 — 선형 RGB 에 곱한다.

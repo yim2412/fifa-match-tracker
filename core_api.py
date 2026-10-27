@@ -68,6 +68,7 @@ from stats import (
     time_weekday_rates, VERSUS_ROWS, VersusLine, VersusProfile, versus_profile,
     MATCH_VERSUS_ROWS, MatchGoal, latest_match_with, match_goals, match_mvp, match_sides, match_versus,
     ShootoutKeeper, shootout_keepers, shot_type_counts,
+    Scorer, ShotSide, ShotSummary, shot_summary,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
     WinDivision, WinRewards, reward_for, win_divisions, win_rewards,
     COMPARE_LINES, COMPARE_MIN_GAMES, CompareDiff, LineCard, LinePair, compare_summary, line_pairs,
@@ -141,6 +142,7 @@ __all__ = [
     "VERSUS_ROWS", "VersusLine", "VersusProfile", "versus_profile",   # 65 M1 대시보드 나와 상대
     "MATCH_VERSUS_ROWS", "MatchGoal", "latest_match_with", "match_goals", "match_mvp", "match_sides", "match_versus",   # 65 M3 경기 상세 창
     "ShootoutKeeper", "shootout_keepers", "shot_type_counts",   # 65 M6 승부차기 상대 GK · 슛 타입 분포
+    "Scorer", "ShotSide", "ShotSummary", "shot_summary",   # 65 M8 슛 맵 오른쪽 패널
     # stats — A2 FC 보상(43단계)
     "WinDivision", "WinRewards", "reward_for", "win_divisions", "win_rewards",
     # stats — D1 구단주 비교 확장(50단계)
