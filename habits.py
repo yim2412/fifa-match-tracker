@@ -4,6 +4,7 @@
 | 함수 | 화면 | 메모 |
 |---|---|---|
 | `division_stays(points, name_of)` | [성적 진단 › 등급 체류](N2) | 재료는 `stats.division_trend` — (일시, division) 오래된 것부터 |
+| `division_runs(points, since)` | [승률 그래프 › 승률·등급] 등급 계단(66 G1) | 같은 재료 · 같은 등급이 이어진 구간 하나가 그림의 가로 한 칸 |
 | `side_totals(details, ouid)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 |
 | `paired_diff(rows, metric)` | 〃 | 지표 하나의 나 − 상대 차와 95% 구간(경기 단위 짝) · 지표 이름은 `METRICS` |
 | `pos_diff(detail, ouid)` · `PosTotals` | (C4 자리별 수준 — 50단계 · 구단주 분포 바퀴가 `pos_json` 으로) | 칸(`config.C4_CELLS`)마다 같은 줄 선수 한 명 평균의 나 − 상대 |
@@ -104,6 +105,30 @@ def division_stays(points: list[tuple[datetime, int]], name_of=None) -> Division
     for div in last_of_day.values():
         row(div).days += 1
     out.rows = [rows[k] for k in sorted(rows)]
+    return out
+
+
+@dataclass
+class DivisionRun:
+    """같은 등급이 이어진 경기 구간 하나(66 G1 — 등급 그래프의 가로 한 칸)."""
+    division: int
+    start: datetime     # 구간 첫 경기 시각
+    end: datetime       # 구간 마지막 경기 시각
+    games: int
+
+
+def division_runs(points: list[tuple[datetime, int]], since: datetime | None = None) -> list[DivisionRun]:
+    """points 는 (경기 일시, 내 division) — 순서는 상관없다. since 보다 앞 경기는 뺀다(시즌 시작 · KST naive).
+    빈 구간(N2_GAP_DAYS)은 끊지 않는다 — 그림의 칸은 "등급이 바뀌기 전까지" 이고 그 사이 오간 것은 원래 안 보인다."""
+    out: list[DivisionRun] = []
+    for t, div in sorted(points, key=lambda p: p[0]):
+        if since is not None and t < since:
+            continue
+        if out and out[-1].division == div:
+            out[-1].end = t
+            out[-1].games += 1
+        else:
+            out.append(DivisionRun(div, t, t, 1))
     return out
 
 

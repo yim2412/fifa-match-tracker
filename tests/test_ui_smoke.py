@@ -1350,10 +1350,6 @@ def test_trend_page_uses_area_chart_with_counts_and_ma():
     assert seen == [(len(_win._matches), [_date(2026, 1, 1), _date(2026, 1, 2), _date(2026, 1, 3)],
                      {"min_n": app_main.core.MIN_COND, "mixed": True})], seen
     assert c.marks["ma_points"] == 3, c.marks
-    # 등급 — 하루 한 점(4경기 → 3일) · 툴팁에 그날 처음·마지막·최고
-    dc = _win.division_chart
-    assert len(dc._points) == 3, dc._points
-    assert all("처음" in t and "최고" in t for t in dc._tips), dc._tips
     _win._render_trend(_win._matches)
 
 
@@ -1374,6 +1370,15 @@ def test_trend_page_groups_not_squeezed():
     finally:
         _at_size(1600, 900)
         _win._go_page("대시보드")
+
+
+def _g1_season(end=None):
+    """등급 계단(66 G1)은 "지금 시즌" 만 그린다 — 픽스처(2026-01-01~03)가 지금 시즌에 들게 끝난 시즌 하나를 둔다.
+    기본 시즌표(시즌 9 · 02-01 끝)면 픽스처가 지난 시즌이라 계단이 빈다. 되돌릴 값을 돌려준다."""
+    from datetime import date as _d
+    keep = _win._rank_seasons
+    _win._rank_seasons = [sn.Season(88, "시즌 8", _d(2025, 10, 1), end or _d(2026, 1, 1))]
+    return keep
 
 
 def _sc_details(div_by_id: dict):
@@ -2030,6 +2035,7 @@ def test_owner_dist_changed_signal_redraws_every_dist_view():
 
 def test_sc_records_list_and_nexon_line():
     keep_max = dict(_win._max_division)
+    keep_seasons = _g1_season()
     try:
         # 0002(01-02 12:00) 900 → 0003(01-02 13:00) 800 → 0004(01-03) 900 : 진입 한 번 — 픽스처 원문은 UTC 라 화면은 KST 21:00·22:00(63)
         det = _sc_details({"0003": 800})
@@ -2037,7 +2043,9 @@ def test_sc_records_list_and_nexon_line():
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         assert _win.lb_sc_list.text() == "2026-01-02 · 1번 (22:00)", _win.lb_sc_list.text()
         assert "2026-01-01 ~" in _win.lb_sc_note.text(), _win.lb_sc_note.text()
-        assert _win.division_chart._markers == [1], _win.division_chart._markers  # 그날(01-02)에 세로 점선
+        # 계단 구간 900(2) · 800(1) · 900(1) — 슈챔 구간(번호 1) 시작에 세로 점선
+        assert [(r.division, r.games) for r in _win.division_chart._runs] == [(900, 2), (800, 1), (900, 1)]
+        assert _win.division_chart._markers == [1], _win.division_chart._markers
         # 넥슨 최근 달성이 목록의 진입과 60초 안이면 같은 것 — 줄을 안 낸다
         _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T22:00:30"})
         assert _win.lb_sc_nexon.isHidden(), _win.lb_sc_nexon.text()
@@ -2065,25 +2073,27 @@ def test_sc_records_list_and_nexon_line():
         assert _win.lb_sc_list.text() == "저장된 경기에는 슈퍼 챔피언스 달성 기록이 없습니다"
     finally:
         _win._max_division = keep_max
+        _win._rank_seasons = keep_seasons
         _restore_account()
 
 
-def test_sc_day_peak_on_division_chart_and_best_date_from_matches():
-    """2026-10-19 사용자 — 슈챔에 올랐다 그날 내려온 날도 등급 추이에 슈챔 점이 보이고, 대시보드 '최고티어 최근 달성일' 은
-    넥슨 값보다 저장된 경기의 진입이 늦으면 그 날짜."""
+def test_sc_one_game_run_on_division_chart_and_best_date_from_matches():
+    """2026-10-19 사용자 — 슈챔에 올랐다 그날 내려온 것도 등급 그래프에 보이고(66 G1 — 한 판짜리 구간이 한 칸), 대시보드
+    '최고티어 최근 달성일' 은 넥슨 값보다 저장된 경기의 진입이 늦으면 그 날짜."""
     keep_max, keep_names = dict(_win._max_division), dict(_win._division_names)
+    keep_seasons = _g1_season()
     # 등급 이름 메타 — CI 에는 넥슨 키·캐시가 없어 비어 있다(이름을 모르면 최고티어 줄 자체가 None · 이 PC 에선 캐시로 통과했다)
     _win._division_names.update({800: "슈퍼 챔피언스", 900: "챔피언스"})
     try:
-        # 0002(01-02 12:00) 800 → 0003(01-02 13:00) 900 : 그날 마지막은 챔스 — 막지 않았으면 점이 챔스 줄에만 있다
+        # 0002(01-02 21:00) 800 → 0003(01-02 22:00) 900 : 그날 마지막은 챔스 — 하루 한 점(옛 그림)이면 슈챔이 안 보였다
         det = _sc_details({"0002": 800})
         _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         dc = _win.division_chart
-        assert all(div != 800 for _, div in dc._points), "전제가 바뀌었다 — 그날 마지막이 슈챔이면 이 테스트가 재는 게 없다"
-        assert dc._peaks == {1: 800}, dc._peaks
+        assert [(r.division, r.games) for r in dc._runs] == [(900, 1), (800, 1), (900, 2)], dc._runs
         dc.grab()
-        assert dc.marks.get("peaks") == 1, dc.marks
+        assert dc.marks["levels"] == [900, 800] and dc.marks["runs"] == 3, dc.marks
+        assert dc.marks["head"] == (900, 800, "시즌 최고"), dc.marks   # 머리 줄 — 현재 챔스 · 시즌 최고 슈챔
         # 최고티어 날짜 — 넥슨이 옛 날짜면 저장된 진입 날짜 · 넥슨이 더 늦으면 넥슨 그대로
         _win._on_max_division(_OUID, {"division": 800, "date": "2025-12-01", "at": "2025-12-01T10:00:00"})
         assert "최근 달성일 2026-01-02 " in (_win._max_division_text() or ""), _win._max_division_text()
@@ -2095,6 +2105,7 @@ def test_sc_day_peak_on_division_chart_and_best_date_from_matches():
         _win._max_division = keep_max
         _win._division_names.clear()
         _win._division_names.update(keep_names)
+        _win._rank_seasons = keep_seasons
         _restore_account()
 
 
@@ -10968,30 +10979,88 @@ def test_step_decimals_keeps_tick_labels_apart():
         assert len(texts) == 3, (step, texts)
 
 
-def test_division_zoom_switches_to_games_when_short():
-    keep_days = _win.sp_trend_days.value()
-    keep_g = config.G1_GAME_LEVEL_DAYS
-    det = _sc_details({})
+def test_division_run_chart_season_zoom_and_badges_66():
+    """66 G1 — 범위는 이번 시즌(시즌 콤보·"최근 N일" 과 무관 · R1·U1) · 구간 단위 확대 · 시즌을 모르면 "최근 70일"(R2) ·
+    ELO·시즌표가 도착하면 다시 그림(M2) · 배지 그림이 오면 축이 그림으로."""
+    from datetime import date as _d
+    from PyQt6.QtGui import QPixmap
+    keep_seasons = _g1_season(_d(2026, 1, 2))     # 지금 시즌 = 01-02~ : 0002·0003·0004 · 0001 은 지난 시즌
+    keep = (dict(_win._elo), dict(_win._div_badges), set(_win._div_badge_tried), _win.sp_trend_days.value())
+    det = _sc_details({"0003": 800})
     try:
         _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         dc, z = _win.division_chart, _win.zoom_division
-        days = len(_win._div_days)
-        assert days >= 3, "날이 셋 이상이어야 확대를 잴 수 있다"
-        assert len(dc._points) == days and z.is_full()
-        z.set_span(0, 1)
-        first, last = _win._div_days[0].day, _win._div_days[1].day
-        n_games = sum(1 for t, _ in _win._div_games if first <= t.date() <= last)
-        assert len(dc._points) == n_games and ":" in dc._points[0][0], "짧게 확대했는데 경기마다가 아니다"
-        assert "경기마다" in _win.gb_division.title(), _win.gb_division.title()
-        config.G1_GAME_LEVEL_DAYS = 1                          # 배선 — 기본값이 아닌 값으로
+        want = [(900, 1), (800, 1), (900, 1)]
+        assert [(r.division, r.games) for r in dc._runs] == want, dc._runs
+        assert _win.gb_division.title() == "등급 — 지금 시즌 (01/02~)", _win.gb_division.title()
+        # R1 — 지난 시즌(0001 만)을 골라도 계단은 이번 시즌 그대로(막지 않았으면 _details 의 한 경기만 남는다)
+        past = next(i for i in range(_win.cb_season.count())
+                    if getattr(_win.cb_season.itemData(i), "no", None) == 88)
+        _win.cb_season.setCurrentIndex(past)
+        assert len(_win._details) == 1, "전제 — 지난 시즌을 고르면 _details 가 한 경기"
+        assert [(r.division, r.games) for r in dc._runs] == want, dc._runs
+        # U1 — "최근 N일" 을 바꿔도 안 바뀐다
+        _win.sp_trend_days.setValue(1)
+        assert [(r.division, r.games) for r in dc._runs] == want, dc._runs
+        # 구간 단위 확대 — 고른 구간만 · 제목은 그 구간 날짜 · 머리 줄은 시즌 전체 그대로
+        assert z.isVisibleTo(_win.gb_division) and z.is_full()
+        z.set_span(1, 2)
+        assert [(r.division, r.games) for r in dc._runs] == want[1:], dc._runs
+        assert _win.gb_division.title() == "등급 — 01/02~01/03", _win.gb_division.title()
+        assert dc._head == (900, 800, "시즌 최고"), dc._head
+        assert dc._markers == [0], dc._markers        # 슈챔 진입은 확대한 목록 안 번호로
+        z.set_span(0, 2)
+        # 배지 — 그림이 오면 축이 글자 대신 그림(못 받은 등급은 글자)
+        pm = QPixmap(30, 30)
+        pm.fill()
+        dc.grab()
+        assert dc.marks["badges"] == 0, dc.marks
+        _win._div_badges.clear()
+        path = pathlib.Path(tempfile.mkdtemp()) / "b.png"
+        pm.save(str(path))
+        _win._on_division_badge(800, str(path))
+        dc.grab()
+        assert dc.marks["badges"] == 1 and dc._badges[800].width() == dc.BADGE, dc.marks
+        broken = path.with_name("x.png")
+        broken.write_bytes(b"not png")
+        _win._on_division_badge(900, str(broken))
+        assert not broken.exists() and 900 not in _win._div_badges, "깨진 캐시를 안 지웠다"
+        # 배지 받기 — 한 번 시도한 등급은 다시 안 받는다(오프라인에서 그릴 때마다 로더가 뜨지 않게)
+        started = []
+        keep_start = app_main.IconLoader.start
+        app_main.IconLoader.start = lambda self: started.append([e[1] for e in self._entries])
+        keep_meta = _win._division_meta
+        _win._division_meta = [{"divisionId": 800}, {"divisionId": 900}]
+        _win._div_badge_tried = set()
+        try:
+            _win._render_division()
+            _win._render_division()
+        finally:
+            app_main.IconLoader.start = keep_start
+            _win._division_meta = keep_meta
+        assert started == [[800, 900]], started
+        # R2 — 시즌표도 스냅숏도 없으면 "최근 70일" · "기간 최고"(70일을 시즌이라 부르지 않는다)
+        _win._div_span = (_win._div_span[0], False)
         _win._draw_division()
-        assert len(dc._points) == 2 and ":" not in dc._points[0][0], "G1_GAME_LEVEL_DAYS 를 config 에서 안 읽는다"
-        z.set_span(0, days - 1)
-        assert len(dc._points) == days and "최근" in _win.gb_division.title()
+        assert dc._head == (900, 800, "기간 최고"), dc._head
+        _win._rank_seasons = []
+        _win._render_division()
+        assert _win.gb_division.title() == f"등급 — 최근 {config.ELO_FALLBACK_DAYS}일", _win.gb_division.title()
+        # M2 — ELO 스냅숏의 시즌 시작이 도착하면 계단이 그 시작으로 다시 그려진다(_on_elo_ready)
+        data = _elo_data([])
+        data.snap_season_start = "2026-01-02T22:00:00"
+        _win._on_elo_ready(_OUID, data)
+        assert [(r.division, r.games) for r in dc._runs] == [(800, 1), (900, 1)], dc._runs
+        assert dc._head == (900, 800, "시즌 최고"), dc._head
+        _win._elo.pop(_OUID, None)
+        # M2 — 시즌표 도착
+        _win._on_seasons_loaded([sn.Season(88, "시즌 8", _d(2025, 10, 1), _d(2026, 1, 3))])
+        assert [(r.division, r.games) for r in dc._runs] == [(900, 1)], dc._runs
     finally:
-        config.G1_GAME_LEVEL_DAYS = keep_g
-        _win.sp_trend_days.setValue(keep_days)
+        _win._rank_seasons = keep_seasons
+        _win._elo, _win._div_badges, _win._div_badge_tried = keep[0], keep[1], keep[2]
+        _win.sp_trend_days.setValue(keep[3])
         _restore_account()
 
 

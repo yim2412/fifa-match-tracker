@@ -181,8 +181,8 @@ python tests/test_review_kit.py   # 계획 검토 준비 도구
 |------|------|
 | `app_main.py` | PyQt6 UI — 검색 화면, 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드·흐름 분석·선수 지표·전술·승부처 분석·성적 진단·슛 맵·결정력·팀컬러·스쿼드·이적 등 18개 — 메뉴 안 구획은 페이지 안 탭 `Tabs`), 조회 워커 스레드 · 거래 받기(`TradeLoader`) |
 | `dashboard.py` | 대시보드 페이지 — 카드 배치·채우기(`DashboardPage.render`), 카드별 범위 규칙 |
-| `charts.py` | 대시보드 그래프(QPainter) — 영역 곡선·도넛·링 게이지·묶음 막대·레이더·결과 점·가로 막대 |
-| `widgets.py` | 화면 부품(위젯) — 카드(`Card`)·랭커 카드·표(`FitTableWidget` — 모든 표)·좁으면 두 줄로 접히는 위쪽 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·글꼴이 줄어드는 라벨(`FitLabel`)·승률/등급 그래프·축구장 v2(`PitchWidget` — 줄마다 폭을 나눠 칩이 안 겹친다 · 접는 구획 `Collapsible`)·슛 맵·`NoScrollComboBox` 등 |
+| `charts.py` | 대시보드 그래프(QPainter) — 영역 곡선·도넛·링 게이지·묶음 막대·등급 계단(`DivisionRunChart`)·결과 점·가로 막대 |
+| `widgets.py` | 화면 부품(위젯) — 카드(`Card`)·랭커 카드·표(`FitTableWidget` — 모든 표)·좁으면 두 줄로 접히는 위쪽 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·글꼴이 줄어드는 라벨(`FitLabel`)·축구장 v2(`PitchWidget` — 줄마다 폭을 나눠 칩이 안 겹친다 · 접는 구획 `Collapsible`)·슛 맵·`NoScrollComboBox` 등 |
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·전역 스타일시트(QSS)·`apply()`(Fusion + 팔레트 + 기본 글꼴). **QSS 에 font-size 를 넣지 않는다**(setFont 를 이긴다) |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트. **엔드포인트 경로·에러코드가 전부 여기 상수에 모여 있다** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 |

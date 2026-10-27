@@ -60,26 +60,6 @@ def division_trend(details: list, ouid: str) -> list[tuple[datetime, int]]:
     out.sort(key=lambda t: t[0])
     return out
 
-class DayDivision(NamedTuple):
-    """하루 등급 — 그래프 점은 last, 툴팁에 first·best(id 가 작을수록 높다)."""
-    day: date
-    last: int
-    first: int
-    best: int
-
-
-def daily_division(points: list[tuple[datetime, int]]) -> list[DayDivision]:
-    """division_trend 결과를 하루 한 점으로 — 그날 마지막 경기 등급(오래된 날부터).
-
-    경기마다 한 점이면 1만 경기 계정이 1만 점(R7: 10,949 → 111일)이라 계단이 읽히지 않는다."""
-    days: dict[date, DayDivision] = {}
-    for t, div in sorted(points, key=lambda x: x[0]):
-        d = t.date()
-        cur = days.get(d)
-        days[d] = DayDivision(d, div, div, div) if cur is None else \
-            DayDivision(d, div, cur.first, min(cur.best, div))
-    return [days[d] for d in sorted(days)]
-
 
 def division_entries(points: list[tuple[datetime, int]],
                      division: int = SUPER_CHAMPION_DIVISION_ID) -> tuple[list[datetime], bool]:

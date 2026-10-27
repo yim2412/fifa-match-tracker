@@ -1119,6 +1119,161 @@ class HBarList(_Chart):
             self._hits.append((QRectF(0, y, self.width(), self.ROW), tip))
 
 
+class DivisionRunChart(_Chart):
+    """등급 계단(66 G1) — 가로 한 칸 = 같은 등급이 이어진 구간 하나(`habits.division_runs`) · 칸 폭은 날짜와 무관.
+
+    세로는 나온 등급만(18단계를 다 그리면 실제 폭이 눌린다) · id 가 작을수록 높아 위로 · 축은 배지 그림(`set_badges` —
+    아직 못 받았거나 못 받는 등급은 이름 글자). head = (지금 등급, 최고 등급, 최고 라벨) — 오른쪽 위 한 줄 · 확대해도
+    부르는 쪽이 시즌 전체로 준다. markers: 세로 점선을 그을 구간 번호(슈챔 진입 — 구간 시작에)."""
+
+    BADGE = 20          # 축·머리 배지 크기(px)
+    HEAD_H = 26         # 머리 줄 높이
+    EMPTY = "표시 구간에 등급 정보가 있는 경기가 없습니다."
+
+    def __init__(self):
+        super().__init__(min_h=220)
+        self._runs: list = []
+        self._names: dict[int, str] = {}
+        self._tips: list[str] = []
+        self._markers: list[int] = []
+        self._head: tuple[int, int, str] | None = None
+        self._badges: dict[int, object] = {}   # 등급 id → 줄인 QPixmap
+        self.marks: dict = {}
+
+    def set_data(self, runs: list, names: dict[int, str], tips: list[str] | None = None, markers=(),
+                 head: tuple[int, int, str] | None = None) -> None:
+        self._runs = list(runs)
+        self._names = names
+        self._tips = list(tips) if tips is not None else []
+        self._markers = sorted(set(markers))
+        self._head = head
+        self.update()
+
+    def set_badges(self, badges: dict) -> None:
+        """{등급 id: QPixmap} — 그릴 크기로 한 번만 줄여 둔다(그릴 때마다 줄이면 확대 막대를 끌 때 느리다)."""
+        px = self.BADGE
+        self._badges = {div: pm.scaled(px, px, Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                        for div, pm in badges.items() if pm is not None and not pm.isNull()}
+        self.update()
+
+    def _name(self, div: int) -> str:
+        return self._names.get(div, str(div))
+
+    def _pieces_w(self, fm: QFontMetrics, pieces: list) -> float:
+        """머리 줄 폭 — 글 조각 (색, 글) 과 배지 자리(등급 id · 그림이 있을 때만 폭을 먹는다)."""
+        return sum(fm.horizontalAdvance(x[1]) if isinstance(x, tuple) else (self.BADGE + 4 if x in self._badges else 0)
+                   for x in pieces)
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        w, h = self.width(), self.height()
+        self._hits = []
+        self.marks = {}
+        f = _small_font(self.font())
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        if not self._runs:
+            self._empty(p, self.EMPTY)
+            return
+
+        # 머리 줄 — "현재 [배지] 이름 · 시즌 최고 [배지] 이름"(오른쪽 맞춤)
+        if self._head is not None:
+            cur, best, best_label = self._head
+            pieces = [(T.TEXT_DIM, "현재 "), cur, (T.TEXT, f" {self._name(cur)}"),
+                      (T.TEXT_DIM, f"  ·  {best_label} "), best, (T.TEXT, f" {self._name(best)}")]
+            x = w - 4 - self._pieces_w(fm, pieces)
+            mid = self.HEAD_H / 2
+            for piece in pieces:
+                if isinstance(piece, tuple):
+                    color, text = piece
+                    p.setPen(QColor(color))
+                    tw = fm.horizontalAdvance(text)
+                    p.drawText(QRectF(x, 0, tw + 1, self.HEAD_H), Qt.AlignmentFlag.AlignVCenter, text)
+                    x += tw
+                else:
+                    pm = self._badges.get(piece)
+                    if pm is not None:
+                        p.drawPixmap(QPointF(x + 2, mid - pm.height() / pm.devicePixelRatio() / 2), pm)
+                        x += self.BADGE + 4
+            self.marks["head"] = (cur, best, best_label)
+
+        n = len(self._runs)
+        levels = sorted({r.division for r in self._runs}, reverse=True)   # id 큰 것(낮은 등급)부터 = 아래부터
+        axis_w = max((self.BADGE if div in self._badges else fm.horizontalAdvance(self._name(div))) for div in levels)
+        ml, mr = axis_w + 12, 12
+        mt = (self.HEAD_H if self._head is not None else 0) + 10
+        mb = fm.height() + 10
+        plot_w = max(w - ml - mr, 1)
+        plot_h = max(h - mt - mb, 1)
+        y_of = {div: (mt + plot_h - plot_h * i / (len(levels) - 1) if len(levels) > 1 else mt + plot_h / 2)
+                for i, div in enumerate(levels)}
+
+        grid = QPen(QColor(T.CHART_GRID), 1)
+        grid.setDashPattern([3, 3])
+        drawn_badges = 0
+        for div in levels:
+            y = y_of[div]
+            p.setPen(grid)
+            p.drawLine(QPointF(ml, y), QPointF(w - mr, y))
+            pm = self._badges.get(div)
+            if pm is not None:
+                p.drawPixmap(QPointF(ml - 8 - pm.width() / pm.devicePixelRatio(),
+                                     y - pm.height() / pm.devicePixelRatio() / 2), pm)
+                drawn_badges += 1
+            else:
+                p.setPen(QColor(T.TEXT_DIM))
+                p.drawText(QRectF(2, y - 8, ml - 10, 16),
+                           Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._name(div))
+        self.marks["levels"] = levels
+        self.marks["badges"] = drawn_badges
+
+        slot = plot_w / n
+        x_of = lambda i: ml + slot * i   # noqa: E731 — 구간 i 의 왼쪽 끝(i == n 이면 오른쪽 끝)
+
+        shown = [i for i in self._markers if 0 <= i < n]
+        if shown:
+            pen = QPen(QColor(T.CHART_NEUTRAL), 1)
+            pen.setStyle(Qt.PenStyle.DotLine)
+            p.setPen(pen)
+            for i in shown:
+                p.drawLine(QPointF(x_of(i), mt), QPointF(x_of(i), mt + plot_h))
+        self.marks["markers"] = len(shown)
+
+        # 계단 — 구간마다 가로 한 칸, 등급이 바뀌는 자리에서 세로로
+        path = QPainterPath(QPointF(x_of(0), y_of[self._runs[0].division]))
+        for i, r in enumerate(self._runs):
+            y = y_of[r.division]
+            if i:
+                path.lineTo(QPointF(x_of(i), y))
+            path.lineTo(QPointF(x_of(i + 1), y))
+        p.setPen(QPen(QColor(T.CHART_LINE), LINE_W))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        self.marks["runs"] = n
+
+        # 가로 라벨 — 구간 시작 날짜 · 겹치거나 앞과 같은 날이면 건너뛴다
+        p.setPen(QColor(T.TEXT_DIM))
+        lw = fm.horizontalAdvance("00/00") + 8
+        last_right, last_text, labels = -1e9, None, []
+        for i, r in enumerate(self._runs):
+            text = f"{r.start:%m/%d}"
+            x = x_of(i)
+            if text == last_text or x - lw / 2 < last_right or x + lw / 2 > w:
+                continue
+            p.drawText(QRectF(x - lw / 2, h - mb + 6, lw, fm.height()), Qt.AlignmentFlag.AlignCenter, text)
+            last_right, last_text = x + lw / 2, text
+            labels.append(text)
+        self.marks["labels"] = labels
+
+        for i, r in enumerate(self._runs):
+            tip = self._tips[i] if i < len(self._tips) else \
+                f"{r.start:%m/%d %H:%M} ~ {r.end:%m/%d %H:%M} · {self._name(r.division)} · {r.games}판"
+            self._hits.append((QRectF(x_of(i), mt, slot, plot_h), tip))
+
+
 DONUT_MAX = 6   # 도넛 조각 상한 — 넘치면 앞 DONUT_MAX-1 개 + "기타"
 
 

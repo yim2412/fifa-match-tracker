@@ -23,8 +23,8 @@ from models import (
     MatchSummary, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
     filter_matches, moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
 )
-from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, DivisionStays, GoalFlow, LeadRow,
-                    division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
+from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, DivisionStay, DivisionStays, GoalFlow, LeadRow,
+                    division_runs, division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
                     AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
                     DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
@@ -60,7 +60,7 @@ from stats import (
     END_KINDS, MIN_BUCKET_SHOTS, PITCH_ROWS, PITCH_X, PITCH_Y, PITCH_Y_MAX, SquadValue, card_ovr, pitch_rows, squad_value, KeyPlayers, key_players, PASS_KINDS, PASS_MIN_TRIES, PERIODS, PLAYER_RATING_MIN_GAMES, PLAYER_TREND_MIN_SHOTS, RANKER_METRICS,
     SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET, SUB_POSITION, SUPER_CHAMPION_DIVISION_ID, CHAMPION_DIVISION_ID,
     Discipline, PositionOpponent, StreakAfter, after_streak_rates, aggregate_players, clutch_summary,
-    daily_division, discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
+    discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above, match_formations,
     FormationUsage, OppCard, formation_label, opponent_cards, opponent_formations, opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
@@ -84,7 +84,7 @@ __all__ = [
     # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
     "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",
     # habits — 내 경기 습관·기준선(2.6.1) · N2 등급 체류
-    "DivisionStay", "DivisionStays", "division_stays",
+    "DivisionRun", "DivisionStay", "DivisionStays", "division_runs", "division_stays",
     # habits — N19 칩 · N17 골 흐름(2.7.1)
     "GOAL_KIND_NOTE", "GOAL_KINDS", "MAX_LEAD", "Chip", "GoalFlow", "LeadRow", "goal_flow", "half_share_diff",
     "paired_diff", "pct", "side_totals", "strength_chips",
@@ -130,7 +130,7 @@ __all__ = [
     "END_KINDS", "MIN_BUCKET_SHOTS", "PITCH_ROWS", "PITCH_X", "PITCH_Y", "PITCH_Y_MAX", "SquadValue", "card_ovr", "pitch_rows", "squad_value", "KeyPlayers", "key_players", "PASS_KINDS", "PASS_MIN_TRIES", "PERIODS", "PLAYER_RATING_MIN_GAMES", "PLAYER_TREND_MIN_SHOTS",
     "RANKER_METRICS", "SHOT_GOAL", "SHOT_OFF_TARGET",
     "SHOT_ON_TARGET", "SUB_POSITION", "SUPER_CHAMPION_DIVISION_ID", "CHAMPION_DIVISION_ID", "Discipline", "PositionOpponent", "StreakAfter",
-    "after_streak_rates", "aggregate_players", "clutch_summary", "daily_division", "discipline_stats",
+    "after_streak_rates", "aggregate_players", "clutch_summary", "discipline_stats",
     "division_entries", "division_stats", "division_trend", "finishing_ranking", "formation_of", "formation_stats",
     "goal_minute_buckets", "is_champion_or_above", "match_formations",
     "FormationUsage", "OppCard", "formation_label", "opponent_cards", "opponent_formations", "opponent_position_players", "opponent_squad", "own_squad", "pass_style", "player_finishing_trend",

@@ -1987,13 +1987,23 @@ def test_win_rate_trend_points_carry_their_day():
     assert [p.label for p in got] == ["09/01", "09/03"]  # 라벨은 그대로
 
 
-def test_daily_division_last_of_day():
-    t = lambda dd, h: datetime(2026, 7, dd, h)  # noqa: E731
-    # 처음·마지막·최고가 전부 다르게(같으면 '마지막 대신 처음'을 못 가른다 — 변이로 확인)
-    pts = [(t(6, 9), 1000), (t(5, 11), 1000), (t(5, 9), 900), (t(5, 10), 800)]  # 순서 섞임
-    got = st.daily_division(pts)
-    assert [(x.day.day, x.last, x.first, x.best) for x in got] == [(5, 1000, 900, 800), (6, 1000, 1000, 1000)], got
-    assert st.daily_division([]) == []
+def test_division_runs_merge_and_season_cut():
+    """66 G1 — 같은 등급이 이어진 경기는 한 칸 · 한 판짜리 구간도 한 칸 · since 앞은 뺀다(시즌 경계는 63 matchtime 의 KST)."""
+    import habits
+    t = lambda dd, h, mi=0: datetime(2026, 9, dd, h, mi)  # noqa: E731
+    # 순서 섞임 · 900 사이에 한 판 800(슈챔에 올랐다 내려온 것 — 옛 하루 한 점 그림이 못 보던 것)
+    pts = [(t(11, 9), 900), (t(10, 9), 1000), (t(10, 22), 900), (t(11, 10), 800), (t(11, 11), 900), (t(12, 9), 900)]
+    got = habits.division_runs(pts)
+    assert [(r.division, r.games) for r in got] == [(1000, 1), (900, 2), (800, 1), (900, 2)], got
+    assert (got[1].start, got[1].end) == (t(10, 22), t(11, 9)) and got[2].start == got[2].end == t(11, 10)
+    assert habits.division_runs([]) == []
+    # 시즌 경계 — 원문 UTC 09-09 15:30 = KST 09-10 00:30 → 09-10 시작 시즌 안 · UTC 09-09 14:59 = KST 23:59 → 밖
+    det = [{"matchId": "a", "matchDate": "2026-09-09T14:59:00", "matchInfo": [{"ouid": "me", "division": 1000}]},
+           {"matchId": "b", "matchDate": "2026-09-09T15:30:00", "matchInfo": [{"ouid": "me", "division": 900}]},
+           {"matchId": "c", "matchDate": "2026-09-10T01:00:00", "matchInfo": [{"ouid": "me"}]},          # 등급 없음 — 빠진다(M9)
+           {"matchId": "d", "matchDate": "2026-09-10T02:00:00", "matchInfo": [{"ouid": "me", "division": 900}]}]
+    got = habits.division_runs(st.division_trend(det, "me"), since=datetime(2026, 9, 10))
+    assert [(r.division, r.games, r.start) for r in got] == [(900, 2, datetime(2026, 9, 10, 0, 30))], got
 
 
 def test_division_entries_counts_each_climb():

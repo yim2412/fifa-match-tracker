@@ -80,7 +80,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
@@ -2654,9 +2654,10 @@ class MainWindow(QMainWindow):
         self._names: dict = {}
         self._positions: dict = {}
         self._trend_reset_pending = True
-        self._div_games: list = []      # 등급 추이 — 경기마다(확대 시) · 하루 한 점(_div_days) · 그 일수(55 G1)
-        self._div_days: list = []
-        self._div_days_n = 30
+        self._div_runs: list = []       # 등급 계단(66 G1) — 이번 시즌 구간(habits.DivisionRun) · 시작·시즌을 아는가
+        self._div_span: tuple = (None, False)
+        self._div_badges: dict = {}     # 등급 id → QPixmap(받은 것) · 한 번 시도한 등급은 이 실행에서 다시 안 받는다
+        self._div_badge_tried: set = set()
         self._tv_points: list = []      # 구단가치 일별(55 V1) — (날짜, 원)
         # 상대 닉네임 -> 팀컬러 글자(teamcolor.label — 이름이 겹치는 두 팀컬러만 "이름 · 강화"/"이름 · 클럽", "" = 못 찾음).
         # 표·콤보·더블클릭 대조가 전부 이 글자로 돈다. DB 에 쓸 원값(넥슨 이름·팀가치·엠블럼 키)은 _teamcolor_raw 에 따로
@@ -3929,16 +3930,19 @@ class MainWindow(QMainWindow):
         gv.addWidget(self.trend_chart)
         v.addWidget(self.gb_trend, 1)
 
-        # 등급 추이 — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음.
-        # 기간(일수)은 위 승률 추이와 같은 스핀박스를 공유한다. 점은 하루 마지막 등급.
-        self.gb_division = QGroupBox("등급 추이")
+        # 등급 계단(66 G1) — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음. 범위는 점수 그래프와 같은
+        # 이번 시즌(U1 — 위 "최근 N일" 과 끊었다) · 시즌 콤보도 안 본다(R1 — 저장된 전체에서 시즌 시작으로 자른다).
+        self.gb_division = QGroupBox("등급")
         dv = QVBoxLayout(self.gb_division)
-        self.division_chart = DivisionChart()
+        self.division_chart = charts.DivisionRunChart()
         dv.addWidget(self.division_chart)
-        # 55 G1 — 구간 확대. G1_GAME_LEVEL_DAYS 일 이하로 좁히면 경기마다 한 점(U4)
-        self.zoom_division = ZoomBar()
+        self.zoom_division = ZoomBar()   # 구간 단위로 좁힌다(55 G1)
         self.zoom_division.range_changed.connect(lambda _a, _b: self._draw_division())
         dv.addWidget(self.zoom_division)
+        self.lb_division_note = QLabel("가로 한 칸이 등급 구간 하나입니다 — 같은 등급이 이어진 동안이라 칸 폭은 날짜와 상관없습니다.")
+        self.lb_division_note.setWordWrap(True)
+        self.lb_division_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        dv.addWidget(self.lb_division_note)
         v.addWidget(self.gb_division, 1)
 
         # 슈퍼 챔피언스 달성 기록 — 시즌 필터 무시(평생 기록). _render_sc_records 가 채운다.
@@ -9660,6 +9664,7 @@ class MainWindow(QMainWindow):
     def _on_seasons_loaded(self, items: list) -> None:
         self._rank_seasons = items
         self._render_elo()   # 지금 시즌 시작이 바뀐다 — 들고 있는 값으로 다시 그림(읽기 없음)
+        self._render_division()   # 등급 계단도 같은 시즌 시작(66 M2)
         self._invalidate("calendar")   # 달력 기준선(그날 시즌 승률)이 시즌표를 쓴다
         self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
@@ -12040,53 +12045,65 @@ class MainWindow(QMainWindow):
             counts=True, baseline=50, ma=ma, avg_weights=[p.rated for p in self._trend_periods],
             weak=[p.rated == 0 for p in self._trend_periods])
 
-        # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다. 점은 하루 마지막 등급(1만 경기 → 약 100점).
-        self._div_games = core.division_trend(self._details, self._ouid)
-        days_div = core.daily_division(self._div_games)
-        if days_div:
-            cutoff = days_div[-1].day - timedelta(days=days - 1)
-            days_div = [d for d in days_div if d.day >= cutoff]
-        self._div_days = days_div
-        self._div_days_n = days
-        self.zoom_division.set_labels([f"{d.day:%m/%d}" for d in days_div], self._ouid)
-        self.zoom_division.setVisible(len(days_div) >= 3)
-        self._draw_division()
+        self._render_division()
 
         self._show_trend_summary()
         self._render_sc_records()
         self._render_elo()
 
+    def _render_division(self) -> None:
+        """등급 계단 재료 — 저장된 전체의 등급 이력을 이번 시즌 시작으로 자른다(66 G1 · R1). 시즌 시작은 점수 그래프와 같은
+        `season_span` 이라 시즌표·ELO 가 도착할 때도 다시 부른다(M2)."""
+        data = self._elo.get(self._ouid) if self._ouid else None
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        self._div_span = (start, known)
+        self._div_runs = core.division_runs(self._div_trend_all(), since=start) if self._ouid else []
+        self.zoom_division.set_labels([f"{r.start:%m/%d}" for r in self._div_runs], self._ouid)
+        self.zoom_division.setVisible(len(self._div_runs) >= 3)
+        self._draw_division()
+        self._load_division_badges()
+
     def _draw_division(self) -> None:
-        """등급 추이 — 확대 막대(zoom_division)가 고른 날만. 고른 구간이 G1_GAME_LEVEL_DAYS 일 이하면 경기마다 한 점(U4)."""
+        """등급 계단 — 확대 막대(zoom_division)가 고른 구간만. 머리 줄(현재 · 시즌 최고)은 늘 시즌 전체."""
         lo, hi = self.zoom_division.span()
-        days_div = self._div_days[lo:hi + 1] if self._div_days else []
-        name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
-        entries = self._sc_entries()[0]
-        zoomed = not self.zoom_division.is_full()
-        span = (days_div[-1].day - days_div[0].day).days + 1 if days_div else 0
-        if zoomed and days_div:
-            self.gb_division.setTitle(f"등급 추이 — {days_div[0].day:%m/%d}~{days_div[-1].day:%m/%d}"
-                                      + (" · 경기마다" if span <= config.G1_GAME_LEVEL_DAYS else ""))
+        runs = self._div_runs[lo:hi + 1]
+        start, known = self._div_span
+        if runs and not self.zoom_division.is_full():
+            tail = f"{runs[0].start:%m/%d}~{runs[-1].end:%m/%d}"
         else:
-            self.gb_division.setTitle(f"최근 {self._div_days_n}일 등급 추이")
-        if zoomed and days_div and span <= config.G1_GAME_LEVEL_DAYS:
-            first, last = days_div[0].day, days_div[-1].day
-            games = [(t, div) for t, div in self._div_games if first <= t.date() <= last]
-            entry_set = set(entries)
-            self.division_chart.set_data(
-                [(f"{t:%m/%d %H:%M}", div) for t, div in games], self._division_names,
-                tips=[f"{t:%Y-%m-%d %H:%M} · {name(div)}" for t, div in games],
-                markers=[i for i, (t, _) in enumerate(games) if t in entry_set])
+            tail = season_title(start, known) if start is not None else ""
+        self.gb_division.setTitle(f"등급 — {tail}" if tail else "등급")
+        head = None
+        if self._div_runs:
+            head = (self._div_runs[-1].division, min(r.division for r in self._div_runs),
+                    "시즌 최고" if known else "기간 최고")   # R2 — 시즌을 모르면 그 70일을 시즌이라 부르지 않는다
+        entries = set(self._sc_entries()[0])
+        self.division_chart.set_data(runs, self._division_names,
+                                     markers=[i for i, r in enumerate(runs) if r.start in entries], head=head)
+
+    def _load_division_badges(self) -> None:
+        """축·머리 줄 배지 — 표 칸 그림과 같은 길(images.icon_url · IconLoader · 캐시 폴더). 못 받으면 그 등급만 글자."""
+        entries = []
+        for div in sorted({r.division for r in self._div_runs} - self._div_badge_tried):
+            url = images.icon_url("division", self._division_icon_key(div))
+            if url:
+                self._div_badge_tried.add(div)
+                entries.append(("division", div, url))
+        if not entries:
             return
-        entry_days = {t.date() for t in entries}
-        self.division_chart.set_data(
-            [(f"{d.day:%m/%d}", d.last) for d in days_div], self._division_names,
-            tips=[f"{d.day:%Y-%m-%d} · 마지막 {name(d.last)} · 처음 {name(d.first)} · 최고 {name(d.best)}"
-                  for d in days_div],
-            markers=[i for i, d in enumerate(days_div) if d.day in entry_days],
-            # 슈챔에 올랐다가 그날 마지막엔 내려온 날 — 점은 하루 마지막 등급이라 슈챔 줄에 따로 한 점(2026-10-19 사용자)
-            peaks={i: d.best for i, d in enumerate(days_div)
-                   if d.best == core.SUPER_CHAMPION_DIVISION_ID and d.last != d.best})
+        loader = IconLoader(entries, self._icon_dir)
+        loader.loaded.connect(lambda _k, div, path: self._on_division_badge(div, path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        self._icon_loaders.append(loader)
+        loader.start()
+
+    def _on_division_badge(self, div: int, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 글자로
+            return
+        self._div_badges[div] = pm
+        self.division_chart.set_badges(self._div_badges)
 
     # ── ELO 그래프 (1.3.1 · 13) ──────────────────────────────────────────────
     def _load_elo(self, ouid: str | None = None) -> None:
@@ -12119,6 +12136,7 @@ class MainWindow(QMainWindow):
         if ouid == self._ouid:
             self._invalidate("matches")   # 57 K3 상대 점수 열
             self._render_elo()
+            self._render_division()       # 스냅숏 시즌 시작이 바뀔 수 있다(66 M2)
             self._invalidate("elodist")   # 점수 분포의 검색 계정 선
             self._invalidate("wrelo")     # 승률→점수의 내 ELO(마지막 스냅숏에 없을 때)
             self._invalidate("poslevel")  # 자리별 수준의 라벨 조건(ⓗ — 가장 최근 순위)
@@ -12331,17 +12349,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"따라가기 목록을 저장하지 못했습니다: {e}", 5000)
         self._load_elo(self._ouid)
 
-    def _sc_entries(self) -> tuple[list, bool]:
-        """저장된 전체(_details_all — 시즌 필터 무시)에서 슈챔 진입 시각 — 캐시.
+    def _div_trend_all(self) -> list:
+        """저장된 전체(_details_all — 시즌 필터 무시)의 경기마다 (일시, 등급) — 캐시.
 
         _render_trend 는 지연 그리기 밖이라 검색·시즌 전환마다 돈다 — 1만 경기 훑기(약 10ms)를 매번 안 하게
         목록 id·길이·맨 앞 경기로 키를 잡는다(_narrate_scope 와 같은 방식)."""
         d = self._details_all
         key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
-        if getattr(self, "_sc_cache_key", None) != key:
-            self._sc_cache = core.division_entries(core.division_trend(d, self._ouid),
-                                                   core.SUPER_CHAMPION_DIVISION_ID)
-            self._sc_cache_key = key
+        if getattr(self, "_div_all_key", None) != key:
+            self._div_all = core.division_trend(d, self._ouid) if self._ouid else []
+            self._div_all_key = key
+            self._sc_cache = core.division_entries(self._div_all, core.SUPER_CHAMPION_DIVISION_ID)
+        return self._div_all
+
+    def _sc_entries(self) -> tuple[list, bool]:
+        """슈챔 진입 시각 — 저장된 전체에서(`_div_trend_all` 과 같은 캐시)."""
+        self._div_trend_all()
         return self._sc_cache
 
     def _season_wins(self) -> list:
