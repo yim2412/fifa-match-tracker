@@ -47,6 +47,7 @@ from rankmeta import (
     RewardBand, RewardBoard, TopCard, reward_board, top3,
     MINOR_LABEL, is_minor_color, minor_formations, usage_counts,
     TcBoard, TcBoardRow, team_color_board, TcDetail, TcOwner, tc_detail, tc_top_owners,
+    ChampGames, champ_games, rank_cut, last_raw_id,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -122,6 +123,7 @@ __all__ = [
     "winrate_peers", "winrate_to_elo",
     "TcBoard", "TcBoardRow", "team_color_board",   # 67 R1 팀컬러 목록
     "TcDetail", "TcOwner", "tc_detail", "tc_top_owners",   # 67 R2 팀컬러 상세 창
+    "ChampGames", "champ_games", "rank_cut", "last_raw_id",   # 67 R5 달성 판수 · R4·R8 20위 컷
     # rankmeta — N23 상대 순위 구간(2.9.1)
     "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table", "opp_rank_label",
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸

@@ -899,11 +899,15 @@ class HistogramChart(_Chart):
         self._cmp_name = ""
         self._marks: list[tuple[float, str, str, bool]] = []   # (값, 글자, 색, 점선)
         self._faint_first = False
+        self._open_last = False
         self.mark_rects: list[QRectF] = []   # 테스트가 글자 겹침을 잰다
 
     def set_data(self, bins: list[float], width: float, main: list[float], main_name: str = "",
                  cmp: list[float] | None = None, cmp_name: str = "",
-                 marks: list[tuple[float, str, str, bool]] | None = None, faint_first: bool = False) -> None:
+                 marks: list[tuple[float, str, str, bool]] | None = None, faint_first: bool = False,
+                 open_last: bool = False) -> None:
+        """open_last: 마지막 칸이 그 값 이상 전부(67 R5 달성 판수 — 꼬리를 한 칸에 모은다)."""
+        self._open_last = open_last
         self._bins, self._width, self._main, self._main_name = list(bins), float(width), list(main), main_name
         self._cmp, self._cmp_name = (list(cmp) if cmp else None), cmp_name
         self._marks = list(marks or ())
@@ -951,7 +955,8 @@ class HistogramChart(_Chart):
                 path.lineTo(x + bar, bottom)
                 path.closeSubpath()
                 p.fillPath(path, _color(T.CHART_UP, 0.35 if faint else 1.0))
-            tip = f"{b:,.0f}~{b + self._width:,.0f} · {self._main_name} {v:,.0f}명"
+            last = self._open_last and i == len(self._bins) - 1
+            tip = (f"{b:,.0f} 이상" if last else f"{b:,.0f}~{b + self._width:,.0f}") + f" · {self._main_name} {v:,.0f}명"
             if self._cmp is not None and i < len(self._cmp):
                 tip += f" · {self._cmp_name} {self._cmp[i]:,.0f}명"
             if faint:

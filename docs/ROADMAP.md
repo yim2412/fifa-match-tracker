@@ -1175,6 +1175,37 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 **검증**: 손 변이 **22건 — 22 잡힘**(rankmeta 일곱 · 창 넷 · R3 여섯 · R10 다섯). 처음엔 **셋이 초록**이었다: ① 지난 시점 하루 승률 비우기 — 테스트 스냅숏 둘이 7일 떨어져 "지금" 쪽도 하루 짝이 없었다 → 하루 안 스냅숏을 끼우고 "지금은 있다"를 먼저 단언 ② 흐린 줄 아래로 — 픽스처의 흐린 줄이 경기도 적어 원래 아래였다 → 흐린 줄이 더 많은 지어낸 줄 ③ [팀컬러 정보] 첫 상태 꺼짐 — 그리기가 늘 다시 꺼서 구분이 안 됐다 → 새로 만든 단추를 직접 단언. 화면 스모크 386/386(1분 36초) · rankmeta 48/48 · 규칙 14/14(SQL 실행 계획 — `tc_top_owners` 포함) · 전체 28 파일(6분 20초 · test_icons 스텁에 `_teamcolor_dialog` 한 줄 더한 뒤 49/49). **실데이터**(이 PC rank.db 읽기 전용 · 상위 셋): 창 첫 계산 0.17~0.20초 · 다시 0.005초 · 지난주 = 10-20 16:00 스냅숏 · 구간 8/8 · 대표 3명. **exe**: 스크래치 폴더로 빌드(브랜치 `dist` 의 exe 가 떠 있어 덮어쓰기가 막혔다 — 끄지 않았다) · offscreen + 스크래치 데이터 폴더로 20초 · crash.log 없음. 창을 실제 화면에서 눈으로 본 것은 아니다 — 2번 모니터 실화면은 ③ 과 같이(카드 여섯 줄바꿈과 함께).
 
+### 조각 ③ 첫 커밋 표 (2026-10-27 · 브랜치 `e1900f2` 위에서) — **조각 ③ 끝**(손 변이 26/26 · 다음은 ④)
+
+**잰 것**(이 PC rank.db 읽기 전용 · 10-27):
+- **R5 칸 폭** — 이번 시즌 `champ_first` 1,339명: 126~4,085판 · 빠른 10% 319 · 중앙값 603 · 느린 10% 1,913 → `config.R5_HIST_BIN = 100` · `R5_HIST_MAX = 3000`(30칸 · 꼬리 1% 남짓은 마지막 칸 "3,000 이상").
+- **첫 계산 시간** — `weekly` 74ms · `rank_cut` 둘 3ms · `meta_trend` 1ms · `reward_board` 0ms(이 시즌 숨김) · `champ_games` 47ms · R8 읽기(마지막 원본 + 컷 셋 + 지난 시즌 컷) 3ms · `top3` 19ms — 전부 0.3초 안이라 화면 스레드 그대로. `test_rankmeta` 예산 표에 `champ_games`(1만 줄)·`rank_cut` 을 더함.
+- 이 PC 는 이번 시즌 사람별 처리가 늦게 시작돼(시즌 시작 09-10 · 처리 10-05) **달성 판수·보상은 "숨김"** 으로 나온다 — 대시보드 H5·K11 과 같은 판정(`_late_start`). 20위 컷 지금 4,559.58 · 7일 전 4,502.97.
+
+**옛 위젯 이름 → 새 부품**(3회차 M9):
+
+| 빌더 | 옛 이름 | 새 이름 | 단언 옮긴 곳 |
+|---|---|---|---|
+| `_build_weekly_tab` | `weekly_tables`(넷) | `weekly_lists`(급상승·하루 최다 승·구단가치 끝·주차) · `weekly_tables["cuts"]` 표 그대로(M6) · 새 `weekly_cards`(일곱) · `weekly_meta_top` | `test_rank_meta_tabs_draw_and_fit`(칸 = 승·무·패 · 카드 = 그 1위) · 새 `test_rank_cards_follow_one_source_67` |
+| `_build_rank_trend_tab` | `top3_cards` `[카드, 글, win_rate_bar]` | `Top3Slot(card, body, wdl, rate, emblem, pitch)` · 새 `champ_box`·`champ_hist`·`champ_value_list`·`lb_champ_note` · `champ_data` | `test_top3_cards_and_reward_board_tab`(막대 칸 · weak/games property · 미니 축구장) |
+| `_build_reward_board_tab` | `tbl_rboard_value` | `rboard_value_list` · 새 `rboard_cards`·`rboard_tc_list`·`rboard_tc_all`(접기 `rboard_tc_more`) · `tbl_rboard_rank` 는 접기 `rboard_rank_box` 안 | 새 테스트(카드 = 보상판 · 팀컬러 순서 · 기준선 = 전체 중앙값) |
+| `_build_elo_tab` | `lb_elo_predict`(늘 보임) | 그대로(못 냈을 때만 보임) + 새 `gb_park`·`park_cards`·`park_pred`·`lb_park_margin`·`park_method`·`park_seasons`·`lb_park_later` | 새 테스트(R8 카드 둘 = 같은 원본 · 예상 컷·계산 줄) |
+| `_build_predict_check_tab` | 판정 칸 글자 | 같은 칸 + 태그 꼴 색(범위 안 GOOD · 밖 WARN · 그 밖 흐림) | `test_predict_check_tab_renders_and_fits` |
+
+표 개수 `test_no_table_elides_at_min_or_default_size` 44 → 39(주간 요약 넷 · 보상 구단가치별 하나). `win_rate_bar(` 앱 5 → **4**(top3 를 `WdlBar(compact)` 로 — 3회차 M10 그대로 · 함수 지우기는 ④).
+
+**새 rank.db 읽기**: `rank_cut`(SQL 둘 — `MIN(rank) … rank >= ?` 뒤 그 줄 · 저장 컷과 같은 규칙을 `rankcollect.aggregate` 와 대조) · `last_raw_id` · `champ_games`(캐시 없음 · `club_head` 와 같은 SELECT) · `reward_board.by_team_color`(캐시 없음 그대로) · `Weekly.base_id`·`cmp_id` · `TopCard` 에 포메이션·팀컬러·구단가치. 전부 `core_api` 경유 · `test_rules` SQL 실행 계획 통과.
+
+**이 조각에서 계획과 다르게 한 것**:
+- **R4 카드는 여섯이 아니라 일곱** — 20위 컷 · 200위 컷 · 점수 상승 1위 · 하루 최다 승 · 사용 증가 팀컬러 · 사용 증가 포메이션 · 100판당 보상 최고 구간(4 + 3 줄).
+- **R5 그림은 새 `HistBars` 대신 지금 점수 분포의 `HistogramChart` 를 다시 썼다** — 마지막 칸 "N 이상" 인자(`open_last`) 하나만 더함(기본값 그림 그대로). 빠른 10%·중앙값·느린 10% 는 세로선.
+- **R8 은 예측 글 줄을 지우지 않았다** — `lb_elo_predict` 는 못 냈을 때 원인 문구만 보이고(테스트가 그 글을 읽는다), 낸 예측의 전체 글은 [계산 방법 · 확률] 접기 안 `lb_park_method` 로. "이번 시즌 진행 중" 은 `Tag` 대신 줄의 보조 글(`MetricRow` 칸에 태그 자리가 없다). 시즌별 컷 줄은 200위·1,000위(20위는 지난 시즌 컷에 없다).
+- **계산 줄은 `predict.need` 를 그대로** — "예상 컷 − 내 점수" 의 내 점수는 `컷 중앙값 − need`(예측에 쓴 점수)로 거꾸로 내서 두 숫자가 갈리지 않게. `need` 는 `test_rules` 문턱 이름이라 `WEAK_ALLOW` 에 이유와 한 줄.
+- **R9 등급 배지는 안 붙였다** — 스냅숏 등급 칸은 코드라 이름·그림 표가 없다(② 와 같은 이유 · 1~3위는 어차피 같은 등급). 엠블럼은 카드마다 `IconLoader`(대시보드 머리와 같은 길).
+- 예측 되짚기 판정 칸은 `Tag` 위젯 대신 표 칸 글자·바탕을 `tag_qss` 와 같은 색(10% 바탕)으로 — 표 칸에 위젯을 끼우면 정렬·잘림 검사 밖이 된다.
+
+**검증**: 손 변이 **26건 — 26 잡힘**(rankmeta 10 · 화면 16). 처음엔 **둘이 초록**: ① 팀컬러 막대 기준선(base) — 픽스처 FC 가 팀마다 등차라 팀 중앙값의 평균 = 전체 중앙값 → 제곱으로 벌림 ② 하루 최다 승 "패" 칸 — 단언이 있는 테스트를 변이 대상에 안 넣었다(넣으니 잡힘). `_check_metric_lists` 에 좁은 폭 인자(`narrow`) — 짧은 줄 목록(주간 요약·시즌별 컷)은 200px 에서도 안 넘쳐 "검사가 빈다" 로 FAIL 했다.
+
 ### ③ 환경 행렬
 
 | 환경 | 볼 것 | 상태 |

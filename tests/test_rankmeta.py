@@ -572,9 +572,16 @@ def test_budget_first_call_cpu():
     """지어낸 1만 행 × 14스냅숏 — 첫 계산(캐시 없음)이 함수마다 CPU 0.3초 안(⑦ · 넘으면 RankMetaLoader 로)."""
     def body(db):
         make_big(db)
+        at = "2026-09-29T09:00:00"                    # 67 R5 — 첫 챔스 판수 1만 줄(이 PC 실측 1,339줄의 여러 배)
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": at}))
+        rng = random.Random(3)
+        with db.conn:
+            db.conn.executemany("INSERT INTO champ_first VALUES (?, ?, ?, ?, 0)",
+                                [(at, rng.randint(100, 4000), int(rng.uniform(3e9, 3e11)), at) for _ in range(10000)])
         conn = db.ro()
         try:
             out = {}
+            last = M.last_raw_id(conn)
             for name, fn in (("day_winrate", lambda: M.day_winrate(conn, 10000)),
                              ("value_score", lambda: M.value_score(conn, 10000)),
                              ("team_color_board", lambda: M.team_color_board(conn, 10000)),   # 67 R1 — 위 둘을 처음부터
@@ -584,7 +591,9 @@ def test_budget_first_call_cpu():
                              ("winrate_to_elo", lambda: M.winrate_to_elo(conn, 10000)),
                              ("weekly", lambda: M.weekly(conn, 5, 3)),
                              ("rank_moves", lambda: M.rank_moves(conn, 5)),
-                             ("ranked_nicknames", lambda: M.ranked_nicknames(conn))):
+                             ("ranked_nicknames", lambda: M.ranked_nicknames(conn)),
+                             ("champ_games", lambda: M.champ_games(conn)),     # 67 R5 — 캐시 없음(메뉴를 열 때마다)
+                             ("rank_cut", lambda: [M.rank_cut(conn, r, last) for r in (20, 200, 1000)])):   # R4·R8
                 M.clear_cache()
                 t = time.process_time()
                 fn()
@@ -604,7 +613,8 @@ BUDGET_S: dict = {}
 def test_rankmeta_behind_core_api():
     import core_api
     for name in ("day_winrate", "value_score", "team_color_board", "tc_detail", "tc_top_owners", "value_bins", "tier_means", "formation_group", "group_meta", "is_champ",
-                 "winrate_to_elo", "weekly", "rank_moves", "find_sn", "ranked_nicknames", "season_end_estimate"):
+                 "winrate_to_elo", "weekly", "rank_moves", "find_sn", "ranked_nicknames", "season_end_estimate",
+                 "champ_games", "rank_cut", "last_raw_id"):
         assert hasattr(core_api, name) and name in core_api.__all__, name
 
 
@@ -920,6 +930,139 @@ def test_reward_board_hidden_by_later_of_two_starts():
             db.conn.execute("DROP TABLE fc_games")
         M.clear_cache()
         assert M.reward_board(db.conn).state == "no_table"
+    using(body)
+
+
+# ── 67 조각 ③ — 20위 컷 · 달성 판수 · 팀컬러별 100판당 · top3 칸 ─────────────────────────────────────
+
+def test_rank_cut_same_rule_as_saved_cut():
+    """저장 컷과 같은 규칙 — 그 순위가 빠졌으면 바로 아래 사람(위 사람을 쓰면 컷이 부푼다) · 목록이 안 가면 None ·
+    원본이 지워졌으면 None. 같은 목록을 수집 쪽 집계(rankcollect)에 넣어 둘이 같은 값인지도 본다."""
+    def body(db):
+        ranks = [r for r in range(1, 23) if r != 20]                  # 20위 빠짐(쪽 경계 이동)
+        sid = db.snap(T0, [person(r, r, elo=5000.0 - r) for r in ranks])
+        assert M.rank_cut(db.conn, 20, sid) == 5000.0 - 21, "20위가 빠졌는데 21위 값이 아니다"
+        assert M.rank_cut(db.conn, 19, sid) == 5000.0 - 19
+        assert M.rank_cut(db.conn, 1, sid) == 4999.0
+        assert M.rank_cut(db.conn, 23, sid) is None, "목록이 그 순위까지 안 가는데 값을 냈다"
+        assert M.rank_cut(db.conn, 20, None) is None
+        import ranker
+        rows = [ranker.RankRow(rank=r, profile_sn=r, nickname=f"n{r}", elo=5000.0 - r) for r in ranks]
+        keep = config.RANK_CUT_RANKS
+        try:
+            config.RANK_CUT_RANKS = (20,)
+            _c, _v, cut_rows = rc.aggregate(rows)
+        finally:
+            config.RANK_CUT_RANKS = keep
+        assert cut_rows == [(20, M.rank_cut(db.conn, 20, sid))], (cut_rows, "저장 컷 규칙과 갈렸다")
+        assert M.last_raw_id(db.conn) == sid
+        with db.conn:
+            db.conn.execute("DELETE FROM snapshot_rows WHERE snapshot_id = ?", (sid,))
+        assert M.rank_cut(db.conn, 20, sid) is None and M.last_raw_id(db.conn) is None
+    using(body)
+
+
+def test_weekly_carries_the_two_cut_snapshot_ids():
+    """R4 20위 카드는 200위 카드와 같은 두 스냅숏을 읽는다(2회차 [상] 2) — weekly 가 그 id 를 넘긴다."""
+    def body(db):
+        first = db.snap(T0, [person(1, 1)], cuts={200: 4400.0})
+        for d in range(1, 7):
+            db.snap(T0 + timedelta(days=d), [person(1, 1)], cuts={200: 4400.0})
+        last = db.snap(T0 + timedelta(days=7), [person(1, 1)], cuts={200: 4450.0})
+        w = M.weekly(db.conn, None, None)
+        assert (w.base_id, w.cmp_id) == (last, first), (w.base_id, w.cmp_id)
+        assert M.last_raw_id(db.conn) == last, "R8 카드가 마지막이 아닌 원본을 읽는다"
+        assert M.weekly(db.conn, None, None).cuts[0][1:] == (4400.0, 4450.0)
+    using(body)
+
+
+def test_champ_games_same_rows_as_club_head():
+    """R5 = 대시보드 H5 와 같은 행 · 같은 중앙값 · 같은 숨김(1회차 [상] 1) · 캐시 없음 · 철회(fc_games 지움)에도 그대로(3회차 M1)."""
+    def body(db):
+        _club_db(db, fc_started="2026-09-29T09:00:00")
+        h, cg = M.club_head(db.conn, 7), M.champ_games(db.conn)
+        assert cg.state == "ok" and cg.n == h.champ_n == 3 and cg.p50 == h.champ_median == 300, (cg, h.champ_median)
+        assert cg.hidden == h.champ_hidden is False
+        w = config.R5_HIST_BIN
+        assert cg.hist == [(100, 1), (200, 0), (300, 1), (400, 0), (500, 1)] if w == 100 else cg.hist
+        assert sum(n for _b, n, _m in cg.by_value) == cg.n, "구단가치 칸 합이 사람 수와 다르다"
+        with db.conn:                                   # 동의 철회 — 지워지는 건 fc_games 뿐(champ_first 는 익명)
+            db.conn.execute("DELETE FROM fc_games")
+            db.conn.execute("INSERT INTO champ_first VALUES (?, 700, 0, ?, 1)", ("2026-09-29T09:00:00", "2026-09-29T09:00:00"))
+        h, cg = M.club_head(db.conn, 7), M.champ_games(db.conn)
+        assert cg.n == h.champ_n == 4 and cg.p50 == h.champ_median == 400, "캐시했거나(새 행을 못 봄) H5 와 갈렸다"
+    using(body)
+
+    def body(db):       # 늦게 시작한 시즌 — H5 와 같이 숨김
+        _club_db(db, season_at="2026-10-05T16:28:11", fc_started="2026-10-05T16:28:11")
+        assert M.champ_games(db.conn).hidden and M.club_head(db.conn, 7).champ_hidden
+    using(body)
+
+    def body(db):       # 사람별 처리 전 · 옛 rank.db
+        db.snap(T0, [person(1, 1)])
+        assert M.champ_games(db.conn).state == "no_season"
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": "2026-09-29T09:00:00"}))
+        with db.conn:
+            db.conn.execute("DROP TABLE champ_first")
+        assert M.champ_games(db.conn).state == "no_table"
+    using(body)
+
+
+def test_champ_games_percentile_edges_and_tail():
+    """빠른·느린 10% 는 _pct 그대로(s[int(q·n)]) — 20명 1..20×10 이면 30·190. R5_HIST_MAX 넘는 사람은 마지막 칸 하나에."""
+    def body(db):
+        at = "2026-09-29T09:00:00"
+        db.snap(T0, [person(i, i, value=100 * i) for i in range(1, 41)])   # 구단가치 칸이 생길 만큼
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": at}))
+        assert M.value_bins(db.conn).bins, "구단가치 칸이 없다 — 아래 '모름' 검사가 빈다"
+        games = [10 * i for i in range(1, 21)]
+        with db.conn:
+            db.conn.executemany("INSERT INTO champ_first VALUES (?, ?, ?, ?, 0)", [(at, g, 100, at) for g in games])
+        cg = M.champ_games(db.conn)
+        assert (cg.p10, cg.p50, cg.p90) == (30, 105.0, 190), (cg.p10, cg.p50, cg.p90)
+        top, w = config.R5_HIST_MAX, config.R5_HIST_BIN
+        with db.conn:
+            db.conn.executemany("INSERT INTO champ_first VALUES (?, ?, NULL, ?, 0)", [(at, top + 5 * w, at), (at, top, at)])
+        cg = M.champ_games(db.conn)
+        assert cg.hist[-1] == (top, 2), ("꼬리를 마지막 칸에 안 모았다", cg.hist[-1])
+        assert sum(n for _lo, n in cg.hist) == cg.n == 22
+        assert len(cg.hist) == top // w + 1, len(cg.hist)
+        assert cg.by_value[-1][0] is None and cg.by_value[-1][1] == 2, "구단가치 모르는 사람이 '모름' 칸에 없다"
+    using(body)
+
+
+def test_reward_board_by_team_color_and_withdrawal():
+    """R6 팀컬러별 100판당 — 마지막 스냅숏 팀컬러 · 빈 이름·"-"·스냅숏에 없는 사람은 뺀다 · 인원 하한 K11_MIN_PER_BAND ·
+    동의 철회(fc_games 지움) 뒤 바로 빈다(캐시 없음 — 3회차 M1)."""
+    n = config.K11_MIN_PER_BAND
+    at = "2026-09-28T09:00:00"
+
+    def body(db):
+        rows = [person(i, i, color="A") for i in range(1, n + 1)]
+        rows += [person(100 + i, 100 + i, color="B") for i in range(n - 1)]
+        rows += [person(300, 300, color="-"), person(301, 301, color="")]
+        db.snap(T0, rows)
+        rc._set_state(db.conn, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": at}),
+                      **{rc.FC_STARTED + at: at, rc.FCG_STARTED + at: at})
+        sns = [r["sn"] for r in rows] + [999]                         # 999 = 마지막 스냅숏에 없음
+        with db.conn:
+            db.conn.executemany("INSERT INTO fc_season VALUES (?, ?, 1500, 2000, 0, 1, ?, 0)", [(at, sn, at) for sn in sns])
+            db.conn.executemany("INSERT INTO fc_games VALUES (?, ?, 100, 200, 0, 1, ?, 0)", [(at, sn, at) for sn in sns])
+        b = M.reward_board(db.conn)
+        got = [(x.label, x.users, x.median) for x in b.by_team_color]
+        assert got == [("A", n, 1375.0), ("B", n - 1, None)], got
+        with db.conn:
+            db.conn.execute("DELETE FROM fc_games")
+        b = M.reward_board(db.conn)
+        assert b.by_team_color == [] and b.state == "empty", "철회 뒤에도 옛 값 — 캐시했다"
+    using(body)
+
+
+def test_top3_carries_formation_color_value():
+    def body(db):
+        db.snap(T0, [person(1, 1, form="4-1-2-3", color="맨유", value=12345), person(2, 2), person(3, 3)])
+        c = M.top3(db.conn)[0]
+        assert (c.formation, c.team_color, c.value) == ("4-1-2-3", "맨유", 12345), c
     using(body)
 
 

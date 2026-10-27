@@ -798,9 +798,9 @@ def _show_widget(wd) -> None:
         _app.processEvents()
 
 
-def _check_metric_lists(lists) -> None:
+def _check_metric_lists(lists, narrow: int = 200) -> None:
     """67 R0 — 지표 줄 목록이 1280×720 · 작은 화면 · 큰 창에서 이름·칸이 안 잘리나(보조 글은 잘려도 툴팁).
-    빈 목록은 안 잰다 · 좁은 폭에서는 잘려야 한다(검사가 무언가를 재는지)."""
+    빈 목록은 안 잰다 · 좁은 폭(narrow)에서는 잘려야 한다(검사가 무언가를 재는지 — 짧은 줄 목록은 더 좁게)."""
     small = app_main.initial_window(1280, 688).min_size
     lists = [x for x in lists if x.rowCount()]
     assert lists, "잴 목록이 없다"
@@ -814,7 +814,7 @@ def _check_metric_lists(lists) -> None:
                 bad = [(r.name, dg.overflow(r, w, lst.font())) for r in lst.all_rows() if dg.overflow(r, w, lst.font())]
                 assert not bad, (size, w, bad[:3])
         for lst in lists:
-            assert lst.itemDelegate().overflow(lst.all_rows()[0], 200, lst.font()), "좁은 폭에서도 넘침이 0 — overflow 가 아무것도 안 잰다"
+            assert lst.itemDelegate().overflow(lst.all_rows()[0], narrow, lst.font()), "좁은 폭에서도 넘침이 0 — overflow 가 아무것도 안 잰다"
     finally:
         _win.setMinimumSize(*app_main.MIN_WINDOW)
         _at_size(1600, 900)
@@ -827,7 +827,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 44, len(tables)   # 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 39, len(tables)   # 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -10177,8 +10177,11 @@ def test_rank_meta_tabs_draw_and_fit():
         assert {r.key for r in _win.tier_mean_data.tables["formation"]} == {"4백", "5백"}
         _win.cb_tmeans_form.setCurrentIndex(0)
         assert _win.wr_elo.ready and _win.tbl_wrelo.rowCount() == len(config.N10_BINS) + 1
-        assert _win.weekly_data.day_wins and _win.weekly_tables["wins"].rowCount() == config.WEEKLY_TOP_N
-        assert _win.weekly_tables["extremes"].rowCount() == 6
+        assert _win.weekly_data.day_wins and _win.weekly_lists["wins"].rowCount() == config.WEEKLY_TOP_N
+        assert _win.weekly_lists["extremes"].rowCount() == 6
+        w0 = _win.weekly_data.day_wins[0]                     # 67 R4 — 줄 목록 칸 = 승·무·패 · 카드 = 그 1위
+        assert [c.text for c in _win.weekly_lists["wins"].row(0).cells] == [f"{w0[2]:,}", f"{w0[3]:,}", f"{w0[4]:,}"]
+        assert _win.weekly_cards["day_win"].value.text() == w0[0]
         # B1 메타 변화도 묶기 콤보를 따른다(N6)
         _win._go_page("랭킹 추이", "메타 변화")
         _win._invalidate("metatrend")
@@ -10192,7 +10195,8 @@ def test_rank_meta_tabs_draw_and_fit():
         new = [t for t in _win.findChildren(widgets.FitTableWidget)
                if any(_win._page_tabs[p].page(i).isAncestorOf(t) for p in ("메타 분석", "랭킹 추이")
                       for i in range(len(_win._page_tabs[p].names())))]
-        assert len([t for t in new if t.rowCount()]) >= 7, len(new)
+        filled = [t for t in new if t.rowCount()]
+        assert len(filled) >= 6, (len(filled), len(new))   # 6 = 67 R4 주간 요약 넷이 줄 목록으로 빠짐(전엔 7)
         _check_elisions(new)
         _check_metric_lists([_win.tc_board_list, _win.vbins_list, _win.vcross_list,
                              _win.meta_lists["team_color"], _win.meta_lists["formation"]])
@@ -10267,8 +10271,14 @@ def test_top3_cards_and_reward_board_tab():
         _win._invalidate("ranktrend")
         cards = _win.top3_data
         assert [c.rank for c in cards] == [1, 2, 3] and _win.top3_box.isVisibleTo(_win), cards
-        assert _win.top3_cards[0][0].title.text() == "1위 m1", _win.top3_cards[0][0].title.text()
-        assert "하루 0.0판" in _win.top3_cards[0][1].text(), _win.top3_cards[0][1].text()   # 지어낸 스냅숏은 승무패가 안 는다
+        s0 = _win.top3_cards[0]
+        assert s0.card.title.text() == "1위 m1", s0.card.title.text()
+        assert "하루 0.0판" in s0.body.text(), s0.body.text()   # 지어낸 스냅숏은 승무패가 안 는다
+        # 67 R9 — 승무패 세 칸 막대 · 표본 흐림 규칙(property) · 미니 축구장(포메이션 4-4-2)
+        assert s0.wdl.counts() == (cards[0].win, cards[0].draw, cards[0].lose)
+        n0 = cards[0].win + cards[0].draw + cards[0].lose
+        assert s0.wdl.property("games") == n0 and s0.wdl.property("weak") == (n0 < app_main.core.MIN_COND)
+        assert cards[0].formation == "4-4-2" and not s0.pitch.isHidden() and "4-4-2" in s0.card.toolTip()
 
         _win._go_page("랭킹 추이", "보상")
         assert _win._current_view() == ("랭킹 추이", "보상")
@@ -10329,6 +10339,105 @@ def test_top3_cards_and_reward_board_tab():
         env.write(notice=config.FC_GAMES_NOTICE_VERSION - 1)     # 판수 안내 전 동의자 — 남들 값을 안 읽는다
         _win._invalidate("rewards_rank")
         assert _win.reward_board is None and t.rowCount() == 0, "안내 13 전인데 보상판을 읽었다"
+
+
+def test_rank_cards_follow_one_source_67():
+    """67 ③ — 주간 요약 카드(R4) · 달성 판수(R5) · 보상(R6) · 시즌 말 컷(R8). 카드마다 같은 재료의 같은 값(⑧):
+    20위 카드 = 200위 카드와 같은 두 스냅숏(M6) · 메타 카드 = [메타 변화] 첫 줄(M5) · 최다 보상 = R6 구간 최고 ·
+    달성 판수 = 대시보드 H5 · R8 카드 둘 = 같은 마지막 원본(M7) · 예상 컷·계산 줄 = 예측 값 그대로 · 안 잘림."""
+    import json
+    import rankmeta
+    with _MetaEnv():
+        _meta_db_moving(days=8)
+        at = "2026-09-28T09:00:00"
+        c = rankcollect.open_rank_db()
+        try:
+            rankcollect._set_state(c, person_season=json.dumps({"seq": 1, "start": "2026-09-28", "at": at}),
+                                   **{rankcollect.FC_STARTED + at: at, rankcollect.FCG_STARTED + at: at})
+            with c:
+                sns = [900 + i for i in range(1, 121)]                 # 1~120위 — 팀컬러 여섯 × 20명 · 구단가치 낮은 칸 셋
+                # 팀마다 FC 를 제곱으로 벌린다 — 대칭이면 팀 중앙값의 평균 = 전체 중앙값이라 기준선(base) 변이가 초록이었다
+                c.executemany("INSERT INTO fc_season VALUES (?, ?, ?, ?, 0, 1, ?, 0)",
+                              [(at, sn, 1000 + 10 * (sn % 6) ** 2, 2000 + 20 * (sn % 6) ** 2, at) for sn in sns])
+                c.executemany("INSERT INTO fc_games VALUES (?, ?, 100, 200, 0, 1, ?, 0)", [(at, sn, at) for sn in sns])
+                c.executemany("INSERT INTO champ_first VALUES (?, ?, ?, ?, 0)",
+                              [(at, g, (g // 100) * 10 ** 9, at) for g in (150, 320, 480, 650, 900, 1300, 5000)])
+            snaps = rankcollect._season_snaps(c)
+            # 7일 전 스냅숏의 20위만 50점 낮춘다 — 20위 카드가 정말 그 시점을 읽는지(같은 값이면 – 라 못 잰다)
+            with c:
+                c.execute("UPDATE snapshot_rows SET elo = elo - 50 WHERE snapshot_id = ? AND rank = 20", (snaps[0]["id"],))
+        finally:
+            c.close()
+        rankmeta.clear_cache()
+        _win._go_page("랭킹 추이", "주간 요약")
+        _win._invalidate("weekly")
+        res = _win.weekly_data
+        assert res.cmp_id == snaps[0]["id"] and res.base_id == snaps[-1]["id"], (res.cmp_id, res.base_id)
+        rc = rankcollect.open_rank_db_ro()
+        try:
+            now20, then20 = rankmeta.rank_cut(rc, 20, res.base_id), rankmeta.rank_cut(rc, 20, res.cmp_id)
+            board = rankmeta.reward_board(rc)
+            head = rankmeta.club_head(rc, None)
+            last = rankmeta.last_raw_id(rc)
+            r8 = {r: rankmeta.rank_cut(rc, r, last) for r in (20, 200, 1000)}
+        finally:
+            rc.close()
+        assert now20 is not None and then20 is not None and now20 - then20 > 50, (now20, then20)   # 낮춘 50 + 그 사이 오름
+        card = _win.weekly_cards["cut_top"]
+        assert card.value.text() == f"{now20:,.0f}점" and f"{then20:,.0f}점" in card.sub.text(), (card.value.text(), card.sub.text())
+        assert "▲" in card.delta.text() and card.delta.property("delta_color") == T.TEXT_DIM, "컷 변화에 좋고 나쁨 색을 칠했다"
+        c200 = next(x for x in res.cuts if x[0] == 200)
+        assert _win.weekly_cards["cut_200"].value.text() == f"{c200[2]:,.0f}점"
+        assert _win.weekly_cards["riser"].value.text() == res.risers[0][0]
+        best = max((b for b in board.by_value if b.bin is not None and b.median is not None), key=lambda b: b.median)
+        assert _win.weekly_cards["reward"].value.text() == _win._bin_label(best.bin), "최다 보상 카드가 R6 구간 최고와 다르다"
+        weekly_top = dict(_win.weekly_meta_top)
+        _check_metric_lists([_win.weekly_lists[k] for k in ("risers", "wins", "extremes")], narrow=80)
+        # M5 — 메타 카드 = [메타 변화] 기본값(구간 첫 칸 · 그대로)의 첫 줄
+        _win._go_page("랭킹 추이", "메타 변화")
+        _win.cb_meta_tier.setCurrentIndex(0)
+        _win.cb_meta_form.setCurrentIndex(0)
+        _win._invalidate("metatrend")
+        for kind in ("team_color", "formation"):
+            assert weekly_top.get(kind) == _win.meta_lists[kind].row(0).key, (kind, weekly_top, _win.meta_lists[kind].row(0).key)
+        # R5 — 대시보드 H5 와 같은 행·같은 중앙값 · 꼬리(5000판)는 마지막 칸
+        _win._go_page("랭킹 추이", "추이")
+        _win._invalidate("ranktrend")
+        cg = _win.champ_data
+        assert cg.n == head.champ_n == 7 and cg.p50 == head.champ_median == 650, (cg.n, cg.p50, head.champ_median)
+        assert cg.hist[-1] == (config.R5_HIST_MAX, 1) and "중앙값 650판" in _win.lb_champ_note.text(), _win.lb_champ_note.text()
+        assert _win.champ_value_list.rowCount() == len(cg.by_value) and _win.champ_value_list.base == 650
+        assert not _win.champ_value_list.higher_better, "달성 판수는 적을수록 좋다(3회차 M8)"
+        # R6 — 카드 = 보상판 전체 · 구단가치 막대 = by_value · 팀컬러 여섯(인원 20) = 전부 펼침
+        _win._go_page("랭킹 추이", "보상")
+        _win._invalidate("rewards_rank")
+        b = _win.reward_board
+        assert _win.rboard_cards["users"].value.text() == f"{b.users:,}명" == f"{len(sns):,}명"
+        assert _win.rboard_cards["median"].value.text() == f"{b.overall.median:,.0f} FC"
+        tc = [r.name for r in _win.rboard_tc_list.rows()]
+        want = [x.label for x in sorted((x for x in b.by_team_color if x.median is not None), key=lambda x: (-x.median, x.label))]
+        assert tc == want and len(tc) == 6, (tc, want)
+        assert _win.rboard_tc_list.base == b.overall.median and _win.rboard_tc_more.isHidden(), "여섯 개뿐인데 [전체 보기]"
+        assert any(r.value == best.median for r in _win.rboard_value_list.rows()), "구단가치 막대에 카드 값이 없다"
+        # R8 — 카드 둘은 같은 마지막 원본(M7) · 예상 컷·계산 줄은 예측 값 그대로
+        _win._go_page("승률 그래프", "점수·예측")
+        pr = app_main.core.Prediction(True, p={200: 0.4, 1000: 0.9}, lo=150, hi=420, cuts={200: (4510.0, 4480.0, 4540.0)},
+                                      need=60.0, pace=30.0, end_text="11/12(공지)")
+        _win._render_park(pr)
+        cards = _win.park_cards
+        assert cards["cut_200"].value.text() == f"{r8[200]:,.0f}점" and cards["cut_top"].value.text() == f"{r8[20]:,.0f}점"
+        assert _win.park_pred.value.text() == "4,510점" and "4,480~4,540" in _win.park_pred.sub.text()
+        assert "4,450" in _win.lb_park_margin.text() and "60점 더 필요" in _win.lb_park_margin.text(), _win.lb_park_margin.text()
+        row0 = _win.park_seasons.row(0)
+        assert r8[1000] is None, "픽스처는 300명 — 1,000위 칸이 '—' 인지 아래에서 본다"
+        assert row0.name == "이번 시즌" and [x.text for x in row0.cells] == [f"{r8[200]:,.0f}", "—"], [x.text for x in row0.cells]
+        assert not _win.park_method.isHidden() and "4,510" in _win.lb_park_method.text()
+        _win._render_park(app_main.core.Prediction(False, "랭킹 기록을 모으는 중입니다"))
+        assert _win.park_pred.value.text() == "—" and _win.park_method.isHidden()
+        _check_metric_lists([_win.park_seasons], narrow=80)
+    _win._render_predict()
+    _win._go_page("랭킹 추이", "추이")
+    _win._go_page("대시보드")
 
 
 def test_teamcolor_kind_and_minor_filters_are_shared():
@@ -10442,6 +10551,10 @@ def test_predict_check_tab_renders_and_fits():
         by_day = {t.item(r, 1).text(): [t.item(r, k).text() for k in range(t.columnCount())] for r in range(2)}
         assert by_day["2026-08-01"][5:] == ["120위", "실제 200위 안 · 범위 안"], by_day
         assert by_day["2026-08-02"][5:] == ["120위", "실제 200위 안 · 범위 밖"], by_day
+        # 67 R8 판정 칸 태그 꼴 — 범위 안 = 좋음 · 범위 밖 = 주의(글자 색)
+        from PyQt6.QtGui import QColor
+        tone = {t.item(r, 1).text(): t.item(r, 6).foreground().color().name() for r in range(2)}
+        assert tone == {"2026-08-01": QColor(T.GOOD).name(), "2026-08-02": QColor(T.WARN).name()}, tone
         key = f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}"
         store.set_trade_state(c, **{key: json.dumps({"state": "not_found", "first": _date.today().isoformat()})})
         _win._invalidate("predcheck")
