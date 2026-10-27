@@ -1111,6 +1111,39 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | ③ | R4 주간 요약 · R5 달성 판수 · R6 보상 · R8 주차 · R9 top3 | `champ_games(...).p50 == club_head(...).champ_median` 단언 · 동의 철회 뒤 R6 이 바로 빈다 · R5 는 철회 뒤에도 H5 와 같은 값(캐시 없음 · 3회차 M1) · `rank_cut` 손 테스트 · 달성 판수 손 테스트(빠른·느린 10% 경계) | 높음 |
 | ④ | R11 짝 없는 화면 · R12 남은 것 · 3.1.1 공개 준비(merge · CHANGELOG · README · CLAUDE.md · `release.py` — 공개 명령은 사용자) | `TOOL_FILES` 셋 diff 0줄 · 전 화면 PNG(두 테마) | 중간~높음 |
 
+### 조각 ① 첫 커밋 표 (2026-10-27 · 브랜치 `3d86740` 위에서 grep) — **조각 ① 끝**(전체 테스트 28/28 · 손 변이 16/16 · 실데이터 rank.db 사본 그림 1280·1600 잘림 0 · exe 빌드) · 다음은 ②
+
+**진입점 표 첫 셋**:
+
+| 무엇 | grep 결과 | 이 조각 |
+|---|---|---|
+| `win_rate_bar(` (app_main · dashboard · widgets — 정의 빼고) | app_main 5줄(4497 · 4586 · 4741 · 5389 · 6889) · dashboard 0 · widgets 0 | 안 건드림(6889 는 ③ R9 · 나머지 넷은 ④ R11 — 3회차 M10) |
+| 새 탭·키 | `NAV` 의 `Tabs("rankmeta"` 첫 칸 `("팀컬러", "_build_tc_board_tab")` · `VIEW_OF_KEY["tcboard"]` · `_renderers["tcboard"]` · `TC_FILTER_KEYS` · `RANK_VIEW_KEYS` — 옛 키 `valuescore` 는 0줄 | 다섯 자리 한 줄씩 · 저장된 탭 "가성비" 는 `OLD_TAB_NAMES` 로 새 탭(`_restore_view` 는 메뉴 이름만 옮겼다 — 탭 대응이 없어 한 줄 더함) |
+| rank.db 를 읽는 새 함수 | `rankmeta.team_color_board`(+ `TcBoard`·`TcBoardRow`) · `core_api` import·`__all__` | 새 SQL 0(묶기만 — `value_score`·`day_winrate` 를 부른다) · `_cached` 안(사람별 표를 안 읽는다) · `test_rankmeta` 예산 표·경계 표에 한 줄 |
+
+**옛 위젯 이름 → 새 부품**(3회차 M9 — 이 조각 빌더 넷이 만드는 `self.` 이름 전부 · app_main/test_ui_smoke 줄 수는 고치기 전):
+
+| 빌더 | 옛 이름(app · test) | 새 이름 | 단언 옮긴 곳 |
+|---|---|---|---|
+| `_build_value_score_tab` → `_build_tc_board_tab` | `tbl_vscore`(7 · 2) · `lb_vscore_note`(4 · 1) · `cb_vscore_tier`(4 · 0) · `value_scores`(2 · 1) | `tc_board_list` · `lb_tcboard_note` · `cb_tcboard_tier`(3회차 M3 — 콤보 남김) · `tc_board` · 새 `ed_tcboard`(검색) · `cb_tcboard_sort` | `test_rank_meta_tabs_draw_and_fit`(줄 수 6 → 묶은 값이 [하루 승률]·`value_score` 와 같다 · 정렬 · 검색) · `test_teamcolor_kind_and_minor_filters_are_shared`(줄 이름) |
+| `_build_value_bins_tab` | `tbl_vbins`(5 · 1) · `tbl_vcross`(10 · 2) · `lb_vbins_note`(4 · 1) · `value_bin_data`(2 · 0) | `vbins_list` · `vcross_list` + `lb_vcross_title`(구간 하나씩) · 이름 그대로 둘 | 같은 테스트 — 구간 8줄 · 구간 0·3 을 골라 옛 `cross` 의 그 열과 줄·값이 같다 |
+| `_build_meta_trend_tab` | `meta_tables`(4 · 2) · `meta_titles` · `lb_meta_note` · `cb_meta_tier` · `cb_meta_form` · `meta_trend` | `meta_lists` · 나머지 그대로 | `test_rank_trend_has_three_tabs_and_meta_tabs_draw`(줄 수 · 사용 증가 순 · 칸 값 · 변화 색) |
+| `_build_position_trait_tab` | `tbl_traits`(6 · 9) 외 8개 | 그대로 + 새 `trait_slots` · `trait_table_box`(표는 접기 아래) | `test_trait_tab_renders_usage`(자리 줄 == 표 첫 줄 · 흐림 · 접힘 · 표는 펼쳐서 잘림 검사) |
+
+**1만 줄 거르기 시간**(이 PC · offscreen · 칸 일곱 · 다섯 번 중 최대): 줄 넣기(칸 폭 재기 포함) 0.235초 · 거르기 0.010초 · 검색 바꾸기 0.007초 · 보이는 줄 그리기 0.006초 — 전부 0.3초 안. 실제 팀컬러 목록은 800줄 안팎이라 줄 넣기는 그 1/12. `team_color_board` 첫 계산(지어낸 1만 행 × 14스냅숏 · 캐시 없음) CPU 0.062초(`test_rankmeta` 예산 표).
+
+**손 변이 16건 — 16 잡힘**(묶기 셋 · 부품 넷 · 화면 아홉). 처음 돌렸을 때 **셋이 초록**이었다: 하루 승률 정렬 · 사용 증가 순은 픽스처의 팀컬러가 값이 전부 같아(점유율·하루 승률·변화 0) 정렬 단언이 아무것도 못 쟀다 → 정렬을 `tc_board_sort`·`meta_rise_order` 로 떼고 지어낸 줄로 잰다 · 넘침 검사 변이는 원문(CRLF)이 안 맞아 못 심었던 것.
+
+표 개수 단언 `test_no_table_elides_at_min_or_default_size` 54 → 49(표 다섯이 줄 목록으로). 줄 목록 잘림은 새 `_check_metric_lists`(1280×720 · 작은 화면 · 1600×900 · 큰 창 · 좁은 폭에선 잘려야 FAIL 아님).
+
+**이 조각에서 계획과 다르게 한 것**:
+- `team_color_board` 는 줄 목록이 아니라 `TcBoard`(시각 · 점수 냈나 · 하루 쌍 있나 · 점유율 분모 + 줄)를 돌려준다 — 안내 줄이 그 넷을 읽는다.
+- 칸 일곱: 가성비 · 평균 점수 · **시즌 승률**(지운 [가성비] 표에 있던 칸 — 빼면 정보가 사라진다) · 하루 승률 · 구단가치 중앙값 · 챔스 이상 · 점유율. 승률 칸 라벨이 식("시즌 승÷(승+패)" · "하루 승÷(승+패)")이라 3회차 M3 의 "(어제 순위 기준)" 은 라벨 대신 정렬 이름 · 안내 줄 · 칸 툴팁에 둔다(라벨에 둘 다 넣으면 칸 폭이 1280 에서 모자라다).
+- 점유율 "크게" 는 글자 크기를 안 키우고 강조 색 + 줄 바탕 채움(가장 큰 팀컬러 = 100%)으로 — 칸 높이가 줄마다 같아야 칸 폭 맞춤이 단순하다.
+- 줄을 두 번 누르면 **지금 효과 창**(`_open_teamcolor_effect`)을 연다 — 넓히는 건 ② R2. "(구분 전)" 줄은 효과 창이 못 찾을 수 있다(1회차 [중] 후보 고르기는 ②).
+- 줄 바탕 채움 색 `T.ROW_FILL`(PANEL ← ACCENT_FILL 12%) — 18% 면 밝은 쪽 흐린 글자 4.12 로 미달이라 낮췄고, 대비 표에 행을 더했다(18% 로 되돌리면 FAIL).
+- 구단가치 탭의 구간 × 팀컬러 넓은 표는 **구간을 고르면 그 구간 팀컬러 줄 목록**으로(평균 점수 상위는 제목 줄) — 한눈에 아홉 구간을 견주던 표가 사라지는 대가. 포지션 특성 자리 줄은 종류마다 1위 하나(그림 없이 % + 이름 · 그림은 접힌 표에).
+
 ### ③ 환경 행렬
 
 | 환경 | 볼 것 | 상태 |

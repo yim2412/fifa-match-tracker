@@ -787,6 +787,38 @@ def _check_elisions(tables) -> None:
         _at_size(1600, 900)
 
 
+def _show_widget(wd) -> None:
+    """그 위젯이 든 (메뉴, 탭)을 연다 — 숨은 페이지는 폭이 안 잡힌다."""
+    page = next((n for n, i in _win._page_index.items() if _win.pages.widget(i).isAncestorOf(wd)), None)
+    if page:
+        tabs = _win._page_tabs.get(page)
+        tab = next((tabs.names()[i] for i in range(len(tabs.names())) if tabs.page(i).isAncestorOf(wd)), None) if tabs else None
+        _win._go_page(page, tab)
+        _app.processEvents()
+
+
+def _check_metric_lists(lists) -> None:
+    """67 R0 — 지표 줄 목록이 1280×720 · 작은 화면 · 큰 창에서 이름·칸이 안 잘리나(보조 글은 잘려도 툴팁).
+    빈 목록은 안 잰다 · 좁은 폭에서는 잘려야 한다(검사가 무언가를 재는지)."""
+    small = app_main.initial_window(1280, 688).min_size
+    lists = [x for x in lists if x.rowCount()]
+    assert lists, "잴 목록이 없다"
+    try:
+        for size in (app_main.MIN_WINDOW, small, (1600, 900), app_main.LARGE_WINDOW):
+            _win.setMinimumSize(*small)
+            _at_size(*size)
+            for lst in lists:
+                _show_widget(lst)
+                w, dg = lst.viewport().width(), lst.itemDelegate()
+                bad = [(r.name, dg.overflow(r, w, lst.font())) for r in lst.all_rows() if dg.overflow(r, w, lst.font())]
+                assert not bad, (size, w, bad[:3])
+        for lst in lists:
+            assert lst.itemDelegate().overflow(lst.all_rows()[0], 200, lst.font()), "좁은 폭에서도 넘침이 0 — overflow 가 아무것도 안 잰다"
+    finally:
+        _win.setMinimumSize(*app_main.MIN_WINDOW)
+        _at_size(1600, 900)
+
+
 def test_no_table_elides_at_min_or_default_size():
     # 예전 기본 표는 둘째 열부터 균등 분할이라 '선수 B'·'기간'·(1280 폭에서) '스코어' 가
     # "…" 로 잘렸다. 헤더도 잰다 — 채우는 동안 정렬이 꺼져 있어 화살표 자리를 빼고
@@ -794,7 +826,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 54, len(tables)   # 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 49, len(tables)   # 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -4304,6 +4336,13 @@ def test_restore_old_page_names():
             _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                             {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
             assert _win._current_view() == want, (old, _win._current_view())
+        # 67 R1 — 지운 탭 이름(가성비)을 기억한 사람은 같은 메뉴의 새 탭(팀컬러)으로(OLD_TAB_NAMES)
+        _win._go_page("메타 분석", "구단가치")
+        _win._ouid = ""
+        _win._restore = {"page": "메타 분석", "tabs": {_win._tab_sid["메타 분석"]: "가성비"}}
+        _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert _win._current_view() == ("메타 분석", "팀컬러"), _win._current_view()
     finally:
         _win._restore = {}
         _win._page_tabs["선수 지표"].set_current("지표", emit=False)
@@ -6668,6 +6707,8 @@ def _palette_contrast_failures(p: dict) -> list:
         pairs.append((key, p[key], "칩 바탕", T.blend(p["PANEL"], p[key], T.CHIP_SOFT_MIX)))
     pairs += [("ON_PRIMARY", p["ON_PRIMARY"], k, p[k]) for k in ("PRIMARY", "PRIMARY_HOVER")]
     pairs += [(k, p[k], "ACCENT_SOFT", p["ACCENT_SOFT"]) for k in ("ACCENT", "TEXT")]
+    for key in ("TEXT", "TEXT_DIM", "GOOD", "BAD"):                           # 지표 줄 바탕 채움(67 R0) 위 글자
+        pairs.append((key, p[key], "줄 채움", T.blend(p["PANEL"], p["ACCENT_FILL"], T.ROW_FILL_MIX)))
     for bar in ("WIN_BAR", "LOSE_BAR"):                                       # 위에 글자를 겹치는 막대 — 꽉 찬 것·흐린 것
         pairs.append(("TEXT", p["TEXT"], bar, p[bar]))
         pairs.append(("TEXT", p["TEXT"], f"흐린 {bar}", T.blend(p["PANEL_2"], p[bar], T.WEAK_MIX)))
@@ -6685,6 +6726,13 @@ def test_palette_text_contrast():
     assert ("GOOD", "PANEL", 3.65) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
     planted = dict(T._PALETTES["dark"], WIN_BAR=T._PALETTES["dark"]["GOOD_FILL"])
     assert any(b == "WIN_BAR" for _, b, _ in _palette_contrast_failures(planted))
+    # 줄 채움 행도 잰다 — 섞는 비율을 0.18 로 올리면 밝은 쪽 흐린 글자가 4.12 로 걸려야 한다(67 R0)
+    keep = T.ROW_FILL_MIX
+    try:
+        T.ROW_FILL_MIX = 0.18
+        assert ("TEXT_DIM", "줄 채움", 4.12) in _palette_contrast_failures(T._PALETTES["light"])
+    finally:
+        T.ROW_FILL_MIX = keep
     # 칩 행도 잰다 — 밝은 쪽 GK 칩을 기준 값(#bb4d00 · 칸 위 4.14)으로 되돌리면 걸려야 한다
     planted = dict(T._PALETTES["light"], CHIP_GK="#bb4d00")
     assert any(f == "CHIP_GK" for f, _, _ in _palette_contrast_failures(planted)), _palette_contrast_failures(planted)
@@ -9257,8 +9305,21 @@ def test_trait_tab_renders_usage():
             assert _win.trait_usage.formation == "4-4-2", "다시 그렸더니 고른 포메이션이 풀렸다"
             few = _win.tbl_traits.item(0, 1).foreground().color().name()
             assert few == app_main.QColor(app_main.T.TEXT_DIM).name(), "표본 미달인데 흐리지 않았다"
+            assert all(r.dim for r in _win.trait_slots.rows()), "표본 미달인데 자리 줄을 흐리지 않았다"
             cb.setCurrentIndex(0)
+            # 67 R7 — 자리마다 종류별 1위 한 줄(표 첫 줄과 같은 값) · 표는 접기 아래(기본 접힘)
+            slots = _win.trait_slots.rows()
+            u = _win.trait_usage
+            assert len(slots) == 2 and all(r.dim == (u.thin or u.few) for r in slots), slots
+            assert slots[0].name + f" · {slots[0].sub}" == _win.tbl_traits.item(0, 0).text(), (slots[0], _win.tbl_traits.item(0, 0).text())
+            for c, col in zip(slots[0].cells, range(1, 5)):
+                it = _win.tbl_traits.item(0, col)
+                assert c.text == it.text() and c.tip == it.data(app_main.NAME_ROLE), (c, it.text())
+            assert not _win.trait_table_box.is_open()
+            _check_metric_lists([_win.trait_slots])
+            _win.trait_table_box.head.setChecked(True)
             _check_elisions([_win.tbl_traits])   # PyQt 5 — 채운 표(가장 긴 이름)가 1280×720 에서 안 잘린다
+            _win.trait_table_box.head.setChecked(False)
             # 배선 — 로더가 한 사람을 저장하면(person) 보고 있는 탭이 다시 그린다 · 바퀴가 끝나면(done) 멈춘 까닭이 뜬다
             _trait_seed([(903, "4-2-3-1", [25, 0])])
             _win._on_trait_person()
@@ -9879,13 +9940,24 @@ def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
         _win._go_page("랭킹 추이", "메타 변화")
         assert _win._current_view() == ("랭킹 추이", "메타 변화")
         _win._invalidate("metatrend")
-        assert "모으는 중" in _win.lb_meta_note.text() and _win.meta_tables["team_color"].rowCount() == 0
+        assert "모으는 중" in _win.lb_meta_note.text() and _win.meta_lists["team_color"].rowCount() == 0
         assert not config.RANK_DB_PATH.exists(), "그리다 rank.db 를 만들었다"
         _meta_db()
         _win._invalidate("metatrend")
         t = _win.meta_trend
         assert not t.collecting and round(t.days) == 7, t
-        assert _win.meta_tables["team_color"].rowCount() == 2 and "7일 전 대비" in _win.meta_titles["team_color"].text()
+        lst = _win.meta_lists["team_color"]
+        assert lst.rowCount() == 2 and "7일 전 대비" in _win.meta_titles["team_color"].text()
+        # 67 R7 — 사용 증가 순 · 변화 칸 색 = 부호(▲ 쪽 좋음 색) · 지금·그때 값은 집계 그대로
+        by_key = {r.key: r for r in t.rows["team_color"]}
+        assert [r.key for r in lst.rows()] == [r.key for r in _win.meta_rise_order(t.rows["team_color"])]
+        from types import SimpleNamespace as NS       # 픽스처 둘은 변화가 같아(0) 순서를 못 잰다 — 지어낸 줄로
+        fake = [NS(key="a", diff_pp=-1.0, now_n=50), NS(key="b", diff_pp=2.5, now_n=10), NS(key="c", diff_pp=2.5, now_n=30)]
+        assert [r.key for r in _win.meta_rise_order(fake)] == ["c", "b", "a"]
+        for r in lst.rows():
+            src = by_key[r.key]
+            assert [c.text for c in r.cells] == [f"{src.now_pct:.1f}%", f"{src.then_pct:.1f}%", f"{src.diff_pp:+.1f}%p"]
+            assert lst.metric_delegate.colors(r)["cell2"] == app_main.delta_color(src.diff_pp)
         assert "합쳐서" in _win.lb_meta_note.text(), "이름이 같은 팀컬러를 합친다는 안내가 없다"
         _win._go_page("랭킹 추이", "점수 분포")
         _win._invalidate("elodist")                    # 앱에선 회차 끝(_on_rank_collect_outcome)이 낡음 표시를 한다
@@ -9918,7 +9990,7 @@ def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
 
 # ── 2.4.1 랭커 메타 ② 스냅숏 읽기 — 메타 분석 탭 다섯 · 주간 요약 · 순위 변동 · 카드별 ─────────────────────
 
-META_TABS = (("메타 분석", "하루 승률", "daywr", "lb_daywr_note"), ("메타 분석", "가성비", "valuescore", "lb_vscore_note"),
+META_TABS = (("메타 분석", "하루 승률", "daywr", "lb_daywr_note"), ("메타 분석", "팀컬러", "tcboard", "lb_tcboard_note"),
              ("메타 분석", "구단가치", "valuebins", "lb_vbins_note"), ("메타 분석", "구간 평균", "tiermeans", "lb_tmeans_note"),
              ("메타 분석", "승률→점수", "wrelo", "lb_wrelo_note"), ("랭킹 추이", "주간 요약", "weekly", "lb_weekly_note"))
 
@@ -9962,9 +10034,48 @@ def test_rank_meta_tabs_draw_and_fit():
             _win._invalidate(key)
         assert _win.day_wr.ready and _win.daywr_tables["team_color"].rowCount() == 6, _win.day_wr
         assert _win.daywr_tables["formation"].rowCount() == 3
-        assert _win.value_scores.scored and _win.tbl_vscore.rowCount() == 6
-        assert _win.tbl_vbins.rowCount() == 8 and _win.tbl_vcross.rowCount() == 6
-        assert _win.tbl_vcross.columnCount() == 2 + 8
+        # 67 R1 팀컬러 목록 — 가성비·하루 승률을 묶기만(⑧ R1 × [하루 승률] — 같은 팀컬러 같은 숫자)
+        b = _win.tc_board
+        assert b.scored and b.day_ready and _win.tc_board_list.rowCount() == 6, b
+        assert abs(sum(r.share for r in b.rows) - 100) < 1e-6 and b.total == 300
+        day = {r.key: r for r in _win.day_wr.tables["team_color"]}
+        vs = {r.key: r for r in _win._rank_read(lambda c: rankmeta.value_score(c, 10000)).rows}
+        for r in b.rows:
+            assert (r.day_rate, r.day_thin) == (day[r.name].rate, day[r.name].thin), r
+            assert (r.score, r.elo, r.rate, r.value, r.champ) == (vs[r.name].score, vs[r.name].elo, vs[r.name].rate,
+                                                                vs[r.name].value, vs[r.name].champ), r
+        row0 = _win.tc_board_list.row(0)
+        assert [c.label for c in row0.cells] == ["가성비", "평균 점수", "시즌 승÷(승+패)", "하루 승÷(승+패)", "구단가치 중앙값",
+                                                 "챔스 이상", "점유율"], row0.cells
+        assert row0.fill == 1.0 and row0.rank == 1
+        # 정렬 — 픽스처 여섯은 값이 다 같아(점유율·하루 승률) 여기선 못 잰다 → 지어낸 줄로(손 변이 10번이 초록이었다)
+        from types import SimpleNamespace as NS
+        mk = lambda k, share, elo, day, thin, score: NS(key=k, share=share, users=int(share), elo=elo, day_rate=day,
+                                                        day_thin=thin, score=score)
+        fake = [mk("a", 30, 3000, 40.0, False, None), mk("b", 20, 3500, 60.0, False, 700), mk("c", 10, 3200, 90.0, True, 500),
+                mk("d", 5, None, 50.0, False, 900)]
+        order = lambda how: [r.key for r in app_main.MainWindow.tc_board_sort(fake, how)]
+        assert order("share") == ["a", "b", "c", "d"] and order("elo") == ["b", "c", "a", "d"]
+        assert order("day") == ["b", "d", "a", "c"], order("day")      # 하루 인원 미달(c)은 아래로
+        assert order("score") == ["d", "b", "c", "a"], order("score")  # 가성비 없는 줄은 아래로
+        _win.cb_tcboard_sort.setCurrentIndex(_win.cb_tcboard_sort.findData("day"))
+        assert [r.key for r in _win.tc_board_list.rows()] == [r.key for r in app_main.MainWindow.tc_board_sort(b.rows, "day")]
+        _win.cb_tcboard_sort.setCurrentIndex(0)
+        _win.ed_tcboard.setText("팀1")
+        assert [r.key for r in _win.tc_board_list.rows()] == ["팀1"]
+        _win.ed_tcboard.setText("")
+        assert _win.tc_board_list.rowCount() == 6
+        # 67 R7 구단가치 — 구간 줄 8 · 고른 구간의 팀컬러(옛 구간 × 팀컬러 표의 한 열)
+        vb = _win.value_bin_data
+        assert _win.vbins_list.rowCount() == 8
+        for i in (0, 3):
+            _win.vbins_list.setCurrentIndex(_win.vbins_list.model().index(i, 0))
+            want = sorted(((c, cells[i]) for c, _n, cells in vb.cross if cells[i] is not None), key=lambda t: (-t[1].users, t[0]))
+            got = _win.vcross_list.rows()
+            assert [r.key for r in got] == [c for c, _x in want], (i, [r.key for r in got])
+            assert [r.cells[0].text for r in got] == [f"{x.share:.0f}%" for _c, x in want]
+            assert _win._bin_label(vb.bins[i]) in _win.lb_vcross_title.text()
+        _win.vbins_list.setCurrentIndex(_win.vbins_list.model().index(0, 0))
         assert _win.tmeans_tables["formation"].rowCount() == 3
         _win.cb_tmeans_form.setCurrentIndex(1)                  # 수비 줄 수
         assert {r.key for r in _win.tier_mean_data.tables["formation"]} == {"4백", "5백"}
@@ -9985,8 +10096,10 @@ def test_rank_meta_tabs_draw_and_fit():
         new = [t for t in _win.findChildren(widgets.FitTableWidget)
                if any(_win._page_tabs[p].page(i).isAncestorOf(t) for p in ("메타 분석", "랭킹 추이")
                       for i in range(len(_win._page_tabs[p].names())))]
-        assert len([t for t in new if t.rowCount()]) >= 12, len(new)
+        assert len([t for t in new if t.rowCount()]) >= 7, len(new)
         _check_elisions(new)
+        _check_metric_lists([_win.tc_board_list, _win.vbins_list, _win.vcross_list,
+                             _win.meta_lists["team_color"], _win.meta_lists["formation"]])
         rankmeta.clear_cache()
     _win._go_page("랭킹 추이", "추이")
     _win._go_page("메타 분석", "하루 승률")
@@ -9998,7 +10111,7 @@ def test_rank_views_invalidate_on_four_paths():
     from types import SimpleNamespace
     W = app_main.MainWindow
     assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
-                                     "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
+                                     "tcboard", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
                                      "traits", "opprank", "predcheck", "rewards_rank"}
     seen = []
     keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
@@ -10129,19 +10242,30 @@ def test_teamcolor_kind_and_minor_filters_are_shared():
         try:
             _meta_db(people=301)                     # 팀A 151명 · 팀B 150명
             config.MINOR_USERS = 151                 # 팀B 만 비주류
-            _win._go_page("메타 분석", "가성비")
-            _win._invalidate("valuescore")
-            names = lambda: sorted(_win.tbl_vscore.item(r, 0).text() for r in range(_win.tbl_vscore.rowCount()))
+            import widgets
+            _win._go_page("메타 분석", "팀컬러")
+            _win._invalidate("tcboard")
+            names = lambda: sorted(r.key for r in _win.tc_board_list.rows())
             assert names() == ["팀A", "팀B"], names()
-            lb, cb, chk = _win._tc_filters[0]
-            assert not chk.isHidden(), "rank.db 가 있는데 비주류 체크를 숨겼다"
-            _win._tc_filters[-1][2].setChecked(True)            # 다른 표의 체크 — 모두 같은 값으로
+            combos = [f for f in _win._tc_filters if not isinstance(f[1], widgets.ChoiceChips)]
+            chips = [f for f in _win._tc_filters if isinstance(f[1], widgets.ChoiceChips)]
+            assert len(chips) == 1 and len(combos) >= 3, (len(chips), len(combos))   # 67 R1 칩 하나 + 콤보(하루 승률·구간 평균·팀컬러 메뉴 …)
+            lb, cb, chk = chips[0]
+            assert not chk.isHidden(), "rank.db 가 있는데 비주류 칩을 숨겼다"
+            combos[-1][2].setChecked(True)                      # 다른 표의 체크 — 칩까지 모두 같은 값으로
             assert all(c.isChecked() for _l, _c, c in _win._tc_filters), "거르기 값이 표마다 갈렸다"
             assert names() == ["팀B"], names()
-            _win._tc_filters[0][2].setChecked(False)
+            cb.buttons[0].click()                               # [전체] — 이미 전체여도 비주류를 끈다(U4)
+            assert not _win._tc_minor_only and not any(c.isChecked() for _l, _c, c in _win._tc_filters)
+            assert names() == ["팀A", "팀B"], names()
             _win._emblem_cache = {"팀A": "crests/1.png", "팀B": "countries/2.png"}
-            _win._tc_filters[1][1].setCurrentIndex(_win._tc_filters[1][1].findData("crests"))
+            cb.buttons[cb.findData("crests")].click()           # 칩을 누르면 콤보도(2회차 [중] — [하루 승률] 콤보가 같이 바뀐다)
             assert all(c.currentData() == "crests" for _l, c, _k in _win._tc_filters)
+            assert names() == ["팀A"], names()
+            chk.click()                                         # 종류 + 비주류를 같이 — 팀A 는 비주류가 아니라 0줄
+            assert _win._tc_kind == "crests" and _win._tc_minor_only and names() == [], names()
+            chk.click()
+            _win._tc_filters[0][1].setCurrentIndex(_win._tc_filters[0][1].findData("crests"))
             assert names() == ["팀A"], names()
             _win._go_page("메타 분석", "구간 평균")
             _win._invalidate("tiermeans")
@@ -10155,6 +10279,43 @@ def test_teamcolor_kind_and_minor_filters_are_shared():
             config.MINOR_USERS = keep_minor
             _win._emblem_cache = keep_cache
             _win._on_tc_filter(None, False)
+
+
+def test_metric_row_and_avg_bar_parts_67():
+    """67 R0 — 지표 줄: 칸 폭은 목록 전체에서 맞춘다(줄마다 숫자가 같은 x) · 흐림은 칸 색까지 · 채움 색은 ROW_FILL.
+    평균 막대: 기준 위/아래 색 · higher_better=False 면 뒤집힌다(3회차 M8) · 막대 길이는 최댓값 대비."""
+    import widgets
+    from PyQt6.QtCore import QRectF
+    lst = widgets.MetricRowList()
+    rows = [widgets.MetricRow("가", "1명", (widgets.MetricCell("1", "짧은 라벨"), widgets.MetricCell("12.3%", "점유", T.GOOD)), rank=1),
+            widgets.MetricRow("나나나", "2명", (widgets.MetricCell("1,234,567", "라벨"), widgets.MetricCell("9.9%", "점유")),
+                              rank=10, dim=True, fill=0.5)]
+    lst.resize(900, 300)
+    lst.set_rows(rows)
+    dg = lst.metric_delegate
+    xs = [[s.rect.left() for s in dg.layout(r, QRectF(0, 0, 900, 60), lst.font()) if s.role.startswith("cell")] for r in rows]
+    assert xs[0] == xs[1], ("칸이 줄마다 다른 x — 폭을 줄마다 쟀다", xs)
+    assert dg.colors(rows[0])["cell1"] == T.GOOD and dg.colors(rows[1])["cell1"] == T.TEXT_DIM
+    assert dg.colors(rows[1])["name"] == T.TEXT_DIM and dg.colors(rows[0])["fill"] == T.ROW_FILL
+    assert dg.overflow(rows[1], 120, lst.font()) and not dg.overflow(rows[1], 900, lst.font())
+    lst.set_filter(lambda r: r.rank == 1)
+    assert lst.rowCount() == 1 and xs[0] == [s.rect.left() for s in dg.layout(rows[0], QRectF(0, 0, 900, 60), lst.font())
+                                             if s.role.startswith("cell")], "거르기로 칸 폭이 흔들렸다"
+    for better, above, below in ((True, T.ACCENT_FILL, T.WARN_FILL), (False, T.WARN_FILL, T.ACCENT_FILL)):
+        bars = widgets.AvgBarList(higher_better=better)
+        bars.resize(600, 200)
+        items = [widgets.AvgBar("위", 30.0, "30"), widgets.AvgBar("아래", 10.0, "10", "5명"), widgets.AvgBar("없음", None, "—")]
+        bars.set_rows(items)
+        assert bars.base == 20.0 and bars.max_value == 30.0
+        bd = bars.bar_delegate
+        assert (bd.colors(items[0])["bar"], bd.colors(items[1])["bar"]) == (above, below), better
+        segs = {s.role: s for s in bd.layout(items[1], QRectF(0, 0, 600, 30), bars.font())}
+        top = {s.role: s for s in bd.layout(items[0], QRectF(0, 0, 600, 30), bars.font())}
+        assert abs(segs["bar"].rect.width() * 3 - top["bar"].rect.width()) < 0.01, "막대 길이가 최댓값 대비가 아니다"
+        assert "bar" not in {s.role for s in bd.layout(items[2], QRectF(0, 0, 600, 30), bars.font())}
+        assert bars.height() == 3 * bd.row_height(bars.font()) + 2 * bars.frameWidth() + 2, "fixed 높이가 줄 수를 안 따른다"
+    bars.set_rows(items, base=25.0)
+    assert bars.base == 25.0
 
 
 def test_predict_check_tab_renders_and_fits():

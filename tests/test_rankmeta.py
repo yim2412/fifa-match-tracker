@@ -234,6 +234,29 @@ def test_value_score_too_few_teams():
     using(body)
 
 
+def test_team_color_board_bundles_by_hand():
+    """67 R1 — 가성비·하루 승률을 팀컬러 하나로 묶기만 · 빈 이름·"-" 뺌(점유율 분모도) · 겹치는 이름은 "(구분 전)" 키."""
+    dup = sorted(config.TEAMCOLOR_DUP_NAMES)[0]
+
+    def body(db):
+        def snap(w, dup_lose):
+            return (_team(1000, "P", 20, 4000.0, w, 10, 5_000_000_000, 20) + _team(2000, dup, 10, 3900.0, w // 2, dup_lose, 4, 1)
+                    + _team(3000, "-", 5, 3000.0, 1, 1, 1, 0) + _team(4000, "", 5, 3000.0, 1, 1, 1, 0))
+        db.snap(T0, snap(10, 10))
+        db.snap(T0 + timedelta(hours=24), snap(30, 20))         # P: 하루 +20승 0패 · dup: +10승 +10패
+        b = M.team_color_board(db.conn)
+        assert [r.key for r in b.rows] == ["P", f"{dup} (구분 전)"], [r.key for r in b.rows]
+        assert b.total == 30 and [round(r.share, 4) for r in b.rows] == [round(2000 / 30, 4), round(1000 / 30, 4)]
+        assert b.day_ready
+        p = b.rows[0]
+        assert (p.name, p.users, p.day_rate) == ("P", 20, 100.0), p        # 하루 20승 0패 — 승÷(승+패)
+        vs = {r.key: r for r in M.value_score(db.conn).rows}
+        assert (p.elo, p.rate, p.value, p.champ) == (vs["P"].elo, vs["P"].rate, vs["P"].value, vs["P"].champ)
+        assert b.rows[1].name == dup and abs(b.rows[1].day_rate - 50.0) < 1e-9   # 10승 10패
+        assert M.team_color_board(db.conn) is b, "같은 rank.db 인데 캐시를 안 썼다"
+    using(body)
+
+
 def test_percentiles_ties():
     p = M._percentiles({"a": 1, "b": 1, "c": 3})
     assert p["a"] == p["b"] == 25.0 and p["c"] == 100.0
@@ -524,6 +547,7 @@ def test_budget_first_call_cpu():
             out = {}
             for name, fn in (("day_winrate", lambda: M.day_winrate(conn, 10000)),
                              ("value_score", lambda: M.value_score(conn, 10000)),
+                             ("team_color_board", lambda: M.team_color_board(conn, 10000)),   # 67 R1 — 위 둘을 처음부터
                              ("value_bins", lambda: M.value_bins(conn)),
                              ("tier_means", lambda: M.tier_means(conn, 10000)),
                              ("winrate_to_elo", lambda: M.winrate_to_elo(conn, 10000)),
@@ -548,7 +572,7 @@ BUDGET_S: dict = {}
 
 def test_rankmeta_behind_core_api():
     import core_api
-    for name in ("day_winrate", "value_score", "value_bins", "tier_means", "formation_group", "group_meta", "is_champ",
+    for name in ("day_winrate", "value_score", "team_color_board", "value_bins", "tier_means", "formation_group", "group_meta", "is_champ",
                  "winrate_to_elo", "weekly", "rank_moves", "find_sn", "ranked_nicknames", "season_end_estimate"):
         assert hasattr(core_api, name) and name in core_api.__all__, name
 

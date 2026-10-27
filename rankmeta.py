@@ -20,7 +20,7 @@
 랭커 메타 ② 스냅숏 읽기(2.4.1 · 31단계) — rank.db 를 **읽기만**(요청 0 · 쓰기 0). 파일 머리말 표가 규칙: 지금 시즌 · `data_time` ·
 이웃 쌍 `latest_pair`(원본 남은 마지막 둘 · ≤ `RANK_CONT_MAX_H`) · **N10 하루 걸음만 `predict._gap_ok`(수집 시각)** · 음수 차 뺌 ·
 하루 승률·승률→점수는 **앞 스냅숏 순위**로 구간 · 랭커 승률 승÷(승+패). 함수: `day_winrate`(B2) · `value_score`(B3 — `B3_MIN_USERS` 이상 팀컬러끼리 백분위 ·
-`B3_MIN_TEAMS` 미만이면 점수 없음) · `value_bins`(B4) · `tier_means`(B6) · `formation_group`/`group_meta`(N6 — B1 은 화면이 묶는다) ·
+`B3_MIN_TEAMS` 미만이면 점수 없음) · `team_color_board`(67 R1 — B3·B2 를 팀컬러 하나로 묶기만) · `value_bins`(B4) · `tier_means`(B6) · `formation_group`/`group_meta`(N6 — B1 은 화면이 묶는다) ·
 `winrate_to_elo`/`winrate_peers`/`my_day_rate`(N10) · `weekly`(N13) ·
 `rank_moves`/`judge`(N8·N9 — 판정 순서는 `judge` 한 곳) · `find_sn` · `ranked_nicknames`(N7 — DISTINCT 대신 파이썬 집합).
 결과는 (DB 파일, 지금 시즌 스냅숏, 원본 목록, 인자) 키로 캐시(`clear_cache` — 테스트).
@@ -43,6 +43,7 @@ import config
 import models
 import predict
 import rankcollect
+import teamcolor
 from rankcollect import is_champ  # noqa: F401 — core_api 가 여기서도 가져갈 수 있게(정본은 rankcollect)
 
 BLANK_COLOR = "안 씀"
@@ -396,6 +397,57 @@ def _value_score(conn, top) -> ValueScore:
             r.pct = {k: pcts[k][r.key] for k in pcts}
             r.score = sum(config.B3_WEIGHTS[k] * r.pct[k] / 100 for k in pcts)
     out.rows.sort(key=lambda r: (r.score is None, -(r.score or 0), -r.users, r.key))
+    return out
+
+
+@dataclass
+class TcBoardRow:
+    key: str                           # 화면 키 teamcolor.label(이름, None) — 겹치는 이름은 "(구분 전)"(1만 명 숫자는 맨 이름 단위)
+    name: str                          # rank.db 맨 이름
+    users: int
+    share: float                       # % — 분모는 이 구간의 빈 이름·"-" 뺀 인원(usage_counts 와 같은 규칙)
+    score: float | None                # 가성비(B3 — value_score 그대로)
+    elo: float | None
+    rate: float | None                 # 시즌 승÷(승+패) %
+    value: float | None                # 구단가치 중앙값
+    champ: float | None                # 챔스 이상 %
+    pct: dict
+    day_rate: float | None             # 하루 승÷(승+패) % — 앞 스냅숏 순위로 가름(day_winrate) · 쌍이 없으면 None
+    day_thin: bool                     # 하루 인원 META_MIN_USERS 미만(그 줄이 없으면 True)
+
+
+@dataclass
+class TcBoard:
+    at: str | None = None
+    rows: list = field(default_factory=list)   # 인원 내림차순
+    scored: bool = False
+    eligible: int = 0
+    day_ready: bool = False
+    total: int = 0                             # 점유율 분모
+
+
+def team_color_board(conn: sqlite3.Connection, top: int = 10000) -> TcBoard:
+    """67 R1 팀컬러 목록 — 가성비(value_score)·하루 승률(day_winrate)을 팀컬러 하나로 묶기만(새 정의 0).
+    빈 이름·"-" 는 뺀다(usage_counts 와 같게). 두 재료가 같은 캐시라 이것도 같은 키로."""
+    return _cached("team_color_board", conn, (top,), lambda: _team_color_board(conn, top))
+
+
+def _team_color_board(conn, top) -> TcBoard:
+    vs = value_score(conn, top)
+    out = TcBoard(at=vs.at, scored=vs.scored, eligible=vs.eligible)
+    if vs.at is None:
+        return out
+    dw = day_winrate(conn, top, "raw")
+    out.day_ready = dw.ready
+    day = {r.key: r for r in dw.tables.get("team_color", [])} if dw.ready else {}
+    rows = [r for r in vs.rows if (r.key or "").strip() not in ("", "-")]
+    out.total = sum(r.users for r in rows)
+    for r in rows:
+        d = day.get(r.key)
+        out.rows.append(TcBoardRow(teamcolor.label(r.key, None), r.key, r.users, r.users * 100 / out.total if out.total else 0.0,
+                                   r.score, r.elo, r.rate, r.value, r.champ, r.pct,
+                                   d.rate if d is not None else None, d is None or d.thin))
+    out.rows.sort(key=lambda x: (-x.users, x.key))
     return out
 
 

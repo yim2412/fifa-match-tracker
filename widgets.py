@@ -2451,6 +2451,390 @@ class RateRowList(CardListView):
             self.setFixedHeight(self.rowCount() * self.rate_delegate.row_height(self.font()) + 2 * self.frameWidth() + 2)
 
 
+class _FitMixin:
+    """fixed 면 줄 수만큼 높이를 고정한다(스크롤 페이지 안 — 목록 안 스크롤이 겹치지 않게). RateRowList 와 같은 약속."""
+
+    def _setup_fixed(self, fixed: bool) -> None:
+        self.fixed = fixed
+        if fixed:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("QListView { background: transparent; border: none; }")
+
+    def _fit(self) -> None:
+        if self.fixed:
+            self.setFixedHeight(self.rowCount() * self.itemDelegate().row_height(self.font()) + 2 * self.frameWidth() + 2)
+
+
+class MetricCell(NamedTuple):
+    text: str                       # 값(굵게)
+    label: str                      # 값 아래 작은 라벨(흐림)
+    color: str | None = None        # 값 색 — None 이면 글자색
+    tip: str = ""
+
+
+@dataclass
+class MetricRow:
+    """지표 줄 목록 한 줄(67 R0) — 순위 · 그림 · 이름 + 아래 흐린 보조 글 · 오른쪽 숫자 칸 N개(값 + 그 아래 라벨) ·
+    바탕을 fill(0~1)만큼 채움. 글자는 화면이 다 만들어 넣는다. 칸 폭은 목록 전체에서 맞춘다(줄마다 숫자가 같은 줄에 선다)."""
+    name: str
+    sub: str = ""
+    cells: tuple = ()                # (MetricCell, …)
+    rank: int | None = None
+    icon: tuple = ()                 # (종류, 키) — 엠블럼 · 포메이션
+    fill: float | None = None        # 바탕 채움 0~1 — None 이면 없음
+    dim: bool = False                # 표본 미달 — 전부 흐림
+    tip: str = ""
+    key: object = None               # 쓰는 쪽 값(팀컬러 라벨 · 구간 번호)
+    sort: dict = None                # 정렬 값(쓰는 쪽이 이름 → 값) — 목록은 안 읽는다
+
+    @property
+    def accessible(self) -> str:
+        return " ".join([self.name] + [f"{c.label} {c.text}" for c in self.cells])
+
+
+class MetricRowDelegate(QStyledItemDelegate):
+    """지표 줄 그리기 — 자리는 layout() 한 곳(그리기·툴팁·넘침 검사가 같이 읽는다 — RateRowDelegate 와 같은 약속)."""
+    MARGIN = 3
+    PAD_X = 10
+    PAD_Y = 6
+    GAP = 2
+    CELL_GAP = 16
+
+    def __init__(self, view: CardListView):
+        super().__init__(view)
+        self.view = view
+        self.col_w: list[float] = []     # 칸마다 폭 — measure() 가 목록 전체에서
+        self.rank_w = 0.0
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        return 2 * self.MARGIN + 2 * self.PAD_Y + QFontMetrics(f["bold"]).height() + self.GAP + QFontMetrics(f["small"]).height()
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    def measure(self, rows: list, base: QFont) -> None:
+        f = self.fonts(base)
+        bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
+        n = max((len(r.cells) for r in rows), default=0)
+        w = [0.0] * n
+        for r in rows:
+            for i, c in enumerate(r.cells):
+                w[i] = max(w[i], bold.horizontalAdvance(c.text), small.horizontalAdvance(c.label))
+        self.col_w = w
+        ranks = [r.rank for r in rows if r.rank is not None]
+        self.rank_w = bold.horizontalAdvance(f"{max(ranks):,}") if ranks else 0.0
+
+    def layout(self, row: MetricRow, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        fm = {k: QFontMetrics(v) for k, v in f.items()}
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left, right = r.left() + self.PAD_X, r.right() - self.PAD_X
+        top = r.top() + self.PAD_Y
+        h1, h2 = fm["bold"].height(), fm["small"].height()
+        y2 = top + h1 + self.GAP
+        segs: list[CardSeg] = []
+        widths = [self.col_w[i] if i < len(self.col_w) else fm["bold"].horizontalAdvance(c.text)
+                  for i, c in enumerate(row.cells)]
+        x = right - sum(widths) - self.CELL_GAP * max(0, len(widths) - 1)
+        cells_left = x
+        for i, (c, w) in enumerate(zip(row.cells, widths)):
+            segs.append(CardSeg(f"cell{i}", QRectF(x, top, w, h1), c.text, fm["bold"].horizontalAdvance(c.text)))
+            segs.append(CardSeg(f"label{i}", QRectF(x, y2, w, h2), c.label, fm["small"].horizontalAdvance(c.label)))
+            x += w + self.CELL_GAP
+        limit = cells_left - 16
+        x = left
+        if self.rank_w:
+            text = f"{row.rank:,}" if row.rank is not None else ""
+            segs.append(CardSeg("rank", QRectF(x, top, self.rank_w, h1 + self.GAP + h2), text,
+                                fm["bold"].horizontalAdvance(text)))
+            x += self.rank_w + 10
+        if row.icon:
+            ih = h1 + self.GAP + h2 - 4
+            segs.append(CardSeg("icon", QRectF(x, top + 2, ih * 1.2, ih), "", 0))
+            x += ih * 1.2 + 8
+        full = fm["bold"].horizontalAdvance(row.name)
+        segs.append(CardSeg("name", QRectF(x, top, max(0.0, min(full, limit - x)), h1), row.name, full))
+        if row.sub:
+            full = fm["small"].horizontalAdvance(row.sub)
+            segs.append(CardSeg("sub", QRectF(x, y2, max(0.0, min(full, limit - x)), h2), row.sub, full))
+        return segs
+
+    def overflow(self, row: MetricRow, width: int, base: QFont) -> list[str]:
+        """그 폭에서 잘리는 글자 조각 — 보조 글은 잘려도 된다(툴팁). 이름·칸이 잘리면 스모크가 FAIL."""
+        return [s.role for s in self.layout(row, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.role != "sub" and s.full > s.rect.width() + 0.5]
+
+    @staticmethod
+    def colors(row: MetricRow) -> dict[str, str]:
+        """글자 색 — 테스트가 그림 대신 읽는다. 칸 값은 쓰는 쪽 색(평균 대비 등) · 표본 미달은 전부 흐림."""
+        out = {"name": T.TEXT, "sub": T.TEXT_DIM, "rank": T.TEXT_DIM, "fill": T.ROW_FILL}
+        for i, c in enumerate(row.cells):
+            out[f"cell{i}"] = T.TEXT_DIM if row.dim else (c.color or T.TEXT)
+            out[f"label{i}"] = T.TEXT_DIM
+        if row.dim:
+            out["name"] = T.TEXT_DIM
+        return out
+
+    def paint(self, painter, option, index) -> None:
+        row = index.data(ROW_ROLE)
+        if row is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, row)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, row: MetricRow) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(row)
+        r = QRectF(option.rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = T.PANEL
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = T.blend(bg, T.TEXT, 0.04)
+        path = QPainterPath()
+        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        p.fillPath(path, QColor(bg))
+        if row.fill:
+            p.save()
+            p.setClipPath(path)
+            p.fillRect(QRectF(r.left(), r.top(), r.width() * min(1.0, max(0.0, row.fill)), r.height()), QColor(col["fill"]))
+            p.restore()
+        if option.state & QStyle.StateFlag.State_Selected:
+            p.setPen(QPen(QColor(T.ACCENT), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        for s in self.layout(row, option.rect, option.font):
+            if s.role == "icon":
+                pm = self.view.icon(*row.icon) if row.icon else None
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left() + (s.rect.width() - scaled.width()) / 2,
+                                         s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            font = "small" if s.role == "sub" or s.role.startswith("label") else "bold"
+            align = Qt.AlignmentFlag.AlignLeft
+            if s.role.startswith(("cell", "label", "rank")):
+                align = Qt.AlignmentFlag.AlignRight
+            p.setFont(f[font])
+            p.setPen(QColor(col.get(s.role, T.TEXT_DIM)))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
+
+    def tip_at(self, row: MetricRow, rect, base: QFont, pos) -> str:
+        for s in self.layout(row, rect, base):
+            if s.rect.adjusted(-2, -2, 2, 2).contains(QPointF(pos)):
+                if s.role.startswith(("cell", "label")):
+                    c = row.cells[int(s.role[4:] if s.role.startswith("cell") else s.role[5:])]
+                    if c.tip:
+                        return c.tip
+                if s.role in ("name", "sub") and s.full > s.rect.width() + 0.5:
+                    return f"{row.name} {row.sub}".strip()
+                break
+        return row.tip
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        tip = self.tip_at(row, option.rect, option.font, event.pos()) if row is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class MetricRowList(_FitMixin, CardListView):
+    """지표 줄 목록(67 R0 — 팀컬러 목록 · 구단가치 구간 · 메타 변화 · 포지션 특성). 거르기는 모델 안(CardListView) ·
+    칸 폭은 set_rows 때 전체 줄에서 잰다(거르기로 줄이 바뀌어도 칸이 흔들리지 않게)."""
+
+    def __init__(self, fixed: bool = False):
+        super().__init__()
+        self.metric_delegate = MetricRowDelegate(self)
+        self.setItemDelegate(self.metric_delegate)
+        self._setup_fixed(fixed)
+
+    def icon_keys(self, row: MetricRow) -> tuple:
+        return (row.icon,) if row.icon else ()
+
+    def set_rows(self, rows: list) -> None:
+        self.metric_delegate.measure(rows, self.font())
+        super().set_rows(rows)
+        self._fit()
+
+    def set_filter(self, pred) -> None:
+        super().set_filter(pred)
+        self._fit()
+
+
+@dataclass
+class AvgBar:
+    """평균 막대 줄 한 줄(67 R0) — 이름 · 가로 막대(기준선 위/아래 색) · 오른쪽 값 + 흐린 인원. value None 이면 막대 없이 "—"."""
+    name: str
+    value: float | None
+    text: str                        # 값 글자(단위 포함)
+    n_text: str = ""                 # 흐린 보조(인원 등)
+    icon: tuple = ()
+    key: object = None
+    tip: str = ""
+
+    @property
+    def accessible(self) -> str:
+        return f"{self.name} {self.text} {self.n_text}".strip()
+
+
+class AvgBarDelegate(QStyledItemDelegate):
+    MARGIN = 2
+    PAD_X = 10
+    PAD_Y = 4
+    BAR_H = 10
+    NAME_MAX = 0.4                   # 이름 칸 상한(폭 대비)
+
+    def __init__(self, view: "AvgBarList"):
+        super().__init__(view)
+        self.view = view
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        return 2 * self.MARGIN + 2 * self.PAD_Y + max(QFontMetrics(f["bold"]).height(), self.BAR_H)
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    def layout(self, row: AvgBar, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left, right = r.left() + self.PAD_X, r.right() - self.PAD_X
+        h = bold.height()
+        y = r.top() + (r.height() - h) / 2
+        v = self.view
+        segs: list[CardSeg] = []
+        x = right - v.n_w
+        segs.append(CardSeg("n", QRectF(x, y, v.n_w, h), row.n_text, small.horizontalAdvance(row.n_text)))
+        x -= v.text_w + (8 if v.n_w else 0)
+        segs.append(CardSeg("text", QRectF(x, y, v.text_w, h), row.text, bold.horizontalAdvance(row.text)))
+        bar_right = x - 12
+        nx = left
+        if row.icon:
+            segs.append(CardSeg("icon", QRectF(nx, y, h * 1.2, h), "", 0))
+            nx += h * 1.2 + 6
+        name_w = min(v.name_w, (right - left) * self.NAME_MAX)
+        full = bold.horizontalAdvance(row.name)
+        segs.append(CardSeg("name", QRectF(nx, y, min(full, name_w), h), row.name, full))
+        bar_left = left + (h * 1.2 + 6 if v.has_icon else 0) + name_w + 12
+        width = max(0.0, bar_right - bar_left)
+        segs.append(CardSeg("track", QRectF(bar_left, r.top() + (r.height() - self.BAR_H) / 2, width, self.BAR_H), "", 0))
+        if row.value is not None and v.max_value > 0:
+            segs.append(CardSeg("bar", QRectF(bar_left, r.top() + (r.height() - self.BAR_H) / 2,
+                                              width * max(0.0, row.value) / v.max_value, self.BAR_H), "", 0))
+        return segs
+
+    def overflow(self, row: AvgBar, width: int, base: QFont) -> list[str]:
+        return [s.role for s in self.layout(row, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.role != "name" and s.full > s.rect.width() + 0.5]
+
+    def colors(self, row: AvgBar) -> dict[str, str]:
+        """기준(평균) 위가 좋음이면 위 = 강조 채움 · 아래 = 주의 채움(higher_better=False 면 뒤집는다 — 판수는 적을수록 좋다)."""
+        above = row.value is not None and row.value >= self.view.base
+        good = above if self.view.higher_better else not above
+        return {"bar": T.ACCENT_FILL if good else T.WARN_FILL, "text": T.TEXT, "n": T.TEXT_DIM, "name": T.TEXT,
+                "track": T.PANEL_2, "base": T.TEXT_DIM}
+
+    def paint(self, painter, option, index) -> None:
+        row = index.data(ROW_ROLE)
+        if row is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, row)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, row: AvgBar) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(row)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        segs = self.layout(row, option.rect, option.font)
+        for s in segs:
+            if s.role in ("track", "bar"):
+                path = QPainterPath()
+                path.addRoundedRect(s.rect, 3, 3)
+                p.fillPath(path, QColor(col[s.role]))
+                continue
+            if s.role == "icon":
+                pm = self.view.icon(*row.icon) if row.icon else None
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left(), s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            font = "small" if s.role == "n" else "bold"
+            p.setFont(f[font])
+            p.setPen(QColor(col.get(s.role, T.TEXT)))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            align = Qt.AlignmentFlag.AlignLeft if s.role == "name" else Qt.AlignmentFlag.AlignRight
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
+        track = next((s for s in segs if s.role == "track"), None)
+        if track is not None and self.view.max_value > 0 and self.view.base > 0:
+            x = track.rect.left() + track.rect.width() * self.view.base / self.view.max_value
+            pen = QPen(QColor(col["base"]), 1, Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(x, track.rect.top() - 3), QPointF(x, track.rect.bottom() + 3))
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        tip = (row.tip or (row.name if row is not None else "")) if row is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class AvgBarList(_FitMixin, CardListView):
+    """평균 막대 줄 목록(67 R0 — 구단가치 구간별 · 팀컬러별 100판당 · 달성 판수). base = 기준선(평균) ·
+    higher_better=False 면 기준 아래가 강조(3회차 M8 — 달성 판수는 적을수록 좋다). 막대 길이는 목록 최댓값 대비."""
+
+    def __init__(self, fixed: bool = True, higher_better: bool = True):
+        super().__init__()
+        self.higher_better = higher_better
+        self.base = 0.0
+        self.max_value = 0.0
+        self.name_w = self.text_w = self.n_w = 0.0
+        self.has_icon = False
+        self.bar_delegate = AvgBarDelegate(self)
+        self.setItemDelegate(self.bar_delegate)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._setup_fixed(fixed)
+
+    def icon_keys(self, row: AvgBar) -> tuple:
+        return (row.icon,) if row.icon else ()
+
+    def set_rows(self, rows: list, base: float | None = None) -> None:
+        """base None 이면 값 있는 줄의 평균."""
+        vals = [r.value for r in rows if r.value is not None]
+        self.base = base if base is not None else (sum(vals) / len(vals) if vals else 0.0)
+        self.max_value = max(vals + [self.base], default=0.0)
+        f = AvgBarDelegate.fonts(self.font())
+        bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
+        self.name_w = max((bold.horizontalAdvance(r.name) for r in rows), default=0)
+        self.text_w = max((bold.horizontalAdvance(r.text) for r in rows), default=0)
+        self.n_w = max((small.horizontalAdvance(r.n_text) for r in rows), default=0)
+        self.has_icon = any(r.icon for r in rows)
+        super().set_rows(rows)
+        self._fit()
+
+
 class ShotTypeRows(QWidget):
     """슛 타입 분포(65 M6 · ④ M8 이 같이 쓴다) — 줄마다 이름 · "시도 N · 유효 N · 골 N" · 누적 막대(골 ⊂ 유효 ⊂ 시도 ·
     길이는 가장 많은 줄 대비) · 전환율(골 ÷ 시도). 시도가 min_shots 미만이면 전환율을 숨기고 막대를 흐린다(작은 표본 규칙)."""
@@ -2759,6 +3143,50 @@ class Segmented(QFrame):
     def set_option_enabled(self, i: int, enabled: bool, tip: str = "") -> None:
         self.buttons[i].setEnabled(enabled)
         self.buttons[i].setToolTip(tip)
+
+
+class ChoiceChips(Segmented):
+    """콤보 꼴로 다루는 칩 묶음(67 R1) — findData · currentData · setCurrentIndex · currentIndexChanged.
+    거르기 상태를 콤보와 칩이 같이 쓸 때(app_main._tc_filters — 한 곳이 값을 바꾸면 나머지를 신호 없이 맞춘다)."""
+    currentIndexChanged = pyqtSignal(int)
+
+    def __init__(self, items: list[tuple[str, object]], current: int = 0):
+        super().__init__([t for t, _d in items], current)
+        self._data = [d for _t, d in items]
+        self.changed.connect(self.currentIndexChanged)
+
+    def count(self) -> int:
+        return len(self._data)
+
+    def findData(self, data) -> int:
+        return self._data.index(data) if data in self._data else -1
+
+    def itemData(self, i: int):
+        return self._data[i]
+
+    def currentIndex(self) -> int:
+        return self._current
+
+    def currentData(self):
+        return self._data[self._current] if 0 <= self._current < len(self._data) else None
+
+    def currentText(self) -> str:
+        return self.buttons[self._current].text() if 0 <= self._current < len(self.buttons) else ""
+
+    def setCurrentIndex(self, i: int) -> None:
+        self.set_current(i, emit=True)
+
+
+def chip_toggle(text: str) -> QPushButton:
+    """켜고 끄는 칩 하나(67 R1 [비주류]) — QCheckBox 와 같은 setChecked/toggled. 모양은 Segmented 의 눌린 칸."""
+    b = QPushButton(text)
+    b.setCheckable(True)
+    b.setObjectName("chipToggle")
+    b.setStyleSheet(
+        f"QPushButton#chipToggle {{ border: 1px solid {T.BORDER}; border-radius: 6px; padding: 2px 10px;"
+        f" background: transparent; color: {T.TEXT_DIM}; }}"
+        f"QPushButton#chipToggle:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; border-color: {T.ACCENT_SOFT}; }}")
+    return b
 
 
 class ZoomBar(QWidget):

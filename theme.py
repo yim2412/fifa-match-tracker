@@ -230,6 +230,10 @@ def blend(base_hex: str, target_hex: str, mix: float) -> str:
     return "#" + "".join(f"{int(x + (y - x) * mix):02x}" for x, y in zip(b, t))
 
 
+ROW_FILL_MIX = 0.12                 # 지표 줄 바탕 채움(67 R0 — 점유율만큼) · 0.18 이면 밝은 쪽 흐린 글자 4.12(미달 — test_palette_text_contrast)
+ROW_FILL = blend(PANEL, ACCENT_FILL, ROW_FILL_MIX)
+
+
 def contrast(a_hex: str, b_hex: str) -> float:
     """WCAG 대비(1~21). 글자는 4.5 이상이어야 읽힌다 — 테스트가 팔레트를 이걸로 잰다."""
     def lum(h: str) -> float:
