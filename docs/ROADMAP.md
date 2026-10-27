@@ -44,7 +44,7 @@
 | 64 | (제안) 3.1.1 | **공통 표현 부품 + 색**(초록 → 보라 · 10-26 사용자 확인) — `theme` 토큰 · 승무패 3색 막대 · 평균 대비 색 · 숫자 카드 · 미니 축구장 · 배지 그림 · 해설 접기 · 태그 — **줄 카드 목록(P4)은 65, 그래프 꼴(P6)은 66 으로**(절 "## 64단계" E1) · **계획 검토 끝(4판) · 구현 끝(조각 ①②③ · 2026-10-26 · 브랜치 `v3.1.1`) — 다음은 65 계획** | 중간~높음 — 앱 전체 모양 · 골든은 66 에서 다시 얼린다 | Opus 2명 / Opus | |
 | 65 | (제안) 3.1.1 | **내 경기 화면 짝** — 대시보드 · 경기 목록(+상대 입력 장치) · 경기 상세(좌우 비교 막대) · 매치업(상대 전적 · 상대·점유율) · 선수 지표(G8) · 슛 맵 · 패스 · 경기 결과(+승부차기 상대 GK) · 전술 · 스쿼드 그림 | 높음 — 화면 수 | Opus 1명 / Sonnet + Opus 리뷰 | |
 | 66 | (제안) 3.1.1 | **그래프 짝** G1~G6 — 등급(구간 계단 · 배지 축) · 점수 · 구단가치(범위 띠 · 자동 축 · 일별/시간별 **자리만** — 시간별 데이터는 "버전 미정 후보 › 시간별 그래프" 조건 그대로(10-25 사용자 "추천대로"), 그때까지 시간별은 꺼 둔다) · 운 범위(점 그림) · 달력(FC 진하기 · 카드 셋) · 승률 추이 · **2판(10-27 · 절 "## 66단계" — 기준 화면 다시 읽음 · 이견 7 · 항목 G0~G6·X1 · U1~U4 "추천대로") · 1회차 [상] 1 → 3판 · 2회차(계획 전체) [상] 1 → 4판 · 3회차(계획 전체) [상] 0 · **계획 검토 끝** · **조각 ① 끝(10-27 — G0·G2·G3·G6·X1 · 절 "조각 ① 에서 정한 것")** · **조각 ② 끝(10-27 — G1 등급 계단 · 절 "조각 ② 에서 정한 것")** · **조각 ③ 끝(10-27 `8d58c41` — G4 · G5 · G5b · M16) · 66 구현 끝** | 중간~높음 — `charts.py` 에 새 그림 둘 | Opus 1명 / Opus | |
-| 67 | (제안) 3.1.1 | **랭커 화면 짝 + 남은 화면** — 팀컬러 목록·상세 · 랭킹 추이(시즌통계 · 점수 분포 · 주간 요약 · 보상 · 주차 — **주차·막판 상승폭은 "버전 미정 후보" 조건 그대로, 시즌 끝 전엔 "모으는 중"**) · 메타 분석(구단가치 · 가성비 · 포지션 특성) · 랭커 픽 · 랭커 목록 · 짝 없는 12화면에 P 입히기 · "아직 안 본 곳" 짝 채우기 · **2판(10-27 · 절 "## 67단계" — U1~U4 추천대로: 팀컬러 목록 새 첫 탭 · 가성비 탭 합침 · 사람 목록 안 만듦 · 승무패 줄만 줄 목록 · 칩 다섯) — 다음은 1회차 검토(Opus 1명)** | 높음 | Opus 1명 / Sonnet + Opus 리뷰 | **3.1.1 공개** |
+| 67 | (제안) 3.1.1 | **랭커 화면 짝 + 남은 화면** — 팀컬러 목록·상세 · 랭킹 추이(시즌통계 · 점수 분포 · 주간 요약 · 보상 · 주차 — **주차·막판 상승폭은 "버전 미정 후보" 조건 그대로, 시즌 끝 전엔 "모으는 중"**) · 메타 분석(구단가치 · 가성비 · 포지션 특성) · 랭커 픽 · 랭커 목록 · 짝 없는 12화면에 P 입히기 · "아직 안 본 곳" 짝 채우기 · **3판(10-27 · 절 "## 67단계" — U1~U4 추천대로 · 1회차 [상] 3 반영: 달성 판수는 `club_head` 와 같은 행 · 사람별 묶음은 캐시 안 함 · 20위 컷은 원본 스냅숏에서) — 다음은 2회차 검토(바뀐 줄)** | 높음 | Opus 1명 / Sonnet + Opus 리뷰 | **3.1.1 공개** |
 | 68 | (제안) 3.2.1 | 카드 정보 화면 — 51 의 조각 ②③(N29 · C2 · C1 · N28 · C3 · N21 · C5 · C6 · 내 스쿼드 OVR 카드) — **측정 A~C 판정 뒤**(D0 + 35) · 빠진 항목은 안 만든다 · 빈 화면 사유에 "구조가 바뀌어 오늘 멈춤"(`card_backfill_format` — 지금은 "채우는 중" 으로 보인다 · 51 ① 리뷰 [하]) | 높음 — 측정에 매임 | Opus 2명 / Opus | |
 | 69 | (제안) 3.2.1 | 같은 OVR 대비 — 랭커 스쿼드 OVR 수집(서비스 키 · 따로 토글) · 상위 랭커 카드의 "스쿼드 대비" | 높음 — 1만 명이면 오픈API 약 3만 요청 · 안내 바뀜 | Opus 2명 / Opus | **3.2.1 공개** |
 | 70 | (제안) 3.3.1 | PySide6 전환(PyQt6 GPL → LGPL) — 화면 동작은 그대로, 회귀 확인이 핵심 | 중간 — 기계적이지만 전 화면 회귀 | Opus 1명 / Sonnet + Opus 리뷰(전 화면 회귀 PNG) | |
@@ -970,9 +970,9 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 난이도 **중간~높음**(새 그림 둘 + 공통 꼴). 검토: Opus 1명(기존 데이터로 화면만 — 검토 기준 7) / 구현 Opus.
 
-## 67단계 — 랭커 화면 짝 + 남은 화면 (제안 3.1.1) · 2판 (2026-10-27 · U1~U4 사용자 "추천대로")
+## 67단계 — 랭커 화면 짝 + 남은 화면 (제안 3.1.1) · 3판 (2026-10-27 · U1~U4 사용자 "추천대로" · 1회차 [상] 3 반영 — **아래 "1회차" 검토 표 > 항목 표**)
 
-10-25 "화면별 짝" 표의 랭커 쪽 줄(팀컬러 · 랭킹 추이 · 메타 분석 · 랭커 픽 · 랭커 목록)과 "짝 없음" 줄, "아직 안 본 곳" 을 한다. 64 의 부품(`WdlBar`·`delta_text`·`StatCard`·`Tag`·`Collapsible`·미니 축구장·배지) · 65 의 줄 목록 틀(`CardListView`·`RateRowList`) · 66 의 그래프 꼴(G0 · `Segmented`)을 쓴다. **계산 정의는 안 바꾼다** — 단 R3·R5 는 rank.db 에 이미 있는 재료(`champ_first`·`fc_games`)로 **새 묶음**을 센다(새 요청 0 · 새 저장 0). 3.1.1 공개 단계라 65·66 이 넘긴 것(E9)과 공개 준비도 여기에.
+10-25 "화면별 짝" 표의 랭커 쪽 줄(팀컬러 · 랭킹 추이 · 메타 분석 · 랭커 픽 · 랭커 목록)과 "짝 없음" 줄, "아직 안 본 곳" 을 한다. 64 의 부품(`WdlBar`·`delta_text`·`StatCard`·`Tag`·`Collapsible`·미니 축구장·배지) · 65 의 줄 목록 틀(`CardListView`·`RateRowList`) · 66 의 그래프 꼴(G0 · `Segmented`)을 쓴다. **계산 정의는 안 바꾼다** — 단 R2·R4·R5·R6 은 rank.db 에 이미 있는 재료(`champ_first`·`fc_games`·`snapshot_rows`)로 **새 묶음**을 센다(새 요청 0 · 새 저장 0 — 1회차 [중]). 3.1.1 공개 단계라 65·66 이 넘긴 것(E9)과 공개 준비도 여기에.
 
 ### 다시 읽은 것 (2026-10-27 · 기준 화면 통계·시즌통계·보상·주차·팀컬러 목록·상세·구단가치·선수·랭킹·메타 트렌드·포메이션을 브라우저에서 열어 제목·단추·배치를 읽음 — 검토자는 다시 재지 않는다)
 
@@ -1025,18 +1025,18 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | # | 화면 | 바꿀 것 | 새 / 고칠 코드 |
 |---|---|---|---|
 | R0 | 공통 줄 목록(P4 나머지) | **지표 줄**: 순위 · 그림(엠블럼/배지/미니 축구장) · 이름 + 흐린 보조 글 · 오른쪽 숫자 칸 N개(값 + 그 아래 작은 라벨) · 줄 바탕을 비율만큼 채움(선택) · **평균 막대 줄**: 이름 · 가로 막대(평균 위 `ACCENT_FILL` · 아래 `WARN_FILL`) · 오른쪽 값 + 흐린 인원. 둘 다 `CardListView` 를 물려받는다(65 — 거르기는 모델 안 · 보이는 줄만 그림) | **새** `widgets.MetricRowList`(줄 `MetricRow(rank, icon, name, sub, cells: [(값 글, 라벨, 색 \| None)], fill: float \| None)`) · **새** `widgets.AvgBarList`(줄 `AvgBar(name, icon, value, n, base)`) · 정렬 단추는 쓰는 쪽(`sort_rate_rows` 꼴) |
-| R1 | 메타 분석 › (새 첫 탭) 팀컬러 | S 팀컬러 목록 꼴 — 줄 = 엠블럼 · 이름 + 인원 · 가성비 · 평균 구단가치 · 평균 점수 · 하루 승률 · 챔스 달성 · 점유율(크게 · 바탕 채움) · 거르기 칩 **전체 · 국가 · 클럽 · 강화 · 비주류**(U4 — 종류는 `teamcolor.KIND_LABEL` · "구분 전"(`UNSPLIT`) 팀컬러는 [전체]·[비주류] 에만 · 비주류는 `rankmeta.is_minor_color`(57 K8 과 같은 문턱 `MINOR_USERS`)라 종류 칩과 겹친다) · 검색 · 정렬(점유율 · 평균 점수 · 하루 승률 · 가성비 — 가성비 정렬이 옛 [가성비] 탭의 TOP 을 대신한다). 줄을 누르면 R2 상세 창 | `rankmeta.team_color_board(conn) -> list[TcBoardRow]`(`value_score`·`tier_means`·`day_wr` 를 팀컬러 하나로 묶기만 — 새 정의 0 · 같은 캐시 `_cached`) · `core_api` 한 줄 · `_build_tc_board_tab` · `VIEW_OF_KEY`·`_renderers` 새 키 `tcboard`(PyQt 7) · **[가성비] 탭 지움**(U1 — `_build_value_score_tab`·키 `valuescore` 를 `tcboard` 로 · 탭 수 여섯 그대로 · 저장된 탭 이름 "가성비" 는 새 탭으로 연다 — `OLD_PAGE_NAMES` 는 메뉴 이름만 받으니 탭 복원 길을 조각 ① 첫 커밋에서 보고, 없으면 탭 대응 한 줄) · `value_score` 계산은 그대로(목록의 한 칸) |
-| R2 | 팀컬러 상세 창 | S 상세의 머리 + 카드 다섯(가성비 · 평균 점수 · 시즌 승률 · 평균 구단가치 · 챔스 — 변화는 지난주 스냅숏 대비, 없으면 숨김) · 구단가치 구간별(`ValueBins.cross` 그 줄) · 대표 구단주 셋(그 팀컬러 최고 점수 — top3 꼴) · 지금 효과 창 내용(단계·효과·적용 선수)은 탭 하나로 아래에 | 지금 `TeamColorDialog` 를 넓힌다(새 창 아님 · 모달 아님 그대로 · `fit_to_screen`) · 웹 데이터 꺼짐이면 효과 탭만 이유 글(지금 그대로) · 1만 명 숫자는 rank.db(꺼짐이면 "랭킹 수집이 꺼져 있어 …") |
-| R3 | 내 상대 팀컬러 두 화면 | [팀컬러 승률] → `RateRowList`(엠블럼 · 평균 대비 · 효과 [보기] 는 줄 오른쪽 작은 단추 대신 **줄 누름 = R2 창**) · [팀컬러 랭킹] → `MetricRowList`(만난 횟수 · 팀가치 범위 막대는 칸 안 작은 막대 — `RangeBarDelegate` 의 그리기 함수를 같이 씀) · 더블클릭(상대들이 쓴 선수)은 그대로 | `_build_teamcolor_rate_tab`(3851) · `_build_teamcolor_rank_tab`(3864) · `_render_teamcolor_tabs`(10778) · 포지션별 최다 상대 › 축구장은 안 건드린다(같은 키 `teamcolor` — 렌더러는 셋을 같이 부른다) |
-| R4 | 랭킹 추이 › 주간 요약 | S "지금 메타" 카드 여섯을 `StatCard` 로: 컷 지난주 대비 둘(슈챔 · 200위 · `delta_text`) · 사용 증가 팀컬러 · 포메이션(메타 변화 1위) · 순위 상승 1위 · **하루 최다 승**(E4) · 최다 보상(R6 재료 · 중앙값 보조 줄). 아래는 지금 표 내용을 `MetricRowList` 로(구단가치 끝 · 주차) | `_build_weekly_tab`(7831) · `rankmeta.weekly` 그대로 + 메타 변화 1위는 `_render_meta_trend` 재료 재사용 |
-| R5 | 랭킹 추이 › 추이 | 맨 위 **챔피언스 달성 판수**(단추 [챔스 \| 슈챔] · 히스토그램 + 빠른 10%·중앙값·느린 10% · 오른쪽 구단가치 구간별 달성 판수 `AvgBarList`) · 등수별 점수 그래프는 66 꼴 그대로 · top3 는 R9 | **새** `rankmeta.champ_games(conn, season_at, kind) -> ChampGames(hist, p10, p50, p90, by_value)`(`champ_first` · 구단가치 칸은 `value_bins` 와 같은 칸 · 늦게 시작한 시즌 숨김은 `club_head` 와 같은 판정) · 슈챔 쪽 재료가 있는지는 조각 ③ 첫 커밋(**추정** — `champ_first` 는 이름대로면 챔스만 · 없으면 단추 하나) · 막대 그림은 `charts` 새 `HistBars`(작은 그림 · 그리기만) |
-| R6 | 랭킹 추이 › 보상 | 카드 셋(시즌 총 보상 · 보상 참여 인원 · 보상 중앙값 — `RewardBoard.users`·`overall`) · 구단가치 구간별 100판당 `AvgBarList`(`by_value`) · **팀컬러별 100판당** `AvgBarList`(위 6 · 아래 6 · [전체 보기] 접기) · 순위 구간 표는 아래 접기로 | `rankmeta.reward_board` 에 `by_team_color` 한 칸(`fc_games` × 마지막 스냅숏 팀컬러 · 표본 하한 `K11_MIN_GAMES` 같은 것 · 인원 하한 새 상수 `config.K11_TC_MIN_USERS` — 값은 조각 ③ 에서 이 PC rank.db 분포를 보고 커밋 전에) · 사람 랭킹 안 만듦(U2) — 1위 한 명은 R4 "최다 보상" 카드 |
+| R1 | 메타 분석 › (새 첫 탭) 팀컬러 | S 팀컬러 목록 꼴 — 줄 = 엠블럼 · 이름 + 인원 · 가성비 · 평균 구단가치 · 평균 점수 · 하루 승률 · 챔스 달성 · 점유율(크게 · 바탕 채움) · 거르기 칩 **전체 · 국가 · 클럽 · 강화 · 비주류**(U4 — 종류는 `teamcolor.KIND_LABEL` · "구분 전"(`UNSPLIT`) 팀컬러는 [전체]·[비주류] 에만 · 비주류는 `rankmeta.is_minor_color`(57 K8 과 같은 문턱 `MINOR_USERS`)라 종류 칩과 겹친다) · 검색 · 정렬(점유율 · 평균 점수 · 하루 승률 · 가성비 — 가성비 정렬이 옛 [가성비] 탭의 TOP 을 대신한다). 줄을 누르면 R2 상세 창 | `rankmeta.team_color_board(conn) -> list[TcBoardRow]`(`value_score`·`tier_means`·`day_wr` 를 팀컬러 하나로 묶기만 — 새 정의 0 · 같은 캐시 `_cached`) · `core_api` 한 줄 · `_build_tc_board_tab` · `VIEW_OF_KEY`·`_renderers` 새 키 `tcboard`(PyQt 7) · **줄 키는 `teamcolor.label(name, None)`**(rank.db 는 맨 이름이라 겹치는 이름 11쌍이 한 줄 — 맨 이름으로 R2 를 열면 `_find` 가 못 찾는다(app_main 1416) · "구분 전" 이면 후보 고르기 · 1회차 [중]) · 빈 이름 `""`·"-" 는 뺀다(`usage_counts` 와 같게) · 하루 승률이 없으면(스냅숏 둘 미만) 칸 "—" · 승률 칸 라벨에 식 "승÷(승+패)"(R9 top3 는 승÷전체 — 섞이지 않게) · 칩은 지금 `_tc_filters` 상태(종류 + 비주류 같이 켬 · [하루 승률]·[구간 평균]·팀컬러 메뉴가 같이 씀 — 3806)를 **그대로 쓴다**(칩 다섯은 그 상태의 단추 꼴) · **[가성비] 탭 지움**(U1 — `_build_value_score_tab`·키 `valuescore` 를 `tcboard` 로 · 탭 수 여섯 그대로 · 저장된 탭 이름 "가성비" 는 새 탭으로 연다 — `OLD_PAGE_NAMES` 는 메뉴 이름만 받으니 탭 복원 길을 조각 ① 첫 커밋에서 보고, 없으면 탭 대응 한 줄) · `value_score` 계산은 그대로(목록의 한 칸) · 키 바꿈은 `TC_FILTER_KEYS`(3784)·`RANK_VIEW_KEYS`(7072) 에도 |
+| R2 | 팀컬러 상세 창 | S 상세의 머리 + 카드 다섯(가성비 · 평균 점수 · 시즌 승률 · 평균 구단가치 · 챔스 — 변화는 지난주 스냅숏 대비, 없으면 숨김) · 구단가치 구간별(`ValueBins.cross` 그 줄) · 대표 구단주 셋(그 팀컬러 최고 점수 — top3 꼴) · 지금 효과 창 내용(단계·효과·적용 선수)은 탭 하나로 아래에 | 지금 `TeamColorDialog` 를 넓힌다(새 창 아님 · 모달 아님 그대로 · `fit_to_screen`) · 웹 데이터 꺼짐이면 효과 탭만 이유 글(지금 그대로) · 1만 명 숫자는 rank.db(꺼짐이면 "랭킹 수집이 꺼져 있어 …") · **새 rank.db 읽기 둘**(1회차 [중]): 지난주 대비 = `team_color_board(conn, at=지난주 스냅숏)` 을 한 번 더 · 대표 구단주 = **새** `rankmeta.tc_top_owners(conn, name, k=3)`(마지막 스냅숏 · `meta_person_allowed` 관문 · 닉네임이 뜨므로 top3 와 같은 규칙) — 둘 다 진입점 표·`_drive_uncovered` |
+| R3 | 내 상대 팀컬러 두 화면 | [팀컬러 승률] → `RateRowList`(엠블럼 · 평균 대비 · 효과 [보기] 는 줄 오른쪽 작은 단추 대신 **줄 누름 = R2 창**) · [팀컬러 랭킹] → `MetricRowList`(만난 횟수 · 팀가치 범위 막대는 칸 안 작은 막대 — `RangeBarDelegate` 의 그리기 함수를 같이 씀) · 더블클릭(상대들이 쓴 선수)은 그대로 — 한 번 누름과 겹치는 기존 함정(10890)이 있어 **창은 줄 오른쪽 [효과] 칸 누름으로만**, 줄 더블클릭은 선수 목록(1회차 [중]) | `_build_teamcolor_rate_tab`(3851) · `_build_teamcolor_rank_tab`(3864) · `_render_teamcolor_tabs`(10778) · 포지션별 최다 상대 › 축구장은 안 건드린다(같은 키 `teamcolor` — 렌더러는 셋을 같이 부른다) |
+| R4 | 랭킹 추이 › 주간 요약 | S "지금 메타" 카드 여섯을 `StatCard` 로: 컷 지난주 대비 둘(슈챔 20위 · 200위 · `delta_text` — **20위는 저장된 컷(`RANK_CUT_RANKS`·`WEEKLY_CUTS`)에 없다** → 새 `rankmeta.rank_cut(conn, rank, at)` 이 원본 `snapshot_rows` 에서 그 순위 점수를 읽는다(원본 14일 보관이라 지난주 값은 있다 · 없으면 카드 "—" · 1회차 [상] 3)) · 사용 증가 팀컬러 · 포메이션(메타 변화 1위) · 순위 상승 1위(`risers` 는 점수 차 정렬 — 871 · 카드는 "점수 +N" 으로 적는다) · **하루 최다 승**(E4) · 최다 보상 = **100판당 구간 중앙값이 가장 높은 구단가치 구간**(사람 아님 — 범위값이라 1위 한 명을 못 고른다 · U2 · 관문 `fc_games_view_allowed`). 아래는 지금 표(급상승 · 하루 최다 승 10명 · 구단가치 끝 · 주차)를 `MetricRowList` 로 그대로(`meta_person_allowed` 관문 그대로) | `_build_weekly_tab`(7831) · `rankmeta.weekly` 그대로 + 메타 변화 1위는 **`core_api.meta_trend` 를 직접**(`self.meta_trend` 는 그 탭을 안 열면 None — PyQt 7 · 1회차 [중]) |
+| R5 | 랭킹 추이 › 추이 | 맨 위 **챔피언스 달성 판수**(단추 [챔스 \| 슈챔] · 히스토그램 + 빠른 10%·중앙값·느린 10% · 오른쪽 구단가치 구간별 달성 판수 `AvgBarList`) · 등수별 점수 그래프는 66 꼴 그대로 · top3 는 R9 | **새** `rankmeta.champ_games(conn, season_at) -> ChampGames(n, hist, p10, p50, p90, by_value, hidden)` — **행 집합은 `club_head` 와 같다**(`SELECT games FROM champ_first WHERE season_at = ?` · 사람 단위 거르기 없음 · 숨김은 시즌 단위 `_late_start` 하나 · p50 은 `_median` — 1회차 [상] 1) · **캐시 안 함**(`reward_board` 와 같은 이유 — 1회차 [상] 2) · 구단가치 칸은 `bin_of_value`(`champ_first.team_value` 는 챔스 닿은 때 값, 칸 경계는 마지막 스냅숏 분포 — 안내 한 줄) · 히스토그램 칸 폭 `config.R5_HIST_BIN` · **단추 없음**(`champ_first` 는 챔스 이상만 · 슈챔 첫 도달 표 없음 — rankcollect 1385·1428 · S 의 [슈챔] 은 안 한다) · 막대 그림은 `charts` 새 `HistBars`(작은 그림 · 그리기만) |
+| R6 | 랭킹 추이 › 보상 | 카드 둘(보상 참여 인원 · 100판당 중앙값 — `RewardBoard.users`·`overall` · S 의 "시즌 총 보상" 은 `RewardBoard` 에 없고 사람마다 범위값이라 합이 안 선다 → 뺀다 · 1회차 [중]) · 구단가치 구간별 100판당 `AvgBarList`(`by_value`) · **팀컬러별 100판당** `AvgBarList`(위 6 · 아래 6 · [전체 보기] 접기) · 순위 구간 표는 아래 접기로 | `rankmeta.reward_board` 에 `by_team_color` 한 칸(캐시 없는 `reward_board` 안 — [상] 2 · `fc_games` × 마지막 스냅숏 팀컬러 · `""`·"-"·마지막 스냅숏에 없는 사람은 뺀다 · 표본 하한 `K11_MIN_GAMES` 같은 것 · 인원 하한은 **`K11_MIN_PER_BAND` 를 같이 쓴다**(새 상수 안 만듦 — 구간 칸과 같은 뜻 · 1회차 [중])) · 사람 랭킹 안 만듦(U2) — 1위 한 명은 R4 "최다 보상" 카드 |
 | R7 | 메타 분석 › 구단가치 · 가성비 · 포지션 특성 · 랭킹 추이 › 메타 변화 | 구단가치 = 8 구간 `MetricRowList`(점유 · 인원 · 평균 점수 · 승률 · 챔스 — 막대 바탕) + 구간 하나를 고르면 그 구간 팀컬러 상위(지금 `best`·`cross`) · 가성비 = R1 에 합침(탭 없음 · U1) · 포지션 특성 = 자리 묶음 카드(일반·신규·훈련 % 세 칸 · 인원) — 표는 [포메이션별] 접기 아래 · 메타 변화 = 사용 증가 팀컬러·포메이션 두 `MetricRowList`(+N명 · 변화 색) | `_build_value_bins_tab`(7647) · `_build_position_trait_tab`(7301) · `_build_meta_trend_tab`(6923) — 계산은 그대로 |
-| R8 | 승률 그래프 › 점수·예측 · 랭킹 추이 › 예측 되짚기 | 주차 꼴 — 카드 넷(현재 200위 · 현재 20위 · 남은 날 · 내 순위) · **예상 200위 컷 크게 + 80% 범위**(지금 `predict.py` 값 그대로) · 여유 점수 계산 줄(예상 컷 − 내 점수) · 계산 방법 `Collapsible` · 지난 시즌 최종 컷 목록(`season_cuts` · 진행 중 `Tag("muted")`) · 막판 상승폭·컷 변화 자리 "모으는 중"(E5) · 예측 되짚기 표는 판정 칸을 `Tag` 로 | `_draw_elo_chart` 위 글 줄 → 카드 · `_build_predict_check_tab`(8024) · 예측 숫자의 정의·골든(`test_predict.GOLDEN_VALUE`)은 안 바뀐다 |
+| R8 | 승률 그래프 › 점수·예측 · 랭킹 추이 › 예측 되짚기 | 주차 꼴 — 카드 넷(현재 200위 · 현재 20위(R4 `rank_cut`) · 남은 날 · 내 순위) · **예상 200위 컷 크게 + 80% 범위**(지금 `predict.py` 값 그대로) · 여유 점수 계산 줄(예상 컷 − 내 점수) · 계산 방법 `Collapsible` · 지난 시즌 최종 컷 목록(`season_cuts` · 진행 중 `Tag("muted")`) · 막판 상승폭·컷 변화 자리 "모으는 중"(E5) · 예측 되짚기 표는 판정 칸을 `Tag` 로 | `_draw_elo_chart` 위 글 줄 → 카드 · `_build_predict_check_tab`(8024) · 예측 숫자의 정의·골든(`test_predict.GOLDEN_VALUE`)은 안 바뀐다 |
 | R9 | 랭커 목록(top3 카드 · 주간 요약 사람 줄) | S 랭킹 줄 꼴 — 등급 배지 · 닉네임 · 점수 · 승률 + `WdlBar(compact)`(지금 `win_rate_bar` 6889) · 미니 축구장 · 엠블럼 · 구단가치 | `RankerCard`(widgets 1062) · `rankmeta.top3`(`TopCard` 에 포메이션·팀컬러 필드 — 마지막 스냅숏에 있음 · 새 요청 0) |
 | R10 | 랭커 픽 › 픽 · 추천 | S 선수 꼴 — 포지션 묶음 칩(공격 · 미드 · 수비 · GK · 우리 `PICK` 줄 이름 그대로) · 줄 목록(카드 시즌 배지 · 포지션 칩 · 강화 배지 · 비율 바탕 채움) · 지표 칩(골·도움·평점·승률)은 **재료가 있는 것만**(랭커 픽은 마지막 경기 선발 — 판당 지표가 없으면 칩 없음) | `_build_ranker_pick_tab`(6419) · `_build_recommend_tab`(6635) · 지표 재료 확인은 조각 ② 첫 커밋 |
-| R11 | 짝 없는 화면(U3 — 승무패 줄만) | 기간별 추이 · 시즌별 성적 → `RateRowList`(기간·시즌 이름 · 평균 대비) · 남은 `win_rate_bar` 5곳 → `WdlBar(compact)` · 흐름 분석 글 줄의 핵심 숫자 색(P9) · 구단주 비교 머리 숫자 → `StatCard`. 표로 남는 화면은 손대지 않는다 | `_build_period_tab`(4176) · `_build_season_tab`(3889) · `win_rate_bar` 를 부르는 자리 0 이면 함수도 지운다(`test_rules` 한 줄 — 다시 쓰면 FAIL) |
-| R12 | 공개 전 남은 것(E9) · 3.1.1 공개 | 상대 전적 "-" 줄 거르기(닉네임 없는 상대 — 몰수 등 · 줄 수는 아래 글에) · `CHART_NEUTRAL` 밝은 값 3.0 이상(대비 표 행) · exe 에서 경기 상세 창 열기(2번 모니터) · `release.py` 를 master merge 뒤 돌리기 확인 · CHANGELOG 3.1.1 절(색·카드 모양 · 화면 짝 · 그래프) · README 스크린샷 문구 · 프로젝트 CLAUDE.md 파일 표(새 부품·함수) · `v3.1.1` → master merge | merge 는 측정(51)이 끝나기 전이다 — **작업 스케줄러가 도는 원래 폴더는 master 를 쓰므로 merge = 측정 코드 sha256 이 바뀌는 순간인지** 먼저 본다(`tools/measure_cards.py:133` — 브랜치가 `tools/measure_cards.py` 를 안 건드렸으면 같다 · 조각 ④ 첫 커밋에서 `git diff master v3.1.1 -- tools/measure_cards.py` 0줄 확인) |
+| R11 | 짝 없는 화면(U3 — 승무패 줄만) | 기간별 추이 · 시즌별 성적 → `RateRowList`(기간·시즌 이름 · 평균 대비) · 남은 `win_rate_bar` 5곳 → `WdlBar(compact)` + **옆 글 "승률 N% · 표본 N"·섞임 툴팁은 쓰는 쪽이 붙인다**(`WdlBar` 는 "N승 N무 N패" 만 — widgets 1697 · `weak` 는 `rated(mixed)` 기준 · `test_winrate_bar_sample_text_uses_rated`(test_ui_smoke 6609) 단언을 새 자리로 옮긴다 · 1회차 [중]) · 흐름 분석 글 줄의 핵심 숫자 색(P9) · 구단주 비교 머리 숫자 → `StatCard`. 표로 남는 화면은 손대지 않는다 | `_build_period_tab`(4176) · `_build_season_tab`(3889) · `win_rate_bar` 를 부르는 자리 0 이면 함수도 지운다(`test_rules` 한 줄 — 다시 쓰면 FAIL) |
+| R12 | 공개 전 남은 것(E9) · 3.1.1 공개 | 상대 전적 "-" 줄 거르기(닉네임 없는 상대 — 몰수 등 · 줄 수는 아래 글에) · `CHART_NEUTRAL` 밝은 값 3.0 이상(대비 표 행) · exe 에서 경기 상세 창 열기(2번 모니터) · `release.py` 를 master merge 뒤 돌리기 확인 · CHANGELOG 3.1.1 절(색·카드 모양 · 화면 짝 · 그래프) · README 스크린샷 문구 · 프로젝트 CLAUDE.md 파일 표(새 부품·함수) · `v3.1.1` → master merge | merge 는 측정(51)이 끝나기 전이다 — **작업 스케줄러가 도는 원래 폴더는 master 를 쓰므로 merge = 측정 코드 sha256 이 바뀌는 순간인지** 먼저 본다(`tools/measure_cards.py:133` — 브랜치가 `tools/measure_cards.py` 를 안 건드렸으면 같다 · 조각 ④ 첫 커밋에서 **`TOOL_FILES` 셋**(`tools/measure_cards.py:129` — `tools/measure_cards.py`·`cardstats.py`·`cardcollect.py`) `git diff master v3.1.1 --` 0줄 확인 · 10-27 검토 때 셋 다 0줄) |
 
 **안 하는 것**: S 승격·경기 분석·선수 분석·BP 시세·스쿼드 메이커(위 표) · 상성 보기·팀컬러 상세 탭 넷·시간별(E3) · 연승(E4) · 1만 명 목록·보상 사람 랭킹(E6 · U2) · 오류 매치(E8) · 포메이션 3·4·5백 · 0~3톱 거르기(우리 앱에 없다 — 10-19 목록이 57 에 넣었지만 들어가지 않았다(grep 0) · 1만 명 포메이션 목록 화면이 없어 붙일 자리가 없다 → "버전 미정 후보" 로).
 
@@ -1048,9 +1048,21 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | 새 탭·키 | `VIEW_OF_KEY` · `_renderers` · `NAV` 의 `Tabs("rankmeta"` | 새 키 `tcboard` 한 줄씩 — `test_every_nav_page_has_a_renderer` |
 | rank.db 를 읽는 새 함수 | `def ` 새 이름 in `rankmeta.py` · `core_api.__all__` | `core_api` 경계 · `_drive_uncovered()`(SQL 실행 계획 — `test_rules`) · `RANK_VIEW_KEYS`(rank.db 바뀜 무효화)에 새 키 |
 | 팀컬러 창 여는 자리 | `TeamColorDialog(` · `_on_teamcolor_cell_clicked` · `_on_teamcolor_double_clicked` | 한 함수로 열기(R1·R3 같은 창) |
-| 표 → 줄 목록으로 바뀌는 표를 읽는 테스트 | `tbl_teamcolor_rate` · `tbl_teamcolor_rank` · `tbl_weekly` · `tbl_value_bins` · `tbl_period` · `tbl_season` 등 바뀌는 이름(첫 커밋에 표) | 65 와 같이 "옛 이름 → 새 부품" 대응표 · 단언은 줄 수·글·색으로 옮긴다(지우지 않는다) |
-| 지우는 탭 | `_build_value_score_tab` · `valuescore` · `lb_vscore_note` · `tbl_value_score`(app_main · tests) | 0 줄 — 단언은 R1 목록(가성비 칸·정렬)으로 옮긴다 · 저장된 "가성비" 탭 → `tcboard` |
-| 새 상수 | `config.K11_TC_MIN_USERS` · 줄 목록 높이 | `config` 한 곳 · 배선 테스트는 기본값이 아닌 값으로 |
+| 표 → 줄 목록으로 바뀌는 표를 읽는 테스트 | `tbl_teamcolor_rate` · `tbl_teamcolor_rank` · `weekly_tables` · `tbl_vbins` · `tbl_vcross` · `tbl_period` · `tbl_seasons` 등 바뀌는 이름(첫 커밋에 표 · **이름은 10-27 코드에서 확인한 것** — 1회차 [중]: 틀린 이름은 0줄이라 빈 검사) | 65 와 같이 "옛 이름 → 새 부품" 대응표 · 단언은 줄 수·글·색으로 옮긴다(지우지 않는다) |
+| 지우는 탭 | `_build_value_score_tab` · `valuescore` · `lb_vscore_note` · `tbl_vscore`(app_main · tests — 10-27 app_main 9줄 · test_ui_smoke 3줄) | 0 줄 — 단언은 R1 목록(가성비 칸·정렬)으로 옮긴다 · 저장된 "가성비" 탭 → `tcboard` |
+| rank.db 를 읽는 새 함수(이름) | `champ_games` · `rank_cut` · `tc_top_owners` · `team_color_board` · `reward_board.by_team_color` | 사람별 표(`champ_first`·`fc_games`·`snapshot_rows` 사람 줄)를 읽는 것은 **`_cached` 밖**(1회차 [상] 2) · 테스트: 동의 철회·`DELETE FROM fc_games` 뒤 다시 부르면 빈 값 |
+| 새 상수 | `config.R5_HIST_BIN` · 줄 목록 높이 | `config` 한 곳 · 배선 테스트는 기본값이 아닌 값으로 |
+
+### 1회차 검토 (2026-10-27 · Opus 1명 · 2판 `7f63769` · 근거 묶음 + grep · 24.9만 토큰) → 3판
+
+[상] 3 · [중] 11 — 전부 위 항목·표에 반영(고친 줄에 "1회차" 표시). 검토자 주장은 코드로 다시 확인했다(rankmeta 1116·1249 · config 225·247 · measure_cards 129 · app_main 표 이름).
+
+| # | 무엇 | 정한 것 |
+|---|---|---|
+| R1 [상] | R5 가 `first_seen_late` 를 거르면 H5 `club_head.champ_median`(거르지 않음 · rankmeta 1116)과 숫자가 갈린다 · 방향도 틀림(늦게 잡힌 사람은 느린 쪽) | R5 = `club_head` 와 같은 행 · 같은 `_median` · 단언 |
+| R2 [상] | ⑦ "새 묶음은 `_cached` 안" — 캐시 키는 스냅숏 목록뿐이라 동의 철회·`DELETE FROM fc_games` 를 못 본다(`reward_board` 가 일부러 캐시 안 하는 이유 · 1249) | 사람별 표를 읽는 새 함수는 캐시 밖 · 진입점 표에 이름으로 · 철회 테스트 |
+| R3 [상] | 20위 컷 재료 없음 — `RANK_CUT_RANKS`·`WEEKLY_CUTS`·`ELO_CUT_LINES` 에 20 없음 | 새 `rank_cut` 이 원본 `snapshot_rows` 에서(저장 형식 안 바꿈 — 수집 쪽 `RANK_CUT_RANKS` 에 20 을 더하는 안은 앞으로만 쌓여 이번 시즌 지난주 값이 없다) |
+| M1~M11 | 겹치는 이름 키 · 빈 키·하루 승률 빈 칸 · 승률 식 둘 · 칩 상태 공유 · `WdlBar` 가 잃는 글 · 진입점 grep 이름 4개 · `TOOL_FILES` 셋 · R4 카드 재료(메타 변화 None · 최다 보상 정의 · 관문) · R6 총 보상·하한 상수 · R5 구단가치 칸 시점 · R2 새 읽기 둘 · R3 누름 겹침 | 각 R 줄·진입점 표·⑥⑦⑧ 에 반영 |
 
 ### 사용자에게 물은 것 (1판 · **2026-10-27 사용자: 전부 추천대로** — 위 항목 표에 반영)
 
@@ -1065,8 +1077,8 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 |---|---|---|---|
 | ① | R0 줄 목록 두 부품 + R1 팀컬러 목록 + R7(구단가치 · 가성비 · 포지션 특성 · 메타 변화) | 진입점 표 첫 셋 grep · 옛 표 이름 → 새 부품 대응표 · 1만 줄 거르기 시간 | 중간~높음 |
 | ② | R2 팀컬러 상세 창 + R3 내 상대 두 화면 + R10 랭커 픽 | 팀컬러별 픽 표본 수(E3) · 픽 지표 재료 확인 | 높음 |
-| ③ | R4 주간 요약 · R5 달성 판수 · R6 보상 · R8 주차 · R9 top3 | `champ_first` 슈챔 재료 확인 · `K11_TC_MIN_USERS` 값(커밋 전) · 달성 판수 손 테스트(빠른·느린 10% 경계) | 높음 |
-| ④ | R11 짝 없는 화면 · R12 남은 것 · 3.1.1 공개 준비(merge · CHANGELOG · README · CLAUDE.md · `release.py` — 공개 명령은 사용자) | `git diff master v3.1.1 -- tools/measure_cards.py` 0줄 · 전 화면 PNG(두 테마) | 중간~높음 |
+| ③ | R4 주간 요약 · R5 달성 판수 · R6 보상 · R8 주차 · R9 top3 | `champ_games(...).p50 == club_head(...).champ_median` 단언 · 동의 철회 뒤 R5·R6 이 바로 빈다(캐시 없음) · `rank_cut` 손 테스트 · 달성 판수 손 테스트(빠른·느린 10% 경계) | 높음 |
+| ④ | R11 짝 없는 화면 · R12 남은 것 · 3.1.1 공개 준비(merge · CHANGELOG · README · CLAUDE.md · `release.py` — 공개 명령은 사용자) | `TOOL_FILES` 셋 diff 0줄 · 전 화면 PNG(두 테마) | 중간~높음 |
 
 ### ③ 환경 행렬
 
@@ -1088,14 +1100,15 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 |---|---|---|---|---|
 | 줄 목록 | 1만 줄(포지션 특성·팀컬러 801개)을 위젯으로 | 메뉴 전환 0.3초 넘김 | 65 와 같이 대리자 그림 · 1만 줄 측정 | `CardListView` |
 | R1 묶기 | 세 함수의 팀컬러 키가 달라(이름 겹침 11쌍) 한 줄이 둘로 | 같은 팀컬러 두 줄 | `teamcolor.name_of` 한 길 · 손 테스트(겹치는 이름) | 키 하나 |
-| R5·R6 새 묶음 | 시즌 중간에 처음 잡힌 사람이 섞임 | 달성 판수가 작게 나옴 | `first_seen_late`·`late` 와 같은 거르기 단언 | 같은 판정 |
+| R5 새 묶음 | 대시보드 H5 와 다른 행을 셈 | 같은 시즌 중앙값이 두 화면에서 다름 | `champ_games().p50 == club_head().champ_median` 단언 | 같은 SELECT · 같은 `_late_start` (1회차 [상] 1 — 늦게 잡힌 사람은 느린 쪽이라 거르면 오히려 작아진다 · 거르지 않는다) |
+| R5·R6 캐시 | 사람별 표를 `_cached` 에 넣음 | 동의 철회·지우기 뒤에도 옛 값 | 철회 뒤 다시 부르는 테스트 | 캐시 밖(`reward_board` 와 같게) |
 | 팀컬러 창 | 웹 데이터 꺼짐에서 효과 탭이 요청 | 스위치 우회 | `test_web_data_switch_blocks_every_request` 그대로 | 첫 줄 검사 |
 | merge(R12) | 측정 코드가 바뀐 채 원래 폴더에 들어감 | 51 판정 무효 | sha256 대조(`measure_cards.py:133`) · 첫 커밋 diff 0줄 | merge 를 판정 뒤로 |
 | `win_rate_bar` 지움 | 바깥(테스트·dashboard)이 부름 | ImportError | grep 0 · 스모크 | 대응표 |
 
 ### ⑦ 자원 예산
 
-새 요청 0 · 새 저장 0. 상한: 메뉴 전환 0.3초(공통 기준 3) · 새 계산은 `champ_games`(`champ_first` 시즌 한 번 · 약 1만 줄)·`by_team_color`(`fc_games` × 1만 명)·`team_color_board`(이미 캐시된 셋을 묶기) — 전부 rank.db `_cached` 안(**추정** → 조각 ①③ 에서 이 PC rank.db 로 전후 측정 · 65 와 같은 도구).
+새 요청 0 · 새 저장 0. 상한: 메뉴 전환 0.3초(공통 기준 3) · 새 계산은 `champ_games`(`champ_first` 시즌 한 번 · 약 1만 줄)·`by_team_color`(`fc_games` × 1만 명)·`rank_cut`(원본 한 순위)·`tc_top_owners` — **이 넷은 캐시 밖**(사람별 표 · 1회차 [상] 2 — 메뉴를 열 때마다 다시 센다) · `team_color_board` 는 이미 캐시된 셋을 묶기만(`_cached` 안). 계산 시간은 조각 ①③ 에서 이 PC rank.db 로 전후 측정(65 와 같은 도구 · 0.3초 넘으면 그 칸만 작업 스레드).
 
 ### ⑧ 기능 상호작용 (두 개씩)
 
@@ -1105,7 +1118,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | R2 창 × R3 줄 누름 × 2.2.1 효과 창 | 창 하나 · 같은 팀컬러를 다시 누르면 새 창이 아니라 그 창 |
 | R3 × 포지션별 최다 상대 › 축구장 | 같은 렌더 키 `teamcolor` — 꼴을 바꿔도 축구장 쪽 단언 그대로 |
 | R4 최다 보상 × R6 카드 | 같은 숫자(`reward_board` 한 길) |
-| R5 달성 판수 × 대시보드 H5 | 중앙값이 같아야 — `club_head.champ_median` 을 `champ_games` 로 바꾸거나 둘이 같다는 단언 |
+| R5 달성 판수 × 대시보드 H5 | 같은 행 집합 · 같은 `_median` — `club_head` 는 안 바꾸고 둘이 같다는 단언(1회차 [상] 1) |
 | R8 × 66 G2 점수 그래프 | 그래프는 그대로, 위 글 줄만 카드로 — 66 의 머리 큰 값과 겹치지 않게 |
 | R11 × 64 표본 흐림 | 줄 목록에서도 미달 기간·시즌 흐림(`WEAK_MIX`) |
 | R12 merge × 작업 스케줄러 세 개 | 원래 폴더의 코드가 바뀌는 순간 — `FifaDevMatches`·`FifaDevArchive`·`FifaMeasureCards` 가 안 쓰는 파일만 바뀌는지 |
@@ -1116,7 +1129,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 ### 재지 않은 것
 
-S 의 줄 목록·카드의 정확한 색 값(64 처럼 계산된 색을 읽지 않았다 — 64 토큰을 쓴다) · S 팀컬러 "단일" 의 뜻 · S 상세 탭 넷 안쪽 · S 밝은 테마 · 다른 기준 화면(I)의 감독모드 랭킹·팀컬러 검색·랭커 픽 감독모드 탭(10-25 "아직 안 본 곳") · `champ_first` 에 슈챔 판수가 있는지 · 팀컬러별 픽 표본 수 · 새 묶음 계산 시간 · 상대 전적 "-" 줄 수.
+S 의 줄 목록·카드의 정확한 색 값(64 처럼 계산된 색을 읽지 않았다 — 64 토큰을 쓴다) · S 팀컬러 "단일" 의 뜻 · S 상세 탭 넷 안쪽 · S 밝은 테마 · 다른 기준 화면(I)의 감독모드 랭킹·팀컬러 검색·랭커 픽 감독모드 탭(10-25 "아직 안 본 곳") · 팀컬러별 픽 표본 수(조각 ②) · 새 묶음 계산 시간 · 상대 전적 "-" 줄 수.
 
 난이도 **높음**(화면 약 25 · 새 부품 둘 · 공개). 검토: Opus 1명(기존 데이터로 화면만 — 검토 기준 7 · 단 R5·R6 새 묶음은 계산이라 검토자 관점에 "rank.db 판정 재사용" 을 적어 준다) / 구현: Sonnet + Opus 리뷰(맨 위 표) — ②③ 은 높음이라 **Opus 로 바꾸기를 추천**(66 이 Opus 로 한 것과 같은 이유: 새 그림·새 묶음).
 
