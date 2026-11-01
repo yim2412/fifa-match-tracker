@@ -28,8 +28,8 @@ if os.path.isdir("C:/Windows/Fonts"):
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-from PyQt6.QtCore import QEvent, QRectF, QThread, QTimer, Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QEvent, QRectF, QThread, QTimer, Qt  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
 
@@ -86,7 +86,7 @@ def _no_modal(name):
     return blocked
 
 
-from PyQt6.QtWidgets import QDialog, QMessageBox, QTabWidget  # noqa: E402
+from PySide6.QtWidgets import QDialog, QMessageBox, QTabWidget  # noqa: E402
 
 for _n in ("warning", "information", "critical", "question"):
     setattr(QMessageBox, _n, staticmethod(_no_modal(f"QMessageBox.{_n}")))
@@ -210,7 +210,7 @@ def test_modal_calls_fail_fast():
 
 def _stray_windows_while(build) -> list[str]:
     """build() 동안 최상위 창으로 보이게 된 위젯(돌려준 창 자신은 빼고) — 켤 때 작은 창이 깜빡이던 원인을 잰다."""
-    from PyQt6.QtCore import QObject
+    from PySide6.QtCore import QObject
 
     class _Watch(QObject):
         def __init__(self):
@@ -232,7 +232,7 @@ def _stray_windows_while(build) -> list[str]:
 
 
 def test_main_window_build_shows_no_stray_windows():
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     # 재는 장치부터: 레이아웃에 넣기 전에 보이면 부모 없는 위젯이 창으로 잡혀야 한다(안 잡히면 아래 검사가 빈 것)
     lone = QLabel("t")
     assert _stray_windows_while(lambda: lone.setVisible(True)), "부모 없는 QLabel 을 창으로 못 잡았다"
@@ -515,7 +515,7 @@ def test_page_tabs_widget():
     """PageTabs — 지금 탭만 보인다 · 바뀔 때만 신호 · 없는 탭은 거절 · 숨은 탭의 넓은 내용이 최소 폭을 안 넓힌다 ·
     좁으면 탭 글자를 줄이지 않고 탭줄이 접힌다."""
     import widgets
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     t = widgets.PageTabs()
     pages = [QLabel("b"), QLabel("넓은 내용" * 60), QLabel("c")]
     for i, p in enumerate(pages):
@@ -595,7 +595,7 @@ def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
 def test_setfont_sizes_survive_stylesheet():
     # QSS 의 QWidget 규칙에 font-size 가 있으면 코드의 setFont 가 전부 눌린다
     # (다크 테마 시절 실제로 그랬다 — 30pt 제목이 15px 로 보였다).
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     title = [lb for lb in _win.stack.widget(_win.PAGE_SEARCH).findChildren(QLabel)
              if lb.objectName() == "searchTitle"]
     assert title, "검색 화면 제목을 못 찾음"
@@ -699,7 +699,7 @@ def test_top_bar_wraps_only_when_narrow():
 
 
 def test_season_combo_never_narrower_than_longest_item():
-    from PyQt6.QtGui import QFontMetrics
+    from PySide6.QtGui import QFontMetrics
     cb = _win.cb_season
     fm = QFontMetrics(cb.font())
     longest = max(fm.horizontalAdvance(cb.itemText(i)) for i in range(cb.count()))
@@ -722,7 +722,7 @@ def test_fit_label_shrinks_instead_of_clipping():
     lb.resize(329, 60)  # 실데이터에서 잘렸던 칸 폭
     lb.show()  # 숨은 위젯은 resizeEvent 가 show 때까지 미뤄진다
     _app.processEvents()
-    from PyQt6.QtGui import QFontMetrics
+    from PySide6.QtGui import QFontMetrics
     full = QFontMetrics(lb._font_at(30)).horizontalAdvance(lb.text())
     assert full > 329, full  # 30pt 그대로였으면 잘렸다
     assert lb.font().pointSize() < 30, lb.font().pointSize()
@@ -842,8 +842,8 @@ def test_measure_text_same_as_measuring_everything():
     # 긴 글자부터 재다 멈추는 방식(2026-10-02)이 전부 재는 것과 같은 폭을 내야 한다 —
     # 짧지만 넓은 글자(한글·이모지)를 일부러 섞는다. 다르면 열이 좁아 "…" 로 잘린다.
     import random
-    from PyQt6.QtGui import QFont, QFontMetrics
-    from PyQt6.QtWidgets import QTableWidgetItem
+    from PySide6.QtGui import QFont, QFontMetrics
+    from PySide6.QtWidgets import QTableWidgetItem
     import widgets
     rnd = random.Random(11)
     pools = ["iiii", "1.0", "가나다", "뷁뷁", "WWW", "MM", "漢字", "😀😀", "★", "a", "Fullcolor쿠팡", "lllllllllll"]
@@ -880,7 +880,7 @@ def test_measure_text_same_as_measuring_everything():
 def test_fit_table_ignores_hidden_columns():
     # 57 K3 — 숨긴 열(상대 점수)의 긴 글자가 폭 계산에 들어가면 보이는 열이 글꼴을 줄이거나 오른쪽이 빈다
     import widgets
-    from PyQt6.QtWidgets import QHeaderView, QTableWidgetItem
+    from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
     tb = widgets.FitTableWidget(2, 3)
     tb.setHorizontalHeaderLabels(["가", "나", "숨김"])
     tb.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
@@ -911,7 +911,7 @@ def test_fit_table_never_scrolls_sideways_above_min_font():
     cols = [f"열이름{i}" for i in range(19)]
     tb = widgets.FitTableWidget(6, len(cols))
     tb.setHorizontalHeaderLabels(cols)
-    from PyQt6.QtWidgets import QHeaderView, QTableWidgetItem
+    from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
     tb.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
     tb.horizontalHeader().setMinimumSectionSize(0)
     tb.set_base_font_px(15, 15)
@@ -958,7 +958,7 @@ def test_sorted_column_gets_arrow_room_after_resort():
             (tb.horizontalHeaderItem(c).text(), tb.columnWidth(c), hdr.sectionSizeHint(c))
     # 폭이 넉넉하면 화살표 자리 없이도 들어가 위가 안 드러난다 — 남는 폭이 0 인 표로 잰다
     import widgets
-    from PyQt6.QtWidgets import QHeaderView, QTableWidgetItem
+    from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
     cols = ["가", "나나", "다다다", "라"]
     t = widgets.FitTableWidget(2, len(cols))
     t.setHorizontalHeaderLabels(cols)
@@ -1137,7 +1137,7 @@ def test_dashboard_gauge_shows_value_once_sample_is_enough():
 
 
 def test_dashboard_cards_navigate():
-    from PyQt6.QtTest import QTest
+    from PySide6.QtTest import QTest
     d = _win.dashboard
     targets = [c for c in d.cards if c.target]
     assert len(targets) >= 9, len(targets)
@@ -1540,7 +1540,7 @@ def _live_widgets(layout):
 
 def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
     # 2.7.1 N17 — 경기가 있는 최대 리드 줄마다 막대 하나 + 되짚은 경기 수 · 제외 안내
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     from widgets import WdlBar
     _win._go_page("승부처 분석", "리드·골 흐름")
     _win._render_goal_flow(_win._details)
@@ -1848,7 +1848,7 @@ def test_habits_tab_flags_a_real_effect_and_stays_quiet_otherwise():
     with _SynthScope(_synth_matches(spec(True))):
         _win._render_habits(_win._matches)
         assert hour_verdict.text().startswith("차이가 뚜렷합니다"), hour_verdict.text()
-        from PyQt6.QtGui import QColor
+        from PySide6.QtGui import QColor
         green = QColor(T.GOOD).name()
         assert hour_tbl.item(0, 0).foreground().color().name() == green, "효과를 심은 칸이 안 칠해졌다"
         assert hour_tbl.item(1, 0).foreground().color().name() != green
@@ -2269,7 +2269,7 @@ def _week_matches():
 
 
 def test_period_table_marks_best_worst_and_keeps_tint_after_sort():
-    from PyQt6.QtGui import QColor
+    from PySide6.QtGui import QColor
     t = _win.tbl_period
     rate_col = _win.PERIOD_COLUMNS.index("승률")
     vs_col = _win.PERIOD_COLUMNS.index("평균 대비")
@@ -2365,7 +2365,7 @@ def test_palettes_have_same_keys():
 
 def test_theme_reaches_widgets():
     # MODE 팔레트가 QPalette 와 QSS 양쪽으로 실제로 걸렸는지 — 카드 배경을 직접 찍어 본다.
-    from PyQt6.QtGui import QPalette
+    from PySide6.QtGui import QPalette
     # 제목 표시줄 색 체계(setColorScheme)는 offscreen 이 Unknown 만 돌려줘 여기선 못 잰다.
     assert _app.palette().color(QPalette.ColorRole.Window).name() == T.BG
     import widgets
@@ -2448,8 +2448,33 @@ def _raise_into_hook(msg):
         sys.excepthook(*sys.exc_info())
 
 
+def test_slot_exception_fails_the_test():
+    """슬롯 안 예외가 테스트를 빨갛게 만든다(73단계 F9 · watchdog.slot_errors) — PySide6 는 슬롯 예외를 훅에 넘기고
+    계속 돌아, 클릭으로 연 슬롯 안의 모달 차단(ModalCalled)이 테스트까지 안 올라온다."""
+    from PySide6.QtWidgets import QPushButton
+    b = QPushButton()
+    b.clicked.connect(lambda: QMessageBox.warning(None, "t", "t"))
+    # 막지 않았으면: click() 은 정상으로 돌아오고 예외는 훅만 받는다 — 테스트 함수는 모른다
+    seen, saved = [], sys.excepthook
+    sys.excepthook = lambda et, e, tb: seen.append(et)
+    try:
+        b.click()
+    finally:
+        sys.excepthook = saved
+    assert seen == [ModalCalled], seen
+    # 테스트 하나를 감싸는 watchdog.limit 이 그 예외를 실패로 바꾼다
+    try:
+        with watchdog.limit("심은 슬롯 예외"):
+            b.click()
+    except watchdog.SlotError as e:
+        assert "ModalCalled" in str(e) and "모달 호출" in str(e), e
+    else:
+        raise AssertionError("슬롯 안 모달이 통과로 읽혔다")
+    assert sys.excepthook is saved, "감싼 뒤 훅을 되돌리지 않았다"
+
+
 def test_setup_app_logs_crash_and_notifies_once():
-    # 훅이 안 걸려 있으면 기본 훅이 받는다 — PyQt6 는 그때 앱을 끝낸다
+    # 훅이 안 걸려 있으면 테스트 하네스(watchdog.slot_errors)의 훅이 받는다 — crashlog 훅이 남아 있으면 안 된다
     assert sys.excepthook is not crashlog._on_main_exc
     with _TempCrash() as ctx:
         _raise_into_hook("한글 오류 하나")
@@ -3514,14 +3539,14 @@ class _TeamColorEnv:
 
 def test_teamcolor_results_reach_table_and_db():
     # 로더 → 창 배선(받기·끝)과 DB 저장까지. 로더는 start() 에서 바로 내보낸다.
-    from PyQt6.QtCore import QObject, pyqtSignal
+    from PySide6.QtCore import QObject, Signal
 
     opps = sorted({m.opponent for m in _MATCHES if m.opponent})
 
     class _Instant(QObject):
-        loaded_many = pyqtSignal(dict)
-        progress = pyqtSignal(int, int)
-        finished_all = pyqtSignal()
+        loaded_many = Signal(dict)
+        progress = Signal(int, int)
+        finished_all = Signal()
 
         def __init__(self, wanted):
             super().__init__()
@@ -3691,7 +3716,7 @@ def test_teamcolor_table_same_before_and_after_meta():
 
 def test_teamcolor_weak_rows_sink_both_ways_and_stay_uncolored():
     # 흐린 줄(상대 수 < 기준 · 구분 전)은 숫자도 흐리고 색이 없으며, 어느 방향으로 정렬해도 맨 아래
-    from PyQt6.QtGui import QColor
+    from PySide6.QtGui import QColor
     opps = sorted({m.opponent for m in _MATCHES if m.opponent})
     with _TeamColorEnv():
         saved_min = config.TEAMCOLOR_MIN_OPPONENTS
@@ -3839,7 +3864,7 @@ def test_teamcolor_info_opens_only_from_button():
         _win._open_teamcolor_effect = opened.append
         try:
             tbl, lst = _win.tbl_teamcolor_rank, _win.tc_rate_list
-            from PyQt6.QtWidgets import QHBoxLayout
+            from PySide6.QtWidgets import QHBoxLayout
             _row, fresh = _win._teamcolor_pick_row(QHBoxLayout())   # 처음 그리기 전(탭을 아직 안 연 창)에도 꺼져 있다
             assert not fresh.isEnabled()
             fresh.deleteLater()
@@ -3895,7 +3920,7 @@ class _TcFake:
 
     def __exit__(self, *exc):
         teamcolor.fetch_list, teamcolor.fetch_detail, teamcolor.fetch_players, images.fetch_url = self._orig
-        del app_main.TeamColorEffectLoader.start   # 물려받은 것으로 되돌린다(대입하면 sip 메서드가 깨진다)
+        del app_main.TeamColorEffectLoader.start   # 물려받은 것으로 되돌린다(대입하면 바인딩 메서드가 깨진다 — PyQt6 때 실측)
 
 
 def _tc_dialog_open(label, timeout=10):
@@ -4007,7 +4032,7 @@ def test_shutdown_stops_teamcolor_effect_loaders():
     # 갈아 끼운(물러난) 로더까지 종료 표가 멈춤을 요청한다 — 창이 먼저 닫혀도. 스모크는 QThread.start 가 막혀 있어
     # "도는 중"을 흉내 낸다(시작은 했고 아직 안 끝남)
     cls = app_main.TeamColorEffectLoader
-    # 되돌릴 땐 지운다 — 물려받은 sip 메서드를 하위 클래스에 다시 대입하면 이후 호출이 깨진다
+    # 되돌릴 땐 지운다 — 물려받은 바인딩 메서드를 하위 클래스에 다시 대입하면 이후 호출이 깨진다
     keep = {n: cls.__dict__.get(n) for n in ("start", "isRunning")}, _win._tc_effect_loaders, _win._teamcolor_dialog
     cls.start, cls.isRunning = (lambda ld: None), (lambda ld: True)
     try:
@@ -4346,7 +4371,7 @@ def test_settings_remember_window_page_and_season():
                 called.append("미리 읽기 멈춤")
         _win._prefetch = _Pf()
         try:
-            from PyQt6.QtGui import QCloseEvent
+            from PySide6.QtGui import QCloseEvent
             _win.closeEvent(QCloseEvent())
         finally:
             del _win._save_settings
@@ -4924,7 +4949,7 @@ def test_quiet_refresh_failure_stays_in_status_bar():
 def test_loader_signals_pass_objects_without_copying():
     # list/dict 로 선언한 신호는 PyQt 가 중첩 dict 를 통째로 깊은 복사한다 — 1만 경기에서 메모리
     # 4.5GB·화면까지 6초였다(2026-10-02). 같은 객체가 그대로 와야 한다(복사면 is 가 깨진다)
-    from PyQt6.QtCore import Qt as _Qt
+    from PySide6.QtCore import Qt as _Qt
     details, matches, names = [{"a": {"b": [1]}}], [object()], {1: "x"}
     got = []
     ld = app_main.MatchLoader(_NoApi(), "x", 52)
@@ -5256,7 +5281,7 @@ def test_match_rows_tinted_by_result():
 def test_compare_colors_the_better_side():
     import dataclasses
     from models import summarize as summ
-    from PyQt6.QtGui import QColor
+    from PySide6.QtGui import QColor
     green = QColor(T.GOOD).name()
     mine = [dataclasses.replace(m, result="승", opp_goals=0) for m in _MATCHES]
     # 상대는 더 많이 먹는다 — 실점 카드는 "나가 낮음 = 좋음" 이라 ▼ 인데 GOOD 여야 한다(lower_better)
@@ -5329,6 +5354,26 @@ def test_pitch_chips_never_overlap():
             checked += 1
         pitch.deleteLater()
     assert checked == 150
+
+
+def test_pitch_card_signal_skips_deleted_pitch():
+    """카드 정보 로더의 신호가 닫힌 축구장에 늦게 와도 죽지 않고, 살아 있는 축구장엔 정보가 붙는다(73단계 —
+    `shiboken6.isValid` 부정 방향. 옛 `sip.isdeleted` 시절부터 이 슬롯을 부르는 테스트가 없었다)."""
+    import shiboken6
+    import playerinfo
+    pitch = _pitch_for([0, 3, 4, 6, 7, 10, 13, 15, 17, 18, 25])
+    pitch.card_data = {}                     # _fill_pitch_from_cache 가 먼저 둔다
+    sid = pitch.chips()[0].card.sp_id
+    info = playerinfo.PlayerInfo(sid, ovr=99, salary=12, prices={1: "1억"})
+    _win._on_pitch_card(pitch, info)
+    assert pitch.card_data.get(sid, {}).get("base_ovr") == 99, pitch.card_data   # 살아 있으면 붙는다
+    gone = _pitch_for([0, 3, 4, 6, 7, 10, 13, 15, 17, 18, 25])
+    gone.card_data = {}
+    shiboken6.delete(gone)
+    assert not shiboken6.isValid(gone)
+    _win._on_pitch_card(gone, info)          # 지워진 축구장 — 그냥 돌아온다(RuntimeError 면 FAIL)
+    _win._on_pitch_card_done(gone, 3)
+    pitch.deleteLater()
 
 
 def test_pitch_chip_drops_face_then_price_when_small():
@@ -6079,7 +6124,7 @@ def test_shell_starts_and_stops_rank_collect():
 
 
 def test_x_hides_when_collecting():
-    from PyQt6.QtGui import QCloseEvent
+    from PySide6.QtGui import QCloseEvent
     keep = config.RANK_COLLECT, config.WEB_DATA
     try:
         with _ShellOnWin() as ctx:
@@ -6093,7 +6138,7 @@ def test_x_hides_when_collecting():
 
 
 def test_x_quits_by_default():
-    from PyQt6.QtGui import QCloseEvent
+    from PySide6.QtGui import QCloseEvent
     keep = config.RANK_COLLECT, config.WEB_DATA, app_main.autostart.is_enabled
     try:
         app_main.autostart.is_enabled = lambda: False
@@ -6115,7 +6160,7 @@ def test_x_quits_by_default():
 
 def test_close_event_while_quitting_only_accepts():
     # app.quit() 은 보이는 창의 closeEvent 를 한 번 더 부른다 — 그때 숨기거나 두 번 정리하면 안 된다
-    from PyQt6.QtGui import QCloseEvent
+    from PySide6.QtGui import QCloseEvent
     with _ShellOnWin():
         _win._quitting = True
         hit = []
@@ -6598,7 +6643,7 @@ def _discipline_details():
 
 def test_discipline_section_shows_averages_and_end_kinds():
     _win._render_discipline(_discipline_details())
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     text = " ".join(lb.text() for i in range(_win.box_diag_discipline.count())
                     if (w := _win.box_diag_discipline.itemAt(i).widget())
                     for lb in [w, *w.findChildren(QLabel)] if isinstance(lb, QLabel))
@@ -6610,7 +6655,7 @@ def test_discipline_section_shows_averages_and_end_kinds():
 
 def _weak_sites():
     """표본 흐림 규칙의 진입점(ROADMAP 1.2.1 표) — 이름 → (그리기, 위젯에서 (경기 수, 흐림) 목록 뽑기, 기준 상수 이름)."""
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     from widgets import WdlBar
 
     def bars(*boxes, kind=WdlBar):
@@ -6812,7 +6857,7 @@ def test_palette_tokens_reach_widgets():
         assert getattr(T, key) == T._P[key], key
     assert (T.WIN, T.LOSE) == (T.GOOD, T.BAD) and T.ACCENT not in (T.GOOD, T.BAD)
     # 꽉 칠한 버튼은 PRIMARY 로 그려진다 — 찍어서 본다
-    from PyQt6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QPushButton
     b = QPushButton("확인")
     b.setObjectName("primary")
     b.resize(120, 40)
@@ -6908,8 +6953,8 @@ def test_players_g8_wiring():
             _win._slice = keep_slice
             _win._render_players(ds)
         # 승률 굵게는 대리자가 그릴 때 — 표 글꼴을 줄여도 따라가고, 폭(sizeHint)은 보통 글꼴로 알린다
-        from PyQt6.QtGui import QFont
-        from PyQt6.QtWidgets import QStyleOptionViewItem
+        from PySide6.QtGui import QFont
+        from PySide6.QtWidgets import QStyleOptionViewItem
         import widgets
         dg = tb.itemDelegateForColumn(4)
         assert isinstance(dg, widgets.BoldColumnDelegate), dg
@@ -6922,7 +6967,7 @@ def test_players_g8_wiring():
         w_bold = dg.sizeHint(plain, tb.model().index(0, 4)).width()
         assert w_bold == widgets.RowBorderDelegate(tb).sizeHint(plain, tb.model().index(0, 4)).width(), w_bold
         # 그래서 굵은 만큼은 그 열 여백으로 — 가장 작은 창(글꼴이 줄어든 상태)에서도 굵은 글자 + 칸 여백이 열 폭 안
-        from PyQt6.QtGui import QFontMetrics
+        from PySide6.QtGui import QFontMetrics
         _win._go_page("선수 지표")
         try:
             _at_size(*app_main.MIN_WINDOW)
@@ -7013,7 +7058,7 @@ def test_grade_badge_not_clipped():
         _win._render_players(_win._slice()[1])
     assert with_badge[0] == plain[0] and with_badge[1] == plain[1], (with_badge[:2], plain)
     assert with_badge[2].get(2) == 2 * widgets.GradeBadgeDelegate.PAD, with_badge[2]
-    from PyQt6.QtGui import QFontMetrics
+    from PySide6.QtGui import QFontMetrics
     _win._go_page("선수 지표")
     _app.processEvents()
     fm = QFontMetrics(tb.font())
@@ -7050,7 +7095,7 @@ def test_badge_paint_failure_falls_back():
 def test_grade_badge_columns_wired():
     # 64 P8 — GRADE_BADGE_COLUMNS 의 표마다 그 열에 배지 대리자 + 배지 여백(test_rules 가 칸을 만드는 함수와 대조한다)
     import widgets
-    from PyQt6.QtWidgets import QStyleOptionViewItem, QTableWidgetItem
+    from PySide6.QtWidgets import QStyleOptionViewItem, QTableWidgetItem
     for fn, (attr, cols) in app_main.MainWindow.GRADE_BADGE_COLUMNS.items():
         tb = getattr(_win, attr)
         for c in cols:
@@ -7075,7 +7120,7 @@ def test_grade_badge_columns_wired():
 def test_player_chip_is_tag_style():
     # 64 조각 ③ — 포지션 칩은 꽉 칠한 색 + 진한 글자(밝은 쪽 대비 2.45)가 아니라 태그 꼴: 바탕 = 그 색 10% · 글자 = 그 색
     import widgets
-    from PyQt6.QtGui import QColor
+    from PySide6.QtGui import QColor
     acc = widgets.PitchWidget._accent_for
     assert [acc(0), acc(5), acc(10), acc(18), acc(25)] == [T.CHIP_GK, T.CHIP_DF, T.CHIP_MF, T.CHIP_MF, T.CHIP_FW]
     chip = widgets._PlayerChip(widgets.PitchCard(25, "ST", "선수", None), T.CHIP_FW)
@@ -7092,7 +7137,7 @@ def test_player_chip_is_tag_style():
 
 # ── 9단계(1.3.1): ② 흐름 분석 띠·근거 막대 · ⑥ 히트맵·도넛·포메이션 막대 · 13 ELO · 다시 묻는 동의 ───────────
 from dataclasses import replace  # noqa: E402
-from PyQt6.QtGui import QFontMetrics  # noqa: E402
+from PySide6.QtGui import QFontMetrics  # noqa: E402
 import charts  # noqa: E402
 import tray  # noqa: E402
 
@@ -7118,7 +7163,7 @@ def test_basis_bar_mixed_text():
 
 def test_analysis_result_dots_and_basis_bars():
     from analysis import Basis, Insight
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     keep = app_main.core.narrate
     found = [Insight(app_main.core.SEC_WIN, "선제골을 넣으면 승률 80%.", "", 5.0,
                      Basis("선제골 넣은 경기", 80.0, 30, 50.0, 8)),
@@ -7988,7 +8033,7 @@ def test_dialog_origin_centers_and_clamps():
 def test_dialog_follows_minimized_main_window():
     """윈도우는 최소화된 창의 좌표를 화면 밖(-32000)으로 보낸다 — 그때도 창이 돌아올 자리 위에(2026-10-06 사용자).
     offscreen 은 이 좌표를 흉내 내지 않아 가짜로 만든다."""
-    from PyQt6.QtCore import QRect
+    from PySide6.QtCore import QRect
     host = app_main.QWidget()
     host.isMinimized = lambda: True
     host.frameGeometry = lambda: QRect(-32000, -32000, 160, 28)
@@ -8747,7 +8792,7 @@ def test_pass_style_section_in_tactics():
     assert ps.all.games == len(wdl) == 3, (ps.all.games, len(wdl))
     # 65 M7 — 종류마다 카드(PASS_CARD_COLS 칸) · 성공률 크게 · 경기당 시도/성공 · 성공률 막대(파랑)
     import core_api
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     from widgets import MeterBar
     g, cols = _win.grid_pass, app_main.config.PASS_CARD_COLS
     cards = _win.pass_cards
@@ -10526,7 +10571,7 @@ def test_metric_row_and_avg_bar_parts_67():
     """67 R0 — 지표 줄: 칸 폭은 목록 전체에서 맞춘다(줄마다 숫자가 같은 x) · 흐림은 칸 색까지 · 채움 색은 ROW_FILL.
     평균 막대: 기준 위/아래 색 · higher_better=False 면 뒤집힌다(3회차 M8) · 막대 길이는 최댓값 대비."""
     import widgets
-    from PyQt6.QtCore import QRectF
+    from PySide6.QtCore import QRectF
     lst = widgets.MetricRowList()
     rows = [widgets.MetricRow("가", "1명", (widgets.MetricCell("1", "짧은 라벨"), widgets.MetricCell("12.3%", "점유", T.GOOD)), rank=1),
             widgets.MetricRow("나나나", "2명", (widgets.MetricCell("1,234,567", "라벨"), widgets.MetricCell("9.9%", "점유")),
@@ -10588,7 +10633,7 @@ def test_predict_check_tab_renders_and_fits():
         assert by_day["2026-08-01"][5:] == ["120위", "실제 200위 안 · 범위 안"], by_day
         assert by_day["2026-08-02"][5:] == ["120위", "실제 200위 안 · 범위 밖"], by_day
         # 67 R8 판정 칸 태그 꼴 — 범위 안 = 좋음 · 범위 밖 = 주의(글자 색)
-        from PyQt6.QtGui import QColor
+        from PySide6.QtGui import QColor
         tone = {t.item(r, 1).text(): t.item(r, 6).foreground().color().name() for r in range(2)}
         assert tone == {"2026-08-01": QColor(T.GOOD).name(), "2026-08-02": QColor(T.WARN).name()}, tone
         key = f"{store.PREDICT_FINAL_PREFIX}{ouid}:{start}"
@@ -11294,7 +11339,7 @@ def test_opponent_diff_column_hides_weak_rows_k13():
     lst = _win.opp_list
     keep = app_main.core.MIN_COND
 
-    from PyQt6.QtCore import QRectF
+    from PySide6.QtCore import QRectF
 
     def diff_seg(row):
         segs = lst.rate_delegate.layout(row, QRectF(0, 0, 900, 60), lst.font())
@@ -11603,7 +11648,7 @@ def test_division_run_chart_season_zoom_and_badges_66():
     """66 G1 — 범위는 이번 시즌(시즌 콤보·"최근 N일" 과 무관 · R1·U1) · 구간 단위 확대 · 시즌을 모르면 "최근 70일"(R2) ·
     ELO·시즌표가 도착하면 다시 그림(M2) · 배지 그림이 오면 축이 그림으로."""
     from datetime import date as _d
-    from PyQt6.QtGui import QPixmap
+    from PySide6.QtGui import QPixmap
     keep_seasons = _g1_season(_d(2026, 1, 2))     # 지금 시즌 = 01-02~ : 0002·0003·0004 · 0001 은 지난 시즌
     keep = (dict(_win._elo), dict(_win._div_badges), set(_win._div_badge_tried), _win.sp_trend_days.value())
     det = _sc_details({"0003": 800})
@@ -11895,7 +11940,7 @@ def test_delta_text_arrow_and_color():
     assert widgets.delta_text(50.06, 50.0) == ("▲ 0.1%p", T.GOOD)
     assert widgets.delta_text(10, 7, unit="골", digits=0) == ("▲ 3골", T.GOOD)
     assert widgets.delta_text(7.4, 7, unit="", digits=0)[1] == T.TEXT_DIM   # 0.4 → 정수로 0
-    from PyQt6.QtWidgets import QTableWidgetItem
+    from PySide6.QtWidgets import QTableWidgetItem
     it = widgets.delta_item(QTableWidgetItem("-3.0%p"), -3.0)
     assert it.foreground().color().name() == T.BAD
     assert widgets.delta_item(QTableWidgetItem("+0.0%p"), 0.01).foreground().color().name() == T.TEXT_DIM
@@ -12213,7 +12258,7 @@ def test_rate_row_list_65():
     assert all(col(rows[0])[k] == T.TEXT_DIM for k in ("win", "lose", "rate", "label")), col(rows[0])   # 흐림은 색도
     lst = _win.opp_list
     # 표본 미달 줄은 차이를 들고 와도 안 그리고 "표본 N" 을 붙인다(색만으로 말하지 않게)
-    from PyQt6.QtCore import QRectF
+    from PySide6.QtCore import QRectF
     w_row = R("w", 1, 0, 0, rate_text="100.0%", rate=100.0, diff=50.0, weak=True, sample="표본 1")
     roles = {s.role: s.text for s in lst.rate_delegate.layout(w_row, QRectF(0, 0, 900, 60), lst.font())}
     assert "diff" not in roles and roles.get("sample") == "표본 1", roles
@@ -12313,7 +12358,7 @@ def test_rate_row_list_65():
 def test_shootout_keeper_cards_65():
     """65 M6 — 승부차기 상대 GK 카드: 많이 만난 순 SHOOTOUT_GK_MAX 장 · 표본 미달 흐림 · 얼굴은 받은 것을 다시 안 받는다."""
     from pathlib import Path
-    from PyQt6.QtGui import QPixmap
+    from PySide6.QtGui import QPixmap
 
     def so_game(i, gk, res):
         return {"matchId": f"so{i}", "matchInfo": [
@@ -12345,7 +12390,7 @@ def test_shootout_keeper_cards_65():
         assert not _win._gk_face_labels[100].pixmap().isNull(), "다시 그렸더니 받은 얼굴이 사라졌다"
         assert 100 not in _win._gk_face_loader._sp_ids, _win._gk_face_loader._sp_ids
         # 1280×720 에서 카드 넷이 가로로 안 넘친다 — 실화면(사본 12장)에서 4px 넘쳐 가로 스크롤이 생겼던 자리. 긴 이름으로
-        from PyQt6.QtWidgets import QScrollArea
+        from PySide6.QtWidgets import QScrollArea
         keep_names = dict(_win._names)
         _win._names.update({sp: "가나다라마바사아자차카타파하" for sp in range(100, 115)})
         try:
@@ -12372,7 +12417,7 @@ def test_shootout_keeper_cards_65():
 def test_shotmap_panel_65():
     """65 M8 — 슛 맵 오른쪽: 슛 요약 · 최다 득점/실점(누르면 상세 창 요약 탭) · 슛 타입 · 박스 안/밖 · 골·어시스트 순위."""
     import core_api
-    from PyQt6.QtCore import QRectF
+    from PySide6.QtCore import QRectF
     from widgets import ScorerRow
     _win._go_page("슛 맵")
     _win.cb_shotmap_side.setCurrentIndex(0)
@@ -12381,12 +12426,12 @@ def test_shotmap_panel_65():
     _win._render_shotmap()
     # 다시 그리기 사이에 지우기 예약(deleteLater)이 실제로 처리되면 — 칸을 지우며 범위 글까지 지워 두 번째 그리기가
     # "지워진 QLabel" 로 죽었다(실데이터 실화면에서만 — 오프스크린 스모크는 사이에 지우기가 안 돌아 못 봤다)
-    from PyQt6.QtCore import QEvent
-    from PyQt6 import sip
+    from PySide6.QtCore import QEvent
+    import shiboken6
     _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
     _win._render_shotmap()
     _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
-    assert not sip.isdeleted(_win.lb_shot_sum_scope) and "경기" in _win.lb_shot_sum_scope.text()
+    assert shiboken6.isValid(_win.lb_shot_sum_scope) and "경기" in _win.lb_shot_sum_scope.text()
     ss = core_api.shot_summary(details, _OUID)
     assert ss.games and ss.mine.shots and ss.opp.shots, (ss.games, ss.mine, ss.opp)
     cells = _win.shot_sum_cells

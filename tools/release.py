@@ -165,8 +165,8 @@ def scan_verdict(leaks: dict, seen: dict) -> str | None:
 def missing_licenses(names: list[str]) -> list[str]:
     """배포물 파일 이름들 중 라이선스 폴더에 파일이 하나도 없는 고지 항목.
 
-    PyQt6 가 GPL v3 라 라이선스 사본을 같이 줘야 한다 — spec 이 넣지만, 패키지 이름이 바뀌어
-    license_files() 가 못 찾으면 조용히 빠지므로 여기서 막는다.
+    PySide6·Qt 가 LGPL v3 라 라이선스 사본을 같이 줘야 한다 — spec 이 넣지만, 패키지 이름이 바뀌어
+    license_files() 가 못 찾으면 조용히 빠지므로 여기서 막는다. 글이 맞는지는 `license_text_problems`.
     """
     want = [n for n, _lic, _d in notice.THIRD_PARTY] + ["this-app"]
     have = {n.split(f"/{notice.LICENSE_DIR}/", 1)[1].split("/", 1)[0]
@@ -174,10 +174,34 @@ def missing_licenses(names: list[str]) -> list[str]:
     return [n for n in want if n not in have]
 
 
+def license_text_problems(read) -> list[str]:
+    """`notice.REPO_LICENSES` 항목의 라이선스 폴더에 LGPL·GPL 전문이 **글로** 들어 있나. read(경로 조각) → {이름: 바이트}.
+    파일 이름만 보면 휠의 상용 안내문(LicenseRef-Qt-Commercial.txt)으로도 통과한다(73단계 F8)."""
+    out = []
+    for name, _lic, dist in notice.THIRD_PARTY:
+        if dist not in notice.REPO_LICENSES:
+            continue
+        text = b"".join(read(f"/{notice.LICENSE_DIR}/{name}/").values()).decode("utf-8", "replace")
+        lack = [m for m in notice.LGPL_MARKERS if m not in text]
+        if lack:
+            out.append(f"{name}: {lack}")
+    return out
+
+
+# 옛 바인딩 — 개발 PC 에 PyQt6 가 같이 깔린 동안(73단계 U3) PyInstaller 가 끌어오면 GPL 이 다시 섞인다
+FORBIDDEN_PARTS = ("/_internal/pyqt6/", "/_internal/pyqt6_qt6", "/_internal/pyqt6_sip",
+                   f"/{notice.LICENSE_DIR}/pyqt6")
+
+
+def forbidden_files(names: list[str]) -> list[str]:
+    """배포물 파일 이름들 중 옛 바인딩(PyQt6)의 것."""
+    return [n for n in names if any(f in n.lower() for f in FORBIDDEN_PARTS)]
+
+
 # 없으면 앱이 '대체 경로'로 돌아 겉으론 멀쩡한 모듈 — 빠져도 아무 오류가 안 난다(store._loads 의 orjson)
-# "PyQt6/QtNetwork.pyd" 처럼 파일로 적은 것은 그 파일 — 트레이의 '한 번만 실행'(QLocalServer)이 쓴다. 1.1.1 계획 때
+# "PySide6/QtNetwork.pyd" 처럼 파일로 적은 것은 그 파일 — 트레이의 '한 번만 실행'(QLocalServer)이 쓴다. 1.1.1 계획 때
 # 배포판에 Qt6Network.dll 은 있는데 이 .pyd 가 없었다(소스·테스트에선 안 보이고 exe 에서만 import 가 죽는다).
-REQUIRED_MODULES = ["orjson", "PyQt6/QtNetwork.pyd"]
+REQUIRED_MODULES = ["orjson", "PySide6/QtNetwork.pyd"]
 
 
 def bundle_pyz_names() -> list[str] | None:
@@ -242,7 +266,7 @@ DISCLAIMER = (
     " 읽는 방식이라 넥슨이 공식으로 허락한 경로(오픈API)가 아니다. 첫 실행 때 켤지 고르며, 켜는 건 사용자의"
     " 선택과 책임이다. 끄면 그 칸이 빈다.\n"
     "- 만든 사람은 아무것도 수집하지 않는다. 연결처는 넥슨(API·이미지·홈페이지)과 GitHub(업데이트 확인)뿐.\n"
-    "- 소스는 MIT, 실행 파일은 PyQt6(GPL v3)를 포함해 GPL v3 조건으로 배포된다."
+    "- 소스는 MIT. 화면 라이브러리 PySide6·Qt 6 는 LGPL v3 — 프로그램 폴더의 Qt 파일을 바꿔 끼울 수 있다."
     " 라이선스 전문은 프로그램 폴더 `_internal\\licenses`.")
 
 
@@ -352,6 +376,16 @@ def main() -> int:
     if lic_missing:
         fail(f"라이선스 전문이 빠졌다 {lic_missing} — notice.THIRD_PARTY 의 배포 이름을 확인")
     ok(f"라이선스 전문 {len(notice.THIRD_PARTY) + 1}개 항목 전부 들어 있음")
+    with zipfile.ZipFile(zip_path) as z:
+        lic_bad = license_text_problems(
+            lambda part: {n: z.read(n) for n in z.namelist() if part in n and not n.endswith("/")})
+        old_binding = forbidden_files(z.namelist())
+    if lic_bad:
+        fail(f"LGPL·GPL 전문이 글로 안 들어 있다 {lic_bad} — notice.REPO_LICENSES 의 파일을 확인")
+    ok("PySide6·shiboken6 라이선스 글 확인(LGPL v3 · GPL v3)")
+    if old_binding:
+        fail(f"옛 바인딩 PyQt6 가 배포물에 섞였다 {old_binding[:3]} — spec excludes 를 확인")
+    ok("배포물에 PyQt6 없음")
     with zipfile.ZipFile(zip_path) as z:
         mods_missing = missing_modules(z.namelist())
     if mods_missing:

@@ -59,7 +59,7 @@ G1·G2·G5 는 사용자가 확인했다(근거 조항·답변은 이 문서에 
 ## 4. 아키텍처
 
 ```
-앱(PyQt6) ──HTTPS──> Cloudflare(프록시·캐시·보호) ──> 서버(FastAPI) ──서비스 키──> 넥슨 오픈API
+앱(PySide6) ──HTTPS──> Cloudflare(프록시·캐시·보호) ──> 서버(FastAPI) ──서비스 키──> 넥슨 오픈API
    │                                                      │
    └ 로컬 SQLite(fifa.db) 개인 누적은 그대로               └ 공유 캐시 DB + 수집기(cron)
 ```

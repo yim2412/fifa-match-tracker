@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                              QVBoxLayout, QWidget)
 
 import config
@@ -76,7 +76,7 @@ class DashCard(QFrame):
 
     탭까지 적는다(2.1.1) — 메뉴만 적으면 그 메뉴에서 마지막에 본 탭으로 열려 카드와 다른 내용이 보인다."""
 
-    clicked = pyqtSignal(object)
+    clicked = Signal(object)
 
     def __init__(self, title: str, target: tuple[str, str | None] | None = None):
         super().__init__()
@@ -149,7 +149,7 @@ def _pct(n: int, d: int) -> float | None:
 class DashboardPage(QWidget):
     """대시보드. render(DashboardInput) 로 채운다. 카드를 누르면 navigate((메뉴, 탭 또는 None))."""
 
-    navigate = pyqtSignal(object)
+    navigate = Signal(object)
 
     def __init__(self, ranker_card: QWidget):
         super().__init__()

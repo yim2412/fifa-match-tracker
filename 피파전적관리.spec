@@ -5,7 +5,7 @@ sys.path.insert(0, SPECPATH)
 import notice  # noqa: E402
 
 # 오픈소스 라이선스 전문 — 배포물 _internal/licenses/<이름>/ 에. 목록은 notice.THIRD_PARTY 한 곳.
-# PyQt6 가 GPL v3 라 받는 사람에게 라이선스 사본을 줘야 한다(tools/release.py 가 들어갔는지 확인한다).
+# PySide6·Qt 가 LGPL v3 라 받는 사람에게 라이선스 사본을 줘야 한다(tools/release.py 가 들어갔는지·글이 맞는지 확인한다).
 LICENSE_DATAS = [(str(p), f"{notice.LICENSE_DIR}/{name}") for name, p in notice.license_files()]
 LICENSE_DATAS.append(('LICENSE', f"{notice.LICENSE_DIR}/this-app"))
 
@@ -17,7 +17,7 @@ a = Analysis(
     hiddenimports=['store', 'stats', 'core_api', 'theme', 'widgets', 'ranker', 'images',
                    'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck', 'notice',
                    # 1.1.1 — 트레이·자동 실행·랭킹 수집. QtNetwork 는 '한 번만 실행'(QLocalServer) — release.py 가 .pyd 를 확인한다
-                   'tray', 'autostart', 'rankcollect', 'PyQt6.QtNetwork',
+                   'tray', 'autostart', 'rankcollect', 'PySide6.QtNetwork',
                    # 2.2.1 — 팀컬러 효과 창(app_main 이 import — release.py 는 모듈별 검사가 없어 exe 스모크로 확인)
                    'teamcolor'],
     hookspath=[],
@@ -25,7 +25,9 @@ a = Analysis(
     runtime_hooks=[],
     # tzdata — 앱은 시간대 자료를 안 쓴다(zoneinfo 호출 0). 개발 PC 에 pandas 와 같이 깔려 있어
     # 딸려 들어왔다: 파일 627개·0.5MB. 쓰게 되면 여기서 빼고 notice.THIRD_PARTY 에 라이선스를 넣는다.
-    excludes=['tzdata'],
+    # PyQt6 — 73단계에서 PySide6 로 옮겼다. 개발 PC 에 옛 바인딩이 같이 깔린 동안(U3) 딸려 오면 GPL 이 다시
+    # 섞인다(release.py 가 _internal/PyQt6 이 없는지 본다).
+    excludes=['tzdata', 'PyQt6'],
     noarchive=False,
     optimize=0,
 )

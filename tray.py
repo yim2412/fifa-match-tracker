@@ -35,9 +35,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
-from PyQt6.QtNetwork import QLocalServer, QLocalSocket
-from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 import autostart
 import config
@@ -155,8 +155,8 @@ def ping(name: str, timeout_ms: int = 2000) -> str | None:
 class SingleInstance(QObject):
     """한 번만 실행 — claim() 이 True 면 이 프로세스가 주인, False 면 앞 실행본을 앞으로 불렀으니 끝내면 된다."""
 
-    activated = pyqtSignal()
-    quit_requested = pyqtSignal()  # --quit(제거기) — AppShell 이 quit_app 으로 받는다
+    activated = Signal()
+    quit_requested = Signal()  # --quit(제거기) — AppShell 이 quit_app 으로 받는다
 
     def __init__(self, name: str, is_quitting: Callable[[], bool] = lambda: False,
                  mutex=_win_mutex, ping_fn=ping, sleep=time.sleep, clock=time.monotonic):

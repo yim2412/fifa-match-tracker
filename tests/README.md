@@ -15,4 +15,7 @@
 `test_server_mode.py`(중앙 서버 앱 쪽 — 서버 주소가 비면 요청 바이트 골든(2026-10-20 바꾸기 전에 뜸) · 서버로 키 안 나감(`set_key` 뒤에도) · 거래 늘 직접 · BUSY 재시도 안 함·즉시 직접 · 100건 중 한 건 실패도 직접 재요청 · 24스레드 폴백·복귀 · HTML 이 문구로 안 샘 · 넥슨 5xx 는 서버 고장 아님 · 설치 ID 는 서버 모드만 · 서버를 켜는 생성 자리 둘 · `check_key` 직접 — 가짜 어댑터) ·
 `test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py`. pytest 없이 파일을 직접 실행.
 **모든 `main()` 루프는 `watchdog.limit`** 안에서 테스트를 돈다 — 하나가 300초(`TEST_LIMIT_S`)를 넘기면 이름·호출 스택을 찍고 종료 코드 3(2026-10-06 스모크가 실패 대신 18분 멈췄다 ·
-재현 못 함). 새 테스트 파일도 같은 루프로
+재현 못 함). 새 테스트 파일도 같은 루프로(`test_rules.test_every_test_main_runs_under_watchdog` 가 대조).
+같은 자리에서 **훅으로 간 예외(슬롯·타이머·스레드 안)도 실패로 바꾼다**(`watchdog.slot_errors` — 73단계: PySide6 는 슬롯 예외를
+찍고 계속 돌아 테스트까지 안 올라온다. 클릭으로 연 슬롯 안의 `ModalCalled` 가 "통과" 로 읽히던 구멍 · `test_slot_exception_fails_the_test`).
+훅을 스스로 바꿔 끼우는 테스트는 안에서 저장·복원한다.

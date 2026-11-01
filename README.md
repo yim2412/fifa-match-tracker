@@ -1,13 +1,13 @@
 # 감독모드 전적 분석
 
-넥슨 오픈API로 EA SPORTS FC 온라인 전적을 조회·집계하는 **PyQt6 데스크톱 앱**(윈도우).
+넥슨 오픈API로 EA SPORTS FC 온라인 전적을 조회·집계하는 **PySide6 데스크톱 앱**(윈도우).
 구단주 닉네임을 검색하면 감독모드 전적을 받아와 승률·선수 지표·전술 상성 등을 화면으로 보여준다.
 v0.3.0 까지의 이름은 "피파 전적관리" — 저장소·데이터 폴더·exe 이름은 업데이트가 끊기지 않게 그대로 뒀다.
 
 > **넥슨(NEXON)·EA 와 관련 없는 비공식 프로그램입니다.** FC 온라인·EA SPORTS FC 는 각 사의 상표입니다.
 > 무료이며 있는 그대로 제공되고, 쓰다 생긴 손해는 책임지지 않습니다. 자세한 것은 아래 [이용 안내](#이용-안내).
 
-- **형태**: 파이썬 3 + PyQt6 GUI 단일 실행 앱. 서버 없음, 설치 없이 소스로 실행하거나 exe로 빌드
+- **형태**: 파이썬 3 + PySide6 GUI 단일 실행 앱. 서버 없음, 설치 없이 소스로 실행하거나 exe로 빌드
 - **데이터**: 넥슨 오픈API(JSON) + 공식 데이터센터 HTML 스크래핑(오픈API에 없는 순위·구단가치·선수 능력치).
   스크래핑은 오픈API 약관 밖이라 **기본 꺼짐** — 첫 실행 안내 창에서 사용자가 켤지 고르고, 나중에 [정보] 에서
   바꾼다(`.env` 의 `FIFA_WEB_DATA=1`). 끄면 랭커 카드·팀컬러·시즌 구분·선수 카드가 빈다.
@@ -78,7 +78,7 @@ v0.3.0 까지의 이름은 "피파 전적관리" — 저장소·데이터 폴더
    **`FifaMatchTracker-Setup-<버전>.exe`** 를 받아 실행한다. 관리자 권한은 필요 없다(사용자 폴더
    `%LOCALAPPDATA%\Programs\피파전적관리` 에 깔린다). 시작 메뉴에 생기고, 바탕화면 아이콘은
    설치할 때 고른다. 지우는 건 윈도우 "설정 → 앱"에서.
-   - 설치 없이 쓰려면 `FifaMatchTracker-<버전>-portable.zip` 을 폴더째 풀고 `피파전적관리.exe` 실행
+   - 설치 없이 쓰려면 `FifaMatchTracker-<버전>-portable.zip` 을 **새 폴더에** 폴더째 풀고(옛 폴더에 덮어 풀면 지난 버전 파일이 남는다) `피파전적관리.exe` 실행
      (`_internal` 이 옆에 있어야 켜진다).
 2. "Windows의 PC 보호" 파란 창이 뜨면 **추가 정보 → 실행**. 서명 인증서가 없는 프로그램이라
    처음 한 번 뜬다(설치 파일도 같다).
@@ -181,7 +181,7 @@ python tests/test_review_kit.py   # 계획 검토 준비 도구
 
 | 파일 | 역할 |
 |------|------|
-| `app_main.py` | PyQt6 UI — 검색 화면, 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드·흐름 분석·선수 지표·전술·승부처 분석·성적 진단·슛 맵·결정력·팀컬러·스쿼드·이적 등 18개 — 메뉴 안 구획은 페이지 안 탭 `Tabs`), 조회 워커 스레드 · 거래 받기(`TradeLoader`) |
+| `app_main.py` | PySide6 UI — 검색 화면, 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드·흐름 분석·선수 지표·전술·승부처 분석·성적 진단·슛 맵·결정력·팀컬러·스쿼드·이적 등 18개 — 메뉴 안 구획은 페이지 안 탭 `Tabs`), 조회 워커 스레드 · 거래 받기(`TradeLoader`) |
 | `dashboard.py` | 대시보드 페이지 — 카드 배치·채우기(`DashboardPage.render`), 카드별 범위 규칙 |
 | `charts.py` | 대시보드 그래프(QPainter) — 영역 곡선·도넛·링 게이지·묶음 막대·등급 계단(`DivisionRunChart`)·결과 점·가로 막대 |
 | `widgets.py` | 화면 부품(위젯) — 카드(`Card`)·랭커 카드·표(`FitTableWidget` — 모든 표)·좁으면 두 줄로 접히는 위쪽 바(`WrapBar`)·세로 스크롤 틀(`VScrollArea`)·글꼴이 줄어드는 라벨(`FitLabel`)·축구장 v2(`PitchWidget` — 줄마다 폭을 나눠 칩이 안 겹친다 · 접는 구획 `Collapsible`)·슛 맵·`NoScrollComboBox` 등 |
@@ -522,6 +522,8 @@ https://fconline.nexon.com/datacenter/rank?rt=manager
 
 ## 라이선스
 
-소스 코드는 [MIT](LICENSE). 배포하는 실행 파일은 **PyQt6(GPL v3)** 를 포함하므로 **실행 파일 전체는 GPL v3
-조건**으로 배포된다 — 소스는 이 저장소에 있다. 포함된 오픈소스 목록은 `notice.THIRD_PARTY`, 라이선스 전문은
-배포물의 `_internal\licenses\`(빌드 때 설치된 패키지에서 모으고, `tools/release.py` 가 빠진 게 없는지 확인한다).
+소스 코드는 [MIT](LICENSE). 화면 라이브러리 **PySide6·Qt 6 는 LGPL v3** 이고(3.2.1 부터 — 그 전 PyQt6 판은
+GPL v3), 배포물의 `_internal` 안 Qt·PySide6 파일을 다른 판으로 바꿔 끼울 수 있다 — 소스는 이 저장소에 있다.
+포함된 오픈소스 목록은 `notice.THIRD_PARTY`, 라이선스 전문은 배포물의 `_internal\licenses\`(빌드 때 설치된 패키지에서
+모으고 — PySide6·shiboken6 휠엔 전문이 없어 저장소 `licenses/` 의 LGPL·GPL 글을 싣는다 — `tools/release.py` 가
+빠진 게 없는지·글이 맞는지 확인한다).

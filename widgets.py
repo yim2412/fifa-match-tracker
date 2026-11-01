@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PyQt6.QtCore import QAbstractListModel, QCollator, QLocale, QModelIndex, QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QAbstractListModel, QCollator, QLocale, QModelIndex, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QListView, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
@@ -56,8 +56,8 @@ class UpdateCard(QFrame):
 
     어느 화면 위에든 같은 자리에 뜬다(검색 화면·메인 화면). 위치는 부모가
     place() 로 정한다. 내려받는 동안은 버튼 대신 진행 막대가 보인다."""
-    update_clicked = pyqtSignal()
-    dismissed = pyqtSignal()
+    update_clicked = Signal()
+    dismissed = Signal()
     MARGIN = 20
     WIDTH = 300  # 고정 — 글자 길이에 따라 줄면 내려받는 중 문구가 잘렸다
     # 새 버전이면 [업데이트](어느 화면에서든), 최신이면 "최신 버전입니다"(첫 검색 화면에서만 — 메인 내용을 가린다).
@@ -382,7 +382,7 @@ class PageTabs(QWidget):
     넓은 표가 있는 탭 하나가 옆 탭까지 가로로 넓힌다(크기 정책 Ignored 를 따로 걸어야 한다). 숨은 위젯은
     레이아웃 크기 계산에서 빠지므로 그 함정이 처음부터 없다."""
 
-    changed = pyqtSignal(int)
+    changed = Signal(int)
 
     def __init__(self):
         super().__init__()
@@ -855,7 +855,7 @@ class RowBorderDelegate(QStyledItemDelegate):
         selected = bool(option.state & QStyle.StateFlag.State_Selected)
         opt = option
         if selected:
-            from PyQt6.QtWidgets import QStyleOptionViewItem
+            from PySide6.QtWidgets import QStyleOptionViewItem
             opt = QStyleOptionViewItem(option)
             opt.state &= ~QStyle.StateFlag.State_Selected
         super().paint(painter, opt, index)
@@ -1313,7 +1313,7 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
     """작은 축구장 — 포메이션 줄마다 점. 수비 줄이 아래, 공격 줄이 위, 맨 아래 GK 한 점. 네트워크 없음 · 같은 모양이면 같은 캐시.
     positions(경기 자리 코드 — FormationStat.positions)를 주면 줄 인원을 고르게 펴지 않고 **그 자리**에 찍는다
     (core.PITCH_X · PITCH_Y). 자리를 모르는 길(랭커 포메이션 글자)은 줄 인원으로. 그릴 수 없는 글자("모름" 등)면 빈 QPixmap(isNull)."""
-    from PyQt6.QtGui import QGuiApplication, QPixmapCache
+    from PySide6.QtGui import QGuiApplication, QPixmapCache
     key = formation_key(formation)
     if not key:
         return QPixmap()
@@ -1363,7 +1363,7 @@ def _formation_band_color(i: int, n: int) -> str:
 
 def _formation_board(p: QPainter, w: float, h: float) -> None:
     """작은 축구장 판 — 위→아래 그라데이션, 클 때만(config.FORMATION_LINES_FROM_PX) 테두리·하프라인·센터서클·두 박스."""
-    from PyQt6.QtGui import QLinearGradient
+    from PySide6.QtGui import QLinearGradient
     g = QLinearGradient(0, 0, 0, h)
     g.setColorAt(0, QColor(T.FORMATION_PITCH_TOP))
     g.setColorAt(1, QColor(T.FORMATION_PITCH_BOTTOM))
@@ -1398,7 +1398,7 @@ def _formation_dot(p: QPainter, at: QPointF, r: float, color: str, h: float) -> 
 
 def _formation_spots_pixmap(spots: tuple, px: int, dpr: float) -> QPixmap:
     """formation_pixmap 의 자리 그림 — 점마다 그 자리 좌표(위 = 최전방) · 색은 그 자리의 줄(core.PITCH_ROWS). 같은 자리 묶음이면 같은 캐시."""
-    from PyQt6.QtGui import QPixmapCache
+    from PySide6.QtGui import QPixmapCache
     ck = f"formation-spots:{','.join(map(str, spots))}:{px}:{dpr}"
     hit = QPixmapCache.find(ck)
     if hit is not None and not hit.isNull():
@@ -1558,7 +1558,7 @@ class GradeBadgeDelegate(RowBorderDelegate):
         w = fm.horizontalAdvance(text) + 2 * self.PAD
         h = min(fm.height() + 4, option.rect.height() - 4)
         r = option.rect
-        from PyQt6.QtCore import QRectF
+        from PySide6.QtCore import QRectF
         box = QRectF(r.x() + (r.width() - w) / 2, r.y() + (r.height() - h) / 2, w, h)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -2069,7 +2069,7 @@ class MatchCardDelegate(QStyledItemDelegate):
     # ── 글꼴 ──
     @staticmethod
     def fonts(base: QFont) -> dict[str, QFont]:
-        from PyQt6.QtGui import QFontInfo
+        from PySide6.QtGui import QFontInfo
         px = QFontInfo(base).pixelSize() or T.BASE_FONT_PX
         out = {}
         for name, scale, bold in (("small", 0.85, False), ("main", 1.0, False), ("bold", 1.0, True), ("big", 1.3, True)):
@@ -3153,7 +3153,7 @@ class BarRow(QWidget):
 
 class Segmented(QFrame):
     """작은 전환 단추 묶음(66 G2 — [일별 | 시간별]). 하나만 눌린다 · 못 고르는 칸은 set_option_enabled 로 끄고 이유는 툴팁."""
-    changed = pyqtSignal(int)
+    changed = Signal(int)
 
     def __init__(self, options: list[str], current: int = 0):
         super().__init__()
@@ -3195,7 +3195,7 @@ class Segmented(QFrame):
 class ChoiceChips(Segmented):
     """콤보 꼴로 다루는 칩 묶음(67 R1) — findData · currentData · setCurrentIndex · currentIndexChanged.
     거르기 상태를 콤보와 칩이 같이 쓸 때(app_main._tc_filters — 한 곳이 값을 바꾸면 나머지를 신호 없이 맞춘다)."""
-    currentIndexChanged = pyqtSignal(int)
+    currentIndexChanged = Signal(int)
 
     def __init__(self, items: list[tuple[str, object]], current: int = 0):
         super().__init__([t for t, _d in items], current)
@@ -3240,7 +3240,7 @@ class ZoomBar(QWidget):
     """그래프 구간 확대 막대(55 G1) — 점 n 개 중 [lo, hi] 를 고른다. 양끝 손잡이를 끌거나, 가운데를 끌어 옮기거나,
     바깥을 눌러 가까운 끝을 그리로. 두 번 누르면 전체. 그래프는 손대지 않고 쓰는 쪽이 range_changed 를 받아 잘라 다시 그린다
     (AreaTrendChart 기본값 그림이 얼린 사본과 같아야 해서 — charts 머리말)."""
-    range_changed = pyqtSignal(int, int)
+    range_changed = Signal(int, int)
     PAD = 10        # 양끝 손잡이가 잘리지 않게
     GRAB = 8        # 손잡이를 잡았다고 보는 거리(px)
 
@@ -3507,7 +3507,7 @@ class _PlayerChip(QWidget):
     위 줄 포지션 · OVR · 강화 배지 / 얼굴 / 시즌 아이콘 + 이름 / 시세(또는 note). 작아지면 얼굴 → 시세 줄 순으로 뺀다
     (글자를 MIN_FONT_PX 밑으로 줄이지 않는다). 클릭하면 clicked — 조회·창은 app_main 몫."""
 
-    clicked = pyqtSignal()
+    clicked = Signal()
     MIN_FONT_PX = 10
     FACE_MIN_H = 76     # 이보다 낮으면 얼굴을 뺀다
     PRICE_MIN_H = 58    # 이보다 낮으면 시세 줄을 뺀다
@@ -3695,8 +3695,8 @@ class PitchWidget(QWidget):
     rows: 줄(위=공격 → 아래=GK)마다 PitchCard 목록(왼쪽 → 오른쪽) — 배치 계산(core.pitch_rows)은 화면이 한다.
     칩의 OVR·시세는 set_card 로 나중에 채운다(캐시 → 자동 읽기). band=False 면 위 띠가 없다(⑨ — 합이 뜻이 없다)."""
 
-    player_clicked = pyqtSignal(int)   # spId — 선수 카드를 클릭했을 때
-    notice_requested = pyqtSignal()    # 띠의 [안내 보기]
+    player_clicked = Signal(int)   # spId — 선수 카드를 클릭했을 때
+    notice_requested = Signal()    # 띠의 [안내 보기]
 
     def __init__(self, rows: list[list[PitchCard]], band: bool = True):
         super().__init__()

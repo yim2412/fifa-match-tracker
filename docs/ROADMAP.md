@@ -42,7 +42,7 @@
 | # | 버전 | 단계 | 난이도 | 모델(검토 / 구현) | 끝에 |
 |---|---|---|---|---|---|
 | 51 | (제안) 2.12.1(조각 ① — 토글·쌓기만) | 카드 정보 넓히기 — C1 · C2 · C3 · C5 · C6(전력 대비 승률 · 팀컬러 상성 · 실효 OVR·키·체형 · 가치 분해 · 시세 지수) + N21 · N28 · N29(승부차기 키퍼 키 · 경기 이변 정도 · 경기마다 발동한 팀컬러) | 높음 — 홈페이지 요청이 크게 는다(하루 상한·동의 문구 다시) | Opus 2명 / Opus | **측정 35일 진행 중 — D0 = 2026-10-19**(규칙 10판 `35ec1cf` · 작업 스케줄러 `FifaMeasureCards` 가 매일 얼리기·백필·측정일 판정 · A 11-09~12 · 11-16~19 · 11-23~26 · B·C 11-23~26) — 그동안 55 · ②③ 은 68(옛 58)로 뗐다 · 측정 동안 64~67 · **판정(11-26) 뒤 63 U1 마무리**: `measure_cards` 의 UTC 날 네 자리(:330·:471·:472·:632)를 `matchtime` 으로 · `test_rules` 예외 표의 U1 두 줄 지우기 · B 다시 대조(`docs/DONE.md` 63단계 절) · **63 남은 대조 하나**: 시즌 마지막 날 경기가 기준 화면과 같은 시즌에 드는지(시즌 종료일이 KST 0시인지 모른다) |
-| 73 | (제안) 3.2.1 | **PySide6 전환**(PyQt6 GPL → LGPL · 옛 70 을 당김) — 화면 동작은 그대로, 회귀 확인이 핵심 · 절 "## 73단계" · **계획 검토 끝(11-01 4판) · 조각 ① 첫 일 끝(M2 재현 · 정렬 골든 · F12~F14) — 다음은 조각 ① 치환** | 중간 — 기계적이지만 전 화면 회귀 · 바인딩 차이 몇 곳(슬롯 예외·테스트 바꿔 끼우기) | Opus 1명 / Sonnet + Opus 리뷰(전 화면 회귀 PNG) | **3.2.1 공개**(따로 — 회귀를 가르려고) |
+| 73 | (제안) 3.2.1 | **PySide6 전환**(PyQt6 GPL → LGPL · 옛 70 을 당김) — 화면 동작은 그대로, 회귀 확인이 핵심 · 절 "## 73단계" · **계획 검토 끝(11-01 4판) · 조각 ① 끝(11-01 — 치환 · 하네스 슬롯 예외 수집 · 규칙 5개 · 라이선스 글·spec·release.py 상수는 ② 에서 당김) — 다음은 조각 ②(exe 빌드·R3·R4·R7 실측·업데이트 실검증)** | 중간 — 기계적이지만 전 화면 회귀 · 바인딩 차이 몇 곳(슬롯 예외·테스트 바꿔 끼우기) | Opus 1명 / Sonnet + Opus 리뷰(전 화면 회귀 PNG) | **3.2.1 공개**(따로 — 회귀를 가르려고) |
 | 68 | (제안) 3.3.1 | 카드 정보 화면 — 51 의 조각 ②③(N29 · C2 · C1 · N28 · C3 · N21 · C5 · C6 · 내 스쿼드 OVR 카드) — **측정 A~C 판정 뒤**(D0 + 35) · 빠진 항목은 안 만든다 · 빈 화면 사유에 "구조가 바뀌어 오늘 멈춤"(`card_backfill_format` — 지금은 "채우는 중" 으로 보인다 · 51 ① 리뷰 [하]) | 높음 — 측정에 매임 | Opus 2명 / Opus | |
 | 69 | (제안) 3.3.1 | 같은 OVR 대비 — 랭커 스쿼드 OVR 수집(서비스 키 · 따로 토글) · 상위 랭커 카드의 "스쿼드 대비" | 높음 — 1만 명이면 오픈API 약 3만 요청 · 안내 바뀜 | Opus 2명 / Opus | **3.3.1 공개** |
 | 71 | (제안) 3.4.1 | 핵심을 비공개 저장소로 · 공개 쪽은 `core_api` + 간이 대체 · `build_dev` / `build_release` 분리 | 높음 — 저장소·빌드 구조 변경 | Opus 2명 / Opus | |
@@ -370,6 +370,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | F12 | **Qt 기본 항목 비교 = `QCollator(QLocale.system())`**(PyQt6 6.11 · 23개 글자 모든 쌍 불일치 0 · `QLocale.setDefault` 는 안 탄다 · 파이썬 `<` 와는 88쌍 다름 — "a" < "A" · 이모지 < "가"). 골든 글자들은 ko_KR·en_US·ja_JP 에서 순서가 같다(C 로캘만 46쌍 다름) — CI(en_US)에서도 골든이 유효 | 11-01 조각 ① 실측(스크래치 `coll.py`·`coll2.py`) |
 | F13 | **M2 끝 — 6.11.3 에서 다시 재현**: F7(재귀 200 넘김) · F9(사용자 훅이면 슬롯·타이머·`QThread.run` 모두 훅 · 기본 훅이면 PyQt6 는 끝나고 PySide6 는 찍고 계속) · F10(`disconnect()` 연결 없으면 `False` + `RuntimeWarning` · PyQt6 는 `TypeError`) · M3(값 객체 bool 반대 그대로) · M4(`triggered` 람다 인자 0개 · 람다 안 `sender()` None) · M5(int 키 dict → `{}` + "Cannot copy-convert") · R3 선행(스레드 건너는 queued `Signal(object)` 도 같은 객체) — 전부 6.12.0 결과와 같다 | 11-01 조각 ① 실측(옛 스크래치 `r2_probe*.py`·새 `f9.py`·`m5.py`) |
 | F14 | **`super()` 오버라이드 전수(M6 정의 `super\(\)\.\w+\(` · `__init__` 제외)**: 앱·테스트 45곳 · Qt 가상 함수 15종(`resizeEvent` 7 · `paint` 4 · `initStyleOption` 3 · `setFont`·`minimumSizeHint`·`leaveEvent`·`closeEvent` 2 · `sizeHint`·`showEvent`·`setText`·`paintEvent`·`moveEvent`·`changeEvent`·`hideEvent`·QThread `start` 1) + `__lt__` 1 · 나머지는 파이썬 클래스. 15종을 한 프로브에서 불러 두 바인딩 모두 재귀 0 · 호출 수 같음 — **재귀는 연산자 `__lt__` 하나뿐** | 11-01 조각 ① 실측(스크래치 `m6.py`) |
+| F15 | **조각 ① 치환 결과(11-01 · PySide6 6.11.3)**: import·`Signal`·`shiboken6.isValid`(8곳 부정 방향 손 대조) · `constBits()` 는 memoryview(`bytes(…)[:n]`) · **하네스 없이 돌린 첫 스모크 389/389** — 슬롯 예외가 삼켜질 수 있어 근거가 못 된다 → `watchdog.slot_errors` 를 넣고 다시. 기본 인자 람다(`lambda _=False, n=…:`)는 PySide6 에서도 `n` 이 안 덮인다 · `lambda *_:` 는 인자 0개지만 안 읽어 해 없음(M4 앱 0곳) · 설정에 쓰는 값은 문자열·바이트·정수라 R6 해당 없음 · `RuntimeWarning`(R5) 테스트 출력 0줄. **되돌리는 변이 8건 전부 FAIL**(하네스 `slot_errors` 빼기 · LGPL 글 검사·옛 바인딩 검사 안 막기 · 저장소 글 대신 휠 파일 · 표식 LGPL 하나 · `isValid` 부정 뒤집기 둘) — 축구장 카드 슬롯(`_on_pitch_card`)은 **옛 `sip.isdeleted` 시절부터 부르는 테스트가 없어** 처음엔 못 잡았다 → `test_pitch_card_signal_skips_deleted_pitch` | 11-01 실측(스크래치 `m4b.py`·`mut.py`) |
 | F6 | 라이선스 글(`notice.licenses_html`)은 동의 해시(`_notice_digest`)에 **안 들어간다** — 글을 고쳐도 `NOTICE_VERSION` 을 올리지 않아도 되고 다시 묻지 않는다 | `tests/test_ui_smoke.py:7798-7802` |
 
 ### 바뀌는 것 (파일 → 핵심 변경)
@@ -406,8 +407,9 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 ### 조각 (제안 — 구현 2개)
 
-1. **조각 ① 바인딩 치환 + 테스트 전부 초록**: 위 표 전부 · R1·R2·R5·R6 를 테스트로 · `test_rules` 새 규칙(변이로 빨개지는지) · 테스트 파일 전부 PySide6 로 실행.
-2. **조각 ② 배포물**: spec · `release.py` · `notice` 라이선스 · exe 빌드 · R3·R4·R7 실측 · 2번 모니터 실화면 · 3.1.1 → 3.2.1 앱 안 업데이트 실검증(설정·데이터 그대로인지).
+1. ✅ **조각 ① 바인딩 치환 + 테스트 전부 초록**(11-01): 위 표 전부 · R1·R2·R5·R6 · `test_rules` 새 규칙 다섯(`test_binding_is_pyside6_only` · `Signal(list/dict)` · 값 객체 bool(M3) · 가변 인자 슬롯(M4) · 테스트 감시 누락) · 하네스 `watchdog.slot_errors`(+ `test_predict_check` 가 감시 밖이던 것) · 테스트 파일 전부 PySide6.
+   **계획과 다르게 한 것**: notice(`THIRD_PARTY`·저장소 `licenses/` LGPL·GPL 전문·`licenses_html`) · `release.py`(`REQUIRED_MODULES`·고지 문구·**글 내용 검사 `license_text_problems`·옛 바인딩 검사 `forbidden_files`**) · spec(`hiddenimports`·`excludes PyQt6`) 의 **글·상수**를 ① 로 당겼다 — CI 에서 PyQt6 를 빼는 순간 `test_release` 의 라이선스 검사가 빨개지고, 반만 바꾸면 그 사이 빌드가 "LGPL 이라 적고 PyQt6 를 요구" 한다. exe 빌드와 그 검사의 실측은 ② 그대로.
+2. **조각 ② 배포물**: exe 빌드(위 검사가 진짜 빌드에서 초록인지 — PyInstaller PySide6 훅이 `PySide6/QtNetwork.pyd` 자리에 두는지 먼저) · R3·R4·R7 실측 · 2번 모니터 실화면 · 공개 문장 grep(정의 표 마지막 줄) · 3.1.1 → 3.2.1 앱 안 업데이트 실검증(설정·데이터 그대로인지).
 
 ### 결정 (2026-11-01 사용자 "추천대로")
 

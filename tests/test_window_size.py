@@ -43,8 +43,8 @@ def _child(case: str, screen: str, settings_path: str) -> None:
     os.environ["QT_QPA_PLATFORM"] = f"offscreen:configfile={screen}.json"
     if os.path.isdir("C:/Windows/Fonts"):
         os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
-    from PyQt6.QtCore import QThread
-    from PyQt6.QtWidgets import QApplication, QDialog
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication, QDialog
     app = QApplication(sys.argv)
     QThread.start = lambda self, *a, **k: None  # 시즌표 등 백그라운드 조회 차단(네트워크 없음)
     import app_main
@@ -74,7 +74,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         old.resize(1600, 900)
         old.show()
         app.processEvents()
-        from PyQt6.QtCore import QSettings
+        from PySide6.QtCore import QSettings
         s = QSettings(settings_path, QSettings.Format.IniFormat)
         s.setValue("window/geometry", old.saveGeometry())
         s.sync()
@@ -121,7 +121,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         QDialog.exec = orig_exec
         out["dialogs"] = sizes
     if case == "about":
-        from PyQt6.QtWidgets import QTabWidget
+        from PySide6.QtWidgets import QTabWidget
         import theme
         theme.apply(app)  # 앱 기본 글꼴 — 없으면 탭 폭이 실제의 절반(434 vs 837)이라 고정 620 도 통과했다
         d = app_main.AboutDialog(win)

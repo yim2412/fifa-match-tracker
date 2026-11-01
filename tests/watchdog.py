@@ -8,6 +8,12 @@
         t()
 
 한도는 TEST_LIMIT_S(환경 변수)로 바꾼다. 기본 300초 — 지금 가장 긴 테스트(규칙 검사의 SQL 모으기)도 그 안이다.
+
+**슬롯 예외도 여기서 잡는다(73단계 F9 · `slot_errors`).** PySide6 는 슬롯·타이머·`QThread.run` 안 예외를
+`sys.excepthook` 으로 넘기고 **기본 훅이면 찍고 계속 돈다**(PyQt6 는 끝냈다). 예외가 테스트 함수까지 안 올라오니,
+클릭으로 연 슬롯 안의 `ModalCalled` 나 단언 실패가 "통과" 로 읽힌다. 그래서 테스트 하나가 도는 동안 훅을
+"모아 두기" 로 바꾸고, 끝에 모인 것이 있으면 실패로 바꾼다. 훅을 스스로 바꿔 끼우는 테스트(crashlog)는 안에서
+저장·복원하면 된다 — 이 훅이 그 "저장된 것" 이 된다.
 """
 from __future__ import annotations
 
@@ -16,6 +22,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 
 DEFAULT_LIMIT_S = 300
@@ -28,6 +35,35 @@ def limit_s() -> float:
         return float(os.environ.get("TEST_LIMIT_S", DEFAULT_LIMIT_S))
     except ValueError:
         return DEFAULT_LIMIT_S
+
+
+class SlotError(AssertionError):
+    """테스트 도중 sys.excepthook·threading.excepthook 으로 간 예외 — 슬롯 안에서 나 테스트까지 안 올라온 것."""
+
+
+@contextmanager
+def slot_errors():
+    """안에서 훅으로 간 예외를 모았다가, 블록이 정상으로 끝나면 `SlotError` 로 올린다(블록이 이미 실패 중이면 그쪽을 둔다)."""
+    caught: list[str] = []
+    lock = threading.Lock()
+
+    def on_exc(exc_type, exc, tb):
+        with lock:
+            caught.append("".join(traceback.format_exception_only(exc_type, exc)).strip())
+
+    def on_thread(args):
+        if args.exc_type is SystemExit:
+            return
+        on_exc(args.exc_type, args.exc_value, args.exc_traceback)
+
+    saved = (sys.excepthook, threading.excepthook)
+    sys.excepthook, threading.excepthook = on_exc, on_thread
+    try:
+        yield caught
+    finally:
+        sys.excepthook, threading.excepthook = saved
+    if caught:
+        raise SlotError(f"훅으로 간 예외 {len(caught)}건(슬롯·스레드 안 — 테스트까지 안 올라왔다): " + " | ".join(caught[:3]))
 
 
 @contextmanager
@@ -48,7 +84,8 @@ def limit(name: str, seconds: float | None = None):
     timer.start()
     faulthandler.dump_traceback_later(secs + _BACKSTOP_S, exit=True)
     try:
-        yield
+        with slot_errors():
+            yield
     finally:
         timer.cancel()
         faulthandler.cancel_dump_traceback_later()

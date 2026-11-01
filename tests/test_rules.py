@@ -168,15 +168,92 @@ def check_encoding(srcs: dict[str, str]) -> list[str]:
 
 
 def check_signals(srcs: dict[str, str]) -> list[str]:
-    """스레드 → 화면 신호에 list·dict 형을 쓰지 않는다 — PyQt 가 통째로 깊은 복사한다(CLAUDE.md PyQt 8)."""
+    """스레드 → 화면 신호에 list·dict 형을 쓰지 않는다 — PyQt6 는 통째로 깊은 복사했고(CLAUDE.md PyQt 8),
+    PySide6 는 int 키 dict 를 **빈 `{}` 로 조용히** 보낸다(73단계 M5). 이름은 `Signal`(옛 `pyqtSignal` 도 잡는다)."""
     out = []
     for rel, src in srcs.items():
         for node in ast.walk(ast.parse(src)):
-            if isinstance(node, ast.Call) and _call_name(node) == "pyqtSignal":
+            if isinstance(node, ast.Call) and _call_name(node).rsplit(".", 1)[-1] in ("Signal", "pyqtSignal"):
                 for a in node.args:
                     if isinstance(a, ast.Name) and a.id in ("list", "dict"):
-                        out.append(f"{rel}:{node.lineno} pyqtSignal({a.id}, …) — object 로")
+                        out.append(f"{rel}:{node.lineno} Signal({a.id}, …) — object 로")
     return out
+
+
+def check_binding(srcs: dict[str, str]) -> list[str]:
+    """바인딩은 PySide6 하나(73단계) — `PyQt6`·`sip` 을 import 하는 줄이 남으면 위반. 둘이 섞이면 한 프로세스에
+    Qt 가 두 벌 뜨고 배포물에 GPL 이 다시 섞인다. 주석·글 속 'PyQt6' 는 기록이라 안 본다."""
+    out = []
+    for rel, src in srcs.items():
+        for node in ast.walk(ast.parse(src)):
+            mods = []
+            if isinstance(node, ast.Import):
+                mods = [a.name for a in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                mods = [node.module or ""] + [f"{node.module}.{a.name}" for a in node.names]
+            for m in mods:
+                if m.split(".")[0] in ("PyQt6", "PyQt5", "sip") or m.endswith(".sip"):
+                    out.append(f"{rel}:{node.lineno} import {m} — PySide6 로")
+                    break
+    return out
+
+
+# Qt 값 객체 — PySide6 와 PyQt6 의 bool() 이 반대인 것들(73단계 M3: QPixmap()·QImage()·QIcon() 은 PySide6 False ·
+# QSize()·QMarginsF() 는 거꾸로). `if x:` 로 판정하면 바인딩만 바꿔도 조용히 뒤집힌다 → isNull() 로
+QT_VALUE_TYPES = {"QPixmap", "QImage", "QIcon", "QSize", "QSizeF", "QMargins", "QMarginsF", "QPoint", "QPointF",
+                  "QRect", "QRectF", "QColor", "QFont"}
+
+
+def check_value_truth(srcs: dict[str, str]) -> list[str]:
+    """함수 안에서 Qt 값 객체 생성 결과를 받은 이름을 `if x:`·`not x`·`x and/or …` 로 판정하는 자리."""
+    out = set()
+    for rel, src in srcs.items():
+        for fn in ast.walk(ast.parse(src)):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            nodes = list(ast.walk(fn))
+            names = {t.id for n in nodes if isinstance(n, ast.Assign) and isinstance(n.value, ast.Call)
+                     and _call_name(n.value).rsplit(".", 1)[-1] in QT_VALUE_TYPES
+                     for t in n.targets if isinstance(t, ast.Name)}
+            for n in nodes if names else ():
+                if isinstance(n, (ast.If, ast.While, ast.IfExp)):
+                    tests = [n.test]
+                elif isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.Not):
+                    tests = [n.operand]
+                elif isinstance(n, ast.BoolOp):
+                    tests = n.values
+                else:
+                    continue
+                for t in tests:
+                    if isinstance(t, ast.Name) and t.id in names:
+                        out.add(f"{rel}:{n.lineno} Qt 값 객체 {t.id} 를 bool 로 판정 — isNull() 로")
+    return sorted(out)
+
+
+def check_vararg_slots(srcs: dict[str, str]) -> list[str]:
+    """`connect(lambda *a: … a …)`·`connect(partial(…))` — PySide6 는 기본 인자 있는 내장 신호(clicked·triggered)에
+    가변 인자 래퍼를 이으면 인자를 **0개** 넘긴다(PyQt6 는 `(False,)` · 73단계 M4). 인자를 안 쓰는 `lambda *_:` 와
+    기본값 인자 람다(`lambda _=False, n=…:` — 11-01 실측 n 이 안 덮인다)는 괜찮다."""
+    out = []
+    for rel, src in srcs.items():
+        for node in ast.walk(ast.parse(src)):
+            if not (isinstance(node, ast.Call) and _call_name(node).endswith(".connect") and node.args):
+                continue
+            a = node.args[0]
+            if isinstance(a, ast.Lambda) and a.args.vararg:
+                v = a.args.vararg.arg
+                if any(isinstance(n, ast.Name) and n.id == v for n in ast.walk(a.body)):
+                    out.append(f"{rel}:{node.lineno} connect(lambda *{v}: …{v}…) — PySide6 는 인자 0개")
+            elif isinstance(a, ast.Call) and _call_name(a).rsplit(".", 1)[-1] == "partial":
+                out.append(f"{rel}:{node.lineno} connect(partial(…)) — 받는 인자 개수를 대조")
+    return out
+
+
+def check_watchdog(srcs: dict[str, str]) -> list[str]:
+    """`main()` 이 있는 테스트 파일은 테스트마다 `watchdog.limit` 안에서 — 시간 한도(멈춤)와 슬롯 예외 수집이
+    거기 있다(73단계 F9). 빠지면 PySide6 에선 슬롯 안 단언 실패·모달 차단이 "통과" 로 읽힌다."""
+    return [f"{rel} — main() 의 테스트가 watchdog.limit 밖" for rel, src in srcs.items()
+            if re.search(r"^def main\(", src, re.M) and "watchdog.limit(" not in src]
 
 
 def guarded_modals(smoke_src: str) -> set[str]:
@@ -675,7 +752,7 @@ def _all(files) -> dict[str, str]:
 
 
 def test_no_direct_combobox():
-    assert check_combo({"x.py": "from PyQt6.QtWidgets import QComboBox\nc = QComboBox()\n"}), "심은 위반을 못 잡는다"
+    assert check_combo({"x.py": "from PySide6.QtWidgets import QComboBox\nc = QComboBox()\n"}), "심은 위반을 못 잡는다"
     assert not check_combo({"x.py": "c = NoScrollComboBox()\n"})
     assert check_combo(_all(APP_FILES)) == []
 
@@ -701,10 +778,44 @@ def test_text_io_names_encoding():
 
 
 def test_signals_carry_objects():
-    assert check_signals({"x.py": "s = pyqtSignal(list, int)\nt = pyqtSignal(dict)\n"}) and \
-        len(check_signals({"x.py": "s = pyqtSignal(list, int)\nt = pyqtSignal(dict)\n"})) == 2
-    assert not check_signals({"x.py": "s = pyqtSignal(object, int)\n"})
+    planted = "s = Signal(list, int)\nt = Signal(dict)\nu = QtCore.Signal(dict)\nv = pyqtSignal(list)\n"
+    assert len(check_signals({"x.py": planted})) == 4, check_signals({"x.py": planted})
+    assert not check_signals({"x.py": "s = Signal(object, int)\n"})
     assert check_signals(_all(APP_FILES)) == []
+
+
+def test_binding_is_pyside6_only():
+    planted = ("from PyQt6.QtCore import Qt\nfrom PyQt6 import sip\nimport PyQt6.QtGui\nimport sip\n"
+               "def f():\n    from PyQt6.QtWidgets import QLabel\n")
+    assert len(check_binding({"x.py": planted})) == 5, check_binding({"x.py": planted})
+    assert not check_binding({"x.py": "from PySide6.QtCore import Qt\nimport shiboken6\n# PyQt6 는 옛 바인딩\n"})
+    assert check_binding(_all(ALL_PY)) == []
+
+
+def test_qt_value_objects_not_judged_by_bool():
+    planted = ("def f():\n    p = QPixmap(path)\n    if p:\n        pass\n    return not p\n"
+               "def g():\n    s = QSize(0, 0)\n    return s or other\n")
+    assert len(check_value_truth({"x.py": planted})) == 3, check_value_truth({"x.py": planted})
+    assert not check_value_truth({"x.py": "def f():\n    p = QPixmap(path)\n    if not p.isNull():\n        pass\n"})
+    assert check_value_truth(_all(APP_FILES)) == []
+
+
+def test_vararg_slots_do_not_read_args():
+    planted = ("b.clicked.connect(lambda *a: f(a[0]))\nb.clicked.connect(partial(g, 1))\n"
+               "b.clicked.connect(functools.partial(g, 1))\n")
+    assert len(check_vararg_slots({"x.py": planted})) == 3, check_vararg_slots({"x.py": planted})
+    assert not check_vararg_slots({"x.py": "b.clicked.connect(lambda *_: f())\n"
+                                           "b.clicked.connect(lambda _=False, n=1: f(n))\n"})
+    assert check_vararg_slots(_all(APP_FILES)) == []
+
+
+def test_every_test_main_runs_under_watchdog():
+    planted = {"tests/test_x.py": "def main():\n    for t in tests:\n        t()\n",
+               "tests/test_y.py": "def main():\n    with watchdog.limit(t.__name__):\n        t()\n"}
+    assert check_watchdog(planted) == ["tests/test_x.py — main() 의 테스트가 watchdog.limit 밖"], check_watchdog(planted)
+    files = sorted(ROOT.glob("tests/test_*.py"))
+    assert len(files) > 20, "테스트 파일을 못 찾았다(빈 검사)"
+    assert check_watchdog(_all(files)) == []
 
 
 def test_every_modal_the_app_uses_is_blocked_in_smoke():

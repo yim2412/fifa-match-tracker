@@ -8,14 +8,15 @@ charts 에서 아무것도 import 하지 않는다 — 상수·도우미(_smooth
 charts 의 상수·도우미와 theme 색을 읽어서, 그쪽을 고치면 사본도 같이 바뀌어 골든이 아무것도 안 쟀다).
 테마만 theme.MODE 로 고른다(색 값은 아래 표에 박아 둠).
 이 파일은 고치지 않는다(고치면 대조가 무의미해진다). 기본값 그림을 일부러 바꿀 때만 통째로 다시 얼린다.
+예외 하나: 73단계(PySide6 전환)에서 **import 줄만** PyQt6 → PySide6 로 바꿨다 — 그림 코드는 그대로다.
 """
 from __future__ import annotations
 
 import math
 
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
-from PyQt6.QtWidgets import QToolTip, QWidget
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen
+from PySide6.QtWidgets import QToolTip, QWidget
 
 import theme as T
 

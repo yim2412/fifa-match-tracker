@@ -16,17 +16,17 @@
 색 상한 `HEAT_MAX_MIX` 는 글자 대비 4.5 로 잼)·도넛 조각(`donut_segments` — 6개 넘으면 "기타").
 추이는 **`AreaTrendChart` 하나**(1.3.1) — 축(`Axis` · `PCT_AXIS`/`Axis.fit`)·기준선·이동평균·경기 수 막대·날짜 x·기준 계단선·띠·범례·큰 값은 전부 `set_data` 인자.
 **기본값 그림은 얼린 사본과 픽셀까지 같아야** 한다(대시보드·선수 카드가 기본값만 쓴다) — `tests/legacy_area_chart.py`(3.1.1 66 G0 꼴로
-다시 얼림 · 상수·도우미·색 값까지 복사해 둬서 여기를 고치면 같이 안 바뀐다 · 고치지 않는다)와 `test_area_chart_defaults_unchanged` 가 대조
+다시 얼림 · 상수·도우미·색 값까지 복사해 둬서 여기를 고치면 같이 안 바뀐다 · 고치지 않는다 — 73단계 바인딩 전환의 import 줄만 예외)와 `test_area_chart_defaults_unchanged` 가 대조
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt
-from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QPainter,
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtGui import (QColor, QFont, QFontMetrics, QPainter,
                          QPainterPath, QPen, QPolygonF)
-from PyQt6.QtWidgets import QToolTip, QWidget
+from PySide6.QtWidgets import QToolTip, QWidget
 
 import theme as T
 

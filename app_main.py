@@ -1,10 +1,10 @@
-"""감독모드 전적 분석(예전 이름 피파 전적관리) — PyQt6 앱.
+"""감독모드 전적 분석(예전 이름 피파 전적관리) — PySide6 앱.
 
 첫 화면은 검색창 하나. 구단주명을 넣으면 왼쪽 메뉴 + 대시보드 화면으로 전환된다.
 
 
 규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
-PyQt6 UI — 랭킹 추이는 탭 셋(추이 · 메타 변화 · 점수 분포 — 2.3.1).
+PySide6 UI — 랭킹 추이는 탭 셋(추이 · 메타 변화 · 점수 분포 — 2.3.1).
 rank.db 정리는 `RankMaintWorker`(예약기 `RankCollectScheduler.maintain` — 켤 때 VACUUM 포함 · 1시간 확인마다 ·
 끄는 길 `sync_ranker_pick_data` · 겹치면 끝난 뒤 한 번 · 수집과 겹치면 수집이 기다림).
 검색 화면 → 왼쪽 메뉴(`NAV` 표) + 위쪽 바 + 메뉴별 페이지(대시보드 포함), 조회 워커 스레드(`MatchLoader`).
@@ -33,10 +33,10 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, pyqtSignal
-from PyQt6 import sip
-from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, Signal
+import shiboken6
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
+from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox,
@@ -357,7 +357,7 @@ class MatchLoader(Worker):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
     WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_IMAGES})   # 경기 저장 · 상세 캐시 · 등급 배지
 
-    progress = pyqtSignal(int, int, str)
+    progress = Signal(int, int, str)
     # [MatchSummary], [원본 detail], ouid, basic, spId→이름, 포지션코드→이름,
     # 새로 저장된 수, 이번에 API 로 받은 수, RankerInfo|None(넥슨 데이터센터 랭킹),
     # 등급이름(감독모드 최고 등급), is_champion(챔피언스 이상인지), 등급 배지 로컬 경로,
@@ -365,17 +365,17 @@ class MatchLoader(Worker):
     # 컨테이너는 list/dict 가 아니라 object 로 선언한다 — list/dict 면 PyQt 가 1만 경기 기록(중첩 dict)을
     # Qt 형식으로 통째로 깊은 복사했다 되돌려, 직접 읽으면 786MB 인 것이 앱에선 2.7~4.5GB 까지 올랐고
     # 로더가 끝난 뒤 화면까지 약 6초 걸렸다(2026-10-02 실측). object 는 참조만 넘긴다.
-    finished_ok = pyqtSignal(object, object, str, object, object, object, int, int, object,
+    finished_ok = Signal(object, object, str, object, object, object, int, int, object,
                              str, bool, str, object, object)
-    failed = pyqtSignal(str)
-    key_invalid = pyqtSignal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
-    quota_hit = pyqtSignal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
-    rank_ready = pyqtSignal(str, object)  # finished_ok 때 랭킹이 아직이었으면 뒤따라 — ouid, RankerInfo|None
+    failed = Signal(str)
+    key_invalid = Signal(str)  # 넥슨이 키를 거절했다 — 키 입력 창으로 보낸다
+    quota_hit = Signal(str)    # 호출 한도(429) — 저장 없이 멈췄다. 서비스 단계 키로 바꾸게 한다
+    rank_ready = Signal(str, object)  # finished_ok 때 랭킹이 아직이었으면 뒤따라 — ouid, RankerInfo|None
     # 역대 최고 등급(user/maxdivision) — ouid, dict|{}(그 종류 기록 없음)|None(실패). finished_ok 뒤에 보내지만
     # 순서에 기대지 않는다: 화면이 ouid 별로 담아서, 먼저 와도 _on_loaded 가 그 계정을 그릴 때 보인다(7단계 변이로 확인)
-    max_division_ready = pyqtSignal(str, object)
+    max_division_ready = Signal(str, object)
     # 이번 검색의 ELO 를 새 줄로 적었다(1.3.1) — 랭킹이 finished_ok 보다 늦게 와도 ELO 그래프가 이번 점을 넣게
-    elo_saved = pyqtSignal(str)
+    elo_saved = Signal(str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
@@ -767,7 +767,7 @@ class ImageLoader(Worker):
     받아지는 대로 채워진다."""
     WRITES = frozenset({STORE_IMAGES})
 
-    loaded = pyqtSignal(int, str)  # spId, 로컬 파일 경로
+    loaded = Signal(int, str)  # spId, 로컬 파일 경로
 
     def __init__(self, sp_ids: list[int], cache_dir):
         super().__init__()
@@ -794,7 +794,7 @@ class IconLoader(Worker):
     화면 스레드가 _fill 뒤에 칸을 훑어 만든 평범한 목록만 받는다. 403·404 는 images.fetch_icon 이 세션 안에 기억한다."""
     WRITES = frozenset({STORE_IMAGES})
 
-    loaded = pyqtSignal(str, object, str)  # 종류, 키, 로컬 파일 경로
+    loaded = Signal(str, object, str)  # 종류, 키, 로컬 파일 경로
 
     def __init__(self, entries: list[tuple[str, object, str]], cache_dir):
         super().__init__()
@@ -826,8 +826,8 @@ class PlayerInfoLoader(Worker):
     사용자가 직접 연 카드라 하루 상한은 없다(계수도 안 한다 — ROADMAP 2.1.1 B)."""
     WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
-    loaded = pyqtSignal(object)   # playerinfo.PlayerInfo
-    failed = pyqtSignal(str)
+    loaded = Signal(object)   # playerinfo.PlayerInfo
+    failed = Signal(str)
 
     def __init__(self, sp_id: int):
         super().__init__()
@@ -857,8 +857,8 @@ class TradeLoader(Worker):
     이어 받는다. 쪽마다 한 트랜잭션이라 끊겨도 반쪽이 안 남아 terminate 하지 않는다(shutdown 표)."""
     WRITES = frozenset({STORE_FIFA})
 
-    wiped = pyqtSignal()        # 키가 바뀌어 옛 주인 거래를 지웠다(커밋 뒤) — 화면이 들고 있던 걸 버린다
-    done = pyqtSignal(object)   # tradecollect.TradeResult
+    wiped = Signal()        # 키가 바뀌어 옛 주인 거래를 지웠다(커밋 뒤) — 화면이 들고 있던 걸 버린다
+    done = Signal(object)   # tradecollect.TradeResult
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -890,7 +890,7 @@ class PriceLoader(Worker):
     config.price_auto_allowed() 뒤에서만. 카드 사이마다 cancel 을 본다(한 장 = 한 트랜잭션)."""
     WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
-    done = pyqtSignal(int, int)  # 이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
+    done = Signal(int, int)  # 이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
 
     def __init__(self, spids: list[int]):
         super().__init__()
@@ -920,8 +920,8 @@ class CardInfoLoader(Worker):
     카드 사이마다 cancel · 한 장 = 한 트랜잭션이라 terminate 하지 않는다(shutdown 표)."""
     WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
-    card = pyqtSignal(object)    # playerinfo.PlayerInfo — 읽는 대로 칩에
-    done = pyqtSignal(int, int)  # 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
+    card = Signal(object)    # playerinfo.PlayerInfo — 읽는 대로 칩에
+    done = Signal(int, int)  # 읽은 카드 수, 상한에 걸려 못 읽은 카드 수
 
     def __init__(self, spids: list[int]):
         super().__init__()
@@ -957,8 +957,8 @@ class RankerStatsLoader(Worker):
     요청은 묶음(RANKER_STATS_BATCH)마다 하나 · 묶음마다 한 트랜잭션이라 terminate 하지 않는다(shutdown 표)."""
     WRITES = frozenset({STORE_FIFA})
 
-    done = pyqtSignal(object)   # (spid, po) → 응답 한 줄 | None
-    failed = pyqtSignal(str)
+    done = Signal(object)   # (spid, po) → 응답 한 줄 | None
+    failed = Signal(str)
 
     def __init__(self, api: FCOnlineAPI, pairs, matchtype: int):
         super().__init__()
@@ -997,7 +997,7 @@ class SquadBackfillWorker(Worker):
     끊겨도 다음 실행이 LEFT JOIN 으로 이어서 찾아 terminate 하지 않는다(shutdown 표)."""
     WRITES = frozenset({STORE_FIFA})
 
-    progress = pyqtSignal(int, int)   # 남은 경기, 전체 경기
+    progress = Signal(int, int)   # 남은 경기, 전체 경기
 
     def __init__(self):
         super().__init__()
@@ -1029,8 +1029,8 @@ class RankerPickLoader(Worker):
     랭커 사이에서 멈추고(받은 만큼은 남는다), 429 대기도 1초씩 cancel 을 본다. 랭커마다 저장이 끝나 terminate 하지 않는다."""
     WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_RANK})
 
-    ranker = pyqtSignal()        # 한 명 끝 — 화면이 집계를 다시 그린다
-    done = pyqtSignal(object)    # rankerpick.PickResult
+    ranker = Signal()        # 한 명 끝 — 화면이 집계를 다시 그린다
+    done = Signal(object)    # rankerpick.PickResult
 
     @property
     def recommend(self) -> tuple | None:
@@ -1107,8 +1107,8 @@ class TraitLoader(Worker):
     사람 사이에서 멈추고(받은 만큼은 남는다) 한 사람 = 한 트랜잭션이라 terminate 하지 않는다. 오픈API 는 랭커 픽과 한 장부."""
     WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_RANK})
 
-    person = pyqtSignal()        # 한 명 끝 — 화면이 다시 그린다
-    done = pyqtSignal(object)    # traitcollect.TraitRun
+    person = Signal()        # 한 명 끝 — 화면이 다시 그린다
+    done = Signal(object)    # traitcollect.TraitRun
 
     def __init__(self, api: FCOnlineAPI, mine: bool = False):
         super().__init__()
@@ -1157,8 +1157,8 @@ class AbilitySimLoader(Worker):
     강화·팀컬러 콤보박스를 바꿀 때마다 PC 데이터센터에 새로 물어봐야 해서
     (서버가 직접 계산 — 로컬 근사 없음) 조작할 때마다 새로 띄운다."""
 
-    loaded = pyqtSignal(object)   # playerinfo.AbilitySim
-    failed = pyqtSignal(str)
+    loaded = Signal(object)   # playerinfo.AbilitySim
+    failed = Signal(str)
 
     def __init__(self, sp_id: int, strong: int, adapt: int,
                  teamcolor_id: int, teamcolor_lv: int,
@@ -1204,10 +1204,10 @@ class TeamColorLoader(Worker):
     MAX_WORKERS = 8
     TIMEOUT = 5
 
-    progress = pyqtSignal(int, int)   # done, total
+    progress = Signal(int, int)   # done, total
     # {닉네임: (넥슨 팀컬러 이름("" 이면 랭킹 밖), 구단가치(원 단위 int, 못 찾으면 None), 엠블럼 키)} — RankListLoader 와 같은 모양
-    loaded_many = pyqtSignal(object)  # dict — 이유는 MatchLoader.finished_ok
-    finished_all = pyqtSignal()
+    loaded_many = Signal(object)  # dict — 이유는 MatchLoader.finished_ok
+    finished_all = Signal()
 
     def __init__(self, nicknames: list[str]):
         super().__init__()
@@ -1273,10 +1273,10 @@ class RankListLoader(Worker):
     MAX_WORKERS = TeamColorLoader.MAX_WORKERS  # 같은 페이지·같은 예의
     TIMEOUT = 10  # 목록 한 쪽은 검색 결과보다 크다(약 50KB)
 
-    progress = pyqtSignal(int, int)   # 읽은 쪽, 전체 쪽
-    loaded_many = pyqtSignal(object)  # {닉네임: (팀컬러, 구단가치, 엠블럼 키)} — object 인 이유는 MatchLoader.finished_ok
-    finished_all = pyqtSignal()
-    waiting = pyqtSignal()            # 랭킹 수집이 같은 목록을 읽는 중이라 기다린다
+    progress = Signal(int, int)   # 읽은 쪽, 전체 쪽
+    loaded_many = Signal(object)  # {닉네임: (팀컬러, 구단가치, 엠블럼 키)} — object 인 이유는 MatchLoader.finished_ok
+    finished_all = Signal()
+    waiting = Signal()            # 랭킹 수집이 같은 목록을 읽는 중이라 기다린다
 
     def __init__(self, wanted: set[str]):
         super().__init__()
@@ -1407,7 +1407,7 @@ class TeamColorEffectLoader(Worker):
     캐시가 있으면 그걸 날짜와 같이 보인다. 받은 선수의 급여·시세는 카드 캐시(B)에 — 급여 열만·0 시세는 안 쓴다."""
     WRITES = frozenset({STORE_FIFA, STORE_CARDS, STORE_IMAGES})
 
-    loaded = pyqtSignal(object)   # TeamColorView
+    loaded = Signal(object)   # TeamColorView
 
     def __init__(self, req: int, label: str, meta_id: int | None = None, have: list | None = None):
         super().__init__()
@@ -1540,7 +1540,7 @@ class EloLoader(Worker):
     """fifa.db elo_history·elo_track 과 rank.db cut_elo 를 읽는다. rank.db 는 읽기 전용 — 없으면 만들지 않는다.
     opp(57 K3): [(match_id, 경기 시각, 상대)] — 주면 내 계정(trade_state my_ouid + 키 지문)일 때만 상대 점수·N23 구간을 같이 읽는다."""
     WRITES = frozenset({STORE_FIFA})
-    elo_ready = pyqtSignal(str, object)   # ouid, EloSeries — object 인 이유는 PyQt 규칙 8
+    elo_ready = Signal(str, object)   # ouid, EloSeries — object 인 이유는 PyQt 규칙 8
 
     def __init__(self, ouid: str, req: int, opp: list | None = None):
         super().__init__()
@@ -1595,7 +1595,7 @@ class PredictWorker(Worker):
     """시즌 말 순위 예측(1.3.1 · predict.py) — EloLoader 가 끝난 뒤 그 계정으로. rank.db 는 읽기 전용(없으면 만들지 않음).
     숫자를 내면 fifa.db predictions 에 그날 한 줄(시즌 뒤 대조용). 계산 예외는 그 구역만 "계산하지 못했습니다"."""
     WRITES = frozenset({STORE_FIFA})
-    pred_ready = pyqtSignal(str, object)   # ouid, (요청 번호, Prediction)
+    pred_ready = Signal(str, object)   # ouid, (요청 번호, Prediction)
 
     FAILED = "예측을 계산하지 못했습니다"
 
@@ -1653,7 +1653,7 @@ class HabitsWorker(Worker):
     """연승·연패 우연 기준(A3 · habits.streak_baseline) — 순서를 200번 섞어 1만 판이면 0.5~0.8초라 화면 스레드 예산
     (0.3초)을 넘는다. 새 검색·범위·시즌이 바뀐 직후 한 번 띄운다(_launch_streak). 요청 번호로 늦은 결과를 버린다.
     계산 예외는 그 구역만 "계산하지 못했습니다"(결과 None)."""
-    streak_ready = pyqtSignal(object)   # (요청 번호, 캐시 키, StreakBaseline | None) — object 인 이유는 PyQt 규칙 8
+    streak_ready = Signal(object)   # (요청 번호, 캐시 키, StreakBaseline | None) — object 인 이유는 PyQt 규칙 8
 
     def __init__(self, req: int, key: tuple, matches: list):
         super().__init__()
@@ -2028,7 +2028,7 @@ class SeasonLoader(Worker):
     """
     WRITES = frozenset({STORE_FIFA})
 
-    loaded = pyqtSignal(object)  # list[sn.Season] — object 인 이유는 MatchLoader.finished_ok
+    loaded = Signal(object)  # list[sn.Season] — object 인 이유는 MatchLoader.finished_ok
 
     def run(self) -> None:
         try:
@@ -2049,8 +2049,8 @@ class SeasonLoader(Worker):
 class RankCollectWorker(Worker):
     """랭킹 수집 한 회차(rankcollect.collect)를 UI 스레드 밖에서."""
     WRITES = frozenset({STORE_FIFA, STORE_RANK})
-    progress = pyqtSignal(int, int)  # 읽은 쪽, 전체 쪽
-    done = pyqtSignal(object)        # rankcollect.Outcome
+    progress = Signal(int, int)  # 읽은 쪽, 전체 쪽
+    done = Signal(object)        # rankcollect.Outcome
 
     def __init__(self):
         super().__init__()
@@ -2072,7 +2072,7 @@ class RankMaintWorker(Worker):
     """rank.db 정리 한 번(rankcollect.maintenance) — 지우기 조건 · 메타 처리 · 원본 정리 · (켤 때) VACUUM · WAL 비우기.
     **화면 스레드는 rank.db 에 쓰지 않는다**(2.3.1 — 메타 처리의 긴 트랜잭션 뒤에서 창이 15초 굳었다): 토글의 켜짐 사본도 여기서."""
     WRITES = frozenset({STORE_RANK})
-    done = pyqtSignal(object)   # dict — maintenance 결과
+    done = Signal(object)   # dict — maintenance 결과
 
     def __init__(self, vacuum: bool = False, enabled: tuple | None = None):
         super().__init__()
@@ -2116,9 +2116,9 @@ class RankCollectScheduler(QObject):
     타이머가 늦게 터지면(절전 복귀) 그 자리에서 시작하지 않고 지금 기준으로 다시 고른다.
     도는 조건은 매번 본다: 안내 동의 · 웹 데이터 · 수집 토글(rankcollect.collect 도 .env 를 다시 읽어 한 번 더 막는다)."""
 
-    status = pyqtSignal(str, bool)   # 상태줄 글, 오래 보여야 하나
-    outcome = pyqtSignal(object)     # 끝난 회차(rankcollect.Outcome)
-    maintained = pyqtSignal(object)  # 끝난 정리(rankcollect.maintenance 결과 dict) — 창이 rank.db 화면을 무효화
+    status = Signal(str, bool)   # 상태줄 글, 오래 보여야 하나
+    outcome = Signal(object)     # 끝난 회차(rankcollect.Outcome)
+    maintained = Signal(object)  # 끝난 정리(rankcollect.maintenance 결과 dict) — 창이 rank.db 화면을 무효화
 
     def __init__(self, parent=None, now_fn=datetime.now):
         super().__init__(parent)
@@ -2263,7 +2263,7 @@ class OwnerDistLoader(Worker):
     """구단주 분포 바퀴 한 호출(ownerdist.run_round)을 UI 스레드 밖에서 — 몇 시간 걸린다. 끊으면 도는 한 명만 버리고
     바퀴는 running 으로 남는다(다음 틱에 이어 받는다). rank.db 는 표본을 뽑는 동안만 연다(rank_open)."""
     WRITES = frozenset({STORE_FIFA, STORE_RANK})
-    done = pyqtSignal(object)   # ownerdist.RoundResult
+    done = Signal(object)   # ownerdist.RoundResult
 
     def __init__(self):
         super().__init__()
@@ -2293,9 +2293,9 @@ class OwnerDistScheduler(QObject):
     - 켜져 있고 ownerdist.should_run 이면 로더 시작(화면 스레드의 fifa.db 읽기 한 번).
     지우기는 로더가 돌면 그 끝(_on_done)에서 — 돌던 저장과 겹치지 않게. 상태로 판정하므로 놓친 지우기는 다음 틱이 잡는다."""
 
-    round_done = pyqtSignal(object)   # ownerdist.RoundResult
-    dist_changed = pyqtSignal()       # 새 done 분포 — 창이 칩·문장을 다시 그린다(③b)
-    switched_off = pyqtSignal(str)    # 스스로 껐다 — 사유(ownerdist.OFF_REASON_TEXT 의 키)
+    round_done = Signal(object)   # ownerdist.RoundResult
+    dist_changed = Signal()       # 새 done 분포 — 창이 칩·문장을 다시 그린다(③b)
+    switched_off = Signal(str)    # 스스로 껐다 — 사유(ownerdist.OFF_REASON_TEXT 의 키)
 
     def __init__(self, parent=None, now_fn=datetime.now):
         super().__init__(parent)
@@ -2443,7 +2443,7 @@ class CardBackfillLoader(Worker):
     """카드 정보 자동 채우기 한 바퀴(cardcollect.run — 틱 하나 최대 CARD_BACKFILL_TICK_REQ 요청)를 UI 스레드 밖에서.
     요청 사이 간격은 취소 이벤트의 wait — 끊으면 기다림 없이 돌아온다(끊긴 뒤 기다림 ≤ 도는 요청 하나의 타임아웃)."""
     WRITES = frozenset({STORE_FIFA, STORE_CARDS})
-    done = pyqtSignal(object)   # cardcollect.RunResult
+    done = Signal(object)   # cardcollect.RunResult
 
     def __init__(self, today: date):
         super().__init__()
@@ -2471,8 +2471,8 @@ class CardBackfillScheduler(QObject):
     - 꺼졌으면 도는 로더를 멈춘다 — 지우기는 없다(G3 · 카드 정보는 사람과 이어지지 않는다)
     - 켜져 있으면 로더 시작. 바퀴 끝에 켠 날 뒤로 막힘이 TRAIT_BLOCK_DAYS 이어졌으면 스스로 끈다(사유 blocked)."""
 
-    finished = pyqtSignal(object)     # cardcollect.RunResult — 창이 [정보] 상태 줄·카드 화면을 다시
-    switched_off = pyqtSignal(str)    # 스스로 껐다 — 사유(cardcollect.OFF_REASON_TEXT 의 키)
+    finished = Signal(object)     # cardcollect.RunResult — 창이 [정보] 상태 줄·카드 화면을 다시
+    switched_off = Signal(str)    # 스스로 껐다 — 사유(cardcollect.OFF_REASON_TEXT 의 키)
 
     def __init__(self, parent=None, now_fn=datetime.now):
         super().__init__(parent)
@@ -7287,7 +7287,7 @@ class MainWindow(QMainWindow):
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
         dlg = self._teamcolor_dialog
-        if dlg is not None and not sip.isdeleted(dlg) and dlg.isVisible():
+        if dlg is not None and shiboken6.isValid(dlg) and dlg.isVisible():
             dlg.refresh_rank()   # 67 3회차 M11 — 열어 둔 팀컬러 창은 무효화 표 밖이라 여기서 1만 명 칸만
         if self._tc_minor_only:
             self._invalidate("teamcolor")   # 57 K8 비주류 기준(마지막 스냅숏 1만 명)이 바뀐다
@@ -10877,7 +10877,7 @@ class MainWindow(QMainWindow):
         if pm.isNull():
             Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 그림 없이
             return
-        if not sip.isdeleted(view):
+        if shiboken6.isValid(view):
             view.put_icon(kind, key, pm)
 
     @staticmethod
@@ -11608,7 +11608,7 @@ class MainWindow(QMainWindow):
         if card_info:
             # [안내 보기]는 게이트를 거는 이 자리에서 잇는다 — 축구장을 만드는 곳마다 잇게 두면 하나를 빠뜨린다
             pitch.notice_requested.connect(self._on_pitch_notice)
-            self._live_pitches = [p for p in self._live_pitches if not sip.isdeleted(p)] + [pitch]
+            self._live_pitches = [p for p in self._live_pitches if shiboken6.isValid(p)] + [pitch]
             self._fill_pitch_from_cache(pitch)
             ld = self._start_card_info(pitch)
             if ld is not None:
@@ -11673,7 +11673,7 @@ class MainWindow(QMainWindow):
         return ld
 
     def _on_pitch_card(self, pitch: PitchWidget, info) -> None:
-        if sip.isdeleted(pitch):
+        if not shiboken6.isValid(pitch):
             return
         d = pitch.card_data.setdefault(info.sp_id, {})
         d["base_ovr"], d["salary"] = info.ovr, info.salary
@@ -11681,7 +11681,7 @@ class MainWindow(QMainWindow):
         self._apply_pitch_card(pitch, info.sp_id)
 
     def _on_pitch_card_done(self, pitch: PitchWidget, skipped: int) -> None:
-        if not sip.isdeleted(pitch) and skipped:
+        if shiboken6.isValid(pitch) and skipped:
             pitch.set_gate(f"오늘 카드 조회 한도({config.CHIP_FETCH_MAX}장)에 걸려 {skipped}장은 내일 읽습니다")
 
     def _on_pitch_notice(self) -> None:
@@ -11690,7 +11690,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_pitch_cards(self) -> None:
         """동의 직후 — 막혀 있던 축구장의 카드 정보 읽기를 다시 본다(닫힌 대화상자의 것은 버린다)."""
-        self._live_pitches = [p for p in self._live_pitches if not sip.isdeleted(p)]
+        self._live_pitches = [p for p in self._live_pitches if shiboken6.isValid(p)]
         if not config.chip_auto_allowed():
             return
         for p in self._live_pitches:
@@ -13454,7 +13454,7 @@ class MainWindow(QMainWindow):
         pm = pm.scaled(px, px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self._gk_faces[sp_id] = pm
         face = self._gk_face_labels.get(sp_id)
-        if face is not None and not sip.isdeleted(face):
+        if face is not None and shiboken6.isValid(face):
             face.setPixmap(pm)
 
     def _render_pass_style(self, details: list[dict]) -> None:
@@ -13614,8 +13614,8 @@ class MainWindow(QMainWindow):
                    for t in (self._loader, self._teamcolor_loader, self._compare_loader, self._clear_worker))
 
     # ── 저장 공간(57 K9) ─────────────────────────────────────────────
-    storage_measured = pyqtSignal(object)   # storage.Sizes — 열린 [저장 공간] 탭이 받는다
-    storage_cleared = pyqtSignal(object)    # ClearResult
+    storage_measured = Signal(object)   # storage.Sizes — 열린 [저장 공간] 탭이 받는다
+    storage_cleared = Signal(object)    # ClearResult
     # 지우는 종류 → 걸쇠에 넣는 저장소. rank·dist 는 기존 길(화면 스레드에서 바로 · 각자 멈춤)이라 여기 없다
     CLEAR_STORES = {"cards": {STORE_CARDS}, "images": {STORE_IMAGES}, "details": {STORE_DETAILS}, "all": {"all"}}
 
@@ -13759,7 +13759,7 @@ class MainWindow(QMainWindow):
 
 class StorageSizeWorker(Worker):
     """[정보 › 저장 공간] 크기 재기(57 K9) — 읽기만(WRITES 없음 · 지우는 중에도 띄운다)."""
-    done = pyqtSignal(object)   # storage.Sizes
+    done = Signal(object)   # storage.Sizes
 
     def run(self) -> None:
         try:
@@ -13781,7 +13781,7 @@ class ClearWorker(Worker):
     """[정보 › 저장 공간] 지우기 한 번(57 K9) — 먼저 멈춤 요청을 받은 쓰는 쪽(targets)이 끝나기를 기다리고, 그 뒤에 지운다.
     주인은 창(대화상자가 닫혀도 산다) · 지우는 동안 새로 띄우는 쪽은 걸쇠(CLEARING)가 막는다. 종료 표가 기다린다 —
     바꿔 끼우기 전이면 cancel 로 멈춰 옛 파일 그대로(reset_db 의 "cancelled")."""
-    done = pyqtSignal(object)   # ClearResult
+    done = Signal(object)   # ClearResult
 
     def __init__(self, kind: str, targets: list):
         super().__init__()
@@ -13834,7 +13834,7 @@ class CachePruneWorker(Worker):
     """켤 때 한 번 — 이미 DB 에 있는 경기의 디스크 캐시를 지운다(FCOnlineAPI.prune_detail_cache).
     수만 개 파일을 훑으니 UI 스레드에서 하지 않는다. 실패는 조용히 — 다음에 켤 때 다시."""
     WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_CARDS})
-    done = pyqtSignal(int, int)  # 지운 수, 바이트
+    done = Signal(int, int)  # 지운 수, 바이트
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -13859,10 +13859,10 @@ class CachePruneWorker(Worker):
 
 class UpdateCheckWorker(Worker):
     """GitHub 최신 릴리스 확인(updatecheck.check)을 UI 스레드 밖에서."""
-    found = pyqtSignal(object)  # updatecheck.Release — 새 버전이 있을 때만
-    latest = pyqtSignal()       # 실제로 확인했고 지금이 최신일 때만
-    unknown = pyqtSignal()      # 확인 못 함(꺼짐·오프라인·릴리스 없음) — '최신'과 다르다
-    season_notice = pyqtSignal(object)   # (종료일, 시작일) — 릴리스 본문에 공지가 있을 때만(1.3.1)
+    found = Signal(object)  # updatecheck.Release — 새 버전이 있을 때만
+    latest = Signal()       # 실제로 확인했고 지금이 최신일 때만
+    unknown = Signal()      # 확인 못 함(꺼짐·오프라인·릴리스 없음) — '최신'과 다르다
+    season_notice = Signal(object)   # (종료일, 시작일) — 릴리스 본문에 공지가 있을 때만(1.3.1)
 
     def run(self) -> None:
         try:
@@ -13882,9 +13882,9 @@ class UpdateCheckWorker(Worker):
 
 class UpdateDownloadWorker(Worker):
     """설치 파일 내려받기 + 체크섬 검증(updatecheck.download_verified)."""
-    progress = pyqtSignal(int, int)  # (받은 바이트, 전체 바이트 — 모르면 0)
-    done = pyqtSignal(str)           # 검증을 통과한 설치 파일 경로
-    failed = pyqtSignal(str)
+    progress = Signal(int, int)  # (받은 바이트, 전체 바이트 — 모르면 0)
+    done = Signal(str)           # 검증을 통과한 설치 파일 경로
+    failed = Signal(str)
 
     def __init__(self, rel):
         super().__init__()
@@ -13910,7 +13910,7 @@ class UpdateDownloadWorker(Worker):
 
 class KeyCheckWorker(Worker):
     """키 확인 호출(nexon_api.check_key)을 UI 스레드 밖에서 한다."""
-    checked = pyqtSignal(str, str)  # (키, 실패 이유 — 통과면 빈 문자열)
+    checked = Signal(str, str)  # (키, 실패 이유 — 통과면 빈 문자열)
 
     def __init__(self, key: str):
         super().__init__()

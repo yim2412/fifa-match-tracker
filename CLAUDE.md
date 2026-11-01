@@ -5,11 +5,11 @@
 
 ## 프로젝트 개요
 
-넥슨 오픈API로 EA SPORTS FC 온라인 전적을 조회·집계하는 PyQt6 데스크톱 앱.
+넥슨 오픈API로 EA SPORTS FC 온라인 전적을 조회·집계하는 PySide6 데스크톱 앱(3.2.1 부터 — 그 전엔 PyQt6 · 73단계).
 
 | 파일 | 역할 |
 |------|------|
-| `app_main.py` | PyQt6 UI — 왼쪽 메뉴(`NAV` 표)·페이지·작업 스레드 로더들. 메뉴를 늘리려면 `NAV` 에 한 줄(그리기 표는 PyQt 7) · 세부는 머리말 |
+| `app_main.py` | PySide6 UI — 왼쪽 메뉴(`NAV` 표)·페이지·작업 스레드 로더들. 메뉴를 늘리려면 `NAV` 에 한 줄(그리기 표는 PyQt 7) · 세부는 머리말 |
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(2026-10-19 사용자: 무승부 포함 승÷전체 — `config.WIN_RATE_DRAWS_IN` 이 `is_mixed` 를 늘 거짓으로 · 끄면 A6 섞임 규칙 · 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
@@ -99,7 +99,7 @@ python -m server.run_local             # 이 PC 시험 서버(127.0.0.1:8765 · 
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
 
-필수 패키지: `pip install -r requirements.txt` (PyQt6, requests, python-dotenv)
+필수 패키지: `pip install -r requirements.txt` (PySide6-Essentials·shiboken6 6.11.3 고정, requests, python-dotenv, orjson)
 
 ---
 
@@ -153,10 +153,14 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 
 ---
 
-## PyQt6 규칙 (실수 방지 — 실제로 당한 것들)
+## PyQt 규칙 (실수 방지 — 실제로 당한 것들 · 바인딩은 PySide6)
 
 > 일반 Qt 함정(`NoScrollComboBox` · 위젯 import 확인 · 네트워크는 UI 스레드 밖 · 닫을 때 워커 정리 · 재할당 전역은 모듈 경유)은
 > 전역 규칙 8번. 아래 번호는 코드·테스트가 "PyQt N" 으로 가리키니 **바꾸지 않는다**. 언제 어떻게 당했나는 `docs/LESSONS.md`.
+> **바인딩은 PySide6**(73단계 · 3.2.1 — LGPL). 이름은 옛 그대로 "PyQt N". 옮기며 달라진 것(`test_rules` 가 지킨다): import 는 PySide6 만 ·
+> 지워진 위젯 판정 `shiboken6.isValid` · **슬롯 예외는 앱을 안 끝내고 훅으로**(테스트는 `watchdog.slot_errors` 가 실패로 바꾼다) ·
+> **표 정렬 `__lt__` 에서 `super().__lt__` 금지**(무한 재귀 — `widgets.qt_item_less`) · Qt 값 객체(`QPixmap`·`QSize`…)를 `if x:` 로
+> 판정하지 않는다(bool 이 PyQt6 와 반대) · `connect(lambda *a: …a…)` 금지(내장 신호 인자 0개).
 
 1. **후처리가 있는 표는 `_fill(..., enable_sort=False)` 로 채우고 후처리 뒤에만 `setSortingEnabled(True)`** — 다시 켜는 순간 Qt 가
    이전 정렬로 즉시 재정렬해, "채운 순서 = 원본 순서"로 칠한 색이 엉뚱한 행에 간다(두 번째 렌더부터만 터진다).
@@ -173,8 +177,8 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
    표에 없으면 예외 없이 조용히 안 그려진다(`test_every_nav_page_has_a_renderer`). 다시 그리기는 직접 `_render_x()` 대신 `_invalidate("키")`.
    `_go_page` 는 없는 이름이면 아무것도 안 한다 — 테스트 안 이름은 `test_go_page_literals_in_tests_exist` 가 대조.
    대시보드·흐름 분석은 `_narrate_scope()` 캐시를 같이 쓴다(키: 목록 id·길이·맨 앞 — 제자리 수정은 안 잡힌다). 테스트는 `LAZY_RENDER = False`.
-8. **스레드 → 화면 신호에 큰 데이터는 `pyqtSignal(object)`** — `list`·`dict` 선언은 통째로 깊은 복사(1만 경기 4.5GB · 6초).
-   메모리는 실제 경로(exe 프로세스)로 잰다. `test_loader_signals_pass_objects_without_copying`.
+8. **스레드 → 화면 신호에 큰 데이터는 `Signal(object)`** — `list`·`dict` 선언은 PyQt6 에서 통째로 깊은 복사(1만 경기 4.5GB · 6초),
+   PySide6 에선 int 키 dict 가 **빈 `{}`** 로 간다(73 M5). 메모리는 실제 경로(exe 프로세스)로 잰다. `test_loader_signals_pass_objects_without_copying`.
 9. **창·대화상자 크기는 화면(배율·작업 표시줄 반영)에 맞춘다** — 새 대화상자는 부모를 주고 `fit_to_screen(dlg, w, h)`
    (메인 창 위 가운데 · 메인 창이 움직이면 따라감 · 내용 최소 높이가 657 넘으면 세로 스크롤 안에). 창은 `initial_window`·`_apply_plan`
    (최소 크기 → 저장 크기 순)·`_check_fits`·`_refit`. `tests/test_window_size.py` 가 흉내 낸 화면 5종에서 잰다.
@@ -194,7 +198,7 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 ## 규칙은 테스트로 (`tests/test_rules.py` — 2026-10-05)
 
 계획 검토 때 검토자가 매번 눈으로 대조하던 규칙을 기계로 옮겼다 — 여기 있는 것은 **검토에서 다시 보지 않는다**.
-`QComboBox` 직접 생성 · 대화상자 `fit_to_screen` · 글자 파일·`subprocess(text=True)` 의 `encoding=` · `pyqtSignal(list/dict)` ·
+`QComboBox` 직접 생성 · 대화상자 `fit_to_screen` · 글자 파일·`subprocess(text=True)` 의 `encoding=` · `Signal(list/dict)` ·
 앱이 쓰는 모달이 화면 스모크 차단에 있는지 · **색은 `theme.py` 에서만** · **모든 SQL 의 실행 계획에 큰 표 `TEMP B-TREE` 없음** ·
 **넥슨 시각 원문(UTC)은 `matchtime` 에서만 파싱**(63 — 테스트에 지어낸 원문을 쓸 땐 KST 로 뜻한 시각에서 **글자 그대로 9시간** 뺀다 ·
 `config.MATCH_DATE_OFFSET_H` 로 빼면 오프셋 변이가 초록이 된다).

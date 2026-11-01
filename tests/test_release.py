@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import io
+import re
 import shutil
 import tempfile
 import os
@@ -159,8 +160,9 @@ def test_sha256_lines_and_notes():
     # 설치 파일이 포터블보다 먼저, 체크섬과 출처 표기가 본문에
     assert notes.index("S.exe") < notes.index("P.zip"), notes
     assert line.strip() in notes and "Data based on NEXON Open API" in notes and "- 바뀐 것" in notes
-    # 받기 전에 읽어야 할 고지 — 비공식·웹 데이터 기본 꺼짐·GPL
-    assert release.DISCLAIMER in notes and "기본 꺼짐" in notes and "GPL v3" in notes, notes
+    # 받기 전에 읽어야 할 고지 — 비공식·웹 데이터 기본 꺼짐·LGPL(73단계 — "GPL v3" in 은 "LGPL v3" 에도 참이라 낱말 경계로)
+    assert release.DISCLAIMER in notes and "기본 꺼짐" in notes and "LGPL v3" in notes, notes
+    assert not re.search(r"(?<!L)GPL v3", notes), "실행 파일 GPL 고지가 남았다"
 
 
 def test_season_notice_tool_changes_only_the_comment():
@@ -213,14 +215,43 @@ def test_missing_licenses_reads_zip_names():
 
 def test_missing_modules_needs_the_pyd():
     base = "피파전적관리/_internal"
-    net = f"{base}/PyQt6/QtNetwork.pyd"
+    net = f"{base}/PySide6/QtNetwork.pyd"
     assert release.missing_modules([f"{base}/orjson/orjson.cp314-win_amd64.pyd", net]) == []
     assert release.missing_modules([f"{base}/orjson/__init__.pyi", net]) == ["orjson"], "pyd 없이 통과했다"
     # 1.1.1 계획 때 실측: Qt6Network.dll 은 있는데 QtNetwork.pyd 가 없었다 — dll 로 통과하면 안 된다
-    only_dll = [f"{base}/orjson/orjson.cp314-win_amd64.pyd", f"{base}/PyQt6/Qt6/bin/Qt6Network.dll",
-                f"{base}/PyQt6/QtCore.pyd"]
-    assert release.missing_modules(only_dll) == ["PyQt6/QtNetwork.pyd"], release.missing_modules(only_dll)
-    assert release.missing_modules([]) == ["orjson", "PyQt6/QtNetwork.pyd"]
+    only_dll = [f"{base}/orjson/orjson.cp314-win_amd64.pyd", f"{base}/PySide6/Qt6Network.dll",
+                f"{base}/PySide6/QtCore.pyd", f"{base}/PyQt6/QtNetwork.pyd"]
+    assert release.missing_modules(only_dll) == ["PySide6/QtNetwork.pyd"], release.missing_modules(only_dll)
+    assert release.missing_modules([]) == ["orjson", "PySide6/QtNetwork.pyd"]
+
+
+def test_lgpl_text_checked_by_content():
+    """PySide6·shiboken6 휠엔 상용 안내문 하나뿐(73단계 F8) — 이름이 아니라 글로 본다."""
+    lic = release.notice.LICENSE_DIR
+    real = {f"x/{lic}/{n}/{p.name}": p.read_bytes() for n, p in release.notice.license_files()
+            if n in ("PySide6", "shiboken6")}
+    assert len(real) == 4, sorted(real)   # 둘 × (LGPL · GPL)
+
+    def reader(files):
+        return lambda part: {k: v for k, v in files.items() if part in k}
+    assert release.license_text_problems(reader(real)) == []
+    # 막지 않았으면: 휠의 상용 안내문만 실려도 이름 검사(missing_licenses)는 통과한다
+    commercial = {f"x/{lic}/{n}/LicenseRef-Qt-Commercial.txt": b"Licensees holding valid commercial Qt licenses"
+                  for n in ("PySide6", "shiboken6")}
+    assert release.missing_licenses([f"x/_internal/{lic}/{n}/f" for n, _l, _d in release.notice.THIRD_PARTY]
+                                    + [f"x/_internal/{lic}/this-app/f"]) == []
+    assert len(release.license_text_problems(reader(commercial))) == 2
+    only_lgpl = {k: v for k, v in real.items() if "LGPL" in k}   # LGPL 은 GPL 을 덧붙이는 꼴 — GPL 글도 있어야
+    assert len(release.license_text_problems(reader(only_lgpl))) == 2, release.license_text_problems(reader(only_lgpl))
+
+
+def test_old_binding_files_are_caught():
+    base = "피파전적관리/_internal"
+    assert release.forbidden_files([f"{base}/PySide6/QtCore.pyd", f"{base}/shiboken6/Shiboken.pyd",
+                                    f"{base}/{release.notice.LICENSE_DIR}/PySide6/LGPL-3.0.txt"]) == []
+    bad = [f"{base}/PyQt6/QtCore.pyd", f"{base}/PyQt6_sip-13.dist-info/x",
+           f"{base}/{release.notice.LICENSE_DIR}/PyQt6/LICENSE"]
+    assert release.forbidden_files(bad) == bad
 
 
 def test_server_modules_never_in_bundle():
@@ -285,7 +316,7 @@ class _FakeProc:
 
 
 def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False, hidden=(),
-              pyz=("nexon_api", "app_main"), branch="master", head="c1", remote="c1"):
+              pyz=("nexon_api", "app_main"), branch="master", head="c1", remote="c1", lgpl=True, old_binding=False):
     """가짜 빌드 결과(dist/피파전적관리)로 release.main 을 돌린다 → (종료 코드, 출력)."""
     import contextlib
     root, dist = tmp / "root", tmp / "root" / "dist"
@@ -294,11 +325,15 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
     (internal / "orjson").mkdir(parents=True)
     (app / f"{release.APP_DIR_NAME}.exe").write_bytes(b"exe")
     (internal / "orjson" / "orjson.cp314-win_amd64.pyd").write_bytes(b"pyd")
-    (internal / "PyQt6").mkdir()
-    (internal / "PyQt6" / "QtNetwork.pyd").write_bytes(b"pyd")
+    (internal / "PySide6").mkdir()
+    (internal / "PySide6" / "QtNetwork.pyd").write_bytes(b"pyd")
     for n in [n for n, _l, _d in release.notice.THIRD_PARTY] + ["this-app"]:
         (internal / release.notice.LICENSE_DIR / n).mkdir(parents=True)
-        (internal / release.notice.LICENSE_DIR / n / "LICENSE").write_text("license", encoding="utf-8")
+        (internal / release.notice.LICENSE_DIR / n / "LICENSE").write_text(
+            "license " + " ".join(release.notice.LGPL_MARKERS if lgpl else ()), encoding="utf-8")
+    if old_binding:
+        (internal / "PyQt6").mkdir()
+        (internal / "PyQt6" / "QtCore.pyd").write_bytes(b"pyd")
     controls = b"".join(release.CONTROLS.values()) + (SECRET.encode("utf-8") if leak else b"")
     (internal / "base.bin").write_bytes(controls)
     if drop:
@@ -351,9 +386,11 @@ def test_release_main_stops_on_every_gate():
         ("이미 있는 릴리스", {"gh_exists": True}, False, "gh release upload"),
         ("커밋 안 한 변경", {"dirty": " M app_main.py"}, True, "커밋 안 한 변경"),
         ("Inno Setup 없음", {"iscc": False}, True, "ISCC"),
-        ("라이선스 빠짐", {"drop": f"{release.notice.LICENSE_DIR}/PyQt6"}, True, "라이선스 전문이 빠졌다"),
+        ("라이선스 빠짐", {"drop": f"{release.notice.LICENSE_DIR}/PySide6"}, True, "라이선스 전문이 빠졌다"),
+        ("LGPL 글 아님", {"lgpl": False}, True, "LGPL·GPL 전문이 글로 안 들어 있다"),
+        ("PyQt6 섞임", {"old_binding": True}, True, "옛 바인딩 PyQt6"),
         ("orjson 빠짐", {"drop": "orjson"}, True, "빠진 모듈"),
-        ("QtNetwork 빠짐", {"drop": "PyQt6/QtNetwork.pyd"}, True, "빠진 모듈"),
+        ("QtNetwork 빠짐", {"drop": "PySide6/QtNetwork.pyd"}, True, "빠진 모듈"),
         ("설치 파일 안 생김", {"make_setup": False}, True, "설치 파일이 안 생겼다"),
         ("개인정보 섞임", {"leak": True}, True, "개인정보가 들어 있다"),
         ("숨긴 메뉴 남음", {"hidden": ("랭커 픽",)}, True, "숨긴 메뉴"),

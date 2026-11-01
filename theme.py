@@ -532,8 +532,8 @@ def apply(app) -> None:
     다른 PC 에서 군데군데 다른 색이 비친다 — Fusion + MODE 팔레트로 고정한다.
     색 체계도 MODE 로 맞춘다 — 안 맞추면 OS 설정을 따라 제목 표시줄만 다른 색이 된다.
     """
-    from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QColor, QFont, QPalette
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QFont, QPalette
 
     app.setStyle("Fusion")
     app.styleHints().setColorScheme(

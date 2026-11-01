@@ -18,9 +18,9 @@ if os.path.isdir("C:/Windows/Fonts"):
     os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from PyQt6.QtCore import QThread, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QThread, Qt  # noqa: E402
+from PySide6.QtGui import QColor, QPixmap  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -281,7 +281,7 @@ def test_pad_ignores_icon_columns():
     """그림이 sizeHintForColumn 을 키워도 그 여백이 모든 열에 얹히지 않는다 — **같은 표**의 그림 붙기 전·후 _pad 가 같다.
     (다른 표와 비교하면 재는 열 집합이 달라 글꼴에 따라 1px 갈린다 — 첫 판이 그렇게 비교했다가 CI 에서 (12, 11) 로 FAIL 했다. 같은 표로
     바꿔도 둘째 판이 똑같이 FAIL 했다 — 첫 측정의 1px 차이를 그림 탓으로 읽은 것이라 예열을 넣었다)"""
-    from PyQt6.QtGui import QIcon
+    from PySide6.QtGui import QIcon
     st = _Stub()
     with_icon = _table({0: "season"})
     st.fill(with_icon, _rows([1, 2, 1]), False)
@@ -302,8 +302,8 @@ def test_gap_measured_from_qt():
     w, h = t.icon_px_for("season")
     probe = FitTableWidget(1, 1)
     probe.setIconSize(t.iconSize())
-    from PyQt6.QtGui import QIcon
-    from PyQt6.QtWidgets import QTableWidgetItem
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QTableWidgetItem
     probe.setItem(0, 0, QTableWidgetItem("가"))
     bare = probe.sizeHintForColumn(0)
     pm = QPixmap(w, h)
@@ -565,7 +565,7 @@ def test_pitch_season_icons_reach_every_player_of_the_season():
 
 
 def test_pitch_season_icon_survives_deleted_pitch():
-    """람다 연결은 위젯이 지워져도 안 끊긴다 — 지워진 축구장에 신호가 와도 죽지 않는다(PyQt6 는 슬롯 예외에서 abort)."""
+    """람다 연결은 위젯이 지워져도 안 끊긴다 — 지워진 축구장에 신호가 와도 죽지 않는다(슬롯 예외는 PySide6 에서 훅으로 가고 테스트 하네스가 실패로 바꾼다)."""
     orig_init = _Stub.__init__
 
     def init(self, icon_dir=None):
@@ -834,7 +834,7 @@ def test_formation_pixmap_draws_dots():
     imgs = {f: formation_pixmap(f, dpr=1.0).toImage() for f in ("4-4-2", "4-3-3", "3-5-2", "5-4-1")}
     for i in imgs.values():
         assert i.width() == round(px * config.ICON_ASPECT["formation"]) and i.height() == px, (i.width(), i.height())
-    uniq = {bytes(i.constBits().asarray(i.sizeInBytes())) for i in imgs.values()}
+    uniq = {bytes(i.constBits())[:i.sizeInBytes()] for i in imgs.values()}
     assert len(uniq) == 4, "포메이션이 달라도 그림이 같다"
     dots = _dot_rgbs()
     for f, i in imgs.items():
@@ -971,8 +971,8 @@ def test_trait_columns_stacked_not_beside():
 
 
 def _paint_cell(t, row, col, icon=None):
-    from PyQt6.QtGui import QImage, QPainter
-    from PyQt6.QtWidgets import QStyleOptionViewItem
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtWidgets import QStyleOptionViewItem
     if icon is not None:
         t.item(row, col).setIcon(icon)
     idx = t.model().index(row, col)
@@ -1007,7 +1007,7 @@ def test_trait_cell_paints_pad_and_icon():
     """그림이 있으면 판 위에 그림 · 없으면 판 없이 이름만 — 판 색은 종류(일반 금 · 훈련 회)를 따른다.
     그림이 없을 때 판을 그리면 이름이 판 밖으로 번져 겹쳐 보였다(2026-10-11 실화면 · 일반 특성 8개는 넥슨에 그림이 없다)."""
     import theme as T
-    from PyQt6.QtGui import QIcon
+    from PySide6.QtGui import QIcon
     t = _trait_table()
     pm = QPixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX)
     pm.fill(QColor("#ff0000"))
@@ -1045,7 +1045,7 @@ def test_trait_blank_cell_draws_nothing():
 
 def test_trait_delegate_leaves_default_drawing_to_background():
     """기본 그리기는 배경·선택만 — 글자와 그림을 비워야 우리가 그린 글자와 겹쳐 두 번 찍히지 않는다."""
-    from PyQt6.QtWidgets import QStyleOptionViewItem
+    from PySide6.QtWidgets import QStyleOptionViewItem
     t = _trait_table()
     t.item(0, 0).setIcon(app_main.QIcon(QPixmap(8, 8)))
     d = t.itemDelegateForColumn(0)
@@ -1073,7 +1073,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "icons"
 def test_real_ratio_icons_fit_cells():
     """진짜 비율(가로로 긴 국기 · 정사각 엠블럼·등급 · 투명 여백 큰 특성)의 지어낸 그림을 붙인 뒤에도 칸이 안 잘리고,
     아이콘 높이는 행 높이 안에 든다(그림이 붙은 **뒤** 잰다 — 붙기 전만 재면 그림 폭을 놓친다)."""
-    from PyQt6.QtGui import QIcon
+    from PySide6.QtGui import QIcon
     for fname, kind in (("flag_130x78.png", "emblem"), ("emblem_128.png", "emblem"), ("division_64.png", "division")):
         pm = QPixmap(str(FIXTURES / fname))
         assert not pm.isNull(), fname
@@ -1095,7 +1095,7 @@ def test_real_ratio_icons_fit_cells():
 
 def test_trait_fixture_paints_inside_pad():
     """투명 여백이 큰 특성 그림(90×90)을 판 안에 줄여 그려도 판 상자 밖으로 안 번진다."""
-    from PyQt6.QtGui import QIcon
+    from PySide6.QtGui import QIcon
     t = _trait_table()
     pm = QPixmap(str(FIXTURES / "trait_90_pad.png"))
     assert not pm.isNull() and pm.width() == 90
@@ -1113,7 +1113,7 @@ def test_trait_fixture_paints_inside_pad():
 def test_hbarlist_icons_make_room_and_draw():
     """상대 포메이션 막대(전술) — 이름 앞 작은 축구장: 그림이 있으면 최소 폭이 그만큼 늘고, 그려지며, 없으면 예전과 같다."""
     import charts
-    from PyQt6.QtGui import QImage
+    from PySide6.QtGui import QImage
     from widgets import formation_pixmap
     rows = [("4-4-2", 55.0, "55%", "t"), ("모름", 40.0, "40%", "t")]
     bars = charts.HBarList()

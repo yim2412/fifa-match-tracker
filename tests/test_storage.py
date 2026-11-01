@@ -169,7 +169,7 @@ def test_clear_cards_only_card_tables():
 # ── 걸쇠 ──────────────────────────────────────────────────────────────
 
 def _qt():
-    from PyQt6.QtCore import QCoreApplication
+    from PySide6.QtCore import QCoreApplication
     return QCoreApplication.instance() or QCoreApplication([])
 
 

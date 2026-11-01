@@ -248,9 +248,8 @@ AGREE_CHECK ="위 내용을 읽었고 동의합니다"
 # 배포물에 실제로 들어가는 것. (이름, 라이선스, 배포 이름 — 라이선스 파일을 찾을 때 쓴다)
 # 새 패키지를 쓰기 시작하면 여기 한 줄 — tests/test_release.py 가 설치된 라이선스 파일과 대조한다.
 THIRD_PARTY = [
-    ("PyQt6", "GPL v3", "PyQt6"),
-    ("Qt 6", "LGPL v3", "PyQt6-Qt6"),
-    ("PyQt6-sip", "BSD-2-Clause", "PyQt6_sip"),
+    ("PySide6", "LGPL v3 (Qt 6 포함)", "PySide6_Essentials"),   # Qt DLL 이 같은 휠에 들어 있다
+    ("shiboken6", "LGPL v3", "shiboken6"),
     ("requests", "Apache-2.0", "requests"),
     ("urllib3", "MIT", "urllib3"),
     ("idna", "BSD-3-Clause", "idna"),
@@ -262,12 +261,23 @@ THIRD_PARTY = [
     ("Python", "PSF License", None),       # OpenSSL·SQLite·libffi 등 동봉 라이브러리 고지가 이 파일 안에 있다
 ]
 LICENSE_DIR = "licenses"  # 배포물 안(_internal\licenses\<이름>\…)
+# 휠에 전문이 없는 것 — 저장소 licenses/ 의 파일을 대신 싣는다. PySide6-Essentials·shiboken6 휠에는 상용 안내문
+# (LicenseRef-Qt-Commercial.txt) 하나뿐이라(73단계 F8) 이름만 보고 집으면 검사는 초록인데 LGPL 글이 안 실린다.
+# LGPL v3 는 GPL v3 를 덧붙이는 꼴이라 둘 다 준다. 글은 PyQt6-Qt6 6.11.1 · PyQt6 6.11.0 휠에서 옮겼다
+# (GPL-3.0.txt sha256 8ceb4b9e… = FSF 원문).
+REPO_LICENSES = {"PySide6_Essentials": ("LGPL-3.0.txt", "GPL-3.0.txt"),
+                 "shiboken6": ("LGPL-3.0.txt", "GPL-3.0.txt")}
+# 배포물 검사(tools/release.py)가 내용으로 찾는 글 — 이름만 보면 상용 안내문으로도 통과한다
+LGPL_MARKERS = ("GNU LESSER GENERAL PUBLIC LICENSE", "GNU GENERAL PUBLIC LICENSE")
 
 
 def license_files() -> list[tuple[str, Path]]:
     """(고지 이름, 라이선스 파일) — spec 이 배포물에 넣고, 테스트가 빠진 게 없는지 본다."""
     out = []
     for name, _lic, dist in THIRD_PARTY:
+        if dist in REPO_LICENSES:
+            out += [(name, Path(__file__).resolve().parent / LICENSE_DIR / f) for f in REPO_LICENSES[dist]]
+            continue
         if dist is None:
             p = Path(sys.base_prefix) / "LICENSE.txt"
             if p.is_file():
@@ -290,8 +300,8 @@ def licenses_html() -> str:
 <h3>오픈소스 라이선스</h3>
 <p>이 프로그램의 소스 코드는 <b>MIT</b> 라이선스입니다
 (<a href="{config.REPO_URL}">{config.REPO_URL}</a>).<br>
-배포하는 실행 파일은 <b>GPL v3</b> 인 PyQt6 를 포함하므로, <b>실행 파일 전체는 GPL v3 조건</b>으로
-배포됩니다 — 소스는 위 주소에서 누구나 받을 수 있습니다.</p>
+화면 라이브러리 PySide6 와 Qt 6 는 <b>LGPL v3</b> 이며, 프로그램 폴더의 <code>_internal</code> 에 있는
+Qt·PySide6 파일을 다른 판으로 바꿔 끼워 쓸 수 있습니다 — 소스는 위 주소에서 누구나 받을 수 있습니다.</p>
 <p>포함된 오픈소스:</p>
 <ul>{rows}</ul>
 <p>라이선스 전문은 프로그램 폴더의 <code>_internal\\{LICENSE_DIR}</code> 에 있습니다.</p>
