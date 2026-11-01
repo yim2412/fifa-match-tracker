@@ -6888,11 +6888,11 @@ def test_palette_text_contrast():
     assert ("GOOD", "PANEL", 3.65) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
     planted = dict(T._PALETTES["dark"], WIN_BAR=T._PALETTES["dark"]["GOOD_FILL"])
     assert any(b == "WIN_BAR" for _, b, _ in _palette_contrast_failures(planted))
-    # 줄 채움 행도 잰다 — 섞는 비율을 0.18 로 올리면 밝은 쪽 흐린 글자가 4.12 로 걸려야 한다(67 R0)
+    # 줄 채움 행도 잰다 — 섞는 비율을 0.22 로 올리면 밝은 쪽 흐린 글자가 4.34 로 걸려야 한다(67 R0 · 3.2.2 초록 채움에서 0.18 은 4.55 라 안 걸린다)
     keep = T.ROW_FILL_MIX
     try:
-        T.ROW_FILL_MIX = 0.18
-        assert ("TEXT_DIM", "줄 채움", 4.12) in _palette_contrast_failures(T._PALETTES["light"])
+        T.ROW_FILL_MIX = 0.22
+        assert ("TEXT_DIM", "줄 채움", 4.34) in _palette_contrast_failures(T._PALETTES["light"])
     finally:
         T.ROW_FILL_MIX = keep
     # 칩 행도 잰다 — 밝은 쪽 GK 칩을 기준 값(#bb4d00 · 칸 위 4.14)으로 되돌리면 걸려야 한다
@@ -6904,7 +6904,7 @@ def test_palette_tokens_reach_widgets():
     # 모듈 이름이 MODE 팔레트 값을 그대로 싣는지(배선) + 승/패는 좋음/나쁨 · 강조는 그와 다른 색
     for key in ("ACCENT", "ACCENT_FILL", "ACCENT_SOFT", "PRIMARY", "PRIMARY_HOVER", "ON_PRIMARY",
                 "GOOD", "BAD", "WARN", "GOOD_FILL", "BAD_FILL", "WARN_FILL", "CHIP_GK", "CHIP_DF", "CHIP_MF", "CHIP_FW",
-                "FORMATION_PITCH_TOP", "FORMATION_PITCH_BOTTOM", "FORMATION_LINE"):
+                "FORMATION_PITCH_TOP", "FORMATION_PITCH_BOTTOM", "FORMATION_LINE", "CHART_LINE", "CAL_FILL"):
         assert getattr(T, key) == T._P[key], key
     assert (T.WIN, T.LOSE) == (T.GOOD, T.BAD) and T.ACCENT not in (T.GOOD, T.BAD)
     # 꽉 칠한 버튼은 PRIMARY 로 그려진다 — 찍어서 본다
@@ -11245,7 +11245,7 @@ def test_calendar_fc_shade_keeps_text_readable_66():
     """66 G5 · M4 — 진하기 0~상한 전부에서, 두 팔레트 모두 칸 위 승률(TEXT) 4.5 · ▲▼(GOOD/BAD) 3.0 · 날짜·판수 글자 4.5.
     미달 날·이 달 최대 0 은 진하기 0(M11). 상한이 0.06 밑이면 진하기가 안 보인다 — 그것도 FAIL."""
     import widgets
-    names = ("PANEL_2", "ACCENT_FILL", "TEXT", "TEXT_DIM", "GOOD", "BAD")
+    names = ("PANEL_2", "CAL_FILL", "TEXT", "TEXT_DIM", "GOOD", "BAD")
     keep = {k: getattr(T, k) for k in names}
     assert config.CAL_FC_MAX_MIX >= 0.06, config.CAL_FC_MAX_MIX
     try:
@@ -11258,7 +11258,7 @@ def test_calendar_fc_shade_keeps_text_readable_66():
                     assert T.contrast(pal[k], bg) >= need, (mode, i, k, T.contrast(pal[k], bg))
                 assert T.contrast(dim, bg) >= 4.5, (mode, i, dim)
             top, _ = widgets.cal_cell_colors(100, 100, False)
-            assert top == T.blend(pal["PANEL_2"], pal["ACCENT_FILL"], config.CAL_FC_MAX_MIX) and top != pal["PANEL_2"], mode
+            assert top == T.blend(pal["PANEL_2"], pal["CAL_FILL"], config.CAL_FC_MAX_MIX) and top != pal["PANEL_2"], mode
             assert widgets.cal_cell_colors(100, 100, True) == (pal["PANEL_2"], pal["TEXT_DIM"]), "미달 날이 칠해졌다"
             assert widgets.cal_cell_colors(0, 0, False)[0] == pal["PANEL_2"], "최대 0 에서 칠했다"
             assert widgets.cal_cell_colors(500, 100, False)[0] == top, "최대를 넘는 값이 상한을 넘었다"
@@ -11826,7 +11826,7 @@ def test_elo_zoom_and_team_value_chart():
 def _chart_color_failures(p: dict) -> list:
     """M17 — 새 그래프 토큰은 카드 위 그래픽 대비 3.0 · 같은 그래프에 같이 그려지는 선끼리 색약 6 이상."""
     bad = []
-    line = p["ACCENT_FILL"]   # T.CHART_LINE
+    line = p["CHART_LINE"]
     for name, c in (("CHART_LINE", line), ("CHART_RANK", p["CHART_RANK"]), ("CHART_VALUE", p["CHART_VALUE"]),
                     ("CHART_NEUTRAL", p["CHART_NEUTRAL"])):   # 67 R12 — 무승부·"기타"·경기 수 막대
         if T.contrast(c, p["PANEL"]) < 3.0:
@@ -11844,7 +11844,7 @@ def _chart_color_failures(p: dict) -> list:
 def test_chart_tokens_contrast_and_cvd_66():
     bad = {m: _chart_color_failures(p) for m, p in T._PALETTES.items()}
     assert not any(bad.values()), bad
-    assert (T.CHART_LINE, T.CHART_RANK, T.CHART_VALUE) == (T._P["ACCENT_FILL"], T._P["CHART_RANK"], T._P["CHART_VALUE"])
+    assert (T.CHART_LINE, T.CHART_RANK, T.CHART_VALUE) == (T._P["CHART_LINE"], T._P["CHART_RANK"], T._P["CHART_VALUE"])
     # 검사가 무언가를 재는지 — 밝은 쪽 순위선을 옛 주황(CHART_CATS[1] · 2.25)으로, 색약 짝이 붙는 색(#b45309 · 컷 5.9)으로
     light = T._PALETTES["light"]
     assert ("contrast", "CHART_RANK", 2.25) in _chart_color_failures(dict(light, CHART_RANK=light["CHART_CATS"][1]))

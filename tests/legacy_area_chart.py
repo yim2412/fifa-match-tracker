@@ -24,7 +24,7 @@ LINE_W = 2.5
 DOT_R = 4
 RING_W = 2
 SMALL_PT = 9
-_COLORS = {   # 2026-10-27 의 theme 값 — PANEL · CHART_AXIS · CHART_GRID · TEXT · TEXT_DIM · 선(ACCENT_FILL)
+_COLORS = {   # 2026-10-27 의 theme 값 — PANEL · CHART_AXIS · CHART_GRID · TEXT · TEXT_DIM · 선(CHART_LINE)
     "dark": ("#18181b", "#3a414b", "#262b33", "#fafafa", "#a1a1aa", "#8689ea"),
     "light": ("#ffffff", "#d5dae3", "#eceff4", "#09090b", "#616875", "#373cbe"),
 }

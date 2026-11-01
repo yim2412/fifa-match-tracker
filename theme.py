@@ -2,7 +2,7 @@
 
 창 배경(BG) 위에 카드(PANEL)를 띄우는 대시보드형. 팔레트는 어두운 것과 밝은 것
 둘을 두고 MODE 로 고른다 — 2026-10-01 하루에 다크 → 밝은 → 다크로 두 번 바뀌어서,
-다시 바뀔 때 값을 git 에서 캐내지 않게 둘 다 남긴다. 앱 정체성: 보라 강조(3.1.1 — 그전엔 초록).
+다시 바뀔 때 값을 git 에서 캐내지 않게 둘 다 남긴다. 앱 정체성: 초록 강조(3.2.2 — 3.1.1 한 판만 보라였다).
 카드는 모서리 6px · 1px 테두리 · 그림자 없음.
 바꿀 일이 생기면 여기만 고친다.
 """
@@ -21,14 +21,15 @@ _PALETTES = {
         TEXT="#fafafa",
         TEXT_DIM="#a1a1aa",
         # 글자 토큰(ACCENT·GOOD·BAD·WARN)은 PANEL·PANEL_2 둘 다 대비 4.5 이상 — 테스트가 잰다.
-        # *_FILL 은 막대·점·채움용(글자로 안 쓴다). 어두운 쪽은 채움 값을 글자로 써도 되는데 ACCENT 만 칸 위
-        # 대비(4.49)가 모자라 한 단계 밝혔다.
-        ACCENT="#9194ee",      # 강조 글자 — 제목·구분선·OVR·선택된 메뉴
-        ACCENT_FILL="#8689ea",
-        ACCENT_SOFT="#272737", # 선택된 메뉴·탭 바탕(위 글자 ACCENT)
-        PRIMARY="#373cbe",     # 꽉 칠한 버튼·선택 바탕(위 글자 ON_PRIMARY)
-        PRIMARY_HOVER="#4549cc",
-        ON_PRIMARY="#ffffff",
+        # *_FILL 은 막대·점·채움용(글자로 안 쓴다).
+        # 강조는 초록(3.2.2 — 사용자 요청으로 3.1.1 의 보라를 되돌림 · 3.1.1 전 GREEN 값 그대로). 밝은 초록 위 흰 글자는
+        # 대비 2.3 이라 버튼 글자는 진한 색(6.70).
+        ACCENT="#3fb950",      # 강조 글자 — 제목·구분선·OVR·선택된 메뉴
+        ACCENT_FILL="#3fb950",
+        ACCENT_SOFT="#173322", # 선택된 메뉴·탭 바탕(위 글자 ACCENT)
+        PRIMARY="#3fb950",     # 꽉 칠한 버튼·선택 바탕(위 글자 ON_PRIMARY)
+        PRIMARY_HOVER="#4fc960",
+        ON_PRIMARY="#08210f",
         GOOD="#00d492",        # 좋음 — 승·득점·▲
         BAD="#ff637e",         # 나쁨 — 패·실점·▼
         WARN="#ffb900",        # 주의
@@ -61,6 +62,10 @@ _PALETTES = {
         CHART_CATS=("#56b4e9", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
         CHART_RANK="#e69f00",
         CHART_VALUE="#f59e0b",
+        # 추이 그래프 선·달력 칠 — 강조(초록)와 따로(3.2.2). 초록 선은 순위(주황)·200위 컷(빨강) 선과 색약 색차가
+        # 3.4·2.6 이라(6 미만) 3.1.1 의 보라 그대로 · 초록 칠 위 빨강 ▼ 는 2.99 라 달력도 그대로
+        CHART_LINE="#8689ea",
+        CAL_FILL="#8689ea",
         # 선수 지표 공격력·수비력 칸 — PANEL 에서 이 색까지 섞는다. 끝 색은 '모든 단계에서 TEXT 대비 ≥ 4.6'
         # 을 만족하는 가장 밝은 값으로 계산해 골랐다(1.2.1). 원색 빨강은 그 위 밝은 글자가 안 읽힌다.
         HEAT_ATK="#c41c1c",
@@ -78,11 +83,12 @@ _PALETTES = {
         BORDER="#d3d7de",
         TEXT="#09090b",
         TEXT_DIM="#616875",
-        ACCENT="#373cbe",
-        ACCENT_FILL="#373cbe",
-        ACCENT_SOFT="#ebebf8",
-        PRIMARY="#373cbe",
-        PRIMARY_HOVER="#4549cc",
+        # 강조 초록(3.2.2) — 3.1.1 전 #1f9d55 는 글자로 3.4 라 글자·버튼만 진하게(칸 위 5.87 · 흰 글자 5.02)
+        ACCENT="#166534",
+        ACCENT_FILL="#1f9d55",
+        ACCENT_SOFT="#e6f5ec",
+        PRIMARY="#15803d",
+        PRIMARY_HOVER="#166534",
         ON_PRIMARY="#ffffff",
         # 흰 바탕에서 채움 값(#009966 3.65 · #e17100 3.20 · #ec003f 칸 위 3.73)은 글자로 안 읽혀 글자만 진하게
         GOOD="#065f46",
@@ -118,6 +124,8 @@ _PALETTES = {
         # 순위선은 같은 그래프의 200위 컷(CHART_DOWN)과 색약 6 이상이어야 해 붉은 쪽(#b45309 는 5.9)
         CHART_RANK="#c2410c",
         CHART_VALUE="#b45309",
+        CHART_LINE="#373cbe",   # 위 어두운 쪽 주석과 같은 이유(3.2.2)
+        CAL_FILL="#373cbe",
         HEAT_ATK="#e96363",    # 밝은 테마는 반대로 — 진한 글자가 읽히는 가장 어두운 값
         HEAT_DEF="#678ce9",
         POS_FW="#db3333",
@@ -135,7 +143,7 @@ BORDER = _P["BORDER"]
 TEXT = _P["TEXT"]
 TEXT_DIM = _P["TEXT_DIM"]
 
-# 강조(앱 정체성 · 보라)와 좋음/나쁨(승·패)은 다른 토큰이다 — 한 색에 두 뜻을 싣던 시절엔 강조를 바꾸면
+# 강조(앱 정체성 · 초록)와 좋음/나쁨(승·패)은 다른 토큰이다 — 한 색에 두 뜻을 싣던 시절엔 강조를 바꾸면
 # 승·골까지 같이 바뀌었다. 좋음/나쁨 짝도 적록 색약 색차가 6 안팎(cvd_delta: 어두운 5.3 · 밝은 글자 5.0 · 채움 6.6)이라
 # 색만으로 승패를 말하지 않는다 — 쓰는 자리마다 글자·부호(승/패 · +/− · ▲▼)가 같이 있다.
 ACCENT = _P["ACCENT"]               # 강조 글자·테두리
@@ -173,8 +181,9 @@ CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
 CHART_CATS = _P["CHART_CATS"]        # 도넛 조각 색(순서대로) — 넘치는 조각은 CHART_NEUTRAL "기타"
-CHART_LINE = ACCENT_FILL             # 추이 그래프 기본 선(3.1.1 — 66 G0)
-CHART_RANK = _P["CHART_RANK"]        # 점수 그래프의 순위 점선·오른쪽 축(57 K5) — 보라 점수선·컷 선과 색약에서도 갈리는 주황
+CHART_LINE = _P["CHART_LINE"]        # 추이 그래프 기본 선(66 G0 · 3.2.2 부터 강조와 따로)
+CAL_FILL = _P["CAL_FILL"]            # 달력 칸 FC 진하기(66 G5 · 3.2.2 부터 강조와 따로)
+CHART_RANK = _P["CHART_RANK"]        # 점수 그래프의 순위 점선·오른쪽 축(57 K5) — 초록 점수선·컷 선과 색약에서도 갈리는 주황
 CHART_VALUE = _P["CHART_VALUE"]      # 구단가치 그래프 선·띠(66 G3)
 
 CHART_ON_MARK = "#ffffff"            # 색 점·골대 맞은 슛 위의 흰 글자·테두리(두 테마 같음)
@@ -231,7 +240,7 @@ def blend(base_hex: str, target_hex: str, mix: float) -> str:
     return "#" + "".join(f"{int(x + (y - x) * mix):02x}" for x, y in zip(b, t))
 
 
-ROW_FILL_MIX = 0.12                 # 지표 줄 바탕 채움(67 R0 — 점유율만큼) · 0.18 이면 밝은 쪽 흐린 글자 4.12(미달 — test_palette_text_contrast)
+ROW_FILL_MIX = 0.12                 # 지표 줄 바탕 채움(67 R0 — 점유율만큼) · 0.22 이면 밝은 쪽 흐린 글자 4.34(미달 — test_palette_text_contrast · 초록 채움 3.2.2)
 ROW_FILL = blend(PANEL, ACCENT_FILL, ROW_FILL_MIX)
 
 

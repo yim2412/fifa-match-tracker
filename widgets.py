@@ -3368,10 +3368,10 @@ class CalCell(NamedTuple):
 
 
 def cal_cell_colors(fc: int, fc_max: int, weak: bool) -> tuple[str, str]:
-    """칸 (배경, 흐린 글자색) — 배경 = PANEL_2 에 ACCENT_FILL 을 그날 FC ÷ 이 달 최대 × `CAL_FC_MAX_MIX` 만큼(66 G5).
+    """칸 (배경, 흐린 글자색) — 배경 = PANEL_2 에 CAL_FILL 을 그날 FC ÷ 이 달 최대 × `CAL_FC_MAX_MIX` 만큼(66 G5).
     미달 날·최대 0 은 0(M11 — 미달 날은 흐린 글자 그대로 보여야). 날짜·판수 글자는 TEXT_DIM 이 4.5 밑이면 TEXT 로(M4)."""
     mix = 0.0 if weak or fc_max <= 0 else min(max(fc, 0) / fc_max, 1.0) * config.CAL_FC_MAX_MIX
-    bg = T.blend(T.PANEL_2, T.ACCENT_FILL, mix)
+    bg = T.blend(T.PANEL_2, T.CAL_FILL, mix)
     return bg, (T.TEXT_DIM if T.contrast(T.TEXT_DIM, bg) >= 4.5 else T.TEXT)
 
 
