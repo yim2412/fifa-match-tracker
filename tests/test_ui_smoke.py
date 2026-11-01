@@ -4964,6 +4964,57 @@ def test_loader_signals_pass_objects_without_copying():
         assert seen and seen[0] is batch, type(loader).__name__
 
 
+def test_loader_signals_cross_threads_without_copying():
+    # 73 R3 — 위 테스트는 같은 스레드 직접 연결만 잰다. 실제 로더는 작업 스레드에서 내보내 화면 스레드가
+    # 큐로 받는다(PyQt 8 의 4.5GB 는 그 길에서 났다). 스모크는 QThread.start 를 막으니 파이썬 스레드에서 내보낸다 —
+    # 보내는 쪽 객체가 화면 스레드에 살아 Qt 가 큐 연결로 넘긴다(받을 때 화면 스레드인지까지 단언)
+    import threading
+    details, matches, names = [{"a": {"b": [1]}}], [object()], {1: "x"}
+    got = []
+    ld = app_main.MatchLoader(_NoApi(), "x", 52)
+    main_thread = threading.get_ident()
+    ld.finished_ok.connect(lambda *a: got.append((threading.get_ident(), a)))
+    th = threading.Thread(target=lambda: ld.finished_ok.emit(
+        matches, details, "o", {}, names, {}, 0, 0, None, "", False, "", {}, {}))
+    th.start(); th.join()
+    assert not got, "같은 스레드에서 바로 불렸다 — 큐 연결을 재지 못한다"
+    for _ in range(50):
+        if got:
+            break
+        QApplication.processEvents()
+    assert got, "큐로 넘긴 신호가 안 왔다"
+    tid, a = got[0]
+    assert tid == main_thread, "화면 스레드에서 안 받았다"
+    assert a[0] is matches and a[1] is details and a[4] is names and a[4] == {1: "x"}, a
+
+
+def test_spinbox_text_field_not_collapsed():
+    # 73 ② — Qt 6.11.3·6.12.0 은 QSS 를 건 스핀박스의 입력칸을 줄인다(버튼 없음이면 폭 1px — 위쪽 바 경기 범위
+    # "1 ~ 4" 가 빈 칸으로 보였다 · 6.11.0·6.11.2 정상 · 2026-11-01 실측). Qt 를 올리면 여기서 먼저 빨개진다
+    from PySide6.QtWidgets import QSpinBox
+    seen = {}
+    # 메뉴마다 첫 탭으로 가므로 뒤 테스트(촬영 포함)가 보는 탭이 바뀌지 않게 되돌린다
+    keep_page = _win._current_page_name()
+    keep_tabs = {n: t.current_index() for n, t in _win._page_tabs.items()}
+    try:
+        for name in list(_win._page_index):
+            _win._go_page(name)
+            QApplication.processEvents()
+            for s in _win.findChildren(QSpinBox):
+                if s.isVisible() and id(s) not in seen:
+                    seen[id(s)] = (s.objectName() or type(s).__name__, s.width(), s.lineEdit().geometry())
+    finally:
+        for n, i in keep_tabs.items():
+            _win._page_tabs[n].set_current(i, emit=False)
+        if keep_page:
+            _win._go_page(keep_page, _win._page_tabs[keep_page].current_name()
+                          if keep_page in _win._page_tabs else None)
+    assert _win.sp_from.isVisible() and id(_win.sp_from) in seen, "위쪽 바 범위 칸을 못 쟀다"
+    assert len(seen) >= 3, seen
+    bad = [(n, w, (g.x(), g.width())) for n, w, g in seen.values() if g.width() < w // 2 or g.x() < 4]
+    assert not bad, f"스핀박스 입력칸이 찌그러졌다(이름, 상자 폭, (입력칸 x, 폭)) {bad}"
+
+
 def test_eta_text_only_from_real_elapsed():
     assert app_main.eta_text(app_main.ETA_MIN_DONE - 1, 100, 10.0) == "", "표본이 적은데 시간을 냈다"
     assert app_main.eta_text(100, 100, 10.0) == "", "끝났는데 남은 시간을 냈다"

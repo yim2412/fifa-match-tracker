@@ -99,7 +99,7 @@ python -m server.run_local             # 이 PC 시험 서버(127.0.0.1:8765 · 
 python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다. 공개 명령은 출력만 (README "빌드·배포")
 ```
 
-필수 패키지: `pip install -r requirements.txt` (PySide6-Essentials·shiboken6 6.11.3 고정, requests, python-dotenv, orjson)
+필수 패키지: `pip install -r requirements.txt` (PySide6-Essentials·shiboken6 6.11.2 고정 — 6.11.3·6.12.0 은 QSS 스핀박스 입력칸이 1px(73 ②), requests, python-dotenv, orjson)
 
 ---
 
