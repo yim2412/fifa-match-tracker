@@ -139,6 +139,11 @@ class MatchSummary:
         return self.match_date.strftime("%Y-%m-%d %H:%M") if self.match_date else "-"
 
 
+# 닉네임이 없는 상대(넥슨이 빈 값으로 준다 — 이 PC 감독모드 28,654경기 중 47 · 10-31)를 파싱하면 이 글자.
+# 서로 다른 상대가 한 이름으로 뭉치므로 상대별 줄에서는 뺀다(67 R12 · app_main._opp_owner_rows)
+NO_NICK = "-"
+
+
 def _i(d: dict, key: str) -> int:
     """숫자 필드를 안전하게 읽는다.
 
@@ -173,7 +178,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         match_date=matchtime.parse(detail.get("matchDate")),   # KST — 넥슨 원문은 UTC
         match_type=detail.get("matchType", 0),
         my_nickname=me.get("nickname") or "-",
-        opponent=opp.get("nickname") or "-",
+        opponent=opp.get("nickname") or NO_NICK,
         result=md.get("matchResult") or "-",
         my_goals=_i(shoot, "goalTotal"),
         opp_goals=_i(opp_shoot, "goalTotal"),

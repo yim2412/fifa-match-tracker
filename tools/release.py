@@ -131,9 +131,17 @@ def zip_files(path: Path):
                 yield n, z.read(n)
 
 
-def preflight_problems(version: str, notes: str, dirty: str, hidden=()) -> list[str]:
-    """빌드 전에 멈춰야 할 이유들. 비면 진행."""
+def preflight_problems(version: str, notes: str, dirty: str, hidden=(), branch: str | None = None,
+                       head: str | None = None, remote_head: str | None = None) -> list[str]:
+    """빌드 전에 멈춰야 할 이유들. 비면 진행.
+
+    branch·head·remote_head 는 주면 본다(None = 안 봄) — 아래 공개 명령이 `--target master` 라, 다른 브랜치
+    (3.1.1 worktree `v3.1.1`)나 아직 안 올린 커밋에서 만들면 첨부 파일과 태그가 서로 다른 코드가 된다(67 R12)."""
     out = []
+    if branch is not None and branch != "master":
+        out.append(f"지금 브랜치가 {branch} 다 — 공개는 --target master 라 master 에 merge·push 한 뒤 master 에서 돌린다")
+    elif head is not None and head != remote_head:
+        out.append("HEAD 가 origin/master 와 다르다 — 먼저 push 한다(태그가 GitHub 의 master 끝에 붙는다)")
     if hidden:
         out.append("숨긴 메뉴가 남아 있다(config.HIDDEN_NAV_UNTIL_READY) — 빈 페이지를 내보내지 않는다: "
                    + ", ".join(hidden))
@@ -303,10 +311,15 @@ def main() -> int:
     notes = changelog_section(version)
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True,
                            text=True, encoding="utf-8", errors="replace").stdout.strip()
-    problems = preflight_problems(version, notes, dirty, config.HIDDEN_NAV_UNTIL_READY)
+    def git(*a: str) -> str:
+        return subprocess.run(["git", *a], cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace").stdout.strip()
+    problems = preflight_problems(version, notes, dirty, config.HIDDEN_NAV_UNTIL_READY,
+                                  branch=git("rev-parse", "--abbrev-ref", "HEAD"), head=git("rev-parse", "HEAD"),
+                                  remote_head=git("rev-parse", "origin/master"))
     if problems:
         fail("\n       ".join(problems))
-    ok(f"버전 {version} · CHANGELOG 절 있음 · 작업 트리 깨끗함")
+    ok(f"버전 {version} · CHANGELOG 절 있음 · 작업 트리 깨끗함 · master = origin/master")
 
     iscc = find_iscc()
     if iscc is None:

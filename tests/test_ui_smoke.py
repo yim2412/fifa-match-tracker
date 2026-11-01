@@ -1540,16 +1540,17 @@ def _live_widgets(layout):
 
 def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
     # 2.7.1 N17 — 경기가 있는 최대 리드 줄마다 막대 하나 + 되짚은 경기 수 · 제외 안내
-    from PyQt6.QtWidgets import QLabel, QProgressBar
+    from PyQt6.QtWidgets import QLabel
+    from widgets import WdlBar
     _win._go_page("승부처 분석", "리드·골 흐름")
     _win._render_goal_flow(_win._details)
     gf = app_main.core.goal_flow(_win._details, _win._ouid)
-    bars = [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(QProgressBar)]
+    bars = [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(WdlBar)]
     assert len(bars) == sum(1 for r in gf.leads if r.games) > 0, (len(bars), [r.games for r in gf.leads])
     assert f"{gf.replayed:,}경기" in _win.lb_goalflow_note.text(), _win.lb_goalflow_note.text()
     # 경기가 없으면 막대 대신 한 줄
     _win._render_goal_flow([])
-    assert not [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(QProgressBar)]
+    assert not [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(WdlBar)]
     assert [w.text() for w in _live_widgets(_win.box_goalflow["lead"]) if isinstance(w, QLabel)] == [
         "골 순서를 되짚을 수 있는 경기가 없습니다."]
     _win._render_goal_flow(_win._details)
@@ -5257,8 +5258,9 @@ def test_compare_colors_the_better_side():
     from models import summarize as summ
     from PyQt6.QtGui import QColor
     green = QColor(T.GOOD).name()
-    mine = [dataclasses.replace(m, result="승") for m in _MATCHES]
-    opp = [dataclasses.replace(m, result="패", match_id=f"o{i}") for i, m in enumerate(_MATCHES)]
+    mine = [dataclasses.replace(m, result="승", opp_goals=0) for m in _MATCHES]
+    # 상대는 더 많이 먹는다 — 실점 카드는 "나가 낮음 = 좋음" 이라 ▼ 인데 GOOD 여야 한다(lower_better)
+    opp = [dataclasses.replace(m, result="패", match_id=f"o{i}", opp_goals=3) for i, m in enumerate(_MATCHES)]
     saved = (_win._matches, _win._fill_compare_squad, _win.sp_compare_n.value())
     _win._matches = mine
     _win._fill_compare_squad = lambda *a: None          # 스쿼드 그림은 이미지 받기라 뺀다
@@ -5278,6 +5280,18 @@ def test_compare_colors_the_better_side():
         assert t.item(1, 1).foreground().color().name() == green, "승률이 높은 쪽(나)이 초록이 아니다"
         lower_better = next(i for i, row in enumerate(_win.COMPARE_ROWS, start=1) if row[3] is False)
         assert lower_better and _win.COMPARE_ROWS[lower_better - 1][1] == "avg_goals_against"
+        # 67 R11 머리 숫자 카드 — 큰 숫자 = 표의 내 칸 · 보조 = 상대 칸 · ▲▼ 색 = 표의 초록 쪽과 같은 판정
+        cards = _win.compare_cards
+        assert list(cards) == [row[0] for row in _win.COMPARE_ROWS[:4]], list(cards)
+        for r, (label, attr, _fmt, higher) in enumerate(_win.COMPARE_ROWS[:4], start=1):
+            c = cards[label]
+            assert c.value.text() == t.item(r, 1).text() and c.sub.text() == f"상대 {t.item(r, 2).text()}", \
+                (label, c.value.text(), c.sub.text())
+            mv, ov = getattr(a, attr), getattr(b, attr)
+            want = T.TEXT_DIM if abs(mv - ov) < 0.005 else T.GOOD if (mv > ov) == higher else T.BAD
+            assert c.delta.property("delta_color") == want, (label, mv, ov, c.delta.property("delta_color"))
+        assert "▼" in cards["평균 실점"].delta.text() and cards["평균 실점"].delta.property("delta_color") == T.GOOD
+        assert cards["승률"].delta.property("delta_color") == T.GOOD
     finally:
         _win._matches, _win._fill_compare_squad = saved[0], saved[1]
         _win.sp_compare_n.setValue(saved[2])
@@ -6596,9 +6610,10 @@ def test_discipline_section_shows_averages_and_end_kinds():
 
 def _weak_sites():
     """표본 흐림 규칙의 진입점(ROADMAP 1.2.1 표) — 이름 → (그리기, 위젯에서 (경기 수, 흐림) 목록 뽑기, 기준 상수 이름)."""
-    from PyQt6.QtWidgets import QLabel, QProgressBar
+    from PyQt6.QtWidgets import QLabel
+    from widgets import WdlBar
 
-    def bars(*boxes, kind=QProgressBar):
+    def bars(*boxes, kind=WdlBar):
         out = []
         for box in boxes:
             for i in range(box.count()):
@@ -6642,6 +6657,8 @@ def _weak_sites():
         # 흐름 분석 메뉴 그리기(_render_analysis)를 거쳐 재야 그 구역이 실제로 불리는지도 잰다
         "흐름 분석 연승": (_win._render_analysis, lambda: bars(_win.box_streak), "streak_min_n"),
         "승부처 시간대": (clutch, lambda: bars(_win.box_clutch_tod), "MIN_COND"),
+        "승부처 리드별": (lambda: _win._render_goal_flow(_win._details), lambda: bars(_win.box_goalflow["lead"]),
+                    "MIN_COND"),
         "승부처 선제골": (clutch, lambda: bars(_win.box_clutch_first, kind=QLabel), "MIN_COND"),
         "대시보드 시간대": (_win._render_dashboard,
                        lambda: hbar(_win.dashboard.timeband_bars, lambda r: tod[r[0]]), "MIN_COND"),
@@ -6685,12 +6702,14 @@ def test_winrate_bars_dim_small_samples():
 
 def test_winrate_bar_sample_text_uses_rated():
     import widgets
-    bar = widgets.win_rate_bar(3, 10, 2, "x", 8, True)
-    assert bar.property("weak") and bar.property("games") == 5, bar.property("games")
-    assert bar.format().endswith("승패 5판"), bar.format()
-    assert round(bar.value()) == 600, bar.value()   # 3/5 — 한 집단 식이면 3/15 = 20%
-    single = widgets.win_rate_bar(3, 10, 2, "x", 8, False)
-    assert not single.property("weak") and single.property("games") == 15 and round(single.value()) == 200
+    row = widgets.wdl_rate_bar(3, 10, 2, "x", 8, True)
+    assert row.bar.property("weak") and row.bar.property("games") == 5, row.bar.property("games")
+    assert row.bar.counts() == (3, 10, 2) and row.bar.strip.weak and row.bar.strip.compact
+    assert row.side.text() == "승률 60.0%*  x  · 승패 5판", row.side.text()   # 3/5 — 한 집단 식이면 3/15 = 20%
+    assert "승패 5판" in row.toolTip() and "승÷(승+패)" in row.toolTip(), row.toolTip()
+    single = widgets.wdl_rate_bar(3, 10, 2, "", 8, False)
+    assert not single.bar.property("weak") and single.bar.property("games") == 15 and not single.bar.strip.weak
+    assert single.side.text() == "승률 20.0%", single.side.text()
     assert widgets.win_rate_text(3, 10, 2, True) == "60.0% · 승÷(승+패) · 무 10"
     assert widgets.win_rate_text(3, 10, 2, False) == "20.0% · 승÷전체 · 무 10"
     assert widgets.win_rate_text(3, 10, 2, True, digits=0, short=True) == "60%*"
@@ -6701,8 +6720,17 @@ def test_winrate_bar_sample_text_uses_rated():
     assert widgets.win_rate_text(0, 1, 0, False, short=True) == "0.0%"
 
 
+def test_key_number_html_colors_numbers_only():
+    import widgets
+    h = widgets.key_number_html("선제골 <b>승률 78.5% · 기준 +3.2%p · 1,204경기 <b>", "#abcdef")
+    nums = [x.split("</span>")[0] for x in h.split("<span style='color:#abcdef'>")[1:]]
+    assert nums == ["78.5%", "+3.2%p", "1,204"], (nums, h)
+    assert h.count("&lt;b&gt;") == 2 and "<b>" not in h, "글을 이스케이프하지 않았다(숫자 앞·뒤 둘 다)"
+    assert widgets.key_number_html("숫자 없음", "#abcdef") == f"<span style='color:{T.TEXT}'>숫자 없음</span>"
+
+
 def test_winrate_bars_use_shared_helper():
-    # 승률 막대는 전부 widgets.win_rate_bar 를 거친다 — 직접 QProgressBar() 를 만들면 표본 흐림 규칙을 건너뛴다.
+    # 승률 막대는 전부 widgets.wdl_rate_bar 를 거친다 — 직접 QProgressBar() 를 만들면 표본 흐림 규칙을 건너뛴다.
     # 허용은 변수 이름으로(줄 번호면 코드를 지울 때마다 깨진다): 상태 진행 막대 · 승부처 분 단위 득·실 개수 막대.
     src = (pathlib.Path(_ROOT) / "app_main.py").read_text(encoding="utf-8")
     made = re.findall(r"^\s*([\w.]+)\s*=\s*QProgressBar\(\)", src, re.M)
@@ -7090,6 +7118,7 @@ def test_basis_bar_mixed_text():
 
 def test_analysis_result_dots_and_basis_bars():
     from analysis import Basis, Insight
+    from PyQt6.QtWidgets import QLabel
     keep = app_main.core.narrate
     found = [Insight(app_main.core.SEC_WIN, "선제골을 넣으면 승률 80%.", "", 5.0,
                      Basis("선제골 넣은 경기", 80.0, 30, 50.0, 8)),
@@ -7114,6 +7143,13 @@ def test_analysis_result_dots_and_basis_bars():
         assert lose_bars[0]._rows[0][4] is True, "표본 미달인데 흐리지 않았다"
         assert "*" not in right, "한 집단 식인데 * 를 붙였다"
         assert bars(app_main.core.SEC_FLOW) == [], "문장이 없는 섹션에 막대가 생겼다"
+        box = _win.box_analysis[app_main.core.SEC_WIN]
+        heads = [lb for i in range(box.count()) if (w := box.itemAt(i).widget()) is not None
+                 for lb in w.findChildren(QLabel) if "선제골" in lb.text()]
+        assert len(heads) == 1, [h.text() for h in heads]
+        h = heads[0].text()
+        assert f"<span style='color:{T.GOOD}'>80%</span>" in h and h.startswith(f"<span style='color:{T.TEXT}'>"), h
+        assert f"color:{T.GOOD}'>선제골" not in h, "글까지 섹션 색이면 숫자가 안 튄다"
     finally:
         app_main.core.narrate = keep
         _win._narrate_key = None
@@ -11288,6 +11324,36 @@ def test_opponent_diff_column_hides_weak_rows_k13():
         _win._invalidate("opponents")
 
 
+def test_opponent_rows_skip_missing_nickname_67():
+    """67 R12 — 닉네임 없는 상대(NO_NICK)는 서로 다른 사람이 한 줄로 뭉친다 → 구단주 줄에서 빼고 머리 글에 경기 수.
+    승률 카드는 그 경기까지 센다(필터에 걸린 경기 전체 — 기준이 바뀌지 않게). 묶음을 바꾸면 안내도 사라진다."""
+    import dataclasses
+    import widgets
+    keep = _win._matches
+    ms = list(keep) + [dataclasses.replace(keep[0], match_id=f"nn{i}", opponent=app_main.core.NO_NICK, result=r)
+                       for i, r in enumerate("승패패")]
+    try:
+        _win._matches = ms
+        _win._go_page("상대 전적")
+        _win.cb_opp_group.setCurrentIndex(_win.cb_opp_group.findData("owner"))
+        _win._invalidate("opponents")
+        # 빼지 않았으면 무엇이 보였을지 먼저 — 집계에는 "-" 한 상대 3경기가 있다
+        assert {s.nickname: s.games for s in app_main.opponent_stats(ms)}.get(app_main.core.NO_NICK) == 3
+        keys = [r.key for r in _win.opp_list.rows()]
+        assert keys and app_main.core.NO_NICK not in keys, keys
+        assert "닉네임 없는 상대 3경기는 줄에서 뺌" in _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
+        assert _win.card_opp_rate.sub.text() == f"{len(ms):,}경기", _win.card_opp_rate.sub.text()
+        assert _win.card_opp_rate.value.text() == widgets.win_rate_text(
+            *(sum(k in m.result for m in ms) for k in "승무패"), core.mixed_of_matches(ms), short=True)
+        _win.cb_opp_group.setCurrentIndex(_win.cb_opp_group.findData("formation"))
+        _win._invalidate("opponents")
+        assert "닉네임 없는" not in _win.lb_opponent_note.text(), "구단주 묶음이 아닌데 안내가 남았다"
+    finally:
+        _win._matches = keep
+        _win.cb_opp_group.setCurrentIndex(_win.cb_opp_group.findData("owner"))
+        _win._invalidate("opponents")
+
+
 def test_match_list_search_matches_nickname_or_color_k13():
     keep = dict(_win._team_colors)
     t = _win.match_list
@@ -11665,7 +11731,8 @@ def _chart_color_failures(p: dict) -> list:
     """M17 — 새 그래프 토큰은 카드 위 그래픽 대비 3.0 · 같은 그래프에 같이 그려지는 선끼리 색약 6 이상."""
     bad = []
     line = p["ACCENT_FILL"]   # T.CHART_LINE
-    for name, c in (("CHART_LINE", line), ("CHART_RANK", p["CHART_RANK"]), ("CHART_VALUE", p["CHART_VALUE"])):
+    for name, c in (("CHART_LINE", line), ("CHART_RANK", p["CHART_RANK"]), ("CHART_VALUE", p["CHART_VALUE"]),
+                    ("CHART_NEUTRAL", p["CHART_NEUTRAL"])):   # 67 R12 — 무승부·"기타"·경기 수 막대
         if T.contrast(c, p["PANEL"]) < 3.0:
             bad.append(("contrast", name, round(T.contrast(c, p["PANEL"]), 2)))
     score = {"line": line, "rank": p["CHART_RANK"], "cut200": p["CHART_DOWN"], "cut1000": p["CHART_NEUTRAL"]}
@@ -11686,6 +11753,7 @@ def test_chart_tokens_contrast_and_cvd_66():
     light = T._PALETTES["light"]
     assert ("contrast", "CHART_RANK", 2.25) in _chart_color_failures(dict(light, CHART_RANK=light["CHART_CATS"][1]))
     assert ("cvd", "rank", "cut200", 5.9) in _chart_color_failures(dict(light, CHART_RANK="#b45309"))
+    assert ("contrast", "CHART_NEUTRAL", 2.59) in _chart_color_failures(dict(light, CHART_NEUTRAL="#9aa1b0"))
 
 
 def test_elo_and_team_value_daily_band_material():

@@ -85,7 +85,7 @@ from widgets import (
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
-    sample_text, tag_qss, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
+    sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
     ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList,
 )
 
@@ -4405,9 +4405,11 @@ class MainWindow(QMainWindow):
         col = QVBoxLayout(row)
         col.setContentsMargins(4, 2, 4, 2)
         col.setSpacing(1)
-        head = QLabel(f"· {ins.headline}")
+        # 결론 한 줄(P9) — 글은 TEXT, 핵심 숫자만 섹션 색(67 R11 · 줄 전체를 칠하면 숫자가 안 튄다)
+        head = QLabel(key_number_html(f"· {ins.headline}", color))
+        head.setTextFormat(Qt.TextFormat.RichText)
         head.setWordWrap(True)
-        head.setStyleSheet(f"color: {color}; font-weight: bold;")
+        head.setStyleSheet("font-weight: bold;")
         col.addWidget(head)
         if ins.detail:
             sub = QLabel(f"   {ins.detail}")
@@ -4516,7 +4518,7 @@ class MainWindow(QMainWindow):
         recent = self._matches[:core.WINDOW][::-1]
         self.analysis_dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                                      for m in recent])
-        colors = {core.SEC_FLOW: T.TEXT,
+        colors = {core.SEC_FLOW: T.ACCENT,   # 결론 줄의 숫자 색(글은 TEXT — _analysis_row)
                   core.SEC_WIN: T.GOOD,
                   core.SEC_LOSE: T.BAD}
         for sec, box in self.box_analysis.items():
@@ -4590,11 +4592,7 @@ class MainWindow(QMainWindow):
             h.addWidget(a)
             if r.games:
                 gap = r.win_rate - base
-                h.addWidget(win_rate_bar(
-                    r.win, r.draw, r.lose,
-                    f"{win_rate_text(r.win, r.draw, r.lose, r.mixed, short=True)}  "
-                    f"({wdl_text(r.win, r.draw, r.lose)})  기준 대비 {gap:+.1f}%p",
-                    need, r.mixed, height=16), 1)
+                h.addWidget(wdl_rate_bar(r.win, r.draw, r.lose, f"기준 대비 {gap:+.1f}%p", need, r.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -4679,9 +4677,7 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(132)
             h.addWidget(a)
             if r.games:
-                h.addWidget(win_rate_bar(r.win, r.draw, r.lose,
-                                         f"{win_rate_text(r.win, r.draw, r.lose, gf.mixed, short=True)}  "
-                                         f"({wdl_text(r.win, r.draw, r.lose)})", core.MIN_COND, gf.mixed), 1)
+                h.addWidget(wdl_rate_bar(r.win, r.draw, r.lose, "", core.MIN_COND, gf.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(dim)
@@ -4834,11 +4830,7 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(120)
             if band.games:
                 h.addWidget(a)
-                h.addWidget(win_rate_bar(
-                    band.win, band.draw, band.lose,
-                    f"{win_rate_text(band.win, band.draw, band.lose, band.mixed, short=True)}  "
-                    f"({wdl_text(band.win, band.draw, band.lose)})",
-                    core.MIN_COND, band.mixed, height=16), 1)
+                h.addWidget(wdl_rate_bar(band.win, band.draw, band.lose, "", core.MIN_COND, band.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -5482,8 +5474,7 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(170)
             h.addWidget(a)
             if sum(wdl):
-                h.addWidget(win_rate_bar(*wdl, f"{win_rate_text(*wdl, ds.mixed, short=True)}  ({wdl_text(*wdl)})",
-                                         core.MIN_COND, ds.mixed, height=16), 1)
+                h.addWidget(wdl_rate_bar(*wdl, "", core.MIN_COND, ds.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -9603,6 +9594,13 @@ class MainWindow(QMainWindow):
         page_main = QWidget()
         pv = QVBoxLayout(page_main)
         pv.setContentsMargins(0, 0, 0, 0)
+        # 머리 숫자 카드(67 R11 · P5) — COMPARE_ROWS 앞 넷 · 큰 숫자 = 나 · 보조 = 상대 · ▲▼ = 나 − 상대
+        cards = QHBoxLayout()
+        self.compare_cards = {}
+        for label, _attr, _fmt, _better in self.COMPARE_ROWS[:4]:
+            self.compare_cards[label] = StatCard(label)
+            cards.addWidget(self.compare_cards[label], 1)
+        pv.addLayout(cards)
         self.lb_compare_summary = QLabel("")
         self.lb_compare_summary.setWordWrap(True)
         self.lb_compare_summary.setTextFormat(Qt.TextFormat.RichText)
@@ -9803,6 +9801,15 @@ class MainWindow(QMainWindow):
                 item_mine.setForeground(QColor(T.GOOD if mine_wins else T.TEXT))
                 item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GOOD))
         self.tbl_compare.refit()  # _fill 을 안 거치는 표
+        units = {"평균 득점": ("", 2), "평균 실점": ("", 2)}
+        for label, mine_txt, opp_txt, mine_val, opp_val, higher_is_better in rows:
+            card = self.compare_cards.get(label)
+            if card is None:
+                continue
+            unit, digits = units.get(label, ("%p", 1))
+            card.set(mine_txt)
+            card.set_sub(f"{opp_nick} {opp_txt}")
+            card.set_delta(mine_val, opp_val, unit, "상대 대비", digits, lower_better=not higher_is_better)
 
         self._render_compare_extra(opp_nick, my_details, opp_details, opp_ouid, mixed,
                                    {r[0]: (r[3], r[4]) for r in rows if r[5] is not None and r[0] != "승률"})
@@ -10300,10 +10307,12 @@ class MainWindow(QMainWindow):
     def _diag_note_text(self) -> str:
         return f"{self._scope_text()} 기준 · 승·무·패 아닌 결과(오류 등)는 제외"
 
-    def _opponent_note_text(self, picked: int | None = None, total: int | None = None) -> str:
+    def _opponent_note_text(self, picked: int | None = None, total: int | None = None, no_nick: int = 0) -> str:
         head = f"{self._scope_text()} 기준"
         if picked is not None and picked != total:
             head += f" · 필터에 걸린 {picked:,}경기 / {total:,}경기" if picked else " · 조건에 맞는 경기가 없습니다"
+        if no_nick:
+            head += f" · 닉네임 없는 상대 {no_nick:,}경기는 줄에서 뺌(승률 카드엔 포함)"
         return f"{head} · 구단주 줄을 더블클릭하면 그 상대와의 최근 경기"
 
     def _refresh_scope_notes(self) -> None:
@@ -10999,6 +11008,7 @@ class MainWindow(QMainWindow):
         self.card_opp_rate.set_sub(f"{len(picked):,}경기")
         self.opp_rate_bar.set_counts(w, d, lo, core.is_weak(core.rated(w, d, lo, mixed), core.MIN_COND))
         group = self.cb_opp_group.currentData() or "owner"
+        self._opp_no_nick = 0   # 구단주 묶음일 때만 _opp_owner_rows 가 센다
         if group == "formation":
             rows = self._opp_formation_rows(self._opp_picked_details, (w, d, lo))
         elif group == "color":
@@ -11018,7 +11028,7 @@ class MainWindow(QMainWindow):
         i = self.cb_opp_sort.findData(keep)
         self.cb_opp_sort.setCurrentIndex(max(0, i))
         self.cb_opp_sort.blockSignals(False)
-        self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches)))
+        self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches), self._opp_no_nick))
         self._show_opp_rows()
         self._apply_opponent_filter()
         self._start_list_icons(self.opp_list)
@@ -11043,11 +11053,15 @@ class MainWindow(QMainWindow):
         first: dict[str, int] = {}
         for i, m in enumerate(picked):
             first.setdefault(m.opponent, i)
+        # 닉네임 없는 상대(NO_NICK)는 서로 다른 사람이 한 줄로 뭉쳐 "한 상대" 처럼 보인다 — 줄에서만 빼고(승률 카드·기준은
+        # 그대로 전체) 머리 글에 경기 수를 적는다(67 R12)
+        stats = opponent_stats(picked)
+        self._opp_no_nick = sum(s.games for s in stats if s.nickname == core.NO_NICK)
         return [self._rate_row(s.nickname, s.win, s.draw, s.lose, s.mixed, base if base_rated else None, s.games,
                                sub=f"득 {s.avg_goals_for:.2f} · 실 {s.avg_goals_against:.2f} · 최근 {s.last_date}",
                                icon=("division", self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
                                key=s.nickname, recent=first.get(s.nickname, 0))
-                for s in opponent_stats(picked)]
+                for s in stats if s.nickname != core.NO_NICK]
 
     def _opp_formation_rows(self, details: list[dict], wdl: tuple[int, int, int]) -> list[RateRow]:
         stats = core.formation_stats(details, self._ouid or "")

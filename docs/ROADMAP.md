@@ -1206,6 +1206,52 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 
 **검증**: 손 변이 **26건 — 26 잡힘**(rankmeta 10 · 화면 16). 처음엔 **둘이 초록**: ① 팀컬러 막대 기준선(base) — 픽스처 FC 가 팀마다 등차라 팀 중앙값의 평균 = 전체 중앙값 → 제곱으로 벌림 ② 하루 최다 승 "패" 칸 — 단언이 있는 테스트를 변이 대상에 안 넣었다(넣으니 잡힘). `_check_metric_lists` 에 좁은 폭 인자(`narrow`) — 짧은 줄 목록(주간 요약·시즌별 컷)은 200px 에서도 안 넘쳐 "검사가 빈다" 로 FAIL 했다.
 
+### 조각 ④ 첫 커밋 표 (2026-11-01 · 브랜치 `503a098` 위에서) — **조각 ④ 끝 · 67 구현 끝**(전체 28/28 · 밝은 테마 스모크 389/389 · 손 변이 22/22 · exe 경기 상세 창 실화면) · 다음은 master merge → 3.1.1 공개(공개 명령은 사용자)
+
+**M12 측정 코드 대조**(merge 전 — 원래 폴더의 예약 작업 셋이 이 코드를 돈다): `TOOL_FILES` 셋 `git diff master` **0줄**(sha256 같음) ·
+측정이 import 하는 다섯 모듈 중 `store`·`rankcollect`·`teamcolor`·`seasons` 0줄 · `config` 는 지운 상수 셋(`MATCH_EXTRA_MIN_PX`·`G1_GAME_LEVEL_DAYS`·
+`N16_MIN_DAY`)과 새 상수뿐 — 측정·`cardstats`·`cardcollect` 가 읽는 `config.*` 21개와 겹침 0. 예약 도구 셋(`dev_matches`·`dev_archive`·
+`measure_cards`)이 실제로 불러오는 이 저장소 모듈 19개를 import 해 대조: 바뀐 것은 `config`·`models`(새 필드·상수 — 값 같음)·`stats`
+(지운 `daily_division` · 새 함수 셋)뿐이고 도구가 쓰는 `reward_for`·`formation_of`·`pitch_rows`·`PITCH_ROWS`·`SUB_POSITION` 은 그대로 → **merge 해도 판정 무효 아님**.
+
+**진입점**(`win_rate_bar(` · 3회차 M10 — ③ 뒤 4곳): 흐름 분석 연승·연패 뒤 · 승부처 리드별 · 승부처 시간대 · 성적 진단 규율·불운 → 전부
+새 `widgets.wdl_rate_bar`(승·무·패 `WdlBar(compact)` + 옆 글 "승률 N%"·뒤 글·"· 표본 N" · 섞임 식은 툴팁). 부르는 자리 0 → 함수 지움 ·
+`test_rules.GONE_NAMES`(이름 토큰 — 다시 쓰면 FAIL · 심은 위반 두 줄을 잡는지 단언).
+
+**옛 위젯 이름 → 새 부품**(3회차 M9):
+
+| 빌더 | 옛 이름 | 새 이름 | 단언 옮긴 곳 |
+|---|---|---|---|
+| 승률 막대 넷 | `QProgressBar` property `weak`·`games` | `WdlBar` 같은 property(`row.bar`) · 옆 글 `row.side` | `_weak_sites`(`bars(kind=WdlBar)`) · 골 흐름 · `test_winrate_bar_sample_text_uses_rated` |
+| `_build_compare_tab` | (없음) | `compare_cards`(승률·평균 득점·평균 실점·평균 점유율 `StatCard`) | `test_compare_colors_the_better_side`(큰 숫자 = 표 내 칸 · 보조 = 상대 칸 · ▲▼ 색 = 표 초록 판정) |
+| `_analysis_row` | 줄 전체 섹션 색 | `key_number_html` — 글 TEXT · 숫자만 섹션 색(흐름 = `ACCENT`) | `test_analysis_result_dots_and_basis_bars` · 새 `test_key_number_html_colors_numbers_only` |
+
+**R12 남은 것**:
+- **상대 전적 "-" 줄** — 이 PC fifa.db 감독모드 **28,654경기 중 47**(0.16% · 승 18 · 무 9 · 패 20 · 종료 유형 0 이 34 · 2 가 13)가 닉네임 없는 상대.
+  서로 다른 사람이 한 줄 "-" 로 뭉쳐 한 상대처럼 보였다 → 구단주 묶음 줄에서만 빼고 머리 글에 "닉네임 없는 상대 N경기는 줄에서 뺌(승률 카드엔 포함)".
+  승률 카드·(±차) 기준은 그대로 전체. 글자는 `models.NO_NICK` 한 곳(`core_api` 경유). 새 `test_opponent_rows_skip_missing_nickname_67`.
+- **밝은 `CHART_NEUTRAL`** `#9aa1b0`(흰 카드 2.59) → **`#858c9b`(3.38)** — 색약 거리: 점수선 23.2 · 순위 15.8 · 컷 12.0 · `CHART_UP` 8.7 · `DRAW` 6.9.
+  `_chart_color_failures` 대비 줄에 넣고 옛 값을 심으면 `("contrast", "CHART_NEUTRAL", 2.59)` 가 나오는지 단언.
+- **`release.py` 브랜치 동작** — 공개 명령이 `--target master` 인데 어느 브랜치에서 도는지 안 봤다(worktree `v3.1.1` 에서 돌리면 첨부는 3.1.1,
+  태그는 옛 master). 사전 검사에 둘: 브랜치 ≠ master · HEAD ≠ origin/master(안 올림). 게이트 표에 두 경우.
+  `updatecheck` 는 GitHub 최신 릴리스만 읽어 브랜치와 무관(코드 확인).
+- **exe 경기 상세 창**(2번 모니터 · 실데이터 사본 · 수집·웹 데이터 끈 스크래치 데이터 폴더): exe 4.4초에 2번 모니터로 뜸 → 검색 → 경기 목록 →
+  첫 카드 두 번 누름 → 상세 창 630×799 · 탭 넷(요약 · 스쿼드 · 슛 · 상대 전적) 그림 · 닫힘 · 종료 코드 0 · crash.log 없음. 사본·캡처는 지웠다.
+  ⚠ 누름을 창 메시지로 보낸 순간 Qt 가 창을 활성화해 **초점이 시험 창으로 넘어갔다**(세 번 실행 · 각 10~20초 — 띄울 때는 안 넘어갔다).
+- CHANGELOG 3.1.1 절 · `APP_VERSION` v3.1.1 · README(대시보드 줄 전체 · 팀컬러 · 메타 분석 · 랭킹 추이 · 랭커 픽 · 승률 그래프 · 운 범위 ·
+  구단주 비교 · 흐름 분석 — 65①·66①③·67①~③ 이 README 를 안 고쳤다 · 화면 절에 "그림은 2.x 화면" 한 줄) · CLAUDE.md 파일 표
+  (`wdl_rate_bar`·`key_number_html`·`rank_cut`·`champ_games`).
+
+**검증**: 손 변이 **22건 — 22 잡힘**(R11 17 · R12 5). 처음엔 **둘이 초록**: ① `key_number_html` 앞쪽 글 이스케이프 — 테스트의 `<b>` 가
+마지막 숫자 뒤에만 있어 다른 줄이 처리했다 → 숫자 앞에도 하나 ② 승부처 리드별 막대의 표본 기준(`MIN_COND` → 0) — 이 자리는 처음부터
+`_weak_sites` 에 없었다(옛 `win_rate_bar` 때도 같은 구멍) → 한 줄 더함. 전체 28 파일 7분 34초 · 밝은 테마(`MODE` 만 바꾼 모듈) 스모크
+389/389 · 메뉴×탭 PNG 52장 두 테마(테스트 픽스처 — 익명).
+
+**이 조각에서 계획과 다르게 한 것**:
+- 구단주 비교 "머리 숫자" 는 `COMPARE_ROWS` 앞 넷 카드 — 평균 실점은 낮을수록 좋아 `StatCard.set_delta(lower_better=True)`(▲▼ 는 그대로, 색만 뒤집음).
+  비교 전에는 카드가 "-".
+- 흐름 분석 숫자 색: 흐름 섹션은 글 색이 TEXT 라 숫자를 `ACCENT` 로(이길 때 GOOD · 질 때 BAD 그대로).
+
 ### ③ 환경 행렬
 
 | 환경 | 볼 것 | 상태 |

@@ -86,6 +86,12 @@ def test_preflight_stops_on_missing_notes_or_dirty_tree():
     # 2.1.1 — 아직 빈 메뉴를 숨겨 둔 채로는 배포판을 안 만든다(test_no_hidden_nav_in_release)
     p = release.preflight_problems("v1.0.0", "변경 내용", "", ("랭커 픽",))
     assert len(p) == 1 and "숨긴 메뉴" in p[0] and "랭커 픽" in p[0], p
+    # 67 R12 — 공개 명령은 --target master 라, 다른 브랜치(v3.1.1 worktree)나 안 올린 커밋에서 돌면 태그가 엉뚱한 커밋에
+    assert release.preflight_problems("v1.0.0", "변경 내용", "", branch="master", head="a", remote_head="a") == []
+    p = release.preflight_problems("v1.0.0", "변경 내용", "", branch="v3.1.1", head="a", remote_head="a")
+    assert len(p) == 1 and "v3.1.1" in p[0] and "master" in p[0], p
+    p = release.preflight_problems("v1.0.0", "변경 내용", "", branch="master", head="a", remote_head="b")
+    assert len(p) == 1 and "origin/master" in p[0], p
 
 
 def test_scan_verdict_distrusts_zero_without_controls():
@@ -279,7 +285,7 @@ class _FakeProc:
 
 
 def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=False, gh_exists=False, hidden=(),
-              pyz=("nexon_api", "app_main")):
+              pyz=("nexon_api", "app_main"), branch="master", head="c1", remote="c1"):
     """가짜 빌드 결과(dist/피파전적관리)로 release.main 을 돌린다 → (종료 코드, 출력)."""
     import contextlib
     root, dist = tmp / "root", tmp / "root" / "dist"
@@ -308,6 +314,8 @@ def _run_main(tmp, *, dirty="", iscc=True, drop=None, make_setup=True, leak=Fals
     def fake_sub(cmd, **kw):
         if cmd[:2] == ["git", "status"]:
             return _FakeProc(stdout=dirty)
+        if cmd[:2] == ["git", "rev-parse"]:   # 67 R12 — 브랜치 이름 · HEAD · origin/master
+            return _FakeProc(stdout={"--abbrev-ref": branch, "HEAD": head, "origin/master": remote}[cmd[2]] + "\n")
         if cmd[:3] == ["gh", "release", "view"]:
             return _FakeProc(returncode=0 if gh_exists else 1)
         return _FakeProc()
@@ -352,6 +360,8 @@ def test_release_main_stops_on_every_gate():
         ("서버 모듈 섞임", {"pyz": ("nexon_api", "server.app")}, True, "중앙 서버 모듈이 exe 에"),
         ("PYZ 목차 못 읽음", {"pyz": None}, True, "PYZ 목차를 못 읽었다"),
         ("PYZ 목차 빔", {"pyz": ()}, True, "PYZ 목차를 못 읽었다"),
+        ("다른 브랜치", {"branch": "v3.1.1"}, True, "지금 브랜치가 v3.1.1"),
+        ("push 안 함", {"remote": "c0"}, True, "origin/master 와 다르다"),
     ]
     for name, kw, should_stop, needle in cases:
         tmp = _P(tempfile.mkdtemp())

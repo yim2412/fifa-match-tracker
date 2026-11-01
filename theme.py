@@ -109,7 +109,8 @@ _PALETTES = {
         SCROLL_HOVER="#b4bcc9",
         CHART_UP="#138a60",
         CHART_DOWN="#e34948",
-        CHART_NEUTRAL="#9aa1b0",
+        # 무승부·도넛 "기타"·경기 수 막대 — 흰 카드 위 그래픽 대비 3.0(옛 #9aa1b0 은 2.59 · 67 R12) → 3.38
+        CHART_NEUTRAL="#858c9b",
         CHART_GRID="#eceff4",
         CHART_AXIS="#d5dae3",
         CHART_CATS=("#0072b2", "#e69f00", "#009e73", "#cc79a7", "#d55e00"),
@@ -216,7 +217,7 @@ LOSE_BAR = _P["LOSE_BAR"]
 ROW_TINT = _P["ROW_TINT"]       # 승/패 행 배경 — PANEL 에 섞는 비율
 
 # 표본이 모자란 막대 — 원래 색을 바탕 쪽으로 이만큼만 섞는다(불투명). 색만으로 구분하지 않게
-# 쓰는 쪽이 글자 "표본 N" 도 같이 붙인다(widgets.win_rate_bar · charts.HBarList).
+# 쓰는 쪽이 글자 "표본 N" 도 같이 붙인다(widgets.wdl_rate_bar · charts.HBarList).
 WEAK_MIX = 0.35
 
 

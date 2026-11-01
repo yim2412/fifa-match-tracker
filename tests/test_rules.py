@@ -341,6 +341,20 @@ def check_old_color_names(srcs: dict[str, str]) -> list[str]:
     return out
 
 
+# 지운 함수(이름으로 다시 부르면 ImportError 가 exe 에서 처음 터진다 — 스모크가 안 지나는 분기)
+GONE_NAMES = {"win_rate_bar": "67 R11 — 승률 줄은 widgets.wdl_rate_bar(승·무·패 세 칸 막대 + 옆 글)"}
+
+
+def check_gone_names(srcs: dict[str, str]) -> list[str]:
+    """지운 함수 이름이 코드에 다시 없다 — 이름 토큰만 센다(주석·글 속 "옛 win_rate_bar 자리" 는 기록이라 둔다)."""
+    out = []
+    for rel, src in srcs.items():
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.NAME and tok.string in GONE_NAMES:
+                out.append(f"{rel}:{tok.start[0]} 지운 이름 {tok.string} — {GONE_NAMES[tok.string]}")
+    return out
+
+
 GRADE_FILES = ("app_main.py", "dashboard.py")
 _GRADE_NAME = re.compile(r"grade(?!s)")
 
@@ -722,6 +736,13 @@ def test_old_color_names_are_gone():
     assert not check_old_color_names({"x.py": "c = T.GOOD  # 옛 GREEN\nd = T.ACCENT_SOFT\ne = 'GREENISH'\n"})
     # test_rules 자신은 위의 심은 위반을 품고 있어 뺀다
     assert check_old_color_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
+
+
+def test_gone_names_stay_gone():
+    planted = 'from widgets import win_rate_bar\nb = widgets.win_rate_bar(1, 0, 0)\n# 주석 win_rate_bar\nx = "win_rate_bar"\n'
+    assert [f.split(":")[1].split()[0] for f in check_gone_names({"x.py": planted})] == ["1", "2"], \
+        check_gone_names({"x.py": planted})
+    assert check_gone_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
 
 
 def test_grade_cells_are_badged():

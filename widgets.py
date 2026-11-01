@@ -10,14 +10,16 @@ OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
 접는 구획(`Collapsible`), 좁으면 접히는 바(`WrapBar`)·페이지 안 탭(`PageTabs` — 숨기기/보이기라 숨은 탭이 최소 폭을 안 넓힌다 ·
 탭줄은 `Card.add_to_title_row` 로 제목 옆)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등
 
-공통 표현 부품(3.1.1 · 64단계): 승·무·패 세 칸 막대 `WdlBar`(승률 한 값 막대는 `win_rate_bar` 그대로) ·
+공통 표현 부품(3.1.1 · 64단계): 승·무·패 세 칸 막대 `WdlBar`(승률 글·표본을 옆에 붙인 줄은 `wdl_rate_bar`) ·
 평균 대비 `delta_text`(▲▼ + 색 — 색만으로 말하지 않는다)·표 칸은 `delta_item` · 숫자 카드 `StatCard`(라벨 → 숫자 → 보조 → 변화) ·
 태그 `Tag`/`tag_qss`(그 색 글자 + 10% 바탕 — 켜진 결과 필터도 이 꼴). 새 글자/바탕 짝은 test_ui_smoke 대비 표에 한 줄.
 """
 from __future__ import annotations
 
 import calendar
+import html
 import math
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
@@ -1039,9 +1041,10 @@ class StatCard(QFrame):
         self.sub.setVisible(bool(text))
 
     def set_delta(self, v: float | None, base: float | None, unit: str = "%p", label: str = "",
-                  digits: int = 1, neutral: bool = False) -> None:
+                  digits: int = 1, neutral: bool = False, lower_better: bool = False) -> None:
         """기준(base) 대비 변화 줄 — 둘 중 하나라도 없으면 숨긴다. label 은 뒤에 붙는 흐린 말("평균 대비").
-        neutral = 오르내림에 좋고 나쁨이 없는 값(구단가치·점유율 — 67 R2) — ▲▼ 만, 색은 흐림."""
+        neutral = 오르내림에 좋고 나쁨이 없는 값(구단가치·점유율 — 67 R2) — ▲▼ 만, 색은 흐림.
+        lower_better = 낮을수록 좋은 값(실점 — 67 R11 구단주 비교) — ▲▼ 는 그대로, 좋음·나쁨 색만 뒤집는다."""
         if v is None or base is None:
             self.delta.setText("")
             self.delta.setProperty("delta_color", None)
@@ -1050,6 +1053,8 @@ class StatCard(QFrame):
         text, color = delta_text(v, base, unit, digits)
         if neutral:
             color = T.TEXT_DIM
+        elif lower_better:
+            color = {T.GOOD: T.BAD, T.BAD: T.GOOD}.get(color, color)
         self.delta.setText(f"<span style='color:{color}'>{text}</span>"
                            + (f" <span style='color:{T.TEXT_DIM}'>{label}</span>" if label else ""))
         self.delta.setProperty("delta_color", color)
@@ -1570,33 +1575,47 @@ def win_rate_text(win: int, draw: int, lose: int, mixed: bool, digits: int = 1, 
     return f"{pct} · {'승÷(승+패)' if mixed else '승÷전체'} · 무 {draw:,}"
 
 
-def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int, mixed: bool,
-                 height: int = 18) -> QProgressBar:
-    """승률 막대 하나 — 승률을 막대로 그리는 곳은 전부 이걸 거친다(표본 흐림 규칙, 1.2.1).
+def wdl_rate_bar(win: int, draw: int, lose: int, extra: str, min_n: int, mixed: bool) -> QWidget:
+    """승률 줄 하나(67 R11) — 승·무·패 세 칸 막대(`WdlBar(compact)`) + 옆 글 "승률 N%"·뒤 글·표본.
 
-    경기 수가 min_n 보다 적으면 막대를 바탕 쪽으로 흐리게(불투명) · 끝에 "· 표본 N".
-    "프로1 (1경기) 100%" 가 꽉 찬 막대로 보여 실력처럼 읽히던 것을 막는다. 색만으로 구분하지 않게
-    글자를 같이 붙인다(적록 색약). 흐렸는지는 property("weak") 로 테스트가 읽는다."""
+    승률을 막대로 그리는 곳은 전부 이걸 거친다(표본 흐림 규칙, 1.2.1 — 옛 `win_rate_bar` 자리).
+    표본(rated) 미달이면 막대를 흐리고 옆 글 끝에 "· 표본 N" — "프로1 (1경기) 100%" 가 실력처럼 읽히지 않게,
+    색만으로 구분하지 않게 글자를 같이 붙인다(적록 색약). 막대는 "N승 N무 N패" 만 쓰므로 승률·섞임 식은
+    옆 글과 툴팁이 맡는다. 흐렸는지는 막대의 property("weak")·("games") 로 테스트가 읽는다."""
     n = core.rated(win, draw, lose, mixed)
-    wr = core.win_pct(win, draw, lose, mixed)
     weak = core.is_weak(n, min_n)
-    bar = QProgressBar()
-    bar.setRange(0, 1000)
-    bar.setValue(int(wr * 10))
-    bar.setFormat(text + (f"  · {sample_text(n, mixed)}" if weak else ""))
-    bar.setFixedHeight(height)
-    chunk = T.blend(T.PANEL_2, T.WIN_BAR, T.WEAK_MIX) if weak else T.WIN_BAR
-    # 글자는 흐리지 않는다 — TEXT_DIM 은 흐린 막대 위에서 대비 3.6(어두운 테마, 기준 4.5)이라 안 읽혔다(1.2.1 실측).
-    # 흐림은 막대색과 "표본 N" 이 맡는다.
-    bar.setStyleSheet(
-        f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
-        f"color:{T.TEXT};text-align:center;}}"
-        f"QProgressBar::chunk{{background:{chunk};border-radius:3px;}}")
+    row = QWidget()
+    h = QHBoxLayout(row)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(10)
+    bar = WdlBar(win, draw, lose, weak=weak, compact=True)
     bar.setProperty("weak", weak)
     bar.setProperty("games", n)
+    h.addWidget(bar, 1)
+    # 글자는 흐리지 않는다 — TEXT_DIM 은 흐린 막대 옆에서 안 읽혔다(1.2.1 실측). 흐림은 막대색과 "표본 N" 이 맡는다.
+    side = QLabel("  ".join(x for x in (f"승률 {win_rate_text(win, draw, lose, mixed, short=True)}", extra,
+                                        f"· {sample_text(n, mixed)}" if weak else "") if x))
+    side.setStyleSheet(f"color: {T.TEXT}; border: none;")
+    h.addWidget(side)
+    row.bar, row.side = bar, side
     tip = win_rate_note(mixed)
-    bar.setToolTip(sample_note(n, min_n, mixed) + "\n" + tip if weak else tip)
-    return bar
+    row.setToolTip(sample_note(n, min_n, mixed) + "\n" + tip if weak else tip)
+    return row
+
+
+_KEY_NUMBER = re.compile(r"[+\-−]?\d[\d,]*(?:\.\d+)?(?:%p|%)?")
+
+
+def key_number_html(text: str, color: str) -> str:
+    """결론 한 줄(P9 · 67 R11) — 글은 TEXT, 숫자(부호·소수·%·%p 포함)만 color 로. 색만으로 말하지 않는다 —
+    숫자는 글 그대로 남고 색은 눈길만 끈다. 글은 html 이스케이프(닉네임·이름에 < 가 들어올 수 있다)."""
+    out, last = [], 0
+    for m in _KEY_NUMBER.finditer(text):
+        out.append(html.escape(text[last:m.start()]))
+        out.append(f"<span style='color:{color}'>{html.escape(m.group())}</span>")
+        last = m.end()
+    out.append(html.escape(text[last:]))
+    return f"<span style='color:{T.TEXT}'>{''.join(out)}</span>"
 
 
 def delta_color(diff: float, eps: float = 0.05) -> str:
@@ -1674,8 +1693,8 @@ def paint_wdl_strip(p: QPainter, r: QRectF, segments: list[tuple[float, str]]) -
 class WdlBar(QWidget):
     """승·무·패 막대(P2) — 6px 세 칸 막대 + "1,861승 404무 1,774패"(승·패만 색 · 글자가 같이 있어 색은 보조).
 
-    weak 면 막대를 바탕 쪽으로 흐린다(WEAK_MIX — win_rate_bar 와 같은 표본 흐림) · 글자는 흐리지 않는다.
-    칸 폭은 경기 수 비례 · 0경기면 빈 띠. 승률 한 값 막대는 win_rate_bar 그대로(이건 세 값을 다 보인다)."""
+    weak 면 막대를 바탕 쪽으로 흐린다(WEAK_MIX — 표본 흐림) · 글자는 흐리지 않는다.
+    칸 폭은 경기 수 비례 · 0경기면 빈 띠. 승률 글·표본을 옆에 붙인 줄은 `wdl_rate_bar`."""
     HEIGHT = 6
     DRAW_MIX = 0.4   # 무 칸 = 흐린 글자색 40%
     COMPACT_MIX = 0.8   # 줄 목록 꼴(compact — 65 E6): 승·패 채움 80% — 줄마다 막대가 있어 한 단 덜 진하게
