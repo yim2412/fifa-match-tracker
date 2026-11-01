@@ -37,7 +37,7 @@ from PyQt6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer,
 from PyQt6 import sip
 from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
+    QApplication, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
@@ -78,12 +78,15 @@ from nexon_api import (
     ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, SERVER_CODES, FCOnlineAPI, NexonAPIError,
     check_key, read_meta_on_disk,
 )
-from dashboard import DashboardInput, DashboardPage
+from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, BarRow, Card, Collapsible, DivisionChart, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
-    CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RatioBarRow, RowBorderDelegate, ShotMapWidget,
-    SortableItem, StatCard, UpdateCard, VScrollArea, WrapBar, ZoomBar, add_shadow, sample_note, short_bp,
-    sample_text, wdl_text, win_rate_bar, win_rate_note, win_rate_text, formation_key, formation_pixmap,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
+    CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RowBorderDelegate, ShotMapWidget,
+    Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
+    ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
+    RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
+    sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
+    ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -107,6 +110,11 @@ MIN_HEIGHT_SMALL = 480  # 레이아웃 하한 434(실측) 위 여유 — 434~640
 # 창을 띄우기 전엔 실제 테두리 크기를 모른다 — 판정할 땐 이만큼 더해 보고, 띄운 뒤 실제 값으로 한 번 더 확인한다.
 # 윈도우 11 의 제목줄 약 31 + 위아래 테두리, 좌우 테두리.
 FRAME_ALLOWANCE = (16, 40)
+# 넓은 화면(QHD 100%·125% · 4K 150% 등)의 기본 — 테두리까지 1920x1080(2026-10-26 사용자). 안쪽 크기로 정하면
+# 흔한 QHD 125%(쓸 수 있는 높이 약 1114)에 제목줄까지 안 들어가 1600x900 으로 떨어진다. 판정은 해상도가 아니라
+# 쓸 수 있는 넓이로(배율 반영) — 해상도로 정하면 배율 큰 화면에서 넘친다(1.0.3).
+LARGE_WINDOW_OUTER = (1920, 1080)
+LARGE_WINDOW = (LARGE_WINDOW_OUTER[0] - FRAME_ALLOWANCE[0], LARGE_WINDOW_OUTER[1] - FRAME_ALLOWANCE[1])
 NARROW_SCREEN_MSG = ("화면 배율이 커서 일부가 잘릴 수 있습니다 — 윈도우 디스플레이 설정에서 배율을 125% 이하로 "
                      "낮추면 전부 보입니다.")
 
@@ -115,6 +123,16 @@ class Tabs(NamedTuple):
     """메뉴 하나의 페이지 안 탭(2.1.1) — sid 는 보던 탭을 기억하는 설정 키(ASCII), tabs 는 ((탭 이름, 빌더 이름), …)."""
     sid: str
     tabs: tuple
+
+
+class Top3Slot(NamedTuple):
+    """[랭킹 추이 › 추이] 위 상위 랭커 카드 한 장(57 K7 · 67 R9)의 부품."""
+    card: QWidget
+    body: QLabel
+    wdl: QWidget          # WdlBar(compact) — 표본 흐림은 property("weak"/"games")
+    rate: QLabel
+    emblem: QLabel
+    pitch: QLabel
 
 
 @dataclass(frozen=True)
@@ -129,6 +147,8 @@ def initial_window(avail_w: int, avail_h: int) -> WindowPlan:
     """쓸 수 있는 화면 크기(배율 반영 · 작업 표시줄 뺀 것)로 창을 어떻게 열지 정한다.
     모니터 해상도로 정하면 FHD 150% 노트북에서 1600x900 이 화면 밖으로 넘친다."""
     fw, fh = FRAME_ALLOWANCE
+    if avail_w >= LARGE_WINDOW[0] + fw and avail_h >= LARGE_WINDOW[1] + fh:
+        return WindowPlan(LARGE_WINDOW, False, MIN_WINDOW, False)
     if avail_w >= DEFAULT_WINDOW[0] + fw and avail_h >= DEFAULT_WINDOW[1] + fh:
         return WindowPlan(DEFAULT_WINDOW, False, MIN_WINDOW, False)
     if avail_w >= MIN_WINDOW[0] + fw and avail_h >= MIN_WINDOW[1] + fh:
@@ -1655,23 +1675,51 @@ class HabitsWorker(Worker):
             self.streak_ready.emit((self._req, self._key, out))
 
 
-def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
+def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료일(반개구간이라 그날 0시부터) ·
-    시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일."""
+    시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
+    → (시작, 시즌을 아는가). 마지막 대체 길이면 False — 화면은 그 70일을 "시즌" 이라 부르지 않는다(66 R2)."""
     ended = [s.end for s in rank_seasons if s.end <= now.date()]
     if ended:
-        return datetime.combine(max(ended), datetime.min.time())
+        return datetime.combine(max(ended), datetime.min.time()), True
     if snap_start:
         try:
-            return datetime.fromisoformat(snap_start)
+            return datetime.fromisoformat(snap_start), True
         except ValueError:
             pass
-    return now - timedelta(days=config.ELO_FALLBACK_DAYS)
+    return now - timedelta(days=config.ELO_FALLBACK_DAYS), False
+
+
+def elo_season_start(rank_seasons, snap_start: str | None, now: datetime) -> datetime:
+    return season_span(rank_seasons, snap_start, now)[0]
+
+
+def season_title(start: datetime, known: bool) -> str:
+    """그래프 제목 꼬리 — "지금 시즌 (MM/DD~)" · 시즌을 모르면 "최근 70일"(66 R2)."""
+    return f"지금 시즌 ({start:%m/%d}~)" if known else f"최근 {config.ELO_FALLBACK_DAYS}일"
+
+
+BAND_NOTE = "띠는 검색·수집 때 적은 값 사이입니다 — 실제 하루 폭보다 좁을 수 있습니다"
+
+
+def day_band(lo: float, hi: float, n: int) -> tuple[float, float] | None:
+    """그날 적은 점들의 최저~최고(66 U3) — 점이 둘 이상이고 폭이 있는 날만(점 하나면 폭 0 띠가 선과 겹친다)."""
+    return (lo, hi) if n >= 2 and hi > lo else None
+
+
+def won_text(v: int) -> str:
+    """구단가치 큰 글자 — "134억 5,440만"(만 아래는 버림 · 1억 밑이면 "5,440만")."""
+    eok, man = divmod(int(v) // 10 ** 4, 10 ** 4)
+    if not eok:
+        return f"{man:,}만"
+    return f"{eok:,}억" + (f" {man:,}만" if man else "")
 
 
 def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
-    """시작 이후 줄을 하루 한 점으로 — 같은 날 둘이면 늦은 것(검색·스냅숏 출처 무관). 오래된 것부터."""
+    """시작 이후 줄을 하루 한 점으로 — 같은 날 둘이면 늦은 것(검색·스냅숏 출처 무관). 오래된 것부터.
+    점마다 그날 적은 값들의 lo·hi·n 도 싣는다(66 U3 띠 — 선은 그대로 그날 마지막 값)."""
     by_day: dict = {}
+    vals: dict = {}
     for r in rows:
         try:
             t = datetime.fromisoformat(r["taken_at"])
@@ -1679,15 +1727,18 @@ def elo_daily_points(rows: list[dict], start: datetime) -> list[dict]:
             continue
         if t < start or r.get("elo") is None:
             continue
+        vals.setdefault(t.date(), []).append(r["elo"])
         cur = by_day.get(t.date())
         if cur is None or t >= cur["at"]:
             by_day[t.date()] = {**r, "at": t}
-    return [by_day[d] for d in sorted(by_day)]
+    return [{**by_day[d], "lo": min(vals[d]), "hi": max(vals[d]), "n": len(vals[d])} for d in sorted(by_day)]
 
 
-def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int]]:
-    """55 V1 — 시작 이후 elo_history.team_value 를 하루 한 점(그날 마지막 값)으로. 값이 빈 줄(옛 버전·못 읽음)은 건너뛴다."""
+def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int, int, int, int]]:
+    """55 V1 — 시작 이후 elo_history.team_value 를 하루 한 점(그날 마지막 값)으로. 값이 빈 줄(옛 버전·못 읽음)은 건너뛴다.
+    → (날, 마지막, 그날 최저, 최고, 점 수) — 뒤 셋은 66 U3 띠."""
     by_day: dict = {}
+    vals: dict = {}
     for r in rows:
         v = r.get("team_value")
         try:
@@ -1696,10 +1747,11 @@ def team_value_daily(rows: list[dict], start: datetime) -> list[tuple[date, int]
             continue
         if t < start or not v:
             continue
+        vals.setdefault(t.date(), []).append(int(v))
         cur = by_day.get(t.date())
         if cur is None or t >= cur[0]:
             by_day[t.date()] = (t, int(v))
-    return [(d, by_day[d][1]) for d in sorted(by_day)]
+    return [(d, by_day[d][1], min(vals[d]), max(vals[d]), len(vals[d])) for d in sorted(by_day)]
 
 
 def _step_decimals(step: float) -> int:
@@ -1747,14 +1799,34 @@ def _peak_rank(rows: list[dict], at) -> int | None:
     return best[1] if best else None
 
 
+def season_rows(wins: list, season_start: datetime) -> tuple[list, bool]:
+    """이번 시즌 줄과 "시즌 첫 경기부터 저장됐나" — 머리 줄 H6 과 FC 카드(66 G5 · M3·M15)가 같은 줄·같은 판정을 쓴다."""
+    season = [w for w in wins if w.when >= season_start]
+    return season, bool(season) and season[0].when <= season_start + timedelta(days=config.N12_START_DAYS)
+
+
+def season_word(known: bool) -> str:
+    """시즌을 모를 때(시즌표·스냅숏 없음 — 66 R2) "시즌" 대신 쓰는 말."""
+    return "이번 시즌" if known else f"최근 {config.ELO_FALLBACK_DAYS}일"
+
+
+def rank_reward(pts: list[dict], today: date) -> tuple[int | None, int | None]:
+    """지금 등수로 본 시즌 말 순위 보상 — (등수 | None(1만 위 밖·모름), FC | None(보상권 밖))."""
+    rank = pts[-1].get("rank") if pts else None
+    if not rank:
+        return None, None
+    return rank, next((fc for cap, fc in core.reward_brackets(today) if rank <= cap), None)
+
+
 def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_start: datetime, today: date,
-               mixed: bool) -> list[tuple[str, str, str, str]]:
-    """머리 줄 여섯 칸 — (제목, 큰 글자,작은 글자, 툴팁). wins = 저장 경기(core.win_divisions) · rows = 내 elo_history ·
+               mixed: bool, known: bool) -> list[tuple[str, str, str, str]]:
+    """머리 칸 여덟 — (제목, 큰 글자, 작은 글자, 툴팁). 대시보드는 순서가 아니라 제목으로 찾는다(65 M1 배치). wins = 저장 경기(core.win_divisions) · rows = 내 elo_history ·
     pts = 지금 시즌 하루 점(elo_daily_points) · club = core.ClubHead 또는 None(rank.db 없음·아직 안 읽음)."""
     out = []
-    season = [w for w in wins if w.when >= season_start]
-    from_start = bool(season) and season[0].when <= season_start + timedelta(days=config.N12_START_DAYS)
+    season, from_start = season_rows(wins, season_start)
     saved_note = "" if from_start else " · 저장 시작 뒤부터"
+    # 시즌을 모르면(R2 · M16) 최근 70일을 "시즌" 이라 부르지 않는다 — 제목은 대시보드가 찾는 열쇠라 그대로 두고 작은 글에
+    span_note = "" if known else f" · {season_word(False)}(시즌 모름)"
     no_club = "랭킹 수집을 켜면 보입니다" if not config.RANK_COLLECT else "다음 수집 뒤부터"
     # H1 어제
     yday = today - timedelta(days=1)
@@ -1804,7 +1876,7 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
     if best is None:
         out.append(("시즌 최고점", "—", "점수 기록이 없습니다", ""))
     else:
-        out.append(("시즌 최고점", f"{best[0]:,.2f}", (f"#{best[2]:,} " if best[2] else "") + f"({best[1]:%m.%d})",
+        out.append(("시즌 최고점", f"{best[0]:,.2f}", (f"#{best[2]:,} " if best[2] else "") + f"({best[1]:%m.%d})" + span_note,
                     "검색·따라가기 기록과 랭킹 수집(하루 한 번) 중 높은 쪽 — 하루 안 최고점은 놓칠 수 있다"))
     # H5 챔스·슈챔 달성 판수
     ch = core.first_reach(wins, season_start, core.CHAMPION_DIVISION_ID)
@@ -1822,7 +1894,7 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
         small.append("저장 시작 뒤부터" + (" — 남들 비교 없음" if club is not None else ""))
     elif ch is not None and ch.gap:
         small.append("중간에 빈 곳 있음")
-    out.append(("챔스·슈챔 달성", big, " · ".join(small) or "이번 시즌 첫 경기부터 센 판수",
+    out.append(("챔스·슈챔 달성", big, (" · ".join(small) or "이번 시즌 첫 경기부터 센 판수") + span_note,
                 "시즌 첫 경기부터 그 등급 첫 경기까지 친 판수(그 경기 포함) · 슈챔은 경기 기록의 등급으로만"
                 " · 남들 값은 첫 달성을 확인한 수집 시각의 누적이라 최대 하루치 많다"))
     # H6 시즌 FC
@@ -1840,8 +1912,17 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
     else:
         lo, hi, n = core.fc_rank_range(club, wr.fc)
         small = (f"{lo:,}등" if lo == hi else f"{lo:,}~{hi:,}등") + f" / {n:,}명"
-    out.append(("시즌 FC", f"{wr.fc:,} FC", small + saved_note,
+    out.append(("시즌 FC", f"{wr.fc:,} FC", small + saved_note + span_note,
                 "내 FC 는 저장 경기의 등급으로 센 값 · 남들은 랭킹 화면 칸으로 추정한 범위(챔스 이상 승리 15~20)라 등수도 범위"))
+    # 65 M1 — 오늘(H1 과 같은 식을 오늘 날짜로) · 랭킹 점수(내 마지막 점수 기록 — H2 의 "내" 값을 큰 글자로)
+    ts = core.club_day(wins, today)
+    tdelta = core.day_delta([(p["at"].date(), p["elo"]) for p in pts], today)
+    out.append(("오늘", f"{tdelta:+,.0f}점" if tdelta is not None else "—",
+                f"{ts.win}승 {ts.draw}무 {ts.lose}패 · {ts.rate(mixed):.1f}% · {ts.fc:,} FC" if ts.games else "오늘 경기 없음",
+                f"오늘({today:%m-%d} 이 PC 날짜 0시부터) — 점수 변화는 오늘 마지막 기록 − 그 앞 마지막 기록"))
+    out.append(("랭킹 점수", f"{me['elo']:,.2f}" if me else "—",
+                f"{me['at']:%m/%d %H:%M} 기록" if me else "내 점수 기록이 없습니다",
+                "검색·따라가기·랭킹 수집 중 마지막 점수 기록"))
     return out
 
 
@@ -2477,9 +2558,8 @@ class CardBackfillScheduler(QObject):
 
 
 class MainWindow(QMainWindow):
-    # 57 K3 — 상대 바로 뒤 넷(팀컬러·구단가치는 상대의 **지금** 값 · 맞대결은 이 PC 저장분 · 상대 점수는 내 계정 경기만)
-    MATCH_COLUMNS = ["일시", "결과", "스코어", "상대", "팀컬러", "구단가치", "맞대결", "상대 점수",
-                     "점유율", "슈팅", "유효", "패스성공률", "평점"]
+    # 57 K3 — 상대 정보 넷(팀컬러·구단가치는 상대의 **지금** 값 · 맞대결은 이 PC 저장분 · 상대 점수는 내 계정 경기만).
+    # 65 M2 부터 경기 목록은 카드라 머리글이 없다 — 같은 글을 카드 조각 툴팁(MATCH_CARD_TIPS)과 상세 창 구단가치에 쓴다
     MATCH_COLUMN_HELP = {
         "팀컬러": "상대의 지금 팀컬러(팀컬러를 조회한 상대만) — 그 경기 때 팀컬러가 아닐 수 있습니다.",
         "구단가치": "상대의 지금 구단가치(넥슨 데이터센터 · 팀컬러와 같이 조회) — 그 경기 때 값이 아닐 수 있습니다.",
@@ -2487,6 +2567,13 @@ class MainWindow(QMainWindow):
         "상대 점수": (f"그날 수집 원본에서 읽은 상대 점수·순위(경기 시각 ±{config.OPP_SNAP_WINDOW_H}시간의 스냅숏 · 원본은 "
                     f"{config.RANK_RAW_KEEP_DAYS}일 보관) — 저장하지 않고 보여 주기만 합니다. 그보다 옛 경기는 순위 구간. "
                     "1만 위 밖이거나 닉네임이 바뀐 상대는 빈칸 · 내 계정 경기만."),
+    }
+    MATCH_CARD_TIPS = {   # 카드 조각 이름(MatchCardDelegate.layout) → 툴팁
+        "color": MATCH_COLUMN_HELP["팀컬러"], "emblem": MATCH_COLUMN_HELP["팀컬러"],
+        "value": MATCH_COLUMN_HELP["구단가치"], "h2h": MATCH_COLUMN_HELP["맞대결"],
+        "oppscore": MATCH_COLUMN_HELP["상대 점수"], "badge": "그 경기 때 상대 등급",
+        "pad": "상대 입력 장치: 패드(키보드면 아이콘이 없습니다)",
+        "stat": "점유율 · 슛(유효/전체) · 패스 성공률 · 평점 — 내 기록",
     }
     PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률",
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
@@ -2514,14 +2601,15 @@ class MainWindow(QMainWindow):
                  "GK는 실제 선방, 필드 플레이어는 수비 기여도로 볼 수 있음.",
         "평점": "이 선수가 출전한 경기들의 평균 평점.",
     }
-    OPPONENT_COLUMNS = ["상대", "전적", "승률", "전체 대비", "평균득점", "평균실점", "최근 경기"]
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
-    TEAMCOLOR_RATE_COLUMNS = ["팀컬러", "경기", "상대 수", "승", "무", "패", "승률", "평균 대비", "효과"]
+    # [팀컬러 승률] 은 승률 줄 목록(67 R3 — tc_rate_list) · [팀컬러 랭킹] 은 표 그대로(범위 막대 대리자 · 여러 열 정렬 — E7).
+    # 두 탭 같은 규칙: 한 번 누름 = 고르기 · 두 번 = 그 팀컬러 상대들이 쓴 선수 · 팀컬러 창은 위 [팀컬러 정보] 단추(옛 "효과" 열)
     TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
-                              "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위", "효과"]
-    TEAMCOLOR_EFFECT_TEXT = "보기"     # "효과" 열 — 이 열의 한 번 클릭만 효과 창을 연다(더블클릭·화살표 이동은 안 연다)
+                              "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위"]
     TEAMCOLOR_RANGE_W = 150            # 팀가치 범위 막대 열 폭(글자가 없어 FitTableWidget 이 최소 폭으로 누른다)
-    TEAMCOLOR_TINT_FULL_PP = 15.0      # 승률 칸 색 — 기준선과 이만큼(%p) 벌어지면 가장 진하게(T.ROW_TINT)
+    # 강화 숫자 칸 = 배지(64 P8) — {칸을 채우는 함수: (표, 열)}. test_rules 가 강화 하나만 든 칸을 만드는 함수를 세어 이 표와 대조한다
+    GRADE_BADGE_COLUMNS = {"_render_players": ("tbl_players", (2,)), "_render_timeline": ("tbl_timeline", (3,)),
+                           "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,))}
     SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
                       "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
 
@@ -2596,9 +2684,10 @@ class MainWindow(QMainWindow):
         self._names: dict = {}
         self._positions: dict = {}
         self._trend_reset_pending = True
-        self._div_games: list = []      # 등급 추이 — 경기마다(확대 시) · 하루 한 점(_div_days) · 그 일수(55 G1)
-        self._div_days: list = []
-        self._div_days_n = 30
+        self._div_runs: list = []       # 등급 계단(66 G1) — 이번 시즌 구간(habits.DivisionRun) · 시작·시즌을 아는가
+        self._div_span: tuple = (None, False)
+        self._div_badges: dict = {}     # 등급 id → QPixmap(받은 것) · 한 번 시도한 등급은 이 실행에서 다시 안 받는다
+        self._div_badge_tried: set = set()
         self._tv_points: list = []      # 구단가치 일별(55 V1) — (날짜, 원)
         # 상대 닉네임 -> 팀컬러 글자(teamcolor.label — 이름이 겹치는 두 팀컬러만 "이름 · 강화"/"이름 · 클럽", "" = 못 찾음).
         # 표·콤보·더블클릭 대조가 전부 이 글자로 돈다. DB 에 쓸 원값(넥슨 이름·팀가치·엠블럼 키)은 _teamcolor_raw 에 따로
@@ -2634,6 +2723,10 @@ class MainWindow(QMainWindow):
         self._live_pitches: list = []           # 카드 정보를 쓰는 축구장 — 동의 직후 막혔던 것을 다시 읽는다
         self._position_pitch_loaders: list = [] # ⑨ 축구장의 얼굴·시즌 아이콘
         self._retired_loaders: list = []        # 갈아 끼운 축구장의 로더 — 끝날 때까지 쥔다(_retire_loaders)
+        self._gk_face_loader: ImageLoader | None = None   # 승부차기 상대 GK 카드 얼굴(65 M6) — 앞 것은 _retire_loaders 로
+        self._gk_faces: dict[int, QPixmap] = {}
+        self._gk_face_labels: dict[int, QLabel] = {}
+        self.shootout_cards: list = []
         self._ability_sim_loader: AbilitySimLoader | None = None
         self._position_ovr_loader: AbilitySimLoader | None = None
         # 선수 색인 백필(12) — schedule_backfill 이 첫 화면 뒤에 띄운다. 남은 수는 찾기 화면의 "색인 중 N/M"
@@ -2739,7 +2832,7 @@ class MainWindow(QMainWindow):
         """그 화면에 맞는 최소 크기를 걸고, 창이 화면보다 크면 줄인다.
         keep_size: 저장된 크기를 살린다(화면보다 클 때만 줄임). 아니면 규칙의 기본 크기로."""
         if screen is None:
-            self.resize(*DEFAULT_WINDOW)
+            self.resize(*DEFAULT_WINDOW)  # 화면을 모를 땐 넘치지 않을 쪽(큰 창은 넓이를 잰 뒤에만)
             self.setMinimumSize(*MIN_WINDOW)
             return None
         avail = screen.availableGeometry()
@@ -3144,7 +3237,7 @@ class MainWindow(QMainWindow):
         box.setMaximumWidth(760)
         box.setStyleSheet(
             f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 16px; }}")
+            f" border-radius: {T.RADIUS}px; }}")
         box_v = QVBoxLayout(box)
         box_v.setContentsMargins(40, 36, 40, 32)
         box_v.setSpacing(0)
@@ -3155,7 +3248,7 @@ class MainWindow(QMainWindow):
         f.setPointSize(30)
         f.setBold(True)
         title.setFont(f)
-        title.setStyleSheet(f"color: {T.GREEN}; border: none;")
+        title.setStyleSheet(f"color: {T.ACCENT}; border: none;")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         box_v.addWidget(title)
 
@@ -3187,7 +3280,7 @@ class MainWindow(QMainWindow):
 
         self.lb_search_msg = QLabel("")
         self.lb_search_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lb_search_msg.setStyleSheet(f"color: {T.RED}; border: none;")
+        self.lb_search_msg.setStyleSheet(f"color: {T.BAD}; border: none;")
         box_v.addSpacing(10)
         box_v.addWidget(self.lb_search_msg)
 
@@ -3202,7 +3295,6 @@ class MainWindow(QMainWindow):
         self.row_recent.addStretch(1)
         box_v.addLayout(self.row_recent)
 
-        add_shadow(box)
         centering.addWidget(box)
         centering.addStretch(1)
         outer.addLayout(centering)
@@ -3431,8 +3523,8 @@ class MainWindow(QMainWindow):
                                               ("주간 요약", "_build_weekly_tab"),
                                               ("보상", "_build_reward_board_tab"),
                                               ("예측 되짚기", "_build_predict_check_tab")))),
-                 ("메타 분석", Tabs("rankmeta", (("하루 승률", "_build_day_wr_tab"),
-                                              ("가성비", "_build_value_score_tab"),
+                 ("메타 분석", Tabs("rankmeta", (("팀컬러", "_build_tc_board_tab"),   # 67 R1 — 옛 [가성비] 를 합쳤다(U1)
+                                              ("하루 승률", "_build_day_wr_tab"),
                                               ("구단가치", "_build_value_bins_tab"),
                                               ("구간 평균", "_build_tier_means_tab"),
                                               ("승률→점수", "_build_wr_elo_tab"),
@@ -3448,6 +3540,8 @@ class MainWindow(QMainWindow):
         "스쿼드 타임라인": ("스쿼드·이적", "타임라인"),
         "이적시장 가계부": ("스쿼드·이적", "가계부"),
     }
+    # 지운 탭 → 새 탭(메뉴별). settings.ini 의 보던 탭이 옛 이름이면 새 자리로 연다
+    OLD_TAB_NAMES = {"메타 분석": {"가성비": "팀컬러"}}   # 67 R1 — [가성비] 는 [팀컬러] 목록의 한 칸이 됐다(U1)
 
     def _build_main_page(self) -> QWidget:
         """검색 이후 화면 — 왼쪽 메뉴 + (상단 바 / 메뉴별 페이지)."""
@@ -3527,7 +3621,7 @@ class MainWindow(QMainWindow):
         self._teamcolor_min_spins: list[QSpinBox] = []
         self._teamcolor_min_units: list[QLabel] = []   # "경기 이상만" — 섞인 식이면 "승패 판 이상만"(거르기도 rated)
         # 57 K8 팀컬러 종류·비주류 거르기 — 팀컬러 표 다섯이 같은 값(한쪽을 바꾸면 다 같이)
-        self._tc_filters: list[tuple[QLabel, NoScrollComboBox, QCheckBox]] = []
+        self._tc_filters: list[tuple] = []   # (라벨, 고르기, 켜기) — 콤보 꼴 (QLabel, NoScrollComboBox, QCheckBox) · 칩 꼴 (ChoiceChips ×2, 칩)
         self._tc_kind: str | None = None
         self._tc_minor_only = False
         self._page_index: dict[str, int] = {}
@@ -3640,7 +3734,6 @@ class MainWindow(QMainWindow):
         """대시보드 — 카드 배치·채우기는 dashboard.DashboardPage. 랭커 카드만
         여기서 만들어 넘긴다(_render_ranker 가 데이터센터 값으로 채운다)."""
         self.card_ranker = RankerCard()
-        add_shadow(self.card_ranker)
         self.dashboard = DashboardPage(self.card_ranker)
         self.dashboard.navigate.connect(self._go_target)
         return self.dashboard
@@ -3700,7 +3793,7 @@ class MainWindow(QMainWindow):
         return row
 
     # 57 K8 — 종류는 엠블럼 경로의 앞 칸(teamcolor.KIND_LABEL) · 비주류 = 1만 명 중 MINOR_USERS 미만(순위 구간과 무관)
-    TC_FILTER_KEYS = ("teamcolor", "daywr", "valuescore", "tiermeans")
+    TC_FILTER_KEYS = ("teamcolor", "daywr", "tcboard", "tiermeans")
 
     def _tc_filter_box(self) -> QWidget:
         """[팀컬러 종류 ▾] [□ 비주류만] — 재료가 없으면 그 부품만 숨긴다(_tc_keep)."""
@@ -3720,6 +3813,25 @@ class MainWindow(QMainWindow):
         for x in (lb, cb, chk):
             h.addWidget(x)
         self._tc_filters.append((lb, cb, chk))
+        return box
+
+    def _tc_filter_chips(self) -> QWidget:
+        """67 R1 [전체 | 국가 | 클럽 | 강화] [비주류] — 콤보 꼴(_tc_filter_box)과 같은 상태(_tc_kind · _tc_minor_only)를 같은
+        (라벨, 고르기, 켜기) 셋으로 쓴다(U4). [전체] = 종류 전체 + 비주류 끔 · [비주류] 는 종류와 같이 켤 수 있다."""
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        chips = ChoiceChips([("전체", None), ("국가", "countries"), ("클럽", "crests"), ("강화", "teamcolorboost")])
+        chips.setToolTip("팀컬러 엠블럼 종류로 거릅니다 — 엠블럼을 모르는 팀컬러(이름이 겹쳐 '구분 전' 인 것 포함)는 '전체' 에서만 보입니다")
+        minor = chip_toggle("비주류")
+        minor.setToolTip(f"랭킹 1만 명 중 {config.MINOR_USERS}명 미만이 쓰는 팀컬러만 — 순위 구간을 좁혀도 기준은 1만 명 전체")
+        chips.currentIndexChanged.connect(
+            lambda _i, c=chips: self._on_tc_filter(c.currentData(), self._tc_minor_only if c.currentData() is not None else False))
+        chips.buttons[0].clicked.connect(lambda: self._tc_minor_only and self._on_tc_filter(None, False))   # 이미 [전체] 일 때도 비주류를 끈다
+        minor.toggled.connect(lambda on: self._on_tc_filter(self._tc_kind, on))
+        h.addWidget(chips)
+        h.addWidget(minor)
+        self._tc_filters.append((chips, chips, minor))
         return box
 
     def _on_tc_filter(self, kind, minor: bool) -> None:
@@ -3767,17 +3879,46 @@ class MainWindow(QMainWindow):
     def _teamcolor_min_games(self) -> int:
         return self._teamcolor_min_spins[0].value() if self._teamcolor_min_spins else core.MIN_COND
 
+    TC_INFO_TIP = "고른 팀컬러의 랭커 1만 명 숫자와 넥슨 데이터센터의 단계별 효과·적용 선수"
+
+    def _teamcolor_pick_row(self, min_row: QHBoxLayout) -> tuple[QHBoxLayout, QPushButton]:
+        """최소 경기 줄 + 오른쪽 [팀컬러 정보](고른 줄이 없으면 꺼짐 — ⑥). 한 번 누름이 두 번 누름 앞에 오는 함정을 피해
+        창은 단추로만 연다(1·2회차 [중])."""
+        btn = QPushButton("팀컬러 정보")
+        btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        btn.setToolTip(self.TC_INFO_TIP)
+        btn.setEnabled(False)
+        min_row.addWidget(btn)
+        return min_row, btn
+
     def _build_teamcolor_rate_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         row, _, _ = self._build_teamcolor_fetch_row()
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
-        v.addLayout(self._teamcolor_min_row())
-        self.tbl_teamcolor_rate = self._make_table(self.TEAMCOLOR_RATE_COLUMNS, icons={0: "emblem"})
-        self.tbl_teamcolor_rate.cellClicked.connect(
-            lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, r, c))
-        v.addWidget(self.tbl_teamcolor_rate, 1)
+        min_row = self._teamcolor_min_row()
+        self.cb_tc_rate_sort = NoScrollComboBox()
+        for key, text in RATE_SORTS:
+            if key != "recent":   # 묶음 줄엔 최근 경기가 없다
+                self.cb_tc_rate_sort.addItem(text, key)
+        self.cb_tc_rate_sort.currentIndexChanged.connect(lambda _i: self._show_tc_rate_rows())
+        min_row.insertWidget(min_row.count() - 1, self.cb_tc_rate_sort)   # 늘어남 앞
+        min_row, self.btn_tc_rate_info = self._teamcolor_pick_row(min_row)
+        v.addLayout(min_row)
+        hint = QLabel("두 번 누르면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수 · (±) 는 팀컬러를 아는 경기 승률 대비")
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(hint)
+        self.tc_rate_list = RateRowList()
+        self.tc_rate_list.doubleClicked.connect(
+            lambda idx: self._show_teamcolor_players(idx.data(ROW_ROLE).key) if idx.isValid() else None)
+        self.tc_rate_list.selectionModel().currentChanged.connect(
+            lambda cur, _p: self.btn_tc_rate_info.setEnabled(cur.isValid()))
+        self.btn_tc_rate_info.clicked.connect(
+            lambda: self._open_teamcolor_effect(self.tc_rate_list.current().key) if self.tc_rate_list.current() else None)
+        self._tc_rate_rows: list[RateRow] = []
+        v.addWidget(self.tc_rate_list, 1)
         return w
 
     def _build_teamcolor_rank_tab(self) -> QWidget:
@@ -3786,18 +3927,21 @@ class MainWindow(QMainWindow):
         row, _, _ = self._build_teamcolor_fetch_row()
         v.addLayout(row)
         v.addWidget(self._teamcolor_note())
-        hint = QLabel("팀컬러 이름을 더블클릭하면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수를,"
-                     " \"효과\" 열의 [보기] 를 누르면 넥슨 데이터센터의 단계별 효과와 적용 선수를 볼 수 있습니다."
+        hint = QLabel("팀컬러를 두 번 누르면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수를,"
+                     " 고른 뒤 [팀컬러 정보] 를 누르면 랭커 1만 명 숫자와 넥슨 데이터센터의 단계별 효과·적용 선수를 볼 수 있습니다."
                      " 범위 막대는 로그 눈금입니다(점 = 평균).")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(hint)
-        v.addLayout(self._teamcolor_min_row())
+        min_row, self.btn_tc_rank_info = self._teamcolor_pick_row(self._teamcolor_min_row())
+        v.addLayout(min_row)
         self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS, icons={1: "emblem"})
         self.tbl_teamcolor_rank.itemDoubleClicked.connect(
             self._on_teamcolor_double_clicked)
-        self.tbl_teamcolor_rank.cellClicked.connect(
-            lambda r, c: self._on_teamcolor_cell_clicked(self.tbl_teamcolor_rank, self.TEAMCOLOR_RANK_COLUMNS, r, c))
+        self.tbl_teamcolor_rank.itemSelectionChanged.connect(
+            lambda: self.btn_tc_rank_info.setEnabled(self._tc_rank_selected() is not None))
+        self.btn_tc_rank_info.clicked.connect(
+            lambda: self._open_teamcolor_effect(self._tc_rank_selected()) if self._tc_rank_selected() else None)
         rc = self.TEAMCOLOR_RANK_COLUMNS.index("팀가치 범위")
         self._tc_range_delegate = RangeBarDelegate(self.tbl_teamcolor_rank)
         self.tbl_teamcolor_rank.setItemDelegateForColumn(rc, self._tc_range_delegate)
@@ -3852,9 +3996,9 @@ class MainWindow(QMainWindow):
         # 선택한 기간의 최고·평균·최저 승률 — 예전엔 상단 요약 카드를 이 탭에서만
         # 바꿔치기했는데, 요약 카드가 대시보드로 옮겨 가 여기 따로 둔다.
         trow = QHBoxLayout()
-        self.card_trend_max = StatCard("최고 승률", T.GREEN)
+        self.card_trend_max = StatCard("최고 승률", T.GOOD)
         self.card_trend_avg = StatCard("평균 승률")
-        self.card_trend_min = StatCard("최저 승률", T.RED)
+        self.card_trend_min = StatCard("최저 승률", T.BAD)
         self.card_trend_games = StatCard("경기수")
         for c in (self.card_trend_max, self.card_trend_avg,
                   self.card_trend_min, self.card_trend_games):
@@ -3863,22 +4007,25 @@ class MainWindow(QMainWindow):
 
         self.gb_trend = QGroupBox("최근 30일 승률 추이")
         gv = QVBoxLayout(self.gb_trend)
-        # 1.3.1 — 옛 widgets.TrendChart(GREEN 꺾은선)를 대시보드와 같은 그래프로. 50% 기준선 ·
+        # 1.3.1 — 옛 widgets.TrendChart(초록 꺾은선)를 대시보드와 같은 그래프로. 50% 기준선 ·
         # 7일 이동평균(달력 7일, 표본 미달이면 끊김) · 아래 띠에 그날 경기 수.
         self.trend_chart = charts.AreaTrendChart()
         gv.addWidget(self.trend_chart)
         v.addWidget(self.gb_trend, 1)
 
-        # 등급 추이 — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음.
-        # 기간(일수)은 위 승률 추이와 같은 스핀박스를 공유한다. 점은 하루 마지막 등급.
-        self.gb_division = QGroupBox("등급 추이")
+        # 등급 계단(66 G1) — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음. 범위는 점수 그래프와 같은
+        # 이번 시즌(U1 — 위 "최근 N일" 과 끊었다) · 시즌 콤보도 안 본다(R1 — 저장된 전체에서 시즌 시작으로 자른다).
+        self.gb_division = QGroupBox("등급")
         dv = QVBoxLayout(self.gb_division)
-        self.division_chart = DivisionChart()
+        self.division_chart = charts.DivisionRunChart()
         dv.addWidget(self.division_chart)
-        # 55 G1 — 구간 확대. G1_GAME_LEVEL_DAYS 일 이하로 좁히면 경기마다 한 점(U4)
-        self.zoom_division = ZoomBar()
+        self.zoom_division = ZoomBar()   # 구간 단위로 좁힌다(55 G1)
         self.zoom_division.range_changed.connect(lambda _a, _b: self._draw_division())
         dv.addWidget(self.zoom_division)
+        self.lb_division_note = QLabel("가로 한 칸이 등급 구간 하나입니다 — 같은 등급이 이어진 동안이라 칸 폭은 날짜와 상관없습니다.")
+        self.lb_division_note.setWordWrap(True)
+        self.lb_division_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        dv.addWidget(self.lb_division_note)
         v.addWidget(self.gb_division, 1)
 
         # 슈퍼 챔피언스 달성 기록 — 시즌 필터 무시(평생 기록). _render_sc_records 가 채운다.
@@ -3913,6 +4060,8 @@ class MainWindow(QMainWindow):
         self.btn_elo_track = QPushButton("")
         self.btn_elo_track.setStyleSheet(T.OUTLINE_BUTTON_QSS)
         self.btn_elo_track.clicked.connect(self._on_elo_track_clicked)
+        self.seg_elo = self._day_hour_switch()
+        top.addWidget(self.seg_elo, 0, Qt.AlignmentFlag.AlignTop)
         top.addWidget(self.btn_elo_track)
         ev.addLayout(top)
         self.lb_elo_note = QLabel("")
@@ -3921,6 +4070,9 @@ class MainWindow(QMainWindow):
         ev.addWidget(self.lb_elo_note)
         self.elo_chart = charts.AreaTrendChart()
         ev.addWidget(self.elo_chart)
+        self.lb_elo_band = self._note_label()
+        self.lb_elo_band.setText(BAND_NOTE)
+        ev.addWidget(self.lb_elo_band)
         self.zoom_elo = ZoomBar()   # 55 G1
         self.zoom_elo.range_changed.connect(lambda _a, _b: self._draw_elo_chart())
         ev.addWidget(self.zoom_elo)
@@ -3935,13 +4087,53 @@ class MainWindow(QMainWindow):
         self.lb_elo_predict.setStyleSheet(f"color: {T.TEXT};")
         ev.addWidget(self.lb_elo_predict)
         v.addWidget(self.gb_elo)
+        # 67 R8 — 시즌 말 컷(기준 화면 "주차" 꼴): 카드 넷 · 예상 200위 컷 크게 + 80% 범위 · 계산 줄 · 계산 방법 접기 ·
+        # 지난 시즌 최종 컷 · 막판 상승폭은 "모으는 중"(E5). 예측 숫자의 정의는 그대로(predict.describe 와 같은 값)
+        self.gb_park = QGroupBox("시즌 말 컷")
+        pv = QVBoxLayout(self.gb_park)
+        row = QHBoxLayout()
+        self.park_cards = {k: StatCard(t) for k, t in (("cut_200", "지금 200위 컷"), ("cut_top", f"지금 {config.R4_CUT_TOP}위 컷"),
+                                                         ("days", "남은 날"), ("rank", "내 순위"))}
+        for c in self.park_cards.values():
+            c.sub.setWordWrap(True)
+            row.addWidget(c, 1)
+        pv.addLayout(row)
+        mid = QHBoxLayout()
+        self.park_pred = StatCard("예상 200위 컷 (시즌 말)", T.ACCENT)
+        f = self.park_pred.value.font()
+        f.setPointSize(22)
+        self.park_pred.value.setFont(f)
+        mid.addWidget(self.park_pred, 1)
+        self.lb_park_margin = QLabel("")
+        self.lb_park_margin.setWordWrap(True)
+        mid.addWidget(self.lb_park_margin, 2)
+        pv.addLayout(mid)
+        self.lb_park_method = QLabel("")
+        self.lb_park_method.setWordWrap(True)
+        self.park_method = Collapsible("계산 방법 · 확률", self.lb_park_method)
+        pv.addWidget(self.park_method)
+        pv.addWidget(self._title_label("시즌별 최종 컷"))
+        self.park_seasons = MetricRowList()
+        self.park_seasons.setMaximumHeight(240)
+        pv.addWidget(self.park_seasons)
+        self.lb_park_later = self._note_label()
+        self.lb_park_later.setText("막판 상승폭 · 시즌 진행에 따른 컷 변화 — 모으는 중(시즌 둘 이상을 처음부터 끝까지 모으면 보입니다)")
+        pv.addWidget(self.lb_park_later)
+        v.addWidget(self.gb_park)
         # 55 V1 — 구단가치 일별(검색·따라가기 때 점수와 같이 적은 값 · elo_history.team_value)
         self.gb_team_value = QGroupBox("구단가치 — 지금 시즌")
         tv = QVBoxLayout(self.gb_team_value)
         self.lb_team_value_note = self._note_label()
-        tv.addWidget(self.lb_team_value_note)
+        self.seg_team_value = self._day_hour_switch()
+        row = QHBoxLayout()
+        row.addWidget(self.lb_team_value_note, 1)
+        row.addWidget(self.seg_team_value, 0, Qt.AlignmentFlag.AlignTop)
+        tv.addLayout(row)
         self.team_value_chart = charts.AreaTrendChart()
         tv.addWidget(self.team_value_chart)
+        self.lb_team_value_band = self._note_label()
+        self.lb_team_value_band.setText(BAND_NOTE)
+        tv.addWidget(self.lb_team_value_band)
         self.zoom_team_value = ZoomBar()
         self.zoom_team_value.range_changed.connect(lambda _a, _b: self._draw_team_value_chart())
         tv.addWidget(self.zoom_team_value)
@@ -3949,10 +4141,18 @@ class MainWindow(QMainWindow):
         v.addStretch(1)
         return w
 
+    @staticmethod
+    def _day_hour_switch() -> Segmented:
+        """[일별 | 시간별] — 시간별은 자리만(66 E6 · 10-25 사용자 "추천대로"): 하루 몇 점뿐이라 시간별이라 부르면 거짓."""
+        seg = Segmented(["일별", "시간별"])
+        seg.set_option_enabled(1, False, "시간별 기록은 아직 모으지 않습니다")
+        return seg
+
     def _build_calendar_tab(self) -> QWidget:
         """승률 그래프 [일별 기록] 탭(55 D1) — 한 달 달력. 저장된 전체(시즌 필터 무시) · 그리기는 _render_calendar."""
         w = QWidget()
         v = QVBoxLayout(w)
+        self.cal_fc_cards = self._make_fc_reward_cards(v)   # 66 G5 — FC 보상량 + 카드 셋(늘 이번 시즌)
         bar = QHBoxLayout()
         self.btn_cal_prev = QPushButton("◀")
         self.btn_cal_next = QPushButton("▶")
@@ -3965,14 +4165,20 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.lb_cal_month)
         bar.addWidget(self.btn_cal_next)
         bar.addWidget(self.btn_cal_now)
+        self.lb_cal_month_sum = QLabel("")
+        bar.addWidget(self.lb_cal_month_sum)
         bar.addStretch(1)
         v.addLayout(bar)
+        body = QHBoxLayout()
         self.cal_grid = CalendarGrid()
-        v.addWidget(self.cal_grid, 1)
-        self.lb_cal_summary = QLabel("")
-        self.lb_cal_summary.setWordWrap(True)
-        self.lb_cal_summary.setStyleSheet(f"color: {T.TEXT};")
-        v.addWidget(self.lb_cal_summary)
+        body.addWidget(self.cal_grid, 1)
+        side = QVBoxLayout()
+        # 오른쪽 작은 표(66 G5) — 줄 = 하루 판수·승률·하루 FC·날 수 · 열 = 이 달·시즌
+        self.tbl_cal_summary = self._make_table(["", "이 달", "시즌"])
+        side.addWidget(self.tbl_cal_summary)
+        side.addStretch(1)
+        body.addLayout(side)
+        v.addLayout(body, 1)
         self.lb_cal_note = self._note_label()
         v.addWidget(self.lb_cal_note)
         self._cal_month: tuple[int, int] | None = None   # None = 마지막 경기가 있는 달
@@ -4026,28 +4232,33 @@ class MainWindow(QMainWindow):
             cells[d.day.day] = CalCell(
                 f"{d.rate:.0f}%", f"{d.games}판 · {d.fc:,} FC" if d.fc else f"{d.games}판", d.arrow,
                 f"{d.day:%Y-%m-%d} · {d.win}승 {d.draw}무 {d.lose}패 · 승률 {d.rate:.1f}% · {d.fc:,} FC\n{judge}",
-                weak=not d.judged)
+                weak=not d.judged, fc=d.fc)
         self.lb_cal_month.setText(f"{y}년 {m}월")
-        self.cal_grid.set_data(y, m, cells, date.today())
+        # 진하기는 이 달 최대 FC 대비 — 미달 날은 진하기 0 이라 최대에서도 뺀다(M11)
+        self.cal_grid.set_data(y, m, cells, date.today(), fc_max=max((d.fc for d in days if d.judged), default=0))
+        self._fill_fc_reward_cards(self.cal_fc_cards)
         self.btn_cal_next.setEnabled((y, m) < (date.today().year, date.today().month))
         oldest = min(w_.when for w_ in wins).date() if wins else None
         self.btn_cal_prev.setEnabled(oldest is not None and (y, m) > (oldest.year, oldest.month))
 
-        def line(title: str, s) -> str:
-            if not s.days:
-                return f"{title}: 경기 없음"
-            return (f"{title}: {s.days}일 · 하루 {s.per_day:.1f}판 · 승률 {s.rate(mixed):.1f}% · "
-                    f"하루 {s.fc_per_day:,.0f} FC")
         month_rows = [w_ for w_ in wins if first <= w_.when.date() <= last]
         anchor = min(last, date.today())
         season = self._cal_season_key(anchor)
-        season_rows = [w_ for w_ in wins if self._cal_season_key(w_.when.date()) == season]
+        in_season = [w_ for w_ in wins if self._cal_season_key(w_.when.date()) == season]
         season_name = "저장된 전체" if no_table else (season.label if season else "이번 시즌")
-        self.lb_cal_summary.setText(line("이 달", core.cal_summary(month_rows)) + "<br>"
-                                    + line(season_name, core.cal_summary(season_rows)))
+        ms, ss = core.cal_summary(month_rows), core.cal_summary(in_season)
+        self.lb_cal_month_sum.setText(f"  {ms.days}일 · {ms.fc:,} FC" if ms.days else "  경기 없음")
+        self.tbl_cal_summary.setHorizontalHeaderLabels(["", "이 달", season_name])
+        cell = lambda s, text: text if s.days else "—"   # noqa: E731
+        self._fill(self.tbl_cal_summary, [
+            ["하루 판수", cell(ms, f"{ms.per_day:.1f}판"), cell(ss, f"{ss.per_day:.1f}판")],
+            ["승률", cell(ms, f"{ms.rate(mixed):.1f}%"), cell(ss, f"{ss.rate(mixed):.1f}%")],
+            ["하루 FC", cell(ms, f"{ms.fc_per_day:,.0f}"), cell(ss, f"{ss.fc_per_day:,.0f}")],
+            ["날 수", cell(ms, f"{ms.days}일"), cell(ss, f"{ss.days}일")]], enable_sort=False)
         up = sum(1 for d in days if d.arrow > 0)
         down = sum(1 for d in days if d.arrow < 0)
         self.lb_cal_note.setText(
+            "칸 진하기 = 그날 승리 보상 FC(이 달 가장 많은 날이 가장 진하게) · "
             f"▲▼ = 그날 판수로 본 우연 범위({'저장된 전체' if no_table else '그 시즌'} 승률 ± {config.N16_BAND_SIGMA:g}σ) 밖"
             f" — 운만이면 스무 날 중 하루 꼴 · {config.D1_MIN_GAMES}판 미만인 날은 흐리게(안 잼) · 이 달 ▲ {up}일 · ▼ {down}일 · "
             "저장된 경기만(앱을 쓰기 전 기록은 없습니다)"
@@ -4194,9 +4405,11 @@ class MainWindow(QMainWindow):
         col = QVBoxLayout(row)
         col.setContentsMargins(4, 2, 4, 2)
         col.setSpacing(1)
-        head = QLabel(f"· {ins.headline}")
+        # 결론 한 줄(P9) — 글은 TEXT, 핵심 숫자만 섹션 색(67 R11 · 줄 전체를 칠하면 숫자가 안 튄다)
+        head = QLabel(key_number_html(f"· {ins.headline}", color))
+        head.setTextFormat(Qt.TextFormat.RichText)
         head.setWordWrap(True)
-        head.setStyleSheet(f"color: {color}; font-weight: bold;")
+        head.setStyleSheet("font-weight: bold;")
         col.addWidget(head)
         if ins.detail:
             sub = QLabel(f"   {ins.detail}")
@@ -4267,7 +4480,7 @@ class MainWindow(QMainWindow):
         head.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.box_chips.addWidget(head)
         for c in chips:
-            color = T.GREEN if c.strong else T.RED
+            color = T.GOOD if c.strong else T.BAD
             lb = QLabel(("강점 " if c.strong else "약점 ") + c.text)
             lb.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color}; border-radius: 9px;"
                              f" padding: 2px 10px;")
@@ -4305,9 +4518,9 @@ class MainWindow(QMainWindow):
         recent = self._matches[:core.WINDOW][::-1]
         self.analysis_dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                                      for m in recent])
-        colors = {core.SEC_FLOW: T.TEXT,
-                  core.SEC_WIN: T.GREEN,
-                  core.SEC_LOSE: T.RED}
+        colors = {core.SEC_FLOW: T.ACCENT,   # 결론 줄의 숫자 색(글은 TEXT — _analysis_row)
+                  core.SEC_WIN: T.GOOD,
+                  core.SEC_LOSE: T.BAD}
         for sec, box in self.box_analysis.items():
             self._clear(box)
             rows = [i for i in found if i.section == sec]
@@ -4379,11 +4592,7 @@ class MainWindow(QMainWindow):
             h.addWidget(a)
             if r.games:
                 gap = r.win_rate - base
-                h.addWidget(win_rate_bar(
-                    r.win, r.draw, r.lose,
-                    f"{win_rate_text(r.win, r.draw, r.lose, r.mixed, short=True)}  "
-                    f"({wdl_text(r.win, r.draw, r.lose)})  기준 대비 {gap:+.1f}%p",
-                    need, r.mixed, height=16), 1)
+                h.addWidget(wdl_rate_bar(r.win, r.draw, r.lose, f"기준 대비 {gap:+.1f}%p", need, r.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -4468,9 +4677,7 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(132)
             h.addWidget(a)
             if r.games:
-                h.addWidget(win_rate_bar(r.win, r.draw, r.lose,
-                                         f"{win_rate_text(r.win, r.draw, r.lose, gf.mixed, short=True)}  "
-                                         f"({wdl_text(r.win, r.draw, r.lose)})", core.MIN_COND, gf.mixed), 1)
+                h.addWidget(wdl_rate_bar(r.win, r.draw, r.lose, "", core.MIN_COND, gf.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(dim)
@@ -4547,17 +4754,16 @@ class MainWindow(QMainWindow):
         cs = core.clutch_summary(details, self._ouid)
         self._clear(self.box_clutch_first)
         for label, wdl, color in (
-                ("내가 선제골", cs.first_scored, T.GREEN),
-                ("선제 실점", cs.first_conceded, T.RED)):
+                ("내가 선제골", cs.first_scored, T.GOOD),
+                ("선제 실점", cs.first_conceded, T.BAD)):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
             a = QLabel(label)
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
-            b = QLabel(wdl_text(*wdl))
-            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
             n = core.rated(*wdl, cs.mixed)
-            weak = core.is_weak(n, core.MIN_COND)  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
+            weak = core.is_weak(n, core.MIN_COND)
+            b = WdlBar(*wdl, weak=weak)  # 표본 흐림 규칙 — 글자만 있는 칸도 색 + "표본 N"
             text = win_rate_text(*wdl, cs.mixed)
             c = QLabel(f"({text} · {sample_text(n, cs.mixed)})" if weak else f"({text})")
             c.setStyleSheet(f"color: {T.TEXT_DIM if weak else color}; font-weight: bold;")
@@ -4624,11 +4830,7 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(120)
             if band.games:
                 h.addWidget(a)
-                h.addWidget(win_rate_bar(
-                    band.win, band.draw, band.lose,
-                    f"{win_rate_text(band.win, band.draw, band.lose, band.mixed, short=True)}  "
-                    f"({wdl_text(band.win, band.draw, band.lose)})",
-                    core.MIN_COND, band.mixed, height=16), 1)
+                h.addWidget(wdl_rate_bar(band.win, band.draw, band.lose, "", core.MIN_COND, band.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -4751,6 +4953,7 @@ class MainWindow(QMainWindow):
         """성적 진단 [FC 보상](43단계 A2) — 이긴 경기의 그 당시 등급 × 승리당 FC 표(config.FC_REWARDS)."""
         w = QWidget()
         v = QVBoxLayout(w)
+        self.rewards_cards = self._make_fc_reward_cards(v)   # 66 G5b — 이번 시즌 카드 · 아래 등급별 표는 지금 범위 그대로
         self.lb_rewards_summary = QLabel("")
         self.lb_rewards_summary.setWordWrap(True)
         v.addWidget(self.lb_rewards_summary)
@@ -4770,7 +4973,48 @@ class MainWindow(QMainWindow):
         return " · ".join(f"{self._division_names.get(d, str(d))} {fc} FC"
                           for d, fc in sorted(latest.items(), reverse=True))
 
+    def _make_fc_reward_cards(self, v: QVBoxLayout) -> tuple[QLabel, list[StatCard]]:
+        """FC 보상량 줄 + 카드 셋(66 G5·G5b — 달력 탭과 FC 보상 탭이 같은 것) · 채우기는 `_fill_fc_reward_cards`."""
+        rule = QLabel("")
+        rule.setWordWrap(True)
+        rule.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(rule)
+        row = QHBoxLayout()
+        cards = [StatCard("이번 시즌 매치 보상", T.ACCENT), StatCard("예상 순위 보상"), StatCard("합계")]
+        for c in cards:
+            row.addWidget(c, 1)
+        v.addLayout(row)
+        return rule, cards
+
+    def _fill_fc_reward_cards(self, box: tuple[QLabel, list[StatCard]]) -> None:
+        """재료는 늘 이번 시즌(표시 범위와 무관) — 머리 줄 H6 과 같은 `season_rows`(M3·M15) · 시즌을 모르면 최근 70일(R2)."""
+        rule, (match, rank_c, total) = box
+        rule.setText(f"FC 보상량 — 이긴 판마다 {self._reward_rule_text()}")
+        data = self._elo.get(self._ouid) if self._ouid else None
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        season, from_start = season_rows(self._season_wins(), start)
+        wr = core.win_rewards(season)
+        match.set_title(f"{season_word(known)} 매치 보상")
+        match.set(f"{wr.fc:,} FC")
+        wins = " · ".join(f"{self._division_names.get(d, str(d))} {n:,}승"
+                          for d, (n, fc) in sorted(wr.by_division.items()) if fc)
+        match.set_sub((wins or "보상 등급에서 이긴 판 없음") + ("" if from_start else " · 저장 시작 뒤부터"))
+        pts = self._elo_points()
+        rank, fc = rank_reward(pts, date.today())
+        if data is None or not pts:
+            rank_c.set("—")
+            rank_c.set_sub((self._elo_note(data, pts) if self._ouid else "") or "점수 기록이 없습니다")
+        elif not rank:
+            rank_c.set("0 FC")
+            rank_c.set_sub(f"지금 {config.RANK_TIERS[-1]:,}위 밖(또는 모름) · 보상권 밖")
+        else:
+            rank_c.set(f"{fc or 0:,} FC")
+            rank_c.set_sub(f"현재 {rank:,}등 · " + ("이대로 끝나면" if fc else "보상권 밖"))
+        total.set(f"{wr.fc + (fc or 0):,} FC")
+        total.set_sub("순위 보상은 예상치")
+
     def _render_rewards(self, details: list[dict]) -> None:
+        self._fill_fc_reward_cards(self.rewards_cards)
         rows = core.win_divisions(details, self._ouid) if self._ouid else []
         r = core.win_rewards(rows)
         # 높은 등급부터(id 작은 것 — 정렬값을 음수로, 등급 체류 표와 같다)
@@ -4934,8 +5178,6 @@ class MainWindow(QMainWindow):
         self._streak_done = (key, result)
         self._invalidate("luck")
 
-    LUCK_DAY_COLUMNS = ["날짜", "판수", "승률", "운만이면 이 범위", "판정"]
-
     def _build_luck_tab(self) -> QWidget:
         """성적 진단 [운 범위](N16·A3) — 하루 승률이 평균 ± 2σ 밖인 날 수 · 몇 판부터 실력 차이로 읽나 · 최장 연승·연패의 우연 기준."""
         scroll = QScrollArea()
@@ -4950,12 +5192,14 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_luck_note)
         gb = QGroupBox("하루 승률은 운만으로 얼마나 흔들리나")
         box = QVBoxLayout(gb)
-        self.lb_luck_summary = QLabel("")
-        self.lb_luck_summary.setWordWrap(True)
-        box.addWidget(self.lb_luck_summary)
-        self.tbl_luck_days = self._make_table(self.LUCK_DAY_COLUMNS)
-        self.tbl_luck_days.setMinimumHeight(220)
-        box.addWidget(self.tbl_luck_days)
+        cards = QHBoxLayout()
+        self.card_luck_base = StatCard("시즌 평균")
+        self.card_luck_out = StatCard("범위 밖 날")
+        for c in (self.card_luck_base, self.card_luck_out):
+            cards.addWidget(c, 1)
+        box.addLayout(cards)
+        self.luck_dots = charts.LuckDotRows()
+        box.addWidget(self.luck_dots)
         v.addWidget(gb)
         gb = QGroupBox("몇 판부터 실력 차이로 읽나 (두 계정의 승률 차를 2σ 로 가르려면)")
         box = QVBoxLayout(gb)
@@ -4974,46 +5218,80 @@ class MainWindow(QMainWindow):
         scroll.setWidget(w)
         return scroll
 
+    def _luck_days(self, matches: list[MatchSummary]) -> tuple[list, bool]:
+        """운 범위 날(66 G4 · U2) — 성적 진단 범위(matches 의 첫~마지막 경기 날) 안의 날을 달력과 같은 `calendar_days` 로.
+        재료는 저장된 전체의 `_season_wins()` · 묶음은 달력과 같은 `_matches_all` 값(M14) — 같은 날이면 달력과 같은 판정."""
+        dated = [m.match_date for m in matches if m.match_date is not None]
+        mixed = core.mixed_of_matches(self._matches_all)
+        if not dated:
+            return [], mixed
+        first, last = min(dated).date(), max(dated).date()
+        return core.calendar_days(self._season_wins(), first, last, self._cal_season_key, mixed), mixed
+
+    def _fill_luck_cards(self, days: list, mixed: bool, no_table: bool) -> None:
+        """G4 카드 둘 — 기준(한 시즌이면 그 시즌 승률 · 여러 시즌이면 "시즌마다" · 시즌표가 없으면 저장된 전체 · M12) ·
+        범위 밖 날 대 운만이면 나올 날 수(`luck_expected` — 날마다 그 시즌 기준)."""
+        base, out = self.card_luck_base, self.card_luck_out
+        if not days:
+            for c, t in ((base, "시즌 평균"), (out, "범위 밖 날")):
+                c.set_title(t)
+                c.set("-")
+                c.set_sub("경기가 없습니다")
+            out.set_color(T.TEXT)
+            return
+        wins = self._season_wins()
+        keys = {self._cal_season_key(d.day) for d in days}
+        if no_table or len(keys) == 1:
+            key = next(iter(keys))
+            n = sum(1 for w in wins if self._cal_season_key(w.when.date()) == key)
+            base.set_title("저장된 전체 승률" if no_table else "시즌 평균")
+            base.set(f"{days[0].base:.1f}%")
+            # 진행 중인 시즌은 시즌표에 없어 키가 None(seasons.season_of)
+            base.set_sub(f"{n:,}판" if no_table else f"{key.label if key else '이번 시즌'} · {n:,}판")
+        else:
+            base.set_title("시즌 평균")
+            base.set("시즌마다")
+            base.set_sub(f"{len(keys)}개 시즌 — 날마다 그 시즌 승률이 기준(흰 세로선)")
+        judged = sum(1 for d in days if d.judged)
+        outside = sum(1 for d in days if d.arrow)
+        out.set_title("범위 밖 날")
+        out.set(f"{outside}일")
+        out.set_color(T.WARN if outside else T.TEXT)
+        out.set_sub(f"운이면 {core.luck_expected(days):.1f}일 · 판정한 {judged}일 중" if judged
+                    else f"하루 {config.D1_MIN_GAMES}판 이상인 날이 없어 안 잽니다")
+
     def _render_luck(self, matches: list[MatchSummary]) -> None:
-        days = self.sp_trend_days.value()
-        lk = core.daily_luck(core.win_rate_trend(matches, days=days))
+        days, mixed = self._luck_days(matches)
+        no_table = not self._rank_seasons
         self.lb_luck_note.setText(
-            f"최근 {days}일(승률 그래프와 같은 기간, {self._scope_text()}) · {win_rate_note(lk.mixed)} "
-            f"· 승패에는 운 몫이 커서, 승률이 오르내린 게 실력인지 운인지 숫자로 가늠하는 화면입니다.")
+            f"{self._scope_text()} 의 경기가 있던 날마다 · {win_rate_note(mixed)} · 띠 = 그날이 속한 "
+            f"{'저장된 전체' if no_table else '시즌'}의 내 승률 ± {config.N16_BAND_SIGMA:g}σ(그날 판수로) — 달력 ▲▼ 와 같은 판정"
+            f" · 하루 {config.D1_MIN_GAMES}판 미만은 빈 고리로(안 잼)"
+            " · 승패에는 운 몫이 커서, 승률이 오르내린 게 실력인지 운인지 숫자로 가늠하는 화면입니다.")
+        self._fill_luck_cards(days, mixed, no_table)
+        rows = []
+        for d in reversed(days):
+            verdict = ("판수 미달 — 안 잼" if not d.judged else
+                       ("범위 위 — 평소보다 잘함" if d.arrow > 0 else ("범위 아래 — 평소보다 못함" if d.arrow < 0 else "범위 안")))
+            rows.append(charts.LuckRow(
+                f"{d.day:%m/%d}", d.games, d.rate, d.lo, d.hi, d.base, d.judged, d.arrow,
+                f"{d.day:%Y-%m-%d} · {d.games}판 · 승률 {win_rate_text(d.win, d.draw, d.lose, mixed, short=True)}"
+                f" · 운만이면 {d.lo:.1f}% ~ {d.hi:.1f}%(기준 {d.base:.1f}%) · {verdict}"))
+        self.luck_dots.set_data(rows)
+        # "몇 판부터" 는 범위 전체 승률 기준(M8) — 일수를 넘기지 않으면 win_rate_trend 기본 30일이 조용히 들어간다(M1)
+        dated = [m.match_date for m in matches if m.match_date is not None]
+        span = (max(dated).date() - min(dated).date()).days + 1 if dated else 1
+        lk = core.daily_luck(core.win_rate_trend(matches, days=span))
         dim = f"color: {T.TEXT_DIM};"
-        if not lk.days:
-            self.lb_luck_summary.setText("경기가 없습니다.")
-            self._fill(self.tbl_luck_days, [], enable_sort=False)
+        if not dated:
             self._fill(self.tbl_luck_required, [], enable_sort=False)
             self.lb_luck_required.setText("")
         else:
-            self.lb_luck_summary.setText(
-                f"기간 평균 승률 {lk.p * 100:.1f}% · 하루 {config.N16_MIN_DAY}판 이상인 {lk.judged}일 중 "
-                f"평균 ± {config.N16_BAND_SIGMA:g}σ 띠 밖인 날 {lk.outside}일 — 운만이면 약 {lk.expected:.1f}일이 나옵니다"
-                + ("" if lk.judged else f" (하루 {config.N16_MIN_DAY}판 미만인 날은 판정하지 않습니다)"))
-            ordered = list(reversed(lk.days))
-            rows = []
-            for d in ordered:
-                if d.weak:
-                    verdict = "표본 부족"
-                elif d.outside:
-                    verdict = "띠 밖 ▲ 평소보다 잘함" if d.rate > d.hi else "띠 밖 ▼ 평소보다 못함"
-                else:
-                    verdict = "띠 안"
-                rows.append([(f"{d.day:%Y-%m-%d}", d.day.toordinal()), (f"{d.n:,}", d.n),
-                             (win_rate_text(d.win, d.draw, d.lose, lk.mixed, short=True), d.rate),
-                             f"{d.lo:.1f}% ~ {d.hi:.1f}%", verdict])
-            self._fill(self.tbl_luck_days, rows, enable_sort=False)
-            for r, d in enumerate(ordered):
-                if d.weak or d.outside:
-                    color = QColor(T.TEXT_DIM if d.weak else (T.GREEN if d.rate > d.hi else T.RED))
-                    for c in range(self.tbl_luck_days.columnCount()):
-                        self.tbl_luck_days.item(r, c).setForeground(color)
             self._fill(self.tbl_luck_required,
                        [[f"{r.diff:g}%p", (f"{r.n:,}판", r.n), (f"{r.games:,}판", r.games)] for r in lk.required],
                        enable_sort=False)
             self.lb_luck_required.setText(
-                "표본이 이만큼 쌓이기 전의 승률 차는 운과 구분이 안 됩니다."
+                f"이 범위 전체 승률 {lk.p * 100:.1f}% 기준 — 표본이 이만큼 쌓이기 전의 승률 차는 운과 구분이 안 됩니다."
                 + (f" 이 계정은 무승부가 전체의 {lk.draw_ratio:.0%}라 승+패 분모에 맞추려면 경기가 그만큼 더 필요합니다."
                    if lk.mixed else ""))
         box = self.box_luck_streak
@@ -5099,7 +5377,7 @@ class MainWindow(QMainWindow):
             for r, b in enumerate(t.bins):
                 if b.flag:
                     for c in range(tbl.columnCount()):
-                        tbl.item(r, c).setForeground(QColor(T.GREEN if b.flag > 0 else T.RED))
+                        tbl.item(r, c).setForeground(QColor(T.GOOD if b.flag > 0 else T.BAD))
             if not t.tested:
                 verdict.setText(f"{t.note or '표본이 모자라 판정하지 않습니다'} ({t.games:,}경기)")
                 verdict.setStyleSheet(dim)
@@ -5115,28 +5393,15 @@ class MainWindow(QMainWindow):
                 verdict.setText(f"차이가 안 보입니다 — {stat}")
                 verdict.setStyleSheet(dim)
 
-    def _wr_bar_row(self, label: str, win: int, draw: int, lose: int,
-                    avg_gf: float, avg_ga: float, mixed: bool, label_w: int = 132) -> QWidget:
-        """승률 막대 한 줄 — 라벨 + (승률·전적·평균득실) 막대. 승부처 탭과 같은 톤."""
-        row = QWidget()
-        h = QHBoxLayout(row)
-        h.setContentsMargins(4, 2, 4, 2)
-        a = QLabel(label)
-        a.setStyleSheet(f"color: {T.TEXT_DIM};")
-        a.setFixedWidth(label_w)
-        h.addWidget(a)
-        if win + draw + lose:
-            h.addWidget(win_rate_bar(win, draw, lose,
-                                     f"{win_rate_text(win, draw, lose, mixed, short=True)}  "
-                                     f"({wdl_text(win, draw, lose)})  득 {avg_gf:.2f} 실 {avg_ga:.2f}",
-                                     core.MIN_COND, mixed), 1)
-        else:
-            none = QLabel("경기 없음")
-            none.setStyleSheet(f"color: {T.TEXT_DIM};")
-            h.addWidget(none, 1)
-        return row
+    def _rate_list(self, rows: list[RateRow], mixed: bool) -> RateRowList:
+        """스크롤 페이지 안 승률 줄 목록(65 P4) — 줄 수만큼 높이 고정 · 그림은 목록 로더로."""
+        lst = RateRowList(fixed=True, tips={"rate": win_rate_note(mixed)})
+        lst.set_rows(rows)
+        self._start_list_icons(lst)
+        return lst
 
     def _render_diagnosis(self, details: list[dict]) -> None:
+        # 묶음은 그대로(내 등급 · 상대 등급 · 점유율 구간) · 꼴만 줄 목록으로(65 M4 — 위 필터 줄은 상대 전적에만)
         for box, mine, none_text in (
                 (self.box_diag_my_division, True, "등급 정보가 있는 경기가 없습니다."),
                 (self.box_diag_division, False, "상대 등급 정보가 있는 경기가 없습니다.")):
@@ -5145,20 +5410,22 @@ class MainWindow(QMainWindow):
                 details, self._ouid,
                 name_of=lambda i: self._division_names.get(i, str(i)), by_mine=mine)
             if divs:
-                for s in divs:
-                    box.addWidget(self._wr_bar_row(
-                        f"{s.name} ({s.games})", s.win, s.draw, s.lose,
-                        s.avg_gf, s.avg_ga, s.mixed))
+                box.addWidget(self._rate_list([
+                    self._rate_row(s.name, s.win, s.draw, s.lose, s.mixed, None,
+                                   sub=f"득 {s.avg_gf:.2f} · 실 {s.avg_ga:.2f}",
+                                   icon=("division", self._division_icon_key(s.division_id)), key=s.division_id)
+                    for s in divs], bool(divs[0].mixed)))
             else:
                 empty = QLabel(none_text)
                 empty.setStyleSheet(f"color: {T.TEXT_DIM};")
                 box.addWidget(empty)
 
         self._clear(self.box_diag_possession)
-        for b in core.possession_stats(details, self._ouid):
-            self.box_diag_possession.addWidget(self._wr_bar_row(
-                f"{b.label} ({b.span}%)", b.win, b.draw, b.lose,
-                b.avg_gf, b.avg_ga, b.mixed))
+        bands = core.possession_stats(details, self._ouid)
+        self.box_diag_possession.addWidget(self._rate_list([
+            self._rate_row(f"{b.label} ({b.span}%)", b.win, b.draw, b.lose, b.mixed, None,
+                           sub=f"득 {b.avg_gf:.2f} · 실 {b.avg_ga:.2f}")
+            for b in bands], bool(bands and bands[0].mixed)))
         self._render_discipline(details)
 
     def _render_discipline(self, details: list[dict]) -> None:
@@ -5195,7 +5462,7 @@ class MainWindow(QMainWindow):
             box.addWidget(row)
 
         sep = QLabel("이런 경기의 승률")
-        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 3px;")
+        sep.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold; padding-top: 3px;")
         box.addWidget(sep)
         for label, wdl in (("골대 맞힌 경기", ds.post_hit), ("내가 퇴장당한 경기", ds.my_red),
                            ("상대가 퇴장당한 경기", ds.opp_red)):
@@ -5207,8 +5474,7 @@ class MainWindow(QMainWindow):
             a.setFixedWidth(170)
             h.addWidget(a)
             if sum(wdl):
-                h.addWidget(win_rate_bar(*wdl, f"{win_rate_text(*wdl, ds.mixed, short=True)}  ({wdl_text(*wdl)})",
-                                         core.MIN_COND, ds.mixed, height=16), 1)
+                h.addWidget(wdl_rate_bar(*wdl, "", core.MIN_COND, ds.mixed), 1)
             else:
                 none = QLabel("경기 없음")
                 none.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -5235,8 +5501,8 @@ class MainWindow(QMainWindow):
         ctrl.addSpacing(16)
         # 결과 종류별 표시 토글(범례 겸용). result 코드로 필터한다.
         self.chk_shotmap_result: dict[int, QCheckBox] = {}
-        for result, text, color in ((core.SHOT_GOAL, "● 골", T.GREEN),
-                                    (core.SHOT_ON_TARGET, "● 유효슛", T.YELLOW),
+        for result, text, color in ((core.SHOT_GOAL, "● 골", T.GOOD),
+                                    (core.SHOT_ON_TARGET, "● 유효슛", T.WARN),
                                     (core.SHOT_OFF_TARGET, "● 빗나감", T.TEXT_DIM)):
             chk = QCheckBox(text)
             chk.setChecked(True)
@@ -5260,9 +5526,9 @@ class MainWindow(QMainWindow):
         self.lb_shotmap_summary.setWordWrap(True)
         v.addWidget(self.lb_shotmap_summary)
 
-        # 좌: 슛 좌표 산점도 / 우: 같은 슛을 유형·거리로 쪼갠 효율.
-        # 한 화면에 둬야 "먼 거리 효율이 낮다"와 "그 점들이 여기 몰려 있다"가
-        # 같이 읽힌다. 위쪽 콤보(내 슛/상대 슛)가 양쪽에 동시에 걸린다.
+        # 좌: 슛 좌표 산점도 / 우: 슈팅 분석(65 M8 — 슛 요약 · 최다 득점/실점 경기 · 슛 타입 분포 · 박스 안/밖 · 골·어시스트 순위).
+        # 한 화면에 둬야 "먼 거리 효율이 낮다"와 "그 점들이 여기 몰려 있다"가 같이 읽힌다. 위쪽 콤보(내 슛/상대 슛)는
+        # 그림·타입·거리에 걸리고, 요약·최다 경기·순위는 양쪽(또는 내 선수)을 늘 같이 보인다.
         body = QHBoxLayout()
         self.shotmap = ShotMapWidget()
         body.addWidget(self.shotmap, 3)
@@ -5270,23 +5536,62 @@ class MainWindow(QMainWindow):
         side = QScrollArea()
         side.setWidgetResizable(True)
         side.setFrameShape(QScrollArea.Shape.NoFrame)
-        side.setMinimumWidth(300)
+        side.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        side.setMinimumWidth(340)
+        self.shotmap_side = side
         host = QWidget()
         sv = QVBoxLayout(host)
         sv.setSpacing(8)
 
-        gb_type = QGroupBox("슛 유형별 득점률")
-        self.box_shot_type = QVBoxLayout(gb_type)
+        gb_sum = QGroupBox("슛 요약")
+        sumv = QVBoxLayout(gb_sum)
+        self.grid_shot_sum = QGridLayout()   # 칸만 — 다시 그릴 때 통째로 지운다(범위 글은 밖에: 같이 지우면 다음 그리기가 지워진 라벨을 만진다)
+        sumv.addLayout(self.grid_shot_sum)
+        self.grid_shot_sum.setHorizontalSpacing(12)
+        self.grid_shot_sum.setVerticalSpacing(2)
+        self.lb_shot_sum_scope = QLabel("")
+        self.lb_shot_sum_scope.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        self.lb_shot_sum_scope.setWordWrap(True)
+        sumv.addWidget(self.lb_shot_sum_scope)
+        sv.addWidget(gb_sum)
+
+        gb_best = QGroupBox("최다 득점 · 최다 실점 경기")
+        bv = QVBoxLayout(gb_best)
+        self.btn_shot_best, self.btn_shot_worst = QPushButton(), QPushButton()
+        for b, which in ((self.btn_shot_best, "best"), (self.btn_shot_worst, "worst")):
+            b.setFlat(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.setStyleSheet(f"QPushButton {{ text-align: left; padding: 3px 4px; color: {T.TEXT}; }}"
+                            f"QPushButton:hover {{ background: {T.PANEL_2}; }}")
+            b.setToolTip("눌러서 경기 상세")
+            b.clicked.connect(lambda _=False, k=which: self._open_shot_extreme(k))
+            bv.addWidget(b)
+        sv.addWidget(gb_best)
+
+        gb_type = QGroupBox("슛 타입 분포")
+        tv = QVBoxLayout(gb_type)
+        self.shotmap_types = ShotTypeRows(stacked=True)
+        tv.addWidget(self.shotmap_types)
         sv.addWidget(gb_type)
 
-        gb_dist = QGroupBox("거리별 득점률")
-        self.box_shot_dist = QVBoxLayout(gb_dist)
+        gb_dist = QGroupBox("박스 안 · 밖")
+        dv = QVBoxLayout(gb_dist)
+        self.shotmap_dist = ShotTypeRows(stacked=True)
+        dv.addWidget(self.shotmap_dist)
         sv.addWidget(gb_dist)
 
+        gb_rank = QGroupBox("골 · 어시스트 순위 (내 선수)")
+        rv = QVBoxLayout(gb_rank)
+        self.shot_scorers = ScorerList()
+        rv.addWidget(self.shot_scorers)
+        self.lb_shot_rank_note = QLabel("")
+        self.lb_shot_rank_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        rv.addWidget(self.lb_shot_rank_note)
+        sv.addWidget(gb_rank)
+
         note = QLabel(
-            f"분모는 골이 아니라 <b>슛</b>이다 — \"그 방식으로 찼을 때 들어가는 "
-            f"비율\".<br>슛 {core.MIN_BUCKET_SHOTS}개 미만인 칸은 비율을 내지 "
-            f"않는다({NA}).<br>괄호는 유효슛률 · {XG_METHOD_NOTE}.")
+            f"전환율 = 골 ÷ 시도 — 시도 {core.MIN_BUCKET_SHOTS}개 미만인 줄은 숨긴다({NA}).<br>"
+            f"막대는 골 ⊂ 유효슛 ⊂ 시도(길이는 가장 많은 줄 대비).<br>{XG_METHOD_NOTE}.")
         note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
         note.setWordWrap(True)
         sv.addWidget(note)
@@ -5294,6 +5599,8 @@ class MainWindow(QMainWindow):
         side.setWidget(host)
         body.addWidget(side, 2)
         v.addLayout(body, 1)
+        self._shot_sum_key = None
+        self.shot_sum = None
         return w
 
     def _render_shotmap(self) -> None:
@@ -5301,6 +5608,7 @@ class MainWindow(QMainWindow):
         mine = bool(self.cb_shotmap_side.currentData())
         sm = core.shot_map(details, self._ouid, mine=mine)
         self._render_shot_buckets(sm, mine)
+        self._render_shot_summary(details)
         # 체크된 결과 종류만 화면에 찍는다(요약 수치는 전체 기준 유지).
         shown = {r for r, chk in self.chk_shotmap_result.items() if chk.isChecked()}
         shots = [s for s in sm.shots if s.result in shown]
@@ -5320,22 +5628,81 @@ class MainWindow(QMainWindow):
         self.lb_shotmap_summary.setText(text)
 
     def _render_shot_buckets(self, sm, mine: bool) -> None:
-        """슛 유형·거리별 효율 패널. 내 슛이면 초록, 상대 슛(=내 실점)이면 빨강."""
-        color = T.GREEN if mine else T.RED
-        for box, buckets in (
-                (self.box_shot_type, core.shot_type_breakdown(sm)),
-                (self.box_shot_dist, core.shot_distance_breakdown(sm))):
-            self._clear(box)
-            if not buckets:
-                lb = QLabel("표시할 슛이 없습니다.")
+        """슛 타입 분포·박스 안/밖(65 M8) — [경기 결과] 득점/실점 유형과 같은 부품(ShotTypeRows). 내 슛 좋음 색 · 상대 슛 나쁨 색."""
+        tone = T.GOOD_FILL if mine else T.BAD_FILL
+        for rows, buckets in ((self.shotmap_types, core.shot_type_breakdown(sm)),
+                              (self.shotmap_dist, core.shot_distance_breakdown(sm))):
+            rows.tone = tone
+            rows.set_data(buckets, core.MIN_BUCKET_SHOTS)
+
+    def _render_shot_summary(self, details: list[dict]) -> None:
+        """슛 요약 · 최다 득점/실점 경기 · 골·어시스트 순위 — 콤보(내/상대)와 무관해 구간이 같으면 다시 세지 않는다
+        (그리기는 매번 — 선수 이름이 늦게 와도 따라가게)."""
+        # 구간 목록은 부를 때마다 새로 짓는다(_slice) — id 대신 원본 목록·길이·양 끝 경기로 잰다(_narrate_scope 와 같은 꼴)
+        key = (self._ouid, id(self._details), len(self._details), len(details),
+               details[0].get("matchId") if details else None, details[-1].get("matchId") if details else None)
+        if key != self._shot_sum_key or self.shot_sum is None:
+            self._shot_sum_key = key
+            self.shot_sum = core.shot_summary(details, self._ouid or "")
+        ss = self.shot_sum
+        g = self.grid_shot_sum
+        self._clear(g)
+        self.shot_sum_cells: dict[str, str] = {}   # 테스트가 읽는다(라벨 → 값 글)
+        if not ss.games:
+            lb = QLabel("슛 기록이 있는 경기가 없습니다.")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            g.addWidget(lb, 0, 0)
+        else:
+            m, o = ss.mine, ss.opp
+            xg_for, xg_against = m.goals - m.xg, o.goals - o.xg
+            cells = (
+                ("경기당 골", f"{ss.per_game(m.goals):.2f}", T.GOOD, ""),
+                ("경기당 실점", f"{ss.per_game(o.goals):.2f}", T.BAD, ""),
+                ("결정력", f"{core.pct(m.goals, m.shots):.1f}%", T.TEXT, "골 ÷ 슛"),
+                ("상대 결정력", f"{core.pct(o.goals, o.shots):.1f}%", T.TEXT, "상대 골 ÷ 상대 슛"),
+                ("기대 골 대비", f"{xg_for:+.1f}", delta_color(xg_for), f"골 {m.goals:,} − 기대 골 {m.xg:.1f} (+면 기대보다 더 넣음)"),
+                ("내준 기대 골 대비", f"{xg_against:+.1f}", delta_color(-xg_against),
+                 f"실점 {o.goals:,} − 내준 기대 골 {o.xg:.1f} (−면 기대보다 덜 먹음)"),
+                ("경기당 슛", f"{ss.per_game(m.shots):.1f}", T.TEXT, f"상대 {ss.per_game(o.shots):.1f}"),
+                ("유효슛 비율", f"{core.pct(m.on_target, m.shots):.0f}%", T.TEXT,
+                 f"유효슛(골 포함) ÷ 슛 · 상대 {core.pct(o.on_target, o.shots):.0f}%"),
+            )
+            for i, (label, val, color, tip) in enumerate(cells):
+                r, c = divmod(i, 2)
+                lb = QLabel(label)
                 lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-                box.addWidget(lb)
-                continue
-            for b in buckets:
-                extra = (f"유효 {b.effective_rate:.0f}% · xG {b.xg:.1f}"
-                         if b.enough else "")
-                box.addWidget(RatioBarRow(b.label, b.goals, b.shots, color,
-                                          enough=b.enough, extra=extra))
+                vl = QLabel(val)
+                vl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 18px;")
+                for x in (lb, vl):
+                    x.setToolTip(tip)
+                g.addWidget(lb, 2 * r, c)
+                g.addWidget(vl, 2 * r + 1, c)
+                self.shot_sum_cells[label] = val
+        self.lb_shot_sum_scope.setText(f"표시 구간 {ss.games:,}경기 · 몰수·오류 경기는 뺌 · 위치 기록이 있는 슛만")
+
+        for btn, d, head in ((self.btn_shot_best, ss.best, "최다 득점"), (self.btn_shot_worst, ss.worst, "최다 실점")):
+            ms = core.parse_match(d, self._ouid) if d is not None else None
+            btn.setEnabled(ms is not None)
+            # 두 줄 — 한 줄이면 긴 닉네임·날짜가 1280 폭의 오른쪽 패널(약 365px)을 넘는다
+            btn.setText(f"{head}  {ms.my_goals} : {ms.opp_goals}\nvs {ms.opponent} · {ms.date_text}"
+                        if ms is not None else f"{head}  —")
+
+        rows = []
+        for i, s in enumerate(ss.scorers[:config.SHOT_RANK_MAX], 1):
+            name = self._names.get(s.sp_id, str(s.sp_id))
+            rows.append(ScorerRow(i, name, s.goals, s.assists, s.grade, core.season_id_of(s.sp_id),
+                                  tip=f"{name} ({self._season_name(s.sp_id)}) — {s.games}경기 {s.goals}골 {s.assists}어시"
+                                      f" · 강화는 그 카드로 나선 경기 중 가장 높은 값"))
+        self.shot_scorers.set_rows(rows)
+        self._start_list_icons(self.shot_scorers)
+        self.lb_shot_rank_note.setText(
+            f"골 + 어시 많은 순 {len(rows)}명 · 카드(시즌)마다 따로" if rows else "골·어시스트 기록이 없습니다.")
+
+    def _open_shot_extreme(self, which: str) -> None:
+        """최다 득점/실점 경기 → 경기 상세 창 요약 탭(4판 A2 — 상세 창은 하나로)."""
+        d = getattr(self.shot_sum, which, None) if self.shot_sum is not None else None
+        if d is not None:
+            self._show_match_detail(d, tab="요약")
 
     ROUTE_COLUMNS = ["루트", "내 슛", "내 골", "내 결정력", "상대 슛", "상대 결정력", "차이 (나 − 상대)", "판정"]
     ROUTE_NOTE = {
@@ -5387,7 +5754,7 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_route, rows, enable_sort=False)
         for i, verdict in enumerate(verdicts):
             self.tbl_route.item(i, 0).setToolTip(self.ROUTE_NOTE[ar.rows[i].route])
-            color = {"▲": T.GREEN, "▼": T.RED, "표": T.TEXT_DIM}.get(verdict[0])
+            color = {"▲": T.GOOD, "▼": T.BAD, "표": T.TEXT_DIM}.get(verdict[0])
             if color:
                 for c in range(self.tbl_route.columnCount()):
                     self.tbl_route.item(i, c).setForeground(QColor(color))
@@ -5448,6 +5815,7 @@ class MainWindow(QMainWindow):
         sums.body.addLayout(grid)
         lv.addWidget(sums)
         self.tbl_ledger = self._make_table(self.LEDGER_COLUMNS, icons={0: "season"})
+        self._grade_badges("_render_ledger")
         lv.addWidget(self.tbl_ledger, 1)
         v.addWidget(self.box_ledger, 1)
         return w
@@ -5579,6 +5947,7 @@ class MainWindow(QMainWindow):
         self.lb_timeline_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_timeline_note)
         self.tbl_timeline = self._make_table(self.TIMELINE_COLUMNS, icons={1: "season"})
+        self._grade_badges("_render_timeline")
         v.addWidget(self.tbl_timeline, 1)
         return w
 
@@ -5694,11 +6063,11 @@ class MainWindow(QMainWindow):
         for group, status in ((lg.held, "보유 중"), (lg.recent, "최근 구매")):
             for h, price in group.rows:
                 t = h.trade
-                now = h.cur_grade if h.cur_grade is not None else t.grade
+                now_grade = h.cur_grade if h.cur_grade is not None else t.grade
                 gain = None if price is None or t.value is None else price - t.value
                 rows.append([IconCell(self._names.get(t.spid, str(t.spid)), None, core.season_id_of(t.spid)), status,
                              (t.date.strftime("%Y-%m-%d"), t.date.timestamp()), (str(t.grade or "-"), t.grade or 0),
-                             (self._bp(t.value), t.value or 0), (str(now or "-"), now or 0),
+                             (self._bp(t.value), t.value or 0), (str(now_grade or "-"), now_grade or 0),
                              (self._bp(price), price or 0), (self._bp(gain, sign=True), gain or 0)])
         self._fill(self.tbl_ledger, rows)
         self._maybe_start_prices(tl)
@@ -6130,8 +6499,6 @@ class MainWindow(QMainWindow):
         w.start()
 
     # ── 랭커 픽(6) — 화면 ─────────────────────────────────────────────
-    PICK_SHARE_COLUMNS = ["이름", "인원", "비율"]
-    PICK_CARD_COLUMNS = ["줄", "선수", "랭커", "비율", "강화"]
     PICK_TOP_SHARES = 10
 
     def _build_ranker_pick_tab(self) -> QWidget:
@@ -6153,29 +6520,28 @@ class MainWindow(QMainWindow):
         self.lb_pick_summary.setWordWrap(True)
         v.addWidget(self.lb_pick_summary)
 
+        # 67 R10 — 팀컬러·포메이션 상위 10 · 줄별 카드를 줄 목록으로(비율만큼 바탕 채움 · 많은 순이 정보라 정렬 없음)
         shares = QHBoxLayout()
-        self.tbl_pick_colors = self._make_table(self.PICK_SHARE_COLUMNS, icons={0: "emblem"})
-        self.tbl_pick_forms = self._make_table(self.PICK_SHARE_COLUMNS, icons={0: "formation"})
-        for title, tbl in (("팀컬러", self.tbl_pick_colors), ("포메이션", self.tbl_pick_forms)):
+        self.pick_colors_list = MetricRowList(fixed=True)
+        self.pick_forms_list = MetricRowList(fixed=True)
+        for title, lst in (("팀컬러", self.pick_colors_list), ("포메이션", self.pick_forms_list)):
             box = QVBoxLayout()
-            lb = QLabel(title)
-            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-            box.addWidget(lb)
-            tbl.setMinimumHeight(200)
-            tbl.setSortingEnabled(False)  # 많은 순이 정보다 — 켜 두면 머리글의 기본 정렬(이름)로 다시 섞였다(17단계 실화면)
-            box.addWidget(tbl)
+            box.addWidget(self._title_label(title))
+            box.addWidget(lst)
+            box.addStretch(1)
             shares.addLayout(box, 1)
         v.addLayout(shares)
 
-        lb = QLabel("줄별 많이 쓴 카드 — 랭커 = 그 줄에 그 카드를 선발로 쓴 사람 수 · 강화는 사람 수(많은 순)")
+        v.addWidget(self._title_label("줄별 많이 쓴 카드"))
+        lb = QLabel("랭커 = 그 줄에 그 카드를 선발로 쓴 사람 수 · 강화는 가장 많이 쓴 단계(툴팁에 나머지) · 두 번 누르면 선수 카드")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb.setWordWrap(True)
         v.addWidget(lb)
-        self.tbl_pick_cards = self._make_table(self.PICK_CARD_COLUMNS, icons={1: "season"})
-        self.tbl_pick_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
-        self.tbl_pick_cards.setMinimumHeight(260)
-        self.tbl_pick_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
-        v.addWidget(self.tbl_pick_cards)
+        self.pick_line_chips = self._line_chips(lambda: self._apply_line_filter(self.pick_cards_list, self.pick_line_chips))
+        v.addWidget(self.pick_line_chips)
+        self.pick_cards_list = MetricRowList(fixed=True)
+        self.pick_cards_list.doubleClicked.connect(self._on_card_row_double_clicked)
+        v.addWidget(self.pick_cards_list)
 
         lb = QLabel("내 스쿼드 vs 랭커 — 최근 경기 선발 · 칩 아래 = 그 카드를 선발로 쓴 랭커 비율")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -6240,8 +6606,8 @@ class MainWindow(QMainWindow):
         self.lb_pick_status.setVisible(bool(status))
         if summary is None:
             self.lb_pick_summary.setText("")
-            for tbl in (self.tbl_pick_colors, self.tbl_pick_forms, self.tbl_pick_cards):
-                self._fill(tbl, [])
+            for lst in (self.pick_colors_list, self.pick_forms_list, self.pick_cards_list):
+                lst.set_rows([])
             self._render_pick_pitch(None)
             return
         when = (taken or "")[:16].replace("T", " ")
@@ -6253,31 +6619,60 @@ class MainWindow(QMainWindow):
         if summary.used < config.RANKER_PICK_MIN_RANKERS:
             parts.append(f"{config.RANKER_PICK_MIN_RANKERS}명 미만이라 카드 비율은 흐리게 — 참고만")
         self.lb_pick_summary.setText(" · ".join(parts))
-        for tbl, counter, cell in ((self.tbl_pick_colors, summary.colors, self._emblem_cell),
-                                   (self.tbl_pick_forms, summary.formations, self._formation_cell)):
+        for lst, counter, kind in ((self.pick_colors_list, summary.colors, "emblem"),
+                                   (self.pick_forms_list, summary.formations, "formation")):
             total = sum(counter.values()) or 1
-            self._fill(tbl, [[cell(name), (str(n), n), (f"{n / total * 100:.0f}%", n / total)]
-                             for name, n in counter.most_common(self.PICK_TOP_SHARES)], enable_sort=False)
+            top = counter.most_common(self.PICK_TOP_SHARES)
+            peak = max((n for _name, n in top), default=0) or 1
+            lst.set_rows([MetricRow(name, "", (MetricCell(f"{n:,}명", "인원"), MetricCell(f"{n / total * 100:.0f}%", "비율", T.ACCENT)),
+                                    rank=i, icon=self._emblem_icon(name) if kind == "emblem" else
+                                    (("formation", formation_key(name)) if formation_key(name) else ()),
+                                    fill=n / peak, key=name)
+                          for i, (name, n) in enumerate(top, 1)])
+            self._start_list_icons(lst)
         few = summary.used < config.RANKER_PICK_MIN_RANKERS
-        rows = []
-        for line, cards in summary.lines:
-            for c in cards:
-                grades = " · ".join(f"{g}강 {n}" for g, n in c.grades.most_common(3) if isinstance(g, int))
-                rate = c.users / summary.used if summary.used else 0.0
-                rows.append([line, IconCell(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
-                                            None, core.season_id_of(c.spid)),
-                             (str(c.users), c.users), (f"{rate * 100:.0f}%", rate), grades])
-        self._fill(self.tbl_pick_cards, rows, enable_sort=False)
-        for r, card in enumerate(c for _ln, cs in summary.lines for c in cs):
-            item = self.tbl_pick_cards.item(r, 1)
-            if item is not None:
-                item.setData(Qt.ItemDataRole.UserRole, card.spid)  # 더블클릭 → 선수 카드
-            if few:
-                for col in range(len(self.PICK_CARD_COLUMNS)):
-                    it = self.tbl_pick_cards.item(r, col)
-                    if it is not None:
-                        it.setForeground(QColor(T.TEXT_DIM))
+        self._set_card_rows(self.pick_cards_list, self.pick_line_chips,
+                            [(line, c, c.users / summary.used if summary.used else 0.0, None)
+                             for line, cards in summary.lines for c in cards], few)
         self._render_pick_pitch(summary)
+
+    # ── 67 R10 줄별 카드 목록(랭커 픽 [픽] · [추천] 같이) ──
+    def _line_chips(self, on_change) -> ChoiceChips:
+        """[전체 | 공격 | 공미 | 미드 | 수미 | 수비 | GK] — 줄 이름은 축구장 줄(PITCH_ROWS) 그대로."""
+        chips = ChoiceChips([("전체", None)] + [(name, name) for name, _rng in core.PITCH_ROWS])
+        chips.currentIndexChanged.connect(lambda _i: on_change())
+        return chips
+
+    @staticmethod
+    def _apply_line_filter(lst: MetricRowList, chips: ChoiceChips) -> None:
+        line = chips.currentData()
+        lst.set_filter(None if line is None else (lambda r, ln=line: r.sort.get("line") == ln))
+
+    def _set_card_rows(self, lst: MetricRowList, chips: ChoiceChips, cards: list, few: bool, who: str = "랭커") -> None:
+        """cards = [(줄, PickCard|RecCard, 비율 0~1, 시세 글 | None)] — 줄 순서(공격 → GK) 그대로. 순위는 줄 안에서.
+        그림은 카드 시즌 배지 · 줄은 보조 글 · 강화는 가장 많은 단계 하나(툴팁에 셋)."""
+        peak = max((rate for _l, _c, rate, _p in cards), default=0) or 1
+        rows, seen = [], Counter()
+        for line, c, rate, price in cards:
+            seen[line] += 1
+            grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
+            grades = " · ".join(f"{g}강 {k}명" for g, k in c.grades.most_common(3) if isinstance(g, int))
+            cells = [MetricCell(f"{c.users:,}명", who), MetricCell(f"{rate * 100:.0f}%", "비율", T.ACCENT),
+                     MetricCell(f"{grade}강" if grade is not None else NA, "많이 쓴 강화", None, grades)]
+            if price is not None:
+                cells.append(MetricCell(price, "시세"))
+            rows.append(MetricRow(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})", line,
+                                  tuple(cells), rank=seen[line], icon=("season", core.season_id_of(c.spid)),
+                                  fill=rate / peak, dim=few, key=c.spid, sort={"line": line},
+                                  tip="참고만 — 랭커 수가 적습니다" if few else ""))
+        lst.set_rows(rows)
+        self._apply_line_filter(lst, chips)
+        self._start_list_icons(lst)
+
+    def _on_card_row_double_clicked(self, index) -> None:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        if row is not None and isinstance(row.key, int):
+            self._show_player_info(row.key)
 
     def _render_pick_pitch(self, summary) -> None:
         """내 최근 경기 선발 — 칩에 그 카드의 랭커 픽률(같은 카드를 어느 자리든 선발로 쓴 비율)."""
@@ -6311,7 +6706,6 @@ class MainWindow(QMainWindow):
     TRAIT_KEY = "traits"   # [메타 분석 › 포지션 특성] — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
     PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
     PICK_DATA_KEYS = PICK_KEYS + (TRAIT_KEY,)  # 무효화 목록 — 랭커 픽·특성 로더 진행 · 끄기/지우기 · 정리 끝
-    REC_CARD_COLUMNS = ["줄", "선수", "후보", "비율", "강화", "시세"]
     REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
     REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
 
@@ -6379,11 +6773,12 @@ class MainWindow(QMainWindow):
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb.setWordWrap(True)
         v.addWidget(lb)
-        self.tbl_rec_cards = self._make_table(self.REC_CARD_COLUMNS, icons={1: "season"})
-        self.tbl_rec_cards.setSortingEnabled(False)  # 줄 순서(공격 → GK)가 정보다
-        self.tbl_rec_cards.setMinimumHeight(260)
-        self.tbl_rec_cards.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
-        v.addWidget(self.tbl_rec_cards, 1)
+        self.rec_line_chips = self._line_chips(lambda: self._apply_line_filter(self.rec_cards_list, self.rec_line_chips))
+        v.addWidget(self.rec_line_chips)
+        self.rec_cards_list = MetricRowList()   # 67 R10 — 줄 순서(공격 → GK)가 정보다 · 두 번 누르면 선수 카드
+        self.rec_cards_list.setMinimumHeight(260)
+        self.rec_cards_list.doubleClicked.connect(self._on_card_row_double_clicked)
+        v.addWidget(self.rec_cards_list, 1)
         self.rec: core.Recommend | None = None  # 테스트가 집계를 본다
         return w
 
@@ -6433,7 +6828,7 @@ class MainWindow(QMainWindow):
         if rec is None or not rec.enough:
             self.lb_rec_summary.setText(self._rec_sources_text(rec) if rec is not None and rec.total else "")
             self._fill(self.tbl_rec_stand, [], enable_sort=False)
-            self._fill(self.tbl_rec_cards, [], enable_sort=False)
+            self.rec_cards_list.set_rows([])
             return
         self.lb_rec_summary.setText(self._rec_sources_text(rec))
         stand = []
@@ -6447,27 +6842,13 @@ class MainWindow(QMainWindow):
         stand.append(["포메이션", form or "모름", "-", f"후보 {n}명 중 {same}명이 같은 배치" if form else "-"])
         self._fill(self.tbl_rec_stand, stand, enable_sort=False)
         few = rec.total < config.RANKER_PICK_MIN_RANKERS
-        rows_out, cards = [], []
+        cards = []
         for line, cs in rec.lines:
             for c in cs:
                 grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
-                grades = " · ".join(f"{g}강 {k}" for g, k in c.grades.most_common(3) if isinstance(g, int))
                 price = prices.get((c.spid, grade)) if grade is not None else None
-                rows_out.append([line, IconCell(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})",
-                                                None, core.season_id_of(c.spid)),
-                                 (str(c.users), c.users), (f"{c.rate * 100:.0f}%", c.rate), grades,
-                                 (self._bp(price[0]) if price else "-", price[0] if price else -1)])
-                cards.append(c)
-        self._fill(self.tbl_rec_cards, rows_out, enable_sort=False)
-        for r, c in enumerate(cards):
-            item = self.tbl_rec_cards.item(r, 1)
-            if item is not None:
-                item.setData(Qt.ItemDataRole.UserRole, c.spid)  # 더블클릭 → 선수 카드
-            if few:
-                for col in range(len(self.REC_CARD_COLUMNS)):
-                    it = self.tbl_rec_cards.item(r, col)
-                    if it is not None:
-                        it.setForeground(QColor(T.TEXT_DIM))
+                cards.append((line, c, c.rate, self._bp(price[0]) if price else NA))   # 시세 = 가장 많이 쓴 강화의 받아 둔 값
+        self._set_card_rows(self.rec_cards_list, self.rec_line_chips, cards, few, "후보")
 
     def _rec_sources_text(self, rec) -> str:
         """후보 출처별 인원 — ②(내가 만난 상대)는 ①과 뽑힌 방식이 달라 섞이면 편향된다(ROADMAP 11-lite)."""
@@ -6500,21 +6881,54 @@ class MainWindow(QMainWindow):
         self.cb_rtrend_tier.currentIndexChanged.connect(lambda _i: self._invalidate("ranktrend"))
         top.addWidget(self.cb_rtrend_tier)
         v.addLayout(top)
-        # 57 K7 — 마지막 스냅숏 1~3위 카드(하루 판수 · 하루 FC · 승률 막대 · 갱신 시각)
+        # 57 K7 — 마지막 스냅숏 1~3위 카드 · 67 R9 랭킹 줄 꼴(엠블럼 · 미니 축구장 · 점수 · 구단가치 · 승무패 막대)
         cards = QHBoxLayout()
-        self.top3_cards: list[list] = []   # [카드, 글, 승률 막대(그릴 때마다 win_rate_bar 로 바꿔 끼움)]
+        self.top3_cards: list[Top3Slot] = []
         for _ in range(config.K7_TOP_N):
             card = Card(margin=12)
+            icons = QHBoxLayout()
+            icons.setSpacing(8)
+            emblem, pitch = QLabel(), QLabel()
+            for lb in (emblem, pitch):
+                lb.setVisible(False)
+                icons.addWidget(lb)
+            icons.addStretch(1)
             body = QLabel("")
             body.setWordWrap(True)
-            card.body.addWidget(body)
+            wdl = WdlBar(compact=True)
+            rate = QLabel("")
+            rate.setStyleSheet(f"color: {T.TEXT_DIM};")
+            card.body.addLayout(icons)
+            for w_ in (body, wdl, rate):
+                card.body.addWidget(w_)
             cards.addWidget(card, 1)
-            self.top3_cards.append([card, body, None])
+            self.top3_cards.append(Top3Slot(card, body, wdl, rate, emblem, pitch))
         self.top3_box = QWidget()
         self.top3_box.setLayout(cards)
         cards.setContentsMargins(0, 0, 0, 0)
         v.addWidget(self.top3_box)
         self.top3_data: list = []   # 테스트가 본다
+        self._top3_icon_loader = None
+        # 67 R5 — 챔피언스 달성 판수(히스토그램 + 빠른 10%·중앙값·느린 10% · 구단가치 구간별 중앙값). 대시보드 H5 와 같은 행
+        self.champ_box = QWidget()
+        cg = QHBoxLayout(self.champ_box)
+        cg.setContentsMargins(0, 0, 0, 0)
+        left = QVBoxLayout()
+        self.lb_champ_title = self._title_label("챔피언스 달성 판수")
+        self.lb_champ_note = self._note_label()
+        self.champ_hist = charts.HistogramChart()
+        self.champ_hist.setMinimumHeight(160)
+        for w_ in (self.lb_champ_title, self.lb_champ_note, self.champ_hist):
+            left.addWidget(w_)
+        right = QVBoxLayout()
+        right.addWidget(self._title_label("구단가치 구간별 (판수 중앙값 · 적을수록 빠름)"))
+        self.champ_value_list = AvgBarList(higher_better=False)
+        right.addWidget(self.champ_value_list)
+        right.addStretch(1)
+        cg.addLayout(left, 3)
+        cg.addLayout(right, 2)
+        v.addWidget(self.champ_box)
+        self.champ_data: core.ChampGames | None = None   # 테스트가 본다
         grid = QGridLayout()
         self.rtrend_titles: dict[str, QLabel] = {}
         self.rtrend_charts: dict[str, charts.AreaTrendChart] = {}
@@ -6545,6 +6959,7 @@ class MainWindow(QMainWindow):
             pass
         self.rank_trend = trend
         self._render_top3()
+        self._render_champ_games()
         n = len(trend.taken)
         if n < 2:
             if not (config.WEB_DATA and config.RANK_COLLECT) and not n:
@@ -6586,14 +7001,18 @@ class MainWindow(QMainWindow):
         cards = self._rank_read(lambda c: core.top3(c, person)) or []
         self.top3_data = cards
         self.top3_box.setVisible(bool(cards))
-        for i, slot in enumerate(self.top3_cards):
-            card, body, old = slot
+        old = self._top3_icon_loader
+        if old is not None and old.isRunning():
+            old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        self._top3_icon_loader = None
+        emblems = []
+        for i, s in enumerate(self.top3_cards):
             c = cards[i] if i < len(cards) else None
-            card.setVisible(c is not None)
+            s.card.setVisible(c is not None)
             if c is None:
                 continue
-            card.title.setText(f"{c.rank}위 {c.nickname}")
-            card.title.setVisible(True)
+            s.card.title.setText(f"{c.rank}위 {c.nickname}")
+            s.card.title.setVisible(True)
             gpd = f"하루 {c.games_per_day:,.1f}판" if c.games_per_day is not None else "하루 판수 모름"
             if c.fc_lo is None:
                 fc = "하루 FC 모름"
@@ -6602,17 +7021,82 @@ class MainWindow(QMainWindow):
             else:
                 fc = f"하루 {c.fc_lo:,.0f}~{c.fc_hi:,.0f} FC"
             elo = f"{c.elo:,.0f}점" if c.elo is not None else ""
-            body.setText(f"{elo} · {gpd} · {fc} · 갱신 {self._at(c.ref_time)}".lstrip(" ·"))
-            # 승률 막대는 공용 부품으로(표본 흐림 규칙 — test_winrate_bars_use_shared_helper) · 앱 규칙 승÷전체
-            bar = win_rate_bar(c.win, c.draw, c.lose,
-                               f"승률 {c.win_pct:.1f}%" if c.win_pct is not None else "승률 -", core.MIN_COND, False)
-            if old is not None:
-                card.body.removeWidget(old)
-                old.deleteLater()
-            card.body.addWidget(bar)
-            slot[2] = bar
-            card.setToolTip("하루 판수 = 원본(14일) 안 처음 본 수집 → 마지막 수집 사이 (승+무+패) 증가 ÷ 날 수 · "
-                            f"하루 FC = 시즌 FC 추정 범위(챔스 이상 승리 {self._champ_fc_text()}) ÷ 시즌 시작부터 날 수 · 승률 = 시즌 승÷전체")
+            value = f"구단가치 {self._won(c.value)}" if c.value is not None else ""
+            s.body.setText(" · ".join(t for t in (elo, value, gpd, fc, f"갱신 {self._at(c.ref_time)}") if t))
+            # 67 R9 — 승무패 세 칸 막대(승률 한 값 막대 대신) · 표본 흐림 규칙은 그대로 · 앱 규칙 승÷전체
+            n = core.rated(c.win, c.draw, c.lose, False)
+            weak = core.is_weak(n, core.MIN_COND)
+            s.wdl.set_counts(c.win, c.draw, c.lose, weak)
+            s.wdl.setProperty("weak", weak)
+            s.wdl.setProperty("games", n)
+            s.rate.setText((f"시즌 승률 {c.win_pct:.1f}% · 승÷전체" if c.win_pct is not None else "시즌 승률 -")
+                           + (f" · {sample_text(n, False)}" if weak else ""))
+            key = formation_key(c.formation) if c.formation else ""
+            pm = formation_pixmap(key) if key else QPixmap()
+            s.pitch.setPixmap(pm)
+            s.pitch.setToolTip(c.formation if not pm.isNull() else "")
+            s.pitch.setVisible(not pm.isNull())
+            label = teamcolor.label(c.team_color, None) if c.team_color else ""
+            icon = self._emblem_icon(label) if label else ()
+            s.emblem.clear()
+            s.emblem.setVisible(False)
+            s.emblem.setToolTip(label)
+            if icon:
+                emblems.append((i, icon[1], images.icon_url(*icon)))
+            s.card.setToolTip("하루 판수 = 원본(14일) 안 처음 본 수집 → 마지막 수집 사이 (승+무+패) 증가 ÷ 날 수 · "
+                              f"하루 FC = 시즌 FC 추정 범위(챔스 이상 승리 {self._champ_fc_text()}) ÷ 시즌 시작부터 날 수 · 승률 = 시즌 승÷전체"
+                              + (f" · 팀컬러 {label}" if label else "") + (f" · 포메이션 {c.formation}" if c.formation else ""))
+        if emblems:
+            loader = IconLoader([("emblem", key, url) for _i, key, url in emblems], self._icon_dir)
+            slots = {key: [self.top3_cards[i].emblem for i, k, _u in emblems if k == key] for _i, key, _u in emblems}
+            loader.loaded.connect(lambda _k, key, path, m=slots: self._put_top3_emblem(m.get(key, []), path))
+            loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+            self._top3_icon_loader = loader
+            self._icon_loaders.append(loader)
+            loader.start()
+
+    @staticmethod
+    def _put_top3_emblem(labels: list, path: str) -> None:
+        pm = QPixmap(path) if path else QPixmap()
+        for lb in labels:
+            if not pm.isNull():
+                lb.setPixmap(pm.scaledToHeight(config.EMBLEM_HEAD_PX, Qt.TransformationMode.SmoothTransformation))
+            lb.setVisible(not pm.isNull())
+
+    def _render_champ_games(self) -> None:
+        """67 R5 — 챔피언스 달성 판수. 대시보드 H5(club_head.champ_median)와 같은 행·같은 숨김 — 관문 없음(익명 표 · H5 와 같게)."""
+        cg = self._rank_read(core.champ_games)
+        self.champ_data = cg
+        show = cg is not None and cg.state == "ok" and cg.n > 0
+        self.champ_box.setVisible(cg is not None and cg.state != "no_table")
+        if cg is None or cg.state == "no_table":
+            return
+        if not show:
+            self.lb_champ_note.setText("모으는 중 — 랭킹 수집의 사람별 처리가 돌면 이 시즌 첫 챔피언스까지 판수를 셉니다.")
+            self.champ_hist.set_data([], 1, [])
+            self.champ_value_list.set_rows([])
+            return
+        if cg.hidden:
+            self.lb_champ_note.setText("이번 시즌은 판수 기록이 시즌 시작보다 늦게 시작돼 보이지 않습니다 — 다음 시즌부터 처음부터 셉니다.")
+            self.champ_hist.set_data([], 1, [])
+            self.champ_value_list.set_rows([])
+            return
+        self.lb_champ_note.setText(
+            f"이번 시즌 챔피언스에 처음 닿기까지 판수 · {cg.n:,}명 · 빠른 10% {cg.p10:,.0f}판 · 중앙값 {cg.p50:,.0f}판 · "
+            f"느린 10% {cg.p90:,.0f}판 · {config.R5_HIST_MAX:,}판 넘으면 마지막 칸")
+        bins = [lo for lo, _n in cg.hist]
+        marks = [(cg.p10, "빠른 10%", T.CHART_NEUTRAL, True),
+                 (cg.p50, "중앙값", T.CHART_LINE, False), (cg.p90, "느린 10%", T.CHART_NEUTRAL, True)]
+        self.champ_hist.set_data(bins, config.R5_HIST_BIN, [n for _lo, n in cg.hist], "구단주",
+                                 marks=[m for m in marks if m[0] <= config.R5_HIST_MAX + config.R5_HIST_BIN],
+                                 open_last=True)
+        rows = []
+        for b, n, med in cg.by_value:
+            name = self._bin_label(b) if b is not None else "모름"
+            rows.append(AvgBar(name, med, f"{med:,.0f}판" if med is not None else "—", f"{n:,}명", key=name))
+        self.champ_value_list.set_rows(rows, base=cg.p50)
+        self.champ_value_list.setToolTip("구단가치는 챔피언스에 닿은 때 값 · 칸 경계는 마지막 수집의 구단가치 분포(구단가치 탭과 같은 칸) · "
+                                         "점선 = 전체 중앙값 · 적을수록 빨리 닿았다")
 
     def _draw_trend(self, key: str, title: str, series: list[tuple[str, list]], dates: list, fmt: str,
                     axis_name: str) -> None:
@@ -6636,8 +7120,7 @@ class MainWindow(QMainWindow):
         self.rtrend_titles[key].setText(f"{title} · 실선 {main_name}")
 
     # ── 랭킹 추이 [메타 변화](2.3.1 B1) · [점수 분포](B5) — rank.db 영구 집계, 요청 0 ─────────────
-    META_COLUMNS = ["이름", "지금", "그때", "변화"]
-
+    # 67 R7 — 표 둘 → 사용 증가 순 줄 목록 둘(변화 색 · 사람 수 증감은 보조 글)
     def _build_meta_trend_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -6657,20 +7140,31 @@ class MainWindow(QMainWindow):
         top.addWidget(self.cb_meta_form)
         v.addLayout(top)
         row = QHBoxLayout()
-        self.meta_tables: dict[str, FitTableWidget] = {}
+        self.meta_lists: dict[str, MetricRowList] = {}
         self.meta_titles: dict[str, QLabel] = {}
         for kind, name in (("team_color", "팀컬러"), ("formation", "포메이션")):
             box = QVBoxLayout()
             title = QLabel(name)
             title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            table = self._make_table(self.META_COLUMNS, icons={0: self.NAME_ICON[kind]})
+            lst = MetricRowList()
             box.addWidget(title)
-            box.addWidget(table, 1)
+            box.addWidget(lst, 1)
             row.addLayout(box, 1)
-            self.meta_tables[kind], self.meta_titles[kind] = table, title
+            self.meta_lists[kind], self.meta_titles[kind] = lst, title
         v.addLayout(row, 1)
         self.meta_trend: rankcollect.MetaTrend | None = None   # 테스트가 본다
         return w
+
+    @staticmethod
+    def meta_rise_order(rows: list) -> list:
+        """사용 증가 순(변화 %p 큰 것부터) — 같으면 지금 인원 순."""
+        return sorted(rows, key=lambda r: (-r.diff_pp, -r.now_n, r.key or ""))
+
+    def _meta_icon(self, kind: str, label: str) -> tuple:
+        if kind == "team_color":
+            return self._emblem_icon(label)
+        key = formation_key(label)
+        return ("formation", key) if key else ()
 
     def _render_meta_trend(self) -> None:
         trend = rankcollect.MetaTrend()
@@ -6691,31 +7185,28 @@ class MainWindow(QMainWindow):
             self.lb_meta_note.setText(
                 "모으는 중 — 같은 시즌 스냅숏이 3일치 넘게 쌓이면 비교합니다(하루 한 번 수집)." if config.RANK_COLLECT else
                 self.rank_off_note("메타 변화를 보여 줍니다"))
-            for kind, table in self.meta_tables.items():
-                self._fill(table, [])
+            for kind, lst in self.meta_lists.items():
+                lst.set_rows([])
                 self.meta_titles[kind].setText("팀컬러" if kind == "team_color" else "포메이션")
             return
         days = round(trend.days or 0)
         self.lb_meta_note.setText(
             f"넥슨 데이터 기준 {trend.now_at[5:16].replace('T', ' ')} 과 {trend.then_at[5:16].replace('T', ' ')}"
-            f"({days}일 전) 비교 · 1만 위 안 랭킹 그대로 · 이름이 같은 팀컬러는 합쳐서 셉니다 · "
+            f"({days}일 전) 비교 · 1만 위 안 랭킹 그대로 · 이름이 같은 팀컬러는 합쳐서 셉니다 · 사용 증가 순 · "
             f"두 시점 다 {config.META_MIN_USERS}명 미만인 줄은 흐리게")
-        for kind, table in self.meta_tables.items():
+        for kind, lst in self.meta_lists.items():
             self.meta_titles[kind].setText(f"{'팀컬러' if kind == 'team_color' else '포메이션'} — {days}일 전 대비")
-            rows = trend.rows.get(kind) or []
-            self._fill(table, [[self._name_cell(kind, r.key or core.blank_label(kind, how if kind == "formation" else "raw")), (f"{r.now_pct:.1f}% ({r.now_n:,})", r.now_pct),
-                                (f"{r.then_pct:.1f}% ({r.then_n:,})", r.then_pct),
-                                (f"{r.diff_pp:+.1f}%p", r.diff_pp)] for r in rows], enable_sort=False)
-            for i, r in enumerate(rows):
-                diff = table.item(i, 3)
-                if diff is not None and abs(r.diff_pp) >= 0.05:
-                    diff.setForeground(QColor(T.CHART_UP if r.diff_pp > 0 else T.CHART_DOWN))
-                if r.thin:
-                    for c in range(table.columnCount()):
-                        it = table.item(i, c)
-                        if it is not None:
-                            it.setForeground(QColor(T.TEXT_DIM))
-            table.setSortingEnabled(True)
+            rows = self.meta_rise_order(trend.rows.get(kind) or [])
+            out = []
+            for r in rows:
+                name = r.key or core.blank_label(kind, how if kind == "formation" else "raw")
+                out.append(MetricRow(name, f"{r.now_n - r.then_n:+,}명 ({r.then_n:,} → {r.now_n:,})", (
+                    MetricCell(f"{r.now_pct:.1f}%", "지금"),
+                    MetricCell(f"{r.then_pct:.1f}%", "그때"),
+                    MetricCell(f"{r.diff_pp:+.1f}%p", "변화", delta_color(r.diff_pp))),
+                    icon=self._meta_icon(kind, name), dim=r.thin, key=r.key))
+            lst.set_rows(out)
+            self._start_list_icons(lst)
 
     ELO_DIST_COMPARE = [("7일 전", "7d"), ("시즌 첫 스냅숏", "season"), ("비교 없음", "none")]
 
@@ -6788,13 +7279,16 @@ class MainWindow(QMainWindow):
     # ── 랭커 메타 ② 스냅숏 읽기(2.4.1) — rank.db 원본 14일 · 영구 집계, 요청 0 · 쓰기 0 ───────────────
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
     RANK_VIEW_KEYS = ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist",
-                      "daywr", "valuescore", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
+                      "daywr", "tcboard", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
                       "traits", "opprank", "predcheck", "rewards_rank")
 
     def _invalidate_rank_views(self) -> None:
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
+        dlg = self._teamcolor_dialog
+        if dlg is not None and not sip.isdeleted(dlg) and dlg.isVisible():
+            dlg.refresh_rank()   # 67 3회차 M11 — 열어 둔 팀컬러 창은 무효화 표 밖이라 여기서 1만 명 칸만
         if self._tc_minor_only:
             self._invalidate("teamcolor")   # 57 K8 비주류 기준(마지막 스냅숏 1만 명)이 바뀐다
 
@@ -7014,6 +7508,7 @@ class MainWindow(QMainWindow):
     # [메타 분석 › 포지션 특성] 32단계 — 상위 랭커가 카드에 넣어 둔 특성·코치(스쿼드메이커). 받기는 이 탭이 보일 때만(TraitLoader)
     TRAIT_COLUMNS = ["포지션", "일반 (5강~)", "신규 (8강~)", "훈련 (11강~)", "훈련 코치"]
     TRAIT_KIND_COLUMNS = ("normal", "new", "train", "coach")   # 위 표 1~4열
+    TRAIT_KIND_SHORT = ("일반", "신규", "훈련", "코치")          # 자리 줄 칸 라벨(67 R7) — 위 순서 그대로
     MY_TRAIT_COLUMNS = ["포지션", "선수", "강화", "일반", "신규", "훈련", "훈련 코치"]
     MY_TRAIT_MAX_H = 220   # 내 스쿼드 표 — 11줄을 다 보이려 하면 랭커 표가 1280×720 에서 눌린다(넘치면 표 안 스크롤)
 
@@ -7041,13 +7536,19 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_my_trait)
         self.tbl_my_traits = self._make_table(self.MY_TRAIT_COLUMNS, icons={3: "trait", 4: "trait", 5: "train"})
         self.tbl_my_traits.setSortingEnabled(False)   # 자리 순서(공격 → GK)
+        self._grade_badges("_render_my_traits")
         self.tbl_my_traits.setMaximumHeight(self.MY_TRAIT_MAX_H)
         v.addWidget(self.tbl_my_traits)
         self._meta_top(v, self.lb_trait_note, ("순위 구간", self.cb_trait_tier), ("포메이션", self.cb_trait_form))
         # 칸 = 육각 판 + 아이콘 + 아래 % (TraitIconDelegate) — 일반·신규는 traits/, 훈련·코치는 trainingTrait/ (같은 표)
+        # 67 R7 — 자리마다 종류별 1위 한 줄(칸 = % + 아래 특성 이름) · 상위 N개 표는 접기 아래
+        self.trait_slots = MetricRowList()
+        v.addWidget(self.trait_slots, 1)
         self.tbl_traits = self._make_table(self.TRAIT_COLUMNS, icons={1: "trait", 2: "trait", 3: "train", 4: "train"})
         self.tbl_traits.setSortingEnabled(False)   # 포지션 순서(공격 → GK)가 정보다
-        v.addWidget(self.tbl_traits, 1)
+        self.tbl_traits.setMinimumHeight(260)
+        self.trait_table_box = Collapsible(f"자리별 상위 {config.TRAIT_TOP_NAMES}개 표", self.tbl_traits)
+        v.addWidget(self.trait_table_box)
         lb = self._note_label()
         lb.setText("% = 이 포메이션·포지션 선수 전부(칸이 안 열린 선수 포함) 중 넣은 비율 — 신규(8강~)·훈련(11강~)은 칸이 열린"
                    " 선수가 적어 낮게 나옵니다 · 코치는 한 선수 셋까지라 합이 100%를 넘습니다 · 게임 안에서 팀 전술을 저장한 때"
@@ -7214,6 +7715,7 @@ class MainWindow(QMainWindow):
         if usage is None:
             self.lb_trait_note.setText("")
             self._fill(self.tbl_traits, [], enable_sort=False)
+            self.trait_slots.set_rows([])
             return
         cover = " · ".join(f"상위 {t:,}: {usage.cover.get(t, 0)}/{min(t, len(targets))}" for t in config.TRAIT_TIERS)
         notes = [f"특성을 본 구단주 {usage.used}명 / 낡은 값 {usage.stale}명 / 대상 {usage.targets}명",
@@ -7239,6 +7741,16 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_traits, rows, enable_sort=False)
         if usage.thin or usage.few:
             self._dim_rows(self.tbl_traits, list(range(len(rows))))
+        cards = []
+        for s in usage.slots:
+            cells = []
+            for kind, short in zip(self.TRAIT_KIND_COLUMNS, self.TRAIT_KIND_SHORT):
+                t = s.top(kind, 1)
+                cells.append(MetricCell(f"{t[0][2] * 100:.0f}%", f"{short} · {t[0][0]}", None, t[0][0]) if t
+                             else MetricCell(NA, short))
+            cards.append(MetricRow(self._positions.get(s.position, str(s.position)), f"{s.players}명", tuple(cells),
+                                   dim=usage.thin or usage.few, key=s.position))
+        self.trait_slots.set_rows(cards)
 
     # [메타 분석 › 하루 승률] B2
     DAYWR_COLUMNS = ["이름", "인원", "승·무·패", "승률", "95% 구간", "전체 대비"]
@@ -7304,77 +7816,125 @@ class MainWindow(QMainWindow):
                                  r.diff_pp if r.diff_pp is not None else 0)] for r in rows], enable_sort=False)
             for i, r in enumerate(rows):
                 diff = table.item(i, 5)
-                if diff is not None and not r.no_diff and r.diff_pp is not None:
-                    diff.setForeground(QColor(T.CHART_UP if r.diff_pp > 0 else T.CHART_DOWN))
+                if not r.no_diff and r.diff_pp is not None:
+                    delta_item(diff, r.diff_pp)
             self._dim_rows(table, [i for i, r in enumerate(rows) if r.thin or r.no_diff])
             table.setSortingEnabled(True)
 
-    # [메타 분석 › 가성비] B3
-    VALUE_SCORE_COLUMNS = ["팀컬러", "점수", "평균 ELO", "시즌 승률", "구단가치 중앙값", "챔스 이상", "인원"]
+    # [메타 분석 › 팀컬러] 67 R1 — 1만 명 팀컬러 목록(옛 [가성비] B3 를 한 칸으로 합침 · U1). 묶기는 rankmeta.team_color_board
+    TC_BOARD_SORTS = (("share", "점유율 순"), ("elo", "평균 점수 순"), ("day", "하루 승률 순(어제 순위 기준)"), ("score", "가성비 순"))
 
-    def _build_value_score_tab(self) -> QWidget:
+    def _build_tc_board_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
-        self.lb_vscore_note = self._note_label()
-        self.cb_vscore_tier = self._tier_combo("valuescore")
-        self._meta_top(v, self.lb_vscore_note, ("순위 구간", self.cb_vscore_tier), ("", self._tc_filter_box()))
-        self.tbl_vscore = self._make_table(self.VALUE_SCORE_COLUMNS, icons={0: "emblem"})
-        v.addWidget(self.tbl_vscore, 1)
-        self.value_scores: core.ValueScore | None = None
+        self.lb_tcboard_note = self._note_label()
+        self.cb_tcboard_tier = self._tier_combo("tcboard")   # 3회차 M3 — 옛 [가성비] 의 순위 구간 콤보를 남긴다
+        self._meta_top(v, self.lb_tcboard_note, ("순위 구간", self.cb_tcboard_tier))
+        bar = QHBoxLayout()
+        bar.addWidget(self._tc_filter_chips())
+        bar.addStretch(1)
+        self.ed_tcboard = QLineEdit()
+        self.ed_tcboard.setPlaceholderText("팀컬러 이름 검색")
+        self.ed_tcboard.setClearButtonEnabled(True)
+        self.ed_tcboard.textChanged.connect(lambda _t: self._apply_tc_board_filter())
+        bar.addWidget(self.ed_tcboard)
+        self.cb_tcboard_sort = NoScrollComboBox()
+        for key, label in self.TC_BOARD_SORTS:
+            self.cb_tcboard_sort.addItem(label, key)
+        self.cb_tcboard_sort.currentIndexChanged.connect(lambda _i: self._invalidate("tcboard"))
+        bar.addWidget(self.cb_tcboard_sort)
+        v.addLayout(bar)
+        self.tc_board_list = MetricRowList()
+        self.tc_board_list.setToolTip("두 번 누르면 팀컬러 효과 창")
+        self.tc_board_list.activated.connect(self._on_tc_board_activated)
+        v.addWidget(self.tc_board_list, 1)
+        self.tc_board: core.TcBoard | None = None   # 테스트가 본다
+        self._tc_board_keep = None
         return w
 
-    def _render_value_score(self) -> None:
-        top = self.cb_vscore_tier.currentData() or 10000
-        res = self._rank_read(lambda c: core.value_score(c, top))
-        self.value_scores = res
+    @staticmethod
+    def tc_board_sort(rows: list, how: str) -> list:
+        """줄 순서 — 값이 없는 줄(하루 승률 쌍 없음 · 가성비 표본 미달)은 늘 아래로, 같으면 인원 순."""
+        val = {"elo": lambda r: r.elo, "day": lambda r: None if r.day_thin else r.day_rate,
+               "score": lambda r: r.score}.get(how, lambda r: r.share)
+        return sorted(rows, key=lambda r: (val(r) is None, -(val(r) or 0), -r.users, r.key))
+
+    def _emblem_icon(self, label: str) -> tuple:
+        """줄 목록의 엠블럼 (종류, 키) — 표 칸(_emblem_cell)과 같은 지도. 모르면 ()."""
+        key = self._emblem_map().get(label, "")
+        return ("emblem", key) if key and images.icon_url("emblem", key) else ()
+
+    def _render_tc_board(self) -> None:
+        top = self.cb_tcboard_tier.currentData() or 10000
+        res = self._rank_read(lambda c: core.team_color_board(c, top))
+        self.tc_board = res
         if res is None or res.at is None:
-            self.lb_vscore_note.setText(self.rank_off_note("팀컬러 가성비를 보여 줍니다") if not config.RANK_COLLECT
-                                        else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
-            self._fill(self.tbl_vscore, [])
+            self.lb_tcboard_note.setText(self.rank_off_note("1만 명이 쓰는 팀컬러 목록을 보여 줍니다") if not config.RANK_COLLECT
+                                         else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+            self.tc_board_list.set_rows([])
             return
         wt = config.B3_WEIGHTS
-        note = [f"넥슨 데이터 기준 {self._at(res.at)} · {self.cb_vscore_tier.currentText()}",
-                f"1,000점 = 점수 {wt['elo']} · 승률 {wt['rate']} · 구단가치 {wt['value']}(낮을수록) · 챔스 {wt['champ']}",
-                f"{config.B3_MIN_USERS}명 이상 팀컬러끼리 백분위 — 다른 구간과 점수를 맞대지 마세요",
-                "승률 = 승÷(승+패)"]
+        note = [f"넥슨 데이터 기준 {self._at(res.at)} · {self.cb_tcboard_tier.currentText()} {res.total:,}명",
+                "승률 = 승÷(승+패) · 하루 승률은 어제 순위로 가름(1만 위 안에 남은 사람만)",
+                f"가성비 1,000점 = 점수 {wt['elo']} · 승률 {wt['rate']} · 구단가치 {wt['value']}(낮을수록) · 챔스 {wt['champ']}"
+                f" — {config.B3_MIN_USERS}명 이상 팀컬러끼리 백분위라 다른 구간과 맞대지 마세요"]
         if not res.scored:
-            note.append(f"{config.B3_MIN_USERS}명 이상 팀컬러가 {res.eligible}개라 표본이 적어 점수를 안 냅니다")
-        self.lb_vscore_note.setText(" · ".join(note))
-        keep = self._tc_keep()
-        rows = res.rows if keep is None else [r for r in res.rows if keep(r.key)]
-        self._fill(self.tbl_vscore, [[
-            self._emblem_cell(r.key or core.blank_label("team_color")),
-            (NA if r.score is None else f"{r.score:,.0f}", -1 if r.score is None else r.score),
-            (NA if r.elo is None else f"{r.elo:,.0f}", r.elo or 0),
-            (NA if r.rate is None else f"{r.rate:.1f}%", r.rate or 0),
-            (self._won(r.value), r.value or 0),
-            (NA if r.champ is None else f"{r.champ:.0f}%", r.champ or 0),
-            (f"{r.users:,}", r.users)] for r in rows], enable_sort=False)
-        names = {"elo": 2, "rate": 3, "value": 4, "champ": 5}
-        for i, r in enumerate(rows):
-            for k, c in names.items():
-                it = self.tbl_vscore.item(i, c)
-                if it is not None and r.pct:
-                    it.setToolTip(f"백분위 {r.pct[k]:.0f}")
-        self._dim_rows(self.tbl_vscore, [i for i, r in enumerate(rows) if r.score is None])
-        self.tbl_vscore.setSortingEnabled(True)
+            note.append(f"{config.B3_MIN_USERS}명 이상 팀컬러가 {res.eligible}개라 표본이 적어 가성비를 안 냅니다")
+        if not res.day_ready:
+            note.append("하루 승률은 하루 간격 스냅숏 둘이 쌓이면 나옵니다")
+        note.append("이름이 같은 팀컬러는 1만 명 숫자가 합쳐져 '(구분 전)' 으로 한 줄")
+        self.lb_tcboard_note.setText(" · ".join(note))
+        rows = self.tc_board_sort(res.rows, self.cb_tcboard_sort.currentData() or "share")
+        top_share = max((r.share for r in rows), default=0) or 1
+        out = []
+        for i, r in enumerate(rows, 1):
+            pct = (f"백분위 — 점수 {r.pct['elo']:.0f} · 승률 {r.pct['rate']:.0f} · 구단가치 {r.pct['value']:.0f}"
+                   f" · 챔스 {r.pct['champ']:.0f}") if r.pct else ""
+            day = NA if r.day_thin or r.day_rate is None else f"{r.day_rate:.1f}%"
+            out.append(MetricRow(
+                r.key, f"{r.users:,}명", (
+                    MetricCell(NA if r.score is None else f"{r.score:,.0f}", "가성비", None, pct),
+                    MetricCell(NA if r.elo is None else f"{r.elo:,.0f}", "평균 점수"),
+                    MetricCell(NA if r.rate is None else f"{r.rate:.1f}%", "시즌 승÷(승+패)"),
+                    MetricCell(day, "하루 승÷(승+패)", None,
+                               "어제 순위로 가른 하루 승률 — 인원이 적거나 쌍이 없으면 —"),
+                    MetricCell(self._won(r.value), "구단가치 중앙값"),
+                    MetricCell(NA if r.champ is None else f"{r.champ:.0f}%", "챔스 이상"),
+                    MetricCell(f"{r.share:.1f}%", "점유율", T.ACCENT)),
+                rank=i, icon=self._emblem_icon(r.key), fill=r.share / top_share, dim=r.score is None, key=r.key))
+        self._tc_board_keep = self._tc_keep()
+        self.tc_board_list.set_rows(out)
+        self._apply_tc_board_filter()
+        self._start_list_icons(self.tc_board_list)
 
-    # [메타 분석 › 구단가치] B4
-    VALUE_BIN_COLUMNS = ["구단가치", "인원", "점유", "평균 ELO", "시즌 승률", "챔스 이상", "평균 ELO 상위 팀컬러"]
+    def _apply_tc_board_filter(self) -> None:
+        keep, q = self._tc_board_keep, self.ed_tcboard.text().strip().lower()
+        if keep is None and not q:
+            self.tc_board_list.set_filter(None)
+            return
+        self.tc_board_list.set_filter(lambda r: (keep is None or keep(r.key)) and (not q or q in r.key.lower()))
 
+    def _on_tc_board_activated(self, index) -> None:
+        row = self.tc_board_list.row(index.row()) if index.isValid() and index.row() < self.tc_board_list.rowCount() else None
+        if row is not None and row.key:
+            self._open_teamcolor_effect(row.key)
+
+    # [메타 분석 › 구단가치] B4 — 67 R7: 구간 줄 목록 + 고른 구간의 팀컬러(옛 구간 × 팀컬러 표를 구간 하나씩)
     def _build_value_bins_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         self.lb_vbins_note = self._note_label()
         v.addWidget(self.lb_vbins_note)
-        self.tbl_vbins = self._make_table(self.VALUE_BIN_COLUMNS)
-        self.tbl_vbins.setSortingEnabled(False)   # 구간 순서가 정보다
-        v.addWidget(self.tbl_vbins, 1)
-        v.addWidget(self._title_label("구간 × 팀컬러 — 그 팀컬러 인원 중 이 구간 % · 챔스 이상 %(색 = 윌슨 하한의 구간 평균 대비)"))
-        self.tbl_vcross = self._make_table(["팀컬러", "인원"], icons={0: "emblem"})
-        self.tbl_vcross.setSortingEnabled(False)
-        v.addWidget(self.tbl_vcross, 1)
+        self.vbins_list = MetricRowList(fixed=True)   # 구간 순서가 정보다 — 정렬 없음
+        self.vbins_list.setToolTip("구간을 누르면 아래에 그 구간의 팀컬러")
+        self.vbins_list.selectionModel().currentChanged.connect(lambda cur, _prev: self._show_vbin(cur.row()))
+        v.addWidget(self.vbins_list)
+        self.lb_vcross_title = self._title_label()
+        v.addWidget(self.lb_vcross_title)
+        self.vcross_list = MetricRowList()
+        v.addWidget(self.vcross_list, 1)
         self.value_bin_data: core.ValueBins | None = None
+        self._vbin_sel = 0
         return w
 
     def _bin_label(self, b) -> str:
@@ -7390,34 +7950,48 @@ class MainWindow(QMainWindow):
         if res is None or not res.bins:
             self.lb_vbins_note.setText(self.rank_off_note("구단가치 분포를 보여 줍니다") if not config.RANK_COLLECT
                                        else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
-            self._fill(self.tbl_vbins, [], enable_sort=False)
-            self.tbl_vcross.setColumnCount(2)
-            self._fill(self.tbl_vcross, [], enable_sort=False)
+            self.vbins_list.set_rows([])
+            self.vcross_list.set_rows([])
+            self.lb_vcross_title.setText("")
             return
         self.lb_vbins_note.setText(
             f"넥슨 데이터 기준 {self._at(res.at)} · 1만 위 안 · {len(res.bins)}구간(경계 = 이 스냅숏 분위를 두 자리로 반올림 — "
-            f"스냅숏마다 다시) · 승률 = 승÷(승+패) · 칸 인원 {config.META_MIN_USERS}명 미만은 빈칸")
-        labels = [self._bin_label(b) for b in res.bins]
-        self._fill(self.tbl_vbins, [[
-            labels[i], f"{b.users:,}", f"{b.share:.1f}%", NA if b.elo is None else f"{b.elo:,.0f}",
-            NA if b.rate is None else f"{b.rate:.1f}%", NA if b.champ is None else f"{b.champ:.0f}%",
-            " · ".join(f"{c} {e:,.0f}" for c, e, _n in res.best[i]) or "-"] for i, b in enumerate(res.bins)],
-            enable_sort=False)
-        cols = ["팀컬러", "인원"] + labels
-        self.tbl_vcross.setColumnCount(len(cols))
-        self.tbl_vcross.setHorizontalHeaderLabels(cols)
-        rows = [[self._emblem_cell(color), f"{n:,}"] + ["" if c is None else f"{c.share:.0f}% · {c.champ:.0f}%" for c in cells]
-                for color, n, cells in res.cross]
-        self._fill(self.tbl_vcross, rows, enable_sort=False)
-        for i, (_color, _n, cells) in enumerate(res.cross):
-            for j, c in enumerate(cells):
-                it = self.tbl_vcross.item(i, 2 + j)
-                if it is None or c is None:
-                    continue
-                it.setToolTip(f"{c.users}명 · 챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}%)")
-                if c.vs_bin is not None and abs(c.vs_bin) >= 5:
-                    it.setForeground(QColor(T.CHART_UP if c.vs_bin > 0 else T.CHART_DOWN))
-        self.tbl_vcross.refit()
+            f"스냅숏마다 다시) · 승률 = 승÷(승+패) · 칸 인원 {config.META_MIN_USERS}명 미만은 빼고 셉니다")
+        top_share = max((b.share for b in res.bins), default=0) or 1
+        self.vbins_list.set_rows([MetricRow(
+            self._bin_label(b), f"{b.users:,}명", (
+                MetricCell(f"{b.share:.1f}%", "점유"),
+                MetricCell(NA if b.elo is None else f"{b.elo:,.0f}", "평균 점수"),
+                MetricCell(NA if b.rate is None else f"{b.rate:.1f}%", "시즌 승÷(승+패)"),
+                MetricCell(NA if b.champ is None else f"{b.champ:.0f}%", "챔스 이상")),
+            fill=b.share / top_share, key=i) for i, b in enumerate(res.bins)])
+        sel = min(self._vbin_sel, len(res.bins) - 1)
+        self.vbins_list.setCurrentIndex(self.vbins_list.model().index(sel, 0))
+        self._show_vbin(sel)
+
+    def _show_vbin(self, i: int) -> None:
+        """고른 구간의 팀컬러 — 그 팀컬러 인원 중 이 구간 비율 · 챔스 이상(색 = 윌슨 하한의 구간 평균 대비 ±5%p 넘을 때)."""
+        res = self.value_bin_data
+        if res is None or not 0 <= i < len(res.bins):
+            return
+        self._vbin_sel = i
+        best = " · ".join(f"{c} {e:,.0f}" for c, e, _n in res.best[i]) or "-"
+        self.lb_vcross_title.setText(f"{self._bin_label(res.bins[i])} 구간의 팀컬러 — 평균 점수 상위: {best}")
+        rows = []
+        for color, n, cells in res.cross:
+            c = cells[i]
+            if c is None:
+                continue
+            tone = delta_color(c.vs_bin) if c.vs_bin is not None and abs(c.vs_bin) >= 5 else None
+            rows.append(MetricRow(color, f"{n:,}명 중 {c.users:,}명", (
+                MetricCell(f"{c.share:.0f}%", "이 구간 비율"),
+                MetricCell(f"{c.champ:.0f}%", "챔스 이상", tone,
+                           f"{c.users}명 · 챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}% · 구간 평균 대비 "
+                           f"{0 if c.vs_bin is None else c.vs_bin:+.0f}%p)")),
+                icon=self._emblem_icon(color), key=color, sort={"users": c.users}))
+        rows.sort(key=lambda r: (-r.sort["users"], r.key))
+        self.vcross_list.set_rows(rows)
+        self._start_list_icons(self.vcross_list)
 
     # [메타 분석 › 구간 평균] B6
     TIER_MEAN_COLUMNS = ["이름", "인원", "평균 ELO", "구단가치 중앙값"]
@@ -7542,8 +8116,8 @@ class MainWindow(QMainWindow):
             NA if b.p5 is None else f"{b.p5:+,.0f} ~ {b.p95:+,.0f}"] for b in res.bins], enable_sort=False)
         for i, b in enumerate(res.bins):
             it = self.tbl_wrelo.item(i, 3)
-            if it is not None and b.median:
-                it.setForeground(QColor(T.CHART_UP if b.median > 0 else T.CHART_DOWN))
+            if b.median:
+                delta_item(it, b.median, eps=0.5)   # 칸은 정수로 적는다
 
     # [랭킹 추이 › 주간 요약] N13
     def _build_weekly_tab(self) -> QWidget:
@@ -7552,27 +8126,100 @@ class MainWindow(QMainWindow):
         self.lb_weekly_note = self._note_label()
         self.cb_weekly_tier = self._tier_combo("weekly")
         self._meta_top(v, self.lb_weekly_note, ("순위 구간(팀컬러 구단가치)", self.cb_weekly_tier))
+        # 67 R4 — "지금 메타" 카드 일곱(컷 둘 · 점수 상승 · 하루 최다 승 · 사용 증가 둘 · 최다 보상 구간). 컷 변화는 색 없이 ▲▼
+        # (컷이 오르면 나에게 불리 — 좋고 나쁨이 없다 · 2회차 [중]) · "연승" 카드는 없다(재료 없음 — E4)
+        cards = QGridLayout()
+        cards.setSpacing(8)
+        self.weekly_cards: dict[str, StatCard] = {}
+        for i, (key, title) in enumerate((("cut_top", f"{config.R4_CUT_TOP}위 컷"), ("cut_200", "200위 컷"),
+                                          ("riser", "점수 상승 1위"), ("day_win", "하루 최다 승"),
+                                          ("tc_rise", "사용 증가 팀컬러"), ("form_rise", "사용 증가 포메이션"),
+                                          ("reward", "100판당 보상 최고 구간"))):
+            card = StatCard(title)
+            card.value.setWordWrap(True)
+            card.sub.setWordWrap(True)
+            cards.addWidget(card, i // 4, i % 4)
+            self.weekly_cards[key] = card
+        for c in range(4):
+            cards.setColumnStretch(c, 1)
+        v.addLayout(cards)
         grid = QGridLayout()
         self.weekly_titles: dict[str, QLabel] = {}
+        # 컷 변화는 표 그대로(순위 셋 × 그때·지금·변화 — 3회차 M6) · 나머지는 줄 목록
         self.weekly_tables: dict[str, FitTableWidget] = {}
-        spec = (("cuts", "컷 변화", ["순위", "그때", "지금", "변화"]),
-                ("risers", "급상승 10명", ["닉네임", "그때 순위", "지금 순위", "ELO 변화"]),
-                ("wins", "하루 최다 승 10명", ["닉네임", "순위", "승·무·패"]),
-                ("extremes", "팀컬러별 최고·최저 구단가치", ["팀컬러", "인원", "최고", "최저"]),
-                ("parked", "주차 중", ["닉네임", "순위", "ELO"]))
-        for i, (key, name, cols) in enumerate(spec):
+        self.weekly_lists: dict[str, MetricRowList] = {}
+        spec = (("cuts", "컷 변화"), ("risers", "급상승 10명"), ("wins", "하루 최다 승 10명"),
+                ("extremes", "팀컬러별 최고·최저 구단가치"), ("parked", "주차 중"))
+        for i, (key, name) in enumerate(spec):
             box = QVBoxLayout()
             title = self._title_label(name)
-            table = self._make_table(cols, icons={0: "emblem"} if key == "extremes" else None)
             box.addWidget(title)
-            box.addWidget(table, 1)
+            if key == "cuts":
+                self.weekly_tables[key] = self._make_table(["순위", "그때", "지금", "변화"])
+                box.addWidget(self.weekly_tables[key], 1)
+            else:
+                self.weekly_lists[key] = MetricRowList()
+                box.addWidget(self.weekly_lists[key], 1)
             grid.addLayout(box, i // 2, i % 2)
-            self.weekly_titles[key], self.weekly_tables[key] = title, table
+            self.weekly_titles[key] = title
         self.lb_weekly_me = self._title_label()
         grid.addWidget(self.lb_weekly_me, 2, 1)
         v.addLayout(grid, 1)
         self.weekly_data: core.Weekly | None = None
+        self.weekly_meta_top: dict = {}   # 사용 증가 카드가 고른 줄(테스트가 [메타 변화] 첫 줄과 대조 — 3회차 M5)
         return w
+
+    def _weekly_cut_card(self, card: StatCard, now: float | None, then: float | None, days: float | None) -> None:
+        card.set(f"{now:,.0f}점" if now is not None else "—")
+        card.set_sub(f"{days:.0f}일 전 {then:,.0f}점" if then is not None and days is not None else
+                     ("비교할 원본이 없습니다(14일 밖)" if now is not None else "원본이 없거나 그 순위까지 목록이 안 갑니다"))
+        card.set_delta(now, then, unit="점", digits=0, neutral=True)
+
+    def _render_weekly_cards(self, res, rc) -> None:
+        """R4 카드 — 20위는 원본에서(rank_cut · 200위 카드와 같은 두 스냅숏 id), 메타 변화 1위는 [메타 변화] 탭 기본값(구간 첫 칸 ·
+        그대로)으로 core.meta_trend 를 직접(그 탭을 안 열면 self.meta_trend 가 None — PyQt 7), 최다 보상은 reward_board 한 길(R6 과 같은 수)."""
+        cards = self.weekly_cards
+        for c in cards.values():
+            c.set("—")
+            c.set_sub("")
+            c.set_delta(None, None)
+        if res is None or res.base_at is None:
+            return
+        days = res.cut_days
+        top_now = top_then = None
+        if rc is not None:
+            top_now = core.rank_cut(rc, config.R4_CUT_TOP, res.base_id)
+            top_then = core.rank_cut(rc, config.R4_CUT_TOP, res.cmp_id)
+        self._weekly_cut_card(cards["cut_top"], top_now, top_then, days)
+        c200 = next(((a, b) for r, a, b in res.cuts if r == 200), (None, None))
+        self._weekly_cut_card(cards["cut_200"], c200[1], c200[0], days)
+        if res.risers:
+            n, a, b, d = res.risers[0]
+            cards["riser"].set(n)
+            cards["riser"].set_sub(f"점수 {d:+,.0f} · {a:,}위 → {b:,}위 · {res.rise_days:.0f}일 전 대비")
+        if res.pair is not None and res.pair.ok and res.day_wins:
+            n, r, w_, d, lo = res.day_wins[0]
+            cards["day_win"].set(n)
+            cards["day_win"].set_sub(f"{w_:,}승 {d:,}무 {lo:,}패 · {r:,}위 · {res.pair.hours:.0f}시간 사이")
+        self.weekly_meta_top = {}
+        if rc is not None:
+            trend = core.group_meta(core.meta_trend(rc, self.TREND_TIERS[0][1]), "raw", frozenset())
+            if not trend.collecting:
+                for kind, key in (("team_color", "tc_rise"), ("formation", "form_rise")):
+                    rows = self.meta_rise_order(trend.rows.get(kind) or [])
+                    if not rows:
+                        continue
+                    r = rows[0]
+                    self.weekly_meta_top[kind] = r.key
+                    cards[key].set(r.key or core.blank_label(kind))
+                    cards[key].set_sub(f"{r.diff_pp:+.1f}%p · {r.now_n - r.then_n:+,}명 · {self.TREND_TIERS[0][0]}")
+        if rc is not None and config.fc_games_view_allowed():
+            board = core.reward_board(rc)
+            cand = [b for b in board.by_value if b.bin is not None and b.median is not None] if board.state == "ok" else []
+            if cand:
+                best = max(cand, key=lambda b: b.median)
+                cards["reward"].set(self._bin_label(best.bin))
+                cards["reward"].set_sub(f"100판당 {best.median:,.0f} FC · {best.users:,}명 · 구간 중앙값")
 
     def _render_weekly(self) -> None:
         top = self.cb_weekly_tier.currentData() or 10000
@@ -7581,15 +8228,21 @@ class MainWindow(QMainWindow):
         sn = getattr(self._rank, "profile_sn", None)
 
         def read(c):
-            return core.weekly(c, core.find_sn(c, sn, self._nick) if self._ouid else None, end_days, top)
+            got = core.weekly(c, core.find_sn(c, sn, self._nick) if self._ouid else None, end_days, top)
+            self._render_weekly_cards(got, c)
+            return got
         res = self._rank_read(read)
+        if res is None:
+            self._render_weekly_cards(None, None)
         self.weekly_data = res
-        tbl, ttl = self.weekly_tables, self.weekly_titles
+        tbl, ttl, lst = self.weekly_tables, self.weekly_titles, self.weekly_lists
         if res is None or res.base_at is None:
             self.lb_weekly_note.setText(self.rank_off_note("주간 요약을 보여 줍니다") if not config.RANK_COLLECT
                                         else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
             for t in tbl.values():
                 self._fill(t, [])
+            for x in lst.values():
+                x.set_rows([])
             self.lb_weekly_me.setText("")
             return
         self.lb_weekly_note.setText(f"넥슨 데이터 기준 {self._at(res.base_at)} · 1만 위 안 랭킹 그대로(닉네임·순위·구단가치)")
@@ -7603,27 +8256,34 @@ class MainWindow(QMainWindow):
             self._fill(tbl["cuts"], [])
         if res.rise_at:
             ttl["risers"].setText(f"급상승 10명 — {res.rise_days:.0f}일 전 대비 ELO · 두 시점 다 1만 위 안이던 사람만")
-            self._fill(tbl["risers"], [[n, (f"{a:,}", a), (f"{b:,}", b), (f"{d:+,.0f}", d)] for n, a, b, d in res.risers])
+            lst["risers"].set_rows([MetricRow(n, f"{a:,}위 → {b:,}위", (MetricCell(f"{d:+,.0f}", "점수 변화", delta_color(d)),),
+                                              rank=i + 1) for i, (n, a, b, d) in enumerate(res.risers)])
         else:
             ttl["risers"].setText("급상승 10명 — 모으는 중(원본이 3일치 넘게 쌓이면)")
-            self._fill(tbl["risers"], [])
+            lst["risers"].set_rows([])
         if res.pair is not None and res.pair.ok:
             ttl["wins"].setText(f"하루 최다 승 10명 — 넥슨 데이터 시각 {res.pair.hours:.1f}시간 사이")
-            self._fill(tbl["wins"], [[n, (f"{r:,}", r), (f"{w_}·{d}·{lo}", w_)] for n, r, w_, d, lo in res.day_wins])
+            lst["wins"].set_rows([MetricRow(n, f"{r:,}위", (MetricCell(f"{w_:,}", "승", T.GOOD), MetricCell(f"{d:,}", "무"),
+                                                           MetricCell(f"{lo:,}", "패", T.BAD)), rank=i + 1)
+                                  for i, (n, r, w_, d, lo) in enumerate(res.day_wins)])
         else:
             ttl["wins"].setText(f"하루 최다 승 — {core.pair_text(res.pair)}")
-            self._fill(tbl["wins"], [])
+            lst["wins"].set_rows([])
         ttl["extremes"].setText(f"팀컬러별 최고·최저 구단가치 — {self.cb_weekly_tier.currentText()} · "
                                 f"{config.META_MIN_USERS}명 이상")
-        self._fill(tbl["extremes"], [[self._emblem_cell(c), (f"{n:,}", n), f"{hi[0]} {hi[1]:,}위 {self._won(hi[2])}",
-                                      f"{lo[0]} {lo[1]:,}위 {self._won(lo[2])}"] for c, n, hi, lo in res.extremes])
+        lst["extremes"].set_rows([MetricRow(c, f"{n:,}명", (MetricCell(self._won(hi[2]), "최고"), MetricCell(self._won(lo[2]), "최저")),
+                                            icon=self._emblem_icon(c), key=c,
+                                            tip=f"최고 {hi[0]} {hi[1]:,}위 {self._won(hi[2])} · 최저 {lo[0]} {lo[1]:,}위 {self._won(lo[2])}")
+                                  for c, n, hi, lo in res.extremes])
+        self._start_list_icons(lst["extremes"])
         if res.park_state == "shown":
             ttl["parked"].setText(f"주차 중 — {config.WEEKLY_PARK_RANK}위 안 · 이웃 쌍 사이 0판 · 시즌 종료 {end.guess.text}")
-            self._fill(tbl["parked"], [[n, (f"{r:,}", r), NA if e is None else f"{e:,.0f}"] for n, r, e in res.parked])
+            lst["parked"].set_rows([MetricRow(n, "", (MetricCell(f"{r:,}위", "순위"),
+                                                      MetricCell(NA if e is None else f"{e:,.0f}", "점수"))) for n, r, e in res.parked])
         else:
             ttl["parked"].setText("주차 중 — " + (f"시즌 끝 {config.WEEKLY_PARK_DAYS}일 전부터 보입니다"
                                                  if res.park_state == "far" else "종료일을 몰라 안 냅니다"))
-            self._fill(tbl["parked"], [])
+            lst["parked"].set_rows([])
         if res.my_value is not None:
             n, total = res.my_value
             self.lb_weekly_me.setText(f"{self._nick} 구단가치 {n:,}등 / {total:,}(상위 {n * 100 / total:.1f}%)")
@@ -7645,17 +8305,36 @@ class MainWindow(QMainWindow):
         self.lb_rboard_summary = QLabel("")
         self.lb_rboard_summary.setWordWrap(True)
         v.addWidget(self.lb_rboard_summary)
+        # 67 R6 — 카드 둘(참여 인원 · 100판당 중앙값 — "시즌 총 보상" 은 사람마다 범위라 합이 안 선다 · 1회차 [중]) ·
+        # 구단가치 구간별 · 팀컬러별 평균 막대(점선 = 전체 중앙값) · 순위 구간 표는 접기 아래
+        cards = QHBoxLayout()
+        self.rboard_cards = {"users": StatCard("보상 참여 인원"), "median": StatCard("100판당 보상 (중앙값)", T.ACCENT)}
+        for c in self.rboard_cards.values():
+            cards.addWidget(c, 1)
+        cards.addStretch(2)
+        v.addLayout(cards)
         grid = QHBoxLayout()
+        left = QVBoxLayout()
+        left.addWidget(self._title_label("구단가치 구간별 100판당 (지금 값)"))
+        self.rboard_value_list = AvgBarList()
+        left.addWidget(self.rboard_value_list)
+        left.addStretch(1)
+        right = QVBoxLayout()
+        self.lb_rboard_tc_title = self._title_label("팀컬러별 100판당")
+        right.addWidget(self.lb_rboard_tc_title)
+        self.rboard_tc_list = AvgBarList()
+        right.addWidget(self.rboard_tc_list)
+        self.rboard_tc_all = AvgBarList()
+        self.rboard_tc_more = Collapsible("전체 보기", self.rboard_tc_all)
+        right.addWidget(self.rboard_tc_more)
+        right.addStretch(1)
+        grid.addLayout(left, 1)
+        grid.addLayout(right, 1)
+        v.addLayout(grid)
         self.tbl_rboard_rank = self._make_table(self.REWARD_BOARD_COLUMNS)
-        self.tbl_rboard_value = self._make_table(self.REWARD_BOARD_COLUMNS)
-        for title, tbl in (("순위 구간별", self.tbl_rboard_rank), ("구단가치별 (지금 값)", self.tbl_rboard_value)):
-            box = QVBoxLayout()
-            lb = QLabel(title)
-            lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            box.addWidget(lb)
-            box.addWidget(tbl, 1)
-            grid.addLayout(box, 1)
-        v.addLayout(grid, 1)
+        self.rboard_rank_box = Collapsible("순위 구간별 표", self.tbl_rboard_rank)
+        v.addWidget(self.rboard_rank_box)
+        v.addStretch(1)
         self.lb_rboard_note = self._note_label()
         v.addWidget(self.lb_rboard_note)
         self.reward_board: core.RewardBoard | None = None   # 테스트가 본다
@@ -7683,10 +8362,9 @@ class MainWindow(QMainWindow):
         pts = self._elo_points()          # 이번 시즌 하루 한 점 — 마지막 점이 지금
         if data is None or not pts:
             return ""
-        rank = pts[-1].get("rank")
+        rank, got = rank_reward(pts, date.today())
         if not rank:
             return f"지금 {config.RANK_TIERS[-1]:,}위 밖(또는 모름) — 순위 보상 구간 밖"
-        got = next((fc for cap, fc in core.reward_brackets(date.today()) if rank <= cap), None)
         if got is None:
             return f"지금 {rank:,}위 — 순위 보상 구간 밖"
         return f"지금 {rank:,}위 — 이대로 끝나면 순위 보상 {got:,} FC"
@@ -7694,19 +8372,17 @@ class MainWindow(QMainWindow):
     def _render_reward_board(self) -> None:
         board = self._rank_read(core.reward_board) if config.fc_games_view_allowed() else None
         self.reward_board = board
-        for bands, tbl in (((board.by_rank if board else []), self.tbl_rboard_rank),
-                           ((board.by_value if board else []), self.tbl_rboard_value)):
-            rows = []
-            for i, b in enumerate(bands):
-                label = self._bin_label(b.bin) if b.bin is not None else b.label
-                if b.median is None:
-                    mid = (f"표본 {b.users}" if b.users else "-", -1)
-                    span = ("", -1)
-                else:
-                    mid = (f"{b.median:,.0f} FC", b.median)
-                    span = (f"{b.lo:,.0f}~{b.hi:,.0f}", b.lo)
-                rows.append([(label, i), (f"{b.users:,}", b.users), mid, span])
-            self._fill(tbl, rows, enable_sort=False)   # 구간 순서 그대로(순위·구단가치 오름차순)
+        rows = []
+        for i, b in enumerate(board.by_rank if board else []):
+            if b.median is None:
+                mid = (f"표본 {b.users}" if b.users else "-", -1)
+                span = ("", -1)
+            else:
+                mid = (f"{b.median:,.0f} FC", b.median)
+                span = (f"{b.lo:,.0f}~{b.hi:,.0f}", b.lo)
+            rows.append([(b.label, i), (f"{b.users:,}", b.users), mid, span])
+        self._fill(self.tbl_rboard_rank, rows, enable_sort=False)   # 구간 순서 그대로(순위 오름차순)
+        self._render_reward_bars(board if board is not None and board.state == "ok" else None)
         mine = " · ".join(t for t in (self._my_reward_text(board.season_start if board else None),
                                       self._rank_reward_text()) if t)
         if board is None:
@@ -7737,6 +8413,39 @@ class MainWindow(QMainWindow):
             f" · 판수를 아는 사람 {board.seen:,}명"
             + (f"(시즌 중간에 처음 잡힌 {board.late:,}명은 처음 본 앞 승리를 판수 없이 안아 뺐습니다)" if board.late else ""))
 
+    @staticmethod
+    def _reward_bar(name: str, b, icon: tuple = ()) -> AvgBar:
+        return AvgBar(name, b.median, f"{b.median:,.0f} FC" if b.median is not None else "—",
+                      f"{b.users:,}명" if b.median is not None else f"표본 {b.users:,}명", icon=icon, key=name,
+                      tip=(f"{name} · 하한~상한 중앙값 {b.lo:,.0f}~{b.hi:,.0f} FC · {b.users:,}명" if b.median is not None
+                           else f"{name} · {config.K11_MIN_PER_BAND}명 미만이라 중앙값을 안 냅니다"))
+
+    def _render_reward_bars(self, board) -> None:
+        """67 R6 카드 둘 · 평균 막대 셋. 점선(기준) = 전체 중앙값 — 위는 강조, 아래는 주의 색."""
+        cards = self.rboard_cards
+        o = board.overall if board is not None else None
+        cards["users"].set(f"{board.users:,}명" if board is not None else "—")
+        cards["median"].set(f"{o.median:,.0f} FC" if o is not None and o.median is not None else "—")
+        cards["median"].set_sub(f"하한~상한 {o.lo:,.0f}~{o.hi:,.0f}" if o is not None and o.median is not None else "")
+        base = o.median if o is not None else None
+        vals = [self._reward_bar(self._bin_label(b.bin) if b.bin is not None else b.label, b)
+                for b in (board.by_value if board is not None else []) if b.bin is not None or b.users]
+        self.rboard_value_list.set_rows(vals, base=base)
+        tcs = board.by_team_color if board is not None else []
+        named = [b for b in tcs if b.median is not None]
+        named.sort(key=lambda b: (-b.median, b.label))
+        k = config.R6_TC_SHOW
+        pick = named if len(named) <= 2 * k else named[:k] + named[-k:]
+        self.rboard_tc_list.set_rows([self._reward_bar(b.label, b, self._emblem_icon(b.label)) for b in pick], base=base)
+        everything = named + sorted((b for b in tcs if b.median is None), key=lambda b: (-b.users, b.label))
+        self.rboard_tc_all.set_rows([self._reward_bar(b.label, b, self._emblem_icon(b.label)) for b in everything], base=base)
+        self.lb_rboard_tc_title.setText(
+            f"팀컬러별 100판당 — 높은 {k} · 낮은 {k}" if len(named) > 2 * k else "팀컬러별 100판당")
+        self.rboard_tc_more.head.setText(f"전체 {len(everything):,}개 보기")
+        self.rboard_tc_more.setVisible(len(everything) > len(pick))
+        for lst in (self.rboard_tc_list, self.rboard_tc_all):
+            self._start_list_icons(lst)
+
     # [랭킹 추이 › 예측 되짚기] B8 — 끝난 시즌마다 그 시즌에 낸 예측과 내 계정의 실제 최종 순위(내 계정 하나)
     PREDICT_CHECK_COLUMNS = ["시즌", "예측한 날", "200위 안", "1,000위 안", "예상 순위 80% 범위", "최종 순위", "판정"]
 
@@ -7752,6 +8461,7 @@ class MainWindow(QMainWindow):
     def _render_predict_check(self) -> None:
         """남겨 둔 예측 × 최종 순위. 내 계정이 확인 전(키 바뀜·미지정)이면 새로 받지 않고 지난 기록만 보여 준다 — 문구로 알린다."""
         rows, note, unconfirmed = [], "", False
+        kinds: list[str] = []
         try:
             conn = store.open_db(config.DB_PATH)
             try:
@@ -7789,6 +8499,9 @@ class MainWindow(QMainWindow):
                 rows.append([label, r["day"],
                              NA if p200 is None else f"{p200 * 100:.0f}%", NA if p1000 is None else f"{p1000 * 100:.0f}%",
                              NA if lo is None or hi is None else f"{lo:,}~{hi:,}위", final, verdict])
+                # 67 R8 판정 칸 태그 꼴 — 범위 안 = 맞음 · 범위 밖 = 빗나감 · 그 밖(확인 전·진행 중)은 흐림
+                kinds.append("good" if res["state"] == "found" and in_range else
+                             "warn" if res["state"] == "found" and in_range is False else "muted")
         if not rows:
             note = ("아직 남은 예측이 없습니다 — 예측 카드가 숫자를 내면 하루 한 줄씩 남습니다." if config.WEB_DATA
                     else "넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다. 남아 있는 예측만 보입니다.")
@@ -7803,6 +8516,12 @@ class MainWindow(QMainWindow):
             note = " ".join(notes)
         self.lb_pcheck_note.setText(note)
         self._fill(self.tbl_pcheck, rows, enable_sort=False)
+        for i, kind in enumerate(kinds):
+            item = self.tbl_pcheck.item(i, len(self.PREDICT_CHECK_COLUMNS) - 1)
+            if item is not None and item.text():
+                color = getattr(T, Tag.KINDS[kind])
+                item.setForeground(QColor(color))
+                item.setBackground(QColor(T.blend(T.PANEL, color, 0.10)))   # tag_qss 와 같은 10% 바탕
 
     # [승률 그래프 › 순위 변동] N8 · N9 (검색 계정)
     RANK_MOVE_COLUMNS = ["날짜", "순위", "ELO", "승·무·패", "기록된 경기", "판정"]
@@ -8269,7 +8988,7 @@ class MainWindow(QMainWindow):
         peak = max((abs(p.xg_diff) for p in players), default=1) or 1
         for r, p in enumerate(players):
             self._tint(self.tbl_finishing.item(r, 6), abs(p.xg_diff), peak,
-                       T.GREEN if p.xg_diff >= 0 else T.RED)
+                       T.GOOD if p.xg_diff >= 0 else T.BAD)
             name_item = self.tbl_finishing.item(r, 0)
             if name_item:
                 name_item.setData(Qt.ItemDataRole.UserRole, p.sp_id)
@@ -8285,8 +9004,7 @@ class MainWindow(QMainWindow):
 
     def _on_trend_days_apply(self) -> None:
         self._render_trend(self._matches)
-        self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일'
-        self._invalidate("luck")       # 운 범위의 띠도 같은 '최근 N일' 평균
+        self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일' — 운 범위는 시즌 범위라 안 건드린다(66 M2)
 
     @staticmethod
     def _make_table(columns: list[str], icons: dict[int, str] | None = None) -> FitTableWidget:
@@ -8315,6 +9033,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
+        self.tbl_players.setItemDelegateForColumn(4, BoldColumnDelegate(self.tbl_players))   # 승률 굵게(65 M9 · E7)
         # 19개 열이라 전역 폰트(15px)로는 스크롤 없이 한눈에 안 들어온다.
         # 이 표만 폰트·여백을 줄인 기본 크기(14/13px)에서 시작한다 — 창이
         # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
@@ -8354,14 +9073,14 @@ class MainWindow(QMainWindow):
                 if item:
                     item.setToolTip(help_text)
         self.tbl_players.setIconSize(QSize(18, 18))
-        self.tbl_players.setItemDelegateForColumn(2, GradeBadgeDelegate(self.tbl_players))
+        self._grade_badges("_render_players")
         # "선수" 열(1번)에 spId 를 UserRole 로 붙여두고(_render_players)
         # 더블클릭하면 상대 스쿼드 화면과 같은 선수 카드 다이얼로그를 연다.
         self.tbl_players.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
         v.addWidget(self.tbl_players, 1)
         return w
 
-    MATCH_FILTER_KINDS = (("승", T.GREEN), ("무", T.TEXT_DIM), ("패", T.RED))
+    MATCH_FILTER_KINDS = (("승", T.GOOD), ("무", T.TEXT_DIM), ("패", T.BAD))
 
     def _build_matches_tab(self) -> QWidget:
         w = QWidget()
@@ -8377,11 +9096,13 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setFixedWidth(48)
+            # 태그 꼴(S1) — 꽉 칠한 좋음/나쁨 위 글자는 대비가 안 나온다. 켜짐 = 그 색 글자·10% 바탕·그 색 테두리·굵게,
+            # 꺼짐 = 흐린 글자. 켜진 "무"(TEXT_DIM 글자)가 꺼진 칸과 갈리는 건 테두리·굵기·바탕이다
             btn.setStyleSheet(
-                f"QPushButton {{ border: 1px solid {T.BORDER}; border-radius: 6px;"
-                f" padding: 4px; }}"
-                f"QPushButton:checked {{ background: {color}; color: {T.ON_ACCENT};"
-                f" font-weight: bold; border-color: {color}; }}")
+                f"QPushButton {{ color: {T.TEXT_DIM}; border: 1px solid {T.BORDER};"
+                f" border-radius: {T.RADIUS}px; padding: 4px; }}"
+                + tag_qss(color, "QPushButton:checked",
+                          f"border-color: {color}; border-radius: {T.RADIUS}px; padding: 4px; font-weight: bold; "))
             btn.clicked.connect(self._apply_match_filter)
             row.addWidget(btn)
             self._match_filter_btns[kind] = btn
@@ -8403,29 +9124,61 @@ class MainWindow(QMainWindow):
         self.cb_match_color.currentIndexChanged.connect(lambda _i: self._apply_match_filter())
         row.addWidget(self.cb_match_color)
         row.addSpacing(16)
-        # 57 K3 — 상대 정보 열 넷. 1280 폭엔 열 13개가 안 들어간다(실측: 15px 에 1,309px 필요 · 표 폭 942) — 글자가
-        # MATCH_EXTRA_MIN_PX 아래로 줄어야 하면 접는다(_fit_match_extra). 넓히면 다시 펼친다
+        # 57 K3 — 상대 정보(카드 셋째 줄). 표일 때는 1280 폭에 열 13개가 안 들어가 저절로 접었지만, 카드는 줄이 따로라
+        # 폭 때문에 접을 일이 없다(65 M2 — 1280 에서 긴 글로 잰다 · test_match_list_opponent_columns_k3). 끄면 줄 높이가 준다
         self.chk_match_extra = QCheckBox("상대 정보")
         self.chk_match_extra.setChecked(True)
-        self.chk_match_extra.setToolTip("팀컬러 · 구단가치 · 맞대결 · 상대 점수 열")
-        self.chk_match_extra.toggled.connect(lambda _on: self._fit_match_extra())
+        self.chk_match_extra.setToolTip("팀컬러 · 구단가치 · 맞대결 · 상대 점수 줄")
+        self.chk_match_extra.toggled.connect(lambda on: self.match_list.set_show_extra(on))
         row.addWidget(self.chk_match_extra)
-        self.lb_match_extra = QLabel("(창이 좁아 접힘)")
-        self.lb_match_extra.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.lb_match_extra.setVisible(False)
-        row.addWidget(self.lb_match_extra)
+        row.addSpacing(16)
+        # 정렬(U1) — 표의 열 정렬 대신 콤보 하나. 고른 값은 settings.ini 에 남는다(없거나 모르는 값이면 최신순)
+        lb_s = QLabel("정렬")
+        lb_s.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(lb_s)
+        self.cb_match_sort = NoScrollComboBox()
+        for label, key in self.MATCH_SORTS:
+            self.cb_match_sort.addItem(label, key)
+        try:
+            saved = str(self._settings().value("view/match_sort", "") or "")
+        except Exception:
+            saved = ""
+        self.cb_match_sort.setCurrentIndex(max(0, self.cb_match_sort.findData(saved)))
+        self.cb_match_sort.currentIndexChanged.connect(lambda _i: self._on_match_sort_changed())
+        row.addWidget(self.cb_match_sort)
         row.addStretch(1)
         v.addLayout(row)
 
-        self.table = self._make_table(self.MATCH_COLUMNS, icons={3: "division", 4: "emblem"})
-        self._match_scores_shown = False
-        self._match_fit_pending = False
-        self.table.installEventFilter(self)
-        self._set_header_help(self.table, self.MATCH_COLUMNS, self.MATCH_COLUMN_HELP)
-        self.table.itemDoubleClicked.connect(self._on_match_double_clicked)
-        self._add_profile_action(self.table, 3)
-        v.addWidget(self.table, 1)
+        self.match_list = MatchCardList(self.MATCH_CARD_TIPS)
+        self._match_cards: list[MatchCard] = []   # 정렬 전(최신순) — 정렬을 바꿀 때 다시 만들지 않는다
+        self.match_list.doubleClicked.connect(self._on_match_double_clicked)
+        self._add_profile_action(self.match_list, lambda: getattr(self.match_list.current(), "opponent", ""))
+        v.addWidget(self.match_list, 1)
         return w
+
+    MATCH_SORTS = (("최신순", "recent"), ("점수 차", "diff"), ("평점", "rating"))
+
+    def _on_match_sort_changed(self) -> None:
+        try:
+            s = self._settings()
+            s.setValue("view/match_sort", self.cb_match_sort.currentData())
+            s.sync()
+        except Exception:
+            pass   # 설정 파일 하나 때문에 정렬이 안 바뀌면 안 된다
+        self._show_match_cards()
+
+    def _sorted_match_cards(self) -> list[MatchCard]:
+        """최신순(넥슨 순서) → 고른 정렬. 같은 값이면 최신이 앞(정렬은 안정적)."""
+        key = self.cb_match_sort.currentData()
+        cards = list(self._match_cards)
+        if key == "diff":
+            cards.sort(key=lambda c: -c.goal_diff)
+        elif key == "rating":
+            cards.sort(key=lambda c: -c.rating)
+        return cards
+
+    def _show_match_cards(self) -> None:
+        self.match_list.set_rows(self._sorted_match_cards())
 
     @staticmethod
     def _set_header_help(table: QTableWidget, columns: list[str], help_: dict[str, str]) -> None:
@@ -8434,17 +9187,21 @@ class MainWindow(QMainWindow):
             if item and name in help_:
                 item.setToolTip(help_[name])
 
-    def _add_profile_action(self, table: QTableWidget, col: int) -> None:
+    def _add_profile_action(self, view: QWidget, nick_of) -> None:
         """57 K13 — 줄 오른쪽 클릭 [넥슨에서 보기]. 메뉴는 Qt 가 띄운다(ActionsContextMenu — 모달 exec 를 부르지 않는다 PyQt 6).
-        여는 것은 사용자 브라우저라 앱의 넥슨 요청이 아니다(웹 데이터 스위치 밖)."""
-        table.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
-        act = QAction("넥슨 데이터센터에서 보기", table)
-        act.triggered.connect(lambda _=False, t=table, c=col: self._open_profile(t, c))
-        table.addAction(act)
+        여는 것은 사용자 브라우저라 앱의 넥슨 요청이 아니다(웹 데이터 스위치 밖). nick_of() → 고른 줄의 닉네임(표·카드 목록 공용)."""
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.ActionsContextMenu)
+        act = QAction("넥슨 데이터센터에서 보기", view)
+        act.triggered.connect(lambda _=False, f=nick_of: self._open_profile(f()))
+        view.addAction(act)
 
-    def _open_profile(self, table: QTableWidget, col: int) -> None:
+    @staticmethod
+    def _table_nick(table: QTableWidget, col: int) -> str:
         item = table.item(table.currentRow(), col) if table.currentRow() >= 0 else None
-        nick = item.text().strip() if item else ""
+        return item.text() if item else ""
+
+    def _open_profile(self, nick: str) -> None:
+        nick = (nick or "").strip()
         if nick and nick != "-":
             QDesktopServices.openUrl(QUrl(ranker.RANK_PAGE_URL.format(nick=quote(nick))))
 
@@ -8453,22 +9210,22 @@ class MainWindow(QMainWindow):
         self._apply_match_filter()
 
     def _apply_match_filter(self) -> None:
-        """체크한 결과만 남기고 나머지 행은 숨긴다 — 데이터는 안 지우고
-        표시만 가린다(setRowHidden), 그래서 필터 해제하면 바로 되돌아온다.
+        """체크한 결과만 남긴다 — 카드는 그대로 두고 모델의 보이는 줄만 거른다(필터를 풀면 바로 되돌아온다).
         찾기 칸(57 K13)은 상대 닉네임이나 그 상대의 팀컬러에 글자가 들어 있는 줄만 — 팀컬러를 찾던 사용자의 줄은 그대로 남는다."""
         active = {k for k, b in self._match_filter_btns.items() if b.isChecked()}
         color = self.cb_match_color.currentText()
         color = "" if color == self.POSITION_COLOR_ALL else color
         needle = self.ed_match_color.text().strip().lower()
-        for r in range(self.table.rowCount()):
-            item = self.table.item(r, 1)  # 결과 컬럼
-            text = item.text() if item else ""
-            kind = next((k for k, _ in self.MATCH_FILTER_KINDS if k in text), None)
-            opp = self.table.item(r, 3)   # 상대 컬럼
-            nick = opp.text() if opp else ""
-            off_color = bool(color) and self._team_colors.get(nick) != color
-            off_needle = bool(needle) and needle not in nick.lower() and needle not in (self._team_colors.get(nick) or "").lower()
-            self.table.setRowHidden(r, (kind is not None and kind not in active) or off_color or off_needle)
+        colors = self._team_colors
+
+        def keep(c: MatchCard) -> bool:
+            kind = next((k for k, _ in self.MATCH_FILTER_KINDS if k in c.result), None)
+            if kind is not None and kind not in active:
+                return False
+            if color and colors.get(c.opponent) != color:
+                return False
+            return not needle or needle in c.opponent.lower() or needle in (colors.get(c.opponent) or "").lower()
+        self.match_list.set_filter(keep)
 
     def _refresh_match_color_options(self) -> None:
         """경기 목록의 상대 팀컬러 콤보 — 고른 색이 새 목록에도 있으면 유지(_refresh_color_combo)."""
@@ -8485,27 +9242,66 @@ class MainWindow(QMainWindow):
         lb = QLabel("상대 검색")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.ed_opponent_filter = QLineEdit()
-        self.ed_opponent_filter.setPlaceholderText("닉네임 일부만 입력해도 찾습니다")
-        self.ed_opponent_filter.setMaximumWidth(240)
+        self.ed_opponent_filter.setPlaceholderText("이름 일부만 입력해도 찾습니다")
+        self.ed_opponent_filter.setFixedWidth(240)   # 옆에 묶음·정렬 콤보가 붙어 늘어나지 않으면 안내 글이 잘린다(실화면)
         self.ed_opponent_filter.textChanged.connect(self._apply_opponent_filter)
         row.addWidget(lb)
         row.addWidget(self.ed_opponent_filter)
+        row.addSpacing(12)
+        row.addWidget(self._dim_label("묶음"))
+        self.cb_opp_group = NoScrollComboBox()
+        for key, text in self.OPP_GROUPS:
+            self.cb_opp_group.addItem(text, key)
+        self.cb_opp_group.setToolTip("상대 팀컬러는 그 상대의 지금 팀컬러(조회한 상대만) — 그 경기 때 팀컬러가 아닐 수 있습니다")
+        self.cb_opp_group.currentIndexChanged.connect(lambda *_: self._invalidate("opponents"))
+        row.addWidget(self.cb_opp_group)
+        row.addSpacing(12)
+        row.addWidget(self._dim_label("정렬"))
+        self.cb_opp_sort = NoScrollComboBox()
+        self.cb_opp_sort.currentIndexChanged.connect(lambda *_: self._show_opp_rows())
+        row.addWidget(self.cb_opp_sort)
         row.addStretch(1)
-        self.lb_opponent_note = QLabel(self._opponent_note_text())
-        self.lb_opponent_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        row.addWidget(self.lb_opponent_note)
         v.addLayout(row)
         v.addLayout(self._build_opp_filter_row())
 
-        self.tbl_opponents = self._make_table(self.OPPONENT_COLUMNS, icons={0: "division"})
-        self._set_header_help(self.tbl_opponents, self.OPPONENT_COLUMNS, {
-            "승률": win_rate_note(False),
-            "전체 대비": ("이 상대 승률 − 필터에 걸린 경기 전체 승률(%p). 이 상대와 "
-                       f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
-        self.tbl_opponents.itemDoubleClicked.connect(self._on_opponent_double_clicked)
-        self._add_profile_action(self.tbl_opponents, 0)
-        v.addWidget(self.tbl_opponents, 1)
+        # 승률 카드(매치업 꼴) — 필터에 걸린 경기 전체(줄의 "(±차)" 기준과 같은 값)
+        top = QHBoxLayout()
+        self.card_opp_rate = StatCard("승률 · 필터에 걸린 경기")
+        self.card_opp_rate.setToolTip(win_rate_note(False))
+        self.opp_rate_bar = WdlBar()
+        self.card_opp_rate.layout().insertWidget(3, self.opp_rate_bar)
+        self.card_opp_rate.setMinimumWidth(260)
+        top.addWidget(self.card_opp_rate)
+        # 범위 글은 카드 옆 — 위 줄(찾기·묶음·정렬)에 두면 1280 폭에서 찾기 칸이 눌려 안내 글이 "…" 로 잘렸다(실화면)
+        self.lb_opponent_note = QLabel(self._opponent_note_text())
+        self.lb_opponent_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_opponent_note.setWordWrap(True)
+        top.addWidget(self.lb_opponent_note, 1, Qt.AlignmentFlag.AlignBottom)
+        v.addLayout(top)
+
+        self.opp_list = RateRowList(tips={
+            "rate": win_rate_note(False),
+            "diff": ("이 줄 승률 − 필터에 걸린 경기 전체 승률(%p). "
+                     f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
+        self.opp_list.doubleClicked.connect(self._on_opponent_double_clicked)
+        self._add_profile_action(self.opp_list, self._opp_row_nick)
+        self._opp_rows: list[RateRow] = []
+        self._opp_picked_details: list[dict] = []
+        v.addWidget(self.opp_list, 1)
         return w
+
+    # 상대 전적 묶음(65 M4) — 구단주 줄만 더블클릭(그 상대와의 최근 경기)·프로필 메뉴가 있다. 내 팀컬러 조합별은 58(3판 S1)
+    OPP_GROUPS = (("owner", "구단주"), ("formation", "상대 포메이션"), ("color", "상대 팀컬러"))
+
+    @staticmethod
+    def _dim_label(text: str) -> QLabel:
+        lb = QLabel(text)
+        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+        return lb
+
+    def _opp_row_nick(self) -> str:
+        row = self.opp_list.current()
+        return row.key if row is not None and self.cb_opp_group.currentData() == "owner" else ""
 
     OPP_FILTER_ALL = "전체"
     OPP_FILTER_CUSTOM = "직접 지정"
@@ -8569,15 +9365,16 @@ class MainWindow(QMainWindow):
         return row
 
     def _reset_opp_filter(self) -> None:
-        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min):
+        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min, self.cb_opp_group):
             w.blockSignals(True)
+        self.cb_opp_group.setCurrentIndex(0)
         self.cb_opp_games.setCurrentIndex(0)
         self.sp_opp_games.setVisible(False)
         self.cb_opp_form.setCurrentIndex(0)
         self.cb_opp_value.setCurrentIndex(0)
         self.chk_opp_min.setChecked(False)
         self.cb_opp_min.setEnabled(False)
-        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min):
+        for w in (self.cb_opp_games, self.cb_opp_form, self.cb_opp_value, self.chk_opp_min, self.cb_opp_group):
             w.blockSignals(False)
 
     def _on_opp_games_changed(self, _i: int) -> None:
@@ -8613,11 +9410,9 @@ class MainWindow(QMainWindow):
         return res.bins if res is not None else []
 
     def _apply_opponent_filter(self) -> None:
+        """찾기 칸 — 줄 이름(닉네임 · 포메이션 · 팀컬러)에 글자가 들어 있는 줄만. 모델 안 목록에서 거른다(65 대응표)."""
         needle = self.ed_opponent_filter.text().strip().lower()
-        for r in range(self.tbl_opponents.rowCount()):
-            item = self.tbl_opponents.item(r, 0)  # 상대 컬럼
-            hidden = bool(needle) and (not item or needle not in item.text().lower())
-            self.tbl_opponents.setRowHidden(r, hidden)
+        self.opp_list.set_filter((lambda r: needle in r.label.lower()) if needle else None)
 
     POSITION_COLOR_ALL = "전체"
     POSITION_COLOR_NONE = "— 팀컬러를 고르세요 —"
@@ -8799,6 +9594,13 @@ class MainWindow(QMainWindow):
         page_main = QWidget()
         pv = QVBoxLayout(page_main)
         pv.setContentsMargins(0, 0, 0, 0)
+        # 머리 숫자 카드(67 R11 · P5) — COMPARE_ROWS 앞 넷 · 큰 숫자 = 나 · 보조 = 상대 · ▲▼ = 나 − 상대
+        cards = QHBoxLayout()
+        self.compare_cards = {}
+        for label, _attr, _fmt, _better in self.COMPARE_ROWS[:4]:
+            self.compare_cards[label] = StatCard(label)
+            cards.addWidget(self.compare_cards[label], 1)
+        pv.addLayout(cards)
         self.lb_compare_summary = QLabel("")
         self.lb_compare_summary.setWordWrap(True)
         self.lb_compare_summary.setTextFormat(Qt.TextFormat.RichText)
@@ -8996,9 +9798,18 @@ class MainWindow(QMainWindow):
                     it.setToolTip(win_rate_text(s.win, s.draw, s.lose, mixed) + "\n" + win_rate_note(mixed))
             if higher_is_better is not None and mine_val != opp_val:
                 mine_wins = (mine_val > opp_val) == higher_is_better
-                item_mine.setForeground(QColor(T.GREEN if mine_wins else T.TEXT))
-                item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GREEN))
+                item_mine.setForeground(QColor(T.GOOD if mine_wins else T.TEXT))
+                item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GOOD))
         self.tbl_compare.refit()  # _fill 을 안 거치는 표
+        units = {"평균 득점": ("", 2), "평균 실점": ("", 2)}
+        for label, mine_txt, opp_txt, mine_val, opp_val, higher_is_better in rows:
+            card = self.compare_cards.get(label)
+            if card is None:
+                continue
+            unit, digits = units.get(label, ("%p", 1))
+            card.set(mine_txt)
+            card.set_sub(f"{opp_nick} {opp_txt}")
+            card.set_delta(mine_val, opp_val, unit, "상대 대비", digits, lower_better=not higher_is_better)
 
         self._render_compare_extra(opp_nick, my_details, opp_details, opp_ouid, mixed,
                                    {r[0]: (r[3], r[4]) for r in rows if r[5] is not None and r[0] != "승률"})
@@ -9131,19 +9942,37 @@ class MainWindow(QMainWindow):
         vf = QVBoxLayout(gb_f)
         vf.setSpacing(5)
 
+        # 대표 포메이션 카드(65 M5) — 미니 축구장 크게 · 포메이션 · 승률 · 승무패 막대 · 경기 수
+        card = QFrame()
+        card.setObjectName("myFormationCard")
+        card.setStyleSheet(f"QFrame#myFormationCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+                           f" border-radius: {T.RADIUS}px; }}")
+        row_f = QHBoxLayout(card)
+        row_f.setContentsMargins(12, 10, 12, 10)
+        self.lb_my_formation_pitch = QLabel()
+        row_f.addWidget(self.lb_my_formation_pitch)
+        col = QVBoxLayout()
+        col.setSpacing(3)
+        col.addWidget(self._dim_label("가장 많이 쓴 내 포메이션"))
         self.lb_my_formation = QLabel("-")
         mf = QFont()
-        mf.setPointSize(14)
+        mf.setPointSize(16)
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
-        self.lb_my_formation.setStyleSheet(
-            f"background: {T.GREEN_SOFT}; border: 1px solid {T.BORDER};"
-            f" border-radius: 6px; padding: 8px;")
-        self.lb_my_formation_pitch = QLabel()   # 작은 축구장(I5) — 글자 줄 왼쪽
-        row_f = QHBoxLayout()
-        row_f.addWidget(self.lb_my_formation_pitch)
-        row_f.addWidget(self.lb_my_formation, 1)
-        vf.addLayout(row_f)
+        col.addWidget(self.lb_my_formation)
+        self.lb_my_formation_rate = QLabel("")
+        self.lb_my_formation_rate.setStyleSheet("font-weight: bold;")
+        col.addWidget(self.lb_my_formation_rate)
+        self.my_formation_bar = WdlBar()
+        col.addWidget(self.my_formation_bar)
+        self.lb_my_formation_sub = self._dim_label("")
+        col.addWidget(self.lb_my_formation_sub)
+        col.addStretch(1)
+        row_f.addLayout(col, 1)
+        row_card = QHBoxLayout()
+        row_card.addWidget(card)
+        row_card.addStretch(1)
+        vf.addLayout(row_card)
 
         # 55 F1 — 상대 포메이션 묶기. 랭커 화면과 같은 콤보·같은 함수(rankmeta.formation_group · J5)
         row_g = QHBoxLayout()
@@ -9167,31 +9996,48 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _build_results_tab(self) -> QWidget:
+        """경기 결과(65 M6) — 위: 결과 줄(정규·연장·승부차기·몰수) + 시간대별 득실 · 가운데: 득점·실점 유형(슛 타입 분포 꼴) ·
+        아래: 승부차기에서 만난 상대 GK 카드."""
         scroll, v = self._tactics_scroll()
         gb_r = QGroupBox("경기 결과")
-        rl = QHBoxLayout(gb_r)
-        self.box_result = QVBoxLayout()
-        self.box_gf = QVBoxLayout()
-        self.box_ga = QVBoxLayout()
-        for box, title in ((self.box_result, "경기 결과"),
-                           (self.box_gf, "득점 유형"),
-                           (self.box_ga, "실점 유형")):
-            box.setSpacing(2)
-            holder = QGroupBox(title)
-            holder.setLayout(box)
-            rl.addWidget(holder, 1)
+        self.box_result = QVBoxLayout(gb_r)
+        self.box_result.setSpacing(2)
         v.addWidget(gb_r)
+        row = QHBoxLayout()
+        self.shot_types, self.shot_type_notes = {}, {}
+        for key, title, tone in (("gf", "득점 유형 — 내 슛", T.GOOD_FILL), ("ga", "실점 유형 — 상대 슛", T.BAD_FILL)):
+            gb = QGroupBox(title)
+            box = QVBoxLayout(gb)
+            self.shot_types[key] = ShotTypeRows(tone)
+            box.addWidget(self.shot_types[key])
+            note = self._dim_label("")
+            note.setWordWrap(True)
+            box.addWidget(note)
+            box.addStretch(1)
+            self.shot_type_notes[key] = note
+            row.addWidget(gb, 1)
+        v.addLayout(row)
+        gb_k = QGroupBox("승부차기에서 만난 상대 골키퍼")
+        kv = QVBoxLayout(gb_k)
+        self.lb_shootout_note = self._dim_label("")
+        self.lb_shootout_note.setWordWrap(True)
+        kv.addWidget(self.lb_shootout_note)
+        self.grid_shootout = QGridLayout()
+        self.grid_shootout.setHorizontalSpacing(8)
+        self.grid_shootout.setVerticalSpacing(8)
+        kv.addLayout(self.grid_shootout)
+        v.addWidget(gb_k)
         v.addStretch(1)
         return scroll
 
     def _build_pass_style_tab(self) -> QWidget:
         scroll, v = self._tactics_scroll()
-        # 1.4.1 N5 — 경기 상세의 패스 종류 6가지(R10). 표(FitTableWidget)는 스크롤 안에서 높이가 안 잡혀 글자 칸으로
+        # 1.4.1 N5 — 경기 상세의 패스 종류 6가지(R10) · 65 M7 종류마다 카드(성공률 크게 · 경기당 시도·성공 · 막대) — 칸은 config.PASS_CARD_COLS
         gb_p = QGroupBox("패스 스타일")
         pv = QVBoxLayout(gb_p)
         self.grid_pass = QGridLayout()
-        self.grid_pass.setHorizontalSpacing(18)
-        self.grid_pass.setVerticalSpacing(3)
+        self.grid_pass.setHorizontalSpacing(8)
+        self.grid_pass.setVerticalSpacing(8)
         pv.addLayout(self.grid_pass)
         self.lb_pass_note = QLabel("")
         self.lb_pass_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
@@ -9378,7 +10224,10 @@ class MainWindow(QMainWindow):
     def _on_seasons_loaded(self, items: list) -> None:
         self._rank_seasons = items
         self._render_elo()   # 지금 시즌 시작이 바뀐다 — 들고 있는 값으로 다시 그림(읽기 없음)
+        self._render_division()   # 등급 계단도 같은 시즌 시작(66 M2)
         self._invalidate("calendar")   # 달력 기준선(그날 시즌 승률)이 시즌표를 쓴다
+        self._invalidate("luck")       # 운 범위도 같은 기준선(66 M2)
+        self._invalidate("rewards")    # FC 카드의 시즌 시작(66 R2)
         self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
@@ -9458,11 +10307,13 @@ class MainWindow(QMainWindow):
     def _diag_note_text(self) -> str:
         return f"{self._scope_text()} 기준 · 승·무·패 아닌 결과(오류 등)는 제외"
 
-    def _opponent_note_text(self, picked: int | None = None, total: int | None = None) -> str:
+    def _opponent_note_text(self, picked: int | None = None, total: int | None = None, no_nick: int = 0) -> str:
         head = f"{self._scope_text()} 기준"
         if picked is not None and picked != total:
             head += f" · 필터에 걸린 {picked:,}경기 / {total:,}경기" if picked else " · 조건에 맞는 경기가 없습니다"
-        return f"{head} · 더블클릭하면 그 상대와의 최근 경기 스쿼드"
+        if no_nick:
+            head += f" · 닉네임 없는 상대 {no_nick:,}경기는 줄에서 뺌(승률 카드엔 포함)"
+        return f"{head} · 구단주 줄을 더블클릭하면 그 상대와의 최근 경기"
 
     def _refresh_scope_notes(self) -> None:
         # 상대 전적 머리 글은 _render_opponents 가 쓴다 — 필터에 걸린 경기 수를 같이 적어서(57 K1). 부르는 쪽이 다시 그린다
@@ -9595,6 +10446,7 @@ class MainWindow(QMainWindow):
         for menu, tabs in self._page_tabs.items():
             name = (saved_tabs or {}).get(self._tab_sid[menu])
             if isinstance(name, str):
+                name = self.OLD_TAB_NAMES.get(menu, {}).get(name, name)
                 tabs.set_current(name, emit=False)
         if not isinstance(page, str):
             return "대시보드", None
@@ -9645,7 +10497,7 @@ class MainWindow(QMainWindow):
         "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
         "predcheck": [("랭킹 추이", "예측 되짚기")], "rewards_rank": [("랭킹 추이", "보상")],
-        "daywr": [("메타 분석", "하루 승률")], "valuescore": [("메타 분석", "가성비")],
+        "daywr": [("메타 분석", "하루 승률")], "tcboard": [("메타 분석", "팀컬러")],
         "valuebins": [("메타 분석", "구단가치")], "tiermeans": [("메타 분석", "구간 평균")],
         "wrelo": [("메타 분석", "승률→점수")], "traits": [("메타 분석", "포지션 특성")],
     }
@@ -9679,7 +10531,7 @@ class MainWindow(QMainWindow):
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
             "divstay": lambda: self._render_divstay(self._details),   # 시즌 범위(diagnosis 와 같다)
-            "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 띠는 그래프 '최근 N일'(sp_trend_days)
+            "luck": lambda: self._render_luck(self._matches),         # 시즌 범위 · 날 판정은 달력과 같은 calendar_days(66 U2)
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "rewards": lambda: self._render_rewards(self._details),   # 시즌 범위(diagnosis 와 같다)
             "poslevel": self._render_poslevel,   # 50단계 C4 — 시즌 범위 무관(내 감독모드 최신 1000판 · 49 칩과 같은 창)
@@ -9698,7 +10550,7 @@ class MainWindow(QMainWindow):
             "metatrend": self._render_meta_trend,    # rank.db 영구 집계(tier_counts) — 같은 이유
             "elodist": self._render_elo_dist,        # rank.db elo_hist + 검색 계정 ELO 선(EloLoader 결과)
             # 2.4.1 — rank.db 원본 14일(검색 결과에 안 묶임) · weekly·wrelo 는 검색 계정 한 줄을 더한다
-            "daywr": self._render_day_wr, "valuescore": self._render_value_score, "valuebins": self._render_value_bins,
+            "daywr": self._render_day_wr, "tcboard": self._render_tc_board, "valuebins": self._render_value_bins,
             "tiermeans": self._render_tier_means, "wrelo": self._render_wr_elo, "weekly": self._render_weekly,
             "rankmove": self._render_rank_move,      # 검색 계정 · rank.db 원본
             "calendar": self._render_calendar,       # 55 D1 — 저장된 전체(시즌 필터 무시) · 기준선은 날마다 그 시즌
@@ -9791,7 +10643,7 @@ class MainWindow(QMainWindow):
         self._render_head_icons()
 
         if self._is_champion and r and r.ranked:
-            c.set("순위", f"{r.rank:,}위", T.GREEN)
+            c.set("순위", f"{r.rank:,}위", T.ACCENT)
             c.set("전적", f"{r.record_text} ({r.win_rate})")
             c.set("구단가치", r.team_value_text or NA)
             c.set("점수", f"{r.elo:g}" if r.elo is not None else NA)
@@ -9991,6 +10843,43 @@ class MainWindow(QMainWindow):
         self._icon_loaders.append(loader)
         loader.start()
 
+    def _start_list_icons(self, view: CardListView) -> None:
+        """줄 카드 목록(65 P4)의 그림 — 표의 _start_icons 와 같은 길(목록당 로더 하나 · 같은 주소 한 번 · 포메이션은 그린다).
+        받은 그림은 (종류, 키) 표에 붙어 정렬·거르기가 바뀌어도 제 줄을 따라간다(CardListView)."""
+        old = getattr(view, "_icon_loader", None)
+        if old is not None and old.isRunning():
+            old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        entries = []
+        for kind, key in sorted(view.icon_entries(), key=repr):
+            if view.icon(kind, key) is not None:
+                continue   # 이미 붙었다 — 다시 그릴 때마다 받지 않는다
+            if kind == "formation":
+                pm = formation_pixmap(key)
+                if not pm.isNull():
+                    view.put_icon(kind, key, pm)
+                continue
+            url = images.icon_url(kind, key, self._seasons)
+            if url:
+                entries.append((kind, key, url))
+        if not entries:
+            view._icon_loader = None
+            return
+        loader = IconLoader(entries, self._icon_dir)
+        loader.loaded.connect(lambda kind, key, path, v=view: self._apply_list_icon(v, kind, key, path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        view._icon_loader = loader
+        self._icon_loaders.append(loader)
+        loader.start()
+
+    @staticmethod
+    def _apply_list_icon(view: CardListView, kind: str, key, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 그림 없이
+            return
+        if not sip.isdeleted(view):
+            view.put_icon(kind, key, pm)
+
     @staticmethod
     def _apply_icon(table: FitTableWidget, kind: str, key, path: str) -> None:
         """받은 그림을 같은 키의 칸에 붙인다. 정렬 중인 열에 붙이면 매번 재정렬되어 큰 표가 멈춘다(실측 1만 행 1.4초) —
@@ -10019,6 +10908,14 @@ class MainWindow(QMainWindow):
         except RuntimeError:
             pass   # 표가 이미 지워졌다 — 늦게 온 그림은 버린다
 
+    def _grade_badges(self, filler: str) -> None:
+        """GRADE_BADGE_COLUMNS 의 표에 배지 대리자 + 열 여백(배지 좌우 PAD — refit 이 계속 쓴다)."""
+        attr, cols = self.GRADE_BADGE_COLUMNS[filler]
+        table = getattr(self, attr)
+        for c in cols:
+            table.setItemDelegateForColumn(c, GradeBadgeDelegate(table))
+        table.set_content_widths({c: 2 * GradeBadgeDelegate.PAD for c in cols})
+
     @staticmethod
     def _fit_columns_to_content(table: FitTableWidget,
                                 extra: dict[int, int] | None = None) -> None:
@@ -10038,96 +10935,44 @@ class MainWindow(QMainWindow):
             return (core.opp_rank_label(band), band + 0.5)   # 정확한 순위보다 뒤로(같은 상한이면)
         return ("-", 10 ** 9)
 
+    def _match_card(self, m: MatchSummary, scores, h2h: dict) -> MatchCard:
+        color = self._team_colors.get(m.opponent) or ""
+        value = self._team_values.get(m.opponent)
+        s = h2h.get(m.opponent)
+        emblem = self._emblem_cell(color, color) if color else None
+        return MatchCard(
+            match_id=m.match_id, date_text=m.date_text, result=m.result,
+            score=f"{m.my_goals} : {m.opp_goals}",
+            shootout=f"승부차기 {m.my_shootout}:{m.opp_shootout}" if m.is_shootout else "",
+            opponent=m.opponent,
+            division_key=self._division_icon_key(m.opp_division),   # 그 경기 때 상대 등급
+            opp_pad=m.opp_pad,
+            stats=(("점유", f"{m.possession}%"), ("슛", f"{m.shoot_effective}/{m.shoot_total}"),
+                   ("패스", f"{m.pass_rate:.0f}%"), ("평점", f"{m.rating:.2f}")),
+            color=color, emblem_key=emblem.icon_key if isinstance(emblem, IconCell) else None,
+            value_text=short_bp(value) if value else "",   # 짧게(110억) — 정확한 값은 [팀컬러 랭킹]
+            h2h_text=wdl_text(s.win, s.draw, s.lose) if s else "",
+            opp_score=self._opp_score_cell(scores, m.match_id)[0] if scores is not None else None,
+            when=m.match_date, goal_diff=m.my_goals - m.opp_goals, rating=m.rating)
+
     def _render_matches(self, matches: list[MatchSummary]) -> None:
+        """경기 목록(65 M2) — 카드를 만들고(최신순) 고른 정렬로 보인다. 상대 점수 칸은 점수가 왔을 때만(관문·내 계정)."""
         elo = self._elo.get(self._ouid) if self._ouid else None
         scores = elo if elo is not None and elo.opp_scores is not None else None
-        self._match_scores_shown = scores is not None   # 관문 미달·남의 목록 — 상대 점수 열이 없다(_fit_match_extra)
         h2h = {s.nickname: s for s in opponent_stats(self._matches)}   # 시즌 범위(상대 전적 탭과 같다)
-        rows = []
-        for m in matches:
-            color = self._team_colors.get(m.opponent) or ""
-            value = self._team_values.get(m.opponent)
-            s = h2h.get(m.opponent)
-            rows.append([
-                m.date_text, m.result, m.score,
-                IconCell(m.opponent, None, self._division_icon_key(m.opp_division)),   # 그 경기 때 상대 등급
-                self._emblem_cell(color, color) if color else ("-", ""),
-                (short_bp(value), value) if value else ("-", -1),   # 짧게(110억) — 1280 폭 · 정확한 값은 [팀컬러 랭킹]
-                (wdl_text(s.win, s.draw, s.lose), s.games) if s else ("-", 0),
-                self._opp_score_cell(scores, m.match_id) if scores is not None else "",
-                (f"{m.possession}%", m.possession), (f"{m.shoot_total}", m.shoot_total),
-                (f"{m.shoot_effective}", m.shoot_effective),
-                (f"{m.pass_rate:.0f}%", m.pass_rate), (f"{m.rating:.2f}", m.rating),
-            ])
-        # enable_sort=False — 선수 지표에서 겪은 것과 같은 이유(재정렬 타이밍
-        # 버그). 행 배경색을 매기는 동안은 채운 순서 = matches 순서가 보장돼야
-        # 한다.
-        self._fill(self.table, rows, enable_sort=False)
-        for r, m in enumerate(matches):
-            if "승" in m.result:
-                bg = T.WIN
-            elif "패" in m.result:
-                bg = T.LOSE
-            else:
-                bg = None
-            for c in range(self.table.columnCount()):
-                item = self.table.item(r, c)
-                if not item:
-                    continue
-                if bg:
-                    item.setBackground(self._blend(T.PANEL, bg, T.ROW_TINT))
-                    item.setForeground(QColor(T.TEXT))
-            # 더블클릭하면 이 경기 스쿼드를 바로 찾을 수 있게 match_id 를 붙인다.
-            date_item = self.table.item(r, 0)
-            if date_item:
-                date_item.setData(Qt.ItemDataRole.UserRole, m.match_id)
-        self.table.setSortingEnabled(True)
-        self._fit_match_extra()
+        self._match_cards = [self._match_card(m, scores, h2h) for m in matches]
         self._refresh_match_color_options()
-        self._apply_match_filter()
+        self._apply_match_filter()        # 거르기 조건을 먼저 — 줄은 아래 한 번만 채운다
+        self._show_match_cards()
+        self._start_list_icons(self.match_list)
 
-    MATCH_EXTRA = ("팀컬러", "구단가치", "맞대결", "상대 점수")
-
-    def _fit_match_extra(self) -> None:
-        """57 K3 상대 정보 열 — 체크가 켜져 있으면 펼쳐 재 보고, 글자가 config.MATCH_EXTRA_MIN_PX 아래로 줄어야 하면 접는다.
-        상대 점수는 점수가 왔을 때만(관문·내 계정). 표 크기가 바뀔 때마다 다시(eventFilter — 한 번으로 모아)."""
-        self._match_fit_pending = False
-        t = self.table
-        cols = [self.MATCH_COLUMNS.index(n) for n in self.MATCH_EXTRA]
-        score = self.MATCH_COLUMNS.index("상대 점수")
-        want = self.chk_match_extra.isChecked()
-
-        def show(on: bool) -> None:
-            for c in cols:
-                t.setColumnHidden(c, not (on and (c != score or self._match_scores_shown)))
-            t.refit()
-        show(want)
-        folded = want and t.rowCount() > 0 and t.font().pixelSize() < config.MATCH_EXTRA_MIN_PX
-        if folded:
-            show(False)
-        self.lb_match_extra.setVisible(folded)
-
-    def eventFilter(self, obj, e) -> bool:
-        if obj is getattr(self, "table", None) and e.type() == QEvent.Type.Resize and not self._match_fit_pending:
-            self._match_fit_pending = True   # 끌어서 크기를 바꾸는 동안 여러 번 와도 한 번만
-            QTimer.singleShot(0, self._fit_match_extra)
-        return super().eventFilter(obj, e)
-
-    def _on_match_double_clicked(self, item) -> None:
-        date_item = self.table.item(item.row(), 0)
-        opp_item = self.table.item(item.row(), 3)
-        if not date_item or not opp_item:
+    def _on_match_double_clicked(self, index) -> None:
+        card = index.data(ROW_ROLE) if index.isValid() else None
+        if card is None:
             return
-        match_id = date_item.data(Qt.ItemDataRole.UserRole)
-        detail = next((d for d in self._details if d.get("matchId") == match_id), None)
-        if detail is None:
-            return
-        opponent = opp_item.text()
-        found = core.opponent_squad([detail], self._ouid, opponent)
-        if found is None:
-            return
-        players, match_date, result = found
-        self._show_opponent_squad(opponent, players, match_date, result)
+        detail = next((d for d in self._details if d.get("matchId") == card.match_id), None)
+        if detail is not None:
+            self._show_match_detail(detail, tab="스쿼드", side="opp")
 
     @staticmethod
     def _blend(base_hex: str, target_hex: str, mix: float) -> QColor:
@@ -10152,53 +10997,111 @@ class MainWindow(QMainWindow):
         picked = core.filter_matches(
             matches, self._opp_game_count(), self.cb_opp_form.currentData(), lambda m: forms.get(m.match_id),
             vbin, lambda nick: core.bin_of_value(bins, self._team_values.get(nick)))
-        stats = opponent_stats(picked)
-        if self.chk_opp_min.isChecked():
-            k = self.cb_opp_min.currentData() or 1
-            stats = [s for s in stats if s.games >= k]
-        # 전체 대비(K13) — 기준은 필터에 걸린 경기 전체(그 줄 포함) · 같은 식(E1 — 승÷전체 그대로)
+        by_id = {d.get("matchId"): d for d in self._details}
+        self._opp_picked_details = [by_id[m.match_id] for m in picked if m.match_id in by_id]   # 최신순 그대로
+        # 승률 카드·"(±차)" 기준 — 필터에 걸린 경기 전체(그 줄 포함) · 같은 식(E1 — 승÷전체 그대로)
         mixed = core.mixed_of_matches(picked)
         w = sum(1 for m in picked if "승" in m.result)
         d = sum(1 for m in picked if "무" in m.result)
         lo = sum(1 for m in picked if "패" in m.result)
-        base_rated = core.rated(w, d, lo, mixed)
-        base = core.win_pct(w, d, lo, mixed)
-        rows = []
-        for s in stats:
-            weak = core.is_weak(s.rated, core.MIN_COND) or not base_rated
-            diff = s.win_rate - base
-            rows.append([
-                IconCell(s.nickname, None, self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
-                wdl_text(s.win, s.draw, s.lose),
-                (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
-                ("", -999.0) if weak else (f"{diff:+.1f}%p", diff),   # E2 — 몇 판짜리 큰 차이를 숨긴다
-                (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
-                (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
-                s.last_date,
-            ])
-        self._fill(self.tbl_opponents, rows)
-        diff_col = self.OPPONENT_COLUMNS.index("전체 대비")
-        for r in range(self.tbl_opponents.rowCount()):
-            it = self.tbl_opponents.item(r, diff_col)
-            if it is not None and it.text():
-                it.setToolTip(f"필터에 걸린 {len(picked):,}경기 전체 승률 {base:.1f}% 기준")
-        self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches)))
+        self.card_opp_rate.set(win_rate_text(w, d, lo, mixed, short=True))
+        self.card_opp_rate.set_sub(f"{len(picked):,}경기")
+        self.opp_rate_bar.set_counts(w, d, lo, core.is_weak(core.rated(w, d, lo, mixed), core.MIN_COND))
+        group = self.cb_opp_group.currentData() or "owner"
+        self._opp_no_nick = 0   # 구단주 묶음일 때만 _opp_owner_rows 가 센다
+        if group == "formation":
+            rows = self._opp_formation_rows(self._opp_picked_details, (w, d, lo))
+        elif group == "color":
+            rows = self._opp_color_rows(picked)
+        else:
+            rows = self._opp_owner_rows(picked, core.win_pct(w, d, lo, mixed), core.rated(w, d, lo, mixed))
+        if self.chk_opp_min.isChecked():
+            k = self.cb_opp_min.currentData() or 1
+            rows = [r for r in rows if r.games >= k]
+        self._opp_rows = rows
+        sorts = [s for s in RATE_SORTS if group == "owner" or s[0] != "recent"]   # 묶음 줄엔 최근 경기가 없다
+        keep = self.cb_opp_sort.currentData()
+        self.cb_opp_sort.blockSignals(True)
+        self.cb_opp_sort.clear()
+        for key, text in sorts:
+            self.cb_opp_sort.addItem(text, key)
+        i = self.cb_opp_sort.findData(keep)
+        self.cb_opp_sort.setCurrentIndex(max(0, i))
+        self.cb_opp_sort.blockSignals(False)
+        self.lb_opponent_note.setText(self._opponent_note_text(len(picked), len(matches), self._opp_no_nick))
+        self._show_opp_rows()
         self._apply_opponent_filter()
+        self._start_list_icons(self.opp_list)
 
-    def _on_opponent_double_clicked(self, item) -> None:
-        row = item.row()
-        name_item = self.tbl_opponents.item(row, 0)
-        if not name_item:
+    def _show_opp_rows(self) -> None:
+        self.opp_list.set_rows(sort_rate_rows(self._opp_rows, self.cb_opp_sort.currentData() or "games"))
+
+    @staticmethod
+    def _rate_row(label: str, win: int, draw: int, lose: int, mixed: bool, base: float | None,
+                  games: int | None = None, **kw) -> RateRow:
+        """승률 줄 하나 — 표본 흐림(is_weak · rated 분모) · 기준 대비는 표본이 될 때만(E2).
+        games 를 주면 경기 수는 그 값(집계가 "오류" 경기까지 센다 — 표 시절 '전적' 열과 같은 수)."""
+        n = core.rated(win, draw, lose, mixed)
+        weak = core.is_weak(n, core.MIN_COND)
+        rate = core.win_pct(win, draw, lose, mixed)
+        return RateRow(label, win, draw, lose, win_rate_text(win, draw, lose, mixed, short=True), rate,
+                       None if weak or base is None else rate - base, weak=weak,
+                       sample=sample_text(n, mixed) if weak else "", rated=n,
+                       other=max(0, (games or 0) - win - draw - lose), **kw)
+
+    def _opp_owner_rows(self, picked: list[MatchSummary], base: float, base_rated: int) -> list[RateRow]:
+        first: dict[str, int] = {}
+        for i, m in enumerate(picked):
+            first.setdefault(m.opponent, i)
+        # 닉네임 없는 상대(NO_NICK)는 서로 다른 사람이 한 줄로 뭉쳐 "한 상대" 처럼 보인다 — 줄에서만 빼고(승률 카드·기준은
+        # 그대로 전체) 머리 글에 경기 수를 적는다(67 R12)
+        stats = opponent_stats(picked)
+        self._opp_no_nick = sum(s.games for s in stats if s.nickname == core.NO_NICK)
+        return [self._rate_row(s.nickname, s.win, s.draw, s.lose, s.mixed, base if base_rated else None, s.games,
+                               sub=f"득 {s.avg_goals_for:.2f} · 실 {s.avg_goals_against:.2f} · 최근 {s.last_date}",
+                               icon=("division", self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
+                               key=s.nickname, recent=first.get(s.nickname, 0))
+                for s in stats if s.nickname != core.NO_NICK]
+
+    def _opp_formation_rows(self, details: list[dict], wdl: tuple[int, int, int]) -> list[RateRow]:
+        stats = core.formation_stats(details, self._ouid or "")
+        mixed = stats[0].mixed if stats else False   # 묶음마다 식 한 번 — 기준도 같은 식으로
+        base = core.win_pct(*wdl, mixed) if core.rated(*wdl, mixed) else None
+        rows = []
+        for f in stats:
+            pm = formation_pixmap(f.formation, positions=f.positions)
+            if not pm.isNull():
+                self.opp_list.put_icon("formation", f.formation, pm)   # 자리 점은 이 묶음의 실제 자리 — 받기 전에 붙인다
+            rows.append(self._rate_row(core.formation_label(f.formation), f.win, f.draw, f.lose, f.mixed, base,
+                                       f.games, icon=("formation", f.formation), key=f.formation))
+        return rows
+
+    def _opp_color_rows(self, picked: list[MatchSummary]) -> list[RateRow]:
+        """상대 팀컬러별 — [팀컬러 승률] 과 같은 근사(상대의 지금 팀컬러 · 찾아진 상대만) · 기준도 같은 함수."""
+        mixed = core.team_color_mixed(picked, self._team_color_of)
+        base_n, base = core.team_color_baseline(picked, self._team_color_of, mixed)
+        rows = []
+        for s in core.team_color_stats(picked, self._team_color_of, team_value_of=self._team_values.get, mixed=mixed):
+            cell = self._emblem_cell(s.team_color)
+            rows.append(self._rate_row(s.team_color, s.win, s.draw, s.lose, s.mixed, base if base_n else None, s.games,
+                                       sub=f"상대 {len(s.opponents):,}명",
+                                       icon=("emblem", cell.icon_key) if isinstance(cell, IconCell) else (),
+                                       key=s.team_color))
+        return rows
+
+    def _on_opponent_double_clicked(self, index) -> None:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        if row is None or self.cb_opp_group.currentData() != "owner":
             return
-        nickname = name_item.text()
-        found = core.opponent_squad(self._details, self._ouid, nickname)  # 표와 같은 범위
-        if found is None:
+        nickname = row.key
+        # 목록과 같은 범위 — K1 필터를 거친 경기(5판 [중] — 예전엔 시즌 범위 전체에서 찾았다)
+        detail = core.latest_match_with(self._opp_picked_details, self._ouid, nickname)
+        if detail is None:
             QMessageBox.information(
-                self, "상대 스쿼드",
-                f"{self._scope_text()} 안에서 이 상대와 붙은 경기의 스쿼드를 찾지 못했습니다.")
+                self, "경기 상세",
+                f"{self._scope_text()} 안에서 이 상대와 붙은 경기를 찾지 못했습니다.")
             return
-        players, match_date, result = found
-        self._show_opponent_squad(nickname, players, match_date, result)
+        self._show_match_detail(detail, tab="스쿼드", side="opp")   # 지금까지와 같은 첫 화면 — 그 상대 스쿼드
 
     def _season_name(self, sp_id: int) -> str:
         info = self._seasons.get(core.season_id_of(sp_id))
@@ -10348,35 +11251,21 @@ class MainWindow(QMainWindow):
         if keep is not None:
             stats_list = [s for s in stats_list if keep(s.team_color)]
         weak = [self._teamcolor_weak(s) for s in stats_list]
-        eff = self.TEAMCOLOR_EFFECT_TEXT
-        # 숫자 열은 (표시 문자열, 정렬용 값) 튜플로 줘야 SortableItem 이
-        # "10"을 "9"보다 뒤로 보내는 문자열 정렬 대신 실제 크기로 정렬한다
-        # (안 그러면 헤더 클릭 정렬이 9,88,80,8,8,8,75... 식으로 깨진다).
+        # [팀컬러 승률] — 승률 줄(65 매치업 꼴 · 67 R3). 기준 대비는 표본이 될 때만 · 흐린 줄은 어느 정렬이든 아래(옛 표의 sink)
         rate_rows = []
-        for s in stats_list:
-            diff = s.win_rate - base_rate
-            rate_rows.append([self._emblem_cell(s.team_color), (str(s.games), s.games), (str(len(s.opponents)), len(s.opponents)),
-                              (str(s.win), s.win), (str(s.draw), s.draw), (str(s.lose), s.lose),
-                              (win_rate_text(s.win, s.draw, s.lose, s.mixed, short=True), s.win_rate),
-                              (f"{diff:+.1f}%p", diff) if base_n else ("-", 0.0), eff])
-        # 채우는 순서(PyQt 규칙 1): 정렬 끈 채로 채움 → 색·흐림 → 정렬 켬 → 기본 정렬
-        self._fill(self.tbl_teamcolor_rate, rate_rows, enable_sort=False)
-        rate_col = self.TEAMCOLOR_RATE_COLUMNS.index("승률")
-        for i, s in enumerate(stats_list):
-            if not weak[i] and base_n:
-                item = self.tbl_teamcolor_rate.item(i, rate_col)
-                diff = s.win_rate - base_rate
-                mix = min(1.0, abs(diff) / self.TEAMCOLOR_TINT_FULL_PP) * T.ROW_TINT
-                item.setBackground(self._blend(T.PANEL, T.CHART_UP if diff >= 0 else T.CHART_DOWN, mix))
-                item.setForeground(QColor(T.TEXT))
-        self._mark_teamcolor_rows(self.tbl_teamcolor_rate, self.TEAMCOLOR_RATE_COLUMNS, stats_list, weak)
-        # 표를 다시 채울 때마다(범위 변경·새 경기 확인 등) 사용자가 전에
-        # 다른 열로 정렬해 뒀어도 "경기 많은 순"으로 되돌린다 — 이 표는
-        # 열어보면 항상 이 기준으로 보이는 게 목적이라, 헤더 클릭 정렬
-        # 상태가 재렌더 사이에 남아 있으면 안 된다.
-        self.tbl_teamcolor_rate.setSortingEnabled(True)
-        self.tbl_teamcolor_rate.sortByColumn(
-            self.TEAMCOLOR_RATE_COLUMNS.index("경기"), Qt.SortOrder.DescendingOrder)
+        for s, why in zip(stats_list, weak):
+            cell = self._emblem_cell(s.team_color)
+            r = self._rate_row(s.team_color, s.win, s.draw, s.lose, s.mixed, base_rate if base_n else None, s.games,
+                               sub=f"상대 {len(s.opponents):,}명",
+                               icon=("emblem", cell.icon_key) if isinstance(cell, IconCell) and cell.icon_key else (),
+                               key=s.team_color)
+            if why:
+                r.weak, r.diff, r.tip = True, None, why
+                r.sample = r.sample or ("구분 전" if teamcolor.is_unsplit(s.team_color) else f"상대 {len(s.opponents)}명")
+            rate_rows.append(r)
+        self._tc_rate_rows = rate_rows
+        self._show_tc_rate_rows()
+        self._start_list_icons(self.tc_rate_list)
         # 팀가치는 넥슨식 축약("10경 9,631조")으로 보여주고 정렬은 원 단위로.
         # 팀가치를 아는 상대가 없는 팀컬러(구버전 캐시 등)는 "-" — 다음
         # 조회(TTL 만료·백필) 때 채워진다.
@@ -10385,9 +11274,10 @@ class MainWindow(QMainWindow):
 
         rank_rows = [[(str(i), i), self._emblem_cell(s.team_color), (str(s.games), s.games),
                      value_cell(s.avg_value), value_cell(s.min_value),
-                     value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1), eff]
+                     value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1)]
                     for i, s in enumerate(stats_list, start=1)]
         self._fill(self.tbl_teamcolor_rank, rank_rows, enable_sort=False)
+        self.btn_tc_rank_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
         # 범위 막대 축은 필터와 무관하게 표의 전체 행 — 스핀을 바꿔도 막대 길이가 안 변하게
         lows = [s.min_value for s in stats_all if s.min_value]
         highs = [s.max_value for s in stats_all if s.max_value]
@@ -10399,7 +11289,7 @@ class MainWindow(QMainWindow):
                 item.setData(RANGE_ROLE, (s.min_value, s.avg_value, s.max_value))
                 item.setToolTip(f"최저 {ranker.format_team_value(s.min_value)} · 평균 "
                                 f"{ranker.format_team_value(s.avg_value)} · 최고 {ranker.format_team_value(s.max_value)}")
-        self._mark_teamcolor_rows(self.tbl_teamcolor_rank, self.TEAMCOLOR_RANK_COLUMNS, stats_list, weak)
+        self._mark_teamcolor_rows(self.tbl_teamcolor_rank, stats_list, weak)
         self.tbl_teamcolor_rank.setSortingEnabled(True)
         self.tbl_teamcolor_rank.sortByColumn(
             self.TEAMCOLOR_RANK_COLUMNS.index("만난 횟수"), Qt.SortOrder.DescendingOrder)
@@ -10426,36 +11316,33 @@ class MainWindow(QMainWindow):
         for lb in self._teamcolor_note_labels:
             lb.setText(self._teamcolor_note_text(len(opps), known) + extra)
 
-    def _mark_teamcolor_rows(self, table, columns: list[str], stats_list: list, weak: list[str]) -> None:
-        """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink) · "효과" 칸에 팀컬러 글자와 안내."""
-        eff_col = columns.index("효과")
-        for i, s in enumerate(stats_list):
+    def _mark_teamcolor_rows(self, table, stats_list: list, weak: list[str]) -> None:
+        """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink)."""
+        for i, _s in enumerate(stats_list):
+            if not weak[i]:
+                continue
             for c in range(table.columnCount()):
                 item = table.item(i, c)
                 if item is None:
                     continue
-                if weak[i]:
-                    item.sink = True
-                    item.setForeground(QColor(T.TEXT_DIM))
-                    item.setToolTip(weak[i])
-                    item.setData(Qt.ItemDataRole.UserRole + 1, True)
-            item = table.item(i, eff_col)
-            if item is not None:
-                item.setData(Qt.ItemDataRole.UserRole, s.team_color)
-                item.setForeground(QColor(T.TEXT_DIM if weak[i] else T.GREEN))
-                item.setToolTip("넥슨 데이터센터의 단계별 효과·적용 선수(누를 때만 읽습니다)")
+                item.sink = True
+                item.setForeground(QColor(T.TEXT_DIM))
+                item.setToolTip(weak[i])
+                item.setData(Qt.ItemDataRole.UserRole + 1, True)
 
-    def _on_teamcolor_cell_clicked(self, table, columns: list[str], row: int, col: int) -> None:
-        """"효과" 열의 한 번 클릭에서만 연다 — 한 번 클릭은 더블클릭 앞에 오므로 다른 열에서 열면 랭킹 탭의
-        포지션 창과 겹친다. 화살표 키 이동(currentChanged)에는 안 묶는다."""
-        if col != columns.index("효과"):
-            return
-        item = table.item(row, col)
-        label = item.data(Qt.ItemDataRole.UserRole) if item else None
-        if label:
-            self._open_teamcolor_effect(label)
+    def _show_tc_rate_rows(self) -> None:
+        rows = sort_rate_rows(self._tc_rate_rows, self.cb_tc_rate_sort.currentData() or "games")
+        rows.sort(key=lambda r: r.weak)   # 흐린 줄은 매치수 순에서도 아래(옛 표 sink — 안정 정렬이라 순서는 그대로)
+        self.tc_rate_list.set_rows(rows)
+        self.btn_tc_rate_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
+
+    def _tc_rank_selected(self) -> str | None:
+        items = self.tbl_teamcolor_rank.selectedItems()
+        item = self.tbl_teamcolor_rank.item(items[0].row(), 1) if items else None
+        return item.text() if item is not None and item.text() else None
 
     def _open_teamcolor_effect(self, label: str) -> None:
+        """팀컬러 정보 창을 여는 한 자리(67 R1 목록 · R3 내 상대 두 탭 — 같은 창 하나)."""
         if self._teamcolor_dialog is None:
             self._teamcolor_dialog = TeamColorDialog(self)
         self._teamcolor_dialog.open_label(label)
@@ -10619,13 +11506,14 @@ class MainWindow(QMainWindow):
             self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
 
     def _on_teamcolor_double_clicked(self, item) -> None:
-        if item.column() == self.TEAMCOLOR_RANK_COLUMNS.index("효과"):
-            return   # 효과 열은 한 번 클릭(효과 창) — 포지션 창을 같이 띄우지 않는다
-        row = item.row()
-        color_item = self.tbl_teamcolor_rank.item(row, 1)
-        if not color_item:
+        color_item = self.tbl_teamcolor_rank.item(item.row(), 1)
+        if color_item:
+            self._show_teamcolor_players(color_item.text())
+
+    def _show_teamcolor_players(self, color: str | None) -> None:
+        """그 팀컬러 상대들이 포지션별로 주로 쓴 선수 — [팀컬러 승률] 줄 · [팀컬러 랭킹] 표의 두 번 누름(같은 규칙 · R3)."""
+        if not color:
             return
-        color = color_item.text()
         nicknames = {nick for nick, c in self._team_colors.items() if c == color}
         if not nicknames:
             return
@@ -10810,37 +11698,269 @@ class MainWindow(QMainWindow):
             if p.window().isVisible() and p.btn_notice.isVisibleTo(p):
                 self._start_card_info(p)
 
-    def _show_opponent_squad(self, nickname: str, players: list[dict],
-                             match_date: str, result: str) -> None:
-        dlg = QDialog(self)
-        dlg.setWindowTitle(f"{nickname} 스쿼드")
-        fit_to_screen(dlg, 600, 760)
-        # 내용은 세로 스크롤 안에 — 축구장 최소 560x640 + 제목이 약 688 이라 FHD 150% 노트북(창 안쪽 약 657)에선
-        # 대화상자를 화면에 맞춰 줄여도 안 들어갔다(2026-10-04 실측)
-        outer = QVBoxLayout(dlg)
-        outer.setContentsMargins(0, 0, 0, 0)
-        body = QWidget()
-        v = QVBoxLayout(body)
-        outer.addWidget(VScrollArea(body))
+    # ── 경기 상세 창(65 M3) ────────────────────────────────────────────
+    # 여는 자리는 셋 — 경기 목록 더블클릭 · 상대 전적 더블클릭(둘 다 스쿼드 탭의 상대 칸 = 예전 상대 스쿼드 창과 같은 첫 화면)
+    # · ④ 슛 맵 최다 득점/실점 매치(요약 탭). 창은 모달(3판 S3) — 로더 정리는 _close_match_detail 한 곳.
+    def _show_match_detail(self, detail: dict, tab: str = "요약", side: str = "opp") -> None:
+        dlg = self._make_match_detail(detail, tab, side)
+        try:
+            dlg.exec()
+        finally:
+            self._close_match_detail(dlg)
 
-        formation = core.formation_of(players)
-        title = QLabel(f"{nickname}  ·  {formation}  ·  {result}  ·  {match_date}")
-        title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-        title.setWordWrap(True)
-        v.addWidget(title)
-
-        pitch, _sp_ids = self._make_pitch_from_players(players)
-        v.addWidget(pitch, 1)
-
-        # 얼굴 이미지·시즌 아이콘·카드 정보는 백그라운드로 — 다이얼로그는 모달이지만
-        # Qt 이벤트 루프는 계속 돌아서 시그널이 도착하는 대로 칩에 채워진다.
-        loaders = self._start_pitch_loaders(pitch)
-        dlg.exec()
-        for ld in loaders:
+    @staticmethod
+    def _close_match_detail(dlg: "MatchDetailDialog") -> None:
+        for ld in dlg.loaders:
             ld.cancel()
-        for ld in loaders:
+        for ld in dlg.loaders:
             if not isinstance(ld, CardInfoLoader):  # 카드 정보는 요청 하나(타임아웃 10초)까지 — 창 표가 종료 때 기다린다
                 ld.wait(500)
+
+    def _make_match_detail(self, detail: dict, tab: str = "요약", side: str = "opp") -> "MatchDetailDialog":
+        me, opp = core.match_sides(detail, self._ouid)
+        m = core.parse_match(detail, self._ouid)
+        dlg = MatchDetailDialog(self, m.opponent if m else "-")
+        if m is None or me is None:
+            dlg.v.addWidget(QLabel("이 경기에서 내 기록을 찾지 못했습니다."))
+            return dlg
+        dlg.v.addWidget(self._detail_head(m, me, opp))
+        dlg.tabs.addTab(self._detail_summary(dlg, detail, m), "요약")
+        dlg.tabs.addTab(self._detail_squads(dlg, me, opp, m), "스쿼드")
+        dlg.tabs.addTab(self._detail_shots(dlg, detail), "슛")
+        dlg.tabs.addTab(self._detail_h2h(dlg, m), "상대 전적")
+        dlg.v.addWidget(dlg.tabs, 1)
+        dlg.tabs.setCurrentIndex(max(0, MatchDetailDialog.TABS.index(tab) if tab in MatchDetailDialog.TABS else 0))
+        dlg.show_side(side)
+        return dlg
+
+    def _detail_side(self, p: dict, nickname: str, right: bool, value_tip: str = "") -> QWidget:
+        """머리 한쪽 — 작은 축구장 · 닉네임 · 등급 · 평점(+ 상대는 지금 구단가치)."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        align = Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft
+        players = [x for x in p.get("player") or [] if x.get("spPosition") != core.SUB_POSITION]
+        pm = formation_pixmap(core.formation_of(players), config.FORMATION_HEAD_PX,
+                              positions=tuple(x.get("spPosition") for x in players))
+        icon = QLabel()
+        if not pm.isNull():
+            icon.setPixmap(pm)
+            icon.setToolTip(core.formation_label(core.formation_of(players)))
+        name = QLabel(nickname)
+        name.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        md = p.get("matchDetail") or {}
+        div = p.get("division")
+        bits = [self._division_names.get(div, "") if isinstance(div, int) else ""]
+        rating = md.get("averageRating")
+        if isinstance(rating, (int, float)):
+            bits.append(f"평점 {rating:.2f}")
+        sub = QLabel(" · ".join(b for b in bits if b) or "-")
+        sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+        for x in (icon, name, sub):
+            x.setAlignment(align)
+            v.addWidget(x, 0, align)
+        if right:
+            value = self._team_values.get(nickname)
+            lb = QLabel(f"구단가치 {short_bp(value)}" if value else "구단가치 -")
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            lb.setToolTip(value_tip)
+            v.addWidget(lb, 0, align)
+        return w
+
+    def _detail_head(self, m: MatchSummary, me: dict, opp: dict) -> QWidget:
+        w = QWidget()
+        g = QGridLayout(w)
+        g.setContentsMargins(4, 4, 4, 8)
+        g.addWidget(self._detail_side(me, self._nick or m.my_nickname, False), 0, 0)
+        g.addWidget(self._detail_side(opp, m.opponent, True, self.MATCH_COLUMN_HELP["구단가치"]), 0, 2)
+        mid = QVBoxLayout()
+        mid.setSpacing(2)
+        score = QLabel(f"{m.my_goals} : {m.opp_goals}")
+        f = score.font()
+        f.setPixelSize(round(T.BASE_FONT_PX * 2))
+        f.setBold(True)
+        score.setFont(f)
+        score.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mid.addWidget(score)
+        if m.is_shootout:
+            so = QLabel(f"승부차기 {m.my_shootout} : {m.opp_shootout}")
+            so.setStyleSheet(f"color: {T.TEXT_DIM};")
+            so.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            mid.addWidget(so)
+        tag = Tag(m.result, "good" if "승" in m.result else ("bad" if "패" in m.result else "muted"))
+        mid.addWidget(tag, 0, Qt.AlignmentFlag.AlignCenter)
+        when = QLabel(m.date_text)
+        when.setStyleSheet(f"color: {T.TEXT_DIM};")
+        when.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        mid.addWidget(when)
+        g.addLayout(mid, 0, 1)
+        g.setColumnStretch(0, 1)
+        g.setColumnStretch(2, 1)
+        h2h = QLabel(self._season_h2h_text(m))
+        h2h.setObjectName("detailH2h")
+        h2h.setStyleSheet(f"color: {T.TEXT_DIM};")
+        h2h.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        h2h.setWordWrap(True)
+        g.addWidget(h2h, 1, 0, 1, 3)
+        return w
+
+    def _season_h2h_text(self, m: MatchSummary) -> str:
+        """머리 "이 시즌 맞대결" — 그 경기가 든 시즌(시즌표 · matchtime KST 경계 63) 안 이 상대와의 저장된 경기 전부.
+        시즌표가 없으면 저장된 전체. 상대 전적 탭(지금 고른 범위)과 범위가 다를 수 있어 범위 이름을 같이 단다."""
+        pool = [x for x in self._matches_all if x.opponent == m.opponent]
+        if self._rank_seasons:
+            season = sn.season_of(self._rank_seasons, m.match_date)
+            pool = [x for x in pool if sn.season_of(self._rank_seasons, x.match_date) == season]
+            scope = season.label if season is not None else "현재 시즌"
+        else:
+            scope = "저장된 전체"
+        w = sum(1 for x in pool if "승" in x.result)
+        d = sum(1 for x in pool if "무" in x.result)
+        lo = sum(1 for x in pool if "패" in x.result)
+        return f"이 시즌 맞대결 {len(pool)}판 · {wdl_text(w, d, lo)} ({scope})"
+
+    def _detail_summary(self, dlg: "MatchDetailDialog", detail: dict, m: MatchSummary) -> QWidget:
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setSpacing(8)
+
+        def head(text: str) -> None:
+            lb = QLabel(text)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-weight: bold;")
+            v.addWidget(lb)
+        head("경기 흐름")
+        goals = core.match_goals(detail, self._ouid)
+        dlg.timeline = GoalTimeline()
+        dlg.timeline.set_goals([(g.minute, g.mine) for g in goals])
+        v.addWidget(dlg.timeline)
+
+        def who(sp) -> str:
+            return self._names.get(sp, "?") if sp is not None else "?"
+        lines = []
+        for mine, label in ((True, "나"), (False, "상대")):
+            got = [f"{g.minute:.0f}' {who(g.sp_id)}" for g in goals if g.mine == mine]
+            lines.append(f"{label}: " + (", ".join(got) if got else "골 없음"))
+        dlg.goal_text = QLabel("\n".join(lines))
+        dlg.goal_text.setStyleSheet(f"color: {T.TEXT_DIM};")
+        dlg.goal_text.setWordWrap(True)
+        v.addWidget(dlg.goal_text)
+
+        head("기대 골(xG)")
+        xg = [core.shot_map([detail], self._ouid, mine=s).xg for s in (True, False)]
+        for label, mine, opp, fmt in (("기대 골", xg[0], xg[1], "{:.2f}"), ("실제 골", m.my_goals, m.opp_goals, "{:.0f}")):
+            bar = VersusBar(label, T.OPP_FILL)
+            bar.set_values(mine, opp, fmt)
+            v.addWidget(bar)
+        xg_note = QLabel(XG_METHOD_NOTE)
+        xg_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        xg_note.setWordWrap(True)
+        v.addWidget(xg_note)
+
+        mvp = core.match_mvp(detail, self._ouid)
+        dlg.mvp = QLabel(f"MVP  {who(mvp[1])} ({'나' if mvp[0] else '상대'} · 평점 {mvp[2]:.1f})" if mvp else "MVP  -")
+        dlg.mvp.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+        v.addWidget(dlg.mvp)
+
+        head("경기 정보 (나 vs 상대)")
+        dlg.versus = []
+        for ln in core.match_versus(detail, self._ouid):
+            bar = VersusBar(ln.name, T.OPP_FILL)
+            bar.set_values(ln.mine, ln.opp, "{:.2f}" if ln.name == "평균 평점" else ("{:.1f}" if ln.unit == "%" and
+                           ln.name != "점유율" else "{:.0f}"), ln.unit)
+            dlg.versus.append(bar)
+            v.addWidget(bar)
+        v.addStretch(1)
+        return VScrollArea(body)
+
+    def _detail_squads(self, dlg: "MatchDetailDialog", me: dict, opp: dict, m: MatchSummary) -> QWidget:
+        """스쿼드 탭 — 나 / 상대 두 칸 전환(나란히 두면 축구장 최소 폭 둘이 600 을 넘는다). 축구장 둘은 지금 만든다 —
+        로더 정리 목록(dlg.loaders)이 탭을 눌렀는지와 무관하게 정해진다(5판 [중])."""
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        grp = QButtonGroup(w)
+        grp.setExclusive(True)
+        stack = QStackedWidget()
+        for i, (key, label, p, nick) in enumerate((("mine", "나", me, self._nick or m.my_nickname),
+                                                    ("opp", "상대", opp, m.opponent))):
+            btn = QPushButton(f"{label} · {nick}")
+            btn.setCheckable(True)
+            btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+            btn.clicked.connect(lambda _=False, k=key: dlg.show_side(k))
+            grp.addButton(btn)
+            row.addWidget(btn)
+            dlg.side_buttons[key] = btn
+            page = QWidget()
+            pv = QVBoxLayout(page)
+            players = p.get("player") or []
+            title = QLabel(f"{nick}  ·  {core.formation_of(players)}  ·  {m.date_text}")
+            title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            title.setWordWrap(True)
+            pv.addWidget(title)
+            pitch, _sp_ids = self._make_pitch_from_players(players)
+            pv.addWidget(pitch, 1)
+            dlg.pitches[key] = pitch
+            # 얼굴·시즌 아이콘·카드 정보는 백그라운드로 — 모달이어도 이벤트 루프가 돌아 오는 대로 칩에 채워진다.
+            # 카드 정보 요청은 예전 상대 스쿼드 창과 같은 관문(chip_auto_allowed) 뒤 — 창 하나에 축구장 둘이라 최대 두 배
+            dlg.loaders.extend(self._start_pitch_loaders(pitch))
+            stack.addWidget(VScrollArea(page))
+            dlg.side_pages[key] = i
+        row.addStretch(1)
+        v.addLayout(row)
+        v.addWidget(stack, 1)
+        dlg.squad_stack = stack
+        return w
+
+    def _detail_shots(self, dlg: "MatchDetailDialog", detail: dict) -> QWidget:
+        body = QWidget()
+        v = QVBoxLayout(body)
+        row = QHBoxLayout()
+        dlg.cb_shot_side = NoScrollComboBox()
+        dlg.cb_shot_side.addItem("내 슛", True)
+        dlg.cb_shot_side.addItem("상대 슛", False)
+        row.addWidget(dlg.cb_shot_side)
+        dlg.shot_note = QLabel("")
+        dlg.shot_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        row.addWidget(dlg.shot_note, 1)
+        v.addLayout(row)
+        dlg.shot_map = ShotMapWidget()
+        v.addWidget(dlg.shot_map, 1)
+
+        def show() -> None:
+            sm = core.shot_map([detail], self._ouid, mine=bool(dlg.cb_shot_side.currentData()))
+            dlg.shot_map.set_shots(sm.shots)
+            dlg.shot_note.setText(f"슛 {sm.total} · 유효 {sm.effective} · 골 {sm.goals} · xG {sm.xg:.2f}")
+        dlg.cb_shot_side.currentIndexChanged.connect(lambda _i: show())
+        show()
+        return VScrollArea(body)
+
+    def _detail_h2h(self, dlg: "MatchDetailDialog", m: MatchSummary) -> QWidget:
+        """상대 전적 탭 — 지금 불러온 범위(시즌 필터) 안 이 상대와의 경기. 줄은 보기만(창을 열지 않는다 — 4판 A2: 모달이 겹겹이 쌓인다)."""
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setSpacing(4)
+        games = [x for x in self._matches if x.opponent == m.opponent]
+        w = sum(1 for x in games if "승" in x.result)
+        d = sum(1 for x in games if "무" in x.result)
+        lo = sum(1 for x in games if "패" in x.result)
+        dlg.h2h_note = QLabel(f"{self._scope_text()} 안 이 상대와 {len(games)}판 · {wdl_text(w, d, lo)}")
+        dlg.h2h_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        dlg.h2h_note.setWordWrap(True)
+        v.addWidget(dlg.h2h_note)
+        dlg.h2h_rows = []
+        for x in games:
+            row = QHBoxLayout()
+            row.addWidget(Tag(x.result, "good" if "승" in x.result else ("bad" if "패" in x.result else "muted")))
+            lb = QLabel(f"{x.score}   ·   {x.date_text}" + ("   (이 경기)" if x.match_id == m.match_id else ""))
+            if x.match_id == m.match_id:
+                lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            row.addWidget(lb, 1)
+            v.addLayout(row)
+            dlg.h2h_rows.append(x.match_id)
+        v.addStretch(1)
+        return VScrollArea(body)
 
     PLAYERCARD_IMG_DIR_NAME = "player_card_images"
 
@@ -11053,7 +12173,7 @@ class MainWindow(QMainWindow):
         photo = QLabel()
         photo.setFixedSize(96, 96)
         photo.setScaledContents(True)
-        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: 8px;")
+        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: {T.RADIUS}px;")
         header.addWidget(photo)
         if info.photo_url:
             widgets_by_url[info.photo_url] = photo
@@ -11088,7 +12208,7 @@ class MainWindow(QMainWindow):
 
         stars = "★" * info.skill_moves + "☆" * max(info.skill_moves_max - info.skill_moves, 0)
         fame_lb = QLabel(f"명성 {info.fame}  ·  개인기 {stars}")
-        fame_lb.setStyleSheet(f"color: {T.YELLOW};")
+        fame_lb.setStyleSheet(f"color: {T.WARN};")
         text_col.addWidget(fame_lb)
         text_col.addStretch(1)
         header.addLayout(text_col, 1)
@@ -11225,13 +12345,13 @@ class MainWindow(QMainWindow):
         v.addLayout(tc_row3)
 
         ovr_lb = QLabel("OVR -")
-        ovr_lb.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")
+        ovr_lb.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold;")
         v.addWidget(ovr_lb)
 
         group_cards: dict[str, StatCard] = {}
         grow_row = QHBoxLayout()
         for name in playerinfo.GROUP_NAMES:
-            card = StatCard(name, T.GREEN)
+            card = StatCard(name, T.ACCENT)
             group_cards[name] = card
             grow_row.addWidget(card)
         v.addLayout(grow_row)
@@ -11399,7 +12519,7 @@ class MainWindow(QMainWindow):
             cell = QFrame()
             cell.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL}; border: 1px solid "
-                f"{T.GREEN if grade == current_grade else T.BORDER}; border-radius: 6px; }}")
+                f"{T.ACCENT if grade == current_grade else T.BORDER}; border-radius: 6px; }}")
             cv = QVBoxLayout(cell)
             cv.setContentsMargins(8, 6, 8, 6)
             grade_lb = QLabel(f"{grade}강" if grade else "기본")
@@ -11480,53 +12600,65 @@ class MainWindow(QMainWindow):
             counts=True, baseline=50, ma=ma, avg_weights=[p.rated for p in self._trend_periods],
             weak=[p.rated == 0 for p in self._trend_periods])
 
-        # 등급 추이 — 승률 추이와 같은 "최근 N일" 구간으로 자른다. 점은 하루 마지막 등급(1만 경기 → 약 100점).
-        self._div_games = core.division_trend(self._details, self._ouid)
-        days_div = core.daily_division(self._div_games)
-        if days_div:
-            cutoff = days_div[-1].day - timedelta(days=days - 1)
-            days_div = [d for d in days_div if d.day >= cutoff]
-        self._div_days = days_div
-        self._div_days_n = days
-        self.zoom_division.set_labels([f"{d.day:%m/%d}" for d in days_div], self._ouid)
-        self.zoom_division.setVisible(len(days_div) >= 3)
-        self._draw_division()
+        self._render_division()
 
         self._show_trend_summary()
         self._render_sc_records()
         self._render_elo()
 
+    def _render_division(self) -> None:
+        """등급 계단 재료 — 저장된 전체의 등급 이력을 이번 시즌 시작으로 자른다(66 G1 · R1). 시즌 시작은 점수 그래프와 같은
+        `season_span` 이라 시즌표·ELO 가 도착할 때도 다시 부른다(M2)."""
+        data = self._elo.get(self._ouid) if self._ouid else None
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        self._div_span = (start, known)
+        self._div_runs = core.division_runs(self._div_trend_all(), since=start) if self._ouid else []
+        self.zoom_division.set_labels([f"{r.start:%m/%d}" for r in self._div_runs], self._ouid)
+        self.zoom_division.setVisible(len(self._div_runs) >= 3)
+        self._draw_division()
+        self._load_division_badges()
+
     def _draw_division(self) -> None:
-        """등급 추이 — 확대 막대(zoom_division)가 고른 날만. 고른 구간이 G1_GAME_LEVEL_DAYS 일 이하면 경기마다 한 점(U4)."""
+        """등급 계단 — 확대 막대(zoom_division)가 고른 구간만. 머리 줄(현재 · 시즌 최고)은 늘 시즌 전체."""
         lo, hi = self.zoom_division.span()
-        days_div = self._div_days[lo:hi + 1] if self._div_days else []
-        name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
-        entries = self._sc_entries()[0]
-        zoomed = not self.zoom_division.is_full()
-        span = (days_div[-1].day - days_div[0].day).days + 1 if days_div else 0
-        if zoomed and days_div:
-            self.gb_division.setTitle(f"등급 추이 — {days_div[0].day:%m/%d}~{days_div[-1].day:%m/%d}"
-                                      + (" · 경기마다" if span <= config.G1_GAME_LEVEL_DAYS else ""))
+        runs = self._div_runs[lo:hi + 1]
+        start, known = self._div_span
+        if runs and not self.zoom_division.is_full():
+            tail = f"{runs[0].start:%m/%d}~{runs[-1].end:%m/%d}"
         else:
-            self.gb_division.setTitle(f"최근 {self._div_days_n}일 등급 추이")
-        if zoomed and days_div and span <= config.G1_GAME_LEVEL_DAYS:
-            first, last = days_div[0].day, days_div[-1].day
-            games = [(t, div) for t, div in self._div_games if first <= t.date() <= last]
-            entry_set = set(entries)
-            self.division_chart.set_data(
-                [(f"{t:%m/%d %H:%M}", div) for t, div in games], self._division_names,
-                tips=[f"{t:%Y-%m-%d %H:%M} · {name(div)}" for t, div in games],
-                markers=[i for i, (t, _) in enumerate(games) if t in entry_set])
+            tail = season_title(start, known) if start is not None else ""
+        self.gb_division.setTitle(f"등급 — {tail}" if tail else "등급")
+        head = None
+        if self._div_runs:
+            head = (self._div_runs[-1].division, min(r.division for r in self._div_runs),
+                    "시즌 최고" if known else "기간 최고")   # R2 — 시즌을 모르면 그 70일을 시즌이라 부르지 않는다
+        entries = set(self._sc_entries()[0])
+        self.division_chart.set_data(runs, self._division_names,
+                                     markers=[i for i, r in enumerate(runs) if r.start in entries], head=head)
+
+    def _load_division_badges(self) -> None:
+        """축·머리 줄 배지 — 표 칸 그림과 같은 길(images.icon_url · IconLoader · 캐시 폴더). 못 받으면 그 등급만 글자."""
+        entries = []
+        for div in sorted({r.division for r in self._div_runs} - self._div_badge_tried):
+            url = images.icon_url("division", self._division_icon_key(div))
+            if url:
+                self._div_badge_tried.add(div)
+                entries.append(("division", div, url))
+        if not entries:
             return
-        entry_days = {t.date() for t in entries}
-        self.division_chart.set_data(
-            [(f"{d.day:%m/%d}", d.last) for d in days_div], self._division_names,
-            tips=[f"{d.day:%Y-%m-%d} · 마지막 {name(d.last)} · 처음 {name(d.first)} · 최고 {name(d.best)}"
-                  for d in days_div],
-            markers=[i for i, d in enumerate(days_div) if d.day in entry_days],
-            # 슈챔에 올랐다가 그날 마지막엔 내려온 날 — 점은 하루 마지막 등급이라 슈챔 줄에 따로 한 점(2026-10-19 사용자)
-            peaks={i: d.best for i, d in enumerate(days_div)
-                   if d.best == core.SUPER_CHAMPION_DIVISION_ID and d.last != d.best})
+        loader = IconLoader(entries, self._icon_dir)
+        loader.loaded.connect(lambda _k, div, path: self._on_division_badge(div, path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        self._icon_loaders.append(loader)
+        loader.start()
+
+    def _on_division_badge(self, div: int, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            Path(path).unlink(missing_ok=True)   # 깨진 캐시 — 지우고 글자로
+            return
+        self._div_badges[div] = pm
+        self.division_chart.set_badges(self._div_badges)
 
     # ── ELO 그래프 (1.3.1 · 13) ──────────────────────────────────────────────
     def _load_elo(self, ouid: str | None = None) -> None:
@@ -11559,11 +12691,14 @@ class MainWindow(QMainWindow):
         if ouid == self._ouid:
             self._invalidate("matches")   # 57 K3 상대 점수 열
             self._render_elo()
+            self._render_division()       # 스냅숏 시즌 시작이 바뀔 수 있다(66 M2)
             self._invalidate("elodist")   # 점수 분포의 검색 계정 선
             self._invalidate("wrelo")     # 승률→점수의 내 ELO(마지막 스냅숏에 없을 때)
             self._invalidate("poslevel")  # 자리별 수준의 라벨 조건(ⓗ — 가장 최근 순위)
             self._invalidate("dashboard")  # 55 머리 줄 — 경기 받기 끝과 둘 중 늦게 온 쪽이 완성(J4)
             self._invalidate("rewards_rank")   # 57 K11 지금 등수로 본 순위 보상
+            self._invalidate("calendar")       # 66 G5 카드 — 시즌 시작·예상 순위 보상
+            self._invalidate("rewards")        # 66 G5b 같은 카드
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
@@ -11599,7 +12734,61 @@ class MainWindow(QMainWindow):
     def _render_predict(self) -> None:
         pr = self._pred.get(self._ouid) if self._ouid else None
         self.lb_elo_predict.setText(core.describe_prediction(pr) if pr is not None else "")
-        self.lb_elo_predict.setVisible(pr is not None and config.WEB_DATA)
+        # 숫자를 낸 예측은 아래 "시즌 말 컷" 카드·접기에 — 여기 글 줄은 못 냈을 때 원인 문구만(67 R8)
+        self.lb_elo_predict.setVisible(pr is not None and config.WEB_DATA and not pr.ok)
+        self._render_park(pr)
+
+    def _render_park(self, pr) -> None:
+        """67 R8 시즌 말 컷 — 지금 컷 둘은 마지막 원본 하나(rank_cut · 같은 id — 3회차 M7) · 예상 컷·범위·계산 줄은 예측 값 그대로."""
+        self.gb_park.setVisible(config.WEB_DATA)
+        if not config.WEB_DATA:
+            return
+
+        def read(c):
+            sid = core.last_raw_id(c)
+            return ({r: core.rank_cut(c, r, sid) for r in (config.R4_CUT_TOP, 200, 1000)}, rankcollect.season_cuts(c))
+        nows, past = self._rank_read(read) or ({}, {})
+        now200, now_top, now1000 = nows.get(200), nows.get(config.R4_CUT_TOP), nows.get(1000)
+        cards = self.park_cards
+        for key, val in (("cut_200", now200), ("cut_top", now_top)):
+            cards[key].set(f"{val:,.0f}점" if val is not None else "—")
+            cards[key].set_sub("마지막 수집 기준" if val is not None else "랭킹 수집 원본이 없습니다")
+        end = core.season_end_estimate(self._rank_seasons, self._season_notice(), date.today())
+        left = end.days_left()
+        cards["days"].set(f"{left:,}일" if left is not None else "—")
+        cards["days"].set_sub(f"시즌 종료 {end.guess.text}" if end.guess is not None else "종료일을 모릅니다")
+        pts = self._elo_points()
+        last = pts[-1] if pts else None
+        rank = last.get("rank") if last else None
+        cards["rank"].set(f"{rank:,}위" if rank else ("1만 위 밖·모름" if last else "—"))
+        cards["rank"].set_sub(f"내 점수 {last['elo']:,.2f}" if last else "검색한 구단주 기록이 없습니다")
+        cut = pr.cuts.get(200) if pr is not None and pr.ok else None
+        if cut is not None:
+            m, a, b = cut
+            self.park_pred.set(f"{m:,.0f}점")
+            self.park_pred.set_sub(f"80% 범위 {a:,.0f}~{b:,.0f}점")
+        else:
+            self.park_pred.set("—")
+            self.park_pred.set_sub(pr.message if pr is not None and not pr.ok else "예측을 아직 못 냈습니다")
+        if cut is not None and pr.need is not None:
+            gap = pr.need                    # 표본 문턱이 아니라 점수 차 — test_rules WEAK_ALLOW 에 이유
+            mine = cut[0] - gap              # 예측에 쓴 지금 점수(predict.need = 예상 컷 중앙값 − 그 점수)
+            word = f"{gap:,.0f}점 더 필요" if gap > 0 else f"{-gap:,.0f}점 여유"
+            self.lb_park_margin.setText(
+                f"예상 200위 컷 {cut[0]:,.0f} − 내 점수 {mine:,.0f} = <b>{word}</b>"
+                + (f"<br><span style='color:{T.TEXT_DIM}'>최근 하루 평균 {pr.pace:.0f}판 · 시즌 종료 {pr.end_text} 가정</span>"
+                   if pr.pace is not None else ""))
+        else:
+            self.lb_park_margin.setText("")
+        self.lb_park_method.setText(core.describe_prediction(pr) if pr is not None and pr.ok else "")
+        self.park_method.setVisible(pr is not None and pr.ok)
+        names = {s.no: s.label for s in self._rank_seasons}
+        rows = [MetricRow("이번 시즌", "진행 중 · 지금 값", (MetricCell(f"{now200:,.0f}" if now200 is not None else "—", "200위"),
+                                                     MetricCell(f"{now1000:,.0f}" if now1000 is not None else "—", "1,000위")))]
+        for no, c in sorted(past.items(), reverse=True):
+            rows.append(MetricRow(names.get(no, f"시즌 {no}"), "최종", (MetricCell(f"{c[200]:,.0f}", "200위"),
+                                                                       MetricCell(f"{c[1000]:,.0f}", "1,000위"))))
+        self.park_seasons.set_rows(rows)
 
     def _elo_points(self) -> list[dict]:
         data = self._elo.get(self._ouid) if self._ouid else None
@@ -11612,8 +12801,9 @@ class MainWindow(QMainWindow):
         """들고 있는 self._elo[self._ouid] 로만 그린다(읽기 없음 — _render_trend 가 검색·시즌 전환마다 부른다)."""
         data = self._elo.get(self._ouid) if self._ouid else None
         pts = self._elo_points()
-        start = elo_season_start(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
-        self.gb_elo.setTitle(f"ELO(랭킹 점수) — 지금 시즌 ({start:%m/%d}~)")
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+        self.gb_elo.setTitle(f"ELO(랭킹 점수) — {season_title(start, known)}")
+        self.gb_team_value.setTitle(f"구단가치 — {season_title(start, known)}")
         self.lb_elo_tier.setText(rank_tier_change_text(pts))
         self.lb_elo_tier.setVisible(bool(pts))
         self.lb_elo_note.setText(self._elo_note(data, pts))
@@ -11636,9 +12826,11 @@ class MainWindow(QMainWindow):
         if len(pts) < 2:
             self.elo_chart.set_data([])
             self.elo_chart.setVisible(False)
+            self.lb_elo_band.setVisible(False)
             return
         self.elo_chart.setVisible(True)
-        vals = [p["elo"] for p in pts]
+        band = [day_band(p["lo"], p["hi"], p["n"]) for p in pts]
+        vals = [p["elo"] for p in pts] + [v for b in band if b for v in b]   # 축이 띠까지 덮게(M6)
         refs = []
         for i, rank in enumerate(config.ELO_CUT_LINES):
             series = []   # 창 앞 값도 넘긴다 — 계단선이 첫 점 날짜에 유효했던 컷부터 긋는다
@@ -11649,11 +12841,15 @@ class MainWindow(QMainWindow):
                     continue
             if series:
                 refs.append((f"{rank:,}위", series, T.CHART_NEUTRAL if i else T.CHART_DOWN))
+        ranks = [p.get("rank") or None for p in pts]
+        legend = [("점수", T.CHART_LINE, False)] + ([("순위", T.CHART_RANK, True)] if any(ranks) else [])
         self.elo_chart.set_data(
             [(p["at"].strftime("%m/%d"),
               p["elo"], None) for p in pts],
             axis=charts.Axis.fit(vals), avg=False, x_dates=[p["at"].date() for p in pts], ref_series=refs,
-            ranks=[p.get("rank") or None for p in pts])   # 57 K5 — 순위 점선(오른쪽 축) · 1만 위 밖인 날은 끊긴다
+            ranks=ranks,   # 57 K5 — 순위 점선(오른쪽 축) · 1만 위 밖인 날은 끊긴다
+            band=band, legend=legend, headline=f"{self._elo_points()[-1]['elo']:,.2f}")
+        self.lb_elo_band.setVisible(any(band))
         self.elo_chart.setToolTip(self._elo_cut_tip(data))
 
     def _render_team_value(self, data, start: datetime) -> None:
@@ -11667,7 +12863,7 @@ class MainWindow(QMainWindow):
                     else "홈페이지 데이터가 꺼져 있어 구단가치를 받지 않습니다 — [정보·설정] · ") + note
         self.lb_team_value_note.setText(note)
         self.gb_team_value.setVisible(bool(self._ouid))
-        self.zoom_team_value.set_labels([f"{d:%m/%d}" for d, _ in self._tv_points], self._ouid)
+        self.zoom_team_value.set_labels([f"{t[0]:%m/%d}" for t in self._tv_points], self._ouid)
         self.zoom_team_value.setVisible(n >= 3)
         self._draw_team_value_chart()
 
@@ -11677,12 +12873,16 @@ class MainWindow(QMainWindow):
         self.team_value_chart.setVisible(len(pts) >= 2)
         if len(pts) < 2:
             self.team_value_chart.set_data([])
+            self.lb_team_value_band.setVisible(False)
             return
-        vals = [v / 1e8 for _, v in pts]   # 억 단위 — 축 글자가 원 단위면 13자리
-        axis = charts.Axis.fit(vals, "{:,.0f}억", "구단가치")
+        vals = [t[1] / 1e8 for t in pts]   # 억 단위 — 축 글자가 원 단위면 13자리
+        band = [day_band(lo / 1e8, hi / 1e8, n) for _d, _v, lo, hi, n in pts]
+        axis = charts.Axis.fit(vals + [v for b in band if b for v in b], "{:,.0f}억", "구단가치")   # 띠까지(M6)
         axis = replace(axis, fmt=f"{{:,.{_step_decimals(axis.ticks[1] - axis.ticks[0])}f}}억")
-        self.team_value_chart.set_data([(f"{d:%m/%d}", x, None) for (d, _), x in zip(pts, vals)],
-                                       axis=axis, avg=False, x_dates=[d for d, _ in pts])
+        self.team_value_chart.set_data([(f"{t[0]:%m/%d}", x, None) for t, x in zip(pts, vals)],
+                                       axis=axis, avg=False, x_dates=[t[0] for t in pts], band=band,
+                                       color=T.CHART_VALUE, headline=won_text(self._tv_points[-1][1]))
+        self.lb_team_value_band.setVisible(any(band))
 
     @staticmethod
     def _elo_cut_tip(data) -> str:
@@ -11760,17 +12960,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"따라가기 목록을 저장하지 못했습니다: {e}", 5000)
         self._load_elo(self._ouid)
 
-    def _sc_entries(self) -> tuple[list, bool]:
-        """저장된 전체(_details_all — 시즌 필터 무시)에서 슈챔 진입 시각 — 캐시.
+    def _div_trend_all(self) -> list:
+        """저장된 전체(_details_all — 시즌 필터 무시)의 경기마다 (일시, 등급) — 캐시.
 
         _render_trend 는 지연 그리기 밖이라 검색·시즌 전환마다 돈다 — 1만 경기 훑기(약 10ms)를 매번 안 하게
         목록 id·길이·맨 앞 경기로 키를 잡는다(_narrate_scope 와 같은 방식)."""
         d = self._details_all
         key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
-        if getattr(self, "_sc_cache_key", None) != key:
-            self._sc_cache = core.division_entries(core.division_trend(d, self._ouid),
-                                                   core.SUPER_CHAMPION_DIVISION_ID)
-            self._sc_cache_key = key
+        if getattr(self, "_div_all_key", None) != key:
+            self._div_all = core.division_trend(d, self._ouid) if self._ouid else []
+            self._div_all_key = key
+            self._sc_cache = core.division_entries(self._div_all, core.SUPER_CHAMPION_DIVISION_ID)
+        return self._div_all
+
+    def _sc_entries(self) -> tuple[list, bool]:
+        """슈챔 진입 시각 — 저장된 전체에서(`_div_trend_all` 과 같은 캐시)."""
+        self._div_trend_all()
         return self._sc_cache
 
     def _season_wins(self) -> list:
@@ -11788,10 +12993,10 @@ class MainWindow(QMainWindow):
             return None
         data = self._elo.get(self._ouid)
         now = datetime.now()
-        start = elo_season_start(self._rank_seasons, data.snap_season_start if data else None, now)
+        start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, now)
         return club_cells(wins=self._season_wins(), rows=data.rows if data else [], pts=self._elo_points(),
                           club=data.club if data else None, season_start=start, today=now.date(),
-                          mixed=core.mixed_of_matches(self._matches_all))
+                          mixed=core.mixed_of_matches(self._matches_all), known=known)
 
     SC_NEXON_MATCH_S = 60  # 넥슨 최근 달성 시각이 목록의 진입과 이만큼 안이면 같은 것으로 본다
 
@@ -11850,8 +13055,12 @@ class MainWindow(QMainWindow):
         self.card_trend_min.set(f"{min(rates):.1f}%{star}" if rates else NA)
         for card in (self.card_trend_max, self.card_trend_avg, self.card_trend_min):
             card.setToolTip(win_rate_note(mixed))
+        avg = core.win_pct(*wdl, mixed) if rates and core.rated(*wdl, mixed) else None   # 평균 카드와 같은 값
+        self.card_trend_max.set_delta(max(rates) if rates else None, avg, label="평균 대비")
+        self.card_trend_min.set_delta(min(rates) if rates else None, avg, label="평균 대비")
         self.card_trend_games.set_title(f"{days}일 경기수")
         self.card_trend_games.set(f"{total_games}경기")
+        self.card_trend_games.set_sub(wdl_text(*wdl) if total_games else "")
 
     def _render_dashboard(self) -> None:
         """대시보드 — 카드마다 자기 상세 페이지와 같은 범위를 넘긴다."""
@@ -11867,7 +13076,22 @@ class MainWindow(QMainWindow):
             trend_days=self.sp_trend_days.value(),
             story=self._narrate_scope(),
             club_cells=self._club_cells(),
-            headline=self._headline()))
+            headline=self._headline(),
+            report=self._dashboard_report()))
+
+    def _dashboard_report(self) -> ScoreParts | None:
+        """65 M1 리포트·해설 재료 — 점수·예측 탭 리포트(R1~R3)와 같은 계산(season_score_report)."""
+        data = self._elo.get(self._ouid) if self._ouid else None
+        if data is None:
+            return None
+        pts = self._elo_points()
+        start = elo_season_start(self._rank_seasons, data.snap_season_start, datetime.now())
+        rep = season_score_report(pts, data.rows, start)
+        if rep is None:
+            return None
+        band = core.dd_band(data.club.peaks_dd, rep.peak) if data.club is not None else None
+        dr = core.decisive_rate(self._season_wins(), datetime.combine(rep.first_day, datetime.min.time()))
+        return ScoreParts(rep, band, dr)
 
     def _headline(self) -> str | None:
         """57 K6 — 흐름 분석 문장(같은 범위 캐시)과 점수 리포트 낙폭 중 순서표대로 하나."""
@@ -11954,15 +13178,16 @@ class MainWindow(QMainWindow):
             name_of=lambda i: self._names.get(i, str(i)),
             pos_name=lambda p: self._positions.get(p, str(p)))
         few = core.MIN_PLAYER_GAMES
+        enough = [p.games >= few for p in players]
         rows = []
-        for p in players:
+        for p, ok in zip(players, enough):
             rows.append([
                 p.position, IconCell(p.name, None, core.season_id_of(p.sp_id)), (f"{p.grade}", p.grade),
                 (f"{p.games} ⚠" if p.games < few else f"{p.games}", p.games),
                 # 선수표는 열이 빽빽해 % 없이(예전 그대로) — 섞인 식이면 * 만(1280 폭에서 가로 스크롤이 생겼다)
                 (f"{p.win_rate:.1f}" + ("*" if p.mixed else ""), p.win_rate),
-                (f"{p.attack_power:.1f}", p.attack_power),
-                (f"{p.defense_power:.1f}", p.defense_power),
+                (f"{p.attack_power:.1f}" + (" ▽" if ok and self._g8_floor(p, 0) else ""), p.attack_power),
+                (f"{p.defense_power:.1f}" + (" ▽" if ok and self._g8_floor(p, 1) else ""), p.defense_power),
                 (f"{p.expected_goal_rate:.1f}", p.expected_goal_rate),
                 (f"{p.attack_point}", p.attack_point),
                 (f"{p.goal}", p.goal), (f"{p.assist}", p.assist),
@@ -11981,16 +13206,36 @@ class MainWindow(QMainWindow):
         # "채운 순서 = players 순서"라고 믿고 매기는 게 틀어져 엉뚱한 행에
         # 색이 칠해진다(실제로 겪은 버그). 후처리를 다 끝낸 뒤에만 켠다.
         self._fill(self.tbl_players, rows, enable_sort=False)
+        # 승률(4열)은 굵게(BoldColumnDelegate) — 폭은 표 글꼴(보통)로 재므로 굵은 글자가 더 쓰는 만큼을 그 열에만 더한다(안 하면 끝이 잘린다)
+        bold = QFont(self.tbl_players.font())
+        bold.setBold(True)
+        fm, fb = QFontMetrics(self.tbl_players.font()), QFontMetrics(bold)
+        bold_extra = max((fb.horizontalAdvance(r[4][0]) - fm.horizontalAdvance(r[4][0]) for r in rows), default=0)
         # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말).
         # 이름 열(1)의 시즌 배지 폭은 set_icon_columns 가 이미 갖고 있다(손으로 26 을 주던 자리)
-        self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD})
-        # 공격력(5열)·수비력(6열) — 최소~최대를 넓은 단계로 칠한다. 눈금은 출전이 충분한 선수로만 잡는다.
-        enough = [p.games >= few for p in players]
-        atk = self._heat_scale([p.attack_power for p in players], enough)
-        dfn = self._heat_scale([p.defense_power for p in players], enough)
+        self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2})
+        # 공격력(5열)·수비력(6열) — 고정 눈금 G8(theme.g8_cell — 표 안 다른 선수와 무관) · 포지션 기준 점수 미만은 "▽"
+        # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 표시 구간 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
+        # 높은 승률이 나쁨으로 읽힌다). 출전 미달 선수는 색·▽ 를 안 붙인다(색은 few 경기부터 — 예전과 같은 규칙).
+        res = [m.result for m in self._slice()[0]]
+        team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
         for r, p in enumerate(players):
-            self._heat(self.tbl_players.item(r, 5), atk[r], T.HEAT_ATK)
-            self._heat(self.tbl_players.item(r, 6), dfn[r], T.HEAT_DEF)
+            for c, kind, v in ((5, "atk", p.attack_power), (6, "def", p.defense_power)):
+                it = self.tbl_players.item(r, c)
+                if it is None or not enough[r]:
+                    continue
+                bg, fg = T.g8_cell(v, kind, config.G8_SCALE)
+                if bg is not None:
+                    it.setBackground(QColor(bg))
+                it.setForeground(QColor(fg))
+                cut = self._g8_floor(p, 0 if kind == "atk" else 1)
+                if cut:
+                    it.setToolTip(f"{p.position} 기준 점수인 {cut}점 미만입니다.")
+            rate_item = self.tbl_players.item(r, 4)
+            if rate_item is not None:
+                if enough[r]:
+                    delta_item(rate_item, p.win_rate - team)
+                    rate_item.setToolTip(f"표시 구간 팀 승률 {team:.1f}% 대비 {p.win_rate - team:+.1f}%p")
             pos_item = self.tbl_players.item(r, 0)
             line = core.position_line(p.pos_code)
             if pos_item and line:
@@ -12007,17 +13252,11 @@ class MainWindow(QMainWindow):
         self.tbl_players.setSortingEnabled(True)
 
     @staticmethod
-    def _heat_scale(values: list[float], enough: list[bool]) -> list[float | None]:
-        """값 → 0~1 단계((값−최소)/(최대−최소)). 최소·최대는 enough 인 것만으로 잡는다 — 1경기 선수 하나가
-        눈금을 늘이지 않게. enough 가 아니거나 눈금을 못 잡으면(대상 0~1명 · 전부 같은 값) None = 안 칠함."""
-        pool = [v for v, ok in zip(values, enough) if ok]
-        if len(pool) < 2:
-            return [None] * len(values)
-        lo, hi = min(pool), max(pool)
-        if hi <= lo:
-            return [None] * len(values)
-        return [max(0.0, min((v - lo) / (hi - lo), 1.0)) if ok else None
-                for v, ok in zip(values, enough)]
+    def _g8_floor(p, i: int) -> int:
+        """그 선수(가장 자주 선 자리)의 기준 점수(i 0 공격 · 1 수비) — 칸 값이 그보다 낮을 때만 그 점수, 아니면 0(기준 없는 자리도 0)."""
+        floor = config.G8_POS_FLOOR.get(p.position)
+        cut = floor[i] if floor else 0
+        return cut if (p.attack_power, p.defense_power)[i] < cut else 0
 
     # 가장 낮은 단계도 바탕과 구분되게 — 0 이면 칠하지 않은 칸과 같아 보인다
     HEAT_FLOOR = 0.12
@@ -12057,66 +13296,57 @@ class MainWindow(QMainWindow):
         mine = core.formation_stats(details, self._ouid, of_opponent=False)
         if mine:
             t = mine[0]
-            self.lb_my_formation.setText(
-                f"{t.formation}      {win_rate_text(t.win, t.draw, t.lose, t.mixed)}      "
-                f"{t.games}경기 · {wdl_text(t.win, t.draw, t.lose)}")
-            self.lb_my_formation.setToolTip(win_rate_note(t.mixed))
-            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 2, positions=t.positions)
+            total = sum(f.games for f in mine)
+            self.lb_my_formation.setText(core.formation_label(t.formation))
+            self.lb_my_formation_rate.setText(win_rate_text(t.win, t.draw, t.lose, t.mixed))
+            self.lb_my_formation_rate.setToolTip(win_rate_note(t.mixed))
+            self.my_formation_bar.set_counts(t.win, t.draw, t.lose, core.is_weak(t.rated, core.MIN_COND))
+            self.lb_my_formation_sub.setText(f"{t.games:,}경기 · 전체의 {core.pct(t.games, total):.0f}%")
+            pitch = formation_pixmap(t.formation, config.FORMATION_PX * 3, positions=t.positions)
             self.lb_my_formation_pitch.setPixmap(pitch)
             self.lb_my_formation_pitch.setVisible(not pitch.isNull())
 
         self._clear(self.box_opp)
         few = core.MIN_COND
-        opp_rows = []
         opp_stats = core.formation_stats(details, self._ouid)
-        mixed = opp_stats[0].mixed if opp_stats else False
+        mixed = bool(opp_stats[0].mixed) if opp_stats else False
         how = self.cb_tactics_form.currentData() or "raw"
         self.lb_tactics_form_note.setVisible(how != "raw")
         if how != "raw":
             opp_stats = group_formation_stats(opp_stats, how)
-        for f in opp_stats:
-            weak = core.is_weak(f.rated, few)
-            opp_rows.append((
-                f.formation, f.win_rate,
-                f"{win_rate_text(f.win, f.draw, f.lose, f.mixed, short=True)} · {wdl_text(f.win, f.draw, f.lose)}"
-                + (f" · {sample_text(f.rated, f.mixed)}" if weak else ""),
-                f"상대 {f.formation} — {f.games}경기 승률 {win_rate_text(f.win, f.draw, f.lose, f.mixed)}"
-                + (f"\n{sample_note(f.rated, few, f.mixed)}" if weak else ""),
-                weak))
-        if opp_rows:
+        self.opp_formation_list = None
+        if opp_stats:
             head = QLabel(f"상대 포메이션별 내 승률 · 흐린 줄은 {'승패' if mixed else '경기'} {few}판 미만")
             head.setToolTip(win_rate_note(mixed))
             head.setStyleSheet(f"color: {T.TEXT_DIM};")
             self.box_opp.addWidget(head)
-            self.opp_formation_bars = charts.HBarList()
-            self.opp_formation_bars.set_data(opp_rows, [formation_pixmap(f.formation, positions=f.positions)
-                                                        if how == "raw" else None for f in opp_stats])
-            self.box_opp.addWidget(self.opp_formation_bars)
+            rows = [self._rate_row(core.formation_label(f.formation) if how == "raw" else f.formation,
+                                   f.win, f.draw, f.lose, f.mixed, None, f.games,
+                                   icon=("formation", f.formation) if how == "raw" else (), key=f.formation,
+                                   tip=f"상대 {f.formation} — {f.games}경기 승률 {win_rate_text(f.win, f.draw, f.lose, f.mixed)}"
+                                       + (f"\n{sample_note(f.rated, few, f.mixed)}" if core.is_weak(f.rated, few) else ""))
+                    for f in opp_stats]
+            lst = RateRowList(fixed=True, tips={"rate": win_rate_note(mixed)})
+            if how == "raw":
+                for f in opp_stats:   # 자리 점은 그 상대들이 실제로 선 자리 — 받기(포메이션 이름만으로 그림) 전에 붙인다
+                    pm = formation_pixmap(f.formation, positions=f.positions)
+                    if not pm.isNull():
+                        lst.put_icon("formation", f.formation, pm)
+            lst.set_rows(rows)   # 경기 많은 순 그대로(formation_stats 순서)
+            self._start_list_icons(lst)
+            self.opp_formation_list = lst
+            self.box_opp.addWidget(lst)
 
         rb = core.result_breakdown(details, self._ouid)
         self._clear(self.box_result)
-        for label, wdl in (("전후반", rb.normal), ("연장전", rb.extra),
-                           ("승부차기", rb.shootout), ("몰수", rb.forfeit)):
-            row = QWidget()
-            h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
-            a = QLabel(label)
-            a.setStyleSheet(f"color: {T.TEXT_DIM};")
-            b = QLabel(wdl_text(*wdl))
-            b.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
-            c = QLabel(f"({win_rate_text(*wdl, rb.mixed, short=True)})")
-            c.setStyleSheet(f"color: {T.TEXT_DIM};")
-            c.setToolTip(win_rate_note(rb.mixed))
-            h.addWidget(a)
-            h.addStretch(1)
-            h.addWidget(b)
-            h.addWidget(c)
-            if wdl is rb.forfeit:
-                row.setToolTip(FORFEIT_TIP)
-            self.box_result.addWidget(row)
+        rows = [self._rate_row(label, *wdl, bool(rb.mixed), None, tip=FORFEIT_TIP if wdl is rb.forfeit else "")
+                for label, wdl in (("전후반", rb.normal), ("연장전", rb.extra), ("승부차기", rb.shootout), ("몰수", rb.forfeit))]
+        self.result_list = RateRowList(fixed=True, tips={"rate": win_rate_note(bool(rb.mixed))})
+        self.result_list.set_rows(rows)
+        self.box_result.addWidget(self.result_list)
 
         sep = QLabel("시간대별 득실")
-        sep.setStyleSheet(f"color: {T.GREEN}; font-weight: bold; padding-top: 3px;")
+        sep.setStyleSheet(f"color: {T.ACCENT}; font-weight: bold; padding-top: 3px;")
         self.box_result.addWidget(sep)
         for k in sorted(rb.periods):
             v = rb.periods[k]
@@ -12126,36 +13356,115 @@ class MainWindow(QMainWindow):
             a = QLabel(core.PERIODS.get(k, str(k)))
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(f"{v.scored}득점")
-            b.setStyleSheet(f"color: {T.GREEN}; font-weight: bold;")
+            b.setStyleSheet(f"color: {T.GOOD}; font-weight: bold;")
             c = QLabel(f"{v.conceded}실점")
-            c.setStyleSheet(f"color: {T.RED}; font-weight: bold;")
+            c.setStyleSheet(f"color: {T.BAD}; font-weight: bold;")
             h.addWidget(a)
             h.addStretch(1)
             h.addWidget(b)
             h.addWidget(c)
             self.box_result.addWidget(row)
 
-        self.type_donuts = {}
-        for key, box, counter, word in (("gf", self.box_gf, rb.goal_types, "득점"),
-                                        ("ga", self.box_ga, rb.concede_types, "실점")):
-            self._clear(box)
-            total = sum(counter.values())
-            segs = charts.donut_segments(list(counter.items()))
-            donut = charts.DonutChart(size=120)
-            donut.set_data(segs, center=f"{total:,}", sub=word)
-            self.type_donuts[key] = donut
-            box.addWidget(donut, 0, Qt.AlignmentFlag.AlignHCenter)
-            for name, n, col in segs:   # 범례 겸 숫자 — 조각과 같은 색
-                box.addWidget(BarRow(name, n, total, col))
-            box.addStretch(1)
+        # 득점·실점 유형 = 슛 타입 분포(시도·유효·골 + 전환율) — 슛 맵의 유형별 표와 같은 줄(shot_type_counts)
+        for key, buckets in zip(("gf", "ga"), core.shot_type_counts(details, self._ouid)):
+            self.shot_types[key].set_data(buckets, core.MIN_BUCKET_SHOTS)
+            shots, goals = sum(b.shots for b in buckets), sum(b.goals for b in buckets)
+            self.shot_type_notes[key].setText(
+                f"슛 {shots:,} · 골 {goals:,} · 전환율(골 ÷ 시도)은 시도 {core.MIN_BUCKET_SHOTS}회 미만이면 숨김"
+                " · 위치 기록이 있는 슛만" if shots else "슛 기록이 없습니다.")
+        self._render_shootout_keepers(details)
         self._render_pass_style(details)
 
+    def _render_shootout_keepers(self, details: list[dict]) -> None:
+        """승부차기 상대 GK 카드(65 M6) — 많이 만난 순 SHOOTOUT_GK_MAX 장 · 표본 미달 카드는 흐림 + "표본 N"."""
+        self._clear(self.grid_shootout)
+        keepers = core.shootout_keepers(details, self._ouid or "")
+        self.shootout_cards = []
+        self._gk_face_labels = {}
+        n_games = sum(k.games for k in keepers)
+        if not keepers:
+            self.lb_shootout_note.setText("승부차기까지 간 경기가 없습니다.")
+            return
+        shown = keepers[:config.SHOOTOUT_GK_MAX]
+        self.lb_shootout_note.setText(
+            f"승부차기 {n_games:,}경기 · 상대 골키퍼 {len(keepers):,}장 중 많이 만난 {len(shown)}장 · 카드(시즌)마다 따로 · "
+            f"흐린 카드는 {core.MIN_COND}경기 미만 · 승부차기 승률 = 승 ÷ (승+패)")
+        cols = config.SHOOTOUT_GK_COLS
+        for i, k in enumerate(shown):
+            card = self._shootout_card(k)
+            self.shootout_cards.append(card)
+            self.grid_shootout.addWidget(card, i // cols, i % cols)
+        self._start_shootout_faces([k.sp_id for k in shown])
+
+    def _shootout_card(self, k) -> QFrame:
+        weak = core.is_weak(k.games, core.MIN_COND)
+        card = QFrame()
+        card.setObjectName("gkCard")
+        card.setStyleSheet(f"QFrame#gkCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+                           f" border-radius: {T.RADIUS}px; }}")
+        h = QHBoxLayout(card)
+        h.setContentsMargins(8, 6, 8, 6)
+        face = QLabel()
+        face.setFixedSize(config.SHOOTOUT_GK_FACE_PX, config.SHOOTOUT_GK_FACE_PX)
+        face.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        face.setStyleSheet("border: none;")
+        pm = self._gk_faces.get(k.sp_id)
+        if pm is not None:
+            face.setPixmap(pm)
+        h.addWidget(face)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        # 이름은 길면 글꼴을 줄인다(카드 넷이 1280 폭에 들어가게 — 실화면에서 카드 하나 226px 이 4px 넘쳤다)
+        name = FitLabel(self._names.get(k.sp_id, str(k.sp_id)), base_pt=config.SHOOTOUT_GK_NAME_PT[0],
+                        min_pt=config.SHOOTOUT_GK_NAME_PT[1])
+        name.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; border: none;")
+        col.addWidget(name)
+        rate = QLabel(win_rate_text(k.win, 0, k.lose, False, short=True)
+                      + (f"  {sample_text(k.games, False)}" if weak else ""))
+        rate.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold; border: none;")
+        col.addWidget(rate)
+        sub = QLabel(f"{k.games}경기 · {k.win}승 {k.lose}패")
+        sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+        col.addWidget(sub)
+        h.addLayout(col, 1)
+        card.setToolTip(f"{self._names.get(k.sp_id, str(k.sp_id))} ({self._season_name(k.sp_id)}) — "
+                        f"승부차기 {k.games}경기 {k.win}승 {k.lose}패"
+                        + (f"\n{sample_note(k.games, core.MIN_COND)}" if weak else ""))
+        card.setProperty("weak", weak)
+        card.setProperty("sp_id", k.sp_id)
+        self._gk_face_labels[k.sp_id] = face
+        return card
+
+    def _start_shootout_faces(self, sp_ids: list[int]) -> None:
+        """GK 카드 얼굴 — 이미 받은 얼굴은 다시 안 받는다. 앞 로더는 물러나 종료 표(_retired_loaders)가 기다린다."""
+        need = [sp for sp in sp_ids if sp not in self._gk_faces]
+        if not need:
+            return
+        self._retire_loaders([ld for ld in (self._gk_face_loader,) if ld is not None])
+        loader = ImageLoader(need, self._img_cache_dir)
+        loader.loaded.connect(self._on_gk_face)
+        self._gk_face_loader = loader
+        loader.start()
+
+    def _on_gk_face(self, sp_id: int, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            return
+        px = config.SHOOTOUT_GK_FACE_PX
+        pm = pm.scaled(px, px, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        self._gk_faces[sp_id] = pm
+        face = self._gk_face_labels.get(sp_id)
+        if face is not None and not sip.isdeleted(face):
+            face.setPixmap(pm)
+
     def _render_pass_style(self, details: list[dict]) -> None:
-        """패스 종류 6가지 — 비중(6종 합 대비)·경기당·성공률, 이긴/진 경기 나란히(N5). 원인 단정 없이 숫자만."""
+        """패스 종류 6가지(65 M7 — 기준 화면 꼴) — 종류마다 카드: 성공률 크게 · 경기당 시도/성공 · 성공률 막대 · 비중,
+        아래 이긴/진 경기 비중·성공률(N5). 원인 단정 없이 숫자만."""
         ps = core.pass_style(details, self._ouid)
         self.pass_style = ps  # 테스트가 계산 결과를 본다
         g = self.grid_pass
         self._clear(g)
+        self.pass_cards: list[QFrame] = []
         if not ps.all.games:
             lb = QLabel("패스 종류 기록이 있는 경기가 없습니다.")
             lb.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -12167,25 +13476,42 @@ class MainWindow(QMainWindow):
         def rate(k) -> str:
             return f"{k.rate:.0f}%" if k.tries >= min_tries else NA
 
-        heads = ["종류", "비중", "경기당", "성공률",
-                 f"이긴 경기 {ps.win.games} — 비중 · 성공률", f"진 경기 {ps.lose.games} — 비중 · 성공률"]
-        for c, text in enumerate(heads):
-            lb = QLabel(text)
-            lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-weight: bold;")
-            g.addWidget(lb, 0, c)
-        for r, (k, kw, kl) in enumerate(zip(ps.all.kinds, ps.win.kinds, ps.lose.kinds), 1):
-            cells = [(k.name, False), (f"{ps.all.share(k):.0f}%", False), (f"{ps.all.per_game(k):.1f}", False),
-                     (rate(k), False)]
+        for i, (k, kw, kl) in enumerate(zip(ps.all.kinds, ps.win.kinds, ps.lose.kinds)):
+            card = QFrame()
+            card.setObjectName("passCard")
+            card.setStyleSheet(f"QFrame#passCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
+                               f" border-radius: {T.RADIUS}px; }} QLabel {{ border: none; }}")
+            v = QVBoxLayout(card)
+            v.setContentsMargins(10, 8, 10, 8)
+            v.setSpacing(3)
+            top = QHBoxLayout()
+            name = QLabel(k.name)
+            name.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            top.addWidget(name)
+            top.addStretch(1)
+            weak = k.tries < min_tries
+            big = QLabel(rate(k))
+            big.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold; font-size: 22px;")
+            big.setToolTip(f"성공 ÷ 시도 — 시도 {min_tries}회 미만이면 숨깁니다" if weak else "성공 ÷ 시도")
+            top.addWidget(big)
+            v.addLayout(top)
+            sub = QLabel(f"경기당 시도 {ps.all.per_game(k):.1f} · 성공 {k.success / ps.all.games:.1f}"
+                         f" · 비중 {ps.all.share(k):.0f}%")
+            sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+            v.addWidget(sub)
+            v.addWidget(MeterBar(k.rate / 100 if not weak else 0.0, T.BLUE, weak))
             for grp, kk in ((ps.win, kw), (ps.lose, kl)):
-                cells.append((f"{grp.share(kk):.0f}% · {rate(kk)}" if grp.games else NA, grp.games < few))
-            for c, (text, weak) in enumerate(cells):
-                lb = QLabel(text)
-                lb.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT};" + (" font-weight: bold;" if c == 0 else ""))
-                if weak:  # 표본 흐림 규칙(1.2.1)
-                    lb.setToolTip(sample_note(ps.win.games if c == 4 else ps.lose.games, few))
-                g.addWidget(lb, r, c)
+                lb = QLabel(f"{grp.label}({grp.games}판) 비중 {grp.share(kk):.0f}% · 성공 {rate(kk)}" if grp.games
+                            else f"{grp.label}: {NA}")
+                lb.setStyleSheet(f"color: {T.TEXT_DIM if grp.games < few else T.TEXT}; font-size: 13px;")
+                if grp.games < few:  # 표본 흐림 규칙(1.2.1)
+                    lb.setToolTip(sample_note(grp.games, few))
+                v.addWidget(lb)
+            card.setProperty("weak", weak)
+            self.pass_cards.append(card)
+            g.addWidget(card, i // config.PASS_CARD_COLS, i % config.PASS_CARD_COLS)
         note = (f"비중은 6가지 종류 합 대비 · 성공률은 시도 {min_tries}회 미만이면 {NA} · "
-                f"흐린 칸은 {few}경기 미만 · 무승부는 전체에만 들어갑니다.")
+                f"흐린 이긴/진 경기 줄은 {few}경기 미만 · 무승부는 전체에만 들어갑니다.")
         if ps.skipped:
             note += f" 종류 기록이 없는 {ps.skipped}경기는 뺐습니다."
         self.lb_pass_note.setText(note)
@@ -12245,7 +13571,8 @@ class MainWindow(QMainWindow):
             # 색인 백필 — 묶음(1,000경기 약 0.2초) 사이에서 멈춘다. 끊겨도 다음 실행이 잇는다
             (self._backfill_worker, cancel(self._backfill_worker), 3000, False),
             *[(ld, cancel(ld), 500, False)
-              for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders],
+              for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders
+              + [x for x in (self._gk_face_loader,) if x is not None]],
             # 축구장 칩 카드 정보 — 카드 사이에서 멈춘다(한 장 = 한 트랜잭션 · 요청 하나 타임아웃 10초)
             *[(ld, cancel(ld), 12000, False) for ld in self._pitch_card_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
@@ -12395,6 +13722,8 @@ class MainWindow(QMainWindow):
             self._restore = {}
         self._matches_all, self._details_all = [], []
         self._matches, self._details = [], []
+        self._opp_picked_details = []   # 상대 전적 K1 범위 경기(더블클릭 찾기용 — 65 M4)
+        self.shot_sum, self._shot_sum_key = None, None   # 슛 맵 최다 득점·실점 경기 원문(65 M8)
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
@@ -12596,13 +13925,16 @@ class KeyCheckWorker(Worker):
 
 
 class TeamColorDialog(QDialog):
-    """팀컬러 효과·적용 선수(2.2.1 · U3 — 별도 창 · 모달 아님 · 하나만). 같은 팀컬러를 다시 누르면 요청 없이 앞으로만,
-    다른 팀컬러면 내용만 바꾼다. 받기는 TeamColorEffectLoader — 도는 로더는 갈아 끼울 때 cancel 하고 메인 창의
-    _tc_effect_loaders 에 끝날 때까지 남겨 종료 표가 기다린다(창이 먼저 닫혀도)."""
+    """팀컬러 정보 창(2.2.1 효과 창 · 67 R2 에서 넓힘 — 별도 창 · 모달 아님 · 하나만). 머리(엠블럼 · 이름 · 점유율) +
+    탭 둘: [랭커 1만 명](rank.db — 카드 다섯 · 구단가치 구간별 · 대표 구단주 · 요청 0) · [효과 · 적용 선수](넥슨 데이터센터).
+    같은 팀컬러를 다시 누르면 요청 없이 앞으로만, 다른 팀컬러면 내용만 바꾼다. 받기는 TeamColorEffectLoader — 도는 로더는
+    갈아 끼울 때 cancel 하고 메인 창의 _tc_effect_loaders 에 끝날 때까지 남겨 종료 표가 기다린다(창이 먼저 닫혀도).
+    1만 명 칸은 rank.db 가 바뀌면 메인 창의 _invalidate_rank_views 가 다시 읽힌다(3회차 M11)."""
 
     STEP_COLUMNS = ["단계", "인원", "효과"]
     PLAYER_COLUMNS = ["OVR", "선수", "포지션", "급여", "1강 시세"]
-    SIZE = (640, 720)
+    TABS = ("랭커 1만 명", "효과 · 적용 선수")
+    SIZE = (760, 780)
     EMBLEM_PX = 44
 
     def __init__(self, main: "MainWindow"):
@@ -12613,6 +13945,7 @@ class TeamColorDialog(QDialog):
         self._label = ""
         self._meta: dict | None = None
         self._players: list = []
+        self.detail: core.TcDetail | None = None   # 테스트가 본다
         v = QVBoxLayout(self)
         head = QHBoxLayout()
         self.lb_emblem = QLabel()
@@ -12625,7 +13958,16 @@ class TeamColorDialog(QDialog):
         self.lb_title.setWordWrap(True)
         head.addWidget(self.lb_emblem)
         head.addWidget(self.lb_title, 1)
+        self.card_share = StatCard("1만 명 중 점유율", T.ACCENT)
+        self.card_share.setVisible(False)
+        head.addWidget(self.card_share)
         v.addLayout(head)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_rank_page(), self.TABS[0])
+        eff = QWidget()
+        self.tabs.addTab(eff, self.TABS[1])
+        v.addWidget(self.tabs, 1)
+        v = QVBoxLayout(eff)
         self.lb_status = QLabel("")
         self.lb_status.setWordWrap(True)
         self.lb_status.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -12654,14 +13996,133 @@ class TeamColorDialog(QDialog):
         v.addLayout(row)
         fit_to_screen(self, *self.SIZE)
 
+    # ── 랭커 1만 명 칸(67 R2) ──
+    # (제목, TcBoardRow 필드, 단위, 자리수, 좋고 나쁨 없음) — 변화는 지난주 스냅숏 대비(주간 요약과 같은 고르기)
+    RANK_CARDS = (("가성비", "score", "점", 0, False), ("평균 점수", "elo", "점", 0, False),
+                  ("시즌 승률 승÷(승+패)", "rate", "%p", 1, False), ("구단가치 중앙값", "value", "억", 1, True),
+                  ("챔스 이상", "champ", "%p", 1, False))
+
+    def _build_rank_page(self) -> QWidget:
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        self.lb_rank_note = QLabel("")
+        self.lb_rank_note.setWordWrap(True)
+        self.lb_rank_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_rank_note)
+        self.rank_body = QWidget()
+        b = QVBoxLayout(self.rank_body)
+        b.setContentsMargins(0, 0, 0, 0)
+        grid = QGridLayout()
+        self.rank_cards: dict[str, StatCard] = {}
+        for i, (title, key, *_rest) in enumerate(self.RANK_CARDS):
+            card = StatCard(title)
+            self.rank_cards[key] = card
+            grid.addWidget(card, i // 3, i % 3)
+        b.addLayout(grid)
+        self.lb_bins_title = MainWindow._title_label("구단가치 구간별 — 이 팀컬러를 쓰는 사람이 어느 구간에 있나")
+        b.addWidget(self.lb_bins_title)
+        self.bins_list = MetricRowList(fixed=True)
+        b.addWidget(self.bins_list)
+        self.lb_owners_title = MainWindow._title_label("대표 구단주 — 이 팀컬러에서 점수 높은 순")
+        b.addWidget(self.lb_owners_title)
+        self.owners_list = MetricRowList(fixed=True)
+        b.addWidget(self.owners_list)
+        v.addWidget(self.rank_body)
+        v.addStretch(1)
+        return VScrollArea(inner)
+
+    def refresh_rank(self) -> bool:
+        """1만 명 칸을 rank.db 에서 다시 — 보일 것이 있으면 True. 맨 이름 단위라 겹치는 이름은 두 종류의 합(안내 줄)."""
+        name = teamcolor.name_of(self._label)
+        res = self.main._rank_read(lambda c: core.tc_detail(c, name)) if name else None
+        self.detail = res
+        if res is None or res.at is None:
+            self._rank_empty(MainWindow.rank_off_note("1만 명 중 이 팀컬러의 숫자를 보여 줍니다") if not config.RANK_COLLECT
+                             else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+            return False
+        if res.now is None:
+            self._rank_empty(f"넥슨 데이터 기준 {MainWindow._at(res.at)} — 랭킹 1만 명 중 이 팀컬러를 쓰는 사람이 없습니다.")
+            return False
+        now, then = res.now, res.then
+        note = [f"넥슨 데이터 기준 {MainWindow._at(res.at)} · 1만 위 안 {now.users:,}명"]
+        note.append(f"변화는 {MainWindow._at(res.then_at)} 대비" if then is not None
+                    else "지난주 원본 스냅숏이 없어 변화는 숨깁니다")
+        if name in config.TEAMCOLOR_DUP_NAMES:
+            note.append("같은 이름 팀컬러를 합친 숫자입니다(1만 명 순위표는 이름만 줍니다)")
+        if now.score is None:
+            note.append(f"가성비는 {config.B3_MIN_USERS}명 이상 팀컬러끼리 백분위라 이 팀컬러는 안 냅니다")
+        self.lb_rank_note.setText(" · ".join(note))
+        self.rank_body.setVisible(True)
+        self.card_share.setVisible(True)
+        self.card_share.set(f"{now.share:.1f}%")
+        self.card_share.set_sub(f"{now.users:,}명")
+        self.card_share.set_delta(now.share, then.share if then else None, "%p", "지난주 대비", neutral=True)
+        for _title, key, unit, digits, neutral in self.RANK_CARDS:
+            card, val = self.rank_cards[key], getattr(now, key)
+            old = getattr(then, key) if then is not None else None
+            if key == "value":
+                card.set(MainWindow._won(val))
+                val, old = (None if val is None else val / 1e8), (None if old is None else old / 1e8)
+            elif key in ("rate", "champ"):
+                card.set(NA if val is None else f"{val:.1f}%" if key == "rate" else f"{val:.0f}%")
+            else:
+                card.set(NA if val is None else f"{val:,.0f}")
+            card.set_delta(val, old, unit, "지난주 대비", digits, neutral)
+        day = NA if now.day_thin or now.day_rate is None else f"{now.day_rate:.1f}%"
+        self.rank_cards["rate"].set_sub(f"하루 {day}")
+        self.rank_cards["rate"].setToolTip("하루 승률은 어제 순위로 가른 하루 승÷(승+패) — 인원이 적거나 쌍이 없으면 —")
+        rows = []
+        for i, (b, c) in enumerate(res.bins):
+            label = self.main._bin_label(b)
+            if c is None:
+                rows.append(MetricRow(label, "", (MetricCell(NA, "이 팀컬러 중"), MetricCell(NA, "챔스 이상")),
+                                      dim=True, key=i, tip=f"이 구간 인원 {config.META_MIN_USERS}명 미만"))
+                continue
+            tone = delta_color(c.vs_bin) if c.vs_bin is not None and abs(c.vs_bin) >= 5 else None
+            rows.append(MetricRow(label, f"{c.users:,}명", (
+                MetricCell(f"{c.share:.0f}%", "이 팀컬러 중"),
+                MetricCell(f"{c.champ:.0f}%", "챔스 이상", tone,
+                           f"챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}% · 구간 평균 대비 "
+                           f"{0 if c.vs_bin is None else c.vs_bin:+.0f}%p)")),
+                fill=c.share / 100, key=i))
+        self.lb_bins_title.setVisible(bool(rows))
+        self.bins_list.setVisible(bool(rows))
+        self.bins_list.set_rows(rows)
+        owners = []
+        for o in res.owners:
+            games = o.win + o.draw + o.lose
+            rate = f"{o.win * 100 / games:.1f}%" if games else NA
+            fkey = formation_key(o.formation) if o.formation else None
+            owners.append(MetricRow(o.nickname, " · ".join(x for x in ("챔스 이상" if o.champ else "", o.formation) if x), (
+                MetricCell(NA if o.elo is None else f"{o.elo:,.0f}", "점수"),
+                MetricCell(rate, "시즌 승÷전체"),
+                MetricCell(wdl_text(o.win, o.draw, o.lose), "승·무·패"),
+                MetricCell(MainWindow._won(o.value), "구단가치")),
+                rank=o.rank, icon=("formation", fkey) if fkey else (), key=o.nickname))
+        self.lb_owners_title.setVisible(bool(owners))
+        self.owners_list.setVisible(bool(owners))
+        self.owners_list.set_rows(owners)
+        self.main._start_list_icons(self.owners_list)
+        return True
+
+    def _rank_empty(self, text: str) -> None:
+        self.lb_rank_note.setText(text)
+        self.rank_body.setVisible(False)
+        self.card_share.setVisible(False)
+        self.bins_list.set_rows([])
+        self.owners_list.set_rows([])
+
     # ── 열기 ──
     def open_label(self, label: str) -> None:
         if label == self._label and (self._meta is not None or self._busy()):
+            self.refresh_rank()
             self.show()
             self.raise_()
             self.activateWindow()
             return
         self._start(label)
+        # 1만 명 숫자가 있으면 그 탭부터(목록·내 상대 화면에서 여는 자리) — 없으면 효과 탭(지금까지의 첫 화면)
+        self.tabs.setCurrentIndex(0 if self.refresh_rank() else 1)
         self.show()
         self.raise_()
         self.activateWindow()
@@ -12676,7 +14137,7 @@ class TeamColorDialog(QDialog):
         self.main._tc_effect_loaders = [x for x in self.main._tc_effect_loaders if x.isRunning()]
         if have is None:
             self._label, self._meta, self._players = label, None, []
-            self.setWindowTitle(f"{label} — 팀컬러 효과")
+            self.setWindowTitle(f"{label} — 팀컬러 정보")
             self.lb_title.setText(label)
             self.lb_emblem.clear()
             self._clear_pick()
@@ -12787,7 +14248,7 @@ class ApiKeyDialog(QDialog):
         v.addWidget(self.ed_key)
         self.lb_msg = QLabel(reason)
         self.lb_msg.setWordWrap(True)
-        self.lb_msg.setStyleSheet(f"color: {T.RED};")
+        self.lb_msg.setStyleSheet(f"color: {T.BAD};")
         v.addWidget(self.lb_msg)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -12891,6 +14352,36 @@ class NoticeDialog(QDialog):
             QMessageBox.warning(self, "저장 실패", f"설정을 저장하지 못했습니다: {e}")
             return
         self.accept()
+
+
+class MatchDetailDialog(QDialog):
+    """경기 상세 창(65 M3) — 머리(양쪽 작은 축구장 · 점수 · 결과 · 이 시즌 맞대결) + 탭 넷. 채우기는 MainWindow._make_match_detail,
+    닫은 뒤 로더 정리는 MainWindow._close_match_detail(모달 — 3판 S3). 테스트는 아래 속성으로 읽는다."""
+    TABS = ("요약", "스쿼드", "슛", "상대 전적")
+
+    def __init__(self, parent: QWidget, opponent: str):
+        super().__init__(parent)
+        self.setWindowTitle(f"{opponent} 경기 상세")
+        fit_to_screen(self, 600, 760)   # 예전 상대 스쿼드 창과 같은 크기 — 탭 안은 세로 스크롤(PyQt 9)
+        self.v = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        self.loaders: list = []
+        self.pitches: dict[str, PitchWidget] = {}
+        self.side_buttons: dict[str, QPushButton] = {}
+        self.side_pages: dict[str, int] = {}
+        self.squad_stack: QStackedWidget | None = None
+
+    def show_side(self, key: str) -> None:
+        """스쿼드 탭의 나 / 상대 칸."""
+        if self.squad_stack is None or key not in self.side_pages:
+            return
+        self.squad_stack.setCurrentIndex(self.side_pages[key])
+        self.side_buttons[key].setChecked(True)
+
+    def side(self) -> str | None:
+        if self.squad_stack is None:
+            return None
+        return next((k for k, i in self.side_pages.items() if i == self.squad_stack.currentIndex()), None)
 
 
 class AboutDialog(QDialog):
@@ -13415,7 +14906,7 @@ def rank_status_text(st: dict) -> str:
         gaps = st.get("meta_gaps")
         gap_text = f"빈 순위 {int(gaps or 0):,}"
         if gaps is not None and int(gaps) >= config.RANK_GAPS_WARN:
-            gap_text = f"<span style='color:{T.YELLOW}'>{gap_text}</span>"
+            gap_text = f"<span style='color:{T.WARN}'>{gap_text}</span>"
         lines.append(f"넥슨 데이터 기준 {st['meta_ref'][5:16].replace('T', ' ')} · {gap_text}")
     if st.get("same_since") and st.get("meta_ref"):
         lines.append(f"넥슨 데이터가 <b>{st['meta_ref'][11:16]} 기준</b>(마지막 수집)에서 멈춰 있습니다 — "

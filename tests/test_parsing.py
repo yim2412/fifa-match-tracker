@@ -114,6 +114,71 @@ def test_team_profile():
     assert empty.games == 0 and empty.axes == []
 
 
+def test_versus_profile():
+    # 65 M1 대시보드 "나와 상대" — 손계산(승·무·패 3경기 · 0004 는 오류): 유효슛 결정력 골 6÷유효 14 · 패스 345÷379 vs
+    # 268÷309 · 긴 패스 비중 = (긴 + 스루) 92÷379 vs 83÷309 · 드리블 308÷3 vs 234÷3 · 태클 61.11 vs 64.52(−3.41%p → 벌어진 곳)
+    ouid, _, details = _load()
+    p = st.versus_profile(details, ouid)
+    got = {ln.name: (round(ln.mine, 2), round(ln.opp, 2)) for ln in p.lines}
+    assert p.games == 3 and [ln.name for ln in p.lines] == [r[0] for r in st.VERSUS_ROWS], (p.games, got)
+    assert got == {"점유율": (52.33, 47.67), "경기당 슛": (5.67, 5.33), "유효슛 결정력": (42.86, 42.86),
+                   "패스 성공률": (91.03, 86.73), "긴 패스 비중": (24.27, 26.86), "경기당 드리블": (102.67, 78.0),
+                   "태클 성공률": (61.11, 64.52)}, got
+    assert [ln.name for ln in p.gaps] == ["태클 성공률"], [ln.name for ln in p.gaps]
+    # 몰수는 뺀다 — 막지 않았으면 3경기 그대로였다(먼저 단언) · 정상 경기 하나를 몰수승으로 바꾸면 2경기
+    forfeit = copy.deepcopy(details)
+    me, _opp = st._me_opp(forfeit[0], ouid)
+    assert st.end_kind(me, _opp) == "정상"
+    me.setdefault("matchDetail", {})["matchEndType"] = st.END_FORFEIT_WIN
+    assert st.versus_profile(forfeit, ouid).games == 2
+    assert st.versus_profile([], ouid).lines == []
+    # 문턱 — 비율 줄은 %p, 횟수 줄은 상대 대비 비율 · 좋고 나쁨이 없는 줄(None)은 벌어진 곳이 아니다
+    pp, rel = config.VERSUS_GAP_PCTP, config.VERSUS_GAP_REL
+    assert st.VersusLine("a", "%", True, 50 - pp, 50).gap and not st.VersusLine("a", "%", True, 50 - pp + 0.01, 50).gap
+    assert st.VersusLine("a", "%", False, 50 + pp, 50).gap, "작을수록 좋은 줄의 방향"
+    assert st.VersusLine("a", "회", True, 10 * (1 - rel), 10).gap and not st.VersusLine("a", "회", True, 9.5, 10).gap
+    assert not st.VersusLine("a", "%", None, 0, 90).gap and not st.VersusLine("a", "회", True, 0, 0).gap
+
+
+def _detail_game(mid, opp_nick="가", me=None, opp=None):
+    return {"matchId": mid, "matchInfo": [dict({"ouid": "me", "nickname": "나"}, **(me or {})),
+                                          dict({"ouid": "op", "nickname": opp_nick}, **(opp or {}))]}
+
+
+def test_match_detail_stats():
+    # 65 M3 경기 상세 창 — 손으로 지은 한 경기
+    me = {"shoot": {"shootTotal": 5, "effectiveShootTotal": 3},
+          "pass": {"passTry": 100, "passSuccess": 80},
+          "matchDetail": {"dribble": 12},
+          "shootDetail": [{"result": 3, "goalTime": (1 << 24) + 600, "spId": 11},    # 후반 10분 = 55분
+                          {"result": 1, "goalTime": 30, "spId": 11},                 # 골 아님
+                          {"result": 3, "goalTime": (2 << 24) + 120, "spId": 12}],   # 연장 전반 2분 = 92분
+          "player": [{"spId": 11, "status": {"spRating": 8.0}}, {"spId": 12, "status": {"spRating": 0}}]}
+    opp = {"shoot": {"shootTotal": 4, "effectiveShootTotal": 1},
+           "pass": {"passTry": 50, "passSuccess": 40},
+           "shootDetail": [{"result": 3, "goalTime": 750, "spId": 21}],                # 전반 12.5분
+           "player": [{"spId": 21, "status": {"spRating": 8.0}}, {"spId": 22, "status": {"spRating": 7.5}}]}
+    d = _detail_game("m", me=me, opp=opp)
+    got = {ln.name: (ln.mine, ln.opp) for ln in st.match_versus(d, "me")}
+    # 양쪽 다 없는 줄(파울·점유율 …)은 빠진다 · 한쪽만 있으면(드리블) 다른 쪽 0 · 성공률은 % · 순서는 표 그대로
+    assert got == {"슈팅": (5, 4), "유효 슈팅": (3, 1), "패스 시도": (100, 50), "패스 성공률": (80.0, 80.0),
+                   "드리블": (12, 0)}, got
+    assert list(got) == [r[0] for r in st.MATCH_VERSUS_ROWS if r[0] in got]
+    assert st.match_versus(d, "없음") == []
+    goals = st.match_goals(d, "me")
+    assert [(g.minute, g.mine, g.sp_id) for g in goals] == [(12.5, False, 21), (55.0, True, 11), (92.0, True, 12)], goals
+    # MVP — 같은 평점이면 내 쪽 · 평점 0 은 안 센다 · 상대가 더 높으면 상대
+    assert st.match_mvp(d, "me") == (True, 11, 8.0)
+    opp["player"][1]["status"]["spRating"] = 9.1
+    assert st.match_mvp(d, "me") == (False, 22, 9.1)
+    assert st.match_mvp(_detail_game("z"), "me") is None
+    # 그 상대와의 가장 최근 경기 — 목록은 최신순 · 내가 없는 경기는 건너뛴다
+    new, old, other = _detail_game("new"), _detail_game("old"), _detail_game("other", "나라")
+    stray = {"matchId": "x", "matchInfo": [{"ouid": "a", "nickname": "가"}, {"ouid": "b", "nickname": "가"}]}
+    assert st.latest_match_with([stray, other, new, old], "me", "가") is new
+    assert st.latest_match_with([new], "me", "다") is None
+
+
 def test_result_breakdown():
     ouid, _, details = _load()
     rb = st.result_breakdown(details, ouid)
@@ -122,6 +187,87 @@ def test_result_breakdown():
     assert rb.shootout == [0, 0, 0], rb.shootout
     # 0004 는 내 쪽 matchEndType 4("오류") + 상대 1(몰수승) — 실제로는 몰수패. 1.2.1 전엔 결과 문자열을 봐서 0 이었다.
     assert rb.forfeit == [0, 0, 1], rb.forfeit
+
+
+def test_shootout_keepers():
+    # 65 M6 — 손으로 지은 경기: 승부차기 넷(같은 GK 셋 · 다른 GK 하나) + 승부차기 아님 + 몰수 + GK 없음 + 결과 오류
+    def game(mid, res, gk=900, so=(5, 4), my_end=0, opp_end=0):
+        players = [{"spId": 7, "spPosition": 25}] + ([{"spId": gk, "spPosition": 0}] if gk else []) \
+            + [{"spId": 901, "spPosition": 28}]   # 교체 명단의 골키퍼는 선발이 아니다
+        me = {"matchDetail": {"matchResult": res, "matchEndType": my_end}, "shoot": {"shootOutScore": so[0]}}
+        opp = {"matchDetail": {"matchEndType": opp_end}, "shoot": {"shootOutScore": so[1]}, "player": players}
+        return _detail_game(mid, me=me, opp=opp)
+    details = [game("a", "승"), game("b", "패", so=(3, 4)), game("c", "승", so=(0, 2)),   # 내 점수 0 이어도 승부차기
+               game("d", "승", gk=800),
+               game("e", "승", so=(0, 0)),                    # 승부차기 아님
+               game("f", "승", my_end=1),                      # 몰수승 — 승부차기 점수가 있어도 뺀다
+               game("g", "승", gk=None),                        # 상대 선발 GK 가 없다
+               game("h", "오류")]
+    got = [(k.sp_id, k.win, k.lose) for k in st.shootout_keepers(details, "me")]
+    assert got == [(900, 2, 1), (800, 1, 0)], got   # 많이 만난 순
+    k = st.shootout_keepers(details, "me")[0]
+    assert k.games == 3 and abs(k.win_rate - 200 / 3) < 1e-9, (k.games, k.win_rate)
+    # 같은 수면 spId 순 · 내가 없는 경기는 건너뛴다
+    tie = [game("x", "승", gk=5), game("y", "패", gk=3), _detail_game("z", me={"ouid": "남"})]
+    assert [k.sp_id for k in st.shootout_keepers(tie, "me")] == [3, 5]
+    # 같은 경기 묶음을 result_breakdown 도 승부차기로 센다(판정이 같은 기준)
+    rb = st.result_breakdown(details[:4], "me")
+    assert rb.shootout == [3, 0, 1], rb.shootout
+
+
+def test_shot_type_counts_matches_shot_map_path():
+    # 65 M6 빠른 길 — shot_type_breakdown(shot_map(...)) 과 같은 줄(이름·시도·유효·골·순서). 실응답 픽스처 + 거르기 경계
+    ouid, _, details = _load()
+    for mine, side in zip((True, False), st.shot_type_counts(details, ouid)):
+        want = [(b.label, b.shots, b.on_target, b.goals) for b in st.shot_type_breakdown(st.shot_map(details, ouid, mine))]
+        got = [(b.label, b.shots, b.on_target, b.goals) for b in side]
+        assert got == want and got, (mine, got, want)
+    me = {"shootDetail": [{"x": 0.9, "y": 0.5, "result": 3, "type": 1}, {"x": 0.9, "y": 0.5, "result": 1, "type": 1},
+                          {"x": None, "y": 0.5, "result": 3, "type": 1},       # 좌표 없음 — 뺀다
+                          {"x": 0.9, "y": 0.5, "result": 9, "type": 3},        # 모르는 결과 — 뺀다
+                          {"x": 0.8, "y": 0.4, "result": 2, "type": 3}]}
+    d = [_detail_game("s", me=me)]
+    got = [(b.label, b.shots, b.on_target, b.goals) for b in st.shot_type_counts(d, "me")[0]]
+    want = [(b.label, b.shots, b.on_target, b.goals) for b in st.shot_type_breakdown(st.shot_map(d, "me"))]
+    assert got == want == [(st.GOAL_TYPES[1], 2, 2, 1), (st.GOAL_TYPES[3], 1, 0, 0)], (got, want)
+
+
+def test_shot_summary():
+    # 65 M8 슛 맵 오른쪽 패널 — 손으로 지은 경기: 정상 셋 + 몰수 + 오류 + 내가 없는 경기
+    def shot(r, x=0.9, y=0.5, t=1):
+        return {"x": x, "y": y, "result": r, "type": t}
+
+    def game(mid, res, gf, ga, mine=(), theirs=(), players=(), my_end=0):
+        me = {"matchDetail": {"matchResult": res, "matchEndType": my_end}, "shoot": {"goalTotal": gf},
+              "shootDetail": list(mine), "player": list(players)}
+        return _detail_game(mid, me=me, opp={"shoot": {"goalTotal": ga}, "shootDetail": list(theirs)})
+
+    def pl(sp, goal=0, assist=0, grade=1, pos=25):
+        return {"spId": sp, "spPosition": pos, "spGrade": grade, "status": {"goal": goal, "assist": assist}}
+    a = game("a", "승", 3, 1, mine=(shot(3), shot(1, 0.8, 0.4), shot(2, 0.7, 0.3, 3)), theirs=(shot(3),),
+             players=(pl(11, goal=2, grade=7), pl(12, assist=1, grade=3), pl(14), pl(13, goal=5, pos=28)))
+    b = game("b", "패", 0, 4, mine=(shot(2),), theirs=(shot(3), shot(3, 0.85)), players=(pl(11, assist=1, grade=5),))
+    c = game("c", "승", 3, 4)                                     # 최다 득점·실점이 앞 경기와 같다 — 앞(최근)이 남는다
+    details = [a, b, c, game("f", "승", 9, 0, mine=(shot(3),) * 9, my_end=1),   # 몰수승 — 뺀다
+               game("h", "오류", 0, 0, mine=(shot(3),)), _detail_game("z", me={"ouid": "남"})]
+    ss = st.shot_summary(details, "me")
+    assert ss.games == 3, ss.games
+    m, o = ss.mine, ss.opp
+    assert (m.shots, m.on_target, m.goals) == (4, 2, 1), m
+    assert (o.shots, o.on_target, o.goals) == (3, 3, 3), o
+    kept = [a, b, c]   # 같은 경기만 남긴 shot_map 과 xG 가 같다(같은 식 · 같은 거르기)
+    for side, mine in ((m, True), (o, False)):
+        sm = st.shot_map(kept, "me", mine=mine)
+        assert side.shots == sm.total and abs(side.xg - sm.xg) < 1e-9 and side.xg > 0, (side, sm.total, sm.xg)
+    assert ss.best is a and ss.worst is b, (ss.best and ss.best["matchId"], ss.worst and ss.worst["matchId"])
+    assert ss.per_game(m.goals) == 1 / 3 and st.ShotSummary().per_game(5) == 0.0
+    got = [(s.sp_id, s.goals, s.assists, s.grade, s.games) for s in ss.scorers]
+    # 11: 2골 1어시 · 강화는 가장 높은 값(앞 경기 7 · 뒤 경기 5 — 마지막 값이 아니다) · 13 은 교체 명단에 기록 없음(안 뛰었다) · 14 는 골·어시 0 이라 뺀다
+    assert got == [(11, 2, 1, 7, 2), (12, 0, 1, 3, 1)], got
+    # 같은 합이면 골 많은 쪽 → 경기 많은 쪽 → spId
+    tie = [game("t", "승", 1, 0, players=(pl(21, assist=1), pl(22, goal=1), pl(20, goal=1)))]
+    assert [s.sp_id for s in st.shot_summary(tie, "me").scorers] == [20, 22, 21]
+    assert st.shot_summary([], "me").best is None
 
 
 def _end_game(my_end, my_res, opp_end=0, opp_res="승"):
@@ -1841,13 +1987,23 @@ def test_win_rate_trend_points_carry_their_day():
     assert [p.label for p in got] == ["09/01", "09/03"]  # 라벨은 그대로
 
 
-def test_daily_division_last_of_day():
-    t = lambda dd, h: datetime(2026, 7, dd, h)  # noqa: E731
-    # 처음·마지막·최고가 전부 다르게(같으면 '마지막 대신 처음'을 못 가른다 — 변이로 확인)
-    pts = [(t(6, 9), 1000), (t(5, 11), 1000), (t(5, 9), 900), (t(5, 10), 800)]  # 순서 섞임
-    got = st.daily_division(pts)
-    assert [(x.day.day, x.last, x.first, x.best) for x in got] == [(5, 1000, 900, 800), (6, 1000, 1000, 1000)], got
-    assert st.daily_division([]) == []
+def test_division_runs_merge_and_season_cut():
+    """66 G1 — 같은 등급이 이어진 경기는 한 칸 · 한 판짜리 구간도 한 칸 · since 앞은 뺀다(시즌 경계는 63 matchtime 의 KST)."""
+    import habits
+    t = lambda dd, h, mi=0: datetime(2026, 9, dd, h, mi)  # noqa: E731
+    # 순서 섞임 · 900 사이에 한 판 800(슈챔에 올랐다 내려온 것 — 옛 하루 한 점 그림이 못 보던 것)
+    pts = [(t(11, 9), 900), (t(10, 9), 1000), (t(10, 22), 900), (t(11, 10), 800), (t(11, 11), 900), (t(12, 9), 900)]
+    got = habits.division_runs(pts)
+    assert [(r.division, r.games) for r in got] == [(1000, 1), (900, 2), (800, 1), (900, 2)], got
+    assert (got[1].start, got[1].end) == (t(10, 22), t(11, 9)) and got[2].start == got[2].end == t(11, 10)
+    assert habits.division_runs([]) == []
+    # 시즌 경계 — 원문 UTC 09-09 15:30 = KST 09-10 00:30 → 09-10 시작 시즌 안 · UTC 09-09 14:59 = KST 23:59 → 밖
+    det = [{"matchId": "a", "matchDate": "2026-09-09T14:59:00", "matchInfo": [{"ouid": "me", "division": 1000}]},
+           {"matchId": "b", "matchDate": "2026-09-09T15:30:00", "matchInfo": [{"ouid": "me", "division": 900}]},
+           {"matchId": "c", "matchDate": "2026-09-10T01:00:00", "matchInfo": [{"ouid": "me"}]},          # 등급 없음 — 빠진다(M9)
+           {"matchId": "d", "matchDate": "2026-09-10T02:00:00", "matchInfo": [{"ouid": "me", "division": 900}]}]
+    got = habits.division_runs(st.division_trend(det, "me"), since=datetime(2026, 9, 10))
+    assert [(r.division, r.games, r.start) for r in got] == [(900, 2, datetime(2026, 9, 10, 0, 30))], got
 
 
 def test_division_entries_counts_each_climb():

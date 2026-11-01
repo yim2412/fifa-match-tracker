@@ -20,13 +20,13 @@ from analysis import (
     Basis, headline, narrate, streak_min_n,
 )
 from models import (
-    MatchSummary, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
+    MatchSummary, NO_NICK, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
     filter_matches, moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
 )
-from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionStay, DivisionStays, GoalFlow, LeadRow,
-                    division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
+from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, DivisionStay, DivisionStays, GoalFlow, LeadRow,
+                    division_runs, division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
                     AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
-                    DayLuck, HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables,
+                    HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables, luck_expected,
                     streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
                     DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
@@ -46,6 +46,8 @@ from rankmeta import (
     ClubHead, club_head, dd_band, fc_rank_range, rank_of,
     RewardBand, RewardBoard, TopCard, reward_board, top3,
     MINOR_LABEL, is_minor_color, minor_formations, usage_counts,
+    TcBoard, TcBoardRow, team_color_board, TcDetail, TcOwner, tc_detail, tc_top_owners,
+    ChampGames, champ_games, rank_cut, last_raw_id,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -60,12 +62,15 @@ from stats import (
     END_KINDS, MIN_BUCKET_SHOTS, PITCH_ROWS, PITCH_X, PITCH_Y, PITCH_Y_MAX, SquadValue, card_ovr, pitch_rows, squad_value, KeyPlayers, key_players, PASS_KINDS, PASS_MIN_TRIES, PERIODS, PLAYER_RATING_MIN_GAMES, PLAYER_TREND_MIN_SHOTS, RANKER_METRICS,
     SHOT_GOAL, SHOT_OFF_TARGET, SHOT_ON_TARGET, SUB_POSITION, SUPER_CHAMPION_DIVISION_ID, CHAMPION_DIVISION_ID,
     Discipline, PositionOpponent, StreakAfter, after_streak_rates, aggregate_players, clutch_summary,
-    daily_division, discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
+    discipline_stats, division_entries, division_stats, division_trend, finishing_ranking,
     formation_of, formation_stats, goal_minute_buckets, is_champion_or_above, match_formations,
     FormationUsage, OppCard, formation_label, opponent_cards, opponent_formations, opponent_position_players, opponent_squad, own_squad, pass_style, player_finishing_trend,
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_baseline, team_color_mixed, team_color_stats, team_profile, time_of_day_rates,
-    time_weekday_rates,
+    time_weekday_rates, VERSUS_ROWS, VersusLine, VersusProfile, versus_profile,
+    MATCH_VERSUS_ROWS, MatchGoal, latest_match_with, match_goals, match_mvp, match_sides, match_versus,
+    ShootoutKeeper, shootout_keepers, shot_type_counts,
+    Scorer, ShotSide, ShotSummary, shot_summary,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
     WinDivision, WinRewards, reward_for, win_divisions, win_rewards,
     COMPARE_LINES, COMPARE_MIN_GAMES, CompareDiff, LineCard, LinePair, compare_summary, line_pairs,
@@ -76,12 +81,12 @@ __all__ = [
     "MIN_COND", "MIN_OPP", "MIN_PLAYER_GAMES", "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "STREAK_MAX", "WINDOW",
     "Basis", "headline", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
-    "MatchSummary", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
+    "MatchSummary", "NO_NICK", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend", "division_icon_index",
     # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
     "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",
     # habits — 내 경기 습관·기준선(2.6.1) · N2 등급 체류
-    "DivisionStay", "DivisionStays", "division_stays",
+    "DivisionRun", "DivisionStay", "DivisionStays", "division_runs", "division_stays",
     # habits — N19 칩 · N17 골 흐름(2.7.1)
     "GOAL_KIND_NOTE", "GOAL_KINDS", "MAX_LEAD", "Chip", "GoalFlow", "LeadRow", "goal_flow", "half_share_diff",
     "paired_diff", "pct", "side_totals", "strength_chips",
@@ -89,7 +94,7 @@ __all__ = [
     "DistBasis", "dist_basis", "dist_judged", "HABIT_METRICS", "N19_CHIP_KEYS", "OwnerDist", "load_owner_dist",
     "PosCell", "PosDist", "PosLevel", "load_pos_dist", "pos_level",   # C4 자리별 수준(50단계 ③)
     # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
-    "DayLuck", "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables",
+    "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables", "luck_expected",
     "streak_baseline", "streak_key",
     # habits·rankmeta — 55 구단 머리 줄·점수 리포트(H1~H6 · R1~R3)
     "DaySummary", "FirstReach", "ScoreReport", "HistoryRun", "history_runs", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
@@ -116,6 +121,9 @@ __all__ = [
     "WinrateElo", "blank_label", "day_winrate", "emblems_by_name", "find_sn", "formation_group", "group_meta", "latest_pair",
     "my_day_rate", "pair_text", "rank_moves", "ranked_nicknames", "tier_means", "value_bins", "value_score", "weekly",
     "winrate_peers", "winrate_to_elo",
+    "TcBoard", "TcBoardRow", "team_color_board",   # 67 R1 팀컬러 목록
+    "TcDetail", "TcOwner", "tc_detail", "tc_top_owners",   # 67 R2 팀컬러 상세 창
+    "ChampGames", "champ_games", "rank_cut", "last_raw_id",   # 67 R5 달성 판수 · R4·R8 20위 컷
     # rankmeta — N23 상대 순위 구간(2.9.1)
     "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table", "opp_rank_label",
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸
@@ -127,7 +135,7 @@ __all__ = [
     "END_KINDS", "MIN_BUCKET_SHOTS", "PITCH_ROWS", "PITCH_X", "PITCH_Y", "PITCH_Y_MAX", "SquadValue", "card_ovr", "pitch_rows", "squad_value", "KeyPlayers", "key_players", "PASS_KINDS", "PASS_MIN_TRIES", "PERIODS", "PLAYER_RATING_MIN_GAMES", "PLAYER_TREND_MIN_SHOTS",
     "RANKER_METRICS", "SHOT_GOAL", "SHOT_OFF_TARGET",
     "SHOT_ON_TARGET", "SUB_POSITION", "SUPER_CHAMPION_DIVISION_ID", "CHAMPION_DIVISION_ID", "Discipline", "PositionOpponent", "StreakAfter",
-    "after_streak_rates", "aggregate_players", "clutch_summary", "daily_division", "discipline_stats",
+    "after_streak_rates", "aggregate_players", "clutch_summary", "discipline_stats",
     "division_entries", "division_stats", "division_trend", "finishing_ranking", "formation_of", "formation_stats",
     "goal_minute_buckets", "is_champion_or_above", "match_formations",
     "FormationUsage", "OppCard", "formation_label", "opponent_cards", "opponent_formations", "opponent_position_players", "opponent_squad", "own_squad", "pass_style", "player_finishing_trend",
@@ -136,6 +144,10 @@ __all__ = [
     "shot_distance_breakdown", "shot_map",
     "shot_type_breakdown", "team_color_baseline", "team_color_mixed", "team_color_stats", "team_profile", "time_of_day_rates",
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
+    "VERSUS_ROWS", "VersusLine", "VersusProfile", "versus_profile",   # 65 M1 대시보드 나와 상대
+    "MATCH_VERSUS_ROWS", "MatchGoal", "latest_match_with", "match_goals", "match_mvp", "match_sides", "match_versus",   # 65 M3 경기 상세 창
+    "ShootoutKeeper", "shootout_keepers", "shot_type_counts",   # 65 M6 승부차기 상대 GK · 슛 타입 분포
+    "Scorer", "ShotSide", "ShotSummary", "shot_summary",   # 65 M8 슛 맵 오른쪽 패널
     # stats — A2 FC 보상(43단계)
     "WinDivision", "WinRewards", "reward_for", "win_divisions", "win_rewards",
     # stats — D1 구단주 비교 확장(50단계)

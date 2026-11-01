@@ -16,6 +16,7 @@ import re
 import sqlite3
 import sys
 import tempfile
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -44,7 +45,7 @@ WEAK_FILES = ("models.py", "stats.py", "analysis.py", "widgets.py", "dashboard.p
               "squad_timeline.py", "check_api.py")
 WEAK_ALLOW = {
     ("models.py", "is_weak", "min_n"): "판정 자신",
-    ("app_main.py", "_fit_match_extra", "MATCH_EXTRA_MIN_PX"): "글꼴 크기(px) — 표본이 아니다(57 K3 상대 정보 열 접기)",
+    ("app_main.py", "_render_park", "need"): "predict.need 는 표본 문턱이 아니라 200위 컷까지 점수 차(67 R8 — 부호로 '더 필요/여유')",
     ("analysis.py", "_contrast", "MIN_BASE"): "선제골 *비율* 표본(경기 수) — 승률 아님",
     ("analysis.py", "_contrast", "MIN_FLOW"): "선제골 *비율* 표본(경기 수) — 승률 아님",
     ("analysis.py", "_contrast", "MIN_COND"): "선제골 *비율* 표본(경기 수) — 승률 아님",
@@ -317,6 +318,86 @@ RAW_TIME_ALLOW = {   # (파일, 함수, 따라간 도우미 — "" 는 그 함�
     ("tools/measure_cards.py", "b_freeze", ""): "51 측정 U1 — 11-26 판정까지 도구를 얼린다(:330·:471·:472 도 그때 같이 · 규칙이 못 보는 꼴)",
     ("tools/measure_cards.py", "b_freeze", "snapshot_list"): "같음(U1) — 도우미는 rank.db 스냅숏(KST) 읽기",
 }
+
+
+OLD_COLOR_NAMES = ("GREEN", "GREEN_SOFT", "GREEN_HOVER", "RED", "YELLOW", "ON_ACCENT")
+_OLD_COLOR_RE = re.compile(r"\b(" + "|".join(OLD_COLOR_NAMES) + r")\b")
+_STRING_TOKENS = {tokenize.STRING} | {getattr(tokenize, n) for n in ("FSTRING_MIDDLE", "TSTRING_MIDDLE")
+                                      if hasattr(tokenize, n)}
+
+
+def check_old_color_names(srcs: dict[str, str]) -> list[str]:
+    """옛 색 이름(3.1.1 에 지움 — 강조 ACCENT · 좋음/나쁨/주의 GOOD·BAD·WARN 으로 갈랐다)이 코드·글에 없다.
+
+    속성은 그 줄이 실행될 때 읽히므로 스모크가 안 지나는 분기에 남은 `T.GREEN` 은 exe 에서 처음 터진다 —
+    그래서 소스로 잰다. 주석은 빼고 문자열(f-string 의 `{GREEN}` · docstring)은 센다."""
+    out = []
+    for rel, src in srcs.items():
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.NAME and tok.string in OLD_COLOR_NAMES:
+                out.append(f"{rel}:{tok.start[0]} 옛 색 이름 {tok.string}")
+            elif tok.type in _STRING_TOKENS:
+                out += [f"{rel}:{tok.start[0]} 글 속 옛 색 이름 {m.group(1)}" for m in _OLD_COLOR_RE.finditer(tok.string)]
+    return out
+
+
+# 지운 함수(이름으로 다시 부르면 ImportError 가 exe 에서 처음 터진다 — 스모크가 안 지나는 분기)
+GONE_NAMES = {"win_rate_bar": "67 R11 — 승률 줄은 widgets.wdl_rate_bar(승·무·패 세 칸 막대 + 옆 글)"}
+
+
+def check_gone_names(srcs: dict[str, str]) -> list[str]:
+    """지운 함수 이름이 코드에 다시 없다 — 이름 토큰만 센다(주석·글 속 "옛 win_rate_bar 자리" 는 기록이라 둔다)."""
+    out = []
+    for rel, src in srcs.items():
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):
+            if tok.type == tokenize.NAME and tok.string in GONE_NAMES:
+                out.append(f"{rel}:{tok.start[0]} 지운 이름 {tok.string} — {GONE_NAMES[tok.string]}")
+    return out
+
+
+GRADE_FILES = ("app_main.py", "dashboard.py")
+_GRADE_NAME = re.compile(r"grade(?!s)")
+
+
+def _mentions_grade(node) -> bool:
+    return any(isinstance(n, ast.Name) and _GRADE_NAME.search(n.id)
+               or isinstance(n, ast.Attribute) and _GRADE_NAME.search(n.attr) for n in ast.walk(node))
+
+
+def _grade_text(node) -> bool:
+    """표 칸 (글자, 정렬 키) 의 글자가 강화 하나뿐인가 — f"{g}" · f"+{g}" · str(g …) · 그 셋의 `… if … else "-"`.
+    "3 → 5" 처럼 값이 둘인 글이나 "5강 12 · 3강 4" 같은 목록은 배지가 아니다(글자 그대로)."""
+    if isinstance(node, ast.IfExp):
+        return _grade_text(node.body)
+    if isinstance(node, ast.JoinedStr):
+        vals = [v for v in node.values if isinstance(v, ast.FormattedValue)]
+        lits = [v.value for v in node.values if isinstance(v, ast.Constant)]
+        return len(vals) == 1 and all(t in ("", "+") for t in lits) and _mentions_grade(vals[0].value)
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "str"
+            and len(node.args) == 1 and _mentions_grade(node.args[0]))
+
+
+def grade_cells(srcs: dict[str, str]) -> dict[str, int]:
+    """함수 이름 → 강화 하나뿐인 표 칸 튜플 수(64 P8 진입점 정의 — 첫 실행이 곧 진입점 표)."""
+    out: dict[str, int] = {}
+
+    def walk(node, fn):
+        for ch in ast.iter_child_nodes(node):
+            here = ch.name if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+            if isinstance(ch, ast.Tuple) and len(ch.elts) == 2 and fn and _grade_text(ch.elts[0]):
+                out[fn] = out.get(fn, 0) + 1
+            walk(ch, here)
+    for src in srcs.values():
+        walk(ast.parse(src), None)
+    return out
+
+
+def check_grade_badges(srcs: dict[str, str], table: dict) -> list[str]:
+    """강화 숫자 칸을 만드는 함수 ↔ app_main.GRADE_BADGE_COLUMNS(배지 대리자를 거는 열) — 함수도 칸 수도 같아야."""
+    found = grade_cells(srcs)
+    want = {fn: len(cols) for fn, (_t, cols) in table.items()}
+    return [f"{fn}: 강화 칸 {found.get(fn, 0)}개 · 배지 열 {want.get(fn, 0)}개"
+            for fn in sorted(set(found) | set(want)) if found.get(fn, 0) != want.get(fn, 0)]
 
 
 def _docstring_nodes(tree) -> set[int]:
@@ -645,6 +726,38 @@ def test_colors_only_in_theme():
     assert check_colors({"playerinfo.py": "STAT_COLOR_BUCKETS = ['#ffffff']\nX = '#000000'\n"}) == \
         ["playerinfo.py:2 색 \"#000000\" — theme.py 에 둔다"]
     assert check_colors(_all(APP_FILES)) == []
+
+
+def test_old_color_names_are_gone():
+    bad = ('c = T.GREEN\nQSS = f"a {{ color: {GREEN}; }}"\ndef f():\n    """ON_ACCENT 위 글자"""\n'
+           "x = theme.RED  # 주석의 YELLOW 는 안 센다\n")
+    found = check_old_color_names({"x.py": bad})
+    assert [f.split(":")[1].split()[0] for f in found] == ["1", "2", "4", "5"], found
+    assert not check_old_color_names({"x.py": "c = T.GOOD  # 옛 GREEN\nd = T.ACCENT_SOFT\ne = 'GREENISH'\n"})
+    # test_rules 자신은 위의 심은 위반을 품고 있어 뺀다
+    assert check_old_color_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
+
+
+def test_gone_names_stay_gone():
+    planted = 'from widgets import win_rate_bar\nb = widgets.win_rate_bar(1, 0, 0)\n# 주석 win_rate_bar\nx = "win_rate_bar"\n'
+    assert [f.split(":")[1].split()[0] for f in check_gone_names({"x.py": planted})] == ["1", "2"], \
+        check_gone_names({"x.py": planted})
+    assert check_gone_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
+
+
+def test_grade_cells_are_badged():
+    # 64 P8 — 강화 숫자 하나만 든 표 칸은 배지로. 심은 소스: 잡혀야 할 넷(f"{}"·f"+{}"·str()·if-else) · 아닌 셋(변화·목록·라벨)
+    planted = ("def a(r, e, t):\n"
+               "    r.append([(f'{e.grade}', 1), (f'+{t.cur_grade}' if t else '-', 0)])\n"
+               "def b(e, now_grade):\n    return [(str(now_grade or '-'), 0), (str(e.grade_to) if e else '-', 0)]\n"
+               "def c(e, c2):\n    x = (f'{e.grade_from} → {e.grade_to}', 0)\n"
+               "    y = (' · '.join(f'{g}강' for g in c2.grades), 0)\n    z = QLabel(f'{e.grade}강')\n")
+    assert grade_cells({"x.py": planted}) == {"a": 2, "b": 2}, grade_cells({"x.py": planted})
+    assert check_grade_badges({"x.py": planted}, {"a": ("t", (1, 2)), "b": ("t", (3,))}) == ["b: 강화 칸 2개 · 배지 열 1개"]
+    import app_main
+    srcs = {f: _src(ROOT / f) for f in GRADE_FILES}
+    bad = check_grade_badges(srcs, app_main.MainWindow.GRADE_BADGE_COLUMNS)
+    assert bad == [], bad
 
 
 def test_weak_samples_go_through_is_weak():

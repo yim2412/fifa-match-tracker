@@ -20,7 +20,7 @@
 랭커 메타 ② 스냅숏 읽기(2.4.1 · 31단계) — rank.db 를 **읽기만**(요청 0 · 쓰기 0). 파일 머리말 표가 규칙: 지금 시즌 · `data_time` ·
 이웃 쌍 `latest_pair`(원본 남은 마지막 둘 · ≤ `RANK_CONT_MAX_H`) · **N10 하루 걸음만 `predict._gap_ok`(수집 시각)** · 음수 차 뺌 ·
 하루 승률·승률→점수는 **앞 스냅숏 순위**로 구간 · 랭커 승률 승÷(승+패). 함수: `day_winrate`(B2) · `value_score`(B3 — `B3_MIN_USERS` 이상 팀컬러끼리 백분위 ·
-`B3_MIN_TEAMS` 미만이면 점수 없음) · `value_bins`(B4) · `tier_means`(B6) · `formation_group`/`group_meta`(N6 — B1 은 화면이 묶는다) ·
+`B3_MIN_TEAMS` 미만이면 점수 없음) · `team_color_board`(67 R1 — B3·B2 를 팀컬러 하나로 묶기만) · `value_bins`(B4) · `tier_means`(B6) · `formation_group`/`group_meta`(N6 — B1 은 화면이 묶는다) ·
 `winrate_to_elo`/`winrate_peers`/`my_day_rate`(N10) · `weekly`(N13) ·
 `rank_moves`/`judge`(N8·N9 — 판정 순서는 `judge` 한 곳) · `find_sn` · `ranked_nicknames`(N7 — DISTINCT 대신 파이썬 집합).
 결과는 (DB 파일, 지금 시즌 스냅숏, 원본 목록, 인자) 키로 캐시(`clear_cache` — 테스트).
@@ -43,6 +43,7 @@ import config
 import models
 import predict
 import rankcollect
+import teamcolor
 from rankcollect import is_champ  # noqa: F401 — core_api 가 여기서도 가져갈 수 있게(정본은 rankcollect)
 
 BLANK_COLOR = "안 씀"
@@ -315,8 +316,11 @@ def is_minor_color(counts: dict[str, int], name: str) -> bool:
     return counts.get(name, 0) < config.MINOR_USERS
 
 
-def _last_raw(conn) -> tuple[dict | None, dict[int, Row]]:
+def _last_raw(conn, snap_id: int | None = None) -> tuple[dict | None, dict[int, Row]]:
+    """마지막 원본 스냅숏 — snap_id 를 주면 지금 시즌 원본 중 그 스냅숏(67 R2 지난주 대비 · 없으면 빈 값)."""
     raw = _season_raw(conn)
+    if snap_id is not None:
+        raw = [s for s in raw if s["id"] == snap_id]
     if not raw:
         return None, {}
     return raw[-1], _rows(conn, raw[-1]["id"])
@@ -368,12 +372,13 @@ def _percentiles(vals: dict[str, float], lower_better: bool = False) -> dict[str
     return out
 
 
-def value_score(conn: sqlite3.Connection, top: int = 10000) -> ValueScore:
-    return _cached("value_score", conn, (top,), lambda: _value_score(conn, top))
+def value_score(conn: sqlite3.Connection, top: int = 10000, snap_id: int | None = None) -> ValueScore:
+    """snap_id None = 마지막 원본 스냅숏(지금까지 그대로) · 주면 그 시점(67 R2 지난주 대비 — 캐시 키도 따로)."""
+    return _cached("value_score", conn, (top, snap_id), lambda: _value_score(conn, top, snap_id))
 
 
-def _value_score(conn, top) -> ValueScore:
-    snap, rows = _last_raw(conn)
+def _value_score(conn, top, snap_id=None) -> ValueScore:
+    snap, rows = _last_raw(conn, snap_id)
     out = ValueScore(at=snap["dt"] if snap else None)
     by: dict[str, list[Row]] = {}
     for r in rows.values():
@@ -396,6 +401,114 @@ def _value_score(conn, top) -> ValueScore:
             r.pct = {k: pcts[k][r.key] for k in pcts}
             r.score = sum(config.B3_WEIGHTS[k] * r.pct[k] / 100 for k in pcts)
     out.rows.sort(key=lambda r: (r.score is None, -(r.score or 0), -r.users, r.key))
+    return out
+
+
+@dataclass
+class TcBoardRow:
+    key: str                           # 화면 키 teamcolor.label(이름, None) — 겹치는 이름은 "(구분 전)"(1만 명 숫자는 맨 이름 단위)
+    name: str                          # rank.db 맨 이름
+    users: int
+    share: float                       # % — 분모는 이 구간의 빈 이름·"-" 뺀 인원(usage_counts 와 같은 규칙)
+    score: float | None                # 가성비(B3 — value_score 그대로)
+    elo: float | None
+    rate: float | None                 # 시즌 승÷(승+패) %
+    value: float | None                # 구단가치 중앙값
+    champ: float | None                # 챔스 이상 %
+    pct: dict
+    day_rate: float | None             # 하루 승÷(승+패) % — 앞 스냅숏 순위로 가름(day_winrate) · 쌍이 없으면 None
+    day_thin: bool                     # 하루 인원 META_MIN_USERS 미만(그 줄이 없으면 True)
+
+
+@dataclass
+class TcBoard:
+    at: str | None = None
+    rows: list = field(default_factory=list)   # 인원 내림차순
+    scored: bool = False
+    eligible: int = 0
+    day_ready: bool = False
+    total: int = 0                             # 점유율 분모
+
+
+def team_color_board(conn: sqlite3.Connection, top: int = 10000, snap_id: int | None = None) -> TcBoard:
+    """67 R1 팀컬러 목록 — 가성비(value_score)·하루 승률(day_winrate)을 팀컬러 하나로 묶기만(새 정의 0).
+    빈 이름·"-" 는 뺀다(usage_counts 와 같게). 두 재료가 같은 캐시라 이것도 같은 키로.
+    snap_id = 지난 시점(67 R2) — 하루 승률은 그 시점 짝이 없어 비운다(day_ready False)."""
+    return _cached("team_color_board", conn, (top, snap_id), lambda: _team_color_board(conn, top, snap_id))
+
+
+def _team_color_board(conn, top, snap_id=None) -> TcBoard:
+    vs = value_score(conn, top, snap_id)
+    out = TcBoard(at=vs.at, scored=vs.scored, eligible=vs.eligible)
+    if vs.at is None:
+        return out
+    dw = day_winrate(conn, top, "raw") if snap_id is None else DayWinrate()
+    out.day_ready = dw.ready
+    day = {r.key: r for r in dw.tables.get("team_color", [])} if dw.ready else {}
+    rows = [r for r in vs.rows if (r.key or "").strip() not in ("", "-")]
+    out.total = sum(r.users for r in rows)
+    for r in rows:
+        d = day.get(r.key)
+        out.rows.append(TcBoardRow(teamcolor.label(r.key, None), r.key, r.users, r.users * 100 / out.total if out.total else 0.0,
+                                   r.score, r.elo, r.rate, r.value, r.champ, r.pct,
+                                   d.rate if d is not None else None, d is None or d.thin))
+    out.rows.sort(key=lambda x: (-x.users, x.key))
+    return out
+
+
+@dataclass
+class TcOwner:
+    rank: int
+    nickname: str
+    elo: float | None
+    value: float | None
+    win: int
+    draw: int
+    lose: int
+    formation: str
+    champ: bool                        # 챔스 이상(is_champ — 등급 칸은 코드라 이름 대신)
+
+
+def tc_top_owners(conn: sqlite3.Connection, name: str, k: int = 3) -> list[TcOwner]:
+    """67 R2 대표 구단주 — 마지막 원본 스냅숏에서 그 팀컬러(맨 이름) 점수 높은 순 k 명. 관문 없음(top3 와 같다 —
+    [랭킹 추이] 가 이미 보이는 원본 14일 범위). 사람 줄을 읽어 캐시하지 않는다(1회차 [상] 2)."""
+    raw = _season_raw(conn)
+    if not raw or not name:
+        return []
+    snap = raw[-1]
+    rows = [Row(*r) for r in conn.execute(f"SELECT {_COLS} FROM snapshot_rows WHERE snapshot_id = ? AND team_color = ?",
+                                          (snap["id"], name))]
+    rows.sort(key=lambda r: (r.elo is None, -(r.elo or 0), r.rank if r.rank is not None else 10 ** 9))
+    return [TcOwner(r.rank, r.nick or "", r.elo, r.value, r.win or 0, r.draw or 0, r.lose or 0, r.formation or "",
+                    is_champ(r.grade)) for r in rows[:k]]
+
+
+@dataclass
+class TcDetail:
+    at: str | None = None
+    now: TcBoardRow | None = None
+    then: TcBoardRow | None = None             # 지난주(주간 요약과 같은 고르기 `_compare_snap`) — 원본이 없으면 None
+    then_at: str | None = None
+    bins: list = field(default_factory=list)   # [(ValueBin, ValueCell | None)] — value_bins.cross 의 이 팀컬러 줄
+    owners: list = field(default_factory=list)
+
+
+def tc_detail(conn: sqlite3.Connection, name: str) -> TcDetail:
+    """67 R2 팀컬러 상세 창의 1만 명 칸 — 목록 줄 · 지난주 줄 · 구단가치 구간별 · 대표 구단주 셋. name 은 rank.db 맨 이름."""
+    board = team_color_board(conn)
+    out = TcDetail(at=board.at)
+    if board.at is None:
+        return out
+    out.now = next((r for r in board.rows if r.name == name), None)
+    cmp = _compare_snap(_season_raw(conn))
+    if cmp is not None:
+        out.then_at = cmp["dt"]
+        out.then = next((r for r in team_color_board(conn, snap_id=cmp["id"]).rows if r.name == name), None)
+    vb = value_bins(conn)
+    row = next((cells for color, _n, cells in vb.cross if color == name), None)
+    if row is not None:
+        out.bins = list(zip(vb.bins, row))
+    out.owners = tc_top_owners(conn, name)
     return out
 
 
@@ -824,6 +937,8 @@ class Weekly:
     my_value: tuple | None = None                  # (등수, 전체)
     park_state: str = "unknown"                    # "shown" · "far" · "unknown"
     parked: list = field(default_factory=list)     # [(닉네임, 순위, ELO)]
+    base_id: int | None = None                     # 컷 비교의 두 스냅숏 id — 20위 카드(rank_cut)가 200위 카드와 같은 시점을 읽게(67 3회차 M6)
+    cmp_id: int | None = None
 
 
 def _compare_snap(snaps: list[dict]) -> dict | None:
@@ -852,9 +967,10 @@ def _weekly(conn, my_sn, end_days, top) -> Weekly:
     if not snaps:
         return out
     base = snaps[-1]
-    out.base_at = base["dt"]
+    out.base_at, out.base_id = base["dt"], base["id"]
     cmp = _compare_snap(snaps)
     if cmp is not None:
+        out.cmp_id = cmp["id"]
         out.cut_at, out.cut_days = cmp["dt"], _days(cmp["dt"], base["dt"])
         now_c, then_c = rankcollect.cut_elo(conn, base["id"]), rankcollect.cut_elo(conn, cmp["id"])
         out.cuts = [(r, then_c.get(r), now_c.get(r)) for r in config.WEEKLY_CUTS]
@@ -908,6 +1024,25 @@ def _weekly(conn, my_sn, end_days, top) -> Weekly:
         vals = [r.value for r in last.values() if r.value is not None]
         out.my_value = (1 + sum(1 for v in vals if v > me.value), len(vals))
     return out
+
+
+def last_raw_id(conn: sqlite3.Connection) -> int | None:
+    """지금 시즌 원본이 남은 마지막 스냅숏 id — 67 R8 카드 둘(20위·200위)이 같은 시점을 읽게(3회차 M7)."""
+    raw = _season_raw(conn)
+    return raw[-1]["id"] if raw else None
+
+
+def rank_cut(conn: sqlite3.Connection, rank: int, snap_id: int | None) -> float | None:
+    """그 스냅숏 원본의 rank 위 컷 점수(67 R4·R8) — 저장 컷(rankcollect.aggregate)과 같은 규칙: 순위가 rank 이상인 첫 사람
+    (정확히 그 순위가 빠졌으면 바로 아래 사람). 원본이 지워졌거나(14일 밖) 목록이 그 순위까지 안 가면 None.
+    캐시 안 함 — 원본 한 순위만 읽는다."""
+    if snap_id is None:
+        return None
+    got = conn.execute("SELECT MIN(rank) FROM snapshot_rows WHERE snapshot_id = ? AND rank >= ?", (snap_id, rank)).fetchone()
+    if got is None or got[0] is None:
+        return None
+    row = conn.execute("SELECT elo FROM snapshot_rows WHERE snapshot_id = ? AND rank = ? LIMIT 1", (snap_id, got[0])).fetchone()
+    return row[0] if row is not None else None
 
 
 def emblems_by_name(conn: sqlite3.Connection) -> dict[str, str]:
@@ -1121,6 +1256,64 @@ def club_head(conn: sqlite3.Connection, my_sn: int | None) -> ClubHead | None:
         return None
 
 
+# ── 67 R5 챔피언스 달성 판수 — club_head(H5)와 같은 행 · 같은 숨김 ─────────────────────────────────────
+
+@dataclass
+class ChampGames:
+    state: str = "ok"                        # ok · no_season(사람별 처리 전) · no_table(옛 rank.db)
+    season_start: str | None = None
+    n: int = 0
+    p10: float | None = None                 # 빠른 10%(판수가 적은 쪽)
+    p50: float | None = None                 # club_head.champ_median 과 같은 값(같은 행 · 같은 _median)
+    p90: float | None = None
+    hist: list = field(default_factory=list)       # [(칸 아래 판수, 사람 수)] — 마지막 칸은 R5_HIST_MAX 이상 전부
+    by_value: list = field(default_factory=list)   # [(ValueBin | None, 사람 수, 판수 중앙값 | None)] — value_bins 칸 순서 + 모름
+    hidden: bool = True                      # 이 시즌 사람별 처리가 늦게 시작됐다(club_head.champ_hidden 과 같은 판정)
+
+
+def champ_games(conn: sqlite3.Connection) -> ChampGames:
+    """첫 챔스(챔피언스 이상)까지 판수 분포. 행 집합은 club_head 와 같다(champ_first 그 시즌 전부 · 사람 단위로 거르지
+    않는다 — 늦게 잡힌 사람은 느린 쪽이라 거르면 오히려 빨라 보인다 · 67 1회차 [상] 1). 시즌은 club_head 처럼 안에서
+    person_season 으로(화면이 다른 시즌을 넘겨 둘이 갈리지 않게). 캐시 안 함 — 사람별 표를 읽는다(reward_board 와 같은 까닭).
+    구단가치 칸은 champ_first.team_value(챔스에 닿은 때 값)를 마지막 스냅숏 칸 경계(value_bins)에 넣는다."""
+    out = ChampGames()
+    try:
+        st = rankcollect.get_state(conn)
+        ps = rankcollect._json_state(st, "person_season") or {}
+        season_at, out.season_start = ps.get("at"), ps.get("start")
+        if not season_at:
+            out.state = "no_season"
+            return out
+        got = conn.execute("SELECT games, team_value FROM champ_first WHERE season_at = ?", (season_at,)).fetchall()
+    except sqlite3.Error as e:
+        if "no such table" not in str(e):
+            raise
+        out.state = "no_table"
+        return out
+    out.hidden = _late_start(out.season_start, season_at)
+    games = sorted(g for g, _v in got if g is not None)
+    out.n, out.p50 = len(got), _median(g for g, _v in got)
+    if games:
+        out.p10, out.p90 = _pct(games, 0.1), _pct(games, 0.9)
+        w, top = config.R5_HIST_BIN, config.R5_HIST_MAX
+        cells: dict[int, int] = {}
+        for g in games:
+            lo = min(g // w * w, top)
+            cells[lo] = cells.get(lo, 0) + 1
+        out.hist = [(lo, cells.get(lo, 0)) for lo in range(min(games[0] // w * w, top), min(games[-1] // w * w, top) + 1, w)]
+    bins = value_bins(conn).bins
+    per: list[list] = [[] for _ in range(len(bins) + 1)]
+    for g, v in got:
+        if g is None:
+            continue
+        i = bin_of_value(bins, v)
+        per[len(bins) if i is None else i].append(g)
+    out.by_value = [(b, len(per[i]), _median(per[i])) for i, b in enumerate(bins)]
+    if per[-1]:
+        out.by_value.append((None, len(per[-1]), _median(per[-1])))
+    return out
+
+
 def dd_band(peaks_dd: list, peak: float | None) -> tuple[float, int] | None:
     """내 시즌 최고점 ± R2_BAND 안 사람들의 최대 낙폭 중앙값과 사람 수(R2) — R2_BAND_MIN 미만이면 None."""
     if peak is None or not peaks_dd:
@@ -1156,9 +1349,12 @@ class TopCard:
     fc_hi: float | None
     win_pct: float | None              # 시즌 승÷전체 %(앱 규칙)
     ref_time: str                      # 마지막 스냅숏 데이터 시각
-    win: int = 0                       # 시즌 승·무·패(막대 — widgets.win_rate_bar 가 받는다)
+    win: int = 0                       # 시즌 승·무·패(막대 — widgets.WdlBar)
     draw: int = 0
     lose: int = 0
+    formation: str = ""                # 67 R9 랭킹 줄 꼴 — 마지막 스냅숏 그대로(새 요청 0)
+    team_color: str = ""
+    value: float | None = None         # 구단가치
 
 
 def top3(conn: sqlite3.Connection, person: bool = False) -> list[TopCard]:
@@ -1206,7 +1402,7 @@ def top3(conn: sqlite3.Connection, person: bool = False) -> list[TopCard]:
             lo, hi = fc[r.sn][0] / fc_days, fc[r.sn][1] / fc_days
         out.append(TopCard(r.rank, r.nick or "", r.elo, per_day, lo, hi,
                            r.win * 100 / games if games and r.win is not None else None, last["dt"],
-                           r.win or 0, r.draw or 0, r.lose or 0))
+                           r.win or 0, r.draw or 0, r.lose or 0, r.formation or "", r.color or "", r.value))
     return out
 
 
@@ -1231,6 +1427,7 @@ class RewardBoard:
     overall: RewardBand | None = None
     by_rank: list = field(default_factory=list)      # RewardBand — OPP_RANK_BANDS 순서 · 마지막 스냅숏에 없는 사람은 "1만 위 밖·모름"
     by_value: list = field(default_factory=list)     # RewardBand — value_bins 칸 순서 + 모름
+    by_team_color: list = field(default_factory=list)   # RewardBand(label = teamcolor.label(이름, None)) — 67 R6 · 인원 내림차순
 
 
 def _reward_band(label: str, spans: list[tuple[float, float]]) -> RewardBand:
@@ -1301,4 +1498,13 @@ def reward_board(conn: sqlite3.Connection) -> RewardBoard:
         band.bin = b
         out.by_value.append(band)
     out.by_value.append(_reward_band("모름", cells[-1]))
+    # 67 R6 — 마지막 스냅숏 팀컬러별(빈 이름·"-"·마지막 스냅숏에 없는 사람은 뺀다 · 인원 하한은 구간 칸과 같은 K11_MIN_PER_BAND)
+    by_tc: dict[str, list] = {}
+    for sn, sp in spans.items():
+        r = rows.get(sn)
+        name = (r.color or "").strip() if r is not None else ""
+        if name not in ("", "-"):
+            by_tc.setdefault(name, []).append(sp)
+    out.by_team_color = sorted((_reward_band(teamcolor.label(name, None), sps) for name, sps in by_tc.items()),
+                               key=lambda b: (-b.users, b.label))
     return out

@@ -22,6 +22,21 @@ SCREENS = os.path.join(_ROOT, "tests", "screens")
 sys.path.insert(0, _ROOT)
 
 
+def _detail(win, players: list) -> dict:
+    """경기 상세 창(65 M3)을 열 지어낸 경기 하나 — 양쪽 같은 선수 11명 · 내 골 하나."""
+    win._ouid = "me"
+    shot = [{"goalTime": 600, "x": 0.9, "y": 0.5, "type": 2, "result": 3, "spId": players[-1]["spId"]}]
+
+    def side(ouid, nick, res, goals):
+        return {"ouid": ouid, "nickname": nick, "division": 800,
+                "matchDetail": {"matchResult": res, "possession": 50, "averageRating": 6.5, "controller": "keyboard"},
+                "shoot": {"goalTotal": goals, "shootTotal": 3, "effectiveShootTotal": 2},
+                "pass": {"passTry": 100, "passSuccess": 80}, "defence": {"tackleTry": 5, "tackleSuccess": 2},
+                "player": players, "shootDetail": shot[:goals]}
+    return {"matchId": "m1", "matchDate": "2026-10-04T03:00:00", "matchType": 52,
+            "matchInfo": [side("me", "나", "승", 1), side("op", "상대", "패", 0)]}
+
+
 # ── 자식 프로세스: 흉내 낸 화면에서 실제 창을 띄우고 잰 값을 JSON 한 줄로 ──────────────
 def _child(case: str, screen: str, settings_path: str) -> None:
     os.chdir(SCREENS)
@@ -68,7 +83,8 @@ def _child(case: str, screen: str, settings_path: str) -> None:
     if case == "move":
         win.show_initial()
         app.processEvents()
-        big_ok = win.width() == app_main.DEFAULT_WINDOW[0]
+        av = win.screen().availableGeometry()
+        big_ok = win.width() == app_main.initial_window(av.width(), av.height()).size[0]
         win.move(1920 + 100, 50)  # 오른쪽 모니터(150%, 논리 1280x720)로
         for _ in range(5):
             app.processEvents()
@@ -97,7 +113,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         app_main.IconLoader.start = lambda self: None
         players = [{"spId": 100000001 + i, "spPosition": p, "spGrade": 5}
                    for i, p in enumerate((0, 3, 5, 6, 7, 10, 14, 16, 18, 23, 25))]
-        win._show_opponent_squad("상대", players, "2026-10-04", "승")
+        win._show_match_detail(_detail(win, players), tab="스쿼드")   # 65 M3 — 예전 상대 스쿼드 창 자리
         d = QDialog(win)
         d.setWindowTitle("고정 600x760")
         app_main.fit_to_screen(d, 600, 760)
@@ -147,7 +163,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
         app_main.ApiKeyDialog(win, reason="만료").exec()
         players = [{"spId": 100000001 + i, "spPosition": p, "spGrade": 5}
                    for i, p in enumerate((0, 3, 5, 6, 7, 10, 14, 16, 18, 23, 25))]
-        win._show_opponent_squad("상대", players, "2026-10-04", "승")
+        win._show_match_detail(_detail(win, players), tab="스쿼드")   # 65 M3 — 예전 상대 스쿼드 창 자리
         out["main_screen"] = win.screen().name()
         # 대화상자가 열린 채 메인 창만 다른 모니터로 옮겨진다(실제 윈도우 실측 — 안내 창이 주 모니터에 홀로 남았다)
         d = QDialog(win)
@@ -237,6 +253,11 @@ def test_rules_by_usable_screen_size():
     import app_main as a
     # 쓸 수 있는 크기 = 배율 반영 해상도 − 작업 표시줄(윈도우 11 48px → 100% 48 · 125% 38 · 150% 32)
     cases = {
+        # 넓은 화면(2026-10-26) — 테두리까지 1920x1080. QHD 125% 가 큰 창이 되는 게 바깥 크기로 정한 이유다
+        "QHD 100%": ((2560, 1392), a.LARGE_WINDOW, False),
+        "QHD 125%": ((2048, 1114), a.LARGE_WINDOW, False),
+        "4K 150%": ((2560, 1408), a.LARGE_WINDOW, False),
+        "QHD 150%": ((1706, 928), a.MIN_WINDOW, False),   # 1600x900 + 제목줄(940)도 안 들어간다
         "FHD 100%": ((1920, 1032), a.DEFAULT_WINDOW, False),
         "FHD 125%": ((1536, 826), a.MIN_WINDOW, False),
         "FHD 150%": ((1280, 688), None, True),
@@ -257,6 +278,10 @@ def test_rules_by_usable_screen_size():
     fw, fh = a.FRAME_ALLOWANCE
     dw, dh = a.DEFAULT_WINDOW
     mw, mh = a.MIN_WINDOW
+    assert a.LARGE_WINDOW[0] + fw == 1920 and a.LARGE_WINDOW[1] + fh == 1080, a.LARGE_WINDOW  # 테두리까지 1920x1080
+    assert a.initial_window(1920, 1080).size == a.LARGE_WINDOW
+    assert a.initial_window(1919, 1080).size == a.DEFAULT_WINDOW
+    assert a.initial_window(1920, 1079).size == a.DEFAULT_WINDOW
     assert a.initial_window(dw + fw, dh + fh).size == a.DEFAULT_WINDOW
     assert a.initial_window(dw + fw - 1, dh + fh).size == a.MIN_WINDOW
     assert a.initial_window(dw + fw, dh + fh - 1).size == a.MIN_WINDOW
@@ -280,11 +305,15 @@ def test_old_behavior_overflows_small_screen():
 
 
 def test_first_run_on_each_screen():
-    big = _run("first", "fhd100")
-    assert big["size"] == [1600, 900] and not big["maximized"] and _inside(big), big
-    ax, ay, aw, ah = big["avail"]
-    fx, fy, fw, fh = big["frame"]
-    assert abs((fx + fw / 2) - (ax + aw / 2)) <= 2 and abs((fy + fh / 2) - (ay + ah / 2)) <= 2, ("가운데가 아니다", big)
+    import app_main as a
+    # 흉내 화면엔 작업 표시줄이 없어 FHD 100% 도 1920x1080 이 다 쓰인다 → 큰 창(테두리까지 1920x1080)이 들어간다.
+    # 작업 표시줄이 있는 진짜 FHD 100%(높이 1032)가 1600x900 인 것은 test_rules_by_usable_screen_size 가 잰다.
+    for screen in ("fhd100", "qhd125"):
+        big = _run("first", screen)
+        assert big["size"] == list(a.LARGE_WINDOW) and not big["maximized"] and _inside(big), (screen, big)
+        ax, ay, aw, ah = big["avail"]
+        fx, fy, fw, fh = big["frame"]
+        assert abs((fx + fw / 2) - (ax + aw / 2)) <= 2 and abs((fy + fh / 2) - (ay + ah / 2)) <= 2, ("가운데가 아니다", screen, big)
     mid = _run("first", "fhd125")
     assert mid["size"] == [1280, 720] and not mid["maximized"] and _inside(mid), mid
     # 흉내 화면엔 작업 표시줄이 없어 1366x768 은 높이 768 이 다 쓰인다 → 1280x720 이 들어간다(규칙대로).
@@ -336,8 +365,10 @@ def test_dialogs_fit_small_screen():
     # '줄일 수 있나'는 작업 표시줄을 뺀 실제 150% 노트북 높이로 — 흉내 화면은 작업 표시줄이 없어 720 을 다 쓴다.
     # 720 으로 재면 스크롤 없는 스쿼드 창(내용 최소 677)도 통과해 버렸다(변이로 확인).
     real_h = 720 - 32
+    assert "상대 경기 상세" in res["dialogs"], ("경기 상세 창(65 M3)을 안 쟀다", list(res["dialogs"]))
     for title, (w, h, mw, mh) in res["dialogs"].items():
         assert h + fh <= ah, ("대화상자가 화면보다 크다", title, h, ah)
+        assert mw + a.FRAME_ALLOWANCE[0] <= res["avail"][2], ("내용 최소 폭이 화면보다 넓다", title, mw)
         assert mh + fh <= real_h, ("내용 최소 크기 때문에 줄일 수 없다 — 스크롤 안에 넣어야", title, mh, real_h)
 
 

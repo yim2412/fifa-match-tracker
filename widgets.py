@@ -9,20 +9,26 @@ app_main 이 UI 흐름에 집중하도록 그리기 부품은 여기로 뺐다.
 OVR·시세는 화면이 `set_card` 로 — 위젯은 계산 안 한다) ·
 접는 구획(`Collapsible`), 좁으면 접히는 바(`WrapBar`)·페이지 안 탭(`PageTabs` — 숨기기/보이기라 숨은 탭이 최소 폭을 안 넓힌다 ·
 탭줄은 `Card.add_to_title_row` 로 제목 옆)·세로 스크롤 틀(`VScrollArea`)·줄어드는 라벨(`FitLabel`) 등
+
+공통 표현 부품(3.1.1 · 64단계): 승·무·패 세 칸 막대 `WdlBar`(승률 글·표본을 옆에 붙인 줄은 `wdl_rate_bar`) ·
+평균 대비 `delta_text`(▲▼ + 색 — 색만으로 말하지 않는다)·표 칸은 `delta_item` · 숫자 카드 `StatCard`(라벨 → 숫자 → 보조 → 변화) ·
+태그 `Tag`/`tag_qss`(그 색 글자 + 10% 바탕 — 켜진 결과 필터도 이 꼴). 새 글자/바탕 짝은 test_ui_smoke 대비 표에 한 줄.
 """
 from __future__ import annotations
 
 import calendar
+import html
 import math
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PyQt6.QtCore import QAbstractListModel, QModelIndex, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
-    QComboBox, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
-    QLabel, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
+    QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
+    QLabel, QListView, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
@@ -45,16 +51,6 @@ class IconCell(NamedTuple):
     name: str = ""   # 특성 칸 — 글자는 "NN%" 만이라 이름은 툴팁·NAME_ROLE 로(TraitIconDelegate 가 그림 없을 때 대신 쓴다)
 
 
-def add_shadow(w: QWidget) -> None:
-    """카드 아래 옅은 그림자. 그림자 효과는 창 크기를 바꿀 때마다 다시
-    그려져 비싸다 — 화면에 동시에 보이는 카드 몇 장에만 건다."""
-    eff = QGraphicsDropShadowEffect(w)
-    eff.setBlurRadius(T.SHADOW_BLUR)
-    eff.setOffset(0, T.SHADOW_Y)
-    eff.setColor(QColor(*T.SHADOW_RGB, T.SHADOW_ALPHA))
-    w.setGraphicsEffect(eff)
-
-
 class UpdateCard(QFrame):
     """창 오른쪽 아래에 떠 있는 '새 버전' 카드 — 런처의 업데이트 알림처럼.
 
@@ -73,8 +69,8 @@ class UpdateCard(QFrame):
         self.setObjectName("updateCard")
         self.setFixedWidth(self.WIDTH)
         self.setStyleSheet(
-            f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.GREEN};"
-            f" border-radius: 12px; }} QLabel {{ border: none; }}")
+            f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.ACCENT};"
+            f" border-radius: {T.RADIUS}px; }} QLabel {{ border: none; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(16, 12, 16, 12)
         v.setSpacing(6)
@@ -105,7 +101,6 @@ class UpdateCard(QFrame):
         row.addWidget(self.btn_later)
         row.addWidget(self.btn_update)
         v.addLayout(row)
-        add_shadow(self)
         self.mode = ""  # "release"(새 버전) · "latest"(최신) — 최신 카드는 메인 화면에서 닫힌다
         self.hide()
 
@@ -489,7 +484,7 @@ class VScrollArea(QScrollArea):
 class Card(QFrame):
     """흰 카드 — 제목(선택) + 본문. 본문 레이아웃은 .body 로 채운다."""
 
-    def __init__(self, title: str = "", shadow: bool = False, margin: int = 18):
+    def __init__(self, title: str = "", margin: int = 18):
         super().__init__()
         self.setObjectName("card")
         v = QVBoxLayout(self)
@@ -503,8 +498,6 @@ class Card(QFrame):
         self.body = QVBoxLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
         v.addLayout(self.body, 1)
-        if shadow:
-            add_shadow(self)
 
     def add_to_title_row(self, w: QWidget) -> None:
         """제목 줄 오른쪽에 붙인다(페이지 안 탭줄) — 제목 아래 따로 두면 그 높이만큼 작은 화면에서 세로 막대가
@@ -520,27 +513,47 @@ class Card(QFrame):
 
 
 class Collapsible(QWidget):
-    """누르면 접히고 펴지는 구획 — 머리(▸ 제목) + 본문. 접힌 본문은 숨김이라 크기 계산에서 빠진다."""
+    """누르면 접히고 펴지는 구획(P9) — 머리 한 줄(왼쪽 흐린 제목 · 오른쪽 흐린 12px "펼치기 ▾"/"접기 ▴") + 본문.
+    제목·오른쪽 글 어느 쪽을 눌러도 같다 · 올리면 글자가 밝아진다. 접힌 본문은 숨김이라 크기 계산에서 빠진다."""
+
+    HINT = {False: "펼치기 ▾", True: "접기 ▴"}
 
     def __init__(self, title: str, body: QWidget, opened: bool = False):
         super().__init__()
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
+        qss = f"QToolButton {{ border: none; color: {T.TEXT_DIM}; }} QToolButton:hover {{ color: {T.TEXT}; }}"
         self.head = QToolButton()
         self.head.setText(title)
         self.head.setCheckable(True)
-        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.head.setStyleSheet(f"QToolButton {{ border: none; color: {T.TEXT_DIM}; font-weight: bold; }}")
+        self.head.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.head.setStyleSheet(qss)
+        bold = QFont(self.head.font())
+        bold.setBold(True)
+        self.head.setFont(bold)
+        self.hint = QToolButton()
+        self.hint.setStyleSheet(qss)
+        small = QFont(self.hint.font())
+        small.setPixelSize(12)
+        self.hint.setFont(small)
+        for b in (self.head, self.hint):
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.hint.clicked.connect(self.head.toggle)
         self.head.toggled.connect(self.set_open)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self.head)
+        row.addStretch(1)
+        row.addWidget(self.hint)
         self.body = body
-        v.addWidget(self.head)
+        v.addLayout(row)
         v.addWidget(body)
         self.head.setChecked(opened)
         self.set_open(opened)
 
     def set_open(self, on: bool) -> None:
-        self.head.setArrowType(Qt.ArrowType.DownArrow if on else Qt.ArrowType.RightArrow)
+        self.hint.setText(self.HINT[on])
         self.body.setVisible(on)
 
     def is_open(self) -> bool:
@@ -849,7 +862,7 @@ class RowBorderDelegate(QStyledItemDelegate):
         if not selected:
             return
         painter.save()
-        painter.setPen(QPen(QColor(T.GREEN), 1))
+        painter.setPen(QPen(QColor(T.ACCENT), 1))
         rect = option.rect.adjusted(0, 0, -1, -1)
         table = self.parent()
         last_col = table.columnCount() - 1 if table is not None else index.column()
@@ -860,6 +873,28 @@ class RowBorderDelegate(QStyledItemDelegate):
         if index.column() == last_col:
             painter.drawLine(rect.topRight(), rect.bottomRight())
         painter.restore()
+
+
+class BoldColumnDelegate(RowBorderDelegate):
+    """그 열 글자를 굵게(65 M9 선수 지표 승률) — 칸에 글꼴을 박으면 FitTableWidget 이 글꼴을 줄일 때 그 칸만 큰 채로 남아
+    잘린다(1280 폭 실측). 대리자는 그릴 때마다 표의 지금 글꼴에서 굵게 한다. 폭(sizeHint)은 보통 글꼴로 알린다 —
+    _measure_pad 가 열마다 잰 여백 중 가장 큰 값을 모든 열에 쓰므로 굵은 만큼은 쓰는 쪽이 그 열에만 여백으로 준다."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._plain = False
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        if not self._plain:
+            option.font.setBold(True)
+
+    def sizeHint(self, option, index):
+        self._plain = True
+        try:
+            return super().sizeHint(option, index)
+        finally:
+            self._plain = False
 
 
 class NoScrollComboBox(QComboBox):
@@ -962,34 +997,68 @@ class RangeBarDelegate(RowBorderDelegate):
 
 
 class StatCard(QFrame):
-    """요약 카드 — 제목 + 큰 값. (전적 / 승률 / 평균 득점 / 평균 실점)"""
+    """숫자 카드(P5) — 작은 라벨 → 큰 숫자 → 흐린 보조 줄 → 변화(▲▼). 보조·변화는 비어 있으면 숨는다."""
 
     def __init__(self, title: str, color: str = T.TEXT):
         super().__init__()
         self.setStyleSheet(
             f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 8px; }}")
+            f" border-radius: {T.RADIUS}px; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(4)
+        v.setSpacing(2)
 
         self.cap = QLabel(title)
+        cf = QFont()
+        cf.setPixelSize(12)
+        self.cap.setFont(cf)
         self.cap.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
-        self.cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.value = QLabel("-")
         f = QFont()
-        f.setPointSize(14)
+        f.setPointSize(16)
         f.setBold(True)
         self.value.setFont(f)
         self.value.setStyleSheet(f"color: {color}; border: none;")
-        self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        v.addWidget(self.cap)
-        v.addWidget(self.value)
+        self.sub = QLabel()
+        self.sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+        self.sub.hide()
+        self.delta = QLabel()
+        self.delta.setTextFormat(Qt.TextFormat.RichText)
+        self.delta.setStyleSheet("border: none;")
+        self.delta.hide()
+
+        for lb in (self.cap, self.value, self.sub, self.delta):
+            v.addWidget(lb)
+        v.addStretch(1)
 
     def set(self, text: str) -> None:
         self.value.setText(text)
+
+    def set_sub(self, text: str) -> None:
+        self.sub.setText(text)
+        self.sub.setVisible(bool(text))
+
+    def set_delta(self, v: float | None, base: float | None, unit: str = "%p", label: str = "",
+                  digits: int = 1, neutral: bool = False, lower_better: bool = False) -> None:
+        """기준(base) 대비 변화 줄 — 둘 중 하나라도 없으면 숨긴다. label 은 뒤에 붙는 흐린 말("평균 대비").
+        neutral = 오르내림에 좋고 나쁨이 없는 값(구단가치·점유율 — 67 R2) — ▲▼ 만, 색은 흐림.
+        lower_better = 낮을수록 좋은 값(실점 — 67 R11 구단주 비교) — ▲▼ 는 그대로, 좋음·나쁨 색만 뒤집는다."""
+        if v is None or base is None:
+            self.delta.setText("")
+            self.delta.setProperty("delta_color", None)
+            self.delta.hide()
+            return
+        text, color = delta_text(v, base, unit, digits)
+        if neutral:
+            color = T.TEXT_DIM
+        elif lower_better:
+            color = {T.GOOD: T.BAD, T.BAD: T.GOOD}.get(color, color)
+        self.delta.setText(f"<span style='color:{color}'>{text}</span>"
+                           + (f" <span style='color:{T.TEXT_DIM}'>{label}</span>" if label else ""))
+        self.delta.setProperty("delta_color", color)
+        self.delta.show()
 
     def set_title(self, title: str) -> None:
         self.cap.setText(title)
@@ -1017,7 +1086,7 @@ class RankerCard(QFrame):
         super().__init__()
         self.setStyleSheet(
             f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: 12px; }}")
+            f" border-radius: {T.RADIUS}px; }}")
         self.setMaximumWidth(720)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
@@ -1092,7 +1161,7 @@ class RankerCard(QFrame):
             r, col = divmod(i, 2)
             tile = QFrame()
             tile.setStyleSheet(
-                f"QFrame {{ background: {T.PANEL_2}; border-radius: 10px; }}")
+                f"QFrame {{ background: {T.PANEL_2}; border-radius: {T.RADIUS}px; }}")
             tv = QVBoxLayout(tile)
             tv.setContentsMargins(20, 20, 20, 20)
             tv.setSpacing(6)
@@ -1139,15 +1208,15 @@ class RankerCard(QFrame):
         self._head_grade.setText(text)
         if is_ranker:
             self._head.setStyleSheet(
-                f"QFrame {{ background: {T.GREEN}; border: none;"
-                f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
-            self._head_name.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
-            self._head_grade.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
-            self._head_best.setStyleSheet(f"color: {T.ON_ACCENT}; border: none;")
+                f"QFrame {{ background: {T.PRIMARY}; border: none;"
+                f" border-top-left-radius: {T.RADIUS}px; border-top-right-radius: {T.RADIUS}px; }}")
+            self._head_name.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
+            self._head_grade.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
+            self._head_best.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
         else:
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL_2}; border: none;"
-                f" border-top-left-radius: 12px; border-top-right-radius: 12px; }}")
+                f" border-top-left-radius: {T.RADIUS}px; border-top-right-radius: {T.RADIUS}px; }}")
             self._head_name.setStyleSheet(f"color: {T.TEXT}; border: none;")
             self._head_grade.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
             self._head_best.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
@@ -1242,18 +1311,16 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(T.FORMATION_PITCH))
-    p.drawRoundedRect(QRectF(0, 0, w, px), 3, 3)
-    p.setBrush(QColor(T.FORMATION_DOT))
+    _formation_board(p, w, px)
     rows = len(lines) + 1                      # GK + 줄들
     r = max(1.1, px / 15)
     pad_y = r + 1.5
     for i in range(rows):
         count = 1 if i == 0 else lines[i - 1]  # i=0 은 GK(맨 아래), 그 위로 수비 → 공격
         y = px - pad_y - (px - 2 * pad_y) * i / max(1, rows - 1)
+        color = T.FORMATION_LINE_COLORS[-1] if i == 0 else _formation_band_color(i - 1, len(lines))
         for j in range(count):
-            p.drawEllipse(QPointF(w * (j + 1) / (count + 1), y), r, r)
+            _formation_dot(p, QPointF(w * (j + 1) / (count + 1), y), r, color, px)
     p.end()
     QPixmapCache.insert(ck, pm)
     return pm
@@ -1262,8 +1329,51 @@ def formation_pixmap(formation: str, px: int | None = None, dpr: float | None = 
 FORMATION_SPREAD = 1.5   # 포메이션 아이콘의 가로 넓힘(가운데 0.5 에서) — 1.0 이면 큰 축구장과 같은 좌표
 
 
+def _formation_band_color(i: int, n: int) -> str:
+    """줄 인원 그림의 i 번째 줄(0 = 수비) 색 — 줄이 n 개면 수비~공격 다섯 띠에 고르게 놓는다(4줄 = 수비·수미·공미·공격).
+    랭커 포메이션 글자는 빈 줄(0)을 안 싣고 내 경기와 같은 키를 쓰므로 정확한 띠를 모른다 — 그림 속 높이를 따른다."""
+    bands = len(T.FORMATION_LINE_COLORS) - 1          # GK 뺀 다섯
+    k = 0 if n <= 1 else round(i * (bands - 1) / (n - 1))
+    return T.FORMATION_LINE_COLORS[bands - 1 - min(bands - 1, k)]
+
+
+def _formation_board(p: QPainter, w: float, h: float) -> None:
+    """작은 축구장 판 — 위→아래 그라데이션, 클 때만(config.FORMATION_LINES_FROM_PX) 테두리·하프라인·센터서클·두 박스."""
+    from PyQt6.QtGui import QLinearGradient
+    g = QLinearGradient(0, 0, 0, h)
+    g.setColorAt(0, QColor(T.FORMATION_PITCH_TOP))
+    g.setColorAt(1, QColor(T.FORMATION_PITCH_BOTTOM))
+    rad = max(2.0, w * 0.08)
+    p.setBrush(g)
+    if h < config.FORMATION_LINES_FROM_PX:
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawRoundedRect(QRectF(0, 0, w, h), rad, rad)
+        return
+    line = QColor(T.FORMATION_LINE)
+    thick = max(0.8, w / 60)
+    p.setPen(QPen(line, thick))
+    p.drawRoundedRect(QRectF(thick / 2, thick / 2, w - thick, h - thick), rad, rad)
+    p.drawLine(QPointF(0, h / 2), QPointF(w, h / 2))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.setPen(QPen(line, thick / 2))
+    p.drawEllipse(QPointF(w / 2, h / 2), w * 0.11, w * 0.11)
+    bw, bh = w * 0.6, h * 0.156
+    p.drawRect(QRectF((w - bw) / 2, 0, bw, bh))
+    p.drawRect(QRectF((w - bw) / 2, h - bh, bw, bh))
+
+
+def _formation_dot(p: QPainter, at: QPointF, r: float, color: str, h: float) -> None:
+    """점 하나 — 테두리(검정 40%)는 선과 같이 큰 그림에서만. 표 칸(r 1.3px)에선 테두리가 점 색을 덮는다."""
+    if h < config.FORMATION_LINES_FROM_PX:
+        p.setPen(Qt.PenStyle.NoPen)
+    else:
+        p.setPen(QPen(QColor(T.FORMATION_DOT_EDGE), max(0.4, r * 0.12)))
+    p.setBrush(QColor(color))
+    p.drawEllipse(at, r, r)
+
+
 def _formation_spots_pixmap(spots: tuple, px: int, dpr: float) -> QPixmap:
-    """formation_pixmap 의 자리 그림 — 점마다 그 자리 좌표(위 = 최전방). 같은 자리 묶음이면 같은 캐시."""
+    """formation_pixmap 의 자리 그림 — 점마다 그 자리 좌표(위 = 최전방) · 색은 그 자리의 줄(core.PITCH_ROWS). 같은 자리 묶음이면 같은 캐시."""
     from PyQt6.QtGui import QPixmapCache
     ck = f"formation-spots:{','.join(map(str, spots))}:{px}:{dpr}"
     hit = QPixmapCache.find(ck)
@@ -1275,18 +1385,16 @@ def _formation_spots_pixmap(spots: tuple, px: int, dpr: float) -> QPixmap:
     pm.fill(Qt.GlobalColor.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(T.FORMATION_PITCH))
-    p.drawRoundedRect(QRectF(0, 0, w, px), 3, 3)
-    p.setBrush(QColor(T.FORMATION_DOT))
+    _formation_board(p, w, px)
     r = max(1.1, px / 15)
     pad = r + 1.5
+    band = {c: i for i, (_, rng) in enumerate(core.PITCH_ROWS) for c in rng}
     for c in spots:
         # PITCH_X 는 큰 축구장(칩 폭)에 맞춘 값이라 작은 그림에선 RAM·CAM·LAM 이 한 덩이로 붙는다 — 가운데에서 넓힌다
         spread = min(1.0, max(0.0, 0.5 + (core.PITCH_X[c] - 0.5) * FORMATION_SPREAD))
         x = pad + (w - 2 * pad) * spread
         y = px - pad - (px - 2 * pad) * core.PITCH_Y[c] / core.PITCH_Y_MAX
-        p.drawEllipse(QPointF(x, y), r, r)
+        _formation_dot(p, QPointF(x, y), r, T.FORMATION_LINE_COLORS[band.get(c, len(core.PITCH_ROWS) - 1)], px)
     p.end()
     QPixmapCache.insert(ck, pm)
     return pm
@@ -1379,7 +1487,7 @@ class GradeBadgeDelegate(RowBorderDelegate):
     RowBorderDelegate 를 상속한다: 표 전체에 걸린 선택 행 테두리가 이 칸에서 끊기지 않게.
     배지 여백(PAD)은 sizeHint 로 알리지 않는다 — FitTableWidget._measure_pad 가 열마다 잰 여백 중
     가장 큰 값 하나를 19열 전부에 쓰므로, 한 열만 키워도 표 전체가 넓어진다. 열 폭은 app_main 이
-    _fit_columns_to_content(extra=…) 로 이 열에만 준다(1.2.1 계획 검토 A).
+    app_main._grade_badges 로 이 열에만 준다(1.2.1 계획 검토 A · 쓰는 표는 MainWindow.GRADE_BADGE_COLUMNS).
     그리기 예외는 다시 그릴 때마다 되풀이되므로 글자만 그리는 쪽으로 넘기고 한 번만 기록한다."""
 
     PAD = 8  # 배지 안쪽 좌우 여백(px) — 열에 더할 폭은 2 × PAD
@@ -1388,13 +1496,26 @@ class GradeBadgeDelegate(RowBorderDelegate):
         super().__init__(parent)
         self.failed = 0  # 테스트가 읽는다 — 기록은 첫 번째만
 
+    @staticmethod
+    def grade_of(text) -> int | None:
+        """칸 글자 → 배지로 그릴 강화(1 이상). "+5" 도 5(int 가 + 를 읽는다) · "3 → 5"(강화 변화)·"-"·0 은 None — 그 칸은 글자 그대로."""
+        try:
+            g = int(str(text or ""))
+        except ValueError:
+            return None
+        return g if g >= 1 else None
+
     def initStyleOption(self, option, index) -> None:
         super().initStyleOption(option, index)
-        option.text = ""  # 글자는 배지 안에 직접 그린다(기본 그리기는 배경·선택 테두리만)
+        if self.grade_of(index.data()) is not None:
+            option.text = ""  # 글자는 배지 안에 직접 그린다(기본 그리기는 배경·선택 테두리만)
 
     def paint(self, painter, option, index) -> None:
         super().paint(painter, option, index)
-        text = str(index.data() or "")
+        g = self.grade_of(index.data())
+        if g is None:
+            return
+        text = str(g)
         try:
             self._badge(painter, option, text)
         except Exception as e:  # noqa: BLE001 — 칸 하나 그리기 실패로 표가 죽거나 로그가 불어나면 안 된다
@@ -1454,33 +1575,1520 @@ def win_rate_text(win: int, draw: int, lose: int, mixed: bool, digits: int = 1, 
     return f"{pct} · {'승÷(승+패)' if mixed else '승÷전체'} · 무 {draw:,}"
 
 
-def win_rate_bar(win: int, draw: int, lose: int, text: str, min_n: int, mixed: bool,
-                 height: int = 18) -> QProgressBar:
-    """승률 막대 하나 — 승률을 막대로 그리는 곳은 전부 이걸 거친다(표본 흐림 규칙, 1.2.1).
+def wdl_rate_bar(win: int, draw: int, lose: int, extra: str, min_n: int, mixed: bool) -> QWidget:
+    """승률 줄 하나(67 R11) — 승·무·패 세 칸 막대(`WdlBar(compact)`) + 옆 글 "승률 N%"·뒤 글·표본.
 
-    경기 수가 min_n 보다 적으면 막대를 바탕 쪽으로 흐리게(불투명) · 끝에 "· 표본 N".
-    "프로1 (1경기) 100%" 가 꽉 찬 막대로 보여 실력처럼 읽히던 것을 막는다. 색만으로 구분하지 않게
-    글자를 같이 붙인다(적록 색약). 흐렸는지는 property("weak") 로 테스트가 읽는다."""
+    승률을 막대로 그리는 곳은 전부 이걸 거친다(표본 흐림 규칙, 1.2.1 — 옛 `win_rate_bar` 자리).
+    표본(rated) 미달이면 막대를 흐리고 옆 글 끝에 "· 표본 N" — "프로1 (1경기) 100%" 가 실력처럼 읽히지 않게,
+    색만으로 구분하지 않게 글자를 같이 붙인다(적록 색약). 막대는 "N승 N무 N패" 만 쓰므로 승률·섞임 식은
+    옆 글과 툴팁이 맡는다. 흐렸는지는 막대의 property("weak")·("games") 로 테스트가 읽는다."""
     n = core.rated(win, draw, lose, mixed)
-    wr = core.win_pct(win, draw, lose, mixed)
     weak = core.is_weak(n, min_n)
-    bar = QProgressBar()
-    bar.setRange(0, 1000)
-    bar.setValue(int(wr * 10))
-    bar.setFormat(text + (f"  · {sample_text(n, mixed)}" if weak else ""))
-    bar.setFixedHeight(height)
-    chunk = T.blend(T.PANEL_2, T.WIN_BAR, T.WEAK_MIX) if weak else T.WIN_BAR
-    # 글자는 흐리지 않는다 — TEXT_DIM 은 흐린 막대 위에서 대비 3.6(어두운 테마, 기준 4.5)이라 안 읽혔다(1.2.1 실측).
-    # 흐림은 막대색과 "표본 N" 이 맡는다.
-    bar.setStyleSheet(
-        f"QProgressBar{{background:{T.PANEL_2};border:none;border-radius:3px;"
-        f"color:{T.TEXT};text-align:center;}}"
-        f"QProgressBar::chunk{{background:{chunk};border-radius:3px;}}")
+    row = QWidget()
+    h = QHBoxLayout(row)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(10)
+    bar = WdlBar(win, draw, lose, weak=weak, compact=True)
     bar.setProperty("weak", weak)
     bar.setProperty("games", n)
+    h.addWidget(bar, 1)
+    # 글자는 흐리지 않는다 — TEXT_DIM 은 흐린 막대 옆에서 안 읽혔다(1.2.1 실측). 흐림은 막대색과 "표본 N" 이 맡는다.
+    side = QLabel("  ".join(x for x in (f"승률 {win_rate_text(win, draw, lose, mixed, short=True)}", extra,
+                                        f"· {sample_text(n, mixed)}" if weak else "") if x))
+    side.setStyleSheet(f"color: {T.TEXT}; border: none;")
+    h.addWidget(side)
+    row.bar, row.side = bar, side
     tip = win_rate_note(mixed)
-    bar.setToolTip(sample_note(n, min_n, mixed) + "\n" + tip if weak else tip)
-    return bar
+    row.setToolTip(sample_note(n, min_n, mixed) + "\n" + tip if weak else tip)
+    return row
+
+
+_KEY_NUMBER = re.compile(r"[+\-−]?\d[\d,]*(?:\.\d+)?(?:%p|%)?")
+
+
+def key_number_html(text: str, color: str) -> str:
+    """결론 한 줄(P9 · 67 R11) — 글은 TEXT, 숫자(부호·소수·%·%p 포함)만 color 로. 색만으로 말하지 않는다 —
+    숫자는 글 그대로 남고 색은 눈길만 끈다. 글은 html 이스케이프(닉네임·이름에 < 가 들어올 수 있다)."""
+    out, last = [], 0
+    for m in _KEY_NUMBER.finditer(text):
+        out.append(html.escape(text[last:m.start()]))
+        out.append(f"<span style='color:{color}'>{html.escape(m.group())}</span>")
+        last = m.end()
+    out.append(html.escape(text[last:]))
+    return f"<span style='color:{T.TEXT}'>{''.join(out)}</span>"
+
+
+def delta_color(diff: float, eps: float = 0.05) -> str:
+    """차이 부호 → 색(P3). |diff| < eps 는 반올림하면 0 이라 흐린 글자 — "+0.0%p" 가 초록으로 보이지 않게."""
+    return T.GOOD if diff >= eps else T.BAD if diff <= -eps else T.TEXT_DIM
+
+
+def delta_text(v: float, base: float, unit: str = "%p", digits: int = 1) -> tuple[str, str]:
+    """평균(기준) 대비 차이(P3) → ("▲ 3.2%p", 색). 색만으로 말하지 않게 ▲▼ 를 늘 붙인다(적록 색약 — theme 머리말)."""
+    diff = v - base
+    eps = 0.5 / 10 ** digits
+    arrow = "▲" if diff >= eps else "▼" if diff <= -eps else "–"
+    return f"{arrow} {abs(diff):.{digits}f}{unit}", delta_color(diff, eps)
+
+
+def delta_item(item: QTableWidgetItem | None, diff: float, eps: float = 0.05) -> QTableWidgetItem | None:
+    """표 칸의 차이 글자(+3.2%p 꼴 — 부호가 이미 있다)에 delta_color 를 입힌다. 칸이 없으면 None 그대로."""
+    if item is not None:
+        item.setForeground(QColor(delta_color(diff, eps)))
+    return item
+
+
+class _WdlStrip(QWidget):
+    """WdlBar 의 막대 — 양 끝 둥근 띠를 경기 수 비례로 승·무·패 세 칸."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedHeight(WdlBar.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.counts = (0, 0, 0)
+        self.weak = False
+        self.compact = False
+
+    def sizeHint(self) -> QSize:
+        return QSize(60, WdlBar.HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(24, WdlBar.HEIGHT)
+
+    def colors(self) -> list[str]:
+        return WdlBar.colors_for(self.weak, self.compact)
+
+    def segments(self) -> list[tuple[float, str]]:
+        """(폭 비율, 색) — 0경기 칸은 뺀다. 테스트가 그림 대신 읽는다."""
+        return wdl_segments(self.counts, self.colors())
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_wdl_strip(p, QRectF(self.rect()), self.segments())
+        p.end()
+
+
+def wdl_segments(counts: tuple[int, int, int], colors: list[str]) -> list[tuple[float, str]]:
+    total = sum(counts)
+    return [(n / total, c) for n, c in zip(counts, colors) if n] if total else []
+
+
+def paint_wdl_strip(p: QPainter, r: QRectF, segments: list[tuple[float, str]]) -> None:
+    """승·무·패 띠 그리기 — WdlBar 와 줄 목록 대리자(RateRowList)가 같이 쓴다(65 E6 — 두 벌로 갈리지 않게)."""
+    h = r.height()
+    path = QPainterPath()
+    path.addRoundedRect(r, h / 2, h / 2)
+    p.save()
+    p.setClipPath(path)
+    p.fillRect(r, QColor(T.PANEL_2))
+    x = r.left()
+    for share, c in segments:
+        w = r.width() * share
+        p.fillRect(QRectF(x, r.top(), w, h), QColor(c))
+        x += w
+    p.restore()
+
+
+class WdlBar(QWidget):
+    """승·무·패 막대(P2) — 6px 세 칸 막대 + "1,861승 404무 1,774패"(승·패만 색 · 글자가 같이 있어 색은 보조).
+
+    weak 면 막대를 바탕 쪽으로 흐린다(WEAK_MIX — 표본 흐림) · 글자는 흐리지 않는다.
+    칸 폭은 경기 수 비례 · 0경기면 빈 띠. 승률 글·표본을 옆에 붙인 줄은 `wdl_rate_bar`."""
+    HEIGHT = 6
+    DRAW_MIX = 0.4   # 무 칸 = 흐린 글자색 40%
+    COMPACT_MIX = 0.8   # 줄 목록 꼴(compact — 65 E6): 승·패 채움 80% — 줄마다 막대가 있어 한 단 덜 진하게
+
+    def __init__(self, w: int = 0, d: int = 0, l: int = 0, weak: bool = False, text_first: bool = False,
+                 compact: bool = False):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 2, 0, 2)
+        v.setSpacing(4)
+        self.strip = _WdlStrip(self)
+        self.strip.compact = compact
+        self.label = QLabel()
+        self.label.setTextFormat(Qt.TextFormat.RichText)
+        self.label.setStyleSheet("border: none; font-weight: bold;")
+        for x in ((self.label, self.strip) if text_first else (self.strip, self.label)):
+            v.addWidget(x)
+        self.set_counts(w, d, l, weak)
+
+    def set_counts(self, w: int, d: int, l: int, weak: bool = False) -> None:
+        self.strip.counts = (w, d, l)
+        self.strip.weak = weak
+        self.label.setText(wdl_html(w, d, l))
+        self.setAccessibleName(wdl_text(w, d, l))
+        self.strip.update()
+
+    def counts(self) -> tuple[int, int, int]:
+        return self.strip.counts
+
+    @staticmethod
+    def colors_for(weak: bool, compact: bool = False) -> list[str]:
+        """승·무·패 칸 색 — 표본 미달이면 바탕 쪽으로 흐린다(WEAK_MIX)."""
+        good, bad = ((T.blend(T.PANEL, T.GOOD_FILL, WdlBar.COMPACT_MIX), T.blend(T.PANEL, T.BAD_FILL, WdlBar.COMPACT_MIX))
+                     if compact else (T.GOOD_FILL, T.BAD_FILL))
+        cols = [good, T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX), bad]
+        return [T.blend(T.PANEL_2, c, T.WEAK_MIX) for c in cols] if weak else cols
+
+
+def wdl_html(w: int, d: int, l: int) -> str:
+    """승·무·패 글 줄(리치 텍스트) — 승은 좋음, 패는 나쁨, 무는 보통 글자."""
+    return (f"<span style='color:{T.GOOD}'>{w:,}승</span> <span style='color:{T.TEXT}'>{d:,}무</span>"
+            f" <span style='color:{T.BAD}'>{l:,}패</span>")
+
+
+def tag_qss(color: str, selector: str, extra: str = "") -> str:
+    """태그 꼴 QSS — 글자 = 그 색 · 바탕 = 그 색 10%(불투명 섞음 · PyQt 2번). Tag 와 켜진 결과 필터가 같이 쓴다
+    (extra 는 같은 덩이 뒤에 붙어 앞 값을 덮는다). 대비는 test_ui_smoke 의 "10% 바탕" 행이 잰다."""
+    soft = T.blend(T.PANEL, color, 0.10)
+    return (f"{selector} {{ color: {color}; background: {soft}; border: 1px solid {soft};"
+            f" border-radius: 4px; padding: 2px 6px; {extra}}}")
+
+
+class Tag(QLabel):
+    """작은 태그(P10) — 연승·연패·진행 중 같은 상태 한 마디. 모서리 4 · 12px · 굵기 500.
+    kind: good · bad · warn · muted. 모르는 kind 는 KeyError — 조용히 회색이 되지 않게."""
+    KINDS = {"good": "GOOD", "bad": "BAD", "warn": "WARN", "muted": "TEXT_DIM"}
+
+    def __init__(self, text: str = "", kind: str = "muted"):
+        super().__init__(text)
+        f = QFont()
+        f.setPixelSize(12)
+        f.setWeight(QFont.Weight.Medium)
+        self.setFont(f)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.set_kind(kind)
+
+    def set_kind(self, kind: str) -> None:
+        self.color = getattr(T, self.KINDS[kind])
+        self.kind = kind
+        self.setStyleSheet(tag_qss(self.color, "QLabel"))
+
+
+class _ShareStrip(QWidget):
+    """VersusBar 의 막대 — 왼쪽부터 내 몫(share) · 나머지는 상대 색(없으면 빈 띠)."""
+
+    def __init__(self, parent: QWidget):
+        super().__init__(parent)
+        self.setFixedHeight(VersusBar.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.share = 0.5
+        self.mine_color = T.ACCENT_FILL
+        self.opp_color: str | None = None
+
+    def sizeHint(self) -> QSize:
+        return QSize(60, VersusBar.HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(24, VersusBar.HEIGHT)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        path = QPainterPath()
+        path.addRoundedRect(r, r.height() / 2, r.height() / 2)
+        p.setClipPath(path)
+        p.fillRect(r, QColor(self.opp_color or T.PANEL_2))
+        p.fillRect(QRectF(r.left(), r.top(), r.width() * self.share, r.height()), QColor(self.mine_color))
+        p.end()
+
+
+class VersusBar(QWidget):
+    """나와 상대 한 줄(65 M1 · 상세 창 경기 정보 M3 도 이 부품) — 위: 라벨 · 오른쪽 "나 vs 상대"(내가 크면 내 숫자 강조색),
+    아래: 내 몫 막대. opp_color 를 주면 두 색으로 갈린 막대(상세 창 꼴), 안 주면 빈 띠 위 내 몫만(대시보드 꼴)."""
+    HEIGHT = 6
+
+    def __init__(self, label: str, opp_color: str | None = None):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 2, 0, 2)
+        v.setSpacing(3)
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        self.name = QLabel(label)
+        self.name.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
+        self.nums = QLabel("")
+        self.nums.setTextFormat(Qt.TextFormat.RichText)
+        self.nums.setStyleSheet("border: none;")
+        top.addWidget(self.name)
+        top.addStretch(1)
+        top.addWidget(self.nums)
+        v.addLayout(top)
+        self.strip = _ShareStrip(self)
+        self.strip.opp_color = opp_color
+        v.addWidget(self.strip)
+
+    def set_values(self, mine: float, opp: float, fmt: str = "{:.0f}", unit: str = "") -> None:
+        ahead = mine > opp
+        if self.strip.opp_color is None:
+            col = T.ACCENT if ahead else T.TEXT
+            self.nums.setText(f"<b style='color:{col}'>{fmt.format(mine)}{unit}</b>"
+                              f" <span style='color:{T.TEXT_DIM}'>vs {fmt.format(opp)}{unit}</span>")
+        else:
+            # 상세 창 꼴 — 파울처럼 적을수록 좋은 줄도 있어 좋고 나쁨 색 대신 큰 쪽만 굵게(작은 쪽 흐림 · 같으면 둘 다 보통)
+            def num(v: float, big: bool, same: bool) -> str:
+                text = f"{fmt.format(v)}{unit}"
+                if same:
+                    return f"<span style='color:{T.TEXT}'>{text}</span>"
+                return f"<b style='color:{T.TEXT}'>{text}</b>" if big else f"<span style='color:{T.TEXT_DIM}'>{text}</span>"
+            same = fmt.format(mine) == fmt.format(opp)
+            self.nums.setText(f"{num(mine, ahead, same)} <span style='color:{T.TEXT_DIM}'>vs</span> "
+                              f"{num(opp, opp > mine, same)}")
+        tot = mine + opp
+        self.strip.share = mine / tot if tot else 0.5
+        self.mine_ahead = ahead
+        self.strip.update()
+
+
+class GoalTimeline(QWidget):
+    """경기 흐름(65 M3 요약) — 가로 시간 줄 위에 내 골(위 · 강조색) · 아래에 상대 골(OPP_FILL). 연장이 있으면 120분까지.
+    색만으로 말하지 않게 화면은 줄 아래에 "12' 이름" 글을 같이 둔다."""
+    HEIGHT = 52
+
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(self.HEIGHT)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.goals: list[tuple[float, bool]] = []
+
+    def set_goals(self, goals: list[tuple[float, bool]]) -> None:
+        self.goals = list(goals)
+        self.update()
+
+    @property
+    def span(self) -> int:
+        return 120 if any(m > 90 for m, _ in self.goals) else 90
+
+    def x_of(self, minute: float) -> float:
+        m = 8
+        return m + (self.width() - 2 * m) * min(max(minute, 0.0), self.span) / self.span
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        mid = self.height() / 2 - 6
+        p.setPen(QPen(QColor(T.BORDER), 2))
+        p.drawLine(QPointF(self.x_of(0), mid), QPointF(self.x_of(self.span), mid))
+        f = QFont(self.font())
+        f.setPixelSize(11)
+        p.setFont(f)
+        p.setPen(QColor(T.TEXT_DIM))
+        for tick in (0, 45, 90, 120):
+            if tick > self.span:
+                continue
+            x = self.x_of(tick)
+            p.drawLine(QPointF(x, mid - 4), QPointF(x, mid + 4))
+            p.drawText(QRectF(x - 20, mid + 14, 40, 14), Qt.AlignmentFlag.AlignCenter, f"{tick}'")
+        p.setPen(Qt.PenStyle.NoPen)
+        for minute, mine in self.goals:
+            p.setBrush(QColor(T.ACCENT_FILL if mine else T.OPP_FILL))
+            p.drawEllipse(QPointF(self.x_of(minute), mid - 9 if mine else mid + 9), 5, 5)
+        p.end()
+
+
+# ── 줄 카드 목록(3.1.1 P4 · 65) ─────────────────────────────────────────────
+# 줄은 위젯이 아니라 대리자가 그리는 그림이다 — 1만 경기를 카드 위젯으로 만들면 메뉴 전환을 못 지킨다(65 E2).
+# 거르기·정렬은 모델 안 목록에서 끝낸다(QListView.setRowHidden 은 숨은 줄을 목록으로 들고 있어 1만 줄이면 느리다).
+ROW_ROLE = Qt.ItemDataRole.UserRole
+
+
+class _RowModel(QAbstractListModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.all: list = []
+        self.shown: list = []
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self.shown)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or index.row() >= len(self.shown):
+            return None
+        row = self.shown[index.row()]
+        if role == ROW_ROLE:
+            return row
+        if role == Qt.ItemDataRole.AccessibleTextRole:
+            return getattr(row, "accessible", "")
+        return None
+
+    def reset_rows(self, rows: list, pred) -> None:
+        self.beginResetModel()
+        self.all = list(rows)
+        self.shown = [r for r in self.all if pred(r)] if pred is not None else list(self.all)
+        self.endResetModel()
+
+
+class CardListView(QListView):
+    """줄 카드 목록의 틀 — 모델(전체 줄 · 보이는 줄) · 거르기 · 그림 표. 줄 그리기는 대리자가, 줄 모양은 물려받은 쪽이 정한다.
+
+    그림(등급 배지·엠블럼)은 (종류, 키) → 그림 표 하나에 붙는다 — 줄이 아니라 키에 붙어서 정렬·거르기가 바뀌어도
+    제 줄을 따라간다(40단계 표 칸 그림의 '키가 행을 따라가나' 와 같은 약속). 받은 뒤엔 보이는 줄만 다시 그린다."""
+
+    def __init__(self):
+        super().__init__()
+        self._model = _RowModel(self)
+        self.setModel(self._model)
+        self._pred = None
+        self._icons: dict[tuple, QPixmap] = {}
+        self.setUniformItemSizes(True)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.setMouseTracking(True)
+        self.setStyleSheet(f"QListView {{ background: {T.BG}; border: none; }}")
+
+    def set_rows(self, rows: list) -> None:
+        self._model.reset_rows(rows, self._pred)
+
+    def set_filter(self, pred) -> None:
+        """pred(줄) → 보일까. None 이면 전부."""
+        self._pred = pred
+        self._model.reset_rows(self._model.all, pred)
+
+    def relayout(self) -> None:
+        """줄 높이가 바뀌었을 때(대리자 꼴) — 같은 줄로 다시 그린다."""
+        self._model.reset_rows(self._model.all, self._pred)
+
+    def rowCount(self) -> int:
+        return len(self._model.shown)
+
+    def row(self, r: int):
+        return self._model.shown[r]
+
+    def rows(self) -> list:
+        """보이는 줄(거른 뒤)."""
+        return list(self._model.shown)
+
+    def all_rows(self) -> list:
+        return list(self._model.all)
+
+    def current(self):
+        idx = self.currentIndex()
+        return self.row(idx.row()) if idx.isValid() and idx.row() < self.rowCount() else None
+
+    def icon_keys(self, row) -> tuple:
+        """줄이 쓰는 그림 (종류, 키) — 물려받는 쪽이 정한다."""
+        return ()
+
+    def icon_entries(self) -> set:
+        out = set()
+        for row in self._model.all:
+            out.update(k for k in self.icon_keys(row) if k[1] is not None)
+        return out
+
+    def put_icon(self, kind: str, key, pm: QPixmap) -> None:
+        self._icons[(kind, key)] = pm
+        self.viewport().update()
+
+    def icon(self, kind: str, key) -> QPixmap | None:
+        return self._icons.get((kind, key)) if key is not None else None
+
+
+@dataclass
+class MatchCard:
+    """경기 목록 카드 한 줄(65 M2) — 글자는 화면(app_main)이 다 만들어 넣는다. 대리자는 그리기만 한다."""
+    match_id: str
+    date_text: str
+    result: str                     # 승 · 무 · 패 · 몰수승 …
+    score: str                      # "3 : 1"
+    shootout: str = ""              # "승부차기 4:2" | ""
+    opponent: str = "-"
+    division_key: object = None     # 그 경기 때 상대 등급 배지 키
+    opp_pad: bool = False           # 상대 입력 장치가 패드(U4 — 패드일 때만 아이콘)
+    stats: tuple = ()               # ((라벨, 값), …) 오른쪽 — 점유 · 슛 · 패스 · 평점
+    color: str = ""                 # 상대 지금 팀컬러
+    emblem_key: object = None
+    value_text: str = ""            # 상대 지금 구단가치(짧게)
+    h2h_text: str = ""              # 맞대결(시즌 범위)
+    opp_score: str | None = None    # None = 칸이 없다(관문 미달·남의 목록)
+    when: object = None             # 정렬 키
+    goal_diff: int = 0
+    rating: float = 0.0
+
+    @property
+    def kind(self) -> str:
+        return "win" if "승" in self.result else ("lose" if "패" in self.result else "other")
+
+    @property
+    def accessible(self) -> str:
+        return f"{self.date_text} {self.result} {self.score} {self.opponent}"
+
+
+class CardSeg(NamedTuple):
+    role: str       # 그린 조각 이름 — 툴팁·넘침 검사가 읽는다
+    rect: QRectF
+    text: str
+    full: float     # 글자가 다 들어가는 폭(그림 조각은 0)
+
+
+class MatchCardDelegate(QStyledItemDelegate):
+    """경기 목록 카드 그리기 — 왼쪽 결과 띠 + 연한 결과 바탕(옛 표 행 색과 같은 T.WIN/LOSE · ROW_TINT),
+    ① 일시 ② 결과 알약 · 점수(크게) · 승부차기 · vs 상대 · 등급 배지 · 패드 / 오른쪽 점유·슛·패스·평점
+    ③ (상대 정보) 엠블럼 · 팀컬러 · 구단가치 · 맞대결 · 상대 점수. 자리는 layout() 한 곳이 정하고 그리기·툴팁·넘침 검사가 같이 쓴다."""
+    MARGIN = 3          # 카드 사이 위아래
+    STRIPE = 4
+    PAD_X = 12
+    PAD_Y = 7
+    GAP = 3
+    ITEM_GAP = 14       # 오른쪽 숫자 묶음 사이
+
+    def __init__(self, view: CardListView, tips: dict[str, str] | None = None):
+        super().__init__(view)
+        self.view = view
+        self.tips = dict(tips or {})
+        self.show_extra = True
+
+    # ── 글꼴 ──
+    @staticmethod
+    def fonts(base: QFont) -> dict[str, QFont]:
+        from PyQt6.QtGui import QFontInfo
+        px = QFontInfo(base).pixelSize() or T.BASE_FONT_PX
+        out = {}
+        for name, scale, bold in (("small", 0.85, False), ("main", 1.0, False), ("bold", 1.0, True), ("big", 1.3, True)):
+            f = QFont(base)
+            f.setPixelSize(max(9, round(px * scale)))
+            f.setBold(bold)
+            out[name] = f
+        return out
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        h = (2 * self.MARGIN + 2 * self.PAD_Y + QFontMetrics(f["small"]).height() + self.GAP
+             + QFontMetrics(f["big"]).height())
+        if self.show_extra:
+            h += self.GAP + QFontMetrics(f["main"]).height()
+        return h
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    @staticmethod
+    def colors(card: MatchCard) -> dict[str, str]:
+        """카드 색 — 테스트가 그림 대신 읽는다."""
+        tone = {"win": T.WIN, "lose": T.LOSE}.get(card.kind)
+        fill = {"win": T.GOOD_FILL, "lose": T.BAD_FILL}.get(card.kind)
+        return {"bg": T.blend(T.PANEL, tone, T.ROW_TINT) if tone else T.PANEL,
+                "stripe": fill or T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX),
+                "pill": tone or T.TEXT_DIM}
+
+    # ── 자리 ──
+    def layout(self, card: MatchCard, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        fm = {k: QFontMetrics(v) for k, v in f.items()}
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left = r.left() + self.STRIPE + self.PAD_X
+        right = r.right() - self.PAD_X
+        segs: list[CardSeg] = []
+
+        def put(role: str, x: float, y: float, h: float, text: str, font: str, limit: float | None = None) -> float:
+            full = fm[font].horizontalAdvance(text) if text else 0
+            w = full if limit is None else max(0.0, min(full, limit - x))
+            segs.append(CardSeg(role, QRectF(x, y, w, h), text, full))
+            return x + w
+
+        y1 = r.top() + self.PAD_Y
+        h1 = fm["small"].height()
+        put("date", left, y1, h1, card.date_text, "small", right)
+        y2 = y1 + h1 + self.GAP
+        h2 = fm["big"].height()
+        # 오른쪽 숫자 묶음 — 폭을 먼저 재서 왼쪽 상대 이름이 쓸 수 있는 끝을 정한다
+        items = [(lab, val, fm["small"].horizontalAdvance(lab + " "), fm["bold"].horizontalAdvance(val))
+                 for lab, val in card.stats]
+        total = sum(a + b for _l, _v, a, b in items) + self.ITEM_GAP * max(0, len(items) - 1)
+        x = right - total
+        stats_left = x
+        for lab, val, a, b in items:
+            segs.append(CardSeg("stat_label", QRectF(x, y2, a, h2), lab, a))
+            segs.append(CardSeg("stat", QRectF(x + a, y2, b, h2), val, b))
+            x += a + b + self.ITEM_GAP
+        limit = stats_left - 16
+        pill_w = fm["small"].horizontalAdvance(card.result) + 14
+        segs.append(CardSeg("result", QRectF(left, y2 + (h2 - h1 - 4) / 2, pill_w, h1 + 4), card.result,
+                            fm["small"].horizontalAdvance(card.result) + 14))
+        x = left + pill_w + 10
+        x = put("score", x, y2, h2, card.score, "big", limit) + 6
+        if card.shootout:
+            x = put("shootout", x, y2, h2, card.shootout, "small", limit) + 6
+        x = put("vs", x, y2, h2, "vs", "small", limit) + 5
+        icon_h = fm["main"].height()
+        reserve = (icon_h * 1.4 + 4 if card.division_key is not None else 0) + (icon_h * 1.3 + 6 if card.opp_pad else 0)
+        x = put("opp", x, y2, h2, card.opponent, "bold", limit - reserve) + 4
+        if card.division_key is not None:
+            segs.append(CardSeg("badge", QRectF(x, y2 + (h2 - icon_h) / 2, icon_h * 1.4, icon_h), "", 0))
+            x += icon_h * 1.4 + 4
+        if card.opp_pad:
+            segs.append(CardSeg("pad", QRectF(x, y2 + (h2 - icon_h) / 2, icon_h * 1.3, icon_h), "", 0))
+        if self.show_extra:
+            y3 = y2 + h2 + self.GAP
+            h3 = fm["main"].height()
+            x = left
+            if card.emblem_key is not None:
+                segs.append(CardSeg("emblem", QRectF(x, y3, h3, h3), "", 0))
+                x += h3 + 4
+            x = put("color", x, y3, h3, card.color or "-", "main", right)
+            parts = [("value", "구단가치", card.value_text or "-"), ("h2h", "맞대결", card.h2h_text or "-")]
+            if card.opp_score is not None:
+                parts.append(("oppscore", "상대 점수", card.opp_score))
+            for role, lab, val in parts:
+                x = put(role + "_label", x + 12, y3, h3, lab, "small", right) + 4
+                x = put(role, x, y3, h3, val, "main", right)
+        return segs
+
+    def overflow(self, card: MatchCard, width: int, base: QFont) -> list[str]:
+        """그 폭에서 잘리는 글자 조각 — 스모크가 1280·150% 에서 잰다(PyQt 5 의 카드판)."""
+        return [s.role for s in self.layout(card, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.full > s.rect.width() + 0.5]
+
+    # ── 그리기 ──
+    def paint(self, painter, option, index) -> None:
+        card = index.data(ROW_ROLE)
+        if card is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, card)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, card: MatchCard) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(card)
+        r = QRectF(option.rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = col["bg"]
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = T.blend(bg, T.TEXT, 0.04)
+        path = QPainterPath()
+        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        p.fillPath(path, QColor(bg))
+        p.save()
+        p.setClipPath(path)
+        p.fillRect(QRectF(r.left(), r.top(), self.STRIPE, r.height()), QColor(col["stripe"]))
+        p.restore()
+        if option.state & QStyle.StateFlag.State_Selected:
+            p.setPen(QPen(QColor(T.ACCENT), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        fonts = {"date": "small", "score": "big", "shootout": "small", "vs": "small", "opp": "bold",
+                 "stat_label": "small", "stat": "bold", "color": "main"}
+        dim = {"date", "shootout", "vs", "stat_label"}
+        for s in self.layout(card, option.rect, option.font):
+            if s.role == "result":
+                soft = T.blend(T.PANEL, col["pill"], 0.10)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(soft))
+                p.drawRoundedRect(s.rect, 4, 4)
+                p.setPen(QColor(col["pill"]))
+                p.setFont(f["small"])
+                p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
+                continue
+            if s.role in ("badge", "emblem"):
+                key = card.division_key if s.role == "badge" else card.emblem_key
+                pm = self.view.icon("division" if s.role == "badge" else "emblem", key)
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left(), s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            if s.role == "pad":
+                self._pad(p, s.rect)
+                continue
+            if not s.text:
+                continue
+            font = fonts.get(s.role) or ("small" if s.role.endswith("_label") else "main")
+            p.setFont(f[font])
+            p.setPen(QColor(T.TEXT_DIM if s.role in dim or s.role.endswith("_label") else T.TEXT))
+            fmx = QFontMetrics(f[font])
+            text = s.text if s.full <= s.rect.width() + 0.5 else fmx.elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
+    @staticmethod
+    def _pad(p: QPainter, rect: QRectF) -> None:
+        """패드 모양(U4) — 이모지 글꼴은 PC 마다 달라 직접 그린다. 둥근 몸통 + 왼쪽 십자 + 오른쪽 단추 둘."""
+        h = rect.height() * 0.62
+        body = QRectF(rect.left(), rect.center().y() - h / 2, rect.width(), h)
+        p.setPen(QPen(QColor(T.TEXT_DIM), 1.4))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(body, h / 2, h / 2)
+        cx, cy, a = body.left() + body.width() * 0.3, body.center().y(), h * 0.22
+        p.drawLine(QPointF(cx - a, cy), QPointF(cx + a, cy))
+        p.drawLine(QPointF(cx, cy - a), QPointF(cx, cy + a))
+        p.setBrush(QColor(T.TEXT_DIM))
+        for dx, dy in ((0.66, -0.12), (0.78, 0.12)):
+            p.drawEllipse(QPointF(body.left() + body.width() * dx, cy + h * dy), h * 0.09, h * 0.09)
+
+    def tip_at(self, card: MatchCard, rect, base: QFont, pos) -> str:
+        for s in self.layout(card, rect, base):
+            if s.rect.adjusted(-2, -2, 2, 2).contains(QPointF(pos)):
+                role = s.role.removesuffix("_label")
+                if role == "opp" and s.full > s.rect.width() + 0.5:
+                    return card.opponent
+                if role in self.tips:
+                    return self.tips[role]
+        return ""
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        card = index.data(ROW_ROLE) if index.isValid() else None
+        tip = self.tip_at(card, option.rect, option.font, event.pos()) if card is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class MatchCardList(CardListView):
+    """경기 목록(65 M2) — 카드 한 줄 = 경기 하나. 더블클릭 → 경기 상세 창(app_main 이 잇는다)."""
+
+    def __init__(self, tips: dict[str, str] | None = None):
+        super().__init__()
+        self.card_delegate = MatchCardDelegate(self, tips)
+        self.setItemDelegate(self.card_delegate)
+
+    def icon_keys(self, row: MatchCard) -> tuple:
+        return (("division", row.division_key), ("emblem", row.emblem_key))
+
+    @property
+    def show_extra(self) -> bool:
+        return self.card_delegate.show_extra
+
+    def set_show_extra(self, on: bool) -> None:
+        if self.card_delegate.show_extra != on:
+            self.card_delegate.show_extra = on
+            self.relayout()
+
+
+@dataclass
+class RateRow:
+    """승률 줄 목록 한 줄(65 P4 · M4~M6) — 이름 · 보조 글 · 오른쪽 "N경기 승 무 패 승률 (±차)" · 아래 3색 막대.
+    글자는 화면이 다 만들어 넣는다(승률 식 표시는 win_rate_text 그대로). 대리자는 그리기만 한다."""
+    label: str
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    rate_text: str = "—"
+    rate: float = 0.0               # 정렬 값
+    diff: float | None = None       # 기준 대비 %p — None 이면 칸이 없다(표본 미달·기준 없음)
+    sub: str = ""                   # 보조 글(흐림)
+    weak: bool = False              # 표본 미달 — 막대·숫자 흐림 + "표본 N"
+    sample: str = ""                # weak 일 때 붙는 "표본 N" 글(sample_text)
+    rated: int = 0                  # 승률 분모(판정에 쓴 표본 — 테스트가 weak 와 같이 읽는다)
+    icon: tuple = ()                # (종류, 키) — 등급 배지 · 엠블럼 · 포메이션
+    tip: str = ""
+    key: object = None              # 쓰는 쪽 값(닉네임 등)
+    recent: int = 0                 # 작을수록 최근(정렬 "최근 경기")
+    other: int = 0                  # 승·무·패가 아닌 경기("오류" 등) — 경기 수에는 든다(집계의 games 와 같게)
+
+    @property
+    def games(self) -> int:
+        return self.win + self.draw + self.lose + self.other
+
+    @property
+    def accessible(self) -> str:
+        return f"{self.label} {self.games}경기 {wdl_text(self.win, self.draw, self.lose)} {self.rate_text}"
+
+
+RATE_SORTS = (("games", "매치수 순"), ("high", "승률 높은 순"), ("low", "승률 낮은 순"), ("recent", "최근 경기 순"))
+
+
+def sort_rate_rows(rows: list[RateRow], how: str) -> list[RateRow]:
+    """줄 목록 정렬(65 대응표) — 승률 순에서는 표본 미달 줄을 늘 아래로(⑧ — 몇 판짜리 100% 가 맨 위에 오지 않게)."""
+    if how == "high":
+        return sorted(rows, key=lambda r: (r.weak, -r.rate, -r.games))
+    if how == "low":
+        return sorted(rows, key=lambda r: (r.weak, r.rate, -r.games))
+    if how == "recent":
+        return sorted(rows, key=lambda r: r.recent)
+    return sorted(rows, key=lambda r: (-r.games, r.recent))
+
+
+class RateRowDelegate(QStyledItemDelegate):
+    """승률 줄 그리기 — 자리는 layout() 한 곳(그리기·툴팁·넘침 검사가 같이 읽는다 — MatchCardDelegate 와 같은 약속)."""
+    MARGIN = 3
+    PAD_X = 10
+    PAD_Y = 6
+    GAP = 4
+    ITEM_GAP = 10
+
+    def __init__(self, view: CardListView, tips: dict[str, str] | None = None):
+        super().__init__(view)
+        self.view = view
+        self.tips = dict(tips or {})
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        line = max(QFontMetrics(f["bold"]).height(), QFontMetrics(f["main"]).height())
+        return 2 * self.MARGIN + 2 * self.PAD_Y + line + self.GAP + WdlBar.HEIGHT
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    def layout(self, row: RateRow, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        fm = {k: QFontMetrics(v) for k, v in f.items()}
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left, right = r.left() + self.PAD_X, r.right() - self.PAD_X
+        y = r.top() + self.PAD_Y
+        h = max(fm["bold"].height(), fm["main"].height())
+        segs: list[CardSeg] = []
+        # 오른쪽 숫자 — 폭을 먼저 재서 왼쪽 이름이 쓸 수 있는 끝을 정한다
+        nums = [("games", f"{row.games:,}경기", "small"), ("win", f"{row.win:,}승", "bold"),
+                ("draw", f"{row.draw:,}무", "bold"), ("lose", f"{row.lose:,}패", "bold"), ("rate", row.rate_text, "bold")]
+        if row.diff is not None and not row.weak:
+            nums.append(("diff", f"({row.diff:+.1f})", "main"))
+        if row.weak and row.sample:
+            nums.append(("sample", row.sample, "small"))
+        widths = [fm[font].horizontalAdvance(text) for _r, text, font in nums]
+        x = right - sum(widths) - self.ITEM_GAP * (len(nums) - 1)
+        nums_left = x
+        for (role, text, _font), w in zip(nums, widths):
+            segs.append(CardSeg(role, QRectF(x, y, w, h), text, w))
+            x += w + self.ITEM_GAP
+        limit = nums_left - 16
+        x = left
+        if row.icon:
+            ih = fm["main"].height()
+            iw = ih * 1.4
+            segs.append(CardSeg("icon", QRectF(x, y + (h - ih) / 2, iw, ih), "", 0))
+            x += iw + 6
+        full = fm["bold"].horizontalAdvance(row.label)
+        w = max(0.0, min(full, limit - x))
+        segs.append(CardSeg("label", QRectF(x, y, w, h), row.label, full))
+        x += w + 8
+        if row.sub and x < limit:
+            full = fm["small"].horizontalAdvance(row.sub)
+            segs.append(CardSeg("sub", QRectF(x, y, max(0.0, min(full, limit - x)), h), row.sub, full))
+        segs.append(CardSeg("bar", QRectF(left, y + h + self.GAP, right - left, WdlBar.HEIGHT), "", 0))
+        return segs
+
+    def overflow(self, row: RateRow, width: int, base: QFont) -> list[str]:
+        """그 폭에서 잘리는 글자 조각 — 보조 글(sub)은 잘려도 된다(툴팁에 같은 글). 이름·숫자가 잘리면 스모크가 FAIL."""
+        return [s.role for s in self.layout(row, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.role != "sub" and s.full > s.rect.width() + 0.5]
+
+    @staticmethod
+    def colors(row: RateRow) -> dict[str, str]:
+        """글자·막대 색 — 테스트가 그림 대신 읽는다. 승·패 숫자와 차이만 색(기준 화면 매치업 줄) · 표본 미달은 흐림."""
+        bar = WdlBar.colors_for(row.weak, compact=True)
+        if row.weak:
+            return {**{k: T.TEXT_DIM for k in ("win", "draw", "lose", "rate", "diff", "label")}, "bar": bar}
+        return {"win": T.GOOD, "draw": T.TEXT, "lose": T.BAD, "rate": T.TEXT, "label": T.TEXT,
+                "diff": delta_color(row.diff) if row.diff is not None else T.TEXT_DIM, "bar": bar}
+
+    def paint(self, painter, option, index) -> None:
+        row = index.data(ROW_ROLE)
+        if row is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, row)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, row: RateRow) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(row)
+        r = QRectF(option.rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = T.PANEL
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = T.blend(bg, T.TEXT, 0.04)
+        path = QPainterPath()
+        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        p.fillPath(path, QColor(bg))
+        if option.state & QStyle.StateFlag.State_Selected:
+            p.setPen(QPen(QColor(T.ACCENT), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        fonts = {"games": "small", "sample": "small", "sub": "small", "diff": "main", "label": "bold"}
+        for s in self.layout(row, option.rect, option.font):
+            if s.role == "bar":
+                paint_wdl_strip(p, s.rect, wdl_segments((row.win, row.draw, row.lose), col["bar"]))
+                continue
+            if s.role == "icon":
+                pm = self.view.icon(*row.icon) if row.icon else None
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left(), s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            font = fonts.get(s.role, "bold")
+            p.setFont(f[font])
+            p.setPen(QColor(col.get(s.role, T.TEXT_DIM)))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
+
+    def tip_at(self, row: RateRow, rect, base: QFont, pos) -> str:
+        for s in self.layout(row, rect, base):
+            if s.rect.adjusted(-2, -2, 2, 2).contains(QPointF(pos)):
+                if s.role in self.tips:
+                    return self.tips[s.role]
+                break
+        return row.tip
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        tip = self.tip_at(row, option.rect, option.font, event.pos()) if row is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class RateRowList(CardListView):
+    """승률 줄 목록(65 P4 첫 부품) — 상대 전적 · 성적 진단 묶음 · 전술 상대 포메이션 · 경기 결과.
+    fixed 면 줄 수만큼 높이를 고정한다(스크롤 페이지 안 — 목록 안 스크롤이 겹치지 않게). 그림은 CardListView 의 (종류, 키) 표."""
+
+    def __init__(self, fixed: bool = False, tips: dict[str, str] | None = None):
+        super().__init__()
+        self.fixed = fixed
+        self.rate_delegate = RateRowDelegate(self, tips)
+        self.setItemDelegate(self.rate_delegate)
+        if fixed:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("QListView { background: transparent; border: none; }")
+
+    def icon_keys(self, row: RateRow) -> tuple:
+        return (row.icon,) if row.icon else ()
+
+    def set_rows(self, rows: list) -> None:
+        super().set_rows(rows)
+        self._fit()
+
+    def set_filter(self, pred) -> None:
+        super().set_filter(pred)
+        self._fit()
+
+    def _fit(self) -> None:
+        if self.fixed:
+            self.setFixedHeight(self.rowCount() * self.rate_delegate.row_height(self.font()) + 2 * self.frameWidth() + 2)
+
+
+class _FitMixin:
+    """fixed 면 줄 수만큼 높이를 고정한다(스크롤 페이지 안 — 목록 안 스크롤이 겹치지 않게). RateRowList 와 같은 약속."""
+
+    def _setup_fixed(self, fixed: bool) -> None:
+        self.fixed = fixed
+        if fixed:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("QListView { background: transparent; border: none; }")
+
+    def _fit(self) -> None:
+        if self.fixed:
+            self.setFixedHeight(self.rowCount() * self.itemDelegate().row_height(self.font()) + 2 * self.frameWidth() + 2)
+
+
+class MetricCell(NamedTuple):
+    text: str                       # 값(굵게)
+    label: str                      # 값 아래 작은 라벨(흐림)
+    color: str | None = None        # 값 색 — None 이면 글자색
+    tip: str = ""
+
+
+@dataclass
+class MetricRow:
+    """지표 줄 목록 한 줄(67 R0) — 순위 · 그림 · 이름 + 아래 흐린 보조 글 · 오른쪽 숫자 칸 N개(값 + 그 아래 라벨) ·
+    바탕을 fill(0~1)만큼 채움. 글자는 화면이 다 만들어 넣는다. 칸 폭은 목록 전체에서 맞춘다(줄마다 숫자가 같은 줄에 선다)."""
+    name: str
+    sub: str = ""
+    cells: tuple = ()                # (MetricCell, …)
+    rank: int | None = None
+    icon: tuple = ()                 # (종류, 키) — 엠블럼 · 포메이션
+    fill: float | None = None        # 바탕 채움 0~1 — None 이면 없음
+    dim: bool = False                # 표본 미달 — 전부 흐림
+    tip: str = ""
+    key: object = None               # 쓰는 쪽 값(팀컬러 라벨 · 구간 번호)
+    sort: dict = None                # 정렬 값(쓰는 쪽이 이름 → 값) — 목록은 안 읽는다
+
+    @property
+    def accessible(self) -> str:
+        return " ".join([self.name] + [f"{c.label} {c.text}" for c in self.cells])
+
+
+class MetricRowDelegate(QStyledItemDelegate):
+    """지표 줄 그리기 — 자리는 layout() 한 곳(그리기·툴팁·넘침 검사가 같이 읽는다 — RateRowDelegate 와 같은 약속)."""
+    MARGIN = 3
+    PAD_X = 10
+    PAD_Y = 6
+    GAP = 2
+    CELL_GAP = 16
+
+    def __init__(self, view: CardListView):
+        super().__init__(view)
+        self.view = view
+        self.col_w: list[float] = []     # 칸마다 폭 — measure() 가 목록 전체에서
+        self.rank_w = 0.0
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        return 2 * self.MARGIN + 2 * self.PAD_Y + QFontMetrics(f["bold"]).height() + self.GAP + QFontMetrics(f["small"]).height()
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    def measure(self, rows: list, base: QFont) -> None:
+        f = self.fonts(base)
+        bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
+        n = max((len(r.cells) for r in rows), default=0)
+        w = [0.0] * n
+        for r in rows:
+            for i, c in enumerate(r.cells):
+                w[i] = max(w[i], bold.horizontalAdvance(c.text), small.horizontalAdvance(c.label))
+        self.col_w = w
+        ranks = [r.rank for r in rows if r.rank is not None]
+        self.rank_w = bold.horizontalAdvance(f"{max(ranks):,}") if ranks else 0.0
+
+    def layout(self, row: MetricRow, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        fm = {k: QFontMetrics(v) for k, v in f.items()}
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left, right = r.left() + self.PAD_X, r.right() - self.PAD_X
+        top = r.top() + self.PAD_Y
+        h1, h2 = fm["bold"].height(), fm["small"].height()
+        y2 = top + h1 + self.GAP
+        segs: list[CardSeg] = []
+        widths = [self.col_w[i] if i < len(self.col_w) else fm["bold"].horizontalAdvance(c.text)
+                  for i, c in enumerate(row.cells)]
+        x = right - sum(widths) - self.CELL_GAP * max(0, len(widths) - 1)
+        cells_left = x
+        for i, (c, w) in enumerate(zip(row.cells, widths)):
+            segs.append(CardSeg(f"cell{i}", QRectF(x, top, w, h1), c.text, fm["bold"].horizontalAdvance(c.text)))
+            segs.append(CardSeg(f"label{i}", QRectF(x, y2, w, h2), c.label, fm["small"].horizontalAdvance(c.label)))
+            x += w + self.CELL_GAP
+        limit = cells_left - 16
+        x = left
+        if self.rank_w:
+            text = f"{row.rank:,}" if row.rank is not None else ""
+            segs.append(CardSeg("rank", QRectF(x, top, self.rank_w, h1 + self.GAP + h2), text,
+                                fm["bold"].horizontalAdvance(text)))
+            x += self.rank_w + 10
+        if row.icon:
+            ih = h1 + self.GAP + h2 - 4
+            segs.append(CardSeg("icon", QRectF(x, top + 2, ih * 1.2, ih), "", 0))
+            x += ih * 1.2 + 8
+        full = fm["bold"].horizontalAdvance(row.name)
+        segs.append(CardSeg("name", QRectF(x, top, max(0.0, min(full, limit - x)), h1), row.name, full))
+        if row.sub:
+            full = fm["small"].horizontalAdvance(row.sub)
+            segs.append(CardSeg("sub", QRectF(x, y2, max(0.0, min(full, limit - x)), h2), row.sub, full))
+        return segs
+
+    def overflow(self, row: MetricRow, width: int, base: QFont) -> list[str]:
+        """그 폭에서 잘리는 글자 조각 — 보조 글은 잘려도 된다(툴팁). 이름·칸이 잘리면 스모크가 FAIL."""
+        return [s.role for s in self.layout(row, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.role != "sub" and s.full > s.rect.width() + 0.5]
+
+    @staticmethod
+    def colors(row: MetricRow) -> dict[str, str]:
+        """글자 색 — 테스트가 그림 대신 읽는다. 칸 값은 쓰는 쪽 색(평균 대비 등) · 표본 미달은 전부 흐림."""
+        out = {"name": T.TEXT, "sub": T.TEXT_DIM, "rank": T.TEXT_DIM, "fill": T.ROW_FILL}
+        for i, c in enumerate(row.cells):
+            out[f"cell{i}"] = T.TEXT_DIM if row.dim else (c.color or T.TEXT)
+            out[f"label{i}"] = T.TEXT_DIM
+        if row.dim:
+            out["name"] = T.TEXT_DIM
+        return out
+
+    def paint(self, painter, option, index) -> None:
+        row = index.data(ROW_ROLE)
+        if row is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, row)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, row: MetricRow) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(row)
+        r = QRectF(option.rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        bg = T.PANEL
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = T.blend(bg, T.TEXT, 0.04)
+        path = QPainterPath()
+        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        p.fillPath(path, QColor(bg))
+        if row.fill:
+            p.save()
+            p.setClipPath(path)
+            p.fillRect(QRectF(r.left(), r.top(), r.width() * min(1.0, max(0.0, row.fill)), r.height()), QColor(col["fill"]))
+            p.restore()
+        if option.state & QStyle.StateFlag.State_Selected:
+            p.setPen(QPen(QColor(T.ACCENT), 1))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+        for s in self.layout(row, option.rect, option.font):
+            if s.role == "icon":
+                pm = self.view.icon(*row.icon) if row.icon else None
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left() + (s.rect.width() - scaled.width()) / 2,
+                                         s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            font = "small" if s.role == "sub" or s.role.startswith("label") else "bold"
+            align = Qt.AlignmentFlag.AlignLeft
+            if s.role.startswith(("cell", "label", "rank")):
+                align = Qt.AlignmentFlag.AlignRight
+            p.setFont(f[font])
+            p.setPen(QColor(col.get(s.role, T.TEXT_DIM)))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
+
+    def tip_at(self, row: MetricRow, rect, base: QFont, pos) -> str:
+        for s in self.layout(row, rect, base):
+            if s.rect.adjusted(-2, -2, 2, 2).contains(QPointF(pos)):
+                if s.role.startswith(("cell", "label")):
+                    c = row.cells[int(s.role[4:] if s.role.startswith("cell") else s.role[5:])]
+                    if c.tip:
+                        return c.tip
+                if s.role in ("name", "sub") and s.full > s.rect.width() + 0.5:
+                    return f"{row.name} {row.sub}".strip()
+                break
+        return row.tip
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        tip = self.tip_at(row, option.rect, option.font, event.pos()) if row is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class MetricRowList(_FitMixin, CardListView):
+    """지표 줄 목록(67 R0 — 팀컬러 목록 · 구단가치 구간 · 메타 변화 · 포지션 특성). 거르기는 모델 안(CardListView) ·
+    칸 폭은 set_rows 때 전체 줄에서 잰다(거르기로 줄이 바뀌어도 칸이 흔들리지 않게)."""
+
+    def __init__(self, fixed: bool = False):
+        super().__init__()
+        self.metric_delegate = MetricRowDelegate(self)
+        self.setItemDelegate(self.metric_delegate)
+        self._setup_fixed(fixed)
+
+    def icon_keys(self, row: MetricRow) -> tuple:
+        return (row.icon,) if row.icon else ()
+
+    def set_rows(self, rows: list) -> None:
+        self.metric_delegate.measure(rows, self.font())
+        super().set_rows(rows)
+        self._fit()
+
+    def set_filter(self, pred) -> None:
+        super().set_filter(pred)
+        self._fit()
+
+
+@dataclass
+class AvgBar:
+    """평균 막대 줄 한 줄(67 R0) — 이름 · 가로 막대(기준선 위/아래 색) · 오른쪽 값 + 흐린 인원. value None 이면 막대 없이 "—"."""
+    name: str
+    value: float | None
+    text: str                        # 값 글자(단위 포함)
+    n_text: str = ""                 # 흐린 보조(인원 등)
+    icon: tuple = ()
+    key: object = None
+    tip: str = ""
+
+    @property
+    def accessible(self) -> str:
+        return f"{self.name} {self.text} {self.n_text}".strip()
+
+
+class AvgBarDelegate(QStyledItemDelegate):
+    MARGIN = 2
+    PAD_X = 10
+    PAD_Y = 4
+    BAR_H = 10
+    NAME_MAX = 0.4                   # 이름 칸 상한(폭 대비)
+
+    def __init__(self, view: "AvgBarList"):
+        super().__init__(view)
+        self.view = view
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def row_height(self, base: QFont) -> int:
+        f = self.fonts(base)
+        return 2 * self.MARGIN + 2 * self.PAD_Y + max(QFontMetrics(f["bold"]).height(), self.BAR_H)
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 200), self.row_height(option.font))
+
+    def layout(self, row: AvgBar, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
+        r = QRectF(rect).adjusted(0, self.MARGIN, 0, -self.MARGIN)
+        left, right = r.left() + self.PAD_X, r.right() - self.PAD_X
+        h = bold.height()
+        y = r.top() + (r.height() - h) / 2
+        v = self.view
+        segs: list[CardSeg] = []
+        x = right - v.n_w
+        segs.append(CardSeg("n", QRectF(x, y, v.n_w, h), row.n_text, small.horizontalAdvance(row.n_text)))
+        x -= v.text_w + (8 if v.n_w else 0)
+        segs.append(CardSeg("text", QRectF(x, y, v.text_w, h), row.text, bold.horizontalAdvance(row.text)))
+        bar_right = x - 12
+        nx = left
+        if row.icon:
+            segs.append(CardSeg("icon", QRectF(nx, y, h * 1.2, h), "", 0))
+            nx += h * 1.2 + 6
+        name_w = min(v.name_w, (right - left) * self.NAME_MAX)
+        full = bold.horizontalAdvance(row.name)
+        segs.append(CardSeg("name", QRectF(nx, y, min(full, name_w), h), row.name, full))
+        bar_left = left + (h * 1.2 + 6 if v.has_icon else 0) + name_w + 12
+        width = max(0.0, bar_right - bar_left)
+        segs.append(CardSeg("track", QRectF(bar_left, r.top() + (r.height() - self.BAR_H) / 2, width, self.BAR_H), "", 0))
+        if row.value is not None and v.max_value > 0:
+            segs.append(CardSeg("bar", QRectF(bar_left, r.top() + (r.height() - self.BAR_H) / 2,
+                                              width * max(0.0, row.value) / v.max_value, self.BAR_H), "", 0))
+        return segs
+
+    def overflow(self, row: AvgBar, width: int, base: QFont) -> list[str]:
+        return [s.role for s in self.layout(row, QRectF(0, 0, width, self.row_height(base)), base)
+                if s.text and s.role != "name" and s.full > s.rect.width() + 0.5]
+
+    def colors(self, row: AvgBar) -> dict[str, str]:
+        """기준(평균) 위가 좋음이면 위 = 강조 채움 · 아래 = 주의 채움(higher_better=False 면 뒤집는다 — 판수는 적을수록 좋다)."""
+        above = row.value is not None and row.value >= self.view.base
+        good = above if self.view.higher_better else not above
+        return {"bar": T.ACCENT_FILL if good else T.WARN_FILL, "text": T.TEXT, "n": T.TEXT_DIM, "name": T.TEXT,
+                "track": T.PANEL_2, "base": T.TEXT_DIM}
+
+    def paint(self, painter, option, index) -> None:
+        row = index.data(ROW_ROLE)
+        if row is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, row)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, row: AvgBar) -> None:
+        f = self.fonts(option.font)
+        col = self.colors(row)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        segs = self.layout(row, option.rect, option.font)
+        for s in segs:
+            if s.role in ("track", "bar"):
+                path = QPainterPath()
+                path.addRoundedRect(s.rect, 3, 3)
+                p.fillPath(path, QColor(col[s.role]))
+                continue
+            if s.role == "icon":
+                pm = self.view.icon(*row.icon) if row.icon else None
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left(), s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            font = "small" if s.role == "n" else "bold"
+            p.setFont(f[font])
+            p.setPen(QColor(col.get(s.role, T.TEXT)))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            align = Qt.AlignmentFlag.AlignLeft if s.role == "name" else Qt.AlignmentFlag.AlignRight
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
+        track = next((s for s in segs if s.role == "track"), None)
+        if track is not None and self.view.max_value > 0 and self.view.base > 0:
+            x = track.rect.left() + track.rect.width() * self.view.base / self.view.max_value
+            pen = QPen(QColor(col["base"]), 1, Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(x, track.rect.top() - 3), QPointF(x, track.rect.bottom() + 3))
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        tip = (row.tip or (row.name if row is not None else "")) if row is not None else ""
+        if tip:
+            QToolTip.showText(event.globalPos(), tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class AvgBarList(_FitMixin, CardListView):
+    """평균 막대 줄 목록(67 R0 — 구단가치 구간별 · 팀컬러별 100판당 · 달성 판수). base = 기준선(평균) ·
+    higher_better=False 면 기준 아래가 강조(3회차 M8 — 달성 판수는 적을수록 좋다). 막대 길이는 목록 최댓값 대비."""
+
+    def __init__(self, fixed: bool = True, higher_better: bool = True):
+        super().__init__()
+        self.higher_better = higher_better
+        self.base = 0.0
+        self.max_value = 0.0
+        self.name_w = self.text_w = self.n_w = 0.0
+        self.has_icon = False
+        self.bar_delegate = AvgBarDelegate(self)
+        self.setItemDelegate(self.bar_delegate)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._setup_fixed(fixed)
+
+    def icon_keys(self, row: AvgBar) -> tuple:
+        return (row.icon,) if row.icon else ()
+
+    def set_rows(self, rows: list, base: float | None = None) -> None:
+        """base None 이면 값 있는 줄의 평균."""
+        vals = [r.value for r in rows if r.value is not None]
+        self.base = base if base is not None else (sum(vals) / len(vals) if vals else 0.0)
+        self.max_value = max(vals + [self.base], default=0.0)
+        f = AvgBarDelegate.fonts(self.font())
+        bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
+        self.name_w = max((bold.horizontalAdvance(r.name) for r in rows), default=0)
+        self.text_w = max((bold.horizontalAdvance(r.text) for r in rows), default=0)
+        self.n_w = max((small.horizontalAdvance(r.n_text) for r in rows), default=0)
+        self.has_icon = any(r.icon for r in rows)
+        super().set_rows(rows)
+        self._fit()
+
+
+class ShotTypeRows(QWidget):
+    """슛 타입 분포(65 M6 · ④ M8 이 같이 쓴다) — 줄마다 이름 · "시도 N · 유효 N · 골 N" · 누적 막대(골 ⊂ 유효 ⊂ 시도 ·
+    길이는 가장 많은 줄 대비) · 전환율(골 ÷ 시도). 시도가 min_shots 미만이면 전환율을 숨기고 막대를 흐린다(작은 표본 규칙)."""
+    BAR_H = 8
+
+    def __init__(self, tone: str = T.GOOD_FILL, stacked: bool = False):
+        super().__init__()
+        self.tone = tone
+        self.stacked = stacked   # 좁은 자리(슛 맵 오른쪽 패널) — 시도·유효·골 글을 이름 아래 줄로
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(10)
+        self.grid.setVerticalSpacing(4)
+        self.grid.setColumnStretch(1 if stacked else 2, 1)
+        self.rows: list[tuple] = []   # (이름, 시도, 유효(골 포함), 골, 전환율 글) — 테스트가 읽는다
+
+    def set_data(self, buckets, min_shots: int) -> None:
+        """buckets: stats.ShotBucket 목록(label · shots · on_target(골 포함) · goals)."""
+        while self.grid.count():
+            it = self.grid.takeAt(0)
+            if it.widget() is not None:
+                it.widget().deleteLater()
+        self.rows = []
+        peak = max((b.shots for b in buckets), default=0)
+        for i, b in enumerate(buckets):
+            weak = core.is_weak(b.shots, min_shots)
+            conv = f"{b.goals / b.shots * 100:.0f}%" if b.shots and not weak else NA
+            self.rows.append((b.label, b.shots, b.on_target, b.goals, conv))
+            name = QLabel(b.label)
+            name.setStyleSheet(f"color: {T.TEXT};")
+            counts = QLabel(f"시도 {b.shots:,} · 유효 {b.on_target:,} · 골 {b.goals:,}")
+            counts.setStyleSheet(f"color: {T.TEXT_DIM};")
+            strip = _StackStrip(self, (b.goals, b.on_target - b.goals, b.shots - b.on_target), peak, self.tone, weak)
+            rate = QLabel(conv)
+            rate.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold;")
+            rate.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            rate.setToolTip(f"골 ÷ 시도 — 시도 {min_shots}회 미만이면 숨깁니다" if weak else "골 ÷ 시도")
+            if self.stacked:
+                counts.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+                for c, wdg in enumerate((name, strip, rate)):
+                    self.grid.addWidget(wdg, 2 * i, c)
+                self.grid.addWidget(counts, 2 * i + 1, 0, 1, 3)
+                continue
+            for c, wdg in enumerate((name, counts, strip, rate)):
+                self.grid.addWidget(wdg, i, c)
+
+
+class _StackStrip(QWidget):
+    """ShotTypeRows 의 누적 막대 — (골, 막힌 유효, 빗나감) 을 가장 많은 줄 대비 길이로."""
+
+    def __init__(self, parent: QWidget, parts: tuple[int, int, int], peak: int, tone: str, weak: bool):
+        super().__init__(parent)
+        self.parts, self.peak, self.weak = parts, peak, weak
+        cols = [tone, T.blend(T.PANEL, tone, 0.45), T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX)]
+        self.cols = [T.blend(T.PANEL_2, c, T.WEAK_MIX) for c in cols] if weak else cols
+        self.setFixedHeight(ShotTypeRows.BAR_H)
+        self.setMinimumWidth(40)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        total = sum(self.parts)
+        span = r.width() * (total / self.peak if self.peak else 0)
+        segs = [(n / total * span / r.width(), c) for n, c in zip(self.parts, self.cols) if n] if total else []
+        paint_wdl_strip(p, r, segs)
+        p.end()
+
+
+class MeterBar(QWidget):
+    """한 값 막대(65 M7 패스 성공률) — 바탕 띠 위에 frac(0~1)만큼 한 색. weak 면 바탕 쪽으로 흐린다(표본 흐림 WEAK_MIX).
+    그리기는 승무패 띠와 같은 paint_wdl_strip(모서리·바탕 트랙이 갈리지 않게)."""
+    HEIGHT = 6
+
+    def __init__(self, frac: float, color: str, weak: bool = False):
+        super().__init__()
+        self.frac = max(0.0, min(frac, 1.0))
+        self.color = T.blend(T.PANEL_2, color, T.WEAK_MIX) if weak else color
+        self.setFixedHeight(self.HEIGHT)
+        self.setMinimumWidth(40)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        paint_wdl_strip(p, QRectF(self.rect()), [(self.frac, self.color)] if self.frac else [])
+        p.end()
+
+
+@dataclass
+class ScorerRow:
+    """골·어시스트 순위 한 줄(65 M8) — 글자는 화면이 만든다. season = 시즌 배지 그림 키 · grade = 강화(배지)."""
+    rank: int
+    name: str
+    goals: int
+    assists: int
+    grade: int = 0
+    season: object = None
+    tip: str = ""
+
+    @property
+    def accessible(self) -> str:
+        return f"{self.rank}위 {self.name} {self.goals}골 {self.assists}어시"
+
+
+class ScorerDelegate(QStyledItemDelegate):
+    """순위 줄 그리기 — 순위 · 시즌 배지 · 이름 · 강화 배지 · 오른쪽 "N골 M어시". 자리는 layout() 한 곳(RateRowDelegate 와 같은 약속)."""
+    PAD_X = 8
+    PAD_Y = 4
+    BADGE_PAD = 6
+    ITEM_GAP = 8
+
+    def __init__(self, view: CardListView):
+        super().__init__(view)
+        self.view = view
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def row_height(self, base: QFont) -> int:
+        return 2 * self.PAD_Y + QFontMetrics(self.fonts(base)["bold"]).height() + 2
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(max(option.rect.width(), 160), self.row_height(option.font))
+
+    def layout(self, row: ScorerRow, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        fm = {k: QFontMetrics(v) for k, v in f.items()}
+        r = QRectF(rect)
+        left, right = r.left() + self.PAD_X, r.right() - self.PAD_X
+        h = fm["bold"].height()
+        y = r.top() + (r.height() - h) / 2
+        segs: list[CardSeg] = []
+        nums = [("goals", f"{row.goals}골", "bold"), ("assists", f"{row.assists}어시", "main")]
+        widths = [fm[font].horizontalAdvance(text) for _r, text, font in nums]
+        x = right - sum(widths) - self.ITEM_GAP
+        limit = x - self.ITEM_GAP
+        for (role, text, _font), w in zip(nums, widths):
+            segs.append(CardSeg(role, QRectF(x, y, w, h), text, w))
+            x += w + self.ITEM_GAP
+        rank = f"{row.rank}"
+        rw = fm["small"].horizontalAdvance("00")
+        segs.append(CardSeg("rank", QRectF(left, y, rw, h), rank, fm["small"].horizontalAdvance(rank)))
+        x = left + rw + 6
+        ih = fm["main"].height()
+        segs.append(CardSeg("icon", QRectF(x, y + (h - ih) / 2, ih * 1.4, ih), "", 0))
+        x += ih * 1.4 + 6
+        badge = f"{row.grade}" if row.grade >= 1 else ""
+        bw = fm["small"].horizontalAdvance(badge) + 2 * self.BADGE_PAD if badge else 0
+        full = fm["bold"].horizontalAdvance(row.name)
+        w = max(0.0, min(full, limit - x - (bw + 6 if bw else 0)))
+        segs.append(CardSeg("name", QRectF(x, y, w, h), row.name, full))
+        if badge:
+            segs.append(CardSeg("grade", QRectF(x + w + 6, y + 1, bw, h - 2), badge, bw))
+        return segs
+
+    def overflow(self, row: ScorerRow, width: int, base: QFont) -> list[str]:
+        """그 폭에서 잘리거나 겹치는 조각 — 이름은 잘려도 된다(툴팁에 전체) · 숫자·배지가 잘리거나 이름 자리(순위·배지 뒤)를
+        파고들면 스모크가 FAIL(숫자는 오른쪽부터 제 폭대로 놓여 폭으로는 안 잘린다 — 왼쪽 끝으로 잰다)."""
+        segs = self.layout(row, QRectF(0, 0, width, self.row_height(base)), base)
+        name_left = next(s.rect.left() for s in segs if s.role == "name")
+        return [s.role for s in segs if s.text and s.role != "name"
+                and (s.full > s.rect.width() + 0.5 or (s.role in ("goals", "assists") and s.rect.left() < name_left - 0.5))]
+
+    def paint(self, painter, option, index) -> None:
+        row = index.data(ROW_ROLE)
+        if row is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, row)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, row: ScorerRow) -> None:
+        f = self.fonts(option.font)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            p.fillRect(option.rect, QColor(T.blend(T.PANEL, T.TEXT, 0.04)))
+        colors = {"rank": T.TEXT_DIM, "name": T.TEXT, "goals": T.GOOD, "assists": T.TEXT}
+        fonts = {"rank": "small", "name": "bold", "goals": "bold", "assists": "main", "grade": "small"}
+        for s in self.layout(row, option.rect, option.font):
+            if s.role == "icon":
+                pm = self.view.icon("season", row.season)
+                if pm is not None and not pm.isNull():
+                    scaled = pm.scaled(s.rect.size().toSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                    p.drawPixmap(QPointF(s.rect.left(), s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            font = f[fonts[s.role]]
+            p.setFont(font)
+            if s.role == "grade":
+                bg, fg = _grade_badge_colors(s.text)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(bg))
+                p.drawRoundedRect(s.rect, s.rect.height() / 2, s.rect.height() / 2)
+                p.setPen(QColor(fg))
+                p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
+                continue
+            p.setPen(QColor(colors[s.role]))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(font).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            align = Qt.AlignmentFlag.AlignRight if s.role == "rank" else Qt.AlignmentFlag.AlignLeft
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        if row is not None and row.tip:
+            QToolTip.showText(event.globalPos(), row.tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class ScorerList(CardListView):
+    """골·어시스트 순위(65 M8 · 슛 맵 오른쪽) — 줄 수만큼 높이 고정(스크롤 패널 안). 시즌 배지는 CardListView 의 그림 표."""
+
+    def __init__(self):
+        super().__init__()
+        self.scorer_delegate = ScorerDelegate(self)
+        self.setItemDelegate(self.scorer_delegate)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setStyleSheet("QListView { background: transparent; border: none; }")
+
+    def icon_keys(self, row: ScorerRow) -> tuple:
+        return (("season", row.season),)
+
+    def set_rows(self, rows: list) -> None:
+        super().set_rows(rows)
+        self.setFixedHeight(self.rowCount() * self.scorer_delegate.row_height(self.font()) + 2 * self.frameWidth() + 2)
 
 
 class BarRow(QWidget):
@@ -1519,202 +3127,89 @@ class BarRow(QWidget):
         v.addWidget(bar)
 
 
-class RatioBarRow(QWidget):
-    """비율 한 줄 — 이름 · 적중/시도 · 비율 · 막대.
+class Segmented(QFrame):
+    """작은 전환 단추 묶음(66 G2 — [일별 | 시간별]). 하나만 눌린다 · 못 고르는 칸은 set_option_enabled 로 끄고 이유는 툴팁."""
+    changed = pyqtSignal(int)
 
-    BarRow 와 분모가 다르다. BarRow 는 "전체 골 중 이 유형이 몇 %"(분모=합계)라
-    막대들을 더하면 100%가 되지만, 여기는 "이 유형으로 찼을 때 몇 %가 들어가나"
-    (분모=그 칸의 시도)라 칸마다 독립이다. 그래서 막대도 각자 0~100%로 그린다.
-
-    enough=False 면 비율을 숨기고 회색으로 낸다 — 2번 차서 1번 들어간 걸
-    50%라고 적으면 사용자가 그걸 실력으로 읽는다.
-    """
-
-    def __init__(self, name: str, hit: int, total: int, color: str,
-                 enough: bool = True, extra: str = ""):
+    def __init__(self, options: list[str], current: int = 0):
         super().__init__()
-        pct = (hit / total * 100) if total else 0.0
-        v = QVBoxLayout(self)
-        v.setContentsMargins(0, 2, 0, 2)
-        v.setSpacing(2)
+        self.setObjectName("segmented")
+        self.setStyleSheet(
+            f"QFrame#segmented {{ border: 1px solid {T.BORDER}; border-radius: 6px; }}"
+            f"QFrame#segmented QPushButton {{ border: none; border-radius: 5px; padding: 2px 10px;"
+            f" background: transparent; color: {T.TEXT_DIM}; }}"
+            f"QFrame#segmented QPushButton:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; }}")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(2, 2, 2, 2)
+        lay.setSpacing(2)
+        self.buttons: list[QPushButton] = []
+        for i, text in enumerate(options):
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.setChecked(i == current)
+            b.clicked.connect(lambda _=False, k=i: self.set_current(k, emit=True))
+            lay.addWidget(b)
+            self.buttons.append(b)
+        self._current = current
 
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        lb = QLabel(name)
-        lb.setStyleSheet(f"color: {T.TEXT};")
-        top.addWidget(lb)
-        top.addStretch(1)
-        if extra:
-            ex = QLabel(extra)
-            ex.setStyleSheet(f"color: {T.TEXT_DIM};")
-            top.addWidget(ex)
-            # 간격이 없으면 "xG 2.4" + "2/8" 이 "2.42/8" 한 숫자로 읽힌다.
-            top.addSpacing(12)
-        n = QLabel(f"{hit}/{total}")
-        n.setStyleSheet(f"color: {T.TEXT_DIM};")
-        top.addWidget(n)
-        p = QLabel(f"{pct:.0f}%" if enough else NA)
-        p.setStyleSheet(f"color: {color if enough else T.TEXT_DIM};"
-                        f" font-weight: bold;")
-        p.setFixedWidth(44)
-        p.setAlignment(Qt.AlignmentFlag.AlignRight
-                       | Qt.AlignmentFlag.AlignVCenter)
-        top.addWidget(p)
-        v.addLayout(top)
+    def current(self) -> int:
+        return self._current
 
-        bar = QProgressBar()
-        bar.setRange(0, 1000)
-        # 표본 미달이면 막대도 채우지 않는다. 숫자는 "—"로 숨겨 놓고 막대만
-        # 절반까지 그리면 결국 그 비율을 말하는 셈이라 앞뒤가 안 맞는다.
-        bar.setValue(int(pct * 10) if enough else 0)
-        bar.setTextVisible(False)
-        bar.setFixedHeight(6)
-        chunk = color if enough else T.BORDER
-        bar.setStyleSheet(
-            f"QProgressBar {{ background: {T.PANEL_2}; border: none;"
-            f" border-radius: 3px; }}"
-            f"QProgressBar::chunk {{ background: {chunk}; border-radius: 3px; }}")
-        v.addWidget(bar)
+    def set_current(self, i: int, emit: bool = False) -> None:
+        for k, b in enumerate(self.buttons):
+            b.setChecked(k == i)
+        if i != self._current:
+            self._current = i
+            if emit:
+                self.changed.emit(i)
+
+    def set_option_enabled(self, i: int, enabled: bool, tip: str = "") -> None:
+        self.buttons[i].setEnabled(enabled)
+        self.buttons[i].setToolTip(tip)
 
 
-class DivisionChart(QWidget):
-    """등급(디비전) 추이 계단 그래프 — QPainter 직접.
+class ChoiceChips(Segmented):
+    """콤보 꼴로 다루는 칩 묶음(67 R1) — findData · currentData · setCurrentIndex · currentIndexChanged.
+    거르기 상태를 콤보와 칩이 같이 쓸 때(app_main._tc_filters — 한 곳이 값을 바꾸면 나머지를 신호 없이 맞춘다)."""
+    currentIndexChanged = pyqtSignal(int)
 
-    points: (라벨, divisionId) 리스트, 날짜 오름차순(1.3.1 부터 하루 한 점 — stats.daily_division).
-    names: divisionId -> 등급 이름(오픈API division 메타). 등급은 id 가
-    작을수록 높다 — Y축은 위가 높은 등급이 되게 뒤집어 그린다.
-    Y 레벨은 데이터에 나온 등급들만 쓴다(전체 18단계를 다 그리면 실제 변화
-    폭이 눌려서 안 보인다).
-    tips: 점마다 툴팁(그날 처음·마지막·최고) · markers: 세로 점선을 그을 점 번호(슈챔 진입한 날) ·
-    peaks: {점 번호: 등급} — 그날 마지막보다 높이 올랐던 등급(슈챔에 올랐다 내려온 날). 계단은 마지막 등급 그대로 두고 그 등급 줄에
-    점을 하나 더 찍는다 — 하루 한 점(마지막)이라 슈챔에 오른 날도 챔스로만 보였다(2026-10-19 사용자)."""
+    def __init__(self, items: list[tuple[str, object]], current: int = 0):
+        super().__init__([t for t, _d in items], current)
+        self._data = [d for _t, d in items]
+        self.changed.connect(self.currentIndexChanged)
 
-    def __init__(self):
-        super().__init__()
-        self._points: list[tuple[str, int]] = []
-        self._names: dict[int, str] = {}
-        self._tips: list[str] = []
-        self._markers: list[int] = []
-        self._peaks: dict[int, int] = {}
-        self._hits: list[tuple[QRectF, str]] = []
-        self.marks: dict = {}
-        self.setMinimumHeight(220)
-        self.setMouseTracking(True)
+    def count(self) -> int:
+        return len(self._data)
 
-    def set_data(self, points: list[tuple[str, int]], names: dict[int, str],
-                 tips: list[str] | None = None, markers=(), peaks: dict[int, int] | None = None) -> None:
-        self._points = points
-        self._names = names
-        self._tips = list(tips) if tips is not None else []
-        self._markers = sorted(set(markers))
-        self._peaks = dict(peaks or {})
-        self.update()
+    def findData(self, data) -> int:
+        return self._data.index(data) if data in self._data else -1
 
-    def mouseMoveEvent(self, event) -> None:
-        pos = event.position()
-        for area, text in self._hits:
-            if area.contains(pos):
-                QToolTip.showText(event.globalPosition().toPoint(), text, self)
-                return
-        QToolTip.hideText()
+    def itemData(self, i: int):
+        return self._data[i]
 
-    def leaveEvent(self, event) -> None:
-        QToolTip.hideText()
-        super().leaveEvent(event)
+    def currentIndex(self) -> int:
+        return self._current
 
-    def paintEvent(self, event) -> None:
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        ml, mr, mt, mb = 96, 16, 14, 26  # 왼쪽 여백은 등급 이름이 들어갈 만큼
-        plot_w = max(w - ml - mr, 1)
-        plot_h = max(h - mt - mb, 1)
-        p.fillRect(self.rect(), QColor(T.PANEL))
-        self._hits = []
-        self.marks = {}
+    def currentData(self):
+        return self._data[self._current] if 0 <= self._current < len(self._data) else None
 
-        font = p.font()
-        font.setPointSize(9)
-        p.setFont(font)
+    def currentText(self) -> str:
+        return self.buttons[self._current].text() if 0 <= self._current < len(self.buttons) else ""
 
-        if not self._points:
-            p.setPen(QColor(T.TEXT_DIM))
-            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                      "표시 구간에 등급 정보가 있는 경기가 없습니다.")
-            return
+    def setCurrentIndex(self, i: int) -> None:
+        self.set_current(i, emit=True)
 
-        n = len(self._points)
-        peaks = {i: div for i, div in self._peaks.items() if 0 <= i < n}
-        # id 내림차순 = 낮은 등급부터 → y 아래에서 위로. 그날 최고(peaks)의 등급도 줄을 갖는다
-        levels = sorted({div for _, div in self._points} | set(peaks.values()), reverse=True)
-        y_of = {div: (mt + plot_h - (plot_h * i / max(len(levels) - 1, 1))
-                      if len(levels) > 1 else mt + plot_h / 2)
-                for i, div in enumerate(levels)}
 
-        for div in levels:
-            y = y_of[div]
-            p.setPen(QColor(T.BORDER))
-            p.drawLine(ml, int(y), w - mr, int(y))
-            p.setPen(QColor(T.TEXT_DIM))
-            p.drawText(2, int(y) - 7, ml - 8, 14,
-                      Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                      self._names.get(div, str(div)))
-
-        def x_of(i: int) -> float:
-            return ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2)
-
-        pts = [QPointF(x_of(i), y_of[div])
-               for i, (_, div) in enumerate(self._points)]
-
-        # 슈챔 진입한 날 — 세로 점선(계단 밑에 깔리게 먼저)
-        shown_markers = [i for i in self._markers if 0 <= i < n]
-        if shown_markers:
-            pen = QPen(QColor(T.CHART_NEUTRAL), 1)
-            pen.setStyle(Qt.PenStyle.DotLine)
-            p.setPen(pen)
-            for i in shown_markers:
-                p.drawLine(QPointF(pts[i].x(), mt), QPointF(pts[i].x(), mt + plot_h))
-        self.marks["markers"] = len(shown_markers)
-
-        # 계단형 — 등급은 경기 사이에 "서서히"가 아니라 딱 바뀌는 값이다
-        p.setPen(QPen(QColor(T.YELLOW), 2))
-        for a, b in zip(pts, pts[1:]):
-            p.drawLine(a, QPointF(b.x(), a.y()))
-            p.drawLine(QPointF(b.x(), a.y()), b)
-
-        p.setPen(QPen(QColor(T.PANEL), 1))
-        p.setBrush(QColor(T.YELLOW))
-        prev_div = None
-        for pt, (_, div) in zip(pts, self._points):
-            if div != prev_div:  # 등급이 바뀐 지점만 점을 찍는다 — 다 찍으면 떡칠
-                p.drawEllipse(pt, 3.5, 3.5)
-                prev_div = div
-
-        # 그날 최고 — 마지막 등급 점에서 그 줄까지 점선 + 큰 점(계단과 헷갈리지 않게 선은 잇지 않는다)
-        line = QPen(QColor(T.YELLOW), 1)
-        line.setStyle(Qt.PenStyle.DotLine)
-        for i, div in sorted(peaks.items()):
-            top = QPointF(pts[i].x(), y_of[div])
-            p.setPen(line)
-            p.drawLine(pts[i], top)
-            p.setPen(QPen(QColor(T.PANEL), 1))
-            p.setBrush(QColor(T.YELLOW))
-            p.drawEllipse(top, 4.5, 4.5)
-        self.marks["peaks"] = len(peaks)
-
-        p.setPen(QColor(T.TEXT_DIM))
-        step = max(1, n // 6)
-        label_y = h - mb + 6
-        for i in range(0, n, step):
-            p.drawText(int(pts[i].x()) - 24, label_y, 48, 14,
-                      Qt.AlignmentFlag.AlignCenter, self._points[i][0])
-
-        # 마우스 올림 — 가장 가까운 점까지의 세로 띠
-        half = plot_w / (2 * (n - 1)) if n > 1 else plot_w / 2
-        for i, pt in enumerate(pts):
-            label, div = self._points[i]
-            tip = self._tips[i] if i < len(self._tips) else f"{label} · {self._names.get(div, div)}"
-            self._hits.append((QRectF(pt.x() - half, mt, 2 * half, plot_h), tip))
+def chip_toggle(text: str) -> QPushButton:
+    """켜고 끄는 칩 하나(67 R1 [비주류]) — QCheckBox 와 같은 setChecked/toggled. 모양은 Segmented 의 눌린 칸."""
+    b = QPushButton(text)
+    b.setCheckable(True)
+    b.setObjectName("chipToggle")
+    b.setStyleSheet(
+        f"QPushButton#chipToggle {{ border: 1px solid {T.BORDER}; border-radius: 6px; padding: 2px 10px;"
+        f" background: transparent; color: {T.TEXT_DIM}; }}"
+        f"QPushButton#chipToggle:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; border-color: {T.ACCENT_SOFT}; }}")
+    return b
 
 
 class ZoomBar(QWidget):
@@ -1845,10 +3340,19 @@ class CalCell(NamedTuple):
     arrow: int          # +1 ▲ · −1 ▼ · 0
     tip: str
     weak: bool = False  # 판수가 적어 화살표를 안 잰 날 — 흐리게
+    fc: int = 0         # 그날 승리 보상 FC — 칸 배경 진하기(66 G5)
+
+
+def cal_cell_colors(fc: int, fc_max: int, weak: bool) -> tuple[str, str]:
+    """칸 (배경, 흐린 글자색) — 배경 = PANEL_2 에 ACCENT_FILL 을 그날 FC ÷ 이 달 최대 × `CAL_FC_MAX_MIX` 만큼(66 G5).
+    미달 날·최대 0 은 0(M11 — 미달 날은 흐린 글자 그대로 보여야). 날짜·판수 글자는 TEXT_DIM 이 4.5 밑이면 TEXT 로(M4)."""
+    mix = 0.0 if weak or fc_max <= 0 else min(max(fc, 0) / fc_max, 1.0) * config.CAL_FC_MAX_MIX
+    bg = T.blend(T.PANEL_2, T.ACCENT_FILL, mix)
+    return bg, (T.TEXT_DIM if T.contrast(T.TEXT_DIM, bg) >= 4.5 else T.TEXT)
 
 
 class CalendarGrid(QWidget):
-    """한 달 달력(55 D1) — 일요일부터 7칸 × 주. 경기가 있던 날만 칸을 채운다."""
+    """한 달 달력(55 D1) — 일요일부터 7칸 × 주. 경기가 있던 날만 칸을 채운다 · 배경 진하기 = 그날 FC(66 G5)."""
     HEAD_H = 22
     MIN_CELL_H = 54
 
@@ -1857,12 +3361,14 @@ class CalendarGrid(QWidget):
         self._year, self._month = 2000, 1
         self._cells: dict[int, CalCell] = {}
         self._today = None
+        self._fc_max = 0
         self._hits: list[tuple[QRectF, str]] = []
         self.setMouseTracking(True)
         self.setMinimumHeight(self.HEAD_H + 6 * self.MIN_CELL_H)
 
-    def set_data(self, year: int, month: int, cells: dict[int, CalCell], today=None) -> None:
+    def set_data(self, year: int, month: int, cells: dict[int, CalCell], today=None, fc_max: int = 0) -> None:
         self._year, self._month, self._cells, self._today = year, month, dict(cells), today
+        self._fc_max = fc_max
         self.update()
 
     def mouseMoveEvent(self, event) -> None:
@@ -1901,28 +3407,30 @@ class CalendarGrid(QWidget):
                     continue
                 rect = QRectF(c * cw + 2, self.HEAD_H + r * ch + 2, cw - 4, ch - 4)
                 cell = self._cells.get(d)
+                bg, dim = cal_cell_colors(cell.fc, self._fc_max, cell.weak) if cell else (T.PANEL, T.TEXT_DIM)
                 p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(T.PANEL_2 if cell else T.PANEL))
+                p.setBrush(QColor(bg))
                 p.drawRoundedRect(rect, 4, 4)
                 is_today = self._today is not None and self._today == date(self._year, self._month, d)
                 p.setPen(QPen(QColor(T.CHART_NEUTRAL if is_today else T.BORDER), 2 if is_today else 1))
                 p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawRoundedRect(rect, 4, 4)
                 p.setFont(small)
-                p.setPen(QColor(T.TEXT_DIM))
+                p.setPen(QColor(dim))
                 p.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, str(d))
                 if cell is None:
                     continue
-                arrow = {1: ("▲", T.CHART_UP), -1: ("▼", T.CHART_DOWN)}.get(cell.arrow)
+                # ▲▼ 는 글자 토큰(GOOD/BAD) — 밝은 CHART_DOWN 은 섞기 0 에서도 3.25 라 진한 칸에서 3.0 을 못 지킨다(66 G5)
+                arrow = {1: ("▲", T.GOOD), -1: ("▼", T.BAD)}.get(cell.arrow)
                 if arrow:
                     p.setPen(QColor(arrow[1]))
                     p.drawText(rect.adjusted(5, 3, -5, -3), Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
                                arrow[0])
                 p.setFont(big)
-                p.setPen(QColor(T.TEXT_DIM if cell.weak else T.TEXT))
+                p.setPen(QColor(dim if cell.weak else T.TEXT))
                 p.drawText(rect.adjusted(4, 0, -4, -ch * 0.18), Qt.AlignmentFlag.AlignCenter, cell.rate)
                 p.setFont(small)
-                p.setPen(QColor(T.TEXT_DIM))
+                p.setPen(QColor(dim))
                 fm = QFontMetrics(small)
                 p.drawText(rect.adjusted(4, 0, -4, -3), Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
                            fm.elidedText(cell.sub, Qt.TextElideMode.ElideRight, int(rect.width() - 8)))
@@ -2038,10 +3546,10 @@ class _PlayerChip(QWidget):
         fm = QFontMetrics(small)
         pos_w = min(w // 2 - 4, fm.horizontalAdvance(self.card.pos_name) + 8)
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(self.accent))
+        p.setBrush(QColor(T.blend(T.PANEL, self.accent, T.CHIP_SOFT_MIX)))   # 태그 꼴 — 글자 = 그 색 · 바탕 = 그 색 10%
         pos_r = QRectF(4, 4, pos_w, top_h - 2)
         p.drawRoundedRect(pos_r, 3, 3)
-        p.setPen(QColor(T.ON_ACCENT))
+        p.setPen(QColor(self.accent))
         p.drawText(pos_r, Qt.AlignmentFlag.AlignCenter, self.card.pos_name)
         if self.card.grade is not None:
             gbg, gfg = _grade_badge_colors(self.card.grade)
@@ -2238,12 +3746,12 @@ class PitchWidget(QWidget):
         · 최전방 공격(20-27) 빨강. 공미(17-19, RAM/CAM/LAM)도 미드필더로 친다 —
         스트라이커·윙어처럼 빨강으로 보이면 헷갈린다는 지적을 반영."""
         if sp_position == 0:
-            return T.YELLOW
+            return T.CHIP_GK
         if 1 <= sp_position <= 8:
-            return T.BLUE
+            return T.CHIP_DF
         if 9 <= sp_position <= 19:
-            return T.GREEN
-        return T.RED
+            return T.CHIP_MF
+        return T.CHIP_FW
 
 
 class ShotMapWidget(QWidget):
@@ -2306,7 +3814,7 @@ class ShotMapWidget(QWidget):
 
         if self._assists:
             self._paint_assists(p, w, h, m)
-        colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.YELLOW), 2: QColor(T.PITCH_MISS)}
+        colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.WARN_FILL), 2: QColor(T.PITCH_MISS)}
         # 빗나감 → 유효 → 골 순으로 그려서 골이 맨 위에 오게 한다.
         order = sorted(self._shots, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
         for s in order:

@@ -60,26 +60,6 @@ def division_trend(details: list, ouid: str) -> list[tuple[datetime, int]]:
     out.sort(key=lambda t: t[0])
     return out
 
-class DayDivision(NamedTuple):
-    """하루 등급 — 그래프 점은 last, 툴팁에 first·best(id 가 작을수록 높다)."""
-    day: date
-    last: int
-    first: int
-    best: int
-
-
-def daily_division(points: list[tuple[datetime, int]]) -> list[DayDivision]:
-    """division_trend 결과를 하루 한 점으로 — 그날 마지막 경기 등급(오래된 날부터).
-
-    경기마다 한 점이면 1만 경기 계정이 1만 점(R7: 10,949 → 111일)이라 계단이 읽히지 않는다."""
-    days: dict[date, DayDivision] = {}
-    for t, div in sorted(points, key=lambda x: x[0]):
-        d = t.date()
-        cur = days.get(d)
-        days[d] = DayDivision(d, div, div, div) if cur is None else \
-            DayDivision(d, div, cur.first, min(cur.best, div))
-    return [days[d] for d in sorted(days)]
-
 
 def division_entries(points: list[tuple[datetime, int]],
                      division: int = SUPER_CHAMPION_DIVISION_ID) -> tuple[list[datetime], bool]:
@@ -783,6 +763,49 @@ def result_breakdown(details: list[dict], ouid: str, mixed: bool | None = None) 
     return rb
 
 
+@dataclass
+class ShootoutKeeper:
+    """승부차기에서 만난 상대 선발 GK 카드 하나(65 M6) — 승부차기엔 무승부가 없어 승률 = 승 ÷ (승+패)."""
+    sp_id: int
+    win: int = 0
+    lose: int = 0
+
+    @property
+    def games(self) -> int:
+        return self.win + self.lose
+
+    @property
+    def win_rate(self) -> float:
+        return self.win / self.games * 100 if self.games else 0.0
+
+
+def shootout_keepers(details: list[dict], ouid: str) -> list[ShootoutKeeper]:
+    """승부차기 경기의 상대 선발 GK(spPosition 0)별 내 승부차기 성적 — 많이 만난 순(같으면 spId 순).
+
+    승부차기 판정은 result_breakdown 과 같다(몰수 빼고 · 어느 쪽이든 shootOutScore 가 있으면). 상대 GK 가 없거나
+    결과가 승·패가 아닌 경기는 뺀다. 카드(spId)마다 따로 — 같은 선수라도 시즌이 다르면 다른 줄이다."""
+    acc: dict[int, ShootoutKeeper] = {}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or end_kind(me, opp) in ("몰수승", "몰수패"):
+            continue
+        if not (_num(me.get("shoot") or {}, "shootOutScore") or _num(opp.get("shoot") or {}, "shootOutScore")):
+            continue
+        res = _result_of(me)
+        if "승" not in res and "패" not in res:
+            continue
+        gk = next((p.get("spId") for p in opp.get("player") or []
+                   if p.get("spPosition") == GK_POSITION and isinstance(p.get("spId"), int)), None)
+        if gk is None:
+            continue
+        k = acc.setdefault(gk, ShootoutKeeper(gk))
+        if "승" in res:
+            k.win += 1
+        else:
+            k.lose += 1
+    return sorted(acc.values(), key=lambda k: (-k.games, k.sp_id))
+
+
 # ── 규율·불운 ─────────────────────────────────────────────────────────────
 # (이름, matchDetail 키) — 골대는 matchDetail 이 아니라 shootDetail[].hitPost 에 있다(None 자리).
 DISCIPLINE_AXES = [
@@ -1442,6 +1465,119 @@ def shot_type_breakdown(sm: ShotMap) -> list[ShotBucket]:
     return sorted(buckets.values(), key=lambda b: (-b.shots, b.label))
 
 
+def shot_type_counts(details: list[dict], ouid: str) -> tuple[list[ShotBucket], list[ShotBucket]]:
+    """(내 슛, 상대 슛) 각각 shot_type_breakdown(shot_map(...)) 과 같은 줄(같은 거르기 · 같은 순서) — xG 는 0.
+    Shot 을 안 만들고 한 번 돌며 양쪽을 센다 — [경기 결과](65 M6)에서 shot_map 두 번은 1만 경기 첫 방문을 0.3초 늘렸다(실측)."""
+    sides: tuple[dict, dict] = ({}, {})
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        for p, buckets in ((me, sides[0]), (opp, sides[1])):
+            for sd in p.get("shootDetail") or []:
+                r = sd.get("result")
+                if r not in _SHOT_RESULTS or not isinstance(sd.get("x"), (int, float)) \
+                        or not isinstance(sd.get("y"), (int, float)):
+                    continue
+                name = goal_type_name(sd.get("type"))
+                b = buckets.get(name)
+                if b is None:
+                    b = buckets[name] = ShotBucket(name)
+                b.shots += 1
+                if r == SHOT_GOAL:
+                    b.goals += 1
+                    b.on_target += 1
+                elif r == SHOT_ON_TARGET:
+                    b.on_target += 1
+    mine, theirs = (sorted(s.values(), key=lambda b: (-b.shots, b.label)) for s in sides)
+    return mine, theirs
+
+
+@dataclass
+class ShotSide:
+    """한쪽(나 · 상대)의 슛 합 — [슛 맵] 요약 카드(65 M8)."""
+    shots: int = 0
+    on_target: int = 0   # 골 포함
+    goals: int = 0
+    xg: float = 0.0
+
+
+@dataclass
+class Scorer:
+    """골·어시스트 순위 한 줄 — 카드(spId)마다. 강화는 그 카드로 나선 경기 중 가장 높은 값(aggregate_players 와 같다)."""
+    sp_id: int
+    goals: int = 0
+    assists: int = 0
+    grade: int = 0
+    games: int = 0
+
+
+@dataclass
+class ShotSummary:
+    games: int = 0
+    mine: ShotSide = field(default_factory=ShotSide)
+    opp: ShotSide = field(default_factory=ShotSide)
+    best: dict | None = None      # 가장 많이 넣은 경기 원문(같으면 최근) — 상세 창을 연다
+    worst: dict | None = None     # 가장 많이 내준 경기 원문
+    scorers: list = field(default_factory=list)   # Scorer — 골 + 어시 많은 순
+
+    def per_game(self, n: float) -> float:
+        return n / self.games if self.games else 0.0
+
+
+def shot_summary(details: list[dict], ouid: str) -> ShotSummary:
+    """[슛 맵] 오른쪽 패널(65 M8) — 양쪽 슛·골·xG, 최다 득점·실점 경기, 내 골·어시스트 순위를 한 번 돌며.
+    경기는 versus_profile 과 같은 기준(승·무·패가 아닌 "오류" · 몰수 뺌 — 슛이 없거나 끊겨 경기당 값을 흔든다).
+    슛은 shot_map 과 같은 거르기(좌표·결과가 정상인 것) · 최다 경기는 점수(goalTotal) · details 최신순이라 같은 수면 앞(최근)."""
+    out = ShotSummary()
+    best = worst = -1.0
+    acc: dict[int, Scorer] = {}
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp or _wdl_of(_result_of(me)) is None or end_kind(me, opp) != "정상":
+            continue
+        out.games += 1
+        for p, side in ((me, out.mine), (opp, out.opp)):
+            for sd in p.get("shootDetail") or []:
+                x, y, r = sd.get("x"), sd.get("y"), sd.get("result")
+                if r not in _SHOT_RESULTS or not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+                    continue
+                side.shots += 1
+                side.xg += shot_xg(float(x), float(y), bool(sd.get("inPenalty")), shot_type_code(sd.get("type")))
+                if r == SHOT_GOAL:
+                    side.goals += 1
+                    side.on_target += 1
+                elif r == SHOT_ON_TARGET:
+                    side.on_target += 1
+        gf, ga = _num(me.get("shoot") or {}, "goalTotal"), _num(opp.get("shoot") or {}, "goalTotal")
+        if gf > best:
+            best, out.best = gf, d
+        if ga > worst:
+            worst, out.worst = ga, d
+        # 선수 줄이 경기마다 18개라 1만 경기면 23만 번 — 시즌 전부 구간 첫 방문에서 이 고리가 0.3초였다(실측).
+        # _played 는 교체 명단(28)일 때만 부르고 0 인 기록은 더하지 않는다(같은 결과 · 약 절반)
+        for p in me.get("player") or ():
+            sp_id = p.get("spId")
+            if not isinstance(sp_id, int) or (p.get("spPosition") == SUB_POSITION and not _played(p)):
+                continue
+            s = acc.get(sp_id)
+            if s is None:
+                s = acc[sp_id] = Scorer(sp_id)
+            s.games += 1
+            st = p.get("status")
+            if st:
+                if st.get("goal"):
+                    s.goals += int(_num(st, "goal"))
+                if st.get("assist"):
+                    s.assists += int(_num(st, "assist"))
+            grade = p.get("spGrade")
+            if grade and grade > s.grade:
+                s.grade = int(_num(p, "spGrade"))
+    out.scorers = sorted((s for s in acc.values() if s.goals or s.assists),
+                         key=lambda s: (-(s.goals + s.assists), -s.goals, -s.games, s.sp_id))
+    return out
+
+
 def shot_distance_breakdown(sm: ShotMap) -> list[ShotBucket]:
     """거리별 효율. 가까운 순 고정 — 순서가 바뀌면 구간 비교가 안 된다."""
     buckets = _bucketize(sm.shots, _distance_label)
@@ -1968,6 +2104,187 @@ def team_profile(details: list[dict], ouid: str) -> TeamProfile:
     for (name, unit), m, o in zip(PROFILE_AXES, values(sums["mine"]), values(sums["opp"])):
         prof.axes.append(ProfileAxis(name, unit, m, o))
     return prof
+
+
+# ── 나와 상대(3.1.1 · 65 M1) ───────────────────────────────────────────────
+# (이름, 단위, 클수록 좋음 — None 은 좋고 나쁨이 없는 성향, 값 = (분자 키, 분모 키 | None=경기 수)).
+# team_profile(레이더·구단주 비교 축)과 따로 둔다 — 그 축 이름을 구단주 비교가 읽는다.
+VERSUS_ROWS = (
+    ("점유율", "%", None, ("possession", None)),
+    ("경기당 슛", "회", True, ("shots", None)),
+    ("유효슛 결정력", "%", True, ("goals", "on_target")),
+    ("패스 성공률", "%", True, ("pass_ok", "pass_try")),
+    ("긴 패스 비중", "%", None, ("long_through", "pass_try")),   # 긴 패스 + 스루 — 기준 화면 같은 계정 28% 와 맞는 정의(10-26)
+    ("경기당 드리블", "회", None, ("dribble", None)),
+    ("태클 성공률", "%", True, ("tackle_ok", "tackle_try")),
+)
+
+
+@dataclass
+class VersusLine:
+    name: str
+    unit: str
+    better_high: bool | None
+    mine: float
+    opp: float
+
+    @property
+    def share(self) -> float:
+        tot = self.mine + self.opp
+        return self.mine / tot if tot else 0.5
+
+    @property
+    def gap(self) -> bool:
+        """'벌어진 곳' — 좋고 나쁨이 있는 줄에서 내가 문턱 넘게 뒤질 때. 비율 줄은 %p, 횟수 줄은 상대 대비 비율."""
+        if self.better_high is None:
+            return False
+        diff = (self.mine - self.opp) if self.better_high else (self.opp - self.mine)
+        if self.unit == "%":
+            return diff <= -config.VERSUS_GAP_PCTP
+        return bool(self.opp) and diff / self.opp <= -config.VERSUS_GAP_REL
+
+
+@dataclass
+class VersusProfile:
+    games: int = 0
+    lines: list[VersusLine] = field(default_factory=list)
+
+    @property
+    def gaps(self) -> list[VersusLine]:
+        return [ln for ln in self.lines if ln.gap]
+
+
+def versus_profile(details: list[dict], ouid: str) -> VersusProfile:
+    """같은 경기들의 나 / 상대 일곱 줄. 승·무·패가 아닌 경기("오류")와 **몰수**는 뺀다 — 몰수 경기는 슛·패스가
+    없거나 끊겨 평균을 흔든다. 비율 줄은 전체 합의 비율(team_profile 과 같은 이유)."""
+    sums = {side: defaultdict(float) for side in ("mine", "opp")}
+    games = 0
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is None or not opp or _wdl_of(_result_of(me)) is None or end_kind(me, opp) != "정상":
+            continue
+        games += 1
+        for side, p in (("mine", me), ("opp", opp)):
+            shoot, pas, dfn = p.get("shoot") or {}, p.get("pass") or {}, p.get("defence") or {}
+            md = p.get("matchDetail") or {}
+            s = sums[side]
+            s["possession"] += _num(md, "possession")
+            s["dribble"] += _num(md, "dribble")
+            s["shots"] += _num(shoot, "shootTotal")
+            s["on_target"] += _num(shoot, "effectiveShootTotal")
+            s["goals"] += _num(shoot, "goalTotal")
+            s["pass_try"] += _num(pas, "passTry")
+            s["pass_ok"] += _num(pas, "passSuccess")
+            s["long_through"] += _num(pas, "longPassTry") + _num(pas, "throughPassTry")
+            s["tackle_try"] += _num(dfn, "tackleTry")
+            s["tackle_ok"] += _num(dfn, "tackleSuccess")
+    out = VersusProfile(games=games)
+    if not games:
+        return out
+    for name, unit, better, (num, den) in VERSUS_ROWS:
+        val = [(_ratio(sums[s][num], sums[s][den]) if den else sums[s][num] / games) for s in ("mine", "opp")]
+        out.lines.append(VersusLine(name, unit, better, val[0], val[1]))
+    return out
+
+
+# ── 경기 상세 창(3.1.1 · 65 M3) ─────────────────────────────────────────────
+# 한 경기의 나 / 상대 줄 — (이름, 단위, 클수록 좋음 — None 은 성향 · False 는 적을수록 좋음, (묶음, 키) | (묶음, 분자, 분모)).
+# 원문에 양쪽 다 없는 줄은 뺀다(match_versus) — 넥슨이 필드를 빼도 0 줄을 지어내지 않는다.
+MATCH_VERSUS_ROWS = (
+    ("점유율", "%", None, ("matchDetail", "possession")),
+    ("슈팅", "", True, ("shoot", "shootTotal")),
+    ("유효 슈팅", "", True, ("shoot", "effectiveShootTotal")),
+    ("박스 안 슈팅", "", True, ("shoot", "shootInPenalty")),
+    ("헤딩 슈팅", "", None, ("shoot", "shootHeading")),
+    ("패스 시도", "", None, ("pass", "passTry")),
+    ("패스 성공률", "%", True, ("pass", "passSuccess", "passTry")),
+    ("짧은 패스", "", None, ("pass", "shortPassTry")),
+    ("긴 패스", "", None, ("pass", "longPassTry")),
+    ("스루 패스", "", None, ("pass", "throughPassTry")),
+    ("드리블", "", None, ("matchDetail", "dribble")),
+    ("태클 성공", "", True, ("defence", "tackleSuccess")),
+    ("블록 성공", "", True, ("defence", "blockSuccess")),
+    ("코너킥", "", None, ("matchDetail", "cornerKick")),
+    ("오프사이드", "", False, ("matchDetail", "offsideCount")),
+    ("파울", "", False, ("matchDetail", "foul")),
+    ("경고", "", False, ("matchDetail", "yellowCards")),
+    ("퇴장", "", False, ("matchDetail", "redCards")),
+    ("평균 평점", "", True, ("matchDetail", "averageRating")),
+)
+# goalTime 구간 → 그 구간이 시작하는 분(전반 0 · 후반 45 · 연장 전반 90 · 연장 후반 105)
+PERIOD_START_MIN = {0: 0, 1: 45, 2: 90, 3: 105}
+
+
+def match_sides(detail: dict, ouid: str) -> tuple[dict | None, dict]:
+    """한 경기의 (내 matchInfo, 상대 matchInfo) — 화면(경기 상세 창)이 원문을 직접 훑지 않게. 내가 없으면 (None, …)."""
+    return _me_opp(detail, ouid)
+
+
+def match_versus(detail: dict, ouid: str) -> list[VersusLine]:
+    """한 경기의 나 / 상대 줄(MATCH_VERSUS_ROWS 순서). 양쪽 원문에 그 키가 없는 줄은 빠진다. 내가 없는 경기면 []."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return []
+    out = []
+    for name, unit, better, src in MATCH_VERSUS_ROWS:
+        group, keys = src[0], src[1:]
+        parts = [p.get(group) or {} for p in (me, opp or {})]
+        if not any(all(k in part for k in keys) for part in parts):
+            continue
+        if len(keys) == 2:
+            vals = [_ratio(_num(part, keys[0]), _num(part, keys[1])) for part in parts]
+        else:
+            vals = [_num(part, keys[0]) for part in parts]
+        out.append(VersusLine(name, unit, better, vals[0], vals[1]))
+    return out
+
+
+def latest_match_with(details: list[dict], ouid: str, nickname: str) -> dict | None:
+    """그 상대와 붙은 가장 최근 경기 원문(details 최신순 전제 — opponent_squad 와 같은 판정). 못 찾으면 None."""
+    for d in details:
+        me, opp = _me_opp(d, ouid)
+        if me is not None and (opp.get("nickname") or "-") == nickname:
+            return d
+    return None
+
+
+class MatchGoal(NamedTuple):
+    minute: float      # 경기 시작부터(연장은 90분 뒤로)
+    mine: bool
+    sp_id: int | None
+
+
+def match_goals(detail: dict, ouid: str) -> list[MatchGoal]:
+    """한 경기의 골 — 시간 순. 슛 기록(shootDetail)의 골만이라 자책골은 없다(goalTotal 과 다를 수 있다)."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return []
+    out = []
+    for mine, p in ((True, me), (False, opp or {})):
+        for sd in p.get("shootDetail") or []:
+            if sd.get("result") != GOAL_RESULT:
+                continue
+            period, sec = decode_goal_time(sd.get("goalTime"))
+            sp = sd.get("spId")
+            out.append(MatchGoal(PERIOD_START_MIN.get(period, 0) + sec / 60, mine, sp if isinstance(sp, int) else None))
+    out.sort(key=lambda g: g.minute)
+    return out
+
+
+def match_mvp(detail: dict, ouid: str) -> tuple[bool, int, float] | None:
+    """양쪽 선수 중 평점(status.spRating)이 가장 높은 한 명 — (내 쪽인가, spId, 평점). 평점이 하나도 없으면 None.
+    같은 평점이면 내 쪽 · 원문 앞 순서."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return None
+    best = None
+    for mine, p in ((True, me), (False, opp or {})):
+        for pl in p.get("player") or []:
+            r = _num(pl.get("status") or {}, "spRating")
+            sp = pl.get("spId")
+            if r > 0 and isinstance(sp, int) and (best is None or r > best[2]):
+                best = (mine, sp, r)
+    return best
 
 
 # ── 평점 추이(1.4.1 N9) ────────────────────────────────────────────────────

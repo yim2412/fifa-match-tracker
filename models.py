@@ -111,6 +111,12 @@ class MatchSummary:
     opp_shootout: int = 0
     draw_possible: bool | None = None   # 무승부가 날 수 있던 경기인가(양쪽 division) — 저장 형식 아님
     opp_division: int | None = None     # 그 경기 때 상대 등급(matchInfo 의 division — 화면 그림용) · 저장 형식 아님
+    opp_controller: str | None = None   # 상대 입력 장치(matchDetail.controller — "keyboard"·"gamepad") · 저장 형식 아님
+
+    @property
+    def opp_pad(self) -> bool:
+        """상대가 패드로 했나(65 M2 — 경기 목록 카드에 패드일 때만 아이콘 · 키보드가 95%라 늘 띄우면 안 보인다)."""
+        return self.opp_controller == "gamepad"
 
     @property
     def is_shootout(self) -> bool:
@@ -131,6 +137,11 @@ class MatchSummary:
     @property
     def date_text(self) -> str:
         return self.match_date.strftime("%Y-%m-%d %H:%M") if self.match_date else "-"
+
+
+# 닉네임이 없는 상대(넥슨이 빈 값으로 준다 — 이 PC 감독모드 28,654경기 중 47 · 10-31)를 파싱하면 이 글자.
+# 서로 다른 상대가 한 이름으로 뭉치므로 상대별 줄에서는 뺀다(67 R12 · app_main._opp_owner_rows)
+NO_NICK = "-"
 
 
 def _i(d: dict, key: str) -> int:
@@ -167,7 +178,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         match_date=matchtime.parse(detail.get("matchDate")),   # KST — 넥슨 원문은 UTC
         match_type=detail.get("matchType", 0),
         my_nickname=me.get("nickname") or "-",
-        opponent=opp.get("nickname") or "-",
+        opponent=opp.get("nickname") or NO_NICK,
         result=md.get("matchResult") or "-",
         my_goals=_i(shoot, "goalTotal"),
         opp_goals=_i(opp_shoot, "goalTotal"),
@@ -181,6 +192,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         opp_shootout=_i(opp_shoot, "shootOutScore"),
         draw_possible=draw_possible(me.get("division"), opp.get("division")) if opp else None,
         opp_division=opp.get("division") if opp and isinstance(opp.get("division"), int) else None,
+        opp_controller=(opp.get("matchDetail") or {}).get("controller") if opp else None,
     )
 
 
