@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PyQt6.QtCore import QAbstractListModel, QModelIndex, QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QAbstractListModel, QCollator, QLocale, QModelIndex, QPointF, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
@@ -945,7 +945,31 @@ class SortableItem(QTableWidgetItem):
         if isinstance(other, SortableItem) and self._key is not None \
                 and getattr(other, "_key", None) is not None:
             return self._key < other._key
-        return super().__lt__(other)
+        return qt_item_less(self, other)
+
+
+_COLLATOR: QCollator | None = None
+
+
+def qt_item_less(a: QTableWidgetItem, b: QTableWidgetItem) -> bool:
+    """Qt 기본 비교(`QTableWidgetItem::operator<`)를 파이썬으로 — PySide6 에선 `super().__lt__` 가 파이썬 쪽
+    `__lt__` 로 되돌아와 무한 재귀(프로세스째 죽는다 · 73단계 F7).
+
+    Qt 는 DisplayRole 을 **시스템 로캘의 QCollator** 로 비교한다(코드 단위 비교가 아니다 — "a" < "A" · 이모지 < "가").
+    2026-11-01 PyQt6 6.11 실측: 23개 글자 모든 쌍에서 `QCollator(QLocale.system())` 와 불일치 0 · `QLocale.setDefault`
+    는 안 탄다(그래서 `QCollator()` 가 아니라 system). 순서는 `tests/test_sort_golden.py`(PyQt6 로 뜬 골든)가 지킨다.
+    빈 값(None)은 Qt 처럼 맨 뒤 · 둘 다 숫자면 숫자로(앱은 늘 글자라 안 닿는 길)."""
+    global _COLLATOR
+    v1, v2 = a.data(Qt.ItemDataRole.DisplayRole), b.data(Qt.ItemDataRole.DisplayRole)
+    if v1 is None:
+        return False
+    if v2 is None:
+        return True
+    if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+        return v1 < v2
+    if _COLLATOR is None:
+        _COLLATOR = QCollator(QLocale.system())
+    return _COLLATOR.compare(str(v1), str(v2)) < 0
 
 
 # 팀가치 범위 막대(2.2.1) 칸의 값 — (최저, 평균, 최고) 원 단위. 축은 델리게이트가 쥔다(표의 전체 행 기준)

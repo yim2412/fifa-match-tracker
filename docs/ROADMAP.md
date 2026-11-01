@@ -42,7 +42,7 @@
 | # | 버전 | 단계 | 난이도 | 모델(검토 / 구현) | 끝에 |
 |---|---|---|---|---|---|
 | 51 | (제안) 2.12.1(조각 ① — 토글·쌓기만) | 카드 정보 넓히기 — C1 · C2 · C3 · C5 · C6(전력 대비 승률 · 팀컬러 상성 · 실효 OVR·키·체형 · 가치 분해 · 시세 지수) + N21 · N28 · N29(승부차기 키퍼 키 · 경기 이변 정도 · 경기마다 발동한 팀컬러) | 높음 — 홈페이지 요청이 크게 는다(하루 상한·동의 문구 다시) | Opus 2명 / Opus | **측정 35일 진행 중 — D0 = 2026-10-19**(규칙 10판 `35ec1cf` · 작업 스케줄러 `FifaMeasureCards` 가 매일 얼리기·백필·측정일 판정 · A 11-09~12 · 11-16~19 · 11-23~26 · B·C 11-23~26) — 그동안 55 · ②③ 은 68(옛 58)로 뗐다 · 측정 동안 64~67 · **판정(11-26) 뒤 63 U1 마무리**: `measure_cards` 의 UTC 날 네 자리(:330·:471·:472·:632)를 `matchtime` 으로 · `test_rules` 예외 표의 U1 두 줄 지우기 · B 다시 대조(`docs/DONE.md` 63단계 절) · **63 남은 대조 하나**: 시즌 마지막 날 경기가 기준 화면과 같은 시즌에 드는지(시즌 종료일이 KST 0시인지 모른다) |
-| 73 | (제안) 3.2.1 | **PySide6 전환**(PyQt6 GPL → LGPL · 옛 70 을 당김) — 화면 동작은 그대로, 회귀 확인이 핵심 · 절 "## 73단계" · **계획 검토 끝(11-01 4판) — 다음은 조각 ①**(첫 일: 6.11.3 venv 재현 M2 · 정렬 골든을 PyQt6 로 먼저 뜨기) | 중간 — 기계적이지만 전 화면 회귀 · 바인딩 차이 몇 곳(슬롯 예외·테스트 바꿔 끼우기) | Opus 1명 / Sonnet + Opus 리뷰(전 화면 회귀 PNG) | **3.2.1 공개**(따로 — 회귀를 가르려고) |
+| 73 | (제안) 3.2.1 | **PySide6 전환**(PyQt6 GPL → LGPL · 옛 70 을 당김) — 화면 동작은 그대로, 회귀 확인이 핵심 · 절 "## 73단계" · **계획 검토 끝(11-01 4판) · 조각 ① 첫 일 끝(M2 재현 · 정렬 골든 · F12~F14) — 다음은 조각 ① 치환** | 중간 — 기계적이지만 전 화면 회귀 · 바인딩 차이 몇 곳(슬롯 예외·테스트 바꿔 끼우기) | Opus 1명 / Sonnet + Opus 리뷰(전 화면 회귀 PNG) | **3.2.1 공개**(따로 — 회귀를 가르려고) |
 | 68 | (제안) 3.3.1 | 카드 정보 화면 — 51 의 조각 ②③(N29 · C2 · C1 · N28 · C3 · N21 · C5 · C6 · 내 스쿼드 OVR 카드) — **측정 A~C 판정 뒤**(D0 + 35) · 빠진 항목은 안 만든다 · 빈 화면 사유에 "구조가 바뀌어 오늘 멈춤"(`card_backfill_format` — 지금은 "채우는 중" 으로 보인다 · 51 ① 리뷰 [하]) | 높음 — 측정에 매임 | Opus 2명 / Opus | |
 | 69 | (제안) 3.3.1 | 같은 OVR 대비 — 랭커 스쿼드 OVR 수집(서비스 키 · 따로 토글) · 상위 랭커 카드의 "스쿼드 대비" | 높음 — 1만 명이면 오픈API 약 3만 요청 · 안내 바뀜 | Opus 2명 / Opus | **3.3.1 공개** |
 | 71 | (제안) 3.4.1 | 핵심을 비공개 저장소로 · 공개 쪽은 `core_api` + 간이 대체 · `build_dev` / `build_release` 분리 | 높음 — 저장소·빌드 구조 변경 | Opus 2명 / Opus | |
@@ -367,6 +367,9 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | F9 | **PySide6 도 슬롯·타이머·`QThread.run` 예외에서 `sys.excepthook` 을 부른다**(crashlog 기록은 그대로) — 다만 **기본 훅이면 찍고 계속 돈다**(PyQt6 는 끝낸다). `grab()` 이 부른 paintEvent 안 예외는 훅이 아니라 호출 자리로 올라온다 | 1회차 실측(같은 스크립트로 두 바인딩) |
 | F10 | `disconnect()` — PySide6 는 연결이 없어도 **예외 없이** `False` + `RuntimeWarning`(인자 없음·안 붙은 슬롯 둘 다) | 1회차 실측 |
 | F11 | PyQt6 가 쓴 `settings.ini` 를 PySide6 `QSettings` 가 **같은 값·형으로** 읽는다 | 1회차 실측 |
+| F12 | **Qt 기본 항목 비교 = `QCollator(QLocale.system())`**(PyQt6 6.11 · 23개 글자 모든 쌍 불일치 0 · `QLocale.setDefault` 는 안 탄다 · 파이썬 `<` 와는 88쌍 다름 — "a" < "A" · 이모지 < "가"). 골든 글자들은 ko_KR·en_US·ja_JP 에서 순서가 같다(C 로캘만 46쌍 다름) — CI(en_US)에서도 골든이 유효 | 11-01 조각 ① 실측(스크래치 `coll.py`·`coll2.py`) |
+| F13 | **M2 끝 — 6.11.3 에서 다시 재현**: F7(재귀 200 넘김) · F9(사용자 훅이면 슬롯·타이머·`QThread.run` 모두 훅 · 기본 훅이면 PyQt6 는 끝나고 PySide6 는 찍고 계속) · F10(`disconnect()` 연결 없으면 `False` + `RuntimeWarning` · PyQt6 는 `TypeError`) · M3(값 객체 bool 반대 그대로) · M4(`triggered` 람다 인자 0개 · 람다 안 `sender()` None) · M5(int 키 dict → `{}` + "Cannot copy-convert") · R3 선행(스레드 건너는 queued `Signal(object)` 도 같은 객체) — 전부 6.12.0 결과와 같다 | 11-01 조각 ① 실측(옛 스크래치 `r2_probe*.py`·새 `f9.py`·`m5.py`) |
+| F14 | **`super()` 오버라이드 전수(M6 정의 `super\(\)\.\w+\(` · `__init__` 제외)**: 앱·테스트 45곳 · Qt 가상 함수 15종(`resizeEvent` 7 · `paint` 4 · `initStyleOption` 3 · `setFont`·`minimumSizeHint`·`leaveEvent`·`closeEvent` 2 · `sizeHint`·`showEvent`·`setText`·`paintEvent`·`moveEvent`·`changeEvent`·`hideEvent`·QThread `start` 1) + `__lt__` 1 · 나머지는 파이썬 클래스. 15종을 한 프로브에서 불러 두 바인딩 모두 재귀 0 · 호출 수 같음 — **재귀는 연산자 `__lt__` 하나뿐** | 11-01 조각 ① 실측(스크래치 `m6.py`) |
 | F6 | 라이선스 글(`notice.licenses_html`)은 동의 해시(`_notice_digest`)에 **안 들어간다** — 글을 고쳐도 `NOTICE_VERSION` 을 올리지 않아도 되고 다시 묻지 않는다 | `tests/test_ui_smoke.py:7798-7802` |
 
 ### 바뀌는 것 (파일 → 핵심 변경)
@@ -374,7 +377,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | 자리 | 변경 | 주의 |
 |---|---|---|
 | Qt 를 import 하는 앱 6개(`app_main` · `widgets` · `charts` · `dashboard` · `theme` · `tray`) + `tools/release` | `PyQt6` → `PySide6` · `pyqtSignal` → `Signal` · `sip.isdeleted(x)` → `not shiboken6.isValid(x)` | 기계적 치환 + **사람 눈으로 8곳**(`isdeleted` 의 부정 방향) |
-| `widgets.SortableItem.__lt__`(F7) | `super().__lt__` 를 없애고 **Qt 기본 비교를 파이썬으로**: 두 칸의 `data(DisplayRole)` 가 둘 다 숫자면 숫자로, 아니면 `text()` 로 | 옛 PyQt6 의 기본 비교와 같은 순서인지 — 숫자 글자 열·빈 칸·섞인 열을 PyQt6 결과로 얼린 골든과 대조(조각 ① 첫 일 · PyQt6 가 아직 깔려 있을 때 뜬다) |
+| `widgets.SortableItem.__lt__`(F7) | `super().__lt__` 를 없애고 **Qt 기본 비교를 파이썬으로** — ✅ 11-01 `widgets.qt_item_less`: Qt 기본 비교는 글자 코드 비교가 아니라 **시스템 로캘의 `QCollator`** 였다(F12) · 빈 값은 맨 뒤 · 둘 다 숫자면 숫자 | ✅ `tests/test_sort_golden.py` — PyQt6 6.11 로 **옮기기 전 코드에서** 뜬 골든(`fixtures/sort_golden.json` · 다시 뜨는 길은 지웠다) · 바꾼 비교를 PyQt6 위에서 먼저 초록 · 되돌리는 변이 3건(파이썬 `<` · C 로캘 · 흐림 방향) FAIL |
 | 연산자·가상 함수 오버라이드에서 `super()` 를 부르는 자리 | 전수 grep(아래 정의 표) → 자리마다 PySide6 에서 재귀하는지 최소 재현 | F7 과 같은 꼴이 더 있을 수 있다 |
 | `requirements.txt` · CI(`test.yml`) | `PyQt6` → `PySide6-Essentials`(Addons 는 안 쓴다 — 크기) · **버전 고정**(U2) | CI 가 PyQt6 를 안 깔면 남은 import 가 바로 빨개진다 |
 | `피파전적관리.spec` | `hiddenimports` 의 `PyQt6.QtNetwork` → `PySide6.QtNetwork` · 라이선스 `datas` | PyInstaller 6.20 의 PySide6 훅 |
@@ -422,7 +425,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | 메서드 바꿔 끼우기 | `\.start *= ` · `Q[A-Za-z]+\.exec *=` | 36(`test_ui_smoke` 22 · `test_window_size` 10 · `test_icons` 4) | R2 |
 | 인자 없는 `disconnect()` | `\.disconnect\(\)` | 4(앱 2 · 테스트 2) | R5 |
 | 슬롯 예외를 다루는 곳 | `excepthook` | 9 | R1 |
-| 연산자·가상 함수 오버라이드의 `super()` | `super\(\)\.(__lt__|__eq__|__gt__|__le__|__ge__|__hash__|event|paintEvent|sizeHint|minimumSizeHint|data|setData)\(` | 조각 ① 첫 일에 센다 | F7 꼴 최소 재현 · 표 정렬 골든 |
+| 연산자·가상 함수 오버라이드의 `super()` | `super\(\)\.\w+\(`(M6 로 넓힘 · `__init__` 제외) | 45(F14 — Qt 가상 함수 15종 + `__lt__` 1) | F14 프로브 · 표 정렬 골든 |
 | sip.voidptr 전용 API | `\.asarray\(|\.asstring\(|\.setsize\(` | 1(`test_icons.py:837`) | 그 테스트 |
 | 공개 문장의 GPL·PyQt | `GPL|PyQt` in `*.md`·`*.html`·`*.iss`·`*.spec`(`docs/ROADMAP.md`·`docs/DONE.md`·`docs/LESSONS.md` 는 기록이라 제외) | 조각 ② 첫 일에 센다 | 손 대조 |
 
@@ -431,7 +434,7 @@ S: 승격 · 경기 분석 · 선수 분석 · 구단 심층 분석 · BP 시세
 | # | 무엇 | 구현 때 할 일 |
 |---|---|---|
 | M1 | 되돌리기는 ①+② 전부 | 위 "되돌리기" 에 반영 |
-| M2 | 실측이 전부 6.12.0 · 고정판은 6.11.3 | **조각 ① 첫 일**: 6.11.3 venv 에서 F7·F9·F10·M3~M5 최소 재현을 다시(스크래치 `sort_probe.py`·`r2_probe*.py`) |
+| M2 | 실측이 전부 6.12.0 · 고정판은 6.11.3 | ✅ 11-01 끝(F13 — 전부 같다) · **조각 ① 첫 일**: 6.11.3 venv 에서 F7·F9·F10·M3~M5 최소 재현을 다시(스크래치 `sort_probe.py`·`r2_probe*.py`) |
 | M3 | 값 객체 bool 이 반대 — `bool(QPixmap())`·`QImage()`·`QIcon()` PySide6 False / PyQt6 True · `bool(QSize())`·`QSize(0,0)`·`QMarginsF()` 반대 | 지금 코드는 `is not None and not isNull()` 꼴이라 0곳 · `test_rules` 에 "Qt 값 객체를 `if x:`·`not x` 로 판정" 규칙(심은 위반 잡는지) — 못 만들면 grep 행 |
 | M4 | 기본 인자 있는 내장 신호(`clicked`·`triggered`)에 `lambda *a`·`partial`·`wraps` 래퍼를 이으면 PySide6 는 인자 0개(PyQt6 `(False,)`) · 람다 안 `self.sender()` 는 None | 앱 0곳 · 전수 정의 표에 grep 행(`connect\((lambda|functools\.partial|partial)`) — 걸린 줄마다 인자 개수 대조 |
 | M5 | `Signal(dict)` 에 int 키 dict → PySide6 는 **빈 `{}` 를 조용히** 보낸다 | 신호 형 규칙을 `Signal(` 로 다시 정의하는 것이 필수(빈 검사 방지 이상) · 되돌리는 변이: `Signal(dict)` 를 심으면 FAIL |
