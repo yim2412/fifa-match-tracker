@@ -1189,6 +1189,44 @@ def test_range_chips_cut_range_screens():
     assert len(_win._match_cards) == len(_win._matches) and _win.cb_range.currentData() == ("all", 0)
 
 
+def test_top_name_field_lists_recent_searches():
+    # 76 — "← 검색" 을 빼고 시작 화면에만 있던 최근 검색을 위쪽 이름 칸 목록으로(사용자 26). 누르면 펼치고, 고르면 그 이름으로 조회
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QPushButton
+    import store
+    assert not [b for b in _win.top_bar.findChildren(QPushButton) if "검색" in b.text()], "위쪽 바에 ← 검색 이 남았다"
+    ed = _win._recent_edit
+    assert ed in _win._nick_edits
+    conn = store.open_db(config.DB_PATH)
+    called = []
+    orig = _win._on_search
+    try:
+        for i, nick in enumerate(("최근검색가", "최근검색나")):
+            store.upsert_account(conn, f"recent-test-{i}", nick)
+            # last_seen 은 초 단위라 같은 초에 둘이 같아진다 — 먼 미래로 순서를 박는다(다른 계정보다 앞에)
+            conn.execute("UPDATE accounts SET last_seen = ? WHERE ouid = ?", (f"2999-01-01T00:00:0{i}", f"recent-test-{i}"))
+        conn.commit()
+        _win._refresh_recent()
+        names = _win._recent_model.stringList()
+        assert names[:2] == ["최근검색나", "최근검색가"], names   # 최신순
+        comp = ed.completer()
+        assert comp is not None and comp.model() is _win._recent_model
+        QTest.mouseClick(ed, Qt.MouseButton.LeftButton)
+        assert comp.popup().isVisible(), "이름 칸을 눌러도 목록이 안 펼쳐졌다"
+        comp.popup().hide()
+        _win._on_search = lambda: called.append([e.text() for e in _win._nick_edits])
+        comp.activated.emit("최근검색가")
+        assert called == [["최근검색가"] * len(_win._nick_edits)], called
+    finally:
+        _win._on_search = orig
+        for i in range(2):
+            store.remove_account(conn, f"recent-test-{i}")
+        conn.close()
+        for e in _win._nick_edits:
+            e.setText(_win._nick)
+        _win._refresh_recent()
+
+
 def test_range_keys_match_slice_users():
     # RANGE_KEYS(범위를 바꾸면 다시 그리는 키)와 실제로 _slice() 를 쓰는 그리기가 같아야 한다 — 빠지면 버튼을 눌러도
     # 그 화면이 옛 범위로 남고(조용히 틀림), 남으면 시즌 화면을 괜히 다시 그린다

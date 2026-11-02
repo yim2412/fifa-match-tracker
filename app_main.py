@@ -33,11 +33,11 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote
 
-from PySide6.QtCore import QEvent, QObject, QSettings, Qt, QSize, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, QSettings, QStringListModel, Qt, QSize, QThread, QTimer, QUrl, Signal
 import shiboken6
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QDialog, QFrame, QGridLayout, QGroupBox,
+    QApplication, QButtonGroup, QCheckBox, QCompleter, QDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
@@ -3375,6 +3375,7 @@ class MainWindow(QMainWindow):
         return lb
 
     RECENT_SEARCH_LIMIT = 5
+    RECENT_LIST_LIMIT = 10   # 위쪽 이름 칸 목록(76)
 
     def _refresh_recent(self) -> None:
         """검색 화면의 '최근 검색' 칩을 최신순 5개로 다시 그린다."""
@@ -3386,11 +3387,14 @@ class MainWindow(QMainWindow):
         try:
             conn = store.open_db(config.DB_PATH)
             try:
-                rows = store.recent_searches(conn, self.RECENT_SEARCH_LIMIT)
+                rows = store.recent_searches(conn, max(self.RECENT_SEARCH_LIMIT, self.RECENT_LIST_LIMIT))
             finally:
                 conn.close()
         except Exception:
             rows = []
+        # 위쪽 이름 칸 목록(76) — 칩보다 길게(칩은 시작 화면 한 줄이라 5개)
+        self._recent_model.setStringList([r["nickname"] or r["ouid"][:8] for r in rows[:self.RECENT_LIST_LIMIT]])
+        rows = rows[:self.RECENT_SEARCH_LIMIT]
 
         for r in rows:
             nick = r["nickname"] or r["ouid"][:8]
@@ -3401,8 +3405,22 @@ class MainWindow(QMainWindow):
         self.row_recent.addStretch(1)
 
     def _search_recent(self, nickname: str) -> None:
+        # 시작 화면 칩·위쪽 이름 칸 목록 둘 다 — _on_search 는 보이는 화면의 칸을 읽으므로 둘 다 채운다
         self.ed_search.setText(nickname)
+        for ed in self._nick_edits:
+            ed.setText(nickname)
         self._on_search()
+
+    def eventFilter(self, obj, event) -> bool:
+        # 위쪽 이름 칸 — 누르면 최근 검색 전부를 펼친다(치면 QCompleter 가 알아서 거른다). 포커스만으로는 안 연다 —
+        # 창이 뜨거나 검색이 끝나 포커스가 돌아올 때마다 목록이 튀어나온다. 이름이 차 있어도 누르면 연다(늘 이름이 있다)
+        if (obj is getattr(self, "_recent_edit", None)
+                and event.type() == QEvent.Type.MouseButtonPress
+                and self._recent_model.rowCount()):
+            comp = obj.completer()
+            comp.setCompletionPrefix("")
+            comp.complete()
+        return super().eventFilter(obj, event)
 
     def _top_bar(self) -> QFrame:
         """상단 바 — 재검색 + 시즌·빠른 범위·새 경기 확인(75 — "등록" 콤보는 안 써서 뺐다 · 2026-11-02 사용자).
@@ -3419,16 +3437,24 @@ class MainWindow(QMainWindow):
             return g, lay
 
         left, h = group()
-        back = QPushButton("← 검색")
-        back.clicked.connect(self._go_search)
+        # 76 — "← 검색" 은 이름 칸과 겹쳐 뺐다(사용자 26). 시작 화면에만 있던 최근 검색은 이 칸의 목록으로:
+        # 빈 칸을 누르면 전부 · 치면 걸러진다(QCompleter — 모달이 아니라 화면 스모크 차단 목록이 안 는다)
         ed = QLineEdit()
         ed.setPlaceholderText("구단주명")
         ed.setFixedWidth(170)
         ed.returnPressed.connect(self._on_search)
+        self._recent_model = QStringListModel(self)
+        comp = QCompleter(self._recent_model, ed)
+        comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        comp.setFilterMode(Qt.MatchFlag.MatchContains)
+        comp.activated.connect(self._search_recent)
+        ed.setCompleter(comp)
+        ed.installEventFilter(self)
+        self._recent_edit = ed
         btn = QPushButton("조회")
         btn.setObjectName("primary")
         btn.clicked.connect(self._on_search)
-        for x in (back, ed, btn):
+        for x in (ed, btn):
             h.addWidget(x)
         self._nick_edits.append(ed)
         self._search_btns.append(btn)
