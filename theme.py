@@ -533,6 +533,23 @@ QScrollBar::handle:horizontal {{ background: {SCROLL}; border-radius: 5px; min-w
 """
 
 
+# 75 — 플랫폼이 클래스마다 따로 주는 글꼴(Qt 의 클래스 글꼴 표 — qapplication.cpp initializeWidgetFontHash 의 이름들).
+# 윈도우는 목록(QAbstractItemView)·상태 줄·말풍선 등에 맑은 고딕 9pt(=12px)를 준다. QApplication.setFont(글꼴) 만으로는
+# 이 표가 안 바뀌어 줄 카드 목록이 BASE_FONT_PX 가 아니라 12px 로 그려졌다(2026-11-02 실제 창 촬영 — offscreen 엔 이 표가
+# 비어 있어 스모크가 못 잡는다). 그래서 이 이름들에 앱 글꼴을 다시 건다.
+PLATFORM_FONT_CLASSES = (
+    "QMenu", "QMenuBar", "QMenuItem", "QMessageBox", "QLabel", "QTipLabel", "QStatusBar",
+    "QMdiSubWindowTitleBar", "QDockWidgetTitle", "QPushButton", "QCheckBox", "QRadioButton", "QToolButton",
+    "QAbstractItemView", "QListView", "QHeaderView", "QListBox", "QComboMenuItem", "QComboLineEdit",
+)
+
+
+def unify_class_fonts(app, font) -> None:
+    """PLATFORM_FONT_CLASSES 전부에 font — 위젯이 setFont 로 직접 준 글꼴은 이것보다 앞선다(표 칸 크기 등은 그대로)."""
+    for name in PLATFORM_FONT_CLASSES:
+        app.setFont(font, name)
+
+
 def apply(app) -> None:
     """앱 전체에 테마를 건다.
 
@@ -569,3 +586,6 @@ def apply(app) -> None:
         pal.setColor(role, QColor(color))
     app.setPalette(pal)
     app.setStyleSheet(QSS)
+    # 맨 끝에서 — 스타일(시트)을 거는 동안 Qt 가 클래스 글꼴 표를 플랫폼 값으로 다시 채운다. setFont 바로 뒤에 두었더니
+    # 실제 창 경기 목록이 그대로 12px 였다(2026-11-02 실측 — 고침 있음/없음이 같았다).
+    unify_class_fonts(app, font)

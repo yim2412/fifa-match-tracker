@@ -85,6 +85,7 @@ WEAK_ALLOW = {
     ("app_main.py", "_render_pass_style", "min_tries"): "패스 시도 수",
     ("app_main.py", "rate", "min_tries"): "패스 시도 수",
     ("app_main.py", "_render_pass_style", "few"): "패스 스타일 경기 수 — 승률 아님",
+    ("app_main.py", "check_update_now", "UPDATE_ON_CLICK_MIN_S"): "업데이트 확인 간격(초) — 75 U10",
 }
 MODAL_STATIC = {"QFileDialog", "QInputDialog", "QColorDialog", "QFontDialog", "QMessageBox"}
 MODAL_GUARDED_BASE = {"QDialog.exec", "QApplication.exec"}   # 하위 클래스의 exec() 도 이걸로 막힌다

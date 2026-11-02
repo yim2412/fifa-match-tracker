@@ -80,13 +80,13 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, Card, Collapsible, FitLabel, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
-    ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList,
+    ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -2750,7 +2750,6 @@ class MainWindow(QMainWindow):
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
         self._search_btns: list[QPushButton] = []
-        self._acct_combos: list[NoScrollComboBox] = []
         # 왼쪽 아래 버전·업데이트 상태 줄 — 검색 화면·사이드바에 하나씩, 함께 갱신한다
         self._update_status_labels: list[QLabel] = []
         self._update_inline_btns: list[QPushButton] = []
@@ -3013,6 +3012,7 @@ class MainWindow(QMainWindow):
         self.update_card.update_clicked.connect(self._on_update_clicked)
         self._release: updatecheck.Release | None = None
         self._update_worker: UpdateCheckWorker | None = None
+        self._update_click_at: float | None = None
         self._download_worker: UpdateDownloadWorker | None = None
         self.statusBar().showMessage("구단주명을 입력하세요.")
 
@@ -3034,6 +3034,17 @@ class MainWindow(QMainWindow):
         self._update_worker.season_notice.connect(self._on_season_notice)
         self._set_update_status("업데이트 확인 중…")
         self._update_worker.start()
+
+    def check_update_now(self) -> None:
+        """버전 칸을 눌렀다(75 U10) — 창을 계속 띄워 두면 새 판을 최대 UPDATE_CHECK_EVERY_H 늦게 안다. 켜는 확인과 같은
+        조건(끄는 설정 · 첫 동의 전)을 따르고, 연달아 눌러도 UPDATE_ON_CLICK_MIN_S 안에는 한 번만 묻는다."""
+        if not config.UPDATE_CHECK or config.notice_needed():
+            return
+        now = time.monotonic()
+        if self._update_click_at is not None and now - self._update_click_at < config.UPDATE_ON_CLICK_MIN_S:
+            return
+        self._update_click_at = now
+        self.start_update_check()
 
     def _on_season_notice(self, notice) -> None:
         """릴리스 본문의 시즌 종료일 공지를 저장 — 받을 때는 형식·범위만 봤고, 지금 시즌과의 대조는 쓸 때
@@ -3318,9 +3329,11 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         row.setSpacing(6)
         style = f"color: {T.TEXT_DIM}; font-size: 11px; border: none;"
-        ver = QLabel(config.APP_VERSION)
+        ver = ClickLabel(config.APP_VERSION)
         ver.setObjectName("versionLabel")
         ver.setStyleSheet(style)
+        ver.setToolTip("누르면 새 버전이 있는지 지금 확인합니다")
+        ver.clicked.connect(self.check_update_now)
         status = QLabel("")
         status.setObjectName("updateStatus")
         status.setStyleSheet(style)
@@ -3392,7 +3405,7 @@ class MainWindow(QMainWindow):
         self._on_search()
 
     def _top_bar(self) -> QFrame:
-        """상단 바 — 재검색·등록 계정 + 시즌·표시 범위·새 경기 확인.
+        """상단 바 — 재검색 + 시즌·표시 범위·새 경기 확인(75 — "등록" 콤보는 안 써서 뺐다 · 2026-11-02 사용자).
 
         어느 메뉴에 있든 같은 필터가 걸린다. 예전엔 랭커/분석 두 페이지가 바를
         하나씩 가져서 리스트(_nick_edits 등)로 묶었는데, 이제 하나뿐이어도
@@ -3415,19 +3428,10 @@ class MainWindow(QMainWindow):
         btn = QPushButton("조회")
         btn.setObjectName("primary")
         btn.clicked.connect(self._on_search)
-        cb = NoScrollComboBox()
-        cb.setMinimumWidth(150)
-        cb.activated.connect(self._on_pick_account)
-        lb_acct = QLabel("등록")
-        lb_acct.setStyleSheet(f"color: {T.TEXT_DIM};")
         for x in (back, ed, btn):
             h.addWidget(x)
-        h.addSpacing(6)
-        h.addWidget(lb_acct)
-        h.addWidget(cb)
         self._nick_edits.append(ed)
         self._search_btns.append(btn)
-        self._acct_combos.append(cb)
 
         sep = QFrame()
         sep.setFixedSize(1, 26)
@@ -3770,13 +3774,13 @@ class MainWindow(QMainWindow):
                 " 그 상대가 지금 쓰는 팀컬러 기준입니다(지난 시즌일수록 실제와 달라질 수 있음).")
 
     def _teamcolor_min_row(self) -> QHBoxLayout:
-        """최소 경기 수 필터 — 두 탭이 같은 값(한쪽을 바꾸면 다른 쪽도). 기본 = 흐림 기준(core.MIN_COND)."""
+        """최소 경기 수 필터 — 두 탭이 같은 값(한쪽을 바꾸면 다른 쪽도). 기본 = 흐림 기준(config.TEAMCOLOR_MIN_GAMES)."""
         row = QHBoxLayout()
         lb = QLabel("최소")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         sp = QSpinBox()
         sp.setRange(1, 999)
-        sp.setValue(core.MIN_COND)
+        sp.setValue(config.TEAMCOLOR_MIN_GAMES)
         sp.setFixedWidth(64)
         sp.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         sp.valueChanged.connect(self._on_teamcolor_min_changed)
@@ -3877,7 +3881,7 @@ class MainWindow(QMainWindow):
         self._invalidate("teamcolor")
 
     def _teamcolor_min_games(self) -> int:
-        return self._teamcolor_min_spins[0].value() if self._teamcolor_min_spins else core.MIN_COND
+        return self._teamcolor_min_spins[0].value() if self._teamcolor_min_spins else config.TEAMCOLOR_MIN_GAMES
 
     TC_INFO_TIP = "고른 팀컬러의 랭커 1만 명 숫자와 넥슨 데이터센터의 단계별 효과·적용 선수"
 
@@ -6624,7 +6628,7 @@ class MainWindow(QMainWindow):
             total = sum(counter.values()) or 1
             top = counter.most_common(self.PICK_TOP_SHARES)
             peak = max((n for _name, n in top), default=0) or 1
-            lst.set_rows([MetricRow(name, "", (MetricCell(f"{n:,}명", "인원"), MetricCell(f"{n / total * 100:.0f}%", "비율", T.ACCENT)),
+            lst.set_rows([MetricRow(name, "", (MetricCell(f"{n:,}명", "인원"), MetricCell(pct_text(n / total * 100), "비율", T.ACCENT)),
                                     rank=i, icon=self._emblem_icon(name) if kind == "emblem" else
                                     (("formation", formation_key(name)) if formation_key(name) else ()),
                                     fill=n / peak, key=name)
@@ -6657,7 +6661,7 @@ class MainWindow(QMainWindow):
             seen[line] += 1
             grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
             grades = " · ".join(f"{g}강 {k}명" for g, k in c.grades.most_common(3) if isinstance(g, int))
-            cells = [MetricCell(f"{c.users:,}명", who), MetricCell(f"{rate * 100:.0f}%", "비율", T.ACCENT),
+            cells = [MetricCell(f"{c.users:,}명", who), MetricCell(pct_text(rate * 100), "비율", T.ACCENT),
                      MetricCell(f"{grade}강" if grade is not None else NA, "많이 쓴 강화", None, grades)]
             if price is not None:
                 cells.append(MetricCell(price, "시세"))
@@ -6696,7 +6700,7 @@ class MainWindow(QMainWindow):
             rate = summary.rate.get(sp_id, 0.0)
             grade = p.get("spGrade")
             cards.append(PitchCard(pos, self._positions.get(pos, str(pos)), self._names.get(sp_id, str(sp_id)), sp_id,
-                                   grade if isinstance(grade, int) else None, note=f"랭커 {rate * 100:.0f}%"))
+                                   grade if isinstance(grade, int) else None, note=f"랭커 {pct_text(rate * 100)}"))
         pitch = PitchWidget(self._pitch_rows(cards), band=False)
         pitch.player_clicked.connect(lambda sid: self._show_player_info(sid))
         self.box_pick_pitch.addWidget(pitch)
@@ -7489,7 +7493,10 @@ class MainWindow(QMainWindow):
     def _won(v) -> str:
         if v is None:
             return NA
-        return f"{v / 1e8:,.0f}억" if v >= 1e8 else f"{v:,.0f}원"
+        if v >= 1e8:
+            return f"{v / 1e8:,.0f}억"
+        # 75 — 1억 미만을 원 단위로 다 쓰면 "1,234억" 옆에 "31,357,040원" 이 섞여 읽기 어렵다(2026-11-02 사용자)
+        return f"{v / 1e4:,.0f}만" if v >= 1e4 else f"{v:,.0f}원"
 
     @staticmethod
     def _at(text: str | None) -> str:
@@ -7560,7 +7567,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _trait_cell(kind: str, name: str, _n: int, ratio: float):
         """특성 칸 — 글자는 "NN%" 만(이름은 툴팁·그림이 없을 때 대신). 이름 → 코드는 trait_codes 역표, "코드 N" 은 그림 없음."""
-        return IconCell(f"{ratio * 100:.0f}%", ratio, trait_codes.code_of(kind, name), name)
+        return IconCell(pct_text(ratio * 100), ratio, trait_codes.code_of(kind, name), name)
 
     def trait_status(self, has_targets: bool = True) -> tuple[str, str]:
         """탭 위 한 줄과 버튼("notice" 안내 보고 동의 · "reenable" 다시 켜기 · "" 없음) — 원인마다 문구 하나(계획 "빈 상태")."""
@@ -7763,7 +7770,7 @@ class MainWindow(QMainWindow):
         self.cb_daywr_form = self._formation_combo("daywr")
         self._meta_top(v, self.lb_daywr_note, ("순위 구간", self.cb_daywr_tier), ("포메이션", self.cb_daywr_form),
                        ("", self._tc_filter_box()))
-        row = QHBoxLayout()
+        self.daywr_pair = PairBox()   # 75 — 좁으면 위아래로(1280×720 실제 창에서 팀컬러 표가 가로 스크롤)
         self.daywr_tables: dict[str, FitTableWidget] = {}
         self.daywr_titles: dict[str, QLabel] = {}
         for kind, name in (("team_color", "팀컬러"), ("formation", "포메이션")):
@@ -7772,9 +7779,9 @@ class MainWindow(QMainWindow):
             table = self._make_table(self.DAYWR_COLUMNS, icons={0: self.NAME_ICON[kind]})
             box.addWidget(title)
             box.addWidget(table, 1)
-            row.addLayout(box, 1)
+            self.daywr_pair.add(box, table)
             self.daywr_tables[kind], self.daywr_titles[kind] = table, title
-        v.addLayout(row, 1)
+        v.addWidget(self.daywr_pair, 1)
         self.day_wr: core.DayWinrate | None = None   # 테스트가 본다
         return w
 
@@ -7820,6 +7827,7 @@ class MainWindow(QMainWindow):
                     delta_item(diff, r.diff_pp)
             self._dim_rows(table, [i for i, r in enumerate(rows) if r.thin or r.no_diff])
             table.setSortingEnabled(True)
+        self.daywr_pair.relayout()
 
     # [메타 분석 › 팀컬러] 67 R1 — 1만 명 팀컬러 목록(옛 [가성비] B3 를 한 칸으로 합침 · U1). 묶기는 rankmeta.team_color_board
     TC_BOARD_SORTS = (("share", "점유율 순"), ("elo", "평균 점수 순"), ("day", "하루 승률 순(어제 순위 기준)"), ("score", "가성비 순"))
@@ -7984,7 +7992,7 @@ class MainWindow(QMainWindow):
                 continue
             tone = delta_color(c.vs_bin) if c.vs_bin is not None and abs(c.vs_bin) >= 5 else None
             rows.append(MetricRow(color, f"{n:,}명 중 {c.users:,}명", (
-                MetricCell(f"{c.share:.0f}%", "이 구간 비율"),
+                MetricCell(pct_text(c.share), "이 구간 비율"),
                 MetricCell(f"{c.champ:.0f}%", "챔스 이상", tone,
                            f"{c.users}명 · 챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}% · 구간 평균 대비 "
                            f"{0 if c.vs_bin is None else c.vs_bin:+.0f}%p)")),
@@ -10047,35 +10055,6 @@ class MainWindow(QMainWindow):
         v.addStretch(1)
         return scroll
 
-    # ── 등록 계정 ─────────────────────────────────────────────────────
-    def _refresh_accounts(self) -> None:
-        try:
-            conn = store.open_db(config.DB_PATH)
-            try:
-                rows = store.list_accounts(conn)
-                counts = {r["ouid"]: store.match_count(
-                    conn, r["ouid"], config.DEFAULT_MATCH_TYPE) for r in rows}
-            finally:
-                conn.close()
-        except Exception:
-            return  # 목록을 못 채워도 검색은 되어야 한다
-
-        for cb in self._acct_combos:
-            cb.blockSignals(True)
-            cb.clear()
-            cb.addItem("— 선택 —", None)
-            for r in rows:
-                nick = r["nickname"] or r["ouid"][:8]
-                cb.addItem(f"{nick} ({counts.get(r['ouid'], 0)})", nick)
-            cb.blockSignals(False)
-
-    def _on_pick_account(self, index: int) -> None:
-        cb = self.sender()
-        nick = cb.itemData(index) if cb else None
-        if nick:
-            self._nick = nick
-            self._api_search(nick)
-
     # ── 조회 ──────────────────────────────────────────────────────────
     def _go_search(self) -> None:
         self.stack.setCurrentIndex(self.PAGE_SEARCH)
@@ -10389,7 +10368,6 @@ class MainWindow(QMainWindow):
                    rank, grade_name: str, is_champion: bool,
                    badge_path: str, seasons: dict, division_names: dict) -> None:
         self._set_busy(False)
-        self._refresh_accounts()
         self._refresh_recent()
         switched = ouid != self._ouid
         if switched:
@@ -11038,11 +11016,12 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _rate_row(label: str, win: int, draw: int, lose: int, mixed: bool, base: float | None,
-                  games: int | None = None, **kw) -> RateRow:
+                  games: int | None = None, min_n: int | None = None, **kw) -> RateRow:
         """승률 줄 하나 — 표본 흐림(is_weak · rated 분모) · 기준 대비는 표본이 될 때만(E2).
-        games 를 주면 경기 수는 그 값(집계가 "오류" 경기까지 센다 — 표 시절 '전적' 열과 같은 수)."""
+        games 를 주면 경기 수는 그 값(집계가 "오류" 경기까지 센다 — 표 시절 '전적' 열과 같은 수).
+        min_n 은 흐림 기준(기본 core.MIN_COND — [팀컬러 승률]은 config.TEAMCOLOR_MIN_GAMES · 75)."""
         n = core.rated(win, draw, lose, mixed)
-        weak = core.is_weak(n, core.MIN_COND)
+        weak = core.is_weak(n, core.MIN_COND if min_n is None else min_n)
         rate = core.win_pct(win, draw, lose, mixed)
         return RateRow(label, win, draw, lose, win_rate_text(win, draw, lose, mixed, short=True), rate,
                        None if weak or base is None else rate - base, weak=weak,
@@ -11231,10 +11210,10 @@ class MainWindow(QMainWindow):
         않게) + "(구분 전)"(같은 이름의 두 팀컬러를 합친 값이라 해석할 수 없다)."""
         if teamcolor.is_unsplit(s.team_color):
             return "예전에 읽은 상대라 같은 이름의 두 팀컬러를 아직 못 가른 경기 — 두 팀컬러를 합친 값입니다."
-        if core.is_weak(s.rated, core.MIN_COND) or len(s.opponents) < config.TEAMCOLOR_MIN_OPPONENTS:
+        if core.is_weak(s.rated, config.TEAMCOLOR_MIN_GAMES) or len(s.opponents) < config.TEAMCOLOR_MIN_OPPONENTS:
             unit = "판" if s.mixed else "경기"
             return (f"{sample_text(s.rated, s.mixed)}{'' if s.mixed else '경기'} · 상대 {len(s.opponents)}명 — "
-                    f"기준({core.MIN_COND}{unit} · 상대 {config.TEAMCOLOR_MIN_OPPONENTS}명) 미만이라 크게 흔들립니다.")
+                    f"기준({config.TEAMCOLOR_MIN_GAMES}{unit} · 상대 {config.TEAMCOLOR_MIN_OPPONENTS}명) 미만이라 크게 흔들립니다.")
         return ""
 
     def _render_teamcolor_tabs(self, matches: list[MatchSummary],
@@ -11244,7 +11223,7 @@ class MainWindow(QMainWindow):
         stats_all = core.team_color_stats(matches, self._team_color_of,
                                         team_value_of=self._team_values.get, mixed=mixed)
         base_n, base_rate = core.team_color_baseline(matches, self._team_color_of, mixed)
-        min_games = self._teamcolor_min_games()   # 기본 = 흐림 기준(MIN_COND) — 같은 분모(rated)로 걸러야 흐림과 안 갈린다
+        min_games = self._teamcolor_min_games()   # 기본 = 흐림 기준(TEAMCOLOR_MIN_GAMES) — 같은 분모(rated)로 걸러야 흐림과 안 갈린다
         stats_list = [s for s in stats_all if not core.is_weak(s.rated, min_games)]
         keep = self._tc_keep()
         shown_n = len(stats_list)
@@ -11256,7 +11235,7 @@ class MainWindow(QMainWindow):
         for s, why in zip(stats_list, weak):
             cell = self._emblem_cell(s.team_color)
             r = self._rate_row(s.team_color, s.win, s.draw, s.lose, s.mixed, base_rate if base_n else None, s.games,
-                               sub=f"상대 {len(s.opponents):,}명",
+                               sub=f"상대 {len(s.opponents):,}명", min_n=config.TEAMCOLOR_MIN_GAMES,
                                icon=("emblem", cell.icon_key) if isinstance(cell, IconCell) and cell.icon_key else (),
                                key=s.team_color)
             if why:
@@ -11272,10 +11251,12 @@ class MainWindow(QMainWindow):
         def value_cell(v):
             return (ranker.format_team_value(v), v) if v is not None else ("-", -1)
 
-        rank_rows = [[(str(i), i), self._emblem_cell(s.team_color), (str(s.games), s.games),
+        # 순위 = 만난 횟수 순위(같은 횟수는 같은 순위) — 줄 번호로 매기면 같은 14번을 다시 정렬했을 때 7·6 으로 뒤집혀 보였다(75)
+        rank_of = self.games_rank([s.games for s in stats_list])
+        rank_rows = [[(str(rk), rk), self._emblem_cell(s.team_color), (str(s.games), s.games),
                      value_cell(s.avg_value), value_cell(s.min_value),
                      value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1)]
-                    for i, s in enumerate(stats_list, start=1)]
+                    for rk, s in zip(rank_of, stats_list)]
         self._fill(self.tbl_teamcolor_rank, rank_rows, enable_sort=False)
         self.btn_tc_rank_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
         # 범위 막대 축은 필터와 무관하게 표의 전체 행 — 스핀을 바꿔도 막대 길이가 안 변하게
@@ -11315,6 +11296,11 @@ class MainWindow(QMainWindow):
                       "(상대를 다시 읽으면 갈립니다). 같은 이름이 최대 세 줄로 나뉘어 줄마다 표본이 작아집니다.")
         for lb in self._teamcolor_note_labels:
             lb.setText(self._teamcolor_note_text(len(opps), known) + extra)
+
+    @staticmethod
+    def games_rank(games: list[int]) -> list[int]:
+        """많은 순 공동 순위(1·2·2·4) — 같은 값이면 같은 순위."""
+        return [1 + sum(1 for o in games if o > g) for g in games]
 
     def _mark_teamcolor_rows(self, table, stats_list: list, weak: list[str]) -> None:
         """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink)."""
@@ -13704,7 +13690,6 @@ class MainWindow(QMainWindow):
             setattr(self, name, None)
         self._dirty = set(self._renderers())   # 다음 검색의 _render_all 이 다시 그린다
         self._refresh_recent()
-        self._refresh_accounts()
         self._go_search()
 
     def release_memory(self) -> None:
@@ -14088,7 +14073,7 @@ class TeamColorDialog(QDialog):
                 continue
             tone = delta_color(c.vs_bin) if c.vs_bin is not None and abs(c.vs_bin) >= 5 else None
             rows.append(MetricRow(label, f"{c.users:,}명", (
-                MetricCell(f"{c.share:.0f}%", "이 팀컬러 중"),
+                MetricCell(pct_text(c.share), "이 팀컬러 중"),
                 MetricCell(f"{c.champ:.0f}%", "챔스 이상", tone,
                            f"챔스 이상 {c.champ:.0f}% (윌슨 하한 {c.champ_lo:.0f}% · 구간 평균 대비 "
                            f"{0 if c.vs_bin is None else c.vs_bin:+.0f}%p)")),

@@ -603,6 +603,125 @@ def test_setfont_sizes_survive_stylesheet():
     assert f.pointSize() == 30, (f.pointSize(), f.pixelSize())
 
 
+def test_platform_class_fonts_follow_app_font():
+    # 75 — 윈도우는 목록·상태 줄 등에 클래스 글꼴(9pt=12px)을 따로 주고, 실측상 **스타일시트를 걸 때** 그 표를 다시 채운다
+    # (setFont 바로 뒤에 덮었더니 실제 창 경기 목록이 그대로 12px). offscreen 엔 그 표가 비어 있으니 setStyleSheet 가 윈도우처럼
+    # 작은 글꼴을 심게 바꿔 끼우고, apply 가 끝난 뒤 표가 앱 글꼴인지 Qt 의 클래스 글꼴 표(QApplication.font(이름))로 본다.
+    from PySide6.QtGui import QFont
+    small = QFont(T.FONT_FAMILY)
+    small.setPointSize(9)
+    names = ("QAbstractItemView", "QListView", "QStatusBar", "QTipLabel")
+    orig = _app.setStyleSheet
+
+    def like_windows(qss):
+        orig(qss)
+        for name in names:
+            _app.setFont(small, name)
+        # 심은 것이 실제로 먹는지 먼저 — 안 먹으면 아래 단언이 고침 없이도 참이다
+        assert [_app.font(n).pointSize() for n in names] == [9] * len(names)
+    _app.setStyleSheet = like_windows
+    try:
+        T.apply(_app)
+    finally:
+        del _app.setStyleSheet
+    got = [_app.font(n).pixelSize() for n in names]
+    assert got == [T.BASE_FONT_PX] * len(names), got
+
+
+def test_75_small_fixes():
+    # 75 — 반올림 0% · 금액 단위 · 같은 횟수 같은 순위
+    from widgets import pct_text
+    assert [pct_text(p) for p in (0, 0.2, 0.5, 0.6, 1.4, 99.6)] == ["0%", "1% 미만", "1% 미만", "1%", "1%", "100%"]
+    won = app_main.MainWindow._won
+    vals = (None, 5000, 31_357_040, 1.5e9, 123_456_780_000)
+    assert [won(v) for v in vals] == [app_main.NA, "5,000원", "3,136만", "15억", "1,235억"], [won(v) for v in vals]
+    assert app_main.MainWindow.games_rank([14, 14, 9, 20]) == [2, 2, 4, 1]
+
+
+def test_75_teamcolor_min_games_from_config():
+    # 75 U6 — 거르기 기본값과 흐림 기준이 같은 상수(8 이던 core.MIN_COND 가 아니다)
+    import types
+    assert config.TEAMCOLOR_MIN_GAMES != app_main.core.MIN_COND
+    assert all(sp.value() == config.TEAMCOLOR_MIN_GAMES for sp in _win._teamcolor_min_spins), \
+        [sp.value() for sp in _win._teamcolor_min_spins]
+    s = types.SimpleNamespace(team_color="프랑스", rated=11, mixed=False, opponents={"a", "b", "c", "d"})
+    saved = config.TEAMCOLOR_MIN_GAMES
+    try:
+        config.TEAMCOLOR_MIN_GAMES = 12
+        assert _win._teamcolor_weak(s), "11경기 < 12 인데 안 흐림"
+        config.TEAMCOLOR_MIN_GAMES = 11
+        assert not _win._teamcolor_weak(s)
+    finally:
+        config.TEAMCOLOR_MIN_GAMES = saved
+
+
+def test_75_no_account_combo_in_top_bar():
+    # 75 — 위쪽 바 "등록" 콤보는 안 써서 뺐다(데이터는 그대로)
+    from PySide6.QtWidgets import QLabel
+    page = _win.stack.widget(_win.PAGE_MAIN)
+    assert not [lb for lb in page.findChildren(QLabel) if lb.text() == "등록"]
+    assert not hasattr(_win, "_acct_combos") and not hasattr(_win, "_refresh_accounts")
+
+
+def test_75_version_label_click_checks_update_now():
+    from PySide6.QtTest import QTest
+    page = _win.stack.widget(_win.PAGE_MAIN)
+    lb = [x for x in page.findChildren(app_main.QLabel) if x.objectName() == "versionLabel"][0]
+    calls = []
+    saved = (_win.start_update_check, config.UPDATE_CHECK, config.notice_needed, _win._update_click_at)
+    _win.start_update_check = lambda: calls.append(1)
+    config.notice_needed = lambda: False
+    try:
+        config.UPDATE_CHECK = False
+        QTest.mouseClick(lb, Qt.MouseButton.LeftButton)
+        assert calls == [], "끈 설정인데 확인함"
+        config.UPDATE_CHECK = True
+        QTest.mouseClick(lb, Qt.MouseButton.LeftButton)
+        assert calls == [1], calls
+        QTest.mouseClick(lb, Qt.MouseButton.LeftButton)   # 간격 안 — 다시 안 묻는다
+        assert calls == [1], calls
+        _win._update_click_at -= config.UPDATE_ON_CLICK_MIN_S + 1
+        QTest.mouseClick(lb, Qt.MouseButton.LeftButton)
+        assert calls == [1, 1], calls
+    finally:
+        (_win.start_update_check, config.UPDATE_CHECK, config.notice_needed, _win._update_click_at) = saved
+        del _win.start_update_check   # 인스턴스 속성을 지워 클래스 메서드로 되돌린다
+
+
+def test_75_pair_box_stacks_when_tables_do_not_fit():
+    # 75 — 1280×720 실제 창에서 하루 승률 팀컬러 표가 9px 로 줄고도 가로 스크롤. 좁으면 위아래로
+    from widgets import FitTableWidget, PairBox
+    from PySide6.QtWidgets import QTableWidgetItem, QVBoxLayout
+    box = PairBox()
+    tables = []
+    for _ in range(2):
+        t = FitTableWidget(3, 4)
+        t.setHorizontalHeaderLabels(["이름", "인원", "승·무·패", "승률"])
+        for r in range(3):
+            for c in range(4):
+                t.setItem(r, c, QTableWidgetItem("아주 긴 팀컬러 이름 " * (2 if c == 0 else 1)))
+        lay = QVBoxLayout()
+        lay.addWidget(t)
+        box.add(lay, t)
+        t.refit()
+        tables.append(t)
+    need = box.need_width()
+    assert need > 0
+    box.resize(need + 10, 400)
+    box.show()
+    _app.processEvents()
+    assert not box.stacked(), (need, box.width())
+    box.resize(need - 10, 400)
+    _app.processEvents()
+    assert box.stacked(), (need, box.width())
+    assert all(t.font().pixelSize() == t._base_cell_px for t in tables), [t.font().pixelSize() for t in tables]
+    box.resize(need + 10, 400)
+    _app.processEvents()
+    assert not box.stacked()
+    box.close()
+    assert isinstance(_win.daywr_pair, PairBox)
+
+
 def test_player_table_cells_not_elided():
     # 열 폭이 Qt 가 계산한 필요 폭보다 좁으면 "33.3" 이 "3…" 로 잘린다
     # (상수 여백을 42→24 로 줄였을 때 실제로 그랬다).
@@ -3726,12 +3845,12 @@ def test_teamcolor_weak_rows_sink_both_ways_and_stay_uncolored():
         try:
             # 강한 줄: 두 상대(X) · 약한 줄: 한 상대(Y)
             _win._on_teamcolor_loaded({opps[0]: ("X", 1, ""), opps[1]: ("X", 1, ""), opps[2]: ("Y", 1, "")})
-            orig_cond = app_main.core.MIN_COND
-            app_main.core.MIN_COND = 1
+            orig_cond = config.TEAMCOLOR_MIN_GAMES   # 75 — 팀컬러 흐림 기준은 이 상수(예전엔 core.MIN_COND)
+            config.TEAMCOLOR_MIN_GAMES = 1
             try:
                 _win._render_teamcolor_tabs(*_win._teamcolor_scope())
             finally:
-                app_main.core.MIN_COND = orig_cond
+                config.TEAMCOLOR_MIN_GAMES = orig_cond
             # [팀컬러 승률] 줄 목록(67 R3) — 흐린 줄은 기준 대비 칸이 없고 숫자·막대가 흐리며 어느 정렬이든 맨 아래
             import widgets
             lst = _win.tc_rate_list

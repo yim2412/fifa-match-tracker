@@ -27,7 +27,7 @@ from typing import NamedTuple
 from PySide6.QtCore import QAbstractListModel, QCollator, QLocale, QModelIndex, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QListView, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
@@ -160,6 +160,20 @@ class UpdateCard(QFrame):
     def _dismiss(self) -> None:
         self.hide()
         self.dismissed.emit()
+
+
+class ClickLabel(QLabel):
+    """누를 수 있는 글자 — 왼쪽 버튼을 놓을 때 clicked(75 U10 버전 칸). 생김새는 QLabel 그대로."""
+    clicked = Signal()
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, e) -> None:
+        if e.button() == Qt.MouseButton.LeftButton and self.rect().contains(e.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(e)
 
 
 class FitLabel(QLabel):
@@ -771,6 +785,13 @@ class FitTableWidget(QTableWidget):
         header.setFont(saved)
         return max(0, arrow - bare)
 
+    def base_width(self) -> int:
+        """기본 글꼴로 글자를 줄이지 않고 다 들어갈 표 폭(테두리·세로 막대 포함) — PairBox 가 나란히 둘지 정한다."""
+        if not self._base_text_widths:
+            return 0
+        return (self._estimate_total(self._base_cell_px) + 2 * self.frameWidth()
+                + self.verticalScrollBar().sizeHint().width())
+
     def _estimate_total(self, cell_px: int) -> int:
         """텍스트 폭을 기준 크기 대비 선형 비례로 추정 — 후보 크기를 고르는
         용도라, 표를 다시 훑지 않고 캐시된 기준 폭에 비율만 곱한다."""
@@ -839,6 +860,41 @@ class FitTableWidget(QTableWidget):
                 cut = -(-over // len(widths))
             for c, w in widths.items():
                 self.setColumnWidth(c, w - cut)
+
+
+class PairBox(QWidget):
+    """표 둘을 나란히 — 둘 다 기본 글꼴로 들어갈 폭이 안 되면 위아래로 쌓는다.
+
+    나란히인 채 좁아지면 FitTableWidget 이 글꼴을 MIN_FONT_PX 까지 줄이고도 넘쳐 가로 스크롤이 떴다(75 — 1280×720 실제
+    창 · 메타 분석 › 하루 승률 팀컬러 표 67px · offscreen 은 글꼴 폭이 달라 test_window_size 가 놓쳤다). 판정은 지금
+    글꼴이 아니라 기본 글꼴 폭(base_width)이라 쌓은 뒤 넓어진 표가 다시 나란히로 되돌리지 않는다(왔다 갔다 없음)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._box = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._box.setContentsMargins(0, 0, 0, 0)
+        self._tables: list[FitTableWidget] = []
+
+    def add(self, layout, table: FitTableWidget) -> None:
+        self._box.addLayout(layout, 1)
+        self._tables.append(table)
+
+    def need_width(self) -> int:
+        return sum(t.base_width() for t in self._tables) + self._box.spacing() * max(0, len(self._tables) - 1)
+
+    def stacked(self) -> bool:
+        return self._box.direction() == QBoxLayout.Direction.TopToBottom
+
+    def relayout(self) -> None:
+        """표 내용이 바뀐 뒤에도 부른다 — 폭은 내용(글자 길이)에 달렸다."""
+        want = (QBoxLayout.Direction.LeftToRight if self.width() >= self.need_width()
+                else QBoxLayout.Direction.TopToBottom)
+        if self._box.direction() != want:
+            self._box.setDirection(want)
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self.relayout()
 
 
 class RowBorderDelegate(QStyledItemDelegate):
@@ -1585,6 +1641,14 @@ def sample_note(n: int, min_n: int, mixed: bool = False) -> str:
 def win_rate_note(mixed: bool) -> str:
     """승률 식 설명(머리·툴팁) — 숫자 옆 식 표시를 풀어 쓴 말."""
     return config.WIN_RATE_NOTE_MIXED if mixed else config.WIN_RATE_NOTE_SINGLE
+
+
+def pct_text(p: float) -> str:
+    """비율(%) 정수 글자 — 0 보다 큰데 반올림하면 0 이 되는 값은 "1% 미만"(75 · 2026-11-02 실화면 "1명 0%" — 0% 는 "아무도 안 쓴다"로 읽힌다)."""
+    text = f"{p:.0f}"
+    if p > 0 and text == "0":   # 0.5 도 "0" 이 된다(짝수 반올림) — 경계를 숫자로 두지 않고 글자로 본다
+        return "1% 미만"
+    return text + "%"
 
 
 def win_rate_text(win: int, draw: int, lose: int, mixed: bool, digits: int = 1, short: bool = False) -> str:

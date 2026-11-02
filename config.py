@@ -171,6 +171,7 @@ LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 RELEASES_URL = f"{REPO_URL}/releases/latest"
 UPDATE_CHECK_EVERY_H = 6            # 트레이에 상주하는 동안 다시 확인하는 간격(켤 때 한 번은 그대로)
 UPDATE_ON_SHOW_MIN = 10             # 트레이에서 창을 열 때도 확인 — 마지막 확인 뒤 이만큼 지났을 때만(74)
+UPDATE_ON_CLICK_MIN_S = 10          # 왼쪽 아래 버전 칸을 눌러 지금 확인(75 U10) — 연달아 눌러도 GitHub 에 매번 묻지 않게
 
 # 트레이 상주(tray.py · 1.1.1)
 TRAY_WAIT_S = 60                    # --tray 로 부팅 직후 트레이가 아직 없을 때 기다리는 한도
@@ -320,6 +321,9 @@ TEAMCOLOR_DUP_NAMES = frozenset({
     "Continental Heroes", "Dramatic Comebacks", "Football Association Champions", "Greatest Runner-Ups",
     "Legend of Europa", "Number 7", "Spartan", "Step Higher", "Untouchable Champions", "Winning Streak", "Wonderboys"})
 TEAMCOLOR_CACHE_DAYS = 7            # 효과 목록·단계 캐시 — 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다
+# 75 — 팀컬러 승률·랭킹의 최소 경기(거르기 기본값)와 흐림 기준이 같은 값이다(둘이 갈리면 숨기지 않은 줄이 흐려진다).
+# 8 → 10 은 2026-11-02 사용자 요청 — 다른 조건부 승률의 8판(analysis.MIN_COND)은 근거가 따로라 그대로 둔다.
+TEAMCOLOR_MIN_GAMES = 10
 TEAMCOLOR_MIN_OPPONENTS = 3         # 승률 표에서 상대가 이보다 적은 팀컬러는 흐림 — 한 사람과의 반복 대전이 승률을 끌고 가지 않게(초안)
 TEAMCOLOR_PLAYERS_PAGE = 100        # 넥슨 선수 목록 한 요청의 최대 인원(쪽 넘김 없음 — OVR 상한으로 이어 받는다)
 POSITION_OPP_FORMATIONS = 3         # [포지션별 최다 상대 › 축구장] 팀컬러마다 칩으로 보이는 포메이션 수(사용 많은 순 · 사용자 2026-10-11)
