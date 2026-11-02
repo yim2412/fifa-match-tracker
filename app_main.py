@@ -9749,14 +9749,14 @@ class MainWindow(QMainWindow):
             self._compare_last = None
             self.lb_compare_status.setText(f"{nick} — 감독모드 기록이 없습니다.")
             return
-        self._compare_last = (nick, matches, ouid, details, False)
+        self._compare_last = (nick, matches, ouid, details, "")
         self._rerender_compare()
 
     def _on_compare_partial(self, nick: str, matches: list, details: list, ouid: str) -> None:
         """U14 — 처음 보는 상대를 받는 동안 받은 만큼(최신부터) 먼저 그린다. 끝나면 _on_compare_loaded 가 덮는다."""
         if not matches:
             return
-        self._compare_last = (nick, matches, ouid, details, True)
+        self._compare_last = (nick, matches, ouid, details, "receiving")
         self._rerender_compare()
 
     def _compare_window(self, matches: list[MatchSummary]) -> list[MatchSummary]:
@@ -9785,26 +9785,29 @@ class MainWindow(QMainWindow):
         if min((m.match_date for m in shown if m.match_date is not None), default=None) != oldest:
             return ""   # 범위가 기록 끝까지 안 갔다 — 더 옛날 경기가 남아 있다
         start = self._range_start()
-        if start is not None and oldest <= start:
-            return ""
-        return f"넥슨이 주는 기록은 {oldest:%m-%d} 경기부터 — 그 앞은 셀 수 없습니다"
+        if start is None or oldest <= start:
+            return ""   # 시즌을 모르면(전체 · 시즌표 없음) 판정 안 함 — 늘 ⚠ 가 붙는다(리뷰 [하]4)
+        return f"받아 둔 기록은 {oldest:%Y-%m-%d} 경기부터 — 그 앞은 셀 수 없습니다(넥슨은 최근 약 한 달만 줍니다)"
 
     def _rerender_compare(self) -> None:
         """마지막으로 비교한 상대를 지금 위쪽 바 범위로 다시(다시 받지 않는다)."""
         last = getattr(self, "_compare_last", None)
         if last is None or not self._matches_all:
             return
-        nick, matches, ouid, details, receiving = last
-        shown = self._render_compare(nick, matches, ouid, details, receiving)
-        state = f" · 받는 중 — 지금까지 {len(matches):,}경기" if receiving else ""
-        self.lb_compare_status.setText(f"{nick} — {self._range_name()} 비교 · 상대 {len(shown):,}경기{state}")
+        nick, matches, ouid, details, state = last
+        shown = self._render_compare(nick, matches, ouid, details, state)
+        tail = (f" · 받는 중 — 지금까지 {len(matches):,}경기" if state == "receiving"
+                else f" · {len(matches):,}경기까지만 받음 — {state}" if state else "")
+        self.lb_compare_status.setText(f"{nick} — {self._range_name()} 비교 · 상대 {len(shown):,}경기{tail}")
 
     def _on_compare_failed(self, msg: str) -> None:
         self.btn_compare.setEnabled(True)
         last = getattr(self, "_compare_last", None)
-        if last is not None and last[4]:
-            # 받은 만큼 먼저 그린 것은 둔다 — 그 위에 멈춘 이유를 적는다(다시 누르면 캐시에서 이어 받는다)
-            msg = f"{len(last[1]):,}경기까지만 받음 — {msg.splitlines()[0] if msg else ''}"
+        if last is not None and last[4] == "receiving":
+            # 받은 만큼 먼저 그린 것은 둔다 — 멈춘 이유를 상태로 들고 있어 바를 바꿔 다시 그려도 남는다(다시 누르면 캐시에서 이어 받는다)
+            self._compare_last = (*last[:4], (msg.splitlines()[0] if msg else "") or "멈춤")
+            self._rerender_compare()
+            return
         self.lb_compare_status.setText(msg)
 
     def _on_compare_key_invalid(self, msg: str) -> None:
@@ -9828,9 +9831,9 @@ class MainWindow(QMainWindow):
             self._invalidate_trades()
 
     def _render_compare(self, opp_nick: str, opp_all: list[MatchSummary],
-                        opp_ouid: str, opp_details: list[dict], receiving: bool = False) -> list[MatchSummary]:
+                        opp_ouid: str, opp_details: list[dict], state: str = "") -> list[MatchSummary]:
         """두 사람 모두 위쪽 바 범위(시즌 → 빠른 범위)로 자른 경기끼리. 그린 상대 경기 목록을 돌려준다.
-        receiving — 처음 보는 상대를 아직 받는 중(받은 최신 경기만 있다)."""
+        state — "" 다 받음 · "receiving" 처음 보는 상대를 받는 중 · 그 밖 글 = 받다가 멈춘 이유(둘 다 받은 최신 경기만 있다)."""
         my_matches = self._slice()[0]
         opp_matches = self._compare_window(opp_all)
         # 나 대 상대 — 두 계정 경기를 합친 범위로 식 한 번(같은 식끼리 견준다)
@@ -9845,8 +9848,9 @@ class MainWindow(QMainWindow):
 
         # 경기 수 옆 ⚠ + 말풍선(76) — 범위가 기록 끝에 닿았거나 아직 받는 중. 설명 줄은 새로 안 둔다(Q3)
         notes = [self._cut_note(self._matches_all, my_matches), self._cut_note(opp_all, opp_matches)]
-        if receiving:
-            notes[1] = f"아직 받는 중 — 지금까지 받은 최근 {len(opp_all):,}경기만 셉니다"
+        if state:
+            notes[1] = (f"아직 받는 중 — 지금까지 받은 최근 {len(opp_all):,}경기만 셉니다" if state == "receiving"
+                        else f"받다가 멈춤({state}) — 받은 최근 {len(opp_all):,}경기만 셉니다")
         heads = [f"{nick} ({len(ms):,}경기){' ⚠' if note else ''}"
                  for nick, ms, note in ((self._nick, my_matches, notes[0]), (opp_nick, opp_matches, notes[1]))]
         self.tbl_compare.setHorizontalHeaderLabels(["지표", *heads])
@@ -13812,6 +13816,7 @@ class MainWindow(QMainWindow):
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
+        self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
         if self._prefetch is not None:
             self._prefetch.discard()  # discard 는 멈춤 표시만 — 끝난 Future 의 결과는 참조를 놓아야 풀린다
         self._prefetch = None

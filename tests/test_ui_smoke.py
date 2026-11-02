@@ -4499,41 +4499,77 @@ def test_compare_loader_partial_only_for_unseen_account():
 
 def test_compare_follows_top_bar_and_marks_cut():
     # 76 — 구단주 비교는 위쪽 바(시즌 + 빠른 범위)로 두 사람을 똑같이 자른다 · 바를 바꾸면 다시 받지 않고 다시 그린다 ·
-    # 범위가 기록 끝에 닿았는데 기록이 범위 시작보다 늦게 시작하면 경기 수 옆 ⚠ + 말풍선 · 받는 중이면 그것도 ⚠
+    # 범위가 기록 끝에 닿았는데 기록이 범위 시작보다 늦게 시작하면 경기 수 옆 ⚠ + 말풍선 · 받는 중·멈춤이면 그것도 ⚠
     import dataclasses
     opp = [dataclasses.replace(m, match_id=f"o{i}") for i, m in enumerate(_MATCHES)]
-    saved = (_win._fill_compare_squad, _win._compare_last, _win._range_start)
+    saved = (_win._fill_compare_squad, _win._compare_last)
     _win._fill_compare_squad = lambda *a: None
     t = _win.tbl_compare
     head = lambda c: t.horizontalHeaderItem(c)   # noqa: E731
+    oldest = min(m.match_date for m in opp)
+    n = len(_MATCHES)
     try:
-        _win._compare_last = ("상대", opp, "opp", [], False)
-        _win._range_start = lambda: None              # 전체 — 시작을 모르면 기록 끝에 닿은 것만으로 ⚠
+        _win._compare_last = ("상대", opp, "opp", [], "")
+        _win._range_start = lambda: oldest - timedelta(days=1)   # 시즌이 기록보다 먼저 시작 — 앞은 못 셌다
         with _range("games", 2):
             assert head(1).text().startswith(f"{_win._nick} (2경기)") and head(2).text().startswith("상대 (2경기)"), \
                 (head(1).text(), head(2).text())
             assert t.item(0, 1).text() == "2" and t.item(0, 2).text() == "2"
             assert "최근 2경기" in _win.lb_compare_status.text(), _win.lb_compare_status.text()
             assert "⚠" not in head(2).text() and head(2).toolTip() == ""   # 2판으론 기록 끝에 안 닿는다
-        n = len(_MATCHES)
         assert head(2).text() == f"상대 ({n}경기) ⚠", head(2).text()  # 범위를 풀면 다시 그린다(전체 = 기록 끝)
-        oldest = min(m.match_date for m in opp)
-        assert f"{oldest:%m-%d} 경기부터" in head(2).toolTip(), head(2).toolTip()
-        # 기록이 범위 시작보다 먼저 있으면 셀 수 있는 것을 다 센 것 — ⚠ 없음
+        assert f"{oldest:%Y-%m-%d} 경기부터" in head(2).toolTip(), head(2).toolTip()
+        # 기록이 범위 시작 때부터 있으면 셀 수 있는 것을 다 센 것 — ⚠ 없음
         _win._range_start = lambda: oldest
         _win._rerender_compare()
         assert head(2).text() == f"상대 ({n}경기)" and head(2).toolTip() == "", head(2).text()
+        # 시즌을 모르면(전체 · 시즌표 없음) 판정하지 않는다 — 안 그러면 늘 ⚠(리뷰 [하]4)
+        _win._range_start = lambda: None
+        _win._rerender_compare()
+        assert "⚠" not in head(1).text() + head(2).text(), (head(1).text(), head(2).text())
         # 받는 중 — 기록 끝과 무관하게 ⚠ · 상태 줄에 받은 수
-        _win._compare_last = ("상대", opp[:1], "opp", [], True)
+        _win._compare_last = ("상대", opp[:1], "opp", [], "receiving")
         _win._rerender_compare()
         assert head(2).text().endswith("⚠") and "받는 중" in head(2).toolTip(), head(2).toolTip()
         assert "받는 중" in _win.lb_compare_status.text()
-        # 한도 등으로 멈추면 받은 만큼은 남기고 이유를 적는다
+        # 한도 등으로 멈추면 받은 만큼은 남기고 이유를 적는다 — 바를 바꿔 다시 그려도 "받는 중"으로 안 돌아간다(리뷰 [중]1)
         _win._on_compare_failed("넥슨 API 호출 한도\n자세한 말")
-        assert _win.lb_compare_status.text().startswith("1경기까지만 받음"), _win.lb_compare_status.text()
+        for _ in range(2):
+            st = _win.lb_compare_status.text()
+            assert "1경기까지만 받음 — 넥슨 API 호출 한도" in st and "받는 중" not in st, st
+            assert "멈춤" in head(2).toolTip() and head(2).text().endswith("⚠"), head(2).toolTip()
+            _win._on_range_changed()
     finally:
-        _win._fill_compare_squad, _win._compare_last = saved[0], saved[1]
-        del _win._range_start
+        _win._fill_compare_squad, _win._compare_last = saved
+        if "_range_start" in vars(_win):
+            del _win._range_start
+
+
+def test_compare_range_start_from_season_table():
+    # _range_start 실물 — 위 테스트는 바꿔 끼우므로 여기서 잰다(리뷰 [하]5). 진행 중 = 시즌표 마지막 종료 8시 · 지난 시즌 = 그 시작 8시
+    from datetime import date
+    import seasons as sn_
+    s1 = sn_.Season(1, "시즌 1", date(2026, 7, 30), date(2026, 9, 10))
+    s2 = sn_.Season(2, "시즌 2", date(2026, 9, 10), date(2026, 10, 29))
+    saved = _win._rank_seasons, _win.cb_season.currentIndex()
+    _win._rank_seasons = [s1, s2]
+    picked = {}
+    real = _win.cb_season.currentData
+    try:
+        _win.cb_season.currentData = lambda: picked["v"]
+        picked["v"] = None
+        assert _win._range_start() is None
+        picked["v"] = _win.ONGOING
+        assert _win._range_start() == datetime(2026, 10, 29, config.SEASON_CUTOFF_H), _win._range_start()
+        picked["v"] = s1
+        assert _win._range_start() == datetime(2026, 7, 30, config.SEASON_CUTOFF_H), _win._range_start()
+        _win._rank_seasons = []
+        picked["v"] = _win.ONGOING
+        assert _win._range_start() is None   # 시즌표가 비면 모른다 → ⚠ 판정 안 함
+    finally:
+        _win.cb_season.currentData = real
+        _win._rank_seasons = saved[0]
+        _win.cb_season.setCurrentIndex(saved[1])
 
 
 def test_research_same_account_reads_only_new_matches():
@@ -6562,6 +6598,8 @@ def test_release_drops_every_reference():
         pf._future.set_result((list(matches), list(details)))
         _win._prefetch = pf
         del pf
+        # 구단주 비교 상대(76) — 비교한 상대의 상세 전부를 쥔다(같은 상세 객체로 심어 내려놓기가 놓는지 잰다)
+        _win._compare_last = ("상대", list(matches), "opp", list(details), "")
         # 테스트 쪽 참조는 지운다 — 창은 넘긴 목록 객체를 그대로 쥐므로, 그 목록을 '내 것'으로 빼면 창의 참조도 안 보인다
         mine: set = set()
         del matches, details

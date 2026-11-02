@@ -1133,7 +1133,7 @@ class DivisionRunChart(_Chart):
 
     BADGE = 20          # 축·머리 배지 크기(px)
     HEAD_H = 26         # 머리 줄 높이
-    EMPTY = "표시 구간에 등급 정보가 있는 경기가 없습니다."
+    EMPTY = "이 시즌에 등급 정보가 있는 경기가 없습니다."
 
     def __init__(self):
         super().__init__(min_h=220)
