@@ -4464,6 +4464,78 @@ def _run_loader(api):
     return got
 
 
+def test_compare_loader_partial_only_for_unseen_account():
+    # 76 U14 — 받는 중간 결과는 저장된 경기가 없는 계정만 · 켠 로더만. 저장분이 있는데 보내면 최신 몇 판과 옛 기록
+    # 사이가 비어 "최근 N판"이 틀린다
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA, config.COMPARE_PARTIAL_EVERY
+    config.DB_PATH, config.WEB_DATA, config.COMPARE_PARTIAL_EVERY = tmp / "t.db", False, 1
+
+    def run(emit, only=None):
+        parts, ok = [], []
+        ld = app_main.MatchLoader(_DetailApi([], "", only=only), "닉", 52, emit_partial=emit)
+        ld.partial.connect(lambda ms, ds, ouid: parts.append((len(ms), len(ds), ouid)))
+        ld.finished_ok.connect(lambda *a: ok.append(len(a[0])))
+        ld.run()
+        assert ok, "끝 신호가 없다"
+        return parts
+
+    ids = sorted(d["matchId"] for d in _DETAILS)
+    try:
+        assert run(False, ids[:2]) == []                       # 끈 로더(메인 검색)는 안 보낸다
+        # 처음 보는 계정(새 DB) — 한 판마다(문턱 1) · 마지막 판은 끝 신호가 대신한다
+        config.DB_PATH = tmp / "t2.db"
+        n = len(_DETAILS)
+        got = run(True)
+        assert got == [(k, k, _OUID) for k in range(1, n)], got
+        # 저장분이 있는 계정 — 앞의 2판만 둔 DB 에서 나머지를 받아도 안 보낸다
+        config.DB_PATH = tmp / "t3.db"
+        run(True, ids[:2])
+        assert run(True) == [], "저장분이 있는 계정에 중간 결과를 보냈다"
+    finally:
+        config.DB_PATH, config.WEB_DATA, config.COMPARE_PARTIAL_EVERY = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_compare_follows_top_bar_and_marks_cut():
+    # 76 — 구단주 비교는 위쪽 바(시즌 + 빠른 범위)로 두 사람을 똑같이 자른다 · 바를 바꾸면 다시 받지 않고 다시 그린다 ·
+    # 범위가 기록 끝에 닿았는데 기록이 범위 시작보다 늦게 시작하면 경기 수 옆 ⚠ + 말풍선 · 받는 중이면 그것도 ⚠
+    import dataclasses
+    opp = [dataclasses.replace(m, match_id=f"o{i}") for i, m in enumerate(_MATCHES)]
+    saved = (_win._fill_compare_squad, _win._compare_last, _win._range_start)
+    _win._fill_compare_squad = lambda *a: None
+    t = _win.tbl_compare
+    head = lambda c: t.horizontalHeaderItem(c)   # noqa: E731
+    try:
+        _win._compare_last = ("상대", opp, "opp", [], False)
+        _win._range_start = lambda: None              # 전체 — 시작을 모르면 기록 끝에 닿은 것만으로 ⚠
+        with _range("games", 2):
+            assert head(1).text().startswith(f"{_win._nick} (2경기)") and head(2).text().startswith("상대 (2경기)"), \
+                (head(1).text(), head(2).text())
+            assert t.item(0, 1).text() == "2" and t.item(0, 2).text() == "2"
+            assert "최근 2경기" in _win.lb_compare_status.text(), _win.lb_compare_status.text()
+            assert "⚠" not in head(2).text() and head(2).toolTip() == ""   # 2판으론 기록 끝에 안 닿는다
+        n = len(_MATCHES)
+        assert head(2).text() == f"상대 ({n}경기) ⚠", head(2).text()  # 범위를 풀면 다시 그린다(전체 = 기록 끝)
+        oldest = min(m.match_date for m in opp)
+        assert f"{oldest:%m-%d} 경기부터" in head(2).toolTip(), head(2).toolTip()
+        # 기록이 범위 시작보다 먼저 있으면 셀 수 있는 것을 다 센 것 — ⚠ 없음
+        _win._range_start = lambda: oldest
+        _win._rerender_compare()
+        assert head(2).text() == f"상대 ({n}경기)" and head(2).toolTip() == "", head(2).text()
+        # 받는 중 — 기록 끝과 무관하게 ⚠ · 상태 줄에 받은 수
+        _win._compare_last = ("상대", opp[:1], "opp", [], True)
+        _win._rerender_compare()
+        assert head(2).text().endswith("⚠") and "받는 중" in head(2).toolTip(), head(2).toolTip()
+        assert "받는 중" in _win.lb_compare_status.text()
+        # 한도 등으로 멈추면 받은 만큼은 남기고 이유를 적는다
+        _win._on_compare_failed("넥슨 API 호출 한도\n자세한 말")
+        assert _win.lb_compare_status.text().startswith("1경기까지만 받음"), _win.lb_compare_status.text()
+    finally:
+        _win._fill_compare_squad, _win._compare_last = saved[0], saved[1]
+        del _win._range_start
+
+
 def test_research_same_account_reads_only_new_matches():
     # 같은 계정을 다시 검색하면 화면이 가진 경기는 DB 에서 다시 읽지 않는다 — 결과는 전부 읽은 것과 같아야 한다
     tmp = pathlib.Path(tempfile.mkdtemp())
@@ -5537,10 +5609,9 @@ def test_compare_colors_the_better_side():
     mine = [dataclasses.replace(m, result="승", opp_goals=0) for m in _MATCHES]
     # 상대는 더 많이 먹는다 — 실점 카드는 "나가 낮음 = 좋음" 이라 ▼ 인데 GOOD 여야 한다(lower_better)
     opp = [dataclasses.replace(m, result="패", match_id=f"o{i}", opp_goals=3) for i, m in enumerate(_MATCHES)]
-    saved = (_win._matches, _win._fill_compare_squad, _win.sp_compare_n.value())
+    saved = (_win._matches, _win._fill_compare_squad)
     _win._matches = mine
     _win._fill_compare_squad = lambda *a: None          # 스쿼드 그림은 이미지 받기라 뺀다
-    _win.sp_compare_n.setValue(len(mine))
     try:
         _win._render_compare("상대", opp, "opp", [])
         a, b = summ(mine), summ(opp)
@@ -5570,7 +5641,6 @@ def test_compare_colors_the_better_side():
         assert cards["승률"].delta.property("delta_color") == T.GOOD
     finally:
         _win._matches, _win._fill_compare_squad = saved[0], saved[1]
-        _win.sp_compare_n.setValue(saved[2])
 
 
 # ── 축구장 v2(C) · ⑨ · ① (2.1.1 15단계) ───────────────────────────────────────
@@ -5705,13 +5775,12 @@ def test_ask_notice_update_refreshes_pitches():
 
 def test_compare_two_pitches_fit_min_window():
     """구단주 비교의 축구장 둘이 1280×720 창에서 가로 스크롤 없이 나란히(예전엔 560×2 를 가로 스크롤로 버텼다)."""
-    saved = (_win.sp_compare_n.value(), config.WEB_DATA, _win.stack.currentIndex())
+    saved = (None, config.WEB_DATA, _win.stack.currentIndex())
     config.WEB_DATA = False
     try:
         _win.stack.setCurrentIndex(_win.PAGE_MAIN)
         _at_size(*app_main.MIN_WINDOW)
         _win._go_page("구단주 비교")
-        _win.sp_compare_n.setValue(len(_MATCHES))
         _win._render_compare("상대", list(_MATCHES), _OUID, list(_DETAILS))
         _app.processEvents()
         _app.processEvents()
@@ -5727,16 +5796,13 @@ def test_compare_two_pitches_fit_min_window():
         for p in pitches:
             assert p.field.width() >= p.field.minimumWidth() and len(p.chips()) == 11, (p.field.width(), len(p.chips()))
     finally:
-        _win.sp_compare_n.setValue(saved[0])
         config.WEB_DATA = saved[1]
         _win.stack.setCurrentIndex(saved[2])
         _at_size(1600, 900)
 
 
 def test_compare_profile_rows_and_key_players():
-    saved = _win.sp_compare_n.value()
     try:
-        _win.sp_compare_n.setValue(len(_MATCHES))
         _win._render_compare("상대", list(_MATCHES), _OUID, list(_DETAILS))
         t = _win.tbl_compare
         labels = [t.item(r, 0).text() for r in range(t.rowCount())]
@@ -5750,8 +5816,7 @@ def test_compare_profile_rows_and_key_players():
         assert "키플레이어" in html and all(p.name in html for p in kp.by_rating), html
         # 범위 — 비교 경기 수를 줄이면 그 경기만(승·무·패로 끝난 경기 하나 — 몰수·오류는 team_profile 이 뺀다)
         first = next(m for m in _MATCHES if m.result in ("승", "무", "패"))
-        _win.sp_compare_n.setValue(1)
-        _win._matches, keep_m = [first], _win._matches
+        _win._matches, keep_m = [first], _win._matches   # 76 — 비교 범위는 위쪽 바(_slice) · 내 쪽은 시즌 목록에서
         try:
             _win._render_compare("상대", [first], _OUID, list(_DETAILS))
         finally:
@@ -5773,12 +5838,12 @@ def test_compare_profile_rows_and_key_players():
         fold.head.click()
         assert fold.is_open()
     finally:
-        _win.sp_compare_n.setValue(saved)
+        pass
 
 
 def test_compare_extra_tabs_render_and_fit():
     """구단주 비교 D1(50단계) — 탭 셋 · 차이 요약 문구 · 슛 지도·골 흐름 둘 · 자리별 표, 1280×720 에서 가로 스크롤 없이."""
-    saved = (_win.sp_compare_n.value(), config.WEB_DATA, _win.stack.currentIndex(), _win._matches, _win._details)
+    saved = (None, config.WEB_DATA, _win.stack.currentIndex(), _win._matches, _win._details)
     config.WEB_DATA = False
     real_summary = app_main.core.compare_summary
     try:
@@ -5789,7 +5854,6 @@ def test_compare_extra_tabs_render_and_fit():
         many = list(_DETAILS) * 3                       # 같은 경기 12개 — 요약이 나올 수 있는 최소 경기 수를 넘긴다
         assert len(many) >= app_main.core.COMPARE_MIN_GAMES
         _win._details = many
-        _win.sp_compare_n.setValue(len(_MATCHES))
         # 경기가 적으면 요약 대신 이유를 말한다
         _win._render_compare("상대", list(_MATCHES), _OUID, list(_DETAILS))
         assert "이상일 때" in _win.lb_compare_summary.text(), _win.lb_compare_summary.text()
@@ -5851,7 +5915,6 @@ def test_compare_extra_tabs_render_and_fit():
         app_main.core.compare_summary = real_summary
         _win._matches, _win._details = saved[3], saved[4]
         _win.pt_compare.set_current("지표·스쿼드")
-        _win.sp_compare_n.setValue(saved[0])
         config.WEB_DATA = saved[1]
         _win.stack.setCurrentIndex(saved[2])
         _at_size(1600, 900)

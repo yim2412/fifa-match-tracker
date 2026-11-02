@@ -376,10 +376,13 @@ class MatchLoader(Worker):
     max_division_ready = Signal(str, object)
     # 이번 검색의 ELO 를 새 줄로 적었다(1.3.1) — 랭킹이 finished_ok 보다 늦게 와도 ELO 그래프가 이번 점을 넣게
     elo_saved = Signal(str)
+    # 76 U14 — 받는 중간 결과(최신순 [MatchSummary], [원본 detail], ouid). 저장된 경기가 하나도 없는 계정만 —
+    # 저장분이 있으면 최신 몇 판과 옛 기록 사이에 구멍이 생겨 "최근 N판"이 실제와 달라진다. 구단주 비교만 켠다
+    partial = Signal(object, object, str)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
-                 record_elo: bool = False, want_max_division: bool = False):
+                 record_elo: bool = False, want_max_division: bool = False, emit_partial: bool = False):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
         offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
@@ -389,6 +392,7 @@ class MatchLoader(Worker):
         super().__init__()
         self._record_elo = record_elo
         self._want_max_division = want_max_division  # 메인 검색만 — 구단주 비교 로더는 안 부른다
+        self._emit_partial = emit_partial
         self._tail: ThreadPoolExecutor | None = None  # 상세 받기가 끝난 뒤 maxdivision 한 건
         self._api = api
         self._nickname = nickname
@@ -503,6 +507,8 @@ class MatchLoader(Worker):
                 todo = [i for i in ids if i not in known]
 
                 fresh: list[dict] = []
+                fresh_m: list[MatchSummary] = []   # partial 용 — 받은 순서(= 최신순, pool.map 은 순서를 지킨다)
+                partial_on = self._emit_partial and not known
                 done = 0
                 if todo:
                     # 이 검색 전까지의 429 수 — API 객체는 앱이 켜져 있는 동안 계속 세므로, 지난 검색의 429 로
@@ -522,6 +528,12 @@ class MatchLoader(Worker):
                                                + eta_text(done, len(todo), time.monotonic() - started))
                             if detail is not None:
                                 fresh.append(detail)
+                                if partial_on:
+                                    m = parse_match(detail, ouid)
+                                    if m is not None:
+                                        fresh_m.append(m)
+                            if partial_on and done % config.COMPARE_PARTIAL_EVERY == 0 and done < len(todo):
+                                self.partial.emit(list(fresh_m), list(fresh), ouid)   # 사본 — 이 스레드가 계속 붙인다
                     except (RuntimeError, CancelledError):
                         return  # cancel() 이 pool 을 내려 map 이 끊긴 경우
                     finally:
@@ -2718,6 +2730,7 @@ class MainWindow(QMainWindow):
         self._released = False     # 숨긴 지 오래돼 경기 기록을 내려놓았다(release_memory) — 열 때 다시 읽는다
         self._shown_once = False   # show_initial 을 한 번 거쳤나(--tray 로 숨긴 채 만든 창은 처음 열 때 거친다)
         self._compare_loader: MatchLoader | None = None  # 구단주 비교 — 상대 계정 조회용
+        self._compare_last = None   # (닉네임, 경기 전부, ouid, 상세, 받는 중) — 위쪽 바를 바꾸면 이걸로 다시 그린다(76)
         self._compare_squad_loaders: list = []  # 구단주 비교 스쿼드 이미지/시즌아이콘 로더
         self._pitch_card_loaders: list = []     # 축구장 칩 카드 정보(CardInfoLoader) — 대화상자가 닫혀도 종료 표가 기다린다
         self._live_pitches: list = []           # 카드 정보를 쓰는 축구장 — 동의 직후 막혔던 것을 다시 읽는다
@@ -9578,15 +9591,7 @@ class MainWindow(QMainWindow):
         self.ed_compare_nick.setPlaceholderText("비교할 구단주명")
         self.ed_compare_nick.setMaximumWidth(220)
         self.ed_compare_nick.returnPressed.connect(self._on_compare_search)
-        lb_n = QLabel("최근")
-        lb_n.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.sp_compare_n = QSpinBox()
-        self.sp_compare_n.setRange(5, 100)
-        self.sp_compare_n.setValue(30)
-        self.sp_compare_n.setFixedWidth(64)
-        self.sp_compare_n.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        lb_n2 = QLabel("경기")
-        lb_n2.setStyleSheet(f"color: {T.TEXT_DIM};")
+        # 76 — 옛 "최근 [30] 경기" 칸은 뺐다. 범위는 위쪽 바(시즌 + 빠른 범위)를 두 사람에게 똑같이 건다(Q1)
         self.btn_compare = QPushButton("비교")
         self.btn_compare.setObjectName("primary")
         self.btn_compare.clicked.connect(self._on_compare_search)
@@ -9595,10 +9600,6 @@ class MainWindow(QMainWindow):
 
         row.addWidget(lb)
         row.addWidget(self.ed_compare_nick)
-        row.addSpacing(8)
-        row.addWidget(lb_n)
-        row.addWidget(self.sp_compare_n)
-        row.addWidget(lb_n2)
         row.addSpacing(8)
         row.addWidget(self.btn_compare)
         row.addSpacing(8)
@@ -9723,7 +9724,12 @@ class MainWindow(QMainWindow):
         # 내 계정과 같은 방식(MatchLoader) 재사용 — 이미 DB 캐시·중복 방지가 있어
         # 같은 상대를 다시 비교하면 거의 즉시 끝난다.
         self._yield_trades()
-        self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE)
+        self._compare_last = None   # 다른 상대 — 바를 바꿔도 옛 상대를 다시 그리지 않게
+        self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, emit_partial=True)
+        self._compare_loader.progress.connect(
+            lambda done, total, msg, n=nick: self.lb_compare_status.setText(f"'{n}' {msg}"))
+        self._compare_loader.partial.connect(
+            lambda ms, ds, ouid, n=nick: self._on_compare_partial(n, ms, ds, ouid))
         self._compare_loader.finished.connect(self.start_trades)  # 끝나면 거래 받기를 잇는다
         self._compare_loader.finished.connect(self.start_visible_api_loader)
         self._compare_loader.finished_ok.connect(self._on_compare_loaded)
@@ -9740,15 +9746,65 @@ class MainWindow(QMainWindow):
         self.btn_compare.setEnabled(True)
         nick = basic.get("nickname") or self.ed_compare_nick.text().strip()
         if not matches:
+            self._compare_last = None
             self.lb_compare_status.setText(f"{nick} — 감독모드 기록이 없습니다.")
             return
-        n = self.sp_compare_n.value()
-        self._render_compare(nick, matches[:n], ouid, details)
-        self.lb_compare_status.setText(
-            f"{nick} — 최근 {min(n, len(matches))}경기 비교")
+        self._compare_last = (nick, matches, ouid, details, False)
+        self._rerender_compare()
+
+    def _on_compare_partial(self, nick: str, matches: list, details: list, ouid: str) -> None:
+        """U14 — 처음 보는 상대를 받는 동안 받은 만큼(최신부터) 먼저 그린다. 끝나면 _on_compare_loaded 가 덮는다."""
+        if not matches:
+            return
+        self._compare_last = (nick, matches, ouid, details, True)
+        self._rerender_compare()
+
+    def _compare_window(self, matches: list[MatchSummary]) -> list[MatchSummary]:
+        """위쪽 바 범위를 상대 목록에 — 내 쪽 _slice() 와 같은 규칙(시즌 → 빠른 범위). 최신순으로 받는다."""
+        selected = self.cb_season.currentData()
+        if selected is not None:
+            matches = [m for m in matches if self._in_selected_season(m.match_date, selected)]
+        return core.window_of(matches, *self._range_spec())
+
+    def _range_start(self):
+        """고른 시즌의 시작 시각(KST) — 전체면 None. ⚠(기록이 그보다 늦게 시작) 판정용."""
+        selected = self.cb_season.currentData()
+        if selected is None:
+            return None
+        if selected == self.ONGOING:
+            return max((s.end_at for s in self._rank_seasons), default=None)
+        return selected.start_at
+
+    def _cut_note(self, all_matches: list[MatchSummary], shown: list[MatchSummary]) -> str:
+        """범위가 그 사람의 가장 오래된 기록까지 닿았는데 기록이 범위 시작보다 늦게 시작하면 — 넥슨이 주는 기록은
+        최근 약 한 달이라 그 앞은 셀 수 없다. 말풍선 글(없으면 ""). 늦게 시작한 계정이어도 문장은 참이다."""
+        dated = [m.match_date for m in all_matches if m.match_date is not None]
+        if not dated or not shown:
+            return ""
+        oldest = min(dated)
+        if min((m.match_date for m in shown if m.match_date is not None), default=None) != oldest:
+            return ""   # 범위가 기록 끝까지 안 갔다 — 더 옛날 경기가 남아 있다
+        start = self._range_start()
+        if start is not None and oldest <= start:
+            return ""
+        return f"넥슨이 주는 기록은 {oldest:%m-%d} 경기부터 — 그 앞은 셀 수 없습니다"
+
+    def _rerender_compare(self) -> None:
+        """마지막으로 비교한 상대를 지금 위쪽 바 범위로 다시(다시 받지 않는다)."""
+        last = getattr(self, "_compare_last", None)
+        if last is None or not self._matches_all:
+            return
+        nick, matches, ouid, details, receiving = last
+        shown = self._render_compare(nick, matches, ouid, details, receiving)
+        state = f" · 받는 중 — 지금까지 {len(matches):,}경기" if receiving else ""
+        self.lb_compare_status.setText(f"{nick} — {self._range_name()} 비교 · 상대 {len(shown):,}경기{state}")
 
     def _on_compare_failed(self, msg: str) -> None:
         self.btn_compare.setEnabled(True)
+        last = getattr(self, "_compare_last", None)
+        if last is not None and last[4]:
+            # 받은 만큼 먼저 그린 것은 둔다 — 그 위에 멈춘 이유를 적는다(다시 누르면 캐시에서 이어 받는다)
+            msg = f"{len(last[1]):,}경기까지만 받음 — {msg.splitlines()[0] if msg else ''}"
         self.lb_compare_status.setText(msg)
 
     def _on_compare_key_invalid(self, msg: str) -> None:
@@ -9771,11 +9827,12 @@ class MainWindow(QMainWindow):
             self.start_trades()
             self._invalidate_trades()
 
-    def _render_compare(self, opp_nick: str, opp_matches: list[MatchSummary],
-                        opp_ouid: str, opp_details: list[dict]) -> None:
-        n = self.sp_compare_n.value()
-        # self._matches 는 누적 전체가 최신순으로 있으므로 앞에서 N개만 쓴다.
-        my_matches = self._matches[:n]
+    def _render_compare(self, opp_nick: str, opp_all: list[MatchSummary],
+                        opp_ouid: str, opp_details: list[dict], receiving: bool = False) -> list[MatchSummary]:
+        """두 사람 모두 위쪽 바 범위(시즌 → 빠른 범위)로 자른 경기끼리. 그린 상대 경기 목록을 돌려준다.
+        receiving — 처음 보는 상대를 아직 받는 중(받은 최신 경기만 있다)."""
+        my_matches = self._slice()[0]
+        opp_matches = self._compare_window(opp_all)
         # 나 대 상대 — 두 계정 경기를 합친 범위로 식 한 번(같은 식끼리 견준다)
         mixed = core.mixed_of_matches(list(my_matches) + list(opp_matches))
         my_stats = summarize(my_matches, mixed)
@@ -9786,9 +9843,15 @@ class MainWindow(QMainWindow):
         my_prof = {a.name: a.mine for a in core.team_profile(my_details, self._ouid).axes}
         opp_prof = {a.name: a.mine for a in core.team_profile(opp_details, opp_ouid).axes}
 
-        self.tbl_compare.setHorizontalHeaderLabels(
-            ["지표", f"{self._nick} (최근 {len(my_matches)}경기)",
-             f"{opp_nick} (최근 {len(opp_matches)}경기)"])
+        # 경기 수 옆 ⚠ + 말풍선(76) — 범위가 기록 끝에 닿았거나 아직 받는 중. 설명 줄은 새로 안 둔다(Q3)
+        notes = [self._cut_note(self._matches_all, my_matches), self._cut_note(opp_all, opp_matches)]
+        if receiving:
+            notes[1] = f"아직 받는 중 — 지금까지 받은 최근 {len(opp_all):,}경기만 셉니다"
+        heads = [f"{nick} ({len(ms):,}경기){' ⚠' if note else ''}"
+                 for nick, ms, note in ((self._nick, my_matches, notes[0]), (opp_nick, opp_matches, notes[1]))]
+        self.tbl_compare.setHorizontalHeaderLabels(["지표", *heads])
+        for col, note in enumerate(notes, start=1):
+            self.tbl_compare.horizontalHeaderItem(col).setToolTip(note)
 
         rows = [("경기수", str(len(my_matches)), str(len(opp_matches)),
                 len(my_matches), len(opp_matches), None)]
@@ -9843,6 +9906,7 @@ class MainWindow(QMainWindow):
                                  self._nick)
         self._fill_compare_squad(self.box_compare_opp_squad, opp_ouid, opp_details,
                                  opp_nick)
+        return opp_matches
 
     def _render_compare_extra(self, opp_nick: str, my_details: list[dict], opp_details: list[dict],
                               opp_ouid: str, mixed: bool, table: dict) -> None:
@@ -10224,6 +10288,7 @@ class MainWindow(QMainWindow):
         self._refresh_range_labels()
         for key in sorted(self.RANGE_KEYS):
             self._invalidate(key)
+        self._rerender_compare()   # 구단주 비교도 같은 범위(Q1) — 그리기 표 밖이라 따로
 
     def _refresh_range_labels(self) -> None:
         n = len(self._slice()[0])
@@ -10375,6 +10440,7 @@ class MainWindow(QMainWindow):
         if render and self._matches_all:
             self._render_all()
             self._on_fetch_team_colors()
+            self._rerender_compare()
 
     def _set_busy(self, busy: bool) -> None:
         for w in (*self._search_btns, *self._nick_edits, self.ed_search):

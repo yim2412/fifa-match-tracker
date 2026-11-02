@@ -916,3 +916,5 @@ MAX_MATCH_LIMIT = 100     # 넥슨 API가 한 번에 주는 상한
 # 자르는 화면은 옛 표시 구간 8곳 + 구단주 비교뿐(app_main.RANGE_KEYS) — 상성·팀컬러는 시즌 그대로(1~2판 승률이 된다)
 RANGE_GAMES = (100, 200, 500)
 RANGE_DAYS = (1, 3, 5, 10)
+# 구단주 비교 — 처음 보는 상대는 상세를 이만큼 받을 때마다 받은 만큼 먼저 그린다(U14 · 3천 판이면 열 번)
+COMPARE_PARTIAL_EVERY = 300
