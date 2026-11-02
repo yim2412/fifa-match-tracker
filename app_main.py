@@ -72,7 +72,7 @@ import tray
 import updatecheck
 from core_api import (
     MatchSummary, current_streak, longest_streaks, opponent_stats, parse_match,
-    period_stats, summarize, win_rate_trend,
+    PeriodStat, period_stats, summarize,
 )
 from nexon_api import (
     ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, SERVER_CODES, FCOnlineAPI, NexonAPIError,
@@ -2694,7 +2694,6 @@ class MainWindow(QMainWindow):
         self._season_picked = False
         self._names: dict = {}
         self._positions: dict = {}
-        self._trend_reset_pending = True
         self._div_runs: list = []       # 등급 계단(66 G1) — 이번 시즌 구간(habits.DivisionRun) · 시작·시즌을 아는가
         self._div_span: tuple = (None, False)
         self._div_badges: dict = {}     # 등급 id → QPixmap(받은 것) · 한 번 시도한 등급은 이 실행에서 다시 안 받는다
@@ -3518,12 +3517,11 @@ class MainWindow(QMainWindow):
                  ("상대 팀컬러", "_build_teamcolor_tab"),   # 77 B — 옛 [팀컬러 승률]·[팀컬러 랭킹]
                  ("구단주 비교", "_build_compare_tab")]),
         ("흐름", [("흐름 분석", "_build_analysis_tab"),
-                 ("승률 그래프", Tabs("trend", (("승률·등급", "_build_trend_tab"),
+                 ("승률 그래프", Tabs("trend", (("등급", "_build_grade_tab"),   # 77 C — "최근 N일 승률" 은 [기간별 성적] 으로
                                               ("점수·예측", "_build_elo_tab"),
                                               ("일별 기록", "_build_calendar_tab"),
                                               ("순위 변동", "_build_rank_move_tab")))),
-                 ("기간별 추이", "_build_period_tab"),
-                 ("시즌별 성적", "_build_season_tab")]),
+                 ("기간별 성적", "_build_period_tab")]),   # 77 A — 옛 [기간별 추이]·[시즌별 성적]
         ("경기력", [("승부처 분석", Tabs("clutch", (("선제골·역전", "_build_clutch_tab"),
                                               ("리드·골 흐름", "_build_goal_flow_tab")))),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
@@ -3572,9 +3570,12 @@ class MainWindow(QMainWindow):
         "선수별 결정력": ("선수 지표", "결정력"),   # 77 E
         "팀컬러 승률": ("상대 팀컬러", None),        # 77 B
         "팀컬러 랭킹": ("상대 팀컬러", None),
+        "기간별 추이": ("기간별 성적", None),       # 77 A
+        "시즌별 성적": ("기간별 성적", None),
     }
     # 지운 탭 → 새 탭(메뉴별). settings.ini 의 보던 탭이 옛 이름이면 새 자리로 연다
-    OLD_TAB_NAMES = {"메타 분석": {"가성비": "팀컬러"}}   # 67 R1 — [가성비] 는 [팀컬러] 목록의 한 칸이 됐다(U1)
+    OLD_TAB_NAMES = {"메타 분석": {"가성비": "팀컬러"},   # 67 R1 — [가성비] 는 [팀컬러] 목록의 한 칸이 됐다(U1)
+                     "승률 그래프": {"승률·등급": "등급"}}    # 77 C — 승률 부분은 [기간별 성적] 으로 갔다
 
     def _build_main_page(self) -> QWidget:
         """검색 이후 화면 — 왼쪽 메뉴 + (상단 바 / 메뉴별 페이지)."""
@@ -3952,72 +3953,13 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tc_rate_list, 1)
         return w
 
-    def _build_season_tab(self) -> QWidget:
-        """시즌끼리 가로로 비교하는 표. 위 시즌 콤보와 달리 여기는 언제나
-        누적 전체(_matches_all)를 시즌별로 나눠 보여준다 — 필터를 걸어 둔
-        채로도 "저번 시즌은 어땠지"를 볼 수 있어야 하기 때문."""
+    def _build_grade_tab(self) -> QWidget:
+        """승률 그래프 [등급] 탭(77 C — 옛 [승률·등급] 에서 승률 부분을 [기간별 성적] 으로 뺐다) — 등급 계단 · 슈퍼 챔피언스."""
         w = QWidget()
         v = QVBoxLayout(w)
-        self.lb_season_note = QLabel("")
-        self.lb_season_note.setWordWrap(True)
-        self.lb_season_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_season_note)
-        # 시즌 승률 막대 — 오른쪽 글에 경기 수(GroupedBarChart 는 계열마다 최대값만 적어 경기 수를 못 단다)
-        self.season_bars = charts.HBarList()
-        v.addWidget(self.season_bars)
-        self.tbl_seasons = self._make_table(self.SEASON_COLUMNS, icons={self.SEASON_COLUMNS.index("등급"): "division"})
-        v.addWidget(self.tbl_seasons, 1)
-        return w
-
-    def _build_trend_tab(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-
-        ctrl = QHBoxLayout()
-        lb_days = QLabel("최근")
-        lb_days.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.sp_trend_days = QSpinBox()
-        self.sp_trend_days.setRange(1, 1)
-        self.sp_trend_days.setFixedWidth(72)
-        self.sp_trend_days.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        lb_days2 = QLabel("일")
-        lb_days2.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.btn_trend_apply = QPushButton("적용")
-        self.btn_trend_apply.setStyleSheet(T.OUTLINE_BUTTON_QSS)
-        self.btn_trend_apply.clicked.connect(self._on_trend_days_apply)
-        self.lb_trend_span = QLabel("")
-        self.lb_trend_span.setStyleSheet(f"color: {T.TEXT_DIM};")
-        ctrl.addWidget(lb_days)
-        ctrl.addWidget(self.sp_trend_days)
-        ctrl.addWidget(lb_days2)
-        ctrl.addWidget(self.btn_trend_apply)
-        ctrl.addSpacing(8)
-        ctrl.addWidget(self.lb_trend_span)
-        ctrl.addStretch(1)
-        v.addLayout(ctrl)
-
-        # 선택한 기간의 최고·평균·최저 승률 — 예전엔 상단 요약 카드를 이 탭에서만
-        # 바꿔치기했는데, 요약 카드가 대시보드로 옮겨 가 여기 따로 둔다.
-        trow = QHBoxLayout()
-        self.card_trend_max = StatCard("최고 승률", T.GOOD)
-        self.card_trend_avg = StatCard("평균 승률")
-        self.card_trend_min = StatCard("최저 승률", T.BAD)
-        self.card_trend_games = StatCard("경기수")
-        for c in (self.card_trend_max, self.card_trend_avg,
-                  self.card_trend_min, self.card_trend_games):
-            trow.addWidget(c)
-        v.addLayout(trow)
-
-        self.gb_trend = QGroupBox("최근 30일 승률 추이")
-        gv = QVBoxLayout(self.gb_trend)
-        # 1.3.1 — 옛 widgets.TrendChart(초록 꺾은선)를 대시보드와 같은 그래프로. 50% 기준선 ·
-        # 7일 이동평균(달력 7일, 표본 미달이면 끊김) · 아래 띠에 그날 경기 수.
-        self.trend_chart = charts.AreaTrendChart()
-        gv.addWidget(self.trend_chart)
-        v.addWidget(self.gb_trend, 1)
 
         # 등급 계단(66 G1) — 매 경기 당시 division 이 상세에 저장돼 있어 추가 조회 없음. 범위는 점수 그래프와 같은
-        # 이번 시즌(U1 — 위 "최근 N일" 과 끊었다) · 시즌 콤보도 안 본다(R1 — 저장된 전체에서 시즌 시작으로 자른다).
+        # 이번 시즌(U1) · 시즌 콤보도 안 본다(R1 — 저장된 전체에서 시즌 시작으로 자른다).
         self.gb_division = QGroupBox("등급")
         dv = QVBoxLayout(self.gb_division)
         self.division_chart = charts.DivisionRunChart()
@@ -4267,43 +4209,139 @@ class MainWindow(QMainWindow):
             "저장된 경기만(앱을 쓰기 전 기록은 없습니다)"
             + (" · 시즌표가 없어(홈페이지 데이터 꺼짐) 시즌을 나누지 못했습니다" if no_table else ""))
 
-    PERIOD_CHOICES = [("1일", 1), ("2일", 2), ("1주", 7), ("1개월", 30)]
+    # 77 A — 칩 순서 = 막혔을 때 내려가는 순서(왼쪽으로). 일·주·월은 시즌 범위 · 시즌은 늘 누적 전체(시즌끼리 견주려면)
+    PERIOD_UNITS = ["일", "주", "월", "시즌"]
+    PERIOD_DAYS = {"일": 1, "주": 7, "월": 30}
+    PERIOD_SCOPE_TEXT = {"일": "하루 단위", "주": "주 단위", "월": "달 단위", "시즌": "시즌 단위"}
     PERIOD_COLUMNS = ["기간", "경기", "승", "무", "패", "승률", "평균 대비",
                       "평균득점", "평균실점"]
     PERIOD_HEAT_FULL_PP = 15.0  # 평균 대비 이만큼(%p) 벌어지면 가장 진한 색
 
     def _build_period_tab(self) -> QWidget:
-        """기간별 추이 — 누적 전체 경기를 1일/2일/1주/1개월 단위로 묶은 전적 표."""
+        """[기간별 성적](77 A) — 위 칩(일·주·월·시즌) · 카드(최고·평균·최저·경기수) · 그래프 · 표.
+        옛 [기간별 추이]·[시즌별 성적]·승률 그래프의 "최근 N일 승률" 을 합쳤다. 칩은 기억하지 않는다(켤 때 일)."""
         w = QWidget()
         v = QVBoxLayout(w)
         ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("묶음 단위"))
-        self.cb_period = NoScrollComboBox()
-        for label, days in self.PERIOD_CHOICES:
-            self.cb_period.addItem(label, days)
-        self.cb_period.setCurrentIndex(self.cb_period.findData(7))
-        self.cb_period.currentIndexChanged.connect(
-            lambda: self._render_period(self._matches))
-        ctrl.addWidget(self.cb_period)
+        self.seg_period = Segmented(self.PERIOD_UNITS, 0)
+        self.seg_period.changed.connect(self._on_period_unit)
+        ctrl.addWidget(self.seg_period)
         ctrl.addSpacing(12)
         self.lb_streaks = QLabel("")
         self.lb_streaks.setStyleSheet(f"color: {T.TEXT_DIM};")
         ctrl.addWidget(self.lb_streaks)
         ctrl.addStretch(1)
         v.addLayout(ctrl)
-        # 표와 같은 묶음 단위의 승률 그래프(오래된 것부터) — 단위가 다르면 헷갈린다
+
+        trow = QHBoxLayout()
+        self.card_period_max = StatCard("최고 승률", T.GOOD)
+        self.card_period_avg = StatCard("평균 승률")
+        self.card_period_min = StatCard("최저 승률", T.BAD)
+        self.card_period_games = StatCard("경기수")
+        for c in (self.card_period_max, self.card_period_avg, self.card_period_min, self.card_period_games):
+            trow.addWidget(c)
+        v.addLayout(trow)
+
+        self.lb_season_note = QLabel("")   # 시즌 단위에서만 보인다
+        self.lb_season_note.setWordWrap(True)
+        self.lb_season_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_season_note)
+        # 표와 같은 묶음 단위의 승률 그래프(오래된 것부터) · 50% 기준선 · 일 단위만 7일 이동평균(달력 7일, 표본 미달이면 끊김)
         self.period_chart = charts.AreaTrendChart()
-        v.addWidget(self.period_chart)
+        v.addWidget(self.period_chart, 1)
         self.tbl_period = self._make_table(self.PERIOD_COLUMNS)
         v.addWidget(self.tbl_period, 1)
+        self.tbl_seasons = self._make_table(self.SEASON_COLUMNS, icons={self.SEASON_COLUMNS.index("등급"): "division"})
+        v.addWidget(self.tbl_seasons, 1)
+        self._period_unit = "일"
         return w
 
-    def _render_period(self, matches: list[MatchSummary]) -> None:
-        mixed = core.mixed_of_matches(m for m in matches if m.match_date is not None)  # 표 하나 — 줄과 평균이 같은 식
-        periods = period_stats(matches, days=self.cb_period.currentData() or 7, mixed=mixed)
-        self.period_chart.set_data([(p.label, p.win_rate, p.games) for p in reversed(periods)],
-                                   counts=True, avg_weights=[p.rated for p in reversed(periods)],
-                                   weak=[p.rated == 0 for p in reversed(periods)])
+    def _period_series(self, unit: str) -> list[PeriodStat]:
+        """단위 하나의 묶음 — 최신부터. [기간별 성적] 과 대시보드 승률 흐름이 이 하나를 같이 쓴다(U16 — 카드와 페이지가 같은 점).
+        일·주·월 = 시즌 범위(self._matches) · 시즌 = 누적 전체(_matches_all — 시즌 콤보 무시). 승률 식은 묶음 전체로 한 번."""
+        if unit == "시즌":
+            mixed = core.mixed_of_matches(self._matches_all)
+            out = []
+            for season, group in self._season_groups():
+                s = summarize(group, mixed)
+                out.append(PeriodStat(label="진행 중" if season is None else season.label,
+                                      win=s.win, draw=s.draw, lose=s.lose, mixed=mixed,
+                                      start=season.start if season is not None else None))
+            return out
+        dated = [m for m in self._matches if m.match_date is not None]
+        return period_stats(dated, days=self.PERIOD_DAYS[unit], mixed=core.mixed_of_matches(dated))
+
+    def _period_unit_now(self) -> tuple[str, dict, dict]:
+        """고른 단위가 점이 모자라면(config.PERIOD_MIN_POINTS 미만) 왼쪽으로 내린다 — 일은 막지 않는다.
+        돌려주는 것: (쓸 단위, 단위 → 점 수, 단위 → 고를 수 있나). 페이지 칩과 대시보드가 이 판정 하나를 쓴다."""
+        counts = {u: len(self._period_series(u)) for u in self.PERIOD_UNITS}
+        usable = {u: k == 0 or counts[u] >= config.PERIOD_MIN_POINTS for k, u in enumerate(self.PERIOD_UNITS)}
+        i = self.PERIOD_UNITS.index(self._period_unit)
+        while not usable[self.PERIOD_UNITS[i]]:
+            i -= 1
+        return self.PERIOD_UNITS[i], counts, usable
+
+    @staticmethod
+    def _period_points(unit: str, old: list[PeriodStat]) -> list[tuple[str, float, int]]:
+        """그래프 점(오래된 것부터) — 페이지와 대시보드가 같은 것(U16). 일은 축 글자가 길어 월/일만(표는 연도까지)."""
+        return [(f"{p.start:%m/%d}" if unit == "일" else p.label, p.win_rate, p.games) for p in old]
+
+    def _on_period_unit(self, i: int) -> None:
+        self._period_unit = self.PERIOD_UNITS[i]
+        self._render_period_page()
+        self._invalidate("dashboard")   # 대시보드 승률 흐름이 같은 단위(U16)
+
+    def _render_period_page(self) -> None:
+        unit, counts, usable = self._period_unit_now()
+        self._period_unit = unit
+        for k, u in enumerate(self.PERIOD_UNITS):
+            ok = usable[u]
+            self.seg_period.set_option_enabled(k, ok, "" if ok else f"점 {counts[u]}개 — {config.PERIOD_MIN_POINTS}개부터 고를 수 있습니다")
+        self.seg_period.set_current(self.PERIOD_UNITS.index(unit))
+        periods = self._period_series(unit)
+        mixed = periods[0].mixed if periods else False
+        old = list(reversed(periods))
+        ma = None
+        if unit == "일":   # 창 앞 6일도 시즌 범위 안에서만
+            ma = core.moving_win_rate(self._matches, [p.start for p in old], min_n=core.MIN_COND, mixed=mixed)
+        self.period_chart.set_data(self._period_points(unit, old), counts=True, baseline=50, ma=ma,
+                                   avg_weights=[p.rated for p in old], weak=[p.rated == 0 for p in old])
+        self.period_chart.setToolTip(win_rate_note(mixed))
+        self._show_period_cards(periods, mixed)
+        season = unit == "시즌"
+        self.tbl_period.setVisible(not season)
+        self.tbl_seasons.setVisible(season)
+        self.lb_season_note.setVisible(season)
+        if season:
+            self._render_seasons()
+            scope_matches = self._matches_all
+        else:
+            self._fill_period_table(periods, mixed)
+            scope_matches = self._matches
+        best_win, best_lose = longest_streaks(scope_matches)
+        kind, n = current_streak(scope_matches)
+        now_text = f"현재 {n}{kind}" if kind else "현재 -"
+        self.lb_streaks.setText(f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose}"
+                                f" ({'누적 전체' if season else self._scope_text()} 기준)")
+
+    def _show_period_cards(self, periods: list[PeriodStat], mixed: bool) -> None:
+        """최고·평균·최저·경기수 — 최고·최저는 표 굵게와 같은 기준(rated ≥ core.MIN_COND 인 기간만 · 4판짜리 주가 최고가 되지 않게)."""
+        rates = [p.win_rate for p in periods if not core.is_weak(p.rated, core.MIN_COND)]
+        wdl = [sum(p.win for p in periods), sum(p.draw for p in periods), sum(p.lose for p in periods)]
+        total_games = sum(wdl)
+        star = "*" if mixed else ""
+        self.card_period_max.set(f"{max(rates):.1f}%{star}" if rates else NA)
+        self.card_period_avg.set(win_rate_text(*wdl, mixed, short=True) if total_games else NA)
+        self.card_period_min.set(f"{min(rates):.1f}%{star}" if rates else NA)
+        for card in (self.card_period_max, self.card_period_avg, self.card_period_min):
+            card.setToolTip(win_rate_note(mixed))
+        avg = core.win_pct(*wdl, mixed) if core.rated(*wdl, mixed) else None   # 평균 카드와 같은 값
+        self.card_period_max.set_delta(max(rates) if rates else None, avg, label="평균 대비")
+        self.card_period_min.set_delta(min(rates) if rates else None, avg, label="평균 대비")
+        self.card_period_games.set(f"{total_games:,}경기")
+        self.card_period_games.set_sub(wdl_text(*wdl) if total_games else "")
+
+    def _fill_period_table(self, periods: list[PeriodStat], mixed: bool) -> None:
         overall = core.win_pct(sum(p.win for p in periods), sum(p.draw for p in periods),
                                sum(p.lose for p in periods), mixed)
         rows = [[p.label, (str(p.games), p.games), (str(p.win), p.win),
@@ -4316,12 +4354,6 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_period, rows, enable_sort=False)
         self._tint_period_rows(periods, overall)
         self.tbl_period.setSortingEnabled(True)
-        best_win, best_lose = longest_streaks(matches)
-        kind, n = current_streak(matches)
-        now_text = f"현재 {n}{kind}" if kind else "현재 -"
-        self.lb_streaks.setText(
-            f"{now_text} · 최장 연승 {best_win} · 최장 연패 {best_lose}"
-            f" ({self._scope_text()} 기준)")
 
     def _tint_period_rows(self, periods: list, overall: float) -> None:
         """승률·평균 대비 칸 — 평균보다 높으면 HEAT_ATK, 낮으면 HEAT_DEF 쪽으로(불투명, 표 함정 2번).
@@ -9009,10 +9041,6 @@ class MainWindow(QMainWindow):
         if isinstance(sp_id, int):
             self._show_player_info(sp_id)
 
-    def _on_trend_days_apply(self) -> None:
-        self._render_trend(self._matches)
-        self._invalidate("dashboard")  # 대시보드 승률 흐름도 같은 '최근 N일' — 운 범위는 시즌 범위라 안 건드린다(66 M2)
-
     @staticmethod
     def _make_table(columns: list[str], icons: dict[int, str] | None = None) -> FitTableWidget:
         """모든 표 — 열은 글자 폭 기준으로 잡고 남는 폭은 비율대로 나누며, 창이
@@ -10303,7 +10331,8 @@ class MainWindow(QMainWindow):
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
             # 선택은 "전체" 그대로라 표시 중인 화면은 건드리지 않는다.
             self._rebuild_season_combo()
-            self._render_seasons()
+            self._invalidate("period")      # 시즌 단위 점·표(칩 판정도)
+            self._invalidate("dashboard")   # 승률 흐름이 시즌 단위일 수 있다
 
     def _season_groups(self) -> list[tuple[object, list[MatchSummary]]]:
         """누적 전체를 시즌별로 묶은 것 — 콤보와 시즌별 성적 표가 같이 쓴다."""
@@ -10451,7 +10480,6 @@ class MainWindow(QMainWindow):
         self._refresh_recent()
         switched = ouid != self._ouid
         if switched:
-            self._trend_reset_pending = True  # 다른 계정으로 전환 — 승률 그래프 기간을 30일로 되돌린다
             self._reset_opp_filter()          # 57 K1 — 필터는 계정마다 처음부터(남의 포메이션이 고른 채로 남지 않게)
         self._ouid = ouid
         self._basic = basic
@@ -10534,7 +10562,7 @@ class MainWindow(QMainWindow):
     VIEW_OF_KEY = {
         "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", "전적")],
         "opprank": [("상대 전적", "상대 순위")],
-        "analysis": [("흐름 분석", None)], "period": [("기간별 추이", None)], "seasons": [("시즌별 성적", None)],
+        "analysis": [("흐름 분석", None)], "period": [("기간별 성적", None)],
         "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
@@ -10561,7 +10589,7 @@ class MainWindow(QMainWindow):
     # 위 표 밖의 자리 — 이유 없이 빠진 자리는 조용히 안 그려진다(test_every_nav_page_has_a_renderer)
     VIEW_EXEMPT = {
         ("구단주 비교", None): "사용자가 [비교] 를 눌러야 그린다 — 검색 결과에 안 묶인다",
-        ("승률 그래프", "승률·등급"): "_render_all 이 늘 그린다(_render_trend — 대시보드 승률 흐름이 그 결과를 쓴다)",
+        ("승률 그래프", "등급"): "_render_all 이 늘 그린다(_render_grade_tab — 등급 계단·SC 기록, [점수·예측] 의 _render_elo 도 거기서)",
         ("승률 그래프", "점수·예측"): "_render_elo 가 EloLoader·PredictWorker 결과로 그린다(검색 결과에 안 묶인다)",
         ("선수로 구단주 찾기", None): "사용자가 [찾기] 를 눌러야 그린다 — 검색 결과에 안 묶인다(구단주 비교와 같다)",
         ("산출 방법", None): "정적 글 — 만들 때 한 번 채우고(methods.page_html) 검색 결과에 안 묶인다",
@@ -10581,8 +10609,7 @@ class MainWindow(QMainWindow):
             "opprank": self._render_opp_rank,   # 시즌 범위(self._details) × rank.db 의 N23 줄 — 그 시즌 동안만 있다
             # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
             "teamcolor": lambda: self._render_teamcolor_tabs(*self._teamcolor_scope()),
-            "period": lambda: self._render_period(self._matches),
-            "seasons": self._render_seasons,  # 시즌 필터도 무시(_matches_all)
+            "period": self._render_period_page,   # 일·주·월 = 시즌 범위 · 시즌 = 누적 전체(시즌 필터 무시)
             "clutch": lambda: self._render_clutch(self._details, self._matches),
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
@@ -10621,9 +10648,8 @@ class MainWindow(QMainWindow):
         self._refresh_range_labels()
         self._refresh_scope_notes()
         self._render_ranker()
-        # 승률 추이는 늘 — 대시보드 승률 흐름이 그 결과(_trend_periods)를 쓴다. 가볍다.
-        # "최근 30일" 이 빠른 범위에 갇히면 안 된다(하루 100경기 넘게 뛰는 계정은 하루도 안 된다).
-        self._render_trend(self._matches)
+        # 등급 탭은 늘 — 같이 부르는 _render_elo 가 [점수·예측] 을 채운다(빠뜨리면 그 탭이 조용히 빈다). 가볍다.
+        self._render_grade_tab()
         self._ranker_failed, self._ranker_note = None, ""  # 새 데이터면 실패했던 랭커 요청도 다시 해 본다
         self._dirty = set(self._renderers())
         self._launch_streak()
@@ -12573,46 +12599,9 @@ class MainWindow(QMainWindow):
         outer.addWidget(scroll)
         return w
 
-    def _render_trend(self, matches: list[MatchSummary]) -> None:
-        """승률 그래프 — '적용 경기 수'(빠른 범위)가 아니라 '적용 일수'
-        (sp_trend_days)로 그린다. 하루 100경기 넘게 뛰는 계정은 경기 수
-        구간이 하루도 안 될 수 있어서, 누적 전체(self._matches)를 기준으로
-        날짜만 계산한다 — _render_all 의 호출도 그래서 self._matches 그대로."""
-        dated = [m for m in matches if m.match_date is not None]
-        if dated:
-            earliest = min(m.match_date for m in dated).date()
-            latest = max(m.match_date for m in dated).date()
-            span_days = (latest - earliest).days + 1
-            span_text = (f"전체 저장 기간: {span_days}일 "
-                        f"({earliest:%Y-%m-%d} ~ {latest:%Y-%m-%d})")
-        else:
-            span_days = 1
-            span_text = ""
-
-        self.sp_trend_days.blockSignals(True)
-        self.sp_trend_days.setRange(1, max(span_days, 1))
-        if self._trend_reset_pending:
-            self.sp_trend_days.setValue(min(30, span_days) or 1)
-            self._trend_reset_pending = False
-        self.sp_trend_days.blockSignals(False)
-        self.lb_trend_span.setText(span_text)
-
-        days = self.sp_trend_days.value()
-        self.gb_trend.setTitle(f"최근 {days}일 승률 추이")
-        self._trend_periods = win_rate_trend(matches, days=days)
-        # 이동평균은 그래프에만 — _trend_periods 는 대시보드가 같이 쓴다. 창 앞 6일도 matches(시즌 범위) 안에서만.
-        mixed = self._trend_periods[0].mixed if self._trend_periods else False   # 그래프 점과 같은 식
-        ma = core.moving_win_rate(matches, [p.day for p in self._trend_periods], min_n=core.MIN_COND, mixed=mixed)
-        self.gb_trend.setToolTip(win_rate_note(mixed))
-        # 평균선 무게는 승률 분모(rated) — 섞인 묶음이면 무승부뿐인 날은 무게 0 · 빈 고리(0% 로 읽히지 않게)
-        self.trend_chart.set_data(
-            [(p.label, p.win_rate, p.games) for p in self._trend_periods],
-            counts=True, baseline=50, ma=ma, avg_weights=[p.rated for p in self._trend_periods],
-            weak=[p.rated == 0 for p in self._trend_periods])
-
+    def _render_grade_tab(self) -> None:
+        """승률 그래프 [등급] — 등급 계단 · 슈퍼 챔피언스 기록 · 그리고 [점수·예측](_render_elo). 검색·시즌 전환마다 _render_all 이 부른다."""
         self._render_division()
-
-        self._show_trend_summary()
         self._render_sc_records()
         self._render_elo()
 
@@ -12808,7 +12797,7 @@ class MainWindow(QMainWindow):
         return elo_daily_points(data.rows, start)
 
     def _render_elo(self) -> None:
-        """들고 있는 self._elo[self._ouid] 로만 그린다(읽기 없음 — _render_trend 가 검색·시즌 전환마다 부른다)."""
+        """들고 있는 self._elo[self._ouid] 로만 그린다(읽기 없음 — _render_grade_tab 이 검색·시즌 전환마다 부른다)."""
         data = self._elo.get(self._ouid) if self._ouid else None
         pts = self._elo_points()
         start, known = season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
@@ -12973,7 +12962,7 @@ class MainWindow(QMainWindow):
     def _div_trend_all(self) -> list:
         """저장된 전체(_details_all — 시즌 필터 무시)의 경기마다 (일시, 등급) — 캐시.
 
-        _render_trend 는 지연 그리기 밖이라 검색·시즌 전환마다 돈다 — 1만 경기 훑기(약 10ms)를 매번 안 하게
+        _render_grade_tab 은 지연 그리기 밖이라 검색·시즌 전환마다 돈다 — 1만 경기 훑기(약 10ms)를 매번 안 하게
         목록 id·길이·맨 앞 경기로 키를 잡는다(_narrate_scope 와 같은 방식)."""
         d = self._details_all
         key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
@@ -13011,8 +13000,8 @@ class MainWindow(QMainWindow):
     SC_NEXON_MATCH_S = 60  # 넥슨 최근 달성 시각이 목록의 진입과 이만큼 안이면 같은 것으로 본다
 
     def _render_sc_records(self) -> None:
-        """슈퍼 챔피언스 달성 기록 — _render_trend 와 _on_max_division 둘 다 부른다.
-        maxdivision 신호는 finished_ok 뒤에 오므로 _render_trend 만 부르면 넥슨 줄이 늘 빠진다."""
+        """슈퍼 챔피언스 달성 기록 — _render_grade_tab 과 _on_max_division 둘 다 부른다.
+        maxdivision 신호는 finished_ok 뒤에 오므로 _render_grade_tab 만 부르면 넥슨 줄이 늘 빠진다."""
         entries, at_start = self._sc_entries()
         dated = [m.match_date for m in self._matches_all if m.match_date is not None]
         first = min(dated).date() if dated else None
@@ -13051,40 +13040,20 @@ class MainWindow(QMainWindow):
             "저장된 경기에서는 못 찾음 — 그 사이 경기가 비었을 수 있습니다"
         return f"넥슨 기록상 최근 달성 {info['date']} ({where})"
 
-    def _show_trend_summary(self) -> None:
-        """승률 그래프 페이지의 기간 요약 — 선택한 기간의 최고·평균·최저 승률."""
-        periods = getattr(self, "_trend_periods", [])
-        days = self.sp_trend_days.value()
-        mixed = periods[0].mixed if periods else False   # win_rate_trend 가 그래프 하나로 정한 식
-        rates = [p.win_rate for p in periods if p.rated]
-        total_games = sum(p.games for p in periods)
-        wdl = [sum(p.win for p in periods), sum(p.draw for p in periods), sum(p.lose for p in periods)]
-        star = "*" if mixed else ""
-        self.card_trend_max.set(f"{max(rates):.1f}%{star}" if rates else NA)
-        self.card_trend_avg.set(win_rate_text(*wdl, mixed, short=True) if total_games else NA)
-        self.card_trend_min.set(f"{min(rates):.1f}%{star}" if rates else NA)
-        for card in (self.card_trend_max, self.card_trend_avg, self.card_trend_min):
-            card.setToolTip(win_rate_note(mixed))
-        avg = core.win_pct(*wdl, mixed) if rates and core.rated(*wdl, mixed) else None   # 평균 카드와 같은 값
-        self.card_trend_max.set_delta(max(rates) if rates else None, avg, label="평균 대비")
-        self.card_trend_min.set_delta(min(rates) if rates else None, avg, label="평균 대비")
-        self.card_trend_games.set_title(f"{days}일 경기수")
-        self.card_trend_games.set(f"{total_games}경기")
-        self.card_trend_games.set_sub(wdl_text(*wdl) if total_games else "")
-
     def _render_dashboard(self) -> None:
         """대시보드 — 카드마다 자기 상세 페이지와 같은 범위를 넘긴다."""
         matches, details = self._slice()
-        periods = getattr(self, "_trend_periods", [])
+        unit, _counts, _usable = self._period_unit_now()
+        periods = list(reversed(self._period_series(unit)))   # [기간별 성적] 그래프와 같은 점(U16)
         self.dashboard.render(DashboardInput(
             ouid=self._ouid,
             range_matches=matches, range_details=details,
             scope_matches=self._matches, scope_details=self._details,
             scope_name=self._scope_text(),
             range_label=self._range_text(len(matches)),
-            trend_points=[(p.label, p.win_rate, p.games) for p in periods],
+            trend_points=self._period_points(unit, periods),
             trend_weights=[p.rated for p in periods],
-            trend_days=self.sp_trend_days.value(),
+            trend_scope=("누적 전체" if unit == "시즌" else self._scope_text()) + " · " + self.PERIOD_SCOPE_TEXT[unit],
             story=self._narrate_scope(),
             club_cells=self._club_cells(),
             headline=self._headline(),
@@ -13121,7 +13090,7 @@ class MainWindow(QMainWindow):
         sums = [summarize(group, mixed) for _, group in groups]
         divs = core.season_divisions(core.division_trend(self._details_all, self._ouid), groups)
         name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
-        rows, bars, tips = [], [], []
+        rows, tips = [], []
         for i, ((season, group), s, dv) in enumerate(zip(groups, sums, divs)):
             if season is None:
                 label, span, key = "진행 중", f"{last_end:%Y-%m-%d} ~", 99999999
@@ -13152,12 +13121,6 @@ class MainWindow(QMainWindow):
                 (f"{s.avg_possession:.1f}%", s.avg_possession),
                 (f"{s.avg_rating:.2f}", s.avg_rating),
             ])
-            weak = core.is_weak(s.rated, core.MIN_COND)
-            bars.append((label, s.win_rate if s.rated else None,
-                         f"{win_rate_text(s.win, s.draw, s.lose, mixed, short=True)} · {s.total:,}경기",
-                         sample_note(s.rated, core.MIN_COND, mixed) if weak
-                         else f"{label} · {span}\n{win_rate_note(mixed)}", weak))
-        self.season_bars.set_data(bars)
         self._fill(self.tbl_seasons, rows, enable_sort=False)  # 툴팁을 채운 순서대로 붙인다(표 함정 1번)
         grade_col = self.SEASON_COLUMNS.index("등급")
         for r, tip in enumerate(tips):
@@ -13181,7 +13144,7 @@ class MainWindow(QMainWindow):
                 " 경기는 이 앱으로 조회해 쌓아 둔 것만 있으므로, 앱을 쓰기 전 시즌은"
                 " 비어 있거나 실제보다 적게 나옵니다."
                 " · '진행 중'은 아직 데이터센터 시즌표에 안 올라온 최신 시즌입니다."
-                " · 이 표만은 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다." + err)
+                " · 시즌 단위는 위 시즌 필터를 무시하고 언제나 누적 전체를 보여줍니다." + err)
 
     def _render_players(self, details: list[dict]) -> None:
         players = core.aggregate_players(

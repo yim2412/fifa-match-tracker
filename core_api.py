@@ -20,7 +20,7 @@ from analysis import (
     Basis, headline, narrate, streak_min_n,
 )
 from models import (
-    MatchSummary, NO_NICK, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
+    MatchSummary, NO_NICK, PeriodStat, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
     filter_matches, moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend, window_of,
 )
 from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, DivisionStay, DivisionStays, GoalFlow, LeadRow,
@@ -81,7 +81,7 @@ __all__ = [
     "MIN_COND", "MIN_OPP", "MIN_PLAYER_GAMES", "SEC_FLOW", "SEC_LOSE", "SEC_WIN", "SECTIONS", "STREAK_MAX", "WINDOW",
     "Basis", "headline", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
-    "MatchSummary", "NO_NICK", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
+    "MatchSummary", "NO_NICK", "PeriodStat", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
     "period_stats", "summarize", "win_rate_trend", "window_of", "division_icon_index",
     # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
     "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",

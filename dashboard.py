@@ -54,7 +54,7 @@ class DashboardInput:
     range_label: str = ""                      # 빠른 범위 이름+개수("현재 시즌 · 최근 100경기") — 비면 scope_name N경기(76)
     trend_points: list[tuple[str, float, int]] = field(default_factory=list)
     trend_weights: list[int] | None = None   # 점마다 승률 분모(rated) — 평균선 무게(A6). 없으면 경기 수
-    trend_days: int = 30
+    trend_scope: str = ""                      # 77 U16 — [기간별 성적] 이 고른 단위("현재 시즌 · 하루 단위")
     # 흐름 분석 결과(analysis.narrate) — 창이 흐름 분석 메뉴와 같이 쓰려고 미리 계산해 넘긴다.
     # 없으면 여기서 계산한다(같은 범위 · scope_matches/details)
     story: list | None = None
@@ -268,7 +268,7 @@ class DashboardPage(QWidget):
         row = QHBoxLayout()
         row.setSpacing(14)
         row.addWidget(ranker_card, 1, Qt.AlignmentFlag.AlignTop)
-        self.trend = self._card("승률 흐름", ("승률 그래프", "승률·등급"))
+        self.trend = self._card("승률 흐름", ("기간별 성적", None))
         # 글자는 점 위 줄로 — 20개 점과 한 줄에 두면 1280 폭에서 자리가 모자란다
         self.trend.body.addWidget(_label(f"최근 {DOTS_N}경기 (왼쪽이 오래된 경기)", dim=True))
         self.dots = ResultDots()
@@ -370,7 +370,7 @@ class DashboardPage(QWidget):
             c.scope.setText(rng)
         for c in (self.clutch, self.minutes, self.timeband, self.story, self.rivals):
             c.scope.setText(scope)
-        self.trend.scope.setText(f"최근 {d.trend_days}일 · 하루 단위")
+        self.trend.scope.setText(d.trend_scope)
         self.head.scope.setText("이번 시즌")
         self.report.scope.setText("이번 시즌 점수 기록")
         self.notes.scope.setText("이번 시즌 점수 기록")

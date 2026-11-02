@@ -290,9 +290,9 @@ def test_every_menu_opens_its_own_page():
 
 def test_trend_page_has_own_summary():
     # 예전엔 상단 카드를 바꿔치기했다 — 이제 대시보드 카드는 그대로 전적이어야 한다.
-    _win._go_page("승률 그래프")
-    assert _win.card_trend_games.value.text().endswith("경기"), \
-        _win.card_trend_games.value.text()
+    _win._go_page("기간별 성적")
+    assert _win.card_period_games.value.text().endswith("경기"), \
+        _win.card_period_games.value.text()
     assert _win.dashboard.kpi_rate.cap.text() == "승률", _win.dashboard.kpi_rate.cap.text()
 
 
@@ -583,8 +583,7 @@ def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
         calls.append(len(m))
         return real(m, d, ouid, *a, **k)
 
-    # 경기를 빼고 그리면 '최근 N일' 칸의 범위가 줄어든 채 남는다 — 뒤 테스트(승률 평균)가 달라졌다
-    saved = _win._matches, _win._details, _win.sp_trend_days.value()
+    saved = _win._matches, _win._details
     app_main.core.narrate = spy
     try:
         _win._narrate_key = None
@@ -600,8 +599,6 @@ def test_narrate_once_per_scope_and_recomputed_when_scope_changes():
         app_main.core.narrate = real
         _win._matches, _win._details = saved[0], saved[1]
         _win._narrate_key = None
-        _win._render_trend(_win._matches)  # 범위를 먼저 되살려야 값이 들어간다
-        _win.sp_trend_days.setValue(saved[2])
         _win._render_all()
 
 
@@ -1142,7 +1139,7 @@ def test_dashboard_cards_filled_from_fixture():
     assert d.kpi_wdl.scope.text() == f"{_win._scope_text()} 4경기", d.kpi_wdl.scope.text()
     assert d.head.scope.text() == "이번 시즌", d.head.scope.text()
     assert d.clutch.scope.text().startswith(_win._scope_text()), d.clutch.scope.text()
-    assert d.trend.scope.text().startswith(f"최근 {_win.sp_trend_days.value()}일")
+    assert d.trend.scope.text() == f"{_win._scope_text()} · 하루 단위", d.trend.scope.text()   # 77 U16 — 켤 때 일
 
 
 def test_dashboard_cards_keep_their_own_scope():
@@ -1240,17 +1237,87 @@ def test_range_keys_match_slice_users():
     assert users == set(_win.RANGE_KEYS), (users ^ set(_win.RANGE_KEYS))
 
 
-def test_dashboard_trend_follows_trend_days():
-    d = _win.dashboard
-    old = _win.sp_trend_days.value()
+def _weeks_spec(n_weeks):
+    # 2026-09-07(월)부터 주마다 하루(월요일)에 10판 — 주 n개 · 일 n개 · 9월~10월이라 달은 1~2개
+    return [(datetime(2026, 9, 7, 10, i) + timedelta(days=7 * w), "승" if (w + i) % 3 else "패", True)
+            for w in range(n_weeks) for i in range(10)]
+
+
+def test_render_all_still_redraws_score_tab_after_grade_split():
+    """77 C — 옛 _render_trend 가 _render_elo 를 같이 불러 [점수·예측] 이 검색·시즌 전환마다 다시 그려졌다.
+    승률 부분을 [기간별 성적] 으로 뺀 뒤에도 _render_all 이 그 길을 지켜야 한다(빠지면 그 탭이 조용히 옛 값/빈 채)."""
+    calls = []
+    real = _win._render_elo
+    _win._render_elo = lambda: calls.append(1)
     try:
-        _win.sp_trend_days.setValue(1)
-        _win._on_trend_days_apply()
-        assert d.trend.scope.text().startswith("최근 1일"), d.trend.scope.text()
-        assert len(d.trend_chart._points) == 1, d.trend_chart._points
+        _win._render_all()
     finally:
-        _win.sp_trend_days.setValue(old)
-        _win._on_trend_days_apply()
+        del _win._render_elo
+    assert calls, "_render_all 이 [점수·예측](_render_elo)을 안 그린다"
+    assert _win._render_elo == real
+
+
+def test_period_units_block_below_min_points_and_dashboard_follows():
+    """77 A·U16 — 점이 PERIOD_MIN_POINTS(4) 미만인 단위는 회색 + 말풍선 "점 N개" · 고른 단위가 막히면 아래로(일은 안 막는다) ·
+    대시보드 승률 흐름 = 페이지가 고른 단위의 같은 점 · 그래프와 표가 같은 단위."""
+    assert config.PERIOD_MIN_POINTS == 4
+    seg, d = _win.seg_period, _win.dashboard
+    with _SynthScope(_synth_matches(_weeks_spec(4))):
+        _win._go_page("기간별 성적")
+        _win._period_unit = "일"
+        _win._render_period_page()
+        assert seg.buttons[1].isEnabled(), "주 4개(경계)인데 막혔다"
+        assert not seg.buttons[2].isEnabled() and "점 1개" in seg.buttons[2].toolTip(), seg.buttons[2].toolTip()
+        assert seg.buttons[0].isEnabled() and seg.current() == 0
+        seg.buttons[1].click()   # 신호 경로
+        assert _win._period_unit == "주" and seg.current() == 1
+        assert len(_win.period_chart._points) == 4 and _win.tbl_period.rowCount() == 4
+        assert _win.period_chart._points[0][0] == "09/07~09/13", _win.period_chart._points   # 오래된 것부터
+        assert _win.period_chart._ma is None, "이동평균은 일 단위만"
+        _win._render_dashboard()
+        assert d.trend_chart._points == _win.period_chart._points, (d.trend_chart._points, _win.period_chart._points)
+        assert d.trend.scope.text() == f"{_win._scope_text()} · 주 단위", d.trend.scope.text()
+        # 3주(경계 밑) — 주가 막히고 골라 둔 주는 일로 내려간다(페이지·대시보드 같이)
+        _win._matches = _synth_matches(_weeks_spec(3))
+        _win._render_period_page()
+        assert not seg.buttons[1].isEnabled() and "점 3개" in seg.buttons[1].toolTip(), seg.buttons[1].toolTip()
+        assert _win._period_unit == "일" and seg.current() == 0
+        assert [p[0] for p in _win.period_chart._points] == ["09/07", "09/14", "09/21"], _win.period_chart._points
+        _win._render_dashboard()
+        assert d.trend.scope.text().endswith("· 하루 단위") and d.trend_chart._points == _win.period_chart._points
+
+
+def test_period_season_unit_ignores_season_combo():
+    """77 A — 시즌 단위는 늘 누적 전체(_matches_all) — 시즌 콤보로 _matches 를 좁혀도 시즌끼리 견준다. 표는 시즌 표로."""
+    from datetime import date as _d
+    allm = _synth_matches(_weeks_spec(4))
+    seasons = [sn.Season(93, "시즌 3", _d(2026, 9, 21), _d(2026, 9, 28)),
+               sn.Season(92, "시즌 2", _d(2026, 9, 14), _d(2026, 9, 21)),
+               sn.Season(91, "시즌 1", _d(2026, 9, 7), _d(2026, 9, 14))]
+    keep = (_win._matches_all, _win._rank_seasons)
+    seg = _win.seg_period
+    try:
+        _win._matches_all, _win._rank_seasons = allm, seasons
+        with _SynthScope(allm[:10]):   # 시즌 콤보로 마지막 주만 고른 꼴
+            _win._go_page("기간별 성적")
+            _win._period_unit = "일"
+            _win._render_period_page()
+            assert seg.buttons[3].isEnabled(), "시즌 4개인데 막혔다 — _matches(한 주)로 셌다"
+            assert not seg.buttons[1].isEnabled()   # 주는 시즌 범위(한 주)라 막힌다
+            seg.buttons[3].click()
+            assert _win._period_unit == "시즌"
+            pts = _win.period_chart._points
+            assert [p[0] for p in pts] == ["2026 시즌 1", "2026 시즌 2", "2026 시즌 3", "진행 중"], pts
+            assert sum(p[2] for p in pts) == 40, pts
+            assert _win.tbl_period.isHidden() and not _win.tbl_seasons.isHidden() and _win.tbl_seasons.rowCount() == 4
+            assert "누적 전체 기준" in _win.lb_streaks.text(), _win.lb_streaks.text()
+            _win._render_dashboard()
+            assert _win.dashboard.trend.scope.text() == "누적 전체 · 시즌 단위", _win.dashboard.trend.scope.text()
+            assert _win.dashboard.trend_chart._points == pts
+    finally:
+        _win._matches_all, _win._rank_seasons = keep
+        _win._period_unit = "일"
+        _win._render_period_page()
 
 
 def test_dashboard_rivals_skip_unknown_nickname():
@@ -1345,7 +1412,7 @@ def test_dashboard_cards_navigate():
         menu, tab = c.target
         want = (menu, tab if tab else (_win._page_tabs[menu].names()[0] if menu in _win._page_tabs else None))
         assert _win._current_view() == want, (c.title.text(), c.target, _win._current_view())
-    _win._go_page("승률 그래프", "승률·등급")
+    _win._go_page("승률 그래프", "등급")
     _win._go_page("대시보드")
 
 
@@ -1405,9 +1472,9 @@ def test_trend_marks_max_min_and_average():
     assert round(c.marks["avg"], 1) == 33.3, c.marks["avg"]
     assert c.marks["max"] == (1, "50.0%"), c.marks["max"]
     assert c.marks["min"] == (0, "0.0%"), c.marks["min"]
-    # 승률 그래프 페이지 '평균 승률' 카드와 같은 숫자(한 집단 식이라 * 없음)
-    assert f"{c.marks['avg']:.1f}%" == _win.card_trend_avg.value.text(), \
-        (c.marks["avg"], _win.card_trend_avg.value.text())
+    # [기간별 성적] '평균 승률' 카드와 같은 숫자(한 집단 식이라 * 없음)
+    assert f"{c.marks['avg']:.1f}%" == _win.card_period_avg.value.text(), \
+        (c.marks["avg"], _win.card_period_avg.value.text())
     rects = c.marks["label_rects"] + [c.marks["avg_rect"]]
     assert not any(a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:]), rects
     # 마지막 날이 최고점이고 평균과 가까우면 두 글자가 오른쪽 끝에서 부딪힌다 — 그때 평균 글자가 비켜야 한다
@@ -1550,8 +1617,8 @@ def test_area_chart_options_each_change_the_drawing():
 def test_trend_page_uses_area_chart_with_counts_and_ma():
     import charts
     _restore_account()
-    _win._go_page("승률 그래프")
-    c = _win.trend_chart
+    _win._go_page("기간별 성적")
+    c = _win.period_chart
     assert isinstance(c, charts.AreaTrendChart), type(c)
     c.resize(700, 300)
     c.grab()
@@ -1569,7 +1636,7 @@ def test_trend_page_uses_area_chart_with_counts_and_ma():
     keep_rule = config.WIN_RATE_DRAWS_IN
     config.WIN_RATE_DRAWS_IN = False   # 배선은 기본값이 아닌 값(True)으로 잰다 — 승÷전체(기본)에선 mixed 가 늘 False 라 빈 검사가 된다
     try:
-        _win._render_trend(_win._matches)
+        _win._render_period_page()
         c.grab()
     finally:
         app_main.core.moving_win_rate = real
@@ -1578,7 +1645,7 @@ def test_trend_page_uses_area_chart_with_counts_and_ma():
     assert seen == [(len(_win._matches), [_date(2026, 1, 1), _date(2026, 1, 2), _date(2026, 1, 3)],
                      {"min_n": app_main.core.MIN_COND, "mixed": True})], seen
     assert c.marks["ma_points"] == 3, c.marks
-    _win._render_trend(_win._matches)
+    _win._render_period_page()
 
 
 def test_trend_page_groups_not_squeezed():
@@ -1589,12 +1656,13 @@ def test_trend_page_groups_not_squeezed():
         _win._go_page("승률 그래프")
         _app.processEvents()
         frame = _win.pages.currentWidget()
-        groups = [_win.gb_trend, _win.gb_division, _win.gb_sc]
+        groups = [_win.gb_division, _win.gb_sc]   # 77 C — 승률 묶음은 [기간별 성적] 으로 갔다
         bad = [(g.title(), g.height(), g.minimumSizeHint().height()) for g in groups
                if g.height() < g.minimumSizeHint().height()]
         assert not bad, bad
-        assert frame.verticalScrollBar().isVisible(), "내용이 창보다 긴데 세로 스크롤이 없다 — 눌렸다"
-        assert frame.verticalScrollBar().maximum() > 0
+        inner = frame.widget().minimumSizeHint().height() if frame.widget() else 0
+        if inner > frame.viewport().height():
+            assert frame.verticalScrollBar().isVisible(), "내용이 창보다 긴데 세로 스크롤이 없다 — 눌렸다"
     finally:
         _at_size(1600, 900)
         _win._go_page("대시보드")
@@ -1785,23 +1853,22 @@ def _synth_matches(spec):
 
 
 class _SynthScope:
-    """화면이 들고 있는 경기 목록을 지어낸 것으로 갈아 끼웠다 되돌린다(승률 그래프 일수 범위까지)."""
+    """화면이 들고 있는 경기 목록을 지어낸 것으로 갈아 끼웠다 되돌린다([기간별 성적] 단위까지)."""
 
     def __init__(self, matches):
         self.matches = matches
 
     def __enter__(self):
-        self.saved = (_win._matches, _win.sp_trend_days.value(), _win._streak_done, _win._streak_req)
+        self.saved = (_win._matches, _win._period_unit, _win._streak_done, _win._streak_req)
         _win._matches = self.matches
-        _win._render_trend(self.matches)
         return self
 
     def __exit__(self, *exc):
         _win._matches = self.saved[0]
+        _win._period_unit = self.saved[1]
         _win._streak_done, _win._streak_req = self.saved[2], self.saved[3]
-        _win._render_trend(_win._matches)
-        _win.sp_trend_days.setValue(self.saved[1])
-        _win._on_trend_days_apply()
+        _win._render_period_page()
+        _win._invalidate("dashboard")
 
 
 def _days_spec():
@@ -1850,11 +1917,6 @@ def test_luck_tab_season_range_cards_and_dots_66():
             _win.card_luck_out.sub.text()
         assert all(r.arrow and r.judged and abs(r.base - 50.0) < 1e-9 for r in rows), rows
         assert "이 범위 전체 승률 50.0%" in _win.lb_luck_required.text(), _win.lb_luck_required.text()
-        # M2 — '최근 N일' 을 바꿔도 운 범위는 그대로(시즌 범위)
-        _win.sp_trend_days.setValue(5)
-        _win._on_trend_days_apply()
-        _win._render_luck(_win._matches)
-        assert len(_win.luck_dots._rows) == 10, "운 범위가 아직 '최근 N일' 을 따른다"
     # 한 시즌(진행 중 — 시즌표에 없는 시즌) → "시즌 평균" · 이번 시즌
     with _LuckScope(_days_spec(), [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 8, 31))]):
         _win._render_luck(_win._matches)
@@ -2427,7 +2489,7 @@ def test_sc_one_game_run_on_division_chart_and_best_date_from_matches():
 
 
 def test_sc_nexon_line_arrives_after_loader_finishes():
-    # maxdivision 신호는 finished_ok 뒤에 온다 — _render_trend 에서만 그리면 넥슨 줄이 늘 빠진다. 진짜 로더로.
+    # maxdivision 신호는 finished_ok 뒤에 온다 — _render_grade_tab 에서만 그리면 넥슨 줄이 늘 빠진다. 진짜 로더로.
     tmp, saved = _loader_db(4)
     keep_names, keep_max = dict(_win._division_names), dict(_win._max_division)
     try:
@@ -2471,10 +2533,10 @@ def test_period_table_marks_best_worst_and_keeps_tint_after_sort():
     games_col = _win.PERIOD_COLUMNS.index("경기")
     ms = _week_matches()
     try:
-        _win.cb_period.setCurrentIndex(_win.cb_period.findData(7))
         # 헤더에 정렬이 남아 있는 상태에서 다시 그린다 — 채우자마자 재정렬되면 색이 엉뚱한 행에 간다(표 함정 1번)
         t.sortByColumn(games_col, Qt.SortOrder.AscendingOrder)
-        _win._render_period(ms)
+        mixed = app_main.core.mixed_of_matches(ms)
+        _win._fill_period_table(app_main.period_stats(ms, days=7, mixed=mixed), mixed)
         assert t.rowCount() == 3
         by_label = {t.item(r, 0).text(): r for r in range(3)}
         a, b, c = by_label["09/07~09/13"], by_label["09/14~09/20"], by_label["09/21~09/27"]
@@ -2492,16 +2554,10 @@ def test_period_table_marks_best_worst_and_keeps_tint_after_sort():
         assert t.item(c, rate_col).background().color().name() == exp(100 / 3 - overall, T.HEAT_DEF)
         assert t.item(b, vs_col).text() == f"{60 - overall:+.1f}%p", t.item(b, vs_col).text()
         assert t.isSortingEnabled()
-        # 그래프는 표와 같은 단위 · 오래된 것부터
-        g = _win.period_chart
-        g.resize(600, 260)
-        g.grab()
-        assert [h[1].split(" · ")[0] for h in g._hits] == ["09/07~09/13", "09/14~09/20", "09/21~09/27"]
-        assert g.marks["count_bars"] == 3 and g.marks["count_peak"] == (1, "10경기"), g.marks
     finally:
         t.setSortingEnabled(False)
         t.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
-        _win._render_period(_win._matches)
+        _win._render_period_page()
 
 
 def test_season_table_compares_with_previous_season():
@@ -2527,10 +2583,10 @@ def test_season_table_compares_with_previous_season():
         assert t.item(rows["2025 시즌 9"], grade).text() == _win._division_names.get(900, "900")
         assert t.item(rows["2025 시즌 9"], grade).toolTip().startswith("최고 ")
         assert t.item(rows["2025 시즌 8"], grade).text() == "—"  # 상세가 없는 경기 — 등급 모름
-        bars = _win.season_bars._rows
-        assert [r[0] for r in bars] == ["2025 시즌 9", "2025 시즌 8"], bars
-        # 한 집단 식 → * 없음 · 흐림 판정은 3경기(rated) 기준
-        assert bars[0][2] == "33.3% · 3경기" and bars[0][4] is True, bars[0]  # 3경기 < MIN_COND → 흐림
+        # 그래프·대시보드 점(77 A) — 같은 시즌 묶음 · 경기 수는 승·무·패만
+        ser = _win._period_series("시즌")
+        assert [(p.label, p.games) for p in ser] == [("2025 시즌 9", 3), ("2025 시즌 8", 2)], ser
+        assert f"{ser[0].win_rate:.1f}" == "33.3", ser[0].win_rate
     finally:
         _win._rank_seasons, _win._matches_all = keep
         _win._render_seasons()
@@ -4658,7 +4714,7 @@ def test_settings_remember_window_page_and_season():
             del _win.restoreGeometry
         assert got_geo == [want_geo], "저장한 창 위치·크기가 복원에 안 쓰였다"
         tabs = _win._restore.pop("tabs", {})
-        assert tabs.get("players") == "랭커 비교" and tabs.get("trend") == "승률·등급", tabs
+        assert tabs.get("players") == "랭커 비교" and tabs.get("trend") == "등급", tabs
         # 켤 때는 늘 대시보드 — 저장돼 있는 "슛 맵" 을 읽지 않는다(읽으면 아래 대시보드 단언이 FAIL)
         assert _win._restore == {"season": want_season}, _win._restore
         _win._restore["tabs"] = tabs
@@ -4698,10 +4754,11 @@ def test_restore_old_page_names():
     """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 모르는 이름은 대시보드."""
     # 77 — 합친 메뉴는 답을 글자로 박는다(표에서 읽으면 표 줄을 지워도 그 경우가 같이 사라져 초록이다)
     moved_77 = [("선수별 결정력", ("선수 지표", "결정력")),
-                ("팀컬러 승률", ("상대 팀컬러", None)), ("팀컬러 랭킹", ("상대 팀컬러", None))]
+                ("팀컬러 승률", ("상대 팀컬러", None)), ("팀컬러 랭킹", ("상대 팀컬러", None)),
+                ("기간별 추이", ("기간별 성적", None)), ("시즌별 성적", ("기간별 성적", None))]
     cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), *moved_77, ("없는 메뉴", ("대시보드", None)),
              ("랭킹 추이", ("랭킹 추이", "추이"))]
-    assert len(app_main.MainWindow.OLD_PAGE_NAMES) == 6
+    assert len(app_main.MainWindow.OLD_PAGE_NAMES) == 8
     try:
         for old, want in cases:
             _win._go_page("선수 지표", "지표")
@@ -4718,8 +4775,16 @@ def test_restore_old_page_names():
         _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         assert _win._current_view() == ("메타 분석", "팀컬러"), _win._current_view()
+        # 77 C — [승률 그래프 › 승률·등급] 을 기억한 사람은 [등급] 으로(첫 탭이라 우연히 맞지 않게 다른 탭을 보던 채로)
+        _win._go_page("승률 그래프", "일별 기록")
+        _win._ouid = ""
+        _win._restore = {"page": "승률 그래프", "tabs": {_win._tab_sid["승률 그래프"]: "승률·등급"}}
+        _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                        {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert _win._current_view() == ("승률 그래프", "등급"), _win._current_view()
     finally:
         _win._restore = {}
+        _win._page_tabs["승률 그래프"].set_current("등급", emit=False)
         _win._page_tabs["선수 지표"].set_current("지표", emit=False)
         _win._page_tabs["스쿼드·이적"].set_current("타임라인", emit=False)
         _win._go_page("대시보드")
@@ -5320,9 +5385,8 @@ def test_spinbox_text_field_not_collapsed():
         if keep_page:
             _win._go_page(keep_page, _win._page_tabs[keep_page].current_name()
                           if keep_page in _win._page_tabs else None)
-    # 위쪽 바 범위 칸은 76 에 버튼으로 바뀌었다 — 이제 승률 그래프 [적용 일수] 칸이 대표
-    assert id(_win.sp_trend_days) in seen, "승률 그래프 일수 칸을 못 쟀다"
-    assert len(seen) >= 2, seen   # 2 = 승률 그래프 일수 + [상대 팀컬러] 최소(77 B 전엔 팀컬러 두 탭이라 3)
+    # 위쪽 바 범위 칸은 76 에, 승률 그래프 일수 칸은 77 C 에 없어졌다 — 이제 [상대 팀컬러] 최소 칸이 대표
+    assert any(n == "QSpinBox" for n, _w, _g in seen.values()) and seen, seen
     bad = [(n, w, (g.x(), g.width())) for n, w, g in seen.values() if g.width() < w // 2 or g.x() < 4]
     assert not bad, f"스핀박스 입력칸이 찌그러졌다(이름, 상자 폭, (입력칸 x, 폭)) {bad}"
 
@@ -11074,7 +11138,7 @@ def test_rank_move_follows_late_profile_sn():
         finally:
             _win._ouid, _win._nick, _win._rank = keep
             rankmeta.clear_cache()
-    _win._go_page("승률 그래프", "승률·등급")   # 보던 탭을 기억한다 — 다음 테스트가 첫 탭을 본다
+    _win._go_page("승률 그래프", "등급")   # 보던 탭을 기억한다 — 다음 테스트가 첫 탭을 본다
     _win._go_page("대시보드")
     _win._render_all()
 
@@ -12029,7 +12093,7 @@ def test_division_run_chart_season_zoom_and_badges_66():
     from datetime import date as _d
     from PySide6.QtGui import QPixmap
     keep_seasons = _g1_season(_d(2026, 1, 2))     # 지금 시즌 = 01-02~ : 0002·0003·0004 · 0001 은 지난 시즌
-    keep = (dict(_win._elo), dict(_win._div_badges), set(_win._div_badge_tried), _win.sp_trend_days.value())
+    keep = (dict(_win._elo), dict(_win._div_badges), set(_win._div_badge_tried))
     det = _sc_details({"0003": 800})
     try:
         _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
@@ -12043,9 +12107,6 @@ def test_division_run_chart_season_zoom_and_badges_66():
                     if getattr(_win.cb_season.itemData(i), "no", None) == 88)
         _win.cb_season.setCurrentIndex(past)
         assert len(_win._details) == 1, "전제 — 지난 시즌을 고르면 _details 가 한 경기"
-        assert [(r.division, r.games) for r in dc._runs] == want, dc._runs
-        # U1 — "최근 N일" 을 바꿔도 안 바뀐다
-        _win.sp_trend_days.setValue(1)
         assert [(r.division, r.games) for r in dc._runs] == want, dc._runs
         # 구간 단위 확대 — 고른 구간만 · 제목은 그 구간 날짜 · 머리 줄은 시즌 전체 그대로
         assert z.isVisibleTo(_win.gb_division) and z.is_full()
@@ -12104,7 +12165,6 @@ def test_division_run_chart_season_zoom_and_badges_66():
     finally:
         _win._rank_seasons = keep_seasons
         _win._elo, _win._div_badges, _win._div_badge_tried = keep[0], keep[1], keep[2]
-        _win.sp_trend_days.setValue(keep[3])
         _restore_account()
 
 
@@ -12344,19 +12404,28 @@ def test_stat_card_sub_and_delta_hide_when_empty():
 
 
 def test_trend_cards_show_delta_against_average():
-    # 승률 그래프 요약 카드 — 최고·최저 카드의 변화 줄이 평균 카드 값과 견준 것인지(배선)
+    # [기간별 성적] 요약 카드 — 최고·최저 카드의 변화 줄이 평균 카드 값과 견준 것인지(배선) · 후보는 MIN_COND 판 이상 기간만
     import widgets
-    _win._show_trend_summary()
-    periods = _win._trend_periods
-    rated = [p.win_rate for p in periods if p.rated]
-    assert len(set(rated)) >= 2, ("최고·최저가 같아 방향을 못 잰다", rated)
-    wdl = [sum(p.win for p in periods), sum(p.draw for p in periods), sum(p.lose for p in periods)]
-    avg = app_main.core.win_pct(*wdl, periods[0].mixed)
-    for card, v, col in ((_win.card_trend_max, max(rated), T.GOOD), (_win.card_trend_min, min(rated), T.BAD)):
-        want, got_col = widgets.delta_text(v, avg)
-        assert not card.delta.isHidden() and want in card.delta.text(), (card.delta.text(), want)
-        assert card.delta.property("delta_color") == got_col == col, (card.cap.text(), got_col)
-    assert _win.card_trend_games.sub.text() == app_main.wdl_text(*wdl)
+    spec = _days_spec() + [(datetime(2026, 9, 11, 10, 0), "승", True)]   # 9/11 한 판 100% — 표본 미달이라 최고가 아니어야
+    with _SynthScope(_synth_matches(spec)):
+        _win._period_unit = "일"
+        _win._render_period_page()
+        periods = _win._period_series("일")
+        rated = [p.win_rate for p in periods if not app_main.core.is_weak(p.rated, app_main.core.MIN_COND)]
+        assert len(set(rated)) >= 2, ("최고·최저가 같아 방향을 못 잰다", rated)
+        assert _win.card_period_min.value.text() == "0.0%" and _win.card_period_max.value.text() == "100.0%"
+        wdl = [sum(p.win for p in periods), sum(p.draw for p in periods), sum(p.lose for p in periods)]
+        avg = app_main.core.win_pct(*wdl, periods[0].mixed)
+        for card, v, col in ((_win.card_period_max, max(rated), T.GOOD), (_win.card_period_min, min(rated), T.BAD)):
+            want, got_col = widgets.delta_text(v, avg)
+            assert not card.delta.isHidden() and want in card.delta.text(), (card.delta.text(), want)
+            assert card.delta.property("delta_color") == got_col == col, (card.cap.text(), got_col)
+        assert _win.card_period_games.sub.text() == app_main.wdl_text(*wdl)
+        # 표본 미달 하루(1판 100%)를 빼고 최고 — 빼지 않으면 9/11 이 최고라 위 100% 와 구분이 안 되니 최저 쪽으로 잰다
+        spec2 = _days_spec()[:100] + [(datetime(2026, 9, 11, 10, 0), "패", True)]   # 전승 5일 + 1판 0% 하루
+        _win._matches = _synth_matches(spec2)
+        _win._render_period_page()
+        assert _win.card_period_min.value.text() == "100.0%", "표본 미달 하루(1판 0%)가 최저 카드에 들어갔다"
 
 
 def test_tag_kinds():

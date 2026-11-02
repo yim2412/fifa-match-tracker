@@ -11,7 +11,7 @@
 
 
 규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
-그래프(QPainter) — 대시보드·승률 그래프·기간별 추이·시즌별 막대 · 점수 분포(`HistogramChart` — 2.3.1, 맨 왼쪽 칸 흐림 · 비교 선 · 세로선).
+그래프(QPainter) — 대시보드·승률 그래프·기간별 성적 · 점수 분포(`HistogramChart` — 2.3.1, 맨 왼쪽 칸 흐림 · 비교 선 · 세로선).
 색은 `theme.CHART_*` — 앱의 좋음/나쁨(GOOD/BAD) 짝은 적록 색약에서 구분이 안 돼 그래프엔 안 쓴다. 히트맵(`HeatmapChart` — 칸 안 글자 · 흐린 칸은 색 없음 ·
 색 상한 `HEAT_MAX_MIX` 는 글자 대비 4.5 로 잼)·도넛 조각(`donut_segments` — 6개 넘으면 "기타").
 추이는 **`AreaTrendChart` 하나**(1.3.1) — 축(`Axis` · `PCT_AXIS`/`Axis.fit`)·기준선·이동평균·경기 수 막대·날짜 x·기준 계단선·띠·범례·큰 값은 전부 `set_data` 인자.

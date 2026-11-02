@@ -379,7 +379,7 @@ def longest_streaks(matches: list[MatchSummary]) -> tuple[int, int]:
 
 @dataclass
 class PeriodStat(RateMixin):
-    """기간(1일/2일/1주/1개월 묶음) 하나의 전적 — 기간별 추이 표의 한 줄."""
+    """기간(일·주·월 묶음) 하나의 전적 — [기간별 성적] 표의 한 줄."""
     label: str
     win: int = 0
     draw: int = 0
@@ -387,6 +387,7 @@ class PeriodStat(RateMixin):
     goals_for: int = 0
     goals_against: int = 0
     mixed: bool | None = None
+    start: date | None = None   # 기간 첫날 — 일 단위 7일 이동 승률(core.moving_win_rate)이 날짜로 받는다
 
     @property
     def games(self) -> int:
@@ -414,6 +415,7 @@ def period_stats(matches: list[MatchSummary], days: int = 7, mixed: bool | None 
     for m in dated:
         d = m.match_date.date()
         if days == 30:
+            start = date(d.year, d.month, 1)
             key = (d.year, d.month)
             label = f"{d.year}-{d.month:02d}"
         elif days == 7:
@@ -421,7 +423,7 @@ def period_stats(matches: list[MatchSummary], days: int = 7, mixed: bool | None 
             key = start
             label = f"{start:%m/%d}~{start + timedelta(days=6):%m/%d}"
         elif days == 1:
-            key = d
+            start = key = d
             label = f"{d:%Y-%m-%d}"
         else:
             start_ord = d.toordinal() // days * days
@@ -430,7 +432,7 @@ def period_stats(matches: list[MatchSummary], days: int = 7, mixed: bool | None 
             label = f"{start:%m/%d}~{start + timedelta(days=days - 1):%m/%d}"
         s = acc.get(key)
         if s is None:
-            s = acc[key] = PeriodStat(label=label, mixed=mixed)
+            s = acc[key] = PeriodStat(label=label, mixed=mixed, start=start)
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
