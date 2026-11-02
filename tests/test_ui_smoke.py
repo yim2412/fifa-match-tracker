@@ -4694,9 +4694,11 @@ def test_settings_remember_window_page_and_season():
 
 def test_restore_old_page_names():
     """E5 — 1.x 의 메뉴 이름이 settings.ini 에 남은 사람은 새 자리(메뉴, 탭)로. 모르는 이름은 대시보드."""
-    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), ("없는 메뉴", ("대시보드", None)),
+    # 77 — 합친 메뉴는 답을 글자로 박는다(표에서 읽으면 표 줄을 지워도 그 경우가 같이 사라져 초록이다)
+    moved_77 = [("선수별 결정력", ("선수 지표", "결정력"))]
+    cases = [*app_main.MainWindow.OLD_PAGE_NAMES.items(), *moved_77, ("없는 메뉴", ("대시보드", None)),
              ("랭킹 추이", ("랭킹 추이", "추이"))]
-    assert len(cases) == 5
+    assert len(app_main.MainWindow.OLD_PAGE_NAMES) == 4
     try:
         for old, want in cases:
             _win._go_page("선수 지표", "지표")

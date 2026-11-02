@@ -3539,8 +3539,8 @@ class MainWindow(QMainWindow):
                    ("슛 맵", Tabs("shotmap", (("슛 맵", "_build_shotmap_tab"),
                                             ("공격 루트", "_build_attack_route_tab"))))]),
         ("선수", [("선수 지표", Tabs("players", (("지표", "_build_players_tab"),
+                                             ("결정력", "_build_finishing_tab"),   # 77 E — 옛 메뉴 [선수별 결정력]
                                              ("랭커 비교", "_build_ranker_compare_tab")))),
-                 ("선수별 결정력", "_build_finishing_tab"),
                  ("포지션별 최다 상대", Tabs("posopp", (("축구장", "_build_position_opp_tab"),
                                                      ("카드별", "_build_opp_cards_tab")))),
                  ("스쿼드·이적", Tabs("squad", (("타임라인", "_build_timeline_tab"),
@@ -3571,6 +3571,7 @@ class MainWindow(QMainWindow):
         "랭커와 비교": ("선수 지표", "랭커 비교"),
         "스쿼드 타임라인": ("스쿼드·이적", "타임라인"),
         "이적시장 가계부": ("스쿼드·이적", "가계부"),
+        "선수별 결정력": ("선수 지표", "결정력"),   # 77 E
     }
     # 지운 탭 → 새 탭(메뉴별). settings.ini 의 보던 탭이 옛 이름이면 새 자리로 연다
     OLD_TAB_NAMES = {"메타 분석": {"가성비": "팀컬러"}}   # 67 R1 — [가성비] 는 [팀컬러] 목록의 한 칸이 됐다(U1)
@@ -10572,7 +10573,7 @@ class MainWindow(QMainWindow):
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
         "shotmap": [("슛 맵", "슛 맵")], "route": [("슛 맵", "공격 루트")],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
-        "finishing": [("선수별 결정력", None)],
+        "finishing": [("선수 지표", "결정력")],
         "teamcolor": [("포지션별 최다 상대", "축구장"), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
         "oppcards": [("포지션별 최다 상대", "카드별")], "rankmove": [("승률 그래프", "순위 변동")],
         "calendar": [("승률 그래프", "일별 기록")],
