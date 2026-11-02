@@ -21,7 +21,7 @@ from analysis import (
 )
 from models import (
     MatchSummary, NO_NICK, current_streak, division_icon_index, is_mixed, is_weak, longest_streaks, mixed_of_details, mixed_of_matches,
-    filter_matches, moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend,
+    filter_matches, moving_win_rate, opponent_stats, parse_match, period_stats, rated, summarize, win_pct, win_rate_trend, window_of,
 )
 from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, DivisionStay, DivisionStays, GoalFlow, LeadRow,
                     division_runs, division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
@@ -82,7 +82,7 @@ __all__ = [
     "Basis", "headline", "narrate", "streak_min_n",
     # models — 경기 파싱 · 한 계정 요약
     "MatchSummary", "NO_NICK", "current_streak", "filter_matches", "longest_streaks", "moving_win_rate", "opponent_stats", "parse_match",
-    "period_stats", "summarize", "win_rate_trend", "division_icon_index",
+    "period_stats", "summarize", "win_rate_trend", "window_of", "division_icon_index",
     # models — 승률 식(2.6.1 A6): 섞인 묶음은 승÷(승+패) · 한 집단은 승÷전체
     "is_mixed", "is_weak", "mixed_of_details", "mixed_of_matches", "rated", "win_pct",
     # habits — 내 경기 습관·기준선(2.6.1) · N2 등급 체류

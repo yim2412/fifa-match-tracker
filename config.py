@@ -911,3 +911,8 @@ OPEN_LAST_ACCOUNT = False
 
 DEFAULT_MATCH_LIMIT = 20  # 한 번 조회할 최근 경기 수
 MAX_MATCH_LIMIT = 100     # 넥슨 API가 한 번에 주는 상한
+
+# 76 — 위쪽 바 빠른 범위 버튼(시즌으로 거른 뒤 최신 N판 / 마지막 경기 날부터 N일). 옛 "1 ~ 100 [적용]" 자리.
+# 자르는 화면은 옛 표시 구간 8곳 + 구단주 비교뿐(app_main.RANGE_KEYS) — 상성·팀컬러는 시즌 그대로(1~2판 승률이 된다)
+RANGE_GAMES = (100, 200, 500)
+RANGE_DAYS = (1, 3, 5, 10)

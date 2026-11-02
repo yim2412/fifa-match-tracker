@@ -2012,6 +2012,26 @@ def test_win_rate_trend_points_carry_their_day():
     assert [p.label for p in got] == ["09/01", "09/03"]  # 라벨은 그대로
 
 
+def test_window_of_quick_ranges():
+    """76 빠른 범위 — 최신순 목록을 그대로 받아 자른다. 날은 오늘이 아니라 목록의 마지막 경기 날부터(U12)."""
+    w = models.window_of
+    # 최신순(9/5 → 9/1) · 9/3 엔 두 판(0시·23시 — 날 경계 양끝) · 날짜 없는 경기 하나
+    ms = [_m(5, "승"), _m(4, "패"), _m(3, "승", hour=23), _m(3, "무", hour=0), _m(1, "패")]
+    nodate = models.MatchSummary(**{**ms[0].__dict__, "match_id": "x", "match_date": None})
+    assert w(ms) == ms and w(ms) is not ms                     # 전체 — 새 목록(부르는 쪽이 제자리 정렬해도 원본은 그대로)
+    assert w(ms, "games", 2) == ms[:2]
+    assert w(ms, "games", 99) == ms                            # 시즌에 N판이 안 되면 전부
+    assert w(ms, "games", 0) == [] and w(ms, "games", -1) == []
+    # 3일 = 9/5·9/4·9/3 — 9/3 0시 판도 든다('>' 면 빠진다) · 9/1 은 빠진다
+    assert w(ms, "days", 3) == ms[:4], [m.match_id for m in w(ms, "days", 3)]
+    assert w(ms, "days", 1) == ms[:1]
+    # 마지막 경기 날 기준 — 오늘(이 테스트를 도는 날)이 몇 달 뒤여도 비지 않는다
+    assert w(ms[2:], "days", 1) == ms[2:4], "오늘 기준으로 셌다"
+    assert w([nodate] + ms, "days", 1) == ms[:1]               # 날짜 없는 판은 날 범위에서 뺀다
+    assert w([], "days", 3) == [] and w(ms, "days", 0) == []
+    assert w(ms, "all", 0) == ms                               # 모르는 종류가 아니라 전체
+
+
 def test_division_runs_merge_and_season_cut():
     """66 G1 — 같은 등급이 이어진 경기는 한 칸 · 한 판짜리 구간도 한 칸 · since 앞은 뺀다(시즌 경계는 63 matchtime 의 KST)."""
     import habits

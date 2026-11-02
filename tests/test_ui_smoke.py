@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import faulthandler
 import json
 import os
@@ -187,6 +188,19 @@ _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "l
 _win.show()
 # 다른 테스트가 메뉴를 옮기기 전, 로드 직후의 상태를 잡아 둔다.
 _AFTER_LOAD = (_win.stack.currentIndex(), _win.pages.currentIndex())
+
+
+@contextlib.contextmanager
+def _range(kind: str, n: int):
+    """빠른 범위(76)를 버튼에 없는 값으로 — 픽스처가 4경기라 100·200·500 으로는 안 좁혀진다.
+    _on_range_changed 를 거쳐 실제 화면 배선(RANGE_KEYS 다시 그리기)을 그대로 탄다."""
+    _win._range_spec = lambda: (kind, n)
+    _win._on_range_changed()
+    try:
+        yield
+    finally:
+        del _win._range_spec
+        _win._on_range_changed()
 
 
 def _nav_items():
@@ -1110,7 +1124,7 @@ def test_ranker_tiles_shrink_to_fit():
 
 
 def test_dashboard_cards_filled_from_fixture():
-    # 손계산: 승·무·패 3경기(오류 제외) — 득 1+4+1, 실 2+3+1. 오류 경기도 '표시 구간'
+    # 손계산: 승·무·패 3경기(오류 제외) — 득 1+4+1, 실 2+3+1. 오류 경기도 빠른 범위(76)
     # 4경기에는 들어간다(경기 목록과 같은 범위).
     # 결정력 = 골 6 ÷ 슛 17(2+8+7 — 오류 경기 슛은 안 센다)
     d = _win.dashboard
@@ -1126,14 +1140,14 @@ def test_dashboard_cards_filled_from_fixture():
     assert len(d.rival_bars._rows) == 4
     # 선제골 표본 3경기 < 최소 표본 — 숫자 대신 "—"
     assert all(g._value is None for g in d.gauges), [g._value for g in d.gauges]
-    assert d.kpi_wdl.scope.text() == "표시 구간 4경기", d.kpi_wdl.scope.text()
+    assert d.kpi_wdl.scope.text() == f"{_win._scope_text()} 4경기", d.kpi_wdl.scope.text()
     assert d.head.scope.text() == "이번 시즌", d.head.scope.text()
     assert d.clutch.scope.text().startswith(_win._scope_text()), d.clutch.scope.text()
     assert d.trend.scope.text().startswith(f"최근 {_win.sp_trend_days.value()}일")
 
 
 def test_dashboard_cards_keep_their_own_scope():
-    # 표시 구간을 2경기로 좁혀도 승부처·15분·시간대·분석은 시즌 범위 그대로여야 한다
+    # 빠른 범위를 2경기로 좁혀도 승부처·15분·시간대·분석은 시즌 범위 그대로여야 한다
     # (상세 페이지와 같은 숫자). 픽스처는 둘이 같아서 좁혀야만 드러난다.
     d = _win.dashboard
     before_goals = sum(d.minute_chart._series[0][1])
@@ -1141,12 +1155,9 @@ def test_dashboard_cards_keep_their_own_scope():
     before_gauges = [g._note for g in d.gauges]
     before_rate = (d.lb_rate.text(), d.lb_rate_delta.text())
     before_rivals = list(d.rival_bars._rows)
-    old_to = _win.sp_to.value()
-    try:
-        _win.sp_to.setValue(2)
-        _win._apply_range()
-        assert d.kpi_wdl.scope.text() == "표시 구간 2경기", d.kpi_wdl.scope.text()
-        # 승률은 시즌 기준 — 표시 구간을 좁혀도 안 바뀐다
+    with _range("games", 2):
+        assert d.kpi_wdl.scope.text() == f"{_win._scope_text()} · 최근 2경기", d.kpi_wdl.scope.text()
+        # 승률은 시즌 기준 — 빠른 범위를 좁혀도 안 바뀐다
         assert (d.lb_rate.text(), d.lb_rate_delta.text()) == before_rate
         assert d.rival_bars._rows == before_rivals  # 자주 만난 상대도 시즌 기준
         assert d.rivals.scope.text().startswith(_win._scope_text()), d.rivals.scope.text()
@@ -1156,9 +1167,40 @@ def test_dashboard_cards_keep_their_own_scope():
         assert d.timeband_bars._rows == before_bands, (d.timeband_bars._rows, before_bands)
         assert [g._note for g in d.gauges] == before_gauges, [g._note for g in d.gauges]
         assert d.clutch.scope.text().endswith(f"{len(_win._matches)}경기"), d.clutch.scope.text()
+
+
+def test_range_chips_cut_range_screens():
+    # 76 — 위쪽 바 [1일] 버튼을 실제로 눌러(신호 경로) 경기 목록·대시보드·왼쪽 아래 글이 같이 줄어드는지.
+    # 상대 전적은 시즌 그대로(U11). 픽스처가 이틀 이상에 걸쳐야 1일이 좁아진다 — 아니면 이 테스트는 아무것도 못 잰다
+    want = core.window_of(_win._matches, "days", 1)
+    assert 0 < len(want) < len(_win._matches), "픽스처가 하루에 몰려 1일 범위가 좁아지지 않는다"
+    i = _win.cb_range.findData(("days", 1))
+    assert i > 0, [_win.cb_range.itemData(k) for k in range(_win.cb_range.count())]
+    opp_before = {r.label for r in _win.opp_list.rows()}
+    try:
+        _win.cb_range.buttons[i].click()
+        assert [m.match_id for m in _win._slice()[0]] == [m.match_id for m in want]
+        assert len(_win._match_cards) == len(want), len(_win._match_cards)
+        assert "최근 1일" in _win.dashboard.kpi_wdl.scope.text(), _win.dashboard.kpi_wdl.scope.text()
+        assert f"최근 1일 {len(want)}경기" in _win.lb_sub.text(), _win.lb_sub.text()
+        assert {r.label for r in _win.opp_list.rows()} == opp_before
     finally:
-        _win.sp_to.setValue(old_to)
-        _win._apply_range()
+        _win.cb_range.buttons[0].click()
+    assert len(_win._match_cards) == len(_win._matches) and _win.cb_range.currentData() == ("all", 0)
+
+
+def test_range_keys_match_slice_users():
+    # RANGE_KEYS(범위를 바꾸면 다시 그리는 키)와 실제로 _slice() 를 쓰는 그리기가 같아야 한다 — 빠지면 버튼을 눌러도
+    # 그 화면이 옛 범위로 남고(조용히 틀림), 남으면 시즌 화면을 괜히 다시 그린다
+    import inspect
+    users = set()
+    for key, fn in _win._renderers().items():
+        src = inspect.getsource(fn) if fn.__name__ == "<lambda>" else inspect.getsource(getattr(fn, "__func__", fn))
+        if fn.__name__ == "<lambda>":
+            src = src[src.index(f'"{key}"'):].split("\n")[0]   # 사전 한 줄 — 같은 줄의 다른 키를 안 섞게
+        if "self._slice(" in src:
+            users.add(key)
+    assert users == set(_win.RANGE_KEYS), (users ^ set(_win.RANGE_KEYS))
 
 
 def test_dashboard_trend_follows_trend_days():
@@ -1188,9 +1230,8 @@ def test_dashboard_rivals_skip_unknown_nickname():
 
 
 def test_opponents_page_uses_season_scope_not_range():
-    # 표시 구간을 1경기로 좁혀도 상대 전적은 시즌 범위 전체를 센다(대시보드 '자주 만난 상대'와 같게)
+    # 빠른 범위를 1경기로 좁혀도 상대 전적은 시즌 범위 전체를 센다(대시보드 '자주 만난 상대'와 같게)
     lst = _win.opp_list
-    old = (_win.sp_from.value(), _win.sp_to.value())
     shown = []
     orig_show, orig_info = _win._show_match_detail, app_main.QMessageBox.information
     # 65 M3 — 경기 상세 창(스쿼드 탭의 상대 칸)으로 연다 · 그 상대와의 가장 최근 경기
@@ -1198,9 +1239,8 @@ def test_opponents_page_uses_season_scope_not_range():
         (core.match_sides(d, _OUID)[1].get("nickname"), tab, side))
     # 못 찾으면 뜨는 안내 창은 모달이라 offscreen 에서 영원히 멈춘다 — 기록만 남긴다
     app_main.QMessageBox.information = lambda *a, **k: shown.append("못 찾음 창")
+    _win._range_spec = lambda: ("games", 1)
     try:
-        _win.sp_from.setValue(1)
-        _win.sp_to.setValue(1)
         _win._render_all()
         in_range = {m.opponent for m in _win._slice()[0]}
         in_scope = {m.opponent for m in _win._matches}
@@ -1212,15 +1252,14 @@ def test_opponents_page_uses_season_scope_not_range():
         _win._render_all()
         del _win._scope_text
         assert "가짜 시즌" in _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
-        # 표시 구간 밖 상대도 더블클릭하면 스쿼드가 열린다
+        # 빠른 범위 밖 상대도 더블클릭하면 스쿼드가 열린다
         outside = next(iter(in_scope - in_range))
         row = next(r for r in range(lst.rowCount()) if lst.row(r).key == outside)
         _win._on_opponent_double_clicked(lst.model().index(row, 0))
         assert shown == [(outside, "스쿼드", "opp")], shown
     finally:
         _win._show_match_detail, app_main.QMessageBox.information = orig_show, orig_info
-        _win.sp_from.setValue(old[0])
-        _win.sp_to.setValue(old[1])
+        del _win._range_spec
         _win._render_all()
 
 
@@ -3718,7 +3757,7 @@ def test_teamcolor_uses_db_cache_for_every_season_before_fetching():
 def test_position_views_follow_teamcolor_scope():
     # 포지션별 최다 상대(색 필터)·팀컬러 더블클릭 상세도 표와 같은 시즌 범위
     seen = []
-    orig = app_main.core.opponent_position_players, _win.sp_to.value(), _win._show_teamcolor_detail
+    orig = app_main.core.opponent_position_players, None, _win._show_teamcolor_detail
     saved_colors = dict(_win._team_colors)
     old_min = _tc_min(1)
 
@@ -3730,9 +3769,9 @@ def test_position_views_follow_teamcolor_scope():
         for m in _MATCHES:
             if m.opponent:
                 _win._team_colors[m.opponent] = "범위컬러"
-        _win.sp_to.setValue(1)
+        _win._range_spec = lambda: ("games", 1)
         _win._render_all()
-        assert len(_win._slice()[1]) < len(_win._details), "표시 구간이 좁아지지 않아 비교가 안 된다"
+        assert len(_win._slice()[1]) < len(_win._details), "빠른 범위가 좁아지지 않아 비교가 안 된다"
         app_main.core.opponent_position_players = spy
         _win._show_teamcolor_detail = lambda *a, **k: None
         _win._refresh_position_color_options()
@@ -3746,19 +3785,19 @@ def test_position_views_follow_teamcolor_scope():
         _win._team_colors.update(saved_colors)
         _win._refresh_position_color_options()
         _win.cb_position_color.setCurrentIndex(0)
-        _win.sp_to.setValue(orig[1])
+        del _win._range_spec
         _tc_min(old_min)
         _win._render_all()
 
 
 def test_teamcolor_counts_season_scope_not_display_range():
-    # 표시 구간을 1경기로 좁혀도 팀컬러 표는 시즌(지금은 전체) 경기를 다 센다
-    saved = dict(_win._team_colors), _win.sp_to.value(), _tc_min(1)
+    # 빠른 범위를 1경기로 좁혀도 팀컬러 표는 시즌(지금은 전체) 경기를 다 센다
+    saved = dict(_win._team_colors), None, _tc_min(1)
     try:
         for m in _MATCHES:
             if m.opponent:
                 _win._team_colors[m.opponent] = "테스트컬러"
-        _win.sp_to.setValue(1)
+        _win._range_spec = lambda: ("games", 1)
         _win._render_all()
         n = sum(1 for m in _win._matches if m.opponent)
         assert len(_win._slice()[0]) == 1 and n > 1, n
@@ -3769,7 +3808,7 @@ def test_teamcolor_counts_season_scope_not_display_range():
     finally:
         _win._team_colors.clear()
         _win._team_colors.update(saved[0])
-        _win.sp_to.setValue(saved[1])
+        del _win._range_spec
         _tc_min(saved[2])
         _win._render_all()
 
@@ -5130,7 +5169,8 @@ def test_spinbox_text_field_not_collapsed():
         if keep_page:
             _win._go_page(keep_page, _win._page_tabs[keep_page].current_name()
                           if keep_page in _win._page_tabs else None)
-    assert _win.sp_from.isVisible() and id(_win.sp_from) in seen, "위쪽 바 범위 칸을 못 쟀다"
+    # 위쪽 바 범위 칸은 76 에 버튼으로 바뀌었다 — 이제 승률 그래프 [적용 일수] 칸이 대표
+    assert id(_win.sp_trend_days) in seen, "승률 그래프 일수 칸을 못 쟀다"
     assert len(seen) >= 3, seen
     bad = [(n, w, (g.x(), g.width())) for n, w, g in seen.values() if g.width() < w // 2 or g.x() < 4]
     assert not bad, f"스핀박스 입력칸이 찌그러졌다(이름, 상자 폭, (입력칸 x, 폭)) {bad}"

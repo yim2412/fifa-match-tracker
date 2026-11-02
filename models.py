@@ -473,6 +473,22 @@ def win_rate_trend(matches: list[MatchSummary], days: int = 30) -> list[PeriodRa
     return [acc[k] for k in sorted(acc.keys())]
 
 
+def window_of(matches: list[MatchSummary], kind: str = "all", n: int = 0) -> list[MatchSummary]:
+    """76 위쪽 바 빠른 범위 — 최신순 목록에서 ("all") 전부 · ("games", n) 최신 n판 · ("days", n) 최근 n일.
+
+    날은 오늘이 아니라 목록 안 가장 최근 경기 날부터 거꾸로 n일(그날 포함) — 오늘 안 뛴 계정·지난 시즌을 골라도
+    비지 않게(win_rate_trend 와 같은 기준 · U12). 날짜 없는 경기는 날 범위에서 뺀다. 순서는 받은 그대로."""
+    if kind == "games":
+        return list(matches[:max(n, 0)])
+    if kind == "days":
+        dated = [m.match_date for m in matches if m.match_date is not None]
+        if not dated or n <= 0:
+            return []
+        cutoff = max(dated).date() - timedelta(days=n - 1)
+        return [m for m in matches if m.match_date is not None and m.match_date.date() >= cutoff]
+    return list(matches)
+
+
 def moving_win_rate(matches: list[MatchSummary], days: list[date], *, min_n: int, mixed: bool,
                     window_days: int = 7) -> list[float | None]:
     """days 의 날마다 달력 window_days 일(그날 포함 앞 window_days-1 일) 승률(win_pct · %).

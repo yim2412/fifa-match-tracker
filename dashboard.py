@@ -4,15 +4,15 @@
 숫자와 상세 화면 숫자가 어긋나면 어느 쪽도 믿을 수 없게 된다. 그래서 카드
 제목 옆에 범위를 작게 적는다.
 
-    이번 시즌 구단(맨 위 · 55 · 65)     → 늘 이번 시즌(표시 구간·시즌 필터와 무관) — 칸은 창이 만든다(app_main.club_cells)
+    이번 시즌 구단(맨 위 · 55 · 65)     → 늘 이번 시즌(빠른 범위·시즌 필터와 무관) — 칸은 창이 만든다(app_main.club_cells)
                                            · 그 안 승률 카드만 시즌 범위(위 셋은 이번 시즌 = 기본 시즌 범위와 같다)
     이 구단 리포트(65)                  → 이번 시즌 점수 기록(점수·예측 탭 리포트와 같은 계산) · 최근 20경기는 시즌 범위
     자주 만난 상대                      → 시즌 범위(사용자 요청 — 100경기 안에선 대부분 1번씩이라
                                            '자주'가 안 드러난다). 상대 전적 페이지도 같은 범위(10-02)
-    경기 결과 · 골·실점 · 나와 상대    → 표시 구간(시작~끝) — 나와 상대는 몰수·오류 뺌(stats.versus_profile)
+    경기 결과 · 골·실점 · 나와 상대    → 빠른 범위(위쪽 바 버튼 · 76) — 나와 상대는 몰수·오류 뺌(stats.versus_profile)
     점수 해설(65)                       → 리포트와 같은 재료
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
-    승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(표시 구간에 안 갇힘)
+    승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(빠른 범위에 안 갇힘)
 """
 from __future__ import annotations
 
@@ -46,11 +46,12 @@ SECTION_TAG = {core.SEC_FLOW: "흐름", core.SEC_WIN: "이길 때",
 class DashboardInput:
     """대시보드를 그리는 데 필요한 것 — 범위별로 나눠 받는다."""
     ouid: str
-    range_matches: list[MatchSummary]          # 표시 구간, 최신순
+    range_matches: list[MatchSummary]          # 빠른 범위(76 — 위쪽 바 버튼으로 자른 시즌), 최신순
     range_details: list[dict]
-    scope_matches: list[MatchSummary]          # 시즌 범위(표시 구간에 안 갇힘), 최신순
+    scope_matches: list[MatchSummary]          # 시즌 범위(빠른 범위에 안 갇힘), 최신순
     scope_details: list[dict]
     scope_name: str                            # "현재 시즌" · "누적 전체" …
+    range_label: str = ""                      # 빠른 범위 이름+개수("현재 시즌 · 최근 100경기") — 비면 scope_name N경기(76)
     trend_points: list[tuple[str, float, int]] = field(default_factory=list)
     trend_weights: list[int] | None = None   # 점마다 승률 분모(rated) — 평균선 무게(A6). 없으면 경기 수
     trend_days: int = 30
@@ -199,7 +200,7 @@ class DashboardPage(QWidget):
         self.report.body.addLayout(rep_row)
         outer.addWidget(self.report)
 
-        # ② 경기 결과 · 골·실점 · 나와 상대(표시 구간)
+        # ② 경기 결과 · 골·실점 · 나와 상대(빠른 범위)
         row = QHBoxLayout()
         row.setSpacing(14)
         self.kpi_wdl = self._card("경기 결과", ("전술·경기 결과", "경기 결과"))
@@ -363,7 +364,7 @@ class DashboardPage(QWidget):
 
     # ── 채우기 ──────────────────────────────────────────────────────────
     def render(self, d: DashboardInput) -> None:
-        rng = f"표시 구간 {len(d.range_matches):,}경기"
+        rng = d.range_label or f"{d.scope_name} {len(d.range_matches):,}경기"
         scope = f"{d.scope_name} {len(d.scope_matches):,}경기"
         for c in (self.kpi_wdl, self.kpi_goals):
             c.scope.setText(rng)
@@ -417,7 +418,7 @@ class DashboardPage(QWidget):
         self.lb_record.setToolTip(f"{best[2]}\n{reach[2]}".strip())
 
     def _render_kpis(self, d: DashboardInput) -> None:
-        # 승률은 시즌 전체가 큰 숫자 — 표시 구간(1~100 등)은 스핀박스에 따라 바뀌는
+        # 승률은 시즌 전체가 큰 숫자 — 빠른 범위(최근 100경기 등)는 버튼에 따라 바뀌는
         # 임의의 묶음이라 기준으로 약하다. 요즘 폼(최근 20경기)은 리포트 카드에.
         season = summarize(d.scope_matches)
         if not season.total:
@@ -529,7 +530,7 @@ class DashboardPage(QWidget):
 
     def _render_versus(self, d: DashboardInput) -> None:
         prof = core.versus_profile(d.range_details, d.ouid)
-        self.versus_card.scope.setText(f"표시 구간 {prof.games:,}판 · 몰수·오류 뺌")
+        self.versus_card.scope.setText(f"{d.range_label or d.scope_name} · {prof.games:,}판 · 몰수·오류 뺌")
         for vb, ln in zip(self.versus_rows, prof.lines):
             vb.set_values(ln.mine, ln.opp, "{:.0f}" if ln.unit == "%" else "{:.1f}", ln.unit)
             vb.setToolTip(f"{ln.name} — 나 {ln.mine:.1f}{ln.unit} · 상대 {ln.opp:.1f}{ln.unit} ({prof.games:,}경기 평균)")

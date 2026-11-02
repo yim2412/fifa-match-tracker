@@ -1779,7 +1779,7 @@ def group_formation_stats(stats: list, how: str) -> list:
 
 
 # ── 55 구단 머리 줄(대시보드 맨 위 — H1~H6) · 점수 리포트(점수·예측 탭 — R1~R3) ─────────────────────────────
-# 남들 값은 EloLoader 가 rank.db 에서 읽어 EloSeries.club 에(J4) · 내 값은 여기서 · 늘 이번 시즌(대시보드 표시 구간과 무관).
+# 남들 값은 EloLoader 가 rank.db 에서 읽어 EloSeries.club 에(J4) · 내 값은 여기서 · 늘 이번 시즌(대시보드 빠른 범위와 무관).
 # 둘 중 늦게 온 신호(경기 받기 끝 · elo_ready)가 대시보드를 다시 그린다 — 그 전엔 그 칸만 "—".
 
 CLUB_LATE = "다음 시즌부터(이번 시즌은 수집이 늦게 시작)"
@@ -3405,7 +3405,7 @@ class MainWindow(QMainWindow):
         self._on_search()
 
     def _top_bar(self) -> QFrame:
-        """상단 바 — 재검색 + 시즌·표시 범위·새 경기 확인(75 — "등록" 콤보는 안 써서 뺐다 · 2026-11-02 사용자).
+        """상단 바 — 재검색 + 시즌·빠른 범위·새 경기 확인(75 — "등록" 콤보는 안 써서 뺐다 · 2026-11-02 사용자).
 
         어느 메뉴에 있든 같은 필터가 걸린다. 예전엔 랭커/분석 두 페이지가 바를
         하나씩 가져서 리스트(_nick_edits 등)로 묶었는데, 이제 하나뿐이어도
@@ -3438,7 +3438,7 @@ class MainWindow(QMainWindow):
         sep.setStyleSheet(f"background: {T.BORDER}; border: none;")
 
         middle, h = group()
-        # 시즌 필터가 먼저 걸리고, 그 안에서 시작~끝 판수를 자른다.
+        # 시즌 필터가 먼저 걸리고, 그 안에서 빠른 범위(cb_range)가 판수·날수를 자른다.
         lb_season = QLabel("시즌")
         lb_season.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.cb_season = NoScrollComboBox()
@@ -3448,22 +3448,12 @@ class MainWindow(QMainWindow):
         h.addWidget(self.cb_season)
         h.addSpacing(8)
 
-        # 표시 범위 — 시작~끝을 직접 입력해 그 구간만 본다. 검색 시 이미 전량을
-        # 받아 두므로 "새 경기 확인"은 그 사이 새로 생긴 경기가 있는지 다시
-        # 확인하는 버튼이다.
-        self.sp_from = QSpinBox()
-        self.sp_from.setRange(1, 1)
-        self.sp_from.setFixedWidth(68)
-        self.sp_from.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        lb_tilde = QLabel("~")
-        lb_tilde.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.sp_to = QSpinBox()
-        self.sp_to.setRange(1, 1)
-        self.sp_to.setFixedWidth(68)
-        self.sp_to.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
-        self.btn_apply = QPushButton("적용")
-        self.btn_apply.setStyleSheet(T.OUTLINE_BUTTON_QSS)
-        self.btn_apply.clicked.connect(self._apply_range)
+        # 빠른 범위(76) — 시즌으로 거른 뒤 최신 N판 / 최근 N일. 옛 "1 ~ 100 [적용]" 자리. 자르는 화면은
+        # RANGE_KEYS 뿐이다(U11). 검색 때 이미 전량을 받아 두므로 "새 경기 확인"은 그 사이 새 경기만 다시 묻는다.
+        self.cb_range = ChoiceChips(self.RANGE_ITEMS)
+        self.cb_range.setToolTip("경기 목록 · 선수 지표 · 전술 · 슛 맵 · 결정력 · 랭커 비교 · 구단주 비교 · 대시보드 경기 결과를 자릅니다.\n"
+                                 "날 범위는 마지막 경기 날부터 셉니다. 상대 전적·팀컬러 등은 시즌 전체 그대로입니다.")
+        self.cb_range.currentIndexChanged.connect(self._on_range_changed)
         self.lb_total = QLabel("")
         self.lb_total.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.btn_more = QPushButton("⟳  새 경기 확인")
@@ -3472,8 +3462,7 @@ class MainWindow(QMainWindow):
             "검색할 때 이미 받을 수 있는 만큼 전부 받아 둡니다.\n"
             "이 버튼은 그 사이 새로 생긴 경기가 있는지 다시 확인합니다.")
         self.btn_more.clicked.connect(self._on_search)
-        for x in (self.sp_from, lb_tilde, self.sp_to, self.btn_apply):
-            h.addWidget(x)
+        h.addWidget(self.cb_range)
         h.addSpacing(6)
         h.addWidget(self.lb_total)
         self.top_bar = WrapBar(left, middle, self.btn_more, sep=sep)
@@ -5682,7 +5671,7 @@ class MainWindow(QMainWindow):
                 g.addWidget(lb, 2 * r, c)
                 g.addWidget(vl, 2 * r + 1, c)
                 self.shot_sum_cells[label] = val
-        self.lb_shot_sum_scope.setText(f"표시 구간 {ss.games:,}경기 · 몰수·오류 경기는 뺌 · 위치 기록이 있는 슛만")
+        self.lb_shot_sum_scope.setText(f"{self._range_name()} · {ss.games:,}경기 · 몰수·오류 경기는 뺌 · 위치 기록이 있는 슛만")
 
         for btn, d, head in ((self.btn_shot_best, ss.best, "최다 득점"), (self.btn_shot_worst, ss.worst, "최다 실점")):
             ms = core.parse_match(d, self._ouid) if d is not None else None
@@ -5730,7 +5719,7 @@ class MainWindow(QMainWindow):
 
     def _render_attack_route(self, details: list[dict]) -> None:
         ar = core.attack_routes(details, self._ouid) if self._ouid else core.AttackRoutes()
-        scope = f"표시 구간 {ar.games:,}경기"
+        scope = f"{self._range_name()} · {ar.games:,}경기"
         if not ar.enough:
             self._fill(self.tbl_route, [], enable_sort=False)
             self.lb_route_note.setText(
@@ -8865,7 +8854,7 @@ class MainWindow(QMainWindow):
         """내 카드(가장 많이 선 자리) vs 그 카드를 그 자리에 쓴 상위 랭커들의 경기당 평균 — 넥슨 오픈API ranker-stats."""
         w = QWidget()
         v = QVBoxLayout(w)
-        note = QLabel("표시 구간 기준 · 칸은 <b>나 / 랭커</b>(경기당 · 성공률은 %) · 열 정렬은 차이(나 − 랭커) 순<br>"
+        note = QLabel("위쪽 바 범위 기준 · 칸은 <b>나 / 랭커</b>(경기당 · 성공률은 %) · 열 정렬은 차이(나 − 랭커) 순<br>"
                       "랭커 = 같은 카드를 같은 자리에 쓴 상위 랭커들의 평균(넥슨 오픈API — 기준일은 카드마다 다르다). "
                       "차이는 조작 실력이 아니라 전술·역할 차이일 수 있습니다. "
                       f"흐린 줄은 랭커 표본 {config.RANKER_MIN_MATCHES}경기 · 내 출전 {core.MIN_PLAYER_GAMES}경기 미만.")
@@ -8898,7 +8887,7 @@ class MainWindow(QMainWindow):
         elif busy:
             self.lb_ranker_status.setText(f"랭커 기록을 받는 중… ({len(missing)}장)")
         else:
-            self.lb_ranker_status.setText("" if pairs else "표시 구간에 선발로 뛴 카드가 없습니다.")
+            self.lb_ranker_status.setText("" if pairs else "이 범위에 선발로 뛴 카드가 없습니다.")
         few_r, few_me = config.RANKER_MIN_MATCHES, core.MIN_PLAYER_GAMES
         rows = []
         for r in rows_data:
@@ -8970,7 +8959,7 @@ class MainWindow(QMainWindow):
         """선수별 결정력 — 슈터별 슛·골·전환율·xG·어시스트. xG는 추정치(stats.shot_xg)."""
         w = QWidget()
         v = QVBoxLayout(w)
-        note = QLabel("표시 구간 기준 · 내 슛만 · 골이 많은 순  "
+        note = QLabel("위쪽 바 범위 기준 · 내 슛만 · 골이 많은 순  "
                       f"(xG=기대득점 · 골−xG가 +면 기대보다 더 넣은 것)<br>{XG_METHOD_NOTE}")
         note.setStyleSheet(f"color: {T.TEXT_DIM};")
         note.setWordWrap(True)
@@ -10175,10 +10164,46 @@ class MainWindow(QMainWindow):
         else:
             self._set_busy(False)
 
-    def _apply_range(self) -> None:
-        """시작~끝 스핀박스 값대로 표시 구간을 바꾼다."""
-        self._render_all()
-        self._on_fetch_team_colors()  # 범위가 넓어졌으면 새로 들어온 상대만 조회
+    # ── 빠른 범위(76) ─────────────────────────────────────────────────
+    RANGE_ITEMS = ([("전체", ("all", 0))]
+                   + [(f"{n}경기", ("games", n)) for n in config.RANGE_GAMES]
+                   + [(f"{n}일", ("days", n)) for n in config.RANGE_DAYS])
+    # 빠른 범위가 자르는 그리기 키(U11) — _slice() 를 쓰는 것과 같아야 한다(test_range_keys_match_slice_users).
+    # 나머지(상대 전적·팀컬러·승부처 …)는 시즌 범위라 범위를 바꿔도 다시 그리지 않는다 — 팀컬러 다시 조회도 안 한다.
+    RANGE_KEYS = frozenset({"dashboard", "matches", "players", "tactics", "shotmap", "route", "finishing", "rankercmp"})
+
+    def _range_spec(self) -> tuple[str, int]:
+        return self.cb_range.currentData() or ("all", 0)
+
+    def _range_name(self) -> str:
+        """개수 없는 범위 이름 — "현재 시즌" · "현재 시즌 · 최근 100경기" · "현재 시즌 · 최근 3일"."""
+        kind, k = self._range_spec()
+        suffix = {"games": f" · 최근 {k}경기", "days": f" · 최근 {k}일"}.get(kind, "")
+        return self._scope_text() + suffix
+
+    def _range_text(self, n: int) -> str:
+        """잘린 범위 이름 + 개수(옛 "표시 구간 N경기") — "현재 시즌 1,234경기" · "현재 시즌 · 최근 100경기" ·
+        "현재 시즌 · 최근 3일 41경기". 시즌에 N판이 안 되면 자른 게 아니라 시즌 전부라 그렇게 적는다."""
+        kind, k = self._range_spec()
+        scope = self._scope_text()
+        if kind == "games" and n >= k:
+            return f"{scope} · 최근 {k}경기"
+        if kind == "days":
+            return f"{scope} · 최근 {k}일 {n:,}경기"
+        return f"{scope} {n:,}경기"
+
+    def _on_range_changed(self) -> None:
+        if not self._matches_all:
+            return
+        self._refresh_range_labels()
+        for key in sorted(self.RANGE_KEYS):
+            self._invalidate(key)
+
+    def _refresh_range_labels(self) -> None:
+        n = len(self._slice()[0])
+        self.lb_total.setText(f"{n:,}경기" if self._range_spec()[0] != "all" else "")
+        self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
+                            f"감독모드 {self._range_text(n)}")
 
     # ── 시즌 ──────────────────────────────────────────────────────────
     ONGOING = "ongoing"  # 콤보 항목 데이터 — 시즌표에 아직 안 올라온 진행 중 시즌
@@ -10267,7 +10292,7 @@ class MainWindow(QMainWindow):
         return selected.contains(when)
 
     def _scope_text(self) -> str:
-        """표시 구간(시작~끝)에 안 갇히는 탭들이 실제로 쓰는 범위 이름.
+        """빠른 범위에 안 갇히는 탭들이 실제로 쓰는 범위 이름.
 
         시즌을 고르면 그 탭들도 그 시즌 안에서만 계산되므로, 안내 문구를
         "누적 전체"로 박아 두면 화면에 틀린 말이 뜬다."""
@@ -10320,17 +10345,7 @@ class MainWindow(QMainWindow):
             self._details = [d for d in self._details_all
                              if d.get("matchId") in ids]
 
-        # 시작~끝 스핀박스 — 처음엔 최근 100경기(또는 그 이하)를 기본으로 보여준다.
-        total_n = len(self._matches)
-        self.sp_from.blockSignals(True)
-        self.sp_to.blockSignals(True)
-        self.sp_from.setRange(1, max(total_n, 1))
-        self.sp_to.setRange(1, max(total_n, 1))
-        self.sp_from.setValue(1)
-        self.sp_to.setValue(min(PAGE_SIZE, total_n) or 1)
-        self.sp_from.blockSignals(False)
-        self.sp_to.blockSignals(False)
-
+        # 빠른 범위(cb_range)는 시즌을 바꿔도 그대로 — 고른 시즌 안에서 다시 자른다(_slice)
         if render and self._matches_all:
             self._render_all()
             self._on_fetch_team_colors()
@@ -10338,8 +10353,7 @@ class MainWindow(QMainWindow):
     def _set_busy(self, busy: bool) -> None:
         for w in (*self._search_btns, *self._nick_edits, self.ed_search):
             w.setEnabled(not busy)
-        for b in (self.btn_more, self.btn_apply):
-            b.setEnabled(not busy)
+        self.btn_more.setEnabled(not busy)
         self.progress.setVisible(busy)
         if busy:
             self.progress.setValue(0)
@@ -10393,7 +10407,7 @@ class MainWindow(QMainWindow):
             self._names, self._positions = names, positions
         self._matches_all, self._details_all = matches, details
         # 시즌 콤보를 먼저 다시 채우고(이전 선택은 그대로 있으면 유지),
-        # 그 선택대로 _matches/_details 와 시작~끝 스핀박스를 맞춘다.
+        # 그 선택대로 _matches/_details 를 맞춘다(빠른 범위는 그대로).
         self._rebuild_season_combo()
         self._apply_season(render=False)
 
@@ -10436,13 +10450,11 @@ class MainWindow(QMainWindow):
 
     # ── 렌더 ──────────────────────────────────────────────────────────
     def _slice(self) -> tuple[list[MatchSummary], list[dict]]:
-        """시작~끝 스핀박스 구간만. 표시 순서는 최신순 그대로다."""
-        total_n = len(self._matches)
-        a = max(self.sp_from.value() - 1, 0)
-        b = min(self.sp_to.value(), total_n)
-        if a >= b:
-            a, b = 0, total_n
-        shown = self._matches[a:b]
+        """빠른 범위(76)로 자른 시즌 경기 — RANGE_KEYS 화면만 쓴다. 표시 순서는 최신순 그대로다."""
+        shown = core.window_of(self._matches, *self._range_spec())
+        if len(shown) == len(self._matches):
+            # 전체 — 상세를 id 로 다시 거르지 않는다(1만 판에서 매번 집합 대조). 옛 슬라이스처럼 새 목록으로(제자리 정렬 대비)
+            return shown, list(self._details)
         ids = {m.match_id for m in shown}
         return shown, [d for d in self._details if d.get("matchId") in ids]
 
@@ -10490,14 +10502,14 @@ class MainWindow(QMainWindow):
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
 
     def _renderers(self) -> dict:
-        """키 → 그리기. 범위 주석은 예전 _render_all 그대로 — 표시 구간(_slice)에 갇히는 것과
+        """키 → 그리기. 범위 주석은 예전 _render_all 그대로 — 빠른 범위(_slice)에 갇히는 것과
         시즌 범위(self._matches)를 쓰는 것이 메뉴마다 다르다."""
         return {
             "dashboard": self._render_dashboard,
             "matches": lambda: self._render_matches(self._slice()[0]),
             "players": lambda: self._render_players(self._slice()[1]),
             "tactics": lambda: self._render_tactics(self._slice()[1]),
-            # 시즌 범위 — 표시 구간(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
+            # 시즌 범위 — 빠른 범위(100경기) 안에선 상대 대부분이 1번씩이라 상성이 안 드러난다.
             "opponents": lambda: self._render_opponents(self._matches),
             "opprank": self._render_opp_rank,   # 시즌 범위(self._details) × rank.db 의 N23 줄 — 그 시즌 동안만 있다
             # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
@@ -10512,10 +10524,10 @@ class MainWindow(QMainWindow):
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "rewards": lambda: self._render_rewards(self._details),   # 시즌 범위(diagnosis 와 같다)
             "poslevel": self._render_poslevel,   # 50단계 C4 — 시즌 범위 무관(내 감독모드 최신 1000판 · 49 칩과 같은 창)
-            "shotmap": self._render_shotmap,  # 표시 구간
-            "route": lambda: self._render_attack_route(self._slice()[1]),   # 표시 구간(슛 맵과 같다)
+            "shotmap": self._render_shotmap,  # 빠른 범위
+            "route": lambda: self._render_attack_route(self._slice()[1]),   # 빠른 범위(슛 맵과 같다)
             "finishing": lambda: self._render_finishing(self._slice()[1]),
-            "rankercmp": lambda: self._render_ranker_compare(self._slice()[1]),  # 표시 구간 — 랭커 요청은 카드 수만큼
+            "rankercmp": lambda: self._render_ranker_compare(self._slice()[1]),  # 빠른 범위 — 랭커 요청은 카드 수만큼
             "analysis": self._render_analysis,  # 패턴 규칙이 표본을 크게 잡아야 한다 — 시즌 범위
             # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기. 가계부 합계만 시즌 범위(짝은 전체로 맞춘 뒤)
             "trades": self._render_trades,
@@ -10538,16 +10550,12 @@ class MainWindow(QMainWindow):
         }
 
     def _render_all(self) -> None:
-        matches, _ = self._slice()
-        total = len(self._matches)
-        self.lb_total.setText(f"전체 {total}경기")
         self.lb_profile.setText(self._nick)
-        self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
-                            f"감독모드 {len(matches)}경기 분석 (누적 {total})")
+        self._refresh_range_labels()
         self._refresh_scope_notes()
         self._render_ranker()
         # 승률 추이는 늘 — 대시보드 승률 흐름이 그 결과(_trend_periods)를 쓴다. 가볍다.
-        # "최근 30일" 이 표시 구간에 갇히면 안 된다(하루 100경기 넘게 뛰는 계정은 하루도 안 된다).
+        # "최근 30일" 이 빠른 범위에 갇히면 안 된다(하루 100경기 넘게 뛰는 계정은 하루도 안 된다).
         self._render_trend(self._matches)
         self._ranker_failed, self._ranker_note = None, ""  # 새 데이터면 실패했던 랭커 요청도 다시 해 본다
         self._dirty = set(self._renderers())
@@ -11344,9 +11352,9 @@ class MainWindow(QMainWindow):
         self._refresh_match_color_options()   # 경기 목록 상대 팀컬러 필터(55 F2) — 가볍다(콤보만)
 
     def _teamcolor_scope(self) -> tuple[list[MatchSummary], list[dict]]:
-        """팀컬러 두 탭·포지션별 최다 상대가 세는 범위 — 표시 구간이 아니라 시즌 콤보.
+        """팀컬러 두 탭·포지션별 최다 상대가 세는 범위 — 빠른 범위가 아니라 시즌 콤보.
 
-        표시 구간(100경기)이면 상대 98명을 거의 한 번씩만 만나 팀컬러마다 1~2경기라
+        빠른 범위(100경기)면 상대 98명을 거의 한 번씩만 만나 팀컬러마다 1~2경기라
         승률이 안 된다(2026-10-02 실측). 시즌이면 2천 경기가 넘는다."""
         return self._matches, self._details
 
@@ -12549,7 +12557,7 @@ class MainWindow(QMainWindow):
         return w
 
     def _render_trend(self, matches: list[MatchSummary]) -> None:
-        """승률 그래프 — '적용 경기 수'(시작~끝)가 아니라 '적용 일수'
+        """승률 그래프 — '적용 경기 수'(빠른 범위)가 아니라 '적용 일수'
         (sp_trend_days)로 그린다. 하루 100경기 넘게 뛰는 계정은 경기 수
         구간이 하루도 안 될 수 있어서, 누적 전체(self._matches)를 기준으로
         날짜만 계산한다 — _render_all 의 호출도 그래서 self._matches 그대로."""
@@ -12973,7 +12981,7 @@ class MainWindow(QMainWindow):
         return self._wins_cache
 
     def _club_cells(self) -> list | None:
-        """대시보드 머리 줄(55 H1~H6) — 계정이 없으면 None. 늘 이번 시즌(표시 구간과 무관)."""
+        """대시보드 머리 줄(55 H1~H6) — 계정이 없으면 None. 늘 이번 시즌(빠른 범위와 무관)."""
         if not self._ouid:
             return None
         data = self._elo.get(self._ouid)
@@ -13056,6 +13064,7 @@ class MainWindow(QMainWindow):
             range_matches=matches, range_details=details,
             scope_matches=self._matches, scope_details=self._details,
             scope_name=self._scope_text(),
+            range_label=self._range_text(len(matches)),
             trend_points=[(p.label, p.win_rate, p.games) for p in periods],
             trend_weights=[p.rated for p in periods],
             trend_days=self.sp_trend_days.value(),
@@ -13200,7 +13209,7 @@ class MainWindow(QMainWindow):
         # 이름 열(1)의 시즌 배지 폭은 set_icon_columns 가 이미 갖고 있다(손으로 26 을 주던 자리)
         self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2})
         # 공격력(5열)·수비력(6열) — 고정 눈금 G8(theme.g8_cell — 표 안 다른 선수와 무관) · 포지션 기준 점수 미만은 "▽"
-        # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 표시 구간 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
+        # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 빠른 범위 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
         # 높은 승률이 나쁨으로 읽힌다). 출전 미달 선수는 색·▽ 를 안 붙인다(색은 few 경기부터 — 예전과 같은 규칙).
         res = [m.result for m in self._slice()[0]]
         team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
@@ -13220,7 +13229,7 @@ class MainWindow(QMainWindow):
             if rate_item is not None:
                 if enough[r]:
                     delta_item(rate_item, p.win_rate - team)
-                    rate_item.setToolTip(f"표시 구간 팀 승률 {team:.1f}% 대비 {p.win_rate - team:+.1f}%p")
+                    rate_item.setToolTip(f"이 범위 팀 승률 {team:.1f}% 대비 {p.win_rate - team:+.1f}%p")
             pos_item = self.tbl_players.item(r, 0)
             line = core.position_line(p.pos_code)
             if pos_item and line:
