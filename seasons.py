@@ -12,6 +12,10 @@
 주의 2: 앞 시즌의 종료일 == 다음 시즌의 시작일이다. 그래서 종료일은 포함이
         아니라 경계로 보고 **[시작, 종료)** 반개구간으로 자른다 — 안 그러면
         경계일 경기가 두 시즌에 겹쳐 들어간다.
+        경계 시각은 종료일 0시가 아니라 **종료일 config.SEASON_CUTOFF_H 시**(KST) — 넥슨은
+        종료일 새벽까지 옛 시즌 경기를 받고 점검 뒤에 새 시즌을 연다(2026-11-02 실측).
+        시각(datetime)은 이 시각으로 가르고, 날짜(date)만 주면 하루를 쪼갤 수 없어 경계일은
+        새 시즌이다(달력 칸). 시즌표 날짜 자체(start·end)는 넥슨 글 그대로 둔다.
 주의 3: 진행 중인 시즌은 목록에 안 올라온다(2026-08-03 확인 — 최신 항목이
         07-30 에 끝나 있었다). 마지막 종료일 이후 경기는 시즌 없음(None)으로
         오고, 화면에서 "진행 중"으로 묶는다.
@@ -23,7 +27,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 import config
 import ranker  # 세션(연결 재사용·UA 헤더)과 동시 상한(web_get)을 그대로 쓴다
@@ -53,9 +57,33 @@ class Season:
     def span_text(self) -> str:
         return f"{self.start:%Y-%m-%d} ~ {self.end:%Y-%m-%d}"
 
+    @property
+    def start_at(self) -> datetime:
+        return boundary_at(self.start)
+
+    @property
+    def end_at(self) -> datetime:
+        return boundary_at(self.end)
+
     def contains(self, when: datetime | date) -> bool:
-        d = when.date() if isinstance(when, datetime) else when
-        return self.start <= d < self.end
+        if isinstance(when, datetime):
+            return self.start_at <= when < self.end_at
+        return self.start <= when < self.end
+
+
+def boundary_at(d: date) -> datetime:
+    """시즌표 날짜(종료일 == 다음 시작일) → 시즌이 실제로 바뀌는 KST 시각(머리말 주의 2)."""
+    return datetime.combine(d, time(config.SEASON_CUTOFF_H))
+
+
+def in_ongoing(seasons: list[Season], when: datetime | date | None) -> bool:
+    """진행 중 시즌(마지막 종료 경계 이후)인가 — 시즌표가 비면 거짓."""
+    last_end = max((s.end for s in seasons), default=None)
+    if when is None or last_end is None:
+        return False
+    if isinstance(when, datetime):
+        return when >= boundary_at(last_end)
+    return when >= last_end
 
 
 class SeasonError(Exception):
@@ -109,7 +137,6 @@ def group_by_season(seasons: list[Season], items: list,
     안 걸리는 아주 오래된 경기는 데이터센터 목록이 2018년까지 있어 사실상
     없지만, 있으면 같은 None 그룹에 섞이지 않도록 날짜로 한 번 걸러 낸다.
     """
-    ongoing_from = max((s.end for s in seasons), default=None)
     buckets: dict[int, list] = {}
     ongoing: list = []
     for item in items:
@@ -117,10 +144,8 @@ def group_by_season(seasons: list[Season], items: list,
         s = season_of(seasons, when)
         if s is not None:
             buckets.setdefault(s.no, []).append(item)
-        elif when is not None and ongoing_from is not None:
-            d = when.date() if isinstance(when, datetime) else when
-            if d >= ongoing_from:
-                ongoing.append(item)
+        elif in_ongoing(seasons, when):
+            ongoing.append(item)
     out: list[tuple[Season | None, list]] = []
     if ongoing:
         out.append((None, ongoing))

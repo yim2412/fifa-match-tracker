@@ -504,21 +504,46 @@ _SEASONS = [_S3, _S2]
 
 
 def test_season_boundary_goes_to_new_season():
-    # [시작, 종료) — 경계일 경기는 새 시즌에만. 닫힌 구간이면 두 시즌에 겹친다.
-    assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 0, 0)) == _S3
+    # [시작, 종료) — 경계일 경기는 한 시즌에만. 닫힌 구간이면 두 시즌에 겹친다.
+    # 경계 시각은 종료일 0시가 아니라 SEASON_CUTOFF_H(8)시 — 종료일 새벽 경기는 옛 시즌(76 · 2026-11-02 실측 3경계)
+    assert config.SEASON_CUTOFF_H == 8
+    assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 8, 0)) == _S3
+    assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 7, 59)) == _S2, "종료일 새벽 경기가 새 시즌에 들어갔다"
+    assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 0, 0)) == _S2
     assert sn.season_of(_SEASONS, datetime(2026, 5, 27, 23, 59)) == _S2
     assert sn.season_of(_SEASONS, date(2026, 4, 2)) == _S2
+    # 날짜만 주면(달력 칸) 하루를 쪼갤 수 없어 경계일은 새 시즌
+    assert sn.season_of(_SEASONS, date(2026, 5, 28)) == _S3
     assert not _S2.contains(date(2026, 5, 28)), "종료일이 포함됐다"
-    # 진행 중(마지막 종료일 당일부터)·날짜 없음·목록 이전은 시즌 없음
+    assert (_S3.start_at, _S3.end_at) == (datetime(2026, 5, 28, 8), datetime(2026, 7, 30, 8))
+    # 진행 중(마지막 종료 경계부터)·날짜 없음·목록 이전은 시즌 없음
     assert sn.season_of(_SEASONS, datetime(2026, 7, 30, 9, 0)) is None
+    assert sn.season_of(_SEASONS, datetime(2026, 7, 30, 3, 56)) == _S3
+    assert sn.in_ongoing(_SEASONS, datetime(2026, 7, 30, 8)) and not sn.in_ongoing(_SEASONS, datetime(2026, 7, 30, 7, 59))
+    assert sn.in_ongoing(_SEASONS, date(2026, 7, 30)) and not sn.in_ongoing(_SEASONS, date(2026, 7, 29))
+    assert not sn.in_ongoing([], datetime(2026, 8, 1)) and not sn.in_ongoing(_SEASONS, None)
     assert sn.season_of(_SEASONS, None) is None
     assert sn.season_of(_SEASONS, date(2026, 4, 1)) is None
 
 
+def test_season_cutoff_follows_config():
+    """배선 — 기본값(8)이 아닌 값으로 바꾸면 경계가 따라 움직이나(코드에 8 을 박으면 FAIL)."""
+    saved = config.SEASON_CUTOFF_H
+    try:
+        config.SEASON_CUTOFF_H = 3
+        assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 3, 0)) == _S3
+        assert sn.season_of(_SEASONS, datetime(2026, 5, 28, 2, 59)) == _S2
+        assert sn.in_ongoing(_SEASONS, datetime(2026, 7, 30, 3))
+        got = sn.group_by_season(_SEASONS, [datetime(2026, 7, 30, 4)], key=lambda x: x)
+        assert [(s.no if s else None) for s, _ in got] == [None], got
+    finally:
+        config.SEASON_CUTOFF_H = saved
+
+
 def test_group_by_season_order_and_buckets():
-    items = [datetime(2026, 8, 1), datetime(2026, 7, 30),     # 진행 중
-             datetime(2026, 7, 29), datetime(2026, 5, 28),    # 시즌 3
-             datetime(2026, 5, 27),                           # 시즌 2
+    items = [datetime(2026, 8, 1), datetime(2026, 7, 30, 12),  # 진행 중
+             datetime(2026, 7, 30, 3), datetime(2026, 5, 28, 8),  # 시즌 3 — 종료일 새벽은 옛 시즌
+             datetime(2026, 5, 28, 1),                         # 시즌 2 — 경계일 8시 전
              datetime(2026, 1, 1),                            # 목록 이전 — 버린다
              None]                                            # 날짜 없음 — 버린다
     got = sn.group_by_season(_SEASONS, items, key=lambda x: x)
@@ -2030,9 +2055,9 @@ def test_division_entries_counts_each_climb():
 
 
 def test_season_divisions_follow_season_boundary():
-    # 경계일 00:00 경기는 새 시즌(시즌 3)에 — 표의 행과 같은 갈림
-    a = _md(datetime(2026, 5, 27, 23, 59), "승")
-    b = _md(datetime(2026, 5, 28, 0, 0), "패")
+    # 경계일 8시 경기는 새 시즌(시즌 3)에 · 그 전 새벽은 옛 시즌 — 표의 행과 같은 갈림
+    a = _md(datetime(2026, 5, 28, 7, 59), "승")
+    b = _md(datetime(2026, 5, 28, 8, 0), "패")
     c = _md(datetime(2026, 6, 10, 12), "승")
     e = _md(datetime(2026, 8, 1, 12), "승")  # 진행 중 — 등급 점 없음
     groups = sn.group_by_season(_SEASONS, [a, b, c, e], key=lambda m: m.match_date)
@@ -2496,9 +2521,9 @@ def test_kst_day_boundaries_follow_matchtime():
     assert st._match_day(late) == date(2026, 10, 25)
     assert st.own_squad([late], "me")[1] == "2026-10-25 00:30"           # 상대 스쿼드 제목 — 원문이 아니라 KST 글
     assert st.opponent_squad([late], "me", "너")[1] == "2026-10-25 00:30"
-    # 시즌 첫날 — 새 시즌 5-28 00:00 KST 직전·직후(원문은 5-27 15:00 UTC 앞뒤)
-    s_before = models.parse_match(_t0_detail("2026-05-27T14:59:00"), "me").match_date
-    s_after = models.parse_match(_t0_detail("2026-05-27T15:01:00"), "me").match_date
+    # 시즌 첫날 — 새 시즌 경계 5-28 08:00 KST 직전·직후(원문은 5-27 23:00 UTC 앞뒤)
+    s_before = models.parse_match(_t0_detail("2026-05-27T22:59:00"), "me").match_date
+    s_after = models.parse_match(_t0_detail("2026-05-27T23:01:00"), "me").match_date
     assert sn.season_of(_SEASONS, s_before) == _S2 and sn.season_of(_SEASONS, s_after) == _S3
     # N23 짝 — 스냅숏(KST)이 경기 KST 시각 ±1시간이면 그 스냅숏(원문 그대로 읽으면 9시간 어긋나 창 밖)
     snaps = [(1, datetime(2026, 10, 25, 1, 0), "2026-10-25"), (2, datetime(2026, 10, 24, 15, 0), "2026-10-24")]

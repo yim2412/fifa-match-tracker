@@ -1676,12 +1676,12 @@ class HabitsWorker(Worker):
 
 
 def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
-    """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료일(반개구간이라 그날 0시부터) ·
+    """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료 경계(그날 `config.SEASON_CUTOFF_H` 시 · seasons 주의 2) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
     → (시작, 시즌을 아는가). 마지막 대체 길이면 False — 화면은 그 70일을 "시즌" 이라 부르지 않는다(66 R2)."""
-    ended = [s.end for s in rank_seasons if s.end <= now.date()]
+    ended = [s.end_at for s in rank_seasons if s.end_at <= now]
     if ended:
-        return datetime.combine(max(ended), datetime.min.time()), True
+        return max(ended), True
     if snap_start:
         try:
             return datetime.fromisoformat(snap_start), True
@@ -10263,8 +10263,7 @@ class MainWindow(QMainWindow):
         if when is None:
             return False
         if selected == self.ONGOING:
-            last_end = max((s.end for s in self._rank_seasons), default=None)
-            return last_end is not None and when.date() >= last_end
+            return sn.in_ongoing(self._rank_seasons, when)
         return selected.contains(when)
 
     def _scope_text(self) -> str:

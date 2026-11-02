@@ -276,13 +276,13 @@ def test_b_freeze_pairing():
             match("b1", t, side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),
             match("b2", t + timedelta(days=4, hours=12), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 양쪽 스냅숏 36시간
             match("b3", t, side(ME, "승", cards(100)), side(OTHER, "패", cards(200))),                                 # 두 쪽 다 계정
-            match("b4", t + timedelta(days=1, hours=13), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 시즌 경계 너머 스냅숏
+            match("b4", t + timedelta(days=1, hours=21), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 시즌 경계(11-03 08시 · 76) 너머 스냅숏
             match("b5", t + timedelta(days=6, hours=1), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),   # 24시간 안 지남
         ])
         rk = rank_db(d / "rank.db", [
             (1, t - timedelta(hours=10), {"상대": ("첼시", 9)}),
             (2, t + timedelta(hours=3), {"상대": ("리버풀", 11)}),     # b1 에 가장 가깝다
-            (3, t + timedelta(days=1, hours=11), {"상대": ("리버풀", 11)}),   # 11-02 23시 — b4(11-03 01시)와 시즌이 다르다
+            (3, t + timedelta(days=1, hours=11), {"상대": ("리버풀", 11)}),   # 11-02 23시 — b4(11-03 09시)와 시즌이 다르다
             (4, t + timedelta(days=3), {"상대": ("리버풀", 11)}),
             (5, t + timedelta(days=6), {"상대": ("리버풀", 11)}),
         ])

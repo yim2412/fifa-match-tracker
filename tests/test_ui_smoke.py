@@ -5415,9 +5415,10 @@ def test_selected_season_filter_edges():
     try:
         f = _win._in_selected_season
         assert f(None, s1) is False and f(None, _win.ONGOING) is False   # 날짜 없는 경기는 어디에도 안 든다
-        assert f(dt_(2025, 6, 1, 0, 0), _win.ONGOING)                     # 마지막 종료일 당일부터 진행 중
-        assert not f(dt_(2025, 5, 31, 23, 59), _win.ONGOING)
-        assert f(dt_(2025, 5, 31, 23, 59), s1) and not f(dt_(2025, 6, 1), s1)
+        cut = config.SEASON_CUTOFF_H                                       # 경계 = 마지막 종료일 이 시각(76 · 그 새벽은 옛 시즌)
+        assert f(dt_(2025, 6, 1, cut, 0), _win.ONGOING)
+        assert not f(dt_(2025, 6, 1, cut - 1, 59), _win.ONGOING)
+        assert f(dt_(2025, 6, 1, cut - 1, 59), s1) and not f(dt_(2025, 6, 1, cut), s1)
         _win._rank_seasons = []
         assert not f(dt_(2025, 6, 1), _win.ONGOING)                       # 시즌표가 없으면 진행 중도 없다
         # 설정 파일에 남기는 시즌 이름 — 셋이 서로 달라야 다음에 켤 때 같은 시즌으로 돌아온다
@@ -7485,12 +7486,14 @@ def test_elo_season_start_rules():
     from datetime import date as _d
     now = datetime(2026, 10, 5, 12, 0)
     seasons = [sn.Season(89, "시즌 2", _d(2026, 7, 1), _d(2026, 8, 1)), sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
-    assert app_main.elo_season_start(seasons, "2026-09-20T00:00:00", now) == datetime(2026, 9, 10)
+    # 시즌 시작은 종료일 0시가 아니라 교체 점검 뒤(config.SEASON_CUTOFF_H · 76) — 그 새벽 옛 시즌 점이 안 섞이게
+    assert app_main.elo_season_start(seasons, "2026-09-20T00:00:00", now) == datetime(2026, 9, 10, config.SEASON_CUTOFF_H)
+    assert app_main.elo_season_start(seasons, None, datetime(2026, 9, 10, 7, 0)) == datetime(2026, 8, 1, config.SEASON_CUTOFF_H)
     assert app_main.elo_season_start([], "2026-09-20T03:00:00", now) == datetime(2026, 9, 20, 3)
     assert app_main.elo_season_start([], None, now) == now - timedelta(days=config.ELO_FALLBACK_DAYS)
     # 아직 안 끝난 시즌(미래 종료일)은 시작으로 안 쓴다
     fut = seasons + [sn.Season(91, "시즌 4", _d(2026, 9, 10), _d(2026, 11, 1))]
-    assert app_main.elo_season_start(fut, None, now) == datetime(2026, 9, 10)
+    assert app_main.elo_season_start(fut, None, now) == datetime(2026, 9, 10, config.SEASON_CUTOFF_H)
 
 
 def test_elo_daily_points_keep_latest_of_day_and_filter_start():
@@ -12047,7 +12050,7 @@ def test_season_span_unknown_says_recent_days():
     assert app_main.season_span([], None, now) == (now - timedelta(days=config.ELO_FALLBACK_DAYS), False)
     assert app_main.season_span([], "2026-09-20T03:00:00", now) == (datetime(2026, 9, 20, 3), True)
     ss = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 9, 10))]
-    assert app_main.season_span(ss, None, now) == (datetime(2026, 9, 10), True)
+    assert app_main.season_span(ss, None, now) == (datetime(2026, 9, 10, config.SEASON_CUTOFF_H), True)
     assert app_main.season_title(datetime(2026, 9, 10), True) == "지금 시즌 (09/10~)"
     assert app_main.season_title(now, False) == f"최근 {config.ELO_FALLBACK_DAYS}일"
     keep = (_win._rank_seasons, dict(_win._elo), config.WEB_DATA)
