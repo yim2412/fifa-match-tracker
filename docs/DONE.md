@@ -5334,3 +5334,136 @@ naive 로 두는 이유: 앱 전체가 `datetime.now()`(이 PC 벽시계 = KST)�
 S 의 줄 목록·카드의 정확한 색 값(64 처럼 계산된 색을 읽지 않았다 — 64 토큰을 쓴다) · S 팀컬러 "단일" 의 뜻 · S 상세 탭 넷 안쪽 · S 밝은 테마 · 다른 기준 화면(I)의 감독모드 랭킹·팀컬러 검색·랭커 픽 감독모드 탭(10-25 "아직 안 본 곳") · 팀컬러별 픽 표본 수(조각 ②) · 새 묶음 계산 시간 · 상대 전적 "-" 줄 수.
 
 난이도 **높음**(화면 약 25 · 새 부품 둘 · 공개). 검토: Opus 1명(기존 데이터로 화면만 — 검토 기준 7 · 단 R5·R6 새 묶음은 계산이라 검토자 관점에 "rank.db 판정 재사용" 을 적어 준다) / 구현: Sonnet + Opus 리뷰(맨 위 표) — ②③ 은 높음이라 **Opus 로 바꾸기를 추천**(66 이 Opus 로 한 것과 같은 이유: 새 그림·새 묶음).
+
+## 73단계 — PySide6 전환 (3.2.1 · 옛 70) · 4판 (2026-11-01 · U1~U3 사용자 "추천대로" · **계획 검토 끝** — 1회차 [상] 3 → 2회차(새 검토자 · 계획 전체) 새 [상] 0 · [중] 8 은 아래 표대로 구현 때) ✅ 끝 (2026-11-02 v3.2.1·3.2.2·3.2.3 공개 · 설치판 확인)
+
+**목표**: 바인딩만 PyQt6(GPL v3) → PySide6(LGPL v3). 화면·동작·저장 형식은 **하나도 안 바꾼다**. 71·72(보호 빌드)의 선행 조건이고(위 "배포 보호 준비"), 68·69 의 새 화면을 처음부터 PySide6 로 쓰려고 당겼다.
+**측정과 안 닿는다**: `tools/measure_cards.py`·`dev_matches.py`·`dev_archive.py` 와 그들이 읽는 모듈은 Qt 를 import 하지 않는다(PyQt6 가 나오는 파일 19개 = Qt 를 import 하는 앱 6 · 테스트 10 · `tools/release.py` + 이름만 나오는 `notice`·`crashlog` — 1회차 [중]). 개발 PC 전역 파이썬에 PySide6 를 같이 깔아도 작업 스케줄러 셋은 그대로다.
+
+### 이 초안을 쓰며 확인한 것 (2026-11-01)
+
+| # | 확인 | 근거 |
+|---|---|---|
+| F1 | **Python 3.14 에서 돈다** — PySide6 6.12.0(`cp310-abi3` 휠) · Qt 6.12.0 · 스크래치 venv 에서 import·`QApplication`·`QLocalServer`·`QtTest` 0.3초 | 실측 · 스크래치 `ps6_probe.py` |
+| F2 | 지금 PyQt6 6.11.0 · **Qt 6.11.1**. PySide6 는 6.11.3 휠(같은 Qt 6.11)도 있다 | `pip show` · `pip download` |
+| F3 | `Signal(object)` 로 100만 원소 list 를 넘기면 **받는 쪽이 같은 객체**(복사 없음 — PyQt 8 의 전제) · 같은 스레드 직접 연결에서만 쟀다 | 실측 |
+| F4 | 바꿀 자리 개수: `pyqtSignal` 92 · `from PyQt6…import` 102줄(QtCore 23 · QtGui 38 · QtWidgets 37 · QtNetwork 1 · QtTest 1 · `sip` 2) · `sip.isdeleted` 8 · `disconnect` 7(넷은 `try/except (TypeError, RuntimeError)` · 둘은 인자 없이 감싸지 않음 `app_main.py:12445-12446`) · `sender()` 2 · `QSettings` 5 · 테스트의 `.start =` 바꿔 끼우기 25 · `Q….exec =` 11 · `pyqtSlot`·`pyqtProperty`·`QVariant`·`exec_` 0 | grep |
+| F5 | **설치기는 덮어 설치할 때 `{app}\_internal` 을 통째로 지운다**(`.iss` `[InstallDelete]`) — 옛 PyQt6 DLL 이 새 설치에 남지 않는다 | `installer/피파전적관리.iss:53-55` |
+| F7 | **표 정렬이 PySide6 에서 프로세스째 죽는다** — `widgets.SortableItem.__lt__` 끝의 `super().__lt__(other)` 가 PySide6 에선 파이썬 쪽 `__lt__` 로 되돌아와 무한 재귀(세그폴트 rc 139). `app_main._cell` 은 글자 칸도 전부 `SortableItem` 이라 글자 열이 있는 표의 정렬마다 닿는다. 직접 비교(`self.text() < other.text()`)는 정상 | 1회차 실측 + 다시 재현(스크래치 `sort_probe.py` — 재귀 200 넘김) |
+| F8 | **PySide6-Essentials·shiboken6 휠에 LGPL 전문이 없다** — 든 것은 `licenses/LicenseRef-Qt-Commercial.txt`(상용 안내) 하나. `notice.license_files()` 는 이름이 `LICENSE…` 로 시작하면 집어 `release.py`·`test_release.py:202` 가 **초록인데 LGPL 글은 안 실린다** | 1회차 실측 + 다시 확인 |
+| F9 | **PySide6 도 슬롯·타이머·`QThread.run` 예외에서 `sys.excepthook` 을 부른다**(crashlog 기록은 그대로) — 다만 **기본 훅이면 찍고 계속 돈다**(PyQt6 는 끝낸다). `grab()` 이 부른 paintEvent 안 예외는 훅이 아니라 호출 자리로 올라온다 | 1회차 실측(같은 스크립트로 두 바인딩) |
+| F10 | `disconnect()` — PySide6 는 연결이 없어도 **예외 없이** `False` + `RuntimeWarning`(인자 없음·안 붙은 슬롯 둘 다) | 1회차 실측 |
+| F11 | PyQt6 가 쓴 `settings.ini` 를 PySide6 `QSettings` 가 **같은 값·형으로** 읽는다 | 1회차 실측 |
+| F12 | **Qt 기본 항목 비교 = `QCollator(QLocale.system())`**(PyQt6 6.11 · 23개 글자 모든 쌍 불일치 0 · `QLocale.setDefault` 는 안 탄다 · 파이썬 `<` 와는 88쌍 다름 — "a" < "A" · 이모지 < "가"). 골든 글자들은 ko_KR·en_US·ja_JP 에서 순서가 같다(C 로캘만 46쌍 다름) — CI(en_US)에서도 골든이 유효 | 11-01 조각 ① 실측(스크래치 `coll.py`·`coll2.py`) |
+| F13 | **M2 끝 — 6.11.3 에서 다시 재현**: F7(재귀 200 넘김) · F9(사용자 훅이면 슬롯·타이머·`QThread.run` 모두 훅 · 기본 훅이면 PyQt6 는 끝나고 PySide6 는 찍고 계속) · F10(`disconnect()` 연결 없으면 `False` + `RuntimeWarning` · PyQt6 는 `TypeError`) · M3(값 객체 bool 반대 그대로) · M4(`triggered` 람다 인자 0개 · 람다 안 `sender()` None) · M5(int 키 dict → `{}` + "Cannot copy-convert") · R3 선행(스레드 건너는 queued `Signal(object)` 도 같은 객체) — 전부 6.12.0 결과와 같다 | 11-01 조각 ① 실측(옛 스크래치 `r2_probe*.py`·새 `f9.py`·`m5.py`) |
+| F14 | **`super()` 오버라이드 전수(M6 정의 `super\(\)\.\w+\(` · `__init__` 제외)**: 앱·테스트 45곳 · Qt 가상 함수 15종(`resizeEvent` 7 · `paint` 4 · `initStyleOption` 3 · `setFont`·`minimumSizeHint`·`leaveEvent`·`closeEvent` 2 · `sizeHint`·`showEvent`·`setText`·`paintEvent`·`moveEvent`·`changeEvent`·`hideEvent`·QThread `start` 1) + `__lt__` 1 · 나머지는 파이썬 클래스. 15종을 한 프로브에서 불러 두 바인딩 모두 재귀 0 · 호출 수 같음 — **재귀는 연산자 `__lt__` 하나뿐** | 11-01 조각 ① 실측(스크래치 `m6.py`) |
+| F15 | **조각 ① 치환 결과(11-01 · PySide6 6.11.3)**: import·`Signal`·`shiboken6.isValid`(8곳 부정 방향 손 대조) · `constBits()` 는 memoryview(`bytes(…)[:n]`) · **하네스 없이 돌린 첫 스모크 389/389** — 슬롯 예외가 삼켜질 수 있어 근거가 못 된다 → `watchdog.slot_errors` 를 넣고 다시. 기본 인자 람다(`lambda _=False, n=…:`)는 PySide6 에서도 `n` 이 안 덮인다 · `lambda *_:` 는 인자 0개지만 안 읽어 해 없음(M4 앱 0곳) · 설정에 쓰는 값은 문자열·바이트·정수라 R6 해당 없음 · `RuntimeWarning`(R5) 테스트 출력 0줄. **되돌리는 변이 8건 전부 FAIL**(하네스 `slot_errors` 빼기 · LGPL 글 검사·옛 바인딩 검사 안 막기 · 저장소 글 대신 휠 파일 · 표식 LGPL 하나 · `isValid` 부정 뒤집기 둘) — 축구장 카드 슬롯(`_on_pitch_card`)은 **옛 `sip.isdeleted` 시절부터 부르는 테스트가 없어** 처음엔 못 잡았다 → `test_pitch_card_signal_skips_deleted_pitch` | 11-01 실측(스크래치 `m4b.py`·`mut.py`) |
+| F16 | **Qt 6.11.3·6.12.0 은 QSS 를 건 `QSpinBox` 의 입력칸을 줄인다** — 버튼 없음이면 폭 **1px**(위쪽 바 경기 범위 "1 ~ 4" 가 빈 칸 · 앱 스핀박스 6개 전부), 화살표가 있으면 왼쪽 여백이 사라진다. 6.11.0·6.11.2 는 정상(PySide6 휠 4판을 같은 최소 재현으로 — 바인딩이 아니라 **Qt 패치판** 회귀). → U2 를 **6.11.2** 로 바꿈 · `test_spinbox_text_field_not_collapsed`(6.11.3 에서 FAIL · 6.11.2 에서 초록). 찾은 길: R4 PNG 대조(6.11.3 판은 24장 전부 1~4.5% 다름 — 글자 안티앨리어싱도 6.11.3 탓이었다) | 11-01 조각 ② 실측(스크래치 `spin_min.py`) |
+| F6 | 라이선스 글(`notice.licenses_html`)은 동의 해시(`_notice_digest`)에 **안 들어간다** — 글을 고쳐도 `NOTICE_VERSION` 을 올리지 않아도 되고 다시 묻지 않는다 | `tests/test_ui_smoke.py:7798-7802` |
+
+### 바뀌는 것 (파일 → 핵심 변경)
+
+| 자리 | 변경 | 주의 |
+|---|---|---|
+| Qt 를 import 하는 앱 6개(`app_main` · `widgets` · `charts` · `dashboard` · `theme` · `tray`) + `tools/release` | `PyQt6` → `PySide6` · `pyqtSignal` → `Signal` · `sip.isdeleted(x)` → `not shiboken6.isValid(x)` | 기계적 치환 + **사람 눈으로 8곳**(`isdeleted` 의 부정 방향) |
+| `widgets.SortableItem.__lt__`(F7) | `super().__lt__` 를 없애고 **Qt 기본 비교를 파이썬으로** — ✅ 11-01 `widgets.qt_item_less`: Qt 기본 비교는 글자 코드 비교가 아니라 **시스템 로캘의 `QCollator`** 였다(F12) · 빈 값은 맨 뒤 · 둘 다 숫자면 숫자 | ✅ `tests/test_sort_golden.py` — PyQt6 6.11 로 **옮기기 전 코드에서** 뜬 골든(`fixtures/sort_golden.json` · 다시 뜨는 길은 지웠다) · 바꾼 비교를 PyQt6 위에서 먼저 초록 · 되돌리는 변이 3건(파이썬 `<` · C 로캘 · 흐림 방향) FAIL |
+| 연산자·가상 함수 오버라이드에서 `super()` 를 부르는 자리 | 전수 grep(아래 정의 표) → 자리마다 PySide6 에서 재귀하는지 최소 재현 | F7 과 같은 꼴이 더 있을 수 있다 |
+| `requirements.txt` · CI(`test.yml`) | `PyQt6` → `PySide6-Essentials`(Addons 는 안 쓴다 — 크기) · **버전 고정**(U2) | CI 가 PyQt6 를 안 깔면 남은 import 가 바로 빨개진다 |
+| `피파전적관리.spec` | `hiddenimports` 의 `PyQt6.QtNetwork` → `PySide6.QtNetwork` · 라이선스 `datas` | PyInstaller 6.20 의 PySide6 훅 |
+| `tools/release.py` | `REQUIRED_MODULES` 의 `PyQt6/QtNetwork.pyd` → `PySide6/QtNetwork.pyd` · "GPL v3" 문구 · 라이선스 폴더 이름 | 되돌리는 변이(빠진 모듈 → FAIL)를 다시 |
+| `notice.py` · 저장소 `licenses/`(새) · spec `datas` | `THIRD_PARTY` 의 PyQt6·PyQt6-Qt6·PyQt6-sip 세 줄 → PySide6·shiboken6(LGPL v3 · Qt DLL 이 같은 휠에 들어 있어 "Qt 6" 은 PySide6 줄에 함께 적는다) · **LGPL-3.0·GPL-3.0 전문은 휠에 없으니(F8) 저장소가 직접 갖고** spec 이 `_internal/licenses/` 에 넣는다 · `license_files()` 는 그 파일을 가리키게 · `licenses_html` 의 "실행 파일 전체 GPL v3" 문단 → "소스 MIT · PySide6/Qt 는 LGPL v3, 프로그램 폴더의 Qt DLL 을 바꿔 끼울 수 있다" | F6 — 다시 묻지 않는다 · **`release.py` 검사는 파일 이름이 아니라 내용**("GNU LESSER GENERAL PUBLIC LICENSE"·"GNU GENERAL PUBLIC LICENSE" 문자열)으로 — 되돌리는 변이: 상용 안내문만 넣으면 FAIL |
+| `README.md`(:3 · :10 · :525) · `docs/index.html`(:137 · :155) · `tools/release.py:245` | "실행 파일 전체는 GPL v3" 류 공개 문장을 LGPL 로 | grep 이 `*.py` 만 봐 놓쳤다(1회차 [중]) — 정의 표에 `*.md`·`*.html` 줄 |
+| `tests/legacy_area_chart.py:16-17` | **얼린 사본이지만 import 줄만** 바꾼다(그림 코드는 그대로 — `charts.py:19` 의 "고치지 않는다" 에 예외 한 줄) | |
+| `tests/test_icons.py:837` | `constBits().asarray(...)`(sip.voidptr 전용) → PySide6 는 memoryview — `bytes(…)[:n]` 꼴로 | 정의 표에 `asarray`·`asstring`·`setsize` |
+| spec · `release.py`(U3 기간 대비) | spec `excludes` 에 `PyQt6` · `release.py` 에 "`_internal/PyQt6`·`licenses/PyQt6` 가 없다" 검사(변이로 빨개지는지) | 전역 파이썬에 두 바인딩이 같이 있는 동안 PyInstaller 가 PyQt6 를 끌어오면 GPL 이 다시 섞인다 · 포터블 zip 을 옛 폴더에 덮어 풀면 남는다(F5 는 설치판만) — README 의 포터블 안내에 "새 폴더에 풀기" |
+| `crashlog.py` | 머리말의 "PyQt6 는 슬롯 예외에서 프로세스를 끝낸다" → F9 대로(기록은 남고, 기본 훅이면 앱은 계속 돈다) | exe 는 훅이 걸려 있어 기록이 남는다 — 동작 변화는 "죽지 않고 계속" 쪽 |
+| 테스트 하네스(`tests/watchdog.py` 꼴 · `watchdog.limit` 을 쓰는 모든 `main()`) | **슬롯 예외 수집 훅을 조건 없이** — 테스트가 도는 동안 `sys.excepthook` 을 "모아 두기" 로 바꾸고, 테스트 함수마다 끝에 0건 단언 · 끝나면 되돌림 · crashlog 테스트(`test_ui_smoke` 2414 언저리)처럼 훅을 바꿔 끼우는 테스트는 그 안에서 저장·복원 | F9 — 없으면 클릭으로 연 슬롯 안의 `ModalCalled`(`test_ui_smoke.py:85`)가 삼켜져 **모달 차단이 빈 검사가 된다**. 되돌리는 변이: 훅을 빼면 클릭 경로 `ModalCalled` 를 심은 테스트가 초록 → 넣으면 FAIL |
+| `tests/test_rules.py` | **새 규칙: `PyQt6`·`sip` import 0건**(위반을 심은 가짜 소스를 잡는지 같이) · 기존 `pyqtSignal(list/dict)` 규칙 → `Signal(list/dict)` 로(안 고치면 빈 검사가 된다) · `check_combo` 의 심은 소스도 | 규칙 검사의 "빈 검사 방지" 꼴 그대로 |
+| `CLAUDE.md`(프로젝트) | PyQt 1~9 의 "PyQt" 이름은 번호라 그대로 두고, 바인딩이 바뀐 사실과 R1~R4 결과만 한 줄씩 | |
+
+### 위험 — 실측으로 먼저 정할 것 (구현 조각 ① 앞)
+
+| # | 위험 | 왜 조용히 깨지나 | 재는 법 |
+|---|---|---|---|
+| R1 | **슬롯 안 예외** — F9(실측 끝). 남은 것: 위 하네스 훅이 테스트 파일 **전부**에 걸렸는지(새 테스트 파일도 — `test_rules` 가 `watchdog.limit` 쓰는 파일과 대조) · paintEvent 안 예외가 `grab()` 호출 자리로 올라와 테스트가 **새로** FAIL 하는 곳(PyQt6 에선 숨던 결함 — 고친다) | `crashlog` 가 훅을 걸어 두니 기록은 남을 수 있지만, "죽지 않고 반쯤 그린 화면" 이 새로 생긴다 · 테스트가 슬롯 예외를 "통과" 로 읽을 수 있다(예외가 테스트 함수까지 안 올라온다) | exe 에서 슬롯에 일부러 예외 → crash.log 한 줄(조각 ②) · 하네스는 위 변이 |
+| R2 | **테스트의 메서드 바꿔 끼우기 36곳**(`QThread.start` · `QDialog.exec` 등) — 지금 주석: "대입하면 sip 메서드가 깨진다 → `del` 로 되돌린다" | 바꿔 끼우기가 조용히 안 먹으면 진짜 `start()` 가 돌아 스레드가 뜨고, 모달이 offscreen 에서 멈춘다(PyQt 6) | 스모크 전체를 PySide6 로 돌려 멈춤·스레드 누수를 본다 · `ModalCalled` 막기가 여전히 잡는지 되돌리는 변이로 |
+| R3 | **큰 데이터 신호가 스레드를 건널 때**(queued) 복사 여부 — F3 은 같은 스레드만 쟀다 | PyQt 8(1만 경기 4.5GB) 이 되살아나도 테스트는 초록 | `test_loader_signals_pass_objects_without_copying` 을 PySide6 로 + exe 프로세스 메모리 실측(검색 1회 전후) |
+| R4 | **그림이 픽셀 단위로 바뀌나** — `test_area_chart_defaults_unchanged` 는 얼린 사본과 픽셀 비교, 창 크기 테스트는 화면 5종 | 바인딩 차이(QPainter 오버로드·글꼴 메트릭)와 Qt 버전 차이가 섞이면 원인을 못 가른다 → U2 | 전환 전후 메뉴별 PNG(`UI_SHOT`)를 같은 Qt 버전으로 떠서 픽셀 차이 · 창 크기 5종 |
+| R5 | `disconnect()` — F10(실측 끝): PySide6 는 예외 없이 `False` + `RuntimeWarning` | 감싸지 않은 `app_main.py:12445-12446` 은 오히려 안전해진다 · 감싼 4곳의 `except` 는 안 타지만 `pass` 라 해 없음 · **테스트를 새로 만들지 않는다**(무조건 통과하는 빈 검사가 된다) | `RuntimeWarning` 이 테스트 출력에 쏟아지면 `warnings` 필터로 그 한 문구만 |
+| R6 | 열거형·플래그 — PySide6 6.4+ 도 파이썬 enum 이지만 `|` 결과·`int()`·`.value` 가 PyQt6 와 다른 자리가 있다(F1 프로브에서 `AlignLeft | AlignTop` 이 `33` 으로 찍혔다) | `QSettings` 에 저장한 값·`data(role)` 비교가 조용히 거짓 | 스모크 + 저장된 `settings.ini` 를 옛 버전 → 새 버전으로 읽어 창 크기·탭 복원이 같은지 |
+| R7 | exe 크기·기동 시간·한 번만 실행(`QLocalServer`) | `QtNetwork` 가 빠지면 exe 에서만 죽는다(1.1.1 실측) | `release.py` 검사 + exe 단독 기동 시간(지금 2.6초 — 2.10.1 실측) · 두 번 실행 |
+
+### 조각 (제안 — 구현 2개)
+
+1. ✅ **조각 ① 바인딩 치환 + 테스트 전부 초록**(11-01): 위 표 전부 · R1·R2·R5·R6 · `test_rules` 새 규칙 다섯(`test_binding_is_pyside6_only` · `Signal(list/dict)` · 값 객체 bool(M3) · 가변 인자 슬롯(M4) · 테스트 감시 누락) · 하네스 `watchdog.slot_errors`(+ `test_predict_check` 가 감시 밖이던 것) · 테스트 파일 전부 PySide6.
+   **계획과 다르게 한 것**: notice(`THIRD_PARTY`·저장소 `licenses/` LGPL·GPL 전문·`licenses_html`) · `release.py`(`REQUIRED_MODULES`·고지 문구·**글 내용 검사 `license_text_problems`·옛 바인딩 검사 `forbidden_files`**) · spec(`hiddenimports`·`excludes PyQt6`) 의 **글·상수**를 ① 로 당겼다 — CI 에서 PyQt6 를 빼는 순간 `test_release` 의 라이선스 검사가 빨개지고, 반만 바꾸면 그 사이 빌드가 "LGPL 이라 적고 PyQt6 를 요구" 한다. exe 빌드와 그 검사의 실측은 ② 그대로.
+2. **조각 ② 배포물**: exe 빌드(위 검사가 진짜 빌드에서 초록인지 — PyInstaller PySide6 훅이 `PySide6/QtNetwork.pyd` 자리에 두는지 먼저) · R3·R4·R7 실측 · 2번 모니터 실화면 · 공개 문장 grep(정의 표 마지막 줄) · 3.1.1 → 3.2.1 앱 안 업데이트 실검증(설정·데이터 그대로인지).
+   ✅ **실측 끝(11-01 · 업데이트 실검증만 공개 때)**:
+   - **exe 빌드**(PySide6 6.11.2 · 1분 17초): `release.py` 검사 함수를 진짜 `dist` 에 — 라이선스 항목 전부 · LGPL/GPL 글 · PyQt6 0 파일 · `PySide6/QtNetwork.pyd` 있음 · 중앙 서버 모듈 0.
+   - **R3**: 스모크에 `test_loader_signals_cross_threads_without_copying`(작업 스레드에서 내보내 화면 스레드가 큐로 받는다 — 같은 객체 · int 키 dict 그대로) · 변이(첫 인자 `Signal(list, …)`) FAIL. exe 메모리는 아래 예산 표.
+   - **R4**: 같은 스모크로 PyQt6(`6e7cc59`) · PySide6 메뉴별 PNG 24장 — **18장 픽셀까지 같음**, 6장은 머리글 정렬 화살표(▾) 11×5 칸 32~37 픽셀만(Qt 가 그리는 화살표 · 패치판 차이). 실제 윈도우(2번 모니터 · 실데이터 사본 · 넥슨 요청 0) 100%·150% 메뉴·탭 52장씩 — **38장 같음**, 14장 정렬 화살표만. 150% 의 [메타 분석 › 하루 승률] 가로 스크롤은 **PyQt6 에도 있다**(옮기며 생긴 것 아님 → 후보).
+   - **R7**: exe 를 처음부터 2번 모니터에 · 초점 그대로(3.1.1 과 번갈아 3회씩) — 아래 예산 표 · 두 번째 실행 `--quit`(QLocalSocket → QLocalServer)로 0.8초에 정상 종료 rc 0 · crash 기록 새로 0.
+   - **공개 문장**: `docs/notes/README.md` 한 줄(PyQt6 → PySide6). `CHANGELOG.md` 의 옛 절 "PyQt6 때문에 GPL" 은 그때 기록이라 둔다.
+   - **못 한 것**: exe 에 슬롯 예외를 심는 R1 실측 — 코드를 안 고치고 심을 길이 없다(훅 자체는 스모크 `crashlog` 테스트가 잰다).
+
+### 결정 (2026-11-01 사용자 "추천대로")
+
+- **U1** 3.2.1 로 **따로** 공개 — 68 과 같이 내면 회귀가 어느 쪽 탓인지 못 가른다.
+- **U2** **PySide6-Essentials 6.11.x 로 고정**(`requirements.txt` 에 `==6.11.3` · `shiboken6==6.11.3` 휠도 있다 — 11-01 받아 봄). 싣는 Qt 는 **6.11.3**(지금 PyQt6-Qt6 는 6.11.1 — 같은 6.11 의 패치판 차이) → R4 에서 그림이 다르면 바인딩 **또는 Qt 패치판** 탓(2회차 [중]2). 6.12 올림은 따로 작은 수정으로. **→ (11-01 조각 ②) 6.11.2 로 내림** — 6.11.3·6.12.0 은 스핀박스 입력칸 회귀(F16). 올릴 때는 `test_spinbox_text_field_not_collapsed` 가 먼저 본다.
+- **U3** 개발 PC 전역 파이썬의 PyQt6 는 **3.2.1 공개 뒤에** 지운다(그 전엔 둘 다 두고 되돌릴 수 있게). CI 는 조각 ① 부터 PySide6 만.
+
+### 전수 목록의 정의 (검토 기준 14 — 손 목록 대신 grep · 기준 커밋 `c2c3ce0`)
+
+| 대상 | grep(저장소 루트 · `build/`·`dist/` 제외 · `*.py`) | 그날 개수 | 지킬 테스트 |
+|---|---|---|---|
+| PyQt6 를 import 하는 파일 | `PyQt6` | 19 | 새 `test_rules` 규칙: `PyQt6`·`from PyQt6 import sip` 0건 |
+| 신호 선언 | `pyqtSignal` | 92 | 같은 규칙(이름이 남으면 FAIL) · 신호 형 규칙은 `Signal(` 로 다시 정의 |
+| 지워진 위젯 판정 | `isdeleted` | 8(앱 7 · 테스트 1) | 손 대조(부정 방향) + R1 테스트 |
+| 메서드 바꿔 끼우기 | `\.start *= ` · `Q[A-Za-z]+\.exec *=` | 36(`test_ui_smoke` 22 · `test_window_size` 10 · `test_icons` 4) | R2 |
+| 인자 없는 `disconnect()` | `\.disconnect\(\)` | 4(앱 2 · 테스트 2) | R5 |
+| 슬롯 예외를 다루는 곳 | `excepthook` | 9 | R1 |
+| 연산자·가상 함수 오버라이드의 `super()` | `super\(\)\.\w+\(`(M6 로 넓힘 · `__init__` 제외) | 45(F14 — Qt 가상 함수 15종 + `__lt__` 1) | F14 프로브 · 표 정렬 골든 |
+| sip.voidptr 전용 API | `\.asarray\(|\.asstring\(|\.setsize\(` | 1(`test_icons.py:837`) | 그 테스트 |
+| 공개 문장의 GPL·PyQt | `GPL|PyQt` in `*.md`·`*.html`·`*.iss`·`*.spec`(`docs/ROADMAP.md`·`docs/DONE.md`·`docs/LESSONS.md` 는 기록이라 제외) | 조각 ② 첫 일에 센다 | 손 대조 |
+
+### 2회차 [중] — 구현 때 테스트로 (2회차 검토 · PyQt6 6.11 / PySide6 6.12.0 나란히 실측)
+
+| # | 무엇 | 구현 때 할 일 |
+|---|---|---|
+| M1 | 되돌리기는 ①+② 전부 | 위 "되돌리기" 에 반영 |
+| M2 | 실측이 전부 6.12.0 · 고정판은 6.11.3 | ✅ 11-01 끝(F13 — 전부 같다) · **조각 ① 첫 일**: 6.11.3 venv 에서 F7·F9·F10·M3~M5 최소 재현을 다시(스크래치 `sort_probe.py`·`r2_probe*.py`) |
+| M3 | 값 객체 bool 이 반대 — `bool(QPixmap())`·`QImage()`·`QIcon()` PySide6 False / PyQt6 True · `bool(QSize())`·`QSize(0,0)`·`QMarginsF()` 반대 | 지금 코드는 `is not None and not isNull()` 꼴이라 0곳 · `test_rules` 에 "Qt 값 객체를 `if x:`·`not x` 로 판정" 규칙(심은 위반 잡는지) — 못 만들면 grep 행 |
+| M4 | 기본 인자 있는 내장 신호(`clicked`·`triggered`)에 `lambda *a`·`partial`·`wraps` 래퍼를 이으면 PySide6 는 인자 0개(PyQt6 `(False,)`) · 람다 안 `self.sender()` 는 None | 앱 0곳 · 전수 정의 표에 grep 행(`connect\((lambda|functools\.partial|partial)`) — 걸린 줄마다 인자 개수 대조 |
+| M5 | `Signal(dict)` 에 int 키 dict → PySide6 는 **빈 `{}` 를 조용히** 보낸다 | 신호 형 규칙을 `Signal(` 로 다시 정의하는 것이 필수(빈 검사 방지 이상) · 되돌리는 변이: `Signal(dict)` 를 심으면 FAIL |
+| M6 | `super()` 오버라이드 grep 이 좁다(`initStyleOption` `widgets.py:887·1425·1508` · `paint` · `*Event` · `eventFilter` · `headerData` · `rowCount`) | 정의를 `super\(\)\.\w+\(`(Qt 하위 클래스 안)로 넓힌다 · `initStyleOption`+`paint` 는 두 바인딩이 같았다(2회차 실측) |
+| M7 | `test_release.py:163` `"GPL v3" in notes` 는 "LGPL v3" 에도 참(부분 문자열) · `:216-223·297·354·356` 의 `PyQt6/…` 경로 | 단언을 낱말 경계(`"LGPL v3"` 있음 + 앞에 L 없는 `"GPL v3"` 없음)로 · 경로는 `PySide6/…` 로 |
+| M8 | **자원 예산 — PySide6 가 약 20% 느리다**(2만 행 표: 채우기 0.16 → 0.20초 · `__lt__` 정렬 0.17 → 0.20초 · 모델 뷰 스크롤 30회 0.17 → 0.21초 · 2회차 실측) | 아래 예산 표 · 조각 ② 에서 실데이터로 |
+
+### 자원 예산 (검토 기준 7 — 조각 ② 실측과 대조)
+
+| 무엇 | 지금(PyQt6) | 상한(PySide6) | 재는 법 |
+|---|---|---|---|
+| exe 단독 기동 | 2.6초(2.10.1 실측) · **3.1.1 exe 1.77초**(11-01 · 같은 사본 3회 중앙값) | 3.5초 | 트레이 없이 창이 뜰 때까지 3회 중앙값 → ✅ **1.99초**(+12%) |
+| 큰 표 채우기·정렬(경기 목록 · 랭킹) | **실데이터**(1만 3천 경기 사본 · 앱의 `_fill` 전부): 열기·그리기 4.05초 · `_fill` 합 0.09초 · 가장 큰 표 126행 | 지금 × 1.3 | ✅ 3.96초 · 0.10초 · 126행 정렬 차이 잡음 안. ⚠ **2만 행 × 8열 합성**(`FitTableWidget`+`SortableItem`)은 넘는다 — 채우기 1.04 → 1.52초(×1.46) · 글자 정렬 0.41 → 0.94초(×2.3, 비교가 C++ 에서 파이썬 `qt_item_less` 로 옮겨 와 한 번 0.5 → 1.95µs) · 숫자 정렬 ×1.10. 비교 키를 항목에 붙이는 캐시는 첫 정렬이 오히려 느려(0.94 → 1.15초) 버렸다 — 앱에 그만한 표가 없어 지금은 둔다 |
+| 검색 1회 뒤 exe 메모리(R3) | 3.1.1 exe 개인 1,058MB(실데이터 사본 · 켜고 45초 — 1만 3천 경기 전부 메모리에) | 지금 + 10% | ✅ 1,066MB(+0.8%) |
+| 배포 zip 크기 | 3.1.1 포터블 43.1MB(풀면 99.1MB) | 지금 + 20% | ✅ 45.5MB(+5.6% · 풀면 105.3MB) |
+
+### 되돌리기 (검토 기준 6 · 1회차 [중])
+
+앱 안 업데이트는 새 버전으로만 간다 — 3.2.1 에 큰 회귀가 나오면 **PyQt6 로 되돌린 3.2.2 를 공개**한다 — **73단계 커밋 전부(① + ②) 를 revert** · 버전만 올림(① 만 되돌리면 spec 의 `excludes PyQt6`·`REQUIRED_MODULES`·LGPL 글이 남아 PyQt6 를 빼고 빌드하거나 GPL 을 싣고 LGPL 이라 적는다 · 2회차 [중]1). 데이터는 안전하다: 바인딩은 `fifa.db`·`rank.db` 를 안 건드리고, `settings.ini` 는 두 바인딩이 같은 값·형으로 읽는다(F11). 그래서 U3 대로 공개 뒤까지 PyQt6 를 지우지 않는다.
+
+### 환경 행렬 (검토 기준 3)
+
+| 칸 | 조각 ① | 조각 ② |
+|---|---|---|
+| 소스 실행(`python app_main.py`) | 실측 | — |
+| offscreen 테스트 전부(`tests/*.py`) | 실측 — 전부 초록 | 다시 |
+| CI(windows-latest · 3.14) | PySide6 만 깔고 초록 | 다시 |
+| exe(onedir) | 해당 없음 | 실측 — `release.py` 검사 · 단독 기동 · 두 번 실행 · 트레이 |
+| 실제 윈도우 100%·150%(2번 모니터) | 해당 없음 | 실측 — 메뉴별 PNG 전후 대조(R4) |
+| 새 설치 | 해당 없음 | 실측(스크래치 데이터 폴더) |
+| 업그레이드 3.1.1 → 3.2.1(앱 안 업데이트) | 해당 없음 | 실측 — 설정(`settings.ini` 창 크기·탭)·데이터·트레이 자동 실행 값 그대로인지 · `_internal\PyQt6` 가 안 남는지(F5) |
+| 남의 PC(CP949) | 해당 없음 — 인코딩 경로를 안 바꾼다(`test_rules` 인코딩 규칙이 지킨다) | 해당 없음 |
+| 개발 PC 작업 스케줄러 셋(측정 중) | 실측 — 조각 ① 커밋 뒤 다음 실행이 rc 0 · 측정 로그에 오늘 줄 | — |
+
+**설치판 확인(2026-11-02 · 개발 PC 설치본)**: 3.1.1 → 3.2.x 앱 안 업데이트 뒤 설치 버전 3.2.2 · `_internal\PyQt6` 없음(`PySide6` 만) · `settings.ini`·`.env` 그대로 · `fifa.db` 746MB 그대로이고 실행 중 새로 쓰임 — 행렬의 "업그레이드" 줄(F5) 통과. 3.2.3 업데이트는 74단계 기능(트레이에서 열 때 확인)으로 사용자가 받는다.
