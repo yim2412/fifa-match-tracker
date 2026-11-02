@@ -81,7 +81,7 @@ from nexon_api import (
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, Card, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
-    CalCell, CalendarGrid, PageTabs, RANGE_ROLE, PitchCard, PitchWidget, RangeBarDelegate, RankerCard, RowBorderDelegate, ShotMapWidget,
+    CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
@@ -2614,11 +2614,10 @@ class MainWindow(QMainWindow):
         "평점": "이 선수가 출전한 경기들의 평균 평점.",
     }
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
-    # [팀컬러 승률] 은 승률 줄 목록(67 R3 — tc_rate_list) · [팀컬러 랭킹] 은 표 그대로(범위 막대 대리자 · 여러 열 정렬 — E7).
-    # 두 탭 같은 규칙: 한 번 누름 = 고르기 · 두 번 = 그 팀컬러 상대들이 쓴 선수 · 팀컬러 창은 위 [팀컬러 정보] 단추(옛 "효과" 열)
-    TEAMCOLOR_RANK_COLUMNS = ["순위", "팀컬러", "만난 횟수",
-                              "평균 팀가치", "최저 팀가치", "최고 팀가치", "팀가치 범위"]
-    TEAMCOLOR_RANGE_W = 150            # 팀가치 범위 막대 열 폭(글자가 없어 FitTableWidget 이 최소 폭으로 누른다)
+    # [상대 팀컬러] 는 승률 줄 목록 하나(77 B — 옛 [팀컬러 승률]·[팀컬러 랭킹] 을 합쳤다 · 팀가치는 줄 보조 글 · 범위 막대는 뺐다).
+    # 한 번 누름 = 고르기 · 두 번 = 그 팀컬러 상대들이 쓴 선수 · 팀컬러 창은 위 [팀컬러 정보] 단추(옛 "효과" 열)
+    # 정렬 — 묶음 줄엔 최근 경기가 없다 · 팀가치 높은 순은 옛 [팀컬러 랭킹] 의 평균 팀가치 열 자리
+    TC_SORTS = (*((k, t) for k, t in RATE_SORTS if k != "recent"), ("value", "팀가치 높은 순"))
     # 강화 숫자 칸 = 배지(64 P8) — {칸을 채우는 함수: (표, 열)}. test_rules 가 강화 하나만 든 칸을 만드는 함수를 세어 이 표와 대조한다
     GRADE_BADGE_COLUMNS = {"_render_players": ("tbl_players", (2,)), "_render_timeline": ("tbl_timeline", (3,)),
                            "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,))}
@@ -3516,6 +3515,7 @@ class MainWindow(QMainWindow):
         ("경기", [("경기 목록", "_build_matches_tab"),
                  ("상대 전적", Tabs("opps", (("전적", "_build_opponents_tab"),
                                             ("상대 순위", "_build_opp_rank_tab")))),
+                 ("상대 팀컬러", "_build_teamcolor_tab"),   # 77 B — 옛 [팀컬러 승률]·[팀컬러 랭킹]
                  ("구단주 비교", "_build_compare_tab")]),
         ("흐름", [("흐름 분석", "_build_analysis_tab"),
                  ("승률 그래프", Tabs("trend", (("승률·등급", "_build_trend_tab"),
@@ -3546,8 +3546,6 @@ class MainWindow(QMainWindow):
                  ("스쿼드·이적", Tabs("squad", (("타임라인", "_build_timeline_tab"),
                                              ("가계부", "_build_ledger_tab"),
                                              ("이력", "_build_history_tab"))))]),
-        ("팀컬러", [("팀컬러 승률", "_build_teamcolor_rate_tab"),
-                   ("팀컬러 랭킹", "_build_teamcolor_rank_tab")]),
         # 2.1.1 새 묶음 — 아직 빈 메뉴는 config.HIDDEN_NAV_UNTIL_READY 에 이름을 넣어 숨긴다(16·17단계가 채웠다)
         ("랭커", [("랭킹 추이", Tabs("ranktrend", (("추이", "_build_rank_trend_tab"),
                                               ("메타 변화", "_build_meta_trend_tab"),
@@ -3572,6 +3570,8 @@ class MainWindow(QMainWindow):
         "스쿼드 타임라인": ("스쿼드·이적", "타임라인"),
         "이적시장 가계부": ("스쿼드·이적", "가계부"),
         "선수별 결정력": ("선수 지표", "결정력"),   # 77 E
+        "팀컬러 승률": ("상대 팀컬러", None),        # 77 B
+        "팀컬러 랭킹": ("상대 팀컬러", None),
     }
     # 지운 탭 → 새 탭(메뉴별). settings.ini 의 보던 탭이 옛 이름이면 새 자리로 연다
     OLD_TAB_NAMES = {"메타 분석": {"가성비": "팀컬러"}}   # 67 R1 — [가성비] 는 [팀컬러] 목록의 한 칸이 됐다(U1)
@@ -3772,9 +3772,7 @@ class MainWindow(QMainWindow):
         return self.dashboard
 
     def _build_teamcolor_fetch_row(self) -> tuple[QHBoxLayout, QPushButton, QLabel]:
-        """팀컬러 승률·랭킹 두 탭이 같은 데이터를 쓰니 조회 트리거·상태
-        표시도 각 탭에 하나씩 두되 같은 핸들러(_on_fetch_team_colors)를
-        공유한다."""
+        """상대 팀컬러 조회 단추·상태 줄(77 B 전엔 두 탭에 하나씩 — 목록은 그 흔적. 지금은 한 벌)."""
         row = QHBoxLayout()
         btn = QPushButton("상대 팀컬러 불러오기")
         btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
@@ -3803,7 +3801,7 @@ class MainWindow(QMainWindow):
                 " 그 상대가 지금 쓰는 팀컬러 기준입니다(지난 시즌일수록 실제와 달라질 수 있음).")
 
     def _teamcolor_min_row(self) -> QHBoxLayout:
-        """최소 경기 수 필터 — 두 탭이 같은 값(한쪽을 바꾸면 다른 쪽도). 기본 = 흐림 기준(config.TEAMCOLOR_MIN_GAMES)."""
+        """최소 경기 수 필터. 기본 = 흐림 기준(config.TEAMCOLOR_MIN_GAMES)."""
         row = QHBoxLayout()
         lb = QLabel("최소")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -3924,7 +3922,8 @@ class MainWindow(QMainWindow):
         min_row.addWidget(btn)
         return min_row, btn
 
-    def _build_teamcolor_rate_tab(self) -> QWidget:
+    def _build_teamcolor_tab(self) -> QWidget:
+        """[상대 팀컬러](77 B) — 옛 [팀컬러 승률] 줄 목록에 [팀컬러 랭킹] 의 팀가치(보조 글 · 정렬)를 얹었다."""
         w = QWidget()
         v = QVBoxLayout(w)
         row, _, _ = self._build_teamcolor_fetch_row()
@@ -3932,9 +3931,8 @@ class MainWindow(QMainWindow):
         v.addWidget(self._teamcolor_note())
         min_row = self._teamcolor_min_row()
         self.cb_tc_rate_sort = NoScrollComboBox()
-        for key, text in RATE_SORTS:
-            if key != "recent":   # 묶음 줄엔 최근 경기가 없다
-                self.cb_tc_rate_sort.addItem(text, key)
+        for key, text in self.TC_SORTS:
+            self.cb_tc_rate_sort.addItem(text, key)
         self.cb_tc_rate_sort.currentIndexChanged.connect(lambda _i: self._show_tc_rate_rows())
         min_row.insertWidget(min_row.count() - 1, self.cb_tc_rate_sort)   # 늘어남 앞
         min_row, self.btn_tc_rate_info = self._teamcolor_pick_row(min_row)
@@ -3952,34 +3950,6 @@ class MainWindow(QMainWindow):
             lambda: self._open_teamcolor_effect(self.tc_rate_list.current().key) if self.tc_rate_list.current() else None)
         self._tc_rate_rows: list[RateRow] = []
         v.addWidget(self.tc_rate_list, 1)
-        return w
-
-    def _build_teamcolor_rank_tab(self) -> QWidget:
-        w = QWidget()
-        v = QVBoxLayout(w)
-        row, _, _ = self._build_teamcolor_fetch_row()
-        v.addLayout(row)
-        v.addWidget(self._teamcolor_note())
-        hint = QLabel("팀컬러를 두 번 누르면 그 팀컬러를 쓴 상대들이 포지션별로 주로 기용한 선수를,"
-                     " 고른 뒤 [팀컬러 정보] 를 누르면 랭커 1만 명 숫자와 넥슨 데이터센터의 단계별 효과·적용 선수를 볼 수 있습니다."
-                     " 범위 막대는 로그 눈금입니다(점 = 평균).")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(hint)
-        min_row, self.btn_tc_rank_info = self._teamcolor_pick_row(self._teamcolor_min_row())
-        v.addLayout(min_row)
-        self.tbl_teamcolor_rank = self._make_table(self.TEAMCOLOR_RANK_COLUMNS, icons={1: "emblem"})
-        self.tbl_teamcolor_rank.itemDoubleClicked.connect(
-            self._on_teamcolor_double_clicked)
-        self.tbl_teamcolor_rank.itemSelectionChanged.connect(
-            lambda: self.btn_tc_rank_info.setEnabled(self._tc_rank_selected() is not None))
-        self.btn_tc_rank_info.clicked.connect(
-            lambda: self._open_teamcolor_effect(self._tc_rank_selected()) if self._tc_rank_selected() else None)
-        rc = self.TEAMCOLOR_RANK_COLUMNS.index("팀가치 범위")
-        self._tc_range_delegate = RangeBarDelegate(self.tbl_teamcolor_rank)
-        self.tbl_teamcolor_rank.setItemDelegateForColumn(rc, self._tc_range_delegate)
-        self.tbl_teamcolor_rank.set_content_widths({rc: self.TEAMCOLOR_RANGE_W})   # refit 이 이 여백을 계속 쓴다
-        v.addWidget(self.tbl_teamcolor_rank, 1)
         return w
 
     def _build_season_tab(self) -> QWidget:
@@ -9478,7 +9448,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.ed_position_color)
         row.addWidget(self.cb_position_color)
         row.addSpacing(8)
-        lb_note = QLabel("※ '팀컬러 승률/랭킹' 탭에서 상대 팀컬러를 먼저 불러와야 목록이 채워집니다.")
+        lb_note = QLabel("※ [상대 팀컬러] 에서 상대 팀컬러를 먼저 불러와야 목록이 채워집니다.")
         lb_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         lb_note.setWordWrap(True)
         row.addWidget(lb_note, 1)
@@ -10574,7 +10544,7 @@ class MainWindow(QMainWindow):
         "shotmap": [("슛 맵", "슛 맵")], "route": [("슛 맵", "공격 루트")],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
         "finishing": [("선수 지표", "결정력")],
-        "teamcolor": [("포지션별 최다 상대", "축구장"), ("팀컬러 승률", None), ("팀컬러 랭킹", None)],
+        "teamcolor": [("포지션별 최다 상대", "축구장"), ("상대 팀컬러", None)],
         "oppcards": [("포지션별 최다 상대", "카드별")], "rankmove": [("승률 그래프", "순위 변동")],
         "calendar": [("승률 그래프", "일별 기록")],
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
@@ -11032,7 +11002,7 @@ class MainWindow(QMainWindow):
             stats=(("점유", f"{m.possession}%"), ("슛", f"{m.shoot_effective}/{m.shoot_total}"),
                    ("패스", f"{m.pass_rate:.0f}%"), ("평점", f"{m.rating:.2f}")),
             color=color, emblem_key=emblem.icon_key if isinstance(emblem, IconCell) else None,
-            value_text=short_bp(value) if value else "",   # 짧게(110억) — 정확한 값은 [팀컬러 랭킹]
+            value_text=short_bp(value) if value else "",   # 짧게(110억) — 정확한 값은 [상대 팀컬러] 줄의 말풍선
             h2h_text=wdl_text(s.win, s.draw, s.lose) if s else "",
             opp_score=self._opp_score_cell(scores, m.match_id)[0] if scores is not None else None,
             when=m.match_date, goal_diff=m.my_goals - m.opp_goals, rating=m.rating)
@@ -11123,7 +11093,7 @@ class MainWindow(QMainWindow):
                   games: int | None = None, min_n: int | None = None, **kw) -> RateRow:
         """승률 줄 하나 — 표본 흐림(is_weak · rated 분모) · 기준 대비는 표본이 될 때만(E2).
         games 를 주면 경기 수는 그 값(집계가 "오류" 경기까지 센다 — 표 시절 '전적' 열과 같은 수).
-        min_n 은 흐림 기준(기본 core.MIN_COND — [팀컬러 승률]은 config.TEAMCOLOR_MIN_GAMES · 75)."""
+        min_n 은 흐림 기준(기본 core.MIN_COND — [상대 팀컬러]는 config.TEAMCOLOR_MIN_GAMES · 75)."""
         n = core.rated(win, draw, lose, mixed)
         weak = core.is_weak(n, core.MIN_COND if min_n is None else min_n)
         rate = core.win_pct(win, draw, lose, mixed)
@@ -11160,7 +11130,7 @@ class MainWindow(QMainWindow):
         return rows
 
     def _opp_color_rows(self, picked: list[MatchSummary]) -> list[RateRow]:
-        """상대 팀컬러별 — [팀컬러 승률] 과 같은 근사(상대의 지금 팀컬러 · 찾아진 상대만) · 기준도 같은 함수."""
+        """상대 팀컬러별 — [상대 팀컬러] 와 같은 근사(상대의 지금 팀컬러 · 찾아진 상대만) · 기준도 같은 함수."""
         mixed = core.team_color_mixed(picked, self._team_color_of)
         base_n, base = core.team_color_baseline(picked, self._team_color_of, mixed)
         rows = []
@@ -11334,50 +11304,29 @@ class MainWindow(QMainWindow):
         if keep is not None:
             stats_list = [s for s in stats_list if keep(s.team_color)]
         weak = [self._teamcolor_weak(s) for s in stats_list]
-        # [팀컬러 승률] — 승률 줄(65 매치업 꼴 · 67 R3). 기준 대비는 표본이 될 때만 · 흐린 줄은 어느 정렬이든 아래(옛 표의 sink)
+        # 승률 줄(65 매치업 꼴 · 67 R3). 기준 대비는 표본이 될 때만 · 흐린 줄은 어느 정렬이든 아래(옛 표의 sink)
+        # 팀가치(77 B — 옛 [팀컬러 랭킹] 열)는 보조 글에 평균 · 최저~최고, 정확한 값은 말풍선
+        fv = ranker.format_team_value
         rate_rows = []
         for s, why in zip(stats_list, weak):
             cell = self._emblem_cell(s.team_color)
+            if s.avg_value is not None:
+                value_sub = f"평균 {fv(s.avg_value)} · {fv(s.min_value)} ~ {fv(s.max_value)}"
+                value_tip = (f"팀가치(아는 상대 {len(s.team_values)}명) — 평균 {fv(s.avg_value)}"
+                             f" · 최저 {fv(s.min_value)} · 최고 {fv(s.max_value)}")
+            else:
+                value_sub = value_tip = "팀가치 모름"
             r = self._rate_row(s.team_color, s.win, s.draw, s.lose, s.mixed, base_rate if base_n else None, s.games,
-                               sub=f"상대 {len(s.opponents):,}명", min_n=config.TEAMCOLOR_MIN_GAMES,
+                               sub=f"상대 {len(s.opponents):,}명 · {value_sub}", min_n=config.TEAMCOLOR_MIN_GAMES,
                                icon=("emblem", cell.icon_key) if isinstance(cell, IconCell) and cell.icon_key else (),
-                               key=s.team_color)
+                               key=s.team_color, value=s.avg_value, tip=value_tip)
             if why:
-                r.weak, r.diff, r.tip = True, None, why
+                r.weak, r.diff, r.tip = True, None, f"{why}\n{value_tip}"
                 r.sample = r.sample or ("구분 전" if teamcolor.is_unsplit(s.team_color) else f"상대 {len(s.opponents)}명")
             rate_rows.append(r)
         self._tc_rate_rows = rate_rows
         self._show_tc_rate_rows()
         self._start_list_icons(self.tc_rate_list)
-        # 팀가치는 넥슨식 축약("10경 9,631조")으로 보여주고 정렬은 원 단위로.
-        # 팀가치를 아는 상대가 없는 팀컬러(구버전 캐시 등)는 "-" — 다음
-        # 조회(TTL 만료·백필) 때 채워진다.
-        def value_cell(v):
-            return (ranker.format_team_value(v), v) if v is not None else ("-", -1)
-
-        # 순위 = 만난 횟수 순위(같은 횟수는 같은 순위) — 줄 번호로 매기면 같은 14번을 다시 정렬했을 때 7·6 으로 뒤집혀 보였다(75)
-        rank_of = self.games_rank([s.games for s in stats_list])
-        rank_rows = [[(str(rk), rk), self._emblem_cell(s.team_color), (str(s.games), s.games),
-                     value_cell(s.avg_value), value_cell(s.min_value),
-                     value_cell(s.max_value), ("", s.avg_value if s.avg_value is not None else -1)]
-                    for rk, s in zip(rank_of, stats_list)]
-        self._fill(self.tbl_teamcolor_rank, rank_rows, enable_sort=False)
-        self.btn_tc_rank_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
-        # 범위 막대 축은 필터와 무관하게 표의 전체 행 — 스핀을 바꿔도 막대 길이가 안 변하게
-        lows = [s.min_value for s in stats_all if s.min_value]
-        highs = [s.max_value for s in stats_all if s.max_value]
-        self._tc_range_delegate.set_axis(min(lows) if lows else None, max(highs) if highs else None)
-        range_col = self.TEAMCOLOR_RANK_COLUMNS.index("팀가치 범위")
-        for i, s in enumerate(stats_list):
-            item = self.tbl_teamcolor_rank.item(i, range_col)
-            if item and s.min_value:
-                item.setData(RANGE_ROLE, (s.min_value, s.avg_value, s.max_value))
-                item.setToolTip(f"최저 {ranker.format_team_value(s.min_value)} · 평균 "
-                                f"{ranker.format_team_value(s.avg_value)} · 최고 {ranker.format_team_value(s.max_value)}")
-        self._mark_teamcolor_rows(self.tbl_teamcolor_rank, stats_list, weak)
-        self.tbl_teamcolor_rank.setSortingEnabled(True)
-        self.tbl_teamcolor_rank.sortByColumn(
-            self.TEAMCOLOR_RANK_COLUMNS.index("만난 횟수"), Qt.SortOrder.DescendingOrder)
         # 새로 알게 된 팀컬러가 있으면 "포지션별 최다 상대" 필터 목록도 같이 넓힌다.
         self._refresh_position_color_options()
         self._render_position_opponents(details)
@@ -11401,35 +11350,11 @@ class MainWindow(QMainWindow):
         for lb in self._teamcolor_note_labels:
             lb.setText(self._teamcolor_note_text(len(opps), known) + extra)
 
-    @staticmethod
-    def games_rank(games: list[int]) -> list[int]:
-        """많은 순 공동 순위(1·2·2·4) — 같은 값이면 같은 순위."""
-        return [1 + sum(1 for o in games if o > g) for g in games]
-
-    def _mark_teamcolor_rows(self, table, stats_list: list, weak: list[str]) -> None:
-        """흐린 줄은 글자 흐리게 + 툴팁 + 정렬 때 늘 아래(SortableItem.sink)."""
-        for i, _s in enumerate(stats_list):
-            if not weak[i]:
-                continue
-            for c in range(table.columnCount()):
-                item = table.item(i, c)
-                if item is None:
-                    continue
-                item.sink = True
-                item.setForeground(QColor(T.TEXT_DIM))
-                item.setToolTip(weak[i])
-                item.setData(Qt.ItemDataRole.UserRole + 1, True)
-
     def _show_tc_rate_rows(self) -> None:
         rows = sort_rate_rows(self._tc_rate_rows, self.cb_tc_rate_sort.currentData() or "games")
         rows.sort(key=lambda r: r.weak)   # 흐린 줄은 매치수 순에서도 아래(옛 표 sink — 안정 정렬이라 순서는 그대로)
         self.tc_rate_list.set_rows(rows)
         self.btn_tc_rate_info.setEnabled(False)   # 다시 채우면 고른 줄이 사라진다
-
-    def _tc_rank_selected(self) -> str | None:
-        items = self.tbl_teamcolor_rank.selectedItems()
-        item = self.tbl_teamcolor_rank.item(items[0].row(), 1) if items else None
-        return item.text() if item is not None and item.text() else None
 
     def _open_teamcolor_effect(self, label: str) -> None:
         """팀컬러 정보 창을 여는 한 자리(67 R1 목록 · R3 내 상대 두 탭 — 같은 창 하나)."""
@@ -11595,13 +11520,8 @@ class MainWindow(QMainWindow):
             self._teamcolor_retry_pending = False
             self._on_fetch_team_colors()  # 조회 도중 넓어진 범위 마저 조회
 
-    def _on_teamcolor_double_clicked(self, item) -> None:
-        color_item = self.tbl_teamcolor_rank.item(item.row(), 1)
-        if color_item:
-            self._show_teamcolor_players(color_item.text())
-
     def _show_teamcolor_players(self, color: str | None) -> None:
-        """그 팀컬러 상대들이 포지션별로 주로 쓴 선수 — [팀컬러 승률] 줄 · [팀컬러 랭킹] 표의 두 번 누름(같은 규칙 · R3)."""
+        """그 팀컬러 상대들이 포지션별로 주로 쓴 선수 — [상대 팀컬러] 줄의 두 번 누름(R3)."""
         if not color:
             return
         nicknames = {nick for nick, c in self._team_colors.items() if c == color}

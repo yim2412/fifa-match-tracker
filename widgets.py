@@ -1028,54 +1028,6 @@ def qt_item_less(a: QTableWidgetItem, b: QTableWidgetItem) -> bool:
     return _COLLATOR.compare(str(v1), str(v2)) < 0
 
 
-# 팀가치 범위 막대(2.2.1) 칸의 값 — (최저, 평균, 최고) 원 단위. 축은 델리게이트가 쥔다(표의 전체 행 기준)
-RANGE_ROLE = Qt.ItemDataRole.UserRole + 7
-
-
-class RangeBarDelegate(RowBorderDelegate):
-    """최저~최고 막대 + 평균 점, **로그 축** — 구단가치가 자릿수로 벌어져(수천억~수경) 선형이면 대부분이 한 점이 된다.
-    축(lo, hi)은 set_axis 로 — 필터로 줄을 숨겨도 막대 길이가 안 변하게 표의 전체 행에서 잰 값을 준다.
-    흐린 줄은 SortableItem.sink 를 보고 흐린 색으로."""
-
-    PAD = 8
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.lo = self.hi = None
-
-    def set_axis(self, lo: int | None, hi: int | None) -> None:
-        self.lo, self.hi = lo, hi
-
-    def x_of(self, v: float, left: float, width: float) -> float:
-        import math
-        if not self.lo or not self.hi or self.hi <= self.lo:
-            return left + width / 2
-        a, b = math.log10(self.lo), math.log10(self.hi)
-        return left + (math.log10(max(v, self.lo)) - a) / (b - a) * width
-
-    def paint(self, painter, option, index) -> None:
-        super().paint(painter, option, index)
-        val = index.data(RANGE_ROLE)
-        if not val or val[0] is None:
-            return
-        lo, avg, hi = val
-        table = self.parent()
-        item = table.item(index.row(), index.column()) if isinstance(table, QTableWidget) else None
-        dim = bool(getattr(item, "sink", False))
-        r = option.rect.adjusted(self.PAD, 0, -self.PAD, 0)
-        y = option.rect.top() + option.rect.height() / 2
-        x0, x1, xa = (self.x_of(v, r.left(), r.width()) for v in (lo, hi, avg))
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor(T.TEXT_DIM if dim else T.CHART_NEUTRAL), 4, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap))
-        painter.drawLine(QPointF(x0, y), QPointF(max(x1, x0 + 0.5), y))
-        painter.setPen(QPen(QColor(T.CHART_ON_MARK), 1.5))
-        painter.setBrush(QColor(T.TEXT_DIM if dim else T.CHART_UP))
-        painter.drawEllipse(QPointF(xa, y), 4.5, 4.5)
-        painter.restore()
-
-
 class StatCard(QFrame):
     """숫자 카드(P5) — 작은 라벨 → 큰 숫자 → 흐린 보조 줄 → 변화(▲▼). 보조·변화는 비어 있으면 숨는다."""
 
@@ -2370,6 +2322,7 @@ class RateRow:
     tip: str = ""
     key: object = None              # 쓰는 쪽 값(닉네임 등)
     recent: int = 0                 # 작을수록 최근(정렬 "최근 경기")
+    value: int | None = None        # 정렬 "팀가치 높은 순"(77 B — [상대 팀컬러] 평균 팀가치 · 모르면 None 은 아래)
     other: int = 0                  # 승·무·패가 아닌 경기("오류" 등) — 경기 수에는 든다(집계의 games 와 같게)
 
     @property
@@ -2392,6 +2345,8 @@ def sort_rate_rows(rows: list[RateRow], how: str) -> list[RateRow]:
         return sorted(rows, key=lambda r: (r.weak, r.rate, -r.games))
     if how == "recent":
         return sorted(rows, key=lambda r: r.recent)
+    if how == "value":
+        return sorted(rows, key=lambda r: (r.weak, r.value is None, -(r.value or 0), -r.games))
     return sorted(rows, key=lambda r: (-r.games, r.recent))
 
 

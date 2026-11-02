@@ -321,7 +321,7 @@ TEAMCOLOR_DUP_NAMES = frozenset({
     "Continental Heroes", "Dramatic Comebacks", "Football Association Champions", "Greatest Runner-Ups",
     "Legend of Europa", "Number 7", "Spartan", "Step Higher", "Untouchable Champions", "Winning Streak", "Wonderboys"})
 TEAMCOLOR_CACHE_DAYS = 7            # 효과 목록·단계 캐시 — 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다
-# 75 — 팀컬러 승률·랭킹의 최소 경기(거르기 기본값)와 흐림 기준이 같은 값이다(둘이 갈리면 숨기지 않은 줄이 흐려진다).
+# 75 — [상대 팀컬러](77 B 전엔 팀컬러 승률·랭킹)의 최소 경기(거르기 기본값)와 흐림 기준이 같은 값이다(둘이 갈리면 숨기지 않은 줄이 흐려진다).
 # 8 → 10 은 2026-11-02 사용자 요청 — 다른 조건부 승률의 8판(analysis.MIN_COND)은 근거가 따로라 그대로 둔다.
 TEAMCOLOR_MIN_GAMES = 10
 TEAMCOLOR_MIN_OPPONENTS = 3         # 승률 표에서 상대가 이보다 적은 팀컬러는 흐림 — 한 사람과의 반복 대전이 승률을 끌고 가지 않게(초안)
