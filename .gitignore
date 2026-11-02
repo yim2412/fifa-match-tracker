@@ -32,3 +32,6 @@ server/**/*.db
 server/**/*.db-*
 server/**/*.env
 server/**/*.log
+
+# 사용자 피드백 캡처·실측 사진 — 다른 구단주 닉네임이 찍혀 있어 저장소에 안 둔다(2026-11-02)
+_feedback/
