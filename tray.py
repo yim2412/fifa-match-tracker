@@ -17,7 +17,7 @@
 
 
 규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
-트레이 상주(1.1.1) — `AppShell`(트레이 · 수집 예약 · 6시간 업데이트 확인 ·
+트레이 상주(1.1.1) — `AppShell`(트레이 · 수집 예약 · 6시간 업데이트 확인(트레이에서 열 때도 — 10분 간격 · 74) ·
 숨긴 30분 뒤 내려놓기)과 **종료 진입점 하나 `quit_app(fast)`** (파일 머리말 표 — 새 종료 경로는 여기를 거친다).
 창(`MainWindow`)은 정리를 `shutdown(fast)` 로 내주고, closeEvent 는 `_quitting` 이면 받기만(`app.quit()` 이 다시 부른다).
 한 번만 실행(`SingleInstance`)은 **뮤텍스로 판정** — 윈도우에선 같은 이름 `QLocalServer` 의 두 번째 listen 도 성공한다(2026-10-04 실측).
@@ -246,6 +246,9 @@ class AppShell(QObject):
         self._pending_crash = None
         self.crash_modal: Callable[[object], None] | None = None  # app_main 이 건다 — 창을 열 때 미뤄 둔 오류 안내
         self._tray_waited_s = 0
+        self.clock = time.monotonic   # 테스트가 가짜 시계로 바꿔 끼운다(74 — 10분·30분 경계)
+        self._hidden_at: float | None = None   # hide_window 시각 — 다시 열 때 오래 숨겼는지(74 ②)
+        self._update_at: float | None = None   # 마지막 업데이트 확인 시각 — 켤 때·6시간·트레이에서 열 때(74 ①)
         app.setQuitOnLastWindowClosed(False)  # 창을 숨겨도 앱은 산다 — 끝내는 건 quit_app 만
         self._release_timer = QTimer(self)
         self._release_timer.setSingleShot(True)
@@ -340,6 +343,7 @@ class AppShell(QObject):
     def hide_window(self) -> None:
         w = self.window
         w.hide()
+        self._hidden_at = self.clock()
         self._release_timer.start(config.RELEASE_AFTER_HIDE_MIN * 60 * 1000)
 
     def show_window(self) -> None:
@@ -349,7 +353,13 @@ class AppShell(QObject):
             if self._open_window is None or self._open_window() is None:
                 return  # 동의·키 창에서 취소 — 트레이로 남는다
         self._release_timer.stop()
+        hidden_at, self._hidden_at = self._hidden_at, None
         w = self.window
+        # 74 ② — 메모리 내려놓기와 같은 기준. 잠깐 숨긴 건 보던 화면 그대로. 다시 읽기보다 먼저(그게 보던 메뉴로 되돌린다)
+        if hidden_at is not None and self.clock() - hidden_at >= config.RELEASE_AFTER_HIDE_MIN * 60:
+            go = getattr(w, "go_home_after_long_hide", None)
+            if go is not None:
+                go()
         if getattr(w, "_released", False):
             w.reload_after_release()
         if not getattr(w, "_shown_once", True):
@@ -363,6 +373,8 @@ class AppShell(QObject):
         ask = getattr(w, "ask_notice_update_once", None)
         if ask is not None:
             QTimer.singleShot(0, ask)  # 옛 동의자에게 바뀐 안내 — 보인 **뒤**(트레이 [열기] · 두 번째 실행)
+        # 74 ① — 상주 중엔 6시간마다라 새 판을 받으려면 껐다 켜야 했다. 연달아 열 때 GitHub 에 매번 묻지 않게 간격을 둔다
+        self._check_update(min_gap_s=config.UPDATE_ON_SHOW_MIN * 60)
         path, self._pending_crash = self._pending_crash, None
         if path is not None and self.crash_modal is not None:
             self.crash_modal(path)
@@ -380,9 +392,21 @@ class AppShell(QObject):
 
     # ── 주기 일 ──
     def _update_due(self) -> None:
+        self._check_update()
+
+    def note_update_check(self) -> None:
+        """켤 때 main 이 창에서 직접 확인했다 — 그 직후 트레이에서 열어도 다시 묻지 않게 시각만 적는다."""
+        self._update_at = self.clock()
+
+    def _check_update(self, min_gap_s: float | None = None) -> None:
         w = self.window
-        if w is not None and config.UPDATE_CHECK and not config.notice_needed():
-            w.start_update_check()
+        if w is None or not config.UPDATE_CHECK or config.notice_needed():
+            return
+        now = self.clock()
+        if min_gap_s is not None and self._update_at is not None and now - self._update_at < min_gap_s:
+            return
+        self._update_at = now
+        w.start_update_check()
 
     def _release_due(self) -> None:
         w = self.window

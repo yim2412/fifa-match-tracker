@@ -13,7 +13,7 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
-APP_VERSION = "v3.2.2"
+APP_VERSION = "v3.2.3"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 # 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 다 뺐다 —
@@ -170,12 +170,13 @@ UPDATE_CHECK = os.getenv("FIFA_UPDATE_CHECK", "1").strip() != "0"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 RELEASES_URL = f"{REPO_URL}/releases/latest"
 UPDATE_CHECK_EVERY_H = 6            # 트레이에 상주하는 동안 다시 확인하는 간격(켤 때 한 번은 그대로)
+UPDATE_ON_SHOW_MIN = 10             # 트레이에서 창을 열 때도 확인 — 마지막 확인 뒤 이만큼 지났을 때만(74)
 
 # 트레이 상주(tray.py · 1.1.1)
 TRAY_WAIT_S = 60                    # --tray 로 부팅 직후 트레이가 아직 없을 때 기다리는 한도
 TRAY_POLL_S = 5                     # 그동안 트레이를 다시 보는 간격
 TRAY_RETRY_MIN = 1                  # 동의가 필요해 창을 못 띄우는 동안 트레이를 다시 보는 간격
-RELEASE_AFTER_HIDE_MIN = 30         # 창을 숨긴 지 이만큼 지나면 경기 기록을 메모리에서 내려놓는다
+RELEASE_AFTER_HIDE_MIN = 30         # 창을 숨긴 지 이만큼 지나면 경기 기록을 메모리에서 내려놓는다 · 다시 열 때 대시보드로(74)
 RELEASE_RETRY_MIN = 5               # 그때 검색·수집 중이면 이만큼 뒤에 다시
 FAST_QUIT_WAIT_S = 1                # 윈도우 종료·로그오프 때 작업을 기다리는 합계 — 길면 "종료를 막고 있습니다"
 # [정보 › 저장 공간](57 K9) — 지우기 전 쓰는 쪽이 멈추기를 기다리는 합계(작업 스레드에서 · 넘으면 안 지우고 "다시"). 가장 긴 것이

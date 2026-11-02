@@ -13738,6 +13738,14 @@ class MainWindow(QMainWindow):
         self._released = True
         gc.collect()
 
+    def go_home_after_long_hide(self) -> None:
+        """트레이에 RELEASE_AFTER_HIDE_MIN 넘게 숨겼다가 열 때(74 ②) — 보던 메뉴 대신 대시보드. 검색 화면이면 그대로.
+        내려놓은 뒤라면 다시 읽기가 끝날 때 _restore 의 메뉴로 가므로(_on_loaded) 그것도 지운다."""
+        if isinstance(getattr(self, "_restore", None), dict):
+            self._restore.pop("page", None)
+        if self.stack.currentIndex() == self.PAGE_MAIN:
+            self._go_page("대시보드")
+
     def reload_after_release(self) -> None:
         """다시 열 때 — 그 계정의 저장된 경기를 DB 에서 다시 읽는다(1만 경기 약 1~2초). 넥슨에는 묻지 않는다."""
         if not self._released or self._held_by_clearing(MatchLoader):
@@ -15006,6 +15014,7 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     if show:
         win.show_initial()  # 작은 화면이면 최대화로 — 띄운 뒤 실제 테두리로 한 번 더 확인
     win.start_update_check()
+    shell.note_update_check()   # 트레이에서 곧 열어도 다시 묻지 않게(74 ①)
     win.start_cache_prune()
     # 랭커 픽 데이터 — 토글과 무관하게 켤 때(14일 · 범위 밖), 수집이 꺼져 있으면 전부(옛 버전으로 내려갔던 동안 남은 것까지)
     win.sync_ranker_pick_data()

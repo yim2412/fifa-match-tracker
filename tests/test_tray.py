@@ -341,6 +341,9 @@ class _FakeWin:
         self._visible = False
         self.calls.append("hide")
 
+    def start_update_check(self):
+        self.calls.append("update")   # 트레이에서 열 때도 부른다(74 ①) — 네트워크 없음
+
     def attach_rank_sched(self, s):
         self.calls.append("sched")
 
@@ -522,6 +525,86 @@ def test_crash_while_hidden_waits_for_open_then_modal():
     assert modal == ["crash.log"]
     sh.show_window()
     assert modal == ["crash.log"], "안내가 두 번 떴다"
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def _open_shell(visible=False):
+    """show_window 를 부를 수 있는 껍데기 — 창 그리기는 없는 가짜 · 시계는 손으로 민다."""
+    sh, w, _q = _shell(visible)
+    w.show, w.raise_, w.activateWindow = (lambda: None), (lambda: None), (lambda: None)
+    sh.clock = clk = _Clock()
+    return sh, w, clk
+
+
+def test_show_window_checks_update_after_gap():
+    # 74 ① — 트레이에서 열 때도 확인 · 마지막 확인 뒤 UPDATE_ON_SHOW_MIN 지났을 때만. 기본값(10)이 아닌 값으로 배선까지 잰다
+    keep = config.UPDATE_CHECK, config.NOTICE_ACCEPTED, config.UPDATE_ON_SHOW_MIN
+    try:
+        config.UPDATE_CHECK, config.NOTICE_ACCEPTED, config.UPDATE_ON_SHOW_MIN = True, config.NOTICE_VERSION, 3
+        sh, w, clk = _open_shell()
+        seen = []
+        w.start_update_check = lambda: seen.append(clk.t)
+        sh.show_window()
+        assert seen == [1000.0], "켠 뒤 한 번도 확인 안 한 상태로 열었는데 안 물었다"
+        clk.t += 3 * 60 - 1
+        sh.show_window()
+        assert seen == [1000.0], "간격 안에 다시 열었는데 GitHub 에 또 물었다"
+        clk.t += 1
+        sh.show_window()
+        assert seen == [1000.0, 1180.0], "간격이 지났는데 트레이에서 열 때 확인을 안 했다"
+        # 켤 때 main 이 직접 확인한 것도 센다 — 곧바로 트레이에서 열면 안 묻는다
+        sh.note_update_check()
+        clk.t += 60
+        sh.show_window()
+        assert seen == [1000.0, 1180.0], "켤 때 확인한 직후 열었는데 다시 물었다"
+        # 6시간 타이머도 같은 시각을 갱신한다
+        clk.t += 3 * 60
+        sh._update_due()
+        sh.show_window()
+        assert len(seen) == 3, seen
+        # 스위치·동의는 열 때도 지킨다
+        clk.t += 3600
+        config.UPDATE_CHECK = False
+        sh.show_window()
+        config.UPDATE_CHECK, config.NOTICE_ACCEPTED = True, config.NOTICE_BASE_VERSION - 1
+        sh.show_window()
+        assert len(seen) == 3, "업데이트 확인을 껐거나 동의 전인데 물었다"
+    finally:
+        config.UPDATE_CHECK, config.NOTICE_ACCEPTED, config.UPDATE_ON_SHOW_MIN = keep
+
+
+def test_show_window_goes_home_after_long_hide():
+    # 74 ② — RELEASE_AFTER_HIDE_MIN 넘게 숨겼으면 대시보드로 · 잠깐이면 그대로 · 숨기지 않고 앞으로만 부른 건(두 번째 실행) 그대로
+    keep = config.UPDATE_CHECK, config.RELEASE_AFTER_HIDE_MIN
+    try:
+        config.UPDATE_CHECK, config.RELEASE_AFTER_HIDE_MIN = False, 7
+        sh, w, clk = _open_shell(visible=True)
+        order = []
+        w.go_home_after_long_hide = lambda: order.append("home")
+        sh.show_window()
+        assert order == [], "숨긴 적 없는 창을 앞으로 부르는데 대시보드로 옮겼다"
+        sh.hide_window()
+        clk.t += 7 * 60 - 1
+        sh.show_window()
+        assert order == [], "잠깐 숨긴 창인데 보던 화면을 버렸다"
+        sh.hide_window()
+        clk.t += 7 * 60
+        w._released = True
+        w.reload_after_release = lambda: order.append("reload")
+        sh.show_window()
+        # 다시 읽기보다 먼저 — 다시 읽기 끝(_on_loaded)이 _restore 의 보던 메뉴로 가니 그걸 먼저 지워야 한다
+        assert order == ["home", "reload"], order
+        sh.show_window()
+        assert order == ["home", "reload", "reload"], "한 번 열고 난 뒤에도 또 대시보드로 옮겼다(숨긴 시각이 남았다)"
+    finally:
+        config.UPDATE_CHECK, config.RELEASE_AFTER_HIDE_MIN = keep
 
 
 def test_constants_sane():

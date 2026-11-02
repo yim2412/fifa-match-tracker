@@ -2666,6 +2666,8 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
         assert sh is not None and sh.window is not None
         assert sh.sched._check_timer.isActive(), "--tray 인데 수집 예약을 안 걸었다 — 상주하는 이유가 수집이다"
         assert sh.owner_sched._timer.isActive(), "--tray 인데 구단주 분포 예약을 안 걸었다"
+        # 74 ① — 켤 때 한 확인을 껍데기가 알아야 부팅 직후 트레이에서 열 때 GitHub 에 또 묻지 않는다
+        assert sh._update_at is not None, "켤 때 확인한 시각을 껍데기에 안 적었다"
     finally:
         _stop_shell()
         (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, app_main._SHELL) = orig
@@ -8072,6 +8074,26 @@ def test_reask_on_tray_open_and_second_instance():
         assert _count_reask(sh.show_window) == [True]
     finally:
         sh.window = None
+
+
+def test_go_home_after_long_hide():
+    # 74 ② — 오래 숨겼다 열면 대시보드 · 내려놓은 뒤 다시 읽기가 돌아갈 보던 메뉴(_restore)도 지운다 · 검색 화면은 그대로
+    keep_idx, keep_restore = _win.stack.currentIndex(), _win._restore
+    try:
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        _win._go_page("경기 목록")
+        assert _win._current_page_name() == "경기 목록"   # 옮기기 전 — 막지 않았으면 여기 남는다
+        _win._restore = {"page": "경기 목록", "season": "x"}
+        _win.go_home_after_long_hide()
+        assert _win._current_page_name() == "대시보드", _win._current_page_name()
+        assert _win._restore == {"season": "x"}, "다시 읽기가 끝나면 보던 메뉴로 되돌아간다"
+        _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
+        _win.go_home_after_long_hide()
+        assert _win.stack.currentIndex() == _win.PAGE_SEARCH, "계정을 안 연 검색 화면에서 메인으로 넘겼다"
+    finally:
+        _win._restore = keep_restore
+        _win._go_page("대시보드")
+        _win.stack.setCurrentIndex(keep_idx)
 
 
 def test_dialog_origin_centers_and_clamps():
