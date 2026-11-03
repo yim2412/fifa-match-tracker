@@ -3899,6 +3899,9 @@ def test_teamcolor_counts_season_scope_not_display_range():
         assert lst.rowCount() == 1 and lst.row(0).games == n, [(r.label, r.games) for r in lst.rows()]
         note = _win._teamcolor_note_labels[0]
         assert note.isHidden() and not note.text(), note.text()   # 78 ① 다 아는 상대 · 숨긴 종류 없음 → 설명 없음
+        _win._team_colors.clear()
+        _win._render_all()
+        assert not note.isHidden() and "팀컬러를 아는 상대가 없습니다" in note.text(), note.text()
     finally:
         _win._team_colors.clear()
         _win._team_colors.update(saved[0])
@@ -5099,6 +5102,10 @@ def test_max_division_card_rules():
             _win._is_champion = champ
             _win._render_ranker()
             assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", champ
+            # 78 ① 리뷰 — 넥슨 순위를 못 쓰는 챔피언스만 출처가 바뀐 이유 한 줄(챔피언스 미만은 숨김)
+            note = _win.card_ranker.note
+            ranked = bool(_win._rank and getattr(_win._rank, "ranked", False))
+            assert note.isHidden() == (not champ or ranked), (champ, ranked, note.text())
         _win._is_champion = False
         # 계정을 바꾸면 옛 계정 줄이 안 남는다 — 새 계정 요청이 실패해도
         _win._on_loaded(_MATCHES, _DETAILS, "B계정", {"nickname": "B", "level": 1},
@@ -6091,7 +6098,16 @@ def test_position_opponents_start_empty_until_color_chosen():
         assert _win.cb_position_color.currentText() == _win.POSITION_COLOR_NONE
         assert _pos_pitch() is None and _pos_chips() == []
         assert _win.tbl_position_opp.rowCount() == 0
-        assert _win.lb_position_hint.text() == _win.POSITION_HINT_EMPTY, _win.lb_position_hint.text()
+        assert _win.lb_position_hint.isHidden() and not _win.lb_position_hint.text(), _win.lb_position_hint.text()
+        keep_tc = dict(_win._team_colors)
+        _win._team_colors.clear()
+        try:
+            _win._render_position_opponents(list(_win._teamcolor_scope()[1]))
+            assert not _win.lb_position_hint.isHidden() and _win.lb_position_hint.text() == _win.POSITION_NEED_COLORS
+        finally:
+            _win._team_colors.update(keep_tc)
+        _win._render_position_opponents(list(_win._teamcolor_scope()[1]))
+        assert _win.lb_position_hint.isHidden(), "아는 팀컬러가 생겼는데 '먼저 불러와야' 가 남았다"
         # 알려진 팀컬러인데 이 범위에 만난 상대가 없으면 칩·축구장 없이 "기록 없음" 안내
         _win._team_colors["유령"] = "컬러Z"
         _win._refresh_position_color_options()
@@ -10577,7 +10593,7 @@ def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
             src = by_key[r.key]
             assert [c.text for c in r.cells] == [f"{src.now_pct:.1f}%", f"{src.then_pct:.1f}%", f"{src.diff_pp:+.1f}%p"]
             assert lst.metric_delegate.colors(r)["cell2"] == app_main.delta_color(src.diff_pp)
-        assert "합쳐서" in _win.lb_meta_note.text(), "이름이 같은 팀컬러를 합친다는 안내가 없다"
+        assert _win.lb_meta_note.isHidden(), _win.lb_meta_note.text()   # 78 ① 리뷰 — 비교가 되면 설명 없음
         _win._go_page("랭킹 추이", "점수 분포")
         _win._invalidate("elodist")                    # 앱에선 회차 끝(_on_rank_collect_outcome)이 낡음 표시를 한다
         h = _win.elo_dist
@@ -10660,6 +10676,7 @@ def test_rank_meta_tabs_draw_and_fit():
         shown = {note: getattr(_win, note).text() for _p, _t, _k, note in META_TABS
                  if note != "lb_wrelo_note" and not getattr(_win, note).isHidden()}
         assert not shown, shown
+        assert not _explainer_hits(), _explainer_hits()   # 데이터가 다 찬 화면에서도 지운 문구가 없다
         assert abs(sum(r.share for r in b.rows) - 100) < 1e-6 and b.total == 300
         day = {r.key: r for r in _win.day_wr.tables["team_color"]}
         vs = {r.key: r for r in _win._rank_read(lambda c: rankmeta.value_score(c, 10000)).rows}
@@ -12994,28 +13011,37 @@ GONE_NOTE_ATTRS = ("lb_analysis_note", "lb_division_note", "lb_sc_note", "lb_clu
                    "lb_pass_note", "lb_shot_sum_scope", "lb_oppcard_note")
 
 
-def test_explainer_notes_gone_78():
-    """78 ① — 평소 화면에 설명 글이 없다. 모든 메뉴·탭을 한 번씩 그린 뒤 창 안 모든 글자(QLabel·그룹 제목)를 훑는다."""
+def _explainer_hits() -> list:
+    """창 안 모든 글자(QLabel·그룹 제목)에서 지운 설명 문구 — 숨은 칸도 센다(글이 남아 있으면 언젠가 뜬다)."""
     from PySide6.QtWidgets import QGroupBox, QLabel
-    # 막지 않았으면 무엇이 보였을지 — 이 검사가 실제 글을 읽는지 먼저(문구 하나를 심어 잡히는지)
+    hits = []
+    for w in _win.findChildren(QLabel) + _win.findChildren(QGroupBox):
+        text = w.text() if isinstance(w, QLabel) else w.title()
+        hits += [(type(w).__name__, p, text[:60]) for p in EXPLAINER_PHRASES if p in text]
+    return hits
+
+
+def test_explainer_notes_gone_78():
+    """78 ① — 평소 화면에 설명 글이 없다. 모든 메뉴·탭을 한 번씩 그린 뒤 창 안 글자를 훑는다
+    (랭킹 데이터가 다 찬 상태는 test_rank_meta_tabs_draw_and_fit 이 같은 훑기를 한다)."""
+    from PySide6.QtWidgets import QGroupBox, QLabel
+    # 막지 않았으면 — 같은 훑기가 심은 라벨·그룹 제목을 실제로 잡는지 먼저(판정 루프가 망가지면 여기서 FAIL)
     plant = QLabel("넥슨 데이터 기준 11-02 16:00 · 1만 위 안 랭킹 그대로", _win)
+    box = QGroupBox("최근 20경기 (왼쪽이 오래된 경기)", _win)
     try:
-        assert any(p in plant.text() for p in EXPLAINER_PHRASES)
-        found = [lb for lb in _win.findChildren(QLabel) if lb is plant]
-        assert found, "창 아래 QLabel 을 못 훑는다(빈 검사)"
+        got = _explainer_hits()
+        assert any("1만 위 안 랭킹 그대로" in h[2] for h in got) and any(h[0] == "QGroupBox" for h in got), got
     finally:
-        plant.deleteLater()
-        plant.setParent(None)
+        for x in (plant, box):
+            x.setParent(None)
+            x.deleteLater()
     _win._render_all()
     views = [v for vs in app_main.MainWindow.VIEW_OF_KEY.values() for v in vs]
     assert len(views) > 30, len(views)
     for page, tab in views:
         _win._go_page(page, tab) if tab else _win._go_page(page)
     _win._go_page("대시보드")
-    hits = []
-    for w in _win.findChildren(QLabel) + _win.findChildren(QGroupBox):
-        text = w.text() if isinstance(w, QLabel) else w.title()
-        hits += [(type(w).__name__, w.objectName(), p, text[:60]) for p in EXPLAINER_PHRASES if p in text]
+    hits = _explainer_hits()
     assert not hits, hits
     back = [a for a in GONE_NOTE_ATTRS if hasattr(_win, a)]
     assert not back, back

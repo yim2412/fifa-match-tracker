@@ -7018,10 +7018,9 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         top = QHBoxLayout()
-        self.lb_meta_note = QLabel("")
-        self.lb_meta_note.setWordWrap(True)
-        self.lb_meta_note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_meta_note = self._note_label()
         top.addWidget(self.lb_meta_note, 1)
+        top.addStretch(0)   # 글이 숨어도(78 ①) 콤보가 오른쪽에 남게
         top.addWidget(QLabel("순위 구간"))
         self.cb_meta_tier = NoScrollComboBox()
         for label, tier in self.TREND_TIERS:
@@ -7075,7 +7074,7 @@ class MainWindow(QMainWindow):
         trend = core.group_meta(trend, how, self._minor_formations() if how == "minor" else frozenset())
         self.meta_trend = trend
         if trend.collecting:
-            self.lb_meta_note.setText(
+            self._set_status(self.lb_meta_note,
                 "모으는 중 — 같은 시즌 스냅숏이 3일치 넘게 쌓이면 비교합니다(하루 한 번 수집)." if config.RANK_COLLECT else
                 self.rank_off_note("메타 변화를 보여 줍니다"))
             for kind, lst in self.meta_lists.items():
@@ -7083,10 +7082,7 @@ class MainWindow(QMainWindow):
                 self.meta_titles[kind].setText("팀컬러" if kind == "team_color" else "포메이션")
             return
         days = round(trend.days or 0)
-        self.lb_meta_note.setText(
-            f"넥슨 데이터 기준 {trend.now_at[5:16].replace('T', ' ')} 과 {trend.then_at[5:16].replace('T', ' ')}"
-            f"({days}일 전) 비교 · 1만 위 안 랭킹 그대로 · 이름이 같은 팀컬러는 합쳐서 셉니다 · 사용 증가 순 · "
-            f"두 시점 다 {config.META_MIN_USERS}명 미만인 줄은 흐리게")
+        self._set_status(self.lb_meta_note)   # 78 ① 리뷰 — 50줄 표 밖이었던 같은 꼴의 설명(실측 날엔 "모으는 중"이었다)
         for kind, lst in self.meta_lists.items():
             self.meta_titles[kind].setText(f"{'팀컬러' if kind == 'team_color' else '포메이션'} — {days}일 전 대비")
             rows = self.meta_rise_order(trend.rows.get(kind) or [])
@@ -7338,7 +7334,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _set_status(lb: QLabel, text: str = "") -> None:
         """흐린 글 칸 — 상태(빈 화면의 이유·켜는 법·읽기 실패)일 때만 보이고 평소엔 숨는다(78 ① · 사용자 11-02
-        "설명 글은 보고 싶은 정보가 아니다"). setVisible(True) 대신 setHidden — 부모 없는 칸이 창으로 뜨지 않게."""
+        "설명 글은 보고 싶은 정보가 아니다"). 칸은 그리기 전에 레이아웃에 붙어 있어야 한다 — 부모 없이 보이면 창으로 뜬다."""
         lb.setText(text)
         lb.setHidden(not text)
 
@@ -10513,7 +10509,8 @@ class MainWindow(QMainWindow):
             c.set("전적",
                   f"{wdl_text(full.win, full.draw, full.lose)} "
                   f"({win_rate_text(full.win, full.draw, full.lose, full.mixed, short=True)})")
-            self._set_status(c.note)
+            # 챔피언스인데 여기로 왔다 = 넥슨 순위를 못 쓴다 — 출처가 바뀐 것을 한 줄로(78 ① 리뷰)
+            self._set_status(c.note, "넥슨 순위에 없거나 읽지 못해 앱이 받은 경기로 셉니다" if self._is_champion else "")
             c.setToolTip("챔피언스 이상 등급에서만 넥슨 데이터센터 순위·구단가치·\n"
                          "점수를 보여줍니다. 전적은 앱이 받은 경기 기준입니다.\n" + win_rate_note(full.mixed))
 
