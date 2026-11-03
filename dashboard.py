@@ -270,7 +270,7 @@ class DashboardPage(QWidget):
         row.addWidget(ranker_card, 1, Qt.AlignmentFlag.AlignTop)
         self.trend = self._card("승률 흐름", ("기간별 성적", None))
         # 글자는 점 위 줄로 — 20개 점과 한 줄에 두면 1280 폭에서 자리가 모자란다
-        self.trend.body.addWidget(_label(f"최근 {DOTS_N}경기 (왼쪽이 오래된 경기)", dim=True))
+        self.trend.body.addWidget(_label(f"최근 {DOTS_N}경기", dim=True))
         self.dots = ResultDots()
         self.trend.body.addWidget(self.dots)
         self.trend_chart = AreaTrendChart()
@@ -467,7 +467,7 @@ class DashboardPage(QWidget):
             for lb, text in zip(self.goal_nums, (f"{s.avg_goals_for:.2f}", f"{s.avg_goals_against:.2f}",
                                                  f"{s.goals_for / shots * 100:.0f}%" if shots else "—")):
                 lb.setText(text)
-            self.lb_goals_sub.setText(f"득실차 {s.goals_for - s.goals_against:+,} · 결정력 = 골 ÷ 슛")
+            self.lb_goals_sub.setText(f"득실차 {s.goals_for - s.goals_against:+,}")
         else:
             for lb in self.goal_nums:
                 lb.setText("—")
@@ -530,7 +530,7 @@ class DashboardPage(QWidget):
 
     def _render_versus(self, d: DashboardInput) -> None:
         prof = core.versus_profile(d.range_details, d.ouid)
-        self.versus_card.scope.setText(f"{d.range_label or d.scope_name} · {prof.games:,}판 · 몰수·오류 뺌")
+        self.versus_card.scope.setText(f"{d.range_label or d.scope_name} · {prof.games:,}판")
         for vb, ln in zip(self.versus_rows, prof.lines):
             vb.set_values(ln.mine, ln.opp, "{:.0f}" if ln.unit == "%" else "{:.1f}", ln.unit)
             vb.setToolTip(f"{ln.name} — 나 {ln.mine:.1f}{ln.unit} · 상대 {ln.opp:.1f}{ln.unit} ({prof.games:,}경기 평균)")

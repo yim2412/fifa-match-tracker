@@ -325,7 +325,7 @@ def test_dashboard_65_layout():
         prof = core.versus_profile(ds, _win._ouid)
         assert [vb.name.text() for vb in d.versus_rows] == [ln.name for ln in prof.lines]
         assert [t.text() for t in d.gap_tags] == ["태클 성공률 -3.4%p"], [t.text() for t in d.gap_tags]
-        assert "몰수·오류 뺌" in d.versus_card.scope.text() and "3판" in d.versus_card.scope.text()
+        assert "3판" in d.versus_card.scope.text() and "몰수" not in d.versus_card.scope.text(), d.versus_card.scope.text()
         drib = d.versus_rows[5]
         assert drib.mine_ahead and f"color:{T.ACCENT}" in drib.nums.text(), drib.nums.text()   # 102.7 vs 78.0
         assert abs(drib.strip.share - 102.67 / (102.67 + 78.0)) < 0.001
@@ -792,7 +792,7 @@ def test_dashboard_kpi_row_fits_min_window_with_longest_text():
                d.card_fc.sub: "9,999~9,999등 / 99,999명 · 저장 시작 뒤부터",
                d.card_day.sub: "무승부 뺀 100.0% · 오른 날 100%", d.card_avg.sub: "지금 9,999점 (+9,999)",
                d.card_dd.sub: "시즌 최고 9,999점 · 같은 구간 중앙 −9,999점", d.card_recent.sub: "누적 전체 100.0% 대비",
-               d.lb_goals_sub: "득실차 -99,999 · 결정력 = 골 ÷ 슛", d.lb_streak_sub: "최장 99연승 · 99연패 (누적 전체)",
+               d.lb_goals_sub: "득실차 -99,999", d.lb_streak_sub: "최장 99연승 · 99연패 (누적 전체)",
                d.lb_days: "오늘 -9,999점 99승 99무 99패 · 100.0% · 9,999 FC  │  어제 -9,999점 99승 99무 99패 · 100.0% · 9,999 FC",
                d.lb_record: "시즌 기록 · 최고 9,999.99 #9,999 (12.31) · 챔스 9,999판 · 슈챔 9,999판 · 남들 중앙 9,999판보다 9,999판 느리게"}
     saved = {lb: lb.text() for lb in longest}
@@ -1351,11 +1351,8 @@ def test_opponents_page_uses_season_scope_not_range():
         assert len(in_range) < len(in_scope), (in_range, in_scope)  # 픽스처가 차이를 만들어야 의미가 있다
         names = {r.label for r in lst.rows()}
         assert names == in_scope, (names, in_scope)
-        # 시즌을 바꾸면 문구도 따라가야 한다 — 처음 만든 문구가 우연히 맞는 것과 구분
-        _win._scope_text = lambda: "가짜 시즌"
-        _win._render_all()
-        del _win._scope_text
-        assert "가짜 시즌" in _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
+        # 78 ① — 필터가 안 걸렸으면 머리 글(범위·더블클릭 안내)이 없다
+        assert _win.lb_opponent_note.isHidden() and not _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
         # 빠른 범위 밖 상대도 더블클릭하면 스쿼드가 열린다
         outside = next(iter(in_scope - in_range))
         row = next(r for r in range(lst.rowCount()) if lst.row(r).key == outside)
@@ -1367,17 +1364,18 @@ def test_opponents_page_uses_season_scope_not_range():
         _win._render_all()
 
 
-def test_season_note_explains_error_games():
-    # 콤보는 모든 경기, 표는 승·무·패만 — 픽스처의 "오류" 1경기만큼 차이가 나고 그걸 적어야 한다
+def test_season_note_only_when_table_missing():
+    # 78 ① — 시즌표가 있으면 글이 없다(옛 설명 · 오류 경기 수는 지웠다) · 못 받았으면 그 이유만
     import seasons as sn_
     from datetime import date as d_
     saved = _win._rank_seasons
     _win._rank_seasons = [sn_.Season(no=1, name="시즌 1", start=d_(2025, 1, 1), end=d_(2025, 6, 1))]
     try:
         _win._render_seasons()
-        n_err = len(_win._matches_all) - models.summarize(_win._matches_all).total
-        assert n_err == 1, n_err  # 픽스처 전제 — 0 이면 이 테스트가 아무것도 안 잰다
-        assert "오류' 경기 1개" in _win.lb_season_note.text(), _win.lb_season_note.text()
+        assert _win.lb_season_note.isHidden() and not _win.lb_season_note.text(), _win.lb_season_note.text()
+        _win._rank_seasons = []
+        _win._render_seasons()
+        assert not _win.lb_season_note.isHidden() and "시즌표를 받지 못했습니다" in _win.lb_season_note.text()
     finally:
         _win._rank_seasons = saved
         _win._render_seasons()
@@ -1698,8 +1696,9 @@ def test_divstay_tab_counts_and_note():
     rows = {t.item(r, 0).text(): [t.item(r, c).text() for c in range(1, 4)] for r in range(t.rowCount())}
     name = lambda i: _win._division_names.get(i, str(i))  # noqa: E731
     assert rows == {name(800): ["1", "1", "1"], name(900): ["3", "2", "1"]}, rows
-    assert "승격 1번 · 강등 1번" in _win.lb_divstay_note.text(), _win.lb_divstay_note.text()
-    assert "빈 구간" not in _win.lb_divstay_note.text()
+    assert _win.lb_divstay_note.isHidden(), _win.lb_divstay_note.text()   # 78 ① 승격·강등 횟수 설명은 지웠다
+    _win._render_divstay([])
+    assert not _win.lb_divstay_note.isHidden() and "등급 정보가 있는 경기가 없습니다" in _win.lb_divstay_note.text()
     _win._render_divstay(_win._details)   # 원래 데이터로 되돌린다
 
 
@@ -1716,13 +1715,9 @@ def test_rewards_tab_counts_and_note():
     name = lambda i: _win._division_names.get(i, str(i))  # noqa: E731
     assert rows == {name(900): ["2", "30"], name(800): ["1", "20"]}, rows
     assert "FC 50" in _win.lb_rewards_summary.text() and "100판당 1,000" in _win.lb_rewards_summary.text(), _win.lb_rewards_summary.text()
-    note = _win.lb_rewards_note.text()
-    assert "5판 기준" in note and "탈주로 이긴 1판 포함" in note and "공식 수치가 아닌 확인값" in note, note
-    assert "등급 기록이 없는" not in note, note
     # 등급 기록이 없는 승·패는 FC 합계에 못 넣으니 100판당 분모에서도 뺀다 — 넣으면 50/7 → 714 로 내려간다
     _win._render_rewards(ds + [det(6, "승", None), det(7, "패", None)])
     assert "100판당 1,000" in _win.lb_rewards_summary.text(), _win.lb_rewards_summary.text()
-    assert "등급 기록이 없는 2판(승리 1판)은 합계와 100판당에서 뺐습니다" in _win.lb_rewards_note.text(), _win.lb_rewards_note.text()
     _win._render_rewards([])
     assert _win.tbl_rewards.rowCount() == 0 and "셀 경기가 없습니다" in _win.lb_rewards_summary.text()
     _win._render_rewards(_win._details)   # 원래 데이터로 되돌린다
@@ -1810,7 +1805,6 @@ def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
     gf = app_main.core.goal_flow(_win._details, _win._ouid)
     bars = [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(WdlBar)]
     assert len(bars) == sum(1 for r in gf.leads if r.games) > 0, (len(bars), [r.games for r in gf.leads])
-    assert f"{gf.replayed:,}경기" in _win.lb_goalflow_note.text(), _win.lb_goalflow_note.text()
     # 경기가 없으면 막대 대신 한 줄
     _win._render_goal_flow([])
     assert not [b for w in _live_widgets(_win.box_goalflow["lead"]) for b in w.findChildren(WdlBar)]
@@ -1831,11 +1825,12 @@ def test_attack_route_tab_draws_a_row_per_route_and_waits_for_enough_shots():
         assert ar.mine_total > 0 and ar.enough, ar.mine_total
         assert _win.tbl_route.rowCount() == len(app_main.core.ROUTES), _win.tbl_route.rowCount()
         assert [_win.tbl_route.item(r, 0).text() for r in range(_win.tbl_route.rowCount())] == list(app_main.core.ROUTES)
-        assert f"{ar.mine_total:,}개" in _win.lb_route_note.text(), _win.lb_route_note.text()
+        assert _win.lb_route_note.isHidden(), _win.lb_route_note.text()   # 78 ① 표가 있으면 설명 없음
         _check_elisions([_win.tbl_route])     # 채운 표가 최소 창 폭에서 안 잘린다
         app_main.config.N18_MIN_SHOTS = ar.mine_total + 1
         _win._render_attack_route(_win._details)
         assert _win.tbl_route.rowCount() == 0 and "아직 못 가릅니다" in _win.lb_route_note.text(), _win.lb_route_note.text()
+        assert not _win.lb_route_note.isHidden()
     finally:
         app_main.config.N18_MIN_SHOTS = old
     _win._render_attack_route([])
@@ -1916,7 +1911,6 @@ def test_luck_tab_season_range_cards_and_dots_66():
         assert _win.card_luck_out.value.text() == "10일" and "운이면 0." in _win.card_luck_out.sub.text(), \
             _win.card_luck_out.sub.text()
         assert all(r.arrow and r.judged and abs(r.base - 50.0) < 1e-9 for r in rows), rows
-        assert "이 범위 전체 승률 50.0%" in _win.lb_luck_required.text(), _win.lb_luck_required.text()
     # 한 시즌(진행 중 — 시즌표에 없는 시즌) → "시즌 평균" · 이번 시즌
     with _LuckScope(_days_spec(), [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 8, 31))]):
         _win._render_luck(_win._matches)
@@ -1964,8 +1958,15 @@ def test_luck_required_table_uses_whole_range_not_30_days_66():
     spec += [(datetime(2026, 8, 11, 10) + timedelta(days=d), "패", True) for d in range(30)]
     with _LuckScope(spec):
         _win._render_luck(_win._matches)
-        want = f"이 범위 전체 승률 {200 / 230 * 100:.1f}%"
-        assert want in _win.lb_luck_required.text(), (want, _win.lb_luck_required.text())
+        # 78 ① 기준 글은 지웠다 — 표 값으로 잰다. 먼저 "30일로 잘랐다면 값이 달랐다" 를 단언(안 그러면 빈 검사)
+        core = app_main.core
+        whole = core.daily_luck(core.win_rate_trend(_win._matches, days=40))
+        cut30 = core.daily_luck(core.win_rate_trend(_win._matches))
+        assert abs(whole.p - 200 / 230) < 1e-9 and [r.n for r in whole.required] != [r.n for r in cut30.required], \
+            (whole.p, cut30.p)
+        t = _win.tbl_luck_required
+        got = [t.item(r, 1).text() for r in range(t.rowCount())]
+        assert got == [f"{r.n:,}판" for r in whole.required], (got, [r.n for r in whole.required])
 
 
 def test_luck_dot_rows_columns_and_hits_66():
@@ -2117,7 +2118,6 @@ def test_habits_tab_empty_and_note():
     with _SynthScope(_synth_matches([(datetime(2026, 9, 1, 10), "승", True)])):
         _win._render_habits(_win._matches)
         assert all("판정하지 않습니다" in v.text() for _, v in _win.habit_boxes), [v.text() for _, v in _win.habit_boxes]
-    assert "표마다 따로 판정" in _win.lb_habits_note.text()
 
 
 def test_analysis_chip_row_shows_strengths_and_weaknesses():
@@ -2421,7 +2421,6 @@ def test_sc_records_list_and_nexon_line():
         _win._on_loaded(_MATCHES, det, _OUID, {"nickname": "테스트구단주", "level": 7},
                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
         assert _win.lb_sc_list.text() == "2026-01-02 · 1번 (22:00)", _win.lb_sc_list.text()
-        assert "2026-01-01 ~" in _win.lb_sc_note.text(), _win.lb_sc_note.text()
         # 계단 구간 900(2) · 800(1) · 900(1) — 슈챔 구간(번호 1) 시작에 세로 점선
         assert [(r.division, r.games) for r in _win.division_chart._runs] == [(900, 2), (800, 1), (900, 1)]
         assert _win.division_chart._markers == [1], _win.division_chart._markers
@@ -3898,8 +3897,8 @@ def test_teamcolor_counts_season_scope_not_display_range():
         assert len(_win._slice()[0]) == 1 and n > 1, n
         lst = _win.tc_rate_list
         assert lst.rowCount() == 1 and lst.row(0).games == n, [(r.label, r.games) for r in lst.rows()]
-        note = _win._teamcolor_note_labels[0].text()
-        assert f"상대 {len({m.opponent for m in _win._matches if m.opponent})}명 중" in note, note
+        note = _win._teamcolor_note_labels[0]
+        assert note.isHidden() and not note.text(), note.text()   # 78 ① 다 아는 상대 · 숨긴 종류 없음 → 설명 없음
     finally:
         _win._team_colors.clear()
         _win._team_colors.update(saved[0])
@@ -10585,7 +10584,7 @@ def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
         assert sum(h.bins.values()) == 300 and h.cmp and 200 in h.cuts, h
         ch = _win.edist_chart
         assert ch._main and ch._cmp and ch._faint_first and any(m[1] == "200위" for m in ch._marks), ch._marks
-        assert "왼쪽 끝 칸은 일부" in _win.lb_edist_note.text()
+        assert _win.lb_edist_note.isHidden(), _win.lb_edist_note.text()   # 78 ① 데이터 시각·잘린 칸 설명은 지웠다
         _win.cb_edist_cmp.setCurrentIndex(2)          # 비교 없음
         assert _win.edist_chart._cmp is None
         _win.cb_edist_cmp.setCurrentIndex(0)
@@ -10657,6 +10656,10 @@ def test_rank_meta_tabs_draw_and_fit():
         # 67 R1 팀컬러 목록 — 가성비·하루 승률을 묶기만(⑧ R1 × [하루 승률] — 같은 팀컬러 같은 숫자)
         b = _win.tc_board
         assert b.scored and b.day_ready and _win.tc_board_list.rowCount() == 6, b
+        # 78 ① — 다 채워졌으면 안내 줄이 없다(손익분기는 결과값이라 승률→점수만 남을 수 있다)
+        shown = {note: getattr(_win, note).text() for _p, _t, _k, note in META_TABS
+                 if note != "lb_wrelo_note" and not getattr(_win, note).isHidden()}
+        assert not shown, shown
         assert abs(sum(r.share for r in b.rows) - 100) < 1e-6 and b.total == 300
         day = {r.key: r for r in _win.day_wr.tables["team_color"]}
         vs = {r.key: r for r in _win._rank_read(lambda c: rankmeta.value_score(c, 10000)).rows}
@@ -11190,7 +11193,7 @@ def test_opp_cards_tab_filters():
         assert _win.chk_oppcard_ranked.isEnabled()
         _win.chk_oppcard_ranked.setChecked(True)
         met2 = sum(c.met for cards in _win.opp_cards.values() for c in cards)
-        assert met2 == met and "닉네임을 바꾼" in _win.lb_oppcard_note.text(), (met2, met)
+        assert met2 == met, (met2, met)
         _win.chk_oppcard_ranked.setChecked(False)
     finally:
         _win._team_colors.clear()
@@ -11523,7 +11526,7 @@ def test_calendar_tab_cells_arrows_and_month_nav():
         assert _win.lb_cal_month_sum.text().strip() == "3일 · 195 FC", _win.lb_cal_month_sum.text()
         assert g._fc_max == 135, "진하기 최대 = 이 달 최대 FC"
         assert g._cells[1].fc == 135 and g._cells[3].fc == 45, g._cells
-        assert "▲ 1일 · ▼ 1일" in _win.lb_cal_note.text(), _win.lb_cal_note.text()
+        assert _win.lb_cal_note.isHidden(), _win.lb_cal_note.text()   # 78 ① 시즌표가 있으면 설명 없음
         g.grab()
         assert len(g._hits) == 3, "칸 툴팁이 경기 있는 날만큼이 아니다"
         assert _win.btn_cal_prev.isEnabled(), "앞 달에 경기가 있는데 ◀ 가 꺼졌다"
@@ -11561,13 +11564,13 @@ def test_calendar_labels_say_all_stored_without_season_table():
         # 막지 않았으면: 9월 30일까지 한 묶음이라 기준선이 9월 경기까지 섞인다 — 그 값을 "시즌 승률" 로 적는다
         assert "저장된 전체 승률" in tip and "시즌 승률" not in tip, tip
         assert "저장된 전체: 2일" in summary and "이번 시즌" not in summary, summary
-        assert "시즌표가 없어" in note and "저장된 전체 승률 ±" in note, note
+        assert "시즌표가 없어" in note and not _win.lb_cal_note.isHidden(), note
         _win._rank_seasons = [sn.Season(90, "시즌 3", _d(2026, 8, 1), _d(2026, 10, 1))]
         _win._render_calendar()
         tip = _win.cal_grid._cells[1].tip
         summary = f"{t.horizontalHeaderItem(2).text()}: {t.item(3, 2).text()}"
         assert "시즌 승률" in tip and "저장된 전체" not in tip, tip
-        assert "이번 시즌: 1일" in summary and "시즌표가 없어" not in _win.lb_cal_note.text(), summary
+        assert "이번 시즌: 1일" in summary and _win.lb_cal_note.isHidden(), (summary, _win.lb_cal_note.text())
     finally:
         if keep[0] is None:
             _win.__dict__.pop("_season_wins", None)
@@ -11813,8 +11816,8 @@ def test_opponent_diff_column_hides_weak_rows_k13():
 
 
 def test_opponent_rows_skip_missing_nickname_67():
-    """67 R12 — 닉네임 없는 상대(NO_NICK)는 서로 다른 사람이 한 줄로 뭉친다 → 구단주 줄에서 빼고 머리 글에 경기 수.
-    승률 카드는 그 경기까지 센다(필터에 걸린 경기 전체 — 기준이 바뀌지 않게). 묶음을 바꾸면 안내도 사라진다."""
+    """67 R12 — 닉네임 없는 상대(NO_NICK)는 서로 다른 사람이 한 줄로 뭉친다 → 구단주 줄에서 뺀다(머리 글 안내는 78 ① 에 지웠다).
+    승률 카드는 그 경기까지 센다(필터에 걸린 경기 전체 — 기준이 바뀌지 않게)."""
     import dataclasses
     import widgets
     keep = _win._matches
@@ -11829,13 +11832,9 @@ def test_opponent_rows_skip_missing_nickname_67():
         assert {s.nickname: s.games for s in app_main.opponent_stats(ms)}.get(app_main.core.NO_NICK) == 3
         keys = [r.key for r in _win.opp_list.rows()]
         assert keys and app_main.core.NO_NICK not in keys, keys
-        assert "닉네임 없는 상대 3경기는 줄에서 뺌" in _win.lb_opponent_note.text(), _win.lb_opponent_note.text()
         assert _win.card_opp_rate.sub.text() == f"{len(ms):,}경기", _win.card_opp_rate.sub.text()
         assert _win.card_opp_rate.value.text() == widgets.win_rate_text(
             *(sum(k in m.result for m in ms) for k in "승무패"), core.mixed_of_matches(ms), short=True)
-        _win.cb_opp_group.setCurrentIndex(_win.cb_opp_group.findData("formation"))
-        _win._invalidate("opponents")
-        assert "닉네임 없는" not in _win.lb_opponent_note.text(), "구단주 묶음이 아닌데 안내가 남았다"
     finally:
         _win._matches = keep
         _win.cb_opp_group.setCurrentIndex(_win.cb_opp_group.findData("owner"))
@@ -12823,7 +12822,7 @@ def test_shootout_keeper_cards_65():
         assert len(cards) == app_main.config.SHOOTOUT_GK_MAX < 14, len(cards)
         assert cards[0].property("sp_id") == 100 and not cards[0].property("weak")
         assert all(c.property("weak") for c in cards[1:]), "2경기 카드가 흐리지 않다"
-        assert "상대 골키퍼 14장" in _win.lb_shootout_note.text(), _win.lb_shootout_note.text()
+        assert _win.lb_shootout_note.isHidden(), _win.lb_shootout_note.text()   # 78 ① 카드가 있으면 설명 없음
         assert _win.grid_shootout.count() == len(cards)
         asked = list(_win._gk_face_loader._sp_ids)
         assert asked == [c.property("sp_id") for c in cards], asked
@@ -12856,7 +12855,7 @@ def test_shootout_keeper_cards_65():
             _win._names.update(keep_names)
             _at_size(1600, 900)
         _win._render_shootout_keepers([])
-        assert not _win.shootout_cards and "없습니다" in _win.lb_shootout_note.text()
+        assert not _win.shootout_cards and "없습니다" in _win.lb_shootout_note.text() and not _win.lb_shootout_note.isHidden()
     finally:
         _win._gk_faces.pop(100, None)
         _win._render_all()
@@ -12879,7 +12878,6 @@ def test_shotmap_panel_65():
     _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
     _win._render_shotmap()
     _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
-    assert shiboken6.isValid(_win.lb_shot_sum_scope) and "경기" in _win.lb_shot_sum_scope.text()
     ss = core_api.shot_summary(details, _OUID)
     assert ss.games and ss.mine.shots and ss.opp.shots, (ss.games, ss.mine, ss.opp)
     cells = _win.shot_sum_cells
@@ -12976,6 +12974,51 @@ def test_shotmap_panel_65():
         _win._slice = keep_slice
         _win._shot_sum_key = None
         _win._render_shotmap()
+
+
+# 78 ① — 지운 설명 글(ROADMAP "지울 설명 글 50줄")의 특징 문구. 하나라도 창 글자에 다시 보이면 FAIL
+EXPLAINER_PHRASES = (
+    "※", "표본이 모자란 항목은 표시하지 않습니다", "승·무·패 아닌 결과(오류 등)는 제외", "가로 한 칸이 등급 구간",
+    "앱을 쓰기 전 기록은 없습니다", "칸 진하기 =", "판정은 위에서부터", "약 한 달 전까지의 경기만", "50%보다 높으면 초록",
+    "골 순서를 되짚은", "머문 날 = 그날 마지막 경기", "운인지 숫자로 가늠", "운과 구분이 안 됩니다", "표마다 따로 판정",
+    "넥슨 공식 수치가 아닌 확인값", "흐린 줄은", "위치 기록이 있는 슛만", "흐린 카드는", "비중은 6가지 종류 합",
+    "결정력 = 골", "전환율 = 골 ÷ 시도", "칸은 <b>나 / 랭커", "골이 많은 순", "11자리가 채워집니다", "교체 명단 뺌",
+    "그 기간의 성적이지 원인이 아닙니다", "'잠깐 바뀜'", "팀컬러 반영", "두 번 누르면 그 팀컬러", "랭킹 페이지 그대로",
+    "왼쪽 끝 칸은 일부", "1만 위 안 랭킹 그대로", "구단가치 평균은 툴팁", "하루 걸음", "칸이 안 열린 선수 포함",
+    "그 줄에 그 카드를 선발로 쓴 사람 수",
+    "선발로 쓴 구단주 — 이 PC", "몰수·오류 뺌", "왼쪽이 오래된", "새로 조회합니다", "구단주 줄을 더블클릭",
+    "최근 흐름은 최근", "기준 · 2026", "통산 · 매시각 갱신")
+# 지워 없어진 칸 — 다시 만들면 FAIL(이름만 되살린 칸도 잡게)
+GONE_NOTE_ATTRS = ("lb_analysis_note", "lb_division_note", "lb_sc_note", "lb_clutch_heat_note", "lb_goalflow_note",
+                   "lb_diag_note", "lb_diag_note2", "lb_luck_note", "lb_luck_required", "lb_habits_note", "lb_rewards_note",
+                   "lb_pass_note", "lb_shot_sum_scope", "lb_oppcard_note")
+
+
+def test_explainer_notes_gone_78():
+    """78 ① — 평소 화면에 설명 글이 없다. 모든 메뉴·탭을 한 번씩 그린 뒤 창 안 모든 글자(QLabel·그룹 제목)를 훑는다."""
+    from PySide6.QtWidgets import QGroupBox, QLabel
+    # 막지 않았으면 무엇이 보였을지 — 이 검사가 실제 글을 읽는지 먼저(문구 하나를 심어 잡히는지)
+    plant = QLabel("넥슨 데이터 기준 11-02 16:00 · 1만 위 안 랭킹 그대로", _win)
+    try:
+        assert any(p in plant.text() for p in EXPLAINER_PHRASES)
+        found = [lb for lb in _win.findChildren(QLabel) if lb is plant]
+        assert found, "창 아래 QLabel 을 못 훑는다(빈 검사)"
+    finally:
+        plant.deleteLater()
+        plant.setParent(None)
+    _win._render_all()
+    views = [v for vs in app_main.MainWindow.VIEW_OF_KEY.values() for v in vs]
+    assert len(views) > 30, len(views)
+    for page, tab in views:
+        _win._go_page(page, tab) if tab else _win._go_page(page)
+    _win._go_page("대시보드")
+    hits = []
+    for w in _win.findChildren(QLabel) + _win.findChildren(QGroupBox):
+        text = w.text() if isinstance(w, QLabel) else w.title()
+        hits += [(type(w).__name__, w.objectName(), p, text[:60]) for p in EXPLAINER_PHRASES if p in text]
+    assert not hits, hits
+    back = [a for a in GONE_NOTE_ATTRS if hasattr(_win, a)]
+    assert not back, back
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
