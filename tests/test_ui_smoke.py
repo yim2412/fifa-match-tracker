@@ -1768,7 +1768,8 @@ def test_opp_rank_tab_gates_and_draws():
         t = _win.tbl_opprank
         assert t.rowCount() == len(config.OPP_RANK_BANDS), t.rowCount()
         assert t.item(0, 0).text() == "1~200위" and int(t.item(0, 1).text()) == 3, [t.item(0, c).text() for c in range(6)]
-        assert "줄이 있는 내 경기 3판" in txt(), txt()   # 픽스처 4경기 중 승·무·패로 끝난 것이 3판
+        # 표가 나오면 설명 칸은 비고 숨는다(78 ② — 상태만 남김 · 위 상태 글들은 그대로 뜬다)
+        assert txt() == "" and _win.lb_opprank_note.isHidden(), txt()
     finally:
         config.WEB_DATA, config.RANK_COLLECT, config.NOTICE_ACCEPTED = cfg_keep
         _win._trade_snapshot, _win._rank_read, _win._details = keep
@@ -2312,7 +2313,6 @@ def test_poslevel_empty_states_stage_names_and_cache():
                                             "판정 보류 (범위가 단계 경계에 걸침)"], rows
             assert rows[0][2:] == ["73", "54 ~ 81", "995판"], rows[0]
             assert _win.lb_poslevel_summary.text() == "미드필더 · 공격 에이스"
-            assert "2026-10-12" in _win.lb_poslevel_note.text() and "같은 경기 상대" in _win.lb_poslevel_note.text()
             _win._poslevel_in_pop = lambda: False
             _win._render_poslevel()
             assert _poslevel_rows()[0][1] == "—", "모집단 밖인데 5단계 이름을 냈다"
@@ -13004,11 +13004,13 @@ EXPLAINER_PHRASES = (
     "왼쪽 끝 칸은 일부", "1만 위 안 랭킹 그대로", "구단가치 평균은 툴팁", "하루 걸음", "칸이 안 열린 선수 포함",
     "그 줄에 그 카드를 선발로 쓴 사람 수",
     "선발로 쓴 구단주 — 이 PC", "몰수·오류 뺌", "왼쪽이 오래된", "새로 조회합니다", "구단주 줄을 더블클릭",
-    "최근 흐름은 최근", "기준 · 2026", "통산 · 매시각 갱신")
+    "최근 흐름은 최근", "기준 · 2026", "통산 · 매시각 갱신",
+    "더 센 상대 쪽으로 치우쳐", "단계 경계 백분위", "판수를 아는 사람", "짝은 같은 카드를 먼저 산 것부터")
 # 지워 없어진 칸 — 다시 만들면 FAIL(이름만 되살린 칸도 잡게)
 GONE_NOTE_ATTRS = ("lb_analysis_note", "lb_division_note", "lb_sc_note", "lb_clutch_heat_note", "lb_goalflow_note",
                    "lb_diag_note", "lb_diag_note2", "lb_luck_note", "lb_luck_required", "lb_habits_note", "lb_rewards_note",
-                   "lb_pass_note", "lb_shot_sum_scope", "lb_oppcard_note")
+                   "lb_pass_note", "lb_shot_sum_scope", "lb_oppcard_note",
+                   "lb_poslevel_note", "lb_rboard_note", "lb_ledger_note")   # 뒤 셋은 78 ②(사용자 11-03 "지운다")
 
 
 def _explainer_hits() -> list:

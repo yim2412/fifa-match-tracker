@@ -5013,10 +5013,6 @@ class MainWindow(QMainWindow):
         v.addWidget(self.lb_poslevel_summary)
         self.tbl_poslevel = self._make_table(self.POSLEVEL_COLUMNS)
         v.addWidget(self.tbl_poslevel, 1)
-        self.lb_poslevel_note = QLabel("")
-        self.lb_poslevel_note.setWordWrap(True)
-        self.lb_poslevel_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_poslevel_note)
         return w
 
     def _poslevel_in_pop(self) -> bool | None:
@@ -5033,7 +5029,6 @@ class MainWindow(QMainWindow):
         """분포는 매번 fifa.db 에서(지우기·새 바퀴·낡음이 다른 신호 없이 잡히게 — _dist_basis 와 같다), 내 1000판 판정만 캐시.
         계획은 작업 스레드였지만 1000판 짝짓기가 실측 0.06~0.08초라(2026-10-18 개발 PC) 화면 스레드 + 캐시로 — _dist_basis 와 같은 꼴."""
         self._fill(self.tbl_poslevel, [], enable_sort=False)
-        self.lb_poslevel_note.setText("")
         say = self.lb_poslevel_summary.setText
         if not self._ouid:
             say("검색한 계정이 없습니다.")
@@ -5095,16 +5090,6 @@ class MainWindow(QMainWindow):
             say(f"상위 {top:,}위 구단주들과 견준 값입니다 — "
                 + ("내 순위 기록이 없어" if in_pop is None else f"{top:,}위 밖이라")
                 + " 단계 이름 없이 백분위만 보여 줍니다.")
-        cuts = "·".join(str(x) for x in config.C4_CUTS)
-        names = " · ".join(config.C4_STAGES)
-        self.lb_poslevel_note.setText(
-            f"1~{top:,}위 구단주 {min(c.n_owners for c in pd.cells.values())}명 이상 분포({pd.ended_at[:10]} 기준) · "
-            f"같은 경기 상대의 같은 자리 대비(절대 수준이 아닙니다) · 선수 한 명의 한 경기 평균 · "
-            f"내 감독모드 최근 {lv.games:,}판(분포와 기간이 다를 수 있습니다, 시즌 선택과 무관) · "
-            + " · ".join(f"{'공격' if s == 'atk' else '수비'} = " + "·".join(self.POSLEVEL_METRIC_NAMES.get(k, k) for k in ks)
-                         for s, ks in config.C4_METRICS.items())
-            + f" · 단계 경계 백분위 {cuts}({names}) · 90% 범위가 경계에 걸치면 판정 보류"
-            f" · 같은 사람을 다시 재도 단계가 한 칸 안에서 유지되던 자리만 보여 줍니다")
 
     # ── 성적 진단 [운 범위] · [경기 습관] (2.7.1 N16·A3·N20) ───────────────────────
     def _launch_streak(self) -> None:
@@ -5702,10 +5687,6 @@ class MainWindow(QMainWindow):
         self.box_ledger = QWidget()
         lv = QVBoxLayout(self.box_ledger)
         lv.setContentsMargins(0, 0, 0, 0)
-        self.lb_ledger_note = QLabel("")
-        self.lb_ledger_note.setWordWrap(True)
-        self.lb_ledger_note.setStyleSheet(f"color: {T.TEXT_DIM};")
-        lv.addWidget(self.lb_ledger_note)
         sums = Card()
         grid = QGridLayout()
         self.lb_ledger = {}
@@ -5932,10 +5913,6 @@ class MainWindow(QMainWindow):
         selected = self.cb_season.currentData()
         scope = None if selected is None else (lambda d: self._in_selected_season(d, selected))
         lg = core.ledger(tl, prices, in_scope=scope, complete=complete)
-        self.lb_ledger_note.setText(
-            f"이적시장 기준(강화 비용 제외) · 지출·수입·실현 손익은 {self._scope_text()} · "
-            "짝은 같은 카드를 먼저 산 것부터 맞춘 추정 · 평가는 홈페이지 오늘 시세라 판매 금액과 합치지 않습니다 · "
-            f"보유는 최근 {tl.games_basis}경기 출전 기준")
         L = self.lb_ledger
         L["spent"].setText(f"{self._bp(lg.spent)} (구매 {lg.spent_n:,}건)")
         L["income"].setText(f"{self._bp(lg.income)} (판매 {lg.income_n:,}건)")
@@ -7236,7 +7213,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setSpacing(8)
-        self.lb_opprank_note = self._note_label()
+        self.lb_opprank_note = self._note_label()   # 상태(빈 이유)만 — 평소엔 숨는다(78 ②)
         v.addWidget(self.lb_opprank_note)
         gb = QGroupBox("상대가 그날 몇 위였나")
         box = QVBoxLayout(gb)
@@ -7303,18 +7280,13 @@ class MainWindow(QMainWindow):
                 if core.is_weak(tr.known, config.OPP_MIN_KNOWN):
                     why = (f"상대 순위를 알아낸 경기가 {tr.known:,}판입니다 — {config.OPP_MIN_KNOWN}판부터 표를 냅니다"
                            f"(줄이 있는 내 경기 {tr.games:,}판 · 1만 위 밖이거나 닉네임이 바뀐 상대는 모릅니다).")
+        self._set_status(self.lb_opprank_note, why or "")
         if why:
-            self.lb_opprank_note.setText(why)
             self.lb_oppgap_note.setText("")
             self._fill(self.tbl_opprank, [], enable_sort=False)
             self._fill(self.tbl_oppgap, [], enable_sort=False)
             return
         self._fill(self.tbl_opprank, self._opp_table_rows(tr.by_rank), enable_sort=False)
-        self.lb_opprank_note.setText(
-            f"{self._scope_text()} · 줄이 있는 내 경기 {tr.games:,}판 중 상대 순위를 안 판 {tr.known:,}판(나머지 {tr.unknown:,}판은 "
-            f"1만 위 밖이거나 닉네임이 바뀌어 모릅니다) · 경기 시각 ±{config.OPP_SNAP_WINDOW_H}시간의 스냅숏으로 찾고 "
-            f"구간만 저장합니다(정확한 순위·점수는 안 남김) · 이 시즌 동안만 둡니다 · 1만 위 안 상대만 보여서 "
-            f"더 센 상대 쪽으로 치우쳐 있습니다")
         if not core.is_weak(tr.gap_known, config.OPP_MIN_KNOWN):
             self._fill(self.tbl_oppgap, self._opp_table_rows(tr.by_gap), enable_sort=False)
             self.lb_oppgap_note.setText(f"내 점수도 안 {tr.gap_known:,}판 기준 — 상대 점수 − 내 점수(그날 스냅숏)")
@@ -8205,8 +8177,6 @@ class MainWindow(QMainWindow):
         self.rboard_rank_box = Collapsible("순위 구간별 표", self.tbl_rboard_rank)
         v.addWidget(self.rboard_rank_box)
         v.addStretch(1)
-        self.lb_rboard_note = self._note_label()
-        v.addWidget(self.lb_rboard_note)
         self.reward_board: core.RewardBoard | None = None   # 테스트가 본다
         return w
 
@@ -8265,23 +8235,14 @@ class MainWindow(QMainWindow):
                 head = self.rank_off_note("남들의 100판당 보상을 구간별로 보여 줍니다")
             self.lb_rboard_summary.setText(
                 head + (f"\n{mine}" if mine else ""))
-            self.lb_rboard_note.setText("")
             return
         if board.state != "ok":
             self.lb_rboard_summary.setText(self.REWARD_BOARD_STATES.get(board.state, "") + (f"\n{mine}" if mine else ""))
-            self.lb_rboard_note.setText("")
             return
         o = board.overall
         head = (f"전체 {board.users:,}명 · 100판당 중앙값 {o.median:,.0f} FC (하한~상한 {o.lo:,.0f}~{o.hi:,.0f})"
                 if o is not None and o.median is not None else f"전체 {board.users:,}명 — 중앙값을 낼 만큼 모이지 않았습니다")
         self.lb_rboard_summary.setText(head + (f"\n{mine}" if mine else ""))
-        self.lb_rboard_note.setText(
-            f"남들은 하루 한 번 랭킹 화면으로 추정한 범위입니다 — 이긴 판 수와 등급 칸으로 FC 하한·상한(챔스 이상 승리 {self._champ_fc_text()})을, "
-            f"승·무·패 증가로 챔스 이상 판수 하한·상한을 잡아 100판당 = [FC 하한 ÷ 판수 상한, FC 상한 ÷ 판수 하한]. "
-            f"사람마다 범위의 가운데 값 → 구간 중앙값 · 챔스 이상 {config.K11_MIN_GAMES}판 넘게(하한) 뛴 사람만 · "
-            f"구간 인원 {config.K11_MIN_PER_BAND}명 미만은 비움 · 순위·구단가치는 마지막 수집({self._at(board.snap_at)}) 기준"
-            f" · 판수를 아는 사람 {board.seen:,}명"
-            + (f"(시즌 중간에 처음 잡힌 {board.late:,}명은 처음 본 앞 승리를 판수 없이 안아 뺐습니다)" if board.late else ""))
 
     @staticmethod
     def _reward_bar(name: str, b, icon: tuple = ()) -> AvgBar:
