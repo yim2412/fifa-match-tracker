@@ -85,6 +85,7 @@ class Basis:
     min_n: int
     base_label: str = "전체"
     mixed: bool = False
+    wdl: tuple[int, int, int] | None = None   # 조건 쪽 승·무·패 수(79 — 근거 막대를 승·무·패 세 칸으로 그린다)
 
 
 @dataclass
@@ -181,7 +182,7 @@ def _flow(matches: list[MatchSummary], details: list[dict], ouid: str,
                 f" {abs(gap):.0f}%p {word}.",
                 "", _w(gap, min(s.rated, prev.rated), MIN_BASE),
                 Basis(f"최근 {s.total}경기", s.win_rate, s.rated, prev.win_rate, MIN_FLOW,
-                      f"그 이전 {prev.total}경기", mixed)))
+                      f"그 이전 {prev.total}경기", mixed, (s.win, s.draw, s.lose))))
 
     out.extend(_contrast(matches, details, ouid, window))
     return out
@@ -247,7 +248,7 @@ def _clutch_rules(details: list[dict], ouid: str, base_rate: float, mixed: bool
                 f" 전체 승률({base_rate:.0f}%)보다 {gap:.0f}%p 높습니다."
                 f" 먼저 앞서 나가는 게 승패를 가장 크게 가릅니다.",
                 _w(gap, n_first, MIN_COND),
-                Basis("선제골 넣은 경기", r, n_first, base_rate, MIN_COND, mixed=mixed)))
+                Basis("선제골 넣은 경기", r, n_first, base_rate, MIN_COND, mixed=mixed, wdl=tuple(cs.first_scored))))
         if cs.comeback_lose >= 3:
             share = cs.comeback_lose / all_first * 100
             if share >= 20:
@@ -273,7 +274,7 @@ def _clutch_rules(details: list[dict], ouid: str, base_rate: float, mixed: bool
                 f"{all_conc}경기 {_wdl_text(*cs.first_conceded)}."
                 f" 선제골이 갈린 경기의 {share:.0f}%에서 먼저 실점하고 있습니다.",
                 _w(gap, n_conc, MIN_COND),
-                Basis("먼저 실점한 경기", r, n_conc, base_rate, MIN_COND, mixed=mixed)))
+                Basis("먼저 실점한 경기", r, n_conc, base_rate, MIN_COND, mixed=mixed, wdl=tuple(cs.first_conceded))))
     return out
 
 
@@ -401,7 +402,7 @@ def _possession_rules(details: list[dict], ouid: str, total: int, mixed: bool
         f" {best.win_rate:.0f}%. {hint}",
         _w(best.win_rate - worst.win_rate, worst.rated, MIN_COND),
         Basis(f"점유율 {worst.span}%", worst.win_rate, worst.rated, best.win_rate, need,
-              f"{best.label}({best.span}%)", mixed))]
+              f"{best.label}({best.span}%)", mixed, (worst.win, worst.draw, worst.lose)))]
 
 
 def _formation_rules(details: list[dict], ouid: str, base_rate: float,
@@ -418,14 +419,16 @@ def _formation_rules(details: list[dict], ouid: str, base_rate: float,
                 f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
                 f" 전체보다 {abs(gap):.0f}%p 낮습니다.",
                 _w(gap, f.rated, MIN_COND),
-                Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed)))
+                Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed,
+                      wdl=(f.win, f.draw, f.lose))))
         elif gap >= GAP_WIDE:
             out.append(Insight(
                 SEC_WIN, f"상대가 {f.formation}일 때 승률 {f.win_rate:.0f}%.",
                 f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
                 f" 전체보다 {gap:.0f}%p 높습니다.",
                 _w(gap, f.rated, MIN_COND),
-                Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed)))
+                Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed,
+                      wdl=(f.win, f.draw, f.lose))))
     return out
 
 
@@ -502,7 +505,8 @@ def _opponent_rules(matches: list[MatchSummary], base_rate: float, mixed: bool
                 f" 평균 {o.avg_goals_for:.1f}:{o.avg_goals_against:.1f}."
                 f" 반복해서 지고 있는 상대입니다.",
                 _w(gap, o.rated, MIN_OPP),
-                Basis(f"{o.nickname} 상대", o.win_rate, o.rated, base_rate, MIN_OPP, mixed=mixed)))
+                Basis(f"{o.nickname} 상대", o.win_rate, o.rated, base_rate, MIN_OPP, mixed=mixed,
+                      wdl=(o.win, o.draw, o.lose))))
     return out
 
 
@@ -530,7 +534,7 @@ def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int, mix
             f"{r.games}경기 {_wdl_text(r.win, r.draw, r.lose)} — 전체 승률({base_rate:.0f}%)보다"
             f" {abs(gap):.0f}%p {'높습니다' if gap > 0 else '낮습니다'}. {tail}",
             _w(gap, r.rated, need),
-            Basis(f"{run} 직후", r.win_rate, r.rated, base_rate, need, mixed=mixed)))
+            Basis(f"{run} 직후", r.win_rate, r.rated, base_rate, need, mixed=mixed, wdl=(r.win, r.draw, r.lose))))
     return out
 
 

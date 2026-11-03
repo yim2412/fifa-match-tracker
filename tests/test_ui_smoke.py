@@ -2795,13 +2795,13 @@ def test_period_table_marks_best_worst_and_keeps_tint_after_sort():
         assert t.item(a, rate_col).foreground().color() == QColor(T.TEXT_DIM)
         assert t.item(a, rate_col).toolTip().startswith("표본이 4경기")
         assert t.item(b, rate_col).font().bold() and t.item(c, rate_col).font().bold()
-        # 평균(13/23 = 56.5%)보다 높은 B 는 HEAT_ATK, 낮은 C 는 HEAT_DEF 쪽 — 그 행에 붙어 있다
+        # 평균(13/23 = 56.5%)보다 높은 B 는 HEAT_GOOD(초록), 낮은 C 는 HEAT_BAD(빨강) 쪽(79) — 그 행에 붙어 있다
         overall = 13 / 23 * 100
         f = _win.HEAT_FLOOR
         exp = lambda diff, end: _win._blend(  # noqa: E731
             T.PANEL, end, f + (1 - f) * min(abs(diff) / _win.PERIOD_HEAT_FULL_PP, 1.0)).name()
-        assert t.item(b, rate_col).background().color().name() == exp(60 - overall, T.HEAT_ATK)
-        assert t.item(c, rate_col).background().color().name() == exp(100 / 3 - overall, T.HEAT_DEF)
+        assert t.item(b, rate_col).background().color().name() == exp(60 - overall, T.HEAT_GOOD)
+        assert t.item(c, rate_col).background().color().name() == exp(100 / 3 - overall, T.HEAT_BAD)
         assert t.item(b, vs_col).text() == f"{60 - overall:+.1f}%p", t.item(b, vs_col).text()
         assert t.isSortingEnabled()
     finally:
@@ -2829,6 +2829,9 @@ def test_season_table_compares_with_previous_season():
         # 새 시즌 33.3%(승1 무1 패1 — 승÷전체) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
         assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 3 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
         assert t.item(rows["2025 시즌 8"], vs).text() == "—"
+        # 79 — 지난 시즌보다 내렸으면 빨강 · 비교 없는 칸은 칠하지 않는다
+        assert t.item(rows["2025 시즌 9"], vs).foreground().color() == QColor(T.BAD)
+        assert t.item(rows["2025 시즌 8"], vs).foreground().color() not in (QColor(T.BAD), QColor(T.GOOD))
         grade = cols.index("등급")
         assert t.item(rows["2025 시즌 9"], grade).text() == _win._division_names.get(900, "900")
         assert t.item(rows["2025 시즌 9"], grade).toolTip().startswith("최고 ")
@@ -7478,7 +7481,7 @@ def test_heat_colors_keep_text_readable():
     f = app_main.MainWindow.HEAT_FLOOR
     bad = []
     for mode, p in T._PALETTES.items():
-        for key in ("HEAT_ATK", "HEAT_DEF"):
+        for key in ("HEAT_GOOD", "HEAT_BAD"):
             for s in range(11):
                 bg = T.blend(p["PANEL"], p[key], f + (1 - f) * s / 10)
                 if T.contrast(p["TEXT"], bg) < 4.5:
@@ -7490,7 +7493,11 @@ def test_heat_colors_keep_text_readable():
             bad.append((mode, "흐린 막대 글자"))
     assert not bad, bad
     # 화면이 실제로 그 끝 색을 쓰는지(배선) — 기본 BAD/BLUE 가 아니다
-    assert (T.HEAT_ATK, T.HEAT_DEF) == (T._P["HEAT_ATK"], T._P["HEAT_DEF"]) and T.HEAT_ATK != T.BAD
+    assert (T.HEAT_GOOD, T.HEAT_BAD) == (T._P["HEAT_GOOD"], T._P["HEAT_BAD"]) and T.HEAT_BAD != T.BAD
+    # 79 — 높음은 초록 쪽(G 가 R 보다 큼) · 낮음은 빨강 쪽. 예전 높음 빨강 · 낮음 파랑으로 되돌리면 FAIL
+    for p in T._PALETTES.values():
+        g, b = QColor(p["HEAT_GOOD"]), QColor(p["HEAT_BAD"])
+        assert g.green() > max(g.red(), g.blue()) and b.red() > max(b.green(), b.blue()), (p["HEAT_GOOD"], p["HEAT_BAD"])
 
 
 def _palette_contrast_failures(p: dict) -> list:
@@ -7839,13 +7846,22 @@ def _wait(cond, timeout=5.0):
 
 
 def test_basis_bar_mixed_text():
-    # 섞인 Basis — 표본 글자는 "승패 N판", 숫자 뒤 *(식은 툴팁). 흐림 판정은 n(=rated)
+    # 섞인 Basis — 표본 글자는 "승패 N판", 숫자 뒤 *(식은 툴팁). 흐림 판정은 rated(wdl) = n
     from analysis import Basis, Insight
-    rows = [Insight(app_main.core.SEC_WIN, "x", "", 1.0, Basis("선제골 넣은 경기", 80.0, 5, 50.0, 8, mixed=True))]
-    bars = app_main.MainWindow._basis_bars(rows)
-    name, v, right, tip, weak = bars._rows[0]
-    assert "승패 5판" in right and "80.0%*" in right and weak, right
+    rows = [Insight(app_main.core.SEC_WIN, "x", "", 1.0,
+                    Basis("선제골 넣은 경기", 80.0, 5, 50.0, 8, mixed=True, wdl=(4, 2, 1)))]
+    box = app_main.MainWindow._basis_bars(rows)
+    name, row, tip = box.basis_rows[0]
+    side = row.side.text()
+    assert "승패 5판" in side and "80.0%*" in side and "전체 50.0%*" in side and row.bar.property("weak"), side
     assert "무승부를 빼고" in tip, tip
+    # 79 — 승·무·패 세 칸 + 색마다 %
+    assert row.bar.counts() == (4, 2, 1), row.bar.counts()
+    assert "57%" in row.bar.label.text() and "29%" in row.bar.label.text() and "14%" in row.bar.label.text(), \
+        row.bar.label.text()
+    # 승·무·패 수가 없는 Basis(옛 꼴)는 줄을 안 만든다 — 막대가 승률과 다른 수를 그리지 않게
+    assert app_main.MainWindow._basis_bars([Insight(app_main.core.SEC_WIN, "x", "", 1.0,
+                                                    Basis("y", 50.0, 10, 50.0, 8))]) is None
 
 
 def test_analysis_result_dots_and_basis_bars():
@@ -7853,10 +7869,10 @@ def test_analysis_result_dots_and_basis_bars():
     from PySide6.QtWidgets import QLabel
     keep = app_main.core.narrate
     found = [Insight(app_main.core.SEC_WIN, "선제골을 넣으면 승률 80%.", "", 5.0,
-                     Basis("선제골 넣은 경기", 80.0, 30, 50.0, 8)),
+                     Basis("선제골 넣은 경기", 80.0, 30, 50.0, 8, wdl=(24, 0, 6))),
              Insight(app_main.core.SEC_WIN, "득점의 30%가 헤더에서 나옵니다.", "", 4.0),       # basis 없음 — 막대 없음
              Insight(app_main.core.SEC_LOSE, "천적 상대로 4경기 승률 25%.", "", 3.0,
-                     Basis("천적 상대", 25.0, 4, 50.0, 6))]                                 # 표본 미달(일부러) — 흐림
+                     Basis("천적 상대", 25.0, 4, 50.0, 6, wdl=(1, 0, 3)))]                                 # 표본 미달(일부러) — 흐림
     app_main.core.narrate = lambda *a, **k: found
     try:
         _win._narrate_key = None
@@ -7867,17 +7883,19 @@ def test_analysis_result_dots_and_basis_bars():
         def bars(sec):
             box = _win.box_analysis[sec]
             return [box.itemAt(i).widget() for i in range(box.count())
-                    if isinstance(box.itemAt(i).widget(), charts.HBarList)]
+                    if hasattr(box.itemAt(i).widget(), "basis_rows")]
         win_bars, lose_bars = bars(app_main.core.SEC_WIN), bars(app_main.core.SEC_LOSE)
-        assert len(win_bars) == 1 and len(win_bars[0]._rows) == 1, "basis 있는 문장만 막대로"
-        name, v, right, tip, weak = win_bars[0]._rows[0]
-        assert (name, v, weak) == ("선제골 넣은 경기", 80.0, False) and "전체 50.0%" in right and "30경기" in right, right
-        assert lose_bars[0]._rows[0][4] is True, "표본 미달인데 흐리지 않았다"
+        assert len(win_bars) == 1 and len(win_bars[0].basis_rows) == 1, "basis 있는 문장만 막대로"
+        name, row, tip = win_bars[0].basis_rows[0]
+        right = row.side.text()
+        assert name == "선제골 넣은 경기" and not row.bar.property("weak") and "전체 50.0% 대비 +30.0%p" in right, right
+        assert row.bar.counts() == (24, 0, 6), "근거 막대가 승·무·패 세 칸이 아니다(79)"
+        assert lose_bars[0].basis_rows[0][1].bar.property("weak") is True, "표본 미달인데 흐리지 않았다"
         assert "*" not in right, "한 집단 식인데 * 를 붙였다"
         assert bars(app_main.core.SEC_FLOW) == [], "문장이 없는 섹션에 막대가 생겼다"
         box = _win.box_analysis[app_main.core.SEC_WIN]
         heads = [lb for i in range(box.count()) if (w := box.itemAt(i).widget()) is not None
-                 for lb in w.findChildren(QLabel) if "선제골" in lb.text()]
+                 for lb in w.findChildren(QLabel) if "선제골을" in lb.text()]   # 근거 줄 이름("선제골 넣은 경기")은 뺀다
         assert len(heads) == 1, [h.text() for h in heads]
         h = heads[0].text()
         assert f"<span style='color:{T.GOOD}'>80%</span>" in h and h.startswith(f"<span style='color:{T.TEXT}'>"), h
@@ -11301,7 +11319,7 @@ def test_metric_row_and_avg_bar_parts_67():
     lst.set_filter(lambda r: r.rank == 1)
     assert lst.rowCount() == 1 and xs[0] == [s.rect.left() for s in dg.layout(rows[0], QRectF(0, 0, 900, 60), lst.font())
                                              if s.role.startswith("cell")], "거르기로 칸 폭이 흔들렸다"
-    for better, above, below in ((True, T.ACCENT_FILL, T.WARN_FILL), (False, T.WARN_FILL, T.ACCENT_FILL)):
+    for better, above, below in ((True, T.GOOD_FILL, T.BAD_FILL), (False, T.BAD_FILL, T.GOOD_FILL)):
         bars = widgets.AvgBarList(higher_better=better)
         bars.resize(600, 200)
         items = [widgets.AvgBar("위", 30.0, "30"), widgets.AvgBar("아래", 10.0, "10", "5명"), widgets.AvgBar("없음", None, "—")]
@@ -13298,6 +13316,175 @@ def test_explainer_notes_gone_78():
     assert not hits, hits
     back = [a for a in GONE_NOTE_ATTRS if hasattr(_win, a)]
     assert not back, back
+
+# ── 79단계(3.3.1 ⑤ 색 규칙): 색마다 % · 좋은 값 초록 / 나쁜 값 빨강 · 근거 막대 승·무·패 ─────────────────────────
+import widgets  # noqa: E402
+from PySide6.QtGui import QColor  # noqa: E402 — 79 검사들과 시즌·열 색 검사가 모듈 이름으로 쓴다
+
+
+def test_79_share_pcts_sum_to_100():
+    import random
+    sp = widgets.share_pcts
+    assert sp((1, 1, 1)) == [34, 33, 33] and sp((4, 2, 1)) == [57, 29, 14], (sp((1, 1, 1)), sp((4, 2, 1)))
+    assert sp((0, 0, 0)) == [0, 0, 0] and sp((3, 0, 0)) == [100, 0, 0] and sp((1, 2)) == [33, 67]
+    rnd = random.Random(79)
+    for _ in range(500):
+        c = [rnd.randint(0, 50) for _ in range(rnd.randint(2, 4))]
+        got = sp(c)
+        assert sum(got) == (100 if sum(c) else 0), (c, got)
+        assert all(abs(g - n * 100 / sum(c)) < 1 for g, n in zip(got, c)) if sum(c) else True, (c, got)
+
+
+def test_79_multi_color_bars_show_percent_per_color():
+    from types import SimpleNamespace
+    from PySide6.QtCore import QRectF
+    from PySide6.QtWidgets import QLabel
+    bar = widgets.WdlBar(4, 2, 1)
+    txt = bar.label.text()
+    assert "4승 57%" in txt and "2무 29%" in txt and "1패 14%" in txt, txt
+    empty = widgets.WdlBar(0, 0, 0)
+    assert "%" not in empty.label.text(), "0경기에 0% 를 적었다"
+    lst = widgets.RateRowList()
+    z = {sg.role: sg.text for sg in lst.rate_delegate.layout(widgets.RateRow("z", win=2, lose=2), QRectF(0, 0, 900, 60),
+                                                             lst.font())}
+    assert (z["win"], z["draw"], z["lose"]) == ("2승 50%", "0무", "2패 50%"), z
+    row = widgets.RateRow("x", win=4, draw=2, lose=1, rate_text="57.1%")
+    segs = {sg.role: sg.text for sg in lst.rate_delegate.layout(row, QRectF(0, 0, 900, 60), lst.font())}
+    assert (segs["win"], segs["draw"], segs["lose"]) == ("4승 57%", "2무 29%", "1패 14%"), segs
+    rows = widgets.ShotTypeRows()
+    rows.set_data([SimpleNamespace(label="중거리", shots=10, on_target=6, goals=3)], 1)
+    texts = [w.text() for w in rows.findChildren(QLabel)]
+    assert "시도 10 · 골 3 · 막힘 3 30% · 빗나감 4 40%" in texts, texts   # 골 몫은 오른쪽 전환율 칸
+    assert "30%" in texts, texts
+    rows.set_data([SimpleNamespace(label="중거리", shots=3, on_target=2, goals=1)], 5)   # 작은 표본 — 전환율처럼 숨김
+    texts = [w.text() for w in rows.findChildren(QLabel) if w.text().startswith("시도")]
+    assert texts[-1] == "시도 3 · 골 1 · 막힘 1 · 빗나감 1", texts
+    zbar = widgets.WdlBar(3, 0, 1)
+    zero = zbar.label.text()
+    assert "0무<" in zero and "0무 " not in zero, "0경기 칸에 % 를 붙였다"
+    vb = widgets.VersusBar("다음 골", T.OPP_FILL)
+    vb.set_values(3, 1, "{:,.0f}", "골", shares=True)
+    assert "3골 75%" in vb.nums.text() and "1골 25%" in vb.nums.text(), vb.nums.text()
+    vb.set_values(82, 79, "{:.0f}", "%")   # 값 자체가 비율인 줄 — 몫 % 를 안 붙인다(기본 끔)
+    assert "51%" not in vb.nums.text() and "49%" not in vb.nums.text(), vb.nums.text()
+    # % 가 붙어 길어진 승·무·패 글은 줄바꿈을 허락한다 — 아니면 막대 최소 폭이 글 한 줄 폭이 돼 좁은 칸에서 가로로 넘친다
+    assert bar.label.wordWrap(), "WdlBar 글이 줄바꿈을 안 한다"
+    long_bar = widgets.WdlBar(1234, 567, 890)
+    one_line = long_bar.label.fontMetrics().horizontalAdvance(long_bar.label.text().replace("<", " <"))
+    assert long_bar.minimumSizeHint().width() < one_line, (long_bar.minimumSizeHint().width(), one_line)
+
+
+def test_79_avg_bar_colors_mean_good_and_bad():
+    # 보상 탭 평균 막대(피드백 18) — 기준(점선) 이상 = 좋음 초록 · 아래 = 나쁨 빨강. 예전 강조/주의(노랑)는 뜻이 안 읽혔다
+    assert T.GOOD_FILL != T.ACCENT_FILL or T.BAD_FILL != T.WARN_FILL, "비교가 비었다 — 옛 색과 새 색이 같다"
+    lst = widgets.AvgBarList()
+    lst.set_rows([widgets.AvgBar("위", 12.0, "12"), widgets.AvgBar("아래", 8.0, "8")], base=10.0)
+    d = lst.bar_delegate
+    assert d.colors(widgets.AvgBar("위", 12.0, "12"))["bar"] == T.GOOD_FILL
+    assert d.colors(widgets.AvgBar("아래", 8.0, "8"))["bar"] == T.BAD_FILL
+    low = widgets.AvgBarList(higher_better=False)   # 판수처럼 적을수록 좋은 줄은 뒤집힌다
+    low.set_rows([widgets.AvgBar("위", 12.0, "12")], base=10.0)
+    assert low.bar_delegate.colors(widgets.AvgBar("위", 12.0, "12"))["bar"] == T.BAD_FILL
+    # 색 뜻은 제목 말풍선에(화면 글로 안 늘린다 — 78)
+    assert _win.lb_rboard_tc_title.toolTip() == app_main.MainWindow.RBOARD_COLOR_TIP
+    assert "초록" in app_main.MainWindow.RBOARD_COLOR_TIP and "빨강" in app_main.MainWindow.RBOARD_COLOR_TIP
+
+
+def test_79_next_goal_is_two_color_bars():
+    _win._go_page("승부처 분석", "리드·골 흐름")
+    _win._render_goal_flow(_win._details)
+    gf = app_main.core.goal_flow(_win._details, _win._ouid)
+    want = {k: (mine, total) for k, total, mine in (("trail", gf.trail_goals, gf.trail_mine),
+                                                    ("lead", gf.lead_goals, gf.lead_goals - gf.lead_theirs)) if total}
+    assert want, "픽스처에 점수 차가 난 상태의 골이 없다 — 이 검사가 비었다"
+    assert set(_win.next_goal_bars) == set(want), (set(_win.next_goal_bars), set(want))
+    for k, (mine, total) in want.items():
+        bar = _win.next_goal_bars[k]
+        assert abs(bar.strip.share - mine / total) < 1e-9 and bar.strip.opp_color == T.OPP_FILL, (k, bar.strip.share)
+        pm, po = widgets.share_pcts((mine, total - mine))
+        assert f"{mine:,}골 {pm}%" in bar.nums.text() and f"{total - mine:,}골 {po}%" in bar.nums.text(), bar.nums.text()
+    # 리드별 줄 이름이 안 잘린다 — 고정 132px 은 16px 글씨에서 "최대 1골 리드 (197)" 를 잘랐다(79 실화면)
+    from PySide6.QtWidgets import QLabel
+    names = [lb for w in _live_widgets(_win.box_goalflow["lead"]) for lb in w.findChildren(QLabel)
+             if "리드 (" in lb.text()]
+    assert len(names) >= 2, "리드별 줄 이름을 못 찾았다 — 이 검사가 비었다"
+    assert all(lb.width() >= lb.fontMetrics().horizontalAdvance(lb.text()) for lb in names), \
+        [(lb.text(), lb.width(), lb.fontMetrics().horizontalAdvance(lb.text())) for lb in names]
+    assert len({lb.width() for lb in names}) == 1, "줄마다 이름 칸 폭이 달라 막대 시작이 어긋난다"
+    # 폭은 글자에서 잰다 — 고정 px 이면 이 픽스처·글꼴에선 우연히 넉넉해도 글씨가 커지면 자른다(글꼴과 무관하게 배선을 잰다)
+    longest = max(lb.fontMetrics().horizontalAdvance(lb.text()) for lb in names)
+    assert names[0].width() == app_main.MainWindow._same_width(names) == longest + 8, (names[0].width(), longest)
+    _win._render_goal_flow([])
+    assert _win.next_goal_bars == {}
+    _win._render_goal_flow(_win._details)
+
+
+def test_79_compare_table_marks_worse_side_red():
+    import dataclasses
+    half = _MATCHES[: max(1, len(_MATCHES) // 2)]
+    saved = (_win._fill_compare_squad, _win._compare_last)
+    _win._fill_compare_squad = lambda *a: None
+    t = _win.tbl_compare
+    try:
+        # 상대 전패 → 내 승률 칸 초록 · 상대 전승 → 내 승률 칸 빨강(양쪽 갈래를 다 지난다)
+        for result, want in (("패", (T.GOOD, T.BAD)), ("승", (T.BAD, T.GOOD))):
+            opp = [dataclasses.replace(m, match_id=f"o{i}", result=result) for i, m in enumerate(half)]
+            _win._compare_last = ("상대", opp, "opp", [], "")
+            _win._rerender_compare()
+            rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
+            r = rows["승률"]
+            mine, theirs = t.item(r, 1).foreground().color(), t.item(r, 2).foreground().color()
+            assert (mine, theirs) == tuple(QColor(c) for c in want), (result, mine.name(), theirs.name())
+            colored = 0
+            for r in range(t.rowCount()):
+                pair = {t.item(r, c).foreground().color().name() for c in (1, 2)}
+                if QColor(T.GOOD).name() in pair or QColor(T.BAD).name() in pair:
+                    colored += 1
+                    assert pair == {QColor(T.GOOD).name(), QColor(T.BAD).name()}, (t.item(r, 0).text(), pair)
+            assert colored >= 1
+    finally:
+        _win._fill_compare_squad, _win._compare_last = saved
+
+
+def test_79_player_extremes_rule_and_wiring():
+    pe = app_main.MainWindow.player_extremes
+    assert pe([1, 5, 5, 0], [True, True, True, False]) == ({1, 2}, {0}), "GK·출전 미달(후보 밖)이 최저가 됐다"
+    assert pe([3, 3], [True, True]) == (set(), set()) and pe([9, 1], [True, False]) == (set(), set())
+    attr = {"기대득점률": "expected_goal_rate", "공격P": "attack_point", "골": "goal", "어시": "assist",
+            "패스%": "pass_rate", "드리블%": "dribble_rate", "공중볼%": "aerial_rate", "가로채기": "intercept",
+            "태클%": "tackle_rate", "블록%": "block_rate", "평점": "rating"}
+    assert set(attr) == set(app_main.MainWindow.PLAYER_EXTREME_COLUMNS)
+    assert not {"선방력", "출전", "승률"} & set(app_main.MainWindow.PLAYER_EXTREME_COLUMNS), "U9 — 칠하지 않는 열"
+    import core_api
+    keep = core_api.MIN_PLAYER_GAMES
+    core_api.MIN_PLAYER_GAMES = 1
+    try:
+        _win._render_players(_win._slice()[1])
+        players = app_main.core.aggregate_players(_win._slice()[1], _win._ouid,
+                                                  pos_name=lambda p: _win._positions.get(p, str(p)))
+        tb = _win.tbl_players
+        by_id = {tb.item(r, 1).data(Qt.ItemDataRole.UserRole): r for r in range(tb.rowCount())}
+        cand = [p for p in players if app_main.core.position_line(p.pos_code) != "GK"]
+        good, bad = QColor(T.GOOD).name(), QColor(T.BAD).name()
+        marked = 0
+        for name, a in attr.items():
+            c = _win.PLAYER_COLUMNS.index(name)
+            vals = [getattr(p, a) for p in cand]
+            hi, lo = max(vals), min(vals)
+            for p in players:
+                fg = tb.item(by_id[p.sp_id], c).foreground().color().name()
+                is_gk = app_main.core.position_line(p.pos_code) == "GK"
+                exp = None if is_gk or hi == lo else good if getattr(p, a) == hi else bad if getattr(p, a) == lo else None
+                if exp is None:
+                    assert fg not in (good, bad), (name, p.name, fg)
+                else:
+                    assert fg == exp, (name, p.name, getattr(p, a), hi, lo, fg)
+                    marked += 1
+        assert marked >= 2 * len(attr) - 2, marked
+    finally:
+        core_api.MIN_PLAYER_GAMES = keep
+        _win._render_players(_win._slice()[1])
+
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

@@ -1968,6 +1968,9 @@ class WdlBar(QWidget):
         self.label = QLabel()
         self.label.setTextFormat(Qt.TextFormat.RichText)
         self.label.setStyleSheet("border: none; font-weight: bold;")
+        # 79 — 칸마다 % 가 붙어 글이 길어졌다. 줄바꿈을 허락해야 막대 최소 폭이 글 한 줄 폭이 되지 않는다
+        # (구단주 비교 › 리드별 줄이 1280 창에서 가로로 넘쳤다)
+        self.label.setWordWrap(True)
         for x in ((self.label, self.strip) if text_first else (self.strip, self.label)):
             v.addWidget(x)
         self.set_counts(w, d, l, weak)
@@ -1992,9 +1995,11 @@ class WdlBar(QWidget):
 
 
 def wdl_html(w: int, d: int, l: int) -> str:
-    """승·무·패 글 줄(리치 텍스트) — 승은 좋음, 패는 나쁨, 무는 보통 글자."""
-    return (f"<span style='color:{T.GOOD}'>{w:,}승</span> <span style='color:{T.TEXT}'>{d:,}무</span>"
-            f" <span style='color:{T.BAD}'>{l:,}패</span>")
+    """승·무·패 글 줄(리치 텍스트) — 승은 좋음, 패는 나쁨, 무는 보통 글자 · 칸마다 % (79 — 0경기면 % 없이)."""
+    pw, pd, pl = share_pcts((w, d, l))
+    pct = lambda n, p: f" {p}%" if n else ""   # noqa: E731 — 0경기 칸은 막대에 색이 없어 % 도 없다
+    return (f"<span style='color:{T.GOOD}'>{w:,}승{pct(w, pw)}</span> · <span style='color:{T.TEXT}'>{d:,}무{pct(d, pd)}</span>"
+            f" · <span style='color:{T.BAD}'>{l:,}패{pct(l, pl)}</span>")
 
 
 def tag_qss(color: str, selector: str, extra: str = "") -> str:
@@ -2079,22 +2084,29 @@ class VersusBar(QWidget):
         self.strip.opp_color = opp_color
         v.addWidget(self.strip)
 
-    def set_values(self, mine: float, opp: float, fmt: str = "{:.0f}", unit: str = "") -> None:
+    def set_values(self, mine: float, opp: float, fmt: str = "{:.0f}", unit: str = "", shares: bool = False) -> None:
+        """shares — 두 값이 한 전체를 나눈 개수일 때만(79 — 다음 골 나/상대) 칸마다 % 를 붙인다. 성공률처럼 값 자체가
+        비율인 줄(82% vs 79%)에 붙이면 "51% 대 49%" 로 틀리게 읽히니 기본은 끔."""
         ahead = mine > opp
+        if shares:
+            pm, po = share_pcts((mine, opp))
+            unit_m, unit_o = f"{unit} {pm}%", f"{unit} {po}%"
+        else:
+            unit_m = unit_o = unit
         if self.strip.opp_color is None:
             col = T.ACCENT if ahead else T.TEXT
-            self.nums.setText(f"<b style='color:{col}'>{fmt.format(mine)}{unit}</b>"
-                              f" <span style='color:{T.TEXT_DIM}'>vs {fmt.format(opp)}{unit}</span>")
+            self.nums.setText(f"<b style='color:{col}'>{fmt.format(mine)}{unit_m}</b>"
+                              f" <span style='color:{T.TEXT_DIM}'>vs {fmt.format(opp)}{unit_o}</span>")
         else:
             # 상세 창 꼴 — 파울처럼 적을수록 좋은 줄도 있어 좋고 나쁨 색 대신 큰 쪽만 굵게(작은 쪽 흐림 · 같으면 둘 다 보통)
-            def num(v: float, big: bool, same: bool) -> str:
-                text = f"{fmt.format(v)}{unit}"
+            def num(v: float, big: bool, same: bool, u: str) -> str:
+                text = f"{fmt.format(v)}{u}"
                 if same:
                     return f"<span style='color:{T.TEXT}'>{text}</span>"
                 return f"<b style='color:{T.TEXT}'>{text}</b>" if big else f"<span style='color:{T.TEXT_DIM}'>{text}</span>"
             same = fmt.format(mine) == fmt.format(opp)
-            self.nums.setText(f"{num(mine, ahead, same)} <span style='color:{T.TEXT_DIM}'>vs</span> "
-                              f"{num(opp, opp > mine, same)}")
+            self.nums.setText(f"{num(mine, ahead, same, unit_m)} <span style='color:{T.TEXT_DIM}'>vs</span> "
+                              f"{num(opp, opp > mine, same, unit_o)}")
         tot = mine + opp
         self.strip.share = mine / tot if tot else 0.5
         self.mine_ahead = ahead
@@ -2600,8 +2612,11 @@ class RateRowDelegate(QStyledItemDelegate):
         h = max(fm["bold"].height(), fm["main"].height())
         segs: list[CardSeg] = []
         # 오른쪽 숫자 — 폭을 먼저 재서 왼쪽 이름이 쓸 수 있는 끝을 정한다
-        nums = [("games", f"{row.games:,}경기", "small"), ("win", f"{row.win:,}승", "bold"),
-                ("draw", f"{row.draw:,}무", "bold"), ("lose", f"{row.lose:,}패", "bold"), ("rate", row.rate_text, "bold")]
+        pw, pd, pl = share_pcts((row.win, row.draw, row.lose))   # 79 — 막대 색마다 %
+        pct = lambda n, p: f" {p}%" if n else ""   # noqa: E731 — 0경기 칸은 막대에 색이 없어 % 도 없다
+        nums = [("games", f"{row.games:,}경기", "small"), ("win", f"{row.win:,}승{pct(row.win, pw)}", "bold"),
+                ("draw", f"{row.draw:,}무{pct(row.draw, pd)}", "bold"), ("lose", f"{row.lose:,}패{pct(row.lose, pl)}", "bold"),
+                ("rate", row.rate_text, "bold")]
         if row.diff is not None and not row.weak:
             nums.append(("diff", f"({row.diff:+.1f})", "main"))
         if row.weak and row.sample:
@@ -3030,7 +3045,8 @@ class AvgBarDelegate(QStyledItemDelegate):
         """기준(평균) 위가 좋음이면 위 = 강조 채움 · 아래 = 주의 채움(higher_better=False 면 뒤집는다 — 판수는 적을수록 좋다)."""
         above = row.value is not None and row.value >= self.view.base
         good = above if self.view.higher_better else not above
-        return {"bar": T.ACCENT_FILL if good else T.WARN_FILL, "text": T.TEXT, "n": T.TEXT_DIM, "name": T.TEXT,
+        # 79 — 기준(점선) 이상 = 좋음 초록 · 아래 = 나쁨 빨강(예전 강조 초록 / 주의 노랑은 뜻이 안 읽혔다 — 피드백 18)
+        return {"bar": T.GOOD_FILL if good else T.BAD_FILL, "text": T.TEXT, "n": T.TEXT_DIM, "name": T.TEXT,
                 "track": T.PANEL_2, "base": T.TEXT_DIM}
 
     def paint(self, painter, option, index) -> None:
@@ -3149,9 +3165,17 @@ class ShotTypeRows(QWidget):
             self.rows.append((b.label, b.shots, b.on_target, b.goals, conv))
             name = QLabel(b.label)
             name.setStyleSheet(f"color: {T.TEXT};")
-            counts = QLabel(f"시도 {b.shots:,} · 유효 {b.on_target:,} · 골 {b.goals:,}")
+            parts = (b.goals, b.on_target - b.goals, b.shots - b.on_target)
+            # 79 — 막대 세 색마다 %. 골 몫은 오른쪽 전환율 칸(골 ÷ 시도)이 말하고, 막힘·빗나감도 같은 식(÷ 시도 · 보통
+            # 반올림 — 전환율과 반올림이 갈리면 "골 39%" 옆에 "40%" 가 선다). 작은 표본이면 전환율처럼 % 를 숨긴다
+            share = (lambda n: f" {n / b.shots * 100:.0f}%") if b.shots and not weak else (lambda n: "")
+            counts = QLabel(f"시도 {b.shots:,} · 골 {b.goals:,} · 막힘 {parts[1]:,}{share(parts[1])}"
+                            f" · 빗나감 {parts[2]:,}{share(parts[2])}")
+            # 79 — % 가 붙어 글이 길어졌다. 줄바꿈을 허락해야 최소 폭이 글 한 줄 폭이 되지 않는다
+            # (안 하면 [경기 결과]·구단주 비교 슛 지도가 1280 창에서 가로로 넘쳤다 — 스모크 실측 962 < 1161)
+            counts.setWordWrap(True)
             counts.setStyleSheet(f"color: {T.TEXT_DIM};")
-            strip = _StackStrip(self, (b.goals, b.on_target - b.goals, b.shots - b.on_target), peak, self.tone, weak)
+            strip = _StackStrip(self, parts, peak, self.tone, weak)
             rate = QLabel(conv)
             rate.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold;")
             rate.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -4113,6 +4137,21 @@ class ShotMapWidget(QWidget):
 
 def wdl_text(w: int, d: int, l: int) -> str:
     return f"{w}승 {d}무 {l}패"
+
+
+def share_pcts(counts) -> list[int]:
+    """색이 여러 개인 막대의 칸별 % (79 — 색마다 % 를 늘 적는다). 정수 % 를 최대 나머지 방식으로 — 합이 늘 100
+    (각각 반올림하면 33·33·33 = 99 처럼 합이 어긋나 읽는 사람이 계산이 틀렸다고 본다). 합이 0 이면 전부 0."""
+    counts = [max(0, int(n)) for n in counts]
+    total = sum(counts)
+    if not total:
+        return [0] * len(counts)
+    raw = [n * 100 / total for n in counts]
+    out = [int(x) for x in raw]
+    order = sorted(range(len(raw)), key=lambda i: (-(raw[i] - out[i]), i))
+    for i in order[:100 - sum(out)]:
+        out[i] += 1
+    return out
 
 
 def rate_of(w: int, d: int, l: int, mixed: bool) -> float:

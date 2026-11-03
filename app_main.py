@@ -4343,7 +4343,7 @@ class MainWindow(QMainWindow):
         self.tbl_period.setSortingEnabled(True)
 
     def _tint_period_rows(self, periods: list, overall: float) -> None:
-        """승률·평균 대비 칸 — 평균보다 높으면 HEAT_ATK, 낮으면 HEAT_DEF 쪽으로(불투명, 표 함정 2번).
+        """승률·평균 대비 칸 — 평균보다 높으면 HEAT_GOOD(초록), 낮으면 HEAT_BAD(빨강) 쪽으로(79)(불투명, 표 함정 2번).
         최고·최저 기간은 굵게 — 후보는 경기 ≥ MIN_COND 인 기간만(4판짜리 주가 최고가 되지 않게).
         미달 기간은 칠하지 않고 흐리게 + 툴팁. 행 r = periods[r] 이어야 한다(정렬은 이 뒤에 켠다)."""
         t = self.tbl_period
@@ -4370,7 +4370,7 @@ class MainWindow(QMainWindow):
             diff = p.win_rate - overall
             frac = min(abs(diff) / self.PERIOD_HEAT_FULL_PP, 1.0)
             for it in cells:
-                self._heat(it, frac, T.HEAT_ATK if diff > 0 else T.HEAT_DEF)
+                self._heat(it, frac, T.HEAT_GOOD if diff > 0 else T.HEAT_BAD)
             for kind, idx in (("최고", best), ("최저", worst)):
                 if r == idx:
                     for it in cells:
@@ -4554,28 +4554,44 @@ class MainWindow(QMainWindow):
         self._render_streak_after(self._matches)
 
     @staticmethod
-    def _basis_bars(rows: list) -> charts.HBarList | None:
-        """섹션 문장 중 조건부 승률(basis)이 있는 것만 막대로 — 조건 승률 vs 기준 승률.
+    def _same_width(labels: list) -> int:
+        """줄 이름 칸 폭 — 목록 안 가장 긴 이름(글자 폭 + 여백). 고정 px 은 글씨가 커지면 이름을 잘랐다(79 실화면)."""
+        return max((lb.fontMetrics().horizontalAdvance(lb.text()) for lb in labels), default=0) + 8
 
-        흐림은 basis.min_n(문장을 낸 표본 기준과 같은 값) — 문장이 나왔으면 흐리지 않다."""
-        data = []
-        for ins in rows:
-            b = ins.basis
-            if b is None:
-                continue
-            gap = b.rate - b.base_rate
-            star = "*" if b.mixed else ""   # 막대 글자는 좁은 칸 — 식은 툴팁(win_rate_text 의 short 와 같은 표시)
-            n_text = f"승패 {b.n:,}판" if b.mixed else f"{b.n:,}경기"   # 표본 글자도 분모(rated)로
-            data.append((b.label, b.rate,
-                         f"{b.rate:.1f}%{star} · {n_text} · {b.base_label} {b.base_rate:.1f}%{star}",
-                         f"{b.label}: 승률 {b.rate:.1f}% ({n_text})\n"
-                         f"{b.base_label} {b.base_rate:.1f}% 대비 {gap:+.1f}%p\n{win_rate_note(b.mixed)}",
-                         core.is_weak(b.n, b.min_n)))
-        if not data:
+    @staticmethod
+    def _basis_bars(rows: list) -> QWidget | None:
+        """섹션 문장 중 조건부 승률(basis)이 있는 것만 줄로 — 승·무·패 세 칸 막대(색마다 %) + 기준 대비 %p(79 U2).
+
+        한 색 막대(옛 charts.HBarList)는 승률 하나만 보여 줬다. 흐림은 basis.min_n(문장을 낸 표본 기준과 같은 값 —
+        wdl_rate_bar 가 rated(wdl) 로 다시 재는데 Basis.n 이 그 값이다 · test_analysis 가 짝을 지킨다).
+        테스트는 돌려준 위젯의 basis_rows[(이름, 줄 위젯, 툴팁)] 를 읽는다."""
+        items = [ins.basis for ins in rows if ins.basis is not None and ins.basis.wdl is not None]
+        if not items:
             return None
-        bars = charts.HBarList()
-        bars.set_data(data)
-        return bars
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(2)
+        box.basis_rows = []
+        names = [QLabel(b.label) for b in items]
+        same_w = MainWindow._same_width(names)
+        for b, name in zip(items, names):
+            gap = b.rate - b.base_rate
+            line = QWidget()
+            h = QHBoxLayout(line)
+            h.setContentsMargins(4, 2, 4, 2)
+            name.setStyleSheet(f"color: {T.TEXT_DIM};")
+            name.setFixedWidth(same_w)
+            h.addWidget(name)
+            star = "*" if b.mixed else ""
+            bar = wdl_rate_bar(*b.wdl, f"{b.base_label} {b.base_rate:.1f}%{star} 대비 {gap:+.1f}%p", b.min_n, b.mixed)
+            tip = (f"{b.label}: 승률 {b.rate:.1f}%\n"
+                   f"{b.base_label} {b.base_rate:.1f}% 대비 {gap:+.1f}%p\n{win_rate_note(b.mixed)}")
+            line.setToolTip(tip)
+            h.addWidget(bar, 1)
+            v.addWidget(line)
+            box.basis_rows.append((b.label, bar, tip))
+        return box
 
     def _render_streak_after(self, matches: list) -> None:
         """연승·연패 1·2·3+ 직후 다음 경기 승률 — 막대 + 전체 승률 대비 ±%p.
@@ -4670,14 +4686,15 @@ class MainWindow(QMainWindow):
     def _goal_flow_lead_rows(box: QVBoxLayout, gf) -> None:
         """최대 리드별 결과 줄들 — [리드·골 흐름]과 구단주 비교(D1)가 같이 쓴다."""
         dim = f"color: {T.TEXT_DIM};"
-        for r in gf.leads:
-            label = f"{r.lead}골 이상 리드" if r.lead >= core.MAX_LEAD else f"최대 {r.lead}골 리드"
+        names = [QLabel(f"{f'{r.lead}골 이상 리드' if r.lead >= core.MAX_LEAD else f'최대 {r.lead}골 리드'} ({r.games:,})")
+                 for r in gf.leads]
+        same_w = MainWindow._same_width(names)
+        for r, a in zip(gf.leads, names):
             row = QWidget()
             h = QHBoxLayout(row)
             h.setContentsMargins(4, 2, 4, 2)
-            a = QLabel(f"{label} ({r.games:,})")
             a.setStyleSheet(dim)
-            a.setFixedWidth(132)
+            a.setFixedWidth(same_w)
             h.addWidget(a)
             if r.games:
                 h.addWidget(wdl_rate_bar(r.win, r.draw, r.lose, "", core.MIN_COND, gf.mixed), 1)
@@ -4711,6 +4728,7 @@ class MainWindow(QMainWindow):
 
         for box in self.box_goalflow.values():
             self._clear(box)
+        self.next_goal_bars = {}
         if not gf.replayed:
             line(self.box_goalflow["lead"], "골 순서를 되짚을 수 있는 경기가 없습니다.")
             return
@@ -4722,12 +4740,18 @@ class MainWindow(QMainWindow):
         self._goal_flow_kind_bars(self.box_goalflow["kind"], gf)
 
         box = self.box_goalflow["next"]
-        if gf.trail_goals:
-            line(box, f"내가 지고 있는 동안 나온 골 {gf.trail_goals:,}개 중 내가 넣은 것 {gf.trail_mine:,}개 "
-                      f"({gf.trail_mine / gf.trail_goals:.0%})", "뒤진 채로는 다음 골을 누가 넣는가")
-        if gf.lead_goals:
-            line(box, f"내가 앞서 있는 동안 나온 골 {gf.lead_goals:,}개 중 상대가 넣은 것 {gf.lead_theirs:,}개 "
-                      f"({gf.lead_theirs / gf.lead_goals:.0%})", "지고 있는 쪽(상대)이 다음 골을 넣는 비율")
+        # 79 — 글 두 줄 대신 나/상대 두 색 막대(색마다 %) · 막대는 테스트가 next_goal_bars 로 읽는다
+        for key, total, mine, label, tip in (
+                ("trail", gf.trail_goals, gf.trail_mine, "지고 있을 때 나온 골", "뒤진 채로는 다음 골을 누가 넣는가"),
+                ("lead", gf.lead_goals, gf.lead_goals - gf.lead_theirs, "앞서 있을 때 나온 골",
+                 "지고 있는 쪽(상대)이 다음 골을 넣는 비율")):
+            if not total:
+                continue
+            bar = VersusBar(f"{label} {total:,}개 · 나 vs 상대", T.OPP_FILL)
+            bar.set_values(mine, total - mine, "{:,.0f}", "골", shares=True)
+            bar.setToolTip(tip)
+            box.addWidget(bar)
+            self.next_goal_bars[key] = bar
         if not (gf.trail_goals or gf.lead_goals):
             line(box, "점수 차가 난 상태에서 나온 골이 없습니다.")
 
@@ -8153,6 +8177,9 @@ class MainWindow(QMainWindow):
         "empty": f"챔스 이상에서 {config.K11_MIN_GAMES}판 넘게 뛴 구단주가 아직 없습니다 — 수집이 쌓이면 보입니다.",
     }
 
+    # 79 — 막대 색 뜻(피드백 18). 화면 글로 안 늘리고 제목 말풍선으로(78 설명 글 빼기)
+    RBOARD_COLOR_TIP = "점선 = 전체 중앙값 · 초록 = 중앙값 이상 · 빨강 = 중앙값 아래"
+
     def _build_reward_board_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -8169,12 +8196,15 @@ class MainWindow(QMainWindow):
         v.addLayout(cards)
         grid = QHBoxLayout()
         left = QVBoxLayout()
-        left.addWidget(self._title_label("구단가치 구간별 100판당 (지금 값)"))
+        value_title = self._title_label("구단가치 구간별 100판당 (지금 값)")
+        value_title.setToolTip(self.RBOARD_COLOR_TIP)
+        left.addWidget(value_title)
         self.rboard_value_list = AvgBarList()
         left.addWidget(self.rboard_value_list)
         left.addStretch(1)
         right = QVBoxLayout()
         self.lb_rboard_tc_title = self._title_label("팀컬러별 100판당")
+        self.lb_rboard_tc_title.setToolTip(self.RBOARD_COLOR_TIP)
         right.addWidget(self.lb_rboard_tc_title)
         self.rboard_tc_list = AvgBarList()
         right.addWidget(self.rboard_tc_list)
@@ -9698,8 +9728,9 @@ class MainWindow(QMainWindow):
                     it.setToolTip(win_rate_text(s.win, s.draw, s.lose, mixed) + "\n" + win_rate_note(mixed))
             if higher_is_better is not None and mine_val != opp_val:
                 mine_wins = (mine_val > opp_val) == higher_is_better
-                item_mine.setForeground(QColor(T.GOOD if mine_wins else T.TEXT))
-                item_opp.setForeground(QColor(T.TEXT if mine_wins else T.GOOD))
+                # 79 — 좋은 쪽 초록 · 나쁜 쪽 빨강(같으면 둘 다 보통 글자)
+                item_mine.setForeground(QColor(T.GOOD if mine_wins else T.BAD))
+                item_opp.setForeground(QColor(T.BAD if mine_wins else T.GOOD))
         self.tbl_compare.refit()  # _fill 을 안 거치는 표
         units = {"평균 득점": ("", 2), "평균 실점": ("", 2)}
         for label, mine_txt, opp_txt, mine_val, opp_val, higher_is_better in rows:
@@ -12871,7 +12902,7 @@ class MainWindow(QMainWindow):
         sums = [summarize(group, mixed) for _, group in groups]
         divs = core.season_divisions(core.division_trend(self._details_all, self._ouid), groups)
         name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
-        rows, tips = [], []
+        rows, tips, diffs = [], [], []
         for i, ((season, group), s, dv) in enumerate(zip(groups, sums, divs)):
             if season is None:
                 label, span, key = "진행 중", f"{last_end:%Y-%m-%d} ~", 99999999
@@ -12884,7 +12915,8 @@ class MainWindow(QMainWindow):
                 diff = s.win_rate - prev.win_rate
                 vs = (f"{diff:+.1f}%p", diff)
             else:
-                vs = ("—", -1e9)
+                vs, diff = ("—", -1e9), None
+            diffs.append(diff)
             # 그림은 시즌을 끝낸 등급(dv[1]) — "A → B" 글자 앞에 B 의 배지
             grade = (IconCell(f"{name(dv[0])} → {name(dv[1])}" if dv[0] != dv[1] else name(dv[0]), -dv[1],
                               self._division_icon_key(dv[1]))
@@ -12903,6 +12935,10 @@ class MainWindow(QMainWindow):
                 (f"{s.avg_rating:.2f}", s.avg_rating),
             ])
         self._fill(self.tbl_seasons, rows, enable_sort=False)  # 툴팁을 채운 순서대로 붙인다(표 함정 1번)
+        vs_col = self.SEASON_COLUMNS.index("지난 시즌 대비")
+        for r, diff in enumerate(diffs):   # 79 — 올랐으면 초록 · 내렸으면 빨강(반올림 0 은 흐림)
+            if diff is not None:
+                delta_item(self.tbl_seasons.item(r, vs_col), diff)
         grade_col = self.SEASON_COLUMNS.index("등급")
         for r, tip in enumerate(tips):
             item = self.tbl_seasons.item(r, grade_col)
@@ -12962,6 +12998,7 @@ class MainWindow(QMainWindow):
         # 공격력(5열)·수비력(6열) — 고정 눈금 G8(theme.g8_cell — 표 안 다른 선수와 무관) · 포지션 기준 점수 미만은 "▽"
         # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 빠른 범위 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
         # 높은 승률이 나쁨으로 읽힌다). 출전 미달 선수는 색·▽ 를 안 붙인다(색은 few 경기부터 — 예전과 같은 규칙).
+        self._mark_player_extremes(players, enough, rows)
         res = [m.result for m in self._slice()[0]]
         team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
         for r, p in enumerate(players):
@@ -13005,6 +13042,39 @@ class MainWindow(QMainWindow):
 
     # 가장 낮은 단계도 바탕과 구분되게 — 0 이면 칠하지 않은 칸과 같아 보인다
     HEAT_FLOOR = 0.12
+
+    # 79 (피드백 12) — 공격력·수비력 오른쪽 지표마다 최고 초록 · 최저 빨강. 선방력은 GK 지표라 빼고(U9 — 출전·승률도
+    # 이 규칙 밖) · 전부 높을수록 좋은 지표다. 열 이름으로 고른다(열 순서가 바뀌어도 안 깨진다)
+    PLAYER_EXTREME_COLUMNS = ("기대득점률", "공격P", "골", "어시", "패스%", "드리블%", "공중볼%", "가로채기",
+                              "태클%", "블록%", "평점")
+
+    @staticmethod
+    def player_extremes(values: list[float], eligible: list[bool]) -> tuple[set[int], set[int]]:
+        """한 열의 (최고 행들, 최저 행들) — 후보(eligible)가 둘 미만이거나 전부 같은 값이면 둘 다 빈 집합.
+        같은 값이 여럿이면 다 칠한다(누구 하나만 고르면 정렬 순서가 색을 정한다)."""
+        cand = [i for i, ok in enumerate(eligible) if ok]
+        if len(cand) < 2:
+            return set(), set()
+        hi = max(values[i] for i in cand)
+        lo = min(values[i] for i in cand)
+        if hi == lo:
+            return set(), set()
+        return {i for i in cand if values[i] == hi}, {i for i in cand if values[i] == lo}
+
+    def _mark_player_extremes(self, players: list, enough: list[bool], rows: list) -> None:
+        """선수 지표 최고·최저 글자색 — 후보는 출전 미달이 아니고 GK 가 아닌 선수. 표시는 글자색만(배경은 공격력·수비력
+        G8 칸이 쓴다) · 색만으로 말하지 않게 말풍선에 "이 열 최고/최저". 테스트는 _player_extremes 를 읽는다."""
+        eligible = [ok and core.position_line(p.pos_code) != "GK" for p, ok in zip(players, enough)]
+        self._player_extremes = {}
+        for name in self.PLAYER_EXTREME_COLUMNS:
+            c = self.PLAYER_COLUMNS.index(name)
+            top, bottom = self.player_extremes([row[c][1] for row in rows], eligible)
+            self._player_extremes[name] = (top, bottom)
+            for r, color, word in [(r, T.GOOD, "최고") for r in top] + [(r, T.BAD, "최저") for r in bottom]:
+                it = self.tbl_players.item(r, c)
+                if it is not None:
+                    it.setForeground(QColor(color))
+                    it.setToolTip(f"{name} — GK·출전 미달을 뺀 선수 중 {word}")
 
     @staticmethod
     def _heat(item, frac: float | None, end_hex: str) -> None:

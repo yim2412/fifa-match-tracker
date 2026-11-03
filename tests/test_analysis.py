@@ -482,6 +482,7 @@ def _basis_cases():
 def test_every_basis_rule_fills_basis_with_its_numbers():
     cases = _basis_cases()
     assert set(cases) == set(analysis.BASIS_RULES), "basis 규칙 하나가 손 데이터 없이 빠졌다"
+    seen_labels: set = set()
     for name, (found, needle, want) in cases.items():
         hits = [i for i in found if needle in i.headline]
         assert hits, f"{name}: 문장이 안 나왔다"
@@ -491,6 +492,16 @@ def test_every_basis_rule_fills_basis_with_its_numbers():
         assert got == want, f"{name}: {b}"
         assert b.n >= b.min_n, f"{name}: 문장이 나왔는데 표본 미달로 흐려진다"
         assert b.label and b.base_label
+        # 79 — 근거 막대가 그리는 승·무·패가 그 승률·표본과 같은 묶음이어야 한다(다른 묶음의 수를 넣으면 FAIL).
+        # 첫 문장만 보면 같은 규칙의 다른 Basis(선제골 → 먼저 실점)가 검사 밖이라 문장마다 본다
+        withb = [i.basis for i in found if i.basis is not None]
+        for bb in withb:
+            assert bb.wdl is not None, f"{name}/{bb.label}: 승·무·패 수가 비었다"
+            assert abs(models.win_pct(*bb.wdl, bb.mixed) - bb.rate) < 1e-6, f"{name}/{bb.label}: wdl {bb.wdl} ≠ 승률 {bb.rate}"
+            assert analysis.rated(*bb.wdl, bb.mixed) == bb.n, f"{name}/{bb.label}: wdl {bb.wdl} ≠ 표본 {bb.n}"
+        seen_labels.update(bb.label for bb in withb)
+    # 선제골 규칙의 두 번째 근거(먼저 실점)가 손 데이터에서 실제로 나와야 위 짝 검사가 그 줄을 본다
+    assert "먼저 실점한 경기" in seen_labels, f"먼저 실점 근거가 안 나와 검사가 비었다: {seen_labels}"
 
 
 def test_basis_base_label_names_the_comparison():
