@@ -169,7 +169,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
    이전 정렬로 즉시 재정렬해, "채운 순서 = 원본 순서"로 칠한 색이 엉뚱한 행에 간다(두 번째 렌더부터만 터진다).
 2. **값 비례 배경색은 알파 대신 `T.PANEL` 과 섞은 불투명 색** — 알파는 줄무늬 행 색과 섞여 같은 값이 행마다 다르게 보인다.
 3. **전역 QSS 에 `font-size`/`font-family` 금지** — QSS 글꼴이 `setFont()` 를 이긴다. 기본 글꼴은 `theme.apply()` 의
-   `QApplication.setFont`. `test_setfont_sizes_survive_stylesheet`.
+   `QApplication.setFont`. `test_setfont_sizes_survive_stylesheet`. **반대로 표 머리글은 QSS 가 꾸미는 한 `setFont` 를 무시한다** —
+   크기는 `FitTableWidget._set_header_px`(글꼴 + 표 자신의 QSS 를 같이)로만 · 앱 QSS 머리글 규칙엔 `font-weight` 도 안 둔다(78 ③ — 실제 창에서만 보였다).
+   `test_header_paint_size_follows_fit_78`.
 4. **`FitTableWidget` 열 여백은 `_measure_pad()` 로 Qt 에 묻는다**(상수 금지 — 표 QSS 의 셀 padding). `test_player_table_cells_not_elided`.
 5. **창은 `MIN_WINDOW`(1280×720) 밑으로 안 줄고 그 크기에서 아무것도 안 잘린다** — 모든 표는 `_make_table` → `FitTableWidget`
    (`_fill` 끝 `refit()` · 안 거치는 표는 직접) · 정렬 화살표 자리는 정렬 중인 열에만 · 위쪽 바 `WrapBar` · 페이지 `VScrollArea`(세로만) ·

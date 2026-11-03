@@ -740,7 +740,7 @@ def test_player_table_cells_not_elided():
     tb = _win.tbl_players
     short = [(tb.horizontalHeaderItem(c).text(), tb.columnWidth(c), tb.sizeHintForColumn(c))
              for c in range(tb.columnCount())
-             if tb.columnWidth(c) < tb.sizeHintForColumn(c)]
+             if not tb.isColumnHidden(c) and tb.columnWidth(c) < tb.sizeHintForColumn(c)]   # 78 ③b — 숨긴 묶음 열은 폭 0 이 맞다
     assert not short, short
 
 
@@ -748,6 +748,88 @@ def _at_size(w, h):
     _win.resize(w, h)
     _app.processEvents()
     _app.processEvents()
+
+
+def test_content_max_width_78():
+    # 78 ③a — 본문 묶음(조회 바 + 페이지)은 CONTENT_MAX_W 에서 멈추고 가운데 선다. 1280 창은 그대로(상한이 안 걸린다).
+    cw = _win._content
+    keep = config.CONTENT_MAX_W
+    try:
+        assert cw.maximumWidth() == keep, (cw.maximumWidth(), keep)
+        box = _win._content_box
+        _at_size(*app_main.MIN_WINDOW)
+        assert cw.width() < keep, ("1280 에서 상한이 걸렸다 — 아무것도 안 바뀌어야 한다", cw.width(), keep)
+        # 상한보다 좁으면 본문이 틀의 폭을 다 쓴다 — 양옆 늘림 칸 시절엔 몇 px 를 뺏겨 [패스 스타일] 이 넘쳤다(실제 창 11-03)
+        assert cw.width() == box.width() and cw.x() == 0, ("1280 에서 본문이 폭을 잃었다", cw.x(), cw.width(), box.width())
+        # 조회 바가 한 줄로 들어가는 폭(+ 본문 좌우 여백)이 상한 안에 있다 — 아니면 넓은 창에서도 바가 두 줄이 된다(1360 이 그랬다)
+        pad = cw.layout().contentsMargins().left() + cw.layout().contentsMargins().right()
+        assert _win.top_bar.one_row_width() + pad <= keep, (_win.top_bar.one_row_width(), pad, keep)
+        _at_size(*app_main.LARGE_WINDOW)
+        assert app_main.LARGE_WINDOW[0] > keep + 100, "큰 창이 상한보다 충분히 넓지 않아 아무것도 안 잰다"
+        assert cw.width() == keep, (cw.width(), keep)
+        assert _win.top_bar._two_rows is False, ("상한 폭에서 조회 바가 두 줄이다", _win.top_bar.width(), _win.top_bar.one_row_width())
+        left, right_gap = cw.x(), box.width() - (cw.x() + cw.width())   # 틀은 왼쪽 메뉴 오른쪽부터 창 끝까지
+        assert abs(left - right_gap) <= 1 and left > 0, ("가운데가 아니다", left, right_gap)
+        # 배선 — 기본값이 아닌 상한(같은 값이면 배선이 끊겨도 참이다)
+        config.CONTENT_MAX_W = 1100
+        _win._apply_content_max()
+        _app.processEvents()
+        _app.processEvents()
+        assert cw.width() == 1100, cw.width()
+        left, right_gap = cw.x(), box.width() - (cw.x() + cw.width())
+        assert abs(left - right_gap) <= 1, (left, right_gap)
+    finally:
+        config.CONTENT_MAX_W = keep
+        _win._apply_content_max()
+        _at_size(1600, 900)
+
+
+def test_player_column_groups_78():
+    # 78 ③b — 선수 지표: 늘 보이는 열 + 칩 하나의 묶음만 보인다. 숨기기만 — 값·정렬·글씨 크기는 그대로.
+    cols = list(app_main.MainWindow.PLAYER_COLUMNS)
+    always = list(app_main.MainWindow.PLAYER_ALWAYS_COLUMNS)
+    groups = app_main.MainWindow.PLAYER_GROUPS
+    members = [n for _g, cs in groups for n in cs]
+    assert len(cols) == 19 and len(always) + len(members) == 19, (len(cols), len(always), len(members))
+    assert sorted(always + members) == sorted(cols), ("19열이 늘 보임 또는 묶음 하나에 정확히 안 들어간다",
+                                                       set(cols) ^ set(always + members), len(set(members)) != len(members))
+    _win._render_players(_win._slice()[1])
+    tb, seg = _win.tbl_players, _win.seg_player_group
+    s = _win._settings()
+    try:
+        _win._go_page("선수 지표", "지표")
+        _at_size(*app_main.MIN_WINDOW)
+        tb.sortByColumn(3, Qt.SortOrder.AscendingOrder)
+        _app.processEvents()
+        before = [tb.item(r, 1).data(Qt.ItemDataRole.UserRole) for r in range(tb.rowCount())]
+        assert tb.rowCount() >= 2
+        seg.set_current(1, emit=True)   # 첫 칩이 이미 눌려 있으면 눌러도 신호가 없다 — 한 번 옮겨 둔다
+        for i, (gname, gcols) in enumerate(groups):
+            seg.set_current(i, emit=True)
+            _app.processEvents()
+            shown = [tb.horizontalHeaderItem(c).text() for c in range(tb.columnCount()) if not tb.isColumnHidden(c)]
+            assert shown == [c for c in cols if c in set(always) | set(gcols)], (gname, shown)
+            assert tb.horizontalScrollBar().maximum() == 0, (gname, "가로 스크롤", tb.horizontalScrollBar().maximum())
+            assert tb.font().pixelSize() == T.TABLE_CELL_PX, (gname, tb.font().pixelSize(), T.TABLE_CELL_PX)
+            assert tb.horizontalHeader().sortIndicatorSection() == 3 and \
+                tb.horizontalHeader().sortIndicatorOrder() == Qt.SortOrder.AscendingOrder, gname
+            assert [tb.item(r, 1).data(Qt.ItemDataRole.UserRole) for r in range(tb.rowCount())] == before, (gname, "행 순서가 바뀜")
+            assert all(tb.columnWidth(c) >= tb.sizeHintForColumn(c) for c in range(tb.columnCount())
+                       if not tb.isColumnHidden(c)), gname
+            assert str(_win._settings().value(app_main.MainWindow.PLAYER_GROUP_KEY)) == gname, ("고른 칩을 안 남겼다", gname)
+            assert _win._saved_player_group() == i, (gname, _win._saved_player_group())
+        # 다시 그려도(재검색) 고른 묶음이 유지된다
+        _win._render_players(_win._slice()[1])
+        shown = [tb.horizontalHeaderItem(c).text() for c in range(tb.columnCount()) if not tb.isColumnHidden(c)]
+        assert shown == [c for c in cols if c in set(always) | set(groups[-1][1])], shown
+        # 모르는 저장값은 첫 칩
+        s.setValue(app_main.MainWindow.PLAYER_GROUP_KEY, "없는 묶음")
+        assert _win._saved_player_group() == 0
+    finally:
+        s.setValue(app_main.MainWindow.PLAYER_GROUP_KEY, groups[0][0])
+        s.sync()
+        seg.set_current(0, emit=True)
+        _at_size(1600, 900)
 
 
 def test_window_shrinks_to_min_without_squeezing():
@@ -1004,6 +1086,57 @@ def test_measure_text_same_as_measuring_everything():
         assert fm.horizontalAdvance(texts[1]) == widest and fm.horizontalAdvance(texts[0]) < widest, \
             (family, [fm.horizontalAdvance(s) for s in texts])  # 정말 '짧은 쪽이 넓은' 경우인지
         assert t._measure_text(fm, fm)[0] == widest, (family, t._measure_text(fm, fm)[0], widest)
+
+
+def test_header_paint_size_follows_fit_78():
+    # 78 ③ — 앱 QSS 가 머리글 칸을 꾸미면 Qt 는 머리글을 setFont 가 아니라 QSS 글꼴로 그린다(실제 창: 재는 14px · 그리는 16px,
+    # 표만의 QSS 가 있던 선수 지표는 약 9px). 그래서 머리글 크기는 표 QSS 에도 싣는다 — 재는 크기 = 싣는 크기 · 표마다 준 QSS 는 남는다.
+    import re
+    import widgets
+    from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
+
+    def qss_px(tb):
+        got = re.findall(r"QHeaderView::section \{ font-size: (\d+)px; font-weight: bold; \}", tb.styleSheet())
+        return int(got[-1]) if got else None
+
+    # 데이터가 오기 전 빈 표도 — 기본 크기를 바꾸면 그리는 크기가 바로 따라간다(채울 때까지 옛 크기로 그리지 않게)
+    empty = widgets.FitTableWidget(0, 2)
+    empty.set_base_font_px(T.BASE_FONT_PX, T.BASE_FONT_PX)
+    assert qss_px(empty) == T.BASE_FONT_PX, ("빈 표의 머리글 QSS 가 기본 크기를 안 따라갔다", qss_px(empty))
+    empty.deleteLater()
+    tb = widgets.FitTableWidget(2, 4)
+    tb.setStyleSheet("QTableWidget::item { padding: 12px 7px; }")
+    tb.setHorizontalHeaderLabels(["아주 긴 열 제목 하나", "둘째 긴 제목", "셋째 제목", "넷"])
+    tb.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+    tb.horizontalHeader().setMinimumSectionSize(0)
+    tb.set_base_font_px(T.TABLE_CELL_PX, T.TABLE_HEADER_PX)
+    for r in range(2):
+        for c in range(4):
+            tb.setItem(r, c, QTableWidgetItem("123.4"))
+    tb.resize(900, 200)
+    tb.show()
+    _app.processEvents()
+    tb.refit()
+    _app.processEvents()
+    try:
+        hp = tb.horizontalHeader().font().pixelSize()
+        assert hp == T.TABLE_HEADER_PX and tb.horizontalHeader().font().bold(), (hp, tb.horizontalHeader().font().bold())
+        assert qss_px(tb) == hp, ("그리는 머리글 크기(QSS)가 재는 크기와 다르다", qss_px(tb), hp)
+        assert "padding: 12px 7px" in tb.styleSheet(), ("표마다 준 QSS 가 사라졌다", tb.styleSheet())
+        # 좁히면 글꼴이 줄고 — 그리는 크기도 같이 준다(전에는 재는 크기만 줄어 머리글이 그대로였다)
+        tb.resize(260, 200)
+        _app.processEvents()
+        tb.refit()
+        _app.processEvents()
+        small = tb.horizontalHeader().font().pixelSize()
+        assert small < T.TABLE_HEADER_PX, ("좁혔는데 머리글 글꼴이 안 줄었다 — 검사가 아무것도 안 잰다", small)
+        assert qss_px(tb) == small, ("줄인 머리글을 QSS 가 안 따라왔다", qss_px(tb), small)
+        assert "padding: 12px 7px" in tb.styleSheet()
+    finally:
+        tb.deleteLater()
+    # 앱 QSS 의 머리글 칸 규칙에 글꼴 속성이 다시 들어오면 위 QSS 줄보다 먼저 꾸민 값으로 굳는다(PyQt 3)
+    sec = re.search(r"QHeaderView::section \{([^}]*)\}", T.QSS)
+    assert sec and "font" not in sec.group(1), sec.group(1) if sec else T.QSS[:80]
 
 
 def test_fit_table_ignores_hidden_columns():

@@ -465,6 +465,34 @@ class PageTabs(QWidget):
         return True
 
 
+class CenteredMax(QWidget):
+    """자식 하나를 최대 폭에서 멈추고 가운데 둔다 — 남는 폭이 있을 때만 양옆 여백을 준다(78 ③a 본문 폭 상한).
+    늘림 칸(addStretch 양옆)으로 하면 상한보다 좁은 1280 창에서도 몇 px 를 가져가, 빠듯하던 [패스 스타일] 카드가
+    가로 스크롤을 냈다(실제 창 실측 11-03). 정렬 플래그(AlignHCenter)는 자식이 sizeHint 폭에서 멈춘다."""
+
+    def __init__(self, child: QWidget, max_w: int):
+        super().__init__()
+        self._child = child
+        self._lay = QHBoxLayout(self)
+        self._lay.setContentsMargins(0, 0, 0, 0)
+        self._lay.addWidget(child)
+        self._max = max_w
+        self.set_max_width(max_w)
+
+    def set_max_width(self, w: int) -> None:
+        self._max = w
+        self._child.setMaximumWidth(w)
+        self._sync()
+
+    def resizeEvent(self, e) -> None:
+        super().resizeEvent(e)
+        self._sync()
+
+    def _sync(self) -> None:
+        extra = max(0, self.width() - self._max)
+        self._lay.setContentsMargins(extra // 2, 0, extra - extra // 2, 0)
+
+
 class VScrollArea(QScrollArea):
     """세로로만 스크롤되는 페이지 틀.
 
@@ -629,12 +657,42 @@ class FitTableWidget(QTableWidget):
         self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
         self._fit_cache: dict[int, dict[int, int]] = {}  # cell_px -> 최종 열 너비(+padding+extra)
         self._pad = 0  # 열마다 얹는 여백 — set_content_widths 때 _measure_pad 로 잰다
+        # 머리글 크기는 setFont 만으로는 안 그려진다 — 앱 QSS 가 QHeaderView::section 을 꾸미면 Qt 는 머리글을 QSS 의
+        # 글꼴(없으면 앱 글꼴 16px)로 그리고 setFont 를 무시한다(PyQt 3 의 반대 방향 · 78 ③ 실제 창 실측 11-03: 재는 글꼴은
+        # 14px 인데 그리는 글꼴은 16px — 열 제목이 잘렸고, 표만의 QSS 가 있던 선수 지표는 약 9px 로 굳었다).
+        # 그래서 머리글만은 재는 글꼴과 같은 크기를 표 자신의 QSS 에 싣는다(_header_qss). 표마다 준 QSS 는 _user_qss 로 따로 둔다.
+        self._user_qss = ""
+        self._header_px_now = 0
+        hf = QFont(self.horizontalHeader().font())
+        hf.setBold(True)
+        self.horizontalHeader().setFont(hf)
+        self._set_header_px(self._base_header_px)
         self.horizontalHeader().sortIndicatorChanged.connect(self._on_sort_changed)
+
+    def setStyleSheet(self, qss: str) -> None:
+        """표마다 주는 QSS(여백 등) — 머리글 크기 줄은 _header_qss 가 뒤에 붙인다."""
+        self._user_qss = qss or ""
+        super().setStyleSheet(self._user_qss + self._header_qss())
+
+    def _header_qss(self) -> str:
+        return f"\nQHeaderView::section {{ font-size: {self._header_px_now}px; font-weight: bold; }}"
+
+    def _set_header_px(self, px: int) -> None:
+        """머리글 글꼴(재기용)과 QSS(그리기용)를 같은 크기로 — 바뀔 때만 QSS 를 다시 건다(다시 꾸미기가 싸지 않다)."""
+        hdr = self.horizontalHeader()
+        f = QFont(hdr.font())
+        f.setBold(True)
+        f.setPixelSize(px)
+        hdr.setFont(f)
+        if px != self._header_px_now:
+            self._header_px_now = px
+            super().setStyleSheet(self._user_qss + self._header_qss())
 
     def set_base_font_px(self, cell_px: int, header_px: int) -> None:
         """폰트를 줄이지 않아도 될 때(창이 넓을 때) 쓸 기본 크기."""
         self._base_cell_px = cell_px
         self._base_header_px = header_px
+        self._set_header_px(header_px)
 
     def set_content_widths(self, extra: dict[int, int] | None = None) -> None:
         """열 너비 계산에 쓸, 열별 추가 여백(아이콘 등)을 지정하고 즉시 맞춘다.
@@ -649,6 +707,7 @@ class FitTableWidget(QTableWidget):
         cell_font = QFont(self.font())
         cell_font.setPixelSize(self._base_cell_px)
         header_font = QFont(self.horizontalHeader().font())
+        header_font.setBold(True)   # 그리는 쪽(QSS)이 굵게다
         header_font.setPixelSize(self._base_header_px)
         self._base_text_widths = self._measure_text(
             QFontMetrics(cell_font), QFontMetrics(header_font))
@@ -743,8 +802,12 @@ class FitTableWidget(QTableWidget):
     def _measure_pad(self) -> int:
         """Qt 가 계산한 열 크기 힌트 − 글자 폭 = 셀/헤더가 글자 외에 먹는 여백.
         셀과 헤더 중 큰 쪽을 모든 열에 같이 쓴다."""
-        cell_fm = QFontMetrics(self.font())
         header = self.horizontalHeader()
+        # 머리글 크기를 QSS 로 싣는다(_set_header_px) — 새 QSS 가 아직 안 입혀졌으면 sectionSizeHint 가 옛 꾸밈으로
+        # 재서 여백이 작게 나온다(78 ③: 23 대 실제 33 → "포지션" 잘림). 재기 전에 입힌다.
+        self.ensurePolished()
+        header.ensurePolished()
+        cell_fm = QFontMetrics(self.font())
         hdr_fm = QFontMetrics(header.font())
         # 정렬 화살표 자리는 따로 잰다(_arrow_w). 채우는 동안(_fill)은 정렬이 꺼져
         # 있어 그대로 재면 화살표 자리가 빠져 "승률▾" 이 겹쳤고, 반대로 켜고 재면
@@ -775,14 +838,17 @@ class FitTableWidget(QTableWidget):
         if not self.columnCount():
             return 0
         header = self.horizontalHeader()
-        saved, shown = header.font(), header.isSortIndicatorShown()
-        header.setFont(header_font)
+        # 머리글은 QSS 크기로 그려지고 재진다(_set_header_px) — 글꼴만 바꿔 재면 지금 QSS 크기의 화살표가 나와
+        # 줄인 표에서 모자랐다(78 ③: 랭커 비교 '포지션▲' 12px 에서 10 대 실제 22). 잴 때 QSS 크기도 같이 바꾼다.
+        saved_px, shown = self._header_px_now, header.isSortIndicatorShown()
+        self._set_header_px(header_font.pixelSize())
+        header.ensurePolished()
         header.setSortIndicatorShown(False)
         bare = header.sectionSizeHint(0)
         header.setSortIndicatorShown(True)
         arrow = header.sectionSizeHint(0)
         header.setSortIndicatorShown(shown)
-        header.setFont(saved)
+        self._set_header_px(saved_px)
         return max(0, arrow - bare)
 
     def base_width(self) -> int:
@@ -807,6 +873,7 @@ class FitTableWidget(QTableWidget):
             cell_font = QFont(self.font())
             cell_font.setPixelSize(cell_px)
             header_font = QFont(self.horizontalHeader().font())
+            header_font.setBold(True)
             header_font.setPixelSize(header_px)
             text_widths = (self._base_text_widths if cell_px == self._base_cell_px
                           else self._measure_text(QFontMetrics(cell_font),
@@ -840,6 +907,19 @@ class FitTableWidget(QTableWidget):
         entry = self._entry(cell_px)
         self.setFont(entry["cell_font"])
         self.horizontalHeader().setFont(entry["header_font"])
+        before_px = self._header_px_now
+        self._set_header_px(entry["header_font"].pixelSize())
+        if self._header_px_now != before_px and not getattr(self, "_refitting", False):
+            # 머리글 QSS 가 바뀌면 머리글 높이가 바뀌고 → 세로 막대가 생기거나 없어져 → 보이는 폭이 달라진다. 표 크기는
+            # 그대로라 resizeEvent 가 안 와서, 옛 폭으로 맞춘 채 남았다(78 ③: 1264×480 랭커 비교 3px 가로 스크롤). 한 번 더.
+            self.updateGeometries()
+            if self.viewport().width() != avail:
+                self._refitting = True
+                try:
+                    self._fit()
+                finally:
+                    self._refitting = False
+                return
         if self._stacked_cols:   # 글꼴이 줄면 글자 줄도 낮아진다 — 행 높이를 지금 글꼴로 다시
             self.verticalHeader().setDefaultSectionSize(TraitIconDelegate.row_height(self.fontMetrics()))
         widths = entry["widths"]

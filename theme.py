@@ -512,7 +512,6 @@ QHeaderView::section {{
     border-right: 1px solid {BORDER};
     border-bottom: 1px solid {BORDER};
     padding: 8px 6px;
-    font-weight: bold;
 }}
 QTableCornerButton::section {{ background: {PANEL_2}; border: none; }}
 

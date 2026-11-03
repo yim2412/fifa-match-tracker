@@ -80,7 +80,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, Card, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
@@ -2591,6 +2591,13 @@ class MainWindow(QMainWindow):
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
                       "블록%", "선방력", "평점"]
+    # 78 ③b — 선수 지표 열 묶음. 늘 보이는 열 + 칩으로 고르는 묶음(열 이름으로 — 열 순서가 바뀌어도 안 깨진다).
+    # 19열 각각이 늘 보임 또는 묶음 셋 중 정확히 하나여야 한다(test_ui_smoke). 열은 숨기기만 한다 — 데이터·정렬·색 그대로.
+    PLAYER_ALWAYS_COLUMNS = ("포지션", "선수", "강화", "출전", "승률", "공격력", "수비력", "평점")
+    PLAYER_GROUPS = (("공격", ("기대득점률", "공격P", "골", "어시")),
+                     ("패스", ("패스%", "드리블%", "공중볼%")),
+                     ("수비", ("가로채기", "태클%", "블록%", "선방력")))
+    PLAYER_GROUP_KEY = "view/player_group"   # 고른 묶음 이름 — 다른 탭처럼 다시 켜도 그 칩
     # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 추정치(stats.shot_xg).
     FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
@@ -3646,7 +3653,9 @@ class MainWindow(QMainWindow):
         rv.addWidget(self._top_bar())
         self.pages = QStackedWidget()
         rv.addWidget(self.pages, 1)
-        h.addWidget(right, 1)
+        self._content = right   # 78 ③a — 넓은 창에서 본문이 끝에서 끝까지 늘어 가운데가 비지 않게(최대 폭 · 가운데)
+        self._content_box = CenteredMax(right, config.CONTENT_MAX_W)
+        h.addWidget(self._content_box, 1)
 
         # 팀컬러 두 탭이 빌드 중에 채우는 목록 — 빌더보다 먼저 있어야 한다.
         self._teamcolor_fetch_btns: list[QPushButton] = []
@@ -8833,6 +8842,12 @@ class MainWindow(QMainWindow):
     def _build_players_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
+        self.seg_player_group = Segmented([n for n, _cols in self.PLAYER_GROUPS], self._saved_player_group())
+        self.seg_player_group.changed.connect(self._on_player_group)
+        chips = QHBoxLayout()
+        chips.addWidget(self.seg_player_group)
+        chips.addStretch(1)
+        v.addLayout(chips)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
         self.tbl_players.setItemDelegateForColumn(4, BoldColumnDelegate(self.tbl_players))   # 승률 굵게(65 M9 · E7)
         # 19개 열이라 전역 폰트(BASE_FONT_PX)로는 스크롤 없이 한눈에 안 들어온다.
@@ -8878,8 +8893,39 @@ class MainWindow(QMainWindow):
         # "선수" 열(1번)에 spId 를 UserRole 로 붙여두고(_render_players)
         # 더블클릭하면 상대 스쿼드 화면과 같은 선수 카드 다이얼로그를 연다.
         self.tbl_players.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
+        self._apply_player_group()
         v.addWidget(self.tbl_players, 1)
         return w
+
+    def _apply_content_max(self) -> None:
+        self._content_box.set_max_width(config.CONTENT_MAX_W)
+
+    def _saved_player_group(self) -> int:
+        """저장된 선수 지표 묶음의 칩 번호 — 없거나 모르는 이름이면 첫 칩."""
+        names = [n for n, _cols in self.PLAYER_GROUPS]
+        try:
+            saved = str(self._settings().value(self.PLAYER_GROUP_KEY, "") or "")
+        except Exception:
+            return 0
+        return names.index(saved) if saved in names else 0
+
+    def _apply_player_group(self) -> None:
+        """고른 묶음의 열만 보인다(늘 보이는 열은 그대로). 숨기기만 — 값·정렬·색은 안 건드린다."""
+        shown = set(self.PLAYER_GROUPS[self.seg_player_group.current()][1])
+        grouped = {n for _g, cols in self.PLAYER_GROUPS for n in cols}
+        for c, name in enumerate(self.PLAYER_COLUMNS):
+            self.tbl_players.setColumnHidden(c, name in grouped and name not in shown)
+
+    def _on_player_group(self, i: int) -> None:
+        self._apply_player_group()
+        try:
+            s = self._settings()
+            s.setValue(self.PLAYER_GROUP_KEY, self.PLAYER_GROUPS[i][0])
+            s.sync()
+        except Exception:
+            pass
+        if self.tbl_players.rowCount():
+            self._fit_columns_to_content(self.tbl_players, extra=getattr(self, "_player_fit_extra", None))
 
     MATCH_FILTER_KINDS = (("승", T.GOOD), ("무", T.TEXT_DIM), ("패", T.BAD))
 
@@ -12902,7 +12948,9 @@ class MainWindow(QMainWindow):
         bold_extra = max((fb.horizontalAdvance(r[4][0]) - fm.horizontalAdvance(r[4][0]) for r in rows), default=0)
         # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말).
         # 이름 열(1)의 시즌 배지 폭은 set_icon_columns 가 이미 갖고 있다(손으로 26 을 주던 자리)
-        self._fit_columns_to_content(self.tbl_players, extra={2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2})
+        self._player_fit_extra = {2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2}
+        self._apply_player_group()
+        self._fit_columns_to_content(self.tbl_players, extra=self._player_fit_extra)
         # 공격력(5열)·수비력(6열) — 고정 눈금 G8(theme.g8_cell — 표 안 다른 선수와 무관) · 포지션 기준 점수 미만은 "▽"
         # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 빠른 범위 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
         # 높은 승률이 나쁨으로 읽힌다). 출전 미달 선수는 색·▽ 를 안 붙인다(색은 few 경기부터 — 예전과 같은 규칙).
