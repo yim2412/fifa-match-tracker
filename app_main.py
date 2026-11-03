@@ -7971,6 +7971,8 @@ class MainWindow(QMainWindow):
                 delta_item(it, b.median, eps=0.5)   # 칸은 정수로 적는다
 
     # [랭킹 추이 › 주간 요약] N13
+    WEEKLY_FULL_LISTS = ("risers", "wins")   # 줄 수만큼 높이를 고정하는 주간 요약 목록(10명)
+
     def _build_weekly_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -8009,7 +8011,8 @@ class MainWindow(QMainWindow):
                 self.weekly_tables[key] = self._make_table(["순위", "그때", "지금", "변화"])
                 box.addWidget(self.weekly_tables[key], 1)
             else:
-                self.weekly_lists[key] = MetricRowList()
+                # 10명 목록은 끝까지 보이게(78 ③c — 4줄 상자 안에서 스크롤했다) · 팀컬러별(58줄)·주차는 남는 높이 안에서
+                self.weekly_lists[key] = MetricRowList(fixed=key in self.WEEKLY_FULL_LISTS)
                 box.addWidget(self.weekly_lists[key], 1)
             grid.addLayout(box, i // 2, i % 2)
             self.weekly_titles[key] = title
@@ -8835,6 +8838,7 @@ class MainWindow(QMainWindow):
         hdr.setMinimumSectionSize(0)
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         t.set_base_font_px(T.BASE_FONT_PX, T.BASE_FONT_PX)
+        t.set_fit_rows()   # 높이는 줄 수만큼(78 ③c) — 남는 높이는 레이아웃의 다른 칸·아래 빈 곳으로
         if icons:
             t.set_icon_columns(icons)   # 표를 만들 때 한 번 — 열 폭을 그림이 오기 전부터 잡는다
         return t
@@ -9417,6 +9421,9 @@ class MainWindow(QMainWindow):
         # 탭 셋(50단계 D1) — [지표·스쿼드](지금까지 화면 + 차이 요약) · [슛·골 흐름] · [자리별]
         self.pt_compare = PageTabs()
         v.addWidget(self.pt_compare, 1)
+        # 비교하기 전엔 숨긴다(78 ③c — 빈 카드·빈 표·빈 스쿼드 상자 셋만 보였다) · 처음 그릴 때 _render_compare 가 연다
+        self.pt_compare.setVisible(False)
+        v.addStretch(0)
         page_main = QWidget()
         pv = QVBoxLayout(page_main)
         pv.setContentsMargins(0, 0, 0, 0)
@@ -9636,6 +9643,7 @@ class MainWindow(QMainWindow):
                         opp_ouid: str, opp_details: list[dict], state: str = "") -> list[MatchSummary]:
         """두 사람 모두 위쪽 바 범위(시즌 → 빠른 범위)로 자른 경기끼리. 그린 상대 경기 목록을 돌려준다.
         state — "" 다 받음 · "receiving" 처음 보는 상대를 받는 중 · 그 밖 글 = 받다가 멈춘 이유(둘 다 받은 최신 경기만 있다)."""
+        self.pt_compare.setVisible(True)
         my_matches = self._slice()[0]
         opp_matches = self._compare_window(opp_all)
         # 나 대 상대 — 두 계정 경기를 합친 범위로 식 한 번(같은 식끼리 견준다)

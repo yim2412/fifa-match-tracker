@@ -750,6 +750,124 @@ def _at_size(w, h):
     _app.processEvents()
 
 
+def _fit_box(n_rows: int, height: int, fit: bool = True):
+    """세로 레이아웃 = 위 카드 줄(Preferred) + 표(_make_table) — 높이를 고정한 틀에 넣어 띄운다."""
+    from PySide6.QtWidgets import QHBoxLayout, QTableWidgetItem, QVBoxLayout, QWidget
+    box = QWidget()
+    v = QVBoxLayout(box)
+    row = QHBoxLayout()
+    card = app_main.StatCard("카드")
+    row.addWidget(card, 1)
+    v.addLayout(row)
+    t = app_main.MainWindow._make_table(["가", "나"])
+    if not fit:
+        t.set_fit_rows(False)   # 78 전 그대로 — 끝 빈 칸도 안 붙는다
+    v.addWidget(t, 1)   # 페이지들이 흔히 주는 늘림 비율 1 그대로
+    t.setRowCount(n_rows)
+    for r in range(n_rows):
+        for c in range(2):
+            t.setItem(r, c, QTableWidgetItem(f"{r}-{c}"))
+    t.refit()
+    box.resize(600, height)
+    box.show()
+    for _ in range(4):
+        _app.processEvents()
+    return box, card, t
+
+
+def test_table_height_fits_rows_78():
+    # 78 ③c — 표 높이는 줄 수만큼 · 남는 높이는 끝 빈 칸으로(옆 카드가 안 늘어난다) · 모자라면 TABLE_MIN_ROWS 줄은 지킨다 ·
+    # 줄이 TABLE_FIT_MAX_ROWS 보다 많으면 예전처럼 남는 높이를 다 쓰고 안에서 스크롤(원하는 높이로 페이지를 늘리지 않는다).
+    keep = (config.TABLE_MIN_ROWS, config.TABLE_FIT_MAX_ROWS)
+    boxes = []
+    try:
+        # 막지 않았으면 — 같은 표를 줄 맞춤 없이(예전) 띄우면 1줄 표가 틀 끝까지 늘어 아래가 빈다
+        box, card, t = _fit_box(1, 600, fit=False)
+        boxes.append(box)
+        assert t.viewport().height() - t.rowHeight(0) > 200, ("예전 배치가 빈 상자를 안 만든다 — 이 검사는 아무것도 안 잰다",
+                                                              t.viewport().height())
+        # 1줄 — 표는 머리글 + 1줄 · 카드는 제 높이 · 남는 높이는 아래로
+        box, card, t = _fit_box(1, 600)
+        boxes.append(box)
+        assert t.height() == t._rows_height(), (t.height(), t._rows_height())
+        assert t.viewport().height() - t.rowHeight(0) <= 2, ("1줄 표 아래 빈 상자", t.viewport().height())
+        assert card.height() <= card.sizeHint().height() + 2, ("남는 높이가 카드로 갔다", card.height(), card.sizeHint().height())
+        assert t.verticalScrollBar().maximum() == 0
+        # 0줄 — 머리글만
+        box, card, t = _fit_box(0, 600)
+        boxes.append(box)
+        assert t.viewport().height() <= 2, ("빈 표가 큰 상자로 남았다", t.viewport().height())
+        # 자리가 모자라면 TABLE_MIN_ROWS 줄은 보이도록 최소 높이를 알린다(스크롤 페이지가 그만큼 늘어난다)
+        n = config.TABLE_FIT_MAX_ROWS
+        box, card, t = _fit_box(n, 150)
+        boxes.append(box)
+        need = t._rows_height(config.TABLE_MIN_ROWS)
+        assert t.minimumSizeHint().height() == need and box.minimumSizeHint().height() >= need, \
+            (t.minimumSizeHint().height(), box.minimumSizeHint().height(), need)
+        # 넉넉한 틀에선 줄 전부 · 줄 맞춤 동안 표 자신의 비율은 0(빈 칸과 반씩 나누면 12줄 표가 207px 로 눌렸다)
+        box, card, t = _fit_box(n, 900)
+        boxes.append(box)
+        assert t.height() == t._rows_height(), ("넉넉한데 줄이 다 안 보인다", t.height(), t._rows_height())
+        box, card, t = _fit_box(n, t._rows_height() + card.sizeHint().height() + 40)
+        boxes.append(box)
+        assert t.verticalScrollBar().maximum() == 0, ("딱 맞는 틀에서 표가 빈 칸과 높이를 나눴다", t.height(), t._rows_height())
+        # 긴 표 — 남는 높이를 다 쓰고(카드 아래부터 틀 끝까지) 원하는 높이는 최소 줄 수만큼
+        box, card, t = _fit_box(n + 1, 600)
+        boxes.append(box)
+        assert t.sizeHint().height() == t._rows_height(config.TABLE_MIN_ROWS), t.sizeHint().height()
+        assert t.geometry().bottom() >= box.height() - 30, ("긴 표가 남는 높이를 안 썼다", t.geometry().bottom(), box.height())
+        assert t.verticalScrollBar().maximum() > 0
+        # 배선 — 기본값이 아닌 상수로(같은 값이면 배선이 끊겨도 참이다)
+        config.TABLE_MIN_ROWS, config.TABLE_FIT_MAX_ROWS = 2, 4
+        box, card, t = _fit_box(5, 600)   # 4줄 상한을 넘었다 — 긴 표 취급
+        boxes.append(box)
+        assert t.sizeHint().height() == t._rows_height(2) and t.minimumSizeHint().height() == t._rows_height(2), \
+            (t.sizeHint().height(), t.minimumSizeHint().height(), t._rows_height(2))
+        assert t.geometry().bottom() >= box.height() - 30, t.geometry().bottom()
+        box, card, t = _fit_box(4, 600)
+        boxes.append(box)
+        assert t.height() == t._rows_height(), (t.height(), t._rows_height())
+    finally:
+        config.TABLE_MIN_ROWS, config.TABLE_FIT_MAX_ROWS = keep
+        for b in boxes:
+            b.hide()
+            b.deleteLater()
+        _app.processEvents()
+
+
+def test_fit_rows_on_real_pages_78():
+    # 78 ③c — 실제 화면 배선: FC 보상 1줄 표 아래 빈 상자·카드 늘어남 없음 · 주간 요약 10명 목록은 끝까지 · 비교 전엔 빈 상자 없음
+    _at_size(*app_main.MIN_WINDOW)
+    try:
+        _win._go_page("성적 진단", "FC 보상")
+        _win._render_rewards(_win._slice()[1])
+        for _ in range(4):
+            _app.processEvents()
+        t = _win.tbl_rewards
+        assert t._fit_rows, "_make_table 이 줄 맞춤을 안 켰다"
+        content = sum(t.rowHeight(r) for r in range(t.rowCount()))
+        assert t.viewport().height() - content <= 2, ("FC 보상 표 아래 빈 상자", t.viewport().height(), content)
+        for c in _win.rewards_cards[1]:
+            assert c.height() <= c.sizeHint().height() + 2, ("FC 보상 카드가 세로로 늘었다", c.height(), c.sizeHint().height())
+        fixed = {k: lst.fixed for k, lst in _win.weekly_lists.items()}
+        assert fixed == {k: k in app_main.MainWindow.WEEKLY_FULL_LISTS for k in fixed} and any(fixed.values()), fixed
+        assert set(app_main.MainWindow.WEEKLY_FULL_LISTS) <= set(fixed), fixed
+    finally:
+        _at_size(1600, 900)
+    fresh = app_main.MainWindow(_NoApi())
+    try:
+        assert fresh.pt_compare.isHidden(), "비교 전에 빈 카드·표·스쿼드 상자가 보인다"
+        fresh._fill_compare_squad = lambda *a: None
+        fresh._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                         {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        fresh._compare_last = ("상대", list(_MATCHES), "opp", [], "")
+        fresh._rerender_compare()
+        assert not fresh.pt_compare.isHidden(), "비교를 그렸는데 탭 묶음이 숨은 채다"
+    finally:
+        fresh.deleteLater()
+        _app.processEvents()
+
+
 def test_content_max_width_78():
     # 78 ③a — 본문 묶음(조회 바 + 페이지)은 CONTENT_MAX_W 에서 멈추고 가운데 선다. 1280 창은 그대로(상한이 안 걸린다).
     cw = _win._content

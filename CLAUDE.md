@@ -176,6 +176,8 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 5. **창은 `MIN_WINDOW`(1280×720) 밑으로 안 줄고 그 크기에서 아무것도 안 잘린다** — 모든 표는 `_make_table` → `FitTableWidget`
    (`_fill` 끝 `refit()` · 안 거치는 표는 직접) · 정렬 화살표 자리는 정렬 중인 열에만 · 위쪽 바 `WrapBar` · 페이지 `VScrollArea`(세로만) ·
    큰 숫자 `FitLabel` · 명시적 `setMinimumWidth` 대신 `sizeHint()`. ⚠ 가로 스크롤이 보이면 원인부터 재 본다.
+   **표 높이는 줄 수만큼**(78 ③c `set_fit_rows` — `_make_table` 이 켠다 · 최소 `config.TABLE_MIN_ROWS` 줄 · `TABLE_FIT_MAX_ROWS` 넘으면 예전처럼
+   남는 높이를 다 쓴다 · 남는 높이는 담은 세로 레이아웃 끝 빈 칸이 받는다). 표 높이를 손으로 박기 전에 이걸 먼저.
 6. **offscreen 테스트에서 모달은 안 닫힌다(회귀가 "멈춤"으로 나온다)** — `test_ui_smoke.py` 머리가 `QMessageBox.*`·`QDialog.exec`·
    `QApplication.exec` 를 `ModalCalled` 로 막는다. 새 종류의 모달(`QFileDialog`·`QInputDialog`·`QMenu.exec` 등)을 쓰면 거기 한 줄.
 7. **화면은 보이는 자리(메뉴·탭)만 그린다 — 새 메뉴·탭은 `VIEW_OF_KEY`·`_renderers()` 에**(뺄 자리는 `VIEW_EXEMPT` 에 이유와).

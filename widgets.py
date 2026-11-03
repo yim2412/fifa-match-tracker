@@ -626,6 +626,50 @@ def measure_icon_gap(owner: QWidget, w: int, h: int) -> int:
     return _GAP_CACHE[key]
 
 
+def _layout_holding(lay, w: QWidget):
+    """레이아웃 나무에서 위젯 w 를 바로 담은 레이아웃."""
+    for i in range(lay.count()):
+        it = lay.itemAt(i)
+        if it.widget() is w:
+            return lay
+        sub = it.layout()
+        if sub is not None:
+            found = _layout_holding(sub, w)
+            if found is not None:
+                return found
+    return None
+
+
+def _update_tail(lay) -> None:
+    """끝 빈 칸(_add_tail_spacer — 늘 마지막 항목)의 늘림 비율 — 줄 수에서 멈춘 짧은 표만 있으면 1(남는 높이를 받는다),
+    긴 표나 다른 늘림 칸(그래프 등)이 있으면 0(그쪽이 받는다). 비율 0 으로 두면 Qt 는 남는 높이를 빈 칸이 아니라
+    옆 카드 줄에 줬다(FC 보상 카드 95 → 159px · 78 ③c 실제 창)."""
+    last = lay.count() - 1
+    if last < 0 or lay.itemAt(last).spacerItem() is None:
+        return
+    other = False
+    for i in range(last):
+        it = lay.itemAt(i)
+        w = it.widget()
+        if isinstance(w, FitTableWidget) and w._fit_rows:
+            # 줄 수에 맞추는 동안은 표의 비율을 0 으로 — 비율이 같으면 높이가 모자랄 때 표와 빈 칸이 반씩 나눠
+            # 12줄 표가 207px 로 눌렸다. 표는 먼저 제 높이(sizeHint)를 받고 남는 것만 빈 칸으로 간다.
+            if w._orig_stretch is None:
+                w._orig_stretch = lay.stretch(i)
+            fits = w._fits_rows()
+            lay.setStretch(i, 0 if fits else w._orig_stretch)
+            if not fits and w.isVisibleTo(w.parentWidget() or w):
+                other = True
+            continue
+        if w is not None and not w.isVisibleTo(w.parentWidget() or w):
+            continue
+        if lay.stretch(i) > 0:
+            other = True
+    want = 0 if other else 1
+    if lay.stretch(last) != want:
+        lay.setStretch(last, want)
+
+
 class FitTableWidget(QTableWidget):
     """열 너비는 값 텍스트 기준으로 잡되, 위젯이 그보다 넓으면 남는 폭을
     각 열의 원래 너비 비율대로 나눠 채운다 — 창을 넓혀도 오른쪽에 빈 칸이
@@ -663,6 +707,9 @@ class FitTableWidget(QTableWidget):
         # 그래서 머리글만은 재는 글꼴과 같은 크기를 표 자신의 QSS 에 싣는다(_header_qss). 표마다 준 QSS 는 _user_qss 로 따로 둔다.
         self._user_qss = ""
         self._header_px_now = 0
+        self._fit_rows = False          # set_fit_rows — 높이를 줄 수에(78 ③c)
+        self._fit_rows_wired = False
+        self._orig_stretch: int | None = None   # 담은 레이아웃이 처음 준 늘림 비율(_update_tail 이 줄 수에 맞추는 동안 0 으로)
         hf = QFont(self.horizontalHeader().font())
         hf.setBold(True)
         self.horizontalHeader().setFont(hf)
@@ -721,6 +768,97 @@ class FitTableWidget(QTableWidget):
     def refit(self) -> None:
         """내용이 바뀐 뒤 — 지난번 열별 추가 여백을 그대로 두고 다시 잰다. 그림 열 여백은 등록이 따로 갖고 있다."""
         self.set_content_widths(self._user_extra)
+        if self._fit_rows:
+            self._rows_changed()   # 숨긴 줄(setRowHidden)은 신호가 없다 — 채운 뒤 여기서
+
+    # ── 줄 수만큼의 높이(78 ③c) ────────────────────────────────────────
+    def set_fit_rows(self, on: bool = True) -> None:
+        """표 높이를 줄 수에 — 원하는 높이 = 머리글 + 줄 전부(그 이상은 안 커진다 · 남는 높이는 레이아웃의 다른 칸으로),
+        최소 = 머리글 + config.TABLE_MIN_ROWS 줄(줄이 그보다 적으면 그 줄 수). 자리가 모자라면 그 사이에서 줄고 표 안이 스크롤된다.
+        이게 없으면 1줄짜리 표도 화면 끝까지 늘어 아래가 빈 상자였다(실제 창 1280×720 · FC 보상 222px)."""
+        self._fit_rows = on
+        if on and not self._fit_rows_wired:
+            self._fit_rows_wired = True
+            m = self.model()
+            for sig in (m.rowsInserted, m.rowsRemoved, m.modelReset):
+                sig.connect(self._rows_changed)
+            self.verticalHeader().sectionResized.connect(self._rows_changed)
+            self.verticalHeader().sectionCountChanged.connect(self._rows_changed)
+        self._rows_changed()
+
+    def _visible_rows(self) -> int:
+        return sum(1 for r in range(self.rowCount()) if not self.isRowHidden(r))
+
+    def _fits_rows(self) -> bool:
+        """줄 수만큼 높이를 맞추는 중인가 — 줄이 TABLE_FIT_MAX_ROWS 보다 많으면 아니다(남는 높이를 다 쓰고 안에서 스크롤)."""
+        return self._fit_rows and self._visible_rows() <= config.TABLE_FIT_MAX_ROWS
+
+    def showEvent(self, e) -> None:
+        super().showEvent(e)
+        if self._fit_rows:
+            self._add_tail_spacer()
+
+    def _add_tail_spacer(self) -> None:
+        """표가 든 세로 레이아웃 끝에 늘어나는 빈 칸 하나 — 표가 줄 수에서 멈추면 남는 높이를 여기가 받는다.
+        없으면 그 높이가 옆 카드·제목으로 가서 FC 보상 카드가 세로로 늘고 주간 요약 제목이 가운데로 떴다(78 ③c 실제 창).
+        늘림 비율은 _update_tail 이 정한다. 레이아웃마다 한 번만."""
+        lay = self._holding_layout()
+        if not isinstance(lay, QVBoxLayout):
+            return
+        if not lay.property("fitTail"):
+            lay.setProperty("fitTail", True)
+            lay.addStretch(0)
+        _update_tail(lay)
+
+    def _holding_layout(self):
+        p = self.parentWidget()
+        if p is None or p.layout() is None:
+            return None
+        return _layout_holding(p.layout(), self)
+
+    def _rows_changed(self, *_) -> None:
+        pol = self.sizePolicy()
+        want = QSizePolicy.Policy.Maximum if self._fits_rows() else QSizePolicy.Policy.Expanding
+        if pol.verticalPolicy() != want:
+            pol.setVerticalPolicy(want)
+            self.setSizePolicy(pol)
+            lay = self._holding_layout()
+            if lay is not None and lay.property("fitTail"):
+                _update_tail(lay)
+        self.updateGeometry()
+
+    def _rows_height(self, limit: int | None = None) -> int:
+        """보이는 줄 높이 합(앞에서 limit 줄까지) + 머리글 + 테두리 + 보이는 가로 막대."""
+        h = 0
+        n = 0
+        for r in range(self.rowCount()):
+            if self.isRowHidden(r):
+                continue
+            if limit is not None and n >= limit:
+                break
+            h += self.rowHeight(r)
+            n += 1
+        hdr = self.horizontalHeader()
+        if hdr.isVisibleTo(self):
+            h += hdr.sizeHint().height()
+        h += 2 * self.frameWidth()
+        if self.horizontalScrollBar().isVisible():
+            h += self.horizontalScrollBar().sizeHint().height()
+        return h
+
+    def sizeHint(self) -> QSize:
+        s = super().sizeHint()
+        if self._fits_rows():
+            s.setHeight(self._rows_height())
+        elif self._fit_rows:   # 긴 표 — 원하는 높이는 최소 줄 수만큼(페이지를 늘리지 않게 · 남는 높이는 Expanding 으로 받는다)
+            s.setHeight(self._rows_height(config.TABLE_MIN_ROWS))
+        return s
+
+    def minimumSizeHint(self) -> QSize:
+        s = super().minimumSizeHint()
+        if self._fit_rows:
+            s.setHeight(self._rows_height(config.TABLE_MIN_ROWS))
+        return s
 
     # ── 표 칸 그림(40단계) ──────────────────────────────────────────────
     def _merge_extra(self) -> None:
