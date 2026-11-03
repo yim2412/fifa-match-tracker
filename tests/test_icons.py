@@ -1100,7 +1100,11 @@ def test_trait_fixture_paints_inside_pad():
     t = _trait_table()
     pm = QPixmap(str(FIXTURES / "trait_90_pad.png"))
     assert not pm.isNull() and pm.width() == 90
-    bare, opt = _paint_cell(t, 0, 0)
+    # 기준은 "그림 없음"이 아니라 같은 크기 투명 그림 — 그림이 없으면 이름 글자를 칸 폭으로 찍어서, 글씨가 커지면(78 ②)
+    # 판 옆 비교 점까지 글자가 닿았다(CI 글꼴에서만 · 로컬 맑은 고딕은 통과). 판은 둘 다 같고 그림 내용만 다르다.
+    clear = QPixmap(pm.size())
+    clear.fill(Qt.GlobalColor.transparent)
+    bare, opt = _paint_cell(t, 0, 0, QIcon(clear))
     drawn, _ = _paint_cell(t, 0, 0, QIcon(pm))
     d = t.itemDelegateForColumn(0)
     box = d.pad_rect(opt)
