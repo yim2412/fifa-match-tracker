@@ -30,6 +30,7 @@ import images  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
 import rankmeta  # noqa: E402
+import theme as T  # noqa: E402
 from widgets import ICON_KEY_ROLE, FitTableWidget, IconCell, measure_icon_gap  # noqa: E402
 
 import test_rankmeta as tr  # noqa: E402 — 지어낸 rank.db
@@ -249,7 +250,7 @@ def test_emblems_by_name():
 def _table(icons=None, cols=3):
     t = FitTableWidget(0, cols)
     t.setHorizontalHeaderLabels([f"열{i}" for i in range(cols)])
-    t.set_base_font_px(14, 13)
+    t.set_base_font_px(T.TABLE_CELL_PX, T.TABLE_HEADER_PX)
     if icons:
         t.set_icon_columns(icons)
     return t
@@ -1062,7 +1063,7 @@ def test_trait_row_height_follows_font():
     t.resize(70, 200)        # 열 셋이 70px 에 안 들어간다 → 글꼴이 줄어든다
     t.show()
     t.refit()
-    assert t.font().pixelSize() < 14, t.font().pixelSize()
+    assert t.font().pixelSize() < T.TABLE_CELL_PX, t.font().pixelSize()
     want = TraitIconDelegate.row_height(t.fontMetrics())
     assert t.verticalHeader().defaultSectionSize() == want, (t.verticalHeader().defaultSectionSize(), want)
 

@@ -610,7 +610,7 @@ def test_setfont_sizes_survive_stylesheet():
              if lb.objectName() == "searchTitle"]
     assert title, "검색 화면 제목을 못 찾음"
     f = title[0].font()
-    assert f.pointSize() == 30, (f.pointSize(), f.pixelSize())
+    assert f.pointSize() == T.PT_TITLE, (f.pointSize(), f.pixelSize())
 
 
 def test_platform_class_fonts_follow_app_font():
@@ -847,14 +847,14 @@ def test_season_combo_never_narrower_than_longest_item():
 
 def test_fit_label_shrinks_instead_of_clipping():
     import widgets
-    lb = widgets.FitLabel("906승 393무 903패 (41.1%)", base_pt=30, min_pt=14)
+    lb = widgets.FitLabel("906승 393무 903패 (41.1%)", base_pt=T.PT_TITLE, min_pt=T.PT_XL)
     lb.resize(329, 60)  # 실데이터에서 잘렸던 칸 폭
     lb.show()  # 숨은 위젯은 resizeEvent 가 show 때까지 미뤄진다
     _app.processEvents()
     from PySide6.QtGui import QFontMetrics
-    full = QFontMetrics(lb._font_at(30)).horizontalAdvance(lb.text())
-    assert full > 329, full  # 30pt 그대로였으면 잘렸다
-    assert lb.font().pointSize() < 30, lb.font().pointSize()
+    full = QFontMetrics(lb._font_at(T.PT_TITLE)).horizontalAdvance(lb.text())
+    assert full > 329, full  # 기본 크기(PT_TITLE) 그대로였으면 잘렸다
+    assert lb.font().pointSize() < T.PT_TITLE, lb.font().pointSize()
     assert QFontMetrics(lb.font()).horizontalAdvance(lb.text()) <= 329
 
 
@@ -1014,7 +1014,7 @@ def test_fit_table_ignores_hidden_columns():
     tb.setHorizontalHeaderLabels(["가", "나", "숨김"])
     tb.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
     tb.horizontalHeader().setMinimumSectionSize(0)
-    tb.set_base_font_px(15, 15)
+    tb.set_base_font_px(T.TABLE_CELL_PX, T.TABLE_CELL_PX)
     for r in range(2):
         tb.setItem(r, 0, QTableWidgetItem("짧은 글"))
         tb.setItem(r, 1, QTableWidgetItem("12.3%"))
@@ -1026,7 +1026,7 @@ def test_fit_table_ignores_hidden_columns():
     tb.refit()
     _app.processEvents()
     try:
-        assert tb.font().pixelSize() == 15, ("숨긴 열 때문에 글꼴을 줄였다", tb.font().pixelSize())
+        assert tb.font().pixelSize() == T.TABLE_CELL_PX, ("숨긴 열 때문에 글꼴을 줄였다", tb.font().pixelSize())
         vis = tb.columnWidth(0) + tb.columnWidth(1)
         assert vis >= tb.viewport().width() - 2, ("보이는 열이 폭을 다 못 받았다", vis, tb.viewport().width())
     finally:
@@ -1043,7 +1043,7 @@ def test_fit_table_never_scrolls_sideways_above_min_font():
     from PySide6.QtWidgets import QHeaderView, QTableWidgetItem
     tb.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
     tb.horizontalHeader().setMinimumSectionSize(0)
-    tb.set_base_font_px(15, 15)
+    tb.set_base_font_px(T.TABLE_CELL_PX, T.TABLE_CELL_PX)
     for r in range(6):
         for c in range(len(cols)):
             tb.setItem(r, c, QTableWidgetItem(f"{(r + 3) * (c + 7) * 1.37:.2f}%"))

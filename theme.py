@@ -218,7 +218,32 @@ G8_LIGHT_INKS = ("#000000",)
 POS_COLORS = {"FW": _P["POS_FW"], "MF": _P["POS_MF"], "DF": _P["POS_DF"], "GK": _P["POS_GK"]}
 
 FONT_FAMILY = "Malgun Gothic"  # 한글이 대부분이라 명시 — 미지정이면 플랫폼 따라 들쭉날쭉
-BASE_FONT_PX = 15
+BASE_FONT_PX = 16
+# 글씨 크기 단계 — 78 ② 15→16px 때 옛 값 × 16/15 반올림 · 이 밖에서 숫자로 박지 않는다(test_rules)
+# 줄임 하한(FLOOR)은 안 키운다 — 좁을 때 넘침을 막는 바닥이라, 올렸더니 1280×720 에서 선수 지표 표 2px ·
+# 승부차기 GK 카드 넷 52px 가 넘쳤다(78 ② offscreen 실측). 읽히는 한계는 기본 크기와 상관없다.
+PX_FLOOR = 9            # 표·경기 카드 축소 하한
+PX_FLOOR_BADGE = 10     # 선수 칩 축소 하한 · 특성 판 글자 기본
+PX_XS = 12           # 옛 11
+PX_S = 13            # 옛 12
+PX_M = 14            # 옛 13
+PX_L = 15            # 옛 14
+PX_XL = 19           # 옛 18
+PX_XXL = 23          # 옛 22
+PT_XS = 10           # 옛 9
+PT_S = 12            # 옛 11
+PT_M = 13            # 옛 12
+PT_L = 14            # 옛 13
+PT_XL = 15           # 옛 14
+PT_2XL = 17          # 옛 16
+PT_3XL = 19          # 옛 18
+PT_4XL = 20          # 옛 19
+PT_5XL = 23          # 옛 22
+PT_TITLE = 32        # 옛 30
+PT_FLOOR = 8            # 승부차기 GK 이름 하한
+SHOOTOUT_GK_NAME_PT = (PT_S, PT_FLOOR)   # 이름 글꼴(기본 · 줄여도 되는 하한) — 긴 이름이 카드 폭을 밀지 않게
+TABLE_CELL_PX = PX_L       # 표 칸 글씨(옛 14)
+TABLE_HEADER_PX = PX_M     # 표 머리 글씨(옛 13)
 RADIUS = 6              # 카드·표·입력·버튼 모서리 — 그림 안 작은 막대·칩(2~4px)은 각자
 # 글자를 위에 겹쳐 쓰는 막대(승부처·시간대 등) — 원색이면 글자가 묻힌다.
 WIN_BAR = _P["WIN_BAR"]
@@ -349,7 +374,7 @@ QFrame#card {{
     border: 1px solid {BORDER};
     border-radius: {RADIUS}px;
 }}
-QLabel#cardTitle {{ font-size: 18px; font-weight: bold; color: {TEXT}; }}
+QLabel#cardTitle {{ font-size: {PX_XL}px; font-weight: bold; color: {TEXT}; }}
 QFrame#topbar {{
     background: {PANEL};
     border: 1px solid {BORDER};
@@ -361,13 +386,13 @@ QFrame#sidebar {{
     border: none;
     border-right: 1px solid {BORDER};
 }}
-QLabel#brand {{ color: {ACCENT}; font-size: 22px; font-weight: bold; }}
-QLabel#brandSub {{ color: {TEXT_DIM}; font-size: 12px; }}
+QLabel#brand {{ color: {ACCENT}; font-size: {PX_XXL}px; font-weight: bold; }}
+QLabel#brandSub {{ color: {TEXT_DIM}; font-size: {PX_S}px; }}
 QListWidget#nav {{
     background: transparent;
     border: none;
     outline: none;
-    font-size: 14px;
+    font-size: {PX_L}px;
 }}
 QListWidget#nav::item {{
     padding: 5px 12px;

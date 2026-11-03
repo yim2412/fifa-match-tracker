@@ -10,7 +10,7 @@
 | 파일 | 역할 |
 |------|------|
 | `app_main.py` | PySide6 UI — 왼쪽 메뉴(`NAV` 표)·페이지·작업 스레드 로더들. 메뉴를 늘리려면 `NAV` 에 한 줄(그리기 표는 PyQt 7) · 세부는 머리말 |
-| `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만** |
+| `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만 · 글씨 크기도 여기서만**(78 ② 단계 상수 `PX_*`/`PT_*`/`TABLE_*_PX` · 줄임 하한 `*_FLOOR` 은 안 키운다 — 밖에서 숫자로 박으면 `test_rules` · 그래프 `charts.py` 만 80단계 몫으로 예외) |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
 | `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(2026-10-19 사용자: 무승부 포함 승÷전체 — `config.WIN_RATE_DRAWS_IN` 이 `is_mixed` 를 늘 거짓으로 · 끄면 A6 섞임 규칙 · 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
 | `matchtime.py` | **넥슨 오픈API 시각(matchDate·achievementDate·tradeDate·createDate)은 UTC** — 읽기는 여기서만(`parse` KST naive · `day` · `label` · SQL 경계 `raw_bound` · `epoch`) · 오프셋 `config.MATCH_DATE_OFFSET_H` · 저장 원문은 안 바꾼다 · 밖에서 직접 파싱하면 `test_rules`(함수 단위 + 도우미 한 단계 · 예외 표 `RAW_TIME_ALLOW`) · 63단계 |

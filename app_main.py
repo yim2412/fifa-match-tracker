@@ -3267,7 +3267,7 @@ class MainWindow(QMainWindow):
         title = QLabel(config.APP_NAME)
         title.setObjectName("searchTitle")
         f = QFont()
-        f.setPointSize(30)
+        f.setPointSize(T.PT_TITLE)
         f.setBold(True)
         title.setFont(f)
         title.setStyleSheet(f"color: {T.ACCENT}; border: none;")
@@ -3275,7 +3275,7 @@ class MainWindow(QMainWindow):
         box_v.addWidget(title)
 
         sub = QLabel("넥슨·EA 와 무관한 비공식 프로그램")
-        sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none; font-size: 14px;")
+        sub.setStyleSheet(f"color: {T.TEXT_DIM}; border: none; font-size: {T.PX_L}px;")
         sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         box_v.addWidget(sub)
         box_v.addSpacing(24)
@@ -3288,7 +3288,7 @@ class MainWindow(QMainWindow):
         self.ed_search.setFixedWidth(580)
         self.ed_search.setFixedHeight(56)
         ef = QFont()
-        ef.setPointSize(13)
+        ef.setPointSize(T.PT_L)
         self.ed_search.setFont(ef)
         self.ed_search.returnPressed.connect(self._on_search)
         btn = QPushButton("🔍")
@@ -3339,7 +3339,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(4)
         row = QHBoxLayout()
         row.setSpacing(6)
-        style = f"color: {T.TEXT_DIM}; font-size: 11px; border: none;"
+        style = f"color: {T.TEXT_DIM}; font-size: {T.PX_XS}px; border: none;"
         ver = ClickLabel(config.APP_VERSION)
         ver.setObjectName("versionLabel")
         ver.setStyleSheet(style)
@@ -3369,7 +3369,7 @@ class MainWindow(QMainWindow):
         btn.setObjectName("aboutButton")
         btn.setFlat(True)
         btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 11px; border: none;"
+        btn.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_XS}px; border: none;"
                           " text-decoration: underline; padding: 0;")
         btn.clicked.connect(self._open_about)
         return btn
@@ -3382,7 +3382,7 @@ class MainWindow(QMainWindow):
         """넥슨 오픈API 약관 제6조④ 출처 표기 — API 데이터가 보이는 화면마다 둔다."""
         lb = QLabel(ATTRIBUTION)
         lb.setObjectName("attribution")
-        lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 11px; border: none;")
+        lb.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_XS}px; border: none;")
         return lb
 
     RECENT_SEARCH_LIMIT = 5
@@ -3612,12 +3612,12 @@ class MainWindow(QMainWindow):
         pv.setSpacing(2)
         self.lb_profile = QLabel("-")
         pf = QFont()
-        pf.setPointSize(12)
+        pf.setPointSize(T.PT_M)
         pf.setBold(True)
         self.lb_profile.setFont(pf)
         self.lb_sub = QLabel("-")
         self.lb_sub.setWordWrap(True)
-        self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 12px;")
+        self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_S}px;")
         pv.addWidget(self.lb_profile)
         pv.addWidget(self.lb_sub)
         pwrap = QHBoxLayout()
@@ -3666,7 +3666,7 @@ class MainWindow(QMainWindow):
                 head = QListWidgetItem(section)
                 head.setFlags(Qt.ItemFlag.NoItemFlags)
                 f = QFont()
-                f.setPointSize(9)
+                f.setPointSize(T.PT_XS)
                 f.setBold(True)
                 head.setFont(f)
                 self.nav.addItem(head)
@@ -4029,7 +4029,7 @@ class MainWindow(QMainWindow):
         mid = QHBoxLayout()
         self.park_pred = StatCard("예상 200위 컷 (시즌 말)", T.ACCENT)
         f = self.park_pred.value.font()
-        f.setPointSize(22)
+        f.setPointSize(T.PT_5XL)
         self.park_pred.value.setFont(f)
         mid.addWidget(self.park_pred, 1)
         self.lb_park_margin = QLabel("")
@@ -5489,7 +5489,7 @@ class MainWindow(QMainWindow):
         self.shot_scorers = ScorerList()
         rv.addWidget(self.shot_scorers)
         self.lb_shot_rank_note = QLabel("")
-        self.lb_shot_rank_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+        self.lb_shot_rank_note.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_M}px;")
         rv.addWidget(self.lb_shot_rank_note)
         sv.addWidget(gb_rank)
 
@@ -5570,7 +5570,7 @@ class MainWindow(QMainWindow):
                 lb = QLabel(label)
                 lb.setStyleSheet(f"color: {T.TEXT_DIM};")
                 vl = QLabel(val)
-                vl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 18px;")
+                vl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: {T.PX_XL}px;")
                 for x in (lb, vl):
                     x.setToolTip(tip)
                 g.addWidget(lb, 2 * r, c)
@@ -8835,8 +8835,8 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
         self.tbl_players.setItemDelegateForColumn(4, BoldColumnDelegate(self.tbl_players))   # 승률 굵게(65 M9 · E7)
-        # 19개 열이라 전역 폰트(15px)로는 스크롤 없이 한눈에 안 들어온다.
-        # 이 표만 폰트·여백을 줄인 기본 크기(14/13px)에서 시작한다 — 창이
+        # 19개 열이라 전역 폰트(BASE_FONT_PX)로는 스크롤 없이 한눈에 안 들어온다.
+        # 이 표만 폰트·여백을 줄인 기본 크기(TABLE_CELL_PX/TABLE_HEADER_PX)에서 시작한다 — 창이
         # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
         # QSS 에 font-size 를 박아두면 그려질 때 그 값이 항상 이기고
         # setFont() 로 준 크기는 QFontMetrics 측정에만 쓰여서, 축소해도
@@ -8848,15 +8848,15 @@ class MainWindow(QMainWindow):
             f"QTableWidget::item {{ padding: 12px 7px; margin: 0px; }}"
             f"QHeaderView::section {{ padding: 8px 6px; }}")
         cell_font = QFont()
-        cell_font.setPixelSize(14)
+        cell_font.setPixelSize(T.TABLE_CELL_PX)
         self.tbl_players.setFont(cell_font)
         hdr = self.tbl_players.horizontalHeader()
         header_font = QFont()
-        header_font.setPixelSize(13)
+        header_font.setPixelSize(T.TABLE_HEADER_PX)
         header_font.setBold(True)
         hdr.setFont(header_font)
         hdr.setMinimumSectionSize(0)
-        self.tbl_players.set_base_font_px(14, 13)
+        self.tbl_players.set_base_font_px(T.TABLE_CELL_PX, T.TABLE_HEADER_PX)
         # Fixed — _render_players 에서 데이터가 채워진 뒤 _fit_columns_to_content
         # 가 "헤더 글자 폭·값 글자 폭 중 큰 쪽" 기준으로 직접 너비를 잡는다.
         # Interactive 로 두면 사용자가 드래그로 너비를 바꿀 수 있는데, 그러면
@@ -9803,7 +9803,7 @@ class MainWindow(QMainWindow):
         col.addWidget(self._dim_label("가장 많이 쓴 내 포메이션"))
         self.lb_my_formation = QLabel("-")
         mf = QFont()
-        mf.setPointSize(16)
+        mf.setPointSize(T.PT_2XL)
         mf.setBold(True)
         self.lb_my_formation.setFont(mf)
         col.addWidget(self.lb_my_formation)
@@ -11961,7 +11961,7 @@ class MainWindow(QMainWindow):
             widgets_by_url[info.season_icon_url] = season
         name_lb = QLabel(f"{info.name}  ·  {info.position}  ·  OVR {info.ovr or NA}")
         nf = QFont()
-        nf.setPointSize(14)
+        nf.setPointSize(T.PT_XL)
         nf.setBold(True)
         name_lb.setFont(nf)
         name_row.addWidget(name_lb)
@@ -13098,8 +13098,8 @@ class MainWindow(QMainWindow):
         col = QVBoxLayout()
         col.setSpacing(1)
         # 이름은 길면 글꼴을 줄인다(카드 넷이 1280 폭에 들어가게 — 실화면에서 카드 하나 226px 이 4px 넘쳤다)
-        name = FitLabel(self._names.get(k.sp_id, str(k.sp_id)), base_pt=config.SHOOTOUT_GK_NAME_PT[0],
-                        min_pt=config.SHOOTOUT_GK_NAME_PT[1])
+        name = FitLabel(self._names.get(k.sp_id, str(k.sp_id)), base_pt=T.SHOOTOUT_GK_NAME_PT[0],
+                        min_pt=T.SHOOTOUT_GK_NAME_PT[1])
         name.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; border: none;")
         col.addWidget(name)
         rate = QLabel(win_rate_text(k.win, 0, k.lose, False, short=True)
@@ -13173,7 +13173,7 @@ class MainWindow(QMainWindow):
             top.addStretch(1)
             weak = k.tries < min_tries
             big = QLabel(rate(k))
-            big.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold; font-size: 22px;")
+            big.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold; font-size: {T.PX_XXL}px;")
             big.setToolTip(f"성공 ÷ 시도 — 시도 {min_tries}회 미만이면 숨깁니다" if weak else "성공 ÷ 시도")
             top.addWidget(big)
             v.addLayout(top)
@@ -13185,7 +13185,7 @@ class MainWindow(QMainWindow):
             for grp, kk in ((ps.win, kw), (ps.lose, kl)):
                 lb = QLabel(f"{grp.label}({grp.games}판) 비중 {grp.share(kk):.0f}% · 성공 {rate(kk)}" if grp.games
                             else f"{grp.label}: {NA}")
-                lb.setStyleSheet(f"color: {T.TEXT_DIM if grp.games < few else T.TEXT}; font-size: 13px;")
+                lb.setStyleSheet(f"color: {T.TEXT_DIM if grp.games < few else T.TEXT}; font-size: {T.PX_M}px;")
                 if grp.games < few:  # 표본 흐림 규칙(1.2.1)
                     lb.setToolTip(sample_note(grp.games, few))
                 v.addWidget(lb)

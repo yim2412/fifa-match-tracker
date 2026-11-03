@@ -91,7 +91,7 @@ class DashCard(QFrame):
         self.title = QLabel(title)
         self.title.setObjectName("cardTitle")
         self.scope = QLabel("")
-        self.scope.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 12px;")
+        self.scope.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_S}px;")
         head.addWidget(self.title)
         head.addStretch(1)
         head.addWidget(self.scope)
@@ -230,7 +230,7 @@ class DashboardPage(QWidget):
         for cap, col in (("경기당 골", T.GOOD), ("경기당 실점", T.BAD), ("결정력", T.TEXT)):
             box = QVBoxLayout()
             box.setSpacing(0)
-            big = _label("—", pt=18, bold=True)
+            big = _label("—", pt=T.PT_3XL, bold=True)
             big.setStyleSheet(f"color: {col};")
             big.setAlignment(Qt.AlignmentFlag.AlignHCenter)
             lb = _label(cap, dim=True)

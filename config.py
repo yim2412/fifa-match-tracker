@@ -414,7 +414,6 @@ VERSUS_GAP_REL = 0.10
 SHOOTOUT_GK_MAX = 12
 SHOOTOUT_GK_COLS = 4
 SHOOTOUT_GK_FACE_PX = 44
-SHOOTOUT_GK_NAME_PT = (11, 8)   # 이름 글꼴(기본 · 줄여도 되는 하한) — 긴 이름이 카드 폭을 밀지 않게
 # [슛 맵] 오른쪽 골·어시스트 순위(65 M8) — 내 선수 이만큼만(골 + 어시 많은 순)
 SHOT_RANK_MAX = 10
 # [패스 스타일] 종류 카드(65 M7) 한 줄 칸 수 — 여섯 종류가 두 줄(1280 폭에서 카드 하나 약 310px)

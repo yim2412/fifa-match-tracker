@@ -77,7 +77,7 @@ class UpdateCard(QFrame):
         self.lb_title = QLabel()
         f = QFont()
         f.setBold(True)
-        f.setPointSize(11)
+        f.setPointSize(T.PT_S)
         self.lb_title.setFont(f)
         self.lb_sub = QLabel()
         self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -185,7 +185,7 @@ class FitLabel(QLabel):
     알려서, 레이아웃이 그보다 좁게는 누르지 않게 한다.
     """
 
-    def __init__(self, text: str = "", base_pt: int = 30, min_pt: int = 14,
+    def __init__(self, text: str = "", base_pt: int = T.PT_TITLE, min_pt: int = T.PT_XL,
                  bold: bool = True):
         super().__init__(text)
         self._base_pt = base_pt
@@ -549,7 +549,7 @@ class Collapsible(QWidget):
         self.hint = QToolButton()
         self.hint.setStyleSheet(qss)
         small = QFont(self.hint.font())
-        small.setPixelSize(12)
+        small.setPixelSize(T.PX_S)
         self.hint.setFont(small)
         for b in (self.head, self.hint):
             b.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -608,7 +608,7 @@ class FitTableWidget(QTableWidget):
     글자가 잘리는 것보다 조금 작게라도 전부 보이는 쪽을 택한다.
     """
 
-    MIN_FONT_PX = 9  # 이보다 더 줄이면 안 읽혀서 여기서 멈춘다.
+    MIN_FONT_PX = T.PX_FLOOR  # 이보다 더 줄이면 안 읽혀서 여기서 멈춘다.
     # 열마다 글자 폭 위에 얹는 여백은 상수로 박지 않고 Qt 에게 묻는다
     # (_measure_pad). 예전 상수 42 는 "재는 글꼴 ≠ 그리는 글꼴"(전역 QSS 의
     # font-size 가 setFont 를 이겼다) 시절의 실측값이라, 그 QSS 를 걷어내자
@@ -624,8 +624,8 @@ class FitTableWidget(QTableWidget):
         self._icon_extra: dict[int, int] = {}   # 등록 열의 그림 폭 + Qt 가 아는 간격
         self._stacked_cols: list[int] = []      # 글자 위에 그림을 쌓아 그리는 열(특성) — 행 높이가 글꼴을 따라간다
         self._extra: dict[int, int] = {}        # 둘을 합친 값 — 폭 계산은 이것만 읽는다
-        self._base_cell_px = 14
-        self._base_header_px = 13
+        self._base_cell_px = T.TABLE_CELL_PX
+        self._base_header_px = T.TABLE_HEADER_PX
         self._base_text_widths: dict[int, int] = {}  # 기준 폰트 크기에서 잰 열별 텍스트 폭
         self._fit_cache: dict[int, dict[int, int]] = {}  # cell_px -> 최종 열 너비(+padding+extra)
         self._pad = 0  # 열마다 얹는 여백 — set_content_widths 때 _measure_pad 로 잰다
@@ -1042,13 +1042,13 @@ class StatCard(QFrame):
 
         self.cap = QLabel(title)
         cf = QFont()
-        cf.setPixelSize(12)
+        cf.setPixelSize(T.PX_S)
         self.cap.setFont(cf)
         self.cap.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
 
         self.value = QLabel("-")
         f = QFont()
-        f.setPointSize(16)
+        f.setPointSize(T.PT_2XL)
         f.setBold(True)
         self.value.setFont(f)
         self.value.setStyleSheet(f"color: {color}; border: none;")
@@ -1132,7 +1132,7 @@ class RankerCard(QFrame):
         self._head_name = QLabel("-")
         nf = QFont()
         nf.setBold(True)
-        nf.setPointSize(14)
+        nf.setPointSize(T.PT_XL)
         self._head_name.setFont(nf)
         self._head_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._head_name.setStyleSheet("border: none;")
@@ -1144,7 +1144,7 @@ class RankerCard(QFrame):
         self._head_grade = QLabel("-")
         gf = QFont()
         gf.setBold(True)
-        gf.setPointSize(19)
+        gf.setPointSize(T.PT_4XL)
         self._head_grade.setFont(gf)
         self._head_grade.setStyleSheet("border: none;")
         grade_row.addWidget(self._head_grade)
@@ -1201,12 +1201,12 @@ class RankerCard(QFrame):
             cap = QLabel(name)
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
             capf = QFont()
-            capf.setPointSize(14)
+            capf.setPointSize(T.PT_XL)
             cap.setFont(capf)
             cap.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
             tv.addWidget(cap)
 
-            val = FitLabel(NA, base_pt=30, min_pt=14)
+            val = FitLabel(NA, base_pt=T.PT_TITLE, min_pt=T.PT_XL)
             val.setAlignment(Qt.AlignmentFlag.AlignCenter)
             val.setStyleSheet(f"color: {T.TEXT}; border: none;")
             val.setSizePolicy(QSizePolicy.Policy.Expanding,
@@ -1224,7 +1224,7 @@ class RankerCard(QFrame):
         self.note.setAlignment(Qt.AlignmentFlag.AlignRight)
         self.note.setStyleSheet(
             f"color: {T.TEXT_DIM}; border: none; padding: 2px 14px 10px;"
-            f" font-size: 13px;")
+            f" font-size: {T.PX_M}px;")
         self.note.setWordWrap(True)
         v.addWidget(self.note)
         self.set_mode(False)  # 기본은 랭커 아님 — 확인되면 켠다
@@ -1501,7 +1501,7 @@ class TraitIconDelegate(RowBorderDelegate):
             # 그림이 없으면 판도 그리지 않는다 — 판 위에 이름을 찍으면 이름이 판 밖으로 번져 겹쳐 보였다(일반 특성 8개 —
             # 코드 0·1·3·4·5·6·7·9 — 는 넥슨 CDN 에 그림이 아예 없다(403, 2026-10-11 실측) · 실화면에서 발견)
             small = QFont(option.font)
-            small.setPixelSize(max(9, small.pixelSize() - 3) if small.pixelSize() > 0 else 10)
+            small.setPixelSize(max(T.PX_FLOOR, small.pixelSize() - 3) if small.pixelSize() > 0 else T.PX_FLOOR_BADGE)
             painter.setFont(small)
             painter.setPen(QColor(T.TEXT_DIM))
             label = QFontMetrics(small).elidedText(name, Qt.TextElideMode.ElideRight, option.rect.width() - 4)
@@ -1795,7 +1795,7 @@ class Tag(QLabel):
     def __init__(self, text: str = "", kind: str = "muted"):
         super().__init__(text)
         f = QFont()
-        f.setPixelSize(12)
+        f.setPixelSize(T.PX_S)
         f.setWeight(QFont.Weight.Medium)
         self.setFont(f)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -1913,7 +1913,7 @@ class GoalTimeline(QWidget):
         p.setPen(QPen(QColor(T.BORDER), 2))
         p.drawLine(QPointF(self.x_of(0), mid), QPointF(self.x_of(self.span), mid))
         f = QFont(self.font())
-        f.setPixelSize(11)
+        f.setPixelSize(T.PX_XS)
         p.setFont(f)
         p.setPen(QColor(T.TEXT_DIM))
         for tick in (0, 45, 90, 120):
@@ -2090,7 +2090,7 @@ class MatchCardDelegate(QStyledItemDelegate):
         out = {}
         for name, scale, bold in (("small", 0.85, False), ("main", 1.0, False), ("bold", 1.0, True), ("big", 1.3, True)):
             f = QFont(base)
-            f.setPixelSize(max(9, round(px * scale)))
+            f.setPixelSize(max(T.PX_FLOOR, round(px * scale)))
             f.setBold(bold)
             out[name] = f
         return out
@@ -2939,7 +2939,7 @@ class ShotTypeRows(QWidget):
             rate.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             rate.setToolTip(f"골 ÷ 시도 — 시도 {min_shots}회 미만이면 숨깁니다" if weak else "골 ÷ 시도")
             if self.stacked:
-                counts.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: 13px;")
+                counts.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_M}px;")
                 for c, wdg in enumerate((name, strip, rate)):
                     self.grid.addWidget(wdg, 2 * i, c)
                 self.grid.addWidget(counts, 2 * i + 1, 0, 1, 3)
@@ -3356,7 +3356,7 @@ class ZoomBar(QWidget):
         if n < 2:
             return
         font = p.font()
-        font.setPointSize(9)
+        font.setPointSize(T.PT_XS)
         p.setFont(font)
         cy = 9
         p.setPen(Qt.PenStyle.NoPen)
@@ -3436,7 +3436,7 @@ class CalendarGrid(QWidget):
         ch = max((self.height() - self.HEAD_H) / max(len(weeks), 1), 1)
         base = p.font()
         small = QFont(base)
-        small.setPointSize(9)
+        small.setPointSize(T.PT_XS)
         big = QFont(base)
         big.setPointSize(base.pointSize() + 1)
         big.setBold(True)
@@ -3527,7 +3527,7 @@ class _PlayerChip(QWidget):
     (글자를 MIN_FONT_PX 밑으로 줄이지 않는다). 클릭하면 clicked — 조회·창은 app_main 몫."""
 
     clicked = Signal()
-    MIN_FONT_PX = 10
+    MIN_FONT_PX = T.PX_FLOOR_BADGE
     FACE_MIN_H = 76     # 이보다 낮으면 얼굴을 뺀다
     PRICE_MIN_H = 58    # 이보다 낮으면 시세 줄을 뺀다
 

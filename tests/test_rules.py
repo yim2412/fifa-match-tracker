@@ -318,6 +318,70 @@ def check_colors(srcs: dict[str, str]) -> list[str]:
     return out
 
 
+FONT_SIZE_CSS = re.compile(r"font-size\s*:\s*\d")
+FONT_SIZE_CALLS = {"setPixelSize", "setPointSize", "setPointSizeF"}
+FONT_SIZE_KW = {"base_pt", "min_pt", "pt"}
+# 글씨 크기는 theme.py 의 단계 상수(PX_*·PT_*)로만 — 15→16px 처럼 기본 크기가 바뀔 때 고칠 곳이 하나여야 한다(78 ②).
+# charts.py 는 그래프 골든(픽셀까지 같아야) 때문에 80단계 몫이라 뺀다. 예외 표는 (파일, 줄 원문 조각) → 이유.
+FONT_SIZE_SKIP = {"theme.py", "charts.py"}
+FONT_SIZE_ALLOW: dict[tuple[str, str], str] = {}
+
+
+def _num(node) -> bool:
+    return isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
+
+
+def check_font_sizes(srcs: dict[str, str]) -> list[str]:
+    """숫자 리터럴 글씨 크기 금지 — setPixelSize/PointSize(숫자) · max(숫자, …) 로 줄이는 꼴 · base_pt/min_pt/pt= 숫자 ·
+    인자 기본값 · *FONT* 이름에 숫자 대입 · 문자열 안 font-size: 숫자."""
+    out = []
+    for rel, src in srcs.items():
+        if rel in FONT_SIZE_SKIP:
+            continue
+        lines = src.splitlines()
+        tree = ast.parse(src)
+
+        def add(node, what):
+            ln = getattr(node, "lineno", 0)
+            text = lines[ln - 1] if 0 < ln <= len(lines) else ""
+            if any(f == rel and frag in text for f, frag in FONT_SIZE_ALLOW):
+                return
+            out.append(f"{rel}:{ln} {what} — theme.py 의 단계 상수(PX_*/PT_*)로 둔다")
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else \
+                    node.func.id if isinstance(node.func, ast.Name) else ""
+                if name in FONT_SIZE_CALLS and node.args:
+                    arg = node.args[0]
+                    if _num(arg):
+                        add(node, f"{name}({arg.value})")
+                    for sub in ast.walk(arg):
+                        if isinstance(sub, ast.Call) and _call_name(sub) in ("max", "min") \
+                                and any(_num(a) for a in sub.args):
+                            add(node, f"{name}({_call_name(sub)}(숫자, …))")
+                            break
+                for kw in node.keywords:
+                    if kw.arg in FONT_SIZE_KW and _num(kw.value):
+                        add(node, f"{kw.arg}={kw.value.value}")
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                a = node.args
+                pos = a.posonlyargs + a.args
+                pairs = list(zip(pos[len(pos) - len(a.defaults):], a.defaults)) + \
+                    [(x, d) for x, d in zip(a.kwonlyargs, a.kw_defaults) if d is not None]
+                for arg, d in pairs:
+                    if arg.arg in FONT_SIZE_KW and _num(d):
+                        add(d, f"인자 기본값 {arg.arg}={d.value}")
+            elif isinstance(node, ast.Assign) and _num(node.value):
+                for t in node.targets:
+                    nm = t.id if isinstance(t, ast.Name) else t.attr if isinstance(t, ast.Attribute) else ""
+                    if "FONT" in nm.upper():
+                        add(node, f"{nm} = {node.value.value}")
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str) and FONT_SIZE_CSS.search(node.value):
+                add(node, "문자열 안 font-size: 숫자")
+    return out
+
+
 def _threshold(name: str) -> bool:
     """문턱 이름 — 밑줄로 자른 조각에 min · need · few* (대소문자 무시). minute 같은 낱말은 안 걸린다."""
     toks = [t.lower() for t in name.split("_") if t]
@@ -839,6 +903,31 @@ def test_colors_only_in_theme():
     assert check_colors({"playerinfo.py": "STAT_COLOR_BUCKETS = ['#ffffff']\nX = '#000000'\n"}) == \
         ["playerinfo.py:2 색 \"#000000\" — theme.py 에 둔다"]
     assert check_colors(_all(APP_FILES)) == []
+
+
+def test_font_sizes_only_in_theme():
+    planted = (
+        "f.setPixelSize(14)\n"                                  # 1
+        "f.setPointSize(9)\n"                                   # 2
+        "f.setPointSizeF(9.5)\n"                                # 3
+        "f.setPixelSize(max(9, px - 3))\n"                      # 4
+        "w.setStyleSheet(f'color: red; font-size: 13px;')\n"    # 5
+        "FitLabel(t, base_pt=30, min_pt=14)\n"                  # 6 (둘이어도 한 줄에 둘)
+        "_label('x', pt=18)\n"                                  # 7
+        "class A:\n    MIN_FONT_PX = 9\n"                      # 8
+        "def g(base_pt=30):\n    pass\n"                       # 10
+    )
+    found = check_font_sizes({"x.py": planted})
+    assert sorted({int(f.split(":")[1].split()[0]) for f in found}) == [1, 2, 3, 4, 5, 6, 7, 9, 10], found
+    assert len(found) == 10, found      # 6번 줄은 둘
+    ok = ("f.setPixelSize(T.PX_S)\nf.setPointSize(base.pointSize() + 1)\nf.setPixelSize(max(T.PX_FLOOR, px - 3))\n"
+          "f.setPixelSize(round(T.BASE_FONT_PX * 2))\nf.setPointSizeF(f.pointSizeF() * 1.25)\n"
+          "w.setStyleSheet(f'font-size: {T.PX_S}px;')\nFitLabel(t, base_pt=T.PT_TITLE)\nMIN_FONT_PX = T.PX_FLOOR\n"
+          "def g(pt=None):\n    pass\n")
+    assert check_font_sizes({"x.py": ok}) == []
+    # theme.py 는 상수를 정의하는 자리, charts.py 는 80단계 몫
+    assert check_font_sizes({"theme.py": planted, "charts.py": planted}) == []
+    assert check_font_sizes(_all(APP_FILES)) == []
 
 
 def test_old_color_names_are_gone():
