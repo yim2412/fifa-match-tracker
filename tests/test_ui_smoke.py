@@ -882,8 +882,8 @@ def test_content_max_width_78():
         # 조회 바가 한 줄로 들어가는 폭(+ 본문 좌우 여백)이 상한 안에 있다 — 아니면 넓은 창에서도 바가 두 줄이 된다(1360 이 그랬다)
         pad = cw.layout().contentsMargins().left() + cw.layout().contentsMargins().right()
         assert _win.top_bar.one_row_width() + pad <= keep, (_win.top_bar.one_row_width(), pad, keep)
-        _at_size(*app_main.LARGE_WINDOW)
-        assert app_main.LARGE_WINDOW[0] > keep + 100, "큰 창이 상한보다 충분히 넓지 않아 아무것도 안 잰다"
+        _at_size(keep + 600, 1000)     # 왼쪽 메뉴를 빼고도 상한보다 넓은 창
+        assert box.width() > keep + 100, ("창이 상한보다 충분히 넓지 않아 아무것도 안 잰다", box.width(), keep)
         assert cw.width() == keep, (cw.width(), keep)
         assert _win.top_bar._two_rows is False, ("상한 폭에서 조회 바가 두 줄이다", _win.top_bar.width(), _win.top_bar.one_row_width())
         left, right_gap = cw.x(), box.width() - (cw.x() + cw.width())   # 틀은 왼쪽 메뉴 오른쪽부터 창 끝까지
