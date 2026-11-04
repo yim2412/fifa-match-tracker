@@ -695,6 +695,7 @@ def _drive_uncovered() -> None:
         conn = store.open_db(Path(d) / "f.db")
         try:
             store.all_match_ids(conn)
+            store.load_card_extras(conn, [1])
             store.list_accounts(conn)
             store.load_details_by_ids(conn, ["a", "b"])
             store.load_seasons(conn)

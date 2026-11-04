@@ -53,6 +53,7 @@ from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
     ranker_pick_summary, recommend, recommend_candidates,
 )
+from cardviews import PlayerCard, SquadOvr, lineup_cards, player_card, squad_ovr
 from squad_timeline import (
     HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, arrival_report, build_timeline, parse_trades,
 )
@@ -128,6 +129,8 @@ __all__ = [
     "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table", "opp_rank_label",
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸
     "OppScore", "bin_of_value", "opp_scores",
+    # cardviews — 카드 정보 화면 재료(68)
+    "PlayerCard", "SquadOvr", "lineup_cards", "player_card", "squad_ovr",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",

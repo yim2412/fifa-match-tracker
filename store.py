@@ -1446,6 +1446,22 @@ def try_record(conn: sqlite3.Connection, key: str, day: str, ok: bool) -> None:
         conn.execute("INSERT OR REPLACE INTO card_tries (key, day, fails) VALUES (?, ?, ?)", (key, day, fails))
 
 
+SQL_IN_CHUNK = 500   # IN (…) 한 번에 넣는 수 — SQLite 변수 상한 안
+
+
+def load_card_extras(conn: sqlite3.Connection, spids) -> dict[int, dict]:
+    """카드 정보(card_extra) — 카드 → {height, weight, body, pos_ovr}. 없는 카드는 안 든다. 화면 재료(`cardviews`)."""
+    ids = sorted(set(spids))
+    out: dict[int, dict] = {}
+    for i in range(0, len(ids), SQL_IN_CHUNK):
+        part = ids[i:i + SQL_IN_CHUNK]
+        marks = ",".join("?" * len(part))
+        for sp, h, w, b, po in conn.execute(
+                f"SELECT spid, height, weight, body, pos_ovr FROM card_extra WHERE spid IN ({marks})", part):
+            out[sp] = {"height": h, "weight": w, "body": b, "pos_ovr": po}
+    return out
+
+
 def save_card_price_days(conn: sqlite3.Connection, rows) -> None:
     """rows: (spid, grade, day, price 또는 None, src 비트). 같은 날 같은 강화를 두 쓰임이 적으면 비트를 합친다."""
     rows = list(rows)

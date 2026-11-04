@@ -2590,14 +2590,16 @@ class MainWindow(QMainWindow):
     PLAYER_COLUMNS = ["포지션", "선수", "강화", "출전", "승률",
                       "공격력", "수비력", "기대득점률", "공격P", "골", "어시",
                       "패스%", "드리블%", "공중볼%", "가로채기", "태클%",
-                      "블록%", "선방력", "평점"]
+                      "블록%", "선방력", "평점", "실효 OVR", "키", "체형"]
     # 78 ③b — 선수 지표 열 묶음. 늘 보이는 열 + 칩으로 고르는 묶음(열 이름으로 — 열 순서가 바뀌어도 안 깨진다).
-    # 19열 각각이 늘 보임 또는 묶음 셋 중 정확히 하나여야 한다(test_ui_smoke). 열은 숨기기만 한다 — 데이터·정렬·색 그대로.
+    # 22열 각각이 늘 보임 또는 묶음 넷 중 정확히 하나여야 한다(test_ui_smoke). 열은 숨기기만 한다 — 데이터·정렬·색 그대로.
     PLAYER_ALWAYS_COLUMNS = ("포지션", "선수", "강화", "출전", "승률", "공격력", "수비력", "평점")
     PLAYER_GROUPS = (("공격", ("기대득점률", "공격P", "골", "어시")),
                      ("패스", ("패스%", "드리블%", "공중볼%")),
-                     ("수비", ("가로채기", "태클%", "블록%", "선방력")))
+                     ("수비", ("가로채기", "태클%", "블록%", "선방력")),
+                     ("카드", ("실효 OVR", "키", "체형")))
     PLAYER_GROUP_KEY = "view/player_group"   # 고른 묶음 이름 — 다른 탭처럼 다시 켜도 그 칩
+    PLAYER_CARD_TIP = "저장된 카드 정보입니다 — [정보]에서 카드 정보 자동 채우기를 켜면 채워지고, 아직 모르는 카드는 비어 있습니다."
     # 선수별 결정력 랭킹 — shootDetail(슛 좌표)만으로 낸 값. xG는 추정치(stats.shot_xg).
     FINISHING_COLUMNS = ["선수", "슛", "유효슛", "골", "전환율", "xG", "골−xG", "어시스트"]
     # 각 열 헤더에 마우스를 올렸을 때 보여줄 설명 — stats.py 의 계산식 주석을 그대로 옮김.
@@ -5151,6 +5153,24 @@ class MainWindow(QMainWindow):
         self._streak_done = (key, result)
         self._invalidate("luck")
 
+    SQUAD_OVR_TIP = ("선발 11장의 그 자리 OVR + 강화 보너스 평균입니다(팀컬러·적응도 제외). ± 는 판마다 흔들린 폭(표준편차)입니다. "
+                     "저장된 카드 정보로 세고, 모르는 카드가 있는 판은 뺍니다.")
+
+    def _show_squad_ovr(self) -> None:
+        """운 범위 카드(68) — 지금 시즌 범위의 내 선발 11장. 다 아는 판이 적으면 값을 안 낸다."""
+        details = self._details
+        r = core.squad_ovr(details, self._ouid, self._card_extras(core.lineup_cards(details, self._ouid)))
+        self.squad_ovr_data = r   # 테스트가 본다
+        card = self.card_squad_ovr
+        if core.is_weak(r.known, config.SQUAD_OVR_MIN_GAMES):
+            card.set("-")
+            card.set_sub(f"카드 정보를 아는 판 {r.known:,} / {r.games:,}" if r.games else "경기가 없습니다")
+            return
+        card.set(f"{r.avg:.1f}")
+        # 둘째 자리까지 — 스쿼드를 거의 안 바꾸는 계정은 실제로 0.05 언저리라 ±0.0 으로 보이면 고장처럼 읽힌다
+        spread = f"변동 ±{r.sd:.2f} · " if r.sd is not None else ""
+        card.set_sub(f"{spread}{r.known:,} / {r.games:,}판")
+
     def _build_luck_tab(self) -> QWidget:
         """성적 진단 [운 범위](N16·A3) — 하루 승률이 평균 ± 2σ 밖인 날 수 · 몇 판부터 실력 차이로 읽나 · 최장 연승·연패의 우연 기준."""
         scroll = QScrollArea()
@@ -5164,7 +5184,9 @@ class MainWindow(QMainWindow):
         cards = QHBoxLayout()
         self.card_luck_base = StatCard("시즌 평균")
         self.card_luck_out = StatCard("범위 밖 날")
-        for c in (self.card_luck_base, self.card_luck_out):
+        self.card_squad_ovr = StatCard("내 스쿼드 OVR")
+        self.card_squad_ovr.setToolTip(self.SQUAD_OVR_TIP)
+        for c in (self.card_luck_base, self.card_luck_out, self.card_squad_ovr):
             cards.addWidget(c, 1)
         box.addLayout(cards)
         self.luck_dots = charts.LuckDotRows()
@@ -5229,6 +5251,7 @@ class MainWindow(QMainWindow):
         days, mixed = self._luck_days(matches)
         no_table = not self._rank_seasons
         self._fill_luck_cards(days, mixed, no_table)
+        self._show_squad_ovr()
         rows = []
         for d in reversed(days):
             verdict = ("판수 미달 — 안 잼" if not d.judged else
@@ -9022,6 +9045,8 @@ class MainWindow(QMainWindow):
         # 오픈API에 없어 역산한 지표는 이름만으로는 기준이 안 보이기 때문.
         for c, name in enumerate(self.PLAYER_COLUMNS):
             help_text = self.PLAYER_COLUMN_HELP.get(name)
+            if name in self.PLAYER_GROUPS[-1][1]:
+                help_text = (f"{help_text} " if help_text else "") + self.PLAYER_CARD_TIP
             if help_text:
                 item = self.tbl_players.horizontalHeaderItem(c)
                 if item:
@@ -13065,6 +13090,18 @@ class MainWindow(QMainWindow):
                          " 잠시 후 다시 검색하면 채워집니다(그동안 판수 기준은 그대로 씁니다)."
                          if not self._rank_seasons else "")
 
+    @staticmethod
+    def _card_extras(spids) -> dict[int, dict]:
+        """카드 정보 — 저장된 것만 읽는다(요청 없음). 못 읽으면 빈칸으로 그린다(열 몇 칸 때문에 표가 죽으면 안 된다)."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                return store.load_card_extras(conn, spids)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return {}
+
     def _render_players(self, details: list[dict]) -> None:
         players = core.aggregate_players(
             details, self._ouid,
@@ -13072,8 +13109,10 @@ class MainWindow(QMainWindow):
             pos_name=lambda p: self._positions.get(p, str(p)))
         few = core.MIN_PLAYER_GAMES
         enough = [p.games >= few for p in players]
+        extras = self._card_extras({p.sp_id for p in players})
         rows = []
         for p, ok in zip(players, enough):
+            card = core.player_card(p.sp_id, p.pos_code, p.grade, extras)
             rows.append([
                 p.position, IconCell(p.name, None, core.season_id_of(p.sp_id)), (f"{p.grade}", p.grade),
                 (f"{p.games} ⚠" if p.games < few else f"{p.games}", p.games),
@@ -13092,6 +13131,9 @@ class MainWindow(QMainWindow):
                 (f"{p.block_rate:.1f}", p.block_rate),
                 (f"{p.save_power:.1f}", p.save_power),
                 (f"{p.rating:.2f}", p.rating),
+                (f"{card.ovr}", card.ovr) if card.ovr is not None else (NA, -1),
+                (f"{card.height}cm", card.height) if card.height else (NA, -1),
+                card.body or NA,
             ])
         # enable_sort=False — 재검색(2번째 이후 렌더)에서는 헤더에 이전 정렬
         # 상태(공격력 내림차순)가 남아 있어서, 여기서 정렬을 바로 켜면 Qt가

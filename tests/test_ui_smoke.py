@@ -908,8 +908,8 @@ def test_player_column_groups_78():
     always = list(app_main.MainWindow.PLAYER_ALWAYS_COLUMNS)
     groups = app_main.MainWindow.PLAYER_GROUPS
     members = [n for _g, cs in groups for n in cs]
-    assert len(cols) == 19 and len(always) + len(members) == 19, (len(cols), len(always), len(members))
-    assert sorted(always + members) == sorted(cols), ("19열이 늘 보임 또는 묶음 하나에 정확히 안 들어간다",
+    assert len(cols) == 22 and len(always) + len(members) == 22, (len(cols), len(always), len(members))
+    assert sorted(always + members) == sorted(cols), ("22열이 늘 보임 또는 묶음 하나에 정확히 안 들어간다",
                                                        set(cols) ^ set(always + members), len(set(members)) != len(members))
     _win._render_players(_win._slice()[1])
     tb, seg = _win.tbl_players, _win.seg_player_group
@@ -13328,6 +13328,7 @@ def test_explainer_notes_gone_78():
 # ── 79단계(3.3.1 ⑤ 색 규칙): 색마다 % · 좋은 값 초록 / 나쁜 값 빨강 · 근거 막대 승·무·패 ─────────────────────────
 import widgets  # noqa: E402
 from PySide6.QtCore import QPoint  # noqa: E402
+import cardstats as core_cardstats  # noqa: E402
 from PySide6.QtGui import QPixmap  # noqa: E402
 from PySide6.QtGui import QColor  # noqa: E402 — 79 검사들과 시즌·열 색 검사가 모듈 이름으로 쓴다
 
@@ -13802,6 +13803,80 @@ def test_82_arrivals_tab_shows_record_not_effect():
         _win._positions.clear()
         _win._positions.update(keep[3])
         _win._render_arrivals()
+
+
+def test_68_player_card_columns_and_squad_ovr():
+    """저장된 카드 정보 → 선수 지표 [카드] 칩 · 운 범위 카드. 값은 측정과 같은 식(cardstats) · 모르면 빈칸."""
+    import json
+    c = store.open_db(config.DB_PATH)
+    try:
+        c.execute("DELETE FROM card_extra")
+        players = core.aggregate_players(_win._slice()[1], _win._ouid, name_of=lambda i: f"선수{i}", pos_name=str)
+        known = next(p for p in players if p.pos_code in config.SIM_POS_OF and p.grade in config.GRADE_OVR_BONUS)
+        spids = core.lineup_cards(_win._details, _win._ouid)
+        assert len(spids) >= 11 and known.sp_id in spids, "픽스처에 선발이 없다 — 검사가 빈다"
+        # 칸마다 다른 값 — 다 같으면 "가장 많이 선 자리 기준" 을 못 잰다
+        grid = {cell: 100 + i for i, cell in enumerate(sorted(set(config.SIM_POS_OF.values())))}
+        assert len(set(grid.values())) > 1
+        c.executemany("INSERT INTO card_extra (spid, height, weight, body, pos_ovr) VALUES (?, 186, 80, '마름', ?)",
+                      [(s, json.dumps(grid)) for s in spids])
+        c.commit()
+        _win._go_page("선수 지표", "지표")
+        _win._render_players(_win._slice()[1])
+        t, cols = _win.tbl_players, _win.PLAYER_COLUMNS
+        name = _win._names.get(known.sp_id, str(known.sp_id))
+        rows = [r for r in range(t.rowCount()) if t.item(r, cols.index("선수")).text() == name]
+        assert rows, name
+        r = rows[0]
+        assert t.item(r, cols.index("실효 OVR")).text() == str(grid[config.SIM_POS_OF[known.pos_code]] + config.GRADE_OVR_BONUS[known.grade]), t.item(r, cols.index("실효 OVR")).text()
+        assert t.item(r, cols.index("키")).text() == "186cm" and t.item(r, cols.index("체형")).text() == "마름"
+        # 칩 — 평소엔 안 보이고 [카드] 를 고르면 보인다 · 다른 묶음은 숨는다
+        i = [n for n, _c in _win.PLAYER_GROUPS].index("카드")
+        keep = _win.seg_player_group.current()
+        _win.seg_player_group.set_current(i, emit=True)
+        assert not t.isColumnHidden(cols.index("실효 OVR")) and t.isColumnHidden(cols.index("골")), "칩이 열을 안 바꾼다"
+        _win.seg_player_group.set_current(0, emit=True)
+        assert t.isColumnHidden(cols.index("실효 OVR"))
+        _win.seg_player_group.set_current(keep, emit=True)
+        assert "[정보]" in t.horizontalHeaderItem(cols.index("키")).toolTip()
+        # 운 범위 카드 — 값은 측정과 같은 식의 판 평균
+        keep_min = config.SQUAD_OVR_MIN_GAMES
+        config.SQUAD_OVR_MIN_GAMES = 1            # 픽스처가 몇 판뿐이다 — 문턱 판정은 아래에서 따로
+        try:
+            _win._render_luck(_win._matches)
+            d = _win.squad_ovr_data
+            want = []
+            ex = {s: {"pos_ovr": json.dumps(grid)} for s in spids}
+            for det in _win._details:
+                me = next((p for p in det.get("matchInfo") or [] if p.get("ouid") == _win._ouid), None)
+                v = core_cardstats.lineup_strength(me, ex)[0] if me else None
+                if v is not None:
+                    want.append(v)
+            assert want and d.known == len(want) and abs(d.avg - sum(want) / len(want)) < 1e-9, (d, want)
+            assert _win.card_squad_ovr.value.text() == f"{d.avg:.1f}", _win.card_squad_ovr.value.text()
+            assert d.sd is not None and f"변동 ±{d.sd:.2f}" in _win.card_squad_ovr.sub.text(), _win.card_squad_ovr.sub.text()
+            # 문턱 — 다 아는 판이 모자라면 값을 안 낸다(기본값이 아닌 값으로 배선을 잰다)
+            config.SQUAD_OVR_MIN_GAMES = d.known + 1
+            _win._show_squad_ovr()
+            assert _win.card_squad_ovr.value.text() == "-" and "아는 판" in _win.card_squad_ovr.sub.text()
+            config.SQUAD_OVR_MIN_GAMES = d.known
+            _win._show_squad_ovr()
+            assert _win.card_squad_ovr.value.text() != "-", "문턱과 같으면 낸다"
+        finally:
+            config.SQUAD_OVR_MIN_GAMES = keep_min
+        # 카드 정보가 없으면 빈칸 · 표는 그대로
+        c.execute("DELETE FROM card_extra")
+        c.commit()
+        _win._render_players(_win._slice()[1])
+        r = next(r for r in range(t.rowCount()) if t.item(r, cols.index("선수")).text() == name)
+        assert t.item(r, cols.index("실효 OVR")).text() == widgets.NA and t.item(r, cols.index("키")).text() == widgets.NA
+        _win._render_luck(_win._matches)
+        assert _win.card_squad_ovr.value.text() == "-"
+    finally:
+        c.execute("DELETE FROM card_extra")
+        c.commit()
+        c.close()
+        _win._render_players(_win._slice()[1])
 
 
 def test_79_next_goal_is_two_color_bars():
