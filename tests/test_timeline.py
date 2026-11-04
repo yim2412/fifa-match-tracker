@@ -354,11 +354,14 @@ def test_arrival_gap_boundary_and_before_excludes_him():
     same = _rep((120, _swap(20, 13)), (120, _BASE), (30, _swap(20, 13)), (120, _BASE))
     pid11 = [r for r in same.arrivals if r.sp_id == 100_000_011]
     assert len(pid11) == 1 and pid11[0].after.games == 240, [(r.sp_id, r.after.games) for r in same.arrivals]
-    back = _rep((120, _swap(20, 13)), (120, _BASE), (31, _swap(20, 13)), (120, _BASE))
+    back = _rep((120, _swap(20, 13)), (120, _BASE), (150, _swap(20, 13)), (120, _BASE))
     pid11 = sorted((r for r in back.arrivals if r.sp_id == 100_000_011), key=lambda r: r.at)
     assert len(pid11) == 2, [(r.sp_id, r.after.games) for r in back.arrivals]
-    # 다시 온 줄의 "앞" 은 그가 없던 판만 — 앞 120(없음) + 31(없음) = 151 · 그가 뛴 120판은 안 든다
-    assert pid11[1].before.games == 151, pid11[1].before.games
+    # 다시 온 줄의 "앞" 은 그가 빠져 있던 150판까지 — 그 너머(그가 뛰기 전 옛 판)로 건너뛰지 않는다
+    assert pid11[1].before.games == 150, pid11[1].before.games
+    # 31판만 쉬고 돌아오면 앞이 100판이 안 돼 줄이 없다(앞에 옛 판을 끌어다 채우지 않는다)
+    short = _rep((120, _swap(20, 13)), (120, _BASE), (31, _swap(20, 13)), (120, _BASE))
+    assert len([r for r in short.arrivals if r.sp_id == 100_000_011]) == 1, [(r.sp_id, r.before.games) for r in short.arrivals]
 
 
 def test_arrival_result_filter_and_short_lineup():
@@ -396,6 +399,38 @@ def test_arrival_squad_swap_and_previous_player():
     later = _rep((100, _BASE), (60, _swap(20, 12)), (60, {**_swap(20, 12), 19: 13}))
     r = next(x for x in later.arrivals if x.sp_id == 100_000_012)
     assert r.together == 0 and r.window_changed == 1, (r.together, r.window_changed)
+
+
+def test_arrival_previous_player_ignores_one_game_rotation():
+    # 직전 한 판만 대타가 뛰었다 — 앞 선수는 그 자리 주전이고 대타가 아니다
+    rep = _rep((150, _BASE), (1, _swap(20, 60)), (120, _swap(20, 12)))
+    r = next(x for x in rep.arrivals if x.sp_id == 100_000_012)
+    assert r.prev_sp == 100_000_011, r.prev_sp
+    # 직전 한 판만 5명을 쉬게 했다 — 돌아온 주전은 "같이 바뀐 선수" 가 아니다 · 스쿼드 교체도 아니다
+    rest = {**_BASE, 16: 31, 17: 32, 18: 33, 19: 34, 15: 35}
+    r = next(x for x in _rep((150, _BASE), (1, rest), (120, _swap(20, 12))).arrivals if x.sp_id == 100_000_012)
+    assert r.together == 0 and not r.squad_swap, (r.together, r.squad_swap)
+    # 그 자리 사람이 자리만 옮겼을 때 — 빠진 주전을 찾는다. 한 판 뛴 대타는 "빠진 주전" 이 아니다
+    shift = {**_BASE, 20: 12, 19: 11}                # 11번이 20 → 19 · 10번이 빠짐
+    r = next(x for x in _rep((150, _BASE), (1, {**_BASE, 18: 60}), (120, shift)).arrivals if x.sp_id == 100_000_012)
+    assert r.prev_sp == 100_000_010, r.prev_sp
+    # 최근 판에 없던 사람은 센다 · 배선 — 창을 줄이면 오래 쉰 주전도 새로 든 사람이 된다
+    keep = config.ARRIVAL_RECENT
+    try:
+        config.ARRIVAL_RECENT = 1
+        r = next(x for x in _rep((150, _BASE), (1, rest), (120, _swap(20, 12))).arrivals if x.sp_id == 100_000_012)
+        assert r.together == 5 and r.squad_swap, (r.together, r.squad_swap)
+    finally:
+        config.ARRIVAL_RECENT = keep
+
+
+def test_arrival_rows_are_newest_first():
+    rep = _rep((120, _BASE), (120, _swap(20, 12)), (120, _swap(19, 13, _swap(20, 12))))
+    assert [r.sp_id for r in rep.arrivals] == [100_000_013, 100_000_012], [r.sp_id for r in rep.arrivals]
+    a = {**_BASE, 10: 2, 11: 1}    # 앞번호 사람이 먼저 옮긴다 — 안 정렬하면 옛 줄이 앞에 온다
+    b = {**a, 17: 9, 18: 8}
+    m = _rep((120, _BASE), (120, a), (120, b)).moves
+    assert [x.at for x in m] == sorted((x.at for x in m), reverse=True) and m[0].at > m[-1].at, [x.at for x in m]
 
 
 def test_arrival_z_none_when_flat_and_inside():
@@ -439,6 +474,16 @@ def test_move_rows():
     other_shape = {k if k != 19 else 5: v for k, v in _BASE.items()}
     assert set(other_shape) != set(_BASE)
     assert not _rep((120, _BASE), (120, other_shape)).moves, "포메이션 변경을 자리 이동으로 셌다"
+    # 결장·깜빡임을 사이에 두고 포메이션이 바뀌어도 자리 이동이 아니다 — 앞 자리에서 실제로 뛴 마지막 판과 견준다
+    shape = {k if k != 20 else 6: v for k, v in _BASE.items()}     # 11번 자리 번호만 20 → 6
+    without = {k: (v if v != 11 else 70) for k, v in shape.items()}
+    assert not _rep((120, _BASE), (3, without), (120, shape)).moves, "결장 뒤 포메이션 변경을 자리 이동으로 셌다"
+    flick = {**shape, 6: 10, 19: 11}                               # 새 포메이션 첫 2판만 10·11 번이 다른 자리
+    assert not _rep((120, _BASE), (2, flick), (120, shape)).moves, "깜빡임 뒤 포메이션 변경을 자리 이동으로 셌다"
+    # 같이 바뀜 — 직전 한 판 로테이션을 세지 않는다
+    rest = {**_BASE, 16: 31, 17: 32, 18: 33}
+    mv = next(x for x in _rep((120, _BASE), (1, rest), (120, swap_pos)).moves if x.sp_id == 100_000_011)
+    assert mv.together == 0, mv.together
     # 창 — 앞뒤 400판까지
     big = _rep((500, _BASE), (450, swap_pos)).moves[0]
     assert (big.before.games, big.after.games) == (400, 400)

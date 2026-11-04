@@ -5898,6 +5898,13 @@ class MainWindow(QMainWindow):
     def _on_arrival_view(self, i: int) -> None:
         self.tbl_arrivals.setVisible(i == 0)
         self.tbl_moves.setVisible(i == 1)
+        self._show_arrival_note()
+
+    def _show_arrival_note(self) -> None:
+        """빈 이유는 보이는 칩 기준 — 이동만 없을 때 그 칩이 이유 없이 비지 않게."""
+        rep = self._arrivals_cache[1] if getattr(self, "_arrivals_cache", None) else None
+        rows = (rep.moves if self.seg_arrivals.current() == 1 else rep.arrivals) if rep is not None else [1]
+        self._set_status(self.lb_arrivals_note, "" if rows else self.ARRIVAL_EMPTY.format(n=config.ARRIVAL_MIN_GAMES))
 
     def _arrival_cells(self, row) -> list:
         """판수 · 승률 · 득실 — 두 표가 같이 쓴다. 정렬 값은 앞뒤 차이."""
@@ -5926,7 +5933,7 @@ class MainWindow(QMainWindow):
             self._arrivals_cache = (key, core.arrival_report(self._details_all, self._ouid))
         rep = self._arrivals_cache[1]
         self.arrival_report = rep   # 테스트가 본다
-        self._set_status(self.lb_arrivals_note, "" if rep.arrivals or rep.moves else self.ARRIVAL_EMPTY.format(n=config.ARRIVAL_MIN_GAMES))
+        self._show_arrival_note()
         name = lambda sp: IconCell(self._names.get(sp, str(sp)), None, core.season_id_of(sp))   # noqa: E731
         pos = lambda p: self._positions.get(p, str(p))   # noqa: E731
         diff = lambda r: self.ARRIVAL_DIFF_OUT if r.outside else self.ARRIVAL_DIFF_IN   # noqa: E731
@@ -5947,8 +5954,6 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_moves, rows, enable_sort=False)
         self._arrival_diff(self.tbl_moves, rep.moves, self.MOVE_COLUMNS.index("득실 차이"))
         self.tbl_moves.setSortingEnabled(True)
-        for t in (self.tbl_arrivals, self.tbl_moves):
-            self._start_icons(t)
 
     def _build_timeline_tab(self) -> QWidget:
         w = QWidget()
@@ -13604,7 +13609,7 @@ class MainWindow(QMainWindow):
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
-        self._timeline_cache = self._history_cache = self._reward_cache = None
+        self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = None
         self._elo.clear()
         self._pred.clear()
         self._max_division.clear()

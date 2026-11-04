@@ -22,7 +22,7 @@
 from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import NamedTuple
@@ -30,6 +30,7 @@ from typing import NamedTuple
 import config
 import matchtime
 from models import RateMixin, draw_possible, is_mixed, is_weak, mixed_of_details
+from store import PLAYER_ID_MOD
 
 SUB_POSITION = 28  # 교체 명단 — 출전으로 안 센다
 
@@ -286,7 +287,7 @@ class ArrivalRow:
     prev_sp: int | None       # 앞 선수 — 그 자리에 있다가 빠진 사람. 모르면 None
     before: Window
     after: Window
-    together: int             # 같은 판에 같이 새로 든 다른 선수
+    together: int             # 같은 판에 같이 새로 든 다른 선수(직전 ARRIVAL_RECENT 판에 없던 사람)
     window_changed: int       # 앞 창 첫 판과 뒤 창 끝 판의 선발이 다른 사람 수(이 선수 빼고)
     z: float | None           # 경기당 득실차 차이 ÷ 표준오차
 
@@ -308,7 +309,7 @@ class MoveRow:
     to_pos: int
     before: Window
     after: Window
-    together: int             # 그 판에 새로 든 선수
+    together: int             # 그 판에 새로 든 선수(직전 ARRIVAL_RECENT 판에 없던 사람)
     z: float | None
 
     @property
@@ -334,7 +335,7 @@ class _Lineup(NamedTuple):
 
 def pid_of(sp_id: int) -> int:
     """카드 번호 → 사람(뒤 6자리) — 시즌이 다른 같은 선수를 한 사람으로."""
-    return sp_id % 1_000_000
+    return sp_id % PLAYER_ID_MOD
 
 
 def _goal(side: dict) -> int:
@@ -398,34 +399,56 @@ def _spells(ids: list[int]) -> list[list[int]]:
     return out
 
 
+def _recent(games: list[_Lineup], i: int) -> list[_Lineup]:
+    """직전 ARRIVAL_RECENT 판 — 바로 앞 한 판만 보면 로테이션에 속는다(대타가 앞 선수로 · 쉬고 돌아온 주전이 새 선수로)."""
+    return games[max(0, i - config.ARRIVAL_RECENT):i]
+
+
+def _newcomers(games: list[_Lineup], i: int) -> set[int]:
+    seen: set[int] = set()
+    for g in _recent(games, i):
+        seen.update(g.by_pid)
+    return set(games[i].by_pid) - seen
+
+
+def _previous_player(games: list[_Lineup], s: int, pos: int) -> int | None:
+    """앞 선수 — 직전 판들에서 그 자리를 가장 많이 맡았고 이번 판에 빠진 사람. 그 사람이 자리만 옮겼으면(안 빠졌으면)
+    직전 판들의 주전(절반 넘게 뜀) 중 빠진 사람이 하나일 때 그 사람. 그래도 모르면 None."""
+    recent, cur = _recent(games, s), games[s].by_pid
+    in_slot = Counter(g.slots[pos] for g in recent if pos in g.slots)
+    if in_slot:
+        sp = in_slot.most_common(1)[0][0]
+        if pid_of(sp) not in cur:
+            return sp
+    plays = Counter(p for g in recent for p in g.by_pid)
+    gone = [p for p, n in plays.items() if n * 2 > len(recent) and p not in cur]
+    if len(gone) != 1:
+        return None
+    last = next(g for g in reversed(recent) if gone[0] in g.by_pid)
+    return last.slots[last.by_pid[gone[0]]]
+
+
 def _arrival(games: list[_Lineup], pid: int, played: list[int], mixed: bool) -> ArrivalRow | None:
     lo, w = config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW
     s = played[0]
     if len(played) < lo:
         return None
     before = []
-    for i in range(s - 1, -1, -1):     # 이 선수가 없던 판만 — 전에 썼다 다시 데려오면 그 판은 "앞" 이 아니다
-        if pid not in games[i].by_pid:
-            before.append(i)
-            if len(before) == w:
-                break
+    for i in range(s - 1, -1, -1):
+        if pid in games[i].by_pid:     # 다시 데려온 줄 — 앞은 빠져 있던 판까지. 넘어가면 시대가 다른 옛 판과 견주게 된다
+            break
+        before.append(i)
+        if len(before) == w:
+            break
     before.reverse()
     if len(before) < lo:           # 기록 첫 판부터 있던 선수는 "앞" 이 없어 여기서 빠진다
         return None
     after = played[:w]
-    cur, prev = games[s], games[s - 1]
-    gone = set(prev.by_pid) - set(cur.by_pid)
+    cur = games[s]
     pos = cur.by_pid[pid]
-    cand = prev.slots.get(pos)
-    if cand is not None and pid_of(cand) in gone:
-        prev_sp = cand
-    elif len(gone) == 1:           # 포메이션이 함께 바뀌어 자리 번호가 달라도 빠진 사람이 하나면 그 사람이다
-        prev_sp = prev.slots[prev.by_pid[next(iter(gone))]]
-    else:
-        prev_sp = None
-    return ArrivalRow(at=cur.at, sp_id=cur.slots[pos], pos=pos, prev_sp=prev_sp,
+    return ArrivalRow(at=cur.at, sp_id=cur.slots[pos], pos=pos, prev_sp=_previous_player(games, s, pos),
                       before=_side(games, before, mixed), after=_side(games, after, mixed),
-                      together=len(set(cur.by_pid) - set(prev.by_pid)) - 1,
+                      together=len(_newcomers(games, s) - {pid}),
                       window_changed=len(set(games[after[-1]].by_pid) - set(games[before[0]].by_pid) - {pid}),
                       z=_gd_z(games, before, after))
 
@@ -448,12 +471,16 @@ def _moves(games: list[_Lineup], pid: int, played: list[int], mixed: bool) -> li
     lo, w = config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW
     for (p0, a), (p1, b) in zip(merged, merged[1:]):
         first = b[0]
-        if len(a) < lo or len(b) < lo or set(games[first].slots) != set(games[first - 1].slots):
-            continue               # 포메이션이 바뀐 판이면 자리 번호만 달라진 것일 수 있다
+        if len(a) < lo or len(b) < lo:
+            continue
+        # 포메이션이 달라졌으면 자리 번호만 바뀐 것일 수 있다 — 앞 자리에서 실제로 뛴 마지막 판과 견준다(그 사이 결장·깜빡임이 있어도)
+        last = max(i for i in a if games[i].by_pid[pid] == p0)
+        if set(games[first].slots) != set(games[last].slots):
+            continue
         before, after = a[-w:], b[:w]
         out.append(MoveRow(at=games[first].at, sp_id=games[first].slots[p1], from_pos=p0, to_pos=p1,
                            before=_side(games, before, mixed), after=_side(games, after, mixed),
-                           together=len(set(games[first].by_pid) - set(games[first - 1].by_pid)),
+                           together=len(_newcomers(games, first)),
                            z=_gd_z(games, before, after)))
     return out
 

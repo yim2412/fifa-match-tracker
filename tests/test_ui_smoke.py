@@ -13714,15 +13714,15 @@ def test_81_owner_candidates_show_season_icons():
 
 
 def _arrival_details():
-    """앞 150판 → 12번을 25번 자리에 → 뒤 120판. 득실차 앞 0 언저리 · 뒤 +2 언저리(범위 밖)."""
+    """앞 150판 → 12번 투입(득실 크게 오름 — 범위 밖) → 120판 → 13번 투입 · 1·2번 자리 맞바꿈(득실이 앞 평균과 비슷 — 범위 안) → 120판."""
     def side(ouid, pids, gf):
         return {"ouid": ouid, "nickname": ouid, "shoot": {"goalTotal": gf}, "matchDetail": {"matchResult": "승" if ouid == "me" and gf > 0 else "패"},
                 "player": [{"spPosition": 10 + k, "spId": 100000000 + p} for k, p in enumerate(pids)]}
     out = []
     base = list(range(1, 12))
-    for i in range(270):
-        pids = base if i < 150 else base[:10] + [12]
-        gf = (i % 2) if i < 150 else 2 + (i % 2)
+    for i in range(390):
+        pids = base if i < 150 else base[:10] + [12] if i < 270 else [2, 1] + base[2:9] + [13, 12]
+        gf = (i % 2) if i < 150 else (2 if i < 270 else 1) + (i % 2)
         out.append({"matchId": f"m{i}", "matchDate": f"2026-08-{1 + i // 30:02d}T{i % 24:02d}:{i % 60:02d}:00",
                     "matchInfo": [side("me", pids, gf), side("opp", base, 0)]})
     return out
@@ -13735,16 +13735,18 @@ def test_82_arrivals_tab_shows_record_not_effect():
         _win._ouid = "me"
         _win._names.update({100000011: "빠진 선수", 100000012: "새 선수"})
         _win._positions[20] = "ST"
+        _win._positions.update({10: "10", 11: "11"})
         _win._go_page("스쿼드·이적", "영입 전후")
         assert _win._page_tabs["스쿼드·이적"].current_name() == "영입 전후", "탭 자리가 없다"
         _win._render_arrivals()
         t = _win.tbl_arrivals
         cols = _win.ARRIVAL_COLUMNS
-        assert t.rowCount() == 1 and _win.tbl_moves.rowCount() == 0, (t.rowCount(), _win.tbl_moves.rowCount())
-        cell = lambda name: t.item(0, cols.index(name))   # noqa: E731
+        assert t.rowCount() == 2 and _win.tbl_moves.rowCount() == 2, (t.rowCount(), _win.tbl_moves.rowCount())
+        new_row = next(r for r in range(2) if t.item(r, cols.index("선수")).text() == "새 선수")
+        cell = lambda name: t.item(new_row, cols.index(name))   # noqa: E731
         assert cell("선수").text() == "새 선수" and cell("앞 선수").text() == "빠진 선수" and cell("자리").text() == "ST"
-        assert cell("판수(앞/뒤)").text() == "150 / 120" and cell("같이 바뀜").text() == "0명"
-        assert cell("경기당 득실").text() == "+0.50 → +2.50", cell("경기당 득실").text()
+        assert cell("판수(앞/뒤)").text() == "150 / 240" and cell("같이 바뀜").text() == "0명"
+        assert cell("경기당 득실").text() == "+0.50 → +2.00", cell("경기당 득실").text()
         assert " → " in cell("승률").text()
         d = cell("득실 차이")
         assert d.text() == _win.ARRIVAL_DIFF_OUT and d.font().bold() and d.foreground().color() == QColor(T.TEXT)
@@ -13757,13 +13759,38 @@ def test_82_arrivals_tab_shows_record_not_effect():
         assert not t.isHidden() and _win.tbl_moves.isHidden()
         # "효과" 라는 말을 화면에 안 쓴다 — 탭 이름 · 머리글 · 칸 · 말풍선
         words = cols + _win.MOVE_COLUMNS + [_win.ARRIVAL_DIFF_TIP, _win.ARRIVAL_TOGETHER_TIP, _win.ARRIVAL_EMPTY, "영입 전후"]
-        assert not [x for x in words if "효과" in x and "덕분" not in x], words
+        assert not [x for x in words if "효과" in x], words
         assert t.horizontalHeaderItem(cols.index("득실 차이")).toolTip() and t.horizontalHeaderItem(cols.index("같이 바뀜")).toolTip()
-        assert not _win.lb_arrivals_note.isVisible() or not _win.lb_arrivals_note.text()
-        # 정렬을 켜도 꾸밈이 제 줄을 따라간다 · 다시 그려도 캐시(같은 키)
+        assert not _win.lb_arrivals_note.text(), _win.lb_arrivals_note.text()
+        # 이동 표 칸
+        m = _win.tbl_moves
+        mc = _win.MOVE_COLUMNS
+        moved = {m.item(r, mc.index("선수")).text(): m.item(r, mc.index("자리")).text() for r in range(2)}
+        assert moved == {"100000001": "10 → 11", "100000002": "11 → 10"}, moved   # 앞 자리 → 뒤 자리
+        assert all(m.item(r, mc.index("판수(앞/뒤)")).text() == "270 / 120" and m.item(r, mc.index("득실 차이")).toolTip() for r in range(2))
+        # 정렬해 둔 채 다시 그려도 꾸밈이 제 줄을 따라간다(PyQt 1 — 정렬을 먼저 켜면 색·굵게가 엉뚱한 줄로 간다)
         first = _win.arrival_report
+        diff_col = cols.index("득실 차이")
+        got = {t.item(r, cols.index("선수")).text(): t.item(r, diff_col).text() for r in range(2)}
+        assert len(set(got.values())) == 2, ("두 줄 판정이 같으면 이 검사가 빈다", got)
+        for order in (Qt.SortOrder.AscendingOrder, Qt.SortOrder.DescendingOrder):
+            t.sortByColumn(cols.index("첫 선발"), order)
+            _win._render_arrivals()
+            assert _win.arrival_report is first, "같은 경기 목록인데 다시 셌다"
+            for r in range(2):
+                it = t.item(r, diff_col)
+                assert it.font().bold() == (it.text() == _win.ARRIVAL_DIFF_OUT), (order, r, it.text())
+                assert got[t.item(r, cols.index("선수")).text()] == it.text(), (order, r)
+        # 이유 글은 보이는 칩 기준 — 이동만 없으면 그 칩에서만 뜬다
+        only = core.arrival_report(_win._details_all, "me")
+        only.moves = []
+        _win._arrivals_cache = (_win._arrivals_cache[0], only)
         _win._render_arrivals()
-        assert _win.arrival_report is first, "같은 경기 목록인데 다시 셌다"
+        assert not _win.lb_arrivals_note.text()
+        _win.seg_arrivals.set_current(1, emit=True)
+        assert str(config.ARRIVAL_MIN_GAMES) in _win.lb_arrivals_note.text(), "빈 표인데 이유가 없다"
+        _win.seg_arrivals.set_current(0, emit=True)
+        assert not _win.lb_arrivals_note.text()
         # 비면 이유 글 · 표 비움
         _win._details_all = []
         _win._render_arrivals()
