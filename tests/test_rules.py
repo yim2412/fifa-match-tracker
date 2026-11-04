@@ -323,7 +323,7 @@ FONT_SIZE_CALLS = {"setPixelSize", "setPointSize", "setPointSizeF"}
 FONT_SIZE_KW = {"base_pt", "min_pt", "pt"}
 # 글씨 크기는 theme.py 의 단계 상수(PX_*·PT_*)로만 — 15→16px 처럼 기본 크기가 바뀔 때 고칠 곳이 하나여야 한다(78 ②).
 # charts.py 는 그래프 골든(픽셀까지 같아야) 때문에 80단계 몫이라 뺀다. 예외 표는 (파일, 줄 원문 조각) → 이유.
-FONT_SIZE_SKIP = {"theme.py", "charts.py"}
+FONT_SIZE_SKIP = {"theme.py"}
 FONT_SIZE_ALLOW: dict[tuple[str, str], str] = {}
 
 
@@ -925,8 +925,9 @@ def test_font_sizes_only_in_theme():
           "w.setStyleSheet(f'font-size: {T.PX_S}px;')\nFitLabel(t, base_pt=T.PT_TITLE)\nMIN_FONT_PX = T.PX_FLOOR\n"
           "def g(pt=None):\n    pass\n")
     assert check_font_sizes({"x.py": ok}) == []
-    # theme.py 는 상수를 정의하는 자리, charts.py 는 80단계 몫
-    assert check_font_sizes({"theme.py": planted, "charts.py": planted}) == []
+    # theme.py 는 상수를 정의하는 자리
+    assert check_font_sizes({"theme.py": planted}) == []
+    assert len(check_font_sizes({"charts.py": planted})) == 10, "charts.py 가 검사 밖이다(80 에서 뺐다)"
     assert check_font_sizes(_all(APP_FILES)) == []
 
 

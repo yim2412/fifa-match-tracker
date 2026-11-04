@@ -37,7 +37,7 @@ RING_W = 2          # 점·끝점 둘레 바탕색 테두리
 GAP = 2             # 맞닿는 채움 사이 바탕색 틈
 BAR_MAX = 24        # 막대 두께 상한
 BAR_RADIUS = 4      # 막대 끝 둥글기
-SMALL_PT = 9        # 축 글자
+SMALL_PT = T.PT_XS  # 축 글자(80 — 옛 9)
 TREND_LINE_W = 2.5  # 추이 그래프(AreaTrendChart) 선만 — 다른 그래프는 LINE_W
 BAND_ALPHA = 0.2    # 추이 띠 진하기
 BAND_BAR_MAX = 6    # 혼자 있는 띠 날의 세로 막대 폭 상한(날 간격의 1/3 과 작은 쪽)
@@ -284,7 +284,7 @@ class AreaTrendChart(_Chart):
         if self._ranks is not None:     # 오른쪽 순위 축 글자 자리
             known = [r for r in self._ranks if r]
             mr = max(mr, max(fm.horizontalAdvance(f"{r:,}위") for r in (min(known), max(known))) + 12)
-        mt, mb = 18, fm.height() + 8
+        mt, mb = 18, fm.height() + fm.height() // 2 + 6
         w, h = self.width(), self.height()
         if self._legend or self._headline:
             mt += self._draw_header(p, fm, w) + 4
@@ -452,7 +452,7 @@ class AreaTrendChart(_Chart):
                 shown.pop()
             shown.append(n - 1)
         for i in shown:
-            p.drawText(QRectF(pts[i].x() - lab_w / 2, foot + 4, lab_w, fm.height()),
+            p.drawText(QRectF(pts[i].x() - lab_w / 2, foot + fm.height() // 2 + 2, lab_w, fm.height()),
                        Qt.AlignmentFlag.AlignCenter, self._points[i][0])
 
         # 마우스 올림 — 가장 가까운 점까지의 세로 띠
@@ -772,7 +772,7 @@ class DonutChart(_Chart):
         big, sub = self._center
         f = QFont(self.font())
         f.setBold(True)
-        f.setPointSize(13)
+        f.setPointSize(T.PT_M)
         p.setFont(f)
         p.setPen(QColor(T.TEXT))
         fm = QFontMetrics(f)
@@ -830,7 +830,7 @@ class RingGauge(_Chart):
                 p.drawArc(ring, 90 * 16, int(-span * 16))
         f = QFont(self.font())
         f.setBold(True)
-        f.setPointSize(13)
+        f.setPointSize(T.PT_M)
         p.setFont(f)
         p.setPen(QColor(T.TEXT))
         fm = QFontMetrics(f)
@@ -1260,7 +1260,7 @@ class DivisionRunChart(_Chart):
         axis_w = max((self.BADGE if div in self._badges else fm.horizontalAdvance(self._name(div))) for div in levels)
         ml, mr = axis_w + 12, 12
         mt = (self.HEAD_H if self._head is not None else 0) + 10
-        mb = fm.height() + 10
+        mb = fm.height() + self.BADGE // 2 + 4
         plot_w = max(w - ml - mr, 1)
         plot_h = max(h - mt - mb, 1)
         y_of = {div: (mt + plot_h - plot_h * i / (len(levels) - 1) if len(levels) > 1 else mt + plot_h / 2)
@@ -1321,7 +1321,7 @@ class DivisionRunChart(_Chart):
             x = x_of(i)
             if text == last_text or x - lw / 2 < last_right or x + lw / 2 > w:
                 continue
-            p.drawText(QRectF(x - lw / 2, h - mb + 6, lw, fm.height()), Qt.AlignmentFlag.AlignCenter, text)
+            p.drawText(QRectF(x - lw / 2, h - mb + self.BADGE // 2 + 2, lw, fm.height()), Qt.AlignmentFlag.AlignCenter, text)
             last_right, last_text = x + lw / 2, text
             labels.append(text)
         self.marks["labels"] = labels

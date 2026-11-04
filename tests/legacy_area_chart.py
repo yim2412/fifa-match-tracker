@@ -9,6 +9,7 @@ charts 의 상수·도우미와 theme 색을 읽어서, 그쪽을 고치면 사�
 테마만 theme.MODE 로 고른다(색 값은 아래 표에 박아 둠).
 이 파일은 고치지 않는다(고치면 대조가 무의미해진다). 기본값 그림을 일부러 바꿀 때만 통째로 다시 얼린다.
 예외 하나: 73단계(PySide6 전환)에서 **import 줄만** PyQt6 → PySide6 로 바꿨다 — 그림 코드는 그대로다.
+2026-11-04 80단계에서 다시 얼렸다 — 그래프 글씨 9 → 10pt · 0% 눈금과 첫 날짜가 겹쳐 x 라벨을 반 줄 내렸다.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ import theme as T
 LINE_W = 2.5
 DOT_R = 4
 RING_W = 2
-SMALL_PT = 9
+SMALL_PT = 10
 _COLORS = {   # 2026-10-27 의 theme 값 — PANEL · CHART_AXIS · CHART_GRID · TEXT · TEXT_DIM · 선(CHART_LINE)
     "dark": ("#18181b", "#3a414b", "#262b33", "#fafafa", "#a1a1aa", "#8689ea"),
     "light": ("#ffffff", "#d5dae3", "#eceff4", "#09090b", "#616875", "#373cbe"),
@@ -100,7 +101,7 @@ class LegacyAreaTrendChart(QWidget):
         p.setFont(small)
         ml = fm.horizontalAdvance("100%") + 8
         mr = fm.horizontalAdvance("100.0%") // 2 + 10
-        mt, mb = 18, fm.height() + 8
+        mt, mb = 18, fm.height() + fm.height() // 2 + 6
         w, h = self.width(), self.height()
         top, bottom = mt, h - mb
         plot_w = max(w - ml - mr, 1)
@@ -187,7 +188,7 @@ class LegacyAreaTrendChart(QWidget):
                 shown.pop()
             shown.append(n - 1)
         for i in shown:
-            p.drawText(QRectF(pts[i].x() - lab_w / 2, bottom + 4, lab_w, fm.height()),
+            p.drawText(QRectF(pts[i].x() - lab_w / 2, bottom + fm.height() // 2 + 2, lab_w, fm.height()),
                        Qt.AlignmentFlag.AlignCenter, self._points[i][0])
 
         half = plot_w / (2 * (n - 1)) if n > 1 else plot_w / 2
