@@ -24,11 +24,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PySide6.QtCore import QAbstractListModel, QCollator, QLocale, QModelIndex, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractListModel, QCollator, QEvent, QLocale, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
-    QLabel, QListView, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
+    QApplication, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
@@ -3502,6 +3502,206 @@ def chip_toggle(text: str) -> QPushButton:
     return b
 
 
+class IconCombo(NoScrollComboBox):
+    """줄마다 작은 그림이 붙는 콤보(81 — 선수로 구단주 찾기의 시즌 아이콘). 그림은 줄 목록과 같은 길로 받는다
+    (app_main._start_list_icons — icon_entries · icon · put_icon)."""
+    ICON_PX = 20
+
+    def __init__(self, min_chars: int):
+        super().__init__()
+        self._icons: dict[tuple, QPixmap] = {}
+        self._row_keys: list[tuple] = []
+        self.setIconSize(QSize(self.ICON_PX, self.ICON_PX))
+        # 후보 글자 길이로 콤보가 늘면 옆 칸이 글자 두 개 폭으로 눌렸다(81 실제 창) — 폭은 글자 수로 정한다
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(min_chars)
+
+    def set_icon_items(self, rows: list[tuple]) -> None:
+        """rows: (글자, 값, (종류, 키) | ()) — 받아 둔 그림은 바로 붙는다."""
+        self.clear()
+        self._row_keys = []
+        for text, data, key in rows:
+            self.addItem(text, data)
+            self._row_keys.append(key)
+            pm = self._icons.get(key)
+            if pm is not None:
+                self.setItemIcon(self.count() - 1, QIcon(pm))
+
+    def icon_entries(self) -> set:
+        return {k for k in self._row_keys if k and k[1] is not None}
+
+    def icon(self, kind: str, key) -> QPixmap | None:
+        return self._icons.get((kind, key))
+
+    def put_icon(self, kind: str, key, pm: QPixmap) -> None:
+        self._icons[(kind, key)] = pm
+        for i, k in enumerate(self._row_keys):
+            if k == (kind, key):
+                self.setItemIcon(i, QIcon(pm))
+
+
+class GridPicker(QFrame):
+    """GridPickCombo 의 펼침 — 창의 자식이라 창 밖으로 안 나간다(피드백 13: 팀컬러 수십 개 목록이 화면 아래로 넘어갔다).
+    모달이 아니다(바깥을 누르거나 Esc 면 닫힌다). 고른 값은 콤보가 들고 있어 currentIndexChanged 흐름이 그대로다."""
+    TILE_W = 170
+    TILE_H = 38
+    ICON_PX = 26
+    MARGIN = 8           # 창 가장자리와 띄울 폭
+    MAX_H = 420
+
+    def __init__(self, combo: "GridPickCombo", search: QLineEdit):
+        super().__init__()
+        self.combo = combo
+        self.search = search
+        self._icons: dict[tuple, QPixmap] = {}
+        self.setObjectName("gridPick")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet(f"QFrame#gridPick {{ background: {T.PANEL}; border: 1px solid {T.BORDER}; border-radius: 6px; }}")
+        v = QVBoxLayout(self)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(6)
+        search.setMaximumWidth(16777215)
+        v.addWidget(search)
+        self.list = QListWidget()
+        self.list.setFlow(QListView.Flow.LeftToRight)
+        self.list.setWrapping(True)
+        self.list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.list.setMovement(QListView.Movement.Static)
+        self.list.setUniformItemSizes(True)
+        self.list.setWordWrap(False)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setIconSize(QSize(self.ICON_PX, self.ICON_PX))
+        self.list.itemClicked.connect(self._pick)
+        v.addWidget(self.list, 1)
+        search.returnPressed.connect(self._pick_first)
+        self.hide()
+
+    # 줄 목록과 같은 그림 길(app_main._start_list_icons)
+    def icon_entries(self) -> set:
+        keys = (self.combo.icon_of(self.combo.itemText(i)) for i in range(self.combo.count()))
+        return {k for k in keys if k and k[1] is not None}
+
+    def icon(self, kind: str, key) -> QPixmap | None:
+        return self._icons.get((kind, key))
+
+    def put_icon(self, kind: str, key, pm: QPixmap) -> None:
+        self._icons[(kind, key)] = pm
+        for r in range(self.list.count()):
+            it = self.list.item(r)
+            if self.combo.icon_of(it.text()) == (kind, key):
+                it.setIcon(QIcon(pm))
+
+    def fill(self) -> None:
+        self.list.clear()
+        for i in range(self.combo.count()):
+            text = self.combo.itemText(i)
+            it = QListWidgetItem(text)
+            it.setData(Qt.ItemDataRole.UserRole, i)
+            it.setToolTip(text)
+            pm = self._icons.get(self.combo.icon_of(text))
+            if pm is not None:
+                it.setIcon(QIcon(pm))
+            self.list.addItem(it)
+        self.list.setCurrentRow(self.combo.currentIndex())
+        self._apply_tiles()
+
+    def _apply_tiles(self) -> None:
+        cols = config.TC_GRID_COLS
+        bar = self.style().pixelMetric(QStyle.PixelMetric.PM_ScrollBarExtent)
+        self.list.setGridSize(QSize(max((self.list.width() - bar - 2 * self.list.frameWidth()) // cols, 1), self.TILE_H))
+
+    def open(self) -> None:
+        win = self.combo.window()
+        if self.parentWidget() is not win:
+            self.setParent(win)
+        self.fill()
+        self.place()
+        self.show()
+        self.raise_()
+        self.search.setFocus()
+        self._apply_tiles()   # 보인 뒤의 폭으로
+        QApplication.instance().installEventFilter(self)
+
+    def place(self) -> None:
+        """콤보 바로 아래 — 아래 자리가 모자라고 위가 더 넓으면 위로. 어느 쪽이든 창 안."""
+        win, m = self.parentWidget(), self.MARGIN
+        cols = config.TC_GRID_COLS
+        w = self.TILE_W * cols + 40   # MIN_WINDOW 폭(1280) 안에 늘 든다
+        top = self.combo.mapTo(win, QPoint(0, 0))
+        below_y = top.y() + self.combo.height()
+        rows = -(-self.combo.count() // cols)
+        want = min(self.MAX_H, self.search.sizeHint().height() + rows * self.TILE_H + 40)
+        below, above = win.height() - below_y - m, top.y() - m
+        if want <= below or below >= above:
+            h, y = min(want, below), below_y
+        else:
+            h = min(want, above)
+            y = top.y() - h
+        self.setGeometry(max(m, min(top.x(), win.width() - w - m)), y, w, h)
+
+    def close_popup(self) -> None:
+        if self.isHidden():   # isVisible 이 아니다 — 창이 트레이로 숨은 동안에도 닫고 이벤트 필터를 떼야 한다
+            return
+        QApplication.instance().removeEventFilter(self)
+        self.hide()
+        self.search.clear()   # 다음에 열 때 전부 보이게 — 고른 값은 찾기와 무관하게 남는다
+
+    def _pick(self, item) -> None:
+        self.combo.setCurrentIndex(item.data(Qt.ItemDataRole.UserRole))
+        self.close_popup()
+
+    def _pick_first(self) -> None:
+        """찾기 칸에서 Enter — 찾는 글자가 든 첫 칸."""
+        needle = self.search.text().strip().lower()
+        if not needle or not self.isVisible():
+            return
+        for r in range(self.list.count()):
+            if needle in self.list.item(r).text().lower():
+                self._pick(self.list.item(r))
+                return
+
+    def eventFilter(self, obj, event) -> bool:
+        if self.isHidden():
+            return False
+        t = event.type()
+        if t == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            self.close_popup()
+            return True
+        if t == QEvent.Type.MouseButtonPress:
+            pos = event.globalPosition().toPoint()
+            if not self.rect().contains(self.mapFromGlobal(pos)):
+                on_combo = self.combo.rect().contains(self.combo.mapFromGlobal(pos))
+                self.close_popup()
+                return on_combo   # 콤보를 다시 누르면 닫기만(곧바로 다시 열리지 않게)
+        elif t in (QEvent.Type.Resize, QEvent.Type.Hide) and obj is self.parentWidget():
+            self.close_popup()
+        return False
+
+
+class GridPickCombo(NoScrollComboBox):
+    """펼치면 창 안 격자(엠블럼 + 가로 config.TC_GRID_COLS 칸)가 뜨는 콤보 — 값·신호·채우기는 보통 콤보 그대로.
+    search: 찾기 칸(펼침 안으로 옮긴다). icon_of: 글자 → (종류, 키) | (). needIcons: 펼칠 때 — 그림 받기를 부른다."""
+    needIcons = Signal()
+
+    def __init__(self, search: QLineEdit):
+        super().__init__()
+        self.icon_of = lambda _text: ()
+        self.picker = GridPicker(self, search)
+
+    def showPopup(self) -> None:
+        self.picker.open()
+        self.needIcons.emit()
+
+    def hidePopup(self) -> None:
+        self.picker.close_popup()
+
+    def sync_popup(self) -> None:
+        """찾기로 항목이 바뀐 뒤 — 펼쳐져 있을 때만 다시 채운다."""
+        if self.picker.isVisible():
+            self.picker.fill()
+
+
 class ZoomBar(QWidget):
     """그래프 구간 확대 막대(55 G1) — 점 n 개 중 [lo, hi] 를 고른다. 양끝 손잡이를 끌거나, 가운데를 끌어 옮기거나,
     바깥을 눌러 가까운 끝을 그리로. 두 번 누르면 전체. 그래프는 손대지 않고 쓰는 쪽이 range_changed 를 받아 잘라 다시 그린다
@@ -3730,9 +3930,8 @@ class CalendarGrid(QWidget):
 def _grade_badge_colors(grade) -> tuple[str, str]:
     """강화 단계 → (배지 배경색, 글자색).
 
-    넥슨 데이터센터(fconline.nexon.com/datacenter) 강화 필터 UI에서 실제로
-    쓰는 색을 그대로 옮겼다 — 숫자만으론 안 와닿는다는 지적 반영.
-    1~4강 브론즈 · 5~7강 실버 · 8~10강 골드 · 11~13강 홀로그램(프리즘).
+    넥슨 웹이 강화 칸에 쓰는 색 그대로(값·근거는 theme.GRADE_BADGES) — 숫자만으론 안 와닿는다는 지적 반영.
+    1강 회색 · 2~4강 브론즈 · 5~7강 실버 · 8~10강 골드 · 11~13강 홀로그램(프리즘).
     """
     try:
         g = int(grade)

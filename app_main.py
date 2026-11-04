@@ -80,7 +80,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, IconCell, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
@@ -8490,16 +8490,14 @@ class MainWindow(QMainWindow):
         self.ed_oppcard_color = QLineEdit()
         self.ed_oppcard_color.setPlaceholderText("팀컬러 찾기")
         self.ed_oppcard_color.setClearButtonEnabled(True)
-        self.ed_oppcard_color.setMaximumWidth(160)
         self.ed_oppcard_color.textChanged.connect(lambda _t: self._refresh_color_combo(self.cb_oppcard_color,
                                                                                        self.ed_oppcard_color))
-        self.cb_oppcard_color = NoScrollComboBox()
+        self.cb_oppcard_color = self._color_grid_combo(self.ed_oppcard_color)
         self.cb_oppcard_color.addItem(self.POSITION_COLOR_ALL)
-        self.cb_oppcard_color.setMinimumWidth(160)
         self.cb_oppcard_color.currentIndexChanged.connect(lambda _i: self._invalidate("oppcards"))
         self.chk_oppcard_ranked = QCheckBox("1만 위 안 상대만")
         self.chk_oppcard_ranked.toggled.connect(lambda _on: self._invalidate("oppcards"))
-        for x in (lb, self.ed_oppcard_color, self.cb_oppcard_color, self.chk_oppcard_ranked):
+        for x in (lb, self.cb_oppcard_color, self.chk_oppcard_ranked):
             row.addWidget(x)
         row.addStretch(1)
         v.addLayout(row)
@@ -8568,8 +8566,7 @@ class MainWindow(QMainWindow):
         self.ed_owner_name.setPlaceholderText("선수 이름(2글자부터)")
         self.ed_owner_name.setMaximumWidth(180)
         self.ed_owner_name.textChanged.connect(lambda _t: self._refresh_owner_candidates())
-        self.cb_owner_card = NoScrollComboBox()
-        self.cb_owner_card.setMinimumWidth(220)
+        self.cb_owner_card = IconCombo(config.OWNER_CARD_COMBO_CHARS)
         # [카드 / 선수](50단계 N30) — 선수면 고른 카드와 pid 가 같은 모든 시즌 카드를 한꺼번에 본다
         self.cb_owner_scope = NoScrollComboBox()
         self.cb_owner_scope.addItem("이 카드만", self.OWNER_SCOPE_CARD)
@@ -8621,13 +8618,14 @@ class MainWindow(QMainWindow):
     def _refresh_owner_candidates(self) -> None:
         """입력 2글자부터 메타 이름(spid 8만 건)에서 후보 — 같은 이름의 시즌 카드가 여럿이라 시즌을 같이 적는다."""
         needle = self.ed_owner_name.text().strip()
-        self.cb_owner_card.clear()
         if len(needle) < 2:
+            self.cb_owner_card.set_icon_items([])
             return
         hits = [(name, sp) for sp, name in self._names.items() if isinstance(name, str) and needle in name]
         hits.sort(key=lambda x: (x[0] != needle, len(x[0]), x[0], -x[1]))
-        for name, sp in hits[:self.CARD_OWNER_MAX_CANDIDATES]:
-            self.cb_owner_card.addItem(f"{name} ({self._season_name(sp)})", sp)
+        self.cb_owner_card.set_icon_items([(f"{name} ({self._season_name(sp)})", sp, ("season", core.season_id_of(sp)))
+                                           for name, sp in hits[:self.CARD_OWNER_MAX_CANDIDATES]])
+        self._start_list_icons(self.cb_owner_card)
 
     def _show_backfill_note(self) -> None:
         if not hasattr(self, "lb_owner_backfill"):
@@ -9318,20 +9316,17 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         lb = QLabel("팀컬러")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.cb_position_color = NoScrollComboBox()
-        self.cb_position_color.addItem(self.POSITION_COLOR_NONE)   # 열었을 때는 빈 축구장 — 팀컬러를 골라야 그린다
-        self.cb_position_color.addItem(self.POSITION_COLOR_ALL)
-        self.cb_position_color.setMinimumWidth(160)
-        self.cb_position_color.currentIndexChanged.connect(
-            self._on_position_color_changed)
-        # 팀컬러가 수십 개라 — 입력하면 콤보 목록이 걸러진다(고른 것은 걸러도 남는다)
+        # 팀컬러가 수십 개라 — 입력하면 목록이 걸러진다(고른 것은 걸러도 남는다). 찾기 칸은 펼친 격자 안에
         self.ed_position_color = QLineEdit()
         self.ed_position_color.setPlaceholderText("팀컬러 찾기")
         self.ed_position_color.setClearButtonEnabled(True)
-        self.ed_position_color.setMaximumWidth(160)
         self.ed_position_color.textChanged.connect(lambda _t: self._refresh_position_color_options())
+        self.cb_position_color = self._color_grid_combo(self.ed_position_color)
+        self.cb_position_color.addItem(self.POSITION_COLOR_NONE)   # 열었을 때는 빈 축구장 — 팀컬러를 골라야 그린다
+        self.cb_position_color.addItem(self.POSITION_COLOR_ALL)
+        self.cb_position_color.currentIndexChanged.connect(
+            self._on_position_color_changed)
         row.addWidget(lb)
-        row.addWidget(self.ed_position_color)
         row.addWidget(self.cb_position_color)
         row.addStretch(1)
         v.addLayout(row)
@@ -9357,6 +9352,14 @@ class MainWindow(QMainWindow):
         self.fold_position_opp = Collapsible("표로 보기", self.tbl_position_opp)
         v.addWidget(self.fold_position_opp)
         return w
+
+    def _color_grid_combo(self, search: QLineEdit) -> GridPickCombo:
+        """팀컬러 고르기(81) — 펼치면 창 안 격자 · 그림은 펼칠 때 받는다(줄 목록과 같은 길 — 이미 붙은 것은 안 받는다)."""
+        cb = GridPickCombo(search)
+        cb.setMinimumWidth(160)
+        cb.icon_of = self._emblem_icon
+        cb.needIcons.connect(lambda c=cb: self._start_list_icons(c.picker))
+        return cb
 
     def _refresh_position_color_options(self) -> None:
         """알려진 팀컬러 목록(self._team_colors 값)으로 필터 콤보를 다시 채운다.
@@ -9386,6 +9389,8 @@ class MainWindow(QMainWindow):
         keep = current if current in colors or current == self.POSITION_COLOR_ALL else (placeholder or self.POSITION_COLOR_ALL)
         cb.setCurrentText(keep)
         cb.blockSignals(False)
+        if isinstance(cb, GridPickCombo):   # 경기 목록 콤보는 보통 콤보다 — 그쪽 입력칸은 경기 찾기를 겸해 펼침 안으로 못 옮긴다
+            cb.sync_popup()
 
     def _on_position_color_changed(self, _index: int) -> None:
         self._posopp_formation = None   # 팀컬러가 바뀌면 그 팀컬러에서 가장 많이 쓴 포메이션부터

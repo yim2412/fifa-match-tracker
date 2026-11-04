@@ -13327,6 +13327,8 @@ def test_explainer_notes_gone_78():
 
 # ── 79단계(3.3.1 ⑤ 색 규칙): 색마다 % · 좋은 값 초록 / 나쁜 값 빨강 · 근거 막대 승·무·패 ─────────────────────────
 import widgets  # noqa: E402
+from PySide6.QtCore import QPoint  # noqa: E402
+from PySide6.QtGui import QPixmap  # noqa: E402
 from PySide6.QtGui import QColor  # noqa: E402 — 79 검사들과 시즌·열 색 검사가 모듈 이름으로 쓴다
 
 
@@ -13523,6 +13525,192 @@ def test_80_avg_bars_diverge_from_base():
     same.set_rows([widgets.AvgBar("a", 5.0, "5"), widgets.AvgBar("b", 5.0, "5")])
     assert same.max_dev == 0 and "bar" not in {s.role for s in same.bar_delegate.layout(
         widgets.AvgBar("a", 5.0, "5"), QRectF(0, 0, 600, 30), same.font())}
+
+
+def test_81_grade_badge_colors_match_nexon_css():
+    # 넥슨 웹 CSS(fc.m_ssl.css en_level1~10)에서 옮긴 값 — 1강 회색 · 2~4 브론즈 · 5~7 실버 · 8~10 골드
+    want = {1: "#45494f", 2: "#c37653", 4: "#c37653", 5: "#c2c5ca", 7: "#c2c5ca", 8: "#e8c337", 10: "#e8c337"}
+    assert {g: widgets._grade_badge_colors(g)[0] for g in want} == want
+    assert widgets._grade_badge_colors(11)[0] not in want.values(), "11강 이상은 웹 CSS 에 없어 따로 둔다"
+    assert widgets._grade_badge_colors(0) == (T.PANEL_2, T.TEXT_DIM)
+
+
+class _TcPick:
+    """포지션별 최다 상대 › 축구장 — 팀컬러 40개가 든 상태."""
+    def __enter__(self):
+        self.saved = dict(_win._team_colors), _win.size()
+        _win._team_colors.clear()
+        _win._team_colors.update({f"상대{i}": f"컬러{i:02d}" for i in range(40)})
+        _win.resize(1280, 720)
+        _win.show()
+        _win._go_page("포지션별 최다 상대", "축구장")
+        _win.ed_position_color.setText("")
+        _win._refresh_position_color_options()
+        _app.processEvents()
+        return _win.cb_position_color
+
+    def __exit__(self, *exc):
+        _win.cb_position_color.hidePopup()
+        _win._team_colors.clear()
+        _win._team_colors.update(self.saved[0])
+        _win._refresh_position_color_options()
+        _win.cb_position_color.setCurrentIndex(0)
+        _win.resize(self.saved[1])
+        _app.processEvents()
+
+
+def test_81_team_color_grid_stays_inside_window():
+    with _TcPick() as cb:
+        p = cb.picker
+        assert cb.count() == 42 and not p.isVisible()
+        cb.showPopup()
+        _app.processEvents()
+        assert p.isVisible() and not p.isWindow() and p.window() is _win, "창 밖으로 나갈 수 있는 별도 창이다"
+        assert _win.rect().contains(p.geometry()), (p.geometry(), _win.rect())
+        assert p.list.count() == 42 and p.list.currentRow() == cb.currentIndex()
+        # 가로 4칸 — 앞 네 칸은 같은 줄 · 다섯째는 다음 줄 첫 칸
+        r = [p.list.visualItemRect(p.list.item(i)) for i in range(5)]
+        assert len({x.top() for x in r[:4]}) == 1 and len({x.left() for x in r[:4]}) == config.TC_GRID_COLS == 4, r
+        assert r[4].top() > r[0].top() and r[4].left() == r[0].left(), r
+        assert r[3].right() <= p.list.viewport().width(), "넷째 칸이 잘린다"
+        cb.hidePopup()
+        # 어디에 있든 창 안 — 콤보가 맨 아래 · 오른쪽 끝이면 위로 뜨고 왼쪽으로 밀린다
+        real = cb.mapTo
+        for at in (QPoint(1100, 680), QPoint(0, 0), QPoint(600, 300)):
+            cb.mapTo = lambda _w, _p, a=at: a
+            try:
+                p.open()
+                assert _win.rect().contains(p.geometry()), (at, p.geometry())
+                if at.y() == 680:
+                    assert p.geometry().bottom() <= at.y(), ("아래 자리가 없는데 위로 안 떴다", p.geometry())
+                p.close_popup()
+            finally:
+                cb.mapTo = real
+
+
+def test_81_team_color_grid_pick_filter_close():
+    from PySide6.QtCore import QEvent as _E, QPointF
+    from PySide6.QtGui import QKeyEvent, QMouseEvent
+    with _TcPick() as cb:
+        p = cb.picker
+        cb.showPopup()
+        _app.processEvents()
+        # 찾기 칸은 펼침 안 — 입력하면 격자가 바로 걸러진다
+        assert p.isAncestorOf(_win.ed_position_color)
+        _win.ed_position_color.setText("컬러07")
+        names = [p.list.item(i).text() for i in range(p.list.count())]
+        assert names == [_win.POSITION_COLOR_NONE, _win.POSITION_COLOR_ALL, "컬러07"], names
+        # 고르면 콤보 값 · 그 흐름(축구장 다시 그리기)이 돈다 · 닫힌다 · 찾기가 비워진다
+        calls = []
+        _win._render_position_opponents = lambda d: calls.append(1)
+        try:
+            p.list.itemClicked.emit(p.list.item(2))
+        finally:
+            del _win._render_position_opponents
+        assert cb.currentText() == "컬러07" and calls == [1] and not p.isVisible(), (cb.currentText(), calls)
+        assert _win.ed_position_color.text() == "" and cb.count() == 42, "다음에 열 때 전부 보여야"
+        # Enter — 찾는 글자가 든 첫 칸
+        cb.showPopup()
+        _win.ed_position_color.setText("컬러12")
+        _win.ed_position_color.returnPressed.emit()
+        assert cb.currentText() == "컬러12" and not p.isVisible()
+        # Esc 로 닫힘 — 값은 그대로
+        cb.showPopup()
+        _app.sendEvent(p.search, QKeyEvent(_E.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+        assert not p.isVisible() and cb.currentText() == "컬러12"
+
+        def press(widget, pos):
+            ev = QMouseEvent(_E.Type.MouseButtonPress, QPointF(pos), QPointF(widget.mapToGlobal(pos)), Qt.MouseButton.LeftButton,
+                             Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+            return p.eventFilter(widget, ev)
+        # 바깥을 누르면 닫힘 · 안을 누르면 안 닫힘 · 콤보를 다시 누르면 닫기만(먹는다)
+        cb.showPopup()
+        assert press(p, p.rect().center()) is False and p.isVisible(), "안을 눌렀는데 닫혔다"
+        assert press(_win, QPoint(5, 5)) is False and not p.isVisible(), "바깥을 눌렀는데 안 닫혔다"
+        cb.showPopup()
+        assert press(cb, cb.rect().center()) is True and not p.isVisible()
+        # 창 크기가 바뀌면 닫힌다(자리가 어긋난다)
+        cb.showPopup()
+        p.eventFilter(_win, QEvent(_E.Type.Resize))
+        assert not p.isVisible()
+        # 연 채 창을 숨기면(트레이) 닫힌다 — 필터가 남으면 다시 열어도 콤보 누르기를 먹는다
+        cb.showPopup()
+        _win.hide()
+        _app.processEvents()
+        assert p.isHidden(), "창을 숨겼는데 펼침이 그대로다"
+        assert press(cb, cb.rect().center()) is False, "닫힌 뒤에도 필터가 눌림을 먹는다"
+        _win.show()
+        _app.processEvents()
+        assert not p.isVisible()
+
+
+def test_81_team_color_grid_loads_emblems():
+    with _TcPick() as cb:
+        p = cb.picker
+        started = []
+        _win._emblem_map = lambda: {"컬러03": "crests/l1.png"}
+        _win._start_list_icons = lambda v: started.append(v)
+        try:
+            cb.showPopup()
+            assert started == [p], "펼칠 때 그림을 안 받는다"
+            assert cb.icon_of("컬러03") == ("emblem", "crests/l1.png") and cb.icon_of("컬러04") == ()
+            assert p.icon_entries() == {("emblem", "crests/l1.png")}
+            row = next(i for i in range(p.list.count()) if p.list.item(i).text() == "컬러03")
+            assert p.list.item(row).icon().isNull()
+            pm = QPixmap(8, 8)
+            pm.fill(QColor(T.ACCENT))
+            p.put_icon("emblem", "crests/l1.png", pm)
+            assert not p.list.item(row).icon().isNull(), "받은 그림이 칸에 안 붙었다"
+            assert p.list.item(row + 1).icon().isNull(), "다른 칸에 붙었다"
+            p.fill()                                                  # 찾기로 다시 채워도 안 받고 남는다
+            assert not p.list.item(row).icon().isNull()
+            p.close_popup()
+        finally:
+            del _win._emblem_map
+            del _win._start_list_icons
+    assert isinstance(_win.cb_oppcard_color, widgets.GridPickCombo) and _win.cb_oppcard_color.icon_of == _win._emblem_icon
+
+
+def test_81_owner_candidates_show_season_icons():
+    keep = dict(_win._names)
+    started = []
+    _win._start_list_icons = lambda v: started.append(v)
+    try:
+        sp_a, sp_b = 283000111, 500000111
+        _win._names.update({sp_a: "테스트선수가", sp_b: "테스트선수가"})
+        _win.ed_owner_name.setText("테스트선수")
+        cb = _win.cb_owner_card
+        assert cb.count() == 2 and started and started[-1] is cb
+        ids = {core.season_id_of(sp_a), core.season_id_of(sp_b)}
+        assert len(ids) == 2 and cb.icon_entries() == {("season", s) for s in ids}, cb.icon_entries()
+        assert {cb.itemData(i) for i in range(2)} == {sp_a, sp_b}
+        row = cb.findData(sp_a)
+        assert cb.itemIcon(row).isNull()
+        pm = QPixmap(8, 8)
+        pm.fill(QColor(T.ACCENT))
+        cb.put_icon("season", core.season_id_of(sp_a), pm)
+        assert not cb.itemIcon(row).isNull() and cb.itemIcon(1 - row).isNull()
+        _win.ed_owner_name.setText("테스트선수가")                 # 후보를 다시 채워도 받은 그림은 바로 붙는다
+        assert not cb.itemIcon(cb.findData(sp_a)).isNull()
+        # 긴 후보가 있어도 옆 이름 칸이 안 눌린다(실제 창에서 글자 두 개 폭이었다) · 한 화면 안에 든다
+        long_sp = 283000112
+        _win._names[long_sp] = "테스트선수가" + "아주긴이름" * 8
+        _win.resize(1280, 720)
+        _win.show()
+        _win._go_page("선수로 구단주 찾기", None)
+        _win.ed_owner_name.setText("테스트선수")
+        _app.processEvents()
+        ed_w = _win.ed_owner_name.width()
+        assert cb.count() == 3 and ed_w >= 100, ed_w   # 한글 이름 몇 글자가 보이는 폭
+        assert _win.btn_owner_find.geometry().right() <= _win.btn_owner_find.parentWidget().width(), "찾기 단추가 밖으로"
+        del _win._names[long_sp]
+        _win.ed_owner_name.setText("테")
+        assert cb.count() == 0 and cb.icon_entries() == set()
+    finally:
+        del _win._start_list_icons
+        _win._names.clear()
+        _win._names.update(keep)
+        _win.ed_owner_name.setText("")
 
 
 def test_79_next_goal_is_two_color_bars():

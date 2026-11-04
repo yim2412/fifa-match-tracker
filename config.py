@@ -13,6 +13,8 @@ from dotenv import dotenv_values, load_dotenv
 # 화면에 보이는 이름 — FIFA·FC ONLINE 상표를 화면에서 뺐다(2026-10-02, notice.UNOFFICIAL).
 # 데이터 폴더·exe·설치 AppId·릴리스 첨부·저장소 이름은 예전 그대로 — 바꾸면 기존 데이터·업데이트가 끊긴다.
 APP_NAME = "감독모드 전적 분석"
+OWNER_CARD_COMBO_CHARS = 18   # 선수로 구단주 찾기 카드 콤보 폭(글자 수)
+TC_GRID_COLS = 4     # 팀컬러 고르기 격자 칸 수(81 — 피드백 13)
 APP_VERSION = "v3.2.3"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
