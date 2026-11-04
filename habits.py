@@ -1268,16 +1268,18 @@ def _wdl(rows: list[WinDivision]) -> tuple[int, int, int]:
     return tuple(sum(1 for w in rows if w.outcome == k) for k in ("승", "무", "패"))
 
 
-def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, mixed: bool) -> list[CalDay]:
+def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, mixed: bool, exact_key=None) -> list[CalDay]:
     """first~last(둘 다 포함) 중 경기가 있던 날 — 날짜순. season_key(date) 는 그날이 속한 시즌을 가리는 값(같으면 같은 시즌)
-    · 기준선은 그 시즌의 rows 전부로 센다(달 안에 시즌 경계가 있으면 날마다 기준선이 다르다 · 1회차 [중])."""
+    · 기준선은 그 시즌의 rows 전부로 센다(달 안에 시즌 경계가 있으면 날마다 기준선이 다르다 · 1회차 [중]).
+    exact_key(datetime) 를 주면 경기마다 시각으로 시즌을 가른다 — 시즌은 종료일 8시에 바뀌어(76) 날짜로 묶으면 그날 새벽 옛 시즌
+    경기가 새 시즌 기준선에 든다. 칸은 그대로 하루이고, 그날 기준선은 그날 마지막 경기의 시즌."""
     keys: dict[date, object] = {}     # season_key 는 날짜마다 한 번만(시즌표 훑기라 경기마다 부르면 1만 경기 167ms — 실측)
     by_season: dict = {}
     for w in rows:
         d = w.when.date()
         if d not in keys:
             keys[d] = season_key(d)
-        by_season.setdefault(keys[d], []).append(w)
+        by_season.setdefault(keys[d] if exact_key is None else exact_key(w.when), []).append(w)
     base_of = {}
     for key, ws in by_season.items():
         wn, dn, ln = _wdl(ws)
@@ -1293,7 +1295,7 @@ def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, 
         ws = by_day[d]
         wn, dn, ln = _wdl(ws)
         n = rated(wn, dn, ln, mixed)
-        p = base_of[keys[d]]
+        p = base_of[keys[d] if exact_key is None else exact_key(max(w.when for w in ws))]
         lo, hi = luck_band(p, n)
         rate = win_pct(wn, dn, ln, mixed)
         judged = not is_weak(n, config.D1_MIN_GAMES)

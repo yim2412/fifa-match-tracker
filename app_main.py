@@ -4142,14 +4142,16 @@ class MainWindow(QMainWindow):
         return d.year, d.month
 
     def _cal_season_key(self, d):
-        """날짜 → 시즌 — 날짜마다 한 번만 훑는다(경기마다 시즌표를 훑으면 1만 경기 167ms · 실측). 시즌표가 바뀌면 비운다."""
+        """날짜·시각 → 시즌 — 경기마다 시즌표를 훑으면 1만 경기 167ms(실측)라 날짜마다 한 번만. 시각이면 경계 시각(8시) 앞뒤 둘로
+        나눠 잰다(시즌은 그 시각에 바뀐다 · 76). 시즌표가 바뀌면 비운다."""
         cache = self.__dict__.setdefault("_cal_key_cache", {})
         if cache.get("_seasons") is not self._rank_seasons:
             cache.clear()
             cache["_seasons"] = self._rank_seasons
-        if d not in cache:
-            cache[d] = sn.season_of(self._rank_seasons, d)
-        return cache[d]
+        k = (d.date(), d.hour < config.SEASON_CUTOFF_H) if isinstance(d, datetime) else d
+        if k not in cache:
+            cache[k] = sn.season_of(self._rank_seasons, d)
+        return cache[k]
 
     def _render_calendar(self) -> None:
         if self._cal_ouid != self._ouid:   # 계정이 바뀌면 마지막 경기 달로
@@ -4159,7 +4161,7 @@ class MainWindow(QMainWindow):
         first = date(y, m, 1)
         last = date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1)
         mixed = core.mixed_of_matches(self._matches_all)
-        days = core.calendar_days(wins, first, last, self._cal_season_key, mixed)
+        days = core.calendar_days(wins, first, last, self._cal_season_key, mixed, exact_key=self._cal_season_key)
         # 시즌표가 없으면(홈페이지 데이터 꺼짐 · 받은 적 없음) 모든 날이 한 묶음 — 기준선은 시즌이 아니라 저장된 전체다
         no_table = not self._rank_seasons
         base_name = "저장된 전체" if no_table else "시즌"
@@ -4185,7 +4187,7 @@ class MainWindow(QMainWindow):
         month_rows = [w_ for w_ in wins if first <= w_.when.date() <= last]
         anchor = min(last, date.today())
         season = self._cal_season_key(anchor)
-        in_season = [w_ for w_ in wins if self._cal_season_key(w_.when.date()) == season]
+        in_season = [w_ for w_ in wins if self._cal_season_key(w_.when) == season]
         season_name = "저장된 전체" if no_table else (season.label if season else "이번 시즌")
         ms, ss = core.cal_summary(month_rows), core.cal_summary(in_season)
         self.lb_cal_month_sum.setText(f"  {ms.days}일 · {ms.fc:,} FC" if ms.days else "  경기 없음")
@@ -5212,8 +5214,11 @@ class MainWindow(QMainWindow):
         mixed = core.mixed_of_matches(self._matches_all)
         if not dated:
             return [], mixed
-        first, last = min(dated).date(), max(dated).date()
-        return core.calendar_days(self._season_wins(), first, last, self._cal_season_key, mixed), mixed
+        lo, hi = min(dated), max(dated)
+        # 범위의 첫~끝 경기 시각으로 자른다 — 날짜로 자르면 시즌 경계일의 다른 시즌 경기가 섞인다(이번 시즌 589판 대 583 · 11-04)
+        self._luck_rows = [w_ for w_ in self._season_wins() if lo <= w_.when <= hi]
+        return core.calendar_days(self._luck_rows, lo.date(), hi.date(), self._cal_season_key, mixed,
+                                  exact_key=self._cal_season_key), mixed
 
     def _fill_luck_cards(self, days: list, mixed: bool, no_table: bool) -> None:
         """G4 카드 둘 — 기준(한 시즌이면 그 시즌 승률 · 여러 시즌이면 "시즌마다" · 시즌표가 없으면 저장된 전체 · M12) ·
@@ -5226,11 +5231,10 @@ class MainWindow(QMainWindow):
                 c.set_sub("경기가 없습니다")
             out.set_color(T.TEXT)
             return
-        wins = self._season_wins()
-        keys = {self._cal_season_key(d.day) for d in days}
+        keys = {self._cal_season_key(w.when) for w in self._luck_rows}
         if no_table or len(keys) == 1:
             key = next(iter(keys))
-            n = sum(1 for w in wins if self._cal_season_key(w.when.date()) == key)
+            n = len(self._luck_rows)
             base.set_title("저장된 전체 승률" if no_table else "시즌 평균")
             base.set(f"{days[0].base:.1f}%")
             # 진행 중인 시즌은 시즌표에 없어 키가 None(seasons.season_of)
@@ -8352,7 +8356,7 @@ class MainWindow(QMainWindow):
         if self._reward_cache is None or self._reward_cache[0] != key:
             # 누적 전체에서 이 시즌만 — 시즌 필터(_details)로 지난 시즌을 골라 두면 이번 시즌 판이 없다고 나온다
             rows = [w for w in core.win_divisions(self._details_all, self._ouid)
-                    if w.when.date() >= start and w.division is not None and w.division <= core.CHAMPION_DIVISION_ID]
+                    if w.when >= sn.boundary_at(start) and w.division is not None and w.division <= core.CHAMPION_DIVISION_ID]
             self._reward_cache = (key, core.win_rewards(rows))
         return self._reward_cache[1]
 

@@ -2176,6 +2176,53 @@ def test_luck_tab_season_range_cards_and_dots_66():
         assert _win.card_luck_out.value.text() == "0일", _win.card_luck_out.value.text()
 
 
+def test_luck_counts_season_by_time_not_date():
+    """시즌은 종료일 8시에 바뀐다 — 그날 새벽 경기는 옛 시즌. 날짜로 묶으면 이번 시즌이 589판(콤보는 583)이었다(11-04 실데이터)."""
+    from datetime import date as _d
+    end = _d(2026, 9, 6)
+    early = [(datetime(2026, 9, 6, 1, i), "승", True) for i in range(6)]          # 경계 전 새벽 — 옛 시즌
+    old = [(datetime(2026, 9, 5, 10, i), "패", True) for i in range(14)]
+    new = [(datetime(2026, 9, 6 + d, 10, i), "승" if i < 5 else "패", True) for d in range(3) for i in range(20)]
+    season = sn.Season(90, "시즌 3", _d(2026, 8, 1), end)
+    with _LuckScope(old + early + new, [season]):
+        all_matches = list(_win._matches)
+        # 이번 시즌을 고른 상태 — 범위는 경계 뒤 경기만
+        _win._matches = [m for m in all_matches if m.match_date >= datetime(2026, 9, 6, 8)]
+        assert len(_win._matches) == 60, len(_win._matches)
+        _win._render_luck(_win._matches)
+        assert _win.card_luck_base.sub.text() == "이번 시즌 · 60판", _win.card_luck_base.sub.text()
+        assert _win.card_luck_base.value.text() == "25.0%", _win.card_luck_base.value.text()   # 새벽 6승을 넣으면 28.8%
+        rows = {r.label: r for r in _win.luck_dots._rows}
+        assert rows["09/06"].games == 20, rows["09/06"].games                       # 새벽 6판을 넣으면 26
+        assert all(abs(r.base - 25.0) < 1e-9 for r in rows.values()), rows
+        # 옛 시즌을 고른 상태 — 경계일 새벽만 들어가고, 그날 뒤 경기는 안 든다 · "시즌마다" 가 아니다
+        _win._matches = [m for m in all_matches if m.match_date < datetime(2026, 9, 6, 8)]
+        _win._render_luck(_win._matches)
+        assert _win.card_luck_base.sub.text() == f"{season.label} · 20판", _win.card_luck_base.sub.text()
+        assert _win.card_luck_base.value.text() == "30.0%", _win.card_luck_base.value.text()   # 6승 14패
+        assert _win.luck_dots._rows[0].label == "09/06" and _win.luck_dots._rows[0].games == 6, _win.luck_dots._rows[0]
+        # 달력 — 칸은 하루 그대로지만 기준선·시즌 요약은 시각으로
+        _win._matches = all_matches
+        _win._cal_month = (2026, 9)
+        _win._render_calendar()
+        t = _win.tbl_cal_summary
+        assert t.item(1, 2).text() == "25.0%", t.item(1, 2).text()                  # [승률] 줄 · 이번 시즌
+        assert t.horizontalHeaderItem(2).text() == "이번 시즌", t.horizontalHeaderItem(2).text()
+        cell = _win.cal_grid._cells[6]
+        assert "26판" in cell.sub and "시즌 승률 25.0%" in cell.tip, cell
+        # 이 계정 100판당 — 시즌 시작일 새벽 승리는 지난 시즌 몫이다(날짜로 자르면 26판)
+        keep_cache = _win._reward_cache, core.win_divisions
+        _win._reward_cache = None
+        rows = _wd_spec(old + early + new)
+        assert sum(1 for w in rows if w.when.date() >= end) == 66, "새벽 경기가 없으면 이 검사가 빈다"
+        core.win_divisions = lambda _d, _o: rows
+        try:
+            got = _win._my_reward(end.isoformat())
+            assert got.games == 60, got.games
+        finally:
+            _win._reward_cache, core.win_divisions = keep_cache
+
+
 def test_luck_tab_judgement_matches_calendar_66():
     """U2 — 같은 날이면 달력 ▲▼ 와 같은 판정(재료·묶음·하한이 같다 · M14) · 묶음 규칙을 꺼도(A6 섞임) 같아야."""
     from datetime import date as _d

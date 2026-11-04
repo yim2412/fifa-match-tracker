@@ -1069,6 +1069,28 @@ def test_calendar_baseline_is_the_days_own_season():
         [(d.day, d.base, d.arrow) for d in days]                   # 둘을 합친 기준선(50%)이면 새 시즌 날이 ▼
 
 
+def test_calendar_exact_key_on_boundary_day():
+    # 시즌은 종료일 8시에 바뀐다(76). 10/10 새벽 전승 5판은 옛 시즌 — 날짜로 묶으면 새 시즌 기준선이 부푼다
+    new_start = datetime(2026, 10, 10, 8)
+    rows = [stats_.WinDivision(datetime(2026, 10, 10, 1, i), 900, "승", False) for i in range(5)]   # 옛 시즌 새벽
+    rows += _day_games(10, 2, 0, 3)                                                                # 9시 — 새 시즌
+    rows += _day_games(9, 1, 0, 4)                                                                 # 옛 시즌
+    by_date = lambda d: d < date(2026, 10, 10)        # noqa: E731
+    by_time = lambda t: t < new_start                 # noqa: E731
+    old = habits.calendar_days(rows, date(2026, 10, 1), date(2026, 10, 31), by_date, False)
+    assert round(old[1].base, 1) == 70.0, "입력이 예전 동작을 재현하지 않는다 — 아래 비교가 빈다"    # 7승 3패
+    new = habits.calendar_days(rows, date(2026, 10, 1), date(2026, 10, 31), by_date, False, exact_key=by_time)
+    assert [d.day.day for d in new] == [9, 10]
+    assert round(new[1].base, 1) == 40.0, new[1].base       # 새 시즌 = 2승 3패
+    assert round(new[0].base, 1) == 60.0, new[0].base       # 옛 시즌 = 1승 4패 + 새벽 5승
+    # 칸 자체는 그대로 하루 — 그날 10판
+    assert new[1].games == 10 and new[1].win == 7
+    # 그날 경기가 새벽뿐이면 그날 기준선은 옛 시즌 — 새 시즌 줄이 없어도 안 터진다
+    only = [stats_.WinDivision(datetime(2026, 10, 10, 1, i), 900, "승", False) for i in range(3)]
+    d = habits.calendar_days(only, date(2026, 10, 1), date(2026, 10, 31), by_date, False, exact_key=by_time)
+    assert round(d[0].base, 1) == 100.0, d[0].base
+
+
 def test_cal_summary_per_day():
     rows = _day_games(1, 9, 0, 1) + _day_games(2, 1, 1, 0, div=800)
     s = habits.cal_summary(rows)
