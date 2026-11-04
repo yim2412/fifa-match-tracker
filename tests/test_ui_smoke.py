@@ -1156,7 +1156,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 38, len(tables)   # 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 40, len(tables)   # 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -13711,6 +13711,70 @@ def test_81_owner_candidates_show_season_icons():
         _win._names.clear()
         _win._names.update(keep)
         _win.ed_owner_name.setText("")
+
+
+def _arrival_details():
+    """앞 150판 → 12번을 25번 자리에 → 뒤 120판. 득실차 앞 0 언저리 · 뒤 +2 언저리(범위 밖)."""
+    def side(ouid, pids, gf):
+        return {"ouid": ouid, "nickname": ouid, "shoot": {"goalTotal": gf}, "matchDetail": {"matchResult": "승" if ouid == "me" and gf > 0 else "패"},
+                "player": [{"spPosition": 10 + k, "spId": 100000000 + p} for k, p in enumerate(pids)]}
+    out = []
+    base = list(range(1, 12))
+    for i in range(270):
+        pids = base if i < 150 else base[:10] + [12]
+        gf = (i % 2) if i < 150 else 2 + (i % 2)
+        out.append({"matchId": f"m{i}", "matchDate": f"2026-08-{1 + i // 30:02d}T{i % 24:02d}:{i % 60:02d}:00",
+                    "matchInfo": [side("me", pids, gf), side("opp", base, 0)]})
+    return out
+
+
+def test_82_arrivals_tab_shows_record_not_effect():
+    keep = _win._details_all, _win._ouid, dict(_win._names), dict(_win._positions)
+    try:
+        _win._details_all = _arrival_details()
+        _win._ouid = "me"
+        _win._names.update({100000011: "빠진 선수", 100000012: "새 선수"})
+        _win._positions[20] = "ST"
+        _win._go_page("스쿼드·이적", "영입 전후")
+        assert _win._page_tabs["스쿼드·이적"].current_name() == "영입 전후", "탭 자리가 없다"
+        _win._render_arrivals()
+        t = _win.tbl_arrivals
+        cols = _win.ARRIVAL_COLUMNS
+        assert t.rowCount() == 1 and _win.tbl_moves.rowCount() == 0, (t.rowCount(), _win.tbl_moves.rowCount())
+        cell = lambda name: t.item(0, cols.index(name))   # noqa: E731
+        assert cell("선수").text() == "새 선수" and cell("앞 선수").text() == "빠진 선수" and cell("자리").text() == "ST"
+        assert cell("판수(앞/뒤)").text() == "150 / 120" and cell("같이 바뀜").text() == "0명"
+        assert cell("경기당 득실").text() == "+0.50 → +2.50", cell("경기당 득실").text()
+        assert " → " in cell("승률").text()
+        d = cell("득실 차이")
+        assert d.text() == _win.ARRIVAL_DIFF_OUT and d.font().bold() and d.foreground().color() == QColor(T.TEXT)
+        assert "덕분" in d.toolTip() and "득실차" in d.toolTip(), "범위 밖의 뜻 · 기준을 말풍선이 안 말한다"
+        # 한 표씩 — 칩으로 바꾼다
+        assert not t.isHidden() and _win.tbl_moves.isHidden()
+        _win.seg_arrivals.set_current(1, emit=True)
+        assert t.isHidden() and not _win.tbl_moves.isHidden()
+        _win.seg_arrivals.set_current(0, emit=True)
+        assert not t.isHidden() and _win.tbl_moves.isHidden()
+        # "효과" 라는 말을 화면에 안 쓴다 — 탭 이름 · 머리글 · 칸 · 말풍선
+        words = cols + _win.MOVE_COLUMNS + [_win.ARRIVAL_DIFF_TIP, _win.ARRIVAL_TOGETHER_TIP, _win.ARRIVAL_EMPTY, "영입 전후"]
+        assert not [x for x in words if "효과" in x and "덕분" not in x], words
+        assert t.horizontalHeaderItem(cols.index("득실 차이")).toolTip() and t.horizontalHeaderItem(cols.index("같이 바뀜")).toolTip()
+        assert not _win.lb_arrivals_note.isVisible() or not _win.lb_arrivals_note.text()
+        # 정렬을 켜도 꾸밈이 제 줄을 따라간다 · 다시 그려도 캐시(같은 키)
+        first = _win.arrival_report
+        _win._render_arrivals()
+        assert _win.arrival_report is first, "같은 경기 목록인데 다시 셌다"
+        # 비면 이유 글 · 표 비움
+        _win._details_all = []
+        _win._render_arrivals()
+        assert t.rowCount() == 0 and str(config.ARRIVAL_MIN_GAMES) in _win.lb_arrivals_note.text()
+    finally:
+        _win._details_all, _win._ouid = keep[0], keep[1]
+        _win._names.clear()
+        _win._names.update(keep[2])
+        _win._positions.clear()
+        _win._positions.update(keep[3])
+        _win._render_arrivals()
 
 
 def test_79_next_goal_is_two_color_bars():

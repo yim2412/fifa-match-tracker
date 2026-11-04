@@ -272,6 +272,178 @@ def test_timeline_budget_10k():
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
+# ── 영입 전후 기록(82) ────────────────────────────────────────────
+_BASE = {10 + k: k + 1 for k in range(11)}     # 자리 → 사람
+
+
+def _game(i, slots, gd=0, res=None, season=100):
+    """slots: 자리 → 사람. 득실 gd 는 나만 넣는다. 카드 번호 = season × 100만 + 사람."""
+    gf, ga = max(gd, 0), max(-gd, 0)
+    r = res or ("승" if gd > 0 else "무" if gd == 0 else "패")
+    me = {"ouid": "me", "nickname": "나", "shoot": {"goalTotal": gf}, "matchDetail": {"matchResult": r},
+          "player": [{"spPosition": pos, "spId": season * 1_000_000 + pid} for pos, pid in slots.items()]
+          + [{"spPosition": 28, "spId": season * 1_000_000 + 99}]}
+    opp = {"ouid": "상대", "nickname": "상대", "shoot": {"goalTotal": ga}, "matchDetail": {"matchResult": "패"},
+           "player": []}
+    t = datetime(2026, 1, 1) + timedelta(hours=i)
+    return {"matchId": f"m{i}", "matchDate": t.strftime("%Y-%m-%dT%H:%M:%S"), "matchInfo": [me, opp]}
+
+
+def _games(*parts):
+    """parts: (판수, 자리표[, 득실 함수]) — 차례로 잇는다. 최신순으로 돌려준다(저장 순서와 같게)."""
+    out, i = [], 0
+    for part in parts:
+        n, slots = part[0], part[1]
+        fn = part[2] if len(part) > 2 else (lambda k: k % 3 - 1)
+        for k in range(n):
+            out.append(_game(i, slots, fn(k)))
+            i += 1
+    return list(reversed(out))
+
+
+def _swap(pos, pid, base=_BASE):
+    return {**base, pos: pid}
+
+
+def _rep(*parts):
+    return st.arrival_report(_games(*parts), "me")
+
+
+def test_arrival_basic_row_by_hand():
+    # 앞 150판 득실 (0,1 반복) · 뒤 120판 (2,3 반복) — 손으로 센 값
+    rep = _rep((150, _BASE, lambda k: k % 2), (120, _swap(20, 12), lambda k: 2 + k % 2))
+    assert rep.games == 270 and len(rep.arrivals) == 1 and rep.moves == [], rep
+    r = rep.arrivals[0]
+    assert r.sp_id == 100_000_012 and r.pos == 20 and r.prev_sp == 100_000_011, r
+    assert (r.before.games, r.after.games) == (150, 120)
+    assert (r.before.gf, r.after.gf) == (75, 300), (r.before.gf, r.after.gf)
+    assert (r.before.win, r.before.draw, r.after.win) == (75, 75, 120)
+    assert r.together == 0 and not r.squad_swap and r.window_changed == 0
+    # z = (2.5 − 0.5) ÷ √(0.2521/120 + 0.2517/150) — 분산은 표본 분산(n−1)
+    va, vb = 0.25 * 120 / 119, 0.25 * 150 / 149
+    want = 2.0 / (va / 120 + vb / 150) ** 0.5
+    assert abs(r.z - want) < 1e-9 and r.outside, (r.z, want)
+
+
+def test_arrival_thresholds_are_exact_and_wired():
+    ok = _rep((100, _BASE), (100, _swap(20, 12)))
+    assert len(ok.arrivals) == 1, "앞뒤 정확히 100판은 줄을 낸다"
+    assert not _rep((100, _BASE), (99, _swap(20, 12))).arrivals, "뒤 99판"
+    assert not _rep((99, _BASE), (100, _swap(20, 12))).arrivals, "앞 99판"
+    many = _rep((500, _BASE), (450, _swap(20, 12))).arrivals[0]
+    assert (many.before.games, many.after.games) == (400, 400), "창은 앞뒤 400판까지"
+    keep = config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW
+    try:                                         # 배선 — 기본값이 아닌 값으로
+        config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW = 7, 9
+        r = _rep((20, _BASE), (8, _swap(20, 12))).arrivals[0]
+        assert (r.before.games, r.after.games) == (9, 8), (r.before.games, r.after.games)
+    finally:
+        config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW = keep
+
+
+def test_arrival_first_lineup_and_season_card_are_not_arrivals():
+    # 기록 첫 판부터 있던 11명은 "앞" 이 없다 · 같은 사람의 다른 시즌 카드는 새 선수가 아니다
+    games = [_game(i, _BASE, i % 3 - 1, season=100) for i in range(150)]
+    games += [_game(150 + i, _BASE, i % 3 - 1, season=200) for i in range(150)]
+    rep = st.arrival_report(list(reversed(games)), "me")
+    assert rep.arrivals == [] and rep.moves == [], rep
+
+
+def test_arrival_gap_boundary_and_before_excludes_him():
+    # 빈 판 정확히 30 은 같은 구간(새 줄 없음) · 31 이면 다시 들어온 것
+    same = _rep((120, _swap(20, 13)), (120, _BASE), (30, _swap(20, 13)), (120, _BASE))
+    pid11 = [r for r in same.arrivals if r.sp_id == 100_000_011]
+    assert len(pid11) == 1 and pid11[0].after.games == 240, [(r.sp_id, r.after.games) for r in same.arrivals]
+    back = _rep((120, _swap(20, 13)), (120, _BASE), (31, _swap(20, 13)), (120, _BASE))
+    pid11 = sorted((r for r in back.arrivals if r.sp_id == 100_000_011), key=lambda r: r.at)
+    assert len(pid11) == 2, [(r.sp_id, r.after.games) for r in back.arrivals]
+    # 다시 온 줄의 "앞" 은 그가 없던 판만 — 앞 120(없음) + 31(없음) = 151 · 그가 뛴 120판은 안 든다
+    assert pid11[1].before.games == 151, pid11[1].before.games
+
+
+def test_arrival_result_filter_and_short_lineup():
+    # 오류 판 · 선발 10명 판은 뺀다 — 넣으면 앞 판수가 달라진다
+    games = [_game(i, _BASE, i % 3 - 1) for i in range(100)]
+    games.append(_game(100, _BASE, 5, res="오류"))
+    short = dict(_BASE)
+    short.pop(20)
+    games.append(_game(101, short, 5))
+    games += [_game(102 + i, _swap(20, 12), i % 3 - 1) for i in range(100)]
+    rep = st.arrival_report(list(reversed(games)), "me")
+    assert rep.games == 200 and rep.arrivals[0].before.games == 100, (rep.games, rep.arrivals[0].before.games)
+    assert rep.arrivals[0].before.gf == sum(max(i % 3 - 1, 0) for i in range(100))
+    assert st.arrival_report([], "me").games == 0
+    assert st.arrival_report(list(reversed(games)), "남").arrivals == [], "내가 안 낀 경기"
+
+
+def test_arrival_squad_swap_and_previous_player():
+    # 5명 동시 — 스쿼드 교체 · 앞 선수는 그 자리에 있다 빠진 사람
+    new = {**_BASE, 16: 21, 17: 22, 18: 23, 19: 24, 20: 25}
+    rep = _rep((100, _BASE), (100, new))
+    assert len(rep.arrivals) == 5 and all(r.together == 4 and r.squad_swap for r in rep.arrivals)
+    assert {r.pos: r.prev_sp for r in rep.arrivals}[17] == 100_000_008
+    four = {**_BASE, 17: 22, 18: 23, 19: 24, 20: 25}
+    assert not _rep((100, _BASE), (100, four)).arrivals[0].squad_swap, "4명은 교체 표시 문턱 밑"
+    # 앞 선수가 자리만 옮겼으면(안 빠졌으면) 그 사람이 아니다 — 빠진 한 사람
+    shift = {**_BASE, 20: 12, 19: 11}          # 11번이 20 → 19 로, 10번이 빠짐
+    r = _rep((100, _BASE), (100, shift)).arrivals[0]
+    assert r.sp_id == 100_000_012 and r.prev_sp == 100_000_010, r.prev_sp
+    # 빠진 사람이 둘이고 그 자리 사람이 안 빠졌으면 모른다
+    amb = {**_BASE, 20: 12, 19: 13, 18: 11}    # 11번이 20 → 18 · 9·10 번이 빠짐
+    r = next(x for x in _rep((100, _BASE), (100, amb)).arrivals if x.sp_id == 100_000_012)
+    assert r.prev_sp is None, r.prev_sp
+    # 창 전체에서 바뀐 사람 — 뒤 창 안의 다른 교체까지
+    later = _rep((100, _BASE), (60, _swap(20, 12)), (60, {**_swap(20, 12), 19: 13}))
+    r = next(x for x in later.arrivals if x.sp_id == 100_000_012)
+    assert r.together == 0 and r.window_changed == 1, (r.together, r.window_changed)
+
+
+def test_arrival_z_none_when_flat_and_inside():
+    flat = _rep((100, _BASE, lambda k: 0), (100, _swap(20, 12), lambda k: 0)).arrivals[0]
+    assert flat.z is None and not flat.outside, "차이도 변화도 없는데 범위 밖"
+    near = _rep((200, _BASE), (200, _swap(20, 12))).arrivals[0]
+    assert near.z is not None and abs(near.z) < 1 and not near.outside
+    keep = config.ARRIVAL_Z
+    try:
+        r = _rep((150, _BASE, lambda k: k % 2), (120, _swap(20, 12), lambda k: 2 + k % 2)).arrivals[0]
+        assert r.outside
+        config.ARRIVAL_Z = abs(r.z) + 1          # 배선 — 문턱을 값 위로 올리면 안으로
+        assert not r.outside
+        config.ARRIVAL_Z = abs(r.z)              # 경계 — 같으면 밖
+        assert r.outside
+    finally:
+        config.ARRIVAL_Z = keep
+
+
+def test_move_rows():
+    swap_pos = {**_BASE, 19: 11, 20: 10}         # 10번·11번이 자리를 맞바꿈(포메이션 그대로)
+    rep = _rep((120, _BASE), (130, swap_pos))
+    assert rep.arrivals == [] and len(rep.moves) == 2, rep.moves
+    m = {r.sp_id: r for r in rep.moves}[100_000_011]
+    assert (m.from_pos, m.to_pos, m.before.games, m.after.games, m.together) == (20, 19, 120, 130, 0), m
+    assert m.z is not None
+    # 앞이나 뒤가 문턱 밑이면 없다
+    assert not _rep((99, _BASE), (130, swap_pos)).moves
+    assert not _rep((120, _BASE), (99, swap_pos)).moves
+    # 깜빡임(BLIP 미만)은 앞 구간에 합친다 · 정확히 BLIP 이면 이동
+    blip = config.ARRIVAL_BLIP
+    assert not _rep((120, _BASE), (blip - 1, swap_pos), (120, _BASE)).moves, "깜빡임을 이동으로 셌다"
+    rows = _rep((120, _BASE), (blip, swap_pos), (120, _BASE)).moves
+    assert rows == [], "앞뒤 다 100판이 아니라 짧은 구간 자체는 줄이 안 된다"
+    # 깜빡임은 구간을 안 끊는다 — 앞 구간 60 + 깜빡 + 60 이 합쳐져 뒤 120 과 견줘진다(안 합치면 앞이 60 이라 줄이 없다)
+    joined = _rep((60, _BASE), (blip - 1, swap_pos), (60, _BASE), (120, swap_pos)).moves
+    assert len(joined) == 2 and joined[0].before.games == 120 + blip - 1, [(m.sp_id, m.before.games) for m in joined]
+    # 정확히 BLIP 이면 깜빡임이 아니다 — 구간이 끊겨 앞이 60 씩이라 줄이 없다
+    assert not _rep((60, _BASE), (blip, swap_pos), (60, _BASE), (120, swap_pos)).moves, "BLIP 경계"
+    # 포메이션이 바뀐 판은 뺀다 — 자리 번호만 달라진 것일 수 있다
+    other_shape = {k if k != 19 else 5: v for k, v in _BASE.items()}
+    assert set(other_shape) != set(_BASE)
+    assert not _rep((120, _BASE), (120, other_shape)).moves, "포메이션 변경을 자리 이동으로 셌다"
+    # 창 — 앞뒤 400판까지
+    big = _rep((500, _BASE), (450, swap_pos)).moves[0]
+    assert (big.before.games, big.after.games) == (400, 400)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

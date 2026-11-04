@@ -29,7 +29,7 @@ from typing import NamedTuple
 
 import config
 import matchtime
-from models import RateMixin, draw_possible, is_mixed, is_weak
+from models import RateMixin, draw_possible, is_mixed, is_weak, mixed_of_details
 
 SUB_POSITION = 28  # 교체 명단 — 출전으로 안 센다
 
@@ -272,3 +272,209 @@ def build_timeline(details: list[dict], ouid: str, trades: list[Trade] | None,
     events.sort(key=lambda e: e.date, reverse=True)
     tl.events = events
     return tl
+
+
+# ── 영입 전후 기록(82) ─────────────────────────────────────────────
+# 선발 기록만 쓴다(거래 없음 — 내 계정이 아니어도 본다). "산 때" 가 아니라 "선발로 처음 쓴 때" 다.
+# 효과가 아니라 기록이다: 선수 한 명을 바꾼 시점의 차이는 우연과 구분이 안 됐다(ROADMAP "## 82단계" 실측).
+@dataclass
+class ArrivalRow:
+    """새로 쓰기 시작한 선수 한 줄. before = 그 선수가 없던 앞 판들 · after = 그 선수가 뛴 뒤 판들."""
+    at: datetime
+    sp_id: int
+    pos: int
+    prev_sp: int | None       # 앞 선수 — 그 자리에 있다가 빠진 사람. 모르면 None
+    before: Window
+    after: Window
+    together: int             # 같은 판에 같이 새로 든 다른 선수
+    window_changed: int       # 앞 창 첫 판과 뒤 창 끝 판의 선발이 다른 사람 수(이 선수 빼고)
+    z: float | None           # 경기당 득실차 차이 ÷ 표준오차
+
+    @property
+    def outside(self) -> bool:
+        return self.z is not None and abs(self.z) >= config.ARRIVAL_Z
+
+    @property
+    def squad_swap(self) -> bool:
+        return self.together + 1 >= config.ARRIVAL_SQUAD_SWAP
+
+
+@dataclass
+class MoveRow:
+    """같은 사람이 선발 자리를 옮긴 한 줄(경기 중 자리는 기록에 없다 — 선수마다 spPosition 하나)."""
+    at: datetime
+    sp_id: int
+    from_pos: int
+    to_pos: int
+    before: Window
+    after: Window
+    together: int             # 그 판에 새로 든 선수
+    z: float | None
+
+    @property
+    def outside(self) -> bool:
+        return self.z is not None and abs(self.z) >= config.ARRIVAL_Z
+
+
+@dataclass
+class ArrivalReport:
+    arrivals: list[ArrivalRow] = field(default_factory=list)
+    moves: list[MoveRow] = field(default_factory=list)
+    games: int = 0            # 선발 11명이 온전한 승·무·패 판
+
+
+class _Lineup(NamedTuple):
+    at: datetime
+    wdl: int           # 0 승 · 1 무 · 2 패
+    gf: int
+    ga: int
+    slots: dict        # 자리 → spId
+    by_pid: dict       # 사람 → 자리
+
+
+def pid_of(sp_id: int) -> int:
+    """카드 번호 → 사람(뒤 6자리) — 시즌이 다른 같은 선수를 한 사람으로."""
+    return sp_id % 1_000_000
+
+
+def _goal(side: dict) -> int:
+    v = (side.get("shoot") or {}).get("goalTotal")
+    return int(v) if isinstance(v, (int, float)) else 0
+
+
+def _lineups(details: list[dict], ouid: str) -> list[_Lineup]:
+    """오래된 판부터. 승·무·패가 아닌 판 · 선발 11명이 안 되는 판은 뺀다(자리 비교가 안 된다)."""
+    out = []
+    for d in details:
+        infos = d.get("matchInfo") or []
+        me = next((p for p in infos if p.get("ouid") == ouid), None)
+        opp = next((p for p in infos if p.get("ouid") != ouid), {})
+        at = matchtime.parse(d.get("matchDate"))
+        if me is None or at is None:
+            continue
+        res = (me.get("matchDetail") or {}).get("matchResult") or ""
+        wdl = 0 if "승" in res else 1 if "무" in res else 2 if "패" in res else None
+        if wdl is None:
+            continue
+        slots = {}
+        for p in me.get("player") or []:
+            pos, sp = p.get("spPosition"), p.get("spId")
+            if isinstance(pos, int) and pos != SUB_POSITION and isinstance(sp, int):
+                slots[pos] = sp
+        if len(slots) < 11:
+            continue
+        out.append(_Lineup(at, wdl, _goal(me), _goal(opp), slots, {pid_of(sp): pos for pos, sp in slots.items()}))
+    out.sort(key=lambda g: g.at)
+    return out
+
+
+def _side(games: list[_Lineup], ids: list[int], mixed: bool) -> Window:
+    picked = [games[i] for i in ids]
+    wdl = [sum(g.wdl == k for g in picked) for k in range(3)]
+    return Window(len(picked), wdl[0], wdl[1], wdl[2], sum(g.gf for g in picked), sum(g.ga for g in picked), mixed)
+
+
+def _gd_z(games: list[_Lineup], before: list[int], after: list[int]) -> float | None:
+    """경기당 득실차의 뒤 − 앞 ÷ 표준오차(분산이 다른 두 묶음). 두 쪽 다 변화가 없으면 None."""
+    a = [games[i].gf - games[i].ga for i in after]
+    b = [games[i].gf - games[i].ga for i in before]
+    if len(a) < 2 or len(b) < 2:
+        return None
+    ma, mb = sum(a) / len(a), sum(b) / len(b)
+    va = sum((x - ma) ** 2 for x in a) / (len(a) - 1)
+    vb = sum((x - mb) ** 2 for x in b) / (len(b) - 1)
+    se = (va / len(a) + vb / len(b)) ** 0.5
+    return (ma - mb) / se if se else None
+
+
+def _spells(ids: list[int]) -> list[list[int]]:
+    """쓴 판 번호 → 이어 쓴 구간들. 빈 판이 ARRIVAL_GAP 을 넘으면 끊는다."""
+    out = [[ids[0]]]
+    for i in ids[1:]:
+        if i - out[-1][-1] - 1 > config.ARRIVAL_GAP:
+            out.append([i])
+        else:
+            out[-1].append(i)
+    return out
+
+
+def _arrival(games: list[_Lineup], pid: int, played: list[int], mixed: bool) -> ArrivalRow | None:
+    lo, w = config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW
+    s = played[0]
+    if len(played) < lo:
+        return None
+    before = []
+    for i in range(s - 1, -1, -1):     # 이 선수가 없던 판만 — 전에 썼다 다시 데려오면 그 판은 "앞" 이 아니다
+        if pid not in games[i].by_pid:
+            before.append(i)
+            if len(before) == w:
+                break
+    before.reverse()
+    if len(before) < lo:           # 기록 첫 판부터 있던 선수는 "앞" 이 없어 여기서 빠진다
+        return None
+    after = played[:w]
+    cur, prev = games[s], games[s - 1]
+    gone = set(prev.by_pid) - set(cur.by_pid)
+    pos = cur.by_pid[pid]
+    cand = prev.slots.get(pos)
+    if cand is not None and pid_of(cand) in gone:
+        prev_sp = cand
+    elif len(gone) == 1:           # 포메이션이 함께 바뀌어 자리 번호가 달라도 빠진 사람이 하나면 그 사람이다
+        prev_sp = prev.slots[prev.by_pid[next(iter(gone))]]
+    else:
+        prev_sp = None
+    return ArrivalRow(at=cur.at, sp_id=cur.slots[pos], pos=pos, prev_sp=prev_sp,
+                      before=_side(games, before, mixed), after=_side(games, after, mixed),
+                      together=len(set(cur.by_pid) - set(prev.by_pid)) - 1,
+                      window_changed=len(set(games[after[-1]].by_pid) - set(games[before[0]].by_pid) - {pid}),
+                      z=_gd_z(games, before, after))
+
+
+def _moves(games: list[_Lineup], pid: int, played: list[int], mixed: bool) -> list[MoveRow]:
+    runs: list[list] = []
+    for i in played:
+        pos = games[i].by_pid[pid]
+        if runs and runs[-1][0] == pos:
+            runs[-1][1].append(i)
+        else:
+            runs.append([pos, [i]])
+    merged: list[list] = []
+    for pos, ids in runs:
+        if merged and (len(ids) < config.ARRIVAL_BLIP or merged[-1][0] == pos):
+            merged[-1][1].extend(ids)
+        else:
+            merged.append([pos, list(ids)])
+    out = []
+    lo, w = config.ARRIVAL_MIN_GAMES, config.ARRIVAL_WINDOW
+    for (p0, a), (p1, b) in zip(merged, merged[1:]):
+        first = b[0]
+        if len(a) < lo or len(b) < lo or set(games[first].slots) != set(games[first - 1].slots):
+            continue               # 포메이션이 바뀐 판이면 자리 번호만 달라진 것일 수 있다
+        before, after = a[-w:], b[:w]
+        out.append(MoveRow(at=games[first].at, sp_id=games[first].slots[p1], from_pos=p0, to_pos=p1,
+                           before=_side(games, before, mixed), after=_side(games, after, mixed),
+                           together=len(set(games[first].by_pid) - set(games[first - 1].by_pid)),
+                           z=_gd_z(games, before, after)))
+    return out
+
+
+def arrival_report(details: list[dict], ouid: str) -> ArrivalReport:
+    """선발 기록 → 새로 쓴 선수 · 자리를 옮긴 선수. 최신순."""
+    games = _lineups(details, ouid)
+    rep = ArrivalReport(games=len(games))
+    if not games:
+        return rep
+    mixed = mixed_of_details(details, ouid)
+    ids: dict[int, list[int]] = defaultdict(list)
+    for i, g in enumerate(games):
+        for pid in g.by_pid:
+            ids[pid].append(i)
+    for pid, lst in ids.items():
+        for played in _spells(lst):
+            row = _arrival(games, pid, played, mixed)
+            if row is not None:
+                rep.arrivals.append(row)
+            rep.moves.extend(_moves(games, pid, played, mixed))
+    rep.arrivals.sort(key=lambda r: (r.at, r.pos), reverse=True)
+    rep.moves.sort(key=lambda r: (r.at, r.to_pos), reverse=True)
+    return rep

@@ -3551,7 +3551,8 @@ class MainWindow(QMainWindow):
                                                      ("카드별", "_build_opp_cards_tab")))),
                  ("스쿼드·이적", Tabs("squad", (("타임라인", "_build_timeline_tab"),
                                              ("가계부", "_build_ledger_tab"),
-                                             ("이력", "_build_history_tab"))))]),
+                                             ("이력", "_build_history_tab"),
+                                             ("영입 전후", "_build_arrivals_tab"))))]),
         # 2.1.1 새 묶음 — 아직 빈 메뉴는 config.HIDDEN_NAV_UNTIL_READY 에 이름을 넣어 숨긴다(16·17단계가 채웠다)
         ("랭커", [("랭킹 추이", Tabs("ranktrend", (("추이", "_build_rank_trend_tab"),
                                               ("메타 변화", "_build_meta_trend_tab"),
@@ -5860,6 +5861,95 @@ class MainWindow(QMainWindow):
         self._set_status(self.lb_history_note, " · ".join(notes))
 
     # ── 스쿼드 타임라인 ──
+    # [스쿼드·이적 › 영입 전후](82) — 기록이지 효과가 아니다. 선수 한 명을 바꾼 시점의 차이는 우연과 구분이 안 됐다(ROADMAP "## 82단계")
+    ARRIVAL_COLUMNS = ["첫 선발", "선수", "자리", "앞 선수", "판수(앞/뒤)", "승률", "경기당 득실", "같이 바뀜", "득실 차이"]
+    MOVE_COLUMNS = ["바뀐 날", "선수", "자리", "판수(앞/뒤)", "승률", "경기당 득실", "같이 바뀜", "득실 차이"]
+    ARRIVAL_VIEWS = ("새로 쓴 선수", "자리를 옮긴 선수")
+    ARRIVAL_DIFF_TIP = ("경기당 득실차의 앞뒤 차이가 표준오차의 {z:g}배를 넘으면 '범위 밖'입니다(승률이 아니라 득실차로 봅니다 — 승률보다 흔들림이 적습니다). "
+                        "범위 밖이어도 우연일 수 있고, 이 선수 덕분이라는 뜻도 아닙니다 — 같이 바뀐 선수 · 시즌 · 상대 수준이 함께 달라집니다.")
+    ARRIVAL_TOGETHER_TIP = "같은 판에 함께 새로 든 선수 — {n}명 이상이면 스쿼드 교체로 표시합니다."
+    ARRIVAL_EMPTY = "앞뒤를 {n}판씩 견줄 수 있는 선수가 아직 없습니다."
+    ARRIVAL_DIFF_IN, ARRIVAL_DIFF_OUT = "우연 범위 안", "범위 밖"
+
+    def _build_arrivals_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.seg_arrivals = Segmented(list(self.ARRIVAL_VIEWS))   # 한 표씩 — 둘을 쌓으면 1280×720 에서 첫 표가 5줄이었다
+        self.seg_arrivals.changed.connect(self._on_arrival_view)
+        top = QHBoxLayout()
+        top.addWidget(self.seg_arrivals)
+        top.addStretch(1)
+        v.addLayout(top)
+        self.lb_arrivals_note = self._note_label()
+        v.addWidget(self.lb_arrivals_note)
+        self.tbl_arrivals = self._make_table(self.ARRIVAL_COLUMNS, icons={1: "season", 3: "season"})
+        v.addWidget(self.tbl_arrivals, 1)
+        self.tbl_moves = self._make_table(self.MOVE_COLUMNS, icons={1: "season"})
+        v.addWidget(self.tbl_moves, 1)
+        self._on_arrival_view(0)
+        tips = {"득실 차이": self.ARRIVAL_DIFF_TIP.format(z=config.ARRIVAL_Z),
+                "같이 바뀜": self.ARRIVAL_TOGETHER_TIP.format(n=config.ARRIVAL_SQUAD_SWAP)}
+        for tbl, cols in ((self.tbl_arrivals, self.ARRIVAL_COLUMNS), (self.tbl_moves, self.MOVE_COLUMNS)):
+            for name, tip in tips.items():
+                tbl.horizontalHeaderItem(cols.index(name)).setToolTip(tip)
+        self._arrivals_cache = None
+        return w
+
+    def _on_arrival_view(self, i: int) -> None:
+        self.tbl_arrivals.setVisible(i == 0)
+        self.tbl_moves.setVisible(i == 1)
+
+    def _arrival_cells(self, row) -> list:
+        """판수 · 승률 · 득실 — 두 표가 같이 쓴다. 정렬 값은 앞뒤 차이."""
+        b, a = row.before, row.after
+        rate = lambda w: win_rate_text(w.win, w.draw, w.lose, w.mixed, short=True)   # noqa: E731
+        gd = lambda w: (w.gf - w.ga) / w.games   # noqa: E731
+        return [(f"{b.games:,} / {a.games:,}", a.games),
+                (f"{rate(b)} → {rate(a)}", a.win_rate - b.win_rate),
+                (f"{gd(b):+.2f} → {gd(a):+.2f}", gd(a) - gd(b))]
+
+    def _arrival_diff(self, tbl: FitTableWidget, rows: list, col: int) -> None:
+        """차이 칸 — 범위 밖만 굵게. 좋음/나쁨 색은 안 쓴다(방향은 옆 칸에 있고, 좋고 나쁨의 판정이 아니다)."""
+        for r, row in enumerate(rows):
+            item = tbl.item(r, col)
+            if item is None:
+                continue
+            item.setToolTip(self.ARRIVAL_DIFF_TIP.format(z=config.ARRIVAL_Z))
+            f = item.font()
+            f.setBold(row.outside)
+            item.setFont(f)
+            item.setForeground(QColor(T.TEXT if row.outside else T.TEXT_DIM))
+
+    def _render_arrivals(self) -> None:
+        key = (self._details_key(), self._ouid)
+        if self._arrivals_cache is None or self._arrivals_cache[0] != key:
+            self._arrivals_cache = (key, core.arrival_report(self._details_all, self._ouid))
+        rep = self._arrivals_cache[1]
+        self.arrival_report = rep   # 테스트가 본다
+        self._set_status(self.lb_arrivals_note, "" if rep.arrivals or rep.moves else self.ARRIVAL_EMPTY.format(n=config.ARRIVAL_MIN_GAMES))
+        name = lambda sp: IconCell(self._names.get(sp, str(sp)), None, core.season_id_of(sp))   # noqa: E731
+        pos = lambda p: self._positions.get(p, str(p))   # noqa: E731
+        diff = lambda r: self.ARRIVAL_DIFF_OUT if r.outside else self.ARRIVAL_DIFF_IN   # noqa: E731
+        rows = []
+        for r in rep.arrivals:
+            together = f"{r.together}명" + (" · 스쿼드 교체" if r.squad_swap else "")
+            rows.append([(f"{r.at:%y-%m-%d}", r.at.timestamp()), name(r.sp_id), pos(r.pos),
+                         name(r.prev_sp) if r.prev_sp is not None else "—", *self._arrival_cells(r),
+                         (together, r.together), diff(r)])
+        self._fill(self.tbl_arrivals, rows, enable_sort=False)   # 차이 칸을 채운 순서대로 꾸민 뒤 정렬을 켠다(PyQt 1)
+        self._arrival_diff(self.tbl_arrivals, rep.arrivals, self.ARRIVAL_COLUMNS.index("득실 차이"))
+        together_col = self.ARRIVAL_COLUMNS.index("같이 바뀜")
+        for i, r in enumerate(rep.arrivals):
+            self.tbl_arrivals.item(i, together_col).setToolTip(f"앞뒤 기간 양끝의 선발을 견주면 다른 선수 {r.window_changed}명")
+        self.tbl_arrivals.setSortingEnabled(True)
+        rows = [[(f"{r.at:%y-%m-%d}", r.at.timestamp()), name(r.sp_id), f"{pos(r.from_pos)} → {pos(r.to_pos)}",
+                 *self._arrival_cells(r), (f"{r.together}명", r.together), diff(r)] for r in rep.moves]
+        self._fill(self.tbl_moves, rows, enable_sort=False)
+        self._arrival_diff(self.tbl_moves, rep.moves, self.MOVE_COLUMNS.index("득실 차이"))
+        self.tbl_moves.setSortingEnabled(True)
+        for t in (self.tbl_arrivals, self.tbl_moves):
+            self._start_icons(t)
+
     def _build_timeline_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -10414,7 +10504,7 @@ class MainWindow(QMainWindow):
         "oppcards": [("포지션별 최다 상대", "카드별")], "rankmove": [("승률 그래프", "순위 변동")],
         "calendar": [("승률 그래프", "일별 기록")],
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
-        "history": [("스쿼드·이적", "이력")],
+        "history": [("스쿼드·이적", "이력")], "arrivals": [("스쿼드·이적", "영입 전후")],
         "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")],
         "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
@@ -10464,6 +10554,7 @@ class MainWindow(QMainWindow):
             # 시즌 필터 무관 — 거래는 키 주인 것 전체, 힌트는 누적 최근 300경기. 가계부 합계만 시즌 범위(짝은 전체로 맞춘 뒤)
             "trades": self._render_trades,
             "timeline": self._render_timeline,  # 누적 전체 — 짝·보유 상태는 전체 이력으로 맞춘다
+            "arrivals": self._render_arrivals,  # 누적 전체 — 앞뒤 판이 시즌을 넘는다
             "history": self._render_history,    # 57 K4 — 누적 전체(시즌 필터 무관) · 닉네임 줄은 내 계정만
             "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
             "recommend": self._render_recommend,     # 후보는 DB(랭커 픽 · 내 상대) · "내 스쿼드"는 최근 경기

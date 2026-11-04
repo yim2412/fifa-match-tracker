@@ -54,7 +54,7 @@ from rankerpick import (
     ranker_pick_summary, recommend, recommend_candidates,
 )
 from squad_timeline import (
-    HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, build_timeline, parse_trades,
+    HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, arrival_report, build_timeline, parse_trades,
 )
 from trade_book import Ledger, ledger, price_targets
 from traitcollect import TraitSlot, TraitUsage, trait_usage
@@ -129,7 +129,7 @@ __all__ = [
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸
     "OppScore", "bin_of_value", "opp_scores",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
-    "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "build_timeline", "parse_trades",
+    "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",
     # stats — 여러 경기 집계
     "END_KINDS", "MIN_BUCKET_SHOTS", "PITCH_ROWS", "PITCH_X", "PITCH_Y", "PITCH_Y_MAX", "SquadValue", "card_ovr", "pitch_rows", "squad_value", "KeyPlayers", "key_players", "PASS_KINDS", "PASS_MIN_TRIES", "PERIODS", "PLAYER_RATING_MIN_GAMES", "PLAYER_TREND_MIN_SHOTS",
