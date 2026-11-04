@@ -15,7 +15,7 @@ from dotenv import dotenv_values, load_dotenv
 APP_NAME = "감독모드 전적 분석"
 OWNER_CARD_COMBO_CHARS = 18   # 선수로 구단주 찾기 카드 콤보 폭(글자 수)
 TC_GRID_COLS = 4     # 팀컬러 고르기 격자 칸 수(81 — 피드백 13)
-APP_VERSION = "v3.2.3"
+APP_VERSION = "v3.3.1"
 DATA_DIR_NAME = "피파전적관리"  # 폴더명이라 공백 없이 — APP_NAME 과 별개로 둔다
 
 # 아직 빈 메뉴 — 왼쪽 메뉴에 안 보이고 열리지도 않는다(2.1.1 "랭커" 묶음을 14단계에 자리만 잡고 16·17단계가 다 뺐다 —
