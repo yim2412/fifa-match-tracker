@@ -955,8 +955,7 @@ def test_trait_columns_stacked_not_beside():
     from widgets import TraitIconDelegate
     t = _trait_table()
     assert t._icon_extra[0] == 0 and t._icon_extra[1] == 0 and 0 in t._extra and 1 in t._extra
-    assert isinstance(t.itemDelegateForColumn(0), TraitIconDelegate) and t.itemDelegateForColumn(0).kind == "trait"
-    assert t.itemDelegateForColumn(1).kind == "train"
+    assert isinstance(t.itemDelegateForColumn(0), TraitIconDelegate)
     assert not isinstance(t.itemDelegateForColumn(2), TraitIconDelegate)
     need = config.TRAIT_ICON_PX + t.fontMetrics().height()
     assert t.verticalHeader().defaultSectionSize() >= need, (t.verticalHeader().defaultSectionSize(), need)
@@ -1004,34 +1003,34 @@ def test_trait_cell_geometry_no_overlap():
     assert pad.left() >= cell.left() and pad.right() <= cell.right() + 1, (pad, cell)
 
 
-def test_trait_cell_paints_pad_and_icon():
-    """그림이 있으면 판 위에 그림 · 없으면 판 없이 이름만 — 판 색은 종류(일반 금 · 훈련 회)를 따른다.
-    그림이 없을 때 판을 그리면 이름이 판 밖으로 번져 겹쳐 보였다(2026-10-11 실화면 · 일반 특성 8개는 넥슨에 그림이 없다)."""
-    import theme as T
+def test_trait_cell_paints_only_the_nexon_icon():
+    """넥슨 특성 그림은 육각 판까지 그림 안에 있다 — 앱이 판을 또 깔면 이중으로 보인다(2026-11-04 실물 확인).
+    그림이 없으면 이름만. 비교는 같은 칸을 그림 없이 그린 바탕과."""
     from PySide6.QtGui import QIcon
     t = _trait_table()
     pm = QPixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX)
     pm.fill(QColor("#ff0000"))
+    clear = QPixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX)
+    clear.fill(QColor(0, 0, 0, 0))
     bare, opt = _paint_cell(t, 0, 0)
     drawn, _ = _paint_cell(t, 0, 0, QIcon(pm))
     d = t.itemDelegateForColumn(0)
     box = d.pad_rect(opt)
     c = box.center().toPoint()
-    assert drawn.pixelColor(c).rgb() == QColor("#ff0000").rgb(), "아이콘이 판 가운데에 안 찍혔다"
+    assert drawn.pixelColor(c).rgb() == QColor("#ff0000").rgb(), "그림이 칸 가운데에 안 찍혔다"
     assert bare.pixelColor(c).rgb() != QColor("#ff0000").rgb()
-    assert bare != drawn, "그림이 있든 없든 똑같다 — 아이콘을 안 그린다"
-    # 육각 판 위쪽 꼭짓점 바로 아래(그림 상자 가장자리 밖) — 판 색
-    top_inside = drawn.pixelColor(int(box.center().x()), int(box.top()) + 1)
-    assert top_inside.rgb() == QColor(T.TRAIT_PAD_GOLD).rgb(), "일반 특성 판이 금색이 아니다"
-    # 그림이 없으면 판이 없다 — 같은 자리가 배경(검정)이어야 한다(이름 글자는 그 아래 가운데에 있어 꼭짓점은 비어 있다)
-    assert bare.pixelColor(int(box.center().x()), int(box.top()) + 1).rgb() == QColor("black").rgb(), \
-        "그림이 없는데 판을 그렸다 — 이름이 판 위에 겹친다"
-    img_t, opt_t = _paint_cell(t, 0, 1, QIcon(pm))
-    d1 = t.itemDelegateForColumn(1)
-    box1 = d1.pad_rect(opt_t)
-    edge_t = img_t.pixelColor(int(box1.center().x()), int(box1.top()) + 1)
-    assert edge_t.rgb() == QColor(T.TRAIT_PAD_GRAY).rgb(), "훈련 특성 판이 회색이 아니다"
-    assert d.failed == 0 and d1.failed == 0, "그리다 예외가 났다"
+    # 그림이 상자를 다 쓴다 — 줄여 올리면 원본이 작아진다
+    for x, y in ((int(box.left()) + 1, int(box.top()) + 1), (int(box.right()) - 1, int(box.bottom()) - 1)):
+        assert drawn.pixelColor(x, y).rgb() == QColor("#ff0000").rgb(), ("그림이 상자를 다 안 쓴다", x, y)
+    # 앱이 판을 안 깐다 — 투명 그림이면 어느 열이든(일반·훈련) 바탕 그대로여야 한다. 깔면 여기가 판 색이 된다
+    for col in (0, 1):
+        see, opt_c = _paint_cell(t, 0, col, QIcon(clear))
+        b = t.itemDelegateForColumn(col).pad_rect(opt_c)
+        for x, y in ((b.center().x(), b.top() + 1), (b.center().x(), b.center().y())):
+            assert see.pixelColor(int(x), int(y)).rgb() == QColor("black").rgb(), ("앱이 판을 깔았다", col, x, y)
+    # 그림이 없으면 판도 없다 — 이름 글자는 그 아래 가운데
+    assert bare.pixelColor(int(box.center().x()), int(box.top()) + 1).rgb() == QColor("black").rgb()
+    assert d.failed == 0 and t.itemDelegateForColumn(1).failed == 0, "그리다 예외가 났다"
 
 
 def test_trait_blank_cell_draws_nothing():

@@ -892,7 +892,7 @@ FORMATION_PX = 20
 # "emblem" 열에는 구단 엠블럼·강화 엠블럼(정사각)과 국기(5:3)가 같이 올 수 있어 가장 넓은 쪽(국기)으로 폭을 잡는다.
 ICON_ASPECT = {"emblem": 130 / 78, "season": 1.0, "division": 1.0, "trait": 1.0, "train": 1.0,
                "formation": 1.0}
-# 종류별 그림 높이 — 없으면 ICON_PX. 특성은 판(육각) 위에 아이콘 + 아래 % 줄이라 더 크게(STACKED_KINDS: 글자 위에 쌓아 그리는 칸)
+# 종류별 그림 높이 — 없으면 ICON_PX. 특성은 그림 + 아래 % 줄이라 더 크게(STACKED_KINDS: 글자 위에 쌓아 그리는 칸)
 ICON_HEIGHT = {"trait": TRAIT_ICON_PX, "train": TRAIT_ICON_PX, "formation": FORMATION_PX}
 STACKED_KINDS = ("trait", "train")
 EMBLEM_HEAD_PX = 32      # 대시보드 머리(구단주 카드) 엠블럼 높이 — 옆 등급 배지(32)와 같다

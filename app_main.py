@@ -7537,7 +7537,7 @@ class MainWindow(QMainWindow):
         self.tbl_my_traits.setMaximumHeight(self.MY_TRAIT_MAX_H)
         v.addWidget(self.tbl_my_traits)
         self._meta_top(v, self.lb_trait_note, ("순위 구간", self.cb_trait_tier), ("포메이션", self.cb_trait_form))
-        # 칸 = 육각 판 + 아이콘 + 아래 % (TraitIconDelegate) — 일반·신규는 traits/, 훈련·코치는 trainingTrait/ (같은 표)
+        # 칸 = 특성 그림(육각 판 포함) + 아래 % (TraitIconDelegate) — 일반·신규는 traits/, 훈련·코치는 trainingTrait/ (같은 표)
         # 67 R7 — 자리마다 종류별 1위 한 줄(칸 = % + 아래 특성 이름) · 상위 N개 표는 접기 아래
         self.trait_slots = MetricRowList()
         v.addWidget(self.trait_slots, 1)

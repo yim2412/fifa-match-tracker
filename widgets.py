@@ -888,7 +888,7 @@ class FitTableWidget(QTableWidget):
         self._stacked_cols = stacked
         self._icon_extra = {c: (0 if c in stacked else widths[c] + gap) for c in cols}
         for c in stacked:
-            self.setItemDelegateForColumn(c, TraitIconDelegate(self, cols[c]))
+            self.setItemDelegateForColumn(c, TraitIconDelegate(self))
         if stacked:
             self.verticalHeader().setDefaultSectionSize(TraitIconDelegate.row_height(self.fontMetrics()))
         self._merge_extra()
@@ -1654,18 +1654,18 @@ NAME_ROLE = Qt.ItemDataRole.UserRole + 3   # 특성 칸의 이름(그림이 없�
 
 
 class TraitIconDelegate(RowBorderDelegate):
-    """특성 칸 — 육각 판 위에 아이콘, 아래에 %. 그림이 아직 없거나 못 받았으면(넥슨에 그림이 아예 없는 특성도 있다)
-    판 없이 그 자리에 이름을 줄여 쓴다.
+    """특성 칸 — 넥슨 특성 그림, 아래에 %. 그림이 아직 없거나 못 받았으면(넥슨에 그림이 아예 없는 코드도 있다)
+    그 자리에 이름을 줄여 쓴다.
 
-    판은 넥슨 원본이 아니라 QPainter 로 그린다(일반·신규 금색 · 훈련·코치 회색 — 색은 theme). 폭은 sizeHint 로 알리지 않는다
-    (GradeBadgeDelegate 와 같은 이유: _measure_pad 가 한 열의 큰 힌트를 모든 열에 얹는다) — 글자 "NN%" 가 곧 칸 폭이고
-    그림은 그 위에 가운데 정렬. RowBorderDelegate 를 상속해 선택 행 테두리가 이 칸에서 끊기지 않는다."""
+    육각 판은 그림 안에 이미 들어 있다(종류별 금·회색까지 — 넥슨 페이지도 <img> 하나만 놓는다). 예전엔 그 뒤에 금·회색 육각을 또 깔아
+    판이 이중으로 보였고 회색 그림이 금색 판에 얹히기도 했다(2026-11-04). 폭은 set_content_widths 의 그림 여백으로 준다
+    (GradeBadgeDelegate 와 같은 이유: _measure_pad 가 한 열의 큰 힌트를 모든 열에 얹는다).
+    RowBorderDelegate 를 상속해 선택 행 테두리가 이 칸에서 끊기지 않는다."""
 
     TOP, GAP, BOTTOM = 2, 2, 2
 
-    def __init__(self, parent=None, kind: str = "trait"):
+    def __init__(self, parent=None):
         super().__init__(parent)
-        self.kind = kind
         self.failed = 0   # 테스트가 읽는다 — 기록은 첫 번째만
 
     @classmethod
@@ -1688,7 +1688,7 @@ class TraitIconDelegate(RowBorderDelegate):
                 crashlog.note("특성 칸 그리기", e)
 
     def pad_rect(self, option) -> QRectF:
-        """판(육각)이 들어가는 정사각형 — 칸 위쪽 가운데. 테스트가 글자와 겹치는지 잴 때도 쓴다."""
+        """그림이 들어가는 정사각형 — 칸 위쪽 가운데. 테스트가 글자와 겹치는지 잴 때도 쓴다."""
         s = config.TRAIT_ICON_PX
         r = option.rect
         return QRectF(r.x() + (r.width() - s) / 2, r.y() + self.TOP, s, s)
@@ -1704,19 +1704,13 @@ class TraitIconDelegate(RowBorderDelegate):
             return                    # 빈 칸(줄 수가 모자란 열)
         box = self.pad_rect(option)
         painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         icon = index.data(Qt.ItemDataRole.DecorationRole)
         pm = icon.pixmap(config.TRAIT_ICON_PX, config.TRAIT_ICON_PX) if isinstance(icon, QIcon) else QPixmap()
         if not pm.isNull():
-            c = box.center()
-            hexa = QPolygonF([QPointF(c.x() + box.width() / 2 * math.sin(math.radians(60 * i)),
-                                      c.y() - box.height() / 2 * math.cos(math.radians(60 * i))) for i in range(6)])
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(T.TRAIT_PAD_GOLD if self.kind == "trait" else T.TRAIT_PAD_GRAY))
-            painter.drawPolygon(hexa)
-            painter.drawPixmap(box.adjusted(3, 3, -3, -3).toRect(), pm)
+            painter.drawPixmap(box.toRect(), pm)
         else:
-            # 그림이 없으면 판도 그리지 않는다 — 판 위에 이름을 찍으면 이름이 판 밖으로 번져 겹쳐 보였다(일반 특성 8개 —
+            # 그림이 없으면 이름만 — 예전 판 위에 이름을 찍으면 이름이 판 밖으로 번져 겹쳐 보였다(일반 특성 8개 —
             # 코드 0·1·3·4·5·6·7·9 — 는 넥슨 CDN 에 그림이 아예 없다(403, 2026-10-11 실측) · 실화면에서 발견)
             small = QFont(option.font)
             small.setPixelSize(max(T.PX_FLOOR, small.pixelSize() - 3) if small.pixelSize() > 0 else T.PX_FLOOR_BADGE)

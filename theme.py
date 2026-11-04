@@ -199,9 +199,7 @@ GRADE_BADGES = ((11, "#6dd5e8", "#0a2a30"),
                 (2, "#c37653", "#2b1608"),
                 (1, "#45494f", "#ffffff"))
 
-# 특성 아이콘 뒤 육각 판(넥슨 원본이 아니라 QPainter 로 그린다) · 작은 축구장(포메이션 점) — 두 테마 같은 고정색
-TRAIT_PAD_GOLD = "#e8c545"   # 일반·신규 특성 판
-TRAIT_PAD_GRAY = "#8a929c"   # 훈련 특성·코치 판
+# 작은 축구장(포메이션 점) — 두 테마 같은 고정색
 # 작은 축구장 — 점 색은 그림 속 높이 띠(stats.PITCH_ROWS 순서: 공격 · 공미 · 미드 · 수미 · 수비 · GK). GK 는 흰색(선 색과 갈리게)
 FORMATION_PITCH_TOP = _P["FORMATION_PITCH_TOP"]
 FORMATION_PITCH_BOTTOM = _P["FORMATION_PITCH_BOTTOM"]
@@ -226,7 +224,7 @@ BASE_FONT_PX = 16
 # 줄임 하한(FLOOR)은 안 키운다 — 좁을 때 넘침을 막는 바닥이라, 올렸더니 1280×720 에서 선수 지표 표 2px ·
 # 승부차기 GK 카드 넷 52px 가 넘쳤다(78 ② offscreen 실측). 읽히는 한계는 기본 크기와 상관없다.
 PX_FLOOR = 9            # 표·경기 카드 축소 하한
-PX_FLOOR_BADGE = 10     # 선수 칩 축소 하한 · 특성 판 글자 기본
+PX_FLOOR_BADGE = 10     # 선수 칩 축소 하한 · 특성 칸 글자 기본
 PX_XS = 12           # 옛 11
 PX_S = 13            # 옛 12
 PX_M = 14            # 옛 13
