@@ -14,7 +14,7 @@
 그래프(QPainter) — 대시보드·승률 그래프·기간별 성적 · 점수 분포(`HistogramChart` — 2.3.1, 맨 왼쪽 칸 흐림 · 비교 선 · 세로선).
 색은 `theme.CHART_*` — 앱의 좋음/나쁨(GOOD/BAD) 짝은 적록 색약에서 구분이 안 돼 그래프엔 안 쓴다. 히트맵(`HeatmapChart` — 칸 안 글자 · 흐린 칸은 색 없음 ·
 색 상한 `HEAT_MAX_MIX` 는 글자 대비 4.5 로 잼)·도넛 조각(`donut_segments` — 6개 넘으면 "기타").
-추이는 **`AreaTrendChart` 하나**(1.3.1) — 축(`Axis` · `PCT_AXIS`/`Axis.fit`)·기준선·이동평균·경기 수 막대·날짜 x·기준 계단선·띠·범례·큰 값은 전부 `set_data` 인자.
+추이는 **`AreaTrendChart` 하나**(1.3.1) — 축(`Axis` · `PCT_AXIS`/`Axis.fit`/`Axis.fit_pct`(승률을 값에 맞춤 · 50% 포함))·기준선·이동평균·경기 수 막대·날짜 x·기준 계단선·띠·범례·큰 값은 전부 `set_data` 인자.
 **기본값 그림은 얼린 사본과 픽셀까지 같아야** 한다(대시보드·선수 카드가 기본값만 쓴다) — `tests/legacy_area_chart.py`(3.1.1 66 G0 꼴로
 다시 얼림 · 상수·도우미·색 값까지 복사해 둬서 여기를 고치면 같이 안 바뀐다 · 고치지 않는다 — 73단계 바인딩 전환의 import 줄만 예외)와 `test_area_chart_defaults_unchanged` 가 대조
 """
@@ -41,6 +41,10 @@ SMALL_PT = 9        # 축 글자
 TREND_LINE_W = 2.5  # 추이 그래프(AreaTrendChart) 선만 — 다른 그래프는 LINE_W
 BAND_ALPHA = 0.2    # 추이 띠 진하기
 BAND_BAR_MAX = 6    # 혼자 있는 띠 날의 세로 막대 폭 상한(날 간격의 1/3 과 작은 쪽)
+PCT_FIT_STEPS = (5, 10, 25)   # Axis.fit_pct 눈금 간격 후보 — 전부 50 에서 0·100 으로 딱 떨어진다
+PCT_FIT_MAX_CELLS = 4         # Axis.fit_pct 눈금 칸 상한
+PCT_FIT_MIN_PAD = 2.0         # Axis.fit_pct 위아래 최소 여백(%p) — 값이 전부 50 이어도 축이 선다
+STEP_RADIUS = 6     # 등급 계단 모서리 둥글기(px)
 
 
 def _color(hex_: str, alpha: float = 1.0) -> QColor:
@@ -100,6 +104,21 @@ def _smooth_path(pts: list[QPointF], top: float, bottom: float) -> QPainterPath:
     return path
 
 
+def _rounded_path(verts: list[QPointF], radius: float) -> QPainterPath:
+    """꺾은선의 모서리를 둥글린다(80 U3 등급 계단). 칸이 좁으면 양쪽 변 절반까지만 — 곡선이 옆 변을 넘지 않게."""
+    path = QPainterPath(verts[0])
+    for prev, cur, nxt in zip(verts, verts[1:], verts[2:]):
+        a, b = cur - prev, nxt - cur
+        la, lb = math.hypot(a.x(), a.y()), math.hypot(b.x(), b.y())
+        if not la or not lb:
+            continue
+        r = min(radius, la / 2, lb / 2)
+        path.lineTo(cur - a * (r / la))
+        path.quadTo(cur, cur + b * (r / lb))
+    path.lineTo(verts[-1])
+    return path
+
+
 @dataclass(frozen=True)
 class Axis:
     """값 축 하나 — 범위·눈금·글자 모양·툴팁 이름. 승률(%)이 박혀 있던 자리를 여기 모은다
@@ -143,8 +162,25 @@ class Axis:
         step = next((s for s in (5, 10, 20, 25, 50) if 2 * s >= top), 50)
         return Axis(0, 2 * step, (0, step, 2 * step), "{:.1f}%", name, "{:.0f}%")
 
+    @staticmethod
+    def fit_pct(values, name: str = "승률") -> "Axis":
+        """승률 축을 값에 맞춘다(80 — 45~55% 를 오가는 선이 0~100% 축에서 일자로 눌렸다). 50% 를 늘 포함해
+        기준선이 눈금에 놓이고 0~100 밖으로 안 나간다 · 눈금 간격은 PCT_FIT_STEPS 중 칸이 PCT_FIT_MAX_CELLS 이하인 첫 값."""
+        vals = [v for v in values if v is not None]
+        if not vals:
+            return PCT_AXIS
+        vmin, vmax = min(*vals, 50.0), max(*vals, 50.0)
+        pad = max((vmax - vmin) * 0.1, PCT_FIT_MIN_PAD)
+        lo_raw, hi_raw = max(vmin - pad, 0.0), min(vmax + pad, 100.0)
+        for step in PCT_FIT_STEPS:
+            lo = 50 - step * math.ceil((50 - lo_raw) / step)
+            hi = 50 + step * math.ceil((hi_raw - 50) / step)
+            if (hi - lo) / step <= PCT_FIT_MAX_CELLS:
+                break
+        return Axis(lo, hi, tuple(range(lo, hi + step, step)), "{:.1f}%", name, "{:.0f}%")
 
-PCT_AXIS = Axis(0, 100, (0, 50, 100), "{:.1f}%", "승률", "{:.0f}%")
+
+PCT_AXIS =Axis(0, 100, (0, 50, 100), "{:.1f}%", "승률", "{:.0f}%")
 
 
 class AreaTrendChart(_Chart):
@@ -283,13 +319,11 @@ class AreaTrendChart(_Chart):
             self.marks["baseline"] = ("dashed", by)
 
         n = len(self._points)
-        if self._x_dates is not None:
-            d0 = self._x_dates[0]
-            span = (self._x_dates[-1] - d0).days
-            xs = [ml + (plot_w * (d - d0).days / span if span else plot_w / 2) for d in self._x_dates]
-        else:
-            xs = [ml + (plot_w * i / (n - 1) if n > 1 else plot_w / 2) for i in range(n)]
-        pts = [QPointF(x, y_of(v)) for x, (_, v, _) in zip(xs, self._points)]
+        xs = self._x_positions(ml, plot_w)
+        if self._counts:   # 양끝 막대가 축 칸·오른쪽 끝으로 나가지 않게 막대 반쪽만큼 안으로(80)
+            pad = self._count_bar_w(xs) / 2
+            xs = self._x_positions(ml + pad, max(plot_w - 2 * pad, 1))
+        pts =[QPointF(x, y_of(v)) for x, (_, v, _) in zip(xs, self._points)]
         line = _smooth_path(pts, top, bottom)
 
         # 뒤에서 앞으로: 경기 수 막대 → 띠 → 기준 계단선 → 이동평균 → 순위 점선 → 본 선
@@ -398,7 +432,7 @@ class AreaTrendChart(_Chart):
                 p.drawEllipse(pts[i], DOT_R, DOT_R)
 
         if self._counts:
-            self._draw_count_peak(p, fm, xs, w - mr, placed)
+            self._draw_count_peak(p, fm, xs, ml, w - mr, placed)
 
         # x 라벨 — 처음·끝 + 사이 몇 개(겹치지 않게)
         p.setFont(small)
@@ -441,6 +475,20 @@ class AreaTrendChart(_Chart):
             if self._weak and self._weak[i]:
                 tip += " · 표본 부족"
             self._hits.append((QRectF(bx, top, bw, foot - top), tip))
+
+    def _x_positions(self, left: float, width: float) -> list[float]:
+        """점마다 x — 날짜가 있으면 날짜 간격, 없으면 순번 간격."""
+        if self._x_dates is not None:
+            d0 = self._x_dates[0]
+            span = (self._x_dates[-1] - d0).days
+            return [left + (width * (d - d0).days / span if span else width / 2) for d in self._x_dates]
+        n = len(self._points)
+        return [left + (width * i / (n - 1) if n > 1 else width / 2) for i in range(n)]
+
+    @staticmethod
+    def _count_bar_w(xs: list[float]) -> float:
+        gaps = [b - a for a, b in zip(xs, xs[1:]) if b > a]
+        return max(2.0, min(BAR_MAX, (min(gaps) if gaps else BAR_MAX) * 0.6))
 
     @staticmethod
     def _free_rect(cands: list[QRectF], placed: list[QRectF]) -> QRectF:
@@ -631,8 +679,7 @@ class AreaTrendChart(_Chart):
         """경기 수 — 선 뒤 회색 막대(66 P6 · 가장 큰 값이 높이의 COUNT_FRAC). 숫자는 _draw_count_peak."""
         games = [g or 0 for _, _, g in self._points]
         peak = max(games)
-        gaps = [b - a for a, b in zip(xs, xs[1:]) if b > a]
-        bw = max(2.0, min(BAR_MAX, (min(gaps) if gaps else BAR_MAX) * 0.6))
+        bw = self._count_bar_w(xs)
         self._count_bw = bw
         self._count_tops: dict[int, float] = {}
         p.setPen(Qt.PenStyle.NoPen)
@@ -645,10 +692,11 @@ class AreaTrendChart(_Chart):
             r = min(BAR_RADIUS, bw / 2)
             p.drawRoundedRect(QRectF(x - bw / 2, bottom - bh, bw, bh), r, r)
             self._count_tops[i] = bottom - bh
+            self.marks.setdefault("count_rects", []).append(QRectF(x - bw / 2, bottom - bh, bw, bh))
             drawn += 1
         self.marks["count_bars"] = drawn
 
-    def _draw_count_peak(self, p: QPainter, fm: QFontMetrics, xs: list[float], right: float,
+    def _draw_count_peak(self, p: QPainter, fm: QFontMetrics, xs: list[float], left: float, right: float,
                          placed: list[QRectF]) -> None:
         """가장 큰 경기 수만 숫자(전부 적으면 읽히지 않는다) — 막대 위, 다른 글자와 겹치면 옆."""
         games = [g or 0 for _, _, g in self._points]
@@ -658,10 +706,12 @@ class AreaTrendChart(_Chart):
         i = max(range(len(games)), key=lambda k: (games[k], k))
         text = f"{peak:,}경기"
         tw, th, bw, ty = fm.horizontalAdvance(text), fm.height(), self._count_bw, self._count_tops[i]
-        cands = [QRectF(min(max(xs[i] - tw / 2, 0), right - tw), ty - th - 2, tw, th),
+        # 왼쪽 끝은 축 글자 칸(left) 안쪽까지만 — 0 까지 허락하면 첫 날 숫자가 눈금 글자 위에 찍혔다(80)
+        cands = [QRectF(max(min(xs[i] - tw / 2, right - tw), left), ty - th - 2, tw, th),
                  QRectF(xs[i] + bw / 2 + 4, ty, tw, th), QRectF(xs[i] - bw / 2 - 4 - tw, ty, tw, th)]
-        cands = [r for r in cands if r.left() >= 0 and r.right() <= right + 1] or cands[:1]
+        cands = [r for r in cands if r.left() >= left and r.right() <= right + 1] or cands[:1]
         rect = self._free_rect(cands, placed)
+        self.marks["count_peak_rect"] = rect
         p.setFont(_small_font(self.font()))
         p.setPen(QColor(T.TEXT_DIM))
         p.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
@@ -1248,16 +1298,19 @@ class DivisionRunChart(_Chart):
         self.marks["markers"] = len(shown)
 
         # 계단 — 구간마다 가로 한 칸, 등급이 바뀌는 자리에서 세로로
-        path = QPainterPath(QPointF(x_of(0), y_of[self._runs[0].division]))
+        verts = [QPointF(x_of(0), y_of[self._runs[0].division])]
         for i, r in enumerate(self._runs):
             y = y_of[r.division]
             if i:
-                path.lineTo(QPointF(x_of(i), y))
-            path.lineTo(QPointF(x_of(i + 1), y))
+                verts.append(QPointF(x_of(i), y))
+            verts.append(QPointF(x_of(i + 1), y))
+        path = _rounded_path(verts, STEP_RADIUS)
         p.setPen(QPen(QColor(T.CHART_LINE), LINE_W))
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
         self.marks["runs"] = n
+        self.marks["step_path"] = path
+        self.marks["step_verts"] = verts
 
         # 가로 라벨 — 구간 시작 날짜 · 겹치거나 앞과 같은 날이면 건너뛴다
         p.setPen(QColor(T.TEXT_DIM))

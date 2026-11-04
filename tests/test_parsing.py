@@ -78,6 +78,34 @@ def test_summarize():
     assert (s.goals_for, s.goals_against) == (6, 6), (s.goals_for, s.goals_against)
 
 
+def test_team_rating_excludes_bench_80():
+    """넥슨 averageRating 은 벤치까지 18 로 나눈 값(실측 62,831줄 전부) — 경기 평점은 뛴 선수 평균이어야 한다."""
+    def side(rate, played=11, avg=None, result="승"):
+        pl = [{"status": {"spRating": rate if i < played else 0}} for i in range(18)]
+        return {"ouid": "me", "nickname": "나", "player": pl,
+                "matchDetail": {"matchResult": result, "averageRating": rate * played / 18 if avg is None else avg}}
+    raw = side(6.0)
+    assert abs(raw["matchDetail"]["averageRating"] - 3.667) < 0.01, "입력이 넥슨 꼴이 아니다 — 아래 비교가 비었다"
+    assert models.team_rating(raw) == 6.0
+    assert models.team_rating(side(7.0, played=13)) == 7.0, "교체로 뛴 선수도 분모에"
+    assert models.team_rating({"matchDetail": {"averageRating": 6.5}}) == 6.5, "player 가 빠진 응답"
+    assert models.team_rating({"matchDetail": {"averageRating": None}}) == 0.0
+    assert models.team_rating({}) == 0.0
+    # 배선 — 한 경기 요약 · 상세 줄 · 구단주 비교 표본
+    assert models.parse_match({"matchInfo": [raw]}, "me").rating == 6.0
+    other = {**side(8.0), "ouid": "opp"}
+    line = next(ln for ln in st.match_versus({"matchInfo": [raw, other]}, "me") if ln.name == "평균 평점")
+    assert (line.mine, line.opp) == (6.0, 8.0), line
+    assert st._per_match([{"matchInfo": [raw, other]}], "me")["평균 평점"] == [6.0]
+    # 평점 없는 판(몰수)은 평균을 끌어내리지 않는다 — 전체로 나누면 3.0 이다
+    forfeit = {"ouid": "me", "nickname": "나", "matchDetail": {"matchResult": "몰수패"}}
+    assert st._per_match([{"matchInfo": [forfeit, other]}], "me")["평균 평점"] == []
+    games = [models.parse_match({"matchInfo": [x]}, "me") for x in (raw, forfeit)]
+    s = models.summarize(games)
+    assert s.total == 2 and s.avg_rating == 6.0, (s.total, s.avg_rating)
+    assert models.summarize(games[1:]).avg_rating == 0.0
+
+
 def test_shot_map():
     ouid, _, details = _load()
     sm = st.shot_map(details, ouid, mine=True)

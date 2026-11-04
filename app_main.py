@@ -2628,8 +2628,9 @@ class MainWindow(QMainWindow):
     # 강화 숫자 칸 = 배지(64 P8) — {칸을 채우는 함수: (표, 열)}. test_rules 가 강화 하나만 든 칸을 만드는 함수를 세어 이 표와 대조한다
     GRADE_BADGE_COLUMNS = {"_render_players": ("tbl_players", (2,)), "_render_timeline": ("tbl_timeline", (3,)),
                            "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,))}
-    SEASON_COLUMNS = ["시즌", "기간", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
-                      "평균 득점", "평균 실점", "평균 점유율", "평균 평점"]
+    # 기간은 시즌 칸 말풍선 · 점유율은 뺐다(80 — 13열이 1280 에서 글씨 하한까지 줄었다)
+    SEASON_COLUMNS = ["시즌", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
+                      "평균 득점", "평균 실점", "평균 평점"]
 
     def __init__(self, api: FCOnlineAPI):
         super().__init__()
@@ -4291,6 +4292,7 @@ class MainWindow(QMainWindow):
         if unit == "일":   # 창 앞 6일도 시즌 범위 안에서만
             ma = core.moving_win_rate(self._matches, [p.start for p in old], min_n=core.MIN_COND, mixed=mixed)
         self.period_chart.set_data(self._period_points(unit, old), counts=True, baseline=50, ma=ma,
+                                   axis=charts.Axis.fit_pct([p.win_rate for p in old if p.rated] + (ma or [])),
                                    avg_weights=[p.rated for p in old], weak=[p.rated == 0 for p in old])
         self.period_chart.setToolTip(win_rate_note(mixed))
         self._show_period_cards(periods, mixed)
@@ -6999,7 +7001,7 @@ class MainWindow(QMainWindow):
             rows.append(AvgBar(name, med, f"{med:,.0f}판" if med is not None else "—", f"{n:,}명", key=name))
         self.champ_value_list.set_rows(rows, base=cg.p50)
         self.champ_value_list.setToolTip("구단가치는 챔피언스에 닿은 때 값 · 칸 경계는 마지막 수집의 구단가치 분포(구단가치 탭과 같은 칸) · "
-                                         "점선 = 전체 중앙값 · 적을수록 빨리 닿았다")
+                                         "가운데 점선 = 전체 중앙값 · 막대 길이 = 중앙값과의 차이 · 적을수록(왼쪽) 빨리 닿았다")
 
     def _draw_trend(self, key: str, title: str, series: list[tuple[str, list]], dates: list, fmt: str,
                     axis_name: str) -> None:
@@ -8178,7 +8180,7 @@ class MainWindow(QMainWindow):
     }
 
     # 79 — 막대 색 뜻(피드백 18). 화면 글로 안 늘리고 제목 말풍선으로(78 설명 글 빼기)
-    RBOARD_COLOR_TIP = "점선 = 전체 중앙값 · 초록 = 중앙값 이상 · 빨강 = 중앙값 아래"
+    RBOARD_COLOR_TIP = "가운데 점선 = 전체 중앙값 · 초록(오른쪽) = 중앙값 이상 · 빨강(왼쪽) = 중앙값 아래 · 막대 길이 = 중앙값과의 차이"
 
     def _build_reward_board_tab(self) -> QWidget:
         w = QWidget()
@@ -8189,10 +8191,11 @@ class MainWindow(QMainWindow):
         # 67 R6 — 카드 둘(참여 인원 · 100판당 중앙값 — "시즌 총 보상" 은 사람마다 범위라 합이 안 선다 · 1회차 [중]) ·
         # 구단가치 구간별 · 팀컬러별 평균 막대(점선 = 전체 중앙값) · 순위 구간 표는 접기 아래
         cards = QHBoxLayout()
-        self.rboard_cards = {"users": StatCard("보상 참여 인원"), "median": StatCard("100판당 보상 (중앙값)", T.ACCENT)}
+        self.rboard_cards = {"users": StatCard("보상 참여 인원"), "median": StatCard("100판당 보상 (중앙값)", T.ACCENT),
+                             "mine": StatCard("이 계정 100판당")}
         for c in self.rboard_cards.values():
             cards.addWidget(c, 1)
-        cards.addStretch(2)
+        cards.addStretch(1)
         v.addLayout(cards)
         grid = QHBoxLayout()
         left = QVBoxLayout()
@@ -8222,10 +8225,10 @@ class MainWindow(QMainWindow):
         self.reward_board: core.RewardBoard | None = None   # 테스트가 본다
         return w
 
-    def _my_reward_text(self, season_start: str | None) -> str:
-        """이 계정의 100판당(정확값 — 저장 경기 중 이 시즌 챔스 이상 등급 판만)."""
+    def _my_reward(self, season_start: str | None):
+        """이 계정의 100판당(정확값 — 저장 경기 중 이 시즌 챔스 이상 등급 판만). 계정·시즌을 모르면 None."""
         if not self._ouid or not season_start:
-            return ""
+            return None
         start = date.fromisoformat(season_start[:10])
         key = (self._details_key(), self._ouid, start)
         if self._reward_cache is None or self._reward_cache[0] != key:
@@ -8233,9 +8236,17 @@ class MainWindow(QMainWindow):
             rows = [w for w in core.win_divisions(self._details_all, self._ouid)
                     if w.when.date() >= start and w.division is not None and w.division <= core.CHAMPION_DIVISION_ID]
             self._reward_cache = (key, core.win_rewards(rows))
-        r = self._reward_cache[1]
-        if not r.games:
-            return "이 계정: 이번 시즌 챔스 이상 판이 이 PC 에 없습니다"
+        return self._reward_cache[1]
+
+    def _show_my_reward(self, r) -> str:
+        """이 계정 카드(80 — 피드백 18 "내 값 표시" · 중앙값과 나란히)를 채우고 요약 줄 글을 돌려준다."""
+        card = self.rboard_cards["mine"]
+        if r is None or not r.games:
+            card.set("—")
+            card.set_sub("")
+            return "이 계정: 이번 시즌 챔스 이상 판이 이 PC 에 없습니다" if r is not None else ""
+        card.set(f"{r.per_100:,.0f} FC")
+        card.set_sub(f"챔스 이상 {r.games:,}판")
         return f"이 계정: 100판당 {r.per_100:,.0f} FC (이번 시즌 챔스 이상 {r.games:,}판 · 저장 경기로 센 정확값)"
 
     def _rank_reward_text(self) -> str:
@@ -8265,7 +8276,7 @@ class MainWindow(QMainWindow):
             rows.append([(b.label, i), (f"{b.users:,}", b.users), mid, span])
         self._fill(self.tbl_rboard_rank, rows, enable_sort=False)   # 구간 순서 그대로(순위 오름차순)
         self._render_reward_bars(board if board is not None and board.state == "ok" else None)
-        mine = " · ".join(t for t in (self._my_reward_text(board.season_start if board else None),
+        mine = " · ".join(t for t in (self._show_my_reward(self._my_reward(board.season_start if board else None)),
                                       self._rank_reward_text()) if t)
         if board is None:
             gate = config.fc_games_view_allowed()
@@ -8294,7 +8305,7 @@ class MainWindow(QMainWindow):
                            else f"{name} · {config.K11_MIN_PER_BAND}명 미만이라 중앙값을 안 냅니다"))
 
     def _render_reward_bars(self, board) -> None:
-        """67 R6 카드 둘 · 평균 막대 셋. 점선(기준) = 전체 중앙값 — 위는 강조, 아래는 주의 색."""
+        """67 R6 카드 둘 · 평균 막대 셋. 가운데 점선(기준) = 전체 중앙값 — 이상은 오른쪽 초록, 아래는 왼쪽 빨강(79·80)."""
         cards = self.rboard_cards
         o = board.overall if board is not None else None
         cards["users"].set(f"{board.users:,}명" if board is not None else "—")
@@ -11604,8 +11615,8 @@ class MainWindow(QMainWindow):
         md = p.get("matchDetail") or {}
         div = p.get("division")
         bits = [self._division_names.get(div, "") if isinstance(div, int) else ""]
-        rating = md.get("averageRating")
-        if isinstance(rating, (int, float)):
+        rating = core.team_rating(p)
+        if rating > 0:
             bits.append(f"평점 {rating:.2f}")
         sub = QLabel(" · ".join(b for b in bits if b) or "-")
         sub.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -12902,7 +12913,7 @@ class MainWindow(QMainWindow):
         sums = [summarize(group, mixed) for _, group in groups]
         divs = core.season_divisions(core.division_trend(self._details_all, self._ouid), groups)
         name = lambda div: self._division_names.get(div, str(div))  # noqa: E731
-        rows, tips, diffs = [], [], []
+        rows, tips, diffs, spans = [], [], [], []
         for i, ((season, group), s, dv) in enumerate(zip(groups, sums, divs)):
             if season is None:
                 label, span, key = "진행 중", f"{last_end:%Y-%m-%d} ~", 99999999
@@ -12922,8 +12933,9 @@ class MainWindow(QMainWindow):
                               self._division_icon_key(dv[1]))
                      if dv else ("—", -1e9))
             tips.append(f"최고 {name(dv[2])}" if dv else "")
+            spans.append(span)
             rows.append([
-                (label, key), span,
+                (label, key),
                 (f"{s.total:,}", s.total),
                 (f"{s.win:,}", s.win), (f"{s.draw:,}", s.draw),
                 (f"{s.lose:,}", s.lose),
@@ -12931,10 +12943,11 @@ class MainWindow(QMainWindow):
                 vs, grade,
                 (f"{s.avg_goals_for:.2f}", s.avg_goals_for),
                 (f"{s.avg_goals_against:.2f}", s.avg_goals_against),
-                (f"{s.avg_possession:.1f}%", s.avg_possession),
                 (f"{s.avg_rating:.2f}", s.avg_rating),
             ])
         self._fill(self.tbl_seasons, rows, enable_sort=False)  # 툴팁을 채운 순서대로 붙인다(표 함정 1번)
+        for r, span in enumerate(spans):
+            self.tbl_seasons.item(r, self.SEASON_COLUMNS.index("시즌")).setToolTip(span)
         vs_col = self.SEASON_COLUMNS.index("지난 시즌 대비")
         for r, diff in enumerate(diffs):   # 79 — 올랐으면 초록 · 내렸으면 빨강(반올림 0 은 흐림)
             if diff is not None:

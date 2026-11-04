@@ -2825,6 +2825,10 @@ def test_season_table_compares_with_previous_season():
         cols = _win.SEASON_COLUMNS
         rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}
         assert set(rows) == {"2025 시즌 9", "2025 시즌 8"}, rows
+        # 80 — 기간은 시즌 칸 말풍선으로 · 점유율 열은 뺐다(13열이 1280 에서 글씨 하한까지 줄었다)
+        assert "기간" not in cols and "평균 점유율" not in cols, cols
+        assert t.item(rows["2025 시즌 8"], 0).toolTip() == old.span_text, t.item(rows["2025 시즌 8"], 0).toolTip()
+        assert t.item(rows["2025 시즌 9"], 0).toolTip() == new.span_text
         vs = cols.index("지난 시즌 대비")
         # 새 시즌 33.3%(승1 무1 패1 — 승÷전체) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
         assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 3 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
@@ -11131,8 +11135,12 @@ def test_top3_cards_and_reward_board_tab():
         keep_details = _win._details
         try:
             _win._details = []                                  # 시즌 필터로 다른 시즌을 고른 상태 — 이 계정 값은 누적 전체에서
-            got = _win._my_reward_text("2025-12-01")
+            mine = _win._my_reward("2025-12-01")
+            got = _win._show_my_reward(mine)
             assert "100판당" in got and "챔스 이상 3판" in got, got   # 픽스처 4경기 중 승·무·패 3판 · 전부 챔피언스(900)
+            card = _win.rboard_cards["mine"]                     # 80 — 중앙값과 나란히 보는 이 계정 값
+            assert card.value.text() == f"{mine.per_100:,.0f} FC", card.value.text()
+            assert _win._show_my_reward(None) == "" and card.value.text() == "—", "계정을 모르면 옛 값이 남으면 안 된다"
         finally:
             _win._details = keep_details
         # 지금 등수 = 이번 시즌 마지막 점 하나 — 최신 줄 순위가 비었으면(1만 위 밖) 며칠 전 순위를 끌어오지 않는다(② 리뷰 [중])
@@ -11324,12 +11332,12 @@ def test_metric_row_and_avg_bar_parts_67():
         bars.resize(600, 200)
         items = [widgets.AvgBar("위", 30.0, "30"), widgets.AvgBar("아래", 10.0, "10", "5명"), widgets.AvgBar("없음", None, "—")]
         bars.set_rows(items)
-        assert bars.base == 20.0 and bars.max_value == 30.0
+        assert bars.base == 20.0 and bars.max_dev == 10.0
         bd = bars.bar_delegate
         assert (bd.colors(items[0])["bar"], bd.colors(items[1])["bar"]) == (above, below), better
         segs = {s.role: s for s in bd.layout(items[1], QRectF(0, 0, 600, 30), bars.font())}
         top = {s.role: s for s in bd.layout(items[0], QRectF(0, 0, 600, 30), bars.font())}
-        assert abs(segs["bar"].rect.width() * 3 - top["bar"].rect.width()) < 0.01, "막대 길이가 최댓값 대비가 아니다"
+        assert abs(segs["bar"].rect.width() - top["bar"].rect.width()) < 0.01, "기준에서 같은 거리인 두 값의 막대 길이가 다르다"
         assert "bar" not in {s.role for s in bd.layout(items[2], QRectF(0, 0, 600, 30), bars.font())}
         assert bars.height() == 3 * bd.row_height(bars.font()) + 2 * bars.frameWidth() + 2, "fixed 높이가 줄 수를 안 따른다"
     bars.set_rows(items, base=25.0)
@@ -13388,6 +13396,133 @@ def test_79_avg_bar_colors_mean_good_and_bad():
     # 색 뜻은 제목 말풍선에(화면 글로 안 늘린다 — 78)
     assert _win.lb_rboard_tc_title.toolTip() == app_main.MainWindow.RBOARD_COLOR_TIP
     assert "초록" in app_main.MainWindow.RBOARD_COLOR_TIP and "빨강" in app_main.MainWindow.RBOARD_COLOR_TIP
+
+
+def test_80_detail_side_shows_players_average_rating():
+    # 넥슨 averageRating(벤치까지 18 로 나눈 값)이 아니라 뛴 선수 평균 — 선수 평점과 같은 척도
+    from PySide6.QtWidgets import QLabel
+    side = {"player": [{"status": {"spRating": 6.0 if i < 11 else 0}} for i in range(18)],
+            "matchDetail": {"averageRating": 3.667}, "division": 800}
+    box = _win._detail_side(side, "상대", False)
+    texts = [lb.text() for lb in box.findChildren(QLabel)]
+    assert any("평점 6.00" in t for t in texts) and not any("3.67" in t for t in texts), texts
+
+
+def test_80_fit_pct_axis():
+    import charts
+    ax = charts.Axis.fit_pct([46.0, 53.0, None])
+    assert (ax.lo, ax.hi, ax.ticks) == (40, 55, (40, 45, 50, 55)), ax
+    assert ax.tick_text(50) == "50%" and ax.text(53.0) == "53.0%" and ax.name == "승률"
+    assert charts.Axis.fit_pct([]) is charts.PCT_AXIS
+    assert charts.Axis.fit_pct([None]) is charts.PCT_AXIS
+    assert charts.Axis.fit_pct([50.0]).ticks == (45, 50, 55), "값이 전부 50 이면 축이 안 선다"
+    assert charts.Axis.fit_pct([0.0, 100.0]).ticks == (0, 25, 50, 75, 100)
+    # 전 범위를 훑어 규칙으로 — 50 포함 · 0~100 안 · 값이 다 축 안 · 칸 상한 · 눈금 간격 같음
+    for a in range(0, 101, 3):
+        for b in range(a, 101, 7):
+            ax = charts.Axis.fit_pct([float(a), float(b)])
+            assert 50 in ax.ticks and 0 <= ax.lo <= min(a, 50) and max(b, 50) <= ax.hi <= 100, (a, b, ax)
+            assert (ax.ticks[0], ax.ticks[-1]) == (ax.lo, ax.hi), (a, b, ax)
+            gaps = {y - x for x, y in zip(ax.ticks, ax.ticks[1:])}
+            assert len(gaps) == 1 and len(ax.ticks) - 1 <= charts.PCT_FIT_MAX_CELLS, (a, b, ax)
+
+
+def test_80_period_and_dashboard_use_fitted_axis():
+    import charts
+    from datetime import date as _d
+    series = [models.PeriodStat(label=f"11/0{i}", win=w, draw=0, lose=l, mixed=False, start=_d(2026, 11, i))
+              for i, (w, l) in enumerate(((12, 10), (9, 11), (11, 10), (0, 0)), start=1)]
+    assert series[-1].rated == 0, "빈 날이 있어야 '빈 날은 축에서 뺀다' 를 잰다"
+    want = charts.Axis.fit_pct([p.win_rate for p in series[:3]])
+    assert want != charts.PCT_AXIS and want.lo > 0, "값이 좁지 않으면 배선 검사가 빈다"
+    keep = _win._period_unit
+    _win._period_series = lambda unit: list(series)
+    try:
+        _win._render_period_page()
+        assert _win.period_chart._axis == want, _win.period_chart._axis
+        _win._render_dashboard()
+        assert _win.dashboard.trend_chart._axis == want, _win.dashboard.trend_chart._axis
+    finally:
+        del _win._period_series
+        _win._period_unit = keep
+        _win._render_period_page()
+        _win._render_dashboard()
+
+
+def test_80_count_bars_and_peak_stay_inside_plot():
+    # 첫 날이 가장 많은 경기 — 옛 코드는 막대가 축 칸으로 나가고 숫자가 눈금 글자 위에 찍혔다
+    import charts
+    from PySide6.QtGui import QFontMetrics
+    pts = [(f"11/{d:02d}", 50.0 + d, g) for d, g in zip(range(1, 8), (40, 5, 7, 6, 9, 3, 2))]
+    c = charts.AreaTrendChart()
+    c.set_data(pts, counts=True, baseline=50, avg=False)
+    c.resize(420, 240)
+    c.grab()
+    fm = QFontMetrics(charts._small_font(c.font()))
+    ml = max(fm.horizontalAdvance(c._axis.tick_text(t)) for t in c._axis.ticks) + 8
+    mr = fm.horizontalAdvance(c._axis.text(c._axis.hi)) // 2 + 10
+    rects = c.marks["count_rects"]
+    assert len(rects) == 7 and abs(rects[0].left() - ml) < 0.01, (rects[0].left(), ml)
+    assert abs(rects[-1].right() - (c.width() - mr)) < 3, (rects[-1], c.width() - mr)
+    assert c.marks["count_peak"][0] == 0 and c.marks["count_peak_rect"].left() >= ml, (c.marks["count_peak_rect"], ml)
+    plain = charts.AreaTrendChart()
+    plain.set_data(pts, baseline=50, avg=False)
+    plain.resize(420, 240)
+    plain.grab()
+    assert "count_rects" not in plain.marks
+
+
+def test_80_division_steps_have_round_corners():
+    import charts
+    from PySide6.QtCore import QPointF
+
+    def nearest(path, pt, n=400):
+        return min(((path.pointAtPercent(i / n).x() - pt.x()) ** 2 + (path.pointAtPercent(i / n).y() - pt.y()) ** 2) ** 0.5
+                   for i in range(n + 1))
+
+    v = [QPointF(0, 0), QPointF(100, 0), QPointF(100, 80), QPointF(200, 80)]
+    path = charts._rounded_path(v, 6)
+    assert nearest(path, v[0]) < 0.01 and nearest(path, v[-1]) < 0.01, "끝점이 달라졌다"
+    assert nearest(path, v[1]) > 1 and nearest(path, v[2]) > 1, "모서리가 그대로다"
+    assert nearest(path, QPointF(50, 0)) < 1 and nearest(path, QPointF(100, 40)) < 1, "직선 구간이 어긋났다"
+    # 변이 반지름보다 짧으면 절반까지만 — 곡선이 옆 변을 넘어 되돌아가지 않는다
+    tight = charts._rounded_path([QPointF(0, 0), QPointF(4, 0), QPointF(4, 3), QPointF(9, 3)], 6)
+    xs = [tight.pointAtPercent(i / 200).x() for i in range(201)]
+    assert all(a <= b + 1e-6 for a, b in zip(xs, xs[1:])), "좁은 칸에서 곡선이 뒤로 갔다"
+    # 배선 — 화면 차트가 실제로 이 경로로 그린다
+    from types import SimpleNamespace
+    runs = [SimpleNamespace(division=d, start=datetime(2026, 11, i), end=datetime(2026, 11, i), games=3)
+            for i, d in enumerate((1100, 900, 800, 900), start=1)]
+    c = charts.DivisionRunChart()
+    c.set_data(runs, {1100: "A", 900: "B", 800: "C"})
+    c.resize(500, 260)
+    c.grab()
+    verts = c.marks["step_verts"]
+    assert len(verts) == 8 and nearest(c.marks["step_path"], verts[1]) > 1, verts
+
+
+def test_80_avg_bars_diverge_from_base():
+    # 피드백 18 — 0 에서 재면 값이 비슷한 줄끼리 막대가 같아 차이가 안 보였다
+    from PySide6.QtCore import QRectF
+    lst = widgets.AvgBarList()
+    lst.resize(600, 200)
+    rows = [widgets.AvgBar("큰", 110.0, "110"), widgets.AvgBar("반", 95.0, "95"), widgets.AvgBar("같음", 100.0, "100"),
+            widgets.AvgBar("살짝", 100.01, "100"), widgets.AvgBar("없음", None, "—")]
+    lst.set_rows(rows, base=100.0)
+    d = lst.bar_delegate
+    seg = {r.name: {s.role: s.rect for s in d.layout(r, QRectF(0, 0, 600, 30), lst.font())} for r in rows}
+    track = seg["큰"]["track"]
+    mid = track.center().x()
+    assert abs(seg["큰"]["bar"].left() - mid) < 0.01 and abs(seg["큰"]["bar"].right() - track.right()) < 0.01, "가장 큰 차이 = 오른쪽 끝까지"
+    assert abs(seg["반"]["bar"].right() - mid) < 0.01, "기준 아래는 왼쪽으로"
+    assert abs(seg["반"]["bar"].width() * 2 - seg["큰"]["bar"].width()) < 0.01, "길이가 차이에 비례하지 않는다"
+    assert "bar" not in seg["같음"] and "bar" not in seg["없음"]
+    assert seg["살짝"]["bar"].width() == d.BAR_MIN_W, "아주 작은 차이도 방향이 보여야"
+    same = widgets.AvgBarList()
+    same.resize(600, 200)
+    same.set_rows([widgets.AvgBar("a", 5.0, "5"), widgets.AvgBar("b", 5.0, "5")])
+    assert same.max_dev == 0 and "bar" not in {s.role for s in same.bar_delegate.layout(
+        widgets.AvgBar("a", 5.0, "5"), QRectF(0, 0, 600, 30), same.font())}
 
 
 def test_79_next_goal_is_two_color_bars():

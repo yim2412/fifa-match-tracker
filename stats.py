@@ -25,7 +25,7 @@ import xg_grid
 import xgmodel
 # 등급 상수·판정은 models 에 있다(A6 의 draw_possible 이 써서) — 예전 이름 그대로 다시 내보낸다.
 from models import (CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, RateMixin,  # noqa: F401
-                    draw_possible_of, is_champion_or_above, is_mixed, rated, win_pct)
+                    draw_possible_of, is_champion_or_above, is_mixed, rated, team_rating, win_pct)
 
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
@@ -2231,7 +2231,9 @@ def match_versus(detail: dict, ouid: str) -> list[VersusLine]:
         parts = [p.get(group) or {} for p in (me, opp or {})]
         if not any(all(k in part for k in keys) for part in parts):
             continue
-        if len(keys) == 2:
+        if keys == ("averageRating",):     # 넥슨 값은 벤치까지 18 로 나눈 값 — models.team_rating
+            vals = [team_rating(me), team_rating(opp or {})]
+        elif len(keys) == 2:
             vals = [_ratio(_num(part, keys[0]), _num(part, keys[1])) for part in parts]
         else:
             vals = [_num(part, keys[0]) for part in parts]
@@ -2516,7 +2518,7 @@ COMPARE_FEATURES = (
     ("평균 득점", True, lambda me, opp: _num(me.get("shoot") or {}, "goalTotal")),
     ("평균 실점", False, lambda me, opp: _num(opp.get("shoot") or {}, "goalTotal")),
     ("평균 점유율", True, lambda me, opp: _num(me.get("matchDetail") or {}, "possession")),
-    ("평균 평점", True, lambda me, opp: _num(me.get("matchDetail") or {}, "averageRating")),
+    ("평균 평점", True, lambda me, opp: team_rating(me) or None),    # 0 = 평점 없는 판(몰수) — 평균에서 뺀다
     ("경기당 슛", True, lambda me, opp: _num(me.get("shoot") or {}, "shootTotal")),
     ("유효슛 비율", True, lambda me, opp: _share(_num(me.get("shoot") or {}, "effectiveShootTotal"),
                                               _num(me.get("shoot") or {}, "shootTotal"))),

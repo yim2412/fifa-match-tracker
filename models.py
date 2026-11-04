@@ -160,6 +160,21 @@ def _f(d: dict, key: str) -> float:
     return float(v) if isinstance(v, (int, float)) else 0.0
 
 
+def team_rating(side: dict) -> float:
+    """한 팀의 경기 평점 — 뛴 선수(spRating > 0) 평균. 없으면 0(모름 — 몰수·오류 판).
+    넥슨 averageRating 은 안 뛴 벤치까지 18 로 나눈 값이라 선수 평점(6점대)과 척도가 다르다
+    (2026-11-04 실측: 평점 있는 62,831줄 전부 합 ÷ averageRating = 18 — 뛴 사람은 62,768줄이 11명).
+    그 값은 player 가 빠진 응답에서만 그대로 돌려준다."""
+    played = []
+    for p in side.get("player") or []:
+        v = _f(p.get("status") or {}, "spRating")
+        if v > 0:
+            played.append(v)
+    if played:
+        return sum(played) / len(played)
+    return _f(side.get("matchDetail") or {}, "averageRating")
+
+
 def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
     """내 ouid 기준으로 한 경기를 요약한다. 내가 안 낀 경기면 None."""
     infos = detail.get("matchInfo") or []
@@ -187,7 +202,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         shoot_effective=_i(shoot, "effectiveShootTotal"),
         pass_try=_i(passes, "passTry"),
         pass_success=_i(passes, "passSuccess"),
-        rating=_f(md, "averageRating"),
+        rating=team_rating(me),
         my_shootout=_i(shoot, "shootOutScore"),
         opp_shootout=_i(opp_shoot, "shootOutScore"),
         draw_possible=draw_possible(me.get("division"), opp.get("division")) if opp else None,
@@ -207,6 +222,7 @@ class Stats(RateMixin):
     goals_against: int = 0
     possession_sum: int = 0
     rating_sum: float = 0.0
+    rating_n: int = 0           # 평점 있는 판 — 몰수 판은 평점이 없어(0) 평균을 끌어내리지 않게 뺀다
     mixed: bool | None = None
 
     @property
@@ -223,7 +239,7 @@ class Stats(RateMixin):
 
     @property
     def avg_rating(self) -> float:
-        return (self.rating_sum / self.total) if self.total else 0.0
+        return (self.rating_sum / self.rating_n) if self.rating_n else 0.0
 
 
 def summarize(matches: list[MatchSummary], mixed: bool | None = None) -> Stats:
@@ -245,7 +261,9 @@ def summarize(matches: list[MatchSummary], mixed: bool | None = None) -> Stats:
         s.goals_for += m.my_goals
         s.goals_against += m.opp_goals
         s.possession_sum += m.possession
-        s.rating_sum += m.rating
+        if m.rating > 0:
+            s.rating_sum += m.rating
+            s.rating_n += 1
     return s
 
 

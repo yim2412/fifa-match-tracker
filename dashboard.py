@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
 import config
 import core_api as core
 import theme as T
-from charts import AreaTrendChart, GroupedBarChart, HBarList, ResultDots, RingGauge
+from charts import AreaTrendChart, Axis, GroupedBarChart, HBarList, ResultDots, RingGauge
 from core_api import (MatchSummary, current_streak, longest_streaks, opponent_stats,
                     summarize)
 from widgets import (Collapsible, StatCard, Tag, VersusBar, WdlBar, delta_text, sample_note, sample_text,
@@ -525,7 +525,8 @@ class DashboardPage(QWidget):
         self.dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                             for m in recent])
         w = d.trend_weights
-        self.trend_chart.set_data(d.trend_points, avg_weights=w,
+        rates = [v for i, (_, v, _) in enumerate(d.trend_points) if w is None or w[i]]
+        self.trend_chart.set_data(d.trend_points, avg_weights=w, axis=Axis.fit_pct(rates),
                                   weak=[n == 0 for n in w] if w is not None else None)
 
     def _render_versus(self, d: DashboardInput) -> None:

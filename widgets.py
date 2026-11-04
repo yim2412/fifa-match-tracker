@@ -2993,6 +2993,7 @@ class AvgBarDelegate(QStyledItemDelegate):
     PAD_X = 10
     PAD_Y = 4
     BAR_H = 10
+    BAR_MIN_W = 2.0                  # 기준과 아주 조금 다른 값도 방향이 보이게
     NAME_MAX = 0.4                   # 이름 칸 상한(폭 대비)
 
     def __init__(self, view: "AvgBarList"):
@@ -3031,10 +3032,13 @@ class AvgBarDelegate(QStyledItemDelegate):
         segs.append(CardSeg("name", QRectF(nx, y, min(full, name_w), h), row.name, full))
         bar_left = left + (h * 1.2 + 6 if v.has_icon else 0) + name_w + 12
         width = max(0.0, bar_right - bar_left)
-        segs.append(CardSeg("track", QRectF(bar_left, r.top() + (r.height() - self.BAR_H) / 2, width, self.BAR_H), "", 0))
-        if row.value is not None and v.max_value > 0:
-            segs.append(CardSeg("bar", QRectF(bar_left, r.top() + (r.height() - self.BAR_H) / 2,
-                                              width * max(0.0, row.value) / v.max_value, self.BAR_H), "", 0))
+        top = r.top() + (r.height() - self.BAR_H) / 2
+        segs.append(CardSeg("track", QRectF(bar_left, top, width, self.BAR_H), "", 0))
+        if row.value is not None and v.max_dev > 0 and row.value != v.base:
+            # 80 — 기준(가운데 점선)에서 좌우로. 0 에서 재면 값이 비슷한 줄끼리 막대가 거의 같았다(피드백 18)
+            mid = bar_left + width / 2
+            bw = max(self.BAR_MIN_W, width / 2 * abs(row.value - v.base) / v.max_dev)
+            segs.append(CardSeg("bar", QRectF(mid if row.value > v.base else mid - bw, top, bw, self.BAR_H), "", 0))
         return segs
 
     def overflow(self, row: AvgBar, width: int, base: QFont) -> list[str]:
@@ -3085,8 +3089,8 @@ class AvgBarDelegate(QStyledItemDelegate):
             align = Qt.AlignmentFlag.AlignLeft if s.role == "name" else Qt.AlignmentFlag.AlignRight
             p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
         track = next((s for s in segs if s.role == "track"), None)
-        if track is not None and self.view.max_value > 0 and self.view.base > 0:
-            x = track.rect.left() + track.rect.width() * self.view.base / self.view.max_value
+        if track is not None:
+            x = track.rect.center().x()
             pen = QPen(QColor(col["base"]), 1, Qt.PenStyle.DashLine)
             p.setPen(pen)
             p.drawLine(QPointF(x, track.rect.top() - 3), QPointF(x, track.rect.bottom() + 3))
@@ -3103,13 +3107,14 @@ class AvgBarDelegate(QStyledItemDelegate):
 
 class AvgBarList(_FitMixin, CardListView):
     """평균 막대 줄 목록(67 R0 — 구단가치 구간별 · 팀컬러별 100판당 · 달성 판수). base = 기준선(평균) ·
-    higher_better=False 면 기준 아래가 강조(3회차 M8 — 달성 판수는 적을수록 좋다). 막대 길이는 목록 최댓값 대비."""
+    higher_better=False 면 기준 아래가 강조(3회차 M8 — 달성 판수는 적을수록 좋다).
+    막대는 가운데 기준선에서 좌우로(80) — 길이는 기준과의 차이 ÷ 목록에서 가장 큰 차이."""
 
     def __init__(self, fixed: bool = True, higher_better: bool = True):
         super().__init__()
         self.higher_better = higher_better
         self.base = 0.0
-        self.max_value = 0.0
+        self.max_dev = 0.0
         self.name_w = self.text_w = self.n_w = 0.0
         self.has_icon = False
         self.bar_delegate = AvgBarDelegate(self)
@@ -3124,7 +3129,7 @@ class AvgBarList(_FitMixin, CardListView):
         """base None 이면 값 있는 줄의 평균."""
         vals = [r.value for r in rows if r.value is not None]
         self.base = base if base is not None else (sum(vals) / len(vals) if vals else 0.0)
-        self.max_value = max(vals + [self.base], default=0.0)
+        self.max_dev = max((abs(x - self.base) for x in vals), default=0.0)
         f = AvgBarDelegate.fonts(self.font())
         bold, small = QFontMetrics(f["bold"]), QFontMetrics(f["small"])
         self.name_w = max((bold.horizontalAdvance(r.name) for r in rows), default=0)
