@@ -31,6 +31,8 @@ jobs:
         run: python tests/test_trades.py
       - name: 스쿼드 타임라인 · 가계부
         run: python tests/test_timeline.py
+      - name: 강화 비용
+        run: python tests/test_enhance.py
       - name: 카드 정보 화면 재료
         run: python tests/test_cardviews.py
       - name: 습관 · 기준선
