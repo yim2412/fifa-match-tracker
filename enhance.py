@@ -57,10 +57,9 @@ PROTECT_ICON_TM_SKIP = frozenset({6, 7})
 # SH · HRT · UC · LKI2 — 5/28 공지 대상 목록(10/29 까지 갱신)에 없는 클래스. 공지와 메타를 2026-11-05 에 대조했다
 PROTECT_EXCLUDED_SEASONS = frozenset({596, 849, 877, 879})
 
-BUDGET_QS = (50, 75, 80, 90, 95, 99)   # 금액 구간 표와 기준 고르기의 "붙을 확률"(사용자 2026-11-05)
-BUDGET_EXPECT_Q = 80          # 맨 위에 적는 기본 기준 — 부족해도 보호면 단계가 남아 더 모아 이으면 된다(판단이지 실측이 아니다)
-BUDGET_TAIL_Q = 90            # 이 확률을 넘긴 나머지의 평균을 한 줄로 — 천장이 없어 "최대 비용" 을 적을 수 없다
-CURVE_POINTS = 120            # 그래프 점 수 · 끝은 BUDGET_QS 마지막 확률에서 자른다(꼬리가 축을 늘여 곡선이 눌리지 않게)
+BUDGET_QS = (50, 85, 95)      # 금액 구간 표 — 보통 운 · 준비 기준 · 나쁜 운까지(사용자 2026-11-06)
+BUDGET_EXPECT_Q = 85          # 맨 위에 적는 기준(사용자 2026-11-06 고정) — 공공사업 예산 기준 넷의 평균(노르웨이 85 · NASA 70 · 호주 NSW 90 · 영국 HS2 95). 최적이라는 실측은 없다
+CURVE_POINTS = 120           # 그래프 점 수 · 끝은 BUDGET_QS 마지막 확률에서 자른다(꼬리가 축을 늘여 곡선이 눌리지 않게)
 
 SIM_RUNS = 20000
 SIM_STEP_BUDGET = 3_000_000   # 시도 수 합 상한 — 평균 수백만 번인 구간은 흉내 내지 않고 평균만 낸다
@@ -145,6 +144,13 @@ class Estimate:
         tail = self.costs[self._q_index(q) + 1:]
         return sum(tail) / len(tail)
 
+    def within_mean(self, q: int) -> float | None:
+        """q% 금액 안에 끝난 판들의 평균."""
+        if self.budget_at(q) is None:
+            return None
+        inside = self.costs[:self._q_index(q) + 1]
+        return sum(inside) / len(inside)
+
     def chance_within(self, amount: int) -> float | None:
         """이 금액으로 끝날 확률(0~1)."""
         if not self.costs:
@@ -225,6 +231,11 @@ def grades_needed(start: int, target: int, protect_from: int | None, season_id: 
     if all(_cannot_fall(g, protect_from, season_id) for g in path):
         return list(path)
     return list(range(GRADES_MIN, target))
+
+
+def lowest_material_ovr(card_ovr: int, grade: int) -> int:
+    """이 강화에 게이지가 조금이라도 차는 가장 낮은 재료 OVR."""
+    return card_ovr + CUM_OVR[grade] + GAUGE_ANCHOR - len(GAUGE_STEPS) + 1
 
 
 def scan_levels(card_ovr: int, grades: list[int]) -> list[int]:
@@ -354,6 +365,23 @@ def _simulate(steps: dict[int, Step], start: int, target: int, mean_attempts: fl
     return tuple(sorted(costs))
 
 
+def cheapest_protect_from(card_ovr: int, season_id: int | None, start: int, target: int, prices: dict[int, int],
+                          material_prices: dict[int, int], pct: int | None = None) -> tuple[int | None, Estimate] | None:
+    """평균이 가장 싼 보호 시작(None = 안 함)과 그 평균. 못 내는 구간은 건너뛴다 · 다 못 내면 None.
+    시작보다 낮은 칸도 묻는다 — ICON TM 은 6·7강에서 떨어져 시작 아래를 다시 지난다(2강부터 ≠ 5강부터).
+    값이 같으면(실제로 걸리는 칸이 같다) 시작이 높은 쪽 — 5강에서 시작하는데 "2강부터" 라고 적지 않게."""
+    best = None
+    materials: dict[int, Materials | None] = {}   # 보호 시작마다 같은 조합을 다시 찾으면 1→13 에 2초가 넘는다(실측 2026-11-06)
+    for pf in [None, *range(target - 1, PROTECT_FROM - 1, -1)]:
+        try:
+            est = estimate(card_ovr, season_id, start, target, prices, material_prices, pf, pct, simulate=False, materials=materials)
+        except EnhanceError:
+            continue
+        if best is None or est.mean_cost < best[1].mean_cost:
+            best = (pf, est)
+    return best
+
+
 def _rate_range(steps: dict[int, Step], visits: dict[int, float], prices: dict[int, int], material: float) -> tuple[float, float] | None:
     """공식 비율표에 없는 구간(PROTECT_TABLE_FROM 아래)의 비율이 범위 끝값일 때 평균. 보호 구간은 시도 수가 비율과 무관하다."""
     guessed = [s for s in steps.values() if s.protected and s.grade < PROTECT_TABLE_FROM]
@@ -366,18 +394,23 @@ def _rate_range(steps: dict[int, Step], visits: dict[int, float], prices: dict[i
 
 def estimate(card_ovr: int, season_id: int | None, start: int, target: int, prices: dict[int, int],
              material_prices: dict[int, int], protect_from: int | None = PROTECT_FROM, pct: int | None = None,
-             simulate: bool = True) -> Estimate:
+             simulate: bool = True, materials: dict[int, Materials | None] | None = None) -> Estimate:
     """start 강 → target 강. prices = 강화 → 시세, material_prices = 재료 OVR → 한 장 값(price_by_ovr).
-    protect_from = 몇 강 도전부터 보호(None = 안 함). simulate=False 면 평균만 — 보호 켠/끈 견주기는 평균만 쓴다."""
+    protect_from = 몇 강 도전부터 보호(None = 안 함). simulate=False 면 평균만 — 보호 켠/끈 견주기는 평균만 쓴다.
+    materials = 강화 → 조합 임시 저장(같은 재료 시세로 여러 번 부를 때만)."""
+    if materials is None:
+        materials = {}
     if not GRADES_MIN <= start < target <= GRADES_MAX:
         raise EnhanceError("목표 강화는 현재 강화보다 높아야 합니다.")
     use_protect = protect_applies(protect_from, season_id)
     rate = protect_pct(card_ovr, season_id) if pct is None else pct
     steps: dict[int, Step] = {}
     for g in grades_needed(start, target, protect_from, season_id):
-        mats = best_materials(card_ovr, g, material_prices)
+        if g not in materials:
+            materials[g] = best_materials(card_ovr, g, material_prices)
+        mats = materials[g]
         if mats is None:
-            raise EnhanceError(f"{g}강 도전에 쓸 재료를 찾지 못했습니다.")
+            raise EnhanceError(f"{g}강 도전에 쓸 OVR {lowest_material_ovr(card_ovr, g)} 이상 재료가 시세에 없어 계산할 수 없습니다.")
         protected = protected_at(g, protect_from, season_id)
         fee = 0
         if protected:

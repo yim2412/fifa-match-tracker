@@ -243,8 +243,13 @@ def test_budget_follows_the_real_distribution():
         got = g.budget_at(q) / one
         assert abs(got - n) <= 2, (q, got, n)
     assert abs(g.mean_attempts - 20) < 1e-6
-    # 평균은 약 64% 자리 — 1-(0.95^20). 80% 를 맨 위에 두는 이유이기도 하다
+    # 평균은 약 64% 자리 — 1-(0.95^20). 평균 대신 85% 를 맨 위에 두는 이유이기도 하다
     assert 0.60 < g.chance_within(round(g.mean_cost)) < 0.68, g.chance_within(round(g.mean_cost))
+
+
+def test_budget_levels_are_the_agreed_ones():
+    assert e.BUDGET_EXPECT_Q == 85, "맨 위 기준 고정(사용자 2026-11-06)"
+    assert e.BUDGET_QS == (50, 85, 95), "보통 운 · 준비 기준 · 나쁜 운까지"
 
 
 def test_budget_helpers_on_a_known_list():
@@ -254,9 +259,10 @@ def test_budget_helpers_on_a_known_list():
     assert est.budget_at(99) == 1980
     assert est.chance_within(0) == 0 and est.chance_within(10 ** 9) == 1
     assert est.tail_mean(90) == sum(range(1801, 2001)) / 200, "90% 금액을 넘긴 판들의 평균"
+    assert est.within_mean(90) == sum(range(1, 1801)) / 1800, "90% 금액 안에 끝난 판들의 평균"
     assert [q for q, _b in est.budgets] == list(e.BUDGET_QS)
     curve = est.curve
-    assert curve[0][0] == 1 and curve[-1] == (1980, 99.0), "꼬리는 표의 마지막 확률에서 자른다"
+    assert curve[0][0] == 1 and curve[-1] == (1900, 95.0), "꼬리는 표의 마지막 확률에서 자른다"
     assert len(curve) <= e.CURVE_POINTS + 1
     assert all(a[0] <= b[0] and a[1] < b[1] for a, b in zip(curve, curve[1:])), "금액·확률 모두 오름차순"
 
@@ -266,11 +272,84 @@ def test_budget_hides_percentiles_with_too_few_runs_above():
     base = e.estimate(CARD, None, 8, 9, PRICES, ALL_MATS, 2, simulate=False)
     few = replace(base, costs=tuple(range(1, 501)))
     assert few.budget_at(95) == 475 and few.budget_at(99) is None and few.tail_mean(99) is None
-    assert [q for q, _b in few.budgets] == [50, 75, 80, 90, 95]
+    assert [q for q, _b in few.budgets] == [50, 85, 95]
     assert few.curve[-1] == (475, 95.0)
+    fewer = replace(base, costs=tuple(range(1, 101)))
+    assert [q for q, _b in fewer.budgets] == [50] and fewer.budget_at(85) is None and fewer.within_mean(85) is None
+    assert fewer.curve[-1] == (50, 50.0)
     empty = base
     assert empty.costs == () and empty.budget_at(50) is None and empty.chance_within(1) is None
-    assert empty.budgets == () and empty.curve == () and empty.tail_mean(50) is None
+    assert empty.budgets == () and empty.curve == () and empty.tail_mean(50) is None and empty.within_mean(50) is None
+
+
+def test_cheapest_protect_is_the_lowest_of_every_choice():
+    # 카드가 재료만큼 싸면 낮은 칸부터 보호(3강부터가 최저 — 손으로 푼 표: None 433만 · 2강 4.24만 · 3강 4.22만 · 4강 4.27만)
+    cheap_cards = {g: 1000 for g in range(1, 14)}
+    assert e.cheapest_protect_from(CARD, None, 1, 8, cheap_cards, ALL_MATS)[0] == 3
+    # 카드가 재료보다 훨씬 비싸면 안 하는 쪽
+    pricey = {g: 10 ** 12 for g in range(1, 14)}
+    assert e.cheapest_protect_from(CARD, None, 1, 8, pricey, {o: 1 for o in ALL_MATS})[0] is None
+    # 낮은 강화만 비싸면 그 위부터 — 양 끝만 재면 못 고르는 답
+    dear_low = {g: 10 ** 8 if g < 8 else 1000 for g in range(1, 14)}
+    pf, est = e.cheapest_protect_from(CARD, None, 1, 11, dear_low, ALL_MATS)
+    every = {c: e.estimate(CARD, None, 1, 11, dear_low, ALL_MATS, c, simulate=False).mean_cost for c in [None, *range(2, 11)]}
+    assert pf == 8 and est.mean_cost == min(every.values()), (pf, every)
+    assert est.costs == (), "평균만 — 후보마다 흉내 내면 느리다"
+
+
+def test_cheapest_protect_looks_below_the_start_for_icon_tm():
+    # ICON TM 은 6강에서 떨어져 5강 아래를 다시 지난다 — 시작(5강)보다 낮은 보호 칸이 실제로 값을 바꾼다
+    cheap_cards = {g: 1000 for g in range(1, 14)}
+    wide = e.estimate(CARD, 100, 5, 8, cheap_cards, ALL_MATS, 2, simulate=False)
+    narrow = e.estimate(CARD, 100, 5, 8, cheap_cards, ALL_MATS, 5, simulate=False)
+    assert wide.mean_cost < narrow.mean_cost, "아래 단언의 전제 — 시작 칸부터만 재면 놓치는 답"
+    assert e.cheapest_protect_from(CARD, 100, 5, 8, cheap_cards, ALL_MATS)[0] == 3
+
+
+def test_cheapest_protect_on_a_tie_names_the_later_start():
+    cheap_cards = {g: 1000 for g in range(1, 14)}
+    # 5강에서 시작하면 2~5강부터는 같은 값 — "5강부터" 로 적는다
+    assert e.cheapest_protect_from(CARD, None, 5, 8, cheap_cards, ALL_MATS)[0] == 5
+    # 1강 도전뿐이면 어느 칸도 안 걸린다 — 보호 안 함
+    assert e.cheapest_protect_from(CARD, None, 1, 2, cheap_cards, ALL_MATS)[0] is None
+
+
+def test_cheapest_protect_skips_what_it_cannot_price():
+    assert e.cheapest_protect_from(CARD, None, 8, 10, {}, ALL_MATS)[0] is None, "시세가 없으면 보호 칸은 못 낸다"
+    # 7강 시세만 없으면 7강까지 보호하는 칸들만 빠진다 — 8강부터 보호로는 7강 시세가 필요 없다
+    no_seven = {g: 1000 for g in range(1, 14) if g != 7}
+    pf, _est = e.cheapest_protect_from(CARD, None, 1, 10, no_seven, ALL_MATS)
+    assert pf == 8, pf
+    assert e.cheapest_protect_from(CARD, None, 1, 8, PRICES, {}) is None, "재료가 없으면 어느 칸도 못 낸다"
+
+
+def test_cheapest_protect_finds_each_combination_once():
+    calls = []
+    keep = e.best_materials
+    e.best_materials = lambda *a: (calls.append(a[1]), keep(*a))[1]
+    try:
+        e.cheapest_protect_from(CARD, None, 1, 8, PRICES, ALL_MATS)
+    finally:
+        e.best_materials = keep
+    assert sorted(calls) == list(range(1, 8)), calls
+
+
+def test_estimate_materials_store_is_not_shared_by_default():
+    # 임시 저장이 호출 사이에 남으면 다른 재료 시세에 앞 답이 나온다
+    a = e.estimate(CARD, None, 8, 9, PRICES, {o: 1000 for o in ALL_MATS}, None, simulate=False)
+    b = e.estimate(CARD, None, 8, 9, PRICES, {o: 2000 for o in ALL_MATS}, None, simulate=False)
+    assert b.mean_material == 2 * a.mean_material
+
+
+def test_missing_material_error_names_the_lowest_usable_ovr():
+    for card, grade in ((115, 5), (127, 12), (100, 1), (120, 3)):
+        low = e.lowest_material_ovr(card, grade)
+        assert e.gauge_of(card, grade, low) > 0 and e.gauge_of(card, grade, low - 1) == 0, (card, grade, low)
+    try:
+        e.estimate(CARD, None, 5, 6, PRICES, {}, 5)
+        raise AssertionError("재료 없이 계산했다")
+    except e.EnhanceError as err:
+        assert f"OVR {e.lowest_material_ovr(CARD, 5)} 이상" in str(err) and "5강" in str(err), err
 
 
 def test_budget_empty_when_too_many_attempts():

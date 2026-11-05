@@ -863,12 +863,23 @@ class PlayerInfoLoader(Worker):
             pass  # 캐시 실패가 카드 창을 막으면 안 된다 — 다음에 다시 읽는다
 
 
+@dataclass(frozen=True)
+class EnhanceResult:
+    """강화 비용 한 번의 결과 — 로더 → 화면."""
+    name: str
+    est: object                # Estimate
+    alt: object = None         # 반대쪽(보호 안 함 ↔ 전부 보호) · 평균만 · 못 내면 None
+    holo: object = None        # 11~13강 바탕 그림 경로 · 못 받으면 None
+    best: tuple | None = None  # (평균이 가장 싼 보호 시작, Estimate)
+    priced_at: str = ""        # 카드 시세를 읽은 시각(글자)
+
+
 class EnhanceLoader(Worker):
     """강화 비용(83) — 카드 시세 → 재료 시세(하루 캐시 · OVR 마다 요청) → 계산. 사용자가 [계산] 을 눌렀을 때만."""
     WRITES = frozenset({STORE_FIFA, STORE_CARDS})
 
     progress = Signal(int, int, int)   # 요청 번호, 받은 수, 전체
-    loaded = Signal(int, object)       # 요청 번호, (이름, Estimate, 반대쪽 Estimate | None)
+    loaded = Signal(int, object)       # 요청 번호, EnhanceResult
     failed = Signal(int, str)
 
     def __init__(self, req: int, sp_id: int, start_grade: int, target: int, protect_from: int | None, pct: int | None):
@@ -902,6 +913,7 @@ class EnhanceLoader(Worker):
             if self._cancel:
                 return
             prices = playerinfo.prices_as_int(info)
+            priced_at = datetime.now().strftime("%m-%d %H:%M")
             est = core.enhance_estimate(info.ovr, season, self._start, self._target, prices, mats, self._protect_from, self._pct)
             other = None if self._protect_from is not None else core.ENHANCE_PROTECT_FROM
             try:
@@ -912,7 +924,9 @@ class EnhanceLoader(Worker):
             self.failed.emit(self._req, str(e))
             return
         holo = images.fetch_icon(images.GRADE_HOLO_URL, config.CACHE_DIR / config.ICON_CACHE_SUBDIR, "grade")   # 실패해도 예외 없음 — 그러데이션으로
-        self.loaded.emit(self._req, (info.name, est, alt, holo))
+        best = None if est.protect_excluded else core.enhance_cheapest_protect(
+            info.ovr, season, self._start, self._target, prices, mats, self._pct)
+        self.loaded.emit(self._req, EnhanceResult(info.name, est, alt, holo, best, priced_at))
 
 
 class TradeLoader(Worker):
@@ -1806,8 +1820,18 @@ def enhance_guard_text(est) -> str:
     return f"100% 보호({guarded[0]}강 도전부터 · 시세의 {est.protect_pct}%)" if fell else f"100% 보호(시세의 {est.protect_pct}%)"
 
 
-def enhance_head_html(name: str, est, q: int) -> str:
-    """맨 위 — 누구·어디까지 + 고른 기준의 금액."""
+def enhance_good(text: str) -> str:
+    """긍정 강조(사용자 2026-11-06 — 긍정 초록 · 부정 빨강). 글 자체로도 뜻이 읽히게 쓴다."""
+    return f"<span style='color:{T.GOOD}'>{text}</span>"
+
+
+def enhance_bad(text: str) -> str:
+    return f"<span style='color:{T.BAD}'>{text}</span>"
+
+
+def enhance_head_html(name: str, est, priced_at: str = "") -> str:
+    """맨 위 — 누구·어디까지 · 시세 시각 + 준비 기준 금액(좋고 나쁨이 아니라 색 없이 굵게)."""
+    q = core.ENHANCE_EXPECT_Q
     budget = est.budget_at(q)
     if not est.costs:
         big = f"평균 <b>{enhance_won(est.mean_cost)}</b> · 시도가 너무 많아 확률별 금액은 낼 수 없습니다"
@@ -1815,36 +1839,61 @@ def enhance_head_html(name: str, est, q: int) -> str:
         big = f"평균 <b>{enhance_won(est.mean_cost)}</b> · {q}% 금액은 낼 수 없습니다"
     else:
         big = f"약 <b>{enhance_won(budget)}</b>이면 {q}% 확률로 붙습니다"
-    return (f"<b>{html.escape(name)}</b> {est.start}강 → {est.target}강 · {enhance_guard_text(est)}"
+    when = f" · 시세 {priced_at} 기준" if priced_at else ""
+    return (f"<b>{html.escape(name)}</b> {est.start}강 → {est.target}강 · {enhance_guard_text(est)}{when}"
             f"<br><span style='font-size: {T.PX_XL}px;'>{big}</span>")
 
 
 def enhance_compare_line(est, alt) -> str:
-    """보호 켠 값과 끈 값 — 재미로 보는 한 줄(사용자 2026-11-05). 보호가 안 걸리는 구간·클래스면 같은 값이라 빈 글."""
+    """보호 켠 값과 끈 값 — 더 싼 결론은 초록, 더 비싼 쪽 금액은 빨강. 보호가 안 걸리는 구간·클래스면 같은 값이라 빈 글."""
     if alt is None or abs(alt.mean_attempts - est.mean_attempts) < 1e-9:
         return ""
     on, off = (est, alt) if any(s.protected for s in est.steps) else (alt, est)
     label = "보호 안 하면" if alt is off else "100% 보호하면"
     gap = off.mean_cost - on.mean_cost
-    verdict = f"보호하는 쪽이 평균 {enhance_won(gap)} 싸다" if gap > 0 else f"보호 안 하는 쪽이 평균 {enhance_won(-gap)} 싸다"
-    return f"{label} 평균 {enhance_won(alt.mean_cost)} · 평균 {alt.mean_attempts:,.0f}회 — <b>{verdict}</b>"
+    verdict = f"보호하는 쪽이 평균 {enhance_rough(gap)} 싸다" if gap > 0 else f"보호 안 하는 쪽이 평균 {enhance_rough(-gap)} 싸다"
+    amount = enhance_rough(alt.mean_cost)
+    amount = enhance_bad(amount) if alt.mean_cost > est.mean_cost else enhance_good(amount)
+    return f"{label} 평균 {amount} · 평균 {enhance_count_text(alt.mean_attempts)} — <b>{enhance_good(verdict)}</b>"
 
 
-def enhance_summary_html(est, alt=None) -> str:
-    """맨 위 금액 아래 글 — 평균(몇 % 자리인지)·횟수 · 기준을 넘긴 나머지 · 비율 범위 · 보호 켠/끈 값 · 시세로 바로 사는 값과 견주기."""
+def enhance_top_step_line(est) -> str:
+    """돈이 가장 많이 드는 강화 한 줄 — 표를 다 안 읽어도 보이게. 단계가 하나면 뻔해서 안 적는다."""
+    if len(est.steps) < 2 or est.mean_cost <= 0:
+        return ""
+    top = max(est.steps, key=lambda s: s.mean_cost)
+    return f"비용의 <b>{enhance_share(top.mean_cost, est.mean_cost)}</b>가 {top.grade}강 → {top.grade + 1}강에서 나옵니다"
+
+
+def enhance_best_line(est, best) -> str:
+    """평균이 가장 싼 보호 시작 — 지금 고른 값과 평균이 같으면 안 적는다. 평균만 본 값이라 횟수를 같이 적는다."""
+    if best is None or est.mean_cost - best[1].mean_cost < 1:
+        return ""
+    pf, cheap = best
+    label = f"{pf}강부터" if pf is not None else "보호 안 함"
+    return (f"평균이 가장 싼 보호 시작: <b>{enhance_good(label)}</b> — 평균 {enhance_rough(cheap.mean_cost)}"
+            f" · 평균 {enhance_count_text(cheap.mean_attempts)}")
+
+
+def enhance_summary_html(est, alt=None, best=None) -> str:
+    """맨 위 금액 아래 글 — 평균(몇 % 자리인지)·횟수 · 기준 안과 넘긴 쪽 · 가장 비싼 강화 · 비율 범위 · 보호 켠/끈 값 · 가장 싼 보호 · 참고 시세."""
     chance = est.chance_within(round(est.mean_cost))
     at = f"({enhance_chance_text(chance)} 확률)" if chance is not None else ""
-    lines = [f"평균 <b>{enhance_won(est.mean_cost)}</b>{at} · 평균 {est.mean_attempts:,.0f}회"
+    lines = [f"평균 <b>{enhance_won(est.mean_cost)}</b>{at} · 평균 {enhance_count_text(est.mean_attempts)}"
              f" · 재료 {enhance_won(est.mean_material)} · 보호 {enhance_won(est.mean_protect)}"]
-    tail = est.tail_mean(core.ENHANCE_TAIL_Q)
+    q = core.ENHANCE_EXPECT_Q
+    inside, tail = est.within_mean(q), est.tail_mean(q)
     if tail is not None:
-        lines.append(f"{core.ENHANCE_TAIL_Q}%를 넘긴 {100 - core.ENHANCE_TAIL_Q}%는 평균 {enhance_won(tail)}")
+        lines.append(f"{q}% 안에 끝나면 평균 {enhance_good(enhance_won(inside))} · 넘긴 {100 - q}%는 평균 {enhance_bad(enhance_won(tail))}")
+    for extra in (enhance_top_step_line(est),):
+        if extra:
+            lines.append(extra)
     if est.rate_range is not None:
         low, high = core.ENHANCE_RANGE_PCTS
         lines.append(f"7강까지 보호 비율이 {low}~{high}%면 평균 {enhance_won(est.rate_range[0])} ~ {enhance_won(est.rate_range[1])}")
-    compare = enhance_compare_line(est, alt)
-    if compare:
-        lines.append(compare)
+    for extra in (enhance_compare_line(est, alt), enhance_best_line(est, best)):
+        if extra:
+            lines.append(extra)
     if est.path_total is not None and est.target_price is not None:
         # 어느 쪽이 싸다고 판정하지 않는다 — 앱은 매물이 있는지 모르고, 매물이 없어서 강화하는 사람이 많다(사용자 2026-11-06)
         lines.append(f"{est.start}강 시세 + 강화 {enhance_won(est.path_total)} · 참고: {est.target}강 시세 {enhance_won(est.target_price)}")
@@ -1852,16 +1901,37 @@ def enhance_summary_html(est, alt=None) -> str:
 
 
 def enhance_won(v: float) -> str:
-    """강화 비용 금액 — 1의 자리까지(사용자 2026-11-06). "3만 9,210" · "1억 9,900만" · "1,000". 줄여 적으면 표에서 재료비 + 보호비 ≠ 1회 비용이 됐다."""
+    """강화 비용 금액 — 1의 자리까지(사용자 2026-11-06). "3만 9,210" · "1억 9,900만" · "1,000" · "359조 4,350억". 줄여 적으면 표에서 재료비 + 보호비 ≠ 1회 비용이 됐다."""
     n = round(v)
-    eok, rest = divmod(n, 10 ** 8)
+    jo, rest = divmod(n, 10 ** 12)
+    eok, rest = divmod(rest, 10 ** 8)
     man, one = divmod(rest, 10 ** 4)
-    parts = [f"{eok:,}억"] if eok else []
+    parts = [f"{jo:,}조"] if jo else []
+    if eok:
+        parts.append(f"{eok:,}억")
     if man:
         parts.append(f"{man:,}만")
     if one or not parts:
         parts.append(f"{one:,}")
     return " ".join(parts)
+
+
+def enhance_rough(v: float) -> str:
+    """보호 안 한 평균처럼 아주 큰 금액 — 1조부터는 조까지만. 끝자리는 믿을 수 없는 숫자다(실측: 분수로 풀면 3,594억 회 중 앞 다섯 자리까지만 같다)."""
+    return f"약 {round(v / 10 ** 12):,}조" if v >= 10 ** 12 else enhance_won(v)
+
+
+def enhance_count_text(v: float) -> str:
+    """평균 시도 수 — 1억 회부터는 억까지만."""
+    return f"약 {round(v / 10 ** 8):,}억 회" if v >= 10 ** 8 else f"{v:,.0f}회"
+
+
+def enhance_chance_html(amount: int, chance: float) -> str:
+    """예산 칸 결과 — 기준 이상이면 초록, 절반 아래면 빨강."""
+    text = f"{enhance_won(amount)}이면 {enhance_chance_text(chance)} 확률로 붙습니다"
+    if chance * 100 >= core.ENHANCE_EXPECT_Q:
+        return enhance_good(text)
+    return enhance_bad(text) if chance * 100 < core.ENHANCE_BUDGET_QS[0] else text
 
 
 def won_text(v: int) -> str:
@@ -8887,13 +8957,27 @@ class MainWindow(QMainWindow):
         """입력 2글자부터 메타 이름(spid 8만 건)에서 후보 — 같은 이름의 시즌 카드가 여럿이라 시즌을 같이 적는다."""
         self._refresh_card_candidates(self.ed_owner_name, self.cb_owner_card)
 
+    def _name_suggestions(self, edit: QLineEdit, names: list[str]) -> None:
+        """이름 칸 자동완성 — 서로 다른 이름 앞 N 개(들어온 순서 그대로). 시즌은 옆 콤보가 고른다. 칸마다 처음 쓸 때 붙인다.
+        textChanged 가 키 입력의 자동완성보다 먼저라, 치는 글자에 맞는 목록이 그 자리에서 뜬다."""
+        comp = edit.completer()
+        if comp is None:
+            comp = QCompleter(QStringListModel(edit), edit)
+            comp.setFilterMode(Qt.MatchFlag.MatchContains)   # 후보를 이름 중간까지 찾으니 — 기본(앞부터)이면 "흥민" 으로 찾은 줄이 팝업에서 사라진다
+            edit.setCompleter(comp)
+        comp.model().setStringList(list(dict.fromkeys(names))[:config.CARD_NAME_SUGGESTIONS])
+        if not names:
+            comp.popup().hide()   # 코드로 칸을 비우면 Qt 가 안 닫아 빈 네모가 남는다(실측 2026-11-06)
+
     def _refresh_card_candidates(self, edit: QLineEdit, combo: IconCombo) -> None:
         needle = edit.text().strip()
         if len(needle) < 2:
+            self._name_suggestions(edit, [])
             combo.set_icon_items([])
             return
         hits = [(name, sp) for sp, name in self._names.items() if isinstance(name, str) and needle in name]
         hits.sort(key=lambda x: (x[0] != needle, len(x[0]), x[0], -x[1]))
+        self._name_suggestions(edit, [name for name, _sp in hits])
         combo.set_icon_items([(f"{name} ({self._season_name(sp)})", sp, ("season", core.season_id_of(sp)))
                               for name, sp in hits[:self.CARD_OWNER_MAX_CANDIDATES]])
         self._start_list_icons(combo)
@@ -8903,6 +8987,15 @@ class MainWindow(QMainWindow):
     ENHANCE_BUDGET_COLUMNS = ["붙을 확률", "금액"]
     ENHANCE_RATES = (95, 80, 60, 40, 30)   # 보호 비율 고르기 — 40% 구간은 넥슨이 최대 10%p 낮출 수 있다
     ENHANCE_BUDGET_W = 240                 # 금액 구간 칸 폭 — 나머지는 그래프가 쓴다
+    ENHANCE_COLUMN_TIPS = {
+        "성공 확률": "넥슨 공지 확률 × 재료 게이지. 게이지를 다 못 채우면 그만큼 낮아집니다.",
+        "재료": "게이지를 채우는 가장 싼 재료 조합. 최대 5장입니다.",
+        "재료비": "재료 조합의 값. OVR마다 낮은 시세 10장의 평균이라, 매물이 적으면 실제로는 더 들 수 있습니다.",
+        "보호비": "시도 한 번마다 내는 돈 = 그 강화 시세 × 보호 비율. 성공해도 냅니다.",
+        "1회 비용": "한 번 도전할 때 나가는 돈 = 재료비 + 보호비.",
+        "평균 비용": "목표까지 가는 동안 이 강화에 드는 평균 금액 = 1회 비용 × 평균 시도 수. 떨어져 다시 지나는 횟수까지 넣습니다.",
+        "비중": "전체 평균 비용 중 이 강화가 차지하는 몫.",
+    }
 
     def _build_enhance_tab(self) -> QWidget:
         w = QWidget()
@@ -8947,21 +9040,10 @@ class MainWindow(QMainWindow):
         self.enh_result_box = QWidget()
         box = QVBoxLayout(self.enh_result_box)
         box.setContentsMargins(0, 0, 0, 0)
-        head = QHBoxLayout()
         self.lb_enh_head = QLabel("")
         self.lb_enh_head.setWordWrap(True)
         self.lb_enh_head.setTextFormat(Qt.TextFormat.RichText)
-        head.addWidget(self.lb_enh_head, 1)
-        self.lb_enh_q = QLabel("기준")
-        self.lb_enh_q.setStyleSheet(f"color: {T.TEXT_DIM};")
-        self.cb_enh_q = NoScrollComboBox()
-        for q in core.ENHANCE_BUDGET_QS:
-            self.cb_enh_q.addItem(f"{q}%", q)
-        self.cb_enh_q.setCurrentIndex(self.cb_enh_q.findData(core.ENHANCE_EXPECT_Q))
-        self.cb_enh_q.currentIndexChanged.connect(lambda _i: self._enh_redraw())
-        head.addWidget(self.lb_enh_q)
-        head.addWidget(self.cb_enh_q)
-        box.addLayout(head)
+        box.addWidget(self.lb_enh_head)
         self.lb_enh_result = QLabel("")
         self.lb_enh_result.setWordWrap(True)
         self.lb_enh_result.setTextFormat(Qt.TextFormat.RichText)
@@ -8982,6 +9064,7 @@ class MainWindow(QMainWindow):
         side.addWidget(self.ed_enh_budget)
         self.lb_enh_chance = QLabel("")
         self.lb_enh_chance.setWordWrap(True)
+        self.lb_enh_chance.setTextFormat(Qt.TextFormat.RichText)
         side.addWidget(self.lb_enh_chance)
         side.addStretch(1)
         mid.addWidget(self.enh_budget_panel)
@@ -8993,13 +9076,16 @@ class MainWindow(QMainWindow):
         self.tbl_enhance.setSortingEnabled(False)
         self.tbl_enhance.set_fit_rows(keep_all=True)
         self.tbl_enhance.setItemDelegateForColumn(0, GradeStepDelegate(self.tbl_enhance))
+        for c, title in enumerate(self.ENHANCE_COLUMNS):
+            if title in self.ENHANCE_COLUMN_TIPS:
+                self.tbl_enhance.horizontalHeaderItem(c).setToolTip(self.ENHANCE_COLUMN_TIPS[title])
         box.addWidget(self.tbl_enhance)
         self.enh_result_box.hide()
         v.addWidget(self.enh_result_box)
         v.addStretch(1)
         self._enh_req = 0
         self._enh_worker: EnhanceLoader | None = None
-        self._enh_shown: tuple | None = None   # (이름, Estimate) — 기준·예산을 바꾸면 요청 없이 다시 그린다
+        self._enh_shown: EnhanceResult | None = None   # 예산을 바꾸면 요청 없이 다시 그린다
         return w
 
     def _on_enhance_calc(self) -> None:
@@ -9035,26 +9121,26 @@ class MainWindow(QMainWindow):
     def _on_enhance_loaded(self, req: int, payload) -> None:
         if req != self._enh_req:
             return
-        name, est, alt, holo = payload
-        self.tbl_enhance.itemDelegateForColumn(0).set_holo(holo)
+        est = payload.est
+        self.tbl_enhance.itemDelegateForColumn(0).set_holo(payload.holo)
         self._set_status(self.lb_enh_status, "보호 제외 클래스라 보호 없이 계산했습니다." if est.protect_excluded else "")
-        self.lb_enh_result.setText(enhance_summary_html(est, alt))
+        self.lb_enh_result.setText(enhance_summary_html(est, payload.alt, payload.best))
         budgets = est.budgets
         self._fill(self.tbl_enh_budget, [[f"{q}%", enhance_won(b)] for q, b in budgets], enable_sort=False)
         self._fill(self.tbl_enhance, [enhance_row(s, est.mean_cost) for s in est.steps], enable_sort=False)
-        for wd in (self.lb_enh_q, self.cb_enh_q, self.enh_budget_panel, self.chart_enh_budget):
+        for wd in (self.enh_budget_panel, self.chart_enh_budget):
             wd.setVisible(bool(budgets))
-        self._enh_shown = (name, est)
+        self._enh_shown = payload
         self._enh_redraw()
         self.enh_result_box.show()
 
     def _enh_redraw(self) -> None:
-        """맨 위 금액 · 예산 확률 · 그래프 세로선 — 기준·예산 칸이 바뀔 때도 이 길로(요청 없음)."""
+        """맨 위 금액 · 예산 확률 · 그래프 세로선 — 예산 칸이 바뀔 때도 이 길로(요청 없음)."""
         if self._enh_shown is None:
             return
-        name, est = self._enh_shown
-        q = self.cb_enh_q.currentData()
-        self.lb_enh_head.setText(enhance_head_html(name, est, q))
+        est = self._enh_shown.est
+        q = core.ENHANCE_EXPECT_Q
+        self.lb_enh_head.setText(enhance_head_html(self._enh_shown.name, est, self._enh_shown.priced_at))
         marks = []
         budget = est.budget_at(q)
         if budget is not None:
@@ -9063,7 +9149,7 @@ class MainWindow(QMainWindow):
         amount = core.enhance_parse_money(text)
         chance = None if amount is None else est.chance_within(amount)
         if chance is not None:
-            self.lb_enh_chance.setText(f"{enhance_won(amount)}이면 {enhance_chance_text(chance)} 확률로 붙습니다")
+            self.lb_enh_chance.setText(enhance_chance_html(amount, chance))
             marks.append((amount, f"예산 {enhance_won(amount)}", T.CHART_RANK, False))
         else:
             self.lb_enh_chance.setText("금액을 읽지 못했습니다" if text else "")

@@ -10702,7 +10702,7 @@ def test_enhance_page_shows_result():
         _win._go_page("강화 비용")
         assert _win.cb_enh_start.currentData() == 1 and _win.cb_enh_target.currentData() == 8
         assert _win.cb_enh_protect.currentData() == 2, "기본값 = 실패할 수 있는 구간 전부 보호(사용자 2026-11-05)"
-        assert _win.cb_enh_q.currentData() == 80, "맨 위 기준은 80%(사용자 2026-11-05)"
+        assert not hasattr(_win, "cb_enh_q"), "맨 위 기준은 고르지 않는다(사용자 2026-11-06)"
         assert not _win.enh_result_box.isVisibleTo(_win), "계산 전에는 빈 칸을 안 보여 준다"
         _win.ed_enh_name.setText("테스트")
         assert _win.cb_enh_card.currentData() == sp
@@ -10716,7 +10716,12 @@ def test_enhance_page_shows_result():
         assert _win.tbl_enhance.item(1, 4).text() == "80만", "2강 200만 × 40%"
         assert _win.tbl_enhance.item(1, 5).text() == "80만 1,000", "1회 비용 = 재료비 + 보호비"
         assert isinstance(_win.tbl_enhance.itemDelegateForColumn(0), app_main.GradeStepDelegate), "단계 칸은 배지"
-        est = _win._enh_shown[1]
+        est = _win._enh_shown.est
+        # 칸 머리 말풍선 — 첫 칸 빼고 전부 · 계산 뒤에도 남는다
+        for c, title in enumerate(app_main.MainWindow.ENHANCE_COLUMNS):
+            tip = _win.tbl_enhance.horizontalHeaderItem(c).toolTip()
+            assert (tip == "") == (title == "강화 단계"), title
+        assert set(app_main.MainWindow.ENHANCE_COLUMN_TIPS) < set(app_main.MainWindow.ENHANCE_COLUMNS), "없는 칸 이름"
         # 표를 줄이지 않고 페이지가 스크롤한다 — 끝 줄이 표 안 스크롤에 숨었다(실제 창 1920×1080)
         for tb in (_win.tbl_enhance, _win.tbl_enh_budget):
             assert tb.minimumSizeHint().height() == tb._rows_height(), "줄 전부가 최소 높이"
@@ -10724,36 +10729,36 @@ def test_enhance_page_shows_result():
             assert not tb.verticalScrollBar().isVisible(), "표 안 세로 막대가 없다"
         assert _win.tbl_enhance.item(6, 7).text() == f"{100 * est.steps[6].mean_cost / est.mean_cost:.0f}%", "비중 = 그 강화 평균 ÷ 전체 평균"
         head = _win.lb_enh_head.text()
-        assert "테스트강화" in head and "100% 보호(시세의 40%)" in head and "80% 확률로 붙습니다" in head, head
-        assert app_main.enhance_won(est.budget_at(80)) in head, head
+        assert "테스트강화" in head and "100% 보호(시세의 40%)" in head and "85% 확률로 붙습니다" in head, head
+        assert f"<b>{app_main.enhance_won(est.budget_at(85))}</b>" in head, "맨 위 금액은 굵게 — " + head
+        assert T.GOOD not in head and T.BAD not in head, "맨 위 금액에는 색을 안 쓴다 — 좋고 나쁨이 아니다"
+        assert "시세 " in head and " 기준" in head, "시세를 언제 읽었는지 — " + head
         text = _win.lb_enh_result.text()
         assert "평균 31회" in text and "% 확률)" in text, text
-        assert "90%를 넘긴 10%는" in text and "30~95%" in text, text
+        assert "85% 안에 끝나면" in text and "넘긴 15%는" in text and "30~95%" in text, text
         assert "보호 안 하면" in text and "4,335회" in text, "켠 값·끈 값을 늘 같이 — " + text
-        assert [_win.tbl_enh_budget.item(r, 0).text() for r in range(_win.tbl_enh_budget.rowCount())] == [
-            "50%", "75%", "80%", "90%", "95%", "99%"]
+        assert "비용의" in text and "7강 → 8강에서 나옵니다" in text, "가장 비싼 강화 — " + text
+        assert "평균이 가장 싼 보호 시작" in text and "보호 안 함" in text, "로더가 낸 답이 글까지 — " + text
+        assert [_win.tbl_enh_budget.item(r, 0).text() for r in range(_win.tbl_enh_budget.rowCount())] == ["50%", "85%", "95%"]
         assert _win.chart_enh_budget.isVisibleTo(_win) and _win.chart_enh_budget._points == list(est.curve)
-        assert [m[0] for m in _win.chart_enh_budget._marks] == [est.budget_at(80)], "고른 기준에 세로선"
-        # 기준을 바꾸면 요청 없이 맨 위·세로선이 따라온다
+        assert [m[0] for m in _win.chart_enh_budget._marks] == [est.budget_at(85)], "85% 자리에 세로선"
         calls = []
         keep_fetch = playerinfo.fetch_player_info
         playerinfo.fetch_player_info = lambda *a, **k: calls.append(a)
-        _win.cb_enh_q.setCurrentIndex(_win.cb_enh_q.findData(95))
-        assert "95% 확률로 붙습니다" in _win.lb_enh_head.text() and app_main.enhance_won(est.budget_at(95)) in _win.lb_enh_head.text()
-        assert [m[0] for m in _win.chart_enh_budget._marks] == [est.budget_at(95)]
         # 예산 칸 — 글·세로선 · 못 읽으면 말한다 · 끝을 넘겨도 100% 라고 안 한다
         _win.ed_enh_budget.setText(f"{est.budget_at(50)}")
         assert "50% 확률로 붙습니다" in _win.lb_enh_chance.text(), _win.lb_enh_chance.text()
         assert len(_win.chart_enh_budget._marks) == 2 and _win.chart_enh_budget._marks[1][0] == est.budget_at(50)
         _win.ed_enh_budget.setText("1조")
         assert "99% 넘게" in _win.lb_enh_chance.text()
+        assert T.GOOD in _win.lb_enh_chance.text(), "85% 이상 초록"
+        assert _win.lb_enh_chance.textFormat() == Qt.TextFormat.RichText, "글자 그대로면 <span> 이 화면에 찍힌다"
         _win.ed_enh_budget.setText("없음")
         assert _win.lb_enh_chance.text() == "금액을 읽지 못했습니다" and len(_win.chart_enh_budget._marks) == 1
         _win.ed_enh_budget.setText("")
         assert _win.lb_enh_chance.text() == ""
-        assert not calls, "기준·예산은 넥슨에 묻지 않는다"
+        assert not calls, "예산은 넥슨에 묻지 않는다"
         playerinfo.fetch_player_info = keep_fetch
-        _win.cb_enh_q.setCurrentIndex(_win.cb_enh_q.findData(80))
         # 안 함 → 자리가 바뀌고 비율 고르기가 잠긴다 · 시도가 많아도 흉내가 돌면 구간이 나온다
         _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(None))
         assert not _win.cb_enh_rate.isEnabled()
@@ -10761,14 +10766,13 @@ def test_enhance_page_shows_result():
         head, text = _win.lb_enh_head.text(), _win.lb_enh_result.text()
         assert "보호 없음" in head and "평균 4,335회" in text and "100% 보호하면" in text and "평균 31회" in text, text
         assert "시세의" not in text and "30~95%" not in text, text
-        assert 0 < _win.tbl_enh_budget.rowCount() < 6, "흉내가 적으면 99% 줄을 안 낸다"
+        assert _win.tbl_enh_budget.rowCount() == 3, "흉내가 줄어도 95% 위쪽은 남는다"
         # 끝까지 못 돌리는 구간 — 평균만, 구간·그래프는 숨긴다
         _win.cb_enh_start.setCurrentIndex(_win.cb_enh_start.findData(8))
         _win.cb_enh_target.setCurrentIndex(_win.cb_enh_target.findData(10))
         _win.btn_enh_calc.click()
         assert "확률별 금액은 낼 수 없습니다" in _win.lb_enh_head.text(), _win.lb_enh_head.text()
         assert not _win.chart_enh_budget.isVisibleTo(_win) and not _win.enh_budget_panel.isVisibleTo(_win)
-        assert not _win.cb_enh_q.isVisibleTo(_win)
         # 일부 구간만 보호 — 어디부터인지 적는다 · 그 위만 보호비
         _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(8))
         _win.cb_enh_rate.setCurrentIndex(_win.cb_enh_rate.findData(30))
@@ -10813,7 +10817,6 @@ def test_enhance_page_shows_result():
     finally:
         restore()
         _win.ed_enh_budget.setText("")
-        _win.cb_enh_q.setCurrentIndex(_win.cb_enh_q.findData(80))
         _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(2))
         _win.cb_enh_rate.setCurrentIndex(0)
         _win.cb_enh_start.setCurrentIndex(0)
@@ -10862,6 +10865,171 @@ def test_enhance_money_keeps_detail_above_100m():
     assert app_main.enhance_won(39_210) == "3만 9,210", "1의 자리까지(사용자 2026-11-06)"
     assert app_main.enhance_won(1_234_567_891) == "12억 3,456만 7,891"
     assert app_main.enhance_won(200_000_005) == "2억 5"
+    assert app_main.enhance_won(359_435_000_000_000) == "359조 4,350억", "3,594,350억 으로 적었다(사용자 2026-11-06)"
+    assert app_main.enhance_won(10 ** 12) == "1조"
+    assert app_main.enhance_won(10 ** 12 + 7) == "1조 7"
+
+
+def test_enhance_rough_amounts_for_huge_values():
+    """보호 비교 줄 — 끝자리를 믿을 수 없는 큰 값은 줄인다(분수로 풀어 앞 다섯 자리까지만 같다)."""
+    assert app_main.enhance_rough(359_435_000_000_000) == "약 359조"
+    assert app_main.enhance_rough(10 ** 12) == "약 1조"
+    assert app_main.enhance_rough(10 ** 12 - 1) == "9,999억 9,999만 9,999", "1조 아래는 그대로"
+    assert app_main.enhance_count_text(359_434_829_491) == "약 3,594억 회"
+    assert app_main.enhance_count_text(10 ** 8) == "약 1억 회"
+    assert app_main.enhance_count_text(10 ** 8 - 1) == "99,999,999회"
+    assert app_main.enhance_count_text(30.6) == "31회"
+
+
+def test_enhance_colors_follow_good_and_bad():
+    """사용자 2026-11-06 — 더 싼 결론 초록 · 더 비싼 쪽 금액과 넘긴 15% 빨강 · 예산 확률 85% 이상 초록 · 50% 미만 빨강."""
+    import enhance
+    mats = {o: 1000 for o in range(100, 180)}
+    cheap_cards = {g: 1000 for g in range(1, 14)}
+    on = enhance.estimate(115, None, 1, 8, cheap_cards, mats)
+    off = enhance.estimate(115, None, 1, 8, cheap_cards, mats, None, simulate=False)
+    good, bad = f"color:{T.GOOD}", f"color:{T.BAD}"
+    line = app_main.enhance_compare_line(on, off)     # 안 하면 더 비싸다
+    assert f"<span style='{bad}'>{app_main.enhance_rough(off.mean_cost)}</span>" in line, line
+    assert f"<b><span style='{good}'>보호하는 쪽이" in line, line
+    line = app_main.enhance_compare_line(off, on)     # 보호하면 더 싸다 — 그 금액은 초록
+    assert f"<span style='{good}'>{app_main.enhance_rough(on.mean_cost)}</span>" in line and bad not in line, line
+    # 아주 큰 값 — 금액·차이·횟수 모두 줄여 적는다(3,594,350억 · 3594억회 사용자 2026-11-06)
+    huge = enhance.estimate(115, None, 10, 13, {g: 10 ** 9 for g in range(1, 14)}, mats, None, simulate=False)
+    guard = enhance.estimate(115, None, 10, 13, {g: 10 ** 9 for g in range(1, 14)}, mats, simulate=False)
+    assert huge.mean_cost > 10 ** 13 and huge.mean_attempts > 10 ** 10, "아래 단언의 전제"
+    line = app_main.enhance_compare_line(guard, huge)
+    assert app_main.enhance_rough(huge.mean_cost) in line and f"평균 {app_main.enhance_rough(huge.mean_cost - guard.mean_cost)} 싸다" in line, line
+    assert "억 회" in line and app_main.enhance_won(huge.mean_cost) not in line, line
+    text = app_main.enhance_summary_html(on)
+    assert f"<span style='{bad}'>{app_main.enhance_won(on.tail_mean(85))}</span>" in text, text
+    assert f"<span style='{good}'>{app_main.enhance_won(on.within_mean(85))}</span>" in text, text
+    # 예산 확률 — 경계 양쪽
+    for chance, want in ((0.85, good), (0.8499, None), (0.5, None), (0.4999, bad)):
+        html_text = app_main.enhance_chance_html(100, chance)
+        assert (good in html_text) == (want == good) and (bad in html_text) == (want == bad), (chance, html_text)
+
+
+def test_enhance_top_step_and_best_lines():
+    import enhance
+    mats = {o: 1000 for o in range(100, 180)}
+    prices = {g: 1_000_000 * g for g in range(1, 14)}
+    est = enhance.estimate(115, None, 1, 8, prices, mats, simulate=False)
+    top = max(est.steps, key=lambda s: s.mean_cost)
+    assert top.grade == 7 and top.mean_cost > est.steps[5].mean_cost, "아래 단언의 전제"
+    line = app_main.enhance_top_step_line(est)
+    assert app_main.enhance_share(top.mean_cost, est.mean_cost) in line and "7강 → 8강에서" in line, line
+    # 일부러 낮은 단계가 더 비싼 시세 — 마지막 단계로 고정해 적으면 빨개진다
+    skew = enhance.estimate(115, None, 1, 8, {**prices, 2: 10 ** 10}, mats, simulate=False)
+    assert max(skew.steps, key=lambda s: s.mean_cost).grade == 2
+    assert "2강 → 3강에서" in app_main.enhance_top_step_line(skew)
+    one = enhance.estimate(115, None, 8, 9, prices, mats, simulate=False)
+    assert app_main.enhance_top_step_line(one) == "", "단계가 하나면 뻔하다"
+    # 가장 싼 보호 시작 — 지금 고른 값이면 안 적는다 · 더 싸면 어디부터인지와 평균·횟수
+    cards = {g: 10 ** 8 if g < 8 else 1000 for g in range(1, 14)}
+    wide = enhance.estimate(115, None, 1, 11, cards, mats, simulate=False)
+    pf, cheap = best = enhance.cheapest_protect_from(115, None, 1, 11, cards, mats)
+    assert cheap.mean_cost < wide.mean_cost and pf == 8, f"아래 단언의 전제 — {pf}"
+    line = app_main.enhance_best_line(wide, best)
+    assert f"{pf}강부터" in line and app_main.enhance_rough(cheap.mean_cost) in line and app_main.enhance_count_text(cheap.mean_attempts) in line, line
+    assert f"color:{T.GOOD}" in line
+    assert app_main.enhance_best_line(cheap, best) == "", "이미 가장 싼 칸을 골랐다"
+    assert app_main.enhance_best_line(wide, None) == ""
+    none_best = (None, enhance.estimate(115, None, 1, 11, cards, mats, None, simulate=False))
+    assert "보호 안 함" in app_main.enhance_best_line(replace(wide, mean_cost=none_best[1].mean_cost + 10), none_best)
+    # 글까지 온다
+    assert line in app_main.enhance_summary_html(wide, None, best)
+
+
+def test_enhance_loader_passes_cheapest_and_skips_for_excluded():
+    """로더가 가장 싼 보호와 시세 시각을 화면까지 넘긴다 · 보호 제외 클래스는 묻지 않는다."""
+    sp = 812345678
+    restore = _enhance_env(sp)
+    asked = []
+    keep = core.enhance_cheapest_protect
+    try:
+        core.enhance_cheapest_protect = lambda *a, **k: (asked.append(a), keep(*a, **k))[1]
+        got = []
+        w = app_main.EnhanceLoader(1, sp, 1, 8, 2, None)
+        w.loaded.connect(lambda _r, p: got.append(p))
+        w.run()
+        assert len(asked) == 1 and got[0].best is not None and got[0].priced_at, got
+        asked.clear()
+        got.clear()
+        excluded = 596 * 1_000_000 + 1
+        w = app_main.EnhanceLoader(1, excluded, 8, 9, 2, None)
+        w.loaded.connect(lambda _r, p: got.append(p))
+        w.run()
+        assert got[0].est.protect_excluded and got[0].best is None and not asked
+    finally:
+        core.enhance_cheapest_protect = keep
+        restore()
+
+
+def test_card_name_suggestions_with_real_keys():
+    """이름 칸 — 한글은 키가 아니라 입력기 이벤트로 온다(QTest.keyClicks 에 한글을 주면 앱이 통째로 죽는다 · 실측 2026-11-06).
+    조합 중인 글자는 text() 에 없어서, 확정된 글자가 2글자가 될 때 뜬다. 강화 비용·구단주 찾기가 같은 함수."""
+    from PySide6.QtGui import QInputMethodEvent
+    from PySide6.QtTest import QTest
+    keep = _win._names
+    names = {100_000_000 + i: f"가나다 {i}호" for i in range(8)}
+    names[300_000_000] = names[400_000_000] = "가나다 3호"       # 같은 이름의 다른 시즌 — 목록에 한 줄
+    names[500_000_000] = "다른선수"
+    names[600_000_000] = names[700_000_000] = "Abc Def"
+    _win._names = names
+    was_visible = _win.isVisible()
+    assert config.CARD_NAME_SUGGESTIONS == 5, "사용자 2026-11-06"
+
+    def ime(edit, preedit="", commit=""):
+        event = QInputMethodEvent(preedit, [])
+        event.setCommitString(commit)
+        QApplication.sendEvent(edit, event)
+        _app.processEvents()
+    try:
+        _win.show()
+        for page, edit, combo in (("강화 비용", _win.ed_enh_name, _win.cb_enh_card),
+                                  ("선수로 구단주 찾기", _win.ed_owner_name, _win.cb_owner_card)):
+            _win._go_page(page)
+            edit.clear()
+            edit.setFocus()
+            ime(edit, preedit="가")
+            ime(edit, preedit="나", commit="가")
+            comp = edit.completer()
+            assert edit.text() == "가" and comp.model().rowCount() == 0, "조합 중인 글자는 아직 칸에 없다 — 1글자"
+            assert not comp.popup().isVisible(), "2글자 밑은 안 띄운다"
+            ime(edit, preedit="다", commit="나")
+            rows = comp.model().stringList()
+            assert rows == [f"가나다 {i}호" for i in range(config.CARD_NAME_SUGGESTIONS)], rows
+            assert comp.popup().isVisible(), "입력기로 쳐도 팝업이 떠야 한다 — " + page
+            assert comp.popup().model().rowCount() == config.CARD_NAME_SUGGESTIONS, "치는 글자에 맞는 목록 그대로"
+            ime(edit, commit="다")
+            # 고르기 — 시즌이 셋인 이름 · 칸에 이름이 들어가고 옆 칸에 그 선수 카드 전부
+            popup = comp.popup()
+            popup.setCurrentIndex(popup.model().index(3, 0))
+            QTest.keyClick(popup, Qt.Key.Key_Return)
+            _app.processEvents()
+            assert edit.text() == "가나다 3호" and not popup.isVisible(), edit.text()
+            assert combo.count() == 3 and {combo.itemData(i) for i in range(combo.count())} == {100_000_003, 300_000_000, 400_000_000}
+            # 이름 중간으로 찾아도 팝업에 남는다
+            edit.clear()
+            ime(edit, commit="나다")
+            assert popup.isVisible() and popup.model().rowCount() == config.CARD_NAME_SUGGESTIONS, popup.model().rowCount()
+            edit.clear()
+            assert comp.model().rowCount() == 0 and combo.count() == 0, "지우면 목록도 빈다"
+            assert not popup.isVisible(), "코드로 비워도 빈 네모가 남지 않는다"
+            # 영문은 키 입력으로 온다
+            edit.setFocus()
+            QTest.keyClicks(edit, "Ab")
+            _app.processEvents()
+            assert comp.model().stringList() == ["Abc Def"] and popup.isVisible(), comp.model().stringList()
+            edit.clear()
+    finally:
+        _win._names = keep
+        _win.ed_enh_name.clear()
+        _win.ed_owner_name.clear()
+        _win._go_page("대시보드")
+        if not was_visible:
+            _win.hide()
 
 
 def test_enhance_summary_verdict():
@@ -10890,15 +11058,17 @@ def test_enhance_summary_verdict():
     low_b = enhance.estimate(115, None, 1, 2, prices, mats, None, simulate=False)
     assert app_main.enhance_compare_line(low_a, low_b) == "", "1강 도전엔 보호가 없다 — 같은 값을 두 번 안 적는다"
     assert app_main.enhance_compare_line(on, None) == ""
-    assert "<b>&lt;b&gt;</b>" in app_main.enhance_head_html("<b>", cheap, 80), "선수 이름은 글자 그대로"
+    assert "<b>&lt;b&gt;</b>" in app_main.enhance_head_html("<b>", cheap), "선수 이름은 글자 그대로"
+    assert "시세 " not in app_main.enhance_head_html("가", cheap), "시각을 모르면 안 적는다"
+    assert "시세 11-06 12:30 기준" in app_main.enhance_head_html("가", cheap, "11-06 12:30")
     # 시도가 너무 많으면 넘긴 나머지 줄이 없고, 시세를 모르면 견주지 않는다
     many = enhance.estimate(115, None, 8, 10, prices, mats, None)
     assert "넘긴" not in app_main.enhance_summary_html(many) and "% 확률" not in app_main.enhance_summary_html(many)
     no_price = enhance.estimate(115, None, 1, 5, {}, mats, None)
     assert "참고" not in app_main.enhance_summary_html(no_price)
     # 어느 기준이 표본 밖이면 숫자를 지어내지 않는다
-    few = replace(cheap, costs=tuple(range(1, 501)))
-    assert "99% 금액은 낼 수 없습니다" in app_main.enhance_head_html("가", few, 99)
+    few = replace(cheap, costs=tuple(range(1, 101)))
+    assert "85% 금액은 낼 수 없습니다" in app_main.enhance_head_html("가", few)
     assert app_main.enhance_chance_text(0.004) == "1% 미만" and app_main.enhance_chance_text(0.5) == "50%"
     assert app_main.enhance_share(1, 1000) == "1% 미만" and app_main.enhance_share(0, 1000) == "0%" and app_main.enhance_share(1, 0) == "0%"
 

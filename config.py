@@ -493,6 +493,7 @@ RANKER_COMPARE_MAX = 40             # 비교 표는 많이 쓴 카드부터 이�
 CARD_OWNER_DAYS = 30                # 이만큼 안에 선발로 쓴 구단주만
 ENHANCE_REQUEST_GAP_S = 1.0         # 강화 재료 목록 요청 간격(83) — 응답이 한 번에 1MB 쯤이라 몰아서 묻지 않는다
 ENHANCE_DEFAULT_TARGET = 8          # 강화 비용 화면을 처음 열 때 목표 강화
+CARD_NAME_SUGGESTIONS = 5           # 선수 이름 칸 자동완성 줄 수(사용자 2026-11-06)
 SQUAD_BACKFILL_DELAY_S = 30         # 첫 화면 뒤 색인 백필 시작 — 1만 경기 첫 화면(공통 기준 3)에 끼지 않게
 SQUAD_BACKFILL_TRAY_DELAY_S = 120   # 트레이로 켜졌으면(첫 화면 없음) 켠 뒤 이만큼
 # 랭커 픽(2.1.1 · 6 — rankerpick.py) — 마지막 스냅숏 상위 RANKER_PICK_TOP 명의 최근 경기 하나. 화면(탭)이 보일 때만 받는다(U2)
