@@ -337,6 +337,25 @@ def main() -> int:
     except Exception as e:
         print(f"[WARN] 능력치 시뮬레이터 조회 실패(전적엔 영향 없음): {e}")
 
+    # 강화 비용(83단계) — 재료 목록 형식 · 게이지 규칙(enhance.gauge_of)이 넥슨 값과 맞는지 한 조합으로. 저장 안 함
+    try:
+        import enhance
+        import playerinfo
+        if not config.WEB_DATA:
+            print("[WARN] 강화 재료 목록: 웹 데이터 꺼짐 — 건너뜀")
+        elif first_sp is not None:
+            base = playerinfo.fetch_player_info(first_sp).ovr
+            level = base + enhance.CUM_OVR[5] + enhance.GAUGE_ANCHOR - 2     # 게이지 48.9 자리
+            rows = playerinfo.fetch_boost_rows(first_sp, level)
+            res = playerinfo.web_boost_cal(first_sp, 5, [(rows[0][0], rows[0][1])]) if rows else None
+            want = enhance.gauge_of(base, 5, rows[0][2]) if rows else None
+            ok = res is not None and abs(res - want) <= 1.0
+            print(f"{'[OK]  ' if ok else '[FAIL]'} 강화 재료 목록: {len(rows)}줄 · 게이지 넥슨 {res}% · 규칙 {want}%")
+        else:
+            print("[WARN] 강화 재료 목록: 확인할 선수가 없음")
+    except Exception as e:
+        print(f"[WARN] 강화 재료 목록 조회 실패(전적엔 영향 없음): {e}")
+
     # 카드 정보 자동 채우기(51단계) — 백필이 새로 기대는 칸(키·체형 · 포지션 16칸 · 소속 팀컬러)이 깨지면 여기서 먼저 보이게. 저장 안 함
     try:
         import playerinfo

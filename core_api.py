@@ -54,6 +54,12 @@ from rankerpick import (
     ranker_pick_summary, recommend, recommend_candidates,
 )
 from cardviews import PlayerCard, SquadOvr, lineup_cards, player_card, squad_ovr
+from enhance import (
+    BUDGET_EXPECT_Q as ENHANCE_EXPECT_Q, BUDGET_QS as ENHANCE_BUDGET_QS, BUDGET_TAIL_Q as ENHANCE_TAIL_Q, GRADES_MAX as ENHANCE_GRADES_MAX,
+    PROTECT_FROM as ENHANCE_PROTECT_FROM, PROTECT_RANGE_PCTS as ENHANCE_RANGE_PCTS,
+    EnhanceError, Estimate as EnhanceEstimate, estimate as enhance_estimate, parse_money as enhance_parse_money,
+    scan_levels as enhance_levels,
+)
 from squad_timeline import (
     HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, arrival_report, build_timeline, parse_trades,
 )
@@ -131,6 +137,9 @@ __all__ = [
     "OppScore", "bin_of_value", "opp_scores",
     # cardviews — 카드 정보 화면 재료(68)
     "PlayerCard", "SquadOvr", "lineup_cards", "player_card", "squad_ovr",
+    # enhance — 강화 비용(83). 재료 받기(boostcollect)는 로더가 부른다
+    "ENHANCE_BUDGET_QS", "ENHANCE_EXPECT_Q", "ENHANCE_GRADES_MAX", "ENHANCE_PROTECT_FROM", "ENHANCE_RANGE_PCTS", "ENHANCE_TAIL_Q",
+    "EnhanceError", "EnhanceEstimate", "enhance_estimate", "enhance_levels", "enhance_parse_money",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",

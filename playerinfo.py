@@ -32,6 +32,18 @@ PLAYER_INFO_URL = "https://m.fconline.nexon.com/datacenter/playerinfo"
 # 넥슨 서버가 직접 계산해 돌려준다. 모바일 페이지에는 이 기능이 없다
 # (2026-07-22, 사용자가 PC 데이터센터 화면 캡처로 알려줘서 발견).
 PLAYER_ABILITY_URL = "https://fconline.nexon.com/datacenter/PlayerAbility"
+# 강화 부스트 도우미 재료 목록(83단계) — 주소의 "Gorw" 는 넥슨 쪽 철자 그대로다
+BOOST_LIST_URL = "https://fconline.nexon.com/datacenter/PlayerGorwSelectList2"
+BOOST_CAL_URL = "https://fconline.nexon.com/datacenter/PlayerGrowCal"
+BOOST_STRONG_MAX = 10   # 도우미의 재료 강화 선택 끝
+_BOOST_CAL = re.compile(r'name="?boostPer"?[^>]*value="?([\d.]+)')
+_BOOST_HEADERS = {"X-Requested-With": "XMLHttpRequest", "Referer": "https://fconline.nexon.com/DataCenter/PlayerGrow"}
+_BOOST_MARK = 'class="char_wrap"'
+_BOOST_ROW = re.compile(r'<li class="en_char_list_item">(.*?)(?=<li class="en_char_list_item">|\Z)', re.S)
+_BOOST_SPID = re.compile(r"Player_info_(\d+)")
+_BOOST_STRONG = re.compile(r'class="ability en_level(\d+)"')
+_BOOST_OVR = re.compile(r"&nbsp;(\d+)")
+_BOOST_PRICE = re.compile(r"([\d,]+)\s*BP")
 _HEADERS = {"User-Agent": config.WEB_USER_AGENT}
 
 # ranker.py 와 같은 이유로 Session 재사용 — 선수 카드를 여러 번 열어봐도
@@ -321,6 +333,49 @@ def fetch_player_ability(sp_id: int, strong: int = 1, adapt: int = ADAPT_DEFAULT
                       club_levels=sorted({int(v) for v in _CLUB_LV_ITEM.findall(html)}),
                       position_ovrs={p.upper(): int(v)
                                      for p, v in _POSITION_OVR_SET.findall(html)})
+
+
+def parse_boost_rows(html: str) -> list[tuple[int, int, int, int]]:
+    """강화 도우미 재료 목록 → (spid, 강화, OVR, 값). OVR 은 첫 번째(주) 포지션 값(게이지가 이 값을 따른다 — 실측). 한 줄이 깨지면 그 줄만 버린다."""
+    rows = []
+    for m in _BOOST_ROW.finditer(html):
+        block = m.group(1)
+        sp, strong, price = _BOOST_SPID.search(block), _BOOST_STRONG.search(block), _BOOST_PRICE.search(block)
+        ovrs = _BOOST_OVR.findall(block)
+        if sp and strong and price and ovrs:
+            rows.append((int(sp.group(1)), int(strong.group(1)), int(ovrs[0]),
+                         int(price.group(1).replace(",", ""))))
+    return rows
+
+
+def fetch_boost_rows(sp_id: int, ovr: int, timeout: int = 25) -> list[tuple[int, int, int, int]]:
+    """그 OVR 부근 재료 목록(값 낮은 순 · 최대 200줄 · TOTS/TOTY 제외 — 도우미 기본값). 대상은 요청에 필요할 뿐 값에 영향이 없다."""
+    if not config.WEB_DATA:
+        raise PlayerInfoError(config.WEB_DATA_OFF_MSG, "off")
+    try:
+        res = ranker.web_get(_session, BOOST_LIST_URL, method="post", timeout=timeout, headers=_BOOST_HEADERS, data={
+            "strPlayerName": "", "strOrderby": "n8PlayerBp", "n4OvrMin": ovr, "IsSearchNonType": 1,
+            "n1StrongMin": 1, "n1StrongMax": BOOST_STRONG_MAX, "n8SpId": sp_id, "n1Strong": 1, "n4PageNo": 1})
+    except requests.RequestException as e:
+        raise PlayerInfoError(f"강화 재료 조회 실패: {e}") from e
+    html = _checked(res, "강화 재료 조회")
+    if _BOOST_MARK not in html:
+        raise PlayerInfoError("강화 재료 페이지 형식이 바뀌었습니다.", "format")
+    return parse_boost_rows(html)
+
+
+def web_boost_cal(sp_id: int, grade: int, materials: list[tuple[int, int]], timeout: int = 15) -> float | None:
+    """넥슨이 계산한 게이지 % — 터미널 점검(check_api)이 규칙표와 대조할 때만 쓴다. materials = [(spid, 강화)]."""
+    if not config.WEB_DATA:
+        raise PlayerInfoError(config.WEB_DATA_OFF_MSG, "off")
+    info = "," + "".join(f"{sp}|{strong}," for sp, strong in materials)
+    try:
+        res = ranker.web_get(_session, BOOST_CAL_URL, method="post", timeout=timeout, headers=_BOOST_HEADERS,
+                             data={"strCalinfo": info, "n8SpId": sp_id, "n1Strong": grade, "n4BoostPer": 0})
+    except requests.RequestException as e:
+        raise PlayerInfoError(f"강화 게이지 조회 실패: {e}") from e
+    m = _BOOST_CAL.search(_checked(res, "강화 게이지 조회"))
+    return float(m.group(1)) if m else None
 
 
 def fetch_player_info(sp_id: int, timeout: int = 10) -> PlayerInfo:

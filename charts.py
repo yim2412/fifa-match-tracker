@@ -1046,6 +1046,95 @@ class HistogramChart(_Chart):
             p.drawText(QRectF(x0, bottom + 4, lw, fm.height()), Qt.AlignmentFlag.AlignCenter, f"{b:,.0f}")
 
 
+def _nice_step(span: float, cells: int) -> float:
+    """눈금 간격 — 1·2·5 × 10^k 중 span/cells 이상인 가장 작은 값."""
+    raw = max(span / cells, 1e-9)
+    mag = 10 ** math.floor(math.log10(raw))
+    return next(m * mag for m in (1, 2, 5, 10) if m * mag >= raw)
+
+
+class BudgetCurveChart(_Chart):
+    """강화 비용(83) — 가로 금액 · 세로 "이 금액 안에 붙을 확률". 세로선은 고른 기준·예산.
+    금액 글자는 쓰는 쪽이 fmt 로 준다(억·만 표기는 화면 규칙)."""
+
+    def __init__(self):
+        super().__init__(min_h=220)
+        self._points: list[tuple[int, float]] = []
+        self._marks: list[tuple[float, str, str, bool]] = []   # (금액, 글자, 색, 점선)
+        self._fmt = str
+        self.mark_rects: list[QRectF] = []   # 테스트가 글자 겹침을 잰다
+
+    def set_data(self, points, marks=(), fmt=str) -> None:
+        self._points, self._marks, self._fmt = list(points), list(marks), fmt
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hits = []
+        self.mark_rects = []
+        if not self._points:
+            self._empty(p, "기록 없음")
+            return
+        small = _small_font(self.font())
+        fm = QFontMetrics(small)
+        p.setFont(small)
+        w, h = self.width(), self.height()
+        mt, mb, ml, mr = fm.height() * 2 + 8, fm.height() + 8, fm.horizontalAdvance("100%") + 8, 12
+        bottom, plot_h = h - mb, max(h - mb - mt, 1)
+        # 예산이 곡선 끝보다 크면 축을 그만큼 늘이지 않는다 — 세로선은 곡선 범위 안일 때만 그린다
+        hi = float(self._points[-1][0]) or 1.0
+
+        def xat(v: float) -> float:
+            return ml + (w - ml - mr) * v / hi
+
+        def yat(pct: float) -> float:
+            return bottom - plot_h * pct / 100
+
+        for pct in (0, 25, 50, 75, 100):
+            p.setPen(QPen(QColor(T.CHART_AXIS if pct == 0 else T.CHART_GRID), 1))
+            p.drawLine(QPointF(ml, yat(pct)), QPointF(w - mr, yat(pct)))
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(0, yat(pct) - fm.height() / 2, ml - 4, fm.height()),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{pct}%")
+        step = _nice_step(hi, 4)
+        tick = step
+        while tick <= hi:
+            text = self._fmt(tick)
+            lw = fm.horizontalAdvance(text) + 4
+            p.drawText(QRectF(min(max(xat(tick) - lw / 2, 0), w - lw), bottom + 4, lw, fm.height()),
+                       Qt.AlignmentFlag.AlignCenter, text)
+            tick += step
+        pts = [QPointF(xat(c), yat(pct)) for c, pct in self._points]
+        area = QPolygonF([QPointF(pts[0].x(), bottom), *pts, QPointF(pts[-1].x(), bottom)])
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(_color(T.CHART_LINE, 0.10))
+        p.drawPolygon(area)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.setPen(QPen(QColor(T.CHART_LINE), LINE_W))
+        p.drawPolyline(QPolygonF(pts))
+        for k, (v, text, col, dashed) in enumerate(self._marks):
+            if not 0 <= v <= hi:
+                continue
+            x = xat(v)
+            pen = QPen(QColor(col), LINE_W)
+            if dashed:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            p.setPen(pen)
+            p.drawLine(QPointF(x, mt - 2), QPointF(x, bottom))
+            tw = fm.horizontalAdvance(text) + 4
+            rect = QRectF(min(max(x - tw / 2, 0), w - tw), k % 2 * (fm.height() + 2), tw, fm.height())
+            self.mark_rects.append(rect)
+            p.setPen(QColor(T.TEXT))
+            p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        # 툴팁 — 점 사이 가운데를 경계로 세로 띠
+        for i, (c, pct) in enumerate(self._points):
+            left = (pts[i - 1].x() + pts[i].x()) / 2 if i else ml
+            right = (pts[i].x() + pts[i + 1].x()) / 2 if i + 1 < len(pts) else w - mr
+            if right > left:
+                self._hits.append((QRectF(left, mt, right - left, plot_h), f"{self._fmt(c)} 안쪽 · {pct:.0f}% 확률"))
+
+
 class ResultDots(_Chart):
     """최근 경기 결과 점 — 오래된 것 → 최신. 색만으로 구분하지 않게 점 안에 승/무/패 글자.
 

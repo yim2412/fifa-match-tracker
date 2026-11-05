@@ -29,12 +29,13 @@ if os.path.isdir("C:/Windows/Fonts"):
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-from PySide6.QtCore import QEvent, QRectF, QThread, QTimer, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QPointF, QRectF, QThread, QTimer, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
 
 import app_main  # noqa: E402
+import boostcollect  # noqa: E402
 import config  # noqa: E402
 import core_api as core  # noqa: E402
 import crashlog  # noqa: E402
@@ -1156,7 +1157,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 40, len(tables)   # 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 42, len(tables)   # 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -3845,6 +3846,8 @@ def _web_calls():
         ("season cut", lambda: ranker.fetch_season_cut(90, 200), ranker.RankerError),
         ("playerinfo", lambda: playerinfo.fetch_player_info(1), playerinfo.PlayerInfoError),
         ("ability", lambda: playerinfo.fetch_player_ability(1), playerinfo.PlayerInfoError),
+        ("boost rows", lambda: playerinfo.fetch_boost_rows(1, 120), playerinfo.PlayerInfoError),
+        ("boost cal", lambda: playerinfo.web_boost_cal(1, 5, [(2, 1)]), playerinfo.PlayerInfoError),
         ("seasons", lambda: sn.fetch_seasons(), sn.SeasonError),
         ("teamcolor list", lambda: teamcolor.fetch_list(), teamcolor.TeamColorError),
         ("teamcolor detail", lambda: teamcolor.fetch_detail(1005), teamcolor.TeamColorError),
@@ -10673,6 +10676,216 @@ def test_backfill_worker_fixes_squad_days_and_retries_when_stopped():
         _win._backfill_timer.stop()
         _win._backfill_worker = keep
         _win._backfill_left = None
+
+
+def _enhance_env(sp: int):
+    """강화 비용 로더를 가짜 넥슨으로 그 자리에서 돌린다 — 스모크는 QThread.start 를 막는다."""
+    info = playerinfo.PlayerInfo(sp_id=sp, name="테스트강화", ovr=115,
+                                 prices={g: f"{g * 1_000_000:,} BP" for g in range(1, 14)})
+    keep = (playerinfo.fetch_player_info, boostcollect.material_prices, app_main.EnhanceLoader.start, _win._names)
+
+    def restore():
+        playerinfo.fetch_player_info, boostcollect.material_prices, app_main.EnhanceLoader.start, _win._names = keep
+    playerinfo.fetch_player_info = lambda _sp, **k: info
+    boostcollect.material_prices = lambda *a, **k: {o: 1000 for o in range(100, 180)}
+    app_main.EnhanceLoader.start = lambda self: self.run()
+    _win._names = {sp: "테스트강화"}
+    return restore
+
+
+def test_enhance_page_shows_result():
+    """83 — 이름 → 카드 → [계산] → 맨 위 금액·글·금액 구간·그래프·단계 표. 기본값은 1강 → 8강 + 전부 보호."""
+    sp = 812345678
+    restore = _enhance_env(sp)
+    try:
+        _win._go_page("강화 비용")
+        assert _win.cb_enh_start.currentData() == 1 and _win.cb_enh_target.currentData() == 8
+        assert _win.cb_enh_protect.currentData() == 2, "기본값 = 실패할 수 있는 구간 전부 보호(사용자 2026-11-05)"
+        assert _win.cb_enh_q.currentData() == 80, "맨 위 기준은 80%(사용자 2026-11-05)"
+        assert not _win.enh_result_box.isVisibleTo(_win), "계산 전에는 빈 칸을 안 보여 준다"
+        _win.ed_enh_name.setText("테스트")
+        assert _win.cb_enh_card.currentData() == sp
+        _win.btn_enh_calc.click()
+        assert _win.enh_result_box.isVisibleTo(_win)
+        assert _win.tbl_enhance.rowCount() == 7 and _win.tbl_enhance.isVisibleTo(_win)
+        assert _win.tbl_enhance.item(0, 0).text() == "1강 → 2강"
+        assert _win.tbl_enhance.item(0, 3).text() == "-", "1강 도전에는 보호비가 없다"
+        assert _win.tbl_enhance.item(1, 3).text() == "80만", "2강 200만 × 40%"
+        assert _win.tbl_enhance.item(6, 5).text() == "14.3", "7강 도전 1/7%"
+        est = _win._enh_shown[1]
+        assert _win.tbl_enhance.item(6, 7).text() == f"{100 * est.steps[6].mean_cost / est.mean_cost:.0f}%", "비중 = 그 강화 평균 ÷ 전체 평균"
+        head = _win.lb_enh_head.text()
+        assert "테스트강화" in head and "100% 보호(시세의 40%)" in head and "80% 확률로 붙습니다" in head, head
+        assert app_main.enhance_won(est.budget_at(80)) in head, head
+        text = _win.lb_enh_result.text()
+        assert "평균 31회" in text and "% 확률)" in text, text
+        assert "90%를 넘긴 10%는" in text and "30~95%" in text, text
+        assert "보호 안 하면" in text and "4,335회" in text, "켠 값·끈 값을 늘 같이 — " + text
+        assert [_win.tbl_enh_budget.item(r, 0).text() for r in range(_win.tbl_enh_budget.rowCount())] == [
+            "50%", "75%", "80%", "90%", "95%", "99%"]
+        assert _win.chart_enh_budget.isVisibleTo(_win) and _win.chart_enh_budget._points == list(est.curve)
+        assert [m[0] for m in _win.chart_enh_budget._marks] == [est.budget_at(80)], "고른 기준에 세로선"
+        # 기준을 바꾸면 요청 없이 맨 위·세로선이 따라온다
+        calls = []
+        keep_fetch = playerinfo.fetch_player_info
+        playerinfo.fetch_player_info = lambda *a, **k: calls.append(a)
+        _win.cb_enh_q.setCurrentIndex(_win.cb_enh_q.findData(95))
+        assert "95% 확률로 붙습니다" in _win.lb_enh_head.text() and app_main.enhance_won(est.budget_at(95)) in _win.lb_enh_head.text()
+        assert [m[0] for m in _win.chart_enh_budget._marks] == [est.budget_at(95)]
+        # 예산 칸 — 글·세로선 · 못 읽으면 말한다 · 끝을 넘겨도 100% 라고 안 한다
+        _win.ed_enh_budget.setText(f"{est.budget_at(50)}")
+        assert "50% 확률로 붙습니다" in _win.lb_enh_chance.text(), _win.lb_enh_chance.text()
+        assert len(_win.chart_enh_budget._marks) == 2 and _win.chart_enh_budget._marks[1][0] == est.budget_at(50)
+        _win.ed_enh_budget.setText("1조")
+        assert "99% 넘게" in _win.lb_enh_chance.text()
+        _win.ed_enh_budget.setText("없음")
+        assert _win.lb_enh_chance.text() == "금액을 읽지 못했습니다" and len(_win.chart_enh_budget._marks) == 1
+        _win.ed_enh_budget.setText("")
+        assert _win.lb_enh_chance.text() == ""
+        assert not calls, "기준·예산은 넥슨에 묻지 않는다"
+        playerinfo.fetch_player_info = keep_fetch
+        _win.cb_enh_q.setCurrentIndex(_win.cb_enh_q.findData(80))
+        # 안 함 → 자리가 바뀌고 비율 고르기가 잠긴다 · 시도가 많아도 흉내가 돌면 구간이 나온다
+        _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(None))
+        assert not _win.cb_enh_rate.isEnabled()
+        _win.btn_enh_calc.click()
+        head, text = _win.lb_enh_head.text(), _win.lb_enh_result.text()
+        assert "보호 없음" in head and "평균 4,335회" in text and "100% 보호하면" in text and "평균 31회" in text, text
+        assert "시세의" not in text and "30~95%" not in text, text
+        assert 0 < _win.tbl_enh_budget.rowCount() < 6, "흉내가 적으면 99% 줄을 안 낸다"
+        # 끝까지 못 돌리는 구간 — 평균만, 구간·그래프는 숨긴다
+        _win.cb_enh_start.setCurrentIndex(_win.cb_enh_start.findData(8))
+        _win.cb_enh_target.setCurrentIndex(_win.cb_enh_target.findData(10))
+        _win.btn_enh_calc.click()
+        assert "확률별 금액은 낼 수 없습니다" in _win.lb_enh_head.text(), _win.lb_enh_head.text()
+        assert not _win.chart_enh_budget.isVisibleTo(_win) and not _win.enh_budget_panel.isVisibleTo(_win)
+        assert not _win.cb_enh_q.isVisibleTo(_win)
+        # 일부 구간만 보호 — 어디부터인지 적는다 · 그 위만 보호비
+        _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(8))
+        _win.cb_enh_rate.setCurrentIndex(_win.cb_enh_rate.findData(30))
+        assert _win.cb_enh_rate.isEnabled()
+        _win.cb_enh_start.setCurrentIndex(_win.cb_enh_start.findData(1))
+        _win.btn_enh_calc.click()
+        assert "8강 도전부터" in _win.lb_enh_head.text(), _win.lb_enh_head.text()
+        assert _win.tbl_enhance.rowCount() == 9
+        assert _win.tbl_enhance.item(6, 3).text() == "-" and _win.tbl_enhance.item(7, 3).text() == "240만", "8강 800만 × 30%"
+        assert _win.chart_enh_budget.isVisibleTo(_win), "앞 계산이 숨긴 칸을 되돌린다"
+        # 전부 보호 + 비율 고름
+        _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(2))
+        _win.cb_enh_start.setCurrentIndex(_win.cb_enh_start.findData(8))
+        _win.btn_enh_calc.click()
+        assert _win.tbl_enhance.rowCount() == 2
+        assert "시세의 30%" in _win.lb_enh_head.text() and "45회" in _win.lb_enh_result.text()
+        _check_elisions([_win.tbl_enhance, _win.tbl_enh_budget])
+    finally:
+        restore()
+        _win.ed_enh_budget.setText("")
+        _win.cb_enh_q.setCurrentIndex(_win.cb_enh_q.findData(80))
+        _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(2))
+        _win.cb_enh_rate.setCurrentIndex(0)
+        _win.cb_enh_start.setCurrentIndex(0)
+        _win.cb_enh_target.setCurrentIndex(_win.cb_enh_target.findData(config.ENHANCE_DEFAULT_TARGET))
+        _win.ed_enh_name.setText("")
+        _win._go_page("대시보드")
+
+
+def test_enhance_page_refuses_and_reports_failure():
+    sp = 812345679
+    restore = _enhance_env(sp)
+    calls = []
+
+    def no_web(*a, **k):
+        calls.append(a)
+        raise playerinfo.PlayerInfoError(config.WEB_DATA_OFF_MSG, "off")
+    try:
+        _win._go_page("강화 비용")
+        _win.ed_enh_name.setText("")
+        _win.btn_enh_calc.click()
+        assert "2글자" in _win.lb_enh_status.text() and not calls
+        _win.ed_enh_name.setText("테스트")
+        _win.cb_enh_start.setCurrentIndex(_win.cb_enh_start.findData(9))
+        _win.btn_enh_calc.click()
+        assert "높아야" in _win.lb_enh_status.text(), "목표가 낮으면 요청을 보내지 않는다"
+        _win.cb_enh_start.setCurrentIndex(0)
+        _win.btn_enh_calc.click()
+        assert _win.enh_result_box.isVisibleTo(_win), "아래 단언의 전제 — 앞 결과가 떠 있다"
+        playerinfo.fetch_player_info = no_web
+        _win.btn_enh_calc.click()
+        assert calls and _win.lb_enh_status.text() == config.WEB_DATA_OFF_MSG
+        assert not _win.enh_result_box.isVisibleTo(_win), "실패한 계산이 앞 결과를 남기면 안 된다"
+        assert not _win.tbl_enhance.isVisibleTo(_win)
+    finally:
+        restore()
+        _win.cb_enh_start.setCurrentIndex(0)
+        _win.ed_enh_name.setText("")
+        _win._go_page("대시보드")
+
+
+def test_enhance_money_keeps_detail_above_100m():
+    assert app_main.enhance_won(199_000_000.4) == "1억 9,900만", "short_bp 면 1억으로 낮게 읽힌다"
+    assert app_main.enhance_won(50_000) == "5만"
+    assert app_main.enhance_won(999) == "999"
+
+
+def test_enhance_summary_verdict():
+    import enhance
+    mats = {o: 1000 for o in range(100, 180)}
+    prices = {g: 1_000_000 * g for g in range(1, 14)}
+    cheap = enhance.estimate(115, None, 1, 8, {**prices, 8: 900_000_000}, mats)
+    buy = enhance.estimate(115, None, 1, 8, {**prices, 8: 1_000}, mats)
+    assert "강화하는 쪽이" in app_main.enhance_summary_html(cheap)
+    assert "바로 사는 쪽이" in app_main.enhance_summary_html(buy)
+    # 보호 켠/끈 한 줄 — 어느 쪽이 싼지 양쪽 다 · 같은 값이면(보호가 안 걸리는 구간) 안 나온다
+    cheap_cards = {g: 1000 for g in range(1, 14)}
+    off = enhance.estimate(115, None, 1, 8, cheap_cards, mats, None, simulate=False)
+    on = enhance.estimate(115, None, 1, 8, cheap_cards, mats, simulate=False)
+    assert "보호하는 쪽이" in app_main.enhance_compare_line(on, off), "시세가 싸면 보호비보다 떨어져서 드는 재료가 크다"
+    pricey = enhance.estimate(115, None, 7, 8, {7: 10 ** 12, 8: 10 ** 12}, {o: 1 for o in mats}, simulate=False)
+    plain = enhance.estimate(115, None, 7, 8, {7: 10 ** 12, 8: 10 ** 12}, {o: 1 for o in mats}, None, simulate=False)
+    assert "보호 안 하는 쪽이" in app_main.enhance_compare_line(pricey, plain)
+    low_a = enhance.estimate(115, None, 1, 2, prices, mats, simulate=False)
+    low_b = enhance.estimate(115, None, 1, 2, prices, mats, None, simulate=False)
+    assert app_main.enhance_compare_line(low_a, low_b) == "", "1강 도전엔 보호가 없다 — 같은 값을 두 번 안 적는다"
+    assert app_main.enhance_compare_line(on, None) == ""
+    assert "<b>&lt;b&gt;</b>" in app_main.enhance_head_html("<b>", cheap, 80), "선수 이름은 글자 그대로"
+    # 시도가 너무 많으면 넘긴 나머지 줄이 없고, 시세를 모르면 견주지 않는다
+    many = enhance.estimate(115, None, 8, 10, prices, mats, None)
+    assert "넘긴" not in app_main.enhance_summary_html(many) and "% 확률" not in app_main.enhance_summary_html(many)
+    no_price = enhance.estimate(115, None, 1, 5, {}, mats, None)
+    assert "싸다" not in app_main.enhance_summary_html(no_price)
+    # 어느 기준이 표본 밖이면 숫자를 지어내지 않는다
+    few = replace(cheap, costs=tuple(range(1, 501)))
+    assert "99% 금액은 낼 수 없습니다" in app_main.enhance_head_html("가", few, 99)
+    assert app_main.enhance_chance_text(0.004) == "1% 미만" and app_main.enhance_chance_text(0.5) == "50%"
+    assert app_main.enhance_share(1, 1000) == "1% 미만" and app_main.enhance_share(0, 1000) == "0%" and app_main.enhance_share(1, 0) == "0%"
+    assert app_main.enhance_count(3.84) == "3.8" and app_main.enhance_count(1234.4) == "1,234"
+
+
+def test_budget_curve_chart_paints():
+    """83 — 빈 값은 빈 표시 · 곡선 안 세로선만 · 글자 칸이 창 안."""
+    chart = charts.BudgetCurveChart()
+    chart.resize(600, 260)
+    chart.set_data([], [], str)
+    chart.grab()
+    assert chart.mark_rects == [] and chart._hits == []
+    pts = [(100 * i, float(i)) for i in range(1, 100)]
+    chart.set_data(pts, [(5000, "기준", T.TEXT_DIM, True), (9_000_000, "밖", T.CHART_RANK, False)], lambda v: f"{v:,.0f}")
+    chart.grab()
+    assert len(chart.mark_rects) == 1, "곡선 끝을 넘긴 예산은 그리지 않는다(축이 늘어나 곡선이 눌린다)"
+    assert all(r.left() >= 0 and r.right() <= chart.width() for r in chart.mark_rects)
+    assert len(chart._hits) == len(pts), "점마다 툴팁"
+    assert "5,000" in next(t for a, t in chart._hits if a.contains(QPointF(chart._hits[49][0].center())))
+    assert charts._nice_step(9900, 4) == 5000 and charts._nice_step(1000, 4) == 500 and charts._nice_step(400, 4) == 100
+
+
+def test_enhance_late_result_is_dropped():
+    _win._enh_req = 7
+    _win.lb_enh_result.setText("그대로")
+    _win._on_enhance_failed(6, "늦은 실패")
+    _win._on_enhance_progress(6, 1, 2)
+    assert "늦은" not in _win.lb_enh_status.text() and "1/2" not in _win.lb_enh_status.text()
+    _win._on_enhance_loaded(6, ("늦은", None, None))
+    assert _win.lb_enh_result.text() == "그대로"
 
 
 def test_card_owner_find():
