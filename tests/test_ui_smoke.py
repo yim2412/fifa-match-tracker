@@ -10682,10 +10682,11 @@ def _enhance_env(sp: int):
     """강화 비용 로더를 가짜 넥슨으로 그 자리에서 돌린다 — 스모크는 QThread.start 를 막는다."""
     info = playerinfo.PlayerInfo(sp_id=sp, name="테스트강화", ovr=115,
                                  prices={g: f"{g * 1_000_000:,} BP" for g in range(1, 14)})
-    keep = (playerinfo.fetch_player_info, boostcollect.material_prices, app_main.EnhanceLoader.start, _win._names)
+    keep = (playerinfo.fetch_player_info, boostcollect.material_prices, app_main.EnhanceLoader.start, _win._names, images.fetch_icon)
 
     def restore():
-        playerinfo.fetch_player_info, boostcollect.material_prices, app_main.EnhanceLoader.start, _win._names = keep
+        playerinfo.fetch_player_info, boostcollect.material_prices, app_main.EnhanceLoader.start, _win._names, images.fetch_icon = keep
+    images.fetch_icon = lambda *a, **k: None
     playerinfo.fetch_player_info = lambda _sp, **k: info
     boostcollect.material_prices = lambda *a, **k: {o: 1000 for o in range(100, 180)}
     app_main.EnhanceLoader.start = lambda self: self.run()
@@ -10709,10 +10710,18 @@ def test_enhance_page_shows_result():
         assert _win.enh_result_box.isVisibleTo(_win)
         assert _win.tbl_enhance.rowCount() == 7 and _win.tbl_enhance.isVisibleTo(_win)
         assert _win.tbl_enhance.item(0, 0).text() == "1강 → 2강"
-        assert _win.tbl_enhance.item(0, 3).text() == "-", "1강 도전에는 보호비가 없다"
-        assert _win.tbl_enhance.item(1, 3).text() == "80만", "2강 200만 × 40%"
-        assert _win.tbl_enhance.item(6, 5).text() == "14.3", "7강 도전 1/7%"
+        assert _win.tbl_enhance.horizontalHeaderItem(0).text() == "강화 단계"
+        assert _win.tbl_enhance.item(0, 3).text() == "1,000", "재료비 칸"
+        assert _win.tbl_enhance.item(0, 4).text() == "-", "1강 도전에는 보호비가 없다"
+        assert _win.tbl_enhance.item(1, 4).text() == "80만", "2강 200만 × 40%"
+        assert _win.tbl_enhance.item(1, 5).text() == "80만 1,000", "1회 비용 = 재료비 + 보호비"
+        assert isinstance(_win.tbl_enhance.itemDelegateForColumn(0), app_main.GradeStepDelegate), "단계 칸은 배지"
         est = _win._enh_shown[1]
+        # 표를 줄이지 않고 페이지가 스크롤한다 — 끝 줄이 표 안 스크롤에 숨었다(실제 창 1920×1080)
+        for tb in (_win.tbl_enhance, _win.tbl_enh_budget):
+            assert tb.minimumSizeHint().height() == tb._rows_height(), "줄 전부가 최소 높이"
+            _app.processEvents()
+            assert not tb.verticalScrollBar().isVisible(), "표 안 세로 막대가 없다"
         assert _win.tbl_enhance.item(6, 7).text() == f"{100 * est.steps[6].mean_cost / est.mean_cost:.0f}%", "비중 = 그 강화 평균 ÷ 전체 평균"
         head = _win.lb_enh_head.text()
         assert "테스트강화" in head and "100% 보호(시세의 40%)" in head and "80% 확률로 붙습니다" in head, head
@@ -10768,7 +10777,7 @@ def test_enhance_page_shows_result():
         _win.btn_enh_calc.click()
         assert "8강 도전부터" in _win.lb_enh_head.text(), _win.lb_enh_head.text()
         assert _win.tbl_enhance.rowCount() == 9
-        assert _win.tbl_enhance.item(6, 3).text() == "-" and _win.tbl_enhance.item(7, 3).text() == "240만", "8강 800만 × 30%"
+        assert _win.tbl_enhance.item(6, 4).text() == "-" and _win.tbl_enhance.item(7, 4).text() == "240만", "8강 800만 × 30%"
         assert _win.chart_enh_budget.isVisibleTo(_win), "앞 계산이 숨긴 칸을 되돌린다"
         # 전부 보호 + 비율 고름
         _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(2))
@@ -10777,6 +10786,30 @@ def test_enhance_page_shows_result():
         assert _win.tbl_enhance.rowCount() == 2
         assert "시세의 30%" in _win.lb_enh_head.text() and "45회" in _win.lb_enh_result.text()
         _check_elisions([_win.tbl_enhance, _win.tbl_enh_budget])
+        # 비싼 카드 — 1의 자리까지 적으면 칸이 가장 길다. 그래도 안 잘려야 한다
+        info = playerinfo.PlayerInfo(sp_id=sp, name="테스트강화", ovr=115,
+                                     prices={g: f"{g * 7_123_456_789:,} BP" for g in range(1, 14)})
+        playerinfo.fetch_player_info = lambda _sp, **k: info
+        boostcollect.material_prices = lambda *a, **k: {o: 123_456_789 for o in range(100, 180)}
+        _win.cb_enh_start.setCurrentIndex(0)
+        _win.cb_enh_target.setCurrentIndex(_win.cb_enh_target.findData(13))
+        _win.cb_enh_rate.setCurrentIndex(0)
+        _win.btn_enh_calc.click()
+        assert _win.tbl_enhance.rowCount() == 12
+        _check_elisions([_win.tbl_enhance, _win.tbl_enh_budget])
+        # 받은 넥슨 그림이 단계 칸까지 온다
+        delegate = _win.tbl_enhance.itemDelegateForColumn(0)
+        assert delegate.holo.isNull(), "아래 단언의 전제 — 아직 못 받았다"
+        with tempfile.TemporaryDirectory() as folder:
+            png = pathlib.Path(folder) / "holo.png"
+            pm = QPixmap(4, 4)
+            pm.fill(QColor(0, 200, 0))
+            assert pm.save(str(png))
+            asked = []
+            images.fetch_icon = lambda url, *a, **k: (asked.append(url), png)[1]
+            _win.btn_enh_calc.click()
+            assert asked == [images.GRADE_HOLO_URL] and not delegate.holo.isNull()
+        delegate.holo = QPixmap()
     finally:
         restore()
         _win.ed_enh_budget.setText("")
@@ -10825,6 +10858,10 @@ def test_enhance_money_keeps_detail_above_100m():
     assert app_main.enhance_won(199_000_000.4) == "1억 9,900만", "short_bp 면 1억으로 낮게 읽힌다"
     assert app_main.enhance_won(50_000) == "5만"
     assert app_main.enhance_won(999) == "999"
+    assert app_main.enhance_won(0) == "0", "보호비 없는 글이 NA 로 나오면 안 된다"
+    assert app_main.enhance_won(39_210) == "3만 9,210", "1의 자리까지(사용자 2026-11-06)"
+    assert app_main.enhance_won(1_234_567_891) == "12억 3,456만 7,891"
+    assert app_main.enhance_won(200_000_005) == "2억 5"
 
 
 def test_enhance_summary_verdict():
@@ -10833,8 +10870,14 @@ def test_enhance_summary_verdict():
     prices = {g: 1_000_000 * g for g in range(1, 14)}
     cheap = enhance.estimate(115, None, 1, 8, {**prices, 8: 900_000_000}, mats)
     buy = enhance.estimate(115, None, 1, 8, {**prices, 8: 1_000}, mats)
-    assert "강화하는 쪽이" in app_main.enhance_summary_html(cheap)
-    assert "바로 사는 쪽이" in app_main.enhance_summary_html(buy)
+    # 산 값과 견주되 판정은 안 한다 — 앱은 매물이 있는지 모른다(사용자 2026-11-06)
+    for est in (cheap, buy):
+        text = app_main.enhance_summary_html(est)
+        assert "참고: 8강 시세" in text and "싸다" not in text, text
+    # 표 한 줄 — 재료비 + 보호비 = 1회 비용이 글자로도 맞는다
+    odd = enhance.estimate(115, None, 2, 3, {2: 12_345_678, 3: 1}, {o: 1_357 for o in mats}, simulate=False)
+    row = app_main.enhance_row(odd.steps[0], odd.mean_cost)
+    assert [enhance.parse_money(row[i]) for i in (3, 4, 5)] == [1_357, 4_938_271, 1_357 + 4_938_271], row
     # 보호 켠/끈 한 줄 — 어느 쪽이 싼지 양쪽 다 · 같은 값이면(보호가 안 걸리는 구간) 안 나온다
     cheap_cards = {g: 1000 for g in range(1, 14)}
     off = enhance.estimate(115, None, 1, 8, cheap_cards, mats, None, simulate=False)
@@ -10852,13 +10895,61 @@ def test_enhance_summary_verdict():
     many = enhance.estimate(115, None, 8, 10, prices, mats, None)
     assert "넘긴" not in app_main.enhance_summary_html(many) and "% 확률" not in app_main.enhance_summary_html(many)
     no_price = enhance.estimate(115, None, 1, 5, {}, mats, None)
-    assert "싸다" not in app_main.enhance_summary_html(no_price)
+    assert "참고" not in app_main.enhance_summary_html(no_price)
     # 어느 기준이 표본 밖이면 숫자를 지어내지 않는다
     few = replace(cheap, costs=tuple(range(1, 501)))
     assert "99% 금액은 낼 수 없습니다" in app_main.enhance_head_html("가", few, 99)
     assert app_main.enhance_chance_text(0.004) == "1% 미만" and app_main.enhance_chance_text(0.5) == "50%"
     assert app_main.enhance_share(1, 1000) == "1% 미만" and app_main.enhance_share(0, 1000) == "0%" and app_main.enhance_share(1, 0) == "0%"
-    assert app_main.enhance_count(3.84) == "3.8" and app_main.enhance_count(1234.4) == "1,234"
+
+
+def test_grade_step_delegate_draws_badges():
+    """83 — 단계 칸은 번호 배지 둘. 공지 꼴 색 구간 · 못 읽는 글자는 글자 그대로 · 그리기 실패는 표를 안 죽인다."""
+    from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+    from widgets import GradeStepDelegate, grade_icon_style
+    assert GradeStepDelegate.grades_of("12강 → 13강") == (12, 13)
+    assert GradeStepDelegate.grades_of("합계") is None and GradeStepDelegate.grades_of(None) is None
+    # 넥슨 공지: 1 회색 · 2~4 브론즈 · 5~7 실버 · 8~10 골드 · 11~13 홀로그램(경계 양쪽을 잰다)
+    tier = {g: grade_icon_style(g)[0] for g in range(1, 14)}
+    groups = ((1,), (2, 3, 4), (5, 6, 7), (8, 9, 10), (11, 12, 13))
+    assert [len({tier[g] for g in grp}) for grp in groups] == [1] * 5
+    assert len({tier[grp[0]] for grp in groups}) == 5
+    t = QTableWidget(2, 1)
+    t.resize(300, 120)
+    t.setColumnWidth(0, 200)
+    dg = GradeStepDelegate(t)
+    t.setItemDelegateForColumn(0, dg)
+    t.setItem(0, 0, QTableWidgetItem("10강 → 11강"))
+    t.setItem(1, 0, QTableWidgetItem("합계"))
+    t.show()
+    _app.processEvents()
+    before = t.grab().toImage()
+    rect = t.visualItemRect(t.item(0, 0))
+    # 배지 바탕색이 칸에 실제로 찍힌다 — 왼쪽은 골드, 오른쪽은 홀로그램
+    cx = rect.center().x() + t.viewport().x()
+    cy = rect.center().y() + t.viewport().y()
+    gold = before.pixelColor(cx - 30, cy + 3)
+    assert gold.red() > 200 and gold.green() > 150 and gold.blue() < 150, gold.name()
+    holo = before.pixelColor(cx + 30, cy - 5)
+    assert holo.blue() > 150, holo.name()
+    # 넥슨 그림을 받으면 11강 이상 바탕을 그 그림으로 — 10강 쪽은 그대로
+    pm = QPixmap(8, 8)
+    pm.fill(QColor(0, 200, 0))
+    dg.holo = pm
+    after = t.grab().toImage()
+    assert after.pixelColor(cx + 30, cy - 5).green() > 150 and after.pixelColor(cx + 30, cy - 5).red() < 80, after.pixelColor(cx + 30, cy - 5).name()
+    assert after.pixelColor(cx - 30, cy + 3) == gold, "10강 배지는 그림을 안 쓴다"
+    dg.holo = QPixmap()
+    dg.set_holo(None)
+    assert dg.holo.isNull(), "못 받으면 그러데이션"
+    keep = dg._draw
+    dg._draw = lambda *a: 1 / 0
+    try:
+        t.grab()
+        assert dg.failed >= 1, "실패를 세고 글자로 넘어간다"
+    finally:
+        dg._draw = keep
+        t.close()
 
 
 def test_budget_curve_chart_paints():

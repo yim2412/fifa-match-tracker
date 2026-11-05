@@ -25,7 +25,7 @@ from datetime import date
 from typing import NamedTuple
 
 from PySide6.QtCore import QAbstractListModel, QCollator, QEvent, QLocale, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QApplication, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
@@ -772,11 +772,13 @@ class FitTableWidget(QTableWidget):
             self._rows_changed()   # 숨긴 줄(setRowHidden)은 신호가 없다 — 채운 뒤 여기서
 
     # ── 줄 수만큼의 높이(78 ③c) ────────────────────────────────────────
-    def set_fit_rows(self, on: bool = True) -> None:
+    def set_fit_rows(self, on: bool = True, keep_all: bool = False) -> None:
         """표 높이를 줄 수에 — 원하는 높이 = 머리글 + 줄 전부(그 이상은 안 커진다 · 남는 높이는 레이아웃의 다른 칸으로),
         최소 = 머리글 + config.TABLE_MIN_ROWS 줄(줄이 그보다 적으면 그 줄 수). 자리가 모자라면 그 사이에서 줄고 표 안이 스크롤된다.
-        이게 없으면 1줄짜리 표도 화면 끝까지 늘어 아래가 빈 상자였다(실제 창 1280×720 · FC 보상 222px)."""
+        이게 없으면 1줄짜리 표도 화면 끝까지 늘어 아래가 빈 상자였다(실제 창 1280×720 · FC 보상 222px).
+        keep_all: 자리가 모자라도 줄지 않고 페이지가 스크롤된다 — 끝 줄이 가장 중요한 표(강화 비용 — 비중이 큰 끝 단계가 표 안 스크롤에 숨었다)."""
         self._fit_rows = on
+        self._fit_keep_all = keep_all
         if on and not self._fit_rows_wired:
             self._fit_rows_wired = True
             m = self.model()
@@ -857,7 +859,7 @@ class FitTableWidget(QTableWidget):
     def minimumSizeHint(self) -> QSize:
         s = super().minimumSizeHint()
         if self._fit_rows:
-            s.setHeight(self._rows_height(config.TABLE_MIN_ROWS))
+            s.setHeight(self._rows_height(None if self._fit_keep_all else config.TABLE_MIN_ROWS))
         return s
 
     # ── 표 칸 그림(40단계) ──────────────────────────────────────────────
@@ -1723,6 +1725,97 @@ class TraitIconDelegate(RowBorderDelegate):
         painter.setPen(QColor(T.TEXT))
         painter.drawText(self.text_rect(option), Qt.AlignmentFlag.AlignCenter, text)
         painter.restore()
+
+
+def grade_icon_style(grade: int) -> tuple:
+    """강화 단계 → theme.GRADE_ICONS 한 줄(바탕, 글자, 위·왼쪽 테두리, 아래·오른쪽 테두리)."""
+    for lo, *style in T.GRADE_ICONS:
+        if grade >= lo:
+            return tuple(style)
+    return tuple(T.GRADE_ICONS[-1][1:])
+
+
+class GradeStepDelegate(RowBorderDelegate):
+    """강화 비용 '강화 단계' 칸 — "1강 → 2강" 글자를 넥슨 공지 꼴 번호 배지 둘과 화살표로 그린다.
+
+    글자는 칸에 그대로 둔다: 열 폭 계산·잘림 검사·툴팁이 글자를 읽고, 배지 둘 + 화살표는 그 폭 안에 든다.
+    읽을 수 없는 글자는 글자 그대로. 그리기 예외는 글자로 넘기고 한 번만 기록한다."""
+
+    PAD_X, GAP, ARROW_W = 5, 4, 8
+
+    HOLO_FROM = 11
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.failed = 0  # 테스트가 읽는다 — 기록은 첫 번째만
+        self.holo = QPixmap()   # 넥슨 11~13강 바탕 그림 — 받기 전·실패면 비어 있고 theme 그러데이션으로 그린다
+
+    def set_holo(self, path) -> None:
+        pm = QPixmap(str(path)) if path else QPixmap()
+        if not pm.isNull():
+            self.holo = pm
+
+    @staticmethod
+    def grades_of(text) -> tuple[int, int] | None:
+        m = re.fullmatch(r"(\d+)강 → (\d+)강", str(text or ""))
+        return (int(m.group(1)), int(m.group(2))) if m else None
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        if self.grades_of(index.data()) is not None:
+            option.text = ""
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        grades = self.grades_of(index.data())
+        if grades is None:
+            return
+        try:
+            self._draw(painter, option, grades)
+        except Exception as e:  # noqa: BLE001 — 칸 하나 그리기 실패로 표가 죽거나 로그가 불어나면 안 된다
+            self.failed += 1
+            if self.failed == 1:
+                import crashlog
+                crashlog.note("강화 단계 그리기", e)
+            painter.save()
+            painter.setPen(QColor(T.TEXT))
+            painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, str(index.data()))
+            painter.restore()
+
+    def _draw(self, painter, option, grades: tuple[int, int]) -> None:
+        fm = QFontMetrics(option.font)
+        bw, bh = fm.horizontalAdvance("13") + 2 * self.PAD_X, min(fm.height() + 2, option.rect.height() - 2)
+        total = 2 * bw + 2 * self.GAP + self.ARROW_W
+        x = option.rect.center().x() - total / 2 + 0.5
+        y = option.rect.center().y() - bh / 2 + 0.5
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._badge(painter, QRectF(x, y, bw, bh), grades[0], option.font)
+        ax, cy = x + bw + self.GAP, y + bh / 2
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(T.TEXT_DIM))
+        painter.drawPolygon(QPolygonF([QPointF(ax, cy - 1.5), QPointF(ax + 4, cy - 1.5), QPointF(ax + 4, cy - 4),
+                                       QPointF(ax + self.ARROW_W, cy), QPointF(ax + 4, cy + 4), QPointF(ax + 4, cy + 1.5), QPointF(ax, cy + 1.5)]))
+        self._badge(painter, QRectF(ax + self.ARROW_W + self.GAP, y, bw, bh), grades[1], option.font)
+        painter.restore()
+
+    def _badge(self, painter, rect: QRectF, grade: int, font) -> None:
+        stops, fg, light, dark = grade_icon_style(grade)
+        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        for i, col in enumerate(stops):
+            grad.setColorAt(i / (len(stops) - 1), QColor(col))
+        painter.setBrush(grad)
+        painter.setPen(QPen(QColor(dark), 1))
+        painter.drawRoundedRect(rect, 2, 2)
+        if grade >= self.HOLO_FROM and not self.holo.isNull():
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(rect.adjusted(1, 1, -1, -1), self.holo, QRectF(self.holo.rect()))
+        painter.setPen(QPen(QColor(light), 1))
+        painter.drawLine(QPointF(rect.left() + 1, rect.top()), QPointF(rect.right() - 1, rect.top()))
+        painter.drawLine(QPointF(rect.left(), rect.top() + 1), QPointF(rect.left(), rect.bottom() - 1))
+        painter.setFont(font)
+        painter.setPen(QColor(fg))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(grade))
 
 
 class GradeBadgeDelegate(RowBorderDelegate):

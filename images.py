@@ -151,6 +151,8 @@ def icon_url(kind: str, key, seasons: dict | None = None) -> str:
     return ""
 
 
+# 11~13강 칸 바탕 — 넥슨 웹 CSS `en_level11~13` 이 쓰는 그림 그대로(1~10강은 CSS 색이라 theme.GRADE_ICONS). 못 받으면 그러데이션으로 그린다
+GRADE_HOLO_URL = "https://ssl.nexon.com/s2/game/fc/online/obt/datacenter/bg_plt.png"
 # 세션 안 부정 캐시 — 403·404 를 다시 그릴 때마다 되묻지 않는다(성공·일시 실패는 넣지 않는다)
 _missing: set[str] = set()
 

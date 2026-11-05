@@ -81,7 +81,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, GradeStepDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
@@ -911,7 +911,8 @@ class EnhanceLoader(Worker):
         except (playerinfo.PlayerInfoError, core.EnhanceError) as e:
             self.failed.emit(self._req, str(e))
             return
-        self.loaded.emit(self._req, (info.name, est, alt))
+        holo = images.fetch_icon(images.GRADE_HOLO_URL, config.CACHE_DIR / config.ICON_CACHE_SUBDIR, "grade")   # 실패해도 예외 없음 — 그러데이션으로
+        self.loaded.emit(self._req, (info.name, est, alt, holo))
 
 
 class TradeLoader(Worker):
@@ -1777,14 +1778,9 @@ def enhance_row(step, total: float) -> list[str]:
     text = " + ".join(f"OVR {c.ovr} × {c.count}" for c in mats.cards)
     if mats.gauge < 100:
         text += f" (게이지 {mats.gauge:.0f}%)"
-    return [f"{step.grade}강 → {step.grade + 1}강", f"{step.success_pct:g}%", text,
-            short_bp(step.protect_cost) if step.protected else "-", short_bp(step.attempt_cost),
-            enhance_count(step.mean_attempts), enhance_won(step.mean_cost), enhance_share(step.mean_cost, total)]
-
-
-def enhance_count(v: float) -> str:
-    """평균 시도 수 — 적을 땐 소수 한 자리까지(3.8회와 4회는 다르다)."""
-    return f"{v:,.1f}" if v < 100 else f"{v:,.0f}"
+    return [f"{step.grade}강 → {step.grade + 1}강", f"{step.success_pct:g}%", text, enhance_won(mats.cost),
+            enhance_won(step.protect_cost) if step.protected else "-", enhance_won(step.attempt_cost),
+            enhance_won(step.mean_cost), enhance_share(step.mean_cost, total)]
 
 
 def enhance_share(part: float, total: float) -> str:
@@ -1850,18 +1846,22 @@ def enhance_summary_html(est, alt=None) -> str:
     if compare:
         lines.append(compare)
     if est.path_total is not None and est.target_price is not None:
-        gap = est.path_total - est.target_price
-        verdict = (f"바로 사는 쪽이 평균 {enhance_won(gap)} 싸다" if gap > 0 else
-                   f"강화하는 쪽이 평균 {enhance_won(-gap)} 싸다")
-        lines.append(f"{est.start}강 시세 + 강화 {enhance_won(est.path_total)} · {est.target}강 시세 {enhance_won(est.target_price)}"
-                     f" — <b>{verdict}</b>")
+        # 어느 쪽이 싸다고 판정하지 않는다 — 앱은 매물이 있는지 모르고, 매물이 없어서 강화하는 사람이 많다(사용자 2026-11-06)
+        lines.append(f"{est.start}강 시세 + 강화 {enhance_won(est.path_total)} · 참고: {est.target}강 시세 {enhance_won(est.target_price)}")
     return "<br>".join(lines)
 
 
 def enhance_won(v: float) -> str:
-    """결과 글의 금액 — short_bp 는 "1억 9천만" 을 "1억" 으로 내려 적어 안쪽 금액이 낮게 읽힌다. 1억부터는 만 단위까지."""
+    """강화 비용 금액 — 1의 자리까지(사용자 2026-11-06). "3만 9,210" · "1억 9,900만" · "1,000". 줄여 적으면 표에서 재료비 + 보호비 ≠ 1회 비용이 됐다."""
     n = round(v)
-    return won_text(n) if n >= 10 ** 8 else short_bp(n)
+    eok, rest = divmod(n, 10 ** 8)
+    man, one = divmod(rest, 10 ** 4)
+    parts = [f"{eok:,}억"] if eok else []
+    if man:
+        parts.append(f"{man:,}만")
+    if one or not parts:
+        parts.append(f"{one:,}")
+    return " ".join(parts)
 
 
 def won_text(v: int) -> str:
@@ -8899,7 +8899,7 @@ class MainWindow(QMainWindow):
         self._start_list_icons(combo)
 
     # ── 강화 비용(83) — 화면 ────────────────────────────────
-    ENHANCE_COLUMNS = ["도전", "성공 확률", "재료", "보호비", "1회 비용", "평균 시도", "평균 비용", "비중"]
+    ENHANCE_COLUMNS = ["강화 단계", "성공 확률", "재료", "재료비", "보호비", "1회 비용", "평균 비용", "비중"]
     ENHANCE_BUDGET_COLUMNS = ["붙을 확률", "금액"]
     ENHANCE_RATES = (95, 80, 60, 40, 30)   # 보호 비율 고르기 — 40% 구간은 넥슨이 최대 10%p 낮출 수 있다
     ENHANCE_BUDGET_W = 240                 # 금액 구간 칸 폭 — 나머지는 그래프가 쓴다
@@ -8908,8 +8908,6 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         row = QHBoxLayout()
-        lb = QLabel("선수")
-        lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.ed_enh_name = QLineEdit()
         self.ed_enh_name.setPlaceholderText("선수 이름(2글자부터)")
         self.ed_enh_name.setMaximumWidth(180)
@@ -8928,15 +8926,16 @@ class MainWindow(QMainWindow):
             self.cb_enh_protect.addItem(f"{g}강부터 보호", g)
         self.cb_enh_protect.setCurrentIndex(self.cb_enh_protect.findData(core.ENHANCE_PROTECT_FROM))
         self.cb_enh_rate = NoScrollComboBox()
-        self.cb_enh_rate.addItem("보호 비율 자동", None)
+        # 비율은 넥슨이 정한다 — 이 칸은 앱의 값이 틀렸을 때(선수별 조정 · 7강까지 추정) 고치는 자리다
+        self.cb_enh_rate.addItem("보호비 공지 기준", None)
         for pct in self.ENHANCE_RATES:
-            self.cb_enh_rate.addItem(f"시세의 {pct}%", pct)
+            self.cb_enh_rate.addItem(f"실제 비율 {pct}%로 계산", pct)
         self.cb_enh_protect.currentIndexChanged.connect(
             lambda _i: self.cb_enh_rate.setEnabled(self.cb_enh_protect.currentData() is not None))
         self.btn_enh_calc = QPushButton("계산")
         self.btn_enh_calc.setObjectName("primary")
         self.btn_enh_calc.clicked.connect(self._on_enhance_calc)
-        for wd in (lb, self.ed_enh_name, self.cb_enh_card, self.cb_enh_start, self.cb_enh_target,
+        for wd in (self.ed_enh_name, self.cb_enh_card, self.cb_enh_start, self.cb_enh_target,
                    self.cb_enh_protect, self.cb_enh_rate, self.btn_enh_calc):
             row.addWidget(wd)
         row.addStretch(1)
@@ -8975,6 +8974,7 @@ class MainWindow(QMainWindow):
         side.setContentsMargins(0, 0, 0, 0)
         self.tbl_enh_budget = self._make_table(self.ENHANCE_BUDGET_COLUMNS)
         self.tbl_enh_budget.setSortingEnabled(False)
+        self.tbl_enh_budget.set_fit_rows(keep_all=True)
         side.addWidget(self.tbl_enh_budget)
         self.ed_enh_budget = QLineEdit()
         self.ed_enh_budget.setPlaceholderText("예산(예: 3000만, 1.5억)")
@@ -8991,6 +8991,8 @@ class MainWindow(QMainWindow):
 
         self.tbl_enhance = self._make_table(self.ENHANCE_COLUMNS)
         self.tbl_enhance.setSortingEnabled(False)
+        self.tbl_enhance.set_fit_rows(keep_all=True)
+        self.tbl_enhance.setItemDelegateForColumn(0, GradeStepDelegate(self.tbl_enhance))
         box.addWidget(self.tbl_enhance)
         self.enh_result_box.hide()
         v.addWidget(self.enh_result_box)
@@ -9033,7 +9035,8 @@ class MainWindow(QMainWindow):
     def _on_enhance_loaded(self, req: int, payload) -> None:
         if req != self._enh_req:
             return
-        name, est, alt = payload
+        name, est, alt, holo = payload
+        self.tbl_enhance.itemDelegateForColumn(0).set_holo(holo)
         self._set_status(self.lb_enh_status, "보호 제외 클래스라 보호 없이 계산했습니다." if est.protect_excluded else "")
         self.lb_enh_result.setText(enhance_summary_html(est, alt))
         budgets = est.budgets
