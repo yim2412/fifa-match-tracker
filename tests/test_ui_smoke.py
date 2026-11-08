@@ -686,6 +686,19 @@ def test_statcard_counts_up_86():
             QApplication.processEvents()
             _time.sleep(0.01)
         assert card.value.text() == "61.0%", card.value.text()
+        # 다 돌았거나 멈춘 애니메이션은 지워진다 — 카드에 매달려 남으면 새로 그릴 때마다 쌓인다(셋을 돌렸다)
+        from PySide6.QtCore import QEvent as _QEvent, QVariantAnimation
+        QApplication.sendPostedEvents(None, _QEvent.Type.DeferredDelete.value)
+        assert not card.findChildren(QVariantAnimation), len(card.findChildren(QVariantAnimation))
+        # 줄어드는 값은 시작 글이 더 넓다 — 끝 글자 폭만 잡으면 도는 중에 옆 카드가 들썩인다
+        card.set("12,345,678점")
+        while card._anim is not None and _time.monotonic() < end + 6:
+            QApplication.processEvents()
+            _time.sleep(0.01)
+        card.set("9점")
+        first = count_text("9점", count_number("9점"), 12345678.0)   # 도는 첫 글(끝 글에 쉼표가 없으니 쉼표 없이)
+        w0 = card.value.fontMetrics().horizontalAdvance(first)
+        assert first == "12345678점" and card.value.minimumWidth() >= w0, (first, card.value.minimumWidth(), w0)
         card.hide()
         card.set("70.0%")
         assert card.value.text() == "70.0%", "안 보이는 카드는 바로 써야 한다"

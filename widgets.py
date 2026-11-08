@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PySide6.QtCore import QAbstractListModel, QCollator, QEasingCurve, QEvent, QLocale, QVariantAnimation, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractAnimation, QAbstractListModel, QCollator, QEasingCurve, QEvent, QLocale, QVariantAnimation, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
@@ -1321,8 +1321,10 @@ class StatCard(QFrame):
             self.value.setText(text)
             return
         start = old[1] if old is not None else 0.0
-        # 도는 동안 글 폭이 자릿수 따라 흔들려 옆 카드가 들썩이지 않게 끝 글자 폭을 먼저 잡는다
-        self.value.setMinimumWidth(self.value.fontMetrics().horizontalAdvance(text))
+        # 도는 동안 글 폭이 자릿수 따라 흔들려 옆 카드가 들썩이지 않게 시작·끝 중 넓은 폭을 먼저 잡는다
+        # (끝 글자만 재면 줄어드는 값 — 1,234 → 98 — 은 도는 중 글이 더 넓어 들썩인다)
+        fm = self.value.fontMetrics()
+        self.value.setMinimumWidth(max(fm.horizontalAdvance(text), fm.horizontalAdvance(count_text(text, new, start))))
         anim = QVariantAnimation(self)
         anim.setStartValue(float(start))
         anim.setEndValue(float(new[1]))
@@ -1331,7 +1333,8 @@ class StatCard(QFrame):
         anim.valueChanged.connect(lambda v, t=text, n=new: self.value.setText(count_text(t, n, float(v))))
         anim.finished.connect(lambda t=text: self._anim_done(t))
         self._anim = anim
-        anim.start()
+        # 다 돌거나 멈추면 스스로 지운다 — 부모(카드)에 매달린 채 남으면 새로 그릴 때마다 하나씩 쌓인다
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
     def _anim_done(self, text: str) -> None:
         self._anim = None
