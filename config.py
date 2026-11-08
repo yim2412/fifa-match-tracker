@@ -935,6 +935,11 @@ TABLE_MIN_ROWS = 5
 # "원하는 높이"로 페이지를 늘려(heightForWidth) 타임라인 126줄이 3,824px 페이지가 됐다(11-03 실측 · 머리글이 스크롤에 밀려 사라진다).
 TABLE_FIT_MAX_ROWS = 15
 
+# 숫자 카드 큰 숫자가 새 값까지 올라가는 효과(86 C3) — 화면 스모크는 끈다(글자를 바로 읽어야 해서 · 켠 채 끝까지 도는
+# 경우는 따로 잰다). 재할당 전역 — 모듈 경유로 읽는다.
+UI_ANIMATE = True
+UI_ANIMATE_MS = 300
+
 # 매치 종류. 정식 목록은 메타데이터 matchtype.json 으로 받아오고, 이건 폴백·기본값용.
 DEFAULT_MATCH_TYPE = 52  # 감독모드 — 이 앱은 감독모드 전적만 집계한다
 FALLBACK_MATCH_TYPES = [

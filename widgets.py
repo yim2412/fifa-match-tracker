@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import NamedTuple
 
-from PySide6.QtCore import QAbstractListModel, QCollator, QEvent, QLocale, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractListModel, QCollator, QEasingCurve, QEvent, QLocale, QVariantAnimation, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
+import charts
 import config
 import core_api as core
 import theme as T
@@ -70,10 +71,10 @@ class UpdateCard(QFrame):
         self.setFixedWidth(self.WIDTH)
         self.setStyleSheet(
             f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.ACCENT};"
-            f" border-radius: {T.RADIUS}px; }} QLabel {{ border: none; }}")
+            f" border-radius: {T.RADIUS_CARD}px; }} QLabel {{ border: none; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(16, 12, 16, 12)
-        v.setSpacing(6)
+        v.setSpacing(4)
         self.lb_title = QLabel()
         f = QFont()
         f.setBold(True)
@@ -252,7 +253,7 @@ class WrapBar(QFrame):
         self.setObjectName(object_name)
         self._left, self._middle, self._right, self._sep = left, middle, right, sep
         self._v = QVBoxLayout(self)
-        self._v.setContentsMargins(14, 10, 14, 10)
+        self._v.setContentsMargins(12, 8, 12, 8)
         self._v.setSpacing(8)
         self._row1 = QHBoxLayout()
         self._row2 = QHBoxLayout()
@@ -335,7 +336,7 @@ class _TabBar(QWidget):
         self._btns: list[QPushButton] = []
         self._v = QVBoxLayout(self)
         self._v.setContentsMargins(0, 0, 0, 0)
-        self._v.setSpacing(6)
+        self._v.setSpacing(4)
         self._rows_now: list[list[int]] | None = None
 
     def add(self, btn: QPushButton) -> None:
@@ -370,7 +371,7 @@ class _TabBar(QWidget):
                 lay.deleteLater()
         for row in rows:
             h = QHBoxLayout()
-            h.setSpacing(6)
+            h.setSpacing(4)
             for i in row:
                 h.addWidget(self._btns[i])
             h.addStretch(1)
@@ -406,7 +407,7 @@ class PageTabs(QWidget):
         self._cur = -1
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(10)
+        v.setSpacing(8)
         self.bar = _TabBar()
         v.addWidget(self.bar)
         self._body = QVBoxLayout()
@@ -531,7 +532,7 @@ class Card(QFrame):
         self.setObjectName("card")
         v = QVBoxLayout(self)
         v.setContentsMargins(margin, margin - 4, margin, margin)
-        v.setSpacing(10)
+        v.setSpacing(8)
         self.title = QLabel(title)
         self.title.setObjectName("cardTitle")
         # 레이아웃에 넣기 전에 보이면 부모 없는 QLabel 이 혼자 창으로 뜬다(켤 때 작은 창 깜빡임 · 2.13.3)
@@ -1248,17 +1249,37 @@ def qt_item_less(a: QTableWidgetItem, b: QTableWidgetItem) -> bool:
     return _COLLATOR.compare(str(v1), str(v2)) < 0
 
 
+_COUNT_NUM = re.compile(r"[0-9][0-9,]*(?:\.[0-9]+)?")
+
+
+def count_number(text: str) -> tuple[re.Match, float] | None:
+    """글 안 첫 숫자(쉼표·소수 포함) → (자리, 값). 없으면 None. 앞 부호(+ −)는 자리 밖 글로 남는다."""
+    m = _COUNT_NUM.search(text or "")
+    if m is None:
+        return None
+    return m, float(m.group(0).replace(",", ""))
+
+
+def count_text(final: str, num: tuple[re.Match, float], v: float) -> str:
+    """올라가는 중의 글 — final 의 숫자 자리만 v 로(같은 소수 자릿수 · 쉼표를 썼으면 쉼표)."""
+    m, _ = num
+    raw = m.group(0)
+    digits = len(raw.split(".")[1]) if "." in raw else 0
+    body = f"{v:,.{digits}f}" if "," in raw else f"{v:.{digits}f}"
+    return final[:m.start()] + body + final[m.end():]
+
+
 class StatCard(QFrame):
     """숫자 카드(P5) — 작은 라벨 → 큰 숫자 → 흐린 보조 줄 → 변화(▲▼). 보조·변화는 비어 있으면 숨는다."""
 
     def __init__(self, title: str, color: str = T.TEXT):
         super().__init__()
         self.setStyleSheet(
-            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: {T.RADIUS}px; }}")
+            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.CARD_BORDER};"
+            f" border-radius: {T.RADIUS_CARD}px; }}")
         v = QVBoxLayout(self)
-        v.setContentsMargins(12, 10, 12, 10)
-        v.setSpacing(2)
+        v.setContentsMargins(12, 8, 12, 8)
+        v.setSpacing(4)
 
         self.cap = QLabel(title)
         cf = QFont()
@@ -1286,7 +1307,36 @@ class StatCard(QFrame):
         v.addStretch(1)
 
     def set(self, text: str) -> None:
+        """큰 숫자 — 숫자가 든 글이면 앞 값에서 새 값까지 짧게 올라간다(86 C3). 끝엔 받은 글자 그대로라 쉼표·소수·단위가
+        안 틀어진다. 숫자가 없는 글("—")·같은 값·안 보이는 카드·config.UI_ANIMATE 꺼짐이면 바로 쓴다."""
+        anim = getattr(self, "_anim", None)
+        if anim is not None:
+            anim.stop()
+            self._anim = None
+            self.value.setMinimumWidth(0)
+        old = count_number(self.value.text())
+        new = count_number(text)
+        if (not config.UI_ANIMATE or new is None or not self.isVisible()
+                or (old is not None and old[1] == new[1])):
+            self.value.setText(text)
+            return
+        start = old[1] if old is not None else 0.0
+        # 도는 동안 글 폭이 자릿수 따라 흔들려 옆 카드가 들썩이지 않게 끝 글자 폭을 먼저 잡는다
+        self.value.setMinimumWidth(self.value.fontMetrics().horizontalAdvance(text))
+        anim = QVariantAnimation(self)
+        anim.setStartValue(float(start))
+        anim.setEndValue(float(new[1]))
+        anim.setDuration(config.UI_ANIMATE_MS)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.valueChanged.connect(lambda v, t=text, n=new: self.value.setText(count_text(t, n, float(v))))
+        anim.finished.connect(lambda t=text: self._anim_done(t))
+        self._anim = anim
+        anim.start()
+
+    def _anim_done(self, text: str) -> None:
+        self._anim = None
         self.value.setText(text)
+        self.value.setMinimumWidth(0)
 
     def set_sub(self, text: str) -> None:
         self.sub.setText(text)
@@ -1337,8 +1387,8 @@ class RankerCard(QFrame):
     def __init__(self):
         super().__init__()
         self.setStyleSheet(
-            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: {T.RADIUS}px; }}")
+            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.CARD_BORDER};"
+            f" border-radius: {T.RADIUS_CARD}px; }}")
         self.setMaximumWidth(720)
         v = QVBoxLayout(self)
         v.setContentsMargins(0, 0, 0, 0)
@@ -1346,8 +1396,8 @@ class RankerCard(QFrame):
 
         self._head = QFrame()
         head_v = QVBoxLayout(self._head)
-        head_v.setContentsMargins(14, 12, 14, 12)
-        head_v.setSpacing(6)
+        head_v.setContentsMargins(12, 12, 12, 12)
+        head_v.setSpacing(4)
 
         self._head_name = QLabel("-")
         nf = QFont()
@@ -1380,7 +1430,7 @@ class RankerCard(QFrame):
         self._head_icons = QWidget()
         icons_h = QHBoxLayout(self._head_icons)
         icons_h.setContentsMargins(0, 0, 0, 0)
-        icons_h.setSpacing(10)
+        icons_h.setSpacing(8)
         icons_h.addStretch(1)
         self._head_emblem = QLabel()
         self._head_pitch = QLabel()
@@ -1405,18 +1455,18 @@ class RankerCard(QFrame):
         v.addWidget(self._head)
 
         grid = QGridLayout()
-        grid.setContentsMargins(22, 22, 22, 10)
-        grid.setSpacing(18)
+        grid.setContentsMargins(24, 24, 24, 8)
+        grid.setSpacing(16)
         self._vals: dict[str, QLabel] = {}
         self._rows: dict[str, tuple[QWidget, QLabel]] = {}
         for i, name in enumerate(self.TILE_ORDER):
             r, col = divmod(i, 2)
             tile = QFrame()
             tile.setStyleSheet(
-                f"QFrame {{ background: {T.PANEL_2}; border-radius: {T.RADIUS}px; }}")
+                f"QFrame {{ background: {T.PANEL_2}; border-radius: {T.RADIUS_CTRL}px; }}")
             tv = QVBoxLayout(tile)
             tv.setContentsMargins(20, 20, 20, 20)
-            tv.setSpacing(6)
+            tv.setSpacing(4)
 
             cap = QLabel(name)
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1461,14 +1511,14 @@ class RankerCard(QFrame):
         if is_ranker:
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.PRIMARY}; border: none;"
-                f" border-top-left-radius: {T.RADIUS}px; border-top-right-radius: {T.RADIUS}px; }}")
+                f" border-top-left-radius: {T.RADIUS_CARD}px; border-top-right-radius: {T.RADIUS_CARD}px; }}")
             self._head_name.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
             self._head_grade.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
             self._head_best.setStyleSheet(f"color: {T.ON_PRIMARY}; border: none;")
         else:
             self._head.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL_2}; border: none;"
-                f" border-top-left-radius: {T.RADIUS}px; border-top-right-radius: {T.RADIUS}px; }}")
+                f" border-top-left-radius: {T.RADIUS_CARD}px; border-top-right-radius: {T.RADIUS_CARD}px; }}")
             self._head_name.setStyleSheet(f"color: {T.TEXT}; border: none;")
             self._head_grade.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
             self._head_best.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
@@ -1932,7 +1982,7 @@ def wdl_rate_bar(win: int, draw: int, lose: int, extra: str, min_n: int, mixed: 
     row = QWidget()
     h = QHBoxLayout(row)
     h.setContentsMargins(0, 0, 0, 0)
-    h.setSpacing(10)
+    h.setSpacing(8)
     bar = WdlBar(win, draw, lose, weak=weak, compact=True)
     bar.setProperty("weak", weak)
     bar.setProperty("games", n)
@@ -2048,7 +2098,7 @@ class WdlBar(QWidget):
                  compact: bool = False):
         super().__init__()
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 2, 0, 2)
+        v.setContentsMargins(0, 4, 0, 4)
         v.setSpacing(4)
         self.strip = _WdlStrip(self)
         self.strip.compact = compact
@@ -2089,16 +2139,25 @@ def wdl_html(w: int, d: int, l: int) -> str:
             f" · <span style='color:{T.BAD}'>{l:,}패{pct(l, pl)}</span>")
 
 
-def tag_qss(color: str, selector: str, extra: str = "") -> str:
+def pill_radius(w: QWidget) -> int:
+    """알약 모서리(86 A2) — 제 높이를 재서 고정하고 그 절반. QSS 는 높이 절반을 넘는 모서리를 버리고 각지게 그리므로
+    상수로 박으면 칩마다(23·25·27px) 어긋난다. 높이가 고정되니 나중에 글자가 바뀌어도 모서리가 맞는다."""
+    w.ensurePolished()
+    h = w.sizeHint().height()
+    w.setFixedHeight(h)
+    return h // 2
+
+
+def tag_qss(color: str, selector: str, extra: str = "", radius: int = 4) -> str:
     """태그 꼴 QSS — 글자 = 그 색 · 바탕 = 그 색 10%(불투명 섞음 · PyQt 2번). Tag 와 켜진 결과 필터가 같이 쓴다
     (extra 는 같은 덩이 뒤에 붙어 앞 값을 덮는다). 대비는 test_ui_smoke 의 "10% 바탕" 행이 잰다."""
     soft = T.blend(T.PANEL, color, 0.10)
     return (f"{selector} {{ color: {color}; background: {soft}; border: 1px solid {soft};"
-            f" border-radius: 4px; padding: 2px 6px; {extra}}}")
+            f" border-radius: {radius}px; padding: 2px 8px; {extra}}}")
 
 
 class Tag(QLabel):
-    """작은 태그(P10) — 연승·연패·진행 중 같은 상태 한 마디. 모서리 4 · 12px · 굵기 500.
+    """작은 태그(P10) — 연승·연패·진행 중 같은 상태 한 마디. 알약 모양(86 A2) · 12px · 굵기 500.
     kind: good · bad · warn · muted. 모르는 kind 는 KeyError — 조용히 회색이 되지 않게."""
     KINDS = {"good": "GOOD", "bad": "BAD", "warn": "WARN", "muted": "TEXT_DIM"}
 
@@ -2109,12 +2168,46 @@ class Tag(QLabel):
         f.setWeight(QFont.Weight.Medium)
         self.setFont(f)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._radius = 4
+        self.set_kind(kind)
+        self._radius = pill_radius(self)   # 모양(패딩)이 잡힌 뒤에 잰다
         self.set_kind(kind)
 
     def set_kind(self, kind: str) -> None:
         self.color = getattr(T, self.KINDS[kind])
         self.kind = kind
-        self.setStyleSheet(tag_qss(self.color, "QLabel"))
+        self.setStyleSheet(tag_qss(self.color, "QLabel", radius=self._radius))
+
+
+class EmptyState(QWidget):
+    """카드 하나가 통째로 빈 자리(86 C4) — 단순한 아이콘 + 지금까지 쓰던 흐린 문구 한 줄. 설명 글은 새로 넣지 않는다(11-02).
+    문구는 안의 QLabel 이라 findChildren(QLabel) 로 읽던 테스트가 그대로 본다."""
+
+    def __init__(self, text: str = ""):
+        super().__init__()
+        v = QVBoxLayout(self)
+        v.setContentsMargins(0, 8, 0, 8)
+        v.setSpacing(8)
+        v.addSpacing(charts.EMPTY_ICON_PX)
+        self.label = QLabel(text)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setWordWrap(True)
+        self.label.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.label)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)   # 아이콘 몫을 덜 받지 않게
+
+    def text(self) -> str:
+        return self.label.text()
+
+    def setText(self, text: str) -> None:
+        self.label.setText(text)
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        # 문구 위치를 기준으로 그 위에 — 레이아웃이 높이를 덜 주면 빈 칸이 줄어 아이콘이 글자에 붙었다(11-09 촬영)
+        cy = self.label.geometry().top() - 8 - charts.EMPTY_ICON_PX / 2
+        charts.paint_empty_icon(p, self.width() / 2, max(cy, charts.EMPTY_ICON_PX / 2 + 1))
+        p.end()
 
 
 class _ShareStrip(QWidget):
@@ -2154,8 +2247,8 @@ class VersusBar(QWidget):
     def __init__(self, label: str, opp_color: str | None = None):
         super().__init__()
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 2, 0, 2)
-        v.setSpacing(3)
+        v.setContentsMargins(0, 4, 0, 4)
+        v.setSpacing(4)
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         self.name = QLabel(label)
@@ -2520,7 +2613,7 @@ class MatchCardDelegate(QStyledItemDelegate):
         if option.state & QStyle.StateFlag.State_MouseOver:
             bg = T.blend(bg, T.TEXT, 0.04)
         path = QPainterPath()
-        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        path.addRoundedRect(r, T.RADIUS_CTRL, T.RADIUS_CTRL)
         p.fillPath(path, QColor(bg))
         p.save()
         p.setClipPath(path)
@@ -2764,7 +2857,7 @@ class RateRowDelegate(QStyledItemDelegate):
         if option.state & QStyle.StateFlag.State_MouseOver:
             bg = T.blend(bg, T.TEXT, 0.04)
         path = QPainterPath()
-        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        path.addRoundedRect(r, T.RADIUS_CTRL, T.RADIUS_CTRL)
         p.fillPath(path, QColor(bg))
         if option.state & QStyle.StateFlag.State_Selected:
             p.setPen(QPen(QColor(T.ACCENT), 1))
@@ -2984,7 +3077,7 @@ class MetricRowDelegate(QStyledItemDelegate):
         if option.state & QStyle.StateFlag.State_MouseOver:
             bg = T.blend(bg, T.TEXT, 0.04)
         path = QPainterPath()
-        path.addRoundedRect(r, T.RADIUS, T.RADIUS)
+        path.addRoundedRect(r, T.RADIUS_CTRL, T.RADIUS_CTRL)
         p.fillPath(path, QColor(bg))
         if row.fill:
             p.save()
@@ -3158,7 +3251,7 @@ class AvgBarDelegate(QStyledItemDelegate):
         for s in segs:
             if s.role in ("track", "bar"):
                 path = QPainterPath()
-                path.addRoundedRect(s.rect, 3, 3)
+                path.addRoundedRect(s.rect, T.BAR_RADIUS, T.BAR_RADIUS)
                 p.fillPath(path, QColor(col[s.role]))
                 continue
             if s.role == "icon":
@@ -3238,7 +3331,7 @@ class ShotTypeRows(QWidget):
         self.stacked = stacked   # 좁은 자리(슛 맵 오른쪽 패널) — 시도·유효·골 글을 이름 아래 줄로
         self.grid = QGridLayout(self)
         self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(10)
+        self.grid.setHorizontalSpacing(8)
         self.grid.setVerticalSpacing(4)
         self.grid.setColumnStretch(1 if stacked else 2, 1)
         self.rows: list[tuple] = []   # (이름, 시도, 유효(골 포함), 골, 전환율 글) — 테스트가 읽는다
@@ -3475,8 +3568,8 @@ class BarRow(QWidget):
         super().__init__()
         pct = (count / total * 100) if total else 0.0
         v = QVBoxLayout(self)
-        v.setContentsMargins(0, 2, 0, 2)
-        v.setSpacing(2)
+        v.setContentsMargins(0, 4, 0, 4)
+        v.setSpacing(4)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -3511,14 +3604,10 @@ class Segmented(QFrame):
     def __init__(self, options: list[str], current: int = 0):
         super().__init__()
         self.setObjectName("segmented")
-        self.setStyleSheet(
-            f"QFrame#segmented {{ border: 1px solid {T.BORDER}; border-radius: 6px; }}"
-            f"QFrame#segmented QPushButton {{ border: none; border-radius: 5px; padding: 2px 10px;"
-            f" background: transparent; color: {T.TEXT_DIM}; }}"
-            f"QFrame#segmented QPushButton:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; }}")
+        self._qss(6, 5)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
-        lay.setSpacing(2)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(4)
         self.buttons: list[QPushButton] = []
         for i, text in enumerate(options):
             b = QPushButton(text)
@@ -3528,6 +3617,16 @@ class Segmented(QFrame):
             lay.addWidget(b)
             self.buttons.append(b)
         self._current = current
+        # 알약(86 A2) — 단추 높이를 먼저 고정하고 틀은 그 높이 + 여백으로(틀 모서리 = 틀 높이 절반 · 안쪽 단추도 제 절반)
+        inner = min((pill_radius(b) for b in self.buttons), default=5)
+        self._qss(pill_radius(self), inner)
+
+    def _qss(self, outer: int, inner: int) -> None:
+        self.setStyleSheet(
+            f"QFrame#segmented {{ border: 1px solid {T.BORDER}; border-radius: {outer}px; }}"
+            f"QFrame#segmented QPushButton {{ border: none; border-radius: {inner}px; padding: 2px 12px;"
+            f" background: transparent; color: {T.TEXT_DIM}; }}"
+            f"QFrame#segmented QPushButton:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; }}")
 
     def current(self) -> int:
         return self._current
@@ -3582,10 +3681,13 @@ def chip_toggle(text: str) -> QPushButton:
     b = QPushButton(text)
     b.setCheckable(True)
     b.setObjectName("chipToggle")
-    b.setStyleSheet(
-        f"QPushButton#chipToggle {{ border: 1px solid {T.BORDER}; border-radius: 6px; padding: 2px 10px;"
-        f" background: transparent; color: {T.TEXT_DIM}; }}"
-        f"QPushButton#chipToggle:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; border-color: {T.ACCENT_SOFT}; }}")
+
+    def qss(r: int) -> str:
+        return (f"QPushButton#chipToggle {{ border: 1px solid {T.BORDER}; border-radius: {r}px; padding: 2px 12px;"
+                f" background: transparent; color: {T.TEXT_DIM}; }}"
+                f"QPushButton#chipToggle:checked {{ background: {T.ACCENT_SOFT}; color: {T.ACCENT}; border-color: {T.ACCENT_SOFT}; }}")
+    b.setStyleSheet(qss(6))
+    b.setStyleSheet(qss(pill_radius(b)))   # 알약(86 A2)
     return b
 
 
@@ -3643,10 +3745,11 @@ class GridPicker(QFrame):
         self._icons: dict[tuple, QPixmap] = {}
         self.setObjectName("gridPick")
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet(f"QFrame#gridPick {{ background: {T.PANEL}; border: 1px solid {T.BORDER}; border-radius: 6px; }}")
+        self.setStyleSheet(f"QFrame#gridPick {{ background: {T.PANEL}; border: 1px solid {T.CARD_BORDER};"
+                           f" border-radius: {T.RADIUS_CARD}px; }}")
         v = QVBoxLayout(self)
         v.setContentsMargins(8, 8, 8, 8)
-        v.setSpacing(6)
+        v.setSpacing(4)
         search.setMaximumWidth(16777215)
         v.addWidget(search)
         self.list = QListWidget()
@@ -4270,7 +4373,7 @@ class PitchWidget(QWidget):
         v.setSpacing(4)
         self.band = QWidget()
         hb = QHBoxLayout(self.band)
-        hb.setContentsMargins(2, 0, 2, 0)
+        hb.setContentsMargins(4, 0, 4, 0)
         self.lb_value = QLabel("")
         self.lb_value.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
         self.lb_value.setWordWrap(True)

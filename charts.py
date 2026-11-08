@@ -36,7 +36,7 @@ DOT_R = 4
 RING_W = 2          # 점·끝점 둘레 바탕색 테두리
 GAP = 2             # 맞닿는 채움 사이 바탕색 틈
 BAR_MAX = 24        # 막대 두께 상한
-BAR_RADIUS = 4      # 막대 끝 둥글기
+BAR_RADIUS = T.BAR_RADIUS   # 막대 끝 둥글기(86 A3 — 값은 theme 한 곳)
 SMALL_PT = T.PT_XS  # 축 글자(80 — 옛 9)
 TREND_LINE_W = 2.5  # 추이 그래프(AreaTrendChart) 선만 — 다른 그래프는 LINE_W
 BAND_ALPHA = 0.2    # 추이 띠 진하기
@@ -45,6 +45,42 @@ PCT_FIT_STEPS = (5, 10, 25)   # Axis.fit_pct 눈금 간격 후보 — 전부 50 
 PCT_FIT_MAX_CELLS = 4         # Axis.fit_pct 눈금 칸 상한
 PCT_FIT_MIN_PAD = 2.0         # Axis.fit_pct 위아래 최소 여백(%p) — 값이 전부 50 이어도 축이 선다
 STEP_RADIUS = 6     # 등급 계단 모서리 둥글기(px)
+
+
+EMPTY_ICON_PX = 36        # 빈 화면 아이콘 한 변(86 C4)
+EMPTY_ICON_MIN_H = 110    # 이보다 낮은 칸은 글자만(작은 그래프 칸에 아이콘이 끼면 글자가 밀린다)
+
+
+def paint_empty_icon(p: QPainter, cx: float, cy: float, size: float = EMPTY_ICON_PX) -> None:
+    """빈 화면 아이콘(86 C4) — 빈 막대그래프 틀(둥근 네모 + 낮은 막대 셋). 설명 글은 안 붙인다(11-02 규칙)."""
+    p.save()
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor(T.EMPTY_ICON), 2)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    box = QRectF(cx - size / 2, cy - size / 2, size, size)
+    p.drawRoundedRect(box, size * 0.2, size * 0.2)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(T.EMPTY_ICON))
+    bw, base = size * 0.14, box.bottom() - size * 0.22
+    for i, frac in enumerate((0.18, 0.34, 0.12)):
+        x = box.left() + size * (0.24 + i * 0.22)
+        h = size * frac
+        p.drawRoundedRect(QRectF(x, base - h, bw, h), 1.5, 1.5)
+    p.restore()
+
+
+def paint_empty(p: QPainter, rect: QRectF, text: str) -> None:
+    """그림 칸의 빈 화면 — 높이가 넉넉하면 아이콘 + 흐린 문구, 낮으면 문구만(예전 모양)."""
+    if rect.height() < EMPTY_ICON_MIN_H:
+        p.setPen(QColor(T.TEXT_DIM))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        return
+    line = p.fontMetrics().height()
+    top = rect.center().y() - (EMPTY_ICON_PX + 8 + line) / 2
+    paint_empty_icon(p, rect.center().x(), top + EMPTY_ICON_PX / 2)
+    p.setPen(QColor(T.TEXT_DIM))
+    p.drawText(QRectF(rect.left(), top + EMPTY_ICON_PX + 8, rect.width(), line), Qt.AlignmentFlag.AlignCenter, text)
 
 
 def _color(hex_: str, alpha: float = 1.0) -> QColor:
@@ -70,8 +106,7 @@ class _Chart(QWidget):
         self._hits: list[tuple[QRectF | QPainterPath, str]] = []
 
     def _empty(self, p: QPainter, text: str = EMPTY_TEXT) -> None:
-        p.setPen(QColor(T.TEXT_DIM))
-        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
+        paint_empty(p, QRectF(self.rect()), text)
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
@@ -1560,11 +1595,11 @@ class LuckDotRows(_Chart):
             track = QRectF(tx, cy - 4, tw, 8)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(QColor(T.PANEL_2))
-            p.drawRoundedRect(track, 4, 4)
+            p.drawRoundedRect(track, BAR_RADIUS, BAR_RADIUS)
             x_of = lambda v: tx + tw * min(max(v, 0.0), 100.0) / 100.0   # noqa: E731
             if r.judged:
                 p.setBrush(_color(T.CHART_NEUTRAL, 0.45))
-                p.drawRoundedRect(QRectF(x_of(r.lo), cy - 4, max(x_of(r.hi) - x_of(r.lo), 2), 8), 4, 4)
+                p.drawRoundedRect(QRectF(x_of(r.lo), cy - 4, max(x_of(r.hi) - x_of(r.lo), 2), 8), BAR_RADIUS, BAR_RADIUS)
             p.setPen(QPen(QColor(T.TEXT), 1.5))
             p.drawLine(QPointF(x_of(r.base), cy - 7), QPointF(x_of(r.base), cy + 7))
             dot = QPointF(x_of(r.rate), cy)

@@ -18,6 +18,7 @@ _PALETTES = {
         PANEL="#18181b",       # 카드·패널
         PANEL_2="#2c2c30",     # 표 헤더·교차행·카드 안 타일
         BORDER="#313135",
+        CARD_BORDER="#3a3a41",  # 카드 테두리만(86 B1) — 표 격자선(BORDER)보다 한 단계 밝아 카드가 바탕에서 떠 보인다
         TEXT="#fafafa",
         TEXT_DIM="#a1a1aa",
         # 글자 토큰(ACCENT·GOOD·BAD·WARN)은 PANEL·PANEL_2 둘 다 대비 4.5 이상 — 테스트가 잰다.
@@ -82,6 +83,7 @@ _PALETTES = {
         PANEL="#ffffff",
         PANEL_2="#e7e9ee",
         BORDER="#d3d7de",
+        CARD_BORDER="#cdd2da",
         TEXT="#09090b",
         TEXT_DIM="#616875",
         # 강조 초록(3.2.2) — 3.1.1 전 #1f9d55 는 글자로 3.4 라 글자·버튼만 진하게(칸 위 5.87 · 흰 글자 5.02)
@@ -141,6 +143,7 @@ BG = _P["BG"]
 PANEL = _P["PANEL"]
 PANEL_2 = _P["PANEL_2"]
 BORDER = _P["BORDER"]
+CARD_BORDER = _P["CARD_BORDER"]   # 카드·묶음 테두리(86 B1) — PANEL 은 안 바꾼다(얼린 추이 그래프 · 기준 화면 P1)
 TEXT = _P["TEXT"]
 TEXT_DIM = _P["TEXT_DIM"]
 
@@ -252,7 +255,12 @@ PT_FLOOR = 8            # 승부차기 GK 이름 하한
 SHOOTOUT_GK_NAME_PT = (PT_S, PT_FLOOR)   # 이름 글꼴(기본 · 줄여도 되는 하한) — 긴 이름이 카드 폭을 밀지 않게
 TABLE_CELL_PX = PX_L       # 표 칸 글씨(옛 14)
 TABLE_HEADER_PX = PX_M     # 표 머리 글씨(옛 13)
-RADIUS = 6              # 카드·표·입력·버튼 모서리 — 그림 안 작은 막대·칩(2~4px)은 각자
+# 모서리(86 A1) — 카드는 크게, 그 안에 든 조작 부품은 작게(안쪽이 바깥보다 작아야 겹친 모서리가 어색하지 않다).
+RADIUS_CARD = 12        # 카드·묶음·탭 판·떠 있는 박스
+RADIUS_CTRL = 8         # 입력·버튼·콤보·표·메뉴 줄·카드 안 타일·줄 카드
+# 알약(86 A2) — QSS 는 모서리가 높이 절반을 넘으면 그 값을 버리고 각지게 그린다. 칩마다 높이가 달라(태그 23 · 칩 27 ·
+# 전환 단추 25 — offscreen 실측) 상수 하나로는 안 맞는다 → widgets.pill_radius 가 제 높이를 재 고정하고 그 절반을 쓴다.
+BAR_RADIUS = 4          # 그래프·목록 막대 끝(86 A3 — 숫자로 박던 3·4 를 하나로) · 도넛 끝은 안 둥글린다(작은 조각·2px 틈)
 # 글자를 위에 겹쳐 쓰는 막대(승부처·시간대 등) — 원색이면 글자가 묻힌다.
 WIN_BAR = _P["WIN_BAR"]
 LOSE_BAR = _P["LOSE_BAR"]
@@ -275,6 +283,10 @@ def blend(base_hex: str, target_hex: str, mix: float) -> str:
 
 ROW_FILL_MIX = 0.12                 # 지표 줄 바탕 채움(67 R0 — 점유율만큼) · 0.22 이면 밝은 쪽 흐린 글자 4.34(미달 — test_palette_text_contrast · 초록 채움 3.2.2)
 ROW_FILL = blend(PANEL, ACCENT_FILL, ROW_FILL_MIX)
+# 빈 화면 아이콘 선(86 C4) — 글자보다 한참 흐리게(아이콘은 장식이고 읽을 것은 문구다)
+EMPTY_ICON = blend(PANEL, TEXT_DIM, 0.45)
+# 눌러서 들어가는 카드에 마우스를 올렸을 때 테두리(86 C2) — 강조색 그대로면 버튼과 구분이 안 돼 반쯤만
+CARD_HOVER_BORDER = blend(CARD_BORDER, ACCENT_FILL, 0.55)
 
 
 def contrast(a_hex: str, b_hex: str) -> float:
@@ -359,7 +371,7 @@ SCROLL_HOVER = _P["SCROLL_HOVER"]
 # "적용"/"불러오기" 류 강조 버튼(윤곽선만, 채우지 않음) — 3곳 이상에서 반복 사용.
 OUTLINE_BUTTON_QSS = f"""
 QPushButton {{ background: transparent; color: {ACCENT};
-    border: 1px solid {ACCENT}; border-radius: {RADIUS}px; padding: 6px 16px;
+    border: 1px solid {ACCENT}; border-radius: {RADIUS_CTRL}px; padding: 6px 16px;
     font-weight: bold; }}
 QPushButton:hover {{ background: {ACCENT_SOFT}; }}
 QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; }}
@@ -379,14 +391,15 @@ QLabel {{ background: transparent; }}
 
 QFrame#card {{
     background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border: 1px solid {CARD_BORDER};
+    border-radius: {RADIUS_CARD}px;
 }}
+QFrame#card[hot="true"] {{ border-color: {CARD_HOVER_BORDER}; }}
 QLabel#cardTitle {{ font-size: {PX_XL}px; font-weight: bold; color: {TEXT}; }}
 QFrame#topbar {{
     background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border: 1px solid {CARD_BORDER};
+    border-radius: {RADIUS_CARD}px;
 }}
 
 QFrame#sidebar {{
@@ -405,7 +418,7 @@ QListWidget#nav {{
 QListWidget#nav::item {{
     padding: 5px 12px;
     margin: 0 10px;
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
     color: {TEXT};
 }}
 QListWidget#nav::item:hover {{ background: {PANEL_2}; }}
@@ -422,7 +435,7 @@ QListWidget#nav::item:disabled {{
 QFrame#profileBox {{
     background: {PANEL_2};
     border: none;
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
 }}
 
 QScrollArea {{ background: transparent; border: none; }}
@@ -431,19 +444,19 @@ QScrollArea > QWidget > QWidget {{ background: transparent; }}
 QLineEdit {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
     padding: 7px 12px;
     color: {TEXT};
     selection-background-color: {PRIMARY};
     selection-color: {ON_PRIMARY};
 }}
 QLineEdit:focus {{ border: 2px solid {ACCENT}; }}
-QLineEdit#bigSearch {{ border: 2px solid {ACCENT}; border-radius: {RADIUS}px; }}
+QLineEdit#bigSearch {{ border: 2px solid {ACCENT}; border-radius: {RADIUS_CTRL}px; }}
 
 QPushButton {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
     padding: 7px 16px;
     color: {TEXT};
 }}
@@ -460,7 +473,7 @@ QPushButton#primary:disabled {{ background: {BORDER}; color: {TEXT_DIM}; }}
 QPushButton#pageTab {{
     background: transparent;
     border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
     padding: 5px 16px;
     color: {TEXT_DIM};
 }}
@@ -469,8 +482,8 @@ QPushButton#pageTab:checked {{ background: {ACCENT_SOFT}; border-color: {ACCENT}
 
 QGroupBox {{
     background: {PANEL};
-    border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border: 1px solid {CARD_BORDER};
+    border-radius: {RADIUS_CARD}px;
     margin-top: 12px;
     padding-top: 10px;
     font-weight: bold;
@@ -483,8 +496,8 @@ QGroupBox::title {{
 }}
 
 QTabWidget::pane {{
-    border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border: 1px solid {CARD_BORDER};
+    border-radius: {RADIUS_CARD}px;
     background: {PANEL};
     top: -1px;
 }}
@@ -493,8 +506,8 @@ QTabBar::tab {{
     color: {TEXT_DIM};
     border: 1px solid {BORDER};
     border-bottom: none;
-    border-top-left-radius: {RADIUS}px;
-    border-top-right-radius: {RADIUS}px;
+    border-top-left-radius: {RADIUS_CTRL}px;
+    border-top-right-radius: {RADIUS_CTRL}px;
     padding: 9px 20px;
     margin-right: 2px;
 }}
@@ -509,7 +522,7 @@ QTableWidget {{
     alternate-background-color: {PANEL_2};
     gridline-color: {BORDER};
     border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
     color: {TEXT};
 }}
 QTableWidget::item:selected {{ background: transparent; color: {TEXT}; }}
@@ -526,7 +539,7 @@ QTableCornerButton::section {{ background: {PANEL_2}; border: none; }}
 QComboBox, QSpinBox {{
     background: {PANEL};
     border: 1px solid {BORDER};
-    border-radius: {RADIUS}px;
+    border-radius: {RADIUS_CTRL}px;
     padding: 5px 8px;
     color: {TEXT};
 }}

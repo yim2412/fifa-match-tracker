@@ -88,7 +88,7 @@ from widgets import (
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
-    ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text,
+    ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text, pill_radius, EmptyState,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -3583,8 +3583,8 @@ class MainWindow(QMainWindow):
         box = QFrame()
         box.setMaximumWidth(760)
         box.setStyleSheet(
-            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-            f" border-radius: {T.RADIUS}px; }}")
+            f"QFrame {{ background: {T.PANEL}; border: 1px solid {T.CARD_BORDER};"
+            f" border-radius: {T.RADIUS_CARD}px; }}")
         box_v = QVBoxLayout(box)
         box_v.setContentsMargins(40, 36, 40, 32)
         box_v.setSpacing(0)
@@ -3628,7 +3628,7 @@ class MainWindow(QMainWindow):
         self.lb_search_msg = QLabel("")
         self.lb_search_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lb_search_msg.setStyleSheet(f"color: {T.BAD}; border: none;")
-        box_v.addSpacing(10)
+        box_v.addSpacing(8)
         box_v.addWidget(self.lb_search_msg)
 
         # 최근 검색 기록 — 클릭하면 바로 재검색.
@@ -3663,7 +3663,7 @@ class MainWindow(QMainWindow):
         v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(4)
         row = QHBoxLayout()
-        row.setSpacing(6)
+        row.setSpacing(4)
         style = f"color: {T.TEXT_DIM}; font-size: {T.PX_XS}px; border: none;"
         ver = ClickLabel(config.APP_VERSION)
         ver.setObjectName("versionLabel")
@@ -3827,7 +3827,7 @@ class MainWindow(QMainWindow):
             "이 버튼은 그 사이 새로 생긴 경기가 있는지 다시 확인합니다.")
         self.btn_more.clicked.connect(self._on_search)
         h.addWidget(self.cb_range)
-        h.addSpacing(6)
+        h.addSpacing(4)
         h.addWidget(self.lb_total)
         self.top_bar = WrapBar(left, middle, self.btn_more, sep=sep)
         return self.top_bar
@@ -3918,16 +3918,16 @@ class MainWindow(QMainWindow):
         side.setObjectName("sidebar")
         side.setFixedWidth(T.SIDEBAR_W)
         sv = QVBoxLayout(side)
-        sv.setContentsMargins(0, 20, 0, 14)
-        sv.setSpacing(2)
+        sv.setContentsMargins(0, 20, 0, 12)
+        sv.setSpacing(4)
         brand = QLabel("감독모드")  # config.APP_NAME 을 두 줄로 — 사이드바 폭에 한 줄로 안 들어간다
         brand.setObjectName("brand")
         brand_sub = QLabel("전적 분석 · 비공식")
         brand_sub.setObjectName("brandSub")
         for lb in (brand, brand_sub):
-            lb.setContentsMargins(22, 0, 0, 0)
+            lb.setContentsMargins(24, 0, 0, 0)
             sv.addWidget(lb)
-        sv.addSpacing(14)
+        sv.addSpacing(12)
 
         self.nav = QListWidget()
         self.nav.setObjectName("nav")
@@ -3938,8 +3938,8 @@ class MainWindow(QMainWindow):
         prof = QFrame()
         prof.setObjectName("profileBox")
         pv = QVBoxLayout(prof)
-        pv.setContentsMargins(12, 10, 12, 10)
-        pv.setSpacing(2)
+        pv.setContentsMargins(12, 8, 12, 8)
+        pv.setSpacing(4)
         self.lb_profile = QLabel("-")
         pf = QFont()
         pf.setPointSize(T.PT_M)
@@ -3957,22 +3957,22 @@ class MainWindow(QMainWindow):
         sv.addSpacing(8)
         attr = self._attribution_label()
         attr.setWordWrap(True)  # 사이드바 폭이 고정이라 넘치면 접는다
-        attr.setContentsMargins(22, 0, 12, 0)
+        attr.setContentsMargins(24, 0, 12, 0)
         sv.addWidget(attr)
         about = QHBoxLayout()
-        about.setContentsMargins(22, 0, 12, 0)
+        about.setContentsMargins(24, 0, 12, 0)
         about.addWidget(self._about_button())
         about.addStretch(1)
         sv.addLayout(about)
         ver = self._version_bar()
-        ver.setContentsMargins(22, 4, 12, 0)
+        ver.setContentsMargins(24, 4, 12, 0)
         sv.addWidget(ver)
         h.addWidget(side)
 
         right = QWidget()
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(20, 16, 20, 14)
-        rv.setSpacing(14)
+        rv.setContentsMargins(20, 16, 20, 12)
+        rv.setSpacing(12)
         rv.addWidget(self._top_bar())
         self.pages = QStackedWidget()
         rv.addWidget(self.pages, 1)
@@ -4717,7 +4717,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(8)
 
         self.box_chips = QHBoxLayout()   # N19 칩 줄 — 같은 경기 상대와 견줘 뚜렷한 강점·약점(그리기: _render_chips)
-        self.box_chips.setSpacing(6)
+        self.box_chips.setSpacing(4)
         v.addLayout(self.box_chips)
 
         gb_dots = QGroupBox(f"최근 {core.WINDOW}경기 결과")
@@ -4730,13 +4730,13 @@ class MainWindow(QMainWindow):
         for sec in core.SECTIONS:
             gb = QGroupBox(sec)
             box = QVBoxLayout(gb)
-            box.setSpacing(6)
+            box.setSpacing(4)
             self.box_analysis[sec] = box
             v.addWidget(gb)
 
         gb_streak = QGroupBox("연승·연패 직후 승률")
         self.box_streak = QVBoxLayout(gb_streak)
-        self.box_streak.setSpacing(3)
+        self.box_streak.setSpacing(4)
         v.addWidget(gb_streak)
 
         v.addStretch(1)
@@ -4746,8 +4746,8 @@ class MainWindow(QMainWindow):
     def _analysis_row(self, ins, color: str) -> QWidget:
         row = QWidget()
         col = QVBoxLayout(row)
-        col.setContentsMargins(4, 2, 4, 2)
-        col.setSpacing(1)
+        col.setContentsMargins(4, 4, 4, 4)
+        col.setSpacing(0)
         # 결론 한 줄(P9) — 글은 TEXT, 핵심 숫자만 섹션 색(67 R11 · 줄 전체를 칠하면 숫자가 안 튄다)
         head = QLabel(key_number_html(f"· {ins.headline}", color))
         head.setTextFormat(Qt.TextFormat.RichText)
@@ -4825,8 +4825,10 @@ class MainWindow(QMainWindow):
         for c in chips:
             color = T.GOOD if c.strong else T.BAD
             lb = QLabel(("강점 " if c.strong else "약점 ") + c.text)
-            lb.setStyleSheet(f"color: {color}; font-weight: bold; border: 1px solid {color}; border-radius: 9px;"
-                             f" padding: 2px 10px;")
+            chip_qss = (f"color: {color}; font-weight: bold; border: 1px solid {color}; border-radius: %dpx;"
+                        f" padding: 2px 12px;")
+            lb.setStyleSheet(chip_qss % 9)
+            lb.setStyleSheet(chip_qss % pill_radius(lb))   # 알약(86 A2)
             d = c.diff
             if c.basis == "dist":
                 dist = basis.dist
@@ -4868,9 +4870,7 @@ class MainWindow(QMainWindow):
             self._clear(box)
             rows = [i for i in found if i.section == sec]
             if not rows:
-                empty = QLabel("표본이 모자라 아직 말할 수 있는 게 없습니다.")
-                empty.setStyleSheet(f"color: {T.TEXT_DIM};")
-                box.addWidget(empty)
+                box.addWidget(EmptyState("표본이 모자라 아직 말할 수 있는 게 없습니다."))
                 continue
             for ins in rows:
                 box.addWidget(self._analysis_row(ins, colors[sec]))
@@ -4897,7 +4897,7 @@ class MainWindow(QMainWindow):
         box = QWidget()
         v = QVBoxLayout(box)
         v.setContentsMargins(0, 4, 0, 0)
-        v.setSpacing(2)
+        v.setSpacing(4)
         box.basis_rows = []
         names = [QLabel(b.label) for b in items]
         same_w = MainWindow._same_width(names)
@@ -4905,7 +4905,7 @@ class MainWindow(QMainWindow):
             gap = b.rate - b.base_rate
             line = QWidget()
             h = QHBoxLayout(line)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             name.setStyleSheet(f"color: {T.TEXT_DIM};")
             name.setFixedWidth(same_w)
             h.addWidget(name)
@@ -4927,9 +4927,7 @@ class MainWindow(QMainWindow):
         self._clear(box)
         s = summarize(matches)
         if not s.total:
-            empty = QLabel("경기가 없습니다.")
-            empty.setStyleSheet(f"color: {T.TEXT_DIM};")
-            box.addWidget(empty)
+            box.addWidget(EmptyState("경기가 없습니다."))
             return
         need = core.streak_min_n(s.rated)
         base = s.win_rate
@@ -4937,7 +4935,7 @@ class MainWindow(QMainWindow):
         for r in core.after_streak_rates(matches, core.STREAK_MAX, mixed=s.mixed):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             plus = "+" if r.length == core.STREAK_MAX else ""
             a = QLabel(f"{r.length}{plus}연{r.kind} 뒤")
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
@@ -4963,17 +4961,17 @@ class MainWindow(QMainWindow):
 
         gb_first = QGroupBox("선제골 승률")
         self.box_clutch_first = QVBoxLayout(gb_first)
-        self.box_clutch_first.setSpacing(3)
+        self.box_clutch_first.setSpacing(4)
         v.addWidget(gb_first)
 
         gb_min = QGroupBox("시간 구간별 득실 (정규시간 15분 단위)")
         self.box_clutch_minute = QVBoxLayout(gb_min)
-        self.box_clutch_minute.setSpacing(3)
+        self.box_clutch_minute.setSpacing(4)
         v.addWidget(gb_min)
 
         gb_tod = QGroupBox("시각대별 승률 (경기 시작 시각 기준)")
         self.box_clutch_tod = QVBoxLayout(gb_tod)
-        self.box_clutch_tod.setSpacing(3)
+        self.box_clutch_tod.setSpacing(4)
         v.addWidget(gb_tod)
 
         gb_heat = QGroupBox("시간대 × 요일 승률")
@@ -5001,7 +4999,7 @@ class MainWindow(QMainWindow):
                            ("gap", "골 사이 시간 (정규시간, 양쪽 골 합쳐서)")):
             gb = QGroupBox(title)
             box = QVBoxLayout(gb)
-            box.setSpacing(3)
+            box.setSpacing(4)
             self.box_goalflow[key] = box
             v.addWidget(gb)
         v.addStretch(1)
@@ -5018,7 +5016,7 @@ class MainWindow(QMainWindow):
         for r, a in zip(gf.leads, names):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a.setStyleSheet(dim)
             a.setFixedWidth(same_w)
             h.addWidget(a)
@@ -5103,7 +5101,7 @@ class MainWindow(QMainWindow):
                 ("선제 실점", cs.first_conceded, T.BAD)):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a = QLabel(label)
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             n = core.rated(*wdl, cs.mixed)
@@ -5138,7 +5136,7 @@ class MainWindow(QMainWindow):
         for bk in buckets:
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a = QLabel(bk.label if bk.label == "연장" else f"{bk.label}분")
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             a.setFixedWidth(64)
@@ -5169,7 +5167,7 @@ class MainWindow(QMainWindow):
         for band in core.time_of_day_rates(matches):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a = QLabel(f"{band.label} ({band.span})")
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             a.setFixedWidth(120)
@@ -5219,17 +5217,17 @@ class MainWindow(QMainWindow):
         # 둘 다 내 승·무·패 — 묶는 기준만 다르다. 제목이 "상대 등급별 성적"뿐일 땐 상대가 오른 등급으로 읽혔다(2026-10-07 사용자)
         gb_mine = QGroupBox("내 등급별 성적 (그 경기 때 내 등급)")
         self.box_diag_my_division = QVBoxLayout(gb_mine)
-        self.box_diag_my_division.setSpacing(3)
+        self.box_diag_my_division.setSpacing(4)
         v.addWidget(gb_mine)
 
         gb_div = QGroupBox("상대 등급별 내 성적 (그 경기 상대의 등급)")
         self.box_diag_division = QVBoxLayout(gb_div)
-        self.box_diag_division.setSpacing(3)
+        self.box_diag_division.setSpacing(4)
         v.addWidget(gb_div)
 
         gb_pos = QGroupBox("점유율 구간별 승률")
         self.box_diag_possession = QVBoxLayout(gb_pos)
-        self.box_diag_possession.setSpacing(3)
+        self.box_diag_possession.setSpacing(4)
         v.addWidget(gb_pos)
 
         v.addStretch(1)
@@ -5246,7 +5244,7 @@ class MainWindow(QMainWindow):
         v.setSpacing(8)
         gb_disc = QGroupBox("규율·불운 (경기당 평균 · 나 / 상대)")
         self.box_diag_discipline = QVBoxLayout(gb_disc)
-        self.box_diag_discipline.setSpacing(3)
+        self.box_diag_discipline.setSpacing(4)
         v.addWidget(gb_disc)
         v.addStretch(1)
         scroll.setWidget(w)
@@ -5706,9 +5704,7 @@ class MainWindow(QMainWindow):
                                    icon=("division", self._division_icon_key(s.division_id)), key=s.division_id)
                     for s in divs], bool(divs[0].mixed)))
             else:
-                empty = QLabel(none_text)
-                empty.setStyleSheet(f"color: {T.TEXT_DIM};")
-                box.addWidget(empty)
+                box.addWidget(EmptyState(none_text))
 
         self._clear(self.box_diag_possession)
         bands = core.possession_stats(details, self._ouid)
@@ -5724,14 +5720,12 @@ class MainWindow(QMainWindow):
         self._clear(box)
         ds = core.discipline_stats(details, self._ouid)
         if not ds.games:
-            empty = QLabel("경기가 없습니다.")
-            empty.setStyleSheet(f"color: {T.TEXT_DIM};")
-            box.addWidget(empty)
+            box.addWidget(EmptyState("경기가 없습니다."))
             return
         for ax in ds.axes:
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a = QLabel(ax.name)
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             a.setFixedWidth(90)
@@ -5758,7 +5752,7 @@ class MainWindow(QMainWindow):
                            ("상대가 퇴장당한 경기", ds.opp_red)):
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a = QLabel(f"{label} ({sum(wdl)})")
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             a.setFixedWidth(170)
@@ -5838,7 +5832,7 @@ class MainWindow(QMainWindow):
         self.grid_shot_sum = QGridLayout()   # 칸만 — 다시 그릴 때 통째로 지운다(이 안에 오래 사는 위젯을 두면 다음 그리기가 지워진 라벨을 만진다)
         sumv.addLayout(self.grid_shot_sum)
         self.grid_shot_sum.setHorizontalSpacing(12)
-        self.grid_shot_sum.setVerticalSpacing(2)
+        self.grid_shot_sum.setVerticalSpacing(4)
         sv.addWidget(gb_sum)
 
         gb_best = QGroupBox("최다 득점 · 최다 실점 경기")
@@ -9848,9 +9842,9 @@ class MainWindow(QMainWindow):
             # 꺼짐 = 흐린 글자. 켜진 "무"(TEXT_DIM 글자)가 꺼진 칸과 갈리는 건 테두리·굵기·바탕이다
             btn.setStyleSheet(
                 f"QPushButton {{ color: {T.TEXT_DIM}; border: 1px solid {T.BORDER};"
-                f" border-radius: {T.RADIUS}px; padding: 4px; }}"
+                f" border-radius: {T.RADIUS_CTRL}px; padding: 4px; }}"
                 + tag_qss(color, "QPushButton:checked",
-                          f"border-color: {color}; border-radius: {T.RADIUS}px; padding: 4px; font-weight: bold; "))
+                          f"border-color: {color}; border-radius: {T.RADIUS_CTRL}px; padding: 4px; font-weight: bold; "))
             btn.clicked.connect(self._apply_match_filter)
             row.addWidget(btn)
             self._match_filter_btns[kind] = btn
@@ -10395,7 +10389,7 @@ class MainWindow(QMainWindow):
             sm = ShotMapWidget(self.COMPARE_SHOTMAP_MIN)
             gv.addWidget(sm)
             flow = QVBoxLayout()
-            flow.setSpacing(3)
+            flow.setSpacing(4)
             gv.addLayout(flow)
             self.gb_compare_shot.append(gb)
             self.lb_compare_shot_sum.append(lb)
@@ -10746,19 +10740,19 @@ class MainWindow(QMainWindow):
 
         gb_f = QGroupBox("전술 분석")
         vf = QVBoxLayout(gb_f)
-        vf.setSpacing(5)
+        vf.setSpacing(4)
 
         # 대표 포메이션 카드(65 M5) — 미니 축구장 크게 · 포메이션 · 승률 · 승무패 막대 · 경기 수
         card = QFrame()
         card.setObjectName("myFormationCard")
         card.setStyleSheet(f"QFrame#myFormationCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-                           f" border-radius: {T.RADIUS}px; }}")
+                           f" border-radius: {T.RADIUS_CTRL}px; }}")
         row_f = QHBoxLayout(card)
-        row_f.setContentsMargins(12, 10, 12, 10)
+        row_f.setContentsMargins(12, 8, 12, 8)
         self.lb_my_formation_pitch = QLabel()
         row_f.addWidget(self.lb_my_formation_pitch)
         col = QVBoxLayout()
-        col.setSpacing(3)
+        col.setSpacing(4)
         col.addWidget(self._dim_label("가장 많이 쓴 내 포메이션"))
         self.lb_my_formation = QLabel("-")
         mf = QFont()
@@ -10796,7 +10790,7 @@ class MainWindow(QMainWindow):
         self.lb_tactics_form_note.setVisible(False)
         vf.addWidget(self.lb_tactics_form_note)
         self.box_opp = QVBoxLayout()
-        self.box_opp.setSpacing(2)
+        self.box_opp.setSpacing(4)
         vf.addLayout(self.box_opp)
         v.addWidget(gb_f)
         v.addStretch(1)
@@ -10808,7 +10802,7 @@ class MainWindow(QMainWindow):
         scroll, v = self._tactics_scroll()
         gb_r = QGroupBox("경기 결과")
         self.box_result = QVBoxLayout(gb_r)
-        self.box_result.setSpacing(2)
+        self.box_result.setSpacing(4)
         v.addWidget(gb_r)
         row = QHBoxLayout()
         self.shot_types, self.shot_type_notes = {}, {}
@@ -12469,7 +12463,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(2)
+        v.setSpacing(4)
         align = Qt.AlignmentFlag.AlignRight if right else Qt.AlignmentFlag.AlignLeft
         players = [x for x in p.get("player") or [] if x.get("spPosition") != core.SUB_POSITION]
         pm = formation_pixmap(core.formation_of(players), config.FORMATION_HEAD_PX,
@@ -12506,7 +12500,7 @@ class MainWindow(QMainWindow):
         g.addWidget(self._detail_side(me, self._nick or m.my_nickname, False), 0, 0)
         g.addWidget(self._detail_side(opp, m.opponent, True, self.MATCH_COLUMN_HELP["구단가치"]), 0, 2)
         mid = QVBoxLayout()
-        mid.setSpacing(2)
+        mid.setSpacing(4)
         score = QLabel(f"{m.my_goals} : {m.opp_goals}")
         f = score.font()
         f.setPixelSize(round(T.BASE_FONT_PX * 2))
@@ -12904,7 +12898,7 @@ class MainWindow(QMainWindow):
         photo = QLabel()
         photo.setFixedSize(96, 96)
         photo.setScaledContents(True)
-        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: {T.RADIUS}px;")
+        photo.setStyleSheet(f"background: {T.PANEL_2}; border-radius: {T.RADIUS_CTRL}px;")
         header.addWidget(photo)
         if info.photo_url:
             widgets_by_url[info.photo_url] = photo
@@ -12950,7 +12944,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_trait_tab(info, widgets_by_url), "특징")
         tabs.addTab(self._build_price_tab(info, current_grade), "시세")
         tabs.addTab(self._build_club_history_tab(info), "클럽 경력")
-        tabs.addTab(self._build_position_ovr_tab(info), "포지션별 오버롤")
+        tabs.addTab(self._build_position_ovr_tab(info), "포지션별 OVR")
         outer.addWidget(tabs, 1)
         return widgets_by_url
 
@@ -12972,14 +12966,14 @@ class MainWindow(QMainWindow):
         status.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(status)
         grid = QGridLayout()
-        grid.setSpacing(10)
+        grid.setSpacing(8)
         v.addLayout(grid)
         v.addStretch(1)
 
         def render(sim: playerinfo.AbilitySim) -> None:
             try:
                 if not sim.position_ovrs:
-                    status.setText("포지션별 오버롤 정보가 없습니다.")
+                    status.setText("포지션별 OVR 정보가 없습니다.")
                     return
                 status.setText("1강 · 적응도 +1 기준")
                 for r, (cap_text, codes) in enumerate(self.POSITION_OVR_ROWS):
@@ -13092,7 +13086,7 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
-        grid.setSpacing(6)
+        grid.setSpacing(4)
         v.addWidget(scroll, 1)
         scroll.setWidget(grid_host)
 
@@ -13242,7 +13236,7 @@ class MainWindow(QMainWindow):
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         host = QWidget()
         grid = QGridLayout(host)
-        grid.setSpacing(6)
+        grid.setSpacing(4)
         cols = 2  # 시세 문자열이 길어서("3,660,000,000,000 BP") 3열이면 가로 스크롤이 생긴다
         for i, grade in enumerate(sorted(info.prices)):
             r, c = divmod(i, cols)
@@ -13250,9 +13244,9 @@ class MainWindow(QMainWindow):
             cell = QFrame()
             cell.setStyleSheet(
                 f"QFrame {{ background: {T.PANEL}; border: 1px solid "
-                f"{T.ACCENT if grade == current_grade else T.BORDER}; border-radius: 6px; }}")
+                f"{T.ACCENT if grade == current_grade else T.BORDER}; border-radius: {T.RADIUS_CTRL}px; }}")
             cv = QVBoxLayout(cell)
-            cv.setContentsMargins(8, 6, 8, 6)
+            cv.setContentsMargins(8, 4, 8, 4)
             grade_lb = QLabel(f"{grade}강" if grade else "기본")
             grade_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
             price_lb = QLabel(price)
@@ -14064,7 +14058,7 @@ class MainWindow(QMainWindow):
             v = rb.periods[k]
             row = QWidget()
             h = QHBoxLayout(row)
-            h.setContentsMargins(4, 2, 4, 2)
+            h.setContentsMargins(4, 4, 4, 4)
             a = QLabel(core.PERIODS.get(k, str(k)))
             a.setStyleSheet(f"color: {T.TEXT_DIM};")
             b = QLabel(f"{v.scored}득점")
@@ -14108,9 +14102,9 @@ class MainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("gkCard")
         card.setStyleSheet(f"QFrame#gkCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-                           f" border-radius: {T.RADIUS}px; }}")
+                           f" border-radius: {T.RADIUS_CTRL}px; }}")
         h = QHBoxLayout(card)
-        h.setContentsMargins(8, 6, 8, 6)
+        h.setContentsMargins(8, 4, 8, 4)
         face = QLabel()
         face.setFixedSize(config.SHOOTOUT_GK_FACE_PX, config.SHOOTOUT_GK_FACE_PX)
         face.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -14120,7 +14114,7 @@ class MainWindow(QMainWindow):
             face.setPixmap(pm)
         h.addWidget(face)
         col = QVBoxLayout()
-        col.setSpacing(1)
+        col.setSpacing(0)
         # 이름은 길면 글꼴을 줄인다(카드 넷이 1280 폭에 들어가게 — 실화면에서 카드 하나 226px 이 4px 넘쳤다)
         name = FitLabel(self._names.get(k.sp_id, str(k.sp_id)), base_pt=T.SHOOTOUT_GK_NAME_PT[0],
                         min_pt=T.SHOOTOUT_GK_NAME_PT[1])
@@ -14186,10 +14180,10 @@ class MainWindow(QMainWindow):
             card = QFrame()
             card.setObjectName("passCard")
             card.setStyleSheet(f"QFrame#passCard {{ background: {T.PANEL}; border: 1px solid {T.BORDER};"
-                               f" border-radius: {T.RADIUS}px; }} QLabel {{ border: none; }}")
+                               f" border-radius: {T.RADIUS_CTRL}px; }} QLabel {{ border: none; }}")
             v = QVBoxLayout(card)
-            v.setContentsMargins(10, 8, 10, 8)
-            v.setSpacing(3)
+            v.setContentsMargins(8, 8, 8, 8)
+            v.setSpacing(4)
             top = QHBoxLayout()
             name = QLabel(k.name)
             name.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")

@@ -84,7 +84,7 @@ class DashCard(QFrame):
         self.setObjectName("card")
         self.target = target
         v = QVBoxLayout(self)
-        v.setContentsMargins(16, 12, 16, 14)
+        v.setContentsMargins(16, 12, 16, 16)
         v.setSpacing(8)
         head = QHBoxLayout()
         head.setSpacing(8)
@@ -98,13 +98,30 @@ class DashCard(QFrame):
         v.addLayout(head)
         self.body = QVBoxLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
-        self.body.setSpacing(6)
+        self.body.setSpacing(4)
         v.addLayout(self.body, 1)
         if target:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             menu, tab = target
             where = f"{menu} › {tab}" if tab else menu
             self.setToolTip(f"눌러서 '{where}' 보기")
+
+    def _set_hot(self, on: bool) -> None:
+        """누를 수 있는 카드만 마우스 올림 테두리(86 C2) — 누를 수 없는 카드가 반응하면 눌리는 것처럼 보인다.
+        QSS :hover 대신 속성으로 — 테스트가 Enter/Leave 이벤트로 잴 수 있다."""
+        if not self.target or bool(self.property("hot")) == on:
+            return
+        self.setProperty("hot", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def enterEvent(self, event) -> None:
+        self._set_hot(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._set_hot(False)
+        super().leaveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self.target and event.button() == Qt.MouseButton.LeftButton \
@@ -156,13 +173,13 @@ class DashboardPage(QWidget):
         super().__init__()
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(14)
+        outer.setSpacing(16)
         self.cards: list[DashCard] = []
 
         # ⓪ 이번 시즌 구단(55 · 65 M1) — 숫자 카드 넷 → 오늘·어제 줄 → 시즌 기록 줄 → K6 한 줄
         self.head = self._card("이번 시즌 구단", ("승률 그래프", "점수·예측"))
         nums = QHBoxLayout()
-        nums.setSpacing(10)
+        nums.setSpacing(8)
         self.card_score = StatCard("랭킹 점수")
         self.card_value = StatCard("구단가치 등수")
         self.card_fc = StatCard("시즌 FC")
@@ -189,7 +206,7 @@ class DashboardPage(QWidget):
         # ① 리포트 넷(65 M1 — 점수·예측 탭 R1~R3 와 같은 재료 · 스쿼드 대비·같은 OVR 대비는 59)
         self.report = self._card("이 구단 리포트", ("승률 그래프", "점수·예측"))
         rep_row = QHBoxLayout()
-        rep_row.setSpacing(10)
+        rep_row.setSpacing(8)
         self.card_day = StatCard("하루 점수")
         self.card_avg = StatCard("시즌 평균 점수")
         self.card_dd = StatCard("최대 낙폭")
@@ -202,7 +219,7 @@ class DashboardPage(QWidget):
 
         # ② 경기 결과 · 골·실점 · 나와 상대(빠른 범위)
         row = QHBoxLayout()
-        row.setSpacing(14)
+        row.setSpacing(16)
         self.kpi_wdl = self._card("경기 결과", ("전술·경기 결과", "경기 결과"))
         self.wdl_bar = WdlBar()
         self.lb_wdl_total = _label("—", dim=True)
@@ -250,7 +267,7 @@ class DashboardPage(QWidget):
         gap_row = QWidget()
         self.gap_box = QHBoxLayout(gap_row)
         self.gap_box.setContentsMargins(0, 4, 0, 0)
-        self.gap_box.setSpacing(6)
+        self.gap_box.setSpacing(4)
         self.lb_gap = _label("벌어진 곳", dim=True)
         self.gap_box.addWidget(self.lb_gap)
         self.gap_tags: list[Tag] = []
@@ -266,7 +283,7 @@ class DashboardPage(QWidget):
 
         # ① 구단주 + ③ 승률 흐름
         row = QHBoxLayout()
-        row.setSpacing(14)
+        row.setSpacing(16)
         row.addWidget(ranker_card, 1, Qt.AlignmentFlag.AlignTop)
         self.trend = self._card("승률 흐름", ("기간별 성적", None))
         # 글자는 점 위 줄로 — 20개 점과 한 줄에 두면 1280 폭에서 자리가 모자란다
@@ -280,7 +297,7 @@ class DashboardPage(QWidget):
 
         # ③ 점수 해설(65 M1 · P9) + ④ 승부처 · 15분 득실
         grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
+        grid.setHorizontalSpacing(16)
         for c in range(3):
             grid.setColumnStretch(c, 1)
         # 눌러서 넘어가지 않는다 — 안의 접기 단추와 카드 누르기가 겹친다
@@ -299,7 +316,7 @@ class DashboardPage(QWidget):
 
         self.clutch = self._card("승부처", ("승부처 분석", "선제골·역전"))
         gauges = QHBoxLayout()
-        gauges.setSpacing(6)
+        gauges.setSpacing(4)
         self.gauges: list[RingGauge] = []
         for cap in ("선제골 넣으면\n승률", "선제 실점 후\n역전승", "선제골 넣고\n끝까지 지킴"):
             col = QVBoxLayout()
@@ -323,7 +340,7 @@ class DashboardPage(QWidget):
 
         # ⑤ 분석 · 시간대 · 상대
         grid = QGridLayout()
-        grid.setHorizontalSpacing(14)
+        grid.setHorizontalSpacing(16)
         grid.setColumnStretch(0, 2)
         grid.setColumnStretch(1, 1)
         grid.setColumnStretch(2, 1)

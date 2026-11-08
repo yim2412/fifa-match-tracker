@@ -134,7 +134,9 @@ def _no_season_fetch():
 _rc._fetch_seasons = _no_season_fetch
 # 한 번만 실행(tray.SingleInstance) — main() 을 부르는 테스트가 이 PC 에 떠 있는 앱을 앞으로 부르거나 그 때문에 끝나지 않게
 config.SINGLE_INSTANCE = False
-_seed = store.open_db(config.DB_PATH)
+# 숫자 카드 올라가기(86 C3) — 끄지 않으면 채운 직후 읽는 단언이 도는 중의 글자를 본다. 켠 채는 test_statcard_counts_up_86
+config.UI_ANIMATE = False
+_seed =store.open_db(config.DB_PATH)
 try:
     from datetime import date as _date
     store.save_seasons(_seed, [sn.Season(no=90, name="시즌 9", start=_date(2025, 12, 1),
@@ -615,6 +617,127 @@ def test_setfont_sizes_survive_stylesheet():
     assert title, "검색 화면 제목을 못 찾음"
     f = title[0].font()
     assert f.pointSize() == T.PT_TITLE, (f.pointSize(), f.pixelSize())
+
+
+def test_digits_are_tabular_86():
+    # 86 D1 — 표·큰 숫자가 자릿수대로 줄 서려면 0~9 폭이 같아야 한다. 맑은 고딕은 이미 그렇다(11-09 실측 16px 전부 9px)
+    # 그래서 글꼴을 더하지 않았다 — FONT_FAMILY 를 바꿔 이게 깨지면 그때 tnum 이 되는 글꼴을 고른다
+    from PySide6.QtGui import QFont, QFontMetricsF
+    for bold in (False, True):
+        f = QFont(T.FONT_FAMILY)
+        f.setPixelSize(T.BASE_FONT_PX)
+        f.setBold(bold)
+        fm = QFontMetricsF(f)
+        widths = {round(fm.horizontalAdvance(d), 2) for d in "0123456789"}
+        assert len(widths) == 1, (bold, widths)
+
+
+def test_pills_stay_round_86():
+    # 86 A2 — QSS 는 모서리가 높이 절반을 넘으면 그 값을 버리고 각지게 그린다. 칩 높이가 고정되고 모서리가 그 절반 이하인지
+    import re as _re
+    from widgets import Segmented, Tag, chip_toggle
+
+    def radius(w, sel=""):
+        m = _re.findall(r"border-radius: (\d+)px", w.styleSheet())
+        return int(m[0]) if m else None
+    t = Tag("연승", "good")
+    c = chip_toggle("비주류")
+    s = Segmented(["일별", "시간별"])
+    for w in (t, c, s, s.buttons[0]):
+        h = w.height() if w.minimumHeight() == w.maximumHeight() else None
+        assert h is not None, f"{type(w).__name__} 높이가 고정되지 않았다"
+    for w, r in ((t, radius(t)), (c, radius(c)), (s, radius(s))):
+        assert r is not None and r * 2 <= w.maximumHeight() and r >= w.maximumHeight() // 2, (type(w).__name__, r, w.maximumHeight())
+    t.set_kind("bad")   # 색을 바꿔도 알약 그대로
+    assert radius(t) == t.maximumHeight() // 2, radius(t)
+    assert T.RADIUS_CARD > T.RADIUS_CTRL, "카드 안 부품 모서리가 카드보다 크면 겹친 모서리가 어색하다(86 A1)"
+
+
+def test_statcard_counts_up_86():
+    # 86 C3 — 켜면 도는 중엔 중간 값, 끝나면 받은 글자 그대로(쉼표·소수·단위·부호). 숫자 없는 글·끔·안 보임은 바로
+    import time as _time
+    from PySide6.QtWidgets import QApplication
+    from widgets import StatCard, count_number, count_text
+    n = count_number("+1,234.5점")
+    assert n is not None and n[1] == 1234.5 and count_text("+1,234.5점", n, 7.25) == "+7.2점", count_text("+1,234.5점", n, 7.25)
+    assert count_number("—") is None
+    card = StatCard("시험")
+    card.show()
+    old = config.UI_ANIMATE
+    try:
+        config.UI_ANIMATE = False
+        card.set("1,000점")
+        assert card.value.text() == "1,000점", "끈 상태는 바로 써야 한다"
+        config.UI_ANIMATE = True
+        card.set("3,210점")
+        mid = card.value.text()
+        assert mid != "3,210점" and card._anim is not None, f"켰는데 바로 썼다: {mid}"   # 막지 않았으면 이 줄이 빨개진다
+        assert card.value.minimumWidth() > 0, "도는 동안 폭을 안 잡았다"
+        end = _time.monotonic() + 3
+        while card._anim is not None and _time.monotonic() < end:
+            QApplication.processEvents()
+            _time.sleep(0.01)
+        assert card.value.text() == "3,210점" and card.value.minimumWidth() == 0, (card.value.text(), card.value.minimumWidth())
+        card.set("—")
+        assert card.value.text() == "—"
+        card.set("52.3%")
+        card.set("61.0%")   # 돌던 것을 멈추고 새로 — 끝 글자가 앞 값으로 덮이면 안 된다
+        while card._anim is not None and _time.monotonic() < end + 3:
+            QApplication.processEvents()
+            _time.sleep(0.01)
+        assert card.value.text() == "61.0%", card.value.text()
+        card.hide()
+        card.set("70.0%")
+        assert card.value.text() == "70.0%", "안 보이는 카드는 바로 써야 한다"
+    finally:
+        config.UI_ANIMATE = old
+        card.deleteLater()
+
+
+def test_empty_state_draws_icon_86():
+    # 86 C4 — 빈 칸 위에 아이콘이 그려지고(아이콘 자리 픽셀이 바탕과 다르다) 문구는 그대로 · 낮은 그림 칸은 글자만
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor, QImage, QPainter
+    import charts as _charts
+    from widgets import EmptyState
+    e = EmptyState("경기가 없습니다.")
+    e.resize(300, 120)
+    img = e.grab().toImage()
+    cx, top = 150, e.layout().contentsMargins().top()
+    edge = {img.pixelColor(cx - _charts.EMPTY_ICON_PX // 2 + dx, top + _charts.EMPTY_ICON_PX // 2).name() for dx in (0, 1, 2)}
+    assert T.EMPTY_ICON in edge or len(edge - {QColor(T.PANEL).name(), QColor(T.BG).name()}) > 0, edge
+    assert e.text() == "경기가 없습니다." and e.label.text() == e.text()
+    e.deleteLater()
+
+    def drawn(h):
+        im = QImage(300, h, QImage.Format.Format_RGB32)
+        im.fill(QColor(T.PANEL))
+        p = QPainter(im)
+        _charts.paint_empty(p, QRectF(0, 0, 300, h), "경기 없음")
+        p.end()
+        # 아이콘 왼쪽 테두리 선 자리(가운데 줄의 글자보다 위)
+        y = int(h / 2 - (_charts.EMPTY_ICON_PX + 8 + 20) / 2 + _charts.EMPTY_ICON_PX / 2)
+        return any(im.pixelColor(150 - _charts.EMPTY_ICON_PX // 2 + dx, y).name() != QColor(T.PANEL).name() for dx in (-1, 0, 1))
+    assert drawn(200), "높은 칸에 아이콘이 안 그려졌다"
+    assert not drawn(_charts.EMPTY_ICON_MIN_H - 1), "낮은 칸은 글자만이어야 한다"
+
+
+def test_dash_card_hover_only_when_clickable_86():
+    # 86 C2 — 누를 수 있는 카드만 마우스 올림에 테두리가 바뀐다
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QEnterEvent
+    from PySide6.QtWidgets import QApplication
+    from dashboard import DashCard
+    nav, still = DashCard("갈 곳", ("성적 진단", None)), DashCard("그냥")
+    for c in (nav, still):
+        c.show()
+        QApplication.sendEvent(c, QEnterEvent(QPointF(5, 5), QPointF(5, 5), QPointF(5, 5)))
+    assert nav.property("hot") is True and not still.property("hot"), (nav.property("hot"), still.property("hot"))
+    assert f"{T.CARD_HOVER_BORDER}" in T.QSS and 'QFrame#card[hot="true"]' in T.QSS
+    QApplication.sendEvent(nav, QEvent(QEvent.Type.Leave))
+    assert not nav.property("hot")
+    for c in (nav, still):
+        c.deleteLater()
 
 
 def test_platform_class_fonts_follow_app_font():
@@ -1769,7 +1892,12 @@ def test_area_chart_defaults_unchanged():
             c.set_data(pts)
             c.resize(w, h)
         a, b = new.grab().toImage(), old.grab().toImage()
-        assert a == b, ("기본값 그림이 바뀌었다", pts[:2], (w, h))
+        if pts:
+            assert a == b, ("기본값 그림이 바뀌었다", pts[:2], (w, h))
+        else:
+            # 빈 그래프는 86 C4 에서 일부러 바꿨다(아이콘 + 문구 · charts.paint_empty — test_empty_state_draws_icon_86).
+            # 얼린 사본은 charts 를 안 읽는 약속이라 고치지 않고, 여기서는 '바뀌었다' 를 단언한다(되돌리면 빨개진다)
+            assert a != b, "빈 그래프에 아이콘이 안 그려졌다(86 C4)"
         om = getattr(old, "marks", {})
         assert {k: (_rect(v) if hasattr(v, "intersects") else v) for k, v in new.marks.items() if k != "label_rects"} \
             == {k: (_rect(v) if hasattr(v, "intersects") else v) for k, v in om.items() if k != "label_rects"}, \

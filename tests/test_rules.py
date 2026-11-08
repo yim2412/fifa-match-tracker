@@ -934,6 +934,31 @@ def test_font_sizes_only_in_theme():
     assert check_font_sizes(_all(APP_FILES)) == []
 
 
+SPACING_METHODS = {"setSpacing", "setContentsMargins", "addSpacing", "setHorizontalSpacing", "setVerticalSpacing"}
+SPACING_STEP = 4   # 86 D2 — 바깥 배치는 8 의 배수 · 부품 안 좁은 간격은 4 까지. 숫자로 박은 여백은 4 의 배수여야 한다
+
+
+def check_spacing(srcs: dict[str, str]) -> list[str]:
+    """레이아웃 여백·간격에 숫자로 박은 값 중 SPACING_STEP 의 배수가 아닌 것. 변수·식은 안 본다(값이 계산이라)."""
+    out = []
+    for name, src in srcs.items():
+        for n in ast.walk(ast.parse(src)):
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in SPACING_METHODS:
+                for a in n.args:
+                    c = a.operand if isinstance(a, ast.UnaryOp) else a
+                    if isinstance(c, ast.Constant) and isinstance(c.value, int) and c.value % SPACING_STEP:
+                        out.append(f"{name}:{n.lineno} {n.func.attr} 의 {c.value} — {SPACING_STEP}px 단위로")
+    return out
+
+
+def test_spacing_on_4px_grid_86():
+    planted = ("v.setSpacing(6)\nv.setContentsMargins(12, 10, 12, 10)\nh.addSpacing(-3)\ng.setHorizontalSpacing(14)\n"
+               "ok.setSpacing(8)\nok.setContentsMargins(0, 4, 16, 24)\nok.addSpacing(-8)\nok.setSpacing(gap)\n")
+    found = check_spacing({"x.py": planted})
+    assert [int(f.split(":")[1].split()[0]) for f in found] == [1, 2, 2, 3, 4], found
+    assert check_spacing(_all(APP_FILES)) == [], "\n".join(check_spacing(_all(APP_FILES))[:20])
+
+
 def test_old_color_names_are_gone():
     bad = ('c = T.GREEN\nQSS = f"a {{ color: {GREEN}; }}"\ndef f():\n    """ON_ACCENT 위 글자"""\n'
            "x = theme.RED  # 주석의 YELLOW 는 안 센다\n")
@@ -1070,6 +1095,10 @@ STYLE_DASH_MAX = {"notice.py": 37, "cardcollect.py": 1}
 STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준
 _STYLE_END = re.compile(r"([가-힣]?)([가-힣])다\.(?=\s|$|<|\"|\))")
 _STYLE_DOT = re.compile(r"(니다|세요)\.?\s*·")
+# 영문·숫자 표기(86 I3) — 한 화면에서 OVR 과 오버롤, %p 와 퍼센트포인트가 섞이지 않게. 화면 글만 본다(식별자는 _ui_strings 가 뺀다)
+STYLE_NOTATION = (("오버롤", "OVR"), ("엘로", "ELO"), ("퍼센트", "%"), ("%포인트", "%p"))
+_STYLE_CASE = re.compile(r"(?<![A-Za-z_.])(ovr|Ovr|elo|Elo|Fc)(?![A-Za-z_])")   # 대문자로만 쓴다
+_STYLE_PCT_GAP = re.compile(r"\d \%")                                              # "50 %" → "50%"
 
 
 def _ui_strings(src: str) -> list[tuple[int, str]]:
@@ -1118,6 +1147,13 @@ def check_style(srcs: dict[str, str]) -> tuple[list[str], dict[str, int]]:
                     hard.append(f"{name}:{ln} 금지어 '{word}'")
             if _STYLE_DOT.search(s):
                 hard.append(f"{name}:{ln} 문장 뒤 가운뎃점 — 문장을 끊는다")
+            for word, want in STYLE_NOTATION:
+                if word in s:
+                    hard.append(f"{name}:{ln} 표기 '{word}' — '{want}' 로")
+            for m in _STYLE_CASE.finditer(s):
+                hard.append(f"{name}:{ln} 표기 '{m.group(1)}' — 대문자로({m.group(1).upper()})")
+            if _STYLE_PCT_GAP.search(s):
+                hard.append(f"{name}:{ln} 숫자와 % 사이를 띄웠다 — 붙여 쓴다")
         dash[name] = n
     return hard, dash
 
@@ -1131,6 +1167,11 @@ def test_ui_text_style():
     hard, dash = check_style({"x.py": planted})
     # 아니다 · 먹혔 · 가운뎃점 · 쓴다 / 줄표 둘(설명 안 것은 안 셈 · f-문자열의 한글 없는 조각도 센다)
     assert len(hard) == 4 and dash == {"x.py": 2}, (hard, dash)
+    # 86 I3 표기 — 넷 다 잡고, 대문자·식별자·URL 은 안 잡는다
+    notation = ('def f(card):\n    a = "포지션별 오버롤"\n    b = f"ovr {card.ovr}점"\n    c = "승률 50 %입니다"\n'
+                '    d = "3퍼센트포인트"\n    e = f"OVR {card.ovr} · ELO 점수"\n    g = "fconline.nexon.com 주소"\n')
+    hard_n, _ = check_style({"n.py": notation})
+    assert len(hard_n) == 4 and all(":2 " in h or ":3 " in h or ":4 " in h or ":5 " in h for h in hard_n), hard_n
     assert style_haera("기록이 있습니다. 됩니다. 입니다.") == [], "합쇼체를 해라체로 잘못 잡는다"
     srcs = {f: _src(ROOT / f) for f in STYLE_FILES}
     hard, dash = check_style(srcs)
