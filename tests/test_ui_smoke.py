@@ -2729,7 +2729,7 @@ def test_sc_records_list_and_nexon_line():
         # 5분 어긋나면 목록에 없는 것
         _win._on_max_division(_OUID, {"division": 800, "date": "2026-01-02", "at": "2026-01-02T22:05:00"})
         assert not _win.lb_sc_nexon.isHidden()
-        assert _win.lb_sc_nexon.text().startswith("넥슨 기록상 최근 달성 2026-01-02 (저장된 경기에서는 못 찾음"), \
+        assert _win.lb_sc_nexon.text().startswith("넥슨 기록상 최근 달성 2026-01-02 (저장된 경기에서는 못 찾았습니다"), \
             _win.lb_sc_nexon.text()
         # 저장 범위보다 앞
         _win._on_max_division(_OUID, {"division": 800, "date": "2025-11-02", "at": "2025-11-02T10:00:00"})
@@ -4904,7 +4904,7 @@ def test_compare_follows_top_bar_and_marks_cut():
         _win._on_compare_failed("넥슨 API 호출 한도\n자세한 말")
         for _ in range(2):
             st = _win.lb_compare_status.text()
-            assert "1경기까지만 받음 — 넥슨 API 호출 한도" in st and "받는 중" not in st, st
+            assert "1경기까지만 받음(넥슨 API 호출 한도)" in st and "받는 중" not in st, st
             assert "멈춤" in head(2).toolTip() and head(2).text().endswith("⚠"), head(2).toolTip()
             _win._on_range_changed()
     finally:
@@ -6486,15 +6486,15 @@ def test_position_opponent_same_label_formations_use_keys_and_hint_says_who():
         _win.cb_position_color.setCurrentText("컬러D")
         texts = [c.text() for c in _pos_chips()]
         assert [t.split()[0] for t in texts] == ["4-1-4-1-0", "4-1-4-0-1"], texts          # 둘 다 키 — "4-1-4-1" 두 개가 아니다
-        assert _win.lb_position_hint.text().startswith("4-1-4-1-0 — 이 팀컬러 상대 5경기 중 3경기"), _win.lb_position_hint.text()
+        assert _win.lb_position_hint.text().startswith("4-1-4-1-0: 이 팀컬러 상대 5경기 중 3경기"), _win.lb_position_hint.text()
         _pos_chips()[1].click()
-        assert _win.lb_position_hint.text().startswith("4-1-4-0-1 — "), _win.lb_position_hint.text()
+        assert _win.lb_position_hint.text().startswith("4-1-4-0-1: "), _win.lb_position_hint.text()
     with _PosOppEnv():
         # 글자가 하나뿐이면 줄여 쓴다 · "전체" 와 팀컬러의 안내가 다르다
         _win.cb_position_color.setCurrentText(_win.POSITION_COLOR_ALL)
-        assert _win.lb_position_hint.text().startswith("4-1-2-1-2 — 모든 상대 "), _win.lb_position_hint.text()
+        assert _win.lb_position_hint.text().startswith("4-1-2-1-2: 모든 상대 "), _win.lb_position_hint.text()
         _win.cb_position_color.setCurrentText("컬러X")
-        assert _win.lb_position_hint.text().startswith("4-1-2-1-2 — 이 팀컬러 상대 "), _win.lb_position_hint.text()
+        assert _win.lb_position_hint.text().startswith("4-1-2-1-2: 이 팀컬러 상대 "), _win.lb_position_hint.text()
 
 
 def test_position_opponent_chip_count_follows_config():
@@ -7505,7 +7505,7 @@ def test_winrate_bar_sample_text_uses_rated():
     assert widgets.win_rate_text(3, 10, 2, False, short=True) == "20.0%"
     # 무승부뿐인 섞인 줄 — 분모 0 이라 "—"(0.0% 면 다 진 것처럼 읽힌다) · 한 집단이면 진짜 0%
     assert widgets.win_rate_text(0, 1, 0, True, short=True) == "—"
-    assert widgets.win_rate_text(0, 1, 0, True) == "— · 승÷(승+패) · 무 1"
+    assert widgets.win_rate_text(0, 1, 0, True) == "승률 없음 · 승÷(승+패) · 무 1"
     assert widgets.win_rate_text(0, 1, 0, False, short=True) == "0.0%"
 
 
@@ -12050,7 +12050,7 @@ def test_about_rank_status_shows_ref_time_and_meta_counts():
     with _MetaEnv() as env:
         _meta_db(days=2)
         text = app_main.rank_status_text(rankcollect.read_status())
-        assert "넥슨 데이터 기준" in text and "빈 순위 0" in text and "쌓는 중 — 상위 20 연속" in text and "슈챔" not in text, text
+        assert "넥슨 데이터 기준" in text and "빈 순위 0" in text and "쌓는 중: 상위 20 연속" in text and "슈챔" not in text, text
         c = rankcollect.open_rank_db()
         try:
             c.execute("UPDATE snapshot_meta SET rank_gaps = ?", (config.RANK_GAPS_WARN,))
@@ -12941,7 +12941,7 @@ def test_division_run_chart_season_zoom_and_badges_66():
         dc, z = _win.division_chart, _win.zoom_division
         want = [(900, 1), (800, 1), (900, 1)]
         assert [(r.division, r.games) for r in dc._runs] == want, dc._runs
-        assert _win.gb_division.title() == "등급 — 지금 시즌 (01/02~)", _win.gb_division.title()
+        assert _win.gb_division.title() == "등급: 지금 시즌 (01/02~)", _win.gb_division.title()
         # R1 — 지난 시즌(0001 만)을 골라도 계단은 이번 시즌 그대로(막지 않았으면 _details 의 한 경기만 남는다)
         past = next(i for i in range(_win.cb_season.count())
                     if getattr(_win.cb_season.itemData(i), "no", None) == 88)
@@ -12952,7 +12952,7 @@ def test_division_run_chart_season_zoom_and_badges_66():
         assert z.isVisibleTo(_win.gb_division) and z.is_full()
         z.set_span(1, 2)
         assert [(r.division, r.games) for r in dc._runs] == want[1:], dc._runs
-        assert _win.gb_division.title() == "등급 — 01/02~01/03", _win.gb_division.title()
+        assert _win.gb_division.title() == "등급: 01/02~01/03", _win.gb_division.title()
         assert dc._head == (900, 800, "시즌 최고"), dc._head
         assert dc._markers == [0], dc._markers        # 슈챔 진입은 확대한 목록 안 번호로
         z.set_span(0, 2)
@@ -12991,7 +12991,7 @@ def test_division_run_chart_season_zoom_and_badges_66():
         assert dc._head == (900, 800, "기간 최고"), dc._head
         _win._rank_seasons = []
         _win._render_division()
-        assert _win.gb_division.title() == f"등급 — 최근 {config.ELO_FALLBACK_DAYS}일", _win.gb_division.title()
+        assert _win.gb_division.title() == f"등급: 최근 {config.ELO_FALLBACK_DAYS}일", _win.gb_division.title()
         # M2 — ELO 스냅숏의 시즌 시작이 도착하면 계단이 그 시작으로 다시 그려진다(_on_elo_ready)
         data = _elo_data([])
         data.snap_season_start = "2026-01-02T22:00:00"

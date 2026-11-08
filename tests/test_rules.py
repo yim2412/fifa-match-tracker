@@ -1066,7 +1066,7 @@ STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "noti
                "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py")
 # 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
 # cardcollect.py 는 51 측정이 해시를 재 11-26 판정 전엔 못 고친다.
-STYLE_DASH_MAX = {"app_main.py": 79, "notice.py": 37, "methods.py": 21, "cardcollect.py": 1}
+STYLE_DASH_MAX = {"notice.py": 37, "cardcollect.py": 1}
 STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준
 _STYLE_END = re.compile(r"([가-힣]?)([가-힣])다\.(?=\s|$|<|\"|\))")
 _STYLE_DOT = re.compile(r"(니다|세요)\.?\s*·")
@@ -1078,8 +1078,19 @@ def _ui_strings(src: str) -> list[tuple[int, str]]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             skip.add(id(node.value))   # docstring 도 여기에 든다(본문 첫 줄의 Expr)
-    return [(n.lineno, n.value) for n in ast.walk(tree)
+    # f-문자열은 조각을 이어 한 문장으로 본다 — 조각마다 보면 f"{a} — {b}경기" 의 " — " 조각에 한글이 없어 빠졌다
+    # (2026-11-08 줄표 0 이라던 app_main 에 남아 있었다). 자리표시는 '{}' 로 둔다.
+    out = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.JoinedStr):
+            for part in n.values:
+                skip.add(id(part))
+            text = "".join(p.value if isinstance(p, ast.Constant) and isinstance(p.value, str) else "{}" for p in n.values)
+            if re.search("[가-힣]", text):
+                out.append((n.lineno, text))
+    out += [(n.lineno, n.value) for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip and re.search("[가-힣]", n.value)]
+    return out
 
 
 def style_haera(text: str) -> list[str]:
@@ -1115,9 +1126,11 @@ def test_ui_text_style():
     """화면 글 말투 — 해라체 끝맺음·금지어·문장 뒤 가운뎃점은 0 · 줄표는 파일별 상한(늘면 FAIL, 줄면 상한을 내린다)."""
     planted = ('def f():\n    """설명은 안 본다 — 아니다."""\n'
                '    a = "득점률이 아니다."\n    b = "1골 먹혔습니다."\n    c = "다시 시도합니다 · 3장"\n'
-               '    d = "기록이 있습니다. 경기를 쓴다."\n    e = "괜찮습니다 — 이어서"\n    g = "정상입니다. 됩니다."\n')
+               '    d = "기록이 있습니다. 경기를 쓴다."\n    e = "괜찮습니다 — 이어서"\n    g = "정상입니다. 됩니다."\n'
+               '    h = f"{a} — {b}경기"\n')
     hard, dash = check_style({"x.py": planted})
-    assert len(hard) == 4 and dash == {"x.py": 1}, (hard, dash)   # 아니다 · 먹혔 · 가운뎃점 · 쓴다 / 줄표 하나(설명 안 것은 안 셈)
+    # 아니다 · 먹혔 · 가운뎃점 · 쓴다 / 줄표 둘(설명 안 것은 안 셈 · f-문자열의 한글 없는 조각도 센다)
+    assert len(hard) == 4 and dash == {"x.py": 2}, (hard, dash)
     assert style_haera("기록이 있습니다. 됩니다. 입니다.") == [], "합쇼체를 해라체로 잘못 잡는다"
     srcs = {f: _src(ROOT / f) for f in STYLE_FILES}
     hard, dash = check_style(srcs)

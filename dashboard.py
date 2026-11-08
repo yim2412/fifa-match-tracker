@@ -564,7 +564,7 @@ class DashboardPage(QWidget):
             n = core.rated(*wdl, cs.mixed)
             if core.is_weak(n, MIN_GAUGE_GAMES):
                 g.set_data(None, sample_text(n, cs.mixed),
-                           f"{sample_text(n, cs.mixed)} — {MIN_GAUGE_GAMES}{'판' if cs.mixed else '경기'}부터 표시")
+                           f"{sample_text(n, cs.mixed)}입니다. {MIN_GAUGE_GAMES}{'판' if cs.mixed else '경기'}부터 보여 줍니다.")
             else:
                 g.set_data(core.win_pct(*wdl, cs.mixed), f"{n:,}{'판' if cs.mixed else '경기'}",
                            f"{tip}\n{win_rate_text(*wdl, cs.mixed)}\n{note}")
