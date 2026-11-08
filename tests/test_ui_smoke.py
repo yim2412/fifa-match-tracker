@@ -3380,10 +3380,15 @@ def test_latest_newer_reads_release_and_stays_quiet_on_failure():
     setup_u, sums_u = "https://example.invalid/s.exe", "https://example.invalid/sums"
     rel = {"tag_name": "v9.0.0", "html_url": page, "draft": False, "prerelease": False,
            "body": "## 받기\n\n- 설치\n\n## 바뀐 점\n\n- 새 기능\n- 고친 것\n\n## 파일 확인\n\nabc",
-           "assets": [{"name": "FifaMatchTracker-Setup-v9.0.0.exe", "browser_download_url": setup_u},
-                      {"name": "SHA256SUMS.txt", "browser_download_url": sums_u},
-                      {"name": "FifaMatchTracker-v9.0.0-portable.zip", "browser_download_url": "z"}]}
-    full = updatecheck.Release("v9.0.0", page, setup_u, sums_u, "- 새 기능\n- 고친 것")
+           "assets": [{"name": "FifaMatchTracker-Setup-v9.0.0.exe", "browser_download_url": setup_u,
+                       "url": "https://example.invalid/api/1"},
+                      {"name": "SHA256SUMS.txt", "browser_download_url": sums_u,
+                       "url": "https://example.invalid/api/2"},
+                      {"name": "FifaMatchTracker-v9.0.0-portable.zip", "browser_download_url": "z",
+                       "url": "https://example.invalid/api/3"}]}
+    full = updatecheck.Release("v9.0.0", page, setup_u, sums_u, "- 새 기능\n- 고친 것",
+                               setup_api_url="https://example.invalid/api/1",
+                               sums_api_url="https://example.invalid/api/2")
     cases = [
         (_FakeGet(body=rel), full),
         (_FakeGet(body=dict(rel, assets=[])), updatecheck.Release("v9.0.0", page, "", "", full.notes)),
@@ -3748,6 +3753,81 @@ def test_download_verified_installs_only_matching_file():
             raise AssertionError("설치 파일 주소 없이 통과했다")
         except updatecheck.UpdateError:
             pass
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_download_falls_back_to_api_path_when_normal_url_fails():
+    """84 G2 — 일반 주소가 504 면 같은 첨부의 API 경로(Accept: octet-stream)로 다시 받는다."""
+    import hashlib
+    payload = b"setup-bytes-api"
+    name = updatecheck.SETUP_ASSET.format(tag=_REL.tag)
+    sums = f"{hashlib.sha256(payload).hexdigest()}  {name}\n"
+    ok = _FakeDownload(payload, sums)
+    calls = []
+
+    def get(url, **kw):
+        calls.append((url, (kw.get("headers") or {}).get("Accept")))
+        if "/api/" not in url:
+            r = requests.Response()
+            r.status_code = 504
+            raise requests.HTTPError("504 Gateway Timeout", response=r)
+        if (kw.get("headers") or {}).get("Accept") != updatecheck.ASSET_API_ACCEPT:
+            raise AssertionError("API 경로에 Accept 를 안 붙였다 — 파일 대신 JSON 이 온다")
+        return ok(url, **kw)
+
+    rel = updatecheck.Release(_REL.tag, _REL.page_url, _REL.setup_url, _REL.sums_url, _REL.notes,
+                              setup_api_url="https://example.invalid/api/1",
+                              sums_api_url="https://example.invalid/api/2")
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    try:
+        with _Patch((updatecheck.requests, "get", get)):
+            # 막지 않았으면: API 경로가 없던 때는 504 한 번에 업데이트가 실패했다
+            try:
+                updatecheck.download_verified(_REL, tmp)
+                raise AssertionError("일반 주소만으로 504 를 넘겼다 — 가짜가 안 막는다")
+            except updatecheck.UpdateError as e:
+                assert "504" in str(e), e
+            assert not (tmp / name).exists()
+            calls.clear()
+            path = updatecheck.download_verified(rel, tmp)
+            assert path.read_bytes() == payload
+            assert [u for u, _ in calls] == [_REL.sums_url, rel.sums_api_url,
+                                             _REL.setup_url, rel.setup_api_url], calls
+            path.unlink()
+
+        # 두 길 모두 받다가 끊기면 반쯤 쓴 설치 파일을 남기지 않는다
+        class _Cut:
+            status_code = 200
+            text = sums
+            headers = {"Content-Length": "100"}
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, n):
+                yield b"half"
+                raise requests.ConnectionError("끊김")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *e):
+                pass
+
+        seen = []
+
+        def cut(url, **kw):
+            seen.append(url)
+            return _Cut()
+        with _Patch((updatecheck.requests, "get", cut)):
+            try:
+                updatecheck.download_verified(rel, tmp)
+                raise AssertionError("끊긴 내려받기가 통과했다")
+            except updatecheck.UpdateError:
+                pass
+            assert seen.count(rel.setup_api_url) == 1, seen      # 끊겼으면 다음 길로 갔다
+            assert not (tmp / name).exists(), "반쯤 받은 설치 파일이 남았다"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

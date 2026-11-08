@@ -17,6 +17,8 @@
 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다).
 창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다.
 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조)
+받는 길은 둘(84 G2 · 2026-11-10): 일반 주소(`browser_download_url`)가 네트워크·HTTP 오류면 같은 첨부의 API 경로(`url` + `Accept: application/octet-stream`)로
+한 번 더 — 체크섬 목록·설치 파일 각각. 끊기면 처음부터 다시 쓰고, 둘 다 실패하면 반쯤 받은 파일을 지운다. 11-10 실측: v3.4.1 SHA256SUMS 가 두 길에서 같았다
 """
 from __future__ import annotations
 
@@ -40,6 +42,9 @@ SUMS_ASSET = "SHA256SUMS.txt"
 UNINSTALLER = "unins000.exe"   # Inno Setup 이 설치 폴더에 두는 제거기 — 있으면 설치판
 INSTALL_ARGS = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/AUTOUPDATE=1"]
 CHUNK = 256 * 1024
+# 첨부를 API 경로(releases/assets/<id>)로 받을 때의 Accept — 이게 없으면 파일 대신 JSON 설명이 온다.
+# 일반 주소(github.com/.../releases/download)가 막힐 때 다시 받는 길이다(84 G2 — 2026-11-08 GitHub 504)
+ASSET_API_ACCEPT = "application/octet-stream"
 NOTES_MAX_LINES = 12           # 확인 창에 보여 줄 '바뀐 점' 줄 수
 
 
@@ -50,6 +55,8 @@ class Release:
     setup_url: str = ""        # 비면 자동 설치 불가 — 페이지만 연다
     sums_url: str = ""
     notes: str = ""
+    setup_api_url: str = ""    # 같은 첨부의 API 경로 — 일반 주소가 실패하면 여기로 한 번 더
+    sums_api_url: str = ""
 
 
 def parse_version(tag: str) -> tuple[int, int, int] | None:
@@ -135,12 +142,16 @@ def check_full(current: str = config.APP_VERSION, timeout: int = 5) -> CheckResu
         return CheckResult(UNKNOWN, None, notice)
     if not is_newer(tag, current):
         return CheckResult(LATEST, None, notice)
-    urls = {a.get("name"): a.get("browser_download_url") or ""
-            for a in data.get("assets") or [] if isinstance(a, dict)}
+    assets = [a for a in data.get("assets") or [] if isinstance(a, dict)]
+    urls = {a.get("name"): a.get("browser_download_url") or "" for a in assets}
+    api = {a.get("name"): a.get("url") or "" for a in assets}
+    setup = SETUP_ASSET.format(tag=tag)
     return CheckResult(NEWER, Release(tag=tag, page_url=data.get("html_url") or config.RELEASES_URL,
-                                      setup_url=urls.get(SETUP_ASSET.format(tag=tag), ""),
+                                      setup_url=urls.get(setup, ""),
                                       sums_url=urls.get(SUMS_ASSET, ""),
-                                      notes=_changes_excerpt(body)), notice)
+                                      notes=_changes_excerpt(body),
+                                      setup_api_url=api.get(setup, ""),
+                                      sums_api_url=api.get(SUMS_ASSET, "")), notice)
 
 
 def _changes_excerpt(body: str) -> str:
@@ -182,6 +193,25 @@ class UpdateError(Exception):
     pass
 
 
+def _sources(normal: str, api: str) -> list[tuple[str, dict]]:
+    """받을 길 순서 — 일반 주소 먼저, 실패하면 API 경로(Accept 를 붙여야 파일이 온다)."""
+    out = [(normal, {})] if normal else []
+    if api:
+        out.append((api, {"Accept": ASSET_API_ACCEPT}))
+    return out
+
+
+def _first_ok(sources: list[tuple[str, dict]], fetch: Callable[[str, dict], object]):
+    """앞 길이 네트워크·HTTP 오류면 다음 길로. 전부 실패하면 마지막 오류. 취소(UpdateError)는 바로 올린다."""
+    last: requests.RequestException | None = None
+    for url, extra in sources:
+        try:
+            return fetch(url, extra)
+        except requests.RequestException as e:
+            last = e
+    raise last if last else requests.RequestException("받을 주소가 없습니다")
+
+
 def download_verified(rel: Release, dest_dir: Path,
                       progress: Callable[[int, int], None] | None = None,
                       cancelled: Callable[[], bool] = lambda: False,
@@ -190,16 +220,17 @@ def download_verified(rel: Release, dest_dir: Path,
     if not rel.setup_url or not rel.sums_url:
         raise UpdateError("이 릴리스에는 자동 설치용 파일이 없습니다. 페이지에서 직접 받아 주세요.")
     name = SETUP_ASSET.format(tag=rel.tag)
-    headers = {"User-Agent": config.WEB_USER_AGENT}
-    try:
-        sums = requests.get(rel.sums_url, timeout=timeout, headers=headers)
-        sums.raise_for_status()
-        want = expected_sha256(sums.text, name)
-        if not want:
-            raise UpdateError("체크섬 목록에 설치 파일이 없습니다. 페이지에서 직접 받아 주세요.")
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        path = dest_dir / name
-        with requests.get(rel.setup_url, timeout=timeout, headers=headers, stream=True) as r:
+    path = dest_dir / name
+
+    def get_sums(url: str, extra: dict) -> str:
+        r = requests.get(url, timeout=timeout, headers={"User-Agent": config.WEB_USER_AGENT, **extra})
+        r.raise_for_status()
+        return r.text
+
+    def get_setup(url: str, extra: dict) -> None:
+        # 도중에 끊기면 다음 길이 처음부터 다시 쓴다("wb") — 반쯤 받은 바이트를 이어 붙이지 않는다
+        with requests.get(url, timeout=timeout, stream=True,
+                          headers={"User-Agent": config.WEB_USER_AGENT, **extra}) as r:
             r.raise_for_status()
             total = int(r.headers.get("Content-Length") or 0)
             done = 0
@@ -211,10 +242,18 @@ def download_verified(rel: Release, dest_dir: Path,
                     done += len(chunk)
                     if progress:
                         progress(done, total)
+
+    try:
+        want = expected_sha256(_first_ok(_sources(rel.sums_url, rel.sums_api_url), get_sums), name)
+        if not want:
+            raise UpdateError("체크섬 목록에 설치 파일이 없습니다. 페이지에서 직접 받아 주세요.")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        _first_ok(_sources(rel.setup_url, rel.setup_api_url), get_setup)
     except requests.RequestException as e:
+        path.unlink(missing_ok=True)
         raise UpdateError(f"내려받지 못했습니다: {e}") from e
     except UpdateError:
-        (dest_dir / name).unlink(missing_ok=True)
+        path.unlink(missing_ok=True)
         raise
     got = sha256_of(path)
     if got != want:
