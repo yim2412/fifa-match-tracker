@@ -3805,7 +3805,7 @@ class ZoomBar(QWidget):
         self._drag: tuple[str, float, int, int] | None = None   # (무엇, 누른 x, 그때 lo, 그때 hi)
         self.setMinimumHeight(34)
         self.setMouseTracking(True)
-        self.setToolTip("양끝을 끌어 구간을 좁힙니다 · 두 번 누르면 전체")
+        self.setToolTip("양 끝을 끌어 구간을 좁힐 수 있습니다. 두 번 누르면 전체 구간으로 돌아갑니다.")
 
     def set_labels(self, labels: list[str], key=None) -> None:
         """점마다 이름(날짜). 이름·key 가 그대로면 고른 구간을 지키고, 바뀌면(새 점·다른 계정) 전체로.

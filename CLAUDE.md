@@ -214,7 +214,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 `QComboBox` 직접 생성 · 대화상자 `fit_to_screen` · 글자 파일·`subprocess(text=True)` 의 `encoding=` · `Signal(list/dict)` ·
 앱이 쓰는 모달이 화면 스모크 차단에 있는지 · **색은 `theme.py` 에서만** · **모든 SQL 의 실행 계획에 큰 표 `TEMP B-TREE` 없음** ·
 **넥슨 시각 원문(UTC)은 `matchtime` 에서만 파싱**(63 — 테스트에 지어낸 원문을 쓸 땐 KST 로 뜻한 시각에서 **글자 그대로 9시간** 뺀다 ·
-`config.MATCH_DATE_OFFSET_H` 로 빼면 오프셋 변이가 초록이 된다).
+`config.MATCH_DATE_OFFSET_H` 로 빼면 오프셋 변이가 초록이 된다) · **화면 글 말투는 `docs/STYLE.md`**(2026-11-08 사용자 "말투가 너무 AI" —
+합쇼체 · 줄표(—)로 문장 잇기 금지 · 문장 뒤 가운뎃점 금지 · 쉬운 말 · `test_ui_text_style` 이 해라체·금지어·가운뎃점 0 과 파일별 줄표 상한
+`STYLE_DASH_MAX` 를 지킨다 — 줄이면 상한도 내린다).
 - 규칙마다 **위반을 심은 가짜 소스를 잡는지** 같이 단언한다(빈 검사 방지). 새 규칙도 그 꼴로.
 - SQL 은 파싱·수집 테스트를 그대로 돌리며 trace 로 모은다 — **SELECT 를 품은 함수가 한 번도 안 돌면 FAIL**(검사 밖이 생기지 않게).
   새 읽기 함수를 그 두 테스트가 안 부르면 `_drive_uncovered()` 에 한 줄.

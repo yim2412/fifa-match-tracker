@@ -244,11 +244,11 @@ def card_empty_text(state) -> str:
         return "[가계부] 위 띠에서 내 계정을 먼저 정해야 합니다."
     if isinstance(state, tuple) and state and state[0] == "collecting":
         _, have, need, wait = state
-        tail = f" · 약 {wait}일 뒤" if wait else ""
-        return f"시세를 모으는 중입니다 · {have:,}/{need:,}장{tail}"
+        tail = f" 약 {wait}일 뒤부터 볼 수 있습니다." if wait else ""
+        return f"시세를 모으는 중입니다({have:,}/{need:,}장).{tail}"
     if isinstance(state, tuple) and state and state[0] == "filling":
         _, known, need = state
-        return f"카드 정보를 채우는 중입니다 · {known:,}/{need:,}장"
+        return f"카드 정보를 채우는 중입니다({known:,}/{need:,}장)."
     return ""
 AGREE_CHECK ="위 내용을 읽었고 동의합니다"
 

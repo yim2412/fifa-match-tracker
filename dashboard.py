@@ -506,7 +506,7 @@ class DashboardPage(QWidget):
             col = T.GOOD if up_ok else T.BAD if dr[0] < 50 else T.TEXT
             word = "오르는 구간" if up_ok else "내리는 구간" if dr[0] < 50 else "제자리"
             c1.setText(f"무승부 뺀 승률 <b style='color:{col}'>{dr[0]:.1f}%</b> — 점수가 {word}입니다.")
-        e1.setText(f"점수는 승·패로만 움직여 무승부 뺀 승률 50% 가 오르내림 경계입니다 · 하루 평균 {rep.day_avg:+,.1f}점"
+        e1.setText(f"점수는 승패로만 움직여서, 무승부를 뺀 승률 50%가 오르고 내리는 경계입니다. 하루 평균 {rep.day_avg:+,.1f}점"
                    + (f" · {up}" if up else "") + (f" · {dr[1]:,}판" if dr else ""))
         if not rep.max_dd or rep.dd_peak is None:
             c2.setText("이번 시즌엔 아직 떨어진 적이 없습니다.")

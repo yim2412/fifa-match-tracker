@@ -1058,6 +1058,76 @@ def test_nexon_times_are_parsed_only_in_matchtime():
             f"예외 표에 더는 안 걸리는 자리: {k}"
 
 
+# ── 화면 글 말투(docs/STYLE.md · 2026-11-08) ──
+# 화면에 나가는 문자열만 본다 — 함수 설명(docstring)·홀로 선 문자열(주석 꼴)은 뺀다. 한글이 든 것만.
+STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "notice.py", "methods.py", "charts.py",
+               "habits.py", "stats.py", "models.py", "tray.py", "updatecheck.py", "cardcollect.py", "nexon_api.py",
+               "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py")
+# 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
+# cardcollect.py 는 51 측정이 해시를 재 11-26 판정 전엔 못 고친다.
+STYLE_DASH_MAX = {"app_main.py": 275, "widgets.py": 3, "dashboard.py": 6, "analysis.py": 13, "notice.py": 37,
+                  "methods.py": 21, "stats.py": 1, "models.py": 1, "updatecheck.py": 3, "cardcollect.py": 1, "config.py": 1}
+STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준
+_STYLE_END = re.compile(r"([가-힣]?)([가-힣])다\.(?=\s|$|<|\"|\))")
+_STYLE_DOT = re.compile(r"(니다|세요)\.?\s*·")
+
+
+def _ui_strings(src: str) -> list[tuple[int, str]]:
+    tree = ast.parse(src)
+    skip = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            skip.add(id(node.value))   # docstring 도 여기에 든다(본문 첫 줄의 Expr)
+    return [(n.lineno, n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in skip and re.search("[가-힣]", n.value)]
+
+
+def style_haera(text: str) -> list[str]:
+    """'~다.' 로 끝나는데 합쇼체('~ㅂ니다.')가 아닌 것 — 아니다·한다·쓴다·있다. '니' 앞 글자의 받침이 ㅂ 이면 합쇼체."""
+    out = []
+    for m in _STYLE_END.finditer(text):
+        a, b = m.group(1), m.group(2)
+        if b == "니" and a and (ord(a) - 0xAC00) % 28 == 17:
+            continue
+        out.append(m.group(0))
+    return out
+
+
+def check_style(srcs: dict[str, str]) -> tuple[list[str], dict[str, int]]:
+    """→ (0 이어야 하는 위반 줄들, 파일별 줄표 개수)."""
+    hard, dash = [], {}
+    for name, src in srcs.items():
+        n = 0
+        for ln, s in _ui_strings(src):
+            n += s.count("—")
+            for bad in style_haera(s):
+                hard.append(f"{name}:{ln} 해라체 끝맺음 '{bad}' — 화면 글은 '~합니다/~입니다'")
+            for word in STYLE_BANNED:
+                if word in s:
+                    hard.append(f"{name}:{ln} 금지어 '{word}'")
+            if _STYLE_DOT.search(s):
+                hard.append(f"{name}:{ln} 문장 뒤 가운뎃점 — 문장을 끊는다")
+        dash[name] = n
+    return hard, dash
+
+
+def test_ui_text_style():
+    """화면 글 말투 — 해라체 끝맺음·금지어·문장 뒤 가운뎃점은 0 · 줄표는 파일별 상한(늘면 FAIL, 줄면 상한을 내린다)."""
+    planted = ('def f():\n    """설명은 안 본다 — 아니다."""\n'
+               '    a = "득점률이 아니다."\n    b = "1골 먹혔습니다."\n    c = "다시 시도합니다 · 3장"\n'
+               '    d = "기록이 있습니다. 경기를 쓴다."\n    e = "괜찮습니다 — 이어서"\n    g = "정상입니다. 됩니다."\n')
+    hard, dash = check_style({"x.py": planted})
+    assert len(hard) == 4 and dash == {"x.py": 1}, (hard, dash)   # 아니다 · 먹혔 · 가운뎃점 · 쓴다 / 줄표 하나(설명 안 것은 안 셈)
+    assert style_haera("기록이 있습니다. 됩니다. 입니다.") == [], "합쇼체를 해라체로 잘못 잡는다"
+    srcs = {f: _src(ROOT / f) for f in STYLE_FILES}
+    hard, dash = check_style(srcs)
+    assert not hard, "\n".join(hard[:20])
+    over = {f: (n, STYLE_DASH_MAX.get(f, 0)) for f, n in dash.items() if n > STYLE_DASH_MAX.get(f, 0)}
+    assert not over, f"줄표(—)로 문장을 이었다 — 문장을 끊는다(docs/STYLE.md): {over}"
+    loose = {f: (dash.get(f, 0), m) for f, m in STYLE_DASH_MAX.items() if dash.get(f, 0) < m}
+    assert not loose, f"줄표를 줄였다 — STYLE_DASH_MAX 를 지금 개수로 내린다(다시 늘지 않게): {loose}"
+
+
 def test_watchdog_kills_hung_test():
     """테스트 감시(tests/watchdog.py)가 정말 끊는다 — 끝나지 않는 테스트를 1초 한도로 돌리면 종료 코드 3 · 이름 · 멈춘 줄.
     감시가 빠지면 이 자식이 30초 시간 초과로 걸려 빨개진다(2026-10-06 스모크가 18분 멈췄던 일의 장치)."""

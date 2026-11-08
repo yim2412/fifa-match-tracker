@@ -159,7 +159,7 @@ def _flow(matches: list[MatchSummary], details: list[dict], ouid: str,
         SEC_FLOW,
         f"최근 {s.total}경기 {_wdl_text(s.win, s.draw, s.lose)},"
         f" 승률 {s.win_rate:.0f}%.",
-        f"경기당 {s.avg_goals_for:.1f}골 넣고 {s.avg_goals_against:.1f}골 먹혔습니다.",
+        f"경기당 평균 {s.avg_goals_for:.1f}골을 넣고 {s.avg_goals_against:.1f}골을 내줬습니다.",
         float("inf"),  # 요약은 항상 맨 위
     )]
 

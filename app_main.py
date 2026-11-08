@@ -2830,7 +2830,7 @@ class MainWindow(QMainWindow):
         "수비력": "패스% + 가로채기 + 태클% + 2×선방력 + 블록% + 5×(승률/출전)\n"
                  "+ 필드 플레이어면 공중볼%.",
         "기대득점률": "경기당 평균 (골+어시) × 100.\n"
-                    "이름과 달리 유효슛 대비 득점률이 아니다.",
+                    "이름과 달리 유효 슛 대비 득점률이 아닙니다.",
         "공격P": "골 + 어시 합계(공격 포인트).",
         "가로채기": "경기당 가로채기 평균 × 100(누적 합계가 아님).",
         "선방력": "defending 스탯의 경기당 평균 × 100.\n"
@@ -5520,8 +5520,8 @@ class MainWindow(QMainWindow):
                        else "순서를 섞어도 이 정도 길이는 흔히 나옵니다")
             line(f"최장 {name} {run} · 섞은 순서의 가운데 {med} · 상위 {(1 - config.A3_QUANTILE) * 100:.1f}% 문턱 {cut}  →  {verdict}",
                  bold=outside)
-        line(f"무승부가 날 수 있는 경기와 없는 경기(챔피언스 이상끼리)를 따로 섞었습니다 · {sb.games:,}경기 · "
-             f"연승·연패를 각각 문턱과 견주므로 둘 중 하나라도 밖일 확률은 우연만으로 약 5% 입니다.")
+        line(f"무승부가 날 수 있는 경기와 없는 경기(챔피언스 이상끼리)는 따로 섞었습니다. 모두 {sb.games:,}경기입니다. "
+             f"연승과 연패를 각각 문턱과 견주므로, 우연만으로도 둘 중 하나가 문턱을 넘을 확률이 약 5%입니다.")
 
     HABIT_COLUMNS = ["구간", "경기", "승률", "무승부 가능 경기 비중", "무승부 가능 경기 중 무승부"]
 
@@ -10690,9 +10690,10 @@ class MainWindow(QMainWindow):
         vf.addLayout(row_g)
         self.lb_tactics_form_note = self._note_label()
         self.lb_tactics_form_note.setText(
-            "경기 기록의 포메이션은 수비-수미-미드-공미-공격 다섯 칸이라 측면 공격수(LW·RW)도 앞줄로 셉니다 — "
-            "같은 전술이 데이터센터 이름(예 4-2-3-1 → 앞줄 1명)과 앞줄 수가 다를 수 있습니다 · "
-            "앞줄 0명 = 순수 공격수 없이 2선 · 수비가 3~5명이 아니면 '기타·모름'")
+            "경기 기록의 포메이션은 수비, 수비형 미드필더, 미드필더, 공격형 미드필더, 공격의 다섯 칸으로 나뉩니다. "
+            "그래서 측면 공격수(LW, RW)도 앞줄로 셉니다. 같은 전술이라도 데이터센터 이름과 앞줄 수가 다를 수 있습니다"
+            "(예: 4-2-3-1은 앞줄 1명). 앞줄이 0명이면 순수 공격수 없이 2선으로 공격하는 전술이고, "
+            "수비가 3~5명이 아니면 '기타·모름'으로 셉니다.")
         self.lb_tactics_form_note.setVisible(False)
         vf.addWidget(self.lb_tactics_form_note)
         self.box_opp = QVBoxLayout()
@@ -11062,7 +11063,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("조회 실패")
         if getattr(self, "_quiet_search", False) and self.stack.currentIndex() == self.PAGE_MAIN:
             first = msg.splitlines()[0] if msg else ""
-            self.statusBar().showMessage(f"새 경기를 확인하지 못했습니다 — 저장된 기록을 보여 줍니다 · {first}")
+            self.statusBar().showMessage("새 경기를 확인하지 못해 저장된 기록을 보여 줍니다." + (f" ({first})" if first else ""))
             return
         if self.stack.currentIndex() == self.PAGE_SEARCH:
             self.lb_search_msg.setText(msg)
@@ -13450,11 +13451,11 @@ class MainWindow(QMainWindow):
         """구단가치 일별(55 V1) — 점수 줄과 같이 적은 값(검색·따라가기). 점 2개 미만이면 그래프 대신 이유 한 줄."""
         self._tv_points = team_value_daily(data.rows if data else [], start)
         n = len(self._tv_points)
-        note = ("넥슨 데이터센터의 구단가치(검색할 때·따라가기 수집 때 점수와 같이 적은 값)입니다 — "
-                "실제로 뛴 11명 시세 합과는 다른 값일 수 있습니다")
+        note = ("넥슨 데이터센터의 구단가치입니다. 검색하거나 따라가기로 수집할 때 점수와 함께 적은 값이라, "
+                "실제로 뛴 11명의 시세 합과 다를 수 있습니다.")
         if n < 2:
-            note = ("아직 점이 모자랍니다 — 검색할 때마다 한 점(따라가기면 하루 한 점) 쌓입니다 · " if config.WEB_DATA
-                    else "홈페이지 데이터가 꺼져 있어 구단가치를 받지 않습니다 — [정보·설정] · ") + note
+            note = ("아직 점이 모자랍니다. 검색할 때마다 한 점씩 쌓입니다(따라가기는 하루 한 점). " if config.WEB_DATA
+                    else "홈페이지 데이터가 꺼져 있어 구단가치를 받지 않습니다. [정보·설정]에서 켤 수 있습니다. ") + note
         self.lb_team_value_note.setText(note)
         self.gb_team_value.setVisible(bool(self._ouid))
         self.zoom_team_value.set_labels([f"{t[0]:%m/%d}" for t in self._tv_points], self._ouid)
