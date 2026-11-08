@@ -547,6 +547,10 @@ DEV_MATCH_CAP_GROWTH = 1.5                    # 전날이 막힘 없이 제시�
 DEV_MATCH_CAP_MAX = 700_000                   # 끝 상한 — 단 2 약 25만~32만(E2) + 단 3·4 몫 · 초당 38 이면 약 5.1시간(U4 는 80만 — 6시간에 9분 남아 낮춤 · 조각 ② M5)
 DEV_MATCH_BACK_PER_PERSON = 100               # 단 4(거슬러 받기) 한 사람 하루 요청 상한 — 앞 순서 몇 명이 남는 상한을 다 먹지 않게
 DEV_MATCH_DAY_HOURS = 6                       # 한 번 실행이 스스로 멈추는 시간 · "제시간" 기준
+# 게임 중엔 개발 PC 수집을 안 한다(gameguard · 2026-11-08 — 11-06 게임이 "불법 프로그램 감지" 로 꺼진 시각에 dev_matches 가
+# 초당 40번 요청 중이었다). 이름은 server/settings.GAME_PROCESSES 와 같다(서버는 config 를 import 하지 않아 따로 둔다)
+GAME_PROCESSES = ("fczf.exe", "fclauncher.exe")
+GAME_CHECK_S = 15                             # 수집 중 게임이 켜졌나 다시 보는 간격(초) — 이름 목록만 읽어 싸다
 DEV_MATCH_WORKERS = 8                         # 동시에 훑는 사람 수(사람 안에서는 차례로)
 DEV_MATCH_PAGE = 100                          # 목록 한 번에 받는 수(넥슨 상한)
 DEV_MATCH_429_WAIT_S = 60                     # 429 → 전원 쉬고 한 번 더 → 또 429 면 그날 멈춤(막힘)

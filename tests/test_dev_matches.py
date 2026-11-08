@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 import config
 import dev_matches as M
 import rankcollect as rc
+M.GAME_CHECK = lambda: False   # 이 PC 에서 게임을 켠 채 돌려도 — 게임 쪽은 test_game_* 가 잰다
 import ranker
 from nexon_api import NexonAPIError
 
@@ -522,6 +523,77 @@ def test_no_service_key_no_requests():
                 os.environ[DEV_KEY_VAR] = saved_env
         assert rc_ == 0 and made == [], f"서비스 키가 없으면 앱 키로 넘어가지 않는다(H4): {made}"
         assert "없음 — 건너뜀" in (d / "log.txt").read_text(encoding="utf-8")
+
+
+def _game_env(d, check):
+    from dev_archive import DEV_KEY_VAR
+    saved = os.environ.get(DEV_KEY_VAR), M.GAME_CHECK
+    os.environ[DEV_KEY_VAR] = "서비스키"
+    M.GAME_CHECK = check
+
+    def restore():
+        if saved[0] is None:
+            os.environ.pop(DEV_KEY_VAR, None)
+        else:
+            os.environ[DEV_KEY_VAR] = saved[0]
+        M.GAME_CHECK = saved[1]
+    return restore
+
+
+def test_game_running_at_start_no_requests():
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = World()
+        w.person("가", "A")
+        w.game("m1", h(1), "A")
+        made = []
+        restore = _game_env(d, lambda: True)
+        try:
+            rcode = M.run(db_path=d / "dm.db", lock_path=d / "l", fifa_db=d / "f.db",
+                          rank_open=lambda: made.append("rank") or rank_db(d, ["가"]),
+                          api_cls=lambda k: made.append(k) or FakeAPI(w), force=True)
+        finally:
+            restore()
+        assert rcode == 0 and made == [], f"게임 중인데 API·rank.db 를 만들었다: {made}"
+        assert "게임 중 — 건너뜀" in (d / "log.txt").read_text(encoding="utf-8")
+
+
+def test_game_starts_mid_run_stops_and_resumes():
+    """도는 중 게임이 켜지면 cancel 로 멈춘다 — 받은 데까지 저장 · 끝난 날로 안 치니 다음 회차가 잇고 한도 벌점 없음."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = World()
+        for i, (nick, ouid) in enumerate((("가", "A"), ("나", "B"), ("다", "C"))):
+            w.person(nick, ouid)
+            w.game(f"m{i}", h(i + 1), ouid)
+        state = {"n": 0}
+
+        def check():   # 처음 묻는 것은 시작 전 검사 — 그 뒤 첫 확인부터 게임이 켜졌다
+            state["n"] += 1
+            return state["n"] > 1
+        api_calls = []
+
+        class Counting(FakeAPI):
+            def __getattribute__(self, name):
+                if not name.startswith("_"):
+                    api_calls.append(name)
+                return super().__getattribute__(name)
+        restore = _game_env(d, check)
+        try:
+            M.run(db_path=d / "dm.db", lock_path=d / "l", fifa_db=d / "f.db", rank_open=lambda: rank_db(d, ["가", "나", "다"]),
+                  api_cls=lambda k: Counting(w), force=True)
+        finally:
+            restore()
+        log = (d / "log.txt").read_text(encoding="utf-8")
+        assert "멈춤 cancel" in log and "게임이 켜져 멈췄다" in log, log
+        assert not api_calls, f"게임이 켜진 뒤에도 넥슨에 물었다: {api_calls[:5]}"
+        row = q1(d, "SELECT finished_at, blocked FROM days")
+        assert row[0] is None and not row[1], f"끝난 날·막힌 날로 기록됐다(벌점): {row}"
+        restore = _game_env(d, lambda: False)
+        try:
+            M.run(db_path=d / "dm.db", lock_path=d / "l", fifa_db=d / "f.db", rank_open=lambda: rank_db(d, ["가", "나", "다"]),
+                  api_cls=lambda k: FakeAPI(w))
+        finally:
+            restore()
+        assert q1(d, "SELECT finished_at FROM days")[0], "게임이 꺼진 다음 회차가 이어 받아 끝내야 한다"
 
 
 def test_run_with_key_uses_service_key():

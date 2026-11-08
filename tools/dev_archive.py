@@ -48,10 +48,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import config  # noqa: E402
+import gameguard  # noqa: E402
 import ranker  # noqa: E402
 
 ARCHIVE_PATH = config.DATA_DIR / "dev_archive.db"
 LOG_PATH = config.DATA_DIR / "logs" / "dev_archive.log"
+GAME_CHECK = gameguard.game_running   # 게임 중엔 시작하지 않는다 — 테스트가 바꿔 끼운다(2026-11-08)
 PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
 REF_RE = ranker._REF_TIME   # 정규식은 ranker 한 곳(2.3.1 N14) — 여기는 페이지 글자(공백 꼴) 그대로 적는다
 PICK_TOP = config.RANKER_PICK_TOP
@@ -266,8 +268,11 @@ def run(parts: set[int], force: bool = False, archive_path=None) -> int:
     import rankcollect
     now = datetime.now()
     day = now.date().isoformat()
-    arc = open_archive(archive_path)
     lines = [f"── {now.isoformat(timespec='seconds')} dev_archive {sorted(parts)}"]
+    if GAME_CHECK():
+        _log(lines + ["[OK]   게임 중 — 건너뜀(다음 실행이 잇는다)"])
+        return 0
+    arc = open_archive(archive_path)
     if not force and ran_ok_today(arc, day):
         _log(lines + ["[OK]   오늘 이미 돌았음 — 건너뜀"])
         arc.close()

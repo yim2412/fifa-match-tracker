@@ -47,6 +47,8 @@ jobs:
         run: python tests/test_rankmeta.py
       - name: 개발용 상시 수집(가짜 DB — 이 PC 전용 아님)
         run: python tests/test_dev_archive.py
+      - name: 게임 중 수집 멈춤(가짜 프로세스 목록)
+        run: python tests/test_gameguard.py
       - name: 표 칸 그림
         run: python tests/test_icons.py
       - name: 표 정렬 골든(73단계)

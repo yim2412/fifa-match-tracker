@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import config
 import dev_archive as D
+D.GAME_CHECK = lambda: False   # 이 PC 에서 게임을 켠 채 돌려도 — 게임 쪽은 test_game_running_skips_before_opening 이 잰다
 import rankcollect as rc
 import ranker
 import store
@@ -117,6 +118,21 @@ def test_pick_day_records_starters_without_subs():
         D.snapshot_pick_day(conn, arc, targets, "2026-10-08")
         assert arc.execute("SELECT COUNT(DISTINCT day) FROM pick_days").fetchone()[0] == 2, "날짜별로 쌓인다"
         conn.close(), arc.close()
+
+
+def test_game_running_skips_before_opening():
+    """게임 중엔 아무 단계도 안 돈다 — 보관 파일도 안 연다(2026-11-08 · gameguard)."""
+    with Tmp() as t:
+        calls = []
+        saved = D.GAME_CHECK, D.record_ref_time
+        D.GAME_CHECK = lambda: True
+        D.record_ref_time = lambda arc, now, fetch=None: calls.append(1)
+        try:
+            assert D.run({1, 2, 3}, force=True, archive_path=t.arc) == 0
+        finally:
+            D.GAME_CHECK, D.record_ref_time = saved
+        assert calls == [] and not Path(t.arc).exists(), "게임 중인데 단계가 돌았거나 보관 파일을 열었다"
+        assert "게임 중" in Path(D.LOG_PATH).read_text(encoding="utf-8")
 
 
 def test_run_once_a_day_and_one_failure_does_not_block_others():

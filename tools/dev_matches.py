@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import config  # noqa: E402
+import gameguard  # noqa: E402
 import matchtime  # noqa: E402
 from nexon_api import KEY_INVALID_CODE, NETWORK_CODE, QUOTA_CODE, NexonAPIError  # noqa: E402
 
@@ -70,6 +71,8 @@ LOCK_PATH = config.DATA_DIR / "dev_matches.lock"
 ARCHIVE_PATH = config.DATA_DIR / "dev_archive.db"   # 단 3 대상(읽기만) — dev_archive.ARCHIVE_PATH 와 같은 파일
 LOG_PATH = config.DATA_DIR / "logs" / "dev_matches.log"
 PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
+# 게임이 켜져 있나 — 테스트가 바꿔 끼운다. 게임 중엔 요청 0(gameguard 머리말 · 2026-11-08)
+GAME_CHECK = gameguard.game_running
 KST = timezone(timedelta(hours=9))
 GONE_CODE = "OPENAPI00004"      # 맞는 키로 없는 닉네임 — get_ouid 에서만 "그 사람 건너뜀", 다른 요청이면 우리 요청이 틀린 것(멈춤)
 PICK_DEV_KIND = "ranker_pick_dev"   # dev_archive ③ 의 계수 이름(fifa.db api_budget)
@@ -1110,6 +1113,9 @@ def run(*, force: bool = False, cap: int | None = None, db_path=None, lock_path=
     if not key:
         _log(lines + [f"[OK]   {DEV_KEY_VAR} 없음 — 건너뜀(앱 키로 넘어가지 않는다)"])
         return 0
+    if GAME_CHECK():
+        _log(lines + ["[OK]   게임 중 — 건너뜀(다음 회차가 잇는다)"])
+        return 0
     lock = acquire_lock(lock_path)
     if lock is None:
         _log(lines + ["[OK]   다른 실행이 돌고 있음 — 건너뜀"])
@@ -1125,6 +1131,7 @@ def run(*, force: bool = False, cap: int | None = None, db_path=None, lock_path=
             rank_open = rankcollect.open_rank_db_ro
         rconn = rank_open()
         res = run_day(db_path, rconn, lambda: api_cls(key), clock=clock, sleep=sleep,
+                      cancel=gameguard.watcher(lambda: GAME_CHECK(), clock=clock),
                       deadline=clock() + config.DEV_MATCH_DAY_HOURS * 3600, fifa_db=fifa_db,
                       force=force, cap_override=cap, progress=prog)
     except Exception as e:  # noqa: BLE001
@@ -1145,6 +1152,8 @@ def run(*, force: bool = False, cap: int | None = None, db_path=None, lock_path=
                      f" · {res.persons:,}명 · 단 {res.stage_done or '-'} · 멈춤 {res.reason or '없음(끝)'}"
                      f" · 오류 {res.errors} · {int(took)}초 · 초당 {rate:.1f}")
         lines += [f"       {n}" for n in res.notes[:5]]
+        if res.reason == "cancel":
+            lines.append("       게임이 켜져 멈췄다 — 받은 데까지 저장 · 다음 회차가 잇는다(한도 벌점 없음)")
     _log(lines)
     return 1 if res.key_rejected else 0
 

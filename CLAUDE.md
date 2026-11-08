@@ -58,6 +58,7 @@
 | `cardstats.py` | 카드 정보 계산(51단계) — 계산만 · 지금은 실효 OVR `effective_ovr`·선발 평균 `lineup_strength` 만(측정 도구와 앱이 **같은 식**을 쓰게 — 측정 A 가 맞춘 `C1_LOGIT_*` 가 앱의 Δ 와 어긋나지 않게) · C1~C6 집계는 조각 ②③ 에서 |
 | `tools/measure_cards.py` | **51단계 측정 A~C(이 PC 전용 · 배포판 밖)** — 판정 규칙 상수는 ROADMAP 측정 절을 옮긴 것(`RULE_COMMIT` · 결과를 보고 안 바꾼다) · `--start` 로 D0 를 잡기 전엔 백필·얼리기가 안 돈다 · **앱 토글이 켜졌으면 거부** · 결과는 `DATA_DIR/measure/`(닉네임 없음) · 명령 표는 머리말 |
 | `server/` | **중앙 조회 서버 1단계 ⓐ(배포판 밖 · 정본 `docs/CENTRAL_SERVER.md` 11절)** — 넥슨 경로를 같은 모양으로 받아 대신 묻고 저장(표준 `http.server` · 프로세스 하나) · 상수는 `server/settings.py` 에만 · **`config` 를 import 하지 않는다**(사용자 `.env` 의 키가 서버 환경에 실린다 — `test_server_import_does_not_load_config`) · 키·DB 는 저장소 밖 `%LOCALAPPDATA%\피파전적관리\server\`(`server.env`·`server.db`) · 실행 `python -m server.run_local`(게임·`dev_matches`·`measure_cards` 가 돌면 거부 · **`GAME_PROCESSES` 가 비면 거부**) · 앱은 `.env` `FIFA_SERVER_URL` 이 있을 때만 — **서버를 켜는 생성 자리는 `app_main` 검색 `api` 와 `check_api` 둘뿐**(키 확인·구단주 분포·dev 도구는 늘 직접) · 서버 사정은 `nexon_api.SERVER_CODES`(키 창·`_mark_final_429` 에 안 잡힌다) · 거래는 늘 직접 |
+| `gameguard.py` · `tools/run_unless_game.py` | **게임 중엔 개발 PC 수집을 안 한다**(2026-11-08 — 11-06 게임이 "불법 프로그램이 감지되어 게임을 종료합니다" 로 꺼진 09:48 에 `dev_matches` 가 초당 40번 요청 중이었다 · 사용자: 파이썬을 끄거나 수집이 끝나면 안 떴다 · 보안 프로그램 로그는 암호화라 직접 확인은 못 했다) · **게임 프로세스를 열지 않는다**(이름 목록만 · 못 읽으면 켜짐) · `dev_matches`·`dev_archive` 는 시작 검사 + 도중 `cancel` · `measure_cards` 는 해시 때문에 예약 작업이 실행기를 거친다 · 이름 `config.GAME_PROCESSES` · 배포 앱은 아직 안 막는다 |
 | `tools/dev_matches.py` | **개발 PC 경기 수집(이 PC 전용 · 배포판 밖)** — 1만 위 랭커 감독모드 경기 요약을 `DATA_DIR/dev_matches.db` 에 · 작업 스케줄러 `FifaDevMatches`(dev_archive 와 따로 — 엮으면 홈페이지 요청이 2시간마다 돈다) · **서비스 키에만**(없으면 요청 0) · fifa.db 에 안 쓴다 · 하루 상한 `next_cap`(×1.5 · 막히면 절반 + 3일 · 제시간은 실제로 돈 시간 `days.run_s`) · 단 1~4(최신 · 새 경기 · 시즌에 1만 위였던 사람 · 거슬러 받기 — 아래 끝은 `cursor.depth`·`base_id`, `games` MIN(at) 아님) · fifa.db·dev_archive 는 읽기 전용 URI 로만 · `--check-fc` 내 계정 빠짐 대조 · 커서 규칙은 머리말 표 · 상수 `config.DEV_MATCH_*` |
 
 ```powershell
@@ -96,6 +97,7 @@ python tools/measure_cards.py --status   # 51 측정 현황(D0 2026-10-19 · 오
 python tools/check_t0.py               # 63 골든 — 내 계정 10-01~10-23 날마다 승·무·패·FC 를 앱 계산으로(이 PC 전용 · 골든은 DATA_DIR/t0_golden.json · --write)
 python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
 python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
+python tests/test_gameguard.py         # 게임 중 수집 멈춤 — 이름 목록·못 읽음은 켜짐·확인 간격·실행기(건너뜀·도중 내림·콘솔 창 숨김)
 python tests/test_server.py            # 중앙 서버 쪽 — 영구 저장·동시 한 번·부정 캐시·허용 목록·서버 코드·IP/전체 몫·키·닉네임 안 샘(가짜 넥슨)
 python tests/test_server_mode.py       # 중앙 서버 앱 쪽 — 서버 주소가 비면 요청 바이트 골든 · 키 안 나감 · 거래 직접 · 실패 한 건도 직접 재요청 · 폴백(가짜 어댑터)
 python -m server.run_local             # 이 PC 시험 서버(127.0.0.1:8765 · 게임 중이면 거부) — 앱은 스크래치 FIFA_DATA_DIR 의 .env 에 FIFA_SERVER_URL 로만
