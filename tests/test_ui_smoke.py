@@ -5484,11 +5484,14 @@ class _MaxDivApi(_DetailApi):
     """maxdivision 은 바로 답하고, 로더가 finished_ok 전에 부르는 division 메타는 그 답이 끝난 뒤에야 준다 —
     그래서 finished_ok 때는 늘 '이미 끝남'이라 보내는 순서가 결정적이다(앞으로 옮기는 변이가 매번 잡힌다)."""
 
-    def __init__(self, rows=_MAXDIV_ROWS, fail=False):
+    def __init__(self, rows=_MAXDIV_ROWS, fail=False, asked=True):
         import threading
         super().__init__([], "")
         self.rows, self.fail, self.calls = rows, fail, 0
         self.done = threading.Event()
+        if not asked:
+            # 안 묻는 경우(calls == 0 을 재는 쪽) — 안 열어 두면 division 메타가 5초를 꽉 채워 기다린다(85단계 실측 5.1초)
+            self.done.set()
 
     def get_max_division(self, ouid):
         self.calls += 1
@@ -5533,7 +5536,7 @@ def test_max_division_survives_account_switch():
         assert api.calls == 1 and _win._ouid == _OUID
         assert _best_line() == "최고티어 최근 달성일 2026-07-05  [ 챔피언스 ]", _best_line()  # 50(공식경기) 줄이 아니라 52
         # 구단주 비교 로더(기본값)는 부르지 않는다
-        other = _MaxDivApi()
+        other = _MaxDivApi(asked=False)
         _run_one(app_main.MatchLoader(other, "닉", 52))
         assert other.calls == 0
         # 실패해도 검색은 정상 완료 · 같은 계정이면 보던 줄 유지
@@ -5620,7 +5623,7 @@ def test_offline_open_does_not_ask_max_division():
     # 켤 때 저장본 열기·내려놓은 뒤 다시 열기(둘 다 offline_ouid)는 넥슨에 묻지 않는다 — 뒤따르는 검색이 채운다
     tmp, saved = _loader_db(4)
     try:
-        api = _MaxDivApi()
+        api = _MaxDivApi(asked=False)
         _run_one(app_main.MatchLoader(api, "닉", 52, offline_ouid=_OUID, want_max_division=True))
         assert api.calls == 0
     finally:
@@ -15000,9 +15003,16 @@ def test_79_player_extremes_rule_and_wiring():
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
+def _flush_deleted():
+    """테스트 사이마다 deleteLater 한 객체를 실제로 지운다 — 실제 앱은 이벤트 루프가 이걸 한다.
+    안 하면 쌓인 위젯을 스타일을 다시 입히는 테스트(_setup_app → T.apply)가 전부 다시 꾸며, 혼자 1.6초인 테스트가
+    전체 실행에선 21초였다(85단계 실측 — 전체 2분 15초 → 1분 13초)."""
+    _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    failed = 0
+    failed, started = 0, time.monotonic()
     for t in tests:
         try:
             with watchdog.limit(t.__name__):
@@ -15014,8 +15024,9 @@ def main() -> int:
         except Exception as e:
             failed += 1
             print(f"[ERR]  {t.__name__}: {type(e).__name__}: {e}")
+        _flush_deleted()
     _shots()
-    print(f"\n{len(tests) - failed}/{len(tests)} 통과")
+    print(f"\n{len(tests) - failed}/{len(tests)} 통과 · {time.monotonic() - started:.0f}초")
     return 1 if failed else 0
 
 
