@@ -53,7 +53,8 @@ from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
     ranker_pick_summary, recommend, recommend_candidates,
 )
-from cardviews import PlayerCard, SquadOvr, lineup_cards, player_card, squad_ovr
+from cardviews import (CardMove, PlayerCard, PriceIndex, SquadOvr, ValueBreakdown, lineup_cards, player_card,
+                       price_days, price_index, squad_ovr, value_breakdown, screen_state as card_screen_state)
 from enhance import (
     BUDGET_EXPECT_Q as ENHANCE_EXPECT_Q, BUDGET_QS as ENHANCE_BUDGET_QS, GRADES_MAX as ENHANCE_GRADES_MAX,
     PROTECT_FROM as ENHANCE_PROTECT_FROM, PROTECT_RANGE_PCTS as ENHANCE_RANGE_PCTS,
@@ -136,7 +137,8 @@ __all__ = [
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸
     "OppScore", "bin_of_value", "opp_scores",
     # cardviews — 카드 정보 화면 재료(68)
-    "PlayerCard", "SquadOvr", "lineup_cards", "player_card", "squad_ovr",
+    "CardMove", "PlayerCard", "PriceIndex", "SquadOvr", "ValueBreakdown", "card_screen_state", "lineup_cards",
+    "player_card", "price_days", "price_index", "squad_ovr", "value_breakdown",
     # enhance — 강화 비용(83). 재료 받기(boostcollect)는 로더가 부른다
     "ENHANCE_BUDGET_QS", "ENHANCE_EXPECT_Q", "ENHANCE_GRADES_MAX", "ENHANCE_PROTECT_FROM", "ENHANCE_RANGE_PCTS",
     "EnhanceError", "EnhanceEstimate", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels", "enhance_parse_money",

@@ -935,6 +935,65 @@ class GroupedBarChart(_Chart):
                        Qt.AlignmentFlag.AlignCenter, lb)
 
 
+class SignedBarChart(_Chart):
+    """0 을 가운데 둔 세로 막대(68 C6 주간 시세 변화) — 오름은 GOOD_FILL 위로 · 내림은 BAD_FILL 아래로.
+    막대를 선으로 잇지 않는다 — 날마다 다른 카드의 변화라 누적 지수로 읽히면 틀린다(51 3판 B[중]9).
+    아래 날짜 글자는 겹치지 않는 만큼만 건너뛰어 적는다. bar_rects: (영역, 색) — 테스트가 방향·색을 잰다."""
+
+    def __init__(self, empty_text: str = EMPTY_TEXT):
+        super().__init__(min_h=180)
+        self._labels: list[str] = []
+        self._values: list[float] = []
+        self._tips: list[str] = []
+        self._empty_text = empty_text
+        self.bar_rects: list[tuple[QRectF, str]] = []
+
+    def set_data(self, labels: list[str], values: list[float], tips: list[str] | None = None) -> None:
+        self._labels, self._values = list(labels), list(values)
+        self._tips = list(tips) if tips is not None else [f"{lb} · {v:+.1f}%" for lb, v in zip(labels, values)]
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hits, self.bar_rects = [], []
+        if not self._values:
+            self._empty(p, self._empty_text)
+            return
+        small = _small_font(self.font())
+        fm = QFontMetrics(small)
+        p.setFont(small)
+        w, h = self.width(), self.height()
+        mt, mb, ml, mr = fm.height() + 4, fm.height() + 8, 4, 4
+        bottom = h - mb
+        half = max((bottom - mt) / 2, 1)
+        zero = mt + half
+        vmax = max(abs(v) for v in self._values) or 1.0
+        n = len(self._values)
+        slot = (w - ml - mr) / n
+        bar = max(3.0, min(BAR_MAX, slot * 0.7))
+        p.setPen(QPen(QColor(T.CHART_AXIS), 1))
+        p.drawLine(QPointF(ml, zero), QPointF(w - mr, zero))
+        for i, v in enumerate(self._values):
+            x = ml + slot * i + (slot - bar) / 2
+            bh = half * abs(v) / vmax
+            if bh > 0:
+                col = T.GOOD_FILL if v > 0 else T.BAD_FILL
+                rect = QRectF(x, zero - bh, bar, bh) if v > 0 else QRectF(x, zero, bar, bh)
+                r = min(BAR_RADIUS, bar / 2, bh)
+                path = QPainterPath()
+                path.addRoundedRect(rect, r, r)
+                p.fillPath(path, QColor(col))
+                self.bar_rects.append((rect, col))
+            self._hits.append((QRectF(ml + slot * i, mt, slot, bottom - mt), self._tips[i]))
+        step = max(1, math.ceil((max(fm.horizontalAdvance(lb) for lb in self._labels) + 8) / slot))
+        p.setPen(QColor(T.TEXT_DIM))
+        for i in range(0, n, step):
+            p.drawText(QRectF(ml + slot * i - slot * (step - 1) / 2, bottom + 4, slot * step, fm.height()),
+                       Qt.AlignmentFlag.AlignCenter, self._labels[i])
+        p.drawText(QRectF(ml, 0, w - ml - mr, mt), Qt.AlignmentFlag.AlignLeft, f"+{vmax:.1f}%")
+
+
 class HistogramChart(_Chart):
     """점수 분포(2.3.1 B5) — 같은 폭 칸의 세로 막대 + 비교 선 하나 + 세로선들(검색 계정 실선 · 순위 컷 점선).
     faint_first: 맨 왼쪽 칸을 흐리게(1만 위 컷에서 잘려 일부만 센다). 막대 위 숫자는 없다 — 툴팁과 아래 축 글자."""

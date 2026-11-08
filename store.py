@@ -1473,6 +1473,17 @@ def save_card_price_days(conn: sqlite3.Connection, rows) -> None:
                          " src = src | excluded.src", rows)
 
 
+def card_price_rows(conn: sqlite3.Connection, src_bit: int, cards=None) -> list[tuple[int, int, str, int | None]]:
+    """날짜별 시세 (spid, 강화, 날, 시세 또는 None) — src 비트(1 내 카드 C5 · 2 C6 표본)가 선 줄만.
+    cards: {(spid, 강화)} 를 주면 그 카드만(C5 — 내 선발 몇십 장). 표가 보관 70일이라 크지 않다."""
+    rows = conn.execute("SELECT spid, grade, day, price FROM card_price_days WHERE (src & ?) != 0",
+                        (src_bit,)).fetchall()
+    out = [(r[0], r[1], r[2], r[3]) for r in rows]
+    if cards is not None:
+        out = [r for r in out if (r[0], r[1]) in cards]
+    return out
+
+
 def prune_card_price_days(conn: sqlite3.Connection, today: date) -> int:
     """보관(CARD_PRICE_KEEP_DAYS)이 지난 날짜별 시세를 지운다 — 출처·관문과 무관(꺼 둬도 안내문의 날 수가 거짓이 안 되게)."""
     cut = (today - timedelta(days=config.CARD_PRICE_KEEP_DAYS)).isoformat()

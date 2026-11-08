@@ -567,6 +567,10 @@ C6_REFRESH_DAYS = 7                           # 표본 카드 시세를 다시 �
 C6_GAP_MIN = 7                                # 주간 시세 변화가 쓰는 관측 간격(일) — 앱을 하루 안 켜도 9일
 C6_GAP_MAX = 10
 C6_MIN_CARDS = 200                            # 최근 7일 간격 조건을 만족한 관측이 이보다 적으면 "모으는 중"
+C6_RECENT_DAYS = 7                            # 위 "최근" 의 길이 · 많이 오른·내린 카드도 이 안의 관측에서
+C6_TOP_N = 10                                 # 많이 오른·내린 카드 줄 수
+C5_DEFAULT_GAP_DAYS = 7                       # 선발 11장 시세 변화 기본 — 이만큼 전 ↔ 오늘
+C5_NEAREST_MAX_DAYS = 3                       # 고른 날에 시세 관측이 없으면 그 앞 가장 가까운 관측일을 이만큼까지
 C2_GAP_MAX = 1                                # 팀컬러 상성 — 전력 차 절댓값이 이 안인 경기만
 # 경기 기록 spPosition(0~27) → 능력치 시뮬레이터 포지션 칸(16칸 — position_ovrs 의 키). 2026-10-18 조각 ① 실측: 시뮬레이터가 주는 칸은
 # ST LW CF RW CAM LM CM RM CDM LWB CB RWB LB SW RB GK 열여섯 — 좌우가 갈린 자리(RCB·LCB 등)는 가운데 칸으로. 28(SUB)은 없다

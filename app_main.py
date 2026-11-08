@@ -2844,7 +2844,8 @@ class MainWindow(QMainWindow):
     TC_SORTS = (*((k, t) for k, t in RATE_SORTS if k != "recent"), ("value", "팀가치 높은 순"))
     # 강화 숫자 칸 = 배지(64 P8) — {칸을 채우는 함수: (표, 열)}. test_rules 가 강화 하나만 든 칸을 만드는 함수를 세어 이 표와 대조한다
     GRADE_BADGE_COLUMNS = {"_render_players": ("tbl_players", (2,)), "_render_timeline": ("tbl_timeline", (3,)),
-                           "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,))}
+                           "_render_ledger": ("tbl_ledger", (3, 5)), "_render_my_traits": ("tbl_my_traits", (2,)),
+                           "_fill_price_moves": ("tbl_price_week", (1,))}
     # 기간은 시즌 칸 말풍선 · 점유율은 뺐다(80 — 13열이 1280 에서 글씨 하한까지 줄었다)
     SEASON_COLUMNS = ["시즌", "경기", "승", "무", "패", "승률", "지난 시즌 대비", "등급",
                       "평균 득점", "평균 실점", "평균 평점"]
@@ -3771,7 +3772,8 @@ class MainWindow(QMainWindow):
                  ("스쿼드·이적", Tabs("squad", (("타임라인", "_build_timeline_tab"),
                                              ("가계부", "_build_ledger_tab"),
                                              ("이력", "_build_history_tab"),
-                                             ("영입 전후", "_build_arrivals_tab")))),
+                                             ("영입 전후", "_build_arrivals_tab"),
+                                             ("주간 시세", "_build_price_week_tab")))),
                  ("강화 비용", "_build_enhance_tab")]),
         # 2.1.1 새 묶음 — 아직 빈 메뉴는 config.HIDDEN_NAV_UNTIL_READY 에 이름을 넣어 숨긴다(16·17단계가 채웠다)
         ("랭커", [("랭킹 추이", Tabs("ranktrend", (("추이", "_build_rank_trend_tab"),
@@ -5987,6 +5989,7 @@ class MainWindow(QMainWindow):
         self._grade_badges("_render_ledger")
         lv.addWidget(self.tbl_ledger, 1)
         v.addWidget(self.box_ledger, 1)
+        v.addWidget(self._build_value_change_card())
         return w
 
     LEDGER_ROWS = [
@@ -6200,6 +6203,202 @@ class MainWindow(QMainWindow):
         self._arrival_diff(self.tbl_moves, rep.moves, self.MOVE_COLUMNS.index("득실 차이"))
         self.tbl_moves.setSortingEnabled(True)
 
+    # ── 선발 11장 시세 변화(68 C5) — [가계부] 아래 절 ──
+    VALUE_CHANGE_TIP = ("고른 두 날의 선발 11장(그날 마지막 경기) 시세를 견줍니다. 넥슨 구단가치와 다릅니다 — 구단가치는 보유 카드 전체, "
+                        "여기는 선발 11장만입니다.\n가격 효과 = 두 날 다 쓴 카드의 시세 변화 · 보강 효과 = 새로 쓴 카드 − 뺀 카드"
+                        "(강화만 올린 것도 보강) · 시세를 모르는 카드는 셈에서 빼고 장수만 적습니다.")
+    VALUE_CHANGE_ROWS = (("total", "선발 11장 변화"), ("price", "가격 효과"), ("squad", "보강 효과"), ("unknown", "시세 모름"))
+
+    def _build_value_change_card(self) -> QWidget:
+        card = Card("선발 11장 시세 변화")
+        card.setToolTip(self.VALUE_CHANGE_TIP)
+        top = QHBoxLayout()
+        self.cb_value_from, self.cb_value_to = NoScrollComboBox(), NoScrollComboBox()
+        top.addWidget(self.cb_value_from)
+        top.addWidget(QLabel("→"))
+        top.addWidget(self.cb_value_to)
+        top.addStretch(1)
+        for cb in (self.cb_value_from, self.cb_value_to):
+            cb.currentIndexChanged.connect(lambda _i: self._redraw_value_change())
+        card.body.addLayout(top)
+        self.lb_value_note = self._note_label()
+        card.body.addWidget(self.lb_value_note)
+        grid = QGridLayout()
+        self.lb_value = {}
+        for r, (key, name) in enumerate(self.VALUE_CHANGE_ROWS):
+            a = QLabel(name)
+            a.setStyleSheet(f"color: {T.TEXT_DIM};")
+            b = QLabel("-")
+            b.setTextFormat(Qt.TextFormat.RichText)
+            grid.addWidget(a, r, 0)
+            grid.addWidget(b, r, 1)
+            self.lb_value[key] = b
+        grid.setColumnStretch(1, 1)
+        self.box_value = QWidget()
+        self.box_value.setLayout(grid)
+        card.body.addWidget(self.box_value)
+        self.value_card = card
+        self._value_input = None   # (details, ouid, prices) — 날짜를 바꾸면 요청·DB 없이 다시 센다
+        return card
+
+    def _signed_bp(self, v: int) -> str:
+        """오름 초록 · 내림 빨강(사용자 11-06 — 긍정 초록·부정 빨강)."""
+        text = self._bp(v, sign=True)
+        color = T.GOOD if v > 0 else T.BAD if v < 0 else T.TEXT
+        return f'<span style="color:{color}; font-weight:bold;">{text}</span>'
+
+    def _render_value_change(self, st: dict | None) -> None:
+        mine = (st or {}).get("my_ouid")
+        self.value_card.setVisible(not mine or mine == self._ouid)   # 남의 계정을 볼 때는 숨긴다(내 시세만 모은다)
+        self._value_input = None
+        today = datetime.now().date()
+        if not mine:
+            return self._value_empty(notice.card_empty_text("mine_unset"))
+        if mine != self._ouid:
+            return
+        cards = set()
+        for d in self._details_all:
+            me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == mine), None)
+            for p in (me or {}).get("player") or []:
+                if isinstance(p.get("spId"), int) and isinstance(p.get("spGrade"), int):
+                    cards.add((p["spId"], p["spGrade"]))
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                rows = store.card_price_rows(conn, 1, cards)
+                state = core.card_screen_state(conn, today)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return self._value_empty("시세 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
+        prices: dict[tuple[int, int], dict[str, int | None]] = {}
+        for spid, grade, day, price in rows:
+            prices.setdefault((spid, grade), {})[day] = price
+        days = core.price_days(prices)
+        if len(days) < 2:
+            if not isinstance(state, tuple):
+                return self._value_empty(notice.card_empty_text(state))
+            return self._value_empty(notice.card_empty_text(("collecting", len(days), 2, 2 - len(days))))
+        self._value_input = (self._details_all, mine, prices)
+        keep = (self.cb_value_from.currentData(), self.cb_value_to.currentData())
+        for cb in (self.cb_value_from, self.cb_value_to):
+            cb.blockSignals(True)
+            cb.clear()
+            for d in reversed(days):
+                cb.addItem(f"{d:%m-%d}", d)
+        want_from = keep[0] if keep[0] in days else max([d for d in days
+                                                         if d <= days[-1] - timedelta(days=config.C5_DEFAULT_GAP_DAYS)]
+                                                        or [days[0]])
+        want_to = keep[1] if keep[1] in days else days[-1]
+        self.cb_value_from.setCurrentIndex(self.cb_value_from.findData(want_from))
+        self.cb_value_to.setCurrentIndex(self.cb_value_to.findData(want_to))
+        for cb in (self.cb_value_from, self.cb_value_to):
+            cb.blockSignals(False)
+        self._redraw_value_change()
+
+    def _value_empty(self, text: str) -> None:
+        self._set_status(self.lb_value_note, text)
+        self.box_value.setVisible(False)
+        for cb in (self.cb_value_from, self.cb_value_to):
+            cb.setVisible(False)
+        self.value_breakdown = None   # 테스트가 본다
+
+    def _redraw_value_change(self) -> None:
+        if self._value_input is None:
+            return
+        d1, d2 = self.cb_value_from.currentData(), self.cb_value_to.currentData()
+        if d1 is None or d2 is None:
+            return
+        if d1 > d2:
+            d1, d2 = d2, d1
+        details, mine, prices = self._value_input
+        vb = core.value_breakdown(details, mine, prices, d1, d2)
+        self.value_breakdown = vb
+        for cb in (self.cb_value_from, self.cb_value_to):
+            cb.setVisible(True)
+        if vb.game1 is None or vb.game2 is None:
+            self._value_empty_keep_dates("고른 날까지 선발 기록이 없습니다.")
+            return
+        self._set_status(self.lb_value_note, "")
+        self.box_value.setVisible(True)
+        L = self.lb_value
+        L["total"].setText(f"{self._signed_bp(vb.total)} · {self._bp(vb.v1)} → {self._bp(vb.v2)}")
+        L["price"].setText(self._signed_bp(vb.price) + f" · 그대로 쓴 {vb.kept}장")
+        L["squad"].setText(self._signed_bp(vb.squad) + f" · 새로 {vb.added}장 · 뺀 {vb.removed}장")
+        L["unknown"].setText(f"{vb.unknown}장" if vb.unknown else "없음")
+
+    def _value_empty_keep_dates(self, text: str) -> None:
+        self._set_status(self.lb_value_note, text)
+        self.box_value.setVisible(False)
+
+    # ── 주간 시세 변화(68 C6) — [스쿼드·이적] 탭 ──
+    PRICE_WEEK_VIEWS = ("많이 오른 카드", "많이 내린 카드")
+    PRICE_WEEK_COLUMNS = ["선수", "강화", "직전 시세", "지금 시세", "변화", "날"]
+    PRICE_WEEK_TIP = ("날마다 그날 시세를 읽은 표본 카드가 직전 관측({lo}~{hi}일 전)보다 몇 % 변했는지의 중앙값입니다. "
+                      "날마다 다른 카드라 막대를 이어 누적으로 읽으면 안 됩니다.\n표본은 최근 내 경기·상대에 많이 나온 카드라 "
+                      "지금 많이 쓰이는 카드 쪽으로 치우칠 수 있습니다.")
+
+    def _build_price_week_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_price_week_note = self._note_label()
+        v.addWidget(self.lb_price_week_note)
+        self.chart_price_week = charts.SignedBarChart("시세 관측 없음")
+        self.chart_price_week.setToolTip(self.PRICE_WEEK_TIP.format(lo=config.C6_GAP_MIN, hi=config.C6_GAP_MAX))
+        v.addWidget(self.chart_price_week)
+        self.seg_price_week = Segmented(list(self.PRICE_WEEK_VIEWS))
+        self.seg_price_week.changed.connect(lambda _i: self._fill_price_moves())
+        top = QHBoxLayout()
+        top.addWidget(self.seg_price_week)
+        top.addStretch(1)
+        v.addLayout(top)
+        self.tbl_price_week = self._make_table(self.PRICE_WEEK_COLUMNS, icons={0: "season"})
+        self._grade_badges("_fill_price_moves")
+        v.addWidget(self.tbl_price_week, 1)
+        self.price_index = None   # 테스트가 본다
+        return w
+
+    def _render_price_week(self) -> None:
+        today = datetime.now().date()
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                rows = store.card_price_rows(conn, 2)
+                state = core.card_screen_state(conn, today)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            self._set_status(self.lb_price_week_note, "시세 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
+            self.price_index = None
+            self.chart_price_week.set_data([], [])
+            self._fill(self.tbl_price_week, [])
+            return
+        idx = core.price_index(rows, today)
+        self.price_index = idx
+        if idx.ready:
+            self._set_status(self.lb_price_week_note, "")
+        elif isinstance(state, tuple):
+            self._set_status(self.lb_price_week_note, notice.card_empty_text(
+                ("collecting", idx.recent, config.C6_MIN_CARDS, idx.wait_days)))
+        else:
+            self._set_status(self.lb_price_week_note, notice.card_empty_text(state))
+        shown = idx.days if idx.ready else []
+        self.chart_price_week.set_data([f"{d:%m-%d}" for d, _m, _n in shown], [m for _d, m, _n in shown],
+                                       [f"{d:%m-%d} · 중앙값 {m:+.1f}% · {n:,}장" for d, m, n in shown])
+        self._fill_price_moves()
+
+    def _fill_price_moves(self) -> None:
+        idx = self.price_index
+        moves = [] if idx is None or not idx.ready else (idx.up if self.seg_price_week.current() == 0 else idx.down)
+        rows = [[IconCell(self._names.get(m.spid, str(m.spid)), None, core.season_id_of(m.spid)),
+                 (str(m.grade), m.grade), (self._bp(m.before), m.before), (self._bp(m.after), m.after),
+                 (f"{m.pct:+.1f}%", m.pct), (f"{m.day:%m-%d}", m.day.toordinal())] for m in moves]
+        self._fill(self.tbl_price_week, rows, enable_sort=False)
+        col = self.PRICE_WEEK_COLUMNS.index("변화")
+        for r, m in enumerate(moves):
+            self.tbl_price_week.item(r, col).setForeground(QColor(T.GOOD if m.pct > 0 else T.BAD))
+        self.tbl_price_week.setSortingEnabled(True)
+
     def _build_timeline_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
@@ -6271,6 +6470,7 @@ class MainWindow(QMainWindow):
         return f"{head}{part} · 평가 {MainWindow._bp(v.gain, sign=True)}"
 
     def _render_ledger(self, st: dict) -> None:
+        self._render_value_change(st)   # 거래가 없어도 그린다 — 내 계정 선발만 쓴다
         tl, st2 = self._timeline_for_screen()
         if tl is None or not tl.has_trades:
             self.box_ledger.setVisible(False)
@@ -10974,6 +11174,7 @@ class MainWindow(QMainWindow):
         "calendar": [("승률 그래프", "일별 기록")],
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
         "history": [("스쿼드·이적", "이력")], "arrivals": [("스쿼드·이적", "영입 전후")],
+        "pricew": [("스쿼드·이적", "주간 시세")],
         "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")],
         "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
@@ -11025,6 +11226,7 @@ class MainWindow(QMainWindow):
             "trades": self._render_trades,
             "timeline": self._render_timeline,  # 누적 전체 — 짝·보유 상태는 전체 이력으로 맞춘다
             "arrivals": self._render_arrivals,  # 누적 전체 — 앞뒤 판이 시즌을 넘는다
+            "pricew": self._render_price_week,  # 검색 계정과 무관 — 표본 카드 시세(68 C6)
             "history": self._render_history,    # 57 K4 — 누적 전체(시즌 필터 무관) · 닉네임 줄은 내 계정만
             "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
             "recommend": self._render_recommend,     # 후보는 DB(랭커 픽 · 내 상대) · "내 스쿼드"는 최근 경기

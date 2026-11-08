@@ -1157,7 +1157,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 42, len(tables)   # 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 43, len(tables)   # 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -14350,6 +14350,139 @@ def test_82_arrivals_tab_shows_record_not_effect():
         _win._positions.clear()
         _win._positions.update(keep[3])
         _win._render_arrivals()
+
+
+def _c5_game(spids, raw, ouid):
+    """raw = 넥슨 원문(UTC) — KST 로 뜻한 시각에서 글자 그대로 9시간 뺀다(63)."""
+    me = {"ouid": ouid, "player": [{"spId": s, "spPosition": 1 + i, "spGrade": 5} for i, s in enumerate(spids)],
+          "matchDetail": {"matchResult": "승"}}
+    return {"matchDate": raw, "matchInfo": [me, {"ouid": "상대", "player": []}]}
+
+
+def _clear_card_prices():
+    c = store.open_db(config.DB_PATH)
+    try:
+        with c:
+            c.execute("DELETE FROM card_price_days")
+            c.execute("DELETE FROM api_budget WHERE kind LIKE 'card_backfill%'")
+    finally:
+        c.close()
+
+
+def test_68_value_change_card_states_and_numbers():
+    """[가계부] 아래 선발 11장 시세 변화(C5) — 내 계정 전 · 남의 계정 · 모으는 중 · 숫자(가격 + 보강 = 총변화) · 색."""
+    keep = _win._details_all, _win._ouid, config.WEB_DATA, config.card_backfill_allowed
+    c = store.open_db(config.DB_PATH)
+    st_keep = store.trade_state(c)
+    c.close()
+    try:
+        config.WEB_DATA = True
+        config.card_backfill_allowed = lambda: True
+        _win._ouid = "me"
+        _win._details_all = [_c5_game(range(1, 12), "2026-11-01T03:00:00", "me"),
+                             _c5_game([*range(1, 11), 12], "2026-11-08T03:00:00", "me")]
+        _win._go_page("스쿼드·이적", "가계부")
+        _win._render_value_change({})
+        assert _win.value_card.isVisibleTo(_win) and "내 계정" in _win.lb_value_note.text(), _win.lb_value_note.text()
+        assert not _win.box_value.isVisibleTo(_win)
+        _win._render_value_change({"my_ouid": "남"})
+        assert not _win.value_card.isVisibleTo(_win), "남의 계정을 볼 땐 숨긴다"
+        _clear_card_prices()
+        c = store.open_db(config.DB_PATH)
+        try:
+            store.save_card_price_days(c, [(s, 5, "2026-11-01", 100, 1) for s in range(1, 12)])
+        finally:
+            c.close()
+        _win._render_value_change({"my_ouid": "me"})
+        assert "모으는 중" in _win.lb_value_note.text() and "1/2" in _win.lb_value_note.text(), _win.lb_value_note.text()
+        c = store.open_db(config.DB_PATH)
+        try:
+            store.save_card_price_days(c, [(s, 5, "2026-11-08", 90, 1) for s in range(1, 11)] + [(12, 5, "2026-11-08", 500, 1)]
+                                       + [(1, 5, "2026-11-10", 9, 2)])   # 내 카드와 같은 카드라도 C6 표본 줄은 안 읽는다
+        finally:
+            c.close()
+        _win._render_value_change({"my_ouid": "me"})
+        vb = _win.value_breakdown
+        assert vb is not None and (vb.day1.isoformat(), vb.day2.isoformat()) == ("2026-11-01", "2026-11-08"), vb
+        assert (vb.price, vb.squad, vb.unknown) == (-100, 500 - 100, 0) and vb.total == vb.price + vb.squad, vb
+        assert _win.box_value.isVisibleTo(_win) and _win.lb_value_note.isHidden()
+        assert T.BAD in _win.lb_value["price"].text() and T.GOOD in _win.lb_value["squad"].text(), "내림 빨강 · 오름 초록"
+        assert "구단가치" in _win.value_card.toolTip(), "넥슨 구단가치와 다르다는 말은 말풍선에(화면 글 아님)"
+        # 날짜를 바꾸면 DB 없이 다시 센다 — 같은 날 둘이면 변화 0
+        _win.cb_value_from.setCurrentIndex(_win.cb_value_from.findData(vb.day2))
+        assert _win.value_breakdown.total == 0 and _win.value_breakdown.price == 0
+    finally:
+        _win._details_all, _win._ouid, config.WEB_DATA, config.card_backfill_allowed = keep
+        _clear_card_prices()
+        c = store.open_db(config.DB_PATH)
+        try:
+            store.set_trade_state(c, my_ouid=st_keep.get("my_ouid"))
+        finally:
+            c.close()
+
+
+def test_68_price_week_tab_ready_empty_and_colors():
+    """[스쿼드·이적 › 주간 시세](C6) — 사유별 빈 화면 · 문턱을 넘으면 막대(오름 초록·내림 빨강)와 표 · 강화 배지 칸."""
+    keep = config.WEB_DATA, config.card_backfill_allowed, dict(_win._names)
+    today = datetime.now().date()
+    try:
+        _clear_card_prices()
+        _win._go_page("스쿼드·이적", "주간 시세")
+        assert _win._page_tabs["스쿼드·이적"].current_name() == "주간 시세", "탭 자리가 없다"
+        config.WEB_DATA = False
+        _win._render_price_week()
+        assert "홈페이지 데이터" in _win.lb_price_week_note.text() and not _win.chart_price_week.bar_rects
+        config.WEB_DATA = True
+        config.card_backfill_allowed = lambda: False
+        _win._render_price_week()
+        assert "자동 채우기" in _win.lb_price_week_note.text(), _win.lb_price_week_note.text()
+        config.card_backfill_allowed = lambda: True
+        c = store.open_db(config.DB_PATH)
+        try:
+            store.budget_mark_429(c, today.isoformat(), f"{store.BUDGET_CARD}_format")
+        finally:
+            c.close()
+        _win._render_price_week()
+        assert "구조가 바뀌어" in _win.lb_price_week_note.text(), _win.lb_price_week_note.text()
+        _clear_card_prices()
+        need = config.C6_MIN_CARDS
+        d0, d1, d2 = (today - timedelta(days=k) for k in (8, 1, 0))
+        rows = []
+        for s in range(need):   # 어제 +10% · 오늘 −20%(다른 카드)
+            day = d1 if s % 2 else d2
+            rows += [(1000 + s, 3, (day - timedelta(days=7)).isoformat(), 1000, 2),
+                     (1000 + s, 3, day.isoformat(), 1100 if s % 2 else 800, 2)]
+        c = store.open_db(config.DB_PATH)
+        try:
+            store.save_card_price_days(c, rows + [(1, 3, (d2 - timedelta(days=7)).isoformat(), 5, 1),
+                                                  (1, 3, d2.isoformat(), 500, 1)])   # 내 카드 줄(+9900%)은 안 읽는다
+        finally:
+            c.close()
+        _win._names.update({1001: "오른 선수", 1000: "내린 선수"})
+        _win._render_price_week()
+        idx = _win.price_index
+        assert idx.ready and idx.recent == need and _win.lb_price_week_note.isHidden(), (idx.recent, _win.lb_price_week_note.text())
+        _app.processEvents()
+        _win.chart_price_week.repaint()
+        colors = [col for _r, col in _win.chart_price_week.bar_rects]
+        assert colors == [T.GOOD_FILL, T.BAD_FILL], colors   # 어제 오름 · 오늘 내림
+        up_rect, down_rect = (r for r, _c in _win.chart_price_week.bar_rects)
+        assert up_rect.bottom() <= down_rect.top() + 0.5, "오름은 0 위 · 내림은 0 아래"
+        t = _win.tbl_price_week
+        cols = _win.PRICE_WEEK_COLUMNS
+        assert t.rowCount() == config.C6_TOP_N and t.item(0, cols.index("변화")).text() == "+10.0%"
+        assert t.item(0, cols.index("변화")).foreground().color() == QColor(T.GOOD)
+        assert isinstance(t.itemDelegateForColumn(cols.index("강화")), app_main.GradeBadgeDelegate), "강화 칸은 배지"
+        _win.seg_price_week.set_current(1, emit=True)
+        assert t.item(0, cols.index("변화")).text() == "-20.0%" and t.item(0, cols.index("선수")).text() == "내린 선수"
+        assert t.item(0, cols.index("변화")).foreground().color() == QColor(T.BAD)
+        assert "누적" in _win.chart_price_week.toolTip(), "누적 지수로 읽지 말라는 말은 말풍선에"
+        _win.seg_price_week.set_current(0, emit=True)
+    finally:
+        config.WEB_DATA, config.card_backfill_allowed, _ = keep
+        _win._names.clear()
+        _win._names.update(keep[2])
+        _clear_card_prices()
 
 
 def test_68_player_card_columns_and_squad_ovr():

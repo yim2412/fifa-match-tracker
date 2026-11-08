@@ -113,6 +113,157 @@ def test_store_load_card_extras():
             conn.close()
 
 
+# ── 68 C5 · C6 ──
+from datetime import date, timedelta  # noqa: E402
+
+
+def dated(spids, raw, grades=None):
+    """raw = 넥슨 원문(UTC) — KST 로 뜻한 시각에서 글자 그대로 9시간 뺀다(test_rules 63)."""
+    g = game(spids)
+    g["matchDate"] = raw
+    if grades:
+        for p in g["matchInfo"][0]["player"]:
+            p["spGrade"] = grades.get(p["spId"], p["spGrade"])
+    return g
+
+
+D1, D2 = date(2026, 11, 1), date(2026, 11, 8)
+
+
+def test_c5_breakdown_by_hand():
+    # 11-01 KST 12:00 선발 1~11 · 11-08 KST 12:00 선발: 1~8 그대로 · 9 를 강화만 올림 · 10·11 을 12·13 으로
+    g1 = dated(ELEVEN, "2026-11-01T03:00:00")
+    g2 = dated([*range(1, 10), 12, 13], "2026-11-08T03:00:00", grades={9: GRADE + 1})
+    prices = {(s, GRADE): {"2026-11-01": 100, "2026-11-08": 110} for s in range(1, 9)}   # 8장 × +10
+    prices[(9, GRADE)] = {"2026-11-01": 200}
+    prices[(9, GRADE + 1)] = {"2026-11-08": 500}       # 강화만 올림 → 보강 +300
+    prices[(10, GRADE)] = {"2026-11-01": 50}
+    prices[(11, GRADE)] = {"2026-11-01": 60}           # 뺀 카드 −110
+    prices[(12, GRADE)] = {"2026-11-08": 70}           # 새 카드 +70 · 13 은 시세 모름
+    vb = cv.value_breakdown([g2, g1], "me", prices, D1, D2)
+    assert (vb.price, vb.squad, vb.unknown) == (80, 500 - 200 + 70 - 110, 1), vb
+    assert vb.total == vb.price + vb.squad, "항등식 — 가격 + 보강 = 아는 카드 총변화"
+    assert (vb.v1, vb.v2) == (800 + 200 + 50 + 60, 880 + 500 + 70), vb
+    assert (vb.kept, vb.added, vb.removed) == (8, 3, 3), vb
+    assert (vb.game1, vb.game2) == (D1, D2)
+
+
+def test_c5_identity_random():
+    import random
+    rnd = random.Random(7)
+    for _ in range(200):
+        a = rnd.sample(range(1, 30), 11)
+        b = rnd.sample(range(1, 30), 11)
+        prices = {}
+        for s in range(1, 30):
+            obs = {}
+            if rnd.random() < 0.8:
+                obs["2026-11-01"] = rnd.randint(1, 10 ** 6)
+            if rnd.random() < 0.8:
+                obs["2026-11-08"] = rnd.choice([None, rnd.randint(1, 10 ** 6)])
+            prices[(s, GRADE)] = obs
+        vb = cv.value_breakdown([dated(a, "2026-11-01T03:00:00"), dated(b, "2026-11-08T03:00:00")], "me", prices, D1, D2)
+        assert vb.total == vb.price + vb.squad, vb
+        assert vb.kept + vb.added + vb.removed >= vb.unknown
+
+
+def test_c5_nearest_price_and_last_game():
+    # 고른 날 관측이 없으면 앞 3일까지 · 4일 앞은 모름 · 같은 날 두 판이면 늦은 판
+    early = dated(range(100, 111), "2026-11-07T23:00:00")   # KST 11-08 08:00
+    late = dated(ELEVEN, "2026-11-08T12:00:00")             # KST 11-08 21:00
+    base = dated(ELEVEN, "2026-11-01T03:00:00")
+    prices = {(s, GRADE): {"2026-11-01": 100, "2026-11-05": 130} for s in range(1, 11)}
+    prices[(11, GRADE)] = {"2026-11-01": 100, "2026-11-04": 999}   # 11-08 에서 4일 앞 — 못 쓴다
+    short = dated(range(200, 210), "2026-11-08T13:00:00")   # KST 22:00 — 10장(몰수 등)이면 그날 선발로 안 친다
+    vb = cv.value_breakdown([late, early, base, short], "me", prices, D1, D2)
+    assert vb.kept == 11 and vb.added == 0, "같은 날 늦은 판의 선발이어야 — 이른 판(100~110)·10장 판이 아니다"
+    assert vb.price == 10 * 30 and vb.unknown == 1, vb
+    # 그날 경기가 없으면 그 앞 가장 가까운 날의 선발
+    vb2 = cv.value_breakdown([base], "me", prices, D1, D2)
+    assert vb2.game2 == D1 and vb2.kept == 11
+    assert cv.value_breakdown([base], "me", prices, date(2026, 10, 1), D2).game1 is None
+
+
+def _c6_rows(today, pairs, gap=7, base=1000, pct=10.0, start=0):
+    rows = []
+    for i in range(pairs):
+        d0 = today - timedelta(days=gap)
+        rows += [(start + i, 1, d0.isoformat(), base), (start + i, 1, today.isoformat(), int(base * (1 + pct / 100)))]
+    return rows
+
+
+def test_c6_gap_rule_and_median():
+    t = date(2026, 12, 10)
+    rows = []
+    for gap, s in ((6, 1), (7, 2), (10, 3), (11, 4)):
+        rows += [(s, 1, (t - timedelta(days=gap)).isoformat(), 1000), (s, 1, t.isoformat(), 1200)]
+    rows += [(5, 1, (t - timedelta(days=8)).isoformat(), None), (5, 1, t.isoformat(), 1500)]   # 매물 없음 → 안 씀
+    rows += [(6, 1, (t - timedelta(days=8)).isoformat(), 1000), (6, 1, t.isoformat(), 900)]
+    rows += [(6, 2, (t - timedelta(days=8)).isoformat(), 1000), (6, 2, t.isoformat(), 3000)]   # 다른 강화는 다른 쌍
+    idx = cv.price_index(rows, t)
+    assert [n for _d, _m, n in idx.days] == [4], idx.days   # 7·10일(2·3) + 6번 두 강화 — 6·11일·매물 없음은 뺀다
+    assert abs(idx.days[0][1] - 20.0) < 1e-9, ("중앙값 — -10 · 20 · 20 · 200", idx.days)
+    assert [(m.spid, m.grade) for m in idx.up] == [(6, 2), (2, 1), (3, 1)], idx.up   # 같은 % 는 spid 순
+    assert [(m.spid, m.grade) for m in idx.down] == [(6, 1)]
+    assert not idx.ready and idx.recent == 4
+
+
+def test_c6_ready_threshold_and_top_n():
+    t = date(2026, 12, 10)
+    need = config.C6_MIN_CARDS
+    rows = _c6_rows(t, need - 1, pct=5) + _c6_rows(t, 30, pct=-5, start=10_000)
+    assert cv.price_index(_c6_rows(t, need - 1), t).ready is False
+    assert cv.price_index(_c6_rows(t, need), t).ready is True, "문턱과 같으면 낸다(이상)"
+    idx = cv.price_index(rows, t)
+    assert idx.ready and idx.recent == need + 29
+    assert len(idx.up) == config.C6_TOP_N and len(idx.down) == config.C6_TOP_N
+    # 최근 7일 밖 관측은 문턱에 안 센다
+    old = _c6_rows(t - timedelta(days=config.C6_RECENT_DAYS), need + 50)
+    assert cv.price_index(old, t).recent == 0
+
+
+def test_c6_wait_days_from_real_observations():
+    t = date(2026, 11, 26)
+    need = config.C6_MIN_CARDS
+    one = [(s, 1, (t - timedelta(days=2)).isoformat(), 1000) for s in range(need)]   # 이틀 전 첫 관측 — 5일 뒤 짝이 생긴다
+    idx = cv.price_index(one, t)
+    assert not idx.ready and idx.wait_days == config.C6_GAP_MIN - 2, idx.wait_days
+    assert cv.price_index(one[:need - 1], t).wait_days is None, "모자라면 날을 지어내지 않는다"
+    assert cv.price_index([], t).wait_days is None
+
+
+def test_card_price_rows_src_filter():
+    with tempfile.TemporaryDirectory() as d:
+        conn = store.open_db(Path(d) / "f.db")
+        try:
+            store.save_card_price_days(conn, [(1, 5, "2026-11-01", 100, 1), (2, 5, "2026-11-01", 200, 2),
+                                              (3, 5, "2026-11-01", None, 3)])
+            assert sorted(r[0] for r in store.card_price_rows(conn, 1)) == [1, 3]
+            assert sorted(r[0] for r in store.card_price_rows(conn, 2)) == [2, 3]
+            assert store.card_price_rows(conn, 1, {(3, 5)}) == [(3, 5, "2026-11-01", None)]
+        finally:
+            conn.close()
+
+
+def test_screen_state_format_stop():
+    with tempfile.TemporaryDirectory() as d:
+        conn = store.open_db(Path(d) / "f.db")
+        keep = config.WEB_DATA, config.card_backfill_allowed
+        try:
+            config.WEB_DATA = True
+            config.card_backfill_allowed = lambda: True
+            today = date(2026, 12, 1)
+            assert isinstance(cv.screen_state(conn, today), tuple), "막힘·형식 없으면 채우는 중"
+            store.budget_mark_429(conn, today.isoformat(), f"{store.BUDGET_CARD}_format")
+            assert cv.screen_state(conn, today) == "format"
+            assert isinstance(cv.screen_state(conn, today + timedelta(days=1)), tuple), "그날만"
+            config.WEB_DATA = False
+            assert cv.screen_state(conn, today) == "web_off", "웹 데이터 꺼짐이 먼저"
+        finally:
+            config.WEB_DATA, config.card_backfill_allowed = keep
+            conn.close()
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

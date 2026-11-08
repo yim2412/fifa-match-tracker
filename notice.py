@@ -238,6 +238,14 @@ def card_empty_text(state) -> str:
         return "[정보] 에서 '카드 정보 자동 채우기'를 켜면 채웁니다."
     if state == "blocked":
         return "넥슨이 오늘 요청을 막아 내일 다시 채웁니다."
+    if state == "format":
+        return "넥슨 페이지 구조가 바뀌어 오늘은 채우기를 멈췄습니다. 내일 다시 시도합니다."
+    if state == "mine_unset":
+        return "[가계부] 위 띠에서 내 계정을 먼저 정해야 합니다."
+    if isinstance(state, tuple) and state and state[0] == "collecting":
+        _, have, need, wait = state
+        tail = f" · 약 {wait}일 뒤" if wait else ""
+        return f"시세를 모으는 중입니다 · {have:,}/{need:,}장{tail}"
     if isinstance(state, tuple) and state and state[0] == "filling":
         _, known, need = state
         return f"카드 정보를 채우는 중입니다 · {known:,}/{need:,}장"

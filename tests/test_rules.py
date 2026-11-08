@@ -711,6 +711,7 @@ def _drive_uncovered() -> None:
             store.prune_trait_squads(conn, on_at=None, keep={1})
             store.trait_block_streak(conn)                      # 특성 막힘 날짜(32단계 단계 3) — test_traits 가 부른다
             store.card_block_streak(conn, "card_backfill", "2026-10-01")   # 카드 백필(51단계) — test_cardcollect 가 부른다
+            store.card_price_rows(conn, 2)                      # 68 C5·C6 날짜별 시세 — test_cardviews·화면 스모크가 부른다
             _drive_cardcollect(Path(d) / "c.db")
             store.owner_round_running(conn)                     # 구단주 분포(49단계) — test_ownerdist 가 부른다
             store.owner_round_last_end(conn, ("done",))
