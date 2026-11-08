@@ -55,6 +55,7 @@ import images
 import matchtime
 import methods
 import notice
+import gameguard
 import ownerdist
 import playerinfo
 import rankcollect
@@ -2337,6 +2338,55 @@ def collect_outcome_text(out) -> tuple[str, bool]:
     return "", False  # disabled · cancelled · fresh · same(멈춰 있음은 [정보] 에만)
 
 
+# 84 G3 — 게임이 켜져 있으면 앱이 스스로 하는 넥슨 요청을 쉰다: 예약 셋(랭킹 수집 · 구단주 분포 · 카드 정보) · 보이는 오픈API 로더
+# (랭커 픽 · 특성) · 매시간 정리. 사용자가 누른 것(검색 · 팀컬러 창 · [계산] · 업데이트)은 막지 않는다. 근거는 gameguard 머리말
+# (11-06 강제 종료 — 개발 도구가 초당 40번 요청하던 때 · 원인은 확인 못 했다). 판정은 이름 목록만, 못 읽으면 켜짐.
+GAME_CHECK = gameguard.game_running   # 테스트가 바꿔 끼운다
+_GAME = {"on": False}                 # 감시가 고친다 — 재할당 전역 대신 dict(이름 import 해도 같은 값을 본다)
+
+
+def game_paused() -> bool:
+    return _GAME["on"]
+
+
+class GameWatch(QObject):
+    """GAME_CHECK_S 마다 게임이 켜졌나 본다(화면 스레드 · 이름 목록 한 번이라 싸다). 바뀔 때만 changed."""
+
+    changed = Signal(bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._timer = QTimer(self)
+        self._timer.setInterval(config.GAME_CHECK_S * 1000)
+        self._timer.timeout.connect(self.poll)
+
+    def start(self) -> None:
+        self.poll()
+        self._timer.start()
+
+    def poll(self) -> None:
+        try:
+            on = bool(GAME_CHECK())
+        except Exception:  # noqa: BLE001 — 모르면 켜짐(쉬는 쪽)
+            on = True
+        if on != _GAME["on"]:
+            _GAME["on"] = on
+            self.changed.emit(on)
+
+
+def on_game_changed(shell, on: bool) -> None:
+    """게임이 켜졌다 → 도는 자동 요청을 멈춘다(각자 이어 받게 돼 있다). 꺼졌다 → 미룬 것을 다시 본다."""
+    for s in (shell.sched, shell.owner_sched, shell.card_sched):
+        if s is not None:
+            (s.pause if on else s.resume)()
+    win = shell.window
+    if win is not None and not getattr(win, "_quitting", False):
+        if on:
+            win.stop_api_loaders()
+        else:
+            win.start_visible_api_loader()
+
+
 class RankCollectScheduler(QObject):
     """랭킹 수집 예약(1.1.1) — 켤 때와 RANK_CHECK_EVERY_MIN 마다 간격이 지났는지 보고, 지났으면 그 시각
     +5~50분(rankcollect.pick_start) 무작위에 한 번 돌린다. 예약은 하나만(planned) — 1시간 확인이 겹쳐 두 번 잡지 않게.
@@ -2362,10 +2412,11 @@ class RankCollectScheduler(QObject):
         self.maint: RankMaintWorker | None = None
         self._maint_next: dict | None = None
         self._run_after_maint = False
+        self._vacuum_after_game = False   # 켤 때 게임 중이라 미룬 VACUUM — 게임이 꺼지면(resume)
 
     @staticmethod
     def can_run() -> bool:
-        return not config.notice_needed() and config.WEB_DATA and config.RANK_COLLECT
+        return not config.notice_needed() and config.WEB_DATA and config.RANK_COLLECT and not game_paused()
 
     def running(self) -> bool:
         return self.worker is not None and self.worker.isRunning()
@@ -2375,8 +2426,23 @@ class RankCollectScheduler(QObject):
 
     def start(self) -> None:
         self._check_timer.start()
+        if game_paused():
+            self._vacuum_after_game = True   # 정리 안에 예측 되짚기 요청이 있다(B8) — 게임이 꺼지면
+            return
         self.maintain(vacuum=True)   # 앱 켤 때 — 메타 따라잡기 · 원본 정리(수집이 꺼져 있어도 — R12) · 옛 흔적 VACUUM
         self.check(maint=False)
+
+    def pause(self) -> None:
+        """게임이 켜졌다(84 G3) — 예약을 지우고 도는 회차를 멈춘다(그 회차는 버린다 · 게임이 꺼지면 다시). 정리는 끊지 않는다."""
+        self._start_timer.stop()
+        self.planned = None
+        self._run_after_maint = False
+        if self.running():
+            self.worker.cancel()
+
+    def resume(self) -> None:
+        vacuum, self._vacuum_after_game = self._vacuum_after_game, False
+        self.maintain(vacuum=vacuum)   # 끝나면 _on_maint_done 이 예약을 다시 본다
 
     def maintain(self, vacuum: bool = False, enabled: tuple | None = None) -> None:
         """작업 스레드에서 rank.db 정리. 지우기 조건은 상태로 판정하므로(rankcollect.purge_person_if_needed) 놓친 요청은
@@ -2404,7 +2470,7 @@ class RankCollectScheduler(QObject):
             self.check(maint=False)   # 켜짐 사본이 바뀌었을 수 있다(토글) — 예약을 다시 본다
 
     def check(self, maint: bool = True) -> None:
-        if maint:
+        if maint and not game_paused():
             self.maintain()
         if not self.can_run() or self.planned is not None or self.running():
             return
@@ -2557,8 +2623,16 @@ class OwnerDistScheduler(QObject):
         if not (prereq and on):
             self._stop_and_purge(everything=not prereq)
             return
-        if start and not self.running() and not self._quitting:
+        if start and not self.running() and not self._quitting and not game_paused():
             self._maybe_start()
+
+    def pause(self) -> None:
+        """게임이 켜졌다(84 G3) — 도는 한 명분만 버리고 바퀴는 running 으로 남는다(게임이 꺼지면 이어 받는다)."""
+        if self.running():
+            self.loader.cancel()
+
+    def resume(self) -> None:
+        self.tick()
 
     def _mix_pending(self) -> None:
         """옛 버전이 끝낸 done 바퀴를 한 번 섞는다(store.owner_dist_mix_pending) — 성공하면 이 프로세스에서 다시 안 본다.
@@ -2736,7 +2810,7 @@ class CardBackfillScheduler(QObject):
             if self.running():
                 self.loader.cancel()
             return
-        if start and not self.running() and not self._quitting:
+        if start and not self.running() and not self._quitting and not game_paused():
             w = CardBackfillLoader(self._now().date())
             w.done.connect(self._on_done)
             self.loader = w
@@ -2762,6 +2836,14 @@ class CardBackfillScheduler(QObject):
                 else:
                     self.switched_off.emit("blocked")
         self.finished.emit(res)
+
+    def pause(self) -> None:
+        """게임이 켜졌다(84 G3) — 한 요청 = 한 트랜잭션이라 끊어도 반쪽이 안 남는다. 게임이 꺼지면 이어서."""
+        if self.running():
+            self.loader.cancel()
+
+    def resume(self) -> None:
+        self.tick()
 
     def halt_for_delete(self) -> None:
         """[정보 › 저장 공간]이 카드 정보를 지우기 전에 — 도는 바퀴에 멈춤 요청만(기다리기는 지우기 작업 스레드가 · 57 K9 ②).
@@ -6771,7 +6853,7 @@ class MainWindow(QMainWindow):
     def start_trait(self) -> None:
         """켜는 조건: 특성 동의(수집 켜짐 포함) · 탭과 창이 보임 · 스스로 끄지 않음 · 지우기 대기 아님 ·
         랭커 픽·다른 오픈API 로더 없음(하나씩). 하루 상한·막힘·429 는 로더 안에서 — 요청 없이 바로 끝난다."""
-        if (self._quitting or not config.API_KEY or not config.trait_allowed() or not self._trait_visible()
+        if (self._quitting or game_paused() or not config.API_KEY or not config.trait_allowed() or not self._trait_visible()
                 or self._pick_purge_pending or self._trait_off_reason()):
             return
         if self._trait_running() or self._pick_running() or self._api_background_busy():
@@ -6810,7 +6892,7 @@ class MainWindow(QMainWindow):
     def start_ranker_pick(self) -> None:
         """E9 — 켜는 조건을 전부 본다: 랭킹 수집 켜짐 + 그 안내 동의 · 화면과 창이 보임 · 다른 오픈API 로더 없음.
         하루 상한·429 는 로더 안(rankerpick.collect)에서 — 요청 없이 바로 끝난다."""
-        if (self._quitting or not config.API_KEY or not config.ranker_pick_allowed()
+        if (self._quitting or game_paused() or not config.API_KEY or not config.ranker_pick_allowed()
                 or not self._ranker_pick_visible() or self._pick_purge_pending):
             return
         recommend = (self._recommend_args()
@@ -15511,6 +15593,8 @@ def rank_status_text(st: dict) -> str:
         retry = (st.get("retry_at") or "")[:16].replace("T", " ")
         parts.append(f"연속 실패 {fails}번 · 다음 시도 {retry} 이후")
     lines = [html.escape(" · ".join(parts))]
+    if game_paused():
+        lines.append("게임이 켜져 있어 자동 수집을 쉬는 중입니다")
     # 2.3.1 N14 — 넥슨 데이터 기준 시각 · 빈 순위 · 멈춰 있음 · WAL 비우기 실패 · 쌓는 중
     if st.get("meta_ref"):
         gaps = st.get("meta_gaps")
@@ -15648,10 +15732,14 @@ def main(argv: list[str] | None = None) -> int:
         single = tray.SingleInstance(tray.instance_name())
         if not single.claim():
             return 0  # 이미 떠 있다 — 그 창을 앞으로 불렀다
+    # 84 G3 — 창·예약보다 먼저 한 번 본다(켜자마자 도는 로더가 게임 중에 나가지 않게)
+    watch = GameWatch(app)
+    watch.start()
     # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
     shell = tray.AppShell(app, open_window=lambda: _open_window(shell),
                           sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler(),
                           card_sched=CardBackfillScheduler())
+    watch.changed.connect(lambda on: on_game_changed(shell, on))
     if tray_mode:
         # 부팅 때 자동 실행 — 창·막는 창·미리 읽기 없이 트레이만. 동의·키가 필요하면 창도 만들지 않는다
         # (창을 만들면 시즌표를 넥슨 웹에 요청한다) — 사용자가 트레이에서 열 때 안내·키 창.

@@ -10230,6 +10230,166 @@ def test_trait_gate():
         assert _FakeTraitLoader.started == 1 and _FakePickLoader.started == 0, "다 맞는데 안 떴다(위 단언이 빈 검사)"
 
 
+class _GameOn:
+    """84 G3 — 게임 켜짐 판정을 잠깐 바꾼다(감시 상태 dict). 나갈 때 꺼짐으로."""
+
+    def __init__(self, on=True):
+        self.on = on
+
+    def __enter__(self):
+        app_main._GAME["on"] = self.on
+        return self
+
+    def __exit__(self, *exc):
+        app_main._GAME["on"] = False
+
+
+def test_84_game_pauses_visible_api_loaders():
+    """게임 중엔 랭커 픽·특성 로더가 안 뜬다 — 같은 조건에서 게임이 꺼져 있으면 뜬다(먼저 단언)."""
+    with _TraitEnv() as env:
+        for vis, cls in (("trait", _FakeTraitLoader), ("pick", _FakePickLoader)):
+            env.vis = vis
+            _win._trait_loader = _win._pick_loader = None
+            cls.started = 0
+            with _GameOn():
+                _win.start_visible_api_loader()
+            assert cls.started == 0, f"게임 중인데 {vis} 로더가 떴다"
+            _win.start_visible_api_loader()
+            assert cls.started == 1, f"게임이 꺼져 있는데 {vis} 로더가 안 떴다(위 단언이 빈 검사)"
+            if vis == "trait":
+                _win._trait_loader.end()
+            else:
+                _win._pick_loader.running = False
+                _win._pick_loader = None
+
+
+def test_84_game_watch_and_schedulers():
+    """감시는 바뀔 때만 알리고 못 읽으면 켜짐 · 예약 셋은 게임 중 시작하지 않고(꺼져 있으면 시작) · pause 는 도는 것을 멈춘다."""
+    seen, answers = [], [False, True, True, False]
+    keep = app_main.GAME_CHECK
+    w = app_main.GameWatch()
+    w.changed.connect(seen.append)
+    try:
+        app_main.GAME_CHECK = lambda: answers.pop(0)
+        for _ in range(4):
+            w.poll()
+        assert seen == [True, False], seen
+
+        def boom():
+            raise OSError("목록 못 읽음")
+        app_main.GAME_CHECK = boom
+        w.poll()
+        assert seen[-1] is True and app_main.game_paused(), "못 읽었는데 켜짐으로 안 봤다"
+    finally:
+        app_main.GAME_CHECK = keep
+        app_main._GAME["on"] = False
+
+    class _Run:
+        def __init__(self):
+            self.cancelled = False
+
+        def isRunning(self):
+            return True
+
+        def cancel(self):
+            self.cancelled = True
+
+    # 랭킹 수집 — 조건이 다 맞으면 돈다(먼저), 게임 중엔 안 돈다 · pause 는 예약을 지우고 회차를 멈춘다
+    keep_cfg = (config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT)
+    config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT = config.NOTICE_VERSION, True, True
+    try:
+        rs = app_main.RankCollectScheduler()
+        assert rs.can_run(), "조건이 다 맞는데 못 돈다(아래 단언이 빈 검사)"
+        with _GameOn():
+            assert not rs.can_run(), "게임 중인데 랭킹 수집이 돈다"
+            maint = []
+            rs.maintain = lambda **kw: maint.append(kw)
+            rs.check()
+            assert maint == [], "게임 중인데 매시간 정리(예측 되짚기 요청 포함)가 돌았다"
+            rs.planned, rs.worker = datetime.now(), _Run()
+            rs.pause()
+            assert rs.planned is None and rs.worker.cancelled
+        rs.resume()
+        assert maint == [{"vacuum": False}], maint
+    finally:
+        config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT = keep_cfg
+
+    # 구단주 분포 · 카드 정보 — 같은 식
+    keep_g = (config.read_owner_dist, config.read_card_backfill, app_main.CardBackfillLoader)
+    started = []
+
+    class _CardLoader(_Run):
+        def __init__(self, today):
+            super().__init__()
+            self.done = _FakePickLoader._S()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            started.append("card")
+    try:
+        config.read_owner_dist = lambda: (True, True)
+        config.read_card_backfill = lambda: True
+        app_main.CardBackfillLoader = _CardLoader
+        od = app_main.OwnerDistScheduler()
+        od._mixed = True
+        od._maybe_start = lambda: started.append("owner")
+        cb = app_main.CardBackfillScheduler()
+        with _GameOn():
+            od.sync(start=True)
+            cb.sync(start=True)
+            assert started == [], f"게임 중인데 시작했다: {started}"
+            for s in (od, cb):
+                s.loader = _Run()
+                s.pause()
+                assert s.loader.cancelled, f"{type(s).__name__}.pause 가 도는 로더를 안 멈췄다"
+                s.loader = None
+        od.resume()
+        cb.resume()
+        assert started == ["owner", "card"], f"게임이 꺼졌는데 다시 안 시작했다: {started}"
+    finally:
+        config.read_owner_dist, config.read_card_backfill, app_main.CardBackfillLoader = keep_g
+
+
+def test_84_game_change_reaches_every_auto_path():
+    """on_game_changed — 예약 셋 pause/resume · 창은 로더 멈춤/다시 켜기 · main 이 감시를 창·예약보다 먼저 켜고 잇는다."""
+    calls = []
+
+    class _S:
+        def __init__(self, name):
+            self.name = name
+
+        def pause(self):
+            calls.append(("pause", self.name))
+
+        def resume(self):
+            calls.append(("resume", self.name))
+
+    class _W:
+        _quitting = False
+
+        def stop_api_loaders(self):
+            calls.append("stop")
+
+        def start_visible_api_loader(self):
+            calls.append("start")
+
+    class _Sh:
+        sched, owner_sched, card_sched, window = _S("rank"), _S("owner"), _S("card"), _W()
+    app_main.on_game_changed(_Sh, True)
+    app_main.on_game_changed(_Sh, False)
+    assert calls == [("pause", "rank"), ("pause", "owner"), ("pause", "card"), "stop",
+                     ("resume", "rank"), ("resume", "owner"), ("resume", "card"), "start"], calls
+    import inspect
+    src = inspect.getsource(app_main.main)
+    assert "watch.changed.connect" in src, "main 이 감시를 셸에 안 이었다"
+    assert src.index("watch.start()") < src.index("tray.AppShell("), "창·예약보다 늦게 처음 본다"
+    with _GameOn():
+        assert "쉬는 중" in app_main.rank_status_text({})
+    assert "쉬는 중" not in app_main.rank_status_text({})
+
+
 def test_trait_visible_needs_trait_key():
     """진짜 보임 판정 — 지금 자리의 키가 TRAIT_KEY 여야 · TRAIT_KEY 는 PICK_KEYS 밖(넣으면 특성 탭에서 랭커 픽 로더가 뜬다)."""
     assert app_main.MainWindow.TRAIT_KEY not in app_main.MainWindow.PICK_KEYS
