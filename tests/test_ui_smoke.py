@@ -10837,7 +10837,7 @@ def test_enhance_page_refuses_and_reports_failure():
         _win._go_page("강화 비용")
         _win.ed_enh_name.setText("")
         _win.btn_enh_calc.click()
-        assert "2글자" in _win.lb_enh_status.text() and not calls
+        assert "선수 이름을 넣고" in _win.lb_enh_status.text() and not calls
         _win.ed_enh_name.setText("테스트")
         _win.cb_enh_start.setCurrentIndex(_win.cb_enh_start.findData(9))
         _win.btn_enh_calc.click()
@@ -10991,12 +10991,31 @@ def test_card_name_suggestions_with_real_keys():
                                   ("선수로 구단주 찾기", _win.ed_owner_name, _win.cb_owner_card)):
             _win._go_page(page)
             edit.clear()
+            _win.activateWindow()   # 입력기 글자는 초점 있는 칸에만 온다 — 앞 테스트가 창을 활성화해 뒀는지에 기대지 않는다
+            _app.processEvents()
             edit.setFocus()
+            _app.processEvents()
+            assert edit.hasFocus(), "전제 — 초점 없는 칸엔 팝업을 안 연다(_refresh_card_candidates)"
+            assert config.CARD_NAME_MIN_CHARS == 1, "사용자 2026-11-08 — 한 글자부터"
+            # 조합 중인 첫 글자 하나만으로 뜬다 — 칸(text)은 아직 비었다(사용자 2026-11-08 "민만 치면 안 나온다")
+            ime(edit, preedit="다")
+            comp = edit.completer()
+            assert edit.text() == "" and comp.model().stringList() == ["다른선수"] + [f"가나다 {i}호" for i in range(4)], \
+                comp.model().stringList()
+            assert comp.popup().isVisible(), "조합만 바뀌어도 팝업이 떠야 한다 — " + page
+            assert combo.count() == 11, "옆 칸도 조합 글자로 — " + str(combo.count())
+            ime(edit, preedit="른", commit="다")   # 확정 "다" + 조합 "른" = "다른" — 확정 뒤 textChanged 도 조합 글자를 센다
+            assert edit.text() == "다" and comp.model().stringList() == ["다른선수"], comp.model().stringList()
+            edit.setText("나다")   # 코드로 바꾼 글 — 남은 조합 글자("른")를 안 붙인다
+            assert comp.model().stringList() == [f"가나다 {i}호" for i in range(5)], comp.model().stringList()
+            edit.clear()
+            ime(edit, preedit="다")
+            ime(edit, preedit="")   # 조합을 지우면 목록도 빈다
+            assert comp.model().rowCount() == 0 and combo.count() == 0 and not comp.popup().isVisible()
             ime(edit, preedit="가")
             ime(edit, preedit="나", commit="가")
-            comp = edit.completer()
-            assert edit.text() == "가" and comp.model().rowCount() == 0, "조합 중인 글자는 아직 칸에 없다 — 1글자"
-            assert not comp.popup().isVisible(), "2글자 밑은 안 띄운다"
+            assert edit.text() == "가" and comp.model().stringList() == [f"가나다 {i}호" for i in range(5)], \
+                "확정 글자 + 조합 글자 — " + str(comp.model().stringList())
             ime(edit, preedit="다", commit="나")
             rows = comp.model().stringList()
             assert rows == [f"가나다 {i}호" for i in range(config.CARD_NAME_SUGGESTIONS)], rows
@@ -11023,6 +11042,11 @@ def test_card_name_suggestions_with_real_keys():
             _app.processEvents()
             assert comp.model().stringList() == ["Abc Def"] and popup.isVisible(), comp.model().stringList()
             edit.clear()
+            edit.clearFocus()
+            _app.processEvents()
+            ime(edit, preedit="다")
+            assert comp.model().rowCount() and not popup.isVisible(), "초점 없는 칸엔 팝업을 안 연다 — 열면 골라도 칸에 안 들어간다"
+            ime(edit, preedit="")
     finally:
         _win._names = keep
         _win.ed_enh_name.clear()
@@ -11175,7 +11199,9 @@ def test_card_owner_find():
         assert _win.lb_owner_backfill.isVisibleTo(_win) and "색인" in _win.lb_owner_backfill.text(), \
             "색인 안 된 경기가 있는데 조용히 덜 나왔다"
         _win.ed_owner_name.setText("테")
-        assert _win.cb_owner_card.count() == 0, "2글자부터"
+        assert _win.cb_owner_card.count() == 1, "한 글자부터(사용자 2026-11-08)"
+        _win.ed_owner_name.setText("")
+        assert _win.cb_owner_card.count() == 0, "비우면 후보도 빈다"
     finally:
         _win._names = keep
         conn = store.open_db(config.DB_PATH)
@@ -14226,7 +14252,7 @@ def test_81_owner_candidates_show_season_icons():
         assert cb.count() == 3 and ed_w >= 100, ed_w   # 한글 이름 몇 글자가 보이는 폭
         assert _win.btn_owner_find.geometry().right() <= _win.btn_owner_find.parentWidget().width(), "찾기 단추가 밖으로"
         del _win._names[long_sp]
-        _win.ed_owner_name.setText("테")
+        _win.ed_owner_name.setText("")
         assert cb.count() == 0 and cb.icon_entries() == set()
     finally:
         del _win._start_list_icons

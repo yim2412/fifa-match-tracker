@@ -3648,6 +3648,8 @@ class MainWindow(QMainWindow):
         self._on_search()
 
     def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.InputMethod and obj in getattr(self, "_name_ime_edits", ()):
+            self._on_name_ime(obj, event)
         # 위쪽 이름 칸 — 누르면 최근 검색 전부를 펼친다(치면 QCompleter 가 알아서 거른다). 포커스만으로는 안 연다 —
         # 창이 뜨거나 검색이 끝나 포커스가 돌아올 때마다 목록이 튀어나온다. 이름이 차 있어도 누르면 연다(늘 이름이 있다)
         if (obj is getattr(self, "_recent_edit", None)
@@ -8901,10 +8903,11 @@ class MainWindow(QMainWindow):
         lb = QLabel("선수")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         self.ed_owner_name = QLineEdit()
-        self.ed_owner_name.setPlaceholderText("선수 이름(2글자부터)")
+        self.ed_owner_name.setPlaceholderText("선수 이름")
         self.ed_owner_name.setMaximumWidth(180)
         self.ed_owner_name.textChanged.connect(lambda _t: self._refresh_owner_candidates())
         self.cb_owner_card = IconCombo(config.OWNER_CARD_COMBO_CHARS)
+        self._watch_name_ime(self.ed_owner_name, self.cb_owner_card)
         # [카드 / 선수](50단계 N30) — 선수면 고른 카드와 pid 가 같은 모든 시즌 카드를 한꺼번에 본다
         self.cb_owner_scope = NoScrollComboBox()
         self.cb_owner_scope.addItem("이 카드만", self.OWNER_SCOPE_CARD)
@@ -8954,7 +8957,7 @@ class MainWindow(QMainWindow):
         self.cb_owner_color.blockSignals(False)
 
     def _refresh_owner_candidates(self) -> None:
-        """입력 2글자부터 메타 이름(spid 8만 건)에서 후보 — 같은 이름의 시즌 카드가 여럿이라 시즌을 같이 적는다."""
+        """입력 config.CARD_NAME_MIN_CHARS 글자부터(조합 중인 글자도 센다) 메타 이름(spid 8만 건)에서 후보 — 같은 이름의 시즌 카드가 여럿이라 시즌을 같이 적는다."""
         self._refresh_card_candidates(self.ed_owner_name, self.cb_owner_card)
 
     def _name_suggestions(self, edit: QLineEdit, names: list[str]) -> None:
@@ -8969,15 +8972,40 @@ class MainWindow(QMainWindow):
         if not names:
             comp.popup().hide()   # 코드로 칸을 비우면 Qt 가 안 닫아 빈 네모가 남는다(실측 2026-11-06)
 
-    def _refresh_card_candidates(self, edit: QLineEdit, combo: IconCombo) -> None:
-        needle = edit.text().strip()
-        if len(needle) < 2:
+    def _watch_name_ime(self, edit: QLineEdit, combo: IconCombo) -> None:
+        """한글 조합 중인 글자도 후보에 센다 — 조합 중 글자는 text() 에 없고 textChanged 도 안 낸다(2026-11-08 사용자:
+        "민만 치면 아무것도 안 나온다"). 입력기 이벤트는 eventFilter 가 받아 조합 글자를 칸에 적어 둔다."""
+        if not hasattr(self, "_name_ime_edits"):
+            self._name_ime_edits: dict[QLineEdit, IconCombo] = {}
+        self._name_ime_edits[edit] = combo
+        edit.installEventFilter(self)
+
+    def _on_name_ime(self, edit: QLineEdit, event) -> None:
+        edit.setProperty("ime_preedit", event.preeditString())
+        if event.commitString():
+            edit.setProperty("ime_commit", True)   # 확정 글자가 들어가면 textChanged 가 뒤따른다 — 거기서 다시 센다
+        else:
+            self._refresh_card_candidates(edit, self._name_ime_edits[edit], from_ime=True)
+
+    def _refresh_card_candidates(self, edit: QLineEdit, combo: IconCombo, from_ime: bool = False) -> None:
+        if not from_ime and not edit.property("ime_commit"):
+            edit.setProperty("ime_preedit", "")    # 키보드·코드로 바뀐 글 — 남아 있던 조합 글자는 이미 없다
+        edit.setProperty("ime_commit", False)
+        text, cur = edit.text(), edit.cursorPosition()
+        needle = (text[:cur] + (edit.property("ime_preedit") or "") + text[cur:]).strip()
+        if len(needle) < config.CARD_NAME_MIN_CHARS:
             self._name_suggestions(edit, [])
             combo.set_icon_items([])
             return
         hits = [(name, sp) for sp, name in self._names.items() if isinstance(name, str) and needle in name]
         hits.sort(key=lambda x: (x[0] != needle, len(x[0]), x[0], -x[1]))
         self._name_suggestions(edit, [name for name, _sp in hits])
+        if from_ime and hits and edit.hasFocus():
+            # 조합만 바뀌면 Qt 가 팝업을 안 연다 — 걸러 둔 목록은 이미 needle 에 맞으니 칸 글자로 연다. 초점이 없을 때 열면
+            # QLineEdit 이 고르기 신호를 안 이어 둔 채라 골라도 칸에 안 들어간다(offscreen 실측 2026-11-08)
+            comp = edit.completer()
+            comp.setCompletionPrefix(edit.text())
+            comp.complete()
         combo.set_icon_items([(f"{name} ({self._season_name(sp)})", sp, ("season", core.season_id_of(sp)))
                               for name, sp in hits[:self.CARD_OWNER_MAX_CANDIDATES]])
         self._start_list_icons(combo)
@@ -9002,10 +9030,11 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         row = QHBoxLayout()
         self.ed_enh_name = QLineEdit()
-        self.ed_enh_name.setPlaceholderText("선수 이름(2글자부터)")
+        self.ed_enh_name.setPlaceholderText("선수 이름")
         self.ed_enh_name.setMaximumWidth(180)
         self.ed_enh_name.textChanged.connect(lambda _t: self._refresh_card_candidates(self.ed_enh_name, self.cb_enh_card))
         self.cb_enh_card = IconCombo(config.OWNER_CARD_COMBO_CHARS)
+        self._watch_name_ime(self.ed_enh_name, self.cb_enh_card)
         self.cb_enh_start, self.cb_enh_target = NoScrollComboBox(), NoScrollComboBox()
         for g in range(1, 14):
             if g < 13:
@@ -9091,7 +9120,7 @@ class MainWindow(QMainWindow):
     def _on_enhance_calc(self) -> None:
         sp = self.cb_enh_card.currentData()
         if not isinstance(sp, int):
-            self._set_status(self.lb_enh_status, "선수 이름을 2글자 이상 넣고 카드를 고르세요.")
+            self._set_status(self.lb_enh_status, "선수 이름을 넣고 카드를 고르세요.")
             return
         start, target = self.cb_enh_start.currentData(), self.cb_enh_target.currentData()
         if target <= start:
@@ -9172,7 +9201,7 @@ class MainWindow(QMainWindow):
         self._refresh_owner_colors()
         sp = self.cb_owner_card.currentData()
         if not isinstance(sp, int):
-            self._set_status(self.lb_owner_status, "선수 이름을 2글자 이상 넣고 카드를 고르세요.")
+            self._set_status(self.lb_owner_status, "선수 이름을 넣고 카드를 고르세요.")
             return
         grade, color = self.cb_owner_grade.currentData(), self.cb_owner_color.currentData()
         player = self.cb_owner_scope.currentData() == self.OWNER_SCOPE_PLAYER

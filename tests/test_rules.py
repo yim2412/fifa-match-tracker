@@ -46,6 +46,7 @@ WEAK_FILES = ("models.py", "stats.py", "analysis.py", "widgets.py", "dashboard.p
 WEAK_ALLOW = {
     ("models.py", "is_weak", "min_n"): "판정 자신",
     ("app_main.py", "_period_unit_now", "PERIOD_MIN_POINTS"): "그래프 점(묶음) 수 — 승률 표본 아님(77 A 칩 회색)",
+    ("app_main.py", "_refresh_card_candidates", "CARD_NAME_MIN_CHARS"): "이름 칸 글자 수 — 표본 아님(83 자동완성)",
     ("app_main.py", "_render_park", "need"):"predict.need 는 표본 문턱이 아니라 200위 컷까지 점수 차(67 R8 — 부호로 '더 필요/여유')",
     ("analysis.py", "_contrast", "MIN_BASE"): "선제골 *비율* 표본(경기 수) — 승률 아님",
     ("analysis.py", "_contrast", "MIN_FLOW"): "선제골 *비율* 표본(경기 수) — 승률 아님",
