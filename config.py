@@ -113,7 +113,7 @@ SERVER_URL = os.getenv(SERVER_URL_VAR, "").strip()
 # set_web_data 가 재할당한다 — 다른 모듈은 config.WEB_DATA 로 읽는다.
 WEB_DATA_VAR = "FIFA_WEB_DATA"
 WEB_DATA = os.getenv(WEB_DATA_VAR, "0").strip() == "1"
-WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다 — [정보] 에서 켤 수 있습니다"
+WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다. [정보]에서 켤 수 있습니다"
 
 # 이용 안내 동의 — 첫 실행 때 받는다. notice.py 의 글을 실질적으로 바꾸면 NOTICE_VERSION 을
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고

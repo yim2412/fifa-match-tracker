@@ -1288,7 +1288,7 @@ def shot_xg(x: float, y: float, in_penalty: bool = False, type_code: int | None 
     이름 문자열을 넘기면 TypeError — 옛 호출(goal_type_name)이 남아 있으면 예외 없이 '기타' 칸 값이 나와
     조용히 틀리므로 개발 중에 터지게 한다(43 3회차 A[중]2). 넥슨 값은 호출부가 shot_type_code 로 거른다."""
     if isinstance(type_code, str):
-        raise TypeError(f"shot_xg 는 슛 종류 코드(int)를 받는다 — 이름 {type_code!r} 을 넘겼다")
+        raise TypeError(f"shot_xg 는 슛 종류 코드(int)를 받습니다. 이름 {type_code!r} 을 넘겼습니다.")
     if type_code == xg_grid.PK_TYPE:
         return xg_grid.PK_RATE       # 위치와 무관한 상수 — 표와 같은 학습분의 성공 비율
     return xgmodel.predict(xg_grid.SHOT, x, y, type_code)

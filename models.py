@@ -64,7 +64,7 @@ def mixed_of_matches(matches) -> bool:
 def rated(win: int, draw: int, lose: int, mixed: bool | None) -> int:
     """승률 분모 — 섞임이면 승+패, 한 집단이면 승+무+패. 표본 판정도 이 값으로 한다."""
     if mixed is None:
-        raise ValueError("mixed 를 안 채운 승률 — 묶음에서 is_mixed 로 정해 넘겨야 한다")
+        raise ValueError("mixed 를 안 채운 승률입니다. 묶음에서 is_mixed 로 정해 넘겨야 합니다.")
     return win + lose if mixed else win + draw + lose
 
 

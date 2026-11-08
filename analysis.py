@@ -244,9 +244,9 @@ def _clutch_rules(details: list[dict], ouid: str, base_rate: float, mixed: bool
         if gap >= GAP:
             out.append(Insight(
                 SEC_WIN, f"선제골을 넣으면 승률 {r:.0f}%.",
-                f"{all_first}경기 {_wdl_text(*cs.first_scored)} —"
+                f"{all_first}경기 {_wdl_text(*cs.first_scored)}로,"
                 f" 전체 승률({base_rate:.0f}%)보다 {gap:.0f}%p 높습니다."
-                f" 먼저 앞서 나가는 게 승패를 가장 크게 가릅니다.",
+                f" 먼저 앞서 나가는 것이 승패를 가장 크게 가릅니다.",
                 _w(gap, n_first, MIN_COND),
                 Basis("선제골 넣은 경기", r, n_first, base_rate, MIN_COND, mixed=mixed, wdl=tuple(cs.first_scored))))
         if cs.comeback_lose >= 3:
@@ -255,8 +255,8 @@ def _clutch_rules(details: list[dict], ouid: str, base_rate: float, mixed: bool
                 out.append(Insight(
                     SEC_LOSE,
                     f"앞서고도 진 경기가 {cs.comeback_lose}번입니다.",
-                    f"선제골을 넣은 {all_first}경기 중 {share:.0f}% —"
-                    f" 리드를 끝까지 지키지 못하고 있습니다.",
+                    f"선제골을 넣은 {all_first}경기 중 {share:.0f}%입니다."
+                    f" 앞선 경기를 끝까지 지키지 못하고 있습니다.",
                     _w(share - 20, all_first, MIN_COND)))
 
     all_conc = sum(cs.first_conceded)
@@ -352,12 +352,12 @@ def _creation_rules(details: list[dict], ouid: str, basis=None) -> list[Insight]
     section = SEC_LOSE if (f < 0 or c < 0) else SEC_WIN
     if fp is not None:
         top = f"상위 {max(1, round(100 - fp))}%" if fp >= 50 else f"하위 {max(1, round(fp))}%"
-        detail = (f"유효슛당 골 {fin.mine:.1f}% 대 상대 {fin.opp:.1f}%({fin.diff:+.1f}%p) — 최근 {fin.n:,}판, "
-                  f"1~3000위 구단주 {basis.dist.n_owners}명 중 {top}(분포 기준일 {basis.dist.ended_at[:10]} · 경향) · "
-                  f"경기당 유효슛 {cre.mine:.2f}개 대 상대 {cre.opp:.2f}개({rel:+.0f}%) — 같은 경기의 상대와 견준 값입니다.")
+        detail = (f"최근 {fin.n:,}판에서 유효 슛당 골은 {fin.mine:.1f}%, 상대는 {fin.opp:.1f}%입니다({fin.diff:+.1f}%p). "
+                  f"1~3000위 구단주 {basis.dist.n_owners}명 중 {top}입니다(분포 기준일 {basis.dist.ended_at[:10]}, 경향으로만 봅니다). "
+                  f"경기당 유효 슛은 {cre.mine:.2f}개, 상대는 {cre.opp:.2f}개입니다({rel:+.0f}%). 모두 같은 경기의 상대와 견준 값입니다.")
     else:
-        detail = (f"유효슛당 골 {fin.mine:.1f}% 대 상대 {fin.opp:.1f}%({fin.diff:+.1f}%p) · "
-                  f"경기당 유효슛 {cre.mine:.2f}개 대 상대 {cre.opp:.2f}개({rel:+.0f}%). 같은 경기의 상대와 견준 값입니다.")
+        detail = (f"유효 슛당 골은 {fin.mine:.1f}%, 상대는 {fin.opp:.1f}%입니다({fin.diff:+.1f}%p). "
+                  f"경기당 유효 슛은 {cre.mine:.2f}개, 상대는 {cre.opp:.2f}개입니다({rel:+.0f}%). 모두 같은 경기의 상대와 견준 값입니다.")
     gap = max(abs(fin.diff) if f else 0.0, abs(rel) * config.N19_MIN_GAP / config.N19_CREATE_MIN_REL if c else 0.0)
     return [Insight(section, head, detail, _w(gap, int(fin.mine_den), MIN_SHOTS))]
 
@@ -416,7 +416,7 @@ def _formation_rules(details: list[dict], ouid: str, base_rate: float,
         if gap <= -GAP_WIDE:
             out.append(Insight(
                 SEC_LOSE, f"상대가 {f.formation}로 나오면 승률 {f.win_rate:.0f}%.",
-                f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
+                f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)}로,"
                 f" 전체보다 {abs(gap):.0f}%p 낮습니다.",
                 _w(gap, f.rated, MIN_COND),
                 Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed,
@@ -424,7 +424,7 @@ def _formation_rules(details: list[dict], ouid: str, base_rate: float,
         elif gap >= GAP_WIDE:
             out.append(Insight(
                 SEC_WIN, f"상대가 {f.formation}일 때 승률 {f.win_rate:.0f}%.",
-                f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)} —"
+                f"{f.games}경기 {_wdl_text(f.win, f.draw, f.lose)}로,"
                 f" 전체보다 {gap:.0f}%p 높습니다.",
                 _w(gap, f.rated, MIN_COND),
                 Basis(f"상대 {f.formation}", f.win_rate, f.rated, base_rate, need, mixed=mixed,
@@ -531,7 +531,7 @@ def _streak_rules(matches: list[MatchSummary], base_rate: float, total: int, mix
             sec, tail = SEC_LOSE, "이긴 뒤에 오히려 흔들립니다."
         out.append(Insight(
             sec, f"{run} 직후 다음 경기 승률 {r.win_rate:.0f}%.",
-            f"{r.games}경기 {_wdl_text(r.win, r.draw, r.lose)} — 전체 승률({base_rate:.0f}%)보다"
+            f"{r.games}경기 {_wdl_text(r.win, r.draw, r.lose)}로, 전체 승률({base_rate:.0f}%)보다"
             f" {abs(gap):.0f}%p {'높습니다' if gap > 0 else '낮습니다'}. {tail}",
             _w(gap, r.rated, need),
             Basis(f"{run} 직후", r.win_rate, r.rated, base_rate, need, mixed=mixed, wdl=(r.win, r.draw, r.lose))))
@@ -571,12 +571,12 @@ SECTIONS = (SEC_FLOW, SEC_WIN, SEC_LOSE)
 BASIS_RULES = ("_flow", "_clutch_rules", "_possession_rules", "_formation_rules",
                "_opponent_rules", "_streak_rules")
 NO_BASIS_RULES = {
-    "_contrast": "선제골 '비율'의 변화 — 승률이 아니다",
-    "_minute_rules": "골이 몰린 구간의 비중 — 승률이 아니다",
-    "_finishing_rules": "기대득점 대비 골 — 승률이 아니다",
-    "_goal_type_rules": "골 유형 비중 — 승률이 아니다",
-    "_creation_rules": "같은 경기 상대 대비 유효슛당 골·경기당 유효슛 — 승률이 아니다",
-    "_half_rules": "전반 실점 비중 대 상대 실점 비중 — 승률이 아니다",
+    "_contrast": "선제골 '비율'의 변화(승률 아님)",
+    "_minute_rules": "골이 몰린 구간의 비중(승률 아님)",
+    "_finishing_rules": "기대득점 대비 골(승률 아님)",
+    "_goal_type_rules": "골 유형 비중(승률 아님)",
+    "_creation_rules": "같은 경기 상대 대비 유효 슛당 골과 경기당 유효 슛(승률 아님)",
+    "_half_rules": "전반 실점 비중 대 상대 실점 비중(승률 아님)",
 }
 
 

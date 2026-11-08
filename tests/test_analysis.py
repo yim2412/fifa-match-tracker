@@ -603,7 +603,7 @@ def test_creation_rule_finish_uses_distribution_when_given():
     found = analysis._creation_rules(scope, OUID, _basis(up, recent))
     assert [(i.section, i.headline) for i in found] == [(analysis.SEC_WIN, "마무리가 상위 구단주들보다 나은 편입니다.")], found
     assert "구단주 123명 중 상위 3%" in found[0].detail and "2026-10-01" in found[0].detail and "경향" in found[0].detail, found[0].detail
-    assert "유효슛당 골 66.7%" in found[0].detail and "최근 30판" in found[0].detail, \
+    assert "유효 슛당 골은 66.7%" in found[0].detail and "최근 30판" in found[0].detail, \
         "설명 숫자가 최근 판(100/150)이 아니라 화면 범위 값이다"
     # 분포 마무리는 중간(칩 아님) + 창출만 있음 → 같은 경기 상대 문구 그대로(분포 문구 표에 (0, c) 는 없다)
     cre = analysis._creation_rules(_creation_games(me_on=(6, 7, 8)), OUID, _basis(_Dist(lambda x: 50.0), recent))

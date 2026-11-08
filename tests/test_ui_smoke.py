@@ -2067,7 +2067,7 @@ def test_goal_flow_tab_draws_a_bar_per_lead_with_games():
 
 
 def test_attack_route_tab_draws_a_row_per_route_and_waits_for_enough_shots():
-    # 2.7.1 N18 — 슛이 하한 이상이면 루트마다 한 줄 · 모자라면 표 대신 "아직 못 가릅니다" · 표시 구간이 바뀌면 새로 그린다
+    # 2.7.1 N18 — 슛이 하한 이상이면 루트마다 한 줄 · 모자라면 표 대신 "아직 루트별로 나누지 못합니다" · 표시 구간이 바뀌면 새로 그린다
     _win._go_page("슛 맵", "공격 루트")
     assert _win._current_view() == ("슛 맵", "공격 루트")
     old = app_main.config.N18_MIN_SHOTS
@@ -2082,7 +2082,7 @@ def test_attack_route_tab_draws_a_row_per_route_and_waits_for_enough_shots():
         _check_elisions([_win.tbl_route])     # 채운 표가 최소 창 폭에서 안 잘린다
         app_main.config.N18_MIN_SHOTS = ar.mine_total + 1
         _win._render_attack_route(_win._details)
-        assert _win.tbl_route.rowCount() == 0 and "아직 못 가릅니다" in _win.lb_route_note.text(), _win.lb_route_note.text()
+        assert _win.tbl_route.rowCount() == 0 and "아직 루트별로 나누지 못합니다" in _win.lb_route_note.text(), _win.lb_route_note.text()
         assert not _win.lb_route_note.isHidden()
     finally:
         app_main.config.N18_MIN_SHOTS = old
@@ -5742,7 +5742,7 @@ def test_teamcolor_progress_reaches_status_bar_unless_search_runs():
         _win._teamcolor_progress_fmt = "랭킹 목록 {done} / {total}쪽 읽는 중…"
         _win._loader = None
         _win._on_teamcolor_progress(120, 500)
-        assert _win.statusBar().currentMessage() == "팀컬러 — 랭킹 목록 120 / 500쪽 읽는 중…", \
+        assert _win.statusBar().currentMessage() == "팀컬러: 랭킹 목록 120 / 500쪽 읽는 중…", \
             _win.statusBar().currentMessage()
         _win.statusBar().showMessage("새 경기 받는 중… 3/10")
         _win._loader = _Busy()                     # 검색이 돌 땐 그쪽이 상태줄 주인
@@ -10034,7 +10034,7 @@ def test_rank_trend_page():
                                    formation="4-2-3-1" if i != 7 else "5-3-2") for i in range(1, 301)]  # 5-3-2 = 0.5%
             rankcollect.save_snapshot(r, rows, datetime.now() - timedelta(days=1))
             _win._invalidate("ranktrend")
-            assert "모으는 중 (1/2)" in _win.lb_rtrend_note.text(), _win.lb_rtrend_note.text()
+            assert "모으는 중입니다(1/2)" in _win.lb_rtrend_note.text(), _win.lb_rtrend_note.text()
             assert not _win.rtrend_charts["cut"]._points
             rankcollect.save_snapshot(r, rows, datetime.now())
         finally:

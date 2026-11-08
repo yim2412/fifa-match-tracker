@@ -1398,8 +1398,8 @@ class RankerCard(QFrame):
         self._head_best = QLabel("")
         self._head_best.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._head_best.setVisible(False)
-        self._head_best.setToolTip("감독모드에서 올라가 본 가장 높은 티어(시즌과 무관)와,\n"
-                                   "그 티어에 가장 최근에 올라선 날 — 넥슨 공식 기록")
+        self._head_best.setToolTip("감독모드에서 올라가 본 가장 높은 티어(시즌과 무관)와\n"
+                                   "그 티어에 가장 최근에 올라선 날입니다. 넥슨 공식 기록입니다.")
         head_v.addWidget(self._head_best)
 
         v.addWidget(self._head)
@@ -3271,7 +3271,7 @@ class ShotTypeRows(QWidget):
             rate = QLabel(conv)
             rate.setStyleSheet(f"color: {T.TEXT_DIM if weak else T.TEXT}; font-weight: bold;")
             rate.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            rate.setToolTip(f"골 ÷ 시도 — 시도 {min_shots}회 미만이면 숨깁니다" if weak else "골 ÷ 시도")
+            rate.setToolTip(f"골 ÷ 시도. 시도가 {min_shots}회 미만이면 숨깁니다." if weak else "골 ÷ 시도")
             if self.stacked:
                 counts.setStyleSheet(f"color: {T.TEXT_DIM}; font-size: {T.PX_M}px;")
                 for c, wdg in enumerate((name, strip, rate)):
@@ -4091,7 +4091,7 @@ class _PlayerChip(QWidget):
         self.ovr, self.price = ovr, price
         tip = f"{self.card.pos_name} · {self.card.name}"
         if ovr is not None:
-            tip += f"\nOVR {ovr} — 카드 기본 포지션·강화 기준(다른 자리에 세우면 게임 값과 다르다)"
+            tip += f"\nOVR {ovr}: 카드 기본 포지션과 강화 기준입니다. 다른 자리에 세우면 게임 값과 다릅니다."
         self.setToolTip(tip + "\n누르면 선수 카드")
         self.update()
 

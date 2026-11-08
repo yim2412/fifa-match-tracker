@@ -188,7 +188,7 @@ def download_verified(rel: Release, dest_dir: Path,
                       timeout: int = 15) -> Path:
     """설치 파일을 받아 체크섬이 맞으면 그 경로. 아니면 UpdateError(받은 파일은 지운다)."""
     if not rel.setup_url or not rel.sums_url:
-        raise UpdateError("이 릴리스에는 자동 설치용 파일이 없습니다 — 페이지에서 직접 받아 주세요.")
+        raise UpdateError("이 릴리스에는 자동 설치용 파일이 없습니다. 페이지에서 직접 받아 주세요.")
     name = SETUP_ASSET.format(tag=rel.tag)
     headers = {"User-Agent": config.WEB_USER_AGENT}
     try:
@@ -196,7 +196,7 @@ def download_verified(rel: Release, dest_dir: Path,
         sums.raise_for_status()
         want = expected_sha256(sums.text, name)
         if not want:
-            raise UpdateError("체크섬 목록에 설치 파일이 없습니다 — 페이지에서 직접 받아 주세요.")
+            raise UpdateError("체크섬 목록에 설치 파일이 없습니다. 페이지에서 직접 받아 주세요.")
         dest_dir.mkdir(parents=True, exist_ok=True)
         path = dest_dir / name
         with requests.get(rel.setup_url, timeout=timeout, headers=headers, stream=True) as r:
@@ -219,7 +219,7 @@ def download_verified(rel: Release, dest_dir: Path,
     got = sha256_of(path)
     if got != want:
         path.unlink(missing_ok=True)
-        raise UpdateError("받은 파일이 릴리스의 체크섬과 다릅니다 — 설치하지 않았습니다. "
+        raise UpdateError("받은 파일이 릴리스의 체크섬과 달라 설치하지 않았습니다. "
                           "페이지에서 직접 받아 주세요.")
     return path
 

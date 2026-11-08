@@ -500,12 +500,12 @@ class DashboardPage(QWidget):
         # 해설 — 결론 한 줄(핵심 숫자 색) + 접은 설명
         (c1, e1), (c2, e2) = self.note_items
         if dr is None:
-            c1.setText(f"하루 평균 {rep.day_avg:+,.1f}점 — 승·패가 아직 없습니다.")
+            c1.setText(f"하루 평균 {rep.day_avg:+,.1f}점입니다. 아직 승패 기록이 없습니다.")
         else:
             up_ok = dr[0] > 50
             col = T.GOOD if up_ok else T.BAD if dr[0] < 50 else T.TEXT
             word = "오르는 구간" if up_ok else "내리는 구간" if dr[0] < 50 else "제자리"
-            c1.setText(f"무승부 뺀 승률 <b style='color:{col}'>{dr[0]:.1f}%</b> — 점수가 {word}입니다.")
+            c1.setText(f"무승부를 뺀 승률이 <b style='color:{col}'>{dr[0]:.1f}%</b>라서 점수가 {word}입니다.")
         e1.setText(f"점수는 승패로만 움직여서, 무승부를 뺀 승률 50%가 오르고 내리는 경계입니다. 하루 평균 {rep.day_avg:+,.1f}점"
                    + (f" · {up}" if up else "") + (f" · {dr[1]:,}판" if dr else ""))
         if not rep.max_dd or rep.dd_peak is None:
@@ -513,8 +513,8 @@ class DashboardPage(QWidget):
             e2.setText(f"시즌 최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d})")
         else:
             deep = band is not None and rep.max_dd > band[0]
-            judge = (" — 같은 구간 사람들보다 깊은 편입니다" if deep else " — 같은 구간 사람들과 비슷하거나 얕습니다") if band else ""
-            c2.setText(f"한 번에 가장 크게 떨어진 폭 <b style='color:{T.BAD}'>{rep.max_dd:,.0f}점</b>{judge}.")
+            judge = (" 같은 구간 사람들보다 깊은 편입니다." if deep else " 같은 구간 사람들과 비슷하거나 얕습니다.") if band else ""
+            c2.setText(f"한 번에 가장 크게 떨어진 폭은 <b style='color:{T.BAD}'>{rep.max_dd:,.0f}점</b>입니다.{judge}")
             e2.setText(f"{rep.dd_peak:,.0f}점에서 {rep.dd_peak - rep.max_dd:,.0f}점까지"
                        + (f"({rep.dd_day:%m.%d} 바닥)" if rep.dd_day else "")
                        + (f" · 같은 구간(최고점 ±{config.R2_BAND}) {band[1]:,}명 중앙 −{band[0]:,.0f}점" if band else "")
@@ -534,7 +534,7 @@ class DashboardPage(QWidget):
         self.versus_card.scope.setText(f"{d.range_label or d.scope_name} · {prof.games:,}판")
         for vb, ln in zip(self.versus_rows, prof.lines):
             vb.set_values(ln.mine, ln.opp, "{:.0f}" if ln.unit == "%" else "{:.1f}", ln.unit)
-            vb.setToolTip(f"{ln.name} — 나 {ln.mine:.1f}{ln.unit} · 상대 {ln.opp:.1f}{ln.unit} ({prof.games:,}경기 평균)")
+            vb.setToolTip(f"{ln.name}: 나 {ln.mine:.1f}{ln.unit}, 상대 {ln.opp:.1f}{ln.unit} ({prof.games:,}경기 평균)")
         for vb in self.versus_rows[len(prof.lines):]:   # 경기 없음 — 줄은 두고 비운다
             vb.nums.setText("—")
             vb.strip.share = 0.5
@@ -570,7 +570,7 @@ class DashboardPage(QWidget):
                            f"{tip}\n{win_rate_text(*wdl, cs.mixed)}\n{note}")
         # 셋째 칸 "지킨 비율" = (승+무) ÷ 선제골 경기 — 승률이 아니라 식·분모 그대로(A6 제외)
         if scored < MIN_GAUGE_GAMES:
-            self.gauges[2].set_data(None, f"{scored}경기", f"표본 {scored}경기 — {MIN_GAUGE_GAMES}경기부터 표시")
+            self.gauges[2].set_data(None, f"{scored}경기", f"아직 {scored}경기뿐입니다. {MIN_GAUGE_GAMES}경기부터 보여 줍니다.")
         else:
             self.gauges[2].set_data(_pct(scored - cs.comeback_lose, scored), f"{scored:,}경기",
                                     f"선제골 넣은 {scored:,}경기 중 {cs.comeback_lose:,}번은 역전패")

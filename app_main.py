@@ -1541,7 +1541,7 @@ class TeamColorEffectLoader(Worker):
                 meta, view.candidates = self._find(rows)
             except teamcolor.TeamColorError as e:
                 if rows:
-                    view.message = f"{self._error_text(e)} — 저장된 목록({rows[0]['fetched_on']})을 보여 줍니다"
+                    view.message = f"{self._error_text(e)}. 저장된 목록({rows[0]['fetched_on']})을 보여 줍니다."
                 else:
                     view.message = self._error_text(e)
                     return
@@ -1572,7 +1572,7 @@ class TeamColorEffectLoader(Worker):
                 steps, sday, fresh = store.load_teamcolor_steps(conn, tid, today, config.TEAMCOLOR_CACHE_DAYS)
             except teamcolor.TeamColorError as e:
                 note = self._error_text(e)
-                view.message = (f"{note} — 저장된 단계({sday})를 보여 줍니다" if steps else note)
+                view.message = (f"{note}. 저장된 단계({sday})를 보여 줍니다." if steps else note)
         elif steps and not fresh:
             view.message = f"웹 데이터가 꺼져 있어 저장된 값({sday})을 보여 줍니다"
         view.steps, view.steps_day = steps, sday
@@ -1778,7 +1778,7 @@ def season_title(start: datetime, known: bool) -> str:
     return f"지금 시즌 ({start:%m/%d}~)" if known else f"최근 {config.ELO_FALLBACK_DAYS}일"
 
 
-BAND_NOTE = "띠는 검색·수집 때 적은 값 사이입니다 — 실제 하루 폭보다 좁을 수 있습니다"
+BAND_NOTE = "띠는 검색하거나 수집할 때 적은 값 사이입니다. 실제 하루 폭보다 좁을 수 있습니다."
 
 
 def day_band(lo: float, hi: float, n: int) -> tuple[float, float] | None:
@@ -2104,7 +2104,7 @@ def club_cells(*, wins: list, rows: list[dict], pts: list[dict], club, season_st
         out.append(("시즌 최고점", "—", "점수 기록이 없습니다", ""))
     else:
         out.append(("시즌 최고점", f"{best[0]:,.2f}", (f"#{best[2]:,} " if best[2] else "") + f"({best[1]:%m.%d})" + span_note,
-                    "검색·따라가기 기록과 랭킹 수집(하루 한 번) 중 높은 쪽 — 하루 안 최고점은 놓칠 수 있다"))
+                    "검색·따라가기 기록과 랭킹 수집(하루 한 번) 중 높은 쪽입니다. 하루 안 최고점은 놓칠 수 있습니다."))
     # H5 챔스·슈챔 달성 판수
     ch = core.first_reach(wins, season_start, core.CHAMPION_DIVISION_ID)
     sc = core.first_reach(wins, season_start, core.SUPER_CHAMPION_DIVISION_ID)
@@ -3346,7 +3346,7 @@ class MainWindow(QMainWindow):
         sched.switched_off.connect(self._on_card_backfill_off)
 
     def _on_card_backfill_off(self, reason: str) -> None:
-        self.statusBar().showMessage(f"카드 정보 자동 채우기 — {cardcollect.OFF_REASON_TEXT.get(reason, reason)}", 0)
+        self.statusBar().showMessage(f"카드 정보 자동 채우기: {cardcollect.OFF_REASON_TEXT.get(reason, reason)}", 0)
 
     def _sync_card_backfill(self, start: bool = False) -> None:
         """끄는 길(웹 데이터·동의·다시 묻는 창)과 안내 12 수락에서 — 예약이 .env 를 다시 읽어 맞춘다(창만 있는 테스트에선 없음)."""
@@ -3354,7 +3354,7 @@ class MainWindow(QMainWindow):
             self._card_sched.sync(start=start)
 
     def _on_owner_dist_off(self, reason: str) -> None:
-        self.statusBar().showMessage(f"구단주 분포 받기 — {ownerdist.OFF_REASON_TEXT.get(reason, reason)}", 0)
+        self.statusBar().showMessage(f"구단주 분포 받기: {ownerdist.OFF_REASON_TEXT.get(reason, reason)}", 0)
         self.refresh_owner_dist_views()   # 꺼졌다 — 분포 판정을 거둔다
 
     def _sync_owner_dist(self) -> None:
@@ -4278,7 +4278,7 @@ class MainWindow(QMainWindow):
         self.park_seasons.setMaximumHeight(240)
         pv.addWidget(self.park_seasons)
         self.lb_park_later = self._note_label()
-        self.lb_park_later.setText("막판 상승폭 · 시즌 진행에 따른 컷 변화 — 모으는 중(시즌 둘 이상을 처음부터 끝까지 모으면 보입니다)")
+        self.lb_park_later.setText("막판 상승폭과 시즌 진행에 따른 컷 변화는 모으는 중입니다. 시즌 둘 이상을 처음부터 끝까지 모으면 보입니다.")
         pv.addWidget(self.lb_park_later)
         v.addWidget(self.gb_park)
         # 55 V1 — 구단가치 일별(검색·따라가기 때 점수와 같이 적은 값 · elo_history.team_value)
@@ -5887,7 +5887,7 @@ class MainWindow(QMainWindow):
     ROUTE_COLUMNS = ["루트", "내 슛", "내 골", "내 결정력", "상대 슛", "상대 결정력", "차이 (나 − 상대)", "판정"]
     ROUTE_NOTE = {
         "세트피스": "프리킥·페널티킥", "헤더": "헤더로 찬 슛(세트피스 헤더 포함)", "중거리": "박스 밖에서 찬 슛(헤더·세트피스 제외)",
-        "크로스": "박스 안 슛 — 어시가 박스 폭 밖(측면)에서 온 것(컷백 제외)", "컷백": "박스 안 슛 — 측면 골라인 쪽에서 뒤로 내준 공",
+        "크로스": "어시스트가 박스 폭 밖(측면)에서 온 박스 안 슛입니다. 컷백은 뺍니다.", "컷백": "측면 골라인 쪽에서 뒤로 내준 공을 받은 박스 안 슛입니다.",
         "중앙 연계": "박스 안 슛 — 어시가 박스 폭 안(중앙)에서 온 것", "어시 없음": "박스 안 슛 — 어시 기록이 없는 것(개인 돌파 등)",
         "기타": "넥슨이 이름을 안 붙인 슛 종류 — 헤더·세트피스로 추측하지 않고 따로 둡니다",
     }
@@ -5908,7 +5908,7 @@ class MainWindow(QMainWindow):
         if not ar.enough:
             self._fill(self.tbl_route, [], enable_sort=False)
             self._set_status(self.lb_route_note,
-                f"슛이 {ar.mine_total:,}개라 아직 못 가릅니다 — 내 슛이 {config.N18_MIN_SHOTS}개는 있어야 루트별로 나눕니다 ({scope}).")
+                f"슛이 {ar.mine_total:,}개라 아직 루트별로 나누지 못합니다. 내 슛이 {config.N18_MIN_SHOTS}개는 있어야 합니다({scope}).")
             return
         rows, verdicts = [], []
         for r in ar.rows:
@@ -6270,7 +6270,7 @@ class MainWindow(QMainWindow):
             finally:
                 conn.close()
         except sqlite3.Error:
-            return self._value_empty("시세 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
+            return self._value_empty("시세 기록을 읽지 못했습니다. 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
         prices: dict[tuple[int, int], dict[str, int | None]] = {}
         for spid, grade, day, price in rows:
             prices.setdefault((spid, grade), {})[day] = price
@@ -6368,7 +6368,7 @@ class MainWindow(QMainWindow):
             finally:
                 conn.close()
         except sqlite3.Error:
-            self._set_status(self.lb_price_week_note, "시세 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
+            self._set_status(self.lb_price_week_note, "시세 기록을 읽지 못했습니다. 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
             self.price_index = None
             self.chart_price_week.set_data([], [])
             self._fill(self.tbl_price_week, [])
@@ -6421,11 +6421,11 @@ class MainWindow(QMainWindow):
     def _render_timeline(self) -> None:
         tl, _st = self._timeline_for_screen()
         if tl is None:
-            self._set_status(self.lb_timeline_note, "거래 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
+            self._set_status(self.lb_timeline_note, "거래 기록을 읽지 못했습니다. 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다.")
             self._fill(self.tbl_timeline, [])
             return
         # 78 ① — 평소 설명은 지웠고 빠진 것의 이유(거래가 안 붙음 · 줄을 잘랐음)만
-        notes = [] if tl.has_trades else ["거래 기록은 내 계정에서만 붙습니다 — 지금은 출전 기록만"]
+        notes = [] if tl.has_trades else ["거래 기록은 내 계정에서만 붙음(지금은 출전 기록만)"]
         events = tl.events[:config.TIMELINE_MAX_ROWS]
         if len(tl.events) > len(events):
             notes.append(f"최근 {len(events):,}건만 (전체 {len(tl.events):,}건)")
@@ -6563,7 +6563,7 @@ class MainWindow(QMainWindow):
         buttons = {"mine": False, "yes": False, "change": False}
         hint = status = ""
         if snap is None:
-            banner = "거래 기록을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다."
+            banner = "거래 기록을 읽지 못했습니다. 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다."
         else:
             st, names = snap["state"], snap["names"]
             mine, unconf = st.get("my_ouid"), st.get("my_ouid_unconfirmed")
@@ -7409,9 +7409,9 @@ class MainWindow(QMainWindow):
         n = len(trend.taken)
         if n < 2:
             if not (config.WEB_DATA and config.RANK_COLLECT) and not n:
-                note = "랭킹 수집을 켜면 하루 한 번 1만 명 순위를 모아 추이를 그립니다 — [정보] 에서 켤 수 있습니다."
+                note = "랭킹 수집을 켜면 하루 한 번 1만 명 순위를 모아 추이를 그립니다. [정보]에서 켤 수 있습니다."
             else:
-                note = f"모으는 중 ({n}/2) — 스냅숏이 이틀치 쌓이면 그립니다(하루 한 번 수집)."
+                note = f"모으는 중입니다({n}/2). 하루 한 번 수집하며, 스냅숏이 이틀치 쌓이면 그립니다."
             self._set_status(self.lb_rtrend_note, note)
             for key, chart in self.rtrend_charts.items():
                 chart.set_data([])
@@ -7517,12 +7517,12 @@ class MainWindow(QMainWindow):
         if cg is None or cg.state == "no_table":
             return
         if not show:
-            self.lb_champ_note.setText("모으는 중 — 랭킹 수집의 사람별 처리가 돌면 이 시즌 첫 챔피언스까지 판수를 셉니다.")
+            self.lb_champ_note.setText("모으는 중입니다. 랭킹 수집의 사람별 처리가 돌면 이 시즌 첫 챔피언스까지의 판수를 셉니다.")
             self.champ_hist.set_data([], 1, [])
             self.champ_value_list.set_rows([])
             return
         if cg.hidden:
-            self.lb_champ_note.setText("이번 시즌은 판수 기록이 시즌 시작보다 늦게 시작돼 보이지 않습니다 — 다음 시즌부터 처음부터 셉니다.")
+            self.lb_champ_note.setText("이번 시즌은 판수 기록이 시즌 시작보다 늦게 시작돼 보이지 않습니다. 다음 시즌부터 처음부터 셉니다.")
             self.champ_hist.set_data([], 1, [])
             self.champ_value_list.set_rows([])
             return
@@ -7627,7 +7627,7 @@ class MainWindow(QMainWindow):
         self.meta_trend = trend
         if trend.collecting:
             self._set_status(self.lb_meta_note,
-                "모으는 중 — 같은 시즌 스냅숏이 3일치 넘게 쌓이면 비교합니다(하루 한 번 수집)." if config.RANK_COLLECT else
+                "모으는 중입니다. 하루 한 번 수집하며, 같은 시즌 스냅숏이 3일치 넘게 쌓이면 비교합니다." if config.RANK_COLLECT else
                 self.rank_off_note("메타 변화를 보여 줍니다"))
             for kind, lst in self.meta_lists.items():
                 lst.set_rows([])
@@ -7685,8 +7685,8 @@ class MainWindow(QMainWindow):
         self.elo_dist = hist
         if not hist.bins:
             self._set_status(self.lb_edist_note,
-                "모으는 중 — 다음 랭킹 수집부터 점수 분포를 그립니다." if config.RANK_COLLECT else
-                "랭킹 수집을 켜면 하루 한 번 1만 명 점수 분포를 그립니다 — [정보] 에서 켤 수 있습니다.")
+                "모으는 중입니다. 다음 랭킹 수집부터 점수 분포를 그립니다." if config.RANK_COLLECT else
+                "랭킹 수집을 켜면 하루 한 번 1만 명 점수 분포를 그립니다. [정보]에서 켤 수 있습니다.")
             self.edist_chart.set_data([], 1, [])
             self.elo_dist_marker = None
             return
@@ -7744,7 +7744,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def rank_off_note(what: str) -> str:
         """랭킹 수집이 꺼졌거나 rank.db 가 없을 때 새 탭마다 같은 한 줄."""
-        return f"랭킹 수집을 켜면 하루 한 번 1만 명 순위를 모아 {what} — [정보] 에서 켤 수 있습니다."
+        return f"랭킹 수집을 켜면 하루 한 번 1만 명 순위를 모아 {what}. [정보]에서 켤 수 있습니다."
 
     @staticmethod
     def _rank_read(fn):
@@ -7815,7 +7815,7 @@ class MainWindow(QMainWindow):
         if not (config.WEB_DATA and config.RANK_COLLECT):
             return self.rank_off_note("내 경기마다 상대가 그날 몇 위였는지를 붙입니다")
         if config.NOTICE_ACCEPTED < config.OPP_RANK_NOTICE_VERSION:
-            return "새 이용 안내(상대 순위 구간)에 동의해야 모읍니다 — 창을 다시 열면 안내가 보입니다."
+            return "새 이용 안내(상대 순위 구간)에 동의해야 모읍니다. 창을 다시 열면 안내가 보입니다."
         snap = self._trade_snapshot()
         if snap is None:
             return "내 계정을 읽지 못했습니다 — 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다."
@@ -7848,7 +7848,7 @@ class MainWindow(QMainWindow):
             if rows is None:
                 why = self.rank_off_note("내 경기마다 상대가 그날 몇 위였는지를 붙입니다")
             elif not rows:
-                why = ("아직 채운 경기가 없습니다 — 수집 정리가 돌 때마다 이 시즌 안 최근 "
+                why = ("아직 채운 경기가 없습니다. 수집 정리가 돌 때마다 이 시즌 안 최근 "
                        f"{config.RANK_RAW_KEEP_DAYS}일 경기를 채웁니다(시즌이 바뀌면 지난 시즌 구간은 지워집니다).")
             else:
                 tr = core.opp_rank_table(self._details, self._ouid, rows)
@@ -7864,11 +7864,11 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_opprank, self._opp_table_rows(tr.by_rank), enable_sort=False)
         if not core.is_weak(tr.gap_known, config.OPP_MIN_KNOWN):
             self._fill(self.tbl_oppgap, self._opp_table_rows(tr.by_gap), enable_sort=False)
-            self.lb_oppgap_note.setText(f"내 점수도 안 {tr.gap_known:,}판 기준 — 상대 점수 − 내 점수(그날 스냅숏)")
+            self.lb_oppgap_note.setText(f"내 점수도 1만 위 안인 {tr.gap_known:,}판 기준입니다. 상대 점수에서 내 점수를 뺀 값입니다(그날 스냅숏).")
         else:
             self._fill(self.tbl_oppgap, [], enable_sort=False)
             self.lb_oppgap_note.setText(
-                f"점수 격차는 내 점수도 1만 위 안일 때만 잴 수 있습니다 — 알아낸 경기 {tr.gap_known:,}판"
+                f"점수 격차는 내 점수도 1만 위 안일 때만 잴 수 있습니다. 알아낸 경기는 {tr.gap_known:,}판입니다"
                 f"({config.OPP_MIN_KNOWN}판부터 표를 냅니다).")
 
     @staticmethod
@@ -8160,10 +8160,10 @@ class MainWindow(QMainWindow):
         if usage.old:
             notes.append(f"마지막 경기가 오래된 {usage.old}명 뺌")
         if usage.thin:
-            notes.append(f"아직 모으는 중 — 위 순위부터 차므로 지금 값은 상위 {usage.reach}위까지" if usage.reach
+            notes.append(f"아직 모으는 중(위 순위부터 차서 지금은 상위 {usage.reach}위까지)" if usage.reach
                          else "아직 모으는 중")
         if usage.formation is not None and usage.few:
-            notes.append(f"이 포메이션은 {config.TRAIT_MIN_PEOPLE}명 미만이라 흐리게 — 참고만")
+            notes.append(f"이 포메이션은 {config.TRAIT_MIN_PEOPLE}명 미만이라 흐리게 표시(참고만)")
         left = self._trait_left_text()
         if left:
             notes.append(left)
@@ -8298,7 +8298,7 @@ class MainWindow(QMainWindow):
         self.tc_board = res
         if res is None or res.at is None:
             self._set_status(self.lb_tcboard_note, self.rank_off_note("1만 명이 쓰는 팀컬러 목록을 보여 줍니다") if not config.RANK_COLLECT
-                                         else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+                                         else "모으는 중입니다. 다음 랭킹 수집부터 보입니다.")
             self.tc_board_list.set_rows([])
             return
         note = []   # 78 ① — 빈 칸의 이유만(가성비 · 하루 승률이 안 나오는 까닭)
@@ -8372,7 +8372,7 @@ class MainWindow(QMainWindow):
         self.value_bin_data = res
         if res is None or not res.bins:
             self._set_status(self.lb_vbins_note, self.rank_off_note("구단가치 분포를 보여 줍니다") if not config.RANK_COLLECT
-                                       else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+                                       else "모으는 중입니다. 다음 랭킹 수집부터 보입니다.")
             self.vbins_list.set_rows([])
             self.vcross_list.set_rows([])
             self.lb_vcross_title.setText("")
@@ -8444,7 +8444,7 @@ class MainWindow(QMainWindow):
         self.tier_mean_data = res
         if res is None or res.at is None:
             self._set_status(self.lb_tmeans_note, self.rank_off_note("구간 평균을 보여 줍니다") if not config.RANK_COLLECT
-                                        else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+                                        else "모으는 중입니다. 다음 랭킹 수집부터 보입니다.")
             for t in self.tmeans_tables.values():
                 self._fill(t, [])
             return
@@ -8502,7 +8502,7 @@ class MainWindow(QMainWindow):
         if res is None or not res.ready:
             self._set_status(self.lb_wrelo_note,
                 self.rank_off_note("하루 승률과 점수 변화의 관계를 보여 줍니다") if res is None and not config.RANK_COLLECT
-                else f"모으는 중 — 하루 간격 스냅숏 쌍이 {config.PREDICT_MIN_PAIRS}개 쌓이면 계산합니다"
+                else f"모으는 중입니다. 하루 간격 스냅숏 쌍이 {config.PREDICT_MIN_PAIRS}개 쌓이면 계산합니다."
                      f"(지금 {res.pairs if res else 0}개 · 예측과 같은 조건).")
             self.lb_wrelo_me.setText("")
             self._fill(self.tbl_wrelo, [], enable_sort=False)
@@ -8658,7 +8658,7 @@ class MainWindow(QMainWindow):
         tbl, ttl, lst = self.weekly_tables, self.weekly_titles, self.weekly_lists
         if res is None or res.base_at is None:
             self._set_status(self.lb_weekly_note, self.rank_off_note("주간 요약을 보여 줍니다") if not config.RANK_COLLECT
-                                        else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+                                        else "모으는 중입니다. 다음 랭킹 수집부터 보입니다.")
             for t in tbl.values():
                 self._fill(t, [])
             for x in lst.values():
@@ -8667,7 +8667,7 @@ class MainWindow(QMainWindow):
             return
         self._set_status(self.lb_weekly_note)
         if res.cut_at:
-            ttl["cuts"].setText(f"컷 변화 — {res.cut_days:.0f}일 전({self._at(res.cut_at)}) 대비")
+            ttl["cuts"].setText(f"컷 변화: {res.cut_days:.0f}일 전({self._at(res.cut_at)}) 대비")
             self._fill(tbl["cuts"], [[f"{r:,}위", NA if a is None else f"{a:,.0f}", NA if b is None else f"{b:,.0f}",
                                       NA if a is None or b is None else f"{b - a:+,.0f}"] for r, a, b in res.cuts],
                        enable_sort=False)
@@ -8927,12 +8927,12 @@ class MainWindow(QMainWindow):
                 kinds.append("good" if res["state"] == "found" and in_range else
                              "warn" if res["state"] == "found" and in_range is False else "muted")
         if not rows:
-            note = ("아직 남은 예측이 없습니다 — 예측 카드가 숫자를 내면 하루 한 줄씩 남습니다." if config.WEB_DATA
+            note = ("아직 남은 예측이 없습니다. 예측 카드가 숫자를 내면 하루 한 줄씩 남습니다." if config.WEB_DATA
                     else "넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다. 남아 있는 예측만 보입니다.")
         else:
             notes = []
             if unconfirmed:
-                notes.append("내 계정 확인 전 — 지난 기록은 남아 있습니다. [스쿼드·이적]에서 내 계정을 정하면 이어집니다.")
+                notes.append("내 계정 확인 전입니다. 지난 기록은 남아 있습니다. [스쿼드·이적]에서 내 계정을 정하면 이어집니다.")
             if not config.WEB_DATA:
                 notes.append("넥슨 홈페이지 데이터가 꺼져 있어 최종 순위를 확인하지 못합니다.")
             if not notes:
@@ -8956,7 +8956,7 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         self.lb_rmove_note = self._note_label()
         v.addWidget(self.lb_rmove_note)
-        v.addWidget(self._title_label("순위 변동 원인 — 스냅숏 사이마다"))
+        v.addWidget(self._title_label("순위 변동 원인(스냅숏 사이마다)"))
         self.tbl_rmove = self._make_table(self.RANK_MOVE_COLUMNS)
         self.tbl_rmove.setSortingEnabled(False)
         v.addWidget(self.tbl_rmove, 1)
@@ -9451,7 +9451,7 @@ class MainWindow(QMainWindow):
             name = f"{who} — 시즌 카드 {len(spids)}장 합쳐서"
         else:
             name = self.cb_owner_card.currentText()
-        note = f"{name} — 구단주 {len(rows)}명(최근 {config.CARD_OWNER_DAYS}일 선발)"
+        note = f"{name}: 구단주 {len(rows)}명(최근 {config.CARD_OWNER_DAYS}일 선발)"
         if color is not None:
             note += f" · 팀컬러를 모르는 구단주 {unknown}명은 빠졌습니다(랭킹 1만 명 안이거나 팀컬러를 불러온 상대만 압니다)"
         self._set_status(self.lb_owner_status, note)
@@ -9563,7 +9563,7 @@ class MainWindow(QMainWindow):
 
     def _on_ranker_failed(self, key: tuple, msg: str) -> None:
         self._ranker_failed = key  # 같은 쌍을 같은 화면에서 되풀이해 묻지 않는다 — 다음 검색·다음 날 다시
-        self._ranker_note = f"랭커 기록을 받지 못했습니다 — {msg}"
+        self._ranker_note = f"랭커 기록을 받지 못했습니다. ({msg})"
 
     def _on_ranker_finished(self) -> None:
         # finished 에서 — done 은 스레드 안에서 나와 그 순간 isRunning 이 참이다(TradeLoader 와 같은 이유)
@@ -9931,7 +9931,7 @@ class MainWindow(QMainWindow):
         self.opp_list = RateRowList(tips={
             "rate": win_rate_note(False),
             "diff": ("이 줄 승률 − 필터에 걸린 경기 전체 승률(%p). "
-                     f"{core.MIN_COND}판 미만이면 비웁니다 — 몇 판짜리 큰 차이가 가장 눈에 띄지 않게.")})
+                     f"{core.MIN_COND}판 미만이면 비웁니다. 몇 판짜리 큰 차이가 가장 눈에 띄지 않게 하려는 것입니다.")})
         self.opp_list.doubleClicked.connect(self._on_opponent_double_clicked)
         self._add_profile_action(self.opp_list, self._opp_row_nick)
         self._opp_rows: list[RateRow] = []
@@ -10064,7 +10064,7 @@ class MainWindow(QMainWindow):
         self.opp_list.set_filter((lambda r: needle in r.label.lower()) if needle else None)
 
     POSITION_COLOR_ALL = "전체"
-    POSITION_COLOR_NONE = "— 팀컬러를 고르세요 —"
+    POSITION_COLOR_NONE = "팀컬러를 고르세요"
     POSITION_HINT_EMPTY = ""   # 78 ① — 쓰는 법 안내는 지웠다(팀컬러를 안 골랐을 때 글 없이 빈 칸)
     POSITION_NEED_COLORS = "[상대 팀컬러] 에서 상대 팀컬러를 먼저 불러와야 목록이 채워집니다."
 
@@ -10464,8 +10464,8 @@ class MainWindow(QMainWindow):
         # 경기 수 옆 ⚠ + 말풍선(76) — 범위가 기록 끝에 닿았거나 아직 받는 중. 설명 줄은 새로 안 둔다(Q3)
         notes = [self._cut_note(self._matches_all, my_matches), self._cut_note(opp_all, opp_matches)]
         if state:
-            notes[1] = (f"아직 받는 중 — 지금까지 받은 최근 {len(opp_all):,}경기만 셉니다" if state == "receiving"
-                        else f"받다가 멈춤({state}) — 받은 최근 {len(opp_all):,}경기만 셉니다")
+            notes[1] = (f"아직 받는 중(지금까지 받은 최근 {len(opp_all):,}경기만 셈)" if state == "receiving"
+                        else f"받다가 멈춤({state}, 받은 최근 {len(opp_all):,}경기만 셈)")
         heads = [f"{nick} ({len(ms):,}경기){' ⚠' if note else ''}"
                  for nick, ms, note in ((self._nick, my_matches, notes[0]), (opp_nick, opp_matches, notes[1]))]
         self.tbl_compare.setHorizontalHeaderLabels(["지표", *heads])
@@ -10713,7 +10713,7 @@ class MainWindow(QMainWindow):
         v.addWidget(gb_r)
         row = QHBoxLayout()
         self.shot_types, self.shot_type_notes = {}, {}
-        for key, title, tone in (("gf", "득점 유형 — 내 슛", T.GOOD_FILL), ("ga", "실점 유형 — 상대 슛", T.BAD_FILL)):
+        for key, title, tone in (("gf", "득점 유형(내 슛)", T.GOOD_FILL), ("ga", "실점 유형(상대 슛)", T.BAD_FILL)):
             gb = QGroupBox(title)
             box = QVBoxLayout(gb)
             self.shot_types[key] = ShotTypeRows(tone)
@@ -10864,7 +10864,7 @@ class MainWindow(QMainWindow):
 
     def _after_offline_open(self, ouid: str, nick: str) -> None:
         if self._ouid == ouid:  # DB 로 그리는 데 성공했다 — 이제 넥슨에 새 경기를 묻는다
-            self.statusBar().showMessage(f"{nick} — 저장된 기록을 보여 주는 중 · 새 경기 확인 중…")
+            self.statusBar().showMessage(f"{nick}: 저장된 기록을 보여 주면서 새 경기를 확인하는 중…")
             self._api_search(nick, quiet=True)
         else:
             self._set_busy(False)
@@ -11115,13 +11115,13 @@ class MainWindow(QMainWindow):
         self._load_elo(ouid)
 
         if not matches:
-            self.statusBar().showMessage(f"{self._nick} — 감독모드 기록이 없습니다.")
+            self.statusBar().showMessage(f"{self._nick}: 감독모드 기록이 없습니다.")
             return
 
         self._render_all()
         self._on_fetch_team_colors()  # DB 캐시(TTL store.TEAM_COLOR_TTL_DAYS · 7일)로 채우고, 모자란 것만 백그라운드 조회
         self.statusBar().showMessage(
-            f"{self._nick} — 누적 {len(matches)}경기 (감독모드 전체)"
+            f"{self._nick}: 누적 {len(matches)}경기(감독모드 전체)"
             + (f" · 새 경기 {new}건 저장" if new else ""))
 
     def _restore_view(self, page, saved_tabs) -> tuple[str, str | None]:
@@ -12098,7 +12098,7 @@ class MainWindow(QMainWindow):
         # 팀컬러 화면에서만 보이던 진행을 상태줄에도 — 처음 목록 읽기(약 50초)가 어느 화면에서든 보이게.
         # 검색이 돌 땐 그쪽 진행이 상태줄 주인이다
         if not (self._loader and self._loader.isRunning()):
-            self.statusBar().showMessage(f"팀컬러 — {text}")
+            self.statusBar().showMessage(f"팀컬러: {text}")
 
     def _rank_snapshot_fresh(self) -> bool:
         try:
@@ -12133,7 +12133,7 @@ class MainWindow(QMainWindow):
         for lb in self._teamcolor_status_labels:
             lb.setText(msg)
         if not (self._loader and self._loader.isRunning()):
-            self.statusBar().showMessage(f"팀컬러 — {msg}")
+            self.statusBar().showMessage(f"팀컬러: {msg}")
         self._invalidate_teamcolor()
         saved = getattr(self._teamcolor_loader, "saved_snapshot", None)
         if saved is not None and getattr(saved, "kind", "ok") in ("ok", "fresh"):
@@ -13729,8 +13729,8 @@ class MainWindow(QMainWindow):
         self.tbl_seasons.setSortingEnabled(True)
 
         self._set_status(self.lb_season_note,
-                         "넥슨 데이터센터에서 시즌표를 받지 못했습니다 —"
-                         " 잠시 후 다시 검색하면 채워집니다(그동안 판수 기준은 그대로 씁니다)."
+                         "넥슨 데이터센터에서 시즌표를 받지 못했습니다."
+                         " 잠시 후 다시 검색하면 채워집니다. 그동안은 판수 기준을 그대로 씁니다."
                          if not self._rank_seasons else "")
 
     @staticmethod
@@ -14359,7 +14359,7 @@ class MainWindow(QMainWindow):
         if self._loader and self._loader.isRunning():
             return
         self._set_busy(True)
-        self.statusBar().showMessage(f"{self._nick} — 저장된 기록을 다시 읽는 중…")
+        self.statusBar().showMessage(f"{self._nick}: 저장된 기록을 다시 읽는 중…")
         self._loader = MatchLoader(self._api, self._nick, config.DEFAULT_MATCH_TYPE, offline_ouid=self._ouid)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
@@ -14648,7 +14648,7 @@ class TeamColorDialog(QDialog):
         self.detail = res
         if res is None or res.at is None:
             self._rank_empty(MainWindow.rank_off_note("1만 명 중 이 팀컬러의 숫자를 보여 줍니다") if not config.RANK_COLLECT
-                             else "모으는 중 — 다음 랭킹 수집부터 보입니다.")
+                             else "모으는 중입니다. 다음 랭킹 수집부터 보입니다.")
             return False
         if res.now is None:
             self._rank_empty(f"넥슨 데이터 기준 {MainWindow._at(res.at)} — 랭킹 1만 명 중 이 팀컬러를 쓰는 사람이 없습니다.")
