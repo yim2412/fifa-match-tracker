@@ -594,10 +594,16 @@ def test_budget_first_call_cpu():
                              ("ranked_nicknames", lambda: M.ranked_nicknames(conn)),
                              ("champ_games", lambda: M.champ_games(conn)),     # 67 R5 — 캐시 없음(메뉴를 열 때마다)
                              ("rank_cut", lambda: [M.rank_cut(conn, r, last) for r in (20, 200, 1000)])):   # R4·R8
-                M.clear_cache()
-                t = time.process_time()
-                fn()
-                out[name] = time.process_time() - t
+                # 세 번 재서 가장 빠른 값 — 한 번만 재면 CI 기계가 잠깐 바쁜 순간을 함수 비용으로 읽는다
+                # (2026-11-08 하루에 두 번: winrate_to_elo 평소 0.17~0.22초가 0.31·0.41초로 · 함수 코드는 안 바뀜).
+                # 함수가 정말 느려지면 세 번 다 느려 그대로 잡힌다(되돌리는 변이로 확인).
+                runs = []
+                for _ in range(BUDGET_TRIES):
+                    M.clear_cache()
+                    t = time.process_time()
+                    fn()
+                    runs.append(time.process_time() - t)
+                out[name] = min(runs)
             print("      CPU 초:", " · ".join(f"{k} {v:.3f}" for k, v in out.items()))
             slow = {k: v for k, v in out.items() if v > BUDGET_S.get(k, 0.3)}
             assert not slow, slow
@@ -608,6 +614,7 @@ def test_budget_first_call_cpu():
 
 # 함수마다 예외 예산 — 지금은 없다(전부 0.3초 안 · 2026-10-07 이 PC 최대 0.16초라 작업 스레드를 안 둔다)
 BUDGET_S: dict = {}
+BUDGET_TRIES = 3   # 함수마다 이만큼 재서 가장 빠른 값으로 판정
 
 
 def test_rankmeta_behind_core_api():
