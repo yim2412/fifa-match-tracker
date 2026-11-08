@@ -533,9 +533,9 @@ def purge(db_path, *, everything: bool, now: datetime) -> bool:
 
 
 OFF_REASON_TEXT = {
-    "devkey": "넥슨이 호출 한도를 알려 껐습니다 — 개발 단계 키로 보입니다(서비스 단계 키가 필요합니다)",
+    "devkey": "넥슨이 호출 한도를 알려 껐습니다. 개발 단계 키로 보입니다(서비스 단계 키가 필요합니다)",
     "fail": f"바퀴가 {config.OWNER_DIST_FAIL_MAX}번 이어서 끝나지 못해 껐습니다",
-    "key": "API 키를 바꿔 껐습니다 — 새 키가 서비스 단계면 다시 켜세요",
+    "key": "API 키를 바꿔 껐습니다. 새 키가 서비스 단계면 다시 켜세요",
 }
 RESULT_TEXT = {"done": "완료", "thin": "인원 부족", "dropped": "기한 넘김", "aborted": "요청 상한", "off": "중단"}
 

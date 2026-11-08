@@ -183,9 +183,9 @@ def latest_pair(conn: sqlite3.Connection) -> Pair | None:
 
 def pair_text(p: Pair | None) -> str:
     if p is None:
-        return "하루 차이를 못 냅니다 — 원본 스냅숏이 둘 이상 쌓여야 합니다(하루 한 번 수집)"
+        return "하루 차이를 못 냅니다. 원본 스냅숏이 둘 이상 쌓여야 합니다(하루 한 번 수집)"
     if not p.ok:
-        return f"하루 차이를 못 냅니다 — 마지막 두 수집이 {p.hours:.0f}시간 떨어져 있습니다"
+        return f"하루 차이를 못 냅니다. 마지막 두 수집이 {p.hours:.0f}시간 떨어져 있습니다"
     return ""
 
 
@@ -1463,7 +1463,7 @@ def reward_board(conn: sqlite3.Connection) -> RewardBoard:
                            (season_at,)).fetchall()
     except sqlite3.Error as e:
         if "no such table" not in str(e):
-            raise           # 잠김·손상은 "옛 버전" 이 아니다 — 화면(_rank_read)이 None(못 읽음)으로 받는다
+            raise           # 잠김·손상은 "옛 버전" 이 아니다. 화면(_rank_read)이 None(못 읽음)으로 받는다
         out.state = "no_table"
         return out
     out.seen = len(got)

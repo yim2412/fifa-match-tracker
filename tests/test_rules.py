@@ -1062,10 +1062,11 @@ def test_nexon_times_are_parsed_only_in_matchtime():
 # 화면에 나가는 문자열만 본다 — 함수 설명(docstring)·홀로 선 문자열(주석 꼴)은 뺀다. 한글이 든 것만.
 STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "notice.py", "methods.py", "charts.py",
                "habits.py", "stats.py", "models.py", "tray.py", "updatecheck.py", "cardcollect.py", "nexon_api.py",
-               "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py")
+               "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py", "teamcolor.py",
+               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py")
 # 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
 # cardcollect.py 는 51 측정이 해시를 재 11-26 판정 전엔 못 고친다.
-STYLE_DASH_MAX = {"app_main.py": 154, "notice.py": 37, "methods.py": 21, "cardcollect.py": 1}
+STYLE_DASH_MAX = {"app_main.py": 79, "notice.py": 37, "methods.py": 21, "cardcollect.py": 1}
 STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준
 _STYLE_END = re.compile(r"([가-힣]?)([가-힣])다\.(?=\s|$|<|\"|\))")
 _STYLE_DOT = re.compile(r"(니다|세요)\.?\s*·")

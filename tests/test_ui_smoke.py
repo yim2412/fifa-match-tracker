@@ -1519,7 +1519,7 @@ def test_period_units_block_below_min_points_and_dashboard_follows():
         _win._period_unit = "일"
         _win._render_period_page()
         assert seg.buttons[1].isEnabled(), "주 4개(경계)인데 막혔다"
-        assert not seg.buttons[2].isEnabled() and "점 1개" in seg.buttons[2].toolTip(), seg.buttons[2].toolTip()
+        assert not seg.buttons[2].isEnabled() and "점이 1개" in seg.buttons[2].toolTip(), seg.buttons[2].toolTip()
         assert seg.buttons[0].isEnabled() and seg.current() == 0
         seg.buttons[1].click()   # 신호 경로
         assert _win._period_unit == "주" and seg.current() == 1
@@ -1532,7 +1532,7 @@ def test_period_units_block_below_min_points_and_dashboard_follows():
         # 3주(경계 밑) — 주가 막히고 골라 둔 주는 일로 내려간다(페이지·대시보드 같이)
         _win._matches = _synth_matches(_weeks_spec(3))
         _win._render_period_page()
-        assert not seg.buttons[1].isEnabled() and "점 3개" in seg.buttons[1].toolTip(), seg.buttons[1].toolTip()
+        assert not seg.buttons[1].isEnabled() and "점이 3개" in seg.buttons[1].toolTip(), seg.buttons[1].toolTip()
         assert _win._period_unit == "일" and seg.current() == 0
         assert [p[0] for p in _win.period_chart._points] == ["09/07", "09/14", "09/21"], _win.period_chart._points
         _win._render_dashboard()
@@ -12204,7 +12204,7 @@ def test_club_cells_texts():
         hidden = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(fc_hidden=True, champ_hidden=True)))}
         assert hidden["시즌 FC"][1].startswith("등수는 다음 시즌부터") and "남들 비교는 다음 시즌부터" in hidden["챔스·슈챔 달성"][1]
         out = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(_club(my_value=None, me_in_fc=False)))}
-        assert out["구단가치 등수"][1].endswith("위 밖 — 등수 없음") and out["시즌 FC"][1].endswith("위 밖 — 등수 없음")
+        assert out["구단가치 등수"][1].endswith("위 밖(등수 없음)") and out["시즌 FC"][1].endswith("위 밖(등수 없음)")
         none = {c[0]: c[1:] for c in app_main.club_cells(**_club_args(None, pts=[], rows=[]))}
         assert none["지금 200위까지"][0] == "—" and none["구단가치 등수"][0] == "—" and none["시즌 최고점"][0] == "—"
         assert none["시즌 FC"][0] == "30 FC", "rank.db 가 없어도 내 FC 는 보인다"
@@ -12325,7 +12325,7 @@ def test_elo_score_report_needs_enough_points():
         _app.processEvents()
         text = _win.lb_elo_report.text()
         assert _win.lb_elo_report.isVisibleTo(_win) and "시즌 평균" in text and "가장 깊었던 하락은?" in text, text
-        assert "점수가 오르는 구간인가?" in text and "무승부 뺀 승률" in text, text
+        assert "점수가 오르는 구간인가?" in text and "무승부를 뺀 승률" in text, text
         rows = pts(config.R_MIN_POINTS) + _elo_rows([("2026-09-12T08:00:00", 4900.0, 100, "search")])   # 하루 안 최고점
         _win._on_elo_ready(_OUID, _elo_data(sorted(rows, key=lambda r: r["taken_at"])))
         assert "최고 4,900점(09.12)" in _win.lb_elo_report.text(), "리포트 최고점이 하루 마지막 점만 봤다(머리 줄과 어긋남)"
@@ -12448,7 +12448,7 @@ def test_fc_reward_cards_match_head_line_66():
         _win._go_page("승률 그래프", "일별 기록")
         _win._render_calendar()
         assert texts(_win.cal_fc_cards) == texts(_win.rewards_cards), "달력 카드와 FC 보상 카드가 다르다"
-        assert "FC 보상량 — 이긴 판마다" in _win.cal_fc_cards[0].text(), _win.cal_fc_cards[0].text()
+        assert "FC 보상량: 이긴 판마다" in _win.cal_fc_cards[0].text(), _win.cal_fc_cards[0].text()
         # 순위 보상 — 지금 등수(마지막 점)로
         data = _elo_data(_elo_rows([("2026-09-12T10:00:00", 4500.0, 150, "search")]))
         _win._on_elo_ready(_OUID, data)

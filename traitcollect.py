@@ -71,8 +71,8 @@ class TraitError(Exception):
 MESSAGES = {
     "off": config.WEB_DATA_OFF_MSG,
     "down": "넥슨 홈페이지가 응답하지 않습니다(점검 중일 수 있음)",
-    "format": "넥슨 응답이 바뀌었습니다 — 특성 받기를 멈춥니다",
-    "rate": "요청이 많아 넥슨이 잠시 막았습니다 — 오늘은 더 받지 않습니다",
+    "format": "넥슨 응답이 바뀌었습니다. 특성 받기를 멈춥니다",
+    "rate": "요청이 많아 넥슨이 잠시 막았습니다. 오늘은 더 받지 않습니다",
 }
 
 def new_session() -> requests.Session:
@@ -480,8 +480,8 @@ def run(api, session, conn, rows: list[dict], *, on_at: str | None, cancel: Call
 MINE_STATES = {   # → 탭 위 한 줄
     "fresh": "",
     "ok": "",
-    "stale": "게임 안 팀 칸에 최근 경기 선발이 다 있는 팀이 없습니다 — 팀 전술을 저장하면 다음 날 다시 봅니다",
-    "nomatch": "저장된 내 경기가 없습니다 — 내 계정을 검색하면 채워집니다",
+    "stale": "게임 안 팀 칸에 최근 경기 선발이 다 있는 팀이 없습니다. 팀 전술을 저장하면 다음 날 다시 봅니다",
+    "nomatch": "저장된 내 경기가 없습니다. 내 계정을 검색하면 채워집니다",
     "nouser": "넥슨 스쿼드메이커에서 내 닉네임을 찾지 못했습니다",
     "limit": f"오늘 넥슨 웹 상한({config.TRAIT_WEB_DAILY_REQ:,}요청)이라 내일 받습니다",
     "cancelled": "",

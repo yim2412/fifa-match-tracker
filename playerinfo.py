@@ -180,7 +180,7 @@ def _checked(res, what: str) -> str:
     kind = ranker.classify_web_response(res)
     if kind is not None:
         status = getattr(res, "status_code", 200)
-        raise PlayerInfoError(f"{what} 실패(HTTP {status})" if status != 200 else f"{what} — 넥슨 오류·점검 페이지", kind)
+        raise PlayerInfoError(f"{what} 실패(HTTP {status})" if status != 200 else f"{what}: 넥슨 오류·점검 페이지", kind)
     return res.text
 
 
