@@ -172,6 +172,7 @@ WEB_USER_AGENT = f"FifaMatchTracker/{APP_VERSION.lstrip('v')} (+{REPO_URL})"
 UPDATE_CHECK = os.getenv("FIFA_UPDATE_CHECK", "1").strip() != "0"
 LATEST_RELEASE_API = f"https://api.github.com/repos/{REPO_SLUG}/releases/latest"
 RELEASES_URL = f"{REPO_URL}/releases/latest"
+ISSUE_NEW_URL = f"{REPO_URL}/issues/new"   # [정보] [문제 알리기] — 작성 화면만 연다(84 H1)
 UPDATE_CHECK_EVERY_H = 6            # 트레이에 상주하는 동안 다시 확인하는 간격(켤 때 한 번은 그대로)
 UPDATE_ON_SHOW_MIN = 10             # 트레이에서 창을 열 때도 확인 — 마지막 확인 뒤 이만큼 지났을 때만(74)
 UPDATE_ON_CLICK_MIN_S = 10          # 왼쪽 아래 버전 칸을 눌러 지금 확인(75 U10) — 연달아 눌러도 GitHub 에 매번 묻지 않게

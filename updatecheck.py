@@ -162,6 +162,39 @@ def _changes_excerpt(body: str) -> str:
     return "\n".join(lines[:NOTES_MAX_LINES])
 
 
+# ── 업데이트 뒤 "바뀐 점" 창(84 H2) ─────────────────────────────────────
+CHANGELOG_FILE = "CHANGELOG.md"   # spec 의 datas 에 같은 이름으로 들어간다(test_ui_smoke 가 spec 을 대조)
+SEEN_VERSION_KEY = "app/seen_version"   # settings.ini — 이 PC 에서 "바뀐 점" 을 마지막으로 보여 준 버전
+_CHANGE_HEAD = re.compile(r"^## (v\d+\.\d+\.\d+)\b.*$", re.M)
+
+
+def changes_between(text: str, seen: str, current: str) -> str:
+    """CHANGELOG 에서 seen 보다 새롭고 current 이하인 절들(새 것부터) — 마크다운 그대로. 고를 게 없으면 "".
+    seen 이 비면(이 창이 생기기 전 버전에서 올라옴) current 절 하나만."""
+    cur = parse_version(current)
+    if cur is None:
+        return ""
+    old = parse_version(seen) if seen else None
+    if seen and old is None:
+        return ""
+    heads = list(_CHANGE_HEAD.finditer(text or ""))
+    out = []
+    for i, m in enumerate(heads):
+        v = parse_version(m.group(1))
+        if v is not None and (v == cur if old is None else old < v <= cur):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+            out.append(text[m.start():end].strip())
+    return "\n\n".join(out)
+
+
+def read_changelog() -> str:
+    """번들(또는 소스 폴더)의 CHANGELOG. 못 읽으면 "" — 창을 안 띄울 뿐 앱은 그대로."""
+    try:
+        return config.asset_path(CHANGELOG_FILE).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
 # ── 설치판 업데이트 ───────────────────────────────────────────────────
 def install_dir() -> Path | None:
     """설치 파일로 깔린 exe 면 그 폴더, 아니면(포터블·소스 실행) None."""

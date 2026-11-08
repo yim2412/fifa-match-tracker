@@ -178,6 +178,9 @@ class _Sig:
 
 _RealCardInfoLoader = app_main.CardInfoLoader
 app_main.CardInfoLoader = _FakeCardInfoLoader
+# 84 G3 — 테스트는 이 PC 의 실제 프로세스 목록을 보지 않는다(main 을 부르는 테스트가 감시를 켠다 · 게임을 켜 둔 날
+# 뒤 테스트가 전부 "게임 중" 으로 흔들린다). 게임 켜짐은 _GameOn 으로만
+app_main.GAME_CHECK = lambda: False
 _win = app_main.MainWindow(_NoApi())
 _win.resize(1600, 900)
 # 대부분의 테스트는 "모든 메뉴가 그려진 상태"를 본다 — 지연 그리기 자체는 test_lazy_* 가 켜서 잰다
@@ -3138,6 +3141,9 @@ def test_main_starts_update_check_after_show():
         def ask_notice_update_once(self):
             pass   # 옛 동의자 다시 묻기 — 창이 보인 뒤(test_reask_after_show_normal)
 
+        def show_changes_once(self, fresh):
+            pass   # 업데이트 뒤 바뀐 점 — test_84_changes_once
+
         def sync_ranker_pick_data(self):
             calls.append("랭커 픽 정리")  # 켤 때 토글과 무관하게(14일 · 꺼졌으면 전부 — E12)
 
@@ -3830,6 +3836,101 @@ def test_download_falls_back_to_api_path_when_normal_url_fails():
             assert not (tmp / name).exists(), "반쯤 받은 설치 파일이 남았다"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_84_changes_once():
+    """84 H2 — 업데이트 뒤 처음 보일 때 한 번: 그 사이 버전 절 · 새로 깐 사람·내려온 사람·숨김엔 안 띄움 · 두 번째엔 안 띄움."""
+    log = ("# 변경 이력\n\n## v3.5.1 — 날\n\n- 새 것\n\n## v3.4.2 — 날\n\n- 중간\n\n## v3.4.1 — 날\n\n- 옛 것\n")
+    got = updatecheck.changes_between(log, "v3.4.1", "v3.5.1")
+    assert "새 것" in got and "중간" in got and "옛 것" not in got, got
+    assert got.index("새 것") < got.index("중간"), "새 버전부터가 아니다"
+    only = updatecheck.changes_between(log, "", "v3.5.1")
+    assert "새 것" in only and "중간" not in only, only     # 이 창이 생기기 전 버전에서 올라옴 — 지금 절만
+    assert updatecheck.changes_between(log, "엉터리", "v3.5.1") == ""
+    real = updatecheck.read_changelog()
+    assert real and updatecheck.changes_between(real, "v0.0.1", "v3.4.1"), "CHANGELOG 를 못 읽거나 절을 못 고른다"
+    spec = (pathlib.Path(app_main.__file__).with_name("피파전적관리.spec")).read_text(encoding="utf-8")
+    assert "('CHANGELOG.md', '.')" in spec, "exe 에 CHANGELOG 가 안 들어간다 — 창이 조용히 안 뜬다"
+    import inspect
+    assert "show_changes_once(fresh)" in inspect.getsource(app_main._open_window), "켤 때 안 부른다"
+
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    shown = []
+    keep = (app_main.ChangesDialog.exec, updatecheck.read_changelog, config.APP_VERSION)
+    try:
+        from PySide6.QtCore import QSettings
+        ini = QSettings(str(tmp / "s.ini"), QSettings.Format.IniFormat)
+        app_main.ChangesDialog.exec = lambda self: shown.append(self.browser.toPlainText())
+        updatecheck.read_changelog = lambda: log
+        config.APP_VERSION = "v3.5.1"
+        with _Patch((_win, "_settings", lambda: ini), (_win, "isVisible", lambda: True),
+                    (_win, "isMinimized", lambda: False)):
+            ini.setValue(updatecheck.SEEN_VERSION_KEY, "v3.4.1")
+            _win.show_changes_once(False)
+            assert len(shown) == 1 and "새 것" in shown[0] and "중간" in shown[0], shown
+            assert ini.value(updatecheck.SEEN_VERSION_KEY) == "v3.5.1"
+            _win.show_changes_once(False)
+            assert len(shown) == 1, "두 번째 실행에도 떴다"
+            for seen, fresh in (("v3.4.1", True), ("v9.0.0", False)):   # 새로 깔았다 · 옛 버전으로 내려왔다
+                ini.setValue(updatecheck.SEEN_VERSION_KEY, seen)
+                _win.show_changes_once(fresh)
+                assert len(shown) == 1 and ini.value(updatecheck.SEEN_VERSION_KEY) == "v3.5.1", (seen, shown)
+            ini.remove(updatecheck.SEEN_VERSION_KEY)                  # 이 창 전 버전에서 올라옴 — 지금 절만
+            _win.show_changes_once(False)
+            assert len(shown) == 2 and "새 것" in shown[1] and "중간" not in shown[1], shown
+        with _Patch((_win, "_settings", lambda: ini), (_win, "isVisible", lambda: False)):
+            ini.setValue(updatecheck.SEEN_VERSION_KEY, "v3.4.1")
+            _win.show_changes_once(False)
+            assert len(shown) == 2 and ini.value(updatecheck.SEEN_VERSION_KEY) == "v3.4.1", "숨긴 창에서 띄우거나 적었다"
+    finally:
+        app_main.ChangesDialog.exec, updatecheck.read_changelog, config.APP_VERSION = keep
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_84_report_body_hides_user_folder_and_fits_url():
+    """84 H1 — 오류 기록 끝을 붙이되 사용자 폴더(한글 이름)는 가리고 · 오래된 줄부터 빼 주소 길이 안에."""
+    from urllib.parse import quote, parse_qs, urlsplit
+    import crashlog
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    home = pathlib.Path(r"C:\Users\홍길동")
+    try:
+        lines = [f"줄{i} File \"{home}\\AppData\\x.py\" 한글 메시지 {'가' * 30}" for i in range(100)]
+        (tmp / crashlog.LOG_NAME).write_text("\n".join(lines), encoding="utf-8")
+        assert str(home) in lines[-1], "가짜 기록에 사용자 폴더가 없다(아래 단언이 빈 검사)"
+        body = crashlog.report_body(tmp, "v9.9.9", home=home)
+        assert str(home) not in body and "홍길동" not in body and "%USERPROFILE%" in body, body[-300:]
+        assert "줄99" in body and "줄0 " not in body and "v9.9.9" in body
+        assert len(quote(body)) <= crashlog.REPORT_QUOTED_MAX, len(quote(body))
+        assert body.count("줄") < crashlog.REPORT_LOG_LINES, "주소 길이로 안 잘랐다(한글은 글자 수로 재면 넘친다)"
+        (tmp / crashlog.LOG_NAME).write_text("가" * 5000, encoding="utf-8")
+        assert "길어" in crashlog.report_body(tmp, "v9.9.9", home=home)
+        (tmp / crashlog.LOG_NAME).unlink()
+        assert "오류 기록 없음" in crashlog.report_body(tmp, "v9.9.9", home=home)
+        # 주소 — 작성 화면 · 본문이 그대로 되돌아온다
+        with _Patch((config, "DATA_DIR", tmp)):
+            (tmp / "logs").mkdir()
+            (tmp / "logs" / crashlog.LOG_NAME).write_text("Traceback 한 줄", encoding="utf-8")
+            u = app_main.issue_url()
+        parts = urlsplit(u)
+        assert u.startswith(config.ISSUE_NEW_URL + "?"), u
+        assert "Traceback 한 줄" in parse_qs(parts.query)["body"][0]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_84_info_dialog_folder_and_issue_buttons():
+    """84 S2·H1 — [정보] 의 두 단추: 데이터 폴더를 탐색기로 · 이슈 작성 화면을 브라우저로(앱은 아무것도 안 보낸다)."""
+    opened = []
+    with _Patch((app_main.QDesktopServices, "openUrl", lambda u: opened.append(u) or True)):
+        dlg = app_main.AboutDialog(_win)
+        try:
+            dlg.btn_folder.click()
+            dlg.btn_issue.click()
+        finally:
+            dlg.deleteLater()
+    assert len(opened) == 2, opened
+    assert opened[0].isLocalFile() and pathlib.Path(opened[0].toLocalFile()) == pathlib.Path(config.DATA_DIR), opened[0]
+    assert opened[1].toString().startswith(config.ISSUE_NEW_URL), opened[1].toString()
 
 
 def test_thread_crash_logged_without_dialog():

@@ -142,3 +142,35 @@ def discard_fault() -> None:
             fault.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+# ── 문제 알리기(84 H1) — 이슈 작성 화면에 붙일 글. 보내는 것은 사용자가 브라우저에서 직접(앱은 아무것도 안 보낸다) ──
+REPORT_LOG_LINES = 40      # crash.log 끝에서 붙일 줄 수
+# 인코딩한 본문 길이 상한 — GitHub 은 주소가 너무 길면 이슈 화면 대신 오류를 낸다. 한글은 한 글자가 %XX 9자라 글자 수로 재면 틀린다
+REPORT_QUOTED_MAX = 6000
+
+
+def report_body(log_dir: Path, version: str, home: Path | None = None) -> str:
+    """버전 · 윈도우 버전 · crash.log 끝 몇 줄(넘치면 오래된 줄부터 뺀다). 사용자 폴더 경로(한글 사용자 이름)는 %USERPROFILE% 로."""
+    import platform
+    from urllib.parse import quote
+    home = Path.home() if home is None else home
+    try:
+        lines = (log_dir / LOG_NAME).read_text(encoding="utf-8", errors="replace").splitlines()[-REPORT_LOG_LINES:]
+    except OSError:
+        lines = []
+    homes = sorted({str(home), str(home).replace("\\", "/")}, key=len, reverse=True)
+    for i, ln in enumerate(lines):
+        for h in homes:
+            ln = ln.replace(h, "%USERPROFILE%")
+        lines[i] = ln
+    head = (f"### 어떤 일이 있었나요\n\n(여기에 적어 주세요)\n\n### 환경\n\n- 앱 {version}\n"
+            f"- {platform.system()} {platform.release()}\n\n### 오류 기록(crash.log 끝)\n\n")
+    fence = "```"
+    had = bool(lines)
+    while lines:
+        body = head + fence + "\n" + "\n".join(lines) + "\n" + fence
+        if len(quote(body)) <= REPORT_QUOTED_MAX:
+            return body
+        lines = lines[1:]
+    return head + ("(오류 기록이 길어 붙이지 못했습니다. crash.log 를 직접 첨부해 주세요)" if had else "(오류 기록 없음)")

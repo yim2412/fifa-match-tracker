@@ -31,7 +31,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from PySide6.QtCore import QEvent, QObject, QSettings, QStringListModel, Qt, QSize, QThread, QTimer, QUrl, Signal
 import shiboken6
@@ -3397,6 +3397,23 @@ class MainWindow(QMainWindow):
             return
         self._notice_asked = True
         self.ask_notice_update()
+
+    def show_changes_once(self, fresh: bool) -> None:
+        """업데이트 뒤 처음 보일 때 한 번 "바뀐 점"(84 H2). fresh = 이번 실행에서 처음 동의했다(새로 깐 사람 — 기록만).
+        숨김·최소화면 적지 않고 넘긴다(다음 실행에 보인다 — 게임 중 초점을 뺏지 않게, ask_notice_update_once 와 같은 까닭)."""
+        if not self.isVisible() or self.isMinimized():
+            return
+        s = self._settings()
+        seen = str(s.value(updatecheck.SEEN_VERSION_KEY, "") or "")
+        if seen == config.APP_VERSION:
+            return
+        s.setValue(updatecheck.SEEN_VERSION_KEY, config.APP_VERSION)
+        s.sync()
+        if fresh:
+            return   # 새로 깔았다 — 옛 버전으로 내려온 경우는 changes_between 이 빈 글을 준다
+        text = updatecheck.changes_between(updatecheck.read_changelog(), seen, config.APP_VERSION)
+        if text:
+            ChangesDialog(text, self).exec()
 
     def ask_notice_update(self, parent: QWidget | None = None) -> bool:
         """다시 묻는 창 + 뒷처리 한 곳 — 창이 보일 때 · 빈 탭 [안내 보고 동의] · [정보] 수집 켜기(parent = 그 창)가 같이 쓴다."""
@@ -14990,6 +15007,26 @@ def _notice_browser(html: str) -> QTextBrowser:
     return tb
 
 
+class ChangesDialog(QDialog):
+    """업데이트 뒤 처음 켤 때 한 번 — 그 사이 버전들의 CHANGELOG 절(84 H2). 받는 사람이 읽는 글이라 그대로 보여 준다."""
+
+    def __init__(self, markdown: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} - {config.APP_VERSION} 바뀐 점")
+        v = QVBoxLayout(self)
+        self.browser = QTextBrowser()
+        self.browser.setOpenExternalLinks(True)
+        self.browser.setMarkdown(markdown)
+        v.addWidget(self.browser, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        btn = QPushButton("확인")
+        btn.clicked.connect(self.accept)
+        row.addWidget(btn)
+        v.addLayout(row)
+        fit_to_screen(self, 620, 560)
+
+
 class NoticeDialog(QDialog):
     """첫 실행(또는 안내 글이 바뀐 뒤) 이용 안내 동의 + 넥슨 홈페이지 데이터 선택.
 
@@ -15076,6 +15113,19 @@ class MatchDetailDialog(QDialog):
         return next((k for k, i in self.side_pages.items() if i == self.squad_stack.currentIndex()), None)
 
 
+def open_data_folder() -> bool:
+    """[정보] [데이터 폴더 열기](84 S2) — 키·기록·오류 기록이 있는 곳을 탐색기로."""
+    return QDesktopServices.openUrl(QUrl.fromLocalFile(str(config.DATA_DIR)))
+
+
+def issue_url() -> str:
+    """[정보] [문제 알리기](84 H1) — 버전·오류 기록 끝을 채운 GitHub 이슈 작성 주소. 보내기는 사용자가 브라우저에서."""
+    q = urlencode({"title": f"[{config.APP_VERSION}] ",
+                   "body": crashlog.report_body(config.DATA_DIR / "logs", config.APP_VERSION)},
+                  quote_via=quote)
+    return f"{config.ISSUE_NEW_URL}?{q}"
+
+
 class AboutDialog(QDialog):
     """[정보] — 버전·이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기."""
 
@@ -15089,6 +15139,18 @@ class AboutDialog(QDialog):
         head.setOpenExternalLinks(True)
         head.setWordWrap(True)
         v.addWidget(head)
+        tools = QHBoxLayout()
+        self.btn_folder = QPushButton("데이터 폴더 열기")
+        self.btn_folder.setToolTip("키·전적 기록·오류 기록이 있는 폴더를 엽니다.")
+        self.btn_folder.clicked.connect(open_data_folder)
+        self.btn_issue = QPushButton("문제 알리기")
+        self.btn_issue.setToolTip("버전과 오류 기록을 채운 GitHub 글쓰기 화면을 브라우저로 엽니다. "
+                                  "올리기 전에 내용을 확인할 수 있고, 앱이 직접 보내는 것은 없습니다.")
+        self.btn_issue.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(issue_url())))
+        tools.addWidget(self.btn_folder)
+        tools.addWidget(self.btn_issue)
+        tools.addStretch(1)
+        v.addLayout(tools)
         tabs = QTabWidget()
         tabs.addTab(_notice_browser(notice.TERMS_HTML), "이용 안내")
         tabs.addTab(_notice_browser(notice.PRIVACY_HTML), "개인정보")
@@ -15677,7 +15739,8 @@ def _setup_app(app: QApplication) -> None:
 
 def _open_window(shell: tray.AppShell, show: bool = True):
     """안내 동의·키 → 창. 동의·키 창에서 취소하면 None. show=False 는 --tray(숨긴 채 — 미리 읽기도 안 한다)."""
-    if config.notice_needed():
+    fresh = config.notice_needed()   # 이번에 처음 동의 — 새로 깐 사람에게 "바뀐 점" 은 안 띄운다(84 H2)
+    if fresh:
         if NoticeDialog().exec() != QDialog.DialogCode.Accepted:
             return None
     new_key = not config.API_KEY
@@ -15708,7 +15771,8 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     if new_key:
         win.start_trades()  # 키를 막 넣었다 — 거래 기록(키 주인 것)을 받아 둔다(내 계정 힌트가 검색 직후 나오게)
     if show:
-        QTimer.singleShot(0, win.ask_notice_update_once)  # 창이 그려진 뒤 그 위에(옛 동의자만)
+        # 창이 그려진 뒤 그 위에 — 다시 묻는 안내(옛 동의자만)를 닫은 다음에 "바뀐 점"(둘이 겹쳐 뜨지 않게 차례로)
+        QTimer.singleShot(0, lambda: (win.ask_notice_update_once(), win.show_changes_once(fresh)))
         if config.OPEN_LAST_ACCOUNT:
             win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
         else:
