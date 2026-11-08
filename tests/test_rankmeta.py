@@ -605,7 +605,10 @@ def test_budget_first_call_cpu():
                     runs.append(time.process_time() - t)
                 out[name] = min(runs)
             print("      CPU 초:", " · ".join(f"{k} {v:.3f}" for k, v in out.items()))
-            slow = {k: v for k, v in out.items() if v > BUDGET_S.get(k, 0.3)}
+            # 기계가 이 PC 보다 느리면 그만큼 예산을 늘린다 — 11-08 CI 가 세 번 다 0.34초(평소 0.17~0.22)로 기계째 느렸다
+            scale = max(1.0, min(_calib() for _ in range(3)) / CALIB_REF_S)
+            print(f"      기계 속도 배율 {scale:.2f}")
+            slow = {k: v for k, v in out.items() if v > BUDGET_S.get(k, 0.3) * scale}
             assert not slow, slow
         finally:
             conn.close()
@@ -615,6 +618,16 @@ def test_budget_first_call_cpu():
 # 함수마다 예외 예산 — 지금은 없다(전부 0.3초 안 · 2026-10-07 이 PC 최대 0.16초라 작업 스레드를 안 둔다)
 BUDGET_S: dict = {}
 BUDGET_TRIES = 3   # 함수마다 이만큼 재서 가장 빠른 값으로 판정
+CALIB_REF_S = 0.156   # 아래 _calib() 의 이 PC 값(2026-11-08 · 7번 중 최솟값) — 예산 0.3초가 맞춰진 기계
+
+
+def _calib() -> float:
+    """정해진 순수 파이썬 계산의 CPU 초 — 기계 속도를 잰다."""
+    t = time.process_time()
+    acc = 0
+    for i in range(3_000_000):
+        acc += i * i % 7
+    return time.process_time() - t
 
 
 def test_rankmeta_behind_core_api():
