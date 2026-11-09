@@ -1927,6 +1927,19 @@ def enhance_count_text(v: float) -> str:
     return f"약 {round(v / 10 ** 8):,}억 회" if v >= 10 ** 8 else f"{v:,.0f}회"
 
 
+def enhance_tries_text(n: int) -> str:
+    """시도 횟수 칸(87 V3) — "30회" · "200만 회" · "10억 회"(표 칸은 1·2·3·5 × 10^k 라 끝자리가 없다)."""
+    for unit, name in ((10 ** 8, "억"), (10 ** 4, "만")):
+        if n >= unit and n % unit == 0:
+            return f"{n // unit:,}{name} 회"
+    return f"{n:,}회"
+
+
+def enhance_try_chance_text(p: float) -> str:
+    """닿을 수 없는 횟수(시작에서 목표까지 칸 수보다 적다)는 "0%" — "1% 미만" 과 갈라 적는다."""
+    return "0%" if p <= 0 else enhance_chance_text(p)
+
+
 def enhance_chance_html(amount: int, chance: float) -> str:
     """예산 칸 결과 — 기준 이상이면 초록, 절반 아래면 빨강."""
     text = f"{enhance_won(amount)}이면 {enhance_chance_text(chance)} 확률로 붙습니다"
@@ -9306,6 +9319,9 @@ class MainWindow(QMainWindow):
     # ── 강화 비용(83) — 화면 ────────────────────────────────
     ENHANCE_COLUMNS = ["강화 단계", "성공 확률", "재료", "재료비", "보호비", "1회 비용", "평균 비용", "비중"]
     ENHANCE_BUDGET_COLUMNS = ["붙을 확률", "금액"]
+    ENHANCE_TRY_COLUMNS = ["시도 횟수", "붙을 확률"]
+    ENHANCE_TRY_TIP = ("이 횟수만큼 도전했을 때 목표 강화에 닿을 확률입니다. 실패해서 떨어진 뒤 다시 오르는 시도까지 셉니다. "
+                       "보호를 건 한 단계만 남았으면 1 − (1 − 성공 확률)^횟수 와 같습니다.")
     ENHANCE_RATES = (95, 80, 60, 40, 30)   # 보호 비율 고르기 — 40% 구간은 넥슨이 최대 10%p 낮출 수 있다
     ENHANCE_BUDGET_W = 240                 # 금액 구간 칸 폭 — 나머지는 그래프가 쓴다
     ENHANCE_COLUMN_TIPS = {
@@ -9388,10 +9404,17 @@ class MainWindow(QMainWindow):
         self.lb_enh_chance.setWordWrap(True)
         self.lb_enh_chance.setTextFormat(Qt.TextFormat.RichText)
         side.addWidget(self.lb_enh_chance)
+        self.tbl_enh_tries = self._make_table(self.ENHANCE_TRY_COLUMNS)
+        self.tbl_enh_tries.setSortingEnabled(False)
+        self.tbl_enh_tries.set_fit_rows(keep_all=True)
+        for c in range(len(self.ENHANCE_TRY_COLUMNS)):
+            self.tbl_enh_tries.horizontalHeaderItem(c).setToolTip(self.ENHANCE_TRY_TIP)
+        side.addWidget(self.tbl_enh_tries)
         side.addStretch(1)
         mid.addWidget(self.enh_budget_panel)
         self.chart_enh_budget = charts.BudgetCurveChart()
         mid.addWidget(self.chart_enh_budget, 1)
+        mid.addStretch(0)   # 그래프를 숨기면(시도 횟수 표만) 남는 폭을 받는다 — 없으면 왼쪽 칸이 가운데로 간다
         box.addLayout(mid)
 
         self.tbl_enhance = self._make_table(self.ENHANCE_COLUMNS)
@@ -9450,8 +9473,12 @@ class MainWindow(QMainWindow):
         budgets = est.budgets
         self._fill(self.tbl_enh_budget, [[f"{q}%", enhance_won(b)] for q, b in budgets], enable_sort=False)
         self._fill(self.tbl_enhance, [enhance_row(s, est.mean_cost) for s in est.steps], enable_sort=False)
-        for wd in (self.enh_budget_panel, self.chart_enh_budget):
+        self._fill(self.tbl_enh_tries, [[enhance_tries_text(n), enhance_try_chance_text(p)] for n, p in est.tries], enable_sort=False)
+        # 시도 횟수 표는 정확히 풀어서 금액 흉내를 못 돌린 구간(평균 시도 수백만 번)에도 나온다
+        for wd in (self.tbl_enh_budget, self.ed_enh_budget, self.lb_enh_chance, self.chart_enh_budget):
             wd.setVisible(bool(budgets))
+        self.tbl_enh_tries.setVisible(bool(est.tries))
+        self.enh_budget_panel.setVisible(bool(budgets) or bool(est.tries))
         self._enh_shown = payload
         self._enh_redraw()
         self.enh_result_box.show()

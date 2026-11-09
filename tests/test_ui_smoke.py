@@ -1296,7 +1296,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 43, len(tables)   # 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 44, len(tables)   # 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -11226,6 +11226,13 @@ def test_enhance_page_shows_result():
         assert "평균이 가장 싼 보호 시작" in text and "보호 안 함" in text, "로더가 낸 답이 글까지 — " + text
         assert [_win.tbl_enh_budget.item(r, 0).text() for r in range(_win.tbl_enh_budget.rowCount())] == ["50%", "85%", "95%"]
         assert _win.chart_enh_budget.isVisibleTo(_win) and _win.chart_enh_budget._points == list(est.curve)
+        # 87 V3 — 시도 횟수 표는 계산값 그대로 · 말풍선
+        tries = _win.tbl_enh_tries
+        assert est.tries and tries.isVisibleTo(_win) and tries.rowCount() == len(est.tries)
+        assert [tries.item(r, 0).text() for r in range(tries.rowCount())] == [app_main.enhance_tries_text(n) for n, _p in est.tries]
+        assert tries.item(0, 0).text() == "1회" and tries.item(0, 1).text() == "0%", "1강 → 8강은 한 번으로 못 닿는다"
+        assert tries.item(tries.rowCount() - 1, 1).text() == "99% 넘게" or est.tries[-1][1] >= 0.99
+        assert "다시 오르는 시도까지" in tries.horizontalHeaderItem(0).toolTip()
         assert [m[0] for m in _win.chart_enh_budget._marks] == [est.budget_at(85)], "85% 자리에 세로선"
         calls = []
         keep_fetch = playerinfo.fetch_player_info
@@ -11257,7 +11264,13 @@ def test_enhance_page_shows_result():
         _win.cb_enh_target.setCurrentIndex(_win.cb_enh_target.findData(10))
         _win.btn_enh_calc.click()
         assert "확률별 금액은 낼 수 없습니다" in _win.lb_enh_head.text(), _win.lb_enh_head.text()
-        assert not _win.chart_enh_budget.isVisibleTo(_win) and not _win.enh_budget_panel.isVisibleTo(_win)
+        assert not _win.chart_enh_budget.isVisibleTo(_win) and not _win.tbl_enh_budget.isVisibleTo(_win)
+        assert not _win.ed_enh_budget.isVisibleTo(_win), "금액 구간이 없으면 예산 칸도 없다"
+        # 87 V3 — 금액 흉내를 못 돌려도 시도 횟수는 정확히 풀어서 나온다
+        assert _win.enh_budget_panel.isVisibleTo(_win) and _win.tbl_enh_tries.isVisibleTo(_win)
+        assert _win.tbl_enh_tries.item(_win.tbl_enh_tries.rowCount() - 1, 0).text().endswith("만 회")
+        _app.processEvents()
+        assert _win.enh_budget_panel.x() == _win.tbl_enhance.x(), "그래프가 없어도 왼쪽에 붙는다(가운데로 가지 않는다)"
         # 일부 구간만 보호 — 어디부터인지 적는다 · 그 위만 보호비
         _win.cb_enh_protect.setCurrentIndex(_win.cb_enh_protect.findData(8))
         _win.cb_enh_rate.setCurrentIndex(_win.cb_enh_rate.findData(30))
@@ -11274,7 +11287,7 @@ def test_enhance_page_shows_result():
         _win.btn_enh_calc.click()
         assert _win.tbl_enhance.rowCount() == 2
         assert "시세의 30%" in _win.lb_enh_head.text() and "45회" in _win.lb_enh_result.text()
-        _check_elisions([_win.tbl_enhance, _win.tbl_enh_budget])
+        _check_elisions([_win.tbl_enhance, _win.tbl_enh_budget, _win.tbl_enh_tries])
         # 비싼 카드 — 1의 자리까지 적으면 칸이 가장 길다. 그래도 안 잘려야 한다
         info = playerinfo.PlayerInfo(sp_id=sp, name="테스트강화", ovr=115,
                                      prices={g: f"{g * 7_123_456_789:,} BP" for g in range(1, 14)})

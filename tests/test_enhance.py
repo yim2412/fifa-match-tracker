@@ -487,6 +487,116 @@ def test_material_cache_corrupt_file_is_ignored():
         assert boostcollect.material_prices(1, [120], "d", fetch=_rows, pause=lambda _s: None) == {120: 101}
 
 
+# ── 87 V3 — N번 시도하면 붙을 확률 ──
+
+def _attempts_sim(est, runs=20000, seed=7):
+    """식과 따로 — 시도 수를 직접 흉내 낸다(비용이 아니라 횟수)."""
+    import random
+    rng = random.Random(seed)
+    steps = {s.grade: s for s in est.steps}
+    out = []
+    for _ in range(runs):
+        g, n = est.start, 0
+        while g < est.target:
+            n += 1
+            st = steps[g]
+            if rng.random() * 100 < st.success_pct:
+                g += 1
+            elif not st.protected:
+                r, acc = rng.random() * 100, 0
+                for j, pct in sorted(e.RECOVERY_PCT[g].items()):
+                    acc += pct
+                    if r < acc:
+                        g = j
+                        break
+        out.append(n)
+    return out
+
+
+def test_tries_protected_one_step_is_the_geometric_formula():
+    est = e.estimate(CARD, None, 8, 9, PRICES, ALL_MATS, 2)
+    assert est.tries[0] == (1, 0.05)
+    for n, p in est.tries:
+        assert abs(p - (1 - 0.95 ** n)) < 1e-12, (n, p)
+    assert [n for n, _ in est.tries] == [1, 2, 3, 5, 10, 20, 30, 50, 100], "1·2·3·5 칸 · 99% 를 처음 넘는 100 에서 멈춘다"
+
+
+def test_tries_without_protection_follow_the_falls():
+    est = e.estimate(CARD, None, 5, 6, PRICES, ALL_MATS, None)
+    # 실패하면 1~3강으로 떨어져 4번째 시도 전엔 다시 못 닿는다 — 1-(1-p)^n 이면 2·3번에서 값이 오른다
+    assert est.tries[:3] == ((1, 0.26), (2, 0.26), (3, 0.26)), est.tries[:3]
+    assert abs(est.tries[3][1] - (1 - 0.74 ** 5)) > 0.2, "기하분포와 달라야 한다"
+    sim = _attempts_sim(est)
+    for n, p in est.tries:
+        got = sum(1 for k in sim if k <= n) / len(sim)
+        assert abs(got - p) < 0.012, (n, p, got)
+    ps = [p for _, p in est.tries]
+    assert ps == sorted(ps) and ps[-1] >= e.TRY_P_MAX
+
+
+def test_tries_from_a_lower_start_need_enough_attempts():
+    est = e.estimate(CARD, None, 1, 5, PRICES, ALL_MATS, None)
+    steps = {s.grade: s for s in est.steps}
+    p1, p3, p4, p5 = e.reach_within(steps, 1, 5, [1, 3, 4, 5])
+    assert p1 == 0 and p3 == 0, "네 단계를 셋 이하로는 못 오른다"
+    assert abs(p4 - _exact_1_to_5_in_5()) < 1e-12 and abs(p5 - p4) < 1e-12, "한 번 실패하면 여섯 번째에야 닿는다"
+    assert dict(est.tries)[1] == 0, "1번 칸은 0% 여도 남긴다"
+
+
+def _exact_1_to_5_in_5():
+    """1→5 를 다섯 번 안에: 실패 없이 네 번(1·.81·.64·.5) + 한 번 실패하고 다섯 번. 1강은 100% 라 실패는 2~4강에서."""
+    p = {1: 1.0, 2: 0.81, 3: 0.64, 4: 0.5}
+    clean = p[1] * p[2] * p[3] * p[4]
+    # 2강 실패(→1) 뒤 1→2→3→4→5 는 4번 더 — 총 6번이라 안 든다. 3강 실패 → 1(65)·2(35): 2강이면 3번 더 = 총 6번. 4강 실패도 넘는다.
+    return clean
+
+
+def test_tries_stop_at_the_cap_and_still_show_it():
+    est = e.estimate(CARD, None, 1, 13, PRICES, ALL_MATS, None)
+    last_n, last_p = est.tries[-1]
+    assert last_n == e.TRY_MAX and last_p < e.TRY_P_MAX, est.tries
+    # 평균이 TRY_MAX 보다 훨씬 크면 거의 기하분포 — 확률 ≈ 횟수 ÷ 평균
+    assert abs(last_p / (e.TRY_MAX / est.mean_attempts) - 1) < 0.1, (last_p, est.mean_attempts)
+
+
+def test_tries_rows_are_thinned_keeping_both_ends():
+    full = e.estimate(CARD, None, 8, 9, PRICES, ALL_MATS, 2).tries
+    keep = e.TRY_ROWS_MAX
+    try:
+        e.TRY_ROWS_MAX = 4
+        thin = e.estimate(CARD, None, 8, 9, PRICES, ALL_MATS, 2).tries
+    finally:
+        e.TRY_ROWS_MAX = keep
+    assert len(full) > 4 and len(thin) == 4
+    assert thin[0] == full[0] and thin[-1] == full[-1] and set(thin) <= set(full)
+
+
+def test_tries_skip_low_rows_but_keep_the_first():
+    est = e.estimate(CARD, None, 8, 10, PRICES, ALL_MATS, None)
+    assert est.tries[0][0] == 1
+    assert all(p >= e.TRY_P_MIN for n, p in est.tries[1:]), est.tries
+    assert est.costs == () and est.tries, "금액 흉내를 못 돌리는 구간에도 시도 표는 나온다"
+
+
+def test_reach_within_matches_one_attempt_at_a_time():
+    """제곱 행렬 길이의 경계 — n 이 2의 거듭제곱일 때 마지막 제곱이 있어야 한다(표 칸 최댓값 10억은 2의 거듭제곱이 아니라 안 지난다)."""
+    est = e.estimate(CARD, None, 5, 7, PRICES, ALL_MATS, None)
+    steps = {s.grade: s for s in est.steps}
+    states, t = e._transition(steps, 7)
+    v = [1.0 if s == 5 else 0.0 for s in states]
+    want = {}
+    for n in range(1, 17):
+        v = [sum(v[i] * t[i][j] for i in range(len(v))) for j in range(len(v))]
+        want[n] = v[-1]
+    for ns in ([1], [2], [4], [8], [16], [3, 5, 16]):
+        got = e.reach_within(steps, 5, 7, ns)
+        assert all(abs(g - want[n]) < 1e-12 for g, n in zip(got, ns)), (ns, got)
+
+
+def test_tries_only_when_simulating():
+    assert e.estimate(CARD, None, 1, 8, PRICES, ALL_MATS, 2, simulate=False).tries == ()
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

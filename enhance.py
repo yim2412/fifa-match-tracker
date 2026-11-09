@@ -67,6 +67,13 @@ SIM_MIN_RUNS = 200
 SIM_TAIL_MIN = 20             # 그 확률 위쪽에 이만큼은 남아야 금액을 적는다 — 몇 번 안 되는 큰 값이 정하는 숫자는 믿지 않는다
 SIM_SEED = 20261105           # 같은 입력이면 같은 답
 
+# "N번 시도하면 붙을 확률" 표(87 V3) — 떨어져 다시 오르는 시도까지 센다. 보호 구간 밖은 1-(1-p)^n 이 안 맞아 전이 행렬로 정확히 푼다
+TRY_SERIES = (1, 2, 3, 5)     # 시도 횟수 칸 — 이 숫자 × 10^k
+TRY_MAX = 10 ** 9             # 이보다 많은 시도는 칸을 만들지 않는다(행렬 제곱 30번 = 2^30)
+TRY_P_MIN = 0.05              # 이보다 낮은 칸은 뺀다 — 1번만 예외로 늘 보인다(첫 칸이 있어야 표가 어디서 시작하는지 안다)
+TRY_P_MAX = 0.99              # 이 확률을 처음 넘는 칸까지
+TRY_ROWS_MAX = 10             # 넘으면 고르게 솎는다(첫·끝 칸은 남긴다)
+
 
 class EnhanceError(Exception):
     """사람이 읽을 사유 — 화면에 그대로 뜬다."""
@@ -121,6 +128,7 @@ class Estimate:
     start_price: int | None
     target_price: int | None
     rate_range: tuple[float, float] | None = None   # 표에 없는 구간 비율이 PROTECT_RANGE_PCTS 끝값일 때 평균 — 비율을 직접 골랐거나 그 구간이 없으면 None
+    tries: tuple[tuple[int, float], ...] = ()       # (시도 횟수, 그 안에 목표에 닿을 확률 0~1) — simulate=False 면 비운다
 
     @property
     def path_total(self) -> float | None:
@@ -365,6 +373,63 @@ def _simulate(steps: dict[int, Step], start: int, target: int, mean_attempts: fl
     return tuple(sorted(costs))
 
 
+def _transition(steps: dict[int, Step], target: int) -> tuple[list[int], list[list[float]]]:
+    """한 번 시도했을 때 강화 → 강화 확률. 목표는 흡수 상태(마지막 칸)."""
+    states = sorted(steps) + [target]
+    idx = {s: i for i, s in enumerate(states)}
+    t = [[0.0] * len(states) for _ in states]
+    for s in steps:
+        st, i = steps[s], idx[s]
+        p = st.success_pct / 100
+        t[i][idx[s + 1]] += p
+        if st.protected:
+            t[i][i] += 1 - p
+        else:
+            for j, pct in RECOVERY_PCT[s].items():
+                t[i][idx[j]] += (1 - p) * pct / 100
+    t[-1][-1] = 1.0
+    return states, t
+
+
+def _matmul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    cols = list(zip(*b))
+    return [[sum(x * y for x, y in zip(row, col)) for col in cols] for row in a]
+
+
+def reach_within(steps: dict[int, Step], start: int, target: int, ns: list[int]) -> list[float]:
+    """시도 n번 안에 목표에 닿을 확률(ns 마다). 제곱한 행렬 T^(2^k) 를 한 번만 만들고 n 의 비트대로 분포 벡터에 곱한다."""
+    states, t = _transition(steps, target)
+    powers = [t]
+    while 1 << len(powers) <= max(ns):
+        powers.append(_matmul(powers[-1], powers[-1]))
+    out = []
+    for n in ns:
+        v = [1.0 if s == start else 0.0 for s in states]
+        k = 0
+        while n >> k:
+            if n >> k & 1:
+                m = powers[k]
+                v = [sum(v[i] * m[i][j] for i in range(len(v))) for j in range(len(v))]
+            k += 1
+        out.append(min(v[-1], 1.0))
+    return out
+
+
+def try_rows(steps: dict[int, Step], start: int, target: int) -> tuple[tuple[int, float], ...]:
+    """표에 올릴 (시도 횟수, 확률) — 1번 칸 · TRY_P_MIN 이상 · TRY_P_MAX 를 처음 넘는 칸까지(못 넘으면 TRY_MAX 칸까지)."""
+    ns = sorted(m * 10 ** k for k in range(10) for m in TRY_SERIES if m * 10 ** k <= TRY_MAX)
+    rows = []
+    for n, p in zip(ns, reach_within(steps, start, target, ns)):
+        if n == 1 or p >= TRY_P_MIN or n == ns[-1]:   # 끝 칸은 늘 — TRY_MAX 번 해도 낮다는 것을 보여 준다
+            rows.append((n, p))
+        if p >= TRY_P_MAX:
+            break
+    if len(rows) > TRY_ROWS_MAX:
+        pick = sorted({round(i * (len(rows) - 1) / (TRY_ROWS_MAX - 1)) for i in range(TRY_ROWS_MAX)})
+        rows = [rows[i] for i in pick]
+    return tuple(rows)
+
+
 def cheapest_protect_from(card_ovr: int, season_id: int | None, start: int, target: int, prices: dict[int, int],
                           material_prices: dict[int, int], pct: int | None = None) -> tuple[int | None, Estimate] | None:
     """평균이 가장 싼 보호 시작(None = 안 함)과 그 평균. 못 내는 구간은 건너뛴다 · 다 못 내면 None.
@@ -427,4 +492,5 @@ def estimate(card_ovr: int, season_id: int | None, start: int, target: int, pric
                     tuple(steps[g] for g in sorted(steps)), mean_material + mean_protect, mean_material, mean_protect,
                     mean_attempts, _simulate(steps, start, target, mean_attempts) if simulate else (),
                     prices.get(start), prices.get(target),
-                    None if pct is not None else _rate_range(steps, visits, prices, mean_material))
+                    None if pct is not None else _rate_range(steps, visits, prices, mean_material),
+                    try_rows(steps, start, target) if simulate else ())
