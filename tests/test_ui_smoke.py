@@ -14136,10 +14136,33 @@ def test_match_detail_shots_88():
         assert plain.grab().toImage() != dotted.grab().toImage(), "슛 점이 그려지지 않았다"
         dotted.set_shots([s._replace(result=core.SHOT_GOAL) for s in fixed])   # 골은 set_goals 몫 — 점으로 또 그리지 않는다
         assert dotted.shots == [] and plain.grab().toImage() == dotted.grab().toImage()
-        assert tl.span == (120 if any(s.minute > 90 for s in shots) or any(g.minute > 90 for g in core.match_goals(d, _OUID)) else 90)
+        assert tl.extra is core.went_to_extra(d) and tl.span == (120 if tl.extra else 90)
+        # 연장 여부를 안 주면(기본) 예전 규칙 — 90분 넘는 점이면 120
         late = [type(shots[0])(100.0, True, core.SHOT_ON_TARGET, 0.1, 0.9, 0.5, None)]
-        tl.set_shots(late)
-        assert tl.span == 120, "90분 넘는 슛이 span 에 안 들어갔다"
+        legacy = widgets.GoalTimeline()
+        legacy.set_shots(late)
+        assert legacy.extra is None and legacy.span == 120, "90분 넘는 슛이 span 에 안 들어갔다"
+        # 후반 추가시간(구간 1 · 47분 = 92') 슛은 연장이 아니다 — 창은 구간 값으로 정한다(실화면 2026-11-09: 정규 경기 28% 가 120분 축)
+        import copy
+        d2 = copy.deepcopy(d)
+        mine_p = next(p for p in d2["matchInfo"] if p.get("ouid") == _OUID)
+        mine_p["shootDetail"][0]["goalTime"] = (1 << 24) + 47 * 60
+        assert not core.went_to_extra(d2) and any(s.minute > 90 for s in core.match_shots(d2, _OUID)), "92' 슛이 안 생겼다 — 아래 단언이 빈다"
+        dlg2 = _win._make_match_detail(d2, tab="요약")
+        try:
+            assert dlg2.timeline.span == 90 and dlg2.xg_flow.span == 90, "후반 추가시간 슛을 연장으로 그렸다"
+            assert all(m <= 90 for m, _v in dlg2.xg_flow.steps(True)), "추가시간 슛이 90분 축 밖에 찍힌다"
+        finally:
+            _win._close_match_detail(dlg2)
+            dlg2.deleteLater()
+        mine_p["shootDetail"][0]["goalTime"] = (2 << 24) + 3 * 60   # 연장 전반 93'
+        assert core.went_to_extra(d2)
+        dlg2 = _win._make_match_detail(d2, tab="요약")
+        try:
+            assert dlg2.timeline.span == 120 and dlg2.xg_flow.span == 120, "연장 경기를 90분으로 그렸다"
+        finally:
+            _win._close_match_detail(dlg2)
+            dlg2.deleteLater()
         tl.set_shots(shots)
         # P3 — 재생: 한 칸씩 · 순서 = match_shots 시간 순(내 쪽)
         order = [s for s in shots if s.mine]
@@ -15453,6 +15476,8 @@ def test_rival_card_and_day_player_88():
         assert _win.card_rival.value.text() == "라이벌갑", _win.card_rival.value.text()
         assert f"{n}경기 {n}승 0무 0패" in _win.card_rival.sub.text(), _win.card_rival.sub.text()
         assert f"{n}연승" in _win.card_rival.sub.text()
+        assert "&nbsp;:&nbsp;" in _win.card_rival.sub.text() and " : " not in _win.card_rival.sub.text(), \
+            "점수가 줄 끝에서 쪼개질 수 있다(150% 실화면 '0 :' / '3')"
         # 88 리뷰 [중] — 카드가 하나 늘어난 위 줄이 1280 에서 창을 밀어내지 않는다(필터 안내 글까지 보인 가장 넓은 꼴)
         try:
             _win.lb_opponent_note.setText("필터: 4-2-3-1 · 최근 100경기 중 37경기")

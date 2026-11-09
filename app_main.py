@@ -11911,13 +11911,14 @@ class MainWindow(QMainWindow):
         self.card_rival.value.setText(r.nickname)   # set() 은 숫자가 든 글을 굴린다(86 C3) — 닉네임 숫자가 굴러가면 안 된다
         kind, n = r.streak
         col = T.GOOD if kind == "승" else T.BAD if kind == "패" else T.TEXT_DIM
-        lines = [f"{r.games:,}경기 {wdl_text(r.win, r.draw, r.lose)} · 득실 {r.goals_for:,} : {r.goals_against:,}"]
+        sc = "{}&nbsp;:&nbsp;{}".format   # 점수 안에서 줄이 안 나뉘게(150% 실화면에서 "0 :" / "3" 으로 쪼개졌다)
+        lines = [f"{r.games:,}경기 {wdl_text(r.win, r.draw, r.lose)} · 득실 {sc(f'{r.goals_for:,}', f'{r.goals_against:,}')}"]
         bits = [f"지금 <b style='color:{col}'>{n}연{kind}</b>" if kind in ("승", "패") and n > 1
                 else f"지난 경기 <b style='color:{col}'>{kind}</b>" if kind else ""]
         if r.best_win:
-            bits.append(f"가장 크게 이긴 경기 <b style='color:{T.GOOD}'>{r.best_win[0]} : {r.best_win[1]}</b>")
+            bits.append(f"가장 크게 이긴 경기 <b style='color:{T.GOOD}'>{sc(*r.best_win)}</b>")
         if r.worst_loss:
-            bits.append(f"가장 크게 진 경기 <b style='color:{T.BAD}'>{r.worst_loss[0]} : {r.worst_loss[1]}</b>")
+            bits.append(f"가장 크게 진 경기 <b style='color:{T.BAD}'>{sc(*r.worst_loss)}</b>")
         lines.append(" · ".join(b for b in bits if b))
         if r.first and r.last:
             lines.append(f"처음 만난 날 {r.first:%Y-%m-%d} · 마지막 {r.last:%Y-%m-%d}")
@@ -12737,6 +12738,8 @@ class MainWindow(QMainWindow):
         dlg.timeline = GoalTimeline()
         dlg.timeline.set_goals([(g.minute, g.mine) for g in goals])
         shots = core.match_shots(detail, self._ouid)
+        extra = core.went_to_extra(detail)   # 분(> 90)으로 보면 후반 추가시간이 연장으로 잡힌다
+        dlg.timeline.set_extra(extra)
         dlg.timeline.set_shots(shots)
         v.addWidget(dlg.timeline)
 
@@ -12753,7 +12756,7 @@ class MainWindow(QMainWindow):
 
         head("기대 골(xG)")
         dlg.xg_flow = charts.XgFlowChart()
-        dlg.xg_flow.set_data([(s.minute, s.mine, s.xg, s.result == core.SHOT_GOAL) for s in shots])
+        dlg.xg_flow.set_data([(s.minute, s.mine, s.xg, s.result == core.SHOT_GOAL) for s in shots], extra=extra)
         v.addWidget(dlg.xg_flow)
         xg = [core.shot_map([detail], self._ouid, mine=s).xg for s in (True, False)]
         for label, mine, opp, fmt in (("기대 골", xg[0], xg[1], "{:.2f}"), ("실제 골", m.my_goals, m.opp_goals, "{:.0f}")):

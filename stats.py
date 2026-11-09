@@ -2294,6 +2294,16 @@ class TimedShot(NamedTuple):
     hit_post: bool = False   # 슛 맵이 흰 테두리로 그린다 — 재생이 시간 순 목록을 그대로 넘길 수 있게(ShotMapWidget 이 읽는 값)
 
 
+def went_to_extra(detail: dict) -> bool:
+    """연장 경기인가 — 양쪽 슛 기록에 구간 2·3(연장 전·후반)이 있으면. 분(> 90)으로 보면 후반 추가시간 슛이
+    연장으로 잡힌다(2026-11-09 실측: 연장 없는 2만 7,472경기 중 7,607경기에 90분 넘은 슛)."""
+    for p in detail.get("matchInfo") or []:
+        for sd in p.get("shootDetail") or []:
+            if decode_goal_time(sd.get("goalTime"))[0] >= 2:
+                return True
+    return False
+
+
 def match_shots(detail: dict, ouid: str) -> list[TimedShot]:
     """한 경기의 양쪽 슛 — 시간 순(같은 분이면 내 슛이 앞). 거르기·xG 는 shot_map 과 같다(_shot_core)."""
     me, opp = _me_opp(detail, ouid)

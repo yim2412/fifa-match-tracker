@@ -2392,6 +2392,12 @@ class GoalTimeline(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.goals: list[tuple[float, bool]] = []
         self.shots: list = []   # match_shots 의 TimedShot 중 골이 아닌 것(골은 goals 가 그린다)
+        self.extra: bool | None = None   # 연장 여부(stats.went_to_extra) — None 이면 예전 규칙(90분 넘는 점)
+
+    def set_extra(self, extra: bool | None) -> None:
+        """연장 여부를 정해 준다 — 후반 추가시간(90분+) 점은 90분 끝에 붙는다(x_of 가 가둔다)."""
+        self.extra = extra
+        self.update()
 
     def set_goals(self, goals: list[tuple[float, bool]]) -> None:
         self.goals = list(goals)
@@ -2404,6 +2410,8 @@ class GoalTimeline(QWidget):
 
     @property
     def span(self) -> int:
+        if self.extra is not None:
+            return 120 if self.extra else 90
         return 120 if any(m > 90 for m, _ in self.goals) or any(s.minute > 90 for s in self.shots) else 90
 
     def x_of(self, minute: float) -> float:

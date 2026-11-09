@@ -1242,22 +1242,29 @@ class XgFlowChart(_Chart):
     def __init__(self):
         super().__init__(min_h=130)
         self._shots: list[tuple[float, bool, float, bool]] = []
+        self._extra: bool | None = None
         self.marks: dict = {}   # 테스트가 그림 대신 읽는다 — totals · span · goals
 
-    def set_data(self, shots) -> None:
+    def set_data(self, shots, extra: bool | None = None) -> None:
+        """extra = 연장 여부(stats.went_to_extra). None 이면 90분 넘는 슛으로 판단 — 후반 추가시간을 연장으로 잘못 본다."""
         self._shots = [(float(m), bool(mine), float(xg), bool(goal)) for m, mine, xg, goal in shots]
+        self._extra = extra
         self.update()
 
     @property
     def span(self) -> int:
+        if self._extra is not None:
+            return 120 if self._extra else 90
         return 120 if any(m > 90 for m, *_ in self._shots) else 90
 
     def steps(self, mine: bool) -> list[tuple[float, float]]:
-        """한 쪽 누적선의 꼭짓점 — (분, 누적 xG). 0분 0 에서 시작해 끝(span)까지 수평."""
+        """한 쪽 누적선의 꼭짓점 — (분, 누적 xG). 0분 0 에서 시작해 끝(span)까지 수평. 추가시간 슛은 span 끝에 붙는다."""
         pts, cum = [(0.0, 0.0)], 0.0
+        span = float(self.span)
         for m, who, xg, _goal in self._shots:
             if who != mine:
                 continue
+            m = min(m, span)
             pts.append((m, cum))
             cum += xg
             pts.append((m, cum))
@@ -1285,7 +1292,7 @@ class XgFlowChart(_Chart):
         bottom, plot_h = h - mb, max(h - mb - mt, 1)
 
         def xat(minute: float) -> float:
-            return ml + (w - ml - mr) * minute / span
+            return ml + (w - ml - mr) * min(max(minute, 0.0), span) / span
 
         def yat(v: float) -> float:
             return bottom - plot_h * v / top
