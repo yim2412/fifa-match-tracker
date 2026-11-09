@@ -884,6 +884,72 @@ def test_player_table_cells_not_elided():
     assert not short, short
 
 
+def test_player_rating_spark_q1():
+    # 88 Q1 — 평점 칸 글자 왼쪽 꺾은선: 값은 표와 같은 범위의 recent_ratings · 정렬해도 행을 따라감 · 자리가 실제로 비고
+    # 거기에 선이 그려진다(값을 지우면 안 그려진다) · 눈금은 고정
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QColor
+    _win._go_page("선수 지표", "지표")
+    _win._render_players(_win._slice()[1])
+    _app.processEvents()
+    tb, cols = _win.tbl_players, _win.PLAYER_COLUMNS
+    rc, nc = cols.index("평점"), cols.index("선수")
+    recent = core.recent_ratings(_win._slice()[1], _win._ouid)
+    assert any(len(v) >= 2 for v in recent.values()), "픽스처에 두 판 넘게 뛴 선수가 없다 — 검사가 빈다"
+
+    def pairs():
+        return [(tb.item(r, nc).data(Qt.ItemDataRole.UserRole), tb.item(r, rc).data(app_main.SPARK_ROLE))
+                for r in range(tb.rowCount())]
+    got = pairs()
+    assert got and all(v == recent[sp] for sp, v in got), got
+    tb.sortByColumn(cols.index("출전"), Qt.SortOrder.AscendingOrder)
+    _app.processEvents()
+    assert all(v == recent[sp] for sp, v in pairs()), "정렬하면 선이 다른 선수로 간다"
+    assert "최근" in tb.item(0, rc).toolTip(), tb.item(0, rc).toolTip()
+    # 범위 — 표와 같은 빠른 범위(저장 전체가 아니다). 먼저 두 범위가 실제로 다른 값을 내는지 단언(같으면 이 검사가 빈다)
+    with _range("games", 2):
+        short = core.recent_ratings(_win._slice()[1], _win._ouid)
+        assert short != recent, "짧은 범위가 전체와 같다 — 범위 배선을 못 잰다"
+        _win._render_players(_win._slice()[1])
+        assert all(v == short.get(sp) for sp, v in pairs() if v), pairs()
+    _win._render_players(_win._slice()[1])
+    # 자리 — 그 열 폭이 글자 크기 힌트보다 그래프 폭만큼 넉넉하다
+    dg = tb.itemDelegateForColumn(rc)
+    assert isinstance(dg, app_main.SparkDelegate)
+    assert _win._player_fit_extra[rc] >= config.Q1_SPARK_W, _win._player_fit_extra
+    assert tb.columnWidth(rc) - tb.sizeHintForColumn(rc) >= config.Q1_SPARK_W, (tb.columnWidth(rc), tb.sizeHintForColumn(rc))
+    # 그림 — 두 판 넘는 줄의 칸 왼쪽 그래프 자리에 선 색이 있다 · 값을 지우면 없다
+    row = next(r for r in range(tb.rowCount()) if len(tb.item(r, rc).data(app_main.SPARK_ROLE) or []) >= 2)
+    tb.scrollToItem(tb.item(row, rc))
+    _app.processEvents()
+    line = QColor(T.CHART_LINE)
+
+    def line_px() -> int:
+        # 칸 왼쪽 절반만 — 오른쪽 끝 점(가장 최근 판 동그라미)만으로도 10px 를 넘어 선을 빼도 초록이었다(손 변이)
+        rect = tb.visualRect(tb.model().index(row, rc))
+        img = tb.viewport().grab(rect).toImage()
+        n = 0
+        for x in range(min(img.width(), config.Q1_SPARK_W // 2)):
+            for y in range(img.height()):
+                c = img.pixelColor(x, y)
+                if abs(c.red() - line.red()) + abs(c.green() - line.green()) + abs(c.blue() - line.blue()) < 60:
+                    n += 1
+        return n
+    assert line_px() >= 10, line_px()
+    keep = tb.item(row, rc).data(app_main.SPARK_ROLE)
+    tb.item(row, rc).setData(app_main.SPARK_ROLE, None)
+    _app.processEvents()
+    try:
+        assert line_px() == 0, ("값이 없는데 선 색이 있다 — 다른 무엇을 재고 있다", line_px())
+    finally:
+        tb.item(row, rc).setData(app_main.SPARK_ROLE, keep)
+    # 눈금 고정 — 아래 끝·위 끝·밖 값은 끝에 붙는다 · 점 하나는 안 그린다
+    r = QRectF(0, 0, 40, 10)
+    pts = app_main.SparkDelegate.points([config.Q1_SPARK_LO, config.Q1_SPARK_HI, 99.0, 0.0], r)
+    assert [(round(p.x(), 3), round(p.y(), 3)) for p in pts] == [(0, 10), (13.333, 0), (26.667, 0), (40, 10)], pts
+    assert app_main.SparkDelegate.points([7.0], r) == []
+
+
 def _at_size(w, h):
     _win.resize(w, h)
     _app.processEvents()

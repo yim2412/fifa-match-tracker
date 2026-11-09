@@ -29,7 +29,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, Q
 from PySide6.QtWidgets import (
     QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QApplication, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
-    QSpinBox, QStyledItemDelegate, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QSpinBox, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import charts
@@ -1172,6 +1172,88 @@ class BoldColumnDelegate(RowBorderDelegate):
             return super().sizeHint(option, index)
         finally:
             self._plain = False
+
+
+SPARK_ROLE = Qt.ItemDataRole.UserRole + 4   # 평점 칸의 최근 평점 목록(88 Q1) — 칸에 붙여 정렬해도 행을 따라간다
+
+
+class SparkDelegate(RowBorderDelegate):
+    """평점 칸 글자 왼쪽에 최근 평점 꺾은선(88 Q1). 자리는 Qt 의 그림 자리(decoration)를 빌려 비운다 — 글자 위치·
+    정렬·줄무늬 바탕은 Qt 가 그대로 그린다. 폭(sizeHint)은 그림 자리 없이 알린다(_measure_pad 가 모든 열에 같은 여백을
+    쓰므로 — GradeBadgeDelegate 와 같은 이유). 그 열에 더할 폭은 extra_width 가 Qt 에 물어 준다.
+    눈금은 config.Q1_SPARK_LO~HI 고정 · 점이 둘 미만이면 자리만 비운다(줄마다 글자 위치가 같게)."""
+
+    def __init__(self, parent=None, width: int = config.Q1_SPARK_W):
+        super().__init__(parent)
+        self.spark_w = width
+        self._plain = False
+
+    def initStyleOption(self, option, index) -> None:
+        super().initStyleOption(option, index)
+        if not self._plain:
+            option.features |= QStyleOptionViewItem.ViewItemFeature.HasDecoration
+            option.decorationSize = QSize(self.spark_w, max(1, option.fontMetrics.height()))
+            option.decorationAlignment = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+
+    def sizeHint(self, option, index):
+        self._plain = True
+        try:
+            return super().sizeHint(option, index)
+        finally:
+            self._plain = False
+
+    def extra_width(self, table, col: int) -> int:
+        """그 열에 더할 폭 — 그림 자리를 넣었을 때와 뺐을 때 Qt 가 내는 칸 폭 차이(간격 상수를 박지 않는다)."""
+        if table.rowCount() == 0:
+            return self.spark_w
+        index = table.model().index(0, col)
+        opt = QStyleOptionViewItem()
+        opt.initFrom(table.viewport())
+        opt.font = table.font()
+        opt.fontMetrics = QFontMetrics(table.font())
+        plain = self.sizeHint(opt, index).width()
+        o = QStyleOptionViewItem(opt)
+        self.initStyleOption(o, index)
+        style = table.style()
+        full = style.sizeFromContents(QStyle.ContentsType.CT_ItemViewItem, o, QSize(), table).width()
+        return max(self.spark_w, full - plain)
+
+    @staticmethod
+    def points(values, rect: QRectF) -> list[QPointF]:
+        """평점들 → rect 안 점(왼쪽이 옛것). 눈금 밖 값은 끝에 붙인다. 테스트가 읽는다."""
+        if len(values) < 2:
+            return []
+        lo, hi = config.Q1_SPARK_LO, config.Q1_SPARK_HI
+        step = rect.width() / (len(values) - 1)
+        out = []
+        for i, v in enumerate(values):
+            f = (min(hi, max(lo, v)) - lo) / (hi - lo)
+            out.append(QPointF(rect.left() + i * step, rect.bottom() - f * rect.height()))
+        return out
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        values = index.data(SPARK_ROLE)
+        if not values:
+            return
+        o = QStyleOptionViewItem(option)
+        self.initStyleOption(o, index)
+        table = self.parent()
+        style = table.style() if table is not None else QApplication.style()
+        r = QRectF(style.subElementRect(QStyle.SubElement.SE_ItemViewItemDecoration, o, table))
+        h = min(r.height(), max(8.0, option.rect.height() * 0.45))
+        r = QRectF(r.left() + 1, r.center().y() - h / 2, r.width() - 2, h)
+        pts = self.points(list(values), r)
+        if not pts:
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(QColor(T.CHART_LINE), 1.5))
+        painter.drawPolyline(QPolygonF(pts))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(T.CHART_LINE))
+        painter.drawEllipse(pts[-1], 2.0, 2.0)   # 가장 최근 판
+        painter.restore()
 
 
 class NoScrollComboBox(QComboBox):

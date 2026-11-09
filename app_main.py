@@ -86,7 +86,7 @@ from widgets import (
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
-    RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate,
+    RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
     ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text, pill_radius, EmptyState,
 )
@@ -9877,6 +9877,9 @@ class MainWindow(QMainWindow):
         v.addLayout(chips)
         self.tbl_players = self._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
         self.tbl_players.setItemDelegateForColumn(4, BoldColumnDelegate(self.tbl_players))   # 승률 굵게(65 M9 · E7)
+        # 88 Q1 — 평점 칸 글자 왼쪽에 최근 평점 꺾은선(새 열 아님 · 값은 칸의 SPARK_ROLE)
+        self._spark = SparkDelegate(self.tbl_players)
+        self.tbl_players.setItemDelegateForColumn(self.PLAYER_COLUMNS.index("평점"), self._spark)
         # 19개 열이라 전역 폰트(BASE_FONT_PX)로는 스크롤 없이 한눈에 안 들어온다.
         # 이 표만 폰트·여백을 줄인 기본 크기(TABLE_CELL_PX/TABLE_HEADER_PX)에서 시작한다 — 창이
         # 좁아지면 FitTableWidget._fit() 이 이보다 더 줄여가며 맞춘다.
@@ -14115,13 +14118,25 @@ class MainWindow(QMainWindow):
         bold_extra = max((fb.horizontalAdvance(r[4][0]) - fm.horizontalAdvance(r[4][0]) for r in rows), default=0)
         # 강화 열(2)은 배지라 글자 폭 + 배지 여백 — 그 열에만 준다(GradeBadgeDelegate 머리말).
         # 이름 열(1)의 시즌 배지 폭은 set_icon_columns 가 이미 갖고 있다(손으로 26 을 주던 자리)
-        self._player_fit_extra = {2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2}
+        rating_col = self.PLAYER_COLUMNS.index("평점")
+        self._player_fit_extra = {2: 2 * GradeBadgeDelegate.PAD, 4: bold_extra + 2,
+                                  rating_col: self._spark.extra_width(self.tbl_players, rating_col)}
         self._apply_player_group()
         self._fit_columns_to_content(self.tbl_players, extra=self._player_fit_extra)
         # 공격력(5열)·수비력(6열) — 고정 눈금 G8(theme.g8_cell — 표 안 다른 선수와 무관) · 포지션 기준 점수 미만은 "▽"
         # (출전 칸 ⚠ 와 다른 뜻). 승률(4열) — 굵게 + 빠른 범위 팀 승률 대비 좋음/나쁨 색(E7 — 기준 화면처럼 늘 빨강이면
         # 높은 승률이 나쁨으로 읽힌다). 출전 미달 선수는 색·▽ 를 안 붙인다(색은 few 경기부터 — 예전과 같은 규칙).
         self._mark_player_extremes(players, enough, rows)
+        # 88 Q1 — 범위는 표와 같은 경기(details) · 칸에 붙여 정렬해도 행을 따라간다 · 말풍선은 최고/최저 뒤에 잇는다
+        recent = core.recent_ratings(details, self._ouid)
+        for r, p in enumerate(players):
+            it = self.tbl_players.item(r, rating_col)
+            vals = recent.get(p.sp_id) or []
+            if it is None or not vals:
+                continue
+            it.setData(SPARK_ROLE, vals)
+            line = f"최근 {len(vals)}경기 평점: " + " → ".join(f"{v:.1f}" for v in vals)
+            it.setToolTip(f"{it.toolTip()}\n{line}" if it.toolTip() else line)
         res = [m.result for m in self._slice()[0]]
         team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
         for r, p in enumerate(players):

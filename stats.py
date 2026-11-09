@@ -2369,6 +2369,32 @@ def rating_trend(details: list[dict], ouid: str, sp_id: int) -> list[WeekRating]
     return [weeks[k] for k in sorted(weeks)]
 
 
+def recent_ratings(details: list[dict], ouid: str, n: int = config.Q1_SPARK_N) -> dict[int, list[float]]:
+    """카드(spId)마다 뛴 경기의 최근 n판 평점(spRating) — 오래된 판부터(88 Q1 평점 미니 그래프).
+    평점 0 은 뺀다 — 안 뛴 벤치·몰수·오류 판(0 이 끼면 선이 바닥으로 꺼져 그 선수가 못한 것처럼 보인다). 벤치는 이것만으로
+    선수 표(_played)와 같은 기준이 된다(_played 는 평점이 0 보다 크면 늘 참 — 따로 부르면 같은 뜻 변이만 남았다) ·
+    시각을 모르는 판도 뺀다(순서를 모른다). 범위는 부르는 쪽이 준 경기 그대로."""
+    games = []
+    for i, d in enumerate(details):
+        me, _ = _me_opp(d, ouid)
+        when = matchtime.parse(d.get("matchDate"))
+        if me is not None and when is not None:
+            games.append((when, -i, me))   # 같은 시각이면 목록 뒤(목록은 최신순 — 옛것)가 먼저
+    games.sort(key=lambda g: (g[0], g[1]))
+    out: dict[int, list[float]] = defaultdict(list)
+    for _when, _i, me in games:
+        seen = set()
+        for p in me.get("player") or []:
+            sp = p.get("spId")
+            if not isinstance(sp, int) or sp in seen:
+                continue
+            seen.add(sp)
+            r = _num(p.get("status") or {}, "spRating")
+            if r > 0:
+                out[sp].append(r)
+    return {sp: v[-n:] for sp, v in out.items()} if n > 0 else {}   # v[-0:] 은 전부다
+
+
 # ── 패스 스타일(1.4.1 N5) ──────────────────────────────────────────────────
 # 경기 상세 pass 의 종류별 시도/성공(R10 — 거의 모든 경기에 있다). (화면 이름, 필드 앞부분)
 PASS_KINDS = (

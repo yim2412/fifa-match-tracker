@@ -1456,6 +1456,31 @@ def test_rating_trend_weeks_and_weak():
     assert st.rating_trend(ds, "me", 999) == []
 
 
+def test_recent_ratings_q1():
+    # 88 Q1 — 카드마다 뛴 판의 최근 n판 평점(오래된 판부터). 목록은 최신순으로 준다(앱과 같게)
+    X, Y = 7, 8
+    ds = [_d(5, "승", [_p(X, 25, spRating=8.0), _p(Y, 28)]),          # Y 는 벤치(기록 없음) — 안 센다
+          _d(4, "패", [_p(X, 25, spRating=0.0), _p(Y, 28, spRating=6.5)]),   # X 평점 0(몰수·오류) — 뺀다 · Y 는 교체로 뛰었다
+          _d(3, "승", [_p(X, 25, spRating=6.0), _p(X, 26, spRating=9.9)]),   # 같은 카드 둘 — 한 판에 한 번(먼저 것)
+          _d(2, "승", [_p(X, 25, spRating=7.0)]),
+          _d(1, "승", [_p(X, 25, spRating=5.5)])]
+    got = st.recent_ratings(ds, "me", 10)
+    assert got == {X: [5.5, 7.0, 6.0, 8.0], Y: [6.5]}, got
+    # n 판만 — 가장 최근 쪽이 남는다
+    assert st.recent_ratings(ds, "me", 2)[X] == [6.0, 8.0], st.recent_ratings(ds, "me", 2)
+    assert st.recent_ratings(ds, "me", 0) == {}
+    # 시각을 모르는 판은 뺀다 · 들어오는 순서와 무관(시각 순)
+    no_time = _d(6, "승", [_p(X, 25, spRating=9.0)])
+    no_time["matchDate"] = ""
+    assert st.recent_ratings(list(reversed(ds)) + [no_time], "me", 10)[X] == [5.5, 7.0, 6.0, 8.0]
+    # 같은 시각이면 목록 뒤(옛것)가 먼저
+    a, b = _d(9, "승", [_p(X, 25, spRating=6.0)]), _d(9, "패", [_p(X, 25, spRating=7.0)], opp="둘")
+    assert st.recent_ratings([a, b], "me", 10)[X] == [7.0, 6.0]
+    # 기본 판 수는 config
+    many = [_d(1 + i, "승", [_p(X, 25, spRating=5.0 + i / 10)]) for i in range(config.Q1_SPARK_N + 3)]
+    assert len(st.recent_ratings(many, "me")[X]) == config.Q1_SPARK_N
+
+
 def _ranker(spid, po, **status):
     return {"spid": spid, "spPosition": po, "status": status, "createDate": "2026-10-05T17:30:00"}
 
