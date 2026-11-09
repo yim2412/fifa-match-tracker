@@ -5,6 +5,8 @@
 | `kinds()` | 업적 종류 순서표 — `config.RECORD_*` 에서 만든다 |
 | `achievements(details, ouid, seasons=…, current_start=…, current_known=…, elo_rows=…, now=…)` | 창 캐시 `_records_cache` 하나 → [내 기록] · 경기 카드 태그 · 대시보드 칩 |
 | `summary(achs)` · `by_match(achs)` · `recent(achs, now)` | 위 셋이 같은 목록에서 읽는다 |
+| `rival(matches)` | F4 라이벌 카드 — [상대 전적 › 전적] 맨 위(저장 전체 · 시즌 필터·포메이션 필터 무관) |
+| `last_day(details)` · `day_player(details, ouid, day)` | Q2 오늘의 선수 — 대시보드 카드(오늘 경기가 없으면 마지막으로 경기한 날 · U4) |
 
 규칙(ROADMAP 88단계 · 1·2회차 검토):
 - **늘 저장 전체 기준** — 시즌 필터·빠른 범위와 무관(범위를 바꿀 때마다 "첫" 이 바뀌면 안 된다). 감독모드 경기만.
@@ -19,12 +21,12 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import config
 import matchtime
-from models import CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID
-from stats import _me_opp, match_goals
+from models import CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, current_streak, opponent_stats
+from stats import _me_opp, _num, _played, match_goals
 
 
 @dataclass(frozen=True)
@@ -220,3 +222,98 @@ def recent(achs: list[Achievement], now: datetime) -> list[Achievement]:
     since = now - timedelta(days=config.RECORD_RECENT_DAYS)
     got = [a for a in achs if since <= a.when <= now]
     return list(reversed(got))[:config.RECORD_RECENT_MAX]
+
+
+# ── F4 라이벌 · Q2 오늘의 선수 ─────────────────────────────────────────
+
+@dataclass(frozen=True)
+class Rival:
+    nickname: str
+    games: int
+    win: int
+    draw: int
+    lose: int
+    goals_for: int
+    goals_against: int
+    streak: tuple[str, int]             # 그 상대와 지금 몇 연속("승"·"무"·"패", n) — current_streak 와 같은 기준
+    first: datetime | None              # 첫 만남
+    last: datetime | None               # 마지막 만남
+    best_win: tuple[int, int] | None    # 점수 차가 가장 큰 승(내 골, 상대 골) — 몰수 뺌
+    worst_loss: tuple[int, int] | None  # 점수 차가 가장 큰 패
+
+
+def rival(matches: list) -> Rival | None:
+    """저장 전체에서 가장 많이 만난 상대(같으면 최근에 만난 쪽) — matches 는 최신순(화면 순서 그대로).
+    닉네임으로 묶는다(닉네임을 바꾼 상대는 둘로 나뉜다 — 한계로 둔다) · 닉네임이 빈 경기("-")는 한 사람이 아니라 뺀다.
+    config.RIVAL_MIN_GAMES 판 밑이면 None(카드를 숨긴다)."""
+    known = [o for o in opponent_stats(matches) if o.nickname not in ("", "-")]
+    if not known or known[0].games < config.RIVAL_MIN_GAMES:
+        return None
+    top = known[0]   # opponent_stats 는 판수 내림차순 · 같으면 처음 본 순(최신순 입력이라 최근 만난 쪽)
+    theirs = [m for m in matches if m.opponent == top.nickname]
+    dates = [m.match_date for m in theirs if m.match_date is not None]
+    best = worst = None
+    for m in theirs:
+        if "몰수" in m.result:
+            continue
+        d = m.my_goals - m.opp_goals
+        if "승" in m.result and d > 0 and (best is None or d > best[0] - best[1]):
+            best = (m.my_goals, m.opp_goals)
+        if "패" in m.result and d < 0 and (worst is None or d < worst[0] - worst[1]):
+            worst = (m.my_goals, m.opp_goals)
+    return Rival(top.nickname, top.games, top.win, top.draw, top.lose, top.goals_for, top.goals_against,
+                 current_streak(theirs), min(dates, default=None), max(dates, default=None), best, worst)
+
+
+@dataclass(frozen=True)
+class DayPlayer:
+    day: date
+    sp_id: int
+    games: int
+    rating: float      # 그날 뛴 경기 평균 spRating(averageRating 아님 — 벤치까지 18 로 나눈 값)
+    goals: int
+    assists: int
+    day_games: int     # 그날 내 경기 수(감독모드)
+
+
+def _manager(d: dict) -> bool:
+    mt = d.get("matchType")
+    return mt is None or mt == config.DEFAULT_MATCH_TYPE
+
+
+def last_day(details: list[dict]) -> date | None:
+    """감독모드 경기가 있던 가장 늦은 날(KST)."""
+    days = (matchtime.day(d.get("matchDate")) for d in details if _manager(d))
+    return max((x for x in days if x is not None), default=None)
+
+
+def day_player(details: list[dict], ouid: str, day: date | None) -> DayPlayer | None:
+    """그날 내 선수 중 평균 평점 1위 — 그날 config.DAY_PLAYER_MIN_GAMES 경기 이상 뛴 선수만.
+    같은 평점이면 더 많이 뛴 쪽 → 골 많은 쪽. 안 뛴 벤치는 뺀다(_played) · 평점 0(기록 없음)은 평균에 안 넣는다."""
+    if day is None:
+        return None
+    acc: dict[int, list] = {}   # sp_id → [경기, 평점 합, 골, 도움]
+    n_games = 0
+    for d in details:
+        if not _manager(d) or matchtime.day(d.get("matchDate")) != day:
+            continue
+        me, _opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        n_games += 1
+        for p in me.get("player") or []:
+            sp = p.get("spId")
+            st = p.get("status") or {}
+            r = _num(st, "spRating")
+            if not isinstance(sp, int) or not _played(p) or r <= 0:
+                continue
+            a = acc.setdefault(sp, [0, 0.0, 0, 0])
+            a[0] += 1
+            a[1] += r
+            a[2] += int(_num(st, "goal"))
+            a[3] += int(_num(st, "assist"))
+    picks = [(a[1] / a[0], a[0], a[2], sp) for sp, a in acc.items() if a[0] >= config.DAY_PLAYER_MIN_GAMES]
+    if not picks:
+        return None
+    avg, games, goals, sp = max(picks)
+    return DayPlayer(day, sp, games, avg, goals, acc[sp][3], n_games)

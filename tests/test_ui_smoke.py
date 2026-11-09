@@ -7347,13 +7347,16 @@ def test_release_drops_every_reference():
         assert before >= 2, f"측정 도구 확인 — 내려놓기 전엔 창(원본)·끝난 로더가 쥐고 있어야 한다: {before}"
         _win._max_division[_OUID] = {"division": 800, "date": "2026-07-05"}
         _win._records()
+        _win._rival()
         assert _win._records_cache is not None, "측정 도구 확인 — 업적 캐시가 차 있어야 비웠는지 잴 수 있다"
+        assert _win._fun_cache, "측정 도구 확인 — 라이벌 캐시가 차 있어야 비웠는지 잴 수 있다"
         _win.release_memory()
         gc.collect()
         left = [type(r).__name__ for r in gc.get_referrers(probe) if id(r) not in mine]
         try:
             assert left == [], f"내려놓은 뒤에도 경기 기록을 쥐고 있다: {left}"
             assert _win._records_cache is None, "내려놓기가 업적 캐시(옛 목록 키)를 남겼다(88 2회차 [중])"
+            assert _win._fun_cache == {}, "내려놓기가 라이벌·오늘의 선수 캐시를 남겼다"
             assert _win.shot_sum is None, "슛 맵 요약이 경기 원문(최다 득점·실점)을 쥐고 있다"
             # 다시 열기는 저장본 경로라 maxdivision 을 다시 안 부른다 — 비우면 줄이 다음 검색까지 사라진다
             assert _win._max_division.get(_OUID), "내려놓기가 역대 최고 등급을 비웠다"
@@ -15276,7 +15279,8 @@ import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면
 
 class _RecordsState:
     """88 업적 테스트 — 창의 계정·경기·시즌표·점수를 지어낸 것으로 바꿨다가 되돌린다."""
-    NAMES = ("_ouid", "_details_all", "_matches_all", "_details", "_matches", "_rank_seasons", "_records_cache")
+    NAMES = ("_ouid", "_details_all", "_matches_all", "_details", "_matches", "_rank_seasons", "_records_cache",
+             "_fun_cache", "_names")
 
     def __init__(self, details: list, seasons=None):
         self.details, self.seasons = details, seasons
@@ -15290,6 +15294,7 @@ class _RecordsState:
         _win._details, _win._matches = [], []      # 시즌 필터가 비워도 업적은 저장 전체에서
         _win._rank_seasons = list(self.seasons or [])
         _win._records_cache = None
+        _win._fun_cache = {}
         _win._elo.pop("me", None)
         return self
 
@@ -15301,7 +15306,7 @@ class _RecordsState:
         else:
             _win._elo["me"] = self.keep_elo
         _win._show_match_detail = self.keep_show
-        for key in ("records", "matches", "dashboard"):
+        for key in ("records", "matches", "dashboard", "opponents"):
             _win._dirty.add(key)
         return False
 
@@ -15353,6 +15358,50 @@ def test_records_page_tags_and_chips_88():
     with _RecordsState(old):
         _win._render_dashboard()
         assert _win.dashboard.record_chips == [] and _win.dashboard.records_row.isHidden(), "지난 기록을 칩에 올렸다"
+
+
+def test_rival_card_and_day_player_88():
+    """88 F4 — [상대 전적 › 전적] 라이벌 카드는 저장 전체(시즌 필터가 비어도) · 판수 미달이면 숨김.
+    Q2 — 대시보드 카드는 마지막으로 경기한 날 · 그 날짜가 제목 · 누르면 [선수 지표 › 지표] · 계정이 바뀌면 다시 센다."""
+    from test_records import _pd
+    n = config.RIVAL_MIN_GAMES
+    base = datetime.now().replace(microsecond=0) - timedelta(days=3)
+    ds = []
+    for i in range(n):
+        d = _pd(i, [(101, 7.0 + i * 0.1, 1, 0, 25), (102, 6.0, 0, 1, 5)], when=base + timedelta(minutes=10 * i))
+        d["matchInfo"][1].update({"ouid": "opp", "nickname": "라이벌갑"})
+        d["matchInfo"][0].update({"nickname": "나"})
+        ds.append(d)
+    ds.reverse()   # 최신순
+    with _RecordsState(ds):
+        _win._names = {101: "앞선수", 102: "뒷선수"}
+        _win._go_page("상대 전적")
+        _win._invalidate("opponents")
+        assert not _win.card_rival.isHidden(), "저장 전체에 라이벌이 있는데 카드가 숨었다(시즌 필터는 비어 있다)"
+        assert _win.card_rival.value.text() == "라이벌갑", _win.card_rival.value.text()
+        assert f"{n}경기 {n}승 0무 0패" in _win.card_rival.sub.text(), _win.card_rival.sub.text()
+        assert f"{n}연승" in _win.card_rival.sub.text()
+        _win._render_dashboard()
+        dash = _win.dashboard
+        assert dash.lb_day_name.text() == "앞선수", dash.lb_day_name.text()
+        assert dash.day_card.title.text() == f"{base:%m-%d}의 선수", dash.day_card.title.text()
+        assert f"{n}경기" in dash.lb_day_sub.text() and "평점" in dash.lb_day_sub.text(), dash.lb_day_sub.text()
+        _win._go_page("대시보드")
+        dash.navigate.emit(dash.day_card.target)
+        assert _win._current_view() == ("선수 지표", "지표"), _win._current_view()
+    short = ds[:n - 1]
+    with _RecordsState(short):
+        _win._names = {101: "앞선수", 102: "뒷선수"}
+        _win._go_page("상대 전적")
+        _win._invalidate("opponents")
+        assert _win.card_rival.isHidden(), f"{n - 1}판 상대로 라이벌 카드를 띄웠다"
+        _win._render_dashboard()
+        assert _win.dashboard.lb_day_name.text() == "앞선수", "목록이 바뀌었는데 옛 계산을 그대로 썼나"
+        _win._details_all = []
+        _win._matches_all = []
+        _win._render_dashboard()
+        assert _win.dashboard.lb_day_name.text() == "—" and _win.dashboard.day_card.title.text() == "오늘의 선수", \
+            "경기가 없는데 옛 선수가 남았다(캐시 키가 목록을 안 따라간다)"
 
 
 def test_records_cache_follows_elo_replace():

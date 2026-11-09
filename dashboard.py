@@ -13,10 +13,12 @@
     점수 해설(65)                       → 리포트와 같은 재료
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
     승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(빠른 범위에 안 갇힘)
+    오늘의 선수(88 Q2)                  → 저장 전체의 마지막으로 경기한 날 하루(시즌 필터·빠른 범위 무관 — 제목이 그 날짜)
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
@@ -61,6 +63,7 @@ class DashboardInput:
     # 55 머리 줄 — (제목, 큰 글자, 작은 글자, 툴팁) 여섯 칸. None 이면 계정 없음
     club_cells: list | None = None
     records: list | None = None                # 88 C1 최근 기록 칩 — [(제목, "MM-DD")] 늦은 것부터(창이 _records 캐시에서)
+    day_player: tuple | None = None            # 88 Q2 (records.DayPlayer, 선수 이름) — 저장 전체의 마지막으로 경기한 날 · 없으면 None
     headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
     report: ScoreParts | None = None           # 65 M1 리포트·해설 — 점수 기록이 모자라면 None
 
@@ -306,7 +309,19 @@ class DashboardPage(QWidget):
         # ① 구단주 + ③ 승률 흐름
         row = QHBoxLayout()
         row.setSpacing(16)
-        row.addWidget(ranker_card, 1, Qt.AlignmentFlag.AlignTop)
+        # 88 Q2 오늘의 선수 — 구단주 카드 밑(구단주 카드는 위에 붙어 있어 그 아래가 비어 있었다)
+        left = QVBoxLayout()
+        left.setSpacing(16)
+        left.addWidget(ranker_card)
+        self.day_card = self._card("오늘의 선수", ("선수 지표", "지표"))
+        self.lb_day_name = _label("—", pt=T.PT_XL, bold=True)
+        self.lb_day_sub = _label("", dim=True, wrap=True)
+        self.lb_day_sub.setTextFormat(Qt.TextFormat.RichText)
+        self.day_card.body.addWidget(self.lb_day_name)
+        self.day_card.body.addWidget(self.lb_day_sub)
+        left.addWidget(self.day_card)
+        left.addStretch(1)
+        row.addLayout(left, 1)
         self.trend = self._card("승률 흐름", ("기간별 성적", None))
         # 글자는 점 위 줄로 — 20개 점과 한 줄에 두면 1280 폭에서 자리가 모자란다
         self.trend.body.addWidget(_label(f"최근 {DOTS_N}경기", dim=True))
@@ -424,6 +439,25 @@ class DashboardPage(QWidget):
         self._render_story(d)
         self._render_timeband(d)
         self._render_rivals(d)
+        self._render_day_player(d)
+
+    def _render_day_player(self, d: DashboardInput) -> None:
+        """Q2 — 오늘 경기가 없으면 마지막으로 경기한 날(U4 · 제목이 그 날짜로 바뀐다)."""
+        if d.day_player is None:
+            self.day_card.title.setText("오늘의 선수")
+            self.day_card.scope.setText("")
+            self.lb_day_name.setText("—")
+            self.lb_day_sub.setText(f"하루 {config.DAY_PLAYER_MIN_GAMES}경기 이상 뛴 선수가 없습니다.")
+            return
+        dp, name = d.day_player
+        today = dp.day == datetime.now().date()
+        self.day_card.title.setText("오늘의 선수" if today else f"{dp.day:%m-%d}의 선수")
+        self.day_card.scope.setText(f"그날 {dp.day_games:,}경기")
+        self.lb_day_name.setText(name)
+        self.lb_day_sub.setText(f"평점 <b style='color:{T.GOOD}'>{dp.rating:.2f}</b> · {dp.games:,}경기"
+                                f" · {dp.goals:,}골 {dp.assists:,}도움")
+        self.day_card.setToolTip(f"그날 {config.DAY_PLAYER_MIN_GAMES}경기 이상 뛴 내 선수 중 평균 평점이 가장 높은 선수입니다.\n"
+                                 "눌러서 '선수 지표 › 지표' 보기")
 
     def _render_head(self, d: DashboardInput) -> None:
         self.lb_headline.setText(d.headline or "")

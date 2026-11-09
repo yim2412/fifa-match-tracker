@@ -2980,6 +2980,7 @@ class MainWindow(QMainWindow):
         self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
         self._history_cache: tuple | None = None       # (키, [HistoryRun]) — 57 K4 이력
         self._records_cache: tuple | None = None       # (키, [Achievement]) — 88 업적 · [내 기록]·경기 카드 태그·대시보드 칩이 같이
+        self._fun_cache: dict = {}                     # 이름 → (키, 값) — 88 F4 라이벌 · Q2 오늘의 선수(저장 전체 · 그릴 때마다 60~80ms)
         self._reward_cache: tuple | None = None        # (키, WinRewards) — 57 K11 이 계정 100판당
         # 랭커 기록(13단계) — N1 메뉴 로더와 N2 카드 탭 로더는 따로(카드 창이 메뉴 로더를 끊지 않게)
         self._ranker_loader: RankerStatsLoader | None = None
@@ -6243,6 +6244,27 @@ class MainWindow(QMainWindow):
     def _records_known(self) -> bool:
         """②③ 줄을 보일까 — 끝난 시즌표가 있거나 지금 시즌을 알 때."""
         return bool(self._rank_seasons) or self._records_seasons()[1]
+
+    def _saved_calc(self, name: str, fn):
+        """저장 전체에서 세는 작은 계산(88 F4·Q2) — 같은 계정·같은 저장 목록이면 다시 안 센다."""
+        key = (self._ouid, self._details_key())
+        hit = self._fun_cache.get(name)
+        if hit is None or hit[0] != key:
+            hit = self._fun_cache[name] = (key, fn())
+        return hit[1]
+
+    def _rival(self):
+        """F4 라이벌 — 저장 전체(시즌 필터·[전적] 필터 무관)."""
+        return self._saved_calc("rival", lambda: core.rival(self._matches_all)) if self._ouid else None
+
+    def _day_player(self):
+        """Q2 오늘의 선수 — (DayPlayer, 이름) · 오늘 경기가 없으면 마지막으로 경기한 날(U4)."""
+        if not self._ouid:
+            return None
+        details = self._details_all
+        dp = self._saved_calc("day_player",
+                              lambda: core.day_player(details, self._ouid, core.last_play_day(details)))
+        return (dp, self._names.get(dp.sp_id, str(dp.sp_id))) if dp is not None else None
 
     def _build_records_tab(self) -> QWidget:
         w = QWidget()
@@ -10126,6 +10148,13 @@ class MainWindow(QMainWindow):
         self.card_opp_rate.layout().insertWidget(3, self.opp_rate_bar)
         self.card_opp_rate.setMinimumWidth(260)
         top.addWidget(self.card_opp_rate)
+        # 88 F4 라이벌 — 저장 전체에서 가장 많이 만난 상대(필터·시즌과 무관 · 제목에 범위) · RIVAL_MIN_GAMES 밑이면 숨김
+        self.card_rival = StatCard("라이벌 · 저장 전체")
+        self.card_rival.sub.setTextFormat(Qt.TextFormat.RichText)
+        self.card_rival.sub.setWordWrap(True)
+        self.card_rival.setMinimumWidth(260)
+        self.card_rival.hide()
+        top.addWidget(self.card_rival)
         # 범위 글은 카드 옆 — 위 줄(찾기·묶음·정렬)에 두면 1280 폭에서 찾기 칸이 눌려 안내 글이 "…" 로 잘렸다(실화면)
         self.lb_opponent_note = self._note_label()
         self.lb_opponent_note.hide()   # 필터가 걸렸을 때만(_render_opponents)
@@ -11871,6 +11900,29 @@ class MainWindow(QMainWindow):
     def _blend(base_hex: str, target_hex: str, mix: float) -> QColor:
         return QColor(T.blend(base_hex, target_hex, mix))
 
+    def _render_rival(self) -> None:
+        """F4 라이벌 카드 — 이름 · 전적 · 지금 연속 · 최다 점수 차 · 첫·마지막 만남. 숫자 강조는 좋음 초록 · 나쁨 빨강."""
+        r = self._rival()
+        self.card_rival.setVisible(r is not None)
+        if r is None:
+            return
+        self.card_rival.value.setText(r.nickname)   # set() 은 숫자가 든 글을 굴린다(86 C3) — 닉네임 숫자가 굴러가면 안 된다
+        kind, n = r.streak
+        col = T.GOOD if kind == "승" else T.BAD if kind == "패" else T.TEXT_DIM
+        lines = [f"{r.games:,}경기 {wdl_text(r.win, r.draw, r.lose)} · 득실 {r.goals_for:,} : {r.goals_against:,}"]
+        bits = [f"지금 <b style='color:{col}'>{n}연{kind}</b>" if kind in ("승", "패") and n > 1
+                else f"지난 경기 <b style='color:{col}'>{kind}</b>" if kind else ""]
+        if r.best_win:
+            bits.append(f"가장 크게 이긴 경기 <b style='color:{T.GOOD}'>{r.best_win[0]} : {r.best_win[1]}</b>")
+        if r.worst_loss:
+            bits.append(f"가장 크게 진 경기 <b style='color:{T.BAD}'>{r.worst_loss[0]} : {r.worst_loss[1]}</b>")
+        lines.append(" · ".join(b for b in bits if b))
+        if r.first and r.last:
+            lines.append(f"처음 만난 날 {r.first:%Y-%m-%d} · 마지막 {r.last:%Y-%m-%d}")
+        self.card_rival.set_sub("<br>".join(lines))
+        self.card_rival.setToolTip(f"저장한 경기 전체에서 가장 많이 만난 상대입니다. 위 필터와 시즌 선택은 반영하지 않습니다.\n"
+                                   f"닉네임이 같은 경기끼리 묶습니다.")
+
     def _render_opponents(self, matches: list[MatchSummary]) -> None:
         # 57 K1 — 필터 칸을 지금 범위로 다시 채우고(고른 값은 남으면 유지) 경기를 거른 뒤 상대별로 센다
         forms = self._match_formations()
@@ -11900,6 +11952,7 @@ class MainWindow(QMainWindow):
         self.card_opp_rate.set(win_rate_text(w, d, lo, mixed, short=True))
         self.card_opp_rate.set_sub(f"{len(picked):,}경기")
         self.opp_rate_bar.set_counts(w, d, lo, core.is_weak(core.rated(w, d, lo, mixed), core.MIN_COND))
+        self._render_rival()
         group = self.cb_opp_group.currentData() or "owner"
         if group == "formation":
             rows = self._opp_formation_rows(self._opp_picked_details, (w, d, lo))
@@ -13918,6 +13971,7 @@ class MainWindow(QMainWindow):
             story=self._narrate_scope(),
             club_cells=self._club_cells(),
             records=[(a.title, f"{a.when:%m-%d}") for a in core.recent_records(self._records(), datetime.now())],
+            day_player=self._day_player(),
             headline=self._headline(),
             report=self._dashboard_report()))
 
@@ -14566,6 +14620,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = None
         self._records_cache = None
+        self._fun_cache = {}
         self._elo.clear()
         self._pred.clear()
         self._max_division.clear()
@@ -14601,6 +14656,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
         self._records_cache = None  # 업적은 match_id 만 들지만 키가 옛 목록 id 를 쥔다
+        self._fun_cache = {}
         if self._prefetch is not None:
             self._prefetch.discard()  # discard 는 멈춤 표시만 — 끝난 Future 의 결과는 참조를 놓아야 풀린다
         self._prefetch = None

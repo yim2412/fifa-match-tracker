@@ -210,6 +210,108 @@ def test_summary_by_match_recent():
     assert records.recent(achs, T0 + timedelta(days=config.RECORD_RECENT_DAYS + 1)) == [], "7일 지난 것을 칩에 올렸다"
 
 
+# ── F4 라이벌 ──────────────────────────────────────────────────────────
+
+def _m(i: int, opp: str, result: str, gf: int, ga: int):
+    from models import MatchSummary
+    return MatchSummary(f"r{i}", T0 + timedelta(hours=i), config.DEFAULT_MATCH_TYPE, "me", opp, result,
+                        gf, ga, 50, 0, 0, 0, 0, 0.0)
+
+
+def test_rival_needs_min_games():
+    n = config.RIVAL_MIN_GAMES
+    few = [_m(i, "A", "승", 1, 0) for i in range(n - 1)]
+    assert records.rival(list(reversed(few))) is None, f"{n - 1}판 상대를 라이벌로 올렸다"
+    got = records.rival(list(reversed(few + [_m(n - 1, "A", "패", 0, 1)])))
+    assert got is not None and got.games == n and (got.win, got.lose) == (n - 1, 1), got
+
+
+def test_rival_most_games_then_most_recent_and_blank_nick_skipped():
+    n = config.RIVAL_MIN_GAMES
+    ms = [_m(i, "-", "승", 1, 0) for i in range(n + 5)]                  # 닉네임 빈 경기 — 가장 많아도 한 사람이 아니다
+    ms += [_m(100 + i, "A", "승", 1, 0) for i in range(n)]
+    ms += [_m(200 + i, "B", "패", 0, 1) for i in range(n)]                # A 와 판수가 같고 더 최근
+    newest_first = sorted(ms, key=lambda m: m.match_date, reverse=True)
+    assert records.rival(newest_first).nickname == "B"
+    ms.append(_m(300, "A", "무", 1, 1))                                   # 한 판 더 — A 가 많아진다
+    got = records.rival(sorted(ms, key=lambda m: m.match_date, reverse=True))
+    assert got.nickname == "A" and got.games == n + 1 and got.draw == 1, got
+
+
+def test_rival_streak_margins_and_dates():
+    ms = [_m(0, "A", "패", 0, 3), _m(1, "A", "패", 1, 2), _m(2, "A", "몰수승", 3, 0),   # 몰수 3:0 은 최다 차에서 뺀다
+          _m(3, "A", "승", 4, 1), _m(4, "A", "승", 2, 1), _m(5, "A", "승", 2, 0),
+          _m(6, "Z", "패", 0, 9)]                                                     # 다른 상대의 큰 패는 안 섞인다
+    got = records.rival(sorted(ms, key=lambda m: m.match_date, reverse=True))
+    assert got.streak == ("승", 4), got.streak                            # 몰수승도 연승(current_streak 와 같다)
+    assert got.best_win == (4, 1) and got.worst_loss == (0, 3), (got.best_win, got.worst_loss)
+    assert (got.first, got.last) == (T0, T0 + timedelta(hours=5))
+    assert (got.goals_for, got.goals_against) == (12, 7)
+    clean = [_m(i, "A", "승", 1, 0) for i in range(config.RIVAL_MIN_GAMES)]
+    assert records.rival(clean).worst_loss is None, "진 적이 없는데 최다 차 패가 있다"
+    # 승부차기 승·패(정규 점수가 같다)는 최다 차에 안 든다
+    pk = [_m(i, "A", "승" if i % 2 else "패", 1, 1) for i in range(config.RIVAL_MIN_GAMES)]
+    got = records.rival(pk)
+    assert got.best_win is None and got.worst_loss is None, (got.best_win, got.worst_loss)
+    # 차가 같으면 최근 경기(최신순 입력의 앞)
+    tie = [_m(0, "A", "승", 4, 1), _m(1, "A", "승", 3, 0), _m(2, "A", "패", 1, 3), _m(3, "A", "패", 0, 2),
+           _m(4, "A", "승", 1, 0)]
+    got = records.rival(sorted(tie, key=lambda m: m.match_date, reverse=True))
+    assert got.best_win == (3, 0) and got.worst_loss == (0, 2), (got.best_win, got.worst_loss)
+
+
+# ── Q2 오늘의 선수 ─────────────────────────────────────────────────────
+
+def _pd(i: int, players, *, when=None, mt=None, me="me"):
+    """경기 하나 — players = [(spId, 평점, 골, 도움, 자리)] (자리 28 = 교체 명단)."""
+    when = when or T0 + timedelta(hours=i)
+    d = {"matchId": f"p{i}", "matchDate": (when - timedelta(hours=9)).isoformat(timespec="seconds"),
+         "matchInfo": [{"ouid": me, "matchDetail": {"matchResult": "승"},
+                        "player": [{"spId": sp, "spPosition": pos,
+                                    "status": {"spRating": r, "goal": g, "assist": a}} for sp, r, g, a, pos in players]},
+                       {"ouid": "opp", "matchDetail": {"matchResult": "패"}, "player": []}]}
+    if mt is not None:
+        d["matchType"] = mt
+    return d
+
+
+def test_day_player_min_games_and_best_average():
+    one = [_pd(0, [(1, 9.9, 3, 0, 25), (2, 7.0, 0, 0, 5)]), _pd(1, [(2, 7.0, 0, 1, 5)])]
+    got = records.day_player(one, "me", T0.date())
+    # 1번은 9.9 지만 한 경기 — 두 경기 뛴 2번이 뽑힌다
+    assert got is not None and got.sp_id == 2 and got.games == 2 and got.assists == 1 and got.day_games == 2, got
+    solo = [_pd(0, [(1, 9.9, 3, 0, 25)])]
+    assert records.day_player(solo, "me", T0.date()) is None, "한 경기 뛴 선수를 올렸다"
+    two = [_pd(0, [(1, 8.0, 1, 0, 25), (2, 7.0, 0, 0, 5)]), _pd(1, [(1, 6.0, 1, 0, 25), (2, 7.5, 0, 0, 5)])]
+    got = records.day_player(two, "me", T0.date())
+    assert got.sp_id == 2 and abs(got.rating - 7.25) < 1e-9 and got.goals == 0, got   # 평균 7.25 > 7.0
+    assert records.day_player(two, "me", None) is None
+    # 평점 0(기록 없음 — 몰수·오류 판)은 그 선수 평균에 안 넣는다: 넣으면 1번 평균이 8.0 → 5.33 으로 떨어져 2번이 뽑힌다
+    zero = [_pd(0, [(1, 8.0, 0, 0, 25), (2, 7.0, 0, 0, 5)]), _pd(1, [(1, 8.0, 0, 0, 25), (2, 7.0, 0, 0, 5)]),
+            _pd(2, [(1, 0, 0, 0, 25), (2, 7.0, 0, 0, 5)])]
+    got = records.day_player(zero, "me", T0.date())
+    assert got.sp_id == 1 and got.games == 2 and got.rating == 8.0, got
+
+
+def test_day_player_skips_bench_other_day_other_mode():
+    bench = [_pd(i, [(1, 7.0, 0, 0, 25), (9, 9.0, 0, 0, 28)]) for i in range(2)]   # 9번 평점이 있어 뛴 것으로 본다
+    assert records.day_player(bench, "me", T0.date()).sp_id == 9
+    unused = [_pd(i, [(1, 7.0, 0, 0, 25), (9, 0, 0, 0, 28)]) for i in range(2)]    # 안 뛴 벤치(기록 0)
+    assert records.day_player(unused, "me", T0.date()).sp_id == 1
+    nxt = T0 + timedelta(days=1)
+    mixed = [_pd(0, [(1, 6.0, 0, 0, 25)]), _pd(1, [(1, 6.0, 0, 0, 25)]),
+             _pd(2, [(5, 9.0, 0, 0, 25)], when=nxt), _pd(3, [(5, 9.0, 0, 0, 25)], when=nxt + timedelta(hours=1)),
+             _pd(4, [(1, 9.9, 0, 0, 25)], mt=999, when=nxt), _pd(5, [(1, 9.9, 0, 0, 25)], mt=999, when=nxt)]
+    assert records.last_day(mixed[:4]) == nxt.date()
+    got = records.day_player(mixed, "me", T0.date())
+    assert got.sp_id == 1 and got.day_games == 2, got                    # 다른 날 경기는 안 섞인다
+    got = records.day_player(mixed, "me", nxt.date())
+    assert got.sp_id == 5 and got.day_games == 2, got                    # 다른 모드(999) 경기는 안 센다
+    late = [_pd(9, [(1, 6.0, 0, 0, 25)], mt=999, when=nxt + timedelta(days=3))]
+    assert records.last_day(mixed[:4] + late) == nxt.date(), "다른 모드 경기 날을 마지막 날로 잡았다"
+    assert records.day_player(mixed, "nobody", T0.date()) is None
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
