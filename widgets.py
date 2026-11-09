@@ -2298,22 +2298,31 @@ class VersusBar(QWidget):
 
 class GoalTimeline(QWidget):
     """경기 흐름(65 M3 요약) — 가로 시간 줄 위에 내 골(위 · 강조색) · 아래에 상대 골(OPP_FILL). 연장이 있으면 120분까지.
-    색만으로 말하지 않게 화면은 줄 아래에 "12' 이름" 글을 같이 둔다."""
+    색만으로 말하지 않게 화면은 줄 아래에 "12' 이름" 글을 같이 둔다.
+    슛(set_shots — 88 P2)을 주면 골 아래에 작은 점으로 깐다: 막힌 유효슛은 진하게 · 빗나간 슛은 더 흐리게. 안 주면 예전 그림 그대로
+    (tests/legacy_goal_timeline.py 얼린 사본과 픽셀 대조)."""
     HEIGHT = 52
+    SHOT_R = 2.5   # 슛 점 반지름(골은 5)
 
     def __init__(self):
         super().__init__()
         self.setFixedHeight(self.HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.goals: list[tuple[float, bool]] = []
+        self.shots: list = []   # match_shots 의 TimedShot 중 골이 아닌 것(골은 goals 가 그린다)
 
     def set_goals(self, goals: list[tuple[float, bool]]) -> None:
         self.goals = list(goals)
         self.update()
 
+    def set_shots(self, shots) -> None:
+        """TimedShot 목록(minute · mine · result). 골(result 3)은 set_goals 가 그리므로 여기서 거른다."""
+        self.shots = [s for s in shots if s.result != core.SHOT_GOAL]
+        self.update()
+
     @property
     def span(self) -> int:
-        return 120 if any(m > 90 for m, _ in self.goals) else 90
+        return 120 if any(m > 90 for m, _ in self.goals) or any(s.minute > 90 for s in self.shots) else 90
 
     def x_of(self, minute: float) -> float:
         m = 8
@@ -2336,6 +2345,16 @@ class GoalTimeline(QWidget):
             p.drawLine(QPointF(x, mid - 4), QPointF(x, mid + 4))
             p.drawText(QRectF(x - 20, mid + 14, 40, 14), Qt.AlignmentFlag.AlignCenter, f"{tick}'")
         p.setPen(Qt.PenStyle.NoPen)
+        # 흐린 빗나감 → 막힌 유효슛 → 골 순 — 겹치면 골이 맨 위
+        for miss in (True, False):
+            alpha = T.TIMELINE_MISS_ALPHA if miss else T.TIMELINE_SHOT_ALPHA
+            for s in self.shots:
+                if (s.result == core.SHOT_OFF_TARGET) != miss:
+                    continue
+                c = QColor(T.ACCENT_FILL if s.mine else T.OPP_FILL)
+                c.setAlphaF(alpha)
+                p.setBrush(c)
+                p.drawEllipse(QPointF(self.x_of(s.minute), mid - 9 if s.mine else mid + 9), self.SHOT_R, self.SHOT_R)
         for minute, mine in self.goals:
             p.setBrush(QColor(T.ACCENT_FILL if mine else T.OPP_FILL))
             p.drawEllipse(QPointF(self.x_of(minute), mid - 9 if mine else mid + 9), 5, 5)
@@ -4445,19 +4464,30 @@ class ShotMapWidget(QWidget):
     """
 
     X_MIN = 0.45  # 이보다 뒤(자기 진영)의 슛은 거의 없다 — 아래 경계로 삼는다.
+    NEWEST_GOAL_R = 9.0   # 재생 중 방금 들어간 골(보통 골은 6)
 
     def __init__(self, min_size: tuple[int, int] = (560, 460)):
         super().__init__()
         self.setMinimumSize(*min_size)   # 구단주 비교는 둘을 나란히 놓아 더 작게 준다(1280 창에서 가로 스크롤이 안 생기게)
         self._shots: list = []
         self._assists = False
+        self._upto: int | None = None
 
     def set_shots(self, shots: list, assists: bool = False) -> None:
         """assists 면 골이면서 어시가 있는 슛에만 어시 위치 → 슛 위치 선(1.4.1 N6). 기본값은 예전 그림 그대로 —
         선수 카드 [내 기록]도 이 함수를 쓴다(test_shotmap_default_unchanged)."""
         self._shots = shots or []
         self._assists = assists
+        self._upto = None   # 새 목록은 늘 전부 — 재생(set_upto)은 목록을 넘긴 뒤 다시 건다
         self.update()
+
+    def set_upto(self, n: int | None) -> None:
+        """재생(88 P3) — None 이면 전부(기본 · 예전 그림 그대로), n 이면 목록 앞 n 개만. n 번째가 골이면 조금 크게."""
+        self._upto = None if n is None else max(0, int(n))
+        self.update()
+
+    def visible_shots(self) -> list:
+        return list(self._shots) if self._upto is None else list(self._shots[:self._upto])
 
     def _pt(self, x: float, y: float, w: int, h: int, m: int):
         dw, dh = w - 2 * m, h - 2 * m
@@ -4497,12 +4527,16 @@ class ShotMapWidget(QWidget):
         if self._assists:
             self._paint_assists(p, w, h, m)
         colors = {3: QColor(T.PITCH_GOAL), 1: QColor(T.WARN_FILL), 2: QColor(T.PITCH_MISS)}
+        shown = self.visible_shots()
+        newest = shown[-1] if self._upto is not None and shown else None   # 재생 중 방금 나온 슛
         # 빗나감 → 유효 → 골 순으로 그려서 골이 맨 위에 오게 한다.
-        order = sorted(self._shots, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
+        order = sorted(shown, key=lambda s: {2: 0, 1: 1, 3: 2}.get(s.result, 0))
         for s in order:
             c = colors.get(s.result, QColor(T.TEXT_DIM))
             pt = self._pt(s.x, s.y, w, h, m)
             r = 6.0 if s.result == 3 else 4.5
+            if s is newest and s.result == 3:
+                r = self.NEWEST_GOAL_R
             if s.hit_post:
                 p.setPen(QPen(QColor(T.CHART_ON_MARK), 1.5))
             else:

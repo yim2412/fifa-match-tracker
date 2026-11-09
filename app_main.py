@@ -12462,6 +12462,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _close_match_detail(dlg: "MatchDetailDialog") -> None:
+        if dlg.replay_timer is not None:   # 슛 재생(88 P3) — 닫힌 창에 신호를 보내지 않게
+            dlg.replay_timer.stop()
         for ld in dlg.loaders:
             ld.cancel()
         for ld in dlg.loaders:
@@ -12585,6 +12587,8 @@ class MainWindow(QMainWindow):
         goals = core.match_goals(detail, self._ouid)
         dlg.timeline = GoalTimeline()
         dlg.timeline.set_goals([(g.minute, g.mine) for g in goals])
+        shots = core.match_shots(detail, self._ouid)
+        dlg.timeline.set_shots(shots)
         v.addWidget(dlg.timeline)
 
         def who(sp) -> str:
@@ -12599,6 +12603,9 @@ class MainWindow(QMainWindow):
         v.addWidget(dlg.goal_text)
 
         head("기대 골(xG)")
+        dlg.xg_flow = charts.XgFlowChart()
+        dlg.xg_flow.set_data([(s.minute, s.mine, s.xg, s.result == core.SHOT_GOAL) for s in shots])
+        v.addWidget(dlg.xg_flow)
         xg = [core.shot_map([detail], self._ouid, mine=s).xg for s in (True, False)]
         for label, mine, opp, fmt in (("기대 골", xg[0], xg[1], "{:.2f}"), ("실제 골", m.my_goals, m.opp_goals, "{:.0f}")):
             bar = VersusBar(label, T.OPP_FILL)
@@ -12673,17 +12680,64 @@ class MainWindow(QMainWindow):
         dlg.cb_shot_side.addItem("내 슛", True)
         dlg.cb_shot_side.addItem("상대 슛", False)
         row.addWidget(dlg.cb_shot_side)
+        dlg.btn_replay = QPushButton("재생")
+        dlg.btn_replay.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        row.addWidget(dlg.btn_replay)
         dlg.shot_note = QLabel("")
         dlg.shot_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         row.addWidget(dlg.shot_note, 1)
         v.addLayout(row)
         dlg.shot_map = ShotMapWidget()
         v.addWidget(dlg.shot_map, 1)
+        # 재생(88 P3) — 그 쪽 슛을 match_shots 시간 순으로 하나씩. 지도에 넘기는 목록이 곧 재생 순서(shot_map 은 원문 순서라 따로 넘긴다).
+        dlg.replay_timer = QTimer(dlg)
+        dlg.replay_timer.setInterval(config.SHOT_REPLAY_MS)
+        dlg.replay_shots = []
+        dlg.replay_i = 0
+
+        def side_map():
+            return core.shot_map([detail], self._ouid, mine=bool(dlg.cb_shot_side.currentData()))
+
+        def note(sm) -> None:
+            dlg.shot_note.setText(f"슛 {sm.total} · 유효 {sm.effective} · 골 {sm.goals} · xG {sm.xg:.2f}")
 
         def show() -> None:
-            sm = core.shot_map([detail], self._ouid, mine=bool(dlg.cb_shot_side.currentData()))
+            """전부 보이는 상태 — 재생은 멈춘다(쪽을 바꿔도 여기로 온다)."""
+            dlg.replay_timer.stop()
+            dlg.btn_replay.setText("재생")
+            sm = side_map()
             dlg.shot_map.set_shots(sm.shots)
-            dlg.shot_note.setText(f"슛 {sm.total} · 유효 {sm.effective} · 골 {sm.goals} · xG {sm.xg:.2f}")
+            note(sm)
+
+        def replay_step() -> None:
+            """한 칸 — 슛 하나 더. 다 보였으면 멈추고 전부 보인 상태로(타이머가 부르고, 테스트는 직접 부른다)."""
+            dlg.replay_i += 1
+            dlg.shot_map.set_upto(dlg.replay_i)
+            dlg.shot_note.setText(f"재생 {min(dlg.replay_i, len(dlg.replay_shots))} / {len(dlg.replay_shots)}")
+            if dlg.replay_i >= len(dlg.replay_shots):
+                dlg.replay_timer.stop()
+                dlg.btn_replay.setText("재생")
+                dlg.shot_map.set_upto(None)
+                note(side_map())
+
+        def replay_toggle() -> None:
+            if dlg.replay_timer.isActive():
+                show()
+                return
+            mine = bool(dlg.cb_shot_side.currentData())
+            dlg.replay_shots = [s for s in core.match_shots(detail, self._ouid) if s.mine == mine]
+            if not dlg.replay_shots:
+                return
+            dlg.replay_i = 0
+            dlg.shot_map.set_shots(dlg.replay_shots)
+            dlg.shot_map.set_upto(0)
+            dlg.shot_note.setText(f"재생 0 / {len(dlg.replay_shots)}")
+            dlg.btn_replay.setText("멈춤")
+            dlg.replay_timer.start()
+        dlg.replay_step = replay_step
+        dlg.replay_toggle = replay_toggle
+        dlg.replay_timer.timeout.connect(replay_step)
+        dlg.btn_replay.clicked.connect(lambda _=False: replay_toggle())
         dlg.cb_shot_side.currentIndexChanged.connect(lambda _i: show())
         show()
         return VScrollArea(body)
@@ -15120,6 +15174,7 @@ class MatchDetailDialog(QDialog):
         self.side_buttons: dict[str, QPushButton] = {}
         self.side_pages: dict[str, int] = {}
         self.squad_stack: QStackedWidget | None = None
+        self.replay_timer: QTimer | None = None   # 슛 탭 재생(88 P3) — 슛 탭을 만들 때 채운다
 
     def show_side(self, key: str) -> None:
         """스쿼드 탭의 나 / 상대 칸."""

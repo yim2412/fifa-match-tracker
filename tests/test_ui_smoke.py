@@ -1919,6 +1919,28 @@ def test_area_chart_defaults_unchanged():
         assert new.minimumHeight() == old.minimumHeight()
 
 
+_TIMELINE_CASES = [
+    ([(12.5, True), (40.0, False), (88.2, True)], (600, 52)),
+    ([(3.0, False), (101.5, True)], (600, 52)),     # 연장 — span 120
+    ([(45.0, True), (45.0, False)], (420, 52)),
+    ([], (600, 52)),
+]
+
+
+def test_goal_timeline_defaults_unchanged():
+    """88 P2 — 슛을 안 주면(골만) GoalTimeline 그림이 얼린 사본(tests/legacy_goal_timeline.py)과 픽셀까지 같다."""
+    import widgets
+    sys.path.insert(0, os.path.join(_ROOT, "tests"))
+    from legacy_goal_timeline import LegacyGoalTimeline
+    for goals, (w, h) in _TIMELINE_CASES:
+        new, old = widgets.GoalTimeline(), LegacyGoalTimeline(T.MODE)
+        for c in (new, old):
+            c.set_goals(goals)
+            c.resize(w, h)
+        assert new.grab().toImage() == old.grab().toImage(), ("골만 줄 때 그림이 바뀌었다", goals, (w, h))
+        assert new.span == old.span
+
+
 def test_area_chart_rank_line_k5():
     """57 K5 — 순위 점선: None 에서 끊기고 오른쪽 축은 가장 좋은·나쁜 순위 · 전부 None 이면 안 넘긴 것과 픽셀까지 같다."""
     import charts
@@ -13993,6 +14015,98 @@ def test_match_detail_dialog_m3():
         assert len(cancelled) == len(dlg2.loaders), (len(cancelled), len(dlg2.loaders))
     finally:
         dlg2.deleteLater()
+
+
+def test_match_detail_shots_88():
+    """88 P1·P2·P3 — 요약의 xG 흐름 선 끝 = [슛] 탭 xG · 경기 흐름 줄의 슛 점 · [재생] 한 칸씩(타이머 안 기다림) ·
+    쪽을 바꾸면 멈추고 전부 · 창을 닫으면 타이머 멈춤 · 슛 맵의 다른 쓰임은 기본값 그대로(전부 보임)."""
+    import charts
+    d = next(x for x in _DETAILS if app_main.parse_match(x, _OUID) and core.match_goals(x, _OUID)
+             and core.shot_map([x], _OUID, mine=True).total and core.shot_map([x], _OUID, mine=False).total)
+    shots = core.match_shots(d, _OUID)
+    dlg = _win._make_match_detail(d, tab="슛")
+    try:
+        # P1 — 선 끝 합 = 슛 탭 xG (둘 다 shot_map 과 같은 식) · 0분 0 에서 시작 · 끝은 span 까지 수평
+        flow = dlg.xg_flow
+        assert isinstance(flow, charts.XgFlowChart)
+        flow.resize(600, 160)
+        flow.grab()
+        want = tuple(core.shot_map([d], _OUID, mine=s).xg for s in (True, False))
+        assert want[0] > 0 and want[1] > 0
+        assert all(abs(a - b) < 1e-9 for a, b in zip(flow.marks["totals"], want)), (flow.marks, want)
+        for mine, total in zip((True, False), want):
+            pts = flow.steps(mine)
+            assert pts[0] == (0.0, 0.0) and pts[-1] == (float(flow.span), pts[-2][1]) and abs(pts[-1][1] - total) < 1e-9
+            assert [v for _m, v in pts] == sorted(v for _m, v in pts), "누적선이 줄었다"
+            # 계단 — 슛마다 같은 분에 (앞 값 → 새 값) 두 꼭짓점 · 처음·끝 꼭짓점 둘 더
+            assert len(pts) == 2 + 2 * sum(1 for s in shots if s.mine == mine), (mine, pts)
+            assert all(pts[i][0] == pts[i + 1][0] for i in range(1, len(pts) - 2, 2)), pts
+        assert flow.marks["goals"] == sum(1 for s in shots if s.result == core.SHOT_GOAL)
+        # 연장 — 90분 넘는 슛이 있으면 선 끝이 120분까지(픽스처엔 연장 경기가 없어 따로 지은 값으로)
+        ext = charts.XgFlowChart()
+        ext.set_data([(30.0, True, 0.2, False)])
+        assert ext.span == 90 and ext.steps(True)[-1] == (90.0, 0.2)
+        ext.set_data([(30.0, True, 0.2, False), (105.0, False, 0.3, True)])
+        assert ext.span == 120 and ext.steps(True)[-1] == (120.0, 0.2) and ext.steps(False)[-1] == (120.0, 0.3)
+        # P2 — 줄에 골 아닌 슛이 다 실리고, 그림이 슛이 없을 때와 달라진다
+        tl = dlg.timeline
+        assert len(tl.shots) == sum(1 for s in shots if s.result != core.SHOT_GOAL) and tl.shots, len(tl.shots)
+        # 그림 — 같은 골·같은 span 에서 슛 점만 있고 없고(span 이 달라지면 눈금이 달라 점 때문인지 모른다)
+        import widgets
+        T_shot = type(shots[0])
+        fixed = [T_shot(30.0, True, core.SHOT_ON_TARGET, 0.1, 0.9, 0.5, None),
+                 T_shot(50.0, False, core.SHOT_OFF_TARGET, 0.1, 0.9, 0.5, None)]
+        plain, dotted = widgets.GoalTimeline(), widgets.GoalTimeline()
+        for c in (plain, dotted):
+            c.set_goals([(10.0, True)])
+            c.resize(600, c.HEIGHT)
+        dotted.set_shots(fixed)
+        assert plain.grab().toImage() != dotted.grab().toImage(), "슛 점이 그려지지 않았다"
+        dotted.set_shots([s._replace(result=core.SHOT_GOAL) for s in fixed])   # 골은 set_goals 몫 — 점으로 또 그리지 않는다
+        assert dotted.shots == [] and plain.grab().toImage() == dotted.grab().toImage()
+        assert tl.span == (120 if any(s.minute > 90 for s in shots) or any(g.minute > 90 for g in core.match_goals(d, _OUID)) else 90)
+        late = [type(shots[0])(100.0, True, core.SHOT_ON_TARGET, 0.1, 0.9, 0.5, None)]
+        tl.set_shots(late)
+        assert tl.span == 120, "90분 넘는 슛이 span 에 안 들어갔다"
+        tl.set_shots(shots)
+        # P3 — 재생: 한 칸씩 · 순서 = match_shots 시간 순(내 쪽)
+        order = [s for s in shots if s.mine]
+        assert len(order) >= 2 and dlg.replay_timer is not None and not dlg.replay_timer.isActive()
+        dlg.btn_replay.click()
+        assert dlg.replay_timer.isActive() and dlg.btn_replay.text() == "멈춤"
+        assert dlg.replay_timer.interval() == app_main.config.SHOT_REPLAY_MS
+        assert dlg.shot_map.visible_shots() == [] and dlg.shot_map._shots == order
+        for k in range(1, len(order)):
+            dlg.replay_step()
+            assert dlg.shot_map.visible_shots() == order[:k], k
+            assert dlg.replay_timer.isActive()
+        dlg.replay_step()   # 마지막 — 전부 보이고 멈춘다
+        assert not dlg.replay_timer.isActive() and dlg.btn_replay.text() == "재생"
+        assert dlg.shot_map.visible_shots() == order and f"슛 {len(order)}" in dlg.shot_note.text()
+        # 쪽을 바꾸면 멈추고 전부(그 쪽 슛 수)
+        dlg.btn_replay.click()
+        dlg.replay_step()
+        assert dlg.replay_timer.isActive() and len(dlg.shot_map.visible_shots()) == 1
+        dlg.cb_shot_side.setCurrentIndex(1)
+        assert not dlg.replay_timer.isActive() and dlg.btn_replay.text() == "재생"
+        assert len(dlg.shot_map.visible_shots()) == core.shot_map([d], _OUID, mine=False).total
+        # 창을 닫으면(_close_match_detail) 타이머가 멈춘다 — 막지 않았으면 돌고 있다는 것부터
+        dlg.btn_replay.click()
+        assert dlg.replay_timer.isActive()
+        app_main.MainWindow._close_match_detail(dlg)
+        assert not dlg.replay_timer.isActive(), "창을 닫았는데 재생 타이머가 돈다"
+    finally:
+        dlg.deleteLater()
+    # ShotMapWidget — set_upto 를 안 부르면 전부(다른 쓰임 셋) · 부르면 앞 n 개 · 새 목록은 전부로 돌아간다
+    w = app_main.ShotMapWidget()
+    w.set_shots(shots)
+    assert w.visible_shots() == shots
+    w.set_upto(2)
+    assert w.visible_shots() == shots[:2]
+    w.set_shots(shots)
+    assert w.visible_shots() == shots
+    w.set_upto(None)
+    assert w.visible_shots() == shots
 
 
 def test_match_detail_head_counts_only_that_season():

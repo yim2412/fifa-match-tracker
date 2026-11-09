@@ -1229,6 +1229,103 @@ class BudgetCurveChart(_Chart):
                 self._hits.append((QRectF(left, mt, right - left, plot_h), f"{self._fmt(c)} 안쪽 · {pct:.0f}% 확률"))
 
 
+XG_FLOW_MIN_TOP = 1.0   # xG 흐름 세로 축 최소 높이 — 슛이 적은 경기가 선 하나로 눌리지 않게
+XG_FLOW_PAD = 1.1       # 가장 큰 누적값 위 여백 배율
+XG_FLOW_GOAL_R = 4      # 골 자리 점 반지름
+
+
+class XgFlowChart(_Chart):
+    """경기 안 xG 흐름(88 P1) — 나·상대 누적 기대 골 두 계단 선(0분 0 에서 시작, 끝은 경기 끝까지 수평) · 골 자리에 점.
+    shots: (분, 내 쪽인가, xG, 골인가) 를 시간 순으로. 선 끝 값이 [기대 골] 막대·[슛] 탭 xG 와 같다(합일 뿐 — 다시 계산하지 않는다).
+    색은 막대와 같은 짝: 내 쪽 ACCENT_FILL · 상대 OPP_FILL."""
+
+    def __init__(self):
+        super().__init__(min_h=130)
+        self._shots: list[tuple[float, bool, float, bool]] = []
+        self.marks: dict = {}   # 테스트가 그림 대신 읽는다 — totals · span · goals
+
+    def set_data(self, shots) -> None:
+        self._shots = [(float(m), bool(mine), float(xg), bool(goal)) for m, mine, xg, goal in shots]
+        self.update()
+
+    @property
+    def span(self) -> int:
+        return 120 if any(m > 90 for m, *_ in self._shots) else 90
+
+    def steps(self, mine: bool) -> list[tuple[float, float]]:
+        """한 쪽 누적선의 꼭짓점 — (분, 누적 xG). 0분 0 에서 시작해 끝(span)까지 수평."""
+        pts, cum = [(0.0, 0.0)], 0.0
+        for m, who, xg, _goal in self._shots:
+            if who != mine:
+                continue
+            pts.append((m, cum))
+            cum += xg
+            pts.append((m, cum))
+        pts.append((float(self.span), cum))
+        return pts
+
+    def paintEvent(self, event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        self._hits = []
+        self.marks = {}
+        if not self._shots:
+            self._empty(p, "슛 기록 없음")
+            return
+        small = _small_font(self.font())
+        fm = QFontMetrics(small)
+        p.setFont(small)
+        w, h = self.width(), self.height()
+        span = self.span
+        lines = {True: self.steps(True), False: self.steps(False)}
+        totals = {k: v[-1][1] for k, v in lines.items()}
+        top = max(max(totals.values()) * XG_FLOW_PAD, XG_FLOW_MIN_TOP)
+        ml, mr = fm.horizontalAdvance("0.0") + 8, fm.horizontalAdvance("0.00") + 12
+        mt, mb = fm.height() // 2 + 2, fm.height() + 8
+        bottom, plot_h = h - mb, max(h - mb - mt, 1)
+
+        def xat(minute: float) -> float:
+            return ml + (w - ml - mr) * minute / span
+
+        def yat(v: float) -> float:
+            return bottom - plot_h * v / top
+
+        for frac in (0.0, 0.5, 1.0):
+            y = yat(top * frac)
+            p.setPen(QPen(QColor(T.CHART_AXIS if frac == 0 else T.CHART_GRID), 1))
+            p.drawLine(QPointF(ml, y), QPointF(w - mr, y))
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(0, y - fm.height() / 2, ml - 4, fm.height()),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{top * frac:.1f}")
+        for tick in (0, 45, 90, 120):
+            if tick > span:
+                continue
+            p.setPen(QColor(T.TEXT_DIM))
+            p.drawText(QRectF(xat(tick) - 20, bottom + 4, 40, fm.height()), Qt.AlignmentFlag.AlignCenter, f"{tick}'")
+        colors = {True: T.ACCENT_FILL, False: T.OPP_FILL}
+        for mine in (False, True):   # 내 선이 위로
+            p.setPen(QPen(QColor(colors[mine]), LINE_W))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPolyline(QPolygonF([QPointF(xat(m), yat(v)) for m, v in lines[mine]]))
+            p.setPen(QColor(T.TEXT))
+            p.drawText(QRectF(w - mr + 4, yat(totals[mine]) - fm.height() / 2, mr - 4, fm.height()),
+                       Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, f"{totals[mine]:.2f}")
+        goals = 0
+        cum = {True: 0.0, False: 0.0}
+        for m, mine, xg, goal in self._shots:
+            cum[mine] += xg
+            if not goal:
+                continue
+            goals += 1
+            c = QPointF(xat(m), yat(cum[mine]))
+            p.setPen(QPen(QColor(T.PANEL), RING_W))
+            p.setBrush(QColor(colors[mine]))
+            p.drawEllipse(c, XG_FLOW_GOAL_R, XG_FLOW_GOAL_R)
+            self._hits.append((QRectF(c.x() - 6, c.y() - 6, 12, 12),
+                               f"{m:.0f}' {'내' if mine else '상대'} 골 · xG {xg:.2f} · 누적 {cum[mine]:.2f}"))
+        self.marks = {"totals": (totals[True], totals[False]), "span": span, "goals": goals}
+
+
 class ResultDots(_Chart):
     """최근 경기 결과 점 — 오래된 것 → 최신. 색만으로 구분하지 않게 점 안에 승/무/패 글자.
 

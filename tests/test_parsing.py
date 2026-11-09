@@ -207,6 +207,37 @@ def test_match_detail_stats():
     assert st.latest_match_with([new], "me", "다") is None
 
 
+def test_match_shots_88():
+    """88 P1~P3 — match_shots: 양쪽 슛을 시간 순으로 · 골 수 = match_goals · xG 합 = shot_map(같은 거르기·같은 식)."""
+    ouid, _, details = _load()
+    total = 0
+    for d in details:
+        shots = st.match_shots(d, ouid)
+        total += len(shots)
+        assert [s.minute for s in shots] == sorted(s.minute for s in shots), "시간 순이 아니다"
+        goals = st.match_goals(d, ouid)
+        assert [(s.minute, s.mine, s.sp_id) for s in shots if s.result == st.SHOT_GOAL] \
+            == [(g.minute, g.mine, g.sp_id) for g in goals], "골 수·시각이 match_goals 와 다르다"
+        for mine in (True, False):
+            sm = st.shot_map([d], ouid, mine=mine)
+            mine_shots = [s for s in shots if s.mine == mine]
+            assert len(mine_shots) == sm.total, (mine, len(mine_shots), sm.total)
+            assert abs(sum(s.xg for s in mine_shots) - sm.xg) < 1e-9, (mine, sm.xg)
+            assert sorted((s.x, s.y, s.result) for s in mine_shots) == sorted((s.x, s.y, s.result) for s in sm.shots)
+    assert total >= 40, total   # 픽스처 4경기 슛 40개(재지 않고 비어 있으면 위 단언이 다 빈다)
+    # 손으로 지은 경기 — 섞인 순서·망가진 슛 거르기·연장 분·골대
+    me = {"shootDetail": [{"x": 0.9, "y": 0.5, "result": 1, "goalTime": (2 << 24) + 60, "spId": 5, "hitPost": True},   # 91분
+                          {"x": 0.9, "y": 0.5, "result": 3, "goalTime": 600, "spId": 6},                              # 10분
+                          {"x": "?", "y": 0.5, "result": 3, "goalTime": 5},                                           # 좌표 이상 — 뺀다
+                          {"x": 0.8, "y": 0.5, "result": 9, "goalTime": 5}]}                                          # result 이상 — 뺀다
+    opp = {"shootDetail": [{"x": 0.7, "y": 0.4, "result": 2, "goalTime": 300, "spId": 21}]}                           # 5분
+    got = st.match_shots(_detail_game("m", me=me, opp=opp), "me")
+    assert [(s.minute, s.mine, s.result, s.sp_id, s.hit_post) for s in got] \
+        == [(5.0, False, 2, 21, False), (10.0, True, 3, 6, False), (91.0, True, 1, 5, True)], got
+    assert all(s.xg > 0 for s in got)
+    assert st.match_shots(_detail_game("z"), "없음") == []
+
+
 def test_result_breakdown():
     ouid, _, details = _load()
     rb = st.result_breakdown(details, ouid)

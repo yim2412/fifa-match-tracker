@@ -363,6 +363,8 @@ def cvd_delta(a_hex: str, b_hex: str) -> float:
 PITCH = "#1e5c34"
 PITCH_GOAL = "#5ee08f"
 PITCH_MISS = "#c3c9d4"
+TIMELINE_SHOT_ALPHA = 0.75   # 경기 흐름 줄의 막힌 유효슛 점 진하기(88 P2 — 골은 불투명 · 색은 내 몫 ACCENT_FILL·상대 몫 OPP_FILL 그대로)
+TIMELINE_MISS_ALPHA = 0.45   # 빗나간 슛 점 — 유효슛보다 흐리게(0.3 은 어두운 바탕에서 거의 안 보였다 — 11-09 그림)
 PITCH_ASSIST = "#8ec9ff"   # 어시스트 위치 → 슛 선(슛 맵 [어시스트]) — 골 초록·빗나감 회색과 갈리게 파랑
 SIDEBAR_W = 230
 SCROLL = _P["SCROLL"]

@@ -76,7 +76,7 @@ from stats import (
     position_line, possession_stats, ranker_compare, ranker_targets, ranker_values, rating_trend, result_breakdown, season_divisions, season_id_of, shot_distance_breakdown, shot_map,
     shot_type_breakdown, team_color_baseline, team_color_mixed, team_color_stats, team_profile, time_of_day_rates,
     time_weekday_rates, VERSUS_ROWS, VersusLine, VersusProfile, versus_profile,
-    MATCH_VERSUS_ROWS, MatchGoal, latest_match_with, match_goals, match_mvp, match_sides, match_versus,
+    MATCH_VERSUS_ROWS, MatchGoal, TimedShot, latest_match_with, match_goals, match_mvp, match_shots, match_sides, match_versus,
     ShootoutKeeper, shootout_keepers, shot_type_counts,
     Scorer, ShotSide, ShotSummary, shot_summary,
     trade_hint, TIME_BANDS, TRADE_HINT_GAMES, WEEKDAYS,
@@ -159,7 +159,7 @@ __all__ = [
     "shot_type_breakdown", "team_color_baseline", "team_color_mixed", "team_color_stats", "team_profile", "time_of_day_rates",
     "time_weekday_rates", "trade_hint", "TIME_BANDS", "TRADE_HINT_GAMES", "WEEKDAYS",
     "VERSUS_ROWS", "VersusLine", "VersusProfile", "versus_profile",   # 65 M1 대시보드 나와 상대
-    "MATCH_VERSUS_ROWS", "MatchGoal", "latest_match_with", "match_goals", "match_mvp", "match_sides", "match_versus",   # 65 M3 경기 상세 창
+    "MATCH_VERSUS_ROWS", "MatchGoal", "TimedShot", "latest_match_with", "match_goals", "match_mvp", "match_shots", "match_sides", "match_versus",   # 65 M3 경기 상세 창
     "ShootoutKeeper", "shootout_keepers", "shot_type_counts",   # 65 M6 승부차기 상대 GK · 슛 타입 분포
     "Scorer", "ShotSide", "ShotSummary", "shot_summary",   # 65 M8 슛 맵 오른쪽 패널
     # stats — A2 FC 보상(43단계)

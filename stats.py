@@ -1353,6 +1353,19 @@ class ShotMap:
         return sum(s.xg for s in self.shots)
 
 
+def _shot_core(sd: dict) -> tuple[float, float, int, int | None, bool, float] | None:
+    """슛 한 건 → (x, y, result, 종류 코드, 박스 안, xG). 좌표·result 가 이상하면 None.
+    shot_map 과 match_shots 가 같은 거르기·같은 xG 를 쓰게 한 곳에 둔다(88 P1 — 둘의 합이 어긋나면 안 된다)."""
+    x, y, r = sd.get("x"), sd.get("y"), sd.get("result")
+    if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+        return None
+    if r not in _SHOT_RESULTS:
+        return None
+    tcode = shot_type_code(sd.get("type"))
+    in_pen = bool(sd.get("inPenalty"))
+    return float(x), float(y), int(r), tcode, in_pen, shot_xg(float(x), float(y), in_pen, tcode)
+
+
 def shot_map(details: list[dict], ouid: str, mine: bool = True,
              sp_id: int | None = None) -> ShotMap:
     """여러 경기의 슛 좌표를 모은다. mine=False 면 상대 슛(내 실점 위치).
@@ -1369,20 +1382,17 @@ def shot_map(details: list[dict], ouid: str, mine: bool = True,
         for sd in p.get("shootDetail") or []:
             if sp_id is not None and sd.get("spId") != sp_id:
                 continue
-            x, y, r = sd.get("x"), sd.get("y"), sd.get("result")
-            if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            got = _shot_core(sd)
+            if got is None:
                 continue
-            if r not in _SHOT_RESULTS:
-                continue
+            x, y, r, tcode, in_pen, xg = got
             tname = goal_type_name(sd.get("type"))
-            tcode = shot_type_code(sd.get("type"))
-            in_pen = bool(sd.get("inPenalty"))
             ax, ay = sd.get("assistX"), sd.get("assistY")
             has_assist = (bool(sd.get("assist")) and isinstance(ax, (int, float))
                           and isinstance(ay, (int, float)))
             sm.shots.append(Shot(
-                float(x), float(y), int(r), tname, in_pen,
-                bool(sd.get("hitPost")), shot_xg(float(x), float(y), in_pen, tcode),
+                x, y, r, tname, in_pen,
+                bool(sd.get("hitPost")), xg,
                 float(ax) if has_assist else None, float(ay) if has_assist else None, tcode))
     return sm
 
@@ -2270,6 +2280,37 @@ def match_goals(detail: dict, ouid: str) -> list[MatchGoal]:
             sp = sd.get("spId")
             out.append(MatchGoal(PERIOD_START_MIN.get(period, 0) + sec / 60, mine, sp if isinstance(sp, int) else None))
     out.sort(key=lambda g: g.minute)
+    return out
+
+
+class TimedShot(NamedTuple):
+    minute: float      # match_goals 와 같은 식 — 구간 시작 분 + 초/60
+    mine: bool
+    result: int        # SHOT_GOAL / SHOT_ON_TARGET / SHOT_OFF_TARGET
+    xg: float
+    x: float
+    y: float
+    sp_id: int | None
+    hit_post: bool = False   # 슛 맵이 흰 테두리로 그린다 — 재생이 시간 순 목록을 그대로 넘길 수 있게(ShotMapWidget 이 읽는 값)
+
+
+def match_shots(detail: dict, ouid: str) -> list[TimedShot]:
+    """한 경기의 양쪽 슛 — 시간 순(같은 분이면 내 슛이 앞). 거르기·xG 는 shot_map 과 같다(_shot_core)."""
+    me, opp = _me_opp(detail, ouid)
+    if me is None:
+        return []
+    out = []
+    for mine, p in ((True, me), (False, opp or {})):
+        for sd in p.get("shootDetail") or []:
+            got = _shot_core(sd)
+            if got is None:
+                continue
+            x, y, r, _tcode, _in_pen, xg = got
+            period, sec = decode_goal_time(sd.get("goalTime"))
+            sp = sd.get("spId")
+            out.append(TimedShot(PERIOD_START_MIN.get(period, 0) + sec / 60, mine, r, xg, x, y,
+                                 sp if isinstance(sp, int) else None, bool(sd.get("hitPost"))))
+    out.sort(key=lambda s: s.minute)   # 파이썬 정렬은 안정 — 같은 분이면 먼저 담은 내 슛이 앞
     return out
 
 
