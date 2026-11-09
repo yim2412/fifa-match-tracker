@@ -89,7 +89,7 @@ from widgets import (
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
     ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text, pill_radius, EmptyState,
-    set_grade_holo,
+    set_grade_holo, GradeBadge,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -7331,7 +7331,8 @@ class MainWindow(QMainWindow):
             grade = next((g for g, _n in c.grades.most_common() if isinstance(g, int)), None)
             grades = " · ".join(f"{g}강 {k}명" for g, k in c.grades.most_common(3) if isinstance(g, int))
             cells = [MetricCell(f"{c.users:,}명", who), MetricCell(pct_text(rate * 100), "비율", T.ACCENT),
-                     MetricCell(f"{grade}강" if grade is not None else NA, "많이 쓴 강화", None, grades)]
+                     MetricCell(str(grade) if grade is not None else NA, "많이 쓴 강화", None, grades,
+                                grade if grade is not None and grade >= 1 else None)]
             if price is not None:
                 cells.append(MetricCell(price, "시세"))
             rows.append(MetricRow(f"{self._names.get(c.spid, str(c.spid))} ({self._season_name(c.spid)})", line,
@@ -13490,13 +13491,17 @@ class MainWindow(QMainWindow):
             r, c = divmod(i, cols)
             price = info.prices[grade]
             cell = QFrame()
+            cell.setObjectName("priceCell")   # 이름으로만 — "QFrame" 이면 안의 QLabel(QFrame 자식 클래스)까지 테두리가 붙었다
             cell.setStyleSheet(
-                f"QFrame {{ background: {T.PANEL}; border: 1px solid "
+                f"QFrame#priceCell {{ background: {T.PANEL}; border: 1px solid "
                 f"{T.ACCENT if grade == current_grade else T.BORDER}; border-radius: {T.RADIUS_CTRL}px; }}")
             cv = QVBoxLayout(cell)
             cv.setContentsMargins(8, 4, 8, 4)
-            grade_lb = QLabel(f"{grade}강" if grade else "기본")
-            grade_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            if grade:
+                grade_lb = GradeBadge(grade)
+            else:
+                grade_lb = QLabel("기본")
+                grade_lb.setStyleSheet(f"color: {T.TEXT_DIM};")
             price_lb = QLabel(price)
             price_lb.setWordWrap(True)
             price_lb.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")

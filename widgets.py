@@ -1878,6 +1878,7 @@ def grade_icon_style(grade: int) -> tuple:
 
 
 GRADE_HOLO_FROM = 11
+GRADE_BADGE_PAD = 6   # 표 밖 배지(줄 목록 칸 · GradeBadge)의 글자 좌우 여백
 _grade_holo = {"pm": None}   # 넥슨 11~13강 바탕 그림(images.GRADE_HOLO_URL) — 받기 전·실패면 None 이고 theme 그러데이션으로 그린다
 
 
@@ -1919,6 +1920,36 @@ def paint_grade_badge(painter, rect: QRectF, grade: int, font) -> None:
     painter.setPen(QColor(fg))
     painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(grade))
     painter.restore()
+
+
+class GradeBadge(QWidget):
+    """강화 배지 하나를 위젯으로 — 레이아웃 안에 글자 대신 놓는 자리(선수 카드 창 시세 칸)."""
+
+    def __init__(self, grade: int, parent=None):
+        super().__init__(parent)
+        self.grade = int(grade)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setAccessibleName(f"{self.grade}강")
+        self.setToolTip(f"{self.grade}강")
+
+    def _bold(self) -> QFont:
+        f = QFont(self.font())
+        f.setBold(True)
+        return f
+
+    def sizeHint(self) -> QSize:
+        fm = QFontMetrics(self._bold())
+        return QSize(fm.horizontalAdvance(str(self.grade)) + 2 * GRADE_BADGE_PAD, fm.height() + 4)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        sh = self.sizeHint()
+        paint_grade_badge(p, QRectF(0.5, (self.height() - sh.height()) / 2 + 0.5, sh.width() - 1, sh.height() - 1),
+                          self.grade, self.font())
+        p.end()
 
 
 class GradeStepDelegate(RowBorderDelegate):
@@ -3093,6 +3124,12 @@ class MetricCell(NamedTuple):
     label: str                      # 값 아래 작은 라벨(흐림)
     color: str | None = None        # 값 색 — None 이면 글자색
     tip: str = ""
+    grade: int | None = None        # 강화 칸이면 값 대신 강화 배지(paint_grade_badge) — text 는 str(grade)
+
+
+def _metric_cell_w(c: MetricCell, bold: QFontMetrics) -> float:
+    """칸 값 폭 — 강화 배지면 좌우 여백까지(넥슨 공지 꼴 배지)."""
+    return bold.horizontalAdvance(c.text) + (2 * GRADE_BADGE_PAD if c.grade else 0)
 
 
 @dataclass
@@ -3145,7 +3182,7 @@ class MetricRowDelegate(QStyledItemDelegate):
         w = [0.0] * n
         for r in rows:
             for i, c in enumerate(r.cells):
-                w[i] = max(w[i], bold.horizontalAdvance(c.text), small.horizontalAdvance(c.label))
+                w[i] = max(w[i], _metric_cell_w(c, bold), small.horizontalAdvance(c.label))
         self.col_w = w
         ranks = [r.rank for r in rows if r.rank is not None]
         self.rank_w = bold.horizontalAdvance(f"{max(ranks):,}") if ranks else 0.0
@@ -3159,12 +3196,12 @@ class MetricRowDelegate(QStyledItemDelegate):
         h1, h2 = fm["bold"].height(), fm["small"].height()
         y2 = top + h1 + self.GAP
         segs: list[CardSeg] = []
-        widths = [self.col_w[i] if i < len(self.col_w) else fm["bold"].horizontalAdvance(c.text)
+        widths = [self.col_w[i] if i < len(self.col_w) else _metric_cell_w(c, fm["bold"])
                   for i, c in enumerate(row.cells)]
         x = right - sum(widths) - self.CELL_GAP * max(0, len(widths) - 1)
         cells_left = x
         for i, (c, w) in enumerate(zip(row.cells, widths)):
-            segs.append(CardSeg(f"cell{i}", QRectF(x, top, w, h1), c.text, fm["bold"].horizontalAdvance(c.text)))
+            segs.append(CardSeg(f"cell{i}", QRectF(x, top, w, h1), c.text, _metric_cell_w(c, fm["bold"])))
             segs.append(CardSeg(f"label{i}", QRectF(x, y2, w, h2), c.label, fm["small"].horizontalAdvance(c.label)))
             x += w + self.CELL_GAP
         limit = cells_left - 16
@@ -3239,6 +3276,11 @@ class MetricRowDelegate(QStyledItemDelegate):
                                        Qt.TransformationMode.SmoothTransformation)
                     p.drawPixmap(QPointF(s.rect.left() + (s.rect.width() - scaled.width()) / 2,
                                          s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
+                continue
+            if s.role.startswith("cell") and row.cells[int(s.role[4:])].grade:
+                g = row.cells[int(s.role[4:])].grade
+                bw = min(s.full, s.rect.width())
+                paint_grade_badge(p, QRectF(s.rect.right() - bw, s.rect.top(), bw, s.rect.height()), g, f["bold"])
                 continue
             font = "small" if s.role == "sub" or s.role.startswith("label") else "bold"
             align = Qt.AlignmentFlag.AlignLeft

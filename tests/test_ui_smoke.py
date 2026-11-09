@@ -10309,6 +10309,9 @@ def test_ranker_pick_renders_summary():
             # 67 R10 줄 칩 — 고른 줄의 카드만 · 줄 안 순위 · 두 번 누르면 그 카드
             lst, chips = _win.pick_cards_list, _win.pick_line_chips
             every = lst.all_rows()
+            # "많이 쓴 강화" 칸은 강화 배지로 — 화면이 grade 를 넘겨야 배지가 된다(빼면 글자만)
+            gcells = [c for r in every for c in r.cells if c.label == "많이 쓴 강화" and c.text != app_main.NA]
+            assert gcells and all(c.grade == int(c.text) for c in gcells), gcells[:3]
             lines = [ln for ln in dict.fromkeys(r.sort["line"] for r in every)]
             assert len(lines) > 1, "줄이 하나뿐이면 거르기가 아무것도 못 잰다"
             chips.setCurrentIndex(chips.findData(lines[-1]))
@@ -14820,7 +14823,7 @@ def test_80_avg_bars_diverge_from_base():
 def test_every_grade_badge_uses_one_painter():
     # 3.7.1 — 강화 배지는 표 칸·골 순위 줄·축구장 카드 모두 넥슨 공지 꼴 하나(paint_grade_badge). 예전 둥근 색 배지로 되돌리면 FAIL
     import widgets
-    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtGui import QColor, QFontMetrics, QPixmap
     from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
     drawn = []
     real = widgets.paint_grade_badge
@@ -14851,6 +14854,31 @@ def test_every_grade_badge_uses_one_painter():
         chip.resize(110, 100)
         chip.grab()
         assert 9 in drawn, drawn
+        # 랭커 픽 "많이 쓴 강화" 칸 — 배지 자리 폭은 여백까지(줄이면 잘림 검사가 잡는다)
+        drawn.clear()
+        ml = widgets.MetricRowList()
+        ml.resize(500, 200)
+        cell = widgets.MetricCell("11", "많이 쓴 강화", None, "", 11)
+        ml.set_rows([widgets.MetricRow("선수", cells=(widgets.MetricCell("3명", "사용자"), cell))])
+        ml.show()
+        _app.processEvents()
+        ml.grab()
+        assert 11 in drawn, drawn
+        dg = ml.metric_delegate
+        seg = {s.role: s for s in dg.layout(ml.rows()[0], QRectF(0, 0, 500, 60), ml.font())}["cell1"]
+        assert seg.full >= QFontMetrics(ml.font()).horizontalAdvance("11") + 2 * widgets.GRADE_BADGE_PAD, seg.full
+        # 선수 카드 창 [시세] 칸 — 강화마다 배지, 기본(0)은 글자
+        drawn.clear()
+        info = playerinfo.PlayerInfo(sp_id=1, name="가", ovr=100, prices={0: "1 BP", 5: "2 BP", 12: "3 BP"})
+        tab = app_main.MainWindow._build_price_tab(info, 5)
+        badges = sorted(b.grade for b in tab.findChildren(widgets.GradeBadge))
+        assert badges == [5, 12], badges
+        tab.resize(400, 300)
+        tab.show()
+        _app.processEvents()
+        tab.grab()
+        assert {5, 12} <= set(drawn), drawn
+        tab.close()
     finally:
         widgets.paint_grade_badge = real
     # 받은 홀로그램 그림은 11강 이상 배지 모두에 — 축구장 카드에서 확인(10강 이하는 안 쓴다)
