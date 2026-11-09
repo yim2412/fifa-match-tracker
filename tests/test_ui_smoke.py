@@ -3352,6 +3352,9 @@ def test_main_starts_update_check_after_show():
         def start_cache_prune(self):
             calls.append("캐시 정리")
 
+        def start_grade_holo(self):
+            calls.append("강화 바탕")
+
         def attach_rank_sched(self, sched):
             calls.append("랭킹 수집")  # 예약은 창 밖(AppShell)에 살고 창은 상태만 받는다
 
@@ -3403,8 +3406,8 @@ def test_main_starts_update_check_after_show():
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
     tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
-    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", *tail, "미리 읽기"], calls
-    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", *tail, "마지막 계정"], calls
+    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail, "미리 읽기"], calls
+    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail, "마지막 계정"], calls
 
 
 def _stop_shell():
@@ -3464,7 +3467,7 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
         (app_main._setup_app, app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY, app_main._SHELL) = orig
     # 창은 만들되 띄우지 않고, 1만 경기 미리 읽기(약 750MB)도 안 한다
     # 색인 백필은 트레이 시작이면 첫 화면이 없어 2분 뒤(ROADMAP 2.1.1 12)
-    assert calls == ["창", "start_update_check", "start_cache_prune", "sync_ranker_pick_data",
+    assert calls == ["창", "start_update_check", "start_cache_prune", "start_grade_holo", "sync_ranker_pick_data",
                      f"색인 {config.SQUAD_BACKFILL_TRAY_DELAY_S}초 뒤"], calls
 
 
@@ -8242,11 +8245,11 @@ def test_badge_paint_failure_falls_back():
     tb = _win.tbl_players
     dg = tb.itemDelegateForColumn(2)
     notes = []
-    real_colors, real_note = widgets._grade_badge_colors, crashlog.note
+    real_paint, real_note = widgets.paint_grade_badge, crashlog.note
 
-    def boom(grade):
-        raise ValueError("배지 색 실패")
-    widgets._grade_badge_colors, crashlog.note = boom, lambda kind, e: notes.append(kind)
+    def boom(*a):
+        raise ValueError("배지 그리기 실패")
+    widgets.paint_grade_badge, crashlog.note = boom, lambda kind, e: notes.append(kind)
     dg.failed = 0
     try:
         _win._go_page("선수 지표")
@@ -8254,7 +8257,7 @@ def test_badge_paint_failure_falls_back():
             tb.viewport().grab()
         assert dg.failed >= 2 and len(notes) == 1, (dg.failed, notes)
     finally:
-        widgets._grade_badge_colors, crashlog.note = real_colors, real_note
+        widgets.paint_grade_badge, crashlog.note = real_paint, real_note
         dg.failed = 0
         _win._go_page("대시보드")
 
@@ -11427,8 +11430,8 @@ def test_enhance_page_shows_result():
         assert _win.tbl_enhance.rowCount() == 12
         _check_elisions([_win.tbl_enhance, _win.tbl_enh_budget])
         # 받은 넥슨 그림이 단계 칸까지 온다
-        delegate = _win.tbl_enhance.itemDelegateForColumn(0)
-        assert delegate.holo.isNull(), "아래 단언의 전제 — 아직 못 받았다"
+        widgets._grade_holo["pm"] = None
+        assert widgets.grade_holo() is None, "아래 단언의 전제 — 아직 못 받았다"
         with tempfile.TemporaryDirectory() as folder:
             png = pathlib.Path(folder) / "holo.png"
             pm = QPixmap(4, 4)
@@ -11437,8 +11440,8 @@ def test_enhance_page_shows_result():
             asked = []
             images.fetch_icon = lambda url, *a, **k: (asked.append(url), png)[1]
             _win.btn_enh_calc.click()
-            assert asked == [images.GRADE_HOLO_URL] and not delegate.holo.isNull()
-        delegate.holo = QPixmap()
+            assert asked == [images.GRADE_HOLO_URL] and widgets.grade_holo() is not None
+        widgets._grade_holo["pm"] = None
     finally:
         restore()
         _win.ed_enh_budget.setText("")
@@ -11754,13 +11757,12 @@ def test_grade_step_delegate_draws_badges():
     # 넥슨 그림을 받으면 11강 이상 바탕을 그 그림으로 — 10강 쪽은 그대로
     pm = QPixmap(8, 8)
     pm.fill(QColor(0, 200, 0))
-    dg.holo = pm
+    widgets._grade_holo["pm"] = pm
     after = t.grab().toImage()
     assert after.pixelColor(cx + 30, cy - 5).green() > 150 and after.pixelColor(cx + 30, cy - 5).red() < 80, after.pixelColor(cx + 30, cy - 5).name()
     assert after.pixelColor(cx - 30, cy + 3) == gold, "10강 배지는 그림을 안 쓴다"
-    dg.holo = QPixmap()
-    dg.set_holo(None)
-    assert dg.holo.isNull(), "못 받으면 그러데이션"
+    widgets._grade_holo["pm"] = None
+    assert not widgets.set_grade_holo(None) and widgets.grade_holo() is None, "못 받으면 그러데이션"
     keep = dg._draw
     dg._draw = lambda *a: 1 / 0
     try:
@@ -14815,12 +14817,81 @@ def test_80_avg_bars_diverge_from_base():
         widgets.AvgBar("a", 5.0, "5"), QRectF(0, 0, 600, 30), same.font())}
 
 
-def test_81_grade_badge_colors_match_nexon_css():
-    # 넥슨 웹 CSS(fc.m_ssl.css en_level1~10)에서 옮긴 값 — 1강 회색 · 2~4 브론즈 · 5~7 실버 · 8~10 골드
-    want = {1: "#45494f", 2: "#c37653", 4: "#c37653", 5: "#c2c5ca", 7: "#c2c5ca", 8: "#e8c337", 10: "#e8c337"}
-    assert {g: widgets._grade_badge_colors(g)[0] for g in want} == want
-    assert widgets._grade_badge_colors(11)[0] not in want.values(), "11강 이상은 웹 CSS 에 없어 따로 둔다"
-    assert widgets._grade_badge_colors(0) == (T.PANEL_2, T.TEXT_DIM)
+def test_every_grade_badge_uses_one_painter():
+    # 3.7.1 — 강화 배지는 표 칸·골 순위 줄·축구장 카드 모두 넥슨 공지 꼴 하나(paint_grade_badge). 예전 둥근 색 배지로 되돌리면 FAIL
+    import widgets
+    from PySide6.QtGui import QColor, QPixmap
+    from PySide6.QtWidgets import QTableWidget, QTableWidgetItem
+    drawn = []
+    real = widgets.paint_grade_badge
+
+    def spy(painter, rect, grade, font):
+        drawn.append(grade)
+        real(painter, rect, grade, font)
+    widgets.paint_grade_badge = spy
+    try:
+        t = QTableWidget(1, 1)
+        t.resize(200, 80)
+        t.setItemDelegateForColumn(0, widgets.GradeBadgeDelegate(t))
+        t.setItem(0, 0, QTableWidgetItem("7"))
+        t.show()
+        _app.processEvents()
+        t.grab()
+        assert 7 in drawn, drawn
+        drawn.clear()
+        lst = widgets.ScorerList()
+        lst.resize(400, 120)
+        lst.set_rows([widgets.ScorerRow(1, "선수", 3, 1, 12, None)])
+        lst.show()
+        _app.processEvents()
+        lst.grab()
+        assert 12 in drawn, drawn
+        drawn.clear()
+        chip = widgets._PlayerChip(widgets.PitchCard(25, "ST", "선수", None, grade=9), T.CHIP_FW)
+        chip.resize(110, 100)
+        chip.grab()
+        assert 9 in drawn, drawn
+    finally:
+        widgets.paint_grade_badge = real
+    # 받은 홀로그램 그림은 11강 이상 배지 모두에 — 축구장 카드에서 확인(10강 이하는 안 쓴다)
+    pm = QPixmap(8, 8)
+    pm.fill(QColor(0, 200, 0))
+    widgets._grade_holo["pm"] = pm
+    try:
+        for g, green in ((12, True), (10, False)):
+            chip = widgets._PlayerChip(widgets.PitchCard(25, "ST", "선수", None, grade=g), T.CHIP_FW)
+            chip.resize(110, 100)
+            img = chip.grab().toImage()
+            top_h = max(16, int(100 * 0.2))
+            px = [img.pixelColor(x, y) for y in range(5, 4 + top_h - 3) for x in range(80, 106)]
+            hit = any(c.green() > 180 and c.red() < 60 and c.blue() < 60 for c in px)
+            assert hit == green, (g, hit)
+    finally:
+        widgets._grade_holo["pm"] = None
+
+
+def test_start_grade_holo_sets_shared_picture():
+    # 켤 때 한 번 받는 11~13강 바탕 — 받은 그림이 공용 배지까지 와야 한다(강화 비용 [계산] 을 안 눌러도)
+    import widgets
+    from PySide6.QtGui import QColor, QPixmap
+    keep = images.fetch_icon
+    asked = []
+    with tempfile.TemporaryDirectory() as folder:
+        png = pathlib.Path(folder) / "holo.png"
+        pm = QPixmap(4, 4)
+        pm.fill(QColor(0, 200, 0))
+        assert pm.save(str(png))
+        images.fetch_icon = lambda url, *a, **k: (asked.append(url), png)[1]
+        widgets._grade_holo["pm"] = None
+        app_main.IconLoader.start = lambda ld: ld.run()   # 스모크는 QThread.start 를 막는다 — 그 자리에서
+        try:
+            _win.start_grade_holo()
+            _app.processEvents()
+            assert asked == [images.GRADE_HOLO_URL] and widgets.grade_holo() is not None, asked
+        finally:
+            del app_main.IconLoader.start
+            images.fetch_icon = keep
+            widgets._grade_holo["pm"] = None
 
 
 class _TcPick:
@@ -15493,7 +15564,8 @@ def test_rival_card_and_day_player_88():
     Q2 — 대시보드 카드는 마지막으로 경기한 날 · 그 날짜가 제목 · 누르면 [선수 지표 › 지표] · 계정이 바뀌면 다시 센다."""
     from test_records import _pd
     n = config.RIVAL_MIN_GAMES
-    base = datetime.now().replace(microsecond=0) - timedelta(days=3)
+    # 정오 기준 — 밤 11시 넘어 돌리면 10분 간격 경기가 자정을 넘어 "마지막으로 경기한 날" 이 하루 밀렸다(11-09 23:4x 실측)
+    base = (datetime.now() - timedelta(days=3)).replace(hour=12, minute=0, second=0, microsecond=0)
     ds = []
     for i in range(n):
         d = _pd(i, [(101, 7.0 + i * 0.1, 1, 0, 25), (102, 6.0, 0, 1, 5)], when=base + timedelta(minutes=10 * i))

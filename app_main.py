@@ -89,6 +89,7 @@ from widgets import (
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
     ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text, pill_radius, EmptyState,
+    set_grade_holo,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -3498,6 +3499,19 @@ class MainWindow(QMainWindow):
         """켤 때 한 번 — main 에서만 부른다(테스트가 실제 캐시 폴더를 건드리지 않게)."""
         self._prune_worker = CachePruneWorker(self._api)
         self._prune_worker.start()
+
+    def start_grade_holo(self) -> None:
+        """켤 때 한 번 — 11~13강 배지 바탕(넥슨 그림 한 장). 한 번 받으면 캐시라 다음부터 요청이 없다. 못 받으면 그러데이션."""
+        loader = IconLoader([("grade", 11, images.GRADE_HOLO_URL)], self._icon_dir)
+        loader.loaded.connect(lambda _k, _key, path: self._on_grade_holo(path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        self._icon_loaders.append(loader)
+        loader.start()
+
+    def _on_grade_holo(self, path) -> None:
+        if set_grade_holo(path):
+            for w in self.findChildren(QWidget):   # 이미 그려진 배지(표·줄 목록·축구장)도 바꾼다 — 켤 때 한 번뿐
+                w.update()
 
     def start_prefetch(self) -> None:
         """켤 때 한 번 — 마지막으로 검색한 계정의 저장된 경기를 뒤에서 읽어 둔다(화면은 검색 화면 그대로).
@@ -9573,7 +9587,8 @@ class MainWindow(QMainWindow):
         if req != self._enh_req:
             return
         est = payload.est
-        self.tbl_enhance.itemDelegateForColumn(0).set_holo(payload.holo)
+        set_grade_holo(payload.holo)
+        self.tbl_enhance.viewport().update()
         self._set_status(self.lb_enh_status, "보호 제외 클래스라 보호 없이 계산했습니다." if est.protect_excluded else "")
         self.lb_enh_result.setText(enhance_summary_html(est, payload.alt, payload.best))
         budgets = est.budgets
@@ -16012,6 +16027,7 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     win.start_update_check()
     shell.note_update_check()   # 트레이에서 곧 열어도 다시 묻지 않게(74 ①)
     win.start_cache_prune()
+    win.start_grade_holo()
     # 랭커 픽 데이터 — 토글과 무관하게 켤 때(14일 · 범위 밖), 수집이 꺼져 있으면 전부(옛 버전으로 내려갔던 동안 남은 것까지)
     win.sync_ranker_pick_data()
     win.schedule_backfill(config.SQUAD_BACKFILL_DELAY_S if show else config.SQUAD_BACKFILL_TRAY_DELAY_S)

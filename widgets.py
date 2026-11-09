@@ -1877,6 +1877,50 @@ def grade_icon_style(grade: int) -> tuple:
     return tuple(T.GRADE_ICONS[-1][1:])
 
 
+GRADE_HOLO_FROM = 11
+_grade_holo = {"pm": None}   # 넥슨 11~13강 바탕 그림(images.GRADE_HOLO_URL) — 받기 전·실패면 None 이고 theme 그러데이션으로 그린다
+
+
+def set_grade_holo(path) -> bool:
+    """받은 홀로그램 바탕 그림을 모든 강화 배지에 쓴다. 못 읽으면 그대로 두고 False."""
+    pm = QPixmap(str(path)) if path else QPixmap()
+    if pm.isNull():
+        return False
+    _grade_holo["pm"] = pm
+    return True
+
+
+def grade_holo() -> QPixmap | None:
+    return _grade_holo["pm"]
+
+
+def paint_grade_badge(painter, rect: QRectF, grade: int, font) -> None:
+    """강화 배지 하나 — 넥슨 공지 꼴(사각 · 위·왼쪽 밝은 테두리). 1~10강은 넥슨 웹 CSS 색, 11~13강은 넥슨 바탕 그림.
+    표 칸·줄 목록·축구장 카드가 전부 이것 하나로 그린다(3.6.1 까지는 화면마다 둥근 색 배지가 따로 있었다)."""
+    stops, fg, light, dark = grade_icon_style(grade)
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+    for i, col in enumerate(stops):
+        grad.setColorAt(i / (len(stops) - 1), QColor(col))
+    painter.setBrush(grad)
+    painter.setPen(QPen(QColor(dark), 1))
+    painter.drawRoundedRect(rect, 1, 1)   # 공지 배지는 거의 직각
+    holo = _grade_holo["pm"]
+    if grade >= GRADE_HOLO_FROM and holo is not None:
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.drawPixmap(rect.adjusted(1, 1, -1, -1), holo, QRectF(holo.rect()))
+    painter.setPen(QPen(QColor(light), 1))
+    painter.drawLine(QPointF(rect.left() + 1, rect.top()), QPointF(rect.right() - 1, rect.top()))
+    painter.drawLine(QPointF(rect.left(), rect.top() + 1), QPointF(rect.left(), rect.bottom() - 1))
+    bold = QFont(font)
+    bold.setBold(True)   # 공지 숫자는 굵다
+    painter.setFont(bold)
+    painter.setPen(QColor(fg))
+    painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(grade))
+    painter.restore()
+
+
 class GradeStepDelegate(RowBorderDelegate):
     """강화 비용 '강화 단계' 칸 — "1강 → 2강" 글자를 넥슨 공지 꼴 번호 배지 둘과 화살표로 그린다.
 
@@ -1885,17 +1929,9 @@ class GradeStepDelegate(RowBorderDelegate):
 
     PAD_X, GAP, ARROW_W = 5, 4, 8
 
-    HOLO_FROM = 11
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self.failed = 0  # 테스트가 읽는다 — 기록은 첫 번째만
-        self.holo = QPixmap()   # 넥슨 11~13강 바탕 그림 — 받기 전·실패면 비어 있고 theme 그러데이션으로 그린다
-
-    def set_holo(self, path) -> None:
-        pm = QPixmap(str(path)) if path else QPixmap()
-        if not pm.isNull():
-            self.holo = pm
 
     @staticmethod
     def grades_of(text) -> tuple[int, int] | None:
@@ -1932,36 +1968,18 @@ class GradeStepDelegate(RowBorderDelegate):
         y = option.rect.center().y() - bh / 2 + 0.5
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self._badge(painter, QRectF(x, y, bw, bh), grades[0], option.font)
+        paint_grade_badge(painter, QRectF(x, y, bw, bh), grades[0], option.font)
         ax, cy = x + bw + self.GAP, y + bh / 2
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(T.TEXT_DIM))
         painter.drawPolygon(QPolygonF([QPointF(ax, cy - 1.5), QPointF(ax + 4, cy - 1.5), QPointF(ax + 4, cy - 4),
                                        QPointF(ax + self.ARROW_W, cy), QPointF(ax + 4, cy + 4), QPointF(ax + 4, cy + 1.5), QPointF(ax, cy + 1.5)]))
-        self._badge(painter, QRectF(ax + self.ARROW_W + self.GAP, y, bw, bh), grades[1], option.font)
+        paint_grade_badge(painter, QRectF(ax + self.ARROW_W + self.GAP, y, bw, bh), grades[1], option.font)
         painter.restore()
-
-    def _badge(self, painter, rect: QRectF, grade: int, font) -> None:
-        stops, fg, light, dark = grade_icon_style(grade)
-        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
-        for i, col in enumerate(stops):
-            grad.setColorAt(i / (len(stops) - 1), QColor(col))
-        painter.setBrush(grad)
-        painter.setPen(QPen(QColor(dark), 1))
-        painter.drawRoundedRect(rect, 2, 2)
-        if grade >= self.HOLO_FROM and not self.holo.isNull():
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-            painter.drawPixmap(rect.adjusted(1, 1, -1, -1), self.holo, QRectF(self.holo.rect()))
-        painter.setPen(QPen(QColor(light), 1))
-        painter.drawLine(QPointF(rect.left() + 1, rect.top()), QPointF(rect.right() - 1, rect.top()))
-        painter.drawLine(QPointF(rect.left(), rect.top() + 1), QPointF(rect.left(), rect.bottom() - 1))
-        painter.setFont(font)
-        painter.setPen(QColor(fg))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, str(grade))
 
 
 class GradeBadgeDelegate(RowBorderDelegate):
-    """선수 지표 '강화' 칸 — 숫자를 넥슨 데이터센터 색 배지로(_grade_badge_colors).
+    """선수 지표 '강화' 칸 — 숫자를 넥슨 공지 꼴 배지로(paint_grade_badge).
 
     RowBorderDelegate 를 상속한다: 표 전체에 걸린 선택 행 테두리가 이 칸에서 끊기지 않게.
     배지 여백(PAD)은 sizeHint 로 알리지 않는다 — FitTableWidget._measure_pad 가 열마다 잰 여백 중
@@ -2008,22 +2026,11 @@ class GradeBadgeDelegate(RowBorderDelegate):
             painter.restore()
 
     def _badge(self, painter, option, text: str) -> None:
-        bg, fg = _grade_badge_colors(text)
         fm = QFontMetrics(option.font)
         w = fm.horizontalAdvance(text) + 2 * self.PAD
         h = min(fm.height() + 4, option.rect.height() - 4)
         r = option.rect
-        from PySide6.QtCore import QRectF
-        box = QRectF(r.x() + (r.width() - w) / 2, r.y() + (r.height() - h) / 2, w, h)
-        painter.save()
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(bg))
-        painter.drawRoundedRect(box, h / 2, h / 2)
-        painter.setPen(QColor(fg))
-        painter.setFont(option.font)
-        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, text)
-        painter.restore()
+        paint_grade_badge(painter, QRectF(r.x() + (r.width() - w) / 2, r.y() + (r.height() - h) / 2, w, h), int(text), option.font)
 
 
 def sample_text(n: int, mixed: bool) -> str:
@@ -3656,12 +3663,7 @@ class ScorerDelegate(QStyledItemDelegate):
             font = f[fonts[s.role]]
             p.setFont(font)
             if s.role == "grade":
-                bg, fg = _grade_badge_colors(s.text)
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(QColor(bg))
-                p.drawRoundedRect(s.rect, s.rect.height() / 2, s.rect.height() / 2)
-                p.setPen(QColor(fg))
-                p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
+                paint_grade_badge(p, s.rect, int(s.text), font)
                 continue
             p.setPen(QColor(colors[s.role]))
             text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(font).elidedText(
@@ -4253,22 +4255,6 @@ class CalendarGrid(QWidget):
                 self._hits.append((rect, cell.tip))
 
 
-def _grade_badge_colors(grade) -> tuple[str, str]:
-    """강화 단계 → (배지 배경색, 글자색).
-
-    넥슨 웹이 강화 칸에 쓰는 색 그대로(값·근거는 theme.GRADE_BADGES) — 숫자만으론 안 와닿는다는 지적 반영.
-    1강 회색 · 2~4강 브론즈 · 5~7강 실버 · 8~10강 골드 · 11~13강 홀로그램(프리즘).
-    """
-    try:
-        g = int(grade)
-    except (TypeError, ValueError):
-        return T.PANEL_2, T.TEXT_DIM
-    for lo, bg, fg in T.GRADE_BADGES:
-        if g >= lo:
-            return bg, fg
-    return T.PANEL_2, T.TEXT_DIM
-
-
 def short_bp(v: int | None) -> str:
     """칩 한 줄에 들어가는 짧은 금액 — 1.2조 · 3,400억 · 5,600만. 모르면 NA."""
     if not isinstance(v, int) or v <= 0:
@@ -4366,18 +4352,14 @@ class _PlayerChip(QWidget):
         p.drawRoundedRect(pos_r, 3, 3)
         p.setPen(QColor(self.accent))
         p.drawText(pos_r, Qt.AlignmentFlag.AlignCenter, self.card.pos_name)
+        gw = 0
         if self.card.grade is not None:
-            gbg, gfg = _grade_badge_colors(self.card.grade)
             d = top_h - 2
-            g_r = QRectF(w - 4 - d, 4, d, d)
-            p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(QColor(gbg))
-            p.drawEllipse(g_r)
-            p.setPen(QColor(gfg))
-            p.drawText(g_r, Qt.AlignmentFlag.AlignCenter, str(self.card.grade))
+            gw = max(d, fm.horizontalAdvance("13") + 8)   # 사각 배지 — 굵은 두 자리도 안 넘치게
+            paint_grade_badge(p, QRectF(w - 4 - gw, 4, gw, d), int(self.card.grade), small)
         if self.ovr is not None:
             p.setPen(QColor(T.TEXT))
-            p.drawText(QRectF(pos_r.right(), 4, w - pos_r.right() - top_h - 4, top_h - 2),
+            p.drawText(QRectF(pos_r.right(), 4, w - pos_r.right() - max(gw, top_h - 2) - 6, top_h - 2),
                        Qt.AlignmentFlag.AlignCenter, str(self.ovr))
 
         y = top_h + 4
