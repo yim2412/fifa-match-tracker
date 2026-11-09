@@ -6262,8 +6262,7 @@ class MainWindow(QMainWindow):
         if not self._ouid:
             return None
         details = self._details_all
-        dp = self._saved_calc("day_player",
-                              lambda: core.day_player(details, self._ouid, core.last_play_day(details)))
+        dp = self._saved_calc("day_player", lambda: core.latest_day_player(details, self._ouid))
         return (dp, self._names.get(dp.sp_id, str(dp.sp_id))) if dp is not None else None
 
     def _build_records_tab(self) -> QWidget:

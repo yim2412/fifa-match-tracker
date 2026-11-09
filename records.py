@@ -6,7 +6,7 @@
 | `achievements(details, ouid, seasons=…, current_start=…, current_known=…, elo_rows=…, now=…)` | 창 캐시 `_records_cache` 하나 → [내 기록] · 경기 카드 태그 · 대시보드 칩 |
 | `summary(achs)` · `by_match(achs)` · `recent(achs, now)` | 위 셋이 같은 목록에서 읽는다 |
 | `rival(matches)` | F4 라이벌 카드 — [상대 전적 › 전적] 맨 위(저장 전체 · 시즌 필터·포메이션 필터 무관) |
-| `last_day(details)` · `day_player(details, ouid, day)` | Q2 오늘의 선수 — 대시보드 카드(오늘 경기가 없으면 마지막으로 경기한 날 · U4) |
+| `latest_day_player(details, ouid)` (`day_player` · `last_day`) | Q2 오늘의 선수 — 대시보드 카드(선수가 나오는 가장 늦은 날 · U4 · 88 리뷰) |
 
 규칙(ROADMAP 88단계 · 1·2회차 검토):
 - **늘 저장 전체 기준** — 시즌 필터·빠른 범위와 무관(범위를 바꿀 때마다 "첫" 이 바뀌면 안 된다). 감독모드 경기만.
@@ -317,3 +317,19 @@ def day_player(details: list[dict], ouid: str, day: date | None) -> DayPlayer | 
         return None
     avg, games, goals, sp = max(picks)
     return DayPlayer(day, sp, games, avg, goals, acc[sp][3], n_games)
+
+
+def latest_day_player(details: list[dict], ouid: str) -> DayPlayer | None:
+    """Q2 카드 — 오늘의 선수가 나오는 가장 늦은 날(U4). 마지막 날에 한 판만 했으면(누구도 2경기를 못 채움)
+    그 앞날로 간다 — 마지막 날로만 고정하면 오늘 첫 판 뒤 카드가 비었다(88 리뷰)."""
+    by_day: dict[date, list[dict]] = {}
+    for d in details:
+        if _manager(d):
+            day = matchtime.day(d.get("matchDate"))
+            if day is not None:
+                by_day.setdefault(day, []).append(d)
+    for day in sorted(by_day, reverse=True):
+        got = day_player(by_day[day], ouid, day)
+        if got is not None:
+            return got
+    return None

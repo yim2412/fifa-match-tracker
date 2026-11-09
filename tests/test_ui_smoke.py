@@ -15417,8 +15417,14 @@ def test_records_page_tags_and_chips_88():
         chips = _win.dashboard.record_chips
         assert len(chips) == config.RECORD_RECENT_MAX and not _win.dashboard.records_row.isHidden(), chips
         _win._go_page("대시보드")
-        _win.dashboard._go_records()
-        assert _win._current_view() == ("내 기록", None), "칩을 눌러도 [내 기록]으로 안 갔다"
+        # 진짜 마우스로 칩(알약)을 누른다 — 부모 머리 카드도 누를 수 있어서, 클릭이 위로 새면 거기로 다시 간다(88 리뷰)
+        from PySide6.QtTest import QTest
+        row = _win.dashboard.records_row
+        QApplication.processEvents()
+        chip = [w for w in row.findChildren(widgets.Tag) if w.isVisibleTo(row)][-1]
+        QTest.mouseClick(chip, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, chip.rect().center())
+        QApplication.processEvents()
+        assert _win._current_view() == ("내 기록", None), f"칩을 눌렀는데 {_win._current_view()} 로 갔다"
     old = list(reversed([_d(i, "승", 5, 0, when=now - timedelta(days=config.RECORD_RECENT_DAYS + 2, hours=-i))
                          for i in range(3)]))
     with _RecordsState(old):
@@ -15447,6 +15453,18 @@ def test_rival_card_and_day_player_88():
         assert _win.card_rival.value.text() == "라이벌갑", _win.card_rival.value.text()
         assert f"{n}경기 {n}승 0무 0패" in _win.card_rival.sub.text(), _win.card_rival.sub.text()
         assert f"{n}연승" in _win.card_rival.sub.text()
+        # 88 리뷰 [중] — 카드가 하나 늘어난 위 줄이 1280 에서 창을 밀어내지 않는다(필터 안내 글까지 보인 가장 넓은 꼴)
+        try:
+            _win.lb_opponent_note.setText("필터: 4-2-3-1 · 최근 100경기 중 37경기")
+            _win.lb_opponent_note.show()
+            _at_size(*app_main.MIN_WINDOW)
+            # 페이지는 세로 스크롤만이라 넘쳐도 창은 1280 그대로 · 막대도 안 뜨고 조용히 잘린다 — 넘친 양(가로 최대값)을 잰다.
+            # 리뷰 실측: 지금 0(카드 오른쪽 끝 804px) · 카드 최소 폭을 900 으로 키우면 277
+            over = _win.pages.currentWidget().horizontalScrollBar().maximum()
+            assert over == 0, f"라이벌 카드가 있는 위 줄이 1280 에서 {over}px 넘친다"
+        finally:
+            _win.lb_opponent_note.hide()
+            _at_size(1600, 900)
         _win._render_dashboard()
         dash = _win.dashboard
         assert dash.lb_day_name.text() == "앞선수", dash.lb_day_name.text()
@@ -15468,6 +15486,14 @@ def test_rival_card_and_day_player_88():
         _win._render_dashboard()
         assert _win.dashboard.lb_day_name.text() == "—" and _win.dashboard.day_card.title.text() == "오늘의 선수", \
             "경기가 없는데 옛 선수가 남았다(캐시 키가 목록을 안 따라간다)"
+    # 88 리뷰 [중] — 다음 날 한 판만 했으면 카드를 비우지 않고 앞날 선수를 낸다
+    lone = _pd(99, [(102, 9.5, 0, 0, 25)], when=base + timedelta(days=1))
+    with _RecordsState([lone] + ds):
+        _win._names = {101: "앞선수", 102: "뒷선수"}
+        _win._render_dashboard()
+        dash = _win.dashboard
+        assert dash.lb_day_name.text() == "앞선수" and dash.day_card.title.text() == f"{base:%m-%d}의 선수", \
+            (dash.lb_day_name.text(), dash.day_card.title.text(), "마지막 날 한 판이라 카드가 비었다")
 
 
 def test_records_cache_follows_elo_replace():

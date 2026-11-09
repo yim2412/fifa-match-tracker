@@ -312,6 +312,27 @@ def test_day_player_skips_bench_other_day_other_mode():
     assert records.day_player(mixed, "nobody", T0.date()) is None
 
 
+def test_latest_day_player_steps_back_past_a_one_game_day():
+    """88 리뷰 [중] — 마지막 날에 한 판만 했으면(아무도 2경기를 못 채움) 그 앞날 선수를 낸다(U4 — 빈 카드를 피하려던 것)."""
+    nxt = T0 + timedelta(days=1)
+    two_days = [_pd(0, [(1, 7.0, 0, 0, 25)]), _pd(1, [(1, 8.0, 1, 0, 25)]),
+                _pd(2, [(5, 9.0, 0, 0, 25)], when=nxt)]
+    # 고치기 전 꼴(마지막 날 고정)이면 비었을 것 — 먼저 그걸 단언한다
+    assert records.day_player(two_days, "me", records.last_day(two_days)) is None
+    got = records.latest_day_player(two_days, "me")
+    assert got is not None and got.day == T0.date() and got.sp_id == 1 and got.games == 2, got
+    # 마지막 날이 채워지면 그날이 먼저
+    full = two_days + [_pd(3, [(5, 8.0, 0, 0, 25)], when=nxt + timedelta(hours=1))]
+    got = records.latest_day_player(full, "me")
+    assert got.day == nxt.date() and got.sp_id == 5, got
+    # 다른 모드 경기 날은 건너뛴다 · 아무 날도 못 채우면 None
+    late = [_pd(9, [(7, 9.9, 0, 0, 25)], mt=999, when=nxt + timedelta(days=2)),
+            _pd(8, [(7, 9.9, 0, 0, 25)], mt=999, when=nxt + timedelta(days=2))]
+    assert records.latest_day_player(full + late, "me").day == nxt.date()
+    assert records.latest_day_player([_pd(0, [(1, 7.0, 0, 0, 25)])], "me") is None
+    assert records.latest_day_player([], "me") is None
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

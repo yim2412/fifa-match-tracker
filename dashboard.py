@@ -13,7 +13,7 @@
     점수 해설(65)                       → 리포트와 같은 재료
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
     승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(빠른 범위에 안 갇힘)
-    오늘의 선수(88 Q2)                  → 저장 전체의 마지막으로 경기한 날 하루(시즌 필터·빠른 범위 무관 — 제목이 그 날짜)
+    오늘의 선수(88 Q2)                  → 저장 전체에서 선수가 나오는 가장 늦은 날 하루(시즌 필터·빠른 범위 무관 — 제목이 그 날짜)
 """
 from __future__ import annotations
 
@@ -77,12 +77,15 @@ class ScoreParts:
 
 
 class _ClickRow(QWidget):
-    """누르면 clicked — 대시보드 "최근 기록" 칩 줄(88 C1 → [내 기록])."""
+    """누르면 clicked — 대시보드 "최근 기록" 칩 줄(88 C1 → [내 기록]).
+    누른 클릭은 받아서 끝낸다 — 부모(머리 카드)도 누를 수 있는 카드라, 넘기면 그쪽 화면으로 한 번 더 간다(88 리뷰 실측)."""
     clicked = Signal()
 
     def mouseReleaseEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
             self.clicked.emit()
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
 
