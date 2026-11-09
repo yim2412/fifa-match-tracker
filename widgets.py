@@ -1543,6 +1543,7 @@ class RankerCard(QFrame):
         grid.setContentsMargins(24, 24, 24, 8)
         grid.setSpacing(16)
         self._vals: dict[str, QLabel] = {}
+        self._caps: dict[str, QLabel] = {}
         self._rows: dict[str, tuple[QWidget, QLabel]] = {}
         for i, name in enumerate(self.TILE_ORDER):
             r, col = divmod(i, 2)
@@ -1560,6 +1561,7 @@ class RankerCard(QFrame):
             cap.setFont(capf)
             cap.setStyleSheet(f"color: {T.TEXT_DIM}; border: none;")
             tv.addWidget(cap)
+            self._caps[name] = cap
 
             val = FitLabel(NA, base_pt=T.PT_TITLE, min_pt=T.PT_XL)
             val.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1660,6 +1662,11 @@ class RankerCard(QFrame):
         lb = self._vals[name]
         lb.setText(text)
         lb.setStyleSheet(f"color: {color}; border: none;")
+
+    def set_caption(self, name: str, extra: str = "") -> None:
+        """타일 제목 줄 — "전적 · 46.7%". 큰 값 줄에 덧붙이면 가장 작은 글씨로도 길어 카드 최소 폭이 대시보드를
+        넘겼다(2026-11-09 실데이터: "6802승 1061무 6687패 (46.7%)" 300px → 1280×720 에서 20px 잘림)."""
+        self._caps[name].setText(f"{name} · {extra}" if extra else name)
 
 
 def formation_key(formation: str) -> str:

@@ -8480,6 +8480,39 @@ def test_dashboard_head_formation_follows_account():
         _win._render_ranker()
 
 
+def test_dashboard_ranker_record_fits_1280():
+    """구단주 카드 전적 — 승률을 값 줄이 아니라 제목 줄에. 실데이터(1만 4천 경기)에서 "6802승 1061무 6687패 (46.7%)" 가
+    가장 작은 글씨로도 300px 라 카드 최소 폭이 대시보드를 1280×720 에서 20px 넘겼다(세로 스크롤만이라 조용히 잘림 · 2026-11-09 실화면)."""
+    # 페이지 전체로는 못 잰다 — 지어낸 경기에선 옆 [승률 흐름] 카드가 실데이터(최소 474)보다 좁아 예전 글도 안 넘친다.
+    # 그래서 카드 폭 예산으로: 1280×720 보이는 폭 1000 − 승률 흐름 474 − 간격 16 = 510, 여유 30.
+    budget = 480
+    from types import SimpleNamespace
+    keep_sum, keep_size, keep_champ, keep_rank = app_main.summarize, _win.size(), _win._is_champion, _win._rank
+    try:
+        _win.resize(1280, 720)
+        _win._go_page("대시보드")
+        _win._is_champion, _win._rank = True, None   # 챔피언스 — 타일 넷(2열). 넥슨 순위를 못 읽은 길이라 앱 집계로 센다
+        app_main.summarize = lambda _m: SimpleNamespace(win=6802, draw=1061, lose=6687, mixed=False)
+        card = _win.card_ranker
+
+        def card_w() -> int:
+            for _ in range(3):
+                card._vals["전적"].updateGeometry()
+                _app.processEvents()
+            return card.minimumSizeHint().width()
+        _win._render_ranker()
+        new_w = card_w()
+        assert "(" not in card._vals["전적"].text() and "%" in card._caps["전적"].text(), \
+            (card._vals["전적"].text(), card._caps["전적"].text())
+        card.set("전적", "6802승 1061무 6687패 (46.7%)")   # 고치기 전 모양 — 이게 예산 안이면 아래 단언이 빈다
+        assert card_w() > budget, f"예전 글({card_w()}px)도 예산 안 — 이 테스트가 재는 게 없다"
+        assert new_w <= budget, f"구단주 카드 최소 폭 {new_w}px — 1280×720 대시보드를 넘긴다(예산 {budget})"
+    finally:
+        app_main.summarize, _win._is_champion, _win._rank = keep_sum, keep_champ, keep_rank
+        _win.resize(keep_size)
+        _win._render_ranker()
+
+
 # ── 13 ELO ──
 
 def _elo_rows(points):

@@ -11566,7 +11566,8 @@ class MainWindow(QMainWindow):
 
         if self._is_champion and r and r.ranked:
             c.set("순위", f"{r.rank:,}위", T.ACCENT)
-            c.set("전적", f"{r.record_text} ({r.win_rate})")
+            c.set("전적", r.record_text)   # 승률은 제목 줄로(값 줄이 길면 카드가 1280 폭을 넘긴다)
+            c.set_caption("전적", r.win_rate)
             c.set("구단가치", r.team_value_text or NA)
             c.set("점수", f"{r.elo:g}" if r.elo is not None else NA)
             self._set_status(c.note)   # 78 ① — 출처 설명은 말풍선에만
@@ -11575,9 +11576,8 @@ class MainWindow(QMainWindow):
         else:
             # 챔피언스 미만이거나, 랭커인데 랭킹 조회에 실패한 경우 — 우리 집계로.
             full = summarize(self._matches)
-            c.set("전적",
-                  f"{wdl_text(full.win, full.draw, full.lose)} "
-                  f"({win_rate_text(full.win, full.draw, full.lose, full.mixed, short=True)})")
+            c.set("전적", wdl_text(full.win, full.draw, full.lose))
+            c.set_caption("전적", win_rate_text(full.win, full.draw, full.lose, full.mixed, short=True))
             # 챔피언스인데 여기로 왔다 = 넥슨 순위를 못 쓴다 — 출처가 바뀐 것을 한 줄로(78 ① 리뷰)
             self._set_status(c.note, "넥슨 순위에 없거나 읽지 못해 앱이 받은 경기로 셉니다" if self._is_champion else "")
             c.setToolTip("챔피언스 이상 등급에서만 넥슨 데이터센터 순위·구단가치·\n"
