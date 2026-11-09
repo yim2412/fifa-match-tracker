@@ -2480,6 +2480,7 @@ class MatchCard:
     when: object = None             # 정렬 키
     goal_diff: int = 0
     rating: float = 0.0
+    records: tuple = ()             # 88 C1 그 경기에서 생긴 업적 제목 — 일시 옆 작은 알약(안 들어가면 뒤를 뺀다)
 
     @property
     def kind(self) -> str:
@@ -2564,7 +2565,13 @@ class MatchCardDelegate(QStyledItemDelegate):
 
         y1 = r.top() + self.PAD_Y
         h1 = fm["small"].height()
-        put("date", left, y1, h1, card.date_text, "small", right)
+        x = put("date", left, y1, h1, card.date_text, "small", right) + 8
+        for title in card.records:          # 넘치면 그 뒤는 안 그린다(잘린 알약 대신 — 말풍선이 전부를 보인다)
+            w = fm["small"].horizontalAdvance(title) + 12
+            if x + w > right:
+                break
+            segs.append(CardSeg("record", QRectF(x, y1, w, h1), title, w))
+            x += w + 4
         y2 = y1 + h1 + self.GAP
         h2 = fm["big"].height()
         # 오른쪽 숫자 묶음 — 폭을 먼저 재서 왼쪽 상대 이름이 쓸 수 있는 끝을 정한다
@@ -2658,6 +2665,14 @@ class MatchCardDelegate(QStyledItemDelegate):
                 p.setFont(f["small"])
                 p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
                 continue
+            if s.role == "record":
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(T.blend(T.PANEL, T.GOOD, 0.12)))
+                p.drawRoundedRect(s.rect, s.rect.height() / 2, s.rect.height() / 2)
+                p.setPen(QColor(T.GOOD))
+                p.setFont(f["small"])
+                p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
+                continue
             if s.role in ("badge", "emblem"):
                 key = card.division_key if s.role == "badge" else card.emblem_key
                 pm = self.view.icon("division" if s.role == "badge" else "emblem", key)
@@ -2700,6 +2715,8 @@ class MatchCardDelegate(QStyledItemDelegate):
                 role = s.role.removesuffix("_label")
                 if role == "opp" and s.full > s.rect.width() + 0.5:
                     return card.opponent
+                if role == "record":
+                    return "이 경기 기록: " + ", ".join(card.records)
                 if role in self.tips:
                     return self.tips[role]
         return ""

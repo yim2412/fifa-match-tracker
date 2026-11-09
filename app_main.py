@@ -2979,6 +2979,7 @@ class MainWindow(QMainWindow):
         self._price_tried_on: str | None = None        # 오늘 이미 띄웠다 — 다 그린 뒤 다시 그려도 또 띄우지 않게
         self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
         self._history_cache: tuple | None = None       # (키, [HistoryRun]) — 57 K4 이력
+        self._records_cache: tuple | None = None       # (키, [Achievement]) — 88 업적 · [내 기록]·경기 카드 태그·대시보드 칩이 같이
         self._reward_cache: tuple | None = None        # (키, WinRewards) — 57 K11 이 계정 100판당
         # 랭커 기록(13단계) — N1 메뉴 로더와 N2 카드 탭 로더는 따로(카드 창이 메뉴 로더를 끊지 않게)
         self._ranker_loader: RankerStatsLoader | None = None
@@ -3861,7 +3862,8 @@ class MainWindow(QMainWindow):
                                               ("점수·예측", "_build_elo_tab"),
                                               ("일별 기록", "_build_calendar_tab"),
                                               ("순위 변동", "_build_rank_move_tab")))),
-                 ("기간별 성적", "_build_period_tab")]),   # 77 A — 옛 [기간별 추이]·[시즌별 성적]
+                 ("기간별 성적", "_build_period_tab"),   # 77 A — 옛 [기간별 추이]·[시즌별 성적]
+                 ("내 기록", "_build_records_tab")]),   # 88 U1 — 업적(늘 저장 전체라 범위 버튼이 붙는 [기간별 성적] 밖에)
         ("경기력", [("승부처 분석", Tabs("clutch", (("선제골·역전", "_build_clutch_tab"),
                                               ("리드·골 흐름", "_build_goal_flow_tab")))),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
@@ -6213,6 +6215,89 @@ class MainWindow(QMainWindow):
         if not mine:
             notes.append("닉네임 이력은 내 계정(API 키 주인)일 때만 보입니다")
         self._set_status(self.lb_history_note, " · ".join(notes))
+
+    # ── 88 내 기록(업적) — [흐름 › 내 기록] · 경기 카드 태그 · 대시보드 칩이 같은 캐시를 읽는다 ──
+    RECORD_COLUMNS = ["기록", "횟수", "처음", "마지막", "마지막 기록"]
+    RECORD_PEAK_TIP = "점수 기록(검색·따라가기 때 적은 점) 기준입니다. 대시보드 시즌 최고점은 랭킹 수집 값과 높은 쪽이라 다를 수 있습니다."
+
+    def _records_seasons(self) -> tuple[datetime | None, bool]:
+        """지금 시즌 시작과 아는가 — 대시보드 머리 줄과 같은 season_span(2회차 [중] — 머리 줄은 보이는데 업적만 숨지 않게)."""
+        data = self._elo.get(self._ouid) if self._ouid else None
+        return season_span(self._rank_seasons, data.snap_season_start if data else None, datetime.now())
+
+    def _records(self) -> list:
+        """저장 전체 업적(시각 순) — 키 = 계정 · 저장 목록 · 점수 묶음 id · 시즌표 id(2회차 [상] — 같은 길이 새 점수도 다시 센다).
+        1만 4천 경기 첫 계산 약 160~200ms(2026-11-09 이 PC) — 작업 스레드 없이 같은 입력이면 다시 안 한다."""
+        if not self._ouid:
+            return []
+        data = self._elo.get(self._ouid)
+        key = (self._ouid, self._details_key(), id(data), id(self._rank_seasons))
+        if self._records_cache is None or self._records_cache[0] != key:
+            start, known = self._records_seasons()
+            got = core.record_achievements(self._details_all, self._ouid, seasons=self._rank_seasons,
+                                           current_start=start, current_known=known,
+                                           elo_rows=data.rows if data else [])
+            self._records_cache = (key, got)
+        return self._records_cache[1]
+
+    def _records_known(self) -> bool:
+        """②③ 줄을 보일까 — 끝난 시즌표가 있거나 지금 시즌을 알 때."""
+        return bool(self._rank_seasons) or self._records_seasons()[1]
+
+    def _build_records_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_records_note = self._note_label()
+        v.addWidget(self.lb_records_note)
+        self.tbl_records = self._make_table(self.RECORD_COLUMNS)
+        self.tbl_records.itemDoubleClicked.connect(self._on_record_double_clicked)
+        v.addWidget(self.tbl_records, 1)
+        self.record_rows: list = []   # 표 줄 순서 그대로(정렬 없음) — 더블클릭·테스트가 읽는다
+        return w
+
+    def _record_note(self, a) -> str:
+        if a is None:
+            return ""
+        if a.key == "hattrick" and a.sp_id is not None:
+            return f"{self._names.get(a.sp_id, str(a.sp_id))} {a.note}"
+        return a.note
+
+    def _render_records(self) -> None:
+        achs = self._records()
+        self.record_rows = core.record_summary(achs, seasons_known=self._records_known())
+        last_of = {}
+        for a in achs:
+            last_of[a.key] = a
+        rows = []
+        for r in self.record_rows:
+            rows.append([(r.title, r.title), (f"{r.count:,}", r.count),
+                         (f"{r.first:%Y-%m-%d}" if r.first else "—", r.first.timestamp() if r.first else 0),
+                         (f"{r.last:%Y-%m-%d %H:%M}" if r.last else "—", r.last.timestamp() if r.last else 0),
+                         (self._record_note(last_of.get(r.key)), r.count)])
+        self._fill(self.tbl_records, rows, enable_sort=False)
+        for i, r in enumerate(self.record_rows):
+            item = self.tbl_records.item(i, 0)
+            if item is not None:
+                item.setToolTip(self.RECORD_PEAK_TIP if r.key == "peak" else
+                                ("누르면 마지막 경기를 엽니다" if r.last_match_id else ""))
+        ms = self._matches_all   # 최신순 — 맨 끝이 저장 시작
+        first = min((m.match_date for m in ms if m.match_date is not None), default=None)
+        self._set_status(self.lb_records_note, (f"저장한 {len(ms):,}경기 기준" + (f" ({first:%Y-%m-%d}부터)" if first else ""))
+                         if ms else "경기가 없어 기록을 낼 수 없습니다.")
+
+    def _on_record_double_clicked(self, item) -> None:
+        row = item.row() if item is not None else -1
+        if not 0 <= row < len(self.record_rows):
+            return
+        self._open_saved_match(self.record_rows[row].last_match_id)
+
+    def _open_saved_match(self, match_id: str | None) -> None:
+        """업적 경기 → 상세 창. 저장 전체(_details_all)에서 찾는다 — 시즌 필터에 갇히지 않게(1회차 [중])."""
+        if not match_id:
+            return
+        detail = next((d for d in self._details_all if d.get("matchId") == match_id), None)
+        if detail is not None:
+            self._show_match_detail(detail, tab="요약")
 
     # ── 스쿼드 타임라인 ──
     # [스쿼드·이적 › 영입 전후](82) — 기록이지 효과가 아니다. 선수 한 명을 바꾼 시점의 차이는 우연과 구분이 안 됐다(ROADMAP "## 82단계")
@@ -11041,7 +11126,7 @@ class MainWindow(QMainWindow):
             conn = store.open_db(config.DB_PATH)
             try:
                 self._rank_seasons = store.load_seasons(conn)
-                stale = store.seasons_stale(conn)
+                stale = store.seasons_stale(conn)   # 창을 만들 때 한 번 — 업적 캐시 키가 id(_rank_seasons) 라 따로 무효화 안 함(88)
             finally:
                 conn.close()
         except Exception:
@@ -11058,6 +11143,7 @@ class MainWindow(QMainWindow):
         self._invalidate("calendar")   # 달력 기준선(그날 시즌 승률)이 시즌표를 쓴다
         self._invalidate("luck")       # 운 범위도 같은 기준선(66 M2)
         self._invalidate("rewards")    # FC 카드의 시즌 시작(66 R2)
+        self._invalidate_records()     # 88 ②③ 은 시즌표로 센다 — 경기 카드 태그·대시보드 칩도
         self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
@@ -11065,6 +11151,11 @@ class MainWindow(QMainWindow):
             self._rebuild_season_combo()
             self._invalidate("period")      # 시즌 단위 점·표(칩 판정도)
             self._invalidate("dashboard")   # 승률 흐름이 시즌 단위일 수 있다
+
+    def _invalidate_records(self) -> None:
+        """업적을 보이는 화면 셋 — [내 기록] · 경기 목록 카드 태그 · 대시보드 칩(88 · 같은 캐시 `_records`)."""
+        for key in ("records", "matches", "dashboard"):
+            self._invalidate(key)
 
     def _season_groups(self) -> list[tuple[object, list[MatchSummary]]]:
         """누적 전체를 시즌별로 묶은 것 — 콤보와 시즌별 성적 표가 같이 쓴다."""
@@ -11280,7 +11371,7 @@ class MainWindow(QMainWindow):
     VIEW_OF_KEY = {
         "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", "전적")],
         "opprank": [("상대 전적", "상대 순위")],
-        "analysis": [("흐름 분석", None)], "period": [("기간별 성적", None)],
+        "analysis": [("흐름 분석", None)], "period": [("기간별 성적", None)], "records": [("내 기록", None)],
         "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
@@ -11330,6 +11421,7 @@ class MainWindow(QMainWindow):
             # 팀컬러·포지션별 최다 상대도 시즌 범위 — 100경기면 팀컬러마다 1~2경기라 승률이 안 된다
             "teamcolor": lambda: self._render_teamcolor_tabs(*self._teamcolor_scope()),
             "period": self._render_period_page,   # 일·주·월 = 시즌 범위 · 시즌 = 누적 전체(시즌 필터 무시)
+            "records": self._render_records,      # 88 — 늘 저장 전체(시즌 필터·빠른 범위 무관)
             "clutch": lambda: self._render_clutch(self._details, self._matches),
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
@@ -11734,7 +11826,7 @@ class MainWindow(QMainWindow):
             return (core.opp_rank_label(band), band + 0.5)   # 정확한 순위보다 뒤로(같은 상한이면)
         return ("-", 10 ** 9)
 
-    def _match_card(self, m: MatchSummary, scores, h2h: dict) -> MatchCard:
+    def _match_card(self, m: MatchSummary, scores, h2h: dict, tags: dict | None = None) -> MatchCard:
         color = self._team_colors.get(m.opponent) or ""
         value = self._team_values.get(m.opponent)
         s = h2h.get(m.opponent)
@@ -11752,14 +11844,16 @@ class MainWindow(QMainWindow):
             value_text=short_bp(value) if value else "",   # 짧게(110억) — 정확한 값은 [상대 팀컬러] 줄의 말풍선
             h2h_text=wdl_text(s.win, s.draw, s.lose) if s else "",
             opp_score=self._opp_score_cell(scores, m.match_id)[0] if scores is not None else None,
-            when=m.match_date, goal_diff=m.my_goals - m.opp_goals, rating=m.rating)
+            when=m.match_date, goal_diff=m.my_goals - m.opp_goals, rating=m.rating,
+            records=tuple((tags or {}).get(m.match_id, ())))
 
     def _render_matches(self, matches: list[MatchSummary]) -> None:
         """경기 목록(65 M2) — 카드를 만들고(최신순) 고른 정렬로 보인다. 상대 점수 칸은 점수가 왔을 때만(관문·내 계정)."""
         elo = self._elo.get(self._ouid) if self._ouid else None
         scores = elo if elo is not None and elo.opp_scores is not None else None
         h2h = {s.nickname: s for s in opponent_stats(self._matches)}   # 시즌 범위(상대 전적 탭과 같다)
-        self._match_cards = [self._match_card(m, scores, h2h) for m in matches]
+        tags = core.records_by_match(self._records())   # 88 C1 — 저장 전체 업적(빠른 범위와 무관)
+        self._match_cards = [self._match_card(m, scores, h2h, tags) for m in matches]
         self._refresh_match_color_options()
         self._apply_match_filter()        # 거르기 조건을 먼저 — 줄은 아래 한 번만 채운다
         self._show_match_cards()
@@ -13468,6 +13562,7 @@ class MainWindow(QMainWindow):
             self._invalidate("rewards_rank")   # 57 K11 지금 등수로 본 순위 보상
             self._invalidate("calendar")       # 66 G5 카드 — 시즌 시작·예상 순위 보상
             self._invalidate("rewards")        # 66 G5b 같은 카드
+            self._invalidate("records")        # 88 ② 시즌 최고 점수 갱신 · 지금 시즌 시작(경기 목록·대시보드는 위에서)
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
@@ -13822,6 +13917,7 @@ class MainWindow(QMainWindow):
             trend_scope=("누적 전체" if unit == "시즌" else self._scope_text()) + " · " + self.PERIOD_SCOPE_TEXT[unit],
             story=self._narrate_scope(),
             club_cells=self._club_cells(),
+            records=[(a.title, f"{a.when:%m-%d}") for a in core.recent_records(self._records(), datetime.now())],
             headline=self._headline(),
             report=self._dashboard_report()))
 
@@ -14469,6 +14565,7 @@ class MainWindow(QMainWindow):
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = None
+        self._records_cache = None
         self._elo.clear()
         self._pred.clear()
         self._max_division.clear()
@@ -14503,6 +14600,7 @@ class MainWindow(QMainWindow):
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
+        self._records_cache = None  # 업적은 match_id 만 들지만 키가 옛 목록 id 를 쥔다
         if self._prefetch is not None:
             self._prefetch.discard()  # discard 는 멈춤 표시만 — 끝난 Future 의 결과는 참조를 놓아야 풀린다
         self._prefetch = None

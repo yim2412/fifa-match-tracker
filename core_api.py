@@ -65,6 +65,8 @@ from squad_timeline import (
     HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, arrival_report, build_timeline, parse_trades,
 )
 from trade_book import Ledger, ledger, price_targets
+from records import (Achievement, RecordRow, achievements as record_achievements, by_match as records_by_match,
+                     kinds as record_kinds, recent as recent_records, summary as record_summary)
 from traitcollect import TraitSlot, TraitUsage, trait_usage
 from stats import (
     END_KINDS, MIN_BUCKET_SHOTS, PITCH_ROWS, PITCH_X, PITCH_Y, PITCH_Y_MAX, SquadValue, card_ovr, pitch_rows, squad_value, KeyPlayers, key_players, PASS_KINDS, PASS_MIN_TRIES, PERIODS, PLAYER_RATING_MIN_GAMES, PLAYER_TREND_MIN_SHOTS, RANKER_METRICS,
@@ -145,6 +147,8 @@ __all__ = [
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "Ledger", "ledger", "price_targets",
+    # records — 88 C1·U1 업적(저장 전체 · 요청 0)
+    "Achievement", "RecordRow", "record_achievements", "records_by_match", "record_kinds", "recent_records", "record_summary",
     # stats — 여러 경기 집계
     "END_KINDS", "MIN_BUCKET_SHOTS", "PITCH_ROWS", "PITCH_X", "PITCH_Y", "PITCH_Y_MAX", "SquadValue", "card_ovr", "pitch_rows", "squad_value", "KeyPlayers", "key_players", "PASS_KINDS", "PASS_MIN_TRIES", "PERIODS", "PLAYER_RATING_MIN_GAMES", "PLAYER_TREND_MIN_SHOTS",
     "RANKER_METRICS", "SHOT_GOAL", "SHOT_OFF_TARGET",

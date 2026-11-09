@@ -1296,7 +1296,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 44, len(tables)   # 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 45, len(tables)   # 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -7346,11 +7346,14 @@ def test_release_drops_every_reference():
         before = sum(1 for r in gc.get_referrers(probe) if id(r) not in mine)
         assert before >= 2, f"측정 도구 확인 — 내려놓기 전엔 창(원본)·끝난 로더가 쥐고 있어야 한다: {before}"
         _win._max_division[_OUID] = {"division": 800, "date": "2026-07-05"}
+        _win._records()
+        assert _win._records_cache is not None, "측정 도구 확인 — 업적 캐시가 차 있어야 비웠는지 잴 수 있다"
         _win.release_memory()
         gc.collect()
         left = [type(r).__name__ for r in gc.get_referrers(probe) if id(r) not in mine]
         try:
             assert left == [], f"내려놓은 뒤에도 경기 기록을 쥐고 있다: {left}"
+            assert _win._records_cache is None, "내려놓기가 업적 캐시(옛 목록 키)를 남겼다(88 2회차 [중])"
             assert _win.shot_sum is None, "슛 맵 요약이 경기 원문(최다 득점·실점)을 쥐고 있다"
             # 다시 열기는 저장본 경로라 maxdivision 을 다시 안 부른다 — 비우면 줄이 다음 검색까지 사라진다
             assert _win._max_division.get(_OUID), "내려놓기가 역대 최고 등급을 비웠다"
@@ -15269,6 +15272,117 @@ def test_79_player_extremes_rule_and_wiring():
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
+
+
+class _RecordsState:
+    """88 업적 테스트 — 창의 계정·경기·시즌표·점수를 지어낸 것으로 바꿨다가 되돌린다."""
+    NAMES = ("_ouid", "_details_all", "_matches_all", "_details", "_matches", "_rank_seasons", "_records_cache")
+
+    def __init__(self, details: list, seasons=None):
+        self.details, self.seasons = details, seasons
+
+    def __enter__(self):
+        self.keep = {n: getattr(_win, n) for n in self.NAMES}
+        self.keep_elo = _win._elo.get("me")
+        self.keep_show = _win._show_match_detail
+        ms = [core.parse_match(d, "me") for d in self.details]
+        _win._ouid, _win._details_all, _win._matches_all = "me", self.details, ms
+        _win._details, _win._matches = [], []      # 시즌 필터가 비워도 업적은 저장 전체에서
+        _win._rank_seasons = list(self.seasons or [])
+        _win._records_cache = None
+        _win._elo.pop("me", None)
+        return self
+
+    def __exit__(self, *exc):
+        for n, v in self.keep.items():
+            setattr(_win, n, v)
+        if self.keep_elo is None:
+            _win._elo.pop("me", None)
+        else:
+            _win._elo["me"] = self.keep_elo
+        _win._show_match_detail = self.keep_show
+        for key in ("records", "matches", "dashboard"):
+            _win._dirty.add(key)
+        return False
+
+
+def test_records_page_tags_and_chips_88():
+    """88 C1·U1 — [내 기록] 표 · 줄 더블클릭은 저장 전체에서 경기를 찾는다 · 경기 카드 태그 · 대시보드 칩(7일 안 · 누르면 [내 기록])."""
+    from test_records import _d
+    now = datetime.now().replace(microsecond=0)
+    ds = list(reversed([_d(i, "승", 5, 0, when=now - timedelta(hours=10 - i)) for i in range(6)]))   # 최신순
+    with _RecordsState(ds):
+        _win._go_page("내 기록")
+        assert _win._current_view() == ("내 기록", None), _win._current_view()
+        _win._invalidate("records")
+        rows = {r.key: (i, r) for i, r in enumerate(_win.record_rows)}
+        assert _win.tbl_records.rowCount() == len(_win.record_rows) and "peak" not in rows, \
+            "시즌을 모르는데 ②③ 줄이 있다"
+        i, big = rows["bigwin"]
+        assert big.count == 6 and _win.tbl_records.item(i, 1).text() == "6", big
+        assert "6경기" in _win.lb_records_note.text(), _win.lb_records_note.text()
+        opened = []
+        _win._show_match_detail = lambda d, tab="요약", side="opp": opened.append((d.get("matchId"), tab))
+        _win._on_record_double_clicked(_win.tbl_records.item(i, 0))
+        assert opened == [("m5", "요약")], f"마지막 경기를 저장 전체에서 못 열었다: {opened}"
+        j, never = rows["streak10"]
+        _win._on_record_double_clicked(_win.tbl_records.item(j, 0))
+        assert len(opened) == 1, "얻지 못한 기록 줄이 경기를 열었다"
+        # 경기 카드 태그 — 빠른 범위 목록이어도 저장 전체 업적에서
+        _win._render_matches(_win._matches_all)
+        card = next(c for c in _win._match_cards if c.match_id == "m2")
+        assert card.records[:2] == ("3연승", "5골 이상 넣고 승리"), card.records
+        assert next(c for c in _win._match_cards if c.match_id == "m0").records == ("5골 이상 넣고 승리", "내 선수 해트트릭")
+        dg = _win.match_list.itemDelegate()
+        font = _win.match_list.font()
+        for width in (1280 - 220, 420):     # 1280 창의 목록 폭 언저리 · 아주 좁은 폭 — 알약은 빼지 자르지 않는다
+            assert "record" not in dg.overflow(card, width, font), width
+        narrow = [s for s in dg.layout(card, QRectF(0, 0, 420, dg.row_height(font)), font) if s.role == "record"]
+        wide = [s for s in dg.layout(card, QRectF(0, 0, 1060, dg.row_height(font)), font) if s.role == "record"]
+        assert len(narrow) < len(wide) == len(card.records), (len(narrow), len(wide))
+        assert "3연승" in dg.tip_at(card, QRectF(0, 0, 1060, dg.row_height(font)), font, wide[0].rect.center().toPoint())
+        # 대시보드 칩
+        _win._render_dashboard()
+        chips = _win.dashboard.record_chips
+        assert len(chips) == config.RECORD_RECENT_MAX and not _win.dashboard.records_row.isHidden(), chips
+        _win._go_page("대시보드")
+        _win.dashboard._go_records()
+        assert _win._current_view() == ("내 기록", None), "칩을 눌러도 [내 기록]으로 안 갔다"
+    old = list(reversed([_d(i, "승", 5, 0, when=now - timedelta(days=config.RECORD_RECENT_DAYS + 2, hours=-i))
+                         for i in range(3)]))
+    with _RecordsState(old):
+        _win._render_dashboard()
+        assert _win.dashboard.record_chips == [] and _win.dashboard.records_row.isHidden(), "지난 기록을 칩에 올렸다"
+
+
+def test_records_cache_follows_elo_replace():
+    """88 2회차 [상] — 같은 계정 점수를 같은 길이 새 묶음으로 다시 받아도 ② 를 다시 센다(키에 점수 묶음 id)."""
+    from datetime import date as _date
+    from seasons import Season
+    season = Season(1, "시즌 1", _date(2026, 10, 1), _date(2026, 10, 20))
+
+    def series(req, vals):
+        return app_main.EloSeries(req=req, rows=[{"taken_at": f"2026-10-0{k + 2}T12:00:00", "elo": v}
+                                                 for k, v in enumerate(vals)], cuts={})
+    with _RecordsState([], seasons=[season]):
+        _win._elo["me"] = series(1, [1000.0, 1100.0])
+        assert [a.key for a in _win._records()] == ["peak"]
+        _win._elo["me"] = series(2, [1000.0, 900.0])           # 길이 같음 · 갱신 없음
+        assert [a.key for a in _win._records()] == [], "점수를 다시 받았는데 옛 업적을 그대로 보였다"
+        # 점수가 도착하면(elo_ready) 보고 있던 [내 기록] 이 다시 그려진다
+        _win._go_page("내 기록")
+        _win._invalidate("records")
+        peak_row = lambda: next(r for r in _win.record_rows if r.key == "peak")   # noqa: E731
+        assert peak_row().count == 0
+        _win._elo_req["me"] = 7
+        _win._on_elo_ready("me", series(7, [1000.0, 1100.0, 1200.0]))
+        assert peak_row().count == 2, "점수가 왔는데 [내 기록] 을 다시 안 그렸다"
+        _win._rank_seasons = []                                  # 시즌표만 바뀌어도(없어지면) ②③ 을 안 센다 — 점수는 그대로
+        assert _win._records() == [] and "peak" not in {r.key for r in core.record_summary([], seasons_known=_win._records_known())}
+        _win._invalidate("records")
+        assert "peak" not in {r.key for r in _win.record_rows}, "시즌을 모르는데 ② 줄을 보였다"
+        _win._on_seasons_loaded([season])                        # 시즌표가 도착하면 보고 있던 [내 기록] 이 다시 그려진다
+        assert peak_row().count == 2, "시즌표가 왔는데 [내 기록] 을 다시 안 그렸다"
 
 
 def _flush_deleted():

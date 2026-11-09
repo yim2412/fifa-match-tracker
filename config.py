@@ -911,6 +911,15 @@ ICON_HEIGHT = {"trait": TRAIT_ICON_PX, "train": TRAIT_ICON_PX, "formation": FORM
 STACKED_KINDS = ("trait", "train")
 EMBLEM_HEAD_PX = 32      # 대시보드 머리(구단주 카드) 엠블럼 높이 — 옆 등급 배지(32)와 같다
 SHOT_REPLAY_MS = 600     # 경기 상세 [슛] 재생 — 슛 하나를 보여 주는 간격(88 P3)
+# 88 C1·U1 업적(records.py) — 종류는 이 표에서 만든다(더하려면 여기 한 줄 · ROADMAP 88단계 U2)
+RECORD_STREAKS = (3, 5, 10)          # ① 그 경기로 N연승(longest_streaks 와 같은 기준 — 몰수도 승패 · 무승부는 끊음)
+RECORD_COMEBACK_DEFICIT = 2          # ④ 이만큼 뒤지다 이긴 경기(슛 기록 골 수 = 최종 점수일 때만)
+RECORD_BIG_WIN_GOALS = 5             # ⑤ 한 경기 이만큼 넣고 승리
+RECORD_CLEAN_RUN = 3                 # ⑥ 무실점 연속(몰수 경기는 건너뛴다)
+RECORD_HATTRICK = 3                  # ⑦ 내 선수 한 명이 한 경기 이만큼 골
+RECORD_MILESTONES = (100, 500, 1000)  # ⑧ 누적 경기·승(몰수 뺌)
+RECORD_RECENT_DAYS = 7               # 대시보드 "최근 기록" 칩 — 이 날 수 안
+RECORD_RECENT_MAX = 3                # 칩 최대 개수
 FORMATION_HEAD_PX = 36   # 같은 머리의 주 포메이션 축구장(formation_pixmap 에 넘기는 높이)
 FORMATION_LINES_FROM_PX = 30   # 이 높이부터 작은 축구장에 선(하프라인·박스)을 긋는다 — 표 칸(20px)에선 선이 점을 흐린다
 ICON_CACHE_SUBDIR = "icons"

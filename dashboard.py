@@ -60,6 +60,7 @@ class DashboardInput:
     story: list | None = None
     # 55 머리 줄 — (제목, 큰 글자, 작은 글자, 툴팁) 여섯 칸. None 이면 계정 없음
     club_cells: list | None = None
+    records: list | None = None                # 88 C1 최근 기록 칩 — [(제목, "MM-DD")] 늦은 것부터(창이 _records 캐시에서)
     headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
     report: ScoreParts | None = None           # 65 M1 리포트·해설 — 점수 기록이 모자라면 None
 
@@ -70,6 +71,16 @@ class ScoreParts:
     rep: object                         # habits.ScoreReport
     band: tuple[float, int] | None      # 같은 구간(최고점 ±R2_BAND) 중앙 낙폭·사람 수 — rank.db 없으면 None
     decisive: tuple[float, int] | None  # 무승부 뺀 승률(%)·승+패 수
+
+
+class _ClickRow(QWidget):
+    """누르면 clicked — 대시보드 "최근 기록" 칩 줄(88 C1 → [내 기록])."""
+    clicked = Signal()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
 
 class DashCard(QFrame):
@@ -196,6 +207,17 @@ class DashboardPage(QWidget):
         self.lb_record = _label("", dim=True, wrap=True)   # 시즌 기록 — 최고점 · 챔스·슈챔 달성
         self.head.body.addWidget(self.lb_days)
         self.head.body.addWidget(self.lb_record)
+        # 88 C1 최근 기록 칩 — 없으면 줄째 숨긴다. 누르면 [내 기록]
+        self.records_row = _ClickRow()
+        self.records_row.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.records_row.setToolTip("눌러서 '내 기록' 보기")
+        self.records_box = QHBoxLayout(self.records_row)
+        self.records_box.setContentsMargins(0, 0, 0, 0)
+        self.records_box.setSpacing(4)
+        self.records_row.clicked.connect(self._go_records)
+        self.records_row.hide()
+        self.head.body.addWidget(self.records_row)
+        self.record_chips: list[str] = []   # 테스트가 읽는다
         # 57 K6 — 머리 칸 아래 한 줄. 없을 때도 자리를 지켜 카드 높이가 검색마다 출렁이지 않게
         self.lb_headline = _label("", wrap=True)
         self.lb_headline.setMinimumHeight(self.lb_headline.fontMetrics().height())
@@ -433,6 +455,23 @@ class DashboardPage(QWidget):
         self.lb_record.setText(f"시즌 기록 · 최고 {best[0]} {best[1]} · {reach[0]} · {reach[1]}"
                                if d.club_cells else "")
         self.lb_record.setToolTip(f"{best[2]}\n{reach[2]}".strip())
+        self._render_record_chips(d)
+
+    def _go_records(self) -> None:
+        self.navigate.emit(("내 기록", None))
+
+    def _render_record_chips(self, d: DashboardInput) -> None:
+        while self.records_box.count():
+            item = self.records_box.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self.record_chips = [f"{day} {title}" for title, day in (d.records or [])]
+        if self.record_chips:
+            self.records_box.addWidget(_label("최근 기록", dim=True))
+            for text in self.record_chips:
+                self.records_box.addWidget(Tag(text, "good"))
+            self.records_box.addStretch(1)
+        self.records_row.setVisible(bool(self.record_chips))
 
     def _render_kpis(self, d: DashboardInput) -> None:
         # 승률은 시즌 전체가 큰 숫자 — 빠른 범위(최근 100경기 등)는 버튼에 따라 바뀌는
