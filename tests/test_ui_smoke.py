@@ -13837,6 +13837,22 @@ def test_elo_and_team_value_charts_66():
         _win._go_page("대시보드")
 
 
+def test_wdl_fills_visible_95():
+    # 95 ④ — 승무패 칸이 카드 위에서 보이는지(그래픽 3.0). 게임 패 #575753 그대로면 어두운 줄 막대 1.99 로 묻혔다(실화면).
+    # 줄 목록 꼴(compact)은 어두운 테마만 잰다 — 밝은 테마는 앱에서 고를 수 없다(theme.MODE 고정)
+    import widgets
+    bad = []
+    for mode, p in T._PALETTES.items():
+        for k in ("GOOD_FILL", "DRAW_FILL", "LOSE_FILL"):
+            if T.contrast(p[k], p["PANEL"]) < 3.0:
+                bad.append((mode, k))
+    p = T._PALETTES["dark"]
+    for k in ("GOOD_FILL", "DRAW_FILL", "LOSE_FILL"):
+        if T.contrast(T.blend(p["PANEL"], p[k], widgets.WdlBar.COMPACT_MIX), p["PANEL"]) < 3.0:
+            bad.append(("dark compact", k))
+    assert not bad, bad
+
+
 def test_game_colors_95_ink_and_level():
     # 95 — 게임 초록·무 연회색 칸 위 글자는 진하게, 패 진회색 칸 위는 흰색(흰 글자 고정이면 초록 위 1.3)
     assert T.ink_on("#07f468") == T.CHART_ON_MARK_DARK and T.ink_on(T._PALETTES["dark"]["DRAW_FILL"]) == T.CHART_ON_MARK_DARK
