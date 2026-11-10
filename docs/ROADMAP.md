@@ -202,7 +202,7 @@
 
 | 조각 | 무엇 | 파일 | 난이도 |
 |---|---|---|---|
-| ① | 팔레트 값 · `LOSE`/`LOSE_FILL` 분리(LOSE 쓰는 4곳 + BAD 중 "패" 뜻인 곳을 하나씩) · `LEVEL` · 대비·색약 테스트 갱신 | `theme.py` · `widgets.py`(WdlBar·결과 칩) · `app_main.py` · `charts.py` · `tests/test_ui_smoke.py` | 중간 — BAD 56곳 중 "패" 뜻을 가려내야 한다 |
+| ① ✅ `bfa389f` | 팔레트 값 · `LOSE`/`LOSE_FILL` 분리 · `LEVEL` · 대비·색약 테스트 갱신. **설계와 달라진 것**: 밝은 테마 채움은 게임 초록·파랑이 흰 카드 위 그래픽 3.0 미달이라 `#0f9d4a`·`#0b7ce0` · 오류 글 `ERROR`(옛 빨강) 새로 · 200위 컷 선 `CHART_CUT`(옛 빨강 — 파랑이면 보라 점수선과 색약 2.9) · 승률 칸(`charts.heat_cell_color`)은 `HEAT_*` 로 · 달력 진하기 상한 0.32 → 0.24 · `LEVEL` 어두운 `#159aff`(게임 값은 머리 칸 4.41) | `theme.py` · `widgets.py` · `app_main.py` · `charts.py` · `config.py` · `tests/test_ui_smoke.py` | 중간 |
 | ② | 축구장 잔디 줄무늬 — 선수 축구장·슛 맵·작은 포메이션 판 | `widgets.py` · `theme.py` | 낮음~중간 |
 | ③ | G8 되돌림(위 결정 ①~③ · ③ 은 기준 화면 칸 색 다시 재기) | `theme.g8_cell` · `tests/test_ui_smoke.py` | 낮음 |
 | ④ | exe · 2번 모니터 실화면(두 테마) · CHANGELOG · 3.7.1 | — | 낮음 |
