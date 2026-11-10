@@ -21,15 +21,15 @@ import html
 import math
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import NamedTuple
 
 from PySide6.QtCore import QAbstractAnimation, QAbstractListModel, QCollator, QEasingCurve, QEvent, QLocale, QVariantAnimation, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
     QApplication, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
-    QSpinBox, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QToolButton, QToolTip, QVBoxLayout, QWidget,
+    QSpinBox, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QTextEdit, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
 import charts
@@ -4709,3 +4709,124 @@ def share_pcts(counts) -> list[int]:
 
 def rate_of(w: int, d: int, l: int, mixed: bool) -> float:
     return core.win_pct(w, d, l, mixed)
+
+
+# ── 기준 시각(96 W1) — 화면의 "언제 값인가" 는 이 둘로만 쓴다 ─────────────────────────────────────────
+# 출처마다 머리말이 다르다: 넥슨 페이지가 적은 시각(meta_ref·ref_time·res.at)과 이 PC 가 받은 시각(fetched_at·taken_at·
+# priced_at)을 한 꼴로 쓰면 받은 시각이 넥슨 시각으로 둔갑한다. "오늘 14:00" 꼴은 안 쓴다(자정을 넘기면 글이 낡는다).
+# 넥슨 오픈API 경기 시각(UTC)은 여기가 아니라 matchtime 이다. 앱 쪽에서 [5:16]·[11:16]·_at( 을 쓰면 test_rules 가 FAIL.
+BASIS_NEXON = "nexon"
+BASIS_FETCHED = "fetched"
+BASIS_HEADS = {BASIS_NEXON: "넥슨 데이터 기준", BASIS_FETCHED: "받은 시각"}
+
+
+def stamp(at) -> str:
+    """시각 → "11-10 14:00"(날짜뿐이면 "11-10"). ISO 글자(초·T 있어도)·datetime·date · 모르면 ""."""
+    if not at:
+        return ""
+    if isinstance(at, datetime):
+        return at.strftime("%m-%d %H:%M")
+    if isinstance(at, date):
+        return at.strftime("%m-%d")
+    s = str(at)
+    if len(s) >= 16:
+        return s[5:16].replace("T", " ")
+    if len(s) == 10:
+        return s[5:10]
+    return s
+
+
+def basis_text(source: str, at) -> str:
+    """기준 시각 한 토막 — 안내 줄 맨 오른쪽에 둔다. 시각을 모르면 ""(머리말만 남기지 않는다)."""
+    t = stamp(at)
+    return f"{BASIS_HEADS[source]} {t}" if t else ""
+
+
+class FindBar(QWidget):
+    """글 안 찾기(96 T1) — 검색칸 · [이전]·[다음] · "3/7". 찾은 곳은 모두 칠하고(ExtraSelection) 지금 곳은 선택으로 보인다.
+    검색어가 비면 아무 일도 안 한다. 글을 setHtml 로 다시 그리면 옛 커서가 죽으니 그린 쪽이 `refind()` 를 부른다."""
+
+    def __init__(self, browser: QTextEdit, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.browser = browser
+        self._hits: list[QTextCursor] = []
+        self._i = -1
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        self.edit = QLineEdit()
+        self.edit.setPlaceholderText("이 페이지에서 찾기")
+        self.edit.setClearButtonEnabled(True)
+        self.btn_prev = QPushButton("이전")
+        self.btn_next = QPushButton("다음")
+        self.count = QLabel("")
+        h.addWidget(self.edit, 1)
+        h.addWidget(self.btn_prev)
+        h.addWidget(self.btn_next)
+        h.addWidget(self.count)
+        self.edit.textChanged.connect(self._on_text)
+        self.edit.returnPressed.connect(self.next)
+        self.btn_prev.clicked.connect(self.prev)
+        self.btn_next.clicked.connect(self.next)
+
+    def _on_text(self, _text: str) -> None:
+        self.refind(reset=True)
+
+    def hits(self) -> int:
+        return len(self._hits)
+
+    def current(self) -> int:
+        """지금 곳(1부터) · 없으면 0."""
+        return self._i + 1 if self._hits else 0
+
+    def refind(self, reset: bool = False) -> None:
+        """지금 검색어로 처음부터 다시 찾는다. reset 이 아니면 몇 번째였는지를 지킨다(글을 다시 그린 뒤)."""
+        text = self.edit.text()
+        doc = self.browser.document()
+        self._hits = []
+        if text:
+            cur = doc.find(text, 0)
+            while not cur.isNull():
+                self._hits.append(QTextCursor(cur))
+                cur = doc.find(text, cur)
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor(T.ACCENT_SOFT))
+        sels = []
+        for c in self._hits:
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = c
+            sel.format = fmt
+            sels.append(sel)
+        self.browser.setExtraSelections(sels)
+        if not self._hits:
+            self._i = -1
+        elif reset or self._i < 0:
+            self._i = 0
+        else:
+            self._i = min(self._i, len(self._hits) - 1)
+        self._show()
+
+    def _show(self) -> None:
+        if not self.edit.text():
+            self.count.setText("")
+            cur = self.browser.textCursor()
+            cur.clearSelection()
+            self.browser.setTextCursor(cur)
+            return
+        if not self._hits:
+            self.count.setText("0/0")
+            return
+        self.count.setText(f"{self._i + 1}/{len(self._hits)}")
+        self.browser.setTextCursor(self._hits[self._i])
+        self.browser.ensureCursorVisible()
+
+    def _step(self, d: int) -> None:
+        if not self._hits:
+            return
+        self._i = (self._i + d) % len(self._hits)
+        self._show()
+
+    def next(self) -> None:
+        self._step(1)
+
+    def prev(self) -> None:
+        self._step(-1)

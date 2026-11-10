@@ -52,6 +52,7 @@ import config
 import core_api as core
 import crashlog
 import images
+import glossary
 import matchtime
 import methods
 import notice
@@ -89,7 +90,7 @@ from widgets import (
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
     ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text, pill_radius, EmptyState,
-    set_grade_holo, GradeBadge,
+    set_grade_holo, GradeBadge, BASIS_FETCHED, BASIS_NEXON, FindBar, basis_text, stamp,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -915,7 +916,7 @@ class EnhanceLoader(Worker):
             if self._cancel:
                 return
             prices = playerinfo.prices_as_int(info)
-            priced_at = datetime.now().strftime("%m-%d %H:%M")
+            priced_at = datetime.now().isoformat(timespec="minutes")
             est = core.enhance_estimate(info.ovr, season, self._start, self._target, prices, mats, self._protect_from, self._pct)
             other = None if self._protect_from is not None else core.ENHANCE_PROTECT_FROM
             try:
@@ -1841,7 +1842,7 @@ def enhance_head_html(name: str, est, priced_at: str = "") -> str:
         big = f"평균 <b>{enhance_won(est.mean_cost)}</b> · {q}% 금액은 낼 수 없습니다"
     else:
         big = f"약 <b>{enhance_won(budget)}</b>이면 {q}% 확률로 붙습니다"
-    when = f" · 시세 {priced_at} 기준" if priced_at else ""
+    when = f" · 시세 {basis_text(BASIS_FETCHED, priced_at)}" if priced_at else ""
     return (f"<b>{html.escape(name)}</b> {est.start}강 → {est.target}강 · {enhance_guard_text(est)}{when}"
             f"<br><span style='font-size: {T.PX_XL}px;'>{big}</span>")
 
@@ -2885,7 +2886,7 @@ class MainWindow(QMainWindow):
     # 65 M2 부터 경기 목록은 카드라 머리글이 없다 — 같은 글을 카드 조각 툴팁(MATCH_CARD_TIPS)과 상세 창 구단가치에 쓴다
     MATCH_COLUMN_HELP = {
         "팀컬러": "상대의 지금 팀컬러입니다(팀컬러를 조회한 상대만). 그 경기 때 팀컬러가 아닐 수 있습니다.",
-        "구단가치": "상대의 지금 구단가치입니다(넥슨 데이터센터에서 팀컬러와 같이 조회). 그 경기 때 값이 아닐 수 있습니다.",
+        "구단가치": glossary.tip("club_value", "여기 값은 상대의 지금 구단가치입니다(팀컬러와 같이 조회). 그 경기 때 값이 아닐 수 있습니다."),
         "맞대결": "고른 시즌 안에서 이 상대와 붙은 전적(이 PC 에 저장된 경기).",
         "상대 점수": (f"그날 수집 원본에서 읽은 상대 점수·순위(경기 시각 ±{config.OPP_SNAP_WINDOW_H}시간의 스냅숏 · 원본은 "
                     f"{config.RANK_RAW_KEEP_DAYS}일 보관). 저장하지 않고 보여 주기만 합니다. 그보다 옛 경기는 순위 구간. "
@@ -2932,6 +2933,7 @@ class MainWindow(QMainWindow):
         "선방력": "defending 스탯의 경기당 평균 × 100.\n"
                  "GK는 실제 선방, 필드 플레이어는 수비 기여도로 볼 수 있음.",
         "평점": "이 선수가 출전한 경기들의 평균 평점.",
+        "실효 OVR": glossary.tip("effective_ovr"),
     }
     POSITION_OPP_COLUMNS = ["포지션", "선수", "만난 횟수", "비율"]
     # [상대 팀컬러] 는 승률 줄 목록 하나(77 B — 옛 [팀컬러 승률]·[팀컬러 랭킹] 을 합쳤다 · 팀가치는 줄 보조 글 · 범위 막대는 뺐다).
@@ -4293,6 +4295,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         self.gb_elo = QGroupBox("ELO(랭킹 점수, 지금 시즌)")
+        self.gb_elo.setToolTip(glossary.tip("elo"))
         ev = QVBoxLayout(self.gb_elo)
         top = QHBoxLayout()
         self.lb_elo_tier = QLabel("")
@@ -5279,6 +5282,7 @@ class MainWindow(QMainWindow):
         rule = QLabel("")
         rule.setWordWrap(True)
         rule.setStyleSheet(f"color: {T.TEXT_DIM};")
+        rule.setToolTip(glossary.tip("fc"))
         v.addWidget(rule)
         row = QHBoxLayout()
         cards = [StatCard("이번 시즌 매치 보상", T.ACCENT), StatCard("예상 순위 보상"), StatCard("합계")]
@@ -7235,15 +7239,15 @@ class MainWindow(QMainWindow):
                 lst.set_rows([])
             self._render_pick_pitch(None)
             return
-        when = (taken or "")[:16].replace("T", " ")
-        parts = [f"{summary.total}명 중 {summary.used}명 · 최근 {config.RANKER_PICK_MAX_AGE_DAYS}일 경기 · 스냅숏 {when}"]
+        parts = [f"{summary.total}명 중 {summary.used}명 · 최근 {config.RANKER_PICK_MAX_AGE_DAYS}일 경기"]
         if summary.old:
             parts.append(f"마지막 경기가 오래된 {summary.old}명은 뺐습니다")
         if summary.refetch:
             parts.append(f"{summary.refetch}명 다시 받는 중")
         if summary.used < config.RANKER_PICK_MIN_RANKERS:
             parts.append(f"{config.RANKER_PICK_MIN_RANKERS}명 미만이라 카드 비율은 흐리게 표시(참고만)")
-        self.lb_pick_summary.setText(" · ".join(parts))
+        parts.append(basis_text(BASIS_FETCHED, taken))   # 96 W1 — 기준 시각은 맨 오른쪽
+        self.lb_pick_summary.setText(" · ".join(p for p in parts if p))
         for lst, counter, kind in ((self.pick_colors_list, summary.colors, "emblem"),
                                    (self.pick_forms_list, summary.formations, "formation")):
             total = sum(counter.values()) or 1
@@ -7646,7 +7650,7 @@ class MainWindow(QMainWindow):
                 fc = f"하루 {c.fc_lo:,.0f}~{c.fc_hi:,.0f} FC"
             elo = f"{c.elo:,.0f}점" if c.elo is not None else ""
             value = f"구단가치 {self._won(c.value)}" if c.value is not None else ""
-            s.body.setText(" · ".join(t for t in (elo, value, gpd, fc, f"갱신 {self._at(c.ref_time)}") if t))
+            s.body.setText(" · ".join(t for t in (elo, value, gpd, fc, basis_text(BASIS_NEXON, c.ref_time)) if t))
             # 67 R9 — 승무패 세 칸 막대(승률 한 값 막대 대신) · 표본 흐림 규칙은 그대로 · 앱 규칙 승÷전체
             n = core.rated(c.win, c.draw, c.lose, False)
             weak = core.is_weak(n, core.MIN_COND)
@@ -7944,7 +7948,13 @@ class MainWindow(QMainWindow):
         self._methods_html = methods.page_html(self._division_names)
         tb = _notice_browser(self._methods_html)
         self.tb_methods = tb
-        return tb
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        self.methods_find = FindBar(tb)   # 96 T1 — 페이지 안 검색
+        v.addWidget(self.methods_find)
+        v.addWidget(tb, 1)
+        return w
 
     def _refresh_methods_page(self) -> None:
         """등급 이름을 늦게 알게 되면(첫 실행 — 메타 캐시 없음) 산출 방법 글의 번호를 이름으로. 글이 같으면 안 건드린다(스크롤 유지)."""
@@ -7955,6 +7965,7 @@ class MainWindow(QMainWindow):
         if html != self._methods_html:
             self._methods_html = html
             tb.setHtml(html)
+            self.methods_find.refind()   # 다시 그리면 옛 검색 위치·칠하기가 사라진다(96 2회차 [중])
 
     # ── 상대 전적 [상대 순위](43단계 N23) — 내 경기 × rank.db match_opp_rank(그 시즌 동안만) ─────────────────────
     OPP_RANK_COLUMNS = ["상대 순위", "경기", "승", "무", "패", "승률"]
@@ -8111,10 +8122,6 @@ class MainWindow(QMainWindow):
         # 75 — 1억 미만을 원 단위로 다 쓰면 "1,234억" 옆에 "31,357,040원" 이 섞여 읽기 어렵다(2026-11-02 사용자)
         return f"{v / 1e4:,.0f}만" if v >= 1e4 else f"{v:,.0f}원"
 
-    @staticmethod
-    def _at(text: str | None) -> str:
-        return (text or "")[5:16].replace("T", " ")
-
     def _meta_top(self, v: QVBoxLayout, note: QLabel, *pairs) -> None:
         """안내 줄(늘어남) + (이름, 콤보) 들."""
         top = QHBoxLayout()
@@ -8262,10 +8269,10 @@ class MainWindow(QMainWindow):
             mine = (self._trait_result.mine if self._trait_result is not None else "")
             text = traitcollect.MINE_STATES.get(mine) or traitcollect.MESSAGES.get(mine, "")
             return text or "내 스쿼드(지금): 내 계정(내 계정 띠)을 정하면 이 탭을 열 때 하루 한 번 읽습니다."
-        when = (row.get("fetched_at") or "")[:16].replace("T", " ")
+        when = basis_text(BASIS_FETCHED, row.get("fetched_at"))
         if row.get("state") != "ok" or not row.get("body"):
-            return f"내 스쿼드(지금): {traitcollect.MINE_STATES['stale']} ({when} 기준)"
-        return f"내 스쿼드(지금): 넥슨 스쿼드메이커의 내 팀 칸 · {when} 기준 · 최근 경기 선발 중 강화가 같은 카드만"
+            return f"내 스쿼드(지금): {traitcollect.MINE_STATES['stale']} ({when})"
+        return f"내 스쿼드(지금): 넥슨 스쿼드메이커의 내 팀 칸 · 최근 경기 선발 중 강화가 같은 카드만 · {when}"
 
     def _my_trait_row(self) -> dict | None:
         if not config.my_trait_allowed():
@@ -8846,7 +8853,7 @@ class MainWindow(QMainWindow):
             return
         self._set_status(self.lb_weekly_note)
         if res.cut_at:
-            ttl["cuts"].setText(f"컷 변화: {res.cut_days:.0f}일 전({self._at(res.cut_at)}) 대비")
+            ttl["cuts"].setText(f"컷 변화: {res.cut_days:.0f}일 전({stamp(res.cut_at)}) 대비")
             self._fill(tbl["cuts"], [[f"{r:,}위", NA if a is None else f"{a:,.0f}", NA if b is None else f"{b:,.0f}",
                                       NA if a is None or b is None else f"{b - a:+,.0f}"] for r, a, b in res.cuts],
                        enable_sort=False)
@@ -9172,14 +9179,14 @@ class MainWindow(QMainWindow):
         rows = []
         for m in moves:
             a, b = m.a, m.b
-            rows.append([f"{self._at(m.at_a)} → {self._at(m.at_b)}",
+            rows.append([f"{stamp(m.at_a)} → {stamp(m.at_b)}",
                          diff(a.rank if a else None, b.rank if b else None, "{:,}"),
                          diff(a.elo if a else None, b.elo if b else None, "{:,.0f}"),
                          "-" if m.wdl is None else "·".join(str(x) for x in m.wdl),
                          str(self._games_between(m.at_a, m.at_b)), m.verdict])
         self._fill(self.tbl_rmove, rows, enable_sort=False)
         hist = list(reversed(res.history))
-        self._fill(self.tbl_rhist, [[self._at(h.at)] + (["1만 위 밖", "", "", "", ""] if h.row is None else [
+        self._fill(self.tbl_rhist, [[stamp(h.at)] + (["1만 위 밖", "", "", "", ""] if h.row is None else [
             f"{h.row.rank:,}", NA if h.row.elo is None else f"{h.row.elo:,.0f}", self._formation_cell(h.row.formation or "-"),
             self._emblem_cell(h.row.color or core.blank_label("team_color")), "닉네임 바뀜" if "nickname" in h.changed else ""])
             for h in hist], enable_sort=False)
@@ -9818,6 +9825,11 @@ class MainWindow(QMainWindow):
         '스코어'(승부차기)·팀컬러 이름). 폭은 _fill 이 채운 뒤 다시 잰다."""
         t = FitTableWidget(0, len(columns))
         t.setHorizontalHeaderLabels(columns)
+        for c, name in enumerate(columns):   # 96 T2 — 용어 머리글은 어느 표든 같은 말풍선(glossary.HEADERS)
+            tip = glossary.header_tip(name)
+            item = t.horizontalHeaderItem(c)
+            if tip and item is not None:
+                item.setToolTip(tip)
         t.verticalHeader().setVisible(False)
         t.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -14968,11 +14980,11 @@ class TeamColorDialog(QDialog):
                              else "모으는 중입니다. 다음 랭킹 수집부터 보입니다.")
             return False
         if res.now is None:
-            self._rank_empty(f"넥슨 데이터 기준 {MainWindow._at(res.at)}으로, 랭킹 1만 명 중 이 팀컬러를 쓰는 사람이 없습니다.")
+            self._rank_empty(f"랭킹 1만 명 중 이 팀컬러를 쓰는 사람이 없습니다({basis_text(BASIS_NEXON, res.at)}).")
             return False
         now, then = res.now, res.then
-        note = [f"넥슨 데이터 기준 {MainWindow._at(res.at)} · 1만 위 안 {now.users:,}명"]
-        note.append(f"변화는 {MainWindow._at(res.then_at)} 대비" if then is not None
+        note = [f"1만 위 안 {now.users:,}명"]
+        note.append(f"변화는 {stamp(res.then_at)} 대비" if then is not None
                     else "지난주 원본 스냅숏이 없어 변화는 숨깁니다")
         if name in config.TEAMCOLOR_DUP_NAMES:
             note.append("같은 이름 팀컬러를 합친 숫자입니다(1만 명 순위표는 이름만 줍니다)")
@@ -15120,7 +15132,7 @@ class TeamColorDialog(QDialog):
                 self.main._fill(self.tbl_steps, [[(f"{m.get('max_step') or '-'}단계", m.get("max_step") or 0),
                                                   (f"{m.get('members')}명" if m.get("members") else "-", 0),
                                                   " · ".join(m.get("effects") or []) or "-"]], enable_sort=False)
-            self.lb_source.setText(f"넥슨 데이터센터 기준 · 받은 날 {view.steps_day or view.meta.get('fetched_on', '')}")
+            self.lb_source.setText(" · ".join(t for t in ("넥슨 데이터센터 값", basis_text(BASIS_FETCHED, view.steps_day or view.meta.get("fetched_on"))) if t))
         self._players += view.players or []
         rows = [[(str(p.ovr) if p.ovr is not None else "-", p.ovr or 0),
                  IconCell(p.name, None, core.season_id_of(p.spid)), p.position,
@@ -15862,8 +15874,7 @@ def rank_status_text(st: dict) -> str:
     if not st or not st.get("snapshots"):
         parts = ["아직 수집한 기록이 없습니다."]
     else:
-        when = (st.get("last_taken_at") or "")[:16].replace("T", " ")
-        parts = [f"마지막 수집 {when} · {int(st.get('last_rows') or 0):,}명 · 보관 {st['snapshots']}회"]
+        parts = [f"마지막 수집 {int(st.get('last_rows') or 0):,}명 · 보관 {st['snapshots']}회"]
     if st.get("enabled") == "0" and st.get("off_reason") == "blocked":
         parts.append("넥슨이 요청을 계속 막아 스스로 껐습니다")
     try:
@@ -15871,9 +15882,10 @@ def rank_status_text(st: dict) -> str:
     except ValueError:
         fails = 0
     if fails:
-        retry = (st.get("retry_at") or "")[:16].replace("T", " ")
+        retry = stamp(st.get("retry_at"))
         parts.append(f"연속 실패 {fails}번 · 다음 시도 {retry} 이후")
-    lines = [html.escape(" · ".join(parts))]
+    parts.append(basis_text(BASIS_FETCHED, (st or {}).get("last_taken_at")))   # 96 W1 — 맨 오른쪽
+    lines = [html.escape(" · ".join(p for p in parts if p))]
     if game_paused():
         lines.append("게임이 켜져 있어 자동 수집을 쉬는 중입니다")
     # 2.3.1 N14 — 넥슨 데이터 기준 시각 · 빈 순위 · 멈춰 있음 · WAL 비우기 실패 · 쌓는 중
@@ -15882,10 +15894,10 @@ def rank_status_text(st: dict) -> str:
         gap_text = f"빈 순위 {int(gaps or 0):,}"
         if gaps is not None and int(gaps) >= config.RANK_GAPS_WARN:
             gap_text = f"<span style='color:{T.WARN}'>{gap_text}</span>"
-        lines.append(f"넥슨 데이터 기준 {st['meta_ref'][5:16].replace('T', ' ')} · {gap_text}")
+        lines.append(f"{gap_text} · {basis_text(BASIS_NEXON, st['meta_ref'])}")
     if st.get("same_since") and st.get("meta_ref"):
-        lines.append(f"넥슨 데이터가 <b>{st['meta_ref'][11:16]} 기준</b>(마지막 수집)에서 멈춰 있습니다. "
-                     f"{st['same_since'][5:16].replace('T', ' ')} 부터 확인(점검 중일 수 있음)")
+        lines.append(f"넥슨 데이터가 <b>{stamp(st['meta_ref'])} 기준</b>(마지막 수집)에서 멈춰 있습니다. "
+                     f"{stamp(st['same_since'])} 부터 확인(점검 중일 수 있음)")
     try:
         ckpt = int(st.get("ckpt_fail") or 0)
     except ValueError:

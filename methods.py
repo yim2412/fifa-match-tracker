@@ -8,6 +8,7 @@ from __future__ import annotations
 import analysis
 import config
 import enhance
+import glossary
 import models
 import xg_grid
 
@@ -41,7 +42,8 @@ def sections(names: dict | None = None) -> list[tuple[str, str]]:
 <p>경기 수가 적은 줄은 승률이 크게 흔들려서 막대를 흐리게 하거나 "표본 N" 을 붙입니다. 기준은 화면마다 다릅니다
 (표 한 줄 {config.OPP_ROW_MIN}판 · 결정력 문장은 슛 {analysis.MIN_SHOTS}개 …).</p>"""),
         ("기대득점(xG)", f"""
-<p>슛 하나가 골이 될 확률을 <b>슛 위치(골대까지 거리·좌우 폭)와 슛 종류</b>로 어림한 값입니다. 경기장을 가로 {cell_d:g}m × 세로 {cell_w:g}m
+{glossary.head_html("xg")}
+<p>슛 위치는 <b>골대까지 거리와 좌우 폭</b>으로 봅니다. 경기장을 가로 {cell_d:g}m × 세로 {cell_w:g}m
 칸으로 나눠(거리 {max_d}칸 · 폭 {max_w}칸까지, 그 밖은 끝 칸에 합침) 칸마다 그 종류의 슛이 실제로 골이 된 비율을 담은 표입니다.
 슛이 적은 칸은 이웃 칸의 평균 쪽으로 당겨 값이 튀지 않게 했습니다. 페널티킥은 위치와 무관하게 {xg_grid.PK_RATE:.0%} 입니다.</p>
 <ul>
@@ -144,6 +146,7 @@ def sections(names: dict | None = None) -> list[tuple[str, str]]:
 <p>슛 종류 이름·시간 구간 인코딩·포메이션 줄처럼 넥슨 공식 문서에 없는 값은 <b>실제 응답으로 역산</b>했습니다.
 근거는 코드 주석에 있고, 모르는 코드는 "알 수 없음" 으로 둡니다. 팀컬러·구단가치·랭킹은 넥슨 홈페이지의 <b>그 시점 값</b>이라
 경기 당시와 다를 수 있습니다.</p>"""),
+        ("용어", "".join(glossary.head_html(k) for k in glossary.TERMS)),   # 96 T2 — 정의 문장은 glossary 한 곳
     ]
 
 

@@ -5752,6 +5752,68 @@ def test_max_division_survives_account_switch():
         _restore_account()
 
 
+def test_methods_find_bar_96():
+    """96 T1 — 산출 방법 안 검색: 칠한 곳 수 · 이전/다음 돌기 · 비우면 아무것도 · 글을 다시 그린 뒤에도 남는다."""
+    fb, tb = _win.methods_find, _win.tb_methods
+    plain = tb.toPlainText()
+    word = "xG"
+    want = plain.lower().count(word.lower())
+    assert want >= 3, f"전제 — 산출 방법에 '{word}' 가 셋 이상({want})"
+    try:
+        fb.edit.setText(word)
+        assert fb.hits() == want and len(tb.extraSelections()) == want, (fb.hits(), want)
+        assert fb.count.text() == f"1/{want}" and tb.textCursor().selectedText().lower() == word.lower()
+        fb.prev()
+        assert fb.current() == want, "처음에서 [이전] 은 마지막으로"
+        fb.next()
+        assert fb.current() == 1, "마지막에서 [다음] 은 처음으로"
+        fb.next()
+        at = tb.textCursor().selectionStart()
+        assert fb.current() == 2
+        _win._methods_html = ""   # 등급 이름이 늦게 온 것처럼 — setHtml 로 다시 그린다
+        _win._refresh_methods_page()
+        assert fb.hits() == want and fb.current() == 2 and tb.textCursor().selectionStart() == at, "다시 그린 뒤 검색이 사라졌다"
+        fb.edit.setText("아무데도없는말xyz")
+        assert fb.hits() == 0 and fb.count.text() == "0/0" and not tb.extraSelections()
+        fb.next()   # 찾은 곳이 없으면 아무 일 없음
+        fb.edit.setText("")
+        assert fb.count.text() == "" and not tb.extraSelections() and not tb.textCursor().hasSelection()
+    finally:
+        fb.edit.setText("")
+
+
+def test_glossary_tips_96():
+    """96 T2 — 용어 머리글 말풍선은 어느 표든 glossary 한 곳에서 · 산출 방법 [용어] 절에 정의가 다 있다."""
+    import glossary
+    tbl = _win._make_table(["선수", "xG", "백분위", "구단가치"])
+    for c, key in ((1, "xg"), (2, "percentile"), (3, "club_value")):
+        assert tbl.horizontalHeaderItem(c).toolTip() == glossary.tip(key), c
+    assert tbl.horizontalHeaderItem(0).toolTip() == "", "용어 아닌 머리글에 말풍선을 달았다"
+    c = _win.PLAYER_COLUMNS.index("실효 OVR")
+    assert _win.tbl_players.horizontalHeaderItem(c).toolTip().startswith(glossary.tip("effective_ovr"))
+    assert _win.gb_elo.toolTip() == glossary.tip("elo")
+    text = _win.tb_methods.toPlainText()
+    for title, definition in glossary.TERMS.values():
+        assert f"{title}: {definition}" in text, title
+
+
+def test_basis_text_96():
+    """96 W1 — 출처마다 머리말이 다르고, 시각을 모르면 아무것도 안 쓴다 · 화면 둘이 그 꼴을 쓴다."""
+    from datetime import date as _d, datetime as _dt
+    assert widgets.basis_text(widgets.BASIS_NEXON, "2026-11-10T14:00:59") == "넥슨 데이터 기준 11-10 14:00"
+    assert widgets.basis_text(widgets.BASIS_FETCHED, "2026-11-10 14:00") == "받은 시각 11-10 14:00"
+    assert widgets.basis_text(widgets.BASIS_FETCHED, "2026-11-10") == "받은 시각 11-10"
+    assert widgets.basis_text(widgets.BASIS_FETCHED, _dt(2026, 1, 2, 3, 4)) == "받은 시각 01-02 03:04"
+    assert widgets.stamp(_d(2026, 1, 2)) == "01-02"
+    assert widgets.basis_text(widgets.BASIS_NEXON, None) == "" and widgets.basis_text(widgets.BASIS_NEXON, "") == ""
+    st = {"snapshots": 2, "last_rows": 10000, "last_taken_at": "2026-11-10T09:05:00", "meta_ref": "2026-11-10T09:00:00",
+          "meta_gaps": 0}
+    text = app_main.rank_status_text(st)
+    first = text.split("<br>")[0]
+    assert first.endswith("받은 시각 11-10 09:05"), first
+    assert "빈 순위 0 · 넥슨 데이터 기준 11-10 09:00" in text, text
+
+
 def test_methods_page_gets_division_names_late():
     # 첫 실행(메타 캐시 없음)엔 산출 방법 글이 등급 번호로 만들어진다 — 조회로 이름이 오면 글도 이름으로 바뀌어야
     champ = str(models.CHAMPION_DIVISION_ID)
@@ -7728,7 +7790,7 @@ def test_my_traits_row_above_trait_table():
             t = _win.tbl_my_traits
             assert t.rowCount() == 11 and not t.isHidden(), t.rowCount()
             assert t.item(0, 5).text() == "-", "잠긴 훈련 칸에 이름을 붙였다"
-            assert "기준" in _win.lb_my_trait.text()
+            assert _win.lb_my_trait.text().endswith("받은 시각 10-20 09:00"), _win.lb_my_trait.text()   # 96 W1 — 맨 오른쪽
             config.NOTICE_ACCEPTED = config.MY_TRAIT_NOTICE_VERSION - 1
             assert not config.my_trait_allowed() and config.trait_allowed()
             _win._render_my_traits()
@@ -11341,7 +11403,7 @@ def test_enhance_page_shows_result():
         assert "테스트강화" in head and "100% 보호(시세의 40%)" in head and "85% 확률로 붙습니다" in head, head
         assert f"<b>{app_main.enhance_won(est.budget_at(85))}</b>" in head, "맨 위 금액은 굵게 — " + head
         assert T.GOOD not in head and T.BAD not in head, "맨 위 금액에는 색을 안 쓴다 — 좋고 나쁨이 아니다"
-        assert "시세 " in head and " 기준" in head, "시세를 언제 읽었는지 — " + head
+        assert "시세 받은 시각 " in head, "시세를 언제 읽었는지 — " + head   # 96 W1
         text = _win.lb_enh_result.text()
         assert "평균 31회" in text and "% 확률)" in text, text
         assert "85% 안에 끝나면" in text and "넘긴 15%는" in text and "30~95%" in text, text
@@ -11706,7 +11768,7 @@ def test_enhance_summary_verdict():
     assert app_main.enhance_compare_line(on, None) == ""
     assert "<b>&lt;b&gt;</b>" in app_main.enhance_head_html("<b>", cheap), "선수 이름은 글자 그대로"
     assert "시세 " not in app_main.enhance_head_html("가", cheap), "시각을 모르면 안 적는다"
-    assert "시세 11-06 12:30 기준" in app_main.enhance_head_html("가", cheap, "11-06 12:30")
+    assert "시세 받은 시각 11-06 12:30" in app_main.enhance_head_html("가", cheap, "2026-11-06T12:30")   # 96 W1 — 이 PC 가 받은 시각
     # 시도가 너무 많으면 넘긴 나머지 줄이 없고, 시세를 모르면 견주지 않는다
     many = enhance.estimate(115, None, 8, 10, prices, mats, None)
     assert "넘긴" not in app_main.enhance_summary_html(many) and "% 확률" not in app_main.enhance_summary_html(many)

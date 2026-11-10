@@ -1083,12 +1083,81 @@ def test_nexon_times_are_parsed_only_in_matchtime():
             f"예외 표에 더는 안 걸리는 자리: {k}"
 
 
+# ── 용어 설명은 한 곳(96 T2) ──
+# glossary.TERMS 의 정의 문장이 다른 소스의 문자열에 다시 나오면 FAIL — 두 벌이면 한쪽만 고쳐져 화면마다 뜻이 갈린다.
+# (1회차: "용어 이름이 든 말풍선" 꼴 규칙은 표본·FC·점수가 일반어라 오탐이고 dict 로 만든 말풍선을 못 봐서 이 꼴로)
+GLOSSARY_SCAN_DIRS = (".", "server", "tools")
+
+
+def check_glossary_dups(srcs: dict[str, str], terms: dict[str, tuple[str, str]]) -> list[str]:
+    out = []
+    for name, src in srcs.items():
+        for ln, s in _ui_strings(src):
+            for key, (_title, text) in terms.items():
+                if text in s:
+                    out.append(f"{name}:{ln} 용어 '{key}' 의 정의 문장을 다시 썼다 — glossary.tip('{key}') 로")
+    return out
+
+
+def test_glossary_definitions_live_in_one_place():
+    sys.path.insert(0, str(ROOT))
+    import glossary
+    assert len(glossary.TERMS) >= 7 and all(glossary.HEADERS[k] in glossary.TERMS for k in glossary.HEADERS)
+    one = next(iter(glossary.TERMS.values()))[1]
+    planted = f'TIP = "{one}"\nOK = glossary.tip("xg")\nF = f"앞 {{x}} {one}"\n'
+    assert len(check_glossary_dups({"x.py": planted}, glossary.TERMS)) == 2, "심은 중복(문자열·f-문자열)을 못 잡는다"
+    srcs = {}
+    for d in GLOSSARY_SCAN_DIRS:
+        for p in sorted((ROOT / d).glob("*.py")):
+            if p.name != "glossary.py":
+                srcs[_rel(p)] = _src(p)
+    assert "app_main.py" in srcs and "methods.py" in srcs, "훑는 파일 목록이 비었다"
+    bad = check_glossary_dups(srcs, glossary.TERMS)
+    assert not bad, "\n".join(bad)
+
+
+# ── 기준 시각은 widgets.stamp·basis_text 로만(96 W1) ──
+# 앱 쪽에서 ISO 글자를 직접 잘라 시각을 쓰면 출처(넥슨 기준 / 받은 시각) 머리말이 빠지고 꼴이 제각각이 된다.
+BASIS_FILES = ("app_main.py", "dashboard.py", "widgets.py")
+BASIS_ALLOW = {("widgets.py", "stamp"), ("widgets.py", "basis_text")}
+_BASIS_BAD = re.compile(r"\[5:16\]|\[11:16\]|\[:16\]\.replace\(\s*[\"']T|(?<![\w])_at\(")
+
+
+def check_basis_slices(srcs: dict[str, str], allow=BASIS_ALLOW) -> list[str]:
+    out = []
+    for name, src in srcs.items():
+        lines = src.splitlines()
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):   # 주석은 지운다(설명 글에 패턴이 나와도 된다)
+            if tok.type == tokenize.COMMENT:
+                r, c = tok.start
+                lines[r - 1] = lines[r - 1][:c]
+        spans = [(n.lineno, n.end_lineno) for n in ast.walk(ast.parse(src))
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and (name, n.name) in allow]
+        for i, line in enumerate(lines, 1):
+            if _BASIS_BAD.search(line) and not any(a <= i <= b for a, b in spans):
+                out.append(f"{name}:{i} 시각을 직접 잘랐다 — widgets.basis_text(출처, 시각) 또는 stamp(시각)")
+    return out
+
+
+def test_basis_times_go_through_one_function():
+    planted = ('def f(st, c):\n    a = st["at"][5:16]\n    b = (x or "")[:16].replace("T", " ")\n'
+               '    d = self._at(c)\n    e = f"{st[\'r\'][11:16]} 기준"\n'
+               '    g = d.tip_at(c, 1)   # [5:16] 은 주석이라 안 센다\n'
+               'def stamp(s):\n    return s[5:16]\n')
+    got = check_basis_slices({"widgets.py": planted})
+    assert len(got) == 4 and all(f":{n} " in "".join(got) for n in (2, 3, 4, 5)), got
+    assert len(check_basis_slices({"widgets.py": planted}, allow=set())) == 5, "허용 함수 밖이면 잡아야 한다"
+    srcs = {f: _src(ROOT / f) for f in BASIS_FILES}
+    bad = check_basis_slices(srcs)
+    assert not bad, "\n".join(bad)
+
+
 # ── 화면 글 말투(docs/STYLE.md · 2026-11-08) ──
 # 화면에 나가는 문자열만 본다 — 함수 설명(docstring)·홀로 선 문자열(주석 꼴)은 뺀다. 한글이 든 것만.
 STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "notice.py", "methods.py", "charts.py",
                "habits.py", "records.py", "stats.py", "models.py", "tray.py", "updatecheck.py", "cardcollect.py", "nexon_api.py",
                "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py", "teamcolor.py",
-               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py")
+               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py", "glossary.py")
 # 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
 # cardcollect.py 는 51 측정이 해시를 재 11-26 판정 전엔 못 고친다.
 STYLE_DASH_MAX = {"notice.py": 37, "cardcollect.py": 1}
