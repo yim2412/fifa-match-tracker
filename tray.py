@@ -50,14 +50,18 @@ QUIT_ARG = "--quit"
 
 
 # ── 한 번만 실행 ──────────────────────────────────────────────────────
-def instance_name(user: str | None = None, exe: str | None = None) -> str:
+DEMO_SUFFIX = "-demo"   # 둘러보기(96 O2) — 보통 실행과 서로 막지 않게. 제거기의 --quit 은 두 이름 다 알린다(app_main.main)
+
+
+def instance_name(user: str | None = None, exe: str | None = None, demo: bool | None = None) -> str:
     """윈도우 사용자 + 실행 파일 경로의 해시 — 네임드 파이프·뮤텍스는 PC 전체에 하나라 사용자를 넣는다.
-    설치판·포터블·소스 실행은 경로가 달라 서로 막지 않는다(서로 다른 실행본은 collect_lock 이 지킨다)."""
+    설치판·포터블·소스 실행은 경로가 달라 서로 막지 않는다(서로 다른 실행본은 collect_lock 이 지킨다).
+    demo: None 이면 이 프로세스(config.DEMO). 파이프·뮤텍스가 같은 이름을 쓰니 창 부르기도 데모끼리만 닿는다."""
     user = user or os.environ.get("USERNAME") or os.environ.get("USER") or "?"
     if exe is None:
         exe = sys.executable if getattr(sys, "frozen", False) else f"{sys.executable}|{Path(__file__).resolve()}"
     h = hashlib.sha1(f"{user.lower()}|{str(exe).lower()}".encode("utf-8")).hexdigest()[:16]
-    return f"FifaMatchTracker-{h}"
+    return f"FifaMatchTracker-{h}" + (DEMO_SUFFIX if (config.DEMO if demo is None else demo) else "")
 
 
 def _win_mutex(name: str):

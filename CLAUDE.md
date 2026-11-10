@@ -39,6 +39,7 @@
 | `enhance.py` · `boostcollect.py` | 강화 비용(83) — `enhance` 는 계산만(공지 표 · 보호 규칙 · 게이지 규칙 `gauge_of` · 재료 조합 `best_materials` · `estimate` — 보호는 `protect_from`(몇 강 도전부터 · None = 안 함) · 금액 분포 `budget_at`·`chance_within`·`within_mean`·`tail_mean`·`curve` · 평균이 가장 싼 보호 `cheapest_protect_from`), `boostcollect` 는 재료 시세 받기(OVR 마다 도우미 목록 · 하루 파일 캐시를 모든 카드가 같이 씀) · 요청은 `playerinfo.fetch_boost_rows` · 화면 [강화 비용]은 [계산] 을 눌렀을 때만(`app_main.EnhanceLoader` — 보호한 값·안 한 값을 같이 낸다 · 예산을 바꾸는 건 `_enh_redraw` 로 요청 없이 · 맨 위 85% 는 고정 `BUDGET_EXPECT_Q`) · 그래프 `charts.BudgetCurveChart` · 단계 칸 `widgets.GradeStepDelegate`(배지는 공용 `paint_grade_badge`) · **게이지 규칙은 도우미 응답 역산**이라 `check_api` 가 넥슨 값과 대조한다 · 넥슨이 보호 범위·제외 클래스를 자주 바꾼다(`PROTECT_*` — 출처는 머리말) · 세부는 머리말 |
 | `methods.py` | 산출 방법 페이지(2.9.1 D2) — 글은 정적이고 **수치는 config·xg_grid·analysis 에서 읽는다**(`page_html()` 하나만 부른다 · 색 안 씀) · `XG_TEST_*` 만 손으로 적은 문구라 xG 표를 다시 세우면 같이 고친다 · 세부는 머리말 |
 | `glossary.py` | 용어 설명(96 T2) — **정의 문장은 `TERMS` 한 곳에만**(말풍선 `tip(key)` · 산출 방법 [용어] 절 `head_html`) · 표 머리글 이름 → 용어는 `HEADERS`(`app_main._make_table` 이 모든 표에 단다) · 정의 문장을 다른 소스 문자열에 다시 쓰면 `test_rules` FAIL |
+| `demo.py` · `demodata.py` | 둘러보기(96 O2) — 키 창 [키 없이 둘러보기] 가 같은 exe 를 `--demo` 로 **새 프로세스**에. `demo` 는 **표준 라이브러리만**(app_main 맨 위 `demo.prepare()` 가 config import 보다 먼저 임시 폴더·`FIFA_DEMO` 를 env 에) · `demodata` 는 지어낸 300판 + 가짜 API `DemoAPI` · 판정은 `config.DEMO` 하나(실제 키·스위치 끔 · `_save_env` 는 OSError · `_read_env_disk` 는 None) · **새 자동 요청 경로를 만들면 `test_demo` 의 "요청 0" 이 잡는다** · 세부는 `demo.py` 머리말 |
 | `tray.py` | 트레이 상주 · **종료 진입점 하나 `quit_app(fast)`**(새 종료 경로는 여기를 거친다) · 한 번만 실행은 뮤텍스 · **트레이 풍선 알림 없음** · 세부는 머리말 |
 | `autostart.py` | 자동 실행 — HKCU Run 에 `"<exe>" --tray`. exe 에서만 · 값 이름을 설치판(`VALUE_INSTALLED` — `.iss` 제거기와 같아야)·포터블로 나눈다 · 경로는 없어졌을 때만 고친다(`repair`) |
 | `trait_codes.py` · `traitcollect.py` | 포지션 특성(32단계) — 특성·코치 이름표(번들에서 옮긴 상수 · 모르는 코드 "코드 N") · 스쿼드메이커 팀 칸 요청·해석·맞는 팀 찾기 · 받기 한 바퀴 `run`(웹 → 오픈API → 웹 · 로더 `app_main.TraitLoader`) · 집계 `trait_usage` → 탭 [메타 분석 › 포지션 특성](키 `TRAIT_KEY` — **`PICK_KEYS` 에 넣지 않는다**, 무효화는 `PICK_DATA_KEYS`) · **오픈API 백그라운드(랭커 픽·특성)를 켜는 자리는 `start_visible_api_loader`, 멈추는 자리는 `stop_api_loaders` 하나**(`test_every_api_loader_start_goes_through_one_function`) · 웹 스위치·`web_get`·`_web_calls()` 규칙은 `teamcolor` 와 같다 · 세부는 `traitcollect.py` 머리말 |
@@ -69,6 +70,8 @@ python rankcollect.py --pages 3   # 랭킹 수집 실제 3쪽(저장 안 함 —
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
 python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
+python tests/test_demo.py      # 둘러보기(96 O2) — 실제 키를 env 에 둔 채 창·검색·토글을 눌러 HTTP 0 · 다시 띄운 env = 원래 env · 데모 폴더 쓸기
+python app_main.py --demo      # 둘러보기 직접 띄우기(지어낸 자료 · 넥슨 요청 0)
 python tests/test_trades.py    # 거래 받기(끊김·겹침·429·키 바뀜) · 시세 캐시 하루 상한 · 랭커 기록 캐시 — 가짜 목록(네트워크 없음)
 python tests/test_traits.py    # 포지션 특성 — 이름표·팀 칸 해석·팀 찾기·요청 오류 분류 · trait_squads 저장·지우기(가짜 응답·가짜 세션, 네트워크 없음)
 python tests/test_habits.py    # 습관·기준선(등급 체류 · 칩 · 전반 비중 · 골 흐름 · 운 범위 · 연승 섞기 · 카이제곱) — 손으로 센 지어낸 입력(네트워크 없음)

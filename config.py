@@ -50,6 +50,18 @@ def asset_path(name: str) -> Path:
     return ROOT / name
 
 
+# 둘러보기(96 O2) — `app_main` 맨 위가 `--demo` 를 보고 세운다(`demo.prepare` — 데이터 폴더도 그때 임시 폴더로). config 는 sys.argv 를
+# 읽지 않는다(테스트·check_api·tools 와 엮이지 않게). 켜지면 실제 키·스위치를 env 와 무관하게 끄고(아래 "둘러보기면 끈다"),
+# .env 는 읽지도 쓰지도 않는다(_save_env · _read_env_disk). 재할당하지 않는다.
+DEMO_VAR = "FIFA_DEMO"
+DEMO = os.getenv(DEMO_VAR, "").strip() == "1"
+DEMO_SEED = 2026         # 지어낸 경기 — 같은 날이면 같은 자료(demodata.generate)
+DEMO_MATCHES = 300
+DEMO_OPPONENTS = 40
+DEMO_DAYS = 40           # 오늘에서 거꾸로 — 앞 절반은 끝난 시즌, 뒤 절반은 진행 중 시즌
+INTRO_SEEN_KEY = "app/intro_seen"   # settings.ini — 처음 켤 때 소개(96 O3)를 본 표시(app_main.intro_needed)
+
+
 def _data_dir() -> Path:
     """데이터(키·DB·캐시)가 사는 곳.
 
@@ -92,13 +104,14 @@ def _migrate_from_source() -> list[str]:
     return moved
 
 
-MIGRATED = _migrate_from_source()
+MIGRATED = [] if DEMO else _migrate_from_source()   # 둘러보기는 소스 폴더 .env 를 데모 폴더로 옮기지 않는다
 
 ENV_PATH = DATA_DIR / ".env"
 API_KEY_VAR = "NEXON_API_KEY"
 
-load_dotenv(ENV_PATH)
-API_KEY = os.getenv(API_KEY_VAR, "").strip()
+if not DEMO:
+    load_dotenv(ENV_PATH)
+API_KEY =os.getenv(API_KEY_VAR, "").strip()
 
 # 중앙 서버(docs/CENTRAL_SERVER.md 11절 · 1단계 ⓐ — 숨은 스위치, 화면·안내 변화 없음). 비면 지금과 같다(직접).
 # 설치 ID 는 서버 모드일 때만 만든다(install_id()) — 서버를 안 쓰는 사람에게 식별자가 생기지 않게.
@@ -217,6 +230,13 @@ CARD_BACKFILL_VAR = "FIFA_CARD_BACKFILL"
 CARD_BACKFILL_OFF_VAR = "FIFA_CARD_BACKFILL_OFF"
 CARD_BACKFILL_ON = os.getenv(CARD_BACKFILL_VAR, "").strip()
 CARD_BACKFILL_OFF = os.getenv(CARD_BACKFILL_OFF_VAR, "").strip()
+# 둘러보기면 끈다 — 부모가 env 에서 빼고 넘기지만(demo.child_env) 두 겹으로. 동의는 "다 본 것" 으로(관문 함수가 화면을 비우지 않게 —
+# 요청은 위 스위치가 다 꺼져 있어 안 나간다)
+if DEMO:
+    API_KEY = SERVER_URL = ""
+    WEB_DATA = RANK_COLLECT = UPDATE_CHECK = False
+    OWNER_DIST_ON = OWNER_DIST_OFF = CARD_BACKFILL_ON = CARD_BACKFILL_OFF = ""
+    NOTICE_ACCEPTED = NOTICE_VERSION
 RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
 RANK_COLLECT_INTERVAL_H = 24
 RANK_CHECK_EVERY_MIN = 60           # 앱이 켜져 있는 동안 간격이 지났는지 보는 주기
@@ -605,6 +625,9 @@ def _save_env(var: str, value: str) -> None:
     임시 파일에 다 쓴 뒤 os.replace 로 바꾼다 — 쓰는 도중 죽거나 다른 실행본이 읽으면
     반쯤 쓴 .env(키가 사라진)를 보게 된다. 끝내 못 바꾸면 OSError 를 그대로 올린다(호출부가 잡는다).
     """
+    if DEMO:
+        # 둘러보기 — 토글·키 저장이 전부 여기를 지난다. 예외라 부른 쪽의 전역도 안 바뀐다(set_* 는 저장 뒤에 바꾼다)
+        raise OSError("둘러보기에서는 저장하지 않습니다")
     lines = []
     if ENV_PATH.exists():
         lines = ENV_PATH.read_text(encoding="utf-8-sig", errors="replace").splitlines()
@@ -702,6 +725,8 @@ def set_card_backfill(on: bool, reason: str = "") -> None:
 
 
 def _read_env_disk() -> dict | None:
+    if DEMO:
+        return None   # 모르는 상태 — 부르는 쪽이 전부 "아무것도 안 함 · 끈 쪽" 으로 받는다
     try:
         return dotenv_values(ENV_PATH, encoding="utf-8-sig") if ENV_PATH.exists() else {}
     except (OSError, UnicodeError, ValueError):

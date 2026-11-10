@@ -13,8 +13,10 @@ a = Analysis(
     ['app_main.py'],
     pathex=[],
     binaries=[],
-    datas=[('app_icon.ico', '.'), ('CHANGELOG.md', '.')] + LICENSE_DATAS,   # CHANGELOG — 업데이트 뒤 "바뀐 점" 창(84 H2)
-    hiddenimports=['store', 'stats', 'core_api', 'theme', 'widgets', 'ranker', 'images',
+    # CHANGELOG — 업데이트 뒤 "바뀐 점" 창(84 H2) · assets/intro — 처음 켤 때 소개 그림(96 O3 · config.asset_path 와 같은 경로)
+    datas=[('app_icon.ico', '.'), ('CHANGELOG.md', '.'), ('assets/intro', 'assets/intro')] + LICENSE_DATAS,
+    # demodata — 둘러보기(96 O2)가 함수 안에서 import 한다
+    hiddenimports=['demo', 'demodata', 'store','stats', 'core_api', 'theme', 'widgets', 'ranker', 'images',
                    'analysis', 'dashboard', 'charts', 'crashlog', 'updatecheck', 'notice',
                    # 1.1.1 — 트레이·자동 실행·랭킹 수집. QtNetwork 는 '한 번만 실행'(QLocalServer) — release.py 가 .pyd 를 확인한다
                    'tray', 'autostart', 'rankcollect', 'PySide6.QtNetwork',

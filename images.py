@@ -19,6 +19,8 @@ from pathlib import Path
 
 import requests
 
+import config
+
 CDN_BASE = "https://fco.dn.nexoncdn.co.kr/live/externalAssets/common/playersAction"
 _REFERER = "https://fconline.nexon.com/"
 
@@ -27,7 +29,15 @@ _REFERER = "https://fconline.nexon.com/"
 # 핸드셰이크가 다시 열린다. ranker.py 의 팀컬러 조회에 적용해 효과를 본 것과
 # 같은 최적화 — Session 으로 연결을 재사용한다. GET 만 하고 세션 상태를
 # 바꾸지 않으니 스레드에서 재사용해도 안전하다.
-_session = requests.Session()
+class _NoNetwork(requests.Session):
+    """둘러보기(96 O2) — 그림을 받지 않는다(자리표시만 · 지어낸 카드 번호의 404 부정 캐시도 안 쌓인다). 받기 함수는 전부
+    이 세션 하나를 쓰고 RequestException 을 잡으니, 여기서 막으면 앞으로 생길 받기 함수도 같이 막힌다."""
+
+    def request(self, *a, **k):
+        raise requests.ConnectionError("둘러보기에서는 그림을 받지 않습니다")
+
+
+_session = _NoNetwork() if config.DEMO else requests.Session()
 
 
 def image_url(sp_id: int) -> str:

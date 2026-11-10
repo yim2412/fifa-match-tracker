@@ -44,7 +44,9 @@ from PySide6.QtWidgets import (
     QTableWidget, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
-import autostart
+import demo  # 표준 라이브러리만 — config 보다 먼저: --demo 면 임시 데이터 폴더·표지를 env 에(96 O2 · 판정은 그 뒤 config.DEMO 하나)
+demo.prepare()
+import autostart  # noqa: E402 — 위 준비가 config import 보다 먼저여야 한다(autostart → updatecheck → config)
 import boostcollect
 import cardcollect
 import charts
@@ -3442,7 +3444,16 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_search_page())  # 0
         self.stack.addWidget(self._build_main_page())    # 1
-        self.setCentralWidget(self.stack)
+        if config.DEMO:
+            box = QWidget()
+            lay = QVBoxLayout(box)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            lay.addWidget(self._build_demo_band())
+            lay.addWidget(self.stack, 1)
+            self.setCentralWidget(box)
+        else:
+            self.setCentralWidget(self.stack)
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
@@ -3457,6 +3468,35 @@ class MainWindow(QMainWindow):
         self._update_click_at: float | None = None
         self._download_worker: UpdateDownloadWorker | None = None
         self.statusBar().showMessage("구단주명을 입력하세요.")
+
+    def _build_demo_band(self) -> QWidget:
+        """둘러보기(96 O2) 창 맨 위 띠 — 지어낸 자료라는 것과 [키 넣고 시작]."""
+        band = QFrame()
+        band.setObjectName("demoBand")
+        band.setStyleSheet(f"#demoBand {{ background: {T.ACCENT_SOFT}; }}")
+        row = QHBoxLayout(band)
+        row.setContentsMargins(16, 8, 16, 8)
+        lb = QLabel("둘러보기 화면입니다. 보이는 경기와 구단주는 모두 지어낸 자료입니다.")
+        row.addWidget(lb, 1)
+        self.btn_demo_start = QPushButton("키 넣고 시작")
+        self.btn_demo_start.setToolTip("둘러보기를 닫고 API 키를 넣는 창으로 앱을 다시 켭니다.")
+        self.btn_demo_start.clicked.connect(self.start_real_app)
+        row.addWidget(self.btn_demo_start)
+        return band
+
+    def start_real_app(self) -> None:
+        """[키 넣고 시작] — 데모 전 원래 env 로 진짜 앱을 띄우고 자기는 끝난다(같은 뮤텍스가 아니라 둘이 잠깐 겹쳐도 된다)."""
+        sess = demo.session()
+        env = demo.restart_env(sess) if sess is not None else demo.child_env(())
+        try:
+            demo.spawn(demo.launch_cmd(False), env)
+        except OSError as e:
+            self.statusBar().showMessage(f"앱을 다시 켜지 못했습니다: {e}")
+            return
+        if self.shell is not None:
+            self.shell.quit_app()
+        else:
+            self.close()
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
@@ -3983,7 +4023,8 @@ class MainWindow(QMainWindow):
                  ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
                                               ("추천", "_build_recommend_tab")))),
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
-        ("도움말", [("산출 방법", "_build_methods_page")]),    # 2.9.1 D2 — 정적 글(methods.py)
+        ("도움말", [("산출 방법", "_build_methods_page"),    # 2.9.1 D2 — 정적 글(methods.py)
+                   ("소개", "_build_intro_page")]),        # 96 O3 — 처음 켤 때 본 소개 세 장을 다시
     ]
     # 1.x 메뉴 이름 → 2.1.1 의 (메뉴, 탭). settings.ini 의 view/page 가 옛 이름이면 새 자리로 연다(U4 — 알림 띠는 없다)
     OLD_PAGE_NAMES = {
@@ -8066,6 +8107,10 @@ class MainWindow(QMainWindow):
         v.addWidget(tb, 1)
         return w
 
+    def _build_intro_page(self) -> QWidget:
+        """도움말 › 소개(96 O3) — 처음 켤 때 본 소개 창과 같은 세 장."""
+        return VScrollArea(IntroView())
+
     def _refresh_methods_page(self) -> None:
         """등급 이름을 늦게 알게 되면(첫 실행 — 메타 캐시 없음) 산출 방법 글의 번호를 이름으로. 글이 같으면 안 건드린다(스크롤 유지)."""
         tb = getattr(self, "tb_methods", None)
@@ -11535,6 +11580,7 @@ class MainWindow(QMainWindow):
         ("승률 그래프", "점수·예측"): "_render_elo 가 EloLoader·PredictWorker 결과로 그린다(검색 결과에 안 묶인다)",
         ("선수로 구단주 찾기", None): "사용자가 [찾기]를 눌러야 그립니다. 검색 결과에 묶이지 않습니다(구단주 비교와 같음)",
         ("산출 방법", None): "정적 글. 만들 때 한 번 채우고(methods.page_html) 검색 결과에 안 묶인다",
+        ("소개", None): "정적 그림·글(INTRO_PAGES). 만들 때 한 번 채우고 검색 결과에 안 묶인다",
         ("강화 비용", None): "사용자가 [계산]을 눌러야 그립니다. 검색 결과에 묶이지 않습니다(구단주 비교와 같음)",
     }
     LAZY_RENDER = True  # 테스트가 "다 그려진 상태"를 볼 때만 끈다
@@ -14680,6 +14726,8 @@ class MainWindow(QMainWindow):
 
     def start_connection_check(self, nickname: str):
         """[정보 › 연결 점검] 시작 → ConnectionCheckWorker(row 신호를 이어 쓴다) · 시작 못 하면 까닭(글)."""
+        if config.DEMO:
+            return "둘러보기에서는 연결 점검을 하지 않습니다."   # 점검은 진짜 API 를 새로 만든다 — 가짜 API 밖 길
         if self._check_worker is not None and self._check_worker.isRunning():
             return "이미 점검하는 중입니다."
         if self._quitting:
@@ -15317,6 +15365,135 @@ class TeamColorDialog(QDialog):
         self.box_pick.addStretch(1)
 
 
+# ── 처음 켤 때 소개(96 O3) ─────────────────────────────────────────────
+# (제목, 그림 — assets/intro/ 안 이름(둘러보기 자료로 뜬 화면 · 실제 닉네임 없음), 글). 소개 창과 [도움말 › 소개] 가 같이 쓴다
+INTRO_PAGES = (
+    ("이 앱이 하는 일", "dashboard.png",
+     "감독모드 경기 기록을 모아 승률, 흐름, 선수 기록을 한눈에 보여 줍니다. 넥슨이 만든 앱이 아닌 개인이 만든 비공식 앱입니다."),
+    ("API 키가 필요한 까닭", "analysis.png",
+     "경기 기록은 넥슨 오픈API 에서 받습니다. 이 PC 에서 넥슨에 직접 묻고, 키는 이 PC 에만 저장합니다. "
+     "키 발급은 무료이며 몇 분이면 됩니다."),
+    ("처음 검색은 몇 분 걸립니다", "matches.png",
+     "처음에는 넥슨에 남아 있는 지난 한 달 정도의 경기를 한 번에 받습니다. 그다음부터는 새 경기만 받아 금방 끝납니다. "
+     "키를 넣기 전에 화면을 먼저 보고 싶으면 키 입력 창에서 [키 없이 둘러보기] 를 누르세요."),
+)
+INTRO_IMAGE_W = 560   # 그림 표시 폭(논리 픽셀) — 원본은 1200 폭이라 150% 화면에서도 줄여 그린다(흐리지 않게)
+
+
+def intro_needed() -> bool:
+    """새 설치 첫 실행에만 — 아직 아무 안내에도 동의하지 않았고(업그레이드한 사람은 이미 동의했다) 소개를 본 표시가 없다.
+    본 표시는 settings.ini(창을 만들기 전에도 읽는다)."""
+    if config.DEMO or config.NOTICE_ACCEPTED > 0:
+        return False
+    try:
+        s = QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
+        return str(s.value(config.INTRO_SEEN_KEY, "") or "") != "1"
+    except Exception:
+        return False
+
+
+def mark_intro_seen() -> None:
+    try:
+        s = QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
+        s.setValue(config.INTRO_SEEN_KEY, "1")
+        s.sync()
+    except Exception:
+        pass   # 못 적으면 다음 실행에 한 번 더 보일 뿐
+
+
+class IntroView(QWidget):
+    """소개 세 장 — 한 장씩 넘긴다. 그림이 없으면(빌드에서 빠짐) 글만."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        v = QVBoxLayout(self)
+        self.pages = QStackedWidget()
+        for title, image, text in INTRO_PAGES:
+            p = QWidget()
+            pv = QVBoxLayout(p)
+            lb_t = QLabel(f"<b>{html.escape(title)}</b>")
+            tf = lb_t.font()
+            tf.setPointSize(T.PT_2XL)
+            lb_t.setFont(tf)
+            pv.addWidget(lb_t)
+            pic = QLabel()
+            pix = QPixmap(str(config.asset_path(f"assets/intro/{image}")))
+            if not pix.isNull():
+                dpr = max(1.0, self.devicePixelRatioF())
+                pix = pix.scaledToWidth(int(INTRO_IMAGE_W * dpr), Qt.TransformationMode.SmoothTransformation)
+                pix.setDevicePixelRatio(dpr)
+                pic.setPixmap(pix)
+            pic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            pv.addWidget(pic)
+            lb = QLabel(text)
+            lb.setWordWrap(True)
+            pv.addWidget(lb)
+            pv.addStretch(1)
+            self.pages.addWidget(p)
+        v.addWidget(self.pages, 1)
+        row = QHBoxLayout()
+        self.lb_count = QLabel("")
+        row.addWidget(self.lb_count)
+        row.addStretch(1)
+        self.btn_prev = QPushButton("이전")
+        self.btn_prev.clicked.connect(lambda: self.go(self.pages.currentIndex() - 1))
+        self.btn_next = QPushButton("다음")
+        self.btn_next.clicked.connect(lambda: self.go(self.pages.currentIndex() + 1))
+        row.addWidget(self.btn_prev)
+        row.addWidget(self.btn_next)
+        v.addLayout(row)
+        self.go(0)
+
+    def go(self, i: int) -> None:
+        i = max(0, min(self.pages.count() - 1, i))
+        self.pages.setCurrentIndex(i)
+        self.lb_count.setText(f"{i + 1} / {self.pages.count()}")
+        self.btn_prev.setEnabled(i > 0)
+        self.btn_next.setEnabled(i < self.pages.count() - 1)
+
+    def at_last(self) -> bool:
+        return self.pages.currentIndex() == self.pages.count() - 1
+
+
+class IntroDialog(QDialog):
+    """처음 켤 때 이용 안내 **앞에** 한 번(96 O3) — [건너뛰기] 도 본 것으로 친다. 마지막 장에서 [다음] 자리가 [시작하기]."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} - 소개")
+        v = QVBoxLayout(self)
+        self.view = IntroView()
+        v.addWidget(self.view, 1)
+        row = QHBoxLayout()
+        self.btn_skip = QPushButton("건너뛰기")
+        self.btn_skip.clicked.connect(self.accept)
+        row.addWidget(self.btn_skip)
+        row.addStretch(1)
+        self.btn_start = QPushButton("시작하기")
+        self.btn_start.setDefault(True)
+        self.btn_start.clicked.connect(self.accept)
+        row.addWidget(self.btn_start)
+        v.addLayout(row)
+        self.view.pages.currentChanged.connect(lambda _i: self._sync())
+        self._sync()
+        fit_to_screen(self, INTRO_IMAGE_W + 80, 620)
+
+    def _sync(self) -> None:
+        self.btn_start.setVisible(self.view.at_last())
+        self.btn_skip.setVisible(not self.view.at_last())
+
+
+# 키 발급 단계(96 O1) — (그림 — assets/keyguide/ 안 이름, 한 줄). 그림은 넥슨 오픈API 사이트를 떠서 계정 정보·게임 이름·로고를 가린 것(U1·U6).
+# 사이트가 바뀌면 그림만 갈아 끼운다(같은 이름). 원본은 표시 폭의 두 배 이상 — 150% 화면에서 줄여 그려 흐리지 않게
+KEY_GUIDE = (
+    ("step1.png", f"<a href='{KEY_ISSUE_URL}'>NEXON Open API</a> 에 로그인합니다."),
+    ("step2.png", "[애플리케이션 등록] 을 누릅니다."),
+    ("step3.png", "<b>서비스 단계</b>를 고르고 등록합니다. 개발 단계 키는 하루 1,000건이라 처음 검색을 끝내지 못합니다."),
+    ("step4.png", "발급된 키를 복사해 아래 칸에 붙여 넣습니다."),
+)
+KEY_GUIDE_W = 280   # 단계 그림 하나의 표시 폭(논리 픽셀) — 두 칸씩 두 줄
+
+
 class ApiKeyDialog(QDialog):
     """넥슨 오픈API 키 입력 — 첫 실행, 또는 넥슨이 키를 거절했을 때.
 
@@ -15324,20 +15501,37 @@ class ApiKeyDialog(QDialog):
     넥슨에 한 번 물어 통과한 키만 config.save_api_key 로 저장한다.
     """
     _running: set = set()  # 창이 먼저 닫혀도 확인 스레드가 끝날 때까지 참조를 쥔다
+    DEMO_RESULT = 2        # [키 없이 둘러보기] — 취소(0)·확인(1)과 다른 결과값(_open_window 가 데모를 띄운다)
 
-    def __init__(self, parent=None, reason: str = ""):
+    def __init__(self, parent=None, reason: str = "", allow_demo: bool = False):
         super().__init__(parent)
         self.setWindowTitle(f"{config.APP_NAME} - API 키")
         v = QVBoxLayout(self)
-        intro = QLabel(
-            "넥슨 오픈API 키가 필요합니다. 키는 무료로 바로 발급됩니다.<br><br>"
-            f"1. <a href='{KEY_ISSUE_URL}'>NEXON Open API</a> 에 로그인<br>"
-            "2. 애플리케이션을 <b>서비스 단계</b>로 등록 → 발급된 키 복사<br>"
-            "3. 아래 칸에 붙여넣기<br><br>"
-            "개발 단계 키는 하루 1,000건이라, 처음 검색할 때 받는 수천 경기를 끝내지 못합니다.")
-        intro.setOpenExternalLinks(True)
+        intro = QLabel("넥슨 오픈API 키가 필요합니다. 키는 무료로 바로 발급됩니다.")
         intro.setWordWrap(True)
         v.addWidget(intro)
+        # 96 O1 — 단계마다 그림 한 장 + 한 줄. 그림이 없으면(사이트가 바뀌어 뺐거나 빌드에서 빠짐) 글만
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self.guide_pics: list[QLabel] = []
+        for i, (image, text) in enumerate(KEY_GUIDE):
+            cell = QVBoxLayout()
+            pix = QPixmap(str(config.asset_path(f"assets/keyguide/{image}")))
+            if not pix.isNull():
+                dpr = max(1.0, self.devicePixelRatioF())
+                pix = pix.scaledToWidth(int(KEY_GUIDE_W * dpr), Qt.TransformationMode.SmoothTransformation)
+                pix.setDevicePixelRatio(dpr)
+                pic = QLabel()
+                pic.setPixmap(pix)
+                cell.addWidget(pic)
+                self.guide_pics.append(pic)
+            lb = QLabel(f"{i + 1}. {text}")
+            lb.setOpenExternalLinks(True)
+            lb.setWordWrap(True)
+            cell.addWidget(lb)
+            cell.addStretch(1)
+            grid.addLayout(cell, i // 2, i % 2)
+        v.addLayout(grid)
         self.ed_key = QLineEdit()
         self.ed_key.setPlaceholderText("live_… 또는 test_…")
         self.ed_key.returnPressed.connect(self._on_submit)
@@ -15347,6 +15541,13 @@ class ApiKeyDialog(QDialog):
         self.lb_msg.setStyleSheet(f"color: {T.ERROR};")
         v.addWidget(self.lb_msg)
         row = QHBoxLayout()
+        # 키가 없는 첫 실행에서만 — 넥슨이 키를 거절해 다시 뜬 창(이미 쓰는 사람)엔 없다(96 시작 경로 표)
+        self.btn_demo: QPushButton | None = None
+        if allow_demo:
+            self.btn_demo = QPushButton("키 없이 둘러보기")
+            self.btn_demo.setToolTip("지어낸 경기로 화면을 먼저 봅니다. 넥슨에 묻지 않고 아무것도 저장하지 않습니다.")
+            self.btn_demo.clicked.connect(lambda: self.done(self.DEMO_RESULT))
+            row.addWidget(self.btn_demo)
         row.addStretch(1)
         self.btn_ok = QPushButton("확인")
         self.btn_ok.clicked.connect(self._on_submit)
@@ -15355,7 +15556,7 @@ class ApiKeyDialog(QDialog):
         row.addWidget(self.btn_ok)
         row.addWidget(btn_cancel)
         v.addLayout(row)
-        fit_to_screen(self, 460, self.sizeHint().height())
+        fit_to_screen(self, 2 * KEY_GUIDE_W + 60 if self.guide_pics else 460, self.sizeHint().height())
 
     def _on_submit(self) -> None:
         key = self.ed_key.text().strip()
@@ -15612,6 +15813,14 @@ class AboutDialog(QDialog):
         self.lb_msg.setWordWrap(True)
         self.lb_msg.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_msg)
+        if config.DEMO:
+            # 둘러보기(96 O2) — 켜는 길은 숨긴다(눌러도 config._save_env 가 막지만 누를 것을 보이지 않는다) · 오류 알리기·연결 점검도
+            for wd in (self.chk_web, self.chk_rank, self.lb_rank, self.chk_owner, self.lb_owner, self.chk_card,
+                       self.lb_card, self.chk_auto, self.btn_issue):
+                wd.setVisible(False)
+            self.btn_check.setEnabled(False)
+            self.btn_check.setToolTip("둘러보기에서는 넥슨에 묻지 않습니다")
+            self.lb_msg.setText("둘러보기 화면입니다. 설정은 바꿀 수 없습니다.")
         row = QHBoxLayout()
         row.addStretch(1)
         btn = QPushButton("닫기")
@@ -16207,14 +16416,25 @@ def _setup_app(app: QApplication) -> None:
 
 
 def _open_window(shell: tray.AppShell, show: bool = True):
-    """안내 동의·키 → 창. 동의·키 창에서 취소하면 None. show=False 는 --tray(숨긴 채 — 미리 읽기도 안 한다)."""
+    """안내 동의·키 → 창. 동의·키 창에서 취소하면 None. show=False 는 --tray(숨긴 채 — 미리 읽기도 안 한다).
+    키 창에서 [키 없이 둘러보기] 를 고르면 데모 프로세스를 띄우고 셸을 끝낸다 → None(트레이 [열기] 로 뜬 키 창이면 예약 셋이 돌던 중이다)."""
+    if config.DEMO:
+        return _open_demo_window(shell)
+    if intro_needed():
+        IntroDialog().exec()   # 새 설치 첫 실행에만 · 안내 동의 **앞에** · 닫는 방법과 무관하게 본 것으로
+        mark_intro_seen()
     fresh = config.notice_needed()   # 이번에 처음 동의 — 새로 깐 사람에게 "바뀐 점" 은 안 띄운다(84 H2)
     if fresh:
         if NoticeDialog().exec() != QDialog.DialogCode.Accepted:
             return None
     new_key = not config.API_KEY
     if new_key:
-        if ApiKeyDialog().exec() != QDialog.DialogCode.Accepted:
+        rc = ApiKeyDialog(allow_demo=True).exec()
+        if rc == ApiKeyDialog.DEMO_RESULT:
+            launch_demo()
+            shell.quit_app()
+            return None
+        if rc != QDialog.DialogCode.Accepted:
             return None
     try:
         rankcollect.delete_pending()  # 지난번 [수집 기록 지우기]에서 다른 실행본이 열고 있어 못 지운 것
@@ -16250,15 +16470,42 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     return win
 
 
+def launch_demo() -> None:
+    """키 창 [키 없이 둘러보기] — 같은 실행 파일을 --demo 로 따로 띄운다. env 에서 실제 키·스위치(config 의 *_VAR)를 뺀다."""
+    strip = [v for k, v in vars(config).items() if k.endswith("_VAR") and isinstance(v, str)]
+    demo.spawn(demo.launch_cmd(True), demo.child_env(strip))
+
+
+def _open_demo_window(shell: tray.AppShell):
+    """둘러보기 창 — 지어낸 자료를 데모 폴더 fifa.db 에 넣고 그 계정을 바로 연다. 안내·키·소개 창 · 업데이트 확인 · 캐시 정리 ·
+    배지 바탕 받기 · 랭커 픽 정리 · 색인 백필 · 거래 · 미리 읽기는 안 한다(O2 진입점 표)."""
+    import demodata
+    data = demodata.generate()
+    demodata.install(data, config.DB_PATH, config.CACHE_DIR)
+    win = MainWindow(demodata.DemoAPI(data, cache_dir=config.CACHE_DIR))
+    shell.attach_window(win)
+    win.show_initial()
+    win.open_last_account()   # DB 로 그린 뒤 새 경기 확인도 가짜 API 로(요청 0)
+    return win
+
+
 def main(argv: list[str] | None = None) -> int:
     global _SHELL
     argv = sys.argv if argv is None else argv
     # instance() — 테스트가 이미 만든 앱으로 main 을 부를 수 있게(둘째 QApplication 은 예외)
     app = QApplication.instance() or QApplication(argv)
     if tray.QUIT_ARG in argv[1:]:
-        # 제거기 — 떠 있는 실행본만 끝내고 이 실행은 아무것도 띄우지 않는다(창·크래시 기록·한 번만 실행 주인도 안 됨)
-        tray.request_quit(tray.instance_name())
+        # 제거기 — 떠 있는 실행본만 끝내고 이 실행은 아무것도 띄우지 않는다(창·크래시 기록·한 번만 실행 주인도 안 됨).
+        # 둘러보기(이름 끝 -demo)도 — 안 끝내면 설치 폴더의 파일을 쥐고 있다
+        tray.request_quit(tray.instance_name(demo=False))
+        tray.request_quit(tray.instance_name(demo=True))
         return 0
+    if config.DEMO:
+        return _demo_main(app)
+    try:
+        demo.sweep()   # 지난 둘러보기가 남긴 임시 폴더(강제 종료 · 열린 WAL)
+    except Exception:
+        pass
     _setup_app(app)
     tray_mode = autostart.TRAY_ARG in argv[1:]
     single = None
@@ -16294,6 +16541,23 @@ def main(argv: list[str] | None = None) -> int:
     # os._exit 와 달리 atexit·로그 비우기는 그대로 돈다.
     gc.freeze()
     return rc
+
+
+def _demo_main(app: QApplication) -> int:
+    """둘러보기 실행 — 트레이·예약 셋·자동 실행 손질 없음 · X 는 끝내기(트레이가 없으니 should_hide 가 거짓). 닫으면 데모 폴더를 지워 본다."""
+    _setup_app(app)
+    single = None
+    if config.SINGLE_INSTANCE:
+        single = tray.SingleInstance(tray.instance_name())   # 이름 끝 -demo — 보통 실행과 서로 막지 않는다
+        if not single.claim():
+            return 0
+    shell = tray.AppShell(app, open_window=lambda: None, single=single)
+    _open_window(shell)
+    shell.crash_modal = _crash_modal
+    try:
+        return app.exec()
+    finally:
+        demo.cleanup()
 
 
 if __name__ == "__main__":

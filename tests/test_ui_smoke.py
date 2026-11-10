@@ -3303,7 +3303,8 @@ def test_main_quit_arg_only_asks_and_starts_nothing():
         assert app_main.main(["exe", tray.QUIT_ARG]) == 0
     finally:
         app_main._setup_app, tray.request_quit, tray.SingleInstance = orig
-    assert asked == [tray.instance_name()], asked
+    # 둘러보기(이름 끝 -demo)에도 알린다(96 O2) — 안 끝내면 설치 폴더 파일을 쥐고 있다
+    assert asked == [tray.instance_name(demo=False), tray.instance_name(demo=True)], asked
 
 
 def test_main_runs_setup_first():
@@ -3546,6 +3547,11 @@ def test_main_asks_notice_first_and_quits_on_decline():
 
     def dialog(name, result):
         class _Dlg:
+            DEMO_RESULT = app_main.ApiKeyDialog.DEMO_RESULT
+
+            def __init__(self, *a, **k):   # 키 창은 allow_demo 를 받는다(96 O2)
+                pass
+
             def exec(self):
                 seen.append(name)
                 return result
@@ -3578,9 +3584,67 @@ def test_main_asks_notice_first_and_quits_on_decline():
         config.NOTICE_ACCEPTED = config.NOTICE_BASE_VERSION
         assert app_main.main() == 0
         assert seen == ["키"], seen
+        # 96 O3 — 새 설치(동의 0)는 소개가 안내 **앞에** 한 번. 소개를 어떻게 닫든 본 것으로(다음 실행엔 안내부터)
+        seen.clear()
+        app_main.IntroDialog = dialog("소개", R)
+        config.NOTICE_ACCEPTED = 0
+        app_main.NoticeDialog = dialog("안내", R)
+        assert app_main.intro_needed()
+        assert app_main.main() == 0
+        assert seen == ["소개", "안내"], seen
+        seen.clear()
+        assert not app_main.intro_needed()
+        assert app_main.main() == 0
+        assert seen == ["안내"], seen
     finally:
         (app_main._setup_app, app_main.NoticeDialog, app_main.ApiKeyDialog,
          app_main.MainWindow, config.NOTICE_ACCEPTED, config.API_KEY) = orig
+        app_main.IntroDialog = _RealIntro
+        s = app_main.QSettings(str(config.SETTINGS_PATH), app_main.QSettings.Format.IniFormat)
+        s.remove(config.INTRO_SEEN_KEY)
+        s.sync()
+
+
+_RealIntro = app_main.IntroDialog
+
+
+def test_key_dialog_steps_96():
+    """96 O1 — 키 창은 단계 넷(그림이 있으면 그림 + 한 줄, 없으면 한 줄만) · 첫 줄에 발급 사이트 주소."""
+    dlg = app_main.ApiKeyDialog(allow_demo=True)
+    texts = [lb.text() for lb in dlg.findChildren(app_main.QLabel)]
+    steps = [t for t in texts if t[:2] in ("1.", "2.", "3.", "4.")]
+    assert len(steps) == len(app_main.KEY_GUIDE) == 4, steps
+    assert app_main.KEY_ISSUE_URL in steps[0] and "서비스 단계" in steps[2]
+    have = sum(os.path.exists(os.path.join(_ROOT, "assets", "keyguide", img)) for img, _t in app_main.KEY_GUIDE)
+    assert len(dlg.guide_pics) == have, (len(dlg.guide_pics), have)
+    dlg.deleteLater()
+
+
+def test_intro_dialog_pages_96():
+    """96 O3 — 세 장 · 그림이 실제로 읽힌다(spec datas 와 같은 경로) · 마지막 장에서만 [시작하기] · 업그레이드한 사람엔 안 뜬다."""
+    dlg = app_main.IntroDialog(_win)
+    v = dlg.view
+    assert v.pages.count() == len(app_main.INTRO_PAGES) == 3
+    for i in range(v.pages.count()):
+        pics = [lb for lb in v.pages.widget(i).findChildren(app_main.QLabel) if not lb.pixmap().isNull()]
+        assert pics, f"{i + 1}장 그림을 못 읽었다"
+    assert not dlg.btn_start.isVisibleTo(dlg) and dlg.btn_skip.isVisibleTo(dlg)
+    v.btn_next.click()
+    v.btn_next.click()
+    assert v.at_last() and dlg.btn_start.isVisibleTo(dlg) and not v.btn_next.isEnabled()
+    v.btn_prev.click()
+    assert v.lb_count.text() == "2 / 3"
+    dlg.deleteLater()
+    spec = open(os.path.join(_ROOT, "피파전적관리.spec"), encoding="utf-8").read()
+    assert "('assets/intro', 'assets/intro')" in spec
+    saved = config.NOTICE_ACCEPTED
+    try:
+        config.NOTICE_ACCEPTED = 1
+        assert not app_main.intro_needed(), "업그레이드한 사람(이미 동의)엔 안 뜬다"
+    finally:
+        config.NOTICE_ACCEPTED = saved
+    _win._go_page("소개")
+    assert _win._current_page_name() == "소개"
 
 
 # ── 새 버전 알림 ──────────────────────────────────────────────────────
