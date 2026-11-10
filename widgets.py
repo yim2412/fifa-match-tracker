@@ -4499,7 +4499,10 @@ class _PitchField(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        p.fillRect(self.rect(), QColor(T.PITCH))
+        n = T.PITCH_STRIPES   # 95 — 게임 잔디 두 색 가로 줄무늬
+        for i in range(n):
+            y0, y1 = round(h * i / n), round(h * (i + 1) / n)
+            p.fillRect(0, y0, w, y1 - y0, QColor(T.PITCH_GRASS[i % 2]))
         p.setPen(QPen(QColor(T.PITCH_LINE), 2))
         m = self.MARGIN
         p.drawRect(m, m, w - 2 * m, h - 2 * m)

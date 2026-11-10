@@ -13863,6 +13863,19 @@ def test_game_colors_95_ink_and_level():
     assert T.LEVEL not in card._head_name.text(), "초록 머리 위에 파랑 레벨"
 
 
+def test_pitch_field_game_grass_95():
+    # 95 ② — 선수 카드 축구장은 게임 잔디 두 색 줄무늬 · 슛 맵 판은 그대로(점이 묻혀서)
+    f = widgets._PitchField([])
+    f.resize(200, 400)
+    img = f.grab().toImage()
+    n = T.PITCH_STRIPES
+    got = [img.pixelColor(3, int(400 * (i + 0.5) / n)).name() for i in range(n)]
+    assert got == [T.PITCH_GRASS[i % 2] for i in range(n)], got
+    s = widgets.ShotMapWidget()
+    s.resize(200, 300)
+    assert s.grab().toImage().pixelColor(3, 150).name() == T.PITCH
+
+
 def test_wdl_bar_segments_and_text():
     # P2 — 칸 폭은 경기 수 비례 · 0경기 칸은 없음 · 흐리면 세 칸 다 바탕 쪽으로 · 글은 승·패만 색
     import widgets

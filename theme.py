@@ -379,7 +379,10 @@ def cvd_delta(a_hex: str, b_hex: str) -> float:
 
 
 # 잔디 위 색 — 밝은 테마의 진한 초록은 잔디와 명도가 비슷해 골 점이 묻힌다.
-PITCH = "#1e5c34"
+PITCH = "#1e5c34"                    # 슛 맵 판 — 게임 잔디(아래)는 밝아 골 점이 2.4~3.0 으로 묻혀 그대로(95)
+# 선수 카드 축구장(PitchWidget) — 게임 스쿼드 관리 화면 잔디 두 줄무늬(95 · 스크린숏 픽셀). 카드가 불투명이라 밝아도 된다
+PITCH_GRASS = ("#487c20", "#648c2c")
+PITCH_STRIPES = 8                    # 가로 줄무늬 수(게임 화면 원근판의 띠를 평평하게 셈)
 PITCH_GOAL = "#5ee08f"
 PITCH_MISS = "#c3c9d4"
 TIMELINE_SHOT_ALPHA = 0.75   # 경기 흐름 줄의 막힌 유효슛 점 진하기(88 P2 — 골은 불투명 · 색은 내 몫 ACCENT_FILL·상대 몫 OPP_FILL 그대로)
