@@ -726,6 +726,10 @@ def _drive_uncovered() -> None:
             store.prune_my_traits(conn, "b")
             store.prune_my_traits(conn, None)
             store.table_bytes(conn, store.CARD_TABLES + store.DIST_TABLES)
+            # 96 W2 받지 못한 경기 — 화면 스모크(test_missed_details_are_retried_and_counted_96)가 부른다 · 줄이 있어야 안쪽 SQL 이 돈다
+            store.record_detail_failures(conn, "a", 52, {"m1": store.RETRY_ERROR}, "2026-11-10")
+            store.record_detail_failures(conn, "a", 52, {"m1": store.RETRY_NETWORK}, "2026-11-10")
+            store.load_detail_retry(conn, "a", 52)
             store.copy_kept(Path(d) / "f.db", Path(d) / "kept.db")
             # 줄 섞기(50단계 V1) — 옛 done 바퀴 하나를 심어 안쪽 SELECT 까지 돌린다(test_ownerdist 가 부른다)
             conn.execute("INSERT INTO owner_dist_state (seed, started_at, ended_at, result) VALUES (1, 'a', 'b', 'done')")

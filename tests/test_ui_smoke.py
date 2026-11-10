@@ -6235,12 +6235,14 @@ def test_search_hands_current_account_to_loader():
     got = []
 
     class _Rec:
-        def __init__(self, api, nick, mt, prev=None, prefetch=None, record_elo=False, want_max_division=False):
+        def __init__(self, api, nick, mt, prev=None, prefetch=None, record_elo=False, want_max_division=False,
+                     track_missed=False):
             got.append(prev)
             pf.append(prefetch)
             elo.append(record_elo)
             maxdiv.append(want_max_division)
             self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
+            self.outcome = self
             self.rank_ready = self.max_division_ready = self.finished = self
             self.elo_saved = _Sig()
 
@@ -6354,6 +6356,167 @@ def test_server_fail_stops_without_saving_holes_or_key_dialog():
         assert not marks, "서버 사정으로 그날 랭커 픽을 껐다"
     finally:
         store.mark_final_429 = orig
+
+
+class _PagedApi(_DetailApi):
+    """96 W2 — 목록을 쪽으로 나눠 준다(PAGE_SIZE 를 줄여) · fail 에 든 경기는 그 이유로 실패 · 물은 상세를 센다."""
+
+    def __init__(self, fail=None):
+        super().__init__([], "")
+        self.fail = dict(fail or {})   # match_id → "error" | "network" | "format"
+        self.asked = []
+        self.order = sorted(self.by_id)
+
+    def get_match_ids(self, ouid, matchtype, offset, limit):
+        return self.order[offset:offset + limit]
+
+    def get_match_detail(self, mid):
+        self.asked.append(mid)
+        how = self.fail.get(mid)
+        if how == "error":
+            raise nexon_api.NexonAPIError("x", code="OPENAPI00009", status=500)
+        if how == "network":
+            raise nexon_api.NexonAPIError("x", code=nexon_api.NETWORK_CODE)
+        if how == "format":
+            raise ValueError("JSON 아님")
+        return self.by_id[mid]
+
+
+def test_missed_details_are_retried_and_counted_96():
+    # 96 W2 — 상세 하나가 실패하면 나머지는 저장되고, 다음 검색은 첫 쪽이 다 아는 경기라 멈춰 그 경기를 영영 안 받았다(구멍).
+    # 이제 detail_retry 가 다음 검색 todo 앞에 붙이고 · 3번이면 포기하고 아는 경기로 · 이유별 수가 outcome 에 실린다
+    tmp = pathlib.Path(tempfile.mkdtemp())
+    saved = config.DB_PATH, config.WEB_DATA, app_main.PAGE_SIZE
+    config.DB_PATH, config.WEB_DATA, app_main.PAGE_SIZE = tmp / "t.db", False, 2
+
+    def search(api, track=True):
+        outs, ok = [], []
+        ld = app_main.MatchLoader(api, "닉", 52, track_missed=track)
+        ld.outcome.connect(outs.append)
+        ld.finished_ok.connect(lambda *a: ok.append(a[6]))
+        ld.failed.connect(lambda m: ok.append(("실패", m)))
+        ld.run()
+        assert len(outs) == 1, outs
+        return outs[0], ok
+
+    def tries():
+        conn = store.open_db(config.DB_PATH)
+        try:
+            return {r["match_id"]: (r["reason"], r["tries"]) for r in conn.execute("SELECT * FROM detail_retry")}
+        finally:
+            conn.close()
+
+    try:
+        order = sorted(d["matchId"] for d in _DETAILS)
+        last = order[-1]   # 둘째 쪽 — 첫 쪽(order[:2])이 다 아는 경기면 목록 확인이 거기서 멈춘다
+        # 막지 않았으면 일어났을 일(대조): 남기지 않는 로더는 다음 검색에서 그 경기를 다시 안 묻는다
+        out, ok = search(_PagedApi({last: "error"}), track=False)
+        assert ok == [len(order) - 1] and out.stop == "" and out.listed == len(order), (ok, out)
+        api = _PagedApi()
+        search(api, track=False)
+        assert last not in api.asked, "대조가 서지 않는다 — 구멍이 원래 없었다"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+
+        # 남기는 로더 — 실패 하나는 이유별로 세고 줄에 남는다
+        out, ok = search(_PagedApi({last: "error"}))
+        assert out.missed == {store.RETRY_ERROR: 1} and out.saved == len(order) - 1, out
+        assert tries() == {last: (store.RETRY_ERROR, 1)}, tries()
+        assert "다음 검색 때 다시 받습니다" in app_main.missed_tip(out), app_main.missed_tip(out)
+        # 다음 검색은 둘째 쪽까지 안 가도 그 경기를 다시 묻고, 받으면 줄에서 뺀다
+        api = _PagedApi()
+        out, ok = search(api)
+        assert api.asked == [last] and ok == [1] and out.missed == {}, (api.asked, ok, out)
+        assert tries() == {}, tries()
+
+        # 3번 실패하면 포기 — 넷째 검색은 묻지 않고, 첫 쪽에 있어도 목록 확인이 거기서 멈춘다
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        first = order[0]
+        for n in range(1, config.DETAIL_RETRY_MAX + 1):
+            out, ok = search(_PagedApi({first: "error"}))
+            want = {app_main.MISSED_GAVE_UP: 1} if n == config.DETAIL_RETRY_MAX else {store.RETRY_ERROR: 1}
+            assert out.missed == want and tries()[first][1] == n, (n, out, tries())
+        api = _PagedApi()
+        out, ok = search(api)
+        assert api.asked == [] and out.missed == {app_main.MISSED_GAVE_UP: 1}, (api.asked, out)
+        assert out.listed == 2, f"포기한 경기가 첫 쪽에 있어 목록을 끝까지 넘겼다: {out.listed}"
+
+        # 네트워크 끊김은 하루 한 번만 센다 — 끊긴 채 몇 번 검색해도 포기하지 않는다
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        for _ in range(config.DETAIL_RETRY_MAX + 1):
+            out, ok = search(_PagedApi({last: "network"}))
+        assert tries() == {last: (store.RETRY_NETWORK, 1)} and out.missed == {store.RETRY_NETWORK: 1}, (tries(), out)
+
+        # 깨진 JSON(ValueError) — 전엔 검색 전체가 "예기치 못한 오류" 로 죽었다
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        out, ok = search(_PagedApi({last: "format"}))
+        assert ok == [len(order) - 1] and out.missed == {store.RETRY_FORMAT: 1}, (ok, out)
+
+        # 다른 길로 이미 저장된 경기는 읽을 때 줄에서 지운다(상대 검색·랭커 픽)
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_matches(conn, [d for d in _DETAILS if d["matchId"] == last])
+            assert store.load_detail_retry(conn, _OUID, 52) == {}
+        finally:
+            conn.close()
+        assert tries() == {}, tries()
+
+        # 한도로 멈추면 저장하지 않으니 tries 에 안 센다 · 못 받은 수는 todo 전부
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir()
+        out, ok = search(_DetailApi(order[:1], nexon_api.QUOTA_CODE))
+        assert out.stop == "quota" and out.missed == {app_main.MISSED_QUOTA: len(order)} and tries() == {}, out
+        assert "내일 다시 검색하면" in app_main.missed_tip(out)
+    finally:
+        config.DB_PATH, config.WEB_DATA, app_main.PAGE_SIZE = saved
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_search_outcome_reaches_status_cell_96():
+    # 배선 — 검색창 검색(_api_search)의 로더만 남기기를 켜고 outcome 을 상태 줄 칸에 잇는다 · 저장본 열기·다시 읽기는 아니다
+    made = []
+
+    class _Rec:
+        def __init__(self, *a, **k):
+            made.append(k)
+            self.outcome = _Sig()
+            self.progress = self.finished_ok = self.failed = self.finished = self.key_invalid = _Sig()
+            self.quota_hit = self.rank_ready = self.max_division_ready = self.elo_saved = _Sig()
+
+        def isRunning(self):
+            return False
+
+        def start(self):
+            pass
+
+    class _Sig:
+        def __init__(self):
+            self.slots = []
+
+        def connect(self, f):
+            self.slots.append(f)
+
+    saved = app_main.MatchLoader, _win._loader, _win._ouid
+    app_main.MatchLoader, _win._loader = _Rec, None
+    try:
+        _win._api_search("닉")
+        assert made and made[-1].get("track_missed") is True, made
+        assert _win._on_search_outcome in _win._loader.outcome.slots
+        # 칸 — 0 이면 숨김 · 취소는 보던 값을 둔다
+        out = app_main.SearchOutcome(listed=5, saved=3, missed={store.RETRY_ERROR: 2}, stop="")
+        _win._on_search_outcome(out)
+        assert _win.lb_missed.isVisibleTo(_win) and _win.lb_missed.text() == "받지 못한 경기 2", _win.lb_missed.text()
+        assert "넥슨이 오류로 답했습니다" in _win.lb_missed.toolTip()
+        _win._on_search_outcome(app_main.SearchOutcome(stop="cancel"))
+        assert _win.lb_missed.text() == "받지 못한 경기 2"
+        _win._on_search_outcome(app_main.SearchOutcome(stop=""))
+        assert not _win.lb_missed.isVisibleTo(_win) and _win.lb_missed.text() == ""
+    finally:
+        app_main.MatchLoader, _win._loader, _win._ouid = saved
+        _win._set_busy(False)
 
 
 def test_quota_signal_reaches_key_dialog():

@@ -977,3 +977,5 @@ RANGE_GAMES = (100, 200, 500)
 RANGE_DAYS = (1, 3, 5, 10)
 # 구단주 비교 — 처음 보는 상대는 상세를 이만큼 받을 때마다 받은 만큼 먼저 그린다(U14 · 3천 판이면 열 번)
 COMPARE_PARTIAL_EVERY = 300
+# 96 W2 — 상세를 못 받은 경기를 다음 검색에서 다시 묻는 횟수(store.detail_retry). 넘으면 "넥슨이 계속 오류" 로 세고 더 안 묻는다
+DETAIL_RETRY_MAX = 3

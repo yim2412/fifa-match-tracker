@@ -352,6 +352,18 @@ CREATE TABLE IF NOT EXISTS my_traits (
     body       TEXT,
     fetched_at TEXT NOT NULL
 );
+-- 상세를 못 받은 경기(96 W2) — 나머지는 저장되니 다음 검색의 목록 확인이 첫 쪽에서 멈춰 이 경기를 영영 안 받았다.
+-- 다음 검색이 todo 앞에 붙인다 · tries 가 config.DETAIL_RETRY_MAX 면 더 안 묻고 known 에 합친다(첫 쪽 "다 아는 경기" 판정이 서게)
+-- day = tries 를 마지막으로 올린 날 — 네트워크 끊김은 하루 한 번만 센다(끊긴 채 몇 번 검색해도 포기하지 않게)
+CREATE TABLE IF NOT EXISTS detail_retry (
+    ouid       TEXT NOT NULL,
+    match_type INTEGER NOT NULL,
+    match_id   TEXT NOT NULL,
+    reason     TEXT NOT NULL,
+    tries      INTEGER NOT NULL DEFAULT 0,
+    day        TEXT NOT NULL,
+    PRIMARY KEY (ouid, match_type, match_id)
+) WITHOUT ROWID;
 """
 
 # [정보 › 저장 공간] 내 기록 전부(57 K9 ⑤) — fifa.db 를 바꿔 끼울 때 새 파일로 옮기는 표와 거르는 조건. 나머지 표는 전부 버린다
@@ -363,7 +375,7 @@ RESET_KEEP = {"api_budget": "", "seasons": "", "teamcolor_meta": "", "teamcolor_
 RESET_WIPE = ("matches", "match_players", "accounts", "team_colors", "elo_history", "elo_track", "predictions",
               "trades", "trades_prev", "card_prices", "card_info", "ranker_stats", "squad_owner", "squad_match",
               "match_squads", "ranker_squads", "ranker_matches", "owner_dist_state", "owner_dist_done", "owner_dist",
-              "trait_squads", "card_extra", "card_tries", "card_price_days", "my_traits")
+              "trait_squads", "card_extra", "card_tries", "card_price_days", "my_traits", "detail_retry")
 # [저장 공간] 의 카드 정보(51 — K9 ②) · 구단주 분포·랭커 픽(K9 ⑥ — 크기만 · 지우기는 기존 purge 함수)
 CARD_TABLES = ("card_extra", "card_tries", "card_price_days")
 DIST_TABLES = ("owner_dist_state", "owner_dist_done", "owner_dist", "ranker_squads", "ranker_matches", "trait_squads")
@@ -718,6 +730,49 @@ def known_ids(conn: sqlite3.Connection, ouid: str,
         sql += " AND m.match_type = ?"
         args.append(match_type)
     return {r["match_id"] for r in conn.execute(sql, args)}
+
+
+# detail_retry.reason — 화면 문구는 app_main.MISSED_TEXT(같은 이름을 키로)
+RETRY_NETWORK = "network"   # 응답을 못 받음 — 하루 한 번만 tries 를 올린다
+RETRY_ERROR = "error"       # 넥슨 오류 응답(404·400·500·상세 중 키 거절 등)
+RETRY_FORMAT = "format"     # 응답이 JSON 이 아니었다
+
+
+def load_detail_retry(conn: sqlite3.Connection, ouid: str, match_type: int) -> dict[str, tuple[str, int]]:
+    """다시 물을 경기 {match_id: (이유, tries)} — 다른 길(상대 검색·랭커 픽·옛 버전)로 이미 저장된 경기는 지우고 뺀다."""
+    rows = conn.execute("SELECT r.match_id, r.reason, r.tries, m.match_id IS NOT NULL AS have"
+                        " FROM detail_retry r LEFT JOIN matches m ON m.match_id = r.match_id"
+                        " WHERE r.ouid = ? AND r.match_type = ?", (ouid, match_type)).fetchall()
+    done = [r["match_id"] for r in rows if r["have"]]
+    if done:
+        clear_detail_retry(conn, ouid, match_type, done)
+    return {r["match_id"]: (r["reason"], r["tries"]) for r in rows if not r["have"]}
+
+
+def record_detail_failures(conn: sqlite3.Connection, ouid: str, match_type: int,
+                           failures: dict[str, str], day: str) -> None:
+    """이번 검색에서 상세를 못 받은 경기 {match_id: 이유} — tries 를 하나 올린다(네트워크는 그날 이미 셌으면 안 올린다)."""
+    with conn:
+        for mid, reason in failures.items():
+            row = conn.execute("SELECT reason, tries, day FROM detail_retry"
+                               " WHERE ouid = ? AND match_type = ? AND match_id = ?",
+                               (ouid, match_type, mid)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO detail_retry (ouid, match_type, match_id, reason, tries, day)"
+                             " VALUES (?, ?, ?, ?, 1, ?)", (ouid, match_type, mid, reason, day))
+            elif reason == RETRY_NETWORK and row["day"] == day:
+                continue
+            else:
+                conn.execute("UPDATE detail_retry SET reason = ?, tries = tries + 1, day = ?"
+                             " WHERE ouid = ? AND match_type = ? AND match_id = ?",
+                             (reason, day, ouid, match_type, mid))
+
+
+def clear_detail_retry(conn: sqlite3.Connection, ouid: str, match_type: int, ids) -> None:
+    """받은(저장한) 경기는 줄에서 뺀다."""
+    with conn:
+        conn.executemany("DELETE FROM detail_retry WHERE ouid = ? AND match_type = ? AND match_id = ?",
+                         [(ouid, match_type, i) for i in ids])
 
 
 def load_details(conn: sqlite3.Connection, ouid: str,

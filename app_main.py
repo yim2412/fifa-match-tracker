@@ -78,7 +78,8 @@ from core_api import (
     PeriodStat, period_stats, summarize,
 )
 from nexon_api import (
-    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, QUOTA_CODE, SERVER_CODES, FCOnlineAPI, NexonAPIError,
+    ATTRIBUTION, KEY_INVALID_CODE, KEY_ISSUE_URL, NETWORK_CODE, QUOTA_CODE, SERVER_CODES, FCOnlineAPI,
+    NexonAPIError,
     check_key, read_meta_on_disk,
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
@@ -357,6 +358,48 @@ def running_writers(stores: set[str]) -> list[Worker]:
     return out
 
 
+# 96 W2 — 받지 못한 경기의 이유(키) → (무슨 일, 할 일). detail_retry 에 남는 셋은 store.RETRY_* 와 같은 이름.
+# 할 일은 이유마다 다음 검색이 이어 받는지에 따라 다르다(ROADMAP 96 "W2 이유별" 표)
+MISSED_QUOTA, MISSED_SERVER, MISSED_GAVE_UP, MISSED_UNREADABLE = "quota", "server", "gave_up", "unreadable"
+MISSED_TEXT = {
+    MISSED_QUOTA: ("호출 한도에 닿았습니다.", "내일 다시 검색하면 이어 받습니다."),
+    MISSED_SERVER: ("중앙 서버와 넥슨 모두 응답이 없었습니다.", "잠시 뒤 다시 검색하면 이어 받습니다."),
+    store.RETRY_NETWORK: ("넥슨 응답을 받지 못했습니다.", "다음 검색 때 다시 받습니다."),
+    store.RETRY_ERROR: ("넥슨이 오류로 답했습니다.", "다음 검색 때 다시 받습니다."),
+    store.RETRY_FORMAT: ("넥슨 응답의 형식이 맞지 않았습니다.", "다음 검색 때 다시 받습니다."),
+    MISSED_GAVE_UP: (f"{config.DETAIL_RETRY_MAX}번 시도했지만 받지 못했습니다.", "넥슨이 계속 오류를 내서 더 묻지 않습니다."),
+    MISSED_UNREADABLE: ("저장은 됐지만 내 경기로 읽지 못했습니다.", "화면에는 나오지 않습니다."),
+}
+
+
+@dataclass
+class SearchOutcome:
+    """검색 하나가 끝난 모양(96 W2) — 끝나는 길(성공·한도·실패·키 거절·취소) 모두 MatchLoader.outcome 으로 하나씩.
+    stop: "" 끝까지 · "quota" · "server" · "failed" · "key" · "cancel"."""
+    listed: int = 0                 # 넥슨 목록에서 본 경기 수
+    saved: int = 0                  # 새로 저장한 수
+    missed: dict | None = None      # 이유 → 못 받은 경기 수
+    stop: str = "cancel"
+
+    def __post_init__(self):
+        if self.missed is None:
+            self.missed = {}
+
+    @property
+    def missed_total(self) -> int:
+        return sum(self.missed.values())
+
+
+def missed_tip(outcome: SearchOutcome) -> str:
+    """상태 줄 칸의 말풍선 — 이유마다 한 줄(무슨 일 · 할 일)."""
+    lines = []
+    for key, (what, todo) in MISSED_TEXT.items():
+        n = outcome.missed.get(key, 0)
+        if n:
+            lines.append(f"{n:,}경기: {what} {todo}")
+    return "\n".join(lines)
+
+
 class MatchLoader(Worker):
     """API 호출은 전부 여기서 — UI 스레드가 멈추지 않게."""
     WRITES = frozenset({STORE_FIFA, STORE_DETAILS, STORE_IMAGES})   # 경기 저장 · 상세 캐시 · 등급 배지
@@ -383,17 +426,24 @@ class MatchLoader(Worker):
     # 76 U14 — 받는 중간 결과(최신순 [MatchSummary], [원본 detail], ouid). 저장된 경기가 하나도 없는 계정만 —
     # 저장분이 있으면 최신 몇 판과 옛 기록 사이에 구멍이 생겨 "최근 N판"이 실제와 달라진다. 구단주 비교만 켠다
     partial = Signal(object, object, str)
+    # 96 W2 — 넥슨에 물은 검색이 끝날 때마다 한 번(SearchOutcome) · 저장본만 읽는 길(offline)은 안 보낸다
+    outcome = Signal(object)
 
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
-                 record_elo: bool = False, want_max_division: bool = False, emit_partial: bool = False):
+                 record_elo: bool = False, want_max_division: bool = False, emit_partial: bool = False,
+                 track_missed: bool = False):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
         offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
         prefetch: 켤 때 미리 읽어 둔 저장 경기 — 같은 계정이면 DB 를 다시 안 읽는다.
         record_elo: 받은 ELO 를 fifa.db elo_history 에 — 메인 검색만. 구단주 비교도 같은 클래스라
-        기본은 꺼 둔다(비교 상대의 이력을 쌓지 않는다)."""
+        기본은 꺼 둔다(비교 상대의 이력을 쌓지 않는다).
+        track_missed: 상세를 못 받은 경기를 detail_retry 에 남기고 다음 검색에서 다시 묻는다(96 W2) — 메인 검색만."""
         super().__init__()
+        self._track_missed = track_missed
+        self._failures: dict[str, str] = {}   # match_id → 이유(store.RETRY_*) — 상세 스레드들이 채운다
+        self._fail_lock = threading.Lock()
         self._record_elo = record_elo
         self._want_max_division = want_max_division  # 메인 검색만 — 구단주 비교 로더는 안 부른다
         self._emit_partial = emit_partial
@@ -474,6 +524,13 @@ class MatchLoader(Worker):
             except Exception as e:
                 self.failed.emit(f"저장된 전적을 읽지 못했습니다: {e}")
             return
+        out = SearchOutcome()
+        try:
+            self._run_search(out)
+        finally:
+            self.outcome.emit(out)
+
+    def _run_search(self, out: SearchOutcome) -> None:
         try:
             self.progress.emit(0, 0, f"'{self._nickname}' 계정 조회 중…")
             ouid = self._api.get_ouid(self._nickname)
@@ -504,11 +561,18 @@ class MatchLoader(Worker):
 
                 # 이미 가진 경기는 목록 확인도, 상세 조회도 다시 하지 않는다.
                 known = store.known_ids(conn, ouid, self._match_type)
-                ids = self._new_match_ids(ouid, known)
+                # 지난 검색에서 못 받은 경기(96 W2) — 다시 물을 것은 맨 앞에, 포기한 것은 아는 경기로(안 그러면 첫 쪽에 있을 때
+                # "다 아는 쪽" 판정이 영영 거짓이라 매번 전부 훑는다)
+                retry = store.load_detail_retry(conn, ouid, self._match_type) if self._track_missed else {}
+                gave_up = {i for i, (_r, t) in retry.items() if t >= config.DETAIL_RETRY_MAX}
+                again = [i for i in retry if i not in gave_up and i not in known]
+                seen = known | set(retry)   # 다시 물을 것도 목록 넘기기에선 아는 경기 — 이미 todo 맨 앞에 있다
+                ids = self._new_match_ids(ouid, seen)
                 if self._cancel:
                     return
                 got = len(ids)
-                todo = [i for i in ids if i not in known]
+                out.listed = got
+                todo = again + [i for i in ids if i not in seen]
 
                 fresh: list[dict] = []
                 fresh_m: list[MatchSummary] = []   # partial 용 — 받은 순서(= 최신순, pool.map 은 순서를 지킨다)
@@ -543,6 +607,10 @@ class MatchLoader(Worker):
                     finally:
                         self._pool.shutdown(wait=False, cancel_futures=True)
                         self._pool = None
+                if self._quota_hit or self._server_fail:
+                    # 저장하지 않으니 다음 검색이 목록부터 다시 본다 — 이 회차의 개별 실패는 tries 에 안 센다
+                    out.stop = "quota" if self._quota_hit else "server"
+                    out.missed = {MISSED_QUOTA if self._quota_hit else MISSED_SERVER: len(todo)}
                 if self._quota_hit:
                     _mark_final_429()  # 재시도 끝의 429 — 그날 랭커 픽은 시작하지 않는다(내 검색이 먼저 · E13)
                     # 듬성듬성한 결과를 DB 에 넣으면 그 구멍은 영영 안 메워진다 — 다음 검색의
@@ -562,6 +630,9 @@ class MatchLoader(Worker):
                         "받은 경기는 캐시에 있어, 다시 검색하면 나머지만 이어서 받습니다.")
                     return
                 new = store.save_matches(conn, fresh)
+                out.saved = new
+                if self._track_missed:
+                    self._note_missed(conn, ouid, fresh, out)
                 # DB 에 들어간 경기의 디스크 캐시는 지운다 — DB 가 정본이고, 캐시는 한도에 걸려
                 # 아직 DB 에 못 넣은 경기를 이어 받을 때만 필요하다(2026-10-02: 2만 개·407MB 중복)
                 self._api.forget_details([d.get("matchId") for d in fresh])
@@ -596,6 +667,7 @@ class MatchLoader(Worker):
                 self._current_grade(details, ouid)
 
             if not details:
+                out.stop = ""
                 self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got,
                                       rank, grade_name, is_champion, badge_path,
                                       {}, division_names)
@@ -610,6 +682,7 @@ class MatchLoader(Worker):
             self.progress.emit(0, 0, "선수 정보 조회 중…")
             names, positions, seasons = meta_f.result()
 
+            out.stop = ""
             self.finished_ok.emit(matches, details, ouid, basic, names,
                                   positions, new, got, rank, grade_name,
                                   is_champion, badge_path, seasons, division_names)
@@ -624,13 +697,37 @@ class MatchLoader(Worker):
             if e.code == QUOTA_CODE or e.status == 429:
                 _mark_final_429()
             if e.code == KEY_INVALID_CODE:
+                out.stop = "key"
                 self.key_invalid.emit(e.message)
             else:
+                out.stop = "quota" if e.code == QUOTA_CODE else "failed"
                 self.failed.emit(e.message)
         except CancelledError:
             return  # cancel()이 나란히 돌던 일을 내렸다 — 창을 닫는 중이라 알릴 곳이 없다
         except Exception as e:
+            out.stop = "failed"
             self.failed.emit(f"예기치 못한 오류: {e}")
+
+    def _note_missed(self, conn, ouid: str, fresh: list[dict], out: SearchOutcome) -> None:
+        """저장 뒤 — 못 받은 것은 tries 를 올리고, 이유별 수를 out 에(96 W2). 받은 것은 아래 load_detail_retry 가
+        matches 와 대조해 지운다(따로 지우는 줄을 두면 변이가 못 잡는 겹친 장치가 된다)."""
+        with self._fail_lock:
+            failures = dict(self._failures)
+        store.record_detail_failures(conn, ouid, self._match_type, failures, datetime.now().date().isoformat())
+        missed: Counter = Counter()
+        for mid, (reason, tries) in store.load_detail_retry(conn, ouid, self._match_type).items():
+            if tries >= config.DETAIL_RETRY_MAX:
+                missed[MISSED_GAVE_UP] += 1
+            elif mid in failures:
+                missed[reason] += 1
+        unreadable = sum(1 for d in fresh if parse_match(d, ouid) is None)
+        if unreadable:
+            missed[MISSED_UNREADABLE] = unreadable
+        out.missed = dict(missed)
+
+    def _fail(self, match_id: str, reason: str) -> None:
+        with self._fail_lock:
+            self._failures[match_id] = reason
 
     def _start_max_division(self, ouid: str):
         """역대 최고 등급 요청을 따로 한 스레드에서 시작 — 꺼져 있으면 None."""
@@ -687,6 +784,13 @@ class MatchLoader(Worker):
                 self._quota_hit = True
             elif e.code in SERVER_CODES:
                 self._server_fail = True
+            else:
+                # 네트워크·404/400/500·상세 중 키 거절 — 나머지는 저장되니 남겨 두지 않으면 영영 안 받는다(96 W2)
+                self._fail(match_id, store.RETRY_NETWORK if e.code == NETWORK_CODE else store.RETRY_ERROR)
+            return None
+        except ValueError:
+            # 200 인데 JSON 이 아니다(_get_direct 의 res.json) — 전엔 여기서 올라가 pool.map 이 검색 전체를 죽였다
+            self._fail(match_id, store.RETRY_FORMAT)
             return None
 
     def _safe_meta(self, name: str, key: str, val: str) -> dict:
@@ -3341,6 +3445,10 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         self.progress.setMaximumHeight(14)
+        # 96 W2 — 마지막 검색에서 받지 못한 경기(0 이면 숨김 · 이유별 수와 할 일은 말풍선) · 검색창에서 시작한 검색만 고친다
+        self.lb_missed = QLabel("")
+        self.lb_missed.setVisible(False)
+        self.statusBar().addPermanentWidget(self.lb_missed)
         self.statusBar().addPermanentWidget(self.progress, 1)
         self._release: updatecheck.Release | None = None
         self._update_worker: UpdateCheckWorker | None = None
@@ -11007,7 +11115,8 @@ class MainWindow(QMainWindow):
         prefetch, self._prefetch = self._prefetch, None
         self._yield_trades()  # 거래 받기는 쪽 사이에서 멈추고, 이 검색이 끝나면(finished) 이어 받는다
         self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
-                                   prefetch=prefetch, record_elo=True, want_max_division=True)
+                                   prefetch=prefetch, record_elo=True, want_max_division=True, track_missed=True)
+        self._loader.outcome.connect(self._on_search_outcome)
         self._loader.finished.connect(self.start_trades)
         self._loader.finished.connect(self.start_visible_api_loader)  # 거래가 시작됐으면 그쪽이 끝난 뒤
         self._loader.progress.connect(self._on_progress)
@@ -11039,6 +11148,16 @@ class MainWindow(QMainWindow):
             self._max_division[ouid] = info
         self._render_ranker()
         self._render_sc_records()  # 이 신호는 finished_ok 뒤에 온다 — 승률 그래프의 넥슨 줄도 다시
+
+    def _on_search_outcome(self, out: SearchOutcome) -> None:
+        """상태 줄 [받지 못한 경기 N] — 마지막 검색 것만(저장 안 함). 취소된 검색은 보던 값을 둔다."""
+        self._search_outcome = out
+        if out.stop == "cancel":
+            return
+        n = out.missed_total
+        self.lb_missed.setText(f"받지 못한 경기 {n:,}" if n else "")
+        self.lb_missed.setToolTip(missed_tip(out))
+        self.lb_missed.setVisible(bool(n))
 
     def _on_quota_hit(self, msg: str) -> None:
         if getattr(self, "_quiet_search", False):
