@@ -5993,3 +5993,171 @@ S 의 줄 목록·카드의 정확한 색 값(64 처럼 계산된 색을 읽지 
 
 **정한 뒤 할 일**: 항목마다 "받기 vs 그리기" 가 정해지면 바뀌는 파일(`theme.py` 색 · `widgets.py` 축구장 셋 · `images.py` 주소) 표를 이 절에 붙이고 구현.
 그림을 받아 쓰는 항목이 생기면 `notice.py` 이용 안내의 받는 곳 목록에 `ssl.nexon.com` 경로가 이미 있는지 확인(있으면 안내 그대로).
+
+## 96단계 — 처음 쓰는 사람 (3.8.1) ✅ 끝 (2026-11-10 공개 — 3.7.2 에서 newer 확인 · 받은 설치 파일 SHA256 일치 · O1 그림은 미룸)
+
+목표: 앱을 처음 받은 사람이 **키 발급 → 동의 → 첫 검색**까지 막히지 않고, 화면의 숫자가 무슨 뜻이고 언제 값인지 같은 꼴로 읽히게 한다.
+새 넥슨 요청은 W3(사용자가 누를 때만) 하나다. **이용 안내 글은 안 바꾼다**(바꿀 일이 생기면 100단계 개정에 모은다 — `NOTICE_VERSION` 그대로).
+
+### 항목별 설계
+
+| 기호 | 무엇을 | 어떻게(핵심) | 수정할 파일 | 난이도 |
+|---|---|---|---|---|
+| T2 | 용어 말풍선 통일 | 용어 설명을 **한 표 `glossary.TERMS`**(새 파일 — xG·ELO·백분위·표본·FC·구단가치·실효 OVR 등)에만 두고, 말풍선은 `glossary.tip(key)` · 산출 방법 페이지는 용어마다 **머리 한 줄(정의 문장)만** 같은 표에서 읽는다 — 수치를 박은 긴 HTML(`methods.sections`)은 그대로. `test_rules`: **`TERMS` 의 정의 문장이 소스 다른 곳에 문자열로 다시 나오면 FAIL**(중복 검출 — 1회차: "용어 이름이 든 말풍선" 규칙은 표본·FC·점수가 일반어로 쓰여 오탐이고, `tip_at`·dict(`MATCH_CARD_TIPS`·`ENHANCE_COLUMN_TIPS`)로 만든 말풍선은 못 본다) · 가짜 소스를 잡는지도 | 새 `glossary.py` · `app_main.py`(말풍선 자리) · `methods.py` · `tests/test_rules.py` | 중간 |
+| T1 | 산출 방법 안 검색 | 페이지 위에 검색칸 + [이전]·[다음] + "3/7" — `QTextBrowser.find` · 모두 칠하기는 `ExtraSelection` · 검색어가 없으면 아무 일 없음(빈 화면 문구 없음) | `app_main._build_methods_page` | 낮음 |
+| W1 | 기준 시각 표시 통일 | 지금 기준 시각을 `MainWindow._at`(안에서 `[5:16]`)·`[:16]`·`[11:16]`·strftime·"받은 날"·"마지막 수집 기준" 으로 제각각 쓴다(1회차 셈 약 20곳 — `_at` 호출 8 · `[:16]` 4 · strftime 2 · 그 밖 · 표 칸 시각은 대상 밖). **자리 목록은 손으로 안 쓴다** — 조각 ① 첫 일로 아래 규칙과 같은 정의의 grep 으로 뽑아 이 절에 표(파일:줄 → 출처)로(검토 기준 14). 한 함수 `widgets.basis_text(출처, 시각)` — **출처마다 머리말이 다르다**: 넥슨 페이지 기준 시각(`meta_ref`·`ref_time`·`res.at`) → `"넥슨 데이터 기준 11-10 14:00"` · 우리 PC 가 받은 시각(`fetched_at`·`taken_at`·`priced_at`) → `"받은 시각 11-10 14:00"`(한 꼴로 쓰면 받은 시각이 넥슨 시각으로 둔갑한다). 오늘이면 `오늘 14:00` 은 **안 한다**(자정을 넘기면 글이 바뀌어 다시 그려야 한다) · 자리는 각 페이지 안내 줄 **맨 오른쪽**(1280 최소 폭을 넓히지 않는지 `test_window_size`). 넥슨 오픈API 경기 시각(UTC)은 대상 밖(`matchtime`). `test_rules`: 앱 쪽(`app_main`·`dashboard`·`widgets`)에서 `[5:16]`·`[11:16]`·`[:16].replace("T"`·`_at(` 를 쓰면 FAIL(예외는 표 · `basis_text` 안만 허용) + 가짜 소스로 잡히는지 단언 | `widgets.py` · `app_main.py` · `dashboard.py` · `tests/test_rules.py` | 낮음~중간 |
+| W2 | 받지 못한 경기 수 한 곳에 + 구멍 메우기 | 지금은 한도(429)·서버 사정이 각자 상태 글로만 나오고 곧 사라진다. **그리고 지금 구멍이 생긴다**(1회차 [상] — 코드 확인): 네트워크 오류·404/400/500·상세 중 키 거절은 `_safe_detail` 이 `None` 으로 삼키고 나머지는 저장되는데, 다음 검색의 `_new_match_ids` 는 첫 쪽이 전부 아는 경기면 멈춰 2쪽 이후 빠진 경기는 영영 안 받는다 · 깨진 JSON(`ValueError`)은 `_safe_detail` 이 못 잡아 검색 전체가 죽는다. 고치기: ① `_safe_detail` 이 `ValueError` 도 잡아 이유 "응답 형식" 으로 센다 ② 개별 실패 id 를 새 작은 표 `detail_retry(ouid, match_id, reason, tries)` 에 남기고 다음 검색이 `todo` 앞에 붙인다 — 3번 실패하면 이유 "넥슨이 계속 오류" 로 세고 더 안 묻는다(표는 `RESET_WIPE` 쪽 · `test_storage` 대조) ③ `MatchLoader` 의 **끝나는 세 신호 모두**(`finished_ok`·`quota_hit`·`failed`)가 `(넥슨 목록 수, 저장한 수, 이유별 못 받은 수)` 한 객체를 싣는다 ④ 검색 상태 줄 한 칸 `받지 못한 경기 12` + 말풍선에 이유별 수와 할 일 — **문구는 아래 "W2 이유별" 표대로**(이유마다 다음 검색이 이어 받는지가 다르다). 값은 **검색창에서 시작한 검색만** 갱신 — 오프라인 읽기(`_run_offline`)·미리 읽기·구단주 비교 로더는 안 건드린다 · 값은 마지막 검색 것만(저장 안 함). **넥슨이 더 이상 안 주는 옛 경기(약 한 달 밖)는 세지 않는다**(E3) | `app_main.MatchLoader`·상태 줄 · `store.py`(표 하나) · `storage.py`(`RESET_WIPE`) | 중간 |
+| W3 | 앱 안 연결 점검 | `check_api.main` 이 한 함수에 print 로 이어져 있고, 점검들이 상태를 이어 쓴다(`ouid → ids → details → players → first_sp`) · 끝내는 꼴도 섞였다(FAIL `return 1` · 경기 없음 `return 0` · WARN 계속 · 여러 줄 출력). → **공유 문맥 객체 `CheckCtx`** + 목록 `CHECKS`(이름, 함수(ctx) → `Result(상태 OK/WARN/FAIL, 줄들(여러 줄), 멈춤 여부, 종료 코드)`) 로 떼고 터미널·앱이 같이 쓴다. 터미널 출력 바이트·종료 코드는 그대로 — **새 `tests/test_check_api.py`** 가 ranker·teamcolor·traitcollect·playerinfo·seasons·ownerdist·images 를 가짜로 바꿔 지금 출력을 골든으로 먼저 얼린다(떼기 전 커밋에서). 앱은 [정보] 에 [연결 점검] 단추 → `Worker` 로 돌고 표로 보인다(`WRITES` 에 `STORE_DETAILS`·`STORE_IMAGES` — 지우는 중엔 `CLEARING` 이 막는다). 앱 쪽은 **사용자용 묶음만**: 키 · 닉네임 → 계정 · 경기 목록 · 경기 상세 1건(**`get_match_detail_nocache`** — 캐시에 있으면 요청 없이 OK 가 된다) · 메타 · 그림 CDN · (웹 데이터 켰을 때만) 데이터센터 순위 1건. **API 는 검색과 같은 생성 자리로 만든다** — 서버 모드(`FIFA_SERVER_URL`)면 서버 경로를 재고, 표에 "경로: 직접/서버" 한 줄. 개발용 줄(랭킹 목록 판정·팀컬러 JSON 단위·특성 칸·구단주 분포·예측 — `DB_PATH` 를 연다)은 터미널에만. 키는 앞 8자도 화면에 안 쓴다. 게임 중에도 돈다(사용자가 누른 것 — G3 규칙) · 둘러보기(O2)에서는 단추를 끈다 | `check_api.py` · `app_main.py`([정보]) · 새 `tests/test_check_api.py` · `tests/test_ui_smoke.py`(가짜 API) | 중간 |
+| O3 | 처음 켤 때 소개 3장 | 이용 안내 **앞에** 넘겨 보는 창 하나(3장 · [다음]·[건너뛰기]) — ① 이 앱이 하는 일 ② 키가 왜 필요한지(내 PC 에서 넥슨에 직접 묻는다) ③ 처음 검색은 몇 분 걸린다. 그림은 **둘러보기(O2) 지어낸 자료로 뜬 화면**(실제 화면은 상대·랭커 닉네임이 곳곳에 남는다 — 그래서 조각 ③ 안 순서가 O2 → O3). 한 번 본 뒤에는 [도움말 › 소개] 에서만. **본 표시는 `settings.ini`**(`updatecheck.SEEN_VERSION_KEY` 선례 — 창을 만들기 전에도 읽게 모듈 함수 하나 · 1회차: 기존 동의 값 `NOTICE_ACCEPTED` 도 `.env` 라 옛 문장이 모순이었다) · 띄우는 조건은 아래 "시작 경로" 표 | `app_main._open_window` · 새 `IntroDialog` · `config.py` | 낮음 |
+| O1 | 키 발급 단계별 그림 | `ApiKeyDialog` 의 글 3줄을 **단계 그림 4장 + 한 줄씩**(로그인 → 애플리케이션 등록 → 서비스 단계 고르기 → 키 복사)으로. 그림 출처는 U1 · **넥슨 사이트 화면의 게임 이름·로고는 가린다**(10-02 화면에서 상표를 뺀 결정과 맞춘다 — U6). 그림은 `assets/keyguide/` · spec `datas` 목적지와 읽는 경로(`config.asset_path`)가 같아야(exe 스모크로) · 150% 에서 안 흐리게 2배 크기 원본을 줄여 그린다 · 사이트가 바뀌면 그림만 갈아 끼운다 | `app_main.ApiKeyDialog` · `assets/` · `피파전적관리.spec` | 낮음~중간 |
+| O2 | 둘러보기 모드 | 키 창에 [키 없이 둘러보기]. **같은 exe 를 `--demo` 로 새 프로세스로 띄운다**(E2) — 띄우는 명령은 exe 면 `sys.executable --demo`, 소스면 `python app_main.py --demo` · 띄운 쪽(키 창)은 띄운 뒤 끝난다(트레이 둘이 안 생기게). 임시 데이터 폴더 `%TEMP%\피파전적관리-demo-<pid>` · 지어낸 경기 약 300판(고정 seed — 선수 이름·닉네임도 지어낸 것 · `store.save_matches`·`parse_match` 를 그대로 거친다)을 그 폴더 fifa.db 에 미리 넣는다. **실제 키·스위치를 물려받지 않는다**(1회차 [상] — `config.py:100 load_dotenv` 가 `.env` 를 `os.environ` 에 올리고 자식은 `API_KEY`·`SERVER_URL`·`WEB_DATA`·`NOTICE_ACCEPTED`·`RANK_COLLECT`·`OWNER_DIST_ON`·`CARD_BACKFILL_ON` 을 `os.getenv` 로 읽는다): ① 부모가 자식 env 에서 `config` 의 `*_VAR` 전부를 뺀다 — **아무것도 넣지 않는다**(폴더는 자식이 정한다 — 아래 "데모 폴더 만들기" · 4회차 [상]: 부모가 `FIFA_UPDATE_CHECK=0` 을 넣으면 자식은 원래 값을 몰라 [키 넣고 시작]의 진짜 앱도 업데이트 확인이 꺼진다) ② 자식 `config` 는 `DEMO` 면 그 값들과 `UPDATE_CHECK`(config.py:172)를 env 와 무관하게 끈다(두 겹) · `_migrate_from_source` 도 안 돈다. 끄는 길 전부는 아래 "O2 진입점" 표. 창 맨 위 띠 "둘러보기 — 지어낸 자료입니다 · [키 넣고 시작]"(누르면 `--demo` 없이 새 프로세스를 띄우고 자기는 `quit_app` — **그 env 는 데모 전 원래 env** 로 만든다: 아래 "다시 띄우기" 행) · X 는 트레이로 숨지 않고 `quit_app` | `app_main.py`(시작 인자·띠·`_open_window` 데모 분기) · `config.py`(데모 끔) · 새 `demo.py`(자료 만들기) · `tray.py`(뮤텍스 이름·`--quit`) · 새 `tests/test_demo.py` | 중간~높음 |
+| I2 | 말투 3단계 | `docs/STYLE.md` 규칙 4~6(괄호 하나 · 한 문장 한 말 · 쉬운 말) — 기계로 못 센다. **처음 쓰는 사람이 먼저 보는 화면부터**: 소개·키 창·대시보드·경기 목록·빈 화면/오류 글 → 말풍선. `UI_SHOT` 으로 화면을 떠 보며 고치고, 고친 화면 목록을 이 절에 남긴다. 이용 안내(`notice.py`)·`cardcollect.py` 는 대상 밖(위 "말투 남은 것") | 화면 글 전반 | 중간 |
+| K3 | 키보드만으로 조작 | **새 단축키는 안 만든다**(E1 "일단 안 함" 과 겹치지 않게 — Ctrl+숫자·F5 없음). 1회차 확인: 포커스는 **이미 닿는다**(`ChoiceChips`·`PageTabs` 탭은 `QPushButton` · 메뉴는 `QListWidget` · `CardListView` 는 `QListView` · `setFocusPolicy` 0곳) — 빈틈은 둘: ① **보이는 포커스 표시**(QSS `:focus` 는 `QLineEdit` 하나 · 메뉴 QSS `outline: none` · 대리자 그림이 `State_HasFocus` 를 안 그린다) ② **Enter**(목록들이 `doubleClicked` 만 잇는다 — `activated` 는 한 곳) + ③ 대화상자 기본 단추·Esc. **그래프 확대 막대·축구장 조작은 대상 밖**. 테스트는 "Tab 이 닿는지"가 아니라(구현 전에도 통과 — 빈 검사) **Enter 로 열림** · **포커스일 때 그린 픽셀이 다름** — 구현 전 커밋에서 FAIL 하는 것부터 확인 | `theme.py` · `widgets.py` · `app_main.py` · `tests/test_ui_smoke.py` | 중간~높음 |
+
+### 조각 (3~4개 — 검토 기준 13)
+1. **부품·규칙** — T2 · T1 · W1(표와 함수를 먼저 세워야 뒤 조각이 그걸 쓴다)
+2. **상태와 점검** — W2 · W3
+3. **처음 켤 때 흐름** — O2 → O3 → O1(같은 시작 경로 `_open_window` 를 건드린다 — 한 조각에서 순서를 한 번에 · O3 그림을 O2 자료로 뜨려고 O2 먼저)
+4. **전체 훑기** — K3 · I2(앞 조각이 만든 창까지 같이 훑으려고 마지막 · `UI_SHOT` 목록에 소개 창·둘러보기 창을 넣는다)
+
+### 조각 ① 결과 (2026-11-10 — T2 · T1 · W1)
+- **T2**: `glossary.TERMS` 7개(xG·ELO·백분위·표본·FC·구단가치·실효 OVR) · 표 머리글은 `_make_table` 이 `glossary.HEADERS` 로 모든 표에 단다(표마다 손으로 달면 빠지는 표가 생긴다) · ELO 묶음·FC 보상 줄·상대 구단가치 말풍선 · 산출 방법 맨 끝 [용어] 절 + xG 절 머리 한 줄. `test_glossary_definitions_live_in_one_place`(정의 문장 중복 — 되돌리는 변이 2건 FAIL).
+- **T1**: `widgets.FindBar`(검색칸 · [이전]·[다음] · "3/7" · 없으면 "0/0" · 비우면 아무것도) · 등급 이름이 늦게 와 다시 그려도 위치 유지(2회차 [중]) · 테마는 실행 중에 안 바뀌어 다시 칠할 일이 없다.
+- **W1** — grep(`[5:16]`·`[11:16]`·`[:16].replace("T"`·`\b_at(`·strftime·"기준"·"받은 날")으로 뽑은 자리:
+
+| 자리(바꾸기 전) | 출처 | 바뀐 꼴 |
+|---|---|---|
+| `EnhanceLoader` priced_at · `enhance_head_html` | 받은 시각 | `시세 받은 시각 11-10 14:00` |
+| 랭커 픽 요약 "스냅숏 {when}" | 받은 시각 | 줄 맨 끝 `받은 시각 …` |
+| 구단 머리 줄 "갱신 {ref_time}" | 넥슨 | 줄 맨 끝 `넥슨 데이터 기준 …` |
+| 내 스쿼드 특성 "{fetched_at} 기준" | 받은 시각 | 줄 맨 끝 `받은 시각 …` |
+| 팀컬러 창 "넥슨 데이터 기준 {res.at}" 둘 | 넥슨 | 줄 맨 끝 |
+| 팀컬러 효과 창 "받은 날 {day}" | 받은 시각 | `넥슨 데이터센터 값 · 받은 시각 11-10` |
+| [정보] 랭킹 수집 "마지막 수집 {when}" · "넥슨 데이터 기준 {meta_ref}" | 받은 시각 · 넥슨 | 각 줄 맨 끝 |
+| 주간 컷 "N일 전({cut_at})" · 팀컬러 "변화는 {then_at} 대비" · 다음 시도 {retry_at} · 멈춤 줄 · 순위 변동/이력 **표 칸** | 기준 시각 아님(비교 시점·예정·표 칸) | `widgets.stamp` 시각만 |
+| 대시보드 "마지막 수집 기준"(시각 없음) · 그래프 축 날짜(strftime `%m/%d`) | 대상 밖 | 그대로 |
+
+  계획과 다른 점: 규칙 예외가 `basis_text` 하나가 아니라 `stamp`·`basis_text` 둘 — 표 칸·비교 시점도 직접 자르지 않게 같은 함수로 모았다. `MainWindow._at` 은 지웠다. `test_basis_times_go_through_one_function`(되돌리는 변이 2건 FAIL). W1 폭(1280)은 글이 짧아져 늘지 않는다 — `test_window_size` 로 확인.
+
+### 조각 ② 결과 (2026-11-10 — W2 · W3)
+- **W2**: 표 `detail_retry(ouid, match_type, match_id, reason, tries, day)` · 이유 `store.RETRY_*`(network·error·format) + 화면만 쓰는 quota·server·gave_up·unreadable(`app_main.MISSED_TEXT` 한 표) · 상한 `config.DETAIL_RETRY_MAX` · 끝 신호 `MatchLoader.outcome(SearchOutcome)` 는 `run` 의 finally 에서 한 번 · 남기기는 `track_missed=True`(검색창 검색 `_api_search` 만) · 상태 줄 `lb_missed`. `test_missed_details_are_retried_and_counted_96`(대조 먼저 — 남기지 않는 로더는 둘째 쪽 경기를 다시 안 묻는다) · 되돌리는 변이 9건 중 8건 FAIL.
+  계획과 다른 점: "저장 성공 때도 지움" 은 따로 두지 않았다 — `load_detail_retry` 가 matches 와 대조해 지우니 겹친 장치였다(변이가 못 잡음). 다시 물을 것도 목록 넘기기에선 아는 경기로 친다(안 그러면 그 경기가 첫 쪽에 있는 동안 쪽을 더 넘긴다).
+- **W3**: `check_api` 를 `CheckCtx` + `CHECKS`(터미널 26개) · `USER_CHECKS`(앱 8개 — 키·경로·닉네임 → 계정·경기 목록·상세 nocache·선수 이름표·그림 서버·데이터센터) · 공용 실행기 `run_checks`. 터미널 출력은 떼기 전 커밋(`tests/test_check_api.py` 골든 9경우 · CP949 콘솔 한 번)과 바이트까지 같다. 앱은 [정보 › 연결 점검] 탭(닉네임 칸 기본 = 마지막 계정 · 표 · 창 수명 `ConnectionCheckWorker` · `WRITES` details·images · 종료 표). 되돌리는 변이 9건 전부 FAIL.
+  계획과 다른 점: stdout 다시 잡기를 import 때에서 `main()` 안으로 옮겼다(앱이 import 하면 앱 stdout 을 바꾼다). 옛 `test_rules.RAW_TIME_ALLOW` 의 `check_api.main` 줄은 함수가 쪼개져 안 걸려 지웠다. 둘러보기(O2)에서 단추 끄기는 조각 ③ 에서. 탭이 늘어 FHD 175% 에서 [정보] 탭 줄이 49px 넘쳐 "오픈소스 라이선스" 탭 이름을 "라이선스"(말풍선에 원래 이름)로 줄였고, 높이도 넘쳐(652 > 617) 새 탭은 세로 스크롤 안에(`test_window_size` 12/12).
+- 계획 변동: 다른 항목 변동 없음 · O2 진입점 표 "[연결 점검]" 행은 이제 끌 대상(`AboutDialog.btn_check`)이 생겼다.
+
+### 조각 ③ 결과 (2026-11-10 — O2 · O3 · O1 코드 · O1 그림은 사용자와 캡처 대기)
+- **진입점 표 대조(첫 일)**: `_open_window`·`main`·`AppShell.start`·`MainWindow.__init__`(시즌표 `SeasonLoader` — 웹 스위치 뒤)·`_on_loaded` 뒤 로더(팀컬러·ELO·가격·칩 — 웹 스위치 · 랭커 픽·특성 — 수집 스위치 · 그림 `IconLoader`·`start_grade_holo` — 그림 세션) · `check_update_now`(UPDATE_CHECK) · `start_connection_check`(진짜 API 를 새로 만든다 — **표에 "끔" 만 있고 막는 자리가 없던 행**: 함수 첫 줄에서 글로 돌려준다) · 표에 없던 자동 경로는 0. `test_demo` 가 실제 키·스위치를 env 에 둔 채 창 · 검색 둘(데모 계정 · 없는 계정) · 토글 넷 · 연결 점검을 눌러 HTTP 0(기록기는 `HTTPAdapter.send` — 대조로 한 번 잡히는 것부터 단언).
+- **O2**: 새 `demo.py`(표준 라이브러리만 — 준비·쓸기·env·띄우기) · 새 `demodata.py`(지어낸 300판 · `DemoAPI`) · `config.DEMO`(env 표지) · `tray.instance_name(demo=)` · `images._session` · 키 창 [키 없이 둘러보기](`DEMO_RESULT`) · 띠 [키 넣고 시작] · [정보] 토글·문제 알리기 숨김. `test_demo` 13개 · 되돌리는 변이 9건 전부 FAIL.
+- **O3**: `IntroDialog`·`IntroView`·`INTRO_PAGES` · 본 표시 `config.INTRO_SEEN_KEY`(settings.ini) · [도움말 › 소개] · 그림 `assets/intro/` 셋은 둘러보기 창을 offscreen 으로 뜬 것(띠 빼고 1200 폭).
+- **O1**: 키 창을 단계 넷(그림 + 한 줄 · 그림이 없으면 한 줄만) — `KEY_GUIDE`. **그림은 아직 없다**(U1 — 로그인한 화면이라 사용자와 같이 뜬다). 그림이 들어오면 `assets/keyguide/step1~4.png` + spec `datas` 한 줄.
+- 계획과 다른 점: ① `_save_env` 는 "아무것도 안 함" 이 아니라 **OSError** — 부른 쪽이 이미 잡고, set_* 가 저장 **뒤에** 전역을 바꾸니 토글을 눌러도 전역이 안 바뀐다(아무것도 안 하면 `WEB_DATA` 가 참이 돼 웹 요청이 나간다 — 변이 #2 가 실제로 그 요청을 잡았다). ② 그림은 받기 함수 넷의 첫 줄이 아니라 **세션 하나**를 갈아 끼웠다(앞으로 생길 받기 함수도 같이). ③ 데모는 동의를 "다 본 것"(`NOTICE_ACCEPTED = NOTICE_VERSION`)으로 — 3회차 재지 않은 것의 답(관문 함수가 화면을 비우지 않게 · 요청은 스위치가 막는다). ④ 표의 `open_last_account` "끔" 대신 데모 계정을 **연다**(가짜 API 라 요청 0 — 빈 검색 화면보다 낫다). ⑤ `GameWatch` 는 데모에서 안 켠다(자동 요청이 없어 볼 일이 없다).
+- 계획 변동: 조각 ④ `UI_SHOT` 목록에 소개 창·둘러보기 창·키 창(그림 들어온 뒤)을 넣는다 · 다른 항목 변동 없음.
+- **O1 그림은 미룸**(2026-11-10 사용자 "그림 없이 넘어가기") — 키 창은 단계 넷 글만으로 나간다. 그림이 생기면 `assets/keyguide/step1~4.png` + spec `datas` 한 줄(계정 정보·키 값·게임 이름·로고는 가린다 — U6).
+
+### 조각 ④ 결과 (2026-11-10 — K3 · I2)
+- **K3**: 앱 하나에 이벤트 거르개 하나 `widgets.KeyboardAid`(`_setup_app` 이 `install_keyboard_aid`) — ① Tab·Shift+Tab·단축키로 온 포커스에만 `FocusRing`(그 위젯 안쪽 2px `ACCENT` · `T.FOCUS_RING_W` · 마우스로 누르면 뗀다 · 글 칸은 QSS `:focus` 그대로) ② Tab 으로 들어간 목록·표에 고른 줄이 없으면 지금 줄을 고른다 ③ 기본 단추를 정하지 않은 대화상자는 Enter 가 아무 단추도 안 누른다(포커스가 단추면 그 단추). 정한 창: 키 창 [확인] · 소개 [다음]→마지막 [시작하기] · 안내 [시작](동의 전엔 꺼져 Enter 가 아무것도) · 바뀐 점 [확인]. 목록·표 16곳 `doubleClicked`/`itemDoubleClicked` → `activated`/`itemActivated`(`test_rules.test_lists_open_on_enter_96`). 새 `tests/test_keyboard.py` 9개.
+  **찾은 결함**(구현 전 FAIL 로 재현): 키 창에서 키를 넣고 Enter → **[키 없이 둘러보기]** 가 눌렸다(Qt 가 띄울 때 포커스 다음 autoDefault 단추를 기본으로 고른다) · [정보] 연결 점검 닉네임 칸 Enter → [데이터 폴더 열기] 도 눌렸다 · 단추를 Tab 으로 지나가면 Qt 가 그 단추를 기본으로 **남겨 둬** 글 칸 Enter 가 그걸 눌렀다.
+  계획과 다른 점: ① 대리자(줄 카드 넷)에 `State_HasFocus` 그림을 넣지 않았다 — Tab 으로 들어올 때 지금 줄을 **고르면** 기존 선택 테두리가 그 일을 한다(방향키는 원래 선택이 따라간다). ② 단추 QSS `:focus` 대신 위젯 하나 — 굵기가 바뀌면 단추 크기가 바뀌고, 따로 꾸민 단추(10곳 넘음)는 제 QSS 가 이겨 빠지고, 마우스로 누른 단추도 눌린 채로 보인다. ③ 전제 정정: Qt 는 Tab 포커스 단추에 **아주 흐린 안쪽 칸**을 이미 그린다(어두운 바탕에서 거의 안 보임) — 테스트는 "그 그림과 다르고 위 변이 ACCENT" 로 잰다.
+- **I2**(STYLE 4~9 — 사람이 보는 규칙): 고친 화면 — 소개 2·3장(한 문장 한 말 · "눌러 보세요") · 키 창(단계 3 · "키를 입력해 주세요") · 대시보드 점수 해설 두 줄(괄호 겹침·가운뎃점 이음을 문장 셋으로 · "중앙" → "가운데 값") · 첫 검색 한도·서버 멈춤 글 · 넥슨 오류 표 `ERROR_MESSAGES` 전부(무슨 일 → 할 일 · "~해 주세요") · 웹 점검 글(`ranker`·`seasons` — 줄표 하나 줄임) · 키 없음 글(`.env` 를 손으로 만들라던 옛 안내를 키 창으로).
+  안 고친 것: 말풍선 전체(U4 — 다음에) · 이용 안내(`notice.py` — 100단계 개정에 모은다) · 경기 목록 화면 글은 칸 이름·짧은 상태라 그대로.
+
+### O2 진입점 — 둘러보기 프로세스에서 (1회차 [상] · 표에 없는 자동 경로가 남으면 "요청 0" 이 깨진다)
+행 목록은 조각 ③ 첫 일로 `_open_window`·`main`·`AppShell` 이 부르는 `start_*`·`schedule_*`·예약 클래스를 grep 해 이 표와 대조한다(빠진 행이 있으면 FAIL 하는 `test_demo` 단언 — 데모 프로세스에서 넥슨 세션·`requests` 가 0번 불리는지, 실제 키를 env 에 둔 채로).
+
+| 경로 | 둘러보기에서 | 막는 방법 |
+|---|---|---|
+| 넥슨 오픈API(`FCOnlineAPI`) | 가짜(요청 0) | `--demo` 면 생성 자리가 가짜를 만든다 |
+| 웹(`ranker.web_get` 계열)·랭킹 수집·구단주 분포·카드 채우기·랭커 픽·특성 | 끔 | `config` 데모 끔(env 무관) |
+| **사용자가 켜는 길**(2회차 [상]) — [정보] 의 웹·랭킹 수집·구단주 분포·카드 토글(`set_web_data`·`set_rank_collect`·`set_owner_dist`·`set_card_backfill`) · 키 저장(`save_api_key`) · `.env` 다시 읽기(`read_env_switches` — app_main 1172·3480·15540·15624) | 끔(토글 숨김) | **두 곳에서 막는다**(3회차 — 함수마다 막으면 `accept_notice`(config 766)·`install_id`(642)·`read_owner_dist`(865)·`read_card_backfill`(890)·앞으로 생길 `set_*` 가 빠진다): `config.DEMO` 면 `_save_env`(602) 는 아무것도 안 하고 `_read_env_disk`(704) 는 None(모르는 상태) · `read_env_switches` 는 지금 전역 `(WEB_DATA, RANK_COLLECT)` 를 그대로 돌려준다(None 이면 app_main 15624·`rankcollect.py` 992·1070·1574 언패킹이 죽는다) · `test_demo` 가 토글 넷을 실제로 눌러 요청 0 · 데모 폴더 `.env` 가 안 생기는지 단언 |
+| `config.DEMO` 세우기 | — | config 안에서 `sys.argv` 를 읽지 않는다(테스트·`check_api`·`tools/*` 와 안 엮이게) — `app_main` 맨 위(표준 라이브러리 import 다음 · 첫 프로젝트 import `import autostart`(47행 — `autostart → updatecheck → config`) **위**)가 `--demo` 를 보고 env 표지 `FIFA_DEMO=1` 을 세우고 config 가 그걸 읽는다 · `main(argv)` 안의 데모 분기도 argv 가 아니라 `config.DEMO` 만 본다(판정 출처 하나 — app_main 16003 `main(argv=None)` · 4회차) · `test_demo` 는 config import 전에 `FIFA_DEMO=1` 을 넣는다 · 새 `demo.py` 는 그 시점에 config 를 import 하지 않는다 · 재할당 전역이라 모듈 경유로만 읽는다 |
+| 업데이트 확인·설치(`start_update_check`·`updatecheck`) | 끔 | `config.DEMO` 면 `UPDATE_CHECK = False`(env 는 안 건드린다) |
+| `start_cache_prune`·`start_trades`·`sync_ranker_pick_data`·`schedule_backfill`·`open_last_account`/`start_prefetch` | 끔 | `_open_window` 데모 분기 |
+| `start_grade_holo`·`images.py` CDN 받기 | 끔(자리표시 그림) | 데모면 받기 함수 첫 줄에서 막는다 — 지어낸 spid 의 404 부정 캐시도 안 쌓인다 |
+| `GameWatch` | 그대로(요청 없음 — 이름 목록만) | — |
+| 트레이(`AppShell` 예약 셋·트레이 아이콘) | 없음 | X = `quit_app` |
+| 자동 실행(`autostart.repair`·[정보] 토글) | 끔(토글 숨김) | HKCU 를 읽지도 쓰지도 않는다 |
+| 크래시 로그·[문제 알리기] | 로그는 데모 폴더 · 알리기 단추 숨김 | — |
+| 안내 동의·키 창·소개(O3) | 안 뜬다 | `_open_window` 데모 분기(안 그러면 키 창 → 둘러보기 → 또 데모의 고리) |
+| `_migrate_from_source` | 안 돈다 | `--demo` 면 건너뜀(소스 실행에서 ROOT `.env` 를 데모 폴더로 옮겨 지우는 사고 방지) |
+| [연결 점검](W3) | 끔 | — |
+| 한 번만 실행 뮤텍스 | 이름 `…-demo` | 제거기·업데이트 설치기의 `--quit` 은 **두 이름 다** 알린다(안 그러면 데모가 파일을 잠근다) |
+| 데모 폴더 만들기 | **자식이** `--demo` 를 보고 자기 `os.getpid()` 로 `%TEMP%\피파전적관리-demo-<pid>` 를 만들어 `FIFA_DATA_DIR` 로(부모는 안 넣는다 — 부모 pid 면 곧 죽은 pid 가 돼 살아 있는 데모 폴더를 지운다 · 2회차) | `config` import 전에 정해야 한다(config.py:60 이 import 때 읽는다) |
+| 다시 띄우기([키 넣고 시작]) env (3회차 [상]) | 자식은 `FIFA_DATA_DIR`·`FIFA_DEMO` **둘만** 자기 `os.environ` 에 넣는다(부모는 아무것도 안 넣으니 자식 맨 위 시점 값이 곧 원래 값이다 — 4회차) — 그대로 띄우면 진짜 앱이 데모 폴더를 데이터 폴더로 써 **넣은 키가 데모 폴더 `.env` 에 저장되고 쓸어 낼 때 사라진다** | 자식이 맨 위에서 두 이름의 **데모 전 원래 값**(없었으면 없음)을 넣기 전에 적어 두고, 다시 띄울 env 는 그것으로 되살린다 · 테스트: 원래 env 에 `FIFA_DATA_DIR=X` 를 둔 경우와 없는 경우 둘 다, 다시 띄우는 `Popen` 의 env 가 원래와 같은지 단언(`FIFA_UPDATE_CHECK` 도 원래 그대로) |
+| 데모 폴더 지우기 | 닫을 때 시도 + **다음 실행(보통·데모)이 쓸어 낸다 — 판정은 pid 가 아니라 폴더 안 잠금 파일**(데모가 열어 쥔 파일을 못 지우면 살아 있는 것 · 파이썬 `open()` 은 FILE_SHARE_DELETE 없이 연다) · **잠금 파일 unlink 를 먼저** 시도해 실패하면 폴더를 통째로 건너뛴다(`rmtree` 먼저면 잠기지 않은 파일부터 지운다) · 잠금 파일이 없고 만든 지 60초 안 된 폴더도 건너뛴다(만들기와 잠금 열기 사이 경쟁 · **만든 시각은 폴더 이름에 넣은 시각**으로 잰다 — mtime 은 안에 파일이 생길 때마다 바뀐다: `피파전적관리-demo-<pid>-<만든 epoch>`) · 폴더 만들기 바로 뒤에 잠금을 연다 · `%TEMP%` 아래 `피파전적관리-demo-*` 꼴만 | 열린 WAL·crash 로그·강제 종료로 닫을 때 지우기는 실패할 수 있다 |
+| 띄운 쪽 끝내기 | 일반 실행: `main` 이 0 을 돌려 끝(16046) · **`--tray` 뒤 [열기] 로 뜬 키 창**: 셸이 예약 셋을 돌리는 중이라 `shell.quit_app()`(2회차 · `tray.py:353 show_window → _open_window`, 람다가 `shell` 을 넘긴다 16029) | 키 창은 "취소"와 "둘러보기를 띄움"을 **다른 결과값**으로 · `quit_app` 뒤 `_open_window` 는 반드시 None(안 그러면 `tray.py:357 w = self.window`) · 두 길 다 테스트 |
+
+### 시작 경로 — 무엇이 뜨나 (O3·O1 · 1회차 [상])
+| 경우 | 안내 동의 | 소개(O3) | 키 창(O1) |
+|---|---|---|---|
+| 새 설치 첫 실행 | 뜬다 | **먼저** 뜬다(`NOTICE_ACCEPTED == 0` 이고 본 표시 없음) | 키 없으면 |
+| 업그레이드(이미 동의함 · v1 동의자 포함) | 다시 동의 규칙대로 | 안 뜬다(`NOTICE_ACCEPTED > 0`) | 키 없으면 |
+| `--tray` 부팅 | 안 뜬다(숨긴 채) | 안 뜬다 | 안 뜬다 |
+| `--tray` 뒤 트레이 [열기] 로 처음 `_open_window` | 뜬다(필요하면) | 새 설치 조건이면 뜬다 | 키 없으면 |
+| `--demo` | 안 뜬다 | 안 뜬다 | 안 뜬다 |
+| 키 거절(`MatchLoader.key_invalid`) 로 다시 뜬 키 창 | — | — | 뜬다 · **[둘러보기] 는 숨긴다**(키가 든 상태 · 이미 쓰는 사람) |
+
+### W2 이유별 — 다음 검색이 이어 받나 (말풍선 문구의 근거)
+| 이유 | 지금 | 96 뒤 | 말풍선 할 일 |
+|---|---|---|---|
+| 한도(429) | 저장 안 함 · 캐시에 남음 → 이어 받음 | 그대로 | "내일 다시 검색하면 이어 받습니다" |
+| 서버 사정(`SERVER_CODES`) | 저장 안 함 → 이어 받음 | 그대로 | "잠시 뒤 다시 검색하면 이어 받습니다" |
+| 네트워크·404/400/500·상세 중 키 거절 | **구멍(영영 안 받음)** | `detail_retry` → 다음 검색이 다시 묻는다 | "다음 검색 때 다시 받습니다" |
+| 깨진 JSON | **검색 전체가 죽음** | "응답 형식" 으로 세고 `detail_retry` | 위와 같음 |
+| 3번 실패 | — | 더 안 묻는다 | "넥슨이 계속 오류를 냅니다" |
+| 읽지 못함(`parse_match` None) | 저장됨 · 화면에서만 빠짐 | 따로 센다 | "저장은 됐지만 화면에 못 그립니다" |
+
+### 환경 행렬 (1회차 — 칸마다 봤음/해당 없음/구현 때 실측 + 잴 테스트)
+| 환경 | T2·T1·W1 | W2 | W3 | O2 | O3·O1 | K3·I2 |
+|---|---|---|---|---|---|---|
+| 소스 | 실측(test_rules) | test_parsing·스모크 | test_check_api 골든 | `python app_main.py --demo` 띄우기 | 스모크 | 스모크 |
+| offscreen 테스트 | 스모크 | 스모크(가짜 실패) | 스모크(가짜 API) | **자식 띄우기를 막는 장치**(모달 차단처럼 `subprocess.Popen` 막기 — 스모크 머리) · `test_demo` 는 데모 분기를 같은 프로세스 함수 단위로 | 스모크 | Enter·픽셀 테스트 |
+| exe | 해당 없음 | 해당 없음 | exe 에서 [연결 점검] 1회 | `sys.executable --demo` · `_MEIPASS` 아래 `demo.py` | `assets/keyguide/` `datas` 경로 | — |
+| 실제 윈도우 100/150% | W1 오른쪽 글이 1280 을 넓히지 않나(`test_window_size`) | 상태 줄 폭 | 표 폭 | 띠 폭 | 그림 흐림(2배 원본) | 포커스 테두리 눈으로 |
+| 새 설치 | — | — | — | 키 창에서 [둘러보기] | 소개 → 안내 → 키 창 | — |
+| 업그레이드 | — | `detail_retry` 표가 옛 DB 에 생기나(CREATE IF NOT EXISTS) | — | — | 소개 안 뜸 | — |
+| 남의 PC CP949 | 해당 없음(글자 파일 없음) | 해당 없음 | `test_check_api` 를 `PYTHONIOENCODING=cp949` 로 한 번(터미널 출력) | 자식 env 인코딩 — `PYTHONIOENCODING=utf-8` 를 넣는다 · 한글 사용자명 TEMP 경로를 따옴표·리스트 인자로 | 해당 없음 | 해당 없음 |
+
+### 이견 (무엇을 / 왜 / 대안)
+- **E1 난이도**: 표의 "낮음~중간" 은 O2·K3 를 낮게 봤다. O2 는 지어낸 자료 생성기와 요청 0 보장, K3 는 그림 부품 넷에 키 처리를 새로 넣는 일이라 둘 다 **중간~높음**. 단계 난이도를 "중간"으로 올린다(모델 분담은 그대로 — Sonnet 구현 + Opus 리뷰, O2·K3 만 Opus 구현 제안).
+- **E2 O2 를 같은 프로세스에서 하지 않는다**: `config.DATA_DIR`·`DB_PATH`·`API_KEY` 를 바꿔 끼우면 재할당 전역(PyQt 규칙 위 · 전역 8번)과 이미 연 연결·예약 셋이 실제 폴더를 계속 볼 수 있다. 새 프로세스는 이 위험이 0 이다. 대안(같은 프로세스)은 기각.
+- **E3 W2 는 "넥슨이 버린 옛 경기" 를 세지 않는다**: 목록에 안 나오니 셀 수 없다. 세는 척하면 추측이다.
+
+### 사용자 결정 (2026-11-10 "추천대로" — 고른 것만 남긴다)
+- **U1 O1 그림** → 넥슨 오픈API 사이트를 직접 떠서 계정 정보·로고를 가린 것. 로그인한 화면이라 **캡처는 조각 ③ 때 사용자와 같이**(사용자가 떠 주거나 브라우저로 함께) · 사이트가 바뀌면 그림만 갈아 끼운다.
+- **U2 O2 둘러보기** → 이번 단계에 넣는다(`--demo` 새 프로세스 · E2).
+- **U3 K3 범위** → 위 ①~③(포커스 테두리 · 그림 부품 넷 · 대화상자) · 그래프 확대 막대·축구장 조작은 뺀다.
+- **U4 I2 범위** → 처음 보는 화면(소개·키 창·대시보드·경기 목록) + 빈 화면·오류 글까지 · 말풍선 전체는 다음에.
+- **U5 W3 자리** → [정보] 탭에 [연결 점검] 단추.
+- 난이도(E1) → 단계 난이도 "중간" · O2·K3 는 Opus 구현.
+
+- **U6 O1 그림의 게임 이름·로고** → **가린다**(2026-11-10 사용자 "추천대로" · 10-02 화면에서 상표를 뺀 결정과 같은 쪽 · `test_no_trademark_in_window_names` 는 창 이름만 재니 그림은 사람이 본다).
+
+### 2회차 [중] — 구현 때 테스트로 (2026-11-10 · 계획 전체 · Opus 1명 · 21.3만 토큰 · [상] 1 은 O2 진입점 표 "사용자가 켜는 길" 행)
+| 기호 | 결함 | 할 것 · 테스트 |
+|---|---|---|
+| W2 | `detail_retry` 에 `match_type` 이 없다(`known_ids` 는 종류별 · app_main 505) | 키 `(ouid, match_type, match_id)` |
+| W2 | 다른 길(상대 검색·랭커 픽 `rankerpick.py:260`·`check_api`·옛 버전)로 이미 저장된 경기가 줄에 남아 계속 묻는다 | 읽을 때 `matches` 에 있는 id 는 지우고 넘김 · 저장 성공 때도 지움 |
+| W2 | 3번 실패 id 가 첫 쪽에 있으면 `todo`(510)가 다시 넣고 `_new_match_ids`(446) "다 아는 쪽" 이 영영 거짓 | 포기한 id 를 `known` 에 합친다 · 한도·서버 사정·취소로 멈춘 회차는 안 센다 · 네트워크 끊김은 **하루 한 번만** 센다 |
+| W2 | 끝나는 신호는 넷(`key_invalid` 626 포함) · `failed` 는 오프라인 열기(474)·비교 로더(10557)도 쓰는 문자열 신호 | `failed` 형은 그대로 · 새 `outcome = Signal(object)` 를 네 길 + 취소에서 · 비교 로더는 `detail_retry` 에 안 쓴다 |
+| W1 | 규칙의 `_at(` 이 `widgets.tip_at(`(2828 등 6곳)에 걸려 첫날 FAIL | `\b_at\(`·`self\._at\(` 경계 · 가짜 소스에 `tip_at(` 이 안 잡히는지 |
+| W3 | 골든의 가짜 목록에 `updatecheck.check_full`(check_api 458)·`rankcollect.open_rank_db_ro`(475)·실제 `DB_PATH` 의 `save_matches`(388)가 빠짐 — 실제 fifa.db 를 바꾸고 결정론이 아니다 | 임시 `FIFA_DATA_DIR` 에서 · updatecheck 도 가짜 |
+| W3 | 앱 쪽 "닉네임 → 계정" 의 닉네임이 처음 쓰는 사람에겐 없다 | [연결 점검] 에 닉네임 칸(기본 마지막 계정) · 비면 키 줄만 재고 나머지는 "닉네임을 넣으면 확인합니다" |
+| K3 | `activated` 를 **더하면** Windows 에서 더블클릭에도 불려 두 번 열린다 | `doubleClicked` 를 `activated` 로 **바꾼다** · 더블클릭 한 번 = 한 번 열림 테스트 |
+| T1 | 등급 이름이 와서 `setHtml` 로 다시 그리면(app_main 7951) 검색 위치·칠하기·"3/7" 이 사라진다 | 다시 그린 뒤 지금 검색어로 다시 찾기(테마 전환도) |
+재지 않은 것: `SingleInstance` 의 파이프·창 부르기가 `…-demo` 이름을 따라가는지(tray.py:155-200) · `images.py` 받기 함수 수(함수마다 막기) · 지어낸 상세 JSON 이 `index_squads`·habits·xG 필수 필드와 UTC 원문을 채우는지 · `MainWindow._settings()` 가 `config.SETTINGS_PATH` 를 쓰는지 · 데모 Popen 플래그(콘솔 없는 exe 에서 부모가 끝난 뒤).
+
+### 4회차 검토 (2026-11-10 · 3회차 고친 여섯 행만 · Opus 1명 · 12.0만 토큰) — [상] 1 · [중] 2 → 6판에 반영 · **계획 검토 끝(2026-11-10 사용자 "추천대로")** — 끝내는 조건 "마지막 회차 새 [상] 0" 은 못 채웠다: 4회차 [상] 은 장치를 하나 뺀 수정이고 남은 위험은 `test_demo` 단언(다시 띄운 env = 원래 env · 토글 넷 눌러 요청 0)으로 잡는다 · **조각 ③ 첫 일로 O2 진입점 표를 코드와 다시 대조**
+[상]: 부모가 넣은 `FIFA_UPDATE_CHECK=0` 은 자식이 원래 값을 몰라 [키 넣고 시작]의 진짜 앱도 업데이트 확인이 꺼진다 → 부모는 아무것도 안 넣고 `config.DEMO` 가 `UPDATE_CHECK` 를 끈다(장치 하나를 뺀 수정 — 새 길을 더하지 않았다).
+[중]: 데모 판정 출처를 `config.DEMO` 하나로(`main(argv)`) · 60초는 폴더 이름의 만든 시각으로. 문제없음 확인: `_read_env_disk` None 이어도 켜짐 쪽 호출자 0(`_read_collect_gate` 719 False · `read_owner_dist`·`read_card_backfill` 아무것도 안 함 · `install_id` 는 서버 주소가 비면 "") · `quit_app` 뒤 `show_window` 353 에서 빠짐.
+재지 않은 것: 데모 뮤텍스 이름과 설치기 `CloseApplications`·`--quit` · 데모 자식이 띄우는 하위 프로세스의 `FIFA_DEMO` 상속(데모는 업데이트 설치기를 안 띄운다는 전제).
+
+### 3회차 검토 (2026-11-10 · 바뀐 줄만 · Opus 1명 · 16.5만 토큰) — [상] 2 · [중] 5 → 5판에 반영
+[상]: [키 넣고 시작]이 데모 env(`FIFA_DATA_DIR`·`FIFA_UPDATE_CHECK`)를 물려받아 진짜 앱이 데모 폴더를 쓴다(키가 쓸어 낼 때 사라짐) → "다시 띄우기" 행 · O2 행 ① "부모가 `FIFA_DATA_DIR` 를 넣는다" 와 "자식이 만든다" 모순 → ① 고침. 2회차 [상](토글)은 닫힘.
+[중]: 막는 자리를 `_save_env`·`_read_env_disk` 두 곳으로 · `read_env_switches` 반환값 유지 · 쓸어 내기 순서(잠금 먼저) · `config.DEMO` 는 env 표지로(`autostart` import 위) · 키 창 결과값 둘 — 전부 표 행에.
+재지 않은 것: `nexon_api.py:383` 메타 `requests.get` 이 가짜 `FCOnlineAPI` 밖 생성 자리에서 불리는지 · `tray.instance_name()` 에 `-demo` 를 붙일 자리 · 데모 `NOTICE_ACCEPTED=0` 으로 `track_allowed` 등이 막혀 둘러보기 화면이 비는지(데모는 동의 판정을 "동의함" 으로 보게 할지 — 조각 ③ 첫 일로 판정).
+
+### 1회차 검토 (2026-11-10 · Opus 1명 · 근거 묶음 · 17.2만 토큰) — [상] 4 · [중] 9 → 이 판에 반영
+[상]: O2 실제 키·스위치 상속(`load_dotenv` → `os.environ`) · O2 진입점 표 없음(키 창 고리·`autostart.repair`·`_migrate_from_source` 포함) · W2 "이어 받는다" 가 이유에 따라 거짓 + 지금 있는 구멍 · O3 본 표시 위치 모순.
+[중]: W1 수치·뜻(넥슨 기준 vs 받은 시각)·빈 규칙 · W2 끝 신호 셋·다른 로더 · W3 상태 공유·골든 가짜 범위 · W3 서버 모드·nocache·`WRITES` · T2 오탐 규칙 · K3 전제 틀림·빈 테스트 · O1/O3 상표·닉네임·`datas`·150% · O2 뮤텍스 `--quit`·폴더 지우기 · 환경 행렬 없음.
+재지 않은 것: `SingleInstance` 가 이름 말고 파이프·창 부르기를 쓰는지(데모 이름 바꿈 부작용) · 지어낸 상세 JSON 의 필수 필드 · `check_api` 개발 묶음이 `DB_PATH` 를 잠그는지 · T1 `ExtraSelection` × 테마 전환 · I2 `UI_SHOT` 목록.
