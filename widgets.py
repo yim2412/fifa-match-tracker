@@ -1613,9 +1613,16 @@ class RankerCard(QFrame):
             tile, _ = self._rows[name]
             tile.setVisible(is_ranker)
 
-    def set_name(self, text: str) -> None:
-        """헤더 안 이름·레벨 줄."""
-        self._head_name.setText(text)
+    def set_name(self, text: str, level=None) -> None:
+        """헤더 안 이름·레벨 줄 — level 을 주면 "Lv.N" 을 게임 랭킹처럼 레벨 색으로(95). 초록 머리(랭커)에선 머리 글자색 그대로."""
+        if level is None:
+            self._head_name.setText(text)
+            return
+        lv = html.escape(f"Lv.{level}")
+        if self._head_name.styleSheet().startswith(f"color: {T.ON_PRIMARY}"):
+            self._head_name.setText(f"{html.escape(text)}&nbsp;&nbsp;{lv}")
+        else:
+            self._head_name.setText(f"{html.escape(text)}&nbsp;&nbsp;<span style='color:{T.LEVEL}'>{lv}</span>")
 
     def set_best(self, text: str | None) -> None:
         """역대 최고 등급 줄 — 없으면(None·빈 글자) 숨긴다."""
@@ -2255,9 +2262,9 @@ class WdlBar(QWidget):
     @staticmethod
     def colors_for(weak: bool, compact: bool = False) -> list[str]:
         """승·무·패 칸 색 — 표본 미달이면 바탕 쪽으로 흐린다(WEAK_MIX)."""
-        good, bad = ((T.blend(T.PANEL, T.GOOD_FILL, WdlBar.COMPACT_MIX), T.blend(T.PANEL, T.BAD_FILL, WdlBar.COMPACT_MIX))
-                     if compact else (T.GOOD_FILL, T.BAD_FILL))
-        cols = [good, T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX), bad]
+        # 95 — 게임 승무패 칸: 승 초록 · 무 연회색 · 패 진회색
+        fills = (T.GOOD_FILL, T.DRAW_FILL, T.LOSE_FILL)
+        cols = [T.blend(T.PANEL, c, WdlBar.COMPACT_MIX) for c in fills] if compact else list(fills)
         return [T.blend(T.PANEL_2, c, T.WEAK_MIX) for c in cols] if weak else cols
 
 
@@ -2266,7 +2273,7 @@ def wdl_html(w: int, d: int, l: int) -> str:
     pw, pd, pl = share_pcts((w, d, l))
     pct = lambda n, p: f" {p}%" if n else ""   # noqa: E731 — 0경기 칸은 막대에 색이 없어 % 도 없다
     return (f"<span style='color:{T.GOOD}'>{w:,}승{pct(w, pw)}</span> · <span style='color:{T.TEXT}'>{d:,}무{pct(d, pd)}</span>"
-            f" · <span style='color:{T.BAD}'>{l:,}패{pct(l, pl)}</span>")
+            f" · <span style='color:{T.LOSE}'>{l:,}패{pct(l, pl)}</span>")
 
 
 def pill_radius(w: QWidget) -> int:
@@ -2678,9 +2685,9 @@ class MatchCardDelegate(QStyledItemDelegate):
     def colors(card: MatchCard) -> dict[str, str]:
         """카드 색 — 테스트가 그림 대신 읽는다."""
         tone = {"win": T.WIN, "lose": T.LOSE}.get(card.kind)
-        fill = {"win": T.GOOD_FILL, "lose": T.BAD_FILL}.get(card.kind)
+        fill = {"win": T.GOOD_FILL, "lose": T.LOSE_FILL}.get(card.kind)
         return {"bg": T.blend(T.PANEL, tone, T.ROW_TINT) if tone else T.PANEL,
-                "stripe": fill or T.blend(T.PANEL, T.TEXT_DIM, WdlBar.DRAW_MIX),
+                "stripe": fill or T.DRAW_FILL,
                 "pill": tone or T.TEXT_DIM}
 
     # ── 자리 ──
@@ -3009,7 +3016,7 @@ class RateRowDelegate(QStyledItemDelegate):
         bar = WdlBar.colors_for(row.weak, compact=True)
         if row.weak:
             return {**{k: T.TEXT_DIM for k in ("win", "draw", "lose", "rate", "diff", "label")}, "bar": bar}
-        return {"win": T.GOOD, "draw": T.TEXT, "lose": T.BAD, "rate": T.TEXT, "label": T.TEXT,
+        return {"win": T.GOOD, "draw": T.TEXT, "lose": T.LOSE, "rate": T.TEXT, "label": T.TEXT,
                 "diff": delta_color(row.diff) if row.diff is not None else T.TEXT_DIM, "bar": bar}
 
     def paint(self, painter, option, index) -> None:

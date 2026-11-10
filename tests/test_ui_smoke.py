@@ -6427,9 +6427,9 @@ def test_match_rows_tinted_by_result():
         tinted = T.blend(T.PANEL, want[card.result], T.ROW_TINT) if card.result in want else None
         if tinted:
             assert col["bg"] == tinted, (card.result, col, tinted)
-            assert col["stripe"] == (T.GOOD_FILL if want[card.result] == T.WIN else T.BAD_FILL), col
+            assert col["stripe"] == (T.GOOD_FILL if want[card.result] == T.WIN else T.LOSE_FILL), col   # 95 — 패 진회색
         else:
-            assert col["bg"] == T.PANEL and col["stripe"] not in (T.GOOD_FILL, T.BAD_FILL), (card.result, col)
+            assert col["bg"] == T.PANEL and col["stripe"] not in (T.GOOD_FILL, T.LOSE_FILL), (card.result, col)
         assert card.match_id, "더블클릭용 경기 id 가 안 붙었다"
         seen.add(card.result)
     assert seen == set(results), seen
@@ -7962,30 +7962,34 @@ def test_heat_colors_keep_text_readable():
                 bg = T.blend(p["PANEL"], p[key], f + (1 - f) * s / 10)
                 if T.contrast(p["TEXT"], bg) < 4.5:
                     bad.append((mode, key, s, bg))
-        for key in ("POS_FW", "POS_MF", "POS_DF", "POS_GK"):
-            if T.contrast(p[key], p["PANEL"]) < 4.5:
+        for key in ("POS_FW", "POS_MF", "POS_DF", "POS_GK"):   # 95 — 게임 값 그대로(사용자 결정) · 글자가 같이 있어 2.5
+            if T.contrast(p[key], p["PANEL"]) < POS_MIN_CONTRAST:
                 bad.append((mode, key))
         if T.contrast(p["TEXT"], T.blend(p["PANEL_2"], p["WIN_BAR"], T.WEAK_MIX)) < 4.5:
             bad.append((mode, "흐린 막대 글자"))
     assert not bad, bad
     # 화면이 실제로 그 끝 색을 쓰는지(배선) — 기본 BAD/BLUE 가 아니다
     assert (T.HEAT_GOOD, T.HEAT_BAD) == (T._P["HEAT_GOOD"], T._P["HEAT_BAD"]) and T.HEAT_BAD != T.BAD
-    # 79 — 높음은 초록 쪽(G 가 R 보다 큼) · 낮음은 빨강 쪽. 예전 높음 빨강 · 낮음 파랑으로 되돌리면 FAIL
+    # 95 — 높음은 초록 쪽(G 가 가장 큼) · 낮음은 게임 나쁨 색인 파랑 쪽. 79 의 빨강으로 되돌리면 FAIL
     for p in T._PALETTES.values():
         g, b = QColor(p["HEAT_GOOD"]), QColor(p["HEAT_BAD"])
-        assert g.green() > max(g.red(), g.blue()) and b.red() > max(b.green(), b.blue()), (p["HEAT_GOOD"], p["HEAT_BAD"])
+        assert g.green() > max(g.red(), g.blue()) and b.blue() > max(b.green(), b.red()), (p["HEAT_GOOD"], p["HEAT_BAD"])
+
+
+POS_MIN_CONTRAST = 2.5   # 95 — 포지션 글자·칩은 게임 값 그대로(어두운 PANEL_2 위 FW 2.73 이 가장 낮다)
 
 
 def _palette_contrast_failures(p: dict) -> list:
-    """한 팔레트에서 글자/바탕 짝마다 대비 4.5 미만인 것 — 테스트와 '심은 팔레트' 검사가 같은 표를 쓴다."""
+    """한 팔레트에서 글자/바탕 짝마다 대비 4.5(포지션 칩은 POS_MIN_CONTRAST) 미만인 것 — 테스트와 '심은 팔레트' 검사가 같은 표를 쓴다."""
     pairs = []
-    for key in ("TEXT", "TEXT_DIM", "ACCENT", "GOOD", "BAD", "WARN"):        # 글자 토큰 × 카드·칸
+    for key in ("TEXT", "TEXT_DIM", "ACCENT", "GOOD", "BAD", "WARN", "ERROR", "LEVEL"):   # 글자 토큰 × 카드·칸
         pairs += [(key, p[key], base, p[base]) for base in ("PANEL", "PANEL_2")]
     for key in ("GOOD", "BAD", "WARN", "TEXT_DIM", "ACCENT"):                # 태그 꼴 — 그 색 글자 + 그 색 10% 바탕
         pairs.append((key, p[key], "10% 바탕", T.blend(p["PANEL"], p[key], 0.10)))
+    chips = []
     for key in ("CHIP_GK", "CHIP_DF", "CHIP_MF", "CHIP_FW"):                 # 포지션 칩(태그 꼴) — 카드 위 · 칩 바탕 위
-        pairs += [(key, p[key], base, p[base]) for base in ("PANEL", "PANEL_2")]
-        pairs.append((key, p[key], "칩 바탕", T.blend(p["PANEL"], p[key], T.CHIP_SOFT_MIX)))
+        chips += [(key, p[key], base, p[base]) for base in ("PANEL", "PANEL_2")]
+        chips.append((key, p[key], "칩 바탕", T.blend(p["PANEL"], p[key], T.CHIP_SOFT_MIX)))
     pairs += [("ON_PRIMARY", p["ON_PRIMARY"], k, p[k]) for k in ("PRIMARY", "PRIMARY_HOVER")]
     pairs += [(k, p[k], "ACCENT_SOFT", p["ACCENT_SOFT"]) for k in ("ACCENT", "TEXT")]
     for key in ("TEXT", "TEXT_DIM", "GOOD", "BAD"):                           # 지표 줄 바탕 채움(67 R0) 위 글자
@@ -7993,8 +7997,10 @@ def _palette_contrast_failures(p: dict) -> list:
     for bar in ("WIN_BAR", "LOSE_BAR"):                                       # 위에 글자를 겹치는 막대 — 꽉 찬 것·흐린 것
         pairs.append(("TEXT", p["TEXT"], bar, p[bar]))
         pairs.append(("TEXT", p["TEXT"], f"흐린 {bar}", T.blend(p["PANEL_2"], p[bar], T.WEAK_MIX)))
-    return [(fg_name, bg_name, round(T.contrast(fg, bg), 2)) for fg_name, fg, bg_name, bg in pairs
-            if T.contrast(fg, bg) < 4.5]
+    return ([(fg_name, bg_name, round(T.contrast(fg, bg), 2)) for fg_name, fg, bg_name, bg in pairs
+             if T.contrast(fg, bg) < 4.5]
+            + [(fg_name, bg_name, round(T.contrast(fg, bg), 2)) for fg_name, fg, bg_name, bg in chips
+               if T.contrast(fg, bg) < POS_MIN_CONTRAST])
 
 
 def test_palette_text_contrast():
@@ -8004,7 +8010,7 @@ def test_palette_text_contrast():
     assert not any(bad.values()), bad
     # 검사가 실제로 무언가를 재는지 — 밝은 쪽 GOOD 을 채움 값으로 되돌리면 걸려야 한다
     planted = dict(T._PALETTES["light"], GOOD=T._PALETTES["light"]["GOOD_FILL"])
-    assert ("GOOD", "PANEL", 3.65) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
+    assert ("GOOD", "PANEL", 3.53) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
     planted = dict(T._PALETTES["dark"], WIN_BAR=T._PALETTES["dark"]["GOOD_FILL"])
     assert any(b == "WIN_BAR" for _, b, _ in _palette_contrast_failures(planted))
     # 줄 채움 행도 잰다 — 섞는 비율을 0.22 로 올리면 밝은 쪽 흐린 글자가 4.34 로 걸려야 한다(67 R0 · 3.2.2 초록 채움에서 0.18 은 4.55 라 안 걸린다)
@@ -8014,8 +8020,8 @@ def test_palette_text_contrast():
         assert ("TEXT_DIM", "줄 채움", 4.34) in _palette_contrast_failures(T._PALETTES["light"])
     finally:
         T.ROW_FILL_MIX = keep
-    # 칩 행도 잰다 — 밝은 쪽 GK 칩을 기준 값(#bb4d00 · 칸 위 4.14)으로 되돌리면 걸려야 한다
-    planted = dict(T._PALETTES["light"], CHIP_GK="#bb4d00")
+    # 칩 행도 잰다 — 밝은 쪽 GK 칩을 게임 노랑(#f4b400 · 흰 바탕 1.85)으로 바꾸면 걸려야 한다
+    planted = dict(T._PALETTES["light"], CHIP_GK="#f4b400")
     assert any(f == "CHIP_GK" for f, _, _ in _palette_contrast_failures(planted)), _palette_contrast_failures(planted)
 
 
@@ -8025,7 +8031,11 @@ def test_palette_tokens_reach_widgets():
                 "GOOD", "BAD", "WARN", "GOOD_FILL", "BAD_FILL", "WARN_FILL", "CHIP_GK", "CHIP_DF", "CHIP_MF", "CHIP_FW",
                 "FORMATION_PITCH_TOP", "FORMATION_PITCH_BOTTOM", "FORMATION_LINE", "CHART_LINE", "CAL_FILL"):
         assert getattr(T, key) == T._P[key], key
-    assert (T.WIN, T.LOSE) == (T.GOOD, T.BAD) and T.ACCENT not in (T.GOOD, T.BAD)
+    for key in ("ERROR", "LEVEL", "LOSE_FILL", "DRAW_FILL"):
+        assert getattr(T, key) == T._P[key], key
+    # 95 — 승은 좋음 · 패는 나쁨(파랑)과 따로(흐린 글자 · 진회색 칸) · 오류는 나쁨과 따로
+    assert T.WIN == T.GOOD and T.LOSE == T.TEXT_DIM != T.BAD and T.ERROR != T.BAD
+    assert T.ACCENT not in (T.GOOD, T.BAD)
     # 꽉 칠한 버튼은 PRIMARY 로 그려진다 — 찍어서 본다
     from PySide6.QtWidgets import QPushButton
     b = QPushButton("확인")
@@ -8035,16 +8045,19 @@ def test_palette_tokens_reach_widgets():
     assert img.pixelColor(10, 20).name() == T.PRIMARY, (img.pixelColor(10, 20).name(), T.PRIMARY)
 
 
+DARK_UPDOWN_CVD, LIGHT_UPDOWN_CVD = 36.1, 25.4   # 95 — 게임 초록·파랑(예전 청록·빨강 6.5 · 6.9)
+
+
 def test_cvd_delta_matches_known_values():
     # 그래프 색을 고를 때 쓴 검증기 값(theme 의 CHART_* 주석)과 같아야 이 도구로 새 색을 잰다
     assert round(T.cvd_delta("#3fb950", "#ef6268"), 1) == 2.0           # 옛 앱 초록/빨강
-    assert round(T.cvd_delta(*[T._PALETTES["dark"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == 6.5
-    assert round(T.cvd_delta(*[T._PALETTES["light"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == 6.9
+    assert round(T.cvd_delta(*[T._PALETTES["dark"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == DARK_UPDOWN_CVD
+    assert round(T.cvd_delta(*[T._PALETTES["light"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == LIGHT_UPDOWN_CVD
     assert T.cvd_delta("#123456", "#123456") == 0
-    # 좋음/나쁨 짝은 6 미만이라 색만으로 승패를 말하지 않는다(theme 주석) — 값이 바뀌면 주석과 쓰는 자리를 다시 본다
+    # 좋음/나쁨 짝 — 95 에 게임 초록·파랑으로 바꾸며 5.3(초록·빨강) → 36.1. 값이 바뀌면 theme 주석과 쓰는 자리를 다시 본다
     got = {(m, k): round(T.cvd_delta(p[f"GOOD{k}"], p[f"BAD{k}"]), 1)
            for m, p in T._PALETTES.items() for k in ("", "_FILL")}
-    assert got == {("dark", ""): 5.3, ("dark", "_FILL"): 5.3, ("light", ""): 5.0, ("light", "_FILL"): 6.6}, got
+    assert got == {("dark", ""): 36.1, ("dark", "_FILL"): 36.1, ("light", ""): 19.3, ("light", "_FILL"): 25.4}, got
 
 
 def test_g8_cells_match_reference():
@@ -8408,16 +8421,16 @@ def test_clutch_heatmap_cells_and_weak_cells_uncolored():
 def test_heatmap_text_stays_readable_and_direction():
     bad = []
     for mode, p in T._PALETTES.items():
-        for key in ("CHART_UP", "CHART_DOWN"):
+        for key in ("HEAT_GOOD", "HEAT_BAD"):   # 95 — 칸 끝 색은 그래프 색(게임 초록)이 아니라 글자 위 칸 전용
             for s in range(11):
                 bg = T.blend(p["PANEL"], p[key], charts.HEAT_MAX_MIX * s / 10)
                 if T.contrast(p["TEXT"], bg) < 4.5:
                     bad.append((mode, key, s))
     assert not bad, bad
     assert charts.heat_cell_color(50.0) == T.PANEL
-    assert charts.heat_cell_color(90.0) == T.blend(T.PANEL, T.CHART_UP, charts.HEAT_MAX_MIX)
-    assert charts.heat_cell_color(10.0) == T.blend(T.PANEL, T.CHART_DOWN, charts.HEAT_MAX_MIX)
-    assert charts.heat_cell_color(62.5) == T.blend(T.PANEL, T.CHART_UP, 0.5 * charts.HEAT_MAX_MIX)
+    assert charts.heat_cell_color(90.0) == T.blend(T.PANEL, T.HEAT_GOOD, charts.HEAT_MAX_MIX)
+    assert charts.heat_cell_color(10.0) == T.blend(T.PANEL, T.HEAT_BAD, charts.HEAT_MAX_MIX)
+    assert charts.heat_cell_color(62.5) == T.blend(T.PANEL, T.HEAT_GOOD, 0.5 * charts.HEAT_MAX_MIX)
 
 
 def test_donut_groups_tail_into_other():
@@ -13689,7 +13702,7 @@ def _chart_color_failures(p: dict) -> list:
                     ("CHART_NEUTRAL", p["CHART_NEUTRAL"])):   # 67 R12 — 무승부·"기타"·경기 수 막대
         if T.contrast(c, p["PANEL"]) < 3.0:
             bad.append(("contrast", name, round(T.contrast(c, p["PANEL"]), 2)))
-    score = {"line": line, "rank": p["CHART_RANK"], "cut200": p["CHART_DOWN"], "cut1000": p["CHART_NEUTRAL"]}
+    score = {"line": line, "rank": p["CHART_RANK"], "cut200": p["CHART_CUT"], "cut1000": p["CHART_NEUTRAL"]}
     keys = list(score)
     for i, a in enumerate(keys):
         for b in keys[i + 1:]:
@@ -13819,22 +13832,53 @@ def test_elo_and_team_value_charts_66():
         _win._go_page("대시보드")
 
 
+def test_game_colors_95_ink_and_level():
+    # 95 — 게임 초록·무 연회색 칸 위 글자는 진하게, 패 진회색 칸 위는 흰색(흰 글자 고정이면 초록 위 1.3)
+    assert T.ink_on("#07f468") == T.CHART_ON_MARK_DARK and T.ink_on(T._PALETTES["dark"]["DRAW_FILL"]) == T.CHART_ON_MARK_DARK
+    assert T.ink_on(T.LOSE_FILL) == T.CHART_ON_MARK
+    # 결과 점(최근 경기 점) — 패는 진회색 · 무는 연회색 · 글자는 ink_on(그림을 떠서 가운데 색을 본다)
+    from PySide6.QtGui import QImage, QPainter
+    dots = charts.ResultDots()
+    dots.set_data([("승", "a"), ("무", "b"), ("패", "c")])
+    dots.resize(200, 40)
+    img = dots.grab().toImage()
+    d = dots.dot_size()
+    step = d + charts.GAP + 2
+    y = int((dots.height() - d) / 2 + d * 0.22)   # 점 안 · 글자 위쪽
+    seen = [img.pixelColor(int(i * step + 1 + d / 2), y).name() for i in range(3)]
+    assert seen[1:] == [T.DRAW_FILL, T.LOSE_FILL], seen
+    # 승 점 안쪽(테두리 밖) 글자 픽셀이 진한가 — 흰 글자로 되돌리면 초록 점 안에 어두운 픽셀이 없다
+    cx, cy, r = 1 + d / 2, (dots.height() - d) / 2 + d / 2, d * 0.35
+    dark = [(x, yy) for x in range(int(cx - r), int(cx + r)) for yy in range(int(cy - r), int(cy + r))
+            if (x - cx) ** 2 + (yy - cy) ** 2 <= r * r and img.pixelColor(x, yy).green() < 100]
+    assert dark, "승 점 글자가 진하지 않다(초록 위 흰 글자)"
+    # 감독 레벨 — 보통 머리에선 LEVEL 색 · 이름은 이스케이프
+    card = widgets.RankerCard()
+    card.set_mode(False, None)
+    card.set_name("a<b", 7)
+    t = card._head_name.text()
+    assert T.LEVEL in t and "Lv.7" in t and "a&lt;b" in t, t
+    card.set_mode(True, None)
+    card.set_name("a", 7)
+    assert T.LEVEL not in card._head_name.text(), "초록 머리 위에 파랑 레벨"
+
+
 def test_wdl_bar_segments_and_text():
     # P2 — 칸 폭은 경기 수 비례 · 0경기 칸은 없음 · 흐리면 세 칸 다 바탕 쪽으로 · 글은 승·패만 색
     import widgets
     b = widgets.WdlBar(1861, 404, 1774)
     segs = b.strip.segments()
     assert [round(w, 3) for w, _ in segs] == [round(n / 4039, 3) for n in (1861, 404, 1774)], segs
-    assert [c for _, c in segs] == [T.GOOD_FILL, T.blend(T.PANEL, T.TEXT_DIM, 0.4), T.BAD_FILL], segs
+    assert [c for _, c in segs] == [T.GOOD_FILL, T.DRAW_FILL, T.LOSE_FILL], segs   # 95 — 게임 승무패 칸
     html = b.label.text()
     assert "1,861승" in html and "404무" in html and "1,774패" in html, html
-    assert html.index(T.GOOD) < html.index("1,861승") < html.index(T.BAD) < html.index("1,774패"), html
+    assert html.index(T.GOOD) < html.index("1,861승") < html.index(T.LOSE) < html.index("1,774패"), html
     assert b.accessibleName() == "1861승 404무 1774패"
     b.set_counts(3, 0, 1, weak=True)
     segs = b.strip.segments()
     assert [round(w, 2) for w, _ in segs] == [0.75, 0.25], "0경기 칸(무)이 남았다"
     assert [c for _, c in segs] == [T.blend(T.PANEL_2, T.GOOD_FILL, T.WEAK_MIX),
-                                    T.blend(T.PANEL_2, T.BAD_FILL, T.WEAK_MIX)], segs
+                                    T.blend(T.PANEL_2, T.LOSE_FILL, T.WEAK_MIX)], segs
     b.set_counts(0, 0, 0)
     assert b.strip.segments() == []
     assert b.strip.height() == widgets.WdlBar.HEIGHT == 6
@@ -14281,7 +14325,7 @@ def test_rate_row_list_65():
     # 줄 막대는 WdlBar 의 compact 꼴(E6 — 같은 색 함수) · 흐림은 바탕 쪽으로
     WB = widgets.WdlBar
     assert WB.colors_for(False, True)[0] == T.blend(T.PANEL, T.GOOD_FILL, WB.COMPACT_MIX) != T.GOOD_FILL
-    assert WB.colors_for(False)[0] == T.GOOD_FILL and WB.colors_for(False)[2] == T.BAD_FILL
+    assert WB.colors_for(False) == [T.GOOD_FILL, T.DRAW_FILL, T.LOSE_FILL]   # 95 — 게임 승무패 칸
     assert widgets.WdlBar(1, 0, 1, compact=True).strip.colors() == widgets.WdlBar.colors_for(False, True)
     assert widgets.WdlBar.colors_for(True, True)[0] == T.blend(T.PANEL_2, widgets.WdlBar.colors_for(False, True)[0],
                                                                T.WEAK_MIX)

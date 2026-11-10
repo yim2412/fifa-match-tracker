@@ -31,19 +31,25 @@ _PALETTES = {
         PRIMARY="#3fb950",     # 꽉 칠한 버튼·선택 바탕(위 글자 ON_PRIMARY)
         PRIMARY_HOVER="#4fc960",
         ON_PRIMARY="#08210f",
-        GOOD="#00d492",        # 좋음 — 승·득점·▲
-        BAD="#ff637e",         # 나쁨 — 패·실점·▼
+        # 좋음/나쁨은 게임 클라이언트 색(95 · 2026-11-10 스크린숏 픽셀) — 많음·오름 초록 · 적음·내림 파랑. 패는 따로(LOSE).
+        GOOD="#07f468",        # 좋음 — 승·득점·▲
+        BAD="#0b96ff",         # 나쁨 — 실점·▼·적음 (패 글자는 LOSE)
         WARN="#ffb900",        # 주의
-        GOOD_FILL="#00d492",
-        BAD_FILL="#ff637e",
+        ERROR="#ff637e",       # 오류 글 — 나쁨이 파랑이 되며 따로(95 · 옛 BAD 값)
+        GOOD_FILL="#07f468",
+        BAD_FILL="#0b96ff",
+        LOSE_FILL="#575753",   # 패 칸·띠 — 게임 "패" 칸 바탕
+        DRAW_FILL="#cecec8",   # 무 칸·띠 — 게임 "무" 칸 바탕
+        LEVEL="#159aff",       # 감독 레벨 숫자 — 게임 랭킹 #0894fc 는 머리 칸(PANEL_2) 위 4.41 이라 한 단계 밝게(4.7)
         WARN_FILL="#ffb900",
         BLUE="#5b8cff",
         PURPLE="#a08cff",
-        # 선수 카드 포지션 칩 — 태그 꼴(글자 = 그 색 · 바탕 = 그 색 10%). 글자라 PANEL·PANEL_2·10% 바탕 모두 4.5 이상
-        CHIP_GK="#ffb900",
-        CHIP_DF="#50a2ff",
-        CHIP_MF="#00d492",
-        CHIP_FW="#ff637e",
+        # 선수 카드 포지션 칩 — 태그 꼴(글자 = 그 색 · 바탕 = 그 색 10%). 게임 값 그대로(95 · 사용자 결정) — 어두운 바탕
+        # 대비 2.7~4.0 으로 4.5 미달이지만 포지션 글자(ST·CB…)가 같이 있어 색은 보조다(test 는 2.5 로 잰다)
+        CHIP_GK="#f4b400",
+        CHIP_DF="#306cfc",
+        CHIP_MF="#248434",
+        CHIP_FW="#d81c28",
         # 작은 축구장(포메이션 그림) — 판 위→아래 그라데이션 · 선
         FORMATION_PITCH_TOP="#0d2818",
         FORMATION_PITCH_BOTTOM="#0a1f12",
@@ -54,8 +60,9 @@ _PALETTES = {
         ROW_TINT=0.35,
         SCROLL="#3f3f46",
         SCROLL_HOVER="#52525b",
-        CHART_UP="#199e70",
-        CHART_DOWN="#e66767",
+        CHART_UP="#07f468",
+        CHART_DOWN="#0b96ff",
+        CHART_CUT="#e66767",   # 점수 그래프 200위 컷 선 — 옛 CHART_DOWN(파랑이 되면 보라 점수선과 색약 2.9)
         CHART_NEUTRAL="#6e7681",
         CHART_GRID="#262b33",
         CHART_AXIS="#3a414b",
@@ -71,12 +78,12 @@ _PALETTES = {
         # 원색은 그 위 밝은 글자가 안 읽힌다. 79 — 높음 = 초록 · 낮음 = 빨강(예전 높음 빨강 · 낮음 파랑은 높은 승률이
         # 나쁨으로 읽혔다). 초록은 빨강과 PANEL 대비가 비슷한 값(빨강 2.98 · 초록 3.02)으로 골라 한쪽만 튀지 않게.
         HEAT_GOOD="#117438",
-        HEAT_BAD="#c41c1c",
-        # 포지션 글자색 — PANEL 위 대비 ≥ 4.6. 글자(ST·CB…)가 같이 있어 색은 보조다(적록 색약).
-        POS_FW="#e25a5a",
-        POS_MF="#1c9c30",
-        POS_DF="#4d88e0",
-        POS_GK="#a9821e",
+        HEAT_BAD="#1d5fb0",   # 95 — 낮음은 파랑(게임 나쁨 색 쪽)
+        # 포지션 글자색 — 게임 값(칩과 같다 · 95)
+        POS_FW="#d81c28",
+        POS_MF="#248434",
+        POS_DF="#306cfc",
+        POS_GK="#f4b400",
     ),
     "light": dict(
         BG="#f6f7f9",
@@ -94,19 +101,24 @@ _PALETTES = {
         PRIMARY_HOVER="#166534",
         ON_PRIMARY="#ffffff",
         # 흰 바탕에서 채움 값(#009966 3.65 · #e17100 3.20 · #ec003f 칸 위 3.73)은 글자로 안 읽혀 글자만 진하게
-        GOOD="#065f46",
-        BAD="#be123c",
+        # 95 — 게임 초록·파랑은 흰 바탕 글자로 1.5·3.1 이라 같은 색상의 진한 값(글자) · 채움은 흰 카드 위 그래픽 3.0 이상
+        GOOD="#047857",
+        BAD="#0b63c4",
         WARN="#92400e",
-        GOOD_FILL="#009966",
-        BAD_FILL="#ec003f",
+        ERROR="#be123c",
+        GOOD_FILL="#0f9d4a",
+        BAD_FILL="#0b7ce0",
+        LOSE_FILL="#575753",
+        DRAW_FILL="#a8a8a2",
+        LEVEL="#0b63c4",
         WARN_FILL="#e17100",
         BLUE="#3b6fe0",
         PURPLE="#7c5cf0",
-        # 칩 글자 — 기준 한 단계(GK·MF 는 두 단계) 진한 값: 흰 칸 위 #bb4d00 4.14 · #007a55 4.42 라 글자로 미달
+        # 칩 글자 — 게임 값(95) · GK 만 게임 노랑이 흰 바탕 1.85 라 진한 값 그대로
         CHIP_GK="#973c00",
-        CHIP_DF="#1447e6",
-        CHIP_MF="#006045",
-        CHIP_FW="#c70036",
+        CHIP_DF="#306cfc",
+        CHIP_MF="#248434",
+        CHIP_FW="#d81c28",
         FORMATION_PITCH_TOP="#2d6045",
         FORMATION_PITCH_BOTTOM="#214a34",
         FORMATION_LINE="#e8f0e8",
@@ -116,8 +128,9 @@ _PALETTES = {
         ROW_TINT=0.18,
         SCROLL="#cfd5df",
         SCROLL_HOVER="#b4bcc9",
-        CHART_UP="#138a60",
-        CHART_DOWN="#e34948",
+        CHART_UP="#0f9d4a",
+        CHART_DOWN="#0b7ce0",
+        CHART_CUT="#e34948",
         # 무승부·도넛 "기타"·경기 수 막대 — 흰 카드 위 그래픽 대비 3.0(옛 #9aa1b0 은 2.59 · 67 R12) → 3.38
         CHART_NEUTRAL="#858c9b",
         CHART_GRID="#eceff4",
@@ -130,10 +143,10 @@ _PALETTES = {
         CHART_LINE="#373cbe",   # 위 어두운 쪽 주석과 같은 이유(3.2.2)
         CAL_FILL="#373cbe",
         HEAT_GOOD="#18a550",   # 밝은 테마는 반대로 — 진한 글자가 읽히는 값(PANEL 대비 빨강 3.27 · 초록 3.21)
-        HEAT_BAD="#e96363",
-        POS_FW="#db3333",
-        POS_MF="#188629",
-        POS_DF="#2b71da",
+        HEAT_BAD="#5b9bff",
+        POS_FW="#d81c28",
+        POS_MF="#248434",
+        POS_DF="#306cfc",
         POS_GK="#8f6e19",
     ),
 }
@@ -148,8 +161,8 @@ TEXT = _P["TEXT"]
 TEXT_DIM = _P["TEXT_DIM"]
 
 # 강조(앱 정체성 · 초록)와 좋음/나쁨(승·패)은 다른 토큰이다 — 한 색에 두 뜻을 싣던 시절엔 강조를 바꾸면
-# 승·골까지 같이 바뀌었다. 좋음/나쁨 짝도 적록 색약 색차가 6 안팎(cvd_delta: 어두운 5.3 · 밝은 글자 5.0 · 채움 6.6)이라
-# 색만으로 승패를 말하지 않는다 — 쓰는 자리마다 글자·부호(승/패 · +/− · ▲▼)가 같이 있다.
+# 승·골까지 같이 바뀌었다. 좋음/나쁨은 95 부터 게임 초록·파랑이라 색약 색차가 크다(어두운 36.1 · 밝은 글자 19.3 · 채움 25.4 —
+# 옛 초록·빨강은 5.3) — 그래도 쓰는 자리마다 글자·부호(승/패 · +/− · ▲▼)를 같이 둔다.
 ACCENT = _P["ACCENT"]               # 강조 글자·테두리
 ACCENT_FILL = _P["ACCENT_FILL"]     # 강조 채움(진행 막대 등)
 ACCENT_SOFT = _P["ACCENT_SOFT"]     # 선택된 메뉴·탭 바탕
@@ -171,16 +184,22 @@ CHIP_MF = _P["CHIP_MF"]
 CHIP_FW = _P["CHIP_FW"]
 CHIP_SOFT_MIX = 0.10                # 태그 꼴 바탕 — widgets.tag_qss 와 같은 비율
 
+ERROR = _P["ERROR"]                 # 오류 글(검색 실패·키 거절) — 나쁨(파랑)과 따로
+LEVEL = _P["LEVEL"]                 # 감독 레벨 숫자
+
+# 승·무·패(95 — 게임): 승 = 좋음 초록 · 무 = 연회색 칸 · 패 = 진회색 칸. 패 글자는 흐린 글자(진회색은 어두운 바탕 글자로 2.4)
 WIN = GOOD
 DRAW = _P["DRAW"]
-LOSE = BAD
+LOSE = TEXT_DIM
+LOSE_FILL = _P["LOSE_FILL"]
+DRAW_FILL = _P["DRAW_FILL"]
 
 # 대시보드 그래프(charts.py) 색 — 옛 앱 초록/빨강 짝(#3fb950/#ef6268)은 적록 색약에서 색차 2.0 으로
-# 구분이 안 된다(dataviz 검증기, 기준 6). 그래서 그래프만 청록 쪽 초록 + 밝은
-# 빨강으로 다시 골랐다: 다크 6.5 · 밝은 6.9 — 6~8 은 '보조 표시가 있을 때만'
-# 허용이라 그래프에는 범례·2px 틈·글자 표기를 항상 같이 둔다. 무승부·상대는 회색.
+# 구분이 안 된다(dataviz 검증기, 기준 6). 95 부터 게임 초록·파랑(다크 36.1 · 밝은 25.4) — 범례·2px 틈·글자 표기는
+# 그대로 같이 둔다. 무승부·상대는 회색.
 CHART_UP = _P["CHART_UP"]            # 득점·승·나
-CHART_DOWN = _P["CHART_DOWN"]        # 실점·패
+CHART_DOWN = _P["CHART_DOWN"]        # 실점·적음
+CHART_CUT = _P["CHART_CUT"]          # 점수 그래프 200위 컷 선(95 — 나쁨 파랑과 따로)
 CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선
@@ -191,6 +210,12 @@ CHART_RANK = _P["CHART_RANK"]        # 점수 그래프의 순위 점선·오른
 CHART_VALUE = _P["CHART_VALUE"]      # 구단가치 그래프 선·띠(66 G3)
 
 CHART_ON_MARK = "#ffffff"            # 색 점·골대 맞은 슛 위의 흰 글자·테두리(두 테마 같음)
+CHART_ON_MARK_DARK = "#151616"       # 밝은 칸(게임 초록·무 연회색) 위 글자 — 게임 결과 칸 글자색(95)
+
+
+def ink_on(bg: str) -> str:
+    """색 칸 위 글자 — 흰색과 진한 글자 중 대비가 큰 쪽(게임 초록 #07f468 위 흰색은 1.3)."""
+    return max((CHART_ON_MARK, CHART_ON_MARK_DARK), key=lambda c: contrast(c, bg))
 
 # 테마와 무관한 고정색 — 게임 화면의 색을 그대로 옮긴 것
 PITCH_LINE = "#82ffffff"             # 축구장 선(흰색 · 알파 130)

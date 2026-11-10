@@ -3656,7 +3656,7 @@ class MainWindow(QMainWindow):
 
         self.lb_search_msg = QLabel("")
         self.lb_search_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lb_search_msg.setStyleSheet(f"color: {T.BAD}; border: none;")
+        self.lb_search_msg.setStyleSheet(f"color: {T.ERROR}; border: none;")
         box_v.addSpacing(8)
         box_v.addWidget(self.lb_search_msg)
 
@@ -8911,7 +8911,7 @@ class MainWindow(QMainWindow):
         if res.pair is not None and res.pair.ok:
             ttl["wins"].setText(f"하루 최다 승 10명: 넥슨 데이터 시각 {res.pair.hours:.1f}시간 사이")
             lst["wins"].set_rows([MetricRow(n, f"{r:,}위", (MetricCell(f"{w_:,}", "승", T.GOOD), MetricCell(f"{d:,}", "무"),
-                                                           MetricCell(f"{lo:,}", "패", T.BAD)), rank=i + 1)
+                                                           MetricCell(f"{lo:,}", "패", T.LOSE)), rank=i + 1)
                                   for i, (n, r, w_, d, lo) in enumerate(res.day_wins)])
         else:
             ttl["wins"].setText(f"하루 최다 승: {core.pair_text(res.pair)}")
@@ -9974,7 +9974,7 @@ class MainWindow(QMainWindow):
         if self.tbl_players.rowCount():
             self._fit_columns_to_content(self.tbl_players, extra=getattr(self, "_player_fit_extra", None))
 
-    MATCH_FILTER_KINDS = (("승", T.GOOD), ("무", T.TEXT_DIM), ("패", T.BAD))
+    MATCH_FILTER_KINDS = (("승", T.GOOD), ("무", T.TEXT_DIM), ("패", T.LOSE))
 
     def _build_matches_tab(self) -> QWidget:
         w = QWidget()
@@ -11575,7 +11575,7 @@ class MainWindow(QMainWindow):
         r = self._rank
         c.set_mode(self._is_champion, self._grade_name)
         lv = (r.level if r and r.level else self._basic.get("level", "-"))
-        c.set_name(f"{self._nick}  Lv.{lv}")
+        c.set_name(self._nick, lv)
         c.set_badge(self._badge_path or None)
         c.set_best(self._max_division_text())
         self._render_head_icons()
@@ -11926,7 +11926,7 @@ class MainWindow(QMainWindow):
             return
         self.card_rival.value.setText(r.nickname)   # set() 은 숫자가 든 글을 굴린다(86 C3) — 닉네임 숫자가 굴러가면 안 된다
         kind, n = r.streak
-        col = T.GOOD if kind == "승" else T.BAD if kind == "패" else T.TEXT_DIM
+        col = T.GOOD if kind == "승" else T.LOSE if kind == "패" else T.TEXT_DIM
         sc = "{}&nbsp;:&nbsp;{}".format   # 점수 안에서 줄이 안 나뉘게(150% 실화면에서 "0 :" / "3" 으로 쪼개졌다)
         lines = [f"{r.games:,}경기 {wdl_text(r.win, r.draw, r.lose)} · 득실 {sc(f'{r.goals_for:,}', f'{r.goals_against:,}')}"]
         bits = [f"지금 <b style='color:{col}'>{n}연{kind}</b>" if kind in ("승", "패") and n > 1
@@ -11934,7 +11934,7 @@ class MainWindow(QMainWindow):
         if r.best_win:
             bits.append(f"가장 크게 이긴 경기 <b style='color:{T.GOOD}'>{sc(*r.best_win)}</b>")
         if r.worst_loss:
-            bits.append(f"가장 크게 진 경기 <b style='color:{T.BAD}'>{sc(*r.worst_loss)}</b>")
+            bits.append(f"가장 크게 진 경기 <b style='color:{T.LOSE}'>{sc(*r.worst_loss)}</b>")
         lines.append(" · ".join(b for b in bits if b))
         if r.first and r.last:
             lines.append(f"처음 만난 날 {r.first:%Y-%m-%d} · 마지막 {r.last:%Y-%m-%d}")
@@ -13782,7 +13782,7 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     continue
             if series:
-                refs.append((f"{rank:,}위", series, T.CHART_NEUTRAL if i else T.CHART_DOWN))
+                refs.append((f"{rank:,}위", series, T.CHART_NEUTRAL if i else T.CHART_CUT))
         ranks = [p.get("rank") or None for p in pts]
         legend = [("점수", T.CHART_LINE, False)] + ([("순위", T.CHART_RANK, True)] if any(ranks) else [])
         self.elo_chart.set_data(
@@ -15223,7 +15223,7 @@ class ApiKeyDialog(QDialog):
         v.addWidget(self.ed_key)
         self.lb_msg = QLabel(reason)
         self.lb_msg.setWordWrap(True)
-        self.lb_msg.setStyleSheet(f"color: {T.BAD};")
+        self.lb_msg.setStyleSheet(f"color: {T.ERROR};")
         v.addWidget(self.lb_msg)
         row = QHBoxLayout()
         row.addStretch(1)

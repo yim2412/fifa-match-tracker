@@ -1375,13 +1375,13 @@ class ResultDots(_Chart):
         step = d + GAP + 2
         y = (self.height() - d) / 2
         for i, (res, tip) in enumerate(self._items):
-            col = (T.CHART_UP if "승" in res else T.CHART_DOWN if "패" in res
-                   else T.CHART_NEUTRAL)
+            col = (T.CHART_UP if "승" in res else T.LOSE_FILL if "패" in res   # 95 — 게임: 패 진회색 · 무 연회색
+                   else T.DRAW_FILL)
             rect = QRectF(i * step + 1, y, d, d)
             p.setPen(QPen(QColor(T.PANEL), RING_W))
             p.setBrush(QColor(col))
             p.drawEllipse(rect)
-            p.setPen(QColor(T.CHART_ON_MARK))
+            p.setPen(QColor(T.ink_on(col)))
             p.drawText(rect, Qt.AlignmentFlag.AlignCenter, res[:1] if res[:1] in "승무패" else "?")
             self._hits.append((rect.adjusted(-GAP, -4, GAP, 4), tip))
 
@@ -1745,9 +1745,10 @@ HEAT_MAX_MIX = 0.6    # 칸 색 상한 — 이보다 진하면 어두운 테마�
 
 
 def heat_cell_color(rate: float) -> str:
-    """승률 → 칸 색(불투명). 50% 는 바탕, 위는 CHART_UP 쪽, 아래는 CHART_DOWN 쪽으로 최대 HEAT_MAX_MIX."""
+    """승률 → 칸 색(불투명). 50% 는 바탕, 위는 HEAT_GOOD 쪽, 아래는 HEAT_BAD 쪽으로 최대 HEAT_MAX_MIX.
+    95 — 그래프 초록(게임 #07f468)은 밝아 칸 안 글자가 안 읽혀 글자 위 칸 전용 끝 색을 쓴다."""
     frac = min(abs(rate - 50.0) / HEAT_FULL_PP, 1.0)
-    return T.blend(T.PANEL, T.CHART_UP if rate >= 50 else T.CHART_DOWN, frac * HEAT_MAX_MIX)
+    return T.blend(T.PANEL, T.HEAT_GOOD if rate >= 50 else T.HEAT_BAD, frac * HEAT_MAX_MIX)
 
 
 class HeatmapChart(_Chart):
