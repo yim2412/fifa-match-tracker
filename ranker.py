@@ -237,7 +237,7 @@ def fetch_manager_rank(nickname: str, timeout: int = 10, season_no: int = 0) -> 
     # 여기서 구분하지 않으면 점검 시간에 조회된 상대 전부가 "못 찾음"으로
     # TTL 기간 내내 잘못 캐시된다(2026-07-23 실제 점검 중 발견).
     if "점검 진행 중" in html or "fc_logo_inspection" in html:
-        raise RankerError("넥슨 웹 점검 중입니다. 잠시 후 다시 시도해 주세요")
+        raise RankerError("넥슨 웹 점검 중입니다. 잠시 뒤 다시 시도해 주세요.")
 
     if _NOT_RANKED in html or 'class="td rank_no"' not in html:
         return info  # 랭킹 1만 위 밖 — 순위 없음
@@ -389,7 +389,7 @@ def fetch_rank_rows(page: int, timeout: int = config.RANK_PAGE_TIMEOUT_S, season
     if getattr(res, "history", None):
         raise RankerError(f"랭킹 목록 {page}쪽이 다른 페이지로 넘어갔습니다")
     if "점검 진행 중" in html or "fc_logo_inspection" in html:
-        raise RankerError("넥슨 웹 점검 중입니다. 잠시 후 다시 시도해 주세요")
+        raise RankerError("넥슨 웹 점검 중입니다. 잠시 뒤 다시 시도해 주세요.")
     return RankPageResult(page, parse_rank_rows(html), getattr(res, "headers", {}).get("Date", ""),
                           parse_ref_time(html))
 

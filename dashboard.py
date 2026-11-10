@@ -599,8 +599,8 @@ class DashboardPage(QWidget):
             col = T.GOOD if up_ok else T.BAD if dr[0] < 50 else T.TEXT
             word = "오르는 구간" if up_ok else "내리는 구간" if dr[0] < 50 else "제자리"
             c1.setText(f"무승부를 뺀 승률이 <b style='color:{col}'>{dr[0]:.1f}%</b>라서 점수가 {word}입니다.")
-        e1.setText(f"점수는 승패로만 움직여서, 무승부를 뺀 승률 50%가 오르고 내리는 경계입니다. 하루 평균 {rep.day_avg:+,.1f}점"
-                   + (f" · {up}" if up else "") + (f" · {dr[1]:,}판" if dr else ""))
+        e1.setText("점수는 승패로만 움직입니다. 무승부를 뺀 승률이 50%를 넘으면 오르고 밑돌면 내립니다.\n"
+                   + " · ".join(x for x in (f"하루 평균 {rep.day_avg:+,.1f}점", up, f"{dr[1]:,}판" if dr else "") if x))
         if not rep.max_dd or rep.dd_peak is None:
             c2.setText("이번 시즌엔 아직 떨어진 적이 없습니다.")
             e2.setText(f"시즌 최고 {rep.peak:,.0f}점({rep.peak_day:%m.%d})")
@@ -608,10 +608,11 @@ class DashboardPage(QWidget):
             deep = band is not None and rep.max_dd > band[0]
             judge = (" 같은 구간 사람들보다 깊은 편입니다." if deep else " 같은 구간 사람들과 비슷하거나 얕습니다.") if band else ""
             c2.setText(f"한 번에 가장 크게 떨어진 폭은 <b style='color:{T.BAD}'>{rep.max_dd:,.0f}점</b>입니다.{judge}")
-            e2.setText(f"{rep.dd_peak:,.0f}점에서 {rep.dd_peak - rep.max_dd:,.0f}점까지"
-                       + (f"({rep.dd_day:%m.%d} 바닥)" if rep.dd_day else "")
-                       + (f" · 같은 구간(최고점 ±{config.R2_BAND}) {band[1]:,}명 중앙 −{band[0]:,.0f}점" if band else "")
-                       + " · 하루 한 점이라 하루 안 낙폭은 작게 나옵니다")
+            # 96 I2 — 괄호 겹침·가운뎃점 이음을 문장 셋으로(STYLE 4·5 · '중앙' 은 쉬운 말로)
+            e2.setText(f"{rep.dd_peak:,.0f}점에서 {rep.dd_peak - rep.max_dd:,.0f}점까지 떨어졌습니다"
+                       + (f"({rep.dd_day:%m.%d} 바닥)" if rep.dd_day else "") + "."
+                       + (f" 시즌 최고점이 나와 {config.R2_BAND:,}점 안쪽인 {band[1]:,}명은 가운데 값이 −{band[0]:,.0f}점입니다." if band else "")
+                       + " 점수는 하루에 한 번 재므로 하루 안에서 떨어진 폭은 작게 나옵니다.")
 
     def _render_trend(self, d: DashboardInput) -> None:
         recent = [m for m in d.range_matches[:DOTS_N]][::-1]

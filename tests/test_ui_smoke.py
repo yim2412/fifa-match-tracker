@@ -5193,7 +5193,7 @@ def test_check_key_judges_by_error_code():
             assert (got is None) == ok, (err and err.message, got)
     finally:
         nexon_api.FCOnlineAPI._get = orig
-    assert nexon_api.check_key("   ") == "키를 입력하세요."
+    assert nexon_api.check_key("   ") == "키를 입력해 주세요."
 
 
 def test_key_dialog_saves_only_accepted_key():

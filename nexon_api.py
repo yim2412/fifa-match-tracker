@@ -63,17 +63,18 @@ RANKER_STATS_BATCH = 50  # 한 카드 × 포지션 28개(N2)가 한 번에 · 81
 
 # 넥슨 에러코드 → 사람이 읽는 말
 ERROR_MESSAGES = {
-    "OPENAPI00001": "넥슨 서버 내부 오류입니다. 잠시 후 다시 시도하세요.",
-    "OPENAPI00004": "요청 파라미터가 잘못됐습니다.",
-    "OPENAPI00005": "API 키가 유효하지 않습니다. 키를 다시 확인하세요.",
-    "OPENAPI00007": "API 호출량을 초과했습니다. 잠시 후 다시 시도하세요.",
-    "OPENAPI00009": "존재하지 않는 데이터입니다.",
-    "OPENAPI00010": "게임 점검 중입니다.",
-    "OPENAPI00011": "API 점검 중입니다.",
+    # 96 I2 — 무슨 일인지 → 무엇을 하면 되는지(docs/STYLE.md 8·9)
+    "OPENAPI00001": "넥슨 서버에 문제가 생겼습니다. 잠시 뒤 다시 시도해 주세요.",
+    "OPENAPI00004": "넥슨이 요청 값을 받지 않았습니다. 닉네임이나 입력한 값을 다시 확인해 주세요.",
+    "OPENAPI00005": "API 키가 맞지 않습니다. 키를 다시 확인해 주세요.",
+    "OPENAPI00007": "넥슨 조회 한도를 넘었습니다. 잠시 뒤 다시 시도해 주세요.",
+    "OPENAPI00009": "넥슨에 없는 자료입니다.",
+    "OPENAPI00010": "게임 점검 중입니다. 점검이 끝난 뒤 다시 시도해 주세요.",
+    "OPENAPI00011": "넥슨 오픈API 점검 중입니다. 점검이 끝난 뒤 다시 시도해 주세요.",
     # 중앙 서버의 사정(아래 SERVER_*) — 넥슨 코드와 섞지 않는다: 서버 키 거절을 00005 로 넘기면 전원에게 "키가 틀렸다" 창이 뜬다
-    "SERVER_BUSY": "중앙 서버가 지금 바쁩니다. 잠시 후 다시 시도하세요.",
-    "SERVER_UNAVAILABLE": "중앙 서버를 지금 쓸 수 없습니다. 잠시 후 다시 시도하세요.",
-    "SERVER_DOWN": "중앙 서버 응답이 없습니다. 잠시 후 다시 시도하세요.",
+    "SERVER_BUSY": "중앙 서버가 지금 바쁩니다. 잠시 뒤 다시 시도해 주세요.",
+    "SERVER_UNAVAILABLE": "중앙 서버를 지금 쓸 수 없습니다. 잠시 뒤 다시 시도해 주세요.",
+    "SERVER_DOWN": "중앙 서버가 답하지 않습니다. 잠시 뒤 다시 시도해 주세요.",
 }
 
 # 키 확인 — 2026-10-02 실측: 틀린 키는 OPENAPI00005, 맞는 키로 없는 닉네임을 물으면
@@ -156,7 +157,7 @@ def check_key(api_key: str, timeout: int = 10) -> str | None:
     """키가 쓸 만하면 None, 아니면 사람이 읽을 이유를 돌려준다."""
     api_key = api_key.strip()
     if not api_key:
-        return "키를 입력하세요."
+        return "키를 입력해 주세요."
     try:
         FCOnlineAPI(api_key, timeout=timeout)._get(EP_ID, nickname=KEY_CHECK_NICKNAME)
     except NexonAPIError as e:
@@ -170,7 +171,7 @@ class FCOnlineAPI:
     def __init__(self, api_key: str, timeout: int = 10, cache_dir: Path | None = None,
                  server: bool = False, server_url: str = "", install_id: str = ""):
         if not api_key:
-            raise NexonAPIError("API 키가 비어 있습니다. .env 파일에 NEXON_API_KEY를 넣어주세요.")
+            raise NexonAPIError("API 키가 없습니다. 앱을 다시 켜고 키 입력 창에 키를 넣어 주세요.")
         # 직접(넥슨) 세션 — 키 헤더는 이 세션에만 있다. 서버 세션과 나눈 것은 키를 바꾸거나(set_key) 폴백으로 오갈 때
         # 공유 세션의 헤더·주소를 바꾸면 상세 24스레드·로더들 사이 경합으로 키가 서버로 나가서다(1회차 검토 [상]1·2)
         self._session = requests.Session()

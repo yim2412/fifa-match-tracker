@@ -103,7 +103,7 @@ def fetch_seasons(timeout: int = 10) -> list[Season]:
 
     html = res.text
     if "점검 진행 중" in html or "fc_logo_inspection" in html:
-        raise SeasonError("넥슨 웹 점검 중입니다 — 잠시 후 다시 시도해주세요")
+        raise SeasonError("넥슨 웹 점검 중입니다. 잠시 뒤 다시 시도해 주세요.")
 
     out: list[Season] = []
     for no, name, start, end in _SEASON_ROW.findall(html):
