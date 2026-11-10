@@ -72,6 +72,7 @@ if os.environ.get("QT_QPA_PLATFORM") == "offscreen" and QApplication.instance() 
         os.chdir(_cwd)
 _app = QApplication.instance() or QApplication(sys.argv)
 T.apply(_app)
+app_main.install_keyboard_aid(_app)   # 실제 앱처럼(_setup_app) — 거르개가 다른 화면 배선과 부딪히면 여기서 보이게(96 K3)
 
 
 # ── 모달 차단 — offscreen 에선 모달이 안 닫혀 테스트가 실패 대신 영원히 멈춘다 ──────
@@ -4622,7 +4623,7 @@ def test_position_views_follow_teamcolor_scope():
         _win.cb_position_color.setCurrentText("범위컬러")    # [축구장] 은 팀컬러를 골라야 그린다
         lst = _win.tc_rate_list   # [상대 팀컬러] 줄의 두 번 누름(77 B — 옛 랭킹 표 자리)
         assert lst.rowCount() == 1 and lst.row(0).label == "범위컬러", [r.label for r in lst.rows()]
-        lst.doubleClicked.emit(lst.model().index(0, 0))
+        lst.activated.emit(lst.model().index(0, 0))
         assert seen == [len(_win._details)] * 2, (seen, len(_win._details))
     finally:
         app_main.core.opponent_position_players = orig[0]
@@ -4862,7 +4863,7 @@ def test_teamcolor_double_click_on_dup_name():
         try:
             lst = _win.tc_rate_list
             i = next(i for i, row in enumerate(lst.rows()) if row.label == "Spartan · 강화")
-            lst.doubleClicked.emit(lst.model().index(i, 0))
+            lst.activated.emit(lst.model().index(i, 0))
             assert got == ["Spartan · 강화"] and seen == [{opps[0]}], (got, seen)
         finally:
             _win._show_teamcolor_detail = orig
@@ -10659,7 +10660,7 @@ def test_ranker_pick_renders_summary():
             keep_info = _win._show_player_info
             _win._show_player_info = got.append
             try:
-                lst.doubleClicked.emit(lst.model().index(0, 0))
+                lst.activated.emit(lst.model().index(0, 0))
             finally:
                 _win._show_player_info = keep_info
             assert got == [every[0].key] and isinstance(every[0].key, int), got
@@ -14462,7 +14463,7 @@ def test_match_card_double_click_opens_detail_on_opponent_squad():
         _win._render_matches(_win._slice()[0])
         lst = _win.match_list
         r = min(2, lst.rowCount() - 1)
-        lst.doubleClicked.emit(lst.model().index(r, 0))
+        lst.activated.emit(lst.model().index(r, 0))
         assert got == [(lst.row(r).match_id, "스쿼드", "opp")], got
     finally:
         _win._show_match_detail = keep

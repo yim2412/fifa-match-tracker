@@ -94,7 +94,7 @@ from widgets import (
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
     ChoiceChips, MetricCell, MetricRow, MetricRowList, chip_toggle, AvgBar, AvgBarList, pct_text, pill_radius, EmptyState,
-    set_grade_holo, GradeBadge, BASIS_FETCHED, BASIS_NEXON, FindBar, basis_text, stamp,
+    set_grade_holo, GradeBadge, BASIS_FETCHED, BASIS_NEXON, FindBar, basis_text, stamp, install_keyboard_aid,
 )
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
@@ -4400,7 +4400,7 @@ class MainWindow(QMainWindow):
         min_row, self.btn_tc_rate_info = self._teamcolor_pick_row(min_row)
         v.addLayout(min_row)
         self.tc_rate_list = RateRowList()
-        self.tc_rate_list.doubleClicked.connect(
+        self.tc_rate_list.activated.connect(
             lambda idx: self._show_teamcolor_players(idx.data(ROW_ROLE).key) if idx.isValid() else None)
         self.tc_rate_list.selectionModel().currentChanged.connect(
             lambda cur, _p: self.btn_tc_rate_info.setEnabled(cur.isValid()))
@@ -6392,7 +6392,7 @@ class MainWindow(QMainWindow):
         self.lb_records_note = self._note_label()
         v.addWidget(self.lb_records_note)
         self.tbl_records = self._make_table(self.RECORD_COLUMNS)
-        self.tbl_records.itemDoubleClicked.connect(self._on_record_double_clicked)
+        self.tbl_records.itemActivated.connect(self._on_record_double_clicked)
         v.addWidget(self.tbl_records, 1)
         self.record_rows: list = []   # 표 줄 순서 그대로(정렬 없음) — 더블클릭·테스트가 읽는다
         return w
@@ -7320,7 +7320,7 @@ class MainWindow(QMainWindow):
         self.pick_line_chips = self._line_chips(lambda: self._apply_line_filter(self.pick_cards_list, self.pick_line_chips))
         v.addWidget(self.pick_line_chips)
         self.pick_cards_list = MetricRowList(fixed=True)
-        self.pick_cards_list.doubleClicked.connect(self._on_card_row_double_clicked)
+        self.pick_cards_list.activated.connect(self._on_card_row_double_clicked)
         v.addWidget(self.pick_cards_list)
 
         lb = QLabel("내 스쿼드 vs 랭커: 최근 경기 선발 · 칩 아래는 그 카드를 선발로 쓴 랭커 비율")
@@ -7558,7 +7558,7 @@ class MainWindow(QMainWindow):
         v.addWidget(self.rec_line_chips)
         self.rec_cards_list = MetricRowList()   # 67 R10 — 줄 순서(공격 → GK)가 정보다 · 두 번 누르면 선수 카드
         self.rec_cards_list.setMinimumHeight(260)
-        self.rec_cards_list.doubleClicked.connect(self._on_card_row_double_clicked)
+        self.rec_cards_list.activated.connect(self._on_card_row_double_clicked)
         v.addWidget(self.rec_cards_list, 1)
         self.rec: core.Recommend | None = None  # 테스트가 집계를 본다
         return w
@@ -9383,7 +9383,7 @@ class MainWindow(QMainWindow):
         row.addStretch(1)
         v.addLayout(row)
         self.tbl_oppcard = self._make_table(self.OPP_CARD_COLUMNS, icons={0: "season"})
-        self.tbl_oppcard.itemDoubleClicked.connect(self._on_oppcard_double_clicked)
+        self.tbl_oppcard.itemActivated.connect(self._on_oppcard_double_clicked)
         v.addWidget(self.tbl_oppcard, 1)
         self.opp_cards: dict = {}
         return w
@@ -9480,7 +9480,7 @@ class MainWindow(QMainWindow):
         self.fold_owner_cards.setVisible(False)
         v.addWidget(self.fold_owner_cards)
         self.tbl_owner = self._make_table(self.CARD_OWNER_COLUMNS, icons={5: "emblem", 6: "division"})
-        self.tbl_owner.itemDoubleClicked.connect(self._on_owner_double_clicked)
+        self.tbl_owner.itemActivated.connect(self._on_owner_double_clicked)
         v.addWidget(self.tbl_owner, 1)
         self.owner_rows: list[dict] = []   # 테스트가 결과를 본다
         self._refresh_owner_colors()
@@ -9842,7 +9842,7 @@ class MainWindow(QMainWindow):
         self.lb_ranker_status.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_ranker_status)
         self.tbl_ranker = self._make_table(self.RANKER_COLUMNS, icons={1: "season"})
-        self.tbl_ranker.itemDoubleClicked.connect(self._on_ranker_double_clicked)
+        self.tbl_ranker.itemActivated.connect(self._on_ranker_double_clicked)
         v.addWidget(self.tbl_ranker, 1)
         return w
 
@@ -9937,7 +9937,7 @@ class MainWindow(QMainWindow):
         w = QWidget()
         v = QVBoxLayout(w)
         self.tbl_finishing = self._make_table(self.FINISHING_COLUMNS, icons={0: "season"})
-        self.tbl_finishing.itemDoubleClicked.connect(
+        self.tbl_finishing.itemActivated.connect(
             self._on_finishing_double_clicked)
         v.addWidget(self.tbl_finishing, 1)
         return w
@@ -10058,7 +10058,7 @@ class MainWindow(QMainWindow):
         self._grade_badges("_render_players")
         # "선수" 열(1번)에 spId 를 UserRole 로 붙여두고(_render_players)
         # 더블클릭하면 상대 스쿼드 화면과 같은 선수 카드 다이얼로그를 연다.
-        self.tbl_players.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
+        self.tbl_players.itemActivated.connect(self._on_player_cell_double_clicked)
         self._apply_player_group()
         v.addWidget(self.tbl_players, 1)
         return w
@@ -10164,7 +10164,7 @@ class MainWindow(QMainWindow):
 
         self.match_list = MatchCardList(self.MATCH_CARD_TIPS)
         self._match_cards: list[MatchCard] = []   # 정렬 전(최신순) — 정렬을 바꿀 때 다시 만들지 않는다
-        self.match_list.doubleClicked.connect(self._on_match_double_clicked)
+        self.match_list.activated.connect(self._on_match_double_clicked)
         self._add_profile_action(self.match_list, lambda: getattr(self.match_list.current(), "opponent", ""))
         v.addWidget(self.match_list, 1)
         return w
@@ -10303,7 +10303,7 @@ class MainWindow(QMainWindow):
             "rate": win_rate_note(False),
             "diff": ("이 줄 승률 − 필터에 걸린 경기 전체 승률(%p). "
                      f"{core.MIN_COND}판 미만이면 비웁니다. 몇 판짜리 큰 차이가 가장 눈에 띄지 않게 하려는 것입니다.")})
-        self.opp_list.doubleClicked.connect(self._on_opponent_double_clicked)
+        self.opp_list.activated.connect(self._on_opponent_double_clicked)
         self._add_profile_action(self.opp_list, self._opp_row_nick)
         self._opp_rows: list[RateRow] = []
         self._opp_picked_details: list[dict] = []
@@ -10477,7 +10477,7 @@ class MainWindow(QMainWindow):
         # 이 표는 순서 자체가 정보다(공격→미들→수비→GK, 줄별 색상) — 헤더
         # 클릭 정렬을 허용하면 그 순서·색상 의미가 깨지니 꺼 둔다.
         self.tbl_position_opp.setSortingEnabled(False)
-        self.tbl_position_opp.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
+        self.tbl_position_opp.itemActivated.connect(self._on_player_cell_double_clicked)
         self.tbl_position_opp.setMinimumHeight(260)
         self.fold_position_opp = Collapsible("표로 보기", self.tbl_position_opp)
         v.addWidget(self.fold_position_opp)
@@ -12581,7 +12581,7 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(dlg)
         tbl = self._make_table(self.POSITION_OPP_COLUMNS, icons={1: "season"})
         tbl.setSortingEnabled(False)  # 이유는 tbl_position_opp 와 동일
-        tbl.itemDoubleClicked.connect(self._on_player_cell_double_clicked)
+        tbl.itemActivated.connect(self._on_player_cell_double_clicked)
         self._fill(tbl, self._position_opp_rows(players), enable_sort=False)
         self._tint_position_rows(tbl, players)
         v.addWidget(tbl)
@@ -15125,7 +15125,7 @@ class TeamColorDialog(QDialog):
         self.lb_players.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_players)
         self.tbl_players = main._make_table(self.PLAYER_COLUMNS, icons={1: "season"})
-        self.tbl_players.itemDoubleClicked.connect(main._on_player_cell_double_clicked)
+        self.tbl_players.itemActivated.connect(main._on_player_cell_double_clicked)
         v.addWidget(self.tbl_players, 3)
         row = QHBoxLayout()
         self.btn_more = QPushButton(f"더 보기 (+{config.TEAMCOLOR_PLAYERS_PAGE}명)")
@@ -15470,7 +15470,6 @@ class IntroDialog(QDialog):
         row.addWidget(self.btn_skip)
         row.addStretch(1)
         self.btn_start = QPushButton("시작하기")
-        self.btn_start.setDefault(True)
         self.btn_start.clicked.connect(self.accept)
         row.addWidget(self.btn_start)
         v.addLayout(row)
@@ -15479,8 +15478,13 @@ class IntroDialog(QDialog):
         fit_to_screen(self, INTRO_IMAGE_W + 80, 620)
 
     def _sync(self) -> None:
-        self.btn_start.setVisible(self.view.at_last())
-        self.btn_skip.setVisible(not self.view.at_last())
+        last = self.view.at_last()
+        self.btn_start.setVisible(last)
+        self.btn_skip.setVisible(not last)
+        # Enter = 다음 장 · 마지막 장에선 [시작하기](96 K3) — 참으로 놓는 쪽을 뒤에(그게 창의 기본 단추가 된다)
+        self.view.btn_next.setDefault(False)
+        self.btn_start.setDefault(False)
+        (self.btn_start if last else self.view.btn_next).setDefault(True)
 
 
 # 키 발급 단계(96 O1) — (그림 — assets/keyguide/ 안 이름, 한 줄). 그림은 넥슨 오픈API 사이트를 떠서 계정 정보·게임 이름·로고를 가린 것(U1·U6).
@@ -15534,7 +15538,7 @@ class ApiKeyDialog(QDialog):
         v.addLayout(grid)
         self.ed_key = QLineEdit()
         self.ed_key.setPlaceholderText("live_… 또는 test_…")
-        self.ed_key.returnPressed.connect(self._on_submit)
+        # Enter 는 기본 단추 [확인] 이 받는다(96 K3) — returnPressed 도 이으면 Enter 한 번에 확인이 두 번
         v.addWidget(self.ed_key)
         self.lb_msg = QLabel(reason)
         self.lb_msg.setWordWrap(True)
@@ -15550,6 +15554,7 @@ class ApiKeyDialog(QDialog):
             row.addWidget(self.btn_demo)
         row.addStretch(1)
         self.btn_ok = QPushButton("확인")
+        self.btn_ok.setDefault(True)   # 정하지 않으면 Qt 가 포커스 다음 단추([키 없이 둘러보기])를 골랐다(96 K3)
         self.btn_ok.clicked.connect(self._on_submit)
         btn_cancel = QPushButton("취소")
         btn_cancel.clicked.connect(self.reject)
@@ -15609,6 +15614,7 @@ class ChangesDialog(QDialog):
         row = QHBoxLayout()
         row.addStretch(1)
         btn = QPushButton("확인")
+        btn.setDefault(True)
         btn.clicked.connect(self.accept)
         row.addWidget(btn)
         v.addLayout(row)
@@ -15650,6 +15656,7 @@ class NoticeDialog(QDialog):
         row = QHBoxLayout()
         row.addStretch(1)
         self.btn_ok = QPushButton("시작")
+        self.btn_ok.setDefault(True)   # 96 K3 — 동의 전엔 꺼져 있어 Enter 가 아무것도 안 한다([닫기] 를 누르지 않는다)
         self.btn_ok.setEnabled(False)
         self.btn_ok.clicked.connect(self._on_accept)
         self.chk_agree.toggled.connect(self.btn_ok.setEnabled)
@@ -16410,6 +16417,7 @@ def _setup_app(app: QApplication) -> None:
     """main()의 창 띄우기 전 준비 — 테스트가 같은 경로를 부를 수 있게 떼어 뒀다."""
     crashlog.install(config.DATA_DIR / "logs", config.APP_VERSION, notify=_notify_crash)
     T.apply(app)
+    install_keyboard_aid(app)   # 96 K3 — Tab 포커스 테두리 · 목록 지금 줄 · 정하지 않은 창의 Enter
     icon_path = config.asset_path("app_icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))

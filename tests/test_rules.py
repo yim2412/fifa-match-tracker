@@ -130,6 +130,19 @@ def check_combo(srcs: dict[str, str]) -> list[str]:
     return out
 
 
+def check_open_on_enter(srcs: dict[str, str]) -> list[str]:
+    """목록·표를 여는 연결은 activated/itemActivated(96 K3) — doubleClicked 는 Enter 로 안 열린다.
+    둘을 같이 이으면 Windows 에선 더블클릭 한 번에 두 번 열린다(activated 가 더블클릭에도 온다)."""
+    out = []
+    for rel, src in srcs.items():
+        for node in ast.walk(ast.parse(src)):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "connect"
+                    and isinstance(node.func.value, ast.Attribute)
+                    and node.func.value.attr in ("doubleClicked", "itemDoubleClicked", "cellDoubleClicked")):
+                out.append(f"{rel}:{node.lineno} {node.func.value.attr}.connect — activated 로 잇는다(Enter 로도 열리게)")
+    return out
+
+
 def check_dialog_fit(srcs: dict[str, str]) -> list[str]:
     """새 대화상자는 fit_to_screen 으로 연다 — 고정 크기는 150% 노트북에서 넘친다(CLAUDE.md PyQt 9)."""
     out = []
@@ -827,6 +840,13 @@ def test_no_direct_combobox():
     assert check_combo({"x.py": "from PySide6.QtWidgets import QComboBox\nc = QComboBox()\n"}), "심은 위반을 못 잡는다"
     assert not check_combo({"x.py": "c = NoScrollComboBox()\n"})
     assert check_combo(_all(APP_FILES)) == []
+
+
+def test_lists_open_on_enter_96():
+    bad = "t.itemDoubleClicked.connect(f)\nself.lst.doubleClicked.connect(g)\nt.cellDoubleClicked.connect(h)\n"
+    assert len(check_open_on_enter({"x.py": bad})) == 3, "심은 위반을 못 잡는다"
+    assert not check_open_on_enter({"x.py": "t.itemActivated.connect(f)\nself.lst.activated.connect(g)\n"})
+    assert check_open_on_enter(_all(APP_FILES)) == []
 
 
 def test_dialogs_fit_to_screen():

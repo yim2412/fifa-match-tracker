@@ -24,11 +24,11 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import NamedTuple
 
-from PySide6.QtCore import QAbstractAnimation, QAbstractListModel, QCollator, QEasingCurve, QEvent, QLocale, QVariantAnimation, QModelIndex, QPoint, QPointF, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractAnimation, QAbstractListModel, QCollator, QEasingCurve, QEvent, QLocale, QVariantAnimation, QModelIndex, QObject, QItemSelectionModel, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QLinearGradient, QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
-    QAbstractItemView, QBoxLayout, QComboBox, QFrame, QGridLayout, QHBoxLayout,
-    QApplication, QLabel, QLineEdit, QListView, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
+    QAbstractItemView, QAbstractSpinBox, QBoxLayout, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout,
+    QApplication, QInputDialog, QLabel, QLineEdit, QListView, QMessageBox, QListWidget, QListWidgetItem, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStyle,
     QSpinBox, QStyledItemDelegate, QStyleOptionViewItem, QTableWidget, QTableWidgetItem, QTextEdit, QToolButton, QToolTip, QVBoxLayout, QWidget,
 )  # QGridLayout: 랭커 카드 표, QSizePolicy: 값 칸 가로 확장
 
@@ -4830,3 +4830,151 @@ class FindBar(QWidget):
 
     def prev(self) -> None:
         self._step(-1)
+
+
+# ── 키보드만으로 조작(96 K3) ─────────────────────────────────────────
+# 앱 하나에 테두리 하나 · 이벤트 거르개 하나(_setup_app 이 건다). 단추마다 QSS :focus 를 두지 않은 이유: 테두리 굵기가
+# 바뀌면 단추 크기가 바뀌고(1280 폭 검사), 따로 꾸민 단추(OUTLINE_BUTTON_QSS · Segmented · 태그 꼴 등 10곳 넘음)는
+# 제 QSS 가 전역 규칙을 이겨 빠진다. 그리고 마우스로 누른 단추에도 :focus 가 붙어 눌린 채로 보인다.
+class FocusRing(QWidget):
+    """포커스 받은 위젯 **안쪽**에 그리는 테두리 — 그 위젯의 자식이라 스크롤 영역에 잘리면 같이 잘리고 같이 움직인다."""
+
+    def __init__(self, target: QWidget):
+        super().__init__(target)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._follow(target)
+
+    def _follow(self, target: QWidget) -> None:
+        if self.parentWidget() is not target:
+            old = self.parentWidget()
+            if old is not None:
+                old.removeEventFilter(self)
+            self.setParent(target)
+        target.installEventFilter(self)
+        self.setGeometry(target.rect())
+        self.raise_()
+        self.show()
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self.setGeometry(obj.rect())
+        return False
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w = T.FOCUS_RING_W
+        p.setPen(QPen(QColor(T.ACCENT), w))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(w / 2, w / 2, -w / 2, -w / 2), T.RADIUS_CTRL, T.RADIUS_CTRL)
+
+
+class KeyboardAid(QObject):
+    """앱 전체 이벤트 거르개 — ① Tab·Shift+Tab·단축키로 온 포커스에만 FocusRing(마우스로 누르면 뗀다)
+    ② Tab 으로 들어간 목록·표에 고른 줄이 없으면 지금 줄을 고른다(Qt 는 첫 줄을 '지금 줄' 로만 두고 안 그린다 —
+    Enter 가 무엇을 여는지 안 보인다) ③ 기본 단추를 정하지 않은 대화상자는 Enter 가 아무 단추도 안 누르게:
+    Qt 는 창을 띄울 때 포커스 다음의 autoDefault 단추를 기본으로 골라, 키 창에서 키를 넣고 Enter 를 치면
+    [키 없이 둘러보기] 가 눌렸다(2026-11-10 실측). 정한 창(setDefault)은 그대로 · 포커스가 단추에 있으면 그 단추.
+    enabled 는 테스트가 '장치가 없으면' 을 재려고 끈다."""
+    KEY_REASONS = (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason, Qt.FocusReason.ShortcutFocusReason)
+    KEEP_REASONS = (Qt.FocusReason.ActiveWindowFocusReason, Qt.FocusReason.PopupFocusReason)
+    NO_RING = (QLineEdit, QAbstractSpinBox)        # 글 칸은 QSS :focus 테두리가 이미 있다
+    QT_DIALOGS = (QMessageBox, QInputDialog)       # Qt 표준 창은 제 규칙대로
+    NO_DEFAULT = "k3NoDefault"                     # 기본 단추를 정하지 않고 띄운 창 표지(동적 속성)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.enabled = True
+        self.ring: FocusRing | None = None
+
+    def eventFilter(self, obj, event) -> bool:
+        if not self.enabled:
+            return False
+        t = event.type()
+        if t == QEvent.Type.FocusIn and isinstance(obj, QWidget) and obj is not self.ring:
+            if not isinstance(obj, QPushButton):
+                self._drop_followed_default(obj)
+            self._focus_in(obj, event.reason())
+        elif t == QEvent.Type.Show and isinstance(obj, QDialog) and not isinstance(obj, self.QT_DIALOGS):
+            self._mark_no_default(obj)
+        return False
+
+    def _ring_alive(self) -> bool:
+        import shiboken6
+        return self.ring is not None and shiboken6.isValid(self.ring)
+
+    def hide_ring(self) -> None:
+        if self._ring_alive():
+            self.ring.hide()
+
+    def _focus_in(self, w: QWidget, reason) -> None:
+        if reason in self.KEEP_REASONS:
+            if self._ring_alive() and self.ring.parentWidget() is not w:
+                self.ring.hide()   # 창이 돌아와 다른 위젯에 포커스 — 옛 테두리를 남기지 않는다
+            return
+        if reason not in self.KEY_REASONS or isinstance(w, self.NO_RING):
+            self.hide_ring()
+            return
+        if self._ring_alive():
+            self.ring._follow(w)
+        else:
+            self.ring = FocusRing(w)
+        if isinstance(w, QAbstractItemView):
+            QTimer.singleShot(0, lambda v=w: self._mark_current(v))   # 지금 줄은 거르개 뒤 Qt 의 focusInEvent 가 정한다
+
+    @staticmethod
+    def _mark_current(view: QAbstractItemView) -> None:
+        import shiboken6
+        if not shiboken6.isValid(view):
+            return
+        sm = view.selectionModel()
+        cur = view.currentIndex()
+        if sm is None or not cur.isValid() or sm.hasSelection():
+            return
+        if view.selectionMode() == QAbstractItemView.SelectionMode.NoSelection:
+            return
+        flags = QItemSelectionModel.SelectionFlag.ClearAndSelect
+        if view.selectionBehavior() == QAbstractItemView.SelectionBehavior.SelectRows:
+            flags |= QItemSelectionModel.SelectionFlag.Rows
+        sm.select(cur, flags)
+
+    @staticmethod
+    def _drop_followed_default(w: QWidget) -> None:
+        """포커스를 받았던 autoDefault 단추는 Qt 가 기본 단추로 **남겨 둔다**(창에 정한 기본이 없으면 되돌릴 곳이 없다) —
+        Tab 으로 [문제 알리기] 를 지나 닉네임 칸에서 Enter 를 치면 그 단추가 눌렸다. 단추 아닌 곳에 포커스가 오면 뗀다."""
+        dlg = w.window()
+        if isinstance(dlg, QDialog) and dlg.property(KeyboardAid.NO_DEFAULT):
+            for b in dlg.findChildren(QPushButton):
+                if b.isDefault():
+                    b.setDefault(False)
+
+    @staticmethod
+    def _mark_no_default(dlg: QDialog) -> None:
+        """Show 이벤트 때(Qt 가 고르기 **전**) 정한 기본 단추가 없으면 표지를 단다. Qt 가 띄우며 고른 단추는 창이
+        활성화될 때 첫 위젯이 포커스를 받으면서 _drop_followed_default 가 뗀다 — 띄울 때 autoDefault 를 잠깐 끄는
+        장치도 뒀었는데 변이가 못 잡아(떼는 장치와 겹침) 지웠다."""
+        if not any(b.isDefault() for b in dlg.findChildren(QPushButton)):
+            dlg.setProperty(KeyboardAid.NO_DEFAULT, True)
+
+
+_KEYBOARD: KeyboardAid | None = None
+
+
+def install_keyboard_aid(app: QApplication) -> KeyboardAid:
+    """앱에 한 번(_setup_app) — 다시 불러도 하나."""
+    global _KEYBOARD
+    if _KEYBOARD is None:
+        _KEYBOARD = KeyboardAid(app)
+        app.installEventFilter(_KEYBOARD)
+    return _KEYBOARD
+
+
+def keyboard_aid() -> KeyboardAid | None:
+    return _KEYBOARD
+
+
+def hide_focus_ring() -> None:
+    if _KEYBOARD is not None:
+        _KEYBOARD.hide_ring()
