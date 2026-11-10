@@ -458,7 +458,6 @@ RAW_TIME_ALLOW = {   # (파일, 함수, 따라간 도우미 — "" 는 그 함�
     ("rankcollect.py", "fill_opp_rank", "season_raw_snaps"): "도우미의 [:10] 은 rank.db 상태(KST) 자르기 · 원문은 raw_bound/parse",
     ("tradecollect.py", "_top", "_overlap_floor"): "받기 쪽 — tradeDate 원문끼리 비교(경계도 원문 꼴) · 시각으로 안 읽는다",
     ("tools/check_t0.py", "reference", ""): "63 골든 — 앱 코드(matchtime)와 독립인 기준 계산이라 일부러 원문을 직접 읽는다",
-    ("check_api.py", "main", ""): "점검 수십 개가 한 함수 — 직접 파싱은 웹 랭킹 기준 시각(KST · ref_time)뿐, 넥슨 시각은 matchtime",
     ("tools/measure_cards.py", "b_freeze", ""): "51 측정 U1 — 11-26 판정까지 도구를 얼린다(:330·:471·:472 도 그때 같이 · 규칙이 못 보는 꼴)",
     ("tools/measure_cards.py", "b_freeze", "snapshot_list"): "같음(U1) — 도우미는 rank.db 스냅숏(KST) 읽기",
 }

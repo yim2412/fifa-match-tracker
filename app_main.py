@@ -48,6 +48,7 @@ import autostart
 import boostcollect
 import cardcollect
 import charts
+import check_api
 import config
 import core_api as core
 import crashlog
@@ -3187,6 +3188,7 @@ class MainWindow(QMainWindow):
         # [정보 › 저장 공간](57 K9) — 지우기·크기 재기 스레드의 주인은 창(대화상자가 닫혀도 산다 · 종료 표가 기다린다)
         self._clear_worker: ClearWorker | None = None
         self._size_workers: list[StorageSizeWorker] = []
+        self._check_worker: ConnectionCheckWorker | None = None   # [정보 › 연결 점검](96 W3) — 창 수명(대화상자가 닫혀도 끝까지)
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
         self._nick_edits: list[QLineEdit] = []
@@ -14637,6 +14639,8 @@ class MainWindow(QMainWindow):
             # 저장 공간 지우기(57 K9) — 바꿔 끼우기 전이면 멈추고(옛 파일 그대로), 바꿔 끼우는 중이면 끝까지. 크기 재기는 읽기만
             (self._clear_worker, cancel(self._clear_worker), (config.CLEAR_HALT_WAIT_S + 30) * 1000, False),
             *[(ld, ld.requestInterruption, 2000, False) for ld in self._size_workers],
+            # 연결 점검(96 W3) — 점검 사이에서 멈춘다(요청 하나 타임아웃 10초)
+            (self._check_worker, cancel(self._check_worker), 12000, False),
         ]
         running = [(t, stop, ms, term) for t, stop, ms, term in table if t is not None and t.isRunning()]
         # 멈춤 요청을 전부 먼저 — 하나씩 "요청 → 기다림"이면 뒤 스레드가 앞의 기다림 동안 계속 돌아 최악이 합이 된다
@@ -14673,6 +14677,17 @@ class MainWindow(QMainWindow):
         """화면을 '조회 중'으로 바꾸고 띄우는 로더(검색·비교·팀컬러·다시 읽기)는 먼저 묻는다 — 걸쇠에 막힌 start 는 신호가 없어
         버튼이 꺼진 채 영영 안 풀렸다(57 ③ 리뷰 · 지우기는 창을 닫아도 돈다)."""
         return any(clearing_blocks(getattr(c, "WRITES", frozenset())) for c in classes)   # Worker 가 아니면 start 도 안 막힌다
+
+    def start_connection_check(self, nickname: str):
+        """[정보 › 연결 점검] 시작 → ConnectionCheckWorker(row 신호를 이어 쓴다) · 시작 못 하면 까닭(글)."""
+        if self._check_worker is not None and self._check_worker.isRunning():
+            return "이미 점검하는 중입니다."
+        if self._quitting:
+            return "앱을 끄는 중입니다."
+        if self._held_by_clearing(ConnectionCheckWorker):
+            return CLEARING_WAIT_MSG
+        self._check_worker = ConnectionCheckWorker(self._api, nickname.strip())
+        return self._check_worker
 
     def measure_storage(self) -> None:
         """크기를 작업 스레드에서 재고 storage_measured 로(P7 — fifa.db 667MB · 그림 수천 장)."""
@@ -14813,6 +14828,29 @@ class MainWindow(QMainWindow):
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.start()
+
+
+class ConnectionCheckWorker(Worker):
+    """[정보 › 연결 점검](96 W3) — check_api.USER_CHECKS 를 차례로, 결과는 한 줄씩 row 로. 검색과 같은 API 객체를 받아
+    서버 모드면 서버 경로를 잰다. 사용자가 누른 것이라 게임 중에도 돈다(84 G3) · 점검 사이에서 멈춘다."""
+    WRITES = frozenset({STORE_DETAILS, STORE_IMAGES})   # 메타 디스크 캐시 · 그림 받기(임시 폴더지만 같은 받기 함수)
+    row = Signal(str, str, str)   # 점검 이름, 상태(check_api.OK·WARN·FAIL·SKIP), 글
+
+    def __init__(self, api, nickname: str):
+        super().__init__()
+        self._api, self._nick = api, nickname
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        ctx = check_api.CheckCtx(nickname=self._nick, api=self._api)
+        try:
+            check_api.run_checks(check_api.USER_CHECKS, ctx, lambda n, r: self.row.emit(n, r.status, r.text),
+                                 stop=lambda: self._cancel)
+        except Exception as e:   # 점검 하나가 예상 밖으로 죽어도 표는 이유를 보인다
+            self.row.emit("점검", check_api.FAIL, f"예기치 못한 오류가 났습니다. ({type(e).__name__})")
 
 
 class StorageSizeWorker(Worker):
@@ -15507,8 +15545,11 @@ class AboutDialog(QDialog):
         tabs.addTab(_notice_browser(notice.WEB_DATA_HTML), "넥슨 홈페이지 데이터")
         tabs.addTab(_notice_browser(notice.RANK_COLLECT_HTML), "랭킹 수집")
         tabs.addTab(_notice_browser(notice.TRAY_HTML), "트레이·자동 실행")
-        tabs.addTab(_notice_browser(notice.licenses_html()), "오픈소스 라이선스")
+        # "오픈소스 라이선스" 였다 — [연결 점검](96 W3) 탭이 늘어 FHD 175% 에서 탭 줄이 49px 넘쳐 ◀ ▶ 가 생겼다(test_window_size)
+        tabs.addTab(_notice_browser(notice.licenses_html()), "라이선스")
+        tabs.setTabToolTip(tabs.count() - 1, "오픈소스 라이선스")
         tabs.addTab(self._build_storage_tab(), "저장 공간")
+        tabs.addTab(self._build_check_tab(), "연결 점검")
         v.addWidget(tabs, 1)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
         self.chk_web.setChecked(config.WEB_DATA)
@@ -15778,6 +15819,84 @@ class AboutDialog(QDialog):
             return
         self.lb_msg.setText("윈도우를 켜면 트레이로 조용히 시작합니다. 창을 닫아도(X) 트레이에 남습니다." if on else
                             "자동 실행을 껐습니다.")
+
+    # ── 연결 점검(96 W3) ─────────────────────────────────────────────
+    CHECK_STATUS = {check_api.OK: ("정상", "GOOD"), check_api.WARN: ("확인 필요", "WARN"),
+                    check_api.FAIL: ("실패", "BAD"), check_api.SKIP: ("건너뜀", "TEXT_DIM")}
+
+    def _build_check_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        intro = QLabel("넥슨에 닿는지 차례대로 확인합니다. 아무것도 저장하지 않습니다.")
+        intro.setWordWrap(True)
+        v.addWidget(intro)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("닉네임"))
+        win = self.parent()
+        self.ed_check_nick = QLineEdit(getattr(win, "_nick", "") or "")
+        self.ed_check_nick.setPlaceholderText("비우면 키만 확인합니다")
+        self.ed_check_nick.returnPressed.connect(self._on_check_start)
+        row.addWidget(self.ed_check_nick, 1)
+        self.btn_check = QPushButton("점검 시작")
+        self.btn_check.clicked.connect(self._on_check_start)
+        self.btn_check.setEnabled(hasattr(win, "start_connection_check"))
+        row.addWidget(self.btn_check)
+        v.addLayout(row)
+        self.tbl_check = MainWindow._make_table(["점검", "결과", "내용"])
+        self.tbl_check.setSortingEnabled(False)   # 점검 차례 그대로 — 줄을 채우는 중 정렬하면 칸이 엉뚱한 줄로 간다(PyQt 1)
+        v.addWidget(self.tbl_check, 1)
+        self.lb_check = QLabel("")
+        self.lb_check.setWordWrap(True)
+        v.addWidget(self.lb_check)
+        self._check_conn = None
+        self.finished.connect(lambda _r: self._drop_check())
+        # 표 최소 높이가 정보 창 최소 높이를 밀어 FHD 175% 에서 창이 화면보다 컸다(652 > 617 · test_window_size) — 저장 공간 탭과 같이
+        return VScrollArea(w)
+
+    def _on_check_start(self) -> None:
+        start = getattr(self.parent(), "start_connection_check", None)
+        if start is None or not self.btn_check.isEnabled():
+            return
+        got = start(self.ed_check_nick.text())
+        if isinstance(got, str):
+            self.lb_check.setText(got)
+            return
+        self._drop_check()
+        self.tbl_check.setRowCount(0)
+        self.lb_check.setText("점검하는 중입니다.")
+        self.btn_check.setEnabled(False)
+        got.row.connect(self._on_check_row)
+        got.finished.connect(self._on_check_done)
+        self._check_conn = got
+        got.start()
+        if got.blocked:   # 걸쇠가 start 를 막았다(지우는 사이 눌림) — 신호가 안 온다
+            self._on_check_done()
+            self.lb_check.setText(CLEARING_WAIT_MSG)
+
+    def _on_check_row(self, name: str, status: str, text: str) -> None:
+        label, color = self.CHECK_STATUS.get(status, (status, "TEXT"))
+        r = self.tbl_check.rowCount()
+        self.tbl_check.insertRow(r)
+        for c, val in enumerate((name, label, text)):
+            item = SortableItem(val, r)   # 정렬 키는 점검 차례
+            if c == 1:
+                item.setForeground(QColor(getattr(T, color)))
+            self.tbl_check.setItem(r, c, item)
+        self.tbl_check.refit()
+
+    def _on_check_done(self) -> None:
+        self.btn_check.setEnabled(True)
+        bad = sum(1 for r in range(self.tbl_check.rowCount())
+                  if (it := self.tbl_check.item(r, 1)) is not None and it.text() == self.CHECK_STATUS[check_api.FAIL][0])
+        self.lb_check.setText("점검을 마쳤습니다." if not bad else f"점검을 마쳤습니다. 실패한 항목이 {bad}개 있습니다.")
+        self._drop_check()
+
+    def _drop_check(self) -> None:
+        """창을 닫거나 다시 누를 때 — 점검 스레드는 창 수명이라 계속 돌고, 이 탭만 끊는다."""
+        w, self._check_conn = self._check_conn, None
+        if w is not None:
+            self._drop_signal(w.row, self._on_check_row)
+            self._drop_signal(w.finished, self._on_check_done)
 
     # ── 저장 공간(57 K9) ─────────────────────────────────────────────
     # (종류, 이름, 무엇 · 지우면) — 크기는 작업 스레드가 재서 채운다. rank 는 [수집 기록 지우기] 핸들러째(_on_clear_rank)

@@ -223,6 +223,64 @@ def test_golden_is_not_empty():
     assert KEY[:8] in want["all"]["text"], "터미널은 키 앞 8자를 보인다(앱은 안 보인다)"
 
 
+def run_user(nick: str, fail=(), web: bool = True, key: str = KEY, server: bool = False):
+    """앱 [연결 점검] 묶음 — (이름, 상태, 글) 줄들 · 가짜 API · 임시 폴더."""
+    with tempfile.TemporaryDirectory() as d, fakes(Path(d), web=web):
+        config.API_KEY = key
+        FakeAPI.fail = set(fail)
+        api = FakeAPI(key, server=server)
+        rows = []
+        ctx = check_api.CheckCtx(nickname=nick, api=api)
+        check_api.run_checks(check_api.USER_CHECKS, ctx, lambda n, r: rows.append((n, r.status, r.text)))
+        made = sorted(p.name for p in Path(d).rglob("*"))
+        return rows, api, made
+
+
+def test_user_checks_96():
+    names = [n for n, _f in check_api.USER_CHECKS]
+    rows, api, made = run_user("테스트구단주")
+    assert [r[0] for r in rows] == names and all(r[1] == check_api.OK for r in rows), rows
+    # 경기 상세는 캐시를 안 거친다 — get_match_detail 이면 캐시에 있을 때 요청 없이 OK 가 된다
+    assert "nocache" in api.asked and "detail" not in api.asked, api.asked
+    assert made == [], f"점검이 무언가를 저장했다: {made}"
+    assert not any(KEY[:4] in r[2] for r in rows), "키 글자가 화면 글에 나왔다"
+    assert rows[1][2] == "넥슨에 직접 묻습니다."
+    rows, _a, _m = run_user("테스트구단주", server=True)
+    assert rows[1][2] == "중앙 서버를 거쳐 묻습니다.", rows[1]
+    # 닉네임이 비면 키·경로만 재고 "닉네임을 넣으면" 에서 멈춘다(처음 쓰는 사람 — 2회차 [중])
+    rows, api, _m = run_user("")
+    assert [r[1] for r in rows] == [check_api.OK, check_api.OK, check_api.SKIP] and api.asked == [], rows
+    # 키가 없으면 거기서 멈춘다
+    rows, api, _m = run_user("테스트구단주", key="")
+    assert len(rows) == 1 and rows[0][1] == check_api.FAIL and api.asked == [], rows
+    # 닉네임 조회 실패 — 넥슨 말 그대로 · 멈춤
+    rows, _a, _m = run_user("테스트구단주", fail=("ouid",))
+    assert rows[-1][0] == "닉네임 → 계정" and rows[-1][1] == check_api.FAIL and "ouid 실패" in rows[-1][2], rows
+    # 상세 실패는 멈추지 않는다(메타·그림은 따로 잰다)
+    rows, _a, _m = run_user("테스트구단주", fail=("nocache",))
+    assert [r[0] for r in rows] == names and rows[4][1] == check_api.FAIL, rows
+    # 웹 데이터가 꺼지면 데이터센터는 묻지 않는다
+    rows, _a, _m = run_user("테스트구단주", web=False)
+    assert rows[-1][1] == check_api.SKIP, rows[-1]
+    # 그림 서버를 못 받으면 경고(전적엔 영향 없음)
+    with tempfile.TemporaryDirectory() as d, fakes(Path(d)):
+        images.fetch_icon = lambda *a, **k: None   # fakes 가 끝에서 되돌린다
+        r = check_api.user_cdn(check_api.CheckCtx())
+    assert r.status == check_api.WARN, r
+
+
+def test_run_checks_stops_and_cancels_96():
+    seen = []
+    mk = lambda st, stop=False, code=0: (lambda ctx: check_api.Result(st, [st], stop, code))  # noqa: E731
+    checks = [("a", mk("OK")), ("b", mk("FAIL", True, 7)), ("c", mk("OK"))]
+    assert check_api.run_checks(checks, check_api.CheckCtx(), lambda n, r: seen.append(n)) == 7 and seen == ["a", "b"]
+    seen.clear()
+    assert check_api.run_checks(checks, check_api.CheckCtx(), lambda n, r: seen.append(n), stop=lambda: True) == 0
+    assert seen == [], "멈춤 요청을 무시했다"
+    # 앱 칸 글은 [OK] 표지를 뗀다
+    assert check_api.Result("OK", ["[OK]   가나", "       다"]).text == "가나\n다"
+
+
 def test_terminal_survives_cp949_console():
     # 남의 PC(CP949) 콘솔 — check_api 가 stdout 을 utf-8 로 다시 잡아 한글·기호에서 안 죽는다
     env = {**os.environ, "PYTHONIOENCODING": "cp949"}

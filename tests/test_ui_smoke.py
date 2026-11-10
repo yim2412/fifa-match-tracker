@@ -6519,6 +6519,62 @@ def test_search_outcome_reaches_status_cell_96():
         _win._set_busy(False)
 
 
+def test_about_connection_check_tab_96():
+    # 96 W3 — [정보 › 연결 점검] 이 검색과 같은 API 객체로 사용자용 묶음을 돌려 표로 · 지우는 중엔 시작 안 함 · 종료 표에 있다
+    import check_api
+
+    class _Api(_DetailApi):
+        server_mode = False
+
+        def get_match_detail_nocache(self, mid, attempts=1):
+            return self.by_id[mid]
+
+        def get_meta(self, name):
+            return [{"id": 1, "name": "가"}]
+
+    api = _Api([], "")
+    saved = (_win._api, _win._nick, config.API_KEY, config.WEB_DATA, images.fetch_icon,
+             app_main.ConnectionCheckWorker.start, _win._check_worker)
+
+    def fake_icon(url, folder, kind=""):
+        p = pathlib.Path(folder) / "x.png"
+        p.write_bytes(b"x")
+        return p
+
+    _win._api, _win._nick, config.API_KEY, config.WEB_DATA = api, "테스트구단주", "k", False
+    images.fetch_icon = fake_icon
+    app_main.ConnectionCheckWorker.start = lambda self: self.run()   # 스레드 대신 그 자리에서
+    try:
+        dlg = app_main.AboutDialog(_win)
+        tabs = dlg.findChild(app_main.QTabWidget)
+        assert "연결 점검" in [tabs.tabText(i) for i in range(tabs.count())]
+        assert dlg.ed_check_nick.text() == "테스트구단주", "기본은 마지막 계정"
+        dlg._on_check_start()
+        t = dlg.tbl_check
+        got = [(t.item(r, 0).text(), t.item(r, 1).text()) for r in range(t.rowCount())]
+        assert [g[0] for g in got] == [n for n, _f in check_api.USER_CHECKS], got
+        assert [g[1] for g in got].count("정상") == len(got) - 1 and got[-1][1] == "건너뜀", got   # 웹 데이터 꺼짐
+        assert _win._check_worker._api is api, "검색과 다른 API 객체로 쟀다"
+        dlg._on_check_done()
+        assert dlg.btn_check.isEnabled() and "마쳤습니다" in dlg.lb_check.text()
+        # 지우는 중이면 시작하지 않는다(걸쇠)
+        app_main.CLEARING.add(app_main.STORE_DETAILS)
+        try:
+            assert _win.start_connection_check("x") == app_main.CLEARING_WAIT_MSG
+        finally:
+            app_main.CLEARING.discard(app_main.STORE_DETAILS)
+        # 창이 닫힐 때 멈출 대상(종료 표)에 들어 있다
+        _win._check_worker.isRunning = lambda: True
+        stopped = []
+        _win._check_worker.cancel = lambda: stopped.append(1)
+        left = _win.shutdown(fast=True)
+        assert stopped and _win._check_worker in left, "종료가 연결 점검 스레드를 멈추지 않았다"
+        dlg.close()
+    finally:
+        (_win._api, _win._nick, config.API_KEY, config.WEB_DATA, images.fetch_icon,
+         app_main.ConnectionCheckWorker.start, _win._check_worker) = saved
+
+
 def test_quota_signal_reaches_key_dialog():
     # 배선 — 검색 로더의 quota_hit 이 키 변경 창으로 이어져야 한다(QThread.start 는 막혀 있다)
     asked = []

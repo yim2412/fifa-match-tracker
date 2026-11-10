@@ -50,7 +50,7 @@
 | `notice.py` | 이용 안내·개인정보·오픈소스 목록. **글을 실질적으로 바꾸면 `config.NOTICE_VERSION` 을 올린다**(문구 골든 `test_notice_text_bumps_version` 이 짝을 지킨다 · 바뀐 점은 `CHANGES` 에 버전별 한 덩이) · 새 패키지는 `THIRD_PARTY` 에 한 줄 · 세부는 머리말 |
 | `crashlog.py` | 처리 안 된 예외 → `crash.log`. exe 는 콘솔이 없어 이게 없으면 창이 흔적 없이 사라진다 · 세부는 머리말 |
 | `updatecheck.py` | 새 버전 확인 + 앱 안 업데이트(SHA256 대조 후 설치) · 첨부 이름 `SETUP_ASSET` 은 `tools/release.py` 와 같아야 · 세부는 머리말 |
-| `check_api.py` | 터미널 연결 점검 — GUI 띄우기 전 키·엔드포인트 확인용 |
+| `check_api.py` | 연결 점검 — 공유 문맥 `CheckCtx` 를 이어 쓰는 점검 목록 · 터미널은 `CHECKS` 전부, 앱 [정보 › 연결 점검]은 사용자용 `USER_CHECKS`(키 글자·DB 를 안 건드린다 · `app_main.ConnectionCheckWorker`) · **새 엔드포인트는 `CHECKS` 에 한 줄** · 터미널 출력은 `tests/test_check_api.py` 골든(바뀌면 의도인지 먼저 · `--write`) |
 | `tools/release.py` · `installer/피파전적관리.iss` | 배포판 — 빌드 → zip·설치 파일 → 개인정보 검사 → `gh release` 명령 **출력만**. `.iss` 는 UTF-8 BOM · `AppId` 불변 · 첨부 이름은 영문 · 세부는 `tools/release.py` 머리말 |
 | `tests/` | pytest 없이 파일을 직접 실행 · **모든 `main()` 루프는 `watchdog.limit` 안에서**(새 테스트 파일도) · 파일별 범위는 `tests/README.md` |
 | `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(본문 한 줄 바꾼 파일 + `gh release edit` **출력만**) · 시즌 뒤 예측 대조 · 세부는 `tools/season_notice.py` 머리말 |
@@ -100,6 +100,7 @@ python tools/measure_cards.py --status   # 51 측정 현황(D0 2026-10-19 · 오
 python tools/check_t0.py               # 63 골든 — 내 계정 10-01~10-23 날마다 승·무·패·FC 를 앱 계산으로(이 PC 전용 · 골든은 DATA_DIR/t0_golden.json · --write)
 python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
 python tests/test_dev_matches.py       # 경기 수집 — 상한 표·커서 ⓐ~ⓔ·같은 id 동시·429·키 거절·잠금·fifa.db 무쓰기(가짜 API, 네트워크 없음)
+python tests/test_check_api.py         # 연결 점검 — 터미널 출력 골든(9경우 · CP949) · 앱 [연결 점검] 묶음(nocache · 키 안 보임 · 저장 0) — 가짜 넥슨
 python tests/test_gameguard.py         # 게임 중 수집 멈춤 — 이름 목록·못 읽음은 켜짐·확인 간격·실행기(건너뜀·도중 내림·콘솔 창 숨김)
 python tests/test_server.py            # 중앙 서버 쪽 — 영구 저장·동시 한 번·부정 캐시·허용 목록·서버 코드·IP/전체 몫·키·닉네임 안 샘(가짜 넥슨)
 python tests/test_server_mode.py       # 중앙 서버 앱 쪽 — 서버 주소가 비면 요청 바이트 골든 · 키 안 나감 · 거래 직접 · 실패 한 건도 직접 재요청 · 폴백(가짜 어댑터)
