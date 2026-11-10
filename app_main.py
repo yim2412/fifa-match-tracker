@@ -84,7 +84,7 @@ from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, GradeStepDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
-    Segmented, SortableItem, StatCard, UpdateCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
+    Segmented, SortableItem, StatCard, VersionCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
@@ -3086,8 +3086,7 @@ class MainWindow(QMainWindow):
         self._nick_edits: list[QLineEdit] = []
         self._search_btns: list[QPushButton] = []
         # 왼쪽 아래 버전·업데이트 상태 줄 — 검색 화면·사이드바에 하나씩, 함께 갱신한다
-        self._update_status_labels: list[QLabel] = []
-        self._update_inline_btns: list[QPushButton] = []
+        self._version_cards: list[VersionCard] = []   # 왼쪽 아래 버전 카드 — 검색 화면 · 사이드바(3.7.2)
 
         self.setWindowTitle(config.APP_NAME)  # 버전은 왼쪽 아래(_version_bar) — 사용자 요청 2026-10-02
         self._start_maximized = False  # 작은 화면 첫 실행 — main 이 showMaximized 로 띄운다
@@ -3336,15 +3335,11 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self._build_search_page())  # 0
         self.stack.addWidget(self._build_main_page())    # 1
         self.setCentralWidget(self.stack)
-        self.stack.currentChanged.connect(self._on_stack_changed)  # 메인으로 가면 '최신 버전' 카드를 닫는다
 
         self.progress = QProgressBar()
         self.progress.setVisible(False)
         self.progress.setMaximumHeight(14)
         self.statusBar().addPermanentWidget(self.progress, 1)
-        # 새 버전 카드 — 창 오른쪽 아래, 어느 화면 위에든 같은 자리(사용자 요청 2026-10-02)
-        self.update_card = UpdateCard(self)
-        self.update_card.update_clicked.connect(self._on_update_clicked)
         self._release: updatecheck.Release | None = None
         self._update_worker: UpdateCheckWorker | None = None
         self._update_click_at: float | None = None
@@ -3353,7 +3348,6 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, e) -> None:
         super().resizeEvent(e)
-        self.update_card.place()
         self._settle_if_restored()
 
     def start_update_check(self) -> None:
@@ -3521,24 +3515,12 @@ class MainWindow(QMainWindow):
             self._prefetch = SavedPrefetch(last[0], config.DEFAULT_MATCH_TYPE)
 
     def _set_update_status(self, text: str, button: str = "") -> None:
-        """왼쪽 아래 상태 칸 — 늘 보이는 자리(카드는 새 버전일 때만 잠깐 눈에 띄게)."""
-        for lb in self._update_status_labels:
-            lb.setText(text)
-        for b in self._update_inline_btns:
-            b.setText(button)
-            b.setVisible(bool(button))
+        """왼쪽 아래 버전 카드(두 화면) — 늘 보이는 한 자리. 떠 있는 카드는 3.7.2 에 없앴다(같은 말을 두 곳에서 했다)."""
+        for c in self._version_cards:
+            c.set_status(text, button)
 
     def _on_update_latest(self) -> None:
         self._set_update_status("최신 버전입니다")
-        # 카드는 첫 검색 화면에서만 — 메인 화면(대시보드 등)에선 내용을 가린다(사용자 요청 2026-10-02).
-        # 메인에선 왼쪽 아래 상태 칸이 같은 말을 한다. 새 버전 카드는 놓치면 안 되니 어디서든 뜬다.
-        if self.stack.currentIndex() == self.PAGE_SEARCH:
-            self.update_card.show_latest(config.APP_VERSION)
-
-    def _on_stack_changed(self, idx: int) -> None:
-        card = getattr(self, "update_card", None)  # 창을 만드는 도중엔 아직 없다
-        if card is not None and idx == self.PAGE_MAIN and card.mode == "latest":
-            card.hide()
 
     def _on_update_unknown(self) -> None:
         # 확인을 못 했는데 '최신'이라 하면 거짓말 — 그렇다고 말한다
@@ -3547,7 +3529,6 @@ class MainWindow(QMainWindow):
     def _on_update_found(self, rel) -> None:
         self._release = rel
         installed = updatecheck.install_dir() is not None and bool(rel.setup_url)
-        self.update_card.show_release(rel.tag, config.APP_VERSION, installed)
         self._set_update_status(f"새 버전 {rel.tag}", "업데이트" if installed else "받으러 가기")
 
     def _on_update_clicked(self) -> None:
@@ -3565,14 +3546,11 @@ class MainWindow(QMainWindow):
             f"내려받은 뒤 앱이 닫히고, 설치가 끝나면 다시 켜집니다. 전적 기록은 그대로입니다.{notes}")
         if ans != QMessageBox.StandardButton.Yes:
             return
-        # 카드를 [나중에]로 닫았어도 왼쪽 아래 버튼으로 올 수 있다 — 진행은 카드에서 보이게 다시 띄운다
-        self.update_card.show()
-        self.update_card.raise_()
-        for b in self._update_inline_btns:
-            b.setEnabled(False)
-        self.update_card.set_busy(True, "내려받는 중…")
+        for c in self._version_cards:
+            c.set_busy(True, "내려받는 중…")
         self._download_worker = UpdateDownloadWorker(rel)
-        self._download_worker.progress.connect(self.update_card.set_progress)
+        for c in self._version_cards:
+            self._download_worker.progress.connect(c.set_progress)
         self._download_worker.done.connect(self._on_update_downloaded)
         self._download_worker.failed.connect(self._on_update_failed)
         self._download_worker.start()
@@ -3592,11 +3570,8 @@ class MainWindow(QMainWindow):
             self.close()
 
     def _on_update_failed(self, msg: str) -> None:
-        self.update_card.set_busy(False)
-        for b in self._update_inline_btns:
-            b.setEnabled(True)
-        if self._release:
-            self.update_card.show_release(self._release.tag, config.APP_VERSION, True)
+        for c in self._version_cards:
+            c.set_busy(False)
         page = self._release.page_url if self._release else config.RELEASES_URL
         QMessageBox.warning(self, "업데이트 실패", f"{msg}\n\n직접 받기: {page}")
 
@@ -3678,44 +3653,20 @@ class MainWindow(QMainWindow):
         outer.addStretch(2)
         outer.addWidget(self._attribution_label(), 0, Qt.AlignmentFlag.AlignHCenter)
         outer.addWidget(self._about_button(), 0, Qt.AlignmentFlag.AlignHCenter)
-        outer.addWidget(self._version_bar(), 0, Qt.AlignmentFlag.AlignLeft)  # 왼쪽 아래 구석
+        ver = self._version_bar()
+        ver.setFixedWidth(VersionCard.WIDTH)
+        outer.addWidget(ver, 0, Qt.AlignmentFlag.AlignLeft)  # 왼쪽 아래 구석
         return w
 
     def _version_bar(self) -> QWidget:
-        """버전 + 업데이트 상태 — 창 제목 대신 왼쪽 아래(검색 화면 구석 · 메인 화면 사이드바 맨 아래).
-
-        "v0.3.1 · 최신 버전입니다" / "v0.3.1 · 새 버전 v0.3.2" + [업데이트] 버튼(아랫줄 — 사이드바
-        230px 에 한 줄로 안 들어간다). 상태줄 왼쪽은 안 쓴다 — showMessage 가 늘 덮어 가려진다.
-        사용자 요청(2026-10-02): 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 자리."""
-        w = QWidget()
-        v = QVBoxLayout(w)
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(4)
-        row = QHBoxLayout()
-        row.setSpacing(4)
-        style = f"color: {T.TEXT_DIM}; font-size: {T.PX_XS}px; border: none;"
-        ver = ClickLabel(config.APP_VERSION)
-        ver.setObjectName("versionLabel")
-        ver.setStyleSheet(style)
-        ver.setToolTip("누르면 새 버전이 있는지 지금 확인합니다")
-        ver.clicked.connect(self.check_update_now)
-        status = QLabel("")
-        status.setObjectName("updateStatus")
-        status.setStyleSheet(style)
-        row.addWidget(ver)
-        row.addWidget(status)
-        row.addStretch(1)
-        v.addLayout(row)
-        btn = QPushButton("")
-        btn.setObjectName("updateInline")
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
-        btn.clicked.connect(self._on_update_clicked)
-        btn.setVisible(False)
-        v.addWidget(btn, 0, Qt.AlignmentFlag.AlignLeft)
-        self._update_status_labels.append(status)
-        self._update_inline_btns.append(btn)
-        return w
+        """버전 카드 — 창 제목 대신 왼쪽 아래(검색 화면 구석 · 메인 화면 사이드바 맨 아래). 업데이트 상태 · [업데이트] ·
+        내려받기 진행이 이 카드에만 있다(3.7.2 사용자: 오른쪽 아래 떠 있던 카드를 없애고 이 칸을 그 크기로).
+        상태줄 왼쪽은 안 쓴다 — showMessage 가 늘 덮어 가려진다(2026-10-02)."""
+        card = VersionCard(config.APP_VERSION)
+        card.version_clicked.connect(self.check_update_now)
+        card.update_clicked.connect(self._on_update_clicked)
+        self._version_cards.append(card)
+        return card
 
     def _about_button(self) -> QPushButton:
         """[정보] — 이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기. 두 화면에 하나씩."""
@@ -3994,9 +3945,10 @@ class MainWindow(QMainWindow):
         about.addWidget(self._about_button())
         about.addStretch(1)
         sv.addLayout(about)
-        ver = self._version_bar()
-        ver.setContentsMargins(24, 4, 12, 0)
-        sv.addWidget(ver)
+        ver_row = QHBoxLayout()
+        ver_row.setContentsMargins(12, 4, 12, 0)   # 카드라 사이드바 폭을 거의 다 쓴다(글줄 들여쓰기 24 대신 12)
+        ver_row.addWidget(self._version_bar())
+        sv.addLayout(ver_row)
         h.addWidget(side)
 
         right = QWidget()

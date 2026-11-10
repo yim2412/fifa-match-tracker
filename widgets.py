@@ -52,36 +52,35 @@ class IconCell(NamedTuple):
     name: str = ""   # 특성 칸 — 글자는 "NN%" 만이라 이름은 툴팁·NAME_ROLE 로(TraitIconDelegate 가 그림 없을 때 대신 쓴다)
 
 
-class UpdateCard(QFrame):
-    """창 오른쪽 아래에 떠 있는 '새 버전' 카드 — 런처의 업데이트 알림처럼.
+class VersionCard(QFrame):
+    """왼쪽 아래 버전 카드 — 업데이트 상태 · [업데이트] · 내려받기 진행을 한곳에(3.7.2 사용자: 오른쪽 아래 떠 있던 카드를
+    없애고 왼쪽 버전 칸을 그 크기로). 검색 화면 구석과 사이드바 맨 아래에 하나씩 늘 있다 — 닫는 단추가 없다.
 
-    어느 화면 위에든 같은 자리에 뜬다(검색 화면·메인 화면). 위치는 부모가
-    place() 로 정한다. 내려받는 동안은 버튼 대신 진행 막대가 보인다."""
+    제목 = 상태("최신 버전입니다" · "새 버전 v…" · "업데이트 확인 중…") · 아래 줄 = "지금 v…"(누르면 지금 확인 —
+    75 U10) · 내려받는 동안은 단추 대신 진행 막대와 받는 양."""
     update_clicked = Signal()
-    dismissed = Signal()
-    MARGIN = 20
-    WIDTH = 300  # 고정 — 글자 길이에 따라 줄면 내려받는 중 문구가 잘렸다
-    # 새 버전이면 [업데이트](어느 화면에서든), 최신이면 "최신 버전입니다"(첫 검색 화면에서만 — 메인 내용을 가린다).
-    # 어느 쪽이든 사용자가 닫을 때까지 둔다 — 6초 뒤 저절로 닫았더니 사용자가 못 봤다.
-    # 확인을 못 했으면 안 띄운다(왼쪽 아래 상태 칸이 "업데이트 확인 못 함"을 보인다).
+    version_clicked = Signal()
+    WIDTH = 300  # 검색 화면 — 사이드바에서는 폭에 맞춘다(fit_width)
 
-    def __init__(self, parent: QWidget):
+    def __init__(self, version: str, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setObjectName("updateCard")
-        self.setFixedWidth(self.WIDTH)
-        self.setStyleSheet(
-            f"QFrame#updateCard {{ background: {T.PANEL}; border: 1px solid {T.ACCENT};"
-            f" border-radius: {T.RADIUS_CARD}px; }} QLabel {{ border: none; }}")
+        self.setObjectName("versionCard")
+        self.version = version
         v = QVBoxLayout(self)
         v.setContentsMargins(16, 12, 16, 12)
         v.setSpacing(4)
         self.lb_title = QLabel()
+        self.lb_title.setObjectName("updateStatus")
         f = QFont()
         f.setBold(True)
         f.setPointSize(T.PT_S)
         self.lb_title.setFont(f)
-        self.lb_sub = QLabel()
+        self.lb_title.setWordWrap(True)
+        self.lb_sub = ClickLabel(f"지금 {version}")
+        self.lb_sub.setObjectName("versionLabel")
+        self.lb_sub.setToolTip("누르면 새 버전이 있는지 지금 확인합니다")
         self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_sub.clicked.connect(self.version_clicked)
         v.addWidget(self.lb_title)
         v.addWidget(self.lb_sub)
         self.bar = QProgressBar()
@@ -90,53 +89,44 @@ class UpdateCard(QFrame):
         self.bar.setVisible(False)
         v.addWidget(self.bar)
         row = QHBoxLayout()
-        row.setSpacing(8)
-        self.btn_later = QPushButton("나중에")
-        self.btn_later.setFlat(True)
-        self.btn_later.clicked.connect(self._dismiss)
-        self.btn_update = QPushButton("업데이트")
+        row.addStretch(1)
+        self.btn_update = QPushButton("")
         self.btn_update.setObjectName("primary")
         self.btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_update.clicked.connect(self.update_clicked)
-        row.addStretch(1)
-        row.addWidget(self.btn_later)
+        self.btn_update.setVisible(False)
         row.addWidget(self.btn_update)
         v.addLayout(row)
-        self.mode = ""  # "release"(새 버전) · "latest"(최신) — 최신 카드는 메인 화면에서 닫힌다
-        self.hide()
+        self._new = False
+        self._restyle()
+        self.set_status("")
 
-    def show_release(self, tag: str, current: str, installed: bool) -> None:
-        self.mode = "release"
-        self.lb_title.setText(f"새 버전 {tag}")
-        self.lb_sub.setText(f"지금 {current}" + ("" if installed else " · 받기 페이지가 열립니다"))
-        self.btn_update.setText("업데이트" if installed else "받으러 가기")
-        self.btn_later.setText("나중에")
-        self.set_busy(False)
-        self.show()
-        self.raise_()
-        self.place()
+    def _restyle(self) -> None:
+        # 새 버전이면 테두리를 강조색으로(옛 오른쪽 카드와 같은 모양) — 평소엔 카드 테두리
+        border = T.ACCENT if self._new else T.CARD_BORDER
+        self.setStyleSheet(
+            f"QFrame#versionCard {{ background: {T.PANEL}; border: 1px solid {border};"
+            f" border-radius: {T.RADIUS_CARD}px; }} QLabel {{ border: none; }}")
 
-    def show_latest(self, current: str) -> None:
-        self.mode = "latest"
-        self.lb_title.setText("최신 버전입니다")
-        self.lb_sub.setText(f"지금 {current}")
-        self.set_busy(False)
-        self.btn_update.setVisible(False)  # 받을 게 없다
-        self.btn_later.setText("닫기")
-        self.show()
-        self.raise_()
-        self.place()
+    def set_status(self, text: str, button: str = "") -> None:
+        """상태 글 + 단추 글(빈 글이면 단추를 숨긴다). 상태가 비면 제목 줄도 숨겨 "지금 v…" 만 남는다."""
+        self.lb_title.setText(text)
+        self.lb_title.setVisible(bool(text))
+        self.btn_update.setText(button)
+        self.btn_update.setVisible(bool(button) and not self.bar.isVisible())
+        new = bool(button)
+        if new != self._new:
+            self._new = new
+            self._restyle()
 
     def set_busy(self, busy: bool, text: str = "") -> None:
-        # 받는 동안은 버튼을 숨긴다 — 비활성 버튼이 남아 있으면 눌러도 되는지 헷갈린다
+        # 받는 동안은 단추를 숨긴다 — 비활성 단추가 남아 있으면 눌러도 되는지 헷갈린다
         self.bar.setVisible(busy)
-        self.btn_update.setVisible(not busy)
+        self.btn_update.setVisible(not busy and bool(self.btn_update.text()))
         self.btn_update.setEnabled(not busy)
-        self.btn_later.setVisible(not busy)
+        self.lb_sub.setText(text if busy else f"지금 {self.version}")
         if busy:
-            self.lb_sub.setText(text)
             self.bar.setRange(0, 0)  # 크기를 모를 때는 물결
-        self.place()
 
     def set_progress(self, done: int, total: int) -> None:
         if total > 0:
@@ -145,22 +135,6 @@ class UpdateCard(QFrame):
             self.lb_sub.setText(f"내려받는 중 {done * 100 // total}% · {done / 2**20:.1f} / {total / 2**20:.1f} MB")
         else:
             self.lb_sub.setText(f"내려받는 중 · {done / 2**20:.1f} MB")
-
-    def place(self) -> None:
-        """부모의 오른쪽 아래(상태줄 위)에 붙인다 — 부모가 크기를 바꿀 때마다 부른다."""
-        p = self.parentWidget()
-        if p is None:
-            return
-        self.adjustSize()
-        bottom = p.height()
-        sb = getattr(p, "statusBar", None)
-        if callable(sb) and sb() is not None and sb().isVisible():
-            bottom -= sb().height()
-        self.move(p.width() - self.width() - self.MARGIN, bottom - self.height() - self.MARGIN)
-
-    def _dismiss(self) -> None:
-        self.hide()
-        self.dismissed.emit()
 
 
 class ClickLabel(QLabel):

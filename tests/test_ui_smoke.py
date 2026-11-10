@@ -3703,85 +3703,74 @@ def test_check_says_latest_only_when_actually_checked():
         updatecheck.requests.get, config.UPDATE_CHECK = orig_get, orig_on
 
 
-def _status_bar_state():
-    """두 화면(검색·사이드바)의 왼쪽 아래 상태 칸 — [(문구, 버튼 문구 or None)]."""
+def _version_cards():
+    """두 화면(검색·사이드바)의 왼쪽 아래 버전 카드 — 화면마다 정확히 하나."""
     out = []
     for idx in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
-        page = _win.stack.widget(idx)
-        lb = [x for x in page.findChildren(app_main.QLabel) if x.objectName() == "updateStatus"]
-        bt = [x for x in page.findChildren(app_main.QPushButton) if x.objectName() == "updateInline"]
-        assert len(lb) == 1 and len(bt) == 1, (idx, len(lb), len(bt))
-        out.append((lb[0].text(), bt[0].text() if bt[0].isVisibleTo(page) else None))
+        cards = _win.stack.widget(idx).findChildren(app_main.VersionCard)
+        assert len(cards) == 1, (idx, len(cards))
+        out.append(cards[0])
     return out
 
 
+def _status_bar_state():
+    """두 화면의 버전 카드 — [(상태 글, 단추 글 or None)]."""
+    return [(c.lb_title.text(), c.btn_update.text() if c.btn_update.isVisibleTo(c) else None) for c in _version_cards()]
+
+
+def _reset_version_cards():
+    _win._release = None
+    _win._download_worker = None
+    for c in _win._version_cards:
+        c.set_busy(False)
+    _win._set_update_status("")
+
+
 def test_update_status_always_visible_bottom_left():
-    # 사용자 요청: 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 칸(버전 옆)
-    card = _win.update_card
+    # 사용자 요청: 잠깐 뜨는 카드가 아니라 화면에 늘 보이는 칸(버전 옆) — 3.7.2 부터 그 칸이 카드 하나다
     orig = updatecheck.check_full
-    page0 = _win.stack.currentIndex()
-    _win.stack.setCurrentIndex(_win.PAGE_SEARCH)  # 최신 카드는 첫 검색 화면에서만 뜬다
     try:
-        for status, rel, want, card_shown in [
-                (updatecheck.LATEST, None, ("최신 버전입니다", None), True),     # 카드 자리에도(검색 화면)
-                (updatecheck.UNKNOWN, None, ("업데이트 확인 못 함", None), False),  # 모르면 '최신'이라 안 한다
-                (updatecheck.NEWER, _REL, ("새 버전 v9.0.0", "받으러 가기"), True)]:
-            card.hide()
+        for status, rel, want in [
+                (updatecheck.LATEST, None, ("최신 버전입니다", None)),
+                (updatecheck.UNKNOWN, None, ("업데이트 확인 못 함", None)),  # 모르면 '최신'이라 안 한다
+                (updatecheck.NEWER, _REL, ("새 버전 v9.0.0", "받으러 가기"))]:
             updatecheck.check_full = lambda *a, s=status, r=rel, **k: updatecheck.CheckResult(s, r)
             _win.start_update_check()          # QThread.start 는 막혀 있다 — 배선만 만든다
             assert _status_bar_state() == [("업데이트 확인 중…", None)] * 2
             _win._update_worker.run()           # 같은 스레드에서 돌려 신호 → 창까지
             assert _status_bar_state() == [want] * 2, (status, _status_bar_state())
-            assert card.isVisibleTo(_win) == card_shown, status
-            if status == updatecheck.LATEST:
-                assert card.lb_title.text() == "최신 버전입니다", card.lb_title.text()
-                assert not card.btn_update.isVisibleTo(card) and card.btn_later.text() == "닫기"
-                _app.processEvents()
-                assert card.isVisibleTo(_win), "최신 카드가 저절로 닫혔다"
-        # 최신 카드 뒤 새 버전이 오면 버튼이 돌아온다(마지막 반복이 NEWER)
-        assert card.btn_update.isVisibleTo(card) and card.btn_later.text() == "나중에"
-        # 왼쪽 아래 버튼도 카드 버튼과 같은 길(소스 실행 = 페이지 열기)
+        # 새 버전이면 테두리가 강조색 — 평소 카드와 구분된다
+        assert all(T.ACCENT in c.styleSheet() for c in _version_cards())
+        # 단추는 소스 실행이면 페이지 열기
         opened = []
         with _Patch((app_main.QDesktopServices, "openUrl", lambda u: opened.append(u.toString())),
                     (updatecheck, "install_dir", lambda: None)):
-            btn = [b for b in _win.stack.widget(_win.PAGE_SEARCH).findChildren(app_main.QPushButton)
-                   if b.objectName() == "updateInline"][0]
-            btn.click()
+            _version_cards()[0].btn_update.click()
         assert opened == [_REL.page_url], opened
+        _win._set_update_status("최신 버전입니다")
+        assert all(T.ACCENT not in c.styleSheet() for c in _version_cards()), "최신인데 강조 테두리가 남았다"
     finally:
         updatecheck.check_full = orig
-        card.hide()
-        _win._release = None
-        _win._set_update_status("")
-        _win.stack.setCurrentIndex(page0)
+        _reset_version_cards()
 
 
-def test_latest_card_never_covers_main_page():
-    # 사용자 요청(2026-10-02 스크린샷): '최신 버전입니다' 카드가 대시보드를 가렸다 — 메인에선 안 뜬다.
-    # 새 버전 카드는 놓치면 안 되니 메인에서도 뜨고, 화면을 옮겨도 남는다.
-    card = _win.update_card
-    page0 = _win.stack.currentIndex()
+def test_no_floating_update_card_372():
+    import widgets
+    # 3.7.2 사용자: 오른쪽 아래 떠 있던 카드를 없앤다 — 같은 말을 왼쪽 아래와 두 곳에서 했다
+    assert not hasattr(_win, "update_card") and not hasattr(widgets, "UpdateCard")
     try:
-        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
-        card.hide()
-        _win._on_update_latest()
-        assert not card.isVisibleTo(_win), "메인 화면에 최신 카드가 떴다"
-        assert _status_bar_state()[1][0] == "최신 버전입니다"   # 왼쪽 아래에는 그대로
-        _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
-        _win._on_update_latest()
-        assert card.isVisibleTo(_win)
-        _win.stack.setCurrentIndex(_win.PAGE_MAIN)            # 검색 → 메인(계정을 열면)이면 닫힌다
-        assert not card.isVisibleTo(_win), "메인으로 넘어가도 최신 카드가 남았다"
-        _win._on_update_found(_REL)                           # 새 버전 카드는 메인에서도
-        assert card.isVisibleTo(_win)
-        _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
-        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
-        assert card.isVisibleTo(_win), "새 버전 카드가 화면을 옮기자 사라졌다"
+        for page in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
+            _win.stack.setCurrentIndex(page)
+            _win._on_update_latest()
+            _win._on_update_found(_REL)
+            _app.processEvents()
+            # 창 바로 아래 떠 있는 위젯(레이아웃 밖)이 없다 — 카드는 화면 안 레이아웃에만
+            floating = [w for w in _win.findChildren(app_main.QFrame, options=Qt.FindChildOption.FindDirectChildrenOnly)
+                        if w.isVisibleTo(_win) and w.objectName() in ("updateCard", "versionCard")]
+            assert floating == [], floating
     finally:
-        card.hide()
-        _win._release = None
-        _win._set_update_status("")
-        _win.stack.setCurrentIndex(page0)
+        _reset_version_cards()
+        _win.stack.setCurrentIndex(_AFTER_LOAD[0])
 
 
 def test_version_bottom_left_not_in_title():
@@ -3789,41 +3778,34 @@ def test_version_bottom_left_not_in_title():
     for idx in (_win.PAGE_SEARCH, _win.PAGE_MAIN):
         page = _win.stack.widget(idx)
         labels = [lb for lb in page.findChildren(app_main.QLabel) if lb.objectName() == "versionLabel"]
-        assert [lb.text() for lb in labels] == [config.APP_VERSION], (idx, [lb.text() for lb in labels])
-        lb = labels[0]
+        assert [lb.text() for lb in labels] == [f"지금 {config.APP_VERSION}"], (idx, [lb.text() for lb in labels])
+        card = page.findChildren(app_main.VersionCard)[0]
         _win.stack.setCurrentIndex(idx)
         _app.processEvents()
-        pos = lb.mapTo(page, lb.rect().bottomLeft())
-        # 왼쪽 아래 — 화면 왼쪽 1/4 · 아래 1/8 안
-        assert pos.x() < page.width() / 4 and pos.y() > page.height() * 7 / 8, (idx, pos, page.size())
+        pos = card.mapTo(page, card.rect().bottomLeft())
+        # 왼쪽 아래 — 화면 왼쪽 1/4 · 아래 1/6 안
+        assert pos.x() < page.width() / 4 and pos.y() > page.height() * 5 / 6, (idx, pos, page.size())
     _win.stack.setCurrentIndex(_AFTER_LOAD[0])
 
 
-def test_update_card_bottom_right_on_both_pages():
-    card = _win.update_card
-    assert not card.isVisibleTo(_win), "새 버전 신호 없이 카드가 보인다"
-    old_page = _win.stack.currentIndex()
+def test_version_card_as_big_as_old_card_372():
+    import widgets
+    # 사용자: 왼쪽 칸을 오른쪽 카드 크기로 — 제목은 옛 카드처럼 굵은 PT_S · 아래 줄은 가장 작은 글자(PX_XS)가 아니다 · 검색 화면 폭 300
+    search, side = _version_cards()
     try:
-        for page in (_win.PAGE_SEARCH, _win.PAGE_MAIN):  # 처음 검색 전 화면에도 떠야 한다(사용자 요청)
-            _win.stack.setCurrentIndex(page)
-            _win._on_update_found(_REL)
-            _app.processEvents()
-            assert card.isVisibleTo(_win) and "v9.0.0" in card.lb_title.text(), card.lb_title.text()
-            g = card.geometry()
-            bottom = _win.height() - _win.statusBar().height()
-            # 오른쪽 아래 구석 — 여백 MARGIN, 상태줄 위
-            assert g.right() == _win.width() - card.MARGIN - 1, (g, _win.width())
-            assert g.bottom() == bottom - card.MARGIN - 1, (g, bottom)
-        # 창 크기를 바꾸면 따라간다
-        _win.resize(1400, 800)
+        _win._on_update_latest()
+        for c in (search, side):
+            f = c.lb_title.font()
+            assert f.bold() and f.pointSize() == T.PT_S, (f.bold(), f.pointSize())
+            assert c.lb_sub.fontInfo().pixelSize() > T.PX_XS, c.lb_sub.fontInfo().pixelSize()
+        assert search.width() == widgets.VersionCard.WIDTH, search.width()
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
         _app.processEvents()
-        assert card.geometry().right() == _win.width() - card.MARGIN - 1, card.geometry()
-        # 소스 실행(테스트)은 설치판이 아니라 '받으러 가기'
-        assert card.btn_update.text() == "받으러 가기", card.btn_update.text()
+        assert side.width() >= T.SIDEBAR_W - 30, (side.width(), T.SIDEBAR_W)
+        assert side.mapTo(_win, side.rect().topRight()).x() < T.SIDEBAR_W, "사이드바 밖으로 나갔다"
     finally:
-        card.hide()
-        _win.resize(1600, 900)
-        _win.stack.setCurrentIndex(old_page)
+        _reset_version_cards()
+        _win.stack.setCurrentIndex(_AFTER_LOAD[0])
 
 
 def test_update_click_portable_opens_page_only():
@@ -3833,6 +3815,7 @@ def test_update_click_portable_opens_page_only():
         _win._release = _REL
         _win._on_update_clicked()
     assert opened == [_REL.page_url] and _win._download_worker is None, (opened, _win._download_worker)
+    _reset_version_cards()
 
 
 def test_update_click_asks_first_and_no_means_nothing():
@@ -3844,9 +3827,10 @@ def test_update_click_asks_first_and_no_means_nothing():
         _win._on_update_clicked()
         try:
             assert _win._download_worker is None, "아니오를 눌렀는데 내려받기 시작"
-            assert _win.update_card.btn_update.isEnabled(), "아니오 뒤에 버튼이 잠겼다"
+            ok = [c.btn_update.isEnabled() and c.btn_update.isVisibleTo(c) for c in _version_cards()]
+            assert all(ok), "아니오 뒤에 단추가 잠겼다"
         finally:
-            _win.update_card.hide()
+            _reset_version_cards()
 
 
 def test_update_click_installed_downloads_then_installs_and_closes():
@@ -3857,56 +3841,39 @@ def test_update_click_installed_downloads_then_installs_and_closes():
                 (updatecheck, "launch_installer", lambda p: launched.append(p)),
                 (_win, "close", lambda: closed.append(1))):
         _win._on_update_found(_REL)
-        assert _win.update_card.btn_update.text() == "업데이트", _win.update_card.btn_update.text()
-        _win._on_update_clicked()
+        assert _status_bar_state() == [("새 버전 v9.0.0", "업데이트")] * 2, _status_bar_state()
+        _version_cards()[1].btn_update.click()   # 사이드바 카드에서 눌러도
         try:
             w = _win._download_worker
-            assert w is not None and _win.update_card.bar.isVisibleTo(_win), "내려받기가 시작되지 않았다"
+            assert w is not None, "내려받기가 시작되지 않았다"
+            # 진행은 두 카드 모두에 — 받는 동안 단추는 숨고 다시 못 누른다
+            for c in _version_cards():
+                assert c.bar.isVisibleTo(c) and not c.btn_update.isVisibleTo(c) and not c.btn_update.isEnabled()
+            w.progress.emit(5 * 2**20, 10 * 2**20)
+            assert all("50%" in c.lb_sub.text() for c in _version_cards()), [c.lb_sub.text() for c in _version_cards()]
             assert "v9.0.0" in asked[0] and "- 새 기능" in asked[0], asked
             w.done.emit("C:/fake/setup.exe")  # 검증 통과 신호
             assert launched == [pathlib.Path("C:/fake/setup.exe")] and closed == [1], (launched, closed)
         finally:
-            _win._download_worker = None
-            _win.update_card.hide()
+            _reset_version_cards()
     del _win.close
-
-
-def test_inline_update_after_dismiss_shows_progress_and_locks_button():
-    # 카드를 [나중에]로 닫고 왼쪽 아래 버튼으로 받으면 — 진행이 보일 곳이 없으면 멈춘 것처럼 보인다
-    yes = app_main.QMessageBox.StandardButton.Yes
-    card = _win.update_card
-    with _Patch((updatecheck, "install_dir", lambda: pathlib.Path("C:/fake")),
-                (app_main.QMessageBox, "question", lambda *a, **k: yes),
-                (app_main.QMessageBox, "warning", lambda *a, **k: None)):
-        _win._on_update_found(_REL)
-        card.btn_later.click()
-        assert not card.isVisibleTo(_win)
-        try:
-            _win._update_inline_btns[0].click()
-            assert card.isVisibleTo(_win) and card.bar.isVisibleTo(_win), "진행이 안 보인다"
-            assert not any(b.isEnabled() for b in _win._update_inline_btns), "받는 중에 또 누를 수 있다"
-            _win._on_update_failed("테스트 실패")
-            assert all(b.isEnabled() for b in _win._update_inline_btns), "실패 뒤 버튼이 잠긴 채다"
-        finally:
-            _win._download_worker = None
-            _win._release = None
-            card.hide()
-            _win._set_update_status("")
-            for b in _win._update_inline_btns:
-                b.setEnabled(True)
 
 
 def test_update_failure_restores_card_and_tells_why():
     warned = []
     with _Patch((app_main.QMessageBox, "warning", lambda *a, **k: warned.append(a[2]))):
+        _win._on_update_found(_REL)
         _win._release = _REL
-        _win.update_card.set_busy(True, "내려받는 중…")
+        for c in _win._version_cards:
+            c.set_busy(True, "내려받는 중…")
         _win._on_update_failed("체크섬이 다릅니다")
     try:
-        assert not _win.update_card.bar.isVisibleTo(_win) and _win.update_card.btn_update.isEnabled()
+        for c in _version_cards():
+            assert not c.bar.isVisibleTo(c) and c.btn_update.isEnabled() and c.btn_update.isVisibleTo(c)
+            assert c.lb_sub.text() == f"지금 {config.APP_VERSION}", c.lb_sub.text()
         assert "체크섬" in warned[0] and _REL.page_url in warned[0], warned
     finally:
-        _win.update_card.hide()
+        _reset_version_cards()
 
 
 def test_install_dir_only_for_installed_exe():
@@ -7375,7 +7342,7 @@ def test_no_tray_balloon_from_any_path():
         ctx.sh.sched._on_done(O("blocked", "막힘", disabled_by_block=True))
         ctx.sh.sched._on_done(O("failed", "점검", fail_notice=True))
         assert ctx.sh.tray.msgs == [], ctx.sh.tray.msgs
-    _win.update_card.hide()
+    _reset_version_cards()
     # 코드에 풍선을 띄우는 호출이 다시 들어오면 — 테스트가 그 경로를 안 밟아도 잡히게
     for f in ("tray.py", "app_main.py"):
         src = (pathlib.Path(app_main.__file__).parent / f).read_text(encoding="utf-8")
@@ -7970,10 +7937,10 @@ def test_heat_colors_keep_text_readable():
     assert not bad, bad
     # 화면이 실제로 그 끝 색을 쓰는지(배선) — 기본 BAD/BLUE 가 아니다
     assert (T.HEAT_GOOD, T.HEAT_BAD) == (T._P["HEAT_GOOD"], T._P["HEAT_BAD"]) and T.HEAT_BAD != T.BAD
-    # 95 — 높음은 초록 쪽(G 가 가장 큼) · 낮음은 게임 나쁨 색인 파랑 쪽. 79 의 빨강으로 되돌리면 FAIL
+    # 3.7.2 — 높음은 초록 쪽(G 가 가장 큼) · 낮음은 빨강 쪽(95 의 파랑으로 되돌리면 FAIL)
     for p in T._PALETTES.values():
         g, b = QColor(p["HEAT_GOOD"]), QColor(p["HEAT_BAD"])
-        assert g.green() > max(g.red(), g.blue()) and b.blue() > max(b.green(), b.red()), (p["HEAT_GOOD"], p["HEAT_BAD"])
+        assert g.green() > max(g.red(), g.blue()) and b.red() > max(b.green(), b.blue()), (p["HEAT_GOOD"], p["HEAT_BAD"])
 
 
 POS_MIN_CONTRAST = 2.5   # 95 — 포지션 글자·칩은 게임 값 그대로(어두운 PANEL_2 위 FW 2.73 이 가장 낮다)
@@ -8010,7 +7977,7 @@ def test_palette_text_contrast():
     assert not any(bad.values()), bad
     # 검사가 실제로 무언가를 재는지 — 밝은 쪽 GOOD 을 채움 값으로 되돌리면 걸려야 한다
     planted = dict(T._PALETTES["light"], GOOD=T._PALETTES["light"]["GOOD_FILL"])
-    assert ("GOOD", "PANEL", 3.53) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
+    assert ("GOOD", "PANEL", 3.65) in _palette_contrast_failures(planted), _palette_contrast_failures(planted)
     planted = dict(T._PALETTES["dark"], WIN_BAR=T._PALETTES["dark"]["GOOD_FILL"])
     assert any(b == "WIN_BAR" for _, b, _ in _palette_contrast_failures(planted))
     # 줄 채움 행도 잰다 — 섞는 비율을 0.22 로 올리면 밝은 쪽 흐린 글자가 4.34 로 걸려야 한다(67 R0 · 3.2.2 초록 채움에서 0.18 은 4.55 라 안 걸린다)
@@ -8033,8 +8000,14 @@ def test_palette_tokens_reach_widgets():
         assert getattr(T, key) == T._P[key], key
     for key in ("ERROR", "LEVEL", "LOSE_FILL", "DRAW_FILL"):
         assert getattr(T, key) == T._P[key], key
-    # 95 — 승은 좋음 · 패는 나쁨(파랑)과 따로(흐린 글자 · 진회색 칸) · 오류는 나쁨과 따로
-    assert T.WIN == T.GOOD and T.LOSE == T.TEXT_DIM != T.BAD and T.ERROR != T.BAD
+    # 3.7.2 사용자 — 승은 좋음(초록) · 패는 나쁨(빨강)과 같은 색 · 패 칸도 빨강(95 의 진회색 아님) · 무는 회색
+    assert T.WIN == T.GOOD and T.LOSE == T.BAD and T.LOSE_FILL == T.BAD_FILL
+    for p in T._PALETTES.values():
+        for key in ("BAD", "BAD_FILL", "LOSE_FILL", "CHART_DOWN", "HEAT_BAD"):   # 빨강 쪽 — 파랑·회색으로 되돌리면 FAIL
+            c = QColor(p[key])
+            assert c.red() > max(c.green(), c.blue()) + 40, (key, p[key])
+        d = QColor(p["DRAW_FILL"])
+        assert max(d.red(), d.green(), d.blue()) - min(d.red(), d.green(), d.blue()) < 16, ("무는 회색", p["DRAW_FILL"])
     assert T.ACCENT not in (T.GOOD, T.BAD)
     # 꽉 칠한 버튼은 PRIMARY 로 그려진다 — 찍어서 본다
     from PySide6.QtWidgets import QPushButton
@@ -8045,7 +8018,7 @@ def test_palette_tokens_reach_widgets():
     assert img.pixelColor(10, 20).name() == T.PRIMARY, (img.pixelColor(10, 20).name(), T.PRIMARY)
 
 
-DARK_UPDOWN_CVD, LIGHT_UPDOWN_CVD = 36.1, 25.4   # 95 — 게임 초록·파랑(예전 청록·빨강 6.5 · 6.9)
+DARK_UPDOWN_CVD, LIGHT_UPDOWN_CVD = 17.1, 6.9   # 3.7.2 — 게임 초록·빨강(어두운) · 95 전 짝(밝은) · 95 의 초록·파랑은 36.1 · 25.4
 
 
 def test_cvd_delta_matches_known_values():
@@ -8054,10 +8027,10 @@ def test_cvd_delta_matches_known_values():
     assert round(T.cvd_delta(*[T._PALETTES["dark"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == DARK_UPDOWN_CVD
     assert round(T.cvd_delta(*[T._PALETTES["light"][k] for k in ("CHART_UP", "CHART_DOWN")]), 1) == LIGHT_UPDOWN_CVD
     assert T.cvd_delta("#123456", "#123456") == 0
-    # 좋음/나쁨 짝 — 95 에 게임 초록·파랑으로 바꾸며 5.3(초록·빨강) → 36.1. 값이 바뀌면 theme 주석과 쓰는 자리를 다시 본다
+    # 좋음/나쁨 짝 — 3.7.2 에 나쁨을 빨강으로 되돌리며 36.1(초록·파랑) → 14.0. 값이 바뀌면 theme 주석과 쓰는 자리를 다시 본다
     got = {(m, k): round(T.cvd_delta(p[f"GOOD{k}"], p[f"BAD{k}"]), 1)
            for m, p in T._PALETTES.items() for k in ("", "_FILL")}
-    assert got == {("dark", ""): 36.1, ("dark", "_FILL"): 36.1, ("light", ""): 19.3, ("light", "_FILL"): 25.4}, got
+    assert got == {("dark", ""): 14.0, ("dark", "_FILL"): 14.0, ("light", ""): 5.0, ("light", "_FILL"): 6.6}, got
 
 
 def test_g8_cells_match_reference():
@@ -13854,10 +13827,10 @@ def test_wdl_fills_visible_95():
 
 
 def test_game_colors_95_ink_and_level():
-    # 95 — 게임 초록·무 연회색 칸 위 글자는 진하게, 패 진회색 칸 위는 흰색(흰 글자 고정이면 초록 위 1.3)
+    # 95 — 게임 초록·무 연회색 칸 위 글자는 진하게(흰 글자 고정이면 초록 위 1.3) · 칸 글자는 대비가 큰 쪽
     assert T.ink_on("#07f468") == T.CHART_ON_MARK_DARK and T.ink_on(T._PALETTES["dark"]["DRAW_FILL"]) == T.CHART_ON_MARK_DARK
-    assert T.ink_on(T.LOSE_FILL) == T.CHART_ON_MARK
-    # 결과 점(최근 경기 점) — 패는 진회색 · 무는 연회색 · 글자는 ink_on(그림을 떠서 가운데 색을 본다)
+    assert T.ink_on("#575753") == T.CHART_ON_MARK   # 진한 칸 위는 흰색
+    # 결과 점(최근 경기 점) — 패는 빨강(3.7.2) · 무는 연회색 · 글자는 ink_on(그림을 떠서 가운데 색을 본다)
     from PySide6.QtGui import QImage, QPainter
     dots = charts.ResultDots()
     dots.set_data([("승", "a"), ("무", "b"), ("패", "c")])

@@ -31,15 +31,15 @@ _PALETTES = {
         PRIMARY="#3fb950",     # 꽉 칠한 버튼·선택 바탕(위 글자 ON_PRIMARY)
         PRIMARY_HOVER="#4fc960",
         ON_PRIMARY="#08210f",
-        # 좋음/나쁨은 게임 클라이언트 색(95 · 2026-11-10 스크린숏 픽셀) — 많음·오름 초록 · 적음·내림 파랑. 패는 따로(LOSE).
+        # 좋음 = 게임 초록(95) · 나쁨 = 빨강(3.7.2 사용자: 게임 파랑이 익숙하지 않다 — 95 전 값). 패도 빨강(LOSE).
         GOOD="#07f468",        # 좋음 — 승·득점·▲
-        BAD="#0b96ff",         # 나쁨 — 실점·▼·적음 (패 글자는 LOSE)
+        BAD="#ff637e",         # 나쁨 — 패·실점·▼·적음
         WARN="#ffb900",        # 주의
-        ERROR="#ff637e",       # 오류 글 — 나쁨이 파랑이 되며 따로(95 · 옛 BAD 값)
+        ERROR="#ff637e",       # 오류 글 — 95 에 나쁨과 떼어 낸 토큰(3.7.2 부터 값은 다시 같다)
         GOOD_FILL="#07f468",
-        BAD_FILL="#0b96ff",
-        LOSE_FILL="#7a7a76",   # 패 칸·띠 — 게임 "패" 칸 #575753 은 밝은 창 위 색이라 어두운 카드 위 1.99(줄 막대)로 묻혀 한 단계 밝게(3.08)
-        DRAW_FILL="#cecec8",   # 무 칸·띠 — 게임 "무" 칸 바탕
+        BAD_FILL="#ff637e",
+        LOSE_FILL="#ff637e",   # 패 칸·띠 — 빨강(3.7.2 · 95 의 진회색은 무 회색과 헷갈렸다)
+        DRAW_FILL="#cecec8",   # 무 칸·띠 — 회색
         LEVEL="#159aff",       # 감독 레벨 숫자 — 게임 랭킹 #0894fc 는 머리 칸(PANEL_2) 위 4.41 이라 한 단계 밝게(4.7)
         WARN_FILL="#ffb900",
         BLUE="#5b8cff",
@@ -61,7 +61,7 @@ _PALETTES = {
         SCROLL="#3f3f46",
         SCROLL_HOVER="#52525b",
         CHART_UP="#07f468",
-        CHART_DOWN="#0b96ff",
+        CHART_DOWN="#e66767",
         CHART_CUT="#e66767",   # 점수 그래프 200위 컷 선 — 옛 CHART_DOWN(파랑이 되면 보라 점수선과 색약 2.9)
         CHART_NEUTRAL="#6e7681",
         CHART_GRID="#262b33",
@@ -78,7 +78,7 @@ _PALETTES = {
         # 원색은 그 위 밝은 글자가 안 읽힌다. 79 — 높음 = 초록 · 낮음 = 빨강(예전 높음 빨강 · 낮음 파랑은 높은 승률이
         # 나쁨으로 읽혔다). 초록은 빨강과 PANEL 대비가 비슷한 값(빨강 2.98 · 초록 3.02)으로 골라 한쪽만 튀지 않게.
         HEAT_GOOD="#117438",
-        HEAT_BAD="#1d5fb0",   # 95 — 낮음은 파랑(게임 나쁨 색 쪽)
+        HEAT_BAD="#c41c1c",   # 낮음 = 빨강(3.7.2 — 95 전 값)
         # 포지션 글자색 — 게임 값(칩과 같다 · 95)
         POS_FW="#d81c28",
         POS_MF="#248434",
@@ -101,14 +101,14 @@ _PALETTES = {
         PRIMARY_HOVER="#166534",
         ON_PRIMARY="#ffffff",
         # 흰 바탕에서 채움 값(#009966 3.65 · #e17100 3.20 · #ec003f 칸 위 3.73)은 글자로 안 읽혀 글자만 진하게
-        # 95 — 게임 초록·파랑은 흰 바탕 글자로 1.5·3.1 이라 같은 색상의 진한 값(글자) · 채움은 흰 카드 위 그래픽 3.0 이상
-        GOOD="#047857",
-        BAD="#0b63c4",
+        # 3.7.2 — 좋음·나쁨은 95 전 초록·빨강 짝 그대로(게임 초록을 남기면 이 빨강과 채움 색약 색차가 2.9)
+        GOOD="#065f46",
+        BAD="#be123c",
         WARN="#92400e",
         ERROR="#be123c",
-        GOOD_FILL="#0f9d4a",
-        BAD_FILL="#0b7ce0",
-        LOSE_FILL="#575753",
+        GOOD_FILL="#009966",
+        BAD_FILL="#ec003f",
+        LOSE_FILL="#ec003f",
         DRAW_FILL="#8c8c86",
         LEVEL="#0b63c4",
         WARN_FILL="#e17100",
@@ -128,8 +128,8 @@ _PALETTES = {
         ROW_TINT=0.18,
         SCROLL="#cfd5df",
         SCROLL_HOVER="#b4bcc9",
-        CHART_UP="#0f9d4a",
-        CHART_DOWN="#0b7ce0",
+        CHART_UP="#138a60",
+        CHART_DOWN="#e34948",
         CHART_CUT="#e34948",
         # 무승부·도넛 "기타"·경기 수 막대 — 흰 카드 위 그래픽 대비 3.0(옛 #9aa1b0 은 2.59 · 67 R12) → 3.38
         CHART_NEUTRAL="#858c9b",
@@ -143,7 +143,7 @@ _PALETTES = {
         CHART_LINE="#373cbe",   # 위 어두운 쪽 주석과 같은 이유(3.2.2)
         CAL_FILL="#373cbe",
         HEAT_GOOD="#18a550",   # 밝은 테마는 반대로 — 진한 글자가 읽히는 값(PANEL 대비 빨강 3.27 · 초록 3.21)
-        HEAT_BAD="#5b9bff",
+        HEAT_BAD="#e96363",
         POS_FW="#d81c28",
         POS_MF="#248434",
         POS_DF="#306cfc",
@@ -161,8 +161,8 @@ TEXT = _P["TEXT"]
 TEXT_DIM = _P["TEXT_DIM"]
 
 # 강조(앱 정체성 · 초록)와 좋음/나쁨(승·패)은 다른 토큰이다 — 한 색에 두 뜻을 싣던 시절엔 강조를 바꾸면
-# 승·골까지 같이 바뀌었다. 좋음/나쁨은 95 부터 게임 초록·파랑이라 색약 색차가 크다(어두운 36.1 · 밝은 글자 19.3 · 채움 25.4 —
-# 옛 초록·빨강은 5.3) — 그래도 쓰는 자리마다 글자·부호(승/패 · +/− · ▲▼)를 같이 둔다.
+# 승·골까지 같이 바뀌었다. 좋음/나쁨은 3.7.2 부터 게임 초록 · 빨강(색약 색차 어두운 글자 14.0 · 그래프 17.1 — 95 전 초록·빨강은
+# 5.3 · 95 의 초록·파랑은 36.1). 색만으로 승패를 말하지 않게 쓰는 자리마다 글자·부호(승/패 · +/− · ▲▼)를 같이 둔다.
 ACCENT = _P["ACCENT"]               # 강조 글자·테두리
 ACCENT_FILL = _P["ACCENT_FILL"]     # 강조 채움(진행 막대 등)
 ACCENT_SOFT = _P["ACCENT_SOFT"]     # 선택된 메뉴·탭 바탕
@@ -184,22 +184,22 @@ CHIP_MF = _P["CHIP_MF"]
 CHIP_FW = _P["CHIP_FW"]
 CHIP_SOFT_MIX = 0.10                # 태그 꼴 바탕 — widgets.tag_qss 와 같은 비율
 
-ERROR = _P["ERROR"]                 # 오류 글(검색 실패·키 거절) — 나쁨(파랑)과 따로
+ERROR = _P["ERROR"]                 # 오류 글(검색 실패·키 거절) — 뜻이 달라 나쁨과 따로 둔다
 LEVEL = _P["LEVEL"]                 # 감독 레벨 숫자
 
-# 승·무·패(95 — 게임): 승 = 좋음 초록 · 무 = 연회색 칸 · 패 = 진회색 칸. 패 글자는 흐린 글자(진회색은 어두운 바탕 글자로 2.4)
+# 승·무·패(3.7.2 사용자): 승 = 초록 · 무 = 회색 · 패 = 빨강(나쁨과 같은 색). 95 의 패 진회색은 무와 헷갈렸다
 WIN = GOOD
 DRAW = _P["DRAW"]
-LOSE = TEXT_DIM
+LOSE = BAD
 LOSE_FILL = _P["LOSE_FILL"]
 DRAW_FILL = _P["DRAW_FILL"]
 
 # 대시보드 그래프(charts.py) 색 — 옛 앱 초록/빨강 짝(#3fb950/#ef6268)은 적록 색약에서 색차 2.0 으로
-# 구분이 안 된다(dataviz 검증기, 기준 6). 95 부터 게임 초록·파랑(다크 36.1 · 밝은 25.4) — 범례·2px 틈·글자 표기는
+# 구분이 안 된다(dataviz 검증기, 기준 6). 3.7.2 부터 게임 초록 · 빨강(다크 17.1) — 범례·2px 틈·글자 표기는
 # 그대로 같이 둔다. 무승부·상대는 회색.
 CHART_UP = _P["CHART_UP"]            # 득점·승·나
-CHART_DOWN = _P["CHART_DOWN"]        # 실점·적음
-CHART_CUT = _P["CHART_CUT"]          # 점수 그래프 200위 컷 선(95 — 나쁨 파랑과 따로)
+CHART_DOWN = _P["CHART_DOWN"]        # 실점·패·적음
+CHART_CUT = _P["CHART_CUT"]          # 점수 그래프 200위 컷 선(95 에 실점 색과 떼어 냈다 — 3.7.2 부터 값은 다시 같다)
 CHART_NEUTRAL = _P["CHART_NEUTRAL"]  # 무승부·상대 평균
 CHART_GRID = _P["CHART_GRID"]        # 격자(1px 실선, 바탕보다 한 단계)
 CHART_AXIS = _P["CHART_AXIS"]        # 기준선

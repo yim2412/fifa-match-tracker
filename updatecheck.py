@@ -15,7 +15,7 @@
 
 규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
 새 버전 확인 + 앱 안 업데이트 — 켤 때 한 번 GitHub 최신 릴리스 태그와 `APP_VERSION` 을 숫자로 비교(`check()` → NEWER·LATEST·UNKNOWN — 실패·릴리스 없음은 UNKNOWN 이라 "최신"이라고 하지 않는다).
-창 오른쪽 아래 카드(`widgets.UpdateCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다.
+왼쪽 아래 버전 카드(`widgets.VersionCard`)의 [업데이트] → 설치 파일을 받아 **`SHA256SUMS.txt` 와 같을 때만** `/AUTOUPDATE=1` 로 실행하고 앱을 닫는다 → `.iss` 의 `IsAutoUpdate` 가 설치 뒤 앱을 다시 켠다.
 설치판 판별은 exe 옆 `unins000.exe`(포터블·소스 실행은 페이지만 연다). 첨부 이름(`SETUP_ASSET`)은 `tools/release.py` 와 같아야 한다(테스트가 대조)
 받는 길은 둘(84 G2 · 2026-11-10): 일반 주소(`browser_download_url`)가 네트워크·HTTP 오류면 같은 첨부의 API 경로(`url` + `Accept: application/octet-stream`)로
 한 번 더 — 체크섬 목록·설치 파일 각각. 끊기면 처음부터 다시 쓰고, 둘 다 실패하면 반쯤 받은 파일을 지운다. 11-10 실측: v3.4.1 SHA256SUMS 가 두 길에서 같았다
