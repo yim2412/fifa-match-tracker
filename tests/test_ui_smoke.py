@@ -8061,30 +8061,35 @@ def test_cvd_delta_matches_known_values():
 
 
 def test_g8_cells_match_reference():
-    # 65 M9 — 다른 기준 화면 같은 계정 표의 실제 칸 색(ROADMAP "G8 색 규칙" 확인 줄)을 그 화면 바탕 rgb(23,29,40) 으로 그대로 낸다.
-    # 앱은 우리 PANEL 에서 섞는다(바탕만 다르고 눈금 위치 t·끝 색·반올림은 같다 — 이 단언이 그 셋을 잰다)
-    g8, scale, ref = T.g8_cell, app_main.config.G8_SCALE, "#171d28"
+    # 95 ③ — 다른 기준 화면과 똑같이. 2026-11-10 그 화면(같은 계정 · 두 테마)에서 계산된 칸 색을 읽은 값 그대로
+    # (값, 공격/수비, 어두운 (바탕, 글자), 밝은 (바탕 — None 은 흰 카드 그대로, 글자)). 밝은 공격 R 이 200~205 에 머무는 것도 그 화면 그대로.
+    g8, scale = T.g8_cell, app_main.config.G8_SCALE
     assert scale == (210, 860)
-    assert g8(839.9, "atk", scale, "dark", ref)[0] == "#c13343"      # 193,51,67
-    assert g8(494.9, "atk", scale, "dark", ref)[0] == "#642734"      # 100,39,52
-    for v in (193.4, 149.5):                                           # 바탕 그대로 · 흐린 글자
-        assert g8(v, "atk", scale, "dark", ref) == (None, T._PALETTES["dark"]["TEXT_DIM"])
-    assert g8(884, "def", scale, "dark", ref)[0] == T.G8_END["def"] == "#3062cd"   # 끝 색(860 이상)
-    assert g8(1527, "atk", scale, "dark", ref)[0] == T.G8_END["atk"] == "#c63444"
-    assert g8(210, "atk", scale, "dark", ref)[0] == ref                 # 아래 끝은 칠하되 바탕과 같은 색
-    assert g8(210, "atk", scale, "dark")[0] == T._PALETTES["dark"]["PANEL"]   # 앱은 PANEL 에서
-    # 밝은 식(값 ÷ 900 — 눈금과 다른 식) · 아래 끝 밑은 안 칠함
-    assert g8(900, "atk", scale, "light")[0] == "#ff4d66" and g8(900, "def", scale, "light")[0] == "#0000ff"
-    assert g8(209.9, "def", scale, "light")[0] is None and g8(210, "def", scale, "light")[0] is not None
-    # 모든 값·두 테마·두 칸에서 글자 대비 4.5 이상(밝은 쪽 글자색은 대비 큰 쪽을 고른다 — 기준 화면의 "700 넘으면 흰색" 은 미달)
-    bad = []
-    for mode, p in T._PALETTES.items():
-        for kind in ("atk", "def"):
-            for v in range(0, 1600, 5):
-                bg, fg = g8(v, kind, scale, mode)
-                if T.contrast(fg, bg or p["PANEL"]) < 4.5:
-                    bad.append((mode, kind, v, bg, fg))
-    assert not bad, bad[:5]
+
+    def h(r, g, b):
+        return f"#{r:02x}{g:02x}{b:02x}"
+    W, K, DT, DD = "#ffffff", "#000000", "#f2f6f1", "#9aa79d"
+    ref = [
+        (912.8, "atk", (h(198, 52, 68), DT), (h(205, 74, 100), W)),
+        (798.1, "atk", (h(181, 50, 65), DT), (h(204, 97, 119), W)),
+        (686.1, "atk", (h(151, 46, 61), DT), (h(204, 119, 138), K)),
+        (500.8, "atk", (h(101, 39, 53), DT), (h(203, 156, 170), K)),
+        (310.7, "atk", (h(50, 33, 44), DT), (h(202, 193, 202), K)),
+        (224.8, "atk", (h(27, 30, 41), DT), (h(201, 210, 217), K)),
+        (213.6, "atk", (h(24, 29, 40), DT), (h(201, 213, 219), K)),
+        (203.6, "atk", (h(23, 29, 40), DD), (None, K)),
+        (0.0, "atk", (h(23, 29, 40), DD), (None, K)),
+        (855.0, "def", (h(48, 97, 204), DT), (h(13, 13, 252), W)),
+        (516.6, "def", (h(35, 62, 118), DT), (h(109, 109, 232), K)),
+        (433.4, "def", (h(32, 53, 97), DT), (h(132, 132, 226), K)),
+        (322.6, "def", (h(27, 41, 69), DT), (h(164, 164, 220), K)),
+        (241.3, "def", (h(24, 32, 48), DT), (h(187, 187, 215), K)),
+        (202.0, "def", (h(23, 29, 40), DD), (None, K)),
+    ]
+    bad = [(v, k, m, g8(v, k, scale, m), want) for v, k, dark, light in ref
+           for m, want in (("dark", dark), ("light", light)) if g8(v, k, scale, m) != want]
+    assert not bad, bad
+    assert g8(1527, "atk", scale, "dark")[0] == T.G8_END["atk"] == "#c63444"   # 860 넘으면 끝 색
 
 
 def test_players_g8_wiring():
@@ -8114,7 +8119,7 @@ def test_players_g8_wiring():
                 it = tb.item(r, c)
                 got = it.background().color().name() if it.background().style() != Qt.BrushStyle.NoBrush else None
                 assert got == bg and it.foreground().color().name() == fg, (p.name, kind, v, got, bg)
-                painted += bg is not None
+                painted += bg not in (None, T.G8_DARK_BASE)   # 95 ③ — 어두운 쪽은 아래 끝 밑도 바탕색으로 칠한다
                 marked = p.position == victim.position and kind == "def" and v < victim.defense_power + 1
                 assert ("▽" in it.text()) == marked and bool(it.toolTip()) == marked, (p.name, kind, it.text())
             rate = tb.item(r, 4)
