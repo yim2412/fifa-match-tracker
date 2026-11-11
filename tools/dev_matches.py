@@ -31,7 +31,7 @@
 **시각**: `games.at`·커서 `top_at`·`base_at`·`owners.gap_at` 은 진짜 epoch 초(`matchtime.epoch` — 넥슨 `matchDate` 는 UTC).
 63 전 줄은 UTC 원문을 KST 로 읽어 9시간 일렀다 — 수집 실행이 한 번 옮기고 `meta.at_fixed` 를 남긴다(`fix_at`). "날"은 실행을 **시작한** KST 날짜(L3).
 
-작업 스케줄러 `FifaDevMatches`(로그온 5분 뒤 + 2시간마다 · pythonw · 실행 제한 PT7H · 겹침 IgnoreNew) — 등록은 XML 로
+작업 스케줄러 `FifaDevMatches`(로그온 5분 뒤 + 30분마다(2026-11-11 — 2시간이면 게임을 끈 뒤 다음 칸까지 놀았다) · pythonw · 실행 제한 PT7H · 겹침 IgnoreNew) — 등록은 XML 로
 (`schtasks /create /tn FifaDevMatches /xml <파일>`). XML 은 이 PC 경로가 들어가 저장소에 두지 않는다.
 
     python tools/dev_matches.py                 # 오늘 끝났으면 바로 나간다
