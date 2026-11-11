@@ -690,11 +690,6 @@ class WinrateElo:
         return self.pairs >= config.PREDICT_MIN_PAIRS
 
 
-def _lean(conn, sid: int) -> dict[int, tuple]:
-    return {r[0]: r[1:] for r in conn.execute(
-        "SELECT profile_sn, rank, elo, win, draw, lose FROM snapshot_rows WHERE snapshot_id = ?", (sid,))}
-
-
 def _pct(s: list[float], q: float) -> float:
     return s[min(len(s) - 1, int(q * len(s)))]
 
@@ -706,26 +701,24 @@ def winrate_to_elo(conn: sqlite3.Connection, top: int = 10000) -> WinrateElo:
 def _winrate_to_elo(conn, top) -> WinrateElo:
     out = WinrateElo()
     raw = _season_raw(conn)
-    prev = None
     for a, b in zip(raw, raw[1:]):
         if not predict._gap_ok(a["taken_at"], b["taken_at"]):
             continue
         out.pairs += 1
-        ra = prev[1] if prev is not None and prev[0] == a["id"] else _lean(conn, a["id"])
-        rb = _lean(conn, b["id"])
-        prev = (b["id"], rb)
-        for sn, (rank, e0, w0, d0, l0) in ra.items():
-            nb = rb.get(sn)
-            if nb is None or rank > top or e0 is None or nb[1] is None:
-                continue
-            dw, dd, dl = nb[2] - w0, nb[3] - d0, nb[4] - l0
+        # 짝 맞추기·차이는 SQLite 안에서(PK 조회) — 두 회차를 파이썬 dict 로 옮기던 것이 함수 시간의 절반이었다
+        # (2026-11-11 실측 0.12 / 0.30초 · CI 가 상한 0.3초에 붙어 있었다)
+        for e0, e1, dw, dd, dl in conn.execute(
+                "SELECT a.elo, b.elo, b.win - a.win, b.draw - a.draw, b.lose - a.lose "
+                "FROM snapshot_rows a JOIN snapshot_rows b ON b.snapshot_id = ? AND b.profile_sn = a.profile_sn "
+                "WHERE a.snapshot_id = ? AND a.rank <= ? AND a.elo IS NOT NULL AND b.elo IS NOT NULL",
+                (b["id"], a["id"], top)):
             if min(dw, dd, dl) < 0:
                 out.negative += 1
                 continue
             if dw + dd + dl < config.N10_MIN_GAMES or dw + dl == 0:
                 out.few += 1
                 continue
-            out.steps.append((dw * 100 / (dw + dl), e0, nb[1] - e0))
+            out.steps.append((dw * 100 / (dw + dl), e0, e1 - e0))
     out.steps.sort()
     edges = config.N10_BINS
     groups: list[list[tuple]] = [[] for _ in range(len(edges) + 1)]

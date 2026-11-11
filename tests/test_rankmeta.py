@@ -423,6 +423,23 @@ def test_winrate_to_elo_tier_by_front_rank():
     using(body)
 
 
+def test_winrate_to_elo_step_values_and_edges_107():
+    """107 — 짝 맞추기를 SQL 조인으로 옮긴 뒤: 걸음 값(승률 · 시작 점수 · 점수 차)이 정확하고, 순위가 top 과 같은 사람은
+    들고, 앞이나 뒤 회차 점수가 빈 사람은 뺀다(변이 셋 — `<=`→`<` · 뒤 점수 거르기 빼기 · 차 +1 — 이 전엔 다 초록이었다)."""
+    def body(db):
+        db.snap(T0, [person(1, 200, elo=3400.0), person(2, 7, elo=3300.0), person(3, 8, elo=None),
+                     person(4, 9, elo=3200.0)])
+        db.snap(T0 + timedelta(hours=24), [person(1, 150, elo=3460.0, w=15, d=1, l=5),
+                                           person(2, 7, elo=None, w=10, l=10),
+                                           person(3, 8, elo=3000.0, w=10, l=10),
+                                           person(4, 9, elo=3150.0, w=4, d=2, l=6)])
+        r = M.winrate_to_elo(db.conn, top=200)
+        # 1 은 앞 순위 200 = top 이라 든다 · 2·3 은 점수가 빈 회차가 있어 빠진다(음수·적은 판으로도 안 센다)
+        assert r.steps == [(40.0, 3200.0, -50.0), (75.0, 3400.0, 60.0)], r.steps
+        assert (r.pairs, r.negative, r.few) == (1, 0, 0), (r.pairs, r.negative, r.few)
+    using(body)
+
+
 def test_my_day_rate():
     from models import MatchSummary
 
