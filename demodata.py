@@ -235,6 +235,37 @@ def _goals(rng, edge: float) -> int:
     return n
 
 
+def _session_stamps(seed: int, start: datetime, days: int, n: int) -> list[datetime]:
+    """경기 시각 n 개 — 하루 몇 번 몰아서 한다(97 세션이 서게). 날마다 판 수를 가중 추첨하고(쉬는 날도 생긴다) 한 날의 판은
+    한 번에 8판(`_SESSION_MAX`)까지만 묶어 시간대를 나눠 둔다. 묶음 안 간격은 10~16분이라 30분 끊기에 안 걸리고, 묶음 사이는 서너 시간 쉰다.
+    결과·점수가 담긴 `rng` 와 따로 뽑는다(경기 내용이 안 바뀌게)."""
+    t = random.Random(f"{seed}:times")
+    weights = [t.uniform(0.0, 1.7) if t.random() > 0.1 else 0.0 for _ in range(days)]
+    if not any(weights):
+        weights = [1.0] * days
+    quota = [0] * days
+    for d in t.choices(range(days), weights=weights, k=n):
+        quota[d] += 1
+    out: list[datetime] = []
+    for d, q in enumerate(quota):
+        if not q:
+            continue
+        sessions = -(-q // _SESSION_MAX)
+        per, extra = divmod(q, sessions)
+        span = 11.0 / sessions
+        for j in range(sessions):
+            games = per + (1 if j < extra else 0)
+            hour = 9.0 + j * span + t.uniform(0.0, max(0.0, min(span - 2.0, 4.0)) if sessions > 1 else 7.0)
+            at = start + timedelta(days=d, hours=hour)
+            for _ in range(games):
+                out.append(at)
+                at += timedelta(minutes=t.uniform(10, 16))
+    return sorted(out)
+
+
+_SESSION_MAX = 8   # 한 묶음 최대 판수 — 마지막 판이 자정을 넘지 않게(시작 20시 + 8판 × 16분 안)
+
+
 def generate(today: date | None = None, n: int | None = None, seed: int | None = None) -> DemoData:
     """지어낸 자료 한 벌 — 같은 seed·today 면 바이트까지 같다."""
     today = today or date.today()
@@ -250,7 +281,9 @@ def generate(today: date | None = None, n: int | None = None, seed: int | None =
         opps.append((f"{k + 1:032x}".replace("0", "e", 8), nick, rng.choice((800, 900, 900, 1000, 1100)), squad))
     start = datetime.combine(today - timedelta(days=config.DEMO_DAYS), dtime(0))
     span = (datetime.combine(today, dtime(0)) - start).total_seconds()
-    stamps = sorted(start + timedelta(seconds=rng.uniform(0, span)) for _ in range(n))
+    for _ in range(n):   # 옛 균등 추첨이 쓰던 만큼 건너뛴다 — 시각만 바꾸고 결과·점수·상대 추첨은 그대로 두려고
+        rng.uniform(0, span)
+    stamps = _session_stamps(config.DEMO_SEED if seed is None else seed, start, config.DEMO_DAYS, n)
     details = []
     for i, kst in enumerate(stamps):
         o_ouid, o_nick, o_div, o_squad = rng.choice(opps)

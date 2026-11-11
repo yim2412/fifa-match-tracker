@@ -27,7 +27,7 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
                     division_runs, division_stays, goal_flow, half_share_diff, paired_diff, pct, side_totals, strength_chips,
                     AttackRoutes, ROUTES, RouteRow, attack_routes, classify_route,
                     HabitBin, HabitTable, Luck, RequiredRow, StreakBaseline, daily_luck, habit_tables, luck_expected,
-                    streak_baseline, streak_key, DistBasis, dist_basis, dist_judged,
+                    streak_baseline, streak_key, DistBasis, dist_basis, dist_judged, DistRow, DistTable, dist_table,
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
                     DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
                     CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
@@ -36,7 +36,7 @@ from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, Strea
                       PaceSide, SeasonPace, SeasonReview, SeasonSpan, StreakNote, season_pace, season_review,
                       season_spans, stored_spans, streak_note, top_scorer,
                       DIVISION_LABELS as BREAK_DIVISION_LABELS, FORMATION_LABELS as BREAK_FORMATION_LABELS)
-from ownerdist import OwnerDist, PosDist, load_dist as load_owner_dist, load_pos_dist
+from ownerdist import OwnerDist, PosDist, StrataDist, load_dist as load_owner_dist, load_pos_dist, load_strata, stratum_of
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
 from predict import (Prediction, SeasonEnd, describe as describe_prediction, predict_for, reward_brackets,
                      season_end_estimate)
@@ -68,6 +68,7 @@ from enhance import (
 )
 from squad_timeline import (
     HELD, NEVER_PLAYED, NOT_RECENT, RECENT, Timeline, TimelineEvent, arrival_report, build_timeline, parse_trades,
+    FormationReport, FormationRow, formation_report,
 )
 from trade_book import Ledger, ledger, price_targets
 from records import (Achievement, DayPlayer, RecordRow, Rival, achievements as record_achievements,
@@ -108,6 +109,7 @@ __all__ = [
     "paired_diff", "pct", "side_totals", "strength_chips",
     # habits·ownerdist — 구단주 분포 판정(49단계 조각 ②) · 받기(ownerdist.run_round)는 로더가 부른다
     "DistBasis", "dist_basis", "dist_judged", "HABIT_METRICS", "N19_CHIP_KEYS", "OwnerDist", "load_owner_dist",
+    "DistRow", "DistTable", "StrataDist", "dist_table", "load_strata", "stratum_of",   # 97 X3 분포 대비
     "PosCell", "PosDist", "PosLevel", "load_pos_dist", "pos_level",   # C4 자리별 수준(50단계 ③)
     # habits — N16 운 범위 · A3 연승·연패 우연 기준 · N20 경기 습관(2.7.1)
     "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables", "luck_expected",
@@ -158,6 +160,7 @@ __all__ = [
     "EnhanceError", "EnhanceEstimate", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels", "enhance_parse_money",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
+    "FormationReport", "FormationRow", "formation_report",   # 97 X2 포메이션 바꾼 전후
     "Ledger", "ledger", "price_targets",
     # records — 88 C1·U1 업적(저장 전체 · 요청 0)
     "Achievement", "RecordRow", "record_achievements", "records_by_match", "record_kinds", "recent_records", "record_summary",

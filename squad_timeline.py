@@ -28,8 +28,10 @@ from datetime import date, datetime
 from typing import NamedTuple
 
 import config
+import habits
 import matchtime
 from models import RateMixin, draw_possible, is_mixed, is_weak, mixed_of_details
+from stats import formation_of
 from store import PLAYER_ID_MOD
 
 SUB_POSITION = 28  # 교체 명단 — 출전으로 안 센다
@@ -504,4 +506,62 @@ def arrival_report(details: list[dict], ouid: str) -> ArrivalReport:
             rep.moves.extend(_moves(games, pid, played, mixed))
     rep.arrivals.sort(key=lambda r: (r.at, r.pos), reverse=True)
     rep.moves.sort(key=lambda r: (r.at, r.to_pos), reverse=True)
+    return rep
+
+
+# ── 포메이션을 바꾼 전후(97 X2) ────────────────────────────────────
+# 82 영입 전후와 같은 틀 · 같은 말 — 효과가 아니라 기록이다(포메이션이 바뀌면 선수도 같이 바뀐다 · `together` 칸).
+@dataclass
+class FormationRow:
+    """포메이션이 바뀐 한 번. before = 앞 구간 끝 ARRIVAL_WINDOW 판 · after = 새 구간 첫 ARRIVAL_WINDOW 판(그 구간 안에서만)."""
+    at: datetime              # 새 포메이션으로 처음 뛴 때(history_runs 구간 시작)
+    from_form: str
+    to_form: str
+    before: Window
+    after: Window
+    together: int             # 새 구간 첫 판 선발 중 직전 ARRIVAL_RECENT 판에 없던 선수 수
+    z: float | None           # 경기당 득실차 차이 ÷ 표준오차(영입 전후와 같은 식)
+
+    @property
+    def outside(self) -> bool:
+        return self.z is not None and abs(self.z) >= config.ARRIVAL_Z
+
+
+@dataclass
+class FormationReport:
+    rows: list[FormationRow] = field(default_factory=list)
+    changes: int = 0          # 포메이션이 바뀐 횟수(양쪽 판수가 모자라 줄이 빠진 것까지)
+    games: int = 0            # 선발 11명이 온전한 승·무·패 판
+
+
+def _form_of(g: _Lineup) -> str:
+    return formation_of([{"spPosition": pos} for pos in g.slots])
+
+
+def formation_report(details: list[dict], ouid: str) -> FormationReport:
+    """포메이션이 바뀐 곳마다 앞뒤 기록 — 최신순. 바뀜은 `habits.history_runs` 의 이웃 구간(깜빡임을 앞 구간에 붙인 뒤)이고,
+    구간은 시각이라 `_lineups`(선발 11명인 판만 모은 번호 공간)에는 **시각으로** 맞춘다. 양쪽이 X2_MIN_GAMES 판 미만이면 줄을 안 낸다."""
+    games = _lineups(details, ouid)
+    rep = FormationReport(games=len(games))
+    runs = habits.history_runs(details, ouid, kinds=("formation",))
+    rep.changes = max(len(runs) - 1, 0)
+    if not games or len(runs) < 2:
+        return rep
+    mixed = mixed_of_details(details, ouid)
+    times = [g.at for g in games]
+    forms = [_form_of(g) for g in games]
+
+    def inside(run) -> list[int]:
+        # 구간 안 판 중 그 포메이션인 것만 — 구간 끝에 붙은 깜빡임 판이 앞 창에 섞이지 않게
+        return [i for i in range(bisect_left(times, run.start), bisect_right(times, run.end)) if forms[i] == run.value]
+
+    lo, w = config.X2_MIN_GAMES, config.ARRIVAL_WINDOW
+    for a, b in zip(runs, runs[1:]):
+        before, after = inside(a)[-w:], inside(b)[:w]
+        if len(before) < lo or len(after) < lo:
+            continue
+        rep.rows.append(FormationRow(at=b.start, from_form=a.value, to_form=b.value,
+                                     before=_side(games, before, mixed), after=_side(games, after, mixed),
+                                     together=len(_newcomers(games, after[0])), z=_gd_z(games, before, after)))
+    rep.rows.sort(key=lambda r: r.at, reverse=True)
     return rep

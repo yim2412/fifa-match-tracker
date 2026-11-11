@@ -3152,6 +3152,8 @@ class MainWindow(QMainWindow):
         self._dist_val = None
         self._poslevel_key = None      # C4 내 1000판 판정 캐시(_render_poslevel)
         self._poslevel_val = None
+        self._distcmp_key = None       # 97 X3 내 1000판 side_totals 캐시(_render_distcmp)
+        self._distcmp_val = None
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
         self._owner_sched: OwnerDistScheduler | None = None   # 구단주 분포 예약 — 같은 셸이 붙여 준다
         self._card_sched: CardBackfillScheduler | None = None  # 카드 정보 자동 채우기 예약 — 같은 셸이 붙여 준다
@@ -3994,7 +3996,8 @@ class MainWindow(QMainWindow):
                                                 ("운 범위", "_build_luck_tab"),
                                                 ("경기 습관", "_build_habits_tab"),
                                                 ("FC 보상", "_build_rewards_tab"),
-                                                ("자리별 수준", "_build_poslevel_tab")))),
+                                                ("자리별 수준", "_build_poslevel_tab"),
+                                                ("분포 대비", "_build_distcmp_tab")))),   # 97 X3
                    ("전술·경기 결과", Tabs("tactics", (("전술", "_build_tactics_tab"),
                                                    ("경기 결과", "_build_results_tab"),
                                                    ("패스 스타일", "_build_pass_style_tab")))),
@@ -4941,7 +4944,7 @@ class MainWindow(QMainWindow):
             self._dist_key = key
         return self._dist_val
 
-    OWNER_DIST_VIEW_KEYS = ("analysis", "dashboard", "poslevel")   # 구단주 분포가 바뀌는 길이 같이 무효화하는 키
+    OWNER_DIST_VIEW_KEYS = ("analysis", "dashboard", "poslevel", "distcmp")   # 구단주 분포가 바뀌는 길이 같이 무효화하는 키
 
     def refresh_owner_dist_views(self) -> None:
         """분포가 바뀌었다(새 바퀴 · 지움 · 토글 · 전제 꺼짐) — 분포를 쓰는 화면(흐름 분석·대시보드 칩·문장 · 자리별 수준)을 낡음으로."""
@@ -5518,10 +5521,14 @@ class MainWindow(QMainWindow):
         5단계 이름은 안일 때만 낸다(계획 ⓗ — 밖이면 백분위 숫자만).
         DB 를 직접 읽지 않고 EloLoader 가 읽어 둔 self._elo 를 본다 — 이번 검색의 순위는 _save_elo 가 늦게 적고,
         그 뒤 _on_elo_ready 가 poslevel 을 다시 그린다(직접 읽으면 저장 전 값으로 굳는다 · ③ 리뷰 [중])."""
+        rank = self._my_rank()
+        return None if rank is None else rank <= config.OWNER_DIST_STRATA[-1]
+
+    def _my_rank(self) -> int | None:
+        """가장 최근 ELO 기록의 순위 — 없으면 None. 자리별 수준(ⓗ)과 분포 대비(97 X3)가 같이 쓴다."""
         data = self._elo.get(self._ouid)
         rows = data.rows if data is not None else []
-        rank = next((r["rank"] for r in reversed(rows) if r.get("rank")), None)
-        return None if rank is None else rank <= config.OWNER_DIST_STRATA[-1]
+        return next((r["rank"] for r in reversed(rows) if r.get("rank")), None)
 
     def _render_poslevel(self) -> None:
         """분포는 매번 fifa.db 에서(지우기·새 바퀴·낡음이 다른 신호 없이 잡히게 — _dist_basis 와 같다), 내 1000판 판정만 캐시.
@@ -5588,6 +5595,91 @@ class MainWindow(QMainWindow):
             say(f"상위 {top:,}위 구단주들과 견준 값입니다. "
                 + ("내 순위 기록이 없어" if in_pop is None else f"{top:,}위 밖이라")
                 + " 단계 이름 없이 백분위만 보여 줍니다.")
+
+    # ── 성적 진단 [분포 대비] (97 X3) ─────────────────────────────────────────
+    # 여섯 지표 전부 한 표 — 칩(N19)은 양 끝만 띄워서 나머지가 안 보인다. 칩과 같은 재료(내 최신 OWNER_DIST_MATCHES 판 · 같은 분포 ·
+    # 같은 백분위)이고, 내 층 평균만 `load_strata` 로 새로 읽는다. "같은 등급대" 가 아니라 분포의 **순위 층**이다(U3).
+    DISTCMP_COLUMNS = ["지표", "내 값(나 − 상대)", "내 층 평균", "백분위", "양 끝"]
+    DISTCMP_SIDE = {1: "상위 끝", -1: "하위 끝", 0: "—"}
+    DISTCMP_NEED = "감독모드 경기가 {n:,}판 미만이라 견줄 수 없습니다. 구단주 분포와 같은 {n:,}판이 쌓이면 열립니다."
+    DISTCMP_STRATUM_TIP = "구간은 {bands}위이고, 내 순위가 속한 구간 하나만 평균을 냅니다."   # 정의는 glossary("dist_compare") 뒤에 붙는다
+    DISTCMP_SIDE_TIP = ("백분위가 양 끝({p}% 이내)이고 오차 범위까지 보아도 안쪽일 때 표시합니다. "
+                        "칩은 결정력과 태클 성공만 띄우고, 나머지 지표는 이 표에서만 볼 수 있습니다.")
+
+    def _build_distcmp_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_distcmp_summary = QLabel("")
+        self.lb_distcmp_summary.setWordWrap(True)
+        self.lb_distcmp_summary.setToolTip(glossary.tip("dist_compare"))
+        v.addWidget(self.lb_distcmp_summary)
+        self.tbl_distcmp = self._make_table(self.DISTCMP_COLUMNS)
+        cols = self.DISTCMP_COLUMNS
+        bands, lo = [], 1
+        for top in config.OWNER_DIST_STRATA:
+            bands.append(f"{lo:,}~{top:,}")
+            lo = top + 1
+        self.tbl_distcmp.horizontalHeaderItem(cols.index("내 층 평균")).setToolTip(
+            glossary.tip("dist_compare", self.DISTCMP_STRATUM_TIP.format(bands=" · ".join(bands))))
+        self.tbl_distcmp.horizontalHeaderItem(cols.index("양 끝")).setToolTip(
+            self.DISTCMP_SIDE_TIP.format(p=config.OWNER_DIST_CHIP_P))
+        v.addWidget(self.tbl_distcmp, 1)
+        return w
+
+    def _render_distcmp(self) -> None:
+        """분포는 매번 fifa.db 에서(지우기·새 바퀴·낡음이 다른 신호 없이 잡히게 — _dist_basis 와 같다), 내 1000판 짝짓기만 캐시."""
+        tbl, say = self.tbl_distcmp, self.lb_distcmp_summary.setText
+        self._fill(tbl, [], enable_sort=False)
+        layer = self.DISTCMP_COLUMNS.index("내 층 평균")
+        tbl.setColumnHidden(layer, True)
+        if not self._ouid:
+            say("검색한 계정이 없습니다.")
+            return
+        if not config.owner_dist_allowed():
+            say(self.POSLEVEL_OFF)
+            return
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                sd = core.load_strata(conn, datetime.now())
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            say("구단주 분포를 읽지 못했습니다. 잠시 뒤 다시 엽니다.")
+            return
+        if sd is None:
+            say(self.POSLEVEL_NO_ROUND)
+            return
+        d = self._details_all
+        key = (sd.dist.round_id, sd.dist.ended_at, self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
+        if key != self._distcmp_key:
+            self._distcmp_val = core.dist_basis(sd.dist, d, self._ouid)
+            self._distcmp_key = key
+        basis = self._distcmp_val
+        if basis is None:
+            say(self.DISTCMP_NEED.format(n=config.OWNER_DIST_MATCHES))
+            return
+        rank = self._my_rank()
+        top = config.OWNER_DIST_STRATA[-1]
+        stratum = core.stratum_of(rank) if rank else None
+        table = core.dist_table(sd, basis.my, stratum, store.OWNER_METRICS)
+        self.distcmp_table = table   # 테스트가 본다
+        rows = []
+        for r in table.rows:
+            mean = ("—", -1.0) if r.stratum_mean is None else (f"{r.stratum_mean:+.1f}{r.unit}", r.stratum_mean)
+            rows.append([r.label, (f"{r.diff:+.1f}{r.unit}", r.diff), mean,
+                         ("—", -1.0) if r.pct is None else (f"{r.pct:.0f}", r.pct),
+                         self.DISTCMP_SIDE[r.side] if r.pct is not None else "분포 부족"])
+        self._fill(tbl, rows, enable_sort=False)
+        tbl.setColumnHidden(layer, stratum is None)
+        head = (f"상위 {top:,}위 구단주 {table.n_owners:,}명(기준일 {table.ended_at[:10]})의 분포 안에서 "
+                f"내 최근 {basis.my.games:,}판의 위치입니다.")
+        if stratum is None:
+            head += (" 내 순위 기록이 없어" if rank is None else f" {top:,}위 밖이라") + " 층 평균 없이 전체 백분위만 보여 줍니다."
+        else:
+            lo = config.OWNER_DIST_STRATA[stratum - 2] + 1 if stratum > 1 else 1
+            head += f" 내 층은 {lo:,}~{config.OWNER_DIST_STRATA[stratum - 1]:,}위 구간입니다."
+        say(head)
 
     # ── 성적 진단 [운 범위] · [경기 습관] (2.7.1 N16·A3·N20) ───────────────────────
     def _launch_streak(self) -> None:
@@ -5839,6 +5931,7 @@ class MainWindow(QMainWindow):
         self.lb_sessions_note = self._note_label()
         v.addWidget(self.lb_sessions_note)
         gb = QGroupBox("세션 판 수별 승률")
+        gb.setToolTip(glossary.tip("session"))
         box = QVBoxLayout(gb)
         self.tbl_session_sizes = self._make_table(self.SIZE_COLUMNS)
         self.tbl_session_sizes.setMinimumHeight(60 + 30 * (len(config.SESSION_SIZE_EDGES) + 1))
@@ -5849,6 +5942,7 @@ class MainWindow(QMainWindow):
         box.addWidget(self.lb_session_luck)
         v.addWidget(gb)
         gb = QGroupBox("세션 목록")
+        gb.setToolTip(glossary.tip("session"))
         box = QVBoxLayout(gb)
         self.tbl_sessions = self._make_table(self.SESSION_COLUMNS)
         self.tbl_sessions.setMinimumHeight(360)
@@ -5877,6 +5971,7 @@ class MainWindow(QMainWindow):
             cards.addWidget(c, 1)
         v.addLayout(cards)
         gb = QGroupBox("경기를 돌린 시간(추정)")
+        gb.setToolTip(glossary.tip("play_time"))
         box = QVBoxLayout(gb)
         self.seg_playtime = Segmented(list(self.PLAYTIME_UNITS))
         self.seg_playtime.changed.connect(lambda _i: self._render_playtime_bars())
@@ -5906,6 +6001,7 @@ class MainWindow(QMainWindow):
         self.break_boxes = []
         for title, rows in (("직전 경기와의 간격", 4), ("포메이션 바꿈", 2), ("상대 등급", 3)):
             gb = QGroupBox(title)
+            gb.setToolTip(glossary.tip("after_losses"))
             box = QVBoxLayout(gb)
             tbl = self._make_table(self.BREAK_COLUMNS)
             tbl.setMinimumHeight(60 + 30 * rows)
@@ -6057,6 +6153,7 @@ class MainWindow(QMainWindow):
         self._review_chip_keys: list = []
         self._review_pick: str | None = None   # 고른 시즌의 시작 날짜(SeasonSpan.key) — 다시 그려도 유지
         gb = QGroupBox("지난 시즌 같은 시점")
+        gb.setToolTip(glossary.tip("elapsed_days"))
         box = QVBoxLayout(gb)
         self.lb_review_pace_head = QLabel("")
         self.lb_review_pace_head.setWordWrap(True)
@@ -6890,11 +6987,14 @@ class MainWindow(QMainWindow):
     # [스쿼드·이적 › 영입 전후](82) — 기록이지 효과가 아니다. 선수 한 명을 바꾼 시점의 차이는 우연과 구분이 안 됐다(ROADMAP "## 82단계")
     ARRIVAL_COLUMNS = ["첫 선발", "선수", "자리", "앞 선수", "판수(앞/뒤)", "승률", "경기당 득실", "같이 바뀜", "득실 차이"]
     MOVE_COLUMNS = ["바뀐 날", "선수", "자리", "판수(앞/뒤)", "승률", "경기당 득실", "같이 바뀜", "득실 차이"]
-    ARRIVAL_VIEWS = ("새로 쓴 선수", "자리를 옮긴 선수")
+    FORMATION_COLUMNS = ["바뀐 날", "포메이션", "판수(앞/뒤)", "승률", "경기당 득실", "같이 바뀜", "득실 차이"]
+    ARRIVAL_VIEWS = ("새로 쓴 선수", "자리를 옮긴 선수", "포메이션을 바꾼 전후")   # 97 X2 — 세 번째
     ARRIVAL_DIFF_TIP = ("경기당 득실차의 앞뒤 차이가 표준오차의 {z:g}배를 넘으면 '범위 밖'입니다. 승률보다 덜 흔들리는 득실차로 판단합니다. "
                         "범위 밖이어도 우연일 수 있고, 이 선수 덕분이라는 뜻도 아닙니다. 같이 바뀐 선수, 시즌, 상대 수준이 함께 달라지기 때문입니다.")
     ARRIVAL_TOGETHER_TIP = "같은 판에 함께 새로 든 선수 수입니다. {n}명 이상이면 스쿼드 교체로 표시합니다."
     ARRIVAL_EMPTY = "앞뒤를 {n}판씩 견줄 수 있는 선수가 아직 없습니다."
+    FORMATION_TOGETHER_TIP = "새 포메이션으로 처음 뛴 판의 선발 중 직전 {n}판에 없던 선수 수입니다. 포메이션을 바꾸면 선수도 같이 바뀌는 일이 많습니다."
+    FORMATION_EMPTY = "앞뒤를 {n}판씩 견줄 수 있는 포메이션 변경이 아직 없습니다. 바꾼 뒤 그 포메이션으로 {n}판 이상 뛰어야 줄이 생깁니다."
     ARRIVAL_DIFF_IN, ARRIVAL_DIFF_OUT = "우연 범위 안", "범위 밖"
 
     def _build_arrivals_tab(self) -> QWidget:
@@ -6912,24 +7012,38 @@ class MainWindow(QMainWindow):
         v.addWidget(self.tbl_arrivals, 1)
         self.tbl_moves = self._make_table(self.MOVE_COLUMNS, icons={1: "season"})
         v.addWidget(self.tbl_moves, 1)
+        self.tbl_formations = self._make_table(self.FORMATION_COLUMNS)
+        v.addWidget(self.tbl_formations, 1)
         self._on_arrival_view(0)
         tips = {"득실 차이": self.ARRIVAL_DIFF_TIP.format(z=config.ARRIVAL_Z),
                 "같이 바뀜": self.ARRIVAL_TOGETHER_TIP.format(n=config.ARRIVAL_SQUAD_SWAP)}
         for tbl, cols in ((self.tbl_arrivals, self.ARRIVAL_COLUMNS), (self.tbl_moves, self.MOVE_COLUMNS)):
             for name, tip in tips.items():
                 tbl.horizontalHeaderItem(cols.index(name)).setToolTip(tip)
+        fcols = self.FORMATION_COLUMNS
+        self.tbl_formations.horizontalHeaderItem(fcols.index("득실 차이")).setToolTip(tips["득실 차이"])
+        self.tbl_formations.horizontalHeaderItem(fcols.index("같이 바뀜")).setToolTip(
+            self.FORMATION_TOGETHER_TIP.format(n=config.ARRIVAL_RECENT))
         self._arrivals_cache = None
+        self._fmchange_cache = None
         return w
 
     def _on_arrival_view(self, i: int) -> None:
         self.tbl_arrivals.setVisible(i == 0)
         self.tbl_moves.setVisible(i == 1)
+        self.tbl_formations.setVisible(i == 2)
         self._show_arrival_note()
 
     def _show_arrival_note(self) -> None:
         """빈 이유는 보이는 칩 기준 — 이동만 없을 때 그 칩이 이유 없이 비지 않게."""
+        view = self.seg_arrivals.current()
+        if view == 2:
+            frep = self._fmchange_cache[1] if getattr(self, "_fmchange_cache", None) else None
+            self._set_status(self.lb_arrivals_note, "" if frep is None or frep.rows
+                             else self.FORMATION_EMPTY.format(n=config.X2_MIN_GAMES))
+            return
         rep = self._arrivals_cache[1] if getattr(self, "_arrivals_cache", None) else None
-        rows = (rep.moves if self.seg_arrivals.current() == 1 else rep.arrivals) if rep is not None else [1]
+        rows = (rep.moves if view == 1 else rep.arrivals) if rep is not None else [1]
         self._set_status(self.lb_arrivals_note, "" if rows else self.ARRIVAL_EMPTY.format(n=config.ARRIVAL_MIN_GAMES))
 
     def _arrival_cells(self, row) -> list:
@@ -6959,6 +7073,9 @@ class MainWindow(QMainWindow):
             self._arrivals_cache = (key, core.arrival_report(self._details_all, self._ouid))
         rep = self._arrivals_cache[1]
         self.arrival_report = rep   # 테스트가 본다
+        if self._fmchange_cache is None or self._fmchange_cache[0] != key:
+            self._fmchange_cache = (key, core.formation_report(self._details_all, self._ouid))
+        self.formation_report = self._fmchange_cache[1]   # 테스트가 본다
         self._show_arrival_note()
         name = lambda sp: IconCell(self._names.get(sp, str(sp)), None, core.season_id_of(sp))   # noqa: E731
         pos = lambda p: self._positions.get(p, str(p))   # noqa: E731
@@ -6980,6 +7097,12 @@ class MainWindow(QMainWindow):
         self._fill(self.tbl_moves, rows, enable_sort=False)
         self._arrival_diff(self.tbl_moves, rep.moves, self.MOVE_COLUMNS.index("득실 차이"))
         self.tbl_moves.setSortingEnabled(True)
+        frows = self.formation_report.rows
+        rows = [[(f"{r.at:%y-%m-%d}", r.at.timestamp()), f"{r.from_form} → {r.to_form}", *self._arrival_cells(r),
+                 (f"{r.together}명", r.together), diff(r)] for r in frows]
+        self._fill(self.tbl_formations, rows, enable_sort=False)
+        self._arrival_diff(self.tbl_formations, frows, self.FORMATION_COLUMNS.index("득실 차이"))
+        self.tbl_formations.setSortingEnabled(True)
 
     # ── 선발 11장 시세 변화(68 C5) — [가계부] 아래 절 ──
     VALUE_CHANGE_TIP = ("고른 두 날의 선발 11장(그날 마지막 경기) 시세를 견줍니다. 넥슨 구단가치와 다릅니다. 구단가치는 보유 카드 전체, "
@@ -12002,6 +12125,7 @@ class MainWindow(QMainWindow):
         "divstay": [("성적 진단", "등급 체류")],
         "luck": [("성적 진단", "운 범위")], "habits": [("성적 진단", "경기 습관")],
         "rewards": [("성적 진단", "FC 보상")], "poslevel": [("성적 진단", "자리별 수준")],
+        "distcmp": [("성적 진단", "분포 대비")],
         "tactics": [("전술·경기 결과", "전술"), ("전술·경기 결과", "경기 결과"), ("전술·경기 결과", "패스 스타일")],
         "shotmap": [("슛 맵", "슛 맵")], "route": [("슛 맵", "공격 루트")],
         "players": [("선수 지표", "지표")], "rankercmp": [("선수 지표", "랭커 비교")],
@@ -12058,6 +12182,7 @@ class MainWindow(QMainWindow):
             "habits": lambda: self._render_habits(self._matches),     # 시즌 범위
             "rewards": lambda: self._render_rewards(self._details),   # 시즌 범위(diagnosis 와 같다)
             "poslevel": self._render_poslevel,   # 50단계 C4 — 시즌 범위 무관(내 감독모드 최신 1000판 · 49 칩과 같은 창)
+            "distcmp": self._render_distcmp,      # 97 X3 — 같은 창(칩과 같은 1000판) · 분포는 매번 fifa.db 에서
             "shotmap": self._render_shotmap,  # 빠른 범위
             "route": lambda: self._render_attack_route(self._slice()[1]),   # 빠른 범위(슛 맵과 같다)
             "finishing": lambda: self._render_finishing(self._slice()[1]),
@@ -14217,6 +14342,7 @@ class MainWindow(QMainWindow):
             self._invalidate("elodist")   # 점수 분포의 검색 계정 선
             self._invalidate("wrelo")     # 승률→점수의 내 ELO(마지막 스냅숏에 없을 때)
             self._invalidate("poslevel")  # 자리별 수준의 라벨 조건(ⓗ — 가장 최근 순위)
+            self._invalidate("distcmp")   # 분포 대비의 내 층(가장 최근 순위)
             self._invalidate("dashboard")  # 55 머리 줄 — 경기 받기 끝과 둘 중 늦게 온 쪽이 완성(J4)
             self._invalidate("rewards_rank")   # 57 K11 지금 등수로 본 순위 보상
             self._invalidate("calendar")       # 66 G5 카드 — 시즌 시작·예상 순위 보상
@@ -15259,7 +15385,8 @@ class MainWindow(QMainWindow):
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
-        self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = None
+        self._distcmp_val, self._distcmp_key = None, None
+        self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = self._fmchange_cache = None
         self._records_cache = None
         self._fun_cache = {}
         self._elo.clear()
@@ -15295,6 +15422,7 @@ class MainWindow(QMainWindow):
         self._narrate_found, self._narrate_key = [], None
         self._dist_val, self._dist_key = None, None
         self._poslevel_val, self._poslevel_key = None, None
+        self._distcmp_val, self._distcmp_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
         self._records_cache = None  # 업적은 match_id 만 들지만 키가 옛 목록 id 를 쥔다
         self._fun_cache = {}

@@ -483,6 +483,46 @@ def strength_chips(totals: SideTotals, basis: DistBasis | None = None) -> list[C
     return dist_out + out
 
 
+# ── 97 X3 분포 대비 — 여섯 지표 전부 한 표 ─────────────────────────────────────────
+
+@dataclass(frozen=True)
+class DistRow:
+    """지표 하나. diff = 나 − 같은 경기 상대(칩과 같은 값) · pct = 1~3000위 분포 속 내 백분위 · stratum_mean = 내 순위 층 표본의 평균
+    (순위를 모르거나 층 밖이면 None) · side = 칩과 같은 양 끝 판정(−1 하위 · 1 상위 · 0 없음). 그 지표를 분포에서 못 쓰면 pct None."""
+    key: str
+    label: str
+    unit: str
+    n: int
+    diff: float
+    pct: float | None
+    stratum_mean: float | None
+    side: int
+
+
+@dataclass(frozen=True)
+class DistTable:
+    rows: tuple
+    stratum: int | None         # 내 순위 층 번호(1~) — 모르거나 분포 밖이면 None(층 열을 뺀다)
+    n_owners: int
+    ended_at: str
+
+
+def dist_unit(m: Metric) -> str:
+    return "개" if m.key == "shots" else "%p"
+
+
+def dist_table(strata, my: SideTotals, stratum: int | None, keys: tuple) -> DistTable:
+    """`strata` 는 ownerdist.StrataDist(순환 import 를 피해 형만 맞춘다) · my 는 `dist_basis().my`(내 최신 OWNER_DIST_MATCHES 판) ·
+    keys 는 `store.OWNER_METRICS`. 백분위·양 끝 판정은 칩(`dist_side`)과 같은 식이라 칩이 뜬 지표는 이 표에서도 같은 쪽 끝이다."""
+    rows = []
+    for key in keys:
+        d = paired_diff(my, key)
+        side, p = dist_side(strata.dist, key, d)
+        mean = strata.mean(key, stratum) if stratum is not None else None
+        rows.append(DistRow(key, d.metric.label, dist_unit(d.metric), d.n, d.diff, p, mean, side))
+    return DistTable(tuple(rows), stratum, strata.dist.n_owners, strata.dist.ended_at)
+
+
 HALF_SHARE = Metric("half_share", "전반 비중", "half", "all")
 
 

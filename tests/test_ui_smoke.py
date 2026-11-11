@@ -1364,7 +1364,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 52, len(tables)   # 52 = 97 조각 2 [시즌 돌아보기] 지난 시즌 같은 시점 표(채운 표는 test_review_page_… 가 잰다) · 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 54, len(tables)   # 54 = 97 조각 3 [영입 전후] 포메이션 표 · [성적 진단 › 분포 대비] 표(채운 표는 test_97_formation_view_… · test_distcmp_tab_… 가 잰다) · 52 = 97 조각 2 [시즌 돌아보기] 지난 시즌 같은 시점 표(채운 표는 test_review_page_… 가 잰다) · 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -2829,6 +2829,120 @@ class _PosFake:
         self.cells = {c: type("C", (), {"n_owners": 129})() for c in ("MF.atk", "DF.atk", "DF.def")}
 
 
+
+class _StrataFake:
+    """ownerdist.StrataDist 꼴 — dist(백분위) · mean(지표, 층). 물은 (지표, 층)을 적는다."""
+
+    def __init__(self, dist=None):
+        self.dist, self.asked = dist or _FakeDist(), []
+
+    def mean(self, key, stratum):
+        self.asked.append((key, stratum))
+        return {"finish": -12.5, "shots": 0.5}.get(key)
+
+
+def _distcmp_rows():
+    t = _win.tbl_distcmp
+    return [[t.item(r, c).text() for c in range(t.columnCount())] for r in range(t.rowCount())]
+
+
+def test_distcmp_tab_empty_states_rows_and_stratum_column():
+    # 97 X3 — 빈 화면 문구 · 여섯 지표 한 표 · 내 층(순위 구간) 평균 · 층을 모르면 그 열을 뺀다 · 내 1000판 캐시
+    import store
+    t, say, cols = _win.tbl_distcmp, _win.lb_distcmp_summary.text, _win.DISTCMP_COLUMNS
+    layer = cols.index("내 층 평균")
+    keep_on = config.OWNER_DIST_ON
+    config.OWNER_DIST_ON = ""   # 이 PC 의 실제 토글이 켜져 있어도 꺼진 상태로 잰다
+    try:
+        _win._render_distcmp()
+        assert say() == _win.POSLEVEL_OFF and not _distcmp_rows(), "토글이 꺼졌는데 켜는 길을 말하지 않았다"
+    finally:
+        config.OWNER_DIST_ON = keep_on
+    keep = (app_main.core.load_strata, _win._my_rank, app_main.core.dist_basis)
+    try:
+        with _OwnerDistOn(_FakeDist()) as od:
+            app_main.core.load_strata = lambda conn, now: None
+            _win._render_distcmp()
+            assert say() == _win.POSLEVEL_NO_ROUND and not _distcmp_rows()
+            fake = _StrataFake()
+            app_main.core.load_strata = lambda conn, now: fake
+            top = config.OWNER_DIST_STRATA
+            for rank, stratum, band in ((150, 1, "1~200위"), (top[1], 2, "201~1,000위"), (top[2], 3, "1,001~3,000위")):
+                _win._my_rank = lambda r=rank: r
+                fake.asked.clear()
+                _win._render_distcmp()
+                rows = _distcmp_rows()
+                assert [r[0] for r in rows] == [core.HABIT_METRICS[k].label for k in store.OWNER_METRICS], rows
+                assert fake.asked == [(k, stratum) for k in store.OWNER_METRICS], fake.asked
+                assert not t.isColumnHidden(layer), "내 층을 아는데 층 열을 뺐다"
+                assert f"내 층은 {band} 구간" in say(), say()
+            by = {r[0]: r for r in rows}
+            assert by["결정력"][cols.index("내 층 평균")] == "-12.5%p" and by["경기당 슛"][cols.index("내 층 평균")] == "+0.5개", by
+            assert by["태클 성공"][cols.index("내 층 평균")] == "—"
+            assert all(r[cols.index("백분위")] == "5" and r[cols.index("양 끝")] == "하위 끝" for r in rows), rows
+            tip = t.horizontalHeaderItem(layer).toolTip()
+            assert tip.startswith(app_main.glossary.tip("dist_compare")) and "1~200 · 201~1,000 · 1,001~3,000위" in tip, tip
+            assert "등급대가 아니라" in tip and tip == _win.lb_distcmp_summary.toolTip() + " " + _win.DISTCMP_STRATUM_TIP.format(
+                bands="1~200 · 201~1,000 · 1,001~3,000"), "말풍선이 용어 사전의 정의가 아니다"
+            assert app_main.glossary.header_tip("내 층 평균") == app_main.glossary.tip("dist_compare"), "머리글 → 용어 연결이 끊겼다"
+            # 층을 모르면(밖 · 기록 없음) 층 열을 빼고 층 평균은 묻지도 않는다 — 전체 백분위는 그대로
+            for rank, text in ((top[2] + 1, f"{top[2]:,}위 밖이라"), (None, "순위 기록이 없어")):
+                _win._my_rank = lambda r=rank: r
+                fake.asked.clear()
+                _win._render_distcmp()
+                assert t.isColumnHidden(layer) and fake.asked == [], (rank, fake.asked)
+                assert text in say() and "전체 백분위만" in say(), say()
+                assert [r[cols.index("백분위")] for r in _distcmp_rows()] == ["5"] * 6
+            # 내 감독모드 경기가 모자라면 이유만
+            _win._my_rank = lambda: 150
+            app_main.core.dist_basis = lambda dist, det, ouid: None
+            _win._distcmp_key = None
+            _win._render_distcmp()
+            assert say() == _win.DISTCMP_NEED.format(n=config.OWNER_DIST_MATCHES) and not _distcmp_rows()
+        # 내 1000판 판정은 같은 바퀴·같은 경기면 다시 안 센다 · 새 바퀴면 센다
+        with _OwnerDistOn(_FakeDist()) as od:
+            fake = _StrataFake()
+            app_main.core.load_strata = lambda conn, now: fake
+            _win._my_rank = lambda: 150
+            _win._distcmp_key = None
+            _win._render_distcmp()
+            _win._render_distcmp()
+            assert od.bases == [7], f"같은 바퀴·같은 경기인데 내 1000판을 다시 셌다: {od.bases}"
+            fake.dist.round_id = 8
+            _win._render_distcmp()
+            assert od.bases == [7, 8], "새 바퀴인데 다시 안 셌다"
+    finally:
+        app_main.core.load_strata, _win._my_rank, app_main.core.dist_basis = keep
+        if "_my_rank" in vars(_win):
+            del _win._my_rank
+        _win._distcmp_key = None
+
+
+def test_my_rank_reads_the_latest_rank_and_distcmp_redraws_with_it():
+    keep = _win._elo.pop(_OUID, None)
+    try:
+        assert _win._my_rank() is None, "아직 안 읽었는데 순위를 말했다"
+        for rows, want in (([], None), ([{"rank": 5}, {"rank": None}], 5), ([{"rank": 10}, {"rank": 77}, {"rank": None}], 77)):
+            _win._elo[_OUID] = app_main.EloSeries(1, rows, {})
+            assert _win._my_rank() == want, (rows, want)
+    finally:
+        _win._elo.pop(_OUID, None)
+        if keep is not None:
+            _win._elo[_OUID] = keep
+    # 순위가 늦게 들어오면 층이 바뀔 수 있어 다시 그린다(자리별 수준과 같다)
+    keep = _win._elo.get(_OUID)
+    drawn = []
+    _win._render_poslevel = lambda: drawn.append("poslevel")
+    _win._render_distcmp = lambda: drawn.append("distcmp")
+    try:
+        _win._on_elo_ready(_OUID, _elo_data([{"taken_at": "2026-10-18T10:00:00", "elo": 3000.0, "rank": 100}]))
+        assert sorted(drawn) == ["distcmp", "poslevel"], f"순위가 들어왔는데 분포 대비를 다시 안 그렸다: {drawn}"
+    finally:
+        del _win._render_poslevel, _win._render_distcmp
+        if keep is not None:
+            _win._elo[_OUID] = keep
+
+
 def _poslevel_rows():
     t = _win.tbl_poslevel
     return [[t.item(r, c).text() for c in range(t.columnCount())] for r in range(t.rowCount())]
@@ -2932,13 +3046,14 @@ def test_owner_dist_changed_signal_redraws_every_dist_view():
     # 분포를 늦게 넣으면(바퀴가 끝남) 칩·문장·자리별 수준(50단계 C4)을 다시 그린다 — 예약의 dist_changed · 스스로 끔 switched_off
     keep_sched = _win._owner_sched
     drawn = []
-    want = ["analysis", "dashboard", "poslevel"]
+    want = ["analysis", "dashboard", "distcmp", "poslevel"]
     sched = app_main.OwnerDistScheduler()
     try:
         _win.attach_owner_sched(sched)
         _win._render_analysis = lambda: drawn.append("analysis")
         _win._render_dashboard = lambda: drawn.append("dashboard")
         _win._render_poslevel = lambda: drawn.append("poslevel")
+        _win._render_distcmp = lambda: drawn.append("distcmp")
         sched.dist_changed.emit()
         assert sorted(drawn) == want, drawn
         drawn.clear()
@@ -2959,7 +3074,7 @@ def test_owner_dist_changed_signal_redraws_every_dist_view():
             dlg.deleteLater()
         assert sorted(drawn) == want, f"[정보] 토글이 분포 화면을 안 다시 그렸다: {drawn}"
     finally:
-        del _win._render_analysis, _win._render_dashboard, _win._render_poslevel
+        del _win._render_analysis, _win._render_dashboard, _win._render_poslevel, _win._render_distcmp
         _win._owner_sched = keep_sched
         sched.deleteLater()
         _win._render_all()
@@ -15606,6 +15721,67 @@ def test_82_arrivals_tab_shows_record_not_effect():
         _win._names.update(keep[2])
         _win._positions.clear()
         _win._positions.update(keep[3])
+        _win._render_arrivals()
+
+
+def _formation_details(parts):
+    """parts: (판수, 포메이션을 바꿨나, 기본 득점) — 시간순 · 바꾼 구간은 2번 선수가 수미(11) → 수비(5) 자리로(0-2-5-3-1 → 1-1-5-3-1)."""
+    from datetime import datetime as _dt, timedelta as _td
+    out, i = [], 0
+    for n, alt, gf0 in parts:
+        for k in range(n):
+            pos = [5 if (alt and j == 1) else 10 + j for j in range(11)]
+            me = {"ouid": "me", "nickname": "me", "shoot": {"goalTotal": gf0 + k % 2}, "matchDetail": {"matchResult": "승"},
+                  "player": [{"spPosition": q, "spId": 100000000 + j + 1} for j, q in enumerate(pos)]}
+            opp = {"ouid": "opp", "nickname": "opp", "shoot": {"goalTotal": 0}, "matchDetail": {"matchResult": "패"}, "player": []}
+            t = _dt(2026, 1, 1) + _td(hours=i)
+            out.append({"matchId": f"f{i}", "matchDate": t.strftime("%Y-%m-%dT%H:%M:%S"), "matchInfo": [me, opp]})
+            i += 1
+    return out
+
+
+def test_97_formation_view_in_arrivals_tab():
+    keep = _win._details_all, _win._ouid
+    try:
+        _win._details_all = _formation_details([(60, False, 0), (70, True, 2)])
+        _win._ouid = "me"
+        _win._go_page("스쿼드·이적", "영입 전후")
+        _win._render_arrivals()
+        assert _win.seg_arrivals.current() == 0 and len(_win.ARRIVAL_VIEWS) == 3
+        t, cols = _win.tbl_formations, _win.FORMATION_COLUMNS
+        assert t.rowCount() == 1, t.rowCount()
+        cell = lambda name: t.item(0, cols.index(name))   # noqa: E731
+        assert cell("포메이션").text() == "0-2-5-3-1 → 1-1-5-3-1", cell("포메이션").text()
+        assert cell("판수(앞/뒤)").text() == "60 / 70" and cell("같이 바뀜").text() == "0명"
+        assert cell("경기당 득실").text() == "+0.50 → +2.50", cell("경기당 득실").text()
+        d = cell("득실 차이")
+        assert d.text() == _win.ARRIVAL_DIFF_OUT and d.font().bold() and d.foreground().color() == QColor(T.TEXT)
+        # 한 표씩 — 세 번째 칩에서만 보인다
+        assert t.isHidden() and not _win.tbl_arrivals.isHidden()
+        _win.seg_arrivals.set_current(2, emit=True)
+        assert not t.isHidden() and _win.tbl_arrivals.isHidden() and _win.tbl_moves.isHidden()
+        assert not _win.lb_arrivals_note.text(), _win.lb_arrivals_note.text()
+        # 머리글 말풍선 · "효과" 라는 말을 안 쓴다(82 와 같은 말)
+        assert t.horizontalHeaderItem(cols.index("득실 차이")).toolTip() and "선수도 같이" in t.horizontalHeaderItem(cols.index("같이 바뀜")).toolTip()
+        words = cols + list(_win.ARRIVAL_VIEWS) + [_win.FORMATION_TOGETHER_TIP, _win.FORMATION_EMPTY]
+        assert not [x for x in words if "효과" in x], words
+        # 같은 경기 목록이면 다시 안 센다
+        first = _win.formation_report
+        _win._render_arrivals()
+        assert _win.formation_report is first, "같은 경기 목록인데 포메이션 전후를 다시 셌다"
+        # 바뀐 적이 없거나 문턱 밑이면 이 칩에서만 이유 글
+        _win._details_all = _formation_details([(60, False, 0), (config.X2_MIN_GAMES - 1, True, 2)])
+        _win._render_arrivals()
+        assert t.rowCount() == 0 and str(config.X2_MIN_GAMES) in _win.lb_arrivals_note.text(), _win.lb_arrivals_note.text()
+        _win.seg_arrivals.set_current(0, emit=True)
+        assert str(config.X2_MIN_GAMES) not in _win.lb_arrivals_note.text(), "다른 칩에 포메이션 이유가 떴다"
+        _win.seg_arrivals.set_current(2, emit=True)
+        _win._details_all = []
+        _win._render_arrivals()
+        assert t.rowCount() == 0 and _win.lb_arrivals_note.text()
+    finally:
+        _win._details_all, _win._ouid = keep
+        _win.seg_arrivals.set_current(0, emit=True)
         _win._render_arrivals()
 
 

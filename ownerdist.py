@@ -205,6 +205,48 @@ def load_dist(conn, now: datetime) -> OwnerDist | None:
     return build_dist(store.owner_dist_rows(conn, last["round_id"]), last["round_id"], last["ended_at"])
 
 
+# ── 층을 지킨 읽기(97 X3) — "같은 등급대 평균" ─────────────────────────────────
+
+@dataclass(frozen=True)
+class StrataDist:
+    """`OwnerDist`(백분위용 — 층 번호를 버린다)에 **층별 값**을 더한 것. dist 는 `load_dist` 와 같은 분포이고(칩과 같은 백분위),
+    by_stratum[지표][층 번호] = 그 층 표본의 값들. 층은 순위 구간이다(`config.OWNER_DIST_STRATA`) — 등급대가 아니다(U3)."""
+    dist: OwnerDist
+    by_stratum: dict
+
+    def mean(self, key: str, stratum: int) -> float | None:
+        """그 층 표본의 단순 평균 — 표본이 층마다 같은 수라 층 안 평균은 가중이 필요 없다. 없으면 None."""
+        vals = (self.by_stratum.get(key) or {}).get(stratum)
+        return sum(vals) / len(vals) if vals else None
+
+
+def build_strata(rows: list[dict], round_id: int, ended_at: str) -> StrataDist | None:
+    """owner_dist 줄 → StrataDist. 대상·지표 거르기는 `build_dist` 와 같다(분포에 있는 지표만 · 같은 eligible)."""
+    dist = build_dist(rows, round_id, ended_at)
+    if dist is None:
+        return None
+    ref = datetime.fromisoformat(ended_at[:19])
+    ok = [r for r in rows if eligible(r, ref)]
+    by: dict = {}
+    for k in dist.values:
+        per: dict[int, list[float]] = {}
+        for r in ok:
+            if r.get(k) is not None:
+                per.setdefault(r["stratum"], []).append(float(r[k]))
+        by[k] = {i: tuple(v) for i, v in per.items()}
+    return StrataDist(dist, by)
+
+
+def load_strata(conn, now: datetime) -> StrataDist | None:
+    """`load_dist` 와 같은 바퀴·같은 낡음 규칙 — 층 번호를 지킨다. 분포가 없으면 None."""
+    last = store.owner_round_last_end(conn, ("done",))
+    if last is None or not last.get("ended_at"):
+        return None
+    if datetime.fromisoformat(last["ended_at"][:19]) + timedelta(days=config.OWNER_DIST_STALE_DAYS) < now:
+        return None
+    return build_strata(store.owner_dist_rows(conn, last["round_id"]), last["round_id"], last["ended_at"])
+
+
 # ── C4 자리별 수준 분포(50단계 ③) — 칸은 config.C4_CELLS · 식은 측정 C 판정기(analyze50.Dist)와 같다 ──────────
 
 @dataclass(frozen=True)

@@ -308,6 +308,38 @@ def test_sweep_keeps_live_and_fresh_folders():
     assert (live / "fifa.db").exists() and fresh.exists() and other.exists()
 
 
+def test_demo_times_form_sessions_and_keep_results():
+    """97 — 경기 시각이 균등 무작위면 세션이 안 선다(30분 안에 두 판이 거의 없다). 하루 몇 번 몰아서 한 꼴이어야 하고,
+    시각만 바뀌어야 한다(결과·점수·상대는 그대로 — 다른 화면의 숫자가 안 흔들리게)."""
+    from datetime import date, datetime, time as dtime, timedelta
+    import sessions
+    today = date(2026, 11, 10)
+    data = demodata.generate(today=today)
+    ms = [models.parse_match(d, demodata.OUID) for d in data.details.values()]
+    ss = sessions.split_sessions(ms)
+    sizes = sorted(len(s.matches) for s in ss)
+    # 세션이 선다: 판 수가 2 이상인 세션이 대부분이고 가장 긴 세션이 몇 판이다(균등 무작위면 거의 전부 1판이었다)
+    assert sum(1 for z in sizes if z >= 3) >= len(ss) * 0.7 and sizes[-1] >= 5, sizes
+    assert len(ss) < config.DEMO_MATCHES / 3, f"세션이 너무 잘게 갈렸다: {len(ss)}"
+    # 쉼이 보인다: 같은 날 두 번 하는 날과 하루 쉬는 날이 모두 있다
+    days = [s.start.date() for s in ss]
+    assert len(days) > len(set(days)), "하루에 한 세션뿐이다"
+    assert len(set(days)) < config.DEMO_DAYS, "쉬는 날이 없다"
+    # 한 세션 안 간격은 끊김 문턱 안 · 세션은 자정을 안 넘는다
+    for s in ss:
+        gaps = [(b.match_date - a.match_date).total_seconds() / 60 for a, b in zip(s.matches, s.matches[1:])]
+        assert all(g <= config.SESSION_GAP_MIN for g in gaps), gaps
+        assert s.start.date() == s.end.date()
+    # 범위: 오늘 0시 앞 · 시작 DEMO_DAYS 일 안
+    first = min(m.match_date for m in ms)
+    last = max(m.match_date for m in ms)
+    assert last < datetime.combine(today, dtime(0)) and first >= datetime.combine(today - timedelta(days=config.DEMO_DAYS), dtime(0))
+    # 결과·득점은 시각과 무관하게 같은 순서 — 시각 추첨만 바뀌었다(옛 균등 추첨이 쓰던 난수를 건너뛴다)
+    results = "".join(m.result for m in ms)   # 시각 추첨을 바꾸기 전 판(2026-11-10 기준)에서 잰 값 — 시각만 바뀌었다는 증거
+    assert (results.count("승"), results.count("무"), results.count("패"), results[:12]) == (134, 53, 113, "패패승패승승승패패승패승"), results[:12]
+    assert len(data.details) == config.DEMO_MATCHES
+
+
 def main() -> int:
     tests = [v for k, v in globals().items() if k.startswith("test_")]   # 적힌 순서 — 창 테스트가 뒤 테스트의 창을 만든다
     failed = 0

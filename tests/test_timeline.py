@@ -489,6 +489,145 @@ def test_move_rows():
     assert (big.before.games, big.after.games) == (400, 400)
 
 
+# ── 포메이션을 바꾼 전후(97 X2) ───────────────────────────────────
+_ALT = {(5 if k == 11 else k): v for k, v in _BASE.items()}     # 2번 선수만 수미(11) → 수비(5): 0-2-5-3-1 → 1-1-5-3-1
+_FORM_A, _FORM_B = "0-2-5-3-1", "1-1-5-3-1"
+
+
+def _frep(*parts):
+    return st.formation_report(_games(*parts), "me")
+
+
+def test_formation_basic_row_by_hand():
+    # 앞 120판 득실 (0,1 반복) · 뒤 130판 (2,3 반복) — 손으로 센 값
+    rep = _frep((120, _BASE, lambda k: k % 2), (130, _ALT, lambda k: 2 + k % 2))
+    assert rep.games == 250 and rep.changes == 1 and len(rep.rows) == 1, rep
+    r = rep.rows[0]
+    assert (r.from_form, r.to_form) == (_FORM_A, _FORM_B), (r.from_form, r.to_form)
+    assert (r.before.games, r.after.games) == (120, 130)
+    assert (r.before.gf, r.after.gf) == (60, 130 // 2 * 2 + 130 // 2 * 3), (r.before.gf, r.after.gf)   # 앞 1골 60번 · 뒤 2골 65번 + 3골 65번
+    assert (r.before.win, r.before.draw, r.after.win) == (60, 60, 130)
+    assert r.together == 0, "선수는 그대로인데 같이 바뀜이 셌다"
+    va, vb = 0.25 * 130 / 129, 0.25 * 120 / 119
+    want = (2.5 - 0.5) / (va / 130 + vb / 120) ** 0.5
+    assert abs(r.z - want) < 1e-9 and r.outside, (r.z, want)
+
+
+def test_formation_row_time_is_first_game_of_new_formation():
+    # 판 i 는 2026-01-01 + i 시간(KST 로 읽은 값 + 9시간 — 테스트 자료의 원문에 오프셋이 없어 읽는 쪽이 9시간을 더한다)
+    r = _frep((60, _BASE), (60, _ALT))
+    assert len(r.rows) == 1
+    first_new = matchtime_of(60)
+    assert r.rows[0].at == first_new, (r.rows[0].at, first_new)
+
+
+def matchtime_of(i):
+    import matchtime
+    return matchtime.parse((datetime(2026, 1, 1) + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M:%S"))
+
+
+def test_formation_min_games_is_exact_and_wired():
+    mn = config.X2_MIN_GAMES
+    assert len(_frep((mn, _BASE), (mn, _ALT)).rows) == 1, "앞뒤 정확히 X2_MIN_GAMES 판은 줄을 낸다"
+    assert not _frep((mn, _BASE), (mn - 1, _ALT)).rows, "뒤가 한 판 모자란데 줄이 났다"
+    assert not _frep((mn - 1, _BASE), (mn, _ALT)).rows, "앞이 한 판 모자란데 줄이 났다"
+    assert _frep((mn - 1, _BASE), (mn, _ALT)).changes == 1, "줄이 빠져도 바뀐 횟수는 센다"
+    old = config.X2_MIN_GAMES
+    try:
+        config.X2_MIN_GAMES = 30      # 기본값이 아닌 값 — 배선이 끊기면 아래가 비어 FAIL
+        assert len(_frep((30, _BASE), (30, _ALT)).rows) == 1, "문턱이 설정과 이어져 있지 않다"
+        assert not _frep((29, _BASE), (30, _ALT)).rows
+    finally:
+        config.X2_MIN_GAMES = old
+    assert config.X2_MIN_GAMES < config.ARRIVAL_MIN_GAMES, "영입 전후 문턱을 그대로 쓰면 줄이 대부분 빠진다(실측)"
+    big = _frep((500, _BASE), (450, _ALT)).rows[0]
+    assert (big.before.games, big.after.games) == (config.ARRIVAL_WINDOW,) * 2, "창은 ARRIVAL_WINDOW 판까지"
+
+
+def test_formation_window_cap_keeps_the_games_nearest_the_change():
+    w = config.ARRIVAL_WINDOW
+    # 앞 구간은 끝에서 w 판(바꾸기 바로 앞) · 뒤 구간은 처음 w 판(바꾼 바로 뒤) — 멀리 있는 판은 값이 달라 자리가 바뀌면 골 합이 다르다
+    a, b = (w + 50, _BASE, lambda k: 0 if k < 50 else 1), (w + 50, _ALT, lambda k: 1 if k < w else 5)
+    r = _frep(a, b).rows[0]
+    assert (r.before.games, r.after.games) == (w, w)
+    assert (r.before.gf, r.after.gf) == (w, w), "앞 창은 구간 끝 w 판 · 뒤 창은 구간 처음 w 판이어야 한다"
+
+
+def test_formation_after_window_stays_inside_the_run():
+    # A(120) → B(60) → A(120): 뒤 창이 다음 구간으로 넘어가면 A→B 줄의 뒤가 180판이 된다
+    rep = _frep((120, _BASE), (60, _ALT), (120, _BASE))
+    assert rep.changes == 2 and len(rep.rows) == 2, rep
+    new, old = rep.rows                      # 최신순
+    assert (old.from_form, old.to_form) == (_FORM_A, _FORM_B) and (new.from_form, new.to_form) == (_FORM_B, _FORM_A)
+    assert (old.before.games, old.after.games) == (120, 60), "뒤 창이 다음 포메이션 구간으로 넘어갔다"
+    assert (new.before.games, new.after.games) == (60, 120), "앞 창이 그 앞 구간으로 넘어갔다"
+    assert new.at > old.at, "최신순이 아니다"
+
+
+def test_formation_blips_join_the_run_but_stay_out_of_the_windows():
+    k4 = config.K4_MIN_RUN
+    # 깜빡임(K4_MIN_RUN 미만) — 구간을 안 끊는다
+    assert not _frep((120, _BASE), (k4 - 1, _ALT), (120, _BASE)).rows
+    assert _frep((120, _BASE), (k4 - 1, _ALT), (120, _BASE)).changes == 0
+    # 구간 끝에 붙은 깜빡임 판은 창에 안 들어간다(구간의 시각 범위 안이지만 다른 포메이션)
+    rep = _frep((60, _ALT), (120, _BASE), (k4 - 1, _ALT))
+    assert len(rep.rows) == 1 and rep.rows[0].after.games == 120, [(r.before.games, r.after.games) for r in rep.rows]
+    rep = _frep((120, _BASE), (k4 - 1, _ALT), (30, _BASE), (60, _ALT))
+    assert len(rep.rows) == 1 and (rep.rows[0].before.games, rep.rows[0].after.games) == (150, 60), \
+        [(r.before.games, r.after.games) for r in rep.rows]
+
+
+def test_formation_aligns_by_time_when_lineups_are_fewer_than_games():
+    # 선발 11명이 아니거나 승·무·패가 아닌 판은 _lineups 에 없다 — 번호가 아니라 시각으로 맞춰야 앞 창이 제 판만 센다
+    out, i = [], 0
+    for n, slots, res in ((60, _BASE, None), (30, _BASE, "오류"), (60, _ALT, None), (20, _ALT, "오류")):
+        for k in range(n):
+            out.append(_game(i, slots, k % 3 - 1, res))
+            i += 1
+    rep = st.formation_report(list(reversed(out)), "me")
+    assert rep.games == 120 and len(rep.rows) == 1, rep
+    r = rep.rows[0]
+    assert (r.before.games, r.after.games) == (60, 60), "오류 판이 창에 섞였거나 번호가 어긋났다"
+    assert r.before.gf == sum(max(k % 3 - 1, 0) for k in range(60)), "앞 창이 엉뚱한 판을 셌다"
+
+
+def test_formation_together_counts_new_starters_only():
+    alt_new = {**_ALT, 20: 12}                       # 포메이션이 바뀌며 12번 선수가 처음 든다
+    r = _frep((60, _BASE), (60, alt_new)).rows[0]
+    assert r.together == 1, r.together
+    # 직전 ARRIVAL_RECENT 판 안에 뛴 적 있는 선수는 새로 든 것이 아니다(바뀌기 5판 전부터 12번이 뛰었다)
+    r = _frep((50, _BASE), (5, {**_BASE, 20: 12}), (60, alt_new)).rows[0]
+    assert r.together == 0, r.together
+    assert config.ARRIVAL_RECENT > 5
+
+
+def test_formation_flat_and_empty_inputs():
+    flat = _frep((60, _BASE, lambda k: 0), (60, _ALT, lambda k: 0)).rows[0]
+    assert flat.z is None and not flat.outside, "득실차가 하나도 안 움직였는데 범위 밖이다"
+    assert st.formation_report([], "me").rows == [] and st.formation_report([], "me").games == 0
+    assert _frep((60, _BASE), (60, _ALT)).rows
+    assert st.formation_report(_games((60, _BASE), (60, _ALT)), "남").rows == [], "내가 안 낀 경기"
+    assert not _frep((200, _BASE)).rows and _frep((200, _BASE)).changes == 0
+
+
+def test_formation_row_outside_boundary_is_exactly_arrival_z():
+    w = st.Window()
+    row = lambda z: st.FormationRow(T0, "a", "b", w, w, 0, z)   # noqa: E731
+    z = config.ARRIVAL_Z
+    assert row(z).outside and row(-z).outside, "정확히 문턱이면 범위 밖"
+    assert not row(z - 1e-9).outside and not row(-z + 1e-9).outside and not row(None).outside
+
+
+def test_formation_budget_10k():
+    parts = [(1000, _BASE if j % 2 == 0 else _ALT) for j in range(10)]
+    games = _games(*parts)
+    t = time.perf_counter()
+    rep = st.formation_report(games, "me")
+    dt = time.perf_counter() - t
+    print(f"       포메이션 전후 1만 경기: {dt * 1000:.0f}ms · 줄 {len(rep.rows)}")
+    assert len(rep.rows) == 9 and dt < 1.0, (len(rep.rows), dt)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

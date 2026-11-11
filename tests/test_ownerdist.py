@@ -1231,6 +1231,60 @@ def test_metric_names_exist_in_habits():
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
+# ── 97 X3 층을 지킨 읽기 ─────────────────────────────────────────────────────
+
+def test_strata_keep_stratum_and_use_the_chip_distribution():
+    with _cfg(**DIST_CFG):
+        sd = od.build_strata(DIST_ROWS, 7, E)
+        assert sd is not None and sd.dist == od.build_dist(DIST_ROWS, 7, E), "칩과 다른 분포를 썼다"
+        # 손 계산: 1층 (1.0, 3.0) → 2.0 · 2층 (2.0) → 2.0 · 3층 (2.0, 4.0, 6.0) → 4.0. 전체 평균 3.0 이나 가중 평균과는 다른 값이다
+        assert [sd.mean("finish", i) for i in (1, 2, 3)] == [2.0, 2.0, 4.0], [sd.mean("finish", i) for i in (1, 2, 3)]
+        assert sd.mean("finish", 4) is None and sd.mean("없는지표", 1) is None
+        # 거르기는 분포와 같다 — 판수가 모자란 구단주는 층 평균에서도 뺀다(1층 평균이 3.0 으로 바뀐다)
+        with _cfg(OWNER_DIST_MIN_OWNERS=5):
+            few = [dict(r, n_games=4) if i == 0 else r for i, r in enumerate(DIST_ROWS)]
+            assert od.build_strata(few, 7, E).mean("finish", 1) == 3.0, "분포에서 뺀 구단주가 층 평균에 남았다"
+            old = [dict(r, last_match="2026-08-31T09:00:00") if i == 0 else r for i, r in enumerate(DIST_ROWS)]
+            assert od.build_strata(old, 7, E).mean("finish", 1) == 3.0, "마지막 경기가 낡은 구단주가 층 평균에 남았다"
+        # 분포에서 빠진 지표는 층 평균도 없다 · 값이 None 인 구단주는 그 지표 층 평균에서만 빠진다
+        no_t = [dict(r, tackle_rate=None) if r["stratum"] == 2 else r for r in DIST_ROWS]
+        sd2 = od.build_strata(no_t, 7, E)
+        assert sd2.mean("tackle_rate", 1) is None and sd2.mean("finish", 1) == 2.0
+        assert od.build_strata([r for r in DIST_ROWS if r["stratum"] != 2], 7, E) is None, "층 하나가 빈 분포를 썼다"
+        assert od.build_strata([], 7, E) is None
+
+
+def test_load_strata_follows_load_dist_round_and_staleness():
+    with tempfile.TemporaryDirectory() as d, _cfg(**DIST_CFG):
+        c, rid = _dist_db(d)
+        try:
+            base = datetime.fromisoformat(E)
+            sd = od.load_strata(c, base)
+            assert sd.dist.round_id == rid and sd.mean("finish", 3) == 4.0
+            r2 = store.owner_round_start(c, 2, "2026-10-05T00:00:00", "t")
+            store.owner_round_end(c, r2, "thin", "2026-10-06T00:00:00")
+            assert od.load_strata(c, base).dist.round_id == rid, "뒤에 온 thin 이 done 분포를 가렸다"
+            edge = base + timedelta(days=config.OWNER_DIST_STALE_DAYS)
+            assert od.load_strata(c, edge) is not None, "정확히 45일은 아직 쓴다"
+            assert od.load_strata(c, edge + timedelta(seconds=1)) is None, "45일 넘게 낡은 분포를 썼다"
+            with _cfg(OWNER_DIST_STALE_DAYS=10):
+                assert od.load_strata(c, base + timedelta(days=11)) is None, "낡음 기준이 설정과 이어져 있지 않다"
+        finally:
+            c.close()
+    with tempfile.TemporaryDirectory() as d:
+        c = store.open_db(Path(d) / "fifa.db")
+        try:
+            assert od.load_strata(c, datetime.fromisoformat(E)) is None, "분포가 없는데 무언가를 돌려줬다"
+        finally:
+            c.close()
+
+
+def test_stratum_of_boundaries_match_config():
+    top = config.OWNER_DIST_STRATA
+    assert [od.stratum_of(r) for r in (1, top[0], top[0] + 1, top[1], top[1] + 1, top[2])] == [1, 1, 2, 2, 3, 3]
+    assert od.stratum_of(top[2] + 1) is None
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

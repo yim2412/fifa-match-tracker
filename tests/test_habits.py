@@ -1137,6 +1137,53 @@ def test_history_runs_merge_blips_and_rejoin():
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
+# ── 97 X3 분포 대비 ──────────────────────────────────────────────────────────
+
+class FakeStrata:
+    """dist = FakeDist · mean(지표, 층) = 표 — 물은 (지표, 층)을 적는다."""
+
+    def __init__(self, dist, means=None):
+        self.dist, self.means, self.asked = dist, dict(means or {}), []
+
+    def mean(self, key, stratum):
+        self.asked.append((key, stratum))
+        return self.means.get((key, stratum))
+
+
+def test_dist_table_rows_follow_chip_rules():
+    t = habits.side_totals(_chip_games(opp_goals=(4, 3, 3)), "me")
+    d = habits.paired_diff(t, "finish")
+    keys = ("finish", "possession", "shots")
+    dist = FakeDist({("finish", d.diff): 5.0, ("finish", d.hi): 40.0}, absent={"possession"})
+    strata = FakeStrata(dist, {("finish", 2): -10.5, ("shots", 2): 0.25})
+    tab = habits.dist_table(strata, t, 2, keys)
+    assert [r.key for r in tab.rows] == list(keys) and tab.stratum == 2
+    assert (tab.n_owners, tab.ended_at) == (120, "2026-10-01T09:00:00")
+    f, p, s = tab.rows
+    assert (f.label, f.unit, f.n) == ("결정력", "%p", d.n) and abs(f.diff - d.diff) < 1e-12
+    assert (f.pct, f.stratum_mean, f.side) == (5.0, -10.5, -1), f
+    assert (p.pct, p.side) == (None, 0), "분포를 못 쓰는 지표에 판정이 붙었다"
+    assert (s.unit, s.stratum_mean) == ("개", 0.25), s
+    assert strata.asked == [("finish", 2), ("possession", 2), ("shots", 2)], strata.asked
+    # 층을 모르면(순위를 모르거나 분포 밖) 층 평균은 아예 묻지 않고 비운다 — 전체 백분위는 그대로
+    strata = FakeStrata(dist, {("finish", None): 999.0})
+    tab = habits.dist_table(strata, t, None, keys)
+    assert tab.stratum is None and [r.stratum_mean for r in tab.rows] == [None] * 3 and strata.asked == []
+    assert tab.rows[0].pct == 5.0 and tab.rows[0].side == -1
+
+
+def test_dist_table_side_uses_the_chip_thresholds():
+    t = habits.side_totals(_chip_games(opp_goals=(4, 3, 3)), "me")
+    d = habits.paired_diff(t, "finish")
+    row = lambda p, hi=1.0, lo=99.0: habits.dist_table(                                      # noqa: E731
+        FakeStrata(FakeDist({("finish", d.diff): p, ("finish", d.hi): hi, ("finish", d.lo): lo})), t, 1, ("finish",)).rows[0]
+    chip = config.OWNER_DIST_CHIP_P
+    assert row(float(chip)).side == -1 and row(chip + 0.001).side == 0, "하위 끝 경계가 칩과 다르다"
+    assert row(100.0 - chip, lo=99.0).side == 1 and row(100.0 - chip - 0.001, lo=99.0).side == 0, "상위 끝 경계가 칩과 다르다"
+    assert row(1.0, hi=config.OWNER_DIST_SURE_P + 0.001).side == 0, "구간 안쪽 끝이 중앙값을 넘었는데 끝으로 쳤다"
+    assert row(chip + 5.0).pct == chip + 5.0, "끝이 아니어도 백분위는 보여 준다"
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
