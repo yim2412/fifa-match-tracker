@@ -1201,7 +1201,8 @@ def test_dashboard_kpi_row_fits_min_window_with_longest_text():
                d.card_dd.sub: "시즌 최고 9,999점 · 같은 구간 중앙 −9,999점", d.card_recent.sub: "누적 전체 100.0% 대비",
                d.lb_goals_sub: "득실차 -99,999", d.lb_streak_sub: "최장 99연승 · 99연패 (누적 전체)",
                d.lb_days: "오늘 -9,999점 99승 99무 99패 · 100.0% · 9,999 FC  │  어제 -9,999점 99승 99무 99패 · 100.0% · 9,999 FC",
-               d.lb_record: "시즌 기록 · 최고 9,999.99 #9,999 (12.31) · 챔스 9,999판 · 슈챔 9,999판 · 남들 중앙 9,999판보다 9,999판 느리게"}
+               d.lb_record: "시즌 기록 · 최고 9,999.99 #9,999 (12.31) · 챔스 9,999판 · 슈챔 9,999판 · 남들 중앙 9,999판보다 9,999판 느리게",
+               d.lb_streak_note: "지금 99연패 중입니다. 이 계정은 99연패 이상 뒤 다음 판 승률 100%(99,999번), 평소 100%입니다."}
     saved = {lb: lb.text() for lb in longest}
     try:
         _at_size(*app_main.MIN_WINDOW)
@@ -1363,7 +1364,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 51, len(tables)   # 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 52, len(tables)   # 52 = 97 조각 2 [시즌 돌아보기] 지난 시즌 같은 시점 표(채운 표는 test_review_page_… 가 잰다) · 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -12563,7 +12564,7 @@ def test_rank_views_invalidate_on_four_paths():
     W = app_main.MainWindow
     assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
                                      "tcboard", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                                     "traits", "opprank", "predcheck", "rewards_rank"}
+                                     "traits", "opprank", "predcheck", "rewards_rank", "review"}   # review = 97 [시즌 돌아보기] 최종 순위
     seen = []
     keep = (_win._ouid, _win._rank_sched, _win._teamcolor_loader, list(_win._teamcolor_pending))
     _win._invalidate_rank_views = lambda: seen.append(1)
@@ -16099,6 +16100,78 @@ def test_records_cache_follows_elo_replace():
         assert "peak" not in {r.key for r in _win.record_rows}, "시즌을 모르는데 ② 줄을 보였다"
         _win._on_seasons_loaded([season])                        # 시즌표가 도착하면 보고 있던 [내 기록] 이 다시 그려진다
         assert peak_row().count == 2, "시즌표가 왔는데 [내 기록] 을 다시 안 그렸다"
+
+
+def test_review_page_and_dashboard_streak_line_97():
+    """97 조각 2 — [시즌 돌아보기] 칩 · 지난 시즌 같은 시점 표·그래프 · 카드 · 시즌표가 없으면 빈 이유 · 대시보드 머리 연패 한 줄(6시간 경계 · 표본)."""
+    from datetime import date
+    from test_records import _d
+    from seasons import Season
+    seasons = [Season(90, "시즌 A", date(2026, 7, 30), date(2026, 9, 10)), Season(91, "시즌 B", date(2026, 9, 10), date(2026, 10, 29))]
+    now = datetime.now().replace(microsecond=0)
+    ds = [_d(i, ("승" if i % 2 else "패"), 1, 0 if i % 2 else 1, div=900 if i % 3 else 800, when=datetime(2026, 9, 11, 10) + timedelta(hours=3 * i))
+          for i in range(6)]                                                           # 시즌 B 여섯 판(9-11)
+    ds += [_d(10 + i, "승", 2, 0, div=900, when=datetime(2026, 10, 30, 10) + timedelta(hours=i)) for i in range(3)]   # 지금 시즌 승 셋
+    ds += [_d(20 + i, "패", 0, 1, div=900, when=now - timedelta(hours=3 - i)) for i in range(3)]                    # 방금까지 3연패
+    ds.reverse()
+    keep = (_win._review_pick, _win._review_chip_keys)
+    with _RecordsState(ds, seasons):
+        try:
+            _win._review_pick = None
+            _win._go_page("시즌 돌아보기")
+            assert _win._current_view() == ("시즌 돌아보기", None), _win._current_view()
+            _win._invalidate("review")
+            assert [b.text() for b in _win.review_chips.buttons] == ["지금 시즌", "2026 시즌 B"], [b.text() for b in _win.review_chips.buttons]
+            p, r = _win.review_pace, _win.review_data
+            assert r.span.ongoing and r.games == 6 and (r.win, r.lose) == (3, 3), (r.games, r.win, r.lose)
+            assert r.achievements >= 1 and r.achievements == len([a for a in _win._records() if a.when >= r.span.start]), \
+                (r.achievements, "업적 수가 [내 기록] 업적에서 오지 않았다")
+            assert p.prev_state == "ok" and p.prev.games >= 1 and _win.tbl_review_pace.rowCount() == len(_win.REVIEW_PACE_ROWS)
+            assert _win.tbl_review_pace.item(0, 1).text() == "6" and _win.review_cards["판 수"].value.text() == "6"
+            assert not _win.review_chart.isHidden() or len([c for c in p.curve if c[1] is not None]) < 2
+            assert _win.review_cards["최종 순위"].value.text() == "—" and "끝나면" in _win.review_cards["최종 순위"].sub.text()
+            # 칩으로 지난 시즌을 고르면 그 시즌 한 장 — 시즌 B 의 첫 판이 시작 3일 안이라 "부터 저장" 줄은 없다
+            _win.review_chips.setCurrentIndex(1)
+            assert _win.review_data.span.label == "2026 시즌 B" and _win.review_data.games == 6 and _win.lb_review_partial.isHidden()
+            assert _win.review_pace.prev_state == "empty" and "저장되어 있지 않습니다" in _win.lb_review_pace_note.text()
+            assert _win._review_pick == "2026-09-10", "고른 시즌이 다시 그려도 유지돼야 한다"
+            # 시즌표가 없으면(웹 데이터 꺼짐) 빈 이유 한 줄 · 카드·표는 숨는다
+            _win._rank_seasons = []
+            _win._invalidate("review")
+            assert "시즌표" in _win.lb_review_note.text() and not _win.lb_review_note.isHidden()
+            assert _win.review_cards["판 수"].isHidden() and _win.tbl_review_pace.isHidden() and _win.review_data is None
+            _win._rank_seasons = list(seasons)
+            _win._on_seasons_loaded(list(seasons))                    # 시즌표가 도착하면 보던 화면이 다시 그려진다
+            assert _win.review_data is not None and _win.lb_review_note.isHidden()
+            assert _win.review_data.peak_elo is None and _win.review_cards["최고 점수"].value.text() == "—"
+            _win._elo_req["me"] = 5                                     # 점수 기록이 도착하면(elo_ready) 최고 점수 카드가 채워진다
+            _win._on_elo_ready("me", app_main.EloSeries(req=5, rows=[{"taken_at": "2026-09-20T12:00:00", "elo": 4321.0}], cuts={}))
+            assert _win.review_data.peak_elo == 4321.0 and _win.review_cards["최고 점수"].value.text() == "4,321.00", \
+                "점수가 왔는데 [시즌 돌아보기] 를 다시 안 그렸다"
+            # Y1 — 지금 3연패 + 마지막 경기가 6시간 안 → 머리 칸 한 줄
+            _win._render_dashboard()
+            lb = _win.dashboard.lb_streak_note
+            assert not lb.isHidden() and lb.text().startswith(f"지금 3연패 중입니다. 이 계정은 {config.Y1_MIN_LOSS}연패 이상 뒤"), lb.text()
+            assert "—" not in lb.text() or "기록이 아직 없습니다" in lb.text()
+            assert lb.styleSheet().count(T.TEXT_DIM) == 1, "표본이 모자란데(표 판정 없음) 흐리지 않다"
+            assert T.BAD not in lb.styleSheet() and T.WARN not in lb.styleSheet(), "연패 줄에 경고색이 들어갔다(E1)"
+            # 색은 표가 유의하고 표본이 모자라지 않을 때만 진하게(셋 중 하나라도 어긋나면 흐리게) — E1
+            dim = lambda note: (_win.dashboard._render_streak_note(note), _win.dashboard.lb_streak_note.styleSheet())[1].count(T.TEXT_DIM)  # noqa: E731
+            sn = core.StreakNote(3, 3, after=(30, 2, 40), base=(300, 20, 400), significant=True, weak=False)
+            assert dim(sn) == 0, "유의하고 표본도 충분한데 흐리다"
+            assert dim(core.StreakNote(3, 3, after=(30, 2, 40), base=(300, 20, 400), significant=True, weak=True)) == 1, "표본이 모자란데 진하다"
+            assert dim(core.StreakNote(3, 3, after=(30, 2, 40), base=(300, 20, 400), significant=False, weak=False)) == 1, "유의하지 않은데 진하다"
+            assert "다음 판 승률 42%(72번), 평소 42%입니다" in _win.dashboard.lb_streak_note.text(), _win.dashboard.lb_streak_note.text()
+            _win._render_dashboard()
+            # 6시간을 넘기면 숨는다
+            for m in _win._matches_all:
+                m.match_date -= timedelta(hours=config.Y1_RECENT_H + 1)
+            _win._render_dashboard()
+            assert lb.isHidden() and lb.text() == "", "마지막 경기가 6시간을 넘었는데 연패 줄이 남았다"
+        finally:
+            _win._review_pick, _win._review_chip_keys = keep
+            _win._rank_seasons = []
+            _win._dirty.add("review")
 
 
 def _flush_deleted():

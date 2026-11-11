@@ -13,6 +13,7 @@
     점수 해설(65)                       → 리포트와 같은 재료
     승률 흐름                          → 승률 그래프와 같은 '최근 N일'
     승부처 · 15분 득실 · 시간대 · 분석  → 시즌 범위(빠른 범위에 안 갇힘)
+    연패 한 줄(97 Y1 · 머리 카드 안)    → 저장 전체(시즌 필터·빠른 범위 무관) · 지금 연패 중일 때만 보인다 — 칸이 아니라 줄이라 제목으로 안 찾는다
     오늘의 선수(88 Q2)                  → 저장 전체에서 선수가 나오는 가장 늦은 날 하루(시즌 필터·빠른 범위 무관 — 제목이 그 날짜)
 """
 from __future__ import annotations
@@ -64,6 +65,7 @@ class DashboardInput:
     club_cells: list | None = None
     records: list | None = None                # 88 C1 최근 기록 칩 — [(제목, "MM-DD")] 늦은 것부터(창이 _records 캐시에서)
     day_player: tuple | None = None            # 88 Q2 (records.DayPlayer, 선수 이름) — 저장 전체의 마지막으로 경기한 날 · 없으면 None
+    streak_note: object | None = None          # 97 Y1 sessions.StreakNote — 지금 연패 중일 때만(검색한 계정 · 저장 전체 기준 · 경고가 아니라 사실 한 줄)
     headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
     report: ScoreParts | None = None           # 65 M1 리포트·해설 — 점수 기록이 모자라면 None
 
@@ -213,6 +215,10 @@ class DashboardPage(QWidget):
         self.lb_record = _label("", dim=True, wrap=True)   # 시즌 기록 — 최고점 · 챔스·슈챔 달성
         self.head.body.addWidget(self.lb_days)
         self.head.body.addWidget(self.lb_record)
+        # 97 Y1 — 지금 연패 중일 때만 한 줄(없으면 숨김). 알림이 아니다: 색은 [플레이 기록 › 연패] 표가 유의할 때만 · 경고색 없음(ROADMAP E1)
+        self.lb_streak_note = _label("", dim=True, wrap=True)
+        self.lb_streak_note.hide()
+        self.head.body.addWidget(self.lb_streak_note)
         # 88 C1 최근 기록 칩 — 없으면 줄째 숨긴다. 누르면 [내 기록]
         self.records_row = _ClickRow()
         self.records_row.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -492,7 +498,28 @@ class DashboardPage(QWidget):
         self.lb_record.setText(f"시즌 기록 · 최고 {best[0]} {best[1]} · {reach[0]} · {reach[1]}"
                                if d.club_cells else "")
         self.lb_record.setToolTip(f"{best[2]}\n{reach[2]}".strip())
+        self._render_streak_note(d.streak_note)
         self._render_record_chips(d)
+
+    def _render_streak_note(self, n) -> None:
+        """Y1 — 지금 N연패 중이면 사실 한 줄. 표본이 모자라거나([플레이 기록 › 연패] 표가 유의하지 않으면) 흐린 글자 그대로 둔다."""
+        if n is None:
+            self.lb_streak_note.hide()
+            self.lb_streak_note.setText("")
+            return
+        after = sum(n.after)
+        if after:
+            text = (f"지금 {n.run}연패 중입니다. 이 계정은 {n.min_loss}연패 이상 뒤 다음 판 승률 "
+                    f"{win_rate_text(*n.after, n.mixed, digits=0, short=True)}({after:,}번), "
+                    f"평소 {win_rate_text(*n.base, n.mixed, digits=0, short=True)}입니다.")
+        else:
+            text = f"지금 {n.run}연패 중입니다. 이 계정은 {n.min_loss}연패 이상 뒤 다음 판 기록이 아직 없습니다."
+        loud = n.significant and not n.weak
+        self.lb_streak_note.setText(text)
+        self.lb_streak_note.setStyleSheet(f"color: {T.TEXT if loud else T.TEXT_DIM};")
+        self.lb_streak_note.setToolTip("저장된 전체 경기 기준입니다. 연패 뒤 승률이 평소와 다른지는 [플레이 기록 › 연패] 표가 판정합니다."
+                                       + (" 지금은 표본이 적어 흐리게 보입니다." if n.weak else ""))
+        self.lb_streak_note.show()
 
     def _go_records(self) -> None:
         self.navigate.emit(("내 기록", None))

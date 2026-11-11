@@ -33,6 +33,8 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
                     CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
 from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, StreakBreak, match_context, period_totals,
                       play_time, session_luck, session_rows, size_bins, split_sessions, streak_break,
+                      PaceSide, SeasonPace, SeasonReview, SeasonSpan, StreakNote, season_pace, season_review,
+                      season_spans, stored_spans, streak_note, top_scorer,
                       DIVISION_LABELS as BREAK_DIVISION_LABELS, FORMATION_LABELS as BREAK_FORMATION_LABELS)
 from ownerdist import OwnerDist, PosDist, load_dist as load_owner_dist, load_pos_dist
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
@@ -120,6 +122,8 @@ __all__ = [
     # habits·sessions — 97 Y3 세션 · Y2 경기를 돌린 시간 · N1 연패 끊는 패턴
     "PlayTime", "Session", "SessionLuck", "SessionRow", "SizeBin", "StreakBreak", "match_context", "period_totals",
     "play_time", "session_luck", "session_rows", "size_bins", "split_sessions", "streak_break",
+    "PaceSide", "SeasonPace", "SeasonReview", "SeasonSpan", "StreakNote", "season_pace", "season_review",
+    "season_spans", "stored_spans", "streak_note", "top_scorer",
     "BREAK_DIVISION_LABELS", "BREAK_FORMATION_LABELS",
     # habits — N18 공격 루트(2.7.1)
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",

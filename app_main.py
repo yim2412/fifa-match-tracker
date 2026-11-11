@@ -3984,7 +3984,8 @@ class MainWindow(QMainWindow):
                  ("내 기록", "_build_records_tab"),   # 88 U1 — 업적(늘 저장 전체라 범위 버튼이 붙는 [기간별 성적] 밖에)
                  ("플레이 기록", Tabs("playlog", (("세션", "_build_sessions_tab"),   # 97 — 세션·경기를 돌린 시간·연패 끊는 패턴
                                               ("경기 시간", "_build_playtime_tab"),
-                                              ("연패", "_build_streakbreak_tab"))))]),
+                                              ("연패", "_build_streakbreak_tab")))),
+                 ("시즌 돌아보기", "_build_review_tab")]),   # 97 조각 2 — 시즌 하나를 한 장으로(X1 지난 시즌 같은 시점 · F5 카드)
         ("경기력", [("승부처 분석", Tabs("clutch", (("선제골·역전", "_build_clutch_tab"),
                                               ("리드·골 흐름", "_build_goal_flow_tab")))),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
@@ -6034,6 +6035,233 @@ class MainWindow(QMainWindow):
             else:
                 verdict.setText(f"차이가 안 보입니다. {stat}")
                 verdict.setStyleSheet(dim)
+
+    # ── 97 조각 2 — [흐름 › 시즌 돌아보기] 시즌 하나를 한 장으로 ──
+    # 늘 저장된 경기에서 그때그때 계산한다(얼리지 않는다 · U7 — 늦게 들어오는 경기와 규칙 정정이 숫자를 안 갈라놓게) ·
+    # 시즌 필터·빠른 범위와 무관(시즌을 칩으로 직접 고른다 — [내 기록] 과 같다) · 시즌표가 있어야 선다(웹 데이터)
+    REVIEW_PACE_COLUMNS = ["지표", "고른 시즌", "지난 시즌 같은 시점"]
+    REVIEW_PACE_ROWS = ("판 수", "승률", "최고 등급", "점수", "FC")
+
+    def _build_review_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_review_note = self._note_label()
+        v.addWidget(self.lb_review_note)
+        self.review_chip_box = QHBoxLayout()
+        v.addLayout(self.review_chip_box)
+        self.review_chips: ChoiceChips | None = None
+        self._review_chip_keys: list = []
+        self._review_pick: str | None = None   # 고른 시즌의 시작 날짜(SeasonSpan.key) — 다시 그려도 유지
+        gb = QGroupBox("지난 시즌 같은 시점")
+        box = QVBoxLayout(gb)
+        self.lb_review_pace_head = QLabel("")
+        self.lb_review_pace_head.setWordWrap(True)
+        self.lb_review_pace_head.setStyleSheet("font-weight: bold;")
+        box.addWidget(self.lb_review_pace_head)
+        self.tbl_review_pace = self._make_table(self.REVIEW_PACE_COLUMNS)
+        self.tbl_review_pace.setMinimumHeight(60 + 30 * len(self.REVIEW_PACE_ROWS))
+        box.addWidget(self.tbl_review_pace)
+        self.review_chart = charts.AreaTrendChart()
+        self.review_chart.setMinimumHeight(220)
+        box.addWidget(self.review_chart)
+        self.lb_review_pace_note = self._note_label()
+        box.addWidget(self.lb_review_pace_note)
+        v.addWidget(gb)
+        self.lb_review_partial = self._note_label()
+        v.addWidget(self.lb_review_partial)
+        grid = QGridLayout()
+        grid.setSpacing(8)
+        self.review_cards: dict[str, StatCard] = {}
+        for i, title in enumerate(("판 수", "승무패", "최고 등급", "최종 등급", "최고 점수", "최장 연승", "주 포메이션",
+                                   "득점 1위 선수", "최종 순위", "업적", "경기를 돌린 시간", "라이벌")):
+            card = StatCard(title)
+            card.sub.setWordWrap(True)
+            grid.addWidget(card, i // 4, i % 4)
+            self.review_cards[title] = card
+        for c in range(4):
+            grid.setColumnStretch(c, 1)
+        v.addLayout(grid)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        self.review_pace = None     # 테스트가 읽는다 — 마지막으로 그린 SeasonPace
+        self.review_data = None     # 마지막으로 그린 SeasonReview
+        return scroll
+
+    def _match_ctx(self) -> dict:
+        """경기마다 (내 등급, 내 포메이션) — 저장 전체(시즌 돌아보기·대시보드 연패 줄이 같이). 같은 계정·같은 저장이면 다시 안 짓는다."""
+        if not self._ouid:
+            return {}
+        return self._saved_calc("match_ctx", lambda: core.match_context(self._details_all, self._ouid))
+
+    def _predict_finals(self) -> dict:
+        """내 계정의 끝난 시즌 최종 순위 {시즌 시작 날짜: 순위}(예측 되짚기가 확인해 둔 것 · found 만). 검색한 계정이 내 계정이 아니면 비운다."""
+        out: dict = {}
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                st = store.trade_state(conn)
+                mine = st.get("my_ouid")
+                if mine and mine == self._ouid and st.get("key_fp") == store.key_fingerprint(config.API_KEY):
+                    for res in core.predict_final_results(conn, mine):
+                        if res["state"] == "found" and res.get("rank"):
+                            out[res["season_start"]] = res["rank"]
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass
+        return out
+
+    def _div_text(self, division: int | None) -> str:
+        return self._division_names.get(division, "—") if division is not None else "—"
+
+    @staticmethod
+    def _hm_text(minutes: float) -> str:
+        h, m = divmod(round(minutes), 60)
+        return f"{h}시간 {m}분" if h else f"{m}분"
+
+    def _review_set_chips(self, spans: list) -> None:
+        keys = [sp.key for sp in spans]
+        if self.review_chips is not None and keys == self._review_chip_keys:
+            return
+        if self.review_chips is not None:
+            self.review_chip_box.removeWidget(self.review_chips)
+            self.review_chips.deleteLater()
+            self.review_chips = None
+        while self.review_chip_box.count():
+            self.review_chip_box.takeAt(0)
+        self._review_chip_keys = keys
+        if not spans:
+            return
+        if self._review_pick not in keys:
+            self._review_pick = keys[0]
+        self.review_chips = ChoiceChips([(sp.label, sp.key) for sp in spans], keys.index(self._review_pick))
+        self.review_chips.currentIndexChanged.connect(self._on_review_pick)
+        self.review_chip_box.addWidget(self.review_chips)
+        self.review_chip_box.addStretch(1)
+
+    def _on_review_pick(self, i: int) -> None:
+        if self.review_chips is None:
+            return
+        self._review_pick = self.review_chips.itemData(i)
+        self._render_review()
+
+    def _render_review(self) -> None:
+        """시즌표가 없으면 빈 이유 한 줄 · 있으면 칩(저장된 경기가 있는 시즌만) → 지난 시즌 같은 시점 → 카드 열둘."""
+        now = datetime.now()
+        all_spans = core.season_spans(self._rank_seasons, now) if self._rank_seasons else []
+        spans = core.stored_spans(all_spans, self._matches_all)
+        self._review_set_chips(spans)
+        self.review_pace = self.review_data = None
+        empty_text = ""
+        if not self._matches_all or not self._ouid:
+            empty_text = "경기가 없어 시즌을 돌아볼 수 없습니다."
+        elif not self._rank_seasons:
+            empty_text = "시즌표가 없어 시즌을 나눌 수 없습니다. " + config.WEB_DATA_OFF_MSG
+        elif not spans:
+            empty_text = "저장된 경기가 속한 시즌이 없습니다."
+        self._set_status(self.lb_review_note, empty_text)
+        for w in (self.tbl_review_pace, self.lb_review_pace_head):
+            w.setVisible(not empty_text)
+        for c in self.review_cards.values():
+            c.setVisible(not empty_text)
+        if empty_text:
+            for lb in (self.lb_review_pace_note, self.lb_review_partial):
+                self._set_status(lb, "")
+            self.review_chart.set_data([])
+            self.review_chart.setVisible(False)
+            return
+        span = next(sp for sp in spans if sp.key == self._review_pick)
+        data = self._elo.get(self._ouid)
+        elo_rows = data.rows if data else []
+        ctx = self._match_ctx()
+        pace = core.season_pace(self._matches_all, self._season_wins(), ctx, elo_rows, all_spans, all_spans.index(span), now)
+        review = core.season_review(self._matches_all, self._details_all, self._ouid, ctx, elo_rows, span,
+                                    finals=self._predict_finals(), ach_times=[a.when for a in self._records()])
+        self.review_pace, self.review_data = pace, review
+        self._render_review_pace(pace)
+        self._render_review_cards(review)
+
+    def _render_review_pace(self, p) -> None:
+        d = int(p.days) if p.span.ongoing else round(p.days)
+        prev = p.prev_span.label if p.prev_span is not None else None
+        head = f"{p.span.label} 시작부터 {d}일째입니다." if p.span.ongoing else f"{p.span.label}은 {d}일 동안 이어졌습니다."
+        if prev:
+            head += f" {prev}의 시작부터 같은 일수와 견줍니다."
+        self.lb_review_pace_head.setText(head)
+
+        def side(s, text_of):
+            return text_of(s) if s is not None else "—"
+        mixed = p.mixed
+        cols = {
+            "판 수": lambda s: f"{s.games:,}",
+            "승률": lambda s: win_rate_text(s.win, s.draw, s.lose, mixed, short=True) if s.games else "—",
+            "최고 등급": lambda s: self._div_text(s.best_div),
+            "점수": lambda s: f"{s.elo:,.2f}" if s.elo is not None else "—",
+            "FC": lambda s: f"{s.fc:,} FC" if s.fc is not None else "—",
+        }
+        rows = [[name, side(p.cur, fn), side(p.prev, fn)] for name, fn in cols.items()]
+        self._fill(self.tbl_review_pace, rows, enable_sort=False)
+        # 경과 일수 축 누적 승률 두 줄 — 이 시즌에 판정할 경기가 아직 없는 날은 점을 건너뛴다
+        pts = [(f"{k}일", a, None) for k, a, _b in p.curve if a is not None]
+        ma = [b for _k, a, b in p.curve if a is not None]
+        if len(pts) >= 2:
+            vals = [x[1] for x in pts] + [m for m in ma if m is not None]
+            self.review_chart.set_data(pts, axis=charts.Axis.fit_pct(vals), avg=False, baseline=50, ma=ma, ma_name="지난 시즌",
+                                       legend=[("이 시즌", T.CHART_LINE, False), ("지난 시즌", T.CHART_NEUTRAL, False)])
+            self.review_chart.setToolTip(win_rate_note(mixed))
+            self.review_chart.setVisible(True)
+        else:
+            self.review_chart.set_data([])
+            self.review_chart.setVisible(False)
+        notes = []
+        if p.prev_state == "none":
+            notes.append("견줄 지난 시즌이 시즌표에 없습니다.")
+        elif p.prev_state == "empty":
+            notes.append("지난 시즌 경기가 저장되어 있지 않습니다.")
+        elif p.prev_state == "late":
+            notes.append(f"지난 시즌은 {p.prev_from.month}월 {p.prev_from.day}일부터 저장되어 있어 견주지 않습니다.")
+        if p.prev_days is not None:
+            notes.append(f"지난 시즌은 {p.prev_days}일에 끝났습니다. 그 뒤는 견주지 않습니다.")
+        self._set_status(self.lb_review_pace_note, " ".join(notes))
+
+    def _render_review_cards(self, r) -> None:
+        c = self.review_cards
+        has = r.games > 0
+        none = "—"
+
+        def put(title: str, big: str, sub: str = "") -> None:
+            c[title].set(big)
+            c[title].set_sub(sub)
+
+        put("판 수", f"{r.games:,}" if has else none, "저장된 경기가 없습니다" if not has else "")
+        put("승무패", win_rate_text(r.win, r.draw, r.lose, r.mixed, short=True) if has else none,
+            f"{r.win:,}승 {r.draw:,}무 {r.lose:,}패" if has else "")
+        put("최고 등급", self._div_text(r.best_div))
+        put("최종 등급", self._div_text(r.final_div), "마지막 경기 때" if r.final_div is not None else "")
+        put("최고 점수", f"{r.peak_elo:,.2f}" if r.peak_elo is not None else none, "점수 기록 기준" if r.peak_elo is not None else "")
+        put("최장 연승", f"{r.longest_win}연승" if has else none)
+        put("주 포메이션", r.formation[0] if r.formation else none, f"{r.formation[1]:,}판" if r.formation else "")
+        if r.scorer is not None:
+            sp, goals, games = r.scorer
+            put("득점 1위 선수", self._names.get(sp, str(sp)), f"{goals:,}골 {games:,}경기")
+        else:
+            put("득점 1위 선수", none)
+        if r.final_rank is not None:
+            put("최종 순위", f"{r.final_rank:,}위", "시즌이 끝난 뒤 확인한 순위")
+        else:
+            put("최종 순위", none, "시즌이 끝나면 확인합니다" if r.span.ongoing else "확인한 기록이 없습니다")
+        put("업적", f"{r.achievements:,}개" if has else none)
+        put("경기를 돌린 시간", self._hm_text(r.play_min) if has else none, "추정" if has else "")
+        if r.rival is not None:
+            put("라이벌", r.rival.nickname, f"{r.rival.games:,}판 {r.rival.win:,}승 {r.rival.draw:,}무 {r.rival.lose:,}패")
+        else:
+            put("라이벌", none, f"{config.RIVAL_MIN_GAMES}판 이상 만난 상대가 없습니다" if has else "")
+        self._set_status(self.lb_review_partial,
+                         f"이 시즌은 {r.from_day.month}월 {r.from_day.day}일부터 저장되어 있습니다" if r.from_day is not None else "")
 
     def _rate_list(self, rows: list[RateRow], mixed: bool) -> RateRowList:
         """스크롤 페이지 안 승률 줄 목록(65 P4) — 줄 수만큼 높이 고정 · 그림은 목록 로더로."""
@@ -8267,7 +8495,7 @@ class MainWindow(QMainWindow):
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
     RANK_VIEW_KEYS = ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist",
                       "daywr", "tcboard", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
-                      "traits", "opprank", "predcheck", "rewards_rank")
+                      "traits", "opprank", "predcheck", "rewards_rank", "review")   # review: 최종 순위(predict_final)가 이 길로 들어온다
 
     def _invalidate_rank_views(self) -> None:
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
@@ -11538,6 +11766,7 @@ class MainWindow(QMainWindow):
         self._invalidate("luck")       # 운 범위도 같은 기준선(66 M2)
         self._invalidate("rewards")    # FC 카드의 시즌 시작(66 R2)
         self._invalidate_records()     # 88 ②③ 은 시즌표로 센다 — 경기 카드 태그·대시보드 칩도
+        self._invalidate("review")     # 97 시즌 돌아보기는 시즌표가 있어야 서고, 시즌 경계가 곧 시즌표다
         self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
             # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
@@ -11767,6 +11996,7 @@ class MainWindow(QMainWindow):
         "opprank": [("상대 전적", "상대 순위")],
         "analysis": [("흐름 분석", None)], "period": [("기간별 성적", None)], "records": [("내 기록", None)],
         "playlog": [("플레이 기록", "세션"), ("플레이 기록", "경기 시간"), ("플레이 기록", "연패")],
+        "review": [("시즌 돌아보기", None)],
         "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
@@ -11819,6 +12049,7 @@ class MainWindow(QMainWindow):
             "period": self._render_period_page,   # 일·주·월 = 시즌 범위 · 시즌 = 누적 전체(시즌 필터 무시)
             "records": self._render_records,      # 88 — 늘 저장 전체(시즌 필터·빠른 범위 무관)
             "playlog": lambda: self._render_playlog(self._matches, self._details),   # 97 — 시즌 범위(경기 습관과 같다)
+            "review": self._render_review,        # 97 조각 2 — 저장 전체에서 고른 시즌을 자른다(시즌 필터·빠른 범위 무관 · [내 기록] 과 같다)
             "clutch": lambda: self._render_clutch(self._details, self._matches),
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),
@@ -13991,6 +14222,7 @@ class MainWindow(QMainWindow):
             self._invalidate("calendar")       # 66 G5 카드 — 시즌 시작·예상 순위 보상
             self._invalidate("rewards")        # 66 G5b 같은 카드
             self._invalidate("records")        # 88 ② 시즌 최고 점수 갱신 · 지금 시즌 시작(경기 목록·대시보드는 위에서)
+            self._invalidate("review")         # 97 점수·FC 칸과 최고 점수 카드가 점수 기록을 읽는다
         self._load_predict(ouid)    # EloLoader 를 띄우는 모든 경우 뒤에(진입점 표 다섯째 줄)
 
     def _load_predict(self, ouid: str | None) -> None:
@@ -14347,8 +14579,15 @@ class MainWindow(QMainWindow):
             club_cells=self._club_cells(),
             records=[(a.title, f"{a.when:%m-%d}") for a in core.recent_records(self._records(), datetime.now())],
             day_player=self._day_player(),
+            streak_note=self._streak_note(),
             headline=self._headline(),
             report=self._dashboard_report()))
+
+    def _streak_note(self):
+        """97 Y1 — 지금 연패 중일 때만(저장 전체 기준 · 시즌 필터·빠른 범위 무관). 조건 밖이면 None."""
+        if not self._ouid or not self._matches_all:
+            return None
+        return core.streak_note(self._matches_all, self._match_ctx, datetime.now())
 
     def _dashboard_report(self) -> ScoreParts | None:
         """65 M1 리포트·해설 재료 — 점수·예측 탭 리포트(R1~R3)와 같은 계산(season_score_report)."""

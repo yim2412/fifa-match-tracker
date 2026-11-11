@@ -6,6 +6,9 @@
 | `session_rows(sessions, mixed, points)` · `size_bins` · `session_luck` | 〃 | 줄(날짜·시각·판 수·승무패·승률·점수 변화) · 판 수 구간별 승률 · 운 범위 밖 세션 수 대 기대 |
 | `play_time(sessions)` · `period_totals` | [플레이 기록 › 경기 시간] | "경기를 돌린 시간(추정)" — 앉아 있던 시간이 아니다 |
 | `match_context(details, ouid)` · `streak_break(matches, ctx)` | [플레이 기록 › 연패] | 연패 뒤 다음 판을 끊음(승) 대 이어짐으로 — 조건 셋 고정 |
+| `season_spans(seasons, now)` · `season_pace(…)` | [흐름 › 시즌 돌아보기] 맨 위 X1 줄·그래프 | 시즌 시작부터 경과 일수로 맞춘 지난 시즌 같은 시점과의 비교 |
+| `season_review(…)` · `top_scorer(…)` | 〃 카드 열둘 | 고른 시즌 한 장 — 늘 저장된 경기에서 그때그때 계산(얼리지 않는다 · U7) |
+| `streak_note(matches, ctx, now)` | 대시보드 머리 칸 한 줄(Y1) | 지금 `Y1_MIN_LOSS` 연패 이상이고 마지막 경기가 `Y1_RECENT_H` 시간 안일 때만 |
 
 규칙(근거 ROADMAP 97 F1·F2·U6):
 - 감독모드는 켜 두면 혼자 돌아 30분 끊기만으로는 126시간짜리 세션이 나온다(실측) — 그래서 0시에서도 끊는다.
@@ -20,14 +23,19 @@
 """
 from __future__ import annotations
 
+import math
 import statistics
+from bisect import bisect_left
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
 import config
 import habits
-from models import MatchSummary, is_mixed, win_pct
-from stats import formation_of
+import records
+from analysis import MIN_COND
+from models import MatchSummary, is_mixed, is_weak, longest_streaks, rated, win_pct
+from stats import _me_opp, _num, _played, formation_of, win_rewards
 
 DAY_CAP_MIN = 24 * 60
 _NO_FORMATION = formation_of([])   # 선발을 못 읽은 경기(몰수 등)의 표기 — 포메이션을 모르는 것으로 본다
@@ -287,4 +295,267 @@ def streak_break(matches: list[MatchSummary], ctx: dict, mixed: bool | None = No
                                ("포메이션 바꿈", list(FORMATION_LABELS), form_rows),
                                ("상대 등급", list(DIVISION_LABELS), div_rows)):
         out.tables.append(habits._chi_table(name, labels, rows, is_mixed(m.draw_possible for _, m in rows), out.alpha))
+    return out
+
+
+# ── X1 지난 시즌 같은 시점 · F5 시즌 돌아보기 ───────────────────────────────
+# 근거: ROADMAP 97 F3(시즌 길이 42~70일로 들쭉날쭉 · 진행 중 시즌은 끝 날을 모른다 → 진행률이 아니라 시작부터 경과 일수로 맞춘다 — U2)
+@dataclass(frozen=True)
+class SeasonSpan:
+    label: str
+    start: datetime            # `Season.start_at`(경계 시각 8시 — seasons.py 주의 2)
+    end: datetime | None       # None = 진행 중(시즌표엔 진행 중 시즌이 없다 — 마지막 끝난 시즌의 경계가 시작)
+
+    @property
+    def ongoing(self) -> bool:
+        return self.end is None
+
+    @property
+    def key(self) -> str:
+        """`predict_final` 이 쓰는 시즌 시작 날짜(시즌표 start · iso) — 시각이 아니라 날짜."""
+        return self.start.date().isoformat()
+
+
+def season_spans(seasons, now: datetime) -> list[SeasonSpan]:
+    """시즌표 → 시즌 구간(최신부터). 이미 시작한 시즌만 — 끝나지 않았으면 진행 중. 시즌표에 진행 중 시즌이 없으면
+    마지막 끝난 시즌의 경계에서 시작하는 "지금 시즌" 을 하나 더한다. 시즌표가 비면 빈 목록(웹 데이터 꺼짐)."""
+    out = [SeasonSpan(s.label, s.start_at, s.end_at if s.end_at <= now else None) for s in seasons if s.start_at <= now]
+    if out and not any(sp.ongoing for sp in out):
+        out.append(SeasonSpan("지금 시즌", max(s.end_at for s in seasons), None))
+    out.sort(key=lambda sp: sp.start, reverse=True)
+    return out
+
+
+def stored_spans(spans: list[SeasonSpan], matches: list[MatchSummary]) -> list[SeasonSpan]:
+    """저장된 경기가 하나라도 속한 시즌만(칩 목록 — 시즌표엔 2018년부터 89개가 있다). 순서는 그대로."""
+    dates = sorted(m.match_date for m in matches if m.match_date is not None)
+    return [sp for sp in spans
+            if bisect_left(dates, sp.start) < (len(dates) if sp.end is None else bisect_left(dates, sp.end))]
+
+
+def _in(ms: list[MatchSummary], lo: datetime, hi: datetime | None) -> list[MatchSummary]:
+    return [m for m in ms if m.match_date is not None and lo <= m.match_date and (hi is None or m.match_date < hi)]
+
+
+def _elo_marks(rows: list[dict] | None) -> list[tuple[datetime, float]]:
+    """내 점수 기록 → (시각, 점수) 시각 순. 읽을 수 없는 줄은 뺀다."""
+    out = []
+    for r in rows or []:
+        try:
+            t = datetime.fromisoformat(r["taken_at"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if isinstance(r.get("elo"), (int, float)):
+            out.append((t, float(r["elo"])))
+    out.sort(key=lambda x: x[0])
+    return out
+
+
+def _ctx_div(ctx: dict, m: MatchSummary) -> int | None:
+    return ctx.get(m.match_id, (None, None))[0]
+
+
+@dataclass
+class PaceSide:
+    games: int = 0
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    rate: float = 0.0
+    best_div: int | None = None     # 그 구간에서 가장 높은 등급(id 가 가장 작은 것)
+    elo: float | None = None        # 구간 안 마지막 점수 기록
+    fc: int | None = None           # 승리 보상 합(보상이 나온 승리가 있을 때만)
+
+
+def _side(ms: list[MatchSummary], wins: list, ctx: dict, marks: list, lo: datetime, hi: datetime | None, mixed: bool) -> PaceSide:
+    w, d, l = _wdl(ms)
+    divs = [x for x in (_ctx_div(ctx, m) for m in ms) if x is not None]
+    got = [v for t, v in marks if lo <= t and (hi is None or t < hi)]
+    rw = win_rewards([x for x in wins if lo <= x.when and (hi is None or x.when < hi)])
+    return PaceSide(len(ms), w, d, l, win_pct(w, d, l, mixed), min(divs) if divs else None,
+                    got[-1] if got else None, rw.fc if rw.rewarded_wins else None)
+
+
+def _cum_rates(ms: list[MatchSummary], start: datetime, days: int, mixed: bool) -> list[tuple[float | None, int]]:
+    """날 1~days 끝까지 쌓은 (승률 | None(그때까지 판정할 경기 없음), 판 수)."""
+    per = [[0, 0, 0] for _ in range(days)]
+    for m in ms:
+        k = int((m.match_date - start).total_seconds() // 86400)
+        v = habits._result_value(m.result)
+        if 0 <= k < days and v:
+            per[k]["승무패".index(v)] += 1
+    out, w, d, l = [], 0, 0, 0
+    for a, b, c in per:
+        w, d, l = w + a, d + b, l + c
+        out.append((win_pct(w, d, l, mixed) if rated(w, d, l, mixed) else None, w + d + l))
+    return out
+
+
+@dataclass
+class SeasonPace:
+    span: SeasonSpan
+    prev_span: SeasonSpan | None
+    days: float                     # 경과 일수(진행 중이면 지금까지 · 끝난 시즌이면 전체 길이)
+    mixed: bool
+    cur: PaceSide
+    prev: PaceSide | None = None
+    prev_state: str = "ok"          # ok · none(지난 시즌이 시즌표에 없다) · empty(지난 시즌 경기가 없다) · late(저장이 시즌 일부만)
+    prev_from: date | None = None   # late 일 때 지난 시즌 저장이 시작된 날
+    prev_days: int | None = None    # 지난 시즌이 이 경과 일수보다 일찍 끝났으면 그 길이(일) — "비교 끝"
+    curve: list = field(default_factory=list)   # [(날 k, 이 시즌 누적 승률 | None, 지난 시즌 누적 승률 | None)] — 지난 시즌 끝난 뒤는 None
+
+
+def season_pace(matches: list[MatchSummary], wins: list, ctx: dict, elo_rows: list[dict] | None,
+                spans: list[SeasonSpan], index: int, now: datetime) -> SeasonPace:
+    """spans[index] 의 시작부터 경과 d 일 대 바로 앞(이전) 시즌의 시작~d 일. 승률 식(mixed)은 두 구간을 합쳐 한 번 정한다.
+    지난 시즌은 저장이 시작부터 있을 때만(첫 경기 ≤ 시작 + `N12_START_DAYS` — records ③ 과 같은 식) · d 가 지난 시즌 길이를 넘으면
+    끝난 곳까지만 견준다(`prev_days`)."""
+    span = spans[index]
+    hi = span.end
+    days = ((hi - span.start) if hi is not None else max(now - span.start, timedelta(0))).total_seconds() / 86400
+    cur_ms = _in(matches, span.start, hi)
+    prev_span = spans[index + 1] if index + 1 < len(spans) else None
+    prev_all: list[MatchSummary] = []
+    prev_ms: list[MatchSummary] = []
+    cutoff = None
+    if prev_span is not None:
+        cutoff = prev_span.start + timedelta(days=days)
+        if prev_span.end is not None and cutoff > prev_span.end:
+            cutoff = prev_span.end
+        prev_all = _in(matches, prev_span.start, prev_span.end)
+        prev_ms = _in(prev_all, prev_span.start, cutoff)
+    mixed = is_mixed(m.draw_possible for m in cur_ms + prev_ms)
+    marks = _elo_marks(elo_rows)
+    out = SeasonPace(span, prev_span, days, mixed, _side(cur_ms, wins, ctx, marks, span.start, hi, mixed))
+    if prev_span is None:
+        out.prev_state = "none"
+        return out
+    if not prev_all:
+        out.prev_state = "empty"
+        return out
+    first = min(m.match_date for m in prev_all)
+    if first > prev_span.start + timedelta(days=config.N12_START_DAYS):
+        out.prev_state, out.prev_from = "late", first.date()
+        return out
+    out.prev = _side(prev_ms, wins, ctx, marks, prev_span.start, cutoff, mixed)
+    if prev_span.end is not None and prev_span.start + timedelta(days=days) > prev_span.end:
+        out.prev_days = round((prev_span.end - prev_span.start).total_seconds() / 86400)
+    k_count = max(math.ceil(days), 1)
+    cur_c = _cum_rates(cur_ms, span.start, k_count, mixed)
+    prev_c = _cum_rates(prev_ms, prev_span.start, k_count, mixed)
+    prev_len = (cutoff - prev_span.start).total_seconds() / 86400
+    for k in range(k_count):
+        out.curve.append((k + 1, cur_c[k][0], prev_c[k][0] if k < prev_len else None))
+    return out
+
+
+@dataclass
+class SeasonReview:
+    span: SeasonSpan
+    games: int = 0
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+    mixed: bool = False
+    rate: float = 0.0
+    best_div: int | None = None
+    final_div: int | None = None            # 그 시즌 마지막 경기 때 내 등급
+    peak_elo: float | None = None
+    longest_win: int = 0
+    formation: tuple[str, int] | None = None   # 가장 많이 쓴 포메이션 (이름, 판 수)
+    scorer: tuple[int, int, int] | None = None  # 득점 1위 (spId, 골, 뛴 경기)
+    final_rank: int | None = None
+    achievements: int = 0
+    play_min: float = 0.0
+    rival: records.Rival | None = None
+    from_day: date | None = None            # 저장이 시즌 시작 `N12_START_DAYS` 넘게 늦게 시작했으면 그 첫 경기 날짜
+
+
+def top_scorer(details: list[dict], ouid: str, match_ids: set) -> tuple[int, int, int] | None:
+    """match_ids 안 경기에서 내 선수 중 골 1위 (spId, 골, 뛴 경기) — 같으면 덜 뛴 쪽 · 골이 0 이면 None."""
+    acc: dict[int, list[int]] = {}
+    for d in details:
+        if d.get("matchId") not in match_ids:
+            continue
+        me, _opp = _me_opp(d, ouid)
+        if me is None:
+            continue
+        for p in me.get("player") or []:
+            sp = p.get("spId")
+            if not isinstance(sp, int) or not _played(p):
+                continue
+            a = acc.setdefault(sp, [0, 0])
+            a[0] += int(_num(p.get("status") or {}, "goal"))
+            a[1] += 1
+    best = max(((g, -n, sp) for sp, (g, n) in acc.items()), default=None)
+    return (best[2], best[0], -best[1]) if best and best[0] > 0 else None
+
+
+def season_review(matches: list[MatchSummary], details: list[dict], ouid: str, ctx: dict, elo_rows: list[dict] | None,
+                  span: SeasonSpan, finals: dict | None = None, ach_times: list[datetime] | None = None) -> SeasonReview:
+    """고른 시즌 한 장. matches·details 는 저장 전체(시즌 필터와 무관) · 시즌 경계는 `Season.start_at`/`end_at`.
+    finals = {시즌 시작 날짜 iso: 최종 순위}(`predict_final` 의 found 만) · ach_times = 업적 시각(records)."""
+    ms = _in(matches, span.start, span.end)
+    out = SeasonReview(span)
+    out.games = len(ms)
+    if not ms:
+        return out
+    out.win, out.draw, out.lose = _wdl(ms)
+    out.mixed = is_mixed(m.draw_possible for m in ms)
+    out.rate = win_pct(out.win, out.draw, out.lose, out.mixed)
+    order = sorted(ms, key=lambda m: m.match_date)
+    known = [d for d in (_ctx_div(ctx, m) for m in order) if d is not None]
+    out.best_div = min(known) if known else None
+    out.final_div = known[-1] if known else None
+    marks = [v for t, v in _elo_marks(elo_rows) if span.start <= t and (span.end is None or t < span.end)]
+    out.peak_elo = max(marks) if marks else None
+    out.longest_win = longest_streaks(ms)[0]
+    forms = Counter(f for f in (ctx.get(m.match_id, (None, None))[1] for m in ms) if f is not None)
+    out.formation = forms.most_common(1)[0] if forms else None
+    out.scorer = top_scorer(details, ouid, {m.match_id for m in ms})
+    out.final_rank = (finals or {}).get(span.key)
+    out.achievements = sum(span.start <= t and (span.end is None or t < span.end) for t in ach_times or [])
+    out.play_min = play_time(split_sessions(ms)).total_min
+    out.rival = records.rival(list(reversed(order)))
+    if order[0].match_date > span.start + timedelta(days=config.N12_START_DAYS):
+        out.from_day = order[0].match_date.date()
+    return out
+
+
+# ── Y1 연패 때 흐름 표시 ────────────────────────────────────────────────────
+@dataclass
+class StreakNote:
+    run: int                       # 지금 연패 수
+    min_loss: int                  # "이 연패 이상 뒤" 의 기준(`Y1_MIN_LOSS`)
+    after: tuple = (0, 0, 0)       # 이 계정이 min_loss 연패 이상 뒤 치른 다음 판 승·무·패(저장 전체)
+    base: tuple = (0, 0, 0)        # 저장 전체 승·무·패
+    mixed: bool = False
+    weak: bool = True              # 다음 판 표본이 모자라다(`is_weak(rated, MIN_COND)`) — 화면이 흐리게
+    significant: bool = False      # [연패] 표 셋 중 하나라도 유의하다 — 화면이 이때만 흐리지 않게(E1: 경고색은 없다)
+
+
+def streak_note(matches: list[MatchSummary], ctx: dict, now: datetime) -> StreakNote | None:
+    """검색한 계정이 지금 `Y1_MIN_LOSS` 연패 이상이고 마지막 경기가 `Y1_RECENT_H` 시간 안이면 사실 한 줄의 재료, 아니면 None.
+    범위는 저장 전체(시즌 필터와 무관) — 평소·연패 뒤 승률이 범위 따라 달라지면 한 줄이 계정 사실이 아니게 된다.
+    연패는 `streak_break` 와 같이 센다(무승부·오류는 연패를 끊는다). ctx 는 dict 이거나 그것을 돌려주는 함수 — 조건을 통과했을 때만
+    부른다(대시보드는 연패가 아닐 때가 대부분이라 전 경기 `match_context` 를 매번 짓지 않게)."""
+    dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
+    run = 0
+    for m in reversed(dated):
+        if habits._result_value(m.result) != "패":
+            break
+        run += 1
+    if run < config.Y1_MIN_LOSS or (now - dated[-1].match_date).total_seconds() > config.Y1_RECENT_H * 3600:
+        return None
+    after, streak, prev = [], 0, None
+    for m in dated:
+        v = habits._result_value(m.result)
+        if v and streak >= config.Y1_MIN_LOSS and prev is not None:
+            after.append(m)
+        streak = streak + 1 if v == "패" else 0
+        prev = m
+    mixed = is_mixed(m.draw_possible for m in dated)
+    out = StreakNote(run, config.Y1_MIN_LOSS, _wdl(after), _wdl(dated), mixed)
+    out.weak = is_weak(rated(*out.after, mixed), MIN_COND)
+    out.significant = any(t.significant for t in streak_break(dated, ctx() if callable(ctx) else ctx, mixed).tables)
     return out
