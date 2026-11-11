@@ -374,6 +374,22 @@ def test_429_twice_blocks_day():
         assert res2.skipped and w.count() == 2, "그날 다시 안 돈다"
 
 
+def test_gate_holds_requests_per_second():
+    # 막지 않았으면: 가짜 시계는 sleep 으로만 가니 요청 401개가 같은 순간(0초)에 나간다
+    with tmp(DEV_MATCH_MAX_RPS=400):
+        c = Clock()
+        g = M._Gate(10 ** 6, 0, lambda: False, c.sleep, c)
+        t0 = c.t
+        for _ in range(401):
+            g.take()
+        took = c.t - t0
+        assert abs(took - 1.0) < 1e-6, took      # 401번째는 정확히 1초 뒤 — 초당 400
+        c.t += 5                                  # 쉬었다 오면 밀린 몫을 몰아 쓰지 않고, 기다림 없이 바로 나간다
+        t1 = c.t
+        g.take()
+        assert c.t == t1, c.t - t1
+
+
 def test_403_blocks_immediately():
     with tmp(DEV_MATCH_WORKERS=1) as d:
         w = World()
@@ -474,7 +490,8 @@ def test_open_db_adds_run_s_to_old_days_table():
 
 def test_run_seconds_exclude_gap_between_runs():
     """제시간은 실행들이 실제로 돈 시간의 합 — 끊긴 뒤 11시간 지나 이어 끝내도 벽시계로 재지 않는다(10-22~24 상한 정체)."""
-    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_DAY_HOURS=6, DEV_MATCH_CAP_GROWTH=2.0) as d:
+    # 초당 상한의 대기(요청마다 1/RPS 초)가 가짜 시계에 섞이지 않게 사실상 끈다 — 여기서 재는 것은 실행 사이 공백뿐
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_DAY_HOURS=6, DEV_MATCH_CAP_GROWTH=2.0, DEV_MATCH_MAX_RPS=float("inf")) as d:
         w = World()
         for i in range(3):
             w.person(f"p{i}", f"O{i}")

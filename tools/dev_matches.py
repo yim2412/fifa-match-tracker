@@ -281,6 +281,7 @@ class _Gate:
         self.reason = ""          # "" | cap | blocked | key | outage | cancel | deadline
         self._pause_until = 0.0
         self._streak = 0
+        self._next_slot = 0.0     # 초당 상한 — 다음 요청이 나갈 수 있는 가장 이른 시각
         self._lock = threading.Lock()
 
     def halt(self, reason: str):
@@ -304,6 +305,12 @@ class _Gate:
                 raise _Halt
             self.used += 1
             self.requests += 1
+            # 동시 수만 늘리면 응답이 빠른 순간 서비스 키 초당 500 을 넘어 429 두 번 = 그날 막힘(+3일 절반)이 된다
+            now = self.clock()
+            slot = max(self._next_slot, now)
+            self._next_slot = slot + 1.0 / config.DEV_MATCH_MAX_RPS
+        if slot > now:
+            self.sleep(slot - now)
 
     def call(self, fn, gone_ok: bool = False):
         for attempt in (0, 1):
