@@ -100,7 +100,7 @@ python tests/test_release.py   # 배포 검사 로직(빌드 없이)
 python tests/test_rules.py     # 규칙 검사(정적 + SQL 실행 계획 — 파싱·수집 테스트를 같이 돌려 쿼리를 모은다)
 python tools/review_kit.py bundle "## 2.1.1"   # 계획 검토 근거 묶음 (diff <커밋> · ledger <절> 도)
 python tools/dev_archive.py --status   # 개발용 상시 수집 현황(이 PC 전용 — 작업 스케줄러 FifaDevArchive 가 로그온·09:00 에 돈다)
-python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevMatches — 로그온 5분 뒤 + 30분마다 · 동시 64) · 시험은 --cap 300 --force
+python tools/dev_matches.py --status   # 개발 PC 경기 수집 현황(FifaDevMatches — 로그온 5분 뒤 + 10분마다 · 동시 64) · 시험은 --cap 300 --force
 python tools/measure_cards.py --status   # 51 측정 현황(D0 2026-10-19 · 오늘 할 일) · 판정 규칙 시험은 --selftest · 매일 도는 것은 작업 스케줄러 FifaMeasureCards(--daily · 로그 DATA_DIR/measure/run.log)
 python tools/check_t0.py               # 63 골든 — 내 계정 10-01~10-23 날마다 승·무·패·FC 를 앱 계산으로(이 PC 전용 · 골든은 DATA_DIR/t0_golden.json · --write)
 python tests/test_measure_cards.py     # 51 측정 도구 — 일정·고정 수요·방향·뺀 이유·B 짝짓기(가장 가까운·24시간·같은 시즌·한 번만)·절반·C 카드 집합·토글 거부(지어낸 DB)
