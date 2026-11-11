@@ -141,6 +141,45 @@ def test_launcher_stops_child_when_game_starts():
     assert rc == 3 and child.terminated and "게임이 켜져 내렸다" in log, (rc, log)
 
 
+def test_once_a_day_skips_only_after_a_finished_run():
+    """--once-a-day: 게임으로 건너뜀·도중 내림은 끝난 게 아니다(다시 띄운다) · 끝까지 돌면 그날은 안 띄운다 · 다음 날은 다시."""
+    game, day, made = [False], [R.date(2026, 11, 16)], []
+    child = [None]
+    keep = R.GAME_CHECK, R.LOG_PATH, R.TODAY
+    tmp = tempfile.TemporaryDirectory()
+    R.GAME_CHECK, R.TODAY = (lambda: game[0]), (lambda: day[0])
+    R.LOG_PATH = Path(tmp.name) / "log.txt"
+
+    def popen(cmd, creationflags=0):
+        made.append(cmd)
+        return child[0]
+
+    def call(c, argv=(R.ONCE_FLAG, "measure_cards.py", "--daily"), sleep=lambda s: None):
+        child[0] = c
+        return R.run(list(argv), popen=popen, sleep=sleep)
+    try:
+        game[0] = True
+        assert call(FakeChild(0)) == 0 and made == [], "게임 중인데 띄웠다"
+        game[0] = False
+
+        def game_starts(_s):
+            game[0] = True
+        assert call(FakeChild(100), sleep=game_starts) == 3 and len(made) == 1
+        game[0] = False
+        assert call(FakeChild(1, code=2)) == 2 and len(made) == 2, "도중에 내린 날을 끝난 것으로 쳤다"
+        assert made[1][1:] == ["measure_cards.py", "--daily"], "표시 인자를 자식에게 넘겼다"
+        assert call(FakeChild(0)) == 0 and len(made) == 2, "오늘 끝났는데 또 띄웠다"
+        day[0] = R.date(2026, 11, 17)
+        call(FakeChild(0))
+        assert len(made) == 3, "다음 날인데 안 띄웠다"
+        call(FakeChild(0), argv=("measure_cards.py",))
+        call(FakeChild(0), argv=("measure_cards.py",))
+        assert len(made) == 5, "표시 없이 부르면 예전처럼 매번 띄운다"
+    finally:
+        R.GAME_CHECK, R.LOG_PATH, R.TODAY = keep
+        tmp.cleanup()
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
