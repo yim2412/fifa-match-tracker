@@ -1,0 +1,290 @@
+"""세션 · 경기를 돌린 시간 · 연패 끊는 패턴(97단계 조각 1 — docs/ROADMAP "## 97단계"). 화면 없음 · 순수 계산 · 화면은 core_api 로.
+
+| 함수 | 화면 | 메모 |
+|---|---|---|
+| `split_sessions(matches)` | [흐름 › 플레이 기록 › 세션] | 세션 = `SESSION_GAP_MIN` 분 넘게 쉬거나 **KST 0시를 넘으면 끊는다** |
+| `session_rows(sessions, mixed, points)` · `size_bins` · `session_luck` | 〃 | 줄(날짜·시각·판 수·승무패·승률·점수 변화) · 판 수 구간별 승률 · 운 범위 밖 세션 수 대 기대 |
+| `play_time(sessions)` · `period_totals` | [플레이 기록 › 경기 시간] | "경기를 돌린 시간(추정)" — 앉아 있던 시간이 아니다 |
+| `match_context(details, ouid)` · `streak_break(matches, ctx)` | [플레이 기록 › 연패] | 연패 뒤 다음 판을 끊음(승) 대 이어짐으로 — 조건 셋 고정 |
+
+규칙(근거 ROADMAP 97 F1·F2·U6):
+- 감독모드는 켜 두면 혼자 돌아 30분 끊기만으로는 126시간짜리 세션이 나온다(실측) — 그래서 0시에서도 끊는다.
+- **경기를 돌린 시간** = 세션마다 (마지막 판 시작 − 첫 판 시작 + 한 판 길이). 한 판 길이는 그 계정 세션 안 간격의 중앙값
+  (간격이 `Y2_MIN_GAPS` 개 미만이면 `Y2_GAME_MIN_FALLBACK`). 세션이 0시에서 끊기므로 하루 합은 24시간을 못 넘는다(0시를 넘겨
+  끝나는 마지막 한 판 길이만큼은 넘을 수 있어 `DAY_CAP_MIN` 으로 자른다).
+- **연패 뒤 다음 판**: 연패는 세션·날짜와 무관하게 이어 센다(F2 와 같다). 무승부·오류는 연패를 끊는다.
+  끊음 = 승 / 이어짐 = 무·패 — 승률 규칙과 같은 두 갈래(`habits._chi_table`). 표 셋 = 검정 셋이라 문턱은 `N20_ALPHA / N1_TESTS`.
+  연패가 다음 판을 망친다는 근거는 이 자료에 없었다(F2) — 그래서 이 모듈은 좋음·나쁨을 말하지 않고 표만 만든다.
+- 승률은 이 모듈이 클래스를 만들지 않는다 — `rate` 는 부르는 쪽이 정한 `mixed` 로 `win_pct` 를 한 번 낸 값이다
+  (`habits.HabitBin` 꼴 · RATE_CLASSES 에 안 넣는 이유).
+"""
+from __future__ import annotations
+
+import statistics
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+
+import config
+import habits
+from models import MatchSummary, is_mixed, win_pct
+from stats import formation_of
+
+DAY_CAP_MIN = 24 * 60
+_NO_FORMATION = formation_of([])   # 선발을 못 읽은 경기(몰수 등)의 표기 — 포메이션을 모르는 것으로 본다
+
+
+def _wdl(ms: list[MatchSummary]) -> tuple[int, int, int]:
+    w = d = l = 0
+    for m in ms:
+        v = habits._result_value(m.result)
+        w += v == "승"
+        d += v == "무"
+        l += v == "패"
+    return w, d, l
+
+
+# ── Y3 세션 ─────────────────────────────────────────────────────────────────
+@dataclass
+class Session:
+    matches: list[MatchSummary] = field(default_factory=list)   # 시각 순
+    ongoing: bool = False   # 마지막 세션만 — 아직 이어지는 중일 수 있다(경기는 1~2시간마다·검색할 때 받아 온다)
+
+    @property
+    def start(self) -> datetime:
+        return self.matches[0].match_date
+
+    @property
+    def end(self) -> datetime:
+        return self.matches[-1].match_date
+
+    @property
+    def day(self) -> date:
+        return self.start.date()
+
+    @property
+    def games(self) -> int:
+        return len(self.matches)
+
+    @property
+    def wdl(self) -> tuple[int, int, int]:
+        return _wdl(self.matches)
+
+
+def _game_length(sessions: list[Session]) -> tuple[float, bool, int]:
+    """(한 판 길이 분, 기본값을 썼나, 간격 수) — 세션 안 간격의 중앙값. 간격이 `Y2_MIN_GAPS` 개 미만이면 기본값."""
+    gaps = [(b.match_date - a.match_date).total_seconds() / 60
+            for s in sessions for a, b in zip(s.matches, s.matches[1:])]
+    if len(gaps) >= config.Y2_MIN_GAPS:
+        return statistics.median(gaps), False, len(gaps)
+    return float(config.Y2_GAME_MIN_FALLBACK), True, len(gaps)
+
+
+def split_sessions(matches: list[MatchSummary], now: datetime | None = None) -> list[Session]:
+    """오래된 세션부터. 앞 판 시작과의 간격이 `SESSION_GAP_MIN` 분을 넘거나(`habits.habit_tables` 와 같은 '넘게') 날짜(KST)가
+    바뀌면 새 세션. 날짜 없는 경기는 뺀다.
+    now 를 주면 마지막 세션의 `ongoing` 을 정한다: 마지막 판 시작에서 now 까지가 `SESSION_GAP_MIN` + 한 판 길이 이내이고
+    같은 날이면 참(날이 바뀌었으면 이어 해도 새 세션이라 아니다)."""
+    dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
+    out: list[Session] = []
+    prev: datetime | None = None
+    for m in dated:
+        if (prev is None or (m.match_date - prev).total_seconds() / 60 > config.SESSION_GAP_MIN
+                or m.match_date.date() != prev.date()):
+            out.append(Session())
+        out[-1].matches.append(m)
+        prev = m.match_date
+    if now is not None and out:
+        game_min = _game_length(out)[0]
+        last = out[-1].end
+        out[-1].ongoing = (now.date() == last.date()
+                           and (now - last).total_seconds() / 60 <= config.SESSION_GAP_MIN + game_min)
+    return out
+
+
+@dataclass
+class SessionRow:
+    start: datetime
+    end: datetime
+    games: int
+    win: int
+    draw: int
+    lose: int
+    rate: float                    # win_pct(%) — 부르는 쪽이 정한 mixed
+    delta: float | None = None     # 그날 점수 변화 — 그날 세션이 하나뿐이고 점수 점이 있을 때만
+    ongoing: bool = False          # 아직 이어지는 중일 수 있다(판 수가 덜 셌다)
+
+
+def session_rows(sessions: list[Session], mixed: bool, points: list[tuple[date, float]] | None = None) -> list[SessionRow]:
+    """세션마다 한 줄(오래된 것부터). points = ELO 하루 점 (날짜, 점수) — 하루 점은 세션을 못 가르므로
+    그날 세션이 **하나뿐일 때만** `habits.day_delta` 를 싣는다(둘 이상이면 어느 세션 몫인지 모른다)."""
+    per_day: dict[date, int] = {}
+    for s in sessions:
+        per_day[s.day] = per_day.get(s.day, 0) + 1
+    out = []
+    for s in sessions:
+        w, d, l = s.wdl
+        delta = habits.day_delta(points, s.day) if points and per_day[s.day] == 1 else None
+        out.append(SessionRow(s.start, s.end, s.games, w, d, l, win_pct(w, d, l, mixed), delta, s.ongoing))
+    return out
+
+
+@dataclass
+class SizeBin:
+    label: str
+    sessions: int = 0
+    win: int = 0
+    draw: int = 0
+    lose: int = 0
+
+
+def size_bins(sessions: list[Session]) -> list[SizeBin]:
+    """세션 판 수 구간(`SESSION_SIZE_EDGES`)별 — 그 구간 세션들에서 친 모든 판의 승무패. 이어지는 중인 세션은 뺀다(판 수가 덜 셌다)."""
+    se = config.SESSION_SIZE_EDGES
+    labels = [f"1~{se[0] - 1}판"] + [f"{lo}~{hi - 1}판" for lo, hi in zip(se, se[1:])] + [f"{se[-1]}판 넘게"]
+    out = [SizeBin(lb) for lb in labels]
+    for s in sessions:
+        if s.ongoing:
+            continue
+        b = out[sum(s.games >= e for e in se)]
+        w, d, l = s.wdl
+        b.sessions += 1
+        b.win, b.draw, b.lose = b.win + w, b.draw + d, b.lose + l
+    return out
+
+
+@dataclass
+class SessionLuck:
+    judged: int = 0          # 판정한 세션 수(승률 분모가 `D1_MIN_GAMES` 이상)
+    outside: int = 0         # 그중 승률이 운 범위 띠 밖
+    expected: float = 0.0    # 운만이면 띠 밖일 세션 수(세션마다 이항 정확히 더함)
+    p: float = 0.0           # 범위 전체 승률(0~1) — 띠의 가운데
+
+
+def session_luck(sessions: list[Session], mixed: bool) -> SessionLuck:
+    """세션 승률이 운 범위(`habits.luck_band` — N16·달력과 같은 식) 밖인 세션 수 대 운만일 때의 기대. 띠 가운데는 범위 전체 승률."""
+    out = SessionLuck()
+    sessions = [s for s in sessions if not s.ongoing]   # 이어지는 중인 세션은 판 수가 덜 셌다
+    tw = td = tl = 0
+    for s in sessions:
+        w, d, l = s.wdl
+        tw, td, tl = tw + w, td + d, tl + l
+    n_all = (tw + tl) if mixed else (tw + td + tl)
+    if not n_all:
+        return out
+    out.p = tw / n_all
+    for s in sessions:
+        w, d, l = s.wdl
+        n = (w + l) if mixed else (w + d + l)
+        if n < config.D1_MIN_GAMES:
+            continue
+        lo, hi = habits.luck_band(out.p, n)
+        rate = w / n
+        out.judged += 1
+        out.outside += rate > hi + 1e-9 or rate < lo - 1e-9
+        out.expected += habits._binom_outside_prob(n, out.p, lo, hi)
+    return out
+
+
+# ── Y2 경기를 돌린 시간(추정) ───────────────────────────────────────────────
+@dataclass
+class PlayTime:
+    game_min: float = float(config.Y2_GAME_MIN_FALLBACK)   # 한 판 길이(분)
+    estimated: bool = True        # 참이면 간격이 모자라 기본값을 썼다
+    gaps: int = 0                 # 중앙값을 낸 세션 안 간격 수
+    days: dict = field(default_factory=dict)   # 날 → 분(24시간 상한)
+
+    @property
+    def total_min(self) -> float:
+        return sum(self.days.values())
+
+    @property
+    def average_day_min(self) -> float:
+        """경기가 있던 날의 하루 평균(분)."""
+        return self.total_min / len(self.days) if self.days else 0.0
+
+    @property
+    def longest_day(self) -> tuple[date, float] | None:
+        return max(self.days.items(), key=lambda kv: kv[1]) if self.days else None
+
+
+def play_time(sessions: list[Session]) -> PlayTime:
+    game_min, estimated, gaps = _game_length(sessions)
+    out = PlayTime(game_min=game_min, estimated=estimated, gaps=gaps)
+    for s in sessions:
+        length = (s.end - s.start).total_seconds() / 60 + out.game_min
+        out.days[s.day] = min(out.days.get(s.day, 0.0) + length, float(DAY_CAP_MIN))
+    return out
+
+
+def period_totals(pt: PlayTime, unit: str) -> list[tuple[date, float]]:
+    """일·주·월 합(분) — 오래된 것부터. 주는 월요일, 월은 1일이 키. 경기가 없던 기간은 줄이 없다."""
+    acc: dict[date, float] = {}
+    for d, minutes in pt.days.items():
+        key = d if unit == "일" else (d - timedelta(days=d.weekday()) if unit == "주" else d.replace(day=1))
+        acc[key] = acc.get(key, 0.0) + minutes
+    return sorted(acc.items())
+
+
+# ── N1 연패 끊는 패턴 ───────────────────────────────────────────────────────
+def match_context(details: list[dict], ouid: str) -> dict[str, tuple[int | None, str | None]]:
+    """경기마다 (그 경기 때 내 등급, 내 포메이션) — {match_id: …}. 등급은 `stats.win_divisions` 와 같은 `matchInfo.division`
+    (경기 당시 값 · 작을수록 높다) — WinDivision 은 match_id 가 없어 경기와 못 짝지어 같은 필드를 id 로 다시 읽는다.
+    선발을 못 읽은 경기의 포메이션은 None."""
+    out: dict[str, tuple[int | None, str | None]] = {}
+    for d in details:
+        me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ouid), None)
+        if me is None:
+            continue
+        div = me.get("division")
+        form = formation_of(me.get("player") or [])
+        out[d.get("matchId", "")] = (div if isinstance(div, int) else None, None if form == _NO_FORMATION else form)
+    return out
+
+
+DIVISION_LABELS = ("상대가 더 높음", "같은 등급", "상대가 더 낮음")
+FORMATION_LABELS = ("같은 포메이션", "포메이션 바꿈")
+
+
+@dataclass
+class StreakBreak:
+    min_loss: int = 0
+    games: int = 0                              # 범위 전체 경기(승·무·패)
+    base: tuple = (0, 0, 0)                     # 범위 전체 승·무·패
+    after: tuple = (0, 0, 0)                    # 연패 뒤 다음 판 승·무·패
+    mixed: bool = False
+    alpha: float = 0.0                          # 표마다 유의 문턱
+    tables: list = field(default_factory=list)  # HabitTable 셋 — 직전 간격 · 포메이션 · 상대 등급
+
+
+def streak_break(matches: list[MatchSummary], ctx: dict, mixed: bool | None = None) -> StreakBreak:
+    """`N1_MIN_LOSS` 연패 뒤 다음 판 — 맨 위 사실(연패 뒤 승률 대 범위 전체)과 조건 셋 표(직전 간격 · 포메이션 바꿈 · 상대 등급).
+    ctx = `match_context`. 조건을 모르는 경기(포메이션·등급 없음)는 그 표에서만 빠진다."""
+    dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
+    flags = [m.draw_possible for m in dated]
+    out = StreakBreak(min_loss=config.N1_MIN_LOSS, mixed=is_mixed(flags) if mixed is None else mixed,
+                      alpha=config.N20_ALPHA / config.N1_TESTS)
+    out.base = _wdl(dated)
+    out.games = sum(out.base)
+    gap_rows, form_rows, div_rows, targets = [], [], [], []
+    run = 0
+    prev: MatchSummary | None = None
+    for m in dated:
+        v = habits._result_value(m.result)
+        if v and run >= config.N1_MIN_LOSS and prev is not None:
+            targets.append(m)
+            gap = (m.match_date - prev.match_date).total_seconds() / 60
+            gap_rows.append((habits._bin_index(gap - 1e-9, config.N20_GAP_EDGES), m))
+            pf, mf = ctx.get(prev.match_id, (None, None))[1], ctx.get(m.match_id, (None, None))[1]
+            if pf is not None and mf is not None:
+                form_rows.append((int(pf != mf), m))
+            mine = ctx.get(m.match_id, (None, None))[0]
+            if mine is not None and isinstance(m.opp_division, int):
+                div_rows.append((0 if m.opp_division < mine else (1 if m.opp_division == mine else 2), m))
+        run = run + 1 if v == "패" else 0
+        prev = m
+    out.after = _wdl(targets)
+    for name, labels, rows in (("직전 경기와의 간격", habits.gap_labels(), gap_rows),
+                               ("포메이션 바꿈", list(FORMATION_LABELS), form_rows),
+                               ("상대 등급", list(DIVISION_LABELS), div_rows)):
+        out.tables.append(habits._chi_table(name, labels, rows, is_mixed(m.draw_possible for _, m in rows), out.alpha))
+    return out

@@ -3981,7 +3981,10 @@ class MainWindow(QMainWindow):
                                               ("일별 기록", "_build_calendar_tab"),
                                               ("순위 변동", "_build_rank_move_tab")))),
                  ("기간별 성적", "_build_period_tab"),   # 77 A — 옛 [기간별 추이]·[시즌별 성적]
-                 ("내 기록", "_build_records_tab")]),   # 88 U1 — 업적(늘 저장 전체라 범위 버튼이 붙는 [기간별 성적] 밖에)
+                 ("내 기록", "_build_records_tab"),   # 88 U1 — 업적(늘 저장 전체라 범위 버튼이 붙는 [기간별 성적] 밖에)
+                 ("플레이 기록", Tabs("playlog", (("세션", "_build_sessions_tab"),   # 97 — 세션·경기를 돌린 시간·연패 끊는 패턴
+                                              ("경기 시간", "_build_playtime_tab"),
+                                              ("연패", "_build_streakbreak_tab"))))]),
         ("경기력", [("승부처 분석", Tabs("clutch", (("선제골·역전", "_build_clutch_tab"),
                                               ("리드·골 흐름", "_build_goal_flow_tab")))),
                    ("성적 진단", Tabs("diagnosis", (("상대·점유율", "_build_diagnosis_tab"),
@@ -5768,13 +5771,13 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(w)
         v.setSpacing(8)
         self.habit_boxes = []
-        for title in ("직전 경기와의 간격", "세션 안 몇 번째 판", "시간대"):
+        for title in ("직전 경기와의 간격", "세션 안 몇 번째 판", "시간대", "요일"):
             gb = QGroupBox(title)
             box = QVBoxLayout(gb)
             tbl = self._make_table(self.HABIT_COLUMNS)
             tbl.horizontalHeaderItem(3).setToolTip("양쪽 다 챔피언스 이상이 아니라 무승부가 날 수 있던 경기의 비중")
             tbl.horizontalHeaderItem(4).setToolTip("무승부가 날 수 있던 경기만 놓고 센 무승부 비율입니다. 전체 대비 무 %와 분모가 다릅니다.")
-            tbl.setMinimumHeight(60 + 30 * (8 if title == "시간대" else 4))
+            tbl.setMinimumHeight(60 + 30 * {"시간대": 8, "요일": 7}.get(title, 4))
             box.addWidget(tbl)
             verdict = QLabel("")
             verdict.setWordWrap(True)
@@ -5813,6 +5816,220 @@ class MainWindow(QMainWindow):
             stat = f"카이제곱 {t.stat:.1f}, 자유도 {t.df}, p = {t.p:.3f} · {form}{tail}"
             if t.significant:
                 verdict.setText(f"차이가 뚜렷합니다. 색이 칠해진 구간(초록 = 평소보다 잘 이김, 빨강 = 못 이김). {stat}")
+                verdict.setStyleSheet("font-weight: bold;")
+            else:
+                verdict.setText(f"차이가 안 보입니다. {stat}")
+                verdict.setStyleSheet(dim)
+
+    # ── 97 플레이 기록 — [흐름 › 플레이 기록] 세션 · 경기 시간 · 연패 (시즌 범위 · 요청 0) ──
+    SESSION_COLUMNS = ["날짜", "시각", "판 수", "승·무·패", "승률", "점수 변화", "비고"]
+    SIZE_COLUMNS = ["세션 판 수", "세션", "승률"]
+    BREAK_COLUMNS = ["구간", "경기", "승률", "무승부 비율"]
+    PLAYTIME_UNITS = ("일", "주", "월")
+    PLAYTIME_ROWS = {"일": 60, "주": 52, "월": 24}   # 막대는 최근 이만큼만
+
+    def _build_sessions_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_sessions_note = self._note_label()
+        v.addWidget(self.lb_sessions_note)
+        gb = QGroupBox("세션 판 수별 승률")
+        box = QVBoxLayout(gb)
+        self.tbl_session_sizes = self._make_table(self.SIZE_COLUMNS)
+        self.tbl_session_sizes.setMinimumHeight(60 + 30 * (len(config.SESSION_SIZE_EDGES) + 1))
+        box.addWidget(self.tbl_session_sizes)
+        self.lb_session_luck = QLabel("")
+        self.lb_session_luck.setWordWrap(True)
+        self.lb_session_luck.setStyleSheet(f"color: {T.TEXT_DIM};")
+        box.addWidget(self.lb_session_luck)
+        v.addWidget(gb)
+        gb = QGroupBox("세션 목록")
+        box = QVBoxLayout(gb)
+        self.tbl_sessions = self._make_table(self.SESSION_COLUMNS)
+        self.tbl_sessions.setMinimumHeight(360)
+        self.tbl_sessions.horizontalHeaderItem(6).setToolTip("가장 최근 세션은 경기를 1~2시간마다, 또는 검색할 때 받아 오므로 아직 이어지는 중일 수 있습니다.")
+        box.addWidget(self.tbl_sessions)
+        v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        self.session_rows: list = []   # 표 줄 순서 그대로(최근 것부터) — 테스트가 읽는다
+        return scroll
+
+    def _build_playtime_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_playtime_note = self._note_label()
+        v.addWidget(self.lb_playtime_note)
+        cards = QHBoxLayout()
+        self.card_play_avg = StatCard("하루 평균")
+        self.card_play_longest = StatCard("가장 오래 돌린 날")
+        self.card_play_game = StatCard("한 판 길이")
+        for c in (self.card_play_avg, self.card_play_longest, self.card_play_game):
+            cards.addWidget(c, 1)
+        v.addLayout(cards)
+        gb = QGroupBox("경기를 돌린 시간(추정)")
+        box = QVBoxLayout(gb)
+        self.seg_playtime = Segmented(list(self.PLAYTIME_UNITS))
+        self.seg_playtime.changed.connect(lambda _i: self._render_playtime_bars())
+        top = QHBoxLayout()
+        top.addWidget(self.seg_playtime)
+        top.addStretch(1)
+        box.addLayout(top)
+        self.playtime_bars = charts.HBarList()
+        box.addWidget(self.playtime_bars)
+        v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        self._playtime = None
+        return scroll
+
+    def _build_streakbreak_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+        self.lb_break_fact = QLabel("")
+        self.lb_break_fact.setWordWrap(True)
+        self.lb_break_fact.setStyleSheet("font-weight: bold;")
+        v.addWidget(self.lb_break_fact)
+        self.break_boxes = []
+        for title, rows in (("직전 경기와의 간격", 4), ("포메이션 바꿈", 2), ("상대 등급", 3)):
+            gb = QGroupBox(title)
+            box = QVBoxLayout(gb)
+            tbl = self._make_table(self.BREAK_COLUMNS)
+            tbl.setMinimumHeight(60 + 30 * rows)
+            tbl.horizontalHeaderItem(3).setToolTip("그 구간 경기 중 무승부로 끝난 비율입니다. 무승부는 이어짐(안 이김)에 들어갑니다.")
+            box.addWidget(tbl)
+            verdict = QLabel("")
+            verdict.setWordWrap(True)
+            box.addWidget(verdict)
+            self.break_boxes.append((tbl, verdict))
+            v.addWidget(gb)
+        v.addStretch(1)
+        scroll.setWidget(w)
+        return scroll
+
+    def _render_playlog(self, matches: list[MatchSummary], details: list[dict]) -> None:
+        mixed = core.mixed_of_matches(matches)
+        sessions = core.split_sessions(matches, now=datetime.now())
+        self._render_sessions(sessions, mixed)
+        self._playtime = core.play_time(sessions)
+        self._render_playtime(sessions)
+        self._render_streakbreak(matches, details)
+
+    def _render_sessions(self, sessions: list, mixed: bool) -> None:
+        points = [(p["at"].date(), p["elo"]) for p in self._elo_points()]
+        rows = core.session_rows(sessions, mixed, points)
+        self.session_rows = list(reversed(rows))[:config.SESSION_MAX_ROWS]
+        dim = f"color: {T.TEXT_DIM};"
+        out = []
+        for r in self.session_rows:
+            out.append([(f"{r.start:%Y-%m-%d}", r.start.timestamp()),
+                        (f"{r.start:%H:%M} ~ {r.end:%H:%M}", r.start.timestamp()),
+                        (f"{r.games:,}", r.games),
+                        (f"{r.win}승 {r.draw}무 {r.lose}패", r.games),
+                        (win_rate_text(r.win, r.draw, r.lose, mixed, short=True), r.rate),
+                        (f"{r.delta:+,.0f}" if r.delta is not None else "—", r.delta if r.delta is not None else 0.0),
+                        ("이어지는 중일 수 있습니다" if r.ongoing else "", int(r.ongoing))])
+        self._fill(self.tbl_sessions, out, enable_sort=False)
+        bins = core.size_bins(sessions)
+        self._fill(self.tbl_session_sizes,
+                   [[b.label, (f"{b.sessions:,}", b.sessions),
+                     (win_rate_text(b.win, b.draw, b.lose, mixed, short=True) if b.sessions else "—",
+                      core.win_pct(b.win, b.draw, b.lose, mixed) if b.sessions else -1.0)] for b in bins],
+                   enable_sort=False)
+        lk = core.session_luck(sessions, mixed)
+        self.lb_session_luck.setText(
+            f"세션 승률이 운 범위 밖인 세션은 {lk.outside}개입니다. 운만이면 {lk.expected:.1f}개가 나옵니다(판정한 {lk.judged}개 중, "
+            f"세션 {config.D1_MIN_GAMES}판 이상). 이어지는 중일 수 있는 세션은 뺐습니다." if lk.judged
+            else f"판정할 세션이 없습니다. 세션 {config.D1_MIN_GAMES}판 이상이 필요합니다.")
+        self.lb_session_luck.setStyleSheet(dim)
+        self._set_status(self.lb_sessions_note,
+                         f"세션 {len(sessions):,}개 · {config.SESSION_GAP_MIN}분 넘게 쉬거나 0시를 넘으면 끊습니다" if sessions
+                         else "경기가 없어 세션을 낼 수 없습니다.")
+
+    def _render_playtime(self, sessions: list) -> None:
+        pt = self._playtime
+
+        def hm(minutes: float) -> str:
+            h, m = divmod(round(minutes), 60)
+            return f"{h}시간 {m}분" if h else f"{m}분"
+
+        if not pt.days:
+            for c in (self.card_play_avg, self.card_play_longest, self.card_play_game):
+                c.set("-")
+                c.set_sub("경기가 없습니다")
+        else:
+            self.card_play_avg.set(hm(pt.average_day_min))
+            self.card_play_avg.set_sub(f"경기가 있던 {len(pt.days):,}일 평균")
+            day, minutes = pt.longest_day
+            self.card_play_longest.set(hm(minutes))
+            self.card_play_longest.set_sub(f"{day:%Y-%m-%d}")
+            self.card_play_game.set(f"{pt.game_min:.1f}분")
+            self.card_play_game.set_sub(f"기본값 {config.Y2_GAME_MIN_FALLBACK}분을 썼습니다(세션 안 간격 {pt.gaps}개)" if pt.estimated
+                                        else f"세션 안 간격 {pt.gaps:,}개의 중앙값")
+        self._set_status(self.lb_playtime_note,
+                         "경기를 돌린 시간은 추정입니다. 앉아 있던 시간이 아니라 세션의 첫 판부터 마지막 판 끝까지를 셉니다." if pt.days
+                         else "경기가 없어 시간을 낼 수 없습니다.")
+        self._render_playtime_bars()
+
+    def _render_playtime_bars(self) -> None:
+        pt = self._playtime
+        if pt is None:
+            return
+        unit = self.PLAYTIME_UNITS[self.seg_playtime.current()]
+        rows = core.period_totals(pt, unit)[-self.PLAYTIME_ROWS[unit]:]
+        top = max((m for _, m in rows), default=0.0)
+        fmt = {"일": "%m-%d", "주": "%m-%d 주", "월": "%Y-%m"}[unit]
+        out = []
+        for d, m in reversed(rows):
+            h, mm = divmod(round(m), 60)
+            out.append((f"{d.strftime(fmt)}", m / top * 100 if top else 0.0, f"{h}시간 {mm}분" if h else f"{mm}분",
+                        f"{d:%Y-%m-%d}부터 · {m:.0f}분" if unit != "일" else f"{d:%Y-%m-%d} · {m:.0f}분"))
+        self.playtime_bars.set_data(out)
+
+    def _render_streakbreak(self, matches: list[MatchSummary], details: list[dict]) -> None:
+        ctx = core.match_context(details, self._ouid) if self._ouid else {}
+        sb = core.streak_break(matches, ctx)
+        n = sum(sb.after)
+        if n:
+            self.lb_break_fact.setText(
+                f"{sb.min_loss}연패 뒤 다음 판 승률 {win_rate_text(*sb.after, sb.mixed)}({n:,}번). 이 범위 전체는 "
+                f"{win_rate_text(*sb.base, sb.mixed)}입니다.")
+        else:
+            self.lb_break_fact.setText(f"{sb.min_loss}연패 뒤의 판이 없습니다.")
+        dim = f"color: {T.TEXT_DIM};"
+        for (tbl, verdict), t in zip(self.break_boxes, sb.tables):
+            rows = []
+            for b in t.bins:
+                has = b.games > 0
+                rows.append([b.label, (f"{b.games:,}", b.games),
+                             (win_rate_text(b.win, b.draw, b.lose, t.mixed, short=True) if has else "—",
+                              core.win_pct(b.win, b.draw, b.lose, t.mixed) if has else -1.0),
+                             (f"{core.pct(b.draw, b.games):.1f}%" if has else "—", core.pct(b.draw, b.games))])
+            self._fill(tbl, rows, enable_sort=False)
+            for r, b in enumerate(t.bins):
+                if b.flag:
+                    for c in range(tbl.columnCount()):
+                        tbl.item(r, c).setForeground(QColor(T.GOOD if b.flag > 0 else T.BAD))
+            if not t.tested:
+                verdict.setText(f"{t.note or '표본이 모자라 판정하지 않습니다'} ({t.games:,}경기)")
+                verdict.setStyleSheet(dim)
+                continue
+            stat = (f"카이제곱 {t.stat:.1f}, 자유도 {t.df}, p = {t.p:.3f} · 표 셋을 함께 보므로 문턱은 p < {sb.alpha:.4f}"
+                    f" · {'승 대 패(무승부 뺌)' if t.mixed else '승 대 (무+패)'}")
+            if t.significant:
+                verdict.setText(f"차이가 뚜렷합니다. 색이 칠해진 구간(초록 = 평소보다 잘 끊음, 빨강 = 못 끊음). {stat}")
                 verdict.setStyleSheet("font-weight: bold;")
             else:
                 verdict.setText(f"차이가 안 보입니다. {stat}")
@@ -11549,6 +11766,7 @@ class MainWindow(QMainWindow):
         "dashboard": [("대시보드", None)], "matches": [("경기 목록", None)], "opponents": [("상대 전적", "전적")],
         "opprank": [("상대 전적", "상대 순위")],
         "analysis": [("흐름 분석", None)], "period": [("기간별 성적", None)], "records": [("내 기록", None)],
+        "playlog": [("플레이 기록", "세션"), ("플레이 기록", "경기 시간"), ("플레이 기록", "연패")],
         "clutch": [("승부처 분석", "선제골·역전")], "goalflow": [("승부처 분석", "리드·골 흐름")],
         "diagnosis": [("성적 진단", "상대·점유율"), ("성적 진단", "규율·불운")],
         "divstay": [("성적 진단", "등급 체류")],
@@ -11600,6 +11818,7 @@ class MainWindow(QMainWindow):
             "teamcolor": lambda: self._render_teamcolor_tabs(*self._teamcolor_scope()),
             "period": self._render_period_page,   # 일·주·월 = 시즌 범위 · 시즌 = 누적 전체(시즌 필터 무시)
             "records": self._render_records,      # 88 — 늘 저장 전체(시즌 필터·빠른 범위 무관)
+            "playlog": lambda: self._render_playlog(self._matches, self._details),   # 97 — 시즌 범위(경기 습관과 같다)
             "clutch": lambda: self._render_clutch(self._details, self._matches),
             "goalflow": lambda: self._render_goal_flow(self._details),   # 시즌 범위(clutch 와 같다)
             "diagnosis": lambda: self._render_diagnosis(self._details),

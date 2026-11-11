@@ -1363,7 +1363,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 45, len(tables)   # 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 51, len(tables)   # 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -2632,7 +2632,7 @@ def test_habits_tab_flags_a_real_effect_and_stays_quiet_otherwise():
     hour_tbl, hour_verdict = _win.habit_boxes[2]
     with _SynthScope(_synth_matches(spec(False))):
         _win._render_habits(_win._matches)
-        assert [t.rowCount() for t, _ in _win.habit_boxes] == [4, 4, 8], [t.rowCount() for t, _ in _win.habit_boxes]
+        assert [t.rowCount() for t, _ in _win.habit_boxes] == [4, 4, 8, 7], [t.rowCount() for t, _ in _win.habit_boxes]
         assert hour_verdict.text().startswith("차이가 안 보입니다"), hour_verdict.text()
         assert all(hour_tbl.item(r, 0).foreground().color().name() == hour_tbl.item(r, 1).foreground().color().name()
                    for r in range(8))
@@ -2651,6 +2651,26 @@ def test_habits_tab_empty_and_note():
     with _SynthScope(_synth_matches([(datetime(2026, 9, 1, 10), "승", True)])):
         _win._render_habits(_win._matches)
         assert all("판정하지 않습니다" in v.text() for _, v in _win.habit_boxes), [v.text() for _, v in _win.habit_boxes]
+
+
+def test_playlog_tabs_render_sessions_time_and_breaks():
+    # 97 조각 1 — 사흘 × 10판(10분 간격 · 패 패 승 반복) = 세션 셋 · 하루 100분(간격 27개 ≥ Y2_MIN_GAPS 라 한 판 10분 · 90+10) · 연패 뒤 판이 있다
+    spec = [(datetime(2026, 9, 1 + d, 10) + timedelta(minutes=10 * i), ("승" if i % 3 == 2 else "패"), True) for d in range(3) for i in range(10)]
+    for tab in ("세션", "경기 시간", "연패"):
+        _win._go_page("플레이 기록", tab)
+    with _SynthScope(_synth_matches(spec)):
+        _win._render_playlog(_win._matches, [])
+        assert _win.tbl_sessions.rowCount() == 3 and len(_win.session_rows) == 3, _win.tbl_sessions.rowCount()
+        assert _win.session_rows[0].start.day == 3, "최근 세션부터 보여야 한다"
+        assert [b.sessions for b in app_main.core.size_bins(app_main.core.split_sessions(_win._matches))] == [0, 3, 0, 0]
+        assert _win.tbl_session_sizes.rowCount() == len(config.SESSION_SIZE_EDGES) + 1
+        assert [r[0] for r in _win.playtime_bars._rows] == ["09-03", "09-02", "09-01"], _win.playtime_bars._rows
+        assert all(r[2] == "1시간 40분" for r in _win.playtime_bars._rows), _win.playtime_bars._rows
+        _win.seg_playtime.set_current(2, emit=True)
+        assert [r[0] for r in _win.playtime_bars._rows] == ["2026-09"], "월 막대로 안 바뀌었다"
+        _win.seg_playtime.set_current(0, emit=True)
+        assert _win.lb_break_fact.text().startswith(f"{config.N1_MIN_LOSS}연패 뒤 다음 판 승률"), _win.lb_break_fact.text()
+        assert [t.rowCount() for t, _ in _win.break_boxes] == [4, 2, 3]
 
 
 def test_analysis_chip_row_shows_strengths_and_weaknesses():

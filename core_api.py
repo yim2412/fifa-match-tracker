@@ -31,6 +31,9 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
                     DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
                     CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
+from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, StreakBreak, match_context, period_totals,
+                      play_time, session_luck, session_rows, size_bins, split_sessions, streak_break,
+                      DIVISION_LABELS as BREAK_DIVISION_LABELS, FORMATION_LABELS as BREAK_FORMATION_LABELS)
 from ownerdist import OwnerDist, PosDist, load_dist as load_owner_dist, load_pos_dist
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
 from predict import (Prediction, SeasonEnd, describe as describe_prediction, predict_for, reward_brackets,
@@ -114,6 +117,10 @@ __all__ = [
     "MINOR_LABEL", "is_minor_color", "minor_formations", "usage_counts",
     # habits — 55 D1 일별 기록 달력
     "CalDay", "CalSummary", "cal_summary", "calendar_days",
+    # habits·sessions — 97 Y3 세션 · Y2 경기를 돌린 시간 · N1 연패 끊는 패턴
+    "PlayTime", "Session", "SessionLuck", "SessionRow", "SizeBin", "StreakBreak", "match_context", "period_totals",
+    "play_time", "session_luck", "session_rows", "size_bins", "split_sessions", "streak_break",
+    "BREAK_DIVISION_LABELS", "BREAK_FORMATION_LABELS",
     # habits — N18 공격 루트(2.7.1)
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
     # predict — 시즌 말 순위 예측(46단계(옛 38)에서 비공개로 옮길 1순위)

@@ -193,6 +193,8 @@
 2. X1·F5([시즌 돌아보기] 새 메뉴) + Y1 대시보드 한 줄 — 중간 · Sonnet + Opus 리뷰
 3. X2·X3(`ownerdist.load_strata`) + 산출 방법·용어(`glossary.TERMS` — 세션·경기를 돌린 시간·경과 일수) + 둘러보기 자료(`demodata` 시각이 균등 무작위라 세션이 안 선다 — demodata.py:253) — 중간 · Sonnet + Opus 리뷰
 
+**조각 1 결과 (2026-11-11 · Sonnet 구현 + Opus 리뷰)** — `sessions.py` · [흐름 › 플레이 기록](세션 · 경기 시간 · 연패) · [경기 습관] 요일 표. 큰 계정 실측: 세션 291개(0시 끊기로 156 → 291) · 한 판 12.07분 · 하루 평균 21.7시간 · 연패 표 셋 모두 차이 없음(간격 p 0.68 · 포메이션은 표본 부족 · 상대 등급 p 0.26) · 계산 전부 0.1초 안. 리뷰에서 뺀 것: **요일×시간대 지도** — [승부처 분석 › 선제골·역전] "시간대 × 요일 승률" 이 이미 있었다(계획 F5 가 놓친 것 · 그 기존 지도는 칸마다 좋음·나쁨 색을 칠한다 — E2 를 거기에 맞출지는 따로). 계획과 다른 것: 내 등급은 `stats.win_divisions` 대신 `match_context` 가 같은 `matchInfo.division` 을 경기 id 로 읽는다(`WinDivision` 에 id 가 없다) · 점수 변화는 그날 세션이 하나일 때만 · `ongoing` 은 날이 바뀌면 거짓. 변이: if-py 9/9 · boundary 7/8(남은 하나는 `1e-9` 경계 동치).
+
 **진입점·지킬 것**: 새 메뉴 둘([플레이 기록]·[시즌 돌아보기])은 `NAV`·`VIEW_OF_KEY`·`_renderers()`(PyQt 7) · [시즌 돌아보기]는 시즌표·ELO 도착 때 무효화 · X3 탭은 `OWNER_DIST_VIEW_KEYS` · 새 표 없음(U7) · 새 쿼리 실행 계획 `TEMP B-TREE` 없음(`test_rules`) · 새 상수는 `config` 에만(`SESSION_GAP_MIN` 재사용 · `N3_GRID_MIN`·`Y1_MIN_LOSS`·`Y1_RECENT_H`·`N1_MIN_LOSS`·`Y2_MIN_GAPS`·`Y2_GAME_MIN_FALLBACK`·`X2_MIN_GAMES`) · 새 승률 집계 클래스는 `models.RATE_CLASSES` · 새 규칙 문장이 생기면 `analysis.BASIS_RULES`/`NO_BASIS_RULES`·`config.K6_ORDER` · 화면 글 `docs/STYLE.md` · 계산은 `core_api` 경유 · 둘러보기 "요청 0"(`test_demo`) · 성능은 1회차 실측(큰 계정 `habit_tables` 0.20초 · `history_runs` 0.08 · `arrival_report` 0.20)으로 화면 스레드 — 구현 때 `sessions` 를 다시 재고 0.5초를 넘으면 작업 스레드로.
 
 ## 기준 화면과 맞추기 — 모음 (2026-10-25 · 단계 63~67 로 뗐다 — 맨 위 표)

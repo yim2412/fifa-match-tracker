@@ -14,7 +14,7 @@
 | `goal_flow(details, ouid)` | [승부처 분석 › 리드·골 흐름](N17) | 최대 리드별 결과 · 골의 성격 · 지고 있을 때 다음 골 · 골 사이 시간 |
 | `daily_luck(periods, mixed)` · `luck_expected(days)` | [성적 진단 › 운 범위](N16 · 66 G4) | 범위 승률·"몇 판부터" 표 · 날 판정은 `calendar_days`(달력과 한 판정) — 운만이면 띠 밖일 날 수는 날마다 그 시즌 기준 이항 |
 | `streak_baseline(matches)` | 〃 (A3) | 최장 연승·연패 대 `draw_possible` 층 안에서 순서를 섞은 기준(97.5분위) — 느려서 작업 스레드 |
-| `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대별 승률 + 표마다 카이제곱(층 보정) |
+| `habit_tables(matches)` | [성적 진단 › 경기 습관](N20) | 간격·세션 순번·시간대·요일(97 N3)별 승률 + 표마다 카이제곱(층 보정) |
 | `club_day(wins, day)` · `day_delta(points, day)` · `first_reach(wins, start, division)` | 대시보드 맨 위 "이번 시즌 구단"(55 H1·H5) | 재료는 `stats.win_divisions` — 화면 글은 `app_main.club_cells` |
 | `score_report(points, marks)` · `decisive_rate(wins, since)` | [승률 그래프 › 점수·예측] 리포트(55 R1~R3) | 평균은 하루 한 점 · 최고점·낙폭은 기록 전부 · 무승부 뺀 승률은 이 해설만(U1) |
 | `calendar_days(wins, first, last, season_key, mixed)` · `cal_summary(wins)` | [승률 그래프 › 일별 기록](55 D1) | 화살표 = 그날 시즌 승률 ± `luck_band`(N16 과 같은 식) · 하한 `D1_MIN_GAMES` |
@@ -977,8 +977,10 @@ def _bin_index(value: float, edges) -> int:
     return sum(value >= e for e in edges)
 
 
-def _chi_table(name: str, labels: list[str], rows: list[tuple[int, MatchSummary]], mixed: bool) -> HabitTable:
-    """rows = (칸 번호, 경기). 결과 두 갈래는 보이는 승률과 같은 양 — 섞임이면 승 대 패(무 뺌), 한 집단이면 승 대 (무+패)."""
+def _chi_table(name: str, labels: list[str], rows: list[tuple[int, MatchSummary]], mixed: bool,
+               alpha: float | None = None) -> HabitTable:
+    """rows = (칸 번호, 경기). 결과 두 갈래는 보이는 승률과 같은 양 — 섞임이면 승 대 패(무 뺌), 한 집단이면 승 대 (무+패).
+    alpha 는 유의 문턱 — 없으면 `N20_ALPHA`(표 하나). 검정을 여럿 한 묶음이면 부르는 쪽이 나눠 넘긴다(97 N1)."""
     t = HabitTable(name, [HabitBin(lb) for lb in labels], mixed)
     cells: dict = {}      # (층, 칸) → [승, 그 밖]
     for b, m in rows:
@@ -1067,7 +1069,7 @@ def _chi_table(name: str, labels: list[str], rows: list[tuple[int, MatchSummary]
         return t
     t.tested, t.stat, t.df = True, stat, df
     t.p = chi2_sf(stat, df)
-    t.significant = t.p < config.N20_ALPHA
+    t.significant = t.p < (config.N20_ALPHA if alpha is None else alpha)
     if t.significant:
         for gi in range(len(groups)):
             if exp_w[gi] <= 0:      # 방어 — 쓰는 층은 칸마다 기대 빈도 5 이상이라 올 일이 없다(변이 검증: 동치)
@@ -1079,11 +1081,20 @@ def _chi_table(name: str, labels: list[str], rows: list[tuple[int, MatchSummary]
     return t
 
 
+def gap_labels() -> list[str]:
+    """직전 경기와의 간격 칸 이름(`N20_GAP_EDGES`) — 경기 습관 표와 연패 끊는 패턴(97 N1)이 같은 칸을 쓴다."""
+    ge = config.N20_GAP_EDGES
+    return [f"{ge[0]}분 이하(바로 이어서)"] + [f"{lo}~{hi}분" for lo, hi in zip(ge, ge[1:])] + [f"{ge[-1]}분 넘게"]
+
+
+WEEKDAY_LABELS = ("월", "화", "수", "목", "금", "토", "일")   # date.weekday() 순서(월=0)
+
+
 def habit_tables(matches: list[MatchSummary]) -> list[HabitTable]:
-    """경기 습관 표 셋 — 직전 경기와의 간격 · 세션 안 몇 번째 판 · 시간대. 날짜 없는 경기는 뺀다.
+    """경기 습관 표 넷 — 직전 경기와의 간격 · 세션 안 몇 번째 판 · 시간대 · 요일(97 N3). 날짜 없는 경기는 뺀다.
     세션 = `SESSION_GAP_MIN` 분 넘게 쉬면 끊음. 간격은 '앞 경기 시작 → 이 경기 시작'이라 앞 경기가 연장까지 갔으면 길게 잡힌다."""
     dated = sorted((m for m in matches if m.match_date is not None), key=lambda m: m.match_date)
-    gap_rows, ses_rows, hour_rows = [], [], []
+    gap_rows, ses_rows, hour_rows, day_rows = [], [], [], []
     ordinal = 0
     prev = None
     for m in dated:
@@ -1094,16 +1105,17 @@ def habit_tables(matches: list[MatchSummary]) -> list[HabitTable]:
             gap_rows.append((_bin_index(gap_min - 1e-9, config.N20_GAP_EDGES), m))   # 칸은 (a, b] — 13분 딱 맞으면 '13분 이하'
         ses_rows.append((_bin_index(ordinal, config.N20_SESSION_EDGES), m))
         hour_rows.append((m.match_date.hour // config.N20_HOUR_STEP, m))
-    ge, se = config.N20_GAP_EDGES, config.N20_SESSION_EDGES
-    gap_labels = [f"{ge[0]}분 이하(바로 이어서)"] + [f"{lo}~{hi}분" for lo, hi in zip(ge, ge[1:])] + [f"{ge[-1]}분 넘게"]
+        day_rows.append((m.match_date.weekday(), m))
+    se = config.N20_SESSION_EDGES
     ses_labels = ["첫 판"] + [f"{lo}번째" if hi - lo == 1 else f"{lo}~{hi - 1}번째"
                               for lo, hi in zip(se, se[1:])] + [f"{se[-1]}번째~"]
     hs = config.N20_HOUR_STEP
     hour_labels = [f"{h:02d}~{h + hs:02d}시" for h in range(0, 24, hs)]
     out = []
-    for name, labels, rows in (("직전 경기와의 간격", gap_labels, gap_rows),
+    for name, labels, rows in (("직전 경기와의 간격", gap_labels(), gap_rows),
                                ("세션 안 몇 번째 판", ses_labels, ses_rows),
-                               ("시간대", hour_labels, hour_rows)):
+                               ("시간대", hour_labels, hour_rows),
+                               ("요일", list(WEEKDAY_LABELS), day_rows)):
         mixed = is_mixed(m.draw_possible for _, m in rows)
         out.append(_chi_table(name, labels, rows, mixed))
     return out
