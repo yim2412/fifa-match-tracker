@@ -6101,8 +6101,8 @@ class MainWindow(QMainWindow):
         n = sum(sb.after)
         if n:
             self.lb_break_fact.setText(
-                f"{sb.min_loss}연패 뒤 다음 판 승률 {win_rate_text(*sb.after, sb.mixed)}({n:,}번). 이 범위 전체는 "
-                f"{win_rate_text(*sb.base, sb.mixed)}입니다.")
+                f"{sb.min_loss}연패 뒤 다음 판 승률 {win_rate_text(*sb.after, sb.mixed, short=True)}({n:,}번). 이 범위 전체는 "
+                f"{win_rate_text(*sb.base, sb.mixed, short=True)}입니다.")
         else:
             self.lb_break_fact.setText(f"{sb.min_loss}연패 뒤의 판이 없습니다.")
         dim = f"color: {T.TEXT_DIM};"

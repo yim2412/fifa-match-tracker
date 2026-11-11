@@ -2671,6 +2671,7 @@ def test_playlog_tabs_render_sessions_time_and_breaks():
         assert [r[0] for r in _win.playtime_bars._rows] == ["2026-09"], "월 막대로 안 바뀌었다"
         _win.seg_playtime.set_current(0, emit=True)
         assert _win.lb_break_fact.text().startswith(f"{config.N1_MIN_LOSS}연패 뒤 다음 판 승률"), _win.lb_break_fact.text()
+        assert "÷" not in _win.lb_break_fact.text(), f"문장 안 승률은 짧은 꼴이어야 한다: {_win.lb_break_fact.text()}"
         assert [t.rowCount() for t, _ in _win.break_boxes] == [4, 2, 3]
 
 
