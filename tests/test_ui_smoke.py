@@ -16281,6 +16281,13 @@ def test_records_cache_follows_elo_replace():
 
 def test_review_page_and_dashboard_streak_line_97():
     """97 조각 2 — [시즌 돌아보기] 칩 · 지난 시즌 같은 시점 표·그래프 · 카드 · 시즌표가 없으면 빈 이유 · 대시보드 머리 연패 한 줄(6시간 경계 · 표본)."""
+    # 등급 이름표(넥슨 메타)를 못 받았으면 번호라도 — 다른 화면과 같다(실데이터 확인에서 "—" 로 숨던 것)
+    saved_names = dict(_win._division_names)
+    _win._division_names.clear()
+    try:
+        assert (_win._div_text(1100), _win._div_text(None)) == ("1100", "—")
+    finally:
+        _win._division_names.update(saved_names)
     from datetime import date
     from test_records import _d
     from seasons import Season

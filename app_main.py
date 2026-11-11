@@ -6213,7 +6213,7 @@ class MainWindow(QMainWindow):
         return out
 
     def _div_text(self, division: int | None) -> str:
-        return self._division_names.get(division, "—") if division is not None else "—"
+        return self._division_names.get(division, str(division)) if division is not None else "—"   # 이름표(메타)를 못 받았으면 번호 — 다른 화면과 같다
 
     @staticmethod
     def _hm_text(minutes: float) -> str:
