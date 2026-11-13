@@ -226,6 +226,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 `config.MATCH_DATE_OFFSET_H` 로 빼면 오프셋 변이가 초록이 된다) · **화면 글 말투는 `docs/STYLE.md`**(2026-11-08 사용자 "말투가 너무 AI" —
 합쇼체 · 줄표(—)로 문장 잇기 금지 · 문장 뒤 가운뎃점 금지 · 쉬운 말 · `test_ui_text_style` 이 해라체·금지어·가운뎃점·표기(오버롤·엘로·퍼센트·소문자 ovr/elo·`50 %` — 86 I3) 0 과 파일별 줄표 상한
 `STYLE_DASH_MAX` 를 지킨다 — 줄이면 상한도 내린다).
+- **GitHub 공개 글도 같은 말투로 씁니다**(2026-11-14 사용자 "깃허브 글도 AI 티 안 나게"). README와 CHANGELOG는 `tools/check_public_text.py` 가
+  지킵니다(`test_public_text_style`, 위반 0, 줄표 상한 `DASH_MAX` 0). 릴리스 본문 틀은 `test_sha256_lines_and_notes` 가 `release_notes()` 결과를 잽니다.
+  새로 쓰는 커밋 메시지, `docs/`, 이 파일도 합쇼체로 쓰고 줄표로 문장을 잇지 않습니다. 지난 커밋은 번호가 바뀌므로 고치지 않습니다. 범위 표는 `docs/STYLE.md` 머리에 있습니다.
 - 규칙마다 **위반을 심은 가짜 소스를 잡는지** 같이 단언한다(빈 검사 방지). 새 규칙도 그 꼴로.
 - SQL 은 파싱·수집 테스트를 그대로 돌리며 trace 로 모은다 — **SELECT 를 품은 함수가 한 번도 안 돌면 FAIL**(검사 밖이 생기지 않게).
   새 읽기 함수를 그 두 테스트가 안 부르면 `_drive_uncovered()` 에 한 줄.

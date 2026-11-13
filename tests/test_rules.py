@@ -1274,6 +1274,33 @@ def test_ui_text_style():
     assert not loose, f"줄표를 줄였다 — STYLE_DASH_MAX 를 지금 개수로 내린다(다시 늘지 않게): {loose}"
 
 
+def _public_text_mod():
+    spec = importlib.util.spec_from_file_location("check_public_text", ROOT / "tools" / "check_public_text.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_public_text_style():
+    """공개 글(README · CHANGELOG) 말투(2026-11-14) — tools/check_public_text.py 가 0 을 내는지.
+    CHANGELOG 는 업데이트 뒤 앱 안 "바뀐 점" 창에도 그대로 뜬다. 검사기가 비어 있지 않은지 먼저 심은 위반으로 잰다."""
+    mod = _public_text_mod()
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert mod.selftest(), "검사기 자체 검사가 실패했다(심은 위반을 못 잡는다)"
+    hard, dash = mod.check_text("기록이 있습니다. 경기를 쓴다.\n괜찮습니다 — 이어서\n")
+    assert len(hard) == 1 and dash == 1, (hard, dash)
+    out = io.StringIO()
+    old = os.getcwd()
+    try:
+        os.chdir(ROOT)
+        with contextlib.redirect_stdout(out):
+            rc = mod.main([])
+    finally:
+        os.chdir(old)
+    assert rc == 0, "공개 글 말투 위반(docs/STYLE.md):\n" + out.getvalue()[-3000:]
+    assert out.getvalue().count("[OK]") == len(mod.DEFAULT_TARGETS), out.getvalue()
+
+
 def test_watchdog_kills_hung_test():
     """테스트 감시(tests/watchdog.py)가 정말 끊는다 — 끝나지 않는 테스트를 1초 한도로 돌리면 종료 코드 3 · 이름 · 멈춘 줄.
     감시가 빠지면 이 자식이 30초 시간 초과로 걸려 빨개진다(2026-10-06 스모크가 18분 멈췄던 일의 장치)."""

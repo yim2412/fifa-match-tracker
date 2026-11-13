@@ -163,6 +163,10 @@ def test_sha256_lines_and_notes():
     # 받기 전에 읽어야 할 고지 — 비공식·웹 데이터 기본 꺼짐·LGPL(73단계 — "GPL v3" in 은 "LGPL v3" 에도 참이라 낱말 경계로)
     assert release.DISCLAIMER in notes and "기본 꺼짐" in notes and "LGPL v3" in notes, notes
     assert not re.search(r"(?<!L)GPL v3", notes), "실행 파일 GPL 고지가 남았다"
+    # 릴리스 본문도 공개 글 말투(2026-11-14 · docs/STYLE.md) — 틀이 만든 본문 그대로 잰다
+    import check_public_text
+    hard, dash = check_public_text.check_text(notes)
+    assert not hard and dash == 0, (hard, dash)
 
 
 def test_season_notice_tool_changes_only_the_comment():
