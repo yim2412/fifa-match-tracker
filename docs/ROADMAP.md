@@ -54,7 +54,7 @@
 | # | 버전 | 단계 | 난이도 | 모델(검토 / 구현) | 끝에 |
 |---|---|---|---|---|---|
 | 51 | (제안) 2.12.1(조각 ① — 토글·쌓기만) | 카드 정보 넓히기 — C1 · C2 · C3 · C5 · C6(전력 대비 승률 · 팀컬러 상성 · 실효 OVR·키·체형 · 가치 분해 · 시세 지수) + N21 · N28 · N29(승부차기 키퍼 키 · 경기 이변 정도 · 경기마다 발동한 팀컬러) | 높음 — 홈페이지 요청이 크게 는다(하루 상한·동의 문구 다시) | Opus 2명 / Opus | **측정 35일 진행 중 — D0 = 2026-10-19** · ⚠ **D0+15~20(11-03~08) 백필 빠짐** — 앱 카드 토글이 11-02 17:26 부터 켜져 있어 `measure_cards --backfill` 이 24번 거부했다(매일 세기도 D0+14 에서 멈춤 · 11-08 끔). **11-08 잼(기록 없이 읽기 전용 · 결과가 아니라 시험 단계만)**: 6일 공백은 판정을 안 바꾼다 — B 는 11-02 에 이미 다 찼고(앞·뒤 2,261/2,262 · 문턱 300), C 는 큰 계정 셋이 칸마다 30 을 넘었고, A 재료는 앱 백필이 일부 채워 9,026경기(최대 9,933). **다만 A 는 공백과 무관하게 '재료 부족(검정력)' 이 될 가능성이 크다**: selftest 를 그날 실제 Δ(표준편차 2.92 — 가짜는 4)로 돌리면 검정력 70%(기준 90%)이고, 시간 순서를 지킨 채 n 을 7,000·8,000·9,026 으로 바꿔도 70% 그대로다(섞으면 94% — 막는 것은 n 이 아니라 실제 자료의 시간 구조). 규칙 10판대로 재료 부족이면 다음 측정일 · 세 번이면 A 미달 → 113(옛 68) 의 C1·N28 은 안 만든다. 규칙은 안 바꿨다(사용자 "추천대로" 11-08 — 측정일 전날 서둘러 고치지 않는다). 측정 해시 셋 D0 값과 같음. 11-02 하루는 앱 백필(600)과 측정 백필(600)이 함께 돌았다(429 없음) · 11-08 부터 측정 예약은 `tools/run_unless_game.py` 를 거친다(게임 중이면 안 돈다) · 11-11 부터 10:00~24:00 10분마다 `--once-a-day` 로 부른다(그날 끝까지 돈 적이 없을 때만 띄운다 — 그 전엔 로그온·10:00 에 게임 중이면 그날 몫이 빠졌다)(규칙 10판 `35ec1cf` · 작업 스케줄러 `FifaMeasureCards` 가 매일 얼리기·백필·측정일 판정 · A 11-09~12 · 11-16~19 · 11-23~26 · B·C 11-23~26) — 그동안 55 · ②③ 은 68(옛 58)로 뗐다 · 측정 동안 64~67 · **판정(11-26) 뒤 63 U1 마무리**: `measure_cards` 의 UTC 날 네 자리(:330·:471·:472·:632)를 `matchtime` 으로 · `test_rules` 예외 표의 U1 두 줄 지우기 · B 다시 대조(`docs/DONE.md` 63단계 절) · **63 남은 대조 하나**: 시즌 마지막 날 경기가 기준 화면과 같은 시즌에 드는지(시즌 종료일이 KST 0시인지 모른다) |
-| 108 | (제안) 3.10.1 | 작은 기능·규칙 — "내 계정" 지정 · 시즌 구분을 경기의 시즌 번호로(홈페이지 데이터를 꺼도 시즌이 나뉜다) · 내 쪽이 "오류"로 남은 몰수패를 승률에(모든 승률이 움직인다 — 규칙은 단계 시작 때 사용자에게) | 낮음~중간 — 몰수패만 숫자가 앱 전체에서 바뀐다 | Fable 1명(11-13 사용자: 써 보기) / Sonnet + diff 리뷰 | **1판 초안(11-13 · U1 패로 센다 · U2 켤 때 내 계정 + 칩) — 절 "## 108단계" · 1회차 검토 [상] 1·[중] 12(반영 전 — 다음은 2판: S1 은 사용자에게 먼저 묻는다)** |
+| 108 | (제안) 3.10.1 | 작은 기능·규칙 — "내 계정" 지정 · 시즌 구분을 경기의 시즌 번호로(홈페이지 데이터를 꺼도 시즌이 나뉜다) · 내 쪽이 "오류"로 남은 몰수패를 승률에(모든 승률이 움직인다 — 규칙은 단계 시작 때 사용자에게) | 낮음~중간 — 몰수패만 숫자가 앱 전체에서 바뀐다 | Fable 1명(11-13 사용자: 써 보기) / Sonnet + diff 리뷰 | **2판(11-13 · U3 내 계정이면 켤 때 연다 · U4 빈 판은 모든 평균에서 — 1회차 [상] 1·[중] 12 반영) — 절 "## 108단계" · 다음은 2회차 검토(새 검토자 + 바뀐 줄 묶음)** |
 | 109 | (제안) 3.10.1 | ⑧ 내 PC 에 저장하는 것 — F1 상대 메모·태그 · L1 경기 표시(끊김·연습)·통계에서 빼기 · L2 경기 한 줄 메모(셋은 같은 저장) · G1 내 기록 백업·복원 · S1 키를 자격 증명 관리자에 · Z7 데이터 파일 정리 자동 · G4 켜는 속도·메모리 다시 재기 · J3 트레이 "오늘 전적" 한 줄 · U2 최근 검색 칩 미리보기 | 낮음~중간 | Opus 1명 / Sonnet + Opus 리뷰 | **3.10.1 공개** |
 | 110 | (제안) 3.11.1 | ⑨ 랭커·색 — R1 나와 비슷한 랭커 · R2 이번 주 뜨는 카드(메타 변화 화면과 겹치는지부터) · R3 상대 미리보기 · B2 등급 색 띠 · B3 팀컬러 대표색 포인트(글자 대비 검사) · B4 강조색 고르기 · **(11-11 더함)** 주차·막판 상승폭(이번 시즌이 끝나 시즌 중 컷 곡선이 생긴 뒤 — 그 전엔 "모으는 중") · 랭커 묶음 팀컬러를 (이름, 엠블럼)으로(영구 집계 키가 바뀌어 옛 회차 잇기를 설계) · 랭커 팀 전술·개인 전술(**판정되는 사람만 세고 "N명 중 M명" 을 같이** — 판정률은 단계 시작 때 다시 잰다) | 중간 | Opus 1명 / Sonnet + Opus 리뷰 | |
 | 111 | (제안) 3.11.1 | 화면 스모크 여러 코어로(개발 도구 · 절 "화면 스모크 여러 코어로" — 테스트별 시간부터 다시 잰다) | 중간 — 숨은 순서 의존 | Opus 1명 / Sonnet + Opus 리뷰 | **3.11.1 공개** |
@@ -812,10 +812,13 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 ---
 
-## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 1판 (2026-11-13 · U1·U2 사용자 답 · 검토 전)
+## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 2판 (2026-11-13 · U1~U4 사용자 답 · 1회차 [상] 1·[중] 12 반영 · 2회차 검토 전)
 
-셋은 서로 독립이다: **A 몰수패를 패로** · **B 시즌을 경기의 시즌 번호로** · **C 켤 때 내 계정**. 넥슨 요청·저장 형식·이용 안내는 안 바뀐다
-(새 표·새 열·새 요청 0 · `NOTICE_VERSION` 그대로). 숫자가 바뀌는 것은 A 뿐이다.
+셋은 서로 독립이다: **A 몰수패를 패로 + 빈 판을 평균에서** · **B 시즌을 경기의 시즌 번호로** · **C 켤 때 내 계정**. 저장 형식은 안 바뀐다(새 표·새 열 0).
+숫자가 바뀌는 것은 A 뿐이다. **C 는 켤 때 넥슨 요청이 새로 생긴다**(내 계정을 정한 사람만 · 검색 한 번과 같은 양 — 2판에서 바뀐 점) → 이용 안내에 한 줄 + `NOTICE_VERSION` 올림.
+
+**2판에서 1판과 달라진 것**: ① C 를 다시 썼다(S1 — 1판의 전제 "지금도 켤 때 계정을 연다" 가 틀렸다) ② "평균에서 뺀다" 가 요약 길만이 아니라 **경기 내용을 쓰는 모든 집계**로 넓어졌다(U4 · M3)
+③ 빈 판의 정의가 "내 선수 0명" 에서 **"한쪽이라도 선수 0명"** 으로(J1 — F14·F15) ④ 닿는 곳 표를 `_me_opp(` 를 부르는 함수 전수로 다시 뽑았다(M6 · 기준 14) ⑤ 구단주 분포 길은 옛 기준 그대로(U4 단서 · F16).
 
 ### 이 초안을 쓰며 확인한 것 (11-13 · fifa.db 읽기 전용 · 감독모드 두 사람 경기 34,659 · 검토자는 다시 재지 않는다)
 
@@ -834,24 +837,47 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | F11 | 켤 때 여는 계정 | `app_main._last_account`(최근 검색 1번 · 저장된 감독모드 경기가 있어야) → `open_last_account`(DB 로 그리고 → `_api_search(quiet=True)`) · `main` 에서만 부른다 |
 | F12 | 내 계정 | `trade_state.my_ouid` — [가계부] 띠 `_set_my_account` 가 쓴다 · 키가 바뀌면 `store` 가 `my_ouid_unconfirmed` 로 옮기고 `my_ouid` 는 비운다(`store.py:1206`) |
 
+2판에서 더 잰 것(11-13 저녁 · fifa.db 읽기 전용 · 감독모드 34,727경기 = 69,318 팀-경기 · `dev_matches.db` 1,088만 경기):
+
+| # | 사실 | 값 |
+|---|---|---|
+| F11′ | **F11 정정** — 배포 앱은 켤 때 계정을 열지 않는다 | `config.OPEN_LAST_ACCOUNT = False`(`config.py:1007`) → `main`(`app_main.py:17060`)은 `start_prefetch`(최근 검색 1번의 저장 경기만 뒤에서 읽음 · 요청 0) · `open_last_account` 는 둘러보기(17082)만 부른다 · `_last_account` 는 `start_prefetch`(3667)도 부르고 그건 `reload_after_release`(15454)도 부른다 · `--tray` 는 `show=False` 라 둘 다 안 타고, 트레이에서 처음 열면 `tray.show_window` → `show_initial`(`_shown_once`) 만 탄다 |
+| F13 | 내 선수 0명 팀-경기 | **395**(F1·F4 포함) — 그 395 전부 내 쪽 슛·골·패스·태클·점유율·파울·`shootDetail` 이 0 이거나 없다(0 아닌 값 0건) |
+| F14 | 상대만 빈 판(내 선수 있음) | **275** 팀-경기 — 같은 경기를 반대편에서 본 것이다(내 쪽만 빈 판도 275 · 양쪽 다 빈 판 94). 남은 쪽 기록은 **진짜 경기 내용**이다: 슛 평균 7.82(0 인 판 4) · 골 4.16 · 점유율 54.70 · 패스 113.6 · 선수 18명 — 지고 있던 쪽이 나가 그쪽 기록만 지워진 판 |
+| F15 | 평균 기준 셋(100경기 넘는 계정 11개 · `team_profile`) — 지금 대비 | 내 빈 판만 뺌: 내 슛 0~+0.088 · 내 득점 0~+0.037 · 내 점유율 0~+1.01%p · 상대 득점 −0.049~+0.011 / **한쪽이라도 빈 판 뺌**: 내 슛 −0.007~+0.069 · 내 득점 −0.006~+0.019 · 내 점유율 0~+0.97%p · 상대 득점 −0.042~+0.013 · 상대 점유율 0~+0.35%p. 빠지는 판은 계정마다 0~3.09% |
+| F16 | 구단주 분포 지표(나 − 같은 경기 상대 · 최신 1000판)의 이동 | **내 빈 판만 빼면 지금보다 더 치우친다** — 상대만 빈 판(내 진짜 값 − 0)이 남아서다(예: 점유율 +0.774 → +1.512 · 한쪽이라도 빼면 +1.188). 한쪽이라도 빼면 최대 이동: 결정력 0.40 · 유효슛당 골 0.32 · 태클 0.27 · 롱·스루 0.04 · 점유율 0.79 · 슛 0.11. 저장된 분포(바퀴 1 · 149명)의 표준편차는 2.87 · 3.26 · 2.24 · 1.50 · 2.13 · 0.28 — **분포 값이 바뀐다**(작지만 0 이 아니다) |
+| F17 | 랭커 쪽 빈 판 비율 | `dev_matches.games` 에서 선발이 없는 쪽 143,257 / 2,177만 팀-경기 = 0.66%(내 DB 는 395/69,318 = 0.57%) — 분포를 만든 사람들도 같은 꼴의 판을 같은 비율로 갖고 있다 |
+| F18 | 칩이 견주는 지표 | `habits.N19_CHIP_KEYS` = 결정력 · 유효슛률 · 태클 성공률 — **승률은 없다**(1회차 "확인 못 한 것" 답) |
+| F19 | 죽은 몰수 판정 | `records._games`(96)·`stats.win_divisions`(133)의 `"몰수" in result` 는 실데이터에서 늘 거짓(결과 글자는 승·무·패·오류뿐) → `_Game.forfeit`(쓰는 곳 `records.py:134`)·`WinDivision.forfeit`(쓰는 곳 `stats.py:180` `forfeit_wins`)는 지금 늘 False/0 이다 |
+
 ### 사용자 답 (2026-11-13)
 
 - **U1 몰수패 규칙 → 패로 센다.** 보통 몰수패와 같이 승률·연승연패·상대 전적에 패로. 기록이 비어 있으니 경기당 평균(득점·실점·점유율·평점)에는 안 넣는다. 양쪽 다 "오류"(중단)는 지금처럼 뺀다.
 - **U2 내 계정 → 켤 때 내 계정 + 칩 고정.** 새 설정은 만들지 않고 [가계부] 띠에서 정한 값을 그대로 쓴다.
+- **U3 (저녁 · S1) 내 계정이 정해져 있으면 켤 때 그 계정을 연다** — 10-04 결정("켤 때 계정을 안 연다")을 내 계정에만 좁힌다. 게임 중이면 요청 없이 저장된 것만 그린다. 내 계정을 안 정한 사람은 지금과 같다.
+- **U4 (저녁 · M3·M5) 빈 판은 모든 화면의 평균에서 뺀다.** 득실 **합계**는 지금처럼 그대로 더한다. 구단주 분포는 값이 바뀌는지 먼저 재고, 바뀌면 그쪽만 그대로 둔다 → F16: 바뀐다 → 분포 길은 그대로(J2).
 
 ### 내 판단 — 사용자 답 밖 (검토자가 볼 것)
 
-- **J1 "평균에서 뺀다" 의 기준을 "내 선수 기록이 없는 판" 으로 잡는다**(F1 만이 아니라 F4 의 221판도). F1 만 빼면 같은 꼴의 판(선수 0명 · 점유 0)이
-  종료 유형에 따라 평균에 들기도 빠지기도 한다. 평점은 이미 같은 이유로 뺀다(`Stats.rating_n`). 대가: 보통 몰수패가 있는 계정의 평균 득실·점유율이 F6 만큼 움직인다 — **처음 계획(몰수패만)보다 넓다.**
-- **J2 원문을 직접 읽어 경기 내용을 쓰는 집계는 안 건드린다** — `stats._result_of` 는 그대로 원문을 돌려주고(F1 판은 "오류" 라 지금처럼 빠진다), 승·무·패를 **세는** 자리만 새 함수로 바꾼다.
-  기본값이 "지금과 같음" 이라 빠뜨린 자리가 생겨도 평균이 조용히 오염되지 않는다(반대로 잡으면 빠뜨린 자리마다 0 이 섞인다). 그래서 구단주 분포(`habits.side_totals` 원문 길)도 그대로다.
+- **J1 빈 판 = "한쪽이라도 선수 기록이 없는 판"**(내 쪽이든 상대 쪽이든 `player` 가 비었다 · 종료 유형과 무관). 사용자 답(U4)은 "내 기록이 빈 판" 이었고, 재 보니 상대만 빈 판 275 가 같은 문제다(F14):
+  그 판의 **상대 열**은 0 으로 지워져 있어 "상대 평균"·"나 − 상대" 를 한쪽으로 민다 — 내 빈 판만 빼면 짝 지표는 지금보다 더 치우친다(F16). 그래서 평균·짝 비교는 **양쪽 다 기록이 있는 판**만 쓴다.
+  대가: 상대가 나가 내 기록만 남은 판(계정마다 0~1.5% · 대개 크게 이기던 판)이 내 평균에서도 빠진다 — 이동 폭은 F15. 규칙이 하나라 화면마다 기준이 갈리지 않는다(M3). 평점은 이미 같은 이유로 뺀다(`Stats.rating_n`).
+  **승·무·패 수와 득실 합계는 빈 판도 그대로 센다**(U4 · M5).
+- **J2 원문 길은 두 갈래로 나눈다** — ⓐ 승·무·패를 **세는** 자리는 `models.result_of`(F1 판이 패가 된다) ⓑ 경기 **내용**(슛·패스·점유율·골 시각)을 쓰는 자리는 `stats._result_of` 그대로(F1 판은 "오류" 라 지금처럼 빠진다) + **빈 판 건너뛰기**(새).
+  ⓑ 의 기본값이 "지금과 같음" 이라 빠뜨린 자리가 생겨도 새 0 이 섞이지 않는다. **구단주 분포 길(`ownerdist` 받기 · `habits.dist_basis` · `pos_diff`)만은 빈 판도 지금처럼 넣는다**(U4 단서 · F16 — 저장된 분포 149명이 옛 기준이라
+  내 값만 새 기준이면 백분위가 어긋난다 · 51 측정 C 판정기와 같은 값을 유지한다). 분포를 새 기준으로 옮기는 것은 바퀴에 기준 번호를 적어야 해(새 열) 108 밖 — "재지 않은 것".
 - **J3 시즌표가 아는 시즌은 지금과 똑같이, 모르는 시즌만 경기 번호로 세운다.** F8 이 어긋남 0 이라 시즌표가 있는 사람에게는 보이는 것이 안 바뀐다. 바뀌는 것은
   시즌표가 없거나(홈페이지 데이터 끔 · 받은 적 없음) **낡은** 경우다 — 시즌표를 받은 뒤 홈페이지 데이터를 끄면 지금은 그 뒤 시즌들이 전부 "진행 중" 한 묶음에 쌓인다.
 - **J4 날짜 계산이 필요한 화면은 범위 밖** — 시즌 돌아보기(경과 일수) · 예측(시즌 길이·종료 추정) · ELO 그래프의 시즌 시작 · 업적의 시즌 경계 · FC 카드의 시즌 시작 · 예측 되짚기는
   지금처럼 시즌표가 있어야 선다(경기 시각으로 어림한 경계를 "경과 일수" 에 쓰면 틀린 숫자를 정확한 것처럼 보인다).
 - **J5 켤 때 여는 내 계정에는 키 지문을 안 본다** — 거래·상대 순위는 저마다 관문(`my_ouid` + 키 지문)을 그대로 거친다. 여기서는 "어느 계정을 먼저 그리나" 뿐이라 남의 자료가 새로 보이지 않는다.
+  키가 바뀌면 `my_ouid` 가 비워져(F12) 켤 때 여는 계정도 없어진다 — 띠에서 다시 정하면 돌아온다.
+- **J6 죽은 몰수 판정(F19)은 108 에서 안 살린다** — `_Game.forfeit`·`WinDivision.forfeit` 를 종료 유형으로 채우면 업적의 몰수 규칙과 `forfeit_wins` 가 처음으로 켜져 숫자가 따로 움직인다(U1·U4 밖).
+  M1 이 걱정한 것(빈 몰수패가 무실점 연속·최다 점수 차 패에 든다)은 `_Game.blank` 로 막는다. 살릴지는 109 시작 때 사용자에게.
+- **J7 켤 때 새 경기 확인은 "검색 한 번" 과 같은 길(`_api_search(quiet=True)`)을 그대로 쓴다** — 요청은 1번이 아니라 검색 한 번 분량이다(닉네임→ouid · 목록 · 새 경기 상세 · 최고 등급 · 끝나면 거래·보이는 로더).
+  새 요청 길을 만들지 않아 한도·429·키 거절 처리가 이미 있는 것 그대로다. 사용자에게는 "요청 1번" 이라고 물었다 — 2판 보고에서 고쳐 말한다.
 
-### A 몰수패를 패로 (숫자가 바뀐다)
+### A 몰수패를 패로 + 빈 판을 평균에서 (숫자가 바뀐다)
 
 새 코드(`models.py` — 종료 유형 상수 `END_*` 를 `stats` 에서 여기로 옮기고 `stats` 는 가져다 쓴다):
 
@@ -859,28 +885,43 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|---|
 | `models.forfeit_loss(me, opp)` | bool | 내 `matchEndType` 4 + 상대 1 — `stats.end_kind` 의 "몰수패" 둘째 갈래와 같은 판정(그쪽이 이 함수를 부른다) |
 | `models.result_of(me, opp)` | str | `matchResult` 원문, 단 `forfeit_loss` 면 "패" |
-| `MatchSummary.blank` | bool = False | 내 선수 0명(`not me.get("player")`) — 경기 내용이 없는 판 |
+| `models.is_blank(me, opp)` | bool | 한쪽이라도 `player` 가 비었다(J1) — 상대가 없으면(`opp` 가 None·빈 dict) 참 |
 | `MatchSummary.result` | str | `parse_match` 가 `result_of` 로 채운다 → `MatchSummary` 를 쓰는 자리는 전부 패로 센다 |
-| `Stats.blank` · `OpponentStat.blank` · `PeriodStat.blank` · `DivisionStat.blank` | int = 0 | 평균의 분모 = 판 수 − `blank`(득점·실점·점유율 합에도 안 더한다). `total`·`games`·승무패 수의 뜻은 그대로 |
+| `MatchSummary.blank` | bool = False | `is_blank(me, opp)` — 평균·짝 비교에서 빼는 판 |
+| `MatchSummary.no_squad` | bool = False | 내 `player` 가 비었다 — 선수 표의 팀 승률 기준(M4)만 쓴다(선수별 승률은 내 선수가 있는 판에서만 나온다) |
+| `Stats.blank` · `OpponentStat.blank` · `PeriodStat.blank` · `DivisionStat.blank` | int = 0 | **평균**의 분모 = 판 수 − `blank` · 평균용 합(`avg_goals_for`·`avg_goals_against`·점유율)에는 빈 판을 안 더한다. `total`·`games`·승무패 수·**득실 합계(`goals_for`·`goals_against`)는 그대로**(U4 · M5 — 대시보드 "득실차" · 상대 줄 "득실 a:b" · 라이벌 카드는 안 바뀐다) |
 
-닿는 곳 — 결과 문자열을 읽는 줄 전수(기준 `8368fd8` · `grep -n "_result_of(\|matchResult\|\.result\b"` 에서 테스트·도구·`Future.result()`·슛 결과를 뺀 것). **세** = 패로 센다 · **빈** = 세되 평균에서 뺀다 · **그대로** = 지금처럼 뺀다(원문 "오류").
+닿는 곳 — **경기 원문을 읽는 함수 전수**(M6 · 기준 14). 정의: 앱 소스(`demodata`·`check_api` 뺌)에서 `_me_opp(` · `_result_of(` · `_wdl_of(` · `"matchResult"` 중 하나라도 쓰는 **함수 이름**(기준 `1eb3cba` · 48개 — 아래 `test_rules` 새 규칙과 같은 정의라 첫 실행 = 이 표).
+**세** = `result_of` 로 승무패를 센다 · **빈** = 빈 판을 건너뛴다(평균·짝 비교·내용 집계) · **분포** = 구단주 분포 길, 지금 그대로 · **그대로** = 선수·슛·한 경기 단위라 빈 쪽은 낼 것이 없다.
 
-| 자리 | 길 | 처리 | 이유 |
-|---|---|---|---|
-| `models.summarize` · `opponent_stats` · `period_stats` | MatchSummary | 세 + 빈 | 승률 분모에 들고 평균 분모에서 빠진다 |
-| `models.current_streak` · `longest_streaks` · `win_rate_trend` · `moving_win_rate` | MatchSummary | 세 | 승무패만 센다(지금은 "오류" 가 연속을 끊기만 한다 → 연패에 든다) |
-| `stats.time_of_day_rates` · `time_weekday_rates` · `after_streak_rates` · `team_color_stats` · `team_color_baseline` | MatchSummary | 세 | 승무패만 |
-| `habits.streak_baseline` · `_chi_table` · `sessions._wdl` · `streak_break` · `_cum_rates` · `streak_note` | MatchSummary | 세 | 승무패만(세션 길이는 시각만 쓴다) |
-| `rankmeta.my_day_rate` · `opp_rank_table` · `records.rival` | MatchSummary | 세 | 승무패만 |
-| `app_main` 의 승·무·패 세기(`_render_opponents` · `_season_h2h_text` · `_detail_h2h`) · 경기 카드·점 그림(`_match_card` · `_detail_head` · `_render_analysis` · `dashboard._render_trend`) | MatchSummary | 세 | 결과 글자가 "패" 로 보인다(보통 몰수패와 같다) |
-| `dashboard._render_kpis` | MatchSummary | 세 + 빈 | "오류" 수가 그만큼 줄고, 경기당 슛은 `blank` 를 뺀 판으로 나눈다 |
-| `stats.win_divisions` | 원문 | 세(`result_of`) | 달력·운 범위·FC 가 이 줄로 날마다 승무패를 센다 — `summarize` 와 같아야 한다(FC 는 승리만 세어 안 바뀐다) |
-| `stats.division_stats` | 원문 | 세 + 빈 | 등급별 승률(F2: 등급이 남아 있다) |
-| `records._games` | 원문 | 세(`result_of`) | 연승 업적이 몰수패를 건너뛰고 이어지지 않게 |
-| `stats.possession_stats` | 원문 | 그대로 + **빈 판을 뺀다** | 점유율 구간이 재료다 — 지금은 F4 의 빈 몰수패가 "열세(<40)" 칸의 패로 들어가 있다(J1 과 같은 기준으로 고친다) |
-| `stats.result_breakdown` | 원문 | 그대로 | 이미 종료 유형으로 센다 — 주석 "합계가 승률 분모보다 클 수 있다" 와 `app_main.FORFEIT_TIP` 둘째 줄을 고친다(이제 같다) |
-| `stats.formation_stats` · `aggregate_players` · `own_squad` · `opponent_squad` · `shootout_keepers` · `discipline_stats` · `clutch_summary` · `shot_summary` · `opponent_cards` · `team_profile` · `versus_profile` · `pass_style` · `_per_match` | 원문 | 그대로 | 선수·슛·패스가 재료다 — F2: 하나도 없다 |
-| `habits.side_totals` · `pos_diff` · `half_share_diff` · `goal_flow` · `attack_routes` · `squad_timeline`(`__init__` · `_lineups`) | 원문 | 그대로 | 위와 같다 · 구단주 분포·분포 대비가 이 길이라 **분포 값이 안 바뀐다** |
+| 처리 | 함수 | 이유·바뀌는 것 |
+|---|---|---|
+| 세 (5) | `models.parse_match` | `result`·`blank`·`no_squad` 를 채운다 — `MatchSummary` 길 전부가 여기서 따라온다(아래 표) |
+| | `stats.win_divisions` | 달력·운 범위·FC 가 이 줄로 날마다 승무패를 센다 — `summarize` 와 같아야 한다(FC 는 승리만 세어 안 바뀐다 · `forfeit` 플래그는 J6 로 그대로) |
+| | `stats.division_stats` | 세 + 빈 — 등급별 승률. **기본은 상대 등급으로 묶는다**(M12) — F1 판의 상대 쪽 `division` 이 있는지는 픽스처 0004 로 단언하고, 없으면 지금처럼 "등급 없음" 줄 |
+| | `records._games` | 세 + `_Game.blank` — 연승 업적이 몰수패를 건너뛰고 이어지지 않게 · **점수를 쓰는 업적(무실점 연속 · 최다 득점 · 최다 점수 차 · `rival` 의 최다 점수 차 승패)은 빈 판을 건너뛴다**(M1) · 경기 수·연승연패·상대 전적은 센다 |
+| | `squad_timeline._Games.__init__` | 사건 앞뒤 창 승률을 누적합으로 낸다(M2) — `result_of` 로 · 득실은 합계라 그대로 · 창의 경기당 득실을 내는 줄이 있으면 빈 판을 분모에서 뺀다(`test_timeline` 에 빈 판을 섞은 창) |
+| 빈 (13) | `stats.team_profile` · `versus_profile` · `discipline_stats` · `pass_style` · `_per_match` | 나·상대 경기당 평균(레이더 · 나와 상대 · 성적 진단 · 패스 · 구단주 비교)이 대시보드 평균과 같은 판을 쓴다(M3). `discipline_stats` 의 `end_kinds` 세기는 건너뛰기 **앞**이라 그대로 |
+| | `stats.clutch_summary` · `goal_minute_buckets` · `habits.goal_flow` · `half_share_diff` | 골 시각이 재료 — 빈 판은 한쪽 골만 남아 있어(F2·F14) "선제 실점"·"먹힌 시간대" 로만 쌓인다(1회차 "확인 못 한 것" 답) |
+| | `stats.possession_stats` | 이미 `pos <= 0` 을 건너뛴다(M12 — 내 빈 판은 지금도 빠진다) → 상대만 빈 판이 더 빠진다 |
+| | `stats.shot_summary` | 이미 종료 유형 "정상" 만 — 정상인데 한쪽이 빈 판(F13: 내 2+상대 0 10건 · 내 0+상대 2·4 14건) 때문에 같은 건너뛰기를 둔다 |
+| | `habits.side_totals` · `attack_routes` | 같은 경기 상대 대비(칩의 "같은 경기 상대" 판정 · 문장 · 공격 루트). `side_totals(details, ouid, keep_blank=False)` — 분포 길만 `keep_blank=True` |
+| 분포 (2) | `habits.side_totals(keep_blank=True)` 를 부르는 두 곳(`ownerdist.py:462` 받기 · `habits.dist_basis` 내 1000판) · `habits.pos_diff` | J2 — 저장된 분포와 내 값이 같은 기준이어야 백분위가 맞는다. 칩의 분포 판정 · [분포 대비] 표 · C4 는 **값이 안 바뀐다** |
+| 그대로 (26) | `stats.trade_hint` · `own_squad` · `opponent_squad` · `aggregate_players` · `formation_stats` · `result_breakdown` · `shootout_keepers` · `shot_map` · `shot_type_counts` · `player_finishing_trend` · `finishing_ranking` · `_opp_scope` · `opponent_cards` · `key_players` · `match_sides` · `match_versus` · `latest_match_with` · `match_goals` · `match_shots` · `match_mvp` · `rating_trend` · `recent_ratings` · `_my_pair_sums` · `records.day_player` · `sessions.top_scorer` · `squad_timeline._lineups` | 선수·슛 한 줄씩이 재료이거나 한 경기 화면이다. `result_breakdown` 은 이미 종료 유형으로 센다 — 주석 "합계가 승률 분모보다 클 수 있다" 와 `app_main.FORFEIT_TIP` 둘째 줄을 고친다(이제 같다) |
+| (요약 길 · 2) | `stats.after_streak_rates` · `team_color_baseline` | `_wdl_of(m.result)` — `MatchSummary` 를 받는다(아래) |
+
+`MatchSummary` 를 받는 자리(전부 `parse_match` 가 채운 `result` 를 쓴다 — 고칠 것은 평균 분모뿐):
+
+| 자리 | 처리 |
+|---|---|
+| `models.summarize` · `opponent_stats` · `period_stats` | 세 + 평균 분모에서 `blank` 를 뺀다 |
+| `models.current_streak` · `longest_streaks` · `win_rate_trend` · `moving_win_rate` · `stats.time_of_day_rates` · `time_weekday_rates` · `after_streak_rates` · `team_color_stats` · `team_color_baseline` · `habits.streak_baseline` · `_chi_table` · `sessions._wdl` · `streak_break` · `_cum_rates` · `streak_note` · `rankmeta.my_day_rate` · `opp_rank_table` · `records.rival`(승무패) | 세 — 승무패만(지금은 "오류" 가 연속을 끊기만 한다 → 연패에 든다) |
+| `app_main` 의 승·무·패 세기(`_render_opponents` · `_season_h2h_text` · `_detail_h2h`) · 경기 카드·점 그림(`_match_card` · `_detail_head` · `_render_analysis` · `dashboard._render_trend`) | 세 — 결과 글자가 "패" 로 보인다(보통 몰수패와 같다) |
+| `dashboard._render_kpis` | 세 — "오류" 수가 그만큼 줄어든다. 586~588 은 골 ÷ 슛 전환율(M12 — 합계 비율이라 분모를 안 건드린다) · 평균 득실은 `Stats` 가 낸다 |
+| 선수 지표 표의 팀 승률 기준(`app_main.py:14877`) | `no_squad` 가 아닌 판으로만(M4) — 선수별 승률(원문 길 · 내 선수가 있는 판)과 같은 판 |
+
+`test_rules` 새 규칙(1판의 `RESULT_RAW_ALLOW` 를 바꾼다 — M6: 원문 길 대부분은 `"matchResult"` 글자가 아니라 `_result_of(` 를 부른다): 위 정의로 뽑은 함수 이름은 전부 표 `RESULT_PATHS`(이름 → `count`·`content`·`dist`·`asis`)에 있어야 한다(`RAW_TIME_ALLOW` 꼴).
+`count` 함수는 `result_of(` 를 부르고 `_result_of(`·`"matchResult"` 를 안 쓴다 · `content` 함수는 `is_blank(` 를 부른다 · 표에 없는 새 함수는 FAIL · 위반을 심은 가짜 소스(표 밖 함수 · `count` 인데 원문 · `content` 인데 `is_blank` 없음) 셋을 잡는지 같이 단언.
 
 - 화면 글: `FORFEIT_TIP` · 산출 방법(`methods.py`)의 승률 줄에 한 문장("상대가 몰수승을 받은 경기는 내 기록이 비어 있어도 패로 셉니다") · `CHANGELOG` 3.10.1 절에 "승률이 조금 내려갈 수 있습니다" 를 적는다.
 - 캐시: `MatchSummary` 는 켤 때마다 원문에서 다시 만든다 — 저장된 요약이 없어 옮길 것이 없다(되돌리기 = 옛 버전을 켜면 옛 숫자).
@@ -892,8 +933,19 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | 이름 | 뜻 |
 |---|---|
 | `MatchSummary.season_id: int \| None = None` | `matchDetail.seasonId`(정수가 아니면 None) |
-| `seasons.DataSeason(sid, start_at, end_at, first, last, games)` | 시즌표가 모르는 시즌 — `start_at` = 그 번호의 첫 저장 경기 시각 · `end_at` = 다음 번호의 첫 경기 시각(가장 새 번호는 None). `Season` 과 같은 이름을 낸다: `no`(= −sid) · `name` · `label`(`"{sid // 100} 시즌 {sid % 100}"`) · `contains(when)` |
-| `seasons.SeasonMap(table, matches)` | 한 번 세워 같이 쓴다. `.groups` → `[(Season \| DataSeason \| None, [경기])]` 최신순(None = 진행 중 — 지금과 같은 뜻) · `.of(m)` 경기 → 시즌(번호로) · `.at(when)` 시각 → 시즌(경기가 아닌 것: 달력 칸 · 거래) · `.known` 시즌이 하나라도 나뉘나 |
+| `seasons.DataSeason(sid, start_at, end_at, first, last, games)` | 시즌표가 모르는 시즌 — `start_at` = 그 번호의 첫 저장 경기 시각 · `end_at` = 다음 번호의 첫 경기 시각(가장 새 번호는 None). `Season` 과 같은 이름을 낸다: `no`(= −sid) · `name` · `label`(`"{sid // 100} 시즌 {sid % 100}"`) · `start`·`end`(첫·마지막 저장 경기 **날짜** — `_period_series` 의 정렬 키) · `contains(when)` = `start_at <= when < end_at`(`end_at` None 이면 끝 없음). **같음·해시는 `sid` 만**(M8 — 새 경기 한 판에 `last`·`games` 가 바뀌어도 콤보의 `findData(prev)` 가 같은 줄을 찾아야 한다 · `test_ui_smoke` 에서 실행으로 확인) |
+| `seasons.SeasonMap(table, matches)` | 한 번 세워 같이 쓴다. `.groups` → `[(Season \| DataSeason \| None, [경기])]` 최신순(None = 진행 중 — 지금과 같은 뜻) · `.of(m)` 경기 → 시즌(번호로) · `.at(when)` 시각 → 시즌(경기가 아닌 것: 달력 칸 · 거래) · `.has(m, selected)` 고른 시즌에 드는 경기인가(남의 계정 경기도 — 아래) · `.ongoing_start` 진행 중 묶음의 시작 시각 · `.known` 시즌이 하나라도 나뉘나 |
+
+돌려주는 값(M9 — 1판은 None 이 "진행 중" 과 "어디에도 없음" 두 뜻이었다):
+
+| 부름 | 시즌표가 아는 기간 | 모르는 번호의 묶음 | 진행 중 | 어디에도 없음 |
+|---|---|---|---|---|
+| `.of(m)` | `Season` | `DataSeason` | None | 없다 — 모든 경기는 `.groups` 의 한 묶음에 든다 |
+| `.at(when)` | `Season` | `DataSeason`(`contains`) | None — `when >= ongoing_start` 일 때만 | `seasons.OUTSIDE`(저장 시작 전 · 묶음 사이 빈 틈) — 달력(4653)·운 범위(5790)는 이 값을 "이번 시즌" 으로 읽지 않고 그 칸을 시즌 밖으로 둔다 |
+| `.has(m, selected)` | `m.season_id` 가 내 맵에 있으면 그 번호의 시즌 == `selected` · 없으면(`season_id` None · 내가 안 뛴 시즌) `selected.contains(m.match_date)` — 진행 중을 골랐으면 `when >= ongoing_start` | ← | ← | 거짓 |
+
+- `ongoing_start`(M10): 시즌표 마지막 종료 경계와 **가장 새 `DataSeason` 의 `end_at`**(= 진행 중 번호의 첫 경기 시각) 중 늦은 쪽. 시즌표가 낡아 못 찾은 번호가 둘 이상일 때 "현재 시즌" 의 시작이 낡은 표의 끝이 아니라 새 묶음과 맞는다.
+- 한계(M11 · 지금도 같다): 시즌표가 낡았고 가장 새 번호의 시즌이 실제로는 끝났어도 그 묶음은 "진행 중" 이다 — 새 시즌 경기가 한 판 저장되면 풀린다.
 
 짝짓는 규칙(번호 묶음 → 시즌표 줄):
 1. 번호 묶음마다 **경기 시각의 중앙값**으로 `season_of(table, 중앙값)` — 찾으면 그 `Season`(기간·이름은 시즌표 것 · 지금 화면과 같다). 이름으로 안 짝짓는다(F9).
@@ -906,45 +958,57 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 | 자리 | 지금 | 바꿈 |
 |---|---|---|
-| `_season_groups` | `sn.group_by_season(self._rank_seasons, …)` | `self._season_map().groups`(창 캐시 — 키: `id(_matches_all)` · 길이 · `id(_rank_seasons)`) |
+| `_season_groups` | `sn.group_by_season(self._rank_seasons, …)` | `self._season_map().groups`(창 캐시 — 키: `id(_matches_all)` · 길이 · **맨 앞 경기 id** · `id(_rank_seasons)` · 시즌표 줄 수 — 목록을 새로 만들면 id 가 재사용될 수 있어 `_narrate_scope` 와 같은 꼴로) |
 | `_rebuild_season_combo` · `_render_seasons` | `season.start`·`season.end` 로 기간 글 | `DataSeason` 이면 기간 대신 "저장된 경기 MM-DD~MM-DD" · 정렬 키는 첫 경기 날짜 |
 | `_in_selected_season` 를 **경기**에 쓰는 두 곳(시즌 필터 · `_scope` 쪽) | `selected.contains(m.match_date)` | `SeasonMap.of(m)` 과 견준다. 시각을 넘기는 한 곳(타임라인·거래 범위)은 `.at(when)` |
-| `_cal_season_key` | `sn.season_of(self._rank_seasons, d)` | `.at(d)` — 시즌표가 아는 시즌은 같은 값 |
+| `_cal_season_key` | `sn.season_of(self._rank_seasons, d)` | `.at(d)` — 시즌표가 아는 시즌은 같은 값 · 캐시 키에 `SeasonMap` 객체를 넣는다(M8) |
+| `_period_series`(4723) | `season.start` | `DataSeason.start`(첫 경기 날짜) — 위 표 |
+| `_compare_window`(11319 — **상대 계정 경기**에 시즌 필터) | `_in_selected_season(m.match_date, selected)` | `.has(m, selected)` — 상대 경기의 번호가 내 맵에 없어도 답한다(M7) |
+| `_range_start`(11329) | 진행 중이면 `max(s.end_at …)` · 아니면 `selected.start_at` | 진행 중이면 `.ongoing_start` · `DataSeason` 이면 None(저장된 첫 경기가 곧 시작이라 ⚠ 판정을 안 한다) |
+| 시즌 콤보(11926)·`_render_seasons`(14752)의 "현재 시즌" 시작 | 시즌표 `last_end` | `.ongoing_start`(M10) |
 | `_season_h2h_text` | `sn.season_of` 두 번 | `.of(m)` |
 | 달력·운 범위의 "저장된 전체" 문구(`no_table = not self._rank_seasons` 두 곳) | 시즌표가 없으면 | `not SeasonMap.known` 이면 |
 | `_season_key` | `s{no}` | 그대로(`DataSeason.no` = −sid → `s-202606`) — 시즌표가 뒤늦게 오면 저장된 선택이 안 맞아 기본(현재 시즌)으로 간다 |
 
 범위 밖(J4 — 시즌표가 있어야 서는 그대로): `season_span` · `elo_season_start` · `_render_review`(`core.season_spans`) · `PredictWorker` · `_records_seasons` · `predict_check` · `rankcollect`.
 
-### C 켤 때 내 계정 + 칩 고정
+### C 켤 때 내 계정 + 칩 고정 (2판에서 다시 씀 — S1 · U3)
+
+지금(F11′): 배포 앱은 켤 때 검색 화면이고 넥슨 요청은 0 이다. 바꾸는 것: **내 계정이 정해져 있을 때만** 켤 때 그 계정을 DB 로 그리고 새 경기를 조용히 확인한다. `config.OPEN_LAST_ACCOUNT`(False)는 그대로 둔다 — "최근 검색한 남의 계정을 여는" 스위치이고 10-04 결정은 그쪽에 그대로 산다.
 
 | 자리 | 바꿈 |
 |---|---|
-| `store.my_account(conn)` (새) | `{ouid, nickname} \| None` — `trade_state.my_ouid` 가 있고 `accounts` 에 그 줄이 있을 때(J5: 키 지문 안 봄) |
-| `app_main._last_account` | 내 계정에 저장된 감독모드 경기가 있으면 그 계정, 아니면 지금처럼 최근 검색 1번. 이름은 `_startup_account` 로(부르는 곳 `open_last_account` 하나) |
+| `store.my_account(conn)` (새) | `{ouid, nickname} \| None` — `trade_state.my_ouid` 가 있고 · `accounts` 에 그 줄이 있고 · 저장된 감독모드 경기가 1판 이상일 때(J5: 키 지문 안 봄) |
+| `MainWindow.open_startup(only_mine=False)` (새) | 켤 때 무엇을 열지 **한 곳**에서 정한다: ① 화면에 이미 계정이 있으면(`_ouid`) 아무것도 안 함 ② 내 계정이 있으면 `_open_saved(ouid, nick, check=not game_paused())` ③ `only_mine` 이면 끝 ④ `OPEN_LAST_ACCOUNT` 면 `open_last_account()` ⑤ 아니면 `start_prefetch()`(지금과 같다) |
+| `_open_saved(ouid, nick, check)` (새 — `open_last_account` 의 몸통을 옮긴다) | DB 로 그린다(`MatchLoader(offline_ouid=)`) → 끝나면 `check` 일 때만 `_api_search(nick, quiet=True)`. `open_last_account` 는 `_last_account()` 로 계정을 고른 뒤 이 함수를 부른다(둘러보기 길 그대로) |
+| 게임 중(84 G3 — "앱이 스스로 하는 요청은 쉰다") | `check=False` 로 그리기만 하고 `_startup_check_pending = (ouid, nick)` 를 남긴다 · 상태줄 "게임이 켜져 있어 새 경기 확인을 쉬었습니다" · `on_game_changed(on=False)` 가 `win.resume_startup_check()` 를 부른다 — 그 계정이 아직 화면에 있고 그 사이 검색을 안 했을 때만 한 번 확인 |
+| `main`(17060) | `if OPEN_LAST_ACCOUNT … else …` 를 `win.open_startup()` 한 줄로 |
+| `tray.show_window` | `--tray` 로 숨겨 켠 창을 **처음 열 때**(`_shown_once` 가 거짓이던 그 한 번) `show_initial()` 뒤에 `open_startup(only_mine=True)` — 내 계정이 없으면 지금과 같다(미리 읽기를 새로 돌리지 않는다) |
+| `start_prefetch` · `reload_after_release` | 그대로(최근 검색 1번 · 요청 0) — 내 계정을 열었으면 `_ouid` 가 있어 `reload_after_release` 는 미리 읽기 갈래를 안 탄다 |
 | `_refresh_recent` | 칩 맨 앞에 내 계정("내 계정 · 닉네임") · 나머지는 최근 순에서 내 계정을 뺀 것 · **칩 수는 그대로 `RECENT_SEARCH_LIMIT`**(폭 예산을 안 늘린다) · 위쪽 이름 칸 목록도 내 계정이 맨 앞 |
-| `_set_my_account` | 끝에 `_refresh_recent()` — 띠에서 정하거나 바꾸면 칩이 바로 따라온다 |
+| `_set_my_account` | 끝에 `_refresh_recent()` — 띠에서 정하거나 바꾸면 칩이 바로 따라온다. 키가 바뀌어 `store` 가 `my_ouid` 를 비우는 길(F12)은 창을 안 거친다 → 키 창을 닫은 뒤 도는 자리(`_on_key_saved` 꼴 — 구현 때 이름 확인)에서 `_refresh_recent()` 한 줄(1회차 "확인 못 한 것" 답 · `test_ui_smoke` 로 칩이 사라지는지) |
+| 이용 안내(`notice.py`) | "내 계정을 정해 두면 프로그램을 켤 때 그 계정의 새 경기를 넥슨 오픈API 에 확인합니다" 한 문장 + `NOTICE_VERSION` 올림 + `CHANGES` 한 덩이(문구 골든이 짝을 지킨다) — 사용자가 누르지 않은 넥슨 요청이 새로 생기는 것이라 실질 변경이다 · 실사용자가 아직 없어 다시 동의 부담은 없다(11-10) |
 
-요청 수는 그대로다(켤 때 여는 계정 하나에 `_api_search(quiet=True)` 한 번 — F11). 내 계정이 없으면(안 정함 · 키가 바뀌어 확인 전 · 목록에서 지움) 전부 지금과 같다.
+요청 양(J7): 검색 버튼 한 번과 같다 — 닉네임→ouid 1 · 경기 목록 · **지난번 뒤 새 경기 상세**(상한은 검색과 같은 로더 상한) · 최고 등급 · 끝나면 거래 받기와 보이는 화면의 로더. 켤 때마다 한 번이고 트레이에 숨긴 채로는 안 돈다.
+실패(네트워크·429·닉네임 바뀜)는 `quiet=True` 라 창 없이 상태줄에만, 키 거절만 키 창(지금 `_api_search` 그대로 · `_on_quota_hit` 는 조용히).
 
 ### 진입점 표 (⑩)
 
 | 같은 일 | 진입점 | 거쳐야 할 것 | 테스트 |
 |---|---|---|---|
-| 승·무·패 판정 | `parse_match` · `stats.win_divisions` · `stats.division_stats` · `records._games` | `models.result_of` | `test_parsing.test_forfeit_loss_counts_everywhere_108` — 픽스처 0004(F1 짝)로 네 길의 패 수가 같다 · 원문을 직접 읽어 **세는** 새 자리를 `test_rules` 가 잡는다(아래) |
-| 평균의 분모 | `Stats` · `OpponentStat` · `PeriodStat` · `DivisionStat` · `dashboard._render_kpis` · `possession_stats` | `blank` | `test_parsing.test_blank_games_out_of_averages_108` — 빈 판을 섞은 묶음의 평균 == 빈 판을 뺀 묶음의 평균 · 승무패 수는 다르다 |
-| 경기 → 시즌 | `_season_groups` · `_in_selected_season` · `_season_h2h_text` | `SeasonMap.of` | `test_parsing` 시즌 절 + `test_ui_smoke`(시즌표 없이 콤보에 시즌 둘) |
-| 켤 때 여는 계정 | `main` → `open_last_account` | `_startup_account` | `test_ui_smoke.test_startup_opens_my_account_108` |
-
-`test_rules` 새 규칙: 앱 소스에서 `"matchResult"` 를 읽는 줄은 허용 표(`RESULT_RAW_ALLOW` — 위 표의 "그대로" 자리 + `models.result_of`)에만. 표 밖에서 읽으면 FAIL(새 집계가 몰수패 규칙을 건너뛰지 않게) · 위반을 심은 가짜 소스를 잡는지 같이 단언.
+| 승·무·패 판정 | `parse_match` · `stats.win_divisions` · `stats.division_stats` · `records._games` · `squad_timeline._Games.__init__` | `models.result_of` | `test_parsing.test_forfeit_loss_counts_everywhere_108` — 픽스처 0004(F1 짝)로 다섯 길의 패 수가 같다 · 표 밖에서 원문으로 세는 새 자리는 `test_rules`(`RESULT_PATHS`)가 잡는다 |
+| 평균·짝 비교에서 빈 판 빼기 | `Stats` · `OpponentStat` · `PeriodStat` · `DivisionStat` · A 표의 "빈" 13개 | `MatchSummary.blank` · `models.is_blank` | `test_parsing.test_blank_games_out_of_averages_108` — 빈 판(내 쪽만 · 상대만 · 양쪽) 셋을 섞은 묶음의 평균 == 뺀 묶음의 평균 · 승무패 수와 득실 합계는 섞은 쪽이 크다 · "빈" 13개마다 같은 단언(함수 이름으로 도는 표 테스트) |
+| 구단주 분포와 같은 기준 | `ownerdist` 받기(462) · `habits.dist_basis` · `pos_diff` | `side_totals(keep_blank=True)` | `test_ownerdist` — 빈 판을 섞은 가짜 경기로 받은 요약 == 108 전 골든 값(분포 값이 안 바뀐다) · `dist_basis` 의 내 값도 같은 판 수 |
+| 경기 → 시즌 | `_season_groups` · `_in_selected_season` · `_season_h2h_text` · `_compare_window` | `SeasonMap.of` · `.has` | `test_parsing` 시즌 절(위 M9 표의 칸마다) + `test_ui_smoke`(시즌표 없이 콤보에 시즌 둘 · 새 경기 한 판 뒤에도 고른 시즌이 유지 · 상대 계정 비교에 시즌 필터) |
+| 켤 때 여는 계정 | `main`(창 보임) · `tray.show_window`(숨겨 켠 창을 처음 열 때) · 둘러보기(`open_last_account`) · `reload_after_release`(안 연다) · `on_game_changed`(미룬 확인) | `open_startup` → `_open_saved` | `test_ui_smoke.test_startup_opens_my_account_108` — **`main` 길로**(가짜 API): 내 계정 있음 → 그 계정이 열리고 검색 1번 · 없음 → 검색 화면 + 요청 0(지금과 같다) · 게임 중 → 그려지고 요청 0, 게임 끔 → 1번 · `test_tray` — `--tray` 로 켜면 요청 0, 처음 열 때 1번, 두 번째 열 때 0 · `test_demo` "요청 0" 그대로 |
 
 ### 조각 (3개 · 검토 기준 13)
 
 | 조각 | 내용 | 난이도 | 모델 |
 |---|---|---|---|
-| ① | A 전부 + 골든 갱신(`test_parsing` · `test_analysis` · `test_check_api` · `tools/check_t0.py` 는 `--write` 전에 바뀐 날을 눈으로) + 산출 방법·`FORFEIT_TIP` | 중간 — 숫자가 앱 전체에서 바뀐다 | Sonnet + diff 리뷰 |
+| ① | A 전부(`test_rules` `RESULT_PATHS` 포함) + 골든 갱신(`test_parsing` · `test_analysis` · `test_check_api` · `test_records` · `test_timeline` · `test_habits` · `tools/check_t0.py` 는 `--write` 전에 바뀐 날을 눈으로 · **`test_ownerdist`·`test_predict` 골든은 안 바뀌어야 한다**) + 산출 방법·`FORFEIT_TIP` | 중간 — 숫자가 앱 전체에서 바뀐다 · 닿는 함수 18개(세 5 + 빈 13) | Sonnet + diff 리뷰 |
 | ② | B 전부 | 중간 — 시즌 필터가 닿는 화면이 많다 | Sonnet + diff 리뷰 |
-| ③ | C + `CHANGELOG` 3.10.1 절(미공개) + CLAUDE.md 표(`models`·`seasons` 줄) + exe 빌드·2번 모니터 실화면 | 낮음 | Sonnet + diff 리뷰 |
+| ③ | C(이용 안내 한 줄 · `NOTICE_VERSION`) + `CHANGELOG` 3.10.1 절(미공개) + CLAUDE.md 표(`models`·`seasons` 줄 · "웹 데이터" 절 옆에 켤 때 요청 한 줄) + exe 빌드·2번 모니터 실화면 | 낮음~중간 — 켤 때 길이 넷(창 · 트레이 · 둘러보기 · 게임 중)이다 | Sonnet + diff 리뷰 |
 
 조각마다: 테스트 → 변이(아래) → 문서 → 커밋·푸시. 공개는 109 끝(3.10.1).
 
@@ -954,11 +1018,12 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|---|---|
 | 소스 · offscreen 테스트 · CI | 구현 때 | 구현 때 | 구현 때 |
 | exe · 실제 윈도우(100%/150%) | 조각 ③ 에서 — 경기 목록의 "패" 글자 · 시즌 콤보 폭(가장 긴 항목) · 칩 줄이 1280 에서 안 잘리는지 | ← | ← |
-| 새 설치 | 해당 없음(같은 식) | 시즌표 없이 시작 → `DataSeason` 길(스모크) | 내 계정 없음 → 지금과 같음(스모크) |
-| 업그레이드 | 저장 형식 그대로 · 숫자만 바뀜 → CHANGELOG | 저장된 `view/season` 키는 시즌표가 아는 시즌이면 그대로 맞는다 | 설정 없음 |
+| 새 설치 | 해당 없음(같은 식) | 시즌표 없이 시작 → `DataSeason` 길(스모크) | 내 계정 없음 → 지금과 같음 · 켤 때 요청 0(스모크) |
+| 업그레이드 | 저장 형식 그대로 · 숫자만 바뀜 → CHANGELOG | 저장된 `view/season` 키는 시즌표가 아는 시즌이면 그대로 맞는다 | 이미 [가계부] 에서 내 계정을 정해 둔 사람은 올린 뒤 첫 실행부터 그 계정이 열린다 — 다시 묻는 안내(`NOTICE_VERSION`)가 먼저 뜨고 동의 전에는 요청하지 않는다(`ask_notice_update_once` 가 닫힌 뒤 `open_startup` — 구현 때 순서를 스모크로) |
 | 옛 버전으로 되돌리기 | 새 표·열이 없어 그대로 열린다(옛 숫자) | ← | ← |
 | 남의 PC(CP949) | 해당 없음 — 파일·자식 프로세스·인코딩을 안 건드린다 | ← | ← |
-| 둘러보기(`--demo`) | 지어낸 경기는 종료 유형 0 뿐 → 숫자 그대로 · 요청 0(`test_demo`) | 지어낸 `seasonId` 202611 하나 + 시즌표 없음 → `DataSeason` 하나("2026 시즌 11") — **지금은 시즌 나눔이 없던 화면에 시즌 하나가 생긴다**(구현 때 `test_demo` 로 확인) | `trade_state` 가 비어 지금과 같음 |
+| 트레이로 시작(`--tray`) · 게임 중 | 해당 없음 | 해당 없음 | 숨긴 채로는 요청 0 · 처음 열 때 한 번(`test_tray`) · 게임 중이면 그리기만 하고 게임이 꺼지면 한 번(`test_ui_smoke`) |
+| 둘러보기(`--demo`) | 지어낸 경기는 종료 유형 0 뿐이고 선수가 다 있다 → 숫자 그대로 · 요청 0(`test_demo`) | 지어낸 `seasonId` 202611 하나 + 시즌표 없음 → `DataSeason` 하나("2026 시즌 11") — **지금은 시즌 나눔이 없던 화면에 시즌 하나가 생긴다**(구현 때 `test_demo` 로 확인) | `trade_state` 가 비어 지금과 같음(`open_last_account` 길 그대로 · 실제 키가 env 에 있어도 요청 0) |
 
 ### ⑥ 실패·복구
 
@@ -966,36 +1031,52 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|---|---|
 | 넥슨이 종료 유형 4 의 뜻을 바꾼다 | 엉뚱한 판이 패로 | `check_api` 에 한 줄(최근 경기의 종료 유형 짝 분포 — 4+1 의 결과 문자열이 "오류"/"승" 이 아니면 `[FAIL]`) | `forfeit_loss` 한 곳 |
 | `player` 가 빈 정상 경기가 온다(응답 누락) | 그 판이 평균에서 빠진다(승무패는 센다) | 평균 분모가 판 수보다 작다 — 화면 표본 글 | 다시 받으면 채워진다(같은 원문 길) |
+| "빈" 건너뛰기를 한 함수에서 빠뜨린다 | 그 화면만 옛 기준(0 이 섞인 평균) — 새로 틀리는 것은 없다(J2 ⓑ) | `test_rules` `RESULT_PATHS` 의 `content` 검사 + 함수마다 도는 표 테스트 | 한 줄 |
+| 분포 길에 `keep_blank=True` 를 빠뜨린다 | 내 값만 새 기준 → 백분위가 F16 만큼 어긋난다(예외 없이 조용히) | `test_ownerdist` 골든 · `dist_basis` 판 수 단언 | 한 줄 |
 | `seasonId` 가 없거나 정수가 아니다 | 그 경기만 시각 길(규칙 4) | 테스트(None · 글자) | — |
 | 번호 묶음 둘이 같은 시즌표 줄에 짝지어진다 | 한 시즌으로 합쳐 보인다(지금의 시각 길과 같은 결과) | 테스트 | — |
-| 내 계정 닉네임이 바뀌었다 | DB 로는 그려지고 조용한 새 경기 확인만 실패(지금 최근 검색과 같다) | 상태 줄 | 직접 검색하면 `accounts` 가 고쳐진다 |
-| 내 계정 줄을 목록에서 지웠다 | `my_account` None → 최근 검색 | 스모크 | — |
+| 내 계정 닉네임이 바뀌었다 | DB 로는 그려지고 조용한 새 경기 확인만 실패(상태줄 · 켤 때마다 되풀이) | 상태 줄 | 직접 검색하면 `accounts` 가 고쳐진다 |
+| 켤 때 확인이 한도(429)·키 거절에 걸린다 | 한도는 조용히 상태줄(`_on_quota_hit` 의 `_quiet_search` 갈래) · 키 거절은 키 창(사용자가 할 일이 있다 — 지금 `_api_search(quiet=True)` 주석 그대로) | 상태줄·키 창 | 키를 바꾸면 `my_ouid` 가 비워져 다음부터 안 연다(J5) |
+| 켤 때 그리는 중에 사용자가 다른 닉네임을 검색한다 | `_api_search` 첫 줄이 도는 로더를 보고 돌아간다 — 지금 `open_last_account` 와 같다(둘러보기에서 이미 타는 길) | 스모크 | 그리기가 끝난 뒤 다시 검색 |
+| 내 계정 줄을 목록에서 지웠다 | `my_account` None → 지금과 같음(검색 화면) · 칩에도 없다 | 스모크 | — |
 
 ### ⑦ 자원 예산
 
 | 항목 | 상한 | 재는 법 |
 |---|---|---|
 | `SeasonMap` 세우기(1만 경기) | 20ms — 한 번 훑고 번호마다 정렬 | `test_parsing` 에 시간 단언 없이 조각 ② 에서 실DB 사본으로 한 번 재 적는다 |
-| `parse_match` 추가 비용 | 경기당 dict 조회 3번 — 1만 경기 읽기(약 2초)의 1% 안 | 조각 ① 에서 앞뒤 한 번 |
-| 네트워크 · 디스크 | 0 | `test_demo` "요청 0" · 스키마 대조 |
+| `parse_match` 추가 비용 | 경기당 dict 조회 5번 안쪽 — 1만 경기 읽기(약 2초)의 1% 안 | 조각 ① 에서 앞뒤 한 번 |
+| "빈" 13개의 `is_blank` | 경기당 `player` 두 번 보기 — 재지 않아도 되는 크기 | — |
+| 네트워크 — A·B | 0 | `test_demo` "요청 0" |
+| 네트워크 — C | 켤 때 **검색 한 번 분량**(J7) · 내 계정을 정한 사람만 · 한도·429 처리는 검색과 같은 로더 그대로(새 계수 없음) · 숨긴 채·게임 중 0 | `test_ui_smoke`·`test_tray` 의 요청 수 단언 · 조각 ③ 실화면에서 켤 때 요청 수를 한 번 적는다 |
+| 켜는 시간 — C | 내 계정 1만 경기면 DB 읽기 약 1~2초(지금 검색했을 때와 같다 · 작업 스레드라 창은 먼저 뜬다) | 조각 ③ 실화면에서 창이 뜬 시각 · 그려진 시각 |
+| 디스크 | 0 | 스키마 대조 |
 
 ### ⑧ 기능 상호작용
 
 | 짝 | 볼 것 |
 |---|---|
-| A × 구단주 분포·분포 대비 | 분포(원문 길)는 그대로, 내 승률 칩은 `MatchSummary` 길 — 칩이 견주는 값이 승률이면 한쪽만 움직인다 → 구현 때 `strength_chips` 가 승률을 쓰는지 확인하고, 쓰면 분포 쪽도 같은 규칙인지 테스트로 |
+| A × 구단주 분포·분포 대비 | 칩은 승률을 안 쓴다(F18). 분포 판정·[분포 대비] 표는 `keep_blank=True` 길이라 **값이 안 바뀐다** — 대신 같은 지표의 "같은 경기 상대" 판정(분포를 못 쓸 때)과 문장은 새 기준이라, 분포 표의 내 값과 흐름 분석 문장의 내 값이 F16 만큼 다를 수 있다(둘이 한 화면에 나란히 나오지는 않는다 — 조각 ① 에서 실DB 로 큰 계정 하나를 적는다) |
+| A × 구단주 비교(`_per_match`·`team_profile`) | 상대 계정 경기에도 같은 `is_blank` — 양쪽 계정이 같은 기준 |
+| A × 선수 지표 | 팀 승률 기준이 `no_squad` 를 뺀 판(M4) — F1 판은 패로 세지만 선수가 없어 기준에서 빠진다 → 선수 승률 대 팀 승률이 같은 판 |
 | A × 51 측정 | 측정 도구는 원문을 직접 읽는다(F10) — 판정에 영향 없음 · `TOOL_FILES` 해시 그대로(조각마다 `measure_cards --status` 의 도구 해시 줄 확인) |
 | A × 예측·예측 되짚기 | 예측은 ELO 점수·경기 날짜만 쓴다 — 골든(`test_predict.GOLDEN_VALUE`) 그대로여야 |
-| A × 업적 | 연승 업적이 줄 수 있다(몰수패가 끊는다) — 이미 본 업적이 사라질 수 있음을 CHANGELOG 에 |
+| A × 업적 | 연승 업적이 줄 수 있다(몰수패가 끊는다) · 점수 업적(무실점 연속 · 최다 점수 차)은 빈 판을 건너뛰어 바뀔 수 있다 — 이미 본 업적이 사라질 수 있음을 CHANGELOG 에 · 몰수 플래그는 그대로(J6) |
 | B × 저장된 시즌 선택 | 위 `_season_key` 줄 |
 | B × A | 시즌별 성적 표의 승무패 합 == 전체(`summarize`) — 테스트 |
-| C × 트레이 시작(`--tray`) · 둘러보기 | 같은 `open_last_account` 길 — 스모크 |
+| C × 트레이 시작(`--tray`) · 둘러보기 | 진입점 표의 행 — 트레이는 처음 열 때 `open_startup(only_mine=True)` · 둘러보기는 `open_last_account` 그대로 |
+| C × 게임 중 멈춤(84 G3) | 새 자동 요청 경로다 → `game_paused()` 를 보고 미뤘다가 `on_game_changed` 에서 한 번(CLAUDE.md `gameguard` 줄의 규칙) |
+| C × 켤 때 도는 다른 것(업데이트 확인 · 캐시 정리 · 색인 백필 · 랭커 픽 정리 · 예약 셋) | 넥슨 오픈API 를 쓰는 것은 켤 때 확인뿐이다(나머지는 GitHub·디스크·홈페이지 예약) — 끝난 뒤 `start_trades`·`start_visible_api_loader` 가 이어지는 것은 검색과 같다 |
+| C × 저장 공간 지우기 · 메모리 내려놓기 | `_api_search` 가 `_held_by_clearing` 을 본다(조용히 돌아감) · 내려놓았다 다시 열 때는 `reload_after_release`(요청 0) — 켤 때 확인은 프로세스에 한 번뿐 |
+| C × 이용 안내 다시 묻기 | 동의 전에는 요청하지 않는다 — `open_startup` 은 안내 창이 닫힌 뒤에(환경 행렬 "업그레이드") |
 | 108 × 109(L1 경기 표시·통계에서 빼기) | 109 가 같은 자리(`MatchSummary` 를 만드는 곳)에 거르기를 더한다 — `blank` 와 이름이 안 겹치게 |
 
 ### ⑤ 사전 부검 · ⑨ 사용자 제약
 
 - "승률이 왜 내려갔나" → CHANGELOG · 산출 방법 · `FORFEIT_TIP` 에 같은 문장. 화면에 "※" 설명 글은 안 더한다(2026-11-02 사용자).
 - "켤 때 왜 다른 계정이 뜨나" → 내 계정을 정한 사람만 바뀐다 · 칩 글자 "내 계정" 으로 알 수 있다.
+- "평균 득점이 왜 바뀌었나" → 산출 방법에 한 문장("한쪽 기록이 비어 있는 경기는 경기당 평균에 넣지 않습니다") · CHANGELOG 에 같은 문장.
+- "켜기만 했는데 넥슨에 요청이 나갔다" → 이용 안내 한 줄 · 내 계정을 지우면([가계부] 띠) 멈춘다 — 끄는 설정을 따로 두지 않는다(U2: 새 설정 없음).
 - 실화면 확인은 2번 모니터 · 초점 뺏기 없음 · 화면 글은 `docs/STYLE.md`(합쇼체).
 
 ### 재지 않은 것
@@ -1004,8 +1085,12 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 - 종료 유형 4 의 뜻은 문서에 없다(실측 짝으로만 안다 — F1·F3).
 - `seasonId` 가 해를 넘길 때 꼴(202701 일지)은 아직 본 적이 없다 — 규칙 1 은 값의 꼴에 안 기대고, `DataSeason.label` 만 기댄다.
 - 실제 윈도우 칸(조각 ③).
+- 구단주 분포를 새 기준(빈 판 뺌)으로 옮기는 것 — 바퀴마다 기준을 적어야 해 새 열이 든다. 108 은 분포 길을 옛 기준에 묶어 둔다(J2). 후보로 남긴다.
+- 죽은 몰수 플래그(F19 · J6)를 살렸을 때 업적·FC 가 얼마나 움직이는지.
+- F14 의 "남은 쪽 기록은 진짜" 는 평균값으로 본 것이다 — 판마다 경기가 몇 분에 끝났는지는 원문에 없다.
+- 켤 때 확인의 실제 요청 수(새 경기 수에 달렸다 — 조각 ③ 에서 한 번 적는다).
 
-### 1회차 검토 (2026-11-13 · Fable 5.2 1명 · 1판 `35fa9ee` · 근거 묶음 줌 · **아직 반영 전 — 2판에서 고친다**)
+### 1회차 검토 (2026-11-13 · Fable 5.2 1명 · 1판 `35fa9ee` · 근거 묶음 줌 · **2판에 반영** — S1 → C 절 · M1·M2·M4·M6·M12 → A 표 · M3·M5 → J1·U4 · M7~M11 → B 표)
 
 22.2만 토큰 · 도구 34번 · 5분 42초 · **[상] 1 · [중] 12**. 견줄 기준(Opus 1회차): 32단계 A [상]4·[중]6 16.4만 / B [상]5·[중]6 14.5만 — 계획 크기가 달라 회차 수로 견준다.
 
@@ -1025,7 +1110,9 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | M11 | 중 | 규칙 2 의 "진행 중" 이 끝난 시즌에도 붙는다 | 시즌표가 낡고 최신 시즌에 경기가 없으면 끝난 시즌이 "현재 시즌 (진행 중)"(지금도 같다 — 회귀는 아님) | 한계로 적거나 `store.seasons_stale` 이면 `DataSeason` 으로 |
 | M12 | 중 | 코드와 다른 문장 셋 | `possession_stats` 는 이미 `pos <= 0` 을 건너뛴다(`stats.py:1241` — "고친다" 가 아니다) · `_render_kpis` 586~588 은 경기당 슛이 아니라 골÷슛 전환율 · `division_stats` 는 기본이 **상대** 등급(1178 — F2 는 내 쪽만 쟀다) | 세 줄을 고친다 |
 
-검토자가 확인 못 한 것(2판에서 재거나 조각으로 넘긴다): `clutch_summary`·`goal_flow` 가 F1 판(상대 골·`shootDetail` 은 남아 있다)을 어느 칸에 넣나(픽스처 0004) · `strength_chips` 가 승률을 견주나 · F1 판의 상대 쪽 `division` · `SeasonMap` 캐시 키의 id 재사용 · 키가 바뀌어 `my_ouid` 가 비워질 때 칩이 언제 다시 그려지나.
+**2판의 답**: `clutch_summary`·`goal_flow` → 빈 판을 건너뛴다(A 표 "빈" · F2·F14) · `strength_chips` → 승률을 안 쓴다(F18) · F1 판의 상대 `division` → 조각 ① 에서 픽스처 0004 로 단언(A 표 `division_stats` 줄) · 캐시 키 → B 표 `_season_groups` 줄 · 칩 → C 표 `_set_my_account` 줄.
+
+검토자가 확인 못 한 것(1회차 원문): `clutch_summary`·`goal_flow` 가 F1 판(상대 골·`shootDetail` 은 남아 있다)을 어느 칸에 넣나(픽스처 0004) · `strength_chips` 가 승률을 견주나 · F1 판의 상대 쪽 `division` · `SeasonMap` 캐시 키의 id 재사용 · 키가 바뀌어 `my_ouid` 가 비워질 때 칩이 언제 다시 그려지나.
 
 **이 회차에서 본 것**: [상] 하나는 내가 `_last_account` 를 부르는 곳을 grep 하지 않고 docstring("main 에서만")을 믿어서 나왔다 — 기준 ②(닿는 곳 전수 grep)를 초안에서 건너뛴 자리다.
 
