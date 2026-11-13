@@ -820,7 +820,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 ---
 
-## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 3판 (2026-11-14 · U1~U6 사용자 답 · 1회차 [상] 1·[중] 12 · 2회차 [상] 2·[중] 8 반영 · 3회차 검토 전)
+## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 3판 (2026-11-14 · U1~U6 사용자 답 · 1회차 [상] 1·[중] 12 · 2회차 [상] 2·[중] 8 반영 · 3회차 [상] 2·[중] 7 (반영 전))
 
 셋은 서로 독립이다: **A 몰수패를 패로 + 빈 판을 평균에서** · **B 시즌을 경기의 시즌 번호로** · **C 켤 때 내 계정**. 저장 형식은 안 바뀐다(새 표·새 열 0).
 숫자가 바뀌는 것은 A 뿐이다. **C 는 켤 때 넥슨 오픈API 요청이 새로 생긴다**(내 계정을 정한 사람만 · 새 경기 확인만 · 홈페이지 요청 0 — U5) → 이용 안내에 한 줄 + `NOTICE_VERSION` 15 · 동의 전에는 안 연다(U6 · 관문 `STARTUP_CHECK_NOTICE_VERSION`).
@@ -1189,6 +1189,26 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 검토자가 재지 못한 것: `_run_offline` 의 `_safe_meta` → `get_meta`(516~517)가 캐시가 낡았을 때 요청을 내는지 · 켤 때 되돌린 메뉴가 가계부·축구장일 때 자동 시세·칩 읽기가 도는지 · PySide6 `findData` 가 `DataSeason.__eq__` 를 쓰는지 — 앞 둘은 S1 과 같은 뿌리라 3판에서 잰다.
 
 **이 회차에서 본 것**: [상] 둘 다 "새 진입점이 옛 함수를 다시 쓴다(`_on_loaded` · `_api_search`)" 에서 나왔다 — 다시 쓰는 함수가 **끝에서 무엇을 더 부르는지**를 끝까지 따라가지 않았다. 3판은 `_on_loaded` 가 부르는 것을 전수로 뽑아 표로 둔다(기준 14).
+
+### 3회차 검토 (2026-11-14 · Opus 5.5 새 검토자 1명 · 3판 `5e45689` · **계획 전체** · 근거 묶음 `review_kit.py bundle "## 108단계"` 30.7만 자 + 주장 장부 · **반영 전**)
+
+25.1만 토큰 · 도구 48번 · 6분 51초 · **[상] 2 · [중] 6** — 2회차 S1·S2 와 1회차 S1 은 3판 본문에 반영됐다(관문 상수 · `NOTICE_COLLECT_ONLY_FROM` 15 · `web=False` · 대시보드 · 켤 때 길 표를 코드와 대조). [상] 둘은 다시 C 절이고 "게임 중 요청 0" 에 걸린다. 둘 다 내가 코드 줄로 다시 확인했다(`app_main.py:827` · `nexon_api.py:367~402` · `app_main.py:2499~2507`). Fable 1·2회차와 견주면 토큰은 22.2만 · 26.8만 · 25.1만으로 비슷하다.
+
+| # | 급 | 요지 | 근거 | 고칠 방향 |
+|---|---|---|---|---|
+| S1 | 상 | **`meta_net=False` 가 메타 요청을 다 막지 못한다** — 게임 중 `check=False` 로 열어도 division 메타가 낡았으면 넥슨에 요청한다 | `_run_offline`(515)이 부르는 `_current_grade` 는 `_safe_meta` 를 안 거치고 `self._api.get_meta("division")`(827)을 직접 부른다 · `get_meta` 는 `_meta_read` 가 None 이면 요청하고(`nexon_api.py:367~390`), `_meta_read` 는 주간 경계 전 캐시를 None 으로 준다(401~402) — 계획 1002행의 "낡았어도 그대로 읽는다" 는 지금 함수로는 안 된다 · 게임 중 테스트("메타 캐시를 낡게 둔다")가 겨눈 줄이 본문에 없다 | `meta_net=False` 면 `_current_grade` 도 디스크 캐시만 · 주간 경계를 안 보는 읽기 함수를 정한다 · 1024행 표를 "주간 캐시가 낡으면 정적 메타 1" 로 |
+| S2 | 상 | **켤 때 확인이 도는 중에 게임이 켜지면 멈추지 않는다** | 게임 상태는 여는 순간(`check=not game_paused()`)과 끈 뒤(`resume_startup_check`)에만 본다 · `on_game_changed(on=True)`(2499~2507)는 예약 셋과 `stop_api_loaders` 만 멈추고 `self._loader` 는 안 건드린다 · 오래 안 켠 계정이면 상세 수백 건을 `DETAIL_WORKERS` 만큼 동시에(588~591) · `check` 는 DB 읽기(1~2초) 전에 정해지고 `_api_search` 는 그 뒤에 불린다 · CLAUDE.md `gameguard` "새 자동 요청 경로는 `pause`/`resume` 을 둔다" | `_api_search(startup=True)` 직전에 `game_paused()` 를 다시 본다 · `on_game_changed(on=True)` 에서 `_startup_auto` 가 켜진 채 로더가 돌면 `cancel()` 하고 `_startup_check_pending` 에 남긴다(취소된 길에서는 `_startup_auto` 를 안 끈다) · 진입점 표·`test_ui_smoke` 에 "확인 도중 게임 켜짐 → 남은 상세 요청 0 · 끔 → 다시 1번" |
+| M1 | 중 | 908행 "득실 합계는 그대로 · 대시보드 득실차는 안 바뀐다" 가 `summarize` 에는 틀리다 | `summarize` 는 "오류" 판을 `continue` 로 합계에서도 뺀다(`models.py:258~262`) → F1 판이 "패" 가 되면 상대 골이 `goals_against` 에 처음 들어간다 · `opponent_stats`·`period_stats` 는 지금도 오류 판 골을 더한다(314 · 460) | F1 판 골을 합계에 넣을지 정하고 문장·CHANGELOG 를 고친다 |
+| M2 | 중 | `ask_notice_update` → `open_startup()` 이 도는 검색 로더를 덮어쓴다 | `_open_saved`(옛 몸통 11800~11812)는 `self._loader` 를 보지 않는다 · 검색 중 [정보]에서 동의하면 `_ouid` 가 비어 ① 을 지난다 · `only_mine=False` 라 내 계정 없는 사람은 `start_prefetch` 가 `discard()` 없이 다시 돈다 | ① 에 `_loader.isRunning()` · 이 자리는 `only_mine=True` |
+| M3 | 중 | `tray.show_window` 의 `resume_startup_check` 가 조용히 사라진다 | `reload_after_release` 가 먼저 오프라인 로더를 띄워(`tray.py:367~368` · 15452~15464) `_api_search` 첫 줄 `isRunning`(11717)에서 돌아간다 — 그때 남은 확인을 지우면 없어진다 | 로더가 실제로 시작될 때만 지우거나 다시 읽기 끝에서 잇는다 |
+| M4 | 중 | `show_inactive` 길에서 "복원 → 1번" 이 성립하지 않는다 | 작업 표시줄 복원은 `changeEvent` 만 타고, `show_inactive`(386~391)는 `open_startup` 을 안 불러 `_startup_after_restore` 가 안 켜진다 | `show_inactive` 끝에 `open_startup(only_mine=True)`(최소화라 ⓪ 이 미룬다) 또는 `changeEvent` 가 `_startup_done` 을 본다 |
+| M5 | 중 | 1012행 칩 다시 그리기 자리가 이르다 | `my_ouid` 를 비우는 것은 키 저장이 아니라 나중의 `TradeLoader` → `tradecollect.collect` → `store.reset_trades_for_key`(`tradecollect.py:67~69` · `store.py:1206`)이고 화면엔 `_on_trades_wiped`(7597)로 온다 | `_on_trades_wiped` 에서 `_refresh_recent()` |
+| M6 | 중 | 시즌표가 뒤늦게 오면 콤보와 화면이 갈린다(B 989행) | `_on_seasons_loaded` 는 `_rebuild_season_combo` 만 부른다(11894~11899) · `DataSeason` 을 골라 둔 채면 `findData(prev)` = −1 → 신호가 막힌 채 콤보만 "전체", 화면은 옛 시즌(11933~11944) · 108 에선 시즌표가 올 때마다 `DataSeason` 이 사라져 흔해진다 | `SeasonMap` 의 sid 짝으로 prev 를 옮기거나, 선택이 바뀌면 `_apply_season()` |
+| M7 | 중 | 1003행 `_startup_auto` 를 끄는 자리가 이르다 | `_api_search(quiet=False)` 첫 줄 `isRunning`·`_held_by_clearing` 에서 돌아가는 길에서 끄면 켤 때 확인이 아직 도는데 `web=False` 가 풀린다 | 로더가 실제로 시작된 뒤에 끈다 |
+
+검토자가 재지 못한 것: A 표 47개 함수를 `RESULT_PATHS` 정의로 다시 뽑아 대조하지 않음(2회차 대조를 믿음) · `squad_timeline._Games`·`records._games`·`formation_stats`·`opponent_cards` 실제 줄 · J8 "`dashboard.py` 에 로더 없음" 과 `_render_all` 이 띄우는 작업 스레드 전수 · `check_api.py:548` 의 `group_by_season`(시각 기준 그대로)이 앱 B 와 갈리는지 · PySide6 `findData` 의 `__eq__` 사용(실행 확인 전) · 둘러보기의 `_startup_auto` 가 `test_demo` 골든에 닿는지.
+
+**이 회차에서 본 것**: 2회차와 같은 뿌리가 한 겹 더 남았다. S1 은 "막을 길을 하나 찾아 막았는데 같은 일을 하는 옆 길(`_current_grade`)이 있었다" — 메타 요청 진입점을 표로 안 뽑았다(기준 ⑩). S2 는 "조건을 들어갈 때만 보고 도는 동안은 안 봤다" — 게임 상태처럼 **도중에 바뀌는 조건**은 진입·도중·끝 세 칸으로 적는다.
 
 ---
 
