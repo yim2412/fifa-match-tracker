@@ -820,10 +820,12 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 ---
 
-## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 3판 (2026-11-14 · U1~U6 사용자 답 · 1회차 [상] 1·[중] 12 · 2회차 [상] 2·[중] 8 반영 · 3회차 [상] 2·[중] 7 (반영 전))
+## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 4판 (2026-11-14 · U1~U7 사용자 답 · 1회차 [상] 1·[중] 12 · 2회차 [상] 2·[중] 8 · 3회차 [상] 2·[중] 7 반영 · 4회차 검토 전)
 
 셋은 서로 독립이다: **A 몰수패를 패로 + 빈 판을 평균에서** · **B 시즌을 경기의 시즌 번호로** · **C 켤 때 내 계정**. 저장 형식은 안 바뀐다(새 표·새 열 0).
 숫자가 바뀌는 것은 A 뿐이다. **C 는 켤 때 넥슨 오픈API 요청이 새로 생긴다**(내 계정을 정한 사람만 · 새 경기 확인만 · 홈페이지 요청 0 — U5) → 이용 안내에 한 줄 + `NOTICE_VERSION` 15 · 동의 전에는 안 연다(U6 · 관문 `STARTUP_CHECK_NOTICE_VERSION`).
+
+**4판에서 3판과 달라진 것**: ① 게임 중 메타 읽기를 `MatchLoader` 의 메타 진입점 셋(`_safe_meta` · `_safe_meta_raw` · `_current_grade`) 전부에서 막는다 — 낡은 캐시도 읽는 `nexon_api.read_meta_on_disk` 로(3회차 S1) ② 게임 상태를 여는 순간만이 아니라 **새 경기 확인 직전과 도는 동안**에도 본다 — 게임이 켜지면 켤 때 확인을 취소하고 남겨 둔다(3회차 S2) ③ F1 판의 골도 득실 합계에 넣는다(U7 · 3회차 M1) ④ 3회차 [중] M2~M7 을 C 표에.
 
 **3판에서 2판과 달라진 것**: ① 켤 때 확인을 **오픈API 새 경기 확인만**으로 좁혔다 — 순위·팀컬러·시세·칩 같은 홈페이지 조회와 거래·랭커 픽은 켤 때 안 돈다(2회차 S1 · U5) ② 관문 상수와 다시 묻기를 모두에게(2회차 S2 · U6) ③ 켤 때 여는 길이 그린 뒤 부르는 것을 전수로 뽑아 표로 뒀다("켤 때 길이 부르는 것") ④ `formation_stats`·`opponent_cards` 를 "세" 로(M1) ⑤ 2회차 [중] M2~M8 을 표에.
 
@@ -868,6 +870,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 - **U4 (저녁 · M3·M5) 빈 판은 모든 화면의 평균에서 뺀다.** 득실 **합계**는 지금처럼 그대로 더한다. 구단주 분포는 값이 바뀌는지 먼저 재고, 바뀌면 그쪽만 그대로 둔다 → F16: 바뀐다 → 분포 길은 그대로(J2).
 - **U5 (11-14 · 2회차 S1) 켤 때는 오픈API 로 새 경기만 확인한다.** 홈페이지 조회(상대 팀컬러 · 내 순위)는 켤 때 안 한다 — 저장된 팀컬러는 그대로 보이고, 새 상대 것은 직접 검색하거나 [새 경기 확인]을 누를 때 채운다.
 - **U6 (11-14 · 2회차 S2) 바뀐 안내를 모두에게 다시 묻는다**(랭킹 수집을 끈 사람도). 동의 전이거나 창을 취소하면 지금처럼 검색 화면(요청 0) · 동의하면 그 자리에서 내 계정을 연다.
+- **U7 (11-14 · 3회차 M1) F1 판(내 쪽 "오류" 로 남은 몰수패)의 골도 득실 합계에 넣는다.** 패로 세는 판이라 골도 같이 센다 — 상대별 전적·기간별 집계는 지금도 넣고 있어 그쪽과 같아진다. 대시보드 득실차가 조금 바뀔 수 있음을 CHANGELOG 에 적는다.
 
 ### 내 판단 — 사용자 답 밖 (검토자가 볼 것)
 
@@ -905,7 +908,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | `MatchSummary.result` | str | `parse_match` 가 `result_of` 로 채운다 → `MatchSummary` 를 쓰는 자리는 전부 패로 센다 |
 | `MatchSummary.blank` | bool = False | `is_blank(me, opp)` — 평균·짝 비교에서 빼는 판 |
 | `MatchSummary.no_squad` | bool = False | 내 `player` 가 비었다 — 선수 표의 팀 승률 기준(M4)만 쓴다(선수별 승률은 내 선수가 있는 판에서만 나온다) |
-| `Stats.blank` · `OpponentStat.blank` · `PeriodStat.blank` · `DivisionStat.blank` | int = 0 | **평균**의 분모 = 판 수 − `blank` · 평균용 합(`avg_goals_for`·`avg_goals_against`·점유율)에는 빈 판을 안 더한다. `total`·`games`·승무패 수·**득실 합계(`goals_for`·`goals_against`)는 그대로**(U4 · M5 — 대시보드 "득실차" · 상대 줄 "득실 a:b" · 라이벌 카드는 안 바뀐다) |
+| `Stats.blank` · `OpponentStat.blank` · `PeriodStat.blank` · `DivisionStat.blank` | int = 0 | **평균**의 분모 = 판 수 − `blank` · 평균용 합(`avg_goals_for`·`avg_goals_against`·점유율)에는 빈 판을 안 더한다. `total`·`games`·승무패 수·**득실 합계(`goals_for`·`goals_against`)는 빈 판도 더한다**(U4 · M5). 단 `summarize` 는 지금 "오류" 판을 `continue` 로 합계에서도 빼므로(`models.py:258~262`) **F1 판이 "패" 가 되면 그 판의 골이 대시보드 "득실차" 에 처음 들어간다**(U7 · 3회차 M1 — 상대 골 0~9 · 내 골 0) · `opponent_stats`·`period_stats` 는 지금도 오류 판 골을 더해(314 · 460) 상대 줄 "득실 a:b" 는 안 바뀐다 · `test_parsing` 에 "F1 판 하나를 넣으면 `summarize.goals_against` 가 그 판 상대 골만큼 늘고 `opponent_stats` 합은 그대로" |
 
 닿는 곳 — **경기 원문을 읽는 함수 전수**(M6 · 기준 14). 정의: 앱 소스(`demodata`·`check_api` 뺌)에서 `_me_opp(` · `_result_of(` · `_wdl_of(` · `"matchResult"` 중 하나라도 쓰는 **함수 이름**(기준 `1eb3cba` · 50개 − 도우미 3(`_me_opp`·`_result_of`·`_wdl_of` 자신) = **47** — 2회차 M7 전수 대조 · 아래 `test_rules` 새 규칙과 같은 정의라 첫 실행 = 이 표).
 **세** = `result_of` 로 승무패를 센다 · **빈** = 빈 판을 건너뛴다(평균·짝 비교·내용 집계) · **분포** = 구단주 분포 길, 지금 그대로 · **그대로** = 선수·슛·한 경기 단위라 빈 쪽은 낼 것이 없다.
@@ -941,7 +944,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 `count` 를 품은 함수는 `result_of(` 를 **단어 경계로**(`(?<![\w.])result_of\(` 또는 `models.result_of(` — `_result_of(` 는 부분 문자열이라 그대로 찾으면 원문 길도 참이 된다 · 2회차 M7) 부르고 `_result_of(`·`"matchResult"` 를 안 쓴다 · `content` 를 품은 함수는 `is_blank(` 를 부르거나 `.blank` 를 읽는다 ·
 도우미 칸 `RESULT_HELPERS`(`models.result_of`·`forfeit_loss`·`is_blank` 와 옛 도우미 셋 — 원문을 읽는 것이 일이다)는 검사 밖 · 표에 없는 새 함수는 FAIL · 위반을 심은 가짜 소스 넷(표 밖 함수 · `count` 인데 원문 · `count` 인데 `_result_of(` 만 부름 · `content` 인데 `is_blank` 없음)을 잡는지 같이 단언.
 
-- 화면 글: `FORFEIT_TIP` · 산출 방법(`methods.py`)의 승률 줄에 한 문장("상대가 몰수승을 받은 경기는 내 기록이 비어 있어도 패로 셉니다") · `CHANGELOG` 3.10.1 절에 "승률이 조금 내려갈 수 있습니다" 를 적는다.
+- 화면 글: `FORFEIT_TIP` · 산출 방법(`methods.py`)의 승률 줄에 한 문장("상대가 몰수승을 받은 경기는 내 기록이 비어 있어도 패로 셉니다") · `CHANGELOG` 3.10.1 절에 "승률이 조금 내려가고 득실차가 조금 바뀔 수 있습니다" 를 적는다(U7).
 - 캐시: `MatchSummary` 는 켤 때마다 원문에서 다시 만든다 — 저장된 요약이 없어 옮길 것이 없다(되돌리기 = 옛 버전을 켜면 옛 숫자).
 
 ### B 시즌을 경기의 시즌 번호로
@@ -952,7 +955,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|
 | `MatchSummary.season_id: int \| None = None` | `matchDetail.seasonId`(정수가 아니면 None) |
 | `seasons.DataSeason(sid, start_at, end_at, first, last, games)` | 시즌표가 모르는 시즌 — `start_at` = 그 번호의 첫 저장 경기 시각 · `end_at` = 다음 번호의 첫 경기 시각(가장 새 번호는 None). `Season` 과 같은 이름을 낸다: `no`(= −sid) · `name` · `label`(`"{sid // 100} 시즌 {sid % 100}"`) · `start`·`end`(첫·마지막 저장 경기 **날짜** — `_period_series` 의 정렬 키) · `contains(when)` — `Season.contains`(`seasons.py:68`)와 같은 꼴로 **datetime 이면** `start_at <= when < end_at`, **date 이면** `start_at.date() <= when` 이고 `end_at` 이 있으면 `when < end_at.date()`(달력은 date 로 부른다 — 4613·4651 · 2회차 M3)(`end_at` None 이면 끝 없음). **같음·해시는 `sid` 만**(M8 — 새 경기 한 판에 `last`·`games` 가 바뀌어도 콤보의 `findData(prev)` 가 같은 줄을 찾아야 한다 · `test_ui_smoke` 에서 실행으로 확인) · `DataSeason` 이 아닌 것(`Season` · `"ongoing"` 글자 · `OUTSIDE`)과는 늘 다르다(`__eq__` 가 `NotImplemented` — `selected == self.ONGOING`(11954) 이 거짓) |
-| `seasons.SeasonMap(table, matches)` | 한 번 세워 같이 쓴다. `.groups` → `[(Season \| DataSeason \| None, [경기])]` 최신순(None = 진행 중 — 지금과 같은 뜻) · `.of(m)` 경기 → 시즌(번호로) · `.at(when)` 시각 → 시즌(경기가 아닌 것: 달력 칸 · 거래) · `.has(m, selected)` 고른 시즌에 드는 경기인가(남의 계정 경기도 — 아래) · `.ongoing_start` 진행 중 묶음의 시작 시각 · `.known` 시즌이 하나라도 나뉘나 |
+| `seasons.SeasonMap(table, matches)` | 한 번 세워 같이 쓴다. `.groups` → `[(Season \| DataSeason \| None, [경기])]` 최신순(None = 진행 중 — 지금과 같은 뜻) · `.of(m)` 경기 → 시즌(번호로) · `.at(when)` 시각 → 시즌(경기가 아닌 것: 달력 칸 · 거래) · `.has(m, selected)` 고른 시즌에 드는 경기인가(남의 계정 경기도 — 아래) · `.ongoing_start` 진행 중 묶음의 시작 시각 · `.known` 시즌이 하나라도 나뉘나 · `.by_sid(sid)` 그 번호가 든 묶음의 시즌(`Season` · `DataSeason` · None — 시즌표가 뒤늦게 와 `DataSeason` 이 `Season` 으로 바뀔 때 고른 줄을 옮기는 데 쓴다 · 3회차 M6) |
 
 돌려주는 값(M9 — 1판은 None 이 "진행 중" 과 "어디에도 없음" 두 뜻이었다):
 
@@ -987,6 +990,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | `_season_h2h_text` | `sn.season_of` 두 번 | `.of(m)` |
 | 달력·운 범위의 "저장된 전체" 문구(`no_table = not self._rank_seasons` 두 곳) | 시즌표가 없으면 | `not SeasonMap.known` 이면 |
 | `_season_key` | `s{no}` | 그대로(`DataSeason.no` = −sid → `s-202606`) — 시즌표가 뒤늦게 오면 저장된 선택이 안 맞아 기본(현재 시즌)으로 간다 |
+| `_on_seasons_loaded`(11894~11899 — 시즌표가 뒤늦게 온다) | `_rebuild_season_combo` 만 · `findData(prev)` 가 −1 이면 신호가 막힌 채 콤보만 "전체" 로 바뀌고 화면은 옛 시즌으로 걸러진 채 남는다(11933~11944) | 고른 것이 `DataSeason` 이면 새 맵의 `.by_sid(prev.sid)` 로 옮겨 고른다 · 그래도 고른 줄이 바뀌었으면 `_apply_season()` 을 부른다(3회차 M6 · 108 에선 시즌표가 올 때마다 `DataSeason` 이 사라져 흔해진다) · `test_ui_smoke` — 시즌표 없이 `DataSeason` 을 고른 뒤 시즌표 도착 → 같은 시즌의 `Season` 이 골라지고 화면 경기 수가 콤보와 같다 |
 
 범위 밖(J4 — 시즌표가 있어야 서는 그대로): `season_span` · `elo_season_start` · `_render_review`(`core.season_spans`) · `PredictWorker` · `_records_seasons` · `predict_check` · `rankcollect`.
 
@@ -998,18 +1002,19 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 |---|---|
 | `config.STARTUP_CHECK_NOTICE_VERSION = 15` · `config.startup_check_allowed()` (새) | `not notice_needed() and NOTICE_ACCEPTED >= STARTUP_CHECK_NOTICE_VERSION` — 다른 `*_allowed` 와 같은 꼴(웹 데이터는 안 본다 — 오픈API 만 쓴다). `NOTICE_VERSION` 15 · **`NOTICE_COLLECT_ONLY_FROM` 8 → 15**(U6 — 수집을 끈 2~14 동의자에게도 다시 묻는다 · `config.py:814~820` 의 `notice_update_pending` 은 그대로 · `test_ui_smoke` 9435·9495 의 `== 8` 단언을 15 로 고치고 "수집 끈 14 동의자도 `notice_update_pending()` 참" 을 더한다) |
 | `store.my_account(conn)` (새) | `{ouid, nickname} \| None` — `trade_state.my_ouid` 가 있고 · `accounts` 에 그 줄이 있고 · 저장된 감독모드 경기가 1판 이상일 때(J5: 키 지문 안 봄) |
-| `MainWindow.open_startup(only_mine=False)` (새) | 켤 때 무엇을 열지 **한 곳**에서 정한다: ⓪ 창이 안 보이거나 최소화면 `_startup_after_restore = True` 로 미루고 끝(`changeEvent` 가 `_notice_after_restore` 와 같은 자리에서 다시 부른다 — 최소화로 켠 exe · `tray.show_inactive`) ① 이미 한 번 했거나(`_startup_done`) 화면에 계정이 있으면(`_ouid`) 아무것도 안 함 ② 내 계정이 있고 `startup_check_allowed()` 면 `_startup_done = True` · `_open_saved(ouid, nick, check=not game_paused())` ③ `only_mine` 이면 끝 ④ `OPEN_LAST_ACCOUNT` 면 `open_last_account()` ⑤ 아니면 `start_prefetch()`(지금과 같다). 내 계정이 있는데 동의 전이면 ⑤ 로 간다(U6 — 검색 화면 · 요청 0) |
-| `_open_saved(ouid, nick, check)` (새 — `open_last_account` 의 몸통을 옮긴다) | DB 로 그린다(`MatchLoader(offline_ouid=, meta_net=check)` — `meta_net=False` 면 `_safe_meta` 가 디스크 캐시만 읽는다(`nexon_api._meta_read` · 낡았어도 그대로 · 없으면 빈 값 = 이름 대신 코드) — 게임 중 "요청 0" 의 메타 구멍 · 2회차 "재지 못한 것") → 끝나면 `check` 일 때만 `_api_search(nick, quiet=True, startup=True)`. `open_last_account` 는 `_last_account()` 로 계정을 고른 뒤 이 함수를 `check=True` 로 부른다(둘러보기 길 그대로 · `meta_net` 기본 True) |
-| `_startup_auto` (새 창 속성 · 켤 때 길 표시) | `_open_saved` 가 켜고, 켤 때 확인이 끝나거나(`_api_search` 로더의 `finished`) 사용자가 검색을 시작하면(`_api_search(quiet=False)`) 끈다. 켜져 있는 동안: `_on_loaded` 는 **보던 메뉴로 되돌리지 않고** 대시보드(`_restore` 는 버림 — J8) · `_on_loaded` 끝의 `_on_fetch_team_colors()` 는 `web=False` 로(DB 캐시만 채우고 홈페이지 조회 0 — U5 · 2회차 S1) |
+| `MainWindow.open_startup(only_mine=False)` (새) | 켤 때 무엇을 열지 **한 곳**에서 정한다: ⓪ 창이 안 보이거나 최소화면 `_startup_after_restore = True` 로 미루고 끝(`changeEvent` 가 `_notice_after_restore` 와 같은 자리에서 다시 부른다 — 최소화로 켠 exe · `tray.show_inactive`) ① 이미 한 번 했거나(`_startup_done`) 화면에 계정이 있거나(`_ouid`) **로더가 돌고 있으면**(`_loader.isRunning()` — 검색 중에 [정보]에서 동의해도 그 검색을 덮어쓰지 않는다 · 3회차 M2) 아무것도 안 함 ② 내 계정이 있고 `startup_check_allowed()` 면 `_startup_done = True` · `_open_saved(ouid, nick, check=not game_paused())` ③ `only_mine` 이면 끝 ④ `OPEN_LAST_ACCOUNT` 면 `open_last_account()` ⑤ 아니면 `start_prefetch()`(지금과 같다). 내 계정이 있는데 동의 전이면 ⑤ 로 간다(U6 — 검색 화면 · 요청 0) |
+| `_open_saved(ouid, nick, check)` (새 — `open_last_account` 의 몸통을 옮긴다) | DB 로 그린다(`MatchLoader(offline_ouid=, meta_net=check)`) → 끝나면 `check` 이고 **그때도 `not game_paused()` 일 때만** `_api_search(nick, quiet=True, startup=True)` — DB 읽기(1~2초) 사이에 게임이 켜졌으면 확인을 남겨 둔다(3회차 S2). **`meta_net` 은 `MatchLoader` 의 메타 진입점 셋 전부가 본다**(3회차 S1 — 아래 "메타 진입점" 표): 메타를 읽는 그 순간에 `meta_net and not game_paused()` 가 거짓이면 `self._api.get_meta` 대신 `nexon_api.read_meta_on_disk(config.CACHE_DIR, name)`(날짜와 무관하게 읽는다 — 이미 있는 함수 · `nexon_api.py:36` · 없으면 빈 값 = 이름 대신 코드). `_meta_read` 는 주간 경계 전 파일을 None 으로 주므로(`nexon_api.py:401~402`) 그걸로는 막을 수 없다. `open_last_account` 는 `_last_account()` 로 계정을 고른 뒤 이 함수를 `check=True` 로 부른다(둘러보기 길 그대로 · `meta_net` 기본 True) |
+| `_startup_auto` (새 창 속성 · 켤 때 길 표시) | `_open_saved` 가 켜고, 켤 때 확인이 **끝까지 돌아** 끝나거나(`_api_search` 로더의 `finished` — 게임 때문에 취소된 길은 안 끈다 · 아래 "게임 중") 사용자 검색의 **로더가 실제로 시작되면**(`_api_search(quiet=False)` 가 첫 줄 `isRunning`·`_held_by_clearing` 을 지나 `start()` 한 뒤 — 거기서 돌아가는 길에서 끄면 켤 때 확인이 아직 도는데 `web=False` 가 풀린다 · 3회차 M7) 끈다. 켜져 있는 동안: `_on_loaded` 는 **보던 메뉴로 되돌리지 않고** 대시보드(`_restore` 는 버림 — J8) · `_on_loaded` 끝의 `_on_fetch_team_colors()` 는 `web=False` 로(DB 캐시만 채우고 홈페이지 조회 0 — U5 · 2회차 S1) |
 | `_api_search(nick, quiet, startup=False)` | `startup=True` 면 `MatchLoader(…, rank=False)`(`_safe_rank` 를 건너뛰어 순위 요청 0 · `rank_ready` 없음 · `record_elo` 는 순위가 없어 적을 것이 없다 — J9) · 로더 `finished` 에 `start_trades`·`start_visible_api_loader` 를 **잇지 않는다**(켤 때 거래·랭커 픽·특성 0 — J7). 나머지는 검색과 같다 |
-| 게임 중(84 G3 — "앱이 스스로 하는 요청은 쉰다") | `check=False` 로 그리기만 하고 `_startup_check_pending = (ouid, nick)` 를 남긴다 · 상태줄 "게임이 켜져 있어 새 경기 확인을 쉬었습니다" · `on_game_changed(on=False)` 가 `win.resume_startup_check()` 를 부른다 |
-| `resume_startup_check()` (새) | 남은 확인이 있고 · 그 계정이 아직 화면에 있고(`_ouid`) · 그 사이 사용자가 검색을 안 했고 · **창이 보이고 최소화가 아니고 `_released` 가 아닐 때만**(2회차 M4) 한 번 `_api_search(nick, quiet=True, startup=True)`. 조건이 안 맞으면 남겨 두고 `tray.show_window` 끝(창을 다시 보인 뒤)에서 한 번 더 부른다 — 숨긴 채로는 안 돈다 |
+| 게임 중(84 G3 — "앱이 스스로 하는 요청은 쉰다") — **진입 · 도중 · 끝 세 칸**(3회차 S2) | **진입**: 여는 순간 게임 중이면 `check=False` 로 그리기만 하고 `_startup_check_pending = (ouid, nick)` 를 남긴다 · 상태줄 "게임이 켜져 있어 새 경기 확인을 쉬었습니다". **DB 읽기 뒤**: `_api_search` 를 부르기 직전에 `game_paused()` 를 다시 보고, 켜졌으면 같은 처리. **확인 도중**: `on_game_changed(on=True)` 가 `win.pause_startup_check()`(새)를 부른다 — `_startup_auto` 가 켜진 채 로더가 돌면 `cancel()` 하고 `_startup_check_pending` 에 남긴다(취소된 길에서는 `_startup_auto` 를 안 끈다 · 이미 받은 상세는 `.cache/` 에 있어 다시 돌 때 그만큼 요청이 줄어든다 — 구현 때 테스트로 확인). 사용자가 직접 한 검색(`_startup_auto` 꺼짐)은 건드리지 않는다(지금 G3 규칙 그대로). **끝**: `on_game_changed(on=False)` 가 `win.resume_startup_check()` 를 부른다 |
+| `resume_startup_check()` (새) | 남은 확인이 있고 · 그 계정이 아직 화면에 있고(`_ouid`) · 그 사이 사용자가 검색을 안 했고 · **창이 보이고 최소화가 아니고 `_released` 가 아닐 때만**(2회차 M4) 한 번 `_api_search(nick, quiet=True, startup=True)`. **남은 확인은 `_api_search` 가 로더를 실제로 띄웠을 때만 지운다**(`_api_search` 가 띄웠는지 bool 을 돌려준다 — `tray.show_window` 에서는 `reload_after_release` 가 먼저 오프라인 로더를 띄워(`tray.py:367~368` · 15452~15464) 첫 줄 `isRunning`(11717)에서 돌아간다 · 3회차 M3). 조건이 안 맞거나 못 띄웠으면 남겨 두고, `tray.show_window` 끝과 **`reload_after_release` 로더가 끝난 뒤**(`_on_loaded`)에 한 번 더 부른다 — 숨긴 채로는 안 돈다 |
 | `main`(17060) | `if OPEN_LAST_ACCOUNT … else …` 를 `win.open_startup()` 한 줄로. **안내 다시 묻기(`singleShot(0, …)`)보다 먼저 동기로 불리지만** ② 가 관문을 보므로 동의 전엔 ⑤ 로 간다(2회차 S2 ②) |
-| `ask_notice_update` | 끝에 `if ok: self.open_startup()` — 동의 직후 그 자리에서 내 계정을 연다(U6). 취소하면 안 연다(옛 동의 그대로 · 다음 실행에 다시 묻는다). 최소화로 미뤄진 다시 묻기는 복원 뒤 이 길로 와서 같다 · [정보] 수집 켜기 · 빈 탭 [안내 보고 동의] 에서 동의해도 같은 줄을 탄다(① 이 이미 연 계정을 지킨다) |
+| `ask_notice_update` | 끝에 `if ok: self.open_startup(only_mine=True)` — `only_mine` 이라 내 계정이 없는 사람은 미리 읽기를 다시 돌리지 않는다(`start_prefetch` 가 앞 미리 읽기를 `discard()` 없이 버리지 않게 · 3회차 M2) · 동의 직후 그 자리에서 내 계정을 연다(U6). 취소하면 안 연다(옛 동의 그대로 · 다음 실행에 다시 묻는다). 최소화로 미뤄진 다시 묻기는 복원 뒤 이 길로 와서 같다 · [정보] 수집 켜기 · 빈 탭 [안내 보고 동의] 에서 동의해도 같은 줄을 탄다(① 이 이미 연 계정을 지킨다) |
 | `tray.show_window` | `--tray` 로 숨겨 켠 창을 보일 때 `show_initial()`(또는 `show`) 뒤 **`_startup_done` 이 거짓이면** `open_startup(only_mine=True)` — `_shown_once` 로 판정하지 않는다(`tray.show_inactive`(386~391)가 `_shown_once = True` 로 만들어 그 길에선 영영 안 불렸다 · 2회차 M5). 이어서 `resume_startup_check()` · 내 계정이 없으면 지금과 같다(미리 읽기를 새로 돌리지 않는다) |
+| `tray.show_inactive`(386~391) | 끝에 `open_startup(only_mine=True)` — 최소화 상태라 ⓪ 이 `_startup_after_restore` 로 미루고, 작업 표시줄에서 복원하면 `changeEvent` 가 다시 부른다. 지금은 이 길에서 아무도 `open_startup` 을 안 불러 "복원 → 1번" 이 성립하지 않았다(3회차 M4) |
 | `start_prefetch` · `reload_after_release` | 그대로(최근 검색 1번 · 요청 0) — 내 계정을 열었으면 `_ouid` 가 있어 `reload_after_release` 는 미리 읽기 갈래를 안 탄다 |
 | `_refresh_recent` | 칩 맨 앞에 내 계정("내 계정 · 닉네임") · 나머지는 최근 순에서 내 계정을 뺀 것 · **칩 수는 그대로 `RECENT_SEARCH_LIMIT`**(폭 예산을 안 늘린다) · 위쪽 이름 칸 목록도 내 계정이 맨 앞 |
-| `_set_my_account` | 끝에 `_refresh_recent()` — 띠에서 정하거나 바꾸면 칩이 바로 따라온다. 키가 바뀌어 `store` 가 `my_ouid` 를 비우는 길(F12)은 창을 안 거친다 → 키 창을 닫은 뒤 도는 자리(`_on_key_saved` 꼴 — 구현 때 이름 확인)에서 `_refresh_recent()` 한 줄(`test_ui_smoke` 로 칩이 사라지는지) |
+| `_set_my_account` | 끝에 `_refresh_recent()` — 띠에서 정하거나 바꾸면 칩이 바로 따라온다. 키가 바뀌어 `my_ouid` 가 비워지는 것은 키를 저장할 때가 아니라 나중에 도는 `TradeLoader` 안의 `tradecollect.collect` → `store.reset_trades_for_key`(`tradecollect.py:67~69` · `store.py:1206`)이고, 화면에는 `on_wiped` → `_on_trades_wiped`(7597)로 온다 → **`_on_trades_wiped` 끝에 `_refresh_recent()`** 한 줄(3회차 M5 · `test_ui_smoke` — 가짜 거래 받기가 wiped 를 내면 칩에서 "내 계정" 이 사라진다) |
 | 이용 안내(`notice.py`) | "내 계정을 정해 두면 프로그램을 켤 때 그 계정의 새 경기를 넥슨 오픈API 에 확인합니다(넥슨 홈페이지에는 묻지 않습니다)" 한 문장 + `NOTICE_VERSION` 15 + `CHANGES` 한 덩이(문구 골든이 짝을 지킨다) — 사용자가 누르지 않은 요청이 새로 생기는 것이라 실질 변경이다 · 실사용자가 아직 없어 다시 동의 부담은 없다(11-10) |
 
 요청 양(J7): 오픈API 의 닉네임→ouid 1 · 기본 정보 1 · 경기 목록(새 경기가 나올 때까지 쪽) · **지난번 뒤 새 경기 상세**(상한은 검색과 같은 로더 상한) · 최고 등급 1 · 메타(주간 캐시가 낡았을 때만). **홈페이지 0 · 거래·랭커 픽·특성 0.** 켤 때마다 한 번이고 트레이에 숨긴 채·게임 중·동의 전엔 0.
@@ -1021,8 +1026,8 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 | 부르는 것 | 요청 | 켤 때 길(`_startup_auto`) |
 |---|---|---|
-| `MatchLoader._run_offline` → `_current_grade` · `load_saved` | 0 (DB) | 그대로 |
-| `_run_offline` → `_safe_meta`·`_safe_meta_raw` → `get_meta` | 주간 캐시가 낡으면 정적 메타 파일 1~3 | `check` 일 때만(`meta_net`) · 게임 중 0 |
+| `MatchLoader._run_offline` → `load_saved` | 0 (DB) | 그대로 |
+| `_run_offline` → 메타 진입점 셋(아래 표) → `get_meta` | 주간 캐시가 낡으면 정적 메타 파일 1~4(spid · spposition · seasonid · division) | `meta_net and not game_paused()` 일 때만 · 아니면 `read_meta_on_disk` — 게임 중 0 |
 | `_api_search` 로더 → `get_ouid`·`get_user_basic`·목록·상세·`maxdivision` | 오픈API | 켤 때 확인 그 자체 |
 | `_api_search` 로더 → `_safe_rank` → `ranker.fetch_manager_rank` | 홈페이지 1 | **안 부름**(`rank=False`) |
 | `_api_search` 로더 `finished` → `start_trades` · `start_visible_api_loader` | 오픈API(거래 하루 한 번 · 랭커 픽·특성) | **안 이음** |
@@ -1032,6 +1037,16 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | `_on_loaded` → `_on_fetch_team_colors` → `TeamColorLoader`·`RankListLoader` | 홈페이지(상대마다 1 · 많으면 목록 500쪽) | **`web=False`** — DB 캐시만(`_load_cached_team_colors`) |
 | `_render_all` 이 그리는 그림 → `IconLoader`·`ImageLoader` | CDN 정적 파일(캐시에 없는 것만) | 그대로(J10) |
 | 창을 만들 때 `_load_season_cache` → `SeasonLoader` | 홈페이지(시즌표가 낡았을 때) | 108 이 바꾸지 않는다 — 지금도 켤 때 돈다(검색 화면이어도) |
+
+#### 메타 진입점 (3회차 S1 — `MatchLoader` 안에서 `get_meta(` 를 부르는 자리 전수 · `grep -n "get_meta(" app_main.py` · 11-14 · 기준 ⑩·14)
+
+| 자리 | 부르는 메타 | `meta_net` 이 거짓일 때 |
+|---|---|---|
+| `_safe_meta`(799 · 802) | spid · spposition | `read_meta_on_disk` → 같은 dict 꼴로 |
+| `_safe_meta_raw`(807 · 811) | seasonid | ← |
+| `_current_grade`(815 · 827 — **`_safe_meta` 를 안 거치고 직접**) | division | ← (없으면 빈 목록 — 지금 `NexonAPIError` 갈래와 같은 결과) |
+
+세 자리를 도우미 하나(`MatchLoader._meta(name)`)로 모으고 `test_rules` 에 "`MatchLoader` 안에서 `get_meta(` 는 `_meta` 에서만" 을 더한다(위반을 심은 가짜 소스를 잡는지 같이). 창 쪽 `_load_meta_from_disk`(12338)는 이미 `read_meta_on_disk` 라 요청 0.
 
 `_startup_auto` 가 꺼진 뒤(사용자가 검색·시즌 바꿈 `_apply_season(render=True)` → `_on_fetch_team_colors()`)는 지금과 같다 — 사용자가 누른 것이라 홈페이지 조회가 돈다.
 
@@ -1043,7 +1058,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | 평균·짝 비교에서 빈 판 빼기 | `Stats` · `OpponentStat` · `PeriodStat` · `DivisionStat` · A 표의 "빈" 13개 | `MatchSummary.blank` · `models.is_blank` | `test_parsing.test_blank_games_out_of_averages_108` — 빈 판(내 쪽만 · 상대만 · 양쪽) 셋을 섞은 묶음의 평균 == 뺀 묶음의 평균 · 승무패 수와 득실 합계는 섞은 쪽이 크다 · "빈" 13개마다 같은 단언(함수 이름으로 도는 표 테스트). **함수마다 "건너뛰기를 빼면 값이 달라지는" 픽스처를 먼저 단언한다**(2회차 M6) — 특히 `shot_summary` 는 종료 유형 0(정상)인데 상대만 빈 판, `possession_stats` 는 상대만 비고 내 점유율 > 0 인 판(몰수 꼴 판은 이미 걸러져 `is_blank` 를 빼도 통과한다) |
 | 구단주 분포와 같은 기준 | `ownerdist` 받기(462) · `habits.dist_basis` · `pos_diff` | `side_totals(keep_blank=True)` | `test_ownerdist` — 빈 판을 섞은 가짜 경기로 받은 요약 == 108 전 골든 값(분포 값이 안 바뀐다) · `dist_basis` 의 내 값도 같은 판 수 |
 | 경기 → 시즌 | `_season_groups` · `_in_selected_season` · `_season_h2h_text` · `_compare_window` | `SeasonMap.of` · `.has` | `test_parsing` 시즌 절(위 M9 표의 칸마다) + `test_ui_smoke`(시즌표 없이 콤보에 시즌 둘 · 새 경기 한 판 뒤에도 고른 시즌이 유지 · 상대 계정 비교에 시즌 필터) |
-| 켤 때 여는 계정 | `main`(창 보임) · `main`(최소화로 켬 → 복원 `changeEvent`) · `tray.show_window`(숨겨 켠 창을 보일 때 · `_startup_done` 기준) · `tray.show_inactive`(최소화 → 복원) · `ask_notice_update`(동의 직후) · 둘러보기(`open_last_account`) · `reload_after_release`(안 연다) · `on_game_changed`·`tray.show_window` 끝(미룬 확인 `resume_startup_check`) | `open_startup` → 관문 `startup_check_allowed` → `_open_saved` → `_api_search(startup=True)` | `test_ui_smoke.test_startup_opens_my_account_108` — **`main` 길로**(가짜 API · **웹 데이터를 켠 채**로 `ranker.web_get` 과 가짜 세션 호출을 같이 센다 — 2회차 S1): 내 계정 있음 + 동의 15 → 그 계정이 대시보드로 열리고 오픈API 검색 1번 · **홈페이지 0**(캐시에 없는 상대를 일부러 넣어 둔다 — 보호가 없으면 `TeamColorLoader` 가 떴을 것을 먼저 단언) · 거래·랭커 픽 로더 0 · 저장된 보기가 [가계부] 여도 대시보드 / 동의 14(기본값 아닌 값) → 검색 화면 + 요청 0, 다시 묻기에서 동의 → 그 자리에서 열림, 취소 → 0 / 내 계정 없음 → 검색 화면 + 요청 0 / 게임 중 → 그려지고 요청 0(메타 캐시를 낡게 둔다), 게임 끔 → 1번, 게임 중 숨겼다가 끄면 0 · 다시 보이면 1번 / 최소화로 켬 → 0 · 복원 → 1번 · `test_tray` — `--tray` 로 켜면 요청 0, 처음 열 때 1번, 두 번째 열 때 0, `show_inactive` 로 띄운 뒤 복원 → 1번 · `test_demo` "요청 0" 그대로 |
+| 켤 때 여는 계정 | `main`(창 보임) · `main`(최소화로 켬 → 복원 `changeEvent`) · `tray.show_window`(숨겨 켠 창을 보일 때 · `_startup_done` 기준) · `tray.show_inactive`(최소화 → 복원) · `ask_notice_update`(동의 직후) · 둘러보기(`open_last_account`) · `reload_after_release`(안 연다 · 끝난 뒤 `resume_startup_check`) · `on_game_changed(on=False)`·`tray.show_window` 끝(미룬 확인 `resume_startup_check`) · `on_game_changed(on=True)`(도는 켤 때 확인을 멈춤 `pause_startup_check`) | `open_startup` → 관문 `startup_check_allowed` → `_open_saved` → (`game_paused()` 다시) → `_api_search(startup=True)` | `test_ui_smoke.test_startup_opens_my_account_108` — **`main` 길로**(가짜 API · **웹 데이터를 켠 채**로 `ranker.web_get` 과 가짜 세션 호출을 같이 센다 — 2회차 S1): 내 계정 있음 + 동의 15 → 그 계정이 대시보드로 열리고 오픈API 검색 1번 · **홈페이지 0**(캐시에 없는 상대를 일부러 넣어 둔다 — 보호가 없으면 `TeamColorLoader` 가 떴을 것을 먼저 단언) · 거래·랭커 픽 로더 0 · 저장된 보기가 [가계부] 여도 대시보드 / 동의 14(기본값 아닌 값) → 검색 화면 + 요청 0, 다시 묻기에서 동의 → 그 자리에서 열림, 취소 → 0 / 내 계정 없음 → 검색 화면 + 요청 0 / 게임 중 → 그려지고 요청 0(메타 캐시 넷을 **주간 경계 전 시각으로** 낡게 둔다 — 보호가 없으면 `_current_grade` 가 division 을 요청했을 것을 먼저 단언 · 3회차 S1) / DB 읽기 중 게임 켜짐 → 새 경기 확인 0 / **확인 도중 게임 켜짐 → 남은 상세 요청 0 · `_startup_auto` 그대로 · 게임 끔 → 다시 1번(앞에서 받은 상세는 다시 안 받는다)** · 사용자가 한 검색은 게임이 켜져도 그대로(3회차 S2), 게임 끔 → 1번, 게임 중 숨겼다가 끄면 0 · 다시 보이면 1번 / 최소화로 켬 → 0 · 복원 → 1번 · `test_tray` — `--tray` 로 켜면 요청 0, 처음 열 때 1번, 두 번째 열 때 0, `show_inactive` 로 띄운 뒤 복원 → 1번 · 메모리를 내려놓은 뒤 게임이 꺼지고 창을 다시 보이면 → 다시 읽기가 끝난 뒤 1번(3회차 M3) · 검색이 도는 중에 [정보]에서 동의 → 그 검색 그대로(3회차 M2) · `test_demo` "요청 0" 그대로 |
 
 ### 조각 (3개 · 검토 기준 13)
 
@@ -1065,7 +1080,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | 업그레이드 | 저장 형식 그대로 · 숫자만 바뀜 → CHANGELOG | 저장된 `view/season` 키는 시즌표가 아는 시즌이면 그대로 맞는다 | 이미 [가계부] 에서 내 계정을 정해 둔 사람(동의 2~14)은 올린 뒤 첫 실행에 **검색 화면 + 다시 묻는 안내**(수집을 꺼 둔 사람도 — `NOTICE_COLLECT_ONLY_FROM` 15) → 동의하면 그 자리에서 열린다 · 취소하면 그 실행은 지금과 같다(관문 `startup_check_allowed` — 순서가 아니라 값으로 막는다 · 2회차 S2) |
 | 옛 버전으로 되돌리기 | 새 표·열이 없어 그대로 열린다(옛 숫자) | ← | ← |
 | 남의 PC(CP949) | 해당 없음 — 파일·자식 프로세스·인코딩을 안 건드린다 | ← | ← |
-| 트레이로 시작(`--tray`) · 최소화로 시작 · 게임 중 | 해당 없음 | 해당 없음 | 숨긴 채·최소화로는 요청 0 · 처음 보일 때 한 번(`test_tray` · `show_inactive` 길 포함) · 게임 중이면 메타까지 캐시로 그리기만 하고 게임이 꺼진 뒤 창이 보일 때 한 번(`test_ui_smoke`) |
+| 트레이로 시작(`--tray`) · 최소화로 시작 · 게임 중 | 해당 없음 | 해당 없음 | 숨긴 채·최소화로는 요청 0 · 처음 보일 때 한 번(`test_tray` · `show_inactive` 길 포함) · 게임 중이면 메타까지 캐시로 그리기만 하고 게임이 꺼진 뒤 창이 보일 때 한 번 · 확인 도중 게임이 켜지면 취소하고 꺼진 뒤 다시(`test_ui_smoke`) |
 | 홈페이지 데이터 켬/끔 | 해당 없음 | J3 | 켤 때 길은 어느 쪽이든 홈페이지 0(U5) — 켠 채로 재는 것이 테스트의 기준(끈 채로 재면 늘 0 이라 공허하다) |
 | 둘러보기(`--demo`) | 지어낸 경기는 종료 유형 0 뿐이고 선수가 다 있다 → 숫자 그대로 · 요청 0(`test_demo`) | 2판의 "시즌표 없음" 은 틀렸다(2회차 M2) — `demodata.py:309` 가 시즌표 한 줄(`Season(no=990, "시즌 1", end=mid)`)을 만들고 326 이 저장해, 지금 300판은 "시즌 1" 과 "현재 시즌" 둘로 갈린다. 번호가 하나면 규칙 1·5 로 한 묶음이 된다 → **`demodata` 가 `mid` 앞 경기에 `seasonId` 202610, 뒤 경기에 202611 을 준다**(지금과 같은 두 묶음 · 난수는 안 건드린다 — 결과·점수 골든 그대로) · `test_demo` 에 "콤보 항목 = 시즌 1 · 현재 시즌" 을 단언 | `trade_state` 가 비어 지금과 같음(`open_last_account` 길 그대로 · 실제 키가 env 에 있어도 요청 0) |
 
@@ -1084,7 +1099,8 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | 켤 때 그리는 중에 사용자가 다른 닉네임을 검색한다 | `_api_search` 첫 줄이 도는 로더를 보고 돌아간다 — 지금 `open_last_account` 와 같다(둘러보기에서 이미 타는 길) | 스모크 | 그리기가 끝난 뒤 다시 검색 |
 | 내 계정 줄을 목록에서 지웠다 | `my_account` None → 지금과 같음(검색 화면) · 칩에도 없다 | 스모크 | — |
 | 새 자동 웹 읽기가 `_on_loaded` 뒤에 붙는다(나중 단계) | 켤 때 길에서 홈페이지 요청이 다시 생긴다(조용히) | `test_startup_opens_my_account_108` 의 웹 호출 0 단언(웹 데이터 켠 채) | 그 자리에 `_startup_auto` 검사 한 줄 |
-| `_startup_auto` 가 안 꺼진다(확인 실패 길) | 그 실행 내내 팀컬러를 캐시로만 | 실패 길(`failed`·키 거절·한도)에서도 `finished` 가 오는지 스모크 | `finished` 에서 끈다(실패해도 스레드는 끝난다) |
+| `_startup_auto` 가 안 꺼진다(확인 실패 길) | 그 실행 내내 팀컬러를 캐시로만 | 실패 길(`failed`·키 거절·한도)에서도 `finished` 가 오는지 스모크 | `finished` 에서 끈다(실패해도 스레드는 끝난다) · 게임 때문에 취소한 길만 켜 둔다 — 사용자가 검색하면 그 로더가 시작될 때 꺼진다 |
+| 게임이 켜졌다 꺼졌다를 되풀이한다 | 켤 때 확인이 매번 취소되고 다시 돈다 | 상태줄 · `GameWatch` 확인 간격 | 다시 돌 때 받은 상세는 디스크 캐시라 요청이 쌓이지 않는다 · 남은 확인은 하나뿐(덮어쓴다) |
 
 ### ⑦ 자원 예산
 
@@ -1111,7 +1127,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | B × 저장된 시즌 선택 | 위 `_season_key` 줄 |
 | B × A | 시즌별 성적 표의 승무패 합 == 전체(`summarize`) — 테스트 |
 | C × 트레이 시작(`--tray`) · 둘러보기 | 진입점 표의 행 — 트레이는 처음 열 때 `open_startup(only_mine=True)` · 둘러보기는 `open_last_account` 그대로 |
-| C × 게임 중 멈춤(84 G3) | 새 자동 요청 경로다 → `game_paused()` 를 보고 미뤘다가 `on_game_changed` 에서 한 번(CLAUDE.md `gameguard` 줄의 규칙) |
+| C × 게임 중 멈춤(84 G3) | 새 자동 요청 경로다 → CLAUDE.md `gameguard` 줄의 규칙대로 `pause`(`pause_startup_check` — 도는 확인을 취소)·`resume`(`resume_startup_check`)을 둔다. 게임 상태는 여는 순간 · 메타를 읽는 순간 · 새 경기 확인 직전 · 도는 동안 넷 다 본다(3회차 S2) |
 | C × 켤 때 도는 다른 것(업데이트 확인 · 캐시 정리 · 색인 백필 · 랭커 픽 정리 · 시즌표 `SeasonLoader` · 예약 셋) | 켤 때 확인이 새로 더하는 것은 오픈API 새 경기 확인뿐이다 — 나머지는 지금도 켤 때 도는 것이고 108 이 안 바꾼다(시즌표·예약 셋은 각자의 관문 그대로). 켤 때 확인은 `start_trades`·`start_visible_api_loader` 를 잇지 않는다("켤 때 길이 부르는 것") |
 | C × 팀컬러 화면 | 켤 때 연 계정은 캐시에 있는 팀컬러만 보인다 — 새 상대 칸은 비어 있다가 사용자가 검색·[새 경기 확인]·시즌을 바꾸면 채워진다(U5 · 상태 글은 지금 쓰는 것 그대로 · 새 설명 글 없음) |
 | C × 보던 메뉴 복원 | 내 계정을 켤 때 열면 대시보드다(J8) — 내 계정을 안 정한 사람은 첫 검색에서 지금처럼 보던 메뉴로 |
@@ -1190,7 +1206,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 **이 회차에서 본 것**: [상] 둘 다 "새 진입점이 옛 함수를 다시 쓴다(`_on_loaded` · `_api_search`)" 에서 나왔다 — 다시 쓰는 함수가 **끝에서 무엇을 더 부르는지**를 끝까지 따라가지 않았다. 3판은 `_on_loaded` 가 부르는 것을 전수로 뽑아 표로 둔다(기준 14).
 
-### 3회차 검토 (2026-11-14 · Opus 5.5 새 검토자 1명 · 3판 `5e45689` · **계획 전체** · 근거 묶음 `review_kit.py bundle "## 108단계"` 30.7만 자 + 주장 장부 · **반영 전**)
+### 3회차 검토 (2026-11-14 · Opus 5.5 새 검토자 1명 · 3판 `5e45689` · **계획 전체** · 근거 묶음 `review_kit.py bundle "## 108단계"` 30.7만 자 + 주장 장부 · **4판에 반영** — S1 → C `_open_saved` 줄·"메타 진입점" 표 · S2 → C "게임 중" 줄(진입·도중·끝)·⑧·⑥ · M1 → U7·A 표 득실 줄 · M2 → `open_startup` ①·`ask_notice_update` · M3 → `resume_startup_check` · M4 → `tray.show_inactive` 줄 · M5 → `_set_my_account` 줄 · M6 → B `_on_seasons_loaded` 줄·`SeasonMap.by_sid` · M7 → `_startup_auto` 줄)
 
 25.1만 토큰 · 도구 48번 · 6분 51초 · **[상] 2 · [중] 6** — 2회차 S1·S2 와 1회차 S1 은 3판 본문에 반영됐다(관문 상수 · `NOTICE_COLLECT_ONLY_FROM` 15 · `web=False` · 대시보드 · 켤 때 길 표를 코드와 대조). [상] 둘은 다시 C 절이고 "게임 중 요청 0" 에 걸린다. 둘 다 내가 코드 줄로 다시 확인했다(`app_main.py:827` · `nexon_api.py:367~402` · `app_main.py:2499~2507`). Fable 1·2회차와 견주면 토큰은 22.2만 · 26.8만 · 25.1만으로 비슷하다.
 
