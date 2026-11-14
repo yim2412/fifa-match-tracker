@@ -1068,7 +1068,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 | 조각 | 내용 | 난이도 | 모델 |
 |---|---|---|---|
 | ① **끝(11-14)** | A 전부(`test_rules` `RESULT_PATHS` 포함) + 골든 갱신(`test_parsing` · `test_analysis` · `test_check_api` · `test_records` · `test_timeline` · `test_habits` · `tools/check_t0.py` 는 `--write` 전에 바뀐 날을 눈으로 · **`test_ownerdist`·`test_predict` 골든은 안 바뀌어야 한다**) + 산출 방법·`FORFEIT_TIP` | 중간 — 숫자가 앱 전체에서 바뀐다 · 닿는 함수 18개(세 5 + 빈 13) | Sonnet + diff 리뷰 |
-| ② | B 전부 | 중간 — 시즌 필터가 닿는 화면이 많다 | Sonnet + diff 리뷰 |
+| ② **끝(11-14)** | B 전부 | 중간 — 시즌 필터가 닿는 화면이 많다 | Sonnet + diff 리뷰 |
 | ③ | C(관문 `STARTUP_CHECK_NOTICE_VERSION` · 이용 안내 한 줄 · `NOTICE_VERSION` 15 · `NOTICE_COLLECT_ONLY_FROM` 15) + `CHANGELOG` 3.10.1 절(미공개) + CLAUDE.md 표(`models`·`seasons` 줄 · "웹 데이터" 절 옆에 켤 때 요청 한 줄) + exe 빌드·2번 모니터 실화면 | 중간 — 켤 때 길이 여섯(창 · 최소화 · 트레이 · 동의 직후 · 둘러보기 · 게임 중)이고 홈페이지 갈래를 끄는 표시(`_startup_auto`)가 세 자리에 닿는다 | Sonnet + Opus diff 리뷰 |
 
 조각마다: 테스트 → 변이(아래) → 문서 → 커밋·푸시. 공개는 109 끝(3.10.1).
@@ -1109,7 +1109,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 | 항목 | 상한 | 재는 법 |
 |---|---|---|
-| `SeasonMap` 세우기(1만 경기) | 20ms — 한 번 훑고 번호마다 정렬 | `test_parsing` 에 시간 단언 없이 조각 ② 에서 실DB 사본으로 한 번 재 적는다 |
+| `SeasonMap` 세우기(1만 경기) | 20ms — 한 번 훑고 번호마다 정렬 · **조각 ② 실측(11-14 · fifa.db 읽기 전용 · 경기 많은 세 계정): 14,962경기 11.1ms · 5,513경기 5.0ms · 5,363경기 5.4ms. 시즌표 91줄과 함께면 세 계정 모두 `group_by_season` 과 묶음이 같습니다(F8 그대로 · 번호 없는 경기 0)** | `test_parsing` 에 시간 단언 없이 |
 | `parse_match` 추가 비용 | 경기당 dict 조회 5번 안쪽 — 1만 경기 읽기(약 2초)의 1% 안 | 조각 ① 에서 앞뒤 한 번 |
 | "빈" 13개의 `is_blank` | 경기당 `player` 두 번 보기 — 재지 않아도 되는 크기 | — |
 | 네트워크 — A·B | 0 | `test_demo` "요청 0" |

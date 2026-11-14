@@ -166,6 +166,11 @@ def test_window_opens_demo_account_without_requests():
     assert _pump(lambda: len(win._matches_all) == config.DEMO_MATCHES and not (win._loader and win._loader.isRunning())), \
         f"데모 계정이 안 열렸다: {len(win._matches_all)}"
     assert win._nick == demodata.NICK
+    # 108 B — 화면은 경기의 시즌 번호로 묶는다. 둘러보기는 시즌표 경계 앞뒤로 번호를 갈라 지금처럼 두 시즌(2회차 M2)
+    texts = [win.cb_season.itemText(i) for i in range(1, win.cb_season.count())]
+    heads = [t.split(" · ")[0] for t in texts]
+    assert len(heads) == 2 and heads[0] == "현재 시즌 (진행 중)" and heads[1].endswith(" 시즌 1"), texts
+    assert "저장된 경기" not in texts[1], "시즌표 줄과 짝을 못 지었다"
     assert win.btn_demo_start.isVisible()
     assert not shell.should_hide(), "트레이가 없으니 X 는 끝내기"
     assert SENT == [], SENT

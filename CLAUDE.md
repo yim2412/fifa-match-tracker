@@ -44,7 +44,7 @@
 | `tray.py` | 트레이 상주 · **종료 진입점 하나 `quit_app(fast)`**(새 종료 경로는 여기를 거친다) · 한 번만 실행은 뮤텍스 · **트레이 풍선 알림 없음** · 세부는 머리말 |
 | `autostart.py` | 자동 실행 — HKCU Run 에 `"<exe>" --tray`. exe 에서만 · 값 이름을 설치판(`VALUE_INSTALLED` — `.iss` 제거기와 같아야)·포터블로 나눈다 · 경로는 없어졌을 때만 고친다(`repair`) |
 | `trait_codes.py` · `traitcollect.py` | 포지션 특성(32단계) — 특성·코치 이름표(번들에서 옮긴 상수 · 모르는 코드 "코드 N") · 스쿼드메이커 팀 칸 요청·해석·맞는 팀 찾기 · 받기 한 바퀴 `run`(웹 → 오픈API → 웹 · 로더 `app_main.TraitLoader`) · 집계 `trait_usage` → 탭 [메타 분석 › 포지션 특성](키 `TRAIT_KEY` — **`PICK_KEYS` 에 넣지 않는다**, 무효화는 `PICK_DATA_KEYS`) · **오픈API 백그라운드(랭커 픽·특성)를 켜는 자리는 `start_visible_api_loader`, 멈추는 자리는 `stop_api_loaders` 하나**(`test_every_api_loader_start_goes_through_one_function`) · 웹 스위치·`web_get`·`_web_calls()` 규칙은 `teamcolor` 와 같다 · 세부는 `traitcollect.py` 머리말 |
-| `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). 함정은 아래 "시즌" |
+| `seasons.py` | 데이터센터 랭킹 시즌표 → 경기를 시즌에 나눠 담기(`season_of`·`group_by_season`). **화면은 `SeasonMap`**(108 B — 경기의 시즌 번호 `MatchSummary.season_id` 로 묶습니다 · 시즌표가 아는 번호는 그 `Season`, 모르는 번호는 `DataSeason` · 창 캐시 `app_main._season_map()`) · 경기를 거를 땐 `_match_in_season`(번호), 시각(거래·달력 칸)은 `_in_selected_season`·`.at` · 함정은 아래 "시즌" |
 | `playerinfo.py` | 선수 카드 상세·능력치 시뮬레이터 스크래핑 · 급여·OVR 은 **본 카드 구역에서만** · 세부는 머리말 |
 | `store.py` | SQLite 누적(`fifa.db`) — **화면은 API 가 아니라 이 DB 를 본다** · **모든 연결 `secure_delete=ON`** · 새 쿼리는 `EXPLAIN QUERY PLAN` 에 `TEMP B-TREE` 없는지(`test_rules`) · 세부는 머리말 |
 | `storage.py` | [정보 › 저장 공간](57 K9) — 종류별 크기·지우기(작업 스레드에서만) · 내 기록 전부는 `store.RESET_KEEP` 행만 새 파일로 옮겨 fifa.db 바꿔 끼우기(**새 표를 만들면 `RESET_KEEP`/`RESET_WIPE` 중 하나에** — `test_storage` 가 스키마와 대조) · **새 작업 스레드는 `app_main.Worker` 를 물려받고 쓰는 저장소를 `WRITES` 에**(지우는 동안 걸쇠 `CLEARING` 이 start 를 막고 `running_writers` 가 멈출 대상을 찾는다 — 손 목록 없음 · `test_storage` 가 QThread 직접 상속·빈 WRITES 를 잡는다) |
@@ -159,7 +159,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 
 ### 시즌 (`seasons.py`) — 넥슨 시즌표의 함정
 
-오픈API 는 경기에 시즌을 안 달아 준다. 데이터센터 시즌표의 기간으로 나누는데, 셋 다
+경기 상세 `matchDetail.seasonId`(202606 꼴)에 시즌 번호가 있습니다. 108 B(2026-11-14)부터 화면은 이 번호로 묶고, 시즌표는 이름과 기간을
+붙이는 데만 씁니다(11-13 실측 34,659경기 전부 번호가 있고 시즌표 묶음과 어긋남 0 · 이름 "시즌 N" 은 해마다 겹쳐 이름으로는 짝짓지 않습니다).
+그 전에는 시즌표 기간으로만 나눴고, 아래 셋은 그 길(`season_of`·번호 없는 경기·달력 칸)에 그대로 남아 있습니다. 셋 다
 조용히 틀어지는 종류라 `test_parsing.py` 의 시즌 테스트가 지킨다(2026-10-02 추가 — 그전엔 0개였다).
 - **`rt` 에 따라 시즌 번호가 다르다** — 공식경기 91 = 감독모드 89(기간은 같다). 항상 `rt=manager`.
 - **앞 시즌 종료일 == 다음 시즌 시작일.** `[시작, 종료)` 반개구간 — 닫힌 구간이면 경계일 경기가 두 시즌에 들어간다.

@@ -102,6 +102,12 @@ def _load():
     details = [json.load(open(os.path.join(_DIR, m + ".json"), encoding="utf-8"))
                for m in man["match_ids"]]
     ouid = man["ouid"]
+    # 108 B — 픽스처의 시즌 번호(넷 다 202603)를 뺀다. 이 파일의 시즌 테스트는 픽스처 날짜(2026-01-01~03) 둘레에
+    # 시즌표를 지어내 시각으로 나누는 꼴이라, 번호가 남으면 넷이 한 시즌으로 묶여 지어낸 표와 어긋난다.
+    # 번호 없는 경기는 지금처럼 시각으로 간다(seasons.SeasonMap 규칙 4) · 번호 길은 *_108 테스트가 번호를 줘서 잰다
+    for d in details:
+        for side in d.get("matchInfo") or []:
+            (side.get("matchDetail") or {}).pop("seasonId", None)
     matches = [m for m in (models.parse_match(d, ouid) for d in details) if m]
     # MatchLoader 와 똑같이 최신순 — 화면 코드는 전부 이 순서를 전제한다
     matches.sort(key=lambda m: m.match_date or 0, reverse=True)
@@ -2375,15 +2381,19 @@ class _LuckScope(_SynthScope):
         self.rows, self.seasons = _wd_spec(spec), list(seasons)
 
     def __enter__(self):
-        self.keep2 = (_win.__dict__.get("_season_wins"), _win._rank_seasons)
+        # 저장 전체도 같은 경기로 — 시즌은 저장 전체의 시즌 번호로 나눈다(108 B SeasonMap). 실제 앱에선
+        # _season_wins 와 _matches_all 이 같은 저장본이라, 하나만 바꾸면 옛 픽스처의 번호가 시즌을 세운다
+        self.keep2 = (_win.__dict__.get("_season_wins"), _win._rank_seasons, _win._matches_all)
         _win._season_wins = lambda: self.rows
         _win._rank_seasons = self.seasons
+        _win._matches_all = self.matches
         return super().__enter__()
 
     def __exit__(self, *exc):
         if self.keep2[0] is None:
             _win.__dict__.pop("_season_wins", None)
         _win._rank_seasons = self.keep2[1]
+        _win._matches_all = self.keep2[2]
         return super().__exit__(*exc)
 
 
@@ -5922,6 +5932,84 @@ def _best_line():
 def _restore_account():
     _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                     {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+
+
+def _sid_matches(spec):
+    """(id, 시각, 시즌 번호, 상대) → MatchSummary — 픽스처 한 경기를 바탕으로(108 B)."""
+    base = _MATCHES[0]
+    return [models.MatchSummary(**{**base.__dict__, "match_id": mid, "match_date": when, "season_id": sid,
+                                   "opponent": opp})
+            for mid, when, sid, opp in spec]
+
+
+def test_season_combo_by_match_number_without_table_108():
+    """108 B — 시즌표가 없어도(홈페이지 데이터 끔) 경기의 시즌 번호로 콤보에 시즌이 선다 · 새 경기 한 판 뒤에도 고른 시즌이
+    그대로(DataSeason 같음 = 번호만 — PySide6 findData 가 __eq__ 를 쓰는지 실행으로) · 상대 계정 경기에도 같은 필터 ·
+    시즌표가 뒤늦게 오면 같은 시즌의 Season 으로 옮겨 고르고 화면 경기 수가 콤보와 같다(3회차 M6)."""
+    from datetime import date as _d
+    spec = [("n3", datetime(2026, 8, 3, 12), 202604, "갑"), ("n2", datetime(2026, 8, 2, 12), 202604, "을"),
+            ("n1", datetime(2026, 7, 30, 12, 40), 202604, "갑"),
+            ("o3", datetime(2026, 7, 30, 3, 50), 202603, "갑"), ("o2", datetime(2026, 7, 1), 202603, "을"),
+            ("o1", datetime(2026, 6, 1), 202603, "갑")]
+    ms = _sid_matches(spec)
+    keep = (_win._rank_seasons, _win._season_picked, _win.__dict__.get("_restore"))
+    try:
+        _win._rank_seasons = []
+        _win._season_picked = False
+        _win._restore = {}
+        _win._matches_all, _win._matches = ms, ms
+        _win._rebuild_season_combo()
+        cb = _win.cb_season
+        items = [cb.itemText(i) for i in range(cb.count())]
+        # 막지 않았으면(시각 + 시즌표): 시즌표가 없어 "전체" 하나뿐이다
+        assert sn.group_by_season([], ms, key=lambda m: m.match_date) == []
+        assert items == ["전체 (6경기)", "2026 시즌 4 · 저장된 경기 07-30~08-03 (3경기)",
+                         "2026 시즌 3 · 저장된 경기 06-01~07-30 (3경기)"], items
+        old = next(i for i in range(cb.count()) if getattr(cb.itemData(i), "sid", None) == 202603)
+        cb.setCurrentIndex(old)   # 사용자가 고른다 → _on_season_changed
+        assert [m.match_id for m in _win._matches] == ["o3", "o2", "o1"], [m.match_id for m in _win._matches]
+        assert _win._range_start() is None, "DataSeason 은 저장된 첫 경기가 곧 시작 — ⚠ 판정 없음"
+        assert _win._scope_text() == "2026 시즌 3"
+        # 새 경기 한 판(목록을 새로 만든다) → 고른 시즌이 그대로
+        ms2 = _sid_matches([("n4", datetime(2026, 8, 4, 12), 202604, "을")] + spec)
+        _win._matches_all = ms2
+        _win._rebuild_season_combo()
+        assert getattr(cb.currentData(), "sid", None) == 202603, cb.currentText()
+        assert "(4경기)" in cb.itemText(1), cb.itemText(1)
+        # 상대 계정 경기 — 번호로(시각은 새 시즌 쪽이어도 번호가 202603) · 내가 안 뛴 번호는 기간으로
+        foe = _sid_matches([("f1", datetime(2026, 7, 30, 20), 202603, "나"), ("f2", datetime(2026, 7, 2), 202601, "나"),
+                            ("f3", datetime(2026, 8, 2), 202604, "나")])
+        saved_range = _win.cb_range.currentIndex()
+        _win.cb_range.setCurrentIndex(0)
+        try:
+            got = [m.match_id for m in _win._compare_window(foe)]
+        finally:
+            _win.cb_range.setCurrentIndex(saved_range)
+        assert got == ["f1", "f2"], got
+        # 시즌표가 뒤늦게 온다 — 202603 은 시즌표의 "시즌 3"(89), 202604 는 진행 중
+        table = [sn.Season(89, "시즌 3", _d(2026, 5, 28), _d(2026, 7, 30)),
+                 sn.Season(88, "시즌 2", _d(2026, 4, 2), _d(2026, 5, 28))]
+        _win._on_seasons_loaded(table)
+        cur = cb.currentData()
+        assert isinstance(cur, sn.Season) and cur.no == 89, cb.currentText()
+        assert len(_win._matches) == 3 and f"({len(_win._matches)}경기)" in cb.currentText(), \
+            (len(_win._matches), cb.currentText())
+        assert cb.itemText(1).startswith("현재 시즌 (진행 중) · 07-30~"), cb.itemText(1)
+        # 안 고른 채 시즌표가 온다 — 기본 선택이 "전체" 에서 현재 시즌으로 바뀌면 화면도 그 시즌으로 다시 거른다
+        _win._rank_seasons, _win._season_picked = [], False
+        _win._matches_all = ms
+        _win._rebuild_season_combo()
+        _win._apply_season(render=False)
+        assert cb.currentData() is None and len(_win._matches) == 6, (cb.currentText(), len(_win._matches))
+        _win._on_seasons_loaded(list(table))
+        assert cb.currentData() == _win.ONGOING, cb.currentText()
+        assert [m.match_id for m in _win._matches] == ["n3", "n2", "n1"], \
+            f"콤보는 {cb.currentText()} 인데 화면은 {len(_win._matches)}경기"
+    finally:
+        _win._rank_seasons, _win._season_picked = keep[0], keep[1]
+        if keep[2] is not None:
+            _win._restore = keep[2]
+        _restore_account()
 
 
 def test_max_division_survives_account_switch():

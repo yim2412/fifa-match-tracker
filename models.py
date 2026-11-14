@@ -153,6 +153,7 @@ class MatchSummary:
     opp_controller: str | None = None   # 상대 입력 장치(matchDetail.controller — "keyboard"·"gamepad") · 저장 형식 아님
     blank: bool = False                 # 한쪽이라도 선수 기록이 없다(is_blank) — 경기당 평균에서 뺀다 · 승무패·득실 합계는 센다
     no_squad: bool = False              # 내 선수 기록이 없다 — 선수 표의 팀 승률 기준만 쓴다(선수별 승률과 같은 판)
+    season_id: int | None = None        # matchDetail.seasonId(202606 꼴) — 경기를 시즌에 나누는 정본(108 B · seasons.SeasonMap)
 
     @property
     def opp_pad(self) -> bool:
@@ -251,7 +252,13 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         opp_controller=(opp.get("matchDetail") or {}).get("controller") if opp else None,
         blank=is_blank(me, opp),
         no_squad=_side_blank(me),
+        season_id=_season_id(md),
     )
+
+
+def _season_id(md: dict) -> int | None:
+    v = md.get("seasonId")
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 @dataclass

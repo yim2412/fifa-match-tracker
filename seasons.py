@@ -1,8 +1,8 @@
 """넥슨 데이터센터에서 감독모드 랭킹 시즌표를 가져온다.
 
-오픈API 는 경기에 시즌을 달아주지 않는다(matchDate 만 준다). 대신 데이터센터
-랭킹 페이지가 시즌 목록을 기간과 함께 갖고 있어서, 그 기간표로 경기를 시즌에
-나눠 담는다.
+경기 상세의 matchDetail.seasonId(202606 꼴)가 시즌 번호다 — 108 B 부터 화면은 이 번호로 묶는다
+(아래 SeasonMap). 데이터센터 랭킹 페이지의 시즌 목록은 그 번호 묶음에 이름·기간을 붙이고, 번호가 없는
+경기·달력 칸·거래 같은 "시각" 은 지금처럼 그 기간표로 시즌에 나눠 담는다.
 
     https://fconline.nexon.com/datacenter/rank?rt=manager
     → <a onclick="ChangeSeason(89);"><span>시즌 3 (2026-05-28~2026-07-30)</span></a>
@@ -153,3 +153,207 @@ def group_by_season(seasons: list[Season], items: list,
         if buckets.get(s.no):
             out.append((s, buckets[s.no]))
     return out
+
+
+# ── 108 B — 경기의 시즌 번호(matchDetail.seasonId)로 묶기 ───────────────────
+# 시즌표가 아는 시즌은 지금과 똑같이(Season), 시즌표가 모르는 번호만 저장된 경기로 세운다(DataSeason).
+# 2026-11-13 실측: 34,659경기 전부 번호가 있고, 번호 묶음과 시즌표(8시 경계) 묶음의 어긋남은 0 이다.
+# 시즌표 이름("시즌 N")은 해마다 겹쳐(68번 "시즌 1" 이 2023-12 시작) 이름으로는 짝짓지 않는다 —
+# 번호 묶음의 경기 시각 중앙값이 든 시즌표 줄로 짝짓는다.
+
+ONGOING = "ongoing"   # 고른 시즌이 "진행 중" 일 때의 값(app_main 콤보 항목 데이터와 같다)
+
+
+class _Outside:
+    """`.at(when)` — 저장 시작 전이나 묶음 사이 빈 틈. "이번 시즌"(None)과 다르다."""
+    label = "시즌 밖"
+
+    def __repr__(self) -> str:
+        return "OUTSIDE"
+
+
+OUTSIDE = _Outside()
+
+
+class DataSeason:
+    """시즌표가 모르는 시즌 — 그 번호의 저장된 경기로 기간을 세운다. 같음·해시는 번호만(새 경기 한 판에
+    last·games 가 바뀌어도 콤보가 같은 줄을 되찾게)."""
+
+    __slots__ = ("sid", "start_at", "end_at", "first", "last", "games")
+
+    def __init__(self, sid: int, start_at: datetime, end_at: datetime | None,
+                 first: datetime, last: datetime, games: int):
+        self.sid, self.start_at, self.end_at = sid, start_at, end_at
+        self.first, self.last, self.games = first, last, games
+
+    @property
+    def no(self) -> int:
+        return -self.sid   # 시즌표 번호와 안 겹치게(설정 키 s-202606)
+
+    @property
+    def name(self) -> str:
+        return f"시즌 {self.sid % 100}"
+
+    @property
+    def label(self) -> str:
+        return f"{self.sid // 100} {self.name}"
+
+    @property
+    def start(self) -> date:
+        return self.first.date()
+
+    @property
+    def end(self) -> date:
+        return self.last.date()
+
+    @property
+    def span_text(self) -> str:
+        return f"저장된 경기 {self.start:%Y-%m-%d} ~ {self.end:%Y-%m-%d}"
+
+    def contains(self, when: datetime | date) -> bool:
+        if isinstance(when, datetime):
+            return self.start_at <= when and (self.end_at is None or when < self.end_at)
+        return self.start_at.date() <= when and (self.end_at is None or when < self.end_at.date())
+
+    def __eq__(self, other):
+        if not isinstance(other, DataSeason):
+            return NotImplemented
+        return self.sid == other.sid
+
+    def __hash__(self) -> int:
+        return hash(("DataSeason", self.sid))
+
+    def __repr__(self) -> str:
+        return f"DataSeason({self.sid}, {self.games}경기)"
+
+
+class SeasonMap:
+    """경기 목록을 시즌으로 한 번 나눈 것 — 콤보·시즌별 표·필터·달력이 같이 쓴다.
+
+    `.groups` 는 group_by_season 과 같은 꼴(최신순 · None = 진행 중). 경기는 자기 번호의 묶음에 든다
+    (시각 경계 8시는 어림이고 번호가 정본이다). 번호가 없는 경기는 시각으로(시즌표 → 진행 중 → DataSeason)."""
+
+    def __init__(self, table: list[Season], matches: list, key=lambda m: m.match_date,
+                 sid=lambda m: getattr(m, "season_id", None)):
+        self.table = table
+        last_end = max((s.end for s in table), default=None)
+        self._table_end = boundary_at(last_end) if last_end else None
+
+        by_sid: dict[int, list] = {}
+        no_sid: list = []
+        for m in matches:
+            v = sid(m)
+            if isinstance(v, int) and not isinstance(v, bool) and key(m) is not None:
+                by_sid.setdefault(v, []).append(m)
+            else:
+                no_sid.append(m)
+        times = {v: sorted(key(m) for m in ms) for v, ms in by_sid.items()}
+
+        # 번호 → 시즌(규칙 1~3)
+        sid_season: dict[int, object] = {}
+        unmatched: list[int] = []
+        for v in sorted(times):
+            ts = times[v]
+            s = season_of(table, ts[len(ts) // 2])
+            if s is not None:
+                sid_season[v] = s
+            else:
+                unmatched.append(v)
+        newest = max(unmatched, default=None)
+        firsts = {v: times[v][0] for v in times}
+        data_sids = []
+        for v in unmatched:
+            mid = times[v][len(times[v]) // 2]
+            if (table and v == newest and self._table_end is not None and mid >= self._table_end):
+                sid_season[v] = None   # 진행 중
+            else:
+                data_sids.append(v)
+        for v in data_sids:
+            later = [firsts[w] for w in times if w > v]
+            sid_season[v] = DataSeason(v, firsts[v], min(later) if later else None,
+                                       times[v][0], times[v][-1], len(times[v]))
+        self._sid_season = sid_season
+        self._data = sorted((s for s in sid_season.values() if isinstance(s, DataSeason)),
+                            key=lambda s: s.sid, reverse=True)
+
+        # 진행 중의 시작: 시즌표 마지막 경계와 가장 새 DataSeason 의 끝 중 늦은 쪽
+        cands = [t for t in (self._table_end,
+                             self._data[0].end_at if self._data else None) if t is not None]
+        self.ongoing_start: datetime | None = max(cands) if cands else None
+
+        # 경기 → 시즌(받은 순서 그대로 — group_by_season 과 같다)
+        of: dict[int, object] = {}
+        buckets: dict[object, list] = {}
+        ongoing: list = []
+        no_sid_ids = {id(m) for m in no_sid}
+        for m in matches:
+            if id(m) in no_sid_ids:
+                s = self._at_time(key(m))
+                if s is OUTSIDE:
+                    continue   # 어느 시즌에도 안 걸린다(group_by_season 과 같다 — 묶음에서 뺀다)
+            else:
+                s = sid_season[sid(m)]
+            of[id(m)] = s
+            (ongoing if s is None else buckets.setdefault(s, [])).append(m)
+        self._of = of
+        self._keep = matches   # id(m) 가 재사용되지 않게 목록을 쥔다
+        groups: list[tuple[object, list]] = [(None, ongoing)] if ongoing else []
+        for s in sorted(buckets, key=lambda s: s.start, reverse=True):
+            groups.append((s, buckets[s]))
+        self.groups = groups
+        self.known = bool(table) or bool(self._data)
+
+    def _at_time(self, when):
+        if when is None:
+            return OUTSIDE
+        s = season_of(self.table, when)
+        if s is not None:
+            return s
+        for d in self._data:
+            if d.contains(when):
+                return d
+        if self.ongoing_start is not None:
+            start = self.ongoing_start if isinstance(when, datetime) else self.ongoing_start.date()
+            if when >= start:
+                return None
+        return OUTSIDE
+
+    def at(self, when: datetime | date | None):
+        """시각·날짜 → Season | DataSeason | None(진행 중) | OUTSIDE — 경기가 아닌 것(달력 칸 · 거래)."""
+        return self._at_time(when)
+
+    def of(self, m):
+        """경기 → 시즌(번호로). 이 맵을 세운 목록의 경기면 그 묶음 그대로."""
+        if id(m) in self._of:
+            return self._of[id(m)]
+        v = getattr(m, "season_id", None)
+        if v in self._sid_season:
+            return self._sid_season[v]
+        return self._at_time(getattr(m, "match_date", None))
+
+    def has(self, m, selected) -> bool:
+        """고른 시즌(Season · DataSeason · ONGOING)에 드는 경기인가 — 남의 계정 경기도 답한다.
+        번호가 이 맵에 없으면(번호 없음 · 내가 안 뛴 시즌) 고른 시즌의 기간으로."""
+        if id(m) in self._of or getattr(m, "season_id", None) in self._sid_season:
+            s = self.of(m)
+            return s is None if selected == ONGOING else (s is not None and s is not OUTSIDE and s == selected)
+        when = getattr(m, "match_date", None)
+        if when is None:
+            return False
+        if selected == ONGOING:
+            return self.ongoing_start is not None and when >= self.ongoing_start
+        return selected.contains(when)
+
+    def by_sid(self, sid: int):
+        """그 번호가 든 묶음의 시즌 — 진행 중이거나 그 번호가 없으면 None(가르려면 has_sid)."""
+        return self._sid_season.get(sid)
+
+    @property
+    def odd_boundary_days(self) -> set[date]:
+        """경계가 8시가 아닌 날(DataSeason 의 시작·끝 = 그 번호의 첫 경기 시각) — 날짜·8시 앞뒤로 캐시하는 쪽이 피한다."""
+        return ({d.start_at.date() for d in self._data}
+                | {d.end_at.date() for d in self._data if d.end_at is not None}
+                | ({self.ongoing_start.date()} if self.ongoing_start is not None else set()))
+
+    def has_sid(self, sid: int) -> bool:
+        return sid in self._sid_season

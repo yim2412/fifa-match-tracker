@@ -28,6 +28,7 @@ import store
 NICK = "둘러보기구단주"
 OUID = "d" * 31 + "1"
 MATCH_TYPE = config.DEFAULT_MATCH_TYPE
+DEMO_SEASON_IDS = (202610, 202611)   # 경기 시즌 번호(matchDetail.seasonId) — 시즌표 "시즌 1" 앞 · 진행 중 뒤
 
 # 넥슨 공개 메타와 같은 꼴(등급 배지 번호 = 목록 순서) — 사람과 무관한 게임 정보라 그대로 둔다
 DIVISIONS = [(800, "슈퍼 챔피언스"), (900, "챔피언스"), (1000, "슈퍼 챌린지"), (1100, "챌린저1"), (1200, "챌린저2"),
@@ -198,7 +199,7 @@ def _side(rng, ouid: str, nick: str, division: int, squad, goals: int, result: s
     head = sum(1 for s in shots if s["type"] == 3)
     return {
         "ouid": ouid, "nickname": nick, "division": division,
-        "matchDetail": {"seasonId": 202611, "matchResult": result, "matchEndType": 0, "systemPause": 0,
+        "matchDetail": {"seasonId": DEMO_SEASON_IDS[1], "matchResult": result, "matchEndType": 0, "systemPause": 0,
                         "foul": rng.randint(0, 6), "injury": 0, "redCards": 0, "yellowCards": rng.randint(0, 2),
                         "dribble": rng.randint(30, 90), "cornerKick": rng.randint(0, 6), "possession": possession,
                         "offsideCount": rng.randint(0, 3), "averageRating": 0.0,
@@ -307,6 +308,13 @@ def generate(today: date | None = None, n: int | None = None, seed: int | None =
         })
     mid = today - timedelta(days=config.DEMO_DAYS // 2)
     seasons = [sn.Season(no=990, name="시즌 1", start=today - timedelta(days=config.DEMO_DAYS * 2), end=mid)]
+    # 108 B — 화면은 경기의 시즌 번호로 묶는다. 경계 앞뒤로 번호를 갈라야 지금처럼 "시즌 1"·"현재 시즌" 둘이 선다
+    # (난수를 안 쓰므로 결과·점수는 그대로)
+    cut = sn.boundary_at(mid)
+    for kst, d in zip(stamps, details):
+        sid = DEMO_SEASON_IDS[0] if kst < cut else DEMO_SEASON_IDS[1]
+        for side in d["matchInfo"]:
+            side["matchDetail"]["seasonId"] = sid
     meta = {
         "division": [{"divisionId": i, "divisionName": nm} for i, nm in DIVISIONS],
         "spposition": [{"spposition": i, "desc": d} for i, d in enumerate(POSITIONS)],

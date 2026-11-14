@@ -34,6 +34,7 @@ from pathlib import Path
 
 import config
 import models
+from models import parse_match
 import ranker
 import seasons as sn
 import stats as st
@@ -626,6 +627,115 @@ def test_season_label_has_year():
     nxt = sn.Season(no=95, name="시즌 3", start=date(2027, 5, 27), end=date(2027, 7, 29))
     assert nxt.label != _S3.label
     assert _S3.span_text == "2026-05-28 ~ 2026-07-30"
+
+
+class _SM:
+    """SeasonMap 용 지어낸 경기 — 시각·시즌 번호만."""
+    def __init__(self, when, sid, mid=""):
+        self.match_date, self.season_id, self.match_id = when, sid, mid
+
+    def __repr__(self):
+        return f"_SM({self.match_date:%m-%d %H:%M}, {self.season_id})"
+
+
+def test_parse_match_reads_season_id_108():
+    ouid, _mids, details = _load()
+    assert {parse_match(d, ouid).season_id for d in details} == {202603}
+    d = json.loads(json.dumps(details[0]))
+    for side in d["matchInfo"]:
+        side["matchDetail"]["seasonId"] = "202603"   # 정수가 아니면 None — 시각으로 간다
+    assert parse_match(d, ouid).season_id is None
+    for side in d["matchInfo"]:
+        del side["matchDetail"]["seasonId"]
+    assert parse_match(d, ouid).season_id is None
+
+
+def test_season_map_matches_table_and_number_wins_108():
+    """시즌표가 아는 시즌은 group_by_season 과 같은 묶음 — 다른 것은 시각 경계 반대편에 선 경기 하나뿐(규칙 5)."""
+    ms = [_SM(datetime(2026, 8, 3, 12), 202604), _SM(datetime(2026, 7, 30, 12), 202604),
+          _SM(datetime(2026, 7, 30, 9), 202603),     # 경계(8시) 뒤인데 번호는 옛 시즌 — 번호가 정본
+          _SM(datetime(2026, 6, 10), 202603), _SM(datetime(2026, 5, 28, 9), 202603),
+          _SM(datetime(2026, 5, 1), 202602), _SM(datetime(2026, 4, 20), 202602)]
+    smap = sn.SeasonMap(_SEASONS, ms)
+    got = [(s.no if s else None, len(v)) for s, v in smap.groups]
+    assert got == [(None, 2), (89, 3), (88, 2)], got
+    old = sn.group_by_season(_SEASONS, ms, key=lambda m: m.match_date)
+    assert [(s.no if s else None, len(v)) for s, v in old] == [(None, 3), (89, 2), (88, 2)], "보호가 없을 때의 값이 달라졌다"
+    assert smap.of(ms[2]) == _S3 and smap.has(ms[2], _S3) and not smap.has(ms[2], sn.ONGOING)
+    assert smap.has(ms[0], sn.ONGOING) and not smap.has(ms[0], _S3)
+    assert smap.known and smap.ongoing_start == datetime(2026, 7, 30, 8)
+    # 받은 순서 그대로(group_by_season 과 같다)
+    assert smap.groups[1][1] == ms[2:5]
+    # 시각 → 시즌표가 아는 시즌은 season_of 와 같은 값 · 진행 중 None · 시즌표 앞은 OUTSIDE
+    assert smap.at(datetime(2026, 5, 28, 7, 59)) == _S2 and smap.at(date(2026, 5, 28)) == _S3
+    assert smap.at(datetime(2026, 7, 30, 8)) is None and smap.at(date(2026, 7, 30)) is None
+    assert smap.at(datetime(2026, 1, 1)) is sn.OUTSIDE and smap.at(None) is sn.OUTSIDE
+    # 번호가 없는 경기는 지금처럼 시각으로(목록 이전은 버린다)
+    nosid = [_SM(datetime(2026, 7, 30, 9), None), _SM(datetime(2026, 6, 1), None), _SM(datetime(2026, 1, 1), None)]
+    m2 = sn.SeasonMap(_SEASONS, nosid)
+    assert [(s.no if s else None, len(v)) for s, v in m2.groups] == [(None, 1), (89, 1)]
+    assert m2.groups == [(s, v) for s, v in sn.group_by_season(_SEASONS, nosid, key=lambda m: m.match_date)]
+
+
+def test_season_map_without_table_builds_data_seasons_108():
+    """시즌표가 없으면(홈페이지 데이터 끔) 번호 묶음마다 DataSeason — 지금은 시즌이 하나도 안 선다."""
+    a = [_SM(datetime(2026, 6, 1, 10), 202603), _SM(datetime(2026, 7, 30, 3, 56), 202603)]
+    b = [_SM(datetime(2026, 7, 30, 12, 40), 202604), _SM(datetime(2026, 9, 1), 202604)]
+    smap = sn.SeasonMap([], b[::-1] + a[::-1])
+    assert sn.group_by_season([], a + b, key=lambda m: m.match_date) == [], "보호가 없을 때의 값이 달라졌다"
+    (s4, g4), (s3, g3) = smap.groups
+    assert isinstance(s4, sn.DataSeason) and isinstance(s3, sn.DataSeason)
+    assert (s3.sid, len(g3), s4.sid, len(g4)) == (202603, 2, 202604, 2)
+    assert (s3.label, s3.name, s3.no) == ("2026 시즌 3", "시즌 3", -202603)
+    assert (s3.start_at, s3.end_at) == (datetime(2026, 6, 1, 10), datetime(2026, 7, 30, 12, 40)), "끝 = 다음 번호의 첫 경기"
+    assert (s4.end_at, s3.start, s3.end) == (None, date(2026, 6, 1), date(2026, 7, 30))
+    assert s3.span_text == "저장된 경기 2026-06-01 ~ 2026-07-30"
+    assert smap.known and smap.ongoing_start is None
+    # .at — datetime · date 둘 다(달력은 date 로 부른다) · 저장 시작 전은 OUTSIDE(이번 시즌이 아니다)
+    assert smap.at(datetime(2026, 7, 30, 12, 39)) == s3 and smap.at(datetime(2026, 7, 30, 12, 40)) == s4
+    assert smap.at(date(2026, 7, 29)) == s3 and smap.at(date(2026, 7, 30)) == s4
+    assert smap.at(date(2030, 1, 1)) == s4, "가장 새 번호는 끝이 없다"
+    assert smap.at(datetime(2026, 5, 31)) is sn.OUTSIDE and smap.at(date(2026, 5, 31)) is sn.OUTSIDE
+    assert smap.odd_boundary_days == {date(2026, 6, 1), date(2026, 7, 30)}
+    # 같음·해시는 번호만 — 새 경기 한 판에 last·games 가 바뀌어도 같은 시즌
+    more = sn.SeasonMap([], b + [_SM(datetime(2026, 9, 2), 202604)] + a)
+    t4 = more.groups[0][0]
+    assert t4 == s4 and hash(t4) == hash(s4) and t4.games == 3 != s4.games
+    assert s4 != sn.ONGOING and sn.ONGOING != s4 and s4 != _S3 and s4 != sn.OUTSIDE and s3 != s4
+    assert s4 is not None and {s4: 1}[t4] == 1
+    # 남의 계정 경기 — 번호가 맵에 있으면 번호로, 없으면 고른 시즌의 기간으로
+    foe_a = _SM(datetime(2026, 7, 30, 20), 202603)      # 시각은 s4 쪽이지만 번호가 s3
+    foe_b = _SM(datetime(2026, 7, 1), 202601)           # 내가 안 뛴 번호
+    foe_c = _SM(datetime(2026, 7, 1), None)
+    assert smap.has(foe_a, s3) and not smap.has(foe_a, s4)
+    assert smap.has(foe_b, s3) and smap.has(foe_c, s3) and not smap.has(foe_c, s4)
+    assert not smap.has(foe_c, sn.ONGOING), "진행 중이 없는데 진행 중으로 셌다"
+    assert not smap.has(_SM(None, None), s3)
+    assert smap.has_sid(202603) and not smap.has_sid(202601) and smap.by_sid(202603) == s3
+
+
+def test_season_map_stale_table_108():
+    """시즌표가 낡았다(07-30 에 끝) — 못 찾은 번호 중 가장 큰 것만 진행 중 · 앞 번호는 DataSeason ·
+    진행 중의 시작은 낡은 표의 끝이 아니라 새 묶음의 첫 경기(M10)."""
+    ms = [_SM(datetime(2026, 10, 2, 13, 41), 202605), _SM(datetime(2026, 10, 5), 202605),
+          _SM(datetime(2026, 8, 1, 11, 36), 202604), _SM(datetime(2026, 9, 1), 202604),
+          _SM(datetime(2026, 7, 1), 202603)]
+    smap = sn.SeasonMap(_SEASONS, ms)
+    got = [(s if s is None else (s.no if isinstance(s, sn.Season) else s.sid), len(v)) for s, v in smap.groups]
+    assert got == [(None, 2), (202604, 2), (89, 1)], got
+    old = sn.group_by_season(_SEASONS, ms, key=lambda m: m.match_date)
+    assert [(s.no if s else None, len(v)) for s, v in old] == [(None, 4), (89, 1)], "보호가 없을 때의 값이 달라졌다"
+    d4 = smap.groups[1][0]
+    assert d4.end_at == datetime(2026, 10, 2, 13, 41)
+    assert smap.ongoing_start == datetime(2026, 10, 2, 13, 41), smap.ongoing_start
+    assert smap.at(datetime(2026, 9, 15)) == d4 and smap.at(datetime(2026, 10, 3)) is None
+    assert smap.at(date(2026, 10, 2)) is None and smap.at(date(2026, 10, 1)) == d4
+    assert smap.at(datetime(2026, 7, 31)) is sn.OUTSIDE, "낡은 표 끝과 새 번호 첫 경기 사이 빈 틈"
+    assert smap.has(_SM(datetime(2026, 10, 9), 202606), sn.ONGOING)   # 남의 경기 · 모르는 번호 → 진행 중 시작 뒤
+    assert not smap.has(_SM(datetime(2026, 9, 9), 202606), sn.ONGOING)
+    # 번호 묶음 둘이 같은 시즌표 줄에 짝지어지면 한 시즌으로 합쳐 보인다
+    twin = sn.SeasonMap(_SEASONS, [_SM(datetime(2026, 6, 1), 202603), _SM(datetime(2026, 6, 2), 202699)])
+    assert [(s.no, len(v)) for s, v in twin.groups] == [(89, 2)]
 
 
 class _FakeRes:

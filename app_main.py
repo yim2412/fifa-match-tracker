@@ -4605,14 +4605,23 @@ class MainWindow(QMainWindow):
 
     def _cal_season_key(self, d):
         """날짜·시각 → 시즌 — 경기마다 시즌표를 훑으면 1만 경기 167ms(실측)라 날짜마다 한 번만. 시각이면 경계 시각(8시) 앞뒤 둘로
-        나눠 잰다(시즌은 그 시각에 바뀐다 · 76). 시즌표가 바뀌면 비운다."""
+        나눠 잰다(시즌은 그 시각에 바뀐다 · 76). 시즌 맵(시즌표 · 저장 경기)이 바뀌면 비운다.
+        시즌표가 모르는 시즌(108 B DataSeason)의 경계는 첫 경기 시각이라 그날만은 캐시하지 않는다.
+        돌려주는 값: Season · DataSeason · None(진행 중) · sn.OUTSIDE(저장 범위 밖 — "이번 시즌" 이 아니다)."""
+        smap = self._season_map()
         cache = self.__dict__.setdefault("_cal_key_cache", {})
-        if cache.get("_seasons") is not self._rank_seasons:
+        if cache.get("_map") is not smap:
             cache.clear()
-            cache["_seasons"] = self._rank_seasons
-        k = (d.date(), d.hour < config.SEASON_CUTOFF_H) if isinstance(d, datetime) else d
+            cache["_map"] = smap
+            cache["_odd"] = smap.odd_boundary_days
+        if isinstance(d, datetime):
+            if d.date() in cache["_odd"]:
+                return smap.at(d)
+            k = (d.date(), d.hour < config.SEASON_CUTOFF_H)
+        else:
+            k = d
         if k not in cache:
-            cache[k] = sn.season_of(self._rank_seasons, d)
+            cache[k] = smap.at(d)
         return cache[k]
 
     def _render_calendar(self) -> None:
@@ -4625,7 +4634,7 @@ class MainWindow(QMainWindow):
         mixed = core.mixed_of_matches(self._matches_all)
         days = core.calendar_days(wins, first, last, self._cal_season_key, mixed, exact_key=self._cal_season_key)
         # 시즌표가 없으면(홈페이지 데이터 꺼짐 · 받은 적 없음) 모든 날이 한 묶음 — 기준선은 시즌이 아니라 저장된 전체다
-        no_table = not self._rank_seasons
+        no_table = not self._season_map().known   # 시즌표도 경기 시즌 번호도 없으면 저장된 전체 한 묶음(108 B)
         base_name = "저장된 전체" if no_table else "시즌"
         cells = {}
         for d in days:
@@ -5803,7 +5812,7 @@ class MainWindow(QMainWindow):
 
     def _render_luck(self, matches: list[MatchSummary]) -> None:
         days, mixed = self._luck_days(matches)
-        no_table = not self._rank_seasons
+        no_table = not self._season_map().known   # 시즌표도 경기 시즌 번호도 없으면 저장된 전체 한 묶음(108 B)
         self._fill_luck_cards(days, mixed, no_table)
         self._show_squad_ovr()
         rows = []
@@ -11316,16 +11325,17 @@ class MainWindow(QMainWindow):
         """위쪽 바 범위를 상대 목록에 — 내 쪽 _slice()와 같은 규칙(시즌 → 빠른 범위). 최신순으로 받는다."""
         selected = self.cb_season.currentData()
         if selected is not None:
-            matches = [m for m in matches if self._in_selected_season(m.match_date, selected)]
+            matches = [m for m in matches if self._match_in_season(m, selected)]
         return core.window_of(matches, *self._range_spec())
 
     def _range_start(self):
-        """고른 시즌의 시작 시각(KST) — 전체면 None. ⚠(기록이 그보다 늦게 시작) 판정용."""
+        """고른 시즌의 시작 시각(KST) — 전체면 None. ⚠(기록이 그보다 늦게 시작) 판정용.
+        DataSeason 이면 None — 저장된 첫 경기가 곧 시작이라 판정할 것이 없다."""
         selected = self.cb_season.currentData()
-        if selected is None:
+        if selected is None or isinstance(selected, sn.DataSeason):
             return None
         if selected == self.ONGOING:
-            return max((s.end_at for s in self._rank_seasons), default=None)
+            return self._season_map().ongoing_start
         return selected.start_at
 
     def _cut_note(self, all_matches: list[MatchSummary], shown: list[MatchSummary]) -> str:
@@ -11862,7 +11872,7 @@ class MainWindow(QMainWindow):
                             f"감독모드 {self._range_text(n)}")
 
     # ── 시즌 ──────────────────────────────────────────────────────────
-    ONGOING = "ongoing"  # 콤보 항목 데이터 — 시즌표에 아직 안 올라온 진행 중 시즌
+    ONGOING = sn.ONGOING  # 콤보 항목 데이터 — 시즌표에 아직 안 올라온 진행 중 시즌
 
     def _load_season_cache(self) -> None:
         """캐시된 시즌표를 즉시 쓰고, 오래됐으면 백그라운드로 다시 받는다."""
@@ -11892,9 +11902,12 @@ class MainWindow(QMainWindow):
         self._invalidate("review")     # 97 시즌 돌아보기는 시즌표가 있어야 서고, 시즌 경계가 곧 시즌표다
         self._load_predict(self._ouid)   # 예측은 시즌 길이·종료일 추정에 시즌표를 쓴다
         if self._matches_all:
-            # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보만 채워 준다.
-            # 선택은 "전체" 그대로라 표시 중인 화면은 건드리지 않는다.
+            # 조회가 이미 끝난 뒤에 시즌표가 도착한 경우 — 콤보를 다시 채운다. 고른 줄이 바뀌었으면(DataSeason → Season ·
+            # 기본 선택이 "전체" → 현재 시즌) 화면도 그 줄로 다시 거른다 — 안 그러면 콤보와 화면이 갈린다(108 3회차 M6).
+            before = self._season_key(self.cb_season.currentData())
             self._rebuild_season_combo()
+            if self._season_key(self.cb_season.currentData()) != before:
+                self._apply_season()
             self._invalidate("period")      # 시즌 단위 점·표(칩 판정도)
             self._invalidate("dashboard")   # 승률 흐름이 시즌 단위일 수 있다
 
@@ -11903,10 +11916,19 @@ class MainWindow(QMainWindow):
         for key in ("records", "matches", "dashboard"):
             self._invalidate(key)
 
+    def _season_map(self) -> sn.SeasonMap:
+        """누적 전체를 시즌으로 나눈 것(108 B — 경기의 시즌 번호로) — 창 캐시. 목록을 새로 만들면 id 가 재사용될 수 있어
+        _narrate_scope 와 같이 길이·맨 앞 경기 id 도 키에 넣는다."""
+        ms, t = self._matches_all, self._rank_seasons
+        key = (id(ms), len(ms), ms[0].match_id if ms else None, id(t), len(t))
+        if getattr(self, "_season_map_key", None) != key:
+            self._season_map_obj = sn.SeasonMap(t, ms)
+            self._season_map_key = key
+        return self._season_map_obj
+
     def _season_groups(self) -> list[tuple[object, list[MatchSummary]]]:
         """누적 전체를 시즌별로 묶은 것 — 콤보와 시즌별 성적 표가 같이 쓴다."""
-        return sn.group_by_season(self._rank_seasons, self._matches_all,
-                                  key=lambda m: m.match_date)
+        return self._season_map().groups
 
     def _rebuild_season_combo(self) -> None:
         """경기가 실제로 있는 시즌만 콤보에 올린다 — 2018년까지 89개가 다
@@ -11916,15 +11938,25 @@ class MainWindow(QMainWindow):
         항목에 기간을 붙이는 건, 끝난 시즌 이름("2026 시즌 3")이 현재 시즌으로
         읽혀서 지난 시즌 기록을 보고 있는 줄 모르는 일이 실제로 있었기 때문이다."""
         prev = self.cb_season.currentData()
-        last_end = max((s.end for s in self._rank_seasons), default=None)
+        smap = self._season_map()
+        if isinstance(prev, sn.DataSeason):
+            # 시즌표가 뒤늦게 오면 같은 번호가 Season 이나 진행 중으로 바뀐다 — 같은 시즌 줄로 옮긴다(3회차 M6)
+            if smap.has_sid(prev.sid):
+                moved = smap.by_sid(prev.sid)
+                prev = self.ONGOING if moved is None else moved
+        start = smap.ongoing_start
         self.cb_season.blockSignals(True)
         self.cb_season.clear()
         self.cb_season.addItem(f"전체 ({len(self._matches_all)}경기)", None)
         for season, group in self._season_groups():
             if season is None:
-                span = f"{last_end:%m-%d}~" if last_end else "최신"
+                span = f"{start:%m-%d}~" if start else "최신"
                 self.cb_season.addItem(
                     f"현재 시즌 (진행 중) · {span} ({len(group)}경기)", self.ONGOING)
+            elif isinstance(season, sn.DataSeason):
+                self.cb_season.addItem(
+                    f"{season.label} · 저장된 경기 {season.start:%m-%d}~{season.end:%m-%d}"
+                    f" ({len(group)}경기)", season)
             else:
                 self.cb_season.addItem(
                     f"{season.label} · {season.start:%m-%d}~{season.end:%m-%d}"
@@ -11949,11 +11981,15 @@ class MainWindow(QMainWindow):
         self.top_bar.relayout()
 
     def _in_selected_season(self, when, selected) -> bool:
+        """시각(경기가 아닌 것 — 거래) 이 고른 시즌에 드나. 경기는 _match_in_season(번호로)."""
         if when is None:
             return False
-        if selected == self.ONGOING:
-            return sn.in_ongoing(self._rank_seasons, when)
-        return selected.contains(when)
+        got = self._season_map().at(when)
+        return got is None if selected == self.ONGOING else (got is not sn.OUTSIDE and got == selected)
+
+    def _match_in_season(self, m: MatchSummary, selected) -> bool:
+        """경기가 고른 시즌에 드나 — 경기의 시즌 번호로(108 B). 상대 계정 경기도 답한다(SeasonMap.has)."""
+        return self._season_map().has(m, selected)
 
     def _scope_text(self) -> str:
         """빠른 범위에 안 갇히는 탭들이 실제로 쓰는 범위 이름.
@@ -11989,8 +12025,7 @@ class MainWindow(QMainWindow):
         if selected is None:
             self._matches, self._details = self._matches_all, self._details_all
         else:
-            self._matches = [m for m in self._matches_all
-                             if self._in_selected_season(m.match_date, selected)]
+            self._matches = [m for m in self._matches_all if self._match_in_season(m, selected)]
             ids = {m.match_id for m in self._matches}
             self._details = [d for d in self._details_all
                              if d.get("matchId") in ids]
@@ -13432,12 +13467,13 @@ class MainWindow(QMainWindow):
         return w
 
     def _season_h2h_text(self, m: MatchSummary) -> str:
-        """머리 "이 시즌 맞대결" — 그 경기가 든 시즌(시즌표 · matchtime KST 경계 63) 안 이 상대와의 저장된 경기 전부.
-        시즌표가 없으면 저장된 전체. 상대 전적 탭(지금 고른 범위)과 범위가 다를 수 있어 범위 이름을 같이 단다."""
+        """머리 "이 시즌 맞대결" — 그 경기가 든 시즌(경기의 시즌 번호 · 108 B) 안 이 상대와의 저장된 경기 전부.
+        시즌을 나눌 수 없으면 저장된 전체. 상대 전적 탭(지금 고른 범위)과 범위가 다를 수 있어 범위 이름을 같이 단다."""
         pool = [x for x in self._matches_all if x.opponent == m.opponent]
-        if self._rank_seasons:
-            season = sn.season_of(self._rank_seasons, m.match_date)
-            pool = [x for x in pool if sn.season_of(self._rank_seasons, x.match_date) == season]
+        smap = self._season_map()
+        season = smap.of(m) if smap.known else sn.OUTSIDE
+        if season is not sn.OUTSIDE:
+            pool = [x for x in pool if smap.of(x) == season]
             scope = season.label if season is not None else "현재 시즌"
         else:
             scope = "저장된 전체"
@@ -14741,7 +14777,7 @@ class MainWindow(QMainWindow):
 
     def _render_seasons(self) -> None:
         groups = self._season_groups()
-        last_end = max((s.end for s in self._rank_seasons), default=None)
+        start = self._season_map().ongoing_start   # 진행 중의 시작 — 시즌표가 낡았으면 새 번호 묶음의 첫 경기(M10)
         mixed = core.mixed_of_matches(self._matches_all)   # 시즌끼리 견주므로 표 하나(누적 전체)로 한 번
         sums = [summarize(group, mixed) for _, group in groups]
         divs = core.season_divisions(core.division_trend(self._details_all, self._ouid), groups)
@@ -14749,7 +14785,7 @@ class MainWindow(QMainWindow):
         rows, tips, diffs, spans = [], [], [], []
         for i, ((season, group), s, dv) in enumerate(zip(groups, sums, divs)):
             if season is None:
-                label, span, key = "진행 중", f"{last_end:%Y-%m-%d} ~", 99999999
+                label, span, key = "진행 중", (f"{start:%Y-%m-%d} ~" if start else ""), 99999999
             else:
                 label, span = season.label, season.span_text
                 key = int(season.start.strftime("%Y%m%d"))
@@ -14795,7 +14831,7 @@ class MainWindow(QMainWindow):
         self._set_status(self.lb_season_note,
                          "넥슨 데이터센터에서 시즌표를 받지 못했습니다."
                          " 잠시 후 다시 검색하면 채워집니다. 그동안은 판수 기준을 그대로 씁니다."
-                         if not self._rank_seasons else "")
+                         if not self._season_map().known else "")
 
     @staticmethod
     def _card_extras(spids) -> dict[int, dict]:
