@@ -3894,7 +3894,10 @@ class MainWindow(QMainWindow):
             conn = store.open_db(config.DB_PATH)
             try:
                 rows = store.recent_searches(conn, max(self.RECENT_SEARCH_LIMIT, self.RECENT_LIST_LIMIT))
-                mine = store.my_account(conn, config.DEFAULT_MATCH_TYPE)
+                try:
+                    mine = store.my_account(conn, config.DEFAULT_MATCH_TYPE)
+                except Exception:
+                    mine = None   # 내 계정을 못 읽어도 최근 검색 칩은 남긴다(108 리뷰)
             finally:
                 conn.close()
         except Exception:

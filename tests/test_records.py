@@ -27,12 +27,18 @@ def _d(i: int, outcome: str, gf: int = 1, ga: int = 0, *, goals=None, div=None, 
     def shots(mine: bool):
         return [{"result": 3, "goalTime": (0 if m < 45 else 1) << 24 | int((m - (0 if m < 45 else 45)) * 60), "spId": sp,
                  "x": 0.9, "y": 0.5, "type": 1} for mm, m, sp in goals if mm == mine]
-    res = ("몰수" if forfeit else "") + outcome
-    opp_res = ("몰수" if forfeit else "") + {"승": "패", "패": "승", "무": "무"}[outcome]
+    # 넥슨이 보내는 꼴 그대로 — 몰수 경기도 matchResult 는 "승"·"패"이고 몰수는 matchEndType(1 몰수승 · 2 몰수패)에만 있다.
+    # forfeit="error" 는 내 쪽이 "오류"(4)로 남고 상대가 몰수승(1)을 받은 판(108 F1)
+    res, opp_res = outcome, {"승": "패", "패": "승", "무": "무"}[outcome]
+    me_end, opp_end = 0, 0
+    if forfeit == "error":
+        res, me_end, opp_end = "오류", 4, 1
+    elif forfeit:
+        me_end, opp_end = (1, 2) if outcome == "승" else (2, 1)
     d = {"matchId": f"m{i}", "matchDate": (when - timedelta(hours=9)).isoformat(timespec="seconds"),
-         "matchInfo": [{"ouid": "me", "division": div, "matchDetail": {"matchResult": res},
+         "matchInfo": [{"ouid": "me", "division": div, "matchDetail": {"matchResult": res, "matchEndType": me_end},
                         "shoot": {"goalTotal": gf}, "shootDetail": shots(True)},
-                       {"ouid": "opp", "matchDetail": {"matchResult": opp_res},
+                       {"ouid": "opp", "matchDetail": {"matchResult": opp_res, "matchEndType": opp_end},
                         "shoot": {"goalTotal": ga}, "shootDetail": shots(False)}]}
     if mt is not None:
         d["matchType"] = mt
@@ -145,6 +151,10 @@ def test_milestones_skip_forfeit():
         assert _keys(got, "games3") == [("games3", "m3")], _keys(got)   # 몰수 뺀 셋째 경기
         assert _keys(got, "wins3") == [("wins3", "m4")], _keys(got)
         assert [k for k, _t in records.kinds()][-2:] == ["games3", "wins3"]
+        # 내 쪽 "오류"로 남은 몰수패(108 ①이 패로 센다)도 몰수라 경기 수에서 뺀다
+        ds = [_d(0, "승"), _d(1, "패", 0, 3, forfeit="error"), _d(2, "패", 0, 1), _d(3, "승")]
+        got = records.achievements(ds, "me")
+        assert _keys(got, "games3") == [("games3", "m3")], _keys(got)
     finally:
         config.RECORD_MILESTONES = old
 
