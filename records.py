@@ -27,7 +27,7 @@ import config
 import matchtime
 from models import (CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, current_streak, is_blank, opponent_stats,
                     result_of)
-from stats import _me_opp, _num, _played, end_kind, match_goals
+from stats import _me_opp, _num, _played, match_goals
 
 
 @dataclass(frozen=True)
@@ -95,8 +95,7 @@ def _games(details: list[dict], ouid: str) -> list[_Game]:
         gf = (me.get("shoot") or {}).get("goalTotal")
         ga = ((opp or {}).get("shoot") or {}).get("goalTotal")
         div = me.get("division")
-        # 몰수는 종료 유형으로 — 넥슨은 몰수 경기도 matchResult 를 "승"·"패"로 보내 글자로는 못 가린다(108 리뷰)
-        out.append(_Game(when, d.get("matchId"), outcome, end_kind(me, opp) in ("몰수승", "몰수패"),
+        out.append(_Game(when, d.get("matchId"), outcome, "몰수" in result,
                          gf if isinstance(gf, int) else 0, ga if isinstance(ga, int) else 0,
                          div if isinstance(div, int) else None, d, is_blank(me, opp)))
     out.sort(key=lambda g: g.when)
