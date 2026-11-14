@@ -22,6 +22,45 @@ CHAMPION_DIVISION_ID = 900
 SUPER_CHAMPION_DIVISION_ID = 800
 
 
+# matchEndType — 오픈API 문서(인용): 0 정상 · 1 몰수승 · 2 몰수패. 4 는 문서에 없고 실DB 에서
+# "오류" 결과에만 붙는다(55팀-경기, 2026-10-05 실측). 1·2 경기의 matchResult 는 "몰수승"이 아니라
+# 그냥 "승"·"패"라, 결과 문자열로는 몰수를 못 가린다(1.2.1 전 result_breakdown 의 몰수 줄이 늘 0이던 이유).
+# 108: stats 에서 여기로 옮겼다 — 승무패를 세는 자리(result_of)가 models 에 있어서.
+END_NORMAL, END_FORFEIT_WIN, END_FORFEIT_LOSE, END_ABORT = 0, 1, 2, 4
+
+
+def end_type(p: dict | None) -> int | None:
+    v = ((p or {}).get("matchDetail") or {}).get("matchEndType")
+    return v if isinstance(v, int) else None
+
+
+def forfeit_loss(me: dict | None, opp: dict | None) -> bool:
+    """내 쪽이 4(오류)로 남았는데 상대가 1(몰수승)을 받은 판 — 실제로는 몰수패다(108 F1 · 실DB 66판 전부 내 "오류"/상대 "승").
+    보통 몰수패(내 2)는 matchResult 가 이미 "패"라 여기 안 든다."""
+    return end_type(me) == END_ABORT and end_type(opp) == END_FORFEIT_WIN
+
+
+def result_of(me: dict | None, opp: dict | None) -> str:
+    """승·무·패를 **세는** 자리의 결과 글자(108 J2 ⓐ) — matchResult 원문, 단 forfeit_loss 면 "패"."""
+    if forfeit_loss(me, opp):
+        return "패"
+    return ((me or {}).get("matchDetail") or {}).get("matchResult") or "-"
+
+
+def _side_blank(p: dict | None) -> bool:
+    # 넥슨은 지워진 쪽에 "player": [] 를 준다 — 키가 없는 판은 실DB 에 0(2026-11-14 · 71,665 팀-경기 · 빈 목록 405).
+    # 키가 없는 것(지어낸 경기·옛 테스트)은 지워진 판이 아니라 모르는 판이라 빈 판으로 치지 않는다.
+    if not p:
+        return True
+    return "player" in p and not p["player"]
+
+
+def is_blank(me: dict | None, opp: dict | None) -> bool:
+    """한쪽이라도 선수 기록이 없는 판(108 J1) — 경기당 평균·나 대 상대 비교에서 뺀다. 상대가 없어도 참.
+    나간 쪽 기록은 슛·골·점유율이 전부 0 으로 지워져 와서(F13) 평균을 0 쪽으로, 짝 비교를 한쪽으로 민다."""
+    return _side_blank(me) or _side_blank(opp)
+
+
 def is_champion_or_above(division_id: int | None) -> bool:
     return division_id is not None and division_id <= CHAMPION_DIVISION_ID
 
@@ -112,6 +151,8 @@ class MatchSummary:
     draw_possible: bool | None = None   # 무승부가 날 수 있던 경기인가(양쪽 division) — 저장 형식 아님
     opp_division: int | None = None     # 그 경기 때 상대 등급(matchInfo 의 division — 화면 그림용) · 저장 형식 아님
     opp_controller: str | None = None   # 상대 입력 장치(matchDetail.controller — "keyboard"·"gamepad") · 저장 형식 아님
+    blank: bool = False                 # 한쪽이라도 선수 기록이 없다(is_blank) — 경기당 평균에서 뺀다 · 승무패·득실 합계는 센다
+    no_squad: bool = False              # 내 선수 기록이 없다 — 선수 표의 팀 승률 기준만 쓴다(선수별 승률과 같은 판)
 
     @property
     def opp_pad(self) -> bool:
@@ -194,7 +235,7 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         match_type=detail.get("matchType", 0),
         my_nickname=me.get("nickname") or "-",
         opponent=opp.get("nickname") or NO_NICK,
-        result=md.get("matchResult") or "-",
+        result=result_of(me, opp),
         my_goals=_i(shoot, "goalTotal"),
         opp_goals=_i(opp_shoot, "goalTotal"),
         possession=_i(md, "possession"),
@@ -208,34 +249,44 @@ def parse_match(detail: dict, my_ouid: str) -> MatchSummary | None:
         draw_possible=draw_possible(me.get("division"), opp.get("division")) if opp else None,
         opp_division=opp.get("division") if opp and isinstance(opp.get("division"), int) else None,
         opp_controller=(opp.get("matchDetail") or {}).get("controller") if opp else None,
+        blank=is_blank(me, opp),
+        no_squad=_side_blank(me),
     )
 
 
 @dataclass
 class Stats(RateMixin):
-    """조회한 경기들을 합친 통계."""
+    """조회한 경기들을 합친 통계. 경기당 평균은 빈 판(MatchSummary.blank)을 뺀 판 수로 낸다 —
+    승무패·total·득실 합계(goals_for·goals_against)는 빈 판도 센다(108 U4)."""
     total: int = 0
     win: int = 0
     draw: int = 0
     lose: int = 0
     goals_for: int = 0
     goals_against: int = 0
-    possession_sum: int = 0
+    possession_sum: int = 0     # 빈 판은 안 더한다(평균 전용)
     rating_sum: float = 0.0
     rating_n: int = 0           # 평점 있는 판 — 몰수 판은 평점이 없어(0) 평균을 끌어내리지 않게 뺀다
     mixed: bool | None = None
+    blank: int = 0              # 빈 판 수 — 평균 분모에서 뺀다
+    blank_gf: int = 0           # 빈 판의 득실 — 합계에는 들고 평균에서는 뺀다
+    blank_ga: int = 0
+
+    @property
+    def avg_n(self) -> int:
+        return self.total - self.blank
 
     @property
     def avg_goals_for(self) -> float:
-        return (self.goals_for / self.total) if self.total else 0.0
+        return ((self.goals_for - self.blank_gf) / self.avg_n) if self.avg_n else 0.0
 
     @property
     def avg_goals_against(self) -> float:
-        return (self.goals_against / self.total) if self.total else 0.0
+        return ((self.goals_against - self.blank_ga) / self.avg_n) if self.avg_n else 0.0
 
     @property
     def avg_possession(self) -> float:
-        return (self.possession_sum / self.total) if self.total else 0.0
+        return (self.possession_sum / self.avg_n) if self.avg_n else 0.0
 
     @property
     def avg_rating(self) -> float:
@@ -246,9 +297,8 @@ def summarize(matches: list[MatchSummary], mixed: bool | None = None) -> Stats:
     """mixed 를 주면 그 식으로(견주는 묶음이 합친 범위로 정한 값), 없으면 matches 로 정한다."""
     s = Stats(mixed=mixed_of_matches(matches) if mixed is None else mixed)
     for m in matches:
-        # 몰수승/몰수패도 승패로 친다. "오류"(중단된 경기)처럼 승·무·패가
-        # 아닌 결과는 아예 집계에서 뺀다 — 승률 분모는 물론 평균 득실·점유율·
-        # 평점까지, 실제로 안 치러진 경기가 끌어내리지 않게.
+        # 몰수승/몰수패도 승패로 친다(내 쪽 "오류"로 남은 몰수패는 parse_match 가 이미 "패"로 바꿨다 — 108 U1).
+        # 양쪽 다 "오류"(중단된 경기)처럼 승·무·패가 아닌 결과는 아예 집계에서 뺀다.
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
@@ -260,6 +310,12 @@ def summarize(matches: list[MatchSummary], mixed: bool | None = None) -> Stats:
         s.total += 1
         s.goals_for += m.my_goals
         s.goals_against += m.opp_goals
+        if m.blank:
+            # 한쪽 기록이 지워진 판 — 점유율·평점·경기당 득실에 0 이 섞이지 않게(108 J1 · U4)
+            s.blank += 1
+            s.blank_gf += m.my_goals
+            s.blank_ga += m.opp_goals
+            continue
         s.possession_sum += m.possession
         if m.rating > 0:
             s.rating_sum += m.rating
@@ -280,14 +336,19 @@ class OpponentStat(RateMixin):
     last_date: str = "-"
     mixed: bool | None = None
     opp_division: int | None = None   # 그 상대와의 가장 최근 경기 때 등급(화면 그림용 — 매번 바뀌는 값이라 최근 것)
+    blank: int = 0                    # 빈 판 — 평균 분모에서 뺀다(득실 합계 "a:b" 에는 든다 · 108 U4)
+    blank_gf: int = 0
+    blank_ga: int = 0
 
     @property
     def avg_goals_for(self) -> float:
-        return (self.goals_for / self.games) if self.games else 0.0
+        n = self.games - self.blank
+        return ((self.goals_for - self.blank_gf) / n) if n else 0.0
 
     @property
     def avg_goals_against(self) -> float:
-        return (self.goals_against / self.games) if self.games else 0.0
+        n = self.games - self.blank
+        return ((self.goals_against - self.blank_ga) / n) if n else 0.0
 
 
 def opponent_stats(matches: list[MatchSummary], mixed: bool | None = None) -> list[OpponentStat]:
@@ -313,6 +374,10 @@ def opponent_stats(matches: list[MatchSummary], mixed: bool | None = None) -> li
             s.lose += 1
         s.goals_for += m.my_goals
         s.goals_against += m.opp_goals
+        if m.blank:
+            s.blank += 1
+            s.blank_gf += m.my_goals
+            s.blank_ga += m.opp_goals
     return sorted(acc.values(), key=lambda s: -s.games)
 
 
@@ -406,6 +471,9 @@ class PeriodStat(RateMixin):
     goals_against: int = 0
     mixed: bool | None = None
     start: date | None = None   # 기간 첫날 — 일 단위 7일 이동 승률(core.moving_win_rate)이 날짜로 받는다
+    blank: int = 0              # 승·무·패로 센 판 중 빈 판 — 평균 분모에서 뺀다(108 U4)
+    blank_gf: int = 0
+    blank_ga: int = 0
 
     @property
     def games(self) -> int:
@@ -413,11 +481,13 @@ class PeriodStat(RateMixin):
 
     @property
     def avg_gf(self) -> float:
-        return self.goals_for / self.games if self.games else 0.0
+        n = self.games - self.blank
+        return (self.goals_for - self.blank_gf) / n if n else 0.0
 
     @property
     def avg_ga(self) -> float:
-        return self.goals_against / self.games if self.games else 0.0
+        n = self.games - self.blank
+        return (self.goals_against - self.blank_ga) / n if n else 0.0
 
 
 def period_stats(matches: list[MatchSummary], days: int = 7, mixed: bool | None = None) -> list[PeriodStat]:
@@ -451,14 +521,21 @@ def period_stats(matches: list[MatchSummary], days: int = 7, mixed: bool | None 
         s = acc.get(key)
         if s is None:
             s = acc[key] = PeriodStat(label=label, mixed=mixed, start=start)
+        counted = True
         if "승" in m.result:
             s.win += 1
         elif "무" in m.result:
             s.draw += 1
         elif "패" in m.result:
             s.lose += 1
+        else:
+            counted = False
         s.goals_for += m.my_goals
         s.goals_against += m.opp_goals
+        if m.blank and counted:   # games(분모)에 든 판만 — 승무패가 아닌 판은 원래 분모 밖이다
+            s.blank += 1
+            s.blank_gf += m.my_goals
+            s.blank_ga += m.opp_goals
     return [acc[k] for k in sorted(acc.keys(), reverse=True)]
 
 

@@ -25,7 +25,8 @@ import xg_grid
 import xgmodel
 # 등급 상수·판정은 models 에 있다(A6 의 draw_possible 이 써서) — 예전 이름 그대로 다시 내보낸다.
 from models import (CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, RateMixin,  # noqa: F401
-                    draw_possible_of, is_champion_or_above, is_mixed, rated, team_rating, win_pct)
+                    END_ABORT, END_FORFEIT_LOSE, END_FORFEIT_WIN, END_NORMAL, draw_possible_of, end_type,
+                    forfeit_loss, is_blank, is_champion_or_above, is_mixed, rated, result_of, team_rating, win_pct)
 
 SUB_POSITION = 28  # spposition 메타: 28=SUB(교체 명단)
 GK_POSITION = 0
@@ -123,7 +124,8 @@ def win_divisions(details: list, ouid: str) -> list[WinDivision]:
         me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ouid), None)
         if me is None:
             continue
-        result = (me.get("matchDetail") or {}).get("matchResult") or ""
+        opp = next((p for p in d.get("matchInfo") or [] if p.get("ouid") != ouid), None)
+        result = result_of(me, opp)
         outcome = "승" if "승" in result else "무" if "무" in result else "패" if "패" in result else None
         when = matchtime.parse(d.get("matchDate"))
         if outcome is None or when is None:
@@ -647,7 +649,7 @@ def formation_stats(details: list[dict], ouid: str,
         s.games += 1
         shapes[f][tuple(sorted(p["spPosition"] for p in players
                                if isinstance(p.get("spPosition"), int) and p["spPosition"] in PITCH_X))] += 1
-        res = _result_of(me)
+        res = result_of(me, opp)
         if "승" in res:
             s.win += 1
         elif "무" in res:
@@ -692,15 +694,7 @@ def _bump(wdl: list[int], res: str) -> None:
         wdl[2] += 1
 
 
-# matchEndType — 오픈API 문서(인용): 0 정상 · 1 몰수승 · 2 몰수패. 4 는 문서에 없고 실DB 에서
-# "오류" 결과에만 붙는다(55팀-경기, 2026-10-05 실측). 1·2 경기의 matchResult 는 "몰수승"이 아니라
-# 그냥 "승"·"패"라, 결과 문자열로는 몰수를 못 가린다(1.2.1 전 result_breakdown 의 몰수 줄이 늘 0이던 이유).
-END_NORMAL, END_FORFEIT_WIN, END_FORFEIT_LOSE, END_ABORT = 0, 1, 2, 4
-
-
-def _end_type(p: dict) -> int | None:
-    v = (p.get("matchDetail") or {}).get("matchEndType")
-    return v if isinstance(v, int) else None
+# matchEndType 상수·end_type·forfeit_loss 는 models 에 있다(108 — 승무패를 세는 result_of 가 같이 쓴다).
 
 
 def end_kind(me: dict, opp: dict) -> str:
@@ -708,13 +702,13 @@ def end_kind(me: dict, opp: dict) -> str:
 
     내가 4(오류)이고 상대가 1(몰수승)이면 실제로는 몰수패다 — 내 쪽 기록은 "오류"로 남는다
     (픽스처 0004 가 이 짝, 실DB 에서 1 이 2 보다 많은 것과 맞는다)."""
-    mine, theirs = _end_type(me), _end_type(opp or {})
+    mine = end_type(me)
     if mine == END_FORFEIT_WIN:
         return "몰수승"
     if mine == END_FORFEIT_LOSE:
         return "몰수패"
     if mine == END_ABORT:
-        return "몰수패" if theirs == END_FORFEIT_WIN else "중단"
+        return "몰수패" if forfeit_loss(me, opp) else "중단"
     return "정상"
 
 
@@ -731,7 +725,7 @@ def result_breakdown(details: list[dict], ouid: str, mixed: bool | None = None) 
         op_shoot = opp.get("shoot") or {}
 
         # 몰수는 결과 문자열이 아니라 종료 유형으로 센다 — 내 쪽이 "오류"인 몰수패도 패로 들어간다.
-        # 그래서 이 패널 합계는 승률 분모(오류 제외)보다 그만큼 클 수 있다(의도).
+        # 108 부터 승률 분모도 그 판을 패로 센다(models.result_of) — 이 패널 합계와 승률 분모가 같다.
         kind = end_kind(me, opp)
         if kind == "몰수승":
             rb.forfeit[0] += 1
@@ -851,6 +845,8 @@ def discipline_stats(details: list[dict], ouid: str, mixed: bool | None = None) 
         if me is None:
             continue
         out.end_kinds[end_kind(me, opp)] += 1
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
+            continue
         w = _wdl_of(_result_of(me))
         if w is None:
             continue
@@ -931,6 +927,8 @@ def clutch_summary(details: list[dict], ouid: str, mixed: bool | None = None) ->
         me, opp = _me_opp(d, ouid)
         if me is None:
             continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
+            continue
         if not (_timeline_matches_board(me) and _timeline_matches_board(opp)):
             cs.unreplayable += 1
             continue
@@ -992,6 +990,8 @@ def goal_minute_buckets(details: list[dict], ouid: str) -> list[MinuteBucket]:
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None:
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
             continue
         for period, sec in _goal_events(me):
             place(period, sec).scored += 1
@@ -1142,6 +1142,9 @@ class DivisionStat(RateMixin):
     goals_for: int = 0
     goals_against: int = 0
     mixed: bool | None = None
+    blank: int = 0              # 빈 판(models.is_blank) — 평균 분모에서 뺀다(108 U4)
+    blank_gf: int = 0
+    blank_ga: int = 0
 
     @property
     def games(self) -> int:
@@ -1149,11 +1152,13 @@ class DivisionStat(RateMixin):
 
     @property
     def avg_gf(self) -> float:
-        return self.goals_for / self.games if self.games else 0.0
+        n = self.games - self.blank
+        return (self.goals_for - self.blank_gf) / n if n else 0.0
 
     @property
     def avg_ga(self) -> float:
-        return self.goals_against / self.games if self.games else 0.0
+        n = self.games - self.blank
+        return (self.goals_against - self.blank_ga) / n if n else 0.0
 
 
 def division_stats(details: list[dict], ouid: str,
@@ -1169,7 +1174,7 @@ def division_stats(details: list[dict], ouid: str,
         me, opp = _me_opp(d, ouid)
         if me is None:
             continue
-        wdl = _wdl_of(_result_of(me))
+        wdl = _wdl_of(result_of(me, opp))
         if wdl is None:
             continue
         flags.append(draw_possible_of(d, ouid))
@@ -1188,8 +1193,14 @@ def division_stats(details: list[dict], ouid: str,
             s.draw += 1
         else:
             s.lose += 1
-        s.goals_for += int(_num(me.get("shoot") or {}, "goalTotal"))
-        s.goals_against += int(_num(opp.get("shoot") or {}, "goalTotal"))
+        gf = int(_num(me.get("shoot") or {}, "goalTotal"))
+        ga = int(_num(opp.get("shoot") or {}, "goalTotal"))
+        s.goals_for += gf
+        s.goals_against += ga
+        if is_blank(me, opp):   # 평균 분모에서 뺀다 — 합계에는 든다(108 U4)
+            s.blank += 1
+            s.blank_gf += gf
+            s.blank_ga += ga
     _set_mixed(acc.values(), flags, mixed)
     return [acc[k] for k in sorted(acc.keys())]
 
@@ -1234,6 +1245,8 @@ def possession_stats(details: list[dict], ouid: str, mixed: bool | None = None) 
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None:
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
             continue
         wdl = _wdl_of(_result_of(me))
         if wdl is None:
@@ -1545,6 +1558,8 @@ def shot_summary(details: list[dict], ouid: str) -> ShotSummary:
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None or not opp or _wdl_of(_result_of(me)) is None or end_kind(me, opp) != "정상":
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
             continue
         out.games += 1
         for p, side in ((me, out.mine), (opp, out.opp)):
@@ -1989,7 +2004,7 @@ def opponent_cards(details: list[dict], ouid: str, nicknames: set[str] | None = 
         if nicknames is not None and (opp.get("nickname") or "-") not in nicknames:
             continue
         flags.append(draw_possible_of(d, ouid))
-        res = _result_of(me)
+        res = result_of(me, opp)
         k = 0 if "승" in res else 1 if "무" in res else 2 if "패" in res else None
         seen: set[tuple[int, int]] = set()
         for p in opp.get("player") or []:
@@ -2085,6 +2100,8 @@ def team_profile(details: list[dict], ouid: str) -> TeamProfile:
         me, opp = _me_opp(d, ouid)
         if me is None or _wdl_of(_result_of(me)) is None:
             continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
+            continue
         games += 1
         for side, p in (("mine", me), ("opp", opp)):
             shoot = p.get("shoot") or {}
@@ -2172,6 +2189,8 @@ def versus_profile(details: list[dict], ouid: str) -> VersusProfile:
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None or not opp or _wdl_of(_result_of(me)) is None or end_kind(me, opp) != "정상":
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
             continue
         games += 1
         for side, p in (("mine", me), ("opp", opp)):
@@ -2461,8 +2480,10 @@ def pass_style(details: list[dict], ouid: str) -> PassStyle:
     """내 패스 종류 6가지의 비중·성공률 — 전체와 이긴/진 경기. 승·무·패가 아닌 경기와 종류 필드가 없는 경기는 뺀다."""
     style = PassStyle(PassGroup("전체"), PassGroup("이긴 경기"), PassGroup("진 경기"))
     for d in details:
-        me, _ = _me_opp(d, ouid)
+        me, opp = _me_opp(d, ouid)
         if me is None:
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
             continue
         wdl = _wdl_of(_result_of(me))
         if wdl is None:
@@ -2612,6 +2633,8 @@ def _per_match(details: list[dict], ouid: str) -> dict[str, list[float]]:
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None or _wdl_of(_result_of(me)) is None:
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판 — 평균·짝 비교에 0 이 섞이지 않게(108 J1)
             continue
         for name, _, fn in COMPARE_FEATURES:
             v = fn(me, opp)

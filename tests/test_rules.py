@@ -830,6 +830,92 @@ def temp_sorts(seen: dict[str, set[str]]) -> tuple[list[str], int]:
     return bad, n
 
 
+# ── 경기 결과 원문 길(108 A) ──────────────────────────────────────────────────
+# 승·무·패를 **세는** 자리는 models.result_of(내 쪽 "오류" + 상대 몰수승 = 패), 경기 **내용**으로 평균·짝 비교를 내는 자리는
+# 빈 판(models.is_blank)을 건너뛴다. 원문을 읽는 함수가 새로 생기면 어느 쪽인지 표에 적게 한다 — 빠뜨리면 몰수패가
+# 한 화면만 "오류"로 빠지거나 지워진 0 이 평균에 섞이는데, 둘 다 예외 없이 숫자만 조용히 틀어진다.
+RESULT_FILES = ("*.py",)
+RESULT_SKIP_FILES = {"demodata.py", "check_api.py"}   # 지어낸 자료 · 터미널 점검 출력(골든이 따로 본다)
+RESULT_READ = re.compile(r"(?<![\w.])(?:_me_opp|_result_of|_wdl_of|result_of)\(|models\.result_of\(|\"matchResult\"")
+RESULT_COUNT_CALL = re.compile(r"(?<![\w.])result_of\(|models\.result_of\(")
+RESULT_RAW = re.compile(r"(?<![\w.])_result_of\(|\"matchResult\"")
+RESULT_BLANK = re.compile(r"(?<![\w.])is_blank\(|models\.is_blank\(|\.blank\b")
+RESULT_HELPERS = {"models.result_of", "stats._me_opp", "stats._result_of", "stats._wdl_of"}   # 원문을 읽는 것이 일
+C, N, D, A = "count", "content", "dist", "asis"
+RESULT_PATHS = {   # 함수 → 처리 묶음 · 이유는 ROADMAP 108 A 표
+    "models.parse_match": {C, N},          # result·blank·no_squad 를 채운다 — MatchSummary 길 전부가 여기서
+    "stats.win_divisions": {C},            # 달력·운 범위·FC — summarize 와 같은 날별 승무패
+    "stats.division_stats": {C, N},
+    "records._games": {C, N},              # 점수를 쓰는 업적은 빈 판을 건너뛴다(M1)
+    "squad_timeline._Games.__init__": {C},  # 창은 득실 합계만 — 평균 분모가 없다
+    "stats.formation_stats": {C},
+    "stats.opponent_cards": {C},
+    "stats.team_profile": {N}, "stats.versus_profile": {N}, "stats.discipline_stats": {N}, "stats.pass_style": {N},
+    "stats._per_match": {N}, "stats.clutch_summary": {N}, "stats.goal_minute_buckets": {N},
+    "stats.possession_stats": {N}, "stats.shot_summary": {N},
+    "habits.goal_flow": {N}, "habits.half_share_diff": {N}, "habits.side_totals": {N}, "habits.attack_routes": {N},
+    "habits.pos_diff": {D},                # 구단주 분포와 같은 108 전 기준(J2 · F16)
+    # 선수·슛 한 줄씩이 재료이거나 한 경기 화면 — 빈 쪽은 낼 것이 없다
+    **{k: {A} for k in (
+        "stats.trade_hint", "stats.own_squad", "stats.opponent_squad", "stats.aggregate_players",
+        "stats.result_breakdown", "stats.shootout_keepers", "stats.shot_map", "stats.shot_type_counts",
+        "stats.player_finishing_trend", "stats.finishing_ranking", "stats._opp_scope", "stats.key_players",
+        "stats.match_sides", "stats.match_versus", "stats.latest_match_with", "stats.match_goals", "stats.match_shots",
+        "stats.match_mvp", "stats.rating_trend", "stats.recent_ratings", "stats._my_pair_sums", "records.day_player",
+        "sessions.top_scorer", "squad_timeline._lineups",
+        "stats.after_streak_rates", "stats.team_color_baseline")},   # 끝 둘은 MatchSummary.result(이미 result_of)를 _wdl_of 로
+}
+del C, N, D, A
+
+
+def _qual_funcs(tree) -> list[tuple[str, ast.AST]]:
+    out = []
+
+    def walk(node, prefix):
+        for ch in ast.iter_child_nodes(node):
+            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.append((prefix + ch.name, ch))
+                walk(ch, prefix + ch.name + ".")
+            elif isinstance(ch, ast.ClassDef):
+                walk(ch, prefix + ch.name + ".")
+            else:
+                walk(ch, prefix)
+    walk(tree, "")
+    return out
+
+
+def result_readers(srcs: dict[str, str]) -> dict[str, str]:
+    """{모듈.함수: 몸통} — 경기 결과 원문(또는 그 도우미)을 읽는 함수. 안쪽 함수는 바깥 몸통에도 든다."""
+    out = {}
+    for rel, src in srcs.items():
+        if rel in RESULT_SKIP_FILES or "/" in rel:
+            continue
+        lines = src.splitlines()
+        for q, f in _qual_funcs(ast.parse(src)):
+            body = "\n".join(lines[f.lineno - 1:f.end_lineno])
+            if RESULT_READ.search(body):
+                out[f"{rel[:-3]}.{q}"] = body
+    return out
+
+
+def check_result_paths(srcs: dict[str, str], table: dict = RESULT_PATHS) -> list[str]:
+    out = []
+    found = result_readers(srcs)
+    for name, body in sorted(found.items()):
+        if name in RESULT_HELPERS:
+            continue
+        kinds = table.get(name)
+        if kinds is None:
+            out.append(f"{name}: 경기 결과 원문을 읽는데 RESULT_PATHS 에 없다 — 세는 자리면 result_of · 평균이면 is_blank")
+            continue
+        if "count" in kinds and (not RESULT_COUNT_CALL.search(body) or RESULT_RAW.search(body)):
+            out.append(f"{name}: 승무패를 세는 자리인데 models.result_of 를 안 쓰거나 원문(_result_of·matchResult)을 읽는다")
+        if "content" in kinds and not RESULT_BLANK.search(body):
+            out.append(f"{name}: 평균·짝 비교 자리인데 빈 판(is_blank·.blank)을 안 거른다")
+    out += [f"{name}: RESULT_PATHS 에 있는데 원문을 안 읽는다(지운 줄)" for name in sorted(set(table) - set(found))]
+    return out
+
+
 # ── 테스트 ───────────────────────────────────────────────────────────────────
 
 def _all(files) -> dict[str, str]:
@@ -1120,6 +1206,28 @@ def check_glossary_dups(srcs: dict[str, str], terms: dict[str, tuple[str, str]])
                 if text in s:
                     out.append(f"{name}:{ln} 용어 '{key}' 의 정의 문장을 다시 썼다 — glossary.tip('{key}') 로")
     return out
+
+
+def test_result_paths_count_with_result_of_and_skip_blanks_108():
+    srcs = _all([p for g in RESULT_FILES for p in sorted(ROOT.glob(g))])
+    assert len(result_readers(srcs)) >= 50, f"뽑힌 함수가 {len(result_readers(srcs))}개 — 검사가 비었다(108 계획 표는 47 + 도우미 4)"
+    bad = check_result_paths(srcs)
+    assert bad == [], "\n".join(bad)
+    # 위반을 심은 가짜 소스 넷 — 빈 검사 방지
+    t = {"x.cnt": {"count"}, "x.cnt2": {"count"}, "x.avg": {"content"}}
+    planted = {"x.py": (
+        "def new_one(d, o):\n    me, opp = _me_opp(d, o)\n"                                    # 표 밖
+        "def cnt(d, o):\n    me, opp = _me_opp(d, o)\n    return me['matchDetail']['matchResult']\n"   # 세는데 원문
+        "def cnt2(d, o):\n    me, opp = _me_opp(d, o)\n    return _result_of(me)\n"           # 세는데 _result_of 만
+        "def avg(d, o):\n    me, opp = _me_opp(d, o)\n    return result_of(me, opp)\n")}       # 평균인데 is_blank 없음
+    planted["x.py"] = planted["x.py"].replace("['matchResult']", ".get(\"matchResult\")")
+    got = check_result_paths(planted, t)
+    assert len(got) == 4 and all(any(n in g for g in got) for n in ("new_one", "cnt:", "cnt2", "avg")), got
+    ok = {"x.py": "def cnt(d, o):\n    me, opp = _me_opp(d, o)\n    return models.result_of(me, opp)\n"
+                  "def avg(d, o):\n    me, opp = _me_opp(d, o)\n    if is_blank(me, opp):\n        return\n"}
+    assert check_result_paths(ok, {"x.cnt": {"count"}, "x.avg": {"content"}}) == []
+    # 지운 함수가 표에 남으면 FAIL — 남겨 두면 그 이름으로 다시 생겨도 검사 없이 통과한다
+    assert any("gone" in g for g in check_result_paths(ok, {"x.cnt": {"count"}, "x.avg": {"content"}, "x.gone": {"asis"}}))
 
 
 def test_glossary_definitions_live_in_one_place():

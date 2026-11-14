@@ -5,7 +5,7 @@
 |---|---|---|
 | `division_stays(points, name_of)` | [성적 진단 › 등급 체류](N2) | 재료는 `stats.division_trend` — (일시, division) 오래된 것부터 |
 | `division_runs(points, since)` | [승률 그래프 › 등급] 등급 계단(66 G1) | 같은 재료 · 같은 등급이 이어진 구간 하나가 그림의 가로 한 칸 |
-| `side_totals(details, ouid)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 |
+| `side_totals(details, ouid, keep_blank=False)` | (N4 기준선 — N19 칩 · A1 · N17 이 쓴다) | 나 / 같은 경기 상대의 경기마다 값 · 승·무·패 경기만 · 빈 판(108 J1)은 뺀다 — `keep_blank` 는 구단주 분포 길만(J2) |
 | `paired_diff(rows, metric)` | 〃 | 지표 하나의 나 − 상대 차와 95% 구간(경기 단위 짝) · 지표 이름은 `METRICS` |
 | `pos_diff(detail, ouid)` · `PosTotals` | (C4 자리별 수준 — 50단계 · 구단주 분포 바퀴가 `pos_json` 으로) | 칸(`config.C4_CELLS`)마다 같은 줄 선수 한 명 평균의 나 − 상대 |
 | `pos_level(pos_dist, details_all, ouid)` | [성적 진단 › 자리별 수준](C4) | 내 최신 1000판 칸별 지수 → 분포 백분위 · 5단계 또는 보류 — 실측 0.06~0.08초라 화면 스레드 + 캐시(`app_main._render_poslevel` · `_dist_basis` 와 같은 꼴) |
@@ -44,7 +44,8 @@ from datetime import date, datetime, timedelta
 
 import config
 import matchtime
-from models import MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_mixed, is_weak, rated, win_pct
+from models import (MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_blank, is_mixed, is_weak, rated,
+                    win_pct)
 from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, WinDivision, _goal_events, _me_opp, _num, _played, _result_of,
                    _set_mixed, _timeline_matches_board, _wdl_of, formation_of, position_line, win_rewards)
 
@@ -174,8 +175,10 @@ def _side_values(p: dict) -> dict:
     }
 
 
-def side_totals(details: list[dict], ouid: str) -> SideTotals:
-    """같은 경기들의 나 / 상대 값 — 승·무·패가 아닌 경기("오류")와 상대가 없는 경기는 뺀다(team_profile 과 같은 기준)."""
+def side_totals(details: list[dict], ouid: str, keep_blank: bool = False) -> SideTotals:
+    """같은 경기들의 나 / 상대 값 — 승·무·패가 아닌 경기("오류")와 상대가 없는 경기는 뺀다(team_profile 과 같은 기준).
+    한쪽 선수 기록이 빈 판(models.is_blank)도 뺀다(108 J1). keep_blank 는 구단주 분포 길만 — 저장된 분포가
+    108 전 기준이라 내 값도 같은 기준이어야 백분위가 맞는다(108 J2 · F16)."""
     out = SideTotals()
     for d in details:
         me, opp = _me_opp(d, ouid)
@@ -183,6 +186,8 @@ def side_totals(details: list[dict], ouid: str) -> SideTotals:
             continue
         res = _wdl_of(_result_of(me))
         if res is None:
+            continue
+        if not keep_blank and is_blank(me, opp):
             continue
         out.rows.append(SideRow(d.get("matchId") or "", res, _side_values(me), _side_values(opp)))
     return out
@@ -434,7 +439,7 @@ def dist_basis(dist, details_all: list[dict], ouid: str) -> DistBasis | None:
     mine = [d for d in details_all if d.get("matchType") == config.DEFAULT_MATCH_TYPE][:config.OWNER_DIST_MATCHES]
     if len(mine) < config.OWNER_DIST_MATCHES:
         return None
-    return DistBasis(dist, side_totals(mine, ouid))
+    return DistBasis(dist, side_totals(mine, ouid, keep_blank=True))   # 분포와 같은 기준(108 J2)
 
 
 def dist_side(dist, key: str, d: Diff) -> tuple[int, float | None]:
@@ -543,6 +548,8 @@ def half_share_diff(details: list[dict], ouid: str) -> Diff:
         res = _wdl_of(_result_of(me))
         if res is None:
             continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판(108 J1)
+            continue
         mine_in = [g for g in _goal_events(opp) if g[0] < 2]    # 내가 먹은 골 = 상대 골
         opp_in = [g for g in _goal_events(me) if g[0] < 2]      # 상대가 먹은 골 = 내 골
         rows.append(SideRow(d.get("matchId") or "", res,
@@ -612,6 +619,8 @@ def goal_flow(details: list[dict], ouid: str, mixed: bool | None = None) -> Goal
             continue
         res = _wdl_of(_result_of(me))
         if res is None:
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판(108 J1)
             continue
         if not (_timeline_matches_board(me) and _timeline_matches_board(opp)):
             gf.unreplayable += 1
@@ -752,6 +761,8 @@ def attack_routes(details: list[dict], ouid: str) -> AttackRoutes:
             continue
         res = _wdl_of(_result_of(me))
         if res is None:
+            continue
+        if is_blank(me, opp):   # 한쪽 기록이 지워진 판(108 J1)
             continue
         out.games += 1
         mc, oc = _route_counts(me), _route_counts(opp)

@@ -25,7 +25,8 @@ from datetime import date, datetime, timedelta
 
 import config
 import matchtime
-from models import CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, current_streak, opponent_stats
+from models import (CHAMPION_DIVISION_ID, SUPER_CHAMPION_DIVISION_ID, current_streak, is_blank, opponent_stats,
+                    result_of)
 from stats import _me_opp, _num, _played, match_goals
 
 
@@ -73,6 +74,7 @@ class _Game:
     ga: int
     division: int | None
     detail: dict
+    blank: bool = False   # 한쪽 기록이 빈 판(models.is_blank) — 점수를 쓰는 업적은 건너뛴다(108 M1)
 
 
 def _games(details: list[dict], ouid: str) -> list[_Game]:
@@ -85,7 +87,7 @@ def _games(details: list[dict], ouid: str) -> list[_Game]:
         me, opp = _me_opp(d, ouid)
         if me is None:
             continue
-        result = (me.get("matchDetail") or {}).get("matchResult") or ""
+        result = result_of(me, opp)
         outcome = "승" if "승" in result else "무" if "무" in result else "패" if "패" in result else None
         when = matchtime.parse(d.get("matchDate"))
         if outcome is None or when is None:
@@ -95,7 +97,7 @@ def _games(details: list[dict], ouid: str) -> list[_Game]:
         div = me.get("division")
         out.append(_Game(when, d.get("matchId"), outcome, "몰수" in result,
                          gf if isinstance(gf, int) else 0, ga if isinstance(ga, int) else 0,
-                         div if isinstance(div, int) else None, d))
+                         div if isinstance(div, int) else None, d, is_blank(me, opp)))
     out.sort(key=lambda g: g.when)
     return out
 
@@ -136,12 +138,14 @@ def achievements(details: list[dict], ouid: str, *, seasons=(), current_start: d
         played += 1
         if g.outcome == "승":
             won += 1
-            if g.gf >= config.RECORD_BIG_WIN_GOALS:
+            if not g.blank and g.gf >= config.RECORD_BIG_WIN_GOALS:
                 add("bigwin", g, note=f"{g.gf} : {g.ga}")
         if played in config.RECORD_MILESTONES:
             add(f"games{played}", g)
         if g.outcome == "승" and won in config.RECORD_MILESTONES:
             add(f"wins{won}", g)
+        if g.blank:   # 점수가 한쪽만 남은 판 — 무실점 연속을 잇지도 끊지도 않는다(108 M1)
+            continue
         clean = clean + 1 if g.ga == 0 else 0
         if clean == config.RECORD_CLEAN_RUN:
             add("clean", g)
@@ -254,7 +258,7 @@ def rival(matches: list) -> Rival | None:
     dates = [m.match_date for m in theirs if m.match_date is not None]
     best = worst = None
     for m in theirs:
-        if "몰수" in m.result:
+        if "몰수" in m.result or m.blank:   # 빈 판은 점수가 한쪽만 남았다(108 M1)
             continue
         d = m.my_goals - m.opp_goals
         if "승" in m.result and d > 0 and (best is None or d > best[0] - best[1]):

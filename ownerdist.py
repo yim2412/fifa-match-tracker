@@ -459,7 +459,7 @@ def _fetch_owner(gate: _Gate, api_for_thread, t: Target, pool: ThreadPoolExecuto
     def one(mid: str):
         try:
             d = gate.call(lambda: api_for_thread().get_match_detail_nocache(mid))
-            rows = habits.side_totals([d], ouid).rows   # 상세 원본은 여기서 버린다 — 요약 재료(SideRow · C4 칸 값)만 남는다
+            rows = habits.side_totals([d], ouid, keep_blank=True).rows   # 상세 원본은 여기서 버린다 — 요약 재료(SideRow · C4 칸 값)만 남는다
             pos = None
             if v2:
                 try:

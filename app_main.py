@@ -99,8 +99,8 @@ from widgets import (
 
 PAGE_SIZE = config.MAX_MATCH_LIMIT  # API 가 한 번에 주는 최대치(100)
 # 1.2.1 에서 몰수 판정을 종료 유형으로 바꿨다 — 업데이트한 사람이 "정상 종료 수가 왜 줄었나"를 여기서 본다.
-FORFEIT_TIP = ("넥슨 경기 종료 유형으로 셉니다. 상대나 내가 나가서 끝난 경기.\n"
-               "내 쪽 기록이 '오류'로 남은 몰수패도 포함해서, 승률 계산에는 아직 안 들어간 경기가 있습니다.")
+FORFEIT_TIP = ("넥슨 경기 종료 유형으로 셉니다. 상대나 내가 나가서 끝난 경기입니다.\n"
+               "내 쪽 기록이 '오류'로 남은 몰수패도 승률에서 패로 셉니다.")
 # 2.9.1 에서 xG 를 격자 표로 바꿨다 — 지난 경기 값도 한꺼번에 바뀌므로 xG 를 보여 주는 자리에 같이 적는다(43 B[중]3)
 XG_METHOD_NOTE = "xG는 넥슨이 주지 않는 추정치 · 2.9.1부터 실제 경기 슛으로 세운 표로 계산(지난 경기 값도 바뀜)"
 # 새 경기 상세를 동시에 몇 개 받나. 2026-10-04 서비스 키 실측(250건씩): 6 → 초당 27~30건, 12 → 55,
@@ -14874,7 +14874,7 @@ class MainWindow(QMainWindow):
             it.setData(SPARK_ROLE, vals)
             line = f"최근 {len(vals)}경기 평점: " + " → ".join(f"{v:.1f}" for v in vals)
             it.setToolTip(f"{it.toolTip()}\n{line}" if it.toolTip() else line)
-        res = [m.result for m in self._slice()[0]]
+        res = [m.result for m in self._slice()[0] if not m.no_squad]   # 선수별 승률과 같은 판 — 내 선수가 있는 경기(108 M4)
         team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
         for r, p in enumerate(players):
             for c, kind, v in ((5, "atk", p.attack_power), (6, "def", p.defense_power)):

@@ -58,7 +58,7 @@ def test_parse_match():
         "aaaaaaaaaaaaaaaaaaaa0001": (1, 2, "패", 46, 2),
         "aaaaaaaaaaaaaaaaaaaa0002": (4, 3, "승", 53, 8),
         "aaaaaaaaaaaaaaaaaaaa0003": (1, 1, "무", 58, 7),
-        "aaaaaaaaaaaaaaaaaaaa0004": (0, 5, "오류", 0, 0),
+        "aaaaaaaaaaaaaaaaaaaa0004": (0, 5, "패", 0, 0),    # 내 "오류" + 상대 몰수승 = 몰수패(108 U1)
     }
     for mid, (gf, ga, res, poss, shoot) in expect.items():
         ms = models.parse_match(by_id[mid], ouid)
@@ -72,10 +72,13 @@ def test_parse_match():
 def test_summarize():
     ouid, _, details = _load()
     s = models.summarize([models.parse_match(d, ouid) for d in details])
-    # 4경기 중 하나는 "오류"(중단) — 집계에서 빠져 total=3, 그 0:5 실점도 제외.
-    assert (s.total, s.win, s.draw, s.lose) == (3, 1, 1, 1), \
+    # 0004 는 내 쪽 "오류" + 상대 몰수승 = 몰수패(108 U1) — 패로 세고 0:5 도 득실 합계에(U7).
+    # 내 선수 기록이 빈 판이라 경기당 평균에서는 뺀다(U4) — 평균 득점 6/3 · 평균 실점 6/3(빼지 않으면 6/4 · 11/4).
+    assert (s.total, s.win, s.draw, s.lose) == (4, 1, 1, 2), \
         (s.total, s.win, s.draw, s.lose)
-    assert (s.goals_for, s.goals_against) == (6, 6), (s.goals_for, s.goals_against)
+    assert (s.goals_for, s.goals_against) == (6, 11), (s.goals_for, s.goals_against)
+    assert (s.blank, s.avg_goals_for, s.avg_goals_against) == (1, 2.0, 2.0), (s.blank, s.avg_goals_for, s.avg_goals_against)
+    assert round(s.avg_possession, 3) == round((46 + 53 + 58) / 3, 3), s.avg_possession
 
 
 def test_team_rating_excludes_bench_80():
@@ -100,7 +103,7 @@ def test_team_rating_excludes_bench_80():
     # 평점 없는 판(몰수)은 평균을 끌어내리지 않는다 — 전체로 나누면 3.0 이다
     forfeit = {"ouid": "me", "nickname": "나", "matchDetail": {"matchResult": "몰수패"}}
     assert st._per_match([{"matchInfo": [forfeit, other]}], "me")["평균 평점"] == []
-    games = [models.parse_match({"matchInfo": [x]}, "me") for x in (raw, forfeit)]
+    games = [models.parse_match({"matchInfo": [x, other]}, "me") for x in (raw, forfeit)]   # 상대가 없으면 빈 판(108 J1)
     s = models.summarize(games)
     assert s.total == 2 and s.avg_rating == 6.0, (s.total, s.avg_rating)
     assert models.summarize(games[1:]).avg_rating == 0.0
@@ -296,9 +299,9 @@ def test_shot_summary():
     def shot(r, x=0.9, y=0.5, t=1):
         return {"x": x, "y": y, "result": r, "type": t}
 
-    def game(mid, res, gf, ga, mine=(), theirs=(), players=(), my_end=0):
+    def game(mid, res, gf, ga, mine=(), theirs=(), players=None, my_end=0):
         me = {"matchDetail": {"matchResult": res, "matchEndType": my_end}, "shoot": {"goalTotal": gf},
-              "shootDetail": list(mine), "player": list(players)}
+              "shootDetail": list(mine), **({} if players is None else {"player": list(players)})}
         return _detail_game(mid, me=me, opp={"shoot": {"goalTotal": ga}, "shootDetail": list(theirs)})
 
     def pl(sp, goal=0, assist=0, grade=1, pos=25):
@@ -355,12 +358,12 @@ def test_result_breakdown_counts_forfeit_by_end_type():
 
 
 def test_result_breakdown_counts_error_side_forfeit():
-    # 몰수패가 내 쪽 "오류"로 남으면 경기 결과 패널엔 패로, 승률 분모(summarize)엔 없다 — 의도된 차이.
+    # 몰수패가 내 쪽 "오류"로 남아도 경기 결과 패널과 승률 분모(summarize)가 같이 패로 센다(108 U1 — 그 전엔 4 대 3).
     ouid, _, details = _load()
     rb = st.result_breakdown(details, ouid)
     panel = sum(rb.normal) + sum(rb.extra) + sum(rb.shootout) + sum(rb.forfeit)
     ms = [models.parse_match(d, ouid) for d in details]
-    assert (panel, models.summarize(ms).total) == (4, 3), (panel, models.summarize(ms).total)
+    assert (panel, models.summarize(ms).total) == (4, 4), (panel, models.summarize(ms).total)
 
 
 def test_discipline_stats_fixture_golden():
@@ -435,12 +438,14 @@ def test_division_stats():
     ouid, _, details = _load()
     ds = st.division_stats(details, ouid)
     by = {s.division_id: s for s in ds}
-    # 상대 900 두 경기(승·패), 상대 1000 한 경기(무). "오류"(상대 900)는 승/무/패가
-    # 아니라 제외 → 총 3경기.
-    assert by[900].games == 2 and [by[900].win, by[900].draw, by[900].lose] == [1, 0, 1]
-    assert (by[900].goals_for, by[900].goals_against) == (5, 5)
+    # 상대 900 세 경기(승·패 + 0004 몰수패), 상대 1000 한 경기(무). 0004 는 내 "오류" + 상대 몰수승이라
+    # 패로 센다(108 U1 — 상대 쪽 division 900 이 남아 있어 900 줄에 든다 · M12) → 총 4경기.
+    # 0004 는 내 선수 기록이 빈 판이라 득실 합계에는 들고(0:5) 평균에서는 빠진다(U4).
+    assert by[900].games == 3 and [by[900].win, by[900].draw, by[900].lose] == [1, 0, 2]
+    assert (by[900].goals_for, by[900].goals_against) == (5, 10)
+    assert (by[900].blank, by[900].avg_gf, by[900].avg_ga) == (1, 2.5, 2.5), (by[900].blank, by[900].avg_gf, by[900].avg_ga)
     assert [by[1000].win, by[1000].draw, by[1000].lose] == [0, 1, 0]
-    assert sum(s.games for s in ds) == 3, sum(s.games for s in ds)
+    assert sum(s.games for s in ds) == 4, sum(s.games for s in ds)
 
 
 def test_possession_stats():
@@ -1044,18 +1049,21 @@ def _p(sp, pos, **status):
     return {"spId": sp, "spPosition": pos, "spGrade": 1, "status": status}
 
 
-def _d(day, res, me_players=(), opp_players=(), opp="상대", me_shots=(), opp_shots=(),
+def _d(day, res, me_players=None, opp_players=None, opp="상대", me_shots=(), opp_shots=(),
        division=None, hour=12, possession=50):
-    """합성 경기 상세 — 내 ouid 는 'me'. res 는 내 결과."""
+    """합성 경기 상세 — 내 ouid 는 'me'. res 는 내 결과.
+    선수를 안 주면 "player" 키를 안 둔다 — 빈 목록(넥슨이 지운 쪽)은 빈 판이라 평균에서 빠진다(108 J1)."""
+    mp = {} if me_players is None else {"player": list(me_players)}
+    op = {} if opp_players is None else {"player": list(opp_players)}
     when = datetime(2026, 9, day, hour) if day <= 30 else datetime(2026, 10, day - 30, hour)
     opp_res = {"승": "패", "패": "승"}.get(res, res)
     return {"matchId": f"m{day}-{hour}-{opp}", "matchDate": when.isoformat(),
             "matchInfo": [
                 {"ouid": "me", "nickname": "나", "division": division,
                  "matchDetail": {"matchResult": res, "possession": possession},
-                 "player": list(me_players), "shootDetail": list(me_shots)},
+                 **mp, "shootDetail": list(me_shots)},
                 {"ouid": "o", "nickname": opp, "matchDetail": {"matchResult": opp_res},
-                 "player": list(opp_players), "shootDetail": list(opp_shots)}]}
+                 **op, "shootDetail": list(opp_shots)}]}
 
 
 def test_champion_boundary_and_division_trend_skips_missing():
@@ -2543,11 +2551,13 @@ def test_every_rate_aggregate_fills_mixed():
         assert all(type(r).__name__ == name for r in rows), name
         assert all(r.mixed is True for r in rows), (name, [r.mixed for r in rows])
     # 주면 그대로 — 섞인 범위여도 False 를 받으면 승÷전체
+    # 0004 몰수패가 패로 들어와 1승 1무 2패(108 U1 — 그 전엔 1승 1무 1패라 33.3 · 50.0)
     s = models.summarize(ms, False)
-    assert s.mixed is False and round(s.win_rate, 1) == 33.3, s.win_rate
-    assert models.summarize(ms).win_rate == 50.0
+    assert s.mixed is False and s.win_rate == 25.0, s.win_rate
+    assert round(models.summarize(ms).win_rate, 1) == 33.3, models.summarize(ms).win_rate
     assert all(r.mixed is False for r in st.division_stats(details, ouid, mixed=False))
-    assert st.team_color_baseline(ms, lambda n: "X" if n else None) == (2, 50.0)
+    n, rate = st.team_color_baseline(ms, lambda n: "X" if n else None)
+    assert (n, round(rate, 1)) == (3, 33.3), (n, rate)   # 섞임 식 승÷(승+패) — 0004 몰수패까지 1승 2패
 
 
 
@@ -2654,6 +2664,156 @@ def test_match_dates_bound_is_kst():
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ── 108 A 몰수패를 패로 · 빈 판을 평균에서 ──────────────────────────────────────
+
+def test_forfeit_loss_counts_everywhere_108():
+    """픽스처 0004(내 "오류" + 상대 몰수승)가 승무패를 세는 일곱 길에서 똑같이 패다."""
+    import records
+    import squad_timeline as tl
+    ouid, _, details = _load()
+    f1 = next(d for d in details if d["matchId"].endswith("0004"))
+    me, opp = st._me_opp(f1, ouid)
+    # 보호가 없을 때 — 원문으로 세면 이 판은 "오류"라 패가 하나 적다(1). 아래 일곱 길이 전부 2 여야 한다
+    raw_lose = sum("패" in st._result_of(st._me_opp(d, ouid)[0]) for d in details)
+    assert raw_lose == 1 and models.forfeit_loss(me, opp) and opp.get("division") is not None, raw_lose
+    ms = [models.parse_match(d, ouid) for d in details]
+    gk = st.opponent_cards(details, ouid).get(st.GK_POSITION) or []
+    got = {
+        "parse_match": models.summarize(ms).lose,
+        "win_divisions": sum(w.outcome == "패" for w in st.win_divisions(details, ouid)),
+        "division_stats": sum(s.lose for s in st.division_stats(details, ouid)),
+        "records._games": sum(g.outcome == "패" for g in records._games(details, ouid)),
+        "_Games": (lambda g: g.window(0, len(g)).lose)(tl._Games(details, ouid)),
+        "formation_stats": sum(s.lose for s in st.formation_stats(details, ouid)),
+        "opponent_cards": sum(c.lose for c in gk),
+    }
+    assert set(got.values()) == {2}, got
+    # 양쪽 다 "오류"(중단)는 지금처럼 뺀다
+    both = json.loads(json.dumps(f1))
+    for p in both["matchInfo"]:
+        p["matchDetail"]["matchResult"], p["matchDetail"]["matchEndType"] = "오류", 4
+    assert models.parse_match(both, ouid).result == "오류"
+    assert not st.win_divisions([both], ouid) and not records._games([both], ouid)
+
+
+def _blank_side(p: dict) -> None:
+    """넥슨이 나간 쪽을 지운 꼴(F13) — 선수 0명 · 슛·패스·태클·점유율·파울 0 · 골 기록 없음."""
+    p["player"], p["shootDetail"] = [], []
+    for k in ("shoot", "pass", "defence"):
+        p[k] = {kk: 0 for kk in (p.get(k) or {})}
+    md = p["matchDetail"]
+    for k, v in list(md.items()):
+        if isinstance(v, (int, float)) and k not in ("matchEndType", "seasonId"):
+            md[k] = 0
+
+
+def _blank_mix(details: list, ouid: str) -> list:
+    """정상 경기 0002 를 셋으로 — 내 쪽만 · 상대만 · 양쪽 다 빈 판. 결과·종료 유형은 정상 그대로(F13 의 정상 + 빈 판 꼴)."""
+    base = next(d for d in details if d["matchId"].endswith("0002"))
+    out = []
+    for i, sides in enumerate(((True, False), (False, True), (True, True))):
+        g = json.loads(json.dumps(base))
+        g["matchId"] = f"blank{i}"
+        for p in g["matchInfo"]:
+            if sides[0 if p.get("ouid") == ouid else 1]:
+                _blank_side(p)
+        out.append(g)
+    return out
+
+
+def test_blank_games_out_of_averages_108():
+    import dataclasses
+    import habits
+    ouid, _, details = _load()
+    base = [d for d in details if not d["matchId"].endswith("0004")]   # 0004 도 빈 판 — 빼야 "섞지 않은 묶음" 이 된다
+    mix = base + _blank_mix(details, ouid)
+
+    def plain(x):
+        return dataclasses.asdict(x) if dataclasses.is_dataclass(x) else x
+
+    checks = {   # 함수 → 섞은 묶음에서도 같아야 할 값(경기당 평균·짝 비교)
+        "team_profile": lambda ds: plain(st.team_profile(ds, ouid)),
+        "versus_profile": lambda ds: plain(st.versus_profile(ds, ouid)),
+        "discipline_stats": lambda ds: (lambda r: (r.games, [plain(a) for a in r.axes]))(st.discipline_stats(ds, ouid)),
+        "pass_style": lambda ds: plain(st.pass_style(ds, ouid)),
+        "_per_match": lambda ds: st._per_match(ds, ouid),
+        "clutch_summary": lambda ds: plain(st.clutch_summary(ds, ouid)),
+        "goal_minute_buckets": lambda ds: [plain(b) for b in st.goal_minute_buckets(ds, ouid)],
+        "possession_stats": lambda ds: [plain(b) for b in st.possession_stats(ds, ouid)],
+        "shot_summary": lambda ds: (lambda r: (r.games, plain(r.mine), plain(r.opp)))(st.shot_summary(ds, ouid)),
+        "goal_flow": lambda ds: plain(habits.goal_flow(ds, ouid)),
+        "half_share_diff": lambda ds: plain(habits.half_share_diff(ds, ouid)),
+        "side_totals": lambda ds: plain(habits.side_totals(ds, ouid)),
+        "attack_routes": lambda ds: plain(habits.attack_routes(ds, ouid)),
+        "summarize": lambda ds: (lambda s: (s.avg_goals_for, s.avg_goals_against, s.avg_possession, s.avg_rating))(
+            models.summarize([models.parse_match(d, ouid) for d in ds])),
+        "opponent_stats": lambda ds: sorted((o.nickname, o.avg_goals_for, o.avg_goals_against) for o in models.opponent_stats(
+            [models.parse_match(d, ouid) for d in ds])),
+        "period_stats": lambda ds: [(p.avg_gf, p.avg_ga) for p in models.period_stats(
+            [models.parse_match(d, ouid) for d in ds], days=3650)],
+        "division_stats": lambda ds: [(s.division_id, s.avg_gf, s.avg_ga) for s in st.division_stats(ds, ouid)],
+    }
+    # 보호가 없을 때 — is_blank 를 늘 거짓으로 바꾸면 함수마다 값이 달라져야 한다(안 달라지면 이 픽스처로는 못 잰다)
+    real = models.is_blank
+    off = lambda me, opp: False   # noqa: E731
+    try:
+        for mod in (models, st, habits):
+            mod.is_blank = off
+        unguarded = {k: f(mix) for k, f in checks.items()}
+    finally:
+        for mod in (models, st, habits):
+            mod.is_blank = real
+    clean = {k: f(base) for k, f in checks.items()}
+    same = [k for k in checks if unguarded[k] == clean[k]]
+    assert not same, f"빈 판이 섞여도 보호 없이 값이 같다 — 픽스처가 못 잰다: {same}"
+    diff = [k for k, f in checks.items() if f(mix) != clean[k]]
+    assert not diff, f"빈 판이 평균에 섞였다: {diff}"
+    # 승무패 수와 득실 합계는 섞은 쪽이 크다(U4)
+    s_mix = models.summarize([models.parse_match(d, ouid) for d in mix])
+    s_base = models.summarize([models.parse_match(d, ouid) for d in base])
+    assert (s_mix.total, s_mix.blank) == (s_base.total + 3, 3) and s_mix.goals_for > s_base.goals_for, (s_mix, s_base)
+    # 구단주 분포 길은 108 전 기준 그대로 — 빈 판도 든다(J2)
+    assert len(habits.side_totals(mix, ouid, keep_blank=True).rows) == len(habits.side_totals(mix, ouid).rows) + 3
+    # 선수 표의 팀 승률 기준 — 내 선수가 없는 판만 no_squad(상대만 빈 판은 아니다)
+    flags = [(models.parse_match(d, ouid).blank, models.parse_match(d, ouid).no_squad) for d in _blank_mix(details, ouid)]
+    assert flags == [(True, True), (True, False), (True, True)], flags
+
+
+def test_records_skip_blank_scores_108():
+    """점수를 쓰는 업적(무실점 연속·대승)은 빈 판을 건너뛴다 — 몰수패 0:5 가 무실점을 끊거나 상대만 빈 판 9:0 이 대승이 되지 않게(M1)."""
+    import records
+    ouid, _, details = _load()
+    big = next(d for d in details if d["matchId"].endswith("0002"))
+    g = json.loads(json.dumps(big))
+    g["matchId"] = "blankbig"
+    for p in g["matchInfo"]:
+        if p.get("ouid") != ouid:
+            _blank_side(p)
+        else:
+            p["shoot"]["goalTotal"], p["matchDetail"]["matchResult"] = config.RECORD_BIG_WIN_GOALS + 3, "승"
+    assert records._games([g], ouid)[0].blank and records._games([g], ouid)[0].gf >= config.RECORD_BIG_WIN_GOALS
+    assert not [a for a in records.achievements([g], ouid) if a.key == "bigwin"], "상대만 빈 판이 대승이 됐다"
+    # 무실점 연속 — 가운데 빈 몰수패(0:5)가 끼어도 끊기지 않는다(그 판은 잇지도 끊지도 않는다)
+    f1_raw = next(d for d in details if d["matchId"].endswith("0004"))
+    run = []
+    for i in range(config.RECORD_CLEAN_RUN):
+        w = json.loads(json.dumps(big))
+        w["matchId"], w["matchDate"] = f"clean{i}", f"2026-01-{10 + 2 * i:02d}T12:00:00"
+        for p in w["matchInfo"]:
+            if p.get("ouid") != ouid:
+                p["shoot"]["goalTotal"] = 0
+        run.append(w)
+    gap = json.loads(json.dumps(f1_raw))
+    gap["matchId"], gap["matchDate"] = "gap", "2026-01-11T12:00:00"
+    keys = [a.key for a in records.achievements(run[:1] + [gap] + run[1:], ouid)]
+    assert "clean" in keys, keys
+    f1 = models.parse_match(f1_raw, ouid)
+    assert f1.blank and f1.result == "패" and (f1.my_goals, f1.opp_goals) == (0, 5)
+    r = records.rival([f1] * config.RIVAL_MIN_GAMES)
+    assert r is not None and r.lose == config.RIVAL_MIN_GAMES, r   # 전적에는 패로 든다
+    assert r.worst_loss is None, "빈 몰수패 0:5 가 최다 점수 차 패가 됐다"
 
 
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)

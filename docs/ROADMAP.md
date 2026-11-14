@@ -897,6 +897,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
   대시보드는 축구장·로더를 안 만든다(`dashboard.py` 에 `_start_pitch_loaders` 0 · 11-14 grep). 대가: 내 계정을 정한 사람은 켤 때 "지난번 보던 메뉴" 복원을 잃는다 — 복원 정보(`_restore`)는 켤 때 길에서 버린다(다음 검색에서 엉뚱하게 튀지 않게).
 - **J9 켤 때 길의 순위 카드는 순위 없이 그린다** — `_rank` None 이면 `_render_ranker` 가 지금도 쓰는 "우리 집계로 대체" 갈래(조회 실패와 같다). 순위·ELO 기록(`record_elo`)은 사용자가 검색할 때 채워진다 — 켤 때마다 ELO 한 줄이 쌓이던 것은 원래 없었다(지금 켤 때 요청 0).
 - **J10 CDN 그림(얼굴·엠블럼·시즌 아이콘)은 셈 밖** — 디스크 캐시에 없는 것만 받는 정적 파일이고 저장본 열기·다시 열기(`reload_after_release`)가 지금도 같은 길로 받는다(CLAUDE.md "CDN 이미지는 스위치 밖"). 게임 중에도 지금 다시 열기와 같다. 오프라인 길의 등급 배지(`_current_grade` → `images.fetch_division_icon` 849)도 같은 CDN 이라 이 셈 밖이다(4회차 M).
+- **J11 (조각 ① 구현 때 · 11-14) 빈 쪽 판정은 "`player` 키가 있는데 비었다" 로 좁혔습니다.** 실DB 71,665 팀-경기를 재 보니 키가 없는 쪽은 0 이고 지워진 쪽은 늘 빈 목록(405)이었습니다. 처음 쓴 `not p.get("player")` 는 선수 칸을 안 둔 지어낸 경기(테스트 대부분)까지 빈 판으로 잡아 `test_parsing`·`test_habits`·`test_records`·`test_compare` 가 한꺼번에 무너졌습니다. 상대 쪽이 아예 없는 판(`opp` 가 None·빈 dict)은 그대로 빈 판입니다. 테스트 도우미(`test_parsing._d`·`test_shot_summary.game`·`test_compare._side`)는 선수를 안 주면 키를 두지 않게 고쳤습니다.
 
 ### A 몰수패를 패로 + 빈 판을 평균에서 (숫자가 바뀐다)
 
@@ -1066,7 +1067,7 @@ A(코드·환경 · 묶음) 17.5만 토큰 [상]2·[중]8 · B(사용자·운영
 
 | 조각 | 내용 | 난이도 | 모델 |
 |---|---|---|---|
-| ① | A 전부(`test_rules` `RESULT_PATHS` 포함) + 골든 갱신(`test_parsing` · `test_analysis` · `test_check_api` · `test_records` · `test_timeline` · `test_habits` · `tools/check_t0.py` 는 `--write` 전에 바뀐 날을 눈으로 · **`test_ownerdist`·`test_predict` 골든은 안 바뀌어야 한다**) + 산출 방법·`FORFEIT_TIP` | 중간 — 숫자가 앱 전체에서 바뀐다 · 닿는 함수 18개(세 5 + 빈 13) | Sonnet + diff 리뷰 |
+| ① **끝(11-14)** | A 전부(`test_rules` `RESULT_PATHS` 포함) + 골든 갱신(`test_parsing` · `test_analysis` · `test_check_api` · `test_records` · `test_timeline` · `test_habits` · `tools/check_t0.py` 는 `--write` 전에 바뀐 날을 눈으로 · **`test_ownerdist`·`test_predict` 골든은 안 바뀌어야 한다**) + 산출 방법·`FORFEIT_TIP` | 중간 — 숫자가 앱 전체에서 바뀐다 · 닿는 함수 18개(세 5 + 빈 13) | Sonnet + diff 리뷰 |
 | ② | B 전부 | 중간 — 시즌 필터가 닿는 화면이 많다 | Sonnet + diff 리뷰 |
 | ③ | C(관문 `STARTUP_CHECK_NOTICE_VERSION` · 이용 안내 한 줄 · `NOTICE_VERSION` 15 · `NOTICE_COLLECT_ONLY_FROM` 15) + `CHANGELOG` 3.10.1 절(미공개) + CLAUDE.md 표(`models`·`seasons` 줄 · "웹 데이터" 절 옆에 켤 때 요청 한 줄) + exe 빌드·2번 모니터 실화면 | 중간 — 켤 때 길이 여섯(창 · 최소화 · 트레이 · 동의 직후 · 둘러보기 · 게임 중)이고 홈페이지 갈래를 끄는 표시(`_startup_auto`)가 세 자리에 닿는다 | Sonnet + Opus diff 리뷰 |
 

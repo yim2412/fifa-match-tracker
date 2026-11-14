@@ -270,9 +270,9 @@ def test_main_window_build_shows_no_stray_windows():
 
 def test_loaded_opens_dashboard():
     assert _AFTER_LOAD == (_win.PAGE_MAIN, _win._page_index["대시보드"]), _AFTER_LOAD
-    # 픽스처: 승1 무1 패1 + 오류1 — 대시보드 지표가 실제로 채워졌는지.
-    # 승률은 무승부 포함 승÷전체(2026-10-19 사용자 · config.WIN_RATE_DRAWS_IN) = 1/3. A6 섞임 식이었다면 50.0%
-    assert _win.dashboard.lb_rate.text() == "33.3%", _win.dashboard.lb_rate.text()
+    # 픽스처: 승1 무1 패2 — 0004 는 내 쪽 오류 + 상대 몰수승이라 108 부터 패(U1). 대시보드 지표가 실제로 채워졌는지.
+    # 승률은 무승부 포함 승÷전체(2026-10-19 사용자 · config.WIN_RATE_DRAWS_IN) = 1/4. 그 전 규칙이면 33.3%
+    assert _win.dashboard.lb_rate.text() == "25.0%", _win.dashboard.lb_rate.text()
     assert "승÷전체" in _win.dashboard.lb_rate.toolTip(), _win.dashboard.lb_rate.toolTip()
     assert "승÷전체" in _win.dashboard.lb_rate_delta.text(), _win.dashboard.lb_rate_delta.text()
     assert _win.lb_profile.text() == "테스트구단주", _win.lb_profile.text()
@@ -349,8 +349,8 @@ def test_dashboard_65_layout():
         assert "오르는 구간" in d.note_items[0][0].text() and "깊은 편" in d.note_items[1][0].text()
         d.render(replace(inp, report=dashboard.ScoreParts(rep, (400.0, 30), (47.0, 400))))
         assert "내리는 구간" in d.note_items[0][0].text() and "깊은 편" not in d.note_items[1][0].text()
-        # 경기 결과 카드 — 픽스처 0004 는 내 쪽 오류 + 상대 몰수승 = 몰수패 1 · 오류 1
-        assert "몰수패 1" in d.lb_forfeit.text() and "오류 1" in d.lb_forfeit.text(), d.lb_forfeit.text()
+        # 경기 결과 카드 — 픽스처 0004 는 내 쪽 오류 + 상대 몰수승 = 몰수패 1 · 오류 0(0004 는 내 쪽 오류 + 상대 몰수승이라 108 부터 패(U1) — 그 전엔 오류 1)
+        assert "몰수패 1" in d.lb_forfeit.text() and "오류 0" in d.lb_forfeit.text(), d.lb_forfeit.text()
         assert f"color:{T.WARN}'>몰수패 1" in d.lb_forfeit.text() and f"color:{T.TEXT_DIM}'>몰수승 0" in d.lb_forfeit.text()
     finally:
         _win._render_dashboard()
@@ -1579,17 +1579,17 @@ def test_ranker_tiles_shrink_to_fit():
 
 
 def test_dashboard_cards_filled_from_fixture():
-    # 손계산: 승·무·패 3경기(오류 제외) — 득 1+4+1, 실 2+3+1. 오류 경기도 빠른 범위(76)
-    # 4경기에는 들어간다(경기 목록과 같은 범위).
-    # 결정력 = 골 6 ÷ 슛 17(2+8+7 — 오류 경기 슛은 안 센다)
+    # 손계산: 승·무·패 4경기(0004 는 내 쪽 오류 + 상대 몰수승이라 108 부터 패(U1)) — 득 1+4+1+0, 실 2+3+1+5. 0004 는 내 선수 기록이 빈 판이라
+    # 경기당 평균에서는 빠지고(6/3 · 6/3 — 빼지 않으면 1.50 · 2.75) 득실 합계에는 든다(득실차 -5 · U7).
+    # 결정력 = 골 6 ÷ 슛 17(2+8+7 — 0004 는 슛이 0)
     d = _win.dashboard
-    assert d.wdl_bar.counts() == (1, 1, 1), d.wdl_bar.counts()
-    assert d.lb_wdl_total.text() == "3경기 · 승률 33.3%(승÷전체)", d.lb_wdl_total.text()
+    assert d.wdl_bar.counts() == (1, 1, 2), d.wdl_bar.counts()
+    assert d.lb_wdl_total.text() == "4경기 · 승률 25.0%(승÷전체)", d.lb_wdl_total.text()
     assert [lb.text() for lb in d.goal_nums] == ["2.00", "2.00", "35%"], [lb.text() for lb in d.goal_nums]
-    assert "득실차 +0" in d.lb_goals_sub.text(), d.lb_goals_sub.text()
+    assert "득실차 -5" in d.lb_goals_sub.text(), d.lb_goals_sub.text()
     assert len(d.versus_rows) == 7 and all(vb.nums.text() != "—" for vb in d.versus_rows)
     assert len(d.dots._items) == 4, d.dots._items
-    assert d.dots._items[-1][0] == "오류"  # 오래된 것 → 최신, 최신이 오류 경기
+    assert d.dots._items[-1][0] == "패"  # 오래된 것 → 최신, 최신이 0004 몰수패(108 U1 — 그 전엔 "오류")
     assert sum(d.minute_chart._series[0][1]) == 6, d.minute_chart._series  # 득점 6골
     assert len(d.timeband_bars._rows) == 4
     assert len(d.rival_bars._rows) == 4
@@ -1919,16 +1919,16 @@ def test_charts_draw_empty_and_single():
 
 
 def test_trend_marks_max_min_and_average():
-    # 픽스처 일별: 01/01 패(1경기 0%) · 01/02 승+무(2경기 — 섞인 묶음이라 무승부를 빼 100%) · 01/03 오류뿐(0경기).
-    # 평균은 승 합 ÷ 승률 분모(rated) 합 = 1/2 — 날짜별 승률의 단순 평균(50%)과 같아 보이니 아래 경기 수 가중(66.7)도 아니어야.
-    # 최저는 01/01 — 경기 없는 01/03 을 0% 로 세면 "다 졌다"로 읽힌다.
+    # 픽스처 일별: 01/01 패(1경기 0%) · 01/02 승+무(2경기) · 01/03 0004 몰수패(1경기 0% — 108 U1 · 그 전엔 오류뿐 0경기).
+    # 최저는 같은 0% 둘 중 마지막 날. 경기 없는 날을 0% 로 세지 않는 것은 아래에서 그래프에 직접 빈 날을 넣어 잰다.
     c = _win.dashboard.trend_chart
     c.resize(600, 220)
     c.grab()
-    # 승÷전체(2026-10-19): 01/02 승+무 = 50% · 평균 = 승 1 ÷ 3경기(날짜별 단순 평균 25% 가 아니어야)
-    assert round(c.marks["avg"], 1) == 33.3, c.marks["avg"]
+    # 승÷전체(2026-10-19): 01/02 승+무 = 50% · 01/03 은 0004 몰수패 1경기 0%(108 U1)
+    # 평균 = 승 1 ÷ 4경기 = 25.0(날짜별 단순 평균 16.7% 가 아니어야)
+    assert round(c.marks["avg"], 1) == 25.0, c.marks["avg"]
     assert c.marks["max"] == (1, "50.0%"), c.marks["max"]
-    assert c.marks["min"] == (0, "0.0%"), c.marks["min"]
+    assert c.marks["min"] == (2, "0.0%"), c.marks["min"]
     # [기간별 성적] '평균 승률' 카드와 같은 숫자(한 집단 식이라 * 없음)
     assert f"{c.marks['avg']:.1f}%" == _win.card_period_avg.value.text(), \
         (c.marks["avg"], _win.card_period_avg.value.text())
@@ -1937,6 +1937,10 @@ def test_trend_marks_max_min_and_average():
     # 마지막 날이 최고점이고 평균과 가까우면 두 글자가 오른쪽 끝에서 부딪힌다 — 그때 평균 글자가 비켜야 한다
     import charts
     t = charts.AreaTrendChart()
+    t.set_data([("a", 40.0, 10), ("b", 0.0, 0), ("c", 46.0, 10)])   # 경기 없는 날 — 0% 로 세면 "다 졌다"로 읽힌다
+    t.resize(400, 200)
+    t.grab()
+    assert t.marks["min"] == (0, "40.0%"), t.marks["min"]
     t.set_data([("a", 40.0, 10), ("b", 40.0, 10), ("c", 46.0, 10)])
     t.resize(400, 200)
     t.grab()
@@ -2106,8 +2110,8 @@ def test_trend_page_uses_area_chart_with_counts_and_ma():
     assert isinstance(c, charts.AreaTrendChart), type(c)
     c.resize(700, 300)
     c.grab()
-    # 픽스처 일별: 01/01 1경기 · 01/02 2경기 · 01/03 오류뿐(0경기) — 막대는 경기 있는 날만
-    assert c.marks["baseline"][0] == "grid" and c.marks["count_bars"] == 2, c.marks
+    # 픽스처 일별: 01/01 1경기 · 01/02 2경기 · 01/03 몰수패 1경기(108 U1 — 그 전엔 오류뿐 0경기라 막대 2)
+    assert c.marks["baseline"][0] == "grid" and c.marks["count_bars"] == 3, c.marks
     assert c._ma == [None, None, None], c._ma  # 3경기 — 이동평균 표본(MIN_COND) 미달이라 끊김
     # 배선 — 이동평균은 경기에서 직접(그날 날짜를 넘긴다), 결과가 그대로 선이 된다
     seen = []
@@ -2253,7 +2257,7 @@ def test_opp_rank_tab_gates_and_draws():
             config.OPP_MIN_KNOWN = saved_min
         t = _win.tbl_opprank
         assert t.rowCount() == len(config.OPP_RANK_BANDS), t.rowCount()
-        assert t.item(0, 0).text() == "1~200위" and int(t.item(0, 1).text()) == 3, [t.item(0, c).text() for c in range(6)]
+        assert t.item(0, 0).text() == "1~200위" and int(t.item(0, 1).text()) == 4, [t.item(0, c).text() for c in range(6)]   # 0004 몰수패 포함(108)
         # 표가 나오면 설명 칸은 비고 숨는다(78 ② — 상태만 남김 · 위 상태 글들은 그대로 뜬다)
         assert txt() == "" and _win.lb_opprank_note.isHidden(), txt()
     finally:
@@ -3248,8 +3252,8 @@ def test_season_table_compares_with_previous_season():
         assert t.item(rows["2025 시즌 8"], 0).toolTip() == old.span_text, t.item(rows["2025 시즌 8"], 0).toolTip()
         assert t.item(rows["2025 시즌 9"], 0).toolTip() == new.span_text
         vs = cols.index("지난 시즌 대비")
-        # 새 시즌 33.3%(승1 무1 패1 — 승÷전체) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
-        assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 3 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
+        # 새 시즌 25.0%(승1 무1 패2 — 0004 몰수패 포함 · 승÷전체) − 지난 시즌 100%(2승) → 음수 · 가장 오래된 시즌은 비교 대상이 없다
+        assert t.item(rows["2025 시즌 9"], vs).text() == f"{100 / 4 - 100:+.1f}%p", t.item(rows["2025 시즌 9"], vs).text()
         assert t.item(rows["2025 시즌 8"], vs).text() == "—"
         # 79 — 지난 시즌보다 내렸으면 빨강 · 비교 없는 칸은 칠하지 않는다
         assert t.item(rows["2025 시즌 9"], vs).foreground().color() == QColor(T.BAD)
@@ -3260,8 +3264,8 @@ def test_season_table_compares_with_previous_season():
         assert t.item(rows["2025 시즌 8"], grade).text() == "—"  # 상세가 없는 경기 — 등급 모름
         # 그래프·대시보드 점(77 A) — 같은 시즌 묶음 · 경기 수는 승·무·패만
         ser = _win._period_series("시즌")
-        assert [(p.label, p.games) for p in ser] == [("2025 시즌 9", 3), ("2025 시즌 8", 2)], ser
-        assert f"{ser[0].win_rate:.1f}" == "33.3", ser[0].win_rate
+        assert [(p.label, p.games) for p in ser] == [("2025 시즌 9", 4), ("2025 시즌 8", 2)], ser
+        assert f"{ser[0].win_rate:.1f}" == "25.0", ser[0].win_rate
     finally:
         _win._rank_seasons, _win._matches_all = keep
         _win._render_seasons()
@@ -7099,8 +7103,8 @@ def test_compare_profile_rows_and_key_players():
         kp = core.key_players(list(_DETAILS), _OUID, name_of=lambda i: _win._names.get(i, str(i)))
         html = _win.lb_compare_keys[0].text()
         assert "키플레이어" in html and all(p.name in html for p in kp.by_rating), html
-        # 범위 — 비교 경기 수를 줄이면 그 경기만(승·무·패로 끝난 경기 하나 — 몰수·오류는 team_profile 이 뺀다)
-        first = next(m for m in _MATCHES if m.result in ("승", "무", "패"))
+        # 범위 — 비교 경기 수를 줄이면 그 경기만(승·무·패로 끝난 경기 하나 — 빈 판·오류는 team_profile 이 뺀다)
+        first = next(m for m in _MATCHES if m.result in ("승", "무", "패") and not m.blank)
         _win._matches, keep_m = [first], _win._matches   # 76 — 비교 범위는 위쪽 바(_slice) · 내 쪽은 시즌 목록에서
         try:
             _win._render_compare("상대", [first], _OUID, list(_DETAILS))
@@ -8565,7 +8569,9 @@ def test_players_g8_wiring():
         _win._render_players(_win._slice()[1])
         tb = _win.tbl_players
         by_id = {tb.item(r, 1).data(Qt.ItemDataRole.UserRole): r for r in range(tb.rowCount())}
-        res = [m.result for m in _win._slice()[0]]
+        # 팀 승률 기준은 내 선수가 있는 판만(108 M4) — 0004 몰수패를 넣으면 25.0 · 빼면 33.3 이라 배선이 갈린다
+        res = [m.result for m in _win._slice()[0] if not m.no_squad]
+        assert len(res) < len(_win._slice()[0]), "픽스처에 내 선수가 없는 판이 없다 — 아래 기준을 못 잰다"
         team = app_main.core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed)
         painted = 0
         for p in players:
@@ -10497,8 +10503,8 @@ def test_pass_style_section_in_tactics():
     _win._go_page("전술·경기 결과")
     _win._render_tactics(_win._slice()[1])
     ps = _win.pass_style
-    # 픽스처 4경기 전부 종류 필드가 있고, 하나는 "오류"(승무패 아님)라 뺀다
-    wdl = [m for m in _win._slice()[0] if m.result in ("승", "무", "패")]
+    # 픽스처 4경기 전부 종류 필드가 있고, 0004 는 내 선수 기록이 빈 판이라 뺀다(108 J1 — 결과는 이제 패)
+    wdl = [m for m in _win._slice()[0] if m.result in ("승", "무", "패") and not m.blank]
     assert ps.all.games == len(wdl) == 3, (ps.all.games, len(wdl))
     # 65 M7 — 종류마다 카드(PASS_CARD_COLS 칸) · 성공률 크게 · 경기당 시도/성공 · 성공률 막대(파랑)
     import core_api
@@ -12788,7 +12794,7 @@ def test_top3_cards_and_reward_board_tab():
             _win._details = []                                  # 시즌 필터로 다른 시즌을 고른 상태 — 이 계정 값은 누적 전체에서
             mine = _win._my_reward("2025-12-01")
             got = _win._show_my_reward(mine)
-            assert "100판당" in got and "챔스 이상 3판" in got, got   # 픽스처 4경기 중 승·무·패 3판 · 전부 챔피언스(900)
+            assert "100판당" in got and "챔스 이상 4판" in got, got   # 픽스처 4경기 전부 승·무·패(0004 몰수패 · 108) · 전부 챔피언스(900)
             card = _win.rboard_cards["mine"]                     # 80 — 중앙값과 나란히 보는 이 계정 값
             assert card.value.text() == f"{mine.per_100:,.0f} FC", card.value.text()
             assert _win._show_my_reward(None) == "" and card.value.text() == "—", "계정을 모르면 옛 값이 남으면 안 된다"

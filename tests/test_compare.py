@@ -13,7 +13,7 @@ import stats as stats_  # noqa: E402
 
 
 def _side(ouid, *, goals=2, conceded=1, poss=50, rating=6.5, shots=10, on=None, pass_try=100, pass_ok=80,
-          tk_try=20, tk_ok=10, result="승", players=()):
+          tk_try=20, tk_ok=10, result="승", players=None):
     if on is None:
         on = shots // 2   # 슛 수가 바뀌어도 유효슛 비율은 그대로(50%) — 한 행만 움직이는 테스트용
     return {
@@ -22,7 +22,8 @@ def _side(ouid, *, goals=2, conceded=1, poss=50, rating=6.5, shots=10, on=None, 
         "shoot": {"goalTotal": goals, "shootTotal": shots, "effectiveShootTotal": on},
         "pass": {"passTry": pass_try, "passSuccess": pass_ok},
         "defence": {"tackleTry": tk_try, "tackleSuccess": tk_ok},
-        "player": list(players),
+        # 선수를 안 주면 "player" 키를 안 둔다 — 빈 목록은 넥슨이 지운 쪽(빈 판 · 108 J1)이라 평균에서 빠진다
+        **({} if players is None else {"player": list(players)}),
     }
 
 

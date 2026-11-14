@@ -30,7 +30,7 @@ from typing import NamedTuple
 import config
 import habits
 import matchtime
-from models import RateMixin, draw_possible, is_mixed, is_weak, mixed_of_details
+from models import RateMixin, draw_possible, is_mixed, is_weak, mixed_of_details, result_of
 from stats import formation_of
 from store import PLAYER_ID_MOD
 
@@ -141,7 +141,7 @@ class _Games:
             if me is None or when is None:
                 continue
             opp = next((p for p in infos if p.get("ouid") != ouid), {})
-            res = (me.get("matchDetail") or {}).get("matchResult") or ""
+            res = result_of(me, opp)   # 창은 득실 합계만 낸다(경기당 평균 없음) — 빈 판을 뺄 분모가 없다
             starters = [(p.get("spId"), p.get("spGrade")) for p in me.get("player") or []
                         if p.get("spId") is not None and p.get("spPosition") != SUB_POSITION]
             rows.append((when, res, _goals(me), _goals(opp), starters,
