@@ -344,6 +344,16 @@ FAST_QUIT_WAIT_S = 1                # 윈도우 종료·로그오프 때 작업�
 # [정보 › 저장 공간](57 K9) — 지우기 전 쓰는 쪽이 멈추기를 기다리는 합계(작업 스레드에서 · 넘으면 안 지우고 "다시"). 가장 긴 것이
 # 특성 로더의 요청 하나(TRAIT_TIMEOUT_S + 2) · 거래·랭커 기록 12초 — 그보다 넉넉히
 CLEAR_HALT_WAIT_S = 30
+# 내 기록 백업·복원(109 J9 · storage.py) — 임시 이름 무늬(켤 때 쓸어 지운다 · 데이터 폴더 안), 여유 공간, 압축·복사 단위
+BACKUP_TMP_PREFIXES = ("restore-", "backup-")   # 데이터 폴더 안 임시 파일 `<접두어>*.tmp*`
+BACKUP_PART_SUFFIX = ".part"                    # zip 을 다 쓰기 전 이름(끝나면 이름 바꾸기)
+BACKUP_SPACE_MARGIN = 64 * 1024 * 1024          # 필요한 바이트에 더하는 여유(SQLite 보조 파일·zip 머리말·다른 프로그램)
+BACKUP_ZIP_LEVEL = 6                            # deflate 단계 — 실측은 tests/test_storage 의 압축률 줄(아래 docs)
+BACKUP_COPY_CHUNK = 1 << 20                     # 풀기·쓰기 단위 — 이만큼마다 취소를 본다
+# SQLite backup 한 걸음(페이지) — -1 = 한 번에 전부. 나눠 하면 걸음 사이에 다른 연결이 fifa.db 에 쓸 때마다 SQLite 가 처음부터
+# 다시 복사해, 수집 예약이 쓰는 동안 백업이 끝나지 않을 수 있다(109 ②-2 리뷰 · test_backup_finishes_while_another_connection_writes).
+# 대신 복사 도중에는 취소를 못 듣고(앞뒤로만) zip 쓰기에서 덩어리마다 듣는다
+BACKUP_PAGES_PER_STEP = -1
 QUIT_REQUEST_WAIT_S = 15            # --quit(제거기)이 떠 있던 실행본이 끝나기를 기다리는 한도
 SINGLE_WAIT_OLD_S = 60            # 앞 실행본이 끝나는 중이면(업데이트 뒤 재실행) 이만큼까지 기다린다
 # 테스트·여러 개 띄워 보기용 — FIFA_SINGLE_INSTANCE=0 이면 한 번만 실행 장치를 끈다

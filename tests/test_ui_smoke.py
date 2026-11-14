@@ -98,10 +98,13 @@ def _no_modal(name):
     return blocked
 
 
-from PySide6.QtWidgets import QDialog, QMessageBox, QTabWidget  # noqa: E402
+from PySide6.QtWidgets import QDialog, QFileDialog, QMessageBox, QTabWidget  # noqa: E402
 
 for _n in ("warning", "information", "critical", "question"):
     setattr(QMessageBox, _n, staticmethod(_no_modal(f"QMessageBox.{_n}")))
+# 109 M7 — 백업·복원 파일 고르기(QFileDialog)
+for _n in ("getSaveFileName", "getOpenFileName"):
+    setattr(QFileDialog, _n, staticmethod(_no_modal(f"QFileDialog.{_n}")))
 QDialog.exec = _no_modal("QDialog.exec")
 QApplication.exec = _no_modal("QApplication.exec")
 
@@ -8245,6 +8248,391 @@ def test_storage_clear_all_wipes_and_resets_window():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+class _BackupEnv:
+    """109 J9 화면 배선 — 임시 DB·임시 설정·동기 작업자·가짜 파일 고르기. 끝나면 전부 되돌린다."""
+
+    def __init__(self, n_saved=None):
+        self.tmp, self.saved = _loader_db(len(_DETAILS) if n_saved is None else n_saved)
+        self.keep = (config.SETTINGS_PATH, app_main.choose_backup_save, app_main.choose_backup_open,
+                     app_main.BackupWorker.start, app_main.RestoreInspectWorker.start, app_main.RestoreWorker.start,
+                     app_main.ClearWorker.start)
+        config.SETTINGS_PATH = self.tmp / "settings.ini"
+        for cls in (app_main.BackupWorker, app_main.RestoreInspectWorker):
+            cls.start = lambda self: self.run()   # 스모크는 start 를 막는다 — 같은 스레드에서 돌려 신호가 바로 온다
+        self.latched = []   # 복원 작업이 돌 때 걸쇠에 든 것(걸쇠를 잡은 뒤에 도는지)
+        app_main.RestoreWorker.start = lambda worker: (self.latched.append(set(app_main.CLEARING)), worker.run())
+        self.zip = self.tmp / "b.zip"
+        self.pre = self.tmp / "pre.zip"
+        self.picked_pre = []
+        app_main.choose_backup_save = self._save
+        app_main.choose_backup_open = lambda parent: str(self.zip)
+        self.win = None
+
+    def _save(self, parent, default):
+        if "복원전" in default:
+            self.picked_pre.append(default)
+            return str(self.pre)
+        return str(self.zip)
+
+    def window(self):
+        w = app_main.MainWindow(_NoApi())
+        w.LAZY_RENDER = False
+        w._on_fetch_team_colors = lambda **k: None
+        w._backfill_timer.stop()
+        self.win = w
+        return w
+
+    def matches(self) -> int:
+        c = store.open_db(config.DB_PATH)
+        try:
+            return c.execute("SELECT COUNT(*) FROM matches").fetchone()[0]
+        finally:
+            c.close()
+
+    def strays(self) -> list[str]:
+        return sorted(p.name for p in config.DB_PATH.parent.iterdir() if p.name.startswith(("restore-", "backup-")))
+
+    def close(self):
+        (config.SETTINGS_PATH, app_main.choose_backup_save, app_main.choose_backup_open, app_main.BackupWorker.start,
+         app_main.RestoreInspectWorker.start, app_main.RestoreWorker.start, app_main.ClearWorker.start) = self.keep
+        app_main.CLEARING.clear()
+        if self.win is not None:
+            self.win.shutdown()
+            self.win.deleteLater()
+        config.DB_PATH, config.WEB_DATA = self.saved
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def _empty_matches_file():
+    c = store.open_db(config.DB_PATH)
+    try:
+        c.execute("DELETE FROM matches")
+        c.commit()
+    finally:
+        c.close()
+
+
+def test_storage_backup_restore_buttons_roundtrip():
+    """109 J9 — [백업] → [복원] 버튼 끝-끝: 백업 zip 이 생기고, 복원이 기록·되돌릴 설정을 돌려놓고 복원 전 백업 zip 도 만들며,
+    끝나면 걸쇠가 풀리고 창이 들고 있던 계정을 놓는다. 창 위치·'바뀐 점 본 버전' 은 안 돌아온다."""
+    env = _BackupEnv()
+    try:
+        w = env.window()
+        w._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
+                     {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
+        assert w._ouid and env.matches() == len(_DETAILS)
+        s = w._settings()
+        for k, v in (("view/page", "players"), ("window/geometry", "cur-geo"), (updatecheck.SEEN_VERSION_KEY, "3.10.1")):
+            s.setValue(k, v)
+        s.sync()
+        dlg = app_main.AboutDialog(w)
+        assert dlg.btn_backup.isEnabled() and dlg.btn_restore.isEnabled()
+        dlg._on_backup()
+        assert "백업을 만들었습니다" in dlg.lb_storage.text(), dlg.lb_storage.text()
+        assert env.zip.exists() and env.zip.stat().st_size > 0 and not env.strays()
+        _empty_matches_file()
+        s = w._settings()
+        s.setValue("view/page", "dash")
+        s.setValue("window/geometry", "new-geo")
+        s.setValue(updatecheck.SEEN_VERSION_KEY, "3.11.0")
+        s.sync()
+        asked = []
+        dlg._ask_restore = lambda info: asked.append((info.backup.matches, info.current.matches)) or (True, True)
+        dlg._on_restore()
+        assert asked == [(len(_DETAILS), 0)], ("확인 창이 백업·지금 기록 집계를 못 받았다", asked)
+        assert "복원했습니다" in dlg.lb_storage.text() and "다시 켜" in dlg.lb_storage.text(), dlg.lb_storage.text()
+        assert env.pre.exists() and env.picked_pre, "복원 전 백업을 안 만들었다"
+        assert env.matches() == len(_DETAILS), "기록이 안 돌아왔다"
+        s = w._settings()
+        assert str(s.value("view/page")) == "players", "되돌릴 설정 키가 안 돌아왔다"
+        assert str(s.value("window/geometry")) == "new-geo" and str(s.value(updatecheck.SEEN_VERSION_KEY)) == "3.11.0"
+        assert not app_main.CLEARING, "끝났는데 걸쇠가 남았다"
+        assert env.latched == [{"all"}], ("복원 작업이 걸쇠를 잡기 전에 돌았다", env.latched)
+        assert w._ouid == "" and w.stack.currentIndex() == w.PAGE_SEARCH, "복원 뒤 창이 옛 계정을 쥔다"
+        assert not env.strays() and w._restore_pending is None
+        assert dlg.btn_backup.isEnabled() and dlg.btn_restore.isEnabled()
+        dlg.close()
+    finally:
+        env.close()
+
+
+def test_storage_restore_does_not_bring_back_data_whose_collection_is_off():
+    """J9 끝 문장 — 수집을 켠 채 백업하고 끈 뒤 복원하면 그 백업의 랭커 픽 기록이 남지 않는다(복원 뒤 sync_ranker_pick_data 한 번)."""
+    import sqlite3
+    import zipfile
+    env = _BackupEnv()
+    try:
+        with _RankSwitches(web=True, collect=True) as sw:
+            w = env.window()
+            c = store.open_db(config.DB_PATH)
+            try:
+                d = dict(_DETAILS[0])
+                d["matchId"] = "rm-zz-1"
+                d["matchInfo"] = [{"ouid": "r-ouid-1", "nickname": "랭커일", "player": []}, {"ouid": "r-ouid-2", "nickname": "랭커이", "player": []}]
+                store.save_matches(c, [d])
+                store.mark_ranker_match(c, "rm-zz-1", datetime.now().date().isoformat())
+            finally:
+                c.close()
+            dlg = app_main.AboutDialog(w)
+            dlg._on_backup()
+            assert env.zip.exists()
+            # 막지 않았으면 일어났을 일 — 백업 안에 그 기록이 실제로 있다
+            with zipfile.ZipFile(env.zip) as zf:
+                probe = env.tmp / "probe.db"
+                probe.write_bytes(zf.read("fifa.db"))
+            pc = sqlite3.connect(str(probe))
+            try:
+                assert pc.execute("SELECT COUNT(*) FROM ranker_matches").fetchone()[0] == 1, "백업에 랭커 픽 기록이 없다 — 아래 단언이 비었다"
+            finally:
+                pc.close()
+            sw.write(False, False)   # 수집 끔
+            dlg._ask_restore = lambda info: (True, False)
+            dlg._on_restore()
+            assert "복원했습니다" in dlg.lb_storage.text(), dlg.lb_storage.text()
+            c = store.open_db(config.DB_PATH)
+            try:
+                assert c.execute("SELECT COUNT(*) FROM ranker_matches").fetchone()[0] == 0, "꺼진 수집의 랭커 픽 기록이 복원과 함께 되살아났다"
+                assert not store.has_match(c, "rm-zz-1")
+                assert c.execute("SELECT COUNT(*) FROM matches").fetchone()[0] == len(_DETAILS), "내 경기까지 지웠다"
+            finally:
+                c.close()
+            dlg.close()
+    finally:
+        env.close()
+
+
+class _FakeRunning:
+    cancelled = False
+
+    def isRunning(self):
+        return True
+
+    def cancel(self):
+        self.cancelled = True
+
+    def wait(self, ms=0):
+        return True
+
+
+class _FakeCardSched:
+    def __init__(self):
+        self.calls = []
+
+    def halt_for_delete(self):
+        self.calls.append("halt")
+
+    def sync(self, *a, **k):
+        self.calls.append("sync")
+
+    def shutdown(self, fast=False):
+        return []
+
+
+def test_storage_backup_restore_gates_and_failure_paths():
+    """M4 — 지우는 중·백업 중에는 백업·복원·지우기가 서로 거부한다 · 복원 전 백업이 실패하면 복원하지 않고 걸쇠를 풀고 멈춘 예약을 다시 세운다
+    · 확인 창 취소·복원 전 백업 위치를 안 고름 → 지금 기록 그대로 · 임시 사본 0."""
+    env = _BackupEnv()
+    try:
+        w = env.window()
+        assert w.start_backup(str(env.zip)) is None and env.zip.exists(), "막는 것이 없을 때 백업이 안 된다 — 아래 단언이 비었다"
+        env.zip.unlink()
+        # 지우기·복원 중
+        w._clear_worker = _FakeRunning()
+        assert w.start_backup(str(env.zip)) == app_main.CLEARING_WAIT_MSG and not env.zip.exists()
+        assert w.inspect_backup(str(env.zip)) == app_main.CLEARING_WAIT_MSG
+        w._clear_worker = None
+        # 백업 중에는 다른 지우기·복원이 거부된다
+        w._backup_worker = _FakeRunning()
+        assert w.start_backup(str(env.zip)) == app_main.BACKUP_BUSY_MSG
+        assert w.clear_storage("all") == app_main.BACKUP_BUSY_MSG and not app_main.CLEARING
+        w._backup_worker = None
+        assert w.start_backup(str(env.zip)) is None
+        # 복원 시작 전 상태가 없으면 거부
+        assert w.start_restore(None) and not app_main.CLEARING
+        sched = _FakeCardSched()
+        w._card_sched = sched
+        info = storage_inspect(env)
+        w._restore_pending = info
+        w._backup_worker = _FakeRunning()
+        assert w.start_restore(None) == app_main.BACKUP_BUSY_MSG and w._restore_pending is info and not app_main.CLEARING
+        w._backup_worker = None
+        # 복원 전 백업이 실패한다(없는 폴더) — 복원하지 않는다
+        _empty_matches_file()
+        before = config.DB_PATH.read_bytes()
+        got = []
+        w.storage_cleared.connect(got.append)
+        assert not w._backfill_timer.isActive()
+        assert w.start_restore(str(env.tmp / "no_such_dir" / "pre.zip")) is None
+        assert got and got[0].kind == "restore" and got[0].state == "prebackup", got
+        assert not app_main.CLEARING, "복원 전 백업이 실패했는데 걸쇠가 남았다"
+        assert env.matches() == 0 and not env.strays() and w._restore_pending is None
+        assert sched.calls[:1] == ["halt"] and "sync" in sched.calls, ("멈춘 예약을 다시 세우지 않았다", sched.calls)
+        assert w._backfill_timer.isActive(), "멈춘 색인 백필을 다시 세우지 않았다"
+        # 확인 창에서 취소 → 임시 사본 0
+        dlg = app_main.AboutDialog(w)
+        dlg._ask_restore = lambda info: (False, True)
+        dlg._on_restore()
+        assert "복원하지 않았습니다" in dlg.lb_storage.text() and env.matches() == 0 and not env.strays() and w._restore_pending is None
+        # 복원 전 백업 위치를 안 고름 → 복원 안 함
+        app_main.choose_backup_save = lambda parent, default: ""
+        dlg._ask_restore = lambda info: (True, True)
+        dlg._on_restore()
+        assert "복원 전 백업 위치" in dlg.lb_storage.text() and env.matches() == 0 and not env.strays() and w._restore_pending is None
+        dlg.close()
+        _ = before
+    finally:
+        env.close()
+
+
+def storage_inspect(env):
+    import storage as st
+    info = st.inspect_backup(env.zip, config.DB_PATH)
+    assert info.state == "ok", (info.state, info.reason)
+    return info
+
+
+def test_storage_restore_confirm_dialog_defaults_and_answer():
+    """확인 창: [복원 전에 지금 기록을 백업] 은 기본 켬 · Enter 는 [취소](기본 단추) · 체크 값이 _ask_restore 의 답으로 간다."""
+    env = _BackupEnv()
+    keep_exec = QDialog.exec
+    try:
+        w = env.window()
+        assert w.start_backup(str(env.zip)) is None
+        info = storage_inspect(env)
+        dlg = app_main.RestoreConfirmDialog(info, w)
+        assert dlg.chk_pre.isChecked(), "복원 전 백업이 기본으로 꺼져 있다"
+        assert dlg.btn_cancel.isDefault() and not dlg.btn_ok.isDefault()
+        texts = [lb.text() for lb in dlg.findChildren(app_main.QLabel)]
+        assert f"{len(_DETAILS):,}" in texts, ("백업의 경기 수가 안 보인다", texts)
+        dlg.deleteLater()
+        about = app_main.AboutDialog(w)
+        QDialog.exec = lambda self: QDialog.DialogCode.Accepted
+        assert about._ask_restore(info) == (True, True)
+        QDialog.exec = lambda self: (self.chk_pre.setChecked(False), QDialog.DialogCode.Accepted)[1]
+        assert about._ask_restore(info) == (True, False), "체크를 풀었는데 복원 전 백업을 한다"
+        QDialog.exec = lambda self: QDialog.DialogCode.Rejected
+        assert about._ask_restore(info)[0] is False
+        about.close()
+        app_main.storage.discard(info)
+    finally:
+        QDialog.exec = keep_exec
+        env.close()
+
+
+def test_storage_restore_stops_writers_and_drops_prefetch():
+    """복원은 clear_storage "all" 갈래와 같은 순서로 쓰는 로더에 멈춤을 요청하고 미리 읽기를 치운다(바꿔 끼우기가 "다시" 로 끝나지 않게)."""
+    env = _BackupEnv()
+    keep_rw = app_main.running_writers
+    try:
+        w = env.window()
+        assert w.start_backup(str(env.zip)) is None
+
+        class _Writer:
+            stopped = False
+
+            def request_stop(self):
+                self.stopped = True
+
+            def isRunning(self):
+                return False
+
+            def wait(self, ms=0):
+                return True
+
+        class _Prefetch:
+            dropped = False
+
+            def discard(self):
+                self.dropped = True
+
+        writer, pre = _Writer(), _Prefetch()
+        app_main.running_writers = lambda stores: [writer]
+        w._prefetch = pre
+        w._restore_pending = storage_inspect(env)
+        assert w.start_restore(None) is None
+        assert writer.stopped, "쓰는 로더에 멈춤을 안 요청했다"
+        assert pre.dropped and w._prefetch is None, "미리 읽기를 안 치웠다"
+        assert env.matches() == len(_DETAILS) and not app_main.CLEARING
+    finally:
+        app_main.running_writers = keep_rw
+        env.close()
+
+
+def test_storage_prune_worker_sweeps_leftover_restore_files():
+    """켤 때(CachePruneWorker) 복원·백업 도중 죽어 남은 임시 파일을 쓸어 지운다 — 옛 기록 전부가 담겨 있다."""
+    env = _BackupEnv(0)
+    try:
+        d = config.DB_PATH.parent
+        left = [d / "restore-dead.tmp", d / "restore-dead.tmp.ini", d / "backup-dead.tmp"]
+        for p in left:
+            p.write_bytes(b"x")
+
+        class _Api:
+            def prune_detail_cache(self, ids, stop=lambda: False):
+                return 0, 0
+
+        keep = app_main.cardcollect.prune
+        app_main.cardcollect.prune = lambda *a, **k: 0
+        try:
+            app_main.CachePruneWorker(_Api()).run()
+        finally:
+            app_main.cardcollect.prune = keep
+        assert not any(p.exists() for p in left), [p.name for p in left if p.exists()]
+        assert config.DB_PATH.exists(), "쓸다가 fifa.db 까지 지웠다"
+    finally:
+        env.close()
+
+
+def test_storage_shutdown_stops_backup_and_drops_pending_restore():
+    """앱 끄기가 도는 백업에 멈춤을 요청하고(종료 표) 확인 전의 풀어 둔 복원 사본을 지운다."""
+    env = _BackupEnv()
+    try:
+        w = env.window()
+        assert w.start_backup(str(env.zip)) is None
+        info = storage_inspect(env)
+        w._restore_pending = info
+        assert env.strays(), "풀어 둔 사본이 없다 — 아래 단언이 비었다"
+        fake = _FakeRunning()
+        w._backup_worker = fake
+        w.shutdown()
+        assert fake.cancelled, "종료가 도는 백업에 멈춤을 안 요청했다"
+        assert not env.strays() and w._restore_pending is None, "종료가 풀어 둔 복원 사본을 안 지웠다"
+        w._backup_worker = None
+    finally:
+        env.close()
+
+
+def test_storage_closing_dialog_during_inspect_leaves_no_copy():
+    """②-2 리뷰 — 백업 검사 도중 [정보] 창을 닫으면 검사에 멈춤을 요청하고, 늦게 온 끝 신호의 사본(옛 기록 전부)을 쥐지 않는다."""
+    env = _BackupEnv()
+    try:
+        w = env.window()
+        assert w.start_backup(str(env.zip)) is None
+        # 보호가 없을 때 무엇이 일어나나 — 멈춤 요청 없이 끝난 검사는 사본을 쥔다(아래 단언이 비지 않게)
+        w._backup_worker = app_main.RestoreInspectWorker(str(env.zip))
+        info = storage_inspect(env)
+        w._on_restore_inspected(info)
+        assert w._restore_pending is info and env.strays(), "보통 검사가 사본을 안 쥔다 — 아래 단언이 비었다"
+        w.discard_restore()
+        assert not env.strays()
+
+        class _Running(app_main.RestoreInspectWorker):
+            def isRunning(self):
+                return True
+
+        run = _Running(str(env.zip))
+        w._backup_worker = run
+        dlg = app_main.AboutDialog(w)
+        dlg.reject()   # 창 닫기 — finished 가 discard_restore 를 부른다
+        assert run.cancelled(), "창을 닫아도 도는 검사에 멈춤을 안 요청했다"
+        info = storage_inspect(env)   # 멈춤 요청 직전에 검사가 끝나 ok 가 늦게 왔다
+        w._on_restore_inspected(info)
+        assert w._restore_pending is None and not env.strays(), ("창을 닫은 뒤 끝난 검사의 사본이 남았다", env.strays())
+        w._backup_worker = None
+    finally:
+        env.close()
+
+
 def test_storage_latch_holds_scheduler_ticks():
     """보호 장치 — 걸쇠가 없으면 틱이 돈다(먼저 단언) · 지우는 중엔 화면 스레드의 fifa.db 열기·로더 띄우기를 미룬다."""
     for cls in (app_main.OwnerDistScheduler, app_main.CardBackfillScheduler):
@@ -9652,7 +10040,7 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
                  15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
-                 16: "ac242cde3764702d"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C)
+                 16: "32fa6de6f72909c7"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C) · 백업·복원(109 B — 같은 판)
 
 
 def _notice_digest() -> str:

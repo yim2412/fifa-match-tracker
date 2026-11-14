@@ -37,7 +37,7 @@ from PySide6.QtCore import QEvent, QObject, QSettings, QStringListModel, Qt, QSi
 import shiboken6
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPixmap
 from PySide6.QtWidgets import (
-    QApplication, QButtonGroup, QCheckBox, QCompleter, QDialog, QFrame, QGridLayout, QGroupBox,
+    QApplication, QButtonGroup, QCheckBox, QCompleter, QDialog, QDialogButtonBox, QFileDialog, QFrame, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QListWidget, QListWidgetItem,
     QMainWindow, QMessageBox,
     QProgressBar, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
@@ -314,6 +314,7 @@ def _mark_final_429() -> None:
 CLEARING: set[str] = set()
 STORE_FIFA, STORE_CARDS, STORE_IMAGES, STORE_DETAILS, STORE_RANK = "fifa", "cards", "images", "details", "rank"
 CLEARING_WAIT_MSG = "저장 공간을 지우는 중입니다. 끝난 뒤 다시 눌러 주세요."
+BACKUP_BUSY_MSG = "백업을 만들거나 확인하는 중입니다. 끝난 뒤 다시 눌러 주세요."
 
 
 def clearing_blocks(writes: frozenset) -> bool:
@@ -3278,6 +3279,9 @@ class MainWindow(QMainWindow):
         # [정보 › 저장 공간](57 K9) — 지우기·크기 재기 스레드의 주인은 창(대화상자가 닫혀도 산다 · 종료 표가 기다린다)
         self._clear_worker: ClearWorker | None = None
         self._size_workers: list[StorageSizeWorker] = []
+        # 내 기록 백업·복원(109 J9) — 백업 만들기·백업 검사는 한 번에 하나(_backup_worker) · 검사를 마친 백업(풀어 둔 임시 파일)은 창이 쥔다
+        self._backup_worker: BackupWorker | RestoreInspectWorker | None = None
+        self._restore_pending: storage.BackupInfo | None = None
         self._check_worker: ConnectionCheckWorker | None = None   # [정보 › 연결 점검](96 W3) — 창 수명(대화상자가 닫혀도 끝까지)
 
         # 랭커/분석 두 페이지가 각각 갖는 상단 바 위젯들. 함께 갱신·잠금한다.
@@ -15747,6 +15751,7 @@ class MainWindow(QMainWindow):
         FAST_QUIT_WAIT_S 만 기다리고 남은 것은 terminate). 아니면 예전처럼 하나씩 기다린다 — 최악 합계 약 60초."""
         self._save_settings()
         self._backfill_timer.stop()
+        self.discard_restore()   # 검사만 마친 백업의 임시 파일(옛 기록 전부 사본) — 확인 전에 끄면 지운다
         if self._prefetch is not None:
             self._prefetch.discard()  # 읽던 중이면 다음 행에서 멈춘다 — 종료를 2초씩 붙잡지 않게
         prune = getattr(self, "_prune_worker", None)
@@ -15801,6 +15806,8 @@ class MainWindow(QMainWindow):
             # 저장 공간 지우기(57 K9) — 바꿔 끼우기 전이면 멈추고(옛 파일 그대로), 바꿔 끼우는 중이면 끝까지. 크기 재기는 읽기만
             (self._clear_worker, cancel(self._clear_worker), (config.CLEAR_HALT_WAIT_S + 30) * 1000, False),
             *[(ld, ld.requestInterruption, 2000, False) for ld in self._size_workers],
+            # 백업 만들기·검사(109 J9) — SQLite 걸음·복사 덩어리마다 취소를 본다(반쯤 쓴 zip·임시 사본은 스스로 지운다)
+            (self._backup_worker, cancel(self._backup_worker), 10000, False),
             # 연결 점검(96 W3) — 점검 사이에서 멈춘다(요청 하나 타임아웃 10초)
             (self._check_worker, cancel(self._check_worker), 12000, False),
         ]
@@ -15829,7 +15836,11 @@ class MainWindow(QMainWindow):
     storage_measured = Signal(object)   # storage.Sizes — 열린 [저장 공간] 탭이 받는다
     storage_cleared = Signal(object)    # ClearResult
     # 지우는 종류 → 걸쇠에 넣는 저장소. rank·dist 는 기존 길(화면 스레드에서 바로 · 각자 멈춤)이라 여기 없다
-    CLEAR_STORES = {"cards": {STORE_CARDS}, "images": {STORE_IMAGES}, "details": {STORE_DETAILS}, "all": {"all"}}
+    # 복원("restore")은 걸쇠는 "all" 과 같되 종류가 달라 rank.db 를 안 지운다(109 M4)
+    CLEAR_STORES = {"cards": {STORE_CARDS}, "images": {STORE_IMAGES}, "details": {STORE_DETAILS}, "all": {"all"},
+                    "restore": {"all"}}
+    backup_finished = Signal(object)     # storage.BackupResult — 열린 [저장 공간] 탭이 받는다
+    restore_inspected = Signal(object)   # storage.BackupInfo
 
     def clearing(self) -> bool:
         return self._clear_worker is not None and self._clear_worker.isRunning()
@@ -15868,6 +15879,8 @@ class MainWindow(QMainWindow):
         순서: 걸쇠(새로 띄우는 쪽 막기) → 그 저장소에 쓰는 도는 작업에 멈춤 요청 → 작업 스레드가 그들이 끝나기를 기다린 뒤 지운다."""
         if self.clearing():
             return "이미 지우는 중입니다."
+        if self.backing_up():
+            return BACKUP_BUSY_MSG   # 백업이 fifa.db 를 읽는 동안 바꿔 끼우면 윈도우가 막는다 — 끝난 뒤
         if kind in ("images", "details", "all") and self.busy_for_release():
             return "검색·팀컬러 조회가 끝난 뒤 다시 눌러 주세요."
         stores = self.CLEAR_STORES[kind]
@@ -15896,7 +15909,9 @@ class MainWindow(QMainWindow):
 
     def _on_storage_cleared(self, res) -> None:
         CLEARING.difference_update(self.CLEAR_STORES[res.kind])
-        if res.kind == "all" and res.state == "ok":
+        if res.kind == "restore":
+            self._on_restore_ended(res)
+        elif res.kind == "all" and res.state == "ok":
             self._forget_everything()
         elif res.kind in ("cards", "images") and res.state == "ok":
             if res.kind == "images":
@@ -15904,12 +15919,126 @@ class MainWindow(QMainWindow):
             self._dirty = set(self._renderers())   # 카드 정보·그림을 쓰는 화면 전부 — 보이는 것은 바로, 나머지는 열 때
             self._render_current_page()
         self.storage_cleared.emit(res)
-        if res.kind in ("cards", "all") and self._card_sched is not None:
+        if res.kind in ("cards", "all", "restore") and self._card_sched is not None:
             self._card_sched.sync()   # 토글이 켜져 있으면 다음 틱이 다시 채운다(지금 바로 띄우지 않는다)
-        if res.kind == "all":
-            self.sync_ranker_pick_data()   # 수집이 꺼졌다 — 예약·토글·랭킹 화면을 맞춘다
+        if res.kind == "all" or (res.kind == "restore" and res.state == "ok"):
+            # "all": 수집이 꺼졌다 — 예약·토글·랭킹 화면을 맞춘다. 복원: 지금은 전제가 꺼져 있는데 백업에는 랭커 픽·구단주 분포가
+            # 있을 수 있다 — 한 번 부르면 꺼진 쪽을 지운다(구단주 분포 sync 도 이 안이라 따로 안 부른다 · 109 M67)
+            self.sync_ranker_pick_data()
         if self._released and self.isVisible():
             self.reload_after_release()   # 지우는 동안 창을 다시 열었다 — 그때 미룬 다시 읽기
+
+    # ── 내 기록 백업·복원(109 G1 · J9) ───────────────────────────────────
+    def backing_up(self) -> bool:
+        """백업을 만드는 중이거나 복원할 백업을 검사하는 중(둘은 한 번에 하나)."""
+        return self._backup_worker is not None and self._backup_worker.isRunning()
+
+    def _sync_settings_file(self) -> None:
+        """백업·복원 전에 settings.ini 를 디스크에 맞춘다(쓰는 자리마다 sync 하지만 창 위치 등은 닫을 때만 쓴다 — 지금 값을 담는다)."""
+        try:
+            self._settings().sync()
+        except Exception:
+            pass
+
+    def _backup_gate(self) -> str | None:
+        if self._quitting:
+            return "앱을 끄는 중입니다."
+        if self.clearing():
+            return CLEARING_WAIT_MSG   # 지우기·복원이 도는 중 — 백업이 반쯤 지워진 기록을 담지 않게(M4)
+        if self.backing_up():
+            return BACKUP_BUSY_MSG
+        return None
+
+    def start_backup(self, dest: str) -> str | None:
+        """[백업] 시작 → 시작 못 한 까닭(글) · None(시작함 — 끝나면 backup_finished)."""
+        why = self._backup_gate()
+        if why:
+            return why
+        self._sync_settings_file()
+        w = BackupWorker(dest)
+        w.done.connect(self.backup_finished.emit)
+        self._backup_worker = w
+        w.start()
+        return None
+
+    def inspect_backup(self, zip_path: str) -> str | None:
+        """[복원] 1단계 - 백업 zip 을 작업 스레드에서 풀어 검사하고 양쪽 집계를 낸다(끝나면 restore_inspected · 확인 창은 그 뒤)."""
+        why = self._backup_gate()
+        if why:
+            return why
+        self.discard_restore()
+        w = RestoreInspectWorker(zip_path)
+        w.done.connect(self._on_restore_inspected)
+        self._backup_worker = w
+        w.start()
+        return None
+
+    def _on_restore_inspected(self, info) -> None:
+        w = self._backup_worker
+        # 검사 도중 [정보] 창을 닫았다(discard_restore 가 멈춤을 요청) — 끝 신호가 늦게 와도 받을 창이 없으니 사본을 쥐지 않는다(②-2 리뷰)
+        dropped = isinstance(w, RestoreInspectWorker) and w.cancelled()
+        if info.state == "ok":
+            if self._quitting or dropped:
+                storage.discard(info)
+            else:
+                self._restore_pending = info   # 사용자가 확인하면 start_restore 가 가져간다 - 아니면 discard_restore
+        self.restore_inspected.emit(info)
+
+    def discard_restore(self) -> None:
+        """검사만 마친 백업의 임시 파일을 지운다(취소·창 닫음·앱 끔 · 여러 번 불러도 된다). 검사가 아직 돌면 멈춤을 요청한다 —
+        안 그러면 창을 닫은 뒤 끝난 검사의 사본(옛 기록 전부)이 앱을 끌 때까지 데이터 폴더에 남는다."""
+        w = self._backup_worker
+        if isinstance(w, RestoreInspectWorker) and w.isRunning():
+            w.cancel()
+        info, self._restore_pending = self._restore_pending, None
+        if info is not None:
+            storage.discard(info)
+
+    def start_restore(self, pre_backup: str | None) -> str | None:
+        """[복원] 2단계 - 확인 뒤. 걸쇠(CLEARING)를 잡고 쓰는 로더를 멈추고(clear_storage "all" 갈래와 같은 순서) 작업 스레드가 (복원 전 백업 →)
+        바꿔 끼운다 → 시작 못 한 까닭(글) · None(시작함 — 끝나면 storage_cleared 가 kind "restore" 로). rank.db 는 안 건드린다(M4)."""
+        info = self._restore_pending
+        if info is None:
+            return "복원할 백업을 다시 골라 주세요."
+        why = self._backup_gate()
+        if why:
+            return why
+        if self.busy_for_release():
+            return "검색·팀컬러 조회가 끝난 뒤 다시 눌러 주세요."
+        self._restore_pending = None   # 이제 복원 작업이 쥔다(끝나면 스스로 지운다)
+        self._sync_settings_file()
+        self.stop_predict_workers()
+        self._backfill_timer.stop()
+        if self._prefetch is not None:
+            self._prefetch.discard()   # 미리 읽기가 fifa.db 를 열고 있으면 바꿔 끼우기가 "다시" 로 끝난다
+            self._prefetch = None
+        CLEARING.update(self.CLEAR_STORES["restore"])
+        if self._card_sched is not None:
+            self._card_sched.halt_for_delete()
+        targets = running_writers(self.CLEAR_STORES["restore"])
+        for t in targets:
+            t.request_stop()
+        w = RestoreWorker(targets, info, Path(pre_backup) if pre_backup else None)
+        w.done.connect(self._on_storage_cleared)
+        self._clear_worker = w
+        w.start()
+        return None
+
+    def _on_restore_ended(self, res) -> None:
+        """복원 작업이 끝났다(걸쇠는 위에서 풀었다)."""
+        if res.state == "ok":
+            self._forget_everything()   # 표시 묶음도 이 안에서 비운다(109 M67)
+            self._exclude_on = self._read_exclude_switch()   # 설정에서 되돌린 값 - 메모리 쪽도 맞춘다(나머지 키는 다시 켤 때)
+            chk = getattr(self, "chk_exclude", None)
+            if chk is not None:
+                chk.blockSignals(True)
+                chk.setChecked(self._exclude_on)
+                chk.blockSignals(False)
+            self._load_season_cache()   # 백업의 시즌표
+        else:
+            # 복원 전 백업이 안 됐거나 멈춤 · 바꿔 끼우기 실패 - 옛 기록 그대로. 걸쇠를 풀었으니 멈춘 예약을 다시 세운다
+            self._backfill_timer.start(self.BACKFILL_RETRY_S * 1000)
+            self._sync_owner_dist()
 
     def _forget_everything(self) -> None:
         """내 기록 전부를 지운 뒤 — 창이 들고 있는 것도 놓고 검색 화면으로(지운 계정이 화면에 남지 않게)."""
@@ -16047,6 +16176,9 @@ class ClearResult:
     state: str          # "ok" · "busy"(쓰는 쪽이 안 멈춤 · 파일을 잡고 있음) · "cancelled" · "error"
     removed: int = 0    # 지운 줄·파일·폴더 수
     failed: int = 0     # 못 지운 파일·폴더 수(다른 실행본이 열고 있음)
+    detail: str = ""    # 복원: "settings"(기록은 되돌렸으나 설정 일부를 못 되돌림) · 복원 전 백업이 안 된 까닭(storage.BackupResult.state)
+    pre_bytes: int = 0  # 복원: 복원 전에 만든 백업 zip 크기
+    need: int = 0       # 복원: 복원 전 백업에 모자란 빈 공간
 
 
 class ClearWorker(Worker):
@@ -16095,6 +16227,72 @@ class ClearWorker(Worker):
         return ClearResult(k, "ok", ok, bad)
 
 
+class RestoreWorker(ClearWorker):
+    """[정보 › 저장 공간] 복원 한 번(109 J9) — 걸쇠를 잡은 뒤의 작업이라 ClearWorker 꼴이다(WRITES 가 비어 `Worker.start` 가 걸쇠에 안 막힌다 ·
+    쓰는 로더가 끝나기를 기다린 뒤 (복원 전 백업 →) 바꿔 끼운다). 종료 표는 `_clear_worker` 로 기다린다 — cancel 은 바꿔 끼우기 전까지 듣는다."""
+
+    def __init__(self, targets: list, info: "storage.BackupInfo", pre_backup: Path | None):
+        super().__init__("restore", targets)
+        self._info = info
+        self._pre_backup = pre_backup
+
+    def _clear(self) -> ClearResult:
+        if self._cancel.is_set():
+            return ClearResult("restore", "cancelled")
+        r = storage.restore(config.DB_PATH, config.SETTINGS_PATH, self._info, self._pre_backup, cancel=self._cancel.is_set)
+        return ClearResult("restore", r.state, detail=r.detail, pre_bytes=r.pre_bytes, need=r.need)
+
+    def run(self) -> None:
+        try:
+            super().run()
+        finally:
+            storage.discard(self._info)   # 쓰는 쪽이 안 멈춰 busy 로 끝났거나 취소됐어도 풀어 둔 사본은 남기지 않는다(여러 번 불러도 된다)
+
+
+class BackupWorker(Worker):
+    """[정보 › 저장 공간] 백업 만들기(109 J9) — fifa.db 는 읽기만(SQLite backup API)·쓰는 것은 데이터 폴더 임시 사본과 고른 곳의 zip 뿐이라
+    WRITES 가 비어 걸쇠가 start 를 안 막는다(지우는 중인지는 MainWindow.start_backup 이 묻는다)."""
+    done = Signal(object)   # storage.BackupResult
+
+    def __init__(self, dest: str):
+        super().__init__()
+        self._dest = Path(dest)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        try:
+            res = storage.backup(config.DB_PATH, config.SETTINGS_PATH, self._dest, self._cancel.is_set)
+        except Exception as e:   # noqa: BLE001 — 하나 때문에 창이 죽지 않게
+            res = storage.BackupResult("error", detail=f"{type(e).__name__}: {e}")
+        self.done.emit(res)
+
+
+class RestoreInspectWorker(Worker):
+    """[정보 › 저장 공간] 복원할 백업 검사(109 J9) — zip 을 데이터 폴더 안 임시 파일로 풀어 immutable 로 열어 보고 양쪽 집계를 낸다."""
+    done = Signal(object)   # storage.BackupInfo
+
+    def __init__(self, zip_path: str):
+        super().__init__()
+        self._zip = Path(zip_path)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+    def run(self) -> None:
+        try:
+            info = storage.inspect_backup(self._zip, config.DB_PATH, self._cancel.is_set)
+        except Exception as e:   # noqa: BLE001
+            info = storage.BackupInfo("error", reason=f"백업 파일을 확인하지 못했습니다: {type(e).__name__}")
+        self.done.emit(info)
+
+
 def _alive(t) -> bool:
     try:
         return t.isRunning()
@@ -16113,6 +16311,10 @@ class CachePruneWorker(Worker):
         self._api = api
 
     def run(self) -> None:
+        try:
+            storage.sweep_tmp(config.DB_PATH.parent)   # 복원·백업 도중 죽어 남은 임시 파일(109 M42) — 앱이 막 켜졌으니 도는 복원은 없다
+        except Exception:
+            pass
         try:
             # 카드 날짜별 시세 보관(51단계) — 관문과 무관한 자리라 꺼 둔 사람도 안내문의 날 수대로 지워진다
             cardcollect.prune(config.DB_PATH, date.today())
@@ -16945,6 +17147,68 @@ def issue_url() -> str:
     return f"{config.ISSUE_NEW_URL}?{q}"
 
 
+BACKUP_FILTER = "백업 파일 (*.zip)"
+
+
+def backup_default_name(prefix: str = "기록백업") -> str:
+    """파일 고르기 창이 처음 보여 줄 이름 — 사용자 폴더 안."""
+    return str(Path.home() / f"{prefix}_{date.today():%Y%m%d}.zip")
+
+
+def choose_backup_save(parent, default: str) -> str:
+    """백업을 저장할 파일 고르기 → 경로("" = 취소). 고르는 자리를 이 한 곳으로 둬서 테스트가 바꿔 끼운다(109 M7)."""
+    path, _ = QFileDialog.getSaveFileName(parent, "백업 파일 저장", default, BACKUP_FILTER)
+    if path and not path.lower().endswith(".zip"):
+        path += ".zip"
+    return path
+
+
+def choose_backup_open(parent) -> str:
+    """복원할 백업 파일 고르기 → 경로("" = 취소)."""
+    path, _ = QFileDialog.getOpenFileName(parent, "복원할 백업 파일", str(Path.home()), BACKUP_FILTER)
+    return path
+
+
+class RestoreConfirmDialog(QDialog):
+    """복원 확인(109 J9) — 백업과 지금 기록을 나란히 보여 주고, [복원 전에 지금 기록을 백업](기본 켬)을 묻는다.
+    Enter 가 복원을 누르지 않게 기본 단추는 [취소]."""
+
+    def __init__(self, info, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("내 기록 복원")
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("백업 파일의 기록으로 지금 기록을 바꿉니다. 지금 기록은 되돌릴 수 없습니다."))
+        grid = QGridLayout()
+        for c, head in enumerate(("", "백업 파일", "지금 기록")):
+            lb = QLabel(f"<b>{head}</b>")
+            grid.addWidget(lb, 0, c)
+        rows = (("경기 수", "matches"), ("마지막 경기", "last_match"), ("계정 수", "accounts"))
+        for r, (name, attr) in enumerate(rows, start=1):
+            grid.addWidget(QLabel(name), r, 0)
+            for c, summ in ((1, info.backup), (2, info.current)):
+                val = getattr(summ, attr) if summ.exists else ""
+                text = f"{val:,}" if isinstance(val, int) and summ.exists else (val or "없음")
+                lb = QLabel(text)
+                lb.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                grid.addWidget(lb, r, c)
+        v.addLayout(grid)
+        self.chk_pre = QCheckBox("복원 전에 지금 기록을 백업")
+        self.chk_pre.setChecked(True)
+        v.addWidget(self.chk_pre)
+        note = QLabel("랭킹 수집 기록(rank.db)과 API 키는 바뀌지 않습니다. 복원이 끝나면 프로그램을 닫고 다시 켜 주세요.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(note)
+        box = QDialogButtonBox()
+        self.btn_ok = box.addButton("복원", QDialogButtonBox.ButtonRole.AcceptRole)
+        self.btn_cancel = box.addButton("취소", QDialogButtonBox.ButtonRole.RejectRole)
+        self.btn_cancel.setDefault(True)
+        box.accepted.connect(self.accept)
+        box.rejected.connect(self.reject)
+        v.addWidget(box)
+        fit_to_screen(self, 520, 320)
+
+
 class AboutDialog(QDialog):
     """[정보] — 버전·이용 안내·개인정보·라이선스, 넥슨 홈페이지 데이터 켜고 끄기."""
 
@@ -17345,10 +17609,14 @@ class AboutDialog(QDialog):
         ("images", "그림 캐시", "선수 얼굴·등급과 시즌 배지·엠블럼·국기·특성 아이콘. 화면을 열 때 다시 받습니다"),
         ("details", "경기 상세 캐시", "넥슨에서 받아 아직 기록에 넣지 않은 경기 상세. 한도에 걸려 못 넣은 경기는 처음부터 다시 받습니다"),
         ("dist", "구단주 분포 · 랭커 픽", "구단주 분포 요약 · 랭커 픽 경기 · 포지션 특성. 토글이 켜져 있어도 다음 바퀴까지 칩·문장이 비어 있습니다"),
-        ("all", "내 기록 전부", "위 전부 + 경기 기록·검색 칩·팀컬러·ELO·거래·예측. 되돌릴 수 없습니다"),
+        ("all", "내 기록 전부", "위 전부 + 경기 기록·검색 칩·팀컬러·ELO·거래·예측. 백업해 두지 않았다면 되돌릴 수 없습니다"),
     )
-    STORAGE_KEEPS = ("지워지지 않는 것: API 키(.env) · 오류 기록(crash.log) · 창 설정(settings.ini) · 하루 요청 계수 · 시즌표 · 팀컬러 효과표. "
+    STORAGE_KEEPS = ("지워지지 않는 것: API 키 ·오류 기록(crash.log) · 창 설정(settings.ini) · 하루 요청 계수 · 시즌표 · 팀컬러 효과표 · "
+                     "[백업]으로 만든 파일(고른 폴더에 있어 앱이 지우지 못합니다). "
                      "랭킹 수집 기록·카드 정보·구단주 분포를 지워도 fifa.db 파일 크기는 바로 줄지 않습니다(내 기록 전부는 줄어듭니다).")
+    BACKUP_NOTE = ("내 기록(경기·메모·표시·ELO·거래 등 fifa.db 전체)과 설정(settings.ini)을 zip 파일 하나로 저장하거나 되돌립니다. "
+                   "API 키와 다른 구단주 1만 명분 순위 기록(rank.db)은 담지 않습니다. 백업 파일에는 경기 상대 닉네임과 검색한 구단주의 ELO 기록, "
+                   "구단주 분포 요약, 랭커 픽 경기가 들어 있습니다.")
 
     def _build_storage_tab(self) -> QWidget:
         w = QWidget()
@@ -17372,6 +17640,19 @@ class AboutDialog(QDialog):
             self._storage_size[kind], self._storage_btn[kind] = size, btn
         grid.setColumnStretch(0, 1)
         v.addLayout(grid)
+        self.lb_backup_note = QLabel(f"<b>내 기록 백업·복원</b><br><span style='color:{T.TEXT_DIM}'>{html.escape(self.BACKUP_NOTE)}</span>")
+        self.lb_backup_note.setWordWrap(True)
+        v.addWidget(self.lb_backup_note)
+        brow = QHBoxLayout()
+        self.btn_backup = QPushButton("백업")
+        self.btn_backup.clicked.connect(self._on_backup)
+        self.btn_restore = QPushButton("복원")
+        self.btn_restore.clicked.connect(self._on_restore)
+        for b in (self.btn_backup, self.btn_restore):
+            b.setEnabled(hasattr(win, "start_backup"))   # 창 없이 연 창(테스트)에서는 못 한다
+            brow.addWidget(b)
+        brow.addStretch(1)
+        v.addLayout(brow)
         self.btn_clear_rank = self._storage_btn["rank"]   # 옛 이름 — [수집 기록 지우기]는 여기로 옮겨 왔다(테스트·안내가 가리킨다)
         self.lb_storage = QLabel("")
         self.lb_storage.setWordWrap(True)
@@ -17383,10 +17664,14 @@ class AboutDialog(QDialog):
         v.addStretch(1)
         self._storage_sizes = None
         for sig, slot in ((getattr(win, "storage_measured", None), self._on_storage_sizes),
-                          (getattr(win, "storage_cleared", None), self._on_storage_cleared)):
+                          (getattr(win, "storage_cleared", None), self._on_storage_cleared),
+                          (getattr(win, "backup_finished", None), self._on_backup_finished),
+                          (getattr(win, "restore_inspected", None), self._on_restore_inspected)):
             if sig is not None:   # 창을 열어 둔 동안만 — 닫을 때 끊는다(작업 스레드는 창 수명)
                 sig.connect(slot)
                 self.finished.connect(lambda _r, s=sig, f=slot: self._drop_signal(s, f))
+        if getattr(win, "discard_restore", None) is not None:   # 확인 전에 창을 닫으면 풀어 둔 백업 사본을 지운다(복원이 시작됐으면 이미 비어 있다)
+            self.finished.connect(lambda _r: win.discard_restore())
         if getattr(win, "clearing", None) is not None and win.clearing():
             self._set_storage_busy(True)
             self.lb_storage.setText("지우는 중…")
@@ -17416,6 +17701,81 @@ class AboutDialog(QDialog):
         win = self.parent()
         for kind, btn in self._storage_btn.items():
             btn.setEnabled(not busy and (kind == "rank" or hasattr(win, "clear_storage")))
+        for btn in (self.btn_backup, self.btn_restore):   # 지우기·백업·복원은 한 번에 하나
+            btn.setEnabled(not busy and hasattr(win, "start_backup"))
+
+    # ── 내 기록 백업·복원(109 G1 · J9) ──
+    BACKUP_TEXT = {"nospace": "빈 공간이 모자라 만들지 못했습니다(약 {need} 필요). 다른 드라이브를 고르거나 공간을 비운 뒤 다시 눌러 주세요.",
+                   "cancelled": "백업을 멈췄습니다. 반쯤 만든 파일은 지웠습니다.",
+                   "error": "백업을 만들지 못했습니다. 반쯤 만든 파일은 지웠습니다. 저장할 폴더에 쓸 수 있는지 확인해 주세요."}
+    RESTORE_TEXT = {"busy": "도는 작업이 멈추지 않았거나 다른 창(실행본)이 파일을 쓰고 있어 복원하지 못했습니다. 지금 기록은 그대로입니다. 다른 창을 닫고 다시 눌러 주세요.",
+                    "cancelled": "복원을 멈췄습니다. 지금 기록은 그대로입니다.",
+                    "error": "복원하지 못했습니다. 지금 기록은 그대로입니다(디스크 등)."}
+
+    def _on_backup(self) -> None:
+        path = choose_backup_save(self, backup_default_name())
+        if not path:
+            return
+        self._set_storage_busy(True)
+        self.lb_storage.setText("백업을 만드는 중입니다. 기록이 크면 몇 분 걸립니다(창을 닫아도 이어서 만듭니다).")
+        why = self.parent().start_backup(path)
+        if why:
+            self._set_storage_busy(False)
+            self.lb_storage.setText(why)
+
+    def _on_backup_finished(self, res) -> None:
+        self._set_storage_busy(False)
+        if res.state == "ok":
+            self.lb_storage.setText(f"백업을 만들었습니다. 파일 크기 {_size_text(res.zip_bytes)}(기록 {_size_text(res.db_bytes)}를 압축). "
+                                    "이 파일은 앱이 지우지 못하니 필요 없으면 직접 지워 주세요.")
+        else:
+            self.lb_storage.setText(self.BACKUP_TEXT.get(res.state, res.state).format(need=_size_text(res.need)))
+
+    def _on_restore(self) -> None:
+        path = choose_backup_open(self)
+        if not path:
+            return
+        self._set_storage_busy(True)
+        self.lb_storage.setText("백업 파일을 확인하는 중입니다. 기록이 크면 몇 분 걸립니다.")
+        why = self.parent().inspect_backup(path)
+        if why:
+            self._set_storage_busy(False)
+            self.lb_storage.setText(why)
+
+    def _on_restore_inspected(self, info) -> None:
+        win = self.parent()
+        self._set_storage_busy(False)
+        if info.state != "ok":
+            text = info.reason or "백업 파일을 확인하지 못했습니다."
+            if info.state == "nospace":
+                text = f"빈 공간이 모자라 복원하지 못했습니다(약 {_size_text(info.need)} 필요). 공간을 비운 뒤 다시 눌러 주세요."
+            self.lb_storage.setText(text + (" 지금 기록은 그대로입니다." if info.state != "cancelled" else ""))
+            return
+        go, pre = self._ask_restore(info)
+        if not go:
+            win.discard_restore()
+            self.lb_storage.setText("복원하지 않았습니다. 지금 기록은 그대로입니다.")
+            return
+        pre_path = None
+        if pre:
+            pre_path = choose_backup_save(self, backup_default_name("복원전"))
+            if not pre_path:   # 복원 전 백업을 고르지 않았다 — 체크를 켜 놓고 백업 없이 지우지 않는다
+                win.discard_restore()
+                self.lb_storage.setText("복원 전 백업 위치를 고르지 않아 복원하지 않았습니다. 지금 기록은 그대로입니다.")
+                return
+        self._set_storage_busy(True)
+        self.lb_storage.setText("복원하는 중입니다. 도는 작업을 멈춘 뒤 바꿉니다(창을 닫아도 이어서 합니다).")
+        why = win.start_restore(pre_path)
+        if why:
+            win.discard_restore()
+            self._set_storage_busy(False)
+            self.lb_storage.setText(why)
+
+    def _ask_restore(self, info) -> tuple[bool, bool]:
+        """복원 확인 창 → (복원할까, 복원 전에 지금 기록을 백업할까). 테스트는 이 함수를 바꿔 끼운다(offscreen 에서 모달이 안 닫힌다)."""
+        dlg = RestoreConfirmDialog(info, self)
+        ok = dlg.exec() == QDialog.DialogCode.Accepted
+        return ok, dlg.chk_pre.isChecked()
 
     def _ask_storage(self, kind: str) -> bool:
         """지우기 확인 — 내 기록 전부는 두 번(U6). 경기 상세 캐시는 아직 못 넣은 경기 수를 적는다."""
@@ -17478,7 +17838,25 @@ class AboutDialog(QDialog):
                   "cancelled": "앱을 닫느라 지우기를 멈췄습니다. 아무것도 바뀌지 않았습니다.",
                   "error": "지우다가 멈췄습니다(디스크 등). 다시 눌러 주세요."}
 
+    def _on_restore_ended(self, res) -> None:
+        self._set_storage_busy(False)
+        if res.state == "ok":
+            text = ("복원했습니다. 설정이 모두 적용되도록 프로그램을 닫고 다시 켜 주세요."
+                    + (f" 복원 전 기록은 백업 파일({_size_text(res.pre_bytes)})로 저장했습니다." if res.pre_bytes else ""))
+            if res.detail == "settings":
+                text += " 설정 파일은 일부를 되돌리지 못했습니다."
+        elif res.state == "prebackup":
+            text = ("복원 전 백업을 만들지 못해 복원하지 않았습니다. 지금 기록은 그대로입니다. "
+                    + self.BACKUP_TEXT.get(res.detail, "").format(need=_size_text(res.need)))
+        else:
+            text = self.RESTORE_TEXT.get(res.state, res.state)
+        self.lb_storage.setText(text)
+        self._measure_storage()
+
     def _on_storage_cleared(self, res) -> None:
+        if res.kind == "restore":
+            self._on_restore_ended(res)
+            return
         self._set_storage_busy(False)
         if res.state == "ok":
             text = "지웠습니다." + (f" 다른 실행본이 열고 있는 {res.failed}개는 못 지웠습니다." if res.failed else "")

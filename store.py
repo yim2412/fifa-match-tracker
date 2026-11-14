@@ -412,6 +412,10 @@ OPTIMIZE_ON_OPEN = 0x10002
 
 # 다른 연결이 쓰는 중이면 이만큼 기다린다(초) — 다른 프로세스(check_api 등)가 같은 DB 를 열 때.
 OPEN_TIMEOUT_S = 15
+# 스키마 판 번호(109 J9) — PRAGMA user_version. 이 앱이 아는 가장 높은 판이다. 열 때 낮으면 올리고(open_db), 백업 복원은 이보다 높은
+# 판을 거부한다(새 앱이 만든 백업을 옛 앱에 되돌리면 모르는 열·표가 남는다). 0 = 판 번호를 두기 전 파일(받는다). 표·열을 새로 만들어
+# 옛 앱이 열면 안 되는 모양이 되면 이 수를 올린다.
+SCHEMA_VERSION = 1
 # 여는 순간의 설정(WAL 전환 · 표 만들기 · 통계 갱신)은 쓰기라, 같은 프로세스의 두 스레드가 동시에 하면 한쪽이
 # "database is locked" 로 죽었다 — 검색이 넥슨 조회와 DB 읽기를 나란히 돌리면서(03eeb08) 생겼다. 새 DB 를
 # 세 스레드가 동시에 열면 60번 중 56번(2026-10-04 실측). WAL 전환은 잠금 대기(timeout)를 안 거쳐서 기다려도 안 된다.
@@ -458,6 +462,8 @@ def open_db(path: Path | str, *, close_elsewhere: bool = False) -> sqlite3.Conne
         if "team_value" not in {r["name"] for r in conn.execute("PRAGMA table_info(elo_history)")}:
             conn.execute("ALTER TABLE elo_history ADD COLUMN team_value INTEGER")
         _ensure_elo_unique(conn)
+        if conn.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
+            conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         conn.commit()
         # 통계가 없거나 낡았으면 다시 잰다(아니면 거의 0초). 통계가 없을 때 SQLite 는 계정별 경기 수를 셀 때
         # 감독모드 경기 2만 개를 매번 다 훑었다 — 계정 11개에 0.79초 → 0.07초(2026-10-04 실측).

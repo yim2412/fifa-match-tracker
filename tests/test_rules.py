@@ -1053,7 +1053,7 @@ def test_every_modal_the_app_uses_is_blocked_in_smoke():
     guarded = guarded_modals(_src(ROOT / "tests" / "test_ui_smoke.py"))
     # 차단 목록을 못 읽으면 아래 검사가 전부 위반이 되거나(엄격) — 반대로 읽기가 넓으면 비어 있어도 통과한다
     assert {"QMessageBox.warning", "QMessageBox.question", "QDialog.exec", "QApplication.exec"} <= guarded, guarded
-    bad = ("QFileDialog.getOpenFileName(None)\nQMessageBox.about(None, 'a', 'b')\n"
+    bad = ("QInputDialog.getText(None)\nQMessageBox.about(None, 'a', 'b')\n"
            "def f():\n    m = QMenu()\n    m.exec(pos)\n")
     assert len(check_modals({"x.py": bad}, guarded)) == 3, check_modals({"x.py": bad}, guarded)
     assert not check_modals({"x.py": "QMessageBox.warning(None, 'a', 'b')\n"}, guarded)
