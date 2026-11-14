@@ -714,6 +714,8 @@ def _drive_uncovered() -> None:
             store.load_seasons(conn)
             store.load_team_colors(conn, ["가", "나"])
             store.recent_searches(conn)
+            store.set_trade_state(conn, my_ouid="a")            # 108 C 내 계정 — 값이 없으면 accounts 를 안 읽는다
+            store.my_account(conn, 50)
             store.match_dates(conn, "a", "2026-01-01")          # 예측(1.3.1) — test_predict·화면 스모크가 부른다
             store.fix_squad_days(conn)                          # 63 옛 줄 날 다시 세기 — test_rankerpick·test_storage 가 부른다
             store.predictions(conn)
@@ -1083,6 +1085,34 @@ def test_gone_names_stay_gone():
     assert [f.split(":")[1].split()[0] for f in check_gone_names({"x.py": planted})] == ["1", "2"], \
         check_gone_names({"x.py": planted})
     assert check_gone_names(_all(p for p in ALL_PY if p.name != "test_rules.py")) == []
+
+
+def check_loader_meta_calls(src: str, cls: str = "MatchLoader", allowed: str = "_meta") -> list[str]:
+    """108 C(3회차 S1) — 앱이 스스로 띄운 검색 로더(auto)는 게임 중 메타를 넥슨에 묻지 않는다. 그 판정은 MatchLoader._meta 한 곳이라
+    로더 안에서 get_meta( 를 직접 부르면 게임 중에도 정적 메타 파일을 받는다(옛 _current_grade 가 그랬다)."""
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.ClassDef) and node.name == cls:
+            for fn in node.body:
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or fn.name == allowed:
+                    continue
+                for sub in ast.walk(fn):
+                    if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                            and sub.func.attr == "get_meta"):
+                        out.append(f"{cls}.{fn.name}:{sub.lineno} get_meta 직접 — self._meta 를 거친다")
+    return out
+
+
+def test_loader_meta_goes_through_one_helper_108():
+    planted = ("class MatchLoader:\n"
+               "    def _meta(self, n):\n        return self._api.get_meta(n)\n"
+               "    def _current_grade(self):\n        raw = self._api.get_meta('division')\n"
+               "    def ok(self):\n        return self._meta('spid')\n"
+               "class Other:\n    def f(self):\n        return api.get_meta('spid')\n")
+    assert check_loader_meta_calls(planted) == ["MatchLoader._current_grade:5 get_meta 직접 — self._meta 를 거친다"], \
+        check_loader_meta_calls(planted)
+    bad = check_loader_meta_calls(_src(ROOT / "app_main.py"))
+    assert bad == [], bad
 
 
 def test_grade_cells_are_badged():

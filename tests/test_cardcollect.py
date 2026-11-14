@@ -857,7 +857,18 @@ def test_toggle_disabled_without_web_data():
 
 
 def test_toggle_asks_notice_12_when_collect_off():
-    """수집을 끈 8~11 동의자 — 다시 묻는 창이 안 뜨므로(notice_update_pending) 토글을 누를 때 묻는다."""
+    """수집을 끈 8~11 동의자 — 다시 묻는 창이 안 뜨므로(notice_update_pending) 토글을 누를 때 묻는다.
+    108 이 NOTICE_COLLECT_ONLY_FROM 을 15 로 올려 지금은 그 사람들도 다시 묻는다 — 토글 쪽 로직은 남아 있으니
+    그 시절 값(8)으로 되돌려 잰다(다시 수집 무관 안내를 안 올리면 같은 상황이 돌아온다)."""
+    saved_from = config.NOTICE_COLLECT_ONLY_FROM
+    config.NOTICE_COLLECT_ONLY_FROM = 8
+    try:
+        _toggle_asks_notice_12_when_collect_off()
+    finally:
+        config.NOTICE_COLLECT_ONLY_FROM = saved_from
+
+
+def _toggle_asks_notice_12_when_collect_off():
     for accept in (True, False):
         with Env() as e:
             e.set(notice=11, collect=False, on="")

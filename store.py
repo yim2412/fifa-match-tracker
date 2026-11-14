@@ -1191,6 +1191,18 @@ def set_trade_state(conn: sqlite3.Connection, **items) -> None:
         _put_state(conn, items)
 
 
+def my_account(conn: sqlite3.Connection, match_type: int) -> dict | None:
+    """[가계부] 띠에서 정한 내 계정 {ouid, nickname} — 계정 목록에 그 줄이 있고 저장된 경기가 1판 이상일 때만(108 C).
+    키 지문은 안 본다 — 키가 바뀌면 거래 받기가 my_ouid 를 비운다(reset_trades_for_key · J5)."""
+    mine = trade_state(conn).get("my_ouid")
+    if not mine:
+        return None
+    row = conn.execute("SELECT ouid, nickname FROM accounts WHERE ouid = ?", (mine,)).fetchone()
+    if row is None or not match_count(conn, mine, match_type):
+        return None
+    return {"ouid": row["ouid"], "nickname": row["nickname"] or ""}
+
+
 def reset_trades_for_key(conn: sqlite3.Connection, fp: str) -> None:
     """키가 바뀌었다 — 거래는 옛 지문으로 trades_prev 에 옮기고, 받기 상태를 비우고 새 지문으로. 한 트랜잭션
     (docs/DONE.md 1.4.1 키 바뀜). 내 계정은 '확인 전'으로 옮긴다. 확인 전에 키가 또 바뀌었으면(my_ouid 가 비었다) 확인 전 값을 그대로 둔다."""

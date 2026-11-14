@@ -194,7 +194,7 @@ _win = app_main.MainWindow(_NoApi())
 _win.resize(1600, 900)
 # 대부분의 테스트는 "모든 메뉴가 그려진 상태"를 본다 — 지연 그리기 자체는 test_lazy_* 가 켜서 잰다
 _win.LAZY_RENDER = False
-_win._on_fetch_team_colors = lambda: None
+_win._on_fetch_team_colors = lambda **k: None
 _OUID, _MATCHES, _DETAILS = _load()
 _win._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                 {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
@@ -3491,6 +3491,7 @@ def test_main_starts_update_check_after_show():
         pass
 
     calls = []
+    real_open_startup = app_main.MainWindow.open_startup   # run() 이 MainWindow 를 _Win 으로 바꾸기 전에 잡는다(아니면 재귀)
 
     class _Win:
         def __init__(self, api):
@@ -3519,6 +3520,13 @@ def test_main_starts_update_check_after_show():
 
         def open_last_account(self):
             calls.append("마지막 계정")
+
+        def open_startup(self, only_mine=False):
+            real_open_startup(self, only_mine)   # 진짜 갈래 — 내 계정 길이 안 맡으면 지금과 같다(108 C)
+
+        def _open_mine_on_startup(self):
+            calls.append("내 계정 길")
+            return False   # 내 계정 없음 · 동의 전 — 켤 때 내 계정은 tests/test_startup_108.py 가 실제 QThread 로 잰다
 
         def start_prefetch(self):
             calls.append("미리 읽기")
@@ -3559,8 +3567,10 @@ def test_main_starts_update_check_after_show():
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
     tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
-    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail, "미리 읽기"], calls
-    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail, "마지막 계정"], calls
+    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
+                          "내 계정 길", "미리 읽기"], calls
+    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
+                         "내 계정 길", "마지막 계정"], calls
 
 
 def _stop_shell():
@@ -6314,7 +6324,7 @@ def test_open_last_account_then_quiet_refresh():
     made, searched = [], []
 
     class _Rec:
-        def __init__(self, api, nick, mt, prev=None, offline_ouid=None):
+        def __init__(self, api, nick, mt, prev=None, offline_ouid=None, auto=False):
             made.append((nick, offline_ouid))
             self.progress = self.finished_ok = self.failed = self.finished = self
 
@@ -6328,7 +6338,7 @@ def test_open_last_account_then_quiet_refresh():
     saved = (config.DB_PATH, app_main.MatchLoader, _win._loader, _win._api_search, _win._ouid)
     config.DB_PATH = tmp / "t.db"
     app_main.MatchLoader, _win._loader = _Rec, None
-    _win._api_search = lambda nick, quiet=False: searched.append((nick, quiet))
+    _win._api_search = lambda nick, quiet=False, startup=False: searched.append((nick, quiet)) or True
     try:
         assert _win.open_last_account() is False and made == [], "열 계정이 없는데 열었다"
         conn = store.open_db(config.DB_PATH)
@@ -6530,7 +6540,7 @@ def test_search_hands_current_account_to_loader():
 
     class _Rec:
         def __init__(self, api, nick, mt, prev=None, prefetch=None, record_elo=False, want_max_division=False,
-                     track_missed=False):
+                     track_missed=False, auto=False, rank=True):
             got.append(prev)
             pf.append(prefetch)
             elo.append(record_elo)
@@ -7517,7 +7527,7 @@ def test_search_uses_the_box_that_has_text():
     calls = []
     saved = (_win._api_search, _win.stack.currentIndex(), _win.ed_search.text(),
              [e.text() for e in _win._nick_edits])
-    _win._api_search = lambda nick, quiet=False: calls.append(nick)
+    _win._api_search = lambda nick, quiet=False, startup=False: calls.append(nick) or True
     try:
         _win.stack.setCurrentIndex(_win.PAGE_SEARCH)
         _win.ed_search.setText("   ")
@@ -8190,7 +8200,7 @@ def test_storage_clear_all_wipes_and_resets_window():
             _rank_snapshot(datetime.now(), {})
             w = app_main.MainWindow(_NoApi())
             w.LAZY_RENDER = False
-            w._on_fetch_team_colors = lambda: None
+            w._on_fetch_team_colors = lambda **k: None
             w._on_loaded(_MATCHES, _DETAILS, _OUID, {"nickname": "테스트구단주", "level": 7},
                          {}, {}, 0, len(_MATCHES), None, "-", False, "", {}, {})
             assert w._matches_all and w._ouid
@@ -9513,7 +9523,8 @@ def test_notice_versions_split_first_and_reask():
                                             (11, False, True, True),    # 12 가 올라서 11 동의자도(수집을 끈 사람은 토글을 누를 때 — 51단계 5판)
                                             (12, False, True, True),    # 13 이 올라서 12 동의자도 수집을 켰으면(57 ⓪)
                                             (13, False, True, True),    # 14 가 올라서 13 동의자도 수집을 켰으면(57 ③)
-                                            (14, False, False, True)]:
+                                            (14, False, True, True),    # 15 가 올라서 14 동의자도(108 C — 수집과 무관)
+                                            (15, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -9523,22 +9534,25 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (14, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (15, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
-        assert config.NOTICE_COLLECT_ONLY_FROM == 8
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
         assert config.CARD_BACKFILL_NOTICE_VERSION == 12
         # 2.12.2: 13 = 다른 구단주의 챔스 이상 판수(57 ⓪) — 수집을 켠 사람 몫. 끈 12 동의자에겐 안 묻는다(켤 때)
         assert config.FC_GAMES_NOTICE_VERSION == 13
         # 2.13.1: 14 = 상대 점수 보여 주기·내 특성(수집 몫) + 버튼 자리·넥슨 페이지 안내 — COLLECT_ONLY_FROM 은 8 그대로(U7)
         assert config.OPP_SCORE_NOTICE_VERSION == config.MY_TRAIT_NOTICE_VERSION == 14
-        config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 13
-        assert not config.notice_update_pending(), "수집을 끈 13 동의자에게 14 를 다시 물었다(U7)"
-        assert "저장 공간" in notice.changes_html(13)
-        config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 12
-        assert not config.notice_update_pending(), "수집을 끈 12 동의자에게 수집 몫 안내를 다시 물었다"
+        # 3.10.1: 15 = 켤 때 내 계정의 새 경기 확인(108 C) — 수집과 무관해 COLLECT_ONLY_FROM 도 15(U6 — 수집 끈 2~14 동의자에게도)
+        assert config.STARTUP_CHECK_NOTICE_VERSION == config.NOTICE_COLLECT_ONLY_FROM == 15
+        for acc in (14, 13, 12, 8):
+            config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, acc
+            assert config.notice_update_pending(), f"수집을 끈 {acc} 동의자에게 15 를 안 물었다(U6)"
+            assert config.startup_check_allowed() is False, acc
+        assert "저장 공간" in notice.changes_html(13) and "새 경기만" in notice.changes_html(13)
         assert "챔피언스 이상에서 뛴 판수" in notice.changes_html(12)
+        config.NOTICE_ACCEPTED = 15
+        assert config.startup_check_allowed() and not config.notice_update_pending()
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -9578,16 +9592,14 @@ def test_notice8_asked_when_collect_off():
         for acc in (config.TRAIT_NOTICE_VERSION, config.TRAIT_NOTICE_VERSION - 1):   # 7 · 6
             config.NOTICE_ACCEPTED = acc
             assert config.notice_update_pending() is True, acc
-        # 9(상대 순위 구간)는 수집을 켠 사람 몫 — 8 동의자는 수집을 끄면 다시 안 묻고, 켜면 묻는다
-        config.NOTICE_ACCEPTED = 8
-        assert not config.notice_update_pending()
-        config.RANK_COLLECT = True
-        assert config.notice_update_pending()
-        config.RANK_COLLECT = False
+        # 9~14 는 수집을 켠 사람 몫이었고, 15(108 C)는 다시 모두에게 — 수집을 끈 8·14 동의자도 묻는다(U6)
+        for acc in (8, 14):
+            config.NOTICE_ACCEPTED = acc
+            assert config.notice_update_pending(), acc
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         assert not config.notice_update_pending()
-        assert config.NOTICE_COLLECT_ONLY_FROM == 8, \
-            "NOTICE_COLLECT_ONLY_FROM 을 6 으로 되돌리면 수집 끈 6·7 동의자가 안내 8 을 못 본다"
+        assert config.NOTICE_COLLECT_ONLY_FROM == 15, \
+            "NOTICE_COLLECT_ONLY_FROM 을 8 로 되돌리면 수집 끈 8~14 동의자가 안내 15 를 못 보고 켤 때 확인이 영영 안 열린다"
     finally:
         config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
 
@@ -9621,7 +9633,8 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  11: "75573220bc230e22",                          # 11 = 2.11.1 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4)
                  12: "b9157edc4717602e",                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 시즌 FC·구단가치 기록 · '상위 20 연속' 이름 바로잡음(공개 전이라 같은 버전)
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
-                 14: "ca182e7bf1bf2efc"}                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
+                 14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
+                 15: "7393043af5fa162b"}                                    # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
 
 
 def _notice_digest() -> str:
@@ -11321,12 +11334,18 @@ def test_84_game_change_reaches_every_auto_path():
         def start_visible_api_loader(self):
             calls.append("start")
 
+        def pause_startup_check(self):
+            calls.append("켤 때 확인 멈춤")    # 108 C — 실제로 멈추는지는 tests/test_startup_108.py(실제 QThread)
+
+        def resume_startup_check(self):
+            calls.append("켤 때 확인 재개")
+
     class _Sh:
         sched, owner_sched, card_sched, window = _S("rank"), _S("owner"), _S("card"), _W()
     app_main.on_game_changed(_Sh, True)
     app_main.on_game_changed(_Sh, False)
-    assert calls == [("pause", "rank"), ("pause", "owner"), ("pause", "card"), "stop",
-                     ("resume", "rank"), ("resume", "owner"), ("resume", "card"), "start"], calls
+    assert calls == [("pause", "rank"), ("pause", "owner"), ("pause", "card"), "stop", "켤 때 확인 멈춤",
+                     ("resume", "rank"), ("resume", "owner"), ("resume", "card"), "start", "켤 때 확인 재개"], calls
     import inspect
     src = inspect.getsource(app_main.main)
     assert "watch.changed.connect" in src, "main 이 감시를 셸에 안 이었다"

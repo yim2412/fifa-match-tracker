@@ -377,6 +377,13 @@ class AppShell(QObject):
         ask = getattr(w, "ask_notice_update_once", None)
         if ask is not None:
             QTimer.singleShot(0, ask)  # 옛 동의자에게 바뀐 안내 — 보인 **뒤**(트레이 [열기] · 두 번째 실행)
+        # 108 C — --tray 로 숨겨 켠 창은 처음 보일 때 내 계정(_shown_once 로 판정하지 않는다 — show_inactive 가 참으로 만든다 · 2회차 M5).
+        # 이어서 게임·숨김 때문에 미룬 새 경기 확인(다시 읽기가 돌면 그 finished 가 다시 부른다)
+        if not getattr(w, "_startup_done", True):
+            w.open_startup(only_mine=True)
+        resume = getattr(w, "resume_startup_check", None)
+        if resume is not None:
+            resume()
         # 74 ① — 상주 중엔 6시간마다라 새 판을 받으려면 껐다 켜야 했다. 연달아 열 때 GitHub 에 매번 묻지 않게 간격을 둔다
         self._check_update(min_gap_s=config.UPDATE_ON_SHOW_MIN * 60)
         path, self._pending_crash = self._pending_crash, None
@@ -389,6 +396,9 @@ class AppShell(QObject):
         w.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         w.showMinimized()
         w._shown_once = True
+        opener = getattr(w, "open_startup", None)
+        if opener is not None:
+            opener(only_mine=True)   # 최소화라 미룬다 — 작업 표시줄에서 복원하면 changeEvent 가 연다(108 3회차 M4)
 
     # 트레이 풍선 알림은 없다(2026-10-05 사용자 — "알림 자체는 안 보내도록"). 숨긴 동안 생긴 일은 창을 열 때 안내한다.
     def crash_while_hidden(self, path) -> None:

@@ -12,7 +12,7 @@
 | `app_main.py` | PySide6 UI — 왼쪽 메뉴(`NAV` 표)·페이지·작업 스레드 로더들. 메뉴를 늘리려면 `NAV` 에 한 줄(그리기 표는 PyQt 7) · 세부는 머리말 |
 | `theme.py` | 테마 — 어두운·밝은 팔레트(`MODE` 로 선택)·QSS·`apply()`(Fusion + 팔레트 + 기본 글꼴). **색은 여기서만 · 글씨 크기도 여기서만**(78 ② 단계 상수 `PX_*`/`PT_*`/`TABLE_*_PX` · 줄임 하한 `*_FLOOR` 은 안 키운다 — 밖에서 숫자로 박으면 `test_rules`) · 모서리는 `RADIUS_CARD`(카드)·`RADIUS_CTRL`(부품 · 카드 안 작은 카드) · 칩은 `widgets.pill_radius` · 카드 테두리 `CARD_BORDER`(86) · **레이아웃 여백 숫자는 4px 단위**(`test_spacing_on_4px_grid_86`) |
 | `nexon_api.py` | 넥슨 오픈API 클라이언트(`FCOnlineAPI`). **엔드포인트 경로·에러코드 상수가 전부 여기 상단에** |
-| `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(2026-10-19 사용자: 무승부 포함 승÷전체 — `config.WIN_RATE_DRAWS_IN` 이 `is_mixed` 를 늘 거짓으로 · 끄면 A6 섞임 규칙 · 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
+| `models.py` | 매치 상세 JSON → `MatchSummary` 파싱, `Stats`·상대 전적·승률 추이 집계 · **내 경기 승률은 전부 `win_pct`(2026-10-19 사용자: 무승부 포함 승÷전체 — `config.WIN_RATE_DRAWS_IN` 이 `is_mixed` 를 늘 거짓으로 · 끄면 A6 섞임 규칙 · 묶음마다 `mixed` 한 번 · 표본은 `is_weak(rated, …)` · 화면 글자는 `widgets.win_rate_text`)** · **승·무·패를 세는 자리는 `result_of`(108 A — 내 쪽이 "오류"로 남은 몰수패 `forfeit_loss` 도 패) · 경기당 평균은 빈 판(`MatchSummary.blank` = `is_blank` — 한쪽이라도 선수 0명)을 뺀다 · 승무패 수·득실 합계는 센다** · 새 승률 집계 클래스는 `RATE_CLASSES` 에(`test_rules` 가 대조) · 세부는 머리말 |
 | `matchtime.py` | **넥슨 오픈API 시각(matchDate·achievementDate·tradeDate·createDate)은 UTC** — 읽기는 여기서만(`parse` KST naive · `day` · `label` · SQL 경계 `raw_bound` · `epoch`) · 오프셋 `config.MATCH_DATE_OFFSET_H` · 저장 원문은 안 바꾼다 · 밖에서 직접 파싱하면 `test_rules`(함수 단위 + 도우미 한 단계 · 예외 표 `RAW_TIME_ALLOW`) · 63단계 |
 | `habits.py` | 내 경기 습관·기준선(2.6.1) — 계산만(화면은 `core_api`) · N2 등급 체류 `division_stays` · 기준선 `side_totals`·`paired_diff`(나 − 같은 경기 상대, 경기 단위 짝 구간) · N19 칩 `strength_chips`·전반 비중 `half_share_diff` · N17 골 흐름 `goal_flow` · N16 운 범위 `daily_luck` · A3 연승·연패 기준 `streak_baseline`(느려서 `app_main.HabitsWorker`) · 55 머리 줄·점수 리포트 `club_day`·`first_reach`·`score_report` · 55 달력 `calendar_days`(띠는 N16 과 같은 `luck_band`)(남들 값은 `rankmeta.club_head` — `EloLoader` 가 읽어 `EloSeries.club` · 글은 `app_main.club_cells`) · N20 경기 습관 `habit_tables`(카이제곱 `chi2_sf` 직접 구현 — scipy 없음) · N18 공격 루트 `classify_route`·`attack_routes`(상대 슛에도 같은 분류기 · 문턱 `config.N18_*` 에 실측 근거) · C4 자리별 수준 `pos_level`(분포는 `ownerdist.load_pos_dist` — v2 바퀴 · 칸마다 층 하한 · 상수 `config.C4_*` 는 측정 C 판정기와 같은 값) · 57 K4 이력 `history_runs`(깜빡임 `config.K4_MIN_RUN` · 빈 선발은 뺀다) · 97 X3 분포 대비 `dist_table`(여섯 지표 전부 한 표 — 칩과 같은 `dist_side`·`OwnerDist.pct` · 층 평균은 `ownerdist.StrataDist.mean` · 층을 모르면 층 열 없이 전체 백분위만) · 세부는 머리말 |
 | `sessions.py` | 세션 · 경기를 돌린 시간 · 연패 끊는 패턴(97 조각 1) — 계산만(화면은 `core_api` · [흐름 › 플레이 기록] 탭 [세션]·[경기 시간]·[연패]) · 세션 = `SESSION_GAP_MIN` 넘게 쉬거나 **KST 0시를 넘으면 끊는다**(감독모드는 켜 두면 126시간 세션이 나온다) · 마지막 세션 `ongoing`(`split_sessions(now=)` — 판 수 구간·운 범위 세기에서 뺀다) · Y2 "경기를 돌린 시간(추정)" = 세션 안 간격 중앙값을 한 판 길이로(`Y2_*`) · N1 연패 뒤 다음 판은 조건 셋 고정·문턱 `N20_ALPHA / N1_TESTS`(`habits._chi_table(alpha=)` 재사용) · 승률 클래스를 안 만든다(`rate` 는 `win_pct` 한 번 낸 값 — RATE_CLASSES 밖) · N3 은 `habits.habit_tables` 의 요일 표(요일×시간대 지도는 [승부처 분석] 에 이미 있어 안 만든다) · **조각 2: X1·F5 [흐름 › 시즌 돌아보기](`season_spans`·`stored_spans`·`season_pace`·`season_review` — 시즌 시작부터 경과 일수로 지난 시즌과 견준다 · 늘 저장 전체에서 그때그때 계산 · 새 표 없음 · 시즌 경계는 `Season.start_at`/`end_at` 8시 · 지난 시즌은 저장이 시작+`N12_START_DAYS` 안부터일 때만 · 무효화는 시즌표·ELO 도착·`RANK_VIEW_KEYS`) · Y1 대시보드 머리 연패 한 줄(`streak_note` — `Y1_MIN_LOSS`·`Y1_RECENT_H` · 저장 전체 · 색은 [연패] 표가 유의하고 표본이 모자라지 않을 때만 · 경고색 없음 · `ctx` 는 함수로 넘겨 조건을 통과한 뒤에만 짓는다)** · **조각 3: 둘러보기 자료(`demodata._session_stamps`)가 하루 몇 번 몰아서 한 꼴이라 데모에서도 세션이 선다(결과·점수는 그대로 — 옛 균등 추첨의 난수를 건너뛴다) · 용어 말풍선은 `glossary`(`session`·`play_time`·`elapsed_days`·`after_losses`)** · 세부는 머리말 |
@@ -71,6 +71,7 @@ python rankcollect.py --pages 3   # 랭킹 수집 실제 3쪽(저장 안 함 —
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
 python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
+python tests/test_startup_108.py   # 켤 때 내 계정(108 C) — **실제 QThread**(스모크는 start 를 막아 신호 순서를 못 본다) · 가짜 오픈API · HTTP 기록기(웹 데이터 켠 채 홈페이지 0) · 게임 진입/DB 읽기/확인 도중 · 최소화 · 트레이 · 내려놓기
 python tests/test_keyboard.py  # 키보드만으로(96 K3) — Tab 테두리 픽셀 · 목록 지금 줄 · 대화상자 Enter(키 창·소개·안내·[정보]) · 더블클릭 한 번 = 한 번
 python tests/test_demo.py      # 둘러보기(96 O2) — 실제 키를 env 에 둔 채 창·검색·토글을 눌러 HTTP 0 · 다시 띄운 env = 원래 env · 데모 폴더 쓸기
 python app_main.py --demo      # 둘러보기 직접 띄우기(지어낸 자료 · 넥슨 요청 0)
@@ -156,6 +157,9 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 - **에러 메시지 표는 `nexon_api.ERROR_MESSAGES`.** 새 코드가 생기면 여기에 넣는다.
 - **터미널 스모크는 `python check_api.py <닉네임>`.** 새 엔드포인트를 붙이면 여기에도
   한 줄 추가한다.
+- **켤 때 넥슨 요청은 내 계정의 새 경기 확인 하나뿐입니다**(108 C · 안내 15 `config.startup_check_allowed`). 진입은 `MainWindow.open_startup`
+  한 곳이고 오픈API 만 씁니다(`_api_search(startup=True)` = 순위 0 · 메타는 게임 중 디스크 `MatchLoader._meta` · 팀컬러는 캐시만 `_startup_auto`).
+  `_on_loaded` 뒤에 새 자동 웹 읽기를 붙이면 `tests/test_startup_108.py` 의 홈페이지 0 이 잡습니다. 로더 안 메타는 `_meta` 로만(`test_rules`).
 
 ### 시즌 (`seasons.py`) — 넥슨 시즌표의 함정
 

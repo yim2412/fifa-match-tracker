@@ -435,15 +435,23 @@ class MatchLoader(Worker):
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
                  record_elo: bool = False, want_max_division: bool = False, emit_partial: bool = False,
-                 track_missed: bool = False):
+                 track_missed: bool = False, auto: bool = False, rank: bool = True):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
         offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
         prefetch: 켤 때 미리 읽어 둔 저장 경기 — 같은 계정이면 DB 를 다시 안 읽는다.
         record_elo: 받은 ELO 를 fifa.db elo_history 에 — 메인 검색만. 구단주 비교도 같은 클래스라
         기본은 꺼 둔다(비교 상대의 이력을 쌓지 않는다).
-        track_missed: 상세를 못 받은 경기를 detail_retry 에 남기고 다음 검색에서 다시 묻는다(96 W2) — 메인 검색만."""
+        track_missed: 상세를 못 받은 경기를 detail_retry 에 남기고 다음 검색에서 다시 묻는다(96 W2) — 메인 검색만.
+        auto: 앱이 스스로 띄운 로더(켤 때 · 다시 읽기 — 108 C). 게임 중이면 메타를 넥슨에 묻지 않고 디스크 캐시로(_meta).
+        사용자가 누른 검색은 False — 게임 중에도 지금처럼 받는다(84 G3 "사용자가 누른 것은 그대로").
+        rank: 넥슨 홈페이지 순위를 묻나 — 켤 때 확인만 False(홈페이지 0 · U5)."""
         super().__init__()
+        self.auto = auto
+        self._rank_on = rank
+        self.startup = False          # 창이 켤 때 확인으로 띄웠다 — 게임이 켜지면 이 로더만 멈춘다(pause_startup_check)
+        self.game_cancelled = False   # 게임 때문에 멈췄다 — finished 에서 남은 확인으로 되돌린다
+        self.last_outcome: SearchOutcome | None = None   # outcome 신호와 같은 값 — finished 에서 끝난 모양을 본다
         self._track_missed = track_missed
         self._failures: dict[str, str] = {}   # match_id → 이유(store.RETRY_*) — 상세 스레드들이 채운다
         self._fail_lock = threading.Lock()
@@ -531,6 +539,7 @@ class MatchLoader(Worker):
         try:
             self._run_search(out)
         finally:
+            self.last_outcome = out
             self.outcome.emit(out)
 
     def _run_search(self, out: SearchOutcome) -> None:
@@ -548,8 +557,8 @@ class MatchLoader(Worker):
                 base_f = self._prefetch.take(ouid, self._match_type) if self._prefetch else None
                 if base_f is None:
                     base_f = self._side.submit(load_saved, ouid, self._match_type, lambda: self._cancel)
-            rank_f = self._side.submit(self._safe_rank)
-            if self._record_elo:
+            rank_f = self._side.submit(self._safe_rank) if self._rank_on else None
+            if self._record_elo and rank_f is not None:
                 # 받는 즉시 로더 쪽에서 적는다 — 화면(_on_rank_ready)은 그사이 다른 계정을 열면 늦게 온 값을 버린다
                 rank_f.add_done_callback(lambda f, o=ouid: self._save_elo(o, f))
             meta_f = self._side.submit(lambda: (self._safe_meta("spid", "id", "name"),
@@ -664,8 +673,8 @@ class MatchLoader(Worker):
             # 나란히 시작). 아직이면 기다리지 않고 먼저 그린다 — 미리 읽은 계정이면 검색 2.0초 중 1.1초가
             # 이 기다림이었다(2026-10-04 실측). 쓰는 곳은 랭커 카드뿐이라 오면 rank_ready 로 카드만 다시.
             # 실패해도 전적 조회는 살린다.
-            rank = rank_f.result() if rank_f.done() else None
-            rank_pending = rank is None and not rank_f.done()
+            rank = rank_f.result() if rank_f is not None and rank_f.done() else None
+            rank_pending = rank_f is not None and rank is None and not rank_f.done()
             grade_name, is_champion, badge_path, division_names = \
                 self._current_grade(details, ouid)
 
@@ -796,10 +805,18 @@ class MatchLoader(Worker):
             self._fail(match_id, store.RETRY_FORMAT)
             return None
 
+    def _meta(self, name: str) -> list[dict]:
+        """메타를 읽는 한 곳 — 앱이 스스로 띄운 로더(auto)는 게임 중이면 넥슨에 묻지 않고 디스크 캐시를 날짜와 무관하게
+        (없으면 빈 목록 = 이름 대신 코드 · 108 3회차 S1). 판정은 읽는 그 순간에 — 로더가 도는 사이 게임이 켜질 수 있다.
+        get_meta 의 주간 캐시(_meta_read)는 갱신일 전 파일을 None 으로 줘 그걸로는 못 막는다."""
+        if self.auto and game_paused():
+            return read_meta_on_disk(config.CACHE_DIR, name) or []
+        return self._api.get_meta(name)
+
     def _safe_meta(self, name: str, key: str, val: str) -> dict:
         """메타를 못 받아도 전적은 보여준다 — 이름 대신 코드가 뜰 뿐."""
         try:
-            return {m[key]: m[val] for m in self._api.get_meta(name)
+            return {m[key]: m[val] for m in self._meta(name)
                     if key in m and val in m}
         except Exception:
             return {}
@@ -808,7 +825,7 @@ class MatchLoader(Worker):
         """_safe_meta 와 달리 항목 전체(dict)를 key 로 묶어 돌려준다 —
         seasonid 처럼 여러 필드(className·seasonImg)가 다 필요할 때."""
         try:
-            return {m[key]: m for m in self._api.get_meta(name) if key in m}
+            return {m[key]: m for m in self._meta(name) if key in m}
         except Exception:
             return {}
 
@@ -824,7 +841,7 @@ class MatchLoader(Worker):
         """
         raw = []
         try:
-            raw = self._api.get_meta("division")
+            raw = self._meta("division")
         except NexonAPIError:
             pass
         names = {d.get("divisionId"): d.get("divisionName") for d in raw
@@ -2467,6 +2484,11 @@ GAME_CHECK = gameguard.game_running   # 테스트가 바꿔 끼운다
 _GAME = {"on": False}                 # 감시가 고친다 — 재할당 전역 대신 dict(이름 import 해도 같은 값을 본다)
 
 
+MY_ACCOUNT_CHIP = "내 계정"   # 최근 검색 칩 맨 앞(108 C)
+GAME_SKIP_CHECK_MSG = "게임이 켜져 있어 새 경기 확인을 쉬었습니다."
+GAME_STOP_CHECK_MSG = "게임이 켜져 있어 새 경기 확인을 멈췄습니다."
+
+
 def game_paused() -> bool:
     return _GAME["on"]
 
@@ -2505,8 +2527,10 @@ def on_game_changed(shell, on: bool) -> None:
     if win is not None and not getattr(win, "_quitting", False):
         if on:
             win.stop_api_loaders()
+            win.pause_startup_check()    # 108 C — 도는 켤 때 확인만(사용자 검색 · DB 읽기는 그대로)
         else:
             win.start_visible_api_loader()
+            win.resume_startup_check()
 
 
 class RankCollectScheduler(QObject):
@@ -3081,6 +3105,12 @@ class MainWindow(QMainWindow):
         self._habits_workers: list[HabitsWorker] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
         self._notice_after_restore = False  # 최소화 중이라 미뤘다 — 창이 돌아오면 묻는다
+        # 108 C 켤 때 내 계정 — 실행당 한 번(open_startup) · 최소화라 미뤘다 · 켤 때 길(대시보드 · 팀컬러는 캐시만) ·
+        # 게임·숨김 때문에 미룬 새 경기 확인 (ouid, 닉네임)
+        self._startup_done = False
+        self._startup_after_restore = False
+        self._startup_auto = False
+        self._startup_check_pending: tuple[str, str] | None = None
         # 거래 기록(1.4.1) — 받기는 한 번에 하나. 도는 중에 다시 띄우라는 요청(키 바꿈 등)이 오면 끝난 뒤 한 번 더
         self._trade_loader: TradeLoader | None = None
         self._trade_again = False
@@ -3328,6 +3358,9 @@ class MainWindow(QMainWindow):
                 self._notice_after_restore = False
                 # 상태가 바뀐 직후엔 창이 아직 제자리가 아니다 — 한 바퀴 뒤 그 창 위에
                 QTimer.singleShot(0, self.ask_notice_update_once)
+            if getattr(self, "_startup_after_restore", False) and not self.isMinimized():
+                self._startup_after_restore = False   # 최소화로 켠 창 · show_inactive — 복원하면 그때 내 계정(108 C)
+                QTimer.singleShot(0, lambda: self.open_startup(only_mine=True))
 
     def moveEvent(self, e) -> None:
         super().moveEvent(e)
@@ -3588,6 +3621,8 @@ class MainWindow(QMainWindow):
         self.sync_ranker_pick_data()
         self.start_visible_api_loader()
         self._sync_card_backfill(start=ok)   # 안내 12 수락 직후 — 토글이 켜져 있을 때만 받기 시작(꺼져 있으면 아무것도 안 함)
+        if ok:
+            self.open_startup(only_mine=True)   # 안내 15 동의 직후 그 자리에서 내 계정(U6) — 내 계정이 없으면 아무것도 안 한다
         return ok
 
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
@@ -3854,21 +3889,26 @@ class MainWindow(QMainWindow):
             if item.widget():
                 item.widget().deleteLater()
 
+        mine = None
         try:
             conn = store.open_db(config.DB_PATH)
             try:
                 rows = store.recent_searches(conn, max(self.RECENT_SEARCH_LIMIT, self.RECENT_LIST_LIMIT))
+                mine = store.my_account(conn, config.DEFAULT_MATCH_TYPE)
             finally:
                 conn.close()
         except Exception:
             rows = []
+        if mine is not None:
+            # 108 C — 내 계정은 맨 앞에 고정(칩 수는 그대로 · 폭 예산을 안 늘린다)
+            rows = [mine] + [r for r in rows if r["ouid"] != mine["ouid"]]
         # 위쪽 이름 칸 목록(76) — 칩보다 길게(칩은 시작 화면 한 줄이라 5개)
         self._recent_model.setStringList([r["nickname"] or r["ouid"][:8] for r in rows[:self.RECENT_LIST_LIMIT]])
         rows = rows[:self.RECENT_SEARCH_LIMIT]
 
         for r in rows:
             nick = r["nickname"] or r["ouid"][:8]
-            chip = QPushButton(nick)
+            chip = QPushButton(f"{MY_ACCOUNT_CHIP} · {nick}" if r is mine else nick)
             chip.setCursor(Qt.CursorShape.PointingHandCursor)
             chip.clicked.connect(lambda _=False, n=nick: self._search_recent(n))
             self.row_recent.addWidget(chip)
@@ -4251,7 +4291,7 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         btn = QPushButton("상대 팀컬러 불러오기")
         btn.setStyleSheet(T.OUTLINE_BUTTON_QSS)
-        btn.clicked.connect(self._on_fetch_team_colors)
+        btn.clicked.connect(lambda: self._on_fetch_team_colors())   # clicked 의 checked 가 web 으로 가지 않게
         lb = QLabel("")
         lb.setStyleSheet(f"color: {T.TEXT_DIM};")
         row.addWidget(btn)
@@ -7560,6 +7600,7 @@ class MainWindow(QMainWindow):
         except sqlite3.Error as e:
             self.statusBar().showMessage(f"내 계정을 저장하지 못했습니다: {e}", 5000)
         self._invalidate_trades()
+        self._refresh_recent()   # 108 C — 칩 맨 앞 "내 계정" 이 바로 따라온다
 
     def _on_trade_mine(self) -> None:
         if self._ouid:
@@ -7595,16 +7636,19 @@ class MainWindow(QMainWindow):
         self._trade_loader = ld
         ld.start()
 
-    def _yield_trades(self) -> None:
+    def _yield_trades(self) -> bool:
         """다른 오픈API 로더가 시작된다 — 쪽 사이에서 멈추게만(기다리지 않는다). 그 로더가 끝나면 이어 받는다.
-        랭커 픽도 같이 양보한다(랭커 사이에서) — 끝나면 거래 → 랭커 픽 순으로 잇는다."""
-        if self._trade_loader is not None and self._trade_loader.isRunning():
+        랭커 픽도 같이 양보한다(랭커 사이에서) — 끝나면 거래 → 랭커 픽 순으로 잇는다. 거래 로더를 멈췄으면 True."""
+        stopped = self._trade_loader is not None and self._trade_loader.isRunning()
+        if stopped:
             self._trade_loader.cancel()
         self.stop_api_loaders()
         self._yield_backfill()  # 같은 DB 쓰기 — 검색 저장이 1,000경기 묶음 뒤에 줄 서지 않게
+        return stopped
 
     def _on_trades_wiped(self) -> None:
         self._invalidate_trades()  # 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게
+        self._refresh_recent()     # 키가 바뀌어 내 계정이 비워졌다(reset_trades_for_key) — 칩에서도 뺀다(108 3회차 M5)
 
     def _on_trades_done(self, res) -> None:
         self._trade_result = res  # 그리기는 스레드가 끝난 뒤(finished) — 여기선 아직 isRunning 이라 "받는 중"으로 남는다
@@ -11721,16 +11765,18 @@ class MainWindow(QMainWindow):
         self.lb_search_msg.setText("")
         self._api_search(nick)
 
-    def _api_search(self, nick: str, quiet: bool = False) -> None:
+    def _api_search(self, nick: str, quiet: bool = False, startup: bool = False) -> bool:
         """quiet: 켤 때 자동으로 하는 새 경기 확인 — 실패해도 경고 창 없이 상태줄에만(화면은 DB 로 이미 떠 있다).
-        키가 거절된 경우만은 그래도 묻는다(사용자가 해야 할 일이 있다)."""
+        키가 거절된 경우만은 그래도 묻는다(사용자가 해야 할 일이 있다).
+        startup: 켤 때 내 계정 확인(108 C) — 오픈API 새 경기만(순위 0 · 메타는 게임 중 디스크) · 거래는 멈춘 것만 다시.
+        로더를 띄웠으면 True — 미룬 확인을 지울지 resume_startup_check 가 이걸로 정한다(3회차 M3)."""
         if self._loader and self._loader.isRunning():
-            return
+            return False
         if self._held_by_clearing(MatchLoader):
             if not quiet:
                 self.lb_search_msg.setText(CLEARING_WAIT_MSG)
                 self.statusBar().showMessage(CLEARING_WAIT_MSG)
-            return
+            return False
         self._nick = nick
         self._quiet_search = quiet
         self._set_busy(True)
@@ -11738,12 +11784,21 @@ class MainWindow(QMainWindow):
         prev = (self._ouid, self._matches_all, self._details_all) if self._ouid else None
         # 미리 읽은 것은 한 번만 넘긴다 — 다른 계정이면 로더가 멈추고 버린다
         prefetch, self._prefetch = self._prefetch, None
-        self._yield_trades()  # 거래 받기는 쪽 사이에서 멈추고, 이 검색이 끝나면(finished) 이어 받는다
-        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
-                                   prefetch=prefetch, record_elo=True, want_max_division=True, track_missed=True)
+        trades_stopped = self._yield_trades()  # 거래 받기는 쪽 사이에서 멈추고, 이 검색이 끝나면(finished) 이어 받는다
+        ld = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, prev=prev,
+                         prefetch=prefetch, record_elo=True, want_max_division=True, track_missed=True,
+                         auto=startup, rank=not startup)
+        ld.startup = startup
+        self._loader = ld
         self._loader.outcome.connect(self._on_search_outcome)
-        self._loader.finished.connect(self.start_trades)
+        if not startup or trades_stopped:
+            # 켤 때 확인은 새 거래 받기를 시작하지 않는다(J7) — 이 검색이 멈춘 것만 되살린다
+            self._loader.finished.connect(self.start_trades)
+        # 켤 때 확인도 잇는다 — _yield_trades 가 랭커 픽·특성을 멈췄고 다시 켜는 짝은 이것뿐이다(5회차 S1).
+        # 보이는 화면만 · game_paused() 를 보는 함수라 켤 때 대시보드면 요청 0
         self._loader.finished.connect(self.start_visible_api_loader)  # 거래가 시작됐으면 그쪽이 끝난 뒤
+        if startup:
+            self._loader.finished.connect(lambda ld=ld: self._on_startup_check_finished(ld))
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
@@ -11753,6 +11808,11 @@ class MainWindow(QMainWindow):
         self._loader.max_division_ready.connect(self._on_max_division)
         self._loader.elo_saved.connect(self._load_elo)
         self._loader.start()
+        if not startup:
+            # 사용자가 연 검색이 실제로 시작됐다 — 켤 때 길 표시를 끄고 미룬 확인은 버린다(3회차 M7 — 돌아가는 앞 길에선 안 끈다)
+            self._startup_auto = False
+            self._startup_check_pending = None
+        return True
 
     def _on_rank_ready(self, ouid: str, rank) -> None:
         """랭킹이 첫 화면보다 늦게 왔다 — 랭커 카드만. 그사이 다른 계정을 열었으면 버린다."""
@@ -11806,28 +11866,122 @@ class MainWindow(QMainWindow):
 
     def open_last_account(self) -> bool:
         """켤 때 — 마지막으로 본 계정을 DB 에서 바로 그리고, 끝나면 새 경기를 조용히 확인한다.
-        main 에서만 부른다. 열 계정이 없으면 False(검색 화면 그대로)."""
+        OPEN_LAST_ACCOUNT 와 둘러보기에서만 부른다. 열 계정이 없으면 False(검색 화면 그대로)."""
         last = self._last_account()
         if not last:
             return False
-        ouid, nick = last
-        self._nick = nick
-        self._set_busy(True)
-        self._loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, offline_ouid=ouid)
-        self._loader.progress.connect(self._on_progress)
-        self._loader.finished_ok.connect(self._on_loaded)
-        self._loader.failed.connect(self._on_failed)
-        # finished_ok 가 아니라 스레드가 끝난 뒤(finished) — 그 전엔 isRunning 이라 새 검색이 막힌다
-        self._loader.finished.connect(lambda o=ouid, n=nick: self._after_offline_open(o, n))
-        self._loader.start()
+        self._open_saved(*last, check=True)
         return True
 
-    def _after_offline_open(self, ouid: str, nick: str) -> None:
-        if self._ouid == ouid:  # DB 로 그리는 데 성공했다 — 이제 넥슨에 새 경기를 묻는다
-            self.statusBar().showMessage(f"{nick}: 저장된 기록을 보여 주면서 새 경기를 확인하는 중…")
-            self._api_search(nick, quiet=True)
-        else:
+    def _my_account(self) -> tuple[str, str] | None:
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                mine = store.my_account(conn, config.DEFAULT_MATCH_TYPE)
+            finally:
+                conn.close()
+        except Exception:
+            return None
+        return (mine["ouid"], mine["nickname"] or mine["ouid"][:8]) if mine else None
+
+    def open_startup(self, only_mine: bool = False) -> None:
+        """켤 때 무엇을 열지 한 곳에서(108 C). 내 계정이 있고 안내 15 에 동의했으면 그 계정을 DB 로 그린 뒤 새 경기만 확인한다.
+        only_mine: 동의 직후 · 트레이에서 처음 보일 때 · 최소화를 풀 때 — 내 계정이 없으면 아무것도 안 한다(미리 읽기를 다시
+        돌리지 않는다 · 3회차 M2). 아니면(main) 지금과 같다 — OPEN_LAST_ACCOUNT 면 마지막 계정, 아니면 미리 읽기."""
+        if not self._open_mine_on_startup() and not only_mine:
+            if config.OPEN_LAST_ACCOUNT:
+                self.open_last_account()
+            else:
+                self.start_prefetch()
+
+    def _open_mine_on_startup(self) -> bool:
+        """내 계정 길이 맡았으면 True(열었거나 · 창이 돌아올 때로 미뤘거나 · 이미 했거나)."""
+        if self._startup_done or self._ouid or (self._loader and self._loader.isRunning()):
+            return True   # 이미 열었거나 화면에 계정이 있거나 검색이 돈다 — 그걸 덮어쓰지 않는다(3회차 M2)
+        if not config.startup_check_allowed():
+            return False  # 동의 전 — 검색 화면 · 요청 0(U6)
+        mine = self._my_account()
+        if mine is None:
+            return False
+        if self.isMinimized():
+            self._startup_after_restore = True   # changeEvent 가 복원 뒤 다시 부른다
+            return True
+        if not self.isVisible():
+            return True   # 숨긴 창(--tray) — tray.show_window 가 보일 때 부른다
+        self._startup_done = True
+        self._open_saved(*mine, check=not game_paused())
+        return True
+
+    def _open_saved(self, ouid: str, nick: str, check: bool) -> None:
+        """저장된 경기로 바로 그린다(넥슨 0) → 스레드가 끝난 뒤 check 이고 그때도 게임이 꺼져 있으면 새 경기 확인."""
+        self._nick = nick
+        self._startup_auto = True   # 대시보드로 · 팀컬러는 캐시만(J8 · U5) — 확인이 끝나거나 사용자 검색이 시작되면 끈다
+        self._set_busy(True)
+        ld = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, offline_ouid=ouid, auto=True)
+        ld.progress.connect(self._on_progress)
+        ld.finished_ok.connect(self._on_loaded)
+        ld.failed.connect(self._on_failed)
+        # finished_ok 가 아니라 스레드가 끝난 뒤(finished) — 그 전엔 isRunning 이라 새 검색이 막힌다
+        ld.finished.connect(lambda o=ouid, n=nick, c=check: self._after_offline_open(o, n, c))
+        self._loader = ld
+        ld.start()
+
+    def _after_offline_open(self, ouid: str, nick: str, check: bool = True) -> None:
+        if self._ouid != ouid:   # 그리지 못했다(저장된 경기 없음 · 읽기 실패) — 검색 화면 그대로
             self._set_busy(False)
+            self._startup_auto = False
+            return
+        if not check or game_paused():
+            # 여는 순간 또는 DB 를 읽는 사이 게임이 켜졌다 — 그리기만 하고 확인은 남긴다(3회차 S2)
+            self._startup_check_pending = (ouid, nick)
+            self._set_busy(False)
+            self.statusBar().showMessage(GAME_SKIP_CHECK_MSG)
+            return
+        self.statusBar().showMessage(f"{nick}: 저장된 기록을 보여 주면서 새 경기를 확인하는 중…")
+        if not self._api_search(nick, quiet=True, startup=True):
+            self._startup_check_pending = (ouid, nick)
+            self._set_busy(False)
+
+    def pause_startup_check(self) -> None:
+        """게임이 켜졌다 — 도는 **켤 때 확인**만 멈추고 남겨 둔다. DB 읽기(오프라인 로더)와 사용자 검색은 그대로(4회차 M · G3)."""
+        ld = self._loader
+        if ld is None or not ld.isRunning() or not getattr(ld, "startup", False) or ld.game_cancelled:
+            return
+        ld.game_cancelled = True
+        ld.cancel()
+        self._startup_check_pending = (self._ouid, self._nick)
+
+    def resume_startup_check(self) -> None:
+        """미룬 켤 때 확인을 한 번 — 게임이 꺼졌고 · 그 계정이 화면에 있고 · 창이 보이고 내려놓지 않았을 때만.
+        못 띄웠으면 남긴다(트레이 열기 · 다시 읽기의 finished · 취소한 로더의 finished 에서 다시 부른다)."""
+        pend = self._startup_check_pending
+        if pend is None or game_paused() or self._quitting:
+            return
+        if self._ouid != pend[0]:
+            self._startup_check_pending = None   # 다른 계정을 열었다
+            return
+        if not self.isVisible() or self.isMinimized() or self._released:
+            return
+        self.statusBar().showMessage(f"{pend[1]}: 저장된 기록을 보여 주면서 새 경기를 확인하는 중…")
+        if self._api_search(pend[1], quiet=True, startup=True):
+            self._startup_check_pending = None
+
+    def _on_startup_check_finished(self, ld: "MatchLoader") -> None:
+        """켤 때 확인 로더의 스레드가 끝났다(finished — 이 로더를 묶어 받는다 · 5회차 M3)."""
+        out = ld.last_outcome
+        if ld.game_cancelled and (out is None or out.stop == "cancel"):
+            # 게임 때문에 멈췄다 — 취소된 검색은 신호 없이 끝나 _set_busy(True) 가 남는다(4회차 S2). 표시는 켜 둔다
+            if self._loader is ld:
+                self._set_busy(False)
+            self.statusBar().showMessage(GAME_STOP_CHECK_MSG)
+            if self._released:
+                self.reload_after_release()   # 도는 사이 내려놓고 다시 보였다 — 그때 못 한 다시 읽기(5회차 M5)
+            else:
+                self.resume_startup_check()   # 끝나기 전에 게임이 꺼졌으면 여기서 한 번(4회차 M)
+            return
+        if ld.game_cancelled:
+            self._startup_check_pending = None   # 마지막 취소 검사 뒤에 닿았다 — 끝까지 돌았다(5회차 M1)
+        self._startup_auto = False   # 끝까지 돌았다(성공 · 실패 · 키 거절 · 한도)
 
     # ── 빠른 범위(76) ─────────────────────────────────────────────────
     RANGE_ITEMS = ([("전체", ("all", 0))]
@@ -11907,7 +12061,7 @@ class MainWindow(QMainWindow):
             before = self._season_key(self.cb_season.currentData())
             self._rebuild_season_combo()
             if self._season_key(self.cb_season.currentData()) != before:
-                self._apply_season()
+                self._apply_season(web=not self._startup_auto)   # 켤 때 길이면 팀컬러는 캐시만(108 U5)
             self._invalidate("period")      # 시즌 단위 점·표(칩 판정도)
             self._invalidate("dashboard")   # 승률 흐름이 시즌 단위일 수 있다
 
@@ -12014,8 +12168,8 @@ class MainWindow(QMainWindow):
         self._season_picked = True
         self._apply_season()
 
-    def _apply_season(self, render: bool = True) -> None:
-        """콤보에서 고른 시즌만 남긴다.
+    def _apply_season(self, render: bool = True, web: bool = True) -> None:
+        """콤보에서 고른 시즌만 남긴다. web: 다시 그린 뒤 팀컬러를 홈페이지에 물어도 되나(시즌표 도착은 켤 때 길이면 False).
 
         _matches/_details 자체를 갈아끼우므로, "누적 전체 기준"으로 그리는
         탭들(승률 그래프·기간별 추이·승부처 등)도 자연히 그 시즌 안에서만
@@ -12033,7 +12187,7 @@ class MainWindow(QMainWindow):
         # 빠른 범위(cb_range)는 시즌을 바꿔도 그대로 — 고른 시즌 안에서 다시 자른다(_slice)
         if render and self._matches_all:
             self._render_all()
-            self._on_fetch_team_colors()
+            self._on_fetch_team_colors(web=web)
             self._rerender_compare()
 
     def _set_busy(self, busy: bool) -> None:
@@ -12101,6 +12255,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentIndex(self.PAGE_MAIN)
         if switched or not getattr(self, "_quiet_search", False):
             # 이번에 켜고 처음 그리는 계정이면 지난번에 보던 메뉴·탭으로(settings.ini), 아니면 대시보드
+            # 켤 때는 _load_settings 가 page 를 안 돌려줘(2026-10-11 사용자) 켤 때 내 계정도 대시보드다(108 J8) — 따로 막지 않는다
             self._go_page(*self._restore_view(self._restore.pop("page", None), self._restore.pop("tabs", None)))
         self._render_ranker()
         # ELO — 검색·저장본 열기·내려놓은 뒤 다시 열기가 전부 여기를 지난다(경기 0 이어도 ELO 는 있을 수 있다)
@@ -12111,7 +12266,8 @@ class MainWindow(QMainWindow):
             return
 
         self._render_all()
-        self._on_fetch_team_colors()  # DB 캐시(TTL store.TEAM_COLOR_TTL_DAYS · 7일)로 채우고, 모자란 것만 백그라운드 조회
+        # DB 캐시(TTL store.TEAM_COLOR_TTL_DAYS · 7일)로 채우고, 모자란 것만 백그라운드 조회 — 켤 때 길은 캐시만(홈페이지 0 · U5)
+        self._on_fetch_team_colors(web=not self._startup_auto)
         self.statusBar().showMessage(
             f"{self._nick}: 누적 {len(matches)}경기(감독모드 전체)"
             + (f" · 새 경기 {new}건 저장" if new else ""))
@@ -13045,7 +13201,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass  # DB 캐시를 못 읽어도 네트워크 조회로 계속 진행
 
-    def _on_fetch_team_colors(self) -> None:
+    def _on_fetch_team_colors(self, *, web: bool = True) -> None:
         """검색이 끝나면 자동으로도 호출된다(_on_loaded) — DB 캐시(TTL 7일)
         에 있는 상대는 그걸로 채우고, 정말 처음 보거나 캐시가 오래된 상대만
         넥슨 데이터센터에서 새로 긁는다.
@@ -13065,9 +13221,9 @@ class MainWindow(QMainWindow):
         self._load_cached_team_colors(all_opps)  # DB 만 — 다른 시즌으로 바꿀 때도 바로 그린다
         remaining = {m.opponent for m in shown_matches
                     if m.opponent and m.opponent not in self._team_colors}
-        if not remaining or not config.WEB_DATA:
+        if not remaining or not config.WEB_DATA or not web:
             self._invalidate_teamcolor()  # 보이면 지금, 아니면 열 때
-            if remaining:  # 꺼져 있다 — 상대마다 실패를 쌓는 대신 이유를 한 번만 보인다
+            if remaining and not config.WEB_DATA:  # 꺼져 있다 — 상대마다 실패를 쌓는 대신 이유를 한 번만 보인다
                 for lb in self._teamcolor_status_labels:
                     lb.setText(config.WEB_DATA_OFF_MSG)
             return
@@ -15485,18 +15641,22 @@ class MainWindow(QMainWindow):
         """다시 열 때 — 그 계정의 저장된 경기를 DB 에서 다시 읽는다(1만 경기 약 1~2초). 넥슨에는 묻지 않는다."""
         if not self._released or self._held_by_clearing(MatchLoader):
             return   # 지우는 중이면 놓은 채로 — 끝나면 _on_storage_cleared 가 다시 부른다
+        if self._ouid and self._loader and self._loader.isRunning():
+            # 놓은 채로 둔다 — 전엔 여기서 _released 를 먼저 풀어 다시 읽기를 영영 건너뛰었다(108 5회차 M5).
+            # 도는 로더는 취소된 켤 때 확인뿐이다(숨긴 동안 다른 검색은 없다) — 그 finished 가 다시 부른다
+            return
         self._released = False
         if not self._ouid:
             self.start_prefetch()  # 검색 전에 놓은 미리 읽기 — 첫 검색이 다시 빠르게
             return
-        if self._loader and self._loader.isRunning():
-            return
         self._set_busy(True)
         self.statusBar().showMessage(f"{self._nick}: 저장된 기록을 다시 읽는 중…")
-        self._loader = MatchLoader(self._api, self._nick, config.DEFAULT_MATCH_TYPE, offline_ouid=self._ouid)
+        self._loader = MatchLoader(self._api, self._nick, config.DEFAULT_MATCH_TYPE, offline_ouid=self._ouid, auto=True)
         self._loader.progress.connect(self._on_progress)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
+        # 스레드가 끝난 뒤 미룬 켤 때 확인 — _on_loaded(finished_ok) 때는 아직 isRunning 이라 못 띄운다(4회차 S3)
+        self._loader.finished.connect(self.resume_startup_check)
         self._loader.start()
 
 
@@ -17093,10 +17253,9 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     if show:
         # 창이 그려진 뒤 그 위에 — 다시 묻는 안내(옛 동의자만)를 닫은 다음에 "바뀐 점"(둘이 겹쳐 뜨지 않게 차례로)
         QTimer.singleShot(0, lambda: (win.ask_notice_update_once(), win.show_changes_once(fresh)))
-        if config.OPEN_LAST_ACCOUNT:
-            win.open_last_account()  # 마지막 계정을 DB 로 바로 — 새 경기는 뒤에서 조용히
-        else:
-            win.start_prefetch()  # 화면은 검색창 그대로, 마지막 계정의 저장된 경기만 뒤에서 읽어 둔다
+        # 내 계정(안내 15 동의) → 그 계정 · 아니면 OPEN_LAST_ACCOUNT 면 마지막 계정 · 아니면 검색창 그대로 + 미리 읽기(108 C).
+        # 다시 묻는 창(singleShot)보다 먼저지만 관문이 값으로 막는다 — 동의 전엔 검색 화면 · 요청 0
+        win.open_startup()
     return win
 
 
