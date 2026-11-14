@@ -112,10 +112,18 @@ def _spans(seasons, current_start: datetime | None, current_known: bool, now: da
 
 def achievements(details: list[dict], ouid: str, *, seasons=(), current_start: datetime | None = None,
                  current_known: bool = False, elo_rows: list[dict] | None = None,
-                 now: datetime | None = None) -> list[Achievement]:
-    """저장 전체에서 업적 — 시각 순. 원문 dict 는 안 든다(창 캐시가 match_id 만 들게 · 2회차 [중])."""
+                 now: datetime | None = None, exclude: frozenset = frozenset()) -> list[Achievement]:
+    """저장 전체에서 업적 — 시각 순. 원문 dict 는 안 든다(창 캐시가 match_id 만 들게 · 2회차 [중]).
+    exclude(109 J2 섞임) — 표시한 경기 번호. 승 기록 업적(연승·큰 승·경기·승 수·무실점·역전·해트트릭)에서만 그 판을 빼고,
+    챔스·슈챔 도달과 점수 최고는 넥슨이 매긴 기록이라 그대로 둔다."""
     now = now or datetime.now()
-    games = _games(details, ouid)
+    all_games = _games(details, ouid)
+    if exclude:
+        if any(not g.match_id for g in all_games):
+            raise ValueError("경기 번호가 빈 경기가 있어 표시한 판을 가릴 수 없습니다")
+        games = [g for g in all_games if g.match_id not in exclude]
+    else:
+        games = all_games
     titles = dict(kinds())
     out: list[Achievement] = []
 
@@ -172,7 +180,7 @@ def achievements(details: list[dict], ouid: str, *, seasons=(), current_start: d
                 add("hattrick", g, note=f"{n}골", sp_id=sp)
 
     # ②③ — 시즌을 알 때만
-    times = [g.when for g in games]
+    times = [g.when for g in all_games]
     for start, end in _spans(seasons, current_start, current_known, now):
         pts = []
         for r in elo_rows or []:
@@ -189,7 +197,7 @@ def achievements(details: list[dict], ouid: str, *, seasons=(), current_start: d
                 if e > best:
                     best = e
                     add("peak", None, when=t, note=f"{e:,.2f}")
-        season = games[bisect_left(times, start):bisect_left(times, end)]   # 시즌 91개 × 전체 훑기를 안 하게
+        season = all_games[bisect_left(times, start):bisect_left(times, end)]   # 시즌 91개 × 전체 훑기를 안 하게
         if season and season[0].when <= start + timedelta(days=config.N12_START_DAYS):
             for key, div_id in (("champ", CHAMPION_DIVISION_ID), ("superchamp", SUPER_CHAMPION_DIVISION_ID)):
                 hit = next((g for g in season if g.division is not None and g.division <= div_id), None)

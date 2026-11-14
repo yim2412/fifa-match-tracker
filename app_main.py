@@ -5055,7 +5055,7 @@ class MainWindow(QMainWindow):
     def _render_analysis(self) -> None:
         self._render_chips()
         found = self._narrate_scope()
-        recent = self._matches[:core.WINDOW][::-1]
+        recent = core.recent_games(self._matches, core.WINDOW)   # F — 표시한 판을 뺀 뒤 최근 WINDOW 판(오래된 것부터)
         self.analysis_dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                                      for m in recent])
         colors = {core.SEC_FLOW: T.ACCENT,   # 결론 줄의 숫자 색(글은 TEXT — _analysis_row)
@@ -12865,9 +12865,7 @@ class MainWindow(QMainWindow):
         self._opp_picked_details = [by_id[m.match_id] for m in picked if m.match_id in by_id]   # 최신순 그대로
         # 승률 카드·"(±차)" 기준 — 필터에 걸린 경기 전체(그 줄 포함) · 같은 식(E1 — 승÷전체 그대로)
         mixed = core.mixed_of_matches(picked)
-        w = sum(1 for m in picked if "승" in m.result)
-        d = sum(1 for m in picked if "무" in m.result)
-        lo = sum(1 for m in picked if "패" in m.result)
+        w, d, lo = core.wdl(picked)
         self.card_opp_rate.set(win_rate_text(w, d, lo, mixed, short=True))
         self.card_opp_rate.set_sub(f"{len(picked):,}경기")
         self.opp_rate_bar.set_counts(w, d, lo, core.is_weak(core.rated(w, d, lo, mixed), core.MIN_COND))
@@ -13636,9 +13634,7 @@ class MainWindow(QMainWindow):
             scope = season.label if season is not None else "현재 시즌"
         else:
             scope = "저장된 전체"
-        w = sum(1 for x in pool if "승" in x.result)
-        d = sum(1 for x in pool if "무" in x.result)
-        lo = sum(1 for x in pool if "패" in x.result)
+        w, d, lo = core.wdl(pool)
         return f"이 시즌 맞대결 {len(pool)}판 · {wdl_text(w, d, lo)} ({scope})"
 
     def _detail_summary(self, dlg: "MatchDetailDialog", detail: dict, m: MatchSummary) -> QWidget:
@@ -13675,7 +13671,7 @@ class MainWindow(QMainWindow):
         dlg.xg_flow = charts.XgFlowChart()
         dlg.xg_flow.set_data([(s.minute, s.mine, s.xg, s.result == core.SHOT_GOAL) for s in shots], extra=extra)
         v.addWidget(dlg.xg_flow)
-        xg = [core.shot_map([detail], self._ouid, mine=s).xg for s in (True, False)]
+        xg = [core.raw.shot_map([detail], self._ouid, mine=s).xg for s in (True, False)]   # 상세 창은 표시한 판도 그린다(J1)
         for label, mine, opp, fmt in (("기대 골", xg[0], xg[1], "{:.2f}"), ("실제 골", m.my_goals, m.opp_goals, "{:.0f}")):
             bar = VersusBar(label, T.OPP_FILL)
             bar.set_values(mine, opp, fmt)
@@ -13765,7 +13761,7 @@ class MainWindow(QMainWindow):
         dlg.replay_i = 0
 
         def side_map():
-            return core.shot_map([detail], self._ouid, mine=bool(dlg.cb_shot_side.currentData()))
+            return core.raw.shot_map([detail], self._ouid, mine=bool(dlg.cb_shot_side.currentData()))   # 상세 창은 표시한 판도 그린다(J1)
 
         def note(sm) -> None:
             dlg.shot_note.setText(f"슛 {sm.total} · 유효 {sm.effective} · 골 {sm.goals} · xG {sm.xg:.2f}")
@@ -13817,9 +13813,7 @@ class MainWindow(QMainWindow):
         v = QVBoxLayout(body)
         v.setSpacing(4)
         games = [x for x in self._matches if x.opponent == m.opponent]
-        w = sum(1 for x in games if "승" in x.result)
-        d = sum(1 for x in games if "무" in x.result)
-        lo = sum(1 for x in games if "패" in x.result)
+        w, d, lo = core.wdl(games)
         dlg.h2h_note = QLabel(f"{self._scope_text()} 안 이 상대와 {len(games)}판 · {wdl_text(w, d, lo)}")
         dlg.h2h_note.setStyleSheet(f"color: {T.TEXT_DIM};")
         dlg.h2h_note.setWordWrap(True)
@@ -15069,8 +15063,8 @@ class MainWindow(QMainWindow):
             it.setData(SPARK_ROLE, vals)
             line = f"최근 {len(vals)}경기 평점: " + " → ".join(f"{v:.1f}" for v in vals)
             it.setToolTip(f"{it.toolTip()}\n{line}" if it.toolTip() else line)
-        res = [m.result for m in self._slice()[0] if not m.no_squad]   # 선수별 승률과 같은 판 — 내 선수가 있는 경기(108 M4)
-        team = core.win_pct(res.count("승"), res.count("무"), res.count("패"), players[0].mixed) if players else 0.0
+        # 선수별 승률과 같은 판 — 내 선수가 있는 경기(108 M4). 승·무·패는 F 함수 wdl(몰수승·몰수패도 승패 — summarize 와 같은 기준)
+        team = core.win_pct(*core.wdl([m for m in self._slice()[0] if not m.no_squad]), players[0].mixed) if players else 0.0
         for r, p in enumerate(players):
             for c, kind, v in ((5, "atk", p.attack_power), (6, "def", p.defense_power)):
                 it = self.tbl_players.item(r, c)

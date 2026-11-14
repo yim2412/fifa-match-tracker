@@ -576,14 +576,14 @@ class DashboardPage(QWidget):
         best_win, best_lose = longest_streaks(d.scope_matches)
         self.lb_streak_sub.setText(f"최장 {best_win}연승 · {best_lose}연패 ({d.scope_name})")
         rb = core.result_breakdown(d.range_details, d.ouid)
-        errors = sum(1 for m in d.range_matches if m.result not in ("승", "무", "패"))
+        errors = core.error_count(d.range_matches)
         bits = [(f"몰수승 {rb.forfeit[0]}", rb.forfeit[0]), (f"몰수패 {rb.forfeit[2]}", rb.forfeit[2]),
                 (f"오류 {errors}", errors)]
         self.lb_forfeit.setText(" · ".join(f"<span style='color:{T.WARN if n else T.TEXT_DIM}'>{t}</span>"
                                            for t, n in bits))
 
         if s.total:
-            shots = sum(m.shoot_total for m in d.range_matches if m.result in ("승", "무", "패"))
+            shots = core.decided_shots(d.range_matches)
             for lb, text in zip(self.goal_nums, (f"{s.avg_goals_for:.2f}", f"{s.avg_goals_against:.2f}",
                                                  f"{s.goals_for / shots * 100:.0f}%" if shots else "—")):
                 lb.setText(text)
@@ -642,7 +642,7 @@ class DashboardPage(QWidget):
                        + " 점수는 하루에 한 번 재므로 하루 안에서 떨어진 폭은 작게 나옵니다.")
 
     def _render_trend(self, d: DashboardInput) -> None:
-        recent = [m for m in d.range_matches[:DOTS_N]][::-1]
+        recent = core.recent_games(d.range_matches, DOTS_N)   # F — 표시한 판을 뺀 뒤 최근 DOTS_N 판
         self.dots.set_data([(m.result, f"{m.date_text} · {m.opponent} · {m.score} {m.result}")
                             for m in recent])
         w = d.trend_weights

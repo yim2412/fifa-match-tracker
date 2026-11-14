@@ -109,6 +109,7 @@ class WinDivision(NamedTuple):
     division: int | None
     outcome: str
     forfeit: bool
+    match_id: str = ""   # 109 J2 — exclude= 가 승·무·패 쪽만 뺄 때 찾는 경기 번호. 빈 줄이 있으면 drop_ids 가 예외(M33)
 
 
 def win_divisions(details: list, ouid: str) -> list[WinDivision]:
@@ -131,7 +132,7 @@ def win_divisions(details: list, ouid: str) -> list[WinDivision]:
         if outcome is None or when is None:
             continue
         div = me.get("division")
-        out.append(WinDivision(when, div if isinstance(div, int) else None, outcome, "몰수" in result))
+        out.append(WinDivision(when, div if isinstance(div, int) else None, outcome, "몰수" in result, d.get("matchId") or ""))
     out.sort(key=lambda w: w.when)
     return out
 

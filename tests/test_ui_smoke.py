@@ -22,6 +22,7 @@ import time
 from datetime import datetime, timedelta
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("FIFA_FILTER_TRACE", "1")   # 109 J2 — core_api 가 모든 분석 함수를 감싸 불린 이름을 모은다(끝 테스트가 표와 대조)
 # offscreen 은 글꼴 폴더를 안 주면 장식체를 집어 글자 폭이 달라지고, 그러면 1280x720
 # 잘림 검사 4개가 코드와 무관하게 FAIL 한다(2026-10-02 — 문서의 명령 그대로 치면 26/30).
 if os.path.isdir("C:/Windows/Fonts"):
@@ -2370,7 +2371,7 @@ def _days_spec():
 
 def _wd_spec(spec):
     """_days_spec 꼴 → 저장 경기(WinDivision) — 운 범위(66 G4)·달력은 _season_wins() 를 본다."""
-    return [st_mod.WinDivision(when, 900, res, False) for when, res, _dp in spec]
+    return [st_mod.WinDivision(when, 900, res, False, f"wd{i}") for i, (when, res, _dp) in enumerate(spec)]   # 109: 번호가 있어야 표시한 판을 뺄 수 있다
 
 
 class _LuckScope(_SynthScope):
@@ -13559,7 +13560,7 @@ def test_elo_score_report_needs_enough_points():
 def _wd_day(day, w, lose, div=900, month=10):
     out = []
     for i, k in enumerate(["승"] * w + ["패"] * lose):
-        out.append(st_mod.WinDivision(datetime(2026, month, day, 9) + timedelta(minutes=i), div, k, False))
+        out.append(st_mod.WinDivision(datetime(2026, month, day, 9) + timedelta(minutes=i), div, k, False, f"wd{month}-{day}-{i}"))
     return out
 
 
@@ -16476,6 +16477,21 @@ def _flush_deleted():
     안 하면 쌓인 위젯을 스타일을 다시 입히는 테스트(_setup_app → T.apply)가 전부 다시 꾸며, 혼자 1.6초인 테스트가
     전체 실행에선 21초였다(85단계 실측 — 전체 2분 15초 → 1분 13초)."""
     _app.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
+def test_zz_every_core_function_the_screens_called_is_in_filter_plan_109():
+    """109 J2 ⓑ — 위 테스트들이 전 화면을 그리며(LAZY_RENDER=False) 부른 분석 함수는 전부 선언 표(FILTER_PLAN)에 있어야 한다.
+    이름이 `test_zz_` 라 sorted 순서에서 맨 끝에 돈다(앞 테스트가 부른 이름을 다 모은 뒤)."""
+    called = core.called_names()
+    assert core._CALLED is not None, "FIFA_FILTER_TRACE 가 안 켜졌다 — 기록기가 꺼진 채로는 이 검사가 비어 있다"
+    unknown = sorted(called - set(core.FILTER_PLAN))
+    assert not unknown, f"FILTER_PLAN 에 없는 분석 함수가 불렸다: {unknown}"
+    kinds: dict[str, int] = {}
+    for n in called:
+        kinds[core.FILTER_PLAN[n][0]] = kinds.get(core.FILTER_PLAN[n][0], 0) + 1
+    print(f"       화면이 부른 분석 함수 {len(called)}개 — {sorted(kinds.items())}")
+    assert len(called) >= 60 and kinds.get("F", 0) >= 15 and kinds.get("MIX", 0) >= 3 and kinds.get("S", 0) >= 20, \
+        f"화면이 부른 이름이 너무 적다({len(called)} · {kinds}) — 기록기가 일부만 보고 있다"
 
 
 def main() -> int:

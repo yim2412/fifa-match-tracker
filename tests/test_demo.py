@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("FIFA_FILTER_TRACE", "1")   # 109 J2 — core_api 가 모든 분석 함수를 감싸 불린 이름을 모은다(끝 테스트가 표와 대조)
 if os.path.isdir("C:/Windows/Fonts"):
     os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -343,6 +344,17 @@ def test_demo_times_form_sessions_and_keep_results():
     results = "".join(m.result for m in ms)   # 시각 추첨을 바꾸기 전 판(2026-11-10 기준)에서 잰 값 — 시각만 바뀌었다는 증거
     assert (results.count("승"), results.count("무"), results.count("패"), results[:12]) == (134, 53, 113, "패패승패승승승패패승패승"), results[:12]
     assert len(data.details) == config.DEMO_MATCHES
+
+
+def test_zz_every_core_function_the_demo_called_is_in_filter_plan_109():
+    """109 J2 ⓑ — 둘러보기 화면을 띄우고 검색·토글을 누르며 부른 분석 함수는 전부 선언 표에 있어야 한다(맨 끝에 돈다)."""
+    import core_api
+    called = core_api.called_names()
+    assert core_api._CALLED is not None, "FIFA_FILTER_TRACE 가 안 켜졌다 — 기록기가 꺼진 채로는 이 검사가 비어 있다"
+    unknown = sorted(called - set(core_api.FILTER_PLAN))
+    assert not unknown, f"FILTER_PLAN 에 없는 분석 함수가 불렸다: {unknown}"
+    print(f"       둘러보기가 부른 분석 함수 {len(called)}개")
+    assert len(called) >= 10, f"불린 이름이 너무 적다({sorted(called)}) — 기록기가 일부만 보고 있다"
 
 
 def main() -> int:

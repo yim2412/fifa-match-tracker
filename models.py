@@ -92,6 +92,28 @@ def is_mixed(flags) -> bool:
     return len(seen) > 1
 
 
+def match_id_of(item) -> str:
+    """경기 하나(MatchSummary · WinDivision · 경기 상세 dict)의 경기 번호. 없으면 빈 글자."""
+    if isinstance(item, dict):
+        return item.get("matchId") or ""
+    return getattr(item, "match_id", "") or ""
+
+
+def drop_ids(items, exclude):
+    """109 J2 — exclude(경기 번호 묶음)에 든 경기를 뺀 새 목록. 묶음이 비면 items 를 그대로(새로 안 만든다).
+    번호가 빈 경기가 있으면 예외 — 아무것도 안 빼는 채로 조용히 지나가면 표시한 판이 숫자에 남는다(M33)."""
+    if not exclude:
+        return items
+    out = []
+    for it in items:
+        mid = match_id_of(it)
+        if not mid:
+            raise ValueError(f"경기 번호가 빈 줄이라 표시한 판을 가릴 수 없습니다: {type(it).__name__}")
+        if mid not in exclude:
+            out.append(it)
+    return out
+
+
 def mixed_of_details(details, ouid: str) -> bool:
     return is_mixed(draw_possible_of(d, ouid) for d in details)
 
@@ -415,6 +437,35 @@ class PeriodRate(RateMixin):
     @property
     def games(self) -> int:
         return self.win + self.draw + self.lose
+
+
+def wdl(matches: list[MatchSummary]) -> tuple[int, int, int]:
+    """승·무·패 수 — 화면이 직접 세던 줄(`"승" in m.result`)의 자리. summarize 와 같은 기준(몰수도 승패, 오류는 뺀다).
+    core_api 의 F 라 표시한 판은 감싸개가 빼고 부른다(109 J2 ⓐ)."""
+    w = d = lo = 0
+    for m in matches:
+        if "승" in m.result:
+            w += 1
+        elif "무" in m.result:
+            d += 1
+        elif "패" in m.result:
+            lo += 1
+    return w, d, lo
+
+
+def error_count(matches: list[MatchSummary]) -> int:
+    """승·무·패가 아닌 결과("오류" — 중단된 경기) 수. F — 표시한 판은 안 센다."""
+    return sum(1 for m in matches if m.result not in ("승", "무", "패"))
+
+
+def decided_shots(matches: list[MatchSummary]) -> int:
+    """승·무·패로 끝난 경기의 슛 합(정확한 결과만 — 몰수승·몰수패·오류는 뺀다). F."""
+    return sum(m.shoot_total for m in matches if m.result in ("승", "무", "패"))
+
+
+def recent_games(matches: list[MatchSummary], n: int) -> list[MatchSummary]:
+    """가장 최근 n 경기를 오래된 것부터 — 결과 점 그래프 재료. matches 는 최신순. F 라 표시한 판을 뺀 뒤 n 판을 채운다."""
+    return matches[:n][::-1]
 
 
 def current_streak(matches: list[MatchSummary]) -> tuple[str, int]:

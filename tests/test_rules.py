@@ -1453,6 +1453,122 @@ def test_watchdog_kills_hung_test():
     assert "spin_forever" in r.stderr, "멈춘 자리(호출 스택)가 안 남았다"
 
 
+# ── 109 J2 — 표시한 판 거르기 선언 표(core_api.FILTER_PLAN)와 화면의 직접 세는 줄 ──
+# 선언 표: core_api 가 내보내는 분석 함수(클래스가 아닌 호출 가능한 이름)는 전부 갈래(F·S·MIX·PASS)와 거를 인자가 적혀 있어야 하고,
+# 적힌 인자는 시그니처에 있어야 하며, WinDivision 행을 받는 F·MIX 함수는 그 인자를 표에 적어야 한다(S 가 낸 경기별 줄을 F 가 받는 길 · ⓑ).
+def check_filter_plan(plan: dict, funcs: dict) -> list[str]:
+    import inspect
+    out = []
+    for n in sorted(set(funcs) - set(plan)):
+        out.append(f"{n}: core_api.FILTER_PLAN 에 갈래가 없다(F·S·MIX·PASS 중 하나를 적는다)")
+    for n in sorted(set(plan) - set(funcs)):
+        out.append(f"{n}: FILTER_PLAN 에만 있다(지운 함수가 남았다)")
+    for n, (kind, args) in sorted(plan.items()):
+        if n not in funcs:
+            continue
+        if kind not in ("F", "S", "MIX", "PASS"):
+            out.append(f"{n}: 모르는 갈래 {kind!r}")
+            continue
+        params = inspect.signature(funcs[n]).parameters
+        if kind in ("F", "MIX") and not args:
+            out.append(f"{n}: {kind} 인데 인자 이름이 없다")
+        if kind in ("S", "PASS") and args:
+            out.append(f"{n}: {kind} 인데 인자를 적었다")
+        for a in args:
+            if a not in params:
+                out.append(f"{n}: 적힌 인자 {a!r} 가 시그니처에 없다")
+        if kind == "MIX" and "exclude" not in params:
+            out.append(f"{n}: MIX 인데 exclude= 인자가 없다")
+        if kind in ("F", "MIX"):
+            for pn, p in params.items():
+                if "WinDivision" in str(p.annotation) and pn not in args:
+                    out.append(f"{n}: {pn} 는 WinDivision 행을 받는데 표에 안 적혔다 — 감싸개가 못 뺀다")
+    return out
+
+
+def test_filter_plan_covers_every_core_function_109():
+    import inspect
+    import core_api
+    funcs = dict(vars(core_api.raw))
+    exported = {n for n in core_api.__all__ if callable(getattr(core_api, n)) and not inspect.isclass(getattr(core_api, n))
+                and n not in core_api.CONTROL_NAMES}
+    assert set(funcs) == exported, sorted(set(funcs) ^ exported)     # raw 가 빠짐없이 원래 함수를 든다
+    assert len(funcs) >= 200, f"{len(funcs)}개 — 검사가 비었다(11-14 기준 208)"
+    assert check_filter_plan(core_api.FILTER_PLAN, funcs) == [], "\n".join(check_filter_plan(core_api.FILTER_PLAN, funcs))
+    kinds = {k for k, _ in core_api.FILTER_PLAN.values()}
+    assert kinds == {"F", "S", "MIX", "PASS"}, kinds
+    # 위반을 심은 가짜 입력 — 못 잡으면 위 단언이 비어 있어도 통과한다
+    def f(matches, rows: "list[WinDivision]", exclude=None): ...
+    def g(matches): ...
+    fs = {"f": f, "g": g}
+    assert any("g" in x and "없다" in x for x in check_filter_plan({"f": ("F", ("matches", "rows"))}, fs))          # 표에 없는 함수
+    assert any("gone" in x for x in check_filter_plan({"f": ("S", ()), "g": ("S", ()), "gone": ("S", ())}, fs))   # 지운 함수
+    assert any("zzz" in x for x in check_filter_plan({"f": ("F", ("zzz",)), "g": ("S", ())}, fs))                 # 시그니처에 없는 인자
+    assert any("rows" in x and "WinDivision" in x for x in check_filter_plan({"f": ("F", ("matches",)), "g": ("S", ())}, fs))
+    assert any("인자 이름이 없다" in x for x in check_filter_plan({"f": ("F", ()), "g": ("S", ())}, fs))
+    assert any("exclude" in x for x in check_filter_plan({"f": ("S", ()), "g": ("MIX", ("matches",))}, fs))
+    assert check_filter_plan({"f": ("F", ("matches", "rows")), "g": ("F", ("matches",))}, fs) == []
+
+
+# 화면 파일이 경기 결과를 직접 세는 꼴 — 감싸개가 못 보는 길이라 core 의 F 함수(wdl·error_count …)로만 센다(J2 ⓐ · M32).
+RESULT_COUNT_FILES = ("app_main.py", "dashboard.py", "widgets.py")
+_RESULT_COUNT = re.compile(
+    r"""["'](?:승|무|패)["']\s+in\s+[\w.\[\]]*\.result\b"""            # "승" in m.result
+    r"""|\bin\s+[a-z_]\w*\.result\b"""                                  # k in c.result
+    r"""|\.result\s+(?:not\s+)?in\s*[(\[]"""                            # m.result not in ("승", …)
+    r"""|\.result\s*[=!]=\s*["'](?:승|무|패)["']"""                      # m.result == "승"
+    r"""|\.count\(\s*["'](?:승|무|패)["']\s*\)"""                        # res.count("승")
+    r"""|\[\s*\w+\.result\s+for\b"""                                    # [m.result for m in …]
+    r"""|\(\s*\w+\.result\s*,\s*f["']""")                               # (m.result, f"…") 결과 점 그래프 재료
+# 색·글자만 고르는 줄이거나 이미 F 함수가 거른 목록을 그리는 줄 — (파일, 줄 일부) → 이유. 세는 줄은 여기 넣지 않는다.
+RESULT_COUNT_ALLOW = {
+    ("app_main.py", 'tag = Tag(m.result, "good" if'): "태그 색·글자만 고른다(세지 않는다)",
+    ("app_main.py", 'row.addWidget(Tag(x.result, "good" if'): "태그 색·글자만 고른다(세지 않는다)",
+    ("app_main.py", "if k in c.result), None)"): "경기 카드 한 장의 종류를 고른다(콤보 거르기 기준 · 세지 않는다)",
+    ("app_main.py", "self.analysis_dots.set_data([(m.result, f"): "결과 점 — core.recent_games(F)가 이미 표시한 판을 뺀 목록을 그린다",
+    ("dashboard.py", "self.dots.set_data([(m.result, f"): "결과 점 — core.recent_games(F)가 이미 표시한 판을 뺀 목록을 그린다",
+    ("widgets.py", 'return "win" if "승" in self.result else'): "경기 카드 한 장의 색 종류(세지 않는다)",
+}
+
+
+def check_result_counts(srcs: dict[str, str], allow=RESULT_COUNT_ALLOW) -> list[str]:
+    out = []
+    for name, src in srcs.items():
+        lines = src.splitlines()
+        for tok in tokenize.generate_tokens(io.StringIO(src).readline):   # 주석은 지운다(설명 글에 꼴이 나와도 된다)
+            if tok.type == tokenize.COMMENT:
+                r, c = tok.start
+                lines[r - 1] = lines[r - 1][:c]
+        for i, line in enumerate(lines, 1):
+            if _RESULT_COUNT.search(line) and not any(f == name and frag in line for (f, frag) in allow):
+                out.append(f"{name}:{i} 결과를 직접 센다 — core.wdl·error_count·decided_shots·recent_games(F)로 옮긴다: {line.strip()[:90]}")
+    return out
+
+
+def test_screens_do_not_count_results_themselves_109():
+    srcs = _all([ROOT / f for f in RESULT_COUNT_FILES])
+    bad = check_result_counts(srcs)
+    assert bad == [], "\n".join(bad)
+    # 예외 표가 낡지 않았다 — 줄 일부가 지금도 그 파일에 있어야(지운 줄이 표에 남으면 그 자리가 다시 생겨도 검사 없이 통과한다)
+    for (f, frag), why in RESULT_COUNT_ALLOW.items():
+        assert why and frag in srcs[f], f"{f}: 예외 표의 줄 {frag!r} 이 없다"
+    # 위반을 심은 가짜 소스 — 빈 검사 방지
+    planted = {"x.py": (
+        'w = sum(1 for m in picked if "승" in m.result)\n'
+        'e = sum(1 for m in r if m.result not in ("승", "무", "패"))\n'
+        's = sum(m.shoot_total for m in r if m.result in ("승", "무", "패"))\n'
+        'res = [m.result for m in ms]\n'
+        'n = res.count("승")\n'
+        'ok = m.result == "승"\n'
+        'k = next(k for k in KINDS if k in c.result)\n'
+        'dots.set_data([(m.result, f"{m.opponent}") for m in recent])\n')}
+    got = check_result_counts(planted, {})
+    assert len(got) == 8, got
+    fine = {"x.py": ('v = fut.result()\nhit = s.result == core.SHOT_GOAL\nz = [s for s in shots if s.result in shown]\n'
+                     'c = colors.get(s.result, 0)\n# 승 in m.result 는 주석이다\n')}
+    assert check_result_counts(fine, {}) == [], check_result_counts(fine, {})
+
+
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 

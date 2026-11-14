@@ -2,7 +2,7 @@
 
 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07)
 
-`test_parsing.py`(파싱·집계·시즌 골든) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) ·
+`test_parsing.py`(파싱·집계·시즌 골든) · `test_filter.py`(109 표시한 판 거르기 감싸개 — F 는 위치·이름 인자 모두 빼고 · 빈 묶음은 같은 객체 · 섞임은 넘긴 `exclude` 가 전역을 이김 · S 는 안 건드림 · 넥슨 기록은 묶음과 무관 · 기록기 · 가짜 함수와 손으로 만든 경기) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) ·
 `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스 — 자식은 `FIFA_DATA_DIR` 임시 폴더로, 안 주면 실제 fifa.db 를 열었다) ·
 `test_storage.py`(57 ③ 저장 공간 — 바꿔 끼우기·캐시 지우기·스키마 표 대조 · 걸쇠(`Worker.WRITES`) · 내 스쿼드 특성 받기 — 임시 폴더) ·
 `test_rankcollect.py`(수집기 — 가짜 목록) · `test_trades.py`(거래 받기·시세 캐시·랭커 기록 캐시 — 가짜 거래·랭커 목록) ·

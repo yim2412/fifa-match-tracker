@@ -44,7 +44,7 @@ from datetime import date, datetime, timedelta
 
 import config
 import matchtime
-from models import (MatchSummary, PeriodRate, RateMixin, draw_possible_of, is_blank, is_mixed, is_weak, rated,
+from models import (MatchSummary, PeriodRate, RateMixin, draw_possible_of, drop_ids, is_blank, is_mixed, is_weak, rated,
                     win_pct)
 from stats import (GOAL_TYPES, SHOT_GOAL, _SHOT_RESULTS, WinDivision, _goal_events, _me_opp, _num, _played, _result_of,
                    _set_mixed, _timeline_matches_board, _wdl_of, formation_of, position_line, win_rewards)
@@ -1193,10 +1193,12 @@ class DaySummary:
         return win_pct(self.win, self.draw, self.lose, mixed)
 
 
-def club_day(rows: list[WinDivision], day: date) -> DaySummary:
-    """그날(이 PC 날짜 0~24시 · J7) 경기 — 승·무·패와 FC(stats.win_rewards 와 같은 보상표)."""
+def club_day(rows: list[WinDivision], day: date, exclude: frozenset = frozenset()) -> DaySummary:
+    """그날(이 PC 날짜 0~24시 · J7) 경기 — 승·무·패와 FC(stats.win_rewards 와 같은 보상표).
+    exclude(109 J2 섞임) — 표시한 경기 번호. 승·무·패에서만 빼고 FC 는 넥슨이 올려 준 값이라 그대로 센다."""
     sel = [w for w in rows if w.when.date() == day]
-    out = DaySummary(day, *(sum(1 for w in sel if w.outcome == k) for k in ("승", "무", "패")))
+    shown = drop_ids(sel, exclude)
+    out = DaySummary(day, *(sum(1 for w in shown if w.outcome == k) for k in ("승", "무", "패")))
     out.fc = win_rewards(sel).fc
     return out
 
@@ -1219,8 +1221,11 @@ class FirstReach:
     gap: bool               # 그 사이 저장 경기가 H5_GAP_DAYS 넘게 빈 곳이 있나(덜 셌을 수 있다 · 3회차 [중])
 
 
-def first_reach(rows: list[WinDivision], season_start: datetime, division: int) -> FirstReach | None:
-    """division 이하(그 등급 이상 — id 가 작을수록 상위)를 처음 찍은 경기까지의 승·무·패 수. 못 찍었으면 None."""
+def first_reach(rows: list[WinDivision], season_start: datetime, division: int,
+                exclude: frozenset = frozenset()) -> FirstReach | None:
+    """division 이하(그 등급 이상 — id 가 작을수록 상위)를 처음 찍은 경기까지의 승·무·패 수. 못 찍었으면 None.
+    exclude(109 J2 섞임)는 받기만 하고 값을 안 바꾼다 — 도달 판수는 넥슨이 매긴 등급 기록의 상태(S)라 표시한 판도
+    센다(J2: H5 도달 판수는 섞임 함수의 S 쪽). 감싸개가 섞임 함수 모두에 같은 인자를 넘길 수 있게 둔 자리다."""
     seq = sorted((w for w in rows if w.when >= season_start), key=lambda w: w.when)
     hit = next((i for i, w in enumerate(seq) if w.division is not None and w.division <= division), None)
     if hit is None:
@@ -1331,8 +1336,10 @@ def _wdl(rows: list[WinDivision]) -> tuple[int, int, int]:
     return tuple(sum(1 for w in rows if w.outcome == k) for k in ("승", "무", "패"))
 
 
-def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, mixed: bool, exact_key=None) -> list[CalDay]:
-    """first~last(둘 다 포함) 중 경기가 있던 날 — 날짜순. season_key(date) 는 그날이 속한 시즌을 가리는 값(같으면 같은 시즌)
+def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, mixed: bool, exact_key=None,
+                  exclude: frozenset = frozenset()) -> list[CalDay]:
+    """(exclude = 109 J2 섞임 — 표시한 경기 번호. 승·무·패·승률·기준선에서만 빼고 FC 와 "경기 있던 날" 은 그대로.)
+    first~last(둘 다 포함) 중 경기가 있던 날 — 날짜순. season_key(date) 는 그날이 속한 시즌을 가리는 값(같으면 같은 시즌)
     · 기준선은 그 시즌의 rows 전부로 센다(달 안에 시즌 경계가 있으면 날마다 기준선이 다르다 · 1회차 [중]).
     exact_key(datetime) 를 주면 경기마다 시각으로 시즌을 가른다 — 시즌은 종료일 8시에 바뀌어(76) 날짜로 묶으면 그날 새벽 옛 시즌
     경기가 새 시즌 기준선에 든다. 칸은 그대로 하루이고, 그날 기준선은 그날 마지막 경기의 시즌."""
@@ -1345,7 +1352,7 @@ def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, 
         by_season.setdefault(keys[d] if exact_key is None else exact_key(w.when), []).append(w)
     base_of = {}
     for key, ws in by_season.items():
-        wn, dn, ln = _wdl(ws)
+        wn, dn, ln = _wdl(drop_ids(ws, exclude))
         n = rated(wn, dn, ln, mixed)
         base_of[key] = wn / n if n else 0.0
     by_day: dict[date, list[WinDivision]] = {}
@@ -1356,7 +1363,7 @@ def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, 
     out = []
     for d in sorted(by_day):
         ws = by_day[d]
-        wn, dn, ln = _wdl(ws)
+        wn, dn, ln = _wdl(drop_ids(ws, exclude))
         n = rated(wn, dn, ln, mixed)
         p = base_of[keys[d] if exact_key is None else exact_key(max(w.when for w in ws))]
         lo, hi = luck_band(p, n)
@@ -1369,9 +1376,9 @@ def calendar_days(rows: list[WinDivision], first: date, last: date, season_key, 
     return out
 
 
-def cal_summary(rows: list[WinDivision]) -> CalSummary:
-    """rows(이미 고른 구간) 의 경기 있던 날 수·승·무·패·FC."""
-    wn, dn, ln = _wdl(rows)
+def cal_summary(rows: list[WinDivision], exclude: frozenset = frozenset()) -> CalSummary:
+    """rows(이미 고른 구간) 의 경기 있던 날 수·승·무·패·FC. exclude(109 J2 섞임)는 승·무·패에서만 뺀다(날 수·FC 는 그대로)."""
+    wn, dn, ln = _wdl(drop_ids(rows, exclude))
     return CalSummary(len({w.when.date() for w in rows}), wn, dn, ln, win_rewards(rows).fc)
 
 

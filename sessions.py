@@ -34,7 +34,7 @@ import config
 import habits
 import records
 from analysis import MIN_COND
-from models import MatchSummary, is_mixed, is_weak, longest_streaks, rated, win_pct
+from models import MatchSummary, drop_ids, is_mixed, is_weak, longest_streaks, rated, win_pct
 from stats import _me_opp, _num, _played, formation_of, win_rewards
 
 DAY_CAP_MIN = 24 * 60
@@ -367,12 +367,14 @@ class PaceSide:
     fc: int | None = None           # 승리 보상 합(보상이 나온 승리가 있을 때만)
 
 
-def _side(ms: list[MatchSummary], wins: list, ctx: dict, marks: list, lo: datetime, hi: datetime | None, mixed: bool) -> PaceSide:
-    w, d, l = _wdl(ms)
+def _side(ms: list[MatchSummary], wins: list, ctx: dict, marks: list, lo: datetime, hi: datetime | None, mixed: bool,
+          exclude: frozenset = frozenset()) -> PaceSide:
+    shown = drop_ids(ms, exclude)   # 승·무·패·판 수만 표시한 판을 뺀다 — 등급·점수·FC 는 넥슨 기록이라 그대로(109 J2)
+    w, d, l = _wdl(shown)
     divs = [x for x in (_ctx_div(ctx, m) for m in ms) if x is not None]
     got = [v for t, v in marks if lo <= t and (hi is None or t < hi)]
     rw = win_rewards([x for x in wins if lo <= x.when and (hi is None or x.when < hi)])
-    return PaceSide(len(ms), w, d, l, win_pct(w, d, l, mixed), min(divs) if divs else None,
+    return PaceSide(len(shown), w, d, l, win_pct(w, d, l, mixed), min(divs) if divs else None,
                     got[-1] if got else None, rw.fc if rw.rewarded_wins else None)
 
 
@@ -406,8 +408,9 @@ class SeasonPace:
 
 
 def season_pace(matches: list[MatchSummary], wins: list, ctx: dict, elo_rows: list[dict] | None,
-                spans: list[SeasonSpan], index: int, now: datetime) -> SeasonPace:
-    """spans[index] 의 시작부터 경과 d 일 대 바로 앞(이전) 시즌의 시작~d 일. 승률 식(mixed)은 두 구간을 합쳐 한 번 정한다.
+                spans: list[SeasonSpan], index: int, now: datetime, exclude: frozenset = frozenset()) -> SeasonPace:
+    """(exclude = 109 J2 섞임 — 표시한 경기 번호. 승·무·패·판 수·승률 곡선에서만 빼고 등급·점수·FC·저장 범위 판정은 그대로.)
+    spans[index] 의 시작부터 경과 d 일 대 바로 앞(이전) 시즌의 시작~d 일. 승률 식(mixed)은 두 구간을 합쳐 한 번 정한다.
     지난 시즌은 저장이 시작부터 있을 때만(첫 경기 ≤ 시작 + `N12_START_DAYS` — records ③ 과 같은 식) · d 가 지난 시즌 길이를 넘으면
     끝난 곳까지만 견준다(`prev_days`)."""
     span = spans[index]
@@ -424,9 +427,10 @@ def season_pace(matches: list[MatchSummary], wins: list, ctx: dict, elo_rows: li
             cutoff = prev_span.end
         prev_all = _in(matches, prev_span.start, prev_span.end)
         prev_ms = _in(prev_all, prev_span.start, cutoff)
-    mixed = is_mixed(m.draw_possible for m in cur_ms + prev_ms)
+    cur_f, prev_f = drop_ids(cur_ms, exclude), drop_ids(prev_ms, exclude)
+    mixed = is_mixed(m.draw_possible for m in cur_f + prev_f)
     marks = _elo_marks(elo_rows)
-    out = SeasonPace(span, prev_span, days, mixed, _side(cur_ms, wins, ctx, marks, span.start, hi, mixed))
+    out = SeasonPace(span, prev_span, days, mixed, _side(cur_ms, wins, ctx, marks, span.start, hi, mixed, exclude))
     if prev_span is None:
         out.prev_state = "none"
         return out
@@ -437,12 +441,12 @@ def season_pace(matches: list[MatchSummary], wins: list, ctx: dict, elo_rows: li
     if first > prev_span.start + timedelta(days=config.N12_START_DAYS):
         out.prev_state, out.prev_from = "late", first.date()
         return out
-    out.prev = _side(prev_ms, wins, ctx, marks, prev_span.start, cutoff, mixed)
+    out.prev = _side(prev_ms, wins, ctx, marks, prev_span.start, cutoff, mixed, exclude)
     if prev_span.end is not None and prev_span.start + timedelta(days=days) > prev_span.end:
         out.prev_days = round((prev_span.end - prev_span.start).total_seconds() / 86400)
     k_count = max(math.ceil(days), 1)
-    cur_c = _cum_rates(cur_ms, span.start, k_count, mixed)
-    prev_c = _cum_rates(prev_ms, prev_span.start, k_count, mixed)
+    cur_c = _cum_rates(cur_f, span.start, k_count, mixed)
+    prev_c = _cum_rates(prev_f, prev_span.start, k_count, mixed)
     prev_len = (cutoff - prev_span.start).total_seconds() / 86400
     for k in range(k_count):
         out.curve.append((k + 1, cur_c[k][0], prev_c[k][0] if k < prev_len else None))
@@ -492,16 +496,19 @@ def top_scorer(details: list[dict], ouid: str, match_ids: set) -> tuple[int, int
 
 
 def season_review(matches: list[MatchSummary], details: list[dict], ouid: str, ctx: dict, elo_rows: list[dict] | None,
-                  span: SeasonSpan, finals: dict | None = None, ach_times: list[datetime] | None = None) -> SeasonReview:
-    """고른 시즌 한 장. matches·details 는 저장 전체(시즌 필터와 무관) · 시즌 경계는 `Season.start_at`/`end_at`.
+                  span: SeasonSpan, finals: dict | None = None, ach_times: list[datetime] | None = None,
+                  exclude: frozenset = frozenset()) -> SeasonReview:
+    """(exclude = 109 J2 섞임 — 표시한 경기 번호. 판 수·승·무·패·연승·득점 1위·시간·라이벌에서만 빼고 등급·포메이션·점수·업적 수는 그대로.)
+    고른 시즌 한 장. matches·details 는 저장 전체(시즌 필터와 무관) · 시즌 경계는 `Season.start_at`/`end_at`.
     finals = {시즌 시작 날짜 iso: 최종 순위}(`predict_final` 의 found 만) · ach_times = 업적 시각(records)."""
     ms = _in(matches, span.start, span.end)
     out = SeasonReview(span)
-    out.games = len(ms)
+    shown = drop_ids(ms, exclude)
+    out.games = len(shown)
     if not ms:
         return out
-    out.win, out.draw, out.lose = _wdl(ms)
-    out.mixed = is_mixed(m.draw_possible for m in ms)
+    out.win, out.draw, out.lose = _wdl(shown)
+    out.mixed = is_mixed(m.draw_possible for m in shown)
     out.rate = win_pct(out.win, out.draw, out.lose, out.mixed)
     order = sorted(ms, key=lambda m: m.match_date)
     known = [d for d in (_ctx_div(ctx, m) for m in order) if d is not None]
@@ -509,14 +516,14 @@ def season_review(matches: list[MatchSummary], details: list[dict], ouid: str, c
     out.final_div = known[-1] if known else None
     marks = [v for t, v in _elo_marks(elo_rows) if span.start <= t and (span.end is None or t < span.end)]
     out.peak_elo = max(marks) if marks else None
-    out.longest_win = longest_streaks(ms)[0]
+    out.longest_win = longest_streaks(shown)[0]
     forms = Counter(f for f in (ctx.get(m.match_id, (None, None))[1] for m in ms) if f is not None)
     out.formation = forms.most_common(1)[0] if forms else None
-    out.scorer = top_scorer(details, ouid, {m.match_id for m in ms})
+    out.scorer = top_scorer(details, ouid, {m.match_id for m in shown})
     out.final_rank = (finals or {}).get(span.key)
     out.achievements = sum(span.start <= t and (span.end is None or t < span.end) for t in ach_times or [])
-    out.play_min = play_time(split_sessions(ms)).total_min
-    out.rival = records.rival(list(reversed(order)))
+    out.play_min = play_time(split_sessions(shown)).total_min
+    out.rival = records.rival(list(reversed(sorted(shown, key=lambda m: m.match_date))))
     if order[0].match_date > span.start + timedelta(days=config.N12_START_DAYS):
         out.from_day = order[0].match_date.date()
     return out
