@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import release  # noqa: E402
 
 SECRET = "C:\\Users\\테스트사람\\Desktop"
@@ -276,6 +277,9 @@ def test_uninstaller_removes_installed_autostart_value():
     assert "RegDeleteValue(HKEY_CURRENT_USER, 'Software\\Microsoft\\Windows\\CurrentVersion\\Run', '{#RunValue}')" in iss
     assert autostart.RUN_KEY == r"Software\Microsoft\Windows\CurrentVersion\Run"
     assert "usUninstall" in iss and autostart.VALUE_PORTABLE not in iss, "제거기는 설치판 값만 지운다"
+    # 109 M8 — 제거기가 API 키(자격 증명)도 지운다. 이름이 앱의 config.CRED_TARGET 과 달라지면 지운다고 믿는 채 키가 남는다
+    assert f'#define CredTarget "{release.config.CRED_TARGET}"' in iss
+    assert "CredDeleteW('{#CredTarget}', 1, 0)" in iss and "uninstallonly" in iss
 
 
 def test_uninstaller_quits_running_app_first():

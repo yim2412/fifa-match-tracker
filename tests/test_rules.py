@@ -21,6 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED) — 이 파일도 규칙 검사 안에서 config 를 import 한다
 
 APP_FILES = sorted(p for p in ROOT.glob("*.py"))
 ALL_PY = APP_FILES + sorted(ROOT.glob("tools/*.py")) + sorted(ROOT.glob("tests/*.py"))
@@ -997,6 +999,54 @@ def test_every_test_main_runs_under_watchdog():
     files = sorted(ROOT.glob("tests/test_*.py"))
     assert len(files) > 20, "테스트 파일을 못 찾았다(빈 검사)"
     assert check_watchdog(_all(files)) == []
+
+
+def check_test_heads(srcs: dict[str, str], project: set[str]) -> list[str]:
+    """프로젝트 모듈(config 를 직접·간접으로 끌어오는 것)을 import 하는 테스트 파일은 그 첫 import 보다 **위에서** `import watchdog` 를 한다(109 J8).
+    머리(watchdog)가 FIFA_NO_CRED=1 을 주므로, 늦으면 config 가 개발 PC 의 진짜 자격 증명을 메모리로 읽는다 —
+    임시 폴더·가짜 키로 도는 테스트가 진짜 키를 덮거나 읽는 길. 줄 번호로 비교한다(함수 안 import 도 센다)."""
+    out = []
+    for rel, src in srcs.items():
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        wd = first = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [a.name.split(".")[0] for a in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names = [node.module.split(".")[0]]
+            else:
+                continue
+            for n in names:
+                if n == "watchdog" and (wd is None or node.lineno < wd):
+                    wd = node.lineno
+                if n in project and (first is None or node.lineno < first):
+                    first = node.lineno
+        if first is not None and (wd is None or wd > first):
+            out.append(f"{rel}:{first} — 프로젝트 모듈 import 가 `import watchdog`(FIFA_NO_CRED) 보다 앞")
+    return out
+
+
+def test_every_test_imports_the_no_cred_head_before_config_109():
+    project = {p.stem for p in ROOT.glob("*.py")} | {p.stem for p in ROOT.glob("tools/*.py")} | {"server"}
+    # 막지 않았으면: 머리 없이 config 를 import 하는 파일은 그 순간 진짜 자격 증명 관리자를 읽는다
+    planted = {"tests/test_late.py": "import config\nimport watchdog\n",
+               "tests/test_none.py": "import app_main\n",
+               "tests/test_inner.py": "def f():\n    import store\nimport watchdog\n",
+               "tests/test_ok.py": "import watchdog\nimport config\n",
+               "tests/test_plain.py": "import json\n"}
+    got = check_test_heads(planted, project)
+    assert [g.split(":")[0] for g in got] == ["tests/test_late.py", "tests/test_none.py", "tests/test_inner.py"], got
+    files = sorted(ROOT.glob("tests/test_*.py"))
+    assert len(files) > 20, "테스트 파일을 못 찾았다(빈 검사)"
+    assert check_test_heads(_all(files), project) == []
+    # 머리 자체: watchdog 을 import 하면 FIFA_NO_CRED=1 이 켜진다
+    code = "import os, sys; os.environ.pop('FIFA_NO_CRED', None); sys.path.insert(0, r'%s'); import watchdog; print(os.environ.get('FIFA_NO_CRED'))" % (ROOT / "tests")
+    import subprocess
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace")
+    assert r.stdout.strip() == "1", (r.stdout, r.stderr[-300:])
 
 
 def test_every_modal_the_app_uses_is_blocked_in_smoke():

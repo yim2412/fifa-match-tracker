@@ -16721,6 +16721,60 @@ class ApiKeyDialog(QDialog):
         self.accept()
 
 
+class KeyReadFailDialog(QDialog):
+    """저장해 둔 API 키를 읽지 못했을 때(109 J8 · config.KEY_STATE "fail") — 키 창으로 가기 전에 한 번 묻는다.
+    키가 없는 것과 달라서 새 키를 받지 않는다(받으면 읽지 못한 옛 키 위에 덮어쓴다). [다시 읽기] 가 "ok"/"none" 을 얻으면
+    accept(그 뒤는 평소 길), [끝내기] 는 QUIT_RESULT, X·Esc 는 reject."""
+    QUIT_RESULT = 2
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} - API 키")
+        v = QVBoxLayout(self)
+        intro = QLabel("저장해 둔 API 키를 읽지 못했습니다. Windows 자격 증명 관리자가 응답하지 않는 것으로 보입니다. "
+                       "잠시 뒤 [다시 읽기]를 눌러 주세요. 키는 지워지지 않았습니다.")
+        intro.setWordWrap(True)
+        v.addWidget(intro)
+        self.lb_msg = QLabel("")
+        self.lb_msg.setWordWrap(True)
+        self.lb_msg.setStyleSheet(f"color: {T.ERROR};")
+        v.addWidget(self.lb_msg)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_retry = QPushButton("다시 읽기")
+        self.btn_retry.setDefault(True)
+        self.btn_retry.clicked.connect(self._on_retry)
+        self.btn_quit = QPushButton("끝내기")
+        self.btn_quit.clicked.connect(lambda: self.done(self.QUIT_RESULT))
+        row.addWidget(self.btn_retry)
+        row.addWidget(self.btn_quit)
+        v.addLayout(row)
+        fit_to_screen(self, 460, self.sizeHint().height())
+
+    def _on_retry(self) -> None:
+        if config.reload_key() == "fail":
+            self.lb_msg.setText("아직 읽지 못했습니다. 잠시 뒤 다시 눌러 주세요.")
+            return
+        self.accept()
+
+
+def _key_gate(shell: tray.AppShell, from_tray: bool) -> bool:
+    """키 관문(109 J8) — 키를 읽지 못한 상태("fail")로는 메인 창·FCOnlineAPI·셸 예약을 만들지 않는다. 넘어가도 되면 True.
+    먼저 화면 없이 한 번 다시 읽고(로그온 직후 자동 실행의 일시 실패가 몇 시간 뒤 [열기]에서 까닭 없는 창으로 보이지 않게),
+    그래도 "fail" 이면 [다시 읽기]·[끝내기] 창. 일반 시작의 X·Esc 는 [끝내기]와 같고, 트레이 [열기]로 뜬 경우는 트레이에 남는다."""
+    if config.KEY_STATE != "fail":
+        return True
+    config.reload_key()   # 조용히 — save_api_key 를 거치지 않는다(구단주 분포 토글을 "key" 사유로 끄지 않게)
+    if config.KEY_STATE != "fail":
+        return True
+    rc = KeyReadFailDialog().exec()
+    if rc == QDialog.DialogCode.Accepted:
+        return True
+    if rc == KeyReadFailDialog.QUIT_RESULT or not from_tray:
+        shell.quit_app()
+    return False
+
+
 def _notice_browser(html: str) -> QTextBrowser:
     tb = QTextBrowser()
     tb.setOpenExternalLinks(True)
@@ -17592,7 +17646,7 @@ def _setup_app(app: QApplication) -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
 
-def _open_window(shell: tray.AppShell, show: bool = True):
+def _open_window(shell: tray.AppShell, show: bool = True, from_tray: bool = False):
     """안내 동의·키 → 창. 동의·키 창에서 취소하면 None. show=False 는 --tray(숨긴 채 — 미리 읽기도 안 한다).
     키 창에서 [키 없이 둘러보기] 를 고르면 데모 프로세스를 띄우고 셸을 끝낸다 → None(트레이 [열기] 로 뜬 키 창이면 예약 셋이 돌던 중이다)."""
     if config.DEMO:
@@ -17604,7 +17658,9 @@ def _open_window(shell: tray.AppShell, show: bool = True):
     if fresh:
         if NoticeDialog().exec() != QDialog.DialogCode.Accepted:
             return None
-    new_key = not config.API_KEY
+    if not _key_gate(shell, from_tray):
+        return None
+    new_key = not config.API_KEY   # 다시 읽은 **뒤에** 계산한다(조용한 다시 읽기가 "ok" 면 평소 시작과 같다)
     if new_key:
         rc = ApiKeyDialog(allow_demo=True).exec()
         if rc == ApiKeyDialog.DEMO_RESULT:
@@ -17689,11 +17745,15 @@ def main(argv: list[str] | None = None) -> int:
         single = tray.SingleInstance(tray.instance_name())
         if not single.claim():
             return 0  # 이미 떠 있다 — 그 창을 앞으로 불렀다
+    try:
+        config.migrate_key_to_cred()   # 109 J5 — 한 번만 떠 있을 실행본이 정해진 **뒤**(앞이면 두 번째 실행도 .env 를 다시 쓴다)
+    except Exception:
+        pass   # 옮기지 못하면 .env 그대로 — 키는 사라지지 않는다
     # 84 G3 — 창·예약보다 먼저 한 번 본다(켜자마자 도는 로더가 게임 중에 나가지 않게)
     watch = GameWatch(app)
     watch.start()
     # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
-    shell = tray.AppShell(app, open_window=lambda: _open_window(shell),
+    shell = tray.AppShell(app, open_window=lambda: _open_window(shell, from_tray=True),
                           sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler(),
                           card_sched=CardBackfillScheduler())
     watch.changed.connect(lambda on: on_game_changed(shell, on))

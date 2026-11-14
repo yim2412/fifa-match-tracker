@@ -13,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import boostcollect
 import config
 import enhance as e

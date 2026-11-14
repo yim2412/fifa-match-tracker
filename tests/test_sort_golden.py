@@ -28,6 +28,7 @@ from PySide6.QtWidgets import QApplication, QTableWidget  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 from widgets import SortableItem  # noqa: E402
 
 GOLDEN = Path(__file__).parent / "fixtures" / "sort_golden.json"

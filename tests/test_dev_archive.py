@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import config
 import dev_archive as D
 D.GAME_CHECK = lambda: False   # 이 PC 에서 게임을 켠 채 돌려도 — 게임 쪽은 test_game_running_skips_before_opening 이 잰다

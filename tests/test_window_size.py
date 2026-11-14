@@ -43,6 +43,7 @@ def _child(case: str, screen: str, settings_path: str) -> None:
     os.environ["QT_QPA_PLATFORM"] = f"offscreen:configfile={screen}.json"
     if os.path.isdir("C:/Windows/Fonts"):
         os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
+    import watchdog  # noqa: F401 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
     from PySide6.QtCore import QThread
     from PySide6.QtWidgets import QApplication, QDialog
     app = QApplication(sys.argv)

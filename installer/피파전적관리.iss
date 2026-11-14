@@ -13,6 +13,8 @@
 #define RunValue "FifaMatchTracker"
 ; tray.QUIT_ARG 와 같아야 한다(test_release 가 대조)
 #define QuitArg "--quit"
+; config.CRED_TARGET 과 같아야 한다(test_release 가 대조) — API 키를 보관하는 Windows 자격 증명 이름(고정 하나)
+#define CredTarget "피파전적관리/NEXON_API_KEY"
 ; config.REPO_URL 과 같아야 한다(test_release 가 대조)
 #define RepoUrl "https://github.com/yim2412/fifa-match-tracker"
 
@@ -70,6 +72,10 @@ Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppTitle}}"; Flag
 Filename: "{app}\{#AppExe}"; Flags: nowait; Check: IsAutoUpdate
 
 [Code]
+// API 키를 지운다(109 C · 자격 증명 이름은 고정 하나라 다시 계산할 것이 없다). 키가 없으면 실패 값만 돌려줄 뿐 아무 일도 없다.
+function CredDeleteW(TargetName: String; CredType: Cardinal; Flags: Cardinal): Integer;
+  external 'CredDeleteW@advapi32.dll stdcall uninstallonly';
+
 function IsAutoUpdate: Boolean;
 begin
   Result := ExpandConstant('{param:AUTOUPDATE|0}') = '1';
@@ -90,6 +96,7 @@ begin
   begin
     Exec(ExpandConstant('{app}\{#AppExe}'), '{#QuitArg}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', '{#RunValue}');
+    CredDeleteW('{#CredTarget}', 1, 0);
   end;
   if CurUninstallStep = usPostUninstall then
     for I := 1 to 20 do

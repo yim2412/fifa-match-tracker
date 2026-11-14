@@ -81,6 +81,9 @@ def private_needles() -> dict[str, list[bytes]]:
         "사용자 이름 경로": _variants(f"Users\\{home.name}"),
         "프로젝트 경로": _variants(str(ROOT)),
     }
+    if config.KEY_STATE == "fail":
+        # 키를 읽지 못하면 키 유출 검사가 조용히 빠진다(키가 자격 증명으로 옮겨진 뒤라 .env 에도 없다)
+        fail("API 키를 읽지 못해 키 유출 검사를 할 수 없습니다(자격 증명 관리자). 앱을 켜서 키가 읽히는지 본 뒤 다시 돌립니다")
     if config.API_KEY:
         needles["API 키"] = [config.API_KEY.encode()]
     try:

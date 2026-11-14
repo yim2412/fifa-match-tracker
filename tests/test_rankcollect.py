@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import config
 import ranker
 import rankcollect as rc
@@ -2280,6 +2281,29 @@ def test_opp_rank_follows_key_and_account():
             _proc(w.c)
             assert _count(w.c, "match_opp_rank") == 0, "내 계정이 바뀌었는데 옛 계정 줄이 남았다"
         finally:
+            w.close()
+
+
+def test_opp_rank_untouched_while_key_unreadable_109():
+    # 109 J8 — --tray 는 키 관문보다 예약이 먼저 선다. 키를 못 읽은 상태(API_KEY "" · KEY_STATE "fail")로 돌아도
+    # 지문이 달라 건너뛰기만 하고, 이미 채운 match_opp_rank 줄을 지우지 않는다(M50·M69)
+    ms = [_opp_match("m1", "2026-10-10T08:00:00", "상대A")]
+    with Env() as env:
+        w = OppEnv(env, ms)
+        keep_state = config.KEY_STATE
+        try:
+            assert _proc(w.c)["opp"] == 1
+            before = _opp_rows(w.c)
+            # 내 계정 줄을 바꿔 둔다 — 지문 검사를 지나면 옛 계정 줄을 지우는 길(test_opp_rank_follows_key_and_account)이라,
+            # 검사가 없으면 여기서 줄이 사라진다
+            f = store.open_db(env.fifa)
+            store.set_trade_state(f, my_ouid="ouid-다른계정")
+            f.close()
+            config.API_KEY, config.KEY_STATE = "", "fail"
+            assert _proc(w.c)["opp"] == 0
+            assert _opp_rows(w.c) == before, "키를 못 읽은 채 돈 예약이 상대 순위 줄을 바꿨다"
+        finally:
+            config.KEY_STATE = keep_state
             w.close()
 
 

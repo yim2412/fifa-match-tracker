@@ -72,6 +72,11 @@ def _data_dir() -> Path:
     override = os.getenv("FIFA_DATA_DIR", "").strip()
     if override:
         return Path(override).expanduser()
+    return _default_data_dir()
+
+
+def _default_data_dir() -> Path:
+    """FIFA_DATA_DIR 을 보지 않은 기본 위치 — 자격 증명 판정(cred_allowed)이 이것과 견준다(109 J8: 스크래치 폴더가 진짜 키를 덮지 않게)."""
     base = os.getenv("LOCALAPPDATA")  # 윈도우 표준 앱 데이터 위치
     if base:
         return Path(base) / DATA_DIR_NAME
@@ -107,11 +112,144 @@ def _migrate_from_source() -> list[str]:
 MIGRATED = [] if DEMO else _migrate_from_source()   # 둘러보기는 소스 폴더 .env 를 데모 폴더로 옮기지 않는다
 
 ENV_PATH = DATA_DIR / ".env"
+# 자격 증명 판정(cred_allowed)의 "기본 위치" — FIFA_DATA_DIR 로 옮긴 폴더(스크래치·서버 시험)도, 테스트가 ENV_PATH 만 바꾼 것도 기본이 아니다
+DEFAULT_ENV_PATH = _default_data_dir() / ".env"
 API_KEY_VAR = "NEXON_API_KEY"
+
+
+def _read_env_disk() -> dict | None:
+    # import 때 API_KEY 를 정하는 자리가 부르므로 이 위치에 둔다(정의를 뒤에 두면 NameError)
+    if DEMO:
+        return None   # 모르는 상태 — 부르는 쪽이 전부 "아무것도 안 함 · 끈 쪽" 으로 받는다
+    try:
+        return dotenv_values(ENV_PATH, encoding="utf-8-sig") if ENV_PATH.exists() else {}
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+# ── API 키 보관(109 ② C · J5·J8) — Windows 자격 증명 관리자(ctypes · 새 패키지 없음) ──────────────────────────────
+# 자격 증명 관리자는 Windows 사용자마다 하나라 FIFA_DATA_DIR 을 모른다. 그래서 기본 위치의 .env 일 때만 건드린다(cred_allowed).
+# 이름은 고정 하나 — 지문을 넣지 않는다(제거기 .iss 가 같은 이름을 다시 계산하지 않게).
+CRED_TARGET = "피파전적관리/NEXON_API_KEY"
+NO_CRED_VAR = "FIFA_NO_CRED"   # 1 이면 자격 증명을 읽지도 쓰지도 않는다 — 테스트 공통 머리(tests/watchdog.py)가 준다
+
+
+def cred_allowed() -> bool:
+    """이 프로세스가 지금 자격 증명 관리자를 건드려도 되나 — 둘러보기 · 기본 위치가 아닌 .env · FIFA_NO_CRED=1 이면 안 된다.
+    쓸 때마다 그 시점의 ENV_PATH 로 판정한다(테스트가 ENV_PATH 만 임시로 바꾼 채 save_api_key 를 부르는 길)."""
+    if DEMO or os.getenv(NO_CRED_VAR, "").strip() == "1":
+        return False
+    try:
+        return Path(ENV_PATH) == Path(DEFAULT_ENV_PATH)
+    except (TypeError, ValueError):
+        return False
+
+
+def _cred_api():
+    """(CREDENTIALW 구조체 정의, advapi32) — Windows 가 아니면 OSError."""
+    if sys.platform != "win32":
+        raise OSError("자격 증명 관리자는 Windows 에만 있습니다")
+    import ctypes
+    from ctypes import wintypes
+
+    class CREDENTIALW(ctypes.Structure):
+        _fields_ = [("Flags", wintypes.DWORD), ("Type", wintypes.DWORD), ("TargetName", wintypes.LPWSTR),
+                    ("Comment", wintypes.LPWSTR), ("LastWritten", wintypes.FILETIME),
+                    ("CredentialBlobSize", wintypes.DWORD), ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+                    ("Persist", wintypes.DWORD), ("AttributeCount", wintypes.DWORD), ("Attributes", ctypes.c_void_p),
+                    ("TargetAlias", wintypes.LPWSTR), ("UserName", wintypes.LPWSTR)]
+
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    adv.CredWriteW.argtypes = [ctypes.POINTER(CREDENTIALW), wintypes.DWORD]
+    adv.CredWriteW.restype = wintypes.BOOL
+    adv.CredReadW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(ctypes.POINTER(CREDENTIALW))]
+    adv.CredReadW.restype = wintypes.BOOL
+    adv.CredDeleteW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+    adv.CredDeleteW.restype = wintypes.BOOL
+    adv.CredFree.argtypes = [ctypes.c_void_p]
+    adv.CredFree.restype = None
+    return CREDENTIALW, adv
+
+
+_CRED_TYPE_GENERIC = 1
+_CRED_PERSIST_LOCAL_MACHINE = 2   # 이 PC 의 이 사용자에게만 — 로밍 안 함
+_ERROR_NOT_FOUND = 1168
+
+
+def _cred_read(target: str | None = None) -> str:
+    """저장된 키 — 없으면 ""(정상). 못 읽으면 OSError(그 PC 에서 API 가 막혔거나 실패)."""
+    import ctypes
+    CREDENTIALW, adv = _cred_api()
+    ptr = ctypes.POINTER(CREDENTIALW)()
+    if not adv.CredReadW(target or CRED_TARGET, _CRED_TYPE_GENERIC, 0, ctypes.byref(ptr)):
+        err = ctypes.get_last_error()
+        if err == _ERROR_NOT_FOUND:
+            return ""
+        raise OSError(f"CredReadW 실패({err})")
+    try:
+        cred = ptr.contents
+        raw = ctypes.string_at(cred.CredentialBlob, cred.CredentialBlobSize) if cred.CredentialBlobSize else b""
+        return raw.decode("utf-8", errors="replace").strip()
+    finally:
+        adv.CredFree(ptr)
+
+
+def _cred_write(value: str, target: str | None = None) -> bool:
+    """키를 쓴다 — 성공하면 True. 실패는 조용히 False(호출부가 .env 로 둔다)."""
+    try:
+        import ctypes
+        CREDENTIALW, adv = _cred_api()
+        blob = value.encode("utf-8")
+        buf = (ctypes.c_ubyte * max(1, len(blob))).from_buffer_copy(blob or b"\0")
+        cred = CREDENTIALW()
+        cred.Type = _CRED_TYPE_GENERIC
+        cred.TargetName = target or CRED_TARGET
+        cred.CredentialBlobSize = len(blob)
+        cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_ubyte))
+        cred.Persist = _CRED_PERSIST_LOCAL_MACHINE
+        cred.UserName = "NEXON_API_KEY"
+        return bool(adv.CredWriteW(ctypes.byref(cred), 0))
+    except Exception:
+        return False
+
+
+def _cred_delete(target: str | None = None) -> bool:
+    """키를 지운다 — 원래 없었어도 True. 실패는 조용히 False."""
+    try:
+        import ctypes
+        _, adv = _cred_api()
+        if adv.CredDeleteW(target or CRED_TARGET, _CRED_TYPE_GENERIC, 0):
+            return True
+        return ctypes.get_last_error() == _ERROR_NOT_FOUND
+    except Exception:
+        return False
+
+
+def _resolve_key() -> tuple[str, str]:
+    """(키, 상태) — .env 의 줄(디스크)이 있으면 그것, 없을 때만 자격 증명. 상태: ok(키 있음) · none(없음) · fail(읽지 못함).
+    os.environ 은 보지 않는다 — 업데이트 설치기가 물려준 환경의 옛 값이 새 자격 증명을 덮지 않게(M59).
+    자격 증명을 안 쓰는 자리(cred_allowed 거짓)는 옛 동작 그대로 .env 만 보고, .env 를 못 읽어도 빈 값이다."""
+    if DEMO:
+        return "", "none"   # _read_env_disk 가 둘러보기에서 일부러 None 이라 그보다 먼저(M71)
+    vals = _read_env_disk()
+    use_cred = cred_allowed()
+    if vals is None:
+        return "", ("fail" if use_cred else "none")
+    env_key = (vals.get(API_KEY_VAR) or "").strip()
+    if env_key:
+        return env_key, "ok"
+    if not use_cred:
+        return "", "none"
+    try:
+        stored = _cred_read()
+    except OSError:
+        return "", "fail"
+    return (stored, "ok") if stored else ("", "none")
+
 
 if not DEMO:
     load_dotenv(ENV_PATH)
-API_KEY =os.getenv(API_KEY_VAR, "").strip()
+API_KEY, KEY_STATE = _resolve_key()   # 둘 다 재할당 전역 — 다른 모듈은 config.API_KEY · config.KEY_STATE 로 읽는다(모듈 경유)
 
 # 중앙 서버(docs/CENTRAL_SERVER.md 11절 · 1단계 ⓐ — 숨은 스위치, 화면·안내 변화 없음). 비면 지금과 같다(직접).
 # 설치 ID 는 서버 모드일 때만 만든다(install_id()) — 서버를 안 쓰는 사람에게 식별자가 생기지 않게.
@@ -132,7 +270,7 @@ WEB_DATA_OFF_MSG = "넥슨 홈페이지 데이터 읽기가 꺼져 있습니다.
 # 올려 이미 동의한 사람에게도 다시 보인다. v0.3.0 까지는 안내 없이 웹 데이터가 켜져 있었고
 # .env 에 이 값이 없으므로, 그 사람들도 업데이트 뒤 한 번 보게 된다.
 NOTICE_VAR = "FIFA_NOTICE"
-NOTICE_VERSION = 15  # 2 =1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
+NOTICE_VERSION = 16  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C) · 2 =1.1.1 랭킹 수집·ELO 기록 안내 · 3 = 1.3.1 고른 구단주 ELO 를 하루 한 번 이어서 기록
 #                     4 = 1.4.1 거래 기록(키 주인 것) · 가계부용 시세 자동 읽기
 #                     5 = 2.1.1 축구장 칩의 카드 정보(시세·급여·OVR) 자동 읽기 · 랭커 픽(16단계) — 최종 문구는 17단계 공개 직전
 #                     6 = 2.3.1 다른 구단주의 사람별 값(프로필 번호만)을 그 시즌 동안 — 슈챔 연속(55 에서 '상위 20 연속' 으로 바로잡음)·최고점·첫 챔스(U1)
@@ -172,7 +310,8 @@ MY_TRAIT_NOTICE_VERSION = 14   # 57 K12 내 스쿼드 특성(내 닉네임을 �
 # 두 번째 예외 — 14(57 · 2.13.1)도 안 올렸다(U7 사용자 "추천대로"): 새로 모으는 것(상대 점수 보여 주기 · 내 특성)은 수집을 켠 사람
 # 몫이고, 수집과 무관한 바뀐 글은 버튼 자리([정보 › 저장 공간])와 넥슨 페이지 열기 안내뿐이라 모두에게 다시 묻지 않는다.
 # 15(108 C · 3.10.1)는 수집과 무관해 올렸다(U6 사용자 "추천대로") — 켤 때 요청이 새로 생기는 것이라 수집을 끈 2~14 동의자에게도 묻는다.
-NOTICE_COLLECT_ONLY_FROM = 15
+# 16(109 C · 3.10.1 · API 키 보관 위치)도 수집과 무관해 17 로 올렸다 — 수집을 끈 15 동의자에게도 묻는다.
+NOTICE_COLLECT_ONLY_FROM = 17
 try:
     NOTICE_ACCEPTED = int(os.getenv(NOTICE_VAR, "0").strip() or 0)
 except ValueError:
@@ -239,6 +378,7 @@ CARD_BACKFILL_OFF = os.getenv(CARD_BACKFILL_OFF_VAR, "").strip()
 # 요청은 위 스위치가 다 꺼져 있어 안 나간다)
 if DEMO:
     API_KEY = SERVER_URL = ""
+    KEY_STATE = "none"
     WEB_DATA = RANK_COLLECT = UPDATE_CHECK = False
     OWNER_DIST_ON = OWNER_DIST_OFF = CARD_BACKFILL_ON = CARD_BACKFILL_OFF = ""
     NOTICE_ACCEPTED = NOTICE_VERSION
@@ -637,8 +777,8 @@ TRAIT_API_SHARE = RANKER_PICK_DAILY_REQ - 2 * -(-RANKER_PICK_TOP // RANKER_PICK_
 ENV_WRITE_RETRY = (3, 0.2)  # (다시 시도 횟수, 간격 초)
 
 
-def _save_env(var: str, value: str) -> None:
-    """.env 의 그 한 줄만 바꾼다(다른 줄은 그대로) — 이 프로세스의 환경 변수도 같이.
+def _rewrite_env(var: str, value: str | None) -> None:
+    """.env 의 그 한 줄만 바꾼다(value 가 None 이면 그 줄을 지운다 · 다른 줄은 그대로).
 
     임시 파일에 다 쓴 뒤 os.replace 로 바꾼다 — 쓰는 도중 죽거나 다른 실행본이 읽으면
     반쯤 쓴 .env(키가 사라진)를 보게 된다. 끝내 못 바꾸면 OSError 를 그대로 올린다(호출부가 잡는다).
@@ -650,10 +790,11 @@ def _save_env(var: str, value: str) -> None:
     if ENV_PATH.exists():
         lines = ENV_PATH.read_text(encoding="utf-8-sig", errors="replace").splitlines()
     lines = [ln for ln in lines if not ln.strip().startswith(f"{var}=")]
-    lines.append(f"{var}={value}")
+    if value is not None:
+        lines.append(f"{var}={value}")
     ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = ENV_PATH.with_name(f"{ENV_PATH.name}.{os.getpid()}.tmp")
-    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     tries, gap = ENV_WRITE_RETRY
     try:
         for i in range(tries + 1):
@@ -666,6 +807,11 @@ def _save_env(var: str, value: str) -> None:
                 time.sleep(gap)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _save_env(var: str, value: str) -> None:
+    """.env 의 그 한 줄만 바꾼다 — 이 프로세스의 환경 변수도 같이(_rewrite_env 의 규칙)."""
+    _rewrite_env(var, value)
     os.environ[var] = value
 
 
@@ -692,13 +838,65 @@ def save_api_key(key: str) -> None:
     API_KEY 를 재할당하므로 다른 모듈은 `from config import API_KEY` 가 아니라
     `config.API_KEY` 로 읽어야 한다.
     """
-    global API_KEY
+    global API_KEY, KEY_STATE
     key = key.strip()
     if key != API_KEY and OWNER_DIST_ON:
         # 구단주 분포 토글은 "이 키가 서비스 단계"라는 자가 신고다 — 키가 바뀌면 신고도 무효(끄기를 먼저: 못 끄면 키도 안 바꾼다)
         set_owner_dist(False, "key")
-    _save_env(API_KEY_VAR, key)
+    if key and _store_in_cred(key):
+        API_KEY, KEY_STATE = key, "ok"
+        return
+    if not key and cred_allowed():
+        _cred_delete()   # 빈 키로 지우는 길 — 자격 증명에 옛 키가 남아 다음 시작에 되살아나지 않게
+    _save_env(API_KEY_VAR, key)   # 자격 증명을 못 쓰는 자리(테스트·다른 폴더·막힌 PC)는 옛 그대로 .env
     API_KEY = key
+    KEY_STATE = "ok" if key else "none"
+
+
+def _store_in_cred(key: str) -> bool:
+    """키를 자격 증명에 쓰고 → 다시 읽어 같을 때만 .env 줄을 지운다(J5 — 옮기다 죽어도 키가 사라지지 않는다).
+    False 면 아무것도 바뀐 게 없는 것으로 보고 부른 쪽이 .env 에 쓴다. .env 줄을 못 지우면 그 줄이 옛 키로 남아 다음 시작에 이기므로
+    이것도 False(= 새 키를 .env 에 써서 그 줄을 덮는다)."""
+    if not cred_allowed() or not _cred_write(key):
+        return False
+    try:
+        if _cred_read() != key:
+            return False
+    except OSError:
+        return False
+    try:
+        _rewrite_env(API_KEY_VAR, None)
+    except OSError:
+        return False
+    os.environ.pop(API_KEY_VAR, None)
+    return True
+
+
+def reload_key() -> str:
+    """키를 .env·자격 증명에서 다시 읽는다 — 키 관문의 조용한 다시 읽기·[다시 읽기]. 새 상태를 돌려준다.
+    save_api_key 를 거치지 않는다 — 그쪽은 `"" != key` 로 구단주 분포 토글을 "key" 사유로 끈다(M60)."""
+    global API_KEY, KEY_STATE
+    API_KEY, KEY_STATE = _resolve_key()
+    return KEY_STATE
+
+
+def migrate_key_to_cred() -> str:
+    """켤 때 .env 에 키가 남아 있으면 자격 증명으로 옮기고 그 줄을 지운다(J5). 앱 주 프로세스 시작에서 한 번만 —
+    config import 때가 아니다(dev_archive·measure_cards·check_api 가 앱과 같이 .env 를 다시 쓰지 않게).
+    "moved"(옮김) · "none"(옮길 것 없음) · "skip"(자격 증명을 안 쓰는 자리·못 읽음) · "fail"(못 써서 .env 그대로)."""
+    global API_KEY, KEY_STATE
+    if not cred_allowed():
+        return "skip"
+    vals = _read_env_disk()
+    if vals is None:
+        return "skip"
+    env_key = (vals.get(API_KEY_VAR) or "").strip()
+    if not env_key:
+        return "none"
+    if not _store_in_cred(env_key):
+        return "fail"
+    API_KEY, KEY_STATE = env_key, "ok"
+    return "moved"
 
 
 def set_web_data(on: bool) -> None:
@@ -740,15 +938,6 @@ def set_card_backfill(on: bool, reason: str = "") -> None:
     _save_env(CARD_BACKFILL_VAR, at)
     _save_env(CARD_BACKFILL_OFF_VAR, why)
     CARD_BACKFILL_ON, CARD_BACKFILL_OFF = at, why
-
-
-def _read_env_disk() -> dict | None:
-    if DEMO:
-        return None   # 모르는 상태 — 부르는 쪽이 전부 "아무것도 안 함 · 끈 쪽" 으로 받는다
-    try:
-        return dotenv_values(ENV_PATH, encoding="utf-8-sig") if ENV_PATH.exists() else {}
-    except (OSError, UnicodeError, ValueError):
-        return None
 
 
 def read_rank_on_at() -> str | None:
@@ -897,16 +1086,22 @@ def owner_dist_prereq() -> bool:
             and NOTICE_ACCEPTED >= OWNER_DIST_NOTICE_VERSION)
 
 
-def owner_dist_allowed() -> bool:
-    """구단주 분포를 받아도 되나 — 전제 + 토글 + 키(이 프로세스 값). 예약은 매 틱 read_owner_dist 로 디스크도 다시 본다."""
+def owner_dist_allowed() -> bool | None:
+    """구단주 분포를 받아도 되나 — 전제 + 토글 + 키(이 프로세스 값). 예약은 매 틱 read_owner_dist 로 디스크도 다시 본다.
+    키를 읽지 못한 상태(KEY_STATE "fail")는 None — 모른다(J8 보험 ⓐ). 거짓으로 돌려주면 빈 키를 "토글 꺼짐" 으로 읽는다."""
+    if KEY_STATE == "fail":
+        return None
     return owner_dist_prereq() and bool(OWNER_DIST_ON) and bool(API_KEY)
 
 
 def read_owner_dist() -> tuple[bool, bool] | None:
     """.env 를 디스크에서 다시 읽어 구단주 분포의 (전제, 토글·키) — 다른 실행본·손 수정. 토글·사유 전역도 맞춘다.
     전제·토글은 이 프로세스 값과 **둘 다** 켜져야 켜짐이다. 못 읽으면 None — 모르는 상태라 아무것도 하지 않는다
-    (False 로 돌려주면 .env 를 잠깐 못 읽은 것만으로 받은 분포를 지운다)."""
+    (False 로 돌려주면 .env 를 잠깐 못 읽은 것만으로 받은 분포를 지운다). 키를 읽지 못한 상태(KEY_STATE "fail")도 None 이다(J8 보험 ⓐ —
+    빈 키가 "토글·키 꺼짐" 으로 보여 돌던 바퀴를 끝내고 지운다). fail→ok 는 키 관문에서만 일어나므로 여기서 다시 읽지 않는다."""
     global OWNER_DIST_ON, OWNER_DIST_OFF
+    if KEY_STATE == "fail":
+        return None
     vals = _read_env_disk()
     if vals is None:
         return None

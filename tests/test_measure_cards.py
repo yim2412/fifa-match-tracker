@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import numpy as np  # noqa: E402
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import cardcollect  # noqa: E402
 import config  # noqa: E402
 import measure_cards as M  # noqa: E402

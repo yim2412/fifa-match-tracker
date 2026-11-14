@@ -76,8 +76,10 @@ def _res(lines: list, stop: bool = False, code: int = 0) -> Result:
 # ── 터미널 점검(차례대로) ──────────────────────────────────────────────
 
 def check_key_loaded(ctx: CheckCtx) -> Result:
+    if config.KEY_STATE == "fail":
+        return _res(["[FAIL] API 키를 읽지 못했습니다(Windows 자격 증명 관리자 또는 .env). 키가 없는 것과는 다릅니다."], stop=True, code=1)
     if not config.API_KEY:
-        return _res(["[FAIL] .env 에 NEXON_API_KEY가 없습니다."], stop=True, code=1)
+        return _res(["[FAIL] API 키가 없습니다(앱을 한 번 켜 키를 넣거나 .env 에 NEXON_API_KEY 를 적습니다)."], stop=True, code=1)
     if ctx.api is None:
         ctx.api = FCOnlineAPI(config.API_KEY, cache_dir=config.CACHE_DIR)
     return _res([f"[OK]   API 키 로드 ({config.API_KEY[:8]}…)"])
@@ -621,6 +623,8 @@ CHECKS: list[tuple[str, Callable[[CheckCtx], Result]]] = [
 # 화면 글이라 docs/STYLE.md 를 따른다(합쇼체).
 
 def user_key(ctx: CheckCtx) -> Result:
+    if config.KEY_STATE == "fail":
+        return Result(FAIL, ["API 키를 읽지 못했습니다. 키가 없는 것과는 다릅니다. 앱을 다시 켜 주세요."], stop=True)
     if not config.API_KEY:
         return Result(FAIL, ["API 키가 없습니다. [정보] 에서 키를 넣어 주세요."], stop=True)
     return Result(OK, ["API 키가 들어 있습니다."])

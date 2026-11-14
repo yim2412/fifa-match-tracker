@@ -16,6 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import config
 import predict_check as PC
 import ranker
@@ -111,6 +112,22 @@ def test_not_found_retries_daily_then_settles():
         assert all(p["final_rank"] is None for p in preds)
         # 굳은 뒤 늦게 찾아도 바꾸지 않는다
         assert run(env, env.fetch_with(50), date(2026, 9, 30))["asked"] == 0
+    with_env(go)
+
+
+def test_key_unreadable_skips_without_touching_rows_109():
+    """109 J8 — --tray 는 키 관문보다 예약이 먼저 선다. 키를 못 읽은 상태(API_KEY "" · KEY_STATE "fail")면
+    지문이 달라 건너뛰기만 하고 묻지도 지우지도 않는다(M50)."""
+    def go(env):
+        before = env.state()
+        keep = config.KEY_STATE
+        config.API_KEY, config.KEY_STATE = "", "fail"
+        try:
+            assert run(env, env.fetch_with(123)) == {"skipped": "no_account"}
+        finally:
+            config.KEY_STATE = keep
+        assert env.calls == [], "키를 못 읽은 채 순위를 물었다"
+        assert env.state() == before, "키를 못 읽은 채 돈 확인이 예측 줄·상태를 바꿨다"
     with_env(go)
 
 

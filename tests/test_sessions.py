@@ -10,6 +10,7 @@ from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import config  # noqa: E402
 import habits  # noqa: E402
 import sessions as ss  # noqa: E402

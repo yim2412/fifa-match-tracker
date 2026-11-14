@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import requests  # noqa: E402
 from requests.adapters import HTTPAdapter  # noqa: E402
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import nexon_api  # noqa: E402
 import watchdog  # noqa: E402
 

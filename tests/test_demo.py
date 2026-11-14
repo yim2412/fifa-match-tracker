@@ -357,6 +357,33 @@ def test_zz_every_core_function_the_demo_called_is_in_filter_plan_109():
     assert len(called) >= 10, f"불린 이름이 너무 적다({sorted(called)}) — 기록기가 일부만 보고 있다"
 
 
+def test_demo_never_touches_credential_manager_109():
+    """둘러보기는 자격 증명 관리자를 읽지도 쓰지도 지우지도 않는다(J8) — FIFA_NO_CRED 가 없어도(둘러보기 판정만으로).
+    env 에 진짜 키가 올라와 있고(REAL) 이 프로세스는 DEMO 다. 막지 않았으면 둘러보기가 진짜 키를 읽어 화면에 쓴다."""
+    calls = []
+    keep = (config._cred_read, config._cred_write, config._cred_delete)
+    config._cred_read = lambda *a, **k: calls.append("read") or "live_real"
+    config._cred_write = lambda *a, **k: calls.append("write") or True
+    config._cred_delete = lambda *a, **k: calls.append("delete") or True
+    no_cred = os.environ.pop("FIFA_NO_CRED", None)
+    try:
+        assert config.DEMO and not config.cred_allowed()
+        assert config._resolve_key() == ("", "none")           # _read_env_disk 가 None 이어도 fail 이 아니다(M71)
+        assert config.KEY_STATE != "fail" and config.migrate_key_to_cred() == "skip"
+        for call in (lambda: config.save_api_key("live_x"), lambda: config.save_api_key("")):
+            try:
+                call()
+                raise AssertionError("둘러보기에서 키가 저장됐다")
+            except OSError:
+                pass
+        assert config.API_KEY == ""
+        assert calls == [], calls
+    finally:
+        config._cred_read, config._cred_write, config._cred_delete = keep
+        if no_cred is not None:
+            os.environ["FIFA_NO_CRED"] = no_cred
+
+
 def main() -> int:
     tests = [v for k, v in globals().items() if k.startswith("test_")]   # 적힌 순서 — 창 테스트가 뒤 테스트의 창을 만든다
     failed = 0

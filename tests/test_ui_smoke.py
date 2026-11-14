@@ -35,6 +35,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import app_main  # noqa: E402
 import boostcollect  # noqa: E402
 import config  # noqa: E402
@@ -56,6 +57,13 @@ import teamcolor  # noqa: E402
 import traitcollect  # noqa: E402
 import updatecheck  # noqa: E402
 import theme as T  # noqa: E402
+
+# 109 J8 — 이 파일이 도는 동안 진짜 Windows 자격 증명 관리자를 부르는 길이 0 이어야 한다(개발 PC 의 진짜 키 보호).
+# 부르는 함수를 기록기로 바꿔 끼우고, 맨 끝 테스트(test_zz_*)가 기록이 비었는지 본다.
+_CRED_CALLS: list[str] = []
+config._cred_read = lambda *a, **k: _CRED_CALLS.append("read") or ""
+config._cred_write = lambda *a, **k: _CRED_CALLS.append("write") or False
+config._cred_delete = lambda *a, **k: _CRED_CALLS.append("delete") or True
 
 _DIR = os.path.join(_ROOT, "tests", "fixtures")
 # offscreen 의 기본 가상 화면은 800x800 이라, 창을 화면에 맞추는 규칙(1.0.3)이 모든 테스트를 '좁은 화면'으로
@@ -9525,7 +9533,8 @@ def test_notice_versions_split_first_and_reask():
                                             (12, False, True, True),    # 13 이 올라서 12 동의자도 수집을 켰으면(57 ⓪)
                                             (13, False, True, True),    # 14 가 올라서 13 동의자도 수집을 켰으면(57 ③)
                                             (14, False, True, True),    # 15 가 올라서 14 동의자도(108 C — 수집과 무관)
-                                            (15, False, False, True)]:
+                                            (15, False, True, True),    # 16 이 올라서 15 동의자도(109 C — 키 보관 위치 · 수집과 무관)
+                                            (16, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -9535,7 +9544,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (15, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (16, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
@@ -9545,7 +9554,11 @@ def test_notice_versions_split_first_and_reask():
         # 2.13.1: 14 = 상대 점수 보여 주기·내 특성(수집 몫) + 버튼 자리·넥슨 페이지 안내 — COLLECT_ONLY_FROM 은 8 그대로(U7)
         assert config.OPP_SCORE_NOTICE_VERSION == config.MY_TRAIT_NOTICE_VERSION == 14
         # 3.10.1: 15 = 켤 때 내 계정의 새 경기 확인(108 C) — 수집과 무관해 COLLECT_ONLY_FROM 도 15(U6 — 수집 끈 2~14 동의자에게도)
-        assert config.STARTUP_CHECK_NOTICE_VERSION == config.NOTICE_COLLECT_ONLY_FROM == 15
+        assert config.STARTUP_CHECK_NOTICE_VERSION == 15
+        # 3.10.1: 16 = API 키 보관 위치(109 C) — 수집과 무관해 COLLECT_ONLY_FROM 은 17(수집 끈 15 동의자에게도)
+        assert config.NOTICE_COLLECT_ONLY_FROM == 17
+        config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 15
+        assert config.notice_update_pending(), "수집을 끈 15 동의자에게 16 을 안 물었다(109 C)"
         for acc in (14, 13, 12, 8):
             config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, acc
             assert config.notice_update_pending(), f"수집을 끈 {acc} 동의자에게 15 를 안 물었다(U6)"
@@ -9553,6 +9566,8 @@ def test_notice_versions_split_first_and_reask():
         assert "저장 공간" in notice.changes_html(13) and "새 경기만" in notice.changes_html(13)
         assert "챔피언스 이상에서 뛴 판수" in notice.changes_html(12)
         config.NOTICE_ACCEPTED = 15
+        assert config.startup_check_allowed()
+        config.NOTICE_ACCEPTED = 16
         assert config.startup_check_allowed() and not config.notice_update_pending()
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
@@ -9594,13 +9609,14 @@ def test_notice8_asked_when_collect_off():
             config.NOTICE_ACCEPTED = acc
             assert config.notice_update_pending() is True, acc
         # 9~14 는 수집을 켠 사람 몫이었고, 15(108 C)는 다시 모두에게 — 수집을 끈 8·14 동의자도 묻는다(U6)
-        for acc in (8, 14):
+        # 16(109 C · 키 보관 위치)도 모두에게 — 수집을 끈 15 동의자도 묻는다
+        for acc in (8, 14, 15):
             config.NOTICE_ACCEPTED = acc
             assert config.notice_update_pending(), acc
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         assert not config.notice_update_pending()
-        assert config.NOTICE_COLLECT_ONLY_FROM == 15, \
-            "NOTICE_COLLECT_ONLY_FROM 을 8 로 되돌리면 수집 끈 8~14 동의자가 안내 15 를 못 보고 켤 때 확인이 영영 안 열린다"
+        assert config.NOTICE_COLLECT_ONLY_FROM == 17, \
+            "NOTICE_COLLECT_ONLY_FROM 을 되돌리면 수집 끈 동의자가 안내 15·16 을 못 본다(켤 때 확인 · 키 보관 위치)"
     finally:
         config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
 
@@ -9610,7 +9626,7 @@ def test_notice_below6_still_asked_when_not_collecting():
     keep = config.NOTICE_ACCEPTED, config.RANK_COLLECT
     try:
         config.RANK_COLLECT = False
-        for acc in range(config.NOTICE_BASE_VERSION, config.NOTICE_COLLECT_ONLY_FROM):
+        for acc in range(config.NOTICE_BASE_VERSION, min(config.NOTICE_COLLECT_ONLY_FROM, config.NOTICE_VERSION)):
             config.NOTICE_ACCEPTED = acc
             assert config.notice_update_pending(), acc
     finally:
@@ -9635,7 +9651,8 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  12: "b9157edc4717602e",                          # 12 = 2.12.1 카드 정보 자동 채우기(51단계) · 55 시즌 FC·구단가치 기록 · '상위 20 연속' 이름 바로잡음(공개 전이라 같은 버전)
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
-                 15: "7393043af5fa162b"}                                    # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
+                 15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
+                 16: "ac242cde3764702d"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C)
 
 
 def _notice_digest() -> str:
@@ -16492,6 +16509,24 @@ def test_zz_every_core_function_the_screens_called_is_in_filter_plan_109():
     print(f"       화면이 부른 분석 함수 {len(called)}개 — {sorted(kinds.items())}")
     assert len(called) >= 60 and kinds.get("F", 0) >= 15 and kinds.get("MIX", 0) >= 3 and kinds.get("S", 0) >= 20, \
         f"화면이 부른 이름이 너무 적다({len(called)} · {kinds}) — 기록기가 일부만 보고 있다"
+
+
+def test_zz_real_credential_manager_never_called_109():
+    """맨 끝(이름순) — 앞 테스트 전체가 도는 동안 자격 증명 읽기·쓰기·지우기가 한 번도 없었다. 머리(watchdog)가 FIFA_NO_CRED=1 을 주므로
+    save_api_key·migrate·키 관문이 모두 건너뛴다. 막지 않았으면: 임시 .env 로 도는 테스트가 개발 PC 의 진짜 키를 덮는다."""
+    assert os.environ.get("FIFA_NO_CRED") == "1" and not config.cred_allowed()
+    assert _CRED_CALLS == [], _CRED_CALLS
+    # 대조 — 기록기가 실제로 걸린다(빈 검사가 아니다): 판정을 열어 쓰면 기록이 생긴다
+    keep, keep_paths = os.environ.pop("FIFA_NO_CRED"), (config.ENV_PATH, config.DEFAULT_ENV_PATH)
+    try:
+        config.ENV_PATH = config.DEFAULT_ENV_PATH = config.Path(tempfile.mkdtemp()) / ".env"   # 없는 파일 — .env 에 키가 없으면 자격 증명을 읽는다
+        assert config.cred_allowed()
+        config._resolve_key()
+        assert _CRED_CALLS and _CRED_CALLS[0] == "read", _CRED_CALLS
+    finally:
+        os.environ["FIFA_NO_CRED"] = keep
+        config.ENV_PATH, config.DEFAULT_ENV_PATH = keep_paths
+        _CRED_CALLS.clear()
 
 
 def main() -> int:

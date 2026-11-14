@@ -25,6 +25,12 @@ import time
 import traceback
 from contextlib import contextmanager
 
+# 테스트 공통 머리(109 J8) — config 를 import 하는 테스트는 config 보다 먼저 이 모듈을 거친다(test_rules 가 대조).
+# Windows 자격 증명 관리자는 사용자마다 하나라 임시 폴더·가짜 키를 쓰는 테스트가 개발 PC 의 진짜 키를 덮거나 읽는다.
+# 그래서 이 프로세스(와 물려받는 자식)는 자격 증명을 읽지도 쓰지도 않는다. 자격 증명 자체를 재는 테스트는
+# 가짜 함수를 바꿔 끼우고 config.NO_CRED_VAR 를 그 안에서만 풀며 진짜 관리자는 부르지 않는다.
+os.environ["FIFA_NO_CRED"] = "1"
+
 DEFAULT_LIMIT_S = 300
 EXIT_HUNG = 3
 _BACKSTOP_S = 15   # 파이썬 스레드조차 못 도는 멈춤(C 코드가 GIL 을 쥔 채) — faulthandler 의 C 스레드가 이만큼 뒤에 끊는다

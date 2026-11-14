@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
+import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import app_main  # noqa: E402
 import config  # noqa: E402
 import ownerdist as od  # noqa: E402
