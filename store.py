@@ -36,6 +36,7 @@ import threading
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 # 경기 기록 해석 — orjson 이 있으면 그걸로. 실데이터 1만 경기 2.05초 → 0.87초(중앙값 2.37배,
 # 2026-10-02, 결과 동일 확인). "2배 이상일 때만 넣는다"는 합의를 넘어 들였다. 없으면(소스 실행) json.
@@ -364,6 +365,18 @@ CREATE TABLE IF NOT EXISTS detail_retry (
     day        TEXT NOT NULL,
     PRIMARY KEY (ouid, match_type, match_id)
 ) WITHOUT ROWID;
+-- 내 메모(109 U2·L2·F1) — 표 하나를 셋이 같이 쓴다. kind 'match': key = match_id · mark = 끊김/연습 코드(config.MATCH_MARKS) · memo = 한 줄 메모.
+-- kind 'opp': key = 상대 ouid(닉네임은 바뀐다 · J4) · memo = 한 줄 메모 · tags = JSON 배열. 셋이 다 비면 줄을 지운다(save_note).
+-- 계정과 무관하다 — 경기 번호·상대 ouid 가 이미 사람을 가린다. [내 기록 전부 지우기] 때 같이 지운다(RESET_WIPE · U3)
+CREATE TABLE IF NOT EXISTS notes (
+    kind       TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    mark       TEXT,
+    memo       TEXT,
+    tags       TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+) WITHOUT ROWID;
 """
 
 # [정보 › 저장 공간] 내 기록 전부(57 K9 ⑤) — fifa.db 를 바꿔 끼울 때 새 파일로 옮기는 표와 거르는 조건. 나머지 표는 전부 버린다
@@ -375,7 +388,7 @@ RESET_KEEP = {"api_budget": "", "seasons": "", "teamcolor_meta": "", "teamcolor_
 RESET_WIPE = ("matches", "match_players", "accounts", "team_colors", "elo_history", "elo_track", "predictions",
               "trades", "trades_prev", "card_prices", "card_info", "ranker_stats", "squad_owner", "squad_match",
               "match_squads", "ranker_squads", "ranker_matches", "owner_dist_state", "owner_dist_done", "owner_dist",
-              "trait_squads", "card_extra", "card_tries", "card_price_days", "my_traits", "detail_retry")
+              "trait_squads", "card_extra", "card_tries", "card_price_days", "my_traits", "detail_retry", "notes")
 # [저장 공간] 의 카드 정보(51 — K9 ②) · 구단주 분포·랭커 픽(K9 ⑥ — 크기만 · 지우기는 기존 purge 함수)
 CARD_TABLES = ("card_extra", "card_tries", "card_price_days")
 DIST_TABLES = ("owner_dist_state", "owner_dist_done", "owner_dist", "ranker_squads", "ranker_matches", "trait_squads")
@@ -2009,6 +2022,97 @@ def prune_my_traits(conn: sqlite3.Connection, keep_ouid: str | None) -> int:
         return 0
     with conn:
         return conn.execute("DELETE FROM my_traits WHERE ouid != ?", (keep_ouid,)).rowcount
+
+
+# ── 내 메모(109 U2·L2·F1) ────────────────────────────────────────────
+
+NOTE_MATCH, NOTE_OPP = "match", "opp"
+
+
+class Notes(NamedTuple):
+    """notes 표를 화면이 쥐는 꼴 — 값 객체(바꾸지 않는다 · 새로 만들어 갈아 끼운다). 로더가 읽어 Signal(object) 로 넘긴다(M1)."""
+    marks: dict      # match_id → 표시 코드(config.MATCH_MARKS)
+    memos: dict      # match_id → 한 줄 메모
+    opp: dict        # 상대 ouid → (메모, 태그 튜플)
+
+    @property
+    def shown(self) -> frozenset:
+        """표시한 경기 번호 — 스위치가 켜져 있으면 core_api.set_excluded 로 넘어가는 묶음."""
+        return frozenset(self.marks)
+
+
+EMPTY_NOTES = Notes({}, {}, {})
+
+
+def clean_memo(text) -> str:
+    """한 줄 메모 — 줄바꿈·탭은 공백으로, 앞뒤 공백을 떼고 상한(config.NOTE_MEMO_MAX)에서 자른다."""
+    s = " ".join(str(text or "").split())
+    return s[:config.NOTE_MEMO_MAX]
+
+
+def clean_tags(tags) -> tuple[str, ...]:
+    """태그 — 하나씩 정리해 빈 것·겹친 것을 빼고 개수·길이 상한(config.NOTE_TAGS_MAX · NOTE_TAG_MAX)을 지킨다."""
+    out: list[str] = []
+    for t in tags or ():
+        t = " ".join(str(t or "").split())[:config.NOTE_TAG_MAX]
+        if t and t not in out:
+            out.append(t)
+    return tuple(out[:config.NOTE_TAGS_MAX])
+
+
+def load_notes(conn: sqlite3.Connection) -> Notes:
+    """표 전부(작다 · 읽을 때 정렬 없음). 읽지 못할 줄(깨진 JSON·모르는 표시 코드)은 그 줄만 건너뛴다."""
+    marks, memos, opp = {}, {}, {}
+    ok_marks = {code for code, _t in config.MATCH_MARKS}
+    for r in conn.execute("SELECT kind, key, mark, memo, tags FROM notes"):
+        if r["kind"] == NOTE_MATCH:
+            if r["mark"] in ok_marks:
+                marks[r["key"]] = r["mark"]
+            if r["memo"]:
+                memos[r["key"]] = r["memo"]
+        elif r["kind"] == NOTE_OPP:
+            try:
+                tags = tuple(json.loads(r["tags"])) if r["tags"] else ()
+            except (ValueError, TypeError):
+                tags = ()
+            if r["memo"] or tags:
+                opp[r["key"]] = (r["memo"] or "", tags)
+    return Notes(marks, memos, opp)
+
+
+def save_note(conn: sqlite3.Connection, kind: str, key: str, *, mark: str | None = None, memo: str = "",
+              tags=()) -> None:
+    """줄 하나를 통째로 바꾼다(부분 갱신 없음 — 화면이 지금 값을 쥐고 있다). 표시·메모·태그가 다 비면 줄을 지운다."""
+    if kind not in (NOTE_MATCH, NOTE_OPP):
+        raise ValueError(f"notes 종류가 아닙니다: {kind!r}")
+    mark = mark if kind == NOTE_MATCH and mark in {c for c, _t in config.MATCH_MARKS} else None
+    memo = clean_memo(memo)
+    tags = clean_tags(tags) if kind == NOTE_OPP else ()
+    with conn:
+        if not (mark or memo or tags):
+            conn.execute("DELETE FROM notes WHERE kind = ? AND key = ?", (kind, key))
+            return
+        conn.execute("INSERT OR REPLACE INTO notes (kind, key, mark, memo, tags, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                     (kind, key, mark, memo or None, json.dumps(list(tags), ensure_ascii=False) if tags else None,
+                      datetime.now().isoformat(timespec="seconds")))
+
+
+def notes_with(notes: Notes, kind: str, key: str, *, mark: str | None = None, memo: str = "", tags=()) -> Notes:
+    """save_note 와 같은 규칙으로 값 객체에서 줄 하나를 바꾼 새 Notes — 쓰기가 끝난 뒤 화면이 쥔 값을 맞춘다."""
+    marks, memos, opp = dict(notes.marks), dict(notes.memos), dict(notes.opp)
+    memo, tags = clean_memo(memo), clean_tags(tags)
+    if kind == NOTE_MATCH:
+        marks.pop(key, None)
+        memos.pop(key, None)
+        if mark in {c for c, _t in config.MATCH_MARKS}:
+            marks[key] = mark
+        if memo:
+            memos[key] = memo
+    elif kind == NOTE_OPP:
+        opp.pop(key, None)
+        if memo or tags:
+            opp[key] = (memo, tags)
+    return Notes(marks, memos, opp)
 
 
 # ── 저장 공간(57 K9) ─────────────────────────────────────────────────

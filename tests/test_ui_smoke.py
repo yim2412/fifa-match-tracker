@@ -2553,12 +2553,12 @@ def test_luck_tab_streak_states():
         _win._invalidate("luck")
         assert "계산 중" in texts(), texts()
         _win._streak_req = 7
-        _win._on_streak_ready((6, key, habits.streak_baseline(ms)))           # 늦게 끝난 옛 요청
+        _win._on_streak_ready((6, key, habits.streak_baseline(ms), app_main.core.filter_version()))           # 늦게 끝난 옛 요청
         assert _win._streak_done is None and "계산 중" in texts()
-        _win._on_streak_ready((7, key, habits.streak_baseline(ms)))
+        _win._on_streak_ready((7, key, habits.streak_baseline(ms), app_main.core.filter_version()))
         assert "최장 연승 25" in texts() and "우연으로 보기 어렵습니다" in texts(), texts()
         assert "최장 연패 25" in texts()
-        _win._on_streak_ready((7, key, None))
+        _win._on_streak_ready((7, key, None, app_main.core.filter_version()))
         assert "계산하지 못했습니다" in texts(), texts()
         # 경기 목록이 바뀌면(키가 달라지면) 들고 있던 결과를 쓰지 않는다
         _win._streak_done = (("다른", 0), habits.streak_baseline(ms))
@@ -2577,7 +2577,7 @@ def test_render_all_launches_streak_worker_once_per_list():
         _win._render_all()
         assert len(started) == 1 and _win._streak_req == before + 1, (len(started), before, _win._streak_req)
         w = started[0]
-        _win._on_streak_ready((w._req, w._key, None))
+        _win._on_streak_ready((w._req, w._key, None, w._fv))
         _win._render_all()
         assert len(started) == 1, "같은 목록이면 다시 띄우지 않는다"
         _win._streak_done = None
@@ -6327,7 +6327,7 @@ def test_open_last_account_then_quiet_refresh():
     class _Rec:
         def __init__(self, api, nick, mt, prev=None, offline_ouid=None, auto=False):
             made.append((nick, offline_ouid))
-            self.progress = self.finished_ok = self.failed = self.finished = self
+            self.progress = self.notes_ready = self.finished_ok = self.failed = self.finished = self
 
         def connect(self, *_):
             pass
@@ -6546,7 +6546,7 @@ def test_search_hands_current_account_to_loader():
             pf.append(prefetch)
             elo.append(record_elo)
             maxdiv.append(want_max_division)
-            self.progress = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
+            self.progress = self.notes_ready = self.finished_ok = self.failed = self.key_invalid = self.quota_hit = self
             self.outcome = self
             self.rank_ready = self.max_division_ready = self.finished = self
             self.elo_saved = _Sig()
@@ -6788,7 +6788,7 @@ def test_search_outcome_reaches_status_cell_96():
         def __init__(self, *a, **k):
             made.append(k)
             self.outcome = _Sig()
-            self.progress = self.finished_ok = self.failed = self.finished = self.key_invalid = _Sig()
+            self.progress = self.notes_ready = self.finished_ok = self.failed = self.finished = self.key_invalid = _Sig()
             self.quota_hit = self.rank_ready = self.max_division_ready = self.elo_saved = _Sig()
 
         def isRunning(self):

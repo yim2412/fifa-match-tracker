@@ -968,6 +968,12 @@ RECORD_HATTRICK = 3                  # ⑦ 내 선수 한 명이 한 경기 이�
 RECORD_MILESTONES = (100, 500, 1000)  # ⑧ 누적 경기·승(몰수 뺌)
 RECORD_RECENT_DAYS = 7               # 대시보드 "최근 기록" 칩 — 이 날 수 안
 RECORD_RECENT_MAX = 3                # 칩 최대 개수
+# 109 U2·L2·F1 내 메모(notes 표) — 경기 표시는 둘뿐이고 둘 다 [표시한 판 빼고 보기] 스위치에 따라 빠진다. (저장 코드, 화면 글자)
+MATCH_MARKS = (("cut", "끊김"), ("practice", "연습"))
+NOTE_MEMO_MAX = 80                   # 경기 한 줄 메모·상대 메모 글자 수 상한(줄바꿈은 공백으로)
+NOTE_TAG_MAX = 12                    # 상대 태그 하나의 글자 수 상한
+NOTE_TAGS_MAX = 8                    # 상대 한 명에 붙는 태그 수 상한
+EXCLUDE_SHOWN_KEY = "view/exclude_shown"   # [표시한 판 빼고 보기] 스위치 — settings.ini (109 J4 · 계정과 무관)
 RIVAL_MIN_GAMES = 5                  # F4 라이벌 — 가장 많이 만난 상대가 이만큼 밑이면 카드를 숨긴다
 DAY_PLAYER_MIN_GAMES = 2             # Q2 오늘의 선수 — 그날 이만큼 이상 뛴 선수만(한 판 반짝을 1위로 안 올리게)
 Q1_SPARK_N = 10                      # Q1 선수 지표 평점 칸 미니 그래프 — 최근 이만큼 판

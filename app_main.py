@@ -429,6 +429,9 @@ class MatchLoader(Worker):
     # 76 U14 — 받는 중간 결과(최신순 [MatchSummary], [원본 detail], ouid). 저장된 경기가 하나도 없는 계정만 —
     # 저장분이 있으면 최신 몇 판과 옛 기록 사이에 구멍이 생겨 "최근 N판"이 실제와 달라진다. 구단주 비교만 켠다
     partial = Signal(object, object, str)
+    # 109 M1 — 내 메모(store.Notes)를 경기 목록과 같이 넘긴다. finished_ok 바로 앞에 온다(화면이 그리기 전에 표시 묶음을 받게).
+    # 화면 스레드는 fifa.db 를 읽지 않는다 — 처음 열 때·메모리를 내려놓았다 다시 열 때(offline 로더)도 같은 길
+    notes_ready = Signal(object)
     # 96 W2 — 넥슨에 물은 검색이 끝날 때마다 한 번(SearchOutcome) · 저장본만 읽는 길(offline)은 안 보낸다
     outcome = Signal(object)
 
@@ -512,6 +515,18 @@ class MatchLoader(Worker):
             offset += PAGE_SIZE
         return ids
 
+    def _emit_notes(self) -> None:
+        """fifa.db notes 표를 읽어 넘긴다 — 못 읽으면(잠김 등) 안 보내고 화면이 쥔 값을 그대로 둔다."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                notes = store.load_notes(conn)
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError):
+            return
+        self.notes_ready.emit(notes)
+
     def _run_offline(self) -> None:
         """DB 만 — 넥슨 API·웹을 부르지 않는다(메타는 디스크 캐시가 있으면 그걸로). 순위는 비워 두고,
         뒤이은 새 경기 확인(정상 검색)이 채운다."""
@@ -524,6 +539,7 @@ class MatchLoader(Worker):
         names = self._safe_meta("spid", "id", "name")
         positions = self._safe_meta("spposition", "spposition", "desc")
         seasons = self._safe_meta_raw("seasonid", "seasonId")
+        self._emit_notes()
         self.finished_ok.emit(matches, details, ouid, {"nickname": self._nickname}, names,
                               positions, 0, 0, None, grade_name, is_champion, badge_path,
                               seasons, division_names)
@@ -680,6 +696,7 @@ class MatchLoader(Worker):
 
             if not details:
                 out.stop = ""
+                self._emit_notes()
                 self.finished_ok.emit([], [], ouid, basic, {}, {}, 0, got,
                                       rank, grade_name, is_champion, badge_path,
                                       {}, division_names)
@@ -695,6 +712,7 @@ class MatchLoader(Worker):
             names, positions, seasons = meta_f.result()
 
             out.stop = ""
+            self._emit_notes()
             self.finished_ok.emit(matches, details, ouid, basic, names,
                                   positions, new, got, rank, grade_name,
                                   is_champion, badge_path, seasons, division_names)
@@ -1859,11 +1877,14 @@ class HabitsWorker(Worker):
     """연승·연패 우연 기준(A3 · habits.streak_baseline) — 순서를 200번 섞어 1만 판이면 0.5~0.8초라 화면 스레드 예산
     (0.3초)을 넘는다. 새 검색·범위·시즌이 바뀐 직후 한 번 띄운다(_launch_streak). 요청 번호로 늦은 결과를 버린다.
     계산 예외는 그 구역만 "계산하지 못했습니다"(결과 None)."""
-    streak_ready = Signal(object)   # (요청 번호, 캐시 키, StreakBaseline | None) — object 인 이유는 PyQt 규칙 8
+    streak_ready = Signal(object)   # (요청 번호, 캐시 키, StreakBaseline | None, 시작 때 거르기 판본) — object 인 이유는 PyQt 규칙 8
 
-    def __init__(self, req: int, key: tuple, matches: list):
+    def __init__(self, req: int, key: tuple, matches: list, fv: int = 0):
         super().__init__()
         self._req, self._key, self._matches = req, key, matches
+        # 109 M13 — 시작 때 거르기 판본. core.streak_baseline 은 F 라 도는 동안 표시가 바뀌면 반쯤 다른 묶음으로 센다 →
+        # 받는 쪽(_on_streak_ready)이 지금 판본과 다르면 이 결과를 버리고 다시 띄운다
+        self._fv = fv
         self._cancel = False
 
     def cancel(self) -> None:
@@ -1878,7 +1899,32 @@ class HabitsWorker(Worker):
                 crashlog.note("habits", e)
             out = None
         if not self._cancel:
-            self.streak_ready.emit((self._req, self._key, out))
+            self.streak_ready.emit((self._req, self._key, out, self._fv))
+
+
+class NotesWriter(Worker):
+    """내 메모 쓰기(109 M3) — 줄 하나를 통째로 바꾼다. fifa.db 에 쓰므로 WRITES 를 두어, 저장 공간을 지우는 중이면 start 가 막는다
+    (blocked). 화면 스레드는 fifa.db 에 쓰지 않는다. 끝나면 (edit, ok) — 화면이 쥔 값은 성공했을 때만 바꾼다."""
+    WRITES = frozenset({STORE_FIFA})
+    done = Signal(object)
+
+    def __init__(self, edit: tuple):
+        super().__init__()
+        self._edit = edit        # (종류, 키, 표시 코드 | None, 메모, 태그)
+
+    def run(self) -> None:
+        kind, key, mark, memo, tags = self._edit
+        ok = False
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                store.save_note(conn, kind, key, mark=mark, memo=memo, tags=tags)
+                ok = True
+            finally:
+                conn.close()
+        except (sqlite3.Error, OSError, ValueError):
+            pass
+        self.done.emit((self._edit, ok))
 
 
 def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
@@ -3013,6 +3059,7 @@ class CardBackfillScheduler(QObject):
 
 
 class MainWindow(QMainWindow):
+    notes_changed = Signal()    # 109 — 내 메모·표시가 바뀌었다(열려 있는 경기 상세의 단추가 따라 바뀐다)
     # 57 K3 — 상대 정보 넷(팀컬러·구단가치는 상대의 **지금** 값 · 맞대결은 이 PC 저장분 · 상대 점수는 내 계정 경기만).
     # 65 M2 부터 경기 목록은 카드라 머리글이 없다 — 같은 글을 카드 조각 툴팁(MATCH_CARD_TIPS)과 상세 창 구단가치에 쓴다
     MATCH_COLUMN_HELP = {
@@ -3103,6 +3150,15 @@ class MainWindow(QMainWindow):
         self._streak_req = 0
         self._streak_done: tuple | None = None     # (키, StreakBaseline | None(계산 실패))
         self._habits_workers: list[HabitsWorker] = []
+        # 109 내 메모·표시 — 로더가 notes_ready 로 넘긴 값(M1) · [표시한 판 빼고 보기] 스위치(settings.ini · J4) · 쓰기 줄 세우기(M3)
+        self._notes: store.Notes = store.EMPTY_NOTES
+        self._exclude_on = self._read_exclude_switch()
+        self._notes_queue: list[tuple] = []
+        self._notes_writer: NotesWriter | None = None
+        self._notes_eff: store.Notes | None = None   # 줄에 올린 쓰기까지 얹은 값 — 쓰기 둘이 이어질 때 뒤 것이 앞 것을 되돌리지 않게(없으면 None)
+        self._opp_ouid_cache: tuple | None = None   # (키, {닉네임: 상대 ouid}) — 상대 메모가 있을 때만 짓는다
+        # 지난 notes_ready 뒤에 끝난 쓰기. 쓰기 전에 표를 읽은 로더 값이 늦게 와도 방금 쓴 메모가 화면에서 되돌아가지 않게 다시 얹는다
+        self._notes_applied: list[tuple] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
         self._notice_after_restore = False  # 최소화 중이라 미뤘다 — 창이 돌아오면 묻는다
         # 108 C 켤 때 내 계정 — 실행당 한 번(open_startup) · 최소화라 미뤘다 · 켤 때 길(대시보드 · 팀컬러는 캐시만) ·
@@ -3243,6 +3299,22 @@ class MainWindow(QMainWindow):
     # ── 설정 기억(settings.ini) ────────────────────────────────────────
     def _settings(self) -> QSettings:
         return QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
+
+    def _read_exclude_switch(self) -> bool:
+        """[표시한 판 빼고 보기] 스위치 값(settings.ini · 기본 꺼짐) — 읽지 못하면 꺼짐."""
+        try:
+            return str(self._settings().value(config.EXCLUDE_SHOWN_KEY, "false")).lower() in ("true", "1")
+        except Exception:
+            return False
+
+    def _write_exclude_switch(self, on: bool) -> None:
+        """쓰는 자리에서 바로 sync — 닫을 때 _save_settings 만 믿으면 강제 종료에 값이 사라진다(109 J10 소항목)."""
+        try:
+            s = self._settings()
+            s.setValue(config.EXCLUDE_SHOWN_KEY, "true" if on else "false")
+            s.sync()
+        except Exception:
+            pass
 
     def _season_key(self, data) -> str:
         if data is None:
@@ -4006,7 +4078,21 @@ class MainWindow(QMainWindow):
         h.addWidget(self.cb_range)
         h.addSpacing(4)
         h.addWidget(self.lb_total)
-        self.top_bar = WrapBar(left, middle, self.btn_more, sep=sep)
+        # 109 U7 — 기본 꺼짐(지금 숫자 그대로). 켜면 끊김·연습으로 표시한 판을 모든 숫자·문장에서 빼고, 막대에 몇 판을 뺐는지 늘 보인다
+        self.chk_exclude = QCheckBox("표시한 판 빼고 보기")
+        self.chk_exclude.setToolTip("끊김·연습으로 표시한 경기를 승률 등 모든 숫자와 문장에서 뺍니다. 경기 목록에는 흐리게 남습니다.\n"
+                                    "등급·보상·스쿼드처럼 넥슨이 기록한 값은 그대로입니다.")
+        self.chk_exclude.setChecked(self._exclude_on)
+        self.chk_exclude.toggled.connect(self._on_exclude_toggled)
+        self.lb_excluded = QLabel("")
+        self.lb_excluded.setStyleSheet(f"color: {T.WARN};")
+        self.lb_excluded.setVisible(False)
+        # 가운데 묶음은 두 줄 배치에서도 한 줄이라 거기 더하면 창 최소 폭이 밀린다 — 오른쪽(새 경기 확인 옆)에 둔다
+        right, rh = group()
+        rh.addWidget(self.chk_exclude)
+        rh.addWidget(self.lb_excluded)
+        rh.addWidget(self.btn_more)
+        self.top_bar = WrapBar(left, middle, right, sep=sep)
         return self.top_bar
 
     # 왼쪽 메뉴 — (묶음 제목, [(메뉴 이름, 페이지 빌더 이름 또는 Tabs)]). 묶음 제목이
@@ -4964,7 +5050,8 @@ class MainWindow(QMainWindow):
         이어 붙이든(길이·맨 앞 경기) 잡히게."""
         m, d = self._matches, self._details
         basis = self._dist_basis()
-        key = (self._ouid, id(m), len(m), m[0].match_id if m else None, id(d), len(d), self._dist_key if basis else None)
+        key = (self._ouid, id(m), len(m), m[0].match_id if m else None, id(d), len(d), self._dist_key if basis else None,
+               core.filter_version())      # 109 J6 — 표시한 판을 빼고 센 문장이라 거르기 판본이 바뀌면 다시
         if key != self._narrate_key:
             self._narrate_found = core.narrate(m, d, self._ouid, basis=basis)
             self._narrate_key = key
@@ -5745,14 +5832,19 @@ class MainWindow(QMainWindow):
             w.cancel()      # 앞 계산은 필요 없다 — 섞기 한 번 사이에서 멈춘다
         self._habits_workers = [w for w in self._habits_workers if w.isRunning()]
         self._streak_req += 1
-        w = HabitsWorker(self._streak_req, key, list(self._matches))
+        w = HabitsWorker(self._streak_req, key, list(self._matches), core.filter_version())
         w.streak_ready.connect(self._on_streak_ready)
         self._habits_workers.append(w)
         w.start()
 
     def _on_streak_ready(self, payload) -> None:
-        req, key, result = payload
+        req, key, result, fv = payload
         if req != self._streak_req:
+            return
+        if fv != core.filter_version():
+            # 109 M13 — 도는 동안 표시한 판이 바뀌었다(F 함수가 반쯤 다른 묶음으로 셌을 수 있다) → 버리고 새 묶음으로 다시
+            self._streak_done = None
+            self._launch_streak()
             return
         self._streak_done = (key, result)
         self._invalidate("luck")
@@ -6645,7 +6737,8 @@ class MainWindow(QMainWindow):
         (그리기는 매번 — 선수 이름이 늦게 와도 따라가게)."""
         # 구간 목록은 부를 때마다 새로 짓는다(_slice) — id 대신 원본 목록·길이·양 끝 경기로 잰다(_narrate_scope 와 같은 꼴)
         key = (self._ouid, id(self._details), len(self._details), len(details),
-               details[0].get("matchId") if details else None, details[-1].get("matchId") if details else None)
+               details[0].get("matchId") if details else None, details[-1].get("matchId") if details else None,
+               core.filter_version())     # 109 J6
         if key != self._shot_sum_key or self.shot_sum is None:
             self._shot_sum_key = key
             self.shot_sum = core.shot_summary(details, self._ouid or "")
@@ -6866,7 +6959,7 @@ class MainWindow(QMainWindow):
                     extra = (st.get("key_fp"), store.trade_count(conn, "buy"), store.trade_count(conn, "sell"),
                              store.trade_latest(conn))
                 key = (id(self._details_all), len(self._details_all), self._ouid, mode, extra,
-                       datetime.now().date())
+                       datetime.now().date(), core.filter_version())   # 109 J6 — build_timeline 은 F
                 if self._timeline_cache is not None and self._timeline_cache[0] == key:
                     return self._timeline_cache[1], st
                 rows = store.load_trades(conn) if mode == "mine" else None
@@ -6896,7 +6989,9 @@ class MainWindow(QMainWindow):
     def _details_key(self) -> tuple:
         """누적 전체 경기 목록의 캐시 키 — id·길이에 맨 앞·뒤 경기 번호(해제된 목록 주소에 같은 길이 새 목록이 와도 안 맞게)."""
         d = self._details_all
-        return id(d), len(d), (d[0].get("matchId") if d else None), (d[-1].get("matchId") if d else None)
+        # 109 J6 — 끝에 거르기 판본. 이 키를 쓰는 캐시(이력·업적·저장 전체 계산·영입 전후·가계부·보상)가 한꺼번에 따라온다
+        return (id(d), len(d), (d[0].get("matchId") if d else None), (d[-1].get("matchId") if d else None),
+                core.filter_version())
 
     def _history_mine(self) -> bool:
         """닉네임 이력은 내 계정일 때만(1회차 B[중] — 남의 옛 닉네임을 이어 보이지 않게) — 거래 화면과 같은 판정(키 지문까지)."""
@@ -10790,6 +10885,7 @@ class MainWindow(QMainWindow):
         self._match_cards: list[MatchCard] = []   # 정렬 전(최신순) — 정렬을 바꿀 때 다시 만들지 않는다
         self.match_list.activated.connect(self._on_match_double_clicked)
         self._add_profile_action(self.match_list, lambda: getattr(self.match_list.current(), "opponent", ""))
+        self._add_match_note_actions()
         v.addWidget(self.match_list, 1)
         return w
 
@@ -10831,6 +10927,48 @@ class MainWindow(QMainWindow):
         act = QAction("넥슨 데이터센터에서 보기", view)
         act.triggered.connect(lambda _=False, f=nick_of: self._open_profile(f()))
         view.addAction(act)
+
+    def _add_match_note_actions(self) -> None:
+        """경기 카드 오른쪽 클릭 — 끊김·연습 표시 · 떼기 · 한 줄 메모(109 U2·L2). 메뉴는 Qt 가 띄운다(위 _add_profile_action 과 같다)."""
+        def cur_id() -> str:
+            return getattr(self.match_list.current(), "match_id", "")
+
+        self.match_note_actions: dict[str, QAction] = {}
+        for code, text in config.MATCH_MARKS:
+            act = QAction(f"{text}으로 표시", self.match_list)
+            act.triggered.connect(lambda _=False, c=code: self._set_match_mark(cur_id(), c))
+            self.match_list.addAction(act)
+            self.match_note_actions[code] = act
+        act = QAction("표시 떼기", self.match_list)
+        act.triggered.connect(lambda _=False: self._set_match_mark(cur_id(), None))
+        self.match_list.addAction(act)
+        self.match_note_actions["clear"] = act
+        act = QAction("메모 쓰기…", self.match_list)
+        act.triggered.connect(lambda _=False: self._ask_match_memo(cur_id()))
+        self.match_list.addAction(act)
+        self.match_note_actions["memo"] = act
+
+    def _ask_match_memo(self, match_id: str) -> None:
+        if not match_id:
+            return
+        dlg = NoteDialog(self, "경기 메모", self._notes.memos.get(match_id, ""))
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._set_match_memo(match_id, dlg.memo())
+
+    def _ask_opp_note(self) -> None:
+        """상대 전적에서 고른 상대의 메모·태그(109 F1) — 상대 ouid 를 모르면(저장된 경기 상세가 없다) 열지 않는다."""
+        ouid = self._opp_ouid_of(self._opp_row_nick())
+        if not ouid:
+            return
+        memo, tags = self._notes.opp.get(ouid, ("", ()))
+        dlg = NoteDialog(self, "상대 메모·태그", memo, tags=tags, with_tags=True)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            self._set_opp_note(ouid, dlg.memo(), dlg.tags())
+
+    def _refresh_opp_note_button(self) -> None:
+        """상대 메모 단추 — 구단주 묶음에서 줄을 골랐고 그 닉네임의 상대 ouid 를 찾을 때만 켠다(J4 · 못 찾으면 흐림)."""
+        nick = self._opp_row_nick()
+        self.btn_opp_note.setEnabled(bool(nick) and bool(self._opp_ouid_of(nick)))
 
     @staticmethod
     def _table_nick(table: QTableWidget, col: int) -> str:
@@ -10897,6 +11035,12 @@ class MainWindow(QMainWindow):
         self.cb_opp_sort = NoScrollComboBox()
         self.cb_opp_sort.currentIndexChanged.connect(lambda *_: self._show_opp_rows())
         row.addWidget(self.cb_opp_sort)
+        row.addSpacing(12)
+        self.btn_opp_note = QPushButton("상대 메모·태그")
+        self.btn_opp_note.setToolTip("고른 상대에게 한 줄 메모와 태그를 답니다. 이 PC 에만 저장됩니다.")
+        self.btn_opp_note.setEnabled(False)
+        self.btn_opp_note.clicked.connect(self._ask_opp_note)
+        row.addWidget(self.btn_opp_note)
         row.addStretch(1)
         v.addLayout(row)
         v.addLayout(self._build_opp_filter_row())
@@ -10929,6 +11073,10 @@ class MainWindow(QMainWindow):
                      f"{core.MIN_COND}판 미만이면 비웁니다. 몇 판짜리 큰 차이가 가장 눈에 띄지 않게 하려는 것입니다.")})
         self.opp_list.activated.connect(self._on_opponent_double_clicked)
         self._add_profile_action(self.opp_list, self._opp_row_nick)
+        act = QAction("메모·태그 쓰기…", self.opp_list)
+        act.triggered.connect(lambda _=False: self._ask_opp_note())
+        self.opp_list.addAction(act)
+        self.opp_list.selectionModel().currentChanged.connect(lambda *_: self._refresh_opp_note_button())
         self._opp_rows: list[RateRow] = []
         self._opp_picked_details: list[dict] = []
         v.addWidget(self.opp_list, 1)
@@ -11031,7 +11179,8 @@ class MainWindow(QMainWindow):
 
     def _match_formations(self) -> dict[str, str]:
         """시즌 범위 경기마다 내 포메이션 — 범위·계정이 같으면 다시 안 센다(⑦ 화면 스레드 50ms)."""
-        key = (self._ouid, len(self._details), self._details[0].get("matchId") if self._details else None)
+        key = (self._ouid, len(self._details), self._details[0].get("matchId") if self._details else None,
+               core.filter_version())     # 109 J6
         if getattr(self, "_formation_cache", (None, None))[0] != key:
             self._formation_cache = (key, core.match_formations(self._details, self._ouid or ""))
         return self._formation_cache[1]
@@ -11803,6 +11952,7 @@ class MainWindow(QMainWindow):
         if startup:
             self._loader.finished.connect(lambda ld=ld: self._on_startup_check_finished(ld))
         self._loader.progress.connect(self._on_progress)
+        self._loader.notes_ready.connect(self._on_notes_ready)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         self._loader.key_invalid.connect(self._on_key_invalid)
@@ -11922,6 +12072,7 @@ class MainWindow(QMainWindow):
         self._set_busy(True)
         ld = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, offline_ouid=ouid, auto=True)
         ld.progress.connect(self._on_progress)
+        ld.notes_ready.connect(self._on_notes_ready)
         ld.finished_ok.connect(self._on_loaded)
         ld.failed.connect(self._on_failed)
         # finished_ok 가 아니라 스레드가 끝난 뒤(finished) — 그 전엔 isRunning 이라 새 검색이 막힌다
@@ -12027,6 +12178,145 @@ class MainWindow(QMainWindow):
         self.lb_total.setText(f"{n:,}경기" if self._range_spec()[0] != "all" else "")
         self.lb_sub.setText(f"Lv.{self._basic.get('level', '-')}  ·  {self._grade_name}  ·  "
                             f"감독모드 {self._range_text(n)}")
+        self._refresh_filter_badge()
+
+    # ── 109 내 메모·표시 · 표시한 판 거르기 ──────────────────────────────────
+    def _excluded_in_view(self) -> int:
+        """지금 계정의 저장된 경기 중 표시한 판 수 — 막대 "표시한 N판 뺌" 의 N."""
+        shown = self._notes.shown
+        return sum(1 for m in self._matches_all if m.match_id in shown) if shown else 0
+
+    def _refresh_filter_badge(self) -> None:
+        on = self._exclude_on
+        self.lb_excluded.setText(f"표시한 {self._excluded_in_view():,}판 뺌" if on else "")
+        self.lb_excluded.setVisible(on)
+
+    def _apply_excluded(self) -> bool:
+        """스위치와 표시 묶음에서 core 의 거를 묶음을 맞춘다 — 바뀌었으면 거르기 판본을 올리고 True. 그리지는 않는다."""
+        ex = self._notes.shown if self._exclude_on else frozenset()
+        if ex == core.excluded():
+            return False
+        core.set_excluded(ex)
+        core.bump_filter_version()
+        return True
+
+    def _on_notes_ready(self, notes) -> None:
+        """로더가 넘긴 메모 묶음(M1) — finished_ok 가 바로 뒤따라 그리므로 여기서는 묶음과 판본만 맞춘다(스위치를 켠 채 켜질 때도 같은 길)."""
+        for kind, key, mark, memo, tags in self._notes_applied:   # 같은 값을 순서대로 다시 얹으므로 이미 읽힌 쓰기여도 결과가 같다
+            notes = store.notes_with(notes, kind, key, mark=mark, memo=memo, tags=tags)
+        self._notes_applied = []
+        self._notes = notes
+        if self._notes_writer is None and not self._notes_queue:
+            self._notes_eff = None
+        self._apply_excluded()
+
+    def _notes_now(self) -> store.Notes:
+        """지금 기준 메모 — 쓰는 중인 것까지 얹은 값(없으면 화면이 쥔 값). 줄 하나를 바꿀 때 나머지 칸은 여기서 읽는다."""
+        return self._notes_eff if self._notes_eff is not None else self._notes
+
+    def _on_exclude_toggled(self, on: bool) -> None:
+        self._exclude_on = bool(on)
+        self._write_exclude_switch(self._exclude_on)
+        self._refilter()
+
+    def _refilter(self) -> None:
+        """표시나 스위치를 바꾼 뒤 지나는 길 하나(109 J7). 거를 묶음 → 거르기 판본 올림 → 화면 키 전부 낡음 → 보이는 것만 바로.
+        경기 목록은 안 바뀌므로 _on_loaded·_apply_season·_rebuild_season_combo 는 부르지 않는다(시즌 콤보 옛 값이 안 생긴다).
+        판본을 올리는 줄은 무조건이다 — 같은 묶음이어도 한 번 지난 뒤 캐시가 남지 않게."""
+        core.set_excluded(self._notes.shown if self._exclude_on else frozenset())
+        core.bump_filter_version()
+        self._refresh_filter_badge()
+        if not self._matches_all:      # 아직 그릴 경기가 없다 — 다음 _render_all 이 새 묶음으로 그린다
+            return
+        self._launch_streak()      # 연승·연패 섞기는 작업 스레드 — 새 묶음으로 다시(M13)
+        for key in self._renderers():
+            self._invalidate(key)
+        self._rerender_compare()
+
+    def _queue_note(self, kind: str, key: str, *, mark: str | None = None, memo: str = "", tags=()) -> None:
+        """메모 줄 하나를 바꾸라고 쓰기 줄에 올린다(M3) — 하나가 도는 동안은 쌓아 두었다 차례로(스레드 둘이 같은 줄을 뒤바꾸지 않게)."""
+        edit = (kind, key, mark, store.clean_memo(memo), store.clean_tags(tags))
+        self._notes_eff = store.notes_with(self._notes_now(), kind, key, mark=edit[2], memo=edit[3], tags=edit[4])
+        self._notes_queue.append(edit)
+        self._pump_notes()
+
+    def _pump_notes(self) -> None:
+        if self._notes_writer is not None or not self._notes_queue:
+            return
+        w = NotesWriter(self._notes_queue.pop(0))
+        w.done.connect(self._on_note_written)
+        w.finished.connect(self._on_notes_writer_finished)
+        self._notes_writer = w
+        w.start()
+        if w.blocked:              # 저장 공간을 지우는 중 — 그동안은 못 쓴다
+            self._notes_writer, self._notes_queue, self._notes_eff = None, [], None
+            self.statusBar().showMessage(CLEARING_WAIT_MSG)
+
+    def _on_notes_writer_finished(self) -> None:
+        self._notes_writer = None      # finished 슬롯 안에서는 isRunning 이 아직 참일 수 있다 — 상태는 내가 쥔다
+        if not self._notes_queue:
+            self._notes_eff = None
+        self._pump_notes()
+
+    def _on_note_written(self, payload) -> None:
+        (kind, key, mark, memo, tags), ok = payload
+        if not ok:
+            self.statusBar().showMessage("메모를 저장하지 못했습니다. 잠시 뒤 다시 해 주세요.")
+            self._notes_queue, self._notes_eff = [], None     # 뒤따르던 쓰기는 이 쓰기를 전제로 만든 값이라 같이 버린다
+            self.notes_changed.emit()      # 단추가 옛 값으로 돌아가게
+            return
+        old = self._notes
+        self._notes = store.notes_with(old, kind, key, mark=mark, memo=memo, tags=tags)
+        self._notes_applied.append((kind, key, mark, memo, tags))
+        self._opp_ouid_cache = None
+        if self._notes.shown != old.shown and self._exclude_on:
+            self._refilter()               # 숫자를 내는 화면 전부 — 카드도 이 안에서 다시 그려진다
+        else:
+            self._refresh_filter_badge()
+            for k in ("matches", "opponents"):   # 표시 알약·메모·태그가 그려지는 곳
+                self._invalidate(k)
+        self.notes_changed.emit()
+
+    def _set_match_mark(self, match_id: str, mark: str | None) -> None:
+        """경기 표시 붙이기·떼기(mark=None) — 한 줄 메모는 그대로 둔다."""
+        if match_id:
+            self._queue_note(store.NOTE_MATCH, match_id, mark=mark, memo=self._notes_now().memos.get(match_id, ""))
+
+    def _set_match_memo(self, match_id: str, memo: str) -> None:
+        if match_id:
+            self._queue_note(store.NOTE_MATCH, match_id, mark=self._notes_now().marks.get(match_id), memo=memo)
+
+    def _set_opp_note(self, ouid: str, memo: str, tags) -> None:
+        if ouid:
+            self._queue_note(store.NOTE_OPP, ouid, memo=memo, tags=tags)
+
+    def _opp_ouids(self) -> dict[str, str]:
+        """닉네임 → 상대 ouid(그 닉네임의 가장 최근 경기 상세의 상대 쪽 — 109 J4). 상대 메모가 있을 때만 짓는다.
+        MatchSummary 에는 상대 ouid 가 없다. 저장 목록(원본 — 표시한 판도 들어 있다)에서 찾는다."""
+        d = self._details_all
+        key = (self._ouid, id(d), len(d))
+        if self._opp_ouid_cache is None or self._opp_ouid_cache[0] != key:
+            out: dict[str, str] = {}
+            for det in d:                       # 최신순 — 닉네임마다 처음 나온 판이 가장 최근
+                _me, opp = core.match_sides(det, self._ouid or "")
+                nick, oid = (opp or {}).get("nickname"), (opp or {}).get("ouid")
+                if nick and oid and nick not in out:
+                    out[nick] = oid
+            self._opp_ouid_cache = (key, out)
+        return self._opp_ouid_cache[1]
+
+    def _opp_ouid_of(self, nickname: str) -> str:
+        """한 닉네임의 상대 ouid — 한 판 찾는 것이라 지도를 안 짓는다. 못 찾으면 "" (메모 단추를 흐리게 둔다)."""
+        if not nickname or not self._ouid:
+            return ""
+        det = core.latest_match_with(self._details_all, self._ouid, nickname)
+        _me, opp = core.match_sides(det, self._ouid) if det is not None else (None, {})
+        return str((opp or {}).get("ouid") or "")
+
+    def _note_suffix(self, ouid: str) -> str:
+        memo, tags = self._notes.opp.get(ouid, ("", ()))
+        parts = ([" ".join(f"#{t}" for t in tags)] if tags else []) + ([memo] if memo else [])
+        return " · " + " · ".join(parts) if parts else ""
 
     # ── 시즌 ──────────────────────────────────────────────────────────
     ONGOING = sn.ONGOING  # 콤보 항목 데이터 — 시즌표에 아직 안 올라온 진행 중 시즌
@@ -12773,6 +13063,8 @@ class MainWindow(QMainWindow):
             return (core.opp_rank_label(band), band + 0.5)   # 정확한 순위보다 뒤로(같은 상한이면)
         return ("-", 10 ** 9)
 
+    MARK_TEXT = dict(config.MATCH_MARKS)    # 표시 코드 → 화면 글자(끊김 · 연습)
+
     def _match_card(self, m: MatchSummary, scores, h2h: dict, tags: dict | None = None) -> MatchCard:
         color = self._team_colors.get(m.opponent) or ""
         value = self._team_values.get(m.opponent)
@@ -12792,7 +13084,8 @@ class MainWindow(QMainWindow):
             h2h_text=wdl_text(s.win, s.draw, s.lose) if s else "",
             opp_score=self._opp_score_cell(scores, m.match_id)[0] if scores is not None else None,
             when=m.match_date, goal_diff=m.my_goals - m.opp_goals, rating=m.rating,
-            records=tuple((tags or {}).get(m.match_id, ())))
+            records=tuple((tags or {}).get(m.match_id, ())),
+            mark=self.MARK_TEXT.get(self._notes.marks.get(m.match_id, ""), ""), memo=self._notes.memos.get(m.match_id, ""))
 
     def _render_matches(self, matches: list[MatchSummary]) -> None:
         """경기 목록(65 M2) — 카드를 만들고(최신순) 고른 정렬로 보인다. 상대 점수 칸은 점수가 왔을 때만(관문·내 계정)."""
@@ -12897,6 +13190,7 @@ class MainWindow(QMainWindow):
 
     def _show_opp_rows(self) -> None:
         self.opp_list.set_rows(sort_rate_rows(self._opp_rows, self.cb_opp_sort.currentData() or "games"))
+        self._refresh_opp_note_button()
 
     @staticmethod
     def _rate_row(label: str, win: int, draw: int, lose: int, mixed: bool, base: float | None,
@@ -12919,8 +13213,10 @@ class MainWindow(QMainWindow):
         # 닉네임 없는 상대(NO_NICK)는 서로 다른 사람이 한 줄로 뭉쳐 "한 상대" 처럼 보인다 — 줄에서만 빼고(승률 카드·기준은
         # 그대로 전체) 머리 글에 경기 수를 적는다(67 R12)
         stats = opponent_stats(picked)
+        ouids = self._opp_ouids() if self._notes.opp else {}     # 109 F1 — 상대 메모·태그를 줄 글에 붙인다
         return [self._rate_row(s.nickname, s.win, s.draw, s.lose, s.mixed, base if base_rated else None, s.games,
-                               sub=f"득 {s.avg_goals_for:.2f} · 실 {s.avg_goals_against:.2f} · 최근 {s.last_date}",
+                               sub=(f"득 {s.avg_goals_for:.2f} · 실 {s.avg_goals_against:.2f} · 최근 {s.last_date}"
+                                    + self._note_suffix(ouids.get(s.nickname, ""))),
                                icon=("division", self._division_icon_key(s.opp_division)),   # 가장 최근 경기 때 상대 등급
                                key=s.nickname, recent=first.get(s.nickname, 0))
                 for s in stats if s.nickname != core.NO_NICK]
@@ -13542,6 +13838,7 @@ class MainWindow(QMainWindow):
             dlg.v.addWidget(QLabel("이 경기에서 내 기록을 찾지 못했습니다."))
             return dlg
         dlg.v.addWidget(self._detail_head(m, me, opp))
+        dlg.v.addWidget(self._detail_note_row(dlg, m.match_id))
         dlg.tabs.addTab(self._detail_summary(dlg, detail, m), "요약")
         dlg.tabs.addTab(self._detail_squads(dlg, me, opp, m), "스쿼드")
         dlg.tabs.addTab(self._detail_shots(dlg, detail), "슛")
@@ -13550,6 +13847,52 @@ class MainWindow(QMainWindow):
         dlg.tabs.setCurrentIndex(max(0, MatchDetailDialog.TABS.index(tab) if tab in MatchDetailDialog.TABS else 0))
         dlg.show_side(side)
         return dlg
+
+    def _detail_note_row(self, dlg: "MatchDetailDialog", match_id: str) -> QWidget:
+        """경기 상세 머리 아래 — 끊김·연습 표시 단추 둘과 한 줄 메모 칸(109 U2·L2). 쓰기는 작업 스레드가 하고(_queue_note)
+        끝나면 notes_changed 로 단추가 맞춰진다."""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(4, 0, 4, 4)
+        h.addWidget(self._dim_label("표시"))
+        dlg.match_id = match_id
+        for code, text in config.MATCH_MARKS:
+            b = QPushButton(text)
+            b.setCheckable(True)
+            b.setToolTip(f"이 경기를 {text}으로 표시합니다. [표시한 판 빼고 보기]를 켜면 숫자와 문장에서 빠집니다.")
+            b.clicked.connect(lambda checked, c=code: self._set_match_mark(match_id, c if checked else None))
+            dlg.mark_buttons[code] = b
+            h.addWidget(b)
+        h.addSpacing(8)
+        dlg.memo_edit = QLineEdit()
+        dlg.memo_edit.setPlaceholderText("한 줄 메모")
+        dlg.memo_edit.setMaxLength(config.NOTE_MEMO_MAX)
+        h.addWidget(dlg.memo_edit, 1)
+        save = QPushButton("메모 저장")
+        save.setAutoDefault(True)
+        save.setDefault(True)           # 글 칸에서 Enter 한 번 = 저장 한 번(returnPressed 를 또 잇지 않는다 — 96 K3)
+        save.clicked.connect(lambda _=False: self._set_match_memo(match_id, dlg.memo_edit.text()))
+        dlg.btn_memo_save = save
+        h.addWidget(save)
+        self._sync_detail_notes(dlg)
+        # 창이 지워지면 연결도 끊는다. 상세를 열 때마다 연결이 쌓이지 않게
+        conn = self.notes_changed.connect(lambda d=dlg: self._sync_detail_notes(d))
+        def _drop(*_a, c=conn) -> None:
+            try:
+                self.notes_changed.disconnect(c)
+            except (RuntimeError, TypeError):    # 창이 먼저 지워졌다(종료 중) — 끊을 것이 없다
+                pass
+        dlg.destroyed.connect(_drop)
+        return w
+
+    def _sync_detail_notes(self, dlg: "MatchDetailDialog") -> None:
+        if not shiboken6.isValid(dlg) or not dlg.match_id:
+            return
+        mark = self._notes.marks.get(dlg.match_id)
+        for code, b in dlg.mark_buttons.items():
+            b.setChecked(code == mark)
+        if not dlg.memo_edit.hasFocus():
+            dlg.memo_edit.setText(self._notes.memos.get(dlg.match_id, ""))
 
     def _detail_side(self, p: dict, nickname: str, right: bool, value_tip: str = "") -> QWidget:
         """머리 한쪽 — 작은 축구장 · 닉네임 · 등급 · 평점(+ 상대는 지금 구단가치)."""
@@ -14820,7 +15163,7 @@ class MainWindow(QMainWindow):
     def _season_wins(self) -> list:
         """저장된 전체의 경기마다 (일시, 등급, 결과) — 55 머리 줄·리포트용 캐시(_sc_entries 와 같은 키)."""
         d = self._details_all
-        key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None)
+        key = (self._ouid, id(d), len(d), d[0].get("matchId") if d else None, core.filter_version())   # 109 J6
         if getattr(self, "_wins_cache_key", None) != key:
             self._wins_cache = core.win_divisions(d, self._ouid) if self._ouid else []
             self._wins_cache_key = key
@@ -15578,6 +15921,11 @@ class MainWindow(QMainWindow):
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = self._fmchange_cache = None
         self._records_cache = None
         self._fun_cache = {}
+        # 109 — notes 표도 같이 지웠다(RESET_WIPE · U3). 창이 쥔 표시 묶음을 여기서 비워야 뒤의 _refilter 류가 옛 표시를 되살리지 않는다
+        self._notes, self._notes_queue, self._notes_eff, self._opp_ouid_cache = store.EMPTY_NOTES, [], None, None
+        self._notes_applied = []
+        core.set_excluded(())
+        core.bump_filter_version()
         self._elo.clear()
         self._pred.clear()
         self._max_division.clear()
@@ -15650,6 +15998,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{self._nick}: 저장된 기록을 다시 읽는 중…")
         self._loader = MatchLoader(self._api, self._nick, config.DEFAULT_MATCH_TYPE, offline_ouid=self._ouid, auto=True)
         self._loader.progress.connect(self._on_progress)
+        self._loader.notes_ready.connect(self._on_notes_ready)
         self._loader.finished_ok.connect(self._on_loaded)
         self._loader.failed.connect(self._on_failed)
         # 스레드가 끝난 뒤 미룬 켤 때 확인 — _on_loaded(finished_ok) 때는 아직 isRunning 이라 못 띄운다(4회차 S3)
@@ -16457,6 +16806,43 @@ class NoticeDialog(QDialog):
         self.accept()
 
 
+class NoteDialog(QDialog):
+    """한 줄 메모(와 상대 태그) 입력 창(109 L2·F1) — 메모는 줄바꿈 없는 한 줄, 태그는 쉼표로 나눈다. 값 정리는 store.clean_memo·clean_tags."""
+
+    def __init__(self, parent: QWidget, title: str, memo: str = "", tags=(), with_tags: bool = False):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        fit_to_screen(self, 420, 190 if with_tags else 130)
+        v = QVBoxLayout(self)
+        self.ed_memo = QLineEdit(memo)
+        self.ed_memo.setMaxLength(config.NOTE_MEMO_MAX)
+        self.ed_memo.setPlaceholderText("한 줄 메모")
+        v.addWidget(self.ed_memo)
+        self.ed_tags: QLineEdit | None = None
+        if with_tags:
+            self.ed_tags = QLineEdit(", ".join(tags))
+            self.ed_tags.setPlaceholderText(f"태그 (쉼표로 나눔 · 최대 {config.NOTE_TAGS_MAX}개)")
+            v.addWidget(self.ed_tags)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_ok = QPushButton("저장")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self.accept)
+        self.btn_cancel = QPushButton("취소")
+        self.btn_cancel.setAutoDefault(False)
+        self.btn_cancel.clicked.connect(self.reject)
+        row.addWidget(self.btn_ok)
+        row.addWidget(self.btn_cancel)
+        v.addLayout(row)
+
+    def memo(self) -> str:
+        return store.clean_memo(self.ed_memo.text())
+
+    def tags(self) -> tuple[str, ...]:
+        return store.clean_tags((self.ed_tags.text() if self.ed_tags is not None else "").replace("，", ",").split(","))
+
+
 class MatchDetailDialog(QDialog):
     """경기 상세 창(65 M3) — 머리(양쪽 작은 축구장 · 점수 · 결과 · 이 시즌 맞대결) + 탭 넷. 채우기는 MainWindow._make_match_detail,
     닫은 뒤 로더 정리는 MainWindow._close_match_detail(모달 — 3판 S3). 테스트는 아래 속성으로 읽는다."""
@@ -16474,6 +16860,10 @@ class MatchDetailDialog(QDialog):
         self.side_pages: dict[str, int] = {}
         self.squad_stack: QStackedWidget | None = None
         self.replay_timer: QTimer | None = None   # 슛 탭 재생(88 P3) — 슛 탭을 만들 때 채운다
+        self.match_id = ""                        # 109 — 표시·메모 줄이 붙는 경기 번호(머리 아래 줄이 채운다)
+        self.mark_buttons: dict[str, QPushButton] = {}
+        self.memo_edit: QLineEdit | None = None
+        self.btn_memo_save: QPushButton | None = None
 
     def show_side(self, key: str) -> None:
         """스쿼드 탭의 나 / 상대 칸."""

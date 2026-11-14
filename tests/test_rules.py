@@ -708,6 +708,7 @@ def _drive_uncovered() -> None:
         conn = store.open_db(Path(d) / "f.db")
         try:
             store.all_match_ids(conn)
+            store.load_notes(conn)                              # 109 내 메모 — test_notes·화면 스모크가 부른다
             store.load_card_extras(conn, [1])
             store.list_accounts(conn)
             store.load_details_by_ids(conn, ["a", "b"])

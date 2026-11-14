@@ -2597,6 +2597,8 @@ class MatchCard:
     goal_diff: int = 0
     rating: float = 0.0
     records: tuple = ()             # 88 C1 그 경기에서 생긴 업적 제목 — 일시 옆 작은 알약(안 들어가면 뒤를 뺀다)
+    mark: str = ""                  # 109 U2 표시 글자("끊김" · "연습" · 없으면 "") — 있으면 카드를 흐리게 그리고 알약을 붙인다
+    memo: str = ""                  # 109 L2 한 줄 메모 — 알약 옆에 다 들어갈 때만 그리고, 아니면 일시 말풍선으로
 
     @property
     def kind(self) -> str:
@@ -2682,6 +2684,16 @@ class MatchCardDelegate(QStyledItemDelegate):
         y1 = r.top() + self.PAD_Y
         h1 = fm["small"].height()
         x = put("date", left, y1, h1, card.date_text, "small", right) + 8
+        if card.mark:                       # 표시 알약이 먼저 — 흐려진 카드에서도 무엇을 표시했는지가 첫눈에 보이게
+            w = fm["small"].horizontalAdvance(card.mark) + 12
+            if x + w <= right:
+                segs.append(CardSeg("mark", QRectF(x, y1, w, h1), card.mark, w))
+                x += w + 4
+        if card.memo:                       # 안 들어가면 안 그린다(잘린 글 대신 — 일시 말풍선이 전부를 보인다)
+            w = fm["small"].horizontalAdvance(card.memo)
+            if x + w <= right:
+                segs.append(CardSeg("memo", QRectF(x, y1, w, h1), card.memo, w))
+                x += w + 8
         for title in card.records:          # 넘치면 그 뒤는 안 그린다(잘린 알약 대신 — 말풍선이 전부를 보인다)
             w = fm["small"].horizontalAdvance(title) + 12
             if x + w > right:
@@ -2739,12 +2751,18 @@ class MatchCardDelegate(QStyledItemDelegate):
                 if s.text and s.full > s.rect.width() + 0.5]
 
     # ── 그리기 ──
+    @staticmethod
+    def opacity(card: MatchCard) -> float:
+        """표시한 경기는 목록에 남기되 흐리게(109 U1) — 테스트가 그림 대신 읽는다."""
+        return T.MARK_DIM_OPACITY if card.mark else 1.0
+
     def paint(self, painter, option, index) -> None:
         card = index.data(ROW_ROLE)
         if card is None:
             return
         painter.save()
         try:
+            painter.setOpacity(self.opacity(card))
             self._paint(painter, option, card)
         finally:
             painter.restore()
@@ -2769,8 +2787,8 @@ class MatchCardDelegate(QStyledItemDelegate):
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawPath(path)
         fonts = {"date": "small", "score": "big", "shootout": "small", "vs": "small", "opp": "bold",
-                 "stat_label": "small", "stat": "bold", "color": "main"}
-        dim = {"date", "shootout", "vs", "stat_label"}
+                 "stat_label": "small", "stat": "bold", "color": "main", "memo": "small"}
+        dim = {"date", "shootout", "vs", "stat_label", "memo"}
         for s in self.layout(card, option.rect, option.font):
             if s.role == "result":
                 soft = T.blend(T.PANEL, col["pill"], 0.10)
@@ -2778,6 +2796,14 @@ class MatchCardDelegate(QStyledItemDelegate):
                 p.setBrush(QColor(soft))
                 p.drawRoundedRect(s.rect, 4, 4)
                 p.setPen(QColor(col["pill"]))
+                p.setFont(f["small"])
+                p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
+                continue
+            if s.role == "mark":
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(QColor(T.blend(T.PANEL, T.TEXT_DIM, 0.25)))
+                p.drawRoundedRect(s.rect, s.rect.height() / 2, s.rect.height() / 2)
+                p.setPen(QColor(T.TEXT))
                 p.setFont(f["small"])
                 p.drawText(s.rect, Qt.AlignmentFlag.AlignCenter, s.text)
                 continue
@@ -2831,6 +2857,10 @@ class MatchCardDelegate(QStyledItemDelegate):
                 role = s.role.removesuffix("_label")
                 if role == "opp" and s.full > s.rect.width() + 0.5:
                     return card.opponent
+                if role == "date" and card.memo:
+                    return "메모: " + card.memo
+                if role in ("mark", "memo"):
+                    return ("표시: " + card.mark + " · " if card.mark else "") + ("메모: " + card.memo if card.memo else "")
                 if role == "record":
                     return "이 경기 기록: " + ", ".join(card.records)
                 if role in self.tips:

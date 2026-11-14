@@ -293,6 +293,8 @@ ROW_TINT = _P["ROW_TINT"]       # 승/패 행 배경 — PANEL 에 섞는 비율
 # 표본이 모자란 막대 — 원래 색을 바탕 쪽으로 이만큼만 섞는다(불투명). 색만으로 구분하지 않게
 # 쓰는 쪽이 글자 "표본 N" 도 같이 붙인다(widgets.wdl_rate_bar · charts.HBarList).
 WEAK_MIX = 0.35
+# 109 U1 — 끊김·연습으로 표시한 경기 카드는 목록에 남기되 이 투명도로 흐리게 그린다(숨기면 표시를 되돌릴 곳이 없다)
+MARK_DIM_OPACITY = 0.5
 
 
 def blend(base_hex: str, target_hex: str, mix: float) -> str:

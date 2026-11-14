@@ -2,7 +2,7 @@
 
 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07)
 
-`test_parsing.py`(파싱·집계·시즌 골든) · `test_filter.py`(109 표시한 판 거르기 감싸개 — F 는 위치·이름 인자 모두 빼고 · 빈 묶음은 같은 객체 · 섞임은 넘긴 `exclude` 가 전역을 이김 · S 는 안 건드림 · 넥슨 기록은 묶음과 무관 · 기록기 · 가짜 함수와 손으로 만든 경기) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) ·
+`test_parsing.py`(파싱·집계·시즌 골든) · `test_filter.py`(109 표시한 판 거르기 감싸개 — F 는 위치·이름 인자 모두 빼고 · 빈 묶음은 같은 객체 · 섞임은 넘긴 `exclude` 가 전역을 이김 · S 는 안 건드림 · 넥슨 기록은 묶음과 무관 · 기록기 · 가짜 함수와 손으로 만든 경기) · `test_notes.py`(109 내 메모 notes 표 — 저장·읽기·한 줄 정리·화면 값과 DB 값이 같은 규칙인지 · RESET_WIPE · 지운 글자가 파일에 안 남는지 · Qt 없음) · `test_filter_screens.py`(109 표시한 판 거르기 화면 끝-끝 — 지어낸 300판으로 모든 화면 키를 숫자 화면·넥슨 기록 화면·예외로 나눠 글 지문을 견준다. 스위치 끔이면 같고 켜면 숫자 화면이 전부 바뀌어 캐시를 빠뜨리면 잡힌다 · 흐리게 그리기 · 경기 상세 xG · 세션 갈림(M11) · 상대 메모 단추 · `test_refilter_redraw_time` 은 이 PC 의 실제 fifa.db 를 읽기 전용 backup 으로 스크래치에 떠서 잰다, 없으면 건너뜀) · `test_notes_thread.py`(109 M1·M3·M13 **실제 QThread** — 로더가 메모 묶음을 경기 목록 앞에 넘기나 · 메모리를 내려놓았다 다시 열 때 · 쓰기 줄 세우기와 지우는 중 거부 · 연승 섞기가 판본 다른 결과를 버리고 다시 띄우나) · `test_analysis.py` · `test_ui_smoke.py`(offscreen 화면 배선 — FHD 가상 화면) ·
 `test_window_size.py`(흉내 낸 화면 5종 `tests/screens/*.json` 에서 실제 창 크기, 화면마다 별도 프로세스 — 자식은 `FIFA_DATA_DIR` 임시 폴더로, 안 주면 실제 fifa.db 를 열었다) ·
 `test_storage.py`(57 ③ 저장 공간 — 바꿔 끼우기·캐시 지우기·스키마 표 대조 · 걸쇠(`Worker.WRITES`) · 내 스쿼드 특성 받기 — 임시 폴더) ·
 `test_rankcollect.py`(수집기 — 가짜 목록) · `test_trades.py`(거래 받기·시세 캐시·랭커 기록 캐시 — 가짜 거래·랭커 목록) ·
