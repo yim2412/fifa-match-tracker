@@ -85,6 +85,23 @@ def test_rank_db_reset_does_not_hide_new_snapshot():
         r.close(), arc.close()
 
 
+def test_archive_follows_season_seq_repair_110():
+    """110 F1 ⓓ — rank.db 의 다시 매김이 시즌 번호를 고치면 이미 옮긴 보관 줄도 따라간다(원본이 지워진 스냅숏도)."""
+    with Tmp() as t:
+        r = rc.open_rank_db(t.rank)
+        rc.save_snapshot(r, _rows(5), T0)
+        rc.save_snapshot(r, _rows(5), T0 + timedelta(days=1))
+        arc = D.open_archive(t.arc)
+        D.archive_snapshots(r, arc, T0)
+        rc.prune_raw(r, T0 + timedelta(days=config.RANK_RAW_KEEP_DAYS + 5))     # 원본이 지워진 뒤에 번호가 고쳐진다
+        r.execute("UPDATE snapshots SET season_seq = 2, new_season = 1 WHERE taken_at = ?", ((T0 + timedelta(days=1)).isoformat(),))
+        r.commit()
+        D.archive_snapshots(r, arc, T0)
+        got = [tuple(x) for x in arc.execute("SELECT season_seq, new_season FROM snap ORDER BY taken_at")]
+        assert got == [(1, 0), (2, 1)], got
+        r.close(), arc.close()
+
+
 def test_parse_ref_time():
     assert D.parse_ref_time(HTML) == "2026-10-07 06:00:00"
     assert D.parse_ref_time("<p>점검 중</p>") is None

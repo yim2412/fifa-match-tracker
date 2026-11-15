@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS match_opp_rank (
 PERSON_TABLES = ("run_open", "elo_season", "champ_watch", "fc_season")
 FC_STARTED = "fc_started:"     # + season_at — 이 시즌 fc_season 이 처음 반영한 스냅숏의 데이터 시각(U9 등수 숨김 판정 · 한 번만 쓴다)
 FCG_STARTED = "fcg_started:"   # + season_at — 같은 것의 fc_games 판(57 ⓪ — 관문이 달라 시작이 다를 수 있다)
+SCHED_OPEN = "season_sched_open:"   # + 시즌을 연 스냅숏 id — 시즌표 신호만으로 연 시즌(JSON sid·at · 사람별 넘김 때 season_at) · 뒤에 ":late" 가 붙은 키 = 그 뒤 ECHO 일 안에 점수·줄 수 신호가 또 옴(늦은 신호로 묶음 · 알아채기용)
 SEQ_REPAIRED = "seq_repaired:"  # + 스냅숏 id — 110 F1 다시 매김이 옮긴 스냅숏의 옛·새 시즌 번호(JSON)
 PERSON_STATE = ("person_prev", "person_season")
 OPP_RANK_FIX_KEY = "opp_rank_t0"   # 63 — 옛 버전이 9시간 이른 경기 시각으로 고른 N23 짝을 (다시 채울 수 있는 범위만) 한 번 지웠다
@@ -294,61 +295,111 @@ def rank_gaps(rows: list[ranker.RankRow]) -> int:
     return (max(ranks) - len(ranks)) if ranks else 0
 
 
-def is_new_season(prev, opener, n_rows: int, top: float | None, ended: int | None, taken: str) -> bool:
-    """새 시즌 첫 스냅숏인가. prev = 앞 스냅숏, opener = 앞 스냅숏 시즌의 첫 스냅숏(둘 다 snapshots 줄 꼴).
-    신호 셋: 줄 수가 절반 밑 · 1위 점수가 크게 떨어짐 · 시즌표의 끝난 시즌 번호가 오름.
-    110 F1(2026-11-15 실측) — 10-29 새 시즌 첫 스냅숏은 줄 수 1만 그대로 · 시즌표는 아직 90 이라 지난 시즌으로 묶였다
-    (1위 4,591 → 2,664). 1위 점수 신호를 더하면, 다음 날 시즌표가 따라와 번호가 오르는 것은 **같은 경계의 늦은 신호**라
-    한 번 더 세지 않는다 — 이 시즌을 연 지 RANK_SEASON_ECHO_DAYS 안이면. 어느 신호로 열었는지는 안 본다:
-    시즌이 6주 넘게라 14일 안에 진짜 경계가 또 오지 않는다(시즌표 신호로 연 시즌에 또 오른 번호도 늦은 갱신이다)."""
-    if prev is None:
-        return False
-    dropped = n_rows < prev["row_count"] * config.RANK_SEASON_DROP_RATIO or (
+def _dropped(prev, n_rows: int, top: float | None) -> bool:
+    return n_rows < prev["row_count"] * config.RANK_SEASON_DROP_RATIO or (
         top is not None and prev["top_elo"] is not None and top < prev["top_elo"] * config.RANK_SEASON_TOP_DROP)
-    if dropped:
-        return True
+
+
+def season_signal(prev, opener, n_rows: int, top: float | None, ended: int | None, taken: str) -> tuple[bool, str]:
+    """새 시즌 첫 스냅숏인가 + 어느 신호인가 — 실시간(save_snapshot)과 다시 매김(repair_season_seq)이 이 한 곳으로 판정한다.
+    prev = 앞 스냅숏, opener = 앞 스냅숏 시즌의 첫 스냅숏(둘 다 snapshots 줄 꼴 · opener["sched"] = 시즌표 신호만으로 연 시즌).
+    → (새 시즌인가, 종류): "drop"(줄 수·1위 점수로 엶) · "sched"(시즌표 신호만으로 엶) · "late_drop"(시즌표로 먼저 연 시즌에 점수가
+    뒤늦게 떨어짐 — 같은 경계) · "echo"(점수로 연 시즌에 시즌표가 뒤늦게 따라옴 — 같은 경계) · ""(아무 신호 없음).
+    110 F1(2026-11-15 실측) — 10-29 새 시즌 첫 스냅숏은 줄 수 1만 그대로 · 시즌표는 아직 90 이라 지난 시즌으로 묶였다
+    (1위 4,591 → 2,664). 신호가 둘이라 같은 경계를 두 번 세는 길이 생겨 막는다 — 그 시즌을 연 지 RANK_SEASON_ECHO_DAYS 안이면:
+    시즌표 신호는 어느 opener 뒤에서든 늦은 신호, 점수·줄 수 신호는 **시즌표 신호로 연 시즌 뒤에서만** 늦은 신호다.
+    점수로 연 시즌 뒤의 점수 신호는 늘 새 시즌 — ⓒ 하루 튄 날을 opener 로 잡았다면 14일 안의 진짜 경계를 먹기 때문이다."""
+    if prev is None:
+        return False, ""
+    within = (opener is not None and bool(opener["new_season"])
+              and _hours(opener["taken_at"], taken) <= config.RANK_SEASON_ECHO_DAYS * 24)
+    if _dropped(prev, n_rows, top):
+        if within and opener.get("sched"):
+            return False, "late_drop"
+        return True, "drop"
     if ended is None or prev["ended_season"] is None or ended <= prev["ended_season"]:
+        return False, ""
+    return (False, "echo") if within else (True, "sched")
+
+
+def is_new_season(prev, opener, n_rows: int, top: float | None, ended: int | None, taken: str) -> bool:
+    return season_signal(prev, opener, n_rows, top, ended, taken)[0]
+
+
+def _glitch(prev, s, nxt) -> bool:
+    """ⓒ — s 가 1위 점수만 튄 하루인가: 앞 스냅숏 대비 점수만 떨어졌고(줄 수·시즌표는 그대로) 다음 스냅숏에서 되돌아왔다.
+    진짜 경계는 다음 날도 새 시즌 점수라 앞 스냅숏의 TOP_DROP 배 밑에 남는다. 다음 스냅숏이 없으면(아직 모름) 아니다."""
+    if prev is None or nxt is None or prev["top_elo"] is None or s["top_elo"] is None or nxt["top_elo"] is None:
         return False
-    echo = (opener is not None and opener["new_season"]
-            and _hours(opener["taken_at"], taken) <= config.RANK_SEASON_ECHO_DAYS * 24)
-    return not echo
+    if s["row_count"] < prev["row_count"] * config.RANK_SEASON_DROP_RATIO or s["top_elo"] >= prev["top_elo"] * config.RANK_SEASON_TOP_DROP:
+        return False
+    if s["ended_season"] is not None and prev["ended_season"] is not None and s["ended_season"] > prev["ended_season"]:
+        return False
+    return (nxt["top_elo"] >= prev["top_elo"] * config.RANK_SEASON_TOP_DROP
+            and nxt["row_count"] >= prev["row_count"] * config.RANK_SEASON_DROP_RATIO)
 
 
 def _season_opener(conn: sqlite3.Connection, seq: int):
-    return conn.execute("SELECT new_season, ended_season, taken_at FROM snapshots WHERE season_seq = ?"
-                        " ORDER BY taken_at, id LIMIT 1", (seq,)).fetchone()
+    row = conn.execute("SELECT id, new_season, ended_season, taken_at FROM snapshots WHERE season_seq = ?"
+                       " ORDER BY taken_at, id LIMIT 1", (seq,)).fetchone()
+    if row is None:
+        return None
+    sched = conn.execute("SELECT 1 FROM collect_state WHERE key = ?", (SCHED_OPEN + str(row["id"]),)).fetchone()
+    return {**dict(row), "sched": sched is not None}
+
+
+def _sched_marks(kind: str, sid: int, at: str, opener) -> list[tuple[str, str]]:
+    """시즌표 신호 표시(알아채기용) — INSERT OR IGNORE 로 쓴다. 늦은 점수 신호는 따로 ":late" 키(먼저 쓴 표시가 뒤 표시를 막지 않게)."""
+    if kind == "sched":
+        return [(SCHED_OPEN + str(sid), json.dumps({"sid": sid, "at": at}))]
+    if kind == "late_drop" and opener is not None:
+        return [(SCHED_OPEN + str(opener["id"]) + ":late", json.dumps({"sid": sid, "at": at}))]
+    return []
 
 
 def repair_season_seq(conn: sqlite3.Connection) -> int:
-    """저장된 스냅숏의 시즌 번호를 지금 규칙(`is_new_season`)으로 다시 매긴다(110 F1 · 매번 불러도 같다). → 고친 줄 수.
+    """저장된 스냅숏의 시즌 번호를 지금 규칙(`season_signal`)으로 다시 매긴다(110 F1 · 매번 불러도 같다). → 고친 줄 수.
     옮겨진 스냅숏은 collect_state `seq_repaired:<id>` 에 옛 번호를 남긴다 — 그 스냅숏을 이미 사람별로 처리했다면
-    그 시즌의 _done 줄(마지막 점수·낙폭 등)에 다음 시즌 값이 섞여 있다(원본이 지워져 되돌릴 수 없다)."""
+    그 시즌의 _done 줄(마지막 점수·낙폭 등)에 다음 시즌 값이 섞여 있다(원본이 지워져 되돌릴 수 없다).
+    표시(`season_sched_open:`)는 고친 줄이 없어도 쓴다 — 3.10.1 이 연 DB 의 opener 는 표시가 없고, 이 루프가 표시를 읽지 않고
+    opener 종류를 스스로 계산하므로 실시간과 같은 판정이 된다.
+    ⓒ 취소의 꼴: 한 칸 앞을 본다 — 점수만 튄 날(`_glitch`: 다음 스냅숏에서 되돌아옴)은 새 시즌이 아니다. 취소한 스냅숏은
+    opener 가 되지 않으므로(opener 는 새 시즌인 줄만) 그 뒤의 신호는 앞 시즌 opener 로 잰다. 앞 스냅숏(prev)은 취소한 줄이 되어
+    다음 줄이 그 점수와 견줘진다(되돌아온 줄이 또 떨어졌다고 안 본다)."""
     snaps = [dict(r) for r in conn.execute(
-        "SELECT id, taken_at, row_count, top_elo, season_seq, new_season, ended_season FROM snapshots"
-        " ORDER BY taken_at, id")]
-    fixed, prev, opener = [], None, None
-    for s in snaps:
-        new = is_new_season(prev, opener, s["row_count"], s["top_elo"], s["ended_season"], s["taken_at"])
+        "SELECT s.id, s.taken_at, s.row_count, s.top_elo, s.season_seq, s.new_season, s.ended_season, m.ref_time"
+        " FROM snapshots s LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id ORDER BY s.taken_at, s.id")]
+    fixed, marks, prev, opener = [], [], None, None
+    for i, s in enumerate(snaps):
+        new, kind = season_signal(prev, opener, s["row_count"], s["top_elo"], s["ended_season"], s["taken_at"])
+        if new and kind == "drop" and _glitch(prev, s, snaps[i + 1] if i + 1 < len(snaps) else None):
+            new, kind = False, "glitch"
         seq = (prev["season_seq"] + (1 if new else 0)) if prev else 1
         if (seq, int(new)) != (s["season_seq"], s["new_season"]):
             fixed.append((s, seq, int(new)))
-        s = {**s, "season_seq": seq, "new_season": int(new)}
+        marks += _sched_marks(kind, s["id"], data_time(s), opener)
+        s = {**s, "season_seq": seq, "new_season": int(new), "sched": kind == "sched"}
         if prev is None or new:
             opener = s
         prev = s
-    if fixed:
-        # 사람별 상태의 시즌 번호도 같이 옮긴다 — 번호가 줄었는데 상태만 옛 번호면 다음 스냅숏이 전부 "더 옛것" 으로 건너뛰어진다
+    if fixed or marks:
         st = get_state(conn)
         ps, pp = _json_state(st, "person_season"), _json_state(st, "person_prev")
+        # 사람별 상태의 시즌 번호도 같이 옮긴다 — 번호가 줄었는데 상태만 옛 번호면 다음 스냅숏이 전부 "더 옛것" 으로 건너뛰어진다.
+        # 번호가 **늘었으면** 안 옮긴다(ⓐ): 마지막에 처리한 스냅숏이 다시 매김이 새로 연 경계면, 상태를 같이 올릴 때 다음
+        # 스냅숏이 'same' 이 되어 그 시즌으로 넘기는 일을 잃는다. 안 올리면 다음 처리가 seq 신호로 넘긴다
         moved = {s["id"]: seq - s["season_seq"] for s, seq, _new in fixed}
         with conn:
-            conn.executemany("UPDATE snapshots SET season_seq = ?, new_season = ? WHERE id = ?",
-                             [(seq, new, s["id"]) for s, seq, new in fixed])
-            if ps is not None and pp is not None and pp.get("sid") in moved and ps.get("seq") is not None:
-                _put_state(conn, person_season=json.dumps({**ps, "seq": int(ps["seq"]) + moved[pp["sid"]]}))
-            conn.executemany("INSERT OR IGNORE INTO collect_state (key, value) VALUES (?, ?)",
-                             [(SEQ_REPAIRED + str(s["id"]), json.dumps({"old": s["season_seq"], "new": seq}))
-                              for s, seq, _new in fixed])
+            if fixed:
+                conn.executemany("UPDATE snapshots SET season_seq = ?, new_season = ? WHERE id = ?",
+                                 [(seq, new, s["id"]) for s, seq, new in fixed])
+                if (ps is not None and pp is not None and moved.get(pp.get("sid"), 0) < 0
+                        and ps.get("seq") is not None):
+                    _put_state(conn, person_season=json.dumps({**ps, "seq": int(ps["seq"]) + moved[pp["sid"]]}))
+                conn.executemany("INSERT OR IGNORE INTO collect_state (key, value) VALUES (?, ?)",
+                                 [(SEQ_REPAIRED + str(s["id"]), json.dumps({"old": s["season_seq"], "new": seq}))
+                                  for s, seq, _new in fixed])
+            conn.executemany("INSERT OR IGNORE INTO collect_state (key, value) VALUES (?, ?)", marks)
     return len(fixed)
 
 
@@ -361,7 +412,7 @@ def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at
         ended_season = prev["ended_season"]
     top = min(rows, key=lambda r: r.rank).elo if rows else None
     opener = _season_opener(conn, prev["season_seq"]) if prev is not None else None
-    new_season = is_new_season(prev, opener, len(rows), top, ended_season, _iso(taken_at))
+    new_season, kind = season_signal(prev, opener, len(rows), top, ended_season, _iso(taken_at))
     seq = (prev["season_seq"] + (1 if new_season else 0)) if prev else 1
     counts, values, cuts = aggregate(rows)
     with conn:
@@ -370,6 +421,8 @@ def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at
             " VALUES (?,?,?,?,?,?,?)",
             (_iso(taken_at), len(rows), dup_count, top, seq, int(new_season), ended_season))
         sid = cur.lastrowid
+        conn.executemany("INSERT OR IGNORE INTO collect_state (key, value) VALUES (?, ?)",
+                         _sched_marks(kind, sid, ref_time or _iso(taken_at), opener))
         conn.executemany(
             "INSERT INTO snapshot_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             [(sid, r.rank, r.profile_sn, r.nickname, r.level, r.team_value, r.elo, r.win, r.draw, r.lose,
@@ -1307,6 +1360,20 @@ def _mark_person(conn: sqlite3.Connection, sid: int) -> None:
                  " ON CONFLICT(snapshot_id) DO UPDATE SET person_done = 1", (sid,))
 
 
+def _mark_season_at(conn: sqlite3.Connection, sid: int, season_at: str) -> None:
+    """시즌표 신호로 연 시즌(`season_sched_open:<sid>`)을 사람별 처리가 그 시각으로 넘길 때, 표시에 season_at 을 붙인다 —
+    옛 시즌 점수가 섞인 시즌을 `_done` 표에서 가려낼 열쇠(알려진 한계)."""
+    row = conn.execute("SELECT value FROM collect_state WHERE key = ?", (SCHED_OPEN + str(sid),)).fetchone()
+    if row is None:
+        return
+    try:
+        d = json.loads(row[0] or "{}")
+    except ValueError:
+        d = {}
+    conn.execute("UPDATE collect_state SET value = ? WHERE key = ?",
+                 (json.dumps({**d, "season_at": season_at}), SCHED_OPEN + str(sid)))
+
+
 def _season_verdict(ps: dict, seq: int, start: str | None) -> tuple[str, str]:
     """사람별 표의 시즌 — 신호 둘(season_seq · 시즌표 시작일)을 **같은 출처끼리 숫자·날짜로**(3회차 A·B: 섞어 문자열로
     비교하면 시즌표를 처음 받는 날 전부 '더 옛것'이 됐다). → (판정, 넘긴 신호).
@@ -1576,6 +1643,7 @@ def _person_one(conn: sqlite3.Connection, s: dict, ends: list, on_at: str | None
             if verdict == "roll":
                 _roll(conn)
             ps, prev = {"seq": int(s["season_seq"]), "start": start, "at": t, "via": via}, None
+            _mark_season_at(conn, sid, t)
         elif verdict == "update":
             ps = {**ps, "seq": max(int(ps.get("seq") or 0), int(s["season_seq"])),
                   "start": start or ps.get("start"), "via": "both"}

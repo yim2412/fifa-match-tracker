@@ -726,6 +726,179 @@ def test_repair_season_seq_moves_old_snapshot_and_person_state_110():
         c.close()
 
 
+# ── 110 F1 보강 — 시즌표 먼저 · 점수 하루 튐(ⓒ) · 다시 매김과 실시간이 같은 판정 ──────────────────────────────────
+
+SCHED = "season_sched_open:"
+
+
+def _pt(top, n=30):
+    """사람별 처리까지 도는 줄(_p) — 1위 점수 = top - 1."""
+    return [_p(sn, elo=top - sn) for sn in range(1, n + 1)]
+
+
+def _seqs(c):
+    return [(r["season_seq"], r["new_season"]) for r in c.execute("SELECT * FROM snapshots ORDER BY taken_at, id")]
+
+
+def _keys(c, prefix):
+    return {k: v for k, v in rc.get_state(c).items() if k.startswith(prefix)}
+
+
+def _feed(c, steps, repair_each=True):
+    """steps = [(일, 1위 점수, ended)] → 스냅숏 id 목록. 회차마다 수집 뒤 처리가 다시 매기는 것까지 흉내 낸다."""
+    ids = []
+    for day, top, ended in steps:
+        ids.append(rc.save_snapshot(c, _pt(top), NOW + timedelta(days=day), ended_season=ended))
+        if repair_each:
+            rc.repair_season_seq(c)
+    return ids
+
+
+def test_glitch_then_real_boundary():
+    """ⓒ 하루(1위 점수만 튐 · 다음 날 되돌아옴) 뒤 14일 안에 점수 먼저 진짜 경계가 와도 seq 가 한 번만 오른다 —
+    취소한 스냅숏이 opener 가 되어 진짜 경계를 늦은 신호로 먹으면 안 된다. 다시 매김을 두 번 불러도 같다."""
+    steps = [(0, 4600, 90), (1, 4590, None), (2, 2000, None), (3, 4580, None), (4, 4570, None),
+             (5, 2665, None), (6, 3213, 91)]
+    want = [(1, 0), (1, 0), (1, 0), (1, 0), (1, 0), (2, 1), (2, 0)]
+    for each in (True, False):       # 회차마다 다시 매김 · 몰아서 한 번만
+        with Env() as env:
+            c = env.conn()
+            _feed(c, steps, repair_each=each)
+            rc.repair_season_seq(c)
+            assert _seqs(c) == want, (each, _seqs(c))
+            assert rc.repair_season_seq(c) == 0, "다시 매김을 두 번 불렀더니 또 고쳤다"
+            c.close()
+    # [중]4 — ⓒ 하루 → 14일 안 시즌표 먼저 경계 → 점수 떨어짐: 취소한 스냅숏이 opener 였다면 시즌표 신호가 늦은 신호로 묻힌다
+    steps = [(0, 4600, 90), (1, 2000, None), (2, 4590, None), (3, 4580, 91), (4, 2665, None)]
+    for each in (True, False):
+        with Env() as env:
+            c = env.conn()
+            ids = _feed(c, steps, repair_each=each)
+            rc.repair_season_seq(c)
+            assert _seqs(c) == [(1, 0), (1, 0), (1, 0), (2, 1), (2, 0)], (each, _seqs(c))
+            assert set(_keys(c, SCHED)) == {SCHED + str(ids[3]), SCHED + str(ids[3]) + ":late"}, _keys(c, SCHED)
+            c.close()
+
+
+def test_schedule_first_then_score_drop():
+    """시즌표 신호가 먼저(B) · 다음 스냅숏에서 점수가 떨어짐(C): seq 는 한 번만 · 표시 키 둘 · 사람별 넘김 한 번 ·
+    사람별 처리가 그 시즌으로 넘길 때 표시에 season_at 이 붙는다."""
+    for each in (True, False):
+        with Env() as env:
+            c = env.conn()
+            a, b, cc = _feed(c, [(0, 4600, 90), (1, 4590, 91), (2, 2665, None)], repair_each=each)
+            rc.repair_season_seq(c)
+            assert _seqs(c) == [(1, 0), (2, 1), (2, 0)], (each, _seqs(c))
+            marks = _keys(c, SCHED)
+            assert set(marks) == {SCHED + str(b), SCHED + str(b) + ":late"}, marks
+            assert json.loads(marks[SCHED + str(b) + ":late"])["sid"] == cc, "늦은 점수 신호가 난 스냅숏"
+            assert "late_drop" not in marks[SCHED + str(b)], "late 는 별도 키여야 — 먼저 쓴 표시가 뒤 표시를 막는다"
+            out = _proc(c, ends=[])
+            assert out["person"] == 3, out
+            assert _count(c, "elo_season_done") == 30, "사람별 넘김이 한 번이 아니다"
+            at = json.loads(_keys(c, SCHED)[SCHED + str(b)]).get("season_at")
+            assert at == (NOW + timedelta(days=1)).isoformat(), ("넘긴 시즌의 시작 시각이 표시에 안 붙었다", at)
+            c.close()
+
+
+def test_score_first_unchanged():
+    """10-29 꼴(점수 먼저 · 다음 날 시즌표)은 그대로 — 표시 없음 · seq 한 번 · 사람별 넘김 한 번."""
+    with Env() as env:
+        c = env.conn()
+        _feed(c, [(0, 4600, 90), (1, 4590, None), (2, 2665, None), (3, 3213, 91)])
+        assert _seqs(c) == [(1, 0), (1, 0), (2, 1), (2, 0)], _seqs(c)
+        assert _keys(c, SCHED) == {}, "점수 먼저 경계에 시즌표 표시가 생겼다"
+        _proc(c, ends=[])
+        assert _count(c, "elo_season_done") == 30
+        c.close()
+
+
+def test_top_drop_one_day_cancel():
+    """ⓒ — 다음 스냅숏에서 1위 점수가 되돌아오면 넘김을 취소한다. 취소한 스냅숏은 opener 가 아니다.
+    이미 넘긴 사람별 표는 되돌리지 않고 seq_repaired 표시만. 튄 날이 앞 경계 opener 에서 14일 넘게 뒤인 경우와 안인 경우."""
+    days = config.RANK_SEASON_ECHO_DAYS
+    cases = {
+        "14일 밖": [(0, 4600, 90), (1, 4590, 91), (days + 6, 4500, None), (days + 7, 2000, None), (days + 8, 4480, None)],
+        "14일 안": [(0, 4600, 90), (1, 2665, None), (5, 2700, None), (6, 1500, None), (7, 2690, None)],
+    }
+    for name, steps in cases.items():
+        with Env() as env:
+            c = env.conn()
+            ids = []
+            for day, top, ended in steps[:4]:
+                ids.append(rc.save_snapshot(c, _pt(top), NOW + timedelta(days=day), ended_season=ended))
+                rc.repair_season_seq(c)
+                _proc(c, now=NOW + timedelta(days=day), ends=[])
+            glitch = ids[3]
+            seq_glitch = c.execute("SELECT season_seq FROM snapshots WHERE id = ?", (glitch,)).fetchone()[0]
+            done_before = _count(c, "elo_season_done")
+            day, top, ended = steps[4]
+            ids.append(rc.save_snapshot(c, _pt(top), NOW + timedelta(days=day), ended_season=ended))
+            _proc(c, now=NOW + timedelta(days=day), ends=[])       # 다시 매김이 취소 → 사람별 처리
+            got = _seqs(c)
+            assert got[3] == (got[2][0], 0) and got[4] == got[3], (name, got)
+            assert got[3][0] == seq_glitch - 1, (name, "튄 날이 넘긴 번호가 취소되지 않았다", got, seq_glitch)
+            st = rc.get_state(c)
+            assert json.loads(st[rc.SEQ_REPAIRED + str(glitch)]) == {"old": seq_glitch, "new": seq_glitch - 1}, (name, st)
+            assert _count(c, "elo_season_done") == done_before, (name, "사람별 표를 되돌리거나 한 번 더 넘겼다")
+            assert json.loads(st["person_season"])["seq"] == got[4][0], (name, "상태 번호가 안 따라왔다")
+            c.close()
+
+
+def test_realtime_save_matches_repair_110():
+    """실시간(save_snapshot)이 다시 매김과 같은 opener 종류·같은 표시를 쓴다 — 다시 매김을 한 번도 안 돌려도 저장 직후 이미 맞다
+    (그래서 다시 매김이 0줄을 고친다). 시즌표가 먼저(B)·점수가 뒤(C)."""
+    with Env() as env:
+        c = env.conn()
+        a, b, cc = _feed(c, [(0, 4600, 90), (1, 4590, 91), (2, 2665, None)], repair_each=False)
+        assert _seqs(c) == [(1, 0), (2, 1), (2, 0)], _seqs(c)
+        assert set(_keys(c, SCHED)) == {SCHED + str(b), SCHED + str(b) + ":late"}, _keys(c, SCHED)
+        assert rc.repair_season_seq(c) == 0, "저장 때 이미 맞았어야 한다"
+        c.close()
+
+
+def test_repair_keeps_person_roll_for_opener_it_opened():
+    """ⓐ — 사람별로 마지막에 처리한 스냅숏이 다시 매김이 연 경계 스냅숏이면 상태 번호를 안 옮긴다(옮기면 다음 스냅숏이
+    'same' 이라 그 시즌으로 넘기는 일을 잃는다)."""
+    with Env() as env:
+        c = env.conn()
+        _feed(c, [(0, 4600, 90), (1, 2665, None)], repair_each=False)
+        c.execute("UPDATE snapshots SET season_seq = 1, new_season = 0 WHERE id = (SELECT MAX(id) FROM snapshots)")
+        c.commit()
+        for s in rc._pending(c, True):                 # 옛 규칙 번호로 사람별 처리(다시 매김 앞)
+            rc._person_one(c, s, [], None)
+        assert _count(c, "elo_season_done") == 0
+        assert rc.repair_season_seq(c) == 1
+        assert _seqs(c) == [(1, 0), (2, 1)]
+        assert json.loads(rc.get_state(c)["person_season"])["seq"] == 1, "경계 스냅숏을 연 번호로 상태를 옮겼다"
+        rc.save_snapshot(c, _pt(3213), NOW + timedelta(days=2), ended_season=91)
+        _proc(c, now=NOW + timedelta(days=2), ends=[])
+        assert _count(c, "elo_season_done") == 30, "다음 스냅숏이 새 시즌으로 넘기지 못했다"
+        c.close()
+
+
+def test_repair_marks_sched_opener_without_marks_from_old_db():
+    """[중]3 — 3.10.1 이 연 DB(시즌표 신호 opener 에 표시가 없다): 고칠 줄이 없어도 표시를 쓰고, 그 opener 뒤 점수 떨어짐이
+    늦은 신호로 묶인다(다시 매김은 표시를 읽지 않고 루프 안에서 opener 종류를 계산한다)."""
+    with Env() as env:
+        c = env.conn()
+        ids = _feed(c, [(0, 4600, 90), (1, 4590, 91)])
+        c.execute("DELETE FROM collect_state WHERE key LIKE 'season_sched_open:%'")
+        c.commit()
+        assert _keys(c, SCHED) == {}
+        assert rc.repair_season_seq(c) == 0, "고칠 줄이 없다"
+        assert set(_keys(c, SCHED)) == {SCHED + str(ids[1])}, "고친 줄이 없어도 시즌표 신호 opener 마다 표시를 써야 한다"
+        # 옛 규칙이 표시 없이 저장한 꼴: 점수 떨어짐이 새 시즌(seq 3)으로 잡혀 있다
+        d = rc.save_snapshot(c, _pt(2665), NOW + timedelta(days=2))
+        c.execute("DELETE FROM collect_state WHERE key LIKE 'season_sched_open:%'")
+        c.execute("UPDATE snapshots SET season_seq = 3, new_season = 1 WHERE id = ?", (d,))
+        c.commit()
+        assert rc.repair_season_seq(c) == 1
+        assert _seqs(c) == [(1, 0), (2, 1), (2, 0)], _seqs(c)
+        assert SCHED + str(ids[1]) + ":late" in _keys(c, SCHED)
+        c.close()
+
+
 def test_rank_trend_series():
     """랭킹 추이(P2) — 지금 시즌만 · 하루에 둘이면 그날 마지막 · 원본을 지워도(14일) 집계로 그린다 · 비율의 분모는 구간 인원."""
     assert rc.rank_trend_series(None).taken == []

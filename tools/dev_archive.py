@@ -121,6 +121,12 @@ def archive_snapshots(rank_conn: sqlite3.Connection | None, arc: sqlite3.Connect
     has_emblems = rank_conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='snapshot_emblems'").fetchone() is not None
     new_snaps = new_rows = 0
+    # 110 F1 ⓓ — rank.db 의 다시 매김이 시즌 번호를 고치면 이미 옮긴 줄도 따라간다(원본이 지워진 스냅숏 포함 · taken_at 로 짝)
+    for taken, seq, new in rank_conn.execute("SELECT taken_at, season_seq, new_season FROM snapshots"):
+        if taken in have:
+            arc.execute("UPDATE snap SET season_seq = ?, new_season = ? WHERE taken_at = ?"
+                        " AND (season_seq IS NOT ? OR new_season IS NOT ?)", (seq, new, taken, seq, new))
+    arc.commit()
     for s in snaps:
         if s[1] in have:
             continue
