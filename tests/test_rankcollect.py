@@ -638,10 +638,91 @@ def test_season_boundary():
         rc.save_snapshot(c, full[:60], NOW + timedelta(days=1))           # 절반 위 — 같은 시즌
         rc.save_snapshot(c, full[:20], NOW + timedelta(days=2))           # 절반 밑 — 새 시즌
         rc.save_snapshot(c, full, NOW + timedelta(days=3))                # 시즌표 모름 → 앞 값(88) 이어받아 같은 시즌
-        rc.save_snapshot(c, full, NOW + timedelta(days=4), ended_season=89)  # 새로 끝난 시즌
+        rc.save_snapshot(c, full, NOW + timedelta(days=4), ended_season=89)  # 시즌표가 이틀 늦게 따라옴 — 같은 경계(110 F1)
+        rc.save_snapshot(c, full, NOW + timedelta(days=40), ended_season=90)  # 다음 경계 — 시즌표 신호만으로
         got = [(r["season_seq"], r["new_season"], r["ended_season"])
                for r in c.execute("SELECT * FROM snapshots ORDER BY id")]
-        assert got == [(1, 0, 88), (1, 0, 88), (2, 1, 88), (2, 0, 88), (3, 1, 89)], got
+        assert got == [(1, 0, 88), (1, 0, 88), (2, 1, 88), (2, 0, 88), (2, 0, 89), (3, 1, 90)], got
+        assert rc.repair_season_seq(c) == 0, "지금 규칙으로 저장한 것은 다시 매겨도 그대로"
+        c.close()
+
+
+def _top(elo, n=100):
+    return [_row(r, elo=elo - r) for r in range(1, n + 1)]
+
+
+def test_season_boundary_by_top_score_110():
+    """110 F1 — 10-29 실측 꼴: 새 시즌 첫 스냅숏이 줄 수 그대로(1만) · 시즌표는 아직 옛 번호 · 1위만 4,591 → 2,664.
+    다음 날 시즌표가 91 로 따라와도 한 번 더 세지 않는다."""
+    with Env() as env:
+        c = env.conn()
+        rc.save_snapshot(c, _top(4600), NOW, ended_season=90)
+        rc.save_snapshot(c, _top(4600 * 0.985), NOW + timedelta(days=1))   # 시즌 안 가장 큰 하루 하락(실측 0.985)
+        rc.save_snapshot(c, _top(2665), NOW + timedelta(days=2))           # 새 시즌 첫날
+        rc.save_snapshot(c, _top(3213), NOW + timedelta(days=3), ended_season=91)
+        got = [(r["season_seq"], r["new_season"]) for r in c.execute("SELECT * FROM snapshots ORDER BY id")]
+        assert got == [(1, 0), (1, 0), (2, 1), (2, 0)], got
+        c.close()
+    with Env() as env:   # 기한 — 점수로 연 뒤 시즌표가 RANK_SEASON_ECHO_DAYS 넘어 오르면 다음 경계(첫날을 못 받은 경우)
+        c = env.conn()
+        rc.save_snapshot(c, _top(4600), NOW, ended_season=90)
+        rc.save_snapshot(c, _top(2665), NOW + timedelta(days=1))
+        days = config.RANK_SEASON_ECHO_DAYS
+        rc.save_snapshot(c, _top(4000), NOW + timedelta(days=1 + days, hours=-1), ended_season=90)
+        rc.save_snapshot(c, _top(4100), NOW + timedelta(days=1 + days, hours=1), ended_season=91)
+        got = [(r["season_seq"], r["new_season"]) for r in c.execute("SELECT * FROM snapshots ORDER BY id")]
+        assert got == [(1, 0), (2, 1), (2, 0), (3, 1)], got
+        c.close()
+
+
+def test_process_meta_repairs_season_seq_110():
+    """배선 — 수집 뒤 처리(앱 켤 때·회차 끝)가 다시 매김을 부른다. 옛 규칙 꼴로 심어 둔 첫날이 처리 뒤 새 시즌이 된다."""
+    with Env() as env:
+        c = env.conn()
+        rc.save_snapshot(c, _top(4600), NOW, ended_season=90)
+        sid = rc.save_snapshot(c, _top(2665), NOW + timedelta(days=1), ended_season=90)
+        c.execute("UPDATE snapshots SET season_seq = 1, new_season = 0 WHERE id = ?", (sid,))
+        c.commit()
+        out = rc.process_meta(c, NOW + timedelta(days=2), season_ends=[])
+        assert out["seq_repaired"] == 1, out
+        assert c.execute("SELECT season_seq FROM snapshots WHERE id = ?", (sid,)).fetchone()[0] == 2
+        c.close()
+
+
+def test_repair_season_seq_moves_old_snapshot_and_person_state_110():
+    """옛 규칙으로 저장된 꼴(첫날이 옛 시즌 · 다음 날 시즌표로 넘김)을 다시 매긴다. 줄인 번호는 사람별 상태에도 옮긴다."""
+    with Env() as env:
+        c = env.conn()
+        ids = [rc.save_snapshot(c, _top(e), NOW + timedelta(days=i), ended_season=90)
+               for i, e in enumerate((4600, 4590, 2665))]
+        # 옛 규칙 결과로 되돌려 놓는다: 첫날(ids[2])은 seq 1, 다음 날이 시즌표로 넘김 → 그 뒤 번호가 하나 더 크다
+        c.execute("UPDATE snapshots SET season_seq = 1, new_season = 0 WHERE id = ?", (ids[2],))
+        c.commit()
+        nxt = rc.save_snapshot(c, _top(3213), NOW + timedelta(days=3), ended_season=91)
+        c.execute("UPDATE snapshots SET season_seq = 2, new_season = 1 WHERE id = ?", (nxt,))
+        c.commit()
+        assert rc.repair_season_seq(c) == 2
+        got = [(r["id"], r["season_seq"], r["new_season"]) for r in c.execute("SELECT * FROM snapshots ORDER BY id")]
+        assert got == [(ids[0], 1, 0), (ids[1], 1, 0), (ids[2], 2, 1), (nxt, 2, 0)], got
+        st = rc.get_state(c)
+        assert json.loads(st[rc.SEQ_REPAIRED + str(ids[2])]) == {"old": 1, "new": 2}, st
+        assert rc.repair_season_seq(c) == 0, "두 번째는 고칠 것이 없다"
+
+        # 번호가 줄어드는 경우: 줄 수 신호로 연 시즌을 옛 규칙이 시즌표 신호로 한 번 더 셌다(seq 3) · 상태도 3
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        full = [_row(r) for r in range(1, 101)]
+        rc.save_snapshot(c, full, NOW, ended_season=88)
+        rc.save_snapshot(c, full[:20], NOW + timedelta(days=1))
+        d = rc.save_snapshot(c, full, NOW + timedelta(days=3), ended_season=89)
+        c.execute("UPDATE snapshots SET season_seq = 3, new_season = 1 WHERE id = ?", (d,))
+        rc._put_state(c, person_season=json.dumps({"seq": 3, "start": None, "at": "x", "via": "seq"}),
+                      person_prev=json.dumps({"sid": d, "at": "x"}))
+        c.commit()
+        assert rc.repair_season_seq(c) == 1
+        assert c.execute("SELECT season_seq FROM snapshots WHERE id = ?", (d,)).fetchone()[0] == 2
+        assert json.loads(rc.get_state(c)["person_season"])["seq"] == 2, "상태 번호가 옛 그대로면 다음 처리가 멈춘다"
         c.close()
 
 
@@ -655,14 +736,14 @@ def test_rank_trend_series():
                 for r in range(1, 1201)]
         rc.save_snapshot(c, full, NOW - timedelta(days=5))                 # 지난 시즌(아래에서 인원이 절반 밑으로)
         rc.save_snapshot(c, full[:500], NOW - timedelta(days=3))           # 새 시즌 첫 스냅숏
-        rc.save_snapshot(c, [_row(r, elo=1.0) for r in range(1, 501)], NOW - timedelta(days=2, hours=5))  # 같은 날 앞 것 — 버린다
-        later = [_row(r, elo=4000.0 - r, color="팀A" if r <= 50 else "팀B") for r in range(1, 501)]
+        rc.save_snapshot(c, [_row(r, elo=4990.0 - r) for r in range(1, 501)], NOW - timedelta(days=2, hours=5))  # 같은 날 앞 것 — 버린다
+        later = [_row(r, elo=4500.0 - r, color="팀A" if r <= 50 else "팀B") for r in range(1, 501)]
         rc.save_snapshot(c, later, NOW - timedelta(days=2))
         rc.prune_raw(c, NOW + timedelta(days=30))                          # 원본은 다 지워져도
         t = rc.rank_trend_series(c)
         assert [x[:10] for x in t.taken] == [(NOW - timedelta(days=3)).date().isoformat(),
                                             (NOW - timedelta(days=2)).date().isoformat()], t.taken
-        assert t.cuts[1] == [4999.0, 3999.0] and t.cuts[200] == [4800.0, 3800.0], t.cuts
+        assert t.cuts[1] == [4999.0, 4499.0] and t.cuts[200] == [4800.0, 4300.0], t.cuts
         assert 1000 not in t.cuts, "목록이 1,000위까지 안 가면 그 컷은 없다(화면은 빈 계열을 건너뛴다)"
         top = t.shares[(200, "team_color")]
         assert top["팀A"] == [75.0, 25.0] and top[""][0] == 25.0 and top["팀B"] == [0.0, 75.0], top

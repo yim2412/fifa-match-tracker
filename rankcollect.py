@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS match_opp_rank (
 PERSON_TABLES = ("run_open", "elo_season", "champ_watch", "fc_season")
 FC_STARTED = "fc_started:"     # + season_at — 이 시즌 fc_season 이 처음 반영한 스냅숏의 데이터 시각(U9 등수 숨김 판정 · 한 번만 쓴다)
 FCG_STARTED = "fcg_started:"   # + season_at — 같은 것의 fc_games 판(57 ⓪ — 관문이 달라 시작이 다를 수 있다)
+SEQ_REPAIRED = "seq_repaired:"  # + 스냅숏 id — 110 F1 다시 매김이 옮긴 스냅숏의 옛·새 시즌 번호(JSON)
 PERSON_STATE = ("person_prev", "person_season")
 OPP_RANK_FIX_KEY = "opp_rank_t0"   # 63 — 옛 버전이 9시간 이른 경기 시각으로 고른 N23 짝을 (다시 채울 수 있는 범위만) 한 번 지웠다
 
@@ -293,19 +294,75 @@ def rank_gaps(rows: list[ranker.RankRow]) -> int:
     return (max(ranks) - len(ranks)) if ranks else 0
 
 
+def is_new_season(prev, opener, n_rows: int, top: float | None, ended: int | None, taken: str) -> bool:
+    """새 시즌 첫 스냅숏인가. prev = 앞 스냅숏, opener = 앞 스냅숏 시즌의 첫 스냅숏(둘 다 snapshots 줄 꼴).
+    신호 셋: 줄 수가 절반 밑 · 1위 점수가 크게 떨어짐 · 시즌표의 끝난 시즌 번호가 오름.
+    110 F1(2026-11-15 실측) — 10-29 새 시즌 첫 스냅숏은 줄 수 1만 그대로 · 시즌표는 아직 90 이라 지난 시즌으로 묶였다
+    (1위 4,591 → 2,664). 1위 점수 신호를 더하면, 다음 날 시즌표가 따라와 번호가 오르는 것은 **같은 경계의 늦은 신호**라
+    한 번 더 세지 않는다 — 이 시즌을 연 지 RANK_SEASON_ECHO_DAYS 안이면. 어느 신호로 열었는지는 안 본다:
+    시즌이 6주 넘게라 14일 안에 진짜 경계가 또 오지 않는다(시즌표 신호로 연 시즌에 또 오른 번호도 늦은 갱신이다)."""
+    if prev is None:
+        return False
+    dropped = n_rows < prev["row_count"] * config.RANK_SEASON_DROP_RATIO or (
+        top is not None and prev["top_elo"] is not None and top < prev["top_elo"] * config.RANK_SEASON_TOP_DROP)
+    if dropped:
+        return True
+    if ended is None or prev["ended_season"] is None or ended <= prev["ended_season"]:
+        return False
+    echo = (opener is not None and opener["new_season"]
+            and _hours(opener["taken_at"], taken) <= config.RANK_SEASON_ECHO_DAYS * 24)
+    return not echo
+
+
+def _season_opener(conn: sqlite3.Connection, seq: int):
+    return conn.execute("SELECT new_season, ended_season, taken_at FROM snapshots WHERE season_seq = ?"
+                        " ORDER BY taken_at, id LIMIT 1", (seq,)).fetchone()
+
+
+def repair_season_seq(conn: sqlite3.Connection) -> int:
+    """저장된 스냅숏의 시즌 번호를 지금 규칙(`is_new_season`)으로 다시 매긴다(110 F1 · 매번 불러도 같다). → 고친 줄 수.
+    옮겨진 스냅숏은 collect_state `seq_repaired:<id>` 에 옛 번호를 남긴다 — 그 스냅숏을 이미 사람별로 처리했다면
+    그 시즌의 _done 줄(마지막 점수·낙폭 등)에 다음 시즌 값이 섞여 있다(원본이 지워져 되돌릴 수 없다)."""
+    snaps = [dict(r) for r in conn.execute(
+        "SELECT id, taken_at, row_count, top_elo, season_seq, new_season, ended_season FROM snapshots"
+        " ORDER BY taken_at, id")]
+    fixed, prev, opener = [], None, None
+    for s in snaps:
+        new = is_new_season(prev, opener, s["row_count"], s["top_elo"], s["ended_season"], s["taken_at"])
+        seq = (prev["season_seq"] + (1 if new else 0)) if prev else 1
+        if (seq, int(new)) != (s["season_seq"], s["new_season"]):
+            fixed.append((s, seq, int(new)))
+        s = {**s, "season_seq": seq, "new_season": int(new)}
+        if prev is None or new:
+            opener = s
+        prev = s
+    if fixed:
+        # 사람별 상태의 시즌 번호도 같이 옮긴다 — 번호가 줄었는데 상태만 옛 번호면 다음 스냅숏이 전부 "더 옛것" 으로 건너뛰어진다
+        st = get_state(conn)
+        ps, pp = _json_state(st, "person_season"), _json_state(st, "person_prev")
+        moved = {s["id"]: seq - s["season_seq"] for s, seq, _new in fixed}
+        with conn:
+            conn.executemany("UPDATE snapshots SET season_seq = ?, new_season = ? WHERE id = ?",
+                             [(seq, new, s["id"]) for s, seq, new in fixed])
+            if ps is not None and pp is not None and pp.get("sid") in moved and ps.get("seq") is not None:
+                _put_state(conn, person_season=json.dumps({**ps, "seq": int(ps["seq"]) + moved[pp["sid"]]}))
+            conn.executemany("INSERT OR IGNORE INTO collect_state (key, value) VALUES (?, ?)",
+                             [(SEQ_REPAIRED + str(s["id"]), json.dumps({"old": s["season_seq"], "new": seq}))
+                              for s, seq, _new in fixed])
+    return len(fixed)
+
+
 def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at: datetime,
                   dup_count: int = 0, ended_season: int | None = None, ref_time: str | None = None) -> int:
     """원본 + 집계(+ snapshot_meta)를 한 트랜잭션으로 — 도중에 죽어도 반쪽이 안 남는다. → 스냅숏 id."""
-    prev = conn.execute("SELECT row_count, season_seq, ended_season FROM snapshots "
+    prev = conn.execute("SELECT row_count, top_elo, season_seq, ended_season FROM snapshots "
                         "ORDER BY taken_at DESC, id DESC LIMIT 1").fetchone()
     if ended_season is None and prev is not None:
         ended_season = prev["ended_season"]
-    new_season = bool(prev) and (
-        len(rows) < prev["row_count"] * config.RANK_SEASON_DROP_RATIO
-        or (ended_season is not None and prev["ended_season"] is not None
-            and ended_season > prev["ended_season"]))
-    seq = (prev["season_seq"] + (1 if new_season else 0)) if prev else 1
     top = min(rows, key=lambda r: r.rank).elo if rows else None
+    opener = _season_opener(conn, prev["season_seq"]) if prev is not None else None
+    new_season = is_new_season(prev, opener, len(rows), top, ended_season, _iso(taken_at))
+    seq = (prev["season_seq"] + (1 if new_season else 0)) if prev else 1
     counts, values, cuts = aggregate(rows)
     with conn:
         cur = conn.execute(
@@ -1772,7 +1829,8 @@ def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list |
     """따라잡기 처리 — 지우기 조건 → 익명 집계(B5, 동의 무관) → 사람별(N3·N11·N12, 동의 뒤) → 스냅숏 없는 시즌 넘김.
     스냅숏 하나 = 한 트랜잭션(깃발 같이). 수집 잠금 안에서 부른다(저장 커밋 뒤 · 앱 켤 때 작업 스레드).
     사람별 직전마다 켜짐·동의를 디스크에서 다시 읽는다 — 처리 중에 끄면 거기서 멈춘다(1회차 A·B)."""
-    out = {"purged": purge_person_if_needed(conn), "anon": 0, "person": 0, "rolled": False, "opp": 0}
+    out = {"purged": purge_person_if_needed(conn), "anon": 0, "person": 0, "rolled": False, "opp": 0,
+           "seq_repaired": repair_season_seq(conn)}
     out["purged"] = purge_opp_rank_if_needed(conn) or out["purged"]
     out["purged"] = purge_fc_games_if_needed(conn) or out["purged"]
 
