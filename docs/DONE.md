@@ -6240,3 +6240,802 @@ S 의 줄 목록·카드의 정확한 색 값(64 처럼 계산된 색을 읽지 
 **진입점·지킬 것**: 새 메뉴 둘([플레이 기록]·[시즌 돌아보기])은 `NAV`·`VIEW_OF_KEY`·`_renderers()`(PyQt 7) · [시즌 돌아보기]는 시즌표·ELO 도착 때 무효화 · X3 탭은 `OWNER_DIST_VIEW_KEYS` · 새 표 없음(U7) · 새 쿼리 실행 계획 `TEMP B-TREE` 없음(`test_rules`) · 새 상수는 `config` 에만(`SESSION_GAP_MIN` 재사용 · `N3_GRID_MIN`·`Y1_MIN_LOSS`·`Y1_RECENT_H`·`N1_MIN_LOSS`·`Y2_MIN_GAPS`·`Y2_GAME_MIN_FALLBACK`·`X2_MIN_GAMES`) · 새 승률 집계 클래스는 `models.RATE_CLASSES` · 새 규칙 문장이 생기면 `analysis.BASIS_RULES`/`NO_BASIS_RULES`·`config.K6_ORDER` · 화면 글 `docs/STYLE.md` · 계산은 `core_api` 경유 · 둘러보기 "요청 0"(`test_demo`) · 성능은 1회차 실측(큰 계정 `habit_tables` 0.20초 · `history_runs` 0.08 · `arrival_report` 0.20)으로 화면 스레드 — 구현 때 `sessions` 를 다시 재고 0.5초를 넘으면 작업 스레드로.
 
 공개 전 확인(2026-11-11): 실데이터 사본 · 넥슨 요청 막음 · offscreen 으로 새 화면 8장 — 1280 가로 스크롤 없음 · 그리기 0.05초 안 · 등급 이름표가 없을 때 새 화면만 '—' 로 숨기던 것을 번호로(`0f12f36`) · [연패] 문장 안 승률을 짧은 꼴로(`0d38067`) · 둘러보기 exe offscreen 20초 crash.log 없음. 남은 것: [승부처 분석] 의 기존 시간대×요일 지도가 칸마다 좋음·나쁨 색을 칠한다(E2 를 거기 맞출지 · 사용자 판단 전).
+
+## 108단계 — 작은 기능·규칙 셋 (제안 3.10.1 · 109 끝에 공개) · 5판 (2026-11-14 · U1~U7 사용자 답 · 1회차 [상] 1·[중] 12 · 2회차 [상] 2·[중] 8 · 3회차 [상] 2·[중] 7 · 4회차 [상] 3·[중] 4 · 5회차 [상] 1·[중] 5 반영 · 검토 끝 — C 는 조각 ③ 테스트로) ✅ 끝 (2026-11-15 3.10.1 공개 — 109 와 같이)
+
+셋은 서로 독립이다: **A 몰수패를 패로 + 빈 판을 평균에서** · **B 시즌을 경기의 시즌 번호로** · **C 켤 때 내 계정**. 저장 형식은 안 바뀐다(새 표·새 열 0).
+숫자가 바뀌는 것은 A 뿐이다. **C 는 켤 때 넥슨 오픈API 요청이 새로 생긴다**(내 계정을 정한 사람만 · 새 경기 확인만 · 홈페이지 요청 0 — U5) → 이용 안내에 한 줄 + `NOTICE_VERSION` 15 · 동의 전에는 안 연다(U6 · 관문 `STARTUP_CHECK_NOTICE_VERSION`).
+
+**5판에서 4판과 달라진 것**: ① 게임 중 메타 막기는 앱이 스스로 띄운 로더(`auto=True`)에만 건다. 사용자가 누른 검색은 그대로다(4회차 S1) ② 게임 때문에 취소한 켤 때 확인은 그 로더의 `finished` 에서 화면을 풀고(`_set_busy(False)`) 다시 확인을 잇는다. 취소 대상은 `startup=True` 검색 로더만이다(4회차 S2·M1·M2) ③ 다시 부르는 자리는 `finished_ok` 가 아니라 스레드가 끝난 `finished` 다(4회차 S3).
+
+**4판에서 3판과 달라진 것**: ① 게임 중 메타 읽기를 `MatchLoader` 의 메타 진입점 셋(`_safe_meta` · `_safe_meta_raw` · `_current_grade`) 전부에서 막는다 — 낡은 캐시도 읽는 `nexon_api.read_meta_on_disk` 로(3회차 S1) ② 게임 상태를 여는 순간만이 아니라 **새 경기 확인 직전과 도는 동안**에도 본다 — 게임이 켜지면 켤 때 확인을 취소하고 남겨 둔다(3회차 S2) ③ F1 판의 골도 득실 합계에 넣는다(U7 · 3회차 M1) ④ 3회차 [중] M2~M7 을 C 표에.
+
+**3판에서 2판과 달라진 것**: ① 켤 때 확인을 **오픈API 새 경기 확인만**으로 좁혔다 — 순위·팀컬러·시세·칩 같은 홈페이지 조회와 거래·랭커 픽은 켤 때 안 돈다(2회차 S1 · U5) ② 관문 상수와 다시 묻기를 모두에게(2회차 S2 · U6) ③ 켤 때 여는 길이 그린 뒤 부르는 것을 전수로 뽑아 표로 뒀다("켤 때 길이 부르는 것") ④ `formation_stats`·`opponent_cards` 를 "세" 로(M1) ⑤ 2회차 [중] M2~M8 을 표에.
+
+**2판에서 1판과 달라진 것**: ① C 를 다시 썼다(S1 — 1판의 전제 "지금도 켤 때 계정을 연다" 가 틀렸다) ② "평균에서 뺀다" 가 요약 길만이 아니라 **경기 내용을 쓰는 모든 집계**로 넓어졌다(U4 · M3)
+③ 빈 판의 정의가 "내 선수 0명" 에서 **"한쪽이라도 선수 0명"** 으로(J1 — F14·F15) ④ 닿는 곳 표를 `_me_opp(` 를 부르는 함수 전수로 다시 뽑았다(M6 · 기준 14) ⑤ 구단주 분포 길은 옛 기준 그대로(U4 단서 · F16).
+
+### 이 초안을 쓰며 확인한 것 (11-13 · fifa.db 읽기 전용 · 감독모드 두 사람 경기 34,659 · 검토자는 다시 재지 않는다)
+
+| # | 사실 | 값 |
+|---|---|---|
+| F1 | 내 종료 4("오류") + 상대 종료 1(몰수승) 팀-경기 | **66** — 결과 문자열은 전부 내 "오류" / 상대 "승" |
+| F2 | 그 66 의 내 쪽 기록 | 선수 0명 66 · 슛 0 · 점유 0 · `goalTotal` null 66 · `division` 있음 66 · `seasonId` 있음 66 · 상대 골은 0~9 로 남아 있다 |
+| F3 | 그 밖의 "오류" | 양쪽 4(중단) 24경기 · 내 4 + 상대 0 이 4팀-경기 · 내 4 + 상대 2 가 1 — **108 은 안 건드린다**(지금처럼 뺀다) |
+| F4 | 보통 몰수패(내 2 + 상대 1) 332 중 내 기록이 빈 것(선수 0명) | **197** — 지금도 패로 세고, 평균 득실·점유율에 0 으로 들어가 있다 · 몰수승(내 1) 쪽도 빈 것이 24(1+2 에 18 · 1+4 에 6) |
+| F5 | F1 을 패로 넣을 때 승률 | 검색해 둔 계정 13개: 0.00~−0.50%p(경기 992 인 계정이 11건으로 가장 크다 · 14,841경기 계정은 2건 −0.01%p) |
+| F6 | 빈 기록 판을 평균에서 빼면(100경기 넘는 계정 11개) | 득점 +0.003~+0.037 · 실점 −0.048~+0.011 · 점유율 +0.08~+1.00%p |
+| F7 | `seasonId` | 34,659경기 전부 있다 · 한 경기의 양쪽이 다른 값 0 · 값 4종(202603~202606) |
+| F8 | `seasonId` 묶음 대 시즌표(8시 경계) 묶음 | **어긋남 0** — 202603→89 · 202604→90 · 202605→91 · 202606→진행 중. 번호가 바뀌는 사이는 03:56→12:40 · 03:51→11:36 · 01:25→13:41 |
+| F9 | 시즌표 이름 | 91줄 전부 "시즌 N" 꼴. **(시작 해, N) 은 유일하지 않다** — 68번 "시즌 1" 이 2023-12-21 시작이라 시작 해로 번호를 만들면 겹친다 → 이름으로 짝짓지 않는다 |
+| F10 | 측정 도구(51)가 기대는 것 | `tools/measure_cards.py` 는 결과를 원문에서 직접 읽고(`:234`) `seasons.season_of` 만 쓴다 · `models`·`stats` 를 import 하지 않는다 · 해시를 재는 파일은 `TOOL_FILES` 셋 |
+| F11 | 켤 때 여는 계정 | `app_main._last_account`(최근 검색 1번 · 저장된 감독모드 경기가 있어야) → `open_last_account`(DB 로 그리고 → `_api_search(quiet=True)`) · `main` 에서만 부른다 |
+| F12 | 내 계정 | `trade_state.my_ouid` — [가계부] 띠 `_set_my_account` 가 쓴다 · 키가 바뀌면 `store` 가 `my_ouid_unconfirmed` 로 옮기고 `my_ouid` 는 비운다(`store.py:1206`) |
+
+2판에서 더 잰 것(11-13 저녁 · fifa.db 읽기 전용 · 감독모드 34,727경기 = 69,318 팀-경기 · `dev_matches.db` 1,088만 경기):
+
+| # | 사실 | 값 |
+|---|---|---|
+| F11′ | **F11 정정** — 배포 앱은 켤 때 계정을 열지 않는다 | `config.OPEN_LAST_ACCOUNT = False`(`config.py:1007`) → `main`(`app_main.py:17060`)은 `start_prefetch`(최근 검색 1번의 저장 경기만 뒤에서 읽음 · 요청 0) · `open_last_account` 는 둘러보기(17082)만 부른다 · `_last_account` 는 `start_prefetch`(3667)도 부르고 그건 `reload_after_release`(15454)도 부른다 · `--tray` 는 `show=False` 라 둘 다 안 타고, 트레이에서 처음 열면 `tray.show_window` → `show_initial`(`_shown_once`) 만 탄다 |
+| F13 | 내 선수 0명 팀-경기 | **395**(F1·F4 포함) — 그 395 전부 내 쪽 슛·골·패스·태클·점유율·파울·`shootDetail` 이 0 이거나 없다(0 아닌 값 0건) |
+| F14 | 상대만 빈 판(내 선수 있음) | **275** 팀-경기 — 같은 경기를 반대편에서 본 것이다(내 쪽만 빈 판도 275 · 양쪽 다 빈 판 94). 남은 쪽 기록은 **진짜 경기 내용**이다: 슛 평균 7.82(0 인 판 4) · 골 4.16 · 점유율 54.70 · 패스 113.6 · 선수 18명 — 지고 있던 쪽이 나가 그쪽 기록만 지워진 판 |
+| F15 | 평균 기준 셋(100경기 넘는 계정 11개 · `team_profile`) — 지금 대비 | 내 빈 판만 뺌: 내 슛 0~+0.088 · 내 득점 0~+0.037 · 내 점유율 0~+1.01%p · 상대 득점 −0.049~+0.011 / **한쪽이라도 빈 판 뺌**: 내 슛 −0.007~+0.069 · 내 득점 −0.006~+0.019 · 내 점유율 0~+0.97%p · 상대 득점 −0.042~+0.013 · 상대 점유율 0~+0.35%p. 빠지는 판은 계정마다 0~3.09% |
+| F16 | 구단주 분포 지표(나 − 같은 경기 상대 · 최신 1000판)의 이동 | **내 빈 판만 빼면 지금보다 더 치우친다** — 상대만 빈 판(내 진짜 값 − 0)이 남아서다(예: 점유율 +0.774 → +1.512 · 한쪽이라도 빼면 +1.188). 한쪽이라도 빼면 최대 이동: 결정력 0.40 · 유효슛당 골 0.32 · 태클 0.27 · 롱·스루 0.04 · 점유율 0.79 · 슛 0.11. 저장된 분포(바퀴 1 · 149명)의 표준편차는 2.87 · 3.26 · 2.24 · 1.50 · 2.13 · 0.28 — **분포 값이 바뀐다**(작지만 0 이 아니다) |
+| F17 | 랭커 쪽 빈 판 비율 | `dev_matches.games` 에서 선발이 없는 쪽 143,257 / 2,177만 팀-경기 = 0.66%(내 DB 는 395/69,318 = 0.57%) — 분포를 만든 사람들도 같은 꼴의 판을 같은 비율로 갖고 있다 |
+| F18 | 칩이 견주는 지표 | `habits.N19_CHIP_KEYS` = 결정력 · 유효슛률 · 태클 성공률 — **승률은 없다**(1회차 "확인 못 한 것" 답) |
+| F19 | 죽은 몰수 판정 | `records._games`(96)·`stats.win_divisions`(133)의 `"몰수" in result` 는 실데이터에서 늘 거짓(결과 글자는 승·무·패·오류뿐) → `_Game.forfeit`(쓰는 곳 `records.py:134`)·`WinDivision.forfeit`(쓰는 곳 `stats.py:180` `forfeit_wins`)는 지금 늘 False/0 이다 |
+
+### 사용자 답 (2026-11-13)
+
+- **U1 몰수패 규칙 → 패로 센다.** 보통 몰수패와 같이 승률·연승연패·상대 전적에 패로. 기록이 비어 있으니 경기당 평균(득점·실점·점유율·평점)에는 안 넣는다. 양쪽 다 "오류"(중단)는 지금처럼 뺀다.
+- **U2 내 계정 → 켤 때 내 계정 + 칩 고정.** 새 설정은 만들지 않고 [가계부] 띠에서 정한 값을 그대로 쓴다.
+- **U3 (저녁 · S1) 내 계정이 정해져 있으면 켤 때 그 계정을 연다** — 10-04 결정("켤 때 계정을 안 연다")을 내 계정에만 좁힌다. 게임 중이면 요청 없이 저장된 것만 그린다. 내 계정을 안 정한 사람은 지금과 같다.
+- **U4 (저녁 · M3·M5) 빈 판은 모든 화면의 평균에서 뺀다.** 득실 **합계**는 지금처럼 그대로 더한다. 구단주 분포는 값이 바뀌는지 먼저 재고, 바뀌면 그쪽만 그대로 둔다 → F16: 바뀐다 → 분포 길은 그대로(J2).
+- **U5 (11-14 · 2회차 S1) 켤 때는 오픈API 로 새 경기만 확인한다.** 홈페이지 조회(상대 팀컬러 · 내 순위)는 켤 때 안 한다 — 저장된 팀컬러는 그대로 보이고, 새 상대 것은 직접 검색하거나 [새 경기 확인]을 누를 때 채운다.
+- **U6 (11-14 · 2회차 S2) 바뀐 안내를 모두에게 다시 묻는다**(랭킹 수집을 끈 사람도). 동의 전이거나 창을 취소하면 지금처럼 검색 화면(요청 0) · 동의하면 그 자리에서 내 계정을 연다.
+- **U7 (11-14 · 3회차 M1) F1 판(내 쪽 "오류" 로 남은 몰수패)의 골도 득실 합계에 넣는다.** 패로 세는 판이라 골도 같이 센다 — 상대별 전적·기간별 집계는 지금도 넣고 있어 그쪽과 같아진다. 대시보드 득실차가 조금 바뀔 수 있음을 CHANGELOG 에 적는다.
+
+### 내 판단 — 사용자 답 밖 (검토자가 볼 것)
+
+- **J1 빈 판 = "한쪽이라도 선수 기록이 없는 판"**(내 쪽이든 상대 쪽이든 `player` 가 비었다 · 종료 유형과 무관). 사용자 답(U4)은 "내 기록이 빈 판" 이었고, 재 보니 상대만 빈 판 275 가 같은 문제다(F14):
+  그 판의 **상대 열**은 0 으로 지워져 있어 "상대 평균"·"나 − 상대" 를 한쪽으로 민다 — 내 빈 판만 빼면 짝 지표는 지금보다 더 치우친다(F16). 그래서 평균·짝 비교는 **양쪽 다 기록이 있는 판**만 쓴다.
+  대가: 상대가 나가 내 기록만 남은 판(계정마다 0~1.5% · 대개 크게 이기던 판)이 내 평균에서도 빠진다 — 이동 폭은 F15. 규칙이 하나라 화면마다 기준이 갈리지 않는다(M3). 평점은 이미 같은 이유로 뺀다(`Stats.rating_n`).
+  **승·무·패 수와 득실 합계는 빈 판도 그대로 센다**(U4 · M5).
+- **J2 원문 길은 두 갈래로 나눈다** — ⓐ 승·무·패를 **세는** 자리는 `models.result_of`(F1 판이 패가 된다) ⓑ 경기 **내용**(슛·패스·점유율·골 시각)을 쓰는 자리는 `stats._result_of` 그대로(F1 판은 "오류" 라 지금처럼 빠진다) + **빈 판 건너뛰기**(새).
+  ⓑ 의 기본값이 "지금과 같음" 이라 빠뜨린 자리가 생겨도 새 0 이 섞이지 않는다. **구단주 분포 길(`ownerdist` 받기 · `habits.dist_basis` · `pos_diff`)만은 빈 판도 지금처럼 넣는다**(U4 단서 · F16 — 저장된 분포 149명이 옛 기준이라
+  내 값만 새 기준이면 백분위가 어긋난다 · 51 측정 C 판정기와 같은 값을 유지한다). 분포를 새 기준으로 옮기는 것은 바퀴에 기준 번호를 적어야 해(새 열) 108 밖 — "재지 않은 것".
+- **J3 시즌표가 아는 시즌은 지금과 똑같이, 모르는 시즌만 경기 번호로 세운다.** F8 이 어긋남 0 이라 시즌표가 있는 사람에게는 보이는 것이 안 바뀐다. 바뀌는 것은
+  시즌표가 없거나(홈페이지 데이터 끔 · 받은 적 없음) **낡은** 경우다 — 시즌표를 받은 뒤 홈페이지 데이터를 끄면 지금은 그 뒤 시즌들이 전부 "진행 중" 한 묶음에 쌓인다.
+- **J4 날짜 계산이 필요한 화면은 범위 밖** — 시즌 돌아보기(경과 일수) · 예측(시즌 길이·종료 추정) · ELO 그래프의 시즌 시작 · 업적의 시즌 경계 · FC 카드의 시즌 시작 · 예측 되짚기는
+  지금처럼 시즌표가 있어야 선다(경기 시각으로 어림한 경계를 "경과 일수" 에 쓰면 틀린 숫자를 정확한 것처럼 보인다).
+- **J5 켤 때 여는 내 계정에는 키 지문을 안 본다** — 거래·상대 순위는 저마다 관문(`my_ouid` + 키 지문)을 그대로 거친다. 여기서는 "어느 계정을 먼저 그리나" 뿐이라 남의 자료가 새로 보이지 않는다.
+  키가 바뀌면 `my_ouid` 가 비워져(F12) 켤 때 여는 계정도 없어진다 — 띠에서 다시 정하면 돌아온다.
+- **J6 죽은 몰수 판정(F19)은 108 에서 안 살린다** — `_Game.forfeit`·`WinDivision.forfeit` 를 종료 유형으로 채우면 업적의 몰수 규칙과 `forfeit_wins` 가 처음으로 켜져 숫자가 따로 움직인다(U1·U4 밖).
+  M1 이 걱정한 것(빈 몰수패가 무실점 연속·최다 점수 차 패에 든다)은 `_Game.blank` 로 막는다. 살릴지는 109 시작 때 사용자에게.
+- **J7 켤 때 새 경기 확인은 "검색" 과 같은 로더(`_api_search(quiet=True, startup=True)`)를 쓰되 홈페이지 갈래를 끈다**(U5) — 요청은 오픈API 의 닉네임→ouid 1 · 기본 정보 1 · 경기 목록 · 지난번 뒤 새 경기 상세 · 최고 등급 1 · 메타(주간 캐시가 낡았을 때만 — 인증 없는 정적 파일).
+  한도·429·키 거절 처리는 이미 있는 것 그대로다. 순위(`_safe_rank` → `ranker.fetch_manager_rank`) · 팀컬러 · 거래 받기 · 보이는 로더는 이 길에서 안 돈다(아래 "켤 때 길이 부르는 것").
+- **J8 켤 때 연 계정은 대시보드로 연다(보던 메뉴로 되돌리지 않는다)** — 되돌린 메뉴가 가계부(시세 자동 읽기 `_maybe_start_prices`)·축구장(칩 카드 정보 `_start_card_info`)·랭커 픽·특성이면 그 화면의 자동 홈페이지·오픈API 읽기가 켤 때 돈다(2회차 "재지 못한 것").
+  대시보드는 축구장·로더를 안 만든다(`dashboard.py` 에 `_start_pitch_loaders` 0 · 11-14 grep). 대가: 내 계정을 정한 사람은 켤 때 "지난번 보던 메뉴" 복원을 잃는다 — 복원 정보(`_restore`)는 켤 때 길에서 버린다(다음 검색에서 엉뚱하게 튀지 않게).
+- **J9 켤 때 길의 순위 카드는 순위 없이 그린다** — `_rank` None 이면 `_render_ranker` 가 지금도 쓰는 "우리 집계로 대체" 갈래(조회 실패와 같다). 순위·ELO 기록(`record_elo`)은 사용자가 검색할 때 채워진다 — 켤 때마다 ELO 한 줄이 쌓이던 것은 원래 없었다(지금 켤 때 요청 0).
+- **J10 CDN 그림(얼굴·엠블럼·시즌 아이콘)은 셈 밖** — 디스크 캐시에 없는 것만 받는 정적 파일이고 저장본 열기·다시 열기(`reload_after_release`)가 지금도 같은 길로 받는다(CLAUDE.md "CDN 이미지는 스위치 밖"). 게임 중에도 지금 다시 열기와 같다. 오프라인 길의 등급 배지(`_current_grade` → `images.fetch_division_icon` 849)도 같은 CDN 이라 이 셈 밖이다(4회차 M).
+- **J11 (조각 ① 구현 때 · 11-14) 빈 쪽 판정은 "`player` 키가 있는데 비었다" 로 좁혔습니다.** 실DB 71,665 팀-경기를 재 보니 키가 없는 쪽은 0 이고 지워진 쪽은 늘 빈 목록(405)이었습니다. 처음 쓴 `not p.get("player")` 는 선수 칸을 안 둔 지어낸 경기(테스트 대부분)까지 빈 판으로 잡아 `test_parsing`·`test_habits`·`test_records`·`test_compare` 가 한꺼번에 무너졌습니다. 상대 쪽이 아예 없는 판(`opp` 가 None·빈 dict)은 그대로 빈 판입니다. 테스트 도우미(`test_parsing._d`·`test_shot_summary.game`·`test_compare._side`)는 선수를 안 주면 키를 두지 않게 고쳤습니다.
+
+### A 몰수패를 패로 + 빈 판을 평균에서 (숫자가 바뀐다)
+
+새 코드(`models.py` — 종료 유형 상수 `END_*` 를 `stats` 에서 여기로 옮기고 `stats` 는 가져다 쓴다):
+
+| 함수·필드 | 반환 | 뜻 |
+|---|---|---|
+| `models.forfeit_loss(me, opp)` | bool | 내 `matchEndType` 4 + 상대 1 — `stats.end_kind` 의 "몰수패" 둘째 갈래와 같은 판정(그쪽이 이 함수를 부른다) |
+| `models.result_of(me, opp)` | str | `matchResult` 원문, 단 `forfeit_loss` 면 "패" |
+| `models.is_blank(me, opp)` | bool | 한쪽이라도 `player` 가 비었다(J1) — 상대가 없으면(`opp` 가 None·빈 dict) 참 |
+| `MatchSummary.result` | str | `parse_match` 가 `result_of` 로 채운다 → `MatchSummary` 를 쓰는 자리는 전부 패로 센다 |
+| `MatchSummary.blank` | bool = False | `is_blank(me, opp)` — 평균·짝 비교에서 빼는 판 |
+| `MatchSummary.no_squad` | bool = False | 내 `player` 가 비었다 — 선수 표의 팀 승률 기준(M4)만 쓴다(선수별 승률은 내 선수가 있는 판에서만 나온다) |
+| `Stats.blank` · `OpponentStat.blank` · `PeriodStat.blank` · `DivisionStat.blank` | int = 0 | **평균**의 분모 = 판 수 − `blank` · 평균용 합(`avg_goals_for`·`avg_goals_against`·점유율)에는 빈 판을 안 더한다. `total`·`games`·승무패 수·**득실 합계(`goals_for`·`goals_against`)는 빈 판도 더한다**(U4 · M5). 단 `summarize` 는 지금 "오류" 판을 `continue` 로 합계에서도 빼므로(`models.py:258~262`) **F1 판이 "패" 가 되면 그 판의 골이 대시보드 "득실차" 에 처음 들어간다**(U7 · 3회차 M1 — 상대 골 0~9 · 내 골 0) · `opponent_stats`·`period_stats` 는 지금도 오류 판 골을 더해(314 · 460) 상대 줄 "득실 a:b" 는 안 바뀐다 · `test_parsing` 에 "F1 판 하나를 넣으면 `summarize.goals_against` 가 그 판 상대 골만큼 늘고 `opponent_stats` 합은 그대로" |
+
+닿는 곳 — **경기 원문을 읽는 함수 전수**(M6 · 기준 14). 정의: 앱 소스(`demodata`·`check_api` 뺌)에서 `_me_opp(` · `_result_of(` · `_wdl_of(` · `"matchResult"` 중 하나라도 쓰는 **함수 이름**(기준 `1eb3cba` · 50개 − 도우미 3(`_me_opp`·`_result_of`·`_wdl_of` 자신) = **47** — 2회차 M7 전수 대조 · 아래 `test_rules` 새 규칙과 같은 정의라 첫 실행 = 이 표).
+**세** = `result_of` 로 승무패를 센다 · **빈** = 빈 판을 건너뛴다(평균·짝 비교·내용 집계) · **분포** = 구단주 분포 길, 지금 그대로 · **그대로** = 선수·슛·한 경기 단위라 빈 쪽은 낼 것이 없다.
+
+| 처리 | 함수 | 이유·바뀌는 것 |
+|---|---|---|
+| 세 (7) | `models.parse_match` | `result`·`blank`·`no_squad` 를 채운다 — `MatchSummary` 길 전부가 여기서 따라온다(아래 표) |
+| | `stats.win_divisions` | 달력·운 범위·FC 가 이 줄로 날마다 승무패를 센다 — `summarize` 와 같아야 한다(FC 는 승리만 세어 안 바뀐다 · `forfeit` 플래그는 J6 로 그대로) |
+| | `stats.division_stats` | 세 + 빈 — 등급별 승률. **기본은 상대 등급으로 묶는다**(M12) — F1 판의 상대 쪽 `division` 이 있는지는 픽스처 0004 로 단언하고, 없으면 지금처럼 "등급 없음" 줄 |
+| | `records._games` | 세 + `_Game.blank` — 연승 업적이 몰수패를 건너뛰고 이어지지 않게 · **점수를 쓰는 업적(무실점 연속 · 최다 득점 · 최다 점수 차 · `rival` 의 최다 점수 차 승패)은 빈 판을 건너뛴다**(M1) · 경기 수·연승연패·상대 전적은 센다 |
+| | `squad_timeline._Games.__init__` | 사건 앞뒤 창 승률을 누적합으로 낸다(M2) — `result_of` 로 · 득실은 합계라 그대로 · 창의 경기당 득실을 내는 줄이 있으면 빈 판을 분모에서 뺀다(`test_timeline` 에 빈 판을 섞은 창) |
+| | `stats.formation_stats`(650) · `opponent_cards`(1992) | 상대 전술별·상대 카드별 내 승무패(2회차 M1) — F1 판은 상대 선발이 남아 있어 지금은 `games` 에만 들고 승무패에는 안 든다 → `result_of` 로 세어 보통 몰수패와 같게(U1). 평균을 안 내 "빈" 은 해당 없다 |
+| 빈 (13) | `stats.team_profile` · `versus_profile` · `discipline_stats` · `pass_style` · `_per_match` | 나·상대 경기당 평균(레이더 · 나와 상대 · 성적 진단 · 패스 · 구단주 비교)이 대시보드 평균과 같은 판을 쓴다(M3). `discipline_stats` 의 `end_kinds` 세기는 건너뛰기 **앞**이라 그대로 |
+| | `stats.clutch_summary` · `goal_minute_buckets` · `habits.goal_flow` · `half_share_diff` | 골 시각이 재료 — 빈 판은 한쪽 골만 남아 있어(F2·F14) "선제 실점"·"먹힌 시간대" 로만 쌓인다(1회차 "확인 못 한 것" 답) |
+| | `stats.possession_stats` | 이미 `pos <= 0` 을 건너뛴다(M12 — 내 빈 판은 지금도 빠진다) → 상대만 빈 판이 더 빠진다 |
+| | `stats.shot_summary` | 이미 종료 유형 "정상" 만 — 정상인데 한쪽이 빈 판(F13: 내 2+상대 0 10건 · 내 0+상대 2·4 14건) 때문에 같은 건너뛰기를 둔다 |
+| | `habits.side_totals` · `attack_routes` | 같은 경기 상대 대비(칩의 "같은 경기 상대" 판정 · 문장 · 공격 루트). `side_totals(details, ouid, keep_blank=False)` — 분포 길만 `keep_blank=True` |
+| 분포 (2) | `habits.side_totals(keep_blank=True)` 를 부르는 두 곳(`ownerdist.py:462` 받기 · `habits.dist_basis` 내 1000판) · `habits.pos_diff` | J2 — 저장된 분포와 내 값이 같은 기준이어야 백분위가 맞는다. 칩의 분포 판정 · [분포 대비] 표 · C4 는 **값이 안 바뀐다** |
+| 그대로 (24) | `stats.trade_hint` · `own_squad` · `opponent_squad` · `aggregate_players` · `result_breakdown` · `shootout_keepers` · `shot_map` · `shot_type_counts` · `player_finishing_trend` · `finishing_ranking` · `_opp_scope` · `key_players` · `match_sides` · `match_versus` · `latest_match_with` · `match_goals` · `match_shots` · `match_mvp` · `rating_trend` · `recent_ratings` · `_my_pair_sums` · `records.day_player` · `sessions.top_scorer` · `squad_timeline._lineups` | 선수·슛 한 줄씩이 재료이거나 한 경기 화면이다. `result_breakdown` 은 이미 종료 유형으로 센다 — 주석 "합계가 승률 분모보다 클 수 있다" 와 `app_main.FORFEIT_TIP` 둘째 줄을 고친다(이제 같다) |
+| (요약 길 · 2) | `stats.after_streak_rates` · `team_color_baseline` | `_wdl_of(m.result)` — `MatchSummary` 를 받는다(아래) |
+
+`MatchSummary` 를 받는 자리(전부 `parse_match` 가 채운 `result` 를 쓴다 — 고칠 것은 평균 분모뿐):
+
+| 자리 | 처리 |
+|---|---|
+| `models.summarize` · `opponent_stats` · `period_stats` | 세 + 평균 분모에서 `blank` 를 뺀다 |
+| `models.current_streak` · `longest_streaks` · `win_rate_trend` · `moving_win_rate` · `stats.time_of_day_rates` · `time_weekday_rates` · `after_streak_rates` · `team_color_stats` · `team_color_baseline` · `habits.streak_baseline` · `_chi_table` · `sessions._wdl` · `streak_break` · `_cum_rates` · `streak_note` · `rankmeta.my_day_rate` · `opp_rank_table` · `records.rival`(승무패) | 세 — 승무패만(지금은 "오류" 가 연속을 끊기만 한다 → 연패에 든다) |
+| `app_main` 의 승·무·패 세기(`_render_opponents` · `_season_h2h_text` · `_detail_h2h`) · 경기 카드·점 그림(`_match_card` · `_detail_head` · `_render_analysis` · `dashboard._render_trend`) | 세 — 결과 글자가 "패" 로 보인다(보통 몰수패와 같다) |
+| `dashboard._render_kpis` | 세 — "오류" 수가 그만큼 줄어든다. 586~588 은 골 ÷ 슛 전환율(M12 — 합계 비율이라 분모를 안 건드린다) · 평균 득실은 `Stats` 가 낸다 |
+| 선수 지표 표의 팀 승률 기준(`app_main.py:14877`) | `no_squad` 가 아닌 판으로만(M4) — 선수별 승률(원문 길 · 내 선수가 있는 판)과 같은 판 |
+
+`test_rules` 새 규칙(1판의 `RESULT_RAW_ALLOW` 를 바꾼다 — M6: 원문 길 대부분은 `"matchResult"` 글자가 아니라 `_result_of(` 를 부른다): 위 정의로 뽑은 함수 이름은 전부 표 `RESULT_PATHS`(이름 → 처리 **묶음** `frozenset` — `count`·`content`·`dist`·`asis` 중 하나 이상 · "세 + 빈" 인 `division_stats`·`records._games` 는 `{count, content}`)에 있어야 한다(`RAW_TIME_ALLOW` 꼴).
+`count` 를 품은 함수는 `result_of(` 를 **단어 경계로**(`(?<![\w.])result_of\(` 또는 `models.result_of(` — `_result_of(` 는 부분 문자열이라 그대로 찾으면 원문 길도 참이 된다 · 2회차 M7) 부르고 `_result_of(`·`"matchResult"` 를 안 쓴다 · `content` 를 품은 함수는 `is_blank(` 를 부르거나 `.blank` 를 읽는다 ·
+도우미 칸 `RESULT_HELPERS`(`models.result_of`·`forfeit_loss`·`is_blank` 와 옛 도우미 셋 — 원문을 읽는 것이 일이다)는 검사 밖 · 표에 없는 새 함수는 FAIL · 위반을 심은 가짜 소스 넷(표 밖 함수 · `count` 인데 원문 · `count` 인데 `_result_of(` 만 부름 · `content` 인데 `is_blank` 없음)을 잡는지 같이 단언.
+
+- 화면 글: `FORFEIT_TIP` · 산출 방법(`methods.py`)의 승률 줄에 한 문장("상대가 몰수승을 받은 경기는 내 기록이 비어 있어도 패로 셉니다") · `CHANGELOG` 3.10.1 절에 "승률이 조금 내려가고 득실차가 조금 바뀔 수 있습니다" 를 적는다(U7).
+- 캐시: `MatchSummary` 는 켤 때마다 원문에서 다시 만든다 — 저장된 요약이 없어 옮길 것이 없다(되돌리기 = 옛 버전을 켜면 옛 숫자).
+
+### B 시즌을 경기의 시즌 번호로
+
+새 코드(`seasons.py` — **`Season` · `season_of` · `group_by_season` · `in_ongoing` 은 안 건드린다**: F10):
+
+| 이름 | 뜻 |
+|---|---|
+| `MatchSummary.season_id: int \| None = None` | `matchDetail.seasonId`(정수가 아니면 None) |
+| `seasons.DataSeason(sid, start_at, end_at, first, last, games)` | 시즌표가 모르는 시즌 — `start_at` = 그 번호의 첫 저장 경기 시각 · `end_at` = 다음 번호의 첫 경기 시각(가장 새 번호는 None). `Season` 과 같은 이름을 낸다: `no`(= −sid) · `name` · `label`(`"{sid // 100} 시즌 {sid % 100}"`) · `start`·`end`(첫·마지막 저장 경기 **날짜** — `_period_series` 의 정렬 키) · `contains(when)` — `Season.contains`(`seasons.py:68`)와 같은 꼴로 **datetime 이면** `start_at <= when < end_at`, **date 이면** `start_at.date() <= when` 이고 `end_at` 이 있으면 `when < end_at.date()`(달력은 date 로 부른다 — 4613·4651 · 2회차 M3)(`end_at` None 이면 끝 없음). **같음·해시는 `sid` 만**(M8 — 새 경기 한 판에 `last`·`games` 가 바뀌어도 콤보의 `findData(prev)` 가 같은 줄을 찾아야 한다 · `test_ui_smoke` 에서 실행으로 확인) · `DataSeason` 이 아닌 것(`Season` · `"ongoing"` 글자 · `OUTSIDE`)과는 늘 다르다(`__eq__` 가 `NotImplemented` — `selected == self.ONGOING`(11954) 이 거짓) |
+| `seasons.SeasonMap(table, matches)` | 한 번 세워 같이 쓴다. `.groups` → `[(Season \| DataSeason \| None, [경기])]` 최신순(None = 진행 중 — 지금과 같은 뜻) · `.of(m)` 경기 → 시즌(번호로) · `.at(when)` 시각 → 시즌(경기가 아닌 것: 달력 칸 · 거래) · `.has(m, selected)` 고른 시즌에 드는 경기인가(남의 계정 경기도 — 아래) · `.ongoing_start` 진행 중 묶음의 시작 시각 · `.known` 시즌이 하나라도 나뉘나 · `.by_sid(sid)` 그 번호가 든 묶음의 시즌(`Season` · `DataSeason` · None — 시즌표가 뒤늦게 와 `DataSeason` 이 `Season` 으로 바뀔 때 고른 줄을 옮기는 데 쓴다 · 3회차 M6) |
+
+돌려주는 값(M9 — 1판은 None 이 "진행 중" 과 "어디에도 없음" 두 뜻이었다):
+
+| 부름 | 시즌표가 아는 기간 | 모르는 번호의 묶음 | 진행 중 | 어디에도 없음 |
+|---|---|---|---|---|
+| `.of(m)` | `Season` | `DataSeason` | None | 없다 — 모든 경기는 `.groups` 의 한 묶음에 든다 |
+| `.at(when)` — `when` 은 datetime 또는 date(date 면 그날 0시가 아니라 **그날이 걸친 쪽** — `contains` 의 date 갈래 · 진행 중은 `when >= ongoing_start.date()`) | `Season` | `DataSeason`(`contains`) | None — `when >= ongoing_start` 일 때만 | `seasons.OUTSIDE`(저장 시작 전 · 묶음 사이 빈 틈) — 달력(4653)·운 범위(5790)는 이 값을 "이번 시즌" 으로 읽지 않고 그 칸을 시즌 밖으로 둔다 |
+| `.has(m, selected)` | `m.season_id` 가 내 맵에 있으면 그 번호의 시즌 == `selected` · 없으면(`season_id` None · 내가 안 뛴 시즌) `selected.contains(m.match_date)` — 진행 중을 골랐으면 `when >= ongoing_start` | ← | ← | 거짓 |
+
+- `ongoing_start`(M10): 시즌표 마지막 종료 경계와 **가장 새 `DataSeason` 의 `end_at`**(= 진행 중 번호의 첫 경기 시각) 중 늦은 쪽. 시즌표가 낡아 못 찾은 번호가 둘 이상일 때 "현재 시즌" 의 시작이 낡은 표의 끝이 아니라 새 묶음과 맞는다.
+- 한계(M11 · 지금도 같다): 시즌표가 낡았고 가장 새 번호의 시즌이 실제로는 끝났어도 그 묶음은 "진행 중" 이다 — 새 시즌 경기가 한 판 저장되면 풀린다.
+
+짝짓는 규칙(번호 묶음 → 시즌표 줄):
+1. 번호 묶음마다 **경기 시각의 중앙값**으로 `season_of(table, 중앙값)` — 찾으면 그 `Season`(기간·이름은 시즌표 것 · 지금 화면과 같다). 이름으로 안 짝짓는다(F9).
+2. 못 찾았고 · 시즌표가 있고 · 중앙값이 마지막 종료 경계 뒤이고 · 못 찾은 번호 중 **가장 큰 번호**면 → 진행 중(None).
+3. 그 밖(시즌표 없음 · 시즌표가 낡아 못 찾은 번호가 둘 이상일 때의 앞 번호들)은 `DataSeason`.
+4. `season_id` 가 없는 경기는 지금처럼 시각으로(`season_of` → `in_ongoing`).
+5. 경기는 **자기 번호의 묶음**에 든다(시각이 경계 반대편이어도) — 시각 경계 8시는 어림이고 번호가 정본이다.
+
+바꾸는 자리(`app_main.py`):
+
+| 자리 | 지금 | 바꿈 |
+|---|---|---|
+| `_season_groups` | `sn.group_by_season(self._rank_seasons, …)` | `self._season_map().groups`(창 캐시 — 키: `id(_matches_all)` · 길이 · **맨 앞 경기 id** · `id(_rank_seasons)` · 시즌표 줄 수 — 목록을 새로 만들면 id 가 재사용될 수 있어 `_narrate_scope` 와 같은 꼴로) |
+| `_rebuild_season_combo` · `_render_seasons` | `season.start`·`season.end` 로 기간 글 | `DataSeason` 이면 기간 대신 "저장된 경기 MM-DD~MM-DD" · 정렬 키는 첫 경기 날짜 |
+| `_in_selected_season` 를 **경기**에 쓰는 두 곳(시즌 필터 · `_scope` 쪽) | `selected.contains(m.match_date)` | `SeasonMap.of(m)` 과 견준다. 시각을 넘기는 한 곳(타임라인·거래 범위)은 `.at(when)` |
+| `_cal_season_key` | `sn.season_of(self._rank_seasons, d)` | `.at(d)` — 시즌표가 아는 시즌은 같은 값 · 캐시 키에 `SeasonMap` 객체를 넣는다(M8) |
+| `_period_series`(4723) | `season.start` | `DataSeason.start`(첫 경기 날짜) — 위 표 |
+| `_compare_window`(11319 — **상대 계정 경기**에 시즌 필터) | `_in_selected_season(m.match_date, selected)` | `.has(m, selected)` — 상대 경기의 번호가 내 맵에 없어도 답한다(M7) |
+| `_range_start`(11329) | 진행 중이면 `max(s.end_at …)` · 아니면 `selected.start_at` | 진행 중이면 `.ongoing_start` · `DataSeason` 이면 None(저장된 첫 경기가 곧 시작이라 ⚠ 판정을 안 한다) |
+| 시즌 콤보(11926)·`_render_seasons`(14752)의 "현재 시즌" 시작 | 시즌표 `last_end` | `.ongoing_start`(M10) |
+| `_season_h2h_text` | `sn.season_of` 두 번 | `.of(m)` |
+| 달력·운 범위의 "저장된 전체" 문구(`no_table = not self._rank_seasons` 두 곳) | 시즌표가 없으면 | `not SeasonMap.known` 이면 |
+| `_season_key` | `s{no}` | 그대로(`DataSeason.no` = −sid → `s-202606`) — 시즌표가 뒤늦게 오면 저장된 선택이 안 맞아 기본(현재 시즌)으로 간다 |
+| `_on_seasons_loaded`(11894~11899 — 시즌표가 뒤늦게 온다) | `_rebuild_season_combo` 만 · `findData(prev)` 가 −1 이면 신호가 막힌 채 콤보만 "전체" 로 바뀌고 화면은 옛 시즌으로 걸러진 채 남는다(11933~11944) | 고른 것이 `DataSeason` 이면 새 맵의 `.by_sid(prev.sid)` 로 옮겨 고른다 · 그래도 고른 줄이 바뀌었으면 `_apply_season()` 을 부른다(3회차 M6 · 108 에선 시즌표가 올 때마다 `DataSeason` 이 사라져 흔해진다) · `test_ui_smoke` — 시즌표 없이 `DataSeason` 을 고른 뒤 시즌표 도착 → 같은 시즌의 `Season` 이 골라지고 화면 경기 수가 콤보와 같다 |
+
+범위 밖(J4 — 시즌표가 있어야 서는 그대로): `season_span` · `elo_season_start` · `_render_review`(`core.season_spans`) · `PredictWorker` · `_records_seasons` · `predict_check` · `rankcollect`.
+
+### C 켤 때 내 계정 + 칩 고정 (3판에서 다시 씀 — 2회차 S1·S2 · U3·U5·U6)
+
+지금(F11′): 배포 앱은 켤 때 검색 화면이고 넥슨 요청은 0 이다. 바꾸는 것: **내 계정이 정해져 있고 안내 15 에 동의했을 때만** 켤 때 그 계정을 DB 로 그리고(대시보드 — J8), 오픈API 로 새 경기만 조용히 확인한다(U5 · J7). `config.OPEN_LAST_ACCOUNT`(False)는 그대로 둔다 — "최근 검색한 남의 계정을 여는" 스위치이고 10-04 결정은 그쪽에 그대로 산다.
+
+| 자리 | 바꿈 |
+|---|---|
+| `config.STARTUP_CHECK_NOTICE_VERSION = 15` · `config.startup_check_allowed()` (새) | `not notice_needed() and NOTICE_ACCEPTED >= STARTUP_CHECK_NOTICE_VERSION` — 다른 `*_allowed` 와 같은 꼴(웹 데이터는 안 본다 — 오픈API 만 쓴다). `NOTICE_VERSION` 15 · **`NOTICE_COLLECT_ONLY_FROM` 8 → 15**(U6 — 수집을 끈 2~14 동의자에게도 다시 묻는다 · `config.py:814~820` 의 `notice_update_pending` 은 그대로 · `test_ui_smoke` 9435·9495 의 `== 8` 단언을 15 로 고치고 "수집 끈 14 동의자도 `notice_update_pending()` 참" 을 더한다) |
+| `store.my_account(conn)` (새) | `{ouid, nickname} \| None` — `trade_state.my_ouid` 가 있고 · `accounts` 에 그 줄이 있고 · 저장된 감독모드 경기가 1판 이상일 때(J5: 키 지문 안 봄) |
+| `MainWindow.open_startup(only_mine=False)` (새) | 켤 때 무엇을 열지 **한 곳**에서 정한다: ⓪ 창이 안 보이거나 최소화면 `_startup_after_restore = True` 로 미루고 끝(`changeEvent` 가 `_notice_after_restore` 와 같은 자리에서 다시 부른다 — 최소화로 켠 exe · `tray.show_inactive`) ① 이미 한 번 했거나(`_startup_done`) 화면에 계정이 있거나(`_ouid`) **로더가 돌고 있으면**(`_loader.isRunning()` — 검색 중에 [정보]에서 동의해도 그 검색을 덮어쓰지 않는다 · 3회차 M2) 아무것도 안 함 ② 내 계정이 있고 `startup_check_allowed()` 면 `_startup_done = True` · `_open_saved(ouid, nick, check=not game_paused())` ③ `only_mine` 이면 끝 ④ `OPEN_LAST_ACCOUNT` 면 `open_last_account()` ⑤ 아니면 `start_prefetch()`(지금과 같다). 내 계정이 있는데 동의 전이면 ⑤ 로 간다(U6 — 검색 화면 · 요청 0) |
+| `_open_saved(ouid, nick, check)` (새 — `open_last_account` 의 몸통을 옮긴다) | DB 로 그린다(`MatchLoader(offline_ouid=, auto=True)`) → **스레드가 끝난 뒤(`finished` — `finished_ok` 가 아니다 · 그 전엔 `isRunning` 이라 새 검색이 막힌다 · `open_last_account` 주석 11810~11811)** `check` 이고 **그때도 `not game_paused()` 일 때만** `_api_search(nick, quiet=True, startup=True)` — DB 읽기(1~2초) 사이에 게임이 켜졌으면 확인을 남겨 둔다(3회차 S2). **`auto` 는 앱이 스스로 띄운 로더에만 준다**(4회차 S1 — `_open_saved` 의 오프라인 로더 · `reload_after_release` · `_api_search(startup=True)` · 기본 False): 사용자가 누른 검색은 게임 중에도 지금처럼 `get_meta` 로 받는다(CLAUDE.md `gameguard` "사용자가 누른 것은 그대로" — 첫 설치·새 카드가 나온 주에 이름 대신 코드가 뜨지 않게). `auto` 인 로더에서 메타 진입점 셋(3회차 S1 — 아래 "메타 진입점" 표)은 메타를 읽는 그 순간에 `game_paused()` 가 참이면 `self._api.get_meta` 대신 `nexon_api.read_meta_on_disk(config.CACHE_DIR, name)`(날짜와 무관하게 읽는다 — 이미 있는 함수 · `nexon_api.py:36` · 없으면 빈 값 = 이름 대신 코드). `_meta_read` 는 주간 경계 전 파일을 None 으로 주므로(`nexon_api.py:401~402`) 그걸로는 막을 수 없다. `open_last_account` 는 `_last_account()` 로 계정을 고른 뒤 이 함수를 `check=True` 로 부른다(둘러보기 길 그대로) |
+| `_startup_auto` (새 창 속성 · 켤 때 길 표시) | `_open_saved` 가 켜고, 켤 때 확인이 **끝까지 돌아** 끝나거나(`_api_search` 로더의 `finished` — 게임 때문에 취소된 길은 안 끈다 · 아래 "게임 중") 사용자 검색의 **로더가 실제로 시작되면**(`_api_search(quiet=False)` 가 첫 줄 `isRunning`·`_held_by_clearing` 을 지나 `start()` 한 뒤 — 거기서 돌아가는 길에서 끄면 켤 때 확인이 아직 도는데 `web=False` 가 풀린다 · 3회차 M7) 끈다. 켜져 있는 동안: `_on_loaded` 는 **보던 메뉴로 되돌리지 않고** 대시보드(`_restore` 는 버림 — J8) · `_on_loaded` 끝의 `_on_fetch_team_colors()` 는 `web=False` 로(DB 캐시만 채우고 홈페이지 조회 0 — U5 · 2회차 S1) |
+| `_api_search(nick, quiet, startup=False)` | `startup=True` 면 `MatchLoader(…, rank=False)`(`_safe_rank` 를 건너뛰어 순위 요청 0 · `rank_ready` 없음 · `record_elo` 는 순위가 없어 적을 것이 없다 — J9) · 로더 `finished` 에 **`start_visible_api_loader` 는 잇는다** — `_api_search` 는 띄우기 전에 늘 `_yield_trades()`(11731)로 도는 거래·랭커 픽·특성을 멈추고(7589~7595), 다시 켜는 짝이 이 `finished` 연결(11735~11736)뿐이라 빼면 [추천]·[특성] 탭을 보던 중의 확인(게임 끔 · 다시 읽기 뒤 · 취소 뒤) 다음에 그 로더가 멈춘 채 남는다(5회차 S1). 보이는 화면만 켜고 `game_paused()` 를 보는 함수라 켤 때 대시보드에서는 0 그대로다. **`start_trades` 는 `_yield_trades` 가 실제로 거래 로더를 취소했을 때만** 잇는다(켤 때 새 거래 받기 0 — J7). 나머지는 검색과 같다 |
+| 게임 중(84 G3 — "앱이 스스로 하는 요청은 쉰다") — **진입 · 도중 · 끝 세 칸**(3회차 S2) | **진입**: 여는 순간 게임 중이면 `check=False` 로 그리기만 하고 `_startup_check_pending = (ouid, nick)` 를 남긴다 · 상태줄 "게임이 켜져 있어 새 경기 확인을 쉬었습니다". **DB 읽기 뒤**: `_api_search` 를 부르기 직전에 `game_paused()` 를 다시 보고, 켜졌으면 같은 처리. **확인 도중**: `on_game_changed(on=True)` 가 `win.pause_startup_check()`(새)를 부른다 — 도는 로더가 **`startup=True` 검색 로더일 때만**(DB 읽기 중인 오프라인 로더는 취소하지 않는다 — 메타 막기로 이미 요청 0 이고, `_run_offline` 은 취소되면 신호 없이 돌아가(513~514) 화면이 빈 검색 화면으로 남는다 · 4회차 M) `cancel()` 하고 `_startup_check_pending` 에 남긴다(취소된 길에서는 `_startup_auto` 를 안 끈다 · 이미 받은 상세는 `.cache/` 에 있어 다시 돌 때 그만큼 요청이 줄어든다 — 구현 때 테스트로 확인). **취소한 로더의 `finished`** 에서 `_set_busy(False)` 를 부르고 상태줄 "게임이 켜져 있어 새 경기 확인을 멈췄습니다" 를 남긴다 — `_api_search` 가 건 `_set_busy(True)`(11726)는 `finished_ok`·`failed` 길에서만 풀리는데 취소된 `_run_search` 는 신호 없이 돌아가(575·598·604·647·704) 검색 칸·버튼이 꺼진 채 굳는다(4회차 S2). 같은 `finished` 에서 게임이 이미 꺼졌으면 `resume_startup_check()` 를 한 번 부른다(취소 뒤에도 진행 중이던 상세 최대 `DETAIL_WORKERS` 건이 끝날 때까지 스레드가 살아 있어, 그 사이 게임이 꺼지면 `_api_search` 가 첫 줄 `isRunning` 에서 돌아가기 때문 · 4회차 M). 사용자가 직접 한 검색(`_startup_auto` 꺼짐)은 건드리지 않는다(지금 G3 규칙 그대로). **끝**: `on_game_changed(on=False)` 가 `win.resume_startup_check()` 를 부른다 |
+| `resume_startup_check()` (새) | 남은 확인이 있고 · 그 계정이 아직 화면에 있고(`_ouid`) · 그 사이 사용자가 검색을 안 했고 · **창이 보이고 최소화가 아니고 `_released` 가 아닐 때만**(2회차 M4) 한 번 `_api_search(nick, quiet=True, startup=True)`. **남은 확인은 `_api_search` 가 로더를 실제로 띄웠을 때만 지운다**(`_api_search` 가 띄웠는지 bool 을 돌려준다 — `tray.show_window` 에서는 `reload_after_release` 가 먼저 오프라인 로더를 띄워(`tray.py:367~368` · 15452~15464) 첫 줄 `isRunning`(11717)에서 돌아간다 · 3회차 M3). 조건이 안 맞거나 못 띄웠으면 남겨 두고, 다음 세 자리에서 한 번 더 부른다 — `tray.show_window` 끝 · **`reload_after_release` 로더의 `finished`**(스레드가 끝난 뒤 — `_on_loaded` 는 `finished_ok` 라 아직 `isRunning` 이다 · 15461~15464 · 4회차 S3) · 게임 때문에 취소한 로더의 `finished`(위 "게임 중"). 숨긴 채로는 안 돈다 |
+| `main`(17060) | `if OPEN_LAST_ACCOUNT … else …` 를 `win.open_startup()` 한 줄로. **안내 다시 묻기(`singleShot(0, …)`)보다 먼저 동기로 불리지만** ② 가 관문을 보므로 동의 전엔 ⑤ 로 간다(2회차 S2 ②) |
+| `ask_notice_update` | 끝에 `if ok: self.open_startup(only_mine=True)` — `only_mine` 이라 내 계정이 없는 사람은 미리 읽기를 다시 돌리지 않는다(`start_prefetch` 가 앞 미리 읽기를 `discard()` 없이 버리지 않게 · 3회차 M2) · 동의 직후 그 자리에서 내 계정을 연다(U6). 취소하면 안 연다(옛 동의 그대로 · 다음 실행에 다시 묻는다). 최소화로 미뤄진 다시 묻기는 복원 뒤 이 길로 와서 같다 · [정보] 수집 켜기 · 빈 탭 [안내 보고 동의] 에서 동의해도 같은 줄을 탄다(① 이 이미 연 계정을 지킨다) |
+| `tray.show_window` | `--tray` 로 숨겨 켠 창을 보일 때 `show_initial()`(또는 `show`) 뒤 **`_startup_done` 이 거짓이면** `open_startup(only_mine=True)` — `_shown_once` 로 판정하지 않는다(`tray.show_inactive`(386~391)가 `_shown_once = True` 로 만들어 그 길에선 영영 안 불렸다 · 2회차 M5). 이어서 `resume_startup_check()` · 내 계정이 없으면 지금과 같다(미리 읽기를 새로 돌리지 않는다) |
+| `tray.show_inactive`(386~391) | 끝에 `open_startup(only_mine=True)` — 최소화 상태라 ⓪ 이 `_startup_after_restore` 로 미루고, 작업 표시줄에서 복원하면 `changeEvent` 가 다시 부른다. 지금은 이 길에서 아무도 `open_startup` 을 안 불러 "복원 → 1번" 이 성립하지 않았다(3회차 M4) |
+| `start_prefetch` · `reload_after_release` | 그대로(최근 검색 1번 · 요청 0) — 내 계정을 열었으면 `_ouid` 가 있어 `reload_after_release` 는 미리 읽기 갈래를 안 탄다 |
+| `_refresh_recent` | 칩 맨 앞에 내 계정("내 계정 · 닉네임") · 나머지는 최근 순에서 내 계정을 뺀 것 · **칩 수는 그대로 `RECENT_SEARCH_LIMIT`**(폭 예산을 안 늘린다) · 위쪽 이름 칸 목록도 내 계정이 맨 앞 |
+| `_set_my_account` | 끝에 `_refresh_recent()` — 띠에서 정하거나 바꾸면 칩이 바로 따라온다. 키가 바뀌어 `my_ouid` 가 비워지는 것은 키를 저장할 때가 아니라 나중에 도는 `TradeLoader` 안의 `tradecollect.collect` → `store.reset_trades_for_key`(`tradecollect.py:67~69` · `store.py:1206`)이고, 화면에는 `on_wiped` → `_on_trades_wiped`(7597)로 온다 → **`_on_trades_wiped` 끝에 `_refresh_recent()`** 한 줄(3회차 M5 · `test_ui_smoke` — 가짜 거래 받기가 wiped 를 내면 칩에서 "내 계정" 이 사라진다) |
+| 이용 안내(`notice.py`) | "내 계정을 정해 두면 프로그램을 켤 때 그 계정의 새 경기를 넥슨 오픈API 에 확인합니다(넥슨 홈페이지에는 묻지 않습니다)" 한 문장 + `NOTICE_VERSION` 15 + `CHANGES` 한 덩이(문구 골든이 짝을 지킨다) — 사용자가 누르지 않은 요청이 새로 생기는 것이라 실질 변경이다 · 실사용자가 아직 없어 다시 동의 부담은 없다(11-10) |
+
+요청 양(J7): 오픈API 의 닉네임→ouid 1 · 기본 정보 1 · 경기 목록(새 경기가 나올 때까지 쪽) · **지난번 뒤 새 경기 상세**(상한은 검색과 같은 로더 상한) · 최고 등급 1 · 메타(주간 캐시가 낡았을 때만). **홈페이지 0 · 거래·랭커 픽·특성 0.** 켤 때마다 한 번이고 트레이에 숨긴 채·게임 중·동의 전엔 0.
+실패(네트워크·429·닉네임 바뀜)는 `quiet=True` 라 창 없이 상태줄에만, 키 거절만 키 창(지금 `_api_search` 그대로 · `_on_quota_hit` 는 조용히).
+
+#### 켤 때 길이 부르는 것 (2회차 S1 — `_on_loaded`·`_api_search` 가 끝에서 부르는 것 전수 · 11-14 코드 읽기 · 기준 14)
+
+정의: `_open_saved` → `MatchLoader` → `_on_loaded`(12030~12082) 와 `_api_search`(11714~11745)가 부르거나 신호로 잇는 것 전부 + 되돌린 메뉴가 그릴 때 띄우는 로더(`MatchLoader`·`Worker` 를 만드는 자리 grep — 위 표 J8 의 근거).
+
+| 부르는 것 | 요청 | 켤 때 길(`_startup_auto`) |
+|---|---|---|
+| `MatchLoader._run_offline` → `load_saved` | 0 (DB) | 그대로 |
+| `_run_offline` → 메타 진입점 셋(아래 표) → `get_meta` | 주간 캐시가 낡으면 정적 메타 파일 1~4(spid · spposition · seasonid · division) | `auto` 로더는 그 순간 `game_paused()` 면 `read_meta_on_disk` — 게임 중 0 · 사용자 검색(`auto=False`)은 지금 그대로 |
+| `_api_search` 로더 → `get_ouid`·`get_user_basic`·목록·상세·`maxdivision` | 오픈API | 켤 때 확인 그 자체 |
+| `_api_search` 로더 → `_safe_rank` → `ranker.fetch_manager_rank` | 홈페이지 1 | **안 부름**(`rank=False`) |
+| `_api_search` 로더 `finished` → `start_trades` · `start_visible_api_loader` | 오픈API(거래 하루 한 번 · 랭커 픽·특성) | `start_visible_api_loader` 는 **잇는다**(보이는 화면만 · 켤 때 대시보드면 0) · `start_trades` 는 `_yield_trades` 가 취소했을 때만(5회차 S1) |
+| `_on_loaded` → `_load_meta_from_disk` · `_rebuild_season_combo` · `_apply_season(render=False)` · `_render_all` · `_render_ranker` | 0 | 그대로 |
+| `_on_loaded` → `_load_elo` → `EloLoader` | 0 (fifa.db·rank.db 읽기) | 그대로 |
+| `_on_loaded` → `_go_page(_restore_view(…))` → `_on_view_opened` → 가계부 `start_trades`·`_maybe_start_prices` · 랭커 픽·특성 `start_visible_api_loader` · 축구장 화면 `_start_card_info` | 오픈API·홈페이지 | **안 탐** — 대시보드로 연다(J8 · 대시보드는 로더를 안 만든다) |
+| `_on_loaded` → `_on_fetch_team_colors` → `TeamColorLoader`·`RankListLoader` | 홈페이지(상대마다 1 · 많으면 목록 500쪽) | **`web=False`** — DB 캐시만(`_load_cached_team_colors`) |
+| `_render_all` 이 그리는 그림 → `IconLoader`·`ImageLoader` | CDN 정적 파일(캐시에 없는 것만) | 그대로(J10) |
+| 창을 만들 때 `_load_season_cache` → `SeasonLoader` | 홈페이지(시즌표가 낡았을 때) | 108 이 바꾸지 않는다 — 지금도 켤 때 돈다(검색 화면이어도) |
+
+#### 메타 진입점 (3회차 S1 — `MatchLoader` 안에서 `get_meta(` 를 부르는 자리 전수 · `grep -n "get_meta(" app_main.py` · 11-14 · 기준 ⑩·14)
+
+| 자리 | 부르는 메타 | `auto` 로더 · 게임 중일 때 |
+|---|---|---|
+| `_safe_meta`(799 · 802) | spid · spposition | `read_meta_on_disk` → 같은 dict 꼴로 |
+| `_safe_meta_raw`(807 · 811) | seasonid | ← |
+| `_current_grade`(815 · 827 — **`_safe_meta` 를 안 거치고 직접**) | division | ← (없으면 빈 목록 — 지금 `NexonAPIError` 갈래와 같은 결과) |
+
+세 자리를 도우미 하나(`MatchLoader._meta(name)` — `self._auto and game_paused()` 면 디스크 · 아니면 지금처럼 `get_meta` · 검색 길(`_run_search` 555~557 · `_current_grade` 670)도 같은 도우미를 지나지만 사용자 검색은 `auto=False` 라 그대로 · 4회차 S1)로 모으고 `test_rules` 에 "`MatchLoader` 안에서 `get_meta(` 는 `_meta` 에서만" 을 더한다(위반을 심은 가짜 소스를 잡는지 같이). 창 쪽 `_load_meta_from_disk`(12338)는 이미 `read_meta_on_disk` 라 요청 0.
+
+`_startup_auto` 가 꺼진 뒤(사용자가 검색·시즌 바꿈 `_apply_season(render=True)` → `_on_fetch_team_colors()`)는 지금과 같다 — 사용자가 누른 것이라 홈페이지 조회가 돈다.
+
+### 진입점 표 (⑩)
+
+| 같은 일 | 진입점 | 거쳐야 할 것 | 테스트 |
+|---|---|---|---|
+| 승·무·패 판정 | `parse_match` · `stats.win_divisions` · `stats.division_stats` · `records._games` · `squad_timeline._Games.__init__` · `stats.formation_stats` · `stats.opponent_cards` | `models.result_of` | `test_parsing.test_forfeit_loss_counts_everywhere_108` — 픽스처 0004(F1 짝)로 일곱 길의 패 수가 같다(먼저 지금 코드에서 `formation_stats`·`opponent_cards` 의 패 수가 하나 적은지 단언 — 보호가 없을 때의 값) · 표 밖에서 원문으로 세는 새 자리는 `test_rules`(`RESULT_PATHS`)가 잡는다 |
+| 평균·짝 비교에서 빈 판 빼기 | `Stats` · `OpponentStat` · `PeriodStat` · `DivisionStat` · A 표의 "빈" 13개 | `MatchSummary.blank` · `models.is_blank` | `test_parsing.test_blank_games_out_of_averages_108` — 빈 판(내 쪽만 · 상대만 · 양쪽) 셋을 섞은 묶음의 평균 == 뺀 묶음의 평균 · 승무패 수와 득실 합계는 섞은 쪽이 크다 · "빈" 13개마다 같은 단언(함수 이름으로 도는 표 테스트). **함수마다 "건너뛰기를 빼면 값이 달라지는" 픽스처를 먼저 단언한다**(2회차 M6) — 특히 `shot_summary` 는 종료 유형 0(정상)인데 상대만 빈 판, `possession_stats` 는 상대만 비고 내 점유율 > 0 인 판(몰수 꼴 판은 이미 걸러져 `is_blank` 를 빼도 통과한다) |
+| 구단주 분포와 같은 기준 | `ownerdist` 받기(462) · `habits.dist_basis` · `pos_diff` | `side_totals(keep_blank=True)` | `test_ownerdist` — 빈 판을 섞은 가짜 경기로 받은 요약 == 108 전 골든 값(분포 값이 안 바뀐다) · `dist_basis` 의 내 값도 같은 판 수 |
+| 경기 → 시즌 | `_season_groups` · `_in_selected_season` · `_season_h2h_text` · `_compare_window` | `SeasonMap.of` · `.has` | `test_parsing` 시즌 절(위 M9 표의 칸마다) + `test_ui_smoke`(시즌표 없이 콤보에 시즌 둘 · 새 경기 한 판 뒤에도 고른 시즌이 유지 · 상대 계정 비교에 시즌 필터) |
+| 켤 때 여는 계정 | `main`(창 보임) · `main`(최소화로 켬 → 복원 `changeEvent`) · `tray.show_window`(숨겨 켠 창을 보일 때 · `_startup_done` 기준) · `tray.show_inactive`(최소화 → 복원) · `ask_notice_update`(동의 직후) · 둘러보기(`open_last_account`) · `reload_after_release`(안 연다 · 끝난 뒤 `resume_startup_check`) · `on_game_changed(on=False)`·`tray.show_window` 끝(미룬 확인 `resume_startup_check`) · `on_game_changed(on=True)`(도는 켤 때 확인을 멈춤 `pause_startup_check`) | `open_startup` → 관문 `startup_check_allowed` → `_open_saved` → (`game_paused()` 다시) → `_api_search(startup=True)` | `test_ui_smoke.test_startup_opens_my_account_108` — **`main` 길로**(가짜 API · **웹 데이터를 켠 채**로 `ranker.web_get` 과 가짜 세션 호출을 같이 센다 — 2회차 S1): 내 계정 있음 + 동의 15 → 그 계정이 대시보드로 열리고 오픈API 검색 1번 · **홈페이지 0**(캐시에 없는 상대를 일부러 넣어 둔다 — 보호가 없으면 `TeamColorLoader` 가 떴을 것을 먼저 단언) · 거래·랭커 픽 로더 0 · 저장된 보기가 [가계부] 여도 대시보드 / 동의 14(기본값 아닌 값) → 검색 화면 + 요청 0, 다시 묻기에서 동의 → 그 자리에서 열림, 취소 → 0 / 내 계정 없음 → 검색 화면 + 요청 0 / 게임 중 → 그려지고 요청 0(메타 캐시 넷을 **주간 경계 전 시각으로** 낡게 둔다 — 보호가 없으면 `_current_grade` 가 division 을 요청했을 것을 먼저 단언 · 3회차 S1) / DB 읽기 중 게임 켜짐 → 새 경기 확인 0 / **확인 도중 게임 켜짐 → 취소 뒤 새로 시작하는 상세 요청 0**(이미 슬롯에 든 요청 최대 `DETAIL_WORKERS` 건과 그 재시도는 끝까지 간다 — `_safe_detail` 775~781 · 4회차 M) **· `_startup_auto` 그대로 · 검색 버튼·이름 칸이 켜져 있고 사용자 검색 1번이 그대로 돈다(4회차 S2) · 게임 끔 → 다시 1번(앞에서 받은 상세는 다시 안 받는다) · 취소한 로더가 끝나기 전에 게임을 꺼도 1번** · DB 읽기 중 게임 켜짐 → 오프라인 로더는 끝까지 그려진다 · 사용자가 한 검색은 게임이 켜져도 그대로이고 낡은 메타도 `get_meta` 로 받는다(4회차 S1 — 게임 중 사용자 검색이 메타 요청을 내는지 단언)(3회차 S2), 게임 끔 → 1번, 게임 중 숨겼다가 끄면 0 · 다시 보이면 1번 / 최소화로 켬 → 0 · 복원 → 1번 · `test_tray` — `--tray` 로 켜면 요청 0, 처음 열 때 1번, 두 번째 열 때 0, `show_inactive` 로 띄운 뒤 복원 → 1번 · 메모리를 내려놓은 뒤 게임이 꺼지고 창을 다시 보이면 → 다시 읽기가 끝난 뒤 1번(3회차 M3 · **실제 QThread 로** — start 를 run 으로 바꿔 끼우면 `finished_ok` 때 `isRunning` 이 늘 거짓이라 4회차 S3 를 못 잡는다) · 셀 것은 오픈API·홈페이지·정적 메타 파일이고 CDN 그림(등급 배지 `fetch_division_icon` 포함)은 J10 대로 셈 밖(4회차 M) · 검색이 도는 중에 [정보]에서 동의 → 그 검색 그대로(3회차 M2) · 확인 도중 [추천] 탭을 보다가 게임 끔 → 확인이 끝난 뒤 랭커 픽 1번(5회차 S1 — 보호가 없으면 멈춘 채 남는 것을 먼저 단언) · `test_demo` "요청 0" 그대로 |
+
+### 조각 (3개 · 검토 기준 13)
+
+| 조각 | 내용 | 난이도 | 모델 |
+|---|---|---|---|
+| ① **끝(11-14)** | A 전부(`test_rules` `RESULT_PATHS` 포함) + 골든 갱신(`test_parsing` · `test_analysis` · `test_check_api` · `test_records` · `test_timeline` · `test_habits` · `tools/check_t0.py` 는 `--write` 전에 바뀐 날을 눈으로 · **`test_ownerdist`·`test_predict` 골든은 안 바뀌어야 한다**) + 산출 방법·`FORFEIT_TIP` | 중간 — 숫자가 앱 전체에서 바뀐다 · 닿는 함수 18개(세 5 + 빈 13) | Sonnet + diff 리뷰 |
+| ② **끝(11-14)** | B 전부 | 중간 — 시즌 필터가 닿는 화면이 많다 | Sonnet + diff 리뷰 |
+| ③ **구현 끝(11-14 · 실화면 남음)** | C(관문 `STARTUP_CHECK_NOTICE_VERSION` · 이용 안내 한 줄 · `NOTICE_VERSION` 15 · `NOTICE_COLLECT_ONLY_FROM` 15) + `CHANGELOG` 3.10.1 절(미공개) + CLAUDE.md 표(`models`·`seasons` 줄 · "웹 데이터" 절 옆에 켤 때 요청 한 줄) + exe 빌드·2번 모니터 실화면 | 중간 — 켤 때 길이 여섯(창 · 최소화 · 트레이 · 동의 직후 · 둘러보기 · 게임 중)이고 홈페이지 갈래를 끄는 표시(`_startup_auto`)가 세 자리에 닿는다 | Sonnet + Opus diff 리뷰 |
+
+조각마다: 테스트 → 변이(아래) → 문서 → 커밋·푸시. 공개는 109 끝(3.10.1).
+
+### ③ 환경 행렬
+
+| 칸 | A | B | C |
+|---|---|---|---|
+| 소스 · offscreen 테스트 · CI | 구현 때 | 구현 때 | 구현 때 |
+| exe · 실제 윈도우(100%/150%) | 조각 ③ 에서 — 경기 목록의 "패" 글자 · 시즌 콤보 폭(가장 긴 항목) · 칩 줄이 1280 에서 안 잘리는지 | ← | ← |
+| 새 설치 | 해당 없음(같은 식) | 시즌표 없이 시작 → `DataSeason` 길(스모크) | 내 계정 없음 → 지금과 같음 · 켤 때 요청 0(스모크) |
+| 업그레이드 | 저장 형식 그대로 · 숫자만 바뀜 → CHANGELOG | 저장된 `view/season` 키는 시즌표가 아는 시즌이면 그대로 맞는다 | 이미 [가계부] 에서 내 계정을 정해 둔 사람(동의 2~14)은 올린 뒤 첫 실행에 **검색 화면 + 다시 묻는 안내**(수집을 꺼 둔 사람도 — `NOTICE_COLLECT_ONLY_FROM` 15) → 동의하면 그 자리에서 열린다 · 취소하면 그 실행은 지금과 같다(관문 `startup_check_allowed` — 순서가 아니라 값으로 막는다 · 2회차 S2) |
+| 옛 버전으로 되돌리기 | 새 표·열이 없어 그대로 열린다(옛 숫자) | ← | ← |
+| 남의 PC(CP949) | 해당 없음 — 파일·자식 프로세스·인코딩을 안 건드린다 | ← | ← |
+| 트레이로 시작(`--tray`) · 최소화로 시작 · 게임 중 | 해당 없음 | 해당 없음 | 숨긴 채·최소화로는 요청 0 · 처음 보일 때 한 번(`test_tray` · `show_inactive` 길 포함) · 게임 중이면 메타까지 캐시로 그리기만 하고 게임이 꺼진 뒤 창이 보일 때 한 번 · 확인 도중 게임이 켜지면 취소하고 꺼진 뒤 다시(`test_ui_smoke`) |
+| 홈페이지 데이터 켬/끔 | 해당 없음 | J3 | 켤 때 길은 어느 쪽이든 홈페이지 0(U5) — 켠 채로 재는 것이 테스트의 기준(끈 채로 재면 늘 0 이라 공허하다) |
+| 둘러보기(`--demo`) | 지어낸 경기는 종료 유형 0 뿐이고 선수가 다 있다 → 숫자 그대로 · 요청 0(`test_demo`) | 2판의 "시즌표 없음" 은 틀렸다(2회차 M2) — `demodata.py:309` 가 시즌표 한 줄(`Season(no=990, "시즌 1", end=mid)`)을 만들고 326 이 저장해, 지금 300판은 "시즌 1" 과 "현재 시즌" 둘로 갈린다. 번호가 하나면 규칙 1·5 로 한 묶음이 된다 → **`demodata` 가 `mid` 앞 경기에 `seasonId` 202610, 뒤 경기에 202611 을 준다**(지금과 같은 두 묶음 · 난수는 안 건드린다 — 결과·점수 골든 그대로) · `test_demo` 에 "콤보 항목 = 시즌 1 · 현재 시즌" 을 단언 | `trade_state` 가 비어 지금과 같음(`open_last_account` 길 그대로 · 실제 키가 env 에 있어도 요청 0) |
+
+### ⑥ 실패·복구
+
+| 무엇이 | 결과 | 알아채는 법 | 복구 |
+|---|---|---|---|
+| 넥슨이 종료 유형 4 의 뜻을 바꾼다 | 엉뚱한 판이 패로 | `check_api` 에 한 줄(최근 경기의 종료 유형 짝 분포 — 4+1 의 결과 문자열이 "오류"/"승" 이 아니면 `[FAIL]`) | `forfeit_loss` 한 곳 |
+| `player` 가 빈 정상 경기가 온다(응답 누락) | 그 판이 평균에서 빠진다(승무패는 센다) | 평균 분모가 판 수보다 작다 — 화면 표본 글 | 다시 받으면 채워진다(같은 원문 길) |
+| "빈" 건너뛰기를 한 함수에서 빠뜨린다 | 그 화면만 옛 기준(0 이 섞인 평균) — 새로 틀리는 것은 없다(J2 ⓑ) | `test_rules` `RESULT_PATHS` 의 `content` 검사 + 함수마다 도는 표 테스트 | 한 줄 |
+| 분포 길에 `keep_blank=True` 를 빠뜨린다 | 내 값만 새 기준 → 백분위가 F16 만큼 어긋난다(예외 없이 조용히) | `test_ownerdist` 골든 · `dist_basis` 판 수 단언 | 한 줄 |
+| `seasonId` 가 없거나 정수가 아니다 | 그 경기만 시각 길(규칙 4) | 테스트(None · 글자) | — |
+| 번호 묶음 둘이 같은 시즌표 줄에 짝지어진다 | 한 시즌으로 합쳐 보인다(지금의 시각 길과 같은 결과) | 테스트 | — |
+| 내 계정 닉네임이 바뀌었다 | DB 로는 그려지고 조용한 새 경기 확인만 실패(상태줄 · 켤 때마다 되풀이) | 상태 줄 | 직접 검색하면 `accounts` 가 고쳐진다 |
+| 켤 때 확인이 한도(429)·키 거절에 걸린다 | 한도는 조용히 상태줄(`_on_quota_hit` 의 `_quiet_search` 갈래) · 키 거절은 키 창(사용자가 할 일이 있다 — 지금 `_api_search(quiet=True)` 주석 그대로) | 상태줄·키 창 | 키를 바꾸면 `my_ouid` 가 비워져 다음부터 안 연다(J5) |
+| 켤 때 그리는 중에 사용자가 다른 닉네임을 검색한다 | `_api_search` 첫 줄이 도는 로더를 보고 돌아간다 — 지금 `open_last_account` 와 같다(둘러보기에서 이미 타는 길) | 스모크 | 그리기가 끝난 뒤 다시 검색 |
+| 내 계정 줄을 목록에서 지웠다 | `my_account` None → 지금과 같음(검색 화면) · 칩에도 없다 | 스모크 | — |
+| 새 자동 웹 읽기가 `_on_loaded` 뒤에 붙는다(나중 단계) | 켤 때 길에서 홈페이지 요청이 다시 생긴다(조용히) | `test_startup_opens_my_account_108` 의 웹 호출 0 단언(웹 데이터 켠 채) | 그 자리에 `_startup_auto` 검사 한 줄 |
+| `_startup_auto` 가 안 꺼진다(확인 실패 길) | 그 실행 내내 팀컬러를 캐시로만 | 실패 길(`failed`·키 거절·한도)에서도 `finished` 가 오는지 스모크 | `finished` 에서 끈다(실패해도 스레드는 끝난다) · 게임 때문에 취소한 길만 켜 둔다 — 사용자가 검색하면 그 로더가 시작될 때 꺼진다 |
+| 게임이 켜졌다 꺼졌다를 되풀이한다 | 켤 때 확인이 매번 취소되고 다시 돈다 | 상태줄 · `GameWatch` 확인 간격 | 다시 돌 때 받은 상세는 디스크 캐시라 요청이 쌓이지 않는다 · 남은 확인은 하나뿐(덮어쓴다) |
+
+### ⑦ 자원 예산
+
+| 항목 | 상한 | 재는 법 |
+|---|---|---|
+| `SeasonMap` 세우기(1만 경기) | 20ms — 한 번 훑고 번호마다 정렬 · **조각 ② 실측(11-14 · fifa.db 읽기 전용 · 경기 많은 세 계정): 14,962경기 11.1ms · 5,513경기 5.0ms · 5,363경기 5.4ms. 시즌표 91줄과 함께면 세 계정 모두 `group_by_season` 과 묶음이 같습니다(F8 그대로 · 번호 없는 경기 0)** | `test_parsing` 에 시간 단언 없이 |
+| `parse_match` 추가 비용 | 경기당 dict 조회 5번 안쪽 — 1만 경기 읽기(약 2초)의 1% 안 | 조각 ① 에서 앞뒤 한 번 |
+| "빈" 13개의 `is_blank` | 경기당 `player` 두 번 보기 — 재지 않아도 되는 크기 | — |
+| 네트워크 — A·B | 0 | `test_demo` "요청 0" |
+| 네트워크 — C | 켤 때 **오픈API 새 경기 확인 한 번**(J7 — 닉네임·기본 정보·최고 등급 각 1 + 목록 쪽 + 새 경기 상세 + 낡은 메타) · **홈페이지 0 · 거래·랭커 픽·특성 0** · 내 계정을 정하고 15 에 동의한 사람만 · 한도·429 처리는 검색과 같은 로더 그대로(새 계수 없음) · 숨긴 채·최소화·게임 중·동의 전 0 | `test_ui_smoke`·`test_tray` 의 요청 수 단언(웹 데이터 켠 채) · 조각 ③ 실화면에서 켤 때 요청 수를 한 번 적는다 |
+| 켜는 시간 — C | 내 계정 1만 경기면 DB 읽기 약 1~2초(지금 검색했을 때와 같다 · 작업 스레드라 창은 먼저 뜬다) | 조각 ③ 실화면에서 창이 뜬 시각 · 그려진 시각 |
+| 디스크 | 0 | 스키마 대조 |
+
+### ⑧ 기능 상호작용
+
+| 짝 | 볼 것 |
+|---|---|
+| A × 구단주 분포·분포 대비 | 칩은 승률을 안 쓴다(F18). 분포 판정·[분포 대비] 표는 `keep_blank=True` 길이라 **값이 안 바뀐다** — 대신 같은 지표의 "같은 경기 상대" 판정(분포를 못 쓸 때)과 문장은 새 기준이라, 분포 표의 내 값과 흐름 분석 문장의 내 값이 F16 만큼 다를 수 있다(둘이 한 화면에 나란히 나오지는 않는다 — 조각 ① 에서 실DB 로 큰 계정 하나를 적는다) |
+| A × 구단주 비교(`_per_match`·`team_profile`) | 상대 계정 경기에도 같은 `is_blank` — 양쪽 계정이 같은 기준 |
+| A × 선수 지표 | 팀 승률 기준이 `no_squad` 를 뺀 판(M4) — F1 판은 패로 세지만 선수가 없어 기준에서 빠진다 → 선수 승률 대 팀 승률이 같은 판 |
+| A × 51 측정 | 측정 도구는 원문을 직접 읽는다(F10) — 판정에 영향 없음 · `TOOL_FILES` 해시 그대로(조각마다 `measure_cards --status` 의 도구 해시 줄 확인) |
+| A × 예측·예측 되짚기 | 예측은 ELO 점수·경기 날짜만 쓴다 — 골든(`test_predict.GOLDEN_VALUE`) 그대로여야 |
+| A × 업적 | 연승 업적이 줄 수 있다(몰수패가 끊는다) · 점수 업적(무실점 연속 · 최다 점수 차)은 빈 판을 건너뛰어 바뀔 수 있다 — 이미 본 업적이 사라질 수 있음을 CHANGELOG 에 · 몰수 플래그는 그대로(J6) |
+| B × 저장된 시즌 선택 | 위 `_season_key` 줄 |
+| B × A | 시즌별 성적 표의 승무패 합 == 전체(`summarize`) — 테스트 |
+| C × 트레이 시작(`--tray`) · 둘러보기 | 진입점 표의 행 — 트레이는 처음 열 때 `open_startup(only_mine=True)` · 둘러보기는 `open_last_account` 그대로 |
+| C × 게임 중 멈춤(84 G3) | 새 자동 요청 경로다 → CLAUDE.md `gameguard` 줄의 규칙대로 `pause`(`pause_startup_check` — 도는 확인을 취소)·`resume`(`resume_startup_check`)을 둔다. 게임 상태는 여는 순간 · 메타를 읽는 순간 · 새 경기 확인 직전 · 도는 동안 넷 다 본다(3회차 S2) |
+| C × 켤 때 도는 다른 것(업데이트 확인 · 캐시 정리 · 색인 백필 · 랭커 픽 정리 · 시즌표 `SeasonLoader` · 예약 셋) | 켤 때 확인이 새로 더하는 것은 오픈API 새 경기 확인뿐이다 — 나머지는 지금도 켤 때 도는 것이고 108 이 안 바꾼다(시즌표·예약 셋은 각자의 관문 그대로). 켤 때 확인은 `start_trades`·`start_visible_api_loader` 를 잇지 않는다("켤 때 길이 부르는 것") |
+| C × 팀컬러 화면 | 켤 때 연 계정은 캐시에 있는 팀컬러만 보인다 — 새 상대 칸은 비어 있다가 사용자가 검색·[새 경기 확인]·시즌을 바꾸면 채워진다(U5 · 상태 글은 지금 쓰는 것 그대로 · 새 설명 글 없음) |
+| C × 보던 메뉴 복원 | 내 계정을 켤 때 열면 대시보드다(J8) — 내 계정을 안 정한 사람은 첫 검색에서 지금처럼 보던 메뉴로 |
+| C × 저장 공간 지우기 · 메모리 내려놓기 | `_api_search` 가 `_held_by_clearing` 을 본다(조용히 돌아감) · 내려놓았다 다시 열 때는 `reload_after_release`(요청 0) — 켤 때 확인은 프로세스에 한 번뿐 |
+| C × 이용 안내 다시 묻기 | 동의 전에는 요청하지 않는다 — 관문 값(`startup_check_allowed`)으로 막고, 동의 직후 `ask_notice_update` 가 연다(순서에 기대지 않는다 · 환경 행렬 "업그레이드") |
+| A 안 — 합계 대 시간대(2회차 M8) | [전술·경기 결과] 의 전후반 득실(`result_breakdown.periods` · "그대로" — 합계)은 빈 판의 골을 넣고, [승부처] 의 시간대·선제 실점(`goal_minute_buckets`·`clutch_summary` · "빈")은 뺀다 → 두 화면의 골 합이 빈 판만큼 다르다. U4(합계는 그대로)대로라 맞는 차이다 — `test_parsing` 에 그 차이 == 빈 판의 골 수를 단언 |
+| 108 × 109(L1 경기 표시·통계에서 빼기) | 109 가 같은 자리(`MatchSummary` 를 만드는 곳)에 거르기를 더한다 — `blank` 와 이름이 안 겹치게 |
+
+### ⑤ 사전 부검 · ⑨ 사용자 제약
+
+- "승률이 왜 내려갔나" → CHANGELOG · 산출 방법 · `FORFEIT_TIP` 에 같은 문장. 화면에 "※" 설명 글은 안 더한다(2026-11-02 사용자).
+- "켤 때 왜 다른 계정이 뜨나" → 내 계정을 정한 사람만 바뀐다 · 칩 글자 "내 계정" 으로 알 수 있다.
+- "평균 득점이 왜 바뀌었나" → 산출 방법에 한 문장("한쪽 기록이 비어 있는 경기는 경기당 평균에 넣지 않습니다") · CHANGELOG 에 같은 문장.
+- "켜기만 했는데 넥슨에 요청이 나갔다" → 이용 안내 한 줄(오픈API 만 · 홈페이지 0) · 내 계정을 지우면([가계부] 띠) 멈춘다 — 끄는 설정을 따로 두지 않는다(U2: 새 설정 없음).
+- "켤 때 보던 메뉴로 안 간다" → 내 계정을 정한 사람만 대시보드(J8) — 사용자 보고 때 알린다.
+- "새 상대의 팀컬러가 비어 있다" → 검색·[새 경기 확인]을 누르면 채운다(U5).
+- 실화면 확인은 2번 모니터 · 초점 뺏기 없음 · 화면 글은 `docs/STYLE.md`(합쇼체).
+
+### 재지 않은 것
+
+- F5·F6 은 이 PC 의 계정 13개 — 몰수패가 많은 사람(일부러 나가는 사람)은 승률이 더 크게 내려갈 수 있다(상한은 그 사람의 F1 비율).
+- 종료 유형 4 의 뜻은 문서에 없다(실측 짝으로만 안다 — F1·F3).
+- `seasonId` 가 해를 넘길 때 꼴(202701 일지)은 아직 본 적이 없다 — 규칙 1 은 값의 꼴에 안 기대고, `DataSeason.label` 만 기댄다.
+- 실제 윈도우 칸(조각 ③).
+- 구단주 분포를 새 기준(빈 판 뺌)으로 옮기는 것 — 바퀴마다 기준을 적어야 해 새 열이 든다. 108 은 분포 길을 옛 기준에 묶어 둔다(J2). 후보로 남긴다.
+- 죽은 몰수 플래그(F19 · J6)를 살렸을 때 업적·FC 가 얼마나 움직이는지.
+- F14 의 "남은 쪽 기록은 진짜" 는 평균값으로 본 것이다 — 판마다 경기가 몇 분에 끝났는지는 원문에 없다.
+- ✅ 켤 때 확인의 실제 요청 수(11-14 실측 · 내 계정 14,962경기 사본 · 웹 데이터 켠 채 · 예약 수집 셋은 끈 사본): 오픈API 60(id 1 · basic 1 · maxdivision 1 · 경기 목록 2쪽 · 새 경기 상세 55) · **홈페이지 0 · CDN 0** · 메타 0(캐시가 새것) · GitHub 1(새 버전 확인 — 108 밖). 창이 뜬 때 5.4초 · 저장 기록으로 그린 때 9.6초 · 새 경기 확인 끝 13.2초(12.1초에 마지막 요청) · 대시보드 · 초점 안 뺏음.
+- PySide6 `findData` 가 `DataSeason.__eq__` 를 쓰는지 — `test_ui_smoke` 에서 실행으로(B 표 M8 줄).
+- CDN 그림 요청 수(J10 — 지금 다시 열기와 같은 길이라 새로 재지 않는다).
+
+### 1회차 검토 (2026-11-13 · Fable 5.2 1명 · 1판 `35fa9ee` · 근거 묶음 줌 · **2판에 반영** — S1 → C 절 · M1·M2·M4·M6·M12 → A 표 · M3·M5 → J1·U4 · M7~M11 → B 표)
+
+22.2만 토큰 · 도구 34번 · 5분 42초 · **[상] 1 · [중] 12**. 견줄 기준(Opus 1회차): 32단계 A [상]4·[중]6 16.4만 / B [상]5·[중]6 14.5만 — 계획 크기가 달라 회차 수로 견준다.
+
+| # | 급 | 요지 | 근거 | 고칠 방향 |
+|---|---|---|---|---|
+| S1 | 상 | **C 의 전제가 틀렸다 — 배포 앱은 켤 때 계정을 열지 않는다**(F11 이 틀렸다 · 내가 `config.py:1007` 로 다시 확인) | `config.OPEN_LAST_ACCOUNT = False`(2026-10-04 사용자 결정 — 켜자마자 남의 닉네임이 떠 있는 게 하드코딩처럼 보였다) · `app_main.py:17060` 은 꺼져 있으면 `start_prefetch` · `open_last_account` 를 실제로 부르는 곳은 둘러보기뿐 · `_last_account` 는 `start_prefetch`(3667)·`reload_after_release` 도 부른다 · `--tray` 는 `show=False` 라 둘 다 안 탄다 | "내 계정이 정해져 있으면 `OPEN_LAST_ACCOUNT` 와 무관하게 연다" 로 다시 쓴다 — **10-04 결정을 좁히는 것이라 사용자에게 한 번 묻는다** · 켤 때 요청이 새로 생긴다(지금 0) → ⑦·환경 행렬·게임 중(`game_paused()`)엔 DB 로만 그릴지 · 진입점 표에 `start_prefetch`·트레이에서 처음 열 때·`reload_after_release` 행 · 테스트는 `main` 길로 |
+| M1 | 중 | `records._games` 에 F1 판이 들면 연승 말고도 바뀐다 | `records.py:96` `"몰수" in result` 는 실데이터에서 늘 거짓(결과 글자에 "몰수" 가 없다) → 빈 몰수패가 경기 수·무실점 연속에 들고 `records.rival` 의 "최다 점수 차 패"(0:9)가 된다 · `win_divisions.forfeit` 도 같은 죽은 판정 | 몰수 여부를 종료 유형(`end_kind`)·`blank` 로 넘긴다 · ⑧ 업적 행에 더한다 |
+| M2 | 중 | `squad_timeline._Games.__init__`(144~161)은 "그대로" 가 아니라 "세" | 선수 유무와 무관하게 승무패 누적합으로 사건 앞뒤 창 승률을 낸다 | `result_of` 로 · `_lineups` 는 그대로가 맞다 |
+| M3 | 중 | J1 이 `MatchSummary` 길에만 걸려 같은 지표가 화면마다 다른 기준이 된다 | 원문 길 평균(`team_profile`·`discipline_stats`·`pass_style`·`_per_match`·`habits.side_totals`)은 빈 보통 몰수패 197판을 0 으로 계속 넣는다 → 대시보드 평균과 레이더·성적 진단이 F6 만큼 갈린다 | (가) 이 다섯에도 빈 판 건너뛰기(단 `side_totals` 는 구단주 분포와 같은 함수 — 분포가 바뀌는지 먼저) 또는 (나) J1 에 "원문 길 평균은 그대로" 를 적고 어긋나는 짝을 ⑧ 에 |
+| M4 | 중 | 선수 지표 표의 팀 승률 기준(`app_main.py:14877`)이 표에 없다 | `m.result` 로 센 팀 승률을 선수별 승률(원문 길 · 빈 판엔 선수가 없다)과 견준다 | 기준을 `blank` 가 아닌 판으로만 |
+| M5 | 중 | 득실 **합계** 표시도 바뀐다 | 대시보드 "득실차"(`dashboard.py:590`) · 상대 줄 "득실 a:b"(747) · 라이벌 카드(`app_main.py:12637`) — 판 수는 그대로인데 빈 판의 상대 골이 사라진다 | 합계는 그대로 더하고 평균용 합을 따로 두거나, 합계가 바뀐다고 적는다 |
+| M6 | 중 | 새 규칙 `RESULT_RAW_ALLOW` 가 지키려는 것을 못 지킨다 | 원문 길 대부분은 `"matchResult"` 글자가 아니라 `stats._result_of(` 를 부른다(약 25곳 · 글자가 있는 줄은 6곳) | 규칙을 "`_result_of(` 를 부르는 **함수 이름** ⊂ 허용 표" 로(`RAW_TIME_ALLOW` 꼴) · "그대로" 표를 그 grep 으로 다시 뽑는다(검토 기준 14) |
+| M7 | 중 | `DataSeason` 이 터지는 자리가 표에 빠졌다 | `_period_series`(4723) `season.start` · `_compare_window`(11319 — **상대 계정 경기**에 시즌 필터: 맵에 없는 경기에도 답해야) · `_range_start`(11329) `selected.start_at` | 세 줄을 표에 · `DataSeason` 이면 `_range_start` 는 None |
+| M8 | 중 | `DataSeason` 의 같음 정의가 없다 | `_rebuild_season_combo` 는 `findData(prev)` 로 고른 시즌을 되찾는다 — 필드 전부로 견주면 새 경기 한 판에 `last`·`games` 가 바뀌어 "전체" 로 튄다(`findData` 가 `==` 를 쓰는지는 실행으로 못 봄) · `_cal_season_key` 캐시도 같다 | eq·hash 는 `sid` 만 · 달력 캐시 키는 `SeasonMap` 객체 |
+| M9 | 중 | `.of`/`.at` 의 None 이 두 뜻(진행 중 / 어디에도 없음) | 4653·5790 은 None 을 "이번 시즌" 으로 읽는다 — 시즌표 없이 `DataSeason` 만 있으면 저장 시작 전 날짜가 "이번 시즌" 빈 묶음이 된다 · `contains(date)` 정의도 비었다 | 규칙 절에 `.at(date)`·`end_at=None`·저장 범위 밖 반환값을 표로 |
+| M10 | 중 | 시즌표가 낡았을 때 "현재 시즌" 글이 새 묶음과 모순 | 콤보(11926)·`_render_seasons`(14752)·`_range_start` 가 진행 중의 시작을 낡은 표의 `last_end` 로 쓴다 | 못 찾은 번호가 둘 이상이면 진행 중의 시작 = 그 묶음 첫 경기 · `.at` 의 진행 중도 가장 새 `DataSeason` 뒤로 |
+| M11 | 중 | 규칙 2 의 "진행 중" 이 끝난 시즌에도 붙는다 | 시즌표가 낡고 최신 시즌에 경기가 없으면 끝난 시즌이 "현재 시즌 (진행 중)"(지금도 같다 — 회귀는 아님) | 한계로 적거나 `store.seasons_stale` 이면 `DataSeason` 으로 |
+| M12 | 중 | 코드와 다른 문장 셋 | `possession_stats` 는 이미 `pos <= 0` 을 건너뛴다(`stats.py:1241` — "고친다" 가 아니다) · `_render_kpis` 586~588 은 경기당 슛이 아니라 골÷슛 전환율 · `division_stats` 는 기본이 **상대** 등급(1178 — F2 는 내 쪽만 쟀다) | 세 줄을 고친다 |
+
+**2판의 답**: `clutch_summary`·`goal_flow` → 빈 판을 건너뛴다(A 표 "빈" · F2·F14) · `strength_chips` → 승률을 안 쓴다(F18) · F1 판의 상대 `division` → 조각 ① 에서 픽스처 0004 로 단언(A 표 `division_stats` 줄) · 캐시 키 → B 표 `_season_groups` 줄 · 칩 → C 표 `_set_my_account` 줄.
+
+검토자가 확인 못 한 것(1회차 원문): `clutch_summary`·`goal_flow` 가 F1 판(상대 골·`shootDetail` 은 남아 있다)을 어느 칸에 넣나(픽스처 0004) · `strength_chips` 가 승률을 견주나 · F1 판의 상대 쪽 `division` · `SeasonMap` 캐시 키의 id 재사용 · 키가 바뀌어 `my_ouid` 가 비워질 때 칩이 언제 다시 그려지나.
+
+**이 회차에서 본 것**: [상] 하나는 내가 `_last_account` 를 부르는 곳을 grep 하지 않고 docstring("main 에서만")을 믿어서 나왔다 — 기준 ②(닿는 곳 전수 grep)를 초안에서 건너뛴 자리다.
+
+### 2회차 검토 (2026-11-13 · Fable 5.2 새 검토자 1명 · 2판 `e4cb2df` · 묶음 `review_kit.py diff 1eb3cba --bundle` · **3판에 반영** — S1 → U5·J7~J10·C 절 "켤 때 길이 부르는 것" · S2 → U6·C 표 관문 줄 · M1 → A 표 "세" · M2 → 환경 행렬 둘러보기 · M3 → B `contains` · M4·M5 → C 표 · M6·M7 → 진입점 표·`RESULT_PATHS` · M8 → ⑧)
+
+26.8만 토큰 · 도구 64번 · 5분 53초 · **[상] 2 · [중] 8** — [상] 은 둘 다 2판에서 다시 쓴 C 절이고 A·B 는 새 [상] 0. 1회차 S1·M1~M12 는 빠진 것 없이 반영됐다. [상] 두 건은 내가 코드 줄로 다시 확인했다.
+
+| # | 급 | 요지 | 근거 | 고칠 방향 |
+|---|---|---|---|---|
+| S1 | 상 | **게임 중 "그리기만(요청 0)" 이 성립하지 않는다 — DB 로 그리는 길이 홈페이지 요청을 낸다.** 요청량 서술·안내 문장에도 홈페이지 요청이 빠졌다 | `_open_saved(check=False)` 도 `_on_loaded` 를 지나고 그 끝이 늘 `_on_fetch_team_colors()`(`app_main.py:12079`) — `config.WEB_DATA` 만 보고(13033) `game_paused()` 를 안 본다 → 캐시에 없는 상대가 있으면 `TeamColorLoader`·`RankListLoader`(최대 500쪽). 배포 앱은 지금 켤 때 `_on_loaded` 를 안 타므로 108 이 처음 만드는 자동 요청이다 · 검색 길은 순위 조회(`ranker.fetch_manager_rank`)도 낸다 · 계획의 테스트는 가짜 오픈API 호출만 세고 스모크는 웹 데이터가 꺼져 있어 못 잡는다 | 켤 때 여는 길의 홈페이지 조회를 정한다(U5) · 게임 중엔 캐시만 읽고 미룬다 · J7·"요청 양"·⑦·⑧·안내 문장에 홈페이지 요청을 적는다 · 테스트는 웹 데이터를 켠 채 `ranker.web_get` 호출 수 0 까지 |
+| S2 | 상 | **"다시 묻는 안내가 먼저 뜨고 동의 전에는 요청하지 않는다" 를 지키는 장치가 없다** | ① `config.notice_update_pending()` 은 `RANK_COLLECT or NOTICE_ACCEPTED < NOTICE_COLLECT_ONLY_FROM(8)` — 수집을 끈 14 동의자는 버전을 올려도 창이 안 뜬다 ② 관문 상수(`*_NOTICE_VERSION`)가 없고, `main` 은 안내를 `QTimer.singleShot(0, …)` 로 미룬 뒤 바로 다음 줄에서 여는 길을 동기로 부른다(17059~17063) · `tray.show_window` 도 같다 ③ 다시 묻는 창을 취소·최소화했을 때 여는지가 안 정해졌다 | `STARTUP_CHECK_NOTICE_VERSION` + `config.startup_check_allowed()` 를 `open_startup` ②·`resume_startup_check` 가 본다(동의 전이면 지금처럼 검색 화면) · 동의 직후 한 번 연다 · 수집 끈 사람에게도 다시 묻는다(U6) · 관문 테스트는 기본값이 아닌 값으로 |
+| M1 | 중 | `formation_stats`(`stats.py:650`)·`opponent_cards`(1992)는 "그대로" 가 아니라 승무패를 센다 | F1 판은 상대 선발이 남아 보통 몰수패는 패로, F1 은 안 세는 채로 남는다(U1 과 어긋남) | `count` 로 옮기거나 "안 센다" 를 판단(J)으로 · 진입점 표에 행 |
+| M2 | 중 | 둘러보기 칸이 코드와 다르다 | `demodata.py:309·326` 은 시즌표를 만든다 — 번호가 하나라 규칙 1·5 로 두 시즌이 한 묶음이 된다 | demodata 가 경계 앞뒤로 `seasonId` 둘 · `test_demo` 단언 |
+| M3 | 중 | `DataSeason.contains` 가 date 입력을 못 받는다 | 달력은 date 로 부른다(4651 · 4613) — date 와 datetime 비교는 TypeError · `selected == self.ONGOING`(11954)의 `__eq__` | M9 표에 date 칸 · `__eq__` 가 다른 형에 False |
+| M4 | 중 | `resume_startup_check` 에 "창이 보인다 · `_released` 아님" 조건이 없다 | 게임 중 숨겼다가 게임이 꺼지면 숨긴 채 요청 — "숨긴 채로는 안 돈다" 와 모순 | 조건 둘을 더하고 다음에 열 때로 미룬다 |
+| M5 | 중 | `tray.show_inactive`(386~391)가 `_shown_once = True` 로 만든다 | `--tray` 시작에서 `open_startup(only_mine=True)` 가 영영 안 불린다 | 진입점 표에 행 |
+| M6 | 중 | "빈" 표 테스트가 `shot_summary`·`possession_stats` 의 새 건너뛰기를 못 잴 수 있다 | 둘은 이미 종료 유형·`pos <= 0` 으로 거른다 — 몰수 꼴 픽스처면 `is_blank` 를 빼도 통과 | 함수별로 "보호가 없으면 값이 달라지는" 픽스처(정상 종료인데 한쪽 빈 판 · 상대만 비고 내 점유율 > 0)를 먼저 단언 |
+| M7 | 중 | `RESULT_PATHS` 글자 대조의 구멍 | `result_of(` 는 `_result_of(` 의 부분 문자열 · `models.result_of` 자신이 `"matchResult"` 를 쓴다 · "세 + 빈" 은 값 넷으로 못 적는다 · 본문 "48개" 는 47(함수 50 − 도우미 3) | 단어 경계 · 도우미 칸 · 값을 묶음으로 |
+| M8 | 중 | `result_breakdown` 의 전후반 득실(그대로)과 `goal_minute_buckets`·`clutch_summary`(뺌)가 빈 판만큼 갈린다 | 같은 재료 · 합계라 U4 로는 맞다 | ⑧ 에 짝으로 적는다 |
+
+검토자가 재지 못한 것: `_run_offline` 의 `_safe_meta` → `get_meta`(516~517)가 캐시가 낡았을 때 요청을 내는지 · 켤 때 되돌린 메뉴가 가계부·축구장일 때 자동 시세·칩 읽기가 도는지 · PySide6 `findData` 가 `DataSeason.__eq__` 를 쓰는지 — 앞 둘은 S1 과 같은 뿌리라 3판에서 잰다.
+
+**이 회차에서 본 것**: [상] 둘 다 "새 진입점이 옛 함수를 다시 쓴다(`_on_loaded` · `_api_search`)" 에서 나왔다 — 다시 쓰는 함수가 **끝에서 무엇을 더 부르는지**를 끝까지 따라가지 않았다. 3판은 `_on_loaded` 가 부르는 것을 전수로 뽑아 표로 둔다(기준 14).
+
+### 3회차 검토 (2026-11-14 · Opus 5.5 새 검토자 1명 · 3판 `5e45689` · **계획 전체** · 근거 묶음 `review_kit.py bundle "## 108단계"` 30.7만 자 + 주장 장부 · **4판에 반영** — S1 → C `_open_saved` 줄·"메타 진입점" 표 · S2 → C "게임 중" 줄(진입·도중·끝)·⑧·⑥ · M1 → U7·A 표 득실 줄 · M2 → `open_startup` ①·`ask_notice_update` · M3 → `resume_startup_check` · M4 → `tray.show_inactive` 줄 · M5 → `_set_my_account` 줄 · M6 → B `_on_seasons_loaded` 줄·`SeasonMap.by_sid` · M7 → `_startup_auto` 줄)
+
+25.1만 토큰 · 도구 48번 · 6분 51초 · **[상] 2 · [중] 6** — 2회차 S1·S2 와 1회차 S1 은 3판 본문에 반영됐다(관문 상수 · `NOTICE_COLLECT_ONLY_FROM` 15 · `web=False` · 대시보드 · 켤 때 길 표를 코드와 대조). [상] 둘은 다시 C 절이고 "게임 중 요청 0" 에 걸린다. 둘 다 내가 코드 줄로 다시 확인했다(`app_main.py:827` · `nexon_api.py:367~402` · `app_main.py:2499~2507`). Fable 1·2회차와 견주면 토큰은 22.2만 · 26.8만 · 25.1만으로 비슷하다.
+
+| # | 급 | 요지 | 근거 | 고칠 방향 |
+|---|---|---|---|---|
+| S1 | 상 | **`meta_net=False` 가 메타 요청을 다 막지 못한다** — 게임 중 `check=False` 로 열어도 division 메타가 낡았으면 넥슨에 요청한다 | `_run_offline`(515)이 부르는 `_current_grade` 는 `_safe_meta` 를 안 거치고 `self._api.get_meta("division")`(827)을 직접 부른다 · `get_meta` 는 `_meta_read` 가 None 이면 요청하고(`nexon_api.py:367~390`), `_meta_read` 는 주간 경계 전 캐시를 None 으로 준다(401~402) — 계획 1002행의 "낡았어도 그대로 읽는다" 는 지금 함수로는 안 된다 · 게임 중 테스트("메타 캐시를 낡게 둔다")가 겨눈 줄이 본문에 없다 | `meta_net=False` 면 `_current_grade` 도 디스크 캐시만 · 주간 경계를 안 보는 읽기 함수를 정한다 · 1024행 표를 "주간 캐시가 낡으면 정적 메타 1" 로 |
+| S2 | 상 | **켤 때 확인이 도는 중에 게임이 켜지면 멈추지 않는다** | 게임 상태는 여는 순간(`check=not game_paused()`)과 끈 뒤(`resume_startup_check`)에만 본다 · `on_game_changed(on=True)`(2499~2507)는 예약 셋과 `stop_api_loaders` 만 멈추고 `self._loader` 는 안 건드린다 · 오래 안 켠 계정이면 상세 수백 건을 `DETAIL_WORKERS` 만큼 동시에(588~591) · `check` 는 DB 읽기(1~2초) 전에 정해지고 `_api_search` 는 그 뒤에 불린다 · CLAUDE.md `gameguard` "새 자동 요청 경로는 `pause`/`resume` 을 둔다" | `_api_search(startup=True)` 직전에 `game_paused()` 를 다시 본다 · `on_game_changed(on=True)` 에서 `_startup_auto` 가 켜진 채 로더가 돌면 `cancel()` 하고 `_startup_check_pending` 에 남긴다(취소된 길에서는 `_startup_auto` 를 안 끈다) · 진입점 표·`test_ui_smoke` 에 "확인 도중 게임 켜짐 → 남은 상세 요청 0 · 끔 → 다시 1번" |
+| M1 | 중 | 908행 "득실 합계는 그대로 · 대시보드 득실차는 안 바뀐다" 가 `summarize` 에는 틀리다 | `summarize` 는 "오류" 판을 `continue` 로 합계에서도 뺀다(`models.py:258~262`) → F1 판이 "패" 가 되면 상대 골이 `goals_against` 에 처음 들어간다 · `opponent_stats`·`period_stats` 는 지금도 오류 판 골을 더한다(314 · 460) | F1 판 골을 합계에 넣을지 정하고 문장·CHANGELOG 를 고친다 |
+| M2 | 중 | `ask_notice_update` → `open_startup()` 이 도는 검색 로더를 덮어쓴다 | `_open_saved`(옛 몸통 11800~11812)는 `self._loader` 를 보지 않는다 · 검색 중 [정보]에서 동의하면 `_ouid` 가 비어 ① 을 지난다 · `only_mine=False` 라 내 계정 없는 사람은 `start_prefetch` 가 `discard()` 없이 다시 돈다 | ① 에 `_loader.isRunning()` · 이 자리는 `only_mine=True` |
+| M3 | 중 | `tray.show_window` 의 `resume_startup_check` 가 조용히 사라진다 | `reload_after_release` 가 먼저 오프라인 로더를 띄워(`tray.py:367~368` · 15452~15464) `_api_search` 첫 줄 `isRunning`(11717)에서 돌아간다 — 그때 남은 확인을 지우면 없어진다 | 로더가 실제로 시작될 때만 지우거나 다시 읽기 끝에서 잇는다 |
+| M4 | 중 | `show_inactive` 길에서 "복원 → 1번" 이 성립하지 않는다 | 작업 표시줄 복원은 `changeEvent` 만 타고, `show_inactive`(386~391)는 `open_startup` 을 안 불러 `_startup_after_restore` 가 안 켜진다 | `show_inactive` 끝에 `open_startup(only_mine=True)`(최소화라 ⓪ 이 미룬다) 또는 `changeEvent` 가 `_startup_done` 을 본다 |
+| M5 | 중 | 1012행 칩 다시 그리기 자리가 이르다 | `my_ouid` 를 비우는 것은 키 저장이 아니라 나중의 `TradeLoader` → `tradecollect.collect` → `store.reset_trades_for_key`(`tradecollect.py:67~69` · `store.py:1206`)이고 화면엔 `_on_trades_wiped`(7597)로 온다 | `_on_trades_wiped` 에서 `_refresh_recent()` |
+| M6 | 중 | 시즌표가 뒤늦게 오면 콤보와 화면이 갈린다(B 989행) | `_on_seasons_loaded` 는 `_rebuild_season_combo` 만 부른다(11894~11899) · `DataSeason` 을 골라 둔 채면 `findData(prev)` = −1 → 신호가 막힌 채 콤보만 "전체", 화면은 옛 시즌(11933~11944) · 108 에선 시즌표가 올 때마다 `DataSeason` 이 사라져 흔해진다 | `SeasonMap` 의 sid 짝으로 prev 를 옮기거나, 선택이 바뀌면 `_apply_season()` |
+| M7 | 중 | 1003행 `_startup_auto` 를 끄는 자리가 이르다 | `_api_search(quiet=False)` 첫 줄 `isRunning`·`_held_by_clearing` 에서 돌아가는 길에서 끄면 켤 때 확인이 아직 도는데 `web=False` 가 풀린다 | 로더가 실제로 시작된 뒤에 끈다 |
+
+검토자가 재지 못한 것: A 표 47개 함수를 `RESULT_PATHS` 정의로 다시 뽑아 대조하지 않음(2회차 대조를 믿음) · `squad_timeline._Games`·`records._games`·`formation_stats`·`opponent_cards` 실제 줄 · J8 "`dashboard.py` 에 로더 없음" 과 `_render_all` 이 띄우는 작업 스레드 전수 · `check_api.py:548` 의 `group_by_season`(시각 기준 그대로)이 앱 B 와 갈리는지 · PySide6 `findData` 의 `__eq__` 사용(실행 확인 전) · 둘러보기의 `_startup_auto` 가 `test_demo` 골든에 닿는지.
+
+**이 회차에서 본 것**: 2회차와 같은 뿌리가 한 겹 더 남았다. S1 은 "막을 길을 하나 찾아 막았는데 같은 일을 하는 옆 길(`_current_grade`)이 있었다" — 메타 요청 진입점을 표로 안 뽑았다(기준 ⑩). S2 는 "조건을 들어갈 때만 보고 도는 동안은 안 봤다" — 게임 상태처럼 **도중에 바뀌는 조건**은 진입·도중·끝 세 칸으로 적는다.
+
+### 4회차 검토 (2026-11-14 · Opus 5.5 새 검토자 1명 · 4판 `9c21a10` · 묶음 `review_kit.py diff be19696 --bundle` 12.8만 자 · **5판에 반영** — S1 → C `_open_saved` 줄 `auto`·"메타 진입점" 도우미 · S2·M(오프라인 취소)·M(늦게 끝남) → C "게임 중" 줄 · S3 → `resume_startup_check` · M(진행 중 24건)·M(CDN) → 진입점 표·J10)
+
+17.5만 토큰 · 도구 17번 · 2분 51초 · **[상] 3 · [중] 4** — 3회차 S1·S2·M1~M7 은 반영됐다. [상] 셋 다 **4판이 새로 쓴 장치**(게임 상태 실시간 검사 · 취소 · 다시 부르는 자리)의 결함이고, 셋 다 내가 코드 줄로 다시 확인했다(`app_main.py:555~557` · 11726 · 11810~11811 · 15461~15464).
+
+| # | 급 | 요지 | 근거 | 고칠 방향 |
+|---|---|---|---|---|
+| S1 | 상 | 게임 중 메타 막기가 **사용자가 누른 검색**까지 막는다 | `meta_net` 기본 True + `not game_paused()` 를 검색 길 메타(555~557 · `_current_grade` 670)도 지난다 → 첫 설치·새 카드 주에 이름 대신 코드 · `gameguard` "사용자가 누른 것은 그대로" 위반 | 생성자 `auto=True` 는 앱이 띄운 로더에만 · 테스트 "게임 중 사용자 검색은 `get_meta`" |
+| S2 | 상 | 게임 때문에 취소하면 화면이 "조회 중" 으로 굳는다 | `_set_busy(True)`(11726)는 `finished_ok`·`failed` 에서만 풀리는데 취소된 `_run_search` 는 신호 없이 돌아간다(575·598·604·647·704) → 검색 칸·버튼이 꺼진 채 | 취소한 로더의 `finished` 에서 `_set_busy(False)` + 상태줄 · 테스트 "취소 뒤 사용자 검색 1번이 돈다" |
+| S3 | 상 | 다시 부르는 자리 "`reload_after_release` 뒤(`_on_loaded`)" 는 `finished_ok` 라 아직 `isRunning` | `open_last_account` 주석 11810~11811 이 같은 함정을 적어 둠 · 창이 이미 보여 그 뒤 부르는 자리가 없어 확인이 사라진다 | 다시 읽기 로더의 `finished` 에 · `test_tray` 는 실제 QThread 로 |
+| M1 | 중 | `pause_startup_check` 가 DB 읽기 중인 오프라인 로더도 취소한다 | `_run_offline` 은 취소되면 신호 없이 돌아가(513~514) 빈 검색 화면 · `_ouid` 가 비어 다시 확인도 못 한다 | 취소 대상은 `startup=True` 검색 로더만 |
+| M2 | 중 | 취소된 로더가 끝나기 전에 게임이 꺼지면 남은 확인이 남는다 | 진행 중 상세 최대 `DETAIL_WORKERS`(109) 건이 끝까지 가 스레드가 산다 | 취소한 로더의 `finished` 에서도 `resume_startup_check` |
+| M3 | 중 | "남은 상세 요청 0" 은 못 지킨다 | `_safe_detail`(775~781)은 슬롯에 든 뒤로 취소를 안 본다 | 단언을 "취소 뒤 새로 시작하는 요청 0" 으로 |
+| M4 | 중 | 오프라인 길 등급 배지가 CDN 요청을 낸다 | `_current_grade` → `images.fetch_division_icon`(849 · `images.py:98~99`) | 테스트가 세는 범위를 적는다 — J10 대로 CDN 은 셈 밖 |
+
+검토자가 재지 못한 것: B `SeasonMap.by_sid`·`_on_seasons_loaded` 의 새 흐름은 문장만 · `ask_notice_update` → `open_startup(only_mine=True)` 가 미리 읽기 중일 때 `_prefetch` 를 어떻게 넘기는지 · 대시보드 다른 카드의 득실(U7) · `changeEvent` 의 `_notice_after_restore` 자리와 `show_inactive` 뒤 복원 순서.
+
+**이 회차에서 본 것**: 4판은 3회차 [상]을 막으려고 장치 셋을 새로 붙였고, [상] 셋이 전부 그 장치에서 나왔다. 장치마다 "이 장치가 지나는 **다른** 길(사용자 검색)" 과 "이 장치가 끊은 뒤 **원래 짝**(`_set_busy` 의 풀기 · `finished` 대 `finished_ok`)" 을 따라가지 않았다. 고칠 때 새로 쓰는 장치는 그 두 가지를 같이 적는다.
+
+### 5회차 검토 (2026-11-14 · Opus 5.5 새 검토자 1명 · 5판 `8fcd9be` · 묶음 `review_kit.py diff 9c21a10 --bundle` 10.3만 자 · **[상]은 이 판에 반영 · 계획 검토는 여기서 멈춘다**)
+
+17.6만 토큰 · 도구 18번 · 3분 18초 · **[상] 1 · [중] 5** — 4회차 S1~S3·M1~M4 는 반영됐다. [상] S1 은 내가 코드 줄로 다시 확인했다(`app_main.py:11731` · 7589~7595 · 11735~11736).
+
+| # | 급 | 요지 | 근거 | 고칠 방향 |
+|---|---|---|---|---|
+| S1 | 상 | 켤 때 확인이 다른 오픈API 로더를 양보시키고 다시 안 켠다 | `_api_search` 는 늘 `_yield_trades()`(11731 → 거래 취소 · `stop_api_loaders`) · 다시 켜는 짝은 `finished → start_trades / start_visible_api_loader`(11735~11736)뿐인데 계획은 `startup=True` 에서 이 짝을 뺐다 · 취소된 거래 로더의 `finished`(7603~7608)는 그때 `_api_background_busy`(7616~7622)에 막힌다 · 5판이 다시 잇는 자리를 늘려 [추천]·[특성]·가계부를 보던 중에도 열린다 | **반영함** — `start_visible_api_loader` 는 잇고 `start_trades` 는 취소했을 때만 · 진입점 표에 "확인 도중 [추천] 탭 · 게임 끔 → 랭커 픽 1번" |
+| M1 | 중 | 취소 표시와 실제 결과가 갈린다 | 마지막 `_cancel` 검사(624) 뒤에 닿은 `cancel()` 은 `finished_ok` 까지 정상으로 끝나는데 `finished` 에서는 "게임 때문에 취소" 로 읽힌다 | 갈래는 `outcome.stop == "cancel"`(381~385 · 534)로 |
+| M2 | 중 | 저장만 되고 화면은 옛것인 길 | 취소가 `save_matches`(612) 뒤 621~624 사이에 닿을 때 | 다시 확인하면 메워지는지 단언 |
+| M3 | 중 | 취소한 로더 쪽 처리를 `self._loader` 로 판정하면 안 된다 | 신호를 낸 그 로더를 봐야 한다 | `finished` 에 로더를 묶어 넘긴다 |
+| M4 | 중 | 다시 확인할 때 미리 읽은 경기 재사용 | 취소된 `_api_search` 가 `_prefetch` 를 이미 꺼내 넘겼고(11730) `cancel()` 이 `discard`(481~482) | 다시 확인은 `prev` 로 화면 목록을 넘겨 DB 를 다시 안 읽는지 |
+| M5 | 중 | `reload_after_release` 가 일찍 돌아가는 길에서도 `_released` 를 먼저 푼다(15456 — 지금 코드의 결함) | 취소됐지만 안 끝난 확인 로더가 돌면 다시 읽기도 그 뒤 확인도 없다 | 테스트 한 줄 · 조각 ③ 에서 같이 고친다 |
+
+검토자가 재지 못한 것: PySide6 에서 큐로 넘어온 `finished` 처리 함수 안의 `isRunning()` 이 늘 거짓인지(11810 주석과 같은 가정) · 둘러보기에서 게임 감시가 도는 경우 상태줄 문구가 `test_demo` 골든에 닿는지 · `ask_notice_update → _open_saved` 의 `auto` 오프라인 로더와 `_prefetch` 넘기기 · `_on_failed` 와 `quiet` 길에서 `_set_busy` 를 두 번 부를 때의 상태줄 순서.
+
+**여기서 멈추는 이유(11-14 사용자 "추천대로" — 4회차 보고 때 미리 정함)**: A·B 는 2회차부터 새 [상] 0 이다. C 는 3·4·5회차 연속 새 [상](2 · 3 · 1)이 나왔고, 그 대부분이 앞 회차를 고치려고 **문장으로 붙인 장치**의 짝(신호 · busy · 양보/재개)이었다. 이 종류는 문장 검토보다 실제 QThread 로 도는 테스트가 더 싸게 잡는다. 그래서 끝내는 조건의 "독립 검토자 새 [상] 0" 은 **A·B 만 만족**으로 두고, C 는 조각 ③ 에서 이렇게 닫는다: ① 진입점 표 "켤 때 여는 계정" 행의 단언을 **구현보다 먼저** 실제 QThread 테스트로 쓴다(보호가 없을 때의 값을 먼저 단언) ② 위 [중] M1~M5 와 3·4회차 "재지 못한 것" 을 그 테스트의 칸으로 ③ Opus diff 리뷰에 "새 장치마다 다른 길 · 원래 짝" 두 질문을 그대로 준다.
+
+### 조각 ③ 구현 기록 (2026-11-14 · Opus 직접 구현)
+
+**테스트를 먼저 썼습니다.** 진입점 표 "켤 때 여는 계정" 행을 `tests/test_startup_108.py` 하나로 옮겼습니다. 계획은 `test_ui_smoke`·`test_tray` 에 나눠 넣는다고 했지만, 스모크는 파일 머리에서 `QThread.start` 를 막아 이 행이 재려는 것(신호 순서 · `isRunning` · 취소한 로더의 뒷정리)을 못 봅니다. 그래서 스레드를 막지 않는 새 파일을 만들었습니다. 넥슨만 바꿔 끼웁니다. 오픈API 는 둘러보기 가짜 API 를 물려받아 길마다 세고(상세는 진짜 디스크 캐시 길), 홈페이지·CDN 은 `HTTPAdapter.send` 에서 주소를 적고 끊습니다. 웹 데이터는 켠 채로 잽니다.
+구현 전 실행: 대조 테스트(사용자 검색이 순위·팀컬러·거래를 부르는 것을 기록기가 본다) 1개만 통과하고 나머지는 FAIL 이었습니다(보호가 없을 때의 값). 가짜 API 의 `get_meta` 셈은 "주간 캐시가 낡았으면 요청이 됐을" 부름입니다.
+
+계획과 다르게 한 것:
+- **J8 줄을 따로 두지 않았습니다.** 켤 때는 2026-10-11 부터 `_load_settings` 가 `page` 를 안 돌려줘 이미 대시보드입니다. 넣었던 "켤 때는 대시보드" 줄은 하는 일이 없어 뺐습니다(저장된 보기 = [가계부] 로 잰 테스트는 그대로 둡니다).
+- **`OPEN_LAST_ACCOUNT`·둘러보기 길도 `startup=True` 로 확인합니다**(`open_last_account` 가 `_open_saved` 를 거친다). 순위 0 · 새 거래 받기 0 이 그 길에도 걸립니다. 둘러보기는 원래 둘 다 0 이었습니다.
+- **5회차 M5(`reload_after_release` 가 일찍 돌아가는 길에서 `_released` 를 먼저 풀던 것)를 고쳤습니다.** 도는 로더가 있으면 놓은 채로 두고, 게임 때문에 취소한 켤 때 확인의 `finished` 가 다시 읽기를 부릅니다.
+- `_api_search` 는 띄웠는지 bool 을 돌려주고, `_yield_trades` 는 거래 로더를 멈췄는지 bool 을 돌려줍니다(`start_trades` 를 이을지).
+- 취소 판정은 `MatchLoader.game_cancelled` + `last_outcome.stop == "cancel"`(5회차 M1)이고, `finished` 처리는 그 로더를 묶어 받습니다(M3).
+- **직접 검토에서 빠진 길을 하나 더 찾았습니다.** 켤 때 길에서 시즌표가 늦게 와 고른 시즌이 바뀌면 `_on_seasons_loaded` → `_apply_season()` 이 팀컬러를 홈페이지에 물었습니다. 테스트를 먼저 써서 FAIL 을 본 뒤 `_apply_season(web=)` 으로 막았습니다(`test_late_season_table_on_startup_path_keeps_homepage_zero` · 대조로 표시를 끄면 로더가 뜹니다).
+
+변이(되돌리는 변이 36건 · 하나씩 심고 어느 테스트가 빨개지는지 적음): 전부 잡혔습니다. 두 번 속을 뻔했습니다.
+- 대상 문자열 끝에 `\n` 을 둔 4건이 CRLF 파일에서 "대상 0곳" 으로 건너뛰어졌습니다(1초 만에 끝난 28번). 줄 끝을 맞춰 다시 쟀습니다.
+- 35번(`my_account` 의 경기 수 조건)은 스모크 rc=1 로 "잡힘" 이었지만, 스모크가 변이와 무관하게 깨져 있었습니다(바꿔 끼운 `_on_fetch_team_colors` 대역이 `web=` 을 못 받음). 그 조건을 지키는 단언이 없어 `test_my_account_needs_saved_matches` 를 더했습니다. 스모크 대역 셋(`_Rec` 둘 · `_api_search` 둘 · `_Win.open_startup` 이 바꿔 끼운 클래스를 다시 불러 생긴 재귀)도 고쳤습니다.
+- `test_cardcollect` 의 "수집을 끈 8~11 동의자" 테스트는 `NOTICE_COLLECT_ONLY_FROM` 15 로 전제가 사라져, 테스트 안에서만 그 시절 값 8 로 잽니다.
+
+---
+
+## 109단계 — 내 PC 에 저장하는 것 (제안 3.10.1 · 108 과 같이 공개) · 16판 · **계획 검토 끝 · J10 16판 검토 [상] 0**(2026-11-15 U13) (2026-11-14 · U1~U12 사용자 답 반영 · 12회차 [상] 1 은 J10 · 11회차 [상] 1·[중] 5 반영 · 10회차 [상] 1·[중] 7 반영 · 9회차(계획 전체) [상] 1·[중] 5 반영 · 8회차 새 [상] 0 · [중] 4 반영 · 1회차 [상] 6·[중] 12 · 2회차 [상] 3·[중] 6 · 3회차 [상] 4·[중] 10 · 4회차 [상] 1·[중] 11 · 5회차 [상] 3·[중] 5 · 6회차 [상] 2·[중] 5 · 7회차 [상] 1·[중] 4 반영) ✅ 끝 (2026-11-15 3.10.1 공개 — 3.9.1 에서 newer 확인 · 받은 설치 파일 SHA256 일치)
+
+맨 위 표의 아홉 항목을 저장 방식으로 다시 묶었습니다. 셋은 새 저장이 생기고(A·B·C), 셋은 읽기만 하는 작은 화면이며(D), 하나는 재기만 합니다(E). Z7 은 재 보니 할 일이 없어 뺐습니다(U5).
+
+**10판에서 9판과 달라진 것**(7회차 Opus 1명 · 바뀐 줄 · 16만 토큰): 7회차는 V2 와 일반 시작의 V1 이 닫혔다고 봤고, `--tray` 에서 [상] 하나를 냈습니다. 트레이 갈래(app_main 17319 `if not config.notice_needed() and config.API_KEY:`)는 "fail" 이면 키 관문에 닿지 않고, 17329 `shell.start(tray_mode=True)` 가 예약을 시작합니다. 9판의 "`--tray` 도 같은 창을 띄웁니다" 와 "ok 전에는 예약 0" 은 이 순서로는 성립하지 않고, 맞추려면 게임 위에 막는 창을 띄우게 됩니다(`tray.AppShell.start` 규칙 위반). 10판은 `--tray` 의 "fail" 을 지금의 "키 없음" 과 같은 길로 둡니다(J8).
+
+**9판에서 8판과 달라진 것**(6회차 Opus 1명 · 바뀐 줄 · 15.5만 토큰 · U12): 6회차는 `.bak` 쪽(T1·T2)이 닫혔다고 봤고, 키 읽기 실패 쪽에서 [상] 둘을 냈습니다. 8판은 "읽기 실패여도 앱은 돌되 키를 보는 자리마다 멈춘다" 였는데, 그 자리가 회차마다 하나씩 더 나왔습니다(17223 키 관문 뒤 `FCOnlineAPI` 생성자 예외 · `read_owner_dist` 의 `bool(API_KEY)`). 9판은 **관문을 하나로 줄입니다.** 키를 읽지 못하면 앱이 키 관문(17223)을 넘지 않으므로, 앱 안에 "읽기 실패로 도는 시간" 이 없습니다(J8).
+
+**8판에서 7판과 달라진 것**(5회차 Opus 1명 · 바뀐 줄 · 17만 토큰 · U11): **복원 사본 `fifa.db.bak` 을 없앴습니다.** 5회차 [상] 셋 중 둘과 [중] 셋이 모두 `.bak` 에서 나왔습니다. 7일 보관이 안내의 "14일만 둡니다"(notice.py:105)와 부딪쳤고, 켤 때만 판정하면 트레이 상주 사용자에게 7일 약속이 지켜지지 않았습니다. 복원 도중 지우기·`.bak` 의 WAL·남은 임시 파일도 같은 뿌리였습니다. 안내의 기한 약속(바로·14일·7일)과 계속 부딪쳐서, 잘못 고른 복원을 막는 길을 바꿉니다. 복원 확인 창이 백업과 지금 기록을 나란히 보여 주고, [복원 전에 지금 기록을 백업](기본 켬)이 평소 [백업]과 같은 zip 을 사용자가 고른 곳에 만듭니다(J9). 셋째 [상](켤 때는 키 "읽기 실패" 를 빈 값과 가를 수 없음)은 키 상태 전역 `KEY_STATE` 로 막습니다(J8).
+
+**7판에서 6판과 달라진 것**(4회차 Opus 1명 · 계획 전체 · 20.5만 토큰 · U10): 4회차는 R1~R4 가 6판으로 닫혔다고 봤고, 새 [상]은 `.bak` 하나였습니다. 복원 때 남기는 `fifa.db.bak` 에, 이용 안내가 "수집을 끄거나 시즌이 끝나면 바로 지웁니다" 라고 약속한 기록(notice.py:115·118·126·158·177)이 기한 없이 남았습니다. 7판은 `.bak` 을 7일만 두고, 안내가 약속한 지우기 길이 전부 `.bak` 도 지우게 합니다(J9). 그 밖에 [중] 셋을 설계에 넣었습니다. 선언 표 검사를 `__all__` 함수 전부로 넓혔고, 기록기가 모든 함수를 감쌉니다(J2). 키를 읽는 쪽에도 같은 판정을 둡니다(J8).
+
+**6판에서 5판과 달라진 것**(3회차 Opus 1명 · 계획 전체 · 17.4만 토큰 · U9): [상] 넷 중 셋이 같은 원인이었습니다. 5판 감싸개는 **인자 모양을 보고 경기 목록인지 짐작**했고, 모양이 다른 행(`WinDivision`), 목록을 돌려주는 함수(`window_of`·`filter_matches`), 한 판짜리 목록(상세 창 `shot_map([detail])`)에서 틀렸습니다. 6판은 짐작을 **선언**으로 바꿉니다. `core_api` 의 표에 함수마다 갈래와 거를 인자 이름을 적고, 표에 없는 함수는 정적 검사가 FAIL 로 냅니다(J1·J2). 넷째 [상](테스트가 진짜 자격 증명을 덮음)은 J8 판정 기준을 `.env` 경로로 바꿨습니다.
+
+**5판에서 4판과 달라진 것**: **거르는 기본값을 뒤집었습니다.** 4판은 화면 함수마다 거른 목록(F)과 원본(S)을 나눴습니다. 그런데 한 함수 안에서 승·무·패와 넥슨 기록(등급·보상·스쿼드)이 섞여 있어, [상] 셋이 모두 그 틈에서 나왔습니다(J2 표 밖의 `_season_groups`, `_season_wins` 안의 FC·도달, `self._details` 로 그리는 등급 체류·보상 표). 5판은 **화면이 드는 목록을 전부 원본으로 두고, 승·무·패와 승률을 세는 분석 함수의 입구(`core_api`)에서만 표시한 판을 뺍니다**(J1·J2). 한 자리를 빠뜨려도 결과는 "표시한 판이 숫자에 남는다"(지금 앱과 같은 동작)에서 그치고, 넥슨 기록이 틀어지는 길은 없어집니다. 4판의 함수별 F/S 표는 지웠습니다(`f90c2c2` 에 남아 있습니다).
+
+**4판에서 3판과 달라진 것**(1회차 Opus 1명): J2 표의 `_season_wins` 를 둘로 나눴습니다 · 캐시 키를 S 키와 F 키로 나눴습니다(J6) · 목록에서 상세를 여는 길을 S 로 돌렸습니다 · 이용 안내를 고치고 `NOTICE_VERSION` 을 올립니다(F3 정정) · 자격 증명은 기본 데이터 폴더에서만 씁니다(J8) · 복원은 검사를 통과한 파일만 바꿔 끼우고 지금 파일을 남깁니다(J9). [중] 12 건은 아래 "1회차 [중]" 표대로 구현 때 테스트로 잡습니다.
+
+**2판에서 1판과 달라진 것**: "통계에서 빼기" 를 늘 빼는 것에서 **스위치를 켤 때만 빼는 것**으로 바꿨습니다(U7). 기본 숫자는 지금과 같습니다 ② U1~U6 답을 넣었습니다 ③ 거르는 한 자리와 거르지 않는 길(예측 · 구단주 분포)을 J 로 적었습니다.
+
+| 묶음 | 항목 | 하는 일 | 난이도 |
+|---|---|---|---|
+| A 메모·표시 | F1 상대 메모·태그 · L1 경기 표시·통계에서 빼기 · L2 경기 한 줄 메모 | fifa.db 에 새 표 하나(`notes`)를 두고 셋이 같이 씁니다. L1 은 경기에 "끊김"·"연습" 표시를 붙이고, 위쪽 막대 스위치 **[표시한 판 빼고 보기]**(기본 꺼짐)를 켜면 숫자를 내는 모든 화면에서 그 판을 뺍니다(U7) | 중간 — 스위치를 켜면 108 A 처럼 앱 전체 집계에 닿습니다 |
+| B 백업·복원 | G1 | [정보 › 저장 공간] 에 [백업] [복원]. 백업은 SQLite backup API 로 fifa.db 사본 + `settings.ini` 를 zip 하나로, 복원은 57 K9 바꿔 끼우기(`storage.reset_db`)와 같은 걸쇠로 | 중간 — 복원 중 쓰는 작업 스레드를 멈추는 길은 이미 있습니다(`CLEARING`·`running_writers`) |
+| C 키 보관 | S1 | API 키를 `.env` 대신 Windows 자격 증명 관리자에(ctypes `CredWriteW`/`CredReadW` — 새 패키지 없음). 켤 때 `.env` 에 키가 있으면 옮기고 그 줄을 지웁니다. 실패하면 `.env` 그대로 | 중간 — 키를 읽는 길(`config.API_KEY`·`_read_env_disk`·둘러보기·서버 모드)이 여럿입니다 |
+| D 읽기만 | J3 트레이 "오늘 전적" · U2 최근 검색 칩 미리보기 | J3: 트레이 메뉴를 열 때(`aboutToShow`) 내 계정의 오늘(KST) 승·무·패 한 줄. 알림은 아닙니다. 창·`core_api` 묶음에 기대지 않고 따로 읽습니다(J10). U2: 칩에 마우스를 올리면 그 계정의 최근 10경기 승·무·패 · 승률. 둘 다 fifa.db 읽기만(요청 0) | 낮음 |
+| E 재기 | G4 켜는 속도·메모리 | 지난 값(exe 단독 보이는 창까지 1.8초 · 검색 1회 뒤 개인 메모리 1,066MB — `DONE.md`)과 같은 방법으로 다시 잽니다. 10% 넘게 나빠진 것만 원인을 찾습니다 | 낮음~중간 |
+| — | Z7 데이터 파일 정리 자동 | **뺐습니다**(F5 · U5) | — |
+
+### 이 초안을 쓰며 확인한 것 (11-14 · 이 PC 데이터 폴더 · 읽기 전용)
+
+| # | 사실 | 값 |
+|---|---|---|
+| F1 | 데이터 폴더 크기 | fifa.db 813MB(경기 35,867) · rank.db 31MB · `.cache` 31MB(얼굴 366장 13MB 등 — 경기 상세 캐시는 켤 때 정리) · `logs` 81KB · 개발 전용 `dev_matches.db` 1.86GB·`dev_archive.db` 48MB 는 배포판에 없습니다 |
+| F2 | 경기 목록이 화면에 들어가는 자리 | `app_main._on_loaded` 가 `_matches_all`·`_details_all` 에 넣고(12250) `_apply_season` 이 시즌으로 잘라 `_matches`·`_details` 를 만듭니다(12183~12188). `_matches_all` 을 직접 읽는 곳 38곳(업적·세션·시즌 돌아보기 같은 "저장 전체" 화면) |
+| F3 | 키를 다루는 곳 | `config.API_KEY`(재할당 전역 · `save_api_key`) · `_save_env`/`_read_env_disk`(`.env` 한 줄씩) · 둘러보기는 `_save_env` 가 OSError · ~~이용 안내에는 키 보관 위치 문장이 없고~~ **정정(1회차): `notice.py` 50행에 "키·전적 기록 … 은 이 PC 의 `%LOCALAPPDATA%\…` 에만 있습니다" 가 있습니다.** S1(키가 자격 증명 관리자로)과 G1(기록이 폴더 밖 zip 으로)이 이 문장을 거짓으로 만들므로, 문장을 고치고 `NOTICE_VERSION` 을 올립니다(`CHANGES` 한 덩이 · 문구 골든 · 실사용자가 아직 없어 다시 동의 부담은 작습니다) |
+| F4 | 트레이 메뉴 | `tray._ensure_tray` 에 [열기]·[종료] 둘 · 알림 0(사용자 10-05 결정 — J3 은 메뉴 글자 한 줄이라 그 결정 안입니다) |
+| F5 | Z7 이 정리할 것 | fifa.db·rank.db 의 빈 페이지 0MB(`freelist_count`) · rank.db 는 이미 켤 때 VACUUM + 1시간마다 정리(`RankMaintWorker`) · 경기 상세 캐시·카드 시세(70일)는 켤 때 `CachePruneWorker` · 로그 81KB. 끝없이 자라는 파일을 찾지 못했습니다 |
+| F6 | 저장 공간 화면 | `storage.py` — 크기 재기·이미지/상세 캐시 지우기·카드 정보 지우기·내 기록 바꿔 끼우기(`RESET_KEEP` 행만 새 파일로). 새 표는 `RESET_KEEP`/`RESET_WIPE` 중 하나에 넣어야 `test_storage` 가 통과합니다 |
+| F7 | 108 과 겹치는 곳 | 108 "다른 단계와 겹치는 곳" 표: 이름이 `blank` 와 겹치지 않게 합니다. 거르는 자리는 `MatchSummary` 를 만드는 곳이 아니라 J1 의 `_on_loaded` 한 자리입니다(1회차 [중]으로 정정) |
+
+### 사용자 답 (2026-11-14 · 전부 "추천대로")
+
+- **U1 표시한 판은 스위치를 켰을 때 숫자를 내는 모든 화면에서 빼고, 경기 목록에는 늘 흐리게 남깁니다**(U7 로 고친 답). 목록에서 숨기면 표시를 되돌릴 곳이 없습니다.
+- **U2 표시는 "끊김" · "연습" 둘이고, 둘 다 스위치에 따라 빠집니다.** 빼지 않는 꼬리표는 F1 태그·L2 메모로 씁니다. 넥슨 몰수 판정(108 A)과는 따로입니다. 넥슨이 정상으로 낸 판도 표시할 수 있습니다.
+- **U3 메모·표시는 [저장 공간 › 내 기록 전부 지우기] 때 같이 지웁니다**(`RESET_WIPE`). 남기려면 백업(G1)을 씁니다.
+- **U4 백업에는 fifa.db 전체 + `settings.ini` 만 넣습니다.** API 키(`.env`·자격 증명)와 rank.db(남들 닉네임·순위 14일치)는 넣지 않습니다. 크기는 압축 전 약 800MB 입니다(압축률은 조각 ② 에서 잽니다).
+- **U5 Z7 은 뺍니다**(F5). 다시 꺼낼 조건: [저장 공간] 의 "기타" 가 100MB 를 넘을 때.
+- **U6 108 J6 "죽은 몰수 판정 살리기" 는 109 에 넣지 않습니다.** 스위치를 켜면 L1 이 같은 업적 숫자를 움직이므로, 같이 넣으면 무엇 때문에 바뀌었는지 가를 수 없습니다. 버전 미정 후보에 그대로 둡니다.
+- **U7 (1판을 보고 사용자가 물음 "통계에서 굳이 빼야 하나" → "원래 계획에 가깝게")** — 처음 아이디어(11-08 `86c7c7b`)는 "통계에서 **뺄지**" 로 열린 질문이었고, 11-10 맨 위 표로 옮기며 "빼기" 로 굳었습니다(그 사이 결정 기록 없음). 늘 빼면 108 U1("몰수패도 패")과 어긋나고 진 판만 골라 승률이 부풀기 쉬워, **기본은 지금 숫자 그대로 두고 스위치를 켤 때만 뺍니다.** 켜 있는 동안 막대에 "표시한 N판 뺌" 이 늘 보입니다.
+- **U8 (2회차 뒤 · 사용자 "추천대로 가자")** 거르는 자리를 화면 함수에서 분석 함수 입구로 옮깁니다. 화면 목록은 전부 원본입니다.
+- **U12 (6회차 뒤 · 사용자 "진행하자")** 키를 읽지 못하면 앱이 키 관문을 넘지 않습니다(J8). 8판의 "fail 이면 아무것도 안 하는 세 자리" 는 만들지 않고, 구단주 분포 읽기만 보험으로 "모름" 을 돌려줍니다.
+- **U11 (5회차 뒤 · 사용자 "추천대로 가자")** 복원 사본 `.bak` 을 없애고(U10 을 뒤집음), 잘못 고른 복원은 확인 창의 나란히 보기와 [복원 전에 지금 기록을 백업](기본 켬)으로 막습니다(J9). 키 읽기 실패는 `KEY_STATE` 로 가릅니다(J8).
+- **U10 (4회차 뒤 · 사용자 "그러자 추천대로" · 8판에서 U11 이 뒤집음)** 복원 때 남기는 `.bak` 은 7일만 두고, 안내가 약속한 지우기 길이 전부 `.bak` 도 지웁니다(J9). 5회차는 계획 전체가 아니라 바뀐 줄만 봅니다(4회차가 계획 전체였습니다).
+- **U9 (3회차 뒤 · 사용자 "추천대로 가자")** 감싸개는 인자 모양을 짐작하지 않고 선언 표를 따릅니다(J2 넷째 갈래 "통과" 포함). 상대 메모의 ouid 는 경기 상세에서 찾습니다(J4). 표시는 경기 번호에 붙으므로 다른 계정 화면(그 상대 검색·비교)에서도 같은 판이 빠집니다(J1).
+
+### 내 판단 — 사용자 답 밖 (검토자가 볼 것)
+
+- **J1 거르는 자리는 분석 함수의 입구 하나입니다**(5판 · U8). 화면이 드는 목록(`_matches_all`·`_details_all`·`_matches`·`_details`)은 지금처럼 원본입니다. 스위치를 켜면 `core_api.set_excluded(번호 묶음)` 으로 표시한 경기 번호를 넘기고, 끄면 빈 묶음을 넘깁니다. 값은 `core_api` 안의 재할당 전역이고 화면은 `core.` 로만 부르므로 모듈 경유 규칙에 맞습니다. `frozenset` 을 통째로 바꿔 끼우므로 작업 스레드가 반쯤 바뀐 값을 읽지 않습니다. `core_api` 안의 감싸개가 J2 선언 표에 적힌 **인자 이름**(예 `matches`·`details`·`rows`)만 걸러 원래 함수를 부릅니다(6판 — 인자 모양으로 짐작하지 않습니다). 한 호출 안에서 묶음 전역은 **한 번만** 읽어 목록 둘(`matches`·`details`)을 같은 판본으로 거르고, 묶음이 비었으면 목록을 새로 만들지 않고 바로 원래 함수를 부릅니다. 감싸지 않은 원래 함수는 `core.raw.<이름>` 으로도 부를 수 있습니다. 원래 모듈(habits·sessions·records 등)은 섞임(J2) 말고는 고치지 않으므로 그 모듈 테스트와 골든은 그대로입니다. 4판의 `_on_loaded` 거르기, `_matches_saved`·`_matches_shown`·`_details_shown` 은 만들지 않습니다. 경기 목록, 상세 열기(12814), 시즌 콤보, "비었나" 판정은 원래 원본이라 손댈 것이 없습니다. **상세 창 안의 그리기는 `core.raw.*` 를 부릅니다**(3회차 [상] — `shot_map([detail], …)` 13678·13768 이 감싸개를 거치면 표시한 판의 슛 맵·xG 가 0 이 됩니다). 테스트: 표시한 판 상세의 xG = 스위치 끔 값. 표시는 경기 번호에 붙으므로 그 상대를 검색하거나 비교할 때(`compare_summary` 의 상대 상세)도 같은 판이 빠집니다(U9 — 의도).
+- **J2 분석 함수를 F · S · 섞임 · 통과 넷으로 나누고, `core_api` 안의 선언 표(`FILTER_PLAN` — 이름 → 갈래·거를 인자 이름)에 적습니다**(6판). 표는 두 검사가 지킵니다(검토 기준 14). ⓐ 정적: `__all__` 의 **클래스가 아닌 호출 가능한 이름은 전부**(11-14 약 200개) 표에 있어야 하고, 표에 적힌 인자 이름은 그 함수 시그니처에 있어야 합니다(없으면 FAIL — 스모크·데모가 안 그리는 화면도 빠지지 않습니다). 7판에서 넓혔습니다. 인자 이름으로 고르면 `compare_summary(my_details, …, opp_details)`(stats.py:2665)·`line_pairs` 가 빠졌습니다(4회차 [중]). 경기와 무관한 함수는 S 로 적습니다. ⓑ 실행: 감싸개는 표에 있는 함수만이 아니라 `__all__` 의 클래스가 아닌 함수 **전부**에 씌웁니다(`functools.wraps` · 인자는 `inspect.signature(...).bind` 로 찾아 위치로 넘긴 것과 이름으로 넘긴 것을 같이 테스트). 클래스(NamedTuple·`isinstance` 대상)는 감싸지 않습니다. 조각 ① 테스트가 `test_ui_smoke`(`LAZY_RENDER = False`)·`test_demo` 를 돌리며 감싸개 안 기록기로 불린 이름을 모읍니다. 표에 없는 이름이 불리면 FAIL 입니다. 기록기는 `core_api` 속성 바꿔 끼우기가 아니라 감싸개 자체에 있어 `dashboard.py:33` 처럼 이름으로 import 한 호출도 기록됩니다. 감싼 뒤 전 화면 그리기 시간은 `test_refilter_redraw_time` 이 같이 잽니다. 첫 실행 값으로 표를 채우고, 그 뒤로는 표가 정본입니다.
+
+  | 갈래 | 무엇 | 감싸개 |
+  |---|---|---|
+  | F 결과 집계 | 승·무·패 · 승률 · 득실 · 연승·연패 · 세션 · 운 범위 · 달력 칸 · 업적의 승 기록 · 라이벌 · 오늘의 선수 · 영입 전후 · 맞대결 · 분석 문장(`narrate`) · 시즌별 `summarize` | 표시한 판을 뺍니다 |
+  | S 기록 상태 | 등급 흐름(`division_trend`·`division_stays`·`first_reach`) · 보상(`win_divisions`·`win_rewards`) · 스쿼드·카드·포메이션 이력 · 저장 범위(`stored_spans`) · 구단주 분포(J3) · 시세 | 없음 |
+  | 통과 | 경기 목록을 골라 **돌려주는** 함수 `window_of`·`filter_matches`(models.py:580·391). 거르면 경기 목록에서 표시한 판이 사라지고(U1), 받은 S 함수도 그 판을 잃습니다 | 없음. 결과를 세는 쪽이 F 함수여야 합니다(아래 ⓐ) |
+  | 섞임 | 한 함수가 둘 다 냅니다. 3회차에서 넷을 더했습니다: `WinDivision` 행으로 FC·보상(S)과 승·무·패·승률(F)을 같이 내는 `club_day`·`calendar_days`·`cal_summary`·`first_reach`(habits.py:1196·1334·1372·1222). `WinDivision`(stats.py:106)에 `match_id` 를 더해(생성 자리 `win_divisions` · 골든 확인) `exclude=` 가 승·무·패 쪽만 뺍니다. 2회차에서 나온 셋: `season_pace`(승·무·패는 F · FC 는 `win_rewards` 라 S — sessions.py:374) · `season_review`(승률은 F · `best_div`·`final_div` 는 S — sessions.py:507~509) · `record_achievements`(승 업적은 F · 챔스·슈챔 도달은 S — records.py:192~196) | 빼지 않습니다. 원래 함수에 `exclude=` 인자(기본 빈 묶음)를 더해 결과 쪽에만 씁니다. 감싸개는 호출자가 `exclude` 를 넘기지 않았을 때만 `core_api` 전역을 넣고, 넘겼으면 덮지도 합치지도 않습니다(14판 · 11회차 [상] — 덮으면 창 없는 트레이에서 빈 전역이, 창이 다른 계정을 띄우면 그 계정의 묶음이 J10 의 묶음을 대신합니다). 테스트: 전역이 비었고 `exclude=X` 면 X 가 빠짐 · 전역이 Y 이고 `exclude=빈 것` 이면 아무것도 안 빠짐 · 우선 규칙을 빼면 FAIL |
+
+  판정 규칙은 4판과 같습니다. 경기 결과·내용에서 나온 숫자는 F, 넥슨이 매긴 상태와 저장 범위는 S 입니다. 2회차 [상] 자리를 이 표에 대 보면: 시즌표·기간별 [시즌] 행의 `summarize`(14941·4772)는 F 라 빠집니다. 달력의 FC 와 보상 카드, H5 도달 판수(2248)는 섞임 함수의 S 쪽이라 같은 값이 됩니다(6판 정정 — 5판은 S 함수라고 적었으나 같은 함수가 승률도 냅니다). 등급 체류(5461)·보상 표(5533)도 S 입니다.
+
+  감싸개가 못 보는 길은 둘이고, 둘 다 조각 ① 첫 일로 잡습니다. ⓐ 분석 함수를 거치지 않고 화면 파일이 직접 세는 줄입니다. `git grep -n "result_of\|\.result ==\|\.result in\|\.result not in\|in [a-z_]*\.result" -- app_main.py dashboard.py widgets.py` 결과를 표로 만들어, 세는 줄이면 core 함수(F — 예 `core.wdl(matches)`)로 옮깁니다. 3회차에서 5판 grep 꼴이 놓친 줄: `"승" in m.result` 꼴 app_main 12868·13639·13820 · 15072 · dashboard 579·586. 색·글자만 고르는 줄(13611·13830 태그)은 세는 줄이 아니라 그대로 둡니다. 이후 화면 파일의 새 세는 꼴은 `test_rules` 가 막습니다(위 grep 과 같은 정의 · 예외는 줄마다 이유를 단 표). 콤보 "전체 (N경기)" 같은 판 수 글자는 저장된 판 수라 그대로 둡니다(뺀 수는 막대의 "표시한 N판 뺌"). ⓑ S 함수가 낸 경기별 줄(`win_divisions` 의 행 등)을 F 함수가 받아 세는 경우입니다. 경기 목록 꼴이 아니라 감싸개가 못 뺍니다. 6판에서는 J2 선언 표가 이 길을 막습니다. S 함수가 낸 행을 받는 F·섞임 함수는 표에 그 인자 이름을 적어야 하고, 그 행 꼴에는 `match_id` 가 있어야 합니다(`WinDivision` 은 6판에서 더함). 정적 검사가 주석 형 `WinDivision` 을 보고 표에 없으면 FAIL 입니다.
+
+  점수 리포트의 `decisive_rate`(2343·14924 · 2회차 [중])는 S 로 둡니다. 옆에 놓인 실제 점수 변화가 표시한 판까지 포함해 움직였으므로 같은 판 묶음이어야 견줄 수 있습니다(J3 예측과 같은 이유). 세션 끊기(`split_sessions`)는 F 이고, 표시한 판 자리에서 세션이 둘로 갈릴 수 있습니다(M11).
+- **J3 거르지 않는 길**: 시즌 말 순위 예측(`PredictWorker` 는 DB 의 경기 날짜만 읽습니다. 실제 순위 점수는 표시와 무관하게 움직였으므로 빼지 않습니다) · 구단주 분포의 내 1000판(분포와 같은 기준이어야 백분위가 맞습니다. 108 J2 와 같은 이유입니다) · 점수 리포트 `decisive_rate`(J2).
+- **J4 스위치 값은 `settings.ini`**(창 설정과 같은 곳 · 계정과 무관). 표시는 경기(`match_id`)에, 상대 메모·태그는 상대 `ouid` 에 붙입니다(닉네임은 바뀝니다). `MatchSummary` 에는 상대 ouid 가 없으므로 경기 상세의 상대 쪽 `ouid` 에서 찾습니다(U9 · 3회차 [중]). 상대 전적 화면은 닉네임으로 묶으니, 메모를 열 때 그 닉네임의 가장 최근 경기 상세에서 ouid 를 읽습니다. 상세가 없으면 메모 단추를 흐리게 둡니다.
+- **J6 캐시 키에 거르기 판본 하나를 더합니다**(5판). 거르기 판본은 스위치가 꺼져 있으면 0, 켜져 있으면 표시 판본 번호(표시를 고칠 때마다 하나씩 오르는 수)입니다. 화면 캐시 키를 만드는 자리 전부(`_details_key` · `_narrate_scope` · `_season_wins` · `_records` · `_saved_calc` · `_render_arrivals` · `_render_history` · `_shot_sum_key`(6649 · 3회차 [중]) — 조각 ① 첫 일로 `grep -n "_key\b\|_cache\b" app_main.py` 를 다시 떠 표로 대조합니다)에 같은 값을 더합니다. S 만 쓰는 캐시도 같이 버려지지만, 표시를 고치는 일은 드물어 캐시마다 키를 고르는 자리를 만들지 않습니다(4판의 S 키·F 키 둘은 그 고르기가 다시 틀릴 자리였습니다). 다시 계산하는 시간은 조각 ① 에서 `test_refilter_redraw_time` 으로 잽니다(전 화면 · 이 PC fifa.db 사본 · 상한 2초). 빠뜨린 캐시는 조각 ① 끝-끝 테스트가 잡습니다: 스위치를 켠 채 한 판을 더 표시하면 숫자를 내는 모든 화면에서 그 판이 빠져야 합니다.
+- **J7 표시나 스위치를 바꾼 뒤 지나는 길은 `_refilter()` 하나**입니다. `set_excluded` → 거르기 판본 올림 → 화면 키 전부 `_invalidate` → 지금 보이는 화면만 다시 그리기 순서입니다. 목록이 바뀌지 않으므로 `_on_loaded`·`_apply_season`·`_rebuild_season_combo` 를 부르지 않습니다(2회차 [중] 콤보 옛 값은 이렇게 없어집니다). 작업 스레드(`HabitsWorker` 등)는 시작할 때 거르기 판본을 들고 가고, 끝났을 때 판본이 바뀌었으면 결과를 버리고 다시 띄웁니다(M13).
+- **J8 자격 증명은 기본 데이터 폴더일 때만 읽고 씁니다**(1회차 [상]). 자격 증명 관리자는 Windows 사용자마다 하나라 `FIFA_DATA_DIR` 을 모릅니다. 테스트가 임시 `.env` 에 쓴 가짜 키가 개발 PC 의 진짜 키를 덮고, 스크래치 폴더·둘러보기가 진짜 키를 읽게 됩니다. 그래서 `config.DEMO` 이거나, **`config.ENV_PATH` 가 기본 위치(기본 `DATA_DIR / ".env"`)가 아니거나**, 환경 변수 `FIFA_NO_CRED=1` 이면 자격 증명을 건드리지 않고 `.env` 만 씁니다(6판 — 3회차 [상]: `test_ownerdist_sched.py:86` 은 `ENV_PATH` 만 임시로 바꾸고 `DATA_DIR` 은 그대로 둔 채 `save_api_key("other")`(474)를 불러, `DATA_DIR` 만 보면 진짜 키가 바뀝니다. `test_cardcollect.py:50` 도 같은 꼴). 판정은 쓸 때마다 그 시점의 `config.ENV_PATH` 로 합니다. **읽기도 같은 판정을 따릅니다**(7판 · 4회차 [중]). `config` import 때 `API_KEY` 를 정하는 자리(config.py:109~114)도 `DEMO`·`ENV_PATH`·`FIFA_NO_CRED` 를 먼저 봅니다. 순서는 `.env` 키가 있으면 그것, 없을 때만 자격 증명입니다. 옛 버전으로 내려 `.env` 에 새 키를 넣은 뒤 다시 올리면 `.env` 키가 이깁니다(다음 시작 때 J5 가 다시 옮깁니다). 자격 증명 읽기 결과는 재할당 전역 `config.KEY_STATE`("ok"·"none"·"fail")에 따로 담습니다(8판 · 5회차 [상] — import 때는 이전 값이 없어 읽기 실패도 `API_KEY = ""`(config.py:114)가 되므로, 빈 값만 보고는 가를 수 없습니다). **"fail" 은 키 관문 하나에서 끝납니다**(9판 · 6회차 [상]). 키 관문은 `app_main.py:17223`(`new_key = not config.API_KEY`)입니다. 13927·16639 는 빈 키 안내 글일 뿐입니다. 그 자리에서 `KEY_STATE == "fail"` 이면 먼저 화면 없이 한 번 다시 읽고(11판 · 8회차 [중] — 로그온 직후 자동 실행의 일시 실패가 몇 시간 뒤 [열기]에서 까닭 없는 창으로 보이지 않게), 그래도 "fail" 일 때만 [다시 읽기]·[끝내기] 창을 띄우고, 다시 읽어 "ok" 가 될 때까지 메인 창·`FCOnlineAPI`(17241 · 키가 비면 생성자가 `NexonAPIError` 를 던집니다 — nexon_api.py:171~173)·셸 예약의 시작을 만들지 않습니다. [끝내기]는 `quit_app` 으로 끝냅니다. 창을 X·Esc 로 닫으면 트레이 [열기]로 뜬 경우는 `ApiKeyDialog` 취소와 같이 None 을 돌려 트레이에 남고(17230 · tray.py:357), 일반 시작은 [끝내기]와 같습니다(11판 · 8회차 [중]). [다시 읽기] 결과가 "none" 이면 바로 아래 `new_key` 길(`ApiKeyDialog`)로 넘기고, `new_key = not config.API_KEY` 는 다시 읽은 **뒤에** 계산합니다(그래야 "ok" 뒤 시작이 평소와 같습니다 · 7회차 [중]). **`--tray` 자동 실행은 창을 띄우지 않습니다**(10판 · 7회차 [상] — 게임 위에 막는 창 금지 · `tray.AppShell.start`). 트레이 갈래(17319)는 지금 "키 없음" 일 때처럼 메인 창을 만들지 않고 트레이만 두며, 사용자가 트레이 [열기]를 누르면 `_open_window` → 17223 관문에서 위 창이 뜹니다. 그래서 `--tray` 에서는 셸 예약 셋이 관문 전에 돕니다(17329). 이 예약들이 키를 보는 자리는 `rankcollect.py:1702`·`predict_check.py:76`(`key_fingerprint("")` 가 저장 지문과 달라 건너뛰기만 하고 지우지 않습니다)과 구단주 분포(보험 ⓐ)이고, 카드 예약은 키를 보지 않습니다. 이 안전을 테스트로 고정합니다: `--tray` + "fail" 로 켜서 예약이 돌아도 바퀴 상태·`match_opp_rank`·예측 줄이 그대로. "예약 0" 단언은 일반 시작에만 겁니다. 일반 시작에서는 셸을 만들기만 하고 `start` 는 `_open_window` 뒤라, "fail→ok" 는 창이 생기기 전에만 일어나고, 키 바뀜 판정·키 지문 지우기·`_trade_mode` 를 따로 막을 필요가 없습니다(8판의 세 자리는 만들지 않습니다). 보험이 둘 있습니다. ⓐ `config.read_owner_dist()`(921)와 `owner_dist_allowed()`(902)는 "fail" 이면 `None`(모름 — 그 틱을 건너뜁니다)을 돌려줍니다. 이 보험은 조건 없이 넣습니다(11판 · 8회차 [중]). `--tray` 에서는 예약이 관문보다 먼저 서고, 일반 시작에서도 관문 창이 떠 있는 동안 게임이 꺼지면 `GameWatch`(17310·17315)의 `on_game_changed`(2521~2525)가 시작 전 예약의 `resume()` 을 불러 구단주 분포 `tick → sync`(2763)가 `shell.start` 전에 돕니다. 보험이 없으면 빈 키로 `on=False` → `_stop_and_purge(everything=False)`(2768~2771)가 진행 중인 바퀴를 off 로 바꿉니다. "fail" 은 예약 틱에서 다시 읽지 않습니다. fail→ok 는 관문에서만 일어나야 아래 "키 바뀜 판정을 따로 막을 필요가 없다" 가 성립하므로, 상주하는 동안 구단주 분포는 [열기] 때까지 건너뜁니다. ⓑ `check_api.py:79·624` 의 `if not config.API_KEY` 는 `KEY_STATE` 를 보고 "키를 읽지 못했습니다" 와 "키가 없습니다" 를 가릅니다. ⓒ `tools/release.py` 의 개인정보 검사 `private_needles()`(84)는 `if config.API_KEY:` 일 때만 키를 찾으므로, `KEY_STATE == "fail"` 이면 [FAIL] 로 멈춥니다(7회차 [중] — 키가 자격 증명으로 옮겨진 뒤 읽기가 실패하면 키 유출 검사가 조용히 빠집니다). 테스트(11판에서 갈래별로 나눔 · 8회차 [중]): 일반 시작 + "fail" 은 메인 창·`FCOnlineAPI`·`shell.start` 0 · 키를 쓰는 요청 0 · `match_opp_rank` 그대로(13판 · 10회차 [중] — rankcollect.py:1702)이고(12판 · 9회차 [중] — 관문 창이 떠 있는 동안 게임이 꺼지면 `on_game_changed` 가 예약 셋의 `resume()` 을 불러 `RankMaintWorker`(2589~2604)·`CardBackfillLoader`(2991)·`_mix_pending`(2763)이 돌 수 있어 "예약 0" 은 단언하지 않습니다), 그동안 구단주 분포 바퀴 상태·예측 줄이 그대로입니다 · `--tray` + "fail" 은 예약이 돌되 바퀴 상태·`match_opp_rank`·예측 줄이 그대로입니다 · 관문의 조용한 다시 읽기가 "ok" 면 창 없이 평소 시작 · [다시 읽기] 성공 뒤에는 평소와 같은 시작 · 트레이 [열기]로 뜬 관문을 X 로 닫으면 트레이에 남고 예약이 그대로입니다. 테스트 공통 머리(`watchdog`)가 `FIFA_NO_CRED=1` 을 주고, `test_rules` 가 "`config` 를 import 하는 테스트 파일은 `config` 보다 먼저 이 머리를 거친다" 를 대조합니다(7판에서 넓힘 — 머리보다 `config` 를 먼저 import 하면 진짜 키를 메모리로 읽습니다). 자격 증명 이름에는 지문을 넣지 않고 고정 이름 하나로 둡니다(기본 폴더일 때만 쓰므로 하나면 되고, 제거기 `.iss` 가 같은 이름을 다시 계산할 필요가 없습니다). `test_demo`·`test_ui_smoke` 가 "자격 증명 호출 0" 을 단언합니다.
+- **J9 복원은 검사를 통과한 파일만 바꿔 끼웁니다. 앱 안에 복원 사본을 남기지 않습니다**(1회차 [상] · 8판에서 `.bak` 을 뺌 · U11). 순서: zip 안 이름이 정확히 `fifa.db`·`settings.ini` 둘인지(경로 탈출 거부) → 빈 공간 확인(고정 크기 상한은 두지 않습니다 — fifa.db 는 계속 자랍니다) → 임시 파일로 풀기 → `PRAGMA quick_check` · 필수 표(`matches`·`match_players`) · 스키마 판 확인(백업의 판이 지금 앱보다 **높으면 거부**하고, 낮으면 받은 뒤 평소 `store.open_db` 이전으로 올립니다) → **확인 창**: 백업과 지금 기록을 나란히 보여 줍니다(마지막 경기 날짜 · 경기 수 · 계정 수). 체크 [복원 전에 지금 기록을 백업] 은 기본으로 켜 있고, 켜 두면 평소 [백업]과 같은 zip 을 사용자가 고른 곳에 먼저 만듭니다(실패하면 복원하지 않습니다 · 이 zip 은 `CLEARING` 을 잡고 쓰는 로더를 멈춘 뒤에 만들어, 만드는 동안 쓴 줄이 zip 과 새 파일 둘 다에서 빠지지 않게 합니다 · 임시 이름으로 쓰고 다 쓴 뒤 이름을 바꾸며 실패하거나 끄면 반쯤 쓴 zip 을 지웁니다 · 빈 공간 확인에 zip 크기도 넣습니다 · 6회차 [중]) → 지금 fifa.db 에 `wal_checkpoint(TRUNCATE)` 뒤 연결을 닫고 `-wal`·`-shm` 을 지운 직후 새 파일을 `os.replace` 한 번으로 넣습니다(`storage.reset_db` 160~180 과 같은 꼴). 실패하면 지금 파일은 그대로입니다.
+
+  **복원 임시 파일**: 풀기 임시 파일은 데이터 폴더 안 정해 둔 이름(`restore-*.tmp`) 하나로 두고 검사는 `mode=ro&immutable=1` 로 엽니다(`-wal`·`-shm` 이 생기지 않게 · 쓸기 무늬는 `restore-*.tmp*` · 스키마 올리기는 바꿔 끼운 뒤 평소 `open_db` 에서만 · 6회차 [중]). 풀기·검사·확인 창에 낼 양쪽 집계는 작업 스레드에서 끝낸 뒤 확인 창을 띄웁니다. 걸쇠를 잡은 뒤의 복원 스레드(복원 전 zip · 바꿔 끼우기)는 `ClearWorker` 와 같은 꼴로 둡니다(7회차 [중] — `Worker.start` 는 `clearing_blocks(WRITES)` 이면 띄우지 않습니다 · app_main 332). 걸쇠를 잡는 쪽 스레드의 `WRITES` 는 비우고, `running_writers` 를 멈추고 미리 읽기(`_prefetch.discard`)를 치운 뒤 띄웁니다(15548~15556 과 같은 순서). 복원 전 백업이 실패하거나 취소되면 걸쇠를 풀고 멈춘 예약을 다시 세웁니다(테스트). 끝나거나 실패하면 지웁니다. 도중에 죽어 남은 것은 켤 때 쓸어 지웁니다(5회차 [중] — 옛 기록 전부가 담겨 있습니다). 이 파일은 복원이 도는 몇 분만 있으므로 안내의 기한 약속과 부딪치지 않습니다. 복원은 `CLEARING` 걸쇠를 잡고 돌아, 그동안 지우기 길(`purge_ranker_pick_data` 등)은 기존 규칙대로 거부되거나 걸쇠가 풀린 뒤에 돕니다. 이용 안내(F3 에서 고치는 자리)에는 한 문장을 더합니다. "백업 파일(zip)은 이 PC 의 다른 곳에 저장되므로, 수집을 끄거나 기록을 지워도 앱이 그 파일을 지우지 못합니다." 7판의 `store.drop_restore_bak`·`RESTORE_BAK_DAYS`·"7일 동안 따로 둡니다" 문장은 만들지 않습니다. **복원을 마친 자리와 [내 기록 전부 지우기] 뒤**에는 창이 쥔 표시 묶음(M1)을 `_forget_everything`(15577~15598) **안에서** 비우고(13판 · 10회차 [중] — 밖에서 비우면 `_refilter` 가 창의 옛 묶음으로 `set_excluded` 를 다시 불러 옛 표시가 되살아납니다), 그다음 `core_api` 표시 묶음을 빈 것으로 · 거르기 판본 올림 · `_refilter` · J10·칩 캐시 비움을 부릅니다. 복원 뒤에는 `sync_ranker_pick_data` 를 부릅니다(구단주 분포 sync 는 그 안 7889 에 있습니다 · 전부 지우기는 이미 15573 에서 부르므로 두 번 부르지 않습니다)(12판 · 9회차 [중] — 복원한 fifa.db 에 지금은 전제가 꺼져 지워야 할 랭커 픽·구단주 분포가 되살아날 수 있습니다). 테스트: 수집을 켠 채 백업하고 끈 뒤 복원해 그 기록이 남지 않는지.
+- **J5 키 옮기기 순서**(옮기는 자리는 앱 주 프로세스 시작 한 곳뿐 · `config` import 때 옮기지 않습니다 — `dev_archive`·`measure_cards`·`check_api` 가 앱과 동시에 `.env` 를 다시 쓰지 않게 · 3회차 [중]): 자격 증명에 쓰고 → 다시 읽어 같을 때만 `.env` 줄을 지웁니다. 옮기다 죽어도 키가 사라지지 않습니다. 자격 증명을 못 쓰는 PC 는 `.env` 그대로입니다. 개발용 `DEV_NEXON_API_KEY`·서버 키는 옮기지 않습니다. **".env 키" 는 파일의 줄(`config._read_env_disk`)로 정합니다**(못 읽어 None 이면 `KEY_STATE` 는 "fail" · 단 `config.DEMO` 는 `_read_env_disk` 보다 먼저 보고 "none" 으로 둡니다(14판 · 11회차 [중] — `_read_env_disk` 는 둘러보기에서 일부러 None 을 돌려줍니다 · config.py:746~747 · 테스트 `test_demo` 에서 `KEY_STATE != "fail"`) — "none" 으로 두면 `.env` 에 키가 있는데 `ApiKeyDialog` 가 뜹니다 · `_read_env_disk` 는 config.py:745 로 import 때 읽는 자리(114)보다 뒤라 정의를 앞으로 옮깁니다 · 13판 · 10회차 [중])(12판 · 9회차 [중] — 지금 읽기는 `os.getenv`(config.py:113~114)라, 업데이트 설치기가 `Popen`(updatecheck.py:303)으로 물려준 환경의 옛 `NEXON_API_KEY` 가 새 자격 증명을 덮을 수 있습니다). 옮긴 뒤와 `save_api_key` 뒤에는 `os.environ` 의 그 값을 지웁니다. 기본 폴더에서 `save_api_key` 는 자격 증명에 쓰고 남은 `.env` 줄도 같이 지웁니다. 관문의 조용한 다시 읽기가 "ok" 면 `save_api_key` 를 거치지 않고 `API_KEY`·`KEY_STATE` 만 바꿉니다(`save_api_key` 는 `"" != key` 로 구단주 분포 토글을 "key" 사유로 끕니다 · config.py:697~699). 옮기는 자리는 `SingleInstance.claim()`(17304~17307) **뒤**입니다. 앞에 두면 떠 있는 실행본을 부르고 끝나는 두 번째 실행도 `.env` 를 다시 씁니다. 테스트: 옛 값을 env 에 둔 채 켜기 · 실행본 둘.
+- **J10 트레이 한 줄은 창에 기대지 않고, 작업 스레드 없이 메뉴를 열 때 바로 읽습니다**(16판 · 2026-11-15 조각 ③ 시작 때 다시 설계 · 검토 [상] 0 · 옛 12~14판 글은 아래 "J10 옛 설계(14판)" 에 그대로 둡니다). 트레이를 주로 쓰는 사람은 창이 없거나(`--tray` · 키 "fail"·"none" · 동의 전), 숨긴 채 켰거나, 메모리를 내려놓은 상태가 대부분이라 M1 의 로더 묶음은 비어 있습니다. 그래서 한 줄은 DB 를 직접 읽습니다. 9~12회차의 [상] 넷(W2~W5)과 [중] 대부분은 "읽는 작업 스레드를 누가 띄우고, 걸쇠·바꿔 끼우기·종료와 어떻게 엮느냐" 에서 나왔습니다. 재 보니 그 스레드가 필요 없어 스레드를 없앴습니다.
+  - **실측(11-15 · 이 PC fifa.db · 1만 5천 판 계정 · 읽기 전용)**: 연결 열기 0.2ms · 오늘 경기 쿼리 0.9~3.8ms(75판을 한 날 포함) · `notes` 읽기 0.1ms. 단 쿼리는 `matches` 의 (종류, 날짜) 색인을 먼저 타야 합니다(`FROM matches m CROSS JOIN match_players p` — 계획: `idx_matches_type_date` 범위 → `match_players` 기본 키 덮는 색인). 계정 색인을 먼저 타면 35~44ms 이고, `store.my_account` 는 안의 `match_count` 때문에 40~119ms 라 쓰지 않습니다. 75판 해석(`parse_match`)은 구현 때 같이 잽니다. 메뉴 열기 전체가 50ms 를 넘으면 그때 다시 정합니다.
+  - **어디서**: 셸(`tray.py`)이 메뉴 `aboutToShow` 에서 app_main 이 넘긴 함수 하나(`today_line() -> str | None`)를 부르고, 돌아온 글로 메뉴 맨 위의 누를 수 없는 줄을 바꿉니다(None 이면 그 줄을 숨깁니다). 예외는 셸이 받아 줄을 숨깁니다(트레이 메뉴가 안 열리면 [종료] 도 못 누릅니다). 세는 코드는 `tray.py` 에 두지 않습니다(J2 ⓐ 정적 검사 범위 밖이 됩니다).
+  - **연결**: 그 함수 안에서 열고 닫습니다(`file:…?mode=ro` URI · `timeout` 0.05초 · 전체 300ms · `try/finally` 로 닫기 · `sqlite3.Row` — M75). 화면 스레드가 이벤트 루프로 돌아가기 전에 닫히므로, 뒤에 시작하는 바꿔 끼우기(`reset_db`·J9 `os.replace`)를 막을 연결이 남지 않습니다. 스레드가 없으니 주인·종료 목록(M63)·치우기 자리(M64·M70·M78)가 없습니다.
+  - **걸쇠(W5)**: `CLEARING` 에 `STORE_FIFA` 나 `"all"` 이 있으면 열지 않고 None. `CLEARING` 은 화면 스레드만 넣고 빼므로(`start_clear` 15898 · 복원 16015 · 끝 `_on_storage_cleared` 15911), 같은 스레드에서 본 값이 그 순간의 사실입니다. `clearing_blocks` 를 쓰지 않습니다(빈 `WRITES` 면 거짓이라 W5 가 그 함정입니다).
+  - **내 계정**: `store.trade_state(conn)` 의 `my_ouid` 와 `accounts` 에 그 줄이 있는지만 봅니다(`match_count` 안 봄 · `key_fp` 안 봄 — M72 그대로). 매치 종류는 `config.DEFAULT_MATCH_TYPE`.
+  - **오늘(KST)**: PC 시간대를 믿지 않고 `datetime.now(timezone.utc)` 에 `config.MATCH_DATE_OFFSET_H` 를 더한 날짜로, 경계는 `matchtime.raw_bound(오늘)`·`raw_bound(내일)` 입니다. 시간대를 KST 가 아닌 곳으로 흉내 낸 테스트를 둡니다.
+  - **읽기·셈**: store 에 새 함수 `today_payloads(conn, ouid, match_type, lo, hi)`(M79 · `test_rules._drive_uncovered()` 에 한 줄 · TEMP B-TREE 없음 · 깨진 행은 건너뜀). 셈은 core 쪽 새 함수 하나(`sessions.today_wdl(details, ouid, *, exclude)` — `parse_match` 뒤 `models.wdl` 을 그대로 불러 몰수도 승패로 셉니다 · 화면과 같은 기준)이고, 표시 묶음은 `exclude=` 로 직접 받습니다(W3). `FILTER_PLAN` 에는 섞임 갈래(인자 `details`)로 둡니다. 셸은 늘 `exclude=` 를 넘기므로 감싸개가 창의 전역을 넣지 않습니다(M77 은 ①-1 에서 `apply_defaults` 앞 검사로 이미 됨 · core_api:349). `set_excluded` 는 부르지 않습니다.
+  - **표시 묶음**: 스위치가 켜졌을 때만 `store.load_notes(conn).marks` 의 키, 꺼졌으면 빈 묶음. `notes` 표가 없는 옛 DB(업데이트 직후 · 읽기 전용 연결은 스키마 올리기를 안 거칩니다)는 빈 표시(M65).
+  - **스위치(M66·M74·M76)**: 트레이와 창은 늘 한 프로세스라, 창과 **같은 읽기 함수**(모듈 함수 `read_exclude_switch()` 로 옮기고 창의 `_read_exclude_switch` 도 그것을 부릅니다)를 씁니다. 쓰는 쪽 `sync()` 는 ①-2 에 이미 있습니다. 다른 프로세스로 재는 테스트는 두지 않고(그런 경로가 없습니다), 같은 프로세스에서 스위치를 바꾼 직후 메뉴를 열어 새 값이 나오는지 잽니다. 복원 뒤 옛 값은 M5(다시 켜기 안내)에 묶습니다.
+  - **캐시 없음**: 열 때마다 셉니다(몇 ms). 옛 설계의 "스레드가 돌아오면 열린 메뉴 글자 바꾸기"·"첫 열기는 앞 캐시" 는 없앱니다.
+  - **글**: "오늘 3승 1무 2패" · 오늘 0판이면 "오늘 경기 없음". 승률·알림은 붙이지 않습니다(알림 없음 원칙).
+
+  - **검토(11-15 · Opus 1명 · [상] 0 · [중] 4 → 16판에 반영)**:
+    - ⓐ 연결은 `try/finally` 로 닫습니다. 닫지 않은 ro 연결은 함수가 끝나도 살아 있어 `-wal`·`-shm` 지우기가 WinError 32 로 막히고 `_swap_in`(storage.py:186~190)이 "busy" 가 됩니다(검토자 실측). 테스트: 셈 도중 예외를 낸 직후 `reset_db` 가 "ok".
+    - ⓑ 시간은 121판인 날(10-30) 첫 실행이 쿼리 36ms + `parse_match` 19ms 로 약 55ms, 데워진 뒤 15ms 입니다(검토자 실측). 메뉴 한 번 열기에는 견딜 만하다고 보고 캐시는 두지 않습니다. 구현 뒤 실제 트레이에서 재서 100ms 를 넘으면 (오늘 날짜, 오늘 경기 수, 마지막 경기 id, 표시 묶음) 을 키로 한 캐시를 붙입니다.
+    - ⓒ `timeout` 은 문장마다 걸려 문장 5개면 최악 1초입니다. 연결 `timeout` 을 0.05초로 줄이고 `set_progress_handler` 로 함수 전체 300ms 가 지나면 끊어 줄 없음으로 둡니다(바꿔 끼운 직후 DELETE 모드·WAL 복구 때의 지연은 재지 못했습니다).
+    - ⓓ Windows 에는 `tzset` 이 없어 프로세스 시간대를 바꿀 수 없습니다. 셈 함수는 `now=`(UTC aware) 를 받고 테스트는 그것을 넣어 자정 경계를 잽니다.
+    - [하] 정한 것: 트레이의 "오늘" 은 KST 입니다(대시보드 dashboard.py:462 는 PC 날짜라 KST 가 아닌 PC 에서 다를 수 있습니다 · 이 PC 와 사용자 대상은 KST 라 지금은 그대로 둡니다). 둘러보기 셸에도 같은 함수를 넘깁니다(둘러보기 DB 를 읽습니다). 동의 판정은 `config.NOTICE_ACCEPTED`(요청 없는 읽기라 판 번호는 안 봅니다). 창이 아직 쓰지 않은 표시(`NotesWriter` 대기)는 몇 ms 늦게 반영됩니다. `today_wdl` 은 F 값만 내지만 `exclude=` 를 직접 받으려고 MIX 갈래에 둡니다(FILTER_PLAN 줄에 주석). ro 연결은 `-wal`·`-shm` 이 없으면 만들고 남깁니다(해 없음 · `_swap_in` 이 먼저 지웁니다). fifa.db 가 없으면 파일을 만들지 않고 줄 없음입니다.
+
+  | 상태 | 한 줄 |
+  |---|---|
+  | 동의 전(`NOTICE_ACCEPTED` 거짓) · 내 계정을 안 정함 | 줄 없음 |
+  | 창 없음(`--tray` · 키 "fail"·"none") · 숨긴 채 켬 · 메모리 내려놓음 | 평소처럼 셈(DB 읽기만 · 요청 0 · 안내 15 는 요청 관문이라 안 봅니다) |
+  | `CLEARING` 에 fifa·all · fifa.db 가 없음·못 엶·잠김 0.2초 넘음 · 셈 도중 예외 | 줄 없음 |
+
+  테스트: 창 없이 트레이만 둔 상태에서 스위치를 켜고 표시한 판이 한 줄에서 빠지는지(끄면 다시 들어오는지) · 내려놓은 뒤 같은 숫자 · 요청 0 · `CLEARING` 중에는 `sqlite3.connect` 가 한 번도 안 불림(감시 · 걸쇠 검사를 빼면 FAIL) · 함수가 돌아온 직후 `reset_db` 가 "ok"(연결 닫기를 빼면 FAIL) · `notes` 없는 옛 DB · KST 가 아닌 시간대에서 자정 경계 · 몰수패가 패로 · `exclude=` 를 안 넘기면 창 전역이 들어가는 것과 넘기면 안 들어가는 것. M10 의 "메모리 내려놓은 상태에서 빈 줄" 은 이 표로 바꿉니다(칩 미리보기는 창 안이라 M10 그대로 — 칩은 경기가 적은 계정이 `load_details(limit=10)` 로 90~260ms 라 작업 스레드에 둡니다 · 11-15 실측).
+
+### 조각
+
+1. **① A** — `notes` 표 · 상대 메모·태그(상대 전적 화면) · 경기 한 줄 메모·표시(경기 카드 · 상세) · 스위치 · `core_api` 감싸개와 선언 표 `FILTER_PLAN`·정적 검사·기록기(J1·J2) · 섞임 함수의 `exclude=` · `WinDivision.match_id` · 화면이 직접 세는 줄을 core 로 · `_refilter`(J7). 테스트: 스위치 끔이면 지금 골든 그대로 · 켜면 표시한 판이 숫자를 내는 어떤 화면에도 안 남는다(전수) · 넥슨 기록(등급·보상·스쿼드) 숫자는 스위치와 무관하게 같다 · 경기 목록에는 남는다
+   - **①-1 끝(2026-11-15)**: 감싸개·`FILTER_PLAN`(212개: F 66 · 섞임 7 · 통과 3 · S 136 · 새 F 함수 넷 포함)·정적 검사·기록기 · 섞임 `exclude=` · `WinDivision.match_id` · 화면이 직접 세던 줄을 `core.wdl`·`error_count`·`decided_shots`·`recent_games` 로 옮겼습니다. 표시 묶음이 비면 숫자가 그대로입니다(전 테스트 초록). 리뷰에서 `build_timeline` 을 S 에서 F 로 옮겼습니다(사건 앞뒤 창의 승·무·패). 결과 점 `recent_games` 는 표시한 판을 뺀 뒤 N판을 채웁니다. `narrate` 의 최근 판과 같은 기준이고, M34 의 "채우지 않음" 은 `window_of` 로 고른 빠른 범위에만 둡니다.
+   - **①-2 끝(2026-11-15)**: `notes` 표(`RESET_WIPE`) · 경기 카드 오른쪽 클릭과 상세 창의 표시·메모 · 상대 전적의 메모·태그 · 위쪽 막대 스위치와 "표시한 N판 뺌" · `_refilter` · 캐시 키에 거르기 판본(`_details_key` 가 품어 캐시 여섯이 같이 따라옵니다 · 캐시 속성은 `test_filter_screens` 가 소스에서 전부 떠 분류표와 대조) · M1·M3·M13 실제 QThread · 끝-끝 전수 테스트. 계획과 다른 점 셋입니다. ⓐ 메모 묶음은 `finished_ok` 의 열다섯째 인자가 아니라 바로 앞에 오는 신호 `notes_ready` 로 넘깁니다(`_on_loaded` 를 직접 부르는 테스트 수십 곳 때문 · 순서는 테스트가 지킵니다). ⓑ 스위치는 가운데가 아니라 오른쪽 묶음에 둡니다(가운데는 1280 최소 폭을 넘깁니다). ⓒ **J6 의 "전 화면 2초" 는 이 PC 자료(14,962판 · 표시 41판)에서 2.2~5.6초라 지키지 못합니다.** 실제 앱은 보이는 화면만 그리므로 상한은 열린 화면 하나에 둡니다(가장 느린 화면 0.47~1.24초). 전 화면 시간은 출력만 합니다. Opus 리뷰에서 둘을 고쳤습니다. 쓰기 전에 표를 읽은 로더 값이 늦게 오면 방금 쓴 표시가 화면에서 사라지던 틈(`_notes_applied` 로 다시 얹음)과, 상세 창을 열 때마다 쌓이던 신호 연결입니다. 둘 다 되돌리면 `test_notes_thread` 가 FAIL 합니다. 다음은 ② B·C 입니다.
+2. **② B·C** — 백업·복원(J9) · 키 보관 옮기기(J5·J8 · 테스트 머리 `FIFA_NO_CRED`). ①처럼 둘로 나눴습니다(②-1 C → ②-2 B). 테스트 머리가 모든 테스트에 닿으므로 그 안전망을 먼저 세웠습니다.
+   - **②-1 끝(2026-11-15)**: 자격 증명(ctypes · 고정 이름 `config.CRED_TARGET`) · `KEY_STATE` · `cred_allowed` · 켤 때 옮기기 `migrate_key_to_cred`(`claim()` 뒤) · 키 관문 `app_main._key_gate`·`KeyReadFailDialog` · 보험 ⓐⓑⓒ · 제거기 · 테스트 머리 `tests/watchdog.py` 와 `test_rules` 대조 · 안내 16. Sonnet 구현(32만 토큰 · 37분 · 변이 14건 전부 FAIL) 뒤 Opus 리뷰가 넷을 고쳤습니다. ⓐ **`FIFA_DATA_DIR` 로 옮긴 스크래치 폴더도 "기본 위치" 로 판정해 거기서 넣은 시험용 키가 진짜 키를 덮었습니다.** 기본 위치를 `FIFA_DATA_DIR` 을 안 본 `_default_data_dir()` 로 잡습니다(테스트는 머리가 `FIFA_NO_CRED` 를 줘서 이 길을 못 봤습니다. 새 프로세스 테스트가 지킵니다). ⓑ 안내 16 은 수집과 무관해 `NOTICE_COLLECT_ONLY_FROM` 을 17 로 올렸습니다(수집을 끈 15 동의자에게도 묻습니다). ⓒ J8 테스트 목록의 "`match_opp_rank`·예측 줄이 그대로" 가 빠져 있어 `test_rankcollect`·`test_predict_check` 에 하나씩 더했습니다(지문 검사를 빼면 둘 다 FAIL). ⓓ 안내 문장 띄어쓰기. 계획과 다른 점 하나: `.env` 를 못 읽었을 때 "fail" 은 자격 증명을 쓰는 자리에서만 냅니다. 테스트·다른 폴더는 옛 동작대로 "none" 입니다(거기엔 자격 증명이 없어 "fail" 로 두면 관문에 갇힙니다). `--tray` 갈래는 이미 "키가 비면 창을 안 만든다" 라 코드를 바꾸지 않았습니다.
+   - **②-2 끝(2026-11-15)**: [정보 › 저장 공간] [백업]·[복원] · `storage.backup`·`inspect_backup`·`restore`·`merge_settings`·`sweep_tmp` · `_swap_in`(`reset_db` 와 공용) · 스키마 판 `store.SCHEMA_VERSION`(`PRAGMA user_version` — 지금까지 판 번호가 없어 새로 두었습니다. 옛 백업은 0 으로 받습니다) · 작업 스레드 `BackupWorker`·`RestoreInspectWorker`·`RestoreWorker(ClearWorker)` · 확인 창 `RestoreConfirmDialog` · 안내 16 에 같은 판으로 백업 문장. Sonnet 구현(38.6만 토큰 · 43분 · 변이 35건 전부 FAIL) 뒤 Opus 리뷰가 셋을 고쳤습니다. ⓐ **안내가 "백업에 랭킹 수집 기록이 들어가지 않는다" 라고 적었으나 구단주 분포·랭커 픽·검색한 구단주 ELO 는 fifa.db 에 있어 zip 에 들어갑니다.** 안내 두 곳과 저장 공간 글을 사실대로 고쳤습니다(들어가지 않는 것은 API 키와 rank.db). ⓑ SQLite backup 을 2048쪽씩 나누면 걸음 사이에 다른 연결이 쓸 때마다 처음부터 다시 복사해, 수집 예약이 쓰는 동안 끝나지 않을 수 있었습니다. 한 번에 복사합니다(`BACKUP_PAGES_PER_STEP = -1` · 복사 도중 취소는 못 듣고 zip 쓰기에서 듣습니다). ⓒ 검사 도중 [정보] 창을 닫으면 끝난 검사의 사본(옛 기록 전부)이 앱을 끌 때까지 데이터 폴더에 남았습니다. 창을 닫으면 검사에 멈춤을 요청하고 늦게 온 결과는 버립니다. 새 테스트 둘은 고친 줄을 되돌리면 FAIL 합니다(변이 3건). 계획과 다른 점: 확인 창 기본 단추는 [취소](Enter 한 번으로 되돌릴 수 없는 복원이 시작되지 않게) · 복원 전 백업 위치 고르기를 취소하면 복원하지 않음 · 백업 zip 의 `.part` 는 사용자가 고른 폴더라 켤 때 쓸기 밖. 재지 못한 것: 실제 800MB fifa.db 의 압축률과 시간(지어낸 159MB 는 단계 6 에서 0.091 · 1.6초라 실제는 더 나쁠 수 있습니다) · 실제 창에서 파일 고르기. 다음은 ③ D·E(J10 다시 설계부터).
+3. **③ D·E** — 트레이 한 줄(시작 때 J10 을 다시 설계하고 그 설계만 검토자 1명 · 12회차 W5·M75~M79 를 넣어서) · 칩 미리보기 · 켜는 속도·메모리 다시 재기 · exe 2번 모니터 실화면 → 108 과 같이 3.10.1 공개
+   - **D 끝(2026-11-15 `1d9b8a4`)**: `app_main.today_line`(J10 16판 그대로 · 화면 스레드 ro 연결 · `finally` 닫기 · 걸쇠는 `CLEARING` 직접) · `tray.AppShell(today_line=)` 메뉴 맨 위 줄(보통 실행·둘러보기 둘 다) · 스위치 읽기를 모듈 함수 `read_exclude_switch` 로 · U2 `ChipPreviewLoader`(작업 스레드 · 캐시 키 `(ouid, filter_version)` · 지우는 중·내려놓은 상태는 빈 말풍선 · `_forget_everything`·`_on_loaded` 에서 비움) · `tests/test_today_line.py` 18개. Sonnet 구현(23만 토큰 · 18분 · 앞 세션이 끊긴 자리에서 이어 씀) 뒤 Opus 리뷰가 하나를 고쳤습니다. **칩 로더를 "읽기만" 이라 `WRITES` 를 비워 두어 지우기·복원이 기다리지 않고 지우는 중에도 떴습니다**(W5 와 같은 함정). `WRITES` 에 fifa 를 두었습니다. 변이 10건 전부 FAIL. 같이 고친 것: CHANGELOG 백업 줄이 "랭킹 수집 기록은 담지 않는다" 로 남아 있던 것(②-2 리뷰에서 안내만 고쳤습니다). 계획과 다른 점: `today_wdl` 이 SQL 경계 밖에서 날짜를 한 번 더 거릅니다(이중 방어 · 경계 변이는 `matchtime.today` 오프셋 변이가 잡습니다). 칩 말풍선 승률은 표본 흐림을 하지 않습니다(10판 고정이라 늘 같은 표본). 재지 못한 것: 실제 트레이에서 메뉴 열기 시간(ⓑ 100ms 기준 · 실화면에서 잽니다).
+   - **E 재기 끝(2026-11-15 · 실데이터 사본 846MB · 내 계정 14,963판 · 넥슨 요청 막음 · 2번 모니터 · 3회 중앙값)**: exe 보이는 창까지 **5.27초** · 켜고 45초 뒤 개인 메모리 **1,188MB**. 지난 값(1.99초 · 1,066MB)보다 나빠 보여 **같은 사본·같은 방법으로 3.9.1 소스와 지금 소스를 나란히** 쟀습니다: 5.37초 대 5.41초(+0.7%). 시작 시간은 코드가 아니라 조건 차이입니다(지난 값은 10-25·11-01 의 더 작은 사본). 메모리는 3.9.1 이 켤 때 계정을 안 열어 588MB 라 바로 견줄 수 없고(108 C 부터 켤 때 내 계정 = 검색 1회), 경기 수로 나누면 83KB/판(12,851판 1,066MB) → 79KB/판으로 늘지 않았습니다. 그래서 10% 넘게 나빠진 것은 없습니다. ⚠ 다음 재기부터는 기준을 "같은 사본에서 직전 공개판과 나란히" 로 둡니다(옛 숫자 하나와 견주면 자료가 늘어난 만큼 나빠 보입니다). **J10 ⓑ**: 같은 사본에서 `today_line` 한 번이 오늘 2.4ms(첫 호출)·1.2ms, 가장 많은 날(123판)로 옮기면 23ms·15ms 라 100ms 아래 · 캐시는 안 붙입니다. 실제 트레이 아이콘 메뉴와 칩 말풍선을 눈으로 보는 것은 마우스가 주 모니터 작업 표시줄을 지나야 해 사용자 확인으로 남깁니다.
+
+### 1회차 [중] (구현 때 테스트로)
+
+| # | 내용 | 조각 · 잡을 곳 |
+|---|---|---|
+| M1 | 표시 묶음은 로더가 `Signal(object)` 로 같이 넘깁니다. 화면 스레드에서 fifa.db 를 읽지 않습니다(`CLEARING`). 메모리를 내려놓았다 다시 열 때도 같은 길 | ① 실제 QThread 테스트 |
+| M2 | ~~`_apply_season` 그리기 조건은 S 로~~ 5판에서 목록이 늘 원본이라 할 일이 없습니다 | — |
+| M3 | `notes` 쓰기는 `WRITES` 를 둔 작업 스레드에서. `CLEARING` 중이면 거부합니다 | ① `test_storage` |
+| M4 | 백업·복원 모두 `clearing()` 중이면 거부합니다. 복원은 "all" 과 다른 kind 로 두어 rank.db 를 지우지 않고(15537), 끝나면 `_forget_everything` · 예약 sync | ② |
+| M5 | `settings.ini` 는 되돌릴 키만 고르고(창 위치·`SEEN_VERSION_KEY` 제외) 다시 켜라고 안내합니다. 닫을 때 `_save_settings` 가 덮기 때문입니다 | ② |
+| M6 | 백업·복원 전에 빈 공간을 잽니다(사본 약 800MB + zip). 사본 연결에도 `secure_delete`, 임시 파일 정리 | ② |
+| M7 | `QFileDialog` 을 `test_ui_smoke` 모달 차단 목록에(PyQt 6) | ② |
+| M8 | 옛 버전으로 되돌리면 `.env` 에 키가 없어 키 창이 다시 뜹니다(실패·복구 표에 적음). 제거기(.iss)에서 자격 증명을 지웁니다. `check_api.py:80` 문구와 골든을 고칩니다 | ② |
+| M9 | 트레이 한 줄·칩 미리보기도 스위치를 따릅니다(U1). 승·무·패는 `result_of`(몰수패 포함), 오늘 경계는 `matchtime.raw_bound` | ③ |
+| M10 | 칩 "최근 10판" 쿼리 실행 계획에 TEMP B-TREE 가 없게(`test_rules`). 칩 읽기는 `CLEARING` 중·메모리 내려놓은 상태에서 빈 줄, 결과는 캐시 · 트레이 한 줄은 J10 표(12판) | ③ |
+| M11 | 세션 끊기가 F 라 표시한 판 자리에서 세션이 갈릴 수 있습니다(J2) | ① |
+| M12 | J2 표 나머지 행 대조 → 2회차에서 끝(줄 번호 맞음 · 빠진 함수 없음 · 번호로 찾는 줄은 12814 하나). 5판에서 그 표는 기록기 표로 바뀌었습니다 | 끝 |
+| M13 | 작업 스레드 결과가 시작 때 거르기 판본과 다르면 버리고 다시 띄웁니다(J7) | ① 실제 QThread 테스트 |
+
+### 계획 검토 종료 (2026-11-15 · U13 사용자 "추천대로")
+
+9~12회차의 [상] 넷(W2~W5)이 모두 J10(트레이 "오늘 전적" 한 줄)에서 나왔고, 문장으로 고칠 때마다 다음 빈틈이 하나씩 드러났습니다. 다른 항목은 9회차(계획 전체) 뒤 [상]이 0 입니다. 그래서 J10 만 계획 검토에서 떼어 조각 ③ 시작 때 다시 설계합니다. 그때는 조각 ① 의 감싸개·선언 표가 코드로 있어 그것을 보고 정할 수 있습니다. J3 은 조각 ③ 안이라 ①·② 와 엮이지 않습니다.
+
+- **검토 기준과 다른 점**: 끝내는 조건 "마지막 회차는 계획 전체 · 새 [상] 0" 은 엄밀히 채우지 않았습니다. 마지막 전체 회차(9회차)의 [상]은 J10 하나뿐이었고, 그 뒤 바뀐 줄 회차 셋도 J10 밖에서는 [상]이 없었습니다.
+- **조각 ③ 시작 때 할 일**: J10 다시 설계(12회차 W5 · M75~M79 를 넣어서 · 특히 `WRITES` 가 빈 스레드는 `clearing_blocks` 에 안 걸린다) → 그 설계만 검토자 1명 → [상] 0 이면 구현.
+- **재지 않은 것**(1~12회차 "재지 않은 것" 합친 것 중 남은 것): exe·작업 스케줄러에서 자격 증명 API 실패 꼴 · 설치기가 띄운 앱의 `NEXON_API_KEY` 물려받기 · 다른 실행본이 관문 창 위에서 창을 부를 때 · `immutable=1`·`mode=ro` 로 연 WAL 파일 · 서버 모드에서 키가 빈 경우 · E 켜는 속도·메모리와 백업 압축률 · 감싸개 기록기의 스레드 안전.
+
+### J10 옛 설계 (14판 · 2026-11-15 15판으로 바꿈 · 그날의 기록이라 고치지 않습니다)
+
+작업 스레드가 읽던 설계입니다. 9~12회차 [상] W2~W5 가 여기서 나왔고, 15판은 스레드를 없애 그 엮임을 지웠습니다.
+
+- **(14판) J10 트레이 한 줄은 창에 기대지 않습니다**(12판 · 9회차 [상] · **조각 ③ 시작 때 다시 설계합니다 — 절 "계획 검토 종료"**). 트레이를 주로 쓰는 사람은 창이 없거나(`--tray` · 키 "fail"·"none" · 동의 전), 숨긴 채 켰거나(`_open_window(show=False)` 는 미리 읽기·`open_startup` 을 안 합니다 · 17245~17261), 메모리를 내려놓은 상태(`tray._release_due` 425~432)가 대부분이라 M1 의 로더 묶음은 비어 있습니다. 그래서 한 줄은 `aboutToShow` 때 작은 작업 스레드(`Worker` · `WRITES` 비움)가 fifa.db 를 읽기 전용으로 열어 내 계정의 오늘 경기와 `notes` 표시를 읽고, 스위치는 `settings.ini` 에서 읽어, 셈은 core 의 새 함수 하나로 합니다. **이 함수는 표시 묶음을 `exclude=` 인자로 직접 받습니다**(13판 · 10회차 [상] — F 감싸개가 보는 `core_api` 재할당 전역은 창이 `set_excluded` 로만 넣어, 창이 없으면 비어 있습니다). J10 스레드는 `set_excluded` 를 부르지 않습니다(부르면 창의 전역을 다른 스레드에서 덮어 J7 의 거르기 판본 올림을 건너뜁니다). 스위치가 꺼져 있으면 빈 묶음을 넘깁니다. 선언 표 `FILTER_PLAN` 에는 섞임 함수와 같은 갈래(인자 `exclude`)로 한 줄을 둡니다. 세는 코드를 `tray.py` 에 두지 않습니다(J2 ⓐ 정적 검사 범위 밖이 됩니다). 결과는 다음 열기까지 캐시하고, 스레드가 돌아오면 열린 메뉴 글자를 바꿉니다. 10회차 [중](13판):
+  - **주인과 종료**: 스레드를 만드는 함수는 app_main 이 셸에 넘기고, 셸이 주인입니다. `quit_app`(tray.py:443~457)의 정리·기다림 목록과 fast 종료의 `finish_threads` 에 넣습니다.
+  - **바꿔 끼우기와 겹침**: `WRITES` 가 비어 `running_writers`(351~361)가 찾지 못하므로, 미리 읽기를 치우는 자리(15546)에서 J10 스레드도 기다리거나 치웁니다. 걸쇠 직전에 연 읽기 연결이 `reset_db`·J9 `os.replace` 를 막지 않게 합니다.
+  - **업데이트 직후**: 읽기 전용 연결은 `store.open_db` 의 스키마 올리기를 안 거치므로, `notes` 표·새 열이 없으면 빈 표시로 읽습니다("못 엶" 으로 줄을 지우지 않습니다).
+  - **스위치 값**: 창이 스위치를 쓰는 자리에서 `QSettings.sync()` 를 불러, 바꾼 직후 트레이를 열어도 새 값을 읽게 합니다. 같은 프로세스 안의 QSettings 는 같은 메모리 사본을 보므로, 테스트는 다른 프로세스가 쓴 값을 읽는지로 잽니다(11회차 [중] — 같은 프로세스로 재면 `sync()` 를 빼도 초록입니다). 복원 뒤 같은 프로세스 캐시가 옛 값을 쥐는 일은 M5(다시 켜기 안내)에 묶습니다.
+  - **치우기 자리 고침**(14판 · 11회차 [중]): 15546 은 `if self._prefetch is not None:` 안이라 미리 읽기가 없으면 건너뜁니다. J10 스레드 치우기는 그 `if` 밖, `CLEARING.update`(15548) **뒤**에 둡니다(그래야 `aboutToShow` 가 새 스레드를 못 띄웁니다). J9 복원 길에도 같은 자리를 둡니다. 테스트: J10 스레드가 연결을 연 채로 [전부 지우기] → "busy" 가 아니라 "ok".
+  - **오늘 경기 범위**: 매치 종류는 `config.DEFAULT_MATCH_TYPE` 하나로 고정합니다. 내 계정도 `store.my_account(conn, config.DEFAULT_MATCH_TYPE)`(app_main 11883)와 같은 종류로 읽고, `key_fp` 를 대조하지 않습니다(대조하면 상태 표의 "키 fail·none → 평소처럼 셈" 과 어긋납니다 · 11회차 [중]).
+  - **SQL 실행 계획**: J10 쿼리를 `test_rules._drive_uncovered()` 에 한 줄 넣고, `raw_bound` 조건에 TEMP B-TREE 가 없게 합니다(11회차 [중]).
+
+  | 상태 | 한 줄 |
+  |---|---|
+  | 동의 전(`NOTICE_ACCEPTED` 거짓) · 내 계정을 안 정함 | 줄 없음 |
+  | 창 없음(`--tray` · 키 "fail"·"none") · 숨긴 채 켬 · 메모리 내려놓음 | 평소처럼 셈(DB 읽기만 · 요청 0 · 안내 15 는 요청 관문이라 안 봅니다) |
+  | `CLEARING` 중 · fifa.db 를 못 엶 | 줄 없음 |
+  | 셈이 아직 안 끝남(첫 열기) | 앞 캐시, 없으면 줄 없음 |
+
+  테스트: 창 없이 트레이만 둔 상태에서 스위치를 켜고 표시한 판이 한 줄에서 빠지는지 · 내려놓은 뒤에도 같은 숫자 · 요청 0. M10 의 "메모리 내려놓은 상태에서 빈 줄" 은 이 표로 바꿉니다(칩 미리보기는 창 안이라 M10 그대로).
+
+### 12회차 [상]·[중] (14판 `f334bfc` · 바뀐 줄 · Opus 1명 · 16.4만 토큰)
+
+9~12회차의 [상] 넷이 모두 J10(트레이 한 줄)에서 나왔습니다. 다른 항목은 9회차 뒤 [상]이 없습니다. 아래는 받은 그대로 적고, 반영은 사용자 결정 뒤에 합니다.
+
+| # | 내용 |
+|---|---|
+| W5 [상] | "`CLEARING.update` 뒤라 `aboutToShow` 가 새 스레드를 못 띄운다" 가 틀립니다. `clearing_blocks` 는 `bool(writes) and …`(app_main 319~321)라 `WRITES` 가 빈 J10 스레드는 걸쇠가 있어도 뜹니다. 지우는 동안 메뉴를 다시 열면 새 읽기 연결이 `reset_db`·J9 `os.replace` 를 막습니다. 고칠 것: `STORE_FIFA`·`"all"` 이 `CLEARING` 에 있으면 띄우지 않고 캐시 줄만 · 테스트 "걸쇠 뒤 메뉴 열기 → 스레드 0" |
+| M75 | 읽기 전용 연결에도 `sqlite3.Row`(`store.my_account` → `trade_state` 가 `r["key"]` · store.py:1177) · `trade_state` 없는 옛 DB |
+| M76 | `sync()` 는 쓰는 쪽인데 테스트는 읽는 쪽을 잼. J10 이 무엇으로 읽는지(같은 프로세스 QSettings 면 `sync()` 불필요 · configparser 면 필요)를 먼저 정하고 테스트를 맞춤 |
+| M77 | 섞임 감싸개는 `"exclude" in bound.arguments` 를 `apply_defaults()` **앞에서** 봄 · 위치 인자도 · 지금 화면에서 `exclude=` 를 넘기는 곳 0 |
+| M78 | 치우기 자리가 `kind == "all"` 블록 안인지 밖인지 · `start_clear` 가 셸의 J10 스레드를 찾는 길 · `ClearWorker` 기다릴 목록 |
+| M79 | J10 쿼리는 store.py 함수로 두고 `_drive_uncovered` 에서 부름 |
+
+12회차 "재지 않은 것": J10 쿼리 실제 실행 계획·메뉴 열 때마다의 시간 · 작업 스레드에서 QSettings 읽기 안전 · J9 걸쇠 순서(코드 없음) · 감싸개 기록기의 스레드 안전.
+
+### 11회차 [상]·[중] (13판 `597c005` · 바뀐 줄 · Opus 1명 · 18.7만 토큰)
+
+| # | 내용 | 14판 |
+|---|---|---|
+| W4 [상] | 감싸개가 넣는 전역과 호출자가 넘긴 `exclude=` 중 어느 쪽이 이기는지 없음 | J2 섞임 칸: 넘겼으면 전역을 안 씀 · 테스트 셋 |
+| M70 | J10 치우기 자리(15546 은 미리 읽기 `if` 안) | J10: `if` 밖 · `CLEARING.update` 뒤 · 복원 길도 |
+| M71 | "None → fail" 이 둘러보기와 부딪침 | J5: `DEMO` 먼저 "none" |
+| M72 | 오늘 경기의 매치 종류·내 계정 읽기 | J10: `DEFAULT_MATCH_TYPE` · `key_fp` 안 봄 |
+| M73 | J10 쿼리 실행 계획 검사 | J10: `_drive_uncovered()` |
+| M74 | `QSettings.sync()` 는 같은 프로세스에서 효과 없음 | J10: 다른 프로세스로 재는 테스트 |
+
+11회차 "재지 않은 것": 감싸개 기록기를 트레이 작업 스레드에서 부를 때의 스레드 안전 · `notes` 표가 없을 때 `mode=ro` 연결의 오류 꼴("표 없음"과 "못 엶"을 가를 수 있나) · 복원이 `_on_storage_cleared` 를 같이 쓰는지(15573 sync 한 번) · 열린 메뉴 글자 바뀜.
+
+### 10회차 [상]·[중] (12판 `69f5ce7` · 바뀐 줄 · Opus 1명 · 19.5만 토큰)
+
+| # | 내용 | 13판 |
+|---|---|---|
+| W3 [상] | J10 셈이 F 감싸개의 전역(창이 넣음)에 기대 창 없는 상태에서 표시한 판을 못 뺍니다 | J10: 새 함수는 `exclude=` 로 직접 받음 · `set_excluded` 를 안 부름 · 선언 표는 섞임 갈래 |
+| M63 | J10 스레드 주인·종료 | J10: 셸이 주인 · `quit_app`·`finish_threads` |
+| M64 | J10 읽기 연결이 바꿔 끼우기를 막음 | J10: 15546 자리에서 기다리거나 치움 |
+| M65 | 업데이트 직후 `notes` 표 없음 | J10: 없는 표는 빈 표시 |
+| M66 | 스위치 값 엇갈림 | J10: 쓰는 자리에서 `sync()` |
+| M67 | 복원 뒤 창이 쥔 묶음으로 옛 표시가 되살아남 · sync 두 번 | J9: `_forget_everything` 안에서 비움 · sync 한 번 |
+| M68 | `_read_env_disk` None 일 때 `KEY_STATE` · 정의 순서 | J5: None 은 "fail" · 정의를 앞으로 |
+| M69 | 일반 시작 + "fail" 에 `match_opp_rank` 단언 없음 | J8 테스트 |
+
+10회차 "재지 않은 것": `mode=ro` 로 `-wal`·`-shm` 이 없는 WAL DB 열기 · 열린 메뉴 글자 바뀜 · 복원 뒤 창이 메모리에 쥔 설정과 복원한 `settings.ini` 의 어긋남(M5 — 다시 켜라고 안내) · 관문 창 아래 카드 예약의 홈페이지 요청(지금도 `ApiKeyDialog` 아래에서 같은 일 · 109 밖).
+
+### 9회차 [상]·[중] (11판 `0d77eef` · 계획 전체 · Opus 1명 · 17.3만 토큰)
+
+| # | 내용 | 12판 |
+|---|---|---|
+| W2 [상] | 트레이 한 줄이 창·로더 묶음에 기대어, 창 없음·숨긴 채 켬·메모리 내려놓음에서 비거나 스위치를 안 따릅니다 | J10: 작업 스레드가 DB·`notes`·`settings.ini` 를 직접 읽고 core F 함수로 셈 · 상태 표 |
+| M58 [중] | 일반 시작 + "fail" 의 "예약 0" 이 M54 와 어긋남 | J8 테스트: `shell.start` 0 · 키를 쓰는 요청 0 |
+| M59 [중] | ".env 키" 를 `os.getenv` 로 읽으면 물려받은 옛 키가 이김 | J5: `_read_env_disk` 로 정의 · 옮긴 뒤 `os.environ` 지움 |
+| M60 [중] | `save_api_key` 와 조용한 다시 읽기의 쓰는 길 | J5: 저장은 `.env` 줄도 지움 · 다시 읽기는 `save_api_key` 를 안 거침 |
+| M61 [중] | 키 옮기기가 `SingleInstance.claim()` 앞이면 두 번째 실행도 `.env` 를 씀 | J5: claim 뒤 |
+| M62 [중] | 복원·전부 지우기 뒤 옛 표시 묶음·되살아난 수집 기록 | J9: 끝난 자리에서 묶음 비움·`_refilter`·sync |
+
+9회차 "재지 않은 것": 설치기가 띄운 앱이 실제로 `NEXON_API_KEY` 를 물려받는지(exe) · 열린 트레이 메뉴 글자가 스레드 결과로 바뀌는지(첫 열기) · 다른 실행본이 관문 창 위에서 창을 부를 때 · E 켜는 속도·메모리와 백업 압축률.
+
+### 8회차 [중] (10판 `910b90d` · 바뀐 줄 · Opus 1명 · 15.9만 토큰 · **새 [상] 0**)
+
+| # | 내용 | 11판 |
+|---|---|---|
+| M54 | 일반 시작도 관문 창이 떠 있는 동안 게임이 꺼지면 예약이 `shell.start` 전에 돕니다(`on_game_changed` → `resume`) | J8 보험 ⓐ 조건 없이 · 테스트 하나 더 |
+| M55 | 일시 실패를 아무도 다시 읽지 않아 몇 시간 뒤 [열기]에서 창이 뜹니다 | J8: 관문에서 조용히 한 번 다시 읽기 · 예약 틱은 다시 읽지 않음(fail→ok 를 관문 한 곳에) |
+| M56 | 트레이 [열기]로 뜬 관문의 닫기가 "키 없음" 길과 다릅니다 | J8: X·Esc 는 트레이에 남음 · 일반 시작은 [끝내기]와 같음 |
+| M57 | J8 테스트 줄이 갈래(일반 시작·`--tray`)를 안 나눔 | J8 테스트 줄을 갈래별로 |
+
+### 7회차 [상]·[중] (9판 `d956961` · 바뀐 줄 · Opus 1명 · 16만 토큰)
+
+| # | 내용 | 10판 |
+|---|---|---|
+| W1 [상] | `--tray` 는 "fail" 이면 키 관문에 닿지 않고(17319) 예약을 시작합니다(17329). 9판대로 창을 띄우면 게임 위에 막는 창이 됩니다 | J8: `--tray` 는 창 없이 트레이만 · [열기] 때 관문 · 예약은 돈다고 적고 테스트로 고정 |
+| M50 [중] | `--tray` + "fail" 에서 도는 예약의 안전이 "지문이 다르면 건너뛴다" 에 기댐 | J8 테스트 |
+| M51 [중] | [다시 읽기] 결과 "none" 의 갈래 | J8: `new_key` 길로 · `new_key` 는 다시 읽은 뒤 계산 |
+| M52 [중] | `release.py` 개인정보 검사가 "fail" 이면 키 검사를 뺌 | J8 보험 ⓒ |
+| M53 [중] | 걸쇠를 잡은 뒤 복원 스레드가 `Worker.start` 에 막힘 | J9: `ClearWorker` 꼴 |
+
+7회차 "재지 않은 것": exe·작업 스케줄러(pythonw)에서 자격 증명 API 실패 꼴 · 트레이 [열기]로 뜬 관문 창과 다른 실행본의 창 부르기(뮤텍스) · `immutable=1` 로 연 WAL 머리 파일의 `quick_check` · 서버 모드에서 키가 빈 경우.
+
+### 6회차 [상]·[중] (8판 `3aa9e84` · 바뀐 줄 · Opus 1명 · 15.5만 토큰)
+
+| # | 내용 | 9판 |
+|---|---|---|
+| V1 [상] | "fail" 이면 키 관문(17223)을 넘어 빈 키로 `FCOnlineAPI` 생성자(17241)까지 가서 죽습니다 · `--tray` 때 무엇을 띄우는지 없음 | J8: 관문에서 [다시 읽기]·[끝내기] · "ok" 전에는 창·API·예약 0 |
+| V2 [상] | `read_owner_dist` 의 `bool(API_KEY)`(config.py:921)가 "fail" 을 토글 꺼짐으로 읽어 돌던 바퀴를 끝내고 지웁니다(app_main 2769 · store 1936) | J8 보험 ⓐ: "fail" 이면 `None` |
+| M45 [중] | 복원 전 zip 과 걸쇠 순서 · 반쯤 쓴 zip · 빈 공간에 zip 크기 | J9 |
+| M46 [중] | 임시 파일 검사가 `-wal`·`-shm` 을 만듭니다 | J9: `immutable=1` · 무늬 넓힘 |
+| M47 [중] | 확인 창 값 계산 스레드 | J9: 작업 스레드 |
+| M48 [중] | `check_api.py:79·624` 가 "fail" 을 "키 없음" 으로 안내 | J8 보험 ⓑ |
+| M49 [중] | ⓑ 다시 읽기마저 실패하면 | 9판: 관문을 안 넘으므로 해당 없음 |
+
+6회차 "재지 않은 것": 평소 [백업] zip 을 만드는 방식(backup API 인지)과 zip 안 `secure_delete` · 셸 수명 예약이 키 관문보다 먼저 서는지(② 에서 따라감) · 둘러보기·dev 도구가 config import 때 자격 증명을 읽는 비용 · 서버 모드에서 키가 빈 경우.
+
+### 5회차 [상]·[중] (7판 `788f128` · 바뀐 줄 · Opus 1명 · 17만 토큰)
+
+| # | 내용 | 8판 |
+|---|---|---|
+| T1 [상] | `.bak` 7일 보관이 안내의 "14일만 둡니다"(notice.py:105)와 특성 `RANK_RAW_KEEP_DAYS`(111)를 어깁니다 | J9: `.bak` 없앰 |
+| T2 [상] | 7일 판정이 켤 때만이라 트레이 상주 사용자에게 지켜지지 않습니다 | J9: `.bak` 없앰 |
+| T3 [상] | import 때는 키 "읽기 실패" 가 빈 값과 같아 키 창·구단주 분포 토글 끔·내 특성 지우기가 일어납니다 | J8: `KEY_STATE` · 세 자리 |
+| M40 [중] | 복원 도중 지우기 길과의 순서 | J9: `CLEARING` 걸쇠 안에서 |
+| M41 [중] | `.bak` 의 `-wal`·`-shm` | `.bak` 없앰 |
+| M42 [중] | 복원 도중 죽어 남은 임시 파일 | J9: 정해 둔 이름 · 켤 때 쓸기 |
+| M43 [중] | 감싸개를 배포판 모든 함수에 걸면 `parse_match`(3만 4천 판)·`win_pct` 가 느려집니다 | ①: 시그니처는 한 번만 계산 · 배포판은 F·섞임만 감싸고 기록·전부 감싸기는 테스트 때만 · 로더 시간 대조 |
+| M44 [중] | "`config` 보다 먼저 머리" 대조가 직접 import 만 보면 `app_main`·`store` 를 거치는 파일이 빠집니다 · `test_demo` 의 env 단언과 `FIFA_NO_CRED` | ②: 첫 import 줄 앞에 머리가 있는지로 대조 · `test_demo` 확인 |
+
+5회차 "재지 않은 것": 백업 zip 쓰는 길(zip 안 `secure_delete` · 도중 종료) · 서버 모드에서 키가 없을 때 `KEY_STATE` · exe 에서 자격 증명 API 실패 꼴.
+
+### 4회차 [상]·[중] (6판 `df67832` · 계획 전체 · Opus 1명 · 20.5만 토큰)
+
+| # | 내용 | 7판 |
+|---|---|---|
+| S1 [상] | 복원 `.bak` 에 안내가 "바로 지웁니다" 라고 약속한 기록이 기한 없이 남습니다 | 7판 J9: 7일 · `store.drop_restore_bak` → 8판: `.bak` 없앰 |
+| M29 [중] | 인자 이름으로 고르면 `compare_summary`·`line_pairs` 가 검사에서 빠집니다 | J2 ⓐ: `__all__` 전부 |
+| M30 [중] | 표에 있는 함수만 감싸면 표에 없는 이름이 기록될 수 없습니다 | J2 ⓑ: 전부 감쌈 · `signature.bind` |
+| M31 [중] | `latest_match_with`(stats.py:2273)는 골라 돌려주는 함수입니다. F 로 거르면 표시한 판만 있는 상대의 상세 열기(12962)·메모 ouid 찾기가 실패합니다. 스위치를 켜면 그 상대 줄이 `opponent_stats` 에서 사라져 메모를 열 수도 없습니다 | ①: 통과 · 사라진 상대 줄은 U1 대로 목록에 흐리게(실화면 점검) |
+| M32 [중] | ⓐ grep 꼴이 `[m.result for …]`·`(m.result, …)` 를 못 잡습니다(15072 · 결과 점 그래프 5059 · dashboard 646) | ①: 화면 파일의 `.result` 읽기 전체를 대상으로 잡고 예외 표로 가립니다 · 점 그래프는 F 로 |
+| M33 [중] | `WinDivision.match_id` 를 기본값 "" 로 더하면 `exclude=` 가 조용히 아무것도 안 뺍니다(테스트 위치 인자 생성 약 15곳) | ①: 기본값 "" · `exclude` 가 있는데 빈 id 행이 있으면 예외 · 스모크 가짜 행에 id |
+| M34 [중] | 통과(`window_of`) 뒤 F 로 거르면 "최근 N판" 이 N보다 적습니다 | ①: 거른 뒤 N판을 채우지 않고 글자에 "표시 k판 뺌" · 실화면 점검 |
+| M35 [중] | 키 읽기 판정·우선순위·읽기 실패 | J8 |
+| M36 [중] | 스키마 판 방향 · 고정 크기 상한 | J9 |
+| M37 [중] | `-wal` 을 지운 뒤 800MB 복사 틈 | 8판: `.bak` 없앰 |
+| M38 [중] | `_refilter` 무효화 목록에 트레이·칩 캐시(M10)가 없습니다 | J7 에 더합니다 · ③ |
+| M39 [중] | `arrival_report` 영입 시점·`formation_report` 구간 경계가 F 로 걸러진 상세에서 다시 계산돼 한 판 밀립니다(전후 승·무·패는 같음) | ①: 선언 표 첫 작성 때 섞임/F 를 정하고 테스트 한 줄 |
+
+4회차 "재지 않은 것": 감싼 뒤 그리기 시간(J2 ⓑ · `test_refilter_redraw_time`) · 자격 증명 API 가 막힌 PC·CP949 PC·대상 이름 한글(② 실측) · 포터블판에서 자격 증명이 남는 것(제거기 없음 — ② 에서 [저장 공간] 에 "키 지우기" 를 둘지 정함) · 백업 압축 도중 종료 · 트레이·칩 쿼리 시간 · 108 C 시작 길에서 표시 묶음이 첫 그리기보다 먼저 오는지(M1) · `exclude=` 가 섞임 함수 안쪽 호출까지 닿는 줄 · 선언 표 첫 결과 · 안내 새 문구 · E.
+
+### 3회차 [상]·[중] (5판 `0236870` · 계획 전체 · Opus 1명 · 17.4만 토큰)
+
+| # | 내용 | 6판 |
+|---|---|---|
+| R1 [상] | `WinDivision` 행에 경기 번호가 없어 달력·운 범위 달력·대시보드 "어제·오늘 n승" 이 걸러지지 않고, 같은 함수가 FC(S)와 승률(F)을 같이 냅니다 | J2: 섞임 넷 · `match_id` 추가 |
+| R2 [상] | `window_of`·`filter_matches` 는 F 도 S 도 틀리고, 화면이 직접 세는 `"승" in m.result` 줄이 5판 grep 꼴에 안 걸립니다 | J2: 통과 갈래 · ⓐ grep 넓힘 · `test_rules` |
+| R3 [상] | 상세 창 `shot_map([detail], …)` 가 걸러져 표시한 판의 슛 맵·xG 가 0 | J1: 상세 창은 `core.raw.*` |
+| R4 [상] | `ENV_PATH` 만 바꾸는 테스트가 진짜 자격 증명을 덮습니다(`test_ownerdist_sched.py:86·474`) | J8: `ENV_PATH` 기준 · `FIFA_NO_CRED` |
+| M19 [중] | `dashboard.py:33` 이름 import 는 속성 바꿔 끼우기 기록기가 못 봅니다 | J2: 기록기는 감싸개 안 |
+| M20 [중] | "첫 실행 = 표" 는 안 그려지는 화면의 함수를 놓칩니다 | J2 ⓐ 정적 검사 |
+| M21 [중] | 목록 둘을 다른 판본으로 거를 수 있음 · 빈 묶음에 목록 새로 만듦 | J1: 한 번 읽기 · 빈 묶음 바로 통과 |
+| M22 [중] | `_shot_sum_key`(6649) 가 J6 목록에 없음 · `side_totals`(F)·`dist_basis`(S) 갈래 | J6 · 선언 표 |
+| M23 [중] | 복원 WAL 처리 · 두 번 옮기는 틈 | J9 |
+| M24 [중] | `.bak` 이 지우기·크기 재기에서 빠짐 | 8판: `.bak` 없앰 |
+| M25 [중] | 키 옮기기를 `config` import 에서 하면 다른 프로세스와 `.env` 를 같이 씀 | J5: 앱 시작 한 곳 |
+| M26 [중] | 상대 ouid 가 `MatchSummary` 에 없음 | J4 · U9 |
+| M27 [중] | 제거기가 지문 든 자격 증명 이름을 다시 만들어야 함 | J8: 고정 이름 하나 |
+| M28 [중] | 다른 계정 화면에도 표시가 걸림 · "N경기" 글자(원본)와 옆 승률(뺀 수)이 어긋남 | U9 · 판 수 글자는 J2 대로 원본이고 막대 "N판 뺌" 으로 알립니다(조각 ① 실화면에서 다시 봅니다) |
+
+3회차 "재지 않은 것": 스모크·데모가 그리는 화면 범위(6판은 정적 검사로 대신) · 다시 그리기 2초 상한 근거(`test_refilter_redraw_time` 첫 실행으로) · 백업 압축 도중 종료(조각 ② `quit_app` 테스트) · 트레이·칩 쿼리 시간(M10) · `_render_compare_extra`·`opp_rank_table` 갈래(선언 표 첫 작성 때) · `exclude=` 가 닿는 줄 · 이용 안내 문구 · E.
+
+### 2회차 [상]·[중] (4판 `f90c2c2` · Opus 1명 · 17만 토큰)
+
+| # | 내용 | 5판 |
+|---|---|---|
+| H1 [상] | 시즌표·기간별 [시즌] 행이 `_season_groups()`(원본)로 `summarize` 해 표시한 판을 그대로 셉니다(14941 · 4772) | J1·J2: `summarize` 는 F 라 감싸개가 뺍니다 |
+| H2 [상] | `_season_wins` 를 F 로 돌리면 FC 보상·챔스·슈챔 도달(2248)·어제 FC·저장 범위까지 F 가 됩니다 | J2: `win_rewards`·`first_reach` 는 S 함수 |
+| H3 [상] | `self._details` 로 그리는 등급 체류(5461)·보상 표(5533)가 F 였습니다 | J1: 목록은 원본 · 두 함수는 S |
+| M14 [중] | 가장 최근 판을 표시하면 픽 축구장·추천·비교 화면 내 스쿼드가 그 앞 판을 씁니다(8089 · 8125 · 11521) | J1: 목록이 원본이라 저절로 풀립니다 |
+| M15 [중] | `season_pace` FC · 업적 챔스 도달 · `season_review` 최고 등급이 F 였습니다 | J2 섞임 |
+| M16 [중] | `decisive_rate` 는 어느 쪽인가 | J2·J3: S |
+| M17 [중] | `_refilter` 뒤 콤보 "전체 (N경기)" 가 옛 값 | J7: 목록이 안 바뀌어 콤보도 안 바뀝니다 |
+| M18 [중] | 달력 이전 달 단추(4698 `oldest`)가 F 에서 나옵니다 | J1: 원본 그대로 |
+
+2회차 "재지 않은 것": `opp_rank_table`(8823)·`_render_compare_extra` 의 갈래 · 콤보 기본 선택 복원. 5판에서는 둘 다 기록기 표 첫 실행에 들어갑니다.
+
+검토: 맨 위 표대로 Opus 1명. 1회차(3판 `bc1044e` · 17.6만 토큰) [상] 6·[중] 12 · 2회차(4판 `f90c2c2` · 바뀐 줄 · 17만 토큰) [상] 3·[중] 6. 5판은 거르는 구조를 바꿨으므로 3회차는 **계획 전체**를 봅니다(끝내는 조건의 "마지막 회차는 계획 전체"). 3회차(5판 `0236870` · 계획 전체 · 17.4만 토큰) [상] 4·[중] 10. 6판도 감싸개 판정 방식을 바꿨으므로 4회차도 계획 전체를 새 검토자 1명이 봅니다. 4회차(6판 `df67832` · 계획 전체 · 20.5만 토큰) [상] 1·[중] 11. 7판은 J2·J8·J9 만 고쳤으므로 5회차는 바뀐 줄 묶음(`review_kit.py diff df67832 --bundle`)을 새 검토자 1명이 봅니다(U10 · 끝내는 조건의 "계획 전체" 회차는 4회차). 새 [상] 0 이면 검토를 끝냅니다. 5회차(7판 `788f128` · 바뀐 줄 · 17만 토큰) [상] 3·[중] 5. 8판은 J8·J9 만 고쳤으므로 6회차도 바뀐 줄 묶음(`review_kit.py diff 788f128 --bundle`)을 새 검토자 1명이 봅니다. 6회차(8판 `3aa9e84` · 바뀐 줄 · 15.5만 토큰) [상] 2·[중] 5. 9판은 J8 관문을 하나로 줄이고 J9 에 [중] 을 넣었으므로 7회차도 바뀐 줄 묶음(`review_kit.py diff 3aa9e84 --bundle`)을 새 검토자 1명이 봅니다. 7회차(9판 `d956961` · 바뀐 줄 · 16만 토큰) [상] 1·[중] 4.
+
+---
