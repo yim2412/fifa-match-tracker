@@ -1055,6 +1055,70 @@ def emblems_by_name(conn: sqlite3.Connection) -> dict[str, str]:
     return {name: next(iter(keys)) for name, keys in seen.items() if len(keys) == 1}
 
 
+# ── 110 L1 막판 상승폭 ─────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class LateCell:
+    rise: float            # 최종 컷 − 그때 200위 컷
+    days_before: float     # 그 스냅숏이 실제로 종료 몇 일 전이었나(행 이름과 다를 수 있다)
+    at: str                # 그 스냅숏의 데이터 시각
+
+
+@dataclass
+class LateRow:
+    days: float            # 행 이름 = 종료 몇 일 전(config.LATE_RISE_DAYS)
+    cells: dict = field(default_factory=dict)   # 시즌 번호 → LateCell — 짝이 없는 시즌은 키가 없다(빈칸)
+
+
+@dataclass
+class LateRise:
+    seasons: list = field(default_factory=list)  # 열 — 최종 컷이 있고 칸이 하나라도 찬 끝난 시즌(최근 먼저)
+    rows: list = field(default_factory=list)     # 열이 없으면 빈 목록("모으는 중")
+
+
+def late_rise(conn: sqlite3.Connection | None, seasons) -> LateRise:
+    """[시즌 말 컷] 막판 상승폭(110 L1 · 산출 기준 방식) — 행 = 종료 10·7·5·4·3·2·1·0.5일 전, 열 = 끝난 시즌, 칸 = 그때 200위 컷에서 최종 컷
+    (`season_cuts` · 홈페이지 시즌 기록)까지 오른 점수. 스냅숏과 시즌은 seq 가 아니라 **데이터 시각**(없으면 받은 시각)과 `Season.end_at`(8시)으로 짝짓는다.
+    스냅숏 하나는 가장 가까운 행 하나에만 쓰고(±LATE_RISE_TOL_DAYS 안 · 밖이면 빈칸), 두 스냅숏이 같은 행을 고르면 더 가까운 쪽, 같으면 늦은 쪽.
+    하루 한 번 수집이라 1일·0.5일 행이 같은 스냅숏을 고르는 일이 흔해서 한 행에만 준다. 캐시하지 않는다(과거 시즌 스냅숏은 14일 뒤에도 남지만
+    최종 컷은 수집 뒤에 따로 들어와 `_db_key` 가 못 본다 · 스냅숏 수백 줄)."""
+    out = LateRise()
+    if conn is None:
+        return out
+    finals = rankcollect.season_cuts(conn)
+    ended = sorted((s for s in seasons if s.no in finals and config.LATE_RISE_CUT in finals[s.no]),
+                   key=lambda s: s.end_at, reverse=True)
+    if not ended:
+        return out
+    snaps = []
+    for taken, ref, elo in conn.execute(
+            "SELECT s.taken_at, m.ref_time, c.elo FROM snapshots s JOIN cut_elo c ON c.snapshot_id = s.id AND c.rank = ?"
+            " LEFT JOIN snapshot_meta m ON m.snapshot_id = s.id WHERE c.elo IS NOT NULL", (config.LATE_RISE_CUT,)):
+        snaps.append((datetime.fromisoformat(ref or taken), ref or taken, elo))
+    tol = config.LATE_RISE_TOL_DAYS
+    rows = [LateRow(d) for d in config.LATE_RISE_DAYS]
+    by_days = {r.days: r for r in rows}
+    for s in ended:
+        best: dict[float, tuple] = {}
+        for dt, at, elo in snaps:
+            before = (s.end_at - dt).total_seconds() / 86400
+            if before <= 0:
+                continue
+            row = min(config.LATE_RISE_DAYS, key=lambda d: (abs(before - d), d))
+            gap = abs(before - row)
+            if gap > tol:
+                continue
+            if row not in best or (gap, before) < best[row][:2]:
+                best[row] = (gap, before, at, elo)
+        for row, (_gap, before, at, elo) in best.items():
+            by_days[row].cells[s.no] = LateCell(finals[s.no][config.LATE_RISE_CUT] - elo, before, at)
+        if best:
+            out.seasons.append(s)
+    if out.seasons:
+        out.rows = rows
+    return out
+
+
 # ── N23 상대 순위 구간(2.9.1 · 43단계) — 내 경기 × rank.db match_opp_rank ──────────────────────────────
 
 def opp_rank_rows(conn: sqlite3.Connection, my_ouid: str) -> dict[str, tuple[int | None, int | None]]:

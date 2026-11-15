@@ -1107,6 +1107,125 @@ def test_top3_carries_formation_color_value():
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패 + 호출 스택)
 
 
+# ── 110 L1 막판 상승폭 — 종료 N일 전 200위 컷 → 최종 컷까지 오른 점수 ─────────────────────────────────────────────
+
+S91 = Season(no=91, name="시즌 5", start=date(2026, 9, 10), end=date(2026, 10, 29))      # 종료 경계 = 10-29 08:00
+S90 = Season(no=90, name="시즌 4", start=date(2026, 7, 30), end=date(2026, 9, 10))
+
+
+def _final_cuts(db, no, cut200):
+    with db.conn:
+        db.conn.executemany("INSERT INTO season_cuts (season_no, rank, elo, fetched_at) VALUES (?, ?, ?, ?)",
+                            [(no, r, cut200 + (200 - r) if r != 200 else cut200, "2026-10-30T09:00:00")
+                             for r in config.RANK_CUT_RANKS])
+
+
+def _before(season, days, hours_taken_later=0.0):
+    """종료 경계 days 일 전의 데이터 시각(ref) · 같은 스냅숏의 받은 시각(taken)."""
+    ref = season.end_at - timedelta(days=days)
+    return ref, ref + timedelta(hours=hours_taken_later)
+
+
+def _late_snap(db, season, days, cut, taken_later_h=1.0):
+    ref, taken = _before(season, days, taken_later_h)
+    return db.snap(taken, [person(1, 1), person(2, 200)], ref=ref, cuts={200: cut})
+
+
+def _cell(res, season_no, row_days):
+    row = next(r for r in res.rows if r.days == row_days)
+    return row.cells.get(season_no)
+
+
+def test_late_rise_picks_rows_by_days_before_end():
+    """종료 10·7·5·4·3·2·1·0.5일 전 행마다 ±0.5일 안 가장 가까운 스냅숏의 200위 컷 → 최종 컷까지 오른 점수.
+    칸에 실제 몇 일 전인지(0.6일 전 …)가 같이 온다 · 0.5일 안에 스냅숏이 없는 행은 빈칸."""
+    def t(db):
+        _final_cuts(db, 91, 4500.0)
+        for days, cut in ((10.2, 4300.0), (7.0, 4350.0), (5.1, 4400.0), (3.9, 4420.0), (3.0, 4440.0), (2.1, 4460.0),
+                          (0.6, 4480.0)):
+            _late_snap(db, S91, days, cut)
+        res = M.late_rise(db.ro(), [S91, S90])
+        assert [s.no for s in res.seasons] == [91], "최종 컷이 없는 시즌 90 은 열이 아니다"
+        assert [r.days for r in res.rows] == [10, 7, 5, 4, 3, 2, 1, 0.5], [r.days for r in res.rows]
+        got = {r.days: (None if r.cells.get(91) is None else (r.cells[91].rise, round(r.cells[91].days_before, 1)))
+               for r in res.rows}
+        assert got == {10: (200.0, 10.2), 7: (150.0, 7.0), 5: (100.0, 5.1), 4: (80.0, 3.9), 3: (60.0, 3.0),
+                       2: (40.0, 2.1), 1: None, 0.5: (20.0, 0.6)}, got
+    using(t)
+
+
+def test_late_rise_snapshot_is_used_by_one_row_only_and_closer_wins():
+    """스냅숏 하나는 가장 가까운 행 하나에만 쓴다(1일 행과 0.5일 행이 같은 스냅숏을 고르면 안 된다) ·
+    두 스냅숏이 같은 행을 고르면 더 가까운 쪽 · 같으면 늦은 쪽(종료에 더 가까운 것)."""
+    def t(db):
+        _final_cuts(db, 91, 4500.0)
+        _late_snap(db, S91, 0.75, 4480.0)             # 1일 행·0.5일 행과 똑같이 0.25 떨어졌다 — 한 행에만
+        res = M.late_rise(db.ro(), [S91])
+        used = [r.days for r in res.rows if r.cells.get(91) is not None]
+        assert used == [0.5], ("동점이면 종료에 가까운 행", used)
+    using(t)
+
+    def t2(db):
+        _final_cuts(db, 91, 4500.0)
+        _late_snap(db, S91, 2.25, 4400.0)
+        _late_snap(db, S91, 1.75, 4450.0)               # 2일 행에서 똑같이 0.25 — 늦은 쪽
+        res = M.late_rise(db.ro(), [S91])
+        c = _cell(res, 91, 2)
+        assert c is not None and c.rise == 50.0 and c.days_before == 1.75, c
+        assert _cell(res, 91, 1) is None, "남은 스냅숏이 1일 행으로 새면 안 된다(0.75일 떨어졌다)"
+    using(t2)
+
+    def t3(db):
+        _final_cuts(db, 91, 4500.0)
+        _late_snap(db, S91, 2.4, 4400.0)
+        _late_snap(db, S91, 1.9, 4450.0)                # 더 가까운 쪽
+        c = _cell(M.late_rise(db.ro(), [S91]), 91, 2)
+        assert c.rise == 50.0 and round(c.days_before, 1) == 1.9, c
+    using(t3)
+
+
+def test_late_rise_uses_data_time_and_ignores_after_end():
+    """짝은 받은 시각이 아니라 데이터 시각(snapshot_meta.ref_time)으로 — 받은 시각을 쓰면 하루 가까이 어긋난다.
+    ref_time 이 없는 옛 스냅숏은 받은 시각 · 종료 경계 뒤 스냅숏은 안 쓴다."""
+    def t(db):
+        _final_cuts(db, 91, 4500.0)
+        _late_snap(db, S91, 7.0, 4350.0, taken_later_h=20.0)      # 받은 시각으로는 6.17일 전 → 7일 행 밖
+        db.snap(S91.end_at - timedelta(days=5), [person(1, 1), person(2, 200)], ref=None, cuts={200: 4400.0})  # ref 없음
+        db.snap(S91.end_at + timedelta(hours=3), [person(1, 1), person(2, 200)], ref=None, cuts={200: 4490.0})  # 경계 뒤
+        _late_snap(db, S91, 8.6, 4310.0)                           # 7일 행과 10일 행에서 1.4일 이상 — ±0.5일 밖이라 어느 행도 안 쓴다
+        db.snap(S91.end_at, [person(1, 1), person(2, 200)], ref=S91.end_at, cuts={200: 4495.0})   # 경계와 같은 시각 — 쓰지 않는다
+        res = M.late_rise(db.ro(), [S91])
+        assert _cell(res, 91, 7).rise == 150.0, "데이터 시각으로 못 짝지었다"
+        assert _cell(res, 91, 10) is None, "허용 폭 밖 스냅숏을 썼다"
+        assert _cell(res, 91, 5).rise == 100.0, "ref_time 이 없는 스냅숏은 받은 시각으로"
+        assert all(r.cells.get(91) is None for r in res.rows if r.days in (0.5, 1)), "경계 뒤 스냅숏을 썼다"
+    using(t)
+
+
+def test_late_rise_columns_and_empty():
+    """열 = 최종 컷이 있고 스냅숏이 하나라도 짝지어진 끝난 시즌(최근 먼저) · 없으면 빈 결과('모으는 중' 그대로)."""
+    def t(db):
+        res = M.late_rise(db.ro(), [S91, S90])
+        assert res.seasons == [] and res.rows == [], "스냅숏도 최종 컷도 없는데 표가 나왔다"
+        _final_cuts(db, 91, 4500.0)
+        _final_cuts(db, 90, 4300.0)
+        _late_snap(db, S91, 3.0, 4440.0)
+        _late_snap(db, S90, 3.0, 4200.0)                          # 시즌 90 스냅숏은 있지만 최종 컷은 아직 없다 — 열이 아니다
+        with db.conn:
+            db.conn.execute("DELETE FROM season_cuts WHERE season_no = 90")
+        res = M.late_rise(db.ro(), [S90, S91])
+        assert [s.no for s in res.seasons] == [91], "최종 컷이 없는 시즌 90 이 열로 들어갔다"
+        _final_cuts(db, 90, 4300.0)
+        s88 = Season(no=88, name="시즌 2", start=date(2026, 6, 1), end=date(2026, 7, 30))
+        _final_cuts(db, 88, 4000.0)                               # 최종 컷은 있지만 스냅숏이 하나도 없는 시즌
+        res = M.late_rise(db.ro(), [s88, S90, S91])
+        assert [s.no for s in res.seasons] == [91, 90], "스냅숏이 하나도 없는 시즌 88 이 열로 들어갔다"
+        res = M.late_rise(db.ro(), [S90, S91])
+        assert [s.no for s in res.seasons] == [91, 90], "최근 시즌이 앞"
+        assert _cell(res, 90, 3).rise == 100.0 and _cell(res, 91, 3).rise == 60.0
+    using(t)
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

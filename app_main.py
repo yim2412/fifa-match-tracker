@@ -4801,8 +4801,14 @@ class MainWindow(QMainWindow):
         self.park_seasons = MetricRowList()
         self.park_seasons.setMaximumHeight(240)
         pv.addWidget(self.park_seasons)
+        # 110 L1 — 막판 상승폭: 행 = 종료 N일 전, 칸 = 그때 200위 컷 → 최종 컷까지 오른 점수(시즌마다 한 칸). 끝난 시즌이 없으면 아래 글만
+        self.park_late_title = self._title_label("막판 상승폭(200위 컷)")
+        self.park_late = MetricRowList()
+        self.park_late.setMaximumHeight(400)
+        pv.addWidget(self.park_late_title)
+        pv.addWidget(self.park_late)
         self.lb_park_later = self._note_label()
-        self.lb_park_later.setText("막판 상승폭과 시즌 진행에 따른 컷 변화는 모으는 중입니다. 시즌 둘 이상을 처음부터 끝까지 모으면 보입니다.")
+        self.lb_park_later.setText(self.PARK_LATER_WAIT)
         pv.addWidget(self.lb_park_later)
         v.addWidget(self.gb_park)
         # 55 V1 — 구단가치 일별(검색·따라가기 때 점수와 같이 적은 값 · elo_history.team_value)
@@ -15075,6 +15081,23 @@ class MainWindow(QMainWindow):
         self.lb_elo_predict.setVisible(pr is not None and config.WEB_DATA and not pr.ok)
         self._render_park(pr)
 
+    PARK_LATER_WAIT = "막판 상승폭과 시즌 진행에 따른 컷 변화는 모으는 중입니다. 시즌 둘 이상을 처음부터 끝까지 모으면 보입니다."
+
+    @staticmethod
+    def late_rise_rows(late) -> list:
+        """110 L1 — 막판 상승폭 표의 줄(계산은 core.late_rise · 여기는 글만). 칸 아래 글은 실제 종료 몇 일 전 스냅숏인지(행 이름과 다를 수 있다)."""
+        rows = []
+        for r in late.rows:
+            cells = []
+            for s in late.seasons:
+                c = r.cells.get(s.no)
+                cells.append(MetricCell("—", s.label) if c is None else MetricCell(
+                    f"{c.rise:+,.0f}점", f"{s.label} {c.days_before:.1f}일 전",
+                    tip=f"종료 {c.days_before:.1f}일 전({stamp(c.at)}) 200위 컷에서 최종 컷까지 오른 점수입니다."))
+            label = f"{r.days:g}일 전"
+            rows.append(MetricRow(f"종료 {label}", "", tuple(cells), dim=not any(r.cells.get(s.no) for s in late.seasons)))
+        return rows
+
     def _render_park(self, pr) -> None:
         """67 R8 시즌 말 컷 — 지금 컷 둘은 마지막 원본 하나(rank_cut · 같은 id — 3회차 M7) · 예상 컷·범위·계산 줄은 예측 값 그대로."""
         self.gb_park.setVisible(config.WEB_DATA)
@@ -15083,8 +15106,9 @@ class MainWindow(QMainWindow):
 
         def read(c):
             sid = core.last_raw_id(c)
-            return ({r: core.rank_cut(c, r, sid) for r in (config.R4_CUT_TOP, 200, 1000)}, rankcollect.season_cuts(c))
-        nows, past = self._rank_read(read) or ({}, {})
+            return ({r: core.rank_cut(c, r, sid) for r in (config.R4_CUT_TOP, 200, 1000)}, rankcollect.season_cuts(c),
+                    core.late_rise(c, self._rank_seasons))
+        nows, past, late = self._rank_read(read) or ({}, {}, core.LateRise())
         now200, now_top, now1000 = nows.get(200), nows.get(config.R4_CUT_TOP), nows.get(1000)
         cards = self.park_cards
         for key, val in (("cut_200", now200), ("cut_top", now_top)):
@@ -15126,6 +15150,12 @@ class MainWindow(QMainWindow):
             rows.append(MetricRow(names.get(no, f"시즌 {no}"), "최종", (MetricCell(f"{c[200]:,.0f}", "200위"),
                                                                        MetricCell(f"{c[1000]:,.0f}", "1,000위"))))
         self.park_seasons.set_rows(rows)
+        self.late_rise = late                  # 테스트가 본다
+        have = bool(late.seasons)
+        self.park_late_title.setVisible(have)
+        self.park_late.setVisible(have)
+        self.park_late.set_rows(self.late_rise_rows(late) if have else [])
+        self.lb_park_later.setVisible(not have)
 
     def _elo_points(self) -> list[dict]:
         data = self._elo.get(self._ouid) if self._ouid else None

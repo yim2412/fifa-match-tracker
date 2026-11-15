@@ -13426,6 +13426,23 @@ def test_rank_cards_follow_one_source_67():
         _win._render_park(app_main.core.Prediction(False, "랭킹 기록을 모으는 중입니다"))
         assert _win.park_pred.value.text() == "—" and _win.park_method.isHidden()
         _check_metric_lists([_win.park_seasons], narrow=80)
+        # 110 L1 막판 상승폭 — 끝난 시즌이 없으면 "모으는 중" 글만 · 있으면 표(여덟 행 × 시즌 열 · 짝 없는 칸 "—" · 짝이 있으면 실제 일수)
+        assert _win.late_rise.seasons == [] and not _win.lb_park_later.isHidden() and _win.park_late.isHidden()
+        from datetime import date as _d
+        s91 = sn.Season(91, "시즌 5", _d(2026, 9, 10), _d(2026, 10, 29))
+        late = app_main.core.LateRise(
+            [s91], [app_main.core.LateRow(10, {91: app_main.core.LateCell(177.0, 10.2, "2026-10-19T00:00:00")}),
+                    app_main.core.LateRow(7)])
+        real_late, app_main.core.late_rise = app_main.core.late_rise, lambda c, seasons: late
+        try:
+            _win._render_park(pr)
+        finally:
+            app_main.core.late_rise = real_late
+        assert not _win.park_late.isHidden() and _win.lb_park_later.isHidden() and _win.late_rise is late
+        got = [(r.name, [(c.text, c.label) for c in r.cells], r.dim) for r in _win.park_late.rows()]
+        assert got == [("종료 10일 전", [("+177점", "2026 시즌 5 10.2일 전")], False),
+                       ("종료 7일 전", [("—", "2026 시즌 5")], True)], got
+        _check_metric_lists([_win.park_late], narrow=80)
     _win._render_predict()
     _win._go_page("랭킹 추이", "추이")
     _win._go_page("대시보드")
