@@ -637,6 +637,7 @@ def _emblem_stub(meta, known, snap):
     st._rank_read = lambda fn: snap
     st._note_emblem = lambda label, emblem: MW._note_emblem(st, label, emblem)
     st._emblem_map = st.map = lambda: MW._emblem_map(st)
+    st._sim_reset = lambda: None   # 110 R1 — rank.db 무효화가 [비슷한 랭커] 단계표도 버린다(이 테스트는 엠블럼 지도만 본다)
     st.cell = lambda *a, **k: MW._emblem_cell(st, *a, **k)
     return st, d
 
