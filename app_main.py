@@ -3301,6 +3301,7 @@ class MainWindow(QMainWindow):
         # 110 R1 [비슷한 랭커] — 단계표·ouid 는 작업 스레드가 읽어 넘긴 값(None = 아직 · 무효화 때 비운다) · 도는 로더
         self._sim_inputs: tuple | None = None
         self._sim_loader: SimilarLoader | None = None
+        self._sim_workers: list[SimilarLoader] = []   # 띄운 로더 전부 — 끝날 때까지 쥔다(도는 QThread 를 놓으면 프로세스가 죽는다 · _retire_loaders)
         self.similar: core.Similar | None = None   # 테스트가 본다
         self._notes_writer: NotesWriter | None = None
         self._notes_eff: store.Notes | None = None   # 줄에 올린 쓰기까지 얹은 값 — 쓰기 둘이 이어질 때 뒤 것이 앞 것을 되돌리지 않게(없으면 None)
@@ -9043,6 +9044,8 @@ class MainWindow(QMainWindow):
         w = SimilarLoader()
         w.ready.connect(self._on_similar_inputs)
         self._sim_loader = w   # start 전에 — 신호가 바로 와도(테스트가 run 으로 바꿔 끼운다) 끝난 로더를 다시 쥐지 않게
+        # _sim_reset·_on_similar_inputs 가 _sim_loader 를 놓아도 run 이 끝날 때까지는 여기서 쥔다
+        self._sim_workers = [x for x in self._sim_workers if x.isRunning()] + [w]
         w.start()
         if w.blocked:
             self._sim_loader = None
@@ -16240,7 +16243,7 @@ class MainWindow(QMainWindow):
             # 연승·연패 섞기 — 섞기 한 번(수 ms)마다 취소를 본다
             *[(ld, cancel(ld), 1000, False) for ld in self._habits_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._chip_workers],
-            (self._sim_loader, cancel(self._sim_loader), 1000, False),   # 110 R1 단계표 읽기 — DB 읽기 한 번
+            *[(ld, cancel(ld), 1000, False) for ld in self._sim_workers],   # 110 R1 단계표 읽기 — DB 읽기 한 번 · 무효화로 놓은 것까지
             # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
             *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
             # 팀컬러 효과 창 — 요청 사이에서 멈춘다(요청 하나 타임아웃 teamcolor.TIMEOUT_S 10초). 저장은 표 하나씩 한 트랜잭션

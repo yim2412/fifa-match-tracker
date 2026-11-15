@@ -17302,6 +17302,40 @@ def test_similar_loader_reads_steps_and_ouids_and_stays_empty_when_clearing_110(
             assert log == ["stop sim"] and _win._sim_loader is None and _win._sim_inputs is None, (log, _win._sim_loader)
         finally:
             _win._sim_loader = keep
+        # 무효화·결과 도착으로 _sim_loader 를 놓아도 도는 로더는 끝날 때까지 쥔다(도는 QThread 를 놓으면 프로세스가 죽는다) · 종료 표가 기다린다
+        from PySide6.QtCore import QObject, Signal
+
+        class _Running(QObject):
+            ready = Signal(object)
+            blocked = False
+
+            def __init__(self):
+                super().__init__()
+                self.running = True
+
+            def start(self):
+                pass
+
+            def isRunning(self):
+                return self.running
+
+            def cancel(self):
+                pass
+        real_cls, keep_workers = app_main.SimilarLoader, list(_win._sim_workers)
+        app_main.SimilarLoader = _Running
+        try:
+            _win._sim_workers = []
+            assert _win._start_similar_loader()
+            first = _win._sim_loader
+            _win._sim_reset()
+            assert _win._sim_loader is None and _win._sim_workers == [first], "무효화가 도는 로더를 놓았다"
+            assert _win._start_similar_loader()
+            assert _win._sim_workers == [first, _win._sim_loader], _win._sim_workers
+            first.running = False
+            assert _win._start_similar_loader() and first not in _win._sim_workers, "끝난 로더를 계속 쥔다"
+        finally:
+            app_main.SimilarLoader = real_cls
+            _win._sim_workers, _win._sim_loader = keep_workers, None
     finally:
         _similar_cleanup()
 
