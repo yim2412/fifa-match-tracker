@@ -68,6 +68,7 @@ import models
 import ranker
 import stats
 import store
+import teamcolor
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -105,6 +106,13 @@ CREATE TABLE IF NOT EXISTS snapshot_emblems (
 CREATE TABLE IF NOT EXISTS tier_counts (
     snapshot_id INTEGER NOT NULL, tier INTEGER NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, n INTEGER NOT NULL,
     PRIMARY KEY (snapshot_id, tier, kind, key)
+) WITHOUT ROWID;
+-- 110 L2 — 팀컬러를 (이름, 엠블럼)으로 센 옆 표. tier_counts 의 열·INSERT 는 옛 버전이 쓰므로 안 건드린다(옆 표만).
+-- emblem "" = 엠블럼 줄이 없는 사람(snapshot_emblems 는 엠블럼이 있는 줄만 저장한다) · 팀컬러 없음 · 포메이션. 새 회차는 save_snapshot 이,
+-- 옛 회차는 켤 때마다 backfill_tier_em 이 원본에서 채운다(원본 14일 안) — 원본이 지워진 회차는 옛 표(이름 줄)로 읽는다
+CREATE TABLE IF NOT EXISTS tier_counts_em (
+    snapshot_id INTEGER NOT NULL, tier INTEGER NOT NULL, kind TEXT NOT NULL, key TEXT NOT NULL, emblem TEXT NOT NULL,
+    n INTEGER NOT NULL, PRIMARY KEY (snapshot_id, tier, kind, key, emblem)
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS tier_values (
     snapshot_id INTEGER NOT NULL, tier INTEGER NOT NULL, rows INTEGER NOT NULL,
@@ -276,6 +284,42 @@ def aggregate(rows: list[ranker.RankRow]):
     return count_rows, value_rows, cut_rows
 
 
+def _em_counts(items) -> list[tuple]:
+    """items = (순위, 포메이션, 팀컬러, 엠블럼) → tier_counts_em 행 (tier, kind, key, emblem, n). 합계는 tier_counts 와 같다
+    (이름·포메이션 키가 같고 엠블럼으로만 더 가른다). 팀컬러가 없거나 엠블럼 줄이 없으면 emblem ""."""
+    counts: Counter = Counter()
+    for rank, formation, color, emblem in items:
+        t = tier_of(rank)
+        if t is None:
+            continue
+        counts[(t, "formation", formation or "", "")] += 1
+        counts[(t, "team_color", color or "", (emblem or "") if color else "")] += 1
+    return [(*k, n) for k, n in sorted(counts.items())]
+
+
+def aggregate_em(rows: list[ranker.RankRow]) -> list[tuple]:
+    return _em_counts((r.rank, r.formation, r.team_color, r.team_color_emblem) for r in rows)
+
+
+def backfill_tier_em(conn: sqlite3.Connection, cancel: threading.Event | None = None) -> int:
+    """옆 표에 없고 원본이 남은 회차를 원본(+엠블럼)에서 채운다 — 켤 때마다(process_meta · prune_raw 앞). 3.10.1 로 되돌렸다
+    다시 켠 사이 옛 코드가 쓴 회차도 다음 켤 때 채워진다. 회차 하나 = 한 트랜잭션. 원본이 지워진 회차는 못 채운다. → 채운 회차 수."""
+    ids = [r[0] for r in conn.execute(
+        "SELECT s.id FROM snapshots s WHERE NOT EXISTS (SELECT 1 FROM tier_counts_em t WHERE t.snapshot_id = s.id)"
+        " AND EXISTS (SELECT 1 FROM snapshot_rows r WHERE r.snapshot_id = s.id)")]
+    done = 0
+    for sid in ids:
+        if cancel is not None and cancel.is_set():
+            break
+        rows = _em_counts(conn.execute(
+            "SELECT r.rank, r.formation, r.team_color, e.emblem FROM snapshot_rows r LEFT JOIN snapshot_emblems e"
+            " ON e.snapshot_id = r.snapshot_id AND e.profile_sn = r.profile_sn WHERE r.snapshot_id = ?", (sid,)))
+        with conn:
+            conn.executemany("INSERT OR IGNORE INTO tier_counts_em VALUES (?,?,?,?,?,?)", [(sid, *c) for c in rows])
+        done += bool(rows)
+    return done
+
+
 def dedup(rows: list[ranker.RankRow]) -> tuple[list[ranker.RankRow], int]:
     """프로필 번호로 겹침 제거(앞 쪽 것을 남긴다) → (행, 버린 수)."""
     seen, out = set(), []
@@ -431,6 +475,7 @@ def save_snapshot(conn: sqlite3.Connection, rows: list[ranker.RankRow], taken_at
                          [(sid, r.profile_sn, r.team_color_emblem) for r in rows
                           if r.team_color and r.team_color_emblem])
         conn.executemany("INSERT INTO tier_counts VALUES (?,?,?,?,?)", [(sid, *c) for c in counts])
+        conn.executemany("INSERT INTO tier_counts_em VALUES (?,?,?,?,?,?)", [(sid, *c) for c in aggregate_em(rows)])
         conn.executemany("INSERT INTO tier_values VALUES (?,?,?,?,?)", [(sid, *v) for v in values])
         conn.executemany("INSERT INTO cut_elo VALUES (?,?,?)", [(sid, *c) for c in cuts])
         conn.execute("INSERT INTO snapshot_meta (snapshot_id, ref_time, rank_gaps) VALUES (?, ?, ?)",
@@ -510,6 +555,31 @@ class RankTrend:
     shares: dict[tuple[int, str], dict[str, list[float]]] = field(default_factory=dict)  # (구간, 종류) → 키 → 비율(%)
 
 
+def _count_rows(conn: sqlite3.Connection, ids: tuple, tier: int | None = None, collapse: bool = False):
+    """팀컬러·포메이션 인원 줄 — 읽는 둘(rank_trend_series · meta_trend)이 같이 쓴다(110 L2). → (줄 [(회차, 구간, 종류, 키, n)], 옆 표가 있는 회차).
+    옆 표가 있는 회차는 겹치는 이름(config.TEAMCOLOR_DUP_NAMES)만 `teamcolor.label` 키(엠블럼으로 갈라)로, 나머지는 이름으로 합쳐
+    지금과 같다(collapse 면 겹치는 이름도 이름 하나로). 옆 표가 없는 회차(원본이 지워진 옛 회차)는 옛 표 이름 줄."""
+    marks = ",".join("?" * len(ids))
+    extra, args = ("", ids) if tier is None else (" AND tier = ?", (*ids, tier))
+    acc: Counter = Counter()
+    have = set()
+    for sid, t, kind, key, emblem, n in conn.execute(
+            f"SELECT snapshot_id, tier, kind, key, emblem, n FROM tier_counts_em WHERE snapshot_id IN ({marks}){extra}", args):
+        have.add(sid)
+        if kind == "team_color" and key in config.TEAMCOLOR_DUP_NAMES and not collapse:
+            key = teamcolor.label(key, emblem)
+        acc[(sid, t, kind, key)] += n
+    # 옆 표 줄이 하나도 안 나온 회차 = 없음(구간 조건이 걸려도 구간마다 줄이 있다)
+    rest = tuple(i for i in ids if i not in have)
+    if rest:
+        m2 = ",".join("?" * len(rest))
+        for sid, t, kind, key, n in conn.execute(
+                f"SELECT snapshot_id, tier, kind, key, n FROM tier_counts WHERE snapshot_id IN ({m2}){extra}",
+                rest if tier is None else (*rest, tier)):
+            acc[(sid, t, kind, key)] += n
+    return [(*k, n) for k, n in acc.items()], have
+
+
 def rank_trend_series(conn: sqlite3.Connection | None) -> RankTrend:
     """rank.db 영구 집계(tier_counts·tier_values·cut_elo) → 지금 시즌의 스냅숏별 값. 없으면 빈 RankTrend."""
     out = RankTrend()
@@ -536,12 +606,22 @@ def rank_trend_series(conn: sqlite3.Connection | None) -> RankTrend:
         out.value_avg.setdefault(tier, [None] * n)[pos[sid]] = avg
         out.value_median.setdefault(tier, [None] * n)[pos[sid]] = med
     counts: dict[tuple[int, str], dict[str, list[int]]] = {}
-    for sid, tier, kind, key, cnt in conn.execute(
-            f"SELECT snapshot_id, tier, kind, key, n FROM tier_counts WHERE snapshot_id IN ({marks})", ids):
+    rows, have = _count_rows(conn, ids)
+    for sid, tier, kind, key, cnt in rows:
         counts.setdefault((tier, kind), {}).setdefault(key, [0] * n)[pos[sid]] = cnt
     for tk, keys in counts.items():
         totals = [sum(v[i] for v in keys.values()) for i in range(n)]
         out.shares[tk] = {k: [v[i] * 100 / totals[i] if totals[i] else 0.0 for i in range(n)] for k, v in keys.items()}
+    # 갈라지는 날 그래프가 반으로 떨어진 꼴이 되지 않게: 옛 회차에 이름 줄이 있는 겹치는 이름은, 갈린 회차의 이름 줄을 두 줄의 합으로 잇는다
+    # (분모는 위에서 이미 갈린 줄만으로 쟀다 — 이름 줄을 더해도 100% 를 넘지 않는다)
+    split_at = [i for sid, i in pos.items() if sid in have]
+    for (tier, kind), sh in out.shares.items():
+        if kind != "team_color":
+            continue
+        for name in [k for k in sh if k in config.TEAMCOLOR_DUP_NAMES]:
+            parts = [v for k, v in sh.items() if k != name and teamcolor.name_of(k) == name]
+            for i in split_at:
+                sh[name][i] = sum(v[i] for v in parts)
     return out
 
 
@@ -1899,6 +1979,7 @@ def process_meta(conn: sqlite3.Connection, now: datetime, *, season_ends: list |
     사람별 직전마다 켜짐·동의를 디스크에서 다시 읽는다 — 처리 중에 끄면 거기서 멈춘다(1회차 A·B)."""
     out = {"purged": purge_person_if_needed(conn), "anon": 0, "person": 0, "rolled": False, "opp": 0,
            "seq_repaired": repair_season_seq(conn)}
+    out["tier_em"] = backfill_tier_em(conn, cancel)      # prune_raw(호출한 쪽) 앞 — 원본이 지워지기 전에
     out["purged"] = purge_opp_rank_if_needed(conn) or out["purged"]
     out["purged"] = purge_fc_games_if_needed(conn) or out["purged"]
 
@@ -2076,9 +2157,11 @@ def meta_trend(conn: sqlite3.Connection | None, tier: int, days: int = 7) -> Met
     out.now_at, out.then_at = base["dt"], then["dt"]
     out.days = (base_t - datetime.fromisoformat(then["dt"])).total_seconds() / 86400
     counts: dict[tuple[int, str], dict[str, int]] = {}
-    for sid, kind, key, n in conn.execute(
-            "SELECT snapshot_id, kind, key, n FROM tier_counts WHERE snapshot_id IN (?, ?) AND tier = ?",
-            (base["id"], then["id"], tier)):
+    ids = (base["id"], then["id"])
+    have = _count_rows(conn, ids, tier)[1]
+    # 두 회차 다 옆 표가 있을 때만 겹치는 이름을 갈라 비교한다 — 한쪽이 이름 줄이면 갈린 줄이 '새로 나타남'으로 읽힌다
+    rows, _have = _count_rows(conn, ids, tier, collapse=not all(i in have for i in ids))
+    for sid, _t, kind, key, n in rows:
         counts.setdefault((sid, kind), {})[key] = n
     for kind in ("team_color", "formation"):
         a, b = counts.get((base["id"], kind), {}), counts.get((then["id"], kind), {})

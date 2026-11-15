@@ -899,6 +899,157 @@ def test_repair_marks_sched_opener_without_marks_from_old_db():
         c.close()
 
 
+# ── 110 L2 — 팀컬러를 (이름, 엠블럼)으로 센 옆 표 tier_counts_em ───────────────────────────────────────────────
+
+import teamcolor  # noqa: E402
+
+EMB_BOOST, EMB_CREST = "teamcolorboost/b7.png", "crests/l7.png"
+DUP = "Spartan"                      # config.TEAMCOLOR_DUP_NAMES 안(강화 하나 + 클럽 하나)
+assert DUP in config.TEAMCOLOR_DUP_NAMES
+
+
+def _em_rows(n_boost=3, n_crest=2, n_plain=4, n_noemb=2, n_none=1):
+    """순위 1~: 겹치는 이름 강화 · 겹치는 이름 클럽 · 안 겹치는 이름(엠블럼 있음) · 이름만 있고 엠블럼 줄이 없는 사람 · 팀컬러 없음."""
+    rows, r = [], 0
+    for color, emb, k in ((DUP, EMB_BOOST, n_boost), (DUP, EMB_CREST, n_crest), ("리버풀", "crests/l1.png", n_plain),
+                          ("리버풀", "", n_noemb), ("", "", n_none)):
+        for _ in range(k):
+            r += 1
+            rows.append(ranker.RankRow(rank=r, profile_sn=700000 + r, nickname=f"e{r}", elo=4000.0 - r, team_value=1000,
+                                       team_color=color, team_color_emblem=emb, formation="4-2-3-1"))
+    return rows
+
+
+def _em_table(c, sid):
+    return {(t, k, key, e): n for t, k, key, e, n in c.execute(
+        "SELECT tier, kind, key, emblem, n FROM tier_counts_em WHERE snapshot_id = ?", (sid,))}
+
+
+def test_tier_counts_em_matches_old_table_110():
+    """(스냅숏, tier, kind, key)마다 옆 표 n 의 합 = 옛 표 n · 겹치는 이름 하나에 엠블럼 둘 · 팀컬러는 있고 엠블럼 줄이 없는 사람은
+    emblem "" · 팀컬러 없는 사람(key "")과 포메이션도 emblem ""."""
+    with Env() as env:
+        c = env.conn()
+        sid = rc.save_snapshot(c, _em_rows(), NOW)
+        old = {(t, k, key): n for t, k, key, n in c.execute(
+            "SELECT tier, kind, key, n FROM tier_counts WHERE snapshot_id = ?", (sid,))}
+        new = {}
+        for (t, k, key, _e), n in _em_table(c, sid).items():
+            new[(t, k, key)] = new.get((t, k, key), 0) + n
+        assert new == old and old, (new, old)
+        em = _em_table(c, sid)
+        tier = config.RANK_TIERS[0]
+        assert em[(tier, "team_color", DUP, EMB_BOOST)] == 3 and em[(tier, "team_color", DUP, EMB_CREST)] == 2, em
+        assert em[(tier, "team_color", "리버풀", "")] == 2, "엠블럼 줄이 없는 사람을 emblem '' 로 세지 않았다"
+        assert em[(tier, "team_color", "", "")] == 1 and em[(tier, "formation", "4-2-3-1", "")] == 12, em
+        c.close()
+
+
+def test_tier_counts_em_old_db_opens_and_backfills_every_start_110():
+    """옛 버전이 연 DB(옆 표 없음)가 열리고 · 켤 때마다 '옆 표에 없고 원본이 남은 회차' 를 채운다(두 번째는 0줄) ·
+    옛 버전이 그 사이에 쓴 회차가 끼어 있어도 다음 켤 때 채운다 · 원본이 지워진 회차는 못 채운다(이름 줄로 읽는다)."""
+    with Env() as env:
+        c = env.conn()
+        a = rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=3))
+        b = rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=2))
+        c.execute("DROP TABLE tier_counts_em")          # 3.10.1 이 연 DB
+        c.commit()
+        c.close()
+        c = env.conn()                                    # 다시 열면 표가 생긴다(CREATE IF NOT EXISTS)
+        assert _count(c, "tier_counts_em") == 0
+        out = rc.process_meta(c, NOW, season_ends=[])
+        assert out["tier_em"] == 2 and _em_table(c, a) and _em_table(c, b), out
+        assert rc.process_meta(c, NOW, season_ends=[])["tier_em"] == 0, "두 번째는 채울 것이 없다"
+        # 3.10.1 로 되돌렸다 다시 켠 사이 쌓인 회차 — 옛 코드는 옛 표만 쓴다
+        d = rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=1))
+        c.execute("DELETE FROM tier_counts_em WHERE snapshot_id = ?", (d,))
+        c.commit()
+        assert rc.process_meta(c, NOW, season_ends=[])["tier_em"] == 1 and _em_table(c, d)
+        # 원본이 지워진 회차는 그대로(옛 표만)
+        e = rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=30))
+        c.execute("DELETE FROM tier_counts_em WHERE snapshot_id = ?", (e,))
+        rc.prune_raw(c, NOW)
+        assert rc.process_meta(c, NOW, season_ends=[])["tier_em"] == 0 and not _em_table(c, e)
+        c.close()
+
+
+def test_tier_em_backfill_runs_before_prune_in_maintenance_110():
+    """미리 채우기는 prune_raw 보다 먼저 — 원본이 지워지기 직전 회차도 옆 표가 채워진다."""
+    with Env() as env:
+        c = env.conn()
+        sid = rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=config.RANK_RAW_KEEP_DAYS + 1))
+        c.execute("DELETE FROM tier_counts_em WHERE snapshot_id = ?", (sid,))
+        c.commit()
+        c.close()
+        out = rc.maintenance(env.db, now_fn=lambda: NOW, season_ends=[])
+        assert out["tier_em"] == 1 and out["pruned"] > 0, out
+        c = env.conn()
+        assert _em_table(c, sid), "원본이 지워지기 전에 채우지 못했다"
+        c.close()
+
+
+def _trend_env(c, old_days=(5, 4), new_days=(3, 2)):
+    """옛 회차(옆 표 없음) + 새 회차(옆 표 있음) — 같은 사람들."""
+    ids = []
+    for d in old_days:
+        sid = rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=d))
+        c.execute("DELETE FROM tier_counts_em WHERE snapshot_id = ?", (sid,))
+        ids.append(sid)
+    for d in new_days:
+        ids.append(rc.save_snapshot(c, _em_rows(), NOW - timedelta(days=d)))
+    c.commit()
+    return ids
+
+
+def test_rank_trend_series_splits_duplicate_names_and_connects_old_110():
+    """화면에는 겹치는 이름만 엠블럼으로 갈라 보이고 나머지는 지금과 같다 · 옆 표 줄이 없는 옛 회차는 이름 줄 ·
+    갈라지는 날 '반으로 떨어진' 꼴이 안 되게 이름 줄(옛 점 + 새 두 줄의 합)이 이어진다."""
+    with Env() as env:
+        c = env.conn()
+        _trend_env(c)
+        t = rc.rank_trend_series(c)
+        tier = config.RANK_TIERS[0]
+        sh = t.shares[(tier, "team_color")]
+        boost, crest = teamcolor.label(DUP, EMB_BOOST), teamcolor.label(DUP, EMB_CREST)
+        assert boost in sh and crest in sh and DUP in sh, sorted(sh)
+        assert sh[boost][:2] == [0.0, 0.0] and sh[boost][2] > 0, "옛 회차에는 갈린 줄이 없다"
+        assert abs(sh[DUP][0] - 5 * 100 / 12) < 1e-6, "옛 회차 이름 줄 = 두 팀컬러의 합"
+        assert all(abs(sh[DUP][i] - (sh[boost][i] + sh[crest][i])) < 1e-6 for i in (2, 3)), "새 회차 이름 줄 = 두 줄의 합"
+        assert "리버풀" in sh and not any(k.startswith("리버풀 ·") for k in sh), "겹치지 않는 이름은 그대로"
+        assert abs(sum(v[3] for k, v in sh.items() if k != DUP) - 100) < 1e-6, "분모가 이름 줄까지 합쳐 부풀었다"
+        # 모두 새 회차면 이름 줄 없이 갈린 줄만
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        _trend_env(c, old_days=(), new_days=(3, 2))
+        sh = rc.rank_trend_series(c).shares[(config.RANK_TIERS[0], "team_color")]
+        assert DUP not in sh and teamcolor.label(DUP, EMB_BOOST) in sh, sorted(sh)
+        c.close()
+
+
+def test_meta_trend_splits_only_when_both_snapshots_have_em_110():
+    """[메타 변화]와 주간 요약이 같이 쓰는 meta_trend — 두 회차 다 옆 표가 있으면 겹치는 이름을 갈라 비교하고,
+    한쪽이라도 없으면 이름 하나로 합쳐 비교한다(갈라진 줄이 '새로 나타남' 으로 읽히지 않게). 두 읽기 함수가 같은 규칙."""
+    with Env() as env:
+        c = env.conn()
+        _trend_env(c, old_days=(8,), new_days=(1,))          # 7일 전(옛) vs 지금(새)
+        mt = rc.meta_trend(c, config.RANK_TIERS[0])
+        keys = {r.key for r in mt.rows["team_color"]}
+        assert DUP in keys and teamcolor.label(DUP, EMB_BOOST) not in keys, keys
+        row = next(r for r in mt.rows["team_color"] if r.key == DUP)
+        assert (row.now_n, row.then_n) == (5, 5), row
+        c.close()
+    with Env() as env:
+        c = env.conn()
+        _trend_env(c, old_days=(), new_days=(8, 1))
+        mt = rc.meta_trend(c, config.RANK_TIERS[0])
+        keys = {r.key for r in mt.rows["team_color"]}
+        assert teamcolor.label(DUP, EMB_BOOST) in keys and teamcolor.label(DUP, EMB_CREST) in keys and DUP not in keys, keys
+        t = rc.rank_trend_series(c)                           # 같은 갈림
+        assert teamcolor.label(DUP, EMB_BOOST) in t.shares[(config.RANK_TIERS[0], "team_color")]
+        c.close()
+
+
 def test_rank_trend_series():
     """랭킹 추이(P2) — 지금 시즌만 · 하루에 둘이면 그날 마지막 · 원본을 지워도(14일) 집계로 그린다 · 비율의 분모는 구간 인원."""
     assert rc.rank_trend_series(None).taken == []
