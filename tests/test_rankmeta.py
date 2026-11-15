@@ -1226,6 +1226,89 @@ def test_late_rise_columns_and_empty():
     using(t)
 
 
+# ── 110 U10 [메타 변화] 쓰는 사람 평균 점수 차 ──────────────────────────────────────────────────────────────
+
+def _avg_people(elos, colors=("A", "A", "B", "B"), forms=("4-2-3-1", "4-2-3-1", "4-4-2", "4-4-2")):
+    rows = [person(i + 1, i + 1, elo=e, color=c, form=f) for i, (e, c, f) in enumerate(zip(elos, colors, forms))]
+    rows.append(person(99, 500, elo=1000.0, color="A", form="4-4-2"))      # 201~1,000위 구간 — 1~200위 구간 계산에 안 들어간다
+    return rows
+
+
+def _avg_trend(now_id, then_id, split=False):
+    return rc.MetaTrend("n", "t", 7.0, {}, False, now_id=now_id, then_id=then_id, split=split)
+
+
+def test_meta_avg_elo_is_user_average_minus_band_average():
+    """쓰는 사람 평균 점수 − 그 순위 구간 전체 평균 · 지난주와 지금 각각 · 다른 구간 사람은 안 센다 · 포메이션 묶음도 같은 키 규칙."""
+    def t(db):
+        then = db.snap(T0, _avg_people((3950.0, 3850.0, 3800.0, 3700.0)), seq=1)
+        now = db.snap(T0 + timedelta(days=7), _avg_people((4000.0, 3900.0, 3800.0, 3700.0)), seq=1)
+        res = M.meta_avg_elo(db.ro(), _avg_trend(now, then), 200)
+        assert res.now_ok and res.then_ok
+        assert res.now[("team_color", "A")] == 100.0 and res.now[("team_color", "B")] == -100.0, res.now
+        assert res.then[("team_color", "A")] == 75.0 and res.then[("team_color", "B")] == -75.0, res.then
+        assert res.now[("formation", "4-2-3-1")] == 100.0
+        res = M.meta_avg_elo(db.ro(), _avg_trend(now, then), 200, how="front")
+        assert res.now[("formation", "앞줄 1명")] == 100.0 and res.now[("formation", "앞줄 2명")] == -100.0, res.now
+    using(t)
+
+
+def test_meta_avg_elo_other_season_or_missing_raw_blanks_that_side():
+    """지난주 회차가 다른 시즌(season_seq)이면 지난주 칸을 비운다(지금 칸은 그대로) · 원본이 지워진 회차는 그쪽만 비운다 ·
+    비교할 회차가 아직 없으면(모으는 중) 빈 결과."""
+    def t(db):
+        then = db.snap(T0, _avg_people((3950.0, 3850.0, 3800.0, 3700.0)), seq=1)
+        now = db.snap(T0 + timedelta(days=7), _avg_people((4000.0, 3900.0, 3800.0, 3700.0)), seq=2)
+        res = M.meta_avg_elo(db.ro(), _avg_trend(now, then), 200)
+        assert res.now_ok and not res.then_ok and res.then == {}, (res.now_ok, res.then_ok, res.then)
+        assert res.now[("team_color", "A")] == 100.0
+        db.conn.execute("UPDATE snapshots SET season_seq = 2 WHERE id = ?", (then,))
+        db.conn.commit()
+        assert M.meta_avg_elo(db.ro(), _avg_trend(now, then), 200).then_ok, "같은 시즌이면 지난주 칸이 있다"
+        with db.conn:
+            db.conn.execute("DELETE FROM snapshot_rows WHERE snapshot_id = ?", (then,))
+        res = M.meta_avg_elo(db.ro(), _avg_trend(now, then), 200)
+        assert res.now_ok and not res.then_ok and res.then == {}, "원본이 지워진 회차를 읽은 것으로 쳤다"
+        with db.conn:
+            db.conn.execute("DELETE FROM snapshot_rows WHERE snapshot_id = ?", (now,))
+        res = M.meta_avg_elo(db.ro(), _avg_trend(now, then), 200)
+        assert not res.now_ok and res.now == {}, "지금 회차 원본이 없는데 값을 냈다"
+        empty = M.meta_avg_elo(db.ro(), rc.MetaTrend(), 200)
+        assert not empty.now_ok and not empty.then_ok and empty.now == {}, empty
+    using(t)
+
+
+def test_meta_avg_elo_splits_duplicate_names_like_the_trend_rows():
+    """meta_trend 가 겹치는 이름을 엠블럼으로 갈랐으면(split) 평균 점수도 같은 키(teamcolor.label)로, 아니면 이름 하나로."""
+    import teamcolor
+
+    def t(db):
+        rows = [person(i + 1, i + 1, elo=e, color="Spartan") for i, e in enumerate((4000.0, 3900.0, 3800.0, 3700.0))]
+        sid = db.snap(T0, rows, seq=1)
+        with db.conn:
+            db.conn.executemany("INSERT INTO snapshot_emblems (snapshot_id, profile_sn, emblem) VALUES (?, ?, ?)",
+                                [(sid, 1, "teamcolorboost/b7.png"), (sid, 2, "teamcolorboost/b7.png"),
+                                 (sid, 3, "crests/l7.png"), (sid, 4, "crests/l7.png")])
+        boost, crest = teamcolor.label("Spartan", "teamcolorboost/b7.png"), teamcolor.label("Spartan", "crests/l7.png")
+        res = M.meta_avg_elo(db.ro(), _avg_trend(sid, None, split=True), 200)
+        assert res.now[("team_color", boost)] == 100.0 and res.now[("team_color", crest)] == -100.0, res.now
+        res = M.meta_avg_elo(db.ro(), _avg_trend(sid, None, split=False), 200)
+        assert res.now[("team_color", "Spartan")] == 0.0 and ("team_color", boost) not in res.now, res.now
+        assert not res.then_ok, "지난주 회차가 없다"
+    using(t)
+
+
+def test_group_meta_regroups_the_spark_series_too_110():
+    """포메이션을 묶으면 7일 추이 선 재료도 같은 묶음 키로 더해진다(줄과 선이 어긋나지 않게)."""
+    tr = rc.MetaTrend("n", "t", 7.0, {"formation": [rc.MetaRow("4-2-3-1", 5, 50.0, 4, 40.0, 10.0, False),
+                                                    rc.MetaRow("4-1-4-1", 5, 50.0, 6, 60.0, -10.0, False)]},
+                      False, series={"formation": {"4-2-3-1": [4, 5], "4-1-4-1": [6, 5]}},
+                      totals={"formation": [10, 10]})
+    g = M.group_meta(tr, "back")
+    assert g.series["formation"] == {"4백": [10, 10]} and g.totals == tr.totals, g.series
+    assert [r.key for r in g.rows["formation"]] == ["4백"]
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import math
 import sqlite3
 import statistics
@@ -658,7 +659,13 @@ def group_meta(trend: rankcollect.MetaTrend, how: str, minor: frozenset = frozen
         rows.append(rankcollect.MetaRow(k, na, pa, nb, pb, pa - pb,
                                         na < config.META_MIN_USERS and nb < config.META_MIN_USERS))
     rows.sort(key=lambda r: (-r.diff_pp, r.key))
-    return rankcollect.MetaTrend(trend.now_at, trend.then_at, trend.days, {**trend.rows, "formation": rows}, False)
+    series: dict = {}
+    for key, v in trend.series.get("formation", {}).items():
+        k = formation_group(key, how, minor)
+        acc = series.setdefault(k, [0] * len(v))
+        for i, n in enumerate(v):
+            acc[i] += n
+    return dataclasses.replace(trend, rows={**trend.rows, "formation": rows}, series={**trend.series, "formation": series})
 
 
 # ── N10 승률 → 하루 점수 ──────────────────────────────────────────────────
@@ -1053,6 +1060,54 @@ def emblems_by_name(conn: sqlite3.Connection) -> dict[str, str]:
         if color and emblem and color not in config.TEAMCOLOR_DUP_NAMES:
             seen.setdefault(color, set()).add(emblem)
     return {name: next(iter(keys)) for name, keys in seen.items() if len(keys) == 1}
+
+
+# ── 110 U10 [메타 변화] 쓰는 사람 평균 점수 차 ────────────────────────────────────
+
+@dataclass
+class MetaAvg:
+    now: dict = field(default_factory=dict)    # (종류, 키) → 쓰는 사람 평균 점수 − 그 구간 전체 평균(점)
+    then: dict = field(default_factory=dict)
+    now_ok: bool = False                       # 원본이 남았다 — 아니면 칸을 비우고 "원본 보관 기간이 지났습니다"
+    then_ok: bool = False                      # 원본이 남았고 지금과 같은 시즌이다 — 다른 시즌이면 비교가 뜻이 없어 비운다
+
+
+def _avg_by_key(conn: sqlite3.Connection, sid: int, tier: int, split: bool, how: str, minor: frozenset):
+    """회차 하나의 (종류, 키) → 쓰는 사람 평균 점수 − 구간 전체 평균. 원본이 없으면 None. 키는 meta_trend 줄의 키와 같은 규칙."""
+    acc: dict[tuple, list] = {}
+    for rank, elo, form, color, emblem in conn.execute(
+            "SELECT r.rank, r.elo, r.formation, r.team_color, e.emblem FROM snapshot_rows r LEFT JOIN snapshot_emblems e"
+            " ON e.snapshot_id = r.snapshot_id AND e.profile_sn = r.profile_sn WHERE r.snapshot_id = ?", (sid,)):
+        if elo is None or rankcollect.tier_of(rank) != tier:
+            continue
+        key = teamcolor.label(color, emblem) if split and color in config.TEAMCOLOR_DUP_NAMES else (color or "")
+        for k in (("all", ""), ("formation", formation_group(form, how, minor)), ("team_color", key)):
+            a = acc.setdefault(k, [0.0, 0])
+            a[0] += elo
+            a[1] += 1
+    if ("all", "") not in acc:
+        return None
+    total = acc[("all", "")][0] / acc[("all", "")][1]
+    return {k: v[0] / v[1] - total for k, v in acc.items() if k != ("all", "")}
+
+
+def meta_avg_elo(conn: sqlite3.Connection | None, trend: rankcollect.MetaTrend, tier: int, how: str = "raw",
+                 minor: frozenset = frozenset()) -> MetaAvg:
+    """[메타 변화] 줄마다 '쓰는 사람 평균 점수가 구간 전체 평균보다 몇 점 높은지' — 지난주와 지금(110 U10 · 산출 기준 방식).
+    원본(14일 보관) 두 회차를 읽는다(영구 집계에는 점수가 없다). 지난주 회차가 지금과 다른 시즌(season_seq)이면 지난주 칸은 비운다."""
+    out = MetaAvg()
+    if conn is None or trend.collecting or trend.now_id is None:
+        return out
+    now = _avg_by_key(conn, trend.now_id, tier, trend.split, how, minor)
+    out.now_ok = now is not None
+    out.now = now or {}
+    seq = {r[0]: r[1] for r in conn.execute("SELECT id, season_seq FROM snapshots WHERE id IN (?, ?)",
+                                            (trend.now_id, trend.then_id or 0))}
+    if trend.then_id is not None and seq.get(trend.then_id) == seq.get(trend.now_id):
+        then = _avg_by_key(conn, trend.then_id, tier, trend.split, how, minor)
+        out.then_ok = then is not None
+        out.then = then or {}
+    return out
 
 
 # ── 110 L1 막판 상승폭 ─────────────────────────────────────────────────────

@@ -410,6 +410,7 @@ RANK_CUT_RANKS = (1, 10, 50, 100, 200, 500, 1000, 2000, 5000, 10000)
 LATE_RISE_DAYS = (10, 7, 5, 4, 3, 2, 1, 0.5)
 LATE_RISE_TOL_DAYS = 0.5
 LATE_RISE_CUT = 200                 # 상승폭을 재는 컷 순위
+U10_SPARK_W = 48                    # 110 U10 [메타 변화] 줄의 7일 추이 선 폭(px)
 RANK_START_JITTER_MIN = (5, 50)     # 간격이 지난 시각의 +5~+50분 — 50분이면 약 1.5분 수집이 다음 정각 전에 끝난다
 RANK_RAW_KEEP_DAYS = 14             # 다른 구단주 1만 명분 원본은 이만큼만. 집계는 계속
 # 랭커 메타(2.3.1 · rankcollect.process_meta) — 초안 값들. 근거는 ROADMAP 2.3.1 실측 장부

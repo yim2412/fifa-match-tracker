@@ -1050,6 +1050,25 @@ def test_meta_trend_splits_only_when_both_snapshots_have_em_110():
         c.close()
 
 
+def test_meta_trend_window_series_for_spark_110():
+    """110 U10 — meta_trend 가 비교 창(then~now) 스냅숏마다 키별 인원과 분모를 같이 낸다(7일 추이 선 재료 · 같은 옆 표 읽기).
+    줄의 now_n·then_n 은 창의 양 끝 값과 같다."""
+    with Env() as env:
+        c = env.conn()
+        rc.save_snapshot(c, _em_rows(n_plain=8), NOW - timedelta(days=11))   # 비교 창 앞 — 선에 들어오면 안 된다
+        for i in range(8):
+            rc.save_snapshot(c, _em_rows(n_plain=4 + i), NOW - timedelta(days=8 - i))
+        mt = rc.meta_trend(c, config.RANK_TIERS[0])
+        assert not mt.collecting and mt.split and mt.now_id and mt.then_id
+        s = mt.series["team_color"]["리버풀"]
+        assert s == [6 + i for i in range(8)], s
+        assert mt.totals["team_color"] == [12 + i for i in range(8)], mt.totals
+        row = next(r for r in mt.rows["team_color"] if r.key == "리버풀")
+        assert (row.then_n, row.now_n) == (s[0], s[-1]), row
+        assert set(mt.series) == {"team_color", "formation"}
+        c.close()
+
+
 def test_rank_trend_series():
     """랭킹 추이(P2) — 지금 시즌만 · 하루에 둘이면 그날 마지막 · 원본을 지워도(14일) 집계로 그린다 · 비율의 분모는 구간 인원."""
     assert rc.rank_trend_series(None).taken == []

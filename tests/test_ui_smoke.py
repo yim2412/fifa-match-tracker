@@ -13034,7 +13034,7 @@ def test_rank_trend_has_three_tabs_and_meta_tabs_draw():
         assert [r.key for r in _win.meta_rise_order(fake)] == ["c", "b", "a"]
         for r in lst.rows():
             src = by_key[r.key]
-            assert [c.text for c in r.cells] == [f"{src.now_pct:.1f}%", f"{src.then_pct:.1f}%", f"{src.diff_pp:+.1f}%p"]
+            assert [c.text for c in r.cells[:3]] == [f"{src.now_pct:.1f}%", f"{src.then_pct:.1f}%", f"{src.diff_pp:+.1f}%p"]
             assert lst.metric_delegate.colors(r)["cell2"] == app_main.delta_color(src.diff_pp)
         assert _win.lb_meta_note.isHidden(), _win.lb_meta_note.text()   # 78 ① 리뷰 — 비교가 되면 설명 없음
         _win._go_page("랭킹 추이", "점수 분포")
@@ -13391,6 +13391,18 @@ def test_rank_cards_follow_one_source_67():
         _win._invalidate("metatrend")
         for kind in ("team_color", "formation"):
             assert weekly_top.get(kind) == _win.meta_lists[kind].row(0).key, (kind, weekly_top, _win.meta_lists[kind].row(0).key)
+        # 110 U10 — [메타 변화] 줄마다 칸 넷(그때·지금·변화 + 점수 차) · 추이 선 자리는 목록 전 줄이 같이 비운다
+        for kind in ("team_color", "formation"):
+            lst = _win.meta_lists[kind]
+            assert lst.rowCount() and all(len(r.cells) == 4 for r in lst.rows()), kind
+            assert lst.row(0).cells[3].label == "점수 차" and "지난주" in lst.row(0).cells[3].tip
+            assert lst.metric_delegate.spark_on == any(r.spark for r in lst.rows()), kind
+        mini = widgets.MetricRow("a", cells=(widgets.MetricCell("1", "x"),), spark=(1.0, 3.0, 2.0))
+        assert mini.spark and widgets.MetricRowDelegate.spark_points(list(mini.spark), QRectF(0, 0, 40, 10)) == [
+            QPointF(0, 10), QPointF(20, 0), QPointF(40, 5)], "추이 선 점이 눈금(최소~최대)을 못 따른다"
+        assert widgets.MetricRowDelegate.spark_points([5.0], QRectF(0, 0, 40, 10)) == [], "점 하나로 선을 그렸다"
+        flat = widgets.MetricRowDelegate.spark_points([2.0, 2.0], QRectF(0, 0, 40, 10))
+        assert [pt.y() for pt in flat] == [5.0, 5.0], "값이 같으면 가운데 가로선"
         # R5 — 대시보드 H5 와 같은 행·같은 중앙값 · 꼬리(5000판)는 마지막 칸
         _win._go_page("랭킹 추이", "추이")
         _win._invalidate("ranktrend")

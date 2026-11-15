@@ -2133,6 +2133,11 @@ class MetaTrend:
     days: float | None = None            # 실제로 비교한 일수(제목 "N일 전 대비")
     rows: dict = field(default_factory=dict)   # "team_color" · "formation" → [MetaRow] 변화 내림차순
     collecting: bool = True              # 비교할 스냅숏이 아직 없다("모으는 중")
+    now_id: int | None = None            # 110 U10 — 평균 점수 차가 원본을 읽을 두 회차
+    then_id: int | None = None
+    split: bool = False                  # 겹치는 이름을 엠블럼으로 갈라 셌나(L2 — 두 회차 다 옆 표가 있을 때만)
+    series: dict = field(default_factory=dict)   # 종류 → 키 → 비교 창(then~now) 스냅숏별 인원 — 7일 추이 선
+    totals: dict = field(default_factory=dict)   # 종류 → 스냅숏별 인원 합(비율의 분모)
 
 
 def meta_trend(conn: sqlite3.Connection | None, tier: int, days: int = 7) -> MetaTrend:
@@ -2160,9 +2165,19 @@ def meta_trend(conn: sqlite3.Connection | None, tier: int, days: int = 7) -> Met
     ids = (base["id"], then["id"])
     have = _count_rows(conn, ids, tier)[1]
     # 두 회차 다 옆 표가 있을 때만 겹치는 이름을 갈라 비교한다 — 한쪽이 이름 줄이면 갈린 줄이 '새로 나타남'으로 읽힌다
-    rows, _have = _count_rows(conn, ids, tier, collapse=not all(i in have for i in ids))
+    collapse = not all(i in have for i in ids)
+    rows, _have = _count_rows(conn, ids, tier, collapse=collapse)
     for sid, _t, kind, key, n in rows:
         counts.setdefault((sid, kind), {})[key] = n
+    out.now_id, out.then_id, out.split = base["id"], then["id"], not collapse
+    # 110 U10 — 7일 추이 선: 비교 창(then~now)의 스냅숏마다 같은 키로 센 인원(옆 표 읽기 한 길 — 위와 같은 규칙)
+    window = [s for s in snaps if then["dt"] <= s["dt"] <= base["dt"]]
+    wids = tuple(s["id"] for s in window)
+    pos = {sid: i for i, sid in enumerate(wids)}
+    for sid, _t, kind, key, n in _count_rows(conn, wids, tier, collapse=collapse)[0]:
+        out.series.setdefault(kind, {}).setdefault(key, [0] * len(wids))[pos[sid]] = n
+    for kind, keys in out.series.items():
+        out.totals[kind] = [sum(v[i] for v in keys.values()) for i in range(len(wids))]
     for kind in ("team_color", "formation"):
         a, b = counts.get((base["id"], kind), {}), counts.get((then["id"], kind), {})
         ta, tb = sum(a.values()), sum(b.values())

@@ -8822,6 +8822,29 @@ class MainWindow(QMainWindow):
         key = formation_key(label)
         return ("formation", key) if key else ()
 
+    @staticmethod
+    def meta_avg_cell(avg, key: tuple) -> MetricCell:
+        """110 U10 — 쓰는 사람 평균 점수 − 구간 전체 평균. 칸에는 지금 값, 말풍선에 지난주 → 지금. 두 칸을 따로 두면 1280 폭에서
+        두 목록이 나란히 선 자리에 이름이 안 들어가서 한 칸으로 합쳤습니다. 원본이 없거나 지난주가 다른 시즌이면 그쪽을 비웁니다."""
+        def one(diffs, ok):
+            if not ok:
+                return "—"
+            d = diffs.get(key)
+            return "—" if d is None else f"{d:+,.0f}점"
+        now, then = one(avg.now, avg.now_ok), one(avg.then, avg.then_ok)
+        why = "" if avg.then_ok else " 지난주는 원본 보관 기간이 지났거나 지난 시즌이라 비웠습니다."
+        if not avg.now_ok:
+            why = " 원본 보관 기간이 지났습니다."
+        return MetricCell(now, "점수 차", tip=f"쓰는 사람 평균 점수에서 같은 순위 구간 전체 평균을 뺀 값입니다. 지난주 {then} → 지금 {now}.{why}")
+
+    @staticmethod
+    def meta_spark(trend, kind: str, key: str) -> tuple:
+        """110 U10 — 비교 창 안 스냅숏마다 이 칸을 쓰는 사람 비율(%) — 7일 추이 선. 점이 둘 미만이면 빈 튜플."""
+        counts, totals = trend.series.get(kind, {}).get(key), trend.totals.get(kind)
+        if not counts or not totals:
+            return ()
+        return tuple(n * 100 / t if t else 0.0 for n, t in zip(counts, totals))
+
     def _render_meta_trend(self) -> None:
         trend = rankcollect.MetaTrend()
         tier = self.cb_meta_tier.currentData() or 200
@@ -8835,8 +8858,21 @@ class MainWindow(QMainWindow):
         except sqlite3.Error:
             pass
         how = self.cb_meta_form.currentData() or "raw"
-        trend = core.group_meta(trend, how, self._minor_formations() if how == "minor" else frozenset())
+        minor = self._minor_formations() if how == "minor" else frozenset()
+        trend = core.group_meta(trend, how, minor)
         self.meta_trend = trend
+        avg = core.MetaAvg()
+        if not trend.collecting:    # 110 U10 — 원본 두 회차를 같은 읽기 연결에서(14일 보관 안일 때만 값이 있다)
+            try:
+                rconn = rankcollect.open_rank_db_ro()
+                if rconn is not None:
+                    try:
+                        avg = core.meta_avg_elo(rconn, trend, tier, how, minor)
+                    finally:
+                        rconn.close()
+            except sqlite3.Error:
+                pass
+        self.meta_avg = avg          # 테스트가 본다
         if trend.collecting:
             self._set_status(self.lb_meta_note,
                 "모으는 중입니다. 하루 한 번 수집하며, 같은 시즌 스냅숏이 3일치 넘게 쌓이면 비교합니다." if config.RANK_COLLECT else
@@ -8856,8 +8892,10 @@ class MainWindow(QMainWindow):
                 out.append(MetricRow(name, f"{r.now_n - r.then_n:+,}명 ({r.then_n:,} → {r.now_n:,})", (
                     MetricCell(f"{r.now_pct:.1f}%", "지금"),
                     MetricCell(f"{r.then_pct:.1f}%", "그때"),
-                    MetricCell(f"{r.diff_pp:+.1f}%p", "변화", delta_color(r.diff_pp))),
-                    icon=self._meta_icon(kind, name), dim=r.thin, key=r.key))
+                    MetricCell(f"{r.diff_pp:+.1f}%p", "변화", delta_color(r.diff_pp)),
+                    self.meta_avg_cell(avg, (kind, r.key))),
+                    icon=self._meta_icon(kind, name), dim=r.thin, key=r.key,
+                    spark=self.meta_spark(trend, kind, r.key)))
             lst.set_rows(out)
             self._start_list_icons(lst)
 

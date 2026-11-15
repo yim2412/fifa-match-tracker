@@ -3157,6 +3157,7 @@ class MetricRow:
     tip: str = ""
     key: object = None               # 쓰는 쪽 값(팀컬러 라벨 · 구간 번호)
     sort: dict = None                # 정렬 값(쓰는 쪽이 이름 → 값) — 목록은 안 읽는다
+    spark: tuple = ()                # 숫자 칸 왼쪽 추이 꺾은선(110 U10 · 값 목록 · 왼쪽이 옛것) — 목록 어느 줄에든 있으면 전 줄이 자리를 비운다
 
     @property
     def accessible(self) -> str:
@@ -3175,6 +3176,7 @@ class MetricRowDelegate(QStyledItemDelegate):
         super().__init__(view)
         self.view = view
         self.col_w: list[float] = []     # 칸마다 폭 — measure() 가 목록 전체에서
+        self.spark_on = False            # 어느 줄에든 추이 선이 있으면 전 줄이 선 자리를 비운다(줄마다 이름 폭이 같게)
         self.rank_w = 0.0
 
     fonts = staticmethod(MatchCardDelegate.fonts)
@@ -3195,6 +3197,7 @@ class MetricRowDelegate(QStyledItemDelegate):
             for i, c in enumerate(r.cells):
                 w[i] = max(w[i], _metric_cell_w(c, bold), small.horizontalAdvance(c.label))
         self.col_w = w
+        self.spark_on = any(r.spark for r in rows)
         ranks = [r.rank for r in rows if r.rank is not None]
         self.rank_w = bold.horizontalAdvance(f"{max(ranks):,}") if ranks else 0.0
 
@@ -3216,6 +3219,10 @@ class MetricRowDelegate(QStyledItemDelegate):
             segs.append(CardSeg(f"label{i}", QRectF(x, y2, w, h2), c.label, fm["small"].horizontalAdvance(c.label)))
             x += w + self.CELL_GAP
         limit = cells_left - 16
+        if self.spark_on:
+            sw = config.U10_SPARK_W
+            segs.append(CardSeg("spark", QRectF(cells_left - 12 - sw, top + 2, sw, h1 + self.GAP + h2 - 4), "", 0))
+            limit -= sw + 12
         x = left
         if self.rank_w:
             text = f"{row.rank:,}" if row.rank is not None else ""
@@ -3288,6 +3295,9 @@ class MetricRowDelegate(QStyledItemDelegate):
                     p.drawPixmap(QPointF(s.rect.left() + (s.rect.width() - scaled.width()) / 2,
                                          s.rect.top() + (s.rect.height() - scaled.height()) / 2), scaled)
                 continue
+            if s.role == "spark":
+                self.paint_spark(p, s.rect, row.spark)
+                continue
             if s.role.startswith("cell") and row.cells[int(s.role[4:])].grade:
                 g = row.cells[int(s.role[4:])].grade
                 bw = min(s.full, s.rect.width())
@@ -3302,6 +3312,28 @@ class MetricRowDelegate(QStyledItemDelegate):
             text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
                 s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
             p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | align, text)
+
+    @staticmethod
+    def spark_points(values, rect: QRectF) -> list[QPointF]:
+        """추이 값 → rect 안 점(왼쪽이 옛것 · 줄마다 자기 최소~최대로 눈금 — 값이 다 같으면 가운데 가로선). 점이 둘 미만이면 빈 목록. 테스트가 읽는다."""
+        if len(values) < 2:
+            return []
+        lo, hi = min(values), max(values)
+        step = rect.width() / (len(values) - 1)
+        return [QPointF(rect.left() + i * step,
+                        rect.center().y() if hi == lo else rect.bottom() - (v - lo) / (hi - lo) * rect.height())
+                for i, v in enumerate(values)]
+
+    def paint_spark(self, p: QPainter, rect: QRectF, values) -> None:
+        pts = self.spark_points(values, rect)
+        if not pts:
+            return
+        path = QPainterPath(pts[0])
+        for pt in pts[1:]:
+            path.lineTo(pt)
+        p.setPen(QPen(QColor(T.ACCENT), 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
 
     def tip_at(self, row: MetricRow, rect, base: QFont, pos) -> str:
         for s in self.layout(row, rect, base):
