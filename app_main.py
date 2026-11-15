@@ -14256,7 +14256,8 @@ class MainWindow(QMainWindow):
         dlg.btn_compare.clicked.connect(lambda _=False: self._compare_from_detail(dlg, opponent, opp_ouid))
         dlg.compare_note = self._dim_label("")
         h.addWidget(dlg.btn_compare)
-        h.addWidget(dlg.compare_note, 1)
+        h.addWidget(dlg.compare_note)
+        h.addStretch(1)   # 이유 글이 숨으면 남는 폭을 단추가 다 받아 창 폭 전체로 늘어났다(110 ② 실화면)
         self._sync_detail_compare(dlg, opp_ouid)
         return w
 

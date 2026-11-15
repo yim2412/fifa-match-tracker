@@ -17021,6 +17021,12 @@ def test_match_detail_compare_button_opens_compare_by_opponent_ouid_110():
         _win._api, _win._compare_loader = api, None
         dlg = _win._make_match_detail(d)
         assert dlg.btn_compare.isEnabled() and dlg.compare_note.isHidden(), dlg.compare_note.text()
+        dlg.resize(620, 500)
+        dlg.show()
+        _app.processEvents()
+        assert dlg.btn_compare.width() <= dlg.btn_compare.sizeHint().width() + 8, \
+            f"이유 글이 숨자 단추가 줄 폭을 다 받았다 ({dlg.btn_compare.width()}px · 실화면 584px)"
+        dlg.hide()
         made = []
         real = app_main.MatchLoader.__init__
 
