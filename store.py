@@ -1427,6 +1427,11 @@ def load_teamcolor_steps(conn: sqlite3.Connection, teamcolor_id: int, today: dat
     return rows, day, _cache_fresh(day, today or date.today(), days)
 
 
+def load_step_members(conn: sqlite3.Connection) -> list[tuple[int, int, int | None]]:
+    """팀컬러 단계표 전부 → [(id, 단계, 그 단계에 필요한 인원)] — 110 R1 이 랭커 팀컬러 인원을 단계로 바꾸는 재료. 낡아도 준다(단계표는 안 바뀐다)."""
+    return [(r[0], r[1], r[2]) for r in conn.execute("SELECT id, step, members FROM teamcolor_steps")]
+
+
 def budget_take(conn: sqlite3.Connection, day: str, kind: str, cap: int | None) -> bool:
     """그날 그 종류 요청을 하나 쓴다 — 상한(cap)에 닿았으면 안 쓰고 False. 요청을 보내기 직전에만 부른다.
 

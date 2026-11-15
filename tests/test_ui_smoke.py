@@ -13197,7 +13197,7 @@ def test_rank_views_invalidate_on_four_paths():
     """rank.db 가 바뀌는 길 넷이 같은 키 묶음(RANK_VIEW_KEYS)을 무효화 — 정리는 바뀐 게 있을 때만."""
     from types import SimpleNamespace
     W = app_main.MainWindow
-    assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "ranktrend", "metatrend", "elodist", "daywr",
+    assert set(W.RANK_VIEW_KEYS) == {"rankerpick", "recommend", "similar", "ranktrend", "metatrend", "elodist", "daywr",
                                      "tcboard", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
                                      "traits", "opprank", "predcheck", "rewards_rank", "review"}   # review = 97 [시즌 돌아보기] 최종 순위
     seen = []
@@ -16977,6 +16977,333 @@ def test_zz_real_credential_manager_never_called_109():
         os.environ["FIFA_NO_CRED"] = keep
         config.ENV_PATH, config.DEFAULT_ENV_PATH = keep_paths
         _CRED_CALLS.clear()
+
+
+# ── 110 R1 [비슷한 랭커] · R3 경기 상세 [구단주 비교] ────────────────────────────────────────────────
+
+class _CompareApi(_DetailApi):
+    """구단주 비교가 부른 요청을 센다. get_ouid 는 옛 닉네임(닉네임을 바꾼 상대)을 못 찾는다 — ouid 로 연 길이 이걸 안 부르는지 잰다."""
+
+    def __init__(self):
+        super().__init__([], "")
+        self.ouid_calls, self.basic_calls = [], []
+
+    def get_ouid(self, nick):
+        self.ouid_calls.append(nick)
+        return f"ouid-of-{nick}"
+
+    def get_user_basic(self, ouid):
+        self.basic_calls.append(ouid)
+        return {"nickname": "새닉네임"}
+
+
+def _run_compare_loader_offline():
+    """스모크는 QThread.start 를 막는다 — 띄워 둔 비교 로더를 그 자리에서. 홈페이지 순위는 안 묻게 웹 데이터를 끈다."""
+    keep = config.WEB_DATA
+    config.WEB_DATA = False
+    try:
+        _win._compare_loader.run()
+    finally:
+        config.WEB_DATA = keep
+
+
+def test_match_detail_compare_button_opens_compare_by_opponent_ouid_110():
+    """R3 — 경기 상세의 [구단주 비교] 는 상대 ouid 로 비교 탭을 연다: 닉네임을 묻는 get_ouid 0번 · 닉네임이 바뀐 상대도 같은 ouid · 로더 한 번.
+    비교를 받는 중이면 단추가 꺼지고 이유가 보이며 눌러도 로더를 또 안 띄운다."""
+    d = next(x for x in _DETAILS if app_main.parse_match(x, _OUID))
+    m = app_main.parse_match(d, _OUID)
+    opp_ouid = core.match_sides(d, _OUID)[1].get("ouid")
+    assert opp_ouid and opp_ouid != _OUID, "픽스처 상대에 ouid 가 없다 — 아래 단언이 비었다"
+    api = _CompareApi()
+    keep = (_win._api, _win._compare_loader)
+    dlg = None
+    try:
+        _win._api, _win._compare_loader = api, None
+        dlg = _win._make_match_detail(d)
+        assert dlg.btn_compare.isEnabled() and dlg.compare_note.isHidden(), dlg.compare_note.text()
+        made = []
+        real = app_main.MatchLoader.__init__
+
+        def spy(self, *a, **k):
+            made.append(k.get("known_ouid"))
+            real(self, *a, **k)
+
+        app_main.MatchLoader.__init__ = spy
+        try:
+            dlg.btn_compare.click()
+        finally:
+            app_main.MatchLoader.__init__ = real
+        assert made == [opp_ouid], made                                   # 로더 한 번 · 경기 상세의 상대 ouid
+        assert _win._current_view() == ("구단주 비교", None) and _win.ed_compare_nick.text() == m.opponent
+        assert not dlg.isVisible() and dlg.result() == app_main.QDialog.DialogCode.Accepted, "눌렀는데 상세 창이 안 닫힌다"
+        _run_compare_loader_offline()
+        assert api.ouid_calls == [], "ouid 를 아는데 닉네임으로 get_ouid 를 불렀다(새 요청)"
+        assert api.basic_calls == [opp_ouid], api.basic_calls
+        assert _win._compare_last is not None and _win._compare_last[2] == opp_ouid, "비교 상대의 ouid 가 다르다"
+        assert _win._compare_last[0] == "새닉네임", "닉네임이 바뀐 상대는 지금 닉네임으로 보인다"
+        # 도는 중 — 새 상세 창은 단추가 꺼지고 이유가 보인다 · 먼저 열어 둔 창의 단추를 눌러도 로더를 또 안 띄운다
+        dlg2 = _win._make_match_detail(d)
+        busy = _FakeThread("cmp", [])
+        _win._compare_loader = busy
+        dlg3 = _win._make_match_detail(d)
+        try:
+            assert not dlg3.btn_compare.isEnabled() and "받는 중" in dlg3.compare_note.text() and not dlg3.compare_note.isHidden()
+            made.clear()
+            app_main.MatchLoader.__init__ = spy
+            try:
+                dlg2.btn_compare.click()
+            finally:
+                app_main.MatchLoader.__init__ = real
+            assert made == [] and _win._compare_loader is busy, "비교가 도는 중에 로더를 또 띄웠다"
+            assert not dlg2.btn_compare.isEnabled() and "받는 중" in dlg2.compare_note.text()
+            assert dlg2.result() != app_main.QDialog.DialogCode.Accepted, "못 열었는데 창을 닫았다"
+            busy.running = False
+            assert _win._sync_detail_compare(dlg3, opp_ouid) and dlg3.btn_compare.isEnabled(), "끝났는데 단추가 안 풀린다"
+        finally:
+            dlg2.deleteLater()
+            dlg3.deleteLater()
+        # 상대 ouid 가 없거나 내 계정이 없으면 끈다(모달 없이)
+        _win._compare_loader = None
+        bare = app_main.MatchDetailDialog(_win, "x")
+        keep_ouid = _win._ouid
+        try:
+            row1 = _win._detail_compare_row(bare, "x", None)   # 위젯을 쥐고 있어야 단추가 안 지워진다
+            assert not bare.btn_compare.isEnabled() and "상대 계정" in bare.compare_note.text()
+            _win._ouid = None
+            row2 = _win._detail_compare_row(bare, "x", "o")
+            assert not bare.btn_compare.isEnabled() and "내 계정" in bare.compare_note.text()
+            del row1, row2
+        finally:
+            _win._ouid = keep_ouid
+            bare.deleteLater()
+    finally:
+        _win._api, _win._compare_loader = keep
+        _win.ed_compare_nick.setText("")
+        _win.btn_compare.setEnabled(True)
+        _win.lb_compare_status.setText("")
+        _win._compare_last = None
+        if dlg is not None:
+            dlg.deleteLater()
+        _win._go_page("대시보드")
+
+
+def _similar_fixture(form_label: str):
+    """내 닉네임이 15위인 스냅숏 · 포메이션은 내 선발 모양으로(셋 중 둘) · 팀컬러 팀3 인원은 순위 % 12 · fifa.db 에 ranker_squads ouid 하나."""
+    _meta_db_moving(me=(_win._nick, 777))
+    c = rankcollect.open_rank_db()
+    try:
+        with c:
+            c.execute("UPDATE snapshot_rows SET formation = ? WHERE formation IN ('4-1-2-3', '4-2-3-1')", (form_label,))
+            c.execute("UPDATE snapshot_rows SET color_count = rank % 12")
+    finally:
+        c.close()
+    f = store.open_db(config.DB_PATH)
+    try:
+        store.save_ranker_squad(f, 909, nickname="g9", ouid="OUID-G9", rank=9, match_id=None, match_day=None,
+                                fetched_at="2026-11-15T00:00:00", fail=None, source=store.PICK)
+    finally:
+        f.close()
+
+
+def _similar_steps(members=(3, 6, 8, 11)):
+    f = store.open_db(config.DB_PATH)
+    try:
+        store.save_teamcolor_meta(f, [teamcolor.TeamColorMeta(77, "팀3", "crests/l3.png", "", len(members), members[-1], [])], "2026-11-15")
+        store.save_teamcolor_steps(f, 77, [teamcolor.Step(i + 1, n, []) for i, n in enumerate(members)], "2026-11-15")
+    finally:
+        f.close()
+
+
+def _similar_cleanup():
+    f = store.open_db(config.DB_PATH)
+    try:
+        with f:
+            for t in ("teamcolor_meta", "teamcolor_steps", "ranker_squads"):
+                f.execute(f"DELETE FROM {t}")
+    finally:
+        f.close()
+
+
+def test_similar_tab_draws_two_lists_and_follows_invalidation_110():
+    """R1 — 탭이 그려진다: 원본이 없으면 사유 · 있으면 같은 포메이션·같은 팀컬러 두 목록(순위순 · 나 뺌 · 보이는 수 R1_SHOW) ·
+    단계표 캐시가 비면 사유 + 단계 없이 · 단계표가 생긴 뒤 rank.db 무효화 길로 다시 읽혀 목록이 바뀐다 · 줄은 순위 · 점수 · 팀컬러 인원 · 구단가치."""
+    starters = _win._my_latest_starters()
+    assert starters, "픽스처에 내 선발이 없다"
+    form_label = core.snapshot_formation(core.formation_of(starters))
+    keep_start, keep_show = app_main.SimilarLoader.start, config.R1_SHOW
+    app_main.SimilarLoader.start = lambda w: w.run()   # 스모크는 QThread.start 를 막는다 — 그 자리에서
+    try:
+        with _MetaEnv() as env:
+            _win._go_page("랭커 픽", "비슷한 랭커")
+            assert _win._current_view() == ("랭커 픽", "비슷한 랭커")
+            env.write(collect=0)
+            _win._sim_reset()
+            _win._invalidate("similar")
+            assert "[정보]" in _win.lb_sim_note.text() and all(l.rowCount() == 0 for l in _win.sim_lists.values())
+            env.write(collect=1)
+            _win._invalidate("similar")
+            assert "원본이 없습니다" in _win.lb_sim_note.text(), _win.lb_sim_note.text()
+            assert not config.RANK_DB_PATH.exists(), "그리다 rank.db 를 만들었다"
+            config.R1_SHOW = 7
+            _similar_fixture(form_label)
+            _win._sim_reset()
+            _win._invalidate("similar")
+            res = _win.similar
+            assert res is not None and res.formation == form_label and res.color == "팀3", (res and (res.formation, res.color))
+            assert "단계 정보가 아직 없어" in _win.lb_sim_note.text() and res.no_steps, _win.lb_sim_note.text()
+            fm = _win.sim_lists["formation"].rows()
+            assert [r.rank for r in fm] == sorted(r.rank for r in fm) and len(fm) == 7 and 15 not in [r.rank for r in fm]
+            assert res.n_formation > 7 and f"{res.n_formation:,}명 중 7명" in _win.sim_titles["formation"].text(), _win.sim_titles["formation"].text()
+            first = fm[0]
+            assert [c.label for c in first.cells] == ["점수", "팀컬러", "구단가치"] and first.rank == res.same_formation[0].rank
+            assert first.key == (res.same_formation[0].sn, res.same_formation[0].nick)
+            # 단계표가 없으면 팀3 전부(15위 나 빼고) — 3위 쪽 낮은 인원도 들어 있다
+            assert 3 in [r.rank for r in _win.sim_lists["color"].all_rows()] or res.n_color > 7
+            assert res.n_color == 49, res.n_color
+            # 단계표가 생겼다 → 팀컬러 목록 저장이 부르는 무효화 길(_invalidate_rank_views)로 다시 읽혀 3단계 이상만(순위 % 12 가 9)
+            _similar_steps()
+            _win._invalidate_rank_views()
+            res = _win.similar
+            assert not res.no_steps and "단계 정보가 아직" not in _win.lb_sim_note.text(), _win.lb_sim_note.text()
+            assert [r.rank for r in _win.sim_lists["color"].rows()] == [9, 21, 33, 45, 57, 69, 81], \
+                [r.rank for r in _win.sim_lists["color"].rows()]
+            assert res.n_color == 25 and f"{config.R1_MIN_STEP}단계 이상" in _win.sim_titles["color"].text()
+            assert [c.text for c in _win.sim_lists["color"].row(0).cells][1] == "9명"
+            # 같은 포메이션 목록은 단계표와 무관 · 팀컬러 목록과 교집합이 아니다
+            assert [r.rank for r in _win.sim_lists["formation"].rows()] == [r.rank for r in fm]
+            assert set(r.rank for r in _win.sim_lists["formation"].rows()) != set(r.rank for r in _win.sim_lists["color"].rows())
+            # 나는 어느 목록에도 없다(보이는 수를 크게 열어 15위가 잘림 밖에서 빠졌는지 본다) · 포메이션 목록은 세 번째마다 둘 = 199명
+            config.R1_SHOW = 300
+            _win._invalidate("similar")
+            assert 15 not in [r.rank for r in _win.sim_lists["formation"].rows()] and _win.similar.n_formation == 199, _win.similar.n_formation
+            assert 15 not in [r.rank for r in _win.sim_lists["color"].rows()]
+            # 탭이 안 보이는 동안 무효화는 열 때 그린다 · 수집 끝(회차 끝)이 같은 묶음을 무효화한다
+            assert "similar" in app_main.MainWindow.RANK_VIEW_KEYS and "similar" not in app_main.MainWindow.PICK_KEYS
+            assert app_main.MainWindow.KEY_OF_VIEW[("랭커 픽", "비슷한 랭커")] == "similar"
+            _win._go_page("대시보드")
+            # 랭커 픽 데이터가 바뀌거나 지워지면(ouid 도 같이) 읽어 둔 값을 버린다
+            assert _win._sim_inputs is not None
+            _win._invalidate_pick()
+            assert _win._sim_inputs is None, "랭커 픽 데이터를 지웠는데 ouid 를 메모리에 쥐고 있다"
+    finally:
+        app_main.SimilarLoader.start, config.R1_SHOW = keep_start, keep_show
+        _similar_cleanup()
+        _win._sim_reset()
+        _win._go_page("대시보드")
+
+
+def test_similar_row_activation_opens_compare_with_known_or_unknown_ouid_110():
+    """R1 줄 두 번 누르기 — ranker_squads 에 그 랭커 ouid 가 있으면 get_ouid 0번, 없으면 스냅숏 닉네임으로 1번 · 비교가 도는 중이면 안 열고 글만 ·
+    내 계정이 없으면 글만."""
+    starters = _win._my_latest_starters()
+    form_label = core.snapshot_formation(core.formation_of(starters))
+    keep = (app_main.SimilarLoader.start, _win._api, _win._compare_loader)
+    app_main.SimilarLoader.start = lambda w: w.run()
+    try:
+        with _MetaEnv():
+            _similar_fixture(form_label)
+            _similar_steps()
+            _win._go_page("랭커 픽", "비슷한 랭커")
+            _win._sim_reset()
+            _win._invalidate("similar")
+            lst = _win.sim_lists["color"]
+            by_rank = {i: lst.row(i) for i in range(lst.rowCount())}
+            row9 = next(r for r in by_rank.values() if r.rank == 9)        # ranker_squads 에 ouid 가 있는 랭커
+            row21 = next(r for r in by_rank.values() if r.rank == 21)      # 없는 랭커
+            assert row9.key == (909, "g9") and _win._sim_inputs[1] == {909: "OUID-G9"}, _win._sim_inputs
+            api = _CompareApi()
+            _win._api = api
+            for row, want_ouid_calls, want_basic in ((row9, [], ["OUID-G9"]), (row21, [row21.key[1]], [f"ouid-of-{row21.key[1]}"])):
+                api.ouid_calls.clear()
+                api.basic_calls.clear()
+                _win._compare_loader = None
+                _win._go_page("랭커 픽", "비슷한 랭커")
+                lst.activated.emit(lst.model().index(next(i for i, r in by_rank.items() if r is row), 0))
+                assert _win._current_view() == ("구단주 비교", None) and _win.ed_compare_nick.text() == row.key[1]
+                assert isinstance(_win._compare_loader, app_main.MatchLoader)
+                _run_compare_loader_offline()
+                assert api.ouid_calls == want_ouid_calls, (row.rank, api.ouid_calls)
+                assert api.basic_calls == want_basic, (row.rank, api.basic_calls)
+            # 비교가 도는 중 — 새로 안 열고 이유만 · 내 계정이 없으면 이유만
+            _win._go_page("랭커 픽", "비슷한 랭커")
+            busy = _FakeThread("cmp", [])
+            _win._compare_loader = busy
+            lst.activated.emit(lst.model().index(0, 0))
+            assert _win._compare_loader is busy and _win._current_view() == ("랭커 픽", "비슷한 랭커")
+            assert "받는 중" in _win.lb_sim_note.text() and not _win.lb_sim_note.isHidden()
+            busy.running = False
+            _win._compare_loader = None
+            keep_ouid = _win._ouid
+            _win._ouid = None
+            try:
+                lst.activated.emit(lst.model().index(0, 0))
+                assert _win._compare_loader is None and "내 계정" in _win.lb_sim_note.text()
+            finally:
+                _win._ouid = keep_ouid
+    finally:
+        app_main.SimilarLoader.start, _win._api, _win._compare_loader = keep
+        _similar_cleanup()
+        _win._sim_reset()
+        _win.ed_compare_nick.setText("")
+        _win.btn_compare.setEnabled(True)
+        _win.lb_compare_status.setText("")
+        _win._compare_last = None
+        _win._go_page("대시보드")
+
+
+def test_similar_loader_reads_steps_and_ouids_and_stays_empty_when_clearing_110():
+    """SimilarLoader — fifa.db 에서 단계표와 ouid 를 읽어 넘긴다(읽기만) · 지우는 중이면 빈 결과 · 기록 지우기가 기다릴 대상(WRITES)이다."""
+    _similar_cleanup()
+    _similar_steps()
+    f = store.open_db(config.DB_PATH)
+    try:
+        store.save_ranker_squad(f, 5, nickname="a", ouid="OU5", rank=5, match_id=None, match_day=None,
+                                fetched_at="2026-11-15T00:00:00", fail=None, source=store.PICK)
+        store.save_ranker_squad(f, 6, nickname="b", ouid=None, rank=6, match_id=None, match_day=None,
+                                fetched_at="2026-11-15T00:00:00", fail=None, source=store.PICK)
+    finally:
+        f.close()
+    try:
+        assert app_main.SimilarLoader.WRITES == {app_main.STORE_FIFA}, "읽기여도 WRITES 가 비면 지우기가 기다려 주지 않는다"
+        got = []
+        ld = app_main.SimilarLoader()
+        ld.ready.connect(got.append)
+        ld.run()
+        (table, ouids), = got
+        assert table.thresholds("팀3", "crests/l3.png") == (3, 6, 8, 11) and ouids == {5: "OU5"}, (table, ouids)
+        before = pathlib.Path(config.DB_PATH).stat().st_mtime_ns
+        got.clear()
+        app_main.CLEARING.add(app_main.STORE_FIFA)
+        try:
+            ld2 = app_main.SimilarLoader()
+            ld2.ready.connect(got.append)
+            ld2.run()
+            (table2, ouids2), = got
+            assert not table2.by_key and ouids2 == {}, "지우는 중인데 읽었다"
+            ld3 = app_main.SimilarLoader()
+            ld3.start()
+            assert ld3.blocked, "걸쇠가 로더를 안 막는다"
+        finally:
+            app_main.CLEARING.clear()
+        got.clear()
+        ld4 = app_main.SimilarLoader()
+        ld4.ready.connect(got.append)
+        ld4.cancel()
+        ld4.run()
+        assert got == [], "멈춤을 요청했는데 결과를 냈다"
+        assert pathlib.Path(config.DB_PATH).stat().st_mtime_ns == before, "읽기 로더가 fifa.db 를 썼다"
+        # 무효화는 읽는 중인 로더를 멈춘다(낡은 ouid 가 지운 뒤에 들어오지 않게)
+        log = []
+        keep = _win._sim_loader
+        _win._sim_loader = _FakeThread("sim", log)
+        _win._sim_inputs = ("x", {})
+        try:
+            _win._sim_reset()
+            assert log == ["stop sim"] and _win._sim_loader is None and _win._sim_inputs is None, (log, _win._sim_loader)
+        finally:
+            _win._sim_loader = keep
+    finally:
+        _similar_cleanup()
 
 
 def main() -> int:

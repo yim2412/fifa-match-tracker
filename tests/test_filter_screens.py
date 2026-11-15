@@ -78,7 +78,7 @@ MUST_CHANGE = {
 # 넥슨이 매긴 기록·저장 범위·경기와 무관한 화면 — 스위치와 무관하게 그대로(J3)
 MUST_SAME = {"divstay", "rewards", "poslevel", "distcmp", "history", "ranktrend", "metatrend", "elodist", "weekly",
              "predcheck", "daywr", "tcboard", "valuebins", "tiermeans", "wrelo", "traits", "rankmove", "rewards_rank",
-             "pricew", "rankerpick", "recommend", "opprank", "trades"}
+             "pricew", "rankerpick", "recommend", "similar", "opprank", "trades"}
 # 그림이 안 바뀌어도 되는 숫자 화면 — 이 지어낸 자료·창 상태에서 바뀔 이유가 없다(이유를 적는다)
 REDRAW_MAX_S = 2.0   # ROADMAP 109 J6 — 상한 2초. 전 화면 한꺼번에는 15,000판에서 4~5초라(위 시험이 찍는다) 열린 화면 하나에 건다
 EXEMPT = {

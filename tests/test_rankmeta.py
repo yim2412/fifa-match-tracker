@@ -49,7 +49,7 @@ class DB:
             self.conn.executemany(
                 "INSERT INTO snapshot_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 [(sid, r["rank"], r["sn"], r.get("nick", f"n{r['sn']}"), 1, r.get("value", 1_000_000_000),
-                  r.get("elo", 3000.0), r.get("w", 0), r.get("d", 0), r.get("l", 0), r.get("color", "A"), 11,
+                  r.get("elo", 3000.0), r.get("w", 0), r.get("d", 0), r.get("l", 0), r.get("color", "A"), r.get("count", 11),
                   r.get("form", "4-2-3-1"), r.get("grade", 2), 2, 2) for r in rows])
             self.conn.execute("INSERT INTO snapshot_meta (snapshot_id, ref_time) VALUES (?, ?)",
                               (sid, ref.isoformat(timespec="seconds") if ref else None))
@@ -1307,6 +1307,179 @@ def test_group_meta_regroups_the_spark_series_too_110():
     g = M.group_meta(tr, "back")
     assert g.series["formation"] == {"4백": [10, 10]} and g.totals == tr.totals, g.series
     assert [r.key for r in g.rows["formation"]] == ["4백"]
+
+
+# ── 110 R1 비슷한 랭커 ──────────────────────────────────────────────────────────────────────────────
+
+# 지어낸 단계표: 팀컬러 "A"(id 1)는 3·6·8·11명에 1~4단계, "B"(id 2)는 2단계까지만, "Spartan" 은 이름이 같은 둘(강화·클럽)
+_SIM_META = [{"id": 1, "name": "A", "emblem": "crests/l1.png"}, {"id": 2, "name": "B", "emblem": "crests/l2.png"},
+             {"id": 3, "name": "Spartan", "emblem": "teamcolorboost/b7.png"}, {"id": 4, "name": "Spartan", "emblem": "crests/l7.png"},
+             {"id": 5, "name": "빈 단계표", "emblem": "crests/l9.png"}]
+_SIM_STEPS = [(1, 1, 3), (1, 2, 6), (1, 3, 8), (1, 4, 11), (2, 1, 2), (2, 2, 4),
+              (3, 1, 3), (3, 2, 6), (4, 1, 3), (4, 2, 6)]
+
+
+def _sim_table():
+    return M.step_table(_SIM_META, _SIM_STEPS)
+
+
+def _sim_people():
+    """순위를 일부러 섞어 넣는다(정렬을 안 하면 순위순이 안 나온다). 내 sn 은 99."""
+    f, g = "4-1-2-3", "4-2-4"
+    return [
+        person(5, 5, color="A", count=6, form=f), person(1, 1, color="A", count=11, form=g),
+        person(3, 3, color="A", count=3, form=f),    # 1단계뿐 — 같은 팀컬러 목록에서 빠진다(포메이션 목록엔 남는다)
+        person(2, 2, color="B", count=2, form=f), person(4, 4, color="A", count=8, form="-"),   # 포메이션을 못 읽은 사람
+        person(99, 9, color="A", count=11, form=f, nick="나"),
+        person(7, 7, color="미등록", count=11, form=f),
+        person(6, 6, color="A", count=6, form=g),
+    ]
+
+
+def test_snapshot_formation_drops_zero_lines_golden():
+    """앱 5칸 표기에서 0 인 칸을 빼면 홈페이지 표기 — 대응표 없이 이 규칙 하나(110 R1 · 11-15 실측 97.2% 일치). 못 읽은 값은 어디와도 안 같다."""
+    for app, home in (("4-1-2-3-0", "4-1-2-3"), ("4-1-4-0-1", "4-1-4-1"), ("4-2-4-0-0", "4-2-4"), ("4-1-2-1-2", "4-1-2-1-2"),
+                      ("4-0-5-0-1", "4-5-1"), ("0-0-0-0-0", ""), ("", ""), (None, ""), ("-", "")):
+        assert M.snapshot_formation(app) == home, (app, M.snapshot_formation(app), home)
+    assert M.snapshot_formation("4-1-2-3") == "4-1-2-3", "홈페이지 표기를 다시 거쳐도 그대로"
+
+
+def test_step_table_and_step_reached():
+    t = _sim_table()
+    assert t.thresholds("A", "crests/l1.png") == (3, 6, 8, 11) and t.thresholds("A") == (3, 6, 8, 11), "이름이 하나뿐이면 이름으로도 찾는다"
+    assert t.thresholds("Spartan") is None, "이름이 겹치는데 엠블럼을 모르면 모른다"
+    assert t.thresholds("Spartan", "crests/l7.png") == (3, 6) and t.thresholds("없는 팀컬러") is None
+    assert t.thresholds("빈 단계표") is None, "단계 줄이 없는 팀컬러는 모른다"
+    assert [M.step_reached((3, 6, 8, 11), n) for n in (None, 0, 2, 3, 5, 6, 10, 11, 12)] == [0, 0, 0, 1, 1, 2, 3, 4, 4]
+    assert M.step_table(_SIM_META, [(1, 1, None), (1, 2, 6)]).thresholds("A") == (6,), "인원을 모르는 단계는 뺀다"
+
+
+def test_similar_rankers_two_lists_are_not_an_intersection():
+    """같은 포메이션과 같은 팀컬러는 각각 따로 순위순으로 · 나는 뺀다 · 같은 팀컬러는 단계 2 이상 · 포메이션 '-' 는 안 같다."""
+    def t(db):
+        db.snap(T0, _sim_people())
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3-0", "A", me_sn=99)
+        assert res.formation == "4-1-2-3" and res.at is not None and not res.no_steps
+        assert [r.rank for r in res.same_formation] == [2, 3, 5, 7], [r.rank for r in res.same_formation]   # 순위순 · 나(9위) 뺌
+        assert [r.rank for r in res.same_color] == [1, 4, 5, 6], [r.rank for r in res.same_color]      # 3위는 1단계라 빠지고 포메이션 '-' 인 4위는 팀컬러 쪽엔 있다
+        assert 3 in {r.rank for r in res.same_formation} and 3 not in {r.rank for r in res.same_color}, "교집합이 아니다"
+        assert 2 in {r.rank for r in res.same_formation} and 2 not in {r.rank for r in res.same_color}, "팀컬러가 다른 사람은 포메이션 쪽에만"
+        assert all(r.formation == "4-1-2-3" for r in res.same_formation)
+        assert (res.n_formation, res.n_color) == (4, 4)
+        by = {r.rank: r for r in res.same_color}
+        assert by[1].step == 4 and by[5].step == 2 and by[1].nick == "n1" and by[1].elo == 3000.0
+    using(t)
+
+
+def test_similar_rankers_min_step_wiring_uses_config_at_call_time():
+    """단계 문턱·보이는 수는 호출 때 config 를 읽는다 — 기본값(2·20)이 아닌 값으로 재서 배선이 끊기면 FAIL."""
+    def t(db):
+        db.snap(T0, _sim_people())
+        keep = (config.R1_MIN_STEP, config.R1_SHOW)
+        try:
+            config.R1_MIN_STEP = 3
+            res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3-0", "A", me_sn=99)
+            assert [r.rank for r in res.same_color] == [1, 4], [r.rank for r in res.same_color]   # 3단계(8명) 이상
+            config.R1_MIN_STEP, config.R1_SHOW = 2, 2
+            res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3-0", "A", me_sn=99)
+            assert [r.rank for r in res.same_formation] == [2, 3] and res.n_formation == 4, "R1_SHOW 로 자르고 전체 수는 따로 센다"
+            assert len(res.same_color) == 2 and res.n_color == 4
+            assert len(M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3-0", "A", me_sn=99, show=3).same_formation) == 3
+        finally:
+            config.R1_MIN_STEP, config.R1_SHOW = keep
+    using(t)
+
+
+def test_similar_rankers_leaves_me_out_by_nickname_when_sn_unknown():
+    def t(db):
+        db.snap(T0, _sim_people())
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3", "A", me_nick="나")
+        assert 9 not in {r.rank for r in res.same_formation + res.same_color}, "닉네임으로도 나를 뺀다"
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3", "A")
+        assert 9 in {r.rank for r in res.same_formation}, "나를 모르면 뺄 수 없다"
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3", "A", me_sn=1, me_nick="나")
+        assert 1 not in {r.rank for r in res.same_color} and 9 in {r.rank for r in res.same_formation}, "프로필 번호가 있으면 그것이 이긴다"
+    using(t)
+
+
+def test_similar_rankers_no_steps_keeps_everyone_of_the_color():
+    """단계표 캐시가 비면(새 설치) 단계 조건이 아무도 안 거르고 사유 표시가 선다(U11) · 내 팀컬러만 캐시에 없어도 같다."""
+    def t(db):
+        db.snap(T0, _sim_people())
+        res = M.similar_rankers(db.ro(), M.StepTable(), "4-1-2-3", "A", me_sn=99)
+        assert res.no_steps and [r.rank for r in res.same_color] == [1, 3, 4, 5, 6], [r.rank for r in res.same_color]
+        assert all(r.step is None for r in res.same_color)
+        assert [r.rank for r in res.same_formation] == [2, 3, 5, 7], "포메이션 목록은 단계표와 무관"
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3", "미등록", me_sn=99)
+        assert res.no_steps and [r.rank for r in res.same_color] == [7]
+        res = M.similar_rankers(db.ro(), None, "4-1-2-3", "A", me_sn=99)
+        assert res.no_steps and res.n_color == 5, "단계표 자체가 없어도(None) 죽지 않는다"
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3", "A", me_sn=99)
+        assert not res.no_steps
+    using(t)
+
+
+def test_similar_rankers_duplicate_names_follow_my_emblem():
+    """이름이 겹치는 팀컬러는 내 엠블럼을 알면 엠블럼이 같은 사람만 · 모르면 이름이 같은 사람 전부(거르지 않는다) · 단계는 그 엠블럼의 단계표로."""
+    def t(db):
+        rows = [person(1, 1, color="Spartan", count=6, form="4-2-4"), person(2, 2, color="Spartan", count=6, form="4-2-4"),
+                person(3, 3, color="Spartan", count=3, form="4-2-4"), person(4, 4, color="Spartan", count=6, form="4-2-4"),
+                person(5, 5, color="Spartan", count=6, form="4-2-4")]
+        sid = db.snap(T0, rows)
+        with db.conn:   # 5번은 엠블럼 줄이 없다
+            db.conn.executemany("INSERT INTO snapshot_emblems (snapshot_id, profile_sn, emblem) VALUES (?, ?, ?)",
+                                [(sid, 1, "teamcolorboost/b7.png"), (sid, 2, "crests/l7.png"), (sid, 3, "crests/l7.png"),
+                                 (sid, 4, "teamcolorboost/b7.png")])
+        assert config.TEAMCOLOR_DUP_NAMES and "Spartan" in config.TEAMCOLOR_DUP_NAMES
+        res = M.similar_rankers(db.ro(), _sim_table(), "", "Spartan", "teamcolorboost/b7.png")
+        assert [r.rank for r in res.same_color] == [1, 4], [r.rank for r in res.same_color]
+        res = M.similar_rankers(db.ro(), _sim_table(), "", "Spartan", "crests/l7.png")
+        assert [r.rank for r in res.same_color] == [2], "3번은 1단계, 엠블럼이 없는 5번은 내 엠블럼과 같다고 볼 수 없다"
+        res = M.similar_rankers(db.ro(), _sim_table(), "", "Spartan", "")
+        assert res.no_steps and [r.rank for r in res.same_color] == [1, 2, 4, 5], \
+            "내 엠블럼을 모르면 이름으로만 모은다 · 사유는 서고 · 3번은 자기 엠블럼의 단계표로 1단계라 빠지고 엠블럼 줄이 없는 5번은 거르지 않는다"
+    using(t)
+
+
+def test_similar_rankers_without_raw_or_conn():
+    def t(db):
+        assert M.similar_rankers(None, _sim_table(), "4-1-2-3", "A").at is None
+        res = M.similar_rankers(db.ro(), _sim_table(), "4-1-2-3", "A")
+        assert res.at is None and res.same_formation == [] and res.same_color == [], "원본이 없으면 빈 결과"
+        db.snap(T0, _sim_people())
+        res = M.similar_rankers(db.ro(), _sim_table(), "", "")
+        assert res.at is not None and res.same_formation == [] and res.same_color == [], "내 포메이션·팀컬러를 모르면 목록이 비어 있다"
+    using(t)
+
+
+def test_my_emblem_source_order_row_then_label_then_none():
+    """내 엠블럼 출처 셋의 순서(3회차 [중]7): 내 행 → 팀컬러 목록 라벨 → 없음. 1만 위 밖이면 첫째가 없다."""
+    def t(db):
+        sid = db.snap(T0, [person(1, 1, color="Spartan"), person(2, 2, color="Spartan")])
+        with db.conn:
+            db.conn.execute("INSERT INTO snapshot_emblems (snapshot_id, profile_sn, emblem) VALUES (?, 1, 'teamcolorboost/b7.png')", (sid,))
+        table = _sim_table()
+        label_club = M.teamcolor.label("Spartan", "crests/l7.png")
+        assert M.my_emblem(db.ro(), 1, label_club, table) == "teamcolorboost/b7.png", "내 행이 라벨보다 앞"
+        assert M.my_emblem(db.ro(), 2, label_club, table) == "crests/l7.png", "내 행에 엠블럼이 없으면 라벨로"
+        assert M.my_emblem(db.ro(), None, label_club, table) == "crests/l7.png", "1만 위 밖(프로필 번호를 모름)"
+        assert M.my_emblem(db.ro(), 77, label_club, table) == "crests/l7.png", "원본에 없는 사람"
+        assert M.my_emblem(db.ro(), 2, "Spartan", table) == "", "겹치는 이름이 라벨에 꼬리표가 없으면 어느 쪽인지 모른다"
+        assert M.my_emblem(db.ro(), 2, "", table) == "" and M.my_emblem(db.ro(), 2, None, None) == ""
+        assert M.my_emblem(None, None, "A", table) == "crests/l1.png", "이름이 하나뿐이면 목록 엠블럼이 곧 내 것"
+        assert M.my_emblem(None, None, "없는 팀컬러", table) == ""
+    using(t)
+
+
+def test_my_emblem_ignores_old_snapshot_rows():
+    """원본이 남은 마지막 스냅숏의 내 행만 본다 — 옛 스냅숏의 엠블럼은 지금 팀컬러가 아닐 수 있다."""
+    def t(db):
+        old = db.snap(T0, [person(1, 1, color="Spartan")])
+        db.snap(T0 + timedelta(days=1), [person(1, 1, color="Spartan")])
+        with db.conn:
+            db.conn.execute("INSERT INTO snapshot_emblems (snapshot_id, profile_sn, emblem) VALUES (?, 1, 'crests/l7.png')", (old,))
+        assert M.my_emblem(db.ro(), 1, None, None) == ""
+    using(t)
 
 
 def main() -> int:

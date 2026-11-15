@@ -494,7 +494,7 @@ class MatchLoader(Worker):
     def __init__(self, api: FCOnlineAPI, nickname: str, match_type: int, prev=None,
                  offline_ouid: str | None = None, prefetch: SavedPrefetch | None = None,
                  record_elo: bool = False, want_max_division: bool = False, emit_partial: bool = False,
-                 track_missed: bool = False, auto: bool = False, rank: bool = True):
+                 track_missed: bool = False, auto: bool = False, rank: bool = True, known_ouid: str | None = None):
         """prev: 화면이 이미 가진 (ouid, matches, details) — 같은 계정이면 새 경기만 DB 에서 읽는다.
         목록은 읽기만 하고 고치지 않는다(UI 스레드가 쓰고 있다).
         offline_ouid: 넥슨에 묻지 않고 DB 에 저장된 것만 읽는다 — 켤 때 마지막 계정을 바로 보여 줄 때.
@@ -504,8 +504,11 @@ class MatchLoader(Worker):
         track_missed: 상세를 못 받은 경기를 detail_retry 에 남기고 다음 검색에서 다시 묻는다(96 W2) — 메인 검색만.
         auto: 앱이 스스로 띄운 로더(켤 때 · 다시 읽기 — 108 C). 게임 중이면 메타를 넥슨에 묻지 않고 디스크 캐시로(_meta).
         사용자가 누른 검색은 False — 게임 중에도 지금처럼 받는다(84 G3 "사용자가 누른 것은 그대로").
-        rank: 넥슨 홈페이지 순위를 묻나 — 켤 때 확인만 False(홈페이지 0 · U5)."""
+        rank: 넥슨 홈페이지 순위를 묻나 — 켤 때 확인만 False(홈페이지 0 · U5).
+        known_ouid: 이미 아는 ouid(경기 상세의 상대 · 110 R3). 닉네임으로 ouid 를 묻는 get_ouid 한 번만 건너뛴다. 나머지는 같은 길이라
+        닉네임을 바꾼 상대도 찾고 요청은 늘지 않는다."""
         super().__init__()
+        self._known_ouid = known_ouid
         self.auto = auto
         self._rank_on = rank
         self.startup = False          # 창이 켤 때 확인으로 띄웠다 — 게임이 켜지면 이 로더만 멈춘다(pause_startup_check)
@@ -617,7 +620,7 @@ class MatchLoader(Worker):
     def _run_search(self, out: SearchOutcome) -> None:
         try:
             self.progress.emit(0, 0, f"'{self._nickname}' 계정 조회 중…")
-            ouid = self._api.get_ouid(self._nickname)
+            ouid = self._known_ouid or self._api.get_ouid(self._nickname)
             # 넥슨 조회(기본 정보·새 경기)를 기다리는 동안 나머지를 나란히 — 차례로 돌 때 1만 경기 검색이
             # 5.3초였고 그중 DB 읽기 1.9초·랭킹 1.0초가 서로를 기다릴 이유가 없었다(2026-10-04 실측).
             # 저장된 경기의 바탕: 화면이 가진 목록(같은 계정 재검색) > 켤 때 미리 읽은 것 > 지금 DB 에서.
@@ -2027,6 +2030,42 @@ class ChipPreviewLoader(Worker):
                 self.ready.emit((self._fv, out))
 
 
+class SimilarLoader(Worker):
+    """110 R1 [비슷한 랭커] 재료 — fifa.db 의 팀컬러 단계표(teamcolor_meta·teamcolor_steps)와 랭커 픽이 받아 둔 ouid(ranker_squads)를 읽는다.
+    화면 스레드는 fifa.db 를 안 열어서 여기서 읽어 넘긴다. 읽기 전용이지만 연결을 쥔 채 지우기·복원이 시작되면 "busy" 라 WRITES 에 fifa 를 둔다
+    (ChipPreviewLoader 와 같은 이유). 지우는 중이면 빈 결과를 낸다 — 화면은 단계 정보 없음으로 그린다. 결과는 (StepTable, {profile_sn: ouid})."""
+    WRITES = frozenset({STORE_FIFA})
+    ready = Signal(object)
+
+    def __init__(self):
+        super().__init__()
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        table, ouids = core.StepTable(), {}
+        conn = None
+        try:
+            if not (STORE_FIFA in CLEARING or "all" in CLEARING or not config.DB_PATH.exists()):
+                conn = sqlite3.connect(f"file:{config.DB_PATH.as_posix()}?mode=ro", uri=True, timeout=config.R1_READ_TIMEOUT_S)
+                conn.row_factory = sqlite3.Row
+                meta, _fresh = store.load_teamcolor_meta(conn)
+                table = core.step_table(meta, store.load_step_members(conn))
+                ouids = {sn: r["ouid"] for sn, r in store.ranker_squads(conn).items() if r.get("ouid")}
+        except Exception:
+            table, ouids = core.StepTable(), {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            if not self._cancel:
+                self.ready.emit((table, ouids))
+
+
 def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료 경계(그날 `config.SEASON_CUTOFF_H` 시 · seasons 주의 2) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
@@ -3259,6 +3298,10 @@ class MainWindow(QMainWindow):
         self._chip_btns: dict[str, QPushButton] = {}
         self._chip_workers: list[ChipPreviewLoader] = []
         self._chip_again = False
+        # 110 R1 [비슷한 랭커] — 단계표·ouid 는 작업 스레드가 읽어 넘긴 값(None = 아직 · 무효화 때 비운다) · 도는 로더
+        self._sim_inputs: tuple | None = None
+        self._sim_loader: SimilarLoader | None = None
+        self.similar: core.Similar | None = None   # 테스트가 본다
         self._notes_writer: NotesWriter | None = None
         self._notes_eff: store.Notes | None = None   # 줄에 올린 쓰기까지 얹은 값 — 쓰기 둘이 이어질 때 뒤 것이 앞 것을 되돌리지 않게(없으면 None)
         self._opp_ouid_cache: tuple | None = None   # (키, {닉네임: 상대 ouid}) — 상대 메모가 있을 때만 짓는다
@@ -4310,7 +4353,8 @@ class MainWindow(QMainWindow):
                                               ("승률→점수", "_build_wr_elo_tab"),
                                               ("포지션 특성", "_build_position_trait_tab")))),
                  ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
-                                              ("추천", "_build_recommend_tab")))),
+                                              ("추천", "_build_recommend_tab"),
+                                              ("비슷한 랭커", "_build_similar_tab")))),
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
         ("도움말", [("산출 방법", "_build_methods_page"),    # 2.9.1 D2 — 정적 글(methods.py)
                    ("소개", "_build_intro_page")]),        # 96 O3 — 처음 켤 때 본 소개 세 장을 다시
@@ -8369,6 +8413,7 @@ class MainWindow(QMainWindow):
     REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
 
     def _invalidate_pick(self) -> None:
+        self._sim_reset()   # 110 R1 — 랭커 픽이 받아 둔 ouid 도 같이 바뀐다(지웠으면 메모리에도 안 남긴다)
         for key in self.PICK_DATA_KEYS:
             self._invalidate(key)
 
@@ -8962,14 +9007,145 @@ class MainWindow(QMainWindow):
         self.edist_chart.set_data(bins, width, main, "지금", cmp, self.cb_edist_cmp.currentText(), marks,
                                   faint_first=True)
 
+    # ── 110 R1 [랭커 픽 › 비슷한 랭커] — 같은 포메이션 · 같은 팀컬러 두 목록(산출 기준 화면과 같은 꼴 · 교집합이 아니다) ─────
+    SIM_TITLES = {"formation": "같은 포메이션", "color": "같은 팀컬러"}
+
+    def _build_similar_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        self.lb_sim_note = self._note_label()
+        v.addWidget(self.lb_sim_note)
+        row = QHBoxLayout()
+        self.sim_lists: dict[str, MetricRowList] = {}
+        self.sim_titles: dict[str, QLabel] = {}
+        for kind, name in self.SIM_TITLES.items():
+            box = QVBoxLayout()
+            title = QLabel(name)
+            title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
+            lst = MetricRowList()
+            lst.activated.connect(self._on_similar_activated)   # 두 번 누르면 그 랭커로 구단주 비교(R3 와 같은 길)
+            box.addWidget(title)
+            box.addWidget(lst, 1)
+            row.addLayout(box, 1)
+            self.sim_lists[kind], self.sim_titles[kind] = lst, title
+        v.addLayout(row, 1)
+        return w
+
+    def _sim_reset(self) -> None:
+        """읽어 둔 단계표·ouid 를 버린다. 읽는 중이던 로더는 결과를 안 내게 멈춘다(낡은 ouid 가 지운 뒤에 들어오지 않게)."""
+        self._sim_inputs = None
+        ld, self._sim_loader = self._sim_loader, None
+        if ld is not None and ld.isRunning():
+            ld.cancel()
+
+    def _start_similar_loader(self) -> bool:
+        """작업 스레드로 단계표를 읽는다 → False 면 지우는 중이라 못 띄웠다."""
+        w = SimilarLoader()
+        w.ready.connect(self._on_similar_inputs)
+        self._sim_loader = w   # start 전에 — 신호가 바로 와도(테스트가 run 으로 바꿔 끼운다) 끝난 로더를 다시 쥐지 않게
+        w.start()
+        if w.blocked:
+            self._sim_loader = None
+            return False
+        return True
+
+    def _on_similar_inputs(self, payload) -> None:
+        self._sim_inputs = payload
+        self._sim_loader = None
+        self._invalidate("similar")
+
+    def _sim_clear(self, note: str) -> None:
+        self.similar = None
+        self._set_status(self.lb_sim_note, note)
+        for kind, lst in self.sim_lists.items():
+            lst.set_rows([])
+            self.sim_titles[kind].setText(self.SIM_TITLES[kind])
+
+    @staticmethod
+    def _sim_count_text(n: int, shown: int) -> str:
+        return f"{n:,}명" if n <= shown else f"{n:,}명 중 {shown:,}명"
+
+    def _render_similar(self) -> None:
+        if not config.RANK_COLLECT:
+            self._sim_clear(self.rank_off_note("나와 비슷한 랭커를 보여 줍니다"))
+            return
+        if not self._ouid:
+            self._sim_clear("먼저 내 계정을 검색해 주세요.")
+            return
+        inputs = self._sim_inputs
+        if inputs is None:
+            busy = (self._sim_loader is not None and self._sim_loader.isRunning()) or self._start_similar_loader()
+            inputs = self._sim_inputs   # 로더가 바로 끝났으면(테스트) 이미 있다
+            if inputs is None:
+                if busy:
+                    self._sim_clear("팀컬러 단계 정보를 읽는 중입니다.")
+                    return
+                inputs = (core.StepTable(), {})   # 기록을 지우는 중이라 못 읽었다 — 단계 정보 없이 그린다(저장하지 않는다)
+        table = inputs[0]
+        starters = self._my_latest_starters()
+        form = core.formation_of(starters) if starters else ""
+
+        def read(c):
+            sn = core.find_sn(c, getattr(self._rank, "profile_sn", None), self._nick)
+            color = self._my_color(rankerpick.top_rankers(c, limit=config.RANK_TIERS[-1])[1]) or ""
+            label = self._team_colors.get(self._nick or "") or ""
+            if teamcolor.name_of(label) != color:
+                label = color   # 라벨(이름 · 강화)이 스냅숏 이름과 다른 팀컬러면 라벨로 엠블럼을 찾지 않는다
+            emblem = core.my_emblem(c, sn, label, table)
+            return core.similar_rankers(c, table, form, color, emblem, me_sn=sn, me_nick=self._nick)
+
+        res = self._rank_read(read)
+        if res is None or res.at is None:
+            self._sim_clear("랭킹 원본이 없습니다. 랭킹 수집이 켜져 있으면 다음 수집부터 보입니다.")
+            return
+        self.similar = res
+        notes = []
+        if not res.formation:
+            notes.append("내 최근 경기를 찾지 못해 같은 포메이션 목록은 비어 있습니다.")
+        if not res.color:
+            notes.append("내 팀컬러를 알 수 없어 같은 팀컬러 목록은 비어 있습니다.")
+        elif res.no_steps:
+            notes.append("이 팀컬러의 단계 정보가 아직 없어 단계와 상관없이 보여 줍니다.")
+        self._set_status(self.lb_sim_note, " ".join(notes))
+        lists = {"formation": (res.same_formation, res.n_formation), "color": (res.same_color, res.n_color)}
+        heads = {"formation": f"같은 포메이션 {res.formation}" if res.formation else self.SIM_TITLES["formation"],
+                 "color": (f"같은 팀컬러 {res.color}" + ("" if res.no_steps else f" {config.R1_MIN_STEP}단계 이상")
+                           if res.color else self.SIM_TITLES["color"])}
+        for kind, (rows, n) in lists.items():
+            self.sim_titles[kind].setText(f"{heads[kind]}: {self._sim_count_text(n, len(rows))}" if (res.formation if kind == "formation" else res.color)
+                                          else heads[kind])
+            self.sim_lists[kind].set_rows([self._similar_row(r, kind) for r in rows])
+            self._start_list_icons(self.sim_lists[kind])
+
+    def _similar_row(self, r, kind: str) -> MetricRow:
+        step_tip = f"{r.color} {r.step}단계" if r.step else ""
+        cells = (MetricCell(f"{r.elo:,.0f}" if r.elo is not None else "—", "점수"),
+                 MetricCell(f"{r.color_count}명" if r.color_count else "—", "팀컬러", tip=step_tip),
+                 MetricCell(short_bp(r.value), "구단가치"))
+        icon = self._emblem_icon(r.color) if kind == "formation" else self._meta_icon("formation", r.formation)
+        return MetricRow(r.nick, r.color if kind == "formation" else r.formation, cells, rank=r.rank, icon=icon, key=(r.sn, r.nick))
+
+    def _on_similar_activated(self, index) -> None:
+        """두 번 누르면 그 랭커로 구단주 비교. 스냅숏에는 ouid 가 없어(snapshot_rows 열) 랭커 픽이 받아 둔 ranker_squads 에 있으면 그것으로
+        열고(닉네임을 묻는 요청 0), 없으면 스냅숏 닉네임으로 지금 길(get_ouid 한 번)로 연다."""
+        row = index.data(ROW_ROLE) if index.isValid() else None
+        if row is None or not isinstance(row.key, tuple):
+            return
+        sn, nick = row.key
+        ouid = self._sim_inputs[1].get(sn) if self._sim_inputs else None
+        if not self.open_compare_for(nick, ouid):
+            self._set_status(self.lb_sim_note, "구단주 비교를 받는 중입니다. 끝난 뒤 다시 눌러 주세요." if self.compare_busy()
+                             else "먼저 내 계정을 검색해 주세요.")
+
     # ── 랭커 메타 ② 스냅숏 읽기(2.4.1) — rank.db 원본 14일 · 영구 집계, 요청 0 · 쓰기 0 ───────────────
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
-    RANK_VIEW_KEYS = ("rankerpick", "recommend", "ranktrend", "metatrend", "elodist",
+    RANK_VIEW_KEYS = ("rankerpick", "recommend", "similar", "ranktrend", "metatrend", "elodist",
                       "daywr", "tcboard", "valuebins", "tiermeans", "wrelo", "weekly", "rankmove", "oppcards",
                       "traits", "opprank", "predcheck", "rewards_rank", "review")   # review: 최종 순위(predict_final)가 이 길로 들어온다
 
     def _invalidate_rank_views(self) -> None:
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
+        self._sim_reset()           # 110 R1 — 팀컬러 목록 저장으로 단계표가 바뀐다
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
         dlg = self._teamcolor_dialog
@@ -11671,6 +11847,22 @@ class MainWindow(QMainWindow):
             return
         if self._compare_loader and self._compare_loader.isRunning():
             return
+        self._start_compare(nick)
+
+    def compare_busy(self) -> bool:
+        return bool(self._compare_loader and self._compare_loader.isRunning())
+
+    def open_compare_for(self, nick: str, ouid: str | None) -> bool:
+        """110 R1 줄 · R3 경기 상세 단추 — 구단주 비교 탭으로 가서 그 사람으로 연다. 모달 없이 못 열면 False(내 계정이 없다 · 비교를 받는 중).
+        ouid 를 알면 닉네임으로 ouid 를 묻지 않는다(MatchLoader known_ouid). 모르면 지금 길 그대로(닉네임 → get_ouid 한 번)."""
+        if not self._ouid or not nick or self.compare_busy():
+            return False
+        self.ed_compare_nick.setText(nick)
+        self._go_page("구단주 비교")
+        self._start_compare(nick, ouid)
+        return True
+
+    def _start_compare(self, nick: str, ouid: str | None = None) -> None:
         if self._held_by_clearing(MatchLoader):
             self.lb_compare_status.setText(CLEARING_WAIT_MSG)
             return
@@ -11680,7 +11872,7 @@ class MainWindow(QMainWindow):
         # 같은 상대를 다시 비교하면 거의 즉시 끝난다.
         self._yield_trades()
         self._compare_last = None   # 다른 상대 — 바를 바꿔도 옛 상대를 다시 그리지 않게
-        self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, emit_partial=True)
+        self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, emit_partial=True, known_ouid=ouid)
         self._compare_loader.progress.connect(
             lambda done, total, msg, n=nick: self.lb_compare_status.setText(f"'{n}' {msg}"))
         self._compare_loader.partial.connect(
@@ -12819,7 +13011,7 @@ class MainWindow(QMainWindow):
         "timeline": [("스쿼드·이적", "타임라인")], "trades": [("스쿼드·이적", "가계부")],
         "history": [("스쿼드·이적", "이력")], "arrivals": [("스쿼드·이적", "영입 전후")],
         "pricew": [("스쿼드·이적", "주간 시세")],
-        "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")],
+        "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")], "similar": [("랭커 픽", "비슷한 랭커")],
         "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
         "predcheck": [("랭킹 추이", "예측 되짚기")], "rewards_rank": [("랭킹 추이", "보상")],
@@ -12879,6 +13071,7 @@ class MainWindow(QMainWindow):
             "history": self._render_history,    # 57 K4 — 누적 전체(시즌 필터 무관) · 닉네임 줄은 내 계정만
             "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
             "recommend": self._render_recommend,     # 후보는 DB(랭커 픽 · 내 상대) · "내 스쿼드"는 최근 경기
+            "similar": self._render_similar,         # 110 R1 — rank.db 원본 × 단계표(작업 스레드가 읽어 넘김) · 내 포메이션은 최근 경기
             "ranktrend": self._render_rank_trend,    # rank.db 영구 집계 — 검색 결과에 안 묶인다
             "metatrend": self._render_meta_trend,    # rank.db 영구 집계(tier_counts) — 같은 이유
             "elodist": self._render_elo_dist,        # rank.db elo_hist + 검색 계정 ELO 선(EloLoader 결과)
@@ -14038,6 +14231,7 @@ class MainWindow(QMainWindow):
             return dlg
         dlg.v.addWidget(self._detail_head(m, me, opp))
         dlg.v.addWidget(self._detail_note_row(dlg, m.match_id))
+        dlg.v.addWidget(self._detail_compare_row(dlg, m.opponent, (opp or {}).get("ouid")))
         dlg.tabs.addTab(self._detail_summary(dlg, detail, m), "요약")
         dlg.tabs.addTab(self._detail_squads(dlg, me, opp, m), "스쿼드")
         dlg.tabs.addTab(self._detail_shots(dlg, detail), "슛")
@@ -14046,6 +14240,37 @@ class MainWindow(QMainWindow):
         dlg.tabs.setCurrentIndex(max(0, MatchDetailDialog.TABS.index(tab) if tab in MatchDetailDialog.TABS else 0))
         dlg.show_side(side)
         return dlg
+
+    def _detail_compare_row(self, dlg: "MatchDetailDialog", opponent: str, opp_ouid: str | None) -> QWidget:
+        """110 R3 — 이 상대로 [구단주 비교] 를 연다. 산출 기준은 감독모드의 상대 분석을 따로 두지 않고 구단 비교로 충분하다고 적었다(U4).
+        경기 상세의 상대 ouid 로 열어서 닉네임을 바꾼 상대도 찾고(MatchLoader known_ouid) 새 요청은 없다. 비교를 받는 중이거나 내 계정이
+        없으면 모달 없이 단추를 끄고 이유를 옆에 적는다. 게임 중에도 사용자가 누른 것이라 막지 않는다(84 G3)."""
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(4, 0, 4, 4)
+        dlg.btn_compare = QPushButton("구단주 비교")
+        dlg.btn_compare.setToolTip("이 상대의 기록을 구단주 비교 탭에서 내 기록과 견줍니다.")
+        dlg.btn_compare.clicked.connect(lambda _=False: self._compare_from_detail(dlg, opponent, opp_ouid))
+        dlg.compare_note = self._dim_label("")
+        h.addWidget(dlg.btn_compare)
+        h.addWidget(dlg.compare_note, 1)
+        self._sync_detail_compare(dlg, opp_ouid)
+        return w
+
+    def _sync_detail_compare(self, dlg: "MatchDetailDialog", opp_ouid: str | None) -> bool:
+        """단추를 켤 수 있나 맞춘다. 끄는 이유는 옆 글에(모달 대신)."""
+        why = ("먼저 내 계정을 검색해 주세요." if not self._ouid else "상대 계정 정보가 없습니다." if not opp_ouid
+               else "구단주 비교를 받는 중입니다. 끝난 뒤 눌러 주세요." if self.compare_busy() else "")
+        dlg.btn_compare.setEnabled(not why)
+        dlg.compare_note.setText(why)
+        dlg.compare_note.setHidden(not why)
+        return not why
+
+    def _compare_from_detail(self, dlg: "MatchDetailDialog", opponent: str, opp_ouid: str | None) -> None:
+        if not self._sync_detail_compare(dlg, opp_ouid):
+            return   # 창을 연 뒤 비교가 시작됐다 — 단추를 끄고 이유만
+        if self.open_compare_for(opponent, opp_ouid):
+            dlg.accept()   # 모달 경기 상세를 닫으면 비교 탭이 보인다
 
     def _detail_note_row(self, dlg: "MatchDetailDialog", match_id: str) -> QWidget:
         """경기 상세 머리 아래 — 끊김·연습 표시 단추 둘과 한 줄 메모 칸(109 U2·L2). 쓰기는 작업 스레드가 하고(_queue_note)
@@ -16015,6 +16240,7 @@ class MainWindow(QMainWindow):
             # 연승·연패 섞기 — 섞기 한 번(수 ms)마다 취소를 본다
             *[(ld, cancel(ld), 1000, False) for ld in self._habits_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._chip_workers],
+            (self._sim_loader, cancel(self._sim_loader), 1000, False),   # 110 R1 단계표 읽기 — DB 읽기 한 번
             # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
             *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
             # 팀컬러 효과 창 — 요청 사이에서 멈춘다(요청 하나 타임아웃 teamcolor.TIMEOUT_S 10초). 저장은 표 하나씩 한 트랜잭션
@@ -17341,6 +17567,8 @@ class MatchDetailDialog(QDialog):
         self.mark_buttons: dict[str, QPushButton] = {}
         self.memo_edit: QLineEdit | None = None
         self.btn_memo_save: QPushButton | None = None
+        self.btn_compare: QPushButton | None = None   # 110 R3 — [구단주 비교](머리 아래 줄이 채운다)
+        self.compare_note: QLabel | None = None
 
     def show_side(self, key: str) -> None:
         """스쿼드 탭의 나 / 상대 칸."""

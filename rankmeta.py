@@ -1620,3 +1620,140 @@ def reward_board(conn: sqlite3.Connection) -> RewardBoard:
     out.by_team_color = sorted((_reward_band(teamcolor.label(name, None), sps) for name, sps in by_tc.items()),
                                key=lambda b: (-b.users, b.label))
     return out
+
+
+# ── 110 R1 비슷한 랭커 — 같은 포메이션 · 같은 팀컬러 두 목록 ─────────────────────────────────────────
+# 산출 기준 화면은 두 목록이다(11-15 확인): 교집합이 아니라 줄마다 따로 순위순으로 보이고 본인은 빠진다. 유사도 점수는 없다.
+
+def snapshot_formation(app_text: str | None) -> str:
+    """앱 포메이션 표기(5칸 줄 수 "4-1-2-3-0")를 홈페이지(스냅숏) 표기("4-1-2-3")로. 0 인 칸을 빼면 같다
+    (11-15 실측: 개발 PC 경기 수집의 마지막 선발 대 스냅숏 9,447명 중 97.2% 같음 · 어긋난 사람은 경기 뒤 포메이션을 바꾼 사람).
+    대응표는 두지 않는다. 비었거나 모두 0 이면 "" — 스냅숏의 "-"(포메이션을 못 읽은 사람)와도 절대 같아지지 않는다."""
+    parts = [g for g in (app_text or "").split("-") if g and g != "0"]
+    return "-".join(parts)
+
+
+@dataclass
+class StepTable:
+    """팀컬러 단계표(fifa.db teamcolor_meta·teamcolor_steps) — 작업 스레드가 읽어 넘긴 값. 화면 스레드는 fifa.db 를 안 연다.
+    by_key (이름, 엠블럼) → 단계마다 필요한 인원(오름차순) · by_name 은 이름이 하나뿐인 팀컬러만 · labels 는 겹치지 않는 라벨 → 엠블럼."""
+    by_key: dict = field(default_factory=dict)
+    by_name: dict = field(default_factory=dict)
+    labels: dict = field(default_factory=dict)
+
+    def thresholds(self, name: str, emblem: str = "") -> tuple | None:
+        """그 팀컬러의 단계별 필요 인원 — 모르면 None(캐시에 없는 팀컬러 · 이름이 겹치는데 엠블럼을 모름)."""
+        got = self.by_key.get((name, emblem or "")) if emblem else None
+        return got if got is not None else self.by_name.get(name)
+
+
+def step_table(meta: list[dict], steps: list[tuple]) -> StepTable:
+    """meta: [{id, name, emblem}] · steps: [(id, 단계, 필요 인원)] — 인원을 모르는(None) 단계는 뺀다."""
+    need: dict[int, list] = {}
+    for tid, step, members in steps:
+        if isinstance(members, int):
+            need.setdefault(tid, []).append((step, members))
+    out = StepTable()
+    names: dict[str, list] = {}
+    labels: dict[str, set] = {}
+    for m in meta:
+        th = tuple(n for _s, n in sorted(need.get(m["id"], ())))
+        if not th:
+            continue   # 단계표가 없는 팀컬러 — 모르는 것으로 둔다(거르지 않고 넣는다 · U11)
+        emblem = m.get("emblem") or ""
+        out.by_key[(m["name"], emblem)] = th
+        names.setdefault(m["name"], []).append(th)
+        labels.setdefault(teamcolor.label(m["name"], emblem), set()).add(emblem)
+    out.by_name = {n: v[0] for n, v in names.items() if len(v) == 1}
+    out.labels = {lb: next(iter(e)) for lb, e in labels.items() if len(e) == 1 and next(iter(e))}
+    return out
+
+
+def step_reached(thresholds: tuple, count: int | None) -> int:
+    """그 인원이 켠 단계 — 필요 인원 이상인 단계의 개수(0 = 1단계도 못 켬)."""
+    if count is None:
+        return 0
+    return sum(1 for n in thresholds if n <= count)
+
+
+def my_emblem(conn: sqlite3.Connection | None, my_sn: int | None, label: str | None, table: StepTable | None) -> str:
+    """내 팀컬러 엠블럼 — 출처 셋을 이 순서로(3회차 [중]7): ① 마지막 원본의 내 행 snapshot_emblems ② 내 팀컬러 라벨로 찾은 팀컬러 목록 엠블럼
+    ③ 없음(""). 1만 위 밖이면 ①이 없다. ""이면 겹치는 이름도 엠블럼으로 거르지 않는다."""
+    if conn is not None and my_sn is not None:
+        raw = _season_raw(conn)
+        if raw:
+            hit = conn.execute("SELECT emblem FROM snapshot_emblems WHERE snapshot_id = ? AND profile_sn = ?",
+                               (raw[-1]["id"], my_sn)).fetchone()
+            if hit and hit[0]:
+                return hit[0]
+    if table is not None and label:
+        return table.labels.get(label, "")
+    return ""
+
+
+@dataclass(frozen=True)
+class SimRow:
+    rank: int
+    sn: int
+    nick: str
+    elo: float | None
+    value: int | None
+    color: str
+    color_count: int | None
+    formation: str
+    step: int | None            # 켠 단계 — 단계표에 없는 팀컬러면 None
+
+
+@dataclass
+class Similar:
+    at: str | None = None                # 원본 스냅숏 데이터 시각 — None 이면 원본이 없다(14일 보관 밖 · 수집 꺼짐)
+    formation: str = ""                  # 내 포메이션(홈페이지 표기) — 비면 포메이션 목록은 비어 있다
+    color: str = ""
+    emblem: str = ""
+    same_formation: list = field(default_factory=list)   # [SimRow] 순위순 · 최대 R1_SHOW
+    same_color: list = field(default_factory=list)
+    n_formation: int = 0                 # 자른 뒤가 아니라 조건에 맞는 전체 인원
+    n_color: int = 0
+    no_steps: bool = False               # 내 팀컬러의 단계표가 캐시에 없어 단계 조건을 못 걸었다(U11 — 같은 팀컬러 전부)
+
+
+def similar_rankers(conn: sqlite3.Connection | None, table: StepTable | None, formation: str | None, color: str | None,
+                    emblem: str = "", *, me_sn: int | None = None, me_nick: str | None = None,
+                    show: int | None = None) -> Similar:
+    """나와 같은 포메이션 랭커 · 내 팀컬러를 R1_MIN_STEP 단계 이상 켠 랭커 — 마지막 원본 1만 명에서 각각 순위순으로(교집합 아님).
+    formation 은 앱 표기를 줘도 된다(snapshot_formation 을 거친다 · 스냅숏의 "-" 는 어디에도 안 같다). 팀컬러는 스냅숏 대표 팀컬러(team_color)가 같은
+    사람이고, 이름이 겹치는 팀컬러(config.TEAMCOLOR_DUP_NAMES)는 내 엠블럼을 알면 엠블럼도 같아야 한다. 단계는 인원(color_count)을 단계표로 바꿔
+    잰다 — 단계표에 없는 팀컬러(캐시 없음)는 거르지 않고 넣는다(U11). 나는 뺀다(프로필 번호 · 없으면 닉네임)."""
+    show = config.R1_SHOW if show is None else show   # 호출 때 읽는다. 정의 때 박으면 설정을 바꿔도 안 따라온다
+    out = Similar(formation=snapshot_formation(formation), color=color or "", emblem=emblem or "")
+    if conn is None:
+        return out
+    raw = _season_raw(conn)
+    if not raw:
+        return out
+    snap = raw[-1]
+    out.at = snap["dt"]
+    table = table or StepTable()
+    mine_th = table.thresholds(out.color, out.emblem) if out.color else None
+    out.no_steps = bool(out.color) and mine_th is None
+    dup = out.color in config.TEAMCOLOR_DUP_NAMES
+    fm, tc = [], []
+    for sn, rank, nick, value, elo, color_, count, form, em in conn.execute(
+            "SELECT r.profile_sn, r.rank, r.nickname, r.team_value, r.elo, r.team_color, r.color_count, r.formation, e.emblem"
+            " FROM snapshot_rows r LEFT JOIN snapshot_emblems e ON e.snapshot_id = r.snapshot_id AND e.profile_sn = r.profile_sn"
+            " WHERE r.snapshot_id = ?", (snap["id"],)):
+        if (me_sn is not None and sn == me_sn) or (me_sn is None and me_nick and nick == me_nick):
+            continue
+        th = table.thresholds(color_ or "", em or "") if color_ else None
+        row = SimRow(rank, sn, nick, elo, value, color_ or "", count, form or "",
+                     step_reached(th, count) if th is not None else None)
+        if out.formation and row.formation == out.formation:
+            fm.append(row)
+        if out.color and color_ == out.color and not (dup and out.emblem and em != out.emblem):
+            if row.step is None or row.step >= config.R1_MIN_STEP:
+                tc.append(row)
+    fm.sort(key=lambda r: r.rank)
+    tc.sort(key=lambda r: r.rank)
+    out.n_formation, out.n_color = len(fm), len(tc)
+    out.same_formation, out.same_color = fm[:show], tc[:show]
+    return out
