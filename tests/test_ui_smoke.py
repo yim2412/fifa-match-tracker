@@ -13403,6 +13403,39 @@ def test_rank_cards_follow_one_source_67():
         assert widgets.MetricRowDelegate.spark_points([5.0], QRectF(0, 0, 40, 10)) == [], "점 하나로 선을 그렸다"
         flat = widgets.MetricRowDelegate.spark_points([2.0, 2.0], QRectF(0, 0, 40, 10))
         assert [pt.y() for pt in flat] == [5.0, 5.0], "값이 같으면 가운데 가로선"
+        # 11-15 실화면 — 1280 폭에서 선이 이름 자리를 먹어 "바이엘…" 세 글자만 남았다. 좁으면 선을 빼고 이름을 먼저
+        dlg = _win.meta_lists["team_color"].metric_delegate
+        base = _win.meta_lists["team_color"].font()
+        long_row = widgets.MetricRow("바이엘 04 레버쿠젠", "+10명 (0 → 10)", lst.row(0).cells, icon="x", spark=(1.0, 2.0))
+        saved_on = dlg.spark_on
+        dlg.spark_on = True
+        try:
+            def segs(w):
+                return {s.role: s for s in dlg.layout(long_row, QRectF(0, 0, w, dlg.row_height(base)), base)}
+            old_min = config.U10_NAME_ROOM_PX
+            def with_min(v, w):
+                config.U10_NAME_ROOM_PX = v
+                try:
+                    return segs(w)
+                finally:
+                    config.U10_NAME_ROOM_PX = old_min
+            wide = 1100
+            # 막지 않았으면(하한 없음) 이름이 하한보다 좁게 잘렸을 폭 — 이 전제가 없으면 아래 단언은 빈 검사
+            # 하한 바로 밑인 가장 넓은 폭 — 선 폭을 빼먹은 판정(limit - x)이면 여기서 선을 그려 빨개진다
+            narrow = max((w for w in range(300, wide, 2)
+                          if 0 < with_min(-10_000, w)["name"].rect.width() < old_min < with_min(-10_000, w)["name"].full), default=None)
+            assert narrow is not None, "선이 이름을 하한 밑으로 자르는 폭을 못 찾았다"
+            forced = with_min(-10_000, narrow)
+            assert "spark" in forced
+            got = segs(narrow)
+            assert "spark" not in got, "좁은 목록에서 선이 이름 자리를 먹었다"
+            assert got["name"].rect.width() >= min(got["name"].full, forced["name"].rect.width() + config.U10_SPARK_W + 12) - 0.5, \
+                "선을 빼고도 이름 자리가 안 넓어졌다"
+            w = segs(wide)
+            assert "spark" in w and w["name"].rect.width() >= old_min, "넓은 목록에서도 선이 빠졌다"
+            assert "spark" not in with_min(5000, wide), "U10_NAME_ROOM_PX 를 안 읽는다"   # 배선 — 기본값 아닌 값으로
+        finally:
+            dlg.spark_on = saved_on
         # R5 — 대시보드 H5 와 같은 행·같은 중앙값 · 꼬리(5000판)는 마지막 칸
         _win._go_page("랭킹 추이", "추이")
         _win._invalidate("ranktrend")

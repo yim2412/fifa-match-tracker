@@ -3219,10 +3219,6 @@ class MetricRowDelegate(QStyledItemDelegate):
             segs.append(CardSeg(f"label{i}", QRectF(x, y2, w, h2), c.label, fm["small"].horizontalAdvance(c.label)))
             x += w + self.CELL_GAP
         limit = cells_left - 16
-        if self.spark_on:
-            sw = config.U10_SPARK_W
-            segs.append(CardSeg("spark", QRectF(cells_left - 12 - sw, top + 2, sw, h1 + self.GAP + h2 - 4), "", 0))
-            limit -= sw + 12
         x = left
         if self.rank_w:
             text = f"{row.rank:,}" if row.rank is not None else ""
@@ -3233,6 +3229,10 @@ class MetricRowDelegate(QStyledItemDelegate):
             ih = h1 + self.GAP + h2 - 4
             segs.append(CardSeg("icon", QRectF(x, top + 2, ih * 1.2, ih), "", 0))
             x += ih * 1.2 + 8
+        sw = config.U10_SPARK_W
+        if self.spark_on and limit - (sw + 12) - x >= config.U10_NAME_ROOM_PX:   # 좁은 목록은 선보다 이름이 먼저
+            segs.append(CardSeg("spark", QRectF(cells_left - 12 - sw, top + 2, sw, h1 + self.GAP + h2 - 4), "", 0))
+            limit -= sw + 12
         full = fm["bold"].horizontalAdvance(row.name)
         segs.append(CardSeg("name", QRectF(x, top, max(0.0, min(full, limit - x)), h1), row.name, full))
         if row.sub:
