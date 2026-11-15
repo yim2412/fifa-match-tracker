@@ -50,7 +50,7 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
 from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, StreakBreak, match_context, period_totals,
                       play_time, session_luck, session_rows, size_bins, split_sessions, streak_break,
                       PaceSide, SeasonPace, SeasonReview, SeasonSpan, StreakNote, season_pace, season_review,
-                      season_spans, stored_spans, streak_note, top_scorer,
+                      season_spans, stored_spans, streak_note, today_wdl, top_scorer,
                       DIVISION_LABELS as BREAK_DIVISION_LABELS, FORMATION_LABELS as BREAK_FORMATION_LABELS)
 from ownerdist import OwnerDist, PosDist, StrataDist, load_dist as load_owner_dist, load_pos_dist, load_strata, stratum_of
 from predict_check import judge_row as judge_predict_row, results as predict_final_results
@@ -143,7 +143,7 @@ __all__ = [
     "PlayTime", "Session", "SessionLuck", "SessionRow", "SizeBin", "StreakBreak", "match_context", "period_totals",
     "play_time", "session_luck", "session_rows", "size_bins", "split_sessions", "streak_break",
     "PaceSide", "SeasonPace", "SeasonReview", "SeasonSpan", "StreakNote", "season_pace", "season_review",
-    "season_spans", "stored_spans", "streak_note", "top_scorer",
+    "season_spans", "stored_spans", "streak_note", "today_wdl", "top_scorer",
     "BREAK_DIVISION_LABELS", "BREAK_FORMATION_LABELS",
     # habits — N18 공격 루트(2.7.1)
     "AttackRoutes", "ROUTES", "RouteRow", "attack_routes", "classify_route",
@@ -249,6 +249,9 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
     "season_pace": ("MIX", ("matches", "wins")),
     "season_review": ("MIX", ("matches", "details")),
     "record_achievements": ("MIX", ("details",)),
+    # 트레이 "오늘 전적"(109 J10) — F 값(승·무·패)만 내지만 MIX 로 둔다. F 감싸개는 창이 넣은 전역 묶음으로 거르는데, 트레이는 창이 없을 때도
+    # 읽으니 묶음을 exclude= 로 직접 받아야 한다(호출자가 넘기면 감싸개는 덮지도 합치지도 않는다)
+    "today_wdl": ("MIX", ("details",)),
     # 통과
     "window_of": ("PASS", ()),
     "filter_matches": ("PASS", ()),

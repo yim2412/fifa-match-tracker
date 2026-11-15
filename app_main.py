@@ -28,7 +28,7 @@ import weakref
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote, urlencode
@@ -320,6 +320,61 @@ BACKUP_BUSY_MSG = "백업을 만들거나 확인하는 중입니다. 끝난 뒤 
 def clearing_blocks(writes: frozenset) -> bool:
     """그 저장소들에 쓰는 작업을 지금 띄우면 안 되나 — 아무것도 안 쓰는 작업(writes 빔)은 늘 띄운다."""
     return bool(writes) and ("all" in CLEARING or bool(writes & CLEARING))
+
+
+def read_exclude_switch() -> bool:
+    """[표시한 판 빼고 보기] 스위치 값(settings.ini · 기본 꺼짐) — 읽지 못하면 꺼짐. 창과 트레이 한 줄(J10)이 같이 쓴다."""
+    try:
+        s = QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
+        return str(s.value(config.EXCLUDE_SHOWN_KEY, "false")).lower() in ("true", "1")
+    except Exception:
+        return False
+
+
+def today_line(now: datetime | None = None) -> str | None:
+    """트레이 메뉴 맨 위 "오늘 3승 1무 2패"(109 J10) — 메뉴를 열 때마다 fifa.db 를 읽기 전용으로 직접 센다(창·작업 스레드·요청 0).
+    줄을 못 만들면(동의 전 · 지우는 중 · DB 없음 · 내 계정 없음 · 시간 초과 · 어떤 예외든) None.
+    `clearing_blocks` 를 쓰지 않는다 - 빈 WRITES 면 거짓이라 걸쇠가 안 걸린다(W5). 연결은 finally 로 반드시 닫는다(안 닫으면 바꿔 끼우기가 busy)."""
+    conn = None
+    try:
+        if not config.NOTICE_ACCEPTED:
+            return None
+        if STORE_FIFA in CLEARING or "all" in CLEARING:
+            return None
+        if not config.DB_PATH.exists():
+            return None
+        now = now if now is not None else datetime.now(timezone.utc)
+        conn = sqlite3.connect(f"file:{config.DB_PATH.as_posix()}?mode=ro", uri=True, timeout=config.TODAY_LINE_TIMEOUT_S)
+        conn.row_factory = sqlite3.Row
+        t0 = time.monotonic()
+        limit_s = config.TODAY_LINE_BUDGET_MS / 1000
+
+        def _over() -> int:
+            return 1 if time.monotonic() - t0 > limit_s else 0
+        conn.set_progress_handler(_over, config.TODAY_LINE_PROGRESS_OPS)
+        mine = store.trade_state(conn).get("my_ouid")
+        if not mine or conn.execute("SELECT 1 FROM accounts WHERE ouid = ?", (mine,)).fetchone() is None:
+            return None
+        day = matchtime.today(now)
+        lo = matchtime.raw_bound(datetime.combine(day, datetime.min.time()))
+        hi = matchtime.raw_bound(datetime.combine(day + timedelta(days=1), datetime.min.time()))
+        details = store.today_payloads(conn, mine, config.DEFAULT_MATCH_TYPE, lo, hi)
+        marks: frozenset = frozenset()
+        if read_exclude_switch():
+            try:
+                marks = frozenset(store.load_notes(conn).marks)
+            except Exception:
+                marks = frozenset()   # notes 표가 없는 옛 DB(읽기 전용 연결은 스키마를 안 올린다)
+        w, d, l = core.today_wdl(details, mine, exclude=marks, now=now)
+        return f"오늘 {w}승 {d}무 {l}패" if w + d + l else "오늘 경기 없음"
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 class Worker(QThread):
@@ -1928,6 +1983,50 @@ class NotesWriter(Worker):
         self.done.emit((self._edit, ok))
 
 
+class ChipPreviewLoader(Worker):
+    """U2 최근 검색 칩 미리보기(109) - 계정마다 최근 config.CHIP_PREVIEW_N 판의 승·무·패. fifa.db 를 읽기 전용으로만 열어 WRITES 가 비었다
+    (쓰지 않으니 저장 공간 지우기가 이 스레드를 기다리지 않는다 - 대신 지우는 중이면 스스로 빈 결과를 낸다). 승·무·패는 core F 함수라
+    표시한 판 거르기를 따른다. 결과는 (시작 때 거르기 판본, {ouid: (판 수, 승, 무, 패, 섞임)}).
+    쓰지는 않지만 WRITES 에 fifa 를 둔다 - 연결을 쥔 채 지우기·복원의 바꿔 끼우기가 시작되면 "busy" 가 된다. WRITES 가 비면
+    running_writers 가 못 찾아 기다려 주지 않고 clearing_blocks 도 start 를 막지 않는다(J10 W5 와 같은 함정 · 109 리뷰)."""
+    WRITES = frozenset({STORE_FIFA})
+    ready = Signal(object)
+
+    def __init__(self, ouids: list, fv: int):
+        super().__init__()
+        self._ouids, self._fv = list(ouids), fv
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        out: dict = {}
+        conn = None
+        try:
+            if STORE_FIFA in CLEARING or "all" in CLEARING or not config.DB_PATH.exists():
+                return
+            conn = sqlite3.connect(f"file:{config.DB_PATH.as_posix()}?mode=ro", uri=True, timeout=config.CHIP_PREVIEW_TIMEOUT_S)
+            conn.row_factory = sqlite3.Row
+            for ouid in self._ouids:
+                if self._cancel or STORE_FIFA in CLEARING or "all" in CLEARING:
+                    return
+                ms = [m for m in (core.parse_match(d, ouid) for d in
+                                  store.load_details(conn, ouid, config.DEFAULT_MATCH_TYPE, config.CHIP_PREVIEW_N)) if m]
+                w, d, l = core.wdl(ms)
+                out[ouid] = (w + d + l, w, d, l, core.mixed_of_matches(ms))
+        except Exception:
+            out = {}
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            if not self._cancel:
+                self.ready.emit((self._fv, out))
+
+
 def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료 경계(그날 `config.SEASON_CUTOFF_H` 시 · seasons 주의 2) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
@@ -3155,6 +3254,11 @@ class MainWindow(QMainWindow):
         self._notes: store.Notes = store.EMPTY_NOTES
         self._exclude_on = self._read_exclude_switch()
         self._notes_queue: list[tuple] = []
+        # U2 최근 검색 칩 미리보기 - 계정별 캐시(키에 거르기 판본) · 칩 단추 · 도는 로더
+        self._chip_cache: dict[tuple, tuple] = {}
+        self._chip_btns: dict[str, QPushButton] = {}
+        self._chip_workers: list[ChipPreviewLoader] = []
+        self._chip_again = False
         self._notes_writer: NotesWriter | None = None
         self._notes_eff: store.Notes | None = None   # 줄에 올린 쓰기까지 얹은 값 — 쓰기 둘이 이어질 때 뒤 것이 앞 것을 되돌리지 않게(없으면 None)
         self._opp_ouid_cache: tuple | None = None   # (키, {닉네임: 상대 ouid}) — 상대 메모가 있을 때만 짓는다
@@ -3305,11 +3409,7 @@ class MainWindow(QMainWindow):
         return QSettings(str(config.SETTINGS_PATH), QSettings.Format.IniFormat)
 
     def _read_exclude_switch(self) -> bool:
-        """[표시한 판 빼고 보기] 스위치 값(settings.ini · 기본 꺼짐) — 읽지 못하면 꺼짐."""
-        try:
-            return str(self._settings().value(config.EXCLUDE_SHOWN_KEY, "false")).lower() in ("true", "1")
-        except Exception:
-            return False
+        return read_exclude_switch()
 
     def _write_exclude_switch(self, on: bool) -> None:
         """쓰는 자리에서 바로 sync — 닫을 때 _save_settings 만 믿으면 강제 종료에 값이 사라진다(109 J10 소항목)."""
@@ -3985,13 +4085,62 @@ class MainWindow(QMainWindow):
         self._recent_model.setStringList([r["nickname"] or r["ouid"][:8] for r in rows[:self.RECENT_LIST_LIMIT]])
         rows = rows[:self.RECENT_SEARCH_LIMIT]
 
+        self._chip_btns = {}
         for r in rows:
             nick = r["nickname"] or r["ouid"][:8]
             chip = QPushButton(f"{MY_ACCOUNT_CHIP} · {nick}" if r is mine else nick)
             chip.setCursor(Qt.CursorShape.PointingHandCursor)
             chip.clicked.connect(lambda _=False, n=nick: self._search_recent(n))
+            self._chip_btns[r["ouid"]] = chip
             self.row_recent.addWidget(chip)
         self.row_recent.addStretch(1)
+        self._chip_apply()
+
+    def _chip_tip(self, ouid: str) -> str:
+        v = self._chip_cache.get((ouid, core.filter_version()))
+        if v is None or not v[0]:
+            return ""
+        n, w, d, l, mixed = v
+        return f"최근 {n}판 {w}승 {d}무 {l}패 승률 {win_rate_text(w, d, l, mixed, short=True)}"
+
+    def _chip_apply(self) -> None:
+        """지금 있는 칩에 캐시된 미리보기를 달고, 없는 계정은 로더로 읽는다. 메모리를 내려놓은 상태·지우는 중에는 빈 줄(M10)."""
+        if not self._chip_btns:
+            return
+        if self._released or STORE_FIFA in CLEARING or "all" in CLEARING:
+            for chip in self._chip_btns.values():
+                chip.setToolTip("")
+            return
+        fv = core.filter_version()
+        for k in [k for k in self._chip_cache if k[1] != fv]:
+            del self._chip_cache[k]        # 지난 판본 값은 버린다(쌓이지 않게)
+        missing = []
+        for ouid, chip in self._chip_btns.items():
+            chip.setToolTip(self._chip_tip(ouid))
+            if (ouid, fv) not in self._chip_cache:
+                missing.append(ouid)
+        if not missing:
+            return
+        self._chip_workers = [w for w in self._chip_workers if w.isRunning()]
+        if self._chip_workers:
+            self._chip_again = True      # 도는 로더가 끝나면 모자란 것을 다시 읽는다
+            return
+        w = ChipPreviewLoader(missing, fv)
+        w.ready.connect(self._on_chip_preview)
+        self._chip_workers.append(w)
+        w.start()
+
+    def _on_chip_preview(self, payload) -> None:
+        fv, out = payload
+        if fv == core.filter_version():
+            for ouid, v in out.items():
+                self._chip_cache[(ouid, fv)] = v
+        again, self._chip_again = self._chip_again or fv != core.filter_version(), False
+        for ouid, chip in self._chip_btns.items():
+            if shiboken6.isValid(chip):
+                chip.setToolTip(self._chip_tip(ouid))
+        if again:
+            QTimer.singleShot(0, self._chip_apply)
 
     def _search_recent(self, nickname: str) -> None:
         # 시작 화면 칩·위쪽 이름 칸 목록 둘 다 — _on_search 는 보이는 화면의 칸을 읽으므로 둘 다 채운다
@@ -12230,6 +12379,7 @@ class MainWindow(QMainWindow):
         core.set_excluded(self._notes.shown if self._exclude_on else frozenset())
         core.bump_filter_version()
         self._refresh_filter_badge()
+        self._chip_apply()             # 칩 미리보기도 새 판본으로(U2)
         if not self._matches_all:      # 아직 그릴 경기가 없다 — 다음 _render_all 이 새 묶음으로 그린다
             return
         self._launch_streak()      # 연승·연패 섞기는 작업 스레드 — 새 묶음으로 다시(M13)
@@ -12518,6 +12668,7 @@ class MainWindow(QMainWindow):
                    rank, grade_name: str, is_champion: bool,
                    badge_path: str, seasons: dict, division_names: dict) -> None:
         self._set_busy(False)
+        self._chip_cache.clear()   # 새 경기가 저장됐을 수 있다
         self._refresh_recent()
         switched = ouid != self._ouid
         if switched:
@@ -15795,6 +15946,7 @@ class MainWindow(QMainWindow):
             *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],
             # 연승·연패 섞기 — 섞기 한 번(수 ms)마다 취소를 본다
             *[(ld, cancel(ld), 1000, False) for ld in self._habits_workers],
+            *[(ld, cancel(ld), 1000, False) for ld in self._chip_workers],
             # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
             *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
             # 팀컬러 효과 창 — 요청 사이에서 멈춘다(요청 하나 타임아웃 teamcolor.TIMEOUT_S 10초). 저장은 표 하나씩 한 트랜잭션
@@ -16050,6 +16202,7 @@ class MainWindow(QMainWindow):
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = self._fmchange_cache = None
         self._records_cache = None
         self._fun_cache = {}
+        self._chip_cache.clear()
         # 109 — notes 표도 같이 지웠다(RESET_WIPE · U3). 창이 쥔 표시 묶음을 여기서 비워야 뒤의 _refilter 류가 옛 표시를 되살리지 않는다
         self._notes, self._notes_queue, self._notes_eff, self._opp_ouid_cache = store.EMPTY_NOTES, [], None, None
         self._notes_applied = []
@@ -18133,7 +18286,8 @@ def main(argv: list[str] | None = None) -> int:
     # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
     shell = tray.AppShell(app, open_window=lambda: _open_window(shell, from_tray=True),
                           sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler(),
-                          card_sched=CardBackfillScheduler())
+                          card_sched=CardBackfillScheduler(),
+                          today_line=today_line)
     watch.changed.connect(lambda on: on_game_changed(shell, on))
     if tray_mode:
         # 부팅 때 자동 실행 — 창·막는 창·미리 읽기 없이 트레이만. 동의·키가 필요하면 창도 만들지 않는다
@@ -18165,7 +18319,7 @@ def _demo_main(app: QApplication) -> int:
         single = tray.SingleInstance(tray.instance_name())   # 이름 끝 -demo — 보통 실행과 서로 막지 않는다
         if not single.claim():
             return 0
-    shell = tray.AppShell(app, open_window=lambda: None, single=single)
+    shell = tray.AppShell(app, open_window=lambda: None, single=single, today_line=today_line)
     _open_window(shell)
     shell.crash_modal = _crash_modal
     try:

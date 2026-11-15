@@ -237,8 +237,10 @@ class AppShell(QObject):
     창(MainWindow)은 없을 수도 있다(--tray 로 켰는데 안내 동의·키가 필요할 때 — 열 때 만든다)."""
 
     def __init__(self, app: QApplication, open_window: Callable[[], object] | None = None, sched=None,
-                 single: SingleInstance | None = None, owner_sched=None, card_sched=None):
+                 single: SingleInstance | None = None, owner_sched=None, card_sched=None,
+                 today_line: Callable[[], str | None] | None = None):
         super().__init__()
+        self._today_line = today_line   # 메뉴를 열 때마다 부르는 오늘 전적 글(109 J10) - None 을 돌려주면 줄을 숨긴다
         self.app = app
         self._open_window = open_window
         self.sched = sched
@@ -302,6 +304,15 @@ class AppShell(QObject):
         tray = QSystemTrayIcon(self.app.windowIcon(), self)
         tray.setToolTip(config.APP_NAME)
         menu = QMenu()
+        self._today_act = None
+        self._today_sep = None
+        if self._today_line is not None:
+            self._today_act = menu.addAction("")
+            self._today_act.setEnabled(False)   # 보기만 - 누를 수 없다
+            self._today_sep = menu.addSeparator()
+            self._today_act.setVisible(False)
+            self._today_sep.setVisible(False)
+            menu.aboutToShow.connect(self._refresh_today)
         menu.addAction("열기", self.show_window)
         menu.addSeparator()
         menu.addAction("종료", self.quit_app)
@@ -311,6 +322,19 @@ class AppShell(QObject):
         tray.show()
         self.tray = tray
         return True
+
+    def _refresh_today(self) -> None:
+        """메뉴를 열 때 맨 위 줄을 새로 읽는다. 글이 없거나 예외면 줄을 숨긴다 - 메뉴는 반드시 열려야 [종료] 를 누른다."""
+        if self._today_act is None:
+            return
+        try:
+            text = self._today_line()
+        except Exception:
+            text = None
+        if text:
+            self._today_act.setText(text)
+        self._today_act.setVisible(bool(text))
+        self._today_sep.setVisible(bool(text))
 
     def _retry_tray(self) -> None:
         if self._ensure_tray():

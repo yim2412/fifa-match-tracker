@@ -710,6 +710,7 @@ def _drive_uncovered() -> None:
         conn = store.open_db(Path(d) / "f.db")
         try:
             store.all_match_ids(conn)
+            store.today_payloads(conn, "a", 50, "2026-01-01 00:00:00", "2026-01-02 00:00:00")   # 109 J10 트레이 오늘 전적 — test_today_line 도 부른다
             store.load_notes(conn)                              # 109 내 메모 — test_notes·화면 스모크가 부른다
             store.load_card_extras(conn, [1])
             store.list_accounts(conn)

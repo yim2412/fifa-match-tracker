@@ -32,9 +32,10 @@ from datetime import date, datetime, timedelta
 
 import config
 import habits
+import matchtime
 import records
 from analysis import MIN_COND
-from models import MatchSummary, drop_ids, is_mixed, is_weak, longest_streaks, rated, win_pct
+from models import MatchSummary, drop_ids, is_mixed, is_weak, longest_streaks, parse_match, rated, wdl, win_pct
 from stats import _me_opp, _num, _played, formation_of, win_rewards
 
 DAY_CAP_MIN = 24 * 60
@@ -566,3 +567,17 @@ def streak_note(matches: list[MatchSummary], ctx: dict, now: datetime) -> Streak
     out.weak = is_weak(rated(*out.after, mixed), MIN_COND)
     out.significant = any(t.significant for t in streak_break(dated, ctx() if callable(ctx) else ctx, mixed).tables)
     return out
+
+
+def today_wdl(details: list[dict], ouid: str, *, exclude: frozenset = frozenset(),
+              now: datetime | None = None) -> tuple[int, int, int]:
+    """내 계정의 오늘(KST) 승·무·패 — 트레이 한 줄(109 J10). now 는 UTC aware(없으면 지금).
+    경기별 승패는 `models.wdl` 그대로라 몰수도 승패로 센다(화면과 같은 기준). 오늘이 아닌 경기·내 경기가 아닌 것은 건너뛴다.
+    exclude = 표시한 경기 번호 — 창이 없는 트레이에는 `core_api` 전역이 비어 있으니 호출자가 직접 넘긴다."""
+    today = matchtime.today(now)
+    ms = []
+    for d in details:
+        m = parse_match(d, ouid)
+        if m is not None and m.match_date is not None and m.match_date.date() == today:
+            ms.append(m)
+    return wdl(drop_ids(ms, exclude))

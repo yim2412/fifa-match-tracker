@@ -828,6 +828,21 @@ def load_details(conn: sqlite3.Connection, ouid: str,
     return out
 
 
+def today_payloads(conn: sqlite3.Connection, ouid: str, match_type: int, lo: str, hi: str) -> list[dict]:
+    """한 계정의 [lo, hi) 사이 경기 원본(UTC 원문 경계 — `matchtime.raw_bound`). 트레이 "오늘 전적"(109 J10) 용이라 순서 없음.
+    CROSS JOIN 으로 (종류, 날짜) 색인을 먼저 타게 고정한다 — 계정 색인을 먼저 타면 35~44ms, 이쪽은 1~4ms(11-15 실측 · 1만 5천 판 계정).
+    깨진 행은 건너뛴다."""
+    out = []
+    for row in conn.execute("SELECT m.payload FROM matches m CROSS JOIN match_players p ON p.match_id = m.match_id"
+                            " WHERE m.match_type = ? AND m.match_date >= ? AND m.match_date < ? AND p.ouid = ?",
+                            (match_type, lo, hi, ouid)):
+        try:
+            out.append(_loads(row["payload"]))
+        except Exception:
+            continue
+    return out
+
+
 def all_match_ids(conn: sqlite3.Connection) -> set[str]:
     """저장된 경기 id 전부(계정 무관) — 디스크 캐시 정리용."""
     return {r["match_id"] for r in conn.execute("SELECT match_id FROM matches")}

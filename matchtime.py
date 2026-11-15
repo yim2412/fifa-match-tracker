@@ -12,6 +12,7 @@
 | `label(raw)` | 화면 글자 `YYYY-MM-DD HH:MM`(`MatchSummary.date_text` 와 같은 꼴) · 깨졌으면 "-" |
 | `raw_bound(kst)` | KST 경계 → 원문과 같은 꼴의 UTC 문자열 — SQL 의 `match_date >= ?` 에 넣는 값. 열을 SQL 안에서 고치면 색인을 못 쓴다 |
 | `epoch(raw)` | 진짜 epoch 초 |
+| `today(now)` | 지금(UTC aware) 기준 KST 오늘 날짜 — PC 시간대를 안 믿는다(트레이 "오늘 전적" · 109 J10) |
 
 저장 원본(`matches.match_date` 열 · payload)은 안 바꾼다 — 옛 버전이 같은 DB 를 열어도 그대로 읽고, 지난 경기도 읽는 쪽에서 같이 맞는다.
 **날짜만(`YYYY-MM-DD`) 원문은 None** — 시각 없이는 KST 날을 모른다(실데이터 3만 경기엔 없다).
@@ -68,6 +69,14 @@ def raw_bound(kst) -> str:
     if t.tzinfo is not None:            # 이미 aware 면 그 시각 그대로 UTC 로
         return t.astimezone(timezone.utc).replace(tzinfo=None, microsecond=0).strftime(RAW_FORMAT)
     return (t.replace(microsecond=0) - _offset()).strftime(RAW_FORMAT)
+
+
+def today(now: datetime | None = None) -> date:
+    """KST 오늘. now 는 UTC aware(없으면 지금) — Windows 엔 tzset 이 없어 테스트가 시간대를 못 바꾸므로 시각을 넣는다."""
+    t = now if now is not None else datetime.now(timezone.utc)
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (t.astimezone(timezone.utc).replace(tzinfo=None) + _offset()).date()
 
 
 def epoch(raw) -> int | None:

@@ -439,6 +439,8 @@ def _fv_slots(win) -> dict:
         "_reward_cache": lambda: win._reward_cache[0][0][-1] if win._reward_cache is not None else core.filter_version(),
         "_formation_cache": lambda: win._formation_cache[0][-1],
         "_wins_cache_key": lambda: win._wins_cache_key[-1],
+        # U2 칩 미리보기 — 키 (ouid, 거르기 판본) · 안 찼으면(스레드 막힘) 지금 판본으로 쳐서 건너뛴다
+        "_chip_cache": lambda: next(iter(win._chip_cache))[-1] if win._chip_cache else core.filter_version(),
     }
     for name in win._fun_cache:                                              # 라이벌·오늘의 선수·내 등급과 포메이션(_saved_calc)
         out[f"_fun_cache[{name}]"] = (lambda n=name: win._fun_cache[n][0][1][-1])
