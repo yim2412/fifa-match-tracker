@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPixmap
 from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel,
                              QVBoxLayout, QWidget)
 
@@ -68,6 +68,7 @@ class DashboardInput:
     streak_note: object | None = None          # 97 Y1 sessions.StreakNote — 지금 연패 중일 때만(검색한 계정 · 저장 전체 기준 · 경고가 아니라 사실 한 줄)
     headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
     report: ScoreParts | None = None           # 65 M1 리포트·해설 — 점수 기록이 모자라면 None
+    emblem: tuple[str, str] = ("", "")         # 110 B3 내 팀컬러 (엠블럼 키, 이름) — 키가 비면 그림 칸이 숨는다(단일 팀·1만 위 밖·팀컬러 모름)
 
 
 @dataclass
@@ -212,8 +213,16 @@ class DashboardPage(QWidget):
         self.head.body.addLayout(nums)
         self.lb_days = _label("", wrap=True)          # 오늘 · 어제
         self.lb_days.setTextFormat(Qt.TextFormat.RichText)
+        # 110 B3 — 오늘·어제 줄 왼쪽에 내 팀컬러 엠블럼(없으면 숨김 — 줄 자리는 그대로). 그림은 창이 받아 put_emblem 으로 준다
+        self.lb_emblem = QLabel()
+        self.lb_emblem.hide()
+        self.emblem_key = ""
+        days_row = QHBoxLayout()
+        days_row.setSpacing(8)
+        days_row.addWidget(self.lb_emblem, 0, Qt.AlignmentFlag.AlignVCenter)
+        days_row.addWidget(self.lb_days, 1)
         self.lb_record = _label("", dim=True, wrap=True)   # 시즌 기록 — 최고점 · 챔스·슈챔 달성
-        self.head.body.addWidget(self.lb_days)
+        self.head.body.addLayout(days_row)
         self.head.body.addWidget(self.lb_record)
         # 97 Y1 — 지금 연패 중일 때만 한 줄(없으면 숨김). 알림이 아니다: 색은 [플레이 기록 › 연패] 표가 유의할 때만 · 경고색 없음(ROADMAP E1)
         self.lb_streak_note = _label("", dim=True, wrap=True)
@@ -500,6 +509,26 @@ class DashboardPage(QWidget):
         self.lb_record.setToolTip(f"{best[2]}\n{reach[2]}".strip())
         self._render_streak_note(d.streak_note)
         self._render_record_chips(d)
+        self._render_emblem(d)
+
+    def _render_emblem(self, d: DashboardInput) -> None:
+        """110 B3 — 키가 바뀌면 그림을 비우고 숨긴다(새 그림은 창이 받아 put_emblem). 같은 키면 이미 붙은 그림을 그대로 둔다."""
+        key, name = d.emblem
+        if key != self.emblem_key:
+            self.lb_emblem.clear()
+            self.lb_emblem.hide()
+        self.emblem_key = key
+        self.lb_emblem.setToolTip(f"내 팀컬러 {name}" if name else "")
+
+    def put_emblem(self, key: str, path: str) -> None:
+        """받은 엠블럼 그림 — 그 사이 키가 바뀌었으면(다른 계정 검색) 버린다."""
+        if not key or key != self.emblem_key:
+            return
+        pm = QPixmap(path) if path else QPixmap()
+        if pm.isNull():
+            return
+        self.lb_emblem.setPixmap(pm.scaledToHeight(config.EMBLEM_HEAD_PX, Qt.TransformationMode.SmoothTransformation))
+        self.lb_emblem.show()
 
     def _render_streak_note(self, n) -> None:
         """Y1 — 지금 N연패 중이면 사실 한 줄. 표본이 모자라거나([플레이 기록 › 연패] 표가 유의하지 않으면) 흐린 글자 그대로 둔다."""

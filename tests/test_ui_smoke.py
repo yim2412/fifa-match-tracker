@@ -17346,6 +17346,258 @@ def test_similar_loader_reads_steps_and_ouids_and_stays_empty_when_clearing_110(
         _similar_cleanup()
 
 
+# ── 110 조각 ③ — B2 등급 색 띠 · B3 대시보드 머리 줄 엠블럼 ─────────────────────────────────────────────────────────
+BAND_MIN_DELTA = 7.0   # 등급 띠 색과 승·무·패·좋음·나쁨 색의 보통 눈 색 거리(OKLab×100) 하한 — 지금 값의 최저는 어두운 17번 ↔ 무 회색 7.3
+
+
+def _division_band_failures(mode: str, bands) -> list:
+    """띠 색이 그 테마의 상태 색(좋음·나쁨·무·승 채움·패 채움·승패 막대)과 BAND_MIN_DELTA 미만으로 붙는 쌍 — [(번호, 토큰, 거리)]."""
+    p = T._PALETTES[mode]
+    toks = ("GOOD", "BAD", "DRAW", "DRAW_FILL", "GOOD_FILL", "BAD_FILL", "LOSE_FILL", "WIN_BAR", "LOSE_BAR")
+    return [(i, k, round(T.cvd_delta(c, p[k], True), 1)) for i, c in enumerate(bands) for k in toks
+            if T.cvd_delta(c, p[k], True) < BAND_MIN_DELTA]
+
+
+def test_110_division_band_palette():
+    import re as _re
+    for mode, bands in T.DIVISION_BANDS.items():
+        assert len(bands) == 21 and all(_re.fullmatch(r"#[0-9a-f]{6}", c) for c in bands), (mode, bands)
+        assert not _division_band_failures(mode, bands), (mode, _division_band_failures(mode, bands))
+    assert T.DIVISION_BAND is T.DIVISION_BANDS[T.MODE]
+    # 번호 → 색: 범위 안은 그 칸, 밖·None·bool 은 None(조용히 틀리는 자리 — 21 은 22번째 칸이 없다)
+    assert [T.division_band(i) for i in (0, 8, 20)] == [T.DIVISION_BAND[0], T.DIVISION_BAND[8], T.DIVISION_BAND[20]]
+    assert T.division_band(21) is None and T.division_band(-1) is None and T.division_band(None) is None and T.division_band(True) is None
+    # 검사가 무언가를 재는지 — 어두운 쪽 8번을 좋음 초록으로, 밝은 쪽 7번을 승 채움으로 되돌리면 걸려야 한다
+    dark = list(T.DIVISION_BANDS["dark"])
+    dark[8] = T._PALETTES["dark"]["GOOD"]
+    assert any(i == 8 and k == "GOOD" for i, k, _d in _division_band_failures("dark", dark))
+    light = list(T.DIVISION_BANDS["light"])
+    light[7] = T._PALETTES["light"]["GOOD_FILL"]
+    assert any(i == 7 and k == "GOOD_FILL" for i, k, _d in _division_band_failures("light", light))
+    light = list(T.DIVISION_BANDS["light"])
+    light[7] = "#389160"   # 옛 값 — 밝은 테마 승 채움과 2.7
+    assert "GOOD_FILL" in {k for i, k, _d in _division_band_failures("light", light) if i == 7}
+
+
+def test_110_division_chart_band_pixels():
+    import charts
+    from types import SimpleNamespace
+    runs = [SimpleNamespace(division=d, start=datetime(2026, 11, i), end=datetime(2026, 11, i), games=3)
+            for i, d in enumerate((1100, 900, 800, 900), start=1)]
+    c = charts.DivisionRunChart()
+    c.set_data(runs, {1100: "A", 900: "B", 800: "C"})
+    c.set_bands({1100: "#ff0000", 800: "#0000ff"})   # 900 은 일부러 비운다 — 띠 없는 칸
+    c.resize(500, 260)
+    img = c.grab().toImage()
+    got = dict(c.marks["bands"])
+    assert set(got) == {1100, 800}, got
+    # 띠 안 한 점(오른쪽 위 모서리 안쪽 — 계단선·점선·축은 거기 안 지나간다)이 PANEL 에 그 색을 섞은 색이다
+    want = {1100: T.blend(T.PANEL, "#ff0000", T.DIVISION_BAND_MIX), 800: T.blend(T.PANEL, "#0000ff", T.DIVISION_BAND_MIX)}
+    for div, r in got.items():
+        px = img.pixelColor(int(r.right()) - 3, int(r.top()) + 3)
+        assert px.alpha() == 255 and px.name() == want[div], (div, px.name())
+    # 띠는 그림 영역 안에서 서로 안 겹친다
+    ys = sorted((r.top(), r.bottom()) for r in got.values())
+    assert ys[0][1] <= ys[1][0] + 1e-6, ys
+    # 이웃한 칸 셋을 다 칠하면 위아래로 맞닿되 겹치지 않는다(한 칸은 이웃과의 가운데까지)
+    c.set_bands({1100: "#ff0000", 900: "#00ff00", 800: "#0000ff"})
+    c.grab()
+    ys = sorted((r.top(), r.bottom()) for _d, r in c.marks["bands"])
+    assert len(ys) == 3 and all(abs(a[1] - b[0]) < 1e-6 for a, b in zip(ys, ys[1:])), ys
+    c.set_bands({1100: "#ff0000", 800: "#0000ff"})
+    c.grab()
+    # 비우면 사라진다
+    c.set_bands({})
+    img2 = c.grab().toImage()
+    r = got[1100]
+    assert img2.pixelColor(int(r.right()) - 3, int(r.top()) + 3).name() != want[1100], "비웠는데 띠가 남았다"
+    assert c.marks["bands"] == []
+
+
+def test_110_division_band_wiring():
+    """화면이 theme.DIVISION_BAND 를 실제로 쓴다 — 기본값이 아닌 값을 끼워 차트·표가 그 값을 받는지 본다."""
+    planted = tuple(f"#{i + 1:02x}{(i * 7) % 256:02x}{(255 - i):02x}" for i in range(21))
+    keep = T.DIVISION_BAND
+    T.DIVISION_BAND = planted
+    try:
+        _win._go_page("승률 그래프", "등급")
+        from types import SimpleNamespace
+        _win._div_runs = [SimpleNamespace(division=d, start=datetime(2026, 11, i), end=datetime(2026, 11, i), games=3)
+                          for i, d in enumerate((900, 800, 900), start=1)]
+        _win._div_span = (None, False)
+        _win._draw_division()
+        want = {div: planted[_win._division_icon_key(div)] for div in {r.division for r in _win._div_runs}
+                if _win._division_icon_key(div) is not None}
+        assert want and _win.division_chart._bands == want, (_win.division_chart._bands, want)
+        # 표 — 등급 칸 대리자가 칸의 그림 키로 색을 찾아 왼쪽 3px 에 칠한다
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtWidgets import QStyleOptionViewItem
+
+        def paint(row: int) -> QImage:
+            img = QImage(120, 30, QImage.Format.Format_ARGB32)
+            img.fill(0)
+            p = QPainter(img)
+            opt = QStyleOptionViewItem()
+            opt.rect = QRectF(0, 0, 120, 30).toRect()
+            opt.font = t.font()
+            t.itemDelegateForColumn(0).paint(p, opt, t.model().index(row, 0))
+            p.end()
+            return img
+        _win._render_divstay(_sc_details({"0003": 800}))
+        t = _win.tbl_divstay
+        assert isinstance(t.itemDelegateForColumn(0), widgets.DivisionBandDelegate)
+        assert not isinstance(t.itemDelegateForColumn(1), widgets.DivisionBandDelegate)
+        painted = 0
+        for r in range(t.rowCount()):
+            key = t.item(r, 0).data(widgets.ICON_KEY_ROLE)
+            if key is None:
+                continue
+            img = paint(r)
+            for x in (0, 1, 2):
+                assert img.pixelColor(x, 15).name() == planted[key], (r, x, img.pixelColor(x, 15).name(), planted[key])
+            assert img.pixelColor(3, 15).name() != planted[key] and img.pixelColor(6, 15).name() != planted[key]   # 3px 만
+            painted += 1
+        assert painted >= 2, painted
+        # 키가 없거나 범위 밖인 칸은 띠가 없다
+        for bad in (None, 99):
+            t.item(0, 0).setData(widgets.ICON_KEY_ROLE, bad)
+            img = paint(0)
+            assert img.pixelColor(1, 15).name() == img.pixelColor(6, 15).name(), ("키가 없는데 띠가 그려졌다", bad)
+    finally:
+        T.DIVISION_BAND = keep
+        _win._render_divstay(_win._details)
+        _win._render_division()
+
+
+def _emblem_png(name: str = "emb.png") -> str:
+    from PySide6.QtGui import QColor, QImage
+    path = os.path.join(tempfile.mkdtemp(), name)
+    img = QImage(64, 48, QImage.Format.Format_ARGB32)
+    img.fill(QColor("#336699"))
+    assert img.save(path)
+    return path
+
+
+def test_110_dashboard_emblem_slot():
+    """B3 — 머리 줄 엠블럼 칸: 키가 있어도 그림이 올 때까지 숨김 · 그림이 오면 높이 EMBLEM_HEAD_PX · 낡은 키의 그림은 버림 · 키가 비면 숨김."""
+    import dashboard
+    from dataclasses import replace as _replace
+    d = _win.dashboard
+    ms, ds = list(_win._matches), list(_win._details)
+    inp = dashboard.DashboardInput(_win._ouid, ms, ds, ms, ds, "시험", club_cells=[("랭킹 점수", "4,103.09", "", "")], emblem=("crests/l10.png", "팀A"))
+    png = _emblem_png()
+    try:
+        d.render(inp)
+        assert d.emblem_key == "crests/l10.png" and d.lb_emblem.isHidden() and d.lb_emblem.toolTip() == "내 팀컬러 팀A"
+        d.put_emblem("crests/other.png", png)   # 그 사이 다른 계정으로 바뀐 낡은 그림
+        assert d.lb_emblem.isHidden() and d.lb_emblem.pixmap().isNull()
+        d.put_emblem("crests/l10.png", "")      # 받기 실패(빈 경로) — 빈칸 그대로
+        d.put_emblem("crests/l10.png", os.path.join(os.path.dirname(png), "없음.png"))   # 깨진·없는 파일
+        assert d.lb_emblem.isHidden()
+        d.put_emblem("crests/l10.png", png)
+        assert not d.lb_emblem.isHidden() and d.lb_emblem.pixmap().height() == config.EMBLEM_HEAD_PX, d.lb_emblem.pixmap().height()
+        d.render(inp)   # 같은 키로 다시 그리면 붙은 그림을 지우지 않는다(대시보드는 검색·범위 바꿈마다 다시 그려진다)
+        assert not d.lb_emblem.isHidden() and not d.lb_emblem.pixmap().isNull()
+        d.render(_replace(inp, emblem=("crests/l11.png", "팀B")))   # 키가 바뀌면 이전 그림이 남지 않는다
+        assert d.lb_emblem.isHidden() and d.lb_emblem.pixmap().isNull() and d.lb_emblem.toolTip() == "내 팀컬러 팀B"
+        d.put_emblem("crests/l11.png", png)
+        d.render(_replace(inp, emblem=("", "단일 팀")))   # 그림이 없는 경우(단일 팀 · 1만 위 밖 · 모름) — 빈칸
+        assert d.lb_emblem.isHidden() and d.lb_emblem.pixmap().isNull() and d.emblem_key == ""
+        d.put_emblem("", png)
+        assert d.lb_emblem.isHidden(), "빈 키에 그림이 붙었다"
+    finally:
+        d.render(_replace(inp, emblem=("", "")))
+
+
+def test_110_dashboard_emblem_source_and_loader():
+    """B3 — 출처 순서(rank.db 내 행 → 지금까지 본 지도) · fifa.db 안 엶 · 단일 팀은 받지 않음 · 기존 IconLoader 길."""
+    saved = (_win._nick, dict(_win._team_colors), dict(_win._emblem_label), _win._sim_inputs, store.open_db, _win._dash_emblem_loader)
+    seen = []
+
+    def no_fifa(*a, **k):
+        raise AssertionError("대시보드 머리 줄이 fifa.db 를 열었다")
+    try:
+        store.open_db = no_fifa
+        _win._nick = "나의닉"
+        _win._team_colors = {"나의닉": "팀A"}
+        _win._emblem_label = {}
+        _win._sim_inputs = None
+        # ① rank.db 가 내 엠블럼을 안다
+        _win._rank_read = lambda fn: (7, "팀A", "crests/l1.png")
+        assert _win._dash_emblem() == ("crests/l1.png", "팀A")
+        # ② rank.db 에는 색만 있고 엠블럼이 없다 → 지금까지 본 지도
+        _win._rank_read = lambda fn: (7, "팀A", "")
+        _win._emblem_label = {"팀A": "crests/l2.png"}
+        assert _win._dash_emblem() == ("crests/l2.png", "팀A")
+        # ③ rank.db 를 못 읽는다 → 라벨 이름과 지도만
+        _win._rank_read = lambda fn: None
+        assert _win._dash_emblem() == ("crests/l2.png", "팀A")
+        # ④ 아무것도 모른다 → 빈칸(키 "") · 이름만 있으면 이름은 준다
+        _win._emblem_label = {}
+        assert _win._dash_emblem() == ("", "팀A")
+        _win._team_colors = {}
+        assert _win._dash_emblem() == ("", "")
+        # 계정이 없으면 읽지도 않는다
+        ouid, _win._ouid = _win._ouid, None
+        try:
+            _win._rank_read = lambda fn: seen.append(1) or (1, "x", "y")
+            assert _win._dash_emblem() == ("", "") and not seen
+        finally:
+            _win._ouid = ouid
+        # 단계표가 도착했으면 rank.db 읽기에 그 표가 간다(둘째 출처 — rankmeta.my_emblem 의 table)
+        table = core.StepTable()
+        _win._sim_inputs = (table, {})
+        passed = []
+        _win._my_color_emblem = lambda c, tb: passed.append(tb) or (1, "팀A", "")
+        _win._rank_read = lambda fn: fn(None)
+        try:
+            _win._dash_emblem()
+            _win._sim_inputs = None
+            _win._dash_emblem()
+        finally:
+            del _win._my_color_emblem
+        assert passed == [table, None], passed
+        # 받기 — 주소가 있는 엠블럼은 IconLoader(종류 · 키 · images.icon_url)가 하나, 단일 팀(teamcolor/)은 받지 않는다
+        d = _win.dashboard
+        d.emblem_key = "crests/l1.png"
+        _win._dash_emblem_loader = None
+        _win._load_dash_emblem()
+        ld = _win._dash_emblem_loader
+        url = images.icon_url("emblem", "crests/l1.png")
+        assert url and ld is not None and ld._entries == [("emblem", "crests/l1.png", url)], ld and ld._entries
+        d.emblem_key = "teamcolor/single.png"
+        assert images.icon_url("emblem", "teamcolor/single.png") == ""
+        _win._load_dash_emblem()
+        assert _win._dash_emblem_loader is None, "주소가 없는데 로더를 띄웠다"
+        d.emblem_key = ""
+        _win._load_dash_emblem()
+        assert _win._dash_emblem_loader is None
+    finally:
+        store.open_db = saved[4]
+        del _win._rank_read
+        _win._nick, _win._team_colors, _win._emblem_label, _win._sim_inputs = saved[:4]
+        _win._dash_emblem_loader = saved[5]
+        _win.dashboard.emblem_key = ""
+        _win._icon_loaders[:] = [x for x in _win._icon_loaders if x.isRunning()]
+
+
+def test_110_render_dashboard_passes_emblem():
+    """B3 배선 — _render_dashboard 가 _dash_emblem 결과를 대시보드 입력으로 넘기고 그 키로 그림을 받으러 간다(기본값이 아닌 키로 잰다)."""
+    keep = _win._dash_emblem_loader
+    try:
+        _win._dash_emblem = lambda: ("countries/kr.png", "시험 팀컬러")
+        _win._render_dashboard()
+        d = _win.dashboard
+        assert d.emblem_key == "countries/kr.png" and d.lb_emblem.toolTip() == "내 팀컬러 시험 팀컬러"
+        ld = _win._dash_emblem_loader
+        assert ld is not None and [e[1] for e in ld._entries] == ["countries/kr.png"], ld and ld._entries
+    finally:
+        del _win._dash_emblem
+        _win._dash_emblem_loader = keep
+        _win._render_dashboard()
+        _win._dash_emblem_loader = keep
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed, started = 0, time.monotonic()

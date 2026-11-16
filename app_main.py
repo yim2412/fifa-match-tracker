@@ -87,7 +87,7 @@ from nexon_api import (
 )
 from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
-    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, GradeBadgeDelegate, GradeStepDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
+    ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, DivisionBandDelegate, GradeBadgeDelegate, GradeStepDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
     Segmented, SortableItem, StatCard, VersionCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
@@ -3299,6 +3299,7 @@ class MainWindow(QMainWindow):
         self._chip_workers: list[ChipPreviewLoader] = []
         self._chip_again = False
         # 110 R1 [비슷한 랭커] — 단계표·ouid 는 작업 스레드가 읽어 넘긴 값(None = 아직 · 무효화 때 비운다) · 도는 로더
+        self._dash_emblem_loader: IconLoader | None = None   # 110 B3 대시보드 머리 줄 엠블럼
         self._sim_inputs: tuple | None = None
         self._sim_loader: SimilarLoader | None = None
         self._sim_workers: list[SimilarLoader] = []   # 띄운 로더 전부 — 끝날 때까지 쥔다(도는 QThread 를 놓으면 프로세스가 죽는다 · _retire_loaders)
@@ -5745,6 +5746,7 @@ class MainWindow(QMainWindow):
         self.lb_divstay_note = self._note_label()
         v.addWidget(self.lb_divstay_note)
         self.tbl_divstay = self._make_table(self.DIVSTAY_COLUMNS, icons={0: "division"})
+        self.tbl_divstay.setItemDelegateForColumn(0, DivisionBandDelegate(self.tbl_divstay))   # 110 B2 — 등급 칸 왼쪽 3px 띠
         v.addWidget(self.tbl_divstay, 1)
         return w
 
@@ -9068,6 +9070,31 @@ class MainWindow(QMainWindow):
     def _sim_count_text(n: int, shown: int) -> str:
         return f"{n:,}명" if n <= shown else f"{n:,}명 중 {shown:,}명"
 
+    def _my_color_emblem(self, c, table) -> tuple:
+        """내 (프로필 번호, 주 팀컬러 이름, 엠블럼 키) — [비슷한 랭커]와 대시보드 머리 줄(110 B3)이 같은 출처를 쓴다(rankmeta.my_emblem 순서).
+        rank.db 연결 c 로 읽고 fifa.db 는 열지 않는다. table 이 None 이면 단계표 둘째 출처만 빠진다."""
+        sn = core.find_sn(c, getattr(self._rank, "profile_sn", None), self._nick)
+        color = self._my_color(rankerpick.top_rankers(c, limit=config.RANK_TIERS[-1])[1]) or ""
+        label = self._team_colors.get(self._nick or "") or ""
+        if teamcolor.name_of(label) != color:
+            label = color   # 라벨(이름 · 강화)이 스냅숏 이름과 다른 팀컬러면 라벨로 엠블럼을 찾지 않는다
+        return sn, color, core.my_emblem(c, sn, label, table)
+
+    def _dash_emblem(self) -> tuple[str, str]:
+        """대시보드 머리 줄 내 팀컬러 (엠블럼 키, 팀컬러 이름) — 못 찾으면 ("", 이름 또는 ""). 요청 0 · fifa.db 0(rank.db 읽기 전용만).
+        1만 위 밖이면 rank.db 에 내 줄이 없어 읽어 둔 단계표(_sim_inputs)와 지금까지 본 팀컬러 지도(_emblem_label)만 남는다."""
+        if not self._ouid:
+            return "", ""
+        table = self._sim_inputs[0] if self._sim_inputs else None
+        got = self._rank_read(lambda c: self._my_color_emblem(c, table))
+        color, key = (got[1], got[2]) if got else ("", "")
+        if not color:
+            color = teamcolor.name_of(self._team_colors.get(self._nick or "") or "")
+        if not key and color:
+            label = self._team_colors.get(self._nick or "") or color
+            key = self._emblem_label.get(label) or self._emblem_label.get(color) or ""
+        return key, color
+
     def _render_similar(self) -> None:
         if not config.RANK_COLLECT:
             self._sim_clear(self.rank_off_note("나와 비슷한 랭커를 보여 줍니다"))
@@ -9089,12 +9116,7 @@ class MainWindow(QMainWindow):
         form = core.formation_of(starters) if starters else ""
 
         def read(c):
-            sn = core.find_sn(c, getattr(self._rank, "profile_sn", None), self._nick)
-            color = self._my_color(rankerpick.top_rankers(c, limit=config.RANK_TIERS[-1])[1]) or ""
-            label = self._team_colors.get(self._nick or "") or ""
-            if teamcolor.name_of(label) != color:
-                label = color   # 라벨(이름 · 강화)이 스냅숏 이름과 다른 팀컬러면 라벨로 엠블럼을 찾지 않는다
-            emblem = core.my_emblem(c, sn, label, table)
+            sn, color, emblem = self._my_color_emblem(c, table)
             return core.similar_rankers(c, table, form, color, emblem, me_sn=sn, me_nick=self._nick)
 
         res = self._rank_read(read)
@@ -15240,6 +15262,8 @@ class MainWindow(QMainWindow):
             head = (self._div_runs[-1].division, min(r.division for r in self._div_runs),
                     "시즌 최고" if known else "기간 최고")   # R2 — 시즌을 모르면 그 70일을 시즌이라 부르지 않는다
         entries = set(self._sc_entries()[0])
+        self.division_chart.set_bands({div: col for div in {r.division for r in self._div_runs}
+                                       if (col := T.division_band(self._division_icon_key(div)))})   # 110 B2 — 시즌 전체 기준이라 확대해도 색이 같다
         self.division_chart.set_data(runs, self._division_names,
                                      markers=[i for i, r in enumerate(runs) if r.start in entries], head=head)
 
@@ -15691,7 +15715,26 @@ class MainWindow(QMainWindow):
             day_player=self._day_player(),
             streak_note=self._streak_note(),
             headline=self._headline(),
-            report=self._dashboard_report()))
+            report=self._dashboard_report(),
+            emblem=self._dash_emblem()))
+        self._load_dash_emblem()
+
+    def _load_dash_emblem(self) -> None:
+        """110 B3 — 머리 줄 엠블럼 그림. 표 칸 그림과 같은 길(images.icon_url · IconLoader · 캐시 폴더)만 쓴다.
+        주소가 비면(단일 팀 teamcolor/ 엠블럼 · 모르는 종류) 받지 않고 빈칸 그대로."""
+        old, self._dash_emblem_loader = self._dash_emblem_loader, None
+        if old is not None and old.isRunning():
+            old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        key = self.dashboard.emblem_key
+        url = images.icon_url("emblem", key) if key else ""
+        if not url:
+            return
+        loader = IconLoader([("emblem", key, url)], self._icon_dir)
+        loader.loaded.connect(lambda _k, k, path: self.dashboard.put_emblem(k, path))
+        loader.finished.connect(lambda ld=loader: self._icon_loaders.remove(ld) if ld in self._icon_loaders else None)
+        self._dash_emblem_loader = loader
+        self._icon_loaders.append(loader)
+        loader.start()
 
     def _streak_note(self):
         """97 Y1 — 지금 연패 중일 때만(저장 전체 기준 · 시즌 필터·빠른 범위 무관). 조건 밖이면 None."""

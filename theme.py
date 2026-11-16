@@ -315,6 +315,28 @@ EMPTY_ICON = blend(PANEL, TEXT_DIM, 0.45)
 CARD_HOVER_BORDER = blend(CARD_BORDER, ACCENT_FILL, 0.55)
 
 
+# 등급 색 띠(110 B2) — 등급 배지 그림 21장(CDN 번호 0~20 · images.division_icon_url)에서 뽑아 손으로 옮긴 값이다. 뽑은 방법: 불투명 픽셀(알파 220 이상) 중
+# 채도 0.30 · 명도 0.35 이상만 색상 18칸으로 나눠 가장 많은 칸의 명도 중앙값 픽셀(2026-11-16 · 80×80 그림).
+# 밝은 테마는 같은 값에서 둘만 손으로 옮겼다: 노랑 셋(12~14)은 흰 바탕에서 안 보여 검정 쪽으로 30% 어둡게, 초록 6·7번은 밝은 테마 승 채움(GOOD_FILL #009966)과 색 거리 2.7·5.8 로 붙어 연두 쪽으로(둘 다 12 이상). 승·무·패 색과 헷갈리지 않는지는 test_rules 가 색 거리로 잰다.
+DIVISION_BANDS = {
+    "dark": ("#b8a575", "#861896", "#19bfbe", "#15c0bc", "#23baaf", "#0ac5c1", "#22ab62",
+             "#389160", "#00cd5f", "#876aad", "#7c53cb", "#8060bd", "#fef403", "#f7ce2e",
+             "#f9d723", "#3d667d", "#3d667e", "#41687d", "#cb9675", "#d48e67", "#c99271"),
+    "light": ("#b8a575", "#861896", "#19bfbe", "#15c0bc", "#23baaf", "#0ac5c1", "#8fae3a",
+              "#7cae2a", "#00cd5f", "#876aad", "#7c53cb", "#8060bd", "#b1aa02", "#ac9020",
+              "#ae9618", "#3d667d", "#3d667e", "#41687d", "#cb9675", "#d48e67", "#c99271"),
+}
+DIVISION_BAND = DIVISION_BANDS[MODE]
+DIVISION_BAND_MIX = 0.16            # 그래프 바탕 띠 — PANEL 에서 그 색 쪽으로 이만큼(불투명 · PyQt 규칙 2번)
+
+
+def division_band(icon_index) -> str | None:
+    """등급 배지 CDN 번호(0~20 · models.division_icon_index) → 띠 색. 모르는 번호·None → None."""
+    if isinstance(icon_index, int) and not isinstance(icon_index, bool) and 0 <= icon_index < len(DIVISION_BAND):
+        return DIVISION_BAND[icon_index]
+    return None
+
+
 def contrast(a_hex: str, b_hex: str) -> float:
     """WCAG 대비(1~21). 글자는 4.5 이상이어야 읽힌다 — 테스트가 팔레트를 이걸로 잰다."""
     def lum(h: str) -> float:
@@ -358,7 +380,10 @@ _CVD = {"protan": ((0.152286, 1.052583, -0.204868), (0.114503, 0.786281, 0.09921
         "deutan": ((0.367322, 0.860646, -0.227968), (0.280085, 0.672501, 0.047413), (-0.011820, 0.042940, 0.968881))}
 
 
-def cvd_delta(a_hex: str, b_hex: str) -> float:
+_IDENT = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+
+
+def cvd_delta(a_hex: str, b_hex: str, plain: bool = False) -> float:
     """적록 색약(1형·2형 중 나쁜 쪽)에서 두 색의 차이 — OKLab 거리 × 100.
 
     8 이상이면 색만으로 갈린다 · 6~8 은 글자·부호가 같이 있을 때만 · 6 미만은 색으로 구분 안 됨.
@@ -382,7 +407,8 @@ def cvd_delta(a_hex: str, b_hex: str) -> float:
         rgb = lin(h)
         return tuple(max(0.0, min(1.0, sum(k * c for k, c in zip(row, rgb)))) for row in mat)
 
-    return min(100 * math.dist(oklab(*sim(a_hex, m)), oklab(*sim(b_hex, m))) for m in _CVD.values())
+    mats = (_IDENT,) if plain else tuple(_CVD.values())   # plain = 색약 변환 없이 보통 눈으로(110 B2 — 띠 색이 승·패 색과 다른가)
+    return min(100 * math.dist(oklab(*sim(a_hex, m)), oklab(*sim(b_hex, m))) for m in mats)
 
 
 # 잔디 위 색 — 밝은 테마의 진한 초록은 잔디와 명도가 비슷해 골 점이 묻힌다.

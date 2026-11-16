@@ -1480,7 +1480,13 @@ class DivisionRunChart(_Chart):
         self._markers: list[int] = []
         self._head: tuple[int, int, str] | None = None
         self._badges: dict[int, object] = {}   # 등급 id → 줄인 QPixmap
+        self._bands: dict[int, str] = {}       # 등급 id → 띠 색(110 B2 — theme.DIVISION_BAND 에서 부르는 쪽이 골라 준다)
         self.marks: dict = {}
+
+    def set_bands(self, bands: dict[int, str]) -> None:
+        """등급 id → 바탕 띠 색 '#rrggbb'(110 B2). 모르는 등급은 빼고 준다 — 그 칸만 띠가 없다."""
+        self._bands = dict(bands)
+        self.update()
 
     def set_data(self, runs: list, names: dict[int, str], tips: list[str] | None = None, markers=(),
                  head: tuple[int, int, str] | None = None) -> None:
@@ -1552,6 +1558,20 @@ class DivisionRunChart(_Chart):
         plot_h = max(h - mt - mb, 1)
         y_of = {div: (mt + plot_h - plot_h * i / (len(levels) - 1) if len(levels) > 1 else mt + plot_h / 2)
                 for i, div in enumerate(levels)}
+
+        # 등급 바탕 띠(110 B2) — 칸마다 위아래 이웃과의 가운데까지, 그림 영역 밖으로는 안 나간다. 승·패 색이 아니라 배지 그림 색을 PANEL 에 섞은 불투명 색
+        step = plot_h / (len(levels) - 1) if len(levels) > 1 else plot_h
+        band_rects = []
+        for div in levels:
+            col = self._bands.get(div)
+            if not col:
+                continue
+            top = max(y_of[div] - step / 2, mt)
+            bottom = min(y_of[div] + step / 2, mt + plot_h)
+            rect = QRectF(ml, top, plot_w, bottom - top)
+            p.fillRect(rect, QColor(T.blend(T.PANEL, col, T.DIVISION_BAND_MIX)))
+            band_rects.append((div, rect))
+        self.marks["bands"] = band_rects
 
         grid = QPen(QColor(T.CHART_GRID), 1)
         grid.setDashPattern([3, 3])

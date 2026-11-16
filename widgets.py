@@ -1126,6 +1126,19 @@ class RowBorderDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class DivisionBandDelegate(RowBorderDelegate):
+    """등급 칸 왼쪽 3px 띠(110 B2) — 색은 칸의 그림 키(등급 배지 CDN 번호 · ICON_KEY_ROLE)로 theme.division_band 에서 찾는다.
+    키를 모르거나 범위 밖이면 띠가 없다(칸 모양은 그대로). 선택한 줄 테두리는 부모가 그린 뒤 그 위에 얹는다."""
+    BAND_W = 3
+
+    def paint(self, painter, option, index) -> None:
+        super().paint(painter, option, index)
+        col = T.division_band(index.data(ICON_KEY_ROLE))
+        if col:
+            r = option.rect
+            painter.fillRect(r.left(), r.top(), self.BAND_W, r.height(), QColor(col))
+
+
 class BoldColumnDelegate(RowBorderDelegate):
     """그 열 글자를 굵게(65 M9 선수 지표 승률) — 칸에 글꼴을 박으면 FitTableWidget 이 글꼴을 줄일 때 그 칸만 큰 채로 남아
     잘린다(1280 폭 실측). 대리자는 그릴 때마다 표의 지금 글꼴에서 굵게 한다. 폭(sizeHint)은 보통 글꼴로 알린다 —
