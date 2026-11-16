@@ -306,12 +306,49 @@ def test_sweep_keeps_live_and_fresh_folders():
     stale.mkdir()
     other = tmp / "피파전적관리-다른것"
     other.mkdir()
+    as_file = tmp / f"{demo.DIR_PREFIX}15-{int(now) - 999}"         # 이름은 같은 꼴인데 폴더가 아니다
+    as_file.write_text("x", encoding="utf-8")
     try:
         gone = demo.sweep(tmp, now)
     finally:
         lock.close()
     assert set(gone) == {dead, stale}, gone
-    assert (live / "fifa.db").exists() and fresh.exists() and other.exists()
+    assert (live / "fifa.db").exists() and fresh.exists() and other.exists() and as_file.is_file()
+
+
+def test_sweep_reads_names_before_disk_111():
+    """111 — %TEMP% 는 수만 개라 접두어가 다른 항목에 is_dir(디스크 조회)을 하면 켤 때마다 초 단위가 든다(이 PC 5만 3천 개 · 3.1초).
+    가짜 scandir 로 잰다: 접두어가 다른 항목은 is_dir 을 안 부르고, 목록은 scandir 에서 온다(가짜에만 있는 폴더를 찾는다)."""
+    asked = []
+
+    class _E:
+        def __init__(self, name):
+            self.name, self.path = name, str(SCRATCH / "nowhere" / name)
+
+        def is_dir(self):
+            asked.append(self.name)
+            return True
+
+    class _It(list):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    names = [f"other-{i}" for i in range(50)] + [f"{demo.DIR_PREFIX}21-1"]
+    real = demo.os.scandir
+    demo.os.scandir = lambda p: _It(_E(n) for n in names)
+    seen = []
+    real_created = demo._created_at
+    demo._created_at = lambda f: seen.append(f.name) or None      # 지우기 전에 멈춘다(None = 만든 시각 모름 → 건너뜀)
+    try:
+        demo.sweep(SCRATCH / "nowhere", time.time())
+    finally:
+        demo.os.scandir, demo._created_at = real, real_created
+    assert asked == [f"{demo.DIR_PREFIX}21-1"], \
+        f"is_dir 은 접두어가 맞는 항목에만 한 번씩이어야 한다(scandir 를 안 쓰면 0번 · 이름을 나중에 보면 51번): {len(asked)}번"
+    assert seen == [f"{demo.DIR_PREFIX}21-1"], seen
 
 
 def test_demo_times_form_sessions_and_keep_results():

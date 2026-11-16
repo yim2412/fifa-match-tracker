@@ -58,8 +58,11 @@ def sweep(tmp: Path | None = None, now: float | None = None, keep: Path | None =
     tmp = Path(tmp or tempfile.gettempdir())
     now = time.time() if now is None else now
     gone = []
+    # 이름을 먼저 본다 — %TEMP% 는 수만 개라 항목마다 is_dir(디스크 조회)을 하면 켤 때마다 초 단위가 든다
+    # (111 실측: 5만 3천 개 · Path.iterdir + is_dir 3.1초 → scandir 이름 먼저 0.2초). DirEntry.is_dir 은 Windows 에서 다시 안 읽는다.
     try:
-        folders = [p for p in tmp.iterdir() if p.is_dir() and p.name.startswith(DIR_PREFIX)]
+        with os.scandir(tmp) as it:
+            folders = [Path(e.path) for e in it if e.name.startswith(DIR_PREFIX) and e.is_dir()]
     except OSError:
         return gone
     for f in folders:
