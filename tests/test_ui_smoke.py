@@ -3353,9 +3353,14 @@ def test_attribution_on_search_and_main_pages():
 
 # ── 크래시 로그 ───────────────────────────────────────────────────────
 class _TempCrash:
-    """_setup_app 을 임시 데이터 폴더로 부르고, 끝나면 훅·faulthandler 를 되돌린다."""
+    """_setup_app 을 임시 데이터 폴더로 부르고, 끝나면 훅·faulthandler 를 되돌린다.
 
-    def __init__(self, prefill: bytes = b"", files: dict | None = None, hold: str | None = None):
+    111 — 기본은 테마 입히기(T.apply)를 기록만 하고 건너뛴다. 이미 떠 있는 창 전체에 QSS 를 다시 입히느라 한 번에 2.3초였고
+    크래시 테스트 열 개가 그것만으로 20초를 넘게 썼다. 불렀는지(배선)는 여기서 단언하고, 진짜 경로는 theme=True 인
+    test_setup_app_logs_crash_and_notifies_once 하나가 지킨다. 테마 자체는 test_platform_class_fonts_follow_app_font 가 잰다."""
+
+    def __init__(self, prefill: bytes = b"", files: dict | None = None, hold: str | None = None, theme: bool = False):
+        self.theme = theme
         self.prefill = prefill
         self.files = files or {}   # logs 폴더에 미리 둘 파일(앞 실행이 남긴 faulthandler 기록 등)
         self.hold = hold           # 그중 열어 둘 파일 — 살아 있는 다른 실행이 쥔 것처럼
@@ -3376,7 +3381,15 @@ class _TempCrash:
             self._held = open(self._dir / "logs" / self.hold, "a", encoding="utf-8")
         config.DATA_DIR = self._dir
         app_main.QMessageBox.warning = lambda *a, **k: self.notified.append(a)
-        app_main._setup_app(_app)
+        applied = []
+        real_apply = app_main.T.apply
+        if not self.theme:
+            app_main.T.apply = lambda app, *a, **k: applied.append(app)
+        try:
+            app_main._setup_app(_app)
+        finally:
+            app_main.T.apply = real_apply
+        assert self.theme or applied == [_app], f"_setup_app 이 테마를 한 번 입히지 않았다: {applied}"
         self.logs = self._dir / "logs"
         return self
 
@@ -3428,7 +3441,7 @@ def test_slot_exception_fails_the_test():
 def test_setup_app_logs_crash_and_notifies_once():
     # 훅이 안 걸려 있으면 테스트 하네스(watchdog.slot_errors)의 훅이 받는다 — crashlog 훅이 남아 있으면 안 된다
     assert sys.excepthook is not crashlog._on_main_exc
-    with _TempCrash() as ctx:
+    with _TempCrash(theme=True) as ctx:   # 진짜 테마 입히기까지 — 나머지 크래시 테스트는 건너뛴다(111)
         _raise_into_hook("한글 오류 하나")
         _raise_into_hook("한글 오류 둘")
         text = (ctx.logs / crashlog.LOG_NAME).read_text(encoding="utf-8")
