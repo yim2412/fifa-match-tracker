@@ -3949,12 +3949,7 @@ class MainWindow(QMainWindow):
             # 포터블·소스 실행 — 설치 위치를 앱이 관리하지 않으니 페이지만 연다
             QDesktopServices.openUrl(QUrl(rel.page_url))
             return
-        notes = f"\n\n바뀐 점:\n{rel.notes}" if rel.notes else ""
-        ans = QMessageBox.question(
-            self, "업데이트",
-            f"{config.APP_VERSION} → {rel.tag} 로 업데이트할까요?\n"
-            f"내려받은 뒤 앱이 닫히고, 설치가 끝나면 다시 켜집니다. 전적 기록은 그대로입니다.{notes}")
-        if ans != QMessageBox.StandardButton.Yes:
+        if UpdateConfirmDialog(rel, self).exec() != QDialog.DialogCode.Accepted:
             return
         for c in self._version_cards:
             c.set_busy(True, "내려받는 중…")
@@ -17497,6 +17492,36 @@ class ChangesDialog(QDialog):
         row.addWidget(btn)
         v.addLayout(row)
         fit_to_screen(self, 620, 560)
+
+
+class UpdateConfirmDialog(QDialog):
+    """[업데이트] 를 눌렀을 때 묻는 창 — 릴리스 본문(CHANGELOG 절과 같은 마크다운)을 스크롤 안에 그려 보여 준다.
+    QMessageBox 였을 때는 `**` 가 글자 그대로 보이고, 본문이 길면 창이 화면보다 커져 단추가 화면 밖으로 나갔다(2026-11-16 사용자 캡처)."""
+
+    def __init__(self, rel, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"{config.APP_NAME} - 업데이트")
+        v = QVBoxLayout(self)
+        self.lb_ask = QLabel(f"{config.APP_VERSION} → {rel.tag} 로 업데이트할까요?\n"
+                             "내려받은 뒤 앱이 닫히고, 설치가 끝나면 다시 켜집니다. 전적 기록은 그대로입니다.")
+        self.lb_ask.setWordWrap(True)
+        v.addWidget(self.lb_ask)
+        self.browser = QTextBrowser()
+        self.browser.setOpenExternalLinks(True)
+        self.browser.setMarkdown(rel.notes or "")
+        self.browser.setVisible(bool(rel.notes))
+        v.addWidget(self.browser, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.btn_yes = QPushButton("업데이트")
+        self.btn_yes.setDefault(True)
+        self.btn_yes.clicked.connect(self.accept)
+        self.btn_no = QPushButton("나중에")
+        self.btn_no.clicked.connect(self.reject)
+        row.addWidget(self.btn_yes)
+        row.addWidget(self.btn_no)
+        v.addLayout(row)
+        fit_to_screen(self, 620, 560 if rel.notes else 180)
 
 
 class NoticeDialog(QDialog):

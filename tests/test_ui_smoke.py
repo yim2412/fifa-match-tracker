@@ -4070,9 +4070,9 @@ def test_update_click_portable_opens_page_only():
 
 
 def test_update_click_asks_first_and_no_means_nothing():
-    no = app_main.QMessageBox.StandardButton.No
+    no = app_main.QDialog.DialogCode.Rejected
     with _Patch((updatecheck, "install_dir", lambda: pathlib.Path("C:/fake")),
-                (app_main.QMessageBox, "question", lambda *a, **k: no)):
+                (app_main.UpdateConfirmDialog, "exec", lambda self: no)):
         _win._download_worker = None
         _win._on_update_found(_REL)
         _win._on_update_clicked()
@@ -4086,9 +4086,10 @@ def test_update_click_asks_first_and_no_means_nothing():
 
 def test_update_click_installed_downloads_then_installs_and_closes():
     asked, launched, closed = [], [], []
-    yes = app_main.QMessageBox.StandardButton.Yes
+    yes = app_main.QDialog.DialogCode.Accepted
     with _Patch((updatecheck, "install_dir", lambda: pathlib.Path("C:/fake")),
-                (app_main.QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or yes),
+                (app_main.UpdateConfirmDialog, "exec",
+                 lambda self: asked.append(self.lb_ask.text() + "\n" + self.browser.toMarkdown()) or yes),
                 (updatecheck, "launch_installer", lambda p: launched.append(p)),
                 (_win, "close", lambda: closed.append(1))):
         _win._on_update_found(_REL)
@@ -4108,6 +4109,33 @@ def test_update_click_installed_downloads_then_installs_and_closes():
         finally:
             _reset_version_cards()
     del _win.close
+
+
+def test_update_confirm_renders_notes_and_fits_screen():
+    """2026-11-16 사용자 캡처 — QMessageBox 였을 때 릴리스 본문의 `**` 가 글자 그대로 보였고, 본문이 길어 창이 화면보다 커지며
+    단추가 화면 밖으로 나갔다. 이제 본문은 스크롤 안에 마크다운으로 그리고, 창은 화면 안에 들어간다."""
+    long_notes = "\n".join(f"- **굵은 항목 {i}** 설명 글이 이어집니다." for i in range(80))
+    rel = updatecheck.Release("v9.0.0", "https://example.invalid/r", "https://example.invalid/s.exe",
+                              "https://example.invalid/sums", long_notes)
+    dlg = app_main.UpdateConfirmDialog(rel, _win)
+    try:
+        plain = dlg.browser.toPlainText()
+        assert "굵은 항목 79" in plain and "**" not in plain, plain[:200]
+        # 굵게가 실제로 굵게 — 마크다운을 글자로 넣으면(setPlainText) "**" 가 남아 위에서 걸리고, 굵기도 여기서 걸린다
+        cur = dlg.browser.document().find("굵은 항목 0")
+        assert not cur.isNull() and cur.charFormat().fontWeight() >= 600, cur.charFormat().fontWeight()
+        avail = (_win.screen() or _app.primaryScreen()).availableGeometry()
+        assert dlg.height() <= avail.height() and dlg.height() <= 560, (dlg.height(), avail.height())
+        assert dlg.btn_yes.isDefault() and dlg.btn_yes.text() == "업데이트" and dlg.btn_no.text() == "나중에"
+        assert dlg.browser.isVisibleTo(dlg)
+    finally:
+        dlg.deleteLater()
+    # 본문이 없으면 빈 칸을 안 보인다
+    empty = app_main.UpdateConfirmDialog(updatecheck.Release("v9.0.0", "u", "s", "c", ""), _win)
+    try:
+        assert not empty.browser.isVisibleTo(empty) and "v9.0.0" in empty.lb_ask.text()
+    finally:
+        empty.deleteLater()
 
 
 def test_update_failure_restores_card_and_tells_why():
