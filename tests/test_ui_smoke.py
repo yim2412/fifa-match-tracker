@@ -17419,6 +17419,9 @@ def test_110_division_band_wiring():
     planted = tuple(f"#{i + 1:02x}{(i * 7) % 256:02x}{(255 - i):02x}" for i in range(21))
     keep = T.DIVISION_BAND
     T.DIVISION_BAND = planted
+    # 등급 → 배지 번호는 넥슨 등급 메타 순서로 찾는다. 이 PC 는 디스크 캐시가 있어 통과했지만 CI 에는 없어 번호가 비었다(11-16 CI 실패) — 직접 심는다
+    keep_meta = _win._division_meta
+    _win._division_meta = [{"divisionId": d} for d in (800, 900, 1000, 1100, 1200, 1300, *range(2000, 3300, 100))]
     try:
         _win._go_page("승률 그래프", "등급")
         from types import SimpleNamespace
@@ -17465,6 +17468,7 @@ def test_110_division_band_wiring():
             assert img.pixelColor(1, 15).name() == img.pixelColor(6, 15).name(), ("키가 없는데 띠가 그려졌다", bad)
     finally:
         T.DIVISION_BAND = keep
+        _win._division_meta = keep_meta
         _win._render_divstay(_win._details)
         _win._render_division()
 
