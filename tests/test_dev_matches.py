@@ -63,6 +63,7 @@ class World:
         self.fail_detail: dict[str, Exception] = {}   # 경기 id → 이 예외(한 번 쓰면 지운다 — once 가 참이면)
         self.fail_once = True
         self.all_fail: Exception | None = None        # 모든 요청이 이 예외
+        self.fail_list: dict[str, Exception] = {}     # ouid → 그 사람 목록 요청이 늘 이 예외
         self.detail_delay = 0.0
 
     def game(self, mid, at, a, b=None, **kw):
@@ -100,6 +101,8 @@ class FakeAPI:
     def get_match_ids(self, ouid, matchtype=50, offset=0, limit=20, attempts=3):
         self.w._hit("list", ouid)
         assert attempts == 1 and matchtype == config.DEFAULT_MATCH_TYPE
+        if ouid in self.w.fail_list:
+            raise self.w.fail_list[ouid]
         return list(self.w.lists.get(ouid, [])[offset:offset + limit])
 
     def get_match_detail_nocache(self, match_id, attempts=1):
@@ -429,6 +432,63 @@ def test_key_rejected_stops_after_one_request():
             w2.all_fail = NexonAPIError("x", code="OPENAPI00005", status=400)
             go(d2, rank_db(d2, ["가", "나", "다"]), w2)
             assert w2.count() == 1, f"요청 1번 뒤 멈춘다(M1): {w2.calls}"
+
+
+def _bad_req():
+    return NexonAPIError("요청 파라미터가 잘못됐습니다.", code="OPENAPI00004", status=400)
+
+
+def test_one_bad_request_skips_only_that_request_not_the_day():
+    """2026-11-15·16: 키가 정상인데 400 하나로 '키 거절' 멈춤이 이틀 났다. 이제 400 하나는 그 요청만 버린다."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = World()
+        for n, o in (("가", "A"), ("나", "B"), ("다", "C")):
+            w.person(n, o)
+        w.game("m1", h(1), "A")
+        w.game("m2", h(2), "C")
+        w.game("m3", h(3), "C")
+        w.fail_list["B"] = _bad_req()          # 목록 요청 400
+        w.fail_detail["m2"] = _bad_req()       # 상세 요청 400
+        res = go(d, rank_db(d, ["가", "나", "다"]), w)
+        # 막지 않았으면: 첫 400 에서 그날 멈춰 B 뒤의 C 경기가 하나도 안 들어온다
+        assert not res.key_rejected and res.reason != "badreq", res
+        assert {"m1", "m3"} <= games_in(d), games_in(d)
+        assert res.codes == {"OPENAPI00004": res.codes.get("OPENAPI00004")} and res.codes["OPENAPI00004"] >= 2, res.codes
+        assert q1(d, "SELECT key_rejected, stop FROM days") == (0, None)
+
+
+def test_many_bad_requests_stop_the_day_as_badreq_not_key():
+    """400 이 쌓이면 우리 요청 형식이 틀린 것 — 계속 보내지 않고 badreq 로 멈춘다. 사람마다 ouid 는 성공하고 목록만
+    400 인 꼴(형식이 깨진 실제 모양) — 사이의 성공이 세기를 지우면 안 멈춘다. 문턱은 config 배선(기본값 50 이 아닌 3)."""
+    with tmp(DEV_MATCH_WORKERS=1, DEV_MATCH_BAD_REQ_MAX=3) as d:
+        w = World()
+        nicks = [f"p{i}" for i in range(10)]
+        for i, n in enumerate(nicks):
+            w.person(n, f"O{i}")
+            w.fail_list[f"O{i}"] = _bad_req()
+        res = go(d, rank_db(d, nicks), w)
+        assert res.reason == "badreq" and not res.key_rejected and not res.blocked, res
+        assert w.count("list") == 3, f"문턱 3 에서 멈춘다: {w.count('list')}"
+        assert q1(d, "SELECT key_rejected, stop FROM days") == (0, "badreq")
+
+
+def test_run_log_names_failure_codes():
+    """로그에 '키 거절' 만 남아 무엇에 걸렸는지 몰랐다(11-15·16) — 실패 코드를 한 줄로 남긴다."""
+    with tmp(DEV_MATCH_WORKERS=1) as d:
+        w = World()
+        w.person("가", "A")
+        w.person("나", "B")
+        w.game("m1", h(1), "B")
+        w.fail_list["A"] = _bad_req()
+        restore = _game_env(d, lambda: False)
+        try:
+            rc_ = M.run(db_path=d / "dm.db", lock_path=d / "l", fifa_db=d / "f.db", rank_open=lambda: rank_db(d, ["가", "나"]),
+                        api_cls=lambda k: FakeAPI(w), force=True)
+        finally:
+            restore()
+        log = (d / "log.txt").read_text(encoding="utf-8")
+        assert "실패 코드 OPENAPI00004 2" in log, log   # 단 1 · 단 2 가 같은 목록을 한 번씩
+        assert rc_ == 0 and "[FAIL]" not in log and "멈춤 key" not in log, log
 
 
 def test_gone_nickname_skips_only_that_person():

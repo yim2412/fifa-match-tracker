@@ -11,7 +11,7 @@
 | 같은 날 ③(랭커 픽 dev)이 429 를 받았으면 시작 안 함 — fifa.db 는 읽기 전용 URI 로만, **한 줄도 안 쓴다** | `_pick_dev_hit_429` |
 | 하루 상한 `next_cap`: 전날 막힘 0 · 끝냄 · 실제로 돈 시간(`days.run_s`) 6시간 안 → ×1.5(끝 35만) · 막힘 → 절반 + 달력 3일 유지 · 그 밖 그대로 | `next_cap` |
 | "제시간"은 시작~끝 벽시계가 아니라 **실행들이 실제로 돈 시간의 합** — 00:00 실행이 PC 꺼짐으로 끊기고 아침에 이어 끝내면 벽시계로 11시간이 돼 10-22~24 사흘 상한이 안 올랐다(실제 7~45분). 사람마다 반영하니 끊긴 실행도 끊기기 전까지는 센다 | `_good_day` · `run_day` |
-| 요청마다: 취소·멈춤 → 429 쉼 대기 → 상한 → 요청(재시도 끔). 429 → 전원 60초 쉬고 한 번 더 → 또 429 면 막힘. 403 막힘 · 키 거절·400 → 그날 멈춤 · 5xx·네트워크 20연속 → 그날 멈춤(막힘 아님) | `_Gate.call` |
+| 요청마다: 취소·멈춤 → 429 쉼 대기 → 상한 → 요청(재시도 끔). 429 → 전원 60초 쉬고 한 번 더 → 또 429 면 막힘. 403 막힘 · 키 거절(`OPENAPI00005`) → 그날 멈춤 · 그 밖 400 → 그 요청만 실패(한 실행에 `DEV_MATCH_BAD_REQ_MAX` 개면 `badreq` 로 그날 멈춤) · 5xx·네트워크 20연속 → 그날 멈춤(막힘 아님) · 실패 코드는 로그 한 줄에 | `_Gate.call` |
 | 목록 훑기는 **커서 `top_id` 에서만** 멈춘다 — games 에 있는지는 상세를 건너뛸지에만(상대가 먼저 넣은 경기에서 멈추면 그 아래가 빈다 · H3) | `_Run.scan` |
 | 커서는 옛 커서(또는 바닥)까지 다 훑은 뒤에만 올린다 — 중간에 끊기면 그대로, 다음 실행이 맨 앞부터 | `_Run.scan` |
 | 커서 없는 사람은 실행 날 `DEV_MATCH_FLOOR_DAYS` 전 00:00 KST 보다 옛 경기에서 멈춘다(그 앞은 단 4 — 거슬러 받기) | `_Run.floor_at` |
@@ -44,6 +44,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import math
 import os
@@ -74,7 +75,7 @@ PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
 # 게임이 켜져 있나 — 테스트가 바꿔 끼운다. 게임 중엔 요청 0(gameguard 머리말 · 2026-11-08)
 GAME_CHECK = gameguard.game_running
 KST = timezone(timedelta(hours=9))
-GONE_CODE = "OPENAPI00004"      # 맞는 키로 없는 닉네임 — get_ouid 에서만 "그 사람 건너뜀", 다른 요청이면 우리 요청이 틀린 것(멈춤)
+GONE_CODE = "OPENAPI00004"      # 맞는 키로 없는 닉네임 — get_ouid 에서만 "그 사람 건너뜀", 다른 요청이면 그 요청만 실패(연달아면 멈춤 · _Gate.call)
 PICK_DEV_KIND = "ranker_pick_dev"   # dev_archive ③ 의 계수 이름(fifa.db api_budget)
 SUB_POSITION = 28               # 교체 명단 — 선발이 아니다(stats.SUB_POSITION 과 같은 값)
 RESULT_CODE = {"승": 1, "무": 0, "패": -1}
@@ -278,9 +279,11 @@ class _Gate:
         self.cap, self.used = cap, used
         self.cancel, self.sleep, self.clock = cancel, sleep, clock
         self.requests = 0
-        self.reason = ""          # "" | cap | blocked | key | outage | cancel | deadline
+        self.reason = ""          # "" | cap | blocked | key | badreq | outage | cancel | deadline
         self._pause_until = 0.0
         self._streak = 0
+        self._bad = 0             # 이번 실행에서 키 거절이 아닌 400 수 — 연속이 아니라 합(사이의 ouid 성공이 세기를 지우면 형식이 깨져도 안 멈춘다)
+        self.codes: collections.Counter = collections.Counter()   # 실패 코드별 수 — 로그 한 줄에(무엇에 걸렸는지 남긴다)
         self._next_slot = 0.0     # 초당 상한 — 다음 요청이 나갈 수 있는 가장 이른 시각
         self._lock = threading.Lock()
 
@@ -330,8 +333,18 @@ class _Gate:
                     self.halt("blocked")
                 if gone_ok and (e.code == GONE_CODE or (e.status is None and e.code != NETWORK_CODE)):
                     raise _Gone from e   # 없는 닉네임 · 응답에 ouid 가 없음
-                if e.code == KEY_INVALID_CODE or e.status == 400:
+                with self._lock:
+                    self.codes[str(e.code or e.status)] += 1
+                # 2026-11-15·16: 40만 건 넘게 받은 뒤 400 하나로 "key" 멈춤이 이틀 났고 키는 정상이었다(check_key 통과) —
+                # 400 을 전부 키 거절로 읽었기 때문. 키 거절은 코드로만 가르고, 나머지 400 은 그 요청만 버린다
+                if e.code == KEY_INVALID_CODE:
                     self.halt("key")
+                if e.status == 400:
+                    with self._lock:
+                        self._bad += 1
+                        bad_out = self._bad >= config.DEV_MATCH_BAD_REQ_MAX
+                    if bad_out:
+                        self.halt("badreq")   # 이만큼 쌓이면 우리 요청 형식이 틀렸다 — 계속 보내지 않는다
                 if e.code == NETWORK_CODE or (e.status is not None and e.status >= 500):
                     with self._lock:
                         self._streak += 1
@@ -523,6 +536,7 @@ class DayResult:
     persons: int = 0
     new_games: int = 0
     errors: int = 0
+    codes: dict = field(default_factory=dict)   # 실패 코드 → 수
     notes: list[str] = field(default_factory=list)
 
 
@@ -1083,6 +1097,7 @@ def run_day(db_path, rank_conn, api_factory, *, cancel=lambda: False, clock=time
         save_used()
         res.used, res.requests, res.reason = gate.used, gate.requests, gate.reason or (soft[0] if soft else "")
         res.new_games, res.errors = run.new_games, run.errors
+        res.codes = dict(gate.codes)
         res.stage_done = stage
         res.blocked = gate.reason == "blocked"
         res.key_rejected = gate.reason == "key"
@@ -1090,7 +1105,7 @@ def run_day(db_path, rank_conn, api_factory, *, cancel=lambda: False, clock=time
         with conn:
             if res.finished:
                 conn.execute("UPDATE days SET finished_at = ? WHERE day = ?", (now_fn().isoformat(timespec="seconds"), day))
-            if gate.reason in ("blocked", "key", "outage"):
+            if gate.reason in ("blocked", "key", "badreq", "outage"):
                 conn.execute("UPDATE days SET stop = ?, blocked = MAX(blocked, ?), key_rejected = MAX(key_rejected, ?)"
                              " WHERE day = ?", (gate.reason, int(res.blocked), int(res.key_rejected), day))
         return res
@@ -1154,15 +1169,17 @@ def run(*, force: bool = False, cap: int | None = None, db_path=None, lock_path=
         lines.append(f"[OK]   {res.skipped}")
     else:
         rate = res.requests / took if took > 0 else 0
-        mark = "[FAIL]" if res.key_rejected else "[OK]  "
+        mark = "[FAIL]" if res.key_rejected or res.reason == "badreq" else "[OK]  "
         lines.append(f"{mark} {res.day} · 요청 {res.requests:,}(오늘 {res.used:,}/{res.cap:,}) · 새 경기 {res.new_games:,}"
                      f" · {res.persons:,}명 · 단 {res.stage_done or '-'} · 멈춤 {res.reason or '없음(끝)'}"
                      f" · 오류 {res.errors} · {int(took)}초 · 초당 {rate:.1f}")
+        if res.codes:
+            lines.append("       실패 코드 " + " · ".join(f"{k} {v:,}" for k, v in sorted(res.codes.items())))
         lines += [f"       {n}" for n in res.notes[:5]]
         if res.reason == "cancel":
             lines.append("       게임이 켜져 멈췄다 — 받은 데까지 저장 · 다음 회차가 잇는다(한도 벌점 없음)")
     _log(lines)
-    return 1 if res.key_rejected else 0
+    return 1 if res.key_rejected or res.reason == "badreq" else 0
 
 
 def status(db_path=None) -> int:

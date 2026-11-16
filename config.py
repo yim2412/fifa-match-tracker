@@ -756,6 +756,7 @@ DEV_MATCH_MAX_RPS = 400                       # 초당 요청 상한(모든 스�
 DEV_MATCH_PAGE = 100                          # 목록 한 번에 받는 수(넥슨 상한)
 DEV_MATCH_429_WAIT_S = 60                     # 429 → 전원 쉬고 한 번 더 → 또 429 면 그날 멈춤(막힘)
 DEV_MATCH_FAIL_STREAK = 20                    # 5xx·네트워크가 이만큼 연달아면 그날 멈춤(막힘 아님)
+DEV_MATCH_BAD_REQ_MAX = 50                    # 키 거절이 아닌 400 이 한 실행에 이만큼이면 그날 멈춤(badreq) — 그 밖엔 그 요청만 버린다(11-15·16 에 실행마다 1개뿐인 400 으로 이틀 멈췄다)
 DEV_MATCH_BLOCK_HOLD_DAYS = 3                 # 막힌 날 뒤 이만큼(달력 날) 절반 상한 유지
 DEV_MATCH_FLOOR_DAYS = 1                      # 커서 없는 사람은 실행 날 이만큼 전 00:00 KST 보다 옛 경기에서 멈춘다
 DEV_MATCH_MISSING_TRIES = 3                   # 상세 실패 경기를 이만큼 다시 받아 보고 포기
