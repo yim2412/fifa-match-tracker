@@ -10,9 +10,11 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
+import cardcollect as cc  # noqa: E402
 import cardstats  # noqa: E402
 import cardviews as cv  # noqa: E402
 import config  # noqa: E402
+import notice  # noqa: E402
 import store  # noqa: E402
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패)
 
@@ -254,15 +256,36 @@ def test_screen_state_format_stop():
             config.WEB_DATA = True
             config.card_backfill_allowed = lambda: True
             today = date(2026, 12, 1)
-            assert isinstance(cv.screen_state(conn, today), tuple), "막힘·형식 없으면 채우는 중"
+            last = cc.Status(3, 9, 0, False)
+            assert cv.screen_state(conn, today, last) == ("filling", 3, 9), "막힘·형식 없으면 채우는 중"
+            assert cv.screen_state(conn, today) == "first_round", "예약이 아직 한 바퀴도 안 돌았다"
+            assert notice.card_empty_text("first_round"), "사유에 글이 없다"
             store.budget_mark_429(conn, today.isoformat(), f"{store.BUDGET_CARD}_format")
-            assert cv.screen_state(conn, today) == "format"
-            assert isinstance(cv.screen_state(conn, today + timedelta(days=1)), tuple), "그날만"
+            assert cv.screen_state(conn, today, last) == "format"
+            assert isinstance(cv.screen_state(conn, today + timedelta(days=1), last), tuple), "그날만"
+            store.budget_mark_429(conn, today.isoformat(), f"{store.BUDGET_CARD}_block")
+            assert cv.screen_state(conn, today, last) == "blocked", "막힘이 형식보다 먼저"
+            boom = cc.demand   # 화면 스레드에서 30일 수요를 세면 0.7초 멈춘다
+            cc.demand = lambda *a, **k: (_ for _ in ()).throw(AssertionError("수요를 셌다"))
+            try:
+                cv.screen_state(conn, today + timedelta(days=1), last)
+            finally:
+                cc.demand = boom
             config.WEB_DATA = False
             assert cv.screen_state(conn, today) == "web_off", "웹 데이터 꺼짐이 먼저"
         finally:
             config.WEB_DATA, config.card_backfill_allowed = keep
             conn.close()
+
+
+def test_screen_thread_never_counts_demand():
+    """화면 쪽 소스가 30일 수요를 세는 함수(cardcollect.status·demand)를 부르지 않는다 — 화면 스레드에서 0.7초 멈춘다."""
+    import re
+    call = re.compile(r"cardcollect\.(status|demand)\(")
+    assert call.search("x = cardcollect.status(conn, day)"), "심은 위반을 못 잡는다"
+    root = Path(__file__).resolve().parent.parent
+    for name in ("app_main.py", "dashboard.py", "cardviews.py", "core_api.py"):
+        assert not call.search((root / name).read_text(encoding="utf-8")), name
 
 
 def main() -> int:

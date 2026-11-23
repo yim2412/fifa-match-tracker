@@ -249,7 +249,7 @@ AUTOSTART_CHECK = "윈도우를 켤 때 트레이로 자동 실행 (선택)"
 
 
 def card_empty_text(state) -> str:
-    """카드 정보를 쓰는 화면의 빈 화면 글 — 사유별(cardcollect.screen_state). 따라 할 수 있는 안내만(5판 B[중]10)."""
+    """카드 정보를 쓰는 화면의 빈 화면 글 — 사유별(cardviews.screen_state). 따라 할 수 있는 안내만(5판 B[중]10)."""
     if state == "web_off":
         return "[정보] 에서 넥슨 홈페이지 데이터를 먼저 켜야 카드 정보를 채울 수 있습니다."
     if state == "toggle_off":
@@ -258,6 +258,8 @@ def card_empty_text(state) -> str:
         return "넥슨이 오늘 요청을 막아 내일 다시 채웁니다."
     if state == "format":
         return "넥슨 페이지 구조가 바뀌어 오늘은 채우기를 멈췄습니다. 내일 다시 시도합니다."
+    if state == "first_round":
+        return "카드 정보는 첫 수집이 끝나면 보입니다."
     if state == "mine_unset":
         return "[가계부] 위 띠에서 내 계정을 먼저 정해야 합니다."
     if isinstance(state, tuple) and state and state[0] == "collecting":

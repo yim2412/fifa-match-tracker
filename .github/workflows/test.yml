@@ -35,6 +35,8 @@ jobs:
         run: python tests/test_enhance.py
       - name: 카드 정보 화면 재료
         run: python tests/test_cardviews.py
+      - name: 라인업으로 켜진 팀컬러
+        run: python tests/test_teamcolor_calc.py
       - name: 습관 · 기준선
         run: python tests/test_habits.py
       - name: 선수 색인 · 랭커 픽

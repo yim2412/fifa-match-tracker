@@ -44,9 +44,12 @@ SQL_TEMP_ALLOW = {
 # 승률 표본 판정(2.6.1 A6) — 문턱과의 비교식은 models.is_weak(rated, 문턱) 안에서만. 아래는 승률 표본이 아닌 비교
 # (파일, 함수, 문턱 이름) → 이유. 줄이 아니라 비교식 단위 — 한 줄에 대상·제외가 같이 있을 수 있다(팀컬러 상대 수)
 WEAK_FILES = ("models.py", "stats.py", "analysis.py", "widgets.py", "dashboard.py", "app_main.py",
-              "squad_timeline.py", "check_api.py")
+              "squad_timeline.py", "check_api.py", "teamcolor_calc.py", "cardviews.py")
 WEAK_ALLOW = {
     ("models.py", "is_weak", "min_n"): "판정 자신",
+    ("cardviews.py", "price_index", "C6_MIN_CARDS"): "시세 관측 카드 장수 — 승률 표본 아님",
+    ("cardviews.py", "price_index", "C6_GAP_MIN"): "두 관측 사이 날 수",
+    ("teamcolor_calc.py", "active", "_UNKNOWN_MIN"): "같은 팀컬러를 가진 카드 장수 — 승률 표본 아님(113)",
     ("app_main.py", "_period_unit_now", "PERIOD_MIN_POINTS"): "그래프 점(묶음) 수 — 승률 표본 아님(77 A 칩 회색)",
     ("app_main.py", "_refresh_card_candidates", "CARD_NAME_MIN_CHARS"): "이름 칸 글자 수 — 표본 아님(83 자동완성)",
     ("app_main.py", "_render_park", "need"):"predict.need 는 표본 문턱이 아니라 200위 컷까지 점수 차(67 R8 — 부호로 '더 필요/여유')",
@@ -442,7 +445,7 @@ def check_weak(srcs: dict[str, str], allow: dict = WEAK_ALLOW) -> list[str]:
     return out
 
 
-RATE_FILES = ("models.py", "stats.py", "squad_timeline.py", "rankmeta.py")
+RATE_FILES = ("models.py", "stats.py", "squad_timeline.py", "rankmeta.py", "teamcolor_calc.py", "cardviews.py")
 
 
 def rate_classes(srcs: dict[str, str]) -> set[str]:
@@ -855,7 +858,7 @@ RESULT_PATHS = {   # 함수 → 처리 묶음 · 이유는 ROADMAP 108 A 표
     "stats.division_stats": {C, N},
     "records._games": {C, N},              # 점수를 쓰는 업적은 빈 판을 건너뛴다(M1)
     "squad_timeline._Games.__init__": {C},  # 창은 득실 합계만 — 평균 분모가 없다
-    "stats.formation_stats": {C},
+    "stats.formation_stats": {C}, "teamcolor_calc.combo_rows": {C},
     "stats.opponent_cards": {C},
     "stats.team_profile": {N}, "stats.versus_profile": {N}, "stats.discipline_stats": {N}, "stats.pass_style": {N},
     "stats._per_match": {N}, "stats.clutch_summary": {N}, "stats.goal_minute_buckets": {N},
@@ -869,7 +872,7 @@ RESULT_PATHS = {   # 함수 → 처리 묶음 · 이유는 ROADMAP 108 A 표
         "stats.player_finishing_trend", "stats.finishing_ranking", "stats._opp_scope", "stats.key_players",
         "stats.match_sides", "stats.match_versus", "stats.latest_match_with", "stats.match_goals", "stats.match_shots",
         "stats.match_mvp", "stats.rating_trend", "stats.recent_ratings", "stats._my_pair_sums", "records.day_player",
-        "sessions.top_scorer", "squad_timeline._lineups",
+        "sessions.top_scorer", "squad_timeline._lineups", "teamcolor_calc.my_lineups",
         "stats.after_streak_rates", "stats.team_color_baseline")},   # 끝 둘은 MatchSummary.result(이미 result_of)를 _wdl_of 로
 }
 del C, N, D, A
@@ -1371,7 +1374,7 @@ def test_basis_times_go_through_one_function():
 STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "notice.py", "methods.py", "charts.py",
                "habits.py", "records.py", "stats.py", "models.py", "tray.py", "updatecheck.py", "cardcollect.py", "nexon_api.py",
                "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py", "teamcolor.py",
-               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py", "glossary.py")
+               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py", "glossary.py", "teamcolor_calc.py")
 # 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
 STYLE_DASH_MAX = {"notice.py": 37}
 STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준

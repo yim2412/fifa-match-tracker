@@ -763,6 +763,10 @@ DEV_MATCH_MISSING_TRIES = 3                   # 상세 실패 경기를 이만�
 CARD_BACKFILL_FIRST_S = 120                   # 앱을 켠 뒤 첫 틱 — 첫 화면(공통 기준 3)에 안 끼게, 10분 안에 닫는 날도 조금은 채우게
 CARD_BACKFILL_TICK_REQ = 40                   # 틱 하나의 요청 상한 — 600 을 한 틱에 몰지 않고 앱이 켜진 약 2.5시간에 퍼뜨린다
 CARD_BACKFILL_GAP_S = 2                       # 요청 사이(취소로 끊긴다)
+# 113 N29 — 모르는 카드가 이만큼이면 팀컬러를 안 보인다. 이 PC 라인업 4,000개에서 가려 봄(11-23): 주 팀컬러는 7장을 가려도 1.3%만
+# 바뀌지만 관계까지 켜진 묶음은 1장 17% · 3장 39% 가 바뀐다 — 그 밑은 "실제와 다를 수 있습니다" 를 붙여 보인다
+TC_UNKNOWN_HIDE = 4
+TC_COMBO_MAX = 4   # 113 K2 — [이력] 위쪽에 보이는 팀컬러 줄 수(1280×720 에서 아래 이력 표가 다섯 줄은 남게)
 CARD_BACKFILL_FORMAT_STOP = 5                 # 서로 다른 대상이 이만큼 이어 형식 실패하면 그날 멈춤(card_backfill_format)
 CARD_MY_DAYS = 7                              # 요청 순서 ① — 확정 내 계정의 최근 이만큼 선발 카드 시세를 날마다(C5)
 CARD_TRY_MAX = 3                              # 형식 실패가 이만큼이면 그 대상은 CARD_TRY_REST_DAYS 쉰다(card_tries)

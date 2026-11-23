@@ -1386,46 +1386,69 @@ def cal_summary(rows: list[WinDivision], exclude: frozenset = frozenset()) -> Ca
 
 @dataclass
 class Run:
-    kind: str                       # "nickname" · "formation"
+    kind: str                       # "nickname" · "formation" · "teamcolor"(113 K4)
     value: str
     start: datetime                 # 이 값으로 처음·마지막 경기 시각
     end: datetime
     games: int                      # 이 값으로 뛴 경기(붙인 깜빡임은 빼고)
     blips: list = field(default_factory=list)   # [(값, 경기 수)] — K4_MIN_RUN 미만으로 잠깐 바뀌었다 돌아온 것
+    unknown: int = 0                # 구간 안에 낀 모르는 판(K4_MIN_RUN 미만씩 · 값을 밖에서 받은 종류만)
+    gap_before: bool = False        # 앞에 모르는 판이 K4_MIN_RUN 이상 이어졌다 — 앞 구간과 어떤 병합도 하지 않는다
 
 
-def history_runs(details: list[dict], ouid: str, kinds: tuple = ("nickname", "formation")) -> list[Run]:
-    """내 경기 기록(matchInfo 의 내 줄)에서 값이 바뀐 구간 — 종류별로 오래된 것부터. 같은 값이 K4_MIN_RUN 경기 미만이면
+def history_runs(details: list[dict], ouid: str, kinds: tuple = ("nickname", "formation"),
+                 values: dict[str, dict] | None = None) -> list[Run]:
+    """values(113 K4): 종류 → {경기 번호: 값 또는 None(모름)} — 있으면 그 종류의 값은 여기서(열쇠가 없는 판은 건너뛴다).
+    모르는 판이 K4_MIN_RUN 이상 이어지면 구간을 끊는다 — 옛 경기는 카드 정보를 띄엄띄엄 알아, 이으면 모르는 수백 판이 앞 값의 기간이 된다.
+
+    내 경기 기록(matchInfo 의 내 줄)에서 값이 바뀐 구간 — 종류별로 오래된 것부터. 같은 값이 K4_MIN_RUN 경기 미만이면
     앞 구간에 붙이고(blips) 그 뒤 같은 값이 이어지면 한 구간으로 합친다. 맨 앞 구간은 붙일 곳이 없어 짧아도 그대로."""
-    seq: list[tuple[datetime, str, str]] = []
+    seq: list[tuple[datetime, str, str, object]] = []
     for d in details:
         me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ouid), None)
         when = matchtime.parse(d.get("matchDate"))
         if when is None or me is None:
             continue
-        seq.append((when, (me.get("nickname") or "").strip(), formation_of(me.get("player") or [])))
+        seq.append((when, (me.get("nickname") or "").strip(), formation_of(me.get("player") or []), d.get("matchId")))
     seq.sort(key=lambda t: t[0])
     out: list[Run] = []
     for kind in kinds:
         raw: list[Run] = []
-        for when, nick, form in seq:
-            value = nick if kind == "nickname" else form
+        pre: list[int] = []     # 구간마다 바로 앞의 짧은 모름 — 앞 구간에 붙을 때만 그 구간 안의 모름이 된다
+        given = (values or {}).get(kind)
+        gap = 0
+        for when, nick, form, mid in seq:
+            if given is not None:
+                if mid not in given:
+                    continue
+                value = given[mid]
+                if value is None:
+                    gap += 1
+                    continue
+            else:
+                value = nick if kind == "nickname" else form
             if not value or (kind == "formation" and value == formation_of([])):
                 continue
-            if raw and raw[-1].value == value:
+            cut = gap >= config.K4_MIN_RUN
+            if raw and raw[-1].value == value and not cut:
                 raw[-1].end, raw[-1].games = when, raw[-1].games + 1
+                raw[-1].unknown += gap
             else:
-                raw.append(Run(kind, value, when, when, 1))
+                pre.append(0 if cut or not raw else gap)
+                raw.append(Run(kind, value, when, when, 1, gap_before=cut and bool(raw)))
+            gap = 0
         runs: list[Run] = []
-        for r in raw:
-            if runs and r.games < config.K4_MIN_RUN:
+        for r, lead in zip(raw, pre):
+            if runs and r.games < config.K4_MIN_RUN and not r.gap_before:
                 prev = runs[-1]
                 prev.blips.append((r.value, r.games))
                 prev.end = r.end
-            elif runs and runs[-1].value == r.value:
+                prev.unknown += lead + r.unknown
+            elif runs and runs[-1].value == r.value and not r.gap_before:
                 prev = runs[-1]
                 prev.end, prev.games = r.end, prev.games + r.games
                 prev.blips.extend(r.blips)
+                prev.unknown += lead + r.unknown
             else:
                 runs.append(r)
         out.extend(runs)

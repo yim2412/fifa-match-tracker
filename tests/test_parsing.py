@@ -2627,6 +2627,15 @@ def test_draw_possible_and_mixed_judgement():
     assert st.is_champion_or_above is models.is_champion_or_above and st.CHAMPION_DIVISION_ID == 900
 
 
+def _combo_rows(details, ouid):
+    """113 K2 — 픽스처 카드가 전부 같은 소속 하나인 재료."""
+    import teamcolor_calc as tcc
+    lines = tcc.my_lineups(details, ouid)
+    spids = {i for ids in lines.values() for i in ids}
+    extras = {s: {"sim_on": "2026-11-01", "club_tc": '[[1, "가"]]', "rel_tc": "[]"} for s in spids}
+    return tcc.combo_rows(details, ouid, lines, tcc.material(extras, [(1, 1, 3)], [{"id": 1, "name": "가"}])).rows
+
+
 @_a6
 def test_every_rate_aggregate_fills_mixed():
     # 픽스처 4경기: 0003 만 상대가 챔스 아래(무승부 가능) — 섞인 묶음. 집계마다 mixed 가 bool 이고 True,
@@ -2655,6 +2664,7 @@ def test_every_rate_aggregate_fills_mixed():
         "Window": [tl._Games(details, ouid).window(0, len(ms))],
         "OppBand": (lambda t: t.by_rank + t.by_gap)(
             rankmeta.opp_rank_table(details, ouid, {d["matchId"]: (200, 3) for d in details})),
+        "ComboRow": _combo_rows(details, ouid),
     }
     assert set(made) == set(models.RATE_CLASSES), set(made) ^ set(models.RATE_CLASSES)
     for name, rows in made.items():

@@ -47,6 +47,8 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
                     METRICS as HABIT_METRICS, N19_CHIP_KEYS, PosCell, PosLevel, pos_level,
                     DaySummary, FirstReach, ScoreReport, club_day, day_delta, decisive_rate, first_reach, score_report,
                     CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
+from teamcolor_calc import (ComboRow, ComboTable, SideColors, club_values, combo_rows, lineup_spids, material as tc_material,
+                            my_lineups as tc_lineups, side_colors)
 from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, StreakBreak, match_context, period_totals,
                       play_time, session_luck, session_rows, size_bins, split_sessions, streak_break,
                       PaceSide, SeasonPace, SeasonReview, SeasonSpan, StreakNote, season_pace, season_review,
@@ -135,7 +137,9 @@ __all__ = [
     "HabitBin", "HabitTable", "Luck", "RequiredRow", "StreakBaseline", "daily_luck", "habit_tables", "luck_expected",
     "streak_baseline", "streak_key",
     # habits·rankmeta — 55 구단 머리 줄·점수 리포트(H1~H6 · R1~R3)
-    "DaySummary", "FirstReach", "ScoreReport", "HistoryRun", "history_runs", "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
+    "DaySummary", "FirstReach", "ScoreReport", "HistoryRun", "history_runs",
+    "ComboRow", "ComboTable", "SideColors", "club_values", "combo_rows", "lineup_spids", "tc_material", "tc_lineups", "side_colors",   # 113 N29·K2·K4
+    "club_day", "day_delta", "decisive_rate", "first_reach", "score_report",
     "ClubHead", "club_head", "dd_band", "fc_rank_range", "rank_of",
     "RewardBand", "RewardBoard", "TopCard", "reward_board", "top3",
     "MINOR_LABEL", "is_minor_color", "minor_formations", "usage_counts",
@@ -232,7 +236,7 @@ _F_DETAILS = ("mixed_of_details", "goal_flow", "half_share_diff", "side_totals",
               "goal_minute_buckets", "opponent_cards", "opponent_formations", "opponent_position_players", "pass_style",
               "player_finishing_trend", "possession_stats", "ranker_compare", "rating_trend", "recent_ratings",
               "result_breakdown", "shot_map", "versus_profile", "shootout_keepers", "shot_type_counts", "shot_summary",
-              "team_profile",
+              "team_profile", "combo_rows",
               # M39: 영입 시점·포메이션 바뀐 구간 경계를 표시한 판을 뺀 기록에서 다시 잡는다(표시한 판이 처음부터 없었던 것처럼).
               # 섞임으로 두면 squad_timeline 의 구간 계산을 둘로 갈라야 하고, 영입이 표시한 판 자리면 전후 구간에 그 판이 끼어
               # 숫자에 남는다. 경계가 한 판 밀릴 수 있어도 화면의 모든 승·무·패는 표시한 판을 안 센다.
@@ -266,7 +270,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
         "headline", "streak_min_n", "parse_match", "team_rating", "division_icon_index", "is_mixed", "is_weak",
         "rated", "win_pct", "division_runs", "division_stays", "paired_diff", "pct", "strength_chips", "dist_basis",
         "dist_judged", "load_owner_dist", "dist_table", "load_strata", "stratum_of", "load_pos_dist", "pos_level",
-        "daily_luck", "luck_expected", "history_runs", "day_delta", "decisive_rate", "score_report", "club_head",
+        "daily_luck", "luck_expected", "history_runs", "club_values", "lineup_spids", "tc_material", "tc_lineups", "side_colors", "day_delta", "decisive_rate", "score_report", "club_head",
         "dd_band", "fc_rank_range", "rank_of", "reward_board", "top3", "is_minor_color", "minor_formations",
         "usage_counts", "match_context", "period_totals", "play_time", "session_luck", "session_rows", "size_bins",
         "season_spans", "stored_spans", "classify_route", "describe_prediction", "predict_for", "reward_brackets",

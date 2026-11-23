@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import faulthandler
 import json
+import sqlite3
 import os
 import pathlib
 import re
@@ -8001,6 +8002,7 @@ def test_release_drops_every_reference():
         _win._render_shot_summary(details)   # 슛 맵 요약이 최다 득점·실점 경기 원문을 쥔다(65 M8)
         assert _win.shot_sum is not None and _win.shot_sum.best is not None
         probe = details[0]
+        _win._value_input = (_win._details_all, _OUID, {})   # 가계부를 한 번 열면 선발 시세 카드가 저장 전체 경기를 쥔다(113)
         # 끝난 로더가 화면 목록(_prev)을 쥐고 있는 경우까지
         _win._loader = app_main.MatchLoader(_NoApi(), "x", 52, prev=(_OUID, list(matches), list(details)))
         # 끝난 미리 읽기 — discard() 는 멈춤 표시만 하고 결과는 Future 가 계속 쥔다
@@ -15226,6 +15228,166 @@ def test_match_card_double_click_opens_detail_on_opponent_squad():
         assert got == [(lst.row(r).match_id, "스쿼드", "opp")], got
     finally:
         _win._show_match_detail = keep
+
+
+@contextlib.contextmanager
+def _tc_cards(spids, club=((1, "에이"),), rel=(), steps=((1, 1, 3), (1, 2, 11)), meta=((1, "에이", "crests/a.png"),), skip=()):
+    """113 — 이 카드들의 팀컬러 재료를 화면 DB 에 심고, 끝나면 원래대로."""
+    c = store.open_db(config.DB_PATH)
+    keep = {t: c.execute(f"SELECT * FROM {t}").fetchall() for t in ("card_extra", "teamcolor_steps", "teamcolor_meta")}
+    try:
+        for t in keep:
+            c.execute(f"DELETE FROM {t}")
+        c.executemany("INSERT INTO card_extra (spid, club_tc, rel_tc, sim_on) VALUES (?, ?, ?, '2026-11-01')",
+                      [(s, json.dumps([list(x) for x in club]), json.dumps([list(x) for x in rel])) for s in spids if s not in skip])
+        c.executemany("INSERT INTO teamcolor_steps (id, step, members, effects, fetched_on) VALUES (?, ?, ?, ?, '2026-11-01')",
+                      [(i, s, m, f"효과{s}") for i, s, m in steps])
+        c.executemany("INSERT INTO teamcolor_meta (id, name, emblem, fetched_on) VALUES (?, ?, ?, '2026-11-01')", list(meta))
+        c.commit()
+        _win._card_rev += 1
+        yield c
+    finally:
+        for t, rows in keep.items():
+            c.execute(f"DELETE FROM {t}")
+            if rows:
+                c.executemany(f"INSERT INTO {t} VALUES ({','.join('?' * len(rows[0]))})", [tuple(r) for r in rows])
+        c.commit()
+        c.close()
+        _win._card_rev += 1
+        _win._invalidate("history")
+
+
+def _all_spids():
+    return {p["spId"] for d in _DETAILS for s in d["matchInfo"] for p in s.get("player") or []}
+
+
+def test_113_detail_teamcolors():
+    """N29 — 경기 상세 [스쿼드] 에 켜진 팀컬러(종류 · 인원 · 단계 · 효과 · 적용 선수) · 모르는 카드 글 · 11명이 아니면 없음."""
+    d = next(x for x in _DETAILS if all(core.lineup_spids(s) for s in x["matchInfo"]))
+    me = core.match_sides(d, _OUID)[0]
+    mine = sorted(core.lineup_spids(me))
+    with _tc_cards(_all_spids(), rel=((5, "관"),), steps=((1, 1, 3), (1, 2, 11), (5, 1, 3)),
+                   meta=((1, "에이", "crests/a.png"), (5, "관", "teamcolorboost/b.png"))):
+        dlg = _win._make_match_detail(d, tab="스쿼드", side="opp")
+        try:
+            assert set(dlg.tc_lists) == {"mine", "opp"} and not dlg.tc_notes, (dlg.tc_lists, dlg.tc_notes)
+            rows = [dlg.tc_lists["mine"].row(i) for i in range(dlg.tc_lists["mine"].rowCount())]
+            assert [(r.name, r.sub, r.cells[0].text, r.cells[0].label, r.cells[1].text) for r in rows] == [
+                ("에이", "효과2", "11명", "소속", "2단계"), ("관", "효과1", "11명", "관계 · 계산값", "1단계")], rows
+            assert rows[0].icon == ("emblem", "crests/a.png") and rows[0].tip.count(",") == 10, rows[0]
+        finally:
+            _win._close_match_detail(dlg)
+    with _tc_cards(_all_spids(), skip=set(mine[:2])):
+        dlg = _win._make_match_detail(d)
+        try:
+            assert "2명" in dlg.tc_notes["mine"].text() and "다를 수" in dlg.tc_notes["mine"].text() and "mine" in dlg.tc_lists
+        finally:
+            _win._close_match_detail(dlg)
+    with _tc_cards(_all_spids(), skip=set(mine[:config.TC_UNKNOWN_HIDE])):
+        dlg = _win._make_match_detail(d)
+        try:
+            assert "mine" not in dlg.tc_lists and "보이지 않습니다" in dlg.tc_notes["mine"].text(), dlg.tc_notes
+        finally:
+            _win._close_match_detail(dlg)
+    with _tc_cards(_all_spids(), steps=()):
+        dlg = _win._make_match_detail(d)
+        try:
+            assert "단계를 아직 모르는" in dlg.tc_notes["mine"].text(), dlg.tc_notes["mine"].text()
+        finally:
+            _win._close_match_detail(dlg)
+    with _tc_cards(_all_spids(), club=()):
+        dlg = _win._make_match_detail(d)
+        try:
+            assert dlg.tc_notes["mine"].text() == "켜진 소속·관계 팀컬러가 없습니다."
+        finally:
+            _win._close_match_detail(dlg)
+
+
+def test_113_history_teamcolor():
+    """K2 · K4 — [이력] 팀컬러 줄과 팀컬러별 성적 · 카드가 없으면 이유 · 카드 재료가 바뀌면(_card_rev) 다시 센다."""
+    _win._go_page("스쿼드·이적", "이력")
+    with _tc_cards(_all_spids()) as c:
+        _win._invalidate("history")
+        assert "teamcolor" in {r.kind for r in _win.history_runs}, {r.kind for r in _win.history_runs}
+        rows = [_win.tc_combo_list.row(i) for i in range(_win.tc_combo_list.rowCount())]
+        n = sum(1 for d in _DETAILS if core.lineup_spids(core.match_sides(d, _OUID)[0]))
+        assert [r.label for r in rows] == ["에이"] and rows[0].games == n > 0, (rows, n)
+        assert f"{n:,}/{n:,}판" in _win.lb_tc_combo_note.text(), _win.lb_tc_combo_note.text()
+        keep_max = config.TC_COMBO_MAX
+        try:
+            config.TC_COMBO_MAX = 0
+            _win._render_history()
+            assert _win.tc_combo_list.rowCount() == 0 and "0종만" in _win.lb_tc_combo_note.text()
+        finally:
+            config.TC_COMBO_MAX = keep_max
+        c.execute("DELETE FROM card_extra")
+        c.commit()
+        _win._invalidate("history")
+        assert _win.tc_combos.known == n, "재료가 그대로라고 여긴 캐시(판본이 안 올랐다)"   # 막지 않았으면: 캐시가 실제로 돈다
+        _win._card_rev += 1
+        _win._invalidate("history")
+        assert _win.tc_combos.known == 0 and not _win.tc_combo_list.isVisible()
+        assert "팀컬러를" in _win.lb_tc_combo_note.text() and "teamcolor" not in {r.kind for r in _win.history_runs}
+        # DB 를 못 읽은 셈은 캐시하지 않는다 — 풀리면 다음에 바로 고쳐진다
+        keep_open = store.open_db
+        keep_mine = _win._history_mine
+        _win._history_mine = lambda: False
+        store.open_db = lambda *a, **k: (_ for _ in ()).throw(sqlite3.OperationalError("locked"))
+        try:
+            _win._card_rev += 1
+            _win._render_history()
+            assert _win.tc_combos is None and _win.lb_tc_combo_note.text() == _win.TC_READ_FAIL and _win._history_cache is None
+            assert {r.kind for r in _win.history_runs} == {"formation"}
+        finally:
+            store.open_db = keep_open
+            _win._history_mine = keep_mine
+        _win._render_history()
+        assert _win.tc_combos is not None and _win._history_cache is not None
+    # 이름표·단계표를 새로 받으면 [이력] 이 낡음
+    rev = _win._card_rev
+    keep_dirty = set(_win._dirty)
+    try:
+        _win._dirty.discard("history")
+        _win.tc_data_changed()
+        assert _win._card_rev == rev + 1 and "history" in _win._dirty
+    finally:
+        _win._dirty = keep_dirty
+
+
+def test_113_card_round_redraws():
+    """카드 백필 바퀴 끝 — 새로 저장했을 때만 낡음 표시 · 지금 화면은 그 자리에서 안 그린다(N7) · 지우는 중·내려놓은 동안은 판본만."""
+    from types import SimpleNamespace as NS
+    _win._go_page("스쿼드·이적", "이력")
+    drawn = []
+    keep_render, keep_dirty = _win._render_history, set(_win._dirty)
+    _win._render_history = lambda: drawn.append(1)
+    try:
+        _win._dirty.clear()
+        rev = _win._card_rev
+        _win._on_card_round_done(NS(done=0))
+        assert not _win._dirty and _win._card_rev == rev, "한 것이 없는 바퀴가 화면을 낡게 했다"
+        _win._on_card_round_done(NS(done=3))
+        assert _win._dirty == set(_win.CARD_VIEW_KEYS) and _win._card_rev == rev + 1 and not drawn, (_win._dirty, drawn)
+        assert set(_win.CARD_VIEW_KEYS) <= set(_win.VIEW_OF_KEY), set(_win.CARD_VIEW_KEYS) - set(_win.VIEW_OF_KEY)
+        _win._dirty.clear()
+        _win._released = True
+        try:
+            _win._on_card_round_done(NS(done=3))
+            assert not _win._dirty and _win._card_rev == rev + 2
+        finally:
+            _win._released = False
+        sched = app_main.CardBackfillScheduler()
+        keep = _win._card_sched
+        try:
+            _win.attach_card_sched(sched)
+            sched.finished.emit(NS(done=1))
+            assert _win._dirty == set(_win.CARD_VIEW_KEYS), "예약의 바퀴 끝 신호를 안 듣는다"
+        finally:
+            _win._card_sched = keep
+            sched.finished.disconnect(_win._on_card_round_done)
+    finally:
+        _win._render_history = keep_render
+        _win._dirty = keep_dirty
 
 
 def test_match_detail_dialog_m3():

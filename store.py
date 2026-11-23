@@ -1562,15 +1562,17 @@ SQL_IN_CHUNK = 500   # IN (…) 한 번에 넣는 수 — SQLite 변수 상한 �
 
 
 def load_card_extras(conn: sqlite3.Connection, spids) -> dict[int, dict]:
-    """카드 정보(card_extra) — 카드 → {height, weight, body, pos_ovr}. 없는 카드는 안 든다. 화면 재료(`cardviews`)."""
+    """카드 정보(card_extra) — 카드 → {height, weight, body, pos_ovr, club_tc, rel_tc, sim_on}. 없는 카드는 안 든다.
+    화면 재료(`cardviews` · `teamcolor_calc`). sim_on 이 없으면 시뮬레이터를 안 읽은 반쪽 카드다."""
     ids = sorted(set(spids))
     out: dict[int, dict] = {}
     for i in range(0, len(ids), SQL_IN_CHUNK):
         part = ids[i:i + SQL_IN_CHUNK]
         marks = ",".join("?" * len(part))
-        for sp, h, w, b, po in conn.execute(
-                f"SELECT spid, height, weight, body, pos_ovr FROM card_extra WHERE spid IN ({marks})", part):
-            out[sp] = {"height": h, "weight": w, "body": b, "pos_ovr": po}
+        for sp, h, w, b, po, club, rel, sim in conn.execute(
+                "SELECT spid, height, weight, body, pos_ovr, club_tc, rel_tc, sim_on FROM card_extra"
+                f" WHERE spid IN ({marks})", part):
+            out[sp] = {"height": h, "weight": w, "body": b, "pos_ovr": po, "club_tc": club, "rel_tc": rel, "sim_on": sim}
     return out
 
 

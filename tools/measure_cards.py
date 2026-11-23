@@ -53,6 +53,7 @@ import rankcollect  # noqa: E402
 import seasons as seasons_mod  # noqa: E402
 import store  # noqa: E402
 import teamcolor  # noqa: E402
+import teamcolor_calc  # noqa: E402
 
 # ── 판정 규칙(ROADMAP 51 측정 절 — 기준 커밋 10판) ──────────────────────────────
 RULE_COMMIT = "35ec1cf"
@@ -127,7 +128,7 @@ def day_no(meta: dict | None, today: date) -> int | None:
     return None if d0 is None else (today - d0).days
 
 
-TOOL_FILES = ("tools/measure_cards.py", "cardstats.py", "cardcollect.py")
+TOOL_FILES = ("tools/measure_cards.py", "cardstats.py", "cardcollect.py", "teamcolor_calc.py")
 
 
 def tool_hashes() -> dict[str, str]:
@@ -690,27 +691,7 @@ def _tc_lists(ex: dict | None) -> tuple[list[int], list[int]] | None:
     return out[0], out[1]
 
 
-def _greedy(pool: dict[int, set[int]], need: dict[int, list[int]]) -> list[tuple[int, int, int]]:
-    """카드 하나는 팀컬러 하나에만 — 적용 인원 많은 것부터(같으면 단계 높은 것 · 같으면 id 작은 것) 차례로 카드를 가져간다.
-    pool: 카드 → 그 카드가 걸 수 있는 팀컬러 id · need: id → 단계별 최소 인원(오름차순). → [(id, 인원, 단계)]."""
-    left = {c: set(ts) for c, ts in pool.items()}
-    out = []
-    while True:
-        cnt: Counter = Counter()
-        for ts in left.values():
-            cnt.update(ts)
-        best = None
-        for tid, m in cnt.items():
-            steps = need.get(tid)
-            if not steps:
-                continue
-            step = sum(1 for s in steps if m >= s)
-            if step and (best is None or (m, step, -tid) > (best[1], best[2], -best[0])):
-                best = (tid, m, step)
-        if best is None:
-            return out
-        out.append(best)
-        left = {c: ts for c, ts in left.items() if best[0] not in ts}
+_greedy = teamcolor_calc.greedy   # 앱과 같은 식(113 — 얼린 7,437경기에서 옛 식과 다름 0)
 
 
 def active_r1(cards: list[tuple[list[int], list[int]]], need) -> list[tuple[int, int, int]]:

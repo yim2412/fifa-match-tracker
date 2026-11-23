@@ -3324,7 +3324,8 @@ class MainWindow(QMainWindow):
         self._price_loader: PriceLoader | None = None  # 가계부를 그릴 때 — 보유·최근 구매 카드 시세(하루 캐시)
         self._price_tried_on: str | None = None        # 오늘 이미 띄웠다 — 다 그린 뒤 다시 그려도 또 띄우지 않게
         self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
-        self._history_cache: tuple | None = None       # (키, [HistoryRun]) — 57 K4 이력
+        self._history_cache: tuple | None = None       # (키, [HistoryRun], ComboTable, 엠블럼) — 57 K4 이력 · 113 K2
+        self._card_rev = 0   # 카드 재료 판본(113) — 카드·단계표·이름표가 바뀔 때 오른다. 카드로 세는 캐시의 키에 넣는다
         self._records_cache: tuple | None = None       # (키, [Achievement]) — 88 업적 · [내 기록]·경기 카드 태그·대시보드 칩이 같이
         self._fun_cache: dict = {}                     # 이름 → (키, 값) — 88 F4 라이벌 · Q2 오늘의 선수(저장 전체 · 그릴 때마다 60~80ms)
         self._reward_cache: tuple | None = None        # (키, WinRewards) — 57 K11 이 계정 100판당
@@ -3863,6 +3864,30 @@ class MainWindow(QMainWindow):
         """카드 정보 자동 채우기 예약도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_card_backfill) 알림만 받는다."""
         self._card_sched = sched
         sched.switched_off.connect(self._on_card_backfill_off)
+        sched.finished.connect(self._on_card_round_done)
+
+    CARD_VIEW_KEYS = ("history", "trades", "pricew", "tactics", "players", "luck")   # 카드 정보·시세를 쓰는 화면(113)
+
+    def _on_card_round_done(self, res) -> None:
+        """카드 백필 한 바퀴가 끝났다(10분마다 · 할 일이 없거나 막힌 날에도 온다) — 새로 저장한 것이 있을 때만 낡음 표시.
+        지금 보이는 화면을 그 자리에서 다시 그리지 않는다(고른 줄·스크롤·펼친 날짜 칸이 날아간다 · 2회차 N7) — 다음에 들어올 때 새 값.
+        표시만 하고 fifa.db 를 열지 않아 지우는 중에도 괜찮다."""
+        if getattr(res, "done", 0) <= 0:
+            return
+        self._card_rev += 1
+        if not self._ouid or self._released or self._quitting:
+            return
+        self._dirty.update(self.CARD_VIEW_KEYS)
+
+    def tc_data_changed(self) -> None:
+        """팀컬러 창이 이름표·단계표를 새로 받았을 수 있다 — [이력] 이 다음에 다시 센다."""
+        self._card_rev += 1
+        if self._ouid:
+            self._dirty.add("history")
+
+    def _card_state(self, conn):
+        """카드 정보 화면의 빈 화면 사유 — 예약이 들고 있는 마지막 상태로만(화면 스레드에서 수요를 세지 않는다)."""
+        return core.card_screen_state(conn, datetime.now().date(), getattr(self._card_sched, "last", None))
 
     def _on_card_backfill_off(self, reason: str) -> None:
         self.statusBar().showMessage(f"카드 정보 자동 채우기: {cardcollect.OFF_REASON_TEXT.get(reason, reason)}", 0)
@@ -7175,11 +7200,18 @@ class MainWindow(QMainWindow):
 
     # ── 이력(57 K4) — 닉네임·포메이션이 바뀐 구간 ──
     HISTORY_COLUMNS = ["종류", "값", "기간", "경기", "잠깐 바뀜"]
-    HISTORY_KINDS = {"nickname": "닉네임", "formation": "포메이션"}
+    HISTORY_KINDS = {"nickname": "닉네임", "formation": "포메이션", "teamcolor": "팀컬러"}
+    TC_COMBO_TIP = ("켜진 소속 팀컬러마다 성적입니다. 선발 11장의 카드 정보로 계산합니다.\n"
+                    "쓴 시기가 달라서 팀컬러끼리의 차이를 팀컬러의 효과로 읽으면 안 됩니다.")
 
     def _build_history_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
+        self.lb_tc_combo_note = self._note_label()
+        v.addWidget(self.lb_tc_combo_note)
+        self.tc_combo_list = RateRowList(fixed=True)
+        self.tc_combo_list.setToolTip(self.TC_COMBO_TIP)
+        v.addWidget(self.tc_combo_list)
         self.lb_history_note = self._note_label()
         v.addWidget(self.lb_history_note)
         self.tbl_history = self._make_table(self.HISTORY_COLUMNS)
@@ -7207,26 +7239,92 @@ class MainWindow(QMainWindow):
 
     def _render_history(self) -> None:
         mine = self._history_mine()
-        kinds = ("nickname", "formation") if mine else ("formation",)
+        kinds = ("nickname", "formation", "teamcolor") if mine else ("formation", "teamcolor")
         # 1만 2천 경기 첫 계산 약 80ms(2026-10-20 이 PC) — 같은 입력이면 다시 안 한다(타임라인 캐시 꼴)
-        key = (self._details_key(), self._ouid, kinds)
+        key = (self._details_key(), self._ouid, kinds, self._card_rev)
         if self._history_cache is None or self._history_cache[0] != key:
-            got = core.history_runs(self._details_all, self._ouid, kinds) if self._ouid else []
-            self._history_cache = (key, sorted(got, key=lambda r: r.start, reverse=True))
-        runs = self._history_cache[1]
+            details = self._details_all if self._ouid else []
+            lines = core.tc_lineups(details, self._ouid)
+            mat, emblems = self._tc_material({i for ids in set(lines.values()) for i in ids})
+            got = core.history_runs(details, self._ouid, kinds,
+                                    {"teamcolor": core.club_values(lines, mat) if mat is not None else {}})
+            hit = (key, sorted(got, key=lambda r: r.start, reverse=True),
+                   core.combo_rows(details, self._ouid, lines, mat) if mat is not None else None, emblems)
+            # 카드 정보를 못 읽은 셈(DB 잠김)은 캐시하지 않는다 — 다음에 들어오면 다시 읽는다
+            self._history_cache = hit if mat is not None else None
+        else:
+            hit = self._history_cache
+        runs = hit[1]
+        self._show_tc_combos(*hit[2:])
         self.history_runs = runs
         rows = []
         for r in runs:
             span = f"{r.start:%Y-%m-%d %H:%M} ~ {r.end:%Y-%m-%d %H:%M}"
-            blip = " · ".join(f"{v} {n}경기" for v, n in r.blips)
+            blip = " · ".join([f"{v} {n}경기" for v, n in r.blips] + ([f"모름 {r.unknown}판"] if r.unknown else []))
             rows.append([(self.HISTORY_KINDS[r.kind], r.kind), (r.value, r.value), (span, r.start.timestamp()),
-                         (f"{r.games:,}", r.games), (blip, len(r.blips))])
+                         (f"{r.games:,}", r.games), (blip, sum(n for _v, n in r.blips) + r.unknown)])
         self._fill(self.tbl_history, rows, enable_sort=False)
         # 78 ① — 평소 설명은 지웠고 빈 이유(경기 없음 · 닉네임 줄이 없는 까닭)만
         notes = [] if runs else ["경기가 없어 이력을 낼 수 없습니다."]
         if not mine:
             notes.append("닉네임 이력은 내 계정(API 키 주인)일 때만 보입니다")
         self._set_status(self.lb_history_note, " · ".join(notes))
+
+    def _tc_material(self, spids) -> tuple:
+        """팀컬러를 세는 재료(저장된 것만 · 요청 0) → (core.tc_material, {팀컬러 id: 엠블럼 키}). 못 읽으면 (None, {})."""
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                extras = store.load_card_extras(conn, spids)
+                steps = store.load_step_members(conn)
+                meta, _fresh = store.load_teamcolor_meta(conn)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None, {}
+        named = [{"id": m["id"], "name": teamcolor.label(m["name"], m["emblem"])} for m in meta]
+        return core.tc_material(extras, steps, named), {m["id"]: m["emblem"] for m in meta}
+
+    TC_READ_FAIL = "카드 정보를 읽지 못했습니다. 다른 프로그램이 데이터 파일을 쓰는 중일 수 있습니다."
+
+    def _tc_unknown_text(self, table) -> str:
+        """아는 판이 0 일 때 이유. 채우기 안내는 채우는 범위(최근 CARD_BACKFILL_DAYS 일) 안에 경기가 있을 때만 — 그 밖의 경기는 켜도 안 채운다."""
+        if not table.total:
+            return ""
+        if table.steps_only:
+            return "팀컬러 단계를 아직 몰라 셀 수 없습니다."
+        last = max((m.match_date for m in self._matches_all if m.match_date), default=None)
+        if last is None or (datetime.now() - last).days >= config.CARD_BACKFILL_DAYS:
+            return "이 경기들의 카드 정보가 없어 팀컬러를 셀 수 없습니다."
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                return f"팀컬러를 아직 모릅니다. {notice.card_empty_text(self._card_state(conn))}".strip()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return self.TC_READ_FAIL
+
+    def _show_tc_combos(self, table, emblems: dict) -> None:
+        """113 K2 — 켜진 소속 팀컬러마다 성적(저장된 전체). 아는 판이 없으면 이유만."""
+        self.tc_combos = table   # 테스트가 본다
+        if table is None:
+            self._set_status(self.lb_tc_combo_note, self.TC_READ_FAIL)
+        elif not table.known:
+            self._set_status(self.lb_tc_combo_note, self._tc_unknown_text(table))
+        else:
+            self._set_status(self.lb_tc_combo_note,
+                             f"저장된 전체, 팀컬러를 아는 경기 {table.known:,}/{table.total:,}판"
+                             + (f", 많이 쓴 {config.TC_COMBO_MAX}종만" if len(table.rows) > config.TC_COMBO_MAX else ""))
+        rows = []
+        for r in (table.rows if table is not None else [])[:config.TC_COMBO_MAX]:
+            span = f"{r.first:%Y-%m-%d} ~ {r.last:%Y-%m-%d}" if r.first and r.last else ""
+            emb = emblems.get(r.ids[0], "") if r.ids else ""
+            rows.append(self._rate_row(r.label, r.win, r.draw, r.lose, r.mixed, None, r.games, sub=span, key=r.ids,
+                                       icon=("emblem", emb) if emb else (), tip=self.TC_COMBO_TIP))
+        self.tc_combo_list.setVisible(bool(rows))
+        self.tc_combo_list.set_rows(rows)
+        self._start_list_icons(self.tc_combo_list)
 
     # ── 88 내 기록(업적) — [흐름 › 내 기록] · 경기 카드 태그 · 대시보드 칩이 같은 캐시를 읽는다 ──
     RECORD_COLUMNS = ["기록", "횟수", "처음", "마지막", "마지막 기록"]
@@ -7515,7 +7613,7 @@ class MainWindow(QMainWindow):
             conn = store.open_db(config.DB_PATH)
             try:
                 rows = store.card_price_rows(conn, 1, cards)
-                state = core.card_screen_state(conn, today)
+                state = self._card_state(conn)
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -7525,7 +7623,7 @@ class MainWindow(QMainWindow):
             prices.setdefault((spid, grade), {})[day] = price
         days = core.price_days(prices)
         if len(days) < 2:
-            if not isinstance(state, tuple):
+            if not isinstance(state, tuple) and not (state == "first_round" and days):   # 관측이 있으면 "모으는 중"이 먼저(N5)
                 return self._value_empty(notice.card_empty_text(state))
             return self._value_empty(notice.card_empty_text(("collecting", len(days), 2, 2 - len(days))))
         self._value_input = (self._details_all, mine, prices)
@@ -7613,7 +7711,7 @@ class MainWindow(QMainWindow):
             conn = store.open_db(config.DB_PATH)
             try:
                 rows = store.card_price_rows(conn, 2)
-                state = core.card_screen_state(conn, today)
+                state = self._card_state(conn)
             finally:
                 conn.close()
         except sqlite3.Error:
@@ -7626,7 +7724,7 @@ class MainWindow(QMainWindow):
         self.price_index = idx
         if idx.ready:
             self._set_status(self.lb_price_week_note, "")
-        elif isinstance(state, tuple):
+        elif isinstance(state, tuple) or (state == "first_round" and rows):
             self._set_status(self.lb_price_week_note, notice.card_empty_text(
                 ("collecting", idx.recent, config.C6_MIN_CARDS, idx.wait_days)))
         else:
@@ -14495,6 +14593,7 @@ class MainWindow(QMainWindow):
         grp = QButtonGroup(w)
         grp.setExclusive(True)
         stack = QStackedWidget()
+        colors = self._detail_colors({"mine": me, "opp": opp})
         for i, (key, label, p, nick) in enumerate((("mine", "나", me, self._nick or m.my_nickname),
                                                     ("opp", "상대", opp, m.opponent))):
             btn = QPushButton(f"{label} · {nick}")
@@ -14514,6 +14613,7 @@ class MainWindow(QMainWindow):
             pitch, _sp_ids = self._make_pitch_from_players(players)
             pv.addWidget(pitch, 1)
             dlg.pitches[key] = pitch
+            self._add_detail_colors(dlg, key, pv, colors[key])
             # 얼굴·시즌 아이콘·카드 정보는 백그라운드로 — 모달이어도 이벤트 루프가 돌아 오는 대로 칩에 채워진다.
             # 카드 정보 요청은 예전 상대 스쿼드 창과 같은 관문(chip_auto_allowed) 뒤 — 창 하나에 축구장 둘이라 최대 두 배
             dlg.loaders.extend(self._start_pitch_loaders(pitch))
@@ -14524,6 +14624,73 @@ class MainWindow(QMainWindow):
         v.addWidget(stack, 1)
         dlg.squad_stack = stack
         return w
+
+    def _detail_colors(self, sides: dict) -> dict:
+        """113 N29 — 쪽마다 (core.SideColors, 줄 목록 재료, 안내 글). 저장된 것만 읽는다(요청 0 · 표시한 판도 그린다)."""
+        ids = {k: core.lineup_spids(p) or () for k, p in sides.items()}
+        mat, emblems = self._tc_material({i for v in ids.values() for i in v})
+        if mat is None:
+            return {k: (core.SideColors("error"), [], self.TC_READ_FAIL) for k in sides}
+        got = {k: core.side_colors(p, mat) for k, p in sides.items()}
+        effects: dict[int, dict] = {}
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                for tid in {a.id for c in got.values() for a in c.actives}:
+                    effects[tid] = {s["step"]: s["effects"] for s in store.load_teamcolor_steps(conn, tid)[0]}
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            pass   # 효과 글만 빈다
+        out = {}
+        for k, c in got.items():
+            rows = []
+            for a in c.actives:
+                who = ", ".join(self._names.get(c.spids[i], str(c.spids[i])) for i in a.idx)
+                rows.append(MetricRow(mat.names[a.id], " · ".join(effects.get(a.id, {}).get(a.step, [])),
+                                      (MetricCell(f"{a.members}명", "소속" if a.kind == "club" else "관계 · 계산값"),
+                                       MetricCell(f"{a.step}단계", "단계")),
+                                      icon=("emblem", emblems[a.id]) if emblems.get(a.id) else (), key=a.id,
+                                      tip=f"적용 선수: {who}"))
+            notes = []
+            if c.state == "unknown":
+                notes.append(f"카드 정보를 모르는 선수가 {c.unknown}명이라 팀컬러를 보이지 않습니다.")
+            elif c.state == "no_meta":
+                notes.append("팀컬러 목록을 아직 받지 못해 팀컬러를 보이지 않습니다.")
+            elif c.state == "ok":
+                if c.unknown:
+                    notes.append(f"카드 정보를 모르는 선수가 {c.unknown}명 있어 실제와 다를 수 있습니다.")
+                if c.steps_unknown:
+                    notes.append("단계를 아직 모르는 팀컬러가 있어 실제와 다를 수 있습니다.")
+                if not rows and not notes:
+                    notes.append("켜진 소속·관계 팀컬러가 없습니다.")
+            out[k] = (c, rows, " ".join(notes))
+        return out
+
+    def _add_detail_colors(self, dlg: "MatchDetailDialog", key: str, box: QVBoxLayout, got: tuple) -> None:
+        """스쿼드 탭 축구장 아래 발동 팀컬러(113 N29) — 누르지 않는다(상세가 모달이라 다른 창의 입력이 막힌다 · 1회차 [상]3)."""
+        colors, rows, note = got
+        dlg.tc_colors[key] = colors
+        if colors.state == "lineup":
+            return
+        head = QLabel("발동 팀컬러")
+        head.setStyleSheet(f"color: {T.TEXT_DIM}; font-weight: bold;")
+        head.setToolTip("선발 11장의 카드 정보로 계산합니다. 관계 팀컬러는 확인할 자료가 없는 계산값이고, 강화 팀컬러는 셈에서 빠집니다.")
+        box.addWidget(head)
+        if rows:
+            lst = MetricRowList(fixed=True)
+            lst.set_rows(rows)
+            box.addWidget(lst)
+            dlg.tc_lists[key] = lst
+            self._start_list_icons(lst)
+            if lst._icon_loader is not None:
+                dlg.loaders.append(lst._icon_loader)   # 창을 닫으면 엠블럼 받기도 멈춘다
+        if note:
+            lb = QLabel(note)
+            lb.setWordWrap(True)
+            lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+            box.addWidget(lb)
+            dlg.tc_notes[key] = lb
 
     def _detail_shots(self, dlg: "MatchDetailDialog", detail: dict) -> QWidget:
         body = QWidget()
@@ -16397,6 +16564,8 @@ class MainWindow(QMainWindow):
 
     def _on_storage_cleared(self, res) -> None:
         CLEARING.difference_update(self.CLEAR_STORES[res.kind])
+        if res.kind in ("cards", "all", "restore"):
+            self._card_rev += 1   # 그리기보다 먼저(2회차 N6) — 아래에서 다시 그리는 화면이 옛 카드 캐시를 쓰지 않게
         if res.kind == "restore":
             self._on_restore_ended(res)
         elif res.kind == "all" and res.state == "ok":
@@ -16536,6 +16705,8 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._distcmp_val, self._distcmp_key = None, None
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = self._fmchange_cache = None
+        self._value_input = None
+        self._card_rev += 1
         self._records_cache = None
         self._fun_cache = {}
         self._chip_cache.clear()
@@ -16579,6 +16750,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._distcmp_val, self._distcmp_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
+        self._value_input = None    # 선발 시세 카드가 저장 전체 경기를 쥔다(113 1회차 [중]15 — 가계부를 한 번 열면 메모리가 안 풀렸다)
         self._records_cache = None  # 업적은 match_id 만 들지만 키가 옛 목록 id 를 쥔다
         self._fun_cache = {}
         if self._prefetch is not None:
@@ -17127,6 +17299,8 @@ class TeamColorDialog(QDialog):
 
     # ── 받은 것 그리기 ──
     def _on_loaded(self, view: TeamColorView) -> None:
+        if not view.more:
+            self.main.tc_data_changed()   # 갈아 끼운 뒤 늦게 온 결과·후보 고르기도 목록은 저장했다
         if view.req != self._req:
             return   # 갈아 끼운 뒤 늦게 온 옛 결과
         self.btn_more.setEnabled(True)
@@ -17641,6 +17815,9 @@ class MatchDetailDialog(QDialog):
         self.btn_memo_save: QPushButton | None = None
         self.btn_compare: QPushButton | None = None   # 110 R3 — [구단주 비교](머리 아래 줄이 채운다)
         self.compare_note: QLabel | None = None
+        self.tc_colors: dict = {}                 # 113 N29 — 쪽 → core.SideColors · 줄 목록 · 안내 글
+        self.tc_lists: dict = {}
+        self.tc_notes: dict = {}
 
     def show_side(self, key: str) -> None:
         """스쿼드 탭의 나 / 상대 칸."""

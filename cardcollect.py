@@ -413,7 +413,7 @@ def run(db_path: Path | str, today: date, cap: int, cancel: Callable[[], bool] =
         conn.close()
 
 
-# ── 상태 · 빈 화면 ───────────────────────────────────────────────────────
+# ── 상태 ───────────────────────────────────────────────────────
 
 @dataclass
 class Status:
@@ -447,20 +447,6 @@ def status_text(st: Status) -> str:
     return " · ".join(parts)
 
 
-def screen_state(conn: sqlite3.Connection | None, today: date):
-    """새 화면의 빈 화면 사유(notice.card_empty_text 에 넘긴다) — web_off · toggle_off · blocked · ("filling", 아는 장수, 수요 장수)."""
-    if not config.WEB_DATA:
-        return "web_off"
-    if not config.card_backfill_allowed():
-        return "toggle_off"
-    if conn is None:
-        return ("filling", 0, 0)
-    st = status(conn, today)
-    if st.blocked:
-        return "blocked"
-    return ("filling", st.known, st.need)
-
-
 def prune(db_path: Path | str, today: date) -> int:
     """켤 때 한 번(CachePruneWorker) — 날짜별 시세 보관을 넘긴 줄. 관문과 무관."""
     conn = store.open_db(db_path)
@@ -481,4 +467,4 @@ def should_turn_off(conn: sqlite3.Connection, on_at: str, kind: str = store.BUDG
 
 
 __all__ = ["Job", "Ctx", "RunResult", "Status", "demand", "my_cards", "c6_panel", "plan", "run", "status", "status_text",
-           "screen_state", "prune", "on_day", "should_turn_off", "OFF_REASON_TEXT"]
+           "prune", "on_day", "should_turn_off", "OFF_REASON_TEXT"]

@@ -761,13 +761,14 @@ def test_effect_dialog_on_loaded_calls_refresh():
     from types import SimpleNamespace
     calls = []
     fake = SimpleNamespace(_req=7, btn_more=SimpleNamespace(setEnabled=lambda on: None),
-                           main=SimpleNamespace(_refresh_emblems=lambda: calls.append("refresh")),
+                           main=SimpleNamespace(_refresh_emblems=lambda: calls.append("refresh"),
+                                                tc_data_changed=lambda: calls.append("tc")),
                            _show_pick=lambda view: calls.append("pick"))
-    app_main.TeamColorDialog._on_loaded(fake, SimpleNamespace(req=7, meta={"name": "A"}, candidates=[1]))
-    assert calls == ["refresh", "pick"], calls
+    app_main.TeamColorDialog._on_loaded(fake, SimpleNamespace(req=7, meta={"name": "A"}, candidates=[1], more=False))
+    assert calls == ["tc", "refresh", "pick"], calls
     calls.clear()
-    app_main.TeamColorDialog._on_loaded(fake, SimpleNamespace(req=6, meta={"name": "A"}, candidates=[1]))
-    assert calls == [], "갈아 끼운 뒤 늦게 온 옛 결과는 건드리지 않는다"
+    app_main.TeamColorDialog._on_loaded(fake, SimpleNamespace(req=6, meta={"name": "A"}, candidates=[1], more=False))
+    assert calls == ["tc"], "갈아 끼운 뒤 늦게 온 옛 결과는 창을 건드리지 않는다(목록은 저장했으니 낡음 표시만 — 113)"
 
 
 def test_icon_column_extra_is_per_column_width():

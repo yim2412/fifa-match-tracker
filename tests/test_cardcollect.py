@@ -944,16 +944,17 @@ def test_rank_off_and_clear_leave_backfill():
 
 
 def test_empty_screen_text_by_reason():
+    import cardviews as cv
     import notice
     with Env() as e:
         e.set(web=False)
-        assert "홈페이지 데이터" in notice.card_empty_text(cc.screen_state(e.conn, TODAY))
+        assert "홈페이지 데이터" in notice.card_empty_text(cv.screen_state(e.conn, TODAY))
         e.set(on="")
-        assert "자동 채우기" in notice.card_empty_text(cc.screen_state(e.conn, TODAY))
+        assert "자동 채우기" in notice.card_empty_text(cv.screen_state(e.conn, TODAY))
         e.set()
         store.budget_mark_429(e.conn, TODAY.isoformat(), "card_backfill_block")
-        assert "막아" in notice.card_empty_text(cc.screen_state(e.conn, TODAY))
-        assert "0/0장" in notice.card_empty_text(cc.screen_state(e.conn, TODAY + timedelta(days=1)))
+        assert "막아" in notice.card_empty_text(cv.screen_state(e.conn, TODAY))
+        assert "0/0장" in notice.card_empty_text(cv.screen_state(e.conn, TODAY + timedelta(days=1), cc.Status(0, 0, 0, False)))
 
 
 import watchdog  # noqa: E402

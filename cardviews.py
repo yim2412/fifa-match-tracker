@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from statistics import median
 
-import cardcollect
 import cardstats
 import config
 import matchtime
@@ -252,11 +251,19 @@ def price_index(rows, today: date) -> PriceIndex:
 
 
 # ── 빈 화면 사유 ──────────────────────────────────────────────────────
-def screen_state(conn: sqlite3.Connection | None, today: date):
-    """`cardcollect.screen_state` + 그날 형식 바뀜으로 멈춤("format")
-    (51 ① 리뷰 [하]: 형식 멈춤이 "채우는 중" 으로 보였다)."""
-    base = cardcollect.screen_state(conn, today)
-    if (conn is not None and isinstance(base, tuple)
-            and store.budget_hit_429(conn, today.isoformat(), (f"{store.BUDGET_CARD}_format",))):
+def screen_state(conn: sqlite3.Connection | None, today: date, last=None):
+    """카드 정보 화면의 사유 — web_off · toggle_off · blocked · format · first_round · ("filling", 아는 장수, 수요 장수).
+    last = 예약이 들고 있는 마지막 바퀴 상태(`cardcollect.Status` · 없으면 None). **수요를 여기서 세지 않는다** —
+    화면 스레드에서 세면 0.7초 멈춘다(2026-11-23 실측 · 3.11.1 까지 C5·C6 이 그릴 때마다 그랬다)."""
+    if not config.WEB_DATA:
+        return "web_off"
+    if not config.card_backfill_allowed():
+        return "toggle_off"
+    day = today.isoformat()
+    if conn is not None and store.budget_hit_429(conn, day, store.card_block_kinds()):
+        return "blocked"
+    if conn is not None and store.budget_hit_429(conn, day, (f"{store.BUDGET_CARD}_format",)):
         return "format"
-    return base
+    if last is None:
+        return "first_round"
+    return ("filling", last.known, last.need)
