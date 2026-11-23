@@ -20,7 +20,8 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("FIFA_FILTER_TRACE", "1")   # 109 J2 — core_api 가 모든 분석 함수를 감싸 불린 이름을 모은다(끝 테스트가 표와 대조)
@@ -9971,7 +9972,8 @@ def test_notice_versions_split_first_and_reask():
                                             (13, False, True, True),    # 14 가 올라서 13 동의자도 수집을 켰으면(57 ③)
                                             (14, False, True, True),    # 15 가 올라서 14 동의자도(108 C — 수집과 무관)
                                             (15, False, True, True),    # 16 이 올라서 15 동의자도(109 C — 키 보관 위치 · 수집과 무관)
-                                            (16, False, False, True)]:
+                                            (16, False, True, True),    # 17 이 올라서 16 동의자도 수집을 켰으면(121 스펙업 순서)
+                                            (17, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -9981,7 +9983,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (16, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (17, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
@@ -9992,8 +9994,9 @@ def test_notice_versions_split_first_and_reask():
         assert config.OPP_SCORE_NOTICE_VERSION == config.MY_TRAIT_NOTICE_VERSION == 14
         # 3.10.1: 15 = 켤 때 내 계정의 새 경기 확인(108 C) — 수집과 무관해 COLLECT_ONLY_FROM 도 15(U6 — 수집 끈 2~14 동의자에게도)
         assert config.STARTUP_CHECK_NOTICE_VERSION == 15
-        # 3.10.1: 16 = API 키 보관 위치(109 C) — 수집과 무관해 COLLECT_ONLY_FROM 은 17(수집 끈 15 동의자에게도)
-        assert config.NOTICE_COLLECT_ONLY_FROM == 17
+        # 3.10.1: 16 = API 키 보관 위치(109 C) — 수집과 무관해 수집 끈 15 동의자에게도
+        # 3.13.1: 17 = 스펙업 순서(121) — 후보가 수집 스냅숏에서 나와 수집 몫. 수집 끈 16 동의자에겐 안 묻고 켤 때 묻는다
+        assert config.NOTICE_COLLECT_ONLY_FROM == 16 and config.SPECUP_NOTICE_VERSION == 17
         config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 15
         assert config.notice_update_pending(), "수집을 끈 15 동의자에게 16 을 안 물었다(109 C)"
         for acc in (14, 13, 12, 8):
@@ -10005,7 +10008,12 @@ def test_notice_versions_split_first_and_reask():
         config.NOTICE_ACCEPTED = 15
         assert config.startup_check_allowed()
         config.NOTICE_ACCEPTED = 16
-        assert config.startup_check_allowed() and not config.notice_update_pending()
+        assert config.startup_check_allowed() and not config.notice_update_pending(), "수집을 끈 16 동의자에게 17 을 물었다"
+        config.RANK_COLLECT = True
+        assert config.notice_update_pending(), "수집을 켠 16 동의자에게 17 을 안 물었다(U12)"
+        assert "스펙업 순서" in notice.changes_html(16) and "스펙업 순서" in notice.WEB_DATA_HTML
+        config.NOTICE_ACCEPTED = 17
+        assert not config.notice_update_pending()
         config.WEB_DATA = config.RANK_COLLECT = True
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
@@ -10052,7 +10060,7 @@ def test_notice8_asked_when_collect_off():
             assert config.notice_update_pending(), acc
         config.NOTICE_ACCEPTED = config.NOTICE_VERSION
         assert not config.notice_update_pending()
-        assert config.NOTICE_COLLECT_ONLY_FROM == 17, \
+        assert config.NOTICE_COLLECT_ONLY_FROM == 16, \
             "NOTICE_COLLECT_ONLY_FROM 을 되돌리면 수집 끈 동의자가 안내 15·16 을 못 본다(켤 때 확인 · 키 보관 위치)"
     finally:
         config.NOTICE_ACCEPTED, config.RANK_COLLECT = keep
@@ -10089,6 +10097,7 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
                  15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
+                 17: "4c0f0aceb94a6cd9",                                   # 17 = 3.13.1 [스펙업 순서] 탭을 연 동안 카드 시세·능력치 읽기(121 ②)
                  16: "32fa6de6f72909c7"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C) · 백업·복원(109 B — 같은 판)
 
 
@@ -11735,7 +11744,7 @@ def test_84_game_watch_and_schedulers():
     class _CardLoader(_Run):
         def __init__(self, today):
             super().__init__()
-            self.done = _FakePickLoader._S()
+            self.done, self.finished = _FakePickLoader._S(), _FakePickLoader._S()
 
         def isRunning(self):
             return False
@@ -12127,6 +12136,9 @@ def test_every_api_loader_start_goes_through_one_function():
     tree = ast.parse(src)
     allowed = {"start_ranker_pick": {"start_visible_api_loader"},
                "_stop_ranker_pick": {"start_visible_api_loader", "stop_api_loaders"},
+               "_stop_specup": {"start_visible_api_loader", "stop_api_loaders"},
+               "start_specup": {"start_visible_api_loader", "_on_specup_ready"},
+               "SpecupFetchLoader": {"_start_specup_fetch", "__init__"},
                "start_trait": {"start_visible_api_loader", "_on_ranker_pick_finished"}}
     bad = []
     for fn in ast.walk(tree):
@@ -17715,6 +17727,496 @@ def test_specup_loader_filters_lineup_and_respects_latch_121():
         assert run() == [(0, None)]
     finally:
         app_main.core.specup_load, app_main.SpecupLoader._noted = keep, keep_noted
+
+
+class _SpecupSig(_FakePickLoader._S):
+    pass
+
+
+class _FakeSpecupRead:
+    """재료 읽는 로더 자리 — give() 로 결과를 낸다."""
+    made: list = []
+
+    def __init__(self, fv=0):
+        self.fv, self.ready, self.running, self.cancelled, self.blocked = fv, _SpecupSig(), False, False, False
+        _FakeSpecupRead.made.append(self)
+
+    def start(self):
+        self.running = True
+
+    def isRunning(self):
+        return self.running
+
+    def cancel(self):
+        self.cancelled = True
+
+    def give(self, data, fv=None):
+        self.running = False
+        self.ready.emit((self.fv if fv is None else fv, data))
+
+
+class _FakeSpecupFetch:
+    made: list = []
+
+    def __init__(self, data, today):
+        self.data, self.today = data, today
+        self.progress, self.done, self.finished = _SpecupSig(), _SpecupSig(), _SpecupSig()
+        self.running = self.stopped = False
+        _FakeSpecupFetch.made.append(self)
+
+    def start(self):
+        self.running = True
+
+    def isRunning(self):
+        return self.running
+
+    def cancel(self):
+        self.stopped = True
+
+    def cancelled(self):
+        return self.stopped
+
+    def end(self, **kw):
+        self.running = False
+        self.done.emit(app_main.specupcollect.Result(**kw))
+        self.finished.emit()
+
+
+class _SpecupEnv:
+    """다 맞는 상태 — 탭 보임 · 웹 데이터 · 안내 17 · 게임 꺼짐 · 도는 로더 없음. 가짜 로더 둘."""
+    KEYS = ("_specup_data", "_specup_loader", "_specup_workers", "_specup_fetch", "_specup_result", "_specup_progress",
+            "_card_sched", "_pick_loader", "_trait_loader", "_loader", "_compare_loader", "_trade_loader", "_ranker_loader", "_released")
+
+    def __enter__(self):
+        self.keep = {k: getattr(_win, k) for k in self.KEYS}
+        self.keep_cfg = (config.WEB_DATA, config.NOTICE_ACCEPTED, app_main.SpecupLoader, app_main.SpecupFetchLoader)
+        config.WEB_DATA, config.NOTICE_ACCEPTED = True, config.SPECUP_NOTICE_VERSION
+        app_main.SpecupLoader, app_main.SpecupFetchLoader = _FakeSpecupRead, _FakeSpecupFetch
+        self.vis = True
+        _win._specup_visible = lambda: self.vis
+        _win._ranker_pick_visible = _win._trait_visible = lambda: False
+        self.clear()
+        return self
+
+    def clear(self):
+        for k in self.KEYS:
+            setattr(_win, k, None)
+        _win._specup_workers, _win._released = [], False
+        _FakeSpecupRead.made, _FakeSpecupFetch.made = [], []
+
+    @staticmethod
+    def data(reason=""):
+        return app_main.core.SpecInputs(reason=reason)
+
+    def ready(self, reason=""):
+        """열고 → 재료가 왔다 → 받는 로더(없으면 None)."""
+        self.clear()
+        _win.start_visible_api_loader()
+        _FakeSpecupRead.made[-1].give(self.data(reason))
+        return _FakeSpecupFetch.made[-1] if _FakeSpecupFetch.made else None
+
+    def __exit__(self, *exc):
+        del _win._specup_visible, _win._ranker_pick_visible, _win._trait_visible
+        for k, v in self.keep.items():
+            setattr(_win, k, v)
+        config.WEB_DATA, config.NOTICE_ACCEPTED, app_main.SpecupLoader, app_main.SpecupFetchLoader = self.keep_cfg
+        return False
+
+
+def test_specup_fetch_gate_121():
+    """받기 관문 — 안내 17 · 웹 데이터 · 보임 · 게임 · 받을 것이 있는 재료 · 다른 로더. 막혀도 재료 읽기(요청 0)는 한다(2회차 [중])."""
+    class _Busy:
+        def isRunning(self):
+            return True
+
+        def cancel(self):
+            pass
+
+    class _Sched:
+        def running(self):
+            return True
+    with _SpecupEnv() as env:
+        ld = env.ready()
+        assert ld is not None and ld.running and _win._specup_data is ld.data, "다 맞는데 안 받는다(아래가 빈 검사)"
+        assert _win._specup_fetching()
+        assert env.ready("tc_list") is not None, "팀컬러 목록을 못 받은 상태는 받아야 풀린다"
+        for reason in ("no_me", "no_snapshot", "few_rankers", "tc_enhance"):
+            assert env.ready(reason) is None and _win._specup_data.reason == reason, reason
+
+        def blocked(name, setup, undo, read=True):
+            env.clear()
+            setup()
+            try:
+                _win.start_visible_api_loader()
+                assert len(_FakeSpecupRead.made) == (1 if read else 0), (name, "재료 읽기")
+                if read:
+                    _FakeSpecupRead.made[0].give(env.data())
+                assert _FakeSpecupFetch.made == [], f"{name}: 막혀야 할 때 받았다"
+            finally:
+                undo()
+        acc = config.SPECUP_NOTICE_VERSION
+        blocked("안내 16", lambda: setattr(config, "NOTICE_ACCEPTED", acc - 1), lambda: setattr(config, "NOTICE_ACCEPTED", acc))
+        blocked("웹 데이터 꺼짐", lambda: setattr(config, "WEB_DATA", False), lambda: setattr(config, "WEB_DATA", True))
+        blocked("게임", lambda: app_main._GAME.update(on=True), lambda: app_main._GAME.update(on=False))
+        blocked("카드 자동 채우기 도는 중", lambda: setattr(_win, "_card_sched", _Sched()), lambda: setattr(_win, "_card_sched", None))
+        for name in ("_loader", "_compare_loader", "_trade_loader", "_ranker_loader", "_trait_loader"):
+            blocked(name, lambda: setattr(_win, name, _Busy()), lambda: setattr(_win, name, None))
+        blocked("안 보임", lambda: setattr(env, "vis", False), lambda: setattr(env, "vis", True), read=False)
+        blocked("끄는 중", lambda: setattr(_win, "_quitting", True), lambda: setattr(_win, "_quitting", False), read=False)
+        # 읽는 사이 다른 화면으로 갔다
+        env.clear()
+        _win.start_visible_api_loader()
+        env.vis = False
+        _FakeSpecupRead.made[0].give(env.data())
+        env.vis = True
+        assert _FakeSpecupFetch.made == []
+        _win.start_visible_api_loader()
+        assert len(_FakeSpecupFetch.made) == 1 and len(_FakeSpecupRead.made) == 1, "읽어 둔 재료로 바로 받는다"
+        _win.start_visible_api_loader()
+        assert len(_FakeSpecupFetch.made) == 1, "도는 중에 또 띄웠다"
+
+
+def test_specup_read_fetch_chain_ends_121():
+    """받은 것이 있으면 카드 화면을 낡게 하고 다시 읽어 남은 것을 이어 받는다 · 새로 받은 것이 없으면 멈춘다."""
+    with _SpecupEnv() as env:
+        keep = _win._card_rev, _win._ouid, set(_win._dirty)
+        try:
+            _win._ouid = "me"
+            _win._dirty.difference_update(_win.CARD_VIEW_KEYS)
+            ld = env.ready()
+            ld.progress.emit(3, 9)
+            assert _win._specup_progress == (3, 9)
+            ld.end(saved=2, requests=2)
+            assert _win._card_rev == keep[0] + 1 and set(_win.CARD_VIEW_KEYS) <= _win._dirty, "카드 화면이 낡은 값을 쓴다"
+            assert _win._specup_progress is None and _win._specup_result.saved == 2 and not _win._specup_fetching()
+            assert len(_FakeSpecupRead.made) == 2 and _win._specup_data is None, "받은 뒤 다시 안 읽었다"
+            _FakeSpecupRead.made[-1].give(env.data())
+            assert len(_FakeSpecupFetch.made) == 2, "남은 것을 안 이었다"
+            rev = _win._card_rev
+            for stop in ("", "cap", "blocked", "down"):
+                _FakeSpecupFetch.made[-1].end(saved=0, stop=stop)
+                assert (len(_FakeSpecupRead.made), len(_FakeSpecupFetch.made)) == (2, 2) and _win._card_rev == rev, f"{stop}: 받은 것이 없는데 되풀이한다"
+            # 못 읽었으면(지우는 중·잠김) 거기서 멈추고, 다시 열 때 다시 읽는다
+            env.clear()
+            _win.start_visible_api_loader()
+            _FakeSpecupRead.made[0].give(None)
+            assert len(_FakeSpecupRead.made) == 1 and _FakeSpecupFetch.made == []
+            _win.start_visible_api_loader()
+            assert len(_FakeSpecupRead.made) == 2
+        finally:
+            _win._card_rev, _win._ouid, _win._dirty = keep
+
+
+def test_specup_stop_and_resume_121():
+    """멈추는 길은 stop_api_loaders 하나(다른 자리 · 숨김 · 게임) — 멈춘 뒤 다시 보이면 잇고, 안 보이면 안 켠다."""
+    with _SpecupEnv() as env:
+        ld = env.ready()
+        _win.stop_api_loaders()
+        assert ld.stopped
+        ld.end(stop="cancel")                             # 끝나는 사이 다시 보인다
+        assert len(_FakeSpecupFetch.made) == 2 and _FakeSpecupFetch.made[-1].running
+        ld = _FakeSpecupFetch.made[-1]
+        _win.stop_api_loaders()
+        env.vis = False
+        ld.end(stop="cancel")
+        assert len(_FakeSpecupFetch.made) == 2, "안 보이는데 다시 켰다"
+        env.vis = True
+        # 게임 — 켜지면 멈추고 꺼지면 잇는다(on_game_changed 한 길)
+        shell = SimpleNamespace(sched=None, owner_sched=None, card_sched=None, window=_win)
+        ld = env.ready()
+        app_main._GAME["on"] = True
+        try:
+            app_main.on_game_changed(shell, True)
+            assert ld.stopped
+            ld.end(stop="cancel")
+            assert len(_FakeSpecupFetch.made) == 1, "게임 중인데 다시 켰다"
+        finally:
+            app_main._GAME["on"] = False
+        app_main.on_game_changed(shell, False)
+        assert len(_FakeSpecupFetch.made) == 2
+        # 다른 탭의 로더를 켤 때 스펙업을 멈추고, 스펙업을 켤 때 그쪽을 멈춘다
+        for other in ("_ranker_pick_visible", "_trait_visible"):
+            ld = env.ready()
+            keep = getattr(_win, other)
+            started = []
+            keep_s = _win.start_ranker_pick, _win.start_trait
+            _win.start_ranker_pick, _win.start_trait = lambda: started.append("_ranker_pick_visible"), lambda: started.append("_trait_visible")
+            setattr(_win, other, lambda: True)
+            try:
+                _win.start_visible_api_loader()
+            finally:
+                setattr(_win, other, keep)
+                del _win.start_ranker_pick, _win.start_trait
+            assert ld.stopped and started == [other], (other, started)
+        env.clear()
+        log = []
+        _win._pick_loader, _win._trait_loader = _FakeThread("픽", log), _FakeThread("특성", log)
+        _win.start_visible_api_loader()
+        assert log == ["stop 픽", "stop 특성"], log
+        # 특성이 끝나면 기다리던 스펙업을 잇는다
+        env.clear()
+        _win._specup_data = env.data()
+        _win._trait_loader = SimpleNamespace(isRunning=lambda: False, cancel=lambda: None, ended=False)
+        _win._on_trait_finished()
+        assert _FakeSpecupRead.made or _FakeSpecupFetch.made, "특성 → 스펙업 탭으로 옮기면 영영 안 켜진다"
+
+
+def test_specup_reset_paths_121():
+    """재료가 낡는 길 전부 — 버리고 보이면 다시 읽는다. 안 보이면 버리기만. 받는 중인 것은 그대로 두고 끝난 뒤 새 재료로 잇는다."""
+    with _SpecupEnv() as env:
+        done = SimpleNamespace(done=1, status=None)
+        paths = {
+            "스냅숏": _win._invalidate_rank_views, "랭커 선발": _win._invalidate_pick, "팀컬러 창": _win.tc_data_changed,
+            "카드 자동 채우기": lambda: _win._on_card_round_done(done), "표시한 판": _win._refilter, "새 경기": _win._render_all,
+            "거래 키 바뀜": _win._on_trades_wiped, "내 계정": lambda: _win._set_my_account(None),
+            "저장 공간": lambda: _win._on_storage_cleared(SimpleNamespace(kind="cards", state="busy")),
+        }
+        keep_set = store.set_trade_state
+        store.set_trade_state = lambda *a, **k: None
+        try:
+            for name, fn in paths.items():
+                for vis in (True, False):
+                    env.clear()
+                    env.vis = vis
+                    _win._specup_data = env.data()
+                    fn()
+                    assert _win._specup_data is None, f"{name}: 낡은 재료가 남았다"
+                    assert bool(_FakeSpecupRead.made) is vis, (name, vis, "다시 읽기")
+        finally:
+            store.set_trade_state = keep_set
+        env.vis = True
+        env.clear()
+        _win._specup_data = same = env.data()
+        _win._on_card_round_done(SimpleNamespace(done=0, status=None))
+        assert _win._specup_data is same, "받은 것이 없는 바퀴가 재료를 버렸다"
+        # 받는 중에 낡았다 — 멈추지 않고, 새 재료는 끝난 뒤 이어서
+        ld = env.ready()
+        _win._specup_reset()
+        _FakeSpecupRead.made[-1].give(env.data())
+        assert not ld.stopped and len(_FakeSpecupFetch.made) == 1
+        ld.end(saved=0)
+        assert len(_FakeSpecupFetch.made) == 2 and _FakeSpecupFetch.made[-1].data is _win._specup_data
+        # 놓은 로더가 늦게 낸 결과는 버린다 · 읽는 동안 거르기 판본이 바뀌면 다시 읽는다
+        env.clear()
+        _win.start_visible_api_loader()
+        old = _FakeSpecupRead.made[0]
+        _win._specup_reset()
+        assert old.cancelled and len(_FakeSpecupRead.made) == 2
+        old.give(env.data("no_me"))
+        assert _win._specup_data is None, "놓은 로더의 결과를 썼다"
+        _FakeSpecupRead.made[1].give(env.data(), fv=-5)
+        assert _win._specup_data is None and len(_FakeSpecupRead.made) == 3, "다른 거르기 판본의 결과를 썼다"
+        core.set_excluded({'표시'})   # 거를 판이 없으면 판본은 늘 0이다
+        core.bump_filter_version()
+        env.vis = False
+        _FakeSpecupRead.made[2].give(env.data())
+        assert len(_FakeSpecupRead.made) == 3, "안 보이는데 다시 읽었다"
+        env.vis = True
+        _win.start_visible_api_loader()
+        assert _FakeSpecupRead.made[3].fv == core.filter_version() > 0, "시작 때 판본을 안 실었다"
+        core.set_excluded(())
+        # 내려놓은 창은 다시 안 읽는다
+        env.clear()
+        _win._released = True
+        _win._specup_reset()
+        assert _FakeSpecupRead.made == []
+        _win._released = False
+        # 지우는 중이면 못 뜬다 — 쥐지 않아야 끝난 뒤 다시 뜬다
+
+        class _Held(_FakeSpecupRead):
+            def start(self):
+                self.blocked = True
+        app_main.SpecupLoader = _Held
+        env.clear()
+        _win.start_visible_api_loader()
+        assert _win._specup_loader is None
+        app_main.SpecupLoader = _FakeSpecupRead
+        _win._on_storage_cleared(SimpleNamespace(kind="cards", state="busy"))
+        assert _win._specup_loader is not None and _win._specup_loader.running
+
+
+def test_specup_and_card_backfill_take_turns_121():
+    """카드 자동 채우기가 도는 동안 스펙업 받기는 미루고(끝나면 잇고), 스펙업이 도는 동안 예약 틱은 건너뛴다(안 돌면 돈다)."""
+    started = []
+
+    class _Card:
+        def __init__(self, today):
+            self.done, self.finished, self.running = _SpecupSig(), _SpecupSig(), False
+
+        def start(self):
+            started.append(self)
+            self.running = True
+
+        def isRunning(self):
+            return self.running
+
+        def cancel(self):
+            pass
+    keep = config.read_card_backfill, app_main.CardBackfillLoader
+    config.read_card_backfill, app_main.CardBackfillLoader = lambda: True, _Card
+    try:
+        with _SpecupEnv() as env:
+            sched = app_main.CardBackfillScheduler()
+            env.clear()
+            _win.attach_card_sched(sched)
+            _win._specup_data = env.data()
+            sched.tick()
+            assert len(started) == 1, "스펙업이 안 도는데 예약이 안 돈다(아래가 빈 검사)"
+            _win.start_visible_api_loader()
+            assert _FakeSpecupFetch.made == [], "예약이 도는데 받기를 시작했다"
+            started[0].running = False
+            started[0].finished.emit()
+            assert len(_FakeSpecupFetch.made) == 1, "예약이 끝났는데 안 이었다"
+            sched.tick()
+            assert len(started) == 1, "스펙업이 도는데 예약이 시작했다"
+            _FakeSpecupFetch.made[0].end(saved=0)
+            sched.tick()
+            assert len(started) == 2
+            env.vis = False
+            started[1].running = False
+            n = len(_FakeSpecupFetch.made), len(_FakeSpecupRead.made)
+            started[1].finished.emit()
+            assert (len(_FakeSpecupFetch.made), len(_FakeSpecupRead.made)) == n
+            sched._timer.stop()
+    finally:
+        config.read_card_backfill, app_main.CardBackfillLoader = keep
+
+
+def test_specup_fetch_loader_121():
+    """로더 — 내 선발 먼저인 순서를 넘기고, 멈춤·안내 철회를 요청마다 보고, 간격은 취소로 끊기는 wait · 실패해도 결과를 낸다 · 지우기가 기다린다."""
+    L = app_main.SpecupFetchLoader
+    assert L.WRITES == {app_main.STORE_FIFA, app_main.STORE_CARDS}
+    import specup
+    data = specup.Inputs(lineup=(specup.Slot(0, 77, 11),), cands=(specup.CandCard(5, "GK", 9),))
+    got, seen = [], {}
+    keep = app_main.specupcollect.run
+    keep_cfg = config.WEB_DATA, config.NOTICE_ACCEPTED
+
+    def fake(path, spids, today, cancel=None, on_progress=None, wait=None, **kw):
+        seen.update(path=path, spids=spids, today=today, cancel=cancel, wait=wait)
+        assert kw == {}, kw
+        config.WEB_DATA, config.NOTICE_ACCEPTED = True, config.SPECUP_NOTICE_VERSION
+        seen["off"] = []
+        seen["off"].append(cancel())
+        config.NOTICE_ACCEPTED = config.SPECUP_NOTICE_VERSION - 1
+        seen["off"].append(cancel())
+        config.NOTICE_ACCEPTED = config.SPECUP_NOTICE_VERSION
+        t = time.perf_counter()
+        ld.cancel()
+        wait(30)
+        seen["waited"] = time.perf_counter() - t
+        seen["off"].append(cancel())
+        return app_main.specupcollect.Result(saved=1)
+    try:
+        app_main.specupcollect.run = fake
+        ld = L(data, date(2026, 11, 24))
+        ld.done.connect(got.append)
+        ld.run()
+        assert seen["spids"] == (77, 5) and seen["path"] == config.DB_PATH and seen["today"] == date(2026, 11, 24), seen
+        assert seen["off"] == [False, True, True] and ld.cancelled(), seen["off"]
+        assert seen["waited"] < 5, "멈춰도 간격을 다 기다린다"
+        assert got[0].saved == 1
+
+        def boom(*a, **k):
+            raise RuntimeError("x")
+        app_main.specupcollect.run = boom
+        ld = L(data, date(2026, 11, 24))
+        ld.done.connect(got.append)
+        ld.run()
+        assert got[1].error == "RuntimeError" and got[1].saved == 0
+        for name in (app_main.STORE_FIFA, app_main.STORE_CARDS, "all"):
+            app_main.CLEARING.add(name)
+            try:
+                ld = L(data, date(2026, 11, 24))
+                ld.start()
+                assert ld.blocked, name
+            finally:
+                app_main.CLEARING.clear()
+    finally:
+        app_main.specupcollect.run = keep
+        config.WEB_DATA, config.NOTICE_ACCEPTED = keep_cfg
+
+
+def test_specup_view_key_opens_and_leaves_121():
+    """탭을 열면 켜고 다른 자리로 가면 멈춘다 · 실제 보임 판정은 키 · 메인 화면 · 창 보임 전부 · U16: PICK_KEYS·PICK_DATA_KEYS 밖."""
+    assert _win.SPECUP_KEY == "specup" and _win.SPECUP_KEY not in _win.PICK_DATA_KEYS, "랭커 픽 받기를 켠다(U16)"
+    calls = []
+    keep_page = _win.stack.currentIndex()
+    try:
+        _win.KEY_OF_VIEW = {**app_main.MainWindow.KEY_OF_VIEW, ("랭커 픽", "스펙업 순서"): "specup"}
+        _win.start_visible_api_loader = lambda: calls.append("start")
+        _win.stop_api_loaders = lambda: calls.append("stop")
+        _win._current_view = lambda: ("랭커 픽", "스펙업 순서")
+        _win._on_view_opened()
+        assert calls == ["start"], calls
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        _win.isVisible, _win.isMinimized = lambda: True, lambda: False
+        assert _win._specup_visible()
+        _win.isMinimized = lambda: True
+        assert not _win._specup_visible()
+        _win.isVisible, _win.isMinimized = lambda: False, lambda: False
+        assert not _win._specup_visible()
+        _win.isVisible = lambda: True
+        _win.stack.setCurrentIndex(1 - _win.PAGE_MAIN if _win.PAGE_MAIN in (0, 1) else 0)
+        assert not _win._specup_visible(), "검색 화면인데 보인다고 했다"
+        _win.stack.setCurrentIndex(_win.PAGE_MAIN)
+        _win._current_view = lambda: ("랭커 픽", "픽")
+        assert not _win._specup_visible()
+        _win._current_view = lambda: ("대시보드", None)
+        _win._on_view_opened()
+        assert calls == ["start", "stop"], calls
+    finally:
+        for n in ("KEY_OF_VIEW", "start_visible_api_loader", "stop_api_loaders", "_current_view", "isVisible", "isMinimized"):
+            _win.__dict__.pop(n, None)
+        _win.stack.setCurrentIndex(keep_page)
+
+
+def test_specup_quit_and_release_121():
+    log = []
+    keep = _win._specup_workers, _win._specup_fetch, _win._specup_data
+    try:
+        _win._specup_workers, _win._specup_fetch = [_FakeThread("읽기", log)], _FakeThread("받기", log)
+        left = _win.shutdown(fast=True)
+        assert {"stop 읽기", "stop 받기"} <= set(log) and _win._specup_fetch in left, log
+        log.clear()
+        _win.shutdown()
+        assert {"wait 읽기", "wait 받기"} <= set(log), log
+        log.clear()
+        _win._specup_fetch.wait = lambda ms: log.append(f"기다림 {ms}")   # 끝까지 안 끝난다
+        _win.shutdown()
+        waited = [int(x.split()[1]) for x in log if x.startswith("기다림")]
+        assert waited and waited[0] >= 10_000 and "kill 받기" not in log, (log, "저장 도중 끊거나 도는 요청(10초)을 안 기다린다")
+    finally:
+        _win._specup_workers, _win._specup_fetch, _win._specup_data = keep
+    import ast
+    import inspect
+    import textwrap
+    for fn in (app_main.MainWindow.release_memory, app_main.MainWindow._forget_everything):
+        called = {n.func.attr for n in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(fn))))
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        assert "_specup_reset" in called, f"{fn.__name__} 이 재료를 안 놓는다"
+
+
+def test_specup_web_toggle_starts_visible_loader_121():
+    """[정보] 에서 홈페이지 데이터를 켜면 뒤에 열려 있는 탭이 바로 받는다 · 끄면 안 부른다."""
+    calls = []
+    keep = config.set_web_data, config.WEB_DATA
+    config.set_web_data = lambda on: setattr(config, "WEB_DATA", on)
+    _win.start_visible_api_loader = lambda: calls.append(config.WEB_DATA)
+    keep_sync = app_main.AboutDialog._sync_pick
+    app_main.AboutDialog._sync_pick = lambda self: None
+    try:
+        dlg = app_main.AboutDialog(_win)
+        dlg._sched = lambda: None
+        dlg._on_web_toggled(True)
+        assert calls == [True], calls
+        dlg._on_web_toggled(False)
+        assert calls == [True], calls
+        dlg.deleteLater()
+    finally:
+        del _win.start_visible_api_loader
+        app_main.AboutDialog._sync_pick = keep_sync
+        config.set_web_data, config.WEB_DATA = keep
 
 
 # ── 110 조각 ③ — B2 등급 색 띠 · B3 대시보드 머리 줄 엠블럼 ─────────────────────────────────────────────────────────

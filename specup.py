@@ -118,8 +118,20 @@ class Inputs:
 
     @property
     def want(self) -> tuple[int, ...]:
-        """시세·카드 정보가 필요한 카드 — 후보 ∪ 지금 선발(받기는 조각 ②)."""
+        """시세·카드 정보가 필요한 카드 — 후보 ∪ 지금 선발."""
         return tuple(sorted({c.spid for c in self.cands} | {s.spid for s in self.lineup}))
+
+    @property
+    def fetch_order(self) -> tuple[int, ...]:
+        """받는 순서(`specupcollect`) — 지금 선발 먼저(지금 카드의 OVR 을 모르면 그 자리 전체가 빈다), 그다음 많이 쓴 후보."""
+        cands = sorted(self.cands, key=lambda c: (-c.users, c.spid))
+        return tuple(dict.fromkeys([s.spid for s in self.lineup] + [c.spid for c in cands]))
+
+    @property
+    def fetchable(self) -> bool:
+        """받을 것이 있는 재료인가 — 팀컬러 목록을 못 받았거나(TC_LIST) 낡아서 못 가른(TC_SPLIT) 때는 목록을 새로 받으면 풀릴 수 있다.
+        나머지 사유는 받아도 순서표가 안 선다."""
+        return self.reason in ("", TC_LIST, TC_SPLIT)
 
 
 @dataclass

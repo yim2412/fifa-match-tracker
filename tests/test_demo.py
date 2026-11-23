@@ -205,6 +205,32 @@ def test_search_toggles_and_check_make_no_requests():
     dlg.deleteLater()
 
 
+def test_specup_tab_makes_no_requests():
+    """121 ② — 둘러보기에서 [스펙업 순서] 가 보여도 재료만 읽고(저장된 것) 요청은 0. 관문을 억지로 열어도 웹 스위치가 막는다."""
+    shell, win = _SHELL_WIN
+    import specup
+    win._specup_visible = lambda: True
+    keep = config.specup_allowed
+    try:
+        win._specup_reset()
+        assert _pump(lambda: win._specup_data is not None), "재료를 못 읽었다(아래가 빈 검사)"
+        assert win._specup_fetch is None and not config.specup_allowed()
+        win._specup_data = specup.Inputs(lineup=(specup.Slot(0, 951900001, 8),))
+        win.start_visible_api_loader()
+        assert win._specup_fetch is None
+        config.specup_allowed = lambda: True
+        win.start_visible_api_loader()
+        ld = win._specup_fetch
+        assert ld is not None, "관문을 열었는데 안 떴다(위가 빈 검사)"
+        assert _pump(lambda: not ld.isRunning() and win._specup_result is not None)
+        assert win._specup_result.requests == 0
+    finally:
+        del win._specup_visible
+        config.specup_allowed = keep
+        win._specup_data = None
+    assert SENT == [], SENT
+
+
 def test_restart_uses_original_env():
     shell, win = _SHELL_WIN
     got = []

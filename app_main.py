@@ -67,6 +67,7 @@ import rankerpick
 import rankerstats
 import ranker
 import seasons as sn
+import specupcollect
 import storage
 import store
 import teamcolor
@@ -2103,6 +2104,35 @@ class SpecupLoader(Worker):
             self.ready.emit((self._fv, out))
 
 
+class SpecupFetchLoader(Worker):
+    """121 [스펙업 순서] 받기(specupcollect.run) — 화면이 보이는 동안만. 요청 사이 간격은 취소 이벤트의 wait 라 끊으면 바로 돌아온다
+    (끊긴 뒤 기다림 ≤ 도는 요청 하나의 타임아웃). 안내·웹 데이터는 요청마다 다시 본다. 한 요청 = 한 트랜잭션이라 terminate 하지 않는다."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS})
+    progress = Signal(int, int)   # 끝까지 본 카드, 받을 카드
+    done = Signal(object)         # specupcollect.Result
+
+    def __init__(self, data, today: date):
+        super().__init__()
+        self.data = data   # 띄울 때의 재료(core.SpecInputs) — 받는 동안 재료가 바뀌었는지 본다
+        self._today = today
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
+
+    def run(self) -> None:
+        try:
+            res = specupcollect.run(config.DB_PATH, self.data.fetch_order, self._today,
+                                    cancel=lambda: self._cancel.is_set() or not config.specup_allowed(),
+                                    on_progress=self.progress.emit, wait=self._cancel.wait)
+        except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등. 다음에 열 때 다시
+            res = specupcollect.Result(error=type(e).__name__)
+        self.done.emit(res)
+
+
 def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료 경계(그날 `config.SEASON_CUTOFF_H` 시 · seasons 주의 2) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
@@ -3147,6 +3177,7 @@ class CardBackfillScheduler(QObject):
     - 켜져 있으면 로더 시작. 바퀴 끝에 켠 날 뒤로 막힘이 TRAIT_BLOCK_DAYS 이어졌으면 스스로 끈다(사유 blocked)."""
 
     finished = Signal(object)     # cardcollect.RunResult — 창이 [정보] 상태 줄·카드 화면을 다시
+    idle = Signal()               # 바퀴의 스레드가 끝났다 — 기다리던 스펙업 받기가 잇는다(finished 는 아직 도는 중에 온다)
     switched_off = Signal(str)    # 스스로 껐다 — 사유(cardcollect.OFF_REASON_TEXT 의 키)
 
     def __init__(self, parent=None, now_fn=datetime.now):
@@ -3160,6 +3191,7 @@ class CardBackfillScheduler(QObject):
         self._first.setInterval(config.CARD_BACKFILL_FIRST_S * 1000)
         self._first.timeout.connect(self.tick)
         self.loader: CardBackfillLoader | None = None
+        self.yield_to = lambda: False   # 참이면 이번 틱은 건너뛴다 — 창이 스펙업 받기(121)를 끼운다. 다음 틱이 잇는다
         self._quitting = False
         # 마지막 바퀴의 상태(cardcollect.Status) — [정보] 줄이 이걸 읽는다. 화면 스레드에서 수요를 세면 0.4초 멈춘다(51 조각 ① 리뷰)
         self.last = None
@@ -3184,11 +3216,15 @@ class CardBackfillScheduler(QObject):
             if self.running():
                 self.loader.cancel()
             return
-        if start and not self.running() and not self._quitting and not game_paused():
+        if start and not self.running() and not self._quitting and not game_paused() and not self.yield_to():
             w = CardBackfillLoader(self._now().date())
             w.done.connect(self._on_done)
+            w.finished.connect(self._on_thread_end)
             self.loader = w
             w.start()
+
+    def _on_thread_end(self) -> None:
+        self.idle.emit()
 
     def _on_done(self, res) -> None:
         if getattr(res, "status", None) is not None:
@@ -3347,6 +3383,13 @@ class MainWindow(QMainWindow):
         self._sim_loader: SimilarLoader | None = None
         self._sim_workers: list[SimilarLoader] = []   # 띄운 로더 전부 — 끝날 때까지 쥔다(도는 QThread 를 놓으면 프로세스가 죽는다 · _retire_loaders)
         self.similar: core.Similar | None = None   # 테스트가 본다
+        # 121 [스펙업 순서] — 읽어 둔 재료(None = 아직 · 무효화 때 비운다) · 읽는 로더(띄운 것 전부는 끝날 때까지 쥔다) · 받는 로더와 그 결과
+        self._specup_data: core.SpecInputs | None = None
+        self._specup_loader: SpecupLoader | None = None
+        self._specup_workers: list[SpecupLoader] = []
+        self._specup_fetch: SpecupFetchLoader | None = None
+        self._specup_result: specupcollect.Result | None = None
+        self._specup_progress: tuple[int, int] | None = None
         self._notes_writer: NotesWriter | None = None
         self._notes_eff: store.Notes | None = None   # 줄에 올린 쓰기까지 얹은 값 — 쓰기 둘이 이어질 때 뒤 것이 앞 것을 되돌리지 않게(없으면 None)
         self._opp_ouid_cache: tuple | None = None   # (키, {닉네임: 상대 ouid}) — 상대 메모가 있을 때만 짓는다
@@ -3910,6 +3953,8 @@ class MainWindow(QMainWindow):
         self._card_sched = sched
         sched.switched_off.connect(self._on_card_backfill_off)
         sched.finished.connect(self._on_card_round_done)
+        sched.yield_to = self._specup_fetching
+        sched.idle.connect(self._on_card_sched_idle)
 
     CARD_VIEW_KEYS = ("history", "trades", "pricew", "tactics", "players", "luck")   # 카드 정보·시세를 쓰는 화면(113)
 
@@ -3919,14 +3964,25 @@ class MainWindow(QMainWindow):
         표시만 하고 fifa.db 를 열지 않아 지우는 중에도 괜찮다."""
         if getattr(res, "done", 0) <= 0:
             return
+        self._card_data_changed()
+        self._specup_reset()
+
+    def _card_data_changed(self) -> None:
+        """저장된 카드 정보·시세·팀컬러 목록이 바뀌었다(카드 자동 채우기 · 스펙업 받기) — 판본을 올리고 쓰는 화면에 낡음 표시."""
         self._card_rev += 1
         if not self._ouid or self._released or self._quitting:
             return
         self._dirty.update(self.CARD_VIEW_KEYS)
 
+    def _on_card_sched_idle(self) -> None:
+        """카드 자동 채우기 한 바퀴가 끝났다 — 그동안 미룬 스펙업 받기가 있으면 잇는다."""
+        if self._specup_visible():
+            self.start_visible_api_loader()
+
     def tc_data_changed(self) -> None:
         """팀컬러 창이 이름표·단계표를 새로 받았을 수 있다 — [이력] 이 다음에 다시 센다."""
         self._card_rev += 1
+        self._specup_reset()   # 121 — 팀컬러 번호를 이 목록에서 찾는다
         if self._ouid:
             self._dirty.add("history")
 
@@ -4590,7 +4646,7 @@ class MainWindow(QMainWindow):
             self.start_trades()
         if key in self.PICK_DATA_KEYS or key == "predcheck":
             self._dirty.add(key)  # 받은 만큼이 DB 에 있다 — 열 때마다 다시 읽는다(예측 되짚기는 내 계정 확정·새 예측 줄에 달려 작은 표 둘)
-        if key in self.PICK_KEYS or key == self.TRAIT_KEY:
+        if key in self.PICK_KEYS or key in (self.TRAIT_KEY, self.SPECUP_KEY):
             self.start_visible_api_loader()  # 다른 쪽 로더는 거기서 멈추게 하고, 그게 끝나면(finished) 이쪽이 뜬다
         else:
             self.stop_api_loaders()  # 다른 자리로 갔다 — 사람 사이에서 멈춘다(받은 만큼은 남는다 · U2)
@@ -8063,6 +8119,7 @@ class MainWindow(QMainWindow):
         except sqlite3.Error as e:
             self.statusBar().showMessage(f"내 계정을 저장하지 못했습니다: {e}", 5000)
         self._invalidate_trades()
+        self._specup_reset()     # 121 — 기준 한 사람이 바뀐다
         self._refresh_recent()   # 108 C — 칩 맨 앞 "내 계정" 이 바로 따라온다
 
     def _on_trade_mine(self) -> None:
@@ -8111,6 +8168,7 @@ class MainWindow(QMainWindow):
 
     def _on_trades_wiped(self) -> None:
         self._invalidate_trades()  # 지연 그리기가 들고 있던 옛 주인 거래가 남지 않게
+        self._specup_reset()       # 121 — 내 계정이 비워졌다
         self._refresh_recent()     # 키가 바뀌어 내 계정이 비워졌다(reset_trades_for_key) — 칩에서도 뺀다(108 3회차 M5)
 
     def _on_trades_done(self, res) -> None:
@@ -8149,20 +8207,118 @@ class MainWindow(QMainWindow):
         return self._bg_running(self._trait_loader)
 
     def start_visible_api_loader(self) -> None:
-        """보이는 쪽 로더를 켠다 — 오픈API 백그라운드(랭커 픽·특성)를 다시 켜는 자리는 전부 여기를 거친다(32단계 검토 3회차:
+        """보이는 쪽 로더를 켠다 — 백그라운드 받기(랭커 픽·특성·스펙업)를 다시 켜는 자리는 전부 여기를 거친다(32단계 검토 3회차:
         랭커 픽 → 특성 탭으로 옮기면 랭커 픽 로더가 아직 돌아 특성이 못 뜨는데, 끝난 뒤 다시 켜는 자리들이 랭커 픽만 켰다).
         안 보이는 쪽이 돌고 있으면 멈추게만 한다 — 그게 끝나면(finished) 다시 여기로 온다."""
         if self._ranker_pick_visible():
             self._stop_trait()
+            self._stop_specup()
             self.start_ranker_pick()
         elif self._trait_visible():
             self._stop_ranker_pick()
+            self._stop_specup()
             self.start_trait()
+        elif self._specup_visible():
+            self._stop_ranker_pick()
+            self._stop_trait()
+            self.start_specup()
 
     def stop_api_loaders(self) -> None:
-        """랭커 픽·특성 둘 다 멈춤 요청만(기다리지 않는다) — 숨김·다른 자리·다른 오픈API 로더에 양보."""
+        """랭커 픽·특성·스펙업 전부 멈춤 요청만(기다리지 않는다) — 숨김·다른 자리·게임·다른 오픈API 로더에 양보."""
         self._stop_ranker_pick()
         self._stop_trait()
+        self._stop_specup()
+
+    # ── 스펙업 순서(121) — 재료 읽기(요청 0) → 모자란 것 받기(홈페이지) ─────────
+    def _specup_visible(self) -> bool:
+        return (self.KEY_OF_VIEW.get(self._current_view()) == self.SPECUP_KEY
+                and self.stack.currentIndex() == self.PAGE_MAIN
+                and self.isVisible() and not self.isMinimized())
+
+    def _specup_fetching(self) -> bool:
+        return self._bg_running(self._specup_fetch)
+
+    def start_specup(self) -> None:
+        """보이면 재료를 읽고(관문·게임과 무관 — 저장된 것만), 읽어 두었으면 모자란 것을 받는다."""
+        if self._quitting or not self._specup_visible():
+            return
+        if self._specup_data is None:
+            self._start_specup_load()
+        else:
+            self._start_specup_fetch()
+
+    def _start_specup_load(self) -> None:
+        if self._specup_loader is not None and self._specup_loader.isRunning():
+            return
+        w = SpecupLoader(core.filter_version())
+        w.ready.connect(lambda payload, w=w: self._on_specup_ready(w, payload))
+        self._specup_loader = w   # start 전에 — 신호가 바로 와도(테스트가 run 으로 바꿔 끼운다)
+        self._specup_workers = [x for x in self._specup_workers if x.isRunning()] + [w]
+        w.start()
+        if w.blocked:   # 지우는 중 — 끝나면 _on_storage_cleared 가 다시
+            self._specup_loader = None
+
+    def _on_specup_ready(self, w, payload) -> None:
+        if w is not self._specup_loader:
+            return   # 무효화로 놓은 로더 — 멈춤을 부탁하기 직전에 낸 결과
+        fv, data = payload
+        self._specup_loader = None
+        if fv != core.filter_version():   # 읽는 동안 표시한 판이 바뀌었다(109 M13)
+            self.start_specup()
+            return
+        self._specup_data = data          # 못 읽었으면 None — 다시 열 때 다시(여기서 되풀이하지 않는다)
+        if data is not None:
+            self._start_specup_fetch()
+
+    def _specup_reset(self) -> None:
+        """재료가 낡았다(스냅숏 · 랭커 선발 · 내 계정 · 새 경기 · 표시한 판 · 카드 정보) — 버리고, 보이면 다시 읽는다. 받는 중인 것은 그대로 둔다."""
+        ld, self._specup_loader = self._specup_loader, None
+        if ld is not None and ld.isRunning():
+            ld.cancel()
+        self._specup_data = None
+        if not self._quitting and not self._released and self._specup_visible():
+            self._start_specup_load()
+
+    def _start_specup_fetch(self) -> None:
+        """켜는 조건: 안내 17(웹 데이터 포함) · 탭과 창이 보임 · 게임 꺼짐 · 카드 자동 채우기가 안 돎(둘이 같은 카드를 읽지 않게) ·
+        다른 오픈API 로더 없음(저장이 줄 서지 않게). 하루 상한·막힘은 로더 안에서 — 요청 없이 바로 끝난다."""
+        data = self._specup_data
+        if (self._quitting or game_paused() or not config.specup_allowed() or not self._specup_visible()
+                or data is None or not data.fetchable):
+            return
+        if self._specup_fetching() or self._api_background_busy():
+            return  # 그 로더가 끝나면(finished) start_visible_api_loader 로 다시 여기로
+        if self._card_sched is not None and self._card_sched.running():
+            return  # 바퀴가 끝나면(idle) 다시 여기로
+        ld = SpecupFetchLoader(data, date.today())
+        ld.progress.connect(self._on_specup_progress)
+        ld.done.connect(self._on_specup_done)
+        ld.finished.connect(self._on_specup_fetch_finished)
+        self._specup_fetch, self._specup_result, self._specup_progress = ld, None, None
+        ld.start()
+
+    def _stop_specup(self) -> None:
+        if self._specup_fetch is not None and self._specup_fetch.isRunning():
+            self._specup_fetch.cancel()
+
+    def _on_specup_progress(self, n: int, m: int) -> None:
+        self._specup_progress = (n, m)
+
+    def _on_specup_done(self, res) -> None:
+        self._specup_result = res
+
+    def _on_specup_fetch_finished(self) -> None:
+        """받은 것이 있으면 재료를 다시 읽는다(그 끝에서 남은 것을 이어 받는다 — 새로 받은 것이 없으면 거기서 멈춘다)."""
+        ld, res = self._specup_fetch, self._specup_result
+        if ld is None:
+            return
+        ld.ended = True
+        self._specup_progress = None
+        if res is not None and res.saved:
+            self._card_data_changed()
+            self._specup_reset()
+        elif ld.cancelled() or self._specup_data is not ld.data:
+            self.start_visible_api_loader()   # 멈췄다 다시 온 탭 · 받는 동안 재료가 바뀌었다
 
     def _trait_visible(self) -> bool:
         return (self.KEY_OF_VIEW.get(self._current_view()) == self.TRAIT_KEY
@@ -8220,7 +8376,7 @@ class MainWindow(QMainWindow):
             self._pick_purge_pending = False
             self._pick_restart = False
             self.purge_ranker_pick_data(everything=True)
-        self._invalidate_pick()
+        self._invalidate_pick()   # 스펙업 탭으로 옮겨 기다리던 쪽은 이 안의 _specup_reset 이 다시 읽으며 잇는다
         if self._ranker_pick_visible():
             self.start_visible_api_loader()   # 특성 → 랭커 픽 탭으로 옮겨 기다리던 쪽. 특성 탭이면 다시 켜지 않는다(끝없이 다시 뜬다)
 
@@ -8570,12 +8726,14 @@ class MainWindow(QMainWindow):
     # ── 11-lite 추천(17단계) — 랭커 픽 [추천] 탭 ─────────────────────────
     TRAIT_KEY = "traits"   # [메타 분석 › 포지션 특성] — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
     PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
+    SPECUP_KEY = "specup"  # [랭커 픽 › 스펙업 순서] — PICK_KEYS 에 넣지 않는다(U16 · 랭커 픽 받기를 켜지 않는다). 화면은 조각 ③
     PICK_DATA_KEYS = PICK_KEYS + (TRAIT_KEY,)  # 무효화 목록 — 랭커 픽·특성 로더 진행 · 끄기/지우기 · 정리 끝
     REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
     REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
 
     def _invalidate_pick(self) -> None:
         self._sim_reset()   # 110 R1 — 랭커 픽이 받아 둔 ouid 도 같이 바뀐다(지웠으면 메모리에도 안 남긴다)
+        self._specup_reset()   # 121 — 랭커 선발(후보)이 바뀐다
         for key in self.PICK_DATA_KEYS:
             self._invalidate(key)
 
@@ -9330,6 +9488,7 @@ class MainWindow(QMainWindow):
     def _invalidate_rank_views(self) -> None:
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
         self._sim_reset()           # 110 R1 — 팀컬러 목록 저장으로 단계표가 바뀐다
+        self._specup_reset()        # 121 — 내 팀컬러·구단가치와 랭커 줄이 스냅숏에서 온다
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
         dlg = self._teamcolor_dialog
@@ -12808,6 +12967,7 @@ class MainWindow(QMainWindow):
         core.bump_filter_version()
         self._refresh_filter_badge()
         self._chip_apply()             # 칩 미리보기도 새 판본으로(U2)
+        self._specup_reset()           # 121 — 기준 선발이 표시한 판을 건너뛴다(M6)
         if not self._matches_all:      # 아직 그릴 경기가 없다 — 다음 _render_all 이 새 묶음으로 그린다
             return
         self._launch_streak()      # 연승·연패 섞기는 작업 스레드 — 새 묶음으로 다시(M13)
@@ -13285,6 +13445,7 @@ class MainWindow(QMainWindow):
         # 등급 탭은 늘 — 같이 부르는 _render_elo 가 [점수·예측] 을 채운다(빠뜨리면 그 탭이 조용히 빈다). 가볍다.
         self._render_grade_tab()
         self._ranker_failed, self._ranker_note = None, ""  # 새 데이터면 실패했던 랭커 요청도 다시 해 본다
+        self._specup_reset()   # 121 — 새 경기면 지금 선발이 바뀔 수 있다
         self._dirty = set(self._renderers())
         self._launch_streak()
         if self.LAZY_RENDER:
@@ -16568,6 +16729,9 @@ class MainWindow(QMainWindow):
             # 연승·연패 섞기 — 섞기 한 번(수 ms)마다 취소를 본다
             *[(ld, cancel(ld), 1000, False) for ld in self._habits_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._chip_workers],
+            # 스펙업 순서(121) — 읽기는 DB 만 · 받기는 요청 사이에서 멈춘다(요청 하나 타임아웃 10초 · 한 요청 = 한 트랜잭션)
+            *[(ld, cancel(ld), 1000, False) for ld in self._specup_workers],
+            (self._specup_fetch, cancel(self._specup_fetch), 12000, False),
             *[(ld, cancel(ld), 1000, False) for ld in self._sim_workers],   # 110 R1 단계표 읽기 — DB 읽기 한 번 · 무효화로 놓은 것까지
             # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
             *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
@@ -16685,6 +16849,7 @@ class MainWindow(QMainWindow):
         CLEARING.difference_update(self.CLEAR_STORES[res.kind])
         if res.kind in ("cards", "all", "restore"):
             self._card_rev += 1   # 그리기보다 먼저(2회차 N6) — 아래에서 다시 그리는 화면이 옛 카드 캐시를 쓰지 않게
+            self._specup_reset()  # 121 — 보이면 다시 읽고 다시 받는다
         if res.kind == "restore":
             self._on_restore_ended(res)
         elif res.kind == "all" and res.state == "ok":
@@ -16825,6 +16990,8 @@ class MainWindow(QMainWindow):
         self._distcmp_val, self._distcmp_key = None, None
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = self._fmchange_cache = None
         self._value_input = self._so_split_cache = None
+        self._specup_reset()   # 121 — 닉네임·선발·랭커 선발에서 만든 후보를 쥔다
+        self._specup_result = None
         self._card_rev += 1
         self._records_cache = None
         self._fun_cache = {}
@@ -16869,6 +17036,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._distcmp_val, self._distcmp_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
+        self._specup_reset()        # 121 — 후보·시세 재료. 읽는 중인 것도 놓는다(늦게 온 결과가 다시 쥐지 않게)
         self._value_input = None    # 선발 시세 카드가 저장 전체 경기를 쥔다(113 1회차 [중]15 — 가계부를 한 번 열면 메모리가 안 풀렸다)
         self._records_cache = None  # 업적은 match_id 만 들지만 키가 옛 목록 id 를 쥔다
         self._fun_cache = {}
@@ -18279,6 +18447,9 @@ class AboutDialog(QDialog):
                             "껐습니다. 다음 조회부터 넥슨 홈페이지를 읽지 않습니다.")
         self._refresh_owner_row()
         self._refresh_card_row()   # 끄면 카드 정보 자동 채우기도 꺼졌다(set_web_data) — 예약은 _sync_pick 이 멈췄다
+        start = getattr(self.parent(), "start_visible_api_loader", None)
+        if on and start is not None:
+            start()   # 121 — 뒤에 열려 있는 [스펙업 순서] 가 바로 받는다(끄면 로더가 요청 사이에서 스스로 멈춘다)
 
     def _on_rank_toggled(self, on: bool) -> None:
         try:

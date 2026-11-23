@@ -39,6 +39,8 @@ jobs:
         run: python tests/test_teamcolor_calc.py
       - name: 스펙업 순서
         run: python tests/test_specup.py
+      - name: 스펙업 순서 받기
+        run: python tests/test_specupcollect.py
       - name: 습관 · 기준선
         run: python tests/test_habits.py
       - name: 선수 색인 · 랭커 픽

@@ -14,12 +14,14 @@
 규칙·함정 (CLAUDE.md 파일 표에서 옮김 — 2026-10-07):
 선수 카드 상세(모바일 데이터센터)·능력치 시뮬레이터(PC 데이터센터 POST) 스크래핑.
 급여·OVR 은 **본 카드 구역**(`playerThumb` … `infoWrap`)에서만 — 페이지에 다른 카드 값이 수십 개다.
-카드 캐시 채우기 `collect_cards`(쓰임별 하루 계수 `KIND_CHIP`·`KIND_LEDGER` — 요청 직전에만 `store.budget_take` · 웹 데이터 꺼짐은 요청도 계수도 0) ·
-`save_card`(시세 + `card_info`)
+카드 캐시 채우기 `collect_cards`(쓰임별 하루 계수 `KIND_CHIP`·`KIND_LEDGER`·스펙업 `store.BUDGET_SPECUP` — 요청 직전에만 `store.budget_take` ·
+웹 데이터 꺼짐은 요청도 계수도 0) · `save_card`(시세 + `card_info`) · 한 실행의 계수·간격·막힘은 `WebRun` 하나(121 — 막힘이면 그날
+`<kind>_block`, 점검은 서로 다른 카드에서 두 번 이어질 때 그 실행만 끝)
 """
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 
 import requests
@@ -529,38 +531,104 @@ def save_card_extra_sim(conn, spid: int, sim: AbilitySim, day: str) -> None:
                       json.dumps([list(x) for x in sim.feature_options], ensure_ascii=False), day))
 
 
-# 쓰임별 하루 계수 이름(store.api_budget.kind)
+# 쓰임별 하루 계수 이름(store.api_budget.kind) — 막힘 표시는 store.card_block_kinds 에도(test_specup 이 대조)
 KIND_LEDGER = "card_ledger"
 KIND_CHIP = "card_chip"
 
 
+class WebRun:
+    """카드 요청 한 실행(로더 하나)의 하루 계수 · 간격 · 막힘(121 — 카드 페이지와 시뮬레이터가 같이 쓴다).
+
+    | 무엇 | 규칙 |
+    |---|---|
+    | 시작 | 그날 blocks(기본 이 쓰임의 `<kind>_block`) 중 하나라도 있으면 요청 없이 끝(`ready`) |
+    | 요청 하나 | (간격) → 취소·웹 데이터 → 하루 계수 → 요청. 실패·빈 응답도 센다 |
+    | 막힘(rate) | 그날 `<kind>_block` 을 남기고 끝 |
+    | 점검(down) | 같은 길(what)의 **서로 다른 카드**에서 이어 두 번이면 끝 — 늘 오류 페이지인 카드 하나가 뒤 카드까지 멈추지 않게(M2). 막힘으로 안 적는다 |
+    | 예외 | 파싱 버그 등은 형식 실패로 — 그 카드만 |
+
+    stop: "" 이어 감 · "blocked" · "down" · "cap" · "cancel"(멈춤·웹 데이터 꺼짐)."""
+
+    def __init__(self, conn, day: str, kind: str, cap: int | None, cancel=lambda: False, gap_s: float = 0, wait=time.sleep,
+                 blocks: tuple[str, ...] | None = None):
+        self.conn, self.day, self.kind, self.cap = conn, day, kind, cap
+        self.cancel, self._gap_s, self._wait = cancel, gap_s, wait
+        self._blocks = blocks or (f"{kind}_block",)
+        self.requests = 0
+        self.stop = ""
+        self._down: set[str] = set()   # 방금 점검이던 길 — 한 실행은 같은 길에서 같은 카드를 두 번 묻지 않는다
+
+    def ready(self) -> bool:
+        import store
+        if not self.stop and store.budget_hit_429(self.conn, self.day, self._blocks):
+            self.stop = "blocked"
+        return not self.stop
+
+    def call(self, what: str, fn, *args):
+        """→ 응답 · 요청하지 않았거나 실행이 끝났으면 None(stop 이 선다). 그 카드만의 실패는 PlayerInfoError·TeamColorError 로 올린다."""
+        import store
+        if self.stop:
+            return None
+        if self.requests and self._gap_s:
+            self._wait(self._gap_s)
+        if self.cancel() or not config.WEB_DATA:
+            self.stop = "cancel"
+            return None
+        if not store.budget_take(self.conn, self.day, self.kind, self.cap):
+            self.stop = "cap"
+            return None
+        self.requests += 1
+        try:
+            out = fn(*args)
+        except Exception as e:  # noqa: BLE001 — 아래에서 갈래를 나눈다
+            kind = getattr(e, "kind", None)   # PlayerInfoError · teamcolor.TeamColorError 가 같은 갈래를 쓴다
+            if kind == "rate":
+                store.budget_mark_429(self.conn, self.day, f"{self.kind}_block")
+                self.stop = "blocked"
+                return None
+            if kind == "down":
+                if what in self._down:
+                    self.stop = "down"
+                    return None
+                self._down.add(what)
+                raise
+            self._down.discard(what)
+            if kind is None:
+                raise PlayerInfoError(f"{type(e).__name__}: {e}", "format") from e
+            raise
+        self._down.discard(what)
+        return out
+
+
 def collect_cards(conn, spids, day: str, kind: str, cap: int, cancel=lambda: False, fetch=None,
-                  need=None, on_card=None) -> tuple[int, int]:
+                  need=None, on_card=None, run: WebRun | None = None) -> tuple[int, int]:
     """선수 페이지를 읽어 시세·카드 정보 캐시를 채운다 → (이번에 읽은 카드 수, 상한에 걸려 못 읽은 카드 수).
 
     need(spid) 가 참인 카드만(기본: 오늘 시세가 없는 카드). 요청 직전에만 그날 그 쓰임(kind)의 계수를 1 더하고
     상한(cap)에 닿으면 멈춘다 — 실행이 여러 번이어도, 시세가 비어 와 저장되지 않는 카드도 센다.
     웹 데이터가 꺼졌으면 요청도 계수도 없이 멈춘다. 한 장 = 한 트랜잭션, 카드 사이마다 cancel.
     한 장 실패는 건너뛴다(나머지를 막지 않게). on_card(PlayerInfo) — 읽은 카드를 화면에 바로 넘길 때.
+    막힘·점검으로 끝내는 규칙은 WebRun. run 을 주면 그 실행에 이어서(스펙업 — 간격·다른 길의 막힘까지).
     그날 읽은 카드(시세가 비어 왔어도 · 형식이 깨져 와도)는 그날 다시 안 읽는다 — 시도 기록 card_tries 의 "p:<spid>"
     (카드 백필의 "c:" 와 따로 · 51단계 4회차 [중]). 형식 실패가 CARD_TRY_MAX 번이면 CARD_TRY_REST_DAYS 쉰다."""
     import store
     fetch = fetch or fetch_player_info
     need = need or (lambda s: not store.card_price_fresh(conn, s, day))
+    run = run or WebRun(conn, day, kind, cap, cancel)
     done = skipped = 0
+    if not run.ready():
+        return done, skipped
     todo = [s for s in dict.fromkeys(spids) if need(s) and not store.try_skip(conn, f"p:{s}", day)]
     for i, spid in enumerate(todo):
-        if cancel() or not config.WEB_DATA:
-            break
-        if not store.budget_take(conn, day, kind, cap):
-            skipped = len(todo) - i
-            break
         try:
-            info = fetch(spid)
+            info = run.call("page", fetch, spid)
         except PlayerInfoError as e:
             if e.kind == "format":
                 store.try_record(conn, f"p:{spid}", day, ok=False)
             continue
+        if run.stop:
+            skipped = len(todo) - i if run.stop == "cap" else 0
+            break
         ok = page_ok(info)
         store.try_record(conn, f"p:{spid}", day, ok=ok)
         if not ok:

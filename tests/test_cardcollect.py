@@ -697,7 +697,7 @@ class FakeLoader:
 
     def __init__(self, today):
         self.today = today
-        self.done = _Sig()
+        self.done, self.finished = _Sig(), _Sig()
         self.running = self.cancelled = self.terminated = False
         self.waits: list[int] = []
         FakeLoader.made.append(self)
@@ -721,6 +721,7 @@ class FakeLoader:
     def finish(self, res):
         self.running = False
         self.done.emit(res)
+        self.finished.emit()
 
 
 def _sched():

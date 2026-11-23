@@ -680,6 +680,7 @@ def test_emblem_cell_cache_and_invalidation():
         assert st.cell("Zed", emblem="crests/l77.png").icon_key == "crests/l77.png", "지도에 없어도 행이 키를 알면 그걸 쓴다"
         assert st.cell("Alpha", emblem="crests/l77.png").icon_key == "crests/l77.png", "지도에 있어도 행이 아는 키가 이긴다(구단주 표 스냅숏 줄)"
         st._invalidate = lambda key: None
+        st._specup_reset = lambda: None   # 121 — 재료 버리기는 스모크가 잰다
         st.RANK_VIEW_KEYS = MW.RANK_VIEW_KEYS
         st._tc_minor_only = False        # 57 K8 — 비주류 거르기가 켜졌을 때만 팀컬러 화면도 무효화한다
         st._teamcolor_dialog = None      # 67 M11 — 열어 둔 팀컬러 창이 있을 때만 1만 명 칸을 다시 읽는다

@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS card_info (
     fetched_on TEXT NOT NULL
 );
 -- 하루 요청 계수(2.1.1) — 실제로 HTTP 요청을 보내기 직전에만 1 더한다. 재시작해도 남아 하루 상한을 지킨다.
--- kind: card_ledger(가계부 시세) · card_chip(축구장 칩) · ranker_pick · openapi(16단계)
+-- kind: card_ledger(가계부 시세) · card_chip(축구장 칩) · specup(스펙업 순서) · ranker_pick · openapi(16단계)
 CREATE TABLE IF NOT EXISTS api_budget (
     day      TEXT NOT NULL,
     kind     TEXT NOT NULL,
@@ -1505,9 +1505,14 @@ BUDGET_CARD = "card_backfill"
 BUDGET_CARD_DEV = "card_backfill_dev"
 
 
+BUDGET_SPECUP = "specup"   # 스펙업 순서(121) — 화면이 보이는 동안 후보 카드의 선수 페이지·시뮬레이터·팀컬러 목록(specupcollect)
+
+
 def card_block_kinds() -> tuple[str, ...]:
-    """같은 IP 의 웹 길 막힘 표시 — 하나라도 그날 있으면 카드 백필(앱·측정 도구 둘 다)은 그날 시작하지 않는다(B[중]11 · 5판)."""
-    return (BUDGET_TRAIT_WEB_BLOCK, f"{BUDGET_CARD}_block", f"{BUDGET_CARD_DEV}_block")
+    """같은 IP 의 웹 길 막힘 표시 — 하나라도 그날 있으면 카드 백필(앱·측정 도구 둘 다)과 스펙업 받기는 그날 시작하지 않는다
+    (B[중]11 · 5판 · 121 M3 이 카드 페이지를 읽는 쓰임 셋 — 가계부·축구장 칩·스펙업 — 을 더했다)."""
+    return (BUDGET_TRAIT_WEB_BLOCK, f"{BUDGET_CARD}_block", f"{BUDGET_CARD_DEV}_block",
+            "card_ledger_block", "card_chip_block", f"{BUDGET_SPECUP}_block")
 
 
 def card_block_streak(conn: sqlite3.Connection, kind: str, since_day: str) -> int:
