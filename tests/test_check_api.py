@@ -270,6 +270,30 @@ def test_user_checks_96():
     assert r.status == check_api.WARN, r
 
 
+def test_salary_cap_compares_my_starters_121():
+    import store
+    ps = [{"spId": 100 + i, "spPosition": i, "spGrade": 8} for i in range(11)] + [{"spId": 999, "spPosition": 28}]
+    game = lambda ouid, players: {"matchId": "m", "matchInfo": [{"ouid": "me", "player": players}, {"ouid": ouid, "player": ps}]}   # noqa: E731
+    with tempfile.TemporaryDirectory() as d, fakes(Path(d)):
+        conn = store.open_db(config.DB_PATH)
+        try:
+            store.save_card_salary(conn, [(100 + i, 28) for i in range(11)] + [(999, 90)])
+        finally:
+            conn.close()
+        run = lambda *ds: check_api.check_salary_cap(check_api.CheckCtx(ouid="me", details=list(ds)))   # noqa: E731
+        r = run(game("o", ps))
+        assert r.status == check_api.OK and "1판 급여 합 최대 308" in r.lines[0], r   # 교체(90)는 안 더한다
+        keep, config.SPECUP_SALARY_CAP = config.SPECUP_SALARY_CAP, 307
+        try:
+            assert run(game("o", ps)).status == check_api.WARN
+        finally:
+            config.SPECUP_SALARY_CAP = keep
+        # 열 명 · 급여를 모르는 카드가 낀 판 · 상대 쪽 선발은 안 센다
+        other = [dict(p, spId=5) for p in ps]
+        for d0 in (game("o", ps[:10]), game("o", other), {"matchInfo": [{"ouid": "o", "player": ps}]}):
+            assert "확인 못 함" in run(d0).lines[0], d0
+
+
 def test_run_checks_stops_and_cancels_96():
     seen = []
     mk = lambda st, stop=False, code=0: (lambda ctx: check_api.Result(st, [st], stop, code))  # noqa: E731

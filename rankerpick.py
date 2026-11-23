@@ -529,10 +529,15 @@ def recommend_candidates(conn, rows: list[dict], color: str | None, me: str | No
     (스냅숏 행에서 빼면 ② 의 색인 쪽으로도 안 간다)."""
     if not color:
         return []
+    mine = [r for r in rows if r.get("team_color") == color and r["nickname"] != me]
+    return known_lineups(conn, mine, config.RECOMMEND_OPPONENT_MAX, today)
+
+
+def known_lineups(conn, mine: list[dict], opponent_max: int, today: date | None = None) -> list[Candidate]:
+    """그 랭커 줄들 가운데 선발을 아는 사람 — 받아 둔 랭커 픽(①③) → 내 DB 의 상대(② · 순위 순 opponent_max 명). 요청 없음."""
     today = today or date.today()
     oldest = (today - timedelta(days=config.RANKER_PICK_MAX_AGE_DAYS)).isoformat()
     since_opp = (today - timedelta(days=config.CARD_OWNER_DAYS)).isoformat()
-    mine = [r for r in rows if r.get("team_color") == color and r["nickname"] != me]
     have = store.ranker_squads(conn)
     out: list[Candidate] = []
     rest: list[dict] = []
@@ -555,7 +560,7 @@ def recommend_candidates(conn, rows: list[dict], color: str | None, me: str | No
                                        f" AND last_day >= ?", (*chunk, since_day)):
             found.append((by_nick[nick], ouid))
     found.sort(key=lambda t: t[0]["rank"])
-    for r, ouid in found[:config.RECOMMEND_OPPONENT_MAX]:
+    for r, ouid in found[:opponent_max]:
         detail = _latest_detail(conn, ouid)
         players = _starters(detail, ouid) if detail else []
         if players:

@@ -60,6 +60,7 @@
 | `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 작업 스케줄러 `FifaDevArchive` · `.env` `DEV_NEXON_API_KEY` · ⚠ 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` · 세부는 머리말 |
 | `cardviews.py` | 카드 정보 화면 재료(113단계(옛 68) 일부) — 선수 지표 실효 OVR·키·체형 · 내 스쿼드 OVR · C5·M3(`squads_by_day` 를 화면이 한 번만 세어 둘에 넘긴다) · N21 승부차기 상대 GK 나눔 `shootout_splits`(저장된 전체 · 경기 고르기는 `stats.shootout_games` 를 M6 카드와 같이 쓴다 · 화면 캐시 키에 `_card_rev`) · 계산만 |
 | `teamcolor_calc.py` | 라인업으로 켜진 팀컬러(113 N29·K2·K4) — 계산만(화면은 `core_api`) · 소속과 관계를 따로 배분(넥슨 시뮬레이터 칸 구조) · 모름은 카드와 단계를 종류별로 가른다 · 배분 식 `greedy` 는 `tools/measure_cards.py` 와 같이 쓴다(51 측정 B 가 잰 식) · 화면 재료는 `app_main._tc_material`(저장된 것만 · 못 읽으면 None, 캐시 안 함) · **카드·단계표·이름표가 바뀌는 길은 `app_main._card_rev` 를 올린다**(카드 백필 바퀴 끝 `_on_card_round_done` · 팀컬러 창 `tc_data_changed` · 지우기) · 화면 사유는 `cardviews.screen_state(conn, 날짜, 예약의 마지막 상태)` — 화면 스레드에서 `cardcollect.status` 를 부르지 않는다(0.7초) · 세부는 머리말 |
+| `specup.py` | 스펙업 순서(121 · 조각 ① 계산만, 화면은 ③) — 읽기는 `load`(작업 스레드 `app_main.SpecupLoader` · 요청 0), 순서는 `plan`(0.02초라 설정을 바꾸면 이것만 다시) · 기준은 검색한 사람이 아니라 내 계정 · 팀컬러는 (이름, 엠블럼) → 목록 번호 `resolve_color`(상수 `TEAMCOLOR_DUP_NAMES` 를 안 본다) · 걸음을 고를 때마다 전체 후보에서 다시 센다(같은 선수·급여로 빠진 칸이 저절로 돌아온다) · 선발 고르기 `core.specup_lineup` 만 F · 못 세우는 사유는 파일 위 상수(글은 notice 에) · 세부는 머리말 |
 | `cardstats.py` | 카드 정보 계산(51단계) — 계산만 · 지금은 실효 OVR `effective_ovr`·선발 평균 `lineup_strength` 만(측정 도구와 앱이 **같은 식**을 쓰게 — 측정 A 가 맞춘 `C1_LOGIT_*` 가 앱의 Δ 와 어긋나지 않게) · C1~C6 집계는 조각 ②③ 에서 |
 | `tools/measure_cards.py` | **51단계 측정 A~C(이 PC 전용 · 배포판 밖)** — 판정 규칙 상수는 ROADMAP 측정 절을 옮긴 것(`RULE_COMMIT` · 결과를 보고 안 바꾼다) · `--start` 로 D0 를 잡기 전엔 백필·얼리기가 안 돈다 · **앱 토글이 켜졌으면 거부** · 결과는 `DATA_DIR/measure/`(닉네임 없음) · 명령 표는 머리말 |
 | `server/` | **중앙 조회 서버 1단계 ⓐ(배포판 밖 · 정본 `docs/CENTRAL_SERVER.md` 11절)** — 넥슨 경로를 같은 모양으로 받아 대신 묻고 저장(표준 `http.server` · 프로세스 하나) · 상수는 `server/settings.py` 에만 · **`config` 를 import 하지 않는다**(사용자 `.env` 의 키가 서버 환경에 실린다 — `test_server_import_does_not_load_config`) · 키·DB 는 저장소 밖 `%LOCALAPPDATA%\피파전적관리\server\`(`server.env`·`server.db`) · 실행 `python -m server.run_local`(게임·`dev_matches`·`measure_cards` 가 돌면 거부 · **`GAME_PROCESSES` 가 비면 거부**) · 앱은 `.env` `FIFA_SERVER_URL` 이 있을 때만 — **서버를 켜는 생성 자리는 `app_main` 검색 `api` 와 `check_api` 둘뿐**(키 확인·구단주 분포·dev 도구는 늘 직접) · 서버 사정은 `nexon_api.SERVER_CODES`(키 창·`_mark_final_429` 에 안 잡힌다) · 거래는 늘 직접 |
@@ -83,6 +84,7 @@ python tests/test_icons.py     # 표 칸 그림(40단계) — 주소 틀 · 받�
 python tests/test_timeline.py  # 스쿼드 타임라인 · 가계부(짝·보유 상태·경계·앞뒤 창) — 지어낸 경기·거래(네트워크 없음)
 python tests/test_records.py   # 88 업적 — 종류마다 조건이 없으면 안 생기는지 · 시즌 경계 · 몰수 규칙 · 라이벌 · 오늘의 선수(지어낸 경기, 네트워크 없음)
 python tests/test_teamcolor_calc.py   # 켜진 팀컬러(113) — 종류별 배분 · 모름(카드·단계) · 이력 끊김 · 조합 묶음(지어낸 카드·경기, 네트워크 없음)
+python tests/test_specup.py    # 스펙업 순서(121) — 순서 골든 · 강제 묶음 · 같은 선수 · 급여 · 팀컬러 번호 실측 픽스처 · 요청 0(네트워크 없음)
 python tests/test_enhance.py   # 강화 비용(83) — 공지 표 · 기대 시도 골든 · 보호 · 금액 분포 · 재료 조합 · 재료 캐시(가짜 응답, 네트워크 없음)
 python tests/test_predict.py   # 시즌 말 예측 — 가짜 스냅숏(네트워크 없음)
 python tests/test_predict_check.py   # 예측 되짚기(B8) — 가짜 fifa.db·가짜 순위 조회(관문·키 지문·sn 대조·다시 묻기 3일·취소·지우기 — 네트워크 없음)

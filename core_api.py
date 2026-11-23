@@ -49,6 +49,8 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
                     CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
 from teamcolor_calc import (ComboRow, ComboTable, SideColors, club_values, combo_rows, lineup_spids, material as tc_material,
                             my_lineups as tc_lineups, side_colors)
+from specup import (Inputs as SpecInputs, Plan as SpecPlan, SpecStep, budget_cut as specup_budget_cut, load as specup_load,
+                    pick_lineup as specup_lineup, plan as specup_plan)
 from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, StreakBreak, match_context, period_totals,
                       play_time, session_luck, session_rows, size_bins, split_sessions, streak_break,
                       PaceSide, SeasonPace, SeasonReview, SeasonSpan, StreakNote, season_pace, season_review,
@@ -187,6 +189,8 @@ __all__ = [
     # enhance — 강화 비용(83). 재료 받기(boostcollect)는 로더가 부른다
     "ENHANCE_BUDGET_QS", "ENHANCE_EXPECT_Q", "ENHANCE_GRADES_MAX", "ENHANCE_PROTECT_FROM", "ENHANCE_RANGE_PCTS",
     "EnhanceError", "EnhanceEstimate", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels", "enhance_parse_money",
+    # specup — 스펙업 순서(121). 선발 고르기 specup_lineup 만 F(표시한 판을 뺀다)
+    "SpecInputs", "SpecPlan", "SpecStep", "specup_budget_cut", "specup_lineup", "specup_load", "specup_plan",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "FormationReport", "FormationRow", "formation_report",   # 97 X2 포메이션 바꾼 전후
@@ -239,6 +243,7 @@ _F_DETAILS = ("mixed_of_details", "goal_flow", "half_share_diff", "side_totals",
               "player_finishing_trend", "possession_stats", "ranker_compare", "rating_trend", "recent_ratings",
               "result_breakdown", "shot_map", "versus_profile", "shootout_keepers", "shot_type_counts", "shot_summary",
               "team_profile", "combo_rows", "shootout_splits",
+              "specup_lineup",   # 121 기준 선발 — 표시한 판은 최근 경기로 안 본다(M6)
               # M39: 영입 시점·포메이션 바뀐 구간 경계를 표시한 판을 뺀 기록에서 다시 잡는다(표시한 판이 처음부터 없었던 것처럼).
               # 섞임으로 두면 squad_timeline 의 구간 계산을 둘로 갈라야 하고, 영입이 표시한 판 자리면 전후 구간에 그 판이 끼어
               # 숫자에 남는다. 경계가 한 판 밀릴 수 있어도 화면의 모든 승·무·패는 표시한 판을 안 센다.
@@ -284,7 +289,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
         "tc_detail", "tc_top_owners", "champ_games", "rank_cut", "last_raw_id", "late_rise", "meta_avg_elo", "similar_rankers", "snapshot_formation", "step_table", "step_reached", "my_emblem", "opp_rank_rows", "opp_rank_label",
         "bin_of_value", "opp_scores", "card_screen_state", "lineup_cards", "player_card", "price_days", "price_index",
         "squad_ovr", "value_breakdown", "squads_by_day", "value_series", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels",
-        "enhance_parse_money", "parse_trades", "ledger", "price_targets", "records_by_match",
+        "enhance_parse_money", "specup_budget_cut", "specup_load", "specup_plan", "parse_trades", "ledger", "price_targets", "records_by_match",
         "record_kinds", "recent_records", "record_summary", "card_ovr", "pitch_rows", "squad_value",
         "division_entries", "division_trend", "formation_of", "is_champion_or_above", "match_formations",
         "formation_label", "opponent_squad", "own_squad", "position_line", "ranker_targets", "ranker_values",

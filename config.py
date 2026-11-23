@@ -797,6 +797,14 @@ RECOMMEND_MIN_RANKERS = 10         # 내 팀컬러 후보가 이보다 적으면
 RECOMMEND_MIN_USERS = 3             # 대체 카드는 후보 중 이만큼 이상이 쓴 것만(한두 명의 취향을 추천으로 내지 않게)
 RECOMMEND_FETCH_MAX = 20            # ③ 모자랄 때 1,000위 안에서 더 받는 랭커 — 최대 60요청(하루 상한 안)
 RECOMMEND_OPPONENT_MAX = 200        # ② 내 DB 의 상대 후보 상한(순위 순) — 경기 본문을 읽어 그리기 예산(0.3초) 안에
+# 스펙업 순서(121단계 · specup.py)
+SPECUP_MIN_USERS = 5               # 후보 카드 — 같은 팀컬러 랭커가 같은 자리 줄에 이만큼 쓴 것만(U2 · RECOMMEND_MIN_USERS 와 따로)
+SPECUP_GRADES = (8, 9, 10, 11)     # 사는 강화(U3) · 아래 둘은 설정 체크로 더한다
+SPECUP_GRADES_MORE = (12, 13)
+SPECUP_OPPONENT_MAX = 1500         # 랭커 선발을 읽는 상한 — 11-24 실측(경기 40,379): 같은 팀컬러 최다 1,205명 · 선발을 아는 642명 읽기 0.2초라 안 걸린다
+SPECUP_SALARY_CAP = 315            # 팀 급여 상한(선발 11명 · U14) — 2026-10-29 넥슨 공지 6337. 업데이트마다 오른다(check_api 가 내 선발 합과 대조)
+SPECUP_CHUNK = {"적게": 1.0, "많이": 0.7}   # 묶음 굵기 — 뒤 걸음 효율이 앞의 이 배수보다 높으면 앞을 건너뛴다(1 = 거꾸로일 때만)
+SPECUP_LINEUP_SCAN = 60            # 내 선발을 찾으려고 먼저 읽는 최근 경기 수(전부 표시한 판·빈 판이면 저장 전체)
 # 특성 몫(32단계 U7) — 하루 RANKER_PICK_DAILY_REQ 에서 1~200 다시 확인(3일마다 67명 × 목록·상세 2 = 134)과 추천 ③(20명 × 3 = 60)을
 # 먼저 떼고 남은 것(106)만 특성 201~500 이 쓴다 — 특성 탭을 먼저 연 날 랭커 픽·[추천] 이 상한에 걸리지 않게(검토 B)
 TRAIT_API_SHARE = RANKER_PICK_DAILY_REQ - 2 * -(-RANKER_PICK_TOP // RANKER_PICK_STALE_DAYS) - 3 * RECOMMEND_FETCH_MAX

@@ -508,6 +508,33 @@ def check_db(ctx: CheckCtx) -> Result:
     return _res(lines)
 
 
+def check_salary_cap(ctx: CheckCtx) -> Result:
+    # 121 스펙업 순서의 급여 상한(config.SPECUP_SALARY_CAP)이 지금 값인가 — 최근 내 선발 11명 급여 합이 넘으면 넥슨이 올린 것이다
+    # (card_info 의 급여는 지금 값이라 라이브 패치 앞의 판은 한두 판 어긋날 수 있어 WARN)
+    try:
+        import cardstats
+        conn = store.open_db(config.DB_PATH)
+        try:
+            sums = []
+            for d in ctx.details:
+                me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == ctx.ouid), None)
+                spids = [p.get("spId") for p in cardstats.starters(me or {})]
+                info = store.load_card_info(conn, spids)
+                pay = [(info.get(s) or {}).get("salary") for s in spids]
+                if len(pay) == 11 and all(isinstance(v, int) for v in pay):
+                    sums.append(sum(pay))
+        finally:
+            conn.close()
+        cap = config.SPECUP_SALARY_CAP
+        if not sums:
+            return _res(["[WARN] 팀 급여 상한: 급여를 다 아는 최근 선발이 없어 확인 못 함"])
+        ok = max(sums) <= cap
+        return _res([f"{'[OK]  ' if ok else '[WARN]'} 팀 급여 상한 {cap}: 최근 내 선발 {len(sums)}판 급여 합 최대 {max(sums)}"
+                     + ("" if ok else " — 상한이 바뀌었으면 config.SPECUP_SALARY_CAP 을 고칠 것")])
+    except Exception as e:
+        return _res([f"[WARN] 팀 급여 상한 확인 실패(스펙업 순서만 영향): {type(e).__name__}: {e}"])
+
+
 def check_owner_dist(ctx: CheckCtx) -> Result:
     # 49단계 구단주 분포 — 상태 한 줄(받는 중·최근 바퀴·쓰는 분포) + 로더와 같은 요청 꼴 탐침: 목록 한 쪽(OWNER_DIST_PAGE ·
     # 재시도 없음)과 캐시 없는 상세 1건. 남의 닉네임 대신 이 계정 ouid 로 — 상세가 .cache 에 안 쓰이는지도 본다(14.6만 파일 방지)
@@ -613,7 +640,7 @@ CHECKS: list[tuple[str, Callable[[CheckCtx], Result]]] = [
     ("랭킹 목록", check_rank_page), ("팀컬러", check_teamcolor), ("표 칸 그림", check_icons),
     ("포지션 특성", check_traits), ("선수 카드", check_player_card), ("시뮬레이터", check_simulator),
     ("강화 재료", check_boost), ("카드 백필", check_card_backfill), ("현재 등급", check_grade),
-    ("DB", check_db), ("구단주 분포", check_owner_dist), ("시즌표", check_rank_seasons), ("예측", check_prediction),
+    ("DB", check_db), ("급여 상한", check_salary_cap), ("구단주 분포", check_owner_dist), ("시즌표", check_rank_seasons), ("예측", check_prediction),
 ]
 
 

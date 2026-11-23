@@ -61,6 +61,7 @@ _DETAIL_END = 'class="content_bottom"'
 # 이름 꼬리표 — 이름이 같은 두 팀컬러를 가르는 엠블럼 종류(ranker.emblem_key 의 앞 칸)
 KIND_LABEL = {"teamcolorboost": "강화", "crests": "클럽", "countries": "국가"}
 UNSPLIT = "구분 전"
+ENHANCE_EMBLEM = "teamcolor/"   # 강화 팀컬러(금빛 물결 등 5개)와 "단일 팀"의 엠블럼 종류 — cardcollect 와 같은 값(test_specup 이 대조)
 _SEP = " · "
 
 

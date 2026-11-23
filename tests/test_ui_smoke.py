@@ -17663,6 +17663,60 @@ def test_similar_loader_reads_steps_and_ouids_and_stays_empty_when_clearing_110(
         _similar_cleanup()
 
 
+def test_specup_loader_filters_lineup_and_respects_latch_121():
+    """SpecupLoader — 시작 때 거르기 판본을 실어 보내고, 표시한 판을 거르는 선발 고르기를 넘긴다 · 지우는 중(fifa·rank 어느 쪽이든)이면 DB 를 안 열고
+    None · 멈추면 결과를 안 낸다 · 읽다 실패해도 None(창이 안 죽는다)."""
+    assert app_main.SpecupLoader.WRITES == {app_main.STORE_FIFA, app_main.STORE_RANK}, "읽기여도 WRITES 가 비면 지우기가 기다려 주지 않는다"
+    got, seen = [], []
+    keep, keep_noted = app_main.core.specup_load, getattr(app_main.SpecupLoader, "_noted", False)
+
+    def fake(conn, rconn, pick=None, today=None):
+        seen.append((conn.execute("PRAGMA query_only").fetchone()[0], pick))
+        try:
+            conn.execute("CREATE TABLE specup_x (a)")
+            seen.append("썼다")
+        except sqlite3.OperationalError:
+            pass
+        return "재료"
+
+    def run(fv=0, cancel=False):
+        got.clear()
+        ld = app_main.SpecupLoader(fv)
+        ld.ready.connect(got.append)
+        if cancel:
+            ld.cancel()
+        ld.run()
+        return list(got)
+    try:
+        app_main.core.specup_load = fake
+        assert run(7) == [(7, "재료")], got
+        assert len(seen) == 1 and seen[0][1] is app_main.core.specup_lineup, seen
+        core.set_excluded({"표시"})
+        try:
+            side = {"ouid": "me", "player": [{"spId": 1, "spPosition": i, "spGrade": 1} for i in range(11)]}
+            assert seen[0][1]([{"matchId": "표시", "matchInfo": [side]}], "me") == (), "거르지 않는 선발 고르기를 넘겼다"
+        finally:
+            core.set_excluded(())
+        for store_name in (app_main.STORE_FIFA, app_main.STORE_RANK, "all"):
+            app_main.CLEARING.add(store_name)
+            try:
+                assert run() == [(0, None)] and len(seen) == 1, (store_name, seen)
+                ld = app_main.SpecupLoader()
+                ld.start()
+                assert ld.blocked, "걸쇠가 로더를 안 막는다"
+            finally:
+                app_main.CLEARING.clear()
+        assert run(cancel=True) == [], "멈춤을 요청했는데 결과를 냈다"
+
+        def boom(*a, **k):
+            raise sqlite3.OperationalError("잠김")
+        app_main.core.specup_load = boom
+        app_main.SpecupLoader._noted = True
+        assert run() == [(0, None)]
+    finally:
+        app_main.core.specup_load, app_main.SpecupLoader._noted = keep, keep_noted
+
+
 # ── 110 조각 ③ — B2 등급 색 띠 · B3 대시보드 머리 줄 엠블럼 ─────────────────────────────────────────────────────────
 BAND_MIN_DELTA = 7.0   # 등급 띠 색과 승·무·패·좋음·나쁨 색의 보통 눈 색 거리(OKLab×100) 하한 — 지금 값의 최저는 어두운 17번 ↔ 무 회색 7.3
 

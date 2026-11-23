@@ -2066,6 +2066,43 @@ class SimilarLoader(Worker):
                 self.ready.emit((table, ouids))
 
 
+class SpecupLoader(Worker):
+    """121 [스펙업 순서] 재료 — 내 계정 기준 팀컬러·선발·같은 팀컬러 랭커 선발·저장된 시세와 카드 정보(요청 0 · 읽기만). 상한 없이 랭커 경기 본문을
+    읽어 화면 스레드 예산(0.3초)을 넘을 수 있어 작업 스레드에서 돈다. 읽기만 하지만 바꿔 끼우는 동안 연결을 쥐지 않게 WRITES 를 둔다(SimilarLoader 와 같다).
+    지우는 중이거나 못 읽으면 None. 결과는 (시작 때 거르기 판본, core.SpecInputs | None) — 받는 쪽은 판본이 다르면 버린다(109 M13)."""
+    WRITES = frozenset({STORE_FIFA, STORE_RANK})
+    ready = Signal(object)
+
+    def __init__(self, fv: int = 0):
+        super().__init__()
+        self._fv = fv
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        out = None
+        conn = rconn = None
+        try:
+            if not (clearing_blocks(self.WRITES) or not config.DB_PATH.exists()):
+                conn = sqlite3.connect(f"file:{config.DB_PATH.as_posix()}?mode=ro", uri=True, timeout=config.R1_READ_TIMEOUT_S)
+                conn.row_factory = sqlite3.Row
+                rconn = rankcollect.open_rank_db_ro()
+                out = core.specup_load(conn, rconn, pick=core.specup_lineup)
+        except Exception as e:  # noqa: BLE001 — 한 화면 때문에 앱이 죽지 않게
+            if not getattr(SpecupLoader, "_noted", False):
+                SpecupLoader._noted = True      # crash.log 에 실행당 한 번만
+                crashlog.note("specup", e)
+            out = None
+        finally:
+            for c in (conn, rconn):
+                if c is not None:
+                    c.close()
+        if not self._cancel:
+            self.ready.emit((self._fv, out))
+
+
 def season_span(rank_seasons, snap_start: str | None, now: datetime) -> tuple[datetime, bool]:
     """ELO 그래프의 "지금 시즌" 시작 — 시즌표의 마지막 끝난 시즌 종료 경계(그날 `config.SEASON_CUTOFF_H` 시 · seasons 주의 2) ·
     시즌표가 없으면 스냅숏 season_seq 가 마지막 것과 같은 첫 스냅숏 · 둘 다 없으면 최근 ELO_FALLBACK_DAYS 일.
