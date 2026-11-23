@@ -313,6 +313,39 @@ def test_five_distinct_format_failures_stop_day():
         assert net.run().requests == 0 and len(net.calls) == n, "멈춘 날 다시 시작했다"
 
 
+def test_dead_cards_left_at_tail_do_not_stop_next_day():
+    """넥슨에 정보가 없는 카드는 안 채워져 줄 끝에 모인다 — 이튿날 그것들만 이어 실패해도 '형식 바뀜' 이 아니다.
+    첫날은 성공한 카드가 사이에 있어 안 멈추고, 처음 보는 카드가 이어 실패하면 이튿날에도 멈춘다."""
+    with Env() as e:
+        account(e.conn)
+        for i in range(6):     # 빈 카드(홀수) 여섯과 멀쩡한 카드(짝수) 여섯을 등장 수로 번갈아
+            for n in range(20 - i):
+                add_match(e.conn, TODAY, {"me": [(2 * i + 1, 5, 25), (2 * i + 2, 5, 25)]})
+        meta(e.conn, [1000])
+        dead = {1, 3, 5, 7, 9, 11}
+        net = Net()
+        net.bad_page = net.bad_sim = dead
+        r = net.run()
+        assert not r.format_err and {k for w, k in net.calls if w == "page"} == set(range(1, 13)), (r, net.calls)
+        n, day = len(net.calls), TODAY + timedelta(days=1)
+        r = net.run(today=day)
+        again = net.calls[n:]
+        assert len({k for w, k in again if w in ("page", "sim")} & dead) == 6, again   # 막지 않았으면 다섯째에서 멈췄을 줄이다
+        assert not r.format_err and not store.budget_hit_429(e.conn, day.isoformat(), ("card_backfill_format",)), (r, again)
+        # 진짜 형식 바뀜 — 같은 날짜 줄에 처음 보는 카드 다섯이 이어 실패하면 멈춘다
+        day += timedelta(days=1)
+        add_match(e.conn, day, {"me": [(s, 5, 25) for s in range(101, 108)]})
+        net.bad_page = net.bad_sim = dead | set(range(101, 108))
+        r = net.run(today=day)
+        assert r.format_err and store.budget_hit_429(e.conn, day.isoformat(), ("card_backfill_format",)), r
+        # 예전에 성공한 카드는 "지난 날 실패" 가 아니다 — 30일 갱신 때 형식이 바뀌어 있으면 멈춘다
+        day = TODAY + timedelta(days=config.CARD_INFO_TTL_DAYS + 1)
+        add_match(e.conn, day, {"me": [(s, 5, 25) for s in range(2, 13, 2)]})
+        net.bad_page = net.bad_sim = set(range(1, 108))
+        r = net.run(today=day, demand_days=1)
+        assert r.format_err, r
+
+
 def test_no_price_is_success_not_retried():
     with Env() as e:
         account(e.conn)

@@ -15,7 +15,7 @@
 | 시도 기록 | 그날 시도한 대상은 성공·실패 모두 그날 다시 안 고른다 · 형식 실패만 `fails` · 3번이면 7일 쉼 · 막힘·점검은 안 센다 | `store.try_skip`·`try_record` |
 | 막힘 | 403·429·Cloudflare → 그 바퀴 끝 + 그날 `<kind>_block` · 그날 다른 웹 길(특성·측정 도구)이 막혔으면 시작 안 함 · 켠 날 뒤로 서로 다른 날 `TRAIT_BLOCK_DAYS` 이어지면 스스로 끔(창 쪽 예약이) | `run`·`store.card_block_streak` |
 | 점검 | 점검·오류 페이지 → 그 바퀴만 끝(막힘으로 안 센다) | `run` |
-| 형식 | 페이지에 이름·OVR·키·체형이 없거나 시뮬레이터가 16칸이 아니면 저장 안 함 + `fails` · 서로 다른 대상 `CARD_BACKFILL_FORMAT_STOP` 이 이어지면 그날 멈춤 `<kind>_format` | `run` |
+| 형식 | 페이지에 이름·OVR·키·체형이 없거나 시뮬레이터가 16칸이 아니면 저장 안 함 + `fails` · 서로 다른 대상 `CARD_BACKFILL_FORMAT_STOP` 이 이어지면 그날 멈춤 `<kind>_format` · 지난 날에도 실패한 대상은 세지 않는다(원래 정보가 없는 카드) | `run` |
 | 저장 | 한 요청 = 한 트랜잭션 · 페이지·시뮬레이터 따로(G4) · 날짜 열로 판정(진행 표 없음) · 끄거나 지워도 안 지운다(G3) | `playerinfo.save_card_extra_*` |
 """
 from __future__ import annotations
@@ -34,7 +34,7 @@ import playerinfo
 import store
 import teamcolor
 
-OFF_REASON_TEXT = {"blocked": "넥슨이 요청을 계속 막아 스스로 껐습니다 — 다시 켜면 이어서 채웁니다"}
+OFF_REASON_TEXT = {"blocked": "넥슨이 요청을 계속 막아 스스로 껐습니다. 다시 켜면 이어서 채웁니다"}
 _MATCH_CHUNK = 500   # IN (…) 한 번에 넣는 경기 수 — SQLite 변수 상한(32,766) 안에서 넉넉히
 _ENHANCE_EMBLEM = "teamcolor/"   # 강화 팀컬러(금빛 물결 등 5개)의 엠블럼 종류 — 2026-10-18 목록 실측
 
@@ -304,8 +304,12 @@ def run(db_path: Path | str, today: date, cap: int, cancel: Callable[[], bool] =
         fails: list[tuple[str, int]] = []   # 이어진 형식 실패(서로 다른 대상)
 
         def failed(key: str, target: tuple[str, int]) -> None:
+            # 지난 날에도 실패한 대상은 안 센다 — 넥슨에 정보가 없는 카드(2026-11 실측 5,005장 중 7장: 이름·OVR·16칸이 전부 빈 페이지)는
+            # 채워지지 않아 늘 줄 끝에 모인다. 다 채운 뒤엔 그것들만 이어져 "형식 바뀜" 으로 사흘(11-14·22·23) 잘못 멈췄다.
+            # 진짜로 형식이 바뀌면 처음 실패하는 대상이 곧 문턱을 넘긴다
+            again = store.try_failed(conn, key)
             store.try_record(conn, key, day, ok=False)
-            if target not in fails:
+            if not again and target not in fails:
                 fails.append(target)
             if len(fails) >= config.CARD_BACKFILL_FORMAT_STOP:
                 store.budget_mark_429(conn, day, format_kind)

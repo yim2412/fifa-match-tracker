@@ -273,12 +273,13 @@ def test_b_freeze_pairing():
         conn.execute("INSERT INTO seasons (no, name, start_date, end_date, fetched_at) VALUES (1, '시즌 1', '2026-09-01', '2026-11-03', '')")
         conn.commit()
         t = datetime(2026, 11, 1, 12)
+        kst9 = timedelta(hours=-9)   # 넥슨 원문은 UTC — 아래 시각은 KST 로 뜻한 것(63)
         store.save_matches(conn, [
-            match("b1", t, side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),
-            match("b2", t + timedelta(days=4, hours=12), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 양쪽 스냅숏 36시간
-            match("b3", t, side(ME, "승", cards(100)), side(OTHER, "패", cards(200))),                                 # 두 쪽 다 계정
-            match("b4", t + timedelta(days=1, hours=21), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 시즌 경계(11-03 08시 · 76) 너머 스냅숏
-            match("b5", t + timedelta(days=6, hours=1), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),   # 24시간 안 지남
+            match("b1", kst9 + t, side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),
+            match("b2", kst9 + t + timedelta(days=4, hours=12), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 양쪽 스냅숏 36시간
+            match("b3", kst9 + t, side(ME, "승", cards(100)), side(OTHER, "패", cards(200))),                                 # 두 쪽 다 계정
+            match("b4", kst9 + t + timedelta(days=1, hours=21), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),  # 시즌 경계(11-03 08시 · 76) 너머 스냅숏
+            match("b5", kst9 + t + timedelta(days=6, hours=1), side(ME, "승", cards(100)), side(YOU, "패", cards(200), nick="상대")),   # 24시간 안 지남
         ])
         rk = rank_db(d / "rank.db", [
             (1, t - timedelta(hours=10), {"상대": ("첼시", 9)}),

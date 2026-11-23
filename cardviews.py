@@ -1,9 +1,7 @@
 """카드 정보로 만드는 화면 재료(68 일부) — 계산만(화면은 `core_api`). 선수 지표의 실효 OVR·키·체형 · 내 스쿼드 OVR ·
 C5 선발 11장 시세 변화 `value_breakdown` · C6 주간 시세 변화 `price_index` · 빈 화면 사유 `screen_state`.
 
-**`cardstats.py` 에 안 넣은 이유**: 51 측정(`tools/measure_cards.py`)이 그 파일의 해시를 D0 값과 견준다(`TOOL_FILES`) —
-측정이 끝나기 전에 고치면 판정에 "도구 바뀜"이 남는다. 식은 `cardstats` 것을 부르기만 해서 측정과 어긋나지 않는다.
-측정이 끝나면(11-26 뒤) 합쳐도 된다.
+식은 `cardstats` 것을 부르기만 한다. 51 측정(11-23 끝) 동안 그 파일을 못 고쳐 나눠 둔 것이다.
 """
 from __future__ import annotations
 
@@ -255,8 +253,8 @@ def price_index(rows, today: date) -> PriceIndex:
 
 # ── 빈 화면 사유 ──────────────────────────────────────────────────────
 def screen_state(conn: sqlite3.Connection | None, today: date):
-    """`cardcollect.screen_state` + 그날 형식 바뀜으로 멈춤("format") — 그 파일은 51 측정이 해시를 재서
-    11-26 판정 전엔 여기서 감싼다(51 ① 리뷰 [하]: 형식 멈춤이 "채우는 중" 으로 보였다)."""
+    """`cardcollect.screen_state` + 그날 형식 바뀜으로 멈춤("format")
+    (51 ① 리뷰 [하]: 형식 멈춤이 "채우는 중" 으로 보였다)."""
     base = cardcollect.screen_state(conn, today)
     if (conn is not None and isinstance(base, tuple)
             and store.budget_hit_429(conn, today.isoformat(), (f"{store.BUDGET_CARD}_format",))):

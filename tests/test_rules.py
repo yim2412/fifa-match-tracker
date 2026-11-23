@@ -473,8 +473,7 @@ RAW_TIME_ALLOW = {   # (파일, 함수, 따라간 도우미 — "" 는 그 함�
     ("rankcollect.py", "fill_opp_rank", "season_raw_snaps"): "도우미의 [:10] 은 rank.db 상태(KST) 자르기 · 원문은 raw_bound/parse",
     ("tradecollect.py", "_top", "_overlap_floor"): "받기 쪽 — tradeDate 원문끼리 비교(경계도 원문 꼴) · 시각으로 안 읽는다",
     ("tools/check_t0.py", "reference", ""): "63 골든 — 앱 코드(matchtime)와 독립인 기준 계산이라 일부러 원문을 직접 읽는다",
-    ("tools/measure_cards.py", "b_freeze", ""): "51 측정 U1 — 11-26 판정까지 도구를 얼린다(:330·:471·:472 도 그때 같이 · 규칙이 못 보는 꼴)",
-    ("tools/measure_cards.py", "b_freeze", "snapshot_list"): "같음(U1) — 도우미는 rank.db 스냅숏(KST) 읽기",
+    ("tools/measure_cards.py", "b_freeze", "snapshot_list"): "도우미는 rank.db 스냅숏(KST) 읽기 · 원문은 parse/raw_bound",
 }
 
 
@@ -710,6 +709,7 @@ def _drive_uncovered() -> None:
         conn = store.open_db(Path(d) / "f.db")
         try:
             store.all_match_ids(conn)
+            store.try_failed(conn, "c:1:page")
             store.today_payloads(conn, "a", 50, "2026-01-01 00:00:00", "2026-01-02 00:00:00")   # 109 J10 트레이 오늘 전적 — test_today_line 도 부른다
             store.load_notes(conn)                              # 109 내 메모 — test_notes·화면 스모크가 부른다
             store.load_card_extras(conn, [1])
@@ -1373,8 +1373,7 @@ STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "noti
                "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py", "teamcolor.py",
                "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py", "glossary.py")
 # 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
-# cardcollect.py 는 51 측정이 해시를 재 11-26 판정 전엔 못 고친다.
-STYLE_DASH_MAX = {"notice.py": 37, "cardcollect.py": 1}
+STYLE_DASH_MAX = {"notice.py": 37}
 STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준
 _STYLE_END = re.compile(r"([가-힣]?)([가-힣])다\.(?=\s|$|<|\"|\))")
 _STYLE_DOT = re.compile(r"(니다|세요)\.?\s*·")

@@ -48,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 import cardcollect  # noqa: E402
 import cardstats  # noqa: E402
 import config  # noqa: E402
+import matchtime  # noqa: E402
 import rankcollect  # noqa: E402
 import seasons as seasons_mod  # noqa: E402
 import store  # noqa: E402
@@ -327,7 +328,7 @@ def a_rows(fifa, d0: date) -> ARows:
             in_acc = [str(s.get("ouid")) in accs for s in ss]
             out.acc_sign.append(0 if in_acc[0] == in_acc[1] else (1 if in_acc[i] else -1))
             try:
-                md = date.fromisoformat(at[:10])
+                md = matchtime.day(at)
                 for s in ss:
                     for p in cardstats.starters(s):
                         so = (ext.get(p.get("spId")) or {}).get("sim_on")
@@ -468,8 +469,8 @@ def judge_a(when: list[str], delta, y, *, seed: int = SEED, boot: int = BOOT) ->
         return out
     out["pass2"] = rel >= REL_GAIN and lo > 0
     out["calib"] = calib(p1, yt, rng, x=xt, theta=[a, b], cov=fisher_cov(a, b, x[:k]))
-    last = datetime.fromisoformat(ww[-1][:19]) - timedelta(days=RECENT_DAYS)
-    rec = np.array([datetime.fromisoformat(w[:19]) >= last for w in ww[k:]])
+    last = matchtime.parse(ww[-1]) - timedelta(days=RECENT_DAYS)
+    rec = np.array([matchtime.parse(w) >= last for w in ww[k:]])
     if rec.sum() >= 2:
         r_rel, r_lo, r_hi = _rel_ci(l0[rec], l1[rec], rng, boot)
         out["recent"] = {"n": int(rec.sum()), "rel": r_rel, "ci": [r_lo, r_hi]}
@@ -616,8 +617,8 @@ def b_freeze(fifa, rank, frozen_path: Path, now: datetime) -> dict:
         return dict(stats)
     ss = store.load_seasons(fifa)
     accs = account_ouids(fifa)
-    lo = (min(t for _i, t in snaps) - timedelta(hours=PAIR_H)).isoformat()
-    hi = (now - timedelta(hours=PAIR_H)).isoformat()
+    lo = matchtime.raw_bound(min(t for _i, t in snaps) - timedelta(hours=PAIR_H))   # 스냅숏·now 는 KST, match_date 는 UTC 원문
+    hi = matchtime.raw_bound(now - timedelta(hours=PAIR_H))
     people: dict[int, dict] = {}
     lines, dts = [], []
 
@@ -628,9 +629,8 @@ def b_freeze(fifa, rank, frozen_path: Path, now: datetime) -> dict:
     for mid, at, d in account_matches(fifa, lo, hi):
         if mid in done:
             continue
-        try:
-            when = datetime.fromisoformat(at[:19])
-        except ValueError:
+        when = matchtime.parse(at)
+        if when is None:
             continue
         sid, t = min(snaps, key=lambda s: (abs((s[1] - when).total_seconds()), s[0]))
         dt_h = (t - when).total_seconds() / 3600

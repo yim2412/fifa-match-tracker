@@ -1541,6 +1541,12 @@ def try_skip(conn: sqlite3.Connection, key: str, day: str) -> bool:
     return False
 
 
+def try_failed(conn: sqlite3.Connection, key: str) -> bool:
+    """마지막 시도가 형식 실패였나(성공하면 fails 가 0 으로 돌아간다)."""
+    r = conn.execute("SELECT fails FROM card_tries WHERE key = ?", (key,)).fetchone()
+    return r is not None and r[0] > 0
+
+
 def try_record(conn: sqlite3.Connection, key: str, day: str, ok: bool) -> None:
     """시도 하나를 적는다 — 성공이면 fails 0, 형식 실패면 1 더한다(쉼이 끝난 뒤의 첫 실패는 1 부터)."""
     with conn:
