@@ -1,19 +1,23 @@
 """카드 정보로 만드는 화면 재료(68 일부) — 계산만(화면은 `core_api`). 선수 지표의 실효 OVR·키·체형 · 내 스쿼드 OVR ·
-C5 선발 11장 시세 변화 `value_breakdown` · C6 주간 시세 변화 `price_index` · 빈 화면 사유 `screen_state`.
+C5 선발 11장 시세 변화 `value_breakdown` · M3 선발 11장 시세 합 추이 `value_series` · C6 주간 시세 변화 `price_index` ·
+N21 승부차기 상대 GK 값 나눔 `shootout_splits` · 빈 화면 사유 `screen_state`.
 
 식은 `cardstats` 것을 부르기만 한다. 51 측정(11-23 끝) 동안 그 파일을 못 고쳐 나눠 둔 것이다.
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
-from statistics import median
+from statistics import median, median_low
 
 import cardstats
 import config
 import matchtime
 import store
+from models import is_weak
+from stats import GK_POSITION, shootout_games
 
 
 @dataclass(frozen=True)
@@ -110,8 +114,9 @@ class ValueBreakdown:
         return self.v2 - self.v1
 
 
-def _squads_by_day(details: list[dict], ouid: str) -> dict[date, frozenset[tuple[int, int]]]:
-    """날마다 그날 마지막 경기 선발 11장 {(spid, 강화)} — 11장이 안 되는 판은 건너뛴다."""
+def squads_by_day(details: list[dict], ouid: str) -> dict[date, frozenset[tuple[int, int]]]:
+    """날마다 그날 마지막 경기 선발 11장 {(spid, 강화)} — 11장이 안 되는 판은 건너뛴다. C5·M3 이 같이 쓴다
+    (1만 5천 판에 약 0.1초라 화면이 한 번만 세어 넘긴다)."""
     last: dict[date, tuple] = {}
     for d in details:
         me = _my_side(d, ouid)
@@ -147,10 +152,9 @@ def _price_on(obs: dict[str, int | None] | None, day: date) -> int | None:
     return None
 
 
-def value_breakdown(details: list[dict], ouid: str, prices: dict[tuple[int, int], dict[str, int | None]],
+def value_breakdown(squads: dict[date, frozenset], prices: dict[tuple[int, int], dict[str, int | None]],
                     day1: date, day2: date) -> ValueBreakdown:
-    """prices: {(spid, 강화): {"YYYY-MM-DD": 시세 또는 None}} — `store.card_price_rows` 를 묶은 것."""
-    squads = _squads_by_day(details, ouid)
+    """squads: `squads_by_day` · prices: {(spid, 강화): {"YYYY-MM-DD": 시세 또는 None}} — `store.card_price_rows` 를 묶은 것."""
     g1, s1 = _squad_on(squads, day1)
     g2, s2 = _squad_on(squads, day2)
     v1 = v2 = price = squad = unknown = 0
@@ -179,6 +183,31 @@ def value_breakdown(details: list[dict], ouid: str, prices: dict[tuple[int, int]
 def price_days(prices: dict[tuple[int, int], dict[str, int | None]]) -> list[date]:
     """시세 관측이 있는 날(오래된 날부터) — 날짜 고르기 칸에 쓴다."""
     return sorted({date.fromisoformat(d) for obs in prices.values() for d in obs})
+
+
+# ── M3 선발 11장 시세 합 추이 ──────────────────────────────────────────
+@dataclass(frozen=True)
+class ValueSeries:
+    """날마다 선발 11장 시세 합. days = 11장 시세를 다 아는 날만 · skipped = 모르는 카드가 있어 뺀 날 수."""
+    days: list[tuple[date, int]] = field(default_factory=list)
+    skipped: int = 0
+
+
+def value_series(squads: dict[date, frozenset], prices: dict[tuple[int, int], dict[str, int | None]]) -> ValueSeries:
+    """세는 날 = 그날 쓰던 선발(없으면 그 앞 가장 가까운 경기 · C5 와 같은 `_squad_on`) 가운데 한 장이라도 그날 시세를 읽은 날.
+    시세는 C5 와 같은 `_price_on`(앞 며칠까지). 한 장이라도 모르면 점을 안 찍는다(부분합은 카드가 빠진 날 뚝 떨어져 보인다)."""
+    days: list[tuple[date, int]] = []
+    skipped = 0
+    for day in price_days(prices):
+        _game, cards = _squad_on(squads, day)
+        if not any(day.isoformat() in prices.get(c, {}) for c in cards):
+            continue
+        vals = [_price_on(prices.get(c), day) for c in cards]
+        if any(v is None for v in vals):
+            skipped += 1
+        else:
+            days.append((day, sum(vals)))
+    return ValueSeries(days, skipped)
 
 
 # ── C6 주간 시세 변화 ─────────────────────────────────────────────────
@@ -248,6 +277,56 @@ def price_index(rows, today: date) -> PriceIndex:
                 wait = k
                 break
     return PriceIndex(days, up, down, len(recent), ready, wait)
+
+
+# ── N21 승부차기 상대 GK ────────────────────────────────────────────────
+@dataclass(frozen=True)
+class ShootoutSplit:
+    """상대 GK 값 하나로 승부차기를 둘로 나눈 줄. cut 이하(low) · 초과(high)의 (승, 패) · known = 그 값을 아는 경기.
+    better = 문턱을 넘은 차이일 때만 승률이 높은 쪽 "low"·"high"(아니면 "")."""
+    key: str                    # "height" · "ovr" · "salary"
+    cut: int
+    low: tuple[int, int]
+    high: tuple[int, int]
+    known: int
+    p: float = 1.0
+    better: str = ""
+
+
+def _two_rate_p(a: tuple[int, int], b: tuple[int, int]) -> float:
+    """두 비율 검정(합동 표준오차 · 양쪽) p. 전승·전패처럼 폭이 0 이면 1."""
+    na, nb = sum(a), sum(b)
+    pool = (a[0] + b[0]) / (na + nb)
+    se = math.sqrt(pool * (1 - pool) * (1 / na + 1 / nb))
+    return math.erfc(abs(a[0] / na - b[0] / nb) / se / math.sqrt(2)) if se else 1.0
+
+
+def shootout_splits(details: list[dict], ouid: str, extras: dict[int, dict],
+                    salaries: dict[int, int | None]) -> tuple[list[ShootoutSplit], int]:
+    """(줄들, 승부차기 경기 수). 단위는 경기 · 가르는 값은 그 값을 아는 경기들의 가운데(짝수면 아래쪽 실제 값 — 나뉨은 같다) ·
+    두 칸 다 SHOOTOUT_SPLIT_MIN 경기 이상인 줄만. 교체 GK 는 기록으로 못 가린다."""
+    games = shootout_games(details, ouid)
+    pick = {
+        "height": lambda gk: (extras.get(gk["spId"]) or {}).get("height") or None,
+        "ovr": lambda gk: cardstats.effective_ovr(GK_POSITION, gk.get("spGrade"), extras.get(gk["spId"]))[0],
+        "salary": lambda gk: salaries.get(gk["spId"]) or None,
+    }
+    rows = []
+    for key, of in pick.items():
+        got = [(v, won) for v, won in ((of(gk), won) for gk, won in games) if v is not None]
+        if not got:
+            continue
+        cut = median_low(v for v, _won in got)
+        low, high = [won for v, won in got if v <= cut], [won for v, won in got if v > cut]
+        if is_weak(min(len(low), len(high)), config.SHOOTOUT_SPLIT_MIN):
+            continue
+        a, b = (sum(low), len(low) - sum(low)), (sum(high), len(high) - sum(high))
+        p = _two_rate_p(a, b)
+        better = ""
+        if p < config.N20_ALPHA / len(pick):   # 셋을 한꺼번에 보니 문턱을 나눈다
+            better = "low" if a[0] / len(low) > b[0] / len(high) else "high"
+        rows.append(ShootoutSplit(key, cut, a, b, len(got), p, better))
+    return rows, len(games)
 
 
 # ── 빈 화면 사유 ──────────────────────────────────────────────────────

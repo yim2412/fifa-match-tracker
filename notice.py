@@ -266,6 +266,9 @@ def card_empty_text(state) -> str:
         _, have, need, wait = state
         tail = f" 약 {wait}일 뒤부터 볼 수 있습니다." if wait else ""
         return f"시세를 모으는 중입니다({have:,}/{need:,}장).{tail}"
+    if isinstance(state, tuple) and state and state[0] == "collecting_days":
+        _, have, need = state
+        return f"시세를 모으는 중입니다({have:,}/{need:,}일)."
     if isinstance(state, tuple) and state and state[0] == "filling":
         _, known, need = state
         return f"카드 정보를 채우는 중입니다({known:,}/{need:,}장)."

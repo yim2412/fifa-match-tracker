@@ -2259,6 +2259,12 @@ def enhance_chance_html(amount: int, chance: float) -> str:
     return enhance_bad(text) if chance * 100 < core.ENHANCE_BUDGET_QS[0] else text
 
 
+def combo_index(cb, data) -> int:
+    """콤보에서 이 값(==)의 줄 번호 · 없으면 -1. 날짜·시즌처럼 파이썬 객체를 담은 콤보는 findData 로 찾지 않는다 — 값이 아니라
+    같은 객체인지로 견줘, 값이 같은 새 객체를 못 찾는다(가계부에 두 번째 들어가면 날짜 칸이 비었다 · 3.11.1 까지)."""
+    return next((i for i in range(cb.count()) if cb.itemData(i) == data), -1)
+
+
 def won_text(v: int) -> str:
     """구단가치 큰 글자 — "134억 5,440만"(만 아래는 버림 · 1억 밑이면 "5,440만")."""
     eok, man = divmod(int(v) // 10 ** 4, 10 ** 4)
@@ -3326,6 +3332,8 @@ class MainWindow(QMainWindow):
         self._timeline_cache: tuple | None = None      # (키, Timeline) — 타임라인·가계부가 같이 쓴다
         self._history_cache: tuple | None = None       # (키, [HistoryRun], ComboTable, 엠블럼) — 57 K4 이력 · 113 K2
         self._card_rev = 0   # 카드 재료 판본(113) — 카드·단계표·이름표가 바뀔 때 오른다. 카드로 세는 캐시의 키에 넣는다
+        self._so_split_cache = None   # (키, 줄들, 승부차기 경기 수) — 113 N21
+        self.shootout_splits: list = []
         self._records_cache: tuple | None = None       # (키, [Achievement]) — 88 업적 · [내 기록]·경기 카드 태그·대시보드 칩이 같이
         self._fun_cache: dict = {}                     # 이름 → (키, 값) — 88 F4 라이벌 · Q2 오늘의 선수(저장 전체 · 그릴 때마다 60~80ms)
         self._reward_cache: tuple | None = None        # (키, WinRewards) — 57 K11 이 계정 100판당
@@ -7553,7 +7561,8 @@ class MainWindow(QMainWindow):
     # ── 선발 11장 시세 변화(68 C5) — [가계부] 아래 절 ──
     VALUE_CHANGE_TIP = ("고른 두 날의 선발 11장(그날 마지막 경기) 시세를 견줍니다. 넥슨 구단가치와 다릅니다. 구단가치는 보유 카드 전체, "
                         "여기는 선발 11장만입니다.\n가격 효과 = 두 날 다 쓴 카드의 시세 변화 · 보강 효과 = 새로 쓴 카드 − 뺀 카드"
-                        "(강화만 올린 것도 보강) · 시세를 모르는 카드는 셈에서 빼고 장수만 적습니다.")
+                        "(강화만 올린 것도 보강) · 시세를 모르는 카드는 셈에서 빼고 장수만 적습니다.\n"
+                        "그래프는 날마다 그날 쓰던 선발 11장의 시세 합입니다. 11장의 시세를 다 아는 날만 그립니다.")
     VALUE_CHANGE_ROWS = (("total", "선발 11장 변화"), ("price", "가격 효과"), ("squad", "보강 효과"), ("unknown", "시세 모름"))
 
     def _build_value_change_card(self) -> QWidget:
@@ -7567,6 +7576,10 @@ class MainWindow(QMainWindow):
         top.addStretch(1)
         for cb in (self.cb_value_from, self.cb_value_to):
             cb.currentIndexChanged.connect(lambda _i: self._redraw_value_change())
+        self.lb_value_series = self._note_label()
+        card.body.addWidget(self.lb_value_series)
+        self.chart_value_series = charts.AreaTrendChart()   # 113 M3
+        card.body.addWidget(self.chart_value_series)
         card.body.addLayout(top)
         self.lb_value_note = self._note_label()
         card.body.addWidget(self.lb_value_note)
@@ -7585,7 +7598,7 @@ class MainWindow(QMainWindow):
         self.box_value.setLayout(grid)
         card.body.addWidget(self.box_value)
         self.value_card = card
-        self._value_input = None   # (details, ouid, prices) — 날짜를 바꾸면 요청·DB 없이 다시 센다
+        self._value_input = None   # (날마다 선발, 시세) — 날짜를 바꾸면 요청·DB 없이 다시 센다
         return card
 
     def _signed_bp(self, v: int) -> str:
@@ -7603,16 +7616,11 @@ class MainWindow(QMainWindow):
             return self._value_empty(notice.card_empty_text("mine_unset"))
         if mine != self._ouid:
             return
-        cards = set()
-        for d in self._details_all:
-            me = next((p for p in d.get("matchInfo") or [] if p.get("ouid") == mine), None)
-            for p in (me or {}).get("player") or []:
-                if isinstance(p.get("spId"), int) and isinstance(p.get("spGrade"), int):
-                    cards.add((p["spId"], p["spGrade"]))
+        squads = core.squads_by_day(self._details_all, mine)
         try:
             conn = store.open_db(config.DB_PATH)
             try:
-                rows = store.card_price_rows(conn, 1, cards)
+                rows = store.card_price_rows(conn, 1, set().union(*squads.values()))
                 state = self._card_state(conn)
             finally:
                 conn.close()
@@ -7625,8 +7633,9 @@ class MainWindow(QMainWindow):
         if len(days) < 2:
             if not isinstance(state, tuple) and not (state == "first_round" and days):   # 관측이 있으면 "모으는 중"이 먼저(N5)
                 return self._value_empty(notice.card_empty_text(state))
-            return self._value_empty(notice.card_empty_text(("collecting", len(days), 2, 2 - len(days))))
-        self._value_input = (self._details_all, mine, prices)
+            return self._value_empty(notice.card_empty_text(("collecting_days", len(days), 2)))
+        self._value_input = (squads, prices)
+        self._draw_value_series(core.value_series(squads, prices))
         keep = (self.cb_value_from.currentData(), self.cb_value_to.currentData())
         for cb in (self.cb_value_from, self.cb_value_to):
             cb.blockSignals(True)
@@ -7637,13 +7646,33 @@ class MainWindow(QMainWindow):
                                                          if d <= days[-1] - timedelta(days=config.C5_DEFAULT_GAP_DAYS)]
                                                         or [days[0]])
         want_to = keep[1] if keep[1] in days else days[-1]
-        self.cb_value_from.setCurrentIndex(self.cb_value_from.findData(want_from))
-        self.cb_value_to.setCurrentIndex(self.cb_value_to.findData(want_to))
+        self.cb_value_from.setCurrentIndex(combo_index(self.cb_value_from, want_from))
+        self.cb_value_to.setCurrentIndex(combo_index(self.cb_value_to, want_to))
         for cb in (self.cb_value_from, self.cb_value_to):
             cb.blockSignals(False)
         self._redraw_value_change()
 
+    def _draw_value_series(self, vs) -> None:
+        """113 M3 — 점이 둘 이상일 때만 선. 못 그리면 까닭 한 줄(시세를 모르는 카드 때문이면 그 말, 아니면 모으는 중)."""
+        self.value_series = vs   # 테스트가 본다
+        pts = vs.days
+        self.chart_value_series.setVisible(len(pts) >= 2)
+        if len(pts) < 2:
+            self.chart_value_series.set_data([])
+            self._set_status(self.lb_value_series,
+                             f"시세를 모르는 카드가 있어 {vs.skipped:,}일을 뺐습니다." if vs.skipped
+                             else notice.card_empty_text(("collecting_days", len(pts), 2)))
+            return
+        self._set_status(self.lb_value_series, "")
+        vals = [v / 1e8 for _d, v in pts]   # 억 단위 — 축 글자가 원 단위면 13자리
+        axis = charts.Axis.fit(vals, "{:,.0f}억", "시세 합")
+        axis = replace(axis, fmt=f"{{:,.{max(1, _step_decimals(axis.ticks[1] - axis.ticks[0]))}f}}억")
+        self.chart_value_series.set_data([(f"{d:%m/%d}", x, None) for (d, _v), x in zip(pts, vals)], axis=axis, avg=False,
+                                         x_dates=[d for d, _v in pts], color=T.CHART_VALUE, headline=won_text(pts[-1][1]))
+
     def _value_empty(self, text: str) -> None:
+        self._set_status(self.lb_value_series, "")
+        self.chart_value_series.setVisible(False)
         self._set_status(self.lb_value_note, text)
         self.box_value.setVisible(False)
         for cb in (self.cb_value_from, self.cb_value_to):
@@ -7658,8 +7687,8 @@ class MainWindow(QMainWindow):
             return
         if d1 > d2:
             d1, d2 = d2, d1
-        details, mine, prices = self._value_input
-        vb = core.value_breakdown(details, mine, prices, d1, d2)
+        squads, prices = self._value_input
+        vb = core.value_breakdown(squads, prices, d1, d2)
         self.value_breakdown = vb
         for cb in (self.cb_value_from, self.cb_value_to):
             cb.setVisible(True)
@@ -12378,6 +12407,14 @@ class MainWindow(QMainWindow):
         v.addLayout(row)
         gb_k = QGroupBox("승부차기에서 만난 상대 골키퍼")
         kv = QVBoxLayout(gb_k)
+        self.box_so_split = QWidget()   # 113 N21 — 상대 GK 값으로 나눈 줄(낼 줄이 없으면 숨김)
+        self.box_so_split.setToolTip(self.SO_SPLIT_TIP)
+        self.grid_so_split = QGridLayout(self.box_so_split)
+        self.grid_so_split.setContentsMargins(0, 0, 0, 4)
+        self.grid_so_split.setHorizontalSpacing(24)
+        self.grid_so_split.setVerticalSpacing(4)
+        self.grid_so_split.setColumnStretch(4, 1)
+        kv.addWidget(self.box_so_split)
         self.lb_shootout_note = self._note_label()
         kv.addWidget(self.lb_shootout_note)
         self.grid_shootout = QGridLayout()
@@ -12918,7 +12955,7 @@ class MainWindow(QMainWindow):
                     f" ({len(group)}경기)", season)
         saved = self._restore.pop("season", None) if hasattr(self, "_restore") else None
         if self._season_picked:
-            idx = self.cb_season.findData(prev)
+            idx = combo_index(self.cb_season, prev)
         elif saved is not None:  # 지난번에 보던 시즌 — 이번 데이터에 그 시즌이 없으면 기본(현재 시즌)
             idx = next((i for i in range(self.cb_season.count())
                         if self._season_key(self.cb_season.itemData(i)) == saved), -1)
@@ -16253,6 +16290,7 @@ class MainWindow(QMainWindow):
 
     def _render_shootout_keepers(self, details: list[dict]) -> None:
         """승부차기 상대 GK 카드(65 M6) — 많이 만난 순 SHOOTOUT_GK_MAX 장 · 표본 미달 카드는 흐림 + "표본 N"."""
+        self._render_shootout_splits()   # 아래 이른 return 앞 — 이 줄은 화면 범위가 아니라 저장된 전체다
         self._clear(self.grid_shootout)
         keepers = core.shootout_keepers(details, self._ouid or "")
         self.shootout_cards = []
@@ -16268,6 +16306,50 @@ class MainWindow(QMainWindow):
             self.shootout_cards.append(card)
             self.grid_shootout.addWidget(card, i // cols, i % cols)
         self._start_shootout_faces([k.sp_id for k in shown])
+
+    SO_SPLIT_NAMES = {"height": ("키", "cm", "키를"), "ovr": ("OVR", "", "OVR을"), "salary": ("급여", "", "급여를")}
+    SO_SPLIT_TIP = ("저장된 전체 승부차기를 상대 선발 골키퍼의 값으로 절반씩 나눈 내 승률입니다.\n"
+                    "OVR은 강화까지만 넣고 팀컬러와 적응도는 뺍니다. 경기 중에 바뀐 골키퍼는 기록으로 가릴 수 없습니다.\n"
+                    "색은 세 줄을 함께 봐도 우연으로 보기 어려운 차이일 때만 칠합니다.")
+
+    def _render_shootout_splits(self) -> None:
+        """113 N21 — 저장된 전체(시즌·빠른 범위와 무관). 카드 정보를 못 읽은 셈은 캐시하지 않는다."""
+        key = (self._ouid, self._details_key(), self._card_rev)
+        if self._so_split_cache is None or self._so_split_cache[0] != key:
+            rows, total = [], 0
+            details = self._details_all if self._ouid else []
+            spids = {k.sp_id for k in core.shootout_keepers(details, self._ouid or "")}
+            try:
+                conn = store.open_db(config.DB_PATH)
+                try:
+                    extras = store.load_card_extras(conn, spids)
+                    salaries = {s: r["salary"] for s, r in store.load_card_info(conn, spids).items()}
+                finally:
+                    conn.close()
+                rows, total = core.shootout_splits(details, self._ouid or "", extras, salaries)
+                self._so_split_cache = (key, rows, total)
+            except sqlite3.Error:
+                self._so_split_cache = None
+        else:
+            _key, rows, total = self._so_split_cache
+        self.shootout_splits = rows   # 테스트가 본다
+        self._clear(self.grid_so_split)
+        self.box_so_split.setVisible(bool(rows))
+        if rows:
+            head = QLabel("저장된 전체")
+            head.setStyleSheet(f"color: {T.TEXT_DIM};")
+            self.grid_so_split.addWidget(head, 0, 0)
+        for i, r in enumerate(rows, 1):
+            name, unit, name_obj = self.SO_SPLIT_NAMES[r.key]
+            cells = [(f"{name} {r.cut:,}{unit}", T.TEXT_DIM)]
+            for side, word, (w, lo) in (("low", "이하", r.low), ("high", "초과", r.high)):
+                color = T.TEXT if not r.better else T.GOOD if r.better == side else T.BAD
+                cells.append((f"{word} {w + lo:,}판 {win_rate_text(w, 0, lo, False, short=True)}", color))
+            cells.append((f"{name_obj} 아는 {r.known:,}/{total:,}판", T.TEXT_DIM))
+            for c, (text, color) in enumerate(cells):
+                lb = QLabel(text)
+                lb.setStyleSheet(f"color: {color};")
+                self.grid_so_split.addWidget(lb, i, c)
 
     def _shootout_card(self, k) -> QFrame:
         weak = core.is_weak(k.games, core.MIN_COND)
@@ -16705,7 +16787,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._distcmp_val, self._distcmp_key = None, None
         self._timeline_cache = self._history_cache = self._reward_cache = self._arrivals_cache = self._fmchange_cache = None
-        self._value_input = None
+        self._value_input = self._so_split_cache = None
         self._card_rev += 1
         self._records_cache = None
         self._fun_cache = {}

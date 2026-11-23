@@ -432,6 +432,7 @@ def _fv_slots(win) -> dict:
         "_shot_sum_key": lambda: win._shot_sum_key[-1],
         "_timeline_cache": lambda: win._timeline_cache[0][-1],
         "_history_cache": lambda: win._history_cache[0][0][-1],          # _details_key() 안
+        "_so_split_cache": lambda: win._so_split_cache[0][1][-1],        # _details_key() 안(113 N21)
         "_records_cache": lambda: win._records_cache[0][1][-1],
         "_arrivals_cache": lambda: win._arrivals_cache[0][0][-1],
         "_fmchange_cache": lambda: win._fmchange_cache[0][0][-1],

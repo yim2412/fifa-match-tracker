@@ -774,12 +774,12 @@ class ShootoutKeeper:
         return self.win / self.games * 100 if self.games else 0.0
 
 
-def shootout_keepers(details: list[dict], ouid: str) -> list[ShootoutKeeper]:
-    """승부차기 경기의 상대 선발 GK(spPosition 0)별 내 승부차기 성적 — 많이 만난 순(같으면 spId 순).
+def shootout_games(details: list[dict], ouid: str) -> list[tuple[dict, bool]]:
+    """승부차기 경기마다 (상대 선발 GK 선수 칸, 내가 이겼나) — GK 카드 목록(M6)과 GK 값 나눔(N21)이 같이 쓴다.
 
-    승부차기 판정은 result_breakdown 과 같다(몰수 빼고 · 어느 쪽이든 shootOutScore 가 있으면). 상대 GK 가 없거나
-    결과가 승·패가 아닌 경기는 뺀다. 카드(spId)마다 따로 — 같은 선수라도 시즌이 다르면 다른 줄이다."""
-    acc: dict[int, ShootoutKeeper] = {}
+    승부차기 판정은 result_breakdown 과 같다(몰수 빼고 · 어느 쪽이든 shootOutScore 가 있으면). 상대 선발 GK(spPosition 0)가
+    없거나 결과가 승·패가 아닌 경기는 뺀다."""
+    out: list[tuple[dict, bool]] = []
     for d in details:
         me, opp = _me_opp(d, ouid)
         if me is None or end_kind(me, opp) in ("몰수승", "몰수패"):
@@ -789,12 +789,20 @@ def shootout_keepers(details: list[dict], ouid: str) -> list[ShootoutKeeper]:
         res = _result_of(me)
         if "승" not in res and "패" not in res:
             continue
-        gk = next((p.get("spId") for p in opp.get("player") or []
+        gk = next((p for p in opp.get("player") or []
                    if p.get("spPosition") == GK_POSITION and isinstance(p.get("spId"), int)), None)
-        if gk is None:
-            continue
-        k = acc.setdefault(gk, ShootoutKeeper(gk))
-        if "승" in res:
+        if gk is not None:
+            out.append((gk, "승" in res))
+    return out
+
+
+def shootout_keepers(details: list[dict], ouid: str) -> list[ShootoutKeeper]:
+    """승부차기 경기의 상대 선발 GK 별 내 승부차기 성적 — 많이 만난 순(같으면 spId 순).
+    카드(spId)마다 따로 — 같은 선수라도 시즌이 다르면 다른 줄이다."""
+    acc: dict[int, ShootoutKeeper] = {}
+    for gk, won in shootout_games(details, ouid):
+        k = acc.setdefault(gk["spId"], ShootoutKeeper(gk["spId"]))
+        if won:
             k.win += 1
         else:
             k.lose += 1

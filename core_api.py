@@ -79,7 +79,8 @@ from rankerpick import (
     ranker_pick_summary, recommend, recommend_candidates,
 )
 from cardviews import (CardMove, PlayerCard, PriceIndex, SquadOvr, ValueBreakdown, lineup_cards, player_card,
-                       price_days, price_index, squad_ovr, value_breakdown, screen_state as card_screen_state)
+                       price_days, price_index, squad_ovr, value_breakdown, screen_state as card_screen_state,
+                       ShootoutSplit, ValueSeries, shootout_splits, squads_by_day, value_series)
 from enhance import (
     BUDGET_EXPECT_Q as ENHANCE_EXPECT_Q, BUDGET_QS as ENHANCE_BUDGET_QS, GRADES_MAX as ENHANCE_GRADES_MAX,
     PROTECT_FROM as ENHANCE_PROTECT_FROM, PROTECT_RANGE_PCTS as ENHANCE_RANGE_PCTS,
@@ -182,6 +183,7 @@ __all__ = [
     # cardviews — 카드 정보 화면 재료(68)
     "CardMove", "PlayerCard", "PriceIndex", "SquadOvr", "ValueBreakdown", "card_screen_state", "lineup_cards",
     "player_card", "price_days", "price_index", "squad_ovr", "value_breakdown",
+    "ShootoutSplit", "ValueSeries", "shootout_splits", "squads_by_day", "value_series",   # 113 N21·M3
     # enhance — 강화 비용(83). 재료 받기(boostcollect)는 로더가 부른다
     "ENHANCE_BUDGET_QS", "ENHANCE_EXPECT_Q", "ENHANCE_GRADES_MAX", "ENHANCE_PROTECT_FROM", "ENHANCE_RANGE_PCTS",
     "EnhanceError", "EnhanceEstimate", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels", "enhance_parse_money",
@@ -236,7 +238,7 @@ _F_DETAILS = ("mixed_of_details", "goal_flow", "half_share_diff", "side_totals",
               "goal_minute_buckets", "opponent_cards", "opponent_formations", "opponent_position_players", "pass_style",
               "player_finishing_trend", "possession_stats", "ranker_compare", "rating_trend", "recent_ratings",
               "result_breakdown", "shot_map", "versus_profile", "shootout_keepers", "shot_type_counts", "shot_summary",
-              "team_profile", "combo_rows",
+              "team_profile", "combo_rows", "shootout_splits",
               # M39: 영입 시점·포메이션 바뀐 구간 경계를 표시한 판을 뺀 기록에서 다시 잡는다(표시한 판이 처음부터 없었던 것처럼).
               # 섞임으로 두면 squad_timeline 의 구간 계산을 둘로 갈라야 하고, 영입이 표시한 판 자리면 전후 구간에 그 판이 끼어
               # 숫자에 남는다. 경계가 한 판 밀릴 수 있어도 화면의 모든 승·무·패는 표시한 판을 안 센다.
@@ -281,7 +283,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
         "tier_means", "value_bins", "value_score", "weekly", "winrate_peers", "winrate_to_elo", "team_color_board",
         "tc_detail", "tc_top_owners", "champ_games", "rank_cut", "last_raw_id", "late_rise", "meta_avg_elo", "similar_rankers", "snapshot_formation", "step_table", "step_reached", "my_emblem", "opp_rank_rows", "opp_rank_label",
         "bin_of_value", "opp_scores", "card_screen_state", "lineup_cards", "player_card", "price_days", "price_index",
-        "squad_ovr", "value_breakdown", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels",
+        "squad_ovr", "value_breakdown", "squads_by_day", "value_series", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels",
         "enhance_parse_money", "parse_trades", "ledger", "price_targets", "records_by_match",
         "record_kinds", "recent_records", "record_summary", "card_ovr", "pitch_rows", "squad_value",
         "division_entries", "division_trend", "formation_of", "is_champion_or_above", "match_formations",

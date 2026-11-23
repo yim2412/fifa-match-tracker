@@ -143,7 +143,7 @@ def test_c5_breakdown_by_hand():
     prices[(10, GRADE)] = {"2026-11-01": 50}
     prices[(11, GRADE)] = {"2026-11-01": 60}           # 뺀 카드 −110
     prices[(12, GRADE)] = {"2026-11-08": 70}           # 새 카드 +70 · 13 은 시세 모름
-    vb = cv.value_breakdown([g2, g1], "me", prices, D1, D2)
+    vb = cv.value_breakdown(cv.squads_by_day([g2, g1], "me"), prices, D1, D2)
     assert (vb.price, vb.squad, vb.unknown) == (80, 500 - 200 + 70 - 110, 1), vb
     assert vb.total == vb.price + vb.squad, "항등식 — 가격 + 보강 = 아는 카드 총변화"
     assert (vb.v1, vb.v2) == (800 + 200 + 50 + 60, 880 + 500 + 70), vb
@@ -165,7 +165,7 @@ def test_c5_identity_random():
             if rnd.random() < 0.8:
                 obs["2026-11-08"] = rnd.choice([None, rnd.randint(1, 10 ** 6)])
             prices[(s, GRADE)] = obs
-        vb = cv.value_breakdown([dated(a, "2026-11-01T03:00:00"), dated(b, "2026-11-08T03:00:00")], "me", prices, D1, D2)
+        vb = cv.value_breakdown(cv.squads_by_day([dated(a, "2026-11-01T03:00:00"), dated(b, "2026-11-08T03:00:00")], "me"), prices, D1, D2)
         assert vb.total == vb.price + vb.squad, vb
         assert vb.kept + vb.added + vb.removed >= vb.unknown
 
@@ -178,13 +178,13 @@ def test_c5_nearest_price_and_last_game():
     prices = {(s, GRADE): {"2026-11-01": 100, "2026-11-05": 130} for s in range(1, 11)}
     prices[(11, GRADE)] = {"2026-11-01": 100, "2026-11-04": 999}   # 11-08 에서 4일 앞 — 못 쓴다
     short = dated(range(200, 210), "2026-11-08T13:00:00")   # KST 22:00 — 10장(몰수 등)이면 그날 선발로 안 친다
-    vb = cv.value_breakdown([late, early, base, short], "me", prices, D1, D2)
+    vb = cv.value_breakdown(cv.squads_by_day([late, early, base, short], "me"), prices, D1, D2)
     assert vb.kept == 11 and vb.added == 0, "같은 날 늦은 판의 선발이어야 — 이른 판(100~110)·10장 판이 아니다"
     assert vb.price == 10 * 30 and vb.unknown == 1, vb
     # 그날 경기가 없으면 그 앞 가장 가까운 날의 선발
-    vb2 = cv.value_breakdown([base], "me", prices, D1, D2)
+    vb2 = cv.value_breakdown(cv.squads_by_day([base], "me"), prices, D1, D2)
     assert vb2.game2 == D1 and vb2.kept == 11
-    assert cv.value_breakdown([base], "me", prices, date(2026, 10, 1), D2).game1 is None
+    assert cv.value_breakdown(cv.squads_by_day([base], "me"), prices, date(2026, 10, 1), D2).game1 is None
 
 
 def _c6_rows(today, pairs, gap=7, base=1000, pct=10.0, start=0):
@@ -233,6 +233,99 @@ def test_c6_wait_days_from_real_observations():
     assert not idx.ready and idx.wait_days == config.C6_GAP_MIN - 2, idx.wait_days
     assert cv.price_index(one[:need - 1], t).wait_days is None, "모자라면 날을 지어내지 않는다"
     assert cv.price_index([], t).wait_days is None
+
+
+# ── 113 M3 · N21 ──
+def test_m3_value_series_by_hand():
+    # 11-01 선발 1~11 · 11-08 부터 11 을 12 로. 시세는 (카드, 강화)마다
+    base, late = dated(ELEVEN, "2026-11-01T03:00:00"), dated([*range(1, 11), 12], "2026-11-08T03:00:00")
+    prices = {(s, GRADE): {"2026-10-31": 1, "2026-11-01": 100, "2026-11-05": 110, "2026-11-08": 120} for s in range(1, 11)}
+    prices[(11, GRADE)] = {"2026-11-01": 100, "2026-11-03": 300}
+    prices[(12, GRADE)] = {"2026-11-08": None, "2026-11-09": 700}
+    prices[(99, GRADE)] = {"2026-11-20": 5}          # 쓴 적 없는 카드만 읽은 날 — 세지 않는다
+    vs = cv.value_series(cv.squads_by_day([late, base], "me"), prices)
+    assert vs.days == [(date(2026, 11, 1), 1100),                 # 10-31 은 경기 전이라 선발이 없다
+                       (date(2026, 11, 3), 1000 + 300),           # 11 만 읽은 날 — 나머지는 앞 3일 안 값
+                       (date(2026, 11, 5), 1100 + 300),           # 경기 없는 날은 앞 선발 그대로 · 11 은 이틀 앞 값
+                       (date(2026, 11, 9), 1200 + 700)], vs.days
+    assert vs.skipped == 1, "11-08 은 12 가 매물 없음이라 뺀 날(부분합을 안 찍는다)"
+    # 앞 C5_NEAREST_MAX_DAYS 일을 넘으면 모름
+    far = {(s, GRADE): {"2026-11-01": 100} for s in range(1, 12)}
+    far[(1, GRADE)]["2026-11-05"] = 100
+    vs = cv.value_series(cv.squads_by_day([base], "me"), far)
+    assert [d for d, _v in vs.days] == [date(2026, 11, 1)] and vs.skipped == 1, vs
+    assert cv.value_series(cv.squads_by_day([], "me"), prices) == cv.ValueSeries() and cv.value_series(cv.squads_by_day([base], "남"), prices).days == []
+
+
+def so_game(gk, won, mid="m", grade=GRADE, res=None):
+    me = {"ouid": "me", "matchDetail": {"matchResult": res or ("승" if won else "패"), "matchEndType": 0},
+          "shoot": {"shootOutScore": 4}}
+    opp = {"ouid": "x", "matchDetail": {"matchResult": "패" if won else "승", "matchEndType": 0},
+           "shoot": {"shootOutScore": 3}, "player": [{"spId": gk, "spPosition": 0, "spGrade": grade}]}
+    return {"matchId": mid, "matchInfo": [me, opp]}
+
+
+def gk_extra(ovr, height):
+    return {"pos_ovr": json.dumps({config.SIM_POS_OF[0]: ovr}), "height": height}
+
+
+def test_n21_split_by_hand():
+    keep = config.SHOOTOUT_SPLIT_MIN
+    try:
+        config.SHOOTOUT_SPLIT_MIN = 2
+        ex = {1: gk_extra(100, 180), 2: gk_extra(100, 188), 3: gk_extra(120, 190), 4: {"pos_ovr": None, "height": 0}}
+        games = [so_game(1, True), so_game(1, False), so_game(2, True), so_game(3, False), so_game(3, True),
+                 so_game(4, True), so_game(5, True), so_game(1, True, res="오류")]   # 4·5 는 카드를 모른다 · 오류는 승부차기가 아니다
+        rows, total = cv.shootout_splits(games, "me", ex, {1: 20, 2: 22, 3: 24, 4: 0})
+        assert total == 7, total
+        got = {r.key: r for r in rows}
+        assert list(got) == ["height", "ovr", "salary"]
+        h = got["height"]
+        assert (h.cut, h.low, h.high, h.known) == (188, (2, 1), (1, 1), 5), h   # 가운데 값은 이하에 든다
+        o = got["ovr"]
+        assert (o.cut, o.low, o.high, o.known) == (100 + BONUS, (2, 1), (1, 1), 5), o
+        s = got["salary"]
+        assert (s.cut, s.low, s.high, s.known) == (22, (2, 1), (1, 1), 5), s   # 급여 0 은 모름
+        # 강화가 다르면 실효 OVR 이 갈린다 — 카드 번호만 보면 한 칸이 빈다
+        mixed = [so_game(1, True, grade=1), so_game(1, True, grade=1), so_game(1, True, grade=8), so_game(1, False, grade=8)]
+        rows, _n = cv.shootout_splits(mixed, "me", ex, {})
+        assert [r.key for r in rows] == ["ovr"] and rows[0].cut == 100 + config.GRADE_OVR_BONUS[1], rows
+        assert (rows[0].low, rows[0].high) == ((2, 0), (1, 1))
+        # 짝수면 아래쪽 실제 값(189.0 같은 없는 키를 안 보인다)
+        even = [so_game(1, True), so_game(1, True), so_game(3, True), so_game(3, True)]
+        assert cv.shootout_splits(even, "me", ex, {})[0][0].cut == 180
+        assert cv.shootout_splits([], "me", ex, {}) == ([], 0)
+    finally:
+        config.SHOOTOUT_SPLIT_MIN = keep
+
+
+def test_n21_min_games_both_sides():
+    n = config.SHOOTOUT_SPLIT_MIN
+    ex = {1: gk_extra(100, 180), 2: gk_extra(100, 190)}
+    lows = [so_game(1, i % 2 == 0) for i in range(n + 5)]
+    assert [r.key for r in cv.shootout_splits(lows + [so_game(2, True)] * n, "me", ex, {})[0]] == ["height"], "문턱과 같으면 낸다"
+    assert cv.shootout_splits(lows + [so_game(2, True)] * (n - 1), "me", ex, {})[0] == []
+
+
+def test_n21_color_threshold_is_divided_by_three():
+    ex = {1: gk_extra(100, 180), 2: gk_extra(100, 190)}
+
+    def run(w1, n1, w2, n2):
+        games = [so_game(1, i < w1) for i in range(n1)] + [so_game(2, i < w2) for i in range(n2)]
+        return next(r for r in cv.shootout_splits(games, "me", ex, {})[0] if r.key == "height")
+    # 손계산: 60/100 대 45/100 → z = 0.15 / sqrt(0.525·0.475·0.02) = 2.124 → p 0.0337 (0.05 밑 · 0.0167 위)
+    r = run(60, 100, 45, 100)
+    assert abs(r.p - 0.0337) < 0.0005 and r.better == "", ("셋을 함께 보는 문턱은 α/3", r)
+    assert r.p < config.N20_ALPHA
+    assert run(70, 100, 45, 100).better == "low" and run(45, 100, 70, 100).better == "high"
+    assert run(100, 100, 100, 100).p == 1.0, "폭이 0 이어도 안 터진다"
+
+
+def test_collecting_days_text_counts_days():
+    # C5 는 날 수를 센다 — "(1/2장)" 이라고 적던 것을 고쳤다
+    text = notice.card_empty_text(("collecting_days", 1, 2))
+    assert "1/2일" in text and "장" not in text, text
+    assert "장" in notice.card_empty_text(("collecting", 3, 200, None))
 
 
 def test_card_price_rows_src_filter():

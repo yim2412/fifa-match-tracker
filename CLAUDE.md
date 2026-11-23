@@ -58,7 +58,7 @@
 | `tools/season_notice.py` · `tools/check_predictions.py` | 시즌 종료일 공지(본문 한 줄 바꾼 파일 + `gh release edit` **출력만**) · 시즌 뒤 예측 대조 · 세부는 `tools/season_notice.py` 머리말 |
 | `tools/review_kit.py` | 계획 검토 준비(ROADMAP "검토 방법" 11~13) — `bundle`(절이 짚은 코드 조각 · 정의/쓰임만/없음) · `diff`(회차 사이 바뀐 줄 + 진입점 표 행) · `ledger`(주장 장부 빈 표). 검토자에게 파일을 통째로 읽히지 않으려고 |
 | `tools/dev_archive.py` | **개발용 상시 수집(이 PC 전용 · 배포판 밖)** — 작업 스케줄러 `FifaDevArchive` · `.env` `DEV_NEXON_API_KEY` · ⚠ 공용 fifa.db 를 연다 — store 스키마를 바꾸는 단계에선 `--only 1,2` · 세부는 머리말 |
-| `cardviews.py` | 카드 정보 화면 재료(113단계(옛 68) 일부) — 선수 지표 실효 OVR·키·체형 · 내 스쿼드 OVR · 계산만 · 51 측정이 11-23 에 끝나 `cardstats.py`·`cardcollect.py` 를 고쳐도 된다 |
+| `cardviews.py` | 카드 정보 화면 재료(113단계(옛 68) 일부) — 선수 지표 실효 OVR·키·체형 · 내 스쿼드 OVR · C5·M3(`squads_by_day` 를 화면이 한 번만 세어 둘에 넘긴다) · N21 승부차기 상대 GK 나눔 `shootout_splits`(저장된 전체 · 경기 고르기는 `stats.shootout_games` 를 M6 카드와 같이 쓴다 · 화면 캐시 키에 `_card_rev`) · 계산만 |
 | `teamcolor_calc.py` | 라인업으로 켜진 팀컬러(113 N29·K2·K4) — 계산만(화면은 `core_api`) · 소속과 관계를 따로 배분(넥슨 시뮬레이터 칸 구조) · 모름은 카드와 단계를 종류별로 가른다 · 배분 식 `greedy` 는 `tools/measure_cards.py` 와 같이 쓴다(51 측정 B 가 잰 식) · 화면 재료는 `app_main._tc_material`(저장된 것만 · 못 읽으면 None, 캐시 안 함) · **카드·단계표·이름표가 바뀌는 길은 `app_main._card_rev` 를 올린다**(카드 백필 바퀴 끝 `_on_card_round_done` · 팀컬러 창 `tc_data_changed` · 지우기) · 화면 사유는 `cardviews.screen_state(conn, 날짜, 예약의 마지막 상태)` — 화면 스레드에서 `cardcollect.status` 를 부르지 않는다(0.7초) · 세부는 머리말 |
 | `cardstats.py` | 카드 정보 계산(51단계) — 계산만 · 지금은 실효 OVR `effective_ovr`·선발 평균 `lineup_strength` 만(측정 도구와 앱이 **같은 식**을 쓰게 — 측정 A 가 맞춘 `C1_LOGIT_*` 가 앱의 Δ 와 어긋나지 않게) · C1~C6 집계는 조각 ②③ 에서 |
 | `tools/measure_cards.py` | **51단계 측정 A~C(이 PC 전용 · 배포판 밖)** — 판정 규칙 상수는 ROADMAP 측정 절을 옮긴 것(`RULE_COMMIT` · 결과를 보고 안 바꾼다) · `--start` 로 D0 를 잡기 전엔 백필·얼리기가 안 돈다 · **앱 토글이 켜졌으면 거부** · 결과는 `DATA_DIR/measure/`(닉네임 없음) · 명령 표는 머리말 |
@@ -205,6 +205,7 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
    `QApplication.exec` 를 `ModalCalled` 로 막는다. 새 종류의 모달(`QFileDialog`·`QInputDialog`·`QMenu.exec` 등)을 쓰면 거기 한 줄.
 7. **화면은 보이는 자리(메뉴·탭)만 그린다 — 새 메뉴·탭은 `VIEW_OF_KEY`·`_renderers()` 에**(뺄 자리는 `VIEW_EXEMPT` 에 이유와).
    표에 없으면 예외 없이 조용히 안 그려진다(`test_every_nav_page_has_a_renderer`). 다시 그리기는 직접 `_render_x()` 대신 `_invalidate("키")`.
+   **날짜·시즌 같은 파이썬 객체를 담은 콤보는 `findData` 로 찾지 않는다 — `combo_index`**(같은 객체만 찾아 값이 같은 새 객체를 놓친다 · 가계부 날짜 칸이 두 번째부터 비었다 · 113).
    `_go_page` 는 없는 이름이면 아무것도 안 한다 — 테스트 안 이름은 `test_go_page_literals_in_tests_exist` 가 대조.
    대시보드·흐름 분석은 `_narrate_scope()` 캐시를 같이 쓴다(키: 목록 id·길이·맨 앞 — 제자리 수정은 안 잡힌다). 테스트는 `LAZY_RENDER = False`.
 8. **스레드 → 화면 신호에 큰 데이터는 `Signal(object)`** — `list`·`dict` 선언은 PyQt6 에서 통째로 깊은 복사(1만 경기 4.5GB · 6초),

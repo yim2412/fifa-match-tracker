@@ -6059,6 +6059,12 @@ def test_season_combo_by_match_number_without_table_108():
         assert len(_win._matches) == 3 and f"({len(_win._matches)}경기)" in cb.currentText(), \
             (len(_win._matches), cb.currentText())
         assert cb.itemText(1).startswith("현재 시즌 (진행 중) · 07-30~"), cb.itemText(1)
+        # 시즌표를 다시 받아 값이 같은 새 Season 이 와도 고른 줄 그대로(findData 는 같은 객체만 찾아 "전체"로 돌아갔다 · 3.11.1 까지)
+        fresh = [sn.Season(89, "시즌 3", _d(2026, 5, 28), _d(2026, 7, 30)),
+                 sn.Season(88, "시즌 2", _d(2026, 4, 2), _d(2026, 5, 28))]
+        assert cb.findData(fresh[0]) == -1, "막지 않았으면 — findData 가 값으로 찾으면 이 검사가 필요 없다"
+        _win._on_seasons_loaded(fresh)
+        assert getattr(cb.currentData(), "no", None) == 89, cb.currentText()
         # 안 고른 채 시즌표가 온다 — 기본 선택이 "전체" 에서 현재 시즌으로 바뀌면 화면도 그 시즌으로 다시 거른다
         _win._rank_seasons, _win._season_picked = [], False
         _win._matches_all = ms
@@ -15765,6 +15771,85 @@ def test_shootout_keeper_cards_65():
         _win._render_all()
 
 
+def test_113_shootout_splits():
+    """113 N21 — 저장된 전체(화면 범위가 아니다) · 승부차기가 없는 범위에서도 · 카드 재료가 바뀌면 다시 · DB 를 못 읽으면 캐시 안 함."""
+    def so_game(i, gk, res):
+        return {"matchId": f"sp{i}", "matchInfo": [
+            {"ouid": _OUID, "nickname": "나", "matchDetail": {"matchResult": res, "matchEndType": 0}, "shoot": {"shootOutScore": 4}},
+            {"ouid": "x", "nickname": "상대", "matchDetail": {"matchEndType": 0}, "shoot": {"shootOutScore": 3},
+             "player": [{"spId": gk, "spPosition": 0, "spGrade": 5}]}]}
+    keep = _win._details_all, config.SHOOTOUT_SPLIT_MIN, store.open_db
+    c = store.open_db(config.DB_PATH)
+    saved = {t: c.execute(f"SELECT * FROM {t}").fetchall() for t in ("card_extra", "card_info")}
+
+    def text():
+        return [_win.grid_so_split.itemAt(i).widget() for i in range(_win.grid_so_split.count())]
+    try:
+        config.SHOOTOUT_SPLIT_MIN = 30
+        _win._details_all = [so_game(f"a{i}", 7001, "승" if i < 30 else "패") for i in range(40)] + \
+            [so_game(f"b{i}", 7002, "승" if i < 10 else "패") for i in range(40)]
+        with c:
+            c.execute("DELETE FROM card_extra")
+            c.execute("DELETE FROM card_info")
+            c.executemany("INSERT INTO card_extra (spid, height) VALUES (?, ?)", [(7001, 188), (7002, 195)])
+            c.executemany("INSERT INTO card_info (spid, salary, fetched_on) VALUES (?, ?, '')", [(7001, 20), (7002, 25)])
+        _win._card_rev += 1
+        _win._go_page("전술·경기 결과", "경기 결과")
+        _win._render_shootout_keepers([])   # 이 범위에는 승부차기가 없다 — 그래도 전체 줄은 나온다
+        assert [(r.key, r.cut, r.low, r.high, r.better) for r in _win.shootout_splits] == [
+            ("height", 188, (30, 10), (10, 30), "low"), ("salary", 20, (30, 10), (10, 30), "low")], _win.shootout_splits
+        texts = [w.text() for w in text()]
+        assert texts == ["저장된 전체", "키 188cm", "이하 40판 75.0%", "초과 40판 25.0%", "키를 아는 80/80판",
+                         "급여 20", "이하 40판 75.0%", "초과 40판 25.0%", "급여를 아는 80/80판"], texts
+        assert T.GOOD in text()[2].styleSheet() and T.BAD in text()[3].styleSheet(), "높은 쪽 초록 · 낮은 쪽 빨강"
+        assert _win.box_so_split.isVisibleTo(_win) and "중앙값" not in _win.box_so_split.toolTip()
+        # 카드가 바뀌어도 판본이 그대로면 다시 안 센다(막지 않았으면 — 캐시가 실제로 돈다) · 판본이 오르면 다시 센다
+        with c:
+            c.execute("DELETE FROM card_extra")
+        _win._render_shootout_splits()
+        assert len(_win.shootout_splits) == 2
+        _win._card_rev += 1
+        _win._render_shootout_splits()
+        assert [r.key for r in _win.shootout_splits] == ["salary"]
+        # 표시한 판을 빼면 문턱 밑으로 — F 갈래
+        core.set_excluded({f"spb{i}" for i in range(11)})
+        core.bump_filter_version()
+        try:
+            _win._render_shootout_splits()
+            assert _win.shootout_splits == [] and not _win.box_so_split.isVisibleTo(_win)
+        finally:
+            core.set_excluded(())
+            core.bump_filter_version()
+
+        def locked(*a, **k):
+            raise sqlite3.OperationalError("locked")
+        _win._card_rev += 1
+        store.open_db = locked
+        try:
+            _win._render_shootout_splits()
+            assert _win.shootout_splits == [] and _win._so_split_cache is None
+        finally:
+            store.open_db = keep[2]
+        _win._render_shootout_splits()
+        assert len(_win.shootout_splits) == 1, "풀리면 다음에 바로 센다"
+        _at_size(*app_main.MIN_WINDOW)
+        from PySide6.QtWidgets import QScrollArea
+        over = [s for s in _win.findChildren(QScrollArea) if s.isVisible() and s.widget().isAncestorOf(_win.box_so_split)
+                and s.horizontalScrollBar().maximum() > 0]
+        assert not over, over
+    finally:
+        _at_size(1600, 900)
+        _win._details_all, config.SHOOTOUT_SPLIT_MIN, store.open_db = keep
+        with c:
+            for t, rows in saved.items():
+                c.execute(f"DELETE FROM {t}")
+                if rows:
+                    c.executemany(f"INSERT INTO {t} VALUES ({', '.join('?' * len(rows[0]))})", [tuple(r) for r in rows])
+        c.close()
+        _win._card_rev += 1
+        _win._render_all()
+
+
 def test_shotmap_panel_65():
     """65 M8 — 슛 맵 오른쪽: 슛 요약 · 최다 득점/실점(누르면 상세 창 요약 탭) · 슛 타입 · 박스 안/밖 · 골·어시스트 순위."""
     import core_api
@@ -16612,7 +16697,8 @@ def test_68_value_change_card_states_and_numbers():
         finally:
             c.close()
         _win._render_value_change({"my_ouid": "me"})
-        assert "모으는 중" in _win.lb_value_note.text() and "1/2" in _win.lb_value_note.text(), _win.lb_value_note.text()
+        assert "모으는 중" in _win.lb_value_note.text() and "1/2일" in _win.lb_value_note.text(), _win.lb_value_note.text()
+        assert _win.chart_value_series.isHidden() and _win.lb_value_series.isHidden(), "이유는 한 번만"
         c = store.open_db(config.DB_PATH)
         try:
             store.save_card_price_days(c, [(s, 5, "2026-11-08", 90, 1) for s in range(1, 11)] + [(12, 5, "2026-11-08", 500, 1)]
@@ -16626,6 +16712,34 @@ def test_68_value_change_card_states_and_numbers():
         assert _win.box_value.isVisibleTo(_win) and _win.lb_value_note.isHidden()
         assert T.BAD in _win.lb_value["price"].text() and T.GOOD in _win.lb_value["squad"].text(), "내림 빨강 · 오름 초록"
         assert "구단가치" in _win.value_card.toolTip(), "넥슨 구단가치와 다르다는 말은 말풍선에(화면 글 아님)"
+        # 113 M3 — 선발 11장 시세 합 선
+        assert [v for _d, v in _win.value_series.days] == [1100, 10 * 90 + 500] and not _win.value_series.skipped, _win.value_series
+        assert not _win.chart_value_series.isHidden() and len(_win.chart_value_series._points) == 2
+        assert _win.lb_value_series.isHidden()
+        c = store.open_db(config.DB_PATH)
+        try:
+            with c:
+                c.execute("UPDATE card_price_days SET price = NULL WHERE spid = 12")
+        finally:
+            c.close()
+        _win._render_value_change({"my_ouid": "me"})
+        assert _win.chart_value_series.isHidden() and "1일을 뺐습니다" in _win.lb_value_series.text(), _win.lb_value_series.text()
+        assert _win.box_value.isVisibleTo(_win), "선을 못 그려도 두 날 비교는 그대로"
+        # 다시 들어와도 고른 날이 남는다 — 날짜 객체를 findData 로 찾아 두 번째부터 칸이 비고 숫자가 안 바뀌었다(3.11.1 까지)
+        picked = (_win.cb_value_from.currentData(), _win.cb_value_to.currentData())
+        assert picked == (vb.day1, vb.day2) and _win.value_breakdown.unknown == 1, (picked, _win.value_breakdown)
+        c = store.open_db(config.DB_PATH)
+        try:
+            with c:
+                c.execute("UPDATE card_price_days SET price = 500 WHERE spid = 12")
+        finally:
+            c.close()
+        _win._render_value_change({"my_ouid": "me"})
+        assert not _win.chart_value_series.isHidden()
+        _win._value_empty("빈 화면")
+        assert _win.chart_value_series.isHidden() and _win.lb_value_series.isHidden(), "빈 화면인데 선이 남았다"
+        _win._render_value_change({"my_ouid": "me"})
+        vb = _win.value_breakdown
         # 날짜를 바꾸면 DB 없이 다시 센다 — 같은 날 둘이면 변화 0
         _win.cb_value_from.setCurrentIndex(_win.cb_value_from.findData(vb.day2))
         assert _win.value_breakdown.total == 0 and _win.value_breakdown.price == 0

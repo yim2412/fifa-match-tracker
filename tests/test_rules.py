@@ -868,7 +868,7 @@ RESULT_PATHS = {   # 함수 → 처리 묶음 · 이유는 ROADMAP 108 A 표
     # 선수·슛 한 줄씩이 재료이거나 한 경기 화면 — 빈 쪽은 낼 것이 없다
     **{k: {A} for k in (
         "stats.trade_hint", "stats.own_squad", "stats.opponent_squad", "stats.aggregate_players",
-        "stats.result_breakdown", "stats.shootout_keepers", "stats.shot_map", "stats.shot_type_counts",
+        "stats.result_breakdown", "stats.shootout_games", "stats.shot_map", "stats.shot_type_counts",
         "stats.player_finishing_trend", "stats.finishing_ranking", "stats._opp_scope", "stats.key_players",
         "stats.match_sides", "stats.match_versus", "stats.latest_match_with", "stats.match_goals", "stats.match_shots",
         "stats.match_mvp", "stats.rating_trend", "stats.recent_ratings", "stats._my_pair_sums", "records.day_player",
