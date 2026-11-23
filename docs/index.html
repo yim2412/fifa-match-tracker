@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>피파 전적 관리</title>
-<meta name="description" content="넥슨 오픈API로 EA SPORTS FC 온라인 감독모드 전적을 조회·집계하는 데스크톱 앱. 승률·선수 지표·전술 상성·슛 맵을 16종의 탭으로 본다.">
-<meta property="og:title" content="피파 전적 관리">
-<meta property="og:description" content="넥슨 오픈API로 EA SPORTS FC 온라인 감독모드 전적을 조회·집계하는 데스크톱 앱. 승률·선수 지표·전술 상성·슛 맵을 16종의 탭으로 본다.">
+<title>감독모드 전적 분석</title>
+<meta name="description" content="넥슨 오픈API로 감독모드 전적을 조회하고 집계하는 데스크톱 앱입니다. 승률, 선수 지표, 전술 상성, 슛 맵을 한 앱에서 봅니다.">
+<meta property="og:title" content="감독모드 전적 분석">
+<meta property="og:description" content="넥슨 오픈API로 감독모드 전적을 조회하고 집계하는 데스크톱 앱입니다. 승률, 선수 지표, 전술 상성, 슛 맵을 한 앱에서 봅니다.">
 <meta property="og:type" content="website">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" as="style" crossorigin
@@ -21,17 +21,17 @@
 /* 대비를 낮춘 종이 톤 (2026-09-05). 흰 배경 + 검정 글자는 16:1 이라 눈이 아프다.
    지금은 약 9:1 — WCAG AA(4.5:1)는 넉넉히 넘으면서 오래 봐도 덜 피곤하다. */
 :root{
-  --bg:#f6f2ea; --fg:#33302a; --dim:#6e6960; --faint:#95908a;
+  --bg:#f6f2ea; --fg:#33302a; --dim:#6e6960; --faint:#716c66; --on-accent:#fff;
   --line:#eae3d7; --soft:#efe8db; --card:#fdfbf7; --code:#efe9de;
   --shadow:0 1px 2px rgba(60,45,25,.05),0 10px 26px -14px rgba(60,45,25,.18);
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]){
-  --bg:#17181b; --fg:#d7d3ca; --dim:#9b968c; --faint:#736e66;
+  --bg:#17181b; --fg:#d7d3ca; --dim:#9b968c; --faint:#8d8880; --on-accent:#17181b;
   --line:#26282c; --soft:#1e2024; --card:#1e2024; --code:#212327;
   --shadow:0 1px 2px rgba(0,0,0,.35),0 12px 30px -16px rgba(0,0,0,.75);
 }}
 :root[data-theme=dark]{
-  --bg:#17181b; --fg:#d7d3ca; --dim:#9b968c; --faint:#736e66;
+  --bg:#17181b; --fg:#d7d3ca; --dim:#9b968c; --faint:#8d8880; --on-accent:#17181b;
   --line:#26282c; --soft:#1e2024; --card:#1e2024; --code:#212327;
   --shadow:0 1px 2px rgba(0,0,0,.35),0 12px 30px -16px rgba(0,0,0,.75);
 }
@@ -63,8 +63,8 @@ h1{font-size:clamp(32px,5.4vw,44px);line-height:1.3;letter-spacing:-.01em;
   border-radius:100px;border:1px solid var(--line);background:var(--card);
   box-shadow:var(--shadow);transition:transform .13s ease,border-color .13s ease}
 .cta a:hover{transform:translateY(-1px);border-color:var(--accent);color:var(--accent)}
-.cta a.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.cta a.primary:hover{color:#fff;opacity:.88}
+.cta a.primary{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.cta a.primary:hover{color:var(--on-accent);opacity:.88}
 
 section{padding:62px 0;border-bottom:1px solid var(--line)}
 h2{font:600 13.5px/1 ui-monospace,monospace;letter-spacing:.08em;text-transform:uppercase;
@@ -132,8 +132,8 @@ footer p{color:var(--faint);max-width:44em;line-height:1.8}
 <header>
   <div class="wrap hero">
     <div class="eyebrow">Match Analytics</div>
-    <h1>피파 전적 관리</h1>
-    <p class="lead">넥슨 오픈API로 <b>EA SPORTS FC 온라인 감독모드</b> 전적을 조회·집계하는 데스크톱 앱. 승률·선수 지표·전술 상성·슛 맵을 <b>16종의 탭</b>으로 본다.</p>
+    <h1>감독모드 전적 분석</h1>
+    <p class="lead">넥슨 오픈API로 <b>감독모드 전적</b>을 조회하고 집계하는 데스크톱 앱입니다. 승률, 선수 지표, 전술 상성, 슛 맵을 한 앱에서 봅니다.</p>
     <div class="stack"><span>Python</span><span>PySide6</span><span>SQLite</span><span>넥슨 오픈API</span><span>PyInstaller</span></div>
     <div class="cta">
       <a class="primary" href="https://github.com/yim2412/fifa-match-tracker">저장소 보기</a>
