@@ -495,6 +495,18 @@ def test_find_sn():
     using(body)
 
 
+def test_tactic_target_tells_outside_from_no_raw_110():
+    def body(db):
+        assert M.tactic_target(db.conn, 5, "new5") == ("noraw", None, None), "원본이 없다"
+        db.snap(T0, [person(5, 1, nick="old5"), person(6, 2, nick="old6")])
+        db.snap(T0 + timedelta(hours=24), [person(5, 3, nick="new5")])
+        assert M.tactic_target(db.conn, 5, "아무개") == ("ok", 5, 3), "번호가 먼저 · 순위는 마지막 스냅숏"
+        assert M.tactic_target(db.conn, None, "new5") == ("ok", 5, 3)
+        for sn, nick in ((6, "new5"), (None, "old5"), (None, "old6"), (None, None), (0, ""), (99, None)):
+            assert M.tactic_target(db.conn, sn, nick) == ("outside", None, None), (sn, nick)
+    using(body)
+
+
 def test_ranked_nicknames():
     def body(db):
         db.snap(T0, [person(1, 1, nick="a")], seq=1)

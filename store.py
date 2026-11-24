@@ -1467,6 +1467,11 @@ BUDGET_TRAIT_SHARE = "trait_share"
 BUDGET_TRAIT_WEB = "trait_web"
 BUDGET_TRAIT_WEB_BLOCK = "trait_web_block"
 BUDGET_TRAIT_WEB_FORMAT = "trait_web_format"
+# 저장 전술(110 ④) — 웹은 특성과 따로 세고 막힘·형식도 따로. 막힘은 같은 주소라 특성·카드·스펙업이 같이 쉰다(card_block_kinds)
+BUDGET_TACTIC_WEB = "tactic_web"
+BUDGET_TACTIC_WEB_BLOCK = "tactic_web_block"
+BUDGET_TACTIC_WEB_FORMAT = "tactic_web_format"
+BUDGET_TACTIC_API = "tactic_api"
 BUDGET_TRAIT_MINE_NOUSER = "trait_mine_nouser"   # 57 K12 — 내 닉네임을 스쿼드메이커에서 못 찾은 날(그날 다시 안 묻는다)
 
 
@@ -1510,8 +1515,8 @@ BUDGET_SPECUP = "specup"   # 스펙업 순서(121) — 화면이 보이는 동�
 
 def card_block_kinds() -> tuple[str, ...]:
     """같은 IP 의 웹 길 막힘 표시 — 하나라도 그날 있으면 카드 백필(앱·측정 도구 둘 다)과 스펙업 받기는 그날 시작하지 않는다
-    (B[중]11 · 5판 · 121 M3 이 카드 페이지를 읽는 쓰임 셋 — 가계부·축구장 칩·스펙업 — 을 더했다)."""
-    return (BUDGET_TRAIT_WEB_BLOCK, f"{BUDGET_CARD}_block", f"{BUDGET_CARD_DEV}_block",
+    (B[중]11 · 5판 · 121 M3 이 카드 페이지를 읽는 쓰임 셋 — 가계부·축구장 칩·스펙업 — 을, 110 ④ 가 저장 전술을 더했다)."""
+    return (BUDGET_TRAIT_WEB_BLOCK, BUDGET_TACTIC_WEB_BLOCK, f"{BUDGET_CARD}_block", f"{BUDGET_CARD_DEV}_block",
             "card_ledger_block", "card_chip_block", f"{BUDGET_SPECUP}_block")
 
 

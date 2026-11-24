@@ -807,6 +807,22 @@ def find_sn(conn: sqlite3.Connection, sn: int | None, nickname: str | None) -> i
     return hit[0] if hit else None
 
 
+def tactic_target(conn: sqlite3.Connection, sn: int | None, nickname: str | None) -> tuple[str, int | None, int | None]:
+    """저장 전술(110 ④)을 볼 수 있는 구단주인가 → (상태 "ok"·"outside"·"noraw", 프로필 번호, 순위). 원본이 남은 마지막 스냅숏에서
+    번호로(없으면 닉네임으로) 찾는다. 원본이 없는 것과 1만 위 밖인 것은 화면 글이 달라 가른다."""
+    raw = _season_raw(conn)
+    if not raw:
+        return "noraw", None, None
+    sid = raw[-1]["id"]
+    if sn:
+        hit = conn.execute("SELECT profile_sn, rank FROM snapshot_rows WHERE snapshot_id = ? AND profile_sn = ?", (sid, sn)).fetchone()
+    elif nickname:
+        hit = conn.execute("SELECT profile_sn, rank FROM snapshot_rows WHERE snapshot_id = ? AND nickname = ?", (sid, nickname)).fetchone()
+    else:
+        hit = None
+    return ("ok", hit[0], hit[1]) if hit else ("outside", None, None)
+
+
 def ranked_nicknames(conn: sqlite3.Connection) -> frozenset:
     """원본이 남은 지금 시즌 스냅숏에 한 번이라도 1만 위 안에 든 닉네임(N7). DISTINCT 대신 파이썬 집합 —
     임시 정렬(TEMP B-TREE)을 안 만든다."""

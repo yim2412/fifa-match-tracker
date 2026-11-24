@@ -303,6 +303,8 @@ OPP_SCORE_NOTICE_VERSION = 14
 STARTUP_CHECK_NOTICE_VERSION = 15
 # 121 [스펙업 순서] 탭의 홈페이지 자동 읽기(선수 페이지 · 시뮬레이터 · 팀컬러 목록)는 이 버전 동의 뒤부터(U12)
 SPECUP_NOTICE_VERSION = 17
+# 110 ④ 저장 전술(tactics.py)은 이 버전 동의 뒤부터. 조각 ④-1 에서는 자리 값(99)이라 아무도 못 받는다 — ④-2 에서 18 로 확정
+TACTIC_NOTICE_VERSION = 99
 MY_TRAIT_NOTICE_VERSION = 14   # 57 K12 내 스쿼드 특성(내 닉네임을 스쿼드메이커에 보낸다 · fifa.db my_traits)은 이 버전 동의 뒤부터
 # 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
 # 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다 — 8 이 그렇다(그림은 수집과 무관하게
@@ -539,6 +541,11 @@ TRAIT_RECHECK_MARGIN_DAYS = 2       # 받은 지 RANK_RAW_KEEP_DAYS − 이만�
 TRAIT_TIERS = (200, TRAIT_TOP)      # 앞은 RANKER_PICK_TOP 과 같아야 한다 — 그 상수가 아래에 있어 숫자로 두고 test_traits 가 대조
 TRAIT_MIN_PEOPLE = 30               # 고른 포메이션 인원이 이보다 적으면 표를 흐림(RANKER_PICK_MIN_RANKERS 와 같은 규칙)
 TRAIT_MIN_COVER = 0.5               # 구간 대상 중 특성 줄이 있는 비율이 이보다 낮으면 흐림 — 첫 바퀴엔 위 순위만 차 있다(검토 B)
+# 110 ④ 랭커 저장 전술(tactics.py) — [전술 보기]를 누를 때만 스쿼드메이커를 읽는다. 저장하지 않는다
+TACTIC_WEB_DAILY_REQ = 600          # 스쿼드메이커 하루 요청 상한(tactic_web — 특성과 따로 · 한 명 6 + 팀마다 9 · 관문 실측 평균 21)
+TACTIC_API_DAILY_REQ = 150          # 오픈API 하루 요청 상한(tactic_api) — 한 명 2~5
+TACTIC_RECENT = 3                   # 선발 11명을 아는 판을 찾으려고 보는 최근 경기 수(몰수 빈 선발을 건너뛴다)
+TACTIC_429_WAIT_S = 3               # 429 를 받으면 쉬는 초 — 사람이 창을 보고 기다린다(랭커 픽의 60초는 안 된다)
 MY_TRAIT_RECENT = 5                 # 57 K12 — 내 특성의 기준 경기: 최근 이만큼 중 선발이 있는 첫 경기(몰수 빈 선발 건너뜀)
 TRAIT_TOP_NAMES = 3                # 포지션·칸마다 많이 넣은 순 이만큼
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
@@ -1107,6 +1114,22 @@ def my_trait_allowed() -> bool:
     """57 K12 내 스쿼드 특성(내 닉네임을 스쿼드메이커에 보낸다)을 받아도 되나 — 특성 관문 + 안내 14. 지우는 조건은 이것의 부정
     (MainWindow.purge_ranker_pick_data — 관문이 어긋나면 지우고 다시 받기를 되풀이한다 · 1회차 A[상]4)."""
     return trait_allowed() and NOTICE_ACCEPTED >= MY_TRAIT_NOTICE_VERSION
+
+
+def tactic_block() -> str:
+    """저장 전술(110 ④)을 못 받는 까닭 — "" 이면 받아도 된다. 차례는 특성(trait_status)과 같다: 안내 18 을 먼저 보면
+    수집을 끈 사람에게도 [안내 보기]가 뜬다(U7 — 수집을 켠 사람에게만 다시 묻는다). 처음 동의 전은 맨 앞이다."""
+    if notice_needed():
+        return "notice"
+    if not WEB_DATA:
+        return "off_web"
+    if not RANK_COLLECT:
+        return "off_collect"
+    return "" if NOTICE_ACCEPTED >= TACTIC_NOTICE_VERSION else "notice"
+
+
+def tactic_allowed() -> bool:
+    return not tactic_block()
 
 
 def specup_allowed() -> bool:

@@ -75,7 +75,7 @@ from rankmeta import (
     TcBoard, TcBoardRow, team_color_board, TcDetail, TcOwner, tc_detail, tc_top_owners,
     ChampGames, champ_games, rank_cut, last_raw_id,
     LateCell, LateRise, LateRow, late_rise, MetaAvg, meta_avg_elo,
-    SimRow, Similar, StepTable, my_emblem, similar_rankers, snapshot_formation, step_reached, step_table,
+    SimRow, Similar, StepTable, my_emblem, similar_rankers, snapshot_formation, step_reached, step_table, tactic_target,
 )
 from rankerpick import (
     SRC_OPP, SRC_PICK, SRC_RECOMMEND, PickCard, PickSummary, RecCard, Recommend, Standing, my_team_color,
@@ -179,6 +179,7 @@ __all__ = [
     "LateCell", "LateRise", "LateRow", "late_rise",           # 110 L1 막판 상승폭
     "MetaAvg", "meta_avg_elo",                                # 110 U10 [메타 변화] 평균 점수 차
     "SimRow", "Similar", "StepTable", "my_emblem", "similar_rankers", "snapshot_formation", "step_reached", "step_table",   # 110 R1 비슷한 랭커
+    "tactic_target",                                          # 110 ④ 저장 전술
     # rankmeta — N23 상대 순위 구간(2.9.1)
     "OppBand", "OppRank", "opp_rank_rows", "opp_rank_table", "opp_rank_label",
     # rankmeta — 57 K3 상대 점수(저장 안 함) · K1 구단가치 칸
@@ -288,7 +289,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
         "elo_marker", "data_time", "meta_status", "is_champ", "blank_label", "day_winrate", "emblems_by_name",
         "find_sn", "formation_group", "group_meta", "latest_pair", "pair_text", "rank_moves", "ranked_nicknames",
         "tier_means", "value_bins", "value_score", "weekly", "winrate_peers", "winrate_to_elo", "team_color_board",
-        "tc_detail", "tc_top_owners", "champ_games", "rank_cut", "last_raw_id", "late_rise", "meta_avg_elo", "similar_rankers", "snapshot_formation", "step_table", "step_reached", "my_emblem", "opp_rank_rows", "opp_rank_label",
+        "tc_detail", "tc_top_owners", "champ_games", "rank_cut", "last_raw_id", "late_rise", "meta_avg_elo", "similar_rankers", "snapshot_formation", "step_table", "step_reached", "my_emblem", "tactic_target", "opp_rank_rows", "opp_rank_label",
         "bin_of_value", "opp_scores", "card_screen_state", "lineup_cards", "player_card", "price_days", "price_index",
         "squad_ovr", "value_breakdown", "squads_by_day", "value_series", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels",
         "enhance_parse_money", "specup_band_value", "specup_budget_cut", "specup_load", "specup_plan", "specup_value_band", "parse_trades", "ledger", "price_targets", "records_by_match",

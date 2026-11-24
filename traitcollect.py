@@ -28,8 +28,11 @@
 함정(2026-10-07 실측 — 25명 × 60칸 1,500요청):
 - **`traits` 는 길이 3 이거나 `[-2]` 하나다**(칸이 전부 잠긴 카드 — 8,297칸). 길이 3 만 허용하면 그 카드마다 "형식 바뀜"으로 오판한다 → `[-2]` 는 (-2,-2,-2) 로 편다.
 - **`trainer` 키는 코치를 안 넣은 카드엔 아예 없다**(선발 2/3 가 그렇다) — 교체 선수도 가질 수 있다. 없으면 None(= 코치 없음) · 형식 이상이 아니다.
-- 칸의 `formation` 글자·`role` 은 자리와 안 맞는다(R2) → 포메이션·자리는 **경기 쪽**(`spPosition`)을 쓴다. 이 파일은 칸의 글자를 읽지 않는다.
+- 칸의 `formation` 글자는 자리와 안 맞는다(R2) → 포메이션·자리는 **경기 쪽**(`spPosition`)을 쓴다. 이 파일은 칸의 글자를 읽지 않는다.
+  `role` 은 맞는다 — 110 ④ 관문(2026-11-24)에서 선발 (카드, role) 11쌍이 86%가 경기와 같았다(그 길은 `tactics`).
 - 저장 안 된 칸은 `ResultCode -1`(정상 빈칸 — 오류 아님) · 그 밖의 코드는 형식 이상.
+- 저장 전술(110 ④)이 막힌 날(`tactic_web_block`)도 같은 주소라 쉰다. 다만 스스로 끄기(`block_streak`)는 특성 자신의 막힘(`trait_web_block`)이 있는
+  날만 센다 — 안 그러면 [다시 켜기] 뒤 남은 3일 장부에 전술 막힘이 겹쳐 특성이 요청 0 으로 다시 꺼진다.
 - 선발 여부(`state` 1)로 팀을 가린다: 경기 선발 11 카드가 칸의 **선발** 카드에 다 있어야 그 팀이다(교체 명단 카드가 우연히 겹쳐 틀린 팀이 채택되지 않게).
 - 경기 `spGrade` ≠ 칸 `buildUp` 인 카드는 그 카드만 뺀다 — 그 사이 강화를 바꿨으면 열린 칸이 달라 값이 그 경기의 것이 아니다.
 """
@@ -262,11 +265,15 @@ def fetch_owner_sn(session, nickname: str) -> int | None:
     return parse_owner(_post(session, {"strMethod": M_OWNER, "strCharacterName": nickname}))
 
 
+def fetch_cell(session, sn: int, team_type: int, part: int, seq: int) -> dict:
+    """한 칸의 원응답 — 특성(`parse_team`)과 저장 전술(`tactics.parse_cell`)이 같은 주소·머리글·오류 분류를 쓴다."""
+    return _post(session, {"strMethod": M_TEAM, "n1TeamType": team_type, "n1TeamPart": part, "n4TeamSeq": seq,
+                           "n8TargetNexonSN": sn})
+
+
 def fetch_team(session, sn: int, team_type: int, part: int, seq: int | None = None) -> list[TeamCard] | None:
     """한 팀 칸(전술 seq — 기본 config.TRAIT_TACTIC_SEQ) → 선수 목록 · 저장 안 된 칸이면 None."""
-    return parse_team(_post(session, {
-        "strMethod": M_TEAM, "n1TeamType": team_type, "n1TeamPart": part,
-        "n4TeamSeq": config.TRAIT_TACTIC_SEQ if seq is None else seq, "n8TargetNexonSN": sn}))
+    return parse_team(fetch_cell(session, sn, team_type, part, config.TRAIT_TACTIC_SEQ if seq is None else seq))
 
 
 # ── 받기(로더가 부른다 — 파일 머리말 "받는 규칙") ─────────────────────────────
@@ -291,6 +298,9 @@ class _Stop(Exception):
 
 class _WebLimit(Exception):
     pass
+
+
+_BLOCKS = ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TACTIC_WEB_BLOCK, "rate"))   # 같은 주소 — 하나라도 막힌 날은 쉰다
 
 
 def _starters_of(conn, h: dict) -> tuple[list[dict], str | None]:
@@ -340,7 +350,7 @@ def collect(session, conn, targets: list[dict], *, on_at: str | None, now_fn=dat
     fetch = fetch or fetch_team
     res = TraitResult()
     day = now_fn().date().isoformat()
-    for kind, why in ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TRAIT_WEB_FORMAT, "format")):
+    for kind, why in (*_BLOCKS, (store.BUDGET_TRAIT_WEB_FORMAT, "format")):
         if store.budget_hit_429(conn, day, (kind,)):
             res.stop, res.error = why, MESSAGES[why]
             return res
@@ -467,7 +477,8 @@ def run(api, session, conn, rows: list[dict], *, on_at: str | None, cancel: Call
                 record_days([r for r in rows if (r.get("rank") or 0) <= config.RANKER_PICK_TOP])
             if out.pick.checked:
                 out.web.append(collect(session, conn, rows, on_at=on_at, on_person=on_person, fetch=fetch, **kw))
-    if out.last_web is not None and out.last_web.stop == "rate":
+    if (out.last_web is not None and out.last_web.stop == "rate"
+            and store.budget_hit_429(conn, now_fn().date().isoformat(), (store.BUDGET_TRAIT_WEB_BLOCK,))):
         out.block_streak = store.trait_block_streak(conn)
     return out
 
@@ -496,8 +507,7 @@ def collect_mine(session, conn, ouid: str, *, now_fn=datetime.now, cancel: Calla
     now = now_fn()
     day = now.date().isoformat()
     # 못 찾은 닉네임은 그날 다시 안 묻는다 — 줄을 안 남겨 탭을 열 때마다 1요청씩 다시 물었다(57 ③ 리뷰)
-    for kind, why in ((store.BUDGET_TRAIT_WEB_BLOCK, "rate"), (store.BUDGET_TRAIT_WEB_FORMAT, "format"),
-                      (store.BUDGET_TRAIT_MINE_NOUSER, "nouser")):
+    for kind, why in (*_BLOCKS, (store.BUDGET_TRAIT_WEB_FORMAT, "format"), (store.BUDGET_TRAIT_MINE_NOUSER, "nouser")):
         if store.budget_hit_429(conn, day, (kind,)):
             return why
     row = store.my_traits(conn, ouid)

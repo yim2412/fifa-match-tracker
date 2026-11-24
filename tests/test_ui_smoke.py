@@ -4514,6 +4514,7 @@ def _web_calls():
         ("teamcolor detail", lambda: teamcolor.fetch_detail(1005), teamcolor.TeamColorError),
         ("teamcolor players", lambda: teamcolor.fetch_players(1005), teamcolor.TeamColorError),
         ("trait owner", lambda: traitcollect.fetch_owner_sn(traitcollect.new_session(), "닉"), traitcollect.TraitError),
+        ("squad cell", lambda: traitcollect.fetch_cell(traitcollect.new_session(), 1, 1, 0, 3), traitcollect.TraitError),
         ("trait team", lambda: traitcollect.fetch_team(traitcollect.new_session(), 1, 1, 0), traitcollect.TraitError),
     ]
 

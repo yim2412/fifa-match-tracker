@@ -90,9 +90,10 @@ class _Session:
     """요청 하나마다: cancel → 하루 계수 → 간격 → 요청(재시도 없음) → 429 면 쉬고 한 번 더."""
 
     def __init__(self, conn, day: str, cancel, sleep, clock, res: PickResult,
-                 kind: str = store.BUDGET_RANKER_PICK, cap: int | None = None):
+                 kind: str = store.BUDGET_RANKER_PICK, cap: int | None = None, wait_429: float | None = None):
         self.conn, self.day, self.cancel, self.sleep, self.clock, self.res = conn, day, cancel, sleep, clock, res
         self.kind, self.cap = kind, (config.RANKER_PICK_DAILY_REQ if cap is None else cap)
+        self.wait_429 = config.RANKER_PICK_429_WAIT_S if wait_429 is None else wait_429   # 사람이 기다리는 자리(110 ④)는 짧게
         self._last: float | None = None
 
     def _gap(self) -> None:
@@ -126,7 +127,7 @@ class _Session:
                     store.budget_mark_429(self.conn, self.day, self.kind)
                     raise _Quota from e
                 # 초당 429 와 하루 429 가 같은 코드라 구분이 안 된다 — 쉬고 한 번 더. 통잠이면 종료가 기다림 시간을 넘긴다
-                for _ in range(int(config.RANKER_PICK_429_WAIT_S)):
+                for _ in range(int(self.wait_429)):
                     if self.cancel():
                         raise _Stop from e
                     self.sleep(1.0)

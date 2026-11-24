@@ -341,7 +341,7 @@ def test_one_always_down_card_does_not_stop_the_others():
 def test_other_paths_block_specup_and_back():
     kinds = store.card_block_kinds()
     assert {f"{k}_block" for k in (store.BUDGET_CARD, store.BUDGET_CARD_DEV, playerinfo.KIND_CHIP, playerinfo.KIND_LEDGER, KIND)} \
-        | {store.BUDGET_TRAIT_WEB_BLOCK} == set(kinds), kinds
+        | {store.BUDGET_TRAIT_WEB_BLOCK, store.BUDGET_TACTIC_WEB_BLOCK} == set(kinds), kinds
     with env() as (net, conn):
         net.run([1])
         assert len(net.calls) == 2, "막힘이 없으면 받는다(아래가 빈 검사)"

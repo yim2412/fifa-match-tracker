@@ -294,6 +294,40 @@ def test_salary_cap_compares_my_starters_121():
             assert "확인 못 함" in run(d0).lines[0], d0
 
 
+def test_tactic_check_shares_the_trait_cell():
+    """전술 점검은 0요청 — 특성 점검이 받은 칸을 같이 쓰고, 특성 해석이 깨져도 돈다. 빈 칸은 안 넘긴다."""
+    import test_tactics
+    with tempfile.TemporaryDirectory() as d, fakes(Path(d)):
+        keep = traitcollect.fetch_cell
+        asked = []
+        try:
+            def serve(resp):
+                asked.clear()
+                traitcollect.fetch_owner_sn = lambda sess, nick: 7
+                traitcollect.fetch_cell = lambda sess, sn, tt, part, seq: (asked.append((sn, tt, part, seq)), {"ResultCode": -1} if len(asked) < 2 else resp)[1]
+                ctx = check_api.CheckCtx(nickname="가")
+                return ctx, check_api.check_traits(ctx), check_api.check_tactics(ctx)
+            cell = test_tactics.cell(strat=[["AR", "2"]])
+            ctx, trait, tac = serve(cell)
+            assert asked == [(7, *config.TRAIT_TEAM_ORDER[0], config.TRAIT_TACTIC_SEQ), (7, *config.TRAIT_TEAM_ORDER[1], config.TRAIT_TACTIC_SEQ)], asked
+            assert trait.status == check_api.WARN and "확인 실패" in trait.lines[0], "특성 칸이 멀쩡하면 아래가 빈 검사다"
+            assert tac.status == check_api.OK and "선발 11명 · 이름 나옴 11/11" in tac.lines[0], tac
+            assert serve(test_tactics.cell(strat=[["QQ", "2"]], teammentality=9))[2].lines[0].startswith("[WARN] 전술 칸")
+            r = serve(test_tactics.cell(strat=[["QQ", "2"]], teammentality=9))[2]
+            assert "9/11" in r.lines[0] and "rb 코드 QQ 2" in r.lines[0] and "teammentality 코드 9" in r.lines[0], r
+            odd = test_tactics.cell()
+            odd["ResultData"]["Squadinfo"]["players"][0]["role"] = "zz"
+            assert serve(odd)[2].status == check_api.FAIL and "모르는 자리 zz" in serve(odd)[2].lines[0]
+            odd["ResultData"]["Squadinfo"]["players"][0].update(role="gk", state=0)
+            assert serve(odd)[2].status == check_api.FAIL
+            odd["ResultData"]["Squadinfo"].pop("teamSt")
+            assert "확인 실패" in serve(odd)[2].lines[0] and serve(odd)[2].status == check_api.WARN
+            ctx, _t, tac = serve({"ResultCode": -1})
+            assert ctx.tactic_cell is None and tac.status == check_api.WARN and "받은 팀 칸이 없어" in tac.lines[0]
+        finally:
+            traitcollect.fetch_cell = keep
+
+
 def test_run_checks_stops_and_cancels_96():
     seen = []
     mk = lambda st, stop=False, code=0: (lambda ctx: check_api.Result(st, [st], stop, code))  # noqa: E731

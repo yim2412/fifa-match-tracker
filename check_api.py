@@ -37,6 +37,7 @@ class CheckCtx:
     page: Any = None            # 랭킹 목록 1쪽(팀컬러 엠블럼 점검이 쓴다)
     items: list = field(default_factory=list)   # 팀컬러 목록(그림 점검이 쓴다)
     rank_seasons: list = field(default_factory=list)
+    tactic_cell: Any = None     # 특성 점검이 받은 스쿼드메이커 칸 원응답(저장 전술 점검이 0요청으로 같이 쓴다)
 
 
 @dataclass
@@ -377,7 +378,10 @@ def check_traits(ctx: CheckCtx) -> Result:
             return _res(["[WARN] 특성 칸: 이 닉네임의 스쿼드메이커 구단주를 못 찾았습니다(특성 받기만 영향)"])
         cards = None
         for tt, part in config.TRAIT_TEAM_ORDER:
-            cards = traitcollect.fetch_team(sess, sn, tt, part)
+            resp = traitcollect.fetch_cell(sess, sn, tt, part, config.TRAIT_TACTIC_SEQ)
+            if isinstance(resp, dict) and resp.get("ResultCode") == traitcollect.RC_OK:
+                ctx.tactic_cell = resp   # 해석보다 먼저 — 특성 형식이 깨져도 전술 점검은 돈다
+            cards = traitcollect.parse_team(resp)
             if cards:
                 break
         if not cards:
@@ -392,6 +396,26 @@ def check_traits(ctx: CheckCtx) -> Result:
                      f"{' · 이름표에 없는 코드 ' + ', '.join(sorted(set(miss))) if miss else ''}"])
     except Exception as e:
         return _res([f"[WARN] 특성 칸 확인 실패(특성 받기만 영향): {type(e).__name__}: {e}"])
+
+
+def check_tactics(ctx: CheckCtx) -> Result:
+    # 저장 전술(110 ④) — 위 점검이 받은 칸을 같이 쓴다(0요청). 구조와 이름표만 본다
+    if ctx.tactic_cell is None:
+        return _res(["[WARN] 전술 칸: 받은 팀 칸이 없어 구조를 확인하지 못했습니다(저장 전술만 영향)"])
+    try:
+        import tactic_codes
+        import tactics
+        cell = tactics.parse_cell(ctx.tactic_cell)
+        names = [(k, tactic_codes.team_value(k, v)) for k, v in cell.team]
+        names += [(p.role, tactic_codes.player_value(p.role, c, lv)) for p in cell.players for c, lv in p.strategy]
+        miss = [f"{where} {text}" for where, text in names if tactic_codes.is_unknown(text)]
+        roles = {p.role for p in cell.players} - set(tactic_codes.PLAYER_NAMES)
+        mark = "[FAIL]" if len(cell.players) != 11 or roles else "[WARN]" if miss else "[OK]  "
+        return _res([f"{mark} 전술 칸: 선발 {len(cell.players)}명 · 이름 나옴 {len(names) - len(miss)}/{len(names)}"
+                     f"{' · 이름표에 없는 값 ' + ', '.join(sorted(set(miss))) if miss else ''}"
+                     f"{' · 모르는 자리 ' + ', '.join(sorted(roles)) if roles else ''}"])
+    except Exception as e:
+        return _res([f"[WARN] 전술 칸 확인 실패(저장 전술만 영향): {type(e).__name__}: {e}"])
 
 
 def check_player_card(ctx: CheckCtx) -> Result:
@@ -638,7 +662,7 @@ CHECKS: list[tuple[str, Callable[[CheckCtx], Result]]] = [
     ("경기 상세", check_details), ("메타·집계", check_meta_and_aggregates), ("선수 그림", check_player_image),
     ("랭커 기록", check_ranker_stats), ("시즌 메타", check_season_meta), ("데이터센터 랭킹", check_manager_rank),
     ("랭킹 목록", check_rank_page), ("팀컬러", check_teamcolor), ("표 칸 그림", check_icons),
-    ("포지션 특성", check_traits), ("선수 카드", check_player_card), ("시뮬레이터", check_simulator),
+    ("포지션 특성", check_traits), ("저장 전술", check_tactics), ("선수 카드", check_player_card), ("시뮬레이터", check_simulator),
     ("강화 재료", check_boost), ("카드 백필", check_card_backfill), ("현재 등급", check_grade),
     ("DB", check_db), ("급여 상한", check_salary_cap), ("구단주 분포", check_owner_dist), ("시즌표", check_rank_seasons), ("예측", check_prediction),
 ]

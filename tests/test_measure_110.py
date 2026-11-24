@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 
 import watchdog  # noqa: E402
 import measure_110 as m  # noqa: E402
+import tactics  # noqa: E402
 import traitcollect  # noqa: E402
 from demodata import POSITIONS  # noqa: E402
 
@@ -101,8 +102,8 @@ def test_bundle_table_and_readable():
     js = "x;var mR=pR({gk:[],rb:[[{tit:`AR`,desc:`가`},{tit:`AR`,desc:`나`}],[{tit:`SR`,desc:`다`},{tit:`SR`,desc:`라`},{tit:`SR`,desc:`마`}]],st:[[{tit:`AR`,desc:`바`}]]}),q=[{tit:`ZZ`}]"
     table = m.bundle_table(js)
     assert table == {"gk": {}, "rb": {"AR": 2, "SR": 3}, "st": {"AR": 1}}, table
-    ok = ["st|defwidth|10", "st|teammentality|6", "pl|rb|SR|2", "pl|rb|SR0|1", "pa|(3, 1)"]
-    bad = ["st|defwidth|11", "st|newkey|1", "pl|rb|SR|3", "pl|rb|QQ|1", "pl|gk|AR|1", "pl|zz|AR|0", "pa|(4, 1)", "st|defwidth|x"]
+    ok = ["st|defwidth|9", "st|offcornerkick|4", "st|teammentality|6", "pl|rb|SR|2", "pl|rb|SR0|1", "pa|(3, 1)"]
+    bad = ["st|defwidth|10", "st|offcornerkick|5", "st|newkey|1", "pl|rb|SR|3", "pl|rb|QQ|1", "pl|gk|AR|1", "pl|zz|AR|0", "pa|(4, 1)", "st|defwidth|x"]
     assert all(m.readable(k, table) for k in ok), [k for k in ok if not m.readable(k, table)]
     assert not any(m.readable(k, table) for k in bad), [k for k in bad if m.readable(k, table)]
 
@@ -139,6 +140,29 @@ def test_fetch_uses_older_lineup_for_team():
     d = m.fetch_person(FakeFetcher({((1, 2), 0): resp(lineup=old)}), t)
     r = m.person_result(t, d)
     assert d["teams"] == ["1-2"] and r["seen"] and r["back"] == 1 and not r["seen_last"], r
+
+
+def test_app_person_agrees_with_verdict():
+    """앱 길(tactics)과 관문 판정이 같은 사람에게 같은 수를 내나 — 지어낸 60칸."""
+    st = {k: 1 for k in tactics.tactic_codes.TEAM_KEYS}
+
+    def full(**kw):
+        r = resp(**kw)
+        r["ResultData"]["Squadinfo"]["teamSt"] = dict(st, defdepth=kw.get("team_st", 5))
+        return r
+    t = {"no": 0, "group": "a", "sn": 1, "lineups": [BASE], "age_h": 1.0}
+    moved = [(BASE[0][0], BASE[0][1]), (BASE[1][0], BASE[2][1]), (BASE[2][0], BASE[1][1])] + BASE[3:]
+    for cells, n in (({}, 0), ({((1, 1), 0): full(), ((1, 1), 3): full(team_st=6), ((1, 1), 4): full()}, 2),
+                     ({((1, 1), 0): full(lineup=moved)}, 0), ({((1, 1), 0): full(), ((0, 0), 0): full(), ((0, 0), 2): full(part=(3, 1))}, 2)):
+        d = m.fetch_person(FakeFetcher(cells), t)
+        assert m.app_person(t, d) == m.person_result(t, d)["distinct_last"] == n, (n, m.app_person(t, d))
+
+
+def test_bundle_names_and_team_names():
+    js = "x;var mR=pR({gk:[],rb:[[{tit:`AR`,desc:`가`},{tit:`AR`,desc:`나`}],[{tit:`SR`,desc:`다`}]]}),q=[`ㄱ`,`ㄴ`],z=[{value:0,label:`a`},{value:1,label:`b`}]"
+    assert m.bundle_names(js) == {"gk": {}, "rb": {"AR": ("가", "나"), "SR": ("다",)}}
+    assert m.team_names_in(js, ("ㄱ", "ㄴ")) and m.team_names_in(js, ("a", "b"))
+    assert not m.team_names_in(js, ("ㄴ", "ㄱ")) and not m.team_names_in(js, ("a",)) and not m.team_names_in(js, ("b", "a"))
 
 
 def test_gate_edges():

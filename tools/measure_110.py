@@ -9,6 +9,7 @@
 | `--fetch [N]` | 남은 사람(앞에서 N명)의 칸을 받아 `raw/<번호>.json.gz` 에. 사람마다 한 파일이라 끊겨도 이어집니다 | 홈페이지 |
 | `--judge` | `raw/` 만 읽고 판정해 `result.json` 에(닉네임·번호 없음) | 0 |
 | `--known 번들.js` | 스쿼드메이커 번들의 자리 × 개인 전술 표와 대조해 조건 ④ 재료 `known.json` 을 만듭니다(`--judge` 앞뒤로) | 0 |
+| `--app` | 앱 코드(`tactics` · `tactic_codes`)로 받아 둔 사람을 다시 판정해 `result.json` 과 사람마다 대조하고, 이름표를 번들과 대조합니다 | 0 |
 | `--status` | 받은 사람 수·오늘 요청 수 | 0 |
 
 막힘(403·429·확인 페이지) 한 번이면 `blocked` 를 남기고 끝냅니다. 그 뒤 `--fetch` 는 거부합니다. 게임 중이면 안 합니다.
@@ -36,6 +37,8 @@ sys.path.insert(0, str(ROOT))
 
 import config  # noqa: E402
 import gameguard  # noqa: E402
+import tactic_codes  # noqa: E402
+import tactics  # noqa: E402
 import traitcollect  # noqa: E402
 from demodata import POSITIONS  # noqa: E402
 
@@ -133,7 +136,7 @@ def pctile(xs: list[float], q: float) -> float:
 
 
 TEAM_ST_MAX = {"defensivestyle": 4, "offensive_style_buildup": 3, "offensive_style_chancecreation": 3, "teammentality": 6,
-               "defwidth": 10, "defdepth": 10, "offwidth": 10, "offplayerinbox": 10, "offcornerkick": 5, "offfreekick": 5}
+               "defwidth": 9, "defdepth": 9, "offwidth": 9, "offplayerinbox": 9, "offcornerkick": 4, "offfreekick": 4}   # 응답은 0부터(화면은 +1)
 
 
 def bundle_table(js: str) -> dict[str, dict[str, int]]:
@@ -148,6 +151,25 @@ def bundle_table(js: str) -> dict[str, dict[str, int]]:
             if codes:
                 out[role][codes[0]] = len(codes)
     return out
+
+
+def bundle_names(js: str) -> dict[str, dict[str, tuple[str, ...]]]:
+    """번들 글자 → {자리: {코드: (선택지 이름, …)}} — 앱 이름표(`tactic_codes.PLAYER_NAMES`)와 같은 꼴."""
+    start = js.index("=pR({gk:") + 4
+    end = js.index("})", start)
+    out: dict[str, dict[str, tuple[str, ...]]] = {}
+    for role, body in re.findall(r"([a-z]+):\[((?:\[[^\]]*\],?)*)\]", js[start:end + 1]):
+        out[role] = {}
+        for group in re.findall(r"\[([^\]]*)\]", body):
+            items = re.findall(r"tit:`([^`]*)`,desc:`([^`]*)`", group)
+            out[role][items[0][0]] = tuple(name for _c, name in items)
+    return out
+
+
+def team_names_in(js: str, names: tuple[str, ...]) -> bool:
+    """이름 목록이 번들에 그 차례로 있나 — `[{value:0,label:`가`},…]` 또는 [`가`,`나`] 꼴."""
+    labeled = ",".join(f"{{value:{i},label:`{n}`}}" for i, n in enumerate(names))
+    return f"[{labeled}]" in js or "[" + ",".join(f"`{n}`" for n in names) + "]" in js
 
 
 def readable(key: str, table: dict) -> bool:
@@ -399,6 +421,49 @@ def judge() -> int:
     return 0
 
 
+def app_person(t: dict, d: dict) -> int:
+    """앱 길(tactics)로 본 한 사람 — 마지막 경기 선발과 맞는 서로 다른 전술 수. 받아 둔 칸만 읽습니다."""
+    raw = {tuple(map(int, k.split("-"))): v for k, v in d["raw"].items()}
+    lineup = tactics.lineup_of([{"spId": s, "spPosition": p} for s, p in t["lineups"][0]])
+    first = {team: tactics.parse_cell(raw[(*team, 0)]) for team in TEAMS}
+    cells = {(*team, s): tactics.parse_cell(raw[(*team, s)]) for team in tactics.candidate_teams(first, lineup) for s in SEQS}
+    return len(tactics.match(lineup, cells))
+
+
+def app() -> int:
+    targets = {t["no"]: t for t in json.loads((OUT / "targets.json").read_text(encoding="utf-8"))}
+    rows = json.loads((OUT / "result.json").read_text(encoding="utf-8"))["rows"]
+    bad, cells, blank, seen = [], 0, 0, collections.Counter()
+    for r in rows:
+        with gzip.open(RAW / f"{r['no']:03d}.json.gz", "rt", encoding="utf-8") as fh:
+            d = json.load(fh)
+        n = app_person(targets[r["no"]], d)
+        if n != r["distinct_last"]:
+            bad.append((r["no"], n, r["distinct_last"]))
+        for v in [*d["raw"].values(), *d["extra"].values()]:
+            c = tactics.parse_cell(v)
+            cells, blank = cells + 1, blank + (c is None)
+            if c is not None:
+                for k, x in c.team:
+                    seen[k, tactic_codes.team_value(k, x)] += 1
+                for p in c.players:
+                    for code, lv in p.strategy:
+                        seen[p.role, tactic_codes.player_value(p.role, code, lv)] += 1
+    unknown = {k: n for k, n in seen.items() if tactic_codes.is_unknown(k[1])}
+    print(f"{'[FAIL]' if bad else '[OK]  '} 사람 {len(rows)} · 다른 사람 {bad}")
+    print(f"{'[FAIL]' if unknown else '[OK]  '} 칸 {cells}(빈칸 {blank}) · 값 {sum(seen.values())} · 모르는 값 {unknown}")
+    diff = []
+    bundles = sorted(OUT.glob("bundle_*.js"))
+    for path in bundles:
+        js = path.read_text(encoding="utf-8")
+        want = bundle_names(js)
+        diff += [(r, want.get(r), tactic_codes.PLAYER_NAMES.get(r)) for r in {*want, *tactic_codes.PLAYER_NAMES}
+                 if want.get(r) != tactic_codes.PLAYER_NAMES.get(r)]
+        diff += [names for names in tactic_codes.TEAM_NAMES.values() if not team_names_in(js, names)]
+    print(f"{'[FAIL]' if diff or not bundles else '[OK]  '} 번들 {len(bundles)}개 · 자리 {len(tactic_codes.PLAYER_NAMES)} · 다른 것 {diff}")
+    return 1 if bad or unknown or diff or not bundles else 0
+
+
 def main() -> int:
     sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
@@ -407,6 +472,7 @@ def main() -> int:
     g.add_argument("--fetch", nargs="?", type=int, const=-1, default=None)
     g.add_argument("--judge", action="store_true")
     g.add_argument("--known")
+    g.add_argument("--app", action="store_true")
     g.add_argument("--status", action="store_true")
     a = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -424,6 +490,8 @@ def main() -> int:
         return fetch(None if a.fetch < 0 else a.fetch)
     if a.judge:
         return judge()
+    if a.app:
+        return app()
     if a.known:
         return known(a.known)
     print(len(list(RAW.glob("*.json.gz"))) if RAW.exists() else 0, "명 받음", _meter())

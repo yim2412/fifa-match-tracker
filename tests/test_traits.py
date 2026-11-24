@@ -376,6 +376,25 @@ def test_fetch_team_request_shape():
     assert kw["allow_redirects"] is False and kw["timeout"] == config.TRAIT_TIMEOUT_S
 
 
+def test_fetch_cell_is_the_one_road():
+    """원응답 길 — 전술 번호를 그대로 싣고, 특성(fetch_team)도 이 길로 받는다(주소·머리글·오류 분류가 두 벌이 되지 않게)."""
+    body = {"ResultCode": 1, "ResultData": {"Squadinfo": {"players": "해석 전"}}}
+    sess, saved = FakeSession(FakeResp(200, body)), config.WEB_DATA
+    asked = []
+    keep = tc.fetch_cell
+    try:
+        config.WEB_DATA = True
+        assert tc.fetch_cell(sess, 9, 0, 2, 7) == body, "해석하지 않은 원응답"
+        data = sess.posts[0][1]["data"]
+        assert (data["n1TeamType"], data["n1TeamPart"], data["n4TeamSeq"], data["n8TargetNexonSN"]) == (0, 2, 7, 9), data
+        assert sess.posts[0][1]["allow_redirects"] is False and sess.posts[0][0] == tc.URL
+        tc.fetch_cell = lambda *a: (asked.append(a), {"ResultCode": -1})[1]
+        assert tc.fetch_team("s", 1, 1, 0) is None and tc.fetch_team("s", 1, 1, 0, 4) is None
+        assert asked == [("s", 1, 1, 0, config.TRAIT_TACTIC_SEQ), ("s", 1, 1, 0, 4)], asked
+    finally:
+        tc.fetch_cell, config.WEB_DATA = keep, saved
+
+
 def test_fetch_owner_sn():
     saved = config.WEB_DATA
     config.WEB_DATA = True
