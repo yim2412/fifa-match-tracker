@@ -28,7 +28,7 @@ import watchdog  # noqa: E402
 
 # 실제 사용자 PC 처럼 — 키·스위치가 env 에 올라와 있다(config.load_dotenv 가 .env 를 os.environ 에 올린 상태)
 REAL = {"NEXON_API_KEY": "live_realkey_should_not_leak", "FIFA_WEB_DATA": "1", "FIFA_RANK_COLLECT": "1",
-        "FIFA_OWNER_DIST": "2026-11-01T00:00:00", "FIFA_CARD_BACKFILL": "2026-11-01T00:00:00",
+        "FIFA_OWNER_DIST": "2026-11-01T00:00:00", "FIFA_SQUAD_CMP": "2026-11-01T00:00:00", "FIFA_CARD_BACKFILL": "2026-11-01T00:00:00",
         "FIFA_SERVER_URL": "http://127.0.0.1:9", "FIFA_NOTICE": "3", "FIFA_UPDATE_CHECK": "1"}
 os.environ.update(REAL)
 os.environ.pop("FIFA_DATA_DIR", None)
@@ -93,14 +93,14 @@ def test_config_ignores_real_keys_and_switches():
         assert os.environ.get(k) == v
     assert config.API_KEY == "" and config.SERVER_URL == ""
     assert not config.WEB_DATA and not config.RANK_COLLECT and not config.UPDATE_CHECK
-    assert config.OWNER_DIST_ON == "" and config.CARD_BACKFILL_ON == ""
+    assert config.OWNER_DIST_ON == "" and config.CARD_BACKFILL_ON == "" and config.SQUAD_CMP_ON == ""
     assert config.NOTICE_ACCEPTED == config.NOTICE_VERSION and not config.notice_needed()
     assert config.MIGRATED == []
     # 디스크의 .env 도 안 읽는다(다른 실행본이 켰다고 쓴 것처럼)
     config.ENV_PATH.write_text("FIFA_WEB_DATA=1\nFIFA_RANK_COLLECT=1\nFIFA_NOTICE=14\n", encoding="utf-8")
     try:
         assert config.read_env_switches() == (False, False)
-        assert config.read_owner_dist() is None and config.read_card_backfill() is None
+        assert config.read_owner_dist() is None and config.read_card_backfill() is None and config.read_squad_cmp() is None
         assert not config.read_person_allowed() and not config.predict_check_allowed()
     finally:
         config.ENV_PATH.unlink()
@@ -108,7 +108,7 @@ def test_config_ignores_real_keys_and_switches():
 
 def test_switches_cannot_be_saved_or_flipped():
     for call in (lambda: config.set_web_data(True), lambda: config.set_rank_collect(True),
-                 lambda: config.set_owner_dist(True), lambda: config.set_card_backfill(True),
+                 lambda: config.set_owner_dist(True), lambda: config.set_card_backfill(True), lambda: config.set_squad_cmp(True),
                  lambda: config.save_api_key("live_x"), lambda: config.accept_notice(True)):
         try:
             call()
@@ -117,7 +117,7 @@ def test_switches_cannot_be_saved_or_flipped():
         else:
             raise AssertionError("데모에서 저장이 통과했다")
     assert not config.WEB_DATA and not config.RANK_COLLECT and config.API_KEY == ""
-    assert not config.OWNER_DIST_ON and not config.CARD_BACKFILL_ON
+    assert not config.OWNER_DIST_ON and not config.CARD_BACKFILL_ON and not config.SQUAD_CMP_ON
     assert not config.ENV_PATH.exists()
 
 

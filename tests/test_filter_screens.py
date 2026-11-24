@@ -463,6 +463,7 @@ CACHE_EXEMPT = {
     "_div_all_key": "등급 이력(S — 넥슨 기록이라 안 거른다 · _render_all 이 부른다)",
     "_sc_cache": "슈챔 진입 시각(S — _div_all_key 와 한 쌍)",
     "_wins_cache": "값 쪽 이름 — 키(_wins_cache_key)가 판본을 싣는다",
+    "_tactic_cache": "랭커 저장 전술(110 ④ — 넥슨에 저장된 전술이라 내 판을 안 센다 · 열쇠에 경기 번호가 든다)",
 }
 
 

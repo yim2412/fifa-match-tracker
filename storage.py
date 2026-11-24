@@ -8,6 +8,7 @@ fifa.db 600MB 안팎 · 그림 수천 장). 무엇을 언제 멈추고 지우는
 | images | `.cache/` 아래 폴더 전부(얼굴·배지·엠블럼·표 칸 그림 …) | `clear_images` — 메타·상세 파일은 남는다 |
 | details | `.cache/` 최상위 `*.json` 중 `meta_` 아닌 것(DB 에 넣기 전 경기 상세) | `clear_details` |
 | dist | 구단주 분포·랭커 픽·포지션 특성 표 | 기존 지우기(`ownerdist.purge` · `MainWindow.purge_ranker_pick_data`) |
+| squads | squads.db(같은 OVR 비교 자료 122) | `clear_squads` — 표를 비우고 WAL 을 비운다(파일은 남는다) |
 | all | 위 전부 + fifa.db 의 사용자 자료 표 전부 | `reset_db`(남길 행만 새 파일로 → 바꿔 끼우기) + `clear_cache` + rank |
 
 내 기록 백업·복원(109 J9 — 맨 아래 절): `backup`(SQLite backup API 사본 + settings.ini → zip 하나) · `inspect_backup`(풀기·검사 — 임시 파일) ·
@@ -30,10 +31,11 @@ from typing import Callable
 
 import config
 import matchtime
+import squadcmp
 import store
 import updatecheck
 
-KINDS = ("rank", "cards", "images", "details", "dist", "all")
+KINDS = ("rank", "cards", "images", "details", "dist", "squads", "all")
 META_PREFIX = "meta_"   # .cache 최상위의 메타(오프라인 등급·시즌 이름 — nexon_api) — 상세 캐시가 아니다
 
 
@@ -86,7 +88,8 @@ class Sizes:
     details: int = 0
 
 
-def measure(db_path: Path, rank_path: Path, cache_dir: Path, stop: Callable[[], bool] = lambda: False) -> Sizes:
+def measure(db_path: Path, rank_path: Path, cache_dir: Path, stop: Callable[[], bool] = lambda: False,
+            squads_path: Path | None = None) -> Sizes:
     """종류별 크기 — 작업 스레드에서. fifa.db 안은 표 값 바이트 근사(store.table_bytes)."""
     out = Sizes()
     out.bytes["rank"] = _files_bytes(db_files(rank_path))
@@ -97,6 +100,7 @@ def measure(db_path: Path, rank_path: Path, cache_dir: Path, stop: Callable[[], 
     files = detail_files(cache_dir)
     out.details = len(files)
     out.bytes["details"] = _files_bytes(files)
+    out.bytes["squads"] = _files_bytes(db_files(squads_path)) if squads_path is not None else 0
     out.bytes["cards"] = out.bytes["dist"] = None
     try:
         conn = store.open_db(db_path)
@@ -110,7 +114,7 @@ def measure(db_path: Path, rank_path: Path, cache_dir: Path, stop: Callable[[], 
             conn.close()
     except sqlite3.Error:
         pass   # 잠김 — 그 칸은 "?"
-    out.bytes["all"] = (_files_bytes(db_files(db_path)) + out.bytes["rank"] + dir_bytes(cache_dir))
+    out.bytes["all"] = (_files_bytes(db_files(db_path)) + out.bytes["rank"] + out.bytes["squads"] + dir_bytes(cache_dir))
     return out
 
 
@@ -151,6 +155,16 @@ def clear_cards(db_path: Path) -> int:
         return store.clear_tables(conn, store.CARD_TABLES)
     finally:
         conn.close()
+
+
+def clear_squads(squads_path: Path) -> int:
+    """같은 OVR 비교 자료 → 1(지웠다) · 0(지울 것 없음). 파일이 없으면 만들지 않는다."""
+    try:
+        return int(squadcmp.purge(squads_path))
+    except sqlite3.DatabaseError as e:
+        if squadcmp.is_corrupt(e) and squadcmp.drop_if_corrupt(squads_path):
+            return 1
+        raise
 
 
 def reset_db(db_path: Path, cancel: Callable[[], bool] = lambda: False) -> str:

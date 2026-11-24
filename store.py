@@ -382,9 +382,9 @@ CREATE TABLE IF NOT EXISTS notes (
 # [정보 › 저장 공간] 내 기록 전부(57 K9 ⑤) — fifa.db 를 바꿔 끼울 때 새 파일로 옮기는 표와 거르는 조건. 나머지 표는 전부 버린다
 # (RESET_WIPE — 스키마의 모든 표가 둘 중 하나에 있어야 한다: test_store 가 대조 · 새 표를 만들면 여기서 고른다).
 # api_budget 은 하루 계수라 지우면 상한이 풀린다 · 시즌표·팀컬러 효과표는 남의 자료가 아니고 웹 데이터가 꺼지면 다시 못 받는다.
-# trade_state 는 키 지문만 — my_ouid(사람)·predict_final:*(지우면 predictions 를 되살리는 정본)·거래 커서 done_*·top_stop_* 는 버린다.
+# trade_state 는 키 지문과 같은 OVR 누적 요청 수만 — my_ouid(사람)·predict_final:*(지우면 predictions 를 되살리는 정본)·거래 커서 done_*·top_stop_* 는 버린다.
 RESET_KEEP = {"api_budget": "", "seasons": "", "teamcolor_meta": "", "teamcolor_steps": "",
-              "trade_state": "WHERE key IN ('key_fp')"}
+              "trade_state": "WHERE key IN ('key_fp', 'squad_cmp_req')"}   # 누적을 잃으면 서비스 키의 429 를 개발 키로 잘못 읽는다(122)
 RESET_WIPE = ("matches", "match_players", "accounts", "team_colors", "elo_history", "elo_track", "predictions",
               "trades", "trades_prev", "card_prices", "card_info", "ranker_stats", "squad_owner", "squad_match",
               "match_squads", "ranker_squads", "ranker_matches", "owner_dist_state", "owner_dist_done", "owner_dist",
@@ -1452,6 +1452,36 @@ def budget_take(conn: sqlite3.Connection, day: str, kind: str, cap: int | None) 
     return True
 
 
+def squad_take(conn: sqlite3.Connection, day: str, cap: int, on_at: str) -> int | None:
+    """같은 OVR 비교 자료(122) 요청 하나 — 하루 계수와 "켠 뒤 누적"(trade_state squad_cmp_req)을 **한 트랜잭션**에서 올린다 → 누적.
+    상한이면 안 쓰고 None. 켠 시각이 달라지면 누적은 1부터다(키를 바꿔 다시 켠 사람의 옛 키 몫이 안 섞이게)."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        r = conn.execute("SELECT attempts FROM api_budget WHERE day = ? AND kind = ?", (day, BUDGET_SQUAD)).fetchone()
+        if (r[0] if r else 0) >= cap:
+            conn.rollback()
+            return None
+        conn.execute("INSERT INTO api_budget (day, kind, attempts) VALUES (?, ?, 1)"
+                     " ON CONFLICT(day, kind) DO UPDATE SET attempts = attempts + 1", (day, BUDGET_SQUAD))
+        n = squad_req(conn, on_at) + 1
+        _put_state(conn, {SQUAD_REQ_KEY: json.dumps({"on": on_at, "n": n}, separators=(",", ":"))})
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return n
+
+
+def squad_req(conn: sqlite3.Connection, on_at: str) -> int:
+    """켠 시각 on_at 뒤로 보낸 요청 수(다른 시각에 켠 것이면 0)."""
+    r = conn.execute("SELECT value FROM trade_state WHERE key = ?", (SQUAD_REQ_KEY,)).fetchone()
+    try:
+        d = json.loads(r[0]) if r else {}
+        return int(d["n"]) if d.get("on") == on_at else 0
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return 0
+
+
 def budget_used(conn: sqlite3.Connection, day: str, kind: str) -> int:
     r = conn.execute("SELECT attempts FROM api_budget WHERE day = ? AND kind = ?", (day, kind)).fetchone()
     return r[0] if r else 0
@@ -1460,6 +1490,8 @@ def budget_used(conn: sqlite3.Connection, day: str, kind: str) -> int:
 BUDGET_OPENAPI = "openapi"          # 다른 로더(검색·거래·랭커 기록)의 최종 429 표시만
 BUDGET_RANKER_PICK = "ranker_pick"
 BUDGET_OWNER_DIST = "owner_dist"    # 구단주 분포(49단계) — 자기 429 는 BUDGET_OPENAPI 에도 남겨 다른 로더가 같이 멈춘다
+BUDGET_SQUAD = "squad_cmp"          # 같은 OVR 비교 자료(122) — 429 는 개발 키로 보이면 여기만, 아니면 BUDGET_OPENAPI 에도
+SQUAD_REQ_KEY = "squad_cmp_req"     # trade_state — 켠 시각과 그 뒤 누적 요청 수(JSON)
 # 포지션 특성(32단계) — 오픈API 는 ranker_pick 한 장부(429 도)에 더해 201~500 몫만 따로 센다(trait_share · 429 는 안 적는다).
 # 웹(스쿼드메이커)은 trait_web 이 하루 요청 · 그날 멈춤 표시는 hit_429 칸에: 막힘(403·429·Cloudflare)은 trait_web_block,
 # 응답 구조 바뀜은 trait_web_format — 막힘 날짜가 이어진 수(trait_block_streak)로 스스로 끈다

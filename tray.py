@@ -233,12 +233,12 @@ def finish_threads(threads, budget_ms: int) -> None:
 
 # ── 앱 껍데기 ─────────────────────────────────────────────────────────
 class AppShell(QObject):
-    """창 밖에서 사는 것들 — 트레이 · 랭킹 수집 예약 · 구단주 분포 예약 · 카드 정보 자동 채우기 예약 · 상주 중 업데이트 확인 · 종료 · 숨긴 창 내려놓기.
+    """창 밖에서 사는 것들 — 트레이 · 랭킹 수집 예약 · 구단주 분포 예약 · 같은 OVR 예약 · 카드 정보 자동 채우기 예약 · 상주 중 업데이트 확인 · 종료 · 숨긴 창 내려놓기.
     창(MainWindow)은 없을 수도 있다(--tray 로 켰는데 안내 동의·키가 필요할 때 — 열 때 만든다)."""
 
     def __init__(self, app: QApplication, open_window: Callable[[], object] | None = None, sched=None,
                  single: SingleInstance | None = None, owner_sched=None, card_sched=None,
-                 today_line: Callable[[], str | None] | None = None):
+                 today_line: Callable[[], str | None] | None = None, squad_sched=None):
         super().__init__()
         self._today_line = today_line   # 메뉴를 열 때마다 부르는 오늘 전적 글(109 J10) - None 을 돌려주면 줄을 숨긴다
         self.app = app
@@ -246,6 +246,9 @@ class AppShell(QObject):
         self.sched = sched
         self.owner_sched = owner_sched   # 구단주 분포 예약(49단계) — 랭킹 수집 예약처럼 창 밖에서 산다
         self.card_sched = card_sched     # 카드 정보 자동 채우기 예약(51단계) — 같은 식
+        self.squad_sched = squad_sched   # 같은 OVR 비교 자료 예약(122) — 같은 식
+        if squad_sched is not None and sched is not None:
+            sched.outcome.connect(squad_sched.on_rank_outcome)   # 수집 회차가 끝나면 바로 — 창이 없어도(--tray)
         self.window = None
         self.tray: QSystemTrayIcon | None = None
         self._quitting = False
@@ -281,6 +284,8 @@ class AppShell(QObject):
             win.attach_owner_sched(self.owner_sched)
         if self.card_sched is not None:
             win.attach_card_sched(self.card_sched)
+        if self.squad_sched is not None:
+            win.attach_squad_sched(self.squad_sched)
 
     def start(self, tray_mode: bool = False) -> None:
         """tray_mode(--tray): 트레이가 아직 없으면(부팅 직후) TRAY_WAIT_S 까지 다시 보고, 끝내 없으면 창을 활성화하지 않고
@@ -293,6 +298,8 @@ class AppShell(QObject):
             self.owner_sched.start()   # 같은 식 — 틱마다 .env 를 다시 읽는다(창이 없어도 돈다)
         if self.card_sched is not None:
             self.card_sched.start()
+        if self.squad_sched is not None:
+            self.squad_sched.start()
         if config.UPDATE_CHECK:
             self._update_timer.start()
 
@@ -477,6 +484,8 @@ class AppShell(QObject):
             left += self.owner_sched.shutdown(fast=fast) or []   # 진행 바퀴는 running 으로 남는다(다음 실행이 이어 받는다)
         if self.card_sched is not None:
             left += self.card_sched.shutdown(fast=fast) or []    # 한 요청 = 한 트랜잭션 — 다음 실행이 날짜 열로 이어 받는다
+        if self.squad_sched is not None:
+            left += self.squad_sched.shutdown(fast=fast) or []   # 한 명 = 한 트랜잭션 — 다음 실행이 이어 받는다
         if fast:
             finish_threads(left, config.FAST_QUIT_WAIT_S * 1000)
         if self.tray is not None:

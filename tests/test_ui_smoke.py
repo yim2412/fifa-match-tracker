@@ -3548,6 +3548,9 @@ def test_main_starts_update_check_after_show():
         def attach_card_sched(self, sched):
             calls.append("카드 정보")  # 같은 셸이 쥐고 붙여 준다(51단계 G2)
 
+        def attach_squad_sched(self, sched):
+            calls.append("같은 OVR")  # 같은 셸이 쥐고 붙여 준다(122)
+
         def open_last_account(self):
             calls.append("마지막 계정")
 
@@ -3597,9 +3600,9 @@ def test_main_starts_update_check_after_show():
     assert config.OPEN_LAST_ACCOUNT is False, "기본값이 켜져 있다 — 켜자마자 지난 닉네임이 검색된다"
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
     tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
-    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
+    assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "같은 OVR", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
                           "내 계정 길", "미리 읽기"], calls
-    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
+    assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "같은 OVR", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
                          "내 계정 길", "마지막 계정"], calls
 
 
@@ -3615,6 +3618,8 @@ def _stop_shell():
             sh.owner_sched.shutdown()
         if sh.card_sched is not None:
             sh.card_sched.shutdown()
+        if sh.squad_sched is not None:
+            sh.squad_sched.shutdown()
     app_main._SHELL = None
 
 
@@ -3632,6 +3637,9 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
             pass
 
         def attach_card_sched(self, sched):
+            pass
+
+        def attach_squad_sched(self, sched):
             pass
 
         def schedule_backfill(self, delay_s):
@@ -3653,6 +3661,7 @@ def test_main_tray_mode_makes_hidden_window_without_prefetch():
         assert sh is not None and sh.window is not None
         assert sh.sched._check_timer.isActive(), "--tray 인데 수집 예약을 안 걸었다 — 상주하는 이유가 수집이다"
         assert sh.owner_sched._timer.isActive(), "--tray 인데 구단주 분포 예약을 안 걸었다"
+        assert sh.squad_sched._timer.isActive(), "--tray 인데 같은 OVR 예약을 안 걸었다(14일 정리가 안 돈다)"
         # 74 ① — 켤 때 한 확인을 껍데기가 알아야 부팅 직후 트레이에서 열 때 GitHub 에 또 묻지 않는다
         assert sh._update_at is not None, "켤 때 확인한 시각을 껍데기에 안 적었다"
     finally:
@@ -8690,7 +8699,7 @@ def test_storage_closing_dialog_during_inspect_leaves_no_copy():
 
 def test_storage_latch_holds_scheduler_ticks():
     """보호 장치 — 걸쇠가 없으면 틱이 돈다(먼저 단언) · 지우는 중엔 화면 스레드의 fifa.db 열기·로더 띄우기를 미룬다."""
-    for cls in (app_main.OwnerDistScheduler, app_main.CardBackfillScheduler):
+    for cls in (app_main.OwnerDistScheduler, app_main.CardBackfillScheduler, app_main.SquadCmpScheduler):
         s = cls()
         calls = []
         s.sync = lambda start=False, c=calls: c.append(start)
@@ -11791,7 +11800,7 @@ def test_84_game_watch_and_schedulers():
 
 
 def test_84_game_change_reaches_every_auto_path():
-    """on_game_changed — 예약 셋 pause/resume · 창은 로더 멈춤/다시 켜기 · main 이 감시를 창·예약보다 먼저 켜고 잇는다."""
+    """on_game_changed — 예약 넷 pause/resume · 창은 로더 멈춤/다시 켜기 · main 이 감시를 창·예약보다 먼저 켜고 잇는다."""
     calls = []
 
     class _S:
@@ -11820,11 +11829,11 @@ def test_84_game_change_reaches_every_auto_path():
             calls.append("켤 때 확인 재개")
 
     class _Sh:
-        sched, owner_sched, card_sched, window = _S("rank"), _S("owner"), _S("card"), _W()
+        sched, owner_sched, card_sched, squad_sched, window = _S("rank"), _S("owner"), _S("card"), _S("squad"), _W()
     app_main.on_game_changed(_Sh, True)
     app_main.on_game_changed(_Sh, False)
-    assert calls == [("pause", "rank"), ("pause", "owner"), ("pause", "card"), "stop", "켤 때 확인 멈춤",
-                     ("resume", "rank"), ("resume", "owner"), ("resume", "card"), "start", "켤 때 확인 재개"], calls
+    assert calls == [("pause", "rank"), ("pause", "owner"), ("pause", "card"), ("pause", "squad"), "stop", "켤 때 확인 멈춤",
+                     ("resume", "rank"), ("resume", "owner"), ("resume", "card"), ("resume", "squad"), "start", "켤 때 확인 재개"], calls
     import inspect
     src = inspect.getsource(app_main.main)
     assert "watch.changed.connect" in src, "main 이 감시를 셸에 안 이었다"
@@ -18473,7 +18482,7 @@ def test_specup_stop_and_resume_121():
         assert len(_FakeSpecupFetch.made) == 2, "안 보이는데 다시 켰다"
         env.vis = True
         # 게임 — 켜지면 멈추고 꺼지면 잇는다(on_game_changed 한 길)
-        shell = SimpleNamespace(sched=None, owner_sched=None, card_sched=None, window=_win)
+        shell = SimpleNamespace(sched=None, owner_sched=None, card_sched=None, squad_sched=None, window=_win)
         ld = env.ready()
         app_main._GAME["on"] = True
         try:

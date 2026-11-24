@@ -67,6 +67,8 @@ jobs:
         run: python tests/test_tray.py
       - name: 카드 정보 자동 채우기(51단계)
         run: python tests/test_cardcollect.py
+      - name: 같은 OVR 비교 자료
+        run: python tests/test_squadcmp.py
       - name: 배포 검사
         run: python tests/test_release.py
       - name: 규칙 검사

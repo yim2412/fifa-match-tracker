@@ -625,7 +625,7 @@ def check_raw_time(srcs: dict[str, str], allow: dict = RAW_TIME_ALLOW) -> list[s
 
 # ── SQL 실행 계획 ────────────────────────────────────────────────────────────
 
-SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py", "rankmeta.py", "cardcollect.py")
+SQL_FILES = ("store.py", "rankcollect.py", "rankerpick.py", "rankmeta.py", "cardcollect.py", "squadcmp.py")
 
 
 def collect_sql() -> dict[str, set[str]]:
@@ -705,6 +705,35 @@ def _drive_cardcollect(path: Path) -> None:
         config.WEB_DATA = keep
 
 
+def _drive_squadcmp(d: Path) -> None:
+    """같은 OVR 비교 자료(122) — 명단 없이 한 실행 + 정리 · 상태 줄 · 지우기(Qt 를 띄우는 test_squadcmp 를 부르기엔 무겁다)."""
+    from datetime import datetime
+    import config
+    import squadcmp
+    import store
+    now, path, fifa = datetime(2026, 11, 25, 12, 0), d / "squads.db", d / "sq_fifa.db"
+    conn = squadcmp.open_db(path)
+    squadcmp._save_ok(conn, 1, 1, b"x", int(now.timestamp()))
+    squadcmp._save_fail(conn, 2, "gone", int(now.timestamp()))
+    squadcmp._meta_set(conn, squadcmp.KEY_DAY, "2026-11-24")
+    conn.close()
+    store.open_db(fifa).close()
+    squadcmp.prune(path, now)
+    squadcmp.should_run(fifa, path, now)
+    squadcmp.status_text(path, now)
+    keep, keep_snap = config.squad_cmp_allowed, squadcmp._snapshot
+    config.squad_cmp_allowed, squadcmp._snapshot = (lambda: True), (lambda *a: [{"profile_sn": 1, "nickname": "n"}])
+    try:
+        squadcmp.collect(path, fifa, lambda: None, lambda: None, now_fn=lambda: now)
+    finally:
+        config.squad_cmp_allowed, squadcmp._snapshot = keep, keep_snap
+    conn = store.open_db(fifa)
+    store.squad_take(conn, "2026-11-25", 5, "a")
+    store.squad_req(conn, "a")
+    conn.close()
+    squadcmp.purge(path)
+
+
 def _drive_uncovered() -> None:
     """파싱·수집 테스트가 안 부르는 읽기 함수 — 화면 스모크만 부른다(Qt 를 띄우기엔 무겁다)."""
     import store
@@ -735,6 +764,7 @@ def _drive_uncovered() -> None:
             store.card_price_rows(conn, 2)                      # 68 C5·C6 날짜별 시세 — test_cardviews·화면 스모크가 부른다
             store.load_step_members(conn)                       # 110 R1 팀컬러 단계표 — 화면 스모크(SimilarLoader)가 부른다
             _drive_cardcollect(Path(d) / "c.db")
+            _drive_squadcmp(Path(d))                            # 같은 OVR 비교 자료(122) — test_squadcmp 가 부른다
             store.owner_round_running(conn)                     # 구단주 분포(49단계) — test_ownerdist 가 부른다
             store.owner_round_last_end(conn, ("done",))
             store.owner_done_hashes(conn, 1)
@@ -811,9 +841,10 @@ def sql_functions() -> set[str]:
 
 def temp_sorts(seen: dict[str, set[str]]) -> tuple[list[str], int]:
     import rankcollect
+    import squadcmp
     import store
     dbs = []
-    for schema in (store.SCHEMA, rankcollect.SCHEMA):
+    for schema in (store.SCHEMA, rankcollect.SCHEMA, squadcmp.SCHEMA):
         c = sqlite3.connect(":memory:")
         c.executescript(schema)
         dbs.append(c)
@@ -1374,7 +1405,8 @@ def test_basis_times_go_through_one_function():
 STYLE_FILES = ("app_main.py", "widgets.py", "dashboard.py", "analysis.py", "notice.py", "methods.py", "charts.py",
                "habits.py", "records.py", "stats.py", "models.py", "tray.py", "updatecheck.py", "cardcollect.py", "nexon_api.py",
                "config.py", "cardviews.py", "enhance.py", "trade_book.py", "squad_timeline.py", "teamcolor.py",
-               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py", "glossary.py", "teamcolor_calc.py")
+               "traitcollect.py", "rankmeta.py", "rankerpick.py", "ownerdist.py", "playerinfo.py", "ranker.py", "glossary.py", "teamcolor_calc.py",
+               "squadcmp.py")
 # 줄표(—)로 문장을 잇는 자리 — 파일마다 지금 개수가 상한(늘면 FAIL · 고쳐서 줄면 여기도 내린다 — 0 을 향해 간다).
 STYLE_DASH_MAX = {"notice.py": 37}
 STYLE_BANNED = ("먹혔", "먹힌", "되어집", "되어져", "잊혀지")   # 어색하거나 이중 피동 — 국립국어원 기준

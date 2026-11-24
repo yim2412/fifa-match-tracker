@@ -309,6 +309,11 @@ class FCOnlineAPI:
             raise NexonAPIError(f"'{nickname}' 계정을 찾지 못했습니다.")
         return ouid
 
+    def get_raw(self, path: str, **params: Any) -> Any:
+        """응답 원본 그대로 · 재시도 없음 — 꼴이 다른 응답과 "없음" 을 갈라야 하는 쪽(122 squadcmp)이 쓴다. get_ouid·get_match_ids 는
+        list 아닌 목록을 빈 목록으로 바꿔 꼴이 바뀐 것을 "경기 없음" 으로 읽게 된다. path 는 이 파일의 EP_*."""
+        return self._get(path, attempts=1, **params)
+
     def get_user_basic(self, ouid: str) -> dict:
         return self._get(EP_USER_BASIC, ouid=ouid)
 

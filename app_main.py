@@ -27,6 +27,7 @@ import time
 import weakref
 from collections import Counter
 from concurrent.futures import CancelledError, ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -69,6 +70,7 @@ import ranker
 import seasons as sn
 import specupcollect
 import storage
+import squadcmp
 import store
 import tactic_codes
 import tactics
@@ -316,6 +318,7 @@ def _mark_final_429() -> None:
 # 에서 start 를 막는다. 제자리로만 바꾼다(재할당 금지 — 다른 모듈이 이름으로 읽어도 같은 집합).
 CLEARING: set[str] = set()
 STORE_FIFA, STORE_CARDS, STORE_IMAGES, STORE_DETAILS, STORE_RANK = "fifa", "cards", "images", "details", "rank"
+STORE_SQUADS = "squads"   # 같은 OVR 비교 자료(122) — squads.db
 CLEARING_WAIT_MSG = "저장 공간을 지우는 중입니다. 끝난 뒤 다시 눌러 주세요."
 BACKUP_BUSY_MSG = "백업을 만들거나 확인하는 중입니다. 끝난 뒤 다시 눌러 주세요."
 
@@ -2830,7 +2833,7 @@ class GameWatch(QObject):
 
 def on_game_changed(shell, on: bool) -> None:
     """게임이 켜졌다 → 도는 자동 요청을 멈춘다(각자 이어 받게 돼 있다). 꺼졌다 → 미룬 것을 다시 본다."""
-    for s in (shell.sched, shell.owner_sched, shell.card_sched):
+    for s in (shell.sched, shell.owner_sched, shell.card_sched, shell.squad_sched):
         if s is not None:
             (s.pause if on else s.resume)()
     win = shell.window
@@ -3196,6 +3199,173 @@ class OwnerDistScheduler(QObject):
         return []
 
 
+class SquadCmpLoader(Worker):
+    """같은 OVR 비교 자료(122) 한 실행(squadcmp.collect)을 UI 스레드 밖에서 — 첫 번은 3만 요청. 끊으면 도는 사람 최대 8명분만 버린다.
+    rank.db 는 명단을 읽는 동안만 연다. 중앙 서버 주소가 있어도 늘 직접(서버를 켜는 생성 자리는 둘뿐)."""
+    WRITES = frozenset({STORE_SQUADS, STORE_FIFA})
+    done = Signal(object)   # squadcmp.Result
+
+    def __init__(self, tries: dict):
+        super().__init__()
+        self._cancel = threading.Event()
+        self._tries = tries
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def run(self) -> None:
+        key = config.API_KEY   # 시작 때 키 — 키가 바뀌면 save_api_key 가 토글을 끄고 예약이 이 로더를 멈춘다
+        try:
+            res = squadcmp.collect(config.squads_db_path(), config.DB_PATH, rankcollect.open_rank_db_ro, lambda: FCOnlineAPI(key),
+                                   cancel=self._cancel.is_set, tries=self._tries)
+        except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등. 메시지엔 남의 닉네임이 URL 로 실릴 수 있어 종류만
+            res = squadcmp.Result(stop="error", error=type(e).__name__)
+        self.done.emit(res)
+
+
+class SquadCmpScheduler(QObject):
+    """같은 OVR 비교 자료 예약(122 W3·W4) — 셸 수명(tray.AppShell 이 쥔다): --tray 로 창 없이도 돈다. 다른 로더와 엮지 않는다.
+
+    SQUAD_CMP_TICK_S 마다(그리고 수집 회차가 끝나면 · 게임이 끝나면) tick = 14일 정리 + sync(start=True):
+    - 14일 정리는 **설정과 무관하게** 돈다(.env 를 못 읽어도) — 로더가 도는 동안은 로더가 시작할 때 한 것으로 친다
+    - .env 를 못 읽었거나 키를 못 읽은 상태면 받기도 지우기도 안 한다
+    - 전제(동의·웹 데이터·랭킹 수집)나 토글·키가 꺼졌으면 로더를 멈추고 **받은 선발을 전부** 지운다(구단주 분포와 달리 토글만 꺼도)
+    - 켜져 있고 squadcmp.should_run 이면 로더 시작.
+    지우기는 로더가 돌면 그 끝(_on_done)에서. 상태로 판정하므로 놓친 지우기는 다음 틱이 잡는다."""
+
+    finished = Signal(object)     # squadcmp.Result
+    switched_off = Signal(str)    # 스스로 껐다 — 사유(squadcmp.OFF_REASON_TEXT 의 키)
+    purged = Signal()             # 받은 것을 지웠다 — 창이 쥔 값을 버린다(조각 ③)
+
+    def __init__(self, parent=None, now_fn=datetime.now):
+        super().__init__(parent)
+        self._now = now_fn
+        self._timer = QTimer(self)
+        self._timer.setInterval(config.SQUAD_CMP_TICK_S * 1000)
+        self._timer.timeout.connect(self.tick)
+        self._first = QTimer(self)
+        self._first.setSingleShot(True)
+        self._first.setInterval(config.SQUAD_CMP_FIRST_S * 1000)
+        self._first.timeout.connect(self.tick)
+        self.loader: SquadCmpLoader | None = None
+        self._purge = False       # 로더가 끝난 뒤 지울 것이 있나
+        self._quitting = False
+        self._tries: dict[int, int] = {}   # 저장하지 않은 실패로 그날 물은 횟수
+        self._tries_day: date | None = None
+
+    def running(self) -> bool:
+        return self.loader is not None and self.loader.isRunning()
+
+    def start(self) -> None:
+        self._timer.start()
+        self._first.start()
+
+    def tick(self) -> None:
+        if self._quitting or CLEARING:   # 지우는 중엔 화면 스레드의 DB 열기도 미룬다(57 K9 — 다음 틱에)
+            return
+        if not self.running():
+            self._guard(lambda: squadcmp.prune(config.squads_db_path(), self._now(), config.SQUAD_CMP_UI_TIMEOUT_S))
+        self.sync(start=True)
+
+    def on_rank_outcome(self, out) -> None:
+        """수집 회차가 끝났다 — 새 명단으로 바로(셸이 잇는다 · 창이 없어도)."""
+        if getattr(out, "kind", None) in ("ok", "fresh"):
+            self.tick()
+
+    def sync(self, start: bool = False) -> None:
+        """설정이 바뀌었다(전제 꺼짐 길 sync_ranker_pick_data · [정보] 토글 · 키 바꿈) — 바로 맞춘다.
+        start 면 받을 차례일 때 로더도 띄운다(틱 · 토글을 켰을 때)."""
+        on = config.read_squad_cmp()
+        if on is None:
+            return   # 모르는 상태에서 받지도 지우지도 않는다
+        if not on:
+            self._stop_and_purge()
+            return
+        if start and not self.running() and not self._quitting and not game_paused():
+            if self._guard(lambda: squadcmp.should_run(config.DB_PATH, config.squads_db_path(), self._now())):
+                self._start_loader()
+
+    def _start_loader(self) -> None:
+        day = self._now().date()
+        if self._tries_day != day:
+            self._tries, self._tries_day = {}, day
+        w = SquadCmpLoader(self._tries)
+        w.done.connect(self._on_done)
+        self.loader = w
+        w.start()
+
+    @staticmethod
+    def _guard(fn):
+        """화면 스레드의 DB 일 하나 — 잠김이면 다음 틱에(None) · squads.db 가 깨졌으면 지우고 다음 틱에."""
+        try:
+            return fn()
+        except sqlite3.DatabaseError as e:
+            if squadcmp.is_corrupt(e):
+                squadcmp.drop_if_corrupt(config.squads_db_path())
+            return None
+        except OSError:
+            return None
+
+    def pause(self) -> None:
+        """게임이 켜졌다(84 G3) — 도는 사람만 버린다. 게임이 꺼지면 이어서."""
+        if self.running():
+            self.loader.cancel()
+
+    def resume(self) -> None:
+        self.tick()
+
+    def _stop_and_purge(self) -> None:
+        if self.running():
+            self._purge = True
+            self.loader.cancel()
+            return
+        self._do_purge()
+
+    def _do_purge(self) -> None:
+        if self._guard(lambda: squadcmp.purge(config.squads_db_path(), config.SQUAD_CMP_UI_TIMEOUT_S)):
+            self.purged.emit()
+
+    def _on_done(self, res) -> None:
+        pending, self._purge = self._purge, False
+        if pending:
+            self._do_purge()
+        elif not self._quitting and getattr(res, "devkey", False) and config.SQUAD_CMP_ON:
+            try:
+                config.set_squad_cmp(False, "devkey")
+            except OSError:
+                pass   # .env 를 못 썼다 — 켜진 채, 그날 표시(api_budget squad_cmp)가 다시 시작을 막는다
+            else:
+                self._do_purge()
+                self.switched_off.emit("devkey")
+        self.finished.emit(res)
+
+    def halt_for_delete(self) -> None:
+        """[수집 기록 지우기]가 rank.db 를 지우기 **전에**(수집을 끈 뒤) — 멈추고 잠깐 기다린다(로더는 명단을 읽는 동안만 rank.db 를 연다).
+        .env 를 못 읽으면 sync 가 아무것도 안 하니 멈춤만은 직접(지우기는 다음 틱)."""
+        self.sync()
+        w = self.loader
+        if w is not None and w.isRunning():
+            w.cancel()
+            w.wait(config.SQUAD_CMP_HALT_WAIT_MS)
+
+    def shutdown(self, fast: bool = False) -> list:
+        """끝낼 때(quit_app) — 받은 것은 남는다(다음 실행이 이어 받는다). fast 면 멈춤 요청만 → 아직 도는 스레드."""
+        self._quitting = True
+        self._timer.stop()
+        self._first.stop()
+        self._purge = False   # 지울 것은 상태로 남아 다음 실행의 첫 틱이 지운다
+        w = self.loader
+        if w is None or not w.isRunning():
+            return []
+        w.cancel()
+        if fast:
+            return [w]
+        if not w.wait(3000):   # 도는 요청(타임아웃 10초)이 끝나기를 다 기다리지 않는다 — 한 명 = 한 트랜잭션
+            w.terminate()
+            w.wait(1000)
+        return []
+
+
 class CardBackfillLoader(Worker):
     """카드 정보 자동 채우기 한 바퀴(cardcollect.run — 틱 하나 최대 CARD_BACKFILL_TICK_REQ 요청)를 UI 스레드 밖에서.
     요청 사이 간격은 취소 이벤트의 wait — 끊으면 기다림 없이 돌아온다(끊긴 뒤 기다림 ≤ 도는 요청 하나의 타임아웃)."""
@@ -3545,6 +3715,7 @@ class MainWindow(QMainWindow):
         self._rank_sched: RankCollectScheduler | None = None  # 랭킹 수집 예약 — 창 밖(tray.AppShell)이 쥐고 붙여 준다
         self._owner_sched: OwnerDistScheduler | None = None   # 구단주 분포 예약 — 같은 셸이 붙여 준다
         self._card_sched: CardBackfillScheduler | None = None  # 카드 정보 자동 채우기 예약 — 같은 셸이 붙여 준다
+        self._squad_sched: SquadCmpScheduler | None = None     # 같은 OVR 비교 자료 예약(122) — 같은 셸이 붙여 준다
         self._maint_workers: list[RankMaintWorker] = []       # 예약이 없을 때만(테스트 창) — _maintain_rank
         self.shell = None          # tray.AppShell — 없으면(테스트) X 가 예전처럼 정리하고 닫는다
         self._quitting = False     # quit_app 이 세운다 — closeEvent 는 받기만
@@ -4012,6 +4183,11 @@ class MainWindow(QMainWindow):
         sched.switched_off.connect(self._on_owner_dist_off)
         sched.dist_changed.connect(self.refresh_owner_dist_views)   # 새 done 분포 — 칩·문장 다시(PyQt 7: _invalidate)
 
+    def attach_squad_sched(self, sched: SquadCmpScheduler) -> None:
+        """같은 OVR 비교 자료 예약(122)도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_squad_cmp) 알림만 받는다."""
+        self._squad_sched = sched
+        sched.switched_off.connect(self._on_squad_cmp_off)
+
     def attach_card_sched(self, sched: CardBackfillScheduler) -> None:
         """카드 정보 자동 채우기 예약도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_card_backfill) 알림만 받는다."""
         self._card_sched = sched
@@ -4072,6 +4248,14 @@ class MainWindow(QMainWindow):
         if self._owner_sched is not None:
             self._owner_sched.sync()
         self.refresh_owner_dist_views()
+
+    def _on_squad_cmp_off(self, reason: str) -> None:
+        self.statusBar().showMessage(f"같은 OVR 비교 자료: {squadcmp.OFF_REASON_TEXT.get(reason, reason)}", 0)
+
+    def _sync_squad_cmp(self) -> None:
+        """끄는 길(수집·웹 데이터·동의·지우기·키)에서 — 예약이 .env 를 다시 읽어 멈추고 전부 지운다(창만 있는 테스트에선 없음)."""
+        if self._squad_sched is not None:
+            self._squad_sched.sync()
 
     def _on_rank_collect_outcome(self, out) -> None:
         """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드).
@@ -8579,6 +8763,7 @@ class MainWindow(QMainWindow):
         rank.db 쪽(사람별 표 · 14일 원본 · 동의 직후 따라잡기 — 2.3.1)은 작업 스레드의 정리 한 번으로 — 조건은 거기서 상태로 판정."""
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
         self._sync_owner_dist()   # 구단주 분포 — 전제가 꺼졌으면 로더 멈춤 + 분포까지 지움(양보 사슬과 무관하게 따로)
+        self._sync_squad_cmp()    # 같은 OVR 비교 자료(122) — 전제가 꺼졌으면 로더 멈춤 + 전부 지움
         self._sync_card_backfill()   # 카드 정보 자동 채우기 — 웹 데이터·동의가 꺼졌으면 멈춤만(지우기 없음 · 수집과 무관)
         if config.tactic_block() not in ("", "notice"):
             self._tactic_drop()   # 저장 전술(110 ④) — 안내 동의 전은 빼야 한다(이 함수는 동의 직후에도 불려 연 창이 닫힌다)
@@ -12947,6 +13132,7 @@ class MainWindow(QMainWindow):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._api.set_key(config.API_KEY)
             self._sync_owner_dist()   # 키가 바뀌면 save_api_key 가 구단주 분포를 껐다 — 옛 키로 돌던 로더를 멈춘다
+            self._sync_squad_cmp()    # 같은 까닭 — 받은 선발도 지운다(122)
             self.statusBar().showMessage("API 키를 바꿨습니다. 다시 검색하세요.")
             # 거래는 키 주인 것 — 새 키로 바로 다시 맞춘다("API 키 확인 중"이 다음 검색까지 안 풀리지 않게)
             self._yield_trades()
@@ -17411,8 +17597,8 @@ class MainWindow(QMainWindow):
     storage_cleared = Signal(object)    # ClearResult
     # 지우는 종류 → 걸쇠에 넣는 저장소. rank·dist 는 기존 길(화면 스레드에서 바로 · 각자 멈춤)이라 여기 없다
     # 복원("restore")은 걸쇠는 "all" 과 같되 종류가 달라 rank.db 를 안 지운다(109 M4)
-    CLEAR_STORES = {"cards": {STORE_CARDS}, "images": {STORE_IMAGES}, "details": {STORE_DETAILS}, "all": {"all"},
-                    "restore": {"all"}}
+    CLEAR_STORES = {"cards": {STORE_CARDS}, "images": {STORE_IMAGES}, "details": {STORE_DETAILS}, "squads": {STORE_SQUADS},
+                    "all": {"all"}, "restore": {"all"}}
     backup_finished = Signal(object)     # storage.BackupResult — 열린 [저장 공간] 탭이 받는다
     restore_inspected = Signal(object)   # storage.BackupInfo
 
@@ -17462,7 +17648,7 @@ class MainWindow(QMainWindow):
             # 랭킹 수집 기록부터 — ① 과 같은 길(수집 끔 · 예약 멈춤 · 구단주 분포 로더 멈춤 · rank.db). .env 를 못 쓰면 아무것도 안 지운다
             self.stop_predict_workers()
             try:
-                clear_rank_records(self._rank_sched, None, self._owner_sched)
+                clear_rank_records(self._rank_sched, None, self._owner_sched, self._squad_sched)
             except OSError as e:
                 return f"설정을 저장하지 못해 지우지 않았습니다: {e}"
             self._backfill_timer.stop()
@@ -17753,7 +17939,8 @@ class StorageSizeWorker(Worker):
 
     def run(self) -> None:
         try:
-            res = storage.measure(config.DB_PATH, config.RANK_DB_PATH, config.CACHE_DIR, stop=self.isInterruptionRequested)
+            res = storage.measure(config.DB_PATH, config.RANK_DB_PATH, config.CACHE_DIR, stop=self.isInterruptionRequested,
+                                  squads_path=config.squads_db_path())
         except Exception:   # noqa: BLE001 — 크기 하나 때문에 창이 죽지 않게. 칸은 "?"
             res = storage.Sizes()
         self.done.emit(res)
@@ -17806,6 +17993,8 @@ class ClearWorker(Worker):
             return ClearResult(k, "cancelled")
         if k == "cards":
             return ClearResult(k, "ok", storage.clear_cards(config.DB_PATH))
+        if k == "squads":   # 토글은 그대로 — 다음 틱이 다시 받는다
+            return ClearResult(k, "ok", storage.clear_squads(config.squads_db_path()))
         if k in ("images", "details"):
             ok, bad = (storage.clear_images if k == "images" else storage.clear_details)(config.CACHE_DIR)
             return ClearResult(k, "ok", ok, bad)
@@ -17813,6 +18002,8 @@ class ClearWorker(Worker):
         if state != "ok":
             return ClearResult(k, state)
         ok, bad = storage.clear_cache(config.CACHE_DIR)
+        with suppress(sqlite3.Error, OSError):   # 잠겨 못 지워도 수집이 꺼졌으니 예약이 다음 틱에 지운다
+            storage.clear_squads(config.squads_db_path())
         return ClearResult(k, "ok", ok, bad)
 
 
@@ -19089,7 +19280,16 @@ class AboutDialog(QDialog):
         self.lb_owner.setWordWrap(True)
         self.lb_owner.setStyleSheet(f"color: {T.TEXT_DIM};")
         v.addWidget(self.lb_owner)
-        self._refresh_owner_row()
+        # 같은 OVR 비교 자료(122 U5) — 구단주 분포와 같은 꼴. 안내 번호가 닫혀 있는 동안(조각 ①②)은 줄째 숨긴다
+        self.chk_squad = QCheckBox(notice.SQUAD_CMP_CHECK)
+        self.chk_squad.toggled.connect(self._on_squad_toggled)
+        v.addWidget(self.chk_squad)
+        self.lb_squad = QLabel("")
+        self.lb_squad.setTextFormat(Qt.TextFormat.PlainText)
+        self.lb_squad.setWordWrap(True)
+        self.lb_squad.setStyleSheet(f"color: {T.TEXT_DIM};")
+        v.addWidget(self.lb_squad)
+        self._refresh_owner_row()   # 같은 OVR 줄까지
         # 카드 정보 자동 채우기(51단계 U5) — 랭킹 수집과 무관 · 웹 데이터가 꺼졌으면 회색 · 안내 12 전이면 누를 때 묻는다
         self.chk_card = QCheckBox(notice.CARD_BACKFILL_CHECK)
         self.chk_card.toggled.connect(self._on_card_toggled)
@@ -19122,8 +19322,8 @@ class AboutDialog(QDialog):
         v.addWidget(self.lb_msg)
         if config.DEMO:
             # 둘러보기(96 O2) — 켜는 길은 숨긴다(눌러도 config._save_env 가 막지만 누를 것을 보이지 않는다) · 오류 알리기·연결 점검도
-            for wd in (self.chk_web, self.chk_rank, self.lb_rank, self.chk_owner, self.lb_owner, self.chk_card,
-                       self.lb_card, self.chk_auto, self.btn_issue):
+            for wd in (self.chk_web, self.chk_rank, self.lb_rank, self.chk_owner, self.lb_owner, self.chk_squad,
+                       self.lb_squad, self.chk_card, self.lb_card, self.chk_auto, self.btn_issue):
                 wd.setVisible(False)
             self.btn_check.setEnabled(False)
             self.btn_check.setToolTip("둘러보기에서는 넥슨에 묻지 않습니다")
@@ -19145,9 +19345,9 @@ class AboutDialog(QDialog):
         return getattr(self.parent(), "_rank_sched", None)
 
     @staticmethod
-    def _owner_block_reason() -> str:
-        """구단주 분포 토글을 못 켜는 이유 — 켤 수 있으면 ""."""
-        if config.notice_needed() or config.NOTICE_ACCEPTED < config.OWNER_DIST_NOTICE_VERSION:
+    def _owner_block_reason(version: int = config.OWNER_DIST_NOTICE_VERSION) -> str:
+        """구단주 분포·같은 OVR 토글을 못 켜는 이유 — 켤 수 있으면 "". version = 그 토글의 안내 번호."""
+        if config.notice_needed() or config.NOTICE_ACCEPTED < version:
             return "바뀐 이용 안내에 동의하면 켤 수 있습니다"
         if not (config.WEB_DATA and config.RANK_COLLECT):
             return "랭킹 수집을 켜야 켤 수 있습니다"
@@ -19170,6 +19370,7 @@ class AboutDialog(QDialog):
         except sqlite3.Error:
             status = ""
         self.lb_owner.setText(" · ".join(x for x in (why, status) if x))
+        self._refresh_squad_row()   # 전제가 같다 — 한 줄이 바뀌는 자리에서 같이
 
     def _on_owner_toggled(self, on: bool) -> None:
         try:
@@ -19188,6 +19389,35 @@ class AboutDialog(QDialog):
             "구단주 분포 받기를 켰습니다. 바퀴마다 내 API 키로 많은 요청을 보냅니다(서비스 단계 키)." if on else
             "구단주 분포 받기를 껐습니다. 받던 바퀴는 버리고, 받아 둔 분포는 남깁니다.")
         self._refresh_owner_row()
+
+    def _refresh_squad_row(self) -> None:
+        why = self._owner_block_reason(config.SQUAD_CMP_NOTICE_VERSION)
+        self.chk_squad.blockSignals(True)
+        self.chk_squad.setChecked(not why and bool(config.SQUAD_CMP_ON))
+        self.chk_squad.blockSignals(False)
+        self.chk_squad.setEnabled(not why)
+        try:
+            status = squadcmp.status_text(config.squads_db_path(), datetime.now())
+        except sqlite3.Error:
+            status = ""   # 잠김·깨짐 — 깨진 것은 예약이 지운다
+        self.lb_squad.setText(". ".join(x for x in (why, status) if x))
+        for wd in (self.chk_squad, self.lb_squad):
+            wd.setVisible(config.squad_cmp_open() and not config.DEMO)
+
+    def _on_squad_toggled(self, on: bool) -> None:
+        try:
+            config.set_squad_cmp(on)   # 켜기 = 서비스 단계 키라는 자가 신고(켠 시각부터 개발 키 판정을 센다)
+        except OSError as e:
+            self.lb_msg.setText(f"저장하지 못했습니다: {e}")
+            self._refresh_squad_row()
+            return
+        sched = getattr(self.parent(), "_squad_sched", None)
+        if sched is not None:
+            sched.sync(start=on)   # 켜면 바로, 끄면 로더 멈춤 + 받은 선발을 지움
+        self.lb_msg.setText(
+            f"같은 OVR 비교 자료 받기를 켰습니다. 하루 최대 {config.SQUAD_CMP_DAILY_REQ:,}번 내 API 키로 묻습니다(서비스 단계 키)."
+            if on else "같은 OVR 비교 자료 받기를 껐습니다. 받은 선발을 지웠습니다.")
+        self._refresh_squad_row()
 
     def _refresh_card_row(self) -> None:
         on = config.WEB_DATA and bool(config.CARD_BACKFILL_ON) and config.NOTICE_ACCEPTED >= config.CARD_BACKFILL_NOTICE_VERSION
@@ -19425,6 +19655,7 @@ class AboutDialog(QDialog):
         ("images", "그림 캐시", "선수 얼굴·등급과 시즌 배지·엠블럼·국기·특성 아이콘. 화면을 열 때 다시 받습니다"),
         ("details", "경기 상세 캐시", "넥슨에서 받아 아직 기록에 넣지 않은 경기 상세. 한도에 걸려 못 넣은 경기는 처음부터 다시 받습니다"),
         ("dist", "구단주 분포 · 랭커 픽", "구단주 분포 요약 · 랭커 픽 경기 · 포지션 특성. 토글이 켜져 있어도 다음 바퀴까지 칩·문장이 비어 있습니다"),
+        ("squads", "같은 OVR 비교 자료", "1만 위 안 구단주의 마지막 경기 선발. 토글이 켜져 있으면 다시 받습니다"),
         ("all", "내 기록 전부", "위 전부 + 경기 기록·검색 칩·팀컬러·ELO·거래·예측. 백업해 두지 않았다면 되돌릴 수 없습니다"),
     )
     STORAGE_KEEPS = ("지워지지 않는 것: API 키 ·오류 기록(crash.log) · 창 설정(settings.ini) · 하루 요청 계수 · 시즌표 · 팀컬러 효과표 · "
@@ -19454,6 +19685,9 @@ class AboutDialog(QDialog):
             btn.setEnabled(kind == "rank" or hasattr(win, "clear_storage"))
             grid.addWidget(btn, r, 2)
             self._storage_size[kind], self._storage_btn[kind] = size, btn
+            if kind == "squads" and not config.squad_cmp_open():   # 아직 안 열린 기능(122 조각 ①②) — 줄째 숨긴다
+                for wd in (lb, size, btn):
+                    wd.setVisible(False)
         grid.setColumnStretch(0, 1)
         v.addLayout(grid)
         self.lb_backup_note = QLabel(f"<b>내 기록 백업·복원</b><br><span style='color:{T.TEXT_DIM}'>{html.escape(self.BACKUP_NOTE)}</span>")
@@ -19714,7 +19948,8 @@ class AboutDialog(QDialog):
             stop()      # 예측 작업자가 predictions 에 쓰는 중이면 지운 뒤에 한 줄이 되살아난다
         try:
             done, n = clear_rank_records(self._sched(), keep_ouid if choice == "keep" else None,
-                                         getattr(self.parent(), "_owner_sched", None))
+                                         getattr(self.parent(), "_owner_sched", None),
+                                         getattr(self.parent(), "_squad_sched", None))
         except OSError as e:
             self.lb_msg.setText(f"설정을 저장하지 못해 지우지 않았습니다: {e}")
             return
@@ -19786,16 +20021,18 @@ def rank_status_text(st: dict) -> str:
     return "<br>".join(lines)
 
 
-def clear_rank_records(sched, keep_ouid: str | None, owner_sched=None) -> tuple[bool, int | None]:
+def clear_rank_records(sched, keep_ouid: str | None, owner_sched=None, squad_sched=None) -> tuple[bool, int | None]:
     """수집 기록 지우기 — 수집을 끄고(.env 를 못 쓰면 OSError — 그러면 아무것도 안 지운다: 켜진 채 지우면 다음
     확인이 곧바로 다시 모은다) 멈춘 뒤 rank.db 를 지우고 fifa.db 의 ELO 기록·따라가기 목록을 지운다.
-    구단주 분포 로더도 rank.db 를 지우기 **전에** 멈춘다(표본을 뽑는 동안 rank.db 를 연다 — OwnerDistScheduler.halt_for_delete).
+    구단주 분포·같은 OVR 로더도 rank.db 를 지우기 **전에** 멈춘다(명단을 읽는 동안 rank.db 를 연다 — halt_for_delete).
     → (rank.db 를 다 지웠나, ELO 줄 수 — 못 지웠으면 None: 표시를 남겨 다음에 켤 때 지운다)."""
     config.set_rank_collect(False)
     if sched is not None:
         sched.stop()      # 수집 스레드가 fifa.db 에도 쓴다(따라가기 — 계정마다 cancel 을 본다)
     if owner_sched is not None:
         owner_sched.halt_for_delete()
+    if squad_sched is not None:
+        squad_sched.halt_for_delete()
     done = rankcollect.delete_db()
     try:
         conn = store.open_db(config.DB_PATH)
@@ -19949,7 +20186,7 @@ def main(argv: list[str] | None = None) -> int:
     # 트레이에서 [열기] 를 눌렀는데 창이 아직 없으면(--tray 로 동의 전에 켬) 그때 안내·키 창부터
     shell = tray.AppShell(app, open_window=lambda: _open_window(shell, from_tray=True),
                           sched=RankCollectScheduler(), single=single, owner_sched=OwnerDistScheduler(),
-                          card_sched=CardBackfillScheduler(),
+                          card_sched=CardBackfillScheduler(), squad_sched=SquadCmpScheduler(),
                           today_line=today_line)
     watch.changed.connect(lambda on: on_game_changed(shell, on))
     if tray_mode:

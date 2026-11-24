@@ -205,7 +205,7 @@ def test_every_qthread_is_a_worker_and_store_users_declare_writes():
     import app_main as am
     starts = [m.start() for m in re.finditer(r"^class ", src, re.M)] + [len(src)]
     uses = re.compile(r"\b(store\.\w+|open_db|images\.fetch\w*|cardcollect\.run|rankcollect\.(collect|maintenance|save_from_pages)|"
-                      r"ownerdist\.run_round|rankerpick\.collect|traitcollect\.run|tradecollect\.collect|playerinfo\.(save|collect)\w*|"
+                      r"ownerdist\.run_round|squadcmp\.(collect|purge|prune)|rankerpick\.collect|traitcollect\.run|tradecollect\.collect|playerinfo\.(save|collect)\w*|"
                       r"get_match_detail|prune_detail_cache)")
     readers = {"EloLoader", "PredictWorker"}   # 읽기지만 open_db 가 스키마를 쓴다 — 그래서 fifa 로 둔다(아래에서 같이 본다)
     missing = []

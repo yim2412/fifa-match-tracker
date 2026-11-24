@@ -437,7 +437,7 @@ def _stop_shell():
     if sh is not None:
         for t in (sh._release_timer, sh._update_timer, sh._tray_timer):
             t.stop()
-        for s in (sh.sched, sh.owner_sched, sh.card_sched):
+        for s in (sh.sched, sh.owner_sched, sh.card_sched, sh.squad_sched):
             if s is not None:
                 s.shutdown()
     app_main._SHELL = None

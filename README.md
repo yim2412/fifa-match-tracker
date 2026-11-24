@@ -196,6 +196,7 @@ python tests/test_rankcollect.py   # 랭킹 수집기
 python tests/test_tray.py   # 트레이 상주·자동 실행·한 번만 실행
 python tests/test_ownerdist.py   # 구단주 분포 받기·판정(가짜 API)
 python tests/test_ownerdist_sched.py   # 구단주 분포 예약·토글·동의·지우기(가짜 로더)
+python tests/test_squadcmp.py   # 같은 OVR 비교 자료 받기·예약·지우기(가짜 API)
 python tests/test_release.py   # 배포 검사 로직
 python tests/test_rules.py   # 규칙 검사(인코딩·색·콤보박스·대화상자 크기·모달·신호·SQL 실행 계획)
 python tests/test_review_kit.py   # 계획 검토 준비 도구
@@ -227,6 +228,7 @@ python tools/check_public_text.py   # 공개 글 말투(README · CHANGELOG)
 | `enhance.py` · `boostcollect.py` | 강화 비용. 공지 확률·보호·게이지 규칙으로 평균 비용 계산 · 재료 시세 받기(하루 캐시) |
 | `squad_timeline.py` · `trade_book.py` | 스쿼드 타임라인(경기 + 거래 → 사건 · 구매↔판매 선입선출 짝 · 판 기록 없는 구매의 보유 상태) · 가계부(지출·수입·손익). 화면 없이 계산만 합니다 |
 | `ownerdist.py` | 구단주 분포 v2(49단계). 사용자 서비스 키로 1~3000위 구단주 150명의 최근 1000판을 받아 이름 없는 요약으로 저장하는 규칙(하루 계수 · 바퀴 상한 · 재시도 끔 · 429 전원 쉼 · 끊기면 그 구단주는 버림) · 분포 읽기·층 가중 백분위(조각 ②) · 예약이 쓰는 차례 판정 `should_run`·스스로 끌 사유 `off_reason_after`·지우기 `purge`·[정보] 상태 줄 `status_text`(조각 ③a). 로더·예약은 `app_main.OwnerDistLoader`·`OwnerDistScheduler`(셸 수명, 창 밖) · 화면 판정은 `app_main._dist_basis`(칩·문장이 같이 씀 · 허용·분포·내 감독모드 1000판이 없으면 None, 조각 ③b) |
+| `squadcmp.py` | 같은 OVR 비교 자료(122단계, 아직 닫혀 있음). 1만 위 안 구단주의 마지막 감독모드 선발 11장을 사용자 서비스 키로 받아 `squads.db` 에 저장하는 규칙입니다. 닉네임과 계정 번호는 저장하지 않고, 14일이 지나거나 끄면 지웁니다. 예약과 로더는 `app_main.SquadCmpScheduler`·`SquadCmpLoader` 입니다 |
 | `rankerpick.py` | 랭커 픽(2.1.1). 스냅숏 상위 200명의 최근 경기를 오픈API 로 받는 규칙(하루 계수 · 재시도 끔 · 요청 간격 · 429 · 3일)과 화면 집계 · 추천(내 팀컬러 후보 ①②③ → 줄별 대체 카드 · 내 스쿼드 위치). 화면 없이 `tests/test_rankerpick.py` 가 잽니다 |
 | `trait_codes.py` · `traitcollect.py` | 포지션 특성(2.5.1). 특성·훈련 코치 이름표 · 넥슨 스쿼드메이커 팀 칸을 읽어 랭커 마지막 경기 선발과 맞는 팀을 찾는 규칙(하루 상한 · 막힘 · 낡은 값) · 포메이션·포지션별 사용률 집계(`trait_usage`). 화면 없이 `tests/test_traits.py` 가 잽니다 |
 | `rankcollect.py` | 랭킹 1만 명을 하루 한 번 모아 `rank.db` 에 쌓는 수집기(1.1.1. 기본 꺼짐이고 [정보] 에서 켭니다). 팀컬러 목록과 같은 읽기를 나눠 씁니다. 2.3.1: 넥슨 기준 시각 · 메타 처리(`process_meta`: 점수 분포 · 상위 20 연속 · 시즌 최고점 · 첫 챔스 · 시즌 FC 범위 · 챔스 이상 판수 범위) · 정리(`maintenance`: 사람별 지우기 · 원본 정리 · WAL 비우기 · 옛 흔적 VACUUM). 터미널 확인: `python rankcollect.py --pages 3` |
@@ -249,6 +251,7 @@ python tools/check_public_text.py   # 공개 글 말투(README · CHANGELOG)
 | `tests/test_timeline.py` | 타임라인·가계부 테스트. 지어낸 경기·거래로 짝·보유 상태·앞뒤 창·범위 · 1만 경기 예산(300ms) |
 | `tests/test_ownerdist.py` | 구단주 분포 받기 테스트(49단계 조각 ①). 가짜 API 로 하루 계수·바퀴 상한·429 쉼/그날 멈춤·끊긴 구단주 버리기와 이어 받기·`.cache` 안 씀·바퀴 종료(done/thin/dropped/aborted)·지운 소금·해시가 파일 바이트에 없는지까지 · 차례 판정·스스로 끌 사유·지우기·상태 줄 |
 | `tests/test_ownerdist_sched.py` | 구단주 분포 예약 테스트(49단계 조각 ③a · 랭킹 수집 기록 지우기가 rank.db 전에 로더를 멈추는지 ③b). 가짜 로더로 `--tray`(창 없음) 틱·종료 뒤 진행 바퀴 남음·전제/토글/키 꺼짐별 멈춤과 지우기(로더가 돌면 끝난 뒤)·`.env` 손 수정·못 읽은 `.env`·연속 실패·개발 키·[정보] 토글과 잠김 이유 · 창이 로더를 양보시키지 않는지(소스 검사) |
+| `tests/test_squadcmp.py` | 같은 OVR 비교 자료 테스트(122단계 조각 ①). 가짜 API 로 요청 수와 계수, 오류 코드별 처리, 이어짐 멈춤, 개발 키 판정, 14일 정리, 지운 바이트, 깨진 파일, 예약과 끄는 길, [정보] 토글을 봅니다 |
 | `tests/test_rankerpick.py` | 선수 색인·랭커 픽 테스트. 지어낸 경기·가짜 API 로 색인(몰수·깨진 경기)·백필 이어 하기·하루 상한·429·닉네임 바뀜·지우기(지운 닉네임이 파일 바이트에 없는지까지) · 추천 후보 출처·문턱 경계 · 2만 경기 백필 · 추천 200명 예산 |
 | `tests/test_tray.py` | 트레이 상주 테스트. 종료 진입점·X 숨김 규칙·한 번만 실행 판정·자동 실행(가짜 레지스트리)·내려놓기 미룸 |
 | `tests/test_analysis.py` | 흐름 분석 회귀 테스트. 임계값 경계·가중치 정규화(네트워크 없음) |

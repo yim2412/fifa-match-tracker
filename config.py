@@ -305,6 +305,9 @@ STARTUP_CHECK_NOTICE_VERSION = 15
 SPECUP_NOTICE_VERSION = 17
 # 110 ④ 저장 전술(tactics.py)은 이 버전 동의 뒤부터
 TACTIC_NOTICE_VERSION = 18
+# 122 같은 OVR 비교 자료(squadcmp.py)는 이 버전 동의 뒤부터. 화면이 없는 조각 ①② 동안은 99 로 닫아 둔다(조각 ③ 에서 19).
+# NOTICE_VERSION 보다 크면 [정보] 의 토글과 저장 공간 줄도 숨긴다(squad_cmp_open)
+SQUAD_CMP_NOTICE_VERSION = 99
 MY_TRAIT_NOTICE_VERSION = 14   # 57 K12 내 스쿼드 특성(내 닉네임을 스쿼드메이커에 보낸다 · fifa.db my_traits)은 이 버전 동의 뒤부터
 # 이 버전 이상 동의자에게 남은 바뀐 점은 랭킹 수집을 켠 사람에게만 해당한다 — 수집을 끈 사람에겐 다시 묻지 않고,
 # 수집을 켤 때 묻는다(32단계 U6). 수집과 무관한 안내를 또 올리면 이 값도 같이 올린다 — 8 이 그렇다(그림은 수집과 무관하게
@@ -390,13 +393,19 @@ CARD_BACKFILL_VAR = "FIFA_CARD_BACKFILL"
 CARD_BACKFILL_OFF_VAR = "FIFA_CARD_BACKFILL_OFF"
 CARD_BACKFILL_ON = os.getenv(CARD_BACKFILL_VAR, "").strip()
 CARD_BACKFILL_OFF = os.getenv(CARD_BACKFILL_OFF_VAR, "").strip()
+# 같은 OVR 비교 자료(122) — 구단주 분포와 같은 꼴: 값은 켠 시각(빈 값 = 꺼짐 · 켜기가 "서비스 단계 키" 자가 신고) · _OFF 는 스스로 끈 사유
+# (devkey|key|blocked). 끄면 받은 선발을 바로 지운다. set_squad_cmp 가 재할당한다 — 다른 모듈은 config.SQUAD_CMP_ON 으로 읽는다.
+SQUAD_CMP_VAR = "FIFA_SQUAD_CMP"
+SQUAD_CMP_OFF_VAR = "FIFA_SQUAD_CMP_OFF"
+SQUAD_CMP_ON = os.getenv(SQUAD_CMP_VAR, "").strip()
+SQUAD_CMP_OFF = os.getenv(SQUAD_CMP_OFF_VAR, "").strip()
 # 둘러보기면 끈다 — 부모가 env 에서 빼고 넘기지만(demo.child_env) 두 겹으로. 동의는 "다 본 것" 으로(관문 함수가 화면을 비우지 않게 —
 # 요청은 위 스위치가 다 꺼져 있어 안 나간다)
 if DEMO:
     API_KEY = SERVER_URL = ""
     KEY_STATE = "none"
     WEB_DATA = RANK_COLLECT = UPDATE_CHECK = False
-    OWNER_DIST_ON = OWNER_DIST_OFF = CARD_BACKFILL_ON = CARD_BACKFILL_OFF = ""
+    OWNER_DIST_ON = OWNER_DIST_OFF = CARD_BACKFILL_ON = CARD_BACKFILL_OFF = SQUAD_CMP_ON = SQUAD_CMP_OFF = ""
     NOTICE_ACCEPTED = NOTICE_VERSION
 RANK_DB_PATH = DATA_DIR / "rank.db"  # fifa.db 와 따로 — 지우기가 파일 삭제라 VACUUM 이 필요 없다(ROADMAP 1.1.1)
 RANK_COLLECT_INTERVAL_H = 24
@@ -744,6 +753,26 @@ OWNER_DIST_SELFCHECK_REQ = 5000               # 누적 요청이 이보다 적�
 OWNER_DIST_SEED = 20261016                    # + 바퀴 시작일 ordinal + 층 번호
 OWNER_DIST_TICK_S = 600                       # 예약이 "받을 차례인가"를 보는 간격(③ — 진행 바퀴가 있거나 새 바퀴 차례면 로더 시작)
 OWNER_DIST_HALT_WAIT_MS = 2000                # [수집 기록 지우기] 가 rank.db 를 지우기 전 로더 멈춤을 기다리는 상한(③b — 화면 스레드가 멈춘다)
+# 같은 OVR 비교 자료(122 · squadcmp.py) — 1만 명의 마지막 감독모드 선발을 사용자 서비스 키로. 근거는 ROADMAP "## 122단계"
+SQUAD_CMP_TOP = 10_000                        # 마지막 스냅숏의 이 순위까지
+SQUAD_CMP_SNAP_MAX_H = 36                     # 스냅숏이 이보다 오래면 받지 않고 수집 회차를 기다린다
+SQUAD_CMP_REFRESH_DAYS = 7                    # 마지막으로 물은 뒤 이만큼 지나면 다시 묻는다
+SQUAD_CMP_FAIL_DAYS = 3                       # gone·nogame 은 이만큼 뒤에 다시(format 은 다음 날)
+SQUAD_CMP_KEEP_DAYS = 14                      # 선발을 받은 지(lineup_at) · 물은 지(checked_at) 이만큼 지나면 지운다 · 마지막 경기가 이보다 오래면 저장 안 함
+SQUAD_CMP_MATCHES = 3                         # 감독모드 목록에서 보는 최근 경기 수
+SQUAD_CMP_WORKERS = 8                         # 동시에 묻는 사람 수(사람 안에서는 차례로)
+SQUAD_CMP_SERIAL_REQ = 50                     # 켠 뒤 첫 이만큼 요청은 한 명씩
+SQUAD_CMP_DAILY_REQ = 40_000                  # 하루 요청 상한(서비스 키 한도의 0.2%)
+SQUAD_CMP_PERSON_REQ = 5                      # 한 명분 최대(계정 1 + 목록 1 + 상세 3)
+SQUAD_CMP_429_WAIT_S = 60                     # 429 → 전원 이만큼 쉬고 한 번 더 → 또 429 면 그날 멈춘다
+SQUAD_CMP_SELFCHECK_REQ = 5_000               # 켠 뒤 누적 요청이 이보다 적은데 429 로 멈추면 개발 키로 보고 스스로 끈다
+SQUAD_CMP_STREAK = 20                         # gone·format·빈 목록이 서로 다른 사람에서 이만큼 이어지면 저장 없이 멈춘다
+SQUAD_CMP_FAIL_STREAK = 20                    # 5xx·연결 실패가 이만큼 이어지면 그 실행을 멈춘다
+SQUAD_CMP_TRY_MAX = 3                         # 저장하지 않는 실패로 같은 사람을 하루에 묻는 횟수
+SQUAD_CMP_TICK_S = 600                        # 예약 간격
+SQUAD_CMP_FIRST_S = 60                        # 앱을 켠 뒤 첫 틱
+SQUAD_CMP_HALT_WAIT_MS = 2000                 # [수집 기록 지우기] 가 rank.db 를 지우기 전 로더 멈춤을 기다리는 상한
+SQUAD_CMP_UI_TIMEOUT_S = 1                    # 화면 스레드가 squads.db 를 여는 대기(잠겨 있으면 다음 틱에)
 # 카드 정보 자동 채우기(51단계 · cardcollect.py) — 카드 페이지 + 능력치 시뮬레이터 + 팀컬러 상세를 한 장부(card_backfill)로.
 # 근거는 ROADMAP "## 51단계"(F1~F8 · U2) — 상한은 가계부(PRICE_FETCH_MAX)·칩(CHIP_FETCH_MAX)과 따로 센다
 CARD_BACKFILL_DAILY_REQ = 600                 # 하루 요청 상한(U2 — 카드 한 장 = 페이지 + 시뮬레이터 2요청)
@@ -896,6 +925,8 @@ def save_api_key(key: str) -> None:
     if key != API_KEY and OWNER_DIST_ON:
         # 구단주 분포 토글은 "이 키가 서비스 단계"라는 자가 신고다 — 키가 바뀌면 신고도 무효(끄기를 먼저: 못 끄면 키도 안 바꾼다)
         set_owner_dist(False, "key")
+    if key != API_KEY and SQUAD_CMP_ON:
+        set_squad_cmp(False, "key")   # 122 — 같은 자가 신고
     if key and _store_in_cred(key):
         API_KEY, KEY_STATE = key, "ok"
         return
@@ -981,6 +1012,17 @@ def set_owner_dist(on: bool, reason: str = "") -> None:
     _save_env(OWNER_DIST_VAR, at)
     _save_env(OWNER_DIST_OFF_VAR, why)
     OWNER_DIST_ON, OWNER_DIST_OFF = at, why
+
+
+def set_squad_cmp(on: bool, reason: str = "") -> None:
+    """같은 OVR 비교 자료 토글(122) — 켜면 지금 시각(개발 키 판정의 시작점), 끄면 빈 값과 사유(devkey|key|blocked · 사용자가 끄면 "").
+    지우기는 예약(app_main.SquadCmpScheduler.sync)이 한다 — 끈 자리가 어디든 다음 sync·틱이 상태로 판정해 지운다."""
+    global SQUAD_CMP_ON, SQUAD_CMP_OFF
+    at = datetime.now().isoformat(timespec="seconds") if on else ""
+    why = "" if on else reason
+    _save_env(SQUAD_CMP_VAR, at)
+    _save_env(SQUAD_CMP_OFF_VAR, why)
+    SQUAD_CMP_ON, SQUAD_CMP_OFF = at, why
 
 
 def set_card_backfill(on: bool, reason: str = "") -> None:
@@ -1189,6 +1231,51 @@ def read_owner_dist() -> tuple[bool, bool] | None:
     disk = ((vals.get(WEB_DATA_VAR) or "0").strip() == "1" and (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
             and accepted >= OWNER_DIST_NOTICE_VERSION)
     return disk and owner_dist_prereq(), bool(OWNER_DIST_ON) and bool(API_KEY)
+
+
+def squads_db_path() -> Path:
+    """같은 OVR 비교 자료(122) — fifa.db·rank.db 와 따로(백업에 안 들어가고 지우기가 서로 안 막힌다). rank.db **옆**으로 계산한다 —
+    상수로 두면 RANK_DB_PATH 만 임시 폴더로 옮긴 테스트가 예약·지우기를 돌릴 때 개발 PC 의 진짜 자료를 지운다."""
+    return RANK_DB_PATH.with_name("squads.db")
+
+
+def squad_cmp_open() -> bool:
+    """같은 OVR 비교 자료가 이 버전에 열려 있나 — 조각 ①② 동안은 안내 번호 99 로 닫아 둔다(토글·저장 공간 줄을 숨긴다)."""
+    return SQUAD_CMP_NOTICE_VERSION <= NOTICE_VERSION
+
+
+def squad_cmp_prereq() -> bool:
+    """같은 OVR 비교 자료(122)의 전제(이 프로세스 값) — 처음 동의 · 웹 데이터 · 랭킹 수집 · 안내 SQUAD_CMP_NOTICE_VERSION 동의."""
+    return (not notice_needed() and WEB_DATA and RANK_COLLECT
+            and NOTICE_ACCEPTED >= SQUAD_CMP_NOTICE_VERSION)
+
+
+def squad_cmp_allowed() -> bool | None:
+    """받아도 되나 — 전제 + 토글 + 키(이 프로세스 값). 키를 읽지 못한 상태(KEY_STATE "fail")는 None(모른다 — owner_dist_allowed 와 같은 까닭)."""
+    if KEY_STATE == "fail":
+        return None
+    return squad_cmp_prereq() and bool(SQUAD_CMP_ON) and bool(API_KEY)
+
+
+def read_squad_cmp() -> bool | None:
+    """.env 를 디스크에서 다시 읽어 같은 OVR 비교 자료가 켜졌나 — 다른 실행본·손 수정. 토글·사유 전역도 맞춘다. 디스크와 이 프로세스 값이
+    **둘 다** 허락해야 참. 전제와 토글을 가르지 않는다 — 어느 쪽이 꺼져도 받은 선발을 지운다(W3). 못 읽거나 키 상태 "fail" 이면 None —
+    받지도 지우지도 않는다(False 로 돌려주면 .env 를 잠깐 못 읽은 것만으로 1만 명분을 지운다)."""
+    global SQUAD_CMP_ON, SQUAD_CMP_OFF
+    if KEY_STATE == "fail":
+        return None
+    vals = _read_env_disk()
+    if vals is None:
+        return None
+    SQUAD_CMP_ON = (vals.get(SQUAD_CMP_VAR) or "").strip()
+    SQUAD_CMP_OFF = (vals.get(SQUAD_CMP_OFF_VAR) or "").strip()
+    try:
+        accepted = int((vals.get(NOTICE_VAR) or "0").strip() or 0)
+    except ValueError:
+        accepted = 0
+    disk = ((vals.get(WEB_DATA_VAR) or "0").strip() == "1" and (vals.get(RANK_COLLECT_VAR) or "0").strip() == "1"
+            and accepted >= SQUAD_CMP_NOTICE_VERSION)
+    return disk and squad_cmp_allowed() is True
 
 
 def card_backfill_allowed() -> bool:

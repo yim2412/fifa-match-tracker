@@ -262,6 +262,7 @@ WEB_DATA_CHECK = "넥슨 홈페이지 데이터 읽기 켜기 (선택)"
 WEB_DATA_ON_NOW = "지금 켜져 있음 — 계속 쓰려면 체크"   # 안내 글이 바뀌어 다시 동의받을 때(D5)
 RANK_COLLECT_CHECK = "랭킹 수집 켜기 — 하루 한 번 랭킹 1만 명 (선택)"
 OWNER_DIST_CHECK = "구단주 분포 받기 — 서비스 단계 키가 필요합니다 (선택)"
+SQUAD_CMP_CHECK = "같은 OVR 비교 자료 받기 (선택, 서비스 단계 키 필요)"
 CARD_BACKFILL_CHECK = f"카드 정보 자동 채우기 — 하루 최대 {config.CARD_BACKFILL_DAILY_REQ}번 (선택)"
 AUTOSTART_CHECK = "윈도우를 켤 때 트레이로 자동 실행 (선택)"
 

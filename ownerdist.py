@@ -345,17 +345,36 @@ def load_pos_dist(conn, now: datetime) -> tuple[PosDist | None, str]:
 
 class _Gate:
     """요청 하나마다: cancel → 429 쉼 대기 → 바퀴 상한 → 하루 계수 → 요청(재시도 없음) → 429 면 전원 쉬고 한 번 더.
-    여러 스레드가 함께 부른다 — 상태는 lock 안에서만 바꾼다."""
+    여러 스레드가 함께 부른다 — 상태는 lock 안에서만 바꾼다.
 
-    def __init__(self, db_path, cancel, sleep, clock, today: Callable[[], str], round_left: int):
+    이름 붙은 인자는 같은 OVR 비교 자료(122 squadcmp)가 쓴다 — 안 주면 구단주 분포 그대로:
+    take(conn, 날) → 하루 계수를 하나 썼나 · wait_s 429 쉼 초 · on_quota(conn, 날) 최종 429 때 남길 표시 ·
+    stop_codes {넥슨 코드: 멈춘 이유} 그 코드를 받으면 전원 즉시 멈춤."""
+
+    def __init__(self, db_path, cancel, sleep, clock, today: Callable[[], str], round_left: int, *,
+                 take: Callable[[object, str], bool] | None = None, wait_s: float | None = None,
+                 on_quota: Callable[[object, str], None] | None = None, stop_codes: dict[str, str] | None = None):
         self.db_path, self.cancel, self.sleep, self.clock, self.today = db_path, cancel, sleep, clock, today
         self.round_left = round_left
+        self._take = take or self._take_owner
+        self._wait_s = wait_s
+        self._on_quota = on_quota or self._quota_owner
+        self.stop_codes = stop_codes or {}
         self.requests = 0
-        self.reason = ""       # "" | cancel | limit | round | quota
+        self.reason = ""       # "" | cancel | limit | round | quota | stop_codes 의 값
         self._pause_until = 0.0
         self._lock = threading.Lock()
         self._local = threading.local()
         self._conns: list = []
+
+    @staticmethod
+    def _take_owner(conn, day: str) -> bool:
+        return store.budget_take(conn, day, store.BUDGET_OWNER_DIST, config.OWNER_DIST_DAILY_REQ)
+
+    @staticmethod
+    def _quota_owner(conn, day: str) -> None:
+        store.budget_mark_429(conn, day, store.BUDGET_OWNER_DIST)
+        store.budget_mark_429(conn, day, store.BUDGET_OPENAPI)
 
     def _conn(self):
         c = getattr(self._local, "conn", None)
@@ -393,7 +412,7 @@ class _Gate:
                 self.reason = self.reason or "round"
                 raise _Halt
             self.requests += 1
-        if not store.budget_take(self._conn(), self.today(), store.BUDGET_OWNER_DIST, config.OWNER_DIST_DAILY_REQ):
+        if not self._take(self._conn(), self.today()):
             with self._lock:
                 self.requests -= 1
             self._halt("limit")
@@ -404,17 +423,17 @@ class _Gate:
             try:
                 return fn()
             except NexonAPIError as e:
+                if e.code in self.stop_codes:
+                    self._halt(self.stop_codes[e.code])
                 if e.code != QUOTA_CODE and e.status != 429:
                     raise
                 if attempt == 1:
-                    day, c = self.today(), self._conn()
-                    store.budget_mark_429(c, day, store.BUDGET_OWNER_DIST)
-                    store.budget_mark_429(c, day, store.BUDGET_OPENAPI)
+                    self._on_quota(self._conn(), self.today())
                     self._halt("quota")
                 with self._lock:
                     now = self.clock()
                     if self._pause_until <= now:   # 같은 순간 여러 스레드가 429 를 받아도 쉼은 한 번만 건다
-                        self._pause_until = now + config.OWNER_DIST_429_WAIT_S
+                        self._pause_until = now + (config.OWNER_DIST_429_WAIT_S if self._wait_s is None else self._wait_s)
         raise AssertionError("unreachable")
 
 
