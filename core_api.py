@@ -49,8 +49,9 @@ from habits import (GOAL_KIND_NOTE, GOAL_KINDS, MAX_LEAD, Chip, DivisionRun, Div
                     CalDay, CalSummary, cal_summary, calendar_days, Run as HistoryRun, history_runs)
 from teamcolor_calc import (ComboRow, ComboTable, SideColors, club_values, combo_rows, lineup_spids, material as tc_material,
                             my_lineups as tc_lineups, side_colors)
-from specup import (Inputs as SpecInputs, Plan as SpecPlan, SpecStep, budget_cut as specup_budget_cut, load as specup_load,
-                    pick_lineup as specup_lineup, plan as specup_plan)
+from specup import (Inputs as SpecInputs, Plan as SpecPlan, SLOT_EMPTY as SPECUP_SLOT_EMPTY, SLOT_NO_OVR as SPECUP_SLOT_NO_OVR, SpecStep,
+                    band_value as specup_band_value, budget_cut as specup_budget_cut,
+                    load as specup_load, pick_lineup as specup_lineup, plan as specup_plan, value_band as specup_value_band)
 from sessions import (PlayTime, Session, SessionLuck, SessionRow, SizeBin, StreakBreak, match_context, period_totals,
                       play_time, session_luck, session_rows, size_bins, split_sessions, streak_break,
                       PaceSide, SeasonPace, SeasonReview, SeasonSpan, StreakNote, season_pace, season_review,
@@ -190,7 +191,8 @@ __all__ = [
     "ENHANCE_BUDGET_QS", "ENHANCE_EXPECT_Q", "ENHANCE_GRADES_MAX", "ENHANCE_PROTECT_FROM", "ENHANCE_RANGE_PCTS",
     "EnhanceError", "EnhanceEstimate", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels", "enhance_parse_money",
     # specup — 스펙업 순서(121). 선발 고르기 specup_lineup 만 F(표시한 판을 뺀다)
-    "SpecInputs", "SpecPlan", "SpecStep", "specup_budget_cut", "specup_lineup", "specup_load", "specup_plan",
+    "SpecInputs", "SpecPlan", "SpecStep", "specup_band_value", "specup_budget_cut", "specup_lineup", "specup_load", "specup_plan",
+    "SPECUP_SLOT_EMPTY", "SPECUP_SLOT_NO_OVR", "specup_value_band",
     # squad_timeline · trade_book — 스쿼드 타임라인 · 이적시장 가계부(1.4.1)
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "FormationReport", "FormationRow", "formation_report",   # 97 X2 포메이션 바꾼 전후
@@ -289,7 +291,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
         "tc_detail", "tc_top_owners", "champ_games", "rank_cut", "last_raw_id", "late_rise", "meta_avg_elo", "similar_rankers", "snapshot_formation", "step_table", "step_reached", "my_emblem", "opp_rank_rows", "opp_rank_label",
         "bin_of_value", "opp_scores", "card_screen_state", "lineup_cards", "player_card", "price_days", "price_index",
         "squad_ovr", "value_breakdown", "squads_by_day", "value_series", "enhance_cheapest_protect", "enhance_estimate", "enhance_levels",
-        "enhance_parse_money", "specup_budget_cut", "specup_load", "specup_plan", "parse_trades", "ledger", "price_targets", "records_by_match",
+        "enhance_parse_money", "specup_band_value", "specup_budget_cut", "specup_load", "specup_plan", "specup_value_band", "parse_trades", "ledger", "price_targets", "records_by_match",
         "record_kinds", "recent_records", "record_summary", "card_ovr", "pitch_rows", "squad_value",
         "division_entries", "division_trend", "formation_of", "is_champion_or_above", "match_formations",
         "formation_label", "opponent_squad", "own_squad", "position_line", "ranker_targets", "ranker_values",

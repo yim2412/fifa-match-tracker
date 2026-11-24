@@ -90,7 +90,7 @@ from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, DivisionBandDelegate, GradeBadgeDelegate, GradeStepDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
-    Segmented, SortableItem, StatCard, VersionCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp,
+    Segmented, SortableItem, StatCard, VersionCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp, price_bp, SpecCell, SpecupGrid,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
@@ -995,6 +995,12 @@ class ImageLoader(Worker):
 
     def cancel(self) -> None:
         self._cancel = True
+
+    def cancelled(self) -> bool:
+        return self._cancel
+
+    def sp_ids(self) -> list[int]:
+        return list(self._sp_ids)
 
     def run(self) -> None:
         for sp_id in self._sp_ids:
@@ -2074,9 +2080,10 @@ class SpecupLoader(Worker):
     WRITES = frozenset({STORE_FIFA, STORE_RANK})
     ready = Signal(object)
 
-    def __init__(self, fv: int = 0):
+    def __init__(self, fv: int = 0, manual: tuple[int, ...] = ()):
         super().__init__()
         self._fv = fv
+        self._manual = manual
         self._cancel = False
 
     def cancel(self) -> None:
@@ -2090,7 +2097,7 @@ class SpecupLoader(Worker):
                 conn = sqlite3.connect(f"file:{config.DB_PATH.as_posix()}?mode=ro", uri=True, timeout=config.R1_READ_TIMEOUT_S)
                 conn.row_factory = sqlite3.Row
                 rconn = rankcollect.open_rank_db_ro()
-                out = core.specup_load(conn, rconn, pick=core.specup_lineup)
+                out = core.specup_load(conn, rconn, pick=core.specup_lineup, manual=self._manual)
         except Exception as e:  # noqa: BLE001 — 한 화면 때문에 앱이 죽지 않게
             if not getattr(SpecupLoader, "_noted", False):
                 SpecupLoader._noted = True      # crash.log 에 실행당 한 번만
@@ -3390,6 +3397,8 @@ class MainWindow(QMainWindow):
         self._specup_fetch: SpecupFetchLoader | None = None
         self._specup_result: specupcollect.Result | None = None
         self._specup_progress: tuple[int, int] | None = None
+        self._specup_face_loader: ImageLoader | None = None
+        self._specup_faces_tried: set[int] = set()   # 이번 실행에 물어본 얼굴 — 넥슨에 없는 그림을 다시 그릴 때마다 되묻지 않게
         self._notes_writer: NotesWriter | None = None
         self._notes_eff: store.Notes | None = None   # 줄에 올린 쓰기까지 얹은 값 — 쓰기 둘이 이어질 때 뒤 것이 앞 것을 되돌리지 않게(없으면 None)
         self._opp_ouid_cache: tuple | None = None   # (키, {닉네임: 상대 ouid}) — 상대 메모가 있을 때만 짓는다
@@ -4477,7 +4486,8 @@ class MainWindow(QMainWindow):
                                               ("포지션 특성", "_build_position_trait_tab")))),
                  ("랭커 픽", Tabs("rankerpick", (("픽", "_build_ranker_pick_tab"),
                                               ("추천", "_build_recommend_tab"),
-                                              ("비슷한 랭커", "_build_similar_tab")))),
+                                              ("비슷한 랭커", "_build_similar_tab"),
+                                              ("스펙업 순서", "_build_specup_tab")))),   # 121
                  ("선수로 구단주 찾기", "_build_card_owner_tab")]),
         ("도움말", [("산출 방법", "_build_methods_page"),    # 2.9.1 D2 — 정적 글(methods.py)
                    ("소개", "_build_intro_page")]),        # 96 O3 — 처음 켤 때 본 소개 세 장을 다시
@@ -8222,12 +8232,15 @@ class MainWindow(QMainWindow):
             self._stop_ranker_pick()
             self._stop_trait()
             self.start_specup()
+            self._specup_refresh_note()   # 게임이 꺼짐 · 안내에 동의함 · 홈페이지 데이터를 켬
 
     def stop_api_loaders(self) -> None:
         """랭커 픽·특성·스펙업 전부 멈춤 요청만(기다리지 않는다) — 숨김·다른 자리·게임·다른 오픈API 로더에 양보."""
         self._stop_ranker_pick()
         self._stop_trait()
         self._stop_specup()
+        if self._specup_visible():
+            self._specup_refresh_note()   # 게임이 켜짐
 
     # ── 스펙업 순서(121) — 재료 읽기(요청 0) → 모자란 것 받기(홈페이지) ─────────
     def _specup_visible(self) -> bool:
@@ -8250,7 +8263,7 @@ class MainWindow(QMainWindow):
     def _start_specup_load(self) -> None:
         if self._specup_loader is not None and self._specup_loader.isRunning():
             return
-        w = SpecupLoader(core.filter_version())
+        w = SpecupLoader(core.filter_version(), self._specup_manual)
         w.ready.connect(lambda payload, w=w: self._on_specup_ready(w, payload))
         self._specup_loader = w   # start 전에 — 신호가 바로 와도(테스트가 run 으로 바꿔 끼운다)
         self._specup_workers = [x for x in self._specup_workers if x.isRunning()] + [w]
@@ -8269,6 +8282,7 @@ class MainWindow(QMainWindow):
         self._specup_data = data          # 못 읽었으면 None — 다시 열 때 다시(여기서 되풀이하지 않는다)
         if data is not None:
             self._start_specup_fetch()
+        self._invalidate(self.SPECUP_KEY)
 
     def _specup_reset(self) -> None:
         """재료가 낡았다(스냅숏 · 랭커 선발 · 내 계정 · 새 경기 · 표시한 판 · 카드 정보) — 버리고, 보이면 다시 읽는다. 받는 중인 것은 그대로 둔다."""
@@ -8278,6 +8292,7 @@ class MainWindow(QMainWindow):
         self._specup_data = None
         if not self._quitting and not self._released and self._specup_visible():
             self._start_specup_load()
+        self._invalidate(self.SPECUP_KEY)
 
     def _start_specup_fetch(self) -> None:
         """켜는 조건: 안내 17(웹 데이터 포함) · 탭과 창이 보임 · 게임 꺼짐 · 카드 자동 채우기가 안 돎(둘이 같은 카드를 읽지 않게) ·
@@ -8303,6 +8318,7 @@ class MainWindow(QMainWindow):
 
     def _on_specup_progress(self, n: int, m: int) -> None:
         self._specup_progress = (n, m)
+        self._specup_refresh_note()
 
     def _on_specup_done(self, res) -> None:
         self._specup_result = res
@@ -8319,6 +8335,7 @@ class MainWindow(QMainWindow):
             self._specup_reset()
         elif ld.cancelled() or self._specup_data is not ld.data:
             self.start_visible_api_loader()   # 멈췄다 다시 온 탭 · 받는 동안 재료가 바뀌었다
+        self._specup_refresh_note()
 
     def _trait_visible(self) -> bool:
         return (self.KEY_OF_VIEW.get(self._current_view()) == self.TRAIT_KEY
@@ -8726,7 +8743,7 @@ class MainWindow(QMainWindow):
     # ── 11-lite 추천(17단계) — 랭커 픽 [추천] 탭 ─────────────────────────
     TRAIT_KEY = "traits"   # [메타 분석 › 포지션 특성] — PICK_KEYS 에 넣지 않는다: 그건 랭커 픽 로더를 켜는 조건이다
     PICK_KEYS = ("rankerpick", "recommend")  # 랭커 픽 로더를 띄우는 자리 — 둘 다 같은 데이터(ranker_squads)를 본다
-    SPECUP_KEY = "specup"  # [랭커 픽 › 스펙업 순서] — PICK_KEYS 에 넣지 않는다(U16 · 랭커 픽 받기를 켜지 않는다). 화면은 조각 ③
+    SPECUP_KEY = "specup"  # [랭커 픽 › 스펙업 순서] — PICK_KEYS 에 넣지 않는다(U16 · 랭커 픽 받기를 켜지 않는다)
     PICK_DATA_KEYS = PICK_KEYS + (TRAIT_KEY,)  # 무효화 목록 — 랭커 픽·특성 로더 진행 · 끄기/지우기 · 정리 끝
     REC_STAND_COLUMNS = ["항목", "나", "후보 중앙값", "내 위치"]
     REC_SOURCE_NAMES = {core.SRC_PICK: "상위 200", core.SRC_OPP: "내 상대", core.SRC_RECOMMEND: "1,000위 안 더 받음"}
@@ -9478,6 +9495,372 @@ class MainWindow(QMainWindow):
         if not self.open_compare_for(nick, ouid):
             self._set_status(self.lb_sim_note, "구단주 비교를 받는 중입니다. 끝난 뒤 다시 눌러 주세요." if self.compare_busy()
                              else "먼저 내 계정을 검색해 주세요.")
+
+    # ── 121 [랭커 픽 › 스펙업 순서] 화면 — 순서는 core.specup_plan(0.02초)이라 설정을 바꾸면 다시 세기만 한다(요청 0 · 다시 읽기 0) ──
+    SPECUP_LINES = (("공격", "FW"), ("미드", "MF"), ("수비", "DF"), ("GK", "GK"))
+    SPECUP_WHY = {"same_player": "선발의 다른 자리에 있는 선수", "color_unknown": "팀컬러를 아직 모름", "color_out": "팀컬러를 받지 못함",
+                  "salary_unknown": "급여를 아직 모름", "ovr_pos": "그 자리 OVR을 모름", "ovr_none": "그 자리 OVR을 모름",
+                  "ovr_grade": "강화 단계를 모름", "price": "시세를 모름"}
+    SPECUP_MANUAL_SETTING = "specup/manual"
+
+    def _build_specup_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        row = QHBoxLayout()
+        self.lb_specup_note = self._note_label()
+        self.btn_specup_notice = QPushButton("안내 보기")
+        self.btn_specup_notice.clicked.connect(lambda _c=False: self.ask_notice_update())
+        self.btn_specup_notice.setVisible(False)
+        row.addWidget(self.lb_specup_note, 1)
+        row.addWidget(self.btn_specup_notice)
+        v.addLayout(row)
+        self.lb_specup_base = QLabel("")
+        self.lb_specup_base.setWordWrap(True)
+        v.addWidget(self.lb_specup_base)
+
+        row = QHBoxLayout()
+        self.specup_lines: dict[str, QPushButton] = {}
+        for name, line in self.SPECUP_LINES:
+            chip = chip_toggle(name)
+            chip.setChecked(True)
+            chip.setToolTip("끄면 이 줄의 카드는 순서에서 뺍니다.")
+            chip.toggled.connect(lambda _on: self._specup_redraw())
+            self.specup_lines[line] = chip
+            row.addWidget(chip)
+        row.addSpacing(8)
+        self.chip_specup_more = chip_toggle("12·13강 포함")
+        self.chip_specup_more.toggled.connect(lambda _on: self._specup_redraw())
+        row.addWidget(self.chip_specup_more)
+        row.addSpacing(8)
+        row.addWidget(QLabel("묶음"))
+        self.cb_specup_chunk = ChoiceChips(list(config.SPECUP_CHUNK.items()))
+        self.cb_specup_chunk.setToolTip("많이로 두면 싼 카드를 거치는 걸음을 건너뛰고 뒤 카드를 바로 사는 칸으로 더 묶습니다.")
+        self.cb_specup_chunk.currentIndexChanged.connect(lambda _i: self._specup_redraw())
+        row.addWidget(self.cb_specup_chunk)
+        row.addSpacing(8)
+        self.chip_specup_mine = chip_toggle("내 구단가치 구간만 진하게")
+        self.chip_specup_mine.toggled.connect(lambda _on: self._specup_redraw())
+        row.addWidget(self.chip_specup_mine)
+        self.chip_specup_legend = chip_toggle("?")
+        self.chip_specup_legend.setToolTip("테두리 색이 뜻하는 구단가치 구간을 보여 줍니다.")
+        self.chip_specup_legend.setAccessibleName("테두리 색 범례")
+        self.chip_specup_legend.toggled.connect(lambda on: self.lb_specup_legend.setVisible(on))
+        row.addWidget(self.chip_specup_legend)
+        row.addStretch(1)
+        v.addLayout(row)
+
+        row = QHBoxLayout()
+        self.ed_specup_budget = QLineEdit()
+        self.ed_specup_budget.setPlaceholderText("예산(예: 30억)")
+        self.ed_specup_budget.setMaximumWidth(180)
+        self.ed_specup_budget.setToolTip("순서대로 사다가 예산이 모자라 멈추는 칸까지 진하게 보여 줍니다. 쓰던 카드를 판 값은 더하지 않습니다.\n"
+                                         "그 예산으로 낼 수 있는 가장 좋은 조합을 찾은 것은 아닙니다.")
+        self.ed_specup_budget.textChanged.connect(lambda _t: self._specup_redraw())
+        row.addWidget(self.ed_specup_budget)
+        self.lb_specup_budget = QLabel("")
+        self.lb_specup_budget.setWordWrap(True)
+        row.addWidget(self.lb_specup_budget, 1)
+        v.addLayout(row)
+        row = QHBoxLayout()
+        self.ed_specup_name = QLineEdit()
+        self.ed_specup_name.setPlaceholderText("선수 이름")
+        self.ed_specup_name.setMaximumWidth(180)
+        self.cb_specup_card = IconCombo(config.SPECUP_COMBO_CHARS)
+        self.ed_specup_name.textChanged.connect(lambda _t: self._refresh_card_candidates(self.ed_specup_name, self.cb_specup_card))
+        self._watch_name_ime(self.ed_specup_name, self.cb_specup_card)
+        self.btn_specup_add = QPushButton("넣기")
+        self.btn_specup_add.setToolTip(f"랭커 {config.SPECUP_MIN_USERS}명 넘게 쓰지 않는 카드도 순서에 넣습니다. 팀컬러와 급여는 그대로 봅니다.")
+        self.btn_specup_add.clicked.connect(lambda _c=False: self._on_specup_add())
+        self.cb_specup_manual = IconCombo(config.SPECUP_COMBO_CHARS)
+        self.btn_specup_drop = QPushButton("빼기")
+        self.btn_specup_drop.clicked.connect(lambda _c=False: self._on_specup_drop())
+        for wd in (self.ed_specup_name, self.cb_specup_card, self.btn_specup_add, self.cb_specup_manual, self.btn_specup_drop):
+            row.addWidget(wd)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.cb_specup_manual.setVisible(False)
+        self.btn_specup_drop.setVisible(False)
+
+        self.lb_specup_legend = QLabel(self._specup_legend_html())
+        self.lb_specup_legend.setTextFormat(Qt.TextFormat.RichText)
+        self.lb_specup_legend.setWordWrap(True)
+        self.lb_specup_legend.setToolTip(glossary.tip("specup_band"))
+        self.lb_specup_legend.setVisible(False)
+        v.addWidget(self.lb_specup_legend)
+        self.specup_grid = SpecupGrid()
+        self.specup_grid.setAccessibleName("스펙업 순서")
+        self.specup_grid.setMinimumHeight(2 * self.specup_grid.cell_delegate.cell_size(self.specup_grid.font()).height())
+        self.specup_grid.activated.connect(self._on_specup_activated)
+        v.addWidget(self.specup_grid, 1)
+        self._specup_manual = self._load_specup_manual()
+        self._specup_plan: core.SpecPlan | None = None   # 테스트가 본다
+        return w
+
+    @staticmethod
+    def _specup_band_text(band: int) -> str:
+        edges = config.SPECUP_VALUE_EDGES
+        if band == 0:
+            return f"{ranker.format_team_value(edges[0])} 미만"
+        if band >= len(edges):
+            return f"{ranker.format_team_value(edges[-1])} 이상"
+        return f"{ranker.format_team_value(edges[band - 1])}~{ranker.format_team_value(edges[band])}"
+
+    @classmethod
+    def _specup_legend_html(cls) -> str:
+        return " ".join(f'<span style="white-space:nowrap;"><span style="color:{c};">■</span>&nbsp;{cls._specup_band_text(i)}&nbsp;&nbsp;</span>'
+                        for i, c in enumerate(T.SPECUP_BAND))
+
+    def _load_specup_manual(self) -> tuple[int, ...]:
+        try:
+            raw = str(self._settings().value(self.SPECUP_MANUAL_SETTING, "") or "")
+        except Exception:  # noqa: BLE001 — 설정을 못 읽어도 화면은 떠야 한다
+            return ()
+        got = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+        return tuple(dict.fromkeys(got))[:config.SPECUP_MANUAL_MAX]
+
+    def _set_specup_manual(self, ids: tuple[int, ...]) -> None:
+        self._specup_manual = ids
+        s = self._settings()
+        s.setValue(self.SPECUP_MANUAL_SETTING, ",".join(str(x) for x in ids))
+
+    def _on_specup_add(self) -> None:
+        sp = self.cb_specup_card.currentData()
+        if not isinstance(sp, int):
+            self.lb_specup_budget.setText("선수 이름을 넣고 카드를 고르세요.")
+            return
+        if sp in self._specup_manual:
+            return
+        if len(self._specup_manual) >= config.SPECUP_MANUAL_MAX:
+            self.lb_specup_budget.setText(f"직접 넣은 카드는 {config.SPECUP_MANUAL_MAX}장까지입니다.")
+            return
+        self._set_specup_manual(self._specup_manual + (sp,))
+        self.ed_specup_name.clear()
+        self._specup_reset()   # 그 카드의 시세·카드 정보까지 다시 읽고, 모자라면 받는다
+
+    def _on_specup_drop(self) -> None:
+        sp = self.cb_specup_manual.currentData()
+        self._set_specup_manual(tuple(x for x in self._specup_manual if x != sp))
+        self._specup_redraw()   # 재료에 남은 시세는 다음에 읽을 때 빠진다
+
+    def _on_specup_activated(self, index) -> None:
+        cell = index.data(ROW_ROLE) if index.isValid() else None
+        if cell is not None:
+            self._show_player_info(cell.spid, cell.grade)
+
+    def _specup_note(self) -> tuple[str, bool]:
+        """(맨 위 상태 글, [안내 보기]를 보일지). 관문은 받기만 막는다 — 저장된 것으로 그린 순서표 위에 '새로 안 받는 까닭'을 한 줄."""
+        texts = notice.SPECUP_TEXTS
+        data, res = self._specup_data, self._specup_result
+        if data is None:
+            return texts["reading" if self._specup_loader is not None and self._specup_loader.isRunning() else "unread"], False
+        parts = []
+        if data.reason:
+            if not config.RANK_COLLECT and data.reason in ("no_snapshot", "no_color", "few_rankers"):
+                return texts["collect_off"], False
+            parts.append(texts[data.reason])
+            if not data.fetchable:
+                return parts[0], False
+        elif self._specup_plan is not None:
+            if not self._specup_plan.steps:
+                parts.append(texts["empty"])
+            if (not self.chip_specup_more.isChecked()
+                    and sum(s.state == core.SPECUP_SLOT_EMPTY for s in self._specup_plan.slots) >= config.SPECUP_HINT_EMPTY):
+                parts.append(texts["more_grades"])
+        button = False
+        if config.notice_needed() or not config.WEB_DATA:
+            parts.append(texts["web_off"])
+        elif config.NOTICE_ACCEPTED < config.SPECUP_NOTICE_VERSION:
+            parts.append(texts["notice"])
+            button = True
+        elif game_paused():
+            parts.append(texts["game"])
+        elif self._specup_fetching():
+            parts.append(notice.specup_collecting(*self._specup_progress) if self._specup_progress else texts["checking"])
+        elif res is not None and (res.error or res.stop in texts):
+            parts.append(texts["error" if res.error else res.stop])
+        return " ".join(parts), button
+
+    def _specup_refresh_note(self) -> None:
+        text, button = self._specup_note()
+        self._set_status(self.lb_specup_note, text)
+        self.btn_specup_notice.setVisible(button)
+
+    def _specup_clear(self) -> None:
+        """화면에 남은 닉네임·카드까지 비운다(지우기 · 메모리 내려놓기)."""
+        self._specup_plan = None
+        self.specup_grid.set_rows([])
+        self.lb_specup_base.setText("")
+        self.lb_specup_base.setToolTip("")
+        self.lb_specup_budget.setText("")
+        self._specup_refresh_note()
+
+    def _render_specup(self) -> None:
+        data = self._specup_data
+        if data is None:
+            if self._specup_loader is not None and self._specup_loader.isRunning():
+                self._specup_refresh_note()   # 다시 읽는 동안은 보던 순서를 둔다(한 바퀴 받을 때마다 비었다 차지 않게)
+            else:
+                self._specup_clear()
+            return
+        self._specup_redraw()
+
+    def _specup_redraw(self) -> None:
+        """재료(_specup_data)로 순서를 다시 세우고 그린다 — 설정을 바꿀 때마다 여기로."""
+        data = self._specup_data
+        if data is None:
+            return
+        plan = None
+        if not data.reason:
+            grades = config.SPECUP_GRADES + (config.SPECUP_GRADES_MORE if self.chip_specup_more.isChecked() else ())
+            lines = {ln for ln, chip in self.specup_lines.items() if chip.isChecked()}
+            plan = core.specup_plan(data, grades=grades, ratio=self.cb_specup_chunk.currentData(), lines=lines,
+                                    manual=self._specup_manual)
+        self._specup_plan = plan
+        self._specup_base_line(data, plan)
+        self._specup_budget_line(plan)
+        self._specup_manual_combo(plan)
+        self.specup_grid.set_rows(self._specup_cells(data, plan) if plan is not None else [])
+        self._specup_refresh_note()
+        self._start_specup_faces()
+
+    def _specup_base_line(self, data, plan) -> None:
+        parts = [f"기준: {data.nickname}"] if data.nickname else []
+        if data.color:
+            parts.append(data.color)
+        if data.value:
+            parts.append(f"구단가치 {ranker.format_team_value(data.value)} BP")
+        tips = []
+        if data.taken_at:
+            tips.append(f"팀컬러·구단가치·랭커: {basis_text(BASIS_FETCHED, data.taken_at)}")
+        if plan is not None:
+            parts.append(f"후보 랭커 {data.rankers:,}명")
+            parts.append(f"카드 {len({c.spid for c in data.cands}):,}장")
+            if plan.salary_now is not None:
+                parts.append(f"급여 {plan.salary_now}/{config.SPECUP_SALARY_CAP}")
+            if plan.why:
+                parts.append(f"뺀 카드 {len(plan.why):,}장")
+                by = Counter(self.SPECUP_WHY.get(why, why) for why in plan.why.values())
+                tips.append("뺀 카드: " + ", ".join(f"{name} {n:,}장" for name, n in by.most_common()))
+        self.lb_specup_base.setText(" · ".join(parts))
+        self.lb_specup_base.setToolTip("\n".join(tips))
+
+    def _specup_budget(self) -> tuple[int | None, bool]:
+        """(예산 BP, 글이 있는데 못 읽었나)."""
+        text = self.ed_specup_budget.text().strip()
+        amount = core.enhance_parse_money(text) if text else None
+        return amount, bool(text) and amount is None
+
+    def _specup_budget_line(self, plan) -> None:
+        amount, bad = self._specup_budget()
+        if bad:
+            self.lb_specup_budget.setText("금액을 읽지 못했습니다")
+        elif amount is None or plan is None or not plan.steps:
+            self.lb_specup_budget.setText("")
+        else:
+            cut = core.specup_budget_cut(plan.steps, amount)
+            spent = plan.steps[cut - 1].spent if cut else 0
+            self.lb_specup_budget.setText(f"{cut}번까지 {self._bp(spent)}, OVR +{sum(s.ovr_gain for s in plan.steps[:cut])}"
+                                          if cut else f"첫 칸이 {self._bp(plan.steps[0].price)}라 예산이 모자랍니다")
+
+    def _specup_manual_combo(self, plan) -> None:
+        keep = self.cb_specup_manual.currentData()
+        items = []
+        for sp in self._specup_manual:
+            state = self._specup_manual_state(sp, plan)
+            name = f"{self._names.get(sp, str(sp))} {self._season_name(sp).split(' ')[0]}"
+            items.append((f"{state}: {name}" if state else name, sp, ("season", core.season_id_of(sp))))   # 상태가 앞 — 칸이 좁아 뒤가 잘린다
+        self.cb_specup_manual.set_icon_items(items)
+        self.cb_specup_manual.setCurrentIndex(max(0, self.cb_specup_manual.findData(keep)) if items else -1)
+        for i, (text, *_r) in enumerate(items):
+            self.cb_specup_manual.setItemData(i, text, Qt.ItemDataRole.ToolTipRole)
+        self.cb_specup_manual.setVisible(bool(items))
+        self.btn_specup_drop.setVisible(bool(items))
+        if items:
+            self._start_list_icons(self.cb_specup_manual)
+
+    def _specup_manual_state(self, sp: int, plan) -> str:
+        if plan is None:
+            return ""
+        at = [i for i, s in enumerate(plan.steps, 1) if s.spid == sp]
+        if at:
+            return f"{at[0]}번"
+        why = plan.why.get(sp)
+        return self.SPECUP_WHY.get(why, why) if why else "순서 밖"
+
+    def _specup_card_name(self, sp: int) -> str:
+        return f"{self._names.get(sp, str(sp))} ({self._season_name(sp)})"
+
+    def _specup_cells(self, data, plan) -> list[SpecCell]:
+        amount, _bad = self._specup_budget()
+        cut = core.specup_budget_cut(plan.steps, amount) if amount is not None else None
+        value = data.value or 0
+        mine = core.specup_value_band(value)
+        only_mine = self.chip_specup_mine.isChecked()
+        cells = []
+        for i, s in enumerate(plan.steps, 1):
+            slot = data.lineup[s.slot]
+            band = core.specup_value_band(core.specup_band_value(s, value))
+            cells.append(SpecCell(s.spid, s.grade, self._names.get(s.spid, str(s.spid)), i,
+                                  self._positions.get(slot.po, str(slot.po)), slot.line, f"OVR +{s.ovr_gain}", price_bp(s.price), band,
+                                  (cut is not None and i > cut) or (only_mine and band != mine),
+                                  self._specup_tip(data, s, i, slot, band, i > 1 and s.per_eok > plan.steps[i - 2].per_eok)))
+        for st in plan.slots:
+            why = {core.SPECUP_SLOT_NO_OVR: "계산할 수 없음", core.SPECUP_SLOT_EMPTY: "살 카드 없음"}.get(st.state)
+            if why is None or (st.slot.line in self.specup_lines and not self.specup_lines[st.slot.line].isChecked()):
+                continue   # 꺼 둔 줄은 살 카드가 없는 것이 아니다
+            pos = self._positions.get(st.slot.po, str(st.slot.po))
+            tip = f"{pos} {self._specup_card_name(st.slot.spid)}" + (f" {st.slot.grade}강" if st.slot.grade else "")
+            tip += ("\n이 카드의 OVR을 몰라 계산할 수 없습니다." if st.ovr is None
+                    else f"\n지금 OVR {st.ovr}\n이보다 OVR이 높은 후보를 찾지 못했습니다.")
+            cells.append(SpecCell(st.slot.spid, st.slot.grade, self._names.get(st.slot.spid, str(st.slot.spid)), None, pos,
+                                  st.slot.line, "", why, None, False, tip))
+        return cells
+
+    def _specup_tip(self, data, s, order: int, slot, band: int, freed: bool) -> str:
+        lines = [f"{order}번 · {self._positions.get(slot.po, str(slot.po))}", f"{self._specup_card_name(s.spid)} {s.grade}강"]
+        was = self._specup_card_name(s.from_spid) + (f" {s.from_grade}강" if s.from_grade else "")
+        lines.append(f"바꾸는 카드: {was}")
+        lines.append(f"시세 {self._bp(s.price)}" + (f" ({s.price_on[5:10]} 기준)" if len(s.price_on) >= 10 else ""))
+        lines.append(f"OVR +{s.ovr_gain}, 1억당 +{s.per_eok:.3f}")
+        lines.append(f"여기까지 {self._bp(s.spent)}")
+        lines.append(f"추천 구단가치 {self._specup_band_text(band)}")
+        if s.salary_sum is not None:
+            lines.append(f"산 뒤 팀 급여 {s.salary_sum}/{config.SPECUP_SALARY_CAP}")
+        if freed:   # 앞 칸보다 1억당 OVR 이 높은데 뒤에 있다 — 급여나 같은 선수에 막혀 있던 칸(순서가 틀린 것처럼 보인다)
+            lines.append("앞 칸을 사서 급여나 선수 자리가 나야 살 수 있습니다.")
+        if s.chunk:
+            lines.append(f"바로 사기: 싼 카드 {len(s.chunk)}장을 거치지 않습니다.")
+        users = max((c.users for c in data.cands if c.spid == s.spid), default=0)
+        if users:
+            lines.append(f"같은 팀컬러 랭커 {users:,}명이 씁니다.")
+        got = core.ranker_values(data.records.get((s.spid, slot.po)))
+        if got is not None:
+            n, _day, vals = got
+            lines.append(f"랭커 경기당 골 {vals['골']:.2f}, 어시 {vals['어시']:.2f}, 태클 {vals['태클']:.2f} ({n:,}경기)")
+        lines.append("사는 값만 셌습니다. OVR은 팀컬러·적응도·특성을 뺀 값입니다.")
+        return "\n".join(lines)
+
+    def _start_specup_faces(self) -> None:
+        """칸 얼굴 — 받은 것·이번 실행에 해 본 것은 다시 안 묻는다. 앞 로더는 물러나 종료 표(_retired_loaders)가 기다린다."""
+        need = [sp for sp in dict.fromkeys(c.spid for c in self.specup_grid.rows())
+                if self.specup_grid.icon("face", sp) is None and sp not in self._specup_faces_tried]
+        if not need:
+            return
+        old = self._specup_face_loader
+        if old is not None:
+            self._retire_loaders([old])
+        ld = ImageLoader(need, self._img_cache_dir)
+        ld.loaded.connect(self._on_specup_face)
+        ld.finished.connect(lambda ld=ld: self._on_specup_faces_end(ld))
+        self._specup_face_loader = ld
+        ld.start()
+
+    def _on_specup_face(self, spid: int, path: str) -> None:
+        self.specup_grid.put_face(spid, path)
+
+    def _on_specup_faces_end(self, ld) -> None:
+        if not ld.cancelled():
+            self._specup_faces_tried.update(ld.sp_ids())
 
     # ── 랭커 메타 ② 스냅숏 읽기(2.4.1) — rank.db 원본 14일 · 영구 집계, 요청 0 · 쓰기 0 ───────────────
     # rank.db 가 바뀌는 길 넷(수집 회차 끝 · 팀컬러 목록 저장 · 정리 끝 · 끄기/지우기)이 같이 무효화하는 키
@@ -13364,6 +13747,7 @@ class MainWindow(QMainWindow):
         "history": [("스쿼드·이적", "이력")], "arrivals": [("스쿼드·이적", "영입 전후")],
         "pricew": [("스쿼드·이적", "주간 시세")],
         "rankerpick": [("랭커 픽", "픽")], "recommend": [("랭커 픽", "추천")], "similar": [("랭커 픽", "비슷한 랭커")],
+        "specup": [("랭커 픽", "스펙업 순서")],
         "ranktrend": [("랭킹 추이", "추이")], "metatrend": [("랭킹 추이", "메타 변화")],
         "elodist": [("랭킹 추이", "점수 분포")], "weekly": [("랭킹 추이", "주간 요약")],
         "predcheck": [("랭킹 추이", "예측 되짚기")], "rewards_rank": [("랭킹 추이", "보상")],
@@ -13424,6 +13808,7 @@ class MainWindow(QMainWindow):
             "rankerpick": self._render_ranker_pick,  # 랭커 쪽은 DB(받은 만큼) · "내 스쿼드"는 최근 경기
             "recommend": self._render_recommend,     # 후보는 DB(랭커 픽 · 내 상대) · "내 스쿼드"는 최근 경기
             "similar": self._render_similar,         # 110 R1 — rank.db 원본 × 단계표(작업 스레드가 읽어 넘김) · 내 포메이션은 최근 경기
+            "specup": self._render_specup,           # 121 — 내 계정 기준 재료(작업 스레드가 읽어 넘김) · 검색 결과에 안 묶인다
             "ranktrend": self._render_rank_trend,    # rank.db 영구 집계 — 검색 결과에 안 묶인다
             "metatrend": self._render_meta_trend,    # rank.db 영구 집계(tier_counts) — 같은 이유
             "elodist": self._render_elo_dist,        # rank.db elo_hist + 검색 계정 ELO 선(EloLoader 결과)
@@ -16720,7 +17105,7 @@ class MainWindow(QMainWindow):
             (self._backfill_worker, cancel(self._backfill_worker), 3000, False),
             *[(ld, cancel(ld), 500, False)
               for ld in self._compare_squad_loaders + self._position_pitch_loaders + self._retired_loaders
-              + [x for x in (self._gk_face_loader,) if x is not None]],
+              + [x for x in (self._gk_face_loader, self._specup_face_loader) if x is not None]],
             # 축구장 칩 카드 정보 — 카드 사이에서 멈춘다(한 장 = 한 트랜잭션 · 요청 하나 타임아웃 10초)
             *[(ld, cancel(ld), 12000, False) for ld in self._pitch_card_loaders],
             # 로컬 DB 읽기 둘 — 금방 끝난다. 끝나면 신호를 안 낸다(cancel)
@@ -16992,6 +17377,7 @@ class MainWindow(QMainWindow):
         self._value_input = self._so_split_cache = None
         self._specup_reset()   # 121 — 닉네임·선발·랭커 선발에서 만든 후보를 쥔다
         self._specup_result = None
+        self._specup_clear()
         self._card_rev += 1
         self._records_cache = None
         self._fun_cache = {}
@@ -17037,6 +17423,7 @@ class MainWindow(QMainWindow):
         self._distcmp_val, self._distcmp_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
         self._specup_reset()        # 121 — 후보·시세 재료. 읽는 중인 것도 놓는다(늦게 온 결과가 다시 쥐지 않게)
+        self._specup_clear()
         self._value_input = None    # 선발 시세 카드가 저장 전체 경기를 쥔다(113 1회차 [중]15 — 가계부를 한 번 열면 메모리가 안 풀렸다)
         self._records_cache = None  # 업적은 match_id 만 들지만 키가 옛 목록 id 를 쥔다
         self._fun_cache = {}

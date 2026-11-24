@@ -4365,6 +4365,192 @@ def short_bp(v: int | None) -> str:
     return f"{v:,}"
 
 
+def price_bp(v: int) -> str:
+    """시세 한 칸 — 10억 밑은 소수 첫째 자리까지(2.3억 · 37억 · 1,240억 · 1.2조). short_bp 는 억 밑을 버려 2.9억이 2억이 된다."""
+    if 10 ** 8 <= v < 10 ** 9:
+        return f"{v / 10 ** 8:.1f}".rstrip("0").rstrip(".") + "억"
+    return short_bp(v)
+
+
+@dataclass
+class SpecCell:
+    """[스펙업 순서](121) 칸 하나 — 글자는 화면이 다 만들어 넣는다. key None 이면 살 것이 없는 자리(회색 칸)."""
+    spid: int
+    grade: int | None
+    name: str
+    order: int | None = None         # 순서표 번호(1부터) — 회색 칸은 None
+    pos: str = ""                    # 포지션 이름
+    line: str | None = None          # 자리 줄(GK·DF·MF·FW) — 포지션 글자색
+    gain: str = ""                   # "OVR +2"
+    price: str = ""                  # 시세 · 회색 칸은 사유 글
+    band: int | None = None          # 추천 구단가치 구간 — 테두리 색
+    dim: bool = False
+    tip: str = ""
+
+    @property
+    def accessible(self) -> str:
+        grade = f"{self.grade}강" if self.grade else ""
+        return " ".join(x for x in (str(self.order or ""), self.pos, self.name, grade, self.gain, self.price) if x)
+
+
+class SpecupDelegate(QStyledItemDelegate):
+    """스펙업 순서 칸 그리기 — 얼굴 + 강화 배지 · 위 순서와 자리 · 아래 이름·OVR·시세 · 테두리 = 추천 구단가치 구간.
+    자리는 layout() 한 곳(그리기·넘침 검사가 같이 읽는다)."""
+    MARGIN = 4
+    PAD = 6
+    GAP = 2
+    BORDER = 2
+
+    def __init__(self, view: CardListView):
+        super().__init__(view)
+        self.view = view
+
+    fonts = staticmethod(MatchCardDelegate.fonts)
+
+    def cell_size(self, base: QFont) -> QSize:
+        f = self.fonts(base)
+        small, bold = QFontMetrics(f["small"]), QFontMetrics(f["bold"])
+        inner = max(SpecupGrid.FACE_PX + 8, bold.horizontalAdvance("OVR +88"), small.horizontalAdvance("계산할 수 없음"),
+                    small.horizontalAdvance("8,888억"))
+        edge = 2 * (self.MARGIN + self.BORDER + self.PAD)
+        return QSize(inner + edge, small.height() * 3 + bold.height() + SpecupGrid.FACE_PX + 4 * self.GAP + edge)
+
+    def sizeHint(self, option, index) -> QSize:
+        return self.cell_size(option.font)
+
+    def layout(self, cell: SpecCell, rect, base: QFont) -> list[CardSeg]:
+        f = self.fonts(base)
+        small, bold = QFontMetrics(f["small"]), QFontMetrics(f["bold"])
+        e = self.MARGIN + self.BORDER + self.PAD
+        r = QRectF(rect).adjusted(e, e, -e, -e)
+        segs: list[CardSeg] = []
+        y = r.top()
+        order = str(cell.order) if cell.order else ""
+        ow, pw = small.horizontalAdvance(order), small.horizontalAdvance(cell.pos)
+        segs.append(CardSeg("order", QRectF(r.left(), y, min(ow, r.width()), small.height()), order, ow))
+        left = r.right() - min(pw, r.width() - ow - 4)
+        segs.append(CardSeg("pos", QRectF(left, y, r.right() - left, small.height()), cell.pos, pw))
+        y += small.height() + self.GAP
+        px = SpecupGrid.FACE_PX
+        face = QRectF(r.center().x() - px / 2, y, px, px)
+        segs.append(CardSeg("face", face, "", 0))
+        if cell.grade:
+            text = str(cell.grade)
+            bw = bold.horizontalAdvance(text) + 2 * GRADE_BADGE_PAD
+            segs.append(CardSeg("badge", QRectF(face.right() - bw + 8, face.bottom() - small.height(), bw, small.height()), text, bw))
+        y += px + self.GAP
+        for role, text, fm in (("name", cell.name, small), ("gain", cell.gain, bold), ("price", cell.price, small)):
+            segs.append(CardSeg(role, QRectF(r.left(), y, r.width(), fm.height()), text, fm.horizontalAdvance(text)))
+            y += fm.height() + self.GAP
+        return segs
+
+    def overflow(self, cell: SpecCell, base: QFont) -> list[str]:
+        """잘리는 글자 조각 — 이름은 잘려도 된다(말풍선에 전부)."""
+        s = self.cell_size(base)
+        return [g.role for g in self.layout(cell, QRectF(0, 0, s.width(), s.height()), base)
+                if g.text and g.role not in ("name", "badge") and g.full > g.rect.width() + 0.5]
+
+    @staticmethod
+    def colors(cell: SpecCell) -> dict[str, str]:
+        """테스트가 그림 대신 읽는다."""
+        return {"border": T.BORDER if cell.band is None else T.SPECUP_BAND[cell.band], "order": T.TEXT_DIM,
+                "pos": T.POS_COLORS.get(cell.line, T.TEXT_DIM), "name": T.TEXT_DIM if cell.order is None else T.TEXT,
+                "gain": T.GOOD, "price": T.TEXT_DIM}
+
+    @staticmethod
+    def opacity(cell: SpecCell) -> float:
+        return T.SPECUP_DIM if cell.dim else 1.0
+
+    def paint(self, painter, option, index) -> None:
+        cell = index.data(ROW_ROLE)
+        if cell is None:
+            return
+        painter.save()
+        try:
+            self._paint(painter, option, cell)
+        finally:
+            painter.restore()
+
+    def _paint(self, p: QPainter, option, cell: SpecCell) -> None:
+        f, col = self.fonts(option.font), self.colors(cell)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        m = self.MARGIN + self.BORDER / 2
+        r = QRectF(option.rect).adjusted(m, m, -m, -m)
+        path = QPainterPath()
+        path.addRoundedRect(r, T.RADIUS_CTRL, T.RADIUS_CTRL)
+        bg = T.PANEL
+        if option.state & QStyle.StateFlag.State_MouseOver:
+            bg = T.blend(bg, T.TEXT, 0.06)
+        p.fillPath(path, QColor(bg))
+        p.setOpacity(self.opacity(cell))
+        p.setPen(QPen(QColor(col["border"]), self.BORDER if cell.band is not None else 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+        for s in self.layout(cell, option.rect, option.font):
+            if s.role == "face":
+                pm = self.view.icon("face", cell.spid)
+                if pm is not None and not pm.isNull():
+                    p.drawPixmap(s.rect, pm, QRectF(pm.rect()))
+                continue
+            if s.role == "badge":
+                paint_grade_badge(p, s.rect, cell.grade, f["small"])
+                continue
+            if not s.text:
+                continue
+            font = "bold" if s.role == "gain" else "small"
+            p.setFont(f[font])
+            p.setPen(QColor(col[s.role]))
+            text = s.text if s.full <= s.rect.width() + 0.5 else QFontMetrics(f[font]).elidedText(
+                s.text, Qt.TextElideMode.ElideRight, max(0, int(s.rect.width())))
+            p.drawText(s.rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter, text)
+        p.setOpacity(1.0)
+        if option.state & QStyle.StateFlag.State_Selected:   # 지금 칸 — 흐린 칸에서도 보이게 또렷하게 안쪽에
+            ring = QPainterPath()
+            ring.addRoundedRect(r.adjusted(3, 3, -3, -3), T.RADIUS_CTRL - 3, T.RADIUS_CTRL - 3)
+            p.setPen(QPen(QColor(T.ACCENT), 2))
+            p.drawPath(ring)
+
+    def helpEvent(self, event, view, option, index) -> bool:
+        cell = index.data(ROW_ROLE) if index.isValid() else None
+        if cell is not None and cell.tip:
+            QToolTip.showText(event.globalPos(), cell.tip, view)
+            return True
+        QToolTip.hideText()
+        return False
+
+
+class SpecupGrid(CardListView):
+    """스펙업 순서 칸 격자(121) — 왼쪽에서 오른쪽으로 순서대로, 창 폭에 맞춰 줄을 바꾼다. 칸을 위젯으로 만들지 않아 수백 칸도 가볍고,
+    화살표·Enter(activated)와 지금 칸 표시는 목록 그대로다(96 K3). 얼굴은 ("face", spid) 그림 표에 받는 대로 붙는다."""
+    FACE_PX = 56
+
+    def __init__(self):
+        super().__init__()
+        self.cell_delegate = SpecupDelegate(self)
+        self.setItemDelegate(self.cell_delegate)
+        self.setFlow(QListView.Flow.LeftToRight)
+        self.setWrapping(True)
+        self.setResizeMode(QListView.ResizeMode.Adjust)
+        self.setMovement(QListView.Movement.Static)
+        self.setStyleSheet("QListView { background: transparent; border: none; }")
+
+    def put_face(self, spid: int, path: str) -> None:
+        pm = QPixmap(path)
+        if pm.isNull():
+            return
+        side = round(self.FACE_PX * self.devicePixelRatioF())
+        scaled = pm.scaled(side, side, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        if scaled.width() != scaled.height():   # 정사각 칸에 늘어나지 않게 가운데에 앉힌다
+            box = QPixmap(side, side)
+            box.fill(Qt.GlobalColor.transparent)
+            q = QPainter(box)
+            q.drawPixmap((side - scaled.width()) // 2, (side - scaled.height()) // 2, scaled)
+            q.end()
+            scaled = box
+        self.put_icon("face", spid, scaled)
+
+
 @dataclass
 class PitchCard:
     """축구장 칩 한 장의 재료 — 화면이 경기 기록에서 만든다(widgets 는 계산하지 않는다)."""

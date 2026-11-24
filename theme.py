@@ -327,6 +327,14 @@ DIVISION_BANDS = {
               "#ae9618", "#3d667d", "#3d667e", "#41687d", "#cb9675", "#d48e67", "#c99271"),
 }
 DIVISION_BAND = DIVISION_BANDS[MODE]
+# 스펙업 순서 칸 테두리 — 추천 구단가치 구간(config.SPECUP_VALUE_EDGES 의 여덟 구간 · 낮은 쪽부터). 이웃 구간 색약 색차 9 이상 ·
+# 아무 두 구간 보통 눈 14 이상 · PANEL 대비 3 이상(test_ui_smoke 가 잰다). 범례와 말풍선에 구간 글자가 같이 있다
+SPECUP_BANDS = {
+    "dark": ("#71717a", "#14b8a6", "#7dd3fc", "#4f6ef7", "#b388ff", "#db2777", "#fb923c", "#fde047"),
+    "light": ("#8c8c95", "#0f766e", "#0c4a6e", "#3b4fd8", "#9b6bf0", "#be185d", "#d95b0c", "#713f12"),
+}
+SPECUP_BAND = SPECUP_BANDS[MODE]
+SPECUP_DIM = 0.30                   # 예산 밖 · 내 구간이 아닌 칸의 불투명도
 DIVISION_BAND_MIX = 0.16            # 그래프 바탕 띠 — PANEL 에서 그 색 쪽으로 이만큼(불투명 · PyQt 규칙 2번)
 
 

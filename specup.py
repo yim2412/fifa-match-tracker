@@ -10,7 +10,7 @@
 | OVR | `cardstats.effective_ovr` — **내 선발 그 자리**의 `spPosition` 으로(랭커가 쓴 자리가 아니다). 모르면 빼고 센다. 지금 카드의 OVR 을 모르면 그 자리는 계산할 수 없음 |
 | 걸음 비용 | 다음 카드 값 전체(거쳐 간 카드 값은 돌려받지 않는다 · 판매값은 안 센다 U7) |
 | 거르기 | 지금 OVR 이하 · 더 비싼데 OVR 이 같거나 낮은 후보를 지운다(파레토 · 볼록 껍질이 아니다) |
-| 묶음 | 뒤 걸음의 1억당 효율이 앞보다 높으면(`ratio` 배 초과) 앞 카드를 건너뛰고 뒤 카드를 바로 산다. 줄마다 하나씩 줄어 반드시 끝나고, 끝나면 효율이 단조다 |
+| 묶음 | 앞 카드를 건너뛰고 뒤 카드를 **바로 사는** 1억당 효율이 앞 카드 효율의 `ratio` 배보다 높으면 건너뛴다(앞 카드 값이 안 버려진다). 줄마다 하나씩 줄어 반드시 끝나고, 끝나면 효율이 단조다 |
 | 병합 | 자리마다 첫 걸음 가운데 효율이 가장 높은 것을 고르고 **고를 때마다 전체 후보에서 다시 계산**한다 — 그래서 빠진 칸·급여로 건너뛴 칸이 저절로 다시 들어온다(5a ⓒ · M4) |
 | 같은 선수 | 지금 선발의 다른 자리에 있는 선수는 처음부터 뺀다. 한 자리가 산 선수는 다른 자리에서 못 쓴다(그 자리가 나중에 다른 카드로 바꿔도) |
 | 급여 | 지금 팀 급여 합 − 그 자리 직전 카드 급여 + 새 카드 급여 ≤ 상한. 이미 상한을 넘었으면(라이브 급여가 바뀐 뒤) 합이 안 늘어나는 걸음은 둔다. 지금 카드 중 하나라도 급여를 모르면 안 막는다(`salary_on` 거짓) |
@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+from bisect import bisect_right
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
@@ -115,17 +116,19 @@ class Inputs:
     prices: dict = field(default_factory=dict)      # (spid, 강화) → (값, 읽은 날)
     extras: dict = field(default_factory=dict)      # spid → card_extra 줄
     salaries: dict = field(default_factory=dict)    # spid → 급여
+    manual: tuple[int, ...] = ()            # 직접 넣은 카드 — 시세·카드 정보를 같이 읽고 받는다
+    records: dict = field(default_factory=dict)     # (spid, 자리) → 오늘 받아 둔 랭커 기록(말풍선에만 · 새로 안 받는다 U16)
 
     @property
     def want(self) -> tuple[int, ...]:
-        """시세·카드 정보가 필요한 카드 — 후보 ∪ 지금 선발."""
-        return tuple(sorted({c.spid for c in self.cands} | {s.spid for s in self.lineup}))
+        """시세·카드 정보가 필요한 카드 — 후보 ∪ 지금 선발 ∪ 직접 넣은 카드."""
+        return tuple(sorted({c.spid for c in self.cands} | {s.spid for s in self.lineup} | set(self.manual)))
 
     @property
     def fetch_order(self) -> tuple[int, ...]:
-        """받는 순서(`specupcollect`) — 지금 선발 먼저(지금 카드의 OVR 을 모르면 그 자리 전체가 빈다), 그다음 많이 쓴 후보."""
+        """받는 순서(`specupcollect`) — 지금 선발 먼저(지금 카드의 OVR 을 모르면 그 자리 전체가 빈다), 직접 넣은 카드, 많이 쓴 후보."""
         cands = sorted(self.cands, key=lambda c: (-c.users, c.spid))
-        return tuple(dict.fromkeys([s.spid for s in self.lineup] + [c.spid for c in cands]))
+        return tuple(dict.fromkeys([s.spid for s in self.lineup] + list(self.manual) + [c.spid for c in cands]))
 
     @property
     def fetchable(self) -> bool:
@@ -139,6 +142,7 @@ class Plan:
     steps: list[SpecStep] = field(default_factory=list)
     slots: list[SlotState] = field(default_factory=list)
     skipped: Counter = field(default_factory=Counter)    # 뺀 이유 → 어느 자리에도 못 세운 카드 수(시세·강화 이유는 카드×강화 수)
+    why: dict = field(default_factory=dict)              # 어느 자리 어느 강화로도 못 세운 카드 → 뺀 이유(뺀 카드 수 · 직접 넣은 카드의 사유 글)
     salary_on: bool = False                              # 급여 상한을 실제로 걸었나
     salary_now: int | None = None
 
@@ -208,10 +212,10 @@ def candidates(lineups: list, min_users: int | None = None) -> tuple[CandCard, .
     return tuple(sorted(got, key=lambda c: (c.line, -c.users, c.spid)))
 
 
-def load(fconn, rconn, pick=pick_lineup, today: date | None = None) -> Inputs:
+def load(fconn, rconn, pick=pick_lineup, today: date | None = None, manual=()) -> Inputs:
     """fifa.db · rank.db(둘 다 읽기만 · 요청 0) → 재료. pick 은 선발 고르는 함수 — 화면은 표시한 판을 거르는 `core_api.specup_lineup` 을 넘긴다.
     사유가 있으면 거기까지 읽은 것만 담는다(기준 줄에 보일 닉네임·팀컬러)."""
-    out = Inputs()
+    out = Inputs(manual=tuple(dict.fromkeys(manual)))
     me = store.my_account(fconn, config.DEFAULT_MATCH_TYPE)
     if me is None:
         out.reason = NO_ME
@@ -251,6 +255,8 @@ def load(fconn, rconn, pick=pick_lineup, today: date | None = None) -> Inputs:
     out.prices = store.load_card_prices(fconn, want)
     out.extras = store.load_card_extras(fconn, want)
     out.salaries = {s: c["salary"] for s, c in store.load_card_info(fconn, want).items() if isinstance(c["salary"], int)}
+    pairs = [(c.spid, s.po) for s in out.lineup for c in out.cands if c.line == s.line]
+    out.records = store.load_ranker_stats(fconn, pairs, config.DEFAULT_MATCH_TYPE, (today or date.today()).isoformat())
     return out
 
 
@@ -313,19 +319,20 @@ def per_eok(gain: int, price: int) -> float:
 
 
 def chain(front: list[Option], base_ovr: int, ratio: float = 1.0) -> list[tuple[Option, int, tuple[Option, ...]]]:
-    """파레토 집합 → 실제로 살 걸음 [(카드, 오르는 OVR, 건너뛴 카드)]. 뒤 걸음의 효율이 앞 걸음의 ratio 배보다 높으면 앞을 건너뛴다 —
-    ratio 1 이면 효율이 거꾸로일 때만(강제 묶음 4a), 1 보다 작으면 더 굵게 묶는다(묶음 굵기 설정)."""
+    """파레토 집합 → 실제로 살 걸음 [(카드, 오르는 OVR, 건너뛴 카드)]. 앞 걸음을 건너뛰고 바로 사는 효율이 앞 걸음의 ratio 배보다
+    높으면 건너뛴다 — ratio 1 이면 바로 사는 편이 나을 때만, 1 보다 작으면 더 굵게 묶는다(묶음 굵기 설정). 앞 걸음 다음에 사는 효율은 바로 사는
+    효율보다 늘 낮으므로 남은 걸음의 효율은 단조다. 처음에는 앞 걸음 다음에 사는 효율로 견줘, 5억 +1 뒤 8억 +2(바로 사면 8억 +2)처럼
+    앞 카드 값을 버리는 걸음이 남았다(121 조각 ③)."""
     stack: list[tuple[Option, int, tuple[Option, ...]]] = []
     for o in front:
         skip: tuple[Option, ...] = ()
-        while True:
-            base = stack[-1][0].ovr if stack else base_ovr
-            gain = o.ovr - base
-            if not stack or per_eok(gain, o.price) <= ratio * per_eok(stack[-1][1], stack[-1][0].price):
+        while stack:
+            prev, g, prev_skip = stack[-1]
+            if per_eok(o.ovr - (prev.ovr - g), o.price) <= ratio * per_eok(g, prev.price):
                 break
-            prev, _g, prev_skip = stack.pop()
+            stack.pop()
             skip = prev_skip + (prev,) + skip
-        stack.append((o, gain, skip))
+        stack.append((o, o.ovr - (stack[-1][0].ovr if stack else base_ovr), skip))
     return stack
 
 
@@ -357,6 +364,9 @@ def plan(inp: Inputs, grades=None, ratio: float = 1.0, lines=None, manual=(), ca
         why.update(skipped)
     usable_keys = {k for got in opts for o in got for k in ((o.spid, None), (o.spid, o.grade))}
     out.skipped.update(v for k, v in why.items() if k not in usable_keys)   # 다른 자리에 세울 수 있는 카드는 뺀 것이 아니다
+    for (spid, _g), v in why.items():
+        if (spid, None) not in usable_keys:
+            out.why.setdefault(spid, v)
     start = list(ovr)
 
     owner: dict[int, int] = {}      # 산 선수 번호 → 자리
@@ -398,7 +408,17 @@ def budget_cut(steps: list[SpecStep], budget: int) -> int:
     return sum(1 for s in steps if s.spent <= budget)
 
 
+def value_band(value: int) -> int:
+    """구단가치 → 구간 번호(0 ~ len(SPECUP_VALUE_EDGES)) — 칸 테두리 색(U8). 경계값은 위 구간."""
+    return bisect_right(config.SPECUP_VALUE_EDGES, value)
+
+
+def band_value(step: SpecStep, value: int) -> int:
+    """그 칸의 추천 구단가치(U8) — 앞 칸을 다 샀을 때의 구단가치(지금 구단가치 + 앞 칸까지 쓴 금액)."""
+    return value + step.spent_before
+
+
 __all__ = ["CandCard", "FEW_RANKERS", "Inputs", "NO_COLOR", "NO_LINEUP", "NO_ME", "NO_SNAPSHOT", "Option", "Plan",
            "SLOT_EMPTY", "SLOT_NO_OVR", "SLOT_OK", "Slot", "SlotState", "SpecStep", "TC_ENHANCE", "TC_LIST", "TC_SPLIT",
-           "budget_cut", "candidates", "chain", "frontier", "keeps_color", "load", "per_eok", "pick_lineup", "plan",
-           "resolve_color", "same_color_rows", "slot_options"]
+           "band_value", "budget_cut", "candidates", "chain", "frontier", "keeps_color", "load", "per_eok", "pick_lineup", "plan",
+           "resolve_color", "same_color_rows", "slot_options", "value_band"]

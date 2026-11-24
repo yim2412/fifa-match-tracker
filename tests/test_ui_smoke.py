@@ -10097,7 +10097,7 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
                  15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
-                 17: "4c0f0aceb94a6cd9",                                   # 17 = 3.13.1 [스펙업 순서] 탭을 연 동안 카드 시세·능력치 읽기(121 ②)
+                 17: "f6af56e6cab9566d",                                   # 17 = 3.13.1 [스펙업 순서] 탭을 연 동안 카드 시세·능력치 읽기(121 ②)
                  16: "32fa6de6f72909c7"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C) · 백업·복원(109 B — 같은 판)
 
 
@@ -17682,8 +17682,8 @@ def test_specup_loader_filters_lineup_and_respects_latch_121():
     got, seen = [], []
     keep, keep_noted = app_main.core.specup_load, getattr(app_main.SpecupLoader, "_noted", False)
 
-    def fake(conn, rconn, pick=None, today=None):
-        seen.append((conn.execute("PRAGMA query_only").fetchone()[0], pick))
+    def fake(conn, rconn, pick=None, today=None, manual=()):
+        seen.append((conn.execute("PRAGMA query_only").fetchone()[0], pick, manual))
         try:
             conn.execute("CREATE TABLE specup_x (a)")
             seen.append("썼다")
@@ -17693,7 +17693,7 @@ def test_specup_loader_filters_lineup_and_respects_latch_121():
 
     def run(fv=0, cancel=False):
         got.clear()
-        ld = app_main.SpecupLoader(fv)
+        ld = app_main.SpecupLoader(fv, (5, 6))
         ld.ready.connect(got.append)
         if cancel:
             ld.cancel()
@@ -17702,7 +17702,7 @@ def test_specup_loader_filters_lineup_and_respects_latch_121():
     try:
         app_main.core.specup_load = fake
         assert run(7) == [(7, "재료")], got
-        assert len(seen) == 1 and seen[0][1] is app_main.core.specup_lineup, seen
+        assert len(seen) == 1 and seen[0][1] is app_main.core.specup_lineup and seen[0][2] == (5, 6), seen
         core.set_excluded({"표시"})
         try:
             side = {"ouid": "me", "player": [{"spId": 1, "spPosition": i, "spGrade": 1} for i in range(11)]}
@@ -17737,7 +17737,8 @@ class _FakeSpecupRead:
     """재료 읽는 로더 자리 — give() 로 결과를 낸다."""
     made: list = []
 
-    def __init__(self, fv=0):
+    def __init__(self, fv=0, manual=()):
+        self.manual = manual
         self.fv, self.ready, self.running, self.cancelled, self.blocked = fv, _SpecupSig(), False, False, False
         _FakeSpecupRead.made.append(self)
 
@@ -18169,6 +18170,450 @@ def test_specup_view_key_opens_and_leaves_121():
         for n in ("KEY_OF_VIEW", "start_visible_api_loader", "stop_api_loaders", "_current_view", "isVisible", "isMinimized"):
             _win.__dict__.pop(n, None)
         _win.stack.setCurrentIndex(keep_page)
+
+
+def _specup_screen_data(**kw):
+    """화면 테스트 재료 — 선발 11자리, 왼쪽 윙(27)과 공격수(25)에 살 카드. 지금 카드 실효 121(11강 · 1강 100)."""
+    import specup
+    pos = [0, 3, 5, 7, 10, 13, 15, 23, 25, 27, 9]
+    mine = [951000001 + i for i in range(11)]
+    cells = sorted(set(config.SIM_POS_OF.values()))
+
+    def ex(ovr, club=(7,)):
+        return {"sim_on": "2026-11-20", "pos_ovr": json.dumps({c: ovr for c in cells}), "club_tc": json.dumps([[i, "x"] for i in club]), "rel_tc": "[]"}
+    eok = 10 ** 8
+    d = specup.Inputs(nickname="내닉", color="가상컬러", color_id=7, value=90 * eok, taken_at="2026-11-23T10:00:00", rankers=12,
+                      lineup=tuple(specup.Slot(p, s, 11) for p, s in zip(pos, mine)))
+    d.extras = {s: ex(100) for s in mine}
+    d.salaries = {s: 28 for s in mine}
+    a, b, c, out = 952000101, 952000102, 952000103, 952000104
+    for s, o in ((a, 101), (b, 103), (c, 102)):
+        d.extras[s], d.salaries[s] = ex(o), 28
+    d.extras[out], d.salaries[out] = ex(120, club=(8,)), 28
+    d.prices = {(a, 11): (5 * eok, "2026-11-20"), (b, 11): (60 * eok, "2026-11-23"), (c, 11): (8 * eok, "2026-11-22"), (c, 13): (900 * eok, "2026-11-22")}
+    d.cands = (specup.CandCard(a, "FW", 9), specup.CandCard(b, "FW", 6), specup.CandCard(c, "GK", 5), specup.CandCard(out, "FW", 7))
+    for k, v in kw.items():
+        setattr(d, k, v)
+    return d
+
+
+class _SpecupScreen(_SpecupEnv):
+    """탭을 연 상태 — 재료를 show() 로 넣으면 그린다. 이름·설정은 지어낸 것으로."""
+
+    def __enter__(self):
+        super().__enter__()
+        self.keep_view = (_win._names, _win._positions, _win._specup_manual, _win._dirty, config.RANK_COLLECT, app_main._GAME["on"], _win.LAZY_RENDER)
+        _win._names = {951000001 + i: f"나{i}" for i in range(11)} | {952000101: "가", 952000102: "나", 952000103: "다", 952000104: "라"}
+        _win._positions = {0: "GK", 23: "RW", 25: "ST", 27: "LW"}
+        _win._current_view = lambda: ("랭커 픽", "스펙업 순서")
+        _win._specup_manual, _win._dirty = (), set()
+        _win._set_specup_manual = lambda ids: setattr(_win, "_specup_manual", ids)
+        app_main._GAME["on"] = False
+        self.reset_controls()
+        return self
+
+    @staticmethod
+    def reset_controls():
+        for chip in _win.specup_lines.values():
+            chip.setChecked(True)
+        for chip in (_win.chip_specup_more, _win.chip_specup_mine, _win.chip_specup_legend):
+            chip.setChecked(False)
+        _win.cb_specup_chunk.setCurrentIndex(0)
+        _win.ed_specup_budget.setText("")
+
+    @staticmethod
+    def show(data):
+        _win._specup_data = data
+        _win._invalidate("specup")
+        return _win.specup_grid.rows()
+
+    @staticmethod
+    def note():
+        return _win.lb_specup_note.text()
+
+    def __exit__(self, *exc):
+        _win._specup_data = None
+        self.reset_controls()
+        _win._specup_clear()
+        _win._names, _win._positions, _win._specup_manual, _win._dirty, config.RANK_COLLECT, app_main._GAME["on"], _win.LAZY_RENDER = self.keep_view
+        for n in ("_current_view", "_set_specup_manual"):
+            _win.__dict__.pop(n, None)
+        return super().__exit__(*exc)
+
+
+def test_specup_screen_cells_order_band_and_gray_121():
+    """칸 = 효율순 번호 · 자리 · OVR · 시세 · 추천 구단가치 테두리 · 살 것 없는 자리는 회색 칸(흐리지 않다) · 말풍선."""
+    with _SpecupScreen() as env:
+        cells = env.show(_specup_screen_data())
+        steps = [c for c in cells if c.order]
+        assert [(c.order, c.name, c.grade, c.gain, c.price) for c in steps] == \
+            [(1, "다", 11, "OVR +2", "8억"), (2, "가", 11, "OVR +1", "5억"), (3, "나", 11, "OVR +3", "60억")], steps
+        assert steps[0].pos == "GK" and steps[0].line == "GK" and {steps[1].pos, steps[2].pos} <= {"RW", "ST", "LW"}
+        # 90억 + 앞 칸까지 쓴 금액(0 · 8 · 13억) → 50~100억 구간 · 50~100억 · 100~200억
+        assert [c.band for c in steps] == [1, 1, 2], [c.band for c in steps]
+        d = _win.specup_grid.cell_delegate
+        assert [d.colors(c)["border"] for c in steps] == [T.SPECUP_BAND[1], T.SPECUP_BAND[1], T.SPECUP_BAND[2]]
+        gray = [c for c in cells if c.order is None]
+        assert len(gray) == 11 - len({c.pos for c in steps}) and all(c.price == "살 카드 없음" and c.band is None for c in gray), gray
+        assert all(d.opacity(c) == 1.0 for c in cells) and d.colors(gray[0])["border"] == T.BORDER
+        tip = steps[2].tip
+        for part in ("60억 BP (11-23 기준)", "OVR +3, 1억당 +0.050", "여기까지 73억 BP", "추천 구단가치 100억~200억", "산 뒤 팀 급여 308/315",
+                     "같은 팀컬러 랭커 6명이 씁니다.", "사는 값만 셌습니다."):
+            assert part in tip, (part, tip)
+        assert "바꾸는 카드: 나" in tip
+        base = _win.lb_specup_base.text()
+        assert _win._specup_plan.why == {952000104: "color_out"}
+        for part in ("기준: 내닉", "가상컬러", "구단가치 90억", "후보 랭커 12명", "카드 4장", "급여 308/315", "뺀 카드 1장"):
+            assert part in base, (part, base)
+        assert "팀컬러를 받지 못함 1장" in _win.lb_specup_base.toolTip()
+        assert [c.role for c in d.layout(steps[0], QRectF(0, 0, 120, 170), _win.specup_grid.font()) if c.role == "badge"], "강화 배지 자리가 없다"
+        bad = [(c.name, d.overflow(c, _win.specup_grid.font())) for c in cells if d.overflow(c, _win.specup_grid.font())]
+        assert not bad, bad
+        import dataclasses
+        wide = dataclasses.replace(steps[0], gain="OVR +88888888888")
+        assert d.overflow(wide, _win.specup_grid.font()) == ["gain"], "넘침 검사가 비었다"
+        # 말풍선 — 칸 위에 마우스를 올리면 그 칸의 글
+        import widgets
+        shown = []
+        keep_tip = widgets.QToolTip
+        widgets.QToolTip = SimpleNamespace(showText=lambda pos, text, w: shown.append(text), hideText=lambda: shown.append(None))
+        try:
+            ev = SimpleNamespace(globalPos=lambda: None, pos=lambda: None)
+            g = _win.specup_grid
+            assert d.helpEvent(ev, g, None, g.model().index(2, 0)) and shown == [steps[2].tip]
+            assert not d.helpEvent(ev, g, None, g.model().index(-1, 0)) and shown[-1] is None
+        finally:
+            widgets.QToolTip = keep_tip
+        assert "바로 사기" not in tip and "랭커 경기당" not in tip
+        # 건너뛴 카드(나 8억 +3 이 가 5억 +1 보다 낫다) · 오늘 받아 둔 랭커 기록이 있는 카드
+        more = _specup_screen_data(records={(952000102, p): {"status": {"matchCount": 4, "goal": 0.5, "assist": 0.25, "tackle": 2}} for p in (23, 25, 27)})
+        more.prices[952000102, 11] = (8 * 10 ** 8, "2026-11-23")
+        tips = {c.name: c.tip for c in env.show(more) if c.order}
+        assert "바로 사기: 싼 카드 1장을 거치지 않습니다." in tips["나"] and "랭커 경기당 골 0.50, 어시 0.25, 태클 2.00 (4경기)" in tips["나"], tips["나"]
+        # 급여에 막혀 있던 칸 — 앞 칸(급여 −7)을 산 뒤에야 서고, 1억당 OVR 은 앞 칸보다 높다. 나머지 칸에는 그 글이 없다
+        tight = _specup_screen_data()
+        tight.salaries[952000103], tight.salaries[952000101], tight.salaries[952000102] = 21, 42, 99
+        tight.prices[952000101, 11] = (10 ** 8, "2026-11-20")
+        tips = [(c.name, "앞 칸을 사서" in c.tip) for c in env.show(tight) if c.order]
+        assert tips == [("다", False), ("가", True)], tips
+        env.show(_specup_screen_data())
+        # 얼굴은 카드 번호에 붙는다(순서가 바뀌어도 제 칸)
+        _win.specup_grid.put_icon("face", 952000103, app_main.QPixmap(4, 4))
+        assert _win.specup_grid.icon("face", steps[0].spid) is not None and _win.specup_grid.icon("face", steps[1].spid) is None
+
+
+def test_specup_screen_settings_replan_without_reading_121():
+    """줄 끄기 · 12·13강 · 예산 · 내 구간만 — 다시 세기만 하고 다시 읽지 않는다."""
+    with _SpecupScreen() as env:
+        env.show(_specup_screen_data())
+        made = len(_FakeSpecupRead.made)
+
+        def steps():
+            return [c for c in _win.specup_grid.rows() if c.order]
+        _win.specup_lines["FW"].setChecked(False)
+        assert [c.name for c in steps()] == ["다"], "줄을 껐는데 남았다"
+        assert not [c for c in _win.specup_grid.rows() if c.line == "FW"], "꺼 둔 줄을 '살 카드 없음' 이라고 했다"
+        _win.specup_lines["FW"].setChecked(True)
+        _win.chip_specup_more.setChecked(True)
+        assert [c.grade for c in steps()][-1] == 13 and len(steps()) == 4, [(c.name, c.grade) for c in steps()]
+        _win.chip_specup_more.setChecked(False)
+        _win.ed_specup_budget.setText("20억")
+        assert [c.dim for c in steps()] == [False, False, True], "예산 밖 칸이 안 흐려졌다"
+        assert _win.lb_specup_budget.text() == "2번까지 13억 BP, OVR +3", _win.lb_specup_budget.text()
+        _win.ed_specup_budget.setText("1억")
+        assert all(c.dim for c in steps()) and "첫 칸이 8억 BP라 예산이 모자랍니다" == _win.lb_specup_budget.text()
+        _win.ed_specup_budget.setText("많이")
+        assert _win.lb_specup_budget.text() == "금액을 읽지 못했습니다" and not any(c.dim for c in steps())
+        _win.ed_specup_budget.setText("")
+        _win.chip_specup_mine.setChecked(True)
+        assert [c.dim for c in steps()] == [False, False, True], "내 구단가치 구간(50~100억) 밖 칸이 안 흐려졌다"
+        _win.chip_specup_mine.setChecked(False)
+        # 묶음 많이 — 설정에 있는 배수를 그대로 넘긴다
+        seen = []
+        keep = core.specup_plan
+        core.specup_plan = lambda *a, **k: (seen.append(k["ratio"]), keep(*a, **k))[1]
+        try:
+            _win.cb_specup_chunk.setCurrentIndex(1)
+        finally:
+            core.specup_plan = keep
+        assert seen == [config.SPECUP_CHUNK["많이"]] and config.SPECUP_CHUNK["많이"] < 1.0
+        assert len(_FakeSpecupRead.made) == made, "설정을 바꿨다고 다시 읽었다"
+        # 범례는 ? 로 열고 구간 여덟을 전부 적는다
+        assert not _win.lb_specup_legend.isVisibleTo(_win) and _win.lb_specup_legend.text().count("■") == len(config.SPECUP_VALUE_EDGES) + 1
+        _win.chip_specup_legend.setChecked(True)
+        assert not _win.lb_specup_legend.isHidden()
+        assert [_win._specup_band_text(i) for i in (0, 1, 7)] == ["50억 미만", "50억~100억", "2,000억 이상"]
+
+
+def test_specup_screen_notes_121():
+    """빈 화면·상태 글 — 사유 하나 = 글 하나. 관문은 받기만 막는다(저장된 것으로 순서표는 그린다)."""
+    import specup
+    reasons = {v for k, v in vars(specup).items() if k.isupper() and isinstance(v, str) and k.split("_")[0] in ("NO", "TC", "FEW")}
+    assert len(reasons) == 8 and reasons <= set(notice.SPECUP_TEXTS), reasons - set(notice.SPECUP_TEXTS)
+    assert {"blocked", "down", "cap"} <= set(notice.SPECUP_TEXTS) and "cancel" not in notice.SPECUP_TEXTS, "멈춤(다른 화면으로 감)은 알릴 일이 아니다"
+    texts = notice.SPECUP_TEXTS
+    with _SpecupScreen() as env:
+        config.RANK_COLLECT = True
+        for r in sorted(reasons):
+            cells = env.show(_specup_screen_data(reason=r))
+            assert texts[r] in env.note() and cells == [], (r, env.note())
+        config.RANK_COLLECT = False
+        for r in ("no_snapshot", "no_color", "few_rankers"):
+            env.show(_specup_screen_data(reason=r))
+            assert env.note() == texts["collect_off"], (r, env.note())
+        env.show(_specup_screen_data(reason="no_me"))
+        assert env.note() == texts["no_me"], "내 계정이 없는 것은 수집과 무관하다"
+        config.WEB_DATA = False
+        env.show(_specup_screen_data(reason="no_me"))
+        assert env.note() == texts["no_me"], "받아도 안 풀리는 사유에 받기 사정을 덧붙였다"
+        env.show(_specup_screen_data(reason="tc_list"))
+        assert env.note() == texts["tc_list"] + " " + texts["web_off"], env.note()
+        config.WEB_DATA = True
+        data = _specup_screen_data()
+        assert env.show(data) and env.note().startswith(texts["more_grades"])   # 열한 자리 가운데 여덟이 빈다
+        _win.chip_specup_more.setChecked(True)
+        assert env.note() == "", env.note()
+        config.WEB_DATA = False
+        assert env.show(data) and env.note() == texts["web_off"] and not _win.btn_specup_notice.isVisibleTo(_win.btn_specup_notice.parentWidget())
+        config.WEB_DATA, config.NOTICE_ACCEPTED = True, config.SPECUP_NOTICE_VERSION - 1
+        assert env.show(data) and env.note() == texts["notice"] and not _win.btn_specup_notice.isHidden(), "[안내 보기] 가 없다"
+        config.NOTICE_ACCEPTED = config.SPECUP_NOTICE_VERSION
+        app_main._GAME["on"] = True
+        _win.stop_api_loaders()
+        assert env.note() == texts["game"], env.note()
+        app_main._GAME["on"] = False
+        _win._card_sched = SimpleNamespace(running=lambda: True)   # 카드 자동 채우기가 도는 동안이라 바로 못 켠다 — 글은 바뀌어야 한다
+        _win.start_visible_api_loader()
+        assert env.note() == "" and not _FakeSpecupFetch.made, env.note()
+        _win._card_sched = None
+        _win.start_visible_api_loader()
+        ld = _FakeSpecupFetch.made[-1]
+        assert env.note() == texts["checking"], env.note()
+        ld.progress.emit(3, 1200)
+        assert env.note() == notice.specup_collecting(3, 1200) == "시세를 모으는 중입니다(3/1,200장). 다 받으면 순서를 새로 냅니다."
+        assert _win.specup_grid.rows(), "받는 동안 순서표가 비었다"
+        for stop in ("blocked", "down", "cap"):
+            _win._specup_fetch = None
+            _win._start_specup_fetch()
+            _FakeSpecupFetch.made[-1].end(saved=0, stop=stop)
+            assert env.note() == texts[stop], (stop, env.note())
+        _win._start_specup_fetch()
+        _FakeSpecupFetch.made[-1].end(saved=0, error="OperationalError")
+        assert env.note() == texts["error"]
+        # 다시 읽는 동안 — 보던 순서를 두고 글만 · 못 읽었으면 비우고 까닭
+        _win._specup_reset()
+        assert env.note() == texts["reading"] and _win.specup_grid.rows(), env.note()
+        _FakeSpecupRead.made[-1].give(None)
+        assert env.note() == texts["unread"] and not _win.specup_grid.rows(), env.note()
+        empty = _specup_screen_data(prices={})
+        _win.chip_specup_more.setChecked(False)
+        env.show(empty)
+        assert texts["empty"] in env.note()
+
+
+def test_specup_screen_redraws_when_data_arrives_121():
+    """재료가 오면 보이는 탭은 바로 그린다 · 안 보이면 낡음 표시만 하고 열 때 그린다 · 지우기·내려놓기 뒤엔 닉네임도 카드도 안 남는다."""
+    with _SpecupScreen() as env:
+        _win.start_visible_api_loader()
+        _FakeSpecupRead.made[-1].give(_specup_screen_data())
+        assert len([c for c in _win.specup_grid.rows() if c.order]) == 3
+        _win._current_view = lambda: ("대시보드", None)
+        _win.LAZY_RENDER = True
+        env.vis = False
+        _win._specup_reset()
+        assert "specup" in _win._dirty, "안 보이는 동안 낡은 것을 모른다"
+        assert _win.KEY_OF_VIEW[("랭커 픽", "스펙업 순서")] == "specup" and "specup" in _win._renderers()
+        _win._specup_clear()
+        assert not _win.specup_grid.rows() and not _win.lb_specup_base.text() and not _win.lb_specup_base.toolTip() and _win._specup_plan is None
+    import ast
+    import inspect
+    import textwrap
+    for fn in (app_main.MainWindow.release_memory, app_main.MainWindow._forget_everything):
+        called = {n.func.attr for n in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(fn))))
+                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
+        assert "_specup_clear" in called, f"{fn.__name__} 뒤에 화면에 남는다"
+
+
+def test_specup_manual_cards_121():
+    """직접 넣기 — 5명 문턱만 면제 · 넣으면 다시 읽고(받을 목록에 든다) · 빼면 다시 세기만 · 상한 · 상태 글 · 설정에 남는다."""
+    with _SpecupScreen() as env:
+        data = _specup_screen_data()
+        data.cands = data.cands[1:]                        # 카드 "가" 를 쓰는 랭커가 다섯 명이 안 된다
+        assert "가" not in [c.name for c in env.show(data)]
+        # 이름 칸 — 한 글자부터 후보가 뜨고(조합 중 글자도), [넣기]·[빼기]·[안내 보기] 가 이어져 있다
+        _win.ed_specup_name.setText("가")
+        assert _win.cb_specup_card.findData(952000101) >= 0, "이름을 쳐도 후보가 없다"
+        _win.ed_specup_name.clear()
+        assert _win._name_ime_edits.get(_win.ed_specup_name) is _win.cb_specup_card
+        called = []
+        _win._on_specup_drop = lambda: called.append("drop")
+        _win.ask_notice_update = lambda *a: called.append(("notice", a))
+        _win.btn_specup_drop.click()
+        _win.btn_specup_notice.click()
+        del _win._on_specup_drop, _win.ask_notice_update
+        assert called == ["drop", ("notice", ())], called
+        _win.cb_specup_card.clear()
+        _win.btn_specup_add.click()
+        assert _win._specup_manual == () and _win.lb_specup_budget.text() == "선수 이름을 넣고 카드를 고르세요."
+        _win.cb_specup_card.addItem("가", 952000101)
+        _win._on_specup_add()
+        assert _win._specup_manual == (952000101,) and _FakeSpecupRead.made[-1].manual == (952000101,), "다시 읽지 않았다"
+        data.manual = (952000101,)
+        _FakeSpecupRead.made[-1].give(data)
+        assert "가" in [c.name for c in _win.specup_grid.rows() if c.order], "넣은 카드가 순서에 없다"
+        assert data.fetch_order[11] == 952000101 and 952000101 in data.want, "시세를 받을 목록에 없다"
+        assert _win.cb_specup_manual.itemText(0).startswith("2번: 가") and not _win.btn_specup_drop.isHidden(), _win.cb_specup_manual.itemText(0)
+        made = len(_FakeSpecupRead.made)
+        _win.cb_specup_card.clear()
+        _win.cb_specup_card.addItem("가", 952000101)
+        _win._on_specup_add()
+        assert len(_FakeSpecupRead.made) == made, "같은 카드를 두 번 넣었다"
+        _win._specup_manual = (952000104, 952000102)
+        _win._specup_redraw()
+        got = [_win.cb_specup_manual.itemText(i) for i in range(2)]
+        assert got[0].startswith("팀컬러를 받지 못함: 라") and got[1].startswith("3번: 나") or got[1].startswith("2번: 나"), got
+        _win.cb_specup_manual.setCurrentIndex(0)
+        _win._on_specup_drop()
+        assert _win._specup_manual == (952000102,) and len(_FakeSpecupRead.made) == made, "뺐다고 다시 읽었다"
+        _win._specup_manual = tuple(range(1, config.SPECUP_MANUAL_MAX + 1))
+        _win._on_specup_add()
+        assert len(_win._specup_manual) == config.SPECUP_MANUAL_MAX and f"{config.SPECUP_MANUAL_MAX}장까지" in _win.lb_specup_budget.text()
+    s = _win._settings()
+    keep = s.value(_win.SPECUP_MANUAL_SETTING)
+    keep_ids = _win._specup_manual
+    try:
+        _win._set_specup_manual((5, 6))
+        assert _win._load_specup_manual() == (5, 6)
+        s.setValue(_win.SPECUP_MANUAL_SETTING, "x,7,7," + ",".join(str(i) for i in range(20, 60)))
+        got = _win._load_specup_manual()
+        assert got[:2] == (7, 20) and len(got) == config.SPECUP_MANUAL_MAX, got
+    finally:
+        s.setValue(_win.SPECUP_MANUAL_SETTING, keep if keep is not None else "")
+        _win._specup_manual = keep_ids
+
+
+def test_specup_screen_opens_card_and_faces_121():
+    """칸을 누르면(Enter·두 번) 그 카드 창 · 얼굴은 모르는 것만 한 번 · 끊긴 로더의 것은 다음에 다시 · 종료 표가 기다린다."""
+    class _Img:
+        made: list = []
+
+        def __init__(self, ids, cache):
+            self.ids, self.loaded, self.finished, self.stopped = ids, _SpecupSig(), _SpecupSig(), False
+            _Img.made.append(self)
+
+        def start(self):
+            pass
+
+        def isRunning(self):
+            return True
+
+        def cancel(self):
+            self.stopped = True
+
+        def cancelled(self):
+            return self.stopped
+
+        def sp_ids(self):
+            return self.ids
+
+    keep = app_main.ImageLoader, _win._specup_face_loader, set(_win._specup_faces_tried), list(_win._retired_loaders), dict(_win.specup_grid._icons)
+    opened = []
+    try:
+        app_main.ImageLoader = _Img
+        _win._specup_face_loader, _win._specup_faces_tried = None, set()
+        _win.specup_grid._icons.clear()
+        _win._show_player_info = lambda sp, grade=None: opened.append((sp, grade))
+        with _SpecupScreen() as env:
+            env.show(_specup_screen_data())
+            idx = _win.specup_grid.model().index(0, 0)
+            _win.specup_grid.activated.emit(idx)
+            assert opened == [(952000103, 11)], opened
+            first = _Img.made[-1]
+            assert 952000103 in first.ids and 951000001 not in first.ids and len(first.ids) == len(set(first.ids))
+            env.show(_specup_screen_data())
+            assert first.stopped and first in _win._retired_loaders and len(_Img.made) == 2, "끊긴 로더의 얼굴을 다시 안 물었다"
+            face = pathlib.Path(tempfile.mkdtemp()) / "face.png"
+            pm = app_main.QPixmap(8, 8)
+            pm.fill(Qt.GlobalColor.red)
+            pm.save(str(face))
+            _Img.made[-1].loaded.emit(952000103, str(face))
+            assert _win.specup_grid.icon("face", 952000103) is not None, "받은 얼굴이 안 붙는다"
+            first.finished.emit()
+            assert not _win._specup_faces_tried, "끊긴 로더를 물어본 것으로 쳤다"
+            _Img.made[-1].finished.emit()
+            n = len(_Img.made)
+            env.show(_specup_screen_data())
+            assert len(_Img.made) == n, "넥슨에 없는 얼굴을 다시 그릴 때마다 되묻는다"
+        log = []
+        _win._specup_face_loader = _FakeThread("얼굴", log)
+        assert _win._specup_face_loader in _win.shutdown(fast=True) and "stop 얼굴" in log, log
+    finally:
+        app_main.ImageLoader, _win._specup_face_loader, _win._specup_faces_tried, _win._retired_loaders = keep[:4]
+        _win.specup_grid._icons.clear()
+        _win.specup_grid._icons.update(keep[4])
+        _win.__dict__.pop("_show_player_info", None)
+
+
+def test_specup_grid_wraps_and_keeps_scroll_121():
+    """창 폭에 맞춰 줄을 바꾸고(가로 스크롤 없음), 다시 채워도 보던 자리를 지킨다 · 정사각이 아닌 얼굴은 늘어나지 않는다."""
+    import widgets
+    g = widgets.SpecupGrid()
+    size = g.cell_delegate.cell_size(g.font())
+    cells = [widgets.SpecCell(1, 11, "이름", i, "ST", "FW", "OVR +1", "1억", 0) for i in range(1, 41)]
+    g.resize(size.width() * 4 + 40, size.height() * 2)
+    g.show()
+    g.set_rows(cells)
+    _app.processEvents()
+    rects = [g.visualRect(g.model().index(i, 0)) for i in range(6)]
+    assert len({r.top() for r in rects[:4]}) == 1 and rects[4].top() > rects[3].top() and rects[4].left() == rects[0].left(), rects
+    assert g.horizontalScrollBar().maximum() == 0
+    g.resize(size.width() * 2 + 40, size.height() * 2)
+    _app.processEvents()
+    assert g.visualRect(g.model().index(2, 0)).top() > g.visualRect(g.model().index(1, 0)).top(), "좁혔는데 줄이 안 바뀐다"
+    g.verticalScrollBar().setValue(300)
+    g.set_rows(list(cells))
+    _app.processEvents()
+    assert g.verticalScrollBar().value() == 300, "다시 채우면 맨 위로 튄다"
+    pm = app_main.QPixmap(40, 80)
+    pm.fill(Qt.GlobalColor.red)
+    path = pathlib.Path(tempfile.mkdtemp()) / "f.png"
+    pm.save(str(path))
+    g.put_face(1, str(path))
+    got = g.icon("face", 1)
+    assert got.width() == got.height() and got.toImage().pixelColor(0, got.height() // 2).alpha() == 0, "세로로 긴 얼굴이 늘어났다"
+    g.put_face(2, str(path.with_name("없음.png")))
+    assert g.icon("face", 2) is None
+    g.close()
+    g.deleteLater()
+
+
+def test_specup_band_palette_and_prices_121():
+    """구간 색 — 구간 수만큼 · 이웃 색약 색차 8 · 아무 둘 보통 눈 10 · PANEL 대비 3. 경계값은 위 구간. 시세 글은 10억 밑 소수 첫째 자리."""
+    import itertools
+    from widgets import price_bp
+    for mode, bands in T.SPECUP_BANDS.items():
+        assert len(bands) == len(config.SPECUP_VALUE_EDGES) + 1 == 8, mode
+        panel = T._PALETTES[mode]["PANEL"]
+        assert all(T.contrast(c, panel) >= 3 for c in bands), (mode, [round(T.contrast(c, panel), 2) for c in bands])
+        assert all(T.cvd_delta(a, b) >= 8 for a, b in zip(bands, bands[1:])), mode
+        assert all(T.cvd_delta(a, b, True) >= 10 for a, b in itertools.combinations(bands, 2)), mode
+    assert T.SPECUP_BAND is T.SPECUP_BANDS[T.MODE]
+    eok = 10 ** 8
+    assert list(config.SPECUP_VALUE_EDGES) == sorted(config.SPECUP_VALUE_EDGES)
+    assert [core.specup_value_band(v) for v in (0, 50 * eok - 1, 50 * eok, 2000 * eok - 1, 2000 * eok)] == [0, 0, 1, 6, 7]
+    assert [price_bp(v) for v in (227_000_000, 100_000_000, 999_999_999, 1_240_000_000, 90_000_000)] == ["2.3억", "1억", "10억", "12억", "9,000만"]
+
+
+def test_specup_screen_fits_min_window_121():
+    """1280×720 에서 칸·줄이 창을 넘지 않는다 · 안내 글자(플레이스홀더)가 안 잘린다."""
+    with _SpecupScreen() as env:
+        env.show(_specup_screen_data())
+        _win.chip_specup_legend.setChecked(True)
+        tab = _win.specup_grid.parentWidget()
+        assert tab.minimumSizeHint().width() <= 1280 - T.SIDEBAR_W - 60, tab.minimumSizeHint().width()
+        for ed in (_win.ed_specup_budget, _win.ed_specup_name):
+            need = app_main.QFontMetrics(ed.font()).horizontalAdvance(ed.placeholderText())
+            assert ed.maximumWidth() >= need + 24, (ed.placeholderText(), need)
 
 
 def test_specup_quit_and_release_121():

@@ -82,6 +82,7 @@ MUST_SAME = {"divstay", "rewards", "poslevel", "distcmp", "history", "ranktrend"
 # 그림이 안 바뀌어도 되는 숫자 화면 — 이 지어낸 자료·창 상태에서 바뀔 이유가 없다(이유를 적는다)
 REDRAW_MAX_S = 2.0   # ROADMAP 109 J6 — 상한 2초. 전 화면 한꺼번에는 15,000판에서 4~5초라(위 시험이 찍는다) 열린 화면 하나에 건다
 EXEMPT = {
+    "specup": "재료를 작업 스레드가 DB 에서 읽는다(여기선 안 읽어 비어 있다). 표시한 판은 기준 선발 고르기 specup_lineup 이 거른다(test_specup)",
     "arrivals": "지어낸 자료에 영입(거래) 기록이 없어 빈 화면이다 — 영입 전후 숫자는 test_filter 의 arrival_report 가 잰다",
 }
 

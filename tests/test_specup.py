@@ -217,20 +217,24 @@ def test_frontier_starts_from_current_card():
 
 
 def test_chain_forced_merge_repeats_until_monotone():
-    plain = [opt(1, 10, 123), opt(2, 20, 125), opt(3, 40, 127)]          # 0.2 · 0.1 · 0.05 — 그대로
-    assert [(o.spid, g, s) for o, g, s in sp.chain(plain, 121)] == [(1, 2, ()), (2, 2, ()), (3, 2, ())]
+    plain = [opt(1, 10, 123), opt(2, 20, 125), opt(3, 40, 127)]          # 바로 사도 0.2 · 0.2 · 0.1(2 다음) — 낫지 않으니 그대로
+    assert [(o.spid, g, s) for o, g, s in sp.chain(plain, 121)] == [(1, 2, ()), (2, 2, ()), (3, 2, ())], "같으면 안 묶는다"
+    # 앞 카드 값을 버리는 걸음 — 5억 +1 뒤 8억 +1 은 앞보다 낮은 0.125 지만, 바로 사면 8억 +2(0.25)라 앞(0.2)을 건너뛴다
+    assert [(o.spid, g, tuple(x.spid for x in s)) for o, g, s in sp.chain([opt(1, 5, 122), opt(2, 8, 123)], 121)] == [(2, 2, (1,))]
     # 0.1 뒤 0.133 → 앞을 건너뛰고 바로(+5/30)
     a, b = opt(1, 10, 122), opt(2, 30, 126)
     assert [(o.spid, g, tuple(x.spid for x in s)) for o, g, s in sp.chain([a, b], 121)] == [(2, 5, (1,))]
-    # 되풀이: 1(0.3) · 2(+1/10 = 0.1) · 3(+9/30 = 0.3) → 3이 2를 건너뛰면 +10/30 = 0.333 > 0.3 이라 1도 건너뛴다
-    c = [opt(1, 10, 124), opt(2, 10.5, 125), opt(3, 30, 134)]
+    # 되풀이: 1(0.3) · 2(바로 4/20 = 0.2 라 남음 · 1 다음이면 0.05) · 3 은 2를 건너뛰고(10/30 = 0.333 > 0.05), 1도 건너뛴다(13/30 = 0.433 > 0.3)
+    c = [opt(1, 10, 124), opt(2, 20, 125), opt(3, 30, 134)]
     got = sp.chain(c, 121)
     assert [(o.spid, g, tuple(x.spid for x in s)) for o, g, s in got] == [(3, 13, (1, 2))], got
-    # 같으면 안 묶는다 · 굵기 0.5 면 앞의 절반보다 높은 뒤를 묶는다
-    eq = [opt(1, 10, 122), opt(2, 20, 124)]
-    assert len(sp.chain(eq, 121)) == 2
-    assert [o.spid for o, _g, _s in sp.chain(plain, 121, 0.4)] == [2, 3], "0.1 > 0.4×0.2 는 묶고, 0.05 < 0.4×0.2 는 둔다"
-    assert [o.spid for o, _g, _s in sp.chain(plain, 121, 0.5)] == [1, 2, 3], "딱 0.5배는 안 묶는다"
+    # 멈출 자리에서 멈춘다 — 3 이 2만 건너뛴다(1 부터 바로 7/30 = 0.233 < 0.3)
+    got = sp.chain([opt(1, 10, 124), opt(2, 20, 125), opt(3, 30, 128)], 121)
+    assert [(o.spid, g, tuple(x.spid for x in s)) for o, g, s in got] == [(1, 3, ()), (3, 4, (2,))], got
+    # 굵기 — 바로 사는 효율(3/20 = 0.15)이 앞(0.2)의 그 배수보다 높으면 묶는다(딱 0.75배는 안 묶는다)
+    two = [opt(1, 10, 123), opt(2, 20, 124)]
+    assert [o.spid for o, _g, _s in sp.chain(two, 121, 0.75)] == [1, 2] and [o.spid for o, _g, _s in sp.chain(two, 121, 0.7)] == [2]
+    assert [o.spid for o, _g, _s in sp.chain(plain, 121, 0.4)] == [3]
 
 
 def test_chain_is_monotone_on_random_fronts():
@@ -243,6 +247,10 @@ def test_chain_is_monotone_on_random_fronts():
             got = sp.chain(front, 121, ratio)
             eff = [sp.per_eok(g, o.price) for o, g, _s in got]
             assert all(b <= ratio * a for a, b in zip(eff, eff[1:])), eff
+            base = 121
+            for (o, g, _s), (o2, _g2, _s2) in zip(got, got[1:]):   # 남은 앞 걸음은 뒤 카드를 바로 사는 것보다 못하지 않다
+                assert sp.per_eok(o2.ovr - base, o2.price) <= ratio * sp.per_eok(g, o.price), (o, o2)
+                base = o.ovr
             assert got[-1][0] is front[-1] and sum(g for _o, g, _s in got) == front[-1].ovr - 121
             assert sum(1 + len(s) for _o, _g, s in got) == n, "건너뛴 카드까지 합치면 처음 목록"
 
@@ -482,6 +490,45 @@ def test_load_reads_one_person_without_requests():
                 assert core.specup_load(d.f, d.r, pick=core.specup_lineup).reason == sp.NO_LINEUP
         finally:
             core.set_excluded(())
+
+
+def test_load_manual_and_ranker_records():
+    """직접 넣은 카드는 시세·카드 정보를 같이 읽고 받는 순서는 선발 다음 · 후보가 아니라서 5명 셈에 안 든다 · 랭커 기록은 오늘 받아 둔 것만."""
+    x = 200_000_777
+    with db() as d:
+        store.save_card_prices(d.f, x, {11: 3 * EOK}, "2026-11-21")
+        store.save_ranker_stats(d.f, [(A, 0)], [{"spId": A, "spPosition": 0, "status": {"matchCount": 4, "goal": 1}}],
+                                config.DEFAULT_MATCH_TYPE, TODAY.isoformat())
+        store.save_ranker_stats(d.f, [(x, 0)], [{"spId": x, "spPosition": 0, "status": {"matchCount": 4}}],
+                                config.DEFAULT_MATCH_TYPE, (TODAY - timedelta(days=1)).isoformat())
+        inp = core.specup_load(d.f, d.r, pick=core.specup_lineup, manual=(x, x), today=TODAY)
+        assert inp.manual == (x,) and x in inp.want and inp.prices[x, 11] == (3 * EOK, "2026-11-21")
+        assert inp.fetch_order[:11] == tuple(MINE) and inp.fetch_order[11:] == (x, A), inp.fetch_order
+        assert [c.spid for c in inp.cands] == [A]
+        assert list(inp.records) == [(A, 0)] and inp.records[A, 0]["status"]["matchCount"] == 4, inp.records
+        later = core.specup_load(d.f, d.r, pick=core.specup_lineup, today=TODAY + timedelta(days=1))
+        assert later.records == {} and later.manual == (), "어제 받은 랭커 기록을 썼다"
+
+
+def test_why_keeps_reason_per_card():
+    """뺀 카드의 사유 — 다른 자리에 세울 수 있으면 뺀 것이 아니다 · 사유 수와 이유 묶음이 같다."""
+    x, y = 200_000_801, 200_000_802
+    inp = make({x: (["FW"], extra(120, club=(OTHER,)), {11: 1}, 28), y: (["FW"], extra(120), {}, 28)})
+    p = sp.plan(inp, grades=(11,))
+    assert p.why == {x: "color_out", y: "price"}, p.why
+    inp.prices[y, 11] = (EOK, "d")
+    got = sp.plan(inp, grades=(10, 11))
+    assert got.why == {x: "color_out"} and got.skipped["price"] == 1, (got.why, got.skipped)   # 11강은 살 수 있는 카드다
+
+
+def test_value_band_uses_money_spent_before():
+    """추천 구단가치(U8) = 지금 구단가치 + 앞 칸까지 쓴 금액. 그 칸의 값은 안 든다. 경계값은 위 구간."""
+    with cfg(SPECUP_VALUE_EDGES=(10 * EOK, 20 * EOK)):
+        assert [sp.value_band(v) for v in (0, 10 * EOK - 1, 10 * EOK, 20 * EOK)] == [0, 0, 1, 2]
+        steps = sp.plan(make(GOLD)).steps
+        assert len(steps) > 1 and steps[0].spent_before == 0
+        assert sp.band_value(steps[0], 9 * EOK) == 9 * EOK
+        assert sp.band_value(steps[1], 9 * EOK) == 9 * EOK + steps[0].price
 
 
 def test_load_reasons():

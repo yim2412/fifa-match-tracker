@@ -188,6 +188,37 @@ def test_list_enter_and_double_click_open_once():
     top.deleteLater()
 
 
+def test_specup_grid_keyboard():
+    """[스펙업 순서] 칸(121) — Tab 으로 들어가면 첫 칸이 지금 칸이고, 오른쪽·아래 화살표로 옮겨 Enter 로 그 칸을 연다."""
+    top = QWidget()
+    v = QVBoxLayout(top)
+    btn = QPushButton("앞")
+    g = widgets.SpecupGrid()
+    g.set_rows([widgets.SpecCell(100 + i, 11, f"카드{i}", i + 1, "ST", "FW", "OVR +1", "1억", 0) for i in range(9)])
+    v.addWidget(btn)
+    v.addWidget(g, 1)
+    size = g.cell_delegate.cell_size(g.font())
+    top.resize(size.width() * 4 + 60, size.height() * 3 + 80)
+    top.show()
+    top.activateWindow()
+    _pump()
+    hits = []
+    g.activated.connect(lambda idx: hits.append(g.row(idx.row()).spid))
+    btn.setFocus(Qt.FocusReason.MouseFocusReason)
+    QTest.keyClick(btn, Qt.Key.Key_Tab)
+    _pump()
+    assert _app.focusWidget() is g and g.selectionModel().isSelected(g.currentIndex()) and g.currentIndex().row() == 0
+    before = _img(top)
+    QTest.keyClick(g, Qt.Key.Key_Right)
+    assert g.currentIndex().row() == 1 and _img(top) != before, "지금 칸 표시가 안 옮겨 간다"
+    QTest.keyClick(g, Qt.Key.Key_Down)
+    assert g.currentIndex().row() == 5, g.currentIndex().row()
+    QTest.keyClick(g, Qt.Key.Key_Return)
+    assert hits == [105], hits
+    top.close()
+    top.deleteLater()
+
+
 def _plain_dialog():
     d = QDialog()
     v = QVBoxLayout(d)

@@ -8,12 +8,14 @@
 | 경기 | 고정 seed(`config.DEMO_SEED`)로 만든 상세 JSON — `store.save_matches`·`models.parse_match` 를 그대로 거친다 |
 | 시각 | 넥슨 원문처럼 **UTC** 문자열(`matchtime` 이 KST 로 읽는다) — 오늘에서 거꾸로 `DEMO_DAYS` 일 |
 | 이름 | 구단주·선수 이름 전부 지어낸 것(실제 닉네임·선수 이름 없음) · 시즌 번호도 넥슨에 없는 번호 |
+| 랭커 | 지어낸 랭커 12명의 선발(`specup_seed`) · 스냅숏 한 장 · 카드 시세와 능력치 · 팀컬러 목록 — [스펙업 순서] 칸이 서게(121) |
 | 메타 | 등급·포지션·경기 종류는 넥슨 공개 메타와 같은 꼴 · 선수 이름표는 지어낸 이름만 |
 """
 from __future__ import annotations
 
 import json
 import random
+from dataclasses import dataclass
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
@@ -22,8 +24,11 @@ import requests
 import config
 import matchtime
 import nexon_api
+import rankcollect
+import ranker
 import seasons as sn
 import store
+import teamcolor
 
 NICK = "둘러보기구단주"
 OUID = "d" * 31 + "1"
@@ -50,6 +55,13 @@ _GIVEN = ["가온", "나래", "다온", "라온", "마루", "바다", "새벽", 
           "해솔", "도담", "보람", "시온", "여울", "윤슬", "이든", "지안", "태오", "하늘", "누리"]
 _NICK_A = ["푸른", "붉은", "조용한", "빠른", "느긋한", "단단한", "새벽", "한낮", "별빛", "바람", "번개", "작은"]
 _NICK_B = ["여우", "늑대", "고래", "참새", "호랑이", "수달", "매", "곰", "사자", "두더지", "다람쥐", "펭귄"]
+
+
+# [스펙업 순서] 자료(121) — 팀컬러 목록에는 이름이 같은 짝을 하나 넣어 엠블럼으로 가르는 길을 그대로 지난다.
+# 엠블럼 키는 그림 주소가 없는 폴더라(images.icon_url "") 받을 그림이 없다
+COLOR, COLOR_ID, COLOR_EMBLEM = "가상 팀컬러", 9901, "demo/1.png"
+SPECUP_RANKERS = 12
+SPECUP_MY_RANK = 57
 
 
 class _NoNetwork(requests.Session):
@@ -116,12 +128,13 @@ class DemoAPI(nexon_api.FCOnlineAPI):
 class DemoData:
     """지어낸 자료 한 벌 — ids 는 최신순(넥슨 목록과 같은 순서)."""
 
-    def __init__(self, details: list[dict], meta: dict, best_at: str, seasons: list):
+    def __init__(self, details: list[dict], meta: dict, best_at: str, seasons: list, specup: "SpecupSeed | None" = None):
         self.details = {d["matchId"]: d for d in details}
         self.ids = [d["matchId"] for d in sorted(details, key=lambda d: d["matchDate"], reverse=True)]
         self.meta = meta
         self.best_at = best_at
         self.seasons = seasons
+        self.specup = specup
 
 
 def _name(rng: random.Random) -> str:
@@ -267,6 +280,70 @@ def _session_stamps(seed: int, start: datetime, days: int, n: int) -> list[datet
 _SESSION_MAX = 8   # 한 묶음 최대 판수 — 마지막 판이 자정을 넘지 않게(시작 20시 + 8판 × 16분 안)
 
 
+@dataclass
+class SpecupSeed:
+    """[스펙업 순서] 재료 — 랭커끼리의 경기(내 경기 목록에 안 든다) · 랭커 줄 · 카드."""
+    matches: list                  # 경기 상세
+    rankers: list                  # (프로필 번호, 닉네임, ouid, 순위, match_id, KST 날짜)
+    cards: dict                    # spid → (이름, 1강 OVR, 급여)
+    today: date
+
+
+def specup_seed(mine, names: dict, today: date, seed: int) -> SpecupSeed:
+    """자리마다 카드 셋을 두고 랭커 12명이 그중 하나씩 쓴다(앞 둘은 다섯 명 넘게). 난수를 따로 뽑아 내 경기 내용은 그대로다."""
+    rng = random.Random(f"{seed}:specup")
+    cards = {sp: (names[sp], 108 + rng.randint(0, 3), rng.randint(23, 26)) for sp, _g in mine}   # 교체까지 - 최근 경기 선발에 교체가 들어간 판이 있다
+    pool = []
+    for slot in range(11):
+        row = []
+        for k in range(3):
+            sp = rng.choice(list(CARD_SEASONS)) * 1_000_000 + 980_000 + slot * 10 + k
+            cards[sp] = (_name(rng), 110 + 2 * k + rng.randint(0, 1), rng.randint(24, 27))
+            row.append(sp)
+        pool.append(row)
+    squads = [[(pool[s][(i % 2) if i < 11 else 2], 8 + (i + s) % 4) for s in range(11)]
+              + [(sp, 1) for sp, _g in mine[11:]] for i in range(SPECUP_RANKERS)]
+    people = [(700_001 + i, f"{_NICK_A[i % len(_NICK_A)]}랭커{i + 1}", f"{i + 1:031x}".replace("0", "c") + "9") for i in range(SPECUP_RANKERS)]
+    kst = datetime.combine(today - timedelta(days=1), dtime(12))
+    matches, rankers = [], []
+    for j in range(0, SPECUP_RANKERS, 2):
+        mid = f"demospec{j:016d}"
+        sides = [_side(rng, people[j + k][2], people[j + k][1], 800, squads[j + k], 1, "무", 50) for k in range(2)]
+        matches.append({"matchId": mid, "matchDate": (kst - timedelta(hours=config.MATCH_DATE_OFFSET_H)).strftime("%Y-%m-%dT%H:%M:%S"),
+                        "matchType": MATCH_TYPE, "matchInfo": sides})
+        rankers += [(*people[j + k], j + k + 1, mid, kst.date().isoformat()) for k in range(2)]
+    return SpecupSeed(matches, rankers, cards, today)
+
+
+def specup_prices(ovr: int) -> dict[int, int]:
+    """강화 1~13강 시세 — OVR 한 칸에 1.6배, 강화 한 단계에 1.7배(지어낸 값)."""
+    return {g: int(2_000_000 * 1.6 ** (ovr - 108) * 1.7 ** (g - 1)) // 10_000 * 10_000 for g in range(1, 14)}
+
+
+def install_specup(conn, rconn, seed: SpecupSeed) -> None:
+    day = seed.today.isoformat()
+    store.save_matches(conn, seed.matches)
+    store.set_trade_state(conn, my_ouid=OUID)   # 내 계정 — 순서표는 내 계정을 기준으로 센다
+    store.save_teamcolor_meta(conn, [teamcolor.TeamColorMeta(COLOR_ID, COLOR, COLOR_EMBLEM, "", 4, 11),
+                                     teamcolor.TeamColorMeta(COLOR_ID + 1, COLOR, "demo/2.png", "", 4, 11)], day)
+    for spid, (name, ovr, salary) in seed.cards.items():
+        store.save_card_prices(conn, spid, specup_prices(ovr), day)
+        store.save_card_info(conn, spid, name, None, ovr, salary, day)
+        with conn:
+            conn.execute("INSERT OR REPLACE INTO card_extra (spid, pos_ovr, club_tc, rel_tc, sim_on) VALUES (?, ?, ?, '[]', ?)",
+                         (spid, json.dumps({c: ovr for c in set(config.SIM_POS_OF.values())}), json.dumps([[COLOR_ID, COLOR]]), day))
+    for sn_, nick, ouid, rank, mid, mday in seed.rankers:
+        store.save_ranker_squad(conn, sn_, nickname=nick, ouid=ouid, rank=rank, match_id=mid, match_day=mday,
+                                fetched_at=f"{mday}T12:00:00", fail=None, source="pick")
+    at = datetime.combine(seed.today, dtime(0))
+    rows = [ranker.RankRow(rank, sn_, nick, team_value=30_000_000_000 + rank, elo=4200.0 - rank, win=60, draw=10, lose=30,
+                           team_color=COLOR, color_count=11, formation="4-2-3-1", team_color_emblem=COLOR_EMBLEM)
+            for sn_, nick, _o, rank, _m, _d in seed.rankers]
+    rows.append(ranker.RankRow(SPECUP_MY_RANK, 700_900, NICK, team_value=9_000_000_000, elo=3900.0, win=50, draw=10, lose=40,
+                               team_color=COLOR, color_count=11, formation="4-2-3-1", team_color_emblem=COLOR_EMBLEM))
+    rankcollect.save_snapshot(rconn, rows, at)
+
+
 def generate(today: date | None = None, n: int | None = None, seed: int | None = None) -> DemoData:
     """지어낸 자료 한 벌 — 같은 seed·today 면 바이트까지 같다."""
     today = today or date.today()
@@ -323,7 +400,9 @@ def generate(today: date | None = None, n: int | None = None, seed: int | None =
         "spid": [{"id": sp, "name": nm} for sp, nm in sorted(names.items())],
     }
     best_at = (stamps[n // 2] - timedelta(hours=config.MATCH_DATE_OFFSET_H)).strftime("%Y-%m-%dT%H:%M:%S") if n else ""
-    return DemoData(details, meta, best_at, seasons)
+    specup = specup_seed(mine, names, today, config.DEMO_SEED if seed is None else seed)
+    meta["spid"] += [{"id": sp, "name": nm} for sp, (nm, _o, _s) in sorted(specup.cards.items()) if sp not in names]
+    return DemoData(details, meta, best_at, seasons, specup)
 
 
 def install(data: DemoData, db_path: Path, cache_dir: Path) -> None:
@@ -333,6 +412,12 @@ def install(data: DemoData, db_path: Path, cache_dir: Path) -> None:
         store.save_matches(conn, list(data.details.values()))
         store.save_seasons(conn, data.seasons)
         store.upsert_account(conn, OUID, NICK)
+        if data.specup is not None:
+            rconn = rankcollect.open_rank_db(db_path.parent / config.RANK_DB_PATH.name)
+            try:
+                install_specup(conn, rconn, data.specup)
+            finally:
+                rconn.close()
     finally:
         conn.close()
     cache_dir.mkdir(parents=True, exist_ok=True)

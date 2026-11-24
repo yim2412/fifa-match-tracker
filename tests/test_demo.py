@@ -205,6 +205,50 @@ def test_search_toggles_and_check_make_no_requests():
     dlg.deleteLater()
 
 
+def test_specup_demo_cells_stand():
+    """121 ③ — 둘러보기 자료만으로 [스펙업 순서] 칸이 선다(요청 0 · 이름이 같은 팀컬러를 엠블럼으로 가른다). 자료를 빼면 사유 글이 뜬다."""
+    shell, win = _SHELL_WIN
+    win._specup_visible = lambda: True
+    keep_view = win._current_view
+    win._current_view = lambda: ("랭커 픽", "스펙업 순서")
+    try:
+        win._specup_reset()
+        assert _pump(lambda: win._specup_data is not None), "재료를 못 읽었다"
+        data = win._specup_data
+        assert data.reason == "" and data.nickname == demodata.NICK and data.color_id == demodata.COLOR_ID, (data.reason, data.color_id)
+        conn = app_main.store.open_db(config.DB_PATH)
+        try:
+            same = [m for m in app_main.store.load_teamcolor_meta(conn)[0] if m["name"] == demodata.COLOR]
+        finally:
+            conn.close()
+        assert len(same) == 2, "이름이 같은 짝이 없으면 엠블럼으로 가르는 길을 안 지난다"
+        assert data.rankers == demodata.SPECUP_RANKERS >= config.RECOMMEND_MIN_RANKERS
+        cells = [c for c in win.specup_grid.rows() if c.order]
+        assert len(cells) >= 11 and all(not c.name.isdigit() for c in cells), "지어낸 이름이 없는 카드가 있다"
+        assert win.lb_specup_note.text() == app_main.notice.SPECUP_TEXTS["web_off"], win.lb_specup_note.text()
+        assert "후보 랭커 12명" in win.lb_specup_base.text()
+    finally:
+        del win._specup_visible
+        win.__dict__.pop("_current_view", None)
+        assert win._current_view == keep_view
+        win._specup_data = None
+    # 자료가 있어서 선 것인지 — 랭커 자료 없이 넣으면 사유가 남는다
+    import sqlite3
+    import specup
+    with tempfile.TemporaryDirectory() as tmp:
+        bare = demodata.generate()
+        bare.specup = None
+        demodata.install(bare, Path(tmp) / "fifa.db", Path(tmp) / "c")
+        conn = sqlite3.connect(Path(tmp) / "fifa.db")
+        conn.row_factory = sqlite3.Row
+        try:
+            assert specup.load(conn, None).reason == specup.NO_ME
+        finally:
+            conn.close()
+        assert not (Path(tmp) / config.RANK_DB_PATH.name).exists()
+    assert SENT == [], SENT
+
+
 def test_specup_tab_makes_no_requests():
     """121 ② — 둘러보기에서 [스펙업 순서] 가 보여도 재료만 읽고(저장된 것) 요청은 0. 관문을 억지로 열어도 웹 스위치가 막는다."""
     shell, win = _SHELL_WIN
