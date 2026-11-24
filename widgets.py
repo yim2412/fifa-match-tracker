@@ -2209,6 +2209,25 @@ def paint_wdl_strip(p: QPainter, r: QRectF, segments: list[tuple[float, str]]) -
     p.restore()
 
 
+class StepBar(QWidget):
+    """칸 막대(110 ④) — 전체 top 칸 가운데 value 칸을 채운다. 값에 좋고 나쁨이 없어 흐린 글자색으로 칠한다(초록·빨강은 좋음·나쁨이다)."""
+    HEIGHT = 8
+    GAP = 2
+
+    def __init__(self, value: int, top: int):
+        super().__init__()
+        self.value, self.top = value, top
+        self.setFixedHeight(self.HEIGHT)
+        self.setMinimumWidth(top * 8)
+        self.setAccessibleName(f"{value}/{top}")
+
+    def paintEvent(self, _event) -> None:
+        p = QPainter(self)
+        w = (self.width() - self.GAP * (self.top - 1)) / self.top
+        for i in range(self.top):
+            p.fillRect(QRectF(i * (w + self.GAP), 0, w, self.height()), QColor(T.TEXT_DIM if i < self.value else T.BORDER))
+
+
 class WdlBar(QWidget):
     """승·무·패 막대(P2) — 6px 세 칸 막대 + "1,861승 404무 1,774패"(승·패만 색 · 글자가 같이 있어 색은 보조).
 

@@ -366,7 +366,7 @@ def test_blocked_elsewhere_in_the_middle_stops_next_card():
 # ── 관문 ────────────────────────────────────────────────────────────────────
 
 def test_gate_needs_web_data_and_notice_17():
-    assert config.SPECUP_NOTICE_VERSION == 17 == config.NOTICE_VERSION
+    assert config.SPECUP_NOTICE_VERSION == 17 <= config.NOTICE_VERSION
     for web, acc, want in ((True, 17, True), (True, 16, False), (False, 17, False), (True, 0, False), (True, 18, True)):
         with cfg(WEB_DATA=web, NOTICE_ACCEPTED=acc):
             assert config.specup_allowed() is want, (web, acc)

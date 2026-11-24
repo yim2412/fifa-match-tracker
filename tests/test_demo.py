@@ -275,6 +275,32 @@ def test_specup_tab_makes_no_requests():
     assert SENT == [], SENT
 
 
+def test_tactic_buttons_off_and_no_requests():
+    """110 ④ E7 — 둘러보기는 홈페이지 데이터가 꺼져 있어 저장 전술 단추가 까닭과 함께 꺼지고, 억지로 열어도 요청 0."""
+    import tactics
+    shell, win = _SHELL_WIN
+    assert not config.tactic_allowed() and config.tactic_block() == "off_web"
+    win._sim_pick, win._compare_tactic = (1, "가"), ("ok", "가")
+    try:
+        win._refresh_tactic_buttons()
+        for btn in (win.btn_sim_tactic, win.btn_compare_tactic):
+            assert not btn.isEnabled() and "홈페이지 데이터" in btn.toolTip(), btn.toolTip()
+        win._open_tactic("가", sn=1)
+        win._tactic_target = tactics.Target(1, "가", "o", ({},))
+        assert win._start_tactic() is False and win._tactic_workers == [] and "홈페이지 데이터" in win._tactic_dialog.lb_state.text()
+        keep = config.tactic_block
+        config.tactic_block = lambda: ""      # 관문을 억지로 열어도 웹 스위치가 막는다
+        try:
+            assert win._start_tactic() is True, "관문을 열었는데 안 떴다(위가 빈 검사)"
+            assert _pump(lambda: not win._tactic_running())
+        finally:
+            config.tactic_block = keep
+    finally:
+        win._tactic_drop()
+        win._sim_pick = win._compare_tactic = None
+    assert SENT == [], SENT
+
+
 def test_restart_uses_original_env():
     shell, win = _SHELL_WIN
     got = []

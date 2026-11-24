@@ -32,7 +32,7 @@ if os.path.isdir("C:/Windows/Fonts"):
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QThread, QTimer, Qt  # noqa: E402
+from PySide6.QtCore import QEvent, QItemSelectionModel, QPointF, QRectF, QThread, QTimer, Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 QThread.start = lambda self, *a, **k: None  # 백그라운드 조회 차단
@@ -43,6 +43,7 @@ import boostcollect  # noqa: E402
 import config  # noqa: E402
 import core_api as core  # noqa: E402
 import crashlog  # noqa: E402
+import glossary  # noqa: E402
 import images  # noqa: E402
 import models  # noqa: E402
 import nexon_api  # noqa: E402
@@ -55,6 +56,8 @@ import requests  # noqa: E402
 import seasons as sn  # noqa: E402
 import store  # noqa: E402
 import stats as st_mod  # noqa: E402
+import tactic_codes  # noqa: E402
+import tactics  # noqa: E402
 import teamcolor  # noqa: E402
 import traitcollect  # noqa: E402
 import updatecheck  # noqa: E402
@@ -8023,6 +8026,7 @@ def test_release_drops_every_reference():
         del pf
         # 구단주 비교 상대(76) — 비교한 상대의 상세 전부를 쥔다(같은 상세 객체로 심어 내려놓기가 놓는지 잰다)
         _win._compare_last = ("상대", list(matches), "opp", list(details), "")
+        _win._tactic_target = tactics.Target(1, "상대", "opp", tuple(details[:config.TACTIC_RECENT]))   # 110 ④ 열어 둔 전술 창
         # 테스트 쪽 참조는 지운다 — 창은 넘긴 목록 객체를 그대로 쥐므로, 그 목록을 '내 것'으로 빼면 창의 참조도 안 보인다
         mine: set = set()
         del matches, details
@@ -9974,7 +9978,8 @@ def test_notice_versions_split_first_and_reask():
                                             (14, False, True, True),    # 15 가 올라서 14 동의자도(108 C — 수집과 무관)
                                             (15, False, True, True),    # 16 이 올라서 15 동의자도(109 C — 키 보관 위치 · 수집과 무관)
                                             (16, False, True, True),    # 17 이 올라서 16 동의자도 수집을 켰으면(121 스펙업 순서)
-                                            (17, False, False, True)]:
+                                            (17, False, True, True),    # 18 이 올라서 17 동의자도 수집을 켰으면(110 ④ 저장 전술)
+                                            (18, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -9984,7 +9989,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (17, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (18, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
@@ -9997,7 +10002,8 @@ def test_notice_versions_split_first_and_reask():
         assert config.STARTUP_CHECK_NOTICE_VERSION == 15
         # 3.10.1: 16 = API 키 보관 위치(109 C) — 수집과 무관해 수집 끈 15 동의자에게도
         # 3.13.1: 17 = 스펙업 순서(121) — 후보가 수집 스냅숏에서 나와 수집 몫. 수집 끈 16 동의자에겐 안 묻고 켤 때 묻는다
-        assert config.NOTICE_COLLECT_ONLY_FROM == 16 and config.SPECUP_NOTICE_VERSION == 17
+        # 3.14.1: 18 = 랭커의 저장 전술(110 ④) — 수집을 끈 사람은 단추가 안 켜져 수집 몫. 수집 끈 17 동의자에겐 안 묻는다(U7)
+        assert config.NOTICE_COLLECT_ONLY_FROM == 16 and config.SPECUP_NOTICE_VERSION == 17 and config.TACTIC_NOTICE_VERSION == 18
         config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, 15
         assert config.notice_update_pending(), "수집을 끈 15 동의자에게 16 을 안 물었다(109 C)"
         for acc in (14, 13, 12, 8):
@@ -10014,8 +10020,15 @@ def test_notice_versions_split_first_and_reask():
         assert config.notice_update_pending(), "수집을 켠 16 동의자에게 17 을 안 물었다(U12)"
         assert "스펙업 순서" in notice.changes_html(16) and "스펙업 순서" in notice.WEB_DATA_HTML
         config.NOTICE_ACCEPTED = 17
+        assert config.notice_update_pending() and not config.tactic_allowed()
+        assert "저장 전술" in notice.changes_html(17) and "스펙업" not in notice.changes_html(17)
+        assert f"하루 최대 {config.TACTIC_WEB_DAILY_REQ:,}번" in notice.RANK_COLLECT_HTML and "전술 보기" in notice.RANK_COLLECT_HTML
+        config.RANK_COLLECT = False
+        assert not config.notice_update_pending(), "수집을 끈 17 동의자에게 18 을 물었다(U7)"
+        config.NOTICE_ACCEPTED = 18
         assert not config.notice_update_pending()
         config.WEB_DATA = config.RANK_COLLECT = True
+        assert config.tactic_allowed()
         for acc, person in ((5, False), (6, True)):
             config.NOTICE_ACCEPTED = acc
             assert config.meta_person_allowed() is person, acc
@@ -10098,6 +10111,7 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
                  15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
+                 18: "c318775aef609f08",                                   # 18 = 3.14.1 [전술 보기]를 누를 때 랭커의 저장 전술 읽기(110 ④)
                  17: "f6af56e6cab9566d",                                   # 17 = 3.13.1 [스펙업 순서] 탭을 연 동안 카드 시세·능력치 읽기(121 ②)
                  16: "32fa6de6f72909c7"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C) · 백업·복원(109 B — 같은 판)
 
@@ -17674,6 +17688,541 @@ def test_similar_loader_reads_steps_and_ouids_and_stays_empty_when_clearing_110(
             _win._sim_workers, _win._sim_loader = keep_workers, None
     finally:
         _similar_cleanup()
+
+
+class _TacticEnv(_MetaEnv):
+    """110 ④ — 수집 켜짐 + 실제 rank.db. 창과 받아 둔 것을 비우고 시작해 비우고 끝난다. 거래·랭커 픽 잇기는 이름만 적는다."""
+
+    def __enter__(self):
+        super().__enter__()
+        self.kept = {n: getattr(_win, n) for n in ("_api", "_compare_loader", "_loader", "_compare_last", "_compare_tactic", "_sim_pick")}
+        self.keep_key = config.API_KEY
+        config.API_KEY = "k"
+        _win._loader = _win._compare_loader = None
+        _win._tactic_drop()
+        self.log = []
+        _win.start_trades = lambda: self.log.append("trades")
+        _win.start_visible_api_loader = lambda: self.log.append("visible")
+        return self
+
+    def __exit__(self, *exc):
+        _win._tactic_drop()
+        del _win.start_trades, _win.start_visible_api_loader
+        _win._tactic_workers = []
+        config.API_KEY = self.keep_key
+        for n, v in self.kept.items():
+            setattr(_win, n, v)
+        out = super().__exit__(*exc)
+        _win._refresh_tactic_buttons()
+        return out
+
+
+def _tactic_result(n=1, cells=1, state="ok", strategies=2):
+    """지어낸 결과 — 전술 n 개, 묶음마다 같은 내용의 칸 cells 개."""
+    strat = (("AR", 1), ("IN", 2), ("SR", 1), ("DP", 1))[:strategies]
+    players = tuple(tactics.TacticPlayer(role, 101000001 + i, strat if role == "st" else (), (1 + i % 3, 2))
+                    for i, role in enumerate(("gk", "rb", "rcb", "lcb", "lb", "cdm", "rm", "rcm", "lcm", "lm", "st")))
+    team = tuple((k, 4 if k != "defdepth" else 9) for k in tactic_codes.TEAM_KEYS[:3]) + tuple((k, 3) for k in tactic_codes.TEAM_KEYS[3:])
+    return tactics.TacticResult(state=state, formation="4-1-4-0-1", match_id="m", match_at=datetime(2026, 11, 24, 13, 5), requests=15, total=15,
+                                tactics=[tactics.Tactic(tuple((1, 0, (i * cells + j) % 10) for j in range(cells)), team, players) for i in range(n)])
+
+
+def test_110_tactic_button_similar_follows_one_picked_row():
+    """[비슷한 랭커] [전술 보기] — 고른 줄이 없으면 꺼짐 · 목록이 둘이어도 고른 사람은 하나 · 다시 그리면 꺼짐 · 수집·홈페이지 데이터가 꺼졌으면
+    까닭과 함께 꺼짐 · 안내 18 전에는 켜져 있다(창에서 묻는다 · U7)."""
+    starters = _win._my_latest_starters()
+    form_label = core.snapshot_formation(core.formation_of(starters))
+    keep_start = app_main.SimilarLoader.start
+    app_main.SimilarLoader.start = lambda w: w.run()
+    opened = []
+    try:
+        with _TacticEnv() as env:
+            _similar_fixture(form_label)
+            _win._go_page("랭커 픽", "비슷한 랭커")
+            _win._sim_reset()
+            _win._invalidate("similar")
+            fm, cl, btn = _win.sim_lists["formation"], _win.sim_lists["color"], _win.btn_sim_tactic
+            assert fm.rowCount() > 2 and cl.rowCount() > 2
+            assert _win._sim_pick is None and not btn.isEnabled() and "먼저 고르세요" in btn.toolTip(), btn.toolTip()
+            _win._open_tactic = lambda nick, **k: opened.append((nick, k))
+            fm.setCurrentIndex(fm.model().index(1, 0))
+            assert _win._sim_pick == fm.row(1).key and btn.isEnabled() and btn.toolTip() == ""
+            cl.setCurrentIndex(cl.model().index(2, 0))
+            assert _win._sim_pick == cl.row(2).key, _win._sim_pick
+            assert not fm.selectionModel().hasSelection() and not fm.currentIndex().isValid() and fm.current() is None
+            btn.click()
+            assert opened == [(cl.row(2).key[1], {"sn": cl.row(2).key[0]})], opened
+            fm.setCurrentIndex(fm.model().index(1, 0))   # 되돌아와 같은 줄을 다시 골라도 잡힌다
+            assert _win._sim_pick == fm.row(1).key and not cl.selectionModel().hasSelection()
+            fm.clearSelection()
+            assert _win._sim_pick is None and not btn.isEnabled()
+            fm.setCurrentIndex(fm.model().index(1, 0))
+            fm.selectionModel().select(fm.model().index(1, 0), QItemSelectionModel.SelectionFlag.ClearAndSelect)
+            assert btn.isEnabled()
+            _win._invalidate("similar")                  # 다시 그리면 고른 줄이 사라진다
+            assert _win._sim_pick is None and not btn.isEnabled()
+            for kw, word in ((dict(collect=0), "랭킹 수집"), (dict(notice=17), "")):
+                fm.setCurrentIndex(fm.model().index(0, 0))
+                env.write(**kw)
+                _win._refresh_tactic_buttons()
+                assert btn.isEnabled() is (not word) and word in btn.toolTip(), (kw, btn.toolTip())
+                env.write()
+            config.WEB_DATA = False
+            _win._refresh_tactic_buttons()
+            assert not btn.isEnabled() and "홈페이지 데이터" in btn.toolTip()
+            config.WEB_DATA = True
+            env.write(collect=0)                         # 수집을 끄면 목록이 비고 고른 것도 없다
+            _win._invalidate("similar")
+            assert _win._sim_pick is None and not btn.isEnabled()
+    finally:
+        _win.__dict__.pop("_open_tactic", None)
+        app_main.SimilarLoader.start = keep_start
+        _similar_cleanup()
+        _win._sim_reset()
+        _win._go_page("대시보드")
+
+
+def test_110_tactic_button_compare_uses_current_nickname_only():
+    """[구단주 비교] 단추 — 비교가 끝난 뒤에만 · 넥슨이 준 지금 닉네임이 1만 위 안일 때만(입력한 옛 닉네임이 남의 번호여도 안 쓴다) ·
+    받는 중·다시 조회·내려놓은 뒤 꺼짐 · 누르면 받은 경기 앞 몇 판만 넘긴다(오픈API 0)."""
+    btn = _win.btn_compare_tactic
+    api = _CompareApi()
+    opp = core.match_sides(next(x for x in _DETAILS if app_main.parse_match(x, _OUID)), _OUID)[1]["ouid"]   # 기록이 있는 상대
+    got = []
+    try:
+        with _TacticEnv():
+            _win._api = api
+            assert not btn.isEnabled()
+
+            def compare():
+                _win._compare_loader = None
+                _win._start_compare("g9", opp)
+                _run_compare_loader_offline()
+                _win._refresh_tactic_buttons()   # 위 도우미가 돌리는 동안 웹 데이터를 끈다
+            # 원본이 없을 때
+            compare()
+            assert _win._compare_tactic == ("noraw", "새닉네임") and not btn.isEnabled() and "원본" in btn.toolTip(), (_win._compare_tactic, btn.toolTip())
+            # 입력한 닉네임(g9)은 스냅숏에 있지만 그 사람은 지금 "새닉네임" — 스냅숏에 없다
+            _meta_db_moving()
+            _win._compare_loader = None
+            _win._start_compare("g9", opp)
+            assert not btn.isEnabled() and btn.toolTip() == "", "조회 중인데 켜져 있다"
+            _win._compare_loader = None
+            compare()
+            assert _win._compare_tactic == ("outside", "새닉네임") and not btn.isEnabled() and "1만 위" in btn.toolTip()
+            _rank_files_gone()
+            _meta_db_moving(me=("새닉네임", 777))
+            _win._compare_loader = None
+            compare()
+            assert _win._compare_tactic == ("ok", "새닉네임") and btn.isEnabled() and btn.toolTip() == "", (_win._compare_tactic, btn.toolTip())
+            nick, matches, ouid, details, _st = _win._compare_last
+            assert len(details) > 0
+            _win._start_tactic = lambda: got.append(_win._tactic_target)
+            many = list(details) * 9
+            _win._compare_last = (nick, matches, ouid, many, "")
+            btn.click()
+            t, = got
+            assert (t.sn, t.nick, t.ouid) == (777, "새닉네임", ouid) and t.details == tuple(many[:config.TACTIC_RECENT]), t
+            assert len(many) > config.TACTIC_RECENT and _win._tactic_dialog.isVisible() and "15위" in _win._tactic_dialog.lb_sub.text()
+            _win._tactic_dialog.close()
+            # 받는 중(partial)·멈춘 비교에서는 눌러도 안 연다
+            got.clear()
+            for state in ("receiving", "호출 한도"):
+                _win._compare_last = (nick, matches, ouid, details, state)
+                _win._on_compare_tactic()
+            _win._compare_last = None
+            _win._on_compare_tactic()
+            assert got == [] and not _win._tactic_dialog.isVisible()
+            # 수집을 끄면 꺼진다(sync 한 자리)
+            config.WEB_DATA = False
+            _win._refresh_tactic_buttons()
+            assert not btn.isEnabled() and "홈페이지 데이터" in btn.toolTip()
+            config.WEB_DATA = True
+            _win._refresh_tactic_buttons()
+            assert btn.isEnabled()
+            assert btn.isEnabled()
+            import ast
+            import inspect
+            import textwrap
+            calls = [n.func.attr for n in ast.walk(ast.parse(textwrap.dedent(inspect.getsource(app_main.MainWindow.release_memory))))
+                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+            assert "_refresh_compare_tactic" in calls, "내려놓은 뒤에도 앞 상대의 단추가 켜져 있다"
+            _win._compare_loader = None
+            _win._start_compare("g9", opp)
+            assert not btn.isEnabled(), "새로 조회하는데 앞 상대의 단추가 남았다"
+    finally:
+        _win.__dict__.pop("_start_tactic", None)
+        _win.ed_compare_nick.setText("")
+        _win.btn_compare.setEnabled(True)
+        _win.lb_compare_status.setText("")
+        _win._refresh_compare_tactic()
+        _win._go_page("대시보드")
+
+
+class _TacticApi:
+    """E1 의 오픈API — 부른 것을 적는다."""
+
+    def __init__(self, details):
+        self.details, self.calls = {d["matchId"]: d for d in details}, []
+
+    def get_ouid(self, nick, attempts=3):
+        self.calls.append("ouid")
+        return "o-" + nick
+
+    def get_match_ids(self, ouid, matchtype, offset, limit, attempts=3):
+        self.calls.append(("ids", ouid, limit))
+        return list(self.details)
+
+    def get_match_detail_nocache(self, mid, attempts=1):
+        self.calls.append(("detail", mid))
+        return self.details[mid]
+
+
+def test_110_tactic_similar_row_to_window_and_request_counts():
+    """E1 — 번호로 스냅숏에서 찾아 오픈API 3번 + 스쿼드메이커 15번, 창에 그린다. 다시 열면 스쿼드메이커 0. 1만 위 밖·원본 없음은 요청 0 으로 글만."""
+    import matchtime
+    line = [0, 3, 4, 6, 7, 10, 12, 13, 15, 16, 25]
+    at = matchtime.raw_bound(datetime.now() - timedelta(hours=3))
+    d = {"matchId": "tm1", "matchDate": at,
+         "matchInfo": [{"ouid": "o-g7", "player": [{"spId": 7000 + i, "spPosition": p, "spGrade": 8} for i, p in enumerate(line)]}]}
+    st = dict.fromkeys(tactic_codes.TEAM_KEYS, 0)
+    cell = {"ResultCode": 1, "ResultData": {"Squadinfo": {"teamSt": st, "players": [
+        {"spid": 7000 + i, "role": tactic_codes.POSITION_ROLE[p], "state": 1} for i, p in enumerate(line)]}}}
+    web = []
+
+    def fetch(_s, sn, t, part, seq):
+        web.append(sn)
+        return cell if (t, part) == (1, 0) and seq < 2 else {"ResultCode": -1}
+
+    keep = traitcollect.fetch_cell, app_main.TacticLoader.start, config.RANKER_PICK_GAP_S
+    traitcollect.fetch_cell, config.RANKER_PICK_GAP_S = fetch, 0
+    app_main.TacticLoader.start = lambda w: w.run()
+    conn = store.open_db(config.DB_PATH)
+    with conn:
+        conn.execute("DELETE FROM api_budget")
+    conn.close()
+    try:
+        with _TacticEnv():
+            api = _win._api = _TacticApi([d])
+            _win._open_tactic("g7", sn=907)
+            dlg = _win._tactic_dialog
+            assert api.calls == [] and web == [] and "원본이 없습니다" in dlg.lb_state.text(), (api.calls, dlg.lb_state.text())
+            _meta_db_moving()
+            _win._open_tactic("없음", sn=5)
+            assert api.calls == [] and web == [] and "1만 위" in dlg.lb_state.text() and _win._tactic_target is None
+            _win._tactic_target = tactics.Target(1, "앞사람")
+            _win._open_tactic("없음", sn=5)
+            assert _win._tactic_target is None, "볼 수 없는 사람을 열었는데 앞사람이 남았다"
+            _win._start_tactic = lambda: None
+            _win._open_tactic("스냅숏 뒤에 바뀐 이름", sn=907)
+            assert _win._tactic_target.sn == 907 and "7위" in dlg.lb_sub.text(), "번호로 찾지 않았다"
+            del _win._start_tactic
+            dlg.close()
+            _win._open_tactic("g7", sn=907)
+            assert api.calls == ["ouid", ("ids", "o-g7", config.TACTIC_RECENT), ("detail", "tm1")], api.calls
+            assert web == [907] * 15, len(web)
+            assert len(dlg.tables) == 1 and dlg.lb_title.text() == "g7" and dlg.lb_sub.text().startswith("7위 · 4-"), dlg.lb_sub.text()
+            assert dlg.box.itemAt(0).widget().title() == "전술 1: 대표 A팀 전술 1 외 1칸"
+            assert list(_win._tactic_cache) == [(907, "tm1", date.today())]
+            _win._tactic_dialog.close()
+            assert _win._tactic_cache, "닫아도 이 실행 동안은 기억한다"
+            _win._tactic_loader = None
+            _win._open_tactic("g7", sn=907)
+            assert len(web) == 15 and len(dlg.tables) == 1 and len(api.calls) == 6, (len(web), api.calls)
+            _win._tactic_loader = None
+            _win._open_tactic("g7", sn=907)              # 창을 연 채 다시 눌러도 새 경기가 있는지 확인한다(받는 중일 때만 앞으로만)
+            assert len(api.calls) == 9 and len(web) == 15, (len(web), api.calls)
+            # 다른 날이면 새로 받는다 — 열쇠에 날짜가 있다
+            res = _win._tactic_cache.pop((907, "tm1", date.today()))
+            _win._tactic_cache[(907, "tm1", date.today() - timedelta(days=1))] = res
+            dlg.close()
+            _win._tactic_loader = None
+            _win._open_tactic("g7", sn=907)
+            assert len(web) == 30, len(web)
+            # 하루 몫을 다 썼어도 받아 둔 사람은 보인다 · 끝까지 못 받은 것은 기억하지 않는다
+            c = store.open_db(config.DB_PATH)
+            with c:
+                c.execute("UPDATE api_budget SET attempts = ? WHERE kind = ?", (config.TACTIC_WEB_DAILY_REQ, store.BUDGET_TACTIC_WEB))
+            c.close()
+            dlg.close()
+            _win._tactic_loader = None
+            _win._open_tactic("g7", sn=907)
+            assert len(dlg.tables) == 1 and len(web) == 30
+            _win._tactic_cache.clear()
+            dlg.close()
+            _win._tactic_loader = None
+            _win._open_tactic("g7", sn=907)
+            assert "다 받지 못합니다" in dlg.lb_state.text() and len(web) == 30 and _win._tactic_cache == {}
+    finally:
+        traitcollect.fetch_cell, app_main.TacticLoader.start, config.RANKER_PICK_GAP_S = keep
+        conn = store.open_db(config.DB_PATH)
+        with conn:
+            conn.execute("DELETE FROM api_budget")
+        conn.close()
+
+
+def test_110_tactic_start_gate_order_and_notice():
+    """시작 차례: 지우는 중 → 검색·비교 → 키(E1 만) → 관문. 안내 18 전이면 창에 [안내 보기] — 동의하면 그 자리에서 이어 받고, 거절하면 그대로."""
+    made = []
+
+    class _Ld(app_main.TacticLoader):
+        def start(self):
+            made.append(self.target)
+
+    keep = app_main.TacticLoader, app_main.NoticeDialog
+    app_main.TacticLoader = _Ld
+    target = tactics.Target(1, "가", "o", None)
+    given = tactics.Target(1, "가", "o", ({},))
+    try:
+        with _TacticEnv() as env:
+            _win._open_tactic("g7", sn=907)             # 창을 만든다(원본 없음)
+            dlg = _win._tactic_dialog
+            made.clear()
+
+            def start(t=target):
+                made.clear()
+                _win._tactic_loader, _win._tactic_workers, _win._tactic_target = None, [], t
+                return _win._start_tactic()
+            assert start() is True and made == [target] and "확인하는 중" in dlg.lb_state.text(), dlg.lb_state.text()
+            # 끝 처리를 마쳤지만 아직 isRunning 인 로더는 기다리지 않되 계속 쥔다(놓으면 프로세스가 죽는다) · 끝난 것은 놓는다
+            ending, gone = _FakeThread("ending", []), _FakeThread("gone", [], running=False)
+            ending.ended = gone.ended = True
+            made.clear()
+            _win._tactic_loader, _win._tactic_workers, _win._tactic_target = None, [ending, gone], target
+            assert _win._start_tactic() is True and _win._tactic_workers == [ending, _win._tactic_loader], _win._tactic_workers
+            _win._quitting = True
+            try:
+                assert start() is False and made == [], "끄는 중에 새로 받기 시작했다"
+            finally:
+                _win._quitting = False
+            busy = _FakeThread("s", [])
+            config.API_KEY = ""
+            env.write(notice=17)
+            _win._loader = busy
+            app_main.CLEARING.add(app_main.STORE_FIFA)
+            try:
+                assert start() is False and "정리하는 중" in dlg.lb_state.text() and made == []
+                _win._open_tactic("g7", sn=907)
+                assert "정리하는 중" in dlg.lb_state.text()
+            finally:
+                app_main.CLEARING.clear()
+            assert start() is False and "다른 조회" in dlg.lb_state.text()
+            _win._loader = None
+            _win._compare_loader = busy
+            assert start() is False and "다른 조회" in dlg.lb_state.text()
+            _win._compare_loader = None
+            assert start() is False and "API 키가 없어" in dlg.lb_state.text() and dlg.btn_notice.isHidden()
+            assert start(given) is False and "동의해야" in dlg.lb_state.text(), "구단주 비교 길은 키를 안 본다"
+            assert not dlg.btn_notice.isHidden() and made == []
+            config.API_KEY = "k"
+            env.write(notice=17, collect=0)
+            assert start() is False and "랭킹 수집" in dlg.lb_state.text() and dlg.btn_notice.isHidden(), "수집을 끈 17 동의자에게 [안내 보기]"
+            # 안내 — 거절
+            env.write(notice=17)
+            assert start() is False and not dlg.btn_notice.isHidden()
+
+            class _No:
+                parents = []
+
+                def __init__(self, parent=None, reask=False):
+                    _No.parents.append(parent)
+
+                def exec(self):
+                    return app_main.QDialog.DialogCode.Rejected
+
+            class _Yes(_No):
+                def exec(self):
+                    env.write()
+                    return app_main.QDialog.DialogCode.Accepted
+            app_main.NoticeDialog = _No
+            dlg.front()
+            dlg.btn_notice.click()
+            assert _No.parents == [dlg] and made == [] and "동의해야" in dlg.lb_state.text() and dlg.isVisible()
+            app_main.NoticeDialog = _Yes
+            dlg.btn_notice.click()
+            assert made == [target] and dlg.isVisible() and dlg.btn_notice.isHidden(), "동의했는데 이어 받지 않거나 창을 닫았다"
+            # 걸쇠가 start 에서 막은 로더(blocked) — 걸린 채 남지 않는다
+            app_main.TacticLoader = keep[0]
+            _win._tactic_loader, _win._tactic_workers = None, []
+            keep_held = _win._held_by_clearing
+            _win._held_by_clearing = lambda *a: False
+            app_main.CLEARING.add(app_main.STORE_FIFA)
+            try:
+                app_main.TacticLoader.start = app_main.Worker.start
+                assert _win._start_tactic() is False and _win._tactic_loader is None and "정리하는 중" in dlg.lb_state.text()
+            finally:
+                app_main.CLEARING.clear()
+                del app_main.TacticLoader.start
+                _win._held_by_clearing = keep_held
+    finally:
+        app_main.TacticLoader, app_main.NoticeDialog = keep
+
+
+def test_110_tactic_switch_off_closes_but_consent_does_not():
+    """E4 — 끄는 길(sync_ranker_pick_data)은 받아 둔 것·창을 비우고, 동의 직후·안내 전에는 그대로 둔다. 기록 지우기·내려놓기도 비운다."""
+    with _TacticEnv() as env:
+        _win._open_tactic("g7", sn=907)
+        dlg = _win._tactic_dialog
+
+        def fill():
+            dlg.open_for("가", 3)
+            dlg.front()
+            dlg.show_result(_tactic_result())
+            _win._tactic_cache[(1, "m", date.today())] = _tactic_result()
+            _win._tactic_target = tactics.Target(1, "가", "o", ({},))
+
+        def empty():
+            return (_win._tactic_cache == {} and _win._tactic_target is None and not dlg.isVisible() and dlg.tables == []
+                    and dlg.lb_title.text() == "" and dlg.windowTitle() == "")
+        _win._compare_tactic = ("ok", "가")
+        for kw, closes in ((dict(), False), (dict(notice=17), False), (dict(collect=0), True)):
+            env.write(**kw)
+            fill()
+            _win._invalidate_rank_views = _win._invalidate_pick = lambda: None   # 화면을 다시 그리며 단추를 고치는 길을 막고 이 함수만 본다
+            try:
+                _win.sync_ranker_pick_data()
+            finally:
+                del _win._invalidate_rank_views, _win._invalidate_pick
+            assert empty() is closes, (kw, closes)
+            assert _win.btn_compare_tactic.isEnabled() is not closes, (kw, "끄고 켠 것이 단추에 안 보인다")
+        env.write()
+        fill()
+        config.WEB_DATA = False
+        _win.sync_ranker_pick_data()
+        assert empty()
+        config.WEB_DATA = True
+        # 메모리 내려놓기 — 검색 없이 숨긴 창(이른 return)이어도
+        fill()
+        keep = _win._matches_all, _win._prefetch
+        _win._matches_all, _win._prefetch = [], None
+        try:
+            _win.release_memory()
+        finally:
+            _win._matches_all, _win._prefetch = keep
+        assert empty() and not _win._released, "이른 return 앞에서 비우지 않았다(또는 이른 길이 아니었다)"
+    import ast
+    import inspect
+    import textwrap
+    for fn in (app_main.MainWindow.release_memory, app_main.MainWindow._forget_everything):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        assert any(isinstance(n, ast.Call) and getattr(n.func, "attr", "") == "_tactic_drop" for n in ast.walk(tree)), fn.__name__
+    # 자동으로 뜨는 길이 없다(E6) — 받기 시작은 열기 · 기다리던 것 · 안내 뒤 셋뿐
+    src = pathlib.Path(app_main.__file__).read_text(encoding="utf-8")
+    callers = [n.name for c in ast.walk(ast.parse(src)) if isinstance(c, ast.ClassDef) for n in c.body if isinstance(n, ast.FunctionDef)
+               if any(isinstance(x, ast.Call) and getattr(x.func, "attr", "") == "_start_tactic" for x in ast.walk(n))]
+    assert sorted(callers) == ["_on_tactic_finished", "_on_tactic_notice", "_open_tactic"], callers
+
+
+def test_110_tactic_quit_waits_for_every_loader():
+    log = []
+    keep = _win._tactic_workers
+    try:
+        _win._tactic_workers = [_FakeThread("앞", log), _FakeThread("뒤", log)]
+        left = _win.shutdown(fast=True)
+        assert {"stop 앞", "stop 뒤"} <= set(log) and all(w in left for w in _win._tactic_workers), log
+        log.clear()
+        for w in _win._tactic_workers:
+            w.wait = lambda ms: log.append(ms)
+        _win.shutdown()
+        assert [x for x in log if isinstance(x, int)] == [12000, 12000] and "kill 앞" not in log, log
+        assert (config.TRAIT_TIMEOUT_S + 2) * 1000 <= 12000, "요청 하나의 타임아웃보다 짧게 기다린다"
+    finally:
+        _win._tactic_workers = keep
+
+
+def test_110_tactic_window_draws_states_groups_and_fits():
+    """창 — 상태마다 글 · 전술 1·3·4개(넷째부터 접힘) · 팀 전술 10값(0부터 온 여섯은 +1) · 개인 전술 표는 공격 → GK · 최소 창에서 안 잘림."""
+    with _TacticEnv():
+        _win._open_tactic("g7", sn=907)
+        dlg = _win._tactic_dialog
+        dlg.open_for("가", 1234)
+        dlg.front()
+        for state, text in notice.TACTIC_TEXTS.items():
+            dlg.show_result(_tactic_result(0, state=state))
+            assert dlg.lb_state.text() == text and not dlg.lb_state.isHidden() and dlg.tables == [], state
+            assert dlg.btn_notice.isHidden() is (state != "notice"), state
+        assert set(notice.TACTIC_TEXTS) == set(tactics.STATES) - {"ok"}
+        dlg.show_progress(0, None)
+        assert "확인하는 중" in dlg.lb_state.text()
+        dlg.show_progress(3, None)
+        assert "(3/6)" in dlg.lb_state.text()
+        dlg.show_progress(8, 15)
+        assert "(8/15)" in dlg.lb_state.text()
+        for n in (1, 3, 4, 11):
+            dlg.show_result(_tactic_result(n))
+            _app.processEvents()
+            assert len(dlg.tables) == n and dlg.lb_state.isHidden() and dlg.btn_notice.isHidden()
+            assert (dlg.fold is not None) is (n > dlg.OPEN), n
+            if dlg.fold is not None:
+                assert dlg.fold.head.text() == f"외 {n - 3}개" and not dlg.fold.is_open()
+                dlg.fold.set_open(True)
+                assert dlg.fold.is_open() and all(t.isVisibleTo(dlg) for t in dlg.tables)
+        assert dlg.lb_sub.text() == "1,234위 · 4-1-4-1 · 마지막 경기 11-24 13:05", dlg.lb_sub.text()
+        assert glossary.tip("saved_tactic") == dlg.lb_sub.toolTip()
+        dlg.show_result(_tactic_result(1, cells=3, strategies=4))
+        _app.processEvents()
+        gb = dlg.box.itemAt(0).widget()
+        assert gb.title() == "전술 1: 대표 A팀 전술 1 외 2칸" and gb.toolTip().splitlines()[2] == "대표 A팀 전술 3"
+        assert dlg.title_of(2, ((2, 2, 9),)) == "전술 2: 클럽 C팀 전술 10"
+        tbl, = dlg.tables
+        col = [tbl.item(r, 0).text() for r in range(tbl.rowCount())]
+        assert col == ["ST", "LM", "LCM", "RCM", "RM", "CDM", "LB", "LCB", "RCB", "RB", "GK"], col
+        assert tbl.item(0, 2).text() == "공격 가담" or "뒤에서 침투" in tbl.item(0, 2).text(), tbl.item(0, 2).text()
+        assert tbl.item(0, 2).text().count(",") == 3 and all(not tbl.item(r, 2).text() for r in range(1, 11))
+        assert (tbl.item(0, 3).text(), tbl.item(0, 4).text()) == ("2", "2") and not tbl.isSortingEnabled()
+        assert tbl.item(0, 1).data(app_main.Qt.ItemDataRole.UserRole) == 101000011
+        assert (tbl.item(10, 3).text(), tbl.item(10, 4).text()) == ("1", "2"), "공격·수비 참여도가 바뀌었다"
+        assert tbl.item(10, 0).text() == "GK" and tbl.item(10, 1).data(app_main.Qt.ItemDataRole.UserRole) == 101000001
+        texts = [lb.text() for lb in gb.findChildren(app_main.QLabel)]
+        assert texts == ["수비", "수비 스타일", "지속적인 압박", "폭", "5", "깊이", "10", "공격", "빌드업 플레이", "빠른 빌드업", "기회 만들기", "빠른 빌드업",
+                         "폭", "4", "박스 안쪽 선수", "4", "코너킥", "4", "프리킥", "4", "팀 성향", "성향", "보통"], texts
+        bars = [(b.value, b.top) for b in gb.findChildren(app_main.StepBar)]
+        assert bars == [(5, 10), (10, 10), (4, 10), (4, 10), (4, 5), (4, 5)], bars
+        keys = [k for _h, ks in dlg.TEAM for k, _n in ks]
+        assert tuple(keys) == tactic_codes.TEAM_KEYS, "팀 전술 열 가지가 다 있지 않다"
+        # 최소 창(1280×720 안쪽) — 가로가 안 넘치고 표 글자가 안 잘린다
+        dlg.resize(1160, 657)
+        _app.processEvents()
+        assert dlg.body.minimumSizeHint().width() <= dlg.body.width() <= 1160, (dlg.body.minimumSizeHint().width(), dlg.body.width())
+        cut = [(r, c, tbl.item(r, c).text()) for r in range(tbl.rowCount()) for c in range(tbl.columnCount())
+               if tbl.item(r, c).text() and app_main.QFontMetrics(tbl.font()).horizontalAdvance(tbl.item(r, c).text()) > tbl.columnWidth(c)]
+        assert cut == [], cut
+        opened = []
+        _win._on_player_cell_double_clicked = lambda it: opened.append(it.data(app_main.Qt.ItemDataRole.UserRole))
+        try:
+            dlg.show_result(_tactic_result())
+            dlg.tables[0].itemActivated.emit(dlg.tables[0].item(0, 1))
+        finally:
+            del _win._on_player_cell_double_clicked
+        assert opened == [101000011], opened
+        # 모르는 자리·이름 없는 카드도 줄이 남는다
+        res = _tactic_result()
+        t = res.tactics[0]
+        res.tactics[0] = replace(t, players=t.players[:-1] + (tactics.TacticPlayer("zz", 5, (("QQ", 7),), (2, 2)),))
+        dlg.show_result(res)
+        tbl, = dlg.tables
+        assert tbl.rowCount() == 11 and tbl.item(10, 0).text() == "ZZ" and tbl.item(10, 2).text() == "코드 QQ 7" and tbl.item(10, 1).text() == "5"
+
+
+def test_110_tactic_dialog_is_one_window_and_child_of_main():
+    with _TacticEnv():
+        _win._open_tactic("g7", sn=907)
+        first = _win._tactic_dialog
+        assert first.parent() is _win and not first.isModal()
+        first.show_result(_tactic_result(2))
+        assert len(first.tables) == 2
+        _win._open_tactic("g8", sn=908)
+        assert _win._tactic_dialog is first and first.lb_title.text() == "g8"
+        assert first.tables == [] and first.lb_sub.text() == "", "앞 사람의 전술이 남았다"
+        keep = _win._rank_read
+        assert "원본이 없습니다" in first.lb_state.text(), "첫 수집 전(파일 없음)을 잠김으로 적었다"
+        _meta_db_moving()
+        _win._rank_read = lambda fn: None                # rank.db 잠김
+        try:
+            _win._open_tactic("g8", sn=908)
+            assert "다른 작업이 쓰고 있어" in first.lb_state.text()
+        finally:
+            _win._rank_read = keep
 
 
 def test_specup_loader_filters_lineup_and_respects_latch_121():

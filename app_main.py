@@ -70,6 +70,8 @@ import seasons as sn
 import specupcollect
 import storage
 import store
+import tactic_codes
+import tactics
 import teamcolor
 import theme as T
 import tradecollect
@@ -90,7 +92,7 @@ from dashboard import DashboardInput, DashboardPage, ScoreParts
 from widgets import (
     ICON_KEY_ROLE, NA, NAME_ROLE, Card, CenteredMax, ClickLabel, Collapsible, FitLabel, PairBox, FitTableWidget, DivisionBandDelegate, GradeBadgeDelegate, GradeStepDelegate, GridPickCombo, IconCell, IconCombo, NoScrollComboBox, NoScrollSpinBox,
     CalCell, CalendarGrid, PageTabs, PitchCard, PitchWidget, RankerCard, RowBorderDelegate, ShotMapWidget,
-    Segmented, SortableItem, StatCard, VersionCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp, price_bp, SpecCell, SpecupGrid,
+    Segmented, SortableItem, StatCard, StepBar, VersionCard, VScrollArea, WdlBar, WrapBar, ZoomBar, delta_item, sample_note, short_bp, price_bp, SpecCell, SpecupGrid,
     ROW_ROLE, CardListView, GoalTimeline, MatchCard, MatchCardList, Tag, VersusBar,
     RATE_SORTS, RateRow, RateRowList, ShotTypeRows, sort_rate_rows, MeterBar, ScorerList, ScorerRow, delta_color, BoldColumnDelegate, SPARK_ROLE, SparkDelegate,
     sample_text, tag_qss, wdl_text, wdl_rate_bar, win_rate_note, key_number_html, win_rate_text, formation_key, formation_pixmap,
@@ -1439,6 +1441,49 @@ class TraitLoader(Worker):
             out.error = f"{type(e).__name__}: {e}"
         out.mine = mine
         self.done.emit(out)
+
+
+class TacticLoader(Worker):
+    """110 ④ 한 구단주의 저장 전술 받기(tactics.collect) — [전술 보기]를 누를 때만. 요청 사이 간격은 취소 이벤트의 wait 라 닫으면 바로 돌아온다.
+    하루 계수만 fifa.db 에 쓴다(한 줄 = 한 트랜잭션) — terminate 하지 않는다. 결과는 어디에도 저장하지 않는다."""
+    WRITES = frozenset({STORE_FIFA})
+    progress = Signal(int, object)   # 받은 칸, 전체 칸(6칸을 받기 전에는 None)
+    done = Signal(object)            # tactics.TacticResult
+
+    def __init__(self, api: FCOnlineAPI, target: tactics.Target, known: dict):
+        super().__init__()
+        self.target = target
+        self.day = date.today()
+        self._api = api
+        self._known = known   # 이 실행 동안 받아 둔 결과의 사본 — (프로필 번호, 경기 번호, 날짜) → TacticResult
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    @staticmethod
+    def _note(e: BaseException) -> None:
+        if not getattr(TacticLoader, "_noted", False):
+            TacticLoader._noted = True      # crash.log 에 실행당 한 번만
+            crashlog.note("tactic", e)
+
+    def run(self) -> None:
+        res = tactics.TacticResult()
+        try:
+            conn = store.open_db(config.DB_PATH)
+            session = traitcollect.new_session()
+            try:
+                res = tactics.collect(session, conn, self.target, self._api, cancel=self._cancel.is_set, wait=self._cancel.wait,
+                                      cached=lambda mid: self._known.get((self.target.sn, mid, self.day)),
+                                      progress=self.progress.emit, on_error=self._note)
+            finally:
+                session.close()
+                conn.close()
+        except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등
+            res = tactics.TacticResult(state=tactics.state_of(e))
+            if res.state == "error":
+                self._note(e)
+        self.done.emit(res)
 
 
 class AbilitySimLoader(Worker):
@@ -3472,6 +3517,15 @@ class MainWindow(QMainWindow):
         self._team_values: dict[str, int | None] = {}  # 상대 닉네임 -> 구단가치(원)
         self._teamcolor_raw: dict[str, tuple] = {}     # 이번 실행에 로더가 준 (이름, 팀가치, 엠블럼 키) — 저장은 여기서
         self._teamcolor_dialog: TeamColorDialog | None = None   # 팀컬러 효과 창(하나만 — U3)
+        # 110 ④ 저장 전술 — 로더는 창이 아니라 여기가 끝날 때까지 쥔다 · 창의 사람 하나 · 앞 로더를 기다리는 중인가 · 이 실행 동안 받아 둔 것
+        self._tactic_dialog: TacticDialog | None = None
+        self._tactic_workers: list[TacticLoader] = []
+        self._tactic_loader: TacticLoader | None = None   # 지금 창의 사람을 받는 로더(멈춘 것은 아니다)
+        self._tactic_target: tactics.Target | None = None
+        self._tactic_wait = False
+        self._tactic_cache: dict[tuple, tactics.TacticResult] = {}   # (프로필 번호, 경기 번호, 날짜) → 끝까지 받은 결과
+        self._sim_pick: tuple | None = None                # [비슷한 랭커]에서 고른 (프로필 번호, 닉네임)
+        self._compare_tactic: tuple | None = None          # [구단주 비교] 상대 (core.tactic_target 상태, 지금 닉네임) · 비교가 끝난 뒤에만
         self._tc_effect_loaders: list[TeamColorEffectLoader] = []  # 효과 창의 로더(도는 것 + 물러난 것) — 종료 표가 기다린다
         self._teamcolor_loader: TeamColorLoader | None = None
         self._teamcolor_pending: list[str] = []  # 이번 라운드에 조회 요청한 닉네임
@@ -3542,6 +3596,7 @@ class MainWindow(QMainWindow):
         self._watched_screen = None    # 배율·작업 표시줄 변경 신호를 잇고 있는 화면
         self._apply_plan(QApplication.primaryScreen())  # 크기·최소 크기 — 저장값 복원(_load_settings)보다 먼저
         self._build_ui()
+        self._refresh_tactic_buttons()
         self._refresh_recent()
         self._load_season_cache()  # 시즌 콤보·시즌별 성적 탭이 쓸 시즌표
         # 지난번 창 크기·위치·메뉴·시즌(사용자 요청 2026-10-02). 메뉴·시즌은 첫 계정을 그릴 때 한 번 쓴다
@@ -8144,8 +8199,12 @@ class MainWindow(QMainWindow):
     def _on_trade_change(self) -> None:
         self._set_my_account(None)
 
-    def _api_loader_busy(self) -> bool:
+    def _search_busy(self) -> bool:
         return any(t is not None and t.isRunning() for t in (self._loader, self._compare_loader))
+
+    def _api_loader_busy(self) -> bool:
+        """검색 · 비교 · 저장 전술(110 ④) — 거래 받기와 색인 백필은 이것들이 끝난 뒤."""
+        return self._search_busy() or self._tactic_running()
 
     def start_trades(self) -> None:
         """거래 기록 받기 — 검색·비교가 끝난 뒤 · 키를 바꾼 직후 · 거래 화면을 열 때. 키가 있으면 계정과 무관하게
@@ -8198,10 +8257,10 @@ class MainWindow(QMainWindow):
                 and self.isVisible() and not self.isMinimized())
 
     def _api_background_busy(self) -> bool:
-        """오픈API 를 쓰는 다른 로더(검색·비교·거래·랭커 기록·특성)가 도는 중 — 랭커 픽은 그 뒤(양보).
+        """오픈API 를 쓰는 다른 로더(검색·비교·거래·랭커 기록·특성·저장 전술)가 도는 중 — 랭커 픽은 그 뒤(양보).
         특성 로더도 넣는다 — 안 그러면 특성 탭 → 랭커 픽 탭으로 옮길 때 두 로더가 같은 장부로 동시에 돌아 간격이
         무력화되고 같은 대상을 두 번 받는다(32단계 검토 4회차)."""
-        return self._trait_running() or any(
+        return self._trait_running() or self._tactic_running() or any(
             t is not None and t.isRunning()
             for t in (self._loader, self._compare_loader, self._trade_loader, self._ranker_loader))
 
@@ -8521,6 +8580,9 @@ class MainWindow(QMainWindow):
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
         self._sync_owner_dist()   # 구단주 분포 — 전제가 꺼졌으면 로더 멈춤 + 분포까지 지움(양보 사슬과 무관하게 따로)
         self._sync_card_backfill()   # 카드 정보 자동 채우기 — 웹 데이터·동의가 꺼졌으면 멈춤만(지우기 없음 · 수집과 무관)
+        if config.tactic_block() not in ("", "notice"):
+            self._tactic_drop()   # 저장 전술(110 ④) — 안내 동의 전은 빼야 한다(이 함수는 동의 직후에도 불려 연 창이 닫힌다)
+        self._refresh_tactic_buttons()
         self._invalidate_pick()
         self._invalidate_rank_views()   # 길 ④ 끄기·[수집 기록 지우기] — 전부 이 함수를 거친다
         self._maintain_rank()
@@ -9347,11 +9409,185 @@ class MainWindow(QMainWindow):
     # ── 110 R1 [랭커 픽 › 비슷한 랭커] — 같은 포메이션 · 같은 팀컬러 두 목록(산출 기준 화면과 같은 꼴 · 교집합이 아니다) ─────
     SIM_TITLES = {"formation": "같은 포메이션", "color": "같은 팀컬러"}
 
+    # ── 110 ④ 랭커의 저장 전술 — 누를 때만 · 저장하지 않는다(tactics 머리말) ─────────
+    def _tactic_running(self) -> bool:
+        return any(self._bg_running(w) for w in self._tactic_workers)
+
+    def _tactic_lookup(self, sn: int | None, nick: str) -> tuple:
+        """랭킹 1만 위 안에서 찾기 → core.tactic_target 의 (상태, 번호, 순위). 첫 수집 전(파일 없음)과 잠김은 글이 다르다."""
+        return (self._rank_read(lambda c: core.tactic_target(c, sn, nick))
+                or ("dbbusy" if config.RANK_DB_PATH.exists() else "noraw", None, None))
+
+    def _open_tactic(self, nick: str, sn: int | None = None, ouid: str | None = None, details=None) -> None:
+        """창을 여는 한 길([비슷한 랭커]는 번호로 · [구단주 비교]는 닉네임과 받은 상세로). 받는 중인 같은 사람이면 창을 앞으로만."""
+        dlg = self._tactic_dialog
+        if dlg is None:
+            dlg = self._tactic_dialog = TacticDialog(self)
+            dlg.finished.connect(self._on_tactic_closed)
+        if self._held_by_clearing(TacticLoader):
+            found = ("clearing", None, None)
+        else:
+            found = self._tactic_lookup(sn, nick)
+        state, sn, rank = found
+        now = self._tactic_target
+        if state == "ok" and now is not None and now.sn == sn and (self._tactic_wait or self._tactic_loader is not None):
+            dlg.front()
+            return
+        self._tactic_halt()
+        dlg.open_for(nick, rank)
+        if state == "ok":
+            self._tactic_target = tactics.Target(sn, nick, ouid, details)
+            self._start_tactic()
+        else:
+            dlg.show_state(state)
+        dlg.front()
+
+    def _start_tactic(self) -> bool:
+        """지금 창의 사람으로 받기 시작 → 로더를 띄웠나. 앞 로더가 아직 돌면 표시만 하고, 끝나면(finished) 다시 여기로 온다(동시에 하나)."""
+        self._tactic_wait = False
+        target, dlg = self._tactic_target, self._tactic_dialog
+        if target is None or self._quitting:
+            return False
+        if self._held_by_clearing(TacticLoader):
+            why = "clearing"
+        elif self._search_busy():
+            why = "busy"
+        elif target.details is None and not config.API_KEY:
+            why = "nokey"
+        else:
+            why = config.tactic_block()
+        if why:
+            dlg.show_state(why)
+            return False
+        if self._tactic_running():
+            self._tactic_wait = True
+            dlg.show_waiting()
+            return False
+        self._yield_trades()
+        ld = TacticLoader(self._api, target, dict(self._tactic_cache))
+        ld.progress.connect(lambda n, m, ld=ld: self._on_tactic_progress(ld, n, m))
+        ld.done.connect(lambda res, ld=ld: self._on_tactic_done(ld, res))
+        ld.finished.connect(lambda ld=ld: self._on_tactic_finished(ld))
+        self._tactic_loader = ld   # start 전에 — 신호가 바로 와도(테스트가 run 으로 바꿔 끼운다)
+        # 창을 닫거나 다른 사람을 열어도 run 이 끝날 때까지는 여기서 쥔다(도는 QThread 를 놓으면 프로세스가 죽는다)
+        self._tactic_workers = [x for x in self._tactic_workers if x.isRunning()] + [ld]
+        dlg.show_progress(0, None)
+        ld.start()
+        if ld.blocked:
+            self._tactic_loader = None
+            dlg.show_state("clearing")
+            return False
+        return True
+
+    def _on_tactic_progress(self, ld, n: int, m) -> None:
+        if ld is self._tactic_loader:
+            self._tactic_dialog.show_progress(n, m)
+
+    def _on_tactic_done(self, ld, res) -> None:
+        if ld is not self._tactic_loader:
+            return   # 닫았거나 다른 사람으로 바꾼 뒤 늦게 온 결과 — 화면에도 기억에도 쓰지 않는다
+        if res.state in tactics.FINAL_STATES and res.match_id:
+            self._tactic_cache[(ld.target.sn, res.match_id, ld.day)] = res
+        self._tactic_dialog.show_result(res)
+
+    def _on_tactic_finished(self, ld) -> None:
+        ld.ended = True
+        if self._tactic_loader is ld:
+            self._tactic_loader = None
+        if self._quitting:
+            return
+        if self._tactic_wait and self._start_tactic():
+            return
+        self.start_trades()               # 양보시킨 것들을 잇는다(비교가 끝날 때와 같은 차례)
+        self.start_visible_api_loader()
+
+    def _tactic_halt(self) -> None:
+        """창의 사람을 놓는다 — 도는 것에 멈춤 요청 · 기다리던 것 취소(기다리지 않는다). 대상은 비교한 상대의 경기 상세를 쥔다."""
+        self._tactic_wait, self._tactic_target = False, None
+        ld, self._tactic_loader = self._tactic_loader, None
+        if ld is not None:
+            ld.cancel()
+
+    def _on_tactic_closed(self, *_args) -> None:
+        self._tactic_halt()
+        self._tactic_dialog.clear_body()
+
+    def _tactic_drop(self) -> None:
+        """받아 둔 것·도는 것·열린 창을 모두 놓는다(수집·홈페이지 데이터 끔 · 기록 지우기 · 메모리 내려놓기)."""
+        self._tactic_halt()
+        self._tactic_cache.clear()
+        dlg = self._tactic_dialog
+        if dlg is not None and shiboken6.isValid(dlg):
+            dlg.done(0)                   # 숨은 창도 비운다(close 는 숨은 창에 finished 를 내지 않는다)
+
+    def _on_tactic_notice(self) -> None:
+        """창의 [안내 보기] — 동의했으면 그 자리에서 이어 받고, 거절했으면 같은 글이 남는다."""
+        self.ask_notice_update(parent=self._tactic_dialog)
+        self._start_tactic()
+
+    def _refresh_tactic_buttons(self) -> None:
+        """단추 둘 — 홈페이지 데이터나 수집이 꺼졌으면 끄고 말풍선에 까닭(안내 동의 전이면 켜 두고 창에서 묻는다 · U7)."""
+        why = config.tactic_block()
+        off = notice.TACTIC_TEXTS[why] if why in ("off_web", "off_collect") else ""
+        picked = self._sim_pick is not None
+        self.btn_sim_tactic.setEnabled(picked and not off)
+        self.btn_sim_tactic.setToolTip(off or ("" if picked else "목록에서 랭커를 먼저 고르세요."))
+        state = self._compare_tactic[0] if self._compare_tactic else ""
+        self.btn_compare_tactic.setEnabled(state == "ok" and not off)
+        self.btn_compare_tactic.setToolTip(off or ("" if state in ("", "ok") else notice.TACTIC_TEXTS[state]))
+
+    def _on_similar_selected(self, kind: str) -> None:
+        """한쪽 목록에서 고르면 다른 쪽 선택을 지운다 — 어느 랭커를 여는지 하나뿐이게."""
+        idx = self.sim_lists[kind].selectionModel().selectedIndexes()
+        row = idx[0].data(ROW_ROLE) if idx else None
+        self._sim_pick = row.key if row is not None and isinstance(row.key, tuple) else None
+        if self._sim_pick is not None:
+            for other, lst in self.sim_lists.items():
+                if other != kind:
+                    sm = lst.selectionModel()
+                    sm.blockSignals(True)
+                    sm.clear()            # 선택과 지금 줄(키보드) 둘 다
+                    sm.blockSignals(False)
+                    lst.viewport().update()
+        self._refresh_tactic_buttons()
+
+    def _sim_unpick(self) -> None:
+        """줄을 다시 채웠다 — 고른 줄이 사라졌다(모델을 다시 채우면 선택 신호가 오지 않는다)."""
+        self._sim_pick = None
+        self._refresh_tactic_buttons()
+
+    def _on_similar_tactic(self) -> None:
+        if self._sim_pick is not None:
+            sn, nick = self._sim_pick
+            self._open_tactic(nick, sn=sn)
+
+    def _refresh_compare_tactic(self, nick: str = "") -> None:
+        """비교 상대의 저장 전술을 볼 수 있나 — nick 은 넥슨이 준 지금 닉네임(입력한 글자가 아니다 · 옛 닉네임이면 남의 번호다)."""
+        self._compare_tactic = None
+        if nick:
+            self._compare_tactic = (self._tactic_lookup(None, nick)[0], nick)
+        self._refresh_tactic_buttons()
+
+    def _on_compare_tactic(self) -> None:
+        last = self._compare_last
+        if self._compare_tactic is None or last is None or last[4]:
+            return
+        _nick, _matches, ouid, details, _state = last
+        # 앞 몇 판만 — 대상이 비교 상세 전부(수백 MB)를 쥐지 않게
+        self._open_tactic(self._compare_tactic[1], ouid=ouid, details=tuple(details[:config.TACTIC_RECENT]))
+
     def _build_similar_tab(self) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
+        head = QHBoxLayout()
         self.lb_sim_note = self._note_label()
-        v.addWidget(self.lb_sim_note)
+        head.addWidget(self.lb_sim_note, 1)
+        head.addStretch(0)
+        self.btn_sim_tactic = QPushButton("전술 보기")
+        self.btn_sim_tactic.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        self.btn_sim_tactic.clicked.connect(self._on_similar_tactic)
+        head.addWidget(self.btn_sim_tactic)
+        v.addLayout(head)
         row = QHBoxLayout()
         self.sim_lists: dict[str, MetricRowList] = {}
         self.sim_titles: dict[str, QLabel] = {}
@@ -9361,6 +9597,7 @@ class MainWindow(QMainWindow):
             title.setStyleSheet(f"color: {T.TEXT}; font-weight: bold;")
             lst = MetricRowList()
             lst.activated.connect(self._on_similar_activated)   # 두 번 누르면 그 랭커로 구단주 비교(R3 와 같은 길)
+            lst.selectionModel().selectionChanged.connect(lambda _on, _off, k=kind: self._on_similar_selected(k))
             box.addWidget(title)
             box.addWidget(lst, 1)
             row.addLayout(box, 1)
@@ -9399,6 +9636,7 @@ class MainWindow(QMainWindow):
         for kind, lst in self.sim_lists.items():
             lst.set_rows([])
             self.sim_titles[kind].setText(self.SIM_TITLES[kind])
+        self._sim_unpick()
 
     @staticmethod
     def _sim_count_text(n: int, shown: int) -> str:
@@ -9475,6 +9713,7 @@ class MainWindow(QMainWindow):
                                           else heads[kind])
             self.sim_lists[kind].set_rows([self._similar_row(r, kind) for r in rows])
             self._start_list_icons(self.sim_lists[kind])
+        self._sim_unpick()
 
     def _similar_row(self, r, kind: str) -> MetricRow:
         step_tip = f"{r.color} {r.step}단계" if r.step else ""
@@ -12518,6 +12757,14 @@ class MainWindow(QMainWindow):
         squad_row.addWidget(gb_my, 1)
         squad_row.addWidget(gb_opp, 1)
         pv.addLayout(squad_row, 1)
+        # 저장 전술(110 ④) — 상자 안은 다시 그릴 때마다 지워져(_clear) 아래 한 줄에 둔다
+        tactic_row = QHBoxLayout()
+        tactic_row.addStretch(1)
+        self.btn_compare_tactic = QPushButton("상대 저장 전술 보기")
+        self.btn_compare_tactic.setStyleSheet(T.OUTLINE_BUTTON_QSS)
+        self.btn_compare_tactic.clicked.connect(self._on_compare_tactic)
+        tactic_row.addWidget(self.btn_compare_tactic)
+        pv.addLayout(tactic_row)
         self.pt_compare.add_tab("지표·스쿼드", page_main)
 
         # [슛·골 흐름] — 두 사람의 슛 지도와 골 흐름을 좌우로. 폭이 모자라 둘이 들어가도록 슛 지도를 작게 둔다
@@ -12598,6 +12845,7 @@ class MainWindow(QMainWindow):
         # 같은 상대를 다시 비교하면 거의 즉시 끝난다.
         self._yield_trades()
         self._compare_last = None   # 다른 상대 — 바를 바꿔도 옛 상대를 다시 그리지 않게
+        self._refresh_compare_tactic()
         self._compare_loader = MatchLoader(self._api, nick, config.DEFAULT_MATCH_TYPE, emit_partial=True, known_ouid=ouid)
         self._compare_loader.progress.connect(
             lambda done, total, msg, n=nick: self.lb_compare_status.setText(f"'{n}' {msg}"))
@@ -12624,6 +12872,7 @@ class MainWindow(QMainWindow):
             return
         self._compare_last = (nick, matches, ouid, details, "")
         self._rerender_compare()
+        self._refresh_compare_tactic(basic.get("nickname") or "")
 
     def _on_compare_partial(self, nick: str, matches: list, details: list, ouid: str) -> None:
         """U14 — 처음 보는 상대를 받는 동안 받은 만큼(최신부터) 먼저 그린다. 끝나면 _on_compare_loaded 가 덮는다."""
@@ -17117,6 +17366,8 @@ class MainWindow(QMainWindow):
             # 스펙업 순서(121) — 읽기는 DB 만 · 받기는 요청 사이에서 멈춘다(요청 하나 타임아웃 10초 · 한 요청 = 한 트랜잭션)
             *[(ld, cancel(ld), 1000, False) for ld in self._specup_workers],
             (self._specup_fetch, cancel(self._specup_fetch), 12000, False),
+            # 저장 전술(110 ④) — 칸 사이에서 멈춘다(요청 하나 타임아웃 TRAIT_TIMEOUT_S). 하루 계수 한 줄 = 한 트랜잭션
+            *[(ld, cancel(ld), max(12000, (config.TRAIT_TIMEOUT_S + 2) * 1000), False) for ld in self._tactic_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._sim_workers],   # 110 R1 단계표 읽기 — DB 읽기 한 번 · 무효화로 놓은 것까지
             # rank.db 정리(예약이 없는 창만 직접 띄운다) — 스냅숏 사이에서 멈춘다. VACUUM·트랜잭션 도중일 수 있어 terminate 안 함
             *[(ld, cancel(ld), 10000, False) for ld in self._maint_workers],
@@ -17378,6 +17629,7 @@ class MainWindow(QMainWindow):
         self._specup_reset()   # 121 — 닉네임·선발·랭커 선발에서 만든 후보를 쥔다
         self._specup_result = None
         self._specup_clear()
+        self._tactic_drop()    # 110 ④
         self._card_rev += 1
         self._records_cache = None
         self._fun_cache = {}
@@ -17404,6 +17656,7 @@ class MainWindow(QMainWindow):
         """숨긴 지 RELEASE_AFTER_HIDE_MIN 지나면 경기 기록을 놓는다(1만 경기면 수백 MB). 붙잡는 곳 전부 —
         하나라도 남으면 gc 가 못 거둔다(test_release_drops_every_reference 가 잰다). 계정(_ouid)은 비우지 않는다 —
         비우면 다시 읽을 때 '다른 계정'으로 보여 승률 그래프 기간이 초기화된다(이미 한 번 고친 버그)."""
+        self._tactic_drop()   # 110 ④ — 검색 없이 숨긴 창(아래 이른 return)에서도
         # 검색 없이 숨겨도 켤 때 미리 읽은 마지막 계정(1만 경기면 약 800MB)이 남는다 — 목록만 보면 그걸 놓친다(1.1.1 exe 실측)
         if self._released or (not self._matches_all and self._prefetch is None):
             return
@@ -17422,6 +17675,7 @@ class MainWindow(QMainWindow):
         self._poslevel_val, self._poslevel_key = None, None
         self._distcmp_val, self._distcmp_key = None, None
         self._compare_last = None   # 구단주 비교 상대의 경기·상세 전부(76 — 수천 판이면 수백 MB)
+        self._refresh_compare_tactic()
         self._specup_reset()        # 121 — 후보·시세 재료. 읽는 중인 것도 놓는다(늦게 온 결과가 다시 쥐지 않게)
         self._specup_clear()
         self._value_input = None    # 선발 시세 카드가 저장 전체 경기를 쥔다(113 1회차 [중]15 — 가계부를 한 번 열면 메모리가 안 풀렸다)
@@ -18030,6 +18284,193 @@ class TeamColorDialog(QDialog):
             b.clicked.connect(lambda _=False, r=r: self._start(teamcolor.label(r["name"], r["emblem"]), r["id"]))
             self.box_pick.addWidget(b)
         self.box_pick.addStretch(1)
+
+
+class TacticDialog(QDialog):
+    """랭커의 저장 전술 창(110 ④ — 모달 아님 · 하나만). 머리(닉네임 · 순위 · 포메이션 · 마지막 경기 시각) + 저장된 전술 묶음.
+    받기와 기억은 메인 창의 일이고(_open_tactic · _start_tactic) 여기는 그리기만 한다. 닫으면(finished) 메인 창이 로더를 멈추고 비운다."""
+
+    SIZE = (1160, 780)
+    OPEN = 3                              # 이만큼 펴 두고 나머지는 "외 N개" 로 접는다(U4)
+    COLUMNS = ["자리", "선수", "개인 전술", "공격 참여도", "수비 참여도"]
+    # 넥슨 스쿼드메이커의 팀 전술 배치(수비 · 공격 · 팀 성향)
+    TEAM = (("수비", (("defensivestyle", "수비 스타일"), ("defwidth", "폭"), ("defdepth", "깊이"))),
+            ("공격", (("offensive_style_buildup", "빌드업 플레이"), ("offensive_style_chancecreation", "기회 만들기"), ("offwidth", "폭"),
+                    ("offplayerinbox", "박스 안쪽 선수"), ("offcornerkick", "코너킥"), ("offfreekick", "프리킥"))),
+            ("팀 성향", (("teammentality", "성향"),)))
+    CODE_OF = {role: code for code, role in tactic_codes.POSITION_ROLE.items()}
+
+    def __init__(self, main: "MainWindow"):
+        super().__init__(main)
+        self.main = main
+        self.setModal(False)
+        self._nick, self._rank = "", None
+        self.tables: list = []            # 그린 개인 전술 표(테스트가 본다)
+        self.fold: Collapsible | None = None
+        v = QVBoxLayout(self)
+        self.lb_title = QLabel("")
+        f = self.lb_title.font()
+        f.setBold(True)
+        f.setPointSizeF(f.pointSizeF() * 1.25)
+        self.lb_title.setFont(f)
+        v.addWidget(self.lb_title)
+        self.lb_sub = QLabel("")
+        self.lb_sub.setStyleSheet(f"color: {T.TEXT_DIM};")
+        self.lb_sub.setToolTip(glossary.tip("saved_tactic"))
+        v.addWidget(self.lb_sub)
+        row = QHBoxLayout()
+        self.lb_state = MainWindow._note_label()
+        self.btn_notice = QPushButton("안내 보기")
+        self.btn_notice.clicked.connect(main._on_tactic_notice)
+        row.addWidget(self.lb_state, 1)
+        row.addWidget(self.btn_notice)
+        v.addLayout(row)
+        self.body = QWidget()
+        self.box = QVBoxLayout(self.body)
+        self.box.setContentsMargins(0, 0, 0, 0)
+        v.addWidget(VScrollArea(self.body), 1)
+        self._say("")
+        fit_to_screen(self, *self.SIZE)
+
+    # ── 메인 창이 부르는 것 ──
+    def open_for(self, nick: str, rank: int | None) -> None:
+        self._nick, self._rank = nick, rank
+        self.setWindowTitle(f"{nick} - 저장된 전술")
+        self.lb_title.setText(nick)
+        self._head(None)
+        self._clear_groups()
+        self._say("")
+
+    def front(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def show_progress(self, n: int, total) -> None:
+        self._say(f"저장된 전술을 읽는 중 ({n}/{total or tactics.FIRST_REQ})" if n else "마지막 경기를 확인하는 중입니다.")
+
+    def show_waiting(self) -> None:
+        self._say("앞에서 고른 구단주를 마치는 중입니다.")
+
+    def show_state(self, state: str) -> None:
+        self._say(notice.TACTIC_TEXTS[state], button=state == "notice")
+
+    def show_result(self, res) -> None:
+        self._head(res)
+        self._clear_groups()
+        if res.state != "ok":
+            self.show_state(res.state)
+            return
+        self._say("")
+        rest = None
+        for i, t in enumerate(res.tactics):
+            box = self.box
+            if i >= self.OPEN:
+                if rest is None:
+                    inner = QWidget()
+                    rest = QVBoxLayout(inner)
+                    rest.setContentsMargins(0, 0, 0, 0)
+                    self.fold = Collapsible(f"외 {len(res.tactics) - self.OPEN}개", inner)
+                    self.box.addWidget(self.fold)
+                box = rest
+            box.addWidget(self._group(i + 1, t))
+        self.box.addStretch(1)
+
+    def clear_body(self) -> None:
+        """남의 닉네임과 전술을 남기지 않는다(닫음 · 내려놓기)."""
+        self._nick, self._rank = "", None
+        self.setWindowTitle("")
+        self.lb_title.setText("")
+        self._head(None)
+        self._clear_groups()
+        self._say("")
+
+    # ── 그리기 ──
+    def _say(self, text: str, button: bool = False) -> None:
+        MainWindow._set_status(self.lb_state, text)
+        self.btn_notice.setVisible(button)
+
+    def _head(self, res) -> None:
+        parts = [f"{self._rank:,}위"] if self._rank else []
+        if res is not None:
+            parts.append(core.formation_label(res.formation))
+            if res.match_at is not None:
+                parts.append(f"마지막 경기 {stamp(res.match_at)}")
+        self.lb_sub.setText(" · ".join(p for p in parts if p))
+
+    def _clear_groups(self) -> None:
+        for t in self.tables:
+            ld = getattr(t, "_icon_loader", None)
+            if ld is not None and ld.isRunning():
+                ld.cancel()               # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
+        self.tables, self.fold = [], None
+        MainWindow._clear(self.box)
+
+    @staticmethod
+    def title_of(no: int, cells) -> str:
+        more = f" 외 {len(cells) - 1}칸" if len(cells) > 1 else ""
+        return f"전술 {no}: {tactics.cell_label(cells[0])}{more}"
+
+    def _group(self, no: int, t) -> QGroupBox:
+        gb = QGroupBox(self.title_of(no, t.cells))
+        gb.setToolTip("\n".join(tactics.cell_label(c) for c in t.cells) if len(t.cells) > 1 else "")
+        h = QHBoxLayout(gb)
+        left = QVBoxLayout()
+        left.addLayout(self._team_grid(dict(t.team)))
+        left.addStretch(1)
+        h.addLayout(left)
+        right = QVBoxLayout()
+        right.addWidget(self._player_table(t.players))
+        right.addStretch(1)
+        h.addLayout(right, 1)
+        h.setSpacing(20)
+        return gb
+
+    def _team_grid(self, team: dict) -> QGridLayout:
+        g = QGridLayout()
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(8)
+        r = 0
+        for head, keys in self.TEAM:
+            g.addWidget(MainWindow._title_label(head), r, 0, 1, 3)
+            r += 1
+            for key, name in keys:
+                v = team[key]
+                lb = QLabel(name)
+                lb.setStyleSheet(f"color: {T.TEXT_DIM};")
+                g.addWidget(lb, r, 0)
+                value = QLabel(tactic_codes.team_value(key, v))
+                bar = tactic_codes.team_bar(key, v)
+                if bar is None:
+                    g.addWidget(value, r, 1, 1, 2)
+                else:
+                    value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    g.addWidget(value, r, 1)
+                    g.addWidget(StepBar(*bar), r, 2)
+                r += 1
+        g.setColumnStretch(2, 1)
+        return g
+
+    def _player_table(self, players) -> FitTableWidget:
+        """개인 전술 — 축구장 줄 순서(공격 → GK). 기본값 그대로 둔 항목은 빈 칸이다."""
+        codes = [self.CODE_OF.get(p.role) for p in players]
+        order = [i for line in core.pitch_rows(codes) for i in line]
+        order += [i for i in range(len(players)) if i not in order]   # 모르는 자리도 버리지 않는다
+        tbl = self.main._make_table(self.COLUMNS, icons={1: "season"})
+        rows = []
+        for i in order:
+            p = players[i]
+            names = ", ".join(tactic_codes.player_value(p.role, c, lv) for c, lv in p.strategy)
+            rows.append([p.role.upper(), IconCell(self.main._names.get(p.spid, str(p.spid)), None, core.season_id_of(p.spid)),
+                         names, str(p.part[0]), str(p.part[1])])
+        self.main._fill(tbl, rows, enable_sort=False)   # 축구장 순서가 정보라 정렬을 켜지 않는다
+        for r, i in enumerate(order):
+            item = tbl.item(r, 1)
+            if item:
+                item.setData(Qt.ItemDataRole.UserRole, players[i].spid)   # 두 번 누르면 선수 카드
+        tbl.itemActivated.connect(self.main._on_player_cell_double_clicked)
+        self.tables.append(tbl)
+        return tbl
 
 
 # ── 처음 켤 때 소개(96 O3) ─────────────────────────────────────────────

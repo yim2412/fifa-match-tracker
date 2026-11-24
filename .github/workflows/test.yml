@@ -49,6 +49,8 @@ jobs:
         run: python tests/test_traits.py
       - name: 랭커 저장 전술
         run: python tests/test_tactics.py
+      - name: 저장 전술 창 (실제 스레드)
+        run: python tests/test_tactic_threads.py
       - name: 시즌 말 예측
         run: python tests/test_predict.py
       - name: 랭커 메타 스냅숏 읽기

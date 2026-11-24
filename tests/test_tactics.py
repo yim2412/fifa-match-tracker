@@ -598,7 +598,7 @@ def test_mark_failure_keeps_reason():
 
 # ── 관문 ─────────────────────────────────────────────────────────────────────
 
-def test_gate_order_and_closed_for_now():
+def test_gate_order_and_notice18():
     v = config.TACTIC_NOTICE_VERSION
     on = dict(WEB_DATA=True, RANK_COLLECT=True, NOTICE_ACCEPTED=v)
     for kw, want in ((on, ""), (dict(on, NOTICE_ACCEPTED=v - 1), "notice"), (dict(on, WEB_DATA=False), "off_web"),
@@ -607,7 +607,8 @@ def test_gate_order_and_closed_for_now():
                      (dict(on, WEB_DATA=False, NOTICE_ACCEPTED=config.NOTICE_BASE_VERSION - 1), "notice")):
         with cfg(**kw):
             assert config.tactic_block() == want and config.tactic_allowed() is (want == ""), (kw, want)
-    with cfg(WEB_DATA=True, RANK_COLLECT=True, NOTICE_ACCEPTED=config.NOTICE_VERSION):   # ④-1: 아직 아무도 못 받는다
+    assert v == 18 == config.NOTICE_VERSION and config.NOTICE_COLLECT_ONLY_FROM == 16, "18 은 수집을 켠 사람 몫이다(U7)"
+    with cfg(WEB_DATA=True, RANK_COLLECT=True, NOTICE_ACCEPTED=17):
         res, web, *_ = run(Web({(1, 1, 0): cell()}), details=[detail()], allowed=None)
         assert res.state == "notice" and web.calls == [], "안내 18 전에 요청이 나갔다"
     with cfg(WEB_DATA=True, RANK_COLLECT=True, NOTICE_ACCEPTED=v):
