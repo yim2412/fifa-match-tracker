@@ -14,7 +14,7 @@ import tempfile
 import threading
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -55,9 +55,12 @@ def ts(dt: datetime) -> int:
     return int(dt.timestamp())
 
 
-def raw_of(kst: datetime) -> str:
-    """KST 로 뜻한 시각 → 넥슨 원문(UTC). config 오프셋을 쓰지 않는다 — 오프셋 변이가 초록이 되지 않게."""
-    return (kst - timedelta(hours=9)).isoformat()
+KST = timezone(timedelta(hours=9))   # config 오프셋을 쓰지 않는다. 쓰면 오프셋 변이가 초록이 된다
+
+
+def raw_of(at: datetime) -> str:
+    """시각 → 넥슨 원문(UTC). 시간대가 없으면 `ts`·앱의 `datetime.now()` 처럼 PC 시간대로 읽는다(9시간을 빼면 UTC 인 CI 에서 어긋난다)."""
+    return at.astimezone(timezone.utc).replace(tzinfo=None).isoformat()
 
 
 def cards(seed: int = 0) -> list[dict]:
@@ -265,9 +268,10 @@ def test_lineup_matches_dev_matches_format_and_roundtrips():
 
 
 def test_lineup_of_picks_my_side_and_time_is_kst_epoch():
-    at, body = sc.lineup_of(match("me", datetime(2026, 11, 25, 1, 30), seed=5), "me")
+    kst = datetime(2026, 11, 25, 1, 30, tzinfo=KST)
+    at, body = sc.lineup_of(match("me", kst, seed=5), "me")
     assert body == sc.pack_lineup(sc.starters({"player": cards(5)})), "상대 쪽 선발을 저장했다"
-    assert at == matchtime.epoch("2026-11-24T16:30:00") == ts(datetime(2026, 11, 25, 1, 30)), "경기 시각이 KST 가 아니다"
+    assert at == matchtime.epoch("2026-11-24T16:30:00") == ts(kst), "경기 시각이 KST 가 아니다"
     assert sc.lineup_of(match("me", opp=[]), "me")[1] is None, "상대가 빈 판(몰수)인데 선발로 쳤다"
     assert sc.lineup_of(match("me", mine=cards()[:10]), "me")[1] is None, "10명 선발을 받았다"
     for bad in (None, [], {"matchDate": None, "matchInfo": []}, {**match("me"), "matchInfo": "x"}, match("남"),
