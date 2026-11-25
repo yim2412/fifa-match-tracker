@@ -67,6 +67,7 @@ class RunResult:
     down: bool = False       # 점검·연결 실패 — 그 바퀴만
     error: str = ""          # DB 잠김 등(종류만)
     planned: int = 0
+    squad: "object | None" = None   # 같은 OVR 카드 몫(squadcmp.FillResult) — 로더가 이어서 했을 때만. done 에는 그 몫도 더해져 있다
     status: "Status | None" = None   # 바퀴 끝 상태(앱 수요) — [정보] 줄이 화면 스레드에서 수요를 다시 세지 않게(0.4초 · 리뷰 [중]2)
 
 
@@ -145,7 +146,7 @@ def _days_since(day: str | None, today: date) -> int | None:
 
 
 def _tc_ids(extras: dict[int, dict]) -> Counter:
-    """백필한 카드의 소속·관계 팀컬러 id → 나온 카드 수."""
+    """extras 카드들의 소속·관계 팀컬러 id → 나온 카드 수."""
     c: Counter = Counter()
     for ex in extras.values():
         for col in ("club_tc", "rel_tc"):
@@ -183,12 +184,16 @@ def plan(conn: sqlite3.Connection, today: date, *, dem, mine: dict[int, set[int]
     meta, fresh = store.load_teamcolor_meta(conn, today, config.TEAMCOLOR_CACHE_DAYS)
     if not fresh and not store.try_skip(conn, "t:list", day):
         jobs.append(Job("tc_list", 0))
-    if extras and meta:
+    # 같은 OVR 비교 자료(122)가 시뮬레이터만 읽은 카드 수천 장의 팀컬러까지 이 몫을 쓰지 않게 — 선수 페이지도 읽은 카드만.
+    # 스펙업·칩·가계부는 페이지를 card_info 에만 적는다(page_on 만 보면 그 카드들의 팀컬러가 끊긴다)
+    paged = {r[0] for r in conn.execute("SELECT spid FROM card_info")}
+    tc_cards = {s: ex for s, ex in extras.items() if ex.get("page_on") or s in paged}
+    if tc_cards and meta:
         known = {m["id"] for m in meta}
-        want = _tc_ids(extras)
+        want = _tc_ids(tc_cards)
         for m in meta:
             if str(m["emblem"]).startswith(_ENHANCE_EMBLEM):
-                want[m["id"]] += len(extras)   # 강화 팀컬러는 어느 라인업에나 걸릴 수 있다 — 먼저
+                want[m["id"]] += len(tc_cards)   # 강화 팀컬러는 어느 라인업에나 걸릴 수 있다 — 먼저
         got = {r[0]: r[1] for r in conn.execute("SELECT id, MIN(fetched_on) FROM teamcolor_steps GROUP BY id")}
         for tid, _n in sorted(want.items(), key=lambda kv: (-kv[1], kv[0])):
             if tid not in known:

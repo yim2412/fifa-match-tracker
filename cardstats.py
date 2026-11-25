@@ -4,7 +4,7 @@ C1·N28·C2·C3·N21·C5·C6 집계는 조각 ②③ 에서 여기에 붙인다(
 
 | 무엇 | 규칙 |
 |---|---|
-| 실효 OVR | 시뮬레이터 1강 그 자리 OVR(`config.SIM_POS_OF` 로 28칸 → 16칸) + `config.GRADE_OVR_BONUS[강화]` — 팀컬러·적응도는 뺀다(U3) |
+| 실효 OVR | 시뮬레이터 1강 그 자리 OVR(`config.SIM_POS_OF` 로 28칸 → 16칸) + `config.GRADE_OVR_BONUS[강화]` + `config.ADAPT_OVR`(적응도 5 · 122 U4 가 51 U3 을 뒤집었다) · 팀컬러는 뺀다 |
 | 선발 | `spPosition` ≠ 28(교체) — 11장 |
 | 모름 | 자리 칸 없음(`pos`) · 백필 없음(`none`) · 강화 모름(`grade`) — 빈 칸을 채워 넣지 않는다(채우면 메타 카드 쪽으로 치우친다) |
 """
@@ -40,7 +40,7 @@ def effective_ovr(po: int, grade, extra: dict | None) -> tuple[int | None, str]:
     bonus = config.GRADE_OVR_BONUS.get(grade)
     if bonus is None:
         return None, "grade"
-    return ovrs[cell] + bonus, ""
+    return ovrs[cell] + bonus + config.ADAPT_OVR, ""
 
 
 def starters(side: dict) -> list[dict]:

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import dataclasses
 import gc
 import json
 import os
@@ -28,11 +29,13 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 import watchdog  # noqa: E402 — 109 J8 · config 보다 먼저(FIFA_NO_CRED)
 import app_main  # noqa: E402
+import cardcollect  # noqa: E402
 import config  # noqa: E402
 import matchtime  # noqa: E402
 import nexon_api  # noqa: E402
 import notice  # noqa: E402
 import ownerdist  # noqa: E402
+import playerinfo  # noqa: E402
 import rankcollect  # noqa: E402
 import ranker  # noqa: E402
 import squadcmp as sc  # noqa: E402
@@ -48,6 +51,7 @@ V = 7                       # 시험용 안내 번호(진짜 99 로 닫혀 있�
 SMALL = dict(SQUAD_CMP_STREAK=4, SQUAD_CMP_FAIL_STREAK=5, SQUAD_CMP_WORKERS=3, SQUAD_CMP_SERIAL_REQ=0, SQUAD_CMP_429_WAIT_S=9,
              SQUAD_CMP_DAILY_REQ=10_000, SQUAD_CMP_SELFCHECK_REQ=100, SQUAD_CMP_REFRESH_DAYS=5, SQUAD_CMP_FAIL_DAYS=2,
              SQUAD_CMP_KEEP_DAYS=11, SQUAD_CMP_SNAP_MAX_H=20, SQUAD_CMP_TRY_MAX=2, SQUAD_CMP_TOP=3000, SQUAD_CMP_PERSON_REQ=5)
+REAL = {k: getattr(config, k) for k in SMALL}   # 진짜 상한으로 재는 테스트용
 _KEYS = ("ENV_PATH", "DB_PATH", "RANK_DB_PATH", "WEB_DATA", "RANK_COLLECT", "NOTICE_ACCEPTED", "NOTICE_VERSION",
          "API_KEY", "KEY_STATE", "SQUAD_CMP_ON", "SQUAD_CMP_OFF", "SQUAD_CMP_NOTICE_VERSION", "SERVER_URL",
          "SQUAD_CMP_TICK_S", "SQUAD_CMP_FIRST_S", "SQUAD_CMP_HALT_WAIT_MS", "CACHE_DIR") + tuple(SMALL)
@@ -1254,6 +1258,640 @@ def test_notice_gate_constant_is_json_safe():
         assert store.squad_take(e.conn, DAY, 2, ON) is None and store.squad_req(e.conn, ON) == 2, "상한인데 누적이 올랐다"
         v = dict(e.conn.execute("SELECT key, value FROM trade_state").fetchall())
         assert v["key_fp"] == "fp" and json.loads(v[store.SQUAD_REQ_KEY]) == {"on": ON, "n": 2}
+
+
+# ── 카드 채우기(조각 ②) ──────────────────────────────────────────────────
+
+_ALL16 = sorted(set(config.SIM_POS_OF.values()))
+TODAY = NOW.date()
+
+
+class Sims:
+    """가짜 시뮬레이터 — 요청한 카드와 간격을 적는다."""
+
+    def __init__(self):
+        self.calls: list[int] = []
+        self.waits: list[float] = []
+        self.bad: set[int] = set()
+        self.kind: dict[int, str] = {}   # 카드 → 오류 갈래(rate · down · format · bug)
+        self.hook = None
+
+    def sim(self, spid):
+        self.calls.append(spid)
+        if self.hook:
+            self.hook(len(self.calls))
+        k = self.kind.get(spid)
+        if k == "bug":
+            raise ValueError("파싱 버그 흉내")
+        if k:
+            raise playerinfo.PlayerInfoError("x", k)
+        return playerinfo.AbilitySim(ovr=100, groups={}, abilities={}, club_options=[(1000, "팀")], feature_options=[],
+                                     position_ovrs={} if spid in self.bad else {c: 100 for c in _ALL16})
+
+    def fill(self, today=TODAY, **kw) -> sc.FillResult:
+        return sc.fill_cards(config.squads_db_path(), config.DB_PATH, today, fetch_sim=self.sim, wait=self.waits.append, **kw)
+
+
+def put_lineup(e, sn: int, spids) -> None:
+    body = sc.pack_lineup([(s, i, 5) for i, s in enumerate(spids)])
+    e.put(sn, NOW, lineup_at=NOW, at=NOW, body=body)
+
+
+def put_account(e, ouid: str, day, spids) -> None:
+    m = e.conn.execute("INSERT INTO squad_match (match_id) VALUES (?)", (f"{ouid}{day}",)).lastrowid
+    o = e.conn.execute("INSERT INTO squad_owner (ouid, nickname, last_day) VALUES (?, ?, ?) ON CONFLICT(ouid)"
+                       " DO UPDATE SET last_day = MAX(last_day, excluded.last_day) RETURNING id", (ouid, ouid, day.toordinal())).fetchone()[0]
+    e.conn.executemany("INSERT INTO match_squads (spid, day, match, owner, po, grade) VALUES (?, ?, ?, ?, ?, ?)",
+                       [(s, day.toordinal(), m, o, i, 5) for i, s in enumerate(spids)])
+    e.conn.commit()
+    store.upsert_account(e.conn, ouid, ouid)
+
+
+def sim_on(e, spid: int, day) -> None:
+    e.conn.execute("INSERT OR REPLACE INTO card_extra (spid, pos_ovr, sim_on) VALUES (?, '{}', ?)", (spid, day.isoformat()))
+    e.conn.commit()
+
+
+@contextmanager
+def fill_env(**cfg):
+    cfg = {"SQUAD_CMP_CARD_TICK_REQ": 90, "SQUAD_CMP_CARD_DAILY_REQ": 900, "CARD_INFO_TTL_DAYS": 12, "CARD_BACKFILL_GAP_S": 3,
+           "CARD_BACKFILL_FORMAT_STOP": 4, **cfg}
+    with env(n=0) as e, _cfg(**cfg):
+        yield e, Sims()
+
+
+def test_fill_order_accounts_first_then_used_then_old():
+    with fill_env() as (e, s):
+        put_lineup(e, 1, [101, 102, 103])
+        put_lineup(e, 2, [102, 103, 104, 110])
+        put_lineup(e, 3, [103, 105, 106, 110])                            # 110 은 두 번 — 번호가 커도 101 보다 앞
+        e.put(4, NOW, fail="gone")                                        # 선발이 없는 줄
+        put_account(e, "me", TODAY - timedelta(days=2), [201, 105])       # 마지막 날이 아니다
+        put_account(e, "me", TODAY - timedelta(days=1), [202, 104])
+        put_account(e, "old", TODAY - timedelta(days=11), [203])          # 딱 11일(SQUAD_CMP_KEEP_DAYS) — 화면이 안 쓰는 선발
+        m = e.conn.execute("SELECT id FROM squad_owner WHERE ouid = 'me'").fetchone()[0]
+        assert m and e.conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 2
+        e.conn.execute("INSERT INTO squad_owner (ouid, nickname, last_day) VALUES ('상대', '상대', ?)", (TODAY.toordinal(),))
+        o = e.conn.execute("SELECT id FROM squad_owner WHERE ouid = '상대'").fetchone()[0]
+        e.conn.execute("INSERT INTO match_squads VALUES (204, ?, 1, ?, 0, 5)", (TODAY.toordinal(), o))   # 검색한 구단주가 아니다
+        e.conn.commit()
+        sim_on(e, 102, TODAY - timedelta(days=11))                        # 아직 신선
+        sim_on(e, 103, TODAY - timedelta(days=12))                        # 딱 12일 — 갱신
+        e.conn.execute("INSERT INTO card_extra (spid, page_on) VALUES (101, '2026-11-25')")   # 페이지만 읽은 반쪽 카드
+        e.conn.commit()
+        plan = sc.fill_plan(e.conn, config.squads_db_path(), TODAY)
+        assert plan == [104, 202, 110, 101, 105, 106, 103], plan
+        store.try_record(e.conn, "q:202", DAY, ok=False)                  # 오늘 물었다
+        store.try_record(e.conn, "c:105:sim", DAY, ok=True)               # 오늘 저쪽이 물었다
+        for d in (3, 2, 1):                                               # 저쪽에서 쉬는 카드(정보가 없는 카드)
+            store.try_record(e.conn, "c:106:sim", (TODAY - timedelta(days=d)).isoformat(), ok=False)
+        assert sc.fill_plan(e.conn, config.squads_db_path(), TODAY) == [104, 110, 101, 103]
+        store.try_record(e.conn, "q:110", (TODAY - timedelta(days=1)).isoformat(), ok=False)
+        assert s.fill().done == 4 and s.calls == [104, 110, 101, 103]
+        assert not store.try_failed(e.conn, "q:110"), "성공했는데 실패 기록이 남았다(다음 실패가 형식 바뀜 세기에서 빠진다)"
+        got = store.load_card_extras(e.conn, [104])[104]
+        assert got["sim_on"] == DAY and json.loads(got["pos_ovr"])["ST"] == 100, got
+        assert sc.fill_plan(e.conn, config.squads_db_path(), TODAY) == [], "채운 카드를 다시 고른다"
+        assert store.load_card_extras(e.conn, [101])[101]["sim_on"] == DAY
+
+
+def test_fill_counts_every_request_caps_and_gap():
+    with fill_env(SQUAD_CMP_CARD_TICK_REQ=5, SQUAD_CMP_CARD_DAILY_REQ=8) as (e, s):
+        put_lineup(e, 1, range(101, 112))
+        put_lineup(e, 2, range(201, 212))
+        s.bad = {102}
+        r = s.fill()
+        assert (r.planned, r.requests, r.done, r.stop) == (22, 5, 4, ""), r
+        assert s.waits == [3] * 4, ("요청 사이 간격", s.waits)
+        r = s.fill()
+        assert (r.requests, r.stop) == (3, "cap") and len(s.calls) == 8 == store.budget_used(e.conn, DAY, "squad_card"), r
+        assert s.fill().requests == 0 and len(s.calls) == 8
+        assert store.budget_used(e.conn, DAY, store.BUDGET_CARD) == 0 == store.budget_used(e.conn, DAY, store.BUDGET_SQUAD), "남의 장부에 셌다"
+        assert s.fill(TODAY + timedelta(days=1)).requests == 5, "다음 날 이어지지 않는다"
+        assert s.calls.count(102) == 2 and len(set(s.calls)) == 12, s.calls   # 실패한 카드는 다음 날 다시 — 줄 차례는 그대로다
+
+
+def test_fill_gates_at_start_and_before_every_request():
+    with fill_env() as (e, s):
+        put_lineup(e, 1, range(101, 112))
+        for name, kw in (("토글", dict(on="")), ("동의", dict(notice_ok=V - 1)), ("웹", dict(web=False)), ("수집", dict(collect=False)),
+                         ("키", dict(key=""))):
+            e.set(**kw)
+            assert s.fill().stop == "off" and s.calls == [], name
+        e.set()
+        config.KEY_STATE = "fail"
+        assert s.fill().stop == "off" and s.calls == [], "모름인데 새로 시작했다"
+        config.KEY_STATE = "ok"
+        s.hook = lambda n: setattr(config, "KEY_STATE", "fail") if n == 2 else None
+        assert s.fill().done == 11, "도는 중에 모름이 되면 이어 가야 한다"
+        config.KEY_STATE = "ok"
+    for name, off in (("토글", lambda: setattr(config, "SQUAD_CMP_ON", "")), ("수집", lambda: setattr(config, "RANK_COLLECT", False)),
+                      ("웹", lambda: setattr(config, "WEB_DATA", False))):
+        with fill_env() as (e, s):
+            put_lineup(e, 1, range(101, 112))
+            s.hook = lambda n, off=off: off() if n == 3 else None
+            r = s.fill()
+            assert (len(s.calls), r.stop, r.requests) == (3, "cancel", 3) and store.budget_used(e.conn, DAY, "squad_card") == 3, (name, r)
+    with fill_env() as (e, s):
+        put_lineup(e, 1, range(101, 112))
+        stop = []
+        s.hook = lambda n: stop.append(1) if n == 4 else None
+        r = s.fill(cancel=lambda: bool(stop))
+        assert (r.stop, r.done, len(s.calls)) == ("cancel", 4, 4), r
+
+
+def test_fill_block_marks_own_kind_and_other_paths_stop_it():
+    with fill_env() as (e, s):
+        put_lineup(e, 1, range(101, 112))
+        s.kind = {103: "rate"}
+        r = s.fill()
+        assert (r.stop, r.blocked, r.done, r.requests) == ("blocked", True, 2, 3) and e.hit("squad_card_block"), r
+        assert store.budget_hit_429(e.conn, DAY, store.card_block_kinds()), "다른 카드 길이 이 막힘을 안 본다"
+        r = s.fill()
+        assert (r.stop, r.blocked, r.requests) == ("blocked", False, 0) and len(s.calls) == 3, r
+    for k in store.card_block_kinds():
+        with fill_env() as (e, s):
+            put_lineup(e, 1, [101])
+            store.budget_mark_429(e.conn, DAY, k)
+            r = s.fill()
+            assert (r.stop, r.blocked, s.calls) == ("blocked", False, []), (k, "다른 길의 막힘을 이 몫의 막힘으로 셌다", r)
+
+
+def test_fill_format_stop_counts_new_cards_only():
+    with fill_env() as (e, s):
+        put_lineup(e, 1, range(101, 112))
+        s.bad = {102, 103}
+        s.kind = {104: "format", 105: "bug"}
+        r = s.fill()
+        assert (r.stop, len(s.calls), r.done) == ("format", 5, 1) and e.hit("squad_card_format"), r
+        assert not store.budget_hit_429(e.conn, DAY, ("card_backfill_format",)), "자동 채우기까지 멈췄다"
+        keys = {k for k, in e.conn.execute("SELECT key FROM card_tries")}
+        assert keys == {f"q:{n}" for n in range(101, 106)}, ("자동 채우기의 시도 기록에 썼다", keys)
+        assert s.fill().stop == "format" and len(s.calls) == 5
+        assert store.load_card_extras(e.conn, [102]) == {}, "깨진 응답을 저장했다"
+    with fill_env() as (e, s):   # 지난 날 실패한 카드(어느 길이든)는 안 센다 — 넥슨에 정보가 없는 카드
+        put_lineup(e, 1, range(101, 112))
+        y = (TODAY - timedelta(days=1)).isoformat()
+        for n in (101, 102, 103):
+            store.try_record(e.conn, f"q:{n}", y, ok=False)
+        for n in (104, 105):
+            store.try_record(e.conn, f"c:{n}:sim", y, ok=False)
+        s.bad = set(range(101, 109))   # 새로 실패하는 카드는 106·107·108 셋
+        r = s.fill()
+        assert (r.stop, len(s.calls), r.done) == ("", 11, 3) and not e.hit("squad_card_format"), r
+    with fill_env() as (e, s):   # 성공하면 처음부터 센다
+        put_lineup(e, 1, range(101, 112))
+        s.bad = {101, 102, 103, 105, 106, 107}
+        assert s.fill().stop == "" and len(s.calls) == 11
+
+
+def test_fill_failure_records_do_not_touch_backfill():
+    """이쪽 실패가 자동 채우기의 차례를 막지 않는다(그쪽의 형식 바뀜 감지가 살아 있게)."""
+    with fill_env() as (e, s):
+        put_lineup(e, 1, [101])
+        s.bad = {101}
+        for d in range(4):
+            s.fill(TODAY + timedelta(days=d))
+        assert len(s.calls) == 3, "세 번 실패한 카드는 쉰다"
+        day = (TODAY + timedelta(days=4)).isoformat()
+        assert store.try_skip(e.conn, "q:101", day) and not store.try_skip(e.conn, "c:101:sim", day)
+        assert not store.try_failed(e.conn, "c:101:sim")
+
+
+def test_fill_down_needs_two_cards_in_a_row():
+    with fill_env() as (e, s):
+        put_lineup(e, 1, range(101, 112))
+        s.kind = {102: "down", 104: "down", 105: "down"}
+        r = s.fill()
+        assert (r.stop, len(s.calls), r.blocked, r.done) == ("down", 5, False, 2), r
+        assert not e.hit("squad_card_block") and not store.try_failed(e.conn, "q:102")
+
+
+def test_fill_reads_squads_and_closes_without_creating():
+    with fill_env() as (e, s):
+        put_account(e, "me", TODAY, [101, 102])
+        assert s.fill().done == 2 and not config.squads_db_path().exists(), "새 설치에 파일을 만들었다"
+    with fill_env() as (e, s):
+        put_lineup(e, 1, [101, 102])
+        seen = []
+        s.hook = lambda n: seen.append(_can_delete(config.squads_db_path()))
+        s.fill()
+        assert seen == [True, True], "요청하는 동안 squads.db 를 열고 있다(지우기·WAL 비우기가 막힌다)"
+    with fill_env() as (e, s):   # 잠긴 DB — 종류만 적고 끝
+        put_lineup(e, 1, [101])
+        keep = store.try_record
+
+        def locked(*a, **k):
+            raise sqlite3.OperationalError("database is locked")
+        store.try_record = locked
+        try:
+            r = s.fill()
+        finally:
+            store.try_record = keep
+        assert r.error == "OperationalError" and r.requests == 1, r
+
+
+# ── 카드 줄(로더 · 예약 · 두 관문) ────────────────────────────────────────
+
+CARD_V = config.CARD_BACKFILL_NOTICE_VERSION
+
+
+@contextmanager
+def row_env(card=True, squad=True, key_state="ok"):
+    """카드 자동 채우기와 같은 OVR 두 토글의 .env · 이 프로세스 값. 안내 번호는 둘 다 넘긴 값으로."""
+    keep = {k: getattr(config, k) for k in ("CARD_BACKFILL_ON", "CARD_BACKFILL_OFF")}
+    try:
+        with env(n=0) as e:
+            config.NOTICE_VERSION = config.SQUAD_CMP_NOTICE_VERSION = CARD_V
+
+            def gates(card=True, squad=True, key_state="ok"):
+                on = ON if card else ""
+                e.set(notice_ok=CARD_V, on=ON if squad else "", disk={config.CARD_BACKFILL_VAR: on})
+                config.CARD_BACKFILL_ON, config.CARD_BACKFILL_OFF, config.KEY_STATE = on, "", key_state
+            e.gates = gates
+            gates(card, squad, key_state)
+            yield e
+    finally:
+        for k, v in keep.items():
+            setattr(config, k, v)
+
+
+class Parts:
+    """진짜 CardBackfillLoader 를 같은 스레드에서 — 두 몫만 바꿔 끼운다."""
+
+    def __init__(self):
+        self.order: list[str] = []
+        self.card_res = cardcollect.RunResult(requests=3, done=2)
+        self.squad_res = sc.FillResult(requests=4, done=4)
+        self.in_card = self.in_squad = None
+        self.got = []
+
+    def __enter__(self):
+        self.keep = cardcollect.run, sc.fill_cards
+
+        def card(path, today, cap, cancel, *, sleep):
+            self.order.append("card")
+            self.card_cancel = cancel
+            if self.in_card:
+                self.in_card()
+            return dataclasses.replace(self.card_res)   # 로더가 결과에 둘째 몫을 더한다
+
+        def squad(spath, fpath, today, *, cancel, wait):
+            assert (spath, fpath, today) == (config.squads_db_path(), config.DB_PATH, TODAY)
+            self.order.append("squad")
+            self.squad_cancel = cancel
+            if self.in_squad:
+                self.in_squad()
+            return self.squad_res
+        cardcollect.run, sc.fill_cards = card, squad
+        return self
+
+    def __exit__(self, *a):
+        cardcollect.run, sc.fill_cards = self.keep
+
+    def go(self, **kw):
+        self.ld = app_main.CardBackfillLoader(TODAY, **kw)
+        waits = []
+        self.ld._stop_squad.wait, self.waits = waits.append, waits
+        self.ld.done.connect(self.got.append)
+        self.ld.run()
+        return self.got[-1]
+
+
+def test_loader_runs_both_parts_in_order():
+    with row_env(), Parts() as p, _cfg(CARD_BACKFILL_GAP_S=7):
+        r = p.go(card=True, squad=True)
+        assert p.order == ["card", "squad"] and r.done == 6 and r.squad is p.squad_res and r.requests == 3, (p.order, r)
+        assert p.waits == [7], "몫이 바뀔 때 요청 사이 간격을 안 지킨다"
+        p.order.clear()
+        r = p.go(card=False, squad=True)
+        assert p.order == ["squad"] and r.done == 4 and r.status is None and p.waits == [], (p.order, r)
+        p.order.clear()
+        r = p.go(card=True, squad=False)
+        assert p.order == ["card"] and r.squad is None, p.order
+        assert app_main.CardBackfillLoader.WRITES == {app_main.STORE_FIFA, app_main.STORE_CARDS}
+    for field in ("blocked", "down"):   # 첫 몫이 막힘·점검이면 둘째 몫을 안 한다
+        with row_env(), Parts() as p:
+            p.card_res = cardcollect.RunResult(requests=1, **{field: True})
+            assert p.go(card=True, squad=True).squad is None and p.order == ["card"], field
+    with row_env(), Parts() as p:   # 첫 몫이 예외로 끝나도 둘째 몫은 한다(결과는 온다)
+        def boom():
+            raise sqlite3.OperationalError("x")
+        p.in_card = boom
+        r = p.go(card=True, squad=True)
+        assert r.error == "OperationalError" and p.order == ["card", "squad"] and r.done == 4, r
+        p.in_squad = boom
+        r = p.go(card=False, squad=True)
+        assert r.squad.error == "OperationalError" and r.done == 0
+
+
+def test_loader_cancels_each_part_alone():
+    with row_env(), Parts() as p:
+        p.in_card = lambda: p.ld.cancel_card()
+        p.go(card=True, squad=True)
+        assert p.card_cancel() and p.order == ["card", "squad"], "첫 몫만 끊었는데 둘째 몫까지 안 했다"
+        assert not p.squad_cancel()
+    with row_env(), Parts() as p:
+        p.in_card = lambda: p.ld.cancel_squad()
+        p.go(card=True, squad=True)
+        assert not p.card_cancel() and p.order == ["card"], "둘째 몫을 끊었는데 시작했다"
+    with row_env(), Parts() as p:
+        p.in_card = lambda: p.ld.request_stop()   # 걸쇠 · 게임 · 종료
+        p.go(card=True, squad=True)
+        assert p.card_cancel() and p.order == ["card"], "두 몫 모두 끊어야 한다"
+    with row_env(), Parts() as p:   # 이 프로세스의 관문 — 도는 동안 토글이 꺼지면
+        p.go(card=True, squad=True)
+        assert not p.card_cancel()
+        config.CARD_BACKFILL_ON = ""
+        assert p.card_cancel(), "자동 채우기를 껐는데 첫 몫이 이어 간다"
+        p.order.clear()
+        p.go(card=True, squad=True)
+        assert p.order == ["squad"], "시작 직전에 첫 몫의 관문을 안 본다"
+
+
+class FakeRow:
+    """가짜 CardBackfillLoader."""
+    made: list["FakeRow"] = []
+
+    def __init__(self, today, card=True, squad=False):
+        self.today, self.parts = today, (card, squad)
+        self.done, self.finished = _Sig(), _Sig()
+        self.running, self.cuts = False, []
+        FakeRow.made.append(self)
+
+    def start(self):
+        self.running = True
+
+    def isRunning(self):
+        return self.running
+
+    def cancel(self):
+        self.cuts.append("all")
+
+    def cancel_card(self):
+        self.cuts.append("card")
+
+    def cancel_squad(self):
+        self.cuts.append("squad")
+
+    def wait(self, ms=0):
+        return True
+
+    def end(self, res):
+        self.running = False
+        self.done.emit(res)
+        self.finished.emit()
+
+
+@contextmanager
+def row_sched(**kw):
+    keep = app_main.CardBackfillLoader
+    app_main.CardBackfillLoader, FakeRow.made = FakeRow, []
+    app_main._GAME["on"] = False
+    try:
+        with row_env(**kw) as e:
+            e.cards = app_main.CardBackfillScheduler(now_fn=lambda: e.now)
+            yield e
+    finally:
+        app_main.CardBackfillLoader = keep
+        app_main._GAME["on"] = False
+
+
+def test_card_row_two_gates_table():
+    """ROADMAP "카드 줄의 두 관문" — 새로 띄우는 몫과, 도는 로더(두 몫)에서 끊는 몫."""
+    table = {(True, True): ((True, True), []), (True, False): ((True, False), ["squad"]), (True, None): ((True, False), []),
+             (False, True): ((False, True), ["card"]), (False, False): (None, ["card", "squad"]), (False, None): (None, ["card"])}
+    for (card, squad), (parts, cuts) in table.items():
+        kw = dict(card=card, squad=squad is not False, key_state="fail" if squad is None else "ok")
+        with row_sched(**kw) as e:
+            assert config.read_card_row() == (card, squad), (card, squad, config.read_card_row())
+            e.cards.tick()
+            assert [x.parts for x in FakeRow.made] == ([parts] if parts else []), (card, squad, [x.parts for x in FakeRow.made])
+        with row_sched() as e:
+            e.cards.tick()
+            assert FakeRow.made[0].parts == (True, True) and FakeRow.made[0].today == TODAY
+            e.gates(**kw)
+            e.cards.sync()
+            e.cards.tick()
+            assert len(FakeRow.made) == 1 and FakeRow.made[0].cuts == cuts * 2, (card, squad, FakeRow.made[0].cuts)
+    with row_sched() as e:   # .env 를 못 읽음 — 아무것도 안 한다
+        keep = config._read_env_disk
+        config._read_env_disk = lambda: None
+        try:
+            e.cards.tick()
+            assert FakeRow.made == []
+            config._read_env_disk = keep
+            e.cards.tick()
+            config._read_env_disk = lambda: None
+            e.cards.sync()
+            assert FakeRow.made[0].cuts == []
+        finally:
+            config._read_env_disk = keep
+    with row_sched() as e:   # 두 관문을 한 번 읽은 .env 로
+        keep, n = config._read_env_disk, []
+        config._read_env_disk = lambda: n.append(1) or keep()
+        try:
+            e.cards.sync()
+        finally:
+            config._read_env_disk = keep
+        assert len(n) == 1, f".env 를 {len(n)}번 읽었다"
+
+
+def test_card_row_disk_side_also_closes_squad():
+    for name, var in (("토글", config.SQUAD_CMP_VAR), ("수집", config.RANK_COLLECT_VAR)):
+        with row_sched() as e:
+            e.set(notice_ok=CARD_V, disk={config.CARD_BACKFILL_VAR: ON, var: "" if name == "토글" else 0})
+            assert config.read_card_row() == (True, False), name
+            e.set(notice_ok=CARD_V, disk={config.CARD_BACKFILL_VAR: ""})
+            assert config.read_card_row() == (False, True), name
+
+
+def test_card_row_stops_both_on_game_and_yields_to_specup():
+    with row_sched(card=False) as e:
+        app_main._GAME["on"] = True
+        e.cards.tick()
+        assert FakeRow.made == [], "게임 중"
+        app_main._GAME["on"] = False
+        e.cards.yield_to = lambda: True
+        e.cards.tick()
+        assert FakeRow.made == [], "스펙업이 도는데 시작했다"
+        e.cards.yield_to = lambda: False
+        e.cards.yield_squad()   # 안 돌면 아무 일 없음
+        e.cards.resume()
+        ld = FakeRow.made[0]
+        e.cards.yield_squad()
+        assert ld.cuts == ["squad"], "스펙업에 둘째 몫만 양보한다"
+        e.cards.pause()
+        e.cards.halt_for_delete()
+        assert ld.cuts == ["squad", "all", "all"]
+        assert e.cards.shutdown(fast=True) == [ld] and ld.cuts[-1] == "all"
+
+
+def test_status_is_kept_when_backfill_part_did_not_run():
+    with row_sched() as e:
+        e.cards.tick()
+        st = cardcollect.Status(5, 10, 3, False)
+        FakeRow.made[0].end(cardcollect.RunResult(status=st))
+        e.gates(card=False)
+        e.cards.tick()
+        FakeRow.made[1].end(cardcollect.RunResult(squad=sc.FillResult(done=3), done=3))
+        assert e.cards.last == st, "자동 채우기를 안 돌렸는데 상태를 지웠다"
+
+
+def _mark_days(e, kind, days):
+    for d in days:
+        store.budget_mark_429(e.conn, f"2026-11-{d}", kind)
+
+
+def test_squad_part_block_turns_off_only_squad_and_purges():
+    with row_sched() as e, _cfg(TRAIT_BLOCK_DAYS=2):
+        squad = app_main.SquadCmpScheduler(now_fn=lambda: e.now)
+        shell = tray.AppShell(_app, card_sched=e.cards, squad_sched=squad)
+        offs = []
+        squad.switched_off.connect(offs.append)
+        put_lineup(e, 1, [101])
+        blocked = cardcollect.RunResult(squad=sc.FillResult(blocked=True))
+        _mark_days(e, "squad_card_block", (24, 25))          # 24 는 켠 날 — 안 센다
+        _mark_days(e, "card_backfill_block", (25, 26, 27))   # 다른 몫의 막힘
+        e.cards.tick()
+        FakeRow.made[0].end(blocked)
+        assert config.SQUAD_CMP_ON and e.rows() and not offs, "하루 막혔는데 껐다"
+        _mark_days(e, "squad_card_block", (26,))
+        e.cards.tick()
+        FakeRow.made[1].end(cardcollect.RunResult(blocked=False, squad=sc.FillResult(blocked=False)))
+        assert config.SQUAD_CMP_ON, "이번에 안 막혔는데 껐다"
+        e.cards.tick()
+        FakeRow.made[2].end(blocked)
+        assert config.SQUAD_CMP_ON == "" and config.SQUAD_CMP_OFF == "blocked" == e.env_line(config.SQUAD_CMP_OFF_VAR)
+        assert e.rows() == {} and offs == ["blocked"], "껐는데 받은 선발을 안 지웠다"
+        assert config.CARD_BACKFILL_ON, "자동 채우기까지 껐다"
+        assert sc.OFF_REASON_TEXT["blocked"] in sc.status_text(config.squads_db_path(), NOW)
+        FakeRow.made[2].running = True
+        e.cards.sync()
+        assert FakeRow.made[2].cuts == ["squad"]
+        shell.deleteLater()
+    with row_sched() as e, _cfg(TRAIT_BLOCK_DAYS=2):   # 거꾸로 — 자동 채우기 몫의 막힘은 같은 OVR 을 안 끈다
+        _mark_days(e, "card_backfill_block", (25, 26))
+        e.cards.tick()
+        FakeRow.made[0].end(cardcollect.RunResult(blocked=True))
+        assert config.CARD_BACKFILL_ON == "" and config.SQUAD_CMP_ON
+    with row_sched() as e, _cfg(TRAIT_BLOCK_DAYS=2):   # .env 를 못 쓰면 켜진 채 · 지우지 않는다
+        off = []
+        e.cards.squad_off.connect(lambda: off.append(1))
+        _mark_days(e, "squad_card_block", (25, 26))
+        keep = config._save_env
+
+        def boom(*a):
+            raise OSError
+        config._save_env = boom
+        e.cards.tick()
+        try:
+            FakeRow.made[0].end(cardcollect.RunResult(squad=sc.FillResult(blocked=True)))
+        finally:
+            config._save_env = keep
+        assert config.SQUAD_CMP_ON and not off
+
+
+def test_devkey_off_cuts_the_running_squad_part():
+    with row_sched() as e:
+        squad = app_main.SquadCmpScheduler(now_fn=lambda: e.now)
+        shell = tray.AppShell(_app, card_sched=e.cards, squad_sched=squad)
+        e.cards.tick()
+        squad._on_done(sc.Result(stop="quota", devkey=True))
+        assert config.SQUAD_CMP_OFF == "devkey" and FakeRow.made[0].cuts == ["squad"], FakeRow.made[0].cuts
+        shell.deleteLater()
+
+
+def test_window_and_toggle_reach_both_schedulers():
+    class S:
+        def __init__(self):
+            self.n = []
+
+        def sync(self, start=False):
+            self.n.append(start)
+    w = type("W", (), {"_squad_sched": S(), "_card_sched": S()})()
+    w._sync_card_backfill = lambda start=False: app_main.MainWindow._sync_card_backfill(w, start)
+    app_main.MainWindow._sync_squad_cmp(w)
+    assert w._squad_sched.n == [False] and w._card_sched.n == [False], "한쪽만 맞춘다"
+    with env() as e:
+        config.SQUAD_CMP_NOTICE_VERSION = config.NOTICE_VERSION
+        e.set(on="")
+
+        class P(QWidget):
+            _squad_sched, _card_sched = S(), S()
+        p = P()
+        dlg = app_main.AboutDialog(p)
+        dlg.chk_squad.setChecked(True)
+        assert p._squad_sched.n == [True] and p._card_sched.n == [False]
+        dlg.chk_squad.setChecked(False)
+        assert p._squad_sched.n == [True, False] and p._card_sched.n == [False, False], "끌 때 카드 줄을 안 맞춘다"
+        dlg.done(0)
+
+
+def test_real_row_loader_fills_in_a_thread():
+    with row_env(card=False) as e, _cfg(CARD_BACKFILL_GAP_S=0):
+        put_lineup(e, 1, [101, 102])
+        s, keep = Sims(), playerinfo.fetch_player_ability
+        playerinfo.fetch_player_ability = lambda spid, strong=1: s.sim(spid)
+        got = []
+        try:
+            ld = app_main.CardBackfillLoader(datetime.now().date(), card=False, squad=True)
+            ld.done.connect(got.append)
+            ld.start()
+            assert ld.wait(10_000)
+            _app.processEvents()
+        finally:
+            playerinfo.fetch_player_ability = keep
+        assert sorted(s.calls) == [101, 102] and got[0].done == 2 and got[0].squad.done == 2, (s.calls, got)
+
+
+def test_fill_days():
+    """며칠이면 관문 B(약 3,000장)까지 가나 — 하루에 켜 둔 틱 수마다, 자동 채우기 켬·끔 · 게임 2시간(가짜 시계).
+    저장이 많아 카드 수와 이 몫의 상한만 1/5 로 같이 줄인다(비율은 그대로 — 600장 · 하루 80 · 틱 8)."""
+    k, per_hour = 5, 6
+    n_cards = 3000 // k
+    small = dict(SQUAD_CMP_CARD_DAILY_REQ=config.SQUAD_CMP_CARD_DAILY_REQ // k, SQUAD_CMP_CARD_TICK_REQ=config.SQUAD_CMP_CARD_TICK_REQ // k)
+
+    def days_to_fill(ticks: int, auto: bool, game_ticks: int = 0) -> tuple[int, int]:
+        with env(n=0) as e, _cfg(**{**REAL, **small}):
+            for i in range(0, n_cards + 3, 11):
+                put_lineup(e, i + 1, [1000 + min(x, n_cards - 1) for x in range(i, i + 11)])
+            if auto:   # 자동 채우기 수요 300장(같은 카드와 겹친다)
+                put_account(e, "me", TODAY, list(range(1000, 1060)))
+            s = Sims()
+            pages = []
+
+            def page(spid):
+                pages.append(spid)
+                return playerinfo.PlayerInfo(sp_id=spid, name="선수", ovr=100, height="181cm", weight="76kg", body_type="보통",
+                                             prices={g: "1,000 BP" for g in range(1, 14)})
+            day, peak, waits = 0, 0, []
+            while day < 40:
+                today = TODAY + timedelta(days=day)
+                for t in range(ticks):
+                    if t < game_ticks:
+                        continue
+                    waits.clear()
+                    if auto:
+                        cardcollect.run(config.DB_PATH, today, config.CARD_BACKFILL_DAILY_REQ, fetch_page=page, fetch_sim=s.sim,
+                                        fetch_detail=lambda i: ("", []), fetch_list=lambda: [], sleep=waits.append)
+                    r = sc.fill_cards(config.squads_db_path(), config.DB_PATH, today, fetch_sim=s.sim, wait=waits.append)
+                    if not r.requests and (not auto or r.stop == "cap"):
+                        break   # 그날 몫이 끝났다 — 남은 틱은 요청 0
+                day += 1
+                peak = max(peak, store.budget_used(e.conn, today.isoformat(), "squad_card"))
+                left = len(sc.fill_plan(e.conn, config.squads_db_path(), today + timedelta(days=1)))
+                if not left:
+                    break
+            assert len(s.calls) == len(set(s.calls)), "한 카드를 두 길이 두 번 물었다"
+            return day, peak * k
+    got = {"1시간": days_to_fill(per_hour, False), "2시간": days_to_fill(2 * per_hour, False), "종일": days_to_fill(24 * per_hour, False),
+           "2시간+자동": days_to_fill(2 * per_hour, True), "4시간(게임 2시간)": days_to_fill(4 * per_hour, False, 2 * per_hour)}
+    print("    카드 3,000장까지 (날, 하루 요청 최대):", got)
+    assert got["1시간"] == (13, 240) and got["2시간"] == (8, 400) and got["종일"] == (8, 400), got
+    assert got["4시간(게임 2시간)"] == (8, 400) and got["2시간+자동"][0] <= 8, got
+    per_tick = (config.CARD_BACKFILL_TICK_REQ + config.SQUAD_CMP_CARD_TICK_REQ) * config.CARD_BACKFILL_GAP_S
+    assert per_tick < config.CARD_BACKFILL_TICK_S / 2, f"한 틱의 간격만 {per_tick}초 — 다음 틱과 겹친다"
 
 
 def main() -> int:

@@ -1491,6 +1491,7 @@ BUDGET_OPENAPI = "openapi"          # 다른 로더(검색·거래·랭커 기�
 BUDGET_RANKER_PICK = "ranker_pick"
 BUDGET_OWNER_DIST = "owner_dist"    # 구단주 분포(49단계) — 자기 429 는 BUDGET_OPENAPI 에도 남겨 다른 로더가 같이 멈춘다
 BUDGET_SQUAD = "squad_cmp"          # 같은 OVR 비교 자료(122) — 429 는 개발 키로 보이면 여기만, 아니면 BUDGET_OPENAPI 에도
+BUDGET_SQUAD_CARD = "squad_card"    # 그 선발의 카드 시뮬레이터(웹 · 조각 ②) — 막힘 squad_card_block · 형식 squad_card_format
 SQUAD_REQ_KEY = "squad_cmp_req"     # trade_state — 켠 시각과 그 뒤 누적 요청 수(JSON)
 # 포지션 특성(32단계) — 오픈API 는 ranker_pick 한 장부(429 도)에 더해 201~500 몫만 따로 센다(trait_share · 429 는 안 적는다).
 # 웹(스쿼드메이커)은 trait_web 이 하루 요청 · 그날 멈춤 표시는 hit_429 칸에: 막힘(403·429·Cloudflare)은 trait_web_block,
@@ -1547,9 +1548,9 @@ BUDGET_SPECUP = "specup"   # 스펙업 순서(121) — 화면이 보이는 동�
 
 def card_block_kinds() -> tuple[str, ...]:
     """같은 IP 의 웹 길 막힘 표시 — 하나라도 그날 있으면 카드 백필(앱·측정 도구 둘 다)과 스펙업 받기는 그날 시작하지 않는다
-    (B[중]11 · 5판 · 121 M3 이 카드 페이지를 읽는 쓰임 셋 — 가계부·축구장 칩·스펙업 — 을, 110 ④ 가 저장 전술을 더했다)."""
+    (B[중]11 · 5판 · 121 M3 이 카드 페이지를 읽는 쓰임 셋 — 가계부·축구장 칩·스펙업 — 을, 110 ④ 가 저장 전술을, 122 가 같은 OVR 카드를 더했다)."""
     return (BUDGET_TRAIT_WEB_BLOCK, BUDGET_TACTIC_WEB_BLOCK, f"{BUDGET_CARD}_block", f"{BUDGET_CARD_DEV}_block",
-            "card_ledger_block", "card_chip_block", f"{BUDGET_SPECUP}_block")
+            "card_ledger_block", "card_chip_block", f"{BUDGET_SPECUP}_block", f"{BUDGET_SQUAD_CARD}_block")
 
 
 def card_block_streak(conn: sqlite3.Connection, kind: str, since_day: str) -> int:

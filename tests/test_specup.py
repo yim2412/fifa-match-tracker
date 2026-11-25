@@ -29,8 +29,9 @@ TEAM, OTHER = 1005, 2006
 POS = [0, 3, 5, 7, 10, 13, 15, 23, 25, 27, 9]        # GK · RB CB LB · CDM CM CM · RW ST LW · CDM
 RB, CB, RW = 1, 2, 7                                 # 위 목록의 자리 번호
 CELLS = sorted(set(config.SIM_POS_OF.values()))
-MINE = [100_000_001 + i for i in range(11)]          # 지금 선발 — 전부 1강 100 · 11강 = 121
-B11 = config.GRADE_OVR_BONUS[11]
+MINE = [100_000_001 + i for i in range(11)]          # 지금 선발 — 전부 1강 100 · 11강 = 121 · 적응도까지 125
+ADAPT = 4                                            # 적응도 5 의 몫(122) — 손으로 적는다. 걸음의 차이와 순서(골든)는 그대로다
+B11 = config.GRADE_OVR_BONUS[11] + ADAPT
 EOK = sp.EOK
 
 
@@ -179,7 +180,7 @@ def test_slot_options_filters_and_counts():
              300_000_001: (["FW"], extra(120), {11: 5}, 20)}                             # 지금 선발 다른 자리(GK)와 같은 선수
     inp = make(cards)
     got, skip = sp.slot_options(inp.lineup[RW], inp.cands, inp, (8, 9, 10, 11), True)
-    bonus = config.GRADE_OVR_BONUS
+    bonus = {g: b + ADAPT for g, b in config.GRADE_OVR_BONUS.items()}
     assert [(o.spid, o.grade, o.ovr) for o in got] == [(ok, 8, 105 + bonus[8]), (ok, 9, 105 + bonus[9]),
                                                        (200_000_102, 11, 100 + B11), (ok, 11, 105 + B11)], got
     assert skip == {(200_000_103, None): "color_out", (200_000_104, None): "color_unknown", (200_000_106, None): "salary_unknown",
@@ -272,7 +273,7 @@ def test_plan_golden_order_chunk_and_budget():
     assert [s.spent_before // EOK for s in p.steps] == [0, 10, 30, 60, 70]
     assert p.salary_on and p.salary_now == 308 and [s.salary_sum for s in p.steps] == [308] * 5
     assert [s.state for s in p.slots] == [sp.SLOT_EMPTY, "", "", sp.SLOT_EMPTY, *[sp.SLOT_EMPTY] * 3, "", "", sp.SLOT_EMPTY, sp.SLOT_EMPTY]
-    assert all(s.ovr == 121 for s in p.slots)
+    assert all(s.ovr == 121 + ADAPT for s in p.slots)
     assert [sp.budget_cut(p.steps, b * EOK) for b in (0, 10, 59, 60, 1000)] == [0, 1, 2, 3, 5]
     assert p.steps[0].price_on == "2026-11-20"
 

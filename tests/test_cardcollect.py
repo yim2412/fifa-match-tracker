@@ -433,6 +433,28 @@ def test_teamcolor_steps_and_daily_share():
         assert [s["members"] for s in steps] == [3, 6] and fresh
 
 
+def test_teamcolor_only_for_cards_whose_page_was_read():
+    """같은 OVR 비교 자료(122)가 시뮬레이터만 읽은 카드의 팀컬러는 안 센다 — 스펙업·칩이 페이지를 읽은 카드(card_info)는 센다."""
+    with Env() as e:
+        account(e.conn)
+        meta(e.conn, [1000, 1001, 1002, 1003], enhance=[10001], steps_fresh=False)
+
+        def sim_card(spid, tid):
+            e.conn.execute("INSERT INTO card_extra (spid, pos_ovr, club_tc, rel_tc, sim_on) VALUES (?, '{}', ?, '[]', ?)",
+                           (spid, f'[[{tid}, "팀"]]', TODAY.isoformat()))
+            e.conn.commit()
+        sim_card(1, 1001)                                             # 시뮬레이터만
+        jobs = cc.plan(e.conn, TODAY, dem=[], mine={}).jobs
+        assert jobs == [], f"페이지를 읽은 카드가 하나도 없는데 팀컬러를 받는다 {jobs}"
+        sim_card(2, 1002)
+        e.conn.execute("UPDATE card_extra SET page_on = ? WHERE spid = 2", (TODAY.isoformat(),))
+        sim_card(3, 1003)
+        store.save_card_info(e.conn, 3, "선수", "ST", 100, 20, TODAY.isoformat())   # 스펙업·칩·가계부가 읽은 페이지
+        e.conn.commit()
+        got = [j.key for j in cc.plan(e.conn, TODAY, dem=[], mine={}).jobs if j.step == "tc"]
+        assert got == [10001, 1002, 1003], got
+
+
 def test_price_days_src_bits_and_fixed_c6_grade():
     with Env() as e:
         account(e.conn)
@@ -695,8 +717,8 @@ class _Sig:
 class FakeLoader:
     made: list["FakeLoader"] = []
 
-    def __init__(self, today):
-        self.today = today
+    def __init__(self, today, card=True, squad=False):
+        self.today, self.parts = today, (card, squad)
         self.done, self.finished = _Sig(), _Sig()
         self.running = self.cancelled = self.terminated = False
         self.waits: list[int] = []
@@ -710,6 +732,11 @@ class FakeLoader:
 
     def cancel(self):
         self.cancelled = True
+
+    cancel_card = cancel
+
+    def cancel_squad(self):   # 같은 OVR 몫(122) — 이 파일은 첫 몫만 본다(test_squadcmp)
+        pass
 
     def wait(self, ms=0):
         self.waits.append(ms)

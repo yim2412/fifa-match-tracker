@@ -38,7 +38,7 @@ class SquadOvr:
 
 
 def player_card(sp_id: int, pos_code, grade, extras: dict[int, dict]) -> PlayerCard:
-    """pos_code·grade = 그 줄에서 가장 많이 선 자리·쓴 강화(`stats.PlayerStat`). 팀컬러·적응도는 안 넣는다(51 U3)."""
+    """pos_code·grade = 그 줄에서 가장 많이 선 자리·쓴 강화(`stats.PlayerStat`). 적응도 5 를 넣고 팀컬러는 안 넣는다(122 U4)."""
     extra = extras.get(sp_id)
     if extra is None:
         return PlayerCard()

@@ -11762,11 +11762,11 @@ def test_84_game_watch_and_schedulers():
         config.NOTICE_ACCEPTED, config.WEB_DATA, config.RANK_COLLECT = keep_cfg
 
     # 구단주 분포 · 카드 정보 — 같은 식
-    keep_g = (config.read_owner_dist, config.read_card_backfill, app_main.CardBackfillLoader)
+    keep_g = (config.read_owner_dist, config.read_card_row, app_main.CardBackfillLoader)
     started = []
 
     class _CardLoader(_Run):
-        def __init__(self, today):
+        def __init__(self, today, card=True, squad=False):
             super().__init__()
             self.done, self.finished = _FakePickLoader._S(), _FakePickLoader._S()
 
@@ -11777,7 +11777,7 @@ def test_84_game_watch_and_schedulers():
             started.append("card")
     try:
         config.read_owner_dist = lambda: (True, True)
-        config.read_card_backfill = lambda: True
+        config.read_card_row = lambda: (True, False)
         app_main.CardBackfillLoader = _CardLoader
         od = app_main.OwnerDistScheduler()
         od._mixed = True
@@ -11796,7 +11796,7 @@ def test_84_game_watch_and_schedulers():
         cb.resume()
         assert started == ["owner", "card"], f"게임이 꺼졌는데 다시 안 시작했다: {started}"
     finally:
-        config.read_owner_dist, config.read_card_backfill, app_main.CardBackfillLoader = keep_g
+        config.read_owner_dist, config.read_card_row, app_main.CardBackfillLoader = keep_g
 
 
 def test_84_game_change_reaches_every_auto_path():
@@ -16876,7 +16876,7 @@ def test_68_player_card_columns_and_squad_ovr():
         rows = [r for r in range(t.rowCount()) if t.item(r, cols.index("선수")).text() == name]
         assert rows, name
         r = rows[0]
-        assert t.item(r, cols.index("실효 OVR")).text() == str(grid[config.SIM_POS_OF[known.pos_code]] + config.GRADE_OVR_BONUS[known.grade]), t.item(r, cols.index("실효 OVR")).text()
+        assert t.item(r, cols.index("실효 OVR")).text() == str(grid[config.SIM_POS_OF[known.pos_code]] + config.GRADE_OVR_BONUS[known.grade] + 4), t.item(r, cols.index("실효 OVR")).text()
         assert t.item(r, cols.index("키")).text() == "186cm" and t.item(r, cols.index("체형")).text() == "마름"
         # 칩 — 평소엔 안 보이고 [카드] 를 고르면 보인다 · 다른 묶음은 숨는다
         i = [n for n, _c in _win.PLAYER_GROUPS].index("카드")
@@ -18395,6 +18395,9 @@ def test_specup_fetch_gate_121():
     class _Sched:
         def running(self):
             return True
+
+        def yield_squad(self):
+            pass
     with _SpecupEnv() as env:
         ld = env.ready()
         assert ld is not None and ld.running and _win._specup_data is ld.data, "다 맞는데 안 받는다(아래가 빈 검사)"
@@ -18600,8 +18603,8 @@ def test_specup_and_card_backfill_take_turns_121():
     started = []
 
     class _Card:
-        def __init__(self, today):
-            self.done, self.finished, self.running = _SpecupSig(), _SpecupSig(), False
+        def __init__(self, today, card=True, squad=False):
+            self.done, self.finished, self.running, self.cut = _SpecupSig(), _SpecupSig(), False, 0
 
         def start(self):
             started.append(self)
@@ -18611,9 +18614,12 @@ def test_specup_and_card_backfill_take_turns_121():
             return self.running
 
         def cancel(self):
-            pass
-    keep = config.read_card_backfill, app_main.CardBackfillLoader
-    config.read_card_backfill, app_main.CardBackfillLoader = lambda: True, _Card
+            raise AssertionError("자동 채우기 몫까지 끊었다")
+
+        def cancel_squad(self):
+            self.cut += 1
+    keep = config.read_card_row, app_main.CardBackfillLoader
+    config.read_card_row, app_main.CardBackfillLoader = lambda: (True, True), _Card
     try:
         with _SpecupEnv() as env:
             sched = app_main.CardBackfillScheduler()
@@ -18624,6 +18630,7 @@ def test_specup_and_card_backfill_take_turns_121():
             assert len(started) == 1, "스펙업이 안 도는데 예약이 안 돈다(아래가 빈 검사)"
             _win.start_visible_api_loader()
             assert _FakeSpecupFetch.made == [], "예약이 도는데 받기를 시작했다"
+            assert started[0].cut == 1, "스펙업이 기다리는데 같은 OVR 몫을 안 끊는다(122)"
             started[0].running = False
             started[0].finished.emit()
             assert len(_FakeSpecupFetch.made) == 1, "예약이 끝났는데 안 이었다"
@@ -18639,7 +18646,7 @@ def test_specup_and_card_backfill_take_turns_121():
             assert (len(_FakeSpecupFetch.made), len(_FakeSpecupRead.made)) == n
             sched._timer.stop()
     finally:
-        config.read_card_backfill, app_main.CardBackfillLoader = keep
+        config.read_card_row, app_main.CardBackfillLoader = keep
 
 
 def test_specup_fetch_loader_121():
@@ -18941,7 +18948,7 @@ def test_specup_screen_notes_121():
         _win.stop_api_loaders()
         assert env.note() == texts["game"], env.note()
         app_main._GAME["on"] = False
-        _win._card_sched = SimpleNamespace(running=lambda: True)   # 카드 자동 채우기가 도는 동안이라 바로 못 켠다 — 글은 바뀌어야 한다
+        _win._card_sched = SimpleNamespace(running=lambda: True, yield_squad=lambda: None)   # 카드 자동 채우기가 도는 동안이라 바로 못 켠다 — 글은 바뀌어야 한다
         _win.start_visible_api_loader()
         assert env.note() == "" and not _FakeSpecupFetch.made, env.note()
         _win._card_sched = None

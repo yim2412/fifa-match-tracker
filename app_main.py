@@ -3339,6 +3339,11 @@ class SquadCmpScheduler(QObject):
                 self.switched_off.emit("devkey")
         self.finished.emit(res)
 
+    def on_card_blocked(self) -> None:
+        """카드 줄의 같은 OVR 몫이 이어서 막혀 토글을 껐다(CardBackfillScheduler.squad_off) — 받은 선발을 지우고 알린다."""
+        self.sync()
+        self.switched_off.emit("blocked")
+
     def halt_for_delete(self) -> None:
         """[수집 기록 지우기]가 rank.db 를 지우기 **전에**(수집을 끈 뒤) — 멈추고 잠깐 기다린다(로더는 명단을 읽는 동안만 rank.db 를 연다).
         .env 를 못 읽으면 sync 가 아무것도 안 하니 멈춤만은 직접(지우기는 다음 틱)."""
@@ -3367,25 +3372,46 @@ class SquadCmpScheduler(QObject):
 
 
 class CardBackfillLoader(Worker):
-    """카드 정보 자동 채우기 한 바퀴(cardcollect.run — 틱 하나 최대 CARD_BACKFILL_TICK_REQ 요청)를 UI 스레드 밖에서.
-    요청 사이 간격은 취소 이벤트의 wait — 끊으면 기다림 없이 돌아온다(끊긴 뒤 기다림 ≤ 도는 요청 하나의 타임아웃)."""
-    WRITES = frozenset({STORE_FIFA, STORE_CARDS})
+    """넥슨 홈페이지 카드 요청 한 바퀴를 UI 스레드 밖에서 — 자동 채우기 몫(cardcollect.run) 뒤에 같은 OVR 몫(squadcmp.fill_cards · 122)을
+    이어서. 요청이 늘 한 줄이라 시각이 안 겹친다(W5). 몫마다 취소 사건이 따로고 자기 관문을 몫 시작 직전과 요청 직전마다 본다 —
+    자동 채우기 몫이 막힘·점검으로 끝나면 같은 OVR 몫은 안 한다. 간격은 취소 이벤트의 wait — 끊으면 기다림 없이 돌아온다."""
+    WRITES = frozenset({STORE_FIFA, STORE_CARDS})   # squads.db 는 읽고 바로 닫는다
     done = Signal(object)   # cardcollect.RunResult
 
-    def __init__(self, today: date):
+    def __init__(self, today: date, card: bool = True, squad: bool = False):
         super().__init__()
-        self._cancel = threading.Event()
-        self._today = today
+        self._today, self._card, self._squad = today, card, squad
+        self._stop_card, self._stop_squad = threading.Event(), threading.Event()
 
     def cancel(self) -> None:
-        self._cancel.set()
+        """두 몫 모두 — 게임 · 지우기 · 종료."""
+        self._stop_card.set()
+        self._stop_squad.set()
+
+    def cancel_card(self) -> None:
+        self._stop_card.set()
+
+    def cancel_squad(self) -> None:
+        self._stop_squad.set()
 
     def run(self) -> None:
-        try:
-            res = cardcollect.run(config.DB_PATH, self._today, config.CARD_BACKFILL_DAILY_REQ, self._cancel.is_set,
-                                  sleep=self._cancel.wait)
-        except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등. 다음 틱이 다시 본다
-            res = cardcollect.RunResult(error=type(e).__name__)
+        res = cardcollect.RunResult()
+        if self._card and not self._stop_card.is_set() and config.card_backfill_allowed():
+            try:
+                res = cardcollect.run(config.DB_PATH, self._today, config.CARD_BACKFILL_DAILY_REQ,
+                                      lambda: self._stop_card.is_set() or not config.card_backfill_allowed(), sleep=self._stop_card.wait)
+            except Exception as e:  # noqa: BLE001 — DB 를 못 여는 등. 다음 틱이 다시 본다
+                res = cardcollect.RunResult(error=type(e).__name__)
+        if self._squad and not (res.blocked or res.down):
+            if res.requests:
+                self._stop_squad.wait(config.CARD_BACKFILL_GAP_S)   # 몫이 바뀌어도 요청 사이 간격은 지킨다
+            if not self._stop_squad.is_set():
+                try:
+                    res.squad = squadcmp.fill_cards(config.squads_db_path(), config.DB_PATH, self._today,
+                                                    cancel=self._stop_squad.is_set, wait=self._stop_squad.wait)
+                except Exception as e:  # noqa: BLE001 — 위와 같다
+                    res.squad = squadcmp.FillResult(error=type(e).__name__)
+                res.done += res.squad.done
         self.done.emit(res)
 
 
@@ -3393,14 +3419,15 @@ class CardBackfillScheduler(QObject):
     """카드 정보 자동 채우기 예약(51단계 G2) — 셸 수명(tray.AppShell 이 쥔다): --tray 로 창 없이도 돈다. 화면 로더(랭커 픽·특성·검색)와
     **엮지 않는다** — 요청을 하나씩 + 간격으로 보내 web_get 동시 칸을 하나만 쓴다(⑧).
 
-    CARD_BACKFILL_TICK_S 마다 tick = sync(start=True): .env 를 디스크에서 다시 읽어(read_card_backfill — 손 수정·다른 실행본)
+    CARD_BACKFILL_TICK_S 마다 tick = sync(start=True): .env 를 디스크에서 **한 번** 읽어 두 관문을 같이 본다(read_card_row — 손 수정·다른 실행본)
     - 못 읽으면 아무것도 안 한다(켜지도 끄지도 않음)
-    - 꺼졌으면 도는 로더를 멈춘다 — 지우기는 없다(G3 · 카드 정보는 사람과 이어지지 않는다)
-    - 켜져 있으면 로더 시작. 바퀴 끝에 켠 날 뒤로 막힘이 TRAIT_BLOCK_DAYS 이어졌으면 스스로 끈다(사유 blocked)."""
+    - 꺼진 몫만 끊는다 — 지우기는 없다(G3 · 카드 정보는 사람과 이어지지 않는다). 같은 OVR 쪽이 모름(키 상태)이면 도는 것은 두고 새로 안 한다
+    - 하나라도 켜져 있으면 로더 시작. 바퀴 끝에 켠 날 뒤로 **그 몫의** 막힘이 TRAIT_BLOCK_DAYS 이어졌으면 그 토글을 스스로 끈다(사유 blocked)."""
 
     finished = Signal(object)     # cardcollect.RunResult — 창이 [정보] 상태 줄·카드 화면을 다시
     idle = Signal()               # 바퀴의 스레드가 끝났다 — 기다리던 스펙업 받기가 잇는다(finished 는 아직 도는 중에 온다)
     switched_off = Signal(str)    # 스스로 껐다 — 사유(cardcollect.OFF_REASON_TEXT 의 키)
+    squad_off = Signal()          # 같은 OVR 비교 자료(122)를 스스로 껐다(그 몫의 막힘) — 셸이 SquadCmpScheduler 에 이어 받은 선발을 지운다
 
     def __init__(self, parent=None, now_fn=datetime.now):
         super().__init__(parent)
@@ -3430,16 +3457,18 @@ class CardBackfillScheduler(QObject):
             self.sync(start=True)
 
     def sync(self, start: bool = False) -> None:
-        """설정이 바뀌었다(토글 · 웹 데이터 · 동의 · 다시 묻는 창) — 바로 맞춘다. start 면 켜져 있을 때 로더도 띄운다."""
-        on = config.read_card_backfill()
-        if on is None:
+        """설정이 바뀌었다(두 토글 · 웹 데이터 · 랭킹 수집 · 동의 · 다시 묻는 창) — 바로 맞춘다. start 면 켜져 있을 때 로더도 띄운다."""
+        card, squad = config.read_card_row()
+        if card is None:
             return   # .env 를 못 읽었다 — 모르는 상태
-        if not on:
-            if self.running():
-                self.loader.cancel()
+        if self.running():
+            if not card:
+                self.loader.cancel_card()
+            if squad is False:
+                self.loader.cancel_squad()
             return
-        if start and not self.running() and not self._quitting and not game_paused() and not self.yield_to():
-            w = CardBackfillLoader(self._now().date())
+        if start and (card or squad) and not self._quitting and not game_paused() and not self.yield_to():
+            w = CardBackfillLoader(self._now().date(), card=card, squad=squad is True)
             w.done.connect(self._on_done)
             w.finished.connect(self._on_thread_end)
             self.loader = w
@@ -3449,25 +3478,42 @@ class CardBackfillScheduler(QObject):
         self.idle.emit()
 
     def _on_done(self, res) -> None:
-        if getattr(res, "status", None) is not None:
+        if getattr(res, "status", None) is not None:   # 자동 채우기 몫을 안 했으면 None — 앞 값을 둔다
             self.last = res.status
-        if not self._quitting and getattr(res, "blocked", False) and config.CARD_BACKFILL_ON:
-            try:
-                conn = store.open_db(config.DB_PATH)
-                try:
-                    off = cardcollect.should_turn_off(conn, config.CARD_BACKFILL_ON)
-                finally:
-                    conn.close()
-            except sqlite3.Error:
-                off = False   # 다음 바퀴 끝에 다시 본다
-            if off:
-                try:
-                    config.set_card_backfill(False, "blocked")
-                except OSError:
-                    pass   # .env 를 못 썼다 — 켜진 채, 다음 바퀴 끝에 다시
-                else:
-                    self.switched_off.emit("blocked")
+        if not self._quitting:
+            if getattr(res, "blocked", False) and self._blocked_for_days(config.CARD_BACKFILL_ON, store.BUDGET_CARD):
+                self._switch_off(config.set_card_backfill, lambda: self.switched_off.emit("blocked"))
+            if getattr(getattr(res, "squad", None), "blocked", False) \
+                    and self._blocked_for_days(config.SQUAD_CMP_ON, store.BUDGET_SQUAD_CARD):
+                self._switch_off(config.set_squad_cmp, self.squad_off.emit)
         self.finished.emit(res)
+
+    @staticmethod
+    def _blocked_for_days(on_at: str, kind: str) -> bool:
+        """그 토글이 켜져 있고 켠 날 뒤로 그 몫의 막힘이 TRAIT_BLOCK_DAYS 이어졌나."""
+        if not on_at:
+            return False
+        try:
+            conn = store.open_db(config.DB_PATH)
+            try:
+                return cardcollect.should_turn_off(conn, on_at, kind)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False   # 다음 바퀴 끝에 다시 본다
+
+    @staticmethod
+    def _switch_off(set_fn, then) -> None:
+        try:
+            set_fn(False, "blocked")
+        except OSError:
+            return   # .env 를 못 썼다 — 켜진 채, 다음 바퀴 끝에 다시
+        then()
+
+    def yield_squad(self) -> None:
+        """스펙업 받기가 기다린다 — 같은 OVR 몫만 끊는다(자동 채우기 몫은 하던 대로 · 한 요청 = 한 트랜잭션). 끝나면 idle 이 잇는다."""
+        if self.running():
+            self.loader.cancel_squad()
 
     def pause(self) -> None:
         """게임이 켜졌다(84 G3) — 한 요청 = 한 트랜잭션이라 끊어도 반쪽이 안 남는다. 게임이 꺼지면 이어서."""
@@ -4256,6 +4302,7 @@ class MainWindow(QMainWindow):
         """끄는 길(수집·웹 데이터·동의·지우기·키)에서 — 예약이 .env 를 다시 읽어 멈추고 전부 지운다(창만 있는 테스트에선 없음)."""
         if self._squad_sched is not None:
             self._squad_sched.sync()
+        self._sync_card_backfill()   # 카드 요청 줄의 둘째 몫이 같은 관문이다
 
     def _on_rank_collect_outcome(self, out) -> None:
         """수집 회차가 끝났다(UI 스레드) — 따라가기 점·컷이 새로 생겼을 수 있으니 지금 계정 ELO 를 다시 읽는다(작업 스레드).
@@ -6425,7 +6472,7 @@ class MainWindow(QMainWindow):
         self._streak_done = (key, result)
         self._invalidate("luck")
 
-    SQUAD_OVR_TIP = ("선발 11장의 그 자리 OVR + 강화 보너스 평균입니다(팀컬러·적응도 제외). ± 는 판마다 흔들린 폭(표준편차)입니다. "
+    SQUAD_OVR_TIP = ("선발 11장의 그 자리 OVR + 강화 보너스 + 적응도 5 평균입니다(팀컬러 제외). ± 는 판마다 흔들린 폭(표준편차)입니다. "
                      "저장된 카드 정보로 세고, 모르는 카드가 있는 판은 뺍니다.")
 
     def _show_squad_ovr(self) -> None:
@@ -8547,6 +8594,7 @@ class MainWindow(QMainWindow):
         if self._specup_fetching() or self._api_background_busy():
             return  # 그 로더가 끝나면(finished) start_visible_api_loader 로 다시 여기로
         if self._card_sched is not None and self._card_sched.running():
+            self._card_sched.yield_squad()
             return  # 바퀴가 끝나면(idle) 다시 여기로
         ld = SpecupFetchLoader(data, date.today())
         ld.progress.connect(self._on_specup_progress)
@@ -8763,8 +8811,9 @@ class MainWindow(QMainWindow):
         rank.db 쪽(사람별 표 · 14일 원본 · 동의 직후 따라잡기 — 2.3.1)은 작업 스레드의 정리 한 번으로 — 조건은 거기서 상태로 판정."""
         self.purge_ranker_pick_data(everything=not (config.WEB_DATA and config.RANK_COLLECT))
         self._sync_owner_dist()   # 구단주 분포 — 전제가 꺼졌으면 로더 멈춤 + 분포까지 지움(양보 사슬과 무관하게 따로)
-        self._sync_squad_cmp()    # 같은 OVR 비교 자료(122) — 전제가 꺼졌으면 로더 멈춤 + 전부 지움
-        self._sync_card_backfill()   # 카드 정보 자동 채우기 — 웹 데이터·동의가 꺼졌으면 멈춤만(지우기 없음 · 수집과 무관)
+        # 같은 OVR 비교 자료(122) — 전제가 꺼졌으면 로더 멈춤 + 전부 지움. 카드 정보 자동 채우기도 이 안에서 — 웹 데이터·동의가 꺼졌으면
+        # 멈춤만(지우기 없음 · 수집과 무관)
+        self._sync_squad_cmp()
         if config.tactic_block() not in ("", "notice"):
             self._tactic_drop()   # 저장 전술(110 ④) — 안내 동의 전은 빼야 한다(이 함수는 동의 직후에도 불려 연 창이 닫힌다)
         self._refresh_tactic_buttons()
@@ -10261,7 +10310,7 @@ class MainWindow(QMainWindow):
         if got is not None:
             n, _day, vals = got
             lines.append(f"랭커 경기당 골 {vals['골']:.2f}, 어시 {vals['어시']:.2f}, 태클 {vals['태클']:.2f} ({n:,}경기)")
-        lines.append("사는 값만 셌습니다. OVR은 팀컬러·적응도·특성을 뺀 값입니다.")
+        lines.append("사는 값만 셌습니다. OVR은 강화와 적응도 5까지 더하고 팀컬러와 특성을 뺀 값입니다.")
         return "\n".join(lines)
 
     def _start_specup_faces(self) -> None:
@@ -17327,7 +17376,7 @@ class MainWindow(QMainWindow):
 
     SO_SPLIT_NAMES = {"height": ("키", "cm", "키를"), "ovr": ("OVR", "", "OVR을"), "salary": ("급여", "", "급여를")}
     SO_SPLIT_TIP = ("저장된 전체 승부차기를 상대 선발 골키퍼의 값으로 절반씩 나눈 내 승률입니다.\n"
-                    "OVR은 강화까지만 넣고 팀컬러와 적응도는 뺍니다. 경기 중에 바뀐 골키퍼는 기록으로 가릴 수 없습니다.\n"
+                    "OVR은 강화와 적응도 5까지 넣고 팀컬러는 뺍니다. 경기 중에 바뀐 골키퍼는 기록으로 가릴 수 없습니다.\n"
                     "색은 세 줄을 함께 봐도 우연으로 보기 어려운 차이일 때만 칠합니다.")
 
     def _render_shootout_splits(self) -> None:
@@ -19414,6 +19463,9 @@ class AboutDialog(QDialog):
         sched = getattr(self.parent(), "_squad_sched", None)
         if sched is not None:
             sched.sync(start=on)   # 켜면 바로, 끄면 로더 멈춤 + 받은 선발을 지움
+        cards = getattr(self.parent(), "_card_sched", None)
+        if cards is not None:
+            cards.sync()           # 카드 줄의 같은 OVR 몫도 — 켰으면 다음 틱부터(아직 받은 선발이 없다)
         self.lb_msg.setText(
             f"같은 OVR 비교 자료 받기를 켰습니다. 하루 최대 {config.SQUAD_CMP_DAILY_REQ:,}번 내 API 키로 묻습니다(서비스 단계 키)."
             if on else "같은 OVR 비교 자료 받기를 껐습니다. 받은 선발은 지웁니다.")   # 도는 로더가 멈춘 뒤라 아직일 수 있다

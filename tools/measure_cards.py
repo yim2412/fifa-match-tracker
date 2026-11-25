@@ -20,7 +20,8 @@
 저장소 밖에만 쓴다: `DATA_DIR/measure/`(닉네임·ouid 는 안 남긴다 — 스냅숏 맞대기에만 쓴다). fifa.db·rank.db 는 읽기만
 (`--backfill` 만 fifa.db 의 카드 표·`api_budget` 에 쓴다 — 앱 백필과 같은 함수).
 
-numpy 를 쓴다(이 PC 에만 있으면 된다 — 앱은 결과 상수 `config.C1_LOGIT_*` 만 읽는다). 실효 OVR 은 앱과 같은 `cardstats.effective_ovr`.
+numpy 를 쓴다(이 PC 에만 있으면 된다 — 앱은 결과 상수 `config.C1_LOGIT_*` 만 읽는다). 실효 OVR 은 앱과 같은 `cardstats.effective_ovr`
+(2026-11-25 부터 적응도 5 의 몫 4 가 더해진다. 측정은 11-23 에 끝났고 차이·칸 나눔은 그대로다).
 
     python tools/measure_cards.py --status
     python tools/measure_cards.py --selftest

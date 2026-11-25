@@ -415,7 +415,8 @@ def test_count_c_c3_two_height_bins_and_median():
         for i in range(4):
             put_extra(conn, 400 + 20 * i, 70 + i, height=180 + i)   # 상대 GK 키 180~183 · OVR 70~73
         me = next(r for r in M.count_c(conn, D0) if r["matches"] == 64)
-        assert me["c3_ovr_bins"] == [80] and me["c3_pass"], me
+        # 80 + 적응도 4(122 U4). 칸 폭이 2 라 묶이는 카드는 같다
+        assert me["c3_ovr_bins"] == [84] and me["c3_pass"], me
         assert me["n21"]["height"] == {"median": 181.5, "bins": [2, 2], "pass": False}, me["n21"]
         assert me["n21"]["ovr"]["bins"] == [2, 2] and me["n21"]["salary"]["bins"] == [0, 0], me["n21"]
 

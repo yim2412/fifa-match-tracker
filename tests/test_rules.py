@@ -706,7 +706,7 @@ def _drive_cardcollect(path: Path) -> None:
 
 
 def _drive_squadcmp(d: Path) -> None:
-    """같은 OVR 비교 자료(122) — 명단 없이 한 실행 + 정리 · 상태 줄 · 지우기(Qt 를 띄우는 test_squadcmp 를 부르기엔 무겁다)."""
+    """같은 OVR 비교 자료(122) — 명단 없이 한 실행 + 카드 채우기 + 정리 · 상태 줄 · 지우기(Qt 를 띄우는 test_squadcmp 를 부르기엔 무겁다)."""
     from datetime import datetime
     import config
     import squadcmp
@@ -725,6 +725,14 @@ def _drive_squadcmp(d: Path) -> None:
     config.squad_cmp_allowed, squadcmp._snapshot = (lambda: True), (lambda *a: [{"profile_sn": 1, "nickname": "n"}])
     try:
         squadcmp.collect(path, fifa, lambda: None, lambda: None, now_fn=lambda: now)
+        conn = squadcmp.open_db(path)
+        squadcmp._save_ok(conn, 1, 1, squadcmp.pack_lineup([(7, 25, 5)]), int(now.timestamp()))
+        conn.close()
+        conn = store.open_db(fifa)   # 검색한 구단주가 있어야 안쪽 SELECT 까지 돈다
+        conn.execute("INSERT INTO squad_owner (ouid, nickname, last_day) VALUES ('a', 'a', ?)", (now.toordinal(),))
+        store.upsert_account(conn, "a", "a")
+        conn.close()
+        squadcmp.fill_cards(path, fifa, now.date(), cancel=lambda: True)
     finally:
         config.squad_cmp_allowed, squadcmp._snapshot = keep, keep_snap
     conn = store.open_db(fifa)

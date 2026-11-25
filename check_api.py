@@ -435,7 +435,10 @@ def check_player_card(ctx: CheckCtx) -> Result:
             sims = {g: playerinfo.fetch_player_ability(first_sp, strong=g).ovr for g in (1, 5, 8, 13)}
             want = {g: sims[1] + config.GRADE_OVR_BONUS[g] for g in sims} if sims[1] is not None else {}
             ok = bool(want) and sims == want and pinfo.ovr == sims[1]
+            adapt = playerinfo.fetch_player_ability(first_sp, adapt=5).ovr   # 실효 OVR 이 더하는 적응도 몫(122)
+            ok_adapt = sims[1] is not None and adapt == sims[1] + config.ADAPT_OVR
             lines.append(f"{'[OK]  ' if ok else '[FAIL]'} 강화별 OVR 가산표: 넥슨 {sims} · 표 {want} · 선수 페이지 1강 {pinfo.ovr}")
+            lines.append(f"{'[OK]  ' if ok_adapt else '[FAIL]'} 적응도 5 OVR: 넥슨 {adapt} · 1강 적응도 1 {sims[1]} + {config.ADAPT_OVR}")
         else:
             lines.append("[WARN] 선수 카드 상세: 확인할 선수가 없음")
     except Exception as e:

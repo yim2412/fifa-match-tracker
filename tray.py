@@ -249,6 +249,9 @@ class AppShell(QObject):
         self.squad_sched = squad_sched   # 같은 OVR 비교 자료 예약(122) — 같은 식
         if squad_sched is not None and sched is not None:
             sched.outcome.connect(squad_sched.on_rank_outcome)   # 수집 회차가 끝나면 바로 — 창이 없어도(--tray)
+        if squad_sched is not None and card_sched is not None:   # 카드 줄의 둘째 몫이 같은 OVR 비교 자료다(122 W5)
+            card_sched.squad_off.connect(squad_sched.on_card_blocked)
+            squad_sched.switched_off.connect(self._on_squad_off)
         self.window = None
         self.tray: QSystemTrayIcon | None = None
         self._quitting = False
@@ -273,6 +276,9 @@ class AppShell(QObject):
             single.activated.connect(self.show_window)
             # 제거기 — 윈도우 종료·설치기와 같은 빠른 종료(제거기가 기다리고 있다)
             single.quit_requested.connect(lambda: self.quit_app(fast=True))
+
+    def _on_squad_off(self, _reason: str) -> None:
+        self.card_sched.sync()   # 개발 키 등으로 스스로 껐다 — 카드 줄의 그 몫도 끊는다
 
     # ── 시작 ──
     def attach_window(self, win) -> None:

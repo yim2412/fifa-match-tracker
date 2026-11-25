@@ -140,7 +140,7 @@ def fakes(tmp: Path, web: bool = True):
                                                         height="180cm", body_type="보통")),
         (playerinfo, "prices_as_int", lambda info: {1: 1000}),
         (playerinfo, "fetch_player_ability",
-         lambda sp, strong=1: NS(ovr=110 + config.GRADE_OVR_BONUS[strong], abilities=[1], club_options=[1],
+         lambda sp, strong=1, adapt=1: NS(ovr=110 + config.GRADE_OVR_BONUS[strong] + (adapt - 1), abilities=[1], club_options=[1],
                                  enhance_options=[1, 2], feature_options=[], position_ovrs={"ST": 110})),
         (playerinfo, "fetch_boost_rows", lambda sp, level: []),
         (playerinfo, "page_ok", lambda info: True),

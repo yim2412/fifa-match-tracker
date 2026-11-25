@@ -562,6 +562,9 @@ TRAIT_TOP_NAMES = 3                # 포지션·칸마다 많이 넣은 순 이�
 # 강화 단계 → OVR 가산(1강 = 0). 2026-10-06 능력치 시뮬레이터(PC PlayerAbility)로 카드 셋(CM·ST·GK, 시즌 셋) × 1~13강을
 # 재서 셋이 같았다. check_api.py 가 넥슨과 다시 대조한다. 칩의 OVR 은 카드 기본 포지션 기준(다른 자리에 세우면 게임 값과 다르다)
 GRADE_OVR_BONUS = {1: 0, 2: 1, 3: 2, 4: 4, 5: 6, 6: 8, 7: 11, 8: 15, 9: 17, 10: 19, 11: 21, 12: 24, 13: 27}
+# 적응도 5 가 적응도 1 보다 더하는 OVR — 2026-11-24 시뮬레이터로 카드 3장 × 16칸 48칸이 모두 같았다(122 R4). 실효 OVR 에 더한다(U4).
+# 카드 페이지·시뮬레이터 창·축구장 칩의 OVR 은 적응도 1 이라 그대로다. check_api 가 넥슨과 다시 대조한다
+ADAPT_OVR = 4
 # 승률에 무승부를 늘 넣는다(승÷전체) — 2026-10-19 사용자("무승부 포함 승률로", 앱 전체). 끄면 A6 규칙(섞인 묶음은 승÷(승+패))으로 돌아간다.
 # 판정은 models.is_mixed 한 곳이 이 값을 본다
 WIN_RATE_DRAWS_IN = True
@@ -774,6 +777,9 @@ SQUAD_CMP_TICK_S = 600                        # 예약 간격
 SQUAD_CMP_FIRST_S = 60                        # 앱을 켠 뒤 첫 틱
 SQUAD_CMP_HALT_WAIT_MS = 2000                 # [수집 기록 지우기] 가 rank.db 를 지우기 전 로더 멈춤을 기다리는 상한
 SQUAD_CMP_UI_TIMEOUT_S = 1                    # 화면 스레드가 squads.db 를 여는 대기(잠겨 있으면 다음 틱에)
+# 그 선발에 나온 카드의 시뮬레이터 채우기(조각 ②) — 카드 자동 채우기와 같은 로더가 이어서 한다(간격·형식 멈춤은 CARD_BACKFILL_*). 계수는 따로
+SQUAD_CMP_CARD_DAILY_REQ = 400                # 하루 요청 상한(U9 — 카드 자동 채우기 600 과 따로)
+SQUAD_CMP_CARD_TICK_REQ = 40                  # 틱 하나의 요청 상한
 # 카드 정보 자동 채우기(51단계 · cardcollect.py) — 카드 페이지 + 능력치 시뮬레이터 + 팀컬러 상세를 한 장부(card_backfill)로.
 # 근거는 ROADMAP "## 51단계"(F1~F8 · U2) — 상한은 가계부(PRICE_FETCH_MAX)·칩(CHIP_FETCH_MAX)과 따로 센다
 CARD_BACKFILL_DAILY_REQ = 600                 # 하루 요청 상한(U2 — 카드 한 장 = 페이지 + 시뮬레이터 2요청)
@@ -1262,12 +1268,12 @@ def read_squad_cmp() -> bool | None:
     """.env 를 디스크에서 다시 읽어 같은 OVR 비교 자료가 켜졌나 — 다른 실행본·손 수정. 토글·사유 전역도 맞춘다. 디스크와 이 프로세스 값이
     **둘 다** 허락해야 참. 전제와 토글을 가르지 않는다 — 어느 쪽이 꺼져도 받은 선발을 지운다(W3). 못 읽거나 키 상태 "fail" 이면 None —
     받지도 지우지도 않는다(False 로 돌려주면 .env 를 잠깐 못 읽은 것만으로 1만 명분을 지운다)."""
+    vals = None if KEY_STATE == "fail" else _read_env_disk()
+    return None if vals is None else _squad_cmp_of(vals)
+
+
+def _squad_cmp_of(vals: dict) -> bool:
     global SQUAD_CMP_ON, SQUAD_CMP_OFF
-    if KEY_STATE == "fail":
-        return None
-    vals = _read_env_disk()
-    if vals is None:
-        return None
     SQUAD_CMP_ON = (vals.get(SQUAD_CMP_VAR) or "").strip()
     SQUAD_CMP_OFF = (vals.get(SQUAD_CMP_OFF_VAR) or "").strip()
     try:
@@ -1289,10 +1295,12 @@ def card_backfill_allowed() -> bool:
 def read_card_backfill() -> bool | None:
     """.env 를 디스크에서 다시 읽어 카드 정보 자동 채우기가 켜졌나 — 다른 실행본·손 수정. 토글·사유 전역도 맞춘다.
     디스크와 이 프로세스 값이 **둘 다** 허락해야 참이다. 못 읽으면 None — 그 틱은 아무것도 안 한다(켜지도 끄지도 않음)."""
-    global CARD_BACKFILL_ON, CARD_BACKFILL_OFF
     vals = _read_env_disk()
-    if vals is None:
-        return None
+    return None if vals is None else _card_backfill_of(vals)
+
+
+def _card_backfill_of(vals: dict) -> bool:
+    global CARD_BACKFILL_ON, CARD_BACKFILL_OFF
     CARD_BACKFILL_ON = (vals.get(CARD_BACKFILL_VAR) or "").strip()
     CARD_BACKFILL_OFF = (vals.get(CARD_BACKFILL_OFF_VAR) or "").strip()
     try:
@@ -1301,6 +1309,16 @@ def read_card_backfill() -> bool | None:
         accepted = 0
     disk = (vals.get(WEB_DATA_VAR) or "0").strip() == "1" and accepted >= CARD_BACKFILL_NOTICE_VERSION
     return disk and card_backfill_allowed()
+
+
+def read_card_row() -> tuple[bool | None, bool | None]:
+    """카드 요청 줄(app_main.CardBackfillScheduler)의 두 관문 — (카드 자동 채우기, 같은 OVR 비교 자료). **한 번 읽은** .env 로 같이 판정한다
+    (따로 열면 그 사이 바뀐 값으로 엇갈린다). 못 읽으면 (None, None), 키 상태 "fail" 이면 같은 OVR 쪽만 None."""
+    vals = _read_env_disk()
+    if vals is None:
+        return None, None
+    return _card_backfill_of(vals), None if KEY_STATE == "fail" else _squad_cmp_of(vals)
+
 
 # ── 표 칸 그림(40단계) ───────────────────────────────────────────────────
 # 크기·비율은 여기 한 곳. ICON_PX 는 표 칸 그림의 높이, 폭은 종류별 가로세로 비율로 정한다.

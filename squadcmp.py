@@ -1,6 +1,7 @@
 """같은 OVR 비교 자료(122단계 · 조각 ①) — 1만 위 안 구단주의 **마지막 감독모드 선발 11장**을 사용자의 서비스 키로 받아 `squads.db` 에 둔다.
 
-rank.db 마지막 스냅숏 1만 명 → 사람마다 (닉네임 → 계정 → 감독모드 목록 3개 → 상세) → 선발. 계산·화면은 조각 ③, 카드 채우기는 조각 ②.
+rank.db 마지막 스냅숏 1만 명 → 사람마다 (닉네임 → 계정 → 감독모드 목록 3개 → 상세) → 선발. 계산·화면은 조각 ③.
+조각 ②: 그 선발에 나온 카드의 시뮬레이터(넥슨 홈페이지)를 `fill_cards` 가 채운다 — 카드 자동 채우기 로더가 자기 몫 뒤에 이어서 부른다(카드 요청은 한 줄 · W5).
 
 | 규칙(ROADMAP "## 122단계") | 어디 |
 |---|---|
@@ -14,6 +15,8 @@ rank.db 마지막 스냅숏 1만 명 → 사람마다 (닉네임 → 계정 → 
 | gone·format·빈 목록이 20명 이어지면 저장 없이 멈춤(format 은 그날 `format_day`) | `_Book` |
 | 하루 계수와 켠 뒤 누적을 한 트랜잭션에서 · 429 두 번이면 멈춤 · 누적 5,000 미만이면 개발 키 | `store.squad_take` · `_Quota` |
 | 상세는 nocache · 전부 재시도 없음 · 늘 직접(중앙 서버 아님) | `_fetch_one` · `app_main.SquadCmpLoader` |
+| 카드 채우기: 검색한 구단주의 마지막 선발 → 많이 쓰인 순 → 30일 지난 것 · 하루·틱 상한 · 간격 · 막힘·점검은 `playerinfo.WebRun` | `fill_plan` · `fill_cards` |
+| 시도 기록은 "q:<spid>" — 자동 채우기의 "c:" 는 읽기만 한다(같이 쓰면 자동 채우기의 형식 바뀜 감지가 죽는다) | `fill_plan` · `fill_cards` |
 
 보류 줄(`_Book`)은 **정상으로 끝났을 때만** 저장한다 — 키 거절·점검·연결 실패·429 로 멈춘 실행의 보류(20명 미만)는 버린다. 계획은 "20명 미만으로
 끝나면 저장"이지만, 점검이 시작되는 순간의 00004 몇 개를 "사라진 사람" 으로 3일 적게 된다. 버려도 다음 틱에 다시 물을 뿐이다.
@@ -27,15 +30,17 @@ import sqlite3
 import struct
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import config
 import matchtime
 import ownerdist
+import playerinfo
 import store
 from nexon_api import EP_ID, EP_USER_MATCH, KEY_INVALID_CODE, NexonAPIError
 
@@ -615,6 +620,126 @@ def _run(res: Result, conn, fifa_path, todo, quota: _Quota, known: set[int], api
         _meta_set(conn, KEY_DAY, day)
     elif gate.reason == FORMAT:
         _meta_set(conn, FORMAT_DAY, day)
+
+
+# ── 카드 채우기(조각 ②) ─────────────────────────────────────────────────────
+
+SQUAD_CARD_FORMAT = f"{store.BUDGET_SQUAD_CARD}_format"   # 그날 멈춤 표시(막힘은 WebRun 이 <kind>_block 에)
+
+
+@dataclass
+class FillResult:
+    planned: int = 0        # 받을 것이 있는 카드(이번 틱 몫만이 아니라 전부)
+    requests: int = 0
+    done: int = 0           # 저장한 카드
+    stop: str = ""          # "" 이번 몫을 다 함 · off · cancel · cap · blocked · down · format
+    blocked: bool = False   # 이 몫이 오늘 막혔다(다른 웹 길의 막힘으로 시작을 안 한 것은 아니다) — 이어지면 스스로 끈다
+    error: str = ""
+
+
+def _used_cards(path: Path | str) -> Counter:
+    """받은 선발에 나온 카드 → 자리 수(1만 명 × 11). 읽고 바로 닫는다(지우기·WAL 비우기를 막지 않게)."""
+    out: Counter = Counter()
+    conn = open_existing(path)
+    if conn is None:
+        return out
+    try:
+        for (body,) in conn.execute("SELECT lineup FROM squads WHERE lineup IS NOT NULL"):
+            out.update(c[0] for c in unpack_lineup(body))
+    finally:
+        conn.close()
+    return out
+
+
+def _account_cards(conn: sqlite3.Connection, today: date) -> Counter:
+    """검색한 구단주마다 마지막으로 뛴 날(14일 안)의 감독모드 선발 카드 — 보는 사람의 스쿼드 OVR 을 먼저 낼 수 있게 줄 맨 앞."""
+    out: Counter = Counter()
+    for owner, day in conn.execute("SELECT so.id, so.last_day FROM accounts a JOIN squad_owner so ON so.ouid = a.ouid"
+                                   " WHERE so.last_day > ?", (today.toordinal() - config.SQUAD_CMP_KEEP_DAYS,)).fetchall():
+        out.update(r[0] for r in conn.execute("SELECT spid FROM match_squads WHERE owner = ? AND day = ?", (owner, day)))
+    return out
+
+
+def fill_plan(conn: sqlite3.Connection, squads_path: Path | str, today: date) -> list[int]:
+    """시뮬레이터를 물을 카드 차례 — 안 읽은 카드(검색한 구단주 → 많이 쓰인 순), 그다음 30일 지난 카드(같은 순). 오늘 이미 물었거나
+    쉬는 카드는 뺀다(자동 채우기 쪽 기록도 본다 — 정보가 없는 카드를 두 길이 같은 날 두 번 묻지 않게)."""
+    day = today.isoformat()
+    used = _used_cards(squads_path)
+    mine = _account_cards(conn, today)
+    sim_on = {r[0]: r[1] for r in conn.execute("SELECT spid, sim_on FROM card_extra")}
+    order = []
+    for spid in used.keys() | mine.keys():
+        on = sim_on.get(spid)
+        try:
+            age = None if not on else (today - date.fromisoformat(on)).days
+        except ValueError:
+            age = None
+        if age is not None and age < config.CARD_INFO_TTL_DAYS:
+            continue
+        order.append((age is not None, spid not in mine, -(mine[spid] if spid in mine else used[spid]), spid))
+    return [x[-1] for x in sorted(order)
+            if not store.try_skip(conn, f"q:{x[-1]}", day) and not store.try_skip(conn, f"c:{x[-1]}:sim", day)]
+
+
+def fill_cards(squads_path: Path | str, fifa_path: Path | str, today: date, *, cancel: Callable[[], bool] = lambda: False,
+               fetch_sim=None, wait: Callable[[float], object] = time.sleep, gap_s: float | None = None) -> FillResult:
+    """한 틱 몫 — 카드마다 시뮬레이터 한 번(요청 하나 = 한 트랜잭션). 시작할 때는 관문이 **참**이어야 하고, 도는 동안은 요청 직전마다
+    **거짓**이면 멈춘다(모름 None 은 이어 간다 — ROADMAP "카드 줄의 두 관문"). wait 는 요청 사이 간격(로더는 취소 이벤트의 wait)."""
+    out = FillResult()
+    if config.squad_cmp_allowed() is not True:
+        out.stop = "off"
+        return out
+    fetch_sim = fetch_sim or (lambda s: playerinfo.fetch_player_ability(s, 1))
+    day = today.isoformat()
+    conn = store.open_db(fifa_path)
+    web = playerinfo.WebRun(conn, day, store.BUDGET_SQUAD_CARD, config.SQUAD_CMP_CARD_DAILY_REQ,
+                            lambda: cancel() or config.squad_cmp_allowed() is False,
+                            gap_s=config.CARD_BACKFILL_GAP_S if gap_s is None else gap_s, wait=wait, blocks=store.card_block_kinds())
+    try:
+        if not web.ready():
+            return out
+        if store.budget_hit_429(conn, day, (SQUAD_CARD_FORMAT,)):
+            web.stop = "format"
+            return out
+        jobs = fill_plan(conn, squads_path, today)
+        out.planned = len(jobs)
+        _fill(conn, web, jobs[:config.SQUAD_CMP_CARD_TICK_REQ], day, fetch_sim, out)
+        return out
+    except sqlite3.Error as e:
+        out.error = type(e).__name__   # 잠김 — 다음 틱이 날짜 열로 다시 고른다
+        return out
+    finally:
+        out.requests, out.stop = web.requests, web.stop
+        out.blocked = web.stop == "blocked" and web.requests > 0
+        conn.close()
+
+
+def _fill(conn, web: playerinfo.WebRun, spids: list[int], day: str, fetch_sim, out: FillResult) -> None:
+    fails = 0   # 이어진 형식 실패 — 지난번에도(어느 길에서든) 실패한 카드는 안 센다(정보가 없는 카드 · cardcollect.run 과 같은 까닭)
+    for spid in spids:
+        key = f"q:{spid}"
+        try:
+            sim = web.call("sim", fetch_sim, spid)
+        except playerinfo.PlayerInfoError as e:
+            if e.kind != "format":
+                continue   # 점검 하나 — 이어서 두 번이면 WebRun 이 끝낸다
+            sim = None
+        else:
+            if web.stop:
+                return
+        if sim is not None and playerinfo.sim_ok(sim):
+            playerinfo.save_card_extra_sim(conn, spid, sim, day)
+            store.try_record(conn, key, day, ok=True)
+            out.done += 1
+            fails = 0
+            continue
+        again = store.try_failed(conn, key) or store.try_failed(conn, f"c:{spid}:sim")
+        store.try_record(conn, key, day, ok=False)
+        fails += not again
+        if fails >= config.CARD_BACKFILL_FORMAT_STOP:
+            store.budget_mark_429(conn, day, SQUAD_CARD_FORMAT)
+            web.stop = "format"
+            return
 
 
 # ── [정보] 상태 줄 ───────────────────────────────────────────────────────────

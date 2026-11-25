@@ -19,7 +19,8 @@ import store  # noqa: E402
 import watchdog  # noqa: E402 — 테스트 하나마다 시간 한도(멈추면 실패)
 
 GRADE = 5
-BONUS = config.GRADE_OVR_BONUS[GRADE]
+ADAPT = 4   # 적응도 5 의 몫(122 R4 실측) — 상수를 읽지 않고 손으로 적는다
+BONUS = config.GRADE_OVR_BONUS[GRADE] + ADAPT
 POS = next(p for p in sorted(config.SIM_POS_OF) if p != 28)   # 시뮬레이터 칸이 있는 자리
 CELL = config.SIM_POS_OF[POS]
 
@@ -38,6 +39,23 @@ def game(spids, **kw):
 
 
 ELEVEN = list(range(1, 12))
+
+
+def test_adapt_is_added_everywhere_from_one_constant():
+    """적응도 몫은 상수 하나에서 — 기본값이 아닌 값으로 바꾸면 선수 지표 · 스쿼드 OVR · 판정식이 같이 움직인다. 말풍선의 숫자도 같다."""
+    import glossary
+    import methods
+    ex = {7: extra(120)}
+    keep = config.ADAPT_OVR
+    try:
+        config.ADAPT_OVR = 9
+        assert cardstats.effective_ovr(POS, 1, ex[7]) == (129, "")
+        assert cv.player_card(7, POS, 1, ex).ovr == 129
+        assert "(+9)" in methods.page_html(), "산출 방법이 상수를 안 읽는다"
+    finally:
+        config.ADAPT_OVR = keep
+    assert config.ADAPT_OVR == ADAPT and cardstats.effective_ovr(POS, 1, ex[7])[0] == 124
+    assert f"카드 OVR보다 {ADAPT} 높습니다" in glossary.TERMS["effective_ovr"][1]
 
 
 def test_player_card_values_and_unknown():
@@ -289,7 +307,7 @@ def test_n21_split_by_hand():
         # 강화가 다르면 실효 OVR 이 갈린다 — 카드 번호만 보면 한 칸이 빈다
         mixed = [so_game(1, True, grade=1), so_game(1, True, grade=1), so_game(1, True, grade=8), so_game(1, False, grade=8)]
         rows, _n = cv.shootout_splits(mixed, "me", ex, {})
-        assert [r.key for r in rows] == ["ovr"] and rows[0].cut == 100 + config.GRADE_OVR_BONUS[1], rows
+        assert [r.key for r in rows] == ["ovr"] and rows[0].cut == 100 + config.GRADE_OVR_BONUS[1] + ADAPT, rows
         assert (rows[0].low, rows[0].high) == ((2, 0), (1, 1))
         # 짝수면 아래쪽 실제 값(189.0 같은 없는 키를 안 보인다)
         even = [so_game(1, True), so_game(1, True), so_game(3, True), so_game(3, True)]
