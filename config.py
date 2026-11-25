@@ -521,11 +521,12 @@ PRICE_FETCH_MAX = 80
 # 하루 상한은 쓰임별로 따로 센다(store.api_budget): 사용자가 연 선수 카드 = 없음 · 가계부 = PRICE_FETCH_MAX · 축구장 칩 = 아래.
 CHIP_FETCH_MAX = 60                 # 초안 — 스쿼드 창·비교를 하루 몇 번 여는지로 다시 정한다(ROADMAP 2.1.1 "재지 않은 것")
 CARD_INFO_TTL_DAYS = 30             # 급여·OVR 은 라이브 패치로만 바뀐다 — 30일인 근거는 아직 없다(재지 않은 것)
-# 팀컬러(2.2.1 · teamcolor.py) — 이름이 같은 팀컬러 11쌍(2026-10-06 목록 801개 실측 — 쌍마다 강화 하나 + 클럽 하나).
+# 팀컬러(2.2.1 · teamcolor.py) — 이름이 같은 팀컬러 13쌍(쌍마다 강화 하나 + 클럽 하나 · 2026-10-06 목록 801개에서 11쌍,
+# 11-20 목록 844개에서 하나이던 둘이 강화와 클럽으로 갈려 두 쌍 늘었다).
 # 상수인 이유: 받은 목록으로 넓히면 효과 창을 열기 전후로 승률 표의 줄이 바뀐다(ROADMAP 2.2.1 U2). check_api 가 실제 목록과 대조한다
 TEAMCOLOR_DUP_NAMES = frozenset({
-    "Continental Heroes", "Dramatic Comebacks", "Football Association Champions", "Greatest Runner-Ups",
-    "Legend of Europa", "Number 7", "Spartan", "Step Higher", "Untouchable Champions", "Winning Streak", "Wonderboys"})
+    "24 Energetic Player", "Champions of Europe", "Continental Heroes", "Dramatic Comebacks", "Football Association Champions",
+    "Greatest Runner-Ups", "Legend of Europa", "Number 7", "Spartan", "Step Higher", "Untouchable Champions", "Winning Streak", "Wonderboys"})
 TEAMCOLOR_CACHE_DAYS = 7            # 효과 목록·단계 캐시 — 30일이면 시즌 업데이트의 효과 조정이 한 달 늦게 보인다
 # 75 — [상대 팀컬러](77 B 전엔 팀컬러 승률·랭킹)의 최소 경기(거르기 기본값)와 흐림 기준이 같은 값이다(둘이 갈리면 숨기지 않은 줄이 흐려진다).
 # 8 → 10 은 2026-11-02 사용자 요청 — 다른 조건부 승률의 8판(analysis.MIN_COND)은 근거가 따로라 그대로 둔다.

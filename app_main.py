@@ -19416,7 +19416,7 @@ class AboutDialog(QDialog):
             sched.sync(start=on)   # 켜면 바로, 끄면 로더 멈춤 + 받은 선발을 지움
         self.lb_msg.setText(
             f"같은 OVR 비교 자료 받기를 켰습니다. 하루 최대 {config.SQUAD_CMP_DAILY_REQ:,}번 내 API 키로 묻습니다(서비스 단계 키)."
-            if on else "같은 OVR 비교 자료 받기를 껐습니다. 받은 선발을 지웠습니다.")
+            if on else "같은 OVR 비교 자료 받기를 껐습니다. 받은 선발은 지웁니다.")   # 도는 로더가 멈춘 뒤라 아직일 수 있다
         self._refresh_squad_row()
 
     def _refresh_card_row(self) -> None:

@@ -601,10 +601,13 @@ def _run(res: Result, conn, fifa_path, todo, quota: _Quota, known: set[int], api
             book.flush()
         else:
             book.drop()
+    except BaseException:
+        halt("error")   # squads.db 에 못 쓴다 — 도는 사람들이 저장할 곳도 없이 남은 요청을 마저 보내지 않게
+        raise
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
         gate.close()
-    res.requests = gate.requests
+        res.requests = gate.requests
     res.stop = gate.reason
     res.devkey = gate.reason == "quota" and quota.devkey
     day = now_fn().date().isoformat()

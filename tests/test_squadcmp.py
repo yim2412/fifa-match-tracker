@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import os
 import re
@@ -31,6 +32,7 @@ import config  # noqa: E402
 import matchtime  # noqa: E402
 import nexon_api  # noqa: E402
 import notice  # noqa: E402
+import ownerdist  # noqa: E402
 import rankcollect  # noqa: E402
 import ranker  # noqa: E402
 import squadcmp as sc  # noqa: E402
@@ -48,7 +50,7 @@ SMALL = dict(SQUAD_CMP_STREAK=4, SQUAD_CMP_FAIL_STREAK=5, SQUAD_CMP_WORKERS=3, S
              SQUAD_CMP_KEEP_DAYS=11, SQUAD_CMP_SNAP_MAX_H=20, SQUAD_CMP_TRY_MAX=2, SQUAD_CMP_TOP=3000, SQUAD_CMP_PERSON_REQ=5)
 _KEYS = ("ENV_PATH", "DB_PATH", "RANK_DB_PATH", "WEB_DATA", "RANK_COLLECT", "NOTICE_ACCEPTED", "NOTICE_VERSION",
          "API_KEY", "KEY_STATE", "SQUAD_CMP_ON", "SQUAD_CMP_OFF", "SQUAD_CMP_NOTICE_VERSION", "SERVER_URL",
-         "SQUAD_CMP_TICK_S", "SQUAD_CMP_FIRST_S", "SQUAD_CMP_HALT_WAIT_MS") + tuple(SMALL)
+         "SQUAD_CMP_TICK_S", "SQUAD_CMP_FIRST_S", "SQUAD_CMP_HALT_WAIT_MS", "CACHE_DIR") + tuple(SMALL)
 
 
 def ts(dt: datetime) -> int:
@@ -156,6 +158,7 @@ class Clock:
 
 class Env:
     def __init__(self, n: int = 6, taken: datetime = NOW - timedelta(hours=2)):
+        gc.collect()   # 앞 테스트가 버린 창·예약을 화면 스레드에서 치운다. 안 치우면 받기 스레드에서 수거돼 다음 processEvents 가 죽는다(접근 위반)
         self._d = tempfile.TemporaryDirectory()
         p = Path(self._d.name)
         self.dir = p
@@ -712,6 +715,42 @@ def test_corrupt_file_is_dropped_but_lock_is_not():
         r = e.run()
         assert r.stop == "corrupt" and not config.squads_db_path().exists(), r
         assert e.run().ok == 6, "다시 받지 않는다"
+
+
+def test_save_failure_stops_the_people_in_flight():
+    """squads.db 에 못 쓰면 도는 사람들의 남은 요청도 멈춘다 — 저장할 곳 없이 마저 보내지 않게."""
+    with env(n=3) as e:
+        halted, first, lock = threading.Event(), [], threading.Lock()
+
+        def hook(kind, n):
+            if kind != "list":
+                return
+            with lock:
+                mine = not first
+                first.append(n)
+            if not mine:
+                halted.wait(5)   # 첫 사람의 저장이 실패할 때까지 목록 요청에 머문다
+
+        def broken(*a):
+            raise sqlite3.OperationalError("database is locked")
+        keep = sc._save_ok, ownerdist._Gate._halt
+
+        def halt(self, reason):
+            try:
+                keep[1](self, reason)
+            finally:
+                halted.set()
+        e.api.hook = hook
+        sc._save_ok, ownerdist._Gate._halt = broken, halt
+        try:
+            r = e.run()
+        finally:
+            sc._save_ok, ownerdist._Gate._halt = keep
+        kinds = [k for k, _ in e.api.calls]
+        assert kinds.count("id") == 3, f"대조군 — 세 사람이 같이 돌아야 한다 {kinds}"
+        assert kinds.count("detail") == 1, f"저장이 실패한 뒤에도 남은 요청을 보냈다 {kinds}"
+        assert r.stop == "error" and r.error == "OperationalError" and r.requests == len(e.api.calls), r
+        assert e.run().ok == 3, "다음 실행이 다시 받지 않는다"
 
 
 def test_status_text_lines():

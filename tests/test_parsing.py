@@ -2336,8 +2336,11 @@ def test_teamcolor_list_parse():
     for m in items:
         by_name.setdefault(m.name, []).append(m)
     dups = {n for n, v in by_name.items() if len(v) > 1}
+    # 픽스처(10-06) 뒤에 둘로 갈린 두 쌍 — 그때는 클럽 엠블럼 하나뿐이었다(실제 목록과의 대조는 check_api)
+    later = {"24 Energetic Player", "Champions of Europe"}
+    assert all([m.emblem.split("/")[0] for m in by_name[n]] == ["crests"] for n in later)
     # 상수 = 실제 목록의 겹치는 이름(T3) · 쌍마다 강화 하나 + 클럽 하나(T17) · (엠블럼, 이름)은 전부 고유
-    assert dups == set(config.TEAMCOLOR_DUP_NAMES), dups ^ set(config.TEAMCOLOR_DUP_NAMES)
+    assert dups | later == set(config.TEAMCOLOR_DUP_NAMES) and not dups & later, (dups | later) ^ set(config.TEAMCOLOR_DUP_NAMES)
     for n in dups:
         assert sorted(m.emblem.split("/")[0] for m in by_name[n]) == ["crests", "teamcolorboost"], n
     assert len({(m.name, m.emblem) for m in items}) == 801
