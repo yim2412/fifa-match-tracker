@@ -30,12 +30,18 @@ sys.path.insert(0, str(ROOT))
 os.environ["FIFA_NO_CRED"] = "1"
 
 
+def is_real_folder(p: Path, default_dir: Path) -> bool:
+    """진짜 데이터 폴더이거나 그 안·그 위인가."""
+    p, d = p.resolve(), default_dir.resolve()
+    return p == d or d in p.parents or p in d.parents
+
+
 def refuse(data_dir: str, default_dir: Path, key: str, game: bool) -> str:
     """돌리면 안 되는 까닭 — 없으면 ""."""
     if not data_dir:
         return "FIFA_DATA_DIR 이 없습니다"
     p = Path(data_dir).resolve()
-    if p == default_dir.resolve() or default_dir.resolve() in p.parents or p in default_dir.resolve().parents:
+    if is_real_folder(p, default_dir):
         return "진짜 데이터 폴더입니다"
     if p.exists() and any(p.iterdir()):
         return "폴더가 비어 있지 않습니다(끝나면 통째로 지우는 폴더입니다)"
