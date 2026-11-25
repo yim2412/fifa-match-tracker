@@ -71,6 +71,18 @@ def test_failures_and_silent_deaths_are_caught():
         assert go(r, "test_a")[0] == 0
 
 
+def test_children_run_at_low_priority():
+    """같이 쓰는 PC 를 멈추지 않게(2026-11-25) — 자식이 실제로 낮은 우선순위인가."""
+    look = ("import ctypes, os\n"
+            "k = ctypes.windll.kernel32 if os.name == 'nt' else None\n"
+            "if k: k.GetCurrentProcess.restype = ctypes.c_void_p; k.GetPriorityClass.argtypes = [ctypes.c_void_p]\n"
+            "raise SystemExit(0 if not k or k.GetPriorityClass(k.GetCurrentProcess()) == 0x4000 else 9)\n")
+    with repo(["python tests/test_a.py"], a=look) as r:
+        rc, out = go(r)
+        assert rc == 0, out
+    assert cl.WORKERS <= 2
+
+
 def test_child_sees_ci_conditions():
     """UTC · 파일마다 빈 데이터 폴더 · 자격 증명 안 씀. 앞 파일이 남긴 것이 다음 파일에 보이지 않는다."""
     body = ("import os, sys\nfrom datetime import datetime\nfrom pathlib import Path\n"

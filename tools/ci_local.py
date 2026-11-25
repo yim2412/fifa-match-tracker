@@ -11,7 +11,10 @@
 출력 없이 죽은 프로세스(접근 위반)도 종료 코드로 잡고 faulthandler 로 멈춘 자리를 남긴다. 파이썬 버전과 글꼴은 흉내 내지 않는다 —
 여기서 초록이어도 CI 초록을 대신하지는 않는다.
 
-    python tools/ci_local.py                # CI 가 돌리는 것 전부(2026-11-25 실측 29개 · 4개 동시 · 227초)
+낮은 우선순위로 2개씩 돈다. 4개씩 돌리며 변이 검증까지 겹친 2026-11-25 에 CPU 는 27%였는데도 크롬과 다른 프로그램이 같이 멈췄다
+(끈 직후 디스크가 100% 를 넘었다 — 저장이 몰린 것으로 보지만 멈춘 순간을 재지는 못했다). 다른 무거운 일과 겹쳐 돌리지 않는다.
+
+    python tools/ci_local.py                # CI 가 돌리는 것 전부(2026-11-25 실측 29개 · 4개 동시일 때 227초)
     python tools/ci_local.py --all          # CI 밖의 tests/test_*.py 까지
     python tools/ci_local.py squadcmp ui    # 이름에 이 글자가 든 것만
 """
@@ -29,7 +32,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = Path(".github/workflows/test.yml")
-WORKERS = 4
+WORKERS = 2
+LOW_PRIORITY = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)   # 윈도우에만 있다 — 자식 프로세스까지 물려받는다
 TAIL_LINES = 25
 
 
@@ -68,7 +72,7 @@ def run_one(root: Path, f: str) -> tuple[int, float, list[str]]:
         data.mkdir()
         with open(log, "wb") as out:
             rc = subprocess.run([sys.executable, "-u", "-X", "faulthandler", f], cwd=root, env=child_env(str(data)),
-                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT).returncode
+                                stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, creationflags=LOW_PRIORITY).returncode
         lines = [x for x in log.read_text(encoding="utf-8", errors="replace").splitlines() if x.strip()]
         return rc, time.monotonic() - t, lines
 
