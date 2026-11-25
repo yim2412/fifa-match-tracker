@@ -662,7 +662,8 @@ def _account_cards(conn: sqlite3.Connection, today: date) -> Counter:
 
 def fill_plan(conn: sqlite3.Connection, squads_path: Path | str, today: date) -> list[int]:
     """시뮬레이터를 물을 카드 차례 — 안 읽은 카드(검색한 구단주 → 많이 쓰인 순), 그다음 30일 지난 카드(같은 순). 오늘 이미 물었거나
-    쉬는 카드는 뺀다(자동 채우기 쪽 기록도 본다 — 정보가 없는 카드를 두 길이 같은 날 두 번 묻지 않게)."""
+    쉬는 카드는 뺀다. 자동 채우기가 실패한 카드도 그날은 안 묻는다(반대로는 안 본다 —
+    이쪽이 먼저 실패한 카드는 저쪽이 그날 한 번 더 묻는다)."""
     day = today.isoformat()
     used = _used_cards(squads_path)
     mine = _account_cards(conn, today)
