@@ -200,6 +200,7 @@ python tests/test_squadcmp.py   # 같은 OVR 비교 자료 받기·예약·지�
 python tests/test_release.py   # 배포 검사 로직
 python tests/test_rules.py   # 규칙 검사(인코딩·색·콤보박스·대화상자 크기·모달·신호·SQL 실행 계획)
 python tests/test_review_kit.py   # 계획 검토 준비 도구
+python tools/ci_local.py          # 푸시 전: CI 가 돌리는 테스트 전부를 UTC·빈 데이터 폴더로(--all 은 CI 밖까지)
 python tools/check_public_text.py   # 공개 글 말투(README · CHANGELOG)
 ```
 

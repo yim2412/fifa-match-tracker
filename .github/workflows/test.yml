@@ -75,6 +75,8 @@ jobs:
         run: python tests/test_rules.py
       - name: 검토 준비 도구
         run: python tests/test_review_kit.py
+      - name: CI 흉내 도구
+        run: python tests/test_ci_local.py
       - name: 화면 스모크
         run: python tests/test_ui_smoke.py
       - name: 창 크기(흉내 낸 화면 5종)

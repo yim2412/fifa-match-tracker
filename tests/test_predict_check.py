@@ -288,7 +288,8 @@ def test_process_meta_calls_run_with_cancel_and_paths():
     """수집 정리가 되짚기를 실제로 부르고(배선) cancel·DB 경로·오늘을 그대로 넘긴다 · 되짚기가 죽어도 정리는 계속."""
     import rankcollect as rc
     seen = []
-    keep = PC.run
+    keep, allowed = PC.run, config.read_person_allowed
+    config.read_person_allowed = lambda: True   # 진짜 관문은 이 PC 의 .env 를 읽는다. 빈 폴더(CI)에서는 닫혀 되짚기까지 못 간다
     ev = threading.Event()
     env = Env()
     try:
@@ -308,7 +309,7 @@ def test_process_meta_calls_run_with_cancel_and_paths():
             conn.close()
         assert "predict_check" not in out and out["rolled"] is False, "되짚기 예외가 정리를 막았다"
     finally:
-        PC.run = keep
+        PC.run, config.read_person_allowed = keep, allowed
         env.close()
 
 
