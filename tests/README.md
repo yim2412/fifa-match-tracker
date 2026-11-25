@@ -17,7 +17,7 @@
 `test_enhance.py`(강화 비용 83 — 공지 표 · 기대 시도 골든(4→8강 4,330회) · 보호(성공해도 낸다 · 1강 도전엔 없다 · 몇 강부터 고르기 · ICON TM · 제외 클래스) · 단계별 평균이 합계와 맞는지 · 금액 분포(기하분포 대조 · 표본 적을 때 숨김 · 넘긴 나머지 평균 · 그래프 점) · 보호 비율 범위 · 금액 입력 읽기 · 게이지 규칙을 넥슨 응답과 대조 · 재료 조합(높은 OVR 이 더 쌀 때) · 재료 줄 해석(`boost_list.html.gz` 실응답 앞 3줄) · 재료 캐시 — 네트워크 없음) ·
 `test_check_api.py`(96 W3 연결 점검 — 터미널 출력 바이트·종료 코드 골든 `fixtures/check_api_golden.json`(떼기 전 커밋에서 뜸) · CP949 콘솔 · 앱 묶음 `USER_CHECKS`(상세 nocache · 닉네임 없으면 멈춤 · 키 글자 없음 · 저장 0) · `run_checks` 멈춤 — 가짜 넥슨·웹·CDN · 임시 폴더) ·
 `test_keyboard.py`(96 K3 키보드만으로 — Tab 으로 온 포커스에만 테두리(픽셀 · 마우스면 없음) · Tab 으로 들어간 목록의 지금 줄 · 기본 단추를 정하지 않은 창의 Enter · 키 창·소개·안내·[정보] Enter · 더블클릭 한 번 = 한 번 — 장치를 끈 결과를 먼저 단언) ·
-`test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py` · `test_ci_local.py`(푸시 전 CI 흉내 도구). pytest 없이 파일을 직접 실행.
+`test_rules.py`(규칙 검사 — 아래 "규칙은 테스트로") · `test_review_kit.py` · `test_ci_local.py`(푸시 전 CI 흉내 도구 · watchdog 의 fsync 끄기와 동시 2개 제한 — 실제 프로세스 넷). pytest 없이 파일을 직접 실행.
 **모든 `main()` 루프는 `watchdog.limit`** 안에서 테스트를 돈다 — 하나가 300초(`TEST_LIMIT_S`)를 넘기면 이름·호출 스택을 찍고 종료 코드 3(2026-10-06 스모크가 실패 대신 18분 멈췄다 ·
 재현 못 함). 새 테스트 파일도 같은 루프로(`test_rules.test_every_test_main_runs_under_watchdog` 가 대조).
 같은 자리에서 **훅으로 간 예외(슬롯·타이머·스레드 안)도 실패로 바꾼다**(`watchdog.slot_errors` — 73단계: PySide6 는 슬롯 예외를
