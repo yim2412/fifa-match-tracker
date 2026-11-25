@@ -53,7 +53,7 @@ import ranker  # noqa: E402
 
 ARCHIVE_PATH = config.DATA_DIR / "dev_archive.db"
 LOG_PATH = config.DATA_DIR / "logs" / "dev_archive.log"
-GAME_CHECK = gameguard.game_running   # 게임 중엔 시작하지 않는다 — 테스트가 바꿔 끼운다(2026-11-08)
+GAME_CHECK = gameguard.dev_game_running   # 게임 중엔 시작하지 않는다 — 테스트가 바꿔 끼운다(2026-11-08)
 PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
 REF_RE = ranker._REF_TIME   # 정규식은 ranker 한 곳(2.3.1 N14) — 여기는 페이지 글자(공백 꼴) 그대로 적는다
 PICK_TOP = config.RANKER_PICK_TOP

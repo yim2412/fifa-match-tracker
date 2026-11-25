@@ -25,7 +25,7 @@ import config  # noqa: E402
 import gameguard  # noqa: E402
 
 LOG_PATH = config.DATA_DIR / "logs" / "run_unless_game.log"
-GAME_CHECK = gameguard.game_running   # 테스트가 바꿔 끼운다
+GAME_CHECK = gameguard.dev_game_running   # 테스트가 바꿔 끼운다
 TODAY = date.today                     # 테스트가 바꿔 끼운다
 ONCE_FLAG = "--once-a-day"
 

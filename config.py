@@ -798,6 +798,9 @@ DEV_MATCH_DAY_HOURS = 6                       # 한 번 실행이 스스로 멈�
 # 게임 중엔 개발 PC 수집을 안 한다(gameguard · 2026-11-08 — 11-06 게임이 "불법 프로그램 감지" 로 꺼진 시각에 dev_matches 가
 # 초당 40번 요청 중이었다). 이름은 server/settings.GAME_PROCESSES 와 같다(서버는 config 를 import 하지 않아 따로 둔다)
 GAME_PROCESSES = ("fczf.exe", "fclauncher.exe")
+# 예약으로 도는 개발 PC 수집(dev_matches · dev_archive · run_unless_game)만 더 보는 게임 — 보안이 아니라 네트워크·디스크를 안 나누려고
+# (2026-11-26 사용자가 배그를 할 때). 배포 앱(app_main.GameWatch)은 위 둘만 본다
+DEV_GAME_PROCESSES = GAME_PROCESSES + ("tslgame.exe",)
 GAME_CHECK_S = 15                             # 수집 중 게임이 켜졌나 다시 보는 간격(초) — 이름 목록만 읽어 싸다
 DEV_MATCH_WORKERS = 96                        # 동시에 훑는 사람 수(사람 안에서는 차례로) · 2026-11-11 실측: 8 초당 39.5 · 16 69.7 · 32 135 · 64 240~296(429 0 · CPU 코어 0.8개) · 같은 날 사용자 "CPU 2코어까지" 로 96 — 넘치는 몫은 아래 초당 상한이 깎는다
 DEV_MATCH_MAX_RPS = 400                       # 초당 요청 상한(모든 스레드 합) — 서비스 키 한도 초당 500 의 80%. 동시 수만 올리면 응답이 빠른 순간 500 을 넘는다

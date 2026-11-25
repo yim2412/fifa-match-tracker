@@ -73,7 +73,7 @@ ARCHIVE_PATH = config.DATA_DIR / "dev_archive.db"   # 단 3 대상(읽기만) �
 LOG_PATH = config.DATA_DIR / "logs" / "dev_matches.log"
 PROGRESS_DIR = Path.home() / ".claude" / "bg-progress.d"
 # 게임이 켜져 있나 — 테스트가 바꿔 끼운다. 게임 중엔 요청 0(gameguard 머리말 · 2026-11-08)
-GAME_CHECK = gameguard.game_running
+GAME_CHECK = gameguard.dev_game_running
 KST = timezone(timedelta(hours=9))
 GONE_CODE = "OPENAPI00004"      # 맞는 키로 없는 닉네임 — get_ouid 에서만 "그 사람 건너뜀", 다른 요청이면 그 요청만 실패(연달아면 멈춤 · _Gate.call)
 PICK_DEV_KIND = "ranker_pick_dev"   # dev_archive ③ 의 계수 이름(fifa.db api_budget)

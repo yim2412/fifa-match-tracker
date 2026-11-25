@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -27,11 +28,29 @@ def test_game_running_by_name():
     assert gameguard.game_running(["x.exe"], games=("x.exe",)) is True
 
 
+def test_dev_collectors_also_see_other_games_but_the_app_does_not():
+    extra = [g for g in config.DEV_GAME_PROCESSES if g not in config.GAME_PROCESSES]
+    assert extra and set(config.GAME_PROCESSES) < set(config.DEV_GAME_PROCESSES)
+    for g in extra:
+        assert gameguard.dev_game_running([g.upper()]) is True and gameguard.game_running([g]) is False, g
+    assert gameguard.dev_game_running([config.GAME_PROCESSES[0]]) is True and gameguard.dev_game_running(["python.exe"]) is False
+    # 예약 도구 셋의 진짜 배선 — 다른 테스트가 GAME_CHECK 를 바꿔 끼우니 새 프로세스에서
+    for mod in ("dev_archive", "dev_matches", "run_unless_game"):
+        code = (f"import sys; sys.path[:0] = [r'{ROOT}', r'{os.path.join(ROOT, 'tools')}']; import gameguard, {mod} as m; "
+                "sys.exit(m.GAME_CHECK is not gameguard.dev_game_running)")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            r = subprocess.run([sys.executable, "-c", code], env=dict(os.environ, FIFA_DATA_DIR=d), capture_output=True)
+        assert r.returncode == 0, (mod, r.stderr[-300:])
+    with open(os.path.join(ROOT, "app_main.py"), encoding="utf-8") as f:
+        assert "GAME_CHECK = gameguard.game_running " in f.read(), "배포 앱이 다른 게임에도 멈춘다"
+
+
 def test_unreadable_list_counts_as_running():
     keep = gameguard.process_names
     try:
         gameguard.process_names = lambda: None
         assert gameguard.game_running() is True, "목록을 못 읽으면 멈추는 쪽"
+        assert gameguard.dev_game_running() is True
     finally:
         gameguard.process_names = keep
 

@@ -9,6 +9,7 @@
 
 배포 앱도 쓴다(84 G3 · 2026-11-10) — app_main.GameWatch 가 GAME_CHECK_S 마다 보고, 켜져 있으면 앱이 스스로 하는 요청
 (예약 셋 · 보이는 오픈API 로더 · 매시간 정리)을 쉰다. 사용자가 누른 것은 막지 않는다.
+예약으로 도는 개발 PC 수집은 다른 게임(config.DEV_GAME_PROCESSES)도 본다(`dev_game_running`).
 """
 from __future__ import annotations
 
@@ -63,6 +64,11 @@ def game_running(names: Iterable[str] | None = None, games: Iterable[str] | None
             return True
     want = {g.lower() for g in (config.GAME_PROCESSES if games is None else games)}
     return any(n.lower() in want for n in names)
+
+
+def dev_game_running(names: Iterable[str] | None = None) -> bool:
+    """예약으로 도는 개발 PC 수집용 — FC 온라인에 더해 config.DEV_GAME_PROCESSES."""
+    return game_running(names, config.DEV_GAME_PROCESSES)
 
 
 def watcher(check: Callable[[], bool] = game_running, every_s: float | None = None,
