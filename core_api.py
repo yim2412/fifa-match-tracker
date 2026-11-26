@@ -278,7 +278,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
     "window_of": ("PASS", ()),
     "filter_matches": ("PASS", ()),
     "latest_match_with": ("PASS", ()),          # M31
-    "squad_compare_load": ("PASS", ()),         # 122 — 남과 견주는 마지막 선발이라 표시한 판도 거르지 않는다(ROADMAP 122 진입점 표)
+    "squad_compare_load": ("PASS", ()),         # 122 — 남과 견주는 마지막 선발이라 표시한 판도 거르지 않는다(DONE.md 3.15.1(122단계) 진입점 표)
     # S — 넥슨 기록·저장 범위·경기와 무관(J3: 예측·구단주 분포·decisive_rate 는 같은 판 묶음이어야 견줘진다)
     **{n: ("S", ()) for n in (
         "headline", "streak_min_n", "parse_match", "team_rating", "division_icon_index", "is_mixed", "is_weak",

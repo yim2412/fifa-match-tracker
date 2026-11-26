@@ -1,6 +1,6 @@
 """122단계 조각 ③ 대조 — 선발을 새로 받고(`--prepare`) 모자란 카드의 시뮬레이터를 하루 200장씩 채운 뒤(`--fill`) 대조한다(`--check` · 이 PC 전용 · 배포판 밖).
 
-판정 규칙은 ROADMAP "## 122단계" 의 **대조**. 이 PC 는 11장을 다 아는 사람이 89.4% 라 관문 B(95%)에 모자라 먼저 채운다.
+판정 규칙은 DONE.md "## 3.15.1"(122단계) 의 **대조**. 이 PC 는 11장을 다 아는 사람이 89.4% 라 관문 B(95%)에 모자라 먼저 채운다.
 받기와 채우기는 앱과 **같은 함수**(`squadcmp.collect` · `squadcmp.fill_cards`)를 부른다.
 
 | 규칙 | 어디 |
@@ -166,7 +166,7 @@ def prepare(squads: Path, fifa: Path, api_key: str, cancel, *, log=print):
     return squadcmp.collect(squads, fifa, rankcollect.open_rank_db_ro, lambda: FCOnlineAPI(api_key), cancel=cancel)
 
 
-# ── 대조(ROADMAP 122 "대조" — 판정 규칙은 거기서 옮겼다. 결과를 보고 바꾸지 않는다) ─────────────────────────
+# ── 대조(DONE.md 3.15.1(122단계) "대조" — 판정 규칙은 거기서 옮겼다. 결과를 보고 바꾸지 않는다) ─────────────────────────
 
 A_PEOPLE = 5            # ⓐ 시뮬레이터에 직접 물을 사람 수(55장)
 B_MIN_CELL = 400        # ⓑ 나를 뺀 인원이 이 이상인 칸만

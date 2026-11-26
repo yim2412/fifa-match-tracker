@@ -758,7 +758,7 @@ OWNER_DIST_SELFCHECK_REQ = 5000               # 누적 요청이 이보다 적�
 OWNER_DIST_SEED = 20261016                    # + 바퀴 시작일 ordinal + 층 번호
 OWNER_DIST_TICK_S = 600                       # 예약이 "받을 차례인가"를 보는 간격(③ — 진행 바퀴가 있거나 새 바퀴 차례면 로더 시작)
 OWNER_DIST_HALT_WAIT_MS = 2000                # [수집 기록 지우기] 가 rank.db 를 지우기 전 로더 멈춤을 기다리는 상한(③b — 화면 스레드가 멈춘다)
-# 같은 OVR 비교 자료(122 · squadcmp.py) — 1만 명의 마지막 감독모드 선발을 사용자 서비스 키로. 근거는 ROADMAP "## 122단계"
+# 같은 OVR 비교 자료(122 · squadcmp.py) — 1만 명의 마지막 감독모드 선발을 사용자 서비스 키로. 근거는 DONE.md "## 3.15.1"(122단계)
 SQUAD_CMP_TOP = 10_000                        # 마지막 스냅숏의 이 순위까지
 SQUAD_CMP_SNAP_MAX_H = 36                     # 스냅숏이 이보다 오래면 받지 않고 수집 회차를 기다린다
 SQUAD_CMP_REFRESH_DAYS = 7                    # 마지막으로 물은 뒤 이만큼 지나면 다시 묻는다
@@ -781,7 +781,7 @@ SQUAD_CMP_UI_TIMEOUT_S = 1                    # 화면 스레드가 squads.db �
 # 그 선발에 나온 카드의 시뮬레이터 채우기(조각 ②) — 카드 자동 채우기와 같은 로더가 이어서 한다(간격·형식 멈춤은 CARD_BACKFILL_*). 계수는 따로
 SQUAD_CMP_CARD_DAILY_REQ = 400                # 하루 요청 상한(U9 — 카드 자동 채우기 600 과 따로)
 SQUAD_CMP_CARD_TICK_REQ = 40                  # 틱 하나의 요청 상한
-# 화면 계산(조각 ③ · squadcmp.compare) — 근거는 ROADMAP "## 122단계 › 화면에 내는 값"
+# 화면 계산(조각 ③ · squadcmp.compare) — 근거는 DONE.md "## 3.15.1단계 › 화면에 내는 값"
 SQUAD_CMP_LINEUP_DAYS = 9                     # 남들 선발은 받은 지(lineup_at) 이만큼 안 · 경기 시각은 KEEP_DAYS(14) 안
 SQUAD_CMP_GATE_LINEUP = 0.90                  # 관문 A — 스냅숏 사람 중 쓸 선발이 있는 비율
 SQUAD_CMP_GATE_CARDS = 0.95                   # 관문 B — 그중 11장을 다 아는 비율(R8: 97% 에서 칸 평균 +6~+16점)

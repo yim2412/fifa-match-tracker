@@ -1990,7 +1990,7 @@ class PredictWorker(Worker):
 class SquadCmpWorker(Worker):
     """같은 OVR 대비 계산(122 ③ · squadcmp.load_compare) — 1만 명 × 11장이라 약 0.5초(이 PC 실측)로 화면 스레드 예산을 넘는다.
     EloLoader 에 얹지 않는다(_on_elo_ready 는 화면 12곳과 예측 저장까지 다시 한다). rank.db·squads.db 는 읽고 바로 닫는다.
-    읽기만 하지만 지우는 동안 squads.db·fifa.db 를 열지 않게 WRITES 로 걸쇠를 본다(ROADMAP 122 걸쇠 이름 표)."""
+    읽기만 하지만 지우는 동안 squads.db·fifa.db 를 열지 않게 WRITES 로 걸쇠를 본다(DONE.md 3.15.1(122단계) 걸쇠 이름 표)."""
     WRITES = frozenset({STORE_FIFA, STORE_SQUADS})
     ready = Signal(object)   # (요청 번호, 열쇠, SquadCompare | None)
 
