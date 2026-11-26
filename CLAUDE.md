@@ -76,7 +76,7 @@ python rankcollect.py --pages 3   # 랭킹 수집 실제 3쪽(저장 안 함 —
 python app_main.py             # 앱 실행
 python tests/test_ui_smoke.py  # 화면 배선 스모크(offscreen, 네트워크 없음 — 글꼴 폴더는 테스트가 기본으로 준다)
 python tests/test_tray.py      # 트레이·종료 진입점·한 번만 실행·자동 실행(가짜 레지스트리)
-python tests/test_startup_108.py   # 켤 때 내 계정(108 C) — **실제 QThread**(스모크는 start 를 막아 신호 순서를 못 본다) · 가짜 오픈API · HTTP 기록기(웹 데이터 켠 채 홈페이지 0) · 게임 진입/DB 읽기/확인 도중 · 최소화 · 트레이 · 내려놓기
+python tests/test_startup_108.py   # 켤 때는 늘 검색 화면(3.15.2 — 108 C 를 뺐습니다) · 저장된 계정을 여는 `_open_saved` 길 — **실제 QThread**(스모크는 start 를 막아 신호 순서를 못 본다) · 가짜 오픈API · HTTP 기록기(웹 데이터 켠 채 홈페이지 0) · 게임 진입/DB 읽기/확인 도중 · 최소화 · 트레이 · 내려놓기
 python tests/test_keyboard.py  # 키보드만으로(96 K3) — Tab 테두리 픽셀 · 목록 지금 줄 · 대화상자 Enter(키 창·소개·안내·[정보]) · 더블클릭 한 번 = 한 번
 python tests/test_demo.py      # 둘러보기(96 O2) — 실제 키를 env 에 둔 채 창·검색·토글을 눌러 HTTP 0 · 다시 띄운 env = 원래 env · 데모 폴더 쓸기
 python app_main.py --demo      # 둘러보기 직접 띄우기(지어낸 자료 · 넥슨 요청 0)
@@ -169,9 +169,7 @@ python tools/release.py        # 배포판 — 커밋된 상태에서만 돈다.
 - **에러 메시지 표는 `nexon_api.ERROR_MESSAGES`.** 새 코드가 생기면 여기에 넣는다.
 - **터미널 스모크는 `python check_api.py <닉네임>`.** 새 엔드포인트를 붙이면 여기에도
   한 줄 추가한다.
-- **켤 때 넥슨 요청은 내 계정의 새 경기 확인 하나뿐입니다**(108 C · 안내 15 `config.startup_check_allowed`). 진입은 `MainWindow.open_startup`
-  한 곳이고 오픈API 만 씁니다(`_api_search(startup=True)` = 순위 0 · 메타는 게임 중 디스크 `MatchLoader._meta` · 팀컬러는 캐시만 `_startup_auto`).
-  `_on_loaded` 뒤에 새 자동 웹 읽기를 붙이면 `tests/test_startup_108.py` 의 홈페이지 0 이 잡습니다. 로더 안 메타는 `_meta` 로만(`test_rules`).
+- **켤 때는 늘 검색 화면이고 넥슨 전적 요청은 0입니다**(3.15.2 사용자: "켜면 닉네임 적는 칸이 나와야 한다" · 3.10.1 의 108 C "켤 때 내 계정 바로 열기" 를 뺐습니다). 진입은 `MainWindow.open_startup` 한 곳(미리 읽기만 · 요청 0)이고 `tests/test_startup_108.py` 가 켤 때·동의 직후·최소화 복원·트레이에서 요청 0 을 잽니다. 저장된 계정을 여는 `_open_saved`(둘러보기 · `OPEN_LAST_ACCOUNT`)는 그대로라 게임 중 멈춤·다시 묻기도 남아 있습니다. 로더 안 메타는 `_meta` 로만(`test_rules`).
 
 ### 시즌 (`seasons.py`) — 넥슨 시즌표의 함정
 

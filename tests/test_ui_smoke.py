@@ -3554,12 +3554,8 @@ def test_main_starts_update_check_after_show():
         def open_last_account(self):
             calls.append("마지막 계정")
 
-        def open_startup(self, only_mine=False):
-            real_open_startup(self, only_mine)   # 진짜 갈래 — 내 계정 길이 안 맡으면 지금과 같다(108 C)
-
-        def _open_mine_on_startup(self):
-            calls.append("내 계정 길")
-            return False   # 내 계정 없음 · 동의 전 — 켤 때 내 계정은 tests/test_startup_108.py 가 실제 QThread 로 잰다
+        def open_startup(self):
+            real_open_startup(self)   # 진짜 갈래(3.15.2 — 켤 때 내 계정을 저절로 열지 않는다 · tests/test_startup_108.py)
 
         def start_prefetch(self):
             calls.append("미리 읽기")
@@ -3601,9 +3597,9 @@ def test_main_starts_update_check_after_show():
     # 대신 마지막 계정의 저장된 경기를 뒤에서 읽어만 둔다(그 계정을 검색하면 DB 읽기를 건너뛴다)
     tail = ["랭커 픽 정리", f"색인 {config.SQUAD_BACKFILL_DELAY_S}초 뒤"]
     assert run(False) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "같은 OVR", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
-                          "내 계정 길", "미리 읽기"], calls
+                          "미리 읽기"], calls
     assert run(True) == ["창", "랭킹 수집", "구단주 분포", "카드 정보", "같은 OVR", "show", "새 버전 확인", "캐시 정리", "강화 바탕", *tail,
-                         "내 계정 길", "마지막 계정"], calls
+                         "마지막 계정"], calls
 
 
 def _stop_shell():
@@ -9989,7 +9985,8 @@ def test_notice_versions_split_first_and_reask():
                                             (16, False, True, True),    # 17 이 올라서 16 동의자도 수집을 켰으면(121 스펙업 순서)
                                             (17, False, True, True),    # 18 이 올라서 17 동의자도 수집을 켰으면(110 ④ 저장 전술)
                                             (18, False, True, True),    # 19 가 올라서 18 동의자도 수집을 켰으면(122 같은 OVR 비교 자료)
-                                            (19, False, False, True)]:
+                                            (19, False, True, True),    # 20 이 올라서 19 동의자도 수집을 켰으면(3.15.2 켤 때 확인 문장을 뺐다)
+                                            (20, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -9999,7 +9996,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (19, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (20, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
@@ -10009,7 +10006,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.13.1: 14 = 상대 점수 보여 주기·내 특성(수집 몫) + 버튼 자리·넥슨 페이지 안내 — COLLECT_ONLY_FROM 은 8 그대로(U7)
         assert config.OPP_SCORE_NOTICE_VERSION == config.MY_TRAIT_NOTICE_VERSION == 14
         # 3.10.1: 15 = 켤 때 내 계정의 새 경기 확인(108 C) — 수집과 무관해 COLLECT_ONLY_FROM 도 15(U6 — 수집 끈 2~14 동의자에게도)
-        assert config.STARTUP_CHECK_NOTICE_VERSION == 15
+        assert config.STARTUP_CHECK_NOTICE_VERSION == 15   # 3.15.2 에서 기능을 뺐다 — 번호만 남는다
         # 3.10.1: 16 = API 키 보관 위치(109 C) — 수집과 무관해 수집 끈 15 동의자에게도
         # 3.13.1: 17 = 스펙업 순서(121) — 후보가 수집 스냅숏에서 나와 수집 몫. 수집 끈 16 동의자에겐 안 묻고 켤 때 묻는다
         # 3.14.1: 18 = 랭커의 저장 전술(110 ④) — 수집을 끈 사람은 단추가 안 켜져 수집 몫. 수집 끈 17 동의자에겐 안 묻는다(U7)
@@ -10019,13 +10016,11 @@ def test_notice_versions_split_first_and_reask():
         for acc in (14, 13, 12, 8):
             config.RANK_COLLECT, config.NOTICE_ACCEPTED = False, acc
             assert config.notice_update_pending(), f"수집을 끈 {acc} 동의자에게 15 를 안 물었다(U6)"
-            assert config.startup_check_allowed() is False, acc
-        assert "저장 공간" in notice.changes_html(13) and "새 경기만" in notice.changes_html(13)
+        assert "저장 공간" in notice.changes_html(13) and "새 경기만" not in notice.changes_html(13)
+        assert "저절로 열고" in notice.changes_html(19) and "켤 때" not in notice.PRIVACY_HTML.split("GitHub")[0]
         assert "챔피언스 이상에서 뛴 판수" in notice.changes_html(12)
-        config.NOTICE_ACCEPTED = 15
-        assert config.startup_check_allowed()
         config.NOTICE_ACCEPTED = 16
-        assert config.startup_check_allowed() and not config.notice_update_pending(), "수집을 끈 16 동의자에게 17 을 물었다"
+        assert not config.notice_update_pending(), "수집을 끈 16 동의자에게 17 을 물었다"
         config.RANK_COLLECT = True
         assert config.notice_update_pending(), "수집을 켠 16 동의자에게 17 을 안 물었다(U12)"
         assert "스펙업 순서" in notice.changes_html(16) and "스펙업 순서" in notice.WEB_DATA_HTML
@@ -10121,6 +10116,7 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
                  15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
+                 20: "d577b7de8ab7c822",                                   # 20 = 3.15.2 켤 때 내 계정 확인(108 C)을 뺀 문장
                  19: "cb8a9ad031f611d9",                                   # 19 = 3.15.1 같은 OVR 비교 자료 받기(122 — 랭킹 수집 안 따로 켜는 토글)
                  18: "c318775aef609f08",                                   # 18 = 3.14.1 [전술 보기]를 누를 때 랭커의 저장 전술 읽기(110 ④)
                  17: "f6af56e6cab9566d",                                   # 17 = 3.13.1 [스펙업 순서] 탭을 연 동안 카드 시세·능력치 읽기(121 ②)

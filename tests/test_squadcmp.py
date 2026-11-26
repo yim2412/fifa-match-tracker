@@ -363,7 +363,7 @@ def test_gates_make_zero_requests():
 
 def test_shipped_version_opens_at_19():
     """조각 ③ 에서 열었다(안내 19) — 배포되는 값 그대로면 19 동의 뒤에만 관문이 열리고, 18 동의자는 요청 0."""
-    assert config.SQUAD_CMP_NOTICE_VERSION == 19 == config.NOTICE_VERSION and config.squad_cmp_open()
+    assert config.SQUAD_CMP_NOTICE_VERSION == 19 <= config.NOTICE_VERSION and config.squad_cmp_open()   # 20 = 3.15.2 다른 문장
     with env() as e:
         config.SQUAD_CMP_NOTICE_VERSION = e._saved["SQUAD_CMP_NOTICE_VERSION"]
         config.NOTICE_VERSION = e._saved["NOTICE_VERSION"]

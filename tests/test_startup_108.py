@@ -1,4 +1,5 @@
-"""켤 때 내 계정(108 C) — **실제 QThread 로** 켤 때 길을 잰다. `python tests/test_startup_108.py` 로 실행(네트워크 없음).
+"""켤 때 화면과 저장된 계정을 여는 길 — **실제 QThread 로** 잰다. 3.15.2 부터 켤 때는 내 계정이 있어도 늘 검색 화면이고
+(사용자 — 108 C 를 뺐다), 게임 중 멈춤·다시 묻기는 둘러보기·OPEN_LAST_ACCOUNT 가 쓰는 `_open_saved` 로 잰다. `python tests/test_startup_108.py` 로 실행(네트워크 없음).
 
 화면 스모크(`test_ui_smoke`)는 파일 머리에서 `QThread.start` 를 막아 이 단계의 결함을 못 본다. 3·4·5회차 검토의 [상]
 대부분이 신호 순서(`finished` 와 `finished_ok`)·`isRunning`·취소한 로더의 뒷정리였고, start 를 run 으로 바꿔 끼우면
@@ -312,52 +313,50 @@ def test_auto_loader_reads_meta_from_disk_only_in_game():
         app_main._GAME["on"] = False
 
 
-# ── 켤 때 ───────────────────────────────────────────────────────────────────
+# ── 켤 때 — 늘 검색 화면(3.15.2 사용자: 내 계정을 저절로 열던 108 C 를 뺐다) ──────────────────
 
 
-def test_startup_opens_my_account_on_dashboard():
+def _open_mine(win) -> None:
+    """저장된 계정을 여는 길(둘러보기 · OPEN_LAST_ACCOUNT 가 쓰는 _open_saved)을 직접 — 켤 때는 더 이상 안 부른다."""
+    win._open_saved(OUID, NICK, check=not app_main.game_paused())
+
+
+def _assert_search_screen(win, api, why: str) -> None:
+    assert api.calls == [] and _homepage() == [], (why, api.calls, _homepage()[:3])
+    assert win.stack.currentIndex() == win.PAGE_SEARCH and not win._ouid, (why, win._ouid)
+    assert _search_enabled(win), why
+
+
+def test_startup_keeps_search_screen_with_my_account():
+    """내 계정을 정해 두고 최신 안내에 동의했어도 켜면 검색 화면 · 넥슨 요청 0. 대조(막지 않았으면 일어났을 것)는
+    위 test_counters_… 가 같은 계정의 검색이 요청을 낸다는 것으로 본다. 칩의 "내 계정" 은 그대로 남는다."""
     api = _fresh()
     shell, win = _open()
     assert _quiet(win)
-    assert win._ouid == OUID and len(win._matches_all) == N_ALL, (win._ouid, len(win._matches_all))
-    assert api.searches() == 1, api.searches()
-    assert _page(win) == "대시보드", _page(win)
-    assert _homepage() == [], _homepage()[:3]
-    assert api.count(nexon_api.EP_USER_TRADE) == 0, "켤 때 거래를 받았다"
-    assert win._teamcolor_loader is None, "켤 때 팀컬러 로더가 떴다"
-    assert not win._startup_auto, "켤 때 확인이 끝났는데 표시가 안 꺼졌다"
-    assert _search_enabled(win)
+    _assert_search_screen(win, api, "켤 때 내 계정을 열었다")
     assert _chips(win)[0] == f"내 계정 · {NICK}", _chips(win)
-    # 표시가 꺼진 뒤 사용자가 누른 것은 지금처럼 홈페이지에 묻는다(팀컬러 · 순위)
-    win._api_search(NICK)
-    assert _quiet(win)
-    assert api.searches() == 2 and _homepage(), "사용자 검색이 켤 때 규칙에 묶였다"
 
 
 def test_no_my_account_keeps_search_screen():
     api = _fresh(my=False)
     shell, win = _open()
     assert _quiet(win)
-    assert api.calls == [] and _homepage() == [], (api.calls, _homepage())
-    assert win.stack.currentIndex() == win.PAGE_SEARCH and not win._ouid
+    _assert_search_screen(win, api, "내 계정 없음")
     assert not any(c.startswith("내 계정") for c in _chips(win)), _chips(win)
 
 
-def test_notice_14_waits_then_opens_on_accept():
+def test_notice_accept_keeps_search_screen():
+    """옛 동의자가 다시 묻는 창에서 동의해도 그 자리에서 내 계정을 열지 않는다."""
     api = _fresh()
     config.NOTICE_ACCEPTED = 14       # 기본값이 아닌 값 — 수집을 끈 14 동의자
     shell, win = _open()
     assert _quiet(win)
-    assert api.calls == [] and win.stack.currentIndex() == win.PAGE_SEARCH, api.calls
-    assert config.notice_update_pending(), "수집을 끈 14 동의자에게 다시 안 묻는다(U6)"
+    assert config.notice_update_pending(), "수집을 끈 14 동의자에게 다시 안 묻는다"
     assert FakeNotice.shown == 1, "창이 보일 때 다시 묻지 않았다"
-    win.ask_notice_update()            # 취소 — 옛 동의 그대로
-    assert _quiet(win) and api.calls == []
     FakeNotice.accept = True
     assert win.ask_notice_update()
     assert _quiet(win)
-    assert api.searches() == 1 and win._ouid == OUID and _page(win) == "대시보드"
-    assert _homepage() == []
+    _assert_search_screen(win, api, "동의 직후 내 계정을 열었다")
 
 
 def test_search_running_when_consent_arrives_is_kept():
@@ -372,16 +371,70 @@ def test_search_running_when_consent_arrives_is_kept():
     assert _pump(lambda: len(api.detail_started) >= 1)
     FakeNotice.accept = True
     win.ask_notice_update()
-    assert win._loader is ld, "도는 검색을 켤 때 길이 바꿔 끼웠다"
+    assert win._loader is ld, "도는 검색을 바꿔 끼웠다"
     api.hold.set()
     assert _quiet(win)
     assert api.searches() == 1, api.searches()
+
+
+def test_minimized_start_then_restore_keeps_search_screen():
+    api = _fresh()
+
+    def minimized(self):
+        self._shown_once = True
+        self.showMinimized()
+
+    app_main.MainWindow.show_initial = minimized
+    shell, win = _open()
+    assert _quiet(win)
+    win.showNormal()
+    assert _quiet(win)
+    _assert_search_screen(win, api, "최소화를 풀 때 내 계정을 열었다")
+
+
+def test_tray_start_then_show_keeps_search_screen():
+    api = _fresh()
+    shell, win = _open(show=False)
+    assert _quiet(win)
+    shell.show_window()
+    assert _quiet(win)
+    _assert_search_screen(win, api, "트레이에서 처음 보일 때 내 계정을 열었다")
+    shell.hide_window()
+    shell.show_inactive()
+    win.showNormal()
+    assert _quiet(win)
+    _assert_search_screen(win, api, "show_inactive 뒤 복원")
+
+
+# ── 저장된 계정을 여는 길(_open_saved — 둘러보기 · OPEN_LAST_ACCOUNT) ─────────────────
+
+
+def test_open_saved_draws_dashboard_then_checks():
+    api = _fresh()
+    shell, win = _open()
+    assert _quiet(win)
+    _open_mine(win)
+    assert _quiet(win)
+    assert win._ouid == OUID and len(win._matches_all) == N_ALL, (win._ouid, len(win._matches_all))
+    assert api.searches() == 1, api.searches()
+    assert _page(win) == "대시보드", _page(win)
+    assert _homepage() == [], _homepage()[:3]
+    assert api.count(nexon_api.EP_USER_TRADE) == 0, "새 경기 확인에서 거래를 받았다"
+    assert win._teamcolor_loader is None, "새 경기 확인에서 팀컬러 로더가 떴다"
+    assert not win._startup_auto, "확인이 끝났는데 표시가 안 꺼졌다"
+    assert _search_enabled(win)
+    # 표시가 꺼진 뒤 사용자가 누른 것은 지금처럼 홈페이지에 묻는다(팀컬러 · 순위)
+    win._api_search(NICK)
+    assert _quiet(win)
+    assert api.searches() == 2 and _homepage(), "사용자 검색이 자동 확인 규칙에 묶였다"
 
 
 def test_fail_path_turns_marker_off_and_frees_search():
     api = _fresh()
     api.fail_id = nexon_api.NexonAPIError("연결 실패", code=nexon_api.NETWORK_CODE)
     shell, win = _open()
+    assert _quiet(win)
+    _open_mine(win)
     assert _quiet(win)
     assert win._ouid == OUID and api.searches() == 1
     assert not win._startup_auto, "실패 길에서 표시가 안 꺼졌다"
@@ -390,20 +443,22 @@ def test_fail_path_turns_marker_off_and_frees_search():
 
 
 def test_visible_api_loader_resumes_after_startup_check():
-    """켤 때 확인도 _yield_trades 로 랭커 픽·특성을 멈춘다 — 끝난 뒤 다시 켜는 짝이 있어야 한다(5회차 S1)."""
+    """자동 확인도 _yield_trades 로 랭커 픽·특성을 멈춘다 — 끝난 뒤 다시 켜는 짝이 있어야 한다(5회차 S1)."""
     api = _fresh()
-    api.hold = threading.Event()
     seen = []
     real = app_main.MainWindow.start_visible_api_loader
     app_main.MainWindow.start_visible_api_loader = lambda self: (seen.append(time.monotonic()), real(self))[1]
     try:
         shell, win = _open()
+        assert _quiet(win)
+        api.hold = threading.Event()
+        _open_mine(win)
         assert _pump(lambda: len(api.detail_started) >= 1)
         _pump(lambda: False, 0.3)
-        seen.clear()                       # 창이 보일 때(showEvent) 부른 것은 뺀다
+        seen.clear()
         api.hold.set()
         assert _quiet(win)
-        assert seen, "켤 때 확인이 끝난 뒤 랭커 픽·특성을 다시 켜지 않았다"
+        assert seen, "자동 확인이 끝난 뒤 랭커 픽·특성을 다시 켜지 않았다"
     finally:
         app_main.MainWindow.start_visible_api_loader = real
 
@@ -413,8 +468,10 @@ def test_visible_api_loader_resumes_after_startup_check():
 
 def test_game_on_at_open_draws_only_then_checks_when_off():
     api = _fresh()
-    app_main._GAME["on"] = True
     shell, win = _open()
+    assert _quiet(win)
+    app_main._GAME["on"] = True
+    _open_mine(win)
     assert _quiet(win)
     assert win._ouid == OUID and len(win._matches_all) == N_SAVED
     assert api.calls == [] and api.meta_calls == [], (api.calls, api.meta_calls)
@@ -427,11 +484,13 @@ def test_game_on_at_open_draws_only_then_checks_when_off():
 
 
 def test_late_season_table_on_startup_path_keeps_homepage_zero():
-    """켤 때 길(_startup_auto)에서 시즌표가 늦게 와 고른 시즌이 바뀌면 _apply_season 이 다시 그린다 — 그때 팀컬러는
+    """자동으로 연 길(_startup_auto)에서 시즌표가 늦게 와 고른 시즌이 바뀌면 _apply_season 이 다시 그린다 — 그때 팀컬러는
     캐시만(U5). 대조: 표시를 끄고 같은 _apply_season 을 부르면 홈페이지 로더가 뜬다(막지 않았으면 일어났을 것)."""
     _fresh()
-    app_main._GAME["on"] = True      # 확인을 남겨 _startup_auto 가 켜진 채로 둔다
     shell, win = _open()
+    assert _quiet(win)
+    app_main._GAME["on"] = True      # 확인을 남겨 _startup_auto 가 켜진 채로 둔다
+    _open_mine(win)
     assert _quiet(win)
     assert win._startup_auto and win._ouid == OUID
     win._rank_seasons = []           # 시즌표 없이 켠 것처럼 — 콤보는 번호 줄(DataSeason)뿐
@@ -441,7 +500,7 @@ def test_late_season_table_on_startup_path_keeps_homepage_zero():
     before = win._season_key(win.cb_season.currentData())
     win._on_seasons_loaded(list(DATA.seasons))
     assert win._season_key(win.cb_season.currentData()) != before, "시즌표가 와도 고른 줄이 안 바뀌었다(검사가 비었다)"
-    assert win._teamcolor_loader is None, "켤 때 길에서 시즌표 도착이 팀컬러 홈페이지 조회를 띄웠다"
+    assert win._teamcolor_loader is None, "자동으로 연 길에서 시즌표 도착이 팀컬러 홈페이지 조회를 띄웠다"
     win._startup_auto = False
     win._apply_season()
     assert win._teamcolor_loader is not None, "대조: 표시가 꺼지면 팀컬러 조회가 떠야 한다"
@@ -451,6 +510,8 @@ def test_late_season_table_on_startup_path_keeps_homepage_zero():
 
 def test_game_on_during_db_read_skips_check():
     api = _fresh()
+    shell, win = _open()
+    assert _quiet(win)
     gate = threading.Event()
 
     def slow_load(*a, **k):
@@ -458,7 +519,7 @@ def test_game_on_during_db_read_skips_check():
         return _REAL_LOAD_SAVED(*a, **k)
 
     app_main.load_saved = slow_load
-    shell, win = _open()
+    _open_mine(win)
     assert _pump(lambda: win._loader is not None and win._loader.isRunning())
     _game(shell, True)
     gate.set()
@@ -470,10 +531,17 @@ def test_game_on_during_db_read_skips_check():
     assert api.searches() == 1
 
 
+def _open_mine_held(api):
+    shell, win = _open()
+    assert _quiet(win)
+    api.hold = threading.Event()
+    _open_mine(win)
+    return shell, win
+
+
 def test_game_on_during_check_cancels_keeps_marker_and_frees_search():
     api = _fresh()
-    api.hold = threading.Event()
-    shell, win = _open()
+    shell, win = _open_mine_held(api)
     assert _pump(lambda: len(api.detail_started) >= app_main.DETAIL_WORKERS)
     _pump(lambda: False, 0.2)
     _game(shell, True)
@@ -494,14 +562,13 @@ def test_game_on_during_check_cancels_keeps_marker_and_frees_search():
     assert api.searches() == 2 and len(win._matches_all) == N_ALL
     assert "division" in api.meta_calls[mark:], api.meta_calls[mark:]
     _game(shell, False)
-    assert _quiet(win) and api.searches() == 2, "사용자가 이미 검색했는데 켤 때 확인을 또 했다"
+    assert _quiet(win) and api.searches() == 2, "사용자가 이미 검색했는데 자동 확인을 또 했다"
 
 
 def test_game_off_before_cancelled_loader_ends_still_checks_once():
     """취소한 로더가 상세를 끝낼 때까지 살아 있는 사이 게임이 꺼진다 — 그 finished 에서 다시 한 번(4회차 M)."""
     api = _fresh()
-    api.hold = threading.Event()
-    shell, win = _open()
+    shell, win = _open_mine_held(api)
     assert _pump(lambda: len(api.detail_started) >= app_main.DETAIL_WORKERS)
     _game(shell, True)
     _game(shell, False)                       # 로더가 아직 돈다 — 여기서는 못 띄운다
@@ -517,8 +584,10 @@ def test_game_off_before_cancelled_loader_ends_still_checks_once():
 
 def test_game_on_while_hidden_then_off_waits_for_show():
     api = _fresh()
-    app_main._GAME["on"] = True
     shell, win = _open()
+    assert _quiet(win)
+    app_main._GAME["on"] = True
+    _open_mine(win)
     assert _quiet(win)
     shell.hide_window()
     _game(shell, False)
@@ -531,8 +600,10 @@ def test_game_on_while_hidden_then_off_waits_for_show():
 def test_release_then_game_off_then_show_checks_after_reload():
     """메모리를 내려놓은 뒤 게임이 꺼지고 창을 보인다 — 다시 읽기(offline)가 **끝난 뒤** 한 번(3회차 M3 · 4회차 S3)."""
     api = _fresh()
-    app_main._GAME["on"] = True
     shell, win = _open()
+    assert _quiet(win)
+    app_main._GAME["on"] = True
+    _open_mine(win)
     assert _quiet(win)
     shell.hide_window()
     win.release_memory()
@@ -548,8 +619,7 @@ def test_release_then_game_off_then_show_checks_after_reload():
 def test_release_while_cancelled_loader_runs_reloads_and_checks():
     """취소했지만 안 끝난 확인 로더가 도는 사이 내려놓고 다시 보인다 — 다시 읽기도 그 뒤 확인도 해야 한다(5회차 M5)."""
     api = _fresh()
-    api.hold = threading.Event()
-    shell, win = _open()
+    shell, win = _open_mine_held(api)
     assert _pump(lambda: len(api.detail_started) >= app_main.DETAIL_WORKERS)
     _game(shell, True)
     shell.hide_window()
@@ -562,49 +632,6 @@ def test_release_while_cancelled_loader_runs_reloads_and_checks():
     assert not win._released, "다시 읽기를 건너뛰었다"
     assert len(win._matches_all) == N_ALL, len(win._matches_all)
     assert api.searches() == 2
-
-
-# ── 창이 안 보일 때(최소화 · 트레이) ─────────────────────────────────────────
-
-
-def test_minimized_start_waits_for_restore():
-    api = _fresh()
-
-    def minimized(self):
-        self._shown_once = True
-        self.showMinimized()
-
-    app_main.MainWindow.show_initial = minimized
-    shell, win = _open()
-    assert _quiet(win)
-    assert win.isMinimized() and api.calls == [], api.calls
-    win.showNormal()
-    assert _quiet(win)
-    assert api.searches() == 1 and win._ouid == OUID
-
-
-def test_tray_start_checks_on_first_show_only():
-    api = _fresh()
-    shell, win = _open(show=False)
-    assert _quiet(win)
-    assert api.calls == [] and not win.isVisible()
-    shell.show_window()
-    assert _quiet(win)
-    assert api.searches() == 1 and win._ouid == OUID
-    shell.hide_window()
-    shell.show_window()
-    assert _quiet(win) and api.searches() == 1, "두 번째로 열 때도 확인했다"
-
-
-def test_tray_show_inactive_then_restore():
-    api = _fresh()
-    shell, win = _open(show=False)
-    assert _quiet(win)
-    shell.show_inactive()
-    assert _quiet(win) and api.calls == [], "최소화로 띄운 채 확인했다"
-    win.showNormal()
-    assert _quiet(win)
-    assert api.searches() == 1
 
 
 # ── 칩 ─────────────────────────────────────────────────────────────────────

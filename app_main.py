@@ -3766,10 +3766,8 @@ class MainWindow(QMainWindow):
         self._notes_applied: list[tuple] = []
         self._notice_asked = False   # ask_notice_update_once — 실행당 한 번
         self._notice_after_restore = False  # 최소화 중이라 미뤘다 — 창이 돌아오면 묻는다
-        # 108 C 켤 때 내 계정 — 실행당 한 번(open_startup) · 최소화라 미뤘다 · 켤 때 길(대시보드 · 팀컬러는 캐시만) ·
-        # 게임·숨김 때문에 미룬 새 경기 확인 (ouid, 닉네임)
-        self._startup_done = False
-        self._startup_after_restore = False
+        # 켤 때 저장된 계정을 여는 길(open_last_account · 둘러보기) — 대시보드로 · 팀컬러는 캐시만 ·
+        # 게임·숨김 때문에 미룬 새 경기 확인 (ouid, 닉네임). 내 계정을 켤 때 저절로 여는 길(108 C)은 3.15.2 에서 뺐습니다
         self._startup_auto = False
         self._startup_check_pending: tuple[str, str] | None = None
         # 거래 기록(1.4.1) — 받기는 한 번에 하나. 도는 중에 다시 띄우라는 요청(키 바꿈 등)이 오면 끝난 뒤 한 번 더
@@ -4048,9 +4046,6 @@ class MainWindow(QMainWindow):
                 self._notice_after_restore = False
                 # 상태가 바뀐 직후엔 창이 아직 제자리가 아니다 — 한 바퀴 뒤 그 창 위에
                 QTimer.singleShot(0, self.ask_notice_update_once)
-            if getattr(self, "_startup_after_restore", False) and not self.isMinimized():
-                self._startup_after_restore = False   # 최소화로 켠 창 · show_inactive — 복원하면 그때 내 계정(108 C)
-                QTimer.singleShot(0, lambda: self.open_startup(only_mine=True))
 
     def moveEvent(self, e) -> None:
         super().moveEvent(e)
@@ -4311,8 +4306,6 @@ class MainWindow(QMainWindow):
         self.sync_ranker_pick_data()
         self.start_visible_api_loader()
         self._sync_card_backfill(start=ok)   # 안내 12 수락 직후 — 토글이 켜져 있을 때만 받기 시작(꺼져 있으면 아무것도 안 함)
-        if ok:
-            self.open_startup(only_mine=True)   # 안내 15 동의 직후 그 자리에서 내 계정(U6) — 내 계정이 없으면 아무것도 안 한다
         return ok
 
     def attach_rank_sched(self, sched: RankCollectScheduler) -> None:
@@ -13814,44 +13807,13 @@ class MainWindow(QMainWindow):
         self._open_saved(*last, check=True)
         return True
 
-    def _my_account(self) -> tuple[str, str] | None:
-        try:
-            conn = store.open_db(config.DB_PATH)
-            try:
-                mine = store.my_account(conn, config.DEFAULT_MATCH_TYPE)
-            finally:
-                conn.close()
-        except Exception:
-            return None
-        return (mine["ouid"], mine["nickname"] or mine["ouid"][:8]) if mine else None
-
-    def open_startup(self, only_mine: bool = False) -> None:
-        """켤 때 무엇을 열지 한 곳에서(108 C). 내 계정이 있고 안내 15 에 동의했으면 그 계정을 DB 로 그린 뒤 새 경기만 확인한다.
-        only_mine: 동의 직후 · 트레이에서 처음 보일 때 · 최소화를 풀 때 — 내 계정이 없으면 아무것도 안 한다(미리 읽기를 다시
-        돌리지 않는다 · 3회차 M2). 아니면(main) 지금과 같다 — OPEN_LAST_ACCOUNT 면 마지막 계정, 아니면 미리 읽기."""
-        if not self._open_mine_on_startup() and not only_mine:
-            if config.OPEN_LAST_ACCOUNT:
-                self.open_last_account()
-            else:
-                self.start_prefetch()
-
-    def _open_mine_on_startup(self) -> bool:
-        """내 계정 길이 맡았으면 True(열었거나 · 창이 돌아올 때로 미뤘거나 · 이미 했거나)."""
-        if self._startup_done or self._ouid or (self._loader and self._loader.isRunning()):
-            return True   # 이미 열었거나 화면에 계정이 있거나 검색이 돈다 — 그걸 덮어쓰지 않는다(3회차 M2)
-        if not config.startup_check_allowed():
-            return False  # 동의 전 — 검색 화면 · 요청 0(U6)
-        mine = self._my_account()
-        if mine is None:
-            return False
-        if self.isMinimized():
-            self._startup_after_restore = True   # changeEvent 가 복원 뒤 다시 부른다
-            return True
-        if not self.isVisible():
-            return True   # 숨긴 창(--tray) — tray.show_window 가 보일 때 부른다
-        self._startup_done = True
-        self._open_saved(*mine, check=not game_paused())
-        return True
+    def open_startup(self) -> None:
+        """켤 때 무엇을 열지 한 곳에서. 늘 검색 화면입니다(3.15.2 사용자 — 내 계정을 저절로 열던 108 C 를 뺐습니다).
+        OPEN_LAST_ACCOUNT 면 마지막 계정, 아니면 미리 읽기(요청 0)."""
+        if config.OPEN_LAST_ACCOUNT:
+            self.open_last_account()
+        else:
+            self.start_prefetch()
 
     def _open_saved(self, ouid: str, nick: str, check: bool) -> None:
         """저장된 경기로 바로 그린다(넥슨 0) → 스레드가 끝난 뒤 check 이고 그때도 게임이 꺼져 있으면 새 경기 확인."""
@@ -20400,8 +20362,7 @@ def _open_window(shell: tray.AppShell, show: bool = True, from_tray: bool = Fals
     if show:
         # 창이 그려진 뒤 그 위에 — 다시 묻는 안내(옛 동의자만)를 닫은 다음에 "바뀐 점"(둘이 겹쳐 뜨지 않게 차례로)
         QTimer.singleShot(0, lambda: (win.ask_notice_update_once(), win.show_changes_once(fresh)))
-        # 내 계정(안내 15 동의) → 그 계정 · 아니면 OPEN_LAST_ACCOUNT 면 마지막 계정 · 아니면 검색창 그대로 + 미리 읽기(108 C).
-        # 다시 묻는 창(singleShot)보다 먼저지만 관문이 값으로 막는다 — 동의 전엔 검색 화면 · 요청 0
+        # OPEN_LAST_ACCOUNT 면 마지막 계정 · 아니면 검색창 그대로 + 미리 읽기(요청 0)
         win.open_startup()
     return win
 
