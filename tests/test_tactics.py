@@ -607,7 +607,8 @@ def test_gate_order_and_notice18():
                      (dict(on, WEB_DATA=False, NOTICE_ACCEPTED=config.NOTICE_BASE_VERSION - 1), "notice")):
         with cfg(**kw):
             assert config.tactic_block() == want and config.tactic_allowed() is (want == ""), (kw, want)
-    assert v == 18 == config.NOTICE_VERSION and config.NOTICE_COLLECT_ONLY_FROM == 16, "18 은 수집을 켠 사람 몫이다(U7)"
+    # 전술 관문은 18 그대로 — 뒤에 안내가 더 올라도(19 = 122 같은 OVR) 18 동의자는 전술을 쓴다
+    assert v == 18 <= config.NOTICE_VERSION and config.NOTICE_COLLECT_ONLY_FROM == 16, "18 은 수집을 켠 사람 몫이다(U7)"
     with cfg(WEB_DATA=True, RANK_COLLECT=True, NOTICE_ACCEPTED=17):
         res, web, *_ = run(Web({(1, 1, 0): cell()}), details=[detail()], allowed=None)
         assert res.state == "notice" and web.calls == [], "안내 18 전에 요청이 나갔다"
