@@ -638,7 +638,8 @@ def _emblem_stub(meta, known, snap):
     st._note_emblem = lambda label, emblem: MW._note_emblem(st, label, emblem)
     st._emblem_map = st.map = lambda: MW._emblem_map(st)
     st._sim_reset = lambda: None   # 110 R1 — rank.db 무효화가 [비슷한 랭커] 단계표도 버린다(이 테스트는 엠블럼 지도만 본다)
-    st.cell = lambda *a, **k: MW._emblem_cell(st, *a, **k)
+    st._squad_cmp_changed = lambda drop=False: None   # 122 ③ — 같은 OVR 판본 올리기는 스모크가 잰다
+    st.cell =lambda *a, **k: MW._emblem_cell(st, *a, **k)
     return st, d
 
 

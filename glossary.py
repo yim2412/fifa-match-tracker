@@ -35,6 +35,11 @@ TERMS: dict[str, tuple[str, str]] = {
                 "카드를 사는 값 1억 BP로 그 자리의 실효 OVR이 얼마나 오르는지이고, 클수록 먼저 살 만합니다."),
     "specup_band": ("추천 구단가치",
                     "순서표에서 앞 칸의 카드를 모두 샀다고 볼 때의 구단가치입니다."),
+    "squad_ovr": ("스쿼드 OVR(마지막 경기)",
+                  "마지막 감독모드 경기 선발 11명의 실효 OVR 평균이고, 팀컬러는 넣지 않습니다."),
+    "squad_cmp": ("같은 OVR 대비",
+                  "1만 위 안에서 스쿼드 OVR이 같은 구간(소수 첫째 자리에서 반올림한 정수)인 사람들의 평균 점수와 내 점수의 차이입니다. "
+                  "점수에는 OVR보다 판수가 더 크게 들어가서, 판수가 비슷한 사람끼리 견준 값을 함께 냅니다."),
     "dist_compare": ("분포 대비",
                      "상위 구단주 표본이 같은 경기 상대와 견준 값의 분포 안에서 내 값이 어디쯤인지 본 것입니다. "
                      "내 층 평균은 등급대가 아니라 내 순위와 같은 순위 구간 표본의 평균입니다."),
@@ -49,7 +54,7 @@ TERMS: dict[str, tuple[str, str]] = {
 HEADERS: dict[str, str] = {
     "xG": "xg", "ELO": "elo", "평균 ELO": "elo", "백분위": "percentile",
     "FC 합계": "fc", "실효 OVR": "effective_ovr", "구단가치": "club_value", "구단가치 중앙값": "club_value",
-    "내 층 평균": "dist_compare",
+    "내 층 평균": "dist_compare", "스쿼드 OVR": "squad_ovr",
 }
 
 

@@ -1483,6 +1483,7 @@ class TopCard:
     formation: str = ""                # 67 R9 랭킹 줄 꼴 — 마지막 스냅숏 그대로(새 요청 0)
     team_color: str = ""
     value: float | None = None         # 구단가치
+    sn: int | None = None              # 프로필 번호(122 — 1~3위 카드의 스쿼드 OVR 을 squadcmp 결과에서 찾는다 · 화면에 안 낸다)
 
 
 def top3(conn: sqlite3.Connection, person: bool = False) -> list[TopCard]:
@@ -1530,7 +1531,7 @@ def top3(conn: sqlite3.Connection, person: bool = False) -> list[TopCard]:
             lo, hi = fc[r.sn][0] / fc_days, fc[r.sn][1] / fc_days
         out.append(TopCard(r.rank, r.nick or "", r.elo, per_day, lo, hi,
                            r.win * 100 / games if games and r.win is not None else None, last["dt"],
-                           r.win or 0, r.draw or 0, r.lose or 0, r.formation or "", r.color or "", r.value))
+                           r.win or 0, r.draw or 0, r.lose or 0, r.formation or "", r.color or "", r.value, r.sn))
     return out
 
 

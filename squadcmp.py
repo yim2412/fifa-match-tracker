@@ -25,6 +25,7 @@ rank.db 마지막 스냅숏 1만 명 → 사람마다 (닉네임 → 계정 → 
 """
 from __future__ import annotations
 
+import math
 import random
 import sqlite3
 import struct
@@ -37,6 +38,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import cardstats
 import config
 import matchtime
 import ownerdist
@@ -741,6 +743,220 @@ def _fill(conn, web: playerinfo.WebRun, spids: list[int], day: str, fetch_sim, o
             store.budget_mark_429(conn, day, SQUAD_CARD_FORMAT)
             web.stop = "format"
             return
+
+
+# ── 화면 계산(조각 ③) ─────────────────────────────────────────────────────────
+# 규칙은 ROADMAP "## 122단계 › 화면에 내는 값". 점수는 얼리지 않고 그때그때 마지막 스냅숏과 잇는다(R5).
+
+OK, NO_DATA, NO_SNAP, NOT_RANKED, SEASON, GATE, NO_LINEUP, FEW = (
+    "ok", "nodata", "nosnap", "notranked", "season", "gate", "nolineup", "few")
+
+
+@dataclass
+class Cell:
+    ovr: int
+    n: int
+    mean: float
+    mine: bool = False
+
+
+@dataclass
+class SquadCompare:
+    state: str = NO_DATA
+    snap_at: str | None = None          # 점수·판수를 읽은 스냅숏 시각
+    lineup_pct: float | None = None     # 관문 A 값(%)
+    card_pct: float | None = None       # 관문 B 값(%)
+    lineup_why: str = ""                # NO_LINEUP 일 때 — "cards"(카드를 모름) · "none"(14일 안 감독모드 선발 없음)
+    my_ovr: float | None = None
+    my_cell: int | None = None
+    my_elo: float | None = None
+    my_games: int | None = None
+    n: int = 0                          # 같은 칸 남들(나 뺌)
+    mean: float | None = None
+    top_pct: int | None = None          # 칸 안 "위에서 N%"
+    n2: int = 0                         # 같은 칸에서 판수가 비슷한 남들(U6)
+    mean2: float | None = None
+    top2: int | None = None
+    cut: float | None = None            # 그 스냅숏의 마지막 줄 점수(1만 위 문턱)
+    cells: list = None                  # [Cell] — OVR 오름차순
+    ovr_of: dict = None                 # {프로필 번호: 스쿼드 OVR} — "남들" 조건을 채운 사람(1~3위 카드 · 관문과 무관)
+
+    def __post_init__(self):
+        self.cells = [] if self.cells is None else self.cells
+        self.ovr_of = {} if self.ovr_of is None else self.ovr_of
+
+    @property
+    def delta(self) -> float | None:
+        return None if self.mean is None or self.my_elo is None else self.my_elo - self.mean
+
+    @property
+    def delta2(self) -> float | None:
+        return None if self.mean2 is None or self.my_elo is None else self.my_elo - self.mean2
+
+    @property
+    def tone(self) -> str | None:
+        """둘째 줄 안 백분위로만 — 위 25% "good" · 아래 25% "bad" · 사이 None. 둘째 줄이 없으면 색 없음."""
+        if self.top2 is None:
+            return None
+        if self.top2 <= config.SQUAD_CMP_COLOR_Q:
+            return "good"
+        if self.top2 > 100 - config.SQUAD_CMP_COLOR_Q:
+            return "bad"
+        return None
+
+
+def cell_of(ovr: float) -> int:
+    """정수 칸 — 반올림은 0.5 를 늘 위로(파이썬 round 는 짝수 쪽이라 쓰지 않는다)."""
+    return math.floor(ovr + 0.5)
+
+
+def lineup_ovr(cards: Iterable[tuple[int, int, int]], extras: dict[int, dict]) -> float | None:
+    """선발 11장의 평균 실효 OVR(적응도 5 · 팀컬러 뺌) — 한 장이라도 모르면 None."""
+    cards = list(cards)
+    if len(cards) != LINEUP_N:
+        return None
+    total = 0
+    for spid, po, grade in cards:
+        v, _why = cardstats.effective_ovr(po, grade, extras.get(spid))
+        if v is None:
+            return None
+        total += v
+    return total / LINEUP_N
+
+
+def _top(higher: int, n: int) -> int:
+    """나보다 점수가 높은 사람 수 → "위에서 N%"(나를 넣은 n + 1 명 안 자리)."""
+    return max(1, round(100 * (higher + 1) / (n + 1)))
+
+
+def compare(rows: list[dict], squads: dict[int, tuple[int, int, list]], extras: dict[int, dict], *, me_sn: int | None,
+            my_lineups: list[tuple[int, list]], season_start: datetime | None, now: datetime,
+            snap_at: str | None) -> SquadCompare:
+    """순수 계산. rows = 마지막 스냅숏 [{profile_sn, elo, games}] · squads = {번호: (경기 시각, 받은 시각, 선발)} ·
+    my_lineups = 저장된 내 마지막 감독모드 선발 [(경기 시각, 선발)]. squads 가 비면 NO_DATA(화면은 아무것도 안 낸다)."""
+    out = SquadCompare(snap_at=snap_at)
+    if not squads:
+        return out
+    t = int(now.timestamp())
+    match_min = t - config.SQUAD_CMP_KEEP_DAYS * DAY_S
+    got_min = t - config.SQUAD_CMP_LINEUP_DAYS * DAY_S
+    by_sn = {r["profile_sn"]: r for r in rows}
+    usable = full = 0
+    others: list[tuple[int, float, int]] = []   # (칸, 점수, 판수)
+    by_cell: dict[int, list[float]] = {}
+    for sn, r in by_sn.items():
+        if sn == me_sn:
+            continue
+        sq = squads.get(sn)
+        if sq is None or sq[0] is None or sq[0] < match_min or sq[1] is None or sq[1] < got_min:
+            continue
+        usable += 1
+        ovr = lineup_ovr(sq[2], extras)
+        if ovr is None:
+            continue
+        full += 1
+        out.ovr_of[sn] = ovr
+        if r.get("elo") is not None:
+            c = cell_of(ovr)
+            others.append((c, r["elo"], r.get("games") or 0))
+            by_cell.setdefault(c, []).append(r["elo"])
+    if not rows:
+        out.state = NO_SNAP
+        return out
+    people = len(by_sn) - (me_sn in by_sn)
+    out.lineup_pct = 100 * usable / people if people else 0.0
+    out.card_pct = 100 * full / usable if usable else 0.0
+    out.cut = rows[max(range(len(rows)), key=lambda i: rows[i].get("rank") or 0)].get("elo")
+    mine = by_sn.get(me_sn) if me_sn is not None else None
+    if mine is None or mine.get("elo") is None:
+        out.state = NOT_RANKED
+        return out
+    out.my_elo, out.my_games = mine["elo"], mine.get("games") or 0
+    if season_start is None or now - season_start < timedelta(days=config.SQUAD_CMP_SEASON_DAYS):
+        out.state = SEASON
+        return out
+    if out.lineup_pct < 100 * config.SQUAD_CMP_GATE_LINEUP or out.card_pct < 100 * config.SQUAD_CMP_GATE_CARDS:
+        out.state = GATE
+        return out
+    cands = list(my_lineups)
+    if me_sn in squads and squads[me_sn][2]:
+        cands.append((squads[me_sn][0], squads[me_sn][2]))
+    cands = sorted((c for c in cands if c[0] is not None and c[0] >= match_min), key=lambda c: -c[0])
+    for _at, cards in cands:
+        out.my_ovr = lineup_ovr(cards, extras)
+        if out.my_ovr is not None:
+            break
+    if out.my_ovr is None:
+        out.state, out.lineup_why = NO_LINEUP, ("cards" if cands else "none")
+        return out
+    out.my_cell = cell_of(out.my_ovr)
+    out.cells = [Cell(c, len(v), sum(v) / len(v), c == out.my_cell) for c, v in sorted(by_cell.items())
+                 if len(v) >= config.SQUAD_CMP_TABLE_MIN or c == out.my_cell]
+    same = [(e, g) for c, e, g in others if c == out.my_cell]
+    out.n = len(same)
+    if out.n < config.SQUAD_CMP_MIN_CELL:
+        out.state = FEW
+        return out
+    out.mean = sum(e for e, _g in same) / out.n
+    out.top_pct = _top(sum(e > out.my_elo for e, _g in same), out.n)
+    lo, hi = out.my_games * config.SQUAD_CMP_GAMES_LO, out.my_games * config.SQUAD_CMP_GAMES_HI
+    near = [e for e, g in same if lo <= g <= hi] if out.my_games else []
+    out.n2 = len(near)
+    if out.n2 >= config.SQUAD_CMP_MIN_CELL:
+        out.mean2 = sum(near) / out.n2
+        out.top2 = _top(sum(e > out.my_elo for e in near), out.n2)
+    out.state = OK
+    return out
+
+
+def load_compare(rank_conn, squads_path, fconn, *, ouid: str | None, my_sn: int | None, nickname: str | None,
+                 table_start: datetime | None, now: datetime) -> SquadCompare:
+    """읽기(작업 스레드) — rank.db(읽기 전용 연결을 받는다) · squads.db(없으면 만들지 않는다) · fifa.db 카드표와 내 경기 → compare.
+    보는 사람은 검색 기록의 프로필 번호(EloLoader 와 같은 방법), 없으면 스냅숏 닉네임. 시즌 시작은 시즌표와 rank.db 의
+    마지막 new_season 스냅숏 가운데 늦은 쪽(관문 C · 시즌표만 보면 끝난 시즌이 늦게 오르는 동안 통과한다)."""
+    sq = open_existing(squads_path)
+    if sq is None:
+        return SquadCompare()
+    try:
+        squads = {sn: (at, got, unpack_lineup(body)) for sn, at, got, body in sq.execute(
+            "SELECT profile_sn, match_at, lineup_at, lineup FROM squads WHERE lineup IS NOT NULL")}
+    finally:
+        sq.close()
+    if not squads:
+        return SquadCompare()
+    snap = rows = None
+    snap_start = None
+    if rank_conn is not None:
+        import rankerpick   # 순환 import 를 피한다(_snapshot 과 같은 까닭)
+        snap = rankerpick.latest_raw_snapshot(rank_conn)
+        if snap is not None:
+            rows = [{"profile_sn": sn, "rank": rank, "elo": elo, "games": (w or 0) + (d or 0) + (lo or 0)}
+                    for sn, rank, elo, w, d, lo in rank_conn.execute(
+                        "SELECT profile_sn, rank, elo, win, draw, lose FROM snapshot_rows WHERE snapshot_id = ?", (snap[0],))]
+            if my_sn is None and nickname:
+                hit = rank_conn.execute("SELECT profile_sn FROM snapshot_rows WHERE snapshot_id = ? AND nickname = ?",
+                                        (snap[0], nickname)).fetchone()
+                my_sn = hit[0] if hit else None
+        row = rank_conn.execute("SELECT MAX(taken_at) FROM snapshots WHERE new_season = 1").fetchone()
+        try:
+            snap_start = datetime.fromisoformat(row[0]) if row and row[0] else None
+        except ValueError:
+            snap_start = None
+    starts = [s for s in (table_start, snap_start) if s is not None]
+    mine: list[tuple[int, list]] = []
+    if ouid:
+        for d in store.load_details(fconn, ouid, config.DEFAULT_MATCH_TYPE, limit=config.SQUAD_CMP_MY_SCAN):
+            try:
+                at, body = lineup_of(d, ouid)
+            except BadFormat:
+                continue
+            if body is not None:
+                mine.append((at, unpack_lineup(body)))
+                break
+    want = {c[0] for v in squads.values() for c in v[2]} | {c[0] for _at, cards in mine for c in cards}
+    extras = store.load_card_extras(fconn, want)
+    return compare(rows or [], squads, extras, me_sn=my_sn, my_lineups=mine, season_start=max(starts) if starts else None,
+                   now=now, snap_at=snap[1] if snap else None)
 
 
 # ── [정보] 상태 줄 ───────────────────────────────────────────────────────────

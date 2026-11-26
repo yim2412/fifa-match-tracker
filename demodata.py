@@ -428,3 +428,14 @@ def install(data: DemoData, db_path: Path, cache_dir: Path) -> None:
 def latest_kst(data: DemoData) -> datetime | None:
     """가장 늦은 경기 시각(KST) — 테스트용."""
     return matchtime.parse(max(d["matchDate"] for d in data.details.values())) if data.details else None
+
+
+def squad_compare():
+    """[점수·예측] 같은 OVR 대비(122 ③) — 지어낸 값(요청 0 · squads.db 를 만들지 않는다). 칸 모양은 실측 분포(R3 + 적응도 4)를 줄인 꼴."""
+    import squadcmp
+    cells = [squadcmp.Cell(o, n, m, o == 142) for o, n, m in (
+        (139, 410, 3242.0), (140, 1120, 3386.0), (141, 2690, 3547.0), (142, 3190, 3662.0), (143, 1420, 3764.0), (144, 500, 3904.0))]
+    return squadcmp.SquadCompare(
+        state=squadcmp.OK, snap_at=(datetime.now() - timedelta(hours=3)).isoformat(timespec="seconds"),
+        lineup_pct=99.6, card_pct=97.8, my_ovr=141.8, my_cell=142, my_elo=3810.0, my_games=1450,
+        n=3190, mean=3662.0, top_pct=34, n2=1280, mean2=3741.0, top2=41, cut=2911.0, cells=cells)

@@ -95,6 +95,7 @@ from squad_timeline import (
     FormationReport, FormationRow, formation_report,
 )
 from trade_book import Ledger, ledger, price_targets
+from squadcmp import SquadCompare, load_compare as squad_compare_load
 from records import (Achievement, DayPlayer, RecordRow, Rival, achievements as record_achievements,
                      by_match as records_by_match, day_player, kinds as record_kinds, last_day as last_play_day,
                      latest_day_player, recent as recent_records, rival, summary as record_summary)
@@ -198,6 +199,8 @@ __all__ = [
     "HELD", "NEVER_PLAYED", "NOT_RECENT", "RECENT", "Timeline", "TimelineEvent", "arrival_report", "build_timeline", "parse_trades",
     "FormationReport", "FormationRow", "formation_report",   # 97 X2 포메이션 바꾼 전후
     "Ledger", "ledger", "price_targets",
+    # squadcmp — 같은 OVR 대비(122 ③). 받기·지우기는 예약이 squadcmp 를 바로 부른다
+    "SquadCompare", "squad_compare_load",
     # records — 88 C1·U1 업적(저장 전체 · 요청 0)
     "Achievement", "RecordRow", "record_achievements", "records_by_match", "record_kinds", "recent_records", "record_summary",
     "Rival", "rival", "DayPlayer", "day_player", "last_play_day", "latest_day_player",   # 88 F4·Q2
@@ -275,6 +278,7 @@ FILTER_PLAN: dict[str, tuple[str, tuple[str, ...]]] = {
     "window_of": ("PASS", ()),
     "filter_matches": ("PASS", ()),
     "latest_match_with": ("PASS", ()),          # M31
+    "squad_compare_load": ("PASS", ()),         # 122 — 남과 견주는 마지막 선발이라 표시한 판도 거르지 않는다(ROADMAP 122 진입점 표)
     # S — 넥슨 기록·저장 범위·경기와 무관(J3: 예측·구단주 분포·decisive_rate 는 같은 판 묶음이어야 견줘진다)
     **{n: ("S", ()) for n in (
         "headline", "streak_min_n", "parse_match", "team_rating", "division_icon_index", "is_mixed", "is_weak",

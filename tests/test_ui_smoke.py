@@ -1387,7 +1387,7 @@ def test_no_table_elides_at_min_or_default_size():
     import widgets
     # 메인 창의 표만 — 대화상자 안의 표(포지션 선수 · 선수 카드 [랭커 기록])는 열 때 생기고 앞 테스트가 열어 둔다
     tables = [t for t in _win.findChildren(widgets.FitTableWidget) if t.window() is _win]
-    assert len(tables) == 54, len(tables)   # 54 = 97 조각 3 [영입 전후] 포메이션 표 · [성적 진단 › 분포 대비] 표(채운 표는 test_97_formation_view_… · test_distcmp_tab_… 가 잰다) · 52 = 97 조각 2 [시즌 돌아보기] 지난 시즌 같은 시점 표(채운 표는 test_review_page_… 가 잰다) · 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
+    assert len(tables) == 55, len(tables)   # 55 = 122 ③ [점수·예측] 같은 OVR 구간별 표(채운 표는 test_122_squad_cmp_… 가 잰다) · 54 = 97 조각 3 [영입 전후] 포메이션 표 · [성적 진단 › 분포 대비] 표(채운 표는 test_97_formation_view_… · test_distcmp_tab_… 가 잰다) · 52 = 97 조각 2 [시즌 돌아보기] 지난 시즌 같은 시점 표(채운 표는 test_review_page_… 가 잰다) · 51 = 97 조각 1 [플레이 기록] 표 다섯(세션 구간 · 세션 목록 · 연패 셋)과 [경기 습관] 요일 표(채운 표는 test_playlog_tabs_… 가 잰다) · 45 = 88 [내 기록] 업적 표(채운 표는 test_records_page_… 가 잰다) · 44 = 87 V3 [강화 비용] 시도 횟수 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 43 = 68 C6 [주간 시세] 표(채운 표는 test_68_price_week_tab_… 가 잰다) · 42 = 83 [강화 비용] 단계 표·금액 구간 표(채운 표는 test_enhance_page_shows_result 가 잰다) · 40 = 82 [영입 전후] 표 둘 · 38 = 77 B [팀컬러 랭킹] 표가 [상대 팀컬러] 줄 목록으로 합쳐짐 · 39 = 67 R4 [주간 요약] 넷(급상승·하루 최다 승·구단가치 끝·주차)·R6 [보상] 구단가치별이 줄 목록·막대로 빠짐 · 44 = 67 R3 [팀컬러 승률]·R10 랭커 픽 셋·[추천] 카드가 줄 목록으로 빠짐 · 49 = 67 R1·R7 [가성비]·[구단가치] 둘·[메타 변화] 둘이 줄 목록(MetricRowList)으로 빠짐 · 54 = 65 M4 상대 전적이 표에서 줄 목록(RateRowList)으로 빠짐 · 55 = 65 M2 경기 목록이 표에서 카드(MatchCardList)로 빠짐 · 56 = 포지션 특성 [내 스쿼드](57 K12 — test_my_traits_…) · 55 = 스쿼드·이적 [이력](57 K4 — test_history_tab_… ) · 53~54 = 랭킹 추이 [보상] 두 표(57 K11 — test_top3_cards_and_reward_board_tab) · 52 = 선수로 구단주 찾기 [카드별·강화별 사용자](50단계 N30 — 채운 표는 test_card_owner_find_player_scope 가 확인) · 51 = 구단주 비교 [자리별](50단계 D1 — 채운 표는 test_compare_extra_tabs_… 가 잰다) · 50 = 성적 진단 [자리별 수준](50단계 C4 — 채운 표는 test_poslevel_… 가 확인) · 49 = 랭킹 추이 [예측 되짚기](50단계 B8 — 채운 표는 test_predict_check_tab_… 가 잰다) · 47~48 = 상대 전적 [상대 순위] 표 둘(2.9.1 N23)  # 13번째는 랭커와 비교(1.4.1) · 14~17 랭커 픽 셋 · 구단주 찾기 · 18~19 추천 둘(2.1.1) · 등급 체류(2.6.1)
     #                                        · 20~21 랭킹 추이 [메타 변화] 팀컬러·포메이션(2.3.1)
     #                                        · 22~37 메타 분석 11 · 주간 요약 5 · 순위 변동 2 · 카드별 1(2.4.1 — 빈 표는
     #                                          여기서 안 재고 test_rank_meta_tabs_draw_and_fit 가 채워서 잰다)
@@ -9988,7 +9988,8 @@ def test_notice_versions_split_first_and_reask():
                                             (15, False, True, True),    # 16 이 올라서 15 동의자도(109 C — 키 보관 위치 · 수집과 무관)
                                             (16, False, True, True),    # 17 이 올라서 16 동의자도 수집을 켰으면(121 스펙업 순서)
                                             (17, False, True, True),    # 18 이 올라서 17 동의자도 수집을 켰으면(110 ④ 저장 전술)
-                                            (18, False, False, True)]:
+                                            (18, False, True, True),    # 19 가 올라서 18 동의자도 수집을 켰으면(122 같은 OVR 비교 자료)
+                                            (19, False, False, True)]:
             config.NOTICE_ACCEPTED = acc
             assert (config.notice_needed(), config.notice_update_pending(), config.track_allowed()) == \
                 (needed, pending, track), acc
@@ -9998,7 +9999,7 @@ def test_notice_versions_split_first_and_reask():
         # 2.5.1: 7 = 포지션 특성 — 6 동의자는 수집을 켰을 때만 다시 묻는다(U6)
         # 2.6.1: 8 = 표 칸 그림 — 수집과 무관하게 2~7 동의자 전원에게 다시 묻는다(NOTICE_COLLECT_ONLY_FROM 도 8)
         assert (config.NOTICE_VERSION, config.TRAIT_NOTICE_VERSION, config.META_NOTICE_VERSION, config.CHIP_NOTICE_VERSION,
-                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (18, 7, 6, 5, 4, 3, 2)
+                config.PRICE_NOTICE_VERSION, config.TRACK_NOTICE_VERSION, config.NOTICE_BASE_VERSION) == (19, 7, 6, 5, 4, 3, 2)
         # 2.11.1: 11 = 내 계정 최종 순위 확인(B8) · 구단주 요약의 자리별 값(C4) — 둘 다 수집을 켠 사람 몫(COLLECT_ONLY_FROM 은 8 그대로)
         assert config.PREDICT_CHECK_NOTICE_VERSION == config.OWNER_DIST_V2_NOTICE_VERSION == 11
         # 2.12.1: 12 = 카드 정보 자동 채우기 — 수집과 무관한 따로 토글이지만 COLLECT_ONLY_FROM 은 8 그대로(토글을 누를 때 묻는다)
@@ -10120,6 +10121,7 @@ NOTICE_GOLDEN = {8: "a3253bc7f91f6821", 9: "5c222c68aff4b67f",   # 8 = 2.6.1 표
                  13: "fc242bfee19fa311",                          # 13 = 2.12.2 다른 구단주의 챔스 이상 판수 범위(57 ⓪ — 보상 100판당)
                  14: "ca182e7bf1bf2efc",                          # 14 = 2.13.1 상대 점수 보여 주기 · 내 스쿼드 특성 · [정보 › 저장 공간] · 넥슨 페이지 열기(57)
                  15: "7393043af5fa162b",                                   # 15 = 3.10.1 켤 때 내 계정의 새 경기 확인(108 C — 오픈API 만)
+                 19: "cb8a9ad031f611d9",                                   # 19 = 3.15.1 같은 OVR 비교 자료 받기(122 — 랭킹 수집 안 따로 켜는 토글)
                  18: "c318775aef609f08",                                   # 18 = 3.14.1 [전술 보기]를 누를 때 랭커의 저장 전술 읽기(110 ④)
                  17: "f6af56e6cab9566d",                                   # 17 = 3.13.1 [스펙업 순서] 탭을 연 동안 카드 시세·능력치 읽기(121 ②)
                  16: "32fa6de6f72909c7"}                                  # 16 = 3.10.1 API 키를 Windows 자격 증명 관리자에(109 C) · 백업·복원(109 B — 같은 판)
@@ -13351,6 +13353,15 @@ def test_top3_cards_and_reward_board_tab():
         n0 = cards[0].win + cards[0].draw + cards[0].lose
         assert s0.wdl.property("games") == n0 and s0.wdl.property("weak") == (n0 < app_main.core.MIN_COND)
         assert cards[0].formation == "4-4-2" and not s0.pitch.isHidden() and "4-4-2" in s0.card.toolTip()
+        # 122 ③ — 그 사람이 "남들" 조건을 채우면 스쿼드 OVR(쥔 결과의 ovr_of · 관문과 무관)
+        assert "스쿼드 OVR" not in s0.body.text() and cards[0].sn is not None
+        keep_sq = _win._squad_cmp
+        _win._squad_cmp = (_win._squad_cmp_key(), _squad_res(state="gate", ovr_of={cards[0].sn: 141.94}))
+        _win._invalidate("ranktrend")
+        assert "스쿼드 OVR(마지막 경기) 141.9" in _win.top3_cards[0].body.text(), _win.top3_cards[0].body.text()
+        assert "스쿼드 OVR" not in _win.top3_cards[1].body.text()
+        _win._squad_cmp = keep_sq
+        _win._invalidate("ranktrend")
 
         _win._go_page("랭킹 추이", "보상")
         assert _win._current_view() == ("랭킹 추이", "보상")
@@ -19484,6 +19495,112 @@ def test_110_render_dashboard_passes_emblem():
         _win._dash_emblem_loader = keep
         _win._render_dashboard()
         _win._dash_emblem_loader = keep
+
+
+def _squad_res(**over):
+    import squadcmp
+    kw = dict(state=squadcmp.OK, snap_at="2026-11-25T16:34:00", lineup_pct=99.0, card_pct=97.0, my_ovr=141.8, my_cell=142,
+              my_elo=3800.0, my_games=1000, n=400, mean=3600.0, top_pct=20, n2=150, mean2=3700.0, top2=10, cut=2900.0,
+              cells=[squadcmp.Cell(141, 300, 3500.0), squadcmp.Cell(142, 400, 3600.0, True)])
+    kw.update(over)
+    return squadcmp.SquadCompare(**kw)
+
+
+def test_122_squad_cmp_lines_per_state():
+    """122 ③ 글 — 상태마다 숫자 대신 까닭 한 줄 · 자료가 없으면 빈 목록(묶음째 숨김) · 색은 둘째 줄 백분위만."""
+    import squadcmp
+    assert app_main.squad_cmp_lines(None) == [] and app_main.squad_cmp_lines(_squad_res(state=squadcmp.NO_DATA)) == []
+    gate = app_main.squad_cmp_lines(_squad_res(state=squadcmp.GATE, lineup_pct=72.4, card_pct=64.0))
+    assert gate == ["자료를 모으는 중입니다. 선발 72%, 카드 정보 64%를 모았습니다."], gate
+    assert str(config.SQUAD_CMP_SEASON_DAYS) in app_main.squad_cmp_lines(_squad_res(state=squadcmp.SEASON))[0]
+    assert "1만 위 안" in app_main.squad_cmp_lines(_squad_res(state=squadcmp.NOT_RANKED))[0]
+    assert "카드" in app_main.squad_cmp_lines(_squad_res(state=squadcmp.NO_LINEUP, lineup_why="cards"))[0]
+    assert "감독모드 경기가 없어" in app_main.squad_cmp_lines(_squad_res(state=squadcmp.NO_LINEUP, lineup_why="none"))[0]
+    few = app_main.squad_cmp_lines(_squad_res(state=squadcmp.FEW, n=40))
+    assert len(few) == 1 and "40명뿐" in few[0] and "141.8" in few[0], few
+    ok = app_main.squad_cmp_lines(_squad_res())
+    assert "+200점" in ok[0] and "위에서 20%" in ok[0] and "판수 차이" not in ok[0], ok
+    lo, hi = 1000 * config.SQUAD_CMP_GAMES_LO, 1000 * config.SQUAD_CMP_GAMES_HI    # 판수 배수는 config 에서
+    assert "+100점" in ok[1] and T.GOOD in ok[1] and f"{lo:,.0f}~{hi:,.0f}판" in ok[1], ok
+    mid = app_main.squad_cmp_lines(_squad_res(top2=50))
+    assert T.GOOD not in mid[1] and T.BAD not in mid[1], mid
+    assert T.BAD in app_main.squad_cmp_lines(_squad_res(top2=90))[1]
+    no2 = app_main.squad_cmp_lines(_squad_res(n2=20, mean2=None, top2=None))
+    assert "판수 차이가 섞인 값" in no2[0] and len(no2) == 2 and T.GOOD not in "".join(no2), no2
+    assert app_main.squad_cmp_dash(_squad_res(state=squadcmp.GATE)) == ""
+    assert "+200점" in app_main.squad_cmp_dash(_squad_res())
+
+
+def test_122_squad_cmp_screens():
+    """122 ③ — [점수·예측] 묶음(글·표·내 칸 굵게) · 대시보드 한 줄 · 지우면 그 자리에서 거둔다 · 늦은 결과는 버린다."""
+    keep = (_win._ouid, _win._squad_cmp)
+    try:
+        _win._ouid = _win._ouid or "ouid-test"
+        res = _squad_res()
+        _win._squad_cmp = (_win._squad_cmp_key(), res)
+        _win._render_squad_cmp()
+        assert not _win.gb_squad_cmp.isHidden() and "+200점" in _win.lb_squad_cmp.text(), _win.lb_squad_cmp.text()
+        assert "2,900점" in _win.lb_squad_cells.text(), _win.lb_squad_cells.text()
+        t = _win.tbl_squad_cells
+        rows = {t.item(r, 0).text(): r for r in range(t.rowCount())}   # 표는 정렬이 켜져 있어 순서를 보지 않는다
+        assert set(rows) == {"142 (나)", "141"}, rows
+        assert t.item(rows["142 (나)"], 2).font().bold() and not t.item(rows["141"], 2).font().bold()
+        assert t.item(rows["142 (나)"], 1).text() == "400" and t.item(rows["141"], 2).text() == "3,500"
+        _check_elisions([t])
+        _win._render_dashboard()
+        assert "+200점" in _win.dashboard.lb_squad_cmp.text() and not _win.dashboard.lb_squad_cmp.isHidden()
+        # 늦은 결과 — 요청 번호가 지난 것도, 열쇠(판본)가 지난 것도 버린다
+        key = _win._squad_cmp_key()
+        other = _squad_res(mean=1.0)
+        _win._on_squad_cmp_ready((_win._squad_cmp_req - 1, key, other))
+        assert _win._squad_cmp[1] is res
+        old = key[:2] + (key[2] - 1,) + key[3:]
+        _win._on_squad_cmp_ready((_win._squad_cmp_req, old, other))
+        assert _win._squad_cmp[1] is res
+        # 지우면(예약 purged · 저장 공간) 바로 거둔다 — squads.db 가 없으니 다시 띄우지도 않는다
+        assert not config.squads_db_path().exists()
+        _win._squad_cmp_changed(drop=True)
+        assert _win._squad_cmp is None and _win.gb_squad_cmp.isHidden() and _win.squad_cmp_shown == []
+        _win._render_dashboard()
+        assert _win.dashboard.lb_squad_cmp.isHidden()
+        # 새 선발·스냅숏은 판본만 올린다(보이는 자리를 그 자리에서 다시 그리지 않는다)
+        _win._squad_cmp = (_win._squad_cmp_key(), res)
+        rev = _win._squad_cmp_rev
+        _win._on_squad_cmp_round(app_main.squadcmp.Result())
+        assert _win._squad_cmp_rev == rev, "저장 0 인 실행이 판본을 올렸다"
+        _win._on_squad_cmp_round(SimpleNamespace(saved=3))
+        assert _win._squad_cmp_rev == rev + 1 and "dashboard" in _win._dirty
+        assert _win._squad_cmp_value() is None, "판본이 올랐는데 옛 값을 냈다"
+    finally:
+        _win._ouid, _win._squad_cmp = keep
+        _win._render_squad_cmp()
+
+
+def test_122_squad_cmp_launches_worker_once():
+    """squads.db 가 있으면 계산을 띄우고, 같은 열쇠로 또 부르면 다시 띄우지 않는다. 끝난 결과가 화면 두 키를 낡음으로 만든다."""
+    import squadcmp
+    started: list = []
+    keep_start = app_main.SquadCmpWorker.start
+    keep = (_win._ouid, _win._squad_cmp)
+    path = config.squads_db_path()
+    try:
+        app_main.SquadCmpWorker.start = lambda w: (started.append(w), setattr(w, "isRunning", lambda: True))
+        _win._ouid = _win._ouid or "ouid-test"
+        _win._squad_cmp = None
+        squadcmp.open_db(path).close()
+        assert _win._squad_cmp_value() is None and len(started) == 1
+        assert _win._squad_cmp_value() is None and len(started) == 1, "같은 열쇠로 또 띄웠다"
+        w = started[0]
+        w.isRunning = lambda: False
+        _win._dirty.discard("dashboard")
+        w.ready.emit((w._req, w._key, _squad_res()))
+        assert _win._squad_cmp is not None and _win._squad_cmp_value().mean == 3600.0
+    finally:
+        app_main.SquadCmpWorker.start = keep_start
+        _win._squad_cmp_workers = []
+        _win._ouid, _win._squad_cmp = keep
+        for p in squadcmp.db_files(path):
+            p.unlink(missing_ok=True)
 
 
 def main() -> int:

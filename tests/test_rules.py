@@ -738,6 +738,14 @@ def _drive_squadcmp(d: Path) -> None:
     conn = store.open_db(fifa)
     store.squad_take(conn, "2026-11-25", 5, "a")
     store.squad_req(conn, "a")
+    # 조각 ③ 화면 읽기 — rank.db 스냅숏 줄 · 닉네임으로 나 찾기 · new_season 시작 · 카드표 · 내 저장 경기
+    import rankcollect
+    r = sqlite3.connect(":memory:")
+    r.executescript(rankcollect.SCHEMA)
+    r.execute("INSERT INTO snapshots VALUES (1, '2026-11-25T08:00:00', 1, 0, NULL, 1, 1, NULL)")
+    r.execute("INSERT INTO snapshot_rows (snapshot_id, rank, profile_sn, nickname, elo) VALUES (1, 1, 1, 'n', 3000)")
+    squadcmp.load_compare(r, path, conn, ouid="a", my_sn=None, nickname="n", table_start=None, now=now)
+    r.close()
     conn.close()
     squadcmp.purge(path)
 

@@ -69,6 +69,7 @@ class DashboardInput:
     headline: str | None = None                # 57 K6 한 줄 총평(analysis.headline) — None 이면 빈 줄(자리는 그대로)
     report: ScoreParts | None = None           # 65 M1 리포트·해설 — 점수 기록이 모자라면 None
     emblem: tuple[str, str] = ("", "")         # 110 B3 내 팀컬러 (엠블럼 키, 이름) — 키가 비면 그림 칸이 숨는다(단일 팀·1만 위 밖·팀컬러 모름)
+    squad_cmp: str = ""                        # 122 ③ 같은 OVR 대비 한 줄(html · app_main.squad_cmp_dash) — 견준 값이 없으면 "" 로 줄을 숨긴다
 
 
 @dataclass
@@ -258,6 +259,11 @@ class DashboardPage(QWidget):
             c.sub.setWordWrap(True)
             rep_row.addWidget(c, 1)
         self.report.body.addLayout(rep_row)
+        # 122 ③ 같은 OVR 대비 — 견준 값이 있을 때만 한 줄(까닭 글은 [점수·예측] 에만)
+        self.lb_squad_cmp = _label("", wrap=True)
+        self.lb_squad_cmp.setTextFormat(Qt.TextFormat.RichText)
+        self.lb_squad_cmp.hide()
+        self.report.body.addWidget(self.lb_squad_cmp)
         outer.addWidget(self.report)
 
         # ② 경기 결과 · 골·실점 · 나와 상대(빠른 범위)
@@ -450,6 +456,8 @@ class DashboardPage(QWidget):
         self._render_head(d)
         self._render_kpis(d)
         self._render_report(d)
+        self.lb_squad_cmp.setText(d.squad_cmp)
+        self.lb_squad_cmp.setVisible(bool(d.squad_cmp))
         self._render_trend(d)
         self._render_versus(d)
         self._render_clutch(d)

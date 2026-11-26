@@ -361,14 +361,16 @@ def test_gates_make_zero_requests():
         assert e.run().ok == 6, "대조군 — 다 열리면 받는다"
 
 
-def test_shipped_version_is_closed():
-    """조각 ①② 동안은 닫혀 있다 — 지금 배포되는 값 그대로면 어떤 동의로도 관문이 안 열린다."""
-    assert config.SQUAD_CMP_NOTICE_VERSION == 99 > config.NOTICE_VERSION and not config.squad_cmp_open()
+def test_shipped_version_opens_at_19():
+    """조각 ③ 에서 열었다(안내 19) — 배포되는 값 그대로면 19 동의 뒤에만 관문이 열리고, 18 동의자는 요청 0."""
+    assert config.SQUAD_CMP_NOTICE_VERSION == 19 == config.NOTICE_VERSION and config.squad_cmp_open()
     with env() as e:
         config.SQUAD_CMP_NOTICE_VERSION = e._saved["SQUAD_CMP_NOTICE_VERSION"]
         config.NOTICE_VERSION = e._saved["NOTICE_VERSION"]
-        e.set(notice_ok=config.NOTICE_VERSION)
+        e.set(notice_ok=18)
         assert config.read_squad_cmp() is False and e.run().stop == "off" and not e.api.calls
+        e.set(notice_ok=19)
+        assert config.read_squad_cmp() is True, "19 동의 뒤에도 안 열린다 — 관문 배선을 확인"
 
 
 def test_snapshot_must_be_fresh():
@@ -1892,6 +1894,200 @@ def test_fill_days():
     assert got["4시간(게임 2시간)"] == (8, 400) and got["2시간+자동"][0] <= 8, got
     per_tick = (config.CARD_BACKFILL_TICK_REQ + config.SQUAD_CMP_CARD_TICK_REQ) * config.CARD_BACKFILL_GAP_S
     assert per_tick < config.CARD_BACKFILL_TICK_S / 2, f"한 틱의 간격만 {per_tick}초 — 다음 틱과 겹친다"
+
+
+# ── 조각 ③ 화면 계산(compare) — 상수는 기본값이 아닌 값으로 ─────────────────────────────────────────
+
+CMP = dict(SQUAD_CMP_MIN_CELL=3, SQUAD_CMP_GATE_LINEUP=0.8, SQUAD_CMP_GATE_CARDS=0.9, SQUAD_CMP_LINEUP_DAYS=5,
+           SQUAD_CMP_KEEP_DAYS=11, SQUAD_CMP_SEASON_DAYS=4, SQUAD_CMP_GAMES_LO=0.5, SQUAD_CMP_GAMES_HI=2.0,
+           SQUAD_CMP_COLOR_Q=30, SQUAD_CMP_TABLE_MIN=2)
+assert all(getattr(config, k) != v for k, v in CMP.items()), "시험 값이 기본값과 같으면 배선이 끊겨도 통과한다"
+PO_ST = 25   # SIM_POS_OF → "ST"
+
+
+def _card(base: int, i: int = 0) -> int:
+    return base * 100 + i
+
+
+def _lineup(base: int, grade: int = 1) -> list:
+    return [(_card(base, i), PO_ST, grade) for i in range(11)]
+
+
+def _extras(*bases) -> dict:
+    return {_card(b, i): {"pos_ovr": json.dumps({"ST": b})} for b in bases for i in range(11)}
+
+
+def _cmp_case(**over):
+    """나(1번) + 같은 칸 남들 다섯(2~6) + 다른 칸 둘(7·8). 카드 OVR 130 → 실효 134(적응도 +4)."""
+    now_t = ts(NOW)
+    fresh = (now_t - 86_400, now_t - 86_400)
+    rows = [{"profile_sn": 1, "rank": 50, "elo": 3000.0, "games": 100}]
+    squads = {}
+    for sn, elo, games in ((2, 2900.0, 100), (3, 3100.0, 150), (4, 2800.0, 10), (5, 3200.0, 190), (6, 2700.0, 400)):
+        rows.append({"profile_sn": sn, "rank": sn * 10, "elo": elo, "games": games})
+        squads[sn] = (*fresh, _lineup(130))
+    for sn in (7, 8):
+        rows.append({"profile_sn": sn, "rank": 90 + sn, "elo": 2600.0 + sn, "games": 50})
+        squads[sn] = (*fresh, _lineup(125))
+    kw = dict(rows=rows, squads=squads, extras=_extras(130, 125, 128), me_sn=1, my_lineups=[(now_t - 3600, _lineup(130))],
+              season_start=NOW - timedelta(days=10), now=NOW, snap_at="2026-11-25T08:00:00")
+    kw.update(over)
+    return kw
+
+
+def test_cmp_same_cell_mean_and_rank():
+    with _cfg(**CMP):
+        out = sc.compare(**_cmp_case())
+    assert out.state == sc.OK, out.state
+    assert out.my_ovr == 130 + config.ADAPT_OVR and out.my_cell == 134, (out.my_ovr, out.my_cell)
+    assert out.n == 5 and out.mean == (2900 + 3100 + 2800 + 3200 + 2700) / 5, (out.n, out.mean)
+    assert out.delta == 3000 - out.mean
+    assert out.top_pct == round(100 * 3 / 6), out.top_pct   # 3100·3200 둘이 위 → 6명 중 3번째
+    # 둘째 줄: 판수 50~200 — 4번(10판)·6번(400판)이 빠진다
+    assert out.n2 == 3 and out.mean2 == (2900 + 3100 + 3200) / 3, (out.n2, out.mean2)
+    assert out.cut == 2608.0, out.cut      # 순위가 가장 큰 줄의 점수(1만 위 문턱)
+    assert [(c.ovr, c.n, c.mine) for c in out.cells] == [(129, 2, False), (134, 5, True)], out.cells
+    assert set(out.ovr_of) == {2, 3, 4, 5, 6, 7, 8} and 1 not in out.ovr_of
+    # 한 명뿐인 칸은 표에 안 낸다(TABLE_MIN 2) — 9번만 OVR 120 칸
+    kw = _cmp_case()
+    kw["rows"].append({"profile_sn": 9, "rank": 99, "elo": 2500.0, "games": 50})
+    kw["squads"][9] = (ts(NOW) - 86_400, ts(NOW) - 86_400, _lineup(116))
+    kw["extras"].update(_extras(116))
+    with _cfg(**CMP):
+        out = sc.compare(**kw)
+    assert 9 in out.ovr_of and [c.ovr for c in out.cells] == [129, 134], out.cells
+
+
+def test_cmp_second_line_and_tone():
+    with _cfg(**CMP):
+        assert sc.compare(**_cmp_case()).tone == "bad"     # 판수가 비슷한 셋 중 둘이 위 → 4명 중 3번째 75% > 70
+        kw = _cmp_case()
+        kw["rows"][0]["elo"] = 3150.0                     # 하나만 위 → 50% — 색 없음
+        assert sc.compare(**kw).tone is None
+        kw["rows"][0]["elo"] = 9999.0
+        assert sc.compare(**kw).tone == "good"
+        kw["rows"][0]["elo"] = 1.0
+        assert sc.compare(**kw).tone == "bad"
+        kw = _cmp_case()
+        kw["rows"][0]["games"] = 5000                    # 판수가 비슷한 사람이 없다 → 둘째 줄 없음 · 색 없음
+        out = sc.compare(**kw)
+    assert out.state == sc.OK and out.n2 == 0 and out.mean2 is None and out.tone is None, out
+
+
+def test_cmp_cell_rounds_half_up():
+    assert sc.cell_of(142.5) == 143 and round(142.5) == 142    # 파이썬 round 를 썼다면 142
+    assert sc.cell_of(142.49) == 142 and sc.cell_of(141.5) == 142
+
+
+def test_cmp_gates():
+    with _cfg(**CMP):
+        assert sc.compare(**_cmp_case(squads={})).state == sc.NO_DATA
+        assert sc.compare(**_cmp_case(rows=[])).state == sc.NO_SNAP
+        assert sc.compare(**_cmp_case(me_sn=99)).state == sc.NOT_RANKED
+        assert sc.compare(**_cmp_case(season_start=None)).state == sc.SEASON
+        assert sc.compare(**_cmp_case(season_start=NOW - timedelta(days=3))).state == sc.SEASON
+        assert sc.compare(**_cmp_case(season_start=NOW - timedelta(days=4))).state == sc.OK
+        # 관문 A: 7명 중 받은 지 5일 넘은 선발이 둘이면 5/7 = 71% < 80%
+        kw = _cmp_case()
+        old = ts(NOW) - 6 * 86_400
+        for sn in (7, 8):
+            kw["squads"][sn] = (ts(NOW) - 86_400, old, _lineup(125))
+        out = sc.compare(**kw)
+        assert out.state == sc.GATE and round(out.lineup_pct) == 71 and out.card_pct == 100.0, out
+        # 경기가 11일보다 오래된 선발도 같다
+        kw = _cmp_case()
+        kw["squads"][7] = (ts(NOW) - 12 * 86_400, ts(NOW) - 86_400, _lineup(125))
+        assert sc.compare(**kw).state == sc.OK            # 6/7 = 86% — 아직 통과
+        kw["squads"][8] = kw["squads"][7]
+        assert sc.compare(**kw).state == sc.GATE
+        # 관문 B: 7번만 카드 한 장 모름 → 6/7 = 86% < 90%
+        kw = _cmp_case()
+        kw["squads"][7] = (*kw["squads"][7][:2], _lineup(124))
+        kw["extras"].update(_extras(124))
+        assert sc.compare(**kw).state == sc.OK
+        kw["extras"].pop(_card(124, 3))
+        out = sc.compare(**kw)
+        assert out.state == sc.GATE and round(out.card_pct) == 86 and out.lineup_pct == 100.0, out
+        assert 7 not in out.ovr_of and 2 in out.ovr_of     # 1~3위 카드 값은 관문과 무관하게 아는 사람만
+        # 같은 칸이 MIN_CELL 미만
+        kw = _cmp_case()
+        for sn in (2, 3, 4):
+            del kw["squads"][sn]
+        kw["rows"] = [r for r in kw["rows"] if r["profile_sn"] not in (2, 3, 4)]
+        out = sc.compare(**kw)
+        assert out.state == sc.FEW and out.n == 2 and out.cells, out
+
+
+def test_cmp_my_lineup_choice():
+    with _cfg(**CMP):
+        now_t = ts(NOW)
+        # 앱에 저장된 판보다 squads 줄이 늦으면 그쪽(두 선발 다 나만 쓰는 카드)
+        kw = _cmp_case(my_lineups=[(now_t - 7200, _lineup(131))])
+        kw["extras"].update(_extras(131))
+        kw["squads"][1] = (now_t - 600, now_t - 600, _lineup(128))
+        assert sc.compare(**kw).my_ovr == 128 + config.ADAPT_OVR
+        kw["squads"][1] = (now_t - 9000, now_t - 600, _lineup(128))   # 경기 시각이 이르면 앱 저장 판
+        assert sc.compare(**kw).my_ovr == 131 + config.ADAPT_OVR
+        kw["squads"][1] = (now_t - 600, now_t - 600, _lineup(128))
+        # 늦은 쪽 카드를 모르면 다른 쪽
+        kw["extras"].pop(_card(128, 0))
+        assert sc.compare(**kw).my_ovr == 131 + config.ADAPT_OVR
+        # 둘 다 모르면 침묵 + 사유 "cards"
+        kw["extras"].pop(_card(131, 0))
+        out = sc.compare(**kw)
+        assert out.state == sc.NO_LINEUP and out.lineup_why == "cards", out
+        # 11일보다 오래된 판만 있으면 "none"
+        out = sc.compare(**_cmp_case(my_lineups=[(now_t - 12 * 86_400, _lineup(130))]))
+        assert out.state == sc.NO_LINEUP and out.lineup_why == "none", out
+
+
+def test_cmp_load_reads_files():
+    """load_compare — 파일이 없으면 만들지 않는다 · 닉네임으로 나를 찾는다 · 시즌 시작은 시즌표와 new_season 스냅숏 중 늦은 쪽."""
+    with tempfile.TemporaryDirectory() as d, _cfg(**CMP):
+        d = Path(d)
+        sq_path = d / "squads.db"
+        fconn = store.open_db(d / "fifa.db")
+        try:
+            got = sc.load_compare(None, sq_path, fconn, ouid=None, my_sn=None, nickname=None, table_start=None, now=NOW)
+            assert got.state == sc.NO_DATA and not sq_path.exists(), "새 설치에 squads.db 를 만들었다"
+            kw = _cmp_case()
+            conn = sc.open_db(sq_path)
+            with conn:
+                for sn, (at, got_at, cards) in kw["squads"].items():
+                    conn.execute("INSERT INTO squads (profile_sn, match_at, lineup, lineup_at, checked_at) VALUES (?, ?, ?, ?, ?)",
+                                 (sn, at, sc.pack_lineup(cards), got_at, got_at))
+            conn.close()
+            with fconn:
+                for spid, ex in kw["extras"].items():
+                    fconn.execute("INSERT INTO card_extra (spid, pos_ovr, sim_on) VALUES (?, ?, ?)", (spid, ex["pos_ovr"], DAY))
+            r = sqlite3.connect(":memory:")
+            r.executescript(rankcollect.SCHEMA)
+            r.execute("INSERT INTO snapshots VALUES (1, '2026-11-14T10:00:00', 10, 0, NULL, 1, 1, NULL)")
+            r.execute("INSERT INTO snapshots VALUES (2, '2026-11-25T08:00:00', 10, 0, NULL, 1, 0, NULL)")
+            for row in kw["rows"]:
+                w = row["games"]
+                r.execute("INSERT INTO snapshot_rows (snapshot_id, rank, profile_sn, nickname, elo, win, draw, lose)"
+                          " VALUES (2, ?, ?, ?, ?, ?, 0, 0)", (row["rank"], row["profile_sn"], f"n{row['profile_sn']}", row["elo"], w))
+            # 내 선발은 squads 줄로(앱 저장 경기 없음) · 나는 닉네임으로 찾는다
+            sq = sc.open_db(sq_path)
+            with sq:
+                sq.execute("INSERT INTO squads (profile_sn, match_at, lineup, lineup_at, checked_at) VALUES (1, ?, ?, ?, ?)",
+                           (ts(NOW) - 600, sc.pack_lineup(_lineup(130)), ts(NOW) - 600, ts(NOW) - 600))
+            sq.close()
+            got = sc.load_compare(r, sq_path, fconn, ouid=None, my_sn=None, nickname="n1", table_start=None, now=NOW)
+            assert got.state == sc.OK and got.n == 5 and got.snap_at == "2026-11-25T08:00:00", got
+            # 시즌표 시작(3일 전)이 스냅숏(11일 전)보다 늦으면 그쪽 → 관문 C
+            got = sc.load_compare(r, sq_path, fconn, ouid=None, my_sn=None, nickname="n1",
+                                  table_start=NOW - timedelta(days=3), now=NOW)
+            assert got.state == sc.SEASON, got.state
+            # new_season 스냅숏이 늦으면 그쪽(시즌표가 아직 옛 시즌만 알 때)
+            r.execute("UPDATE snapshots SET new_season = 1 WHERE id = 2")
+            got = sc.load_compare(r, sq_path, fconn, ouid=None, my_sn=None, nickname="n1",
+                                  table_start=NOW - timedelta(days=20), now=NOW)
+            assert got.state == sc.SEASON, got.state
+            r.close()
+        finally:
+            fconn.close()
 
 
 def main() -> int:

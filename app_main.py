@@ -1987,6 +1987,48 @@ class PredictWorker(Worker):
             self.pred_ready.emit(self._ouid, (self._req, pr))
 
 
+class SquadCmpWorker(Worker):
+    """같은 OVR 대비 계산(122 ③ · squadcmp.load_compare) — 1만 명 × 11장이라 약 0.5초(이 PC 실측)로 화면 스레드 예산을 넘는다.
+    EloLoader 에 얹지 않는다(_on_elo_ready 는 화면 12곳과 예측 저장까지 다시 한다). rank.db·squads.db 는 읽고 바로 닫는다.
+    읽기만 하지만 지우는 동안 squads.db·fifa.db 를 열지 않게 WRITES 로 걸쇠를 본다(ROADMAP 122 걸쇠 이름 표)."""
+    WRITES = frozenset({STORE_FIFA, STORE_SQUADS})
+    ready = Signal(object)   # (요청 번호, 열쇠, SquadCompare | None)
+
+    def __init__(self, req: int, key: tuple, ouid: str | None, nickname: str | None, table_start: datetime | None):
+        super().__init__()
+        self._req, self._key = req, key
+        self._ouid, self._nick, self._table_start = ouid, nickname, table_start
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        out = None
+        try:
+            fconn = store.open_db(config.DB_PATH)
+            try:
+                my_sn = None
+                if self._ouid:   # EloLoader 와 같은 방법 — 검색 기록의 프로필 번호, 없으면 스냅숏 닉네임
+                    rows = store.elo_history(fconn, self._ouid)
+                    my_sn = next((x["profile_sn"] for x in reversed(rows) if x.get("profile_sn")), None)
+                rconn = rankcollect.open_rank_db_ro()
+                try:
+                    out = core.squad_compare_load(rconn, config.squads_db_path(), fconn, ouid=self._ouid, my_sn=my_sn,
+                                                  nickname=self._nick, table_start=self._table_start, now=datetime.now())
+                finally:
+                    if rconn is not None:
+                        rconn.close()
+            finally:
+                fconn.close()
+        except Exception as e:  # noqa: BLE001 — 한 구역 때문에 화면이 죽지 않게(None = 아무것도 안 낸다)
+            if not getattr(SquadCmpWorker, "_noted", False):
+                SquadCmpWorker._noted = True
+                crashlog.note("squadcmp", e)
+        if not self._cancel:
+            self.ready.emit((self._req, self._key, out))
+
+
 class HabitsWorker(Worker):
     """연승·연패 우연 기준(A3 · habits.streak_baseline) — 순서를 200번 섞어 1만 판이면 0.5~0.8초라 화면 스레드 예산
     (0.3초)을 넘는다. 새 검색·범위·시즌이 바뀐 직후 한 번 띄운다(_launch_streak). 요청 번호로 늦은 결과를 버린다.
@@ -2659,6 +2701,57 @@ def score_report_lines(pts: list[dict], rows: list[dict], wins: list, club, seas
     if rep.first_day > (season_start + timedelta(days=config.N12_START_DAYS)).date():
         lines.append(f"기록 시작 {rep.first_day:%m-%d} 부터")
     return lines
+
+
+SQUAD_CMP_TONE = {"good": T.GOOD, "bad": T.BAD}
+
+
+def squad_cmp_lines(res) -> list[str]:
+    """같은 OVR 대비(122 ③) — 점수 탭 묶음의 글 줄. 자료가 없으면(토글 꺼짐·지움) 빈 목록 → 묶음째 숨긴다.
+    못 견주면 숫자 대신 까닭 한 줄. 색은 둘째 줄(판수가 비슷한 사람) 안 백분위로만(SquadCompare.tone)."""
+    if res is None or res.state == squadcmp.NO_DATA:
+        return []
+    st = res.state
+    if st == squadcmp.NO_SNAP:
+        return ["랭킹 수집 자료가 없어 견주지 않습니다."]
+    if st == squadcmp.NOT_RANKED:
+        return ["1만 위 안에 있을 때만 견줄 수 있습니다."]
+    if st == squadcmp.SEASON:
+        return [f"시즌이 시작한 지 {config.SQUAD_CMP_SEASON_DAYS}일이 지나면 보입니다."]
+    if st == squadcmp.GATE:
+        return [f"자료를 모으는 중입니다. 선발 {res.lineup_pct:.0f}%, 카드 정보 {res.card_pct:.0f}%를 모았습니다."]
+    if st == squadcmp.NO_LINEUP:
+        return ["내 선발에 아직 정보가 없는 카드가 있어 견주지 않습니다." if res.lineup_why == "cards"
+                else f"최근 {config.SQUAD_CMP_KEEP_DAYS}일 안에 감독모드 경기가 없어 견주지 않습니다."]
+    mine = f"내 스쿼드 OVR(마지막 경기) {res.my_ovr:.1f}"
+    if st == squadcmp.FEW:
+        return [f"{mine}. 같은 OVR {res.my_cell} 구간에 {res.n:,}명뿐이라 견주지 않습니다."]
+    col = SQUAD_CMP_TONE.get(res.tone, T.TEXT)
+    first = (f"<b>1만 위 안 같은 OVR {res.n:,}명 평균 {res.mean:,.0f}점보다 {res.delta:+,.0f}점</b>"
+             f", 위에서 {res.top_pct}%입니다.")
+    if res.mean2 is None:
+        first += " 판수 차이가 섞인 값입니다."
+    lines = [first]
+    if res.mean2 is not None:
+        lo = res.my_games * config.SQUAD_CMP_GAMES_LO
+        hi = res.my_games * config.SQUAD_CMP_GAMES_HI
+        lines.append(f"판수가 비슷한({lo:,.0f}~{hi:,.0f}판) {res.n2:,}명과 견주면 "
+                     f"<b style='color:{col}'>{res.delta2:+,.0f}점</b>, 그 안에서 위 {res.top2}%입니다.")
+    tail = basis_text(BASIS_FETCHED, res.snap_at)
+    lines.append(f"<span style='color:{T.TEXT_DIM}'>{mine}, OVR {res.my_cell} 구간"
+                 + (f", 점수는 랭킹 수집 {tail}" if tail else "") + "</span>")
+    return lines
+
+
+def squad_cmp_dash(res) -> str:
+    """대시보드 리포트 카드 아래 한 줄 — 견준 값이 있을 때만(까닭 글은 점수 탭에만)."""
+    if res is None or res.state != squadcmp.OK:
+        return ""
+    col = SQUAD_CMP_TONE.get(res.tone, T.TEXT)
+    second = (f", 판수가 비슷한 {res.n2:,}명보다 <b style='color:{col}'>{res.delta2:+,.0f}점</b>"
+              if res.mean2 is not None else "")
+    return (f"<span style='color:{T.TEXT_DIM}'>같은 OVR</span> 1만 위 안 OVR {res.my_cell} 구간 {res.n:,}명 평균보다 "
+            f"<b>{res.delta:+,.0f}점</b>{second}")
 
 
 def rank_tier_index(rank: int | None) -> int:
@@ -3636,6 +3729,12 @@ class MainWindow(QMainWindow):
         self._streak_req = 0
         self._streak_done: tuple | None = None     # (키, StreakBaseline | None(계산 실패))
         self._habits_workers: list[HabitsWorker] = []
+        # 122 ③ 같은 OVR 대비 — 마지막으로 끝난 (열쇠, SquadCompare | None). 열쇠가 지금 것과 같을 때만 쓴다.
+        # 선발 판본(_squad_cmp_rev)은 새 선발 저장·지움·새 스냅숏에서 오른다(열쇠에 _card_rev 도 들어 카드 저장도 잡는다)
+        self._squad_cmp: tuple | None = None
+        self._squad_cmp_rev = 0
+        self._squad_cmp_req = 0
+        self._squad_cmp_workers: list[SquadCmpWorker] = []
         # 109 내 메모·표시 — 로더가 notes_ready 로 넘긴 값(M1) · [표시한 판 빼고 보기] 스위치(settings.ini · J4) · 쓰기 줄 세우기(M3)
         self._notes: store.Notes = store.EMPTY_NOTES
         self._exclude_on = self._read_exclude_switch()
@@ -4233,6 +4332,66 @@ class MainWindow(QMainWindow):
         """같은 OVR 비교 자료 예약(122)도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_squad_cmp) 알림만 받는다."""
         self._squad_sched = sched
         sched.switched_off.connect(self._on_squad_cmp_off)
+        sched.finished.connect(self._on_squad_cmp_round)
+        sched.purged.connect(lambda: self._squad_cmp_changed(drop=True))
+
+    # 같은 OVR 대비를 쓰는 화면 키(122 ③) — [점수·예측] 묶음은 키 밖(_render_elo 가 늘 그린다)이라 직접 다시 칠한다
+    SQUAD_CMP_VIEW_KEYS = ("dashboard", "ranktrend")
+
+    def _on_squad_cmp_round(self, res) -> None:
+        """받기 한 실행이 끝났다 — 새로 저장한 선발이 있을 때만 낡음 표시(보이는 화면을 그 자리에서 다시 그리지 않는다)."""
+        if getattr(res, "saved", 0) > 0:
+            self._squad_cmp_changed()
+
+    def _squad_cmp_changed(self, drop: bool = False) -> None:
+        """선발·스냅숏이 바뀌었다 → 판본을 올리고 쓰는 화면에 낡음 표시. drop(지웠다) = 쥔 값을 바로 버리고 보이는 자리도 거둔다
+        — 지운 남의 선발 값이 화면에 남지 않게. 도는 계산의 늦은 결과는 열쇠(판본)가 달라 버려진다."""
+        self._squad_cmp_rev += 1
+        if drop:
+            self._squad_cmp = None
+            self._render_squad_cmp()
+            if self.top3_data:
+                self._invalidate("ranktrend")
+            self._invalidate("dashboard")
+            return
+        self._dirty.update(self.SQUAD_CMP_VIEW_KEYS)
+
+    def _squad_cmp_key(self) -> tuple:
+        now = datetime.now()
+        ended = [s.end_at for s in self._rank_seasons if s.end_at <= now]
+        return (self._ouid, self._nick, self._squad_cmp_rev, self._card_rev, max(ended) if ended else None, now.date())
+
+    def _squad_cmp_value(self):
+        """쓰는 화면이 부른다 → 지금 열쇠의 SquadCompare(못 냈으면 None). 열쇠가 낡았으면 계산을 띄우고 None — 끝나면 다시 그린다.
+        squads.db 가 없으면(토글을 켠 적 없음·지움·둘러보기) 띄우지 않는다."""
+        if config.DEMO:
+            import demodata   # 둘러보기만 — 지어낸 값(요청 0 · 파일 0)
+            return demodata.squad_compare() if self._ouid else None
+        key = self._squad_cmp_key()
+        if self._squad_cmp is not None and self._squad_cmp[0] == key:
+            return self._squad_cmp[1]
+        if not config.squads_db_path().exists() or self._released or self._quitting:
+            return None
+        if any(w.isRunning() and w._key == key for w in self._squad_cmp_workers):
+            return None
+        for w in self._squad_cmp_workers:
+            w.cancel()
+        self._squad_cmp_workers = [w for w in self._squad_cmp_workers if w.isRunning()]
+        self._squad_cmp_req += 1
+        w = SquadCmpWorker(self._squad_cmp_req, key, self._ouid, self._nick, key[4])
+        w.ready.connect(self._on_squad_cmp_ready)
+        self._squad_cmp_workers.append(w)
+        w.start()
+        return None
+
+    def _on_squad_cmp_ready(self, payload) -> None:
+        req, key, res = payload
+        if req != self._squad_cmp_req or key != self._squad_cmp_key():
+            return   # 늦은 결과(사람·판본이 바뀌었다) — 지금 열쇠로는 다음 그리기가 다시 띄운다
+        self._squad_cmp = (key, res)
+        self._render_squad_cmp()
+        for k in self.SQUAD_CMP_VIEW_KEYS:
+            self._invalidate(k)
 
     def attach_card_sched(self, sched: CardBackfillScheduler) -> None:
         """카드 정보 자동 채우기 예약도 창 밖(tray.AppShell)에 산다. 창은 끄는 길을 알려 주고(_sync_card_backfill) 알림만 받는다."""
@@ -5235,6 +5394,22 @@ class MainWindow(QMainWindow):
         self.lb_elo_predict.setStyleSheet(f"color: {T.TEXT};")
         ev.addWidget(self.lb_elo_predict)
         v.addWidget(self.gb_elo)
+        # 122 ③ 같은 OVR 대비 — 글 줄 + 칸별 표. 자료가 없으면(토글을 켠 적 없음·지움) 묶음째 숨긴다
+        self.gb_squad_cmp = QGroupBox("같은 OVR 대비")
+        sv = QVBoxLayout(self.gb_squad_cmp)
+        self.lb_squad_cmp = QLabel("")
+        self.lb_squad_cmp.setWordWrap(True)
+        self.lb_squad_cmp.setTextFormat(Qt.TextFormat.RichText)
+        self.lb_squad_cmp.setStyleSheet(f"color: {T.TEXT};")
+        self.lb_squad_cmp.setToolTip(glossary.tip("squad_cmp"))
+        sv.addWidget(self.lb_squad_cmp)
+        self.lb_squad_cells = self._title_label()
+        sv.addWidget(self.lb_squad_cells)
+        self.tbl_squad_cells = self._make_table(["스쿼드 OVR", "사람 수", "평균 점수"])
+        sv.addWidget(self.tbl_squad_cells)
+        self.gb_squad_cmp.setVisible(False)
+        self.squad_cmp_shown: list[str] = []   # 테스트가 읽는다
+        v.addWidget(self.gb_squad_cmp)
         # 67 R8 — 시즌 말 컷(기준 화면 "주차" 꼴): 카드 넷 · 예상 200위 컷 크게 + 80% 범위 · 계산 줄 · 계산 방법 접기 ·
         # 지난 시즌 최종 컷 · 막판 상승폭은 "모으는 중"(E5). 예측 숫자의 정의는 그대로(predict.describe 와 같은 값)
         self.gb_park = QGroupBox("시즌 말 컷")
@@ -6503,7 +6678,7 @@ class MainWindow(QMainWindow):
         cards = QHBoxLayout()
         self.card_luck_base = StatCard("시즌 평균")
         self.card_luck_out = StatCard("범위 밖 날")
-        self.card_squad_ovr = StatCard("내 스쿼드 OVR")
+        self.card_squad_ovr = StatCard("시즌 평균 스쿼드 OVR")
         self.card_squad_ovr.setToolTip(self.SQUAD_OVR_TIP)
         for c in (self.card_luck_base, self.card_luck_out, self.card_squad_ovr):
             cards.addWidget(c, 1)
@@ -9341,6 +9516,9 @@ class MainWindow(QMainWindow):
             old.cancel()   # 물러난 로더는 _icon_loaders 에 남아 종료 표가 기다린다
         self._top3_icon_loader = None
         emblems = []
+        # 122 ③ — 그 사람이 "남들" 조건(선발 14일·받은 지 9일·11장을 다 앎)을 채우면 스쿼드 OVR. 관문 A·B·C 는 안 거친다
+        sq = self._squad_cmp_value() if cards else None
+        ovr_of = sq.ovr_of if sq is not None else {}
         for i, s in enumerate(self.top3_cards):
             c = cards[i] if i < len(cards) else None
             s.card.setVisible(c is not None)
@@ -9357,7 +9535,9 @@ class MainWindow(QMainWindow):
                 fc = f"하루 {c.fc_lo:,.0f}~{c.fc_hi:,.0f} FC"
             elo = f"{c.elo:,.0f}점" if c.elo is not None else ""
             value = f"구단가치 {self._won(c.value)}" if c.value is not None else ""
-            s.body.setText(" · ".join(t for t in (elo, value, gpd, fc, basis_text(BASIS_NEXON, c.ref_time)) if t))
+            ovr = ovr_of.get(c.sn)
+            squad = f"스쿼드 OVR(마지막 경기) {ovr:.1f}" if ovr is not None else ""
+            s.body.setText(" · ".join(t for t in (elo, value, squad, gpd, fc, basis_text(BASIS_NEXON, c.ref_time)) if t))
             # 67 R9 — 승무패 세 칸 막대(승률 한 값 막대 대신) · 표본 흐림 규칙은 그대로 · 앱 규칙 승÷전체
             n = core.rated(c.win, c.draw, c.lose, False)
             weak = core.is_weak(n, core.MIN_COND)
@@ -10345,6 +10525,7 @@ class MainWindow(QMainWindow):
         self._emblem_cache = None   # 엠블럼 지도의 셋째 출처(스냅숏)가 바뀐다 — 첫째(팀컬러 목록 저장)는 효과 창이 _refresh_emblems 로
         self._sim_reset()           # 110 R1 — 팀컬러 목록 저장으로 단계표가 바뀐다
         self._specup_reset()        # 121 — 내 팀컬러·구단가치와 랭커 줄이 스냅숏에서 온다
+        self._squad_cmp_changed()   # 122 ③ — 점수·판수와 1만 명이 새 스냅숏에서 온다
         for key in self.RANK_VIEW_KEYS:
             self._invalidate(key)
         dlg = self._teamcolor_dialog
@@ -16741,6 +16922,34 @@ class MainWindow(QMainWindow):
         self.zoom_elo.setVisible(len(pts) >= 3)
         self._draw_elo_chart()
         self._render_team_value(data, start)
+        self._render_squad_cmp()
+
+    def _render_squad_cmp(self) -> None:
+        """[점수·예측] 같은 OVR 대비(122 ③) — 쥔 값으로만 칠한다(낡았으면 계산을 띄우고 끝나면 _on_squad_cmp_ready 가 다시 부른다)."""
+        res = self._squad_cmp_value() if self._ouid else None
+        lines = squad_cmp_lines(res)
+        self.squad_cmp_shown = lines
+        self.gb_squad_cmp.setVisible(bool(lines))
+        if not lines:
+            self._fill(self.tbl_squad_cells, [])
+            return
+        self.lb_squad_cmp.setText("<br>".join(lines))
+        cells = res.cells if res is not None and res.state in (squadcmp.OK, squadcmp.FEW) else []
+        self.lb_squad_cells.setText(f"OVR 구간별 평균 점수 · 1만 위 문턱 {res.cut:,.0f}점" if cells and res.cut is not None
+                                    else "OVR 구간별 평균 점수")
+        self.lb_squad_cells.setVisible(bool(cells))
+        self.tbl_squad_cells.setVisible(bool(cells))
+        self._fill(self.tbl_squad_cells, [[(f"{c.ovr}" + (" (나)" if c.mine else ""), c.ovr), (f"{c.n:,}", c.n),
+                                           (f"{c.mean:,.0f}", c.mean)] for c in cells], enable_sort=False)
+        bold = QFont(self.tbl_squad_cells.font())
+        bold.setBold(True)
+        for r, c in enumerate(cells):
+            if c.mine:
+                for col in range(self.tbl_squad_cells.columnCount()):
+                    item = self.tbl_squad_cells.item(r, col)
+                    if item is not None:
+                        item.setFont(bold)
+        self.tbl_squad_cells.setSortingEnabled(True)
 
     def _draw_elo_chart(self) -> None:
         """ELO 그래프 — 확대 막대(zoom_elo)가 고른 날만(55 G1)."""
@@ -16982,7 +17191,8 @@ class MainWindow(QMainWindow):
             streak_note=self._streak_note(),
             headline=self._headline(),
             report=self._dashboard_report(),
-            emblem=self._dash_emblem()))
+            emblem=self._dash_emblem(),
+            squad_cmp=squad_cmp_dash(self._squad_cmp_value() if self._ouid else None)))
         self._load_dash_emblem()
 
     def _load_dash_emblem(self) -> None:
@@ -17597,6 +17807,8 @@ class MainWindow(QMainWindow):
             *[(ld, cancel(ld), 1000, False) for ld in self._pred_workers],
             # 연승·연패 섞기 — 섞기 한 번(수 ms)마다 취소를 본다
             *[(ld, cancel(ld), 1000, False) for ld in self._habits_workers],
+            # 같은 OVR 대비 계산(122 ③) — DB 읽기 한 번(약 0.5초). 끝나면 신호를 안 낸다(cancel)
+            *[(ld, cancel(ld), 2000, False) for ld in self._squad_cmp_workers],
             *[(ld, cancel(ld), 1000, False) for ld in self._chip_workers],
             # 스펙업 순서(121) — 읽기는 DB 만 · 받기는 요청 사이에서 멈춘다(요청 하나 타임아웃 10초 · 한 요청 = 한 트랜잭션)
             *[(ld, cancel(ld), 1000, False) for ld in self._specup_workers],
@@ -17721,6 +17933,9 @@ class MainWindow(QMainWindow):
         if res.kind in ("cards", "all", "restore"):
             self._card_rev += 1   # 그리기보다 먼저(2회차 N6) — 아래에서 다시 그리는 화면이 옛 카드 캐시를 쓰지 않게
             self._specup_reset()  # 121 — 보이면 다시 읽고 다시 받는다
+        if res.kind in ("squads", "cards", "all", "restore"):
+            # 122 ③ — 이 길은 예약의 purged 를 내지 않는다(조각 ① 리뷰). 같은 OVR 값을 바로 거두고 판본을 올린다
+            self._squad_cmp_changed(drop=True)
         if res.kind == "restore":
             self._on_restore_ended(res)
         elif res.kind == "all" and res.state == "ok":
@@ -19299,10 +19514,15 @@ class AboutDialog(QDialog):
         tabs.addTab(self._build_storage_tab(), "저장 공간")
         tabs.addTab(self._build_check_tab(), "연결 점검")
         v.addWidget(tabs, 1)
+        # 토글 묶음은 세로 스크롤 안에(122 ③) — 같은 OVR 줄이 열리며 FHD 175% 에서 창이 화면보다 53px 커졌다(test_window_size).
+        # 넉넉한 화면에서는 묶음이 다 보이는 높이(sizeHint)를 받는다
+        settings = QWidget()
+        sv = QVBoxLayout(settings)
+        sv.setContentsMargins(0, 0, 0, 0)
         self.chk_web = QCheckBox(notice.WEB_DATA_CHECK)
         self.chk_web.setChecked(config.WEB_DATA)
         self.chk_web.toggled.connect(self._on_web_toggled)
-        v.addWidget(self.chk_web)
+        sv.addWidget(self.chk_web)
         # 랭킹 수집 — 웹 데이터가 꺼져 있으면 잠긴다. 켜짐은 .env 와 rank.db 사본 둘 다 봐야 한다(D6 로 꺼졌을 수 있다)
         try:
             st = rankcollect.read_status()
@@ -19315,39 +19535,39 @@ class AboutDialog(QDialog):
         self.chk_rank.toggled.connect(self._on_rank_toggled)
         rank_row.addWidget(self.chk_rank)
         rank_row.addStretch(1)
-        v.addLayout(rank_row)
+        sv.addLayout(rank_row)
         self.lb_rank = QLabel(rank_status_text(st))
         self.lb_rank.setWordWrap(True)
         self.lb_rank.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_rank)
+        sv.addWidget(self.lb_rank)
         # 구단주 분포(49단계 ③) — 랭킹 수집 아래. 전제가 꺼져 있으면 비활성 + 이유 한 줄. 상태는 창을 열 때(그리고 토글 뒤) 읽는다
         self.chk_owner = QCheckBox(notice.OWNER_DIST_CHECK)
         self.chk_owner.toggled.connect(self._on_owner_toggled)
-        v.addWidget(self.chk_owner)
+        sv.addWidget(self.chk_owner)
         self.lb_owner = QLabel("")
         self.lb_owner.setTextFormat(Qt.TextFormat.PlainText)
         self.lb_owner.setWordWrap(True)
         self.lb_owner.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_owner)
+        sv.addWidget(self.lb_owner)
         # 같은 OVR 비교 자료(122 U5) — 구단주 분포와 같은 꼴. 안내 번호가 닫혀 있는 동안(조각 ①②)은 줄째 숨긴다
         self.chk_squad = QCheckBox(notice.SQUAD_CMP_CHECK)
         self.chk_squad.toggled.connect(self._on_squad_toggled)
-        v.addWidget(self.chk_squad)
+        sv.addWidget(self.chk_squad)
         self.lb_squad = QLabel("")
         self.lb_squad.setTextFormat(Qt.TextFormat.PlainText)
         self.lb_squad.setWordWrap(True)
         self.lb_squad.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_squad)
+        sv.addWidget(self.lb_squad)
         self._refresh_owner_row()   # 같은 OVR 줄까지
         # 카드 정보 자동 채우기(51단계 U5) — 랭킹 수집과 무관 · 웹 데이터가 꺼졌으면 회색 · 안내 12 전이면 누를 때 묻는다
         self.chk_card = QCheckBox(notice.CARD_BACKFILL_CHECK)
         self.chk_card.toggled.connect(self._on_card_toggled)
-        v.addWidget(self.chk_card)
+        sv.addWidget(self.chk_card)
         self.lb_card = QLabel("")
         self.lb_card.setTextFormat(Qt.TextFormat.PlainText)
         self.lb_card.setWordWrap(True)
         self.lb_card.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_card)
+        sv.addWidget(self.lb_card)
         self._refresh_card_row()
         card_round = getattr(getattr(self.parent(), "_card_sched", None), "finished", None)
         if card_round is not None:   # 창을 열어 둔 동안 바퀴가 끝나면 줄을 다시 — 닫을 때 끊는다(예약은 셸 수명)
@@ -19364,11 +19584,11 @@ class AboutDialog(QDialog):
         if not avail:
             self.chk_auto.setToolTip("설치판·포터블 실행 파일에서만 켤 수 있습니다")
         self.chk_auto.toggled.connect(self._on_auto_toggled)
-        v.addWidget(self.chk_auto)
+        sv.addWidget(self.chk_auto)
         self.lb_msg = QLabel("")
         self.lb_msg.setWordWrap(True)
         self.lb_msg.setStyleSheet(f"color: {T.TEXT_DIM};")
-        v.addWidget(self.lb_msg)
+        sv.addWidget(self.lb_msg)
         if config.DEMO:
             # 둘러보기(96 O2) — 켜는 길은 숨긴다(눌러도 config._save_env 가 막지만 누를 것을 보이지 않는다) · 오류 알리기·연결 점검도
             for wd in (self.chk_web, self.chk_rank, self.lb_rank, self.chk_owner, self.lb_owner, self.chk_squad,
@@ -19377,6 +19597,7 @@ class AboutDialog(QDialog):
             self.btn_check.setEnabled(False)
             self.btn_check.setToolTip("둘러보기에서는 넥슨에 묻지 않습니다")
             self.lb_msg.setText("둘러보기 화면입니다. 설정은 바꿀 수 없습니다.")
+        v.addWidget(VScrollArea(settings))
         row = QHBoxLayout()
         row.addStretch(1)
         btn = QPushButton("닫기")
