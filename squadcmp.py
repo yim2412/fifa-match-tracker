@@ -909,6 +909,27 @@ def compare(rows: list[dict], squads: dict[int, tuple[int, int, list]], extras: 
     return out
 
 
+def snapshot_rows(rank_conn) -> tuple[tuple[int, str] | None, list[dict]]:
+    """원본이 남은 마지막 스냅숏 → ((id, 찍은 시각), [{profile_sn, rank, elo, games}]). 화면과 대조 도구가 같이 쓴다."""
+    import rankerpick   # 순환 import 를 피한다(_snapshot 과 같은 까닭)
+    snap = rankerpick.latest_raw_snapshot(rank_conn)
+    if snap is None:
+        return None, []
+    return snap, [{"profile_sn": sn, "rank": rank, "elo": elo, "games": (w or 0) + (d or 0) + (lo or 0)}
+                  for sn, rank, elo, w, d, lo in rank_conn.execute(
+                      "SELECT profile_sn, rank, elo, win, draw, lose FROM snapshot_rows WHERE snapshot_id = ?", (snap[0],))]
+
+
+def cell_means(rows: list[dict], ovr_of: dict[int, float]) -> dict[int, tuple[int, float]]:
+    """{칸: (인원, 평균 점수)} — compare 의 ovr_of(남들 조건을 채운 사람)와 스냅숏 점수로. 대조 도구가 쓴다(화면 표와 같은 칸)."""
+    by: dict[int, list[float]] = {}
+    for r in rows:
+        ovr = ovr_of.get(r["profile_sn"])
+        if ovr is not None and r.get("elo") is not None:
+            by.setdefault(cell_of(ovr), []).append(r["elo"])
+    return {c: (len(v), sum(v) / len(v)) for c, v in by.items()}
+
+
 def load_compare(rank_conn, squads_path, fconn, *, ouid: str | None, my_sn: int | None, nickname: str | None,
                  table_start: datetime | None, now: datetime) -> SquadCompare:
     """읽기(작업 스레드) — rank.db(읽기 전용 연결을 받는다) · squads.db(없으면 만들지 않는다) · fifa.db 카드표와 내 경기 → compare.
@@ -927,12 +948,8 @@ def load_compare(rank_conn, squads_path, fconn, *, ouid: str | None, my_sn: int 
     snap = rows = None
     snap_start = None
     if rank_conn is not None:
-        import rankerpick   # 순환 import 를 피한다(_snapshot 과 같은 까닭)
-        snap = rankerpick.latest_raw_snapshot(rank_conn)
+        snap, rows = snapshot_rows(rank_conn)
         if snap is not None:
-            rows = [{"profile_sn": sn, "rank": rank, "elo": elo, "games": (w or 0) + (d or 0) + (lo or 0)}
-                    for sn, rank, elo, w, d, lo in rank_conn.execute(
-                        "SELECT profile_sn, rank, elo, win, draw, lose FROM snapshot_rows WHERE snapshot_id = ?", (snap[0],))]
             if my_sn is None and nickname:
                 hit = rank_conn.execute("SELECT profile_sn FROM snapshot_rows WHERE snapshot_id = ? AND nickname = ?",
                                         (snap[0], nickname)).fetchone()

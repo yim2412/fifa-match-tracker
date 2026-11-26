@@ -7,6 +7,7 @@ import hashlib
 import io
 import os
 import sys
+import sqlite3
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -250,6 +251,86 @@ def test_main_fill_and_delete():
             assert e.main("--delete")[0] == 0 and not e.box.exists() and e.real.exists()
         finally:
             playerinfo.fetch_player_ability, config.CARD_BACKFILL_GAP_S = keep
+
+
+# ── 대조 ⓐ ⓑ ⓒ(조각 ③) ──────────────────────────────────────────────────────
+
+def _lineup(base: int):
+    return [(base * 100 + i, 25, 3) for i in range(11)]   # 자리 25 → "ST" · 3강(보너스 2)
+
+
+def test_check_a_exact_answer_and_adapt_mutation():
+    """ⓐ — 정답(시뮬레이터 그 강화·적응도 5)과 앱 값이 같아야 통과 · 앱 적응도 몫을 3 으로 바꾸면 틀린다 · 같은 카드는 한 번만 묻는다."""
+    got = {sn: (0, 0, _lineup(130 + sn)) for sn in range(8)}
+    extras = {s: {"pos_ovr": f'{{"ST": {s // 100}}}'} for v in got.values() for s, _p, _g in v[2]}
+    asked = []
+
+    def ask(spid, grade):
+        asked.append(spid)
+        return {"ST": spid // 100 + config.GRADE_OVR_BONUS[grade] + 4, "GK": 1}   # 넥슨 적응도 5 = 1 + 4
+
+    cache: dict = {}
+    a = C.check_a(got, extras, TODAY, ask, cache=cache)
+    assert len(a) == C.A_PEOPLE and all(x == y for x, y in a), a
+    assert len(asked) == C.A_PEOPLE * 11
+    bad = C.check_a(got, extras, TODAY, ask, adapt=3, cache=cache)
+    assert len(asked) == C.A_PEOPLE * 11, "되풀이가 다시 물었다"
+    assert all(x == y - 1 for x, y in bad), bad
+    assert config.ADAPT_OVR == 4, "바꿔 끼운 적응도 몫을 되돌리지 않았다"
+    assert C.check_a(got, extras, TODAY, ask, cache=cache) == a, "날짜가 같으면 같은 사람을 뽑아야 한다"
+
+
+def test_judge_b_bounds():
+    app = {139: (399, 3000.0), 140: (500, 3000.0), 141: (1000, 3500.0)}
+    ok = C.judge_b(app, {140: (540, 3015.0), 141: (960, 3485.0)})
+    assert [x[0] for x in ok] == [140, 141] and all(x[-1] for x in ok), "399명 칸은 빼고 경계(±15점 · ±8%)는 통과"
+    assert not C.judge_b(app, {140: (541, 3000.0), 141: (1000, 3500.0)})[0][-1], "인원 +8.2%"
+    assert not C.judge_b(app, {140: (500, 3015.01), 141: (1000, 3500.0)})[0][-1], "평균 +15.01점"
+    assert not C.judge_b(app, {141: (1000, 3500.0)})[0][-1], "수집 쪽에 없는 칸"
+
+
+def test_dev_lineups_newest_full_game():
+    """ⓑ — 앱과 같은 규칙: 최근 경기부터 양쪽 11명이 다 있는 첫 판의 내 쪽. 상대로만 본 사람(번호 없음)은 안 센다."""
+    import dev_matches
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as t:
+        path = Path(t) / "dev.db"
+        c = sqlite3.connect(path)
+        c.executescript(dev_matches.SCHEMA)
+        c.executemany("INSERT INTO owners (id, ouid, profile_sn) VALUES (?, ?, ?)", [(1, "a", 501), (2, "b", None), (3, "c", 503)])
+        full, ten = squadcmp.pack_lineup(_lineup(140)), squadcmp.pack_lineup(_lineup(141)[:10])
+        mine_old, mine_new = squadcmp.pack_lineup(_lineup(142)), squadcmp.pack_lineup(_lineup(143))
+        c.executemany("INSERT INTO lineups (id, h, body) VALUES (?, ?, ?)", [(1, 1, full), (2, 2, ten), (3, 3, mine_old), (4, 4, mine_new)])
+        c.executemany("INSERT INTO games (match_id, at, o1, l1, o2, l2) VALUES (?, ?, ?, ?, ?, ?)", [
+            ("g1", 100, 1, 3, 2, 1),     # 501 의 옛 판 — 양쪽 11명
+            ("g2", 300, 2, 2, 1, 4),     # 501 의 새 판이지만 상대가 10명 → 건너뛴다
+            ("g3", 200, 3, 4, 2, 1)])    # 503(o1) — 양쪽 11명(상대는 번호 없는 b)
+        c.commit()
+        c.close()
+        now = datetime(2026, 11, 26, 12)
+        got = C.dev_lineups(path, {501, 503, 999}, now)
+    assert set(got) == {501, 503}, got
+    assert got[501][0] == 100 and got[501][2] == squadcmp.unpack_lineup(mine_old), "상대가 10명인 새 판을 썼다"
+    assert got[503][2] == squadcmp.unpack_lineup(mine_new) and got[503][1] == int(now.timestamp())
+
+
+def test_asker_stops_before_request_when_blocked_or_game():
+    with env() as e:
+        calls, waits = [], []
+        ask = C.asker(e.real, DAY, lambda: False, fetch=lambda s, g: calls.append(s) or {"ST": 1}, wait=waits.append)
+        assert ask(7, 1) == {"ST": 1} and calls == [7] and waits == [config.CARD_BACKFILL_GAP_S]
+        e.run(e.real, "INSERT INTO api_budget (day, kind, attempts, hit_429) VALUES (?, ?, 1, 1)", [(DAY, store.card_block_kinds()[0])])
+        try:
+            ask(8, 1)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError("앱 쪽이 막힌 날에 물었다")
+        game = C.asker(e.real, "2000-01-01", lambda: True, fetch=lambda s, g: calls.append(s) or {}, wait=waits.append)
+        try:
+            game(9, 1)
+        except RuntimeError:
+            pass
+        assert calls == [7], calls
 
 
 def main() -> int:

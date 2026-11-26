@@ -1,4 +1,4 @@
-"""122단계 조각 ③ 대조 준비 — 선발을 새로 받고(`--prepare`) 모자란 카드의 시뮬레이터를 하루 200장씩 채운다(`--fill` · 이 PC 전용 · 배포판 밖).
+"""122단계 조각 ③ 대조 — 선발을 새로 받고(`--prepare`) 모자란 카드의 시뮬레이터를 하루 200장씩 채운 뒤(`--fill`) 대조한다(`--check` · 이 PC 전용 · 배포판 밖).
 
 판정 규칙은 ROADMAP "## 122단계" 의 **대조**. 이 PC 는 11장을 다 아는 사람이 89.4% 라 관문 B(95%)에 모자라 먼저 채운다.
 받기와 채우기는 앱과 **같은 함수**(`squadcmp.collect` · `squadcmp.fill_cards`)를 부른다.
@@ -17,6 +17,7 @@
     python tools/squadcmp_check.py --prepare   # 선발 받기(오픈API 약 3만 요청 · 약 13분). 대조하는 날 한 번 더(24시간 안이어야 한다)
     python tools/squadcmp_check.py --fill      # 하루 한 번(약 10분)
     python tools/squadcmp_check.py --status    # 요청 없음
+    python tools/squadcmp_check.py --check     # 대조 ⓐⓑⓒ(ⓐ 만 시뮬레이터 최대 55요청 · ⓑ 는 dev_matches.db 를 읽기만)
     python tools/squadcmp_check.py --delete    # 다 쓴 뒤 폴더째
 
 출력에 닉네임·계정 번호는 없다.
@@ -29,7 +30,7 @@ import shutil
 import sqlite3
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -165,6 +166,212 @@ def prepare(squads: Path, fifa: Path, api_key: str, cancel, *, log=print):
     return squadcmp.collect(squads, fifa, rankcollect.open_rank_db_ro, lambda: FCOnlineAPI(api_key), cancel=cancel)
 
 
+# ── 대조(ROADMAP 122 "대조" — 판정 규칙은 거기서 옮겼다. 결과를 보고 바꾸지 않는다) ─────────────────────────
+
+A_PEOPLE = 5            # ⓐ 시뮬레이터에 직접 물을 사람 수(55장)
+B_MIN_CELL = 400        # ⓑ 나를 뺀 인원이 이 이상인 칸만
+B_MEAN_TOL = 15.0       # ⓑ 칸 평균 차 ±점
+B_COUNT_TOL = 0.08      # ⓑ 인원 차 ±비율
+FRESH_H = 24            # ⓑ 다 받은 지 이 시간 안
+C_CUT_CARDS = 1200      # ⓒ 많이 쓰인 순으로 이만큼만 남긴 카드표
+C_LOW_GATE = 0.40       # ⓒ 그 카드표로 낮춘 관문 B
+
+
+def _inputs(squads: Path, fifa: Path, rank: Path):
+    """(스냅숏 줄, 찍은 시각, {번호: (경기 시각, 받은 시각, 선발)}, 카드표) — 다 읽기만."""
+    import squadcmp
+    import store
+    rc = _ro(rank)
+    try:
+        snap, rows = squadcmp.snapshot_rows(rc)
+    finally:
+        rc.close()
+    sq = _ro(squads)
+    try:
+        got = {sn: (at, la, squadcmp.unpack_lineup(b)) for sn, at, la, b in sq.execute(
+            "SELECT profile_sn, match_at, lineup_at, lineup FROM squads WHERE lineup IS NOT NULL")}
+    finally:
+        sq.close()
+    fc = _ro(fifa)
+    try:
+        extras = store.load_card_extras(fc, {c[0] for v in got.values() for c in v[2]})
+    finally:
+        fc.close()
+    return rows, snap[1] if snap else None, got, extras
+
+
+def _ovr_of(rows, got, extras, now):
+    import squadcmp
+    return squadcmp.compare(rows, got, extras, me_sn=None, my_lineups=[], season_start=None, now=now, snap_at=None)
+
+
+def check_a(got: dict, extras: dict, today: date, ask, *, adapt: int | None = None, cache: dict | None = None) -> list[tuple[float, float]]:
+    """ⓐ — 날짜로 뽑은 5명. ask(spid, 강화) → 그 강화·적응도 5 의 시뮬레이터 16칸 {칸: OVR}. → [(앱 값, 정답)].
+    cache 를 주면 같은 (카드, 강화)는 다시 묻지 않는다(ⓒ 가 요청 없이 되풀이한다). adapt = 앱 쪽 ADAPT_OVR 을 바꿔 끼울 때(ⓒ)."""
+    import random
+    import config
+    import squadcmp
+    keep = config.ADAPT_OVR
+    if adapt is not None:
+        config.ADAPT_OVR = adapt
+    try:
+        ok = sorted(sn for sn, v in got.items() if squadcmp.lineup_ovr(v[2], extras) is not None)
+        pick = random.Random(today.toordinal()).sample(ok, min(A_PEOPLE, len(ok)))
+        cache = {} if cache is None else cache
+        out = []
+        for sn in pick:
+            cards = got[sn][2]
+            truth = []
+            for spid, po, grade in cards:
+                if (spid, grade) not in cache:
+                    cache[(spid, grade)] = ask(spid, grade)
+                truth.append(cache[(spid, grade)][config.SIM_POS_OF[po]])
+            out.append((squadcmp.lineup_ovr(cards, extras), sum(truth) / len(truth)))
+        return out
+    finally:
+        config.ADAPT_OVR = keep
+
+
+def dev_lineups(dev: Path, sns: set[int], now) -> dict:
+    """ⓑ — dev_matches.db(읽기만)에서 사람마다 마지막 감독모드 경기 가운데 양쪽 선발 11명이 다 있는 첫 판의 내 쪽 선발.
+    앱(squadcmp.lineup_of)과 같은 규칙이고 받은 시각은 지금으로 둔다(이 수집은 10분마다 돈다)."""
+    import squadcmp
+    conn = _ro(dev)
+    try:
+        owners = [(oid, sn) for oid, sn in conn.execute("SELECT id, profile_sn FROM owners WHERE profile_sn IS NOT NULL") if sn in sns]
+        bodies: dict[int, list] = {}
+
+        def lineup(lid):
+            if lid is None:
+                return None
+            if lid not in bodies:
+                row = conn.execute("SELECT body FROM lineups WHERE id = ?", (lid,)).fetchone()
+                bodies[lid] = squadcmp.unpack_lineup(row[0]) if row else None
+            return bodies[lid]
+
+        out, t = {}, int(now.timestamp())
+        for oid, sn in owners:
+            games = []
+            for mine, other in (("l1", "l2"), ("l2", "l1")):
+                col = "o1" if mine == "l1" else "o2"
+                games += conn.execute(f"SELECT at, {mine}, {other} FROM games WHERE {col} = ? ORDER BY at DESC LIMIT ?",
+                                      (oid, config_matches())).fetchall()
+            for at, lm, lo in sorted(games, key=lambda g: -g[0])[:config_matches()]:
+                a, b = lineup(lm), lineup(lo)
+                if a is not None and b is not None and len(a) == len(b) == squadcmp.LINEUP_N:
+                    out[sn] = (at, t, a)
+                    break
+        return out
+    finally:
+        conn.close()
+
+
+def config_matches() -> int:
+    import config
+    return config.SQUAD_CMP_MATCHES
+
+
+def judge_b(app: dict, dev: dict) -> list[tuple[int, int, int, float, float, bool]]:
+    """칸마다 (칸, 앱 인원, dev 인원, 앱 평균, dev 평균, 통과) — 앱 인원이 B_MIN_CELL 이상인 칸만."""
+    out = []
+    for c in sorted(app):
+        n, m = app[c]
+        if n < B_MIN_CELL:
+            continue
+        dn, dm = dev.get(c, (0, float("nan")))
+        ok = dn > 0 and abs(m - dm) <= B_MEAN_TOL and abs(dn - n) <= B_COUNT_TOL * n
+        out.append((c, n, dn, m, dm, ok))
+    return out
+
+
+def check(squads: Path, fifa: Path, rank: Path, dev: Path, today: date, now, ask, *, log=print) -> bool:
+    """ⓐ ⓑ ⓒ 를 차례로 → 모두 통과했나. ask = None 이면 ⓐ 와 ⓐ 의 ⓒ 를 건너뛴다(요청 0)."""
+    import config
+    import squadcmp
+    rows, taken, got, extras = _inputs(squads, fifa, rank)
+    newest = max((v[1] for v in got.values()), default=0)
+    oldest = min((v[1] for v in got.values()), default=0)
+    log(f"스냅숏 {taken} · 선발 {len(got):,}명(받은 때 {datetime.fromtimestamp(oldest):%m-%d %H:%M} ~ "
+        f"{datetime.fromtimestamp(newest):%m-%d %H:%M}) · 카드표 {len(extras):,}장")
+    ok = True
+    if now.timestamp() - oldest > FRESH_H * 3600:
+        log(f"[FAIL] ⓑ 전제 — 선발을 받은 지 {FRESH_H}시간이 넘었습니다. --prepare 를 한 번 더 돌립니다")
+        return False
+    base = _ovr_of(rows, got, extras, now)
+    gate = base.lineup_pct >= 100 * config.SQUAD_CMP_GATE_LINEUP and base.card_pct >= 100 * config.SQUAD_CMP_GATE_CARDS
+    log(f"{'[OK]  ' if gate else '[FAIL]'} 관문 A {base.lineup_pct:.1f}% · B {base.card_pct:.1f}%")
+    ok &= gate
+    cache: dict = {}
+    if ask is not None:
+        a = check_a(got, extras, today, ask, cache=cache)
+        good = len(a) == A_PEOPLE and all(x == y for x, y in a)
+        log(f"{'[OK]  ' if good else '[FAIL]'} ⓐ 시뮬레이터 정답과 " + " · ".join(f"{x:.2f}/{y:.2f}" for x, y in a) + f" (요청 {len(cache)})")
+        ok &= good
+        bad3 = check_a(got, extras, today, ask, adapt=3, cache=cache)
+        caught = any(x != y for x, y in bad3)
+        log(f"{'[OK]  ' if caught else '[FAIL]'} ⓒ 적응도 몫을 3 으로 바꾸면 ⓐ 가 틀린다")
+        ok &= caught
+    app_cells = squadcmp.cell_means(rows, base.ovr_of)
+    dev_got = dev_lineups(dev, {r["profile_sn"] for r in rows}, now)
+    dev_cells = squadcmp.cell_means(rows, _ovr_of(rows, dev_got, {**extras, **_extras_for(fifa, dev_got, extras)}, now).ovr_of)
+    b = judge_b(app_cells, dev_cells)
+    for c, n, dn, m, dm, good in b:
+        log(f"   칸 {c}: 앱 {n:,}명 {m:,.0f}점 · 수집 {dn:,}명 {dm:,.0f}점 · 차 {m - dm:+.1f}점 {dn - n:+,}명 {'' if good else '← 벗어남'}")
+    good = bool(b) and all(x[-1] for x in b)
+    log(f"{'[OK]  ' if good else '[FAIL]'} ⓑ 칸 {len(b)}개(인원 {B_MIN_CELL} 이상) · 평균 ±{B_MEAN_TOL:g}점 · 인원 ±{B_COUNT_TOL:.0%}")
+    ok &= good
+    shifted = {sn: (v[0], v[1], [(s, (p % 27) + 1, g) for s, p, g in v[2]]) for sn, v in got.items()}
+    sb = judge_b(squadcmp.cell_means(rows, _ovr_of(rows, shifted, extras, now).ovr_of), dev_cells)
+    caught = not sb or not all(x[-1] for x in sb)
+    log(f"{'[OK]  ' if caught else '[FAIL]'} ⓒ 선발 자리 번호를 한 칸 밀면 ⓑ 가 틀린다")
+    ok &= caught
+    use: dict[int, int] = {}
+    for v in got.values():
+        for s, _p, _g in v[2]:
+            use[s] = use.get(s, 0) + 1
+    top = set(sorted(use, key=lambda s: -use[s])[:C_CUT_CARDS])
+    cut = {s: e for s, e in extras.items() if s in top}
+    cut_res = _ovr_of(rows, got, cut, now)
+    cut_cells = squadcmp.cell_means(rows, cut_res.ovr_of)
+    off = [x[0] for x in judge_b(app_cells, cut_cells) if not abs(x[3] - x[4]) <= B_MEAN_TOL]   # 칸이 사라져도(nan) 벗어남
+    low_pass = cut_res.card_pct >= 100 * C_LOW_GATE
+    log(f"{'[OK]  ' if low_pass and off else '[FAIL]'} ⓒ 카드표 {C_CUT_CARDS:,}장 · 관문 {C_LOW_GATE:.0%}({cut_res.card_pct:.1f}%) 이면 "
+        f"±{B_MEAN_TOL:g}점을 벗어나는 칸 {len(off)}개")
+    ok &= low_pass and bool(off)
+    silent = cut_res.card_pct < 100 * config.SQUAD_CMP_GATE_CARDS
+    log(f"{'[OK]  ' if silent else '[FAIL]'} ⓒ 같은 카드표로 관문 {config.SQUAD_CMP_GATE_CARDS:.0%} 이면 침묵")
+    ok &= silent
+    return ok
+
+
+def asker(real: Path, day: str, cancel, *, fetch=None, wait=time.sleep):
+    """ⓐ 의 묻기 — (카드, 강화) → 적응도 5 시뮬레이터 16칸. 요청 사이 간격 · 앱 쪽 웹 길이 오늘 막혔거나 게임이 켜지면 멈춘다(예외)."""
+    import config
+    import playerinfo
+    fetch = fetch or (lambda s, g: playerinfo.fetch_player_ability(s, strong=g, adapt=5).position_ovrs)
+
+    def ask(spid, grade):
+        if cancel() or real_blocked(real, day):
+            raise RuntimeError("멈춤 — 게임이 켜졌거나 앱 쪽 홈페이지 길이 오늘 막혔습니다")
+        got = fetch(spid, grade)
+        wait(config.CARD_BACKFILL_GAP_S)
+        return got
+    return ask
+
+
+def _extras_for(fifa: Path, got: dict, have: dict) -> dict:
+    """dev 쪽 선발에만 나온 카드의 카드표(같은 fifa.db · 읽기만)."""
+    import store
+    want = {c[0] for v in got.values() for c in v[2]} - set(have)
+    if not want:
+        return {}
+    fc = _ro(fifa)
+    try:
+        return store.load_card_extras(fc, want)
+    finally:
+        fc.close()
+
+
 def delete(folder: Path) -> bool:
     if not (folder / MARK).exists():
         return False
@@ -176,7 +383,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
-    for name in ("prepare", "fill", "status", "delete"):
+    for name in ("prepare", "fill", "status", "delete", "check"):
         g.add_argument(f"--{name}", action="store_true")
     args = ap.parse_args(argv)
     data_dir = os.environ.get("FIFA_DATA_DIR", "").strip()
@@ -189,13 +396,13 @@ def main(argv: list[str] | None = None) -> int:
     why = folder_why(data_dir, default_dir, files)
     if not why and not args.prepare and MARK not in files:
         why = "먼저 --prepare 를 돌립니다"
-    if not why and (args.prepare or args.fill) and gameguard.game_running():
+    if not why and (args.prepare or args.fill or args.check) and gameguard.game_running():
         why = "게임이 켜져 있습니다"
     env = {}
-    if not why and (args.prepare or args.fill):
+    if not why and (args.prepare or args.fill or args.check):
         from dotenv import dotenv_values
         env = dotenv_values(default_dir / ".env", encoding="utf-8-sig")
-        if args.fill and (env.get(config.WEB_DATA_VAR) or "").strip() != "1":
+        if (args.fill or args.check) and (env.get(config.WEB_DATA_VAR) or "").strip() != "1":
             why = "홈페이지 데이터가 꺼져 있습니다"
         if args.prepare and not (env.get(DEV_KEY_VAR) or "").strip():
             why = f"{DEV_KEY_VAR} 가 없습니다"
@@ -211,6 +418,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.status:
         print(status_line(status(squads, fifa)))
         return 0
+    if args.check:
+        open_gate("check-only")   # ⓐ 의 시뮬레이터만 — 오픈API 는 부르지 않는다
+        ok = check(squads, fifa, config.RANK_DB_PATH, default_dir / "dev_matches.db", date.today(), datetime.now(),
+                   asker(real, date.today().isoformat(), gameguard.watcher()))
+        print("\n[OK] 대조 통과" if ok else "\n[FAIL] 대조 실패 — 까닭을 찾기 전에는 공개하지 않습니다")
+        return 0 if ok else 1
     open_gate((env.get(DEV_KEY_VAR) or "").strip() or "fill-only")
     (folder / MARK).write_text("tools/squadcmp_check.py 가 만든 폴더입니다. --delete 로 지웁니다.\n", encoding="utf-8")
     print(f"앱에서 가져온 카드 {sync_cards(real, fifa):,}장")
